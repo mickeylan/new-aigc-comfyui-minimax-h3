@@ -31,8 +31,8 @@ type AliConfig struct {
 	APIKey    string            `json:"api_key"`
 	BaseURL   string            `json:"base_url"`
 	Model     string            `json:"model"`
-	Voice     string            `json:"voice"`       // 默认音色
-	VoiceMale string            `json:"voice_male"`  // 男声默认音色
+	Voice     string            `json:"voice"`      // 默认音色
+	VoiceMale string            `json:"voice_male"` // 男声默认音色
 	VoiceMap  map[string]string `json:"voice_map"`
 	Extra     map[string]any    `json:"extra"`
 }
@@ -119,7 +119,118 @@ func (a *AliyunTTS) TextToSpeech(text, character, voice string) ([]byte, error) 
 		"input":      map[string]any{"text": text},
 		"parameters": params,
 	})
-	url := strings.TrimRight(cfg.BaseURL, "/") + "/api/v1/services/aigc/multimodal-generation/generation"
+	return a.postGeneration(body)
+}
+
+// qwen-voice-enrollment 音色复刻：参考音频（10~20 秒清晰人声）注册为可复用的复刻音色；
+// 复刻音色与注册时的 target_model 绑定，合成必须使用完全相同的模型。
+const (
+	QwenVoiceEnrollmentModel = "qwen-voice-enrollment"
+	QwenTTSVCModel           = "qwen3-tts-vc-2026-01-22"
+)
+
+// origin 取百炼 API 源站（scheme://host），兼容工作空间专属域名与默认 dashscope 域名
+func (a *AliyunTTS) origin() string {
+	base := strings.TrimSpace(a.get(SettingAliBaseURL, ""))
+	if base == "" {
+		base = "https://dashscope.aliyuncs.com"
+	}
+	if i := strings.Index(base, "://"); i > 0 {
+		base = base[i+3:]
+	}
+	if j := strings.IndexAny(base, "/"); j > 0 {
+		base = base[:j]
+	}
+	return "https://" + base
+}
+
+// CloneVoice 上传参考音频注册复刻音色，返回音色 ID（供 TextToSpeechVC 使用）。
+// audioBase64 为音频原始字节 base64；preferredName 仅允许数字和小写字母（可空，服务端会生成）。
+func (a *AliyunTTS) CloneVoice(audioBase64, mimeType, preferredName string) (string, error) {
+	cfg := a.Config()
+	if !cfg.Configured() {
+		return "", fmt.Errorf("尚未配置阿里云 TTS API Key，请到「平台设置」填写")
+	}
+	if strings.TrimSpace(audioBase64) == "" {
+		return "", fmt.Errorf("参考语音为空")
+	}
+	if mimeType == "" {
+		mimeType = "audio/mpeg"
+	}
+	input := map[string]any{
+		"action":       "create",
+		"target_model": QwenTTSVCModel,
+		"audio":        map[string]any{"data": "data:" + mimeType + ";base64," + audioBase64},
+	}
+	if strings.TrimSpace(preferredName) != "" {
+		input["preferred_name"] = preferredName
+	}
+	body, _ := json.Marshal(map[string]any{
+		"model": QwenVoiceEnrollmentModel,
+		"input": input,
+	})
+	req, err := http.NewRequest("POST", a.origin()+"/api/v1/services/audio/tts/customization", strings.NewReader(string(body)))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := a.httpc.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("调用音色复刻接口失败: %w", err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("音色复刻返回 %d: %s", resp.StatusCode, truncateStr(string(data), 300))
+	}
+	var out struct {
+		Output struct {
+			Voice string `json:"voice"`
+		} `json:"output"`
+		Error *struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return "", fmt.Errorf("解析音色复刻响应失败: %w", err)
+	}
+	if out.Error != nil {
+		return "", fmt.Errorf("音色复刻错误: %s %s", out.Error.Code, out.Error.Message)
+	}
+	if out.Output.Voice == "" {
+		return "", fmt.Errorf("音色复刻响应缺少音色 ID")
+	}
+	return out.Output.Voice, nil
+}
+
+// TextToSpeechVC 使用复刻音色合成（voice 位于 input；model 须与注册复刻音色时的 target_model 一致）
+func (a *AliyunTTS) TextToSpeechVC(text, voiceID, model string) ([]byte, error) {
+	cfg := a.Config()
+	if !cfg.Configured() {
+		return nil, fmt.Errorf("尚未配置阿里云 TTS API Key，请到「平台设置」填写")
+	}
+	if strings.TrimSpace(voiceID) == "" {
+		return nil, fmt.Errorf("复刻音色 ID 为空，请先上传参考语音")
+	}
+	if model == "" {
+		model = QwenTTSVCModel
+	}
+	body, _ := json.Marshal(map[string]any{
+		"model": model,
+		"input": map[string]any{"text": text, "voice": voiceID},
+		"parameters": map[string]any{
+			"format": "mp3",
+		},
+	})
+	return a.postGeneration(body)
+}
+
+// postGeneration 调用多模态生成接口并解析音频（预设音色与复刻音色共用）
+func (a *AliyunTTS) postGeneration(body []byte) ([]byte, error) {
+	cfg := a.Config()
+	url := a.origin() + "/api/v1/services/aigc/multimodal-generation/generation"
 	req, err := http.NewRequest("POST", url, strings.NewReader(string(body)))
 	if err != nil {
 		return nil, err

@@ -91,51 +91,109 @@
       </div>
     </section>
 
-    <!-- 角色与人物资产（Character Bible）：跨场景一致性） -->
-    <section class="section" v-if="characters.length || project.plan !== undefined">
+    <!-- 资产库（角色 / 道具 / 场景 + 角色音色）：跨分镜、跨集一致性 -->
+    <section class="section" v-if="characters.length || assets.length || project.plan !== undefined">
       <div class="section-head">
         <div>
-          <span class="overline">CHARACTERS</span>
-          <h2>角色与人物 <span class="count">{{ characters.length }}</span></h2>
-          <p class="sub">统一角色外貌与服装，分镜画面生成时自动注入角色设定，保证跨场景人物一致</p>
+          <span class="overline">ASSET BIBLE</span>
+          <h2>角色 · 道具 · 场景</h2>
+          <p class="sub">统一角色外貌、道具与场景环境，并可锁定角色音色；分镜画面生成时自动注入设定与参考图，保证跨集一致</p>
         </div>
         <div class="section-actions">
-          <button class="btn btn-ghost btn-sm" :disabled="busy || charsWithoutPortrait === 0" @click="allPortraits">
+          <button v-if="assetTab === 'char'" class="btn btn-ghost btn-sm" :disabled="busy || charsWithoutPortrait === 0" @click="allPortraits">
             一键生成标准像 ({{ charsWithoutPortrait }})
           </button>
-          <button class="btn btn-secondary btn-sm" @click="openCreateCharacter">＋ 新建角色</button>
+          <button v-else class="btn btn-ghost btn-sm" :disabled="busy || assetsWithoutImage === 0" @click="allAssetImages">
+            一键生成{{ assetKindLabel }}图 ({{ assetsWithoutImage }})
+          </button>
+          <button v-if="assetTab === 'char'" class="btn btn-secondary btn-sm" @click="openCreateCharacter">＋ 新建角色</button>
+          <button v-else class="btn btn-secondary btn-sm" @click="openCreateAsset">＋ 新建{{ assetKindLabel }}</button>
         </div>
       </div>
-      <div v-if="characters.length" class="character-grid">
-        <div v-for="ch in characters" :key="ch.id" class="card character-card">
-          <div class="char-portrait" @click="viewCharPortrait(ch)">
-            <img v-if="ch.portrait" :src="charPortraitUrl(ch)" alt="角色标准像" />
-            <div v-else class="char-portrait-ph">{{ (ch.name || '?').slice(0, 1) }}</div>
-          </div>
-          <div class="char-body">
-            <div class="char-name-row">
-              <span class="char-name">{{ ch.name }}</span>
-              <span v-if="ch.role" class="char-role">{{ ch.role }}</span>
-              <span v-if="ch.source === 'auto'" class="tag tag-gray">方案抽取</span>
+      <div class="asset-tabs">
+        <button class="asset-tab" :class="{ active: assetTab === 'char' }" @click="assetTab = 'char'">👤 角色 ({{ characters.length }})</button>
+        <button class="asset-tab" :class="{ active: assetTab === 'prop' }" @click="assetTab = 'prop'">🎒 道具 ({{ propAssets.length }})</button>
+        <button class="asset-tab" :class="{ active: assetTab === 'location' }" @click="assetTab = 'location'">🏞 场景 ({{ locationAssets.length }})</button>
+      </div>
+
+      <!-- 角色卡片 -->
+      <div v-show="assetTab === 'char'">
+        <div v-if="characters.length" class="character-grid">
+          <div v-for="ch in characters" :key="ch.id" class="card character-card">
+            <div class="char-portrait" @click="viewCharPortrait(ch)">
+              <img v-if="ch.portrait" :src="charPortraitUrl(ch)" alt="角色标准像" />
+              <div v-else class="char-portrait-ph">{{ (ch.name || '?').slice(0, 1) }}</div>
             </div>
-            <p v-if="ch.trait" class="char-trait">🎨 {{ ch.trait }}</p>
-            <p v-if="ch.style" class="char-style">👔 {{ ch.style }}</p>
-            <span class="char-appear">出场 {{ characterCounts[ch.id] || 0 }} 场</span>
-            <div class="char-actions">
-              <button class="btn btn-sm btn-secondary" :disabled="busy" @click="genPortrait(ch)">
-                {{ ch.portrait ? '重生成标准像' : '生成标准像' }}
-              </button>
-              <button class="btn btn-sm btn-ghost" :disabled="busy || ch._uploading" @click="uploadPortrait(ch)">
-                {{ ch._uploading ? '上传中…' : '上传图片替换' }}
-              </button>
-              <button class="btn btn-sm btn-ghost" @click="openEditCharacter(ch)">编辑</button>
-              <button class="btn btn-sm btn-danger" @click="removeCharacter(ch)">删除</button>
+            <div class="char-body">
+              <div class="char-name-row">
+                <span class="char-name">{{ ch.name }}</span>
+                <span v-if="ch.role" class="char-role">{{ ch.role }}</span>
+                <span v-if="ch.source === 'auto'" class="tag tag-gray">方案抽取</span>
+              </div>
+              <p v-if="ch.trait" class="char-trait">🎨 {{ ch.trait }}</p>
+              <p v-if="ch.style" class="char-style">👔 {{ ch.style }}</p>
+              <span v-if="ch.voice_id" class="char-voice" title="已用参考语音注册复刻音色，配音音色全剧一致">🎤 复刻音色（参考语音）</span>
+              <span v-else-if="ch.voice" class="char-voice">🎵 音色：{{ ch.voice }}</span>
+              <span class="char-appear">出场 {{ characterCounts[ch.id] || 0 }} 场</span>
+              <div class="char-actions">
+                <button class="btn btn-sm btn-secondary" :disabled="busy" @click="genPortrait(ch)">
+                  {{ ch.portrait ? '重生成标准像' : '生成标准像' }}
+                </button>
+                <button class="btn btn-sm btn-ghost" :disabled="busy || ch._uploading" @click="uploadPortrait(ch)">
+                  {{ ch._uploading ? '上传中…' : '上传图片替换' }}
+                </button>
+                <button class="btn btn-sm btn-ghost" @click="openEditCharacter(ch)">编辑</button>
+                <button class="btn btn-sm btn-danger" @click="removeCharacter(ch)">删除</button>
+              </div>
+              <div class="char-actions">
+                <button class="btn btn-sm btn-ghost" :disabled="busy || ch._voiceUploading" @click="uploadVoice(ch)"
+                  :title="'上传 10~20 秒清晰人声，注册为该角色的复刻音色（全剧配音一致）'">
+                  {{ ch._voiceUploading ? '注册中…' : (ch.voice_ref ? '↻ 重传参考语音' : '🎤 上传参考语音') }}
+                </button>
+                <button v-if="ch.voice_ref && !ch.voice_id" class="btn btn-sm btn-ghost" :disabled="busy || ch._voiceUploading" @click="retryCloneVoice(ch)">
+                  重试注册音色
+                </button>
+                <button v-if="ch.voice || ch.voice_id" class="btn btn-sm btn-ghost" :disabled="busy" @click="clearVoice(ch)">清除语音</button>
+              </div>
             </div>
           </div>
         </div>
+        <div v-else class="card empty-inline">
+          暂无角色。生成创作方案后会自动抽取角色，也可点击「新建角色」手动添加。
+        </div>
       </div>
-      <div v-else class="card empty-inline">
-        暂无角色。生成创作方案后会自动抽取角色，也可点击「新建角色」手动添加。
+
+      <!-- 道具 / 场景卡片 -->
+      <div v-show="assetTab !== 'char'">
+        <div v-if="currentAssets.length" class="character-grid">
+          <div v-for="a in currentAssets" :key="a.id" class="card character-card">
+            <div class="char-portrait" @click="viewAssetImage(a)">
+              <img v-if="a.image" :src="assetImageUrl(a)" :alt="assetKindLabel + '参考图'" />
+              <div v-else class="char-portrait-ph">{{ assetTab === 'prop' ? '🎒' : '🏞' }}</div>
+            </div>
+            <div class="char-body">
+              <div class="char-name-row">
+                <span class="char-name">{{ a.name }}</span>
+                <span v-if="a.source === 'auto'" class="tag tag-gray">方案抽取</span>
+              </div>
+              <p v-if="a.description" class="char-trait">📝 {{ a.description }}</p>
+              <span class="char-appear">出场 {{ assetCounts[a.id] || 0 }} 场</span>
+              <div class="char-actions">
+                <button class="btn btn-sm btn-secondary" :disabled="busy" @click="genAssetImage(a)">
+                  {{ a.image ? '重生成参考图' : '生成参考图' }}
+                </button>
+                <button class="btn btn-sm btn-ghost" :disabled="busy || a._uploading" @click="uploadAssetImage(a)">
+                  {{ a._uploading ? '上传中…' : '上传图片替换' }}
+                </button>
+                <button class="btn btn-sm btn-ghost" @click="openEditAsset(a)">编辑</button>
+                <button class="btn btn-sm btn-danger" @click="removeAsset(a)">删除</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-else class="card empty-inline">
+          暂无{{ assetKindLabel }}。生成创作方案后会自动抽取关键{{ assetKindLabel }}（分镜引用的{{ assetKindLabel }}也会自动建卡），分镜画面生成时会自动以{{ assetKindLabel }}参考图锁定外观，保证全剧一致；也可点击「新建{{ assetKindLabel }}」手动添加。
+        </div>
       </div>
     </section>
 
@@ -145,8 +203,8 @@
         <span class="step-n">1</span><span>创作方案</span>
       </div>
       <span class="step-arrow">→</span>
-      <div class="step" :class="{ done: allPortraitsReady, active: !!project.plan && !allPortraitsReady }" :title="allPortraitsReady ? '角色标准像就绪，视频将锁定人物' : '建议先生成角色标准像，视频才能锁定人物形象'">
-        <span class="step-n">2</span><span>角色标准像</span>
+      <div class="step" :class="{ done: allRefsReady, active: !!project.plan && !allRefsReady }" :title="allRefsReady ? '角色/道具/场景参考图就绪，画面将锁定人物与道具环境一致' : '建议先生成参考图（角色标准像、道具图、场景图），画面生成时才能锁定人物、道具与环境一致'">
+        <span class="step-n">2</span><span>参考图（角色/道具/场景）</span>
       </div>
       <span class="step-arrow">→</span>
       <div class="step" :class="{ done: scenes.length > 0 && imageCount === scenes.length }">
@@ -492,9 +550,41 @@
           <textarea v-model="charForm.style" class="textarea" rows="2"
             placeholder="标志性服装、配饰、主色调…" />
         </div>
+        <div class="field">
+          <label>配音音色 <span class="optional">可选，预设音色 ID</span></label>
+          <input v-model="charForm.voice" class="input" list="voice-presets" placeholder="如 Cherry / Ethan；留空使用平台设置的音色映射" />
+          <datalist id="voice-presets">
+            <option v-for="v in voicePresets" :key="v" :value="v" />
+          </datalist>
+          <div class="field-hint">角色级音色优先于平台设置的角色音色映射；上传参考语音复刻的音色优先级最高（在角色卡片上传）</div>
+        </div>
         <div class="modal-actions">
           <button class="btn btn-ghost" @click="editingCharacter = null">取消</button>
           <button class="btn" :disabled="busy || !charForm.name.trim()" @click="saveCharacter">
+            {{ busy ? '保存中…' : '保存' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 道具/场景新建/编辑弹窗 -->
+    <div v-if="editingAsset" class="modal-mask" @click.self="editingAsset = null">
+      <div class="modal card">
+        <h2>{{ editingAsset === 'new' ? `新建${assetKindLabel}` : `编辑${assetKindLabel}` }}</h2>
+        <div class="field">
+          <label>{{ assetKindLabel }}名 <span class="req">必填</span></label>
+          <input v-model="assetForm.name" class="input" :placeholder="assetTab === 'prop' ? '如：青铜古镜' : '如：云隐宗大殿'" />
+          <div class="field-hint">名称须与剧本分镜中引用的{{ assetKindLabel }}名完全一致，才能自动匹配参考图</div>
+        </div>
+        <div class="field">
+          <label>外观描述 <span class="optional">用于保证{{ assetKindLabel }}一致</span></label>
+          <textarea v-model="assetForm.description" class="textarea" rows="3"
+            :placeholder="assetTab === 'prop' ? '形状、材质、颜色、标志性细节…' : '空间、建筑陈设、光线氛围…'" />
+        </div>
+        <div v-if="assetError" class="notice error-notice">{{ assetError }}</div>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" @click="editingAsset = null">取消</button>
+          <button class="btn" :disabled="busy || !assetForm.name.trim()" @click="saveAsset">
             {{ busy ? '保存中…' : '保存' }}
           </button>
         </div>
@@ -560,7 +650,15 @@ const curEpDubReady = computed(() => {
   return dubs.length > 0 && dubs.every(d => d.status === 'ready')
 })
 const editingCharacter = ref(null)
-const charForm = reactive({ name: '', role: '', trait: '', style: '' })
+const charForm = reactive({ name: '', role: '', trait: '', style: '', voice: '' })
+// 道具/场景资产 + 角色语音
+const assetTab = ref('char') // char / prop / location
+const assets = ref([])
+const assetCounts = ref({})
+const editingAsset = ref(null)
+const assetError = ref('')
+const assetForm = reactive({ name: '', description: '' })
+const voicePresets = ['Cherry', 'Ethan', 'Chelsie', 'Serena', 'Nofish', 'Dylan', 'Jada', 'Peter', 'Sunny', 'Luna']
 const showScript = ref(false)
 const showPlan = ref(false)
 const viewer = ref(null)
@@ -593,6 +691,13 @@ const imageReadyScenes = computed(() => scenes.value.filter(s => s.status === 'i
 const imageCount = computed(() => scenes.value.filter(s => s.image_file).length)
 const videoReadyCount = computed(() => scenes.value.filter(s => s.status === 'video_ready').length)
 const allPortraitsReady = computed(() => characters.value.length > 0 && characters.value.every(c => c.portrait))
+const propAssets = computed(() => assets.value.filter(a => a.kind === 'prop'))
+const locationAssets = computed(() => assets.value.filter(a => a.kind === 'location'))
+const currentAssets = computed(() => (assetTab.value === 'location' ? locationAssets.value : propAssets.value))
+const assetKindLabel = computed(() => (assetTab.value === 'location' ? '场景' : '道具'))
+const assetsWithoutImage = computed(() => currentAssets.value.filter(a => !a.image).length)
+const allAssetImagesReady = computed(() => assets.value.length === 0 || assets.value.every(a => a.image))
+const allRefsReady = computed(() => allPortraitsReady.value && allAssetImagesReady.value)
 const readyText = computed(() => `${videoReadyCount.value}/${scenes.value.length} 视频就绪`)
 const pipelineActive = computed(() => ['plan', 'plan_running', 'script', 'script_running', 'script_manual', 'images', 'videos', 'merge'].includes(project.value?.pipeline_stage))
 const projectStatusText = computed(() => ({
@@ -764,6 +869,8 @@ async function load() {
     merges.value = data.merges || []
     characters.value = data.characters || []
     characterCounts.value = data.character_counts || {}
+    assets.value = data.assets || []
+    assetCounts.value = data.asset_counts || {}
     dialogues.value = data.dialogues || []
     scenes.value = (data.scenes || []).map(s => {
       s._working = isWorking(s)
@@ -918,11 +1025,11 @@ async function uploadPortrait(ch) {
   input.click()
 }
 function openCreateCharacter() {
-  Object.assign(charForm, { name: '', role: '', trait: '', style: '' })
+  Object.assign(charForm, { name: '', role: '', trait: '', style: '', voice: '' })
   editingCharacter.value = 'new'
 }
 function openEditCharacter(ch) {
-  Object.assign(charForm, { name: ch.name, role: ch.role, trait: ch.trait, style: ch.style })
+  Object.assign(charForm, { name: ch.name, role: ch.role, trait: ch.trait, style: ch.style, voice: ch.voice || '' })
   editingCharacter.value = ch
 }
 async function saveCharacter() {
@@ -946,6 +1053,153 @@ async function removeCharacter(ch) {
   if (!confirm(`确定删除角色「${ch.name}」？已生成标准像将被移除（不影响已有分镜）。`)) return
   try {
     await api.deleteCharacter(id(), ch.id)
+    await load()
+  } catch (e) {
+    toast.show(e.response?.data?.error || '删除失败')
+  }
+}
+
+// ---------- 角色语音（预设音色 / 参考语音复刻） ----------
+async function uploadVoice(ch) {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = 'audio/*'
+  input.onchange = async () => {
+    const f = input.files && input.files[0]
+    if (!f) return
+    if (!/\.(mp3|wav|m4a|aac)$/i.test(f.name)) {
+      toast.show('请上传 MP3/WAV/M4A/AAC 音频（建议 10~20 秒清晰人声）')
+      return
+    }
+    if (f.size > 10 * 1024 * 1024) {
+      toast.show('参考语音不能超过 10MB')
+      return
+    }
+    ch._voiceUploading = true
+    try {
+      const { data } = await api.uploadCharacterVoice(id(), ch.id, f)
+      if (data.warning) toast.show(data.warning)
+      else toast.show(data.message || '参考语音已上传')
+      await load()
+    } catch (e) {
+      toast.show(e.response?.data?.error || '上传失败')
+    } finally {
+      ch._voiceUploading = false
+    }
+  }
+  input.click()
+}
+async function retryCloneVoice(ch) {
+  ch._voiceUploading = true
+  try {
+    const { data } = await api.cloneCharacterVoice(id(), ch.id)
+    toast.show(data.message || '复刻音色注册成功')
+    await load()
+  } catch (e) {
+    toast.show(e.response?.data?.error || '注册失败')
+  } finally {
+    ch._voiceUploading = false
+  }
+}
+async function clearVoice(ch) {
+  if (!confirm(`确定清除「${ch.name}」的语音配置（预设音色与参考语音复刻）？`)) return
+  try {
+    await api.clearCharacterVoice(id(), ch.id)
+    await load()
+  } catch (e) {
+    toast.show(e.response?.data?.error || '清除失败')
+  }
+}
+
+// ---------- 道具/场景资产 ----------
+function assetImageUrl(a) {
+  return api.inputUrl(project.value.id, a.image)
+}
+function viewAssetImage(a) {
+  if (a.image) {
+    viewer.value = assetImageUrl(a)
+    nextTick(() => viewerMask.value?.focus())
+  }
+}
+async function allAssetImages() {
+  busy.value = true
+  try {
+    const { data } = await api.generateAllAssetImages(id(), assetTab.value)
+    toast.show(data.message || '已提交')
+    refreshSoon()
+  } catch (e) {
+    toast.show(e.response?.data?.error || '生成失败')
+  } finally {
+    busy.value = false
+  }
+}
+async function genAssetImage(a) {
+  try {
+    await api.generateAssetImage(id(), a.kind, a.id)
+    refreshSoon()
+  } catch (e) {
+    toast.show(e.response?.data?.error || '生成失败')
+  }
+}
+function uploadAssetImage(a) {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = 'image/*'
+  input.onchange = async () => {
+    const f = input.files && input.files[0]
+    if (!f) return
+    if (!/^image\/(jpeg|png|webp)$/.test(f.type)) {
+      toast.show('请上传 JPG/PNG/WebP 图片')
+      return
+    }
+    if (f.size > 10 * 1024 * 1024) {
+      toast.show('图片不能超过 10MB')
+      return
+    }
+    a._uploading = true
+    try {
+      await api.uploadAssetImage(id(), a.kind, a.id, f)
+      toast.show('图片已设为参考图')
+      await load()
+    } catch (e) {
+      toast.show(e.response?.data?.error || '上传失败')
+    } finally {
+      a._uploading = false
+    }
+  }
+  input.click()
+}
+function openCreateAsset() {
+  assetError.value = ''
+  Object.assign(assetForm, { name: '', description: '' })
+  editingAsset.value = 'new'
+}
+function openEditAsset(a) {
+  assetError.value = ''
+  Object.assign(assetForm, { name: a.name, description: a.description })
+  editingAsset.value = a
+}
+async function saveAsset() {
+  if (!assetForm.name.trim()) return
+  busy.value = true
+  try {
+    if (editingAsset.value === 'new') {
+      await api.createAsset(id(), assetTab.value, { ...assetForm })
+    } else {
+      await api.updateAsset(id(), editingAsset.value.kind, editingAsset.value.id, { ...assetForm })
+    }
+    editingAsset.value = null
+    await load()
+  } catch (e) {
+    assetError.value = e.response?.data?.error || '保存失败'
+  } finally {
+    busy.value = false
+  }
+}
+async function removeAsset(a) {
+  if (!confirm(`确定删除${a.kind === 'location' ? '场景' : '道具'}「${a.name}」？已生成参考图将被移除（不影响已有分镜）。`)) return
+  try {
+    await api.deleteAsset(id(), a.kind, a.id)
     await load()
   } catch (e) {
     toast.show(e.response?.data?.error || '删除失败')
@@ -1245,6 +1499,14 @@ onBeforeUnmount(() => {
 .plan-episodes h4 .btn { margin-left: 10px; }
 .stop-video { margin-left: 8px; padding: 2px 10px; font-size: 12px; }
 .character-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+.asset-tabs { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.asset-tab {
+  padding: 7px 16px; border-radius: 980px; border: 1.5px solid var(--border); background: transparent;
+  font-size: 13px; font-weight: 600; color: var(--text-secondary); cursor: pointer; transition: all 0.2s;
+}
+.asset-tab:hover { border-color: var(--accent); color: var(--accent); }
+.asset-tab.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.char-voice { margin-top: 6px; font-size: 12px; color: var(--accent); font-weight: 600; }
 .character-card { padding: 16px; display: flex; gap: 14px; align-items: flex-start; }
 .char-portrait { flex: 0 0 88px; width: 88px; height: 88px; border-radius: 14px; overflow: hidden; background: rgba(0, 0, 0, 0.04); cursor: zoom-in; }
 .char-portrait img { width: 100%; height: 100%; object-fit: cover; display: block; }

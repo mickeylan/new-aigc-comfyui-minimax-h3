@@ -1,8 +1,10 @@
 package service
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -120,9 +122,11 @@ func (s *Service) HandleGetProject(c *gin.Context) {
 	merges, _ := s.Projects.ListMerges(uint(id))
 	chars, _ := s.Projects.ListCharacters(uint(id))
 	counts, _ := s.Projects.CharacterSceneCounts(uint(id))
+	assets, _ := s.Projects.ListAssets(uint(id), "")
+	assetCounts, _ := s.Projects.AssetSceneCounts(uint(id))
 	var dialogues []models.Dialogue
 	s.DB.Where("project_id = ?", uint(id)).Order("scene_id, `order`").Find(&dialogues)
-	c.JSON(200, gin.H{"project": p, "scenes": scenes, "merges": merges, "characters": chars, "character_counts": counts, "dialogues": dialogues})
+	c.JSON(200, gin.H{"project": p, "scenes": scenes, "merges": merges, "characters": chars, "character_counts": counts, "assets": assets, "asset_counts": assetCounts, "dialogues": dialogues})
 }
 
 func (s *Service) HandleDeleteProject(c *gin.Context) {
@@ -616,6 +620,334 @@ func (s *Service) loadCharacter(c *gin.Context) (*models.Character, bool) {
 		return nil, false
 	}
 	return &ch, true
+}
+
+// ---------- 视觉资产（道具 / 场景） ----------
+
+// assetKindOf 从 :kind 路由段解析资产类别
+func assetKindOf(c *gin.Context) (string, bool) {
+	kind, err := normalizeAssetKind(c.Param("kind"))
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return "", false
+	}
+	return kind, true
+}
+
+// loadAsset 从 :aid 加载资产（校验类别与归属 :id 项目）
+func (s *Service) loadAsset(c *gin.Context) (*models.Asset, bool) {
+	projectID, err := strconv.Atoi(c.Param("id"))
+	if err != nil || projectID <= 0 {
+		c.JSON(400, gin.H{"error": "invalid project id"})
+		return nil, false
+	}
+	kind, ok := assetKindOf(c)
+	if !ok {
+		return nil, false
+	}
+	aid, err := strconv.Atoi(c.Param("aid"))
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid asset id"})
+		return nil, false
+	}
+	var a models.Asset
+	if err := s.DB.Where("id = ? AND project_id = ? AND kind = ?", aid, projectID, kind).First(&a).Error; err != nil {
+		c.JSON(404, gin.H{"error": "asset not found"})
+		return nil, false
+	}
+	return &a, true
+}
+
+func (s *Service) HandleListAssets(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	kind := ""
+	if k := c.Param("kind"); k != "" {
+		if kind, ok = assetKindOf(c); !ok {
+			return
+		}
+	}
+	list, err := s.Projects.ListAssets(p.ID, kind)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	counts, _ := s.Projects.AssetSceneCounts(p.ID)
+	c.JSON(200, gin.H{"assets": list, "counts": counts})
+}
+
+func (s *Service) HandleCreateAsset(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	kind, ok := assetKindOf(c)
+	if !ok {
+		return
+	}
+	var req models.Asset
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": "参数错误"})
+		return
+	}
+	req.ID = 0
+	req.ProjectID = p.ID
+	req.Kind = kind
+	a, err := s.Projects.CreateAsset(req)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, a)
+}
+
+func (s *Service) HandleUpdateAsset(c *gin.Context) {
+	a, ok := s.loadAsset(c)
+	if !ok {
+		return
+	}
+	var req models.Asset
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": "参数错误"})
+		return
+	}
+	if err := s.Projects.UpdateAsset(a, req); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	var updated models.Asset
+	s.DB.First(&updated, a.ID)
+	c.JSON(200, updated)
+}
+
+func (s *Service) HandleDeleteAsset(c *gin.Context) {
+	a, ok := s.loadAsset(c)
+	if !ok {
+		return
+	}
+	if err := s.Projects.DeleteAsset(a.ProjectID, a.ID); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true})
+}
+
+func (s *Service) HandleGenerateAssetImage(c *gin.Context) {
+	a, ok := s.loadAsset(c)
+	if !ok {
+		return
+	}
+	if err := s.Projects.StartAssetImage(a); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true, "message": fmt.Sprintf("%s「%s」参考图生成中", AssetKindLabel(a.Kind), a.Name)})
+}
+
+// HandleUploadAssetImage 上传图片作为资产参考图（替代文生图）
+func (s *Service) HandleUploadAssetImage(c *gin.Context) {
+	a, ok := s.loadAsset(c)
+	if !ok {
+		return
+	}
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(400, gin.H{"error": "file required: " + err.Error()})
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if len(data) == 0 {
+		c.JSON(400, gin.H{"error": "空文件"})
+		return
+	}
+	ext := filepath.Ext(header.Filename)
+	if ext == "" {
+		ext = detectImageExt(data)
+	}
+	if ext == "" {
+		ext = ".jpg"
+	}
+	name := fmt.Sprintf("%s_%d_%d%s", assetFilePrefix(a.Kind), a.ID, time.Now().UnixNano(), ext)
+	path, _, err := s.Upload.SaveFile(fmt.Sprintf("%d", a.ProjectID), "image", name, data)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if err := s.DB.Model(&models.Asset{}).Where("id = ?", a.ID).Update("image", filepath.Base(path)).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	s.Projects.PushProject(nil)
+	c.JSON(200, gin.H{"ok": true, "message": "图片已设为参考图", "image": filepath.Base(path)})
+}
+
+// HandleGenerateAllAssetImages 一键生成该类别全部缺图资产
+func (s *Service) HandleGenerateAllAssetImages(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	kind, ok := assetKindOf(c)
+	if !ok {
+		return
+	}
+	n, err := s.Projects.GenerateAllAssetImages(p, kind)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true, "message": fmt.Sprintf("已提交 %d 个%s的参考图生成", n, AssetKindLabel(kind))})
+}
+
+// ---------- 角色语音（预设音色 / 参考语音复刻） ----------
+
+// audioMimeOf 音频扩展名 → MIME（音色复刻 data URI 用）
+func audioMimeOf(ext string) string {
+	switch strings.ToLower(strings.TrimPrefix(ext, ".")) {
+	case "wav":
+		return "audio/wav"
+	case "m4a":
+		return "audio/mp4"
+	case "aac":
+		return "audio/aac"
+	default:
+		return "audio/mpeg"
+	}
+}
+
+// HandleUploadCharacterVoice 上传参考语音并注册复刻音色（10~20 秒清晰人声）。
+// 注册失败时仍保留音频文件（voice_ref），可用 voice/clone 重试。
+func (s *Service) HandleUploadCharacterVoice(c *gin.Context) {
+	ch, ok := s.loadCharacter(c)
+	if !ok {
+		return
+	}
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(400, gin.H{"error": "file required: " + err.Error()})
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if len(data) == 0 {
+		c.JSON(400, gin.H{"error": "空文件"})
+		return
+	}
+	if len(data) > 10*1024*1024 {
+		c.JSON(400, gin.H{"error": "参考语音不能超过 10MB"})
+		return
+	}
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if ext == "" {
+		ext = ".mp3"
+	}
+	switch ext {
+	case ".mp3", ".wav", ".m4a", ".aac":
+	default:
+		c.JSON(400, gin.H{"error": "仅支持 MP3/WAV/M4A/AAC 音频"})
+		return
+	}
+	name := fmt.Sprintf("voice_%d_%d%s", ch.ID, time.Now().UnixNano(), ext)
+	path, _, err := s.Upload.SaveFile(fmt.Sprintf("%d", ch.ProjectID), "audio", name, data)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	// 先落文件并清空旧复刻音色，再同步注册新音色
+	if err := s.DB.Model(&models.Character{}).Where("id = ?", ch.ID).
+		Updates(map[string]any{"voice_ref": filepath.Base(path), "voice_id": "", "voice_model": ""}).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	ali := NewAliyunTTS(s.DB)
+	voiceID, cloneErr := ali.CloneVoice(base64.StdEncoding.EncodeToString(data), audioMimeOf(ext),
+		fmt.Sprintf("p%dc%d", ch.ProjectID, ch.ID))
+	if cloneErr == nil && voiceID != "" {
+		if err := s.DB.Model(&models.Character{}).Where("id = ?", ch.ID).
+			Updates(map[string]any{"voice_id": voiceID, "voice_model": QwenTTSVCModel}).Error; err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	s.Projects.PushProject(nil)
+	resp := gin.H{"ok": true, "voice_ref": filepath.Base(path), "voice_id": ""}
+	if cloneErr != nil {
+		resp["warning"] = "参考语音已保存，但音色注册失败：" + cloneErr.Error() + "（配音时将回退到角色预设音色，可稍后重试注册）"
+	} else {
+		resp["voice_id"] = voiceID
+		resp["message"] = "参考语音已上传并注册为角色复刻音色，该角色配音将保持音色一致"
+	}
+	c.JSON(200, resp)
+}
+
+// HandleCloneCharacterVoice 用已保存的参考语音重试注册复刻音色
+func (s *Service) HandleCloneCharacterVoice(c *gin.Context) {
+	ch, ok := s.loadCharacter(c)
+	if !ok {
+		return
+	}
+	if ch.VoiceRef == "" {
+		c.JSON(400, gin.H{"error": "该角色尚未上传参考语音"})
+		return
+	}
+	abs := filepath.Join(s.Upload.InputDir(), fmt.Sprintf("%d", ch.ProjectID), ch.VoiceRef)
+	f, err := s.Remote.Open(abs)
+	if err != nil {
+		c.JSON(404, gin.H{"error": "参考语音文件不存在"})
+		return
+	}
+	data, err := io.ReadAll(f)
+	f.Close()
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	ali := NewAliyunTTS(s.DB)
+	voiceID, cloneErr := ali.CloneVoice(base64.StdEncoding.EncodeToString(data),
+		audioMimeOf(filepath.Ext(ch.VoiceRef)), fmt.Sprintf("p%dc%d", ch.ProjectID, ch.ID))
+	if cloneErr != nil {
+		c.JSON(500, gin.H{"error": "音色注册失败: " + cloneErr.Error()})
+		return
+	}
+	if err := s.DB.Model(&models.Character{}).Where("id = ?", ch.ID).
+		Updates(map[string]any{"voice_id": voiceID, "voice_model": QwenTTSVCModel}).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	s.Projects.PushProject(nil)
+	c.JSON(200, gin.H{"ok": true, "voice_id": voiceID, "message": "复刻音色注册成功"})
+}
+
+// HandleClearCharacterVoice 清除角色语音配置（预设音色与参考语音）
+func (s *Service) HandleClearCharacterVoice(c *gin.Context) {
+	ch, ok := s.loadCharacter(c)
+	if !ok {
+		return
+	}
+	if ch.VoiceRef != "" && s.Remote != nil && s.Upload != nil {
+		path := filepath.Join(s.Upload.InputDir(), fmt.Sprintf("%d", ch.ProjectID), ch.VoiceRef)
+		if _, err := s.Remote.Run("rm -f -- " + shellQuote(path)); err != nil {
+			log.Printf("[character %d] cleanup voice %s failed: %v", ch.ID, path, err)
+		}
+	}
+	if err := s.DB.Model(&models.Character{}).Where("id = ?", ch.ID).
+		Updates(map[string]any{"voice": "", "voice_ref": "", "voice_id": "", "voice_model": ""}).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	s.Projects.PushProject(nil)
+	c.JSON(200, gin.H{"ok": true, "message": "角色语音配置已清除"})
 }
 
 // ---------- 对白配音与字幕 ----------

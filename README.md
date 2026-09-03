@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://hequan2017.github.io/new-aigc-comfyui-minimax-h3/"><strong>🌐 在线预览前端</strong></a>
+  ·
+  <a href="https://github.com/hequan2017/new-aigc-comfyui-minimax-h3/actions/workflows/deploy-pages.yml">查看构建状态</a>
+</p>
+
 # ComfyStudio · ComfyUI 多卡管理控制平台
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -6,7 +12,7 @@
 
 ComfyStudio 是一个基于 **Go + Vue3** 的 ComfyUI 多卡管理平台：管理 **8×NVIDIA L40** 算力节点，内置 **MiniMax H3** 工作流（文生视频 / 图生视频 / 首尾帧 / 参考视频），自动把任务调度到最空闲的 GPU，前端实时展示**节点级生成进度**与显卡占用，生成结果在线预览并解析视频元数据。
 
-平台还内置 **AI 漫剧工作台**：一条流水线完成「剧本 → 分镜画面 → 场景视频 → 合并成片」的漫剧制作，支持**角色资产库**（跨场景人物一致）、**ref2v 角色参考图锁角色**、**对白配音（TTS）与 SRT 字幕**。
+平台还内置 **AI 漫剧工作台**：一条流水线完成「剧本 → 分镜画面 → 场景视频 → 合并成片」的漫剧制作，支持**角色资产库**（跨场景人物一致）、**道具/场景资产库**（跨分镜道具与环境一致）、**角色音色绑定**（预设音色或参考语音复刻，全剧配音一致）、**对白配音（TTS）与 SRT 字幕**。
 
 ---
 
@@ -56,6 +62,8 @@ ComfyStudio 是一个基于 **Go + Vue3** 的 ComfyUI 多卡管理平台：管�
 | 视频元数据 | 纯手写解析 MP4/图片（分辨率/时长/大小/编码），不依赖 ffprobe |
 | 漫剧工作台 | 剧本（火山文生文）→ 分镜（火山文生图）→ 视频（本地 L40）→ 合并成片 |
 | 角色资产库 | 角色卡（trait/style/标准像）自动抽取，ref2v 锁角色保证跨场景一致 |
+| 道具/场景资产 | 关键道具与主要场景自动建卡 + 参考图（生成或上传），分镜画面按 location/props 注入参考图锁定外观 |
+| 角色音色绑定 | 角色级预设音色，或上传 10~20 秒参考语音复刻音色（qwen-voice-enrollment），全剧配音一致 |
 | TTS 配音 | 火山 Ark `/audio/speech` 合成对白，直出 SRT 字幕（UTF-8 BOM） |
 | 模拟模式 | `simulate: true` 时按模板参考耗时模拟进度，无需 GPU 即可体验全流程 |
 
@@ -148,6 +156,9 @@ sequenceDiagram
 - [x] **场景状态机**：待画面 → 画面生成中 → 画面就绪 → 视频排队/生成中 → 视频就绪
 - [x] **角色资产库**：角色卡（trait/style/标准像），重复抽取幂等、不覆盖手动编辑；文生图注入权威设定纠偏描述漂移
 - [x] **角色标准像**：基于 trait 文生图生成，角色面板支持编辑/重新生成/出场统计
+- [x] **道具/场景资产库**：创作方案自动抽取关键道具与主要场景建卡（分镜引用未建卡的也会自动补建），参考图支持文生图（道具特写/场景空镜）或上传替换；分镜画面按 `location`/`props` 匹配注入参考图与文字设定，保证同一道具/场景全剧外观一致
+- [x] **流水线一致性门控**：分镜画面前置等待引用的道具/场景参考图就绪，视频阶段等待全部资产参考图就绪
+- [x] **角色音色绑定**：角色卡可选预设音色（优先于平台角色映射），或上传 10~20 秒参考语音经 qwen-voice-enrollment 注册复刻音色（合成走 qwen3-tts-vc，单条对白音色可覆盖），保证全剧角色声音一致
 - [x] **画幅选择**：横屏 16:9 / 竖屏 9:16 / 方形 1:1，画面按画幅比例文生图、视频按画幅分辨率
 - [x] **ref2v 锁角色**：有标准像时切 ref2v（`ref_images=[首帧+角色标准像]`），无角色自动回退 i2v
 - [x] **视频失败重试**：场景视频任务失败自动重试（最多 2 次）
@@ -185,10 +196,10 @@ sequenceDiagram
 
 本仓库内置 GitHub Actions 工作流（`.github/workflows/deploy-pages.yml`）：**推送到 `main` 后自动执行前端测试 → `vite build` → 发布静态站点到 GitHub Pages**，全程使用内置 `GITHUB_TOKEN` 部署，**无需配置任何仓库 Secret**。
 
-- 访问地址：`https://<用户名>.github.io/<仓库名>/`
+- 访问地址：[https://hequan2017.github.io/new-aigc-comfyui-minimax-h3/](https://hequan2017.github.io/new-aigc-comfyui-minimax-h3/)
 - 首次部署前需一次性放开 Token 权限：仓库 **Settings → Actions → General → Workflow permissions** 选 **Read and write permissions**，之后工作流会用 `GITHUB_TOKEN` 自动开启 Pages 并设 Source 为 GitHub Actions；若不想放开权限，也可在 **Settings → Pages** 手动将 Source 设为 **GitHub Actions**，再 Re-run 工作流
-- 构建时自动注入子路径 base（`--base=/<仓库名>/`）并生成 `404.html` 兜底 SPA 深链路由，fork 改名后依然可用
-- Pages 版本仅为**前端静态预览**：`/api` 请求在 Pages 上无后端响应，完整功能请按下方步骤本地部署
+- 构建时自动注入子路径 base（`--base=/<仓库名>/`），静态预览使用 Hash 路由，刷新子页面不会出现 404，fork 改名后依然可用
+- Pages 版本会显示“静态预览”状态且不会反复连接 WebSocket；`/api` 请求在 Pages 上无后端响应，完整功能请按下方步骤本地部署
 
 ### 组件清单
 
@@ -518,10 +529,25 @@ ssh root@<server> "cd /opt/comfyui-console && bash -c 'nohup ./console-linux-amd
 |---|---|---|
 | GET | `/api/projects/:id/characters` | 角色列表（含出场统计） |
 | POST | `/api/projects/:id/characters` | 新建角色（手动，source=manual） |
-| PUT | `/api/projects/:id/characters/:cid` | 编辑角色（name/role/trait/style） |
+| PUT | `/api/projects/:id/characters/:cid` | 编辑角色（name/role/trait/style/voice） |
 | DELETE | `/api/projects/:id/characters/:cid` | 删除角色 |
 | POST | `/api/projects/:id/characters/:cid/portrait` | 生成/重新生成角色标准像 |
 | POST | `/api/projects/:id/characters/portraits` | 一键生成全部缺标准像角色 |
+| POST | `/api/projects/:id/characters/:cid/voice/upload` | 上传参考语音并注册复刻音色（multipart `file`，MP3/WAV/M4A/AAC ≤10MB） |
+| POST | `/api/projects/:id/characters/:cid/voice/clone` | 用已保存的参考语音重试注册复刻音色 |
+| POST | `/api/projects/:id/characters/:cid/voice/clear` | 清除角色语音配置（预设音色与参考语音） |
+
+### 道具/场景资产（Asset Bible，`:kind` = `prop` / `location`）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/projects/:id/assets/:kind` | 资产列表（含出场统计） |
+| POST | `/api/projects/:id/assets/:kind` | 新建资产（手动，source=manual） |
+| PUT | `/api/projects/:id/assets/:kind/:aid` | 编辑资产（name/description） |
+| DELETE | `/api/projects/:id/assets/:kind/:aid` | 删除资产（清理参考图文件） |
+| POST | `/api/projects/:id/assets/:kind/:aid/image` | 生成/重新生成资产参考图（道具特写 / 场景空镜） |
+| POST | `/api/projects/:id/assets/:kind/:aid/image/upload` | 上传图片作为资产参考图（multipart `file`） |
+| POST | `/api/projects/:id/assets/:kind/images` | 一键生成该类别全部缺图资产 |
 
 ### 对白配音与字幕
 

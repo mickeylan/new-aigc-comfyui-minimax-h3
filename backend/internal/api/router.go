@@ -102,6 +102,18 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.DELETE("/api/projects/:id/characters/:cid", svc.HandleDeleteCharacter)
 	r.POST("/api/projects/:id/characters/:cid/portrait", svc.HandleGenerateCharacterPortrait)
 	r.POST("/api/projects/:id/characters/:cid/portrait/upload", svc.HandleUploadCharacterPortrait)
+	// 角色语音（预设音色 / 参考语音复刻）
+	r.POST("/api/projects/:id/characters/:cid/voice/upload", svc.HandleUploadCharacterVoice)
+	r.POST("/api/projects/:id/characters/:cid/voice/clone", svc.HandleCloneCharacterVoice)
+	r.POST("/api/projects/:id/characters/:cid/voice/clear", svc.HandleClearCharacterVoice)
+	// 视觉资产（道具 / 场景，跨分镜一致性参考图）
+	r.GET("/api/projects/:id/assets/:kind", svc.HandleListAssets)
+	r.POST("/api/projects/:id/assets/:kind", svc.HandleCreateAsset)
+	r.POST("/api/projects/:id/assets/:kind/images", svc.HandleGenerateAllAssetImages)
+	r.PUT("/api/projects/:id/assets/:kind/:aid", svc.HandleUpdateAsset)
+	r.DELETE("/api/projects/:id/assets/:kind/:aid", svc.HandleDeleteAsset)
+	r.POST("/api/projects/:id/assets/:kind/:aid/image", svc.HandleGenerateAssetImage)
+	r.POST("/api/projects/:id/assets/:kind/:aid/image/upload", svc.HandleUploadAssetImage)
 	r.GET("/api/input/:taskid/*path", svc.HandleInputFile)
 
 	// 素材库

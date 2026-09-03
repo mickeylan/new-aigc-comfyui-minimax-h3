@@ -83,6 +83,32 @@ export const api = {
     })
   },
   generateAllPortraits: (id) => http.post(`/projects/${id}/characters/portraits`),
+  // 角色语音（预设音色 / 参考语音复刻）
+  uploadCharacterVoice: (id, cid, file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return http.post(`/projects/${id}/characters/${cid}/voice/upload`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000
+    })
+  },
+  cloneCharacterVoice: (id, cid) => http.post(`/projects/${id}/characters/${cid}/voice/clone`, null, { timeout: 120000 }),
+  clearCharacterVoice: (id, cid) => http.post(`/projects/${id}/characters/${cid}/voice/clear`),
+  // 视觉资产（kind: prop=道具 / location=场景）
+  assets: (id, kind) => http.get(`/projects/${id}/assets/${kind}`),
+  createAsset: (id, kind, data) => http.post(`/projects/${id}/assets/${kind}`, data),
+  updateAsset: (id, kind, aid, data) => http.put(`/projects/${id}/assets/${kind}/${aid}`, data),
+  deleteAsset: (id, kind, aid) => http.delete(`/projects/${id}/assets/${kind}/${aid}`),
+  generateAssetImage: (id, kind, aid) => http.post(`/projects/${id}/assets/${kind}/${aid}/image`),
+  uploadAssetImage: (id, kind, aid, file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return http.post(`/projects/${id}/assets/${kind}/${aid}/image/upload`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000
+    })
+  },
+  generateAllAssetImages: (id, kind) => http.post(`/projects/${id}/assets/${kind}/images`),
   // 对白配音与字幕
   sceneDialogues: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/dialogues`),
   generateSceneDub: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/dub`),

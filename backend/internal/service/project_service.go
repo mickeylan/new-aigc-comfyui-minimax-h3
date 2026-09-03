@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -19,17 +20,19 @@ import (
 
 // ProjectService 漫剧项目：剧本（文生文）→ 分镜画面（文生图）→ 视频（本地 L40）→ 合并成片
 type ProjectService struct {
-	cfg          *config.Config
-	db           *gorm.DB
-	volc         *VolcClient
-	ali          *AliyunTTS
-	tasks        *TaskService
-	remote       *RemoteExec
-	upload       *UploadManager
-	hub          *Hub
-	stopped      chan struct{}
-	imageSem     chan struct{} // 文生图并发限制（火山 API QPS），默认 3
-	materials    *MaterialService
+	cfg           *config.Config
+	db            *gorm.DB
+	volc          *VolcClient
+	ali           *AliyunTTS
+	tasks         *TaskService
+	remote        *RemoteExec
+	upload        *UploadManager
+	hub           *Hub
+	stopped       chan struct{}
+	imageSem      chan struct{} // 文生图并发限制（火山 API QPS），默认 3
+	materials     *MaterialService
+	assetMu       sync.Mutex    // 资产参考图生成去重（流水线轮询会重复触发）
+	assetInflight map[uint]bool // 生成中的资产 ID
 }
 
 func NewProjectService(cfg *config.Config, db *gorm.DB, volc *VolcClient, tasks *TaskService, remote *RemoteExec, upload *UploadManager, hub *Hub, materials *MaterialService) *ProjectService {
@@ -198,6 +201,9 @@ func (s *ProjectService) DeleteProject(id uint) error {
 		if err := tx.Where("project_id = ?", id).Delete(&models.Character{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("project_id = ?", id).Delete(&models.Asset{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("project_id = ?", id).Delete(&models.Dialogue{}).Error; err != nil {
 			return err
 		}
@@ -329,6 +335,8 @@ type scriptScene struct {
 	ImagePrompt string           `json:"image_prompt"`
 	Duration    float64          `json:"duration"`
 	Characters  []string         `json:"characters"`
+	Location    string           `json:"location"`
+	Props       []string         `json:"props"`
 	Dialogues   []scriptDialogue `json:"dialogues"`
 }
 
@@ -352,6 +360,8 @@ const scriptSystemPrompt = `你是一位专业的漫剧编剧与分镜师。根�
       "image_prompt": "该场景的静态画面提示词（用于文生图）：包含主体人物外貌特征、服装、场景环境、光影氛围、构图与画风描述",
       "duration": 5,
       "characters": ["出场角色名1", "角色名2"],
+      "location": "该场景地点名（同一地点多场景须用同一名称，保证环境一致；无明确地点则为空字符串）",
+      "props": ["该场景出现的关键道具名（同一道具须用同一名称；无则为空数组）"],
       "dialogues": [{"character": "角色名", "text": "台词"}, {"character": "", "text": "旁白"}]
     }
   ]
@@ -360,7 +370,8 @@ const scriptSystemPrompt = `你是一位专业的漫剧编剧与分镜师。根�
 4. 人物一致性至关重要：同一角色在多个场景出现时，image_prompt 必须重复其外貌特征（发型、服装颜色、体型），且所有场景画风描述保持一致。
 5. 每个场景必须在 characters 数组中列出该场出场的角色名（须与角色卡或创作方案中的角色名完全一致；无出场角色则为空数组）。
 6. 每个场景必须在 dialogues 数组中列出该场的对白与旁白（character 为说话人角色名，空字符串表示旁白；用于配音与字幕）。无对白则为空数组。
-7. 第一个场景尽量给出大场景/环境交代，后续场景聚焦人物动作与剧情推进。`
+7. 第一个场景尽量给出大场景/环境交代，后续场景聚焦人物动作与剧情推进。
+8. 道具与场景一致性：贯穿剧情的关键道具（信物/武器等）与主要地点必须在 props/location 中用统一名称标出（系统会用同名资产参考图锁定其外观），同一道具/地点在不同场景中名称必须完全相同。`
 
 // GenerateScript 生成分镜剧本：已有创作方案时按方案渲染（两阶段流程），否则直接文生文。
 // episodeN 指定当前制作集数（默认 1），只生成该集的分镜场景并替换该集旧场景。
@@ -504,7 +515,9 @@ func (s *ProjectService) generateScriptCore(p *models.Project, episodeN int, raw
 				ProjectID: p.ID, EpisodeN: episodeN, Order: i + 1, Generation: newGeneration,
 				Title: sc.Title, Content: sc.Content,
 				ImagePrompt: sc.ImagePrompt, Duration: normalizeSceneDuration(sc.Duration), Status: "pending",
-				Characters: joinSceneCharacters(sc.Characters),
+				Characters:   joinSceneCharacters(sc.Characters),
+				LocationName: strings.TrimSpace(sc.Location),
+				Props:        joinSceneCharacters(sc.Props),
 			}
 			if scene.Title == "" {
 				scene.Title = fmt.Sprintf("场景 %d", i+1)
@@ -548,6 +561,8 @@ func (s *ProjectService) generateScriptCore(p *models.Project, episodeN int, raw
 		return nil, nil, err
 	}
 	s.cleanupStaleSceneFiles(p.ID, oldScenes)
+	// 分镜引用的道具/地点若尚未建卡，自动补建（source=auto，供参考图生成与一致性注入）
+	s.upsertAssetsFromScenes(p.ID, res.Scenes)
 
 	s.pushProject(p)
 	return s.GetProject(p.ID)
@@ -827,6 +842,7 @@ func (s *ProjectService) UpdateCharacter(ch *models.Character, req models.Charac
 	updates["role"] = strings.TrimSpace(req.Role)
 	updates["trait"] = strings.TrimSpace(req.Trait)
 	updates["style"] = strings.TrimSpace(req.Style)
+	updates["voice"] = strings.TrimSpace(req.Voice) // 预设音色；参考语音（voice_ref/voice_id）由独立接口管理
 	if err := s.db.Model(ch).Updates(updates).Error; err != nil {
 		return err
 	}
@@ -1026,9 +1042,9 @@ func (s *ProjectService) characterContextForScene(sc *models.Scene) string {
 	return "【角色设定（必须严格遵守，保证人物一致）】\n" + strings.Join(lines, "\n")
 }
 
-// buildSceneImagePrompt 拼装场景文生图提示词：强画风约束 → 画风/视觉基准 → 角色设定 → 当前分镜
+// buildSceneImagePrompt 拼装场景文生图提示词：强画风约束 → 画风/视觉基准 → 角色设定 → 道具/场景设定 → 当前分镜
 func (s *ProjectService) buildSceneImagePrompt(sc *models.Scene) string {
-	parts := make([]string, 0, 5)
+	parts := make([]string, 0, 6)
 	var p models.Project
 	if err := s.db.First(&p, sc.ProjectID).Error; err == nil {
 		if desc := styleDescriptor(p.Style); desc != "" {
@@ -1043,6 +1059,9 @@ func (s *ProjectService) buildSceneImagePrompt(sc *models.Scene) string {
 	}
 	if charCtx := s.characterContextForScene(sc); charCtx != "" {
 		parts = append(parts, charCtx)
+	}
+	if assetCtx := s.assetContextForScene(sc); assetCtx != "" {
+		parts = append(parts, assetCtx)
 	}
 	if prompt := strings.TrimSpace(sc.ImagePrompt); prompt != "" {
 		parts = append(parts, "当前分镜："+prompt)
@@ -1140,14 +1159,20 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 		return fmt.Errorf("场景缺少提示词")
 	}
 
-	// 注入出场角色标准像作为图生图底图（subject 主体参考，多角色传多张），强制人物形象一致
+	// 注入出场角色标准像 + 匹配道具/场景参考图作为图生图底图（subject 主体参考），强制人物/道具/环境一致
 	refs, names, err := s.scenePortraitRefs(sc)
 	if err != nil {
 		log.Printf("[project %d] scene %d portrait refs failed: %v", sc.ProjectID, sc.Order, err)
 	}
+	assetRefs, assetLines := s.sceneAssetRefs(sc, len(refs))
+	if len(assetRefs) > 0 {
+		refs = append(refs, assetRefs...)
+		names = append(names, assetLines...)
+	}
 	if len(refs) > 0 {
 		prompt += "\n参考图说明：\n" + strings.Join(names, "\n") +
-			"\n请严格保持图1至图" + fmt.Sprintf("%d", len(refs)) + " 中各人物的外貌完全一致（五官、发型、体型、服装），仅按描述调整场景、构图与动作，禁止改变人物形象。"
+			"\n请严格保持图1至图" + fmt.Sprintf("%d", len(refs)) +
+			" 中各参考主体（人物/道具/场景环境）的外观完全一致：人物保持五官、发型、体型、服装不变；道具保持形状、材质、颜色与细节不变；场景环境保持空间布局、陈设与光线氛围一致。仅按描述调整构图与动作，禁止改变参考图中的形象。"
 	}
 
 	data, err := s.volc.GenerateImageRefs(prompt, s.projectImageSize(sc.ProjectID), refs)
@@ -1427,8 +1452,9 @@ func (s *ProjectService) advancePipeline(projectID uint) {
 			s.failPipeline(p.ID, err, true)
 			return
 		}
-		// 触发角色标准像生成（异步，供后续 ref2v 视频锁定人物）
+		// 触发角色标准像与道具/场景参考图生成（异步，供后续分镜画面锁定一致性）
 		s.GenerateAllPortraits(fresh)
+		s.GenerateAllAssetImages(fresh, "")
 		s.db.Model(&models.Project{}).Where("id = ? AND pipeline_stage = ?", p.ID, "plan_running").Update("pipeline_stage", "script")
 		go s.advancePipeline(fresh.ID)
 	case "script":
@@ -1458,6 +1484,11 @@ func (s *ProjectService) advancePipeline(projectID uint) {
 			s.failPipeline(p.ID, fmt.Errorf("没有可生成的分镜场景"), true)
 			return
 		}
+		// 道具/场景参考图优先于分镜画面：分镜图生图需要资产参考图锁定道具与环境外观
+		if s.pendingSceneAssetRefs(p.ID, episodeN, p.Generation) > 0 {
+			s.GenerateAllAssetImages(&p, "")
+			return
+		}
 		// 文生图失败自动重试一次；达到上限后停止流水线并保留逐场景重试入口。
 		s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ? AND status = ? AND image_file = '' AND image_retries < ?",
 			p.ID, episodeN, p.Generation, "failed", 2).Updates(map[string]any{"status": "pending", "error": ""})
@@ -1482,6 +1513,13 @@ func (s *ProjectService) advancePipeline(projectID uint) {
 		s.db.Model(&models.Character{}).Where("project_id = ? AND portrait = ''", p.ID).Count(&pendingPortraits)
 		if pendingPortraits > 0 {
 			s.GenerateAllPortraits(&p)
+			return
+		}
+		// 确保道具/场景参考图就绪（分镜画面一致性依赖）
+		var pendingAssets int64
+		s.db.Model(&models.Asset{}).Where("project_id = ? AND image = ''", p.ID).Count(&pendingAssets)
+		if pendingAssets > 0 {
+			s.GenerateAllAssetImages(&p, "")
 			return
 		}
 		var failed int64
@@ -2139,9 +2177,9 @@ func (s *ProjectService) EditorData(p *models.Project, episodeN int) (map[string
 	}
 	type editorScene struct {
 		models.Scene
-		VideoURL  string  `json:"video_url"`
-		ImageURL  string  `json:"image_url"`
-		VideoDur  float64 `json:"video_dur"`
+		VideoURL  string   `json:"video_url"`
+		ImageURL  string   `json:"image_url"`
+		VideoDur  float64  `json:"video_dur"`
 		AudioURLs []string `json:"audio_urls,omitempty"`
 	}
 	outScenes := make([]editorScene, 0, len(scenes))
@@ -2311,15 +2349,31 @@ func (s *ProjectService) ReorderScenes(p *models.Project, sceneIDs []uint) error
 	})
 }
 
-// dubVoiceFor 对白音色：Dialogue.Voice 优先，否则取阿里云 TTS 默认音色
-func (s *ProjectService) dubVoiceFor(d *models.Dialogue) string {
+// dubVoiceFor 对白音色解析（优先级）：单条对白覆盖 → 角色复刻音色 → 角色预设音色 → 平台角色映射/默认。
+// 返回 (预设音色, 复刻音色ID, 复刻合成模型)；复刻音色 ID 非空时用 VC 合成。
+func (s *ProjectService) dubVoiceFor(d *models.Dialogue) (string, string, string) {
 	if strings.TrimSpace(d.Voice) != "" {
-		return d.Voice
+		return d.Voice, "", ""
+	}
+	if name := strings.TrimSpace(d.Character); name != "" {
+		var ch models.Character
+		if err := s.db.Where("project_id = ? AND name = ?", d.ProjectID, name).First(&ch).Error; err == nil {
+			if ch.VoiceID != "" {
+				model := ch.VoiceModel
+				if model == "" {
+					model = QwenTTSVCModel
+				}
+				return "", ch.VoiceID, model
+			}
+			if ch.Voice != "" {
+				return ch.Voice, "", ""
+			}
+		}
 	}
 	if s.ali != nil {
-		return s.ali.Config().VoiceFor(d.Character)
+		return s.ali.Config().VoiceFor(d.Character), "", ""
 	}
-	return ""
+	return "", "", ""
 }
 
 // StartDialogueTTS 异步合成单条对白（占位防并发）
@@ -2349,12 +2403,16 @@ func (s *ProjectService) synthesizeDialogue(d *models.Dialogue) error {
 		s.db.Model(&models.Dialogue{}).Where("id = ?", d.ID).Updates(map[string]any{"status": "ready", "audio_file": "", "error": ""})
 		return nil
 	}
-	// 后期配音：阿里云 TTS（DashScope）
+	// 后期配音：阿里云 TTS（DashScope）；角色绑定参考语音时用复刻音色合成
 	var data []byte
 	var err error
-	voice := s.dubVoiceFor(d)
+	voice, voiceID, vcModel := s.dubVoiceFor(d)
 	if s.ali != nil && s.ali.Config().Configured() {
-		data, err = s.ali.TextToSpeech(d.Text, d.Character, voice)
+		if voiceID != "" {
+			data, err = s.ali.TextToSpeechVC(d.Text, voiceID, vcModel)
+		} else {
+			data, err = s.ali.TextToSpeech(d.Text, d.Character, voice)
+		}
 	} else {
 		err = fmt.Errorf("TTS 未配置（请到平台设置配置阿里云语音服务）")
 	}

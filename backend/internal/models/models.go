@@ -90,29 +90,29 @@ type Setting struct {
 
 // Project 漫剧项目：选题 → 创作方案 → 剧本 → 分镜画面 → 视频 → 合并成片
 type Project struct {
-	ID            uint      `gorm:"primaryKey" json:"id"`
-	Title         string    `json:"title"`
-	Genre         string    `json:"genre"`                         // 题材（可选，支持组合如"科幻+悬疑"）
-	Style         string    `json:"style"`                         // 画风（可选）
-	Synopsis      string    `json:"synopsis"`                      // 故事创意/一句话梗概
-	Audience      string    `json:"audience"`                      // 受众：女频/男频/全龄
-	Tone          string    `json:"tone"`                          // 基调：爽/甜/虐/燃/搞笑/悬疑
-	Ending        string    `json:"ending"`                        // 结局：HE/BE/OE
-	Episodes      int       `json:"episodes"`                      // 目标集数（用于节奏规划）
-	AspectRatio   string    `json:"aspect_ratio"`                  // 画幅：16:9 横屏 / 9:16 竖屏 / 1:1 方形（默认 16:9）
-	Plan          string    `gorm:"type:text" json:"plan"`         // 创作方案 JSON（short-drama 方法论产物）
-	Script        string    `gorm:"type:text" json:"script"`       // 最近一集剧本（兼容旧数据）
-	Scripts       string    `gorm:"type:text" json:"scripts"`      // 按集剧本 JSON map[int]string（episode_n -> 剧本正文）
-	VisualBible   string    `gorm:"type:text" json:"visual_bible"` // 角色外观与统一画风基准
-	Status        string    `json:"status"`                        // draft/plan_done/script_done/producing/ready/finished/failed
-	Error         string    `json:"error"`
-	Generation    uint      `gorm:"default:0" json:"generation"`                       // 当前生成版本，防止旧任务回写新分镜
-	PipelineStage string    `gorm:"column:pipeline_stage;index" json:"pipeline_stage"` // plan/script/images/videos/merge/finished/failed
+	ID              uint      `gorm:"primaryKey" json:"id"`
+	Title           string    `json:"title"`
+	Genre           string    `json:"genre"`                         // 题材（可选，支持组合如"科幻+悬疑"）
+	Style           string    `json:"style"`                         // 画风（可选）
+	Synopsis        string    `json:"synopsis"`                      // 故事创意/一句话梗概
+	Audience        string    `json:"audience"`                      // 受众：女频/男频/全龄
+	Tone            string    `json:"tone"`                          // 基调：爽/甜/虐/燃/搞笑/悬疑
+	Ending          string    `json:"ending"`                        // 结局：HE/BE/OE
+	Episodes        int       `json:"episodes"`                      // 目标集数（用于节奏规划）
+	AspectRatio     string    `json:"aspect_ratio"`                  // 画幅：16:9 横屏 / 9:16 竖屏 / 1:1 方形（默认 16:9）
+	Plan            string    `gorm:"type:text" json:"plan"`         // 创作方案 JSON（short-drama 方法论产物）
+	Script          string    `gorm:"type:text" json:"script"`       // 最近一集剧本（兼容旧数据）
+	Scripts         string    `gorm:"type:text" json:"scripts"`      // 按集剧本 JSON map[int]string（episode_n -> 剧本正文）
+	VisualBible     string    `gorm:"type:text" json:"visual_bible"` // 角色外观与统一画风基准
+	Status          string    `json:"status"`                        // draft/plan_done/script_done/producing/ready/finished/failed
+	Error           string    `json:"error"`
+	Generation      uint      `gorm:"default:0" json:"generation"`                               // 当前生成版本，防止旧任务回写新分镜
+	PipelineStage   string    `gorm:"column:pipeline_stage;index" json:"pipeline_stage"`         // plan/script/images/videos/merge/finished/failed
 	PipelineEpisode int       `gorm:"column:pipeline_episode;default:1" json:"pipeline_episode"` // 当前一键生成流水线的目标集数
-	AutoGenerate  bool      `gorm:"column:auto_generate" json:"auto_generate"`
+	AutoGenerate    bool      `gorm:"column:auto_generate" json:"auto_generate"`
 	StopAfterScript bool      `gorm:"column:stop_after_script" json:"-"` // 自动流水线生成完第一集剧本后停止（后续由人工处理）
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // Scene 分镜场景（项目内顺序片段）
@@ -127,6 +127,8 @@ type Scene struct {
 	ImagePrompt  string    `json:"image_prompt"`                              // 文生图提示词
 	Duration     float64   `gorm:"default:5" json:"duration"`                 // 场景目标时长（秒）
 	Characters   string    `json:"characters"`                                // 出场角色名（逗号分隔），用于一致性注入
+	LocationName string    `gorm:"column:location_name" json:"location"`      // 场景地点名（对应 location 资产，用于环境一致性注入）
+	Props        string    `json:"props"`                                     // 出场关键道具名（逗号分隔），用于道具一致性注入
 	ImageFile    string    `json:"image_file"`                                // 首帧图文件名（input/<project_id>/ 下）
 	ImageToken   string    `gorm:"column:image_token" json:"-"`               // 单次生成令牌，防止并发或过期结果回写
 	VideoTaskID  string    `gorm:"column:video_task_id" json:"video_task_id"` // 关联视频生成任务
@@ -142,16 +144,33 @@ type Scene struct {
 
 // Character 角色卡：项目内可复用的人物资产，统一外貌/服装设定以保证跨场景一致性
 type Character struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	ProjectID uint      `gorm:"column:project_id;index;uniqueIndex:idx_character_project_name" json:"project_id"`
-	Name      string    `gorm:"uniqueIndex:idx_character_project_name" json:"name"` // 项目内唯一
-	Role      string    `json:"role"`                                               // 身份：主角/女主/反派/配角…
-	Trait     string    `gorm:"type:text" json:"trait"`                             // 外貌特征（发型/五官/体型）
-	Style     string    `gorm:"type:text" json:"style"`                             // 服装造型
-	Portrait  string    `json:"portrait"`                                           // 标准参考像文件名（input/<project_id>/ 下）
-	Source    string    `json:"source"`                                             // auto(方案抽取) / manual(手动新建)
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	ProjectID  uint      `gorm:"column:project_id;index;uniqueIndex:idx_character_project_name" json:"project_id"`
+	Name       string    `gorm:"uniqueIndex:idx_character_project_name" json:"name"` // 项目内唯一
+	Role       string    `json:"role"`                                               // 身份：主角/女主/反派/配角…
+	Trait      string    `gorm:"type:text" json:"trait"`                             // 外貌特征（发型/五官/体型）
+	Style      string    `gorm:"type:text" json:"style"`                             // 服装造型
+	Portrait   string    `json:"portrait"`                                           // 标准参考像文件名（input/<project_id>/ 下）
+	Voice      string    `json:"voice"`                                              // 预设 TTS 音色 ID（角色级，配音优先于平台角色映射）
+	VoiceRef   string    `gorm:"column:voice_ref" json:"voice_ref"`                  // 参考语音文件名（input/<project_id>/ 下）
+	VoiceID    string    `gorm:"column:voice_id" json:"voice_id"`                    // 参考语音注册的复刻音色 ID（阿里云 qwen-voice-enrollment）
+	VoiceModel string    `gorm:"column:voice_model" json:"voice_model"`              // 复刻音色绑定的合成模型（须与注册时 target_model 一致）
+	Source     string    `json:"source"`                                             // auto(方案抽取) / manual(手动新建)
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// Asset 视觉资产卡：道具（prop）/场景（location）参考图，项目内可复用，跨分镜保持一致
+type Asset struct {
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	ProjectID   uint      `gorm:"column:project_id;index;uniqueIndex:idx_asset_project_kind_name" json:"project_id"`
+	Kind        string    `gorm:"column:kind;uniqueIndex:idx_asset_project_kind_name" json:"kind"` // prop(道具) / location(场景)
+	Name        string    `gorm:"uniqueIndex:idx_asset_project_kind_name" json:"name"`             // 项目内同类别唯一
+	Description string    `gorm:"type:text" json:"description"`                                    // 外观描述（道具：形状/材质/颜色/细节；场景：空间/建筑/光线氛围）
+	Image       string    `json:"image"`                                                           // 参考图文件名（input/<project_id>/ 下）
+	Source      string    `json:"source"`                                                          // auto(方案抽取) / manual(手动新建)
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // MergeTask 视频合并任务（把多个场景视频合并剪辑成片）
@@ -162,8 +181,8 @@ type MergeTask struct {
 	Title      string    `json:"title"`
 	SceneOrder string    `json:"scene_order"` // 按序合并的场景 ID（逗号分隔）
 	Generation uint      `gorm:"index" json:"generation"`
-	Status     string    `json:"status"`      // pending/running/success/failed
-	OutputFile string    `json:"output_file"` // 合并输出文件（相对 output_workers/gpu0/ 路径）
+	Status     string    `json:"status"`                        // pending/running/success/failed
+	OutputFile string    `json:"output_file"`                   // 合并输出文件（相对 output_workers/gpu0/ 路径）
 	Subtitle   bool      `gorm:"default:false" json:"subtitle"` // 是否生成了配音字幕（SRT 与成片同名）
 	Error      string    `json:"error"`
 	CreatedAt  time.Time `json:"created_at"`

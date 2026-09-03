@@ -35,6 +35,7 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.MergeTask{},
 		&models.Material{},
 		&models.Character{},
+		&models.Asset{},
 		&models.Dialogue{},
 	); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)

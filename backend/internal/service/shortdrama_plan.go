@@ -54,6 +54,14 @@ type dramaPlan struct {
 		Name  string `json:"name"`
 		Motif string `json:"motif"`
 	} `json:"villains"` // 四层反派
+	Props []struct {
+		Name        string `json:"name"`
+		Description string `json:"description"` // 外观描述（形状/材质/颜色/标志性细节）
+	} `json:"props"` // 贯穿全剧的关键道具（供分镜画面保持道具一致）
+	Locations []struct {
+		Name        string `json:"name"`
+		Description string `json:"description"` // 环境描述（空间/建筑/光线氛围）
+	} `json:"locations"` // 主要场景地点（供分镜画面保持环境一致）
 	Episodes []struct {
 		N     int    `json:"n"`
 		Title string `json:"title"`
@@ -101,10 +109,13 @@ func planSystemPrompt() string {
   "satisfaction": "爽感矩阵配比（打脸/逆袭/甜宠/虐心/悬疑/燃/搞笑/感动）",
   "characters": [{"name": "角色名", "role": "身份", "arc": "人物弧光", "trait": "外貌特征（发型/五官/体型，供画面生成保持一致）", "style": "服装造型"}],
   "villains": [{"layer": "小反派/中反派/大反派/隐藏反派", "name": "名字", "motif": "动机与行为模式"}],
+  "props": [{"name": "道具名", "description": "关键道具外观（形状/材质/颜色/标志性细节），贯穿全剧反复出现，供画面生成保持一致"}],
+  "locations": [{"name": "场景名", "description": "主要场景环境（空间/建筑/陈设/光线氛围），供画面生成保持一致"}],
   "episodes": [{"n": 1, "title": "集标题", "brief": "核心冲突或爽点一句话", "hook": "钩子类型（悬念钩/反转钩/情绪钩/信息钩/危机钩）", "tag": "🔥或💰或空"}]
 }
 3. episodes 必须覆盖全集数（与用户配置的集数一致），体现三幕节奏；前10集至少3个🔥和2个💰；🔥占比25-35%，💰占比10-15%。
-4. 每个主要角色必须给出 trait（外貌特征）与 style（服装造型），后续分镜画面需要保持人物一致。`
+4. 每个主要角色必须给出 trait（外貌特征）与 style（服装造型），后续分镜画面需要保持人物一致。
+5. 必须给出贯穿全剧的关键道具清单 props（2~8 项，如信物/武器/法宝/手机等反复出现、影响剧情的物件）与主要场景清单 locations（2~8 个地点），每项给出具体外观/环境描述；后续分镜只引用这些名称，系统会用它们生成参考图保证道具与场景全剧一致。`
 }
 
 // scriptFromPlanSystemPrompt 阶段 2 系统提示词：依据创作方案渲染分镜场景
@@ -123,6 +134,8 @@ func scriptFromPlanSystemPrompt() string {
       "image_prompt": "该场景的静态画面提示词（用于文生图）：包含主体人物外貌特征、服装、场景环境、光影氛围、构图与画风描述",
       "duration": 5,
       "characters": ["出场角色名1", "角色名2"],
+      "location": "该场景地点名（须与创作方案 locations 中的名称完全一致；无明确地点则为空字符串）",
+      "props": ["该场景出现的关键道具名（与创作方案 props 中的名称完全一致；无则为空数组）"],
       "dialogues": [{"character": "角色名", "text": "台词"}, {"character": "", "text": "旁白"}]
     }
   ]
@@ -132,7 +145,8 @@ func scriptFromPlanSystemPrompt() string {
 5. 每个场景必须在 characters 数组中列出该场出场的角色名（须与创作方案中的角色名完全一致；无出场角色则为空数组）。
 6. 每个场景必须在 dialogues 数组中列出该场的对白与旁白（character 为说话人角色名，空字符串表示旁白；用于配音与字幕）。无对白则为空数组。
 7. 第一个场景尽量给出大场景/环境交代，后续场景聚焦人物动作与剧情推进。
-8. 剧情节奏参考创作方案中的节奏曲线：开头要有钩子，中段冲突升级，结尾留悬念。`
+8. 剧情节奏参考创作方案中的节奏曲线：开头要有钩子，中段冲突升级，结尾留悬念。
+9. 道具与场景一致性：每个场景的 location 与 props 名称必须完全取自创作方案的 locations/props 清单（系统会用同名资产参考图锁定画面中该场景环境与道具外观），不得随意改名；只有确属剧情新出现的道具才允许新名称。`
 }
 
 // GeneratePlan 阶段 1：按 short-drama 方法论生成创作方案（存 project.plan）
@@ -184,6 +198,8 @@ func (s *ProjectService) GeneratePlan(p *models.Project) (*models.Project, error
 	}
 	// 抽取创作方案中的角色为独立资产（保留已编辑角色与标准像）
 	s.upsertCharactersFromPlan(&fresh, res)
+	// 抽取关键道具与主要场景为独立资产（跨分镜一致性参考图）
+	s.upsertAssetsFromPlan(&fresh, res)
 	return &fresh, nil
 }
 

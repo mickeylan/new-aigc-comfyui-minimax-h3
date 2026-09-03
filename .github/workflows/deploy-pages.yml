@@ -51,11 +51,9 @@ jobs:
       # 项目页部署在 /<仓库名>/ 子路径下，base 必须带上该前缀（从 GITHUB_REPOSITORY 动态截取，fork 改名亦可直接用）
       - name: Build
         working-directory: frontend
+        env:
+          VITE_STATIC_DEMO: "true"
         run: npm run build -- --base="/${GITHUB_REPOSITORY#*/}/"
-
-      # GitHub Pages 不支持 SPA 路由回退，复制 index.html 为 404.html 让深链路由由前端接管
-      - name: SPA fallback page
-        run: cp frontend/dist/index.html frontend/dist/404.html
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

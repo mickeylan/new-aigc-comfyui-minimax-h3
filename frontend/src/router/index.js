@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHashHistory, createWebHistory } from 'vue-router'
 
 const routes = [
   { path: '/', redirect: '/projects' },
@@ -17,7 +17,9 @@ const routes = [
 ]
 
 export default createRouter({
-  // BASE_URL 本地构建默认为 '/'，GitHub Pages 子路径部署时由 vite --base 注入
-  history: createWebHistory(import.meta.env.BASE_URL),
+  // GitHub Pages 没有 SPA 回退能力，静态演示使用 hash；完整部署保留干净的 history URL。
+  history: import.meta.env.VITE_STATIC_DEMO === 'true'
+    ? createWebHashHistory(import.meta.env.BASE_URL)
+    : createWebHistory(import.meta.env.BASE_URL),
   routes
 })
