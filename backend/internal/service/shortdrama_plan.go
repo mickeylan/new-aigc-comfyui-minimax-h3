@@ -173,7 +173,7 @@ func (s *ProjectService) GeneratePlan(p *models.Project) (*models.Project, error
 	}
 	user.WriteString("请按系统要求输出创作方案 JSON。")
 
-	raw, err := s.volc.Chat(planSystemPrompt(), user.String())
+	raw, err := s.textProvider.Chat(planSystemPrompt(), user.String())
 	if err != nil {
 		return nil, err
 	}

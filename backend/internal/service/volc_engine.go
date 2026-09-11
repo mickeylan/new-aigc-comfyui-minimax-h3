@@ -77,8 +77,9 @@ func (c VolcConfig) Configured() bool {
 
 // VolcClient 火山引擎 Ark 在线模型客户端（文生文 / 文生图）
 type VolcClient struct {
-	db    *gorm.DB
-	httpc *http.Client
+	db     *gorm.DB
+	getter IGetter // IGetter 兼容模式（用于 TextProviderFactory）
+	httpc  *http.Client
 }
 
 func NewVolcClient(db *gorm.DB) *VolcClient {
@@ -91,9 +92,16 @@ func NewVolcClient(db *gorm.DB) *VolcClient {
 // Config 从平台设置读取火山引擎配置（实时读取，改配置立即生效）
 func (v *VolcClient) Config() VolcConfig {
 	get := func(key, def string) string {
-		var s models.Setting
-		if v.db != nil && v.db.Where("key = ?", key).First(&s).Error == nil && s.Value != "" {
-			return s.Value
+		// 优先使用 IGetter 接口
+		if v.getter != nil {
+			return v.getter.GetSetting(key, def)
+		}
+		// 回退到 gorm.DB
+		if v.db != nil {
+			var s models.Setting
+			if v.db.Where("key = ?", key).First(&s).Error == nil && s.Value != "" {
+				return s.Value
+			}
 		}
 		return def
 	}
@@ -104,6 +112,25 @@ func (v *VolcClient) Config() VolcConfig {
 		ImgModel:  get(SettingVolcImgModel, DefaultVolcImgModel),
 		ImgSize:   get(SettingVolcImgSize, DefaultVolcImgSize),
 	}
+}
+
+// GetSetting 读取单个设置（实现 IGetter 接口）
+func (v *VolcClient) GetSetting(key, def string) string {
+	return v.ConfigFromGetter(key, def)
+}
+
+// ConfigFromGetter 从 IGetter 读取配置
+func (v *VolcClient) ConfigFromGetter(key, def string) string {
+	if v.getter != nil {
+		return v.getter.GetSetting(key, def)
+	}
+	if v.db != nil {
+		var s models.Setting
+		if v.db.Where("key = ?", key).First(&s).Error == nil && s.Value != "" {
+			return s.Value
+		}
+	}
+	return def
 }
 
 // ---------- 文生文（Responses API） ----------
@@ -352,15 +379,6 @@ func (v *VolcClient) generateImageOnce(cfg VolcConfig, prompt, size, format stri
 
 // ---------- 设置读写 ----------
 
-// GetSetting 读取单个设置
-func (v *VolcClient) GetSetting(key, def string) string {
-	var s models.Setting
-	if v.db.Where("key = ?", key).First(&s).Error == nil && s.Value != "" {
-		return s.Value
-	}
-	return def
-}
-
 // SetSetting 写入单个设置
 func (v *VolcClient) SetSetting(key, value string) {
 	v.db.Save(&models.Setting{Key: key, Value: value})
@@ -369,9 +387,11 @@ func (v *VolcClient) SetSetting(key, value string) {
 // AllSettings 返回全部平台设置（API Key 打码后返回，避免前端明文回显）
 func (v *VolcClient) AllSettings() map[string]string {
 	keys := []string{SettingVolcAPIKey, SettingVolcBaseURL, SettingVolcTextModel, SettingVolcImgModel, SettingVolcImgSize,
-		SettingAliAPIKey, SettingAliBaseURL, SettingAliTTSModel, SettingAliTTSVoice, SettingAliVoiceMale, SettingAliTTSStyle, SettingAliTTSExtra, "video_concurrency", "video_resolution"}
+		SettingAliAPIKey, SettingAliBaseURL, SettingAliTTSModel, SettingAliTTSVoice, SettingAliVoiceMale, SettingAliTTSStyle, SettingAliTTSExtra,
+		SettingMiniMaxAPIKey, SettingMiniMaxBaseURL, SettingMiniMaxModel, "video_concurrency", "video_resolution"}
 	defs := []string{"", DefaultVolcBaseURL, DefaultVolcTextModel, DefaultVolcImgModel, DefaultVolcImgSize,
-		"", "https://llm-ebg0fg1ejgmvv30a.cn-beijing.maas.aliyuncs.com", "qwen3-tts-flash", "Cherry", "Ethan", "{}", "{}", "4", "720p"}
+		"", "https://llm-ebg0fg1ejgmvv30a.cn-beijing.maas.aliyuncs.com", "qwen3-tts-flash", "Cherry", "Ethan", "{}", "{}",
+		"", "", DefaultMiniMaxModel, "4", "720p"}
 	out := map[string]string{}
 	for i, k := range keys {
 		out[k] = v.GetSetting(k, defs[i])
@@ -389,6 +409,14 @@ func (v *VolcClient) AllSettings() map[string]string {
 			out[SettingAliAPIKey] = k[:4] + "****" + k[len(k)-4:]
 		}
 	}
+	if out[SettingMiniMaxAPIKey] != "" {
+		k := out[SettingMiniMaxAPIKey]
+		if len(k) > 12 {
+			out[SettingMiniMaxAPIKey] = k[:4] + "****" + k[len(k)-4:]
+		} else {
+			out[SettingMiniMaxAPIKey] = "****"
+		}
+	}
 	return out
 }
 
@@ -396,6 +424,7 @@ func (v *VolcClient) AllSettings() map[string]string {
 func (v *VolcClient) UpdateSettings(m map[string]string) {
 	cur := v.GetSetting(SettingVolcAPIKey, "")
 	aliCur := v.GetSetting(SettingAliAPIKey, "")
+	miniMaxCur := v.GetSetting(SettingMiniMaxAPIKey, "")
 	for k, val := range m {
 		switch k {
 		case SettingVolcAPIKey:
@@ -406,6 +435,10 @@ func (v *VolcClient) UpdateSettings(m map[string]string) {
 		case SettingAliAPIKey:
 			if val == "" || strings.Contains(val, "****") {
 				val = aliCur
+			}
+		case SettingMiniMaxAPIKey:
+			if val == "" || strings.Contains(val, "****") {
+				val = miniMaxCur
 			}
 		}
 		v.SetSetting(k, val)

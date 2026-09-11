@@ -98,7 +98,7 @@ func newTestProjectService(t *testing.T) *ProjectService {
 	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.Character{}, &models.MergeTask{}, &models.Task{}); err != nil {
 		t.Fatal(err)
 	}
-	ps := NewProjectService(nil, db, nil, nil, nil, nil, nil, nil)
+	ps := NewProjectService(nil, db, nil, nil, nil, nil, nil, nil, nil)
 	ps.stopped = make(chan struct{})
 	return ps
 }

@@ -22,7 +22,8 @@ import (
 type ProjectService struct {
 	cfg           *config.Config
 	db            *gorm.DB
-	volc          *VolcClient
+	textProvider  TextProvider // 文生文 provider（支持火山 / llama.cpp 等）
+	volc          *VolcClient  // 保留用于图片生成
 	ali           *AliyunTTS
 	tasks         *TaskService
 	remote        *RemoteExec
@@ -35,9 +36,9 @@ type ProjectService struct {
 	assetInflight map[uint]bool // 生成中的资产 ID
 }
 
-func NewProjectService(cfg *config.Config, db *gorm.DB, volc *VolcClient, tasks *TaskService, remote *RemoteExec, upload *UploadManager, hub *Hub, materials *MaterialService) *ProjectService {
+func NewProjectService(cfg *config.Config, db *gorm.DB, textProvider TextProvider, volc *VolcClient, tasks *TaskService, remote *RemoteExec, upload *UploadManager, hub *Hub, materials *MaterialService) *ProjectService {
 	return &ProjectService{
-		cfg: cfg, db: db, volc: volc, tasks: tasks,
+		cfg: cfg, db: db, textProvider: textProvider, volc: volc, tasks: tasks,
 		remote: remote, upload: upload, hub: hub,
 		ali:       NewAliyunTTS(db),
 		stopped:   make(chan struct{}),
@@ -401,7 +402,7 @@ func (s *ProjectService) GenerateScript(p *models.Project, episodeN int) (*model
 		user.WriteString("请按系统要求输出剧本 JSON。")
 	}
 
-	raw, err := s.volc.Chat(system, user.String())
+	raw, err := s.textProvider.Chat(system, user.String())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -445,7 +446,7 @@ func (s *ProjectService) GenerateScriptFromText(p *models.Project, episodeN int,
 		system = scriptSystemPrompt
 	}
 
-	raw, err := s.volc.Chat(system, user.String())
+	raw, err := s.textProvider.Chat(system, user.String())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -464,7 +465,7 @@ func (s *ProjectService) ExpandScript(p *models.Project, episodeN int, scriptTex
 	}
 	system := "你是专业的漫剧编剧。根据用户提供的本集剧本正文进行扩写：丰富场景环境描写、人物动作与表情、对白与冲突细节，保持原有剧情走向、人物关系与核心冲突不变，节奏更紧凑有张力。只输出扩写后的完整剧本正文（纯文本，按场景分段，含动作描写与对白），不要输出 JSON、Markdown 标记或任何解释。"
 	user := fmt.Sprintf("第 %d 集「%s」剧本正文，请扩写：\n\n%s", episodeN, epTitle, scriptText)
-	return s.volc.Chat(system, user)
+	return s.textProvider.Chat(system, user)
 }
 
 // generateScriptCore 解析 LLM 输出并落库（替换指定集的分镜场景）

@@ -22,7 +22,15 @@ import (
 
 // HandleGetSettings 读取平台设置（API Key 打码返回）
 func (s *Service) HandleGetSettings(c *gin.Context) {
-	c.JSON(200, s.Volc.AllSettings())
+	settings := s.Volc.AllSettings()
+	// 添加当前选中的文生文 provider
+	settings["text_provider"] = s.Volc.GetSetting(SettingTextProvider, DefaultTextProvider)
+	// 添加 llama 配置
+	settings["llama_base_url"] = s.Volc.GetSetting(SettingLlamaBaseURL, DefaultLlamaBaseURL)
+	settings["llama_model"] = s.Volc.GetSetting(SettingLlamaModel, DefaultLlamaModel)
+	settings[SettingMiniMaxBaseURL] = s.Volc.GetSetting(SettingMiniMaxBaseURL, "")
+	settings[SettingMiniMaxModel] = s.Volc.GetSetting(SettingMiniMaxModel, DefaultMiniMaxModel)
+	c.JSON(200, settings)
 }
 
 // HandleUpdateSettings 保存平台设置
@@ -32,21 +40,27 @@ func (s *Service) HandleUpdateSettings(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "参数错误"})
 		return
 	}
+	if tp, ok := req["text_provider"]; ok && tp != "llama" && tp != "volcano" && tp != "minimax_coding" {
+		c.JSON(400, gin.H{"error": "text_provider 仅支持 llama、minimax_coding 或 volcano"})
+		return
+	}
 	s.Volc.UpdateSettings(req)
+	log.Printf("[settings] text provider: %s", s.TextProviderFact.Name())
 	c.JSON(200, gin.H{"ok": true})
 }
 
-// HandleTestText 测试文生文接口
+// HandleTestText 测试文生文接口（根据当前选中的 provider 测试）
 func (s *Service) HandleTestText(c *gin.Context) {
-	msg, err := s.Volc.TestText()
+	provider := s.TextProviderFact.Create()
+	text, err := provider.Chat("你是连接测试助手。", "请只回复两个字：正常")
 	if err != nil {
 		c.JSON(500, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{"ok": true, "message": "文生文连通正常: " + msg})
+	c.JSON(200, gin.H{"ok": true, "message": fmt.Sprintf("[%s] 文生文连通正常: %s", provider.Name(), strings.TrimSpace(text))})
 }
 
-// HandleTestImage 测试文生图接口
+// HandleTestImage 测试文生图接口（仅火山引擎支持）
 func (s *Service) HandleTestImage(c *gin.Context) {
 	msg, err := s.Volc.TestImage()
 	if err != nil {

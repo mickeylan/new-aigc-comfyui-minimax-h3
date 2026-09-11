@@ -4,41 +4,139 @@
       <div class="settings-hero-icon">⚡</div>
       <div>
         <span class="hero-eyebrow">PLATFORM SETTINGS</span>
-        <h1>火山引擎 · 在线模型</h1>
-        <p>平台将使用火山引擎 Ark 的<strong>文生文</strong>模型生成剧本、<strong>图生图</strong>模型生成分镜画面（以角色标准人像图为底）；视频生成仍由本地 L40 算力完成。</p>
+        <h1>平台设置</h1>
+        <p>配置文生文、文生图、配音等服务提供商。切换文生文模型后，所有剧本生成功能将使用新的模型。</p>
       </div>
     </div>
 
+    <!-- 文生文 Provider 选择 -->
     <div class="card settings-card">
       <div class="section-head">
         <div>
-          <h2>接口配置</h2>
-          <p class="hint">前往 <a href="https://console.volcengine.com/ark" target="_blank" rel="noopener">火山方舟控制台</a> 创建 API Key，并在「开通管理」中开通所需模型</p>
+          <h2>文生文 · 模型选择</h2>
+          <p class="hint">选择用于剧本生成、场景拆分、扩写的文本生成模型</p>
         </div>
         <span class="badge" :class="saved ? 'badge-green' : 'badge-gray'">{{ saved ? '已保存' : '未保存' }}</span>
       </div>
 
-      <div class="form-grid">
-        <div class="field span-2">
-          <label for="api_key">API Key <span class="req">必填</span></label>
-          <div class="key-row">
-            <input id="api_key" v-model="form.volc_api_key" type="password" class="input" autocomplete="off"
-              :placeholder="apiKeyPlaceholder" />
-            <button type="button" class="btn btn-sm btn-ghost" @click="showKey = !showKey">
-              {{ showKey ? '隐藏' : '显示' }}
-            </button>
+      <div class="provider-selector">
+        <div class="provider-option" :class="{ active: form.text_provider === 'volcano' }" @click="form.text_provider = 'volcano'">
+          <div class="provider-icon">🌋</div>
+          <div class="provider-info">
+            <strong>火山引擎 Ark</strong>
+            <span>在线大模型 · DeepSeek / Doubao 等</span>
           </div>
-          <div class="field-hint">打码显示时保存不会覆盖原 Key</div>
+          <div class="provider-check" v-if="form.text_provider === 'volcano'">✓</div>
         </div>
-        <div class="field span-2">
-          <label for="base_url">接口地址</label>
-          <input id="base_url" v-model="form.volc_base_url" type="text" class="input" />
+        <div class="provider-option" :class="{ active: form.text_provider === 'llama' }" @click="form.text_provider = 'llama'">
+          <div class="provider-icon">🦙</div>
+          <div class="provider-info">
+            <strong>llama.cpp (本地)</strong>
+            <span>OpenAI-compatible · Qwen / Llama 等</span>
+          </div>
+          <div class="provider-check" v-if="form.text_provider === 'llama'">✓</div>
         </div>
-        <div class="field">
-          <label for="text_model">文生文模型</label>
-          <input id="text_model" v-model="form.volc_text_model" type="text" class="input" placeholder="deepseek-v4-flash-260425" />
-          <div class="field-hint">用于剧本 / 分镜生成</div>
+        <div class="provider-option" :class="{ active: form.text_provider === 'minimax_coding' }" @click="form.text_provider = 'minimax_coding'">
+          <div class="provider-icon">⌨️</div>
+          <div class="provider-info">
+            <strong>MiniMax Coding Plan</strong>
+            <span>国内 OpenAI 兼容文本模型</span>
+          </div>
+          <div class="provider-check" v-if="form.text_provider === 'minimax_coding'">✓</div>
         </div>
+      </div>
+
+      <!-- 火山引擎配置 -->
+      <div v-if="form.text_provider === 'volcano'" class="provider-config">
+        <h3>火山引擎 Ark 配置</h3>
+        <p class="hint">前往 <a href="https://console.volcengine.com/ark" target="_blank" rel="noopener">火山方舟控制台</a> 创建 API Key，并在「开通管理」中开通所需模型</p>
+        <div class="form-grid">
+          <div class="field span-2">
+            <label for="api_key">API Key <span class="req">必填</span></label>
+            <div class="key-row">
+              <input id="api_key" v-model="form.volc_api_key" type="password" class="input" autocomplete="off"
+                :placeholder="apiKeyPlaceholder" />
+              <button type="button" class="btn btn-sm btn-ghost" @click="showKey = !showKey">
+                {{ showKey ? '隐藏' : '显示' }}
+              </button>
+            </div>
+            <div class="field-hint">打码显示时保存不会覆盖原 Key</div>
+          </div>
+          <div class="field span-2">
+            <label for="base_url">接口地址</label>
+            <input id="base_url" v-model="form.volc_base_url" type="text" class="input" />
+          </div>
+          <div class="field">
+            <label for="text_model">文生文模型</label>
+            <input id="text_model" v-model="form.volc_text_model" type="text" class="input" placeholder="deepseek-v4-flash-260425" />
+            <div class="field-hint">用于剧本 / 分镜生成</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- llama.cpp 配置 -->
+      <div v-if="form.text_provider === 'llama'" class="provider-config">
+        <h3>llama.cpp 配置</h3>
+        <p class="hint">配置本地运行的 llama.cpp 服务器（需支持 OpenAI-compatible API，即 <code>/v1/chat/completions</code> 端点）</p>
+        <div class="form-grid">
+          <div class="field span-2">
+            <label for="llama_base_url">服务器地址</label>
+            <input id="llama_base_url" v-model="form.llama_base_url" type="text" class="input" placeholder="http://localhost:8080/v1" />
+            <div class="field-hint">llama.cpp 服务器的 base URL，需包含 /v1</div>
+          </div>
+          <div class="field">
+            <label for="llama_model">模型名称</label>
+            <input id="llama_model" v-model="form.llama_model" type="text" class="input" placeholder="qwen3.5-9b" />
+            <div class="field-hint">与服务器启动时加载的模型名一致</div>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="form.text_provider === 'minimax_coding'" class="provider-config">
+        <h3>MiniMax Coding Plan 配置</h3>
+        <p class="hint">按 OpenAI-compatible <code>/chat/completions</code> 接口调用，仅用于创作方案、剧本拆分和扩写。</p>
+        <div class="form-grid">
+          <div class="field span-2">
+            <label for="minimax_coding_api_key">API Key <span class="req">必填</span></label>
+            <input id="minimax_coding_api_key" v-model="form.minimax_coding_api_key" type="password" class="input" autocomplete="off" :placeholder="miniMaxKeyPlaceholder" />
+          </div>
+          <div class="field span-2">
+            <label for="minimax_coding_base_url">OpenAI 兼容 Base URL <span class="req">必填</span></label>
+            <input id="minimax_coding_base_url" v-model="form.minimax_coding_base_url" type="text" class="input" placeholder="填写 Coding Plan 提供的 .../v1 地址" />
+          </div>
+          <div class="field">
+            <label for="minimax_coding_model">模型名称</label>
+            <input id="minimax_coding_model" v-model="form.minimax_coding_model" type="text" class="input" placeholder="MiniMax-M2.5" />
+          </div>
+        </div>
+      </div>
+
+      <div v-if="error" class="notice error-notice">{{ error }}</div>
+      <div v-if="success" class="notice success-notice">{{ success }}</div>
+
+      <div class="actions-row">
+        <button class="btn btn-lg" :disabled="saving" @click="save">
+          {{ saving ? '保存中…' : '保存配置' }}
+        </button>
+        <button class="btn btn-secondary" :disabled="testing || saving" @click="test('text')">
+          {{ testing === 'text' ? '测试中…' : '测试文生文' }}
+        </button>
+        <div v-if="testResult" class="test-result" :class="{ ok: testResultOk }">
+          <span class="dot" :class="testResultOk ? 'dot-green' : 'dot-red'"></span>{{ testResult }}
+        </div>
+      </div>
+    </div>
+
+    <!-- 火山引擎 文生图配置（始终显示） -->
+    <div class="card settings-card">
+      <div class="section-head">
+        <div>
+          <h2>火山引擎 · 图生图</h2>
+          <p class="hint">配置用于分镜画面生成的文生图模型（以角色标准人像图为底）</p>
+        </div>
+      </div>
+
+      <div class="form-grid">
         <div class="field">
           <label for="image_model">文生图模型</label>
           <input id="image_model" v-model="form.volc_image_model" type="text" class="input" placeholder="doubao-seedream-5-0-260128" />
@@ -65,29 +163,17 @@
             <option value="1080p">1080p（更清晰）</option>
             <option value="2k">2K（最清晰，慢）</option>
           </select>
-          <div class="field-hint">场景视频生成分辨率；越高越慢、显存越大（2K 在 L40 上可能明显变慢）</div>
+          <div class="field-hint">场景视频生成分辨率；越高越慢、显存越大</div>
         </div>
       </div>
 
-      <div v-if="error" class="notice error-notice">{{ error }}</div>
-      <div v-if="success" class="notice success-notice">{{ success }}</div>
-
       <div class="actions-row">
-        <button class="btn btn-lg" :disabled="saving" @click="save">
-          {{ saving ? '保存中…' : '保存配置' }}
-        </button>
-        <button class="btn btn-secondary" :disabled="testing || saving" @click="test('text')">
-          {{ testing === 'text' ? '测试中…' : '测试文生文' }}
-        </button>
         <button class="btn btn-secondary" :disabled="testing || saving" @click="test('image')">
           {{ testing === 'image' ? '测试中…' : '测试文生图' }}
         </button>
         <button class="btn btn-danger" :disabled="restarting" @click="restartAll">
           {{ restarting ? '重启中…' : '重启全部' }}
         </button>
-        <div v-if="testResult" class="test-result" :class="{ ok: testResultOk }">
-          <span class="dot" :class="testResultOk ? 'dot-green' : 'dot-red'"></span>{{ testResult }}
-        </div>
       </div>
     </div>
 
@@ -111,7 +197,7 @@
               {{ showAliKey ? '隐藏' : '显示' }}
             </button>
           </div>
-          <div class="field-hint">打码显示时保存不会覆盖原 Key（示例：sk-xxxxxxxx）</div>
+          <div class="field-hint">打码显示时保存不会覆盖原 Key</div>
         </div>
         <div class="field span-2">
           <label for="ali_base_url">接口地址</label>
@@ -214,6 +300,7 @@ const restarting = ref(false)
 const aliStyleText = ref('{}')
 const aliExtraText = ref('{}')
 const aliKeyPlaceholder = ref('')
+const miniMaxKeyPlaceholder = ref('')
 
 const apiKeyPlaceholder = ref('')
 
@@ -223,6 +310,20 @@ onMounted(async () => {
   try {
     const { data } = await api.settings()
     form.value = { ...data }
+    // 确保 text_provider 有默认值
+    if (!form.value.text_provider) {
+      form.value.text_provider = 'volcano'
+    }
+    // 设置 llama 默认值
+    if (!form.value.llama_base_url) {
+      form.value.llama_base_url = 'http://localhost:8080/v1'
+    }
+    if (!form.value.llama_model) {
+      form.value.llama_model = 'qwen3.5-9b'
+    }
+    if (!form.value.minimax_coding_model) {
+      form.value.minimax_coding_model = 'MiniMax-M2.5'
+    }
     aliStyleText.value = data.ali_tts_style || '{}'
     aliExtraText.value = data.ali_tts_extra || '{}'
     if (data.volc_api_key && data.volc_api_key.includes('****')) {
@@ -232,6 +333,10 @@ onMounted(async () => {
     if (data.ali_api_key && data.ali_api_key.includes('****')) {
       aliKeyPlaceholder.value = data.ali_api_key
       form.value.ali_api_key = ''
+    }
+    if (data.minimax_coding_api_key && data.minimax_coding_api_key.includes('****')) {
+      miniMaxKeyPlaceholder.value = data.minimax_coding_api_key
+      form.value.minimax_coding_api_key = ''
     }
   } catch (e) {
     error.value = e.response?.data?.error || '读取设置失败'
@@ -246,6 +351,7 @@ async function save() {
     const payload = { ...form.value }
     if (!payload.volc_api_key) delete payload.volc_api_key
     if (!payload.ali_api_key) delete payload.ali_api_key
+    if (!payload.minimax_coding_api_key) delete payload.minimax_coding_api_key
     if (payload.video_concurrency != null) payload.video_concurrency = String(payload.video_concurrency)
     // 校验 JSON
     try { JSON.parse(aliStyleText.value) } catch { throw new Error('角色音色映射不是合法 JSON') }
@@ -360,10 +466,92 @@ async function restartAll() {
 .pipe-step strong { font-size: 14px; }
 .pipe-step p { margin: 3px 0 0; font-size: 12px; color: var(--text-secondary); }
 .pipe-arrow { color: var(--text-tertiary); font-size: 18px; }
+
+/* Provider selector */
+.provider-selector {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.provider-option {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px;
+  border: 2px solid var(--border, #e5e5e5);
+  border-radius: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.provider-option:hover {
+  border-color: var(--accent);
+  background: rgba(0, 122, 255, 0.03);
+}
+.provider-option.active {
+  border-color: var(--accent);
+  background: rgba(0, 122, 255, 0.06);
+}
+.provider-icon {
+  font-size: 32px;
+  line-height: 1;
+}
+.provider-info {
+  flex: 1;
+}
+.provider-info strong {
+  display: block;
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+.provider-info span {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.provider-check {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+/* Provider config section */
+.provider-config {
+  padding-top: 20px;
+  border-top: 1px solid var(--border, #e5e5e5);
+  margin-bottom: 20px;
+}
+.provider-config h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+.provider-config .hint {
+  margin: 0 0 16px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.provider-config .hint a {
+  color: var(--accent);
+}
+.provider-config code {
+  background: rgba(0,0,0,0.06);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 12px;
+}
+
 @media (max-width: 780px) {
   .form-grid { grid-template-columns: 1fr; }
   .span-2 { grid-column: span 1; }
   .pipeline { flex-direction: column; align-items: flex-start; }
   .pipe-arrow { transform: rotate(90deg); }
+  .provider-selector { grid-template-columns: 1fr; }
 }
 </style>

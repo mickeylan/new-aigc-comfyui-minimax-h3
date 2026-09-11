@@ -20,17 +20,18 @@ import (
 
 // Service 聚合所有子服务
 type Service struct {
-	Cfg      *config.Config
-	DB       *gorm.DB
-	Mgr      *InstanceManager
-	Mon      *GPUMonitor
-	Tasks    *TaskService
-	Hub      *Hub
-	Upload   *UploadManager
-	Remote   *RemoteExec
-	Volc      *VolcClient
-	Projects  *ProjectService
-	Materials *MaterialService
+	Cfg              *config.Config
+	DB               *gorm.DB
+	Mgr              *InstanceManager
+	Mon              *GPUMonitor
+	Tasks            *TaskService
+	Hub              *Hub
+	Upload           *UploadManager
+	Remote           *RemoteExec
+	Volc             *VolcClient
+	Projects         *ProjectService
+	Materials        *MaterialService
+	TextProviderFact *TextProviderFactory // 文生文 provider 工厂（运行时按设置动态选择）
 }
 
 func New(cfg *config.Config, db *gorm.DB) *Service {
@@ -44,8 +45,11 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	upload := NewUploadManager(cfg, db, remote)
 	volc := NewVolcClient(db)
 	materials := NewMaterialService(cfg, db, remote, upload)
-	projects := NewProjectService(cfg, db, volc, tasks, remote, upload, hub, materials)
-	return &Service{Cfg: cfg, DB: db, Mgr: mgr, Mon: mon, Tasks: tasks, Hub: hub, Upload: upload, Remote: remote, Volc: volc, Projects: projects, Materials: materials}
+
+	// 工厂自身实现 TextProvider，并在每次调用时按数据库设置动态选择实现。
+	textProviderFact := NewTextProviderFactory(volc)
+	projects := NewProjectService(cfg, db, textProviderFact, volc, tasks, remote, upload, hub, materials)
+	return &Service{Cfg: cfg, DB: db, Mgr: mgr, Mon: mon, Tasks: tasks, Hub: hub, Upload: upload, Remote: remote, Volc: volc, Projects: projects, Materials: materials, TextProviderFact: textProviderFact}
 }
 
 // comfyHost 返回 ComfyUI 实例所在主机（docker 模式为容器名，远程模式为算力节点 IP，本地模式为本机）
