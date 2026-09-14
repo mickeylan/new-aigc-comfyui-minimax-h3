@@ -320,6 +320,13 @@ func TestSkillService_StageValidation(t *testing.T) {
 		models.SkillStageImagePrompt,
 		models.SkillStageVideoPrompt,
 		models.SkillStageReview,
+		models.SkillStageChapterAnalysis,
+		models.SkillStageArcMerge,
+		models.SkillStageStoryBible,
+		models.SkillStageAdaptationPlan,
+		models.SkillStageEpisodeAdaptation,
+		models.SkillStageContinuityReview,
+		models.SkillStageMegastructure,
 	}
 
 	for _, stage := range validStages {
@@ -341,8 +348,8 @@ func TestSkillService_GetAvailableStages(t *testing.T) {
 	svc := NewSkillService(db)
 
 	stages := svc.GetAvailableStages()
-	if len(stages) != 9 {
-		t.Errorf("应该有 9 个阶段，实际 %d", len(stages))
+	if len(stages) != 13 {
+		t.Errorf("应该有 13 个阶段，实际 %d", len(stages))
 	}
 
 	stageSet := make(map[string]bool)
@@ -360,6 +367,10 @@ func TestSkillService_GetAvailableStages(t *testing.T) {
 		models.SkillStageChapterAnalysis,
 		models.SkillStageArcMerge,
 		models.SkillStageStoryBible,
+		models.SkillStageAdaptationPlan,
+		models.SkillStageEpisodeAdaptation,
+		models.SkillStageContinuityReview,
+		models.SkillStageMegastructure,
 	}
 
 	for _, expected := range expectedStages {

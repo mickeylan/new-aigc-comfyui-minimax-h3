@@ -35,6 +35,18 @@ func TestScriptFromPlanPromptMatchesStoryboardSchema(t *testing.T) {
 	}
 }
 
+func TestNormalizeVisualTypeDetectsMegastructure(t *testing.T) {
+	if got := normalizeVisualType("", "云层环绕的巨塔延伸出画框"); got != "megastructure" {
+		t.Fatalf("expected megastructure, got %q", got)
+	}
+	if got := normalizeVisualType("normal", "普通室内对话"); got != "normal" {
+		t.Fatalf("expected normal, got %q", got)
+	}
+	if got := normalizeMegaType("mechanical"); got != "mechanical" {
+		t.Fatalf("expected mechanical, got %q", got)
+	}
+}
+
 func TestParseScriptJSON(t *testing.T) {
 	cases := []struct {
 		name string

@@ -444,6 +444,20 @@
             placeholder="描述画面动作、镜头运动、对白…" />
         </div>
         <div class="field">
+          <label>视觉类型</label>
+          <select v-model="sceneForm.visual_type" class="input">
+            <option value="normal">普通场景</option>
+            <option value="megastructure">巨构场景（Krea2 专项增强）</option>
+          </select>
+          <div v-if="sceneForm.visual_type === 'megastructure'" class="field">
+            <label>巨构类别</label>
+            <select v-model="sceneForm.mega_type" class="input">
+              <option value="architecture">建筑巨构</option><option value="creature">巨兽/生物</option><option value="geological">自然/地质</option><option value="mechanical">机械/载具</option><option value="surreal">超现实混合</option>
+            </select>
+          </div>
+          <div class="field-hint">巨构模式强化尺度参照、大气分层、结构可读性、重量感和镜头构图，不改变剧情主体。</div>
+        </div>
+        <div class="field">
           <label>画面提示词（图生图，参考人像图为主）</label>
           <textarea v-model="sceneForm.image_prompt" class="textarea" rows="3"
             placeholder="人物外貌特征、场景环境、画风…" />
@@ -866,7 +880,7 @@ const savingProject = ref(false)
 const sceneError = ref('')
 const projectError = ref('')
 const loadError = ref('')
-const sceneForm = reactive({ title: '', content: '', image_prompt: '' })
+const sceneForm = reactive({ title: '', content: '', image_prompt: '', visual_type: 'normal', mega_type: 'architecture' })
 const projectForm = reactive({ title: '', genre: '', style: '', synopsis: '', audience: '', tone: '', ending: '', episodes: 10, aspect_ratio: '16:9' })
 let timer = null
 let wsTimer = null
@@ -1690,7 +1704,8 @@ function openEditScene(sc) {
   sceneError.value = ''
   editingScene.value = sc
   Object.assign(sceneForm, {
-    title: sc.title, content: sc.content, image_prompt: sc.image_prompt
+    title: sc.title, content: sc.content, image_prompt: sc.image_prompt,
+    visual_type: sc.visual_type || 'normal', mega_type: sc.mega_type || 'architecture'
   })
 }
 
@@ -1701,7 +1716,9 @@ async function saveScene() {
     await api.updateScene(id(), editingScene.value.id, {
       title: sceneForm.title,
       content: sceneForm.content,
-      image_prompt: sceneForm.image_prompt
+      image_prompt: sceneForm.image_prompt,
+      visual_type: sceneForm.visual_type,
+      mega_type: sceneForm.mega_type
     })
     const promptChanged = sceneForm.image_prompt !== editingScene.value.image_prompt
     editingScene.value = null

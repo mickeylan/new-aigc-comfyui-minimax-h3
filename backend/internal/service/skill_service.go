@@ -128,6 +128,7 @@ func (s *SkillService) InitSystemSkills() error {
 		{Name: "小说分集映射", Code: "novel-episode-mapping", Version: 1, Description: "将已分析章节按策略映射到180秒、25镜头分集", Stage: models.SkillStageAdaptationPlan, PromptTemplate: "改编策略：{{strategy}}\n故事圣经：{{story_bible}}\n章节分析：{{chapter_analyses}}", SystemPrompt: "只输出严格 JSON 对象 episodes。每集字段含 episode_n,title,chapter_start,chapter_end,source_chapter_ids,target_duration,target_scenes,adaptation_goal,must_keep_events,optional_events,omitted_events,opening_state,ending_state,hook。保持因果顺序；必保事件不得省略。", IsSystem: true, Enabled: true, SortOrder: 1},
 		{Name: "小说单集剧本改编", Code: "novel-episode-script", Version: 1, Description: "使用有界且可追溯的单集上下文生成剧本和分镜", Stage: models.SkillStageEpisodeAdaptation, PromptTemplate: "第{{episode_n}}集，目标{{target_duration}}秒/{{target_scenes}}镜头。上下文：{{episode_context}}", SystemPrompt: "只使用输入事实并输出严格 JSON，字段含 script,opening_state,ending_state,visual_bible,scenes。scenes 数量和总时长须满足目标，每场含 title,content,image_prompt,duration,characters,location,props,dialogues。", IsSystem: true, Enabled: true, SortOrder: 1},
 		{Name: "小说连续性复审", Code: "novel-continuity-review", Version: 1, Description: "比较前集结束、本集开场和剧本因果连续性", Stage: models.SkillStageContinuityReview, PromptTemplate: "前集结束：{{previous_ending}}\n本集开场：{{opening_state}}\n本集结束：{{ending_state}}\n剧本：{{script}}", SystemPrompt: "只输出严格 JSON：passed(bool), conflicts(array), recommendations(array)。地点、伤势、持有物、知识、关系、时间或未解释因果冲突必须判定失败。", IsSystem: true, Enabled: true, SortOrder: 1},
+		{Name: "Krea2 巨构场景增强", Code: "krea2-megastructure-prompt", Version: 1, Description: "用结构、尺度参照、大气透视和镜头语言强化宏大场景，不改变剧情主体", Stage: models.SkillStageMegastructure, PromptTemplate: "巨构类别：{{mega_type}}。原始分镜：{{original_prompt}}。项目画风：{{style_requirements}}。角色约束：{{character_definitions}}。", SystemPrompt: "按主体结构、尺度锚定、材质表面、环境、大气光、镜头和媒介七层表达。保留原主体、人物、动作、颜色及空间关系，不得擅自增加剧情角色或关键道具。至少使用一个可辨认尺度参照物、近清远雾的大气分层、两个结构重复单元以及明确重量感；使用14至35mm低角度或合适远景，使主体占画面70%至90%或延伸出画框。尺寸形容词不超过两个，使用自然语言长句，禁止标签堆砌和元语言。", IsSystem: true, Enabled: true, SortOrder: 1},
 	}
 
 	for _, skill := range systemSkills {
@@ -375,6 +376,10 @@ func (s *SkillService) GetAvailableStages() []map[string]string {
 		{"value": models.SkillStageChapterAnalysis, "label": "章节分析"},
 		{"value": models.SkillStageArcMerge, "label": "剧情单元"},
 		{"value": models.SkillStageStoryBible, "label": "故事圣经"},
+		{"value": models.SkillStageAdaptationPlan, "label": "分集改编规划"},
+		{"value": models.SkillStageEpisodeAdaptation, "label": "小说单集改编"},
+		{"value": models.SkillStageContinuityReview, "label": "连续性复审"},
+		{"value": models.SkillStageMegastructure, "label": "巨构画面提示词"},
 	}
 }
 
@@ -617,6 +622,7 @@ func isValidStage(stage string) bool {
 		models.SkillStageAdaptationPlan,
 		models.SkillStageEpisodeAdaptation,
 		models.SkillStageContinuityReview,
+		models.SkillStageMegastructure,
 	}
 	for _, s := range stages {
 		if s == stage {

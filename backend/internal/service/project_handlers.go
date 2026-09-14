@@ -199,6 +199,8 @@ func (s *Service) HandleUpdateScene(c *gin.Context) {
 		Title       string `json:"title"`
 		Content     string `json:"content"`
 		ImagePrompt string `json:"image_prompt"`
+		VisualType  string `json:"visual_type"`
+		MegaType    string `json:"mega_type"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": "参数错误"})
@@ -208,7 +210,7 @@ func (s *Service) HandleUpdateScene(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "场景正文和画面提示词不能为空"})
 		return
 	}
-	if err := s.Projects.UpdateScene(sc, req.Title, req.Content, req.ImagePrompt); err != nil {
+	if err := s.Projects.UpdateScene(sc, req.Title, req.Content, req.ImagePrompt, req.VisualType, req.MegaType); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}

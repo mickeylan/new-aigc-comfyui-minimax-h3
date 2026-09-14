@@ -149,16 +149,18 @@ type Scene struct {
 	EpisodeN     int       `gorm:"column:episode_n;default:1;uniqueIndex:idx_scene_project_generation_episode_order" json:"episode_n"` // 所属集数（从 1 开始）
 	Order        int       `gorm:"uniqueIndex:idx_scene_project_generation_episode_order" json:"order"`                                // 场景序号（从 1 开始）
 	Generation   uint      `gorm:"uniqueIndex:idx_scene_project_generation_episode_order" json:"generation"`
-	Title        string    `json:"title"`                                     // 场景标题
-	Content      string    `json:"content"`                                   // 场景正文（作为视频提示词）
-	ImagePrompt  string    `json:"image_prompt"`                              // 文生图提示词
-	Duration     float64   `gorm:"default:5" json:"duration"`                 // 场景目标时长（秒）
-	Characters   string    `json:"characters"`                                // 出场角色名（逗号分隔），用于一致性注入
-	LocationName string    `gorm:"column:location_name" json:"location"`      // 场景地点名（对应 location 资产，用于环境一致性注入）
-	Props        string    `json:"props"`                                     // 出场关键道具名（逗号分隔），用于道具一致性注入
-	ImageFile    string    `json:"image_file"`                                // 首帧图文件名（input/<project_id>/ 下）
-	ImageToken   string    `gorm:"column:image_token" json:"-"`               // 单次生成令牌，防止并发或过期结果回写
-	VideoTaskID  string    `gorm:"column:video_task_id" json:"video_task_id"` // 关联视频生成任务
+	Title        string    `json:"title"`                                                // 场景标题
+	Content      string    `json:"content"`                                              // 场景正文（作为视频提示词）
+	ImagePrompt  string    `json:"image_prompt"`                                         // 文生图提示词
+	Duration     float64   `gorm:"default:5" json:"duration"`                            // 场景目标时长（秒）
+	Characters   string    `json:"characters"`                                           // 出场角色名（逗号分隔），用于一致性注入
+	LocationName string    `gorm:"column:location_name" json:"location"`                 // 场景地点名（对应 location 资产，用于环境一致性注入）
+	Props        string    `json:"props"`                                                // 出场关键道具名（逗号分隔），用于道具一致性注入
+	VisualType   string    `gorm:"column:visual_type;default:normal" json:"visual_type"` // normal/megastructure
+	MegaType     string    `gorm:"column:mega_type" json:"mega_type"`                    // architecture/creature/geological/mechanical/surreal
+	ImageFile    string    `json:"image_file"`                                           // 首帧图文件名（input/<project_id>/ 下）
+	ImageToken   string    `gorm:"column:image_token" json:"-"`                          // 单次生成令牌，防止并发或过期结果回写
+	VideoTaskID  string    `gorm:"column:video_task_id" json:"video_task_id"`            // 关联视频生成任务
 	VideoGPU     *int      `gorm:"column:video_gpu" json:"video_gpu"`
 	VideoFile    string    `gorm:"column:video_file" json:"video_file"` // 输出相对路径（subfolder/filename）
 	Status       string    `json:"status"`                              // pending/image_pending/image_ready/video_pending/video_running/video_ready/failed
@@ -351,18 +353,19 @@ type Skill struct {
 
 // SkillStage 技能适用阶段常量
 const (
-	SkillStagePlan              = "plan"               // 创作方案阶段
-	SkillStageCharacter         = "character"          // 角色设定阶段
-	SkillStageStoryboard        = "storyboard"         // 分镜剧本阶段
-	SkillStageImagePrompt       = "image_prompt"       // 画面提示词阶段
-	SkillStageVideoPrompt       = "video_prompt"       // 视频提示词阶段
-	SkillStageReview            = "review"             // 审核/复审阶段
-	SkillStageChapterAnalysis   = "chapter_analysis"   // 小说章节结构化分析
-	SkillStageArcMerge          = "arc_merge"          // 小说剧情单元归并
-	SkillStageStoryBible        = "story_bible"        // 小说故事圣经综合
-	SkillStageAdaptationPlan    = "adaptation_plan"    // 小说分集映射
-	SkillStageEpisodeAdaptation = "episode_adaptation" // 小说单集剧本改编
-	SkillStageContinuityReview  = "continuity_review"  // 小说集间连续性复审
+	SkillStagePlan              = "plan"                 // 创作方案阶段
+	SkillStageCharacter         = "character"            // 角色设定阶段
+	SkillStageStoryboard        = "storyboard"           // 分镜剧本阶段
+	SkillStageImagePrompt       = "image_prompt"         // 画面提示词阶段
+	SkillStageVideoPrompt       = "video_prompt"         // 视频提示词阶段
+	SkillStageReview            = "review"               // 审核/复审阶段
+	SkillStageChapterAnalysis   = "chapter_analysis"     // 小说章节结构化分析
+	SkillStageArcMerge          = "arc_merge"            // 小说剧情单元归并
+	SkillStageStoryBible        = "story_bible"          // 小说故事圣经综合
+	SkillStageAdaptationPlan    = "adaptation_plan"      // 小说分集映射
+	SkillStageEpisodeAdaptation = "episode_adaptation"   // 小说单集剧本改编
+	SkillStageContinuityReview  = "continuity_review"    // 小说集间连续性复审
+	SkillStageMegastructure     = "megastructure_prompt" // Krea2 巨构场景提示词增强
 )
 
 // ProjectSkillConfig 项目级技能配置：支持项目选择特定技能或覆盖系统默认

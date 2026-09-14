@@ -59,12 +59,16 @@ func (s *ProjectService) applyPromptSkill(projectID uint, stage, prompt string, 
 	if s.skills == nil {
 		return prompt
 	}
-	_, addition, skill, err := s.skills.ApplyPrompt(projectID, stage, "", "", params)
-	if err != nil || skill == nil || strings.TrimSpace(addition) == "" {
+	system, addition, skill, err := s.skills.ApplyPrompt(projectID, stage, "", "", params)
+	if err != nil || skill == nil {
 		return prompt
 	}
-	_ = s.skills.LogSkillUsage(projectID, stage, skill, prompt, len(prompt)+len(addition), 0, true, "")
-	return prompt + "\n\n" + addition
+	extra := strings.TrimSpace(strings.Join([]string{strings.TrimSpace(system), strings.TrimSpace(addition)}, "\n"))
+	if extra == "" {
+		return prompt
+	}
+	_ = s.skills.LogSkillUsage(projectID, stage, skill, prompt, len(prompt)+len(extra), 0, true, "")
+	return prompt + "\n\n" + extra
 }
 
 // ---------- 项目 ----------
@@ -315,7 +319,7 @@ func (s *ProjectService) UpdateProject(p *models.Project, req models.Project) er
 
 // UpdateScene 编辑场景文案。修改 image_prompt 会清空已生成画面与视频（需重新生成）；
 // 仅修改 content/title 时保留画面、清空已生成视频（需重新生成视频）。
-func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imagePrompt string) error {
+func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imagePrompt string, visual ...string) error {
 	updates := map[string]any{}
 	if title != "" {
 		updates["title"] = title
@@ -324,9 +328,22 @@ func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imageProm
 		updates["content"] = content
 	}
 	imageChanged := false
+	if len(visual) > 0 {
+		visualType := normalizeVisualType(visual[0], "")
+		updates["visual_type"] = visualType
+		imageChanged = visualType != normalizeVisualType(sc.VisualType, "")
+	}
+	if len(visual) > 1 {
+		megaType := ""
+		if normalizeVisualType(visual[0], "") == "megastructure" {
+			megaType = normalizeMegaType(visual[1])
+		}
+		updates["mega_type"] = megaType
+		imageChanged = imageChanged || megaType != sc.MegaType
+	}
 	if imagePrompt != "" {
 		updates["image_prompt"] = imagePrompt
-		imageChanged = sc.ImagePrompt != imagePrompt
+		imageChanged = imageChanged || sc.ImagePrompt != imagePrompt
 	}
 	if imageChanged {
 		updates["image_file"] = ""
@@ -378,6 +395,8 @@ type scriptScene struct {
 	Characters  []string         `json:"characters"`
 	Location    string           `json:"location"`
 	Props       []string         `json:"props"`
+	VisualType  string           `json:"visual_type"`
+	MegaType    string           `json:"mega_type"`
 	Dialogues   []scriptDialogue `json:"dialogues"`
 }
 
@@ -403,6 +422,8 @@ const scriptSystemPrompt = `你是一位专业的漫剧编剧与分镜师。根�
       "characters": ["出场角色名1", "角色名2"],
       "location": "该场景地点名（同一地点多场景须用同一名称，保证环境一致；无明确地点则为空字符串）",
       "props": ["该场景出现的关键道具名（同一道具须用同一名称；无则为空数组）"],
+      "visual_type": "normal 或 megastructure（仅巨型建筑、巨兽、地质奇观、巨型机械、超现实巨构使用后者）",
+      "mega_type": "architecture/creature/geological/mechanical/surreal，非巨构留空",
       "dialogues": [{"character": "角色名", "text": "台词"}, {"character": "", "text": "旁白"}]
     }
   ]
@@ -579,6 +600,8 @@ func (s *ProjectService) generateScriptCore(p *models.Project, episodeN int, raw
 				Characters:   joinSceneCharacters(sc.Characters),
 				LocationName: strings.TrimSpace(sc.Location),
 				Props:        joinSceneCharacters(sc.Props),
+				VisualType:   normalizeVisualType(sc.VisualType, sc.Title+" "+sc.Content+" "+sc.ImagePrompt),
+				MegaType:     normalizeMegaType(sc.MegaType),
 			}
 			if scene.Title == "" {
 				scene.Title = fmt.Sprintf("场景 %d", i+1)
@@ -1219,7 +1242,38 @@ func (s *ProjectService) buildSceneImagePrompt(sc *models.Scene) string {
 		parts = append(parts, "当前分镜："+prompt)
 	}
 	prompt := strings.Join(parts, "\n")
-	return s.applyPromptSkill(sc.ProjectID, models.SkillStageImagePrompt, prompt, map[string]string{"original_prompt": prompt, "character_definitions": s.characterContextForScene(sc), "style_requirements": p.Style})
+	params := map[string]string{"original_prompt": prompt, "character_definitions": s.characterContextForScene(sc), "style_requirements": p.Style}
+	if normalizeVisualType(sc.VisualType, sc.Title+" "+sc.Content+" "+sc.ImagePrompt) == "megastructure" {
+		params["mega_type"] = normalizeMegaType(sc.MegaType)
+		return s.applyPromptSkill(sc.ProjectID, models.SkillStageMegastructure, prompt, params)
+	}
+	return s.applyPromptSkill(sc.ProjectID, models.SkillStageImagePrompt, prompt, params)
+}
+
+func normalizeVisualType(value, text string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "megastructure":
+		return "megastructure"
+	case "normal":
+		return "normal"
+	}
+	lower := strings.ToLower(text)
+	for _, keyword := range []string{"巨构", "巨型建筑", "巨塔", "巨城", "天空城", "悬浮要塞", "世界树", "巨型峡谷", "巨浪", "巨兽", "巨龙", "巨神像", "星舰", "巨型机甲", "行星发动机", "megastructure", "colossal", "leviathan"} {
+		if strings.Contains(lower, strings.ToLower(keyword)) {
+			return "megastructure"
+		}
+	}
+	return "normal"
+}
+
+func normalizeMegaType(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "architecture", "creature", "geological", "mechanical", "surreal":
+		return value
+	default:
+		return "architecture"
+	}
 }
 
 // parseSceneCharacters 解析场景出场角色（逗号分隔）
