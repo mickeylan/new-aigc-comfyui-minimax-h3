@@ -644,8 +644,7 @@ func (s *Service) HandleGenerateCharacterSheet(c *gin.Context) {
 	if !ok {
 		return
 	}
-	phase, err := s.Projects.StartCharacterSheet(ch)
-	if err != nil {
+	if err := s.Projects.StartCharacterSheet(ch); err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, errSheetActive) {
 			status = http.StatusConflict
@@ -653,11 +652,7 @@ func (s *Service) HandleGenerateCharacterSheet(c *gin.Context) {
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
-	message := fmt.Sprintf("角色「%s」四视图任务已提交", ch.Name)
-	if phase == "anchor" {
-		message = fmt.Sprintf("角色「%s」全身服装锚点生成中，完成后将自动生成四视图", ch.Name)
-	}
-	c.JSON(http.StatusAccepted, gin.H{"ok": true, "phase": phase, "message": message})
+	c.JSON(http.StatusAccepted, gin.H{"ok": true, "message": fmt.Sprintf("角色「%s」四视图任务已提交", ch.Name)})
 }
 
 func (s *Service) HandleGenerateAllPortraits(c *gin.Context) {

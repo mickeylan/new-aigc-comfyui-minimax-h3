@@ -124,17 +124,13 @@ func (s *CharacterProfileService) GenerateProfile(char *models.Character, projec
 		"profile_version":  gorm.Expr("profile_version + 1"),
 		"reference_prompt": "",
 		"review_note":      "",
-		"portrait":           "",
-		"portrait_task_id":   "",
-		"portrait_error":     "",
-		"clothing_anchor":    "",
-		"anchor_task_id":     "",
-		"anchor_error":       "",
-		"sheet":              "",
-		"sheet_task_id":      "",
-		"sheet_error":        "",
-		"sheet_after_anchor": false,
-		"trait":              coalesceField(char.Trait, result.Appearance),
+		"portrait":         "",
+		"portrait_task_id": "",
+		"portrait_error":   "",
+		"sheet":            "",
+		"sheet_task_id":    "",
+		"sheet_error":      "",
+		"trait":            coalesceField(char.Trait, result.Appearance),
 		"style":            coalesceField(char.Style, result.WardrobeDetail),
 	}
 
@@ -216,18 +212,14 @@ func (s *CharacterProfileService) GenerateReferencePrompt(char *models.Character
 		"禁止显老、年龄漂移、中年感、法令纹、眼袋、深皱纹、松弛皮肤、厚重妆容、复古影楼感、多人、分屏、拼图、三视图、复杂背景、文字、水印、畸形五官和畸形肢体")
 	prompt := strings.Join(parts, "，")
 	updates := map[string]any{
-		"reference_prompt":   prompt,
-		"portrait":           "",
-		"portrait_task_id":   "",
-		"portrait_error":     "",
-		"clothing_anchor":    "",
-		"anchor_task_id":     "",
-		"anchor_error":       "",
-		"sheet":              "",
-		"sheet_task_id":      "",
-		"sheet_error":        "",
-		"sheet_after_anchor": false,
-		"profile_version":    gorm.Expr("profile_version + 1"),
+		"reference_prompt": prompt,
+		"portrait":         "",
+		"portrait_task_id": "",
+		"portrait_error":   "",
+		"sheet":            "",
+		"sheet_task_id":    "",
+		"sheet_error":      "",
+		"profile_version":  gorm.Expr("profile_version + 1"),
 	}
 	// 参考提示词是由现有档案确定性编译出的派生内容；档案本身未变化时，
 	// 不应把刚审核通过的状态退回草稿，否则会形成“审核→生成提示词→再审核”的循环。
@@ -309,13 +301,9 @@ func (s *CharacterProfileService) UpdateProfile(char *models.Character, req mode
 	updates["portrait"] = ""
 	updates["portrait_task_id"] = ""
 	updates["portrait_error"] = ""
-	updates["clothing_anchor"] = ""
-	updates["anchor_task_id"] = ""
-	updates["anchor_error"] = ""
 	updates["sheet"] = ""
 	updates["sheet_task_id"] = ""
 	updates["sheet_error"] = ""
-	updates["sheet_after_anchor"] = false
 
 	return s.db.Model(char).Updates(updates).Error
 }

@@ -160,7 +160,7 @@ type Scene struct {
 	MegaType     string    `gorm:"column:mega_type" json:"mega_type"`                    // architecture/creature/geological/mechanical/surreal
 	ImageFile    string    `json:"image_file"`                                           // 首帧图文件名（input/<project_id>/ 下）
 	ImageToken   string    `gorm:"column:image_token" json:"-"`                          // 单次生成令牌，防止并发或过期结果回写
-	ImageTaskID  string    `gorm:"column:image_task_id;index" json:"image_task_id"`       // 关联 Krea2 分镜画面任务
+	ImageTaskID  string    `gorm:"column:image_task_id;index" json:"image_task_id"`      // 关联 Krea2 分镜画面任务
 	VideoTaskID  string    `gorm:"column:video_task_id" json:"video_task_id"`            // 关联视频生成任务
 	VideoGPU     *int      `gorm:"column:video_gpu" json:"video_gpu"`
 	VideoFile    string    `gorm:"column:video_file" json:"video_file"` // 输出相对路径（subfolder/filename）
@@ -247,16 +247,12 @@ type Character struct {
 	Role           string `json:"role"`                                                  // 身份：主角/女主/反派/配角…
 	Trait          string `gorm:"type:text" json:"trait"`                                // 外貌特征（发型/五官/体型）
 	Style          string `gorm:"type:text" json:"style"`                                // 服装造型
-	Portrait         string `json:"portrait"`                                              // 标准参考像文件名（input/<project_id>/ 下）
-	PortraitTaskID   string `gorm:"column:portrait_task_id;index" json:"portrait_task_id"` // Krea2 标准像生成任务
-	PortraitError    string `gorm:"type:text" json:"portrait_error"`                       // 标准像生成错误
-	ClothingAnchor   string `gorm:"column:clothing_anchor" json:"clothing_anchor"`         // 由标准像生成的全身服装锚点（input/<project_id>/ 下）
-	AnchorTaskID     string `gorm:"column:anchor_task_id;index" json:"anchor_task_id"`      // Krea2 全身服装锚点任务
-	AnchorError      string `gorm:"column:anchor_error;type:text" json:"anchor_error"`      // 全身服装锚点错误
-	Sheet            string `json:"sheet"`                                                 // 角色四视图文件名（input/<project_id>/ 下）
-	SheetTaskID      string `gorm:"column:sheet_task_id;index" json:"sheet_task_id"`       // Krea2 四视图生成任务
-	SheetError       string `gorm:"column:sheet_error;type:text" json:"sheet_error"`       // 四视图生成错误
-	SheetAfterAnchor bool   `gorm:"column:sheet_after_anchor;default:false" json:"-"`      // 持久化一键四视图意图，锚点成功后自动续跑
+	Portrait       string `json:"portrait"`                                              // 标准参考像文件名（input/<project_id>/ 下）
+	PortraitTaskID string `gorm:"column:portrait_task_id;index" json:"portrait_task_id"` // Krea2 标准像生成任务
+	PortraitError  string `gorm:"type:text" json:"portrait_error"`                       // 标准像生成错误
+	Sheet          string `json:"sheet"`                                                 // 角色四视图文件名（input/<project_id>/ 下）
+	SheetTaskID    string `gorm:"column:sheet_task_id;index" json:"sheet_task_id"`       // Krea2 四视图生成任务
+	SheetError     string `gorm:"column:sheet_error;type:text" json:"sheet_error"`       // 四视图生成错误
 	Voice          string `json:"voice"`                                                 // 预设 TTS 音色 ID（角色级，配音优先于平台角色映射）
 	VoiceRef       string `gorm:"column:voice_ref" json:"voice_ref"`                     // 参考语音文件名（input/<project_id>/ 下）
 	VoiceID        string `gorm:"column:voice_id" json:"voice_id"`                       // 参考语音注册的复刻音色 ID（阿里云 qwen-voice-enrollment）

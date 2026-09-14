@@ -151,8 +151,6 @@
               <span class="char-appear">出场 {{ characterCounts[ch.id] || 0 }} 场</span>
               <span v-if="ch.portrait_task_id" class="char-voice">⏳ Krea2 标准像生成中</span>
               <span v-if="ch.portrait_error" class="fail-msg">{{ ch.portrait_error }}</span>
-              <span v-if="ch.anchor_task_id" class="char-voice">⏳ 正在生成全身服装与佩饰锚点，完成后自动生成四视图</span>
-              <span v-if="ch.anchor_error" class="fail-msg">{{ ch.anchor_error }}</span>
               <span v-if="ch.sheet_task_id" class="char-voice">⏳ 角色四视图生成中</span>
               <span v-if="ch.sheet_error" class="fail-msg">{{ ch.sheet_error }}</span>
               <div class="char-actions">
@@ -163,9 +161,9 @@
                 <button class="btn btn-sm btn-ghost" :disabled="busy || ch._uploading" @click="uploadPortrait(ch)">
                   {{ ch._uploading ? '上传中…' : '上传图片替换' }}
                 </button>
-                <button class="btn btn-sm btn-secondary" :disabled="busy || !ch.portrait || !!ch.anchor_task_id || !!ch.sheet_task_id" @click="genCharacterSheet(ch)"
+                <button class="btn btn-sm btn-secondary" :disabled="busy || !ch.portrait || !!ch.sheet_task_id" @click="genCharacterSheet(ch)"
                   :title="!ch.portrait ? '请先生成或上传标准像' : '下游分镜与 H3 视频将优先使用四视图'">
-                  {{ ch.anchor_task_id ? '服装佩饰锚点生成中…' : ch.sheet_task_id ? '四视图生成中…' : ch.sheet ? '重生成四视图' : '生成四视图' }}
+                  {{ ch.sheet_task_id ? '四视图生成中…' : ch.sheet ? '重生成四视图' : '生成四视图' }}
                 </button>
                 <button v-if="ch.sheet" class="btn btn-sm btn-ghost" @click="viewCharacterSheet(ch)">查看四视图</button>
                 <button class="btn btn-sm btn-ghost" @click="openEditCharacter(ch)">编辑</button>

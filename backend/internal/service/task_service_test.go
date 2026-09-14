@@ -65,8 +65,7 @@ func TestMiniMaxH3TemplatesRenderWithoutPlaceholders(t *testing.T) {
 		}},
 		{file: "krea2_character_portrait.json"},
 		{file: "krea2_character_sheet.json", files: map[string][]FileMeta{
-			"face_portrait":   {{TaskID: "draft", Name: "portrait.png"}},
-			"clothing_anchor": {{TaskID: "draft", Name: "anchor.png"}},
+			"source_image": {{TaskID: "draft", Name: "portrait.png"}},
 		}},
 		{file: "minimax_h3_storyboard_candidates_selflift.json", files: map[string][]FileMeta{
 			"ref_images": {{TaskID: "draft", Name: "character.png"}, {TaskID: "draft", Name: "location.png"}},

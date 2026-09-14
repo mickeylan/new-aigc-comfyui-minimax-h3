@@ -575,24 +575,6 @@ func TestGenerateReferencePromptKeepsFaceFocusedPortrait(t *testing.T) {
 	}
 }
 
-func TestCharacterAnchorAndSheetLockAccessories(t *testing.T) {
-	p := &models.Project{Genre: "古典修仙", Style: "国风仙侠"}
-	ch := &models.Character{Role: "女主", Appearance: "22岁女性，发间金色步摇，耳戴珍珠耳坠", WardrobeDetail: "白色交领仙裙，银色腰封，颈戴青玉项链，右腕银镯"}
-	anchor := buildCharacterAnchorPrompt(p, ch)
-	for _, want := range []string{"单人正面全身站立图", "从头顶到鞋底完整入镜", "人物占画面高度约85%", "绝对不是半身图", "鞋底下方留白"} {
-		if !strings.Contains(anchor, want) {
-			t.Fatalf("anchor prompt missing %q: %s", want, anchor)
-		}
-	}
-	for name, prompt := range map[string]string{"anchor": anchor, "sheet": buildCharacterSheetPrompt(p, ch)} {
-		for _, want := range []string{"金色步摇", "珍珠耳坠", "青玉项链", "右腕银镯", "位置、数量、左右侧", "不得丢失、增减"} {
-			if !strings.Contains(prompt, want) {
-				t.Fatalf("%s prompt missing %q: %s", name, want, prompt)
-			}
-		}
-	}
-}
-
 func TestBuildCharacterSheetPromptLocksHistoricalFootwear(t *testing.T) {
 	p := &models.Project{Genre: "古典修仙", Style: "国风仙侠", Synopsis: "中国古代宗门修炼故事"}
 	ch := &models.Character{Name: "林舒", Appearance: "22岁女性", WardrobeDetail: "白色交领仙裙，银色腰封"}

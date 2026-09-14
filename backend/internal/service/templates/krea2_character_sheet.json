@@ -1,18 +1,12 @@
 {
   "name": "Krea2 角色四视图",
   "code": "krea2_character_sheet",
-  "description": "同时使用角色正面特写锁定脸部身份、全身服装锚点锁定体型服饰鞋履，生成四视图。",
+  "description": "以审核后的角色正面特写为身份参考，生成脸部特写、正面全身、侧面全身和背面全身四视图。",
   "inputs": [
     {
-      "key": "face_portrait",
+      "key": "source_image",
       "type": "image",
-      "label": "角色正面特写（脸部身份参考）",
-      "required": true
-    },
-    {
-      "key": "clothing_anchor",
-      "type": "image",
-      "label": "角色全身服装锚点",
+      "label": "角色正面特写",
       "required": true
     },
     {
@@ -98,52 +92,24 @@
     "17": {
       "class_type": "LoadImage",
       "inputs": {
-        "image": "{{img:face_portrait}}"
+        "image": "{{img:source_image}}"
       }
     },
     "18": {
       "class_type": "ImageResizeKJv2",
       "inputs": {
-        "image": ["17", 0],
-        "width": 768,
-        "height": 1344,
+        "image": [
+          "17",
+          0
+        ],
+        "width": 1024,
+        "height": 1536,
         "upscale_method": "lanczos",
-        "keep_proportion": "pad",
-        "pad_color": "255, 255, 255",
+        "keep_proportion": "resize",
+        "pad_color": "0, 0, 0",
         "crop_position": "center",
         "divisible_by": 2,
         "device": "cpu"
-      }
-    },
-    "27": {
-      "class_type": "LoadImage",
-      "inputs": {
-        "image": "{{img:clothing_anchor}}"
-      }
-    },
-    "28": {
-      "class_type": "ImageResizeKJv2",
-      "inputs": {
-        "image": ["27", 0],
-        "width": 768,
-        "height": 1344,
-        "upscale_method": "lanczos",
-        "keep_proportion": "pad",
-        "pad_color": "255, 255, 255",
-        "crop_position": "center",
-        "divisible_by": 2,
-        "device": "cpu"
-      }
-    },
-    "30": {
-      "class_type": "ImageStitch",
-      "inputs": {
-        "image1": ["18", 0],
-        "image2": ["28", 0],
-        "direction": "right",
-        "match_image_size": true,
-        "spacing_width": 16,
-        "spacing_color": "white"
       }
     },
     "25": {
@@ -174,7 +140,7 @@
       "class_type": "VAEEncode",
       "inputs": {
         "pixels": [
-          "30",
+          "18",
           0
         ],
         "vae": [
@@ -199,7 +165,7 @@
           0
         ],
         "source_image": [
-          "30",
+          "18",
           0
         ],
         "ref_boost": 1,
@@ -215,7 +181,7 @@
           0
         ],
         "image": [
-          "30",
+          "18",
           0
         ],
         "prompt": "{{prompt}}",
@@ -231,10 +197,10 @@
           0
         ],
         "image": [
-          "30",
+          "18",
           0
         ],
-        "prompt": "barefoot, bare feet, naked feet, exposed toes, missing shoes, mismatched footwear, different shoes between views, high heels, stiletto heels, modern sneakers, modern leather shoes, Japanese geta, wooden clogs, cropped feet, hidden feet",
+        "prompt": "",
         "grounding_px": 768,
         "system_prompt": ""
       }

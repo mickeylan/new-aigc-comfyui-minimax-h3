@@ -1253,13 +1253,9 @@ func (s *ProjectService) UpdateCharacter(ch *models.Character, req models.Charac
 		updates["portrait"] = ""
 		updates["portrait_task_id"] = ""
 		updates["portrait_error"] = ""
-		updates["clothing_anchor"] = ""
-		updates["anchor_task_id"] = ""
-		updates["anchor_error"] = ""
 		updates["sheet"] = ""
 		updates["sheet_task_id"] = ""
 		updates["sheet_error"] = ""
-		updates["sheet_after_anchor"] = false
 		updates["profile_version"] = gorm.Expr("profile_version + 1")
 	}
 	if err := s.db.Model(ch).Updates(updates).Error; err != nil {
@@ -1390,8 +1386,7 @@ func (s *ProjectService) StartCharacterPortrait(ch *models.Character) error {
 	}
 	if err := s.db.Model(&models.Character{}).Where("id = ?", ch.ID).Updates(map[string]any{
 		"portrait_task_id": task.TaskID, "portrait_error": "",
-		"clothing_anchor": "", "anchor_task_id": "", "anchor_error": "",
-		"sheet": "", "sheet_task_id": "", "sheet_error": "", "sheet_after_anchor": false,
+		"sheet": "", "sheet_task_id": "", "sheet_error": "",
 	}).Error; err != nil {
 		return err
 	}

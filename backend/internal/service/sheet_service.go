@@ -11,110 +11,42 @@ import (
 	"comfyui-console/internal/models"
 )
 
-var errSheetActive = errors.New("角色设定图正在生成")
+var errSheetActive = errors.New("四视图正在生成")
 
 func characterFootwear(project *models.Project, ch *models.Character) string {
 	context := strings.Join([]string{project.Genre, project.Style, project.Synopsis, ch.Role, ch.Appearance, ch.WardrobeDetail}, "，")
-	wardrobe := strings.TrimSpace(ch.WardrobeDetail)
-	footwear := "与完整服装和时代背景严格一致的包头鞋履"
 	for _, word := range []string{"鞋", "靴", "履", "木屐", "凉鞋", "高跟"} {
-		if strings.Contains(wardrobe, word) {
-			return wardrobe
+		if strings.Contains(ch.WardrobeDetail, word) {
+			return strings.TrimSpace(ch.WardrobeDetail)
 		}
 	}
 	for _, keyword := range []string{"修仙", "仙侠", "古典", "古代", "国风", "武侠", "汉服", "宗门", "朝代", "中国古"} {
 		if strings.Contains(context, keyword) {
-			if strings.Contains(ch.Appearance+ch.Role, "女性") || strings.Contains(ch.Appearance+ch.Role, "女") {
+			if strings.Contains(ch.Appearance+ch.Role, "女") {
 				return "与服装主色一致的中式软底云头绣鞋（包头、平底、非露趾）"
 			}
 			return "与服装主色一致的中式云纹皂靴（包头、平底）"
 		}
 	}
-	return footwear
-}
-
-func characterAccessoryConstraint(ch *models.Character) string {
-	return "角色固定佩饰档案：" + strings.TrimSpace(ch.Appearance) + "；" + strings.TrimSpace(ch.WardrobeDetail) + "。" +
-		"所有明确佩饰（发簪、步摇、发冠、耳环、耳坠、项链、吊坠、腰佩、腰带、手镯、腕饰、戒指）必须严格固定其形状、材质、颜色、纹样、佩戴位置、数量、左右侧和层叠关系；不得丢失、增减、换款、左右互换或在不同视图中漂移。尤其女性角色的发饰、耳饰、颈饰、腰饰与腕饰必须逐项保留。"
-}
-
-func buildCharacterAnchorPrompt(project *models.Project, ch *models.Character) string {
-	return "【构图硬约束】生成一张单人正面全身站立图，必须从头顶到鞋底完整入镜，人物垂直居中，头顶留白，鞋底下方留白，双腿、双脚和左右两只鞋全部清晰可见，人物占画面高度约85%，绝对不是半身图、胸像、头像或膝盖以上构图。" +
-		"角色身份与外貌：单一角色「" + ch.Name + "」，" + strings.TrimSpace(ch.Appearance) + "，" + strings.TrimSpace(ch.Trait) + "；保持准确视觉年龄、五官、脸型、发型和体型。" +
-		"角色完整服装档案：" + strings.TrimSpace(ch.WardrobeDetail) + "。" + characterAccessoryConstraint(ch) +
-		"【鞋履硬约束】指定鞋履：" + characterFootwear(project, ch) + "；左右两只鞋必须完整穿在脚上、同款同色，鞋面、鞋头与鞋底轮廓清楚可见，长裙下摆不得遮住鞋。" +
-		"时代与文化必须服从项目设定「" + project.Genre + " / " + project.Style + "」。纯白背景，中性自然站姿，单人单视图，禁止赤脚、裸足、露趾、缺鞋、裁脚、遮脚、坐姿、跪姿、现代高跟鞋、运动鞋、现代皮鞋、日式木屐、多人、拼图、文字和水印。"
+	return "与完整服装和时代背景一致的包头鞋履"
 }
 
 func buildCharacterSheetPrompt(project *models.Project, ch *models.Character) string {
-	wardrobe := strings.TrimSpace(ch.WardrobeDetail)
-	footwear := characterFootwear(project, ch)
-	return "The supplied reference canvas contains two authoritative images of the same character: the face portrait on the LEFT controls identity, exact face, visual age and hairstyle; the full-body clothing anchor on the RIGHT controls body proportions, complete outfit and footwear. Use BOTH references. " +
-		"Generate one clean character sheet with exactly four panels: face close-up, front full body, side full body, back full body. " +
-		"Preserve the same identity, exact visual age, face, hairstyle, body proportions, complete outfit, colors and art style. " +
-		"角色完整服装档案：" + wardrobe + "。" + characterAccessoryConstraint(ch) + "指定鞋履：" + footwear + "。" +
-		"正面全身、侧面全身、背面全身三个视图必须穿完全相同的鞋：鞋型、鞋底高度、颜色、材质、纹样完全一致；每个视图都要清楚画出左右两只鞋，双脚必须完整穿鞋并全部位于画框内。" +
-		"不得根据姿态、省略、长裙遮挡或背面视角把鞋变成赤脚，也不得让三个视图出现不同鞋款。" +
-		"时代与文化必须服从项目设定「" + project.Genre + " / " + project.Style + "」，严禁赤脚、裸足、露趾、现代高跟鞋、细高跟鞋、运动鞋、现代皮鞋、日式木屐、和风鞋履及跨时代跨文化鞋款。" +
-		" Neutral white background, no text, no extra people, no cropped feet."
+	return "Convert the exact same single character from the supplied face portrait into a clean four-view character sheet: face close-up, front full body, side full body, and back full body. Preserve identity, exact visual age, face, hairstyle, body proportions, complete outfit, colors, accessories and art style. " +
+		"角色完整服装档案：" + strings.TrimSpace(ch.WardrobeDetail) + "。指定鞋履：" + characterFootwear(project, ch) + "。" +
+		"正面全身、侧面全身、背面全身三个视图必须穿完全相同的鞋，并使用同一套服装；双脚必须完整穿鞋并位于画框内。禁止赤脚、露趾、裁脚、换装、丢失发饰和佩饰，禁止现代高跟鞋、运动鞋、现代皮鞋和日式木屐。Neutral white background, no text, no extra people."
 }
 
-// StartCharacterSheet is the one-click entry point. It persists the final-sheet
-// intent and creates the clothing anchor first when the character does not have one.
-func (s *ProjectService) StartCharacterSheet(ch *models.Character) (string, error) {
+// StartCharacterSheet submits a Krea2 image-edit task using the character portrait.
+func (s *ProjectService) StartCharacterSheet(ch *models.Character) error {
 	if strings.TrimSpace(ch.Portrait) == "" {
-		return "", fmt.Errorf("请先为角色「%s」生成或上传标准像", ch.Name)
+		return fmt.Errorf("请先为角色「%s」生成或上传标准像", ch.Name)
 	}
 	if s.tasks == nil {
-		return "", fmt.Errorf("角色四视图生成依赖 ComfyUI 任务服务")
-	}
-	if s.sheetTaskActive(ch.AnchorTaskID) {
-		s.db.Model(ch).Update("sheet_after_anchor", true)
-		return "", fmt.Errorf("%w：角色「%s」正在生成全身服装锚点", errSheetActive, ch.Name)
+		return fmt.Errorf("角色四视图生成依赖 ComfyUI 任务服务")
 	}
 	if s.sheetTaskActive(ch.SheetTaskID) {
-		return "", fmt.Errorf("%w：角色「%s」正在生成四视图", errSheetActive, ch.Name)
-	}
-	// Every explicit click rebuilds the anchor first. Reusing an older half-body or
-	// barefoot anchor would make the final sheet repeat the same defect indefinitely.
-	return "anchor", s.startCharacterAnchor(ch)
-}
-
-func (s *ProjectService) startCharacterAnchor(ch *models.Character) error {
-	var tpl models.Template
-	if err := s.db.Where("code = ? AND enabled = ?", "krea2_character_clothing_anchor", true).First(&tpl).Error; err != nil {
-		return fmt.Errorf("未找到已启用的 Krea2 角色全身服装锚点模板")
-	}
-	var project models.Project
-	if err := s.db.First(&project, ch.ProjectID).Error; err != nil {
-		return err
-	}
-	task, err := s.tasks.CreateTask(CreateTaskReq{
-		TemplateID: tpl.ID,
-		Prompt:     buildCharacterAnchorPrompt(&project, ch),
-	})
-	if err != nil {
-		return fmt.Errorf("创建角色全身服装锚点任务失败: %w", err)
-	}
-	if err := s.db.Model(&models.Character{}).Where("id = ?", ch.ID).Updates(map[string]any{
-		"clothing_anchor": "", "anchor_task_id": task.TaskID, "anchor_error": "",
-		"sheet": "", "sheet_task_id": "", "sheet_error": "", "sheet_after_anchor": true,
-	}).Error; err != nil {
-		_ = s.tasks.CancelTask(task.TaskID)
-		return err
-	}
-	go func() {
-		if err := s.tasks.Execute(task.TaskID); err != nil && !errors.Is(err, errNoFreeGPU) {
-			log.Printf("[character %d] execute clothing anchor task %s failed: %v", ch.ID, task.TaskID, err)
-		}
-	}()
-	s.pushProject(nil)
-	return nil
-}
-
-func (s *ProjectService) startFinalCharacterSheet(ch *models.Character) error {
-	if strings.TrimSpace(ch.Portrait) == "" || strings.TrimSpace(ch.ClothingAnchor) == "" {
-		return fmt.Errorf("角色「%s」缺少标准像或全身服装锚点", ch.Name)
+		return fmt.Errorf("%w：角色「%s」", errSheetActive, ch.Name)
 	}
 	var tpl models.Template
 	if err := s.db.Where("code = ? AND enabled = ?", "krea2_character_sheet", true).First(&tpl).Error; err != nil {
@@ -124,19 +56,17 @@ func (s *ProjectService) startFinalCharacterSheet(ch *models.Character) error {
 	if err := s.db.First(&project, ch.ProjectID).Error; err != nil {
 		return err
 	}
+	prompt := buildCharacterSheetPrompt(&project, ch)
 	task, err := s.tasks.CreateTask(CreateTaskReq{
 		TemplateID: tpl.ID,
-		Prompt:     buildCharacterSheetPrompt(&project, ch),
-		Files: map[string][]FileMeta{
-			"face_portrait":   {{TaskID: fmt.Sprint(ch.ProjectID), Name: ch.Portrait}},
-			"clothing_anchor": {{TaskID: fmt.Sprint(ch.ProjectID), Name: ch.ClothingAnchor}},
-		},
+		Prompt:     prompt,
+		Files:      map[string][]FileMeta{"source_image": {{TaskID: fmt.Sprint(ch.ProjectID), Name: ch.Portrait}}},
 	})
 	if err != nil {
 		return fmt.Errorf("创建角色四视图任务失败: %w", err)
 	}
 	if err := s.db.Model(&models.Character{}).Where("id = ?", ch.ID).Updates(map[string]any{
-		"sheet_task_id": task.TaskID, "sheet_error": "", "sheet_after_anchor": false,
+		"sheet_task_id": task.TaskID, "sheet_error": "",
 	}).Error; err != nil {
 		_ = s.tasks.CancelTask(task.TaskID)
 		return err
@@ -202,27 +132,11 @@ func (s *ProjectService) sheetTaskActive(taskID string) bool {
 
 func (s *ProjectService) syncSheets() {
 	changed := false
-	var anchoring []models.Character
-	if s.db.Where("anchor_task_id != ''").Find(&anchoring).Error == nil {
-		for i := range anchoring {
-			ch := &anchoring[i]
-			updates, ok := s.generatedImageTaskUpdates(ch.AnchorTaskID, fmt.Sprintf("char_anchor_%d_%d", ch.ID, time.Now().UnixNano()), ch.ProjectID,
-				"clothing_anchor", "anchor_task_id", "anchor_error", "全身服装锚点")
-			if ok {
-				if errText, failed := updates["anchor_error"].(string); failed && errText != "" {
-					updates["sheet_after_anchor"] = false
-				}
-				res := s.db.Model(ch).Where("anchor_task_id = ?", ch.AnchorTaskID).Updates(updates)
-				changed = changed || res.RowsAffected > 0
-			}
-		}
-	}
 	var chars []models.Character
 	if s.db.Where("sheet_task_id != ''").Find(&chars).Error == nil {
 		for i := range chars {
 			ch := &chars[i]
-			updates, ok := s.generatedImageTaskUpdates(ch.SheetTaskID, fmt.Sprintf("char_sheet_%d_%d", ch.ID, time.Now().UnixNano()), ch.ProjectID,
-				"sheet", "sheet_task_id", "sheet_error", "四视图")
+			updates, ok := s.sheetTaskUpdates(ch.SheetTaskID, fmt.Sprintf("char_sheet_%d_%d", ch.ID, time.Now().UnixNano()), ch.ProjectID)
 			if ok {
 				res := s.db.Model(ch).Where("sheet_task_id = ?", ch.SheetTaskID).Updates(updates)
 				changed = changed || res.RowsAffected > 0
@@ -233,20 +147,10 @@ func (s *ProjectService) syncSheets() {
 	if s.db.Where("kind = ? AND sheet_task_id != ''", AssetKindProp).Find(&assets).Error == nil {
 		for i := range assets {
 			a := &assets[i]
-			updates, ok := s.generatedImageTaskUpdates(a.SheetTaskID, fmt.Sprintf("prop_sheet_%d_%d", a.ID, time.Now().UnixNano()), a.ProjectID,
-				"sheet", "sheet_task_id", "sheet_error", "四视图")
+			updates, ok := s.sheetTaskUpdates(a.SheetTaskID, fmt.Sprintf("prop_sheet_%d_%d", a.ID, time.Now().UnixNano()), a.ProjectID)
 			if ok {
 				res := s.db.Model(a).Where("sheet_task_id = ?", a.SheetTaskID).Updates(updates)
 				changed = changed || res.RowsAffected > 0
-			}
-		}
-	}
-	var pending []models.Character
-	if s.db.Where("sheet_after_anchor = ? AND clothing_anchor != '' AND anchor_task_id = '' AND sheet_task_id = ''", true).Find(&pending).Error == nil {
-		for i := range pending {
-			if err := s.startFinalCharacterSheet(&pending[i]); err != nil {
-				s.db.Model(&pending[i]).Update("sheet_error", "自动续跑四视图失败: "+err.Error())
-				changed = true
 			}
 		}
 	}
@@ -255,25 +159,22 @@ func (s *ProjectService) syncSheets() {
 	}
 }
 
-func (s *ProjectService) generatedImageTaskUpdates(taskID, baseName string, projectID uint, outputField, taskField, errorField, label string) (map[string]any, bool) {
-	failure := func(message string) (map[string]any, bool) {
-		return map[string]any{taskField: "", errorField: message}, true
-	}
+func (s *ProjectService) sheetTaskUpdates(taskID, baseName string, projectID uint) (map[string]any, bool) {
 	var task models.Task
 	if err := s.db.Where("task_id = ?", taskID).First(&task).Error; err != nil {
-		return failure(label + "任务不存在，请重新生成")
+		return map[string]any{"sheet_task_id": "", "sheet_error": "四视图任务不存在，请重新生成"}, true
 	}
 	switch task.Status {
 	case "failed", "cancelled":
 		msg := strings.TrimSpace(task.Error)
 		if msg == "" {
-			msg = label + "任务已" + map[string]string{"failed": "失败", "cancelled": "取消"}[task.Status]
+			msg = "四视图任务已" + map[string]string{"failed": "失败", "cancelled": "取消"}[task.Status]
 		}
-		return failure(msg)
+		return map[string]any{"sheet_task_id": "", "sheet_error": msg}, true
 	case "success":
 		file, _ := resultImageOf(&task)
 		if file == "" || task.Port == nil || s.upload == nil || s.tasks == nil {
-			return failure(label + "任务成功但未返回可用图片")
+			return map[string]any{"sheet_task_id": "", "sheet_error": "四视图任务成功但未返回可用图片"}, true
 		}
 		subfolder, filename := filepath.ToSlash(filepath.Dir(file)), filepath.Base(file)
 		if subfolder == "." {
@@ -281,7 +182,7 @@ func (s *ProjectService) generatedImageTaskUpdates(taskID, baseName string, proj
 		}
 		data, err := NewComfyClient(s.tasks.comfyHostForPort(*task.Port), *task.Port).DownloadOutput(filename, subfolder, "output")
 		if err != nil {
-			return failure("读取" + label + "失败: " + err.Error())
+			return map[string]any{"sheet_task_id": "", "sheet_error": "读取四视图失败: " + err.Error()}, true
 		}
 		ext := filepath.Ext(file)
 		if ext == "" {
@@ -289,9 +190,9 @@ func (s *ProjectService) generatedImageTaskUpdates(taskID, baseName string, proj
 		}
 		path, _, err := s.upload.SaveFile(fmt.Sprint(projectID), "image", baseName+ext, data)
 		if err != nil {
-			return failure("保存" + label + "失败: " + err.Error())
+			return map[string]any{"sheet_task_id": "", "sheet_error": "保存四视图失败: " + err.Error()}, true
 		}
-		return map[string]any{outputField: filepath.Base(path), taskField: "", errorField: ""}, true
+		return map[string]any{"sheet": filepath.Base(path), "sheet_task_id": "", "sheet_error": ""}, true
 	}
 	return nil, false
 }
