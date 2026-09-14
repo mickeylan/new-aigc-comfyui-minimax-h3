@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -63,6 +64,28 @@ func TestParseScriptJSON(t *testing.T) {
 func TestParseScriptJSONInvalid(t *testing.T) {
 	if _, err := parseScriptJSON("这不是 JSON"); err == nil {
 		t.Fatal("期望解析失败")
+	}
+}
+
+func TestGenerateScriptCoreRepairsMalformedJSONOnce(t *testing.T) {
+	ps := newTestProjectService(t)
+	scenes := make([]map[string]any, 6)
+	for i := range scenes {
+		scenes[i] = map[string]any{"title": fmt.Sprintf("场景%d", i+1), "content": "动作", "image_prompt": "image", "duration": 5, "characters": []string{}, "dialogues": []any{}}
+	}
+	fixed, _ := json.Marshal(map[string]any{"script": "正文", "visual_bible": "视觉基准", "scenes": scenes})
+	provider := &stubTextProvider{response: string(fixed)}
+	ps.textProvider = provider
+	p := models.Project{Title: "测试", Synopsis: "故事"}
+	if err := ps.db.Create(&p).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, got, err := ps.generateScriptCore(&p, 1, `{"script":"正文"雷}`, resScriptHandler(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 1 || len(got) != 6 {
+		t.Fatalf("自动修复未生效: calls=%d scenes=%d", provider.calls, len(got))
 	}
 }
 

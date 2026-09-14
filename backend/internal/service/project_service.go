@@ -498,7 +498,19 @@ func (s *ProjectService) ExpandScript(p *models.Project, episodeN int, scriptTex
 func (s *ProjectService) generateScriptCore(p *models.Project, episodeN int, raw string, scriptTextFn func(prefix, script string) string) (*models.Project, []models.Scene, error) {
 	res, err := parseScriptJSON(raw)
 	if err != nil {
-		return nil, nil, fmt.Errorf("剧本解析失败（可重试）: %w", err)
+		// 模型偶尔会在对白中输出未转义引号等非法 JSON。仅做一次受控修复调用，
+		// 不用字符串替换猜测结构，避免悄悄改坏剧情内容。
+		repairSystem := `你是 JSON 修复器。将用户提供的剧本结果修复为合法 JSON，只修复语法、引号、转义、逗号和括号，不改写、删减或新增剧情。必须保持 script、visual_bible、scenes 及 scenes 内所有字段和内容。只输出修复后的 JSON 对象，不要 Markdown 或解释。`
+		repaired, repairErr := s.textProvider.Chat(repairSystem, raw)
+		if repairErr == nil {
+			res, err = parseScriptJSON(repaired)
+		}
+		if err != nil {
+			if repairErr != nil {
+				return nil, nil, fmt.Errorf("剧本解析失败，自动修复调用也失败: %v；原始解析错误: %w", repairErr, err)
+			}
+			return nil, nil, fmt.Errorf("剧本解析失败，自动修复后仍不是合法 JSON: %w", err)
+		}
 	}
 	if err := validateScriptResult(res); err != nil {
 		return nil, nil, fmt.Errorf("剧本结构不完整（可重试）: %w", err)
@@ -881,6 +893,8 @@ func (s *ProjectService) UpdateCharacter(ch *models.Character, req models.Charac
 		updates["review_note"] = ""
 		updates["reference_prompt"] = ""
 		updates["portrait"] = ""
+		updates["portrait_task_id"] = ""
+		updates["portrait_error"] = ""
 		updates["profile_version"] = gorm.Expr("profile_version + 1")
 	}
 	if err := s.db.Model(ch).Updates(updates).Error; err != nil {
@@ -950,6 +964,8 @@ func (s *ProjectService) upsertCharactersFromPlan(p *models.Project, plan *drama
 				updates["reference_prompt"] = ""
 				updates["review_note"] = ""
 				updates["portrait"] = ""
+				updates["portrait_task_id"] = ""
+				updates["portrait_error"] = ""
 				s.db.Model(&existing).Updates(updates)
 			}
 			continue
@@ -977,7 +993,7 @@ func (s *ProjectService) GenerateAllPortraits(p *models.Project) (int, error) {
 	return len(chars), nil
 }
 
-// StartCharacterPortrait 异步生成角色标准像（文生图，限流并发）
+// StartCharacterPortrait 使用本地 ComfyUI Krea2 模板异步生成角色标准像。
 func (s *ProjectService) StartCharacterPortrait(ch *models.Character) error {
 	if ch.ProfileStatus != models.ProfileStatusApproved {
 		return fmt.Errorf("请先审核通过角色「%s」的详细档案", ch.Name)
@@ -985,41 +1001,32 @@ func (s *ProjectService) StartCharacterPortrait(ch *models.Character) error {
 	if strings.TrimSpace(ch.ReferencePrompt) == "" {
 		return fmt.Errorf("请先为角色「%s」生成或填写参考像提示词", ch.Name)
 	}
-	go func() {
-		if err := s.generateCharacterPortrait(ch); err != nil {
-			log.Printf("[character %d] portrait failed: %v", ch.ID, err)
-		}
-	}()
-	return nil
-}
-
-func (s *ProjectService) generateCharacterPortrait(ch *models.Character) error {
-	if s.volc == nil || s.upload == nil {
-		return fmt.Errorf("角色标准像生成依赖文生图与存储服务")
+	if s.tasks == nil {
+		return fmt.Errorf("Krea2 生成依赖 ComfyUI 任务服务")
 	}
-	select {
-	case s.imageSem <- struct{}{}:
-		defer func() { <-s.imageSem }()
-	case <-s.stopped:
-		return fmt.Errorf("服务已停止")
+	if ch.PortraitTaskID != "" {
+		var active int64
+		s.db.Model(&models.Task{}).Where("task_id = ? AND status IN ?", ch.PortraitTaskID, []string{"pending", "queued", "running"}).Count(&active)
+		if active > 0 {
+			return fmt.Errorf("角色「%s」标准像正在生成", ch.Name)
+		}
 	}
 	var p models.Project
 	if err := s.db.First(&p, ch.ProjectID).Error; err != nil {
 		return err
 	}
-	data, err := s.volc.GenerateImage(buildPortraitPrompt(&p, ch), "")
+	var tpl models.Template
+	if err := s.db.Where("code = ? AND enabled = ?", "krea2_character_portrait", true).First(&tpl).Error; err != nil {
+		return fmt.Errorf("未找到已启用的 Krea2 角色标准像模板")
+	}
+	task, err := s.tasks.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: buildPortraitPrompt(&p, ch)})
 	if err != nil {
 		return err
 	}
-	ext := detectImageExt(data)
-	name := fmt.Sprintf("char_%d_%d%s", ch.ID, time.Now().UnixNano(), ext)
-	path, _, err := s.upload.SaveFile(fmt.Sprintf("%d", ch.ProjectID), "image", name, data)
-	if err != nil {
+	if err := s.db.Model(&models.Character{}).Where("id = ?", ch.ID).Updates(map[string]any{"portrait_task_id": task.TaskID, "portrait_error": ""}).Error; err != nil {
 		return err
 	}
-	if err := s.db.Model(&models.Character{}).Where("id = ?", ch.ID).Update("portrait", filepath.Base(path)).Error; err != nil {
-		return err
-	}
+	go func() { _ = s.tasks.Execute(task.TaskID) }()
 	s.pushProject(nil)
 	return nil
 }
@@ -1481,6 +1488,7 @@ func (s *ProjectService) WatchSceneVideos() {
 			case <-s.stopped:
 				return
 			case <-ticker.C:
+				s.syncCharacterPortraits()
 				s.syncSceneVideos()
 				s.advanceAutoPipelines()
 			}
@@ -1685,6 +1693,74 @@ func (s *ProjectService) failPipeline(projectID uint, err error, auto bool) {
 	}
 	s.db.Model(&models.Project{}).Where("id = ?", projectID).Updates(updates)
 	s.pushProject(nil)
+}
+
+func (s *ProjectService) syncCharacterPortraits() {
+	var chars []models.Character
+	if err := s.db.Where("portrait_task_id != ''").Find(&chars).Error; err != nil {
+		return
+	}
+	changed := false
+	for i := range chars {
+		ch := &chars[i]
+		var task models.Task
+		if err := s.db.Where("task_id = ?", ch.PortraitTaskID).First(&task).Error; err != nil {
+			continue
+		}
+		switch task.Status {
+		case "failed", "cancelled":
+			msg := task.Error
+			if msg == "" {
+				msg = task.Status
+			}
+			s.db.Model(ch).Where("portrait_task_id = ?", task.TaskID).Updates(map[string]any{"portrait_task_id": "", "portrait_error": msg})
+			changed = true
+		case "success":
+			file, gpu := resultImageOf(&task)
+			if file == "" || gpu == nil || s.cfg == nil || s.remote == nil || s.upload == nil {
+				s.db.Model(ch).Where("portrait_task_id = ?", task.TaskID).Updates(map[string]any{"portrait_task_id": "", "portrait_error": "Krea2 任务成功但未返回可用图片"})
+				changed = true
+				continue
+			}
+			abs := filepath.Join(s.cfg.Comfy.ComfyDir, "output_workers", fmt.Sprintf("gpu%d", *gpu), filepath.FromSlash(file))
+			f, err := s.remote.Open(abs)
+			if err != nil {
+				continue
+			}
+			data, readErr := io.ReadAll(f)
+			f.Close()
+			if readErr != nil {
+				continue
+			}
+			name := fmt.Sprintf("char_%d_%d%s", ch.ID, time.Now().UnixNano(), filepath.Ext(file))
+			path, _, saveErr := s.upload.SaveFile(fmt.Sprint(ch.ProjectID), "image", name, data)
+			if saveErr != nil {
+				continue
+			}
+			res := s.db.Model(ch).Where("portrait_task_id = ?", task.TaskID).Updates(map[string]any{"portrait": filepath.Base(path), "portrait_task_id": "", "portrait_error": ""})
+			changed = changed || res.RowsAffected > 0
+		}
+	}
+	if changed {
+		s.pushProject(nil)
+	}
+}
+
+func resultImageOf(task *models.Task) (string, *int) {
+	var files []map[string]string
+	if json.Unmarshal([]byte(task.ResultFiles), &files) != nil {
+		return "", nil
+	}
+	for _, f := range files {
+		name := f["filename"]
+		if f["type"] == "images" && !isVideoExt(name) {
+			if f["subfolder"] != "" {
+				return f["subfolder"] + "/" + name, task.GPUIndex
+			}
+			return name, task.GPUIndex
+		}
+	}
+	return "", nil
 }
 
 func (s *ProjectService) syncSceneVideos() {

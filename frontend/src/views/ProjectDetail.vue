@@ -33,6 +33,14 @@
       </div>
     </div>
 
+    <div v-if="project.status === 'failed'" class="notice project-failure-notice" role="alert">
+      <div>
+        <strong>项目生成异常</strong>
+        <p>{{ project.error || '后端未保存具体错误信息。可重新执行失败步骤；若仍失败，请查看对应场景或任务详情。' }}</p>
+      </div>
+      <button class="btn btn-ghost btn-sm" :disabled="busy || pipelineActive" @click="startPipeline">重试当前集流程</button>
+    </div>
+
     <!-- 创作方案（short-drama 方法论两阶段：先方案后分镜） -->
     <section class="section" v-if="project.plan || !project.plan === false">
       <div class="section-head">
@@ -135,10 +143,12 @@
               <span v-if="ch.voice_id" class="char-voice" title="已用参考语音注册复刻音色，配音音色全剧一致">🎤 复刻音色（参考语音）</span>
               <span v-else-if="ch.voice" class="char-voice">🎵 音色：{{ ch.voice }}</span>
               <span class="char-appear">出场 {{ characterCounts[ch.id] || 0 }} 场</span>
+              <span v-if="ch.portrait_task_id" class="char-voice">⏳ Krea2 标准像生成中</span>
+              <span v-if="ch.portrait_error" class="fail-msg">{{ ch.portrait_error }}</span>
               <div class="char-actions">
-                <button class="btn btn-sm btn-secondary" :disabled="busy || ch.profile_status !== 'approved' || !ch.reference_prompt" @click="genPortrait(ch)"
+                <button class="btn btn-sm btn-secondary" :disabled="busy || !!ch.portrait_task_id || ch.profile_status !== 'approved' || !ch.reference_prompt" @click="genPortrait(ch)"
                   :title="ch.profile_status !== 'approved' ? '请先审核通过角色档案' : !ch.reference_prompt ? '请先生成或填写参考像提示词' : ''">
-                  {{ ch.portrait ? '重生成标准像' : '生成标准像' }}
+                  {{ ch.portrait_task_id ? 'Krea2 生成中…' : ch.portrait ? 'Krea2 重生成标准像' : 'Krea2 生成标准像' }}
                 </button>
                 <button class="btn btn-sm btn-ghost" :disabled="busy || ch._uploading" @click="uploadPortrait(ch)">
                   {{ ch._uploading ? '上传中…' : '上传图片替换' }}
@@ -226,7 +236,7 @@
     </div>
 
     <!-- 剧本（当前集，可编辑后 AI 重新生成分镜） -->
-    <section class="section" v-if="project.script || project.scripts">
+    <section id="episode-workspace" class="section" v-if="project.script || project.scripts">
       <div class="section-head">
         <div>
           <span class="overline">SCENARIO</span>
@@ -922,18 +932,19 @@ async function saveEpisodes() {
 const queryEpisode = Number.parseInt(String(route.query.episode || ''), 10)
 const activeEpN = ref(Number.isInteger(queryEpisode) && queryEpisode > 0 ? queryEpisode : 1)
 const curMerging = ref(false)
-function selectEp(n) {
-  if (n === activeEpN.value) {
-    syncEpisodeQuery(n)
-    return
-  }
-  if (scriptDirty.value && !confirm(`第${activeEpN.value}集剧本有未保存修改，切换后将丢弃？`)) return
-  activeEpN.value = n
-  syncEpisodeQuery(n)
+async function selectEp(n) {
+  const episodeN = Number(n)
+  if (!Number.isInteger(episodeN) || episodeN <= 0) return
+  if (episodeN !== activeEpN.value && scriptDirty.value && !confirm(`第${activeEpN.value}集剧本有未保存修改，切换后将丢弃？`)) return
+  activeEpN.value = episodeN
+  syncEpisodeQuery(episodeN)
   scriptDirty.value = false
   scenePage.value = 1
-  load()
-  document.querySelector('.scene-grid')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  await load()
+  await nextTick()
+  // 即使该集尚无分镜，也滚动到剧本工作区，让“进入”操作有明确反馈。
+  const target = document.querySelector('.scene-grid') || document.querySelector('#episode-workspace')
+  target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 function syncEpisodeQuery(n) {
   if (String(route.query.episode || '') === String(n)) return
@@ -1973,6 +1984,8 @@ onBeforeUnmount(() => {
 .field-hint { font-size: 12px; color: var(--text-tertiary); margin-top: 5px; }
 .notice { border-radius: 12px; padding: 10px 14px; font-size: 13px; margin-top: 14px; }
 .error-notice { background: rgba(255, 69, 58, 0.1); color: var(--red); }
+.project-failure-notice { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 20px; background: rgba(255, 69, 58, 0.1); color: var(--red); border: 1px solid rgba(255, 69, 58, 0.22); }
+.project-failure-notice p { margin: 4px 0 0; white-space: pre-wrap; color: inherit; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
 @keyframes pop { from { transform: scale(0.94); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 

@@ -121,6 +121,8 @@ func (s *CharacterProfileService) GenerateProfile(char *models.Character, projec
 		"reference_prompt": "",
 		"review_note":      "",
 		"portrait":         "",
+		"portrait_task_id": "",
+		"portrait_error":   "",
 		"trait":            coalesceField(char.Trait, result.Appearance),
 		"style":            coalesceField(char.Style, result.WardrobeDetail),
 	}
@@ -165,6 +167,8 @@ func (s *CharacterProfileService) GenerateReferencePrompt(char *models.Character
 		"profile_status":   models.ProfileStatusDraft,
 		"review_note":      "",
 		"portrait":         "",
+		"portrait_task_id": "",
+		"portrait_error":   "",
 		"profile_version":  gorm.Expr("profile_version + 1"),
 	}).Error; err != nil {
 		return "", err
