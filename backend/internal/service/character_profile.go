@@ -56,14 +56,15 @@ const characterProfileSystemPrompt = `你是一位专业的漫剧角色设计师
   "relationships": "关系图谱：该角色与其他角色的关系描述（亲子/恋人/朋友/敌人等），关系动态变化",
   "emotions": "情绪表达：该角色在喜悦/愤怒/悲伤/惊讶等情绪下的具体表现方式，面部表情和肢体语言特点",
   "habits": "习惯动作：常见小动作（摸头发/托腮等）、口头禅、特殊习惯、紧张/放松时的标志性行为",
-  "wardrobe_detail": "服装细节：日常服装描述（材质/颜色/款式）、重要场合造型、随时间变化的造型演变、重要配饰",
+  "wardrobe_detail": "完整服装细节：日常服装描述（材质/颜色/款式）、上装、下装、腰带、重要配饰以及明确鞋履（鞋型/材质/颜色）；重要场合造型和随时间变化的造型演变",
   "lighting_mood": "光影氛围：适合该角色的打光风格（柔和/硬朗/戏剧性）、主光源方向、氛围偏好（暖色调/冷色调）",
   "color_palette": "角色色调：主色调、辅色调、点缀色，以及与角色性格的关联"
 }
 3. 输出的内容应符合漫剧风格，适合后续 AI 生图和视频生成。
 4. 每个字段都要有实质性内容，不要为空。
 5. appearance 和 wardrobe_detail 要足够详细，能支撑高质量的参考像生成。
-6. 如果输入或故事明确给出年龄，appearance 必须在开头原样保留准确年龄（例如“22岁青年女性”），不得用“成熟、资深、威严”等身份语义改变视觉年龄；30岁以下角色应描述符合该年龄的面部骨骼、紧致皮肤和自然妆容，禁止擅自增加法令纹、眼袋、皱纹或中年感。`
+6. 如果输入或故事明确给出年龄，appearance 必须在开头原样保留准确年龄（例如“22岁青年女性”），不得用“成熟、资深、威严”等身份语义改变视觉年龄；30岁以下角色应描述符合该年龄的面部骨骼、紧致皮肤和自然妆容，禁止擅自增加法令纹、眼袋、皱纹或中年感。
+7. wardrobe_detail 必须明确写出鞋履。鞋履严格符合故事时代、地域文化、身份和服装：中国古典/修仙/武侠角色使用布靴、皂靴、云头履或绣鞋等中式鞋履；除非故事明确要求，禁止赤脚、现代高跟鞋、运动鞋、皮鞋、日式木屐及跨时代跨文化鞋款。`
 
 // GenerateProfile 使用 LLM 从故事中生成角色详细档案
 func (s *CharacterProfileService) GenerateProfile(char *models.Character, project *models.Project, planJSON string) error {
@@ -123,10 +124,17 @@ func (s *CharacterProfileService) GenerateProfile(char *models.Character, projec
 		"profile_version":  gorm.Expr("profile_version + 1"),
 		"reference_prompt": "",
 		"review_note":      "",
-		"portrait":         "",
-		"portrait_task_id": "",
-		"portrait_error":   "",
-		"trait":            coalesceField(char.Trait, result.Appearance),
+		"portrait":           "",
+		"portrait_task_id":   "",
+		"portrait_error":     "",
+		"clothing_anchor":    "",
+		"anchor_task_id":     "",
+		"anchor_error":       "",
+		"sheet":              "",
+		"sheet_task_id":      "",
+		"sheet_error":        "",
+		"sheet_after_anchor": false,
+		"trait":              coalesceField(char.Trait, result.Appearance),
 		"style":            coalesceField(char.Style, result.WardrobeDetail),
 	}
 
@@ -203,14 +211,23 @@ func (s *CharacterProfileService) GenerateReferencePrompt(char *models.Character
 	if char.LightingMood != "" {
 		parts = append(parts, "影棚布光："+char.LightingMood)
 	}
-	parts = append(parts, "正面半身头像，直视镜头，自然放松表情，肩颈端正，纯白干净背景，柔和均匀自然光，居中对称构图，高分辨率真实角色参考照", "禁止显老、年龄漂移、中年感、法令纹、眼袋、深皱纹、松弛皮肤、厚重妆容、复古影楼感、多人、分屏、拼图、三视图、复杂背景、文字、水印、畸形五官和畸形肢体")
+	parts = append(parts,
+		"正面半身头像，直视镜头，自然放松表情，肩颈端正，纯白干净背景，柔和均匀自然光，居中对称构图，高分辨率真实角色参考照",
+		"禁止显老、年龄漂移、中年感、法令纹、眼袋、深皱纹、松弛皮肤、厚重妆容、复古影楼感、多人、分屏、拼图、三视图、复杂背景、文字、水印、畸形五官和畸形肢体")
 	prompt := strings.Join(parts, "，")
 	updates := map[string]any{
-		"reference_prompt": prompt,
-		"portrait":         "",
-		"portrait_task_id": "",
-		"portrait_error":   "",
-		"profile_version":  gorm.Expr("profile_version + 1"),
+		"reference_prompt":   prompt,
+		"portrait":           "",
+		"portrait_task_id":   "",
+		"portrait_error":     "",
+		"clothing_anchor":    "",
+		"anchor_task_id":     "",
+		"anchor_error":       "",
+		"sheet":              "",
+		"sheet_task_id":      "",
+		"sheet_error":        "",
+		"sheet_after_anchor": false,
+		"profile_version":    gorm.Expr("profile_version + 1"),
 	}
 	// 参考提示词是由现有档案确定性编译出的派生内容；档案本身未变化时，
 	// 不应把刚审核通过的状态退回草稿，否则会形成“审核→生成提示词→再审核”的循环。
@@ -290,6 +307,15 @@ func (s *CharacterProfileService) UpdateProfile(char *models.Character, req mode
 	updates["profile_status"] = models.ProfileStatusDraft
 	updates["review_note"] = ""
 	updates["portrait"] = ""
+	updates["portrait_task_id"] = ""
+	updates["portrait_error"] = ""
+	updates["clothing_anchor"] = ""
+	updates["anchor_task_id"] = ""
+	updates["anchor_error"] = ""
+	updates["sheet"] = ""
+	updates["sheet_task_id"] = ""
+	updates["sheet_error"] = ""
+	updates["sheet_after_anchor"] = false
 
 	return s.db.Model(char).Updates(updates).Error
 }

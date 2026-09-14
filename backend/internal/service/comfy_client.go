@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"time"
 )
 
@@ -104,6 +106,39 @@ func (c *ComfyClient) SubmitPrompt(workflow map[string]any, clientID string) (st
 		return "", fmt.Errorf("comfy error: %v", out.Error)
 	}
 	return out.PromptID, nil
+}
+
+// UploadInput sends an input through ComfyUI's API so the selected instance can
+// validate and load it even when the console and ComfyUI do not share a filesystem.
+func (c *ComfyClient) UploadInput(filename, subfolder string, data []byte) error {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("image", filepath.Base(filename))
+	if err != nil {
+		return err
+	}
+	if _, err := part.Write(data); err != nil {
+		return err
+	}
+	_ = writer.WriteField("subfolder", subfolder)
+	_ = writer.WriteField("type", "input")
+	_ = writer.WriteField("overwrite", "true")
+	if err := writer.Close(); err != nil {
+		return err
+	}
+	resp, err := c.HTTP.Post(c.baseURL()+"/upload/image", writer.FormDataContentType(), &body)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	response, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return readErr
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("ComfyUI input upload failed %d: %s", resp.StatusCode, truncateStr(string(response), 300))
+	}
+	return nil
 }
 
 // DownloadOutput 通过 ComfyUI /view 读取输出，避免假设本地、SSH、Docker 使用同一文件系统路径。

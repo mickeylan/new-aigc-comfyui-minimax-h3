@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"path/filepath"
@@ -603,6 +604,50 @@ func (s *TaskService) CreateTask(req CreateTaskReq) (*models.Task, error) {
 	return &task, nil
 }
 
+func (s *TaskService) syncInputFilesToInstance(client *ComfyClient, params map[string]any) error {
+	seen := map[string]bool{}
+	var syncValue func(any) error
+	syncValue = func(value any) error {
+		switch v := value.(type) {
+		case map[string]any:
+			taskID, _ := v["task_id"].(string)
+			name, _ := v["name"].(string)
+			if taskID != "" && name != "" {
+				rel := filepath.ToSlash(filepath.Join(taskID, name))
+				if seen[rel] {
+					return nil
+				}
+				seen[rel] = true
+				file, err := s.remote.Open(filepath.Join(s.cfg.Comfy.ComfyDir, "input", filepath.FromSlash(rel)))
+				if err != nil {
+					return fmt.Errorf("读取 %s 失败: %w", rel, err)
+				}
+				data, readErr := io.ReadAll(file)
+				file.Close()
+				if readErr != nil {
+					return fmt.Errorf("读取 %s 失败: %w", rel, readErr)
+				}
+				if err := client.UploadInput(name, taskID, data); err != nil {
+					return fmt.Errorf("上传 %s 失败: %w", rel, err)
+				}
+			}
+			for _, child := range v {
+				if err := syncValue(child); err != nil {
+					return err
+				}
+			}
+		case []any:
+			for _, child := range v {
+				if err := syncValue(child); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return syncValue(params)
+}
+
 // Execute 调度并提交任务 (异步执行)
 func (s *TaskService) Execute(taskID string) error {
 	// 短临界区：校验状态并登记执行中，随后的实例探测/工作流渲染/提交均在锁外，
@@ -682,6 +727,10 @@ func (s *TaskService) Execute(taskID string) error {
 
 	clientID := "console-" + taskID
 	c := NewComfyClient(s.comfyHostForPort(inst.Port), inst.Port)
+	if err := s.syncInputFilesToInstance(c, params); err != nil {
+		s.failTask(&task, "同步输入素材失败: "+err.Error())
+		return err
+	}
 	promptID, err := c.SubmitPrompt(workflow, clientID)
 	if err != nil {
 		s.failTask(&task, "提交失败: "+err.Error())

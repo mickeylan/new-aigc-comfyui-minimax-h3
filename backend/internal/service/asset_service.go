@@ -88,6 +88,36 @@ func (s *ProjectService) AssetSceneCounts(projectID uint) (map[uint]int, error) 
 	return count, nil
 }
 
+// RedesignAssetDescription expands a short user brief into an authoritative asset bible entry.
+func (s *ProjectService) RedesignAssetDescription(p *models.Project, kind, name, brief string) (string, error) {
+	kind, err := normalizeAssetKind(kind)
+	if err != nil {
+		return "", err
+	}
+	name, brief = strings.TrimSpace(name), strings.TrimSpace(brief)
+	if name == "" || brief == "" {
+		return "", fmt.Errorf("名称和简单说明不能为空")
+	}
+	if s.textProvider == nil {
+		return "", fmt.Errorf("文本生成服务未配置")
+	}
+	system := `你是影视美术设定师。把用户的简单说明扩写为可长期复用的资产权威设定。
+严格遵守项目题材、时代、地域文化和画风，不添加人物或剧情。
+如果是场景：写清空间类型、建筑结构、固定布局、入口出口、前中后景、主要陈设、材质、主辅色、光源方向、时段与氛围；必须是无人物环境设定。
+如果是道具：写清类别、形状比例、材质、颜色、纹样、磨损、可识别特征和尺寸参照；必须是无生命单一物件，不得因名称含人物或生物词而拟人化。
+只输出一段具体中文描述，不要标题、解释、Markdown、JSON或空泛质量标签。`
+	user := fmt.Sprintf("项目：%s\n题材：%s\n画风：%s\n故事：%s\n资产类型：%s\n名称：%s\n用户简单说明：%s", p.Title, p.Genre, p.Style, p.Synopsis, AssetKindLabel(kind), name, brief)
+	output, err := s.textProvider.Chat(system, user)
+	if err != nil {
+		return "", fmt.Errorf("AI 重新设计%s失败: %w", AssetKindLabel(kind), err)
+	}
+	output = strings.TrimSpace(strings.Trim(strings.TrimSpace(output), "`"))
+	if len([]rune(output)) < 20 {
+		return "", fmt.Errorf("AI 返回的%s描述过短，请重试", AssetKindLabel(kind))
+	}
+	return output, nil
+}
+
 // CreateAsset 手动新建资产
 func (s *ProjectService) CreateAsset(a models.Asset) (*models.Asset, error) {
 	kind, err := normalizeAssetKind(a.Kind)
@@ -310,19 +340,31 @@ func assetImageSize(p *models.Project, kind string) (int, int) {
 
 // buildAssetPrompt 资产参考图提示词：画风强约束 + 描述 + 类别定式（道具特写 / 场景空镜）
 func buildAssetPrompt(p *models.Project, a *models.Asset) string {
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 6)
+	if a.Kind == AssetKindProp {
+		// Put the asset class before its name. Fantasy names such as “元婴玉佩” contain
+		// person-like tokens; without this guard portrait-biased checkpoints may draw a person.
+		parts = append(parts,
+			"【主体类型硬约束】这是一件无生命道具的产品参考图，画面主体只能是一个物件，人物数量必须为零",
+			"道具名称「"+strings.TrimSpace(a.Name)+"」只是物品专名，名称中的人物、身份或生物词汇不得被画成人形；它不是人物、不是美女、不是婴儿、不是人体、不是雕像")
+		if d := strings.TrimSpace(a.Description); d != "" {
+			parts = append(parts, "物件外观必须精确遵守："+d)
+		}
+		if style := strings.TrimSpace(p.Style); style != "" {
+			parts = append(parts, "只把项目画风「"+style+"」用于物件材质、色彩和照明，不得因此增加人物")
+		}
+		parts = append(parts, "道具特写参考图，单一完整物体，居中构图，中性纯色背景，产品摄影构图，材质与纹理清晰，画面中人物数量必须为零，禁止脸、人体、手、婴儿、美女、人像、拟人化、文字、水印和拼图")
+		return strings.Join(parts, "，")
+	}
+	parts = append(parts, "【主体类型硬约束】这是无人物的环境场景空镜，人物数量必须为零")
 	if desc := styleDescriptor(p.Style); desc != "" {
 		parts = append(parts, desc)
 	}
-	parts = append(parts, AssetKindLabel(a.Kind)+"「"+strings.TrimSpace(a.Name)+"」")
+	parts = append(parts, "场景「"+strings.TrimSpace(a.Name)+"」")
 	if d := strings.TrimSpace(a.Description); d != "" {
-		parts = append(parts, "外观必须精确遵守："+d)
+		parts = append(parts, "环境外观必须精确遵守："+d)
 	}
-	if a.Kind == AssetKindLocation {
-		parts = append(parts, "场景空镜参考图，全景构图，无人物，环境陈设与光影氛围完整清晰，高质量，禁止文字、水印和拼图")
-	} else {
-		parts = append(parts, "道具特写参考图，单一物体，完整展示，居中构图，中性纯色背景，细节清晰，无人物，禁止文字、水印和拼图")
-	}
+	parts = append(parts, "场景空镜参考图，全景构图，无人物，环境陈设与光影氛围完整清晰，高质量，禁止人物、文字、水印和拼图")
 	return strings.Join(parts, "，")
 }
 

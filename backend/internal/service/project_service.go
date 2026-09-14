@@ -316,6 +316,43 @@ func (s *ProjectService) UpdateProject(p *models.Project, req models.Project) er
 	return s.db.Model(p).Updates(updates).Error
 }
 
+// RedesignSceneImagePrompt asks the configured text provider to rebuild a production-ready
+// image prompt from authoritative project, character, location and prop data.
+func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, error) {
+	if s.textProvider == nil {
+		return "", fmt.Errorf("文本生成服务未配置")
+	}
+	var project models.Project
+	if err := s.db.First(&project, sc.ProjectID).Error; err != nil {
+		return "", err
+	}
+	characterContext := s.characterContextForScene(sc)
+	assetContext := s.assetContextForScene(sc)
+	system := `你是专业影视美术指导和分镜提示词设计师。请把场景资料重构成可直接用于 Krea2 生图的单幅画面提示词。
+必须遵守：
+1. 忠实于场景正文，不新增角色、道具、地点或剧情；角色名、人数和动作必须准确。
+2. 严格使用角色档案的年龄、五官、发型、服装和鞋履，使用资产档案的材质、颜色、空间布局和时代文化。
+3. 明确主体及位置、动作瞬间、表情视线、前中后景、景别、机位、镜头焦段、构图、光源方向、色彩、材质和氛围。
+4. 这是单幅画面，不描述时间序列，不生成拼图、四视图、字幕、文字、水印或画外内容。
+5. 不要使用“高清、杰作”等空泛标签堆砌；所有描述必须可见、具体且不互相冲突。
+只输出重新设计后的完整中文提示词，不要解释、标题、Markdown 或 JSON。`
+	user := fmt.Sprintf("项目：%s\n题材：%s\n画风：%s\n故事：%s\n场景标题：%s\n场景正文：%s\n原画面提示词：%s\n出场角色：%s\n地点：%s\n道具：%s\n\n角色权威档案：\n%s\n\n场景与道具权威档案：\n%s",
+		project.Title, project.Genre, project.Style, project.Synopsis, sc.Title, sc.Content, sc.ImagePrompt,
+		sc.Characters, sc.LocationName, sc.Props, characterContext, assetContext)
+	output, err := s.textProvider.Chat(system, user)
+	if err != nil {
+		return "", fmt.Errorf("AI 重新设计场景提示词失败: %w", err)
+	}
+	output = strings.TrimSpace(output)
+	output = strings.TrimPrefix(output, "```")
+	output = strings.TrimSuffix(output, "```")
+	output = strings.TrimSpace(output)
+	if len([]rune(output)) < 20 {
+		return "", fmt.Errorf("AI 返回的场景提示词过短，请重试")
+	}
+	return output, nil
+}
+
 // UpdateScene 编辑场景文案。修改 image_prompt 会清空已生成画面与视频（需重新生成）；
 // 仅修改 content/title 时保留画面、清空已生成视频（需重新生成视频）。
 func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imagePrompt string, visual ...string) error {
@@ -1216,6 +1253,13 @@ func (s *ProjectService) UpdateCharacter(ch *models.Character, req models.Charac
 		updates["portrait"] = ""
 		updates["portrait_task_id"] = ""
 		updates["portrait_error"] = ""
+		updates["clothing_anchor"] = ""
+		updates["anchor_task_id"] = ""
+		updates["anchor_error"] = ""
+		updates["sheet"] = ""
+		updates["sheet_task_id"] = ""
+		updates["sheet_error"] = ""
+		updates["sheet_after_anchor"] = false
 		updates["profile_version"] = gorm.Expr("profile_version + 1")
 	}
 	if err := s.db.Model(ch).Updates(updates).Error; err != nil {
@@ -1344,7 +1388,11 @@ func (s *ProjectService) StartCharacterPortrait(ch *models.Character) error {
 	if err != nil {
 		return err
 	}
-	if err := s.db.Model(&models.Character{}).Where("id = ?", ch.ID).Updates(map[string]any{"portrait_task_id": task.TaskID, "portrait_error": ""}).Error; err != nil {
+	if err := s.db.Model(&models.Character{}).Where("id = ?", ch.ID).Updates(map[string]any{
+		"portrait_task_id": task.TaskID, "portrait_error": "",
+		"clothing_anchor": "", "anchor_task_id": "", "anchor_error": "",
+		"sheet": "", "sheet_task_id": "", "sheet_error": "", "sheet_after_anchor": false,
+	}).Error; err != nil {
 		return err
 	}
 	go func() { _ = s.tasks.Execute(task.TaskID) }()

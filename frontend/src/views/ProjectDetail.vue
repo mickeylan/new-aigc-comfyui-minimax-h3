@@ -151,6 +151,8 @@
               <span class="char-appear">出场 {{ characterCounts[ch.id] || 0 }} 场</span>
               <span v-if="ch.portrait_task_id" class="char-voice">⏳ Krea2 标准像生成中</span>
               <span v-if="ch.portrait_error" class="fail-msg">{{ ch.portrait_error }}</span>
+              <span v-if="ch.anchor_task_id" class="char-voice">⏳ 正在生成全身服装与佩饰锚点，完成后自动生成四视图</span>
+              <span v-if="ch.anchor_error" class="fail-msg">{{ ch.anchor_error }}</span>
               <span v-if="ch.sheet_task_id" class="char-voice">⏳ 角色四视图生成中</span>
               <span v-if="ch.sheet_error" class="fail-msg">{{ ch.sheet_error }}</span>
               <div class="char-actions">
@@ -161,9 +163,9 @@
                 <button class="btn btn-sm btn-ghost" :disabled="busy || ch._uploading" @click="uploadPortrait(ch)">
                   {{ ch._uploading ? '上传中…' : '上传图片替换' }}
                 </button>
-                <button class="btn btn-sm btn-secondary" :disabled="busy || !ch.portrait || !!ch.sheet_task_id" @click="genCharacterSheet(ch)"
+                <button class="btn btn-sm btn-secondary" :disabled="busy || !ch.portrait || !!ch.anchor_task_id || !!ch.sheet_task_id" @click="genCharacterSheet(ch)"
                   :title="!ch.portrait ? '请先生成或上传标准像' : '下游分镜与 H3 视频将优先使用四视图'">
-                  {{ ch.sheet_task_id ? '四视图生成中…' : ch.sheet ? '重生成四视图' : '生成四视图' }}
+                  {{ ch.anchor_task_id ? '服装佩饰锚点生成中…' : ch.sheet_task_id ? '四视图生成中…' : ch.sheet ? '重生成四视图' : '生成四视图' }}
                 </button>
                 <button v-if="ch.sheet" class="btn btn-sm btn-ghost" @click="viewCharacterSheet(ch)">查看四视图</button>
                 <button class="btn btn-sm btn-ghost" @click="openEditCharacter(ch)">编辑</button>
@@ -474,9 +476,9 @@
           <div class="field-hint">巨构模式强化尺度参照、大气分层、结构可读性、重量感和镜头构图，不改变剧情主体。</div>
         </div>
         <div class="field">
-          <label>画面提示词（图生图，参考人像图为主）</label>
-          <textarea v-model="sceneForm.image_prompt" class="textarea" rows="3"
-            placeholder="人物外貌特征、场景环境、画风…" />
+          <div class="field-label-actions"><label>画面提示词（输入简单说明后交给 AI 设计）</label><button class="btn btn-sm btn-secondary" :disabled="redesigningScenePrompt || !sceneForm.content.trim()" @click="redesignScenePrompt">{{ redesigningScenePrompt ? 'AI 设计中…' : 'AI 重新设计' }}</button></div>
+          <textarea v-model="sceneForm.image_prompt" class="textarea" rows="6"
+            placeholder="可先只写简单意图，例如：女主在雨夜宗门大殿发现玉佩；点击 AI 重新设计补全人物、环境、构图、镜头和光影。" />
           <div class="field-hint">以出场角色的标准人像图为底图生成画面（多角色传多张参考图锁人物）；修改画面提示词会清空已生成的画面与视频，需要重新生成</div>
         </div>
         <div v-if="sceneError" class="notice error-notice">{{ sceneError }}</div>
@@ -768,9 +770,9 @@
           <div class="field-hint">名称须与剧本分镜中引用的{{ assetKindLabel }}名完全一致，才能自动匹配参考图</div>
         </div>
         <div class="field">
-          <label>外观描述 <span class="optional">用于保证{{ assetKindLabel }}一致</span></label>
-          <textarea v-model="assetForm.description" class="textarea" rows="3"
-            :placeholder="assetTab === 'prop' ? '形状、材质、颜色、标志性细节…' : '空间、建筑陈设、光线氛围…'" />
+          <div class="field-label-actions"><label>简单说明 / AI 设计结果 <span class="optional">用于保证{{ assetKindLabel }}一致</span></label><button class="btn btn-sm btn-secondary" :disabled="redesigningAsset || !assetForm.name.trim() || !assetForm.description.trim()" @click="redesignAssetDescription">{{ redesigningAsset ? 'AI 设计中…' : 'AI 重新设计' }}</button></div>
+          <textarea v-model="assetForm.description" class="textarea" rows="6"
+            :placeholder="assetTab === 'prop' ? '简单写：青玉玉佩，金色云纹；AI 会补全形状、材质、比例和辨识细节。' : '简单写：云隐宗大殿，宏伟、晨雾；AI 会补全空间布局、建筑、陈设、材质和光线。'" />
         </div>
         <div v-if="assetError" class="notice error-notice">{{ assetError }}</div>
         <div class="modal-actions">
@@ -876,6 +878,7 @@ const assetCounts = ref({})
 const editingAsset = ref(null)
 const assetError = ref('')
 const assetForm = reactive({ name: '', description: '' })
+const redesigningAsset = ref(false)
 const voicePresets = ['Cherry', 'Ethan', 'Chelsie', 'Serena', 'Nofish', 'Dylan', 'Jada', 'Peter', 'Sunny', 'Luna']
 const showScript = ref(false)
 const showPlan = ref(false)
@@ -892,6 +895,7 @@ const videoProgressMap = ref({})
 const editingScene = ref(null)
 const editingProject = ref(false)
 const savingScene = ref(false)
+const redesigningScenePrompt = ref(false)
 const savingProject = ref(false)
 const sceneError = ref('')
 const projectError = ref('')
@@ -1260,6 +1264,21 @@ async function genPortrait(ch) {
     toast.show(e.response?.data?.error || '生成失败')
   }
 }
+async function genCharacterSheet(ch) {
+  try {
+    const { data } = await api.generateCharacterSheet(id(), ch.id)
+    toast.show(data.message || '角色四视图任务已提交')
+    await load()
+  } catch (e) {
+    toast.error(e.response?.data?.error || '角色四视图任务提交失败')
+  }
+}
+function viewCharacterSheet(ch) {
+  if (ch.sheet) {
+    viewer.value = api.inputUrl(project.value.id, ch.sheet)
+    nextTick(() => viewerMask.value?.focus())
+  }
+}
 async function uploadPortrait(ch) {
   const input = document.createElement('input')
   input.type = 'file'
@@ -1536,6 +1555,21 @@ function viewAssetImage(a) {
     nextTick(() => viewerMask.value?.focus())
   }
 }
+async function genPropSheet(a) {
+  try {
+    const { data } = await api.generatePropSheet(id(), a.id)
+    toast.show(data.message || '道具四视图任务已提交')
+    await load()
+  } catch (e) {
+    toast.error(e.response?.data?.error || '道具四视图任务提交失败')
+  }
+}
+function viewPropSheet(a) {
+  if (a.sheet) {
+    viewer.value = api.inputUrl(project.value.id, a.sheet)
+    nextTick(() => viewerMask.value?.focus())
+  }
+}
 async function allAssetImages() {
   busy.value = true
   try {
@@ -1599,6 +1633,22 @@ function openEditAsset(a) {
   Object.assign(assetForm, { name: a.name, description: a.description })
   editingAsset.value = a
 }
+async function redesignAssetDescription() {
+  if (!assetForm.name.trim() || !assetForm.description.trim()) return
+  redesigningAsset.value = true
+  assetError.value = ''
+  try {
+    const kind = editingAsset.value === 'new' ? assetTab.value : editingAsset.value.kind
+    const { data } = await api.redesignAssetDescription(id(), kind, { name: assetForm.name.trim(), brief: assetForm.description.trim() })
+    assetForm.description = data.description
+    toast.success(`${kind === 'location' ? '场景' : '道具'}设定已由 AI 重新设计，请确认后保存`)
+  } catch (e) {
+    assetError.value = e.response?.data?.error || 'AI 重新设计失败'
+  } finally {
+    redesigningAsset.value = false
+  }
+}
+
 async function saveAsset() {
   if (!assetForm.name.trim()) return
   busy.value = true
@@ -1759,6 +1809,21 @@ function openEditScene(sc) {
     title: sc.title, content: sc.content, image_prompt: sc.image_prompt,
     visual_type: sc.visual_type || 'normal', mega_type: sc.mega_type || 'architecture'
   })
+}
+
+async function redesignScenePrompt() {
+  if (!editingScene.value || !sceneForm.content.trim()) return
+  redesigningScenePrompt.value = true
+  sceneError.value = ''
+  try {
+    const { data } = await api.redesignScenePrompt(id(), editingScene.value.id, sceneForm.content.trim())
+    sceneForm.image_prompt = data.prompt
+    toast.success('场景画面提示词已由 AI 重新设计，请确认后保存')
+  } catch (e) {
+    sceneError.value = e.response?.data?.error || 'AI 重新设计失败'
+  } finally {
+    redesigningScenePrompt.value = false
+  }
 }
 
 async function saveScene() {

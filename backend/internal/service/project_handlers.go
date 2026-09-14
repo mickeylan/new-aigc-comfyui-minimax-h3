@@ -191,6 +191,25 @@ func (s *Service) HandleUpdateProject(c *gin.Context) {
 }
 
 // HandleUpdateScene 编辑场景文案（修改画面提示词会重置画面与视频）
+func (s *Service) HandleRedesignScenePrompt(c *gin.Context) {
+	sc, ok := s.loadScene(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Brief string `json:"brief"`
+	}
+	if err := c.ShouldBindJSON(&req); err == nil && strings.TrimSpace(req.Brief) != "" {
+		sc.Content = strings.TrimSpace(req.Brief)
+	}
+	prompt, err := s.Projects.RedesignSceneImagePrompt(sc)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"prompt": prompt})
+}
+
 func (s *Service) HandleUpdateScene(c *gin.Context) {
 	sc, ok := s.loadScene(c)
 	if !ok {
@@ -625,7 +644,8 @@ func (s *Service) HandleGenerateCharacterSheet(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := s.Projects.StartCharacterSheet(ch); err != nil {
+	phase, err := s.Projects.StartCharacterSheet(ch)
+	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, errSheetActive) {
 			status = http.StatusConflict
@@ -633,7 +653,11 @@ func (s *Service) HandleGenerateCharacterSheet(c *gin.Context) {
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusAccepted, gin.H{"ok": true, "message": fmt.Sprintf("角色「%s」四视图任务已提交", ch.Name)})
+	message := fmt.Sprintf("角色「%s」四视图任务已提交", ch.Name)
+	if phase == "anchor" {
+		message = fmt.Sprintf("角色「%s」全身服装锚点生成中，完成后将自动生成四视图", ch.Name)
+	}
+	c.JSON(http.StatusAccepted, gin.H{"ok": true, "phase": phase, "message": message})
 }
 
 func (s *Service) HandleGenerateAllPortraits(c *gin.Context) {
@@ -723,6 +747,31 @@ func (s *Service) HandleListAssets(c *gin.Context) {
 	}
 	counts, _ := s.Projects.AssetSceneCounts(p.ID)
 	c.JSON(200, gin.H{"assets": list, "counts": counts})
+}
+
+func (s *Service) HandleRedesignAssetDescription(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	kind, ok := assetKindOf(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Name  string `json:"name"`
+		Brief string `json:"brief"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": "参数错误"})
+		return
+	}
+	description, err := s.Projects.RedesignAssetDescription(p, kind, req.Name, req.Brief)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"description": description})
 }
 
 func (s *Service) HandleCreateAsset(c *gin.Context) {

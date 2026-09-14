@@ -532,13 +532,102 @@ func TestEnsurePlanCharactersKeepsCompletePlanCharacters(t *testing.T) {
 	}
 }
 
+func TestRedesignSceneImagePromptUsesProjectAndAssetContext(t *testing.T) {
+	ps := newTestProjectService(t)
+	provider := &stubTextProvider{response: "电影级全景，古典宗门大殿，林舒身穿白色仙裙，青玉佩悬于腰间，晨雾体积光，低机位纵深构图"}
+	ps.textProvider = provider
+	project := models.Project{Title: "问仙", Genre: "古典修仙", Style: "国风写实", Synopsis: "宗门试炼"}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID, Title: "入殿", Content: "林舒进入宗门大殿", ImagePrompt: "一个人在房间", Characters: "林舒", LocationName: "宗门大殿", Props: "元婴玉佩"}
+	if err := ps.db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	ps.db.Create(&models.Character{ProjectID: project.ID, Name: "林舒", Appearance: "22岁女性，黑色长发", WardrobeDetail: "白色交领仙裙，中式绣鞋"})
+	ps.db.Create(&models.Asset{ProjectID: project.ID, Kind: AssetKindLocation, Name: "宗门大殿", Description: "石柱、长阶、云雾"})
+	ps.db.Create(&models.Asset{ProjectID: project.ID, Kind: AssetKindProp, Name: "元婴玉佩", Description: "青玉材质、金色纹路"})
+	prompt, err := ps.RedesignSceneImagePrompt(&scene)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 1 || !strings.Contains(prompt, "宗门大殿") {
+		t.Fatalf("prompt=%q calls=%d", prompt, provider.calls)
+	}
+}
+
+func TestGenerateReferencePromptKeepsFaceFocusedPortrait(t *testing.T) {
+	ps := newTestProjectService(t)
+	p := models.Project{Title: "问仙", Genre: "古典修仙", Style: "国风仙侠"}
+	if err := ps.db.Create(&p).Error; err != nil {
+		t.Fatal(err)
+	}
+	ch := models.Character{ProjectID: p.ID, Name: "林舒", Role: "女主", Appearance: "22岁女性，黑色长发", WardrobeDetail: "白色交领仙裙，银色腰封", ProfileStatus: models.ProfileStatusApproved}
+	if err := ps.db.Create(&ch).Error; err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := NewCharacterProfileService(ps.db, nil).GenerateReferencePrompt(&ch, &p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "正面半身头像") || strings.Contains(prompt, "正面全身立姿") {
+		t.Fatalf("reference portrait should remain face-focused: %s", prompt)
+	}
+}
+
+func TestCharacterAnchorAndSheetLockAccessories(t *testing.T) {
+	p := &models.Project{Genre: "古典修仙", Style: "国风仙侠"}
+	ch := &models.Character{Role: "女主", Appearance: "22岁女性，发间金色步摇，耳戴珍珠耳坠", WardrobeDetail: "白色交领仙裙，银色腰封，颈戴青玉项链，右腕银镯"}
+	for name, prompt := range map[string]string{"anchor": buildCharacterAnchorPrompt(p, ch), "sheet": buildCharacterSheetPrompt(p, ch)} {
+		for _, want := range []string{"金色步摇", "珍珠耳坠", "青玉项链", "右腕银镯", "位置、数量、左右侧", "不得丢失、增减"} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("%s prompt missing %q: %s", name, want, prompt)
+			}
+		}
+	}
+}
+
+func TestBuildCharacterSheetPromptLocksHistoricalFootwear(t *testing.T) {
+	p := &models.Project{Genre: "古典修仙", Style: "国风仙侠", Synopsis: "中国古代宗门修炼故事"}
+	ch := &models.Character{Name: "林舒", Appearance: "22岁女性", WardrobeDetail: "白色交领仙裙，银色腰封"}
+	prompt := buildCharacterSheetPrompt(p, ch)
+	for _, want := range []string{"白色交领仙裙", "软底云头绣鞋", "正面全身、侧面全身、背面全身三个视图必须穿完全相同的鞋", "双脚必须完整穿鞋", "高跟鞋", "日式木屐"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("sheet prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestBuildCharacterSheetPromptUsesDeclaredFootwear(t *testing.T) {
+	p := &models.Project{Genre: "古典修仙"}
+	ch := &models.Character{WardrobeDetail: "玄色长袍，黑色云纹长靴"}
+	prompt := buildCharacterSheetPrompt(p, ch)
+	if !strings.Contains(prompt, "指定鞋履：玄色长袍，黑色云纹长靴") || !strings.Contains(prompt, "三个视图必须穿完全相同的鞋") {
+		t.Fatalf("declared footwear not preserved: %s", prompt)
+	}
+}
+
+func TestRedesignLocationDescriptionUsesProjectContext(t *testing.T) {
+	ps := newTestProjectService(t)
+	provider := &stubTextProvider{response: "中国古典修仙宗门主殿，青石长阶通向朱漆殿门，两侧云纹石柱，殿内中央祭坛与铜制灯架，晨雾穿过格窗形成冷暖交错光束，固定空间布局，无人物"}
+	ps.textProvider = provider
+	project := &models.Project{Title: "问仙", Genre: "古典修仙", Style: "国风写实", Synopsis: "宗门试炼"}
+	description, err := ps.RedesignAssetDescription(project, AssetKindLocation, "宗门大殿", "很大的大殿")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 1 || !strings.Contains(description, "青石长阶") {
+		t.Fatalf("description=%q calls=%d", description, provider.calls)
+	}
+}
+
 func TestBuildAssetPromptAndSizeUseKrea2ReferenceConventions(t *testing.T) {
 	p := &models.Project{Style: "真人写实", AspectRatio: "16:9"}
-	prop := &models.Asset{Kind: AssetKindProp, Name: "玉佩", Description: "青玉材质，金色纹路"}
+	prop := &models.Asset{Kind: AssetKindProp, Name: "元婴玉佩", Description: "青玉材质，金色纹路"}
 	location := &models.Asset{Kind: AssetKindLocation, Name: "宗门大殿", Description: "石柱与长阶"}
 	propPrompt := buildAssetPrompt(p, prop)
 	locationPrompt := buildAssetPrompt(p, location)
-	for _, want := range []string{"道具特写参考图", "单一物体", "青玉材质"} {
+	for _, want := range []string{"无生命道具", "只是物品专名", "不是人物", "不是婴儿", "画面中人物数量必须为零", "青玉材质"} {
 		if !strings.Contains(propPrompt, want) {
 			t.Fatalf("prop prompt missing %q: %s", want, propPrompt)
 		}

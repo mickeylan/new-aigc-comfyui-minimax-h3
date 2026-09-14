@@ -77,6 +77,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/images", svc.HandleGenerateAllImages)
 	r.POST("/api/projects/:id/videos", svc.HandleGenerateAllVideos)
 	r.PATCH("/api/projects/:id/scenes/:sid", svc.HandleUpdateScene)
+	r.POST("/api/projects/:id/scenes/:sid/prompt/redesign", svc.HandleRedesignScenePrompt)
 	r.POST("/api/projects/:id/scenes/:sid/image", svc.HandleGenerateSceneImage)
 	r.POST("/api/projects/:id/scenes/:sid/video", svc.HandleGenerateSceneVideo)
 	r.POST("/api/projects/:id/scenes/:sid/video/cancel", svc.HandleCancelSceneVideo)
@@ -117,6 +118,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/characters/:cid/voice/clear", svc.HandleClearCharacterVoice)
 	// 视觉资产（道具 / 场景，跨分镜一致性参考图）
 	r.GET("/api/projects/:id/assets/:kind", svc.HandleListAssets)
+	r.POST("/api/projects/:id/assets/:kind/redesign", svc.HandleRedesignAssetDescription)
 	r.POST("/api/projects/:id/assets/:kind", svc.HandleCreateAsset)
 	r.POST("/api/projects/:id/assets/:kind/images", svc.HandleGenerateAllAssetImages)
 	r.PUT("/api/projects/:id/assets/:kind/:aid", svc.HandleUpdateAsset)

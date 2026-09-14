@@ -62,6 +62,7 @@ export const api = {
   generateAllImages: (id, episodeN) => http.post(`/projects/${id}/images${episodeN ? `?episode_n=${episodeN}` : ''}`),
   generateAllVideos: (id, episodeN) => http.post(`/projects/${id}/videos${episodeN ? `?episode_n=${episodeN}` : ''}`),
   updateScene: (id, sid, data) => http.patch(`/projects/${id}/scenes/${sid}`, data),
+  redesignScenePrompt: (id, sid, brief) => http.post(`/projects/${id}/scenes/${sid}/prompt/redesign`, { brief }, { timeout: 300000 }),
   generateSceneImage: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/image`),
   generateSceneVideo: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/video`),
   cancelSceneVideo: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/video/cancel`),
@@ -106,6 +107,7 @@ export const api = {
   clearCharacterVoice: (id, cid) => http.post(`/projects/${id}/characters/${cid}/voice/clear`),
   // 视觉资产（kind: prop=道具 / location=场景）
   assets: (id, kind) => http.get(`/projects/${id}/assets/${kind}`),
+  redesignAssetDescription: (id, kind, data) => http.post(`/projects/${id}/assets/${kind}/redesign`, data, { timeout: 300000 }),
   createAsset: (id, kind, data) => http.post(`/projects/${id}/assets/${kind}`, data),
   updateAsset: (id, kind, aid, data) => http.put(`/projects/${id}/assets/${kind}/${aid}`, data),
   deleteAsset: (id, kind, aid) => http.delete(`/projects/${id}/assets/${kind}/${aid}`),
