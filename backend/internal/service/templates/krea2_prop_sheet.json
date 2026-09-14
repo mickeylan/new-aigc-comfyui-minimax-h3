@@ -1,0 +1,267 @@
+{
+  "name": "Krea2 道具四视图",
+  "code": "krea2_prop_sheet",
+  "description": "以道具参考图为外观参考，生成正面、左侧、背面和右侧四视图。",
+  "inputs": [
+    {
+      "key": "source_image",
+      "type": "image",
+      "label": "道具参考图",
+      "required": true
+    },
+    {
+      "key": "prompt",
+      "type": "prompt",
+      "label": "道具四视图编辑指令",
+      "required": true,
+      "default": "Convert the prop in the image to an object sheet showing front, left side, back and right side views"
+    },
+    {
+      "key": "width",
+      "type": "int",
+      "label": "输出宽度",
+      "default": 1536,
+      "min": 512,
+      "max": 2048,
+      "step": 8
+    },
+    {
+      "key": "height",
+      "type": "int",
+      "label": "输出高度",
+      "default": 1024,
+      "min": 512,
+      "max": 2048,
+      "step": 8
+    },
+    {
+      "key": "seed",
+      "type": "int",
+      "label": "随机种子",
+      "default": -1,
+      "min": -1
+    },
+    {
+      "key": "steps",
+      "type": "int",
+      "label": "采样步数",
+      "default": 10,
+      "min": 1,
+      "max": 50
+    },
+    {
+      "key": "unet_name",
+      "type": "string",
+      "label": "unet_name",
+      "default": "krea2\\Krea2-Moody-Mix-premium_int8_convrot.safetensors"
+    },
+    {
+      "key": "clip_name",
+      "type": "string",
+      "label": "clip_name",
+      "default": "krea2\\qwen3vl_4b_fp8_scaled.safetensors"
+    },
+    {
+      "key": "vae_name",
+      "type": "string",
+      "label": "vae_name",
+      "default": "qwen_image_vae.safetensors"
+    },
+    {
+      "key": "lora_name",
+      "type": "string",
+      "label": "lora_name",
+      "default": "krea2\\Krea2-四视图QuadView_krea2_v1.safetensors"
+    },
+    {
+      "key": "lora_strength",
+      "type": "float",
+      "label": "lora_strength",
+      "default": 1
+    }
+  ],
+  "workflow": {
+    "21": {
+      "class_type": "CLIPLoader",
+      "inputs": {
+        "clip_name": "{{clip_name}}",
+        "type": "krea2",
+        "device": "default"
+      }
+    },
+    "17": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "{{img:source_image}}"
+      }
+    },
+    "18": {
+      "class_type": "ImageResizeKJv2",
+      "inputs": {
+        "image": [
+          "17",
+          0
+        ],
+        "width": 1024,
+        "height": 1536,
+        "upscale_method": "lanczos",
+        "keep_proportion": "resize",
+        "pad_color": "0, 0, 0",
+        "crop_position": "center",
+        "divisible_by": 2,
+        "device": "cpu"
+      }
+    },
+    "25": {
+      "class_type": "UNETLoader",
+      "inputs": {
+        "unet_name": "{{unet_name}}",
+        "weight_dtype": "default"
+      }
+    },
+    "16": {
+      "class_type": "LoraLoaderModelOnly",
+      "inputs": {
+        "model": [
+          "25",
+          0
+        ],
+        "lora_name": "{{lora_name}}",
+        "strength_model": "{{lora_strength}}"
+      }
+    },
+    "9": {
+      "class_type": "VAELoader",
+      "inputs": {
+        "vae_name": "{{vae_name}}"
+      }
+    },
+    "20": {
+      "class_type": "VAEEncode",
+      "inputs": {
+        "pixels": [
+          "18",
+          0
+        ],
+        "vae": [
+          "9",
+          0
+        ]
+      }
+    },
+    "23": {
+      "class_type": "Krea2EditModelPatch",
+      "inputs": {
+        "model": [
+          "16",
+          0
+        ],
+        "source_latent": [
+          "20",
+          0
+        ],
+        "vae": [
+          "9",
+          0
+        ],
+        "source_image": [
+          "18",
+          0
+        ],
+        "ref_boost": 1,
+        "ref_boost_a": 1,
+        "fit_mode": "fit"
+      }
+    },
+    "24": {
+      "class_type": "Krea2EditGroundedEncode",
+      "inputs": {
+        "clip": [
+          "21",
+          0
+        ],
+        "image": [
+          "18",
+          0
+        ],
+        "prompt": "{{prompt}}",
+        "grounding_px": 0,
+        "system_prompt": ""
+      }
+    },
+    "22": {
+      "class_type": "Krea2EditGroundedEncode",
+      "inputs": {
+        "clip": [
+          "21",
+          0
+        ],
+        "image": [
+          "18",
+          0
+        ],
+        "prompt": "",
+        "grounding_px": 768,
+        "system_prompt": ""
+      }
+    },
+    "7": {
+      "class_type": "EmptySD3LatentImage",
+      "inputs": {
+        "width": "{{width}}",
+        "height": "{{height}}",
+        "batch_size": 1
+      }
+    },
+    "14": {
+      "class_type": "KSampler",
+      "inputs": {
+        "model": [
+          "23",
+          0
+        ],
+        "positive": [
+          "24",
+          0
+        ],
+        "negative": [
+          "22",
+          0
+        ],
+        "latent_image": [
+          "7",
+          0
+        ],
+        "seed": "{{seed}}",
+        "steps": "{{steps}}",
+        "cfg": 1,
+        "sampler_name": "euler",
+        "scheduler": "simple",
+        "denoise": 1
+      }
+    },
+    "11": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": [
+          "14",
+          0
+        ],
+        "vae": [
+          "9",
+          0
+        ]
+      }
+    },
+    "5": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "images": [
+          "11",
+          0
+        ],
+        "filename_prefix": "krea2/prop_sheet_{{task_id}}"
+      }
+    }
+  }
+}

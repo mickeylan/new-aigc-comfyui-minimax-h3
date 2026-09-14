@@ -183,6 +183,38 @@ func comfyTestPort(server *httptest.Server) int {
 	return server.Listener.Addr().(*net.TCPAddr).Port
 }
 
+func TestPickInstanceDiscoversReachableInstanceWithStaleStoppedStatus(t *testing.T) {
+	idle := newComfyLoadServer(t, 0, 30<<30)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.Instance{}, &models.Task{}); err != nil {
+		t.Fatal(err)
+	}
+	instance := models.Instance{GPUIndex: 0, Port: comfyTestPort(idle), Status: "stopped"}
+	if err := db.Create(&instance).Error; err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	remote := NewRemoteExec(config.RemoteConfig{})
+	svc := &TaskService{cfg: cfg, db: db, manager: NewInstanceManager(cfg, db, remote)}
+	selected, err := svc.pickInstance(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.GPUIndex != 0 || selected.Status != "running" {
+		t.Fatalf("selected = %+v", selected)
+	}
+	var stored models.Instance
+	if err := db.First(&stored, instance.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "running" {
+		t.Fatalf("stored status = %q", stored.Status)
+	}
+}
+
 func TestPickInstanceRequiresPlatformAndComfyQueuesIdle(t *testing.T) {
 	externalBusy := newComfyLoadServer(t, 1, 90<<30)
 	idle := newComfyLoadServer(t, 0, 30<<30)

@@ -118,7 +118,7 @@
             一键生成已审核标准像 ({{ approvedCharsWithoutPortrait }})
           </button>
           <button v-else class="btn btn-ghost btn-sm" :disabled="busy || assetsWithoutImage === 0" @click="allAssetImages">
-            一键生成{{ assetKindLabel }}图 ({{ assetsWithoutImage }})
+            一键 Krea2 生成{{ assetKindLabel }}参考图 ({{ assetsWithoutImage }})
           </button>
           <button v-if="assetTab === 'char'" class="btn btn-secondary btn-sm" @click="openCreateCharacter">＋ 新建角色</button>
           <button v-else class="btn btn-secondary btn-sm" @click="openCreateAsset">＋ 新建{{ assetKindLabel }}</button>
@@ -151,6 +151,8 @@
               <span class="char-appear">出场 {{ characterCounts[ch.id] || 0 }} 场</span>
               <span v-if="ch.portrait_task_id" class="char-voice">⏳ Krea2 标准像生成中</span>
               <span v-if="ch.portrait_error" class="fail-msg">{{ ch.portrait_error }}</span>
+              <span v-if="ch.sheet_task_id" class="char-voice">⏳ 角色四视图生成中</span>
+              <span v-if="ch.sheet_error" class="fail-msg">{{ ch.sheet_error }}</span>
               <div class="char-actions">
                 <button class="btn btn-sm btn-secondary" :disabled="busy || !!ch.portrait_task_id || ch.profile_status !== 'approved' || !ch.reference_prompt" @click="genPortrait(ch)"
                   :title="ch.profile_status !== 'approved' ? '请先审核通过角色档案' : !ch.reference_prompt ? '请先生成或填写参考像提示词' : ''">
@@ -159,6 +161,11 @@
                 <button class="btn btn-sm btn-ghost" :disabled="busy || ch._uploading" @click="uploadPortrait(ch)">
                   {{ ch._uploading ? '上传中…' : '上传图片替换' }}
                 </button>
+                <button class="btn btn-sm btn-secondary" :disabled="busy || !ch.portrait || !!ch.sheet_task_id" @click="genCharacterSheet(ch)"
+                  :title="!ch.portrait ? '请先生成或上传标准像' : '下游分镜与 H3 视频将优先使用四视图'">
+                  {{ ch.sheet_task_id ? '四视图生成中…' : ch.sheet ? '重生成四视图' : '生成四视图' }}
+                </button>
+                <button v-if="ch.sheet" class="btn btn-sm btn-ghost" @click="viewCharacterSheet(ch)">查看四视图</button>
                 <button class="btn btn-sm btn-ghost" @click="openEditCharacter(ch)">编辑</button>
                 <button class="btn btn-sm btn-danger" @click="removeCharacter(ch)">删除</button>
               </div>
@@ -196,13 +203,22 @@
               </div>
               <p v-if="a.description" class="char-trait">📝 {{ a.description }}</p>
               <span class="char-appear">出场 {{ assetCounts[a.id] || 0 }} 场</span>
+              <span v-if="a.image_task_id" class="char-voice">⏳ Krea2 参考图生成中</span>
+              <span v-if="a.image_error" class="fail-msg">{{ a.image_error }}</span>
+              <span v-if="a.kind === 'prop' && a.sheet_task_id" class="char-voice">⏳ 道具四视图生成中</span>
+              <span v-if="a.kind === 'prop' && a.sheet_error" class="fail-msg">{{ a.sheet_error }}</span>
               <div class="char-actions">
-                <button class="btn btn-sm btn-secondary" :disabled="busy" @click="genAssetImage(a)">
-                  {{ a.image ? '重生成参考图' : '生成参考图' }}
+                <button class="btn btn-sm btn-secondary" :disabled="busy || !!a.image_task_id" @click="genAssetImage(a)">
+                  {{ a.image_task_id ? 'Krea2 生成中…' : a.image ? 'Krea2 重生成参考图' : 'Krea2 生成参考图' }}
                 </button>
                 <button class="btn btn-sm btn-ghost" :disabled="busy || a._uploading" @click="uploadAssetImage(a)">
                   {{ a._uploading ? '上传中…' : '上传图片替换' }}
                 </button>
+                <button v-if="a.kind === 'prop'" class="btn btn-sm btn-secondary" :disabled="busy || !a.image || !!a.sheet_task_id" @click="genPropSheet(a)"
+                  :title="!a.image ? '请先生成或上传道具参考图' : '下游分镜与 H3 视频将优先使用四视图'">
+                  {{ a.sheet_task_id ? '四视图生成中…' : a.sheet ? '重生成四视图' : '生成四视图' }}
+                </button>
+                <button v-if="a.kind === 'prop' && a.sheet" class="btn btn-sm btn-ghost" @click="viewPropSheet(a)">查看四视图</button>
                 <button class="btn btn-sm btn-ghost" @click="openEditAsset(a)">编辑</button>
                 <button class="btn btn-sm btn-danger" @click="removeAsset(a)">删除</button>
               </div>
@@ -898,7 +914,7 @@ const propAssets = computed(() => assets.value.filter(a => a.kind === 'prop'))
 const locationAssets = computed(() => assets.value.filter(a => a.kind === 'location'))
 const currentAssets = computed(() => (assetTab.value === 'location' ? locationAssets.value : propAssets.value))
 const assetKindLabel = computed(() => (assetTab.value === 'location' ? '场景' : '道具'))
-const assetsWithoutImage = computed(() => currentAssets.value.filter(a => !a.image).length)
+const assetsWithoutImage = computed(() => currentAssets.value.filter(a => !a.image && !a.image_task_id).length)
 const allAssetImagesReady = computed(() => assets.value.length === 0 || assets.value.every(a => a.image))
 const allRefsReady = computed(() => allPortraitsReady.value && allAssetImagesReady.value)
 const readyText = computed(() => `${videoReadyCount.value}/${scenes.value.length} 视频就绪`)
@@ -1085,9 +1101,40 @@ async function load() {
       scriptDraft.value = cur
     }
     merges.value = data.merges || []
-    characters.value = data.characters || []
+    const previousCharacters = new Map(characters.value.map(character => [character.id, character]))
+    const nextCharacters = data.characters || []
+    for (const character of nextCharacters) {
+      const previous = previousCharacters.get(character.id)
+      if (previous?.portrait_task_id && !character.portrait_task_id && character.portrait && character.portrait !== previous.portrait) {
+        toast.show(`角色「${character.name}」标准像生成完成`)
+      } else if (previous?.portrait_task_id && !character.portrait_task_id && character.portrait_error) {
+        toast.show(`角色「${character.name}」标准像处理失败：${character.portrait_error}`)
+      }
+      if (previous?.sheet_task_id && !character.sheet_task_id && character.sheet && character.sheet !== previous.sheet) {
+        toast.success(`角色「${character.name}」四视图生成完成`)
+      } else if (previous?.sheet_task_id && !character.sheet_task_id && character.sheet_error) {
+        toast.error(`角色「${character.name}」四视图生成失败：${character.sheet_error}`)
+      }
+    }
+    characters.value = nextCharacters
     characterCounts.value = data.character_counts || {}
-    assets.value = data.assets || []
+    const previousAssets = new Map(assets.value.map(asset => [asset.id, asset]))
+    const nextAssets = data.assets || []
+    for (const asset of nextAssets) {
+      const previous = previousAssets.get(asset.id)
+      const label = asset.kind === 'location' ? '场景' : '道具'
+      if (previous?.image_task_id && !asset.image_task_id && asset.image && asset.image !== previous.image) {
+        toast.success(`${label}「${asset.name}」Krea2 参考图生成完成`)
+      } else if (previous?.image_task_id && !asset.image_task_id && asset.image_error) {
+        toast.error(`${label}「${asset.name}」Krea2 参考图生成失败：${asset.image_error}`)
+      }
+      if (asset.kind === 'prop' && previous?.sheet_task_id && !asset.sheet_task_id && asset.sheet && asset.sheet !== previous.sheet) {
+        toast.success(`道具「${asset.name}」四视图生成完成`)
+      } else if (asset.kind === 'prop' && previous?.sheet_task_id && !asset.sheet_task_id && asset.sheet_error) {
+        toast.error(`道具「${asset.name}」四视图生成失败：${asset.sheet_error}`)
+      }
+    }
+    assets.value = nextAssets
     assetCounts.value = data.asset_counts || {}
     dialogues.value = data.dialogues || []
     scenes.value = (data.scenes || []).map(s => {
@@ -1503,10 +1550,11 @@ async function allAssetImages() {
 }
 async function genAssetImage(a) {
   try {
-    await api.generateAssetImage(id(), a.kind, a.id)
-    refreshSoon()
+    const { data } = await api.generateAssetImage(id(), a.kind, a.id)
+    toast.show(data.message || 'Krea2 参考图任务已提交')
+    await load()
   } catch (e) {
-    toast.show(e.response?.data?.error || '生成失败')
+    toast.error(e.response?.data?.error || 'Krea2 参考图任务提交失败')
   }
 }
 function uploadAssetImage(a) {
@@ -1526,7 +1574,11 @@ function uploadAssetImage(a) {
     }
     a._uploading = true
     try {
-      await api.uploadAssetImage(id(), a.kind, a.id, f)
+      const { data } = await api.uploadAssetImage(id(), a.kind, a.id, f)
+      // 上传结果优先于仍在运行的生成任务，先更新本地状态以免误报为 Krea2 完成。
+      a.image = data.image || a.image
+      a.image_task_id = ''
+      a.image_error = ''
       toast.show('图片已设为参考图')
       await load()
     } catch (e) {

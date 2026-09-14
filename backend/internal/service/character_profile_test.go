@@ -85,15 +85,15 @@ func TestGenerateReferencePromptCompilesLumxDimensions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"黑色长发", "羊毛风衣", "银色", "真人照片风格", "单一角色", "禁止多人"} {
+	for _, want := range []string{"26岁青年女性", "年龄视觉必须严格锁定为26岁", "年轻面部比例", "紧致平滑肌肤", "黑色长发", "羊毛风衣", "银色", "真人照片风格", "单一角色", "禁止显老"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("提示词缺少 %q: %s", want, prompt)
 		}
 	}
 	var got models.Character
 	ps.db.First(&got, ch.ID)
-	if got.ProfileStatus != models.ProfileStatusDraft || got.ReviewNote != "" || got.Portrait != "" {
-		t.Fatalf("替换提示词后应重新审核并清除旧标准像: %+v", got)
+	if got.ProfileStatus != models.ProfileStatusApproved || got.ReviewNote != "旧审核" || got.Portrait != "" {
+		t.Fatalf("已审核档案生成确定性提示词后应保持审核状态并清除旧标准像: %+v", got)
 	}
 }
 

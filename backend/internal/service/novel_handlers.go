@@ -112,8 +112,8 @@ func (s *Service) HandleUploadNovel(c *gin.Context) {
 	})
 }
 
-// HandleGetImportStatus 获取导入状态
-func (s *Service) HandleGetImportStatus(c *gin.Context) {
+// HandleGetNovelImportStatus 获取小说导入状态
+func (s *Service) HandleGetNovelImportStatus(c *gin.Context) {
 	p, ok := s.loadProject(c)
 	if !ok {
 		return

@@ -3,6 +3,8 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"gorm.io/gorm"
@@ -60,7 +62,8 @@ const characterProfileSystemPrompt = `你是一位专业的漫剧角色设计师
 }
 3. 输出的内容应符合漫剧风格，适合后续 AI 生图和视频生成。
 4. 每个字段都要有实质性内容，不要为空。
-5. appearance 和 wardrobe_detail 要足够详细，能支撑高质量的参考像生成。`
+5. appearance 和 wardrobe_detail 要足够详细，能支撑高质量的参考像生成。
+6. 如果输入或故事明确给出年龄，appearance 必须在开头原样保留准确年龄（例如“22岁青年女性”），不得用“成熟、资深、威严”等身份语义改变视觉年龄；30岁以下角色应描述符合该年龄的面部骨骼、紧致皮肤和自然妆容，禁止擅自增加法令纹、眼袋、皱纹或中年感。`
 
 // GenerateProfile 使用 LLM 从故事中生成角色详细档案
 func (s *CharacterProfileService) GenerateProfile(char *models.Character, project *models.Project, planJSON string) error {
@@ -130,6 +133,39 @@ func (s *CharacterProfileService) GenerateProfile(char *models.Character, projec
 	return s.db.Model(char).Updates(updates).Error
 }
 
+var characterAgePattern = regexp.MustCompile(`(?:年龄(?:为|约|：|:)?\s*)?(\d{1,2})\s*岁`)
+
+func characterAgeAnchor(appearance, trait string) string {
+	match := characterAgePattern.FindStringSubmatch(appearance + "，" + trait)
+	if len(match) < 2 {
+		return ""
+	}
+	age, err := strconv.Atoi(match[1])
+	if err != nil || age < 1 || age > 99 {
+		return ""
+	}
+	anchor := fmt.Sprintf("年龄视觉必须严格锁定为%d岁，与真实%d岁青年人的面部骨骼和皮肤状态一致", age, age)
+	if age <= 30 {
+		anchor += "，年轻面部比例，紧致平滑肌肤，饱满面中，自然清晰下颌线，眼神清澈，轻盈自然妆容，禁止显老、成熟脸、中年感、法令纹、眼袋、深皱纹、松弛皮肤和厚重妆容"
+	}
+	return anchor
+}
+
+func ageSubject(appearance, trait string) string {
+	match := characterAgePattern.FindStringSubmatch(appearance + "，" + trait)
+	if len(match) < 2 {
+		return ""
+	}
+	gender := "青年人物"
+	text := appearance + trait
+	if strings.Contains(text, "女性") || strings.Contains(text, "女子") || strings.Contains(text, "女孩") {
+		gender = "青年女性"
+	} else if strings.Contains(text, "男性") || strings.Contains(text, "男子") || strings.Contains(text, "男孩") {
+		gender = "青年男性"
+	}
+	return match[1] + "岁" + gender
+}
+
 // GenerateReferencePrompt 按审核后的结构化档案编译稳定的单人参考像提示词。
 // 这里采用 LumxAI 的人物维度与设定图规范，但保持单人单视图，避免后续参考图模型误判为多人。
 func (s *CharacterProfileService) GenerateReferencePrompt(char *models.Character, project *models.Project) (string, error) {
@@ -144,7 +180,14 @@ func (s *CharacterProfileService) GenerateReferencePrompt(char *models.Character
 	if appearance == "" || wardrobe == "" {
 		return "", fmt.Errorf("请先完善角色外貌与服装档案")
 	}
-	parts := []string{"人物角色标准参考像", "单一角色「" + char.Name + "」"}
+	parts := []string{"人物角色标准参考像"}
+	if subject := ageSubject(appearance, char.Trait); subject != "" {
+		parts = append(parts, subject)
+	}
+	if anchor := characterAgeAnchor(appearance, char.Trait); anchor != "" {
+		parts = append(parts, anchor)
+	}
+	parts = append(parts, "单一角色「"+char.Name+"」")
 	if char.Role != "" {
 		parts = append(parts, "身份气质："+char.Role)
 	}
@@ -160,17 +203,22 @@ func (s *CharacterProfileService) GenerateReferencePrompt(char *models.Character
 	if char.LightingMood != "" {
 		parts = append(parts, "影棚布光："+char.LightingMood)
 	}
-	parts = append(parts, "正面半身头像，直视镜头，中性自然表情，肩颈端正，纯白干净背景，影棚级柔和布光，居中对称构图，高分辨率，电影级质感", "禁止多人、分屏、拼图、三视图、复杂背景、文字、水印、畸形五官和畸形肢体")
+	parts = append(parts, "正面半身头像，直视镜头，自然放松表情，肩颈端正，纯白干净背景，柔和均匀自然光，居中对称构图，高分辨率真实角色参考照", "禁止显老、年龄漂移、中年感、法令纹、眼袋、深皱纹、松弛皮肤、厚重妆容、复古影楼感、多人、分屏、拼图、三视图、复杂背景、文字、水印、畸形五官和畸形肢体")
 	prompt := strings.Join(parts, "，")
-	if err := s.db.Model(char).Updates(map[string]any{
+	updates := map[string]any{
 		"reference_prompt": prompt,
-		"profile_status":   models.ProfileStatusDraft,
-		"review_note":      "",
 		"portrait":         "",
 		"portrait_task_id": "",
 		"portrait_error":   "",
 		"profile_version":  gorm.Expr("profile_version + 1"),
-	}).Error; err != nil {
+	}
+	// 参考提示词是由现有档案确定性编译出的派生内容；档案本身未变化时，
+	// 不应把刚审核通过的状态退回草稿，否则会形成“审核→生成提示词→再审核”的循环。
+	if char.ProfileStatus != models.ProfileStatusApproved {
+		updates["profile_status"] = models.ProfileStatusDraft
+		updates["review_note"] = ""
+	}
+	if err := s.db.Model(char).Updates(updates).Error; err != nil {
 		return "", err
 	}
 	return prompt, nil

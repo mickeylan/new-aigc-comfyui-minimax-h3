@@ -369,6 +369,62 @@ func (s *ProjectService) UpdatePlanEpisodes(p *models.Project, updates []PlanEpi
 	return &fresh, nil
 }
 
+var planScalarStringFields = map[string]bool{
+	"title": true, "logline": true, "core": true, "rhythm": true, "paywall": true, "satisfaction": true,
+	"name": true, "range": true, "event": true, "role": true, "arc": true, "trait": true, "style": true,
+	"appearance": true, "personality": true, "background": true, "relationships": true, "emotions": true,
+	"habits": true, "wardrobe_detail": true, "lighting_mood": true, "color_palette": true,
+	"layer": true, "motif": true, "description": true, "brief": true, "hook": true, "tag": true,
+}
+
+// normalizePlanScalarStrings 兼容本地小模型把字符串字段输出成单元素或多元素数组。
+// 数组内容按顺序合并，避免因 title/logline 等字段类型漂移导致整个方案丢失。
+func normalizePlanScalarStrings(data []byte) ([]byte, error) {
+	var root any
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil, err
+	}
+	var walk func(any)
+	walk = func(value any) {
+		switch node := value.(type) {
+		case map[string]any:
+			for key, child := range node {
+				if planScalarStringFields[key] {
+					node[key] = planScalarString(child)
+				} else {
+					walk(child)
+				}
+			}
+		case []any:
+			for _, child := range node {
+				walk(child)
+			}
+		}
+	}
+	walk(root)
+	return json.Marshal(root)
+}
+
+func planScalarString(value any) string {
+	switch v := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	case []any:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			if part := strings.TrimSpace(planScalarString(item)); part != "" {
+				parts = append(parts, part)
+			}
+		}
+		return strings.Join(parts, "；")
+	default:
+		encoded, _ := json.Marshal(v)
+		return string(encoded)
+	}
+}
+
 // parsePlanJSON 从模型输出中提取创作方案 JSON（剥离 markdown 包裹与杂文）
 func parsePlanJSON(raw string) (*dramaPlan, error) {
 	text := strings.TrimSpace(raw)
@@ -386,8 +442,13 @@ func parsePlanJSON(raw string) (*dramaPlan, error) {
 	if start < 0 || end <= start {
 		return nil, fmt.Errorf("输出中未找到 JSON 对象")
 	}
+	data := []byte(text[start : end+1])
+	data, err := normalizePlanScalarStrings(data)
+	if err != nil {
+		return nil, err
+	}
 	var res dramaPlan
-	if err := json.Unmarshal([]byte(text[start:end+1]), &res); err != nil {
+	if err := json.Unmarshal(data, &res); err != nil {
 		return nil, err
 	}
 	if res.Logline == "" || len(res.Episodes) == 0 {

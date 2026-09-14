@@ -59,6 +59,9 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.EpisodeAdaptation{},
 		&models.CharacterAliasCandidate{},
 		&models.NovelJob{},
+		&models.Shot{},
+		&models.PromptVersion{},
+		&models.StylePreset{},
 	); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}

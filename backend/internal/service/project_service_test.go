@@ -26,6 +26,22 @@ func (s *stubTextProvider) Chat(_, _ string) (string, error) {
 	return s.response, nil
 }
 
+type sequenceTextProvider struct {
+	responses []string
+	calls     int
+}
+
+func (s *sequenceTextProvider) Name() string                      { return "sequence-stub" }
+func (s *sequenceTextProvider) HealthCheck(context.Context) error { return nil }
+func (s *sequenceTextProvider) Chat(_, _ string) (string, error) {
+	if s.calls >= len(s.responses) {
+		return "", fmt.Errorf("unexpected call %d", s.calls+1)
+	}
+	response := s.responses[s.calls]
+	s.calls++
+	return response, nil
+}
+
 func TestScriptFromPlanPromptMatchesStoryboardSchema(t *testing.T) {
 	prompt := scriptFromPlanSystemPrompt(180, 25)
 	for _, field := range []string{"visual_bible", "duration", "3~15", "180", "25"} {
@@ -58,6 +74,10 @@ func TestParseScriptJSON(t *testing.T) {
 		{"前后杂文", `好的，这是剧本：
 {"script":"正文","scenes":[{"title":"s1","content":"c1","image_prompt":"p1"}]}
 希望你喜欢`, 1},
+		{"字符串内原始换行", "{\"script\":\"第一行\n第二行\",\"scenes\":[{\"title\":\"s1\",\"content\":\"动作\n对白\",\"image_prompt\":\"p1\"}]}", 1},
+		{"字符串值后混入文字", `{"script":"正文"舒,"scenes":[{"title":"s1","content":"c1","image_prompt":"p1"}]}`, 1},
+		{"数组值后混入文字", `{"script":"正文","visual_bible":"基准","scenes":[{"title":"s1","content":"c1","image_prompt":"p1","characters":[]舒适氛围,"dialogues":[]}]}`, 1},
+		{"数字值后混入文字", `{"script":"正文","visual_bible":"基准","scenes":[{"title":"s1","content":"c1","image_prompt":"p1","duration":5舒秒,"characters":[],"dialogues":[]}]}`, 1},
 	}
 	for _, tc := range cases {
 		res, err := parseScriptJSON(tc.in)
@@ -98,6 +118,81 @@ func TestGenerateScriptCoreRepairsMalformedJSONOnce(t *testing.T) {
 	}
 	if provider.calls != 1 || len(got) != 20 {
 		t.Fatalf("自动修复未生效: calls=%d scenes=%d", provider.calls, len(got))
+	}
+}
+
+func TestGenerateScriptCoreRetriesTargetedRepairOnce(t *testing.T) {
+	ps := newTestProjectService(t)
+	scenes := make([]map[string]any, 20)
+	for i := range scenes {
+		scenes[i] = map[string]any{"title": fmt.Sprintf("场景%d", i+1), "content": "动作", "image_prompt": "image", "duration": 9, "characters": []string{}, "dialogues": []any{}}
+	}
+	fixed, _ := json.Marshal(map[string]any{"script": "正文", "visual_bible": "视觉基准", "scenes": scenes})
+	provider := &sequenceTextProvider{responses: []string{
+		`{"script":"正文"舒,"scenes":[]}`,
+		string(fixed),
+	}}
+	ps.textProvider = provider
+	p := models.Project{Title: "测试", Synopsis: "故事"}
+	if err := ps.db.Create(&p).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, got, err := ps.generateScriptCore(&p, 1, `{"script":"正文"雷}`, resScriptHandler(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 2 || len(got) != 20 {
+		t.Fatalf("targeted repair not used: calls=%d scenes=%d", provider.calls, len(got))
+	}
+}
+
+func TestRebalanceScriptDurationsMeetsTarget(t *testing.T) {
+	res := &scriptResult{Scenes: make([]scriptScene, 20)}
+	for i := range res.Scenes {
+		res.Scenes[i].Duration = 5
+	}
+	if !rebalanceScriptDurations(res, 180) {
+		t.Fatal("expected durations to be rebalanced")
+	}
+	var total float64
+	for _, scene := range res.Scenes {
+		if scene.Duration < 3 || scene.Duration > 15 {
+			t.Fatalf("duration out of range: %v", scene.Duration)
+		}
+		total += scene.Duration
+	}
+	if total < 179.9 || total > 180.1 {
+		t.Fatalf("total duration = %v, want 180", total)
+	}
+}
+
+func TestValidateScriptResultAcceptsFeasibleSceneCountBelowTargetTolerance(t *testing.T) {
+	res := &scriptResult{Script: "正文", VisualBible: "视觉基准", Scenes: make([]scriptScene, 17)}
+	for i := range res.Scenes {
+		res.Scenes[i] = scriptScene{Content: "动作", ImagePrompt: "画面", Duration: 180.0 / 17}
+	}
+	if err := validateScriptResult(res, 180.0, 25); err != nil {
+		t.Fatalf("17 scenes can carry 180 seconds within 3-15 seconds each: %v", err)
+	}
+}
+
+func TestValidateScriptResultRejectsSceneCountThatCannotCarryDuration(t *testing.T) {
+	res := &scriptResult{Script: "正文", VisualBible: "视觉基准", Scenes: make([]scriptScene, 10)}
+	for i := range res.Scenes {
+		res.Scenes[i] = scriptScene{Content: "动作", ImagePrompt: "画面", Duration: 15}
+	}
+	if err := validateScriptResult(res, 180.0, 25); err == nil {
+		t.Fatal("10 scenes cannot carry 180 seconds within the 15-second maximum")
+	}
+}
+
+func TestRebalanceScriptDurationsRejectsImpossibleTarget(t *testing.T) {
+	res := &scriptResult{Scenes: make([]scriptScene, 10)}
+	for i := range res.Scenes {
+		res.Scenes[i].Duration = 5
+	}
+	if rebalanceScriptDurations(res, 180) {
+		t.Fatal("10 scenes cannot reach 180 seconds within the 15-second maximum")
 	}
 }
 
@@ -143,7 +238,7 @@ func newTestProjectService(t *testing.T) *ProjectService {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.Character{}, &models.MergeTask{}, &models.Task{}); err != nil {
+	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.Character{}, &models.Asset{}, &models.MergeTask{}, &models.Task{}); err != nil {
 		t.Fatal(err)
 	}
 	ps := NewProjectService(nil, db, nil, nil, nil, nil, nil, nil, nil)
@@ -437,6 +532,44 @@ func TestEnsurePlanCharactersKeepsCompletePlanCharacters(t *testing.T) {
 	}
 }
 
+func TestBuildAssetPromptAndSizeUseKrea2ReferenceConventions(t *testing.T) {
+	p := &models.Project{Style: "真人写实", AspectRatio: "16:9"}
+	prop := &models.Asset{Kind: AssetKindProp, Name: "玉佩", Description: "青玉材质，金色纹路"}
+	location := &models.Asset{Kind: AssetKindLocation, Name: "宗门大殿", Description: "石柱与长阶"}
+	propPrompt := buildAssetPrompt(p, prop)
+	locationPrompt := buildAssetPrompt(p, location)
+	for _, want := range []string{"道具特写参考图", "单一物体", "青玉材质"} {
+		if !strings.Contains(propPrompt, want) {
+			t.Fatalf("prop prompt missing %q: %s", want, propPrompt)
+		}
+	}
+	for _, want := range []string{"场景空镜参考图", "无人物", "石柱与长阶"} {
+		if !strings.Contains(locationPrompt, want) {
+			t.Fatalf("location prompt missing %q: %s", want, locationPrompt)
+		}
+	}
+	if w, h := assetImageSize(p, AssetKindProp); w != 1024 || h != 1024 {
+		t.Fatalf("prop size = %dx%d", w, h)
+	}
+	if w, h := assetImageSize(p, AssetKindLocation); w != 1344 || h != 768 {
+		t.Fatalf("location size = %dx%d", w, h)
+	}
+}
+
+func TestBuildPortraitPromptDoesNotDuplicateStyleAndKeepsYouthAnchor(t *testing.T) {
+	p := &models.Project{Style: "真人写实"}
+	ch := &models.Character{Appearance: "22岁女性，黑色长发", ReferencePrompt: "22岁青年女性，年龄视觉必须严格锁定为22岁，超写实真人照片风格"}
+	prompt := buildPortraitPrompt(p, ch)
+	if strings.Count(prompt, "超写实真人照片风格") != 1 {
+		t.Fatalf("style duplicated: %s", prompt)
+	}
+	for _, want := range []string{"22岁青年女性", "禁止显老", "法令纹", "眼袋"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
 func TestStartCharacterPortraitRequiresApprovedProfileAndPrompt(t *testing.T) {
 	ps := newTestProjectService(t)
 	ch := &models.Character{Name: "林夏", ProfileStatus: models.ProfileStatusDraft}
@@ -584,25 +717,23 @@ func TestAspectSizeMapping(t *testing.T) {
 	}
 }
 
-// TestBuildSceneVideoSpec 验证固定 i2v：仅首帧，不再使用 ref2v 参考图
+// TestBuildSceneVideoSpec 验证有权威角色参考时走 ref2v，否则保持首帧 i2v。
 func TestBuildSceneVideoSpec(t *testing.T) {
 	ps := newTestProjectService(t)
 	p := models.Project{Title: "t", Synopsis: "s", AspectRatio: "16:9"}
 	ps.db.Create(&p)
-	ps.db.Create(&models.Character{ProjectID: p.ID, Name: "林夏", Portrait: "lin.png"})
+	ps.db.Create(&models.Character{ProjectID: p.ID, Name: "林夏", Portrait: "lin.png", Sheet: "lin-sheet.png"})
 	ps.db.Create(&models.Character{ProjectID: p.ID, Name: "陆川", Portrait: "lu.png"})
 
-	// 有出场角色标准像 → 仍固定 i2v，仅首帧，无角色参考图
+	// 当前分镜 + 两个角色参考图 → ref2v；四视图优先，标准像兜底。
 	sc := &models.Scene{ProjectID: p.ID, ImageFile: "scene_1.png", Characters: "林夏, 陆川"}
 	code, _, files := ps.buildSceneVideoSpec(sc, "1")
-	if code != "minimax_h3_i2v" {
-		t.Fatalf("固定应走 i2v, got %s", code)
+	if code != "minimax_h3_ref2v" {
+		t.Fatalf("有角色参考应走 ref2v, got %s", code)
 	}
-	if len(files["first_frame"]) != 1 {
-		t.Fatalf("first_frame 应为 1 张, got %v", files)
-	}
-	if _, ok := files["ref_images"]; ok {
-		t.Fatalf("不应再构造 ref_images: %v", files["ref_images"])
+	refs := files["ref_images"]
+	if len(refs) != 3 || refs[0].Name != "scene_1.png" || refs[1].Name != "lin-sheet.png" || refs[2].Name != "lu.png" {
+		t.Fatalf("参考图顺序或回退错误: %+v", refs)
 	}
 
 	// 无出场角色 → i2v，first_frame 单图

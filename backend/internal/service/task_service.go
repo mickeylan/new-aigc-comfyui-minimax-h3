@@ -363,6 +363,26 @@ func (s *TaskService) pickInstance(forcePort *int) (*models.Instance, error) {
 	if len(insts) == 0 {
 		return nil, fmt.Errorf("没有可用实例")
 	}
+	// 数据库状态可能滞后于外部启动的 ComfyUI 进程。调度前并发探测全部
+	// 已登记端口，并把实际可连接的实例恢复为 running，不能要求用户先打开实例页刷新。
+	discovered := make([]instanceLoad, len(insts))
+	var discoverWG sync.WaitGroup
+	for i := range insts {
+		discoverWG.Add(1)
+		go func(idx int) {
+			defer discoverWG.Done()
+			discovered[idx] = s.probeInstanceLoad(insts[idx])
+		}(i)
+	}
+	discoverWG.Wait()
+	for i, load := range discovered {
+		if load.up {
+			insts[i].Status = "running"
+			_ = s.db.Model(&models.Instance{}).Where("id = ?", insts[i].ID).Updates(map[string]any{
+				"status": "running", "queue_len": load.queueLen, "vram_free": load.vramFree,
+			}).Error
+		}
+	}
 	if forcePort != nil {
 		for i := range insts {
 			if insts[i].Port == *forcePort {

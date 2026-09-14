@@ -3,9 +3,11 @@ package service
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -20,21 +22,19 @@ import (
 
 // ProjectService 漫剧项目：剧本（文生文）→ 分镜画面（文生图）→ 视频（本地 L40）→ 合并成片
 type ProjectService struct {
-	cfg           *config.Config
-	db            *gorm.DB
-	textProvider  TextProvider // 文生文 provider（支持火山 / llama.cpp 等）
-	volc          *VolcClient  // 保留用于图片生成
-	ali           *AliyunTTS
-	tasks         *TaskService
-	remote        *RemoteExec
-	upload        *UploadManager
-	hub           *Hub
-	stopped       chan struct{}
-	imageSem      chan struct{} // 文生图并发限制（火山 API QPS），默认 3
-	materials     *MaterialService
-	skills        *SkillService
-	assetMu       sync.Mutex    // 资产参考图生成去重（流水线轮询会重复触发）
-	assetInflight map[uint]bool // 生成中的资产 ID
+	cfg          *config.Config
+	db           *gorm.DB
+	textProvider TextProvider // 文生文 provider（支持火山 / llama.cpp 等）
+	volc         *VolcClient  // 保留用于图片生成
+	ali          *AliyunTTS
+	tasks        *TaskService
+	remote       *RemoteExec
+	upload       *UploadManager
+	hub          *Hub
+	stopped      chan struct{}
+	materials    *MaterialService
+	skills       *SkillService
+	assetMu      sync.Mutex // 串行化资产参考图任务创建，避免并发重复排队
 }
 
 func NewProjectService(cfg *config.Config, db *gorm.DB, textProvider TextProvider, volc *VolcClient, tasks *TaskService, remote *RemoteExec, upload *UploadManager, hub *Hub, materials *MaterialService) *ProjectService {
@@ -43,7 +43,6 @@ func NewProjectService(cfg *config.Config, db *gorm.DB, textProvider TextProvide
 		remote: remote, upload: upload, hub: hub,
 		ali:       NewAliyunTTS(db),
 		stopped:   make(chan struct{}),
-		imageSem:  make(chan struct{}, 3),
 		materials: materials,
 	}
 }
@@ -534,18 +533,24 @@ func (s *ProjectService) ExpandScript(p *models.Project, episodeN int, scriptTex
 func (s *ProjectService) generateScriptCore(p *models.Project, episodeN int, raw string, scriptTextFn func(prefix, script string) string) (*models.Project, []models.Scene, error) {
 	res, err := parseScriptJSON(raw)
 	if err != nil {
-		// 模型偶尔会在对白中输出未转义引号等非法 JSON。仅做一次受控修复调用，
-		// 不用字符串替换猜测结构，避免悄悄改坏剧情内容。
-		repairSystem := `你是 JSON 修复器。将用户提供的剧本结果修复为合法 JSON，只修复语法、引号、转义、逗号和括号，不改写、删减或新增剧情。必须保持 script、visual_bible、scenes 及 scenes 内所有字段和内容。只输出修复后的 JSON 对象，不要 Markdown 或解释。`
-		repaired, repairErr := s.textProvider.Chat(repairSystem, raw)
-		if repairErr == nil {
-			res, err = parseScriptJSON(repaired)
+		// 小模型可能在长 JSON 中遗漏逗号、混入未转义文本。最多进行两次受控修复：
+		// 第二次携带精确解析错误并基于第一次结果修复，避免重复同一种失败。
+		candidate := raw
+		originalErr := err
+		for attempt := 1; attempt <= 2 && err != nil; attempt++ {
+			repairSystem := `你是严格的 JSON 语法修复器。只修复 JSON 的引号、转义、逗号、冒号和括号，不改写、删减或新增剧情。必须保留 script、visual_bible、scenes 以及 scenes 内全部字段。输出前逐字符确认可被标准 JSON.parse 解析。只输出一个 JSON 对象，不要 Markdown 或解释。`
+			if attempt == 2 {
+				repairSystem += "\n上一次修复仍失败，解析器错误是：" + err.Error() + "。请针对该位置修正，不要原样返回。"
+			}
+			repaired, repairErr := s.textProvider.Chat(repairSystem, candidate)
+			if repairErr != nil {
+				return nil, nil, fmt.Errorf("剧本解析失败，第%d次自动修复调用失败: %v；原始解析错误: %w", attempt, repairErr, originalErr)
+			}
+			candidate = repaired
+			res, err = parseScriptJSON(candidate)
 		}
 		if err != nil {
-			if repairErr != nil {
-				return nil, nil, fmt.Errorf("剧本解析失败，自动修复调用也失败: %v；原始解析错误: %w", repairErr, err)
-			}
-			return nil, nil, fmt.Errorf("剧本解析失败，自动修复后仍不是合法 JSON: %w", err)
+			return nil, nil, fmt.Errorf("剧本解析失败，两次自动修复后仍不是合法 JSON: %w", err)
 		}
 	}
 	_, _, targetDuration, targetScenes := s.planEpisodeInfo(p, episodeN)
@@ -555,6 +560,9 @@ func (s *ProjectService) generateScriptCore(p *models.Project, episodeN int, raw
 	if targetScenes <= 0 {
 		targetScenes = 25
 	}
+	// 本地小模型常给出足量分镜但沿用 5 秒默认值，导致总时长远低于方案预算。
+	// 在镜头数足以承载目标时，按原有时长比例确定性重平衡到目标值，不额外消耗一次 LLM 重试。
+	rebalanceScriptDurations(res, targetDuration)
 	if err := validateScriptResult(res, targetDuration, targetScenes); err != nil {
 		return nil, nil, fmt.Errorf("剧本结构不完整（可重试）: %w", err)
 	}
@@ -763,14 +771,16 @@ func (s *ProjectService) projectImageSize(projectID uint) string {
 	return aspectImageSize("")
 }
 
-// sceneCharacterPortraits 收集场景出场角色的标准像（仅含已生成 Portrait 的角色，按出场顺序）
+const maxSceneReferenceImages = 9
+
+// sceneCharacterPortraits 收集场景出场角色的参考像（四视图优先，标准像兜底，按出场顺序）
 func (s *ProjectService) sceneCharacterPortraits(sc *models.Scene) []models.Character {
 	names := parseSceneCharacters(sc.Characters)
 	if len(names) == 0 {
 		return nil
 	}
 	var chars []models.Character
-	s.db.Where("project_id = ? AND name IN ? AND portrait != ''", sc.ProjectID, names).Find(&chars)
+	s.db.Where("project_id = ? AND name IN ? AND (portrait != '' OR sheet != '')", sc.ProjectID, names).Find(&chars)
 	if len(chars) == 0 {
 		return nil
 	}
@@ -822,10 +832,114 @@ func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string) (tplC
 	prompt += "\n\n再次强调：严禁画面出现任何文字/字幕/水印/对话框，对白只用声音表达（Do NOT render any text or subtitles on screen）"
 	prompt = s.applyPromptSkill(sc.ProjectID, models.SkillStageVideoPrompt, prompt, map[string]string{"scene_content": sc.Content, "duration": fmt.Sprint(sc.Duration)})
 
-	// 固定使用 i2v：仅首帧（ref2v 多参考图易跑偏，弃用）
-	return "minimax_h3_i2v", prompt, map[string][]FileMeta{
-		"first_frame": {{TaskID: pid, Name: sc.ImageFile}},
+	// 有角色/资产参考时使用 H3 ref2v。图1保留当前分镜构图，其余主体优先使用四视图，
+	// 并严格受模板最多 9 张参考图的输入限制；没有额外参考时仍走首帧 i2v。
+	refs, refLines := s.sceneVideoReferenceFiles(sc, pid)
+	if len(refs) > 1 {
+		prompt += "\n\n参考图片映射：\n" + strings.Join(refLines, "\n") +
+			"\n以 <Picture 1> 为镜头构图和动作起点，并严格保持其他 Picture 中对应人物、道具和场景的外观一致。"
+		return "minimax_h3_ref2v", prompt, map[string][]FileMeta{"ref_images": refs}
 	}
+	return "minimax_h3_i2v", prompt, map[string][]FileMeta{"first_frame": {{TaskID: pid, Name: sc.ImageFile}}}
+}
+
+func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) ([]FileMeta, []string) {
+	refs := []FileMeta{{TaskID: pid, Name: sc.ImageFile}}
+	lines := []string{"- <Picture 1>：当前分镜画面（构图与动作起点）"}
+	for _, ch := range s.sceneCharacterPortraits(sc) {
+		if len(refs) >= maxSceneReferenceImages {
+			break
+		}
+		name, kind := ch.Sheet, "四视图"
+		if name == "" {
+			name, kind = ch.Portrait, "标准像"
+		}
+		if name == "" {
+			continue
+		}
+		refs = append(refs, FileMeta{TaskID: pid, Name: name})
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」%s", len(refs), ch.Name, kind))
+	}
+	for _, a := range s.sceneMatchedAssets(sc) {
+		if len(refs) >= maxSceneReferenceImages {
+			break
+		}
+		name, kind := a.Image, "参考图"
+		if a.Kind == AssetKindProp && a.Sheet != "" {
+			name, kind = a.Sheet, "四视图"
+		}
+		if name == "" {
+			continue
+		}
+		refs = append(refs, FileMeta{TaskID: pid, Name: name})
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：%s「%s」%s", len(refs), AssetKindLabel(a.Kind), a.Name, kind))
+	}
+	return refs, lines
+}
+
+// rebalanceScriptDurations keeps every scene within the supported 3–15 second range
+// and preserves relative duration weights while matching the episode budget.
+func rebalanceScriptDurations(res *scriptResult, target float64) bool {
+	if res == nil || len(res.Scenes) == 0 || target <= 0 {
+		return false
+	}
+	if target < float64(len(res.Scenes))*3 || target > float64(len(res.Scenes))*15 {
+		return false
+	}
+	weights := make([]float64, len(res.Scenes))
+	for i, scene := range res.Scenes {
+		weights[i] = scene.Duration
+		if weights[i] <= 0 || math.IsNaN(weights[i]) || math.IsInf(weights[i], 0) {
+			weights[i] = 5
+		}
+	}
+	remaining := target
+	active := make(map[int]bool, len(weights))
+	for i := range weights {
+		active[i] = true
+	}
+	values := make([]float64, len(weights))
+	for len(active) > 0 {
+		weightTotal := 0.0
+		for i := range active {
+			weightTotal += weights[i]
+		}
+		changed := false
+		for i := range active {
+			value := remaining * weights[i] / weightTotal
+			if value < 3 {
+				values[i], remaining, changed = 3, remaining-3, true
+				delete(active, i)
+			} else if value > 15 {
+				values[i], remaining, changed = 15, remaining-15, true
+				delete(active, i)
+			}
+		}
+		if !changed {
+			for i := range active {
+				values[i] = remaining * weights[i] / weightTotal
+			}
+			break
+		}
+	}
+	// Round to tenths, then put rounding residue on the last scene without breaking bounds.
+	total := 0.0
+	for i := range values {
+		values[i] = math.Round(values[i]*10) / 10
+		total += values[i]
+	}
+	delta := math.Round((target-total)*10) / 10
+	for i := len(values) - 1; i >= 0 && math.Abs(delta) >= 0.05; i-- {
+		adjusted := values[i] + delta
+		if adjusted >= 3 && adjusted <= 15 {
+			values[i] = adjusted
+			delta = 0
+		}
+	}
+	for i := range res.Scenes {
+		res.Scenes[i].Duration = values[i]
+	}
+	return math.Abs(delta) < 0.05
 }
 
 func validateScriptResult(res *scriptResult, targets ...any) error {
@@ -846,12 +960,23 @@ func validateScriptResult(res *scriptResult, targets ...any) error {
 			targetScenes = v
 		}
 	}
-	minScenes, maxScenes := targetScenes-5, targetScenes+5
-	if minScenes < 1 {
-		minScenes = 1
+	// targetScenes 是创作目标而非固定协议。硬下限由单镜最长 15 秒决定；
+	// 另保留目标值 60% 的节奏底线，避免把整集压缩成少量超长镜头。
+	minScenes := int(math.Ceil(targetDuration / 15))
+	paceMin := int(math.Ceil(float64(targetScenes) * 0.6))
+	if paceMin > minScenes {
+		minScenes = paceMin
+	}
+	maxScenes := targetScenes + 5
+	capacityMax := int(math.Floor(targetDuration / 3))
+	if maxScenes > capacityMax {
+		maxScenes = capacityMax
+	}
+	if maxScenes < minScenes {
+		maxScenes = minScenes
 	}
 	if len(res.Scenes) < minScenes || len(res.Scenes) > maxScenes {
-		return fmt.Errorf("分镜数量应为 %d~%d 个，实际为 %d 个", minScenes, maxScenes, len(res.Scenes))
+		return fmt.Errorf("分镜数量应为 %d~%d 个（目标 %d 个，并满足单镜 3~15 秒），实际为 %d 个", minScenes, maxScenes, targetScenes, len(res.Scenes))
 	}
 	totalDuration := 0.0
 	for i, sc := range res.Scenes {
@@ -868,6 +993,94 @@ func validateScriptResult(res *scriptResult, targets ...any) error {
 		return fmt.Errorf("分镜总时长应为 %.0f~%.0f 秒，实际为 %.0f 秒", minDuration, maxDuration, totalDuration)
 	}
 	return nil
+}
+
+// escapeJSONControlCharsInStrings 只转义 JSON 字符串内部的原始控制字符。
+// llama.cpp 小模型常在长剧本字符串中直接输出换行，标准 JSON 要求写成 \\n。
+func escapeJSONControlCharsInStrings(data []byte) []byte {
+	out := make([]byte, 0, len(data)+32)
+	inString, escaped := false, false
+	for _, b := range data {
+		if !inString {
+			out = append(out, b)
+			if b == '"' {
+				inString = true
+			}
+			continue
+		}
+		if escaped {
+			out = append(out, b)
+			escaped = false
+			continue
+		}
+		switch b {
+		case '\\':
+			out = append(out, b)
+			escaped = true
+		case '"':
+			out = append(out, b)
+			inString = false
+		case '\n':
+			out = append(out, '\\', 'n')
+		case '\r':
+			out = append(out, '\\', 'r')
+		case '\t':
+			out = append(out, '\\', 't')
+		default:
+			if b < 0x20 {
+				out = append(out, []byte(fmt.Sprintf("\\u%04x", b))...)
+			} else {
+				out = append(out, b)
+			}
+		}
+	}
+	return out
+}
+
+// removeStrayTextAfterJSONValue 删除模型偶发追加在完整 JSON 值与逗号/括号之间的游离文字。
+// 例如角色名中的字可能被错误复制到字符串、数组或数字值之后："雷"雷、[]舒、5秒。
+// 仅按标准解析器给出的错误位置处理，并要求游离段后紧邻结构分隔符。
+func isJSONValueEnd(b byte) bool {
+	return b == '"' || b == '}' || b == ']' || b == 'e' || b == 'l' || (b >= '0' && b <= '9')
+}
+
+func removeStrayTextAfterJSONValue(data []byte, parseErr error) ([]byte, bool) {
+	var syntaxErr *json.SyntaxError
+	if !errors.As(parseErr, &syntaxErr) || syntaxErr.Offset <= 0 {
+		return data, false
+	}
+	errorAt := int(syntaxErr.Offset) - 1
+	if errorAt < 0 || errorAt >= len(data) {
+		return data, false
+	}
+	// Offset can point inside a multi-byte rune. Find its first byte without
+	// inspecting the rune itself; names and all other Unicode text are equivalent.
+	start := errorAt
+	for start > 0 && data[start]&0xc0 == 0x80 {
+		start--
+	}
+	previous := start - 1
+	for previous >= 0 && (data[previous] == ' ' || data[previous] == '\n' || data[previous] == '\r' || data[previous] == '\t') {
+		previous--
+	}
+	if previous < 0 || !isJSONValueEnd(data[previous]) {
+		return data, false
+	}
+	end := start
+	for end < len(data) && data[end] != ',' && data[end] != '}' && data[end] != ']' {
+		// 出现新的 JSON 结构符号说明不是单纯的游离文字，拒绝自动删除。
+		if data[end] == '"' || data[end] == ':' || data[end] == '{' || data[end] == '[' {
+			return data, false
+		}
+		end++
+	}
+	if end == start || end >= len(data) {
+		return data, false
+	}
+	cleaned := make([]byte, 0, len(data)-(end-start))
+	cleaned = append(cleaned, data[:start]...)
+	cleaned = append(cleaned, data[end:]...)
+	return cleaned, true
 }
 
 // parseScriptJSON 从模型输出中提取 JSON（剥离 markdown 代码块与前后杂文）
@@ -889,9 +1102,32 @@ func parseScriptJSON(raw string) (*scriptResult, error) {
 	if start < 0 || end <= start {
 		return nil, fmt.Errorf("输出中未找到 JSON 对象")
 	}
+	data := escapeJSONControlCharsInStrings([]byte(text[start : end+1]))
 	var res scriptResult
-	if err := json.Unmarshal([]byte(text[start:end+1]), &res); err != nil {
-		return nil, err
+	var parseErr, originalParseErr error
+	usedCleanup := false
+	for attempt := 0; attempt < 8; attempt++ {
+		parseErr = json.Unmarshal(data, &res)
+		if attempt == 0 {
+			originalParseErr = parseErr
+		}
+		if parseErr == nil {
+			break
+		}
+		cleaned, ok := removeStrayTextAfterJSONValue(data, parseErr)
+		if !ok {
+			return nil, parseErr
+		}
+		data = cleaned
+		usedCleanup = true
+	}
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	// If cleanup only made a truncated object parseable, keep the original syntax
+	// failure so generateScriptCore asks the model to reconstruct the full schema.
+	if usedCleanup && len(res.Scenes) == 0 && originalParseErr != nil {
+		return nil, originalParseErr
 	}
 	if res.Script == "" && len(res.Scenes) == 0 {
 		return nil, fmt.Errorf("JSON 中缺少 script/scenes 字段")
@@ -1148,12 +1384,16 @@ func styleDescriptor(style string) string {
 
 func buildPortraitPrompt(p *models.Project, ch *models.Character) string {
 	parts := make([]string, 0, 8)
-	if desc := styleDescriptor(p.Style); desc != "" {
-		parts = append(parts, desc)
-	}
 	if prompt := strings.TrimSpace(ch.ReferencePrompt); prompt != "" {
+		// GenerateReferencePrompt 已包含项目画风，避免再次叠加造成影楼化和成熟化。
 		parts = append(parts, prompt)
 	} else {
+		if anchor := characterAgeAnchor(ch.Appearance, ch.Trait); anchor != "" {
+			parts = append(parts, ageSubject(ch.Appearance, ch.Trait), anchor)
+		}
+		if desc := styleDescriptor(p.Style); desc != "" {
+			parts = append(parts, desc)
+		}
 		if appearance := strings.TrimSpace(ch.Appearance); appearance != "" {
 			parts = append(parts, "人物外貌必须严格固定："+appearance)
 		} else if trait := strings.TrimSpace(ch.Trait); trait != "" {
@@ -1171,8 +1411,11 @@ func buildPortraitPrompt(p *models.Project, ch *models.Character) string {
 			parts = append(parts, "布光："+lighting)
 		}
 	}
-	// 主参考像保持单人单视图，避免多视图设定图被后续参考图模型误识别为多人。
-	parts = append(parts, "单一角色，正面半身头像，直视镜头，中性自然表情，纯白干净背景，影棚级柔和布光，居中对称构图，高分辨率角色标准参考像，禁止多人、拼图、文字、水印和复杂背景")
+	// 主参考像保持单人单视图；年龄约束放在结尾再次锚定，抵消身份和古装语义造成的成熟化。
+	if anchor := characterAgeAnchor(ch.Appearance, ch.Trait); anchor != "" {
+		parts = append(parts, anchor)
+	}
+	parts = append(parts, "单一角色，正面半身头像，直视镜头，自然放松表情，纯白干净背景，柔和均匀自然光，居中对称构图，高分辨率真实角色参考照，禁止显老、年龄漂移、中年感、法令纹、眼袋、深皱纹、松弛皮肤、厚重妆容、复古影楼感、多人、拼图、文字、水印和复杂背景")
 	return strings.Join(parts, "，")
 }
 
@@ -1333,7 +1576,7 @@ func (s *ProjectService) claimSceneImage(sc *models.Scene) (string, error) {
 		Where("id = ? AND project_id = ? AND generation = ? AND image_token = '' AND status IN ?",
 			sc.ID, sc.ProjectID, sc.Generation, []string{"pending", "failed", "image_ready", "video_ready"}).
 		Updates(map[string]any{
-			"status": "image_pending", "error": "", "image_token": token,
+			"status": "image_pending", "error": "", "image_token": token, "image_task_id": "",
 			"image_retries": gorm.Expr("image_retries + 1"),
 			"video_task_id": "", "video_file": "", "video_gpu": nil,
 		})
@@ -1349,14 +1592,6 @@ func (s *ProjectService) claimSceneImage(sc *models.Scene) (string, error) {
 }
 
 func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token string) error {
-	// 并发限制：火山文生图 QPS 有限，超出会触发限流
-	select {
-	case s.imageSem <- struct{}{}:
-		defer func() { <-s.imageSem }()
-	case <-s.stopped:
-		return fmt.Errorf("服务已停止")
-	}
-
 	prompt := s.buildSceneImagePrompt(sc)
 	if prompt == "" {
 		prompt = sc.Content
@@ -1365,53 +1600,95 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 		s.failSceneImage(sc, token, "场景缺少提示词")
 		return fmt.Errorf("场景缺少提示词")
 	}
+	if s.tasks == nil {
+		s.failSceneImage(sc, token, "Krea2 分镜画面生成依赖 ComfyUI 任务服务")
+		return fmt.Errorf("Krea2 分镜画面生成依赖 ComfyUI 任务服务")
+	}
 
-	// 注入出场角色标准像 + 匹配道具/场景参考图作为图生图底图（subject 主体参考），强制人物/道具/环境一致
-	refs, names, err := s.scenePortraitRefs(sc)
-	if err != nil {
-		log.Printf("[project %d] scene %d portrait refs failed: %v", sc.ProjectID, sc.Order, err)
-	}
-	assetRefs, assetLines := s.sceneAssetRefs(sc, len(refs))
-	if len(assetRefs) > 0 {
-		refs = append(refs, assetRefs...)
-		names = append(names, assetLines...)
-	}
+	refs, lines := s.sceneImageReferenceFiles(sc)
 	if len(refs) > 0 {
-		prompt += "\n参考图说明：\n" + strings.Join(names, "\n") +
-			"\n请严格保持图1至图" + fmt.Sprintf("%d", len(refs)) +
-			" 中各参考主体（人物/道具/场景环境）的外观完全一致：人物保持五官、发型、体型、服装不变；道具保持形状、材质、颜色与细节不变；场景环境保持空间布局、陈设与光线氛围一致。仅按描述调整构图与动作，禁止改变参考图中的形象。"
+		prompt += "\n\n参考图映射：\n" + strings.Join(lines, "\n") +
+			fmt.Sprintf("\n严格保持图1至图%d中对应人物、道具与场景的身份和外观一致，仅按当前分镜调整构图、动作、表情与镜头。不要把四视图画成拼图，不要复制参考图背景。", len(refs))
 	}
 
-	data, err := s.volc.GenerateImageRefs(prompt, s.projectImageSize(sc.ProjectID), refs)
-	if err != nil {
+	templateCode := "krea2_storyboard_reference"
+	if len(refs) == 0 {
+		// Krea2 编辑工作流至少需要一张参考图；纯文生图仍走同一套本地 Krea2 基础模型。
+		templateCode = "krea2_asset_reference"
+	}
+	var tpl models.Template
+	if err := s.db.Where("code = ? AND enabled = ?", templateCode, true).First(&tpl).Error; err != nil {
+		msg := "未找到已启用的 Krea2 分镜画面模板 " + templateCode
+		s.failSceneImage(sc, token, msg)
+		return fmt.Errorf("%s", msg)
+	}
+	var p models.Project
+	if err := s.db.First(&p, sc.ProjectID).Error; err != nil {
 		s.failSceneImage(sc, token, err.Error())
 		return err
 	}
-	ext := detectImageExt(data)
-	name := fmt.Sprintf("scene_g%d_%d_%d%s", sc.Generation, sc.Order, time.Now().UnixNano(), ext)
-	taskID := fmt.Sprintf("%d", sc.ProjectID)
-	path, size, err := s.upload.SaveFile(taskID, "image", name, data)
+	width, height := assetImageSize(&p, AssetKindLocation)
+	task, err := s.tasks.CreateTask(CreateTaskReq{
+		TemplateID: tpl.ID,
+		Prompt:     prompt,
+		Params:     map[string]any{"width": width, "height": height},
+		Files:      map[string][]FileMeta{"ref_images": refs},
+	})
 	if err != nil {
-		s.failSceneImage(sc, token, "保存图片失败: "+err.Error())
+		s.failSceneImage(sc, token, "创建 Krea2 分镜画面任务失败: "+err.Error())
 		return err
 	}
-	updated := s.db.Model(&models.Scene{}).Where("id = ? AND image_token = ? AND generation = ?", sc.ID, token, sc.Generation).
-		Updates(map[string]any{
-			"image_file": filepath.Base(path), "status": "image_ready", "error": "", "image_token": "",
-		})
-	if updated.Error != nil {
-		return updated.Error
+	bound := s.db.Model(&models.Scene{}).
+		Where("id = ? AND image_token = ? AND generation = ?", sc.ID, token, sc.Generation).
+		Update("image_task_id", task.TaskID)
+	if bound.Error != nil || bound.RowsAffected == 0 {
+		_ = s.tasks.CancelTask(task.TaskID)
+		if bound.Error != nil {
+			return bound.Error
+		}
+		return fmt.Errorf("场景 %d 生成任务已过期", sc.Order)
 	}
-	if updated.RowsAffected == 0 {
-		return fmt.Errorf("场景 %d 生成结果已过期", sc.Order)
-	}
-	// 自动入库素材库
-	if s.materials != nil {
-		s.materials.SaveGeneratedImage(sc, path, size)
-	}
-	s.updateProjectStatus(sc.ProjectID)
+	go func() {
+		if err := s.tasks.Execute(task.TaskID); err != nil && !errors.Is(err, errNoFreeGPU) {
+			log.Printf("[project %d] scene %d execute Krea2 task %s failed: %v", sc.ProjectID, sc.Order, task.TaskID, err)
+		}
+	}()
 	s.pushProject(nil)
 	return nil
+}
+
+// sceneImageReferenceFiles selects at most nine authoritative references in prompt order:
+// character sheets (portrait fallback), location image, then prop sheets (image fallback).
+func (s *ProjectService) sceneImageReferenceFiles(sc *models.Scene) ([]FileMeta, []string) {
+	pid := fmt.Sprint(sc.ProjectID)
+	refs := make([]FileMeta, 0, maxSceneReferenceImages)
+	lines := make([]string, 0, maxSceneReferenceImages)
+	for _, ch := range s.sceneCharacterPortraits(sc) {
+		name, kind := ch.Sheet, "四视图"
+		if name == "" {
+			name, kind = ch.Portrait, "标准像"
+		}
+		if name == "" || len(refs) >= maxSceneReferenceImages {
+			continue
+		}
+		refs = append(refs, FileMeta{TaskID: pid, Name: name})
+		lines = append(lines, fmt.Sprintf("- 图%d：角色「%s」%s", len(refs), ch.Name, kind))
+	}
+	for _, a := range s.sceneMatchedAssets(sc) {
+		if len(refs) >= maxSceneReferenceImages {
+			break
+		}
+		name, kind := a.Image, "参考图"
+		if a.Kind == AssetKindProp && a.Sheet != "" {
+			name, kind = a.Sheet, "四视图"
+		}
+		if name == "" {
+			continue
+		}
+		refs = append(refs, FileMeta{TaskID: pid, Name: name})
+		lines = append(lines, fmt.Sprintf("- 图%d：%s「%s」%s", len(refs), AssetKindLabel(a.Kind), a.Name, kind))
+	}
+	return refs, lines
 }
 
 // GenerateAllImages 生成项目内所有 pending 场景画面（限流并发）
@@ -1446,13 +1723,19 @@ func (s *ProjectService) scenePortraitRefs(sc *models.Scene) ([]ImageRef, []stri
 	refs := make([]ImageRef, 0, len(chars))
 	lines := make([]string, 0, len(chars))
 	for _, ch := range chars {
-		if ch.Portrait == "" {
+		name := ch.Sheet
+		kind := "四视图"
+		if name == "" {
+			name = ch.Portrait
+			kind = "标准像"
+		}
+		if name == "" || len(refs) >= maxSceneReferenceImages {
 			continue
 		}
-		abs := filepath.Join(s.cfg.Comfy.ComfyDir, "input", fmt.Sprintf("%d", sc.ProjectID), ch.Portrait)
+		abs := filepath.Join(s.cfg.Comfy.ComfyDir, "input", fmt.Sprintf("%d", sc.ProjectID), name)
 		f, err := s.remote.Open(abs)
 		if err != nil {
-			log.Printf("[project %d] open portrait %s: %v", sc.ProjectID, abs, err)
+			log.Printf("[project %d] open character reference %s: %v", sc.ProjectID, abs, err)
 			continue
 		}
 		data, err := io.ReadAll(f)
@@ -1460,7 +1743,7 @@ func (s *ProjectService) scenePortraitRefs(sc *models.Scene) ([]ImageRef, []stri
 		if err != nil {
 			continue
 		}
-		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(ch.Portrait)), ".")
+		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
 		if ext == "jpg" {
 			ext = "jpeg"
 		}
@@ -1468,7 +1751,7 @@ func (s *ProjectService) scenePortraitRefs(sc *models.Scene) ([]ImageRef, []stri
 			ext = "jpeg"
 		}
 		refs = append(refs, ImageRef{URL: fmt.Sprintf("data:image/%s;base64,%s", ext, base64.StdEncoding.EncodeToString(data))})
-		lines = append(lines, fmt.Sprintf("- 图%d：%s（%s）", len(refs), ch.Name, strings.TrimSpace(ch.Trait)))
+		lines = append(lines, fmt.Sprintf("- 图%d：角色 %s %s（%s）", len(refs), ch.Name, kind, strings.TrimSpace(ch.Trait)))
 	}
 	return refs, lines, nil
 }
@@ -1486,7 +1769,7 @@ func (s *ProjectService) failSceneImage(sc *models.Scene, token, errMsg string) 
 		status = "image_ready"
 	}
 	s.db.Model(&models.Scene{}).Where("id = ? AND image_token = ?", sc.ID, token).
-		Updates(map[string]any{"status": status, "error": errMsg, "image_token": ""})
+		Updates(map[string]any{"status": status, "error": errMsg, "image_token": "", "image_task_id": ""})
 	s.updateProjectStatus(sc.ProjectID)
 	s.pushProject(nil)
 }
@@ -1605,6 +1888,9 @@ func (s *ProjectService) WatchSceneVideos() {
 				return
 			case <-ticker.C:
 				s.syncCharacterPortraits()
+				s.syncAssetImages()
+				s.syncSheets()
+				s.syncSceneImages()
 				s.syncSceneVideos()
 				s.advanceAutoPipelines()
 			}
@@ -1613,7 +1899,8 @@ func (s *ProjectService) WatchSceneVideos() {
 }
 
 func (s *ProjectService) recoverInterruptedProjects() {
-	s.db.Model(&models.Scene{}).Where("status = ?", "image_pending").
+	// TaskService 会恢复持久化的 queued/running Krea2 任务；只有尚未绑定任务的旧式占位需要回退。
+	s.db.Model(&models.Scene{}).Where("status = ? AND image_task_id = ''", "image_pending").
 		Updates(map[string]any{"status": "pending", "image_token": "", "error": "服务重启，画面任务已重新排队"})
 	s.db.Model(&models.Scene{}).Where("status = ?", "video_creating").
 		Updates(map[string]any{"status": "image_ready", "error": "服务重启，视频任务已重新排队"})
@@ -1811,6 +2098,61 @@ func (s *ProjectService) failPipeline(projectID uint, err error, auto bool) {
 	s.pushProject(nil)
 }
 
+func (s *ProjectService) syncSceneImages() {
+	var scenes []models.Scene
+	if err := s.db.Where("status = ? AND image_task_id != ''", "image_pending").Find(&scenes).Error; err != nil {
+		return
+	}
+	for i := range scenes {
+		sc := &scenes[i]
+		var task models.Task
+		if err := s.db.Where("task_id = ?", sc.ImageTaskID).First(&task).Error; err != nil {
+			s.failSceneImage(sc, sc.ImageToken, "Krea2 分镜任务不存在，请重新生成")
+			continue
+		}
+		switch task.Status {
+		case "failed", "cancelled":
+			msg := strings.TrimSpace(task.Error)
+			if msg == "" {
+				msg = task.Status
+			}
+			s.failSceneImage(sc, sc.ImageToken, msg)
+		case "success":
+			file, _ := resultImageOf(&task)
+			if file == "" || task.Port == nil || s.tasks == nil || s.upload == nil {
+				s.failSceneImage(sc, sc.ImageToken, "Krea2 分镜任务成功但未返回可用图片")
+				continue
+			}
+			subfolder, filename := filepath.ToSlash(filepath.Dir(file)), filepath.Base(file)
+			if subfolder == "." {
+				subfolder = ""
+			}
+			data, err := NewComfyClient(s.tasks.comfyHostForPort(*task.Port), *task.Port).DownloadOutput(filename, subfolder, "output")
+			if err != nil {
+				s.failSceneImage(sc, sc.ImageToken, "读取 Krea2 分镜图片失败: "+err.Error())
+				continue
+			}
+			ext := filepath.Ext(file)
+			if ext == "" {
+				ext = detectImageExt(data)
+			}
+			name := fmt.Sprintf("scene_g%d_%d_%d%s", sc.Generation, sc.Order, time.Now().UnixNano(), ext)
+			path, _, err := s.upload.SaveFile(fmt.Sprint(sc.ProjectID), "image", name, data)
+			if err != nil {
+				s.failSceneImage(sc, sc.ImageToken, "保存 Krea2 分镜图片失败: "+err.Error())
+				continue
+			}
+			res := s.db.Model(&models.Scene{}).Where("id = ? AND image_token = ? AND image_task_id = ?", sc.ID, sc.ImageToken, task.TaskID).Updates(map[string]any{
+				"image_file": filepath.Base(path), "image_token": "", "image_task_id": "", "status": "image_ready", "error": "",
+			})
+			if res.RowsAffected > 0 {
+				s.updateProjectStatus(sc.ProjectID)
+				s.pushProject(nil)
+			}
+		}
+	}
+}
+
 func (s *ProjectService) syncCharacterPortraits() {
 	var chars []models.Character
 	if err := s.db.Where("portrait_task_id != ''").Find(&chars).Error; err != nil {
@@ -1833,19 +2175,20 @@ func (s *ProjectService) syncCharacterPortraits() {
 			changed = true
 		case "success":
 			file, gpu := resultImageOf(&task)
-			if file == "" || gpu == nil || s.cfg == nil || s.remote == nil || s.upload == nil {
+			if file == "" || gpu == nil || task.Port == nil || s.upload == nil {
 				s.db.Model(ch).Where("portrait_task_id = ?", task.TaskID).Updates(map[string]any{"portrait_task_id": "", "portrait_error": "Krea2 任务成功但未返回可用图片"})
 				changed = true
 				continue
 			}
-			abs := filepath.Join(s.cfg.Comfy.ComfyDir, "output_workers", fmt.Sprintf("gpu%d", *gpu), filepath.FromSlash(file))
-			f, err := s.remote.Open(abs)
-			if err != nil {
-				continue
+			subfolder, filename := filepath.ToSlash(filepath.Dir(file)), filepath.Base(file)
+			if subfolder == "." {
+				subfolder = ""
 			}
-			data, readErr := io.ReadAll(f)
-			f.Close()
-			if readErr != nil {
+			client := NewComfyClient(s.tasks.comfyHostForPort(*task.Port), *task.Port)
+			data, downloadErr := client.DownloadOutput(filename, subfolder, "output")
+			if downloadErr != nil {
+				s.db.Model(ch).Where("portrait_task_id = ?", task.TaskID).Update("portrait_error", "读取 Krea2 图片失败: "+downloadErr.Error())
+				changed = true
 				continue
 			}
 			name := fmt.Sprintf("char_%d_%d%s", ch.ID, time.Now().UnixNano(), filepath.Ext(file))

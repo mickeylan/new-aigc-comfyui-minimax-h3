@@ -55,13 +55,13 @@
       "key": "unet_name",
       "type": "string",
       "label": "unet_name",
-      "default": "Krea2\\Krea2-Moody-Mix-premium_int8_convrot.safetensors"
+      "default": "krea2\\Krea2-Moody-Mix-premium_int8_convrot.safetensors"
     },
     {
       "key": "clip_name",
       "type": "string",
       "label": "clip_name",
-      "default": "qwen3vl_4b_fp8_scaled.safetensors"
+      "default": "krea2\\qwen3vl_4b_fp8_scaled.safetensors"
     },
     {
       "key": "vae_name",

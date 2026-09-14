@@ -102,6 +102,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.DELETE("/api/projects/:id/characters/:cid", svc.HandleDeleteCharacter)
 	r.POST("/api/projects/:id/characters/:cid/portrait", svc.HandleGenerateCharacterPortrait)
 	r.POST("/api/projects/:id/characters/:cid/portrait/upload", svc.HandleUploadCharacterPortrait)
+	r.POST("/api/projects/:id/characters/:cid/sheet", svc.HandleGenerateCharacterSheet)
 
 	// 角色档案（LumxAI 风格结构化角色提示词 + 审核工作流）
 	r.POST("/api/projects/:id/characters/:cid/profile", svc.HandleGenerateCharacterProfile)                // LLM 生成完整角色档案
@@ -122,6 +123,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.DELETE("/api/projects/:id/assets/:kind/:aid", svc.HandleDeleteAsset)
 	r.POST("/api/projects/:id/assets/:kind/:aid/image", svc.HandleGenerateAssetImage)
 	r.POST("/api/projects/:id/assets/:kind/:aid/image/upload", svc.HandleUploadAssetImage)
+	r.POST("/api/projects/:id/assets/:kind/:aid/sheet", svc.HandleGeneratePropSheet)
 	r.GET("/api/input/:taskid/*path", svc.HandleInputFile)
 
 	// 创作技能管理
@@ -149,16 +151,16 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.DELETE("/api/materials/:id", svc.HandleDeleteMaterial)
 
 	// 小说改编项目（source_type=novel）
-	r.POST("/api/projects/novel", svc.HandleCreateNovelProject)                   // 创建小说改编项目
-	r.POST("/api/projects/:id/novel/upload", svc.HandleUploadNovel)               // 上传小说文件（TXT/MD）
-	r.GET("/api/projects/:id/novel/import-status", svc.HandleGetImportStatus)     // 获取导入状态
-	r.GET("/api/projects/:id/novel/chapters", svc.HandleListChapters)             // 章节列表
-	r.GET("/api/projects/:id/novel/chapters/:cid", svc.HandleGetChapter)          // 章节详情
-	r.PUT("/api/projects/:id/novel/chapters/:cid", svc.HandleUpdateChapter)       // 更新章节（标题/顺序）
-	r.PUT("/api/projects/:id/novel/chapters/reorder", svc.HandleReorderChapters)  // 批量更新章节顺序
-	r.POST("/api/projects/:id/novel/chapters/:cid/split", svc.HandleSplitChapter) // 拆分章节
-	r.POST("/api/projects/:id/novel/chapters/merge", svc.HandleMergeChapters)     // 合并章节
-	r.GET("/api/projects/:id/novel/tasks", svc.HandleListChapterTasks)            // 章节任务列表
+	r.POST("/api/projects/novel", svc.HandleCreateNovelProject)                    // 创建小说改编项目
+	r.POST("/api/projects/:id/novel/upload", svc.HandleUploadNovel)                // 上传小说文件（TXT/MD）
+	r.GET("/api/projects/:id/novel/import-status", svc.HandleGetNovelImportStatus) // 获取导入状态
+	r.GET("/api/projects/:id/novel/chapters", svc.HandleListChapters)              // 章节列表
+	r.GET("/api/projects/:id/novel/chapters/:cid", svc.HandleGetChapter)           // 章节详情
+	r.PUT("/api/projects/:id/novel/chapters/:cid", svc.HandleUpdateChapter)        // 更新章节（标题/顺序）
+	r.PUT("/api/projects/:id/novel/chapters/reorder", svc.HandleReorderChapters)   // 批量更新章节顺序
+	r.POST("/api/projects/:id/novel/chapters/:cid/split", svc.HandleSplitChapter)  // 拆分章节
+	r.POST("/api/projects/:id/novel/chapters/merge", svc.HandleMergeChapters)      // 合并章节
+	r.GET("/api/projects/:id/novel/tasks", svc.HandleListChapterTasks)             // 章节任务列表
 	r.POST("/api/projects/:id/novel/chapters/analyze", svc.HandleAnalyzeNovelChapters)
 	r.POST("/api/projects/:id/novel/chapters/:cid/retry", svc.HandleRetryNovelChapter)
 	r.GET("/api/projects/:id/novel/arcs", svc.HandleListNovelArcs)
@@ -186,6 +188,29 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/adaptations/review", svc.HandleBatchReviewAdaptations)
 	r.GET("/api/projects/:id/novel/usage", svc.HandleNovelUsage)
 	r.PUT("/api/projects/:id/source-type", svc.HandleChangeProjectSourceType) // 转换项目来源类型
+
+	// Scene 下的导演镜头层（手动结构化数据，不按字符比例切分）
+	r.POST("/api/projects/:id/scenes/:sid/shots", svc.HandleCreateShots)
+	r.GET("/api/projects/:id/scenes/:sid/shots", svc.HandleGetSceneShots)
+	r.PUT("/api/projects/:id/shots/:shid", svc.HandleUpdateShot)
+	r.DELETE("/api/projects/:id/shots/:shid", svc.HandleDeleteShot)
+
+	// 提示词工作台
+	r.POST("/api/prompts/build", svc.HandleBuildPrompt)         // 构建提示词
+	r.POST("/api/prompts/optimize", svc.HandleOptimizePrompt)   // 优化提示词
+	r.POST("/api/prompts/translate", svc.HandleTranslatePrompt) // 翻译提示词
+	r.GET("/api/prompts/history", svc.HandleGetPromptHistory)   // 提示词历史
+	r.POST("/api/prompts/rollback", svc.HandleRollbackPrompt)   // 回滚提示词
+
+	// 风格预设
+	r.GET("/api/presets", svc.HandleListPresets)                    // 列出预设
+	r.GET("/api/presets/categories", svc.HandleGetPresetCategories) // 获取分类
+	r.GET("/api/presets/recommend", svc.HandleGetRecommendations)   // 获取推荐（查询参数）
+	r.GET("/api/presets/:id", svc.HandleGetPreset)                  // 获取单个预设
+	r.POST("/api/presets/:id/apply", svc.HandleApplyPreset)         // 应用预设
+	r.POST("/api/presets", svc.HandleCreatePreset)                  // 创建自定义预设
+	r.PUT("/api/presets/:id", svc.HandleUpdatePreset)               // 更新预设
+	r.DELETE("/api/presets/:id", svc.HandleDeletePreset)            // 删除预设
 
 	// 前端静态资源 (SPA)
 	r.NoRoute(func(c *gin.Context) {

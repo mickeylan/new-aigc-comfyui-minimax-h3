@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -213,91 +214,187 @@ func (s *ProjectService) upsertAssetsFromScenes(projectID uint, scenes []scriptS
 	}
 }
 
-// GenerateAllAssetImages 一键生成全部缺少参考图的资产（kind 为空表示全部类别）
+var errAssetImageActive = errors.New("资产参考图正在生成")
+
+// GenerateAllAssetImages 一键生成全部缺少参考图的资产（kind 为空表示全部类别）。
+// 已有活动任务的资产会跳过，不会重复创建 ComfyUI 任务。
 func (s *ProjectService) GenerateAllAssetImages(p *models.Project, kind string) (int, error) {
 	query := s.db.Where("project_id = ? AND image = ''", p.ID)
 	if kind != "" {
 		query = query.Where("kind = ?", kind)
 	}
 	var assets []models.Asset
-	query.Find(&assets)
+	if err := query.Find(&assets).Error; err != nil {
+		return 0, err
+	}
+	submitted := 0
 	for i := range assets {
-		s.StartAssetImage(&assets[i])
-	}
-	return len(assets), nil
-}
-
-// StartAssetImage 异步生成资产参考图（文生图，限流并发；进行中的资产不重复排队）
-func (s *ProjectService) StartAssetImage(a *models.Asset) error {
-	s.assetMu.Lock()
-	if s.assetInflight == nil {
-		s.assetInflight = map[uint]bool{}
-	}
-	if s.assetInflight[a.ID] {
-		s.assetMu.Unlock()
-		return nil
-	}
-	s.assetInflight[a.ID] = true
-	s.assetMu.Unlock()
-	go func() {
-		defer func() {
-			s.assetMu.Lock()
-			delete(s.assetInflight, a.ID)
-			s.assetMu.Unlock()
-		}()
-		if err := s.generateAssetImage(a); err != nil {
-			log.Printf("[asset %d] image failed: %v", a.ID, err)
+		if err := s.StartAssetImage(&assets[i]); err != nil {
+			if errors.Is(err, errAssetImageActive) {
+				continue
+			}
+			return submitted, err
 		}
-	}()
-	return nil
+		submitted++
+	}
+	return submitted, nil
 }
 
-func (s *ProjectService) generateAssetImage(a *models.Asset) error {
-	if s.volc == nil || s.upload == nil {
-		return fmt.Errorf("资产参考图生成依赖文生图与存储服务")
+// StartAssetImage 使用本地 ComfyUI Krea2 模板异步生成资产参考图。
+func (s *ProjectService) StartAssetImage(a *models.Asset) error {
+	if s.tasks == nil {
+		return fmt.Errorf("Krea2 资产参考图生成依赖 ComfyUI 任务服务")
 	}
-	select {
-	case s.imageSem <- struct{}{}:
-		defer func() { <-s.imageSem }()
-	case <-s.stopped:
-		return fmt.Errorf("服务已停止")
+
+	// 串行化“检查活动任务 → 创建任务 → 绑定资产”，避免并发请求重复排队。
+	s.assetMu.Lock()
+	defer s.assetMu.Unlock()
+	var current models.Asset
+	if err := s.db.First(&current, a.ID).Error; err != nil {
+		return err
+	}
+	if current.ImageTaskID != "" {
+		var active int64
+		if err := s.db.Model(&models.Task{}).Where("task_id = ? AND status IN ?", current.ImageTaskID, []string{"pending", "queued", "running"}).Count(&active).Error; err != nil {
+			return err
+		}
+		if active > 0 {
+			return fmt.Errorf("%w：%s「%s」", errAssetImageActive, AssetKindLabel(current.Kind), current.Name)
+		}
 	}
 	var p models.Project
-	if err := s.db.First(&p, a.ProjectID).Error; err != nil {
+	if err := s.db.First(&p, current.ProjectID).Error; err != nil {
 		return err
 	}
-	data, err := s.volc.GenerateImage(buildAssetPrompt(&p, a), "")
+	var tpl models.Template
+	if err := s.db.Where("code = ? AND enabled = ?", "krea2_asset_reference", true).First(&tpl).Error; err != nil {
+		return fmt.Errorf("未找到已启用的 Krea2 资产参考图模板")
+	}
+	width, height := assetImageSize(&p, current.Kind)
+	task, err := s.tasks.CreateTask(CreateTaskReq{
+		TemplateID: tpl.ID,
+		Prompt:     buildAssetPrompt(&p, &current),
+		Params:     map[string]any{"width": width, "height": height},
+	})
 	if err != nil {
+		return fmt.Errorf("创建 Krea2 资产参考图任务失败: %w", err)
+	}
+	if err := s.db.Model(&models.Asset{}).Where("id = ?", current.ID).Updates(map[string]any{
+		"image_task_id": task.TaskID, "image_error": "",
+	}).Error; err != nil {
+		_ = s.tasks.CancelTask(task.TaskID)
 		return err
 	}
-	ext := detectImageExt(data)
-	name := fmt.Sprintf("%s_%d_%d%s", assetFilePrefix(a.Kind), a.ID, time.Now().UnixNano(), ext)
-	path, _, err := s.upload.SaveFile(fmt.Sprintf("%d", a.ProjectID), "image", name, data)
-	if err != nil {
-		return err
-	}
-	if err := s.db.Model(&models.Asset{}).Where("id = ?", a.ID).Update("image", filepath.Base(path)).Error; err != nil {
-		return err
-	}
+	go func() {
+		if err := s.tasks.Execute(task.TaskID); err != nil && !errors.Is(err, errNoFreeGPU) {
+			log.Printf("[asset %d] execute Krea2 task %s failed: %v", current.ID, task.TaskID, err)
+		}
+	}()
 	s.pushProject(nil)
 	return nil
 }
 
+func assetImageSize(p *models.Project, kind string) (int, int) {
+	if kind == AssetKindProp {
+		return 1024, 1024
+	}
+	switch strings.TrimSpace(p.AspectRatio) {
+	case "9:16":
+		return 768, 1344
+	case "1:1":
+		return 1024, 1024
+	default:
+		return 1344, 768
+	}
+}
+
 // buildAssetPrompt 资产参考图提示词：画风强约束 + 描述 + 类别定式（道具特写 / 场景空镜）
 func buildAssetPrompt(p *models.Project, a *models.Asset) string {
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 4)
 	if desc := styleDescriptor(p.Style); desc != "" {
 		parts = append(parts, desc)
 	}
+	parts = append(parts, AssetKindLabel(a.Kind)+"「"+strings.TrimSpace(a.Name)+"」")
 	if d := strings.TrimSpace(a.Description); d != "" {
-		parts = append(parts, d)
+		parts = append(parts, "外观必须精确遵守："+d)
 	}
 	if a.Kind == AssetKindLocation {
-		parts = append(parts, "场景空镜参考图，全景构图，无人物，环境陈设与光影氛围完整清晰，高质量")
+		parts = append(parts, "场景空镜参考图，全景构图，无人物，环境陈设与光影氛围完整清晰，高质量，禁止文字、水印和拼图")
 	} else {
-		parts = append(parts, "道具特写参考图，单一物体，居中构图，中性纯色背景，细节清晰，无人物")
+		parts = append(parts, "道具特写参考图，单一物体，完整展示，居中构图，中性纯色背景，细节清晰，无人物，禁止文字、水印和拼图")
 	}
 	return strings.Join(parts, "，")
+}
+
+// syncAssetImages 把已结束的 Krea2 任务结果同步到项目 input 目录。
+func (s *ProjectService) syncAssetImages() {
+	var assets []models.Asset
+	if err := s.db.Where("image_task_id != ''").Find(&assets).Error; err != nil {
+		return
+	}
+	changed := false
+	for i := range assets {
+		a := &assets[i]
+		var task models.Task
+		if err := s.db.Where("task_id = ?", a.ImageTaskID).First(&task).Error; err != nil {
+			res := s.db.Model(a).Where("image_task_id = ?", a.ImageTaskID).Updates(map[string]any{
+				"image_task_id": "", "image_error": "Krea2 资产参考图任务不存在，请重新生成",
+			})
+			changed = changed || res.RowsAffected > 0
+			continue
+		}
+		switch task.Status {
+		case "failed", "cancelled":
+			msg := strings.TrimSpace(task.Error)
+			if msg == "" {
+				msg = "Krea2 任务已" + map[string]string{"failed": "失败", "cancelled": "取消"}[task.Status]
+			}
+			res := s.db.Model(a).Where("image_task_id = ?", task.TaskID).Updates(map[string]any{"image_task_id": "", "image_error": msg})
+			changed = changed || res.RowsAffected > 0
+		case "success":
+			file, _ := resultImageOf(&task)
+			if file == "" || task.Port == nil || s.upload == nil || s.tasks == nil {
+				res := s.db.Model(a).Where("image_task_id = ?", task.TaskID).Updates(map[string]any{
+					"image_task_id": "", "image_error": "Krea2 任务成功但未返回可用图片",
+				})
+				changed = changed || res.RowsAffected > 0
+				continue
+			}
+			subfolder, filename := filepath.ToSlash(filepath.Dir(file)), filepath.Base(file)
+			if subfolder == "." {
+				subfolder = ""
+			}
+			client := NewComfyClient(s.tasks.comfyHostForPort(*task.Port), *task.Port)
+			data, err := client.DownloadOutput(filename, subfolder, "output")
+			if err != nil {
+				res := s.db.Model(a).Where("image_task_id = ?", task.TaskID).Updates(map[string]any{
+					"image_task_id": "", "image_error": "读取 Krea2 资产参考图失败: " + err.Error(),
+				})
+				changed = changed || res.RowsAffected > 0
+				continue
+			}
+			ext := filepath.Ext(file)
+			if ext == "" {
+				ext = detectImageExt(data)
+			}
+			name := fmt.Sprintf("%s_%d_%d%s", assetFilePrefix(a.Kind), a.ID, time.Now().UnixNano(), ext)
+			path, _, err := s.upload.SaveFile(fmt.Sprint(a.ProjectID), "image", name, data)
+			if err != nil {
+				res := s.db.Model(a).Where("image_task_id = ?", task.TaskID).Updates(map[string]any{
+					"image_task_id": "", "image_error": "保存 Krea2 资产参考图失败: " + err.Error(),
+				})
+				changed = changed || res.RowsAffected > 0
+				continue
+			}
+			res := s.db.Model(a).Where("image_task_id = ?", task.TaskID).Updates(map[string]any{
+				"image": filepath.Base(path), "image_task_id": "", "image_error": "",
+			})
+			changed = changed || res.RowsAffected > 0
+		}
+	}
+	if changed {
+		s.pushProject(nil)
+	}
 }
 
 // sceneMatchedAssets 返回该分镜引用的资产（场景在前、道具在后，按引用顺序）。
@@ -369,10 +466,17 @@ func (s *ProjectService) sceneAssetRefs(sc *models.Scene, startIdx int) ([]Image
 	refs := make([]ImageRef, 0, len(assets))
 	lines := make([]string, 0, len(assets))
 	for _, a := range assets {
-		if a.Image == "" {
+		if startIdx+len(refs) >= maxSceneReferenceImages {
+			break
+		}
+		name, kind := a.Image, "参考图"
+		if a.Kind == AssetKindProp && a.Sheet != "" {
+			name, kind = a.Sheet, "四视图"
+		}
+		if name == "" {
 			continue
 		}
-		abs := filepath.Join(s.cfg.Comfy.ComfyDir, "input", fmt.Sprintf("%d", sc.ProjectID), a.Image)
+		abs := filepath.Join(s.cfg.Comfy.ComfyDir, "input", fmt.Sprintf("%d", sc.ProjectID), name)
 		f, err := s.remote.Open(abs)
 		if err != nil {
 			log.Printf("[project %d] open asset image %s: %v", sc.ProjectID, abs, err)
@@ -383,7 +487,7 @@ func (s *ProjectService) sceneAssetRefs(sc *models.Scene, startIdx int) ([]Image
 		if err != nil {
 			continue
 		}
-		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(a.Image)), ".")
+		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
 		if ext == "jpg" {
 			ext = "jpeg"
 		}
@@ -391,7 +495,7 @@ func (s *ProjectService) sceneAssetRefs(sc *models.Scene, startIdx int) ([]Image
 			ext = "jpeg"
 		}
 		refs = append(refs, ImageRef{URL: fmt.Sprintf("data:image/%s;base64,%s", ext, base64.StdEncoding.EncodeToString(data))})
-		lines = append(lines, fmt.Sprintf("- 图%d：%s「%s」（%s）", startIdx+len(refs), AssetKindLabel(a.Kind), a.Name, strings.TrimSpace(a.Description)))
+		lines = append(lines, fmt.Sprintf("- 图%d：%s「%s」%s（%s）", startIdx+len(refs), AssetKindLabel(a.Kind), a.Name, kind, strings.TrimSpace(a.Description)))
 	}
 	return refs, lines
 }

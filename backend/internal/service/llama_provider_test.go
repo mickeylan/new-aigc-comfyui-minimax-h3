@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -74,6 +75,32 @@ func TestLlamaProviderChat(t *testing.T) {
 	}
 	if !strings.Contains(text, "测试响应") {
 		t.Errorf("Chat() = %v, want to contain '测试响应'", text)
+	}
+}
+
+func TestLlamaProviderUsesJSONModeForJSONPrompt(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		format, ok := body["response_format"].(map[string]any)
+		if !ok || format["type"] != "json_object" {
+			t.Fatalf("response_format = %#v", body["response_format"])
+		}
+		messages := body["messages"].([]any)
+		system := messages[0].(map[string]any)["content"].(string)
+		for _, rule := range []string{"字符串闭合后", `\\n`, "姓名"} {
+			if !strings.Contains(system, rule) {
+				t.Fatalf("JSON discipline missing %q: %s", rule, system)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": `{"ok":true}`}}}})
+	}))
+	defer server.Close()
+	g := &mockGetter{settings: map[string]string{SettingLlamaBaseURL: server.URL, SettingLlamaModel: "qwen3.5-9b"}}
+	if _, err := NewLlamaProvider(g).Chat("只输出一个合法的 JSON 对象", "生成数据"); err != nil {
+		t.Fatal(err)
 	}
 }
 

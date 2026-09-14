@@ -160,13 +160,15 @@ type Scene struct {
 	MegaType     string    `gorm:"column:mega_type" json:"mega_type"`                    // architecture/creature/geological/mechanical/surreal
 	ImageFile    string    `json:"image_file"`                                           // 首帧图文件名（input/<project_id>/ 下）
 	ImageToken   string    `gorm:"column:image_token" json:"-"`                          // 单次生成令牌，防止并发或过期结果回写
+	ImageTaskID  string    `gorm:"column:image_task_id;index" json:"image_task_id"`       // 关联 Krea2 分镜画面任务
 	VideoTaskID  string    `gorm:"column:video_task_id" json:"video_task_id"`            // 关联视频生成任务
 	VideoGPU     *int      `gorm:"column:video_gpu" json:"video_gpu"`
 	VideoFile    string    `gorm:"column:video_file" json:"video_file"` // 输出相对路径（subfolder/filename）
 	Status       string    `json:"status"`                              // pending/image_pending/image_ready/video_pending/video_running/video_ready/failed
 	Error        string    `json:"error"`
-	ImageRetries int       `gorm:"column:image_retries" json:"image_retries"` // 画面生成已重试次数
-	VideoRetries int       `gorm:"column:video_retries" json:"video_retries"` // 视频生成已重试次数
+	ImageRetries int       `gorm:"column:image_retries" json:"image_retries"`     // 画面生成已重试次数
+	VideoRetries int       `gorm:"column:video_retries" json:"video_retries"`     // 视频生成已重试次数
+	ShotCount    int       `gorm:"column:shot_count;default:0" json:"shot_count"` // 镜头数量
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
@@ -248,6 +250,9 @@ type Character struct {
 	Portrait       string `json:"portrait"`                                              // 标准参考像文件名（input/<project_id>/ 下）
 	PortraitTaskID string `gorm:"column:portrait_task_id;index" json:"portrait_task_id"` // Krea2 标准像生成任务
 	PortraitError  string `gorm:"type:text" json:"portrait_error"`                       // 标准像生成错误
+	Sheet          string `json:"sheet"`                                                 // 角色四视图文件名（input/<project_id>/ 下）
+	SheetTaskID    string `gorm:"column:sheet_task_id;index" json:"sheet_task_id"`       // Krea2 四视图生成任务
+	SheetError     string `gorm:"column:sheet_error;type:text" json:"sheet_error"`       // 四视图生成错误
 	Voice          string `json:"voice"`                                                 // 预设 TTS 音色 ID（角色级，配音优先于平台角色映射）
 	VoiceRef       string `gorm:"column:voice_ref" json:"voice_ref"`                     // 参考语音文件名（input/<project_id>/ 下）
 	VoiceID        string `gorm:"column:voice_id" json:"voice_id"`                       // 参考语音注册的复刻音色 ID（阿里云 qwen-voice-enrollment）
@@ -281,6 +286,11 @@ type Asset struct {
 	Name        string    `gorm:"uniqueIndex:idx_asset_project_kind_name" json:"name"`             // 项目内同类别唯一
 	Description string    `gorm:"type:text" json:"description"`                                    // 外观描述（道具：形状/材质/颜色/细节；场景：空间/建筑/光线氛围）
 	Image       string    `json:"image"`                                                           // 参考图文件名（input/<project_id>/ 下）
+	ImageTaskID string    `gorm:"column:image_task_id;index" json:"image_task_id"`                 // Krea2 参考图生成任务
+	ImageError  string    `gorm:"column:image_error;type:text" json:"image_error"`                 // 参考图生成错误
+	Sheet       string    `json:"sheet"`                                                           // 道具四视图文件名（input/<project_id>/ 下；location 不使用）
+	SheetTaskID string    `gorm:"column:sheet_task_id;index" json:"sheet_task_id"`                 // Krea2 道具四视图任务
+	SheetError  string    `gorm:"column:sheet_error;type:text" json:"sheet_error"`                 // 道具四视图错误
 	Source      string    `json:"source"`                                                          // auto(方案抽取) / manual(手动新建)
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
@@ -521,4 +531,81 @@ type SkillAuditLog struct {
 	Success      bool      `gorm:"default:true" json:"success"`                 // 是否成功
 	Error        string    `gorm:"type:text" json:"error"`                      // 错误信息（如有）
 	CreatedAt    time.Time `json:"created_at"`
+}
+
+type ShotActType string
+
+const (
+	ShotActSetup      ShotActType = "setup"
+	ShotActRising     ShotActType = "rising"
+	ShotActMidpoint   ShotActType = "midpoint"
+	ShotActFalling    ShotActType = "falling"
+	ShotActResolution ShotActType = "resolution"
+)
+
+// Shot 是 Scene 下的导演镜头层。ActType 表示五幕叙事位置，五段提示词描述单镜画面。
+type Shot struct {
+	ID             uint        `gorm:"primaryKey" json:"id"`
+	SceneID        uint        `gorm:"column:scene_id;index;uniqueIndex:idx_shot_scene_order" json:"scene_id"`
+	Order          int         `gorm:"column:order_num;uniqueIndex:idx_shot_scene_order" json:"order"`
+	ActType        ShotActType `gorm:"column:act_type;index" json:"act_type"`
+	ShotType       string      `gorm:"column:shot_type" json:"shot_type"`
+	CameraAngle    string      `gorm:"column:camera_angle" json:"camera_angle"`
+	CameraMovement string      `gorm:"column:camera_movement" json:"camera_movement"`
+	Duration       float64     `gorm:"default:1.5" json:"duration"`
+	Description    string      `gorm:"type:text" json:"description"`
+	Dialogue       string      `gorm:"type:text" json:"dialogue"`
+	Emotion        string      `gorm:"type:text" json:"emotion"`
+	PromptSubject  string      `gorm:"column:prompt_subject;type:text" json:"prompt_subject"`
+	PromptAction   string      `gorm:"column:prompt_action;type:text" json:"prompt_action"`
+	PromptCamera   string      `gorm:"column:prompt_camera;type:text" json:"prompt_camera"`
+	PromptLighting string      `gorm:"column:prompt_lighting;type:text" json:"prompt_lighting"`
+	PromptStyle    string      `gorm:"column:prompt_style;type:text" json:"prompt_style"`
+	CreatedAt      time.Time   `json:"created_at"`
+	UpdatedAt      time.Time   `json:"updated_at"`
+}
+
+// PromptVersion 提示词版本历史
+type PromptVersion struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	ProjectID  uint      `gorm:"column:project_id;index" json:"project_id"`
+	EntityType string    `gorm:"column:entity_type;index" json:"entity_type"` // scene/shot/skill
+	EntityID   uint      `gorm:"column:entity_id;index" json:"entity_id"`     // 关联实体 ID
+	Content    string    `gorm:"column:content;type:text" json:"content"`     // 版本内容
+	Action     string    `gorm:"column:action" json:"action"`                 // build/optimize/translate/manual
+	Metadata   string    `gorm:"column:metadata;type:text" json:"metadata"`   // JSON: model_used, duration, tokens
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// StylePresetCategory 风格预设分类
+type StylePresetCategory string
+
+const (
+	StylePresetCinematic  StylePresetCategory = "cinematic"  // 电影感
+	StylePresetAnimated   StylePresetCategory = "animated"   // 动画风
+	StylePresetRealistic  StylePresetCategory = "realistic"  // 写实风
+	StylePresetArtistic   StylePresetCategory = "artistic"   // 艺术风
+	StylePresetCommercial StylePresetCategory = "commercial" // 商业风
+)
+
+// StylePreset 风格预设：提供可复用的提示词片段与推荐理由
+type StylePreset struct {
+	ID             uint                `gorm:"primaryKey" json:"id"`
+	Name           string              `gorm:"column:name" json:"name"`                                   // 预设名称
+	Category       StylePresetCategory `gorm:"column:category" json:"category"`                           // 分类
+	Subcategory    string              `gorm:"column:subcategory" json:"subcategory"`                     // 子分类
+	PromptTail     string              `gorm:"column:prompt_tail;type:text" json:"prompt_tail"`           // 追加提示词
+	NegativeTail   string              `gorm:"column:negative_tail;type:text" json:"negative_tail"`       // 负面提示词
+	Reason         string              `gorm:"column:reason;type:text" json:"reason"`                     // 推荐理由
+	UseCases       string              `gorm:"column:use_cases;type:text" json:"use_cases"`               // 适用场景
+	SceneTypes     string              `gorm:"column:scene_types;type:text" json:"scene_types"`           // 适用镜头类型
+	Parameters     string              `gorm:"column:parameters;type:text" json:"parameters"`             // JSON: temperature, guidance_scale
+	PreviewURL     string              `gorm:"column:preview_url" json:"preview_url"`                     // 预览图
+	Tags           string              `gorm:"column:tags" json:"tags"`                                   // 逗号分隔标签
+	IsRecommended  bool                `gorm:"column:is_recommended;default:false" json:"is_recommended"` // 是否推荐
+	RecommendedFor string              `gorm:"column:recommended_for;type:text" json:"recommended_for"`   // 推荐用于
+	UsageCount     int                 `gorm:"column:usage_count;default:0" json:"usage_count"`           // 使用次数
+	IsSystem       bool                `gorm:"column:is_system;default:false" json:"is_system"`           // 是否系统预设
+	CreatedAt      time.Time           `json:"created_at"`
+	UpdatedAt      time.Time           `json:"updated_at"`
 }

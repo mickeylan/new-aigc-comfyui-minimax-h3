@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -619,6 +620,22 @@ func (s *Service) HandleUploadCharacterPortrait(c *gin.Context) {
 	c.JSON(200, gin.H{"ok": true, "message": "照片已设为角色标准像", "portrait": filepath.Base(path)})
 }
 
+func (s *Service) HandleGenerateCharacterSheet(c *gin.Context) {
+	ch, ok := s.loadCharacter(c)
+	if !ok {
+		return
+	}
+	if err := s.Projects.StartCharacterSheet(ch); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errSheetActive) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"ok": true, "message": fmt.Sprintf("角色「%s」四视图任务已提交", ch.Name)})
+}
+
 func (s *Service) HandleGenerateAllPortraits(c *gin.Context) {
 	p, ok := s.loadProject(c)
 	if !ok {
@@ -770,10 +787,30 @@ func (s *Service) HandleGenerateAssetImage(c *gin.Context) {
 		return
 	}
 	if err := s.Projects.StartAssetImage(a); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+		status := http.StatusInternalServerError
+		if errors.Is(err, errAssetImageActive) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{"ok": true, "message": fmt.Sprintf("%s「%s」参考图生成中", AssetKindLabel(a.Kind), a.Name)})
+	c.JSON(http.StatusAccepted, gin.H{"ok": true, "message": fmt.Sprintf("%s「%s」Krea2 参考图任务已提交", AssetKindLabel(a.Kind), a.Name)})
+}
+
+func (s *Service) HandleGeneratePropSheet(c *gin.Context) {
+	a, ok := s.loadAsset(c)
+	if !ok {
+		return
+	}
+	if err := s.Projects.StartPropSheet(a); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errSheetActive) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"ok": true, "message": fmt.Sprintf("道具「%s」四视图任务已提交", a.Name)})
 }
 
 // HandleUploadAssetImage 上传图片作为资产参考图（替代文生图）
@@ -810,9 +847,17 @@ func (s *Service) HandleUploadAssetImage(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	if err := s.DB.Model(&models.Asset{}).Where("id = ?", a.ID).Update("image", filepath.Base(path)).Error; err != nil {
+	if err := s.DB.Model(&models.Asset{}).Where("id = ?", a.ID).Updates(map[string]any{
+		"image": filepath.Base(path), "image_task_id": "", "image_error": "",
+	}).Error; err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
+	}
+	// 上传结果优先：取消旧生成任务，且同步器的 task-id 条件可阻止旧结果覆盖上传图片。
+	if a.ImageTaskID != "" && s.Tasks != nil {
+		if err := s.Tasks.CancelTask(a.ImageTaskID); err != nil && !strings.Contains(err.Error(), "已结束") {
+			log.Printf("[asset %d] cancel replaced image task %s failed: %v", a.ID, a.ImageTaskID, err)
+		}
 	}
 	s.Projects.PushProject(nil)
 	c.JSON(200, gin.H{"ok": true, "message": "图片已设为参考图", "image": filepath.Base(path)})
@@ -833,7 +878,7 @@ func (s *Service) HandleGenerateAllAssetImages(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{"ok": true, "message": fmt.Sprintf("已提交 %d 个%s的参考图生成", n, AssetKindLabel(kind))})
+	c.JSON(http.StatusAccepted, gin.H{"ok": true, "message": fmt.Sprintf("已提交 %d 个%s的 Krea2 参考图任务", n, AssetKindLabel(kind))})
 }
 
 // ---------- 角色语音（预设音色 / 参考语音复刻） ----------

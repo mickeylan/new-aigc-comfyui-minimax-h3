@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -103,6 +104,24 @@ func (c *ComfyClient) SubmitPrompt(workflow map[string]any, clientID string) (st
 		return "", fmt.Errorf("comfy error: %v", out.Error)
 	}
 	return out.PromptID, nil
+}
+
+// DownloadOutput 通过 ComfyUI /view 读取输出，避免假设本地、SSH、Docker 使用同一文件系统路径。
+func (c *ComfyClient) DownloadOutput(filename, subfolder, outputType string) ([]byte, error) {
+	query := url.Values{"filename": {filename}, "subfolder": {subfolder}, "type": {outputType}}
+	resp, err := c.HTTP.Get(c.baseURL() + "/view?" + query.Encode())
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, readErr
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ComfyUI output download failed %d: %s", resp.StatusCode, truncateStr(string(data), 300))
+	}
+	return data, nil
 }
 
 // Interrupt 中断当前任务

@@ -162,6 +162,8 @@
       </section>
     </div>
 
+    <ShotDirectorEditor v-if="selected" :project-id="id()" :scene-id="selected.id" />
+
     <!-- 合并记录 -->
     <section class="section" v-if="merges.length">
       <div class="section-head">
@@ -195,6 +197,7 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { useToastStore } from '../stores/toast'
+import ShotDirectorEditor from '../components/ShotDirectorEditor.vue'
 
 const route = useRoute()
 const toast = useToastStore()

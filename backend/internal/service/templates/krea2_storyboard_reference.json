@@ -1,20 +1,20 @@
 {
-  "name": "Krea2 角色四视图",
-  "code": "krea2_character_sheet",
-  "description": "以审核后的角色正面特写为身份参考，生成脸部特写、正面全身、侧面全身和背面全身四视图。",
+  "name": "Krea2 分镜参考图",
+  "code": "krea2_storyboard_reference",
+  "description": "以角色、道具或场景权威参考图为基础，生成项目画幅的分镜画面。", 
   "inputs": [
     {
-      "key": "source_image",
-      "type": "image",
-      "label": "角色正面特写",
-      "required": true
+      "key": "ref_images",
+      "type": "images",
+      "label": "角色/道具/场景参考图",
+      "required": true,
+      "max_count": 9
     },
     {
       "key": "prompt",
       "type": "prompt",
-      "label": "四视图编辑指令",
-      "required": true,
-      "default": "Convert the character in the image to a Character Sheet showing a face close-up, front full body, side full body and back full body views"
+      "label": "分镜画面提示词",
+      "required": true
     },
     {
       "key": "width",
@@ -67,18 +67,6 @@
       "label": "vae_name",
       "default": "qwen_image_vae.safetensors"
     },
-    {
-      "key": "lora_name",
-      "type": "string",
-      "label": "lora_name",
-      "default": "krea2\\Krea2-四视图QuadView_krea2_v1.safetensors"
-    },
-    {
-      "key": "lora_strength",
-      "type": "float",
-      "label": "lora_strength",
-      "default": 1
-    }
   ],
   "workflow": {
     "21": {
@@ -92,7 +80,7 @@
     "17": {
       "class_type": "LoadImage",
       "inputs": {
-        "image": "{{img:source_image}}"
+        "image": "{{img:ref_image_0}}"
       }
     },
     "18": {
@@ -119,17 +107,6 @@
         "weight_dtype": "default"
       }
     },
-    "16": {
-      "class_type": "LoraLoaderModelOnly",
-      "inputs": {
-        "model": [
-          "25",
-          0
-        ],
-        "lora_name": "{{lora_name}}",
-        "strength_model": "{{lora_strength}}"
-      }
-    },
     "9": {
       "class_type": "VAELoader",
       "inputs": {
@@ -153,7 +130,7 @@
       "class_type": "Krea2EditModelPatch",
       "inputs": {
         "model": [
-          "16",
+          "25",
           0
         ],
         "source_latent": [
@@ -260,7 +237,7 @@
           "11",
           0
         ],
-        "filename_prefix": "krea2/character_sheet_{{task_id}}"
+        "filename_prefix": "krea2/storyboard_{{task_id}}"
       }
     }
   }

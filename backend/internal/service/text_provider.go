@@ -111,9 +111,14 @@ func (l *LlamaProvider) Name() string {
 
 // OpenAI-compatible request/response types
 type openAIChatReq struct {
-	Model    string          `json:"model"`
-	Messages []openAIMessage `json:"messages"`
-	Stream   bool            `json:"stream"`
+	Model          string                `json:"model"`
+	Messages       []openAIMessage       `json:"messages"`
+	Stream         bool                  `json:"stream"`
+	ResponseFormat *openAIResponseFormat `json:"response_format,omitempty"`
+}
+
+type openAIResponseFormat struct {
+	Type string `json:"type"`
 }
 
 type openAIMessage struct {
@@ -141,6 +146,20 @@ type openAIError struct {
 	Code    string `json:"code"`
 }
 
+const llamaJSONDiscipline = `
+
+【JSON 严格输出规则】
+- 所有自然语言内容（包括中文姓名、对白和场景描述）必须完整包含在 JSON 双引号字符串内部；姓名中的任何字都只是普通字符串内容。
+- 字符串闭合后只能出现逗号、右花括号或右方括号，禁止在闭合引号后重复姓名、对白或任何其他字符。
+- 字符串内部禁止直接换行；需要换行时必须输出转义序列 \\n。双引号和反斜杠也必须正确转义。
+- 禁止尾随逗号、注释、Markdown、思考过程和 JSON 对象之外的文本。
+- 输出前在内部逐字符检查：结果必须能被标准 JSON.parse 完整解析。最终只输出 JSON 对象。`
+
+func requestsJSONObject(system string) bool {
+	lower := strings.ToLower(system)
+	return strings.Contains(lower, "json") && (strings.Contains(system, "只输出") || strings.Contains(lower, "output json") || strings.Contains(lower, "json object"))
+}
+
 // Chat 文生文：调用 OpenAI-compatible 接口
 func (l *LlamaProvider) Chat(system, user string) (string, error) {
 	var lastErr error
@@ -163,17 +182,23 @@ func (l *LlamaProvider) chatOnce(system, user string) (string, error) {
 		return "", fmt.Errorf("尚未配置 llama.cpp 服务器地址和模型名，请在「平台设置」中填写")
 	}
 
+	wantsJSON := l.name == "llama.cpp" && requestsJSONObject(system)
+	if wantsJSON {
+		system += llamaJSONDiscipline
+	}
 	messages := []openAIMessage{}
 	if system != "" {
 		messages = append(messages, openAIMessage{Role: "system", Content: system})
 	}
 	messages = append(messages, openAIMessage{Role: "user", Content: user})
 
-	body, _ := json.Marshal(openAIChatReq{
-		Model:    cfg.Model,
-		Messages: messages,
-		Stream:   false,
-	})
+	requestBody := openAIChatReq{Model: cfg.Model, Messages: messages, Stream: false}
+	if wantsJSON {
+		// llama.cpp maps OpenAI JSON mode to a grammar-constrained sampler. This
+		// prevents ordinary Chinese names such as 雷/舒 from escaping a JSON string.
+		requestBody.ResponseFormat = &openAIResponseFormat{Type: "json_object"}
+	}
+	body, _ := json.Marshal(requestBody)
 
 	base := cfg.BaseURL
 	base = strings.TrimRight(base, "/")

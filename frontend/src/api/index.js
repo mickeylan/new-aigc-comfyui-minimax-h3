@@ -74,6 +74,7 @@ export const api = {
   updateCharacter: (id, cid, data) => http.put(`/projects/${id}/characters/${cid}`, data),
   deleteCharacter: (id, cid) => http.delete(`/projects/${id}/characters/${cid}`),
   generateCharacterPortrait: (id, cid) => http.post(`/projects/${id}/characters/${cid}/portrait`),
+  generateCharacterSheet: (id, cid) => http.post(`/projects/${id}/characters/${cid}/sheet`),
   uploadCharacterPortrait: (id, cid, file) => {
     const fd = new FormData()
     fd.append('file', file)
@@ -109,6 +110,7 @@ export const api = {
   updateAsset: (id, kind, aid, data) => http.put(`/projects/${id}/assets/${kind}/${aid}`, data),
   deleteAsset: (id, kind, aid) => http.delete(`/projects/${id}/assets/${kind}/${aid}`),
   generateAssetImage: (id, kind, aid) => http.post(`/projects/${id}/assets/${kind}/${aid}/image`),
+  generatePropSheet: (id, aid) => http.post(`/projects/${id}/assets/prop/${aid}/sheet`),
   uploadAssetImage: (id, kind, aid, file) => {
     const fd = new FormData()
     fd.append('file', file)
@@ -167,6 +169,20 @@ export const api = {
   resetProjectSkill: (id, stage) => http.delete(`/projects/${id}/skills/${stage}`),
   effectiveSkill: (id, stage) => http.get(`/projects/${id}/skills/effective?stage=${stage}`),
   skillAuditLogs: (id, params) => http.get(`/projects/${id}/skills/audit`, { params }),
+
+  // 导演镜头与提示词工作台
+  sceneShots: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/shots`),
+  replaceSceneShots: (id, sid, shots) => http.post(`/projects/${id}/scenes/${sid}/shots`, { shots }),
+  updateShot: (id, shotId, data) => http.put(`/projects/${id}/shots/${shotId}`, data),
+  deleteShot: (id, shotId) => http.delete(`/projects/${id}/shots/${shotId}`),
+  buildPrompt: (data) => http.post('/prompts/build', data),
+  optimizePrompt: (data) => http.post('/prompts/optimize', data, { timeout: 300000 }),
+  translatePrompt: (data) => http.post('/prompts/translate', data, { timeout: 300000 }),
+  promptHistory: (params) => http.get('/prompts/history', { params }),
+  rollbackPrompt: (data) => http.post('/prompts/rollback', data),
+  presets: (params) => http.get('/presets', { params }),
+  presetRecommendations: (params) => http.get('/presets/recommend', { params }),
+  applyPreset: (presetId, basePrompt) => http.post(`/presets/${presetId}/apply`, { base_prompt: basePrompt }),
 
   // 长篇小说导入与章节管理
   createNovelProject: (data) => http.post('/projects/novel', data),

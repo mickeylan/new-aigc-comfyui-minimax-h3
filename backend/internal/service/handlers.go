@@ -37,6 +37,9 @@ type Service struct {
 	TextProviderFact  *TextProviderFactory     // 文生文 provider 工厂（运行时按设置动态选择）
 	CharacterProfiles *CharacterProfileService // 角色档案服务
 	Skills            *SkillService            // 创作技能管理服务
+	Shots             *ShotService             // 镜头层服务
+	PromptWorkshop    *PromptWorkshopService   // 提示词工作台服务
+	StylePresets      *StylePresetService      // 风格预设服务
 }
 
 func New(cfg *config.Config, db *gorm.DB) *Service {
@@ -61,13 +64,30 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	novel := NewNovelService(db)
 	novelAnalysis := NewNovelAnalysisService(db, textProviderFact, skills)
 	adaptations := NewAdaptationService(db, textProviderFact, skills, projects)
+
+	// 初始化新服务
+	shots := NewShotService(db)
+	promptWorkshop := NewPromptWorkshopService(db, textProviderFact)
+	stylePresets := NewStylePresetService(db)
+
+	// 初始化系统预设
 	if err := skills.InitSystemSkills(); err != nil {
 		log.Printf("[skills] init system skills failed: %v", err)
+	}
+	if err := stylePresets.InitSystemPresets(); err != nil {
+		log.Printf("[style-presets] init system presets failed: %v", err)
 	}
 	if err := novelAnalysis.RecoverInterruptedJobs(); err != nil {
 		log.Printf("[novel] recover jobs failed: %v", err)
 	}
-	return &Service{Cfg: cfg, DB: db, Mgr: mgr, Mon: mon, Tasks: tasks, Hub: hub, Upload: upload, Remote: remote, Volc: volc, Projects: projects, Materials: materials, Novel: novel, NovelAnalysis: novelAnalysis, Adaptations: adaptations, TextProviderFact: textProviderFact, CharacterProfiles: charProfiles, Skills: skills}
+
+	return &Service{
+		Cfg: cfg, DB: db, Mgr: mgr, Mon: mon, Tasks: tasks, Hub: hub, Upload: upload,
+		Remote: remote, Volc: volc, Projects: projects, Materials: materials,
+		Novel: novel, NovelAnalysis: novelAnalysis, Adaptations: adaptations,
+		TextProviderFact: textProviderFact, CharacterProfiles: charProfiles, Skills: skills,
+		Shots: shots, PromptWorkshop: promptWorkshop, StylePresets: stylePresets,
+	}
 }
 
 // comfyHost 返回 ComfyUI 实例所在主机（docker 模式为容器名，远程模式为算力节点 IP，本地模式为本机）
@@ -847,6 +867,360 @@ func (s *Service) HandlePreviewSkillPrompt(c *gin.Context) {
 		"system_prompt": systemPrompt,
 		"user_prompt":   userPrompt,
 	})
+}
+
+// ---------- Shots 镜头层 ----------
+func (s *Service) HandleCreateShots(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	sceneID, err := strconv.ParseUint(c.Param("sid"), 10, 32)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid scene id"})
+		return
+	}
+	var scene models.Scene
+	if err := s.DB.Where("id = ? AND project_id = ?", sceneID, p.ID).First(&scene).Error; err != nil {
+		c.JSON(404, gin.H{"error": "scene not found"})
+		return
+	}
+	var req struct {
+		Shots []models.Shot `json:"shots"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	shots, err := s.Shots.ReplaceShots(uint(sceneID), req.Shots)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"shots": shots, "count": len(shots)})
+}
+
+func (s *Service) HandleGetSceneShots(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	sceneID, err := strconv.ParseUint(c.Param("sid"), 10, 32)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid scene id"})
+		return
+	}
+
+	// 验证场景属于项目
+	var scene models.Scene
+	if err := s.DB.Where("id = ? AND project_id = ?", sceneID, p.ID).First(&scene).Error; err != nil {
+		c.JSON(404, gin.H{"error": "scene not found"})
+		return
+	}
+
+	shots, err := s.Shots.GetSceneShots(uint(sceneID))
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"shots": shots})
+}
+
+func (s *Service) HandleUpdateShot(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	shotID, err := strconv.ParseUint(c.Param("shid"), 10, 32)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid shot id"})
+		return
+	}
+
+	// 验证镜头属于项目
+	var shot models.Shot
+	if err := s.DB.First(&shot, shotID).Error; err != nil {
+		c.JSON(404, gin.H{"error": "shot not found"})
+		return
+	}
+
+	// 加载场景以验证项目归属
+	var scene models.Scene
+	if err := s.DB.Where("id = ? AND project_id = ?", shot.SceneID, p.ID).First(&scene).Error; err != nil {
+		c.JSON(403, gin.H{"error": "shot does not belong to project"})
+		return
+	}
+
+	var updates map[string]any
+	if err := c.ShouldBindJSON(&updates); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	updated, err := s.Shots.UpdateShot(uint(shotID), updates)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, updated)
+}
+
+func (s *Service) HandleDeleteShot(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	shotID, err := strconv.ParseUint(c.Param("shid"), 10, 32)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid shot id"})
+		return
+	}
+
+	// 验证镜头属于项目
+	var shot models.Shot
+	if err := s.DB.First(&shot, shotID).Error; err != nil {
+		c.JSON(404, gin.H{"error": "shot not found"})
+		return
+	}
+
+	// 加载场景以验证项目归属
+	var scene models.Scene
+	if err := s.DB.Where("id = ? AND project_id = ?", shot.SceneID, p.ID).First(&scene).Error; err != nil {
+		c.JSON(403, gin.H{"error": "shot does not belong to project"})
+		return
+	}
+
+	if err := s.Shots.DeleteShot(uint(shotID)); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"message": "shot deleted"})
+}
+
+// ---------- Prompt Workshop 提示词工作台 ----------
+func (s *Service) HandleBuildPrompt(c *gin.Context) {
+	var req struct {
+		EntityType string            `json:"entity_type"`
+		EntityID   uint              `json:"entity_id"`
+		Template   string            `json:"template"`
+		Params     map[string]string `json:"params"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := s.PromptWorkshop.BuildPrompt(req.EntityType, req.EntityID, req.Template, req.Params)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"prompt": result})
+}
+
+func (s *Service) HandleOptimizePrompt(c *gin.Context) {
+	var req struct {
+		EntityType string `json:"entity_type"`
+		EntityID   uint   `json:"entity_id"`
+		Prompt     string `json:"prompt"`
+		Context    string `json:"context"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := s.PromptWorkshop.OptimizePrompt(req.EntityType, req.EntityID, req.Prompt, req.Context)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"prompt": result})
+}
+
+func (s *Service) HandleTranslatePrompt(c *gin.Context) {
+	var req struct {
+		EntityType string `json:"entity_type"`
+		EntityID   uint   `json:"entity_id"`
+		Prompt     string `json:"prompt"`
+		TargetLang string `json:"target_lang"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := s.PromptWorkshop.TranslatePrompt(req.EntityType, req.EntityID, req.Prompt, req.TargetLang)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"prompt": result})
+}
+
+func (s *Service) HandleGetPromptHistory(c *gin.Context) {
+	entityType := c.Query("entity_type")
+	entityID, _ := strconv.ParseUint(c.Query("entity_id"), 10, 32)
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+
+	history, err := s.PromptWorkshop.GetHistory(entityType, uint(entityID), limit)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, history)
+}
+
+func (s *Service) HandleRollbackPrompt(c *gin.Context) {
+	var req struct {
+		EntityType string `json:"entity_type"`
+		EntityID   uint   `json:"entity_id"`
+		VersionID  uint   `json:"version_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := s.PromptWorkshop.Rollback(req.EntityType, req.EntityID, req.VersionID)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"prompt": result})
+}
+
+// ---------- Style Presets 风格预设 ----------
+func (s *Service) HandleListPresets(c *gin.Context) {
+	category := c.Query("category")
+	tagsStr := c.Query("tags")
+	recommendedOnly, _ := strconv.ParseBool(c.DefaultQuery("recommended_only", "false"))
+
+	var tags []string
+	if tagsStr != "" {
+		tags = strings.Split(tagsStr, ",")
+	}
+
+	presets, err := s.StylePresets.ListPresets(category, tags, recommendedOnly)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, presets)
+}
+
+func (s *Service) HandleGetPreset(c *gin.Context) {
+	presetID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid preset id"})
+		return
+	}
+
+	preset, err := s.StylePresets.GetPreset(uint(presetID))
+	if err != nil {
+		c.JSON(404, gin.H{"error": "preset not found"})
+		return
+	}
+	c.JSON(200, preset)
+}
+
+func (s *Service) HandleApplyPreset(c *gin.Context) {
+	presetID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid preset id"})
+		return
+	}
+
+	var req struct {
+		BasePrompt string `json:"base_prompt"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	prompt, negative, err := s.StylePresets.ApplyPreset(uint(presetID), req.BasePrompt)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"prompt": prompt, "negative_prompt": negative})
+}
+
+func (s *Service) HandleGetRecommendations(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "5"))
+	var tags []string
+	if raw := strings.TrimSpace(c.Query("tags")); raw != "" {
+		tags = strings.Split(raw, ",")
+	}
+	recommendations, err := s.StylePresets.GetRecommendations(
+		SceneContext{Genre: c.Query("genre"), Tone: c.Query("tone"), SceneType: c.Query("scene_type"), Tags: tags},
+		limit,
+	)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, recommendations)
+}
+
+func (s *Service) HandleGetPresetCategories(c *gin.Context) {
+	categories, err := s.StylePresets.GetCategories()
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, categories)
+}
+
+func (s *Service) HandleCreatePreset(c *gin.Context) {
+	var preset models.StylePreset
+	if err := c.ShouldBindJSON(&preset); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	created, err := s.StylePresets.CreatePreset(preset)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, created)
+}
+
+func (s *Service) HandleUpdatePreset(c *gin.Context) {
+	presetID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid preset id"})
+		return
+	}
+
+	var updates map[string]any
+	if err := c.ShouldBindJSON(&updates); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	updated, err := s.StylePresets.UpdatePreset(uint(presetID), updates)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, updated)
+}
+
+func (s *Service) HandleDeletePreset(c *gin.Context) {
+	presetID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid preset id"})
+		return
+	}
+
+	if err := s.StylePresets.DeletePreset(uint(presetID)); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"message": "preset deleted"})
 }
 
 // ---------- WS ----------
