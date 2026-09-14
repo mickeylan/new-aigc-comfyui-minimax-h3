@@ -22,6 +22,19 @@
         </div>
         <div class="form-grid">
           <div class="field">
+            <label>内容来源</label>
+            <select v-model="sourceType" class="input">
+              <option value="outline">故事梗概</option>
+              <option value="novel">长篇小说</option>
+            </select>
+            <div class="field-hint">长篇小说项目创建后进入章节导入、确认和分层分析流程</div>
+          </div>
+          <div class="field" v-if="sourceType === 'novel'">
+            <label>小说文件 <span class="req">必填</span></label>
+            <input type="file" accept=".txt,.md,.markdown" class="input" @change="novelFile = $event.target.files?.[0] || null" />
+            <div class="field-hint">首版支持 UTF-8 编码的 TXT、Markdown</div>
+          </div>
+          <div class="field">
             <label>项目名称 <span class="optional">可选</span></label>
             <input v-model="form.title" class="input" placeholder="如：穿越到明朝当皇帝" />
             <div class="field-hint">留空时系统会按故事自动起名</div>
@@ -215,6 +228,8 @@ const router = useRouter()
 const creating = ref(false)
 const error = ref('')
 const customStyle = ref('')
+const sourceType = ref('outline')
+const novelFile = ref(null)
 const form = reactive({ title: '', genre: '', style: '', synopsis: '', audience: '', tone: '', ending: '', episodes: 10, aspect_ratio: '9:16' })
 
 const endingLabel = computed(() => ({ HE: 'HE（大团圆）', BE: 'BE（悲剧）', OE: 'OE（开放式）' }[form.ending] || '不限'))
@@ -222,13 +237,23 @@ const effectiveStyle = computed(() => form.style === '__custom' ? customStyle.va
 
 async function create() {
   error.value = ''
-  if (!form.synopsis.trim()) {
+  if (sourceType.value === 'outline' && !form.synopsis.trim()) {
     error.value = '请填写故事创意'
+    return
+  }
+  if (sourceType.value === 'novel' && !novelFile.value) {
+    error.value = '请选择小说文件'
     return
   }
   creating.value = true
   try {
-    const payload = { ...form, synopsis: form.synopsis.trim(), style: effectiveStyle.value }
+    if (sourceType.value === 'novel') {
+      const { data } = await api.createNovelProject({ title: form.title.trim() || novelFile.value.name.replace(/\.[^.]+$/, '') })
+      await api.uploadNovel(data.id, novelFile.value)
+      router.push(`/projects/${data.id}/novel`)
+      return
+    }
+    const payload = { ...form, synopsis: form.synopsis.trim(), style: effectiveStyle.value, source_type: 'outline' }
     const { data } = await api.createProject(payload)
     try {
       await api.generateProject(data.id, 1, true)

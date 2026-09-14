@@ -88,31 +88,58 @@ type Setting struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// ProjectSourceType 项目来源类型常量
+type ProjectSourceType string
+
+const (
+	ProjectSourceOutline ProjectSourceType = "outline" // 梗概项目：故事创意 → 创作方案 → 剧本 → 分镜画面 → 视频
+	ProjectSourceNovel   ProjectSourceType = "novel"   // 小说改编项目：上传 TXT/MD → 章节识别 → 拆分合并 → 剧本生成
+)
+
+// NovelImportStatus 小说导入状态
+type NovelImportStatus string
+
+const (
+	NovelImportPending    NovelImportStatus = "pending"    // 待处理
+	NovelImportProcessing NovelImportStatus = "processing" // 处理中
+	NovelImportCompleted  NovelImportStatus = "completed"  // 已完成
+	NovelImportFailed     NovelImportStatus = "failed"     // 失败
+)
+
 // Project 漫剧项目：选题 → 创作方案 → 剧本 → 分镜画面 → 视频 → 合并成片
 type Project struct {
-	ID              uint      `gorm:"primaryKey" json:"id"`
-	Title           string    `json:"title"`
-	Genre           string    `json:"genre"`                         // 题材（可选，支持组合如"科幻+悬疑"）
-	Style           string    `json:"style"`                         // 画风（可选）
-	Synopsis        string    `json:"synopsis"`                      // 故事创意/一句话梗概
-	Audience        string    `json:"audience"`                      // 受众：女频/男频/全龄
-	Tone            string    `json:"tone"`                          // 基调：爽/甜/虐/燃/搞笑/悬疑
-	Ending          string    `json:"ending"`                        // 结局：HE/BE/OE
-	Episodes        int       `json:"episodes"`                      // 目标集数（用于节奏规划）
-	AspectRatio     string    `json:"aspect_ratio"`                  // 画幅：16:9 横屏 / 9:16 竖屏 / 1:1 方形（默认 16:9）
-	Plan            string    `gorm:"type:text" json:"plan"`         // 创作方案 JSON（short-drama 方法论产物）
-	Script          string    `gorm:"type:text" json:"script"`       // 最近一集剧本（兼容旧数据）
-	Scripts         string    `gorm:"type:text" json:"scripts"`      // 按集剧本 JSON map[int]string（episode_n -> 剧本正文）
-	VisualBible     string    `gorm:"type:text" json:"visual_bible"` // 角色外观与统一画风基准
-	Status          string    `json:"status"`                        // draft/plan_done/script_done/producing/ready/finished/failed
-	Error           string    `json:"error"`
-	Generation      uint      `gorm:"default:0" json:"generation"`                               // 当前生成版本，防止旧任务回写新分镜
-	PipelineStage   string    `gorm:"column:pipeline_stage;index" json:"pipeline_stage"`         // plan/script/images/videos/merge/finished/failed
-	PipelineEpisode int       `gorm:"column:pipeline_episode;default:1" json:"pipeline_episode"` // 当前一键生成流水线的目标集数
-	AutoGenerate    bool      `gorm:"column:auto_generate" json:"auto_generate"`
-	StopAfterScript bool      `gorm:"column:stop_after_script" json:"-"` // 自动流水线生成完第一集剧本后停止（后续由人工处理）
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID              uint              `gorm:"primaryKey" json:"id"`
+	Title           string            `json:"title"`
+	SourceType      ProjectSourceType `gorm:"column:source_type;default:outline" json:"source_type"` // 项目来源类型：outline(梗概)/novel(小说改编)
+	Genre           string            `json:"genre"`                                                 // 题材（可选，支持组合如"科幻+悬疑"）
+	Style           string            `json:"style"`                                                 // 画风（可选）
+	Synopsis        string            `json:"synopsis"`                                              // 故事创意/一句话梗概
+	Audience        string            `json:"audience"`                                              // 受众：女频/男频/全龄
+	Tone            string            `json:"tone"`                                                  // 基调：爽/甜/虐/燃/搞笑/悬疑
+	Ending          string            `json:"ending"`                                                // 结局：HE/BE/OE
+	Episodes        int               `json:"episodes"`                                              // 目标集数（用于节奏规划）
+	AspectRatio     string            `json:"aspect_ratio"`                                          // 画幅：16:9 横屏 / 9:16 竖屏 / 1:1 方形（默认 16:9）
+	Plan            string            `gorm:"type:text" json:"plan"`                                 // 创作方案 JSON（short-drama 方法论产物）
+	Script          string            `gorm:"type:text" json:"script"`                               // 最近一集剧本（兼容旧数据）
+	Scripts         string            `gorm:"type:text" json:"scripts"`                              // 按集剧本 JSON map[int]string（episode_n -> 剧本正文）
+	VisualBible     string            `gorm:"type:text" json:"visual_bible"`                         // 角色外观与统一画风基准
+	Status          string            `json:"status"`                                                // draft/plan_done/script_done/producing/ready/finished/failed
+	Error           string            `json:"error"`
+	Generation      uint              `gorm:"default:0" json:"generation"`                               // 当前生成版本，防止旧任务回写新分镜
+	PipelineStage   string            `gorm:"column:pipeline_stage;index" json:"pipeline_stage"`         // plan/script/images/videos/merge/finished/failed
+	PipelineEpisode int               `gorm:"column:pipeline_episode;default:1" json:"pipeline_episode"` // 当前一键生成流水线的目标集数
+	AutoGenerate    bool              `gorm:"column:auto_generate" json:"auto_generate"`
+	StopAfterScript bool              `gorm:"column:stop_after_script" json:"-"` // 自动流水线生成完第一集剧本后停止（后续由人工处理）
+
+	// 小说导入相关字段（仅 source_type=novel 时有效）
+	NovelFilePath  string            `gorm:"column:novel_file_path" json:"novel_file_path,omitempty"`             // 原始小说文件路径
+	NovelFileHash  string            `gorm:"column:novel_file_hash;size:64" json:"novel_file_hash,omitempty"`     // 文件内容哈希（检测重复上传）
+	NovelWordCount int               `gorm:"column:novel_word_count" json:"novel_word_count,omitempty"`           // 总字数
+	ImportStatus   NovelImportStatus `gorm:"column:import_status;default:pending" json:"import_status,omitempty"` // 导入状态
+	ImportError    string            `gorm:"column:import_error;type:text" json:"import_error,omitempty"`         // 导入错误信息
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Scene 分镜场景（项目内顺序片段）
@@ -140,6 +167,62 @@ type Scene struct {
 	VideoRetries int       `gorm:"column:video_retries" json:"video_retries"` // 视频生成已重试次数
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// Chapter 小说章节（仅 source_type=novel 的项目使用）
+type Chapter struct {
+	ID              uint      `gorm:"primaryKey" json:"id"`
+	ProjectID       uint      `gorm:"column:project_id;index" json:"project_id"`
+	Order           int       `gorm:"column:chapter_order;index" json:"order"`                     // 章节顺序（从 1 开始）
+	Title           string    `json:"title"`                                                       // 章节标题（可人工修改）
+	Content         string    `gorm:"type:text" json:"content"`                                    // 章节正文
+	WordCount       int       `gorm:"column:word_count" json:"word_count"`                         // 字数统计
+	IdentifiedBy    string    `gorm:"column:identified_by;default:rule" json:"identified_by"`      // 识别方式：rule(规则)/manual(手动)
+	ManuallyEdited  bool      `gorm:"column:manually_edited;default:false" json:"manually_edited"` // 是否经人工修改
+	ContentHash     string    `gorm:"column:content_hash;size:64;index" json:"content_hash"`
+	Summary         string    `gorm:"type:text" json:"summary"`
+	AnalysisJSON    string    `gorm:"column:analysis_json;type:text" json:"analysis_json"`
+	AnalysisStatus  string    `gorm:"column:analysis_status;default:pending;index" json:"analysis_status"`
+	AnalysisVersion int       `gorm:"column:analysis_version;default:0" json:"analysis_version"`
+	AnalysisHash    string    `gorm:"column:analysis_hash;size:64" json:"analysis_hash"`
+	AnalysisError   string    `gorm:"column:analysis_error;type:text" json:"analysis_error"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// ChapterTaskType 章节任务类型
+type ChapterTaskType string
+
+const (
+	ChapterTaskSplit   ChapterTaskType = "split"   // 拆分章节
+	ChapterTaskMerge   ChapterTaskType = "merge"   // 合并章节
+	ChapterTaskRetitle ChapterTaskType = "retitle" // 重命名章节
+)
+
+// ChapterTaskStatus 章节任务状态
+type ChapterTaskStatus string
+
+const (
+	ChapterTaskPending    ChapterTaskStatus = "pending"    // 待处理
+	ChapterTaskProcessing ChapterTaskStatus = "processing" // 处理中
+	ChapterTaskCompleted  ChapterTaskStatus = "completed"  // 已完成
+	ChapterTaskFailed     ChapterTaskStatus = "failed"     // 失败
+)
+
+// ChapterTask 章节操作任务（拆分/合并/重命名）
+type ChapterTask struct {
+	ID               uint              `gorm:"primaryKey" json:"id"`
+	ProjectID        uint              `gorm:"column:project_id;index" json:"project_id"`
+	TaskType         ChapterTaskType   `gorm:"column:task_type;index" json:"task_type"` // 任务类型
+	Status           ChapterTaskStatus `gorm:"column:task_status;default:pending" json:"status"`
+	SourceChapterID  *uint             `gorm:"column:source_chapter_id" json:"source_chapter_id,omitempty"`   // 来源章节ID（拆分/重命名）
+	TargetChapterIDs string            `gorm:"column:target_chapter_ids" json:"target_chapter_ids,omitempty"` // 目标章节ID列表，逗号分隔（合并）
+	NewTitle         string            `gorm:"column:new_title" json:"new_title,omitempty"`                   // 新标题（重命名）
+	SplitPoints      string            `gorm:"column:split_points;type:text" json:"split_points,omitempty"`   // 拆分点位置 JSON
+	ResultIDs        string            `gorm:"column:result_ids" json:"result_ids,omitempty"`                 // 结果章节ID列表
+	Error            string            `gorm:"column:task_error;type:text" json:"error,omitempty"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
 }
 
 // CharacterProfileStatus 角色档案审核状态
@@ -268,12 +351,18 @@ type Skill struct {
 
 // SkillStage 技能适用阶段常量
 const (
-	SkillStagePlan        = "plan"         // 创作方案阶段
-	SkillStageCharacter   = "character"    // 角色设定阶段
-	SkillStageStoryboard  = "storyboard"   // 分镜剧本阶段
-	SkillStageImagePrompt = "image_prompt" // 画面提示词阶段
-	SkillStageVideoPrompt = "video_prompt" // 视频提示词阶段
-	SkillStageReview      = "review"       // 审核/复审阶段
+	SkillStagePlan              = "plan"               // 创作方案阶段
+	SkillStageCharacter         = "character"          // 角色设定阶段
+	SkillStageStoryboard        = "storyboard"         // 分镜剧本阶段
+	SkillStageImagePrompt       = "image_prompt"       // 画面提示词阶段
+	SkillStageVideoPrompt       = "video_prompt"       // 视频提示词阶段
+	SkillStageReview            = "review"             // 审核/复审阶段
+	SkillStageChapterAnalysis   = "chapter_analysis"   // 小说章节结构化分析
+	SkillStageArcMerge          = "arc_merge"          // 小说剧情单元归并
+	SkillStageStoryBible        = "story_bible"        // 小说故事圣经综合
+	SkillStageAdaptationPlan    = "adaptation_plan"    // 小说分集映射
+	SkillStageEpisodeAdaptation = "episode_adaptation" // 小说单集剧本改编
+	SkillStageContinuityReview  = "continuity_review"  // 小说集间连续性复审
 )
 
 // ProjectSkillConfig 项目级技能配置：支持项目选择特定技能或覆盖系统默认
@@ -292,6 +381,129 @@ type ProjectSkillConfig struct {
 }
 
 // SkillAuditLog 技能使用审计日志：记录每次生成使用的技能版本
+// StoryArc is a 5-10 chapter structured merge product.
+type StoryArc struct {
+	ID             uint      `gorm:"primaryKey" json:"id"`
+	ProjectID      uint      `gorm:"column:project_id;uniqueIndex:idx_story_arc_project_no" json:"project_id"`
+	ArcNo          int       `gorm:"column:arc_no;uniqueIndex:idx_story_arc_project_no" json:"arc_no"`
+	Title          string    `json:"title"`
+	ChapterStart   int       `gorm:"column:chapter_start" json:"chapter_start"`
+	ChapterEnd     int       `gorm:"column:chapter_end" json:"chapter_end"`
+	Summary        string    `gorm:"type:text" json:"summary"`
+	AnalysisJSON   string    `gorm:"column:analysis_json;type:text" json:"analysis_json"`
+	SourceVersions string    `gorm:"column:source_versions;type:text" json:"source_versions"`
+	Status         string    `gorm:"default:draft;index" json:"status"`
+	Version        int       `gorm:"default:1" json:"version"`
+	Error          string    `gorm:"type:text" json:"error"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// StoryBible is the editable, explicitly approved whole-book synthesis.
+type StoryBible struct {
+	ID                uint      `gorm:"primaryKey" json:"id"`
+	ProjectID         uint      `gorm:"column:project_id;uniqueIndex" json:"project_id"`
+	Premise           string    `gorm:"type:text" json:"premise"`
+	WorldRules        string    `gorm:"type:text" json:"world_rules"`
+	MainPlot          string    `gorm:"type:text" json:"main_plot"`
+	Subplots          string    `gorm:"type:text" json:"subplots"`
+	TimelineJSON      string    `gorm:"column:timeline_json;type:text" json:"timeline_json"`
+	RelationshipsJSON string    `gorm:"column:relationships_json;type:text" json:"relationships_json"`
+	ClueLedgerJSON    string    `gorm:"column:clue_ledger_json;type:text" json:"clue_ledger_json"`
+	LocationBibleJSON string    `gorm:"column:location_bible_json;type:text" json:"location_bible_json"`
+	PropBibleJSON     string    `gorm:"column:prop_bible_json;type:text" json:"prop_bible_json"`
+	AdaptationRules   string    `gorm:"type:text" json:"adaptation_rules"`
+	SourceVersions    string    `gorm:"column:source_versions;type:text" json:"source_versions"`
+	Status            string    `gorm:"default:draft;index" json:"status"`
+	Version           int       `gorm:"default:1" json:"version"`
+	Error             string    `gorm:"type:text" json:"error"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+// AdaptationStrategy stores the user-approved constraints used to create episode mappings.
+type AdaptationStrategy struct {
+	ID                  uint      `gorm:"primaryKey" json:"id"`
+	ProjectID           uint      `gorm:"column:project_id;uniqueIndex" json:"project_id"`
+	Mode                string    `gorm:"default:cinematic" json:"mode"`
+	ChapterStart        int       `gorm:"column:chapter_start" json:"chapter_start"`
+	ChapterEnd          int       `gorm:"column:chapter_end" json:"chapter_end"`
+	TargetEpisodes      int       `gorm:"column:target_episodes" json:"target_episodes"`
+	TargetDuration      float64   `gorm:"column:target_duration;default:180" json:"target_duration"`
+	TargetScenes        int       `gorm:"column:target_scenes;default:25" json:"target_scenes"`
+	MustKeepJSON        string    `gorm:"column:must_keep_json;type:text" json:"must_keep_json"`
+	DroppableJSON       string    `gorm:"column:droppable_json;type:text" json:"droppable_json"`
+	AllowCharacterMerge bool      `gorm:"column:allow_character_merge" json:"allow_character_merge"`
+	AllowEndingChange   bool      `gorm:"column:allow_ending_change" json:"allow_ending_change"`
+	PlatformRules       string    `gorm:"column:platform_rules;type:text" json:"platform_rules"`
+	Status              string    `gorm:"default:draft;index" json:"status"`
+	Version             int       `gorm:"default:1" json:"version"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
+}
+
+// EpisodeAdaptation maps source chapters and events to one production episode.
+type EpisodeAdaptation struct {
+	ID               uint      `gorm:"primaryKey" json:"id"`
+	ProjectID        uint      `gorm:"column:project_id;uniqueIndex:idx_adaptation_project_episode" json:"project_id"`
+	EpisodeN         int       `gorm:"column:episode_n;uniqueIndex:idx_adaptation_project_episode" json:"episode_n"`
+	Title            string    `json:"title"`
+	ChapterStart     int       `gorm:"column:chapter_start" json:"chapter_start"`
+	ChapterEnd       int       `gorm:"column:chapter_end" json:"chapter_end"`
+	SourceChapterIDs string    `gorm:"column:source_chapter_ids;type:text" json:"source_chapter_ids"`
+	TargetDuration   float64   `gorm:"column:target_duration;default:180" json:"target_duration"`
+	TargetScenes     int       `gorm:"column:target_scenes;default:25" json:"target_scenes"`
+	AdaptationGoal   string    `gorm:"column:adaptation_goal;type:text" json:"adaptation_goal"`
+	MustKeepEvents   string    `gorm:"column:must_keep_events;type:text" json:"must_keep_events"`
+	OptionalEvents   string    `gorm:"column:optional_events;type:text" json:"optional_events"`
+	OmittedEvents    string    `gorm:"column:omitted_events;type:text" json:"omitted_events"`
+	OpeningState     string    `gorm:"column:opening_state;type:text" json:"opening_state"`
+	EndingState      string    `gorm:"column:ending_state;type:text" json:"ending_state"`
+	Hook             string    `gorm:"type:text" json:"hook"`
+	SourceDigest     string    `gorm:"column:source_digest;size:64;index" json:"source_digest"`
+	SourceTracesJSON string    `gorm:"column:source_traces_json;type:text" json:"source_traces_json"`
+	Script           string    `gorm:"type:text" json:"script"`
+	ReviewJSON       string    `gorm:"column:review_json;type:text" json:"review_json"`
+	ContinuityStatus string    `gorm:"column:continuity_status;default:pending;index" json:"continuity_status"`
+	OverrideReason   string    `gorm:"column:override_reason;type:text" json:"override_reason"`
+	Status           string    `gorm:"default:draft;index" json:"status"`
+	Version          int       `gorm:"default:1" json:"version"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+// CharacterAliasCandidate never mutates Character records until explicitly confirmed.
+type CharacterAliasCandidate struct {
+	ID            uint      `gorm:"primaryKey" json:"id"`
+	ProjectID     uint      `gorm:"column:project_id;index;uniqueIndex:idx_alias_project_alias" json:"project_id"`
+	CanonicalName string    `gorm:"column:canonical_name;index" json:"canonical_name"`
+	Alias         string    `gorm:"uniqueIndex:idx_alias_project_alias" json:"alias"`
+	ChapterID     uint      `gorm:"column:chapter_id;index" json:"chapter_id"`
+	Status        string    `gorm:"default:pending;index" json:"status"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// NovelJob persists resumable Phase B work and its locked Skill version.
+type NovelJob struct {
+	ID           uint       `gorm:"primaryKey" json:"id"`
+	ProjectID    uint       `gorm:"column:project_id;index" json:"project_id"`
+	Type         string     `gorm:"index" json:"type"`
+	ScopeStart   int        `gorm:"column:scope_start" json:"scope_start"`
+	ScopeEnd     int        `gorm:"column:scope_end" json:"scope_end"`
+	Status       string     `gorm:"index" json:"status"`
+	Progress     float64    `json:"progress"`
+	Total        int        `json:"total"`
+	Completed    int        `json:"completed"`
+	SkillID      *uint      `gorm:"column:skill_id" json:"skill_id"`
+	SkillVersion int        `gorm:"column:skill_version" json:"skill_version"`
+	Token        string     `gorm:"size:64" json:"-"`
+	Error        string     `gorm:"type:text" json:"error"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	FinishedAt   *time.Time `json:"finished_at"`
+}
+
 type SkillAuditLog struct {
 	ID           uint      `gorm:"primaryKey" json:"id"`
 	ProjectID    uint      `gorm:"column:project_id;index" json:"project_id"`

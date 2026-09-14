@@ -148,6 +148,45 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/materials", svc.HandleUploadMaterial)
 	r.DELETE("/api/materials/:id", svc.HandleDeleteMaterial)
 
+	// 小说改编项目（source_type=novel）
+	r.POST("/api/projects/novel", svc.HandleCreateNovelProject)                   // 创建小说改编项目
+	r.POST("/api/projects/:id/novel/upload", svc.HandleUploadNovel)               // 上传小说文件（TXT/MD）
+	r.GET("/api/projects/:id/novel/import-status", svc.HandleGetImportStatus)     // 获取导入状态
+	r.GET("/api/projects/:id/novel/chapters", svc.HandleListChapters)             // 章节列表
+	r.GET("/api/projects/:id/novel/chapters/:cid", svc.HandleGetChapter)          // 章节详情
+	r.PUT("/api/projects/:id/novel/chapters/:cid", svc.HandleUpdateChapter)       // 更新章节（标题/顺序）
+	r.PUT("/api/projects/:id/novel/chapters/reorder", svc.HandleReorderChapters)  // 批量更新章节顺序
+	r.POST("/api/projects/:id/novel/chapters/:cid/split", svc.HandleSplitChapter) // 拆分章节
+	r.POST("/api/projects/:id/novel/chapters/merge", svc.HandleMergeChapters)     // 合并章节
+	r.GET("/api/projects/:id/novel/tasks", svc.HandleListChapterTasks)            // 章节任务列表
+	r.POST("/api/projects/:id/novel/chapters/analyze", svc.HandleAnalyzeNovelChapters)
+	r.POST("/api/projects/:id/novel/chapters/:cid/retry", svc.HandleRetryNovelChapter)
+	r.GET("/api/projects/:id/novel/arcs", svc.HandleListNovelArcs)
+	r.POST("/api/projects/:id/novel/arcs/generate", svc.HandleGenerateNovelArcs)
+	r.GET("/api/projects/:id/novel/aliases", svc.HandleListNovelAliases)
+	r.PUT("/api/projects/:id/novel/aliases/:aid", svc.HandleUpdateNovelAlias)
+	r.GET("/api/projects/:id/story-bible", svc.HandleGetStoryBible)
+	r.POST("/api/projects/:id/story-bible/generate", svc.HandleGenerateStoryBible)
+	r.PUT("/api/projects/:id/story-bible", svc.HandleUpdateStoryBible)
+	r.POST("/api/projects/:id/story-bible/approve", svc.HandleApproveStoryBible)
+	r.GET("/api/projects/:id/novel/jobs", svc.HandleListNovelJobs)
+	r.POST("/api/projects/:id/novel/jobs/:jid/retry", svc.HandleRetryNovelJob)
+	r.POST("/api/projects/:id/novel/jobs/:jid/cancel", svc.HandleCancelNovelJob)
+	r.GET("/api/projects/:id/adaptation-strategy", svc.HandleGetAdaptationStrategy)
+	r.PUT("/api/projects/:id/adaptation-strategy", svc.HandleSaveAdaptationStrategy)
+	r.GET("/api/projects/:id/adaptations", svc.HandleListAdaptations)
+	r.POST("/api/projects/:id/adaptations/generate", svc.HandleGenerateAdaptations)
+	r.PUT("/api/projects/:id/adaptations/:episode", svc.HandleUpdateAdaptation)
+	r.POST("/api/projects/:id/adaptations/:episode/approve", svc.HandleApproveAdaptations)
+	r.POST("/api/projects/:id/adaptations/approve", svc.HandleApproveAdaptations)
+	r.GET("/api/projects/:id/adaptations/:episode/context", svc.HandleAdaptationContext)
+	r.POST("/api/projects/:id/adaptations/:episode/script", svc.HandleGenerateAdaptationScript)
+	r.POST("/api/projects/:id/adaptations/scripts", svc.HandleBatchGenerateAdaptationScripts)
+	r.POST("/api/projects/:id/adaptations/:episode/review", svc.HandleReviewAdaptation)
+	r.POST("/api/projects/:id/adaptations/review", svc.HandleBatchReviewAdaptations)
+	r.GET("/api/projects/:id/novel/usage", svc.HandleNovelUsage)
+	r.PUT("/api/projects/:id/source-type", svc.HandleChangeProjectSourceType) // 转换项目来源类型
+
 	// 前端静态资源 (SPA)
 	r.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/api/") {

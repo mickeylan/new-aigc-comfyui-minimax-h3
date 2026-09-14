@@ -27,8 +27,8 @@ func (s *stubTextProvider) Chat(_, _ string) (string, error) {
 }
 
 func TestScriptFromPlanPromptMatchesStoryboardSchema(t *testing.T) {
-	prompt := scriptFromPlanSystemPrompt()
-	for _, field := range []string{"visual_bible", "duration", "3~8"} {
+	prompt := scriptFromPlanSystemPrompt(180, 25)
+	for _, field := range []string{"visual_bible", "duration", "3~15", "180", "25"} {
 		if !strings.Contains(prompt, field) {
 			t.Fatalf("方案转分镜提示词缺少 %q", field)
 		}
@@ -69,9 +69,9 @@ func TestParseScriptJSONInvalid(t *testing.T) {
 
 func TestGenerateScriptCoreRepairsMalformedJSONOnce(t *testing.T) {
 	ps := newTestProjectService(t)
-	scenes := make([]map[string]any, 6)
+	scenes := make([]map[string]any, 20)
 	for i := range scenes {
-		scenes[i] = map[string]any{"title": fmt.Sprintf("场景%d", i+1), "content": "动作", "image_prompt": "image", "duration": 5, "characters": []string{}, "dialogues": []any{}}
+		scenes[i] = map[string]any{"title": fmt.Sprintf("场景%d", i+1), "content": "动作", "image_prompt": "image", "duration": 9, "characters": []string{}, "dialogues": []any{}}
 	}
 	fixed, _ := json.Marshal(map[string]any{"script": "正文", "visual_bible": "视觉基准", "scenes": scenes})
 	provider := &stubTextProvider{response: string(fixed)}
@@ -84,7 +84,7 @@ func TestGenerateScriptCoreRepairsMalformedJSONOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if provider.calls != 1 || len(got) != 6 {
+	if provider.calls != 1 || len(got) != 20 {
 		t.Fatalf("自动修复未生效: calls=%d scenes=%d", provider.calls, len(got))
 	}
 }
@@ -183,9 +183,9 @@ func TestClaimPipelineDefaultsToFirstEpisode(t *testing.T) {
 }
 
 func TestValidateScriptResultAndDuration(t *testing.T) {
-	scenes := make([]scriptScene, 6)
+	scenes := make([]scriptScene, 25)
 	for i := range scenes {
-		scenes[i] = scriptScene{Title: "场景", Content: "动作", ImagePrompt: "画面", Duration: 5}
+		scenes[i] = scriptScene{Title: "场景", Content: "动作", ImagePrompt: "画面", Duration: 7.2}
 	}
 	valid := &scriptResult{Script: "正文", VisualBible: "黑发少年，蓝色外套，国漫画风", Scenes: scenes}
 	if err := validateScriptResult(valid); err != nil {
@@ -201,7 +201,7 @@ func TestValidateScriptResultAndDuration(t *testing.T) {
 	if got := normalizeSceneDuration(1); got != 3 {
 		t.Fatalf("最小时长 = %v", got)
 	}
-	if got := normalizeSceneDuration(12); got != 8 {
+	if got := normalizeSceneDuration(20); got != 15 {
 		t.Fatalf("最大时长 = %v", got)
 	}
 }

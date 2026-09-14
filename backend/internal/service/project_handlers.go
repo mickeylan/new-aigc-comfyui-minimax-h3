@@ -105,7 +105,10 @@ func (s *Service) HandleListProjects(c *gin.Context) {
 }
 
 func (s *Service) HandleCreateProject(c *gin.Context) {
-	var req models.Project
+	var req struct {
+		models.Project
+		SourceType string `json:"source_type"` // outline(默认)/novel
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": "参数错误"})
 		return
@@ -114,7 +117,14 @@ func (s *Service) HandleCreateProject(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "请填写故事创意"})
 		return
 	}
-	p, err := s.Projects.CreateProject(req)
+	// 设置来源类型（默认梗概）
+	if req.SourceType == "novel" {
+		req.Project.SourceType = models.ProjectSourceNovel
+		req.Project.ImportStatus = models.NovelImportPending
+	} else {
+		req.Project.SourceType = models.ProjectSourceOutline
+	}
+	p, err := s.Projects.CreateProject(req.Project)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return

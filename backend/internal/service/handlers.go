@@ -31,6 +31,9 @@ type Service struct {
 	Volc              *VolcClient
 	Projects          *ProjectService
 	Materials         *MaterialService
+	Novel             *NovelService            // 小说改编服务
+	NovelAnalysis     *NovelAnalysisService    // 小说分层分析服务
+	Adaptations       *AdaptationService       // 小说分集改编服务
 	TextProviderFact  *TextProviderFactory     // 文生文 provider 工厂（运行时按设置动态选择）
 	CharacterProfiles *CharacterProfileService // 角色档案服务
 	Skills            *SkillService            // 创作技能管理服务
@@ -55,10 +58,16 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	projects.skills = skills
 	charProfiles := NewCharacterProfileService(db, textProviderFact)
 	charProfiles.skills = skills
+	novel := NewNovelService(db)
+	novelAnalysis := NewNovelAnalysisService(db, textProviderFact, skills)
+	adaptations := NewAdaptationService(db, textProviderFact, skills, projects)
 	if err := skills.InitSystemSkills(); err != nil {
 		log.Printf("[skills] init system skills failed: %v", err)
 	}
-	return &Service{Cfg: cfg, DB: db, Mgr: mgr, Mon: mon, Tasks: tasks, Hub: hub, Upload: upload, Remote: remote, Volc: volc, Projects: projects, Materials: materials, TextProviderFact: textProviderFact, CharacterProfiles: charProfiles, Skills: skills}
+	if err := novelAnalysis.RecoverInterruptedJobs(); err != nil {
+		log.Printf("[novel] recover jobs failed: %v", err)
+	}
+	return &Service{Cfg: cfg, DB: db, Mgr: mgr, Mon: mon, Tasks: tasks, Hub: hub, Upload: upload, Remote: remote, Volc: volc, Projects: projects, Materials: materials, Novel: novel, NovelAnalysis: novelAnalysis, Adaptations: adaptations, TextProviderFact: textProviderFact, CharacterProfiles: charProfiles, Skills: skills}
 }
 
 // comfyHost 返回 ComfyUI 实例所在主机（docker 模式为容器名，远程模式为算力节点 IP，本地模式为本机）

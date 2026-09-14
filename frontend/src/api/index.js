@@ -167,6 +167,42 @@ export const api = {
   resetProjectSkill: (id, stage) => http.delete(`/projects/${id}/skills/${stage}`),
   effectiveSkill: (id, stage) => http.get(`/projects/${id}/skills/effective?stage=${stage}`),
   skillAuditLogs: (id, params) => http.get(`/projects/${id}/skills/audit`, { params }),
+
+  // 长篇小说导入与章节管理
+  createNovelProject: (data) => http.post('/projects/novel', data),
+  uploadNovel: (id, file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return http.post(`/projects/${id}/novel/upload`, fd, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 300000 })
+  },
+  novelImportStatus: (id) => http.get(`/projects/${id}/novel/import-status`),
+  novelChapters: (id) => http.get(`/projects/${id}/novel/chapters`),
+  novelChapter: (id, cid) => http.get(`/projects/${id}/novel/chapters/${cid}`),
+  updateNovelChapter: (id, cid, data) => http.put(`/projects/${id}/novel/chapters/${cid}`, data),
+  reorderNovelChapters: (id, orders) => http.put(`/projects/${id}/novel/chapters/reorder`, { orders }),
+  splitNovelChapter: (id, cid, splitPoints) => http.post(`/projects/${id}/novel/chapters/${cid}/split`, { split_points: splitPoints }),
+  mergeNovelChapters: (id, chapterIds, newTitle) => http.post(`/projects/${id}/novel/chapters/merge`, { chapter_ids: chapterIds, new_title: newTitle }),
+  analyzeNovelChapters: (id, chapterIds = []) => http.post(`/projects/${id}/novel/chapters/analyze`, { chapter_ids: chapterIds }, { timeout: 300000 }),
+  retryNovelChapter: (id, cid) => http.post(`/projects/${id}/novel/chapters/${cid}/retry`, {}, { timeout: 300000 }),
+  novelArcs: (id) => http.get(`/projects/${id}/novel/arcs`),
+  generateNovelArcs: (id, groupSize = 8) => http.post(`/projects/${id}/novel/arcs/generate`, { group_size: groupSize }, { timeout: 300000 }),
+  novelAliases: (id) => http.get(`/projects/${id}/novel/aliases`),
+  updateNovelAlias: (id, aid, status) => http.put(`/projects/${id}/novel/aliases/${aid}`, { status }),
+  storyBible: (id) => http.get(`/projects/${id}/story-bible`),
+  generateStoryBible: (id) => http.post(`/projects/${id}/story-bible/generate`, {}, { timeout: 300000 }),
+  updateStoryBible: (id, data) => http.put(`/projects/${id}/story-bible`, data),
+  approveStoryBible: (id) => http.post(`/projects/${id}/story-bible/approve`),
+  novelJobs: (id) => http.get(`/projects/${id}/novel/jobs`),
+  adaptationStrategy: (id) => http.get(`/projects/${id}/adaptation-strategy`),
+  saveAdaptationStrategy: (id, data) => http.put(`/projects/${id}/adaptation-strategy`, data),
+  adaptations: (id) => http.get(`/projects/${id}/adaptations`),
+  generateAdaptations: (id) => http.post(`/projects/${id}/adaptations/generate`, {}, { timeout: 300000 }),
+  updateAdaptation: (id, episode, data) => http.put(`/projects/${id}/adaptations/${episode}`, data),
+  approveAdaptation: (id, episode) => http.post(`/projects/${id}/adaptations/${episode}/approve`),
+  generateAdaptationScript: (id, episode) => http.post(`/projects/${id}/adaptations/${episode}/script`, {}, { timeout: 300000 }),
+  reviewAdaptation: (id, episode, overrideReason = '') => http.post(`/projects/${id}/adaptations/${episode}/review`, { override_reason: overrideReason }, { timeout: 300000 }),
+  adaptationContext: (id, episode) => http.get(`/projects/${id}/adaptations/${episode}/context`),
+  novelUsage: (id) => http.get(`/projects/${id}/novel/usage`),
 }
 
 export function wsUrl() {

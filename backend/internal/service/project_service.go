@@ -80,6 +80,9 @@ func (s *ProjectService) CreateProject(p models.Project) (*models.Project, error
 	if p.AspectRatio == "" {
 		p.AspectRatio = "16:9"
 	}
+	if p.SourceType == "" {
+		p.SourceType = models.ProjectSourceOutline // 默认梗概项目
+	}
 	if err := s.db.Create(&p).Error; err != nil {
 		return nil, err
 	}
@@ -237,6 +240,17 @@ func (s *ProjectService) DeleteProject(id uint) error {
 		if err := tx.Where("project_id = ?", id).Delete(&models.SkillAuditLog{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("project_id = ?", id).Delete(&models.ChapterTask{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ?", id).Delete(&models.Chapter{}).Error; err != nil {
+			return err
+		}
+		for _, model := range []any{&models.StoryArc{}, &models.StoryBible{}, &models.CharacterAliasCandidate{}, &models.NovelJob{}} {
+			if err := tx.Where("project_id = ?", id).Delete(model).Error; err != nil {
+				return err
+			}
+		}
 		return tx.Delete(&models.Project{}, id).Error
 	}); err != nil {
 		return err
@@ -393,7 +407,7 @@ const scriptSystemPrompt = `你是一位专业的漫剧编剧与分镜师。根�
     }
   ]
 }
-3. 拆分为 6~10 个场景，每个场景是一段 3~8 秒的独立短视频片段；根据对白长度与动作复杂度设置 duration。
+3. 默认按约 180 秒单集规划 20~30 个镜头；每个镜头为 3~15 秒的独立视频片段，所有镜头 duration 之和应在 162~198 秒内。
 4. 人物一致性至关重要：同一角色在多个场景出现时，image_prompt 必须重复其外貌特征（发型、服装颜色、体型），且所有场景画风描述保持一致。
 5. 每个场景必须在 characters 数组中列出该场出场的角色名（须与角色卡或创作方案中的角色名完全一致；无出场角色则为空数组）。
 6. 每个场景必须在 dialogues 数组中列出该场的对白与旁白（character 为说话人角色名，空字符串表示旁白；用于配音与字幕）。无对白则为空数组。
@@ -420,10 +434,10 @@ func (s *ProjectService) GenerateScript(p *models.Project, episodeN int) (*model
 		// 阶段 2：依据创作方案渲染分镜场景（人物外观沿用方案中的 trait/style 保持一致）
 		user.WriteString("\n\n=== 创作方案 ===\n" + p.Plan + "\n")
 		// 注入当前集提示词（用户可在创作方案中修改每集标题与剧情提示词）
-		epTitle, epBrief := s.planEpisodeOf(p, episodeN)
-		user.WriteString(fmt.Sprintf("\n=== 当前制作集 ===\n第 %d 集「%s」\n本集剧情提示词：%s\n", episodeN, epTitle, epBrief))
+		epTitle, epBrief, targetDuration, targetScenes := s.planEpisodeInfo(p, episodeN)
+		user.WriteString(fmt.Sprintf("\n=== 当前制作集 ===\n第 %d 集「%s」\n本集剧情提示词：%s\n目标时长：%.0f秒 | 目标镜头：%d个\n", episodeN, epTitle, epBrief, targetDuration, targetScenes))
 		user.WriteString("请基于创作方案，重点围绕「当前制作集」的剧情提示词，输出该集的分镜剧本 JSON。")
-		system = scriptFromPlanSystemPrompt()
+		system = scriptFromPlanSystemPrompt(targetDuration, targetScenes)
 	} else {
 		user.WriteString("请按系统要求输出剧本 JSON。")
 	}
@@ -463,13 +477,14 @@ func (s *ProjectService) GenerateScriptFromText(p *models.Project, episodeN int,
 	}
 	var user strings.Builder
 	user.WriteString("=== 剧本正文（用户已定稿，请勿改写剧情） ===\n" + scriptText + "\n")
+	system := scriptSystemPrompt
 	if strings.TrimSpace(p.Plan) != "" {
 		user.WriteString("\n\n=== 创作方案 ===\n" + p.Plan + "\n")
+		// 获取当前集的目标时长和镜头数
+		_, _, targetDuration, targetScenes := s.planEpisodeInfo(p, episodeN)
+		user.WriteString(fmt.Sprintf("本集目标时长：%.0f秒 | 目标镜头：%d个\n", targetDuration, targetScenes))
 		user.WriteString("请保持创作方案中主要角色的人物外貌（trait）与服装（style）一致、全片画风统一，将上面的剧本正文拆分为该集的分镜场景 JSON，输出格式遵循系统要求。")
-	}
-	system := scriptFromPlanSystemPrompt()
-	if strings.TrimSpace(p.Plan) == "" {
-		system = scriptSystemPrompt
+		system = scriptFromPlanSystemPrompt(targetDuration, targetScenes)
 	}
 
 	raw, err := s.chatWithSkill(p.ID, models.SkillStageStoryboard, system, user.String(), map[string]string{"episode_n": fmt.Sprint(episodeN), "story_prompt": scriptText, "characters": p.Plan})
@@ -512,7 +527,14 @@ func (s *ProjectService) generateScriptCore(p *models.Project, episodeN int, raw
 			return nil, nil, fmt.Errorf("剧本解析失败，自动修复后仍不是合法 JSON: %w", err)
 		}
 	}
-	if err := validateScriptResult(res); err != nil {
+	_, _, targetDuration, targetScenes := s.planEpisodeInfo(p, episodeN)
+	if targetDuration <= 0 {
+		targetDuration = 180
+	}
+	if targetScenes <= 0 {
+		targetScenes = 25
+	}
+	if err := validateScriptResult(res, targetDuration, targetScenes); err != nil {
 		return nil, nil, fmt.Errorf("剧本结构不完整（可重试）: %w", err)
 	}
 
@@ -617,21 +639,37 @@ func episodePrefix(p *models.Project, episodeN int) string {
 
 // planEpisodeOf 从创作方案中提取指定集的标题与剧情提示词
 func (s *ProjectService) planEpisodeOf(p *models.Project, n int) (string, string) {
+	title, brief, _, _ := s.planEpisodeInfo(p, n)
+	return title, brief
+}
+
+// planEpisodeInfo 从创作方案中提取指定集的完整信息（标题、剧情提示词、目标时长、目标镜头数）
+func (s *ProjectService) planEpisodeInfo(p *models.Project, n int) (string, string, float64, int) {
 	if strings.TrimSpace(p.Plan) == "" {
-		return "", ""
+		return "", "", 0, 0
 	}
 	var plan dramaPlan
 	if err := json.Unmarshal([]byte(p.Plan), &plan); err != nil {
-		return "", ""
+		return "", "", 0, 0
 	}
 	for _, ep := range plan.Episodes {
 		if ep.N == n {
-			return ep.Title, ep.Brief
+			// 兼容旧项目缺失字段：默认 180 秒 / 25 个镜头
+			targetDuration := ep.TargetDuration
+			if targetDuration <= 0 {
+				targetDuration = 180
+			}
+			targetScenes := ep.TargetScenes
+			if targetScenes <= 0 {
+				targetScenes = 25
+			}
+			return ep.Title, ep.Brief, targetDuration, targetScenes
 		}
 	}
-	return "", ""
+	return "", "", 0, 0
 }
 
+// normalizeSceneDuration 归一化镜头时长为 3-15 秒（兼容旧项目 3-8 秒上限）
 func normalizeSceneDuration(duration float64) float64 {
 	if duration == 0 {
 		return 5
@@ -639,8 +677,8 @@ func normalizeSceneDuration(duration float64) float64 {
 	if duration < 3 {
 		return 3
 	}
-	if duration > 8 {
-		return 8
+	if duration > 15 {
+		return 15
 	}
 	return duration
 }
@@ -767,20 +805,44 @@ func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string) (tplC
 	}
 }
 
-func validateScriptResult(res *scriptResult) error {
+func validateScriptResult(res *scriptResult, targets ...any) error {
 	if strings.TrimSpace(res.Script) == "" {
 		return fmt.Errorf("缺少完整剧本正文")
 	}
 	if strings.TrimSpace(res.VisualBible) == "" {
 		return fmt.Errorf("缺少角色与画风视觉基准")
 	}
-	if len(res.Scenes) < 6 || len(res.Scenes) > 10 {
-		return fmt.Errorf("分镜数量必须为 6~10 个，实际为 %d 个", len(res.Scenes))
+	targetDuration, targetScenes := 180.0, 25
+	if len(targets) > 0 {
+		if v, ok := targets[0].(float64); ok && v > 0 {
+			targetDuration = v
+		}
 	}
+	if len(targets) > 1 {
+		if v, ok := targets[1].(int); ok && v > 0 {
+			targetScenes = v
+		}
+	}
+	minScenes, maxScenes := targetScenes-5, targetScenes+5
+	if minScenes < 1 {
+		minScenes = 1
+	}
+	if len(res.Scenes) < minScenes || len(res.Scenes) > maxScenes {
+		return fmt.Errorf("分镜数量应为 %d~%d 个，实际为 %d 个", minScenes, maxScenes, len(res.Scenes))
+	}
+	totalDuration := 0.0
 	for i, sc := range res.Scenes {
 		if strings.TrimSpace(sc.Content) == "" || strings.TrimSpace(sc.ImagePrompt) == "" {
 			return fmt.Errorf("场景 %d 缺少视频或画面提示词", i+1)
 		}
+		if sc.Duration < 3 || sc.Duration > 15 {
+			return fmt.Errorf("场景 %d 时长必须为 3~15 秒", i+1)
+		}
+		totalDuration += sc.Duration
+	}
+	minDuration, maxDuration := targetDuration*0.9, targetDuration*1.1
+	if totalDuration < minDuration || totalDuration > maxDuration {
+		return fmt.Errorf("分镜总时长应为 %.0f~%.0f 秒，实际为 %.0f 秒", minDuration, maxDuration, totalDuration)
 	}
 	return nil
 }

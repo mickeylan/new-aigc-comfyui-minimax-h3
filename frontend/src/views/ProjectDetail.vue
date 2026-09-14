@@ -17,6 +17,7 @@
       <div class="head-actions">
         <span class="badge" :class="projectBadgeClass">{{ projectStatusText }}</span>
         <button class="btn btn-ghost btn-sm" :disabled="busy" @click="openEditProject">✎ 编辑信息</button>
+        <router-link v-if="project.source_type === 'novel'" :to="`/projects/${id()}/novel`" class="btn btn-secondary btn-sm">📚 小说章节</router-link>
         <button v-if="!project.plan" class="btn btn-secondary btn-sm" :disabled="busy || generatingPlan || !project.synopsis" @click="generatePlan">
           {{ generatingPlan ? '方案生成中…' : '📋 生成创作方案' }}
         </button>
@@ -88,6 +89,11 @@
                 <input v-model="e.title" class="input input-sm ep-title" :class="{ 'ep-dirty': isEpDirty(e) }" placeholder="集标题" @click.stop />
                 <span v-if="e.tag" class="ep-tag">{{ e.tag }}</span>
                 <textarea v-model="e.brief" rows="1" class="textarea textarea-sm ep-brief" :class="{ 'ep-dirty': isEpDirty(e) }" placeholder="剧情提示词" @click.stop />
+                <span class="ep-duration" :title="'目标时长：' + e.target_duration + '秒，目标镜头：' + e.target_scenes + '个'">
+                  {{ fmtSec(e.target_duration) }} / {{ e.target_scenes }}镜
+                </span>
+                <input type="number" v-model.number="e.target_duration" class="input input-xs ep-dur" min="60" max="600" step="10" @click.stop :class="{ 'ep-dirty': isEpDirty(e) }" title="目标时长（秒）" />
+                <input type="number" v-model.number="e.target_scenes" class="input input-xs ep-scene-count" min="10" max="50" step="5" @click.stop :class="{ 'ep-dirty': isEpDirty(e) }" title="目标镜头数" />
                 <button class="btn btn-sm btn-ghost ep-enter" @click.stop="selectEp(e.n)">进入 ▶</button>
               </div>
             </div>
@@ -902,7 +908,12 @@ function trackEpisodes() {
   if (!p || !p.episodes || p.episodes.length === 0) return
   epEdits.value = p.episodes.map(e => ({
     n: e.n, title: e.title || '', brief: e.brief || '', tag: e.tag || '',
-    origTitle: e.title || '', origBrief: e.brief || ''
+    origTitle: e.title || '', origBrief: e.brief || '',
+    // 目标时长/镜头数（兼容旧项目缺失字段）
+    target_duration: e.target_duration || 180,
+    target_scenes: e.target_scenes || 25,
+    origTargetDuration: e.target_duration || 180,
+    origTargetScenes: e.target_scenes || 25
   }))
   if (!activeEpN.value || !p.episodes.some(e => e.n === activeEpN.value)) {
     activeEpN.value = p.episodes[0].n
@@ -910,11 +921,14 @@ function trackEpisodes() {
   }
 }
 function isEpDirty(e) {
-  return e.origTitle !== e.title || e.origBrief !== e.brief
+  return e.origTitle !== e.title || e.origBrief !== e.brief || e.origTargetDuration !== e.target_duration || e.origTargetScenes !== e.target_scenes
 }
 async function saveEpisodes() {
   if (epEdits.value.length === 0) return
-  const eps = epEdits.value.map(e => ({ n: e.n, title: e.title.trim(), brief: e.brief.trim() }))
+  const eps = epEdits.value.map(e => ({
+    n: e.n, title: e.title.trim(), brief: e.brief.trim(),
+    target_duration: e.target_duration, target_scenes: e.target_scenes
+  }))
   epSaving.value = true
   try {
     const { data } = await api.updatePlanEpisodes(id(), eps)
@@ -1018,6 +1032,12 @@ function mergeBadgeClass(m) {
 }
 function orderColor(n) {
   return ['', 'icon-blue', 'icon-purple', 'icon-teal', 'icon-orange', 'icon-green', 'icon-pink', 'icon-indigo', 'icon-brown'][n % 8 + 1]
+}
+function fmtSec(s) {
+  // 格式化为 mm:ss 或 ss（秒）
+  const sec = Math.round(Number(s) || 0)
+  if (sec < 60) return sec + 's'
+  return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0')
 }
 function videoProgress(sc) {
   const p = videoProgressMap.value[sc.video_task_id]
@@ -1824,6 +1844,9 @@ onBeforeUnmount(() => {
 .plan-episode-row .ep-title { flex: 0 0 180px; }
 .plan-episode-row .ep-brief { flex: 1; }
 .plan-episode-row .ep-tag { flex: 0 0 auto; font-size: 12px; }
+.plan-episode-row .ep-duration { flex: 0 0 60px; font-size: 12px; color: var(--text-secondary); text-align: center; }
+.plan-episode-row .ep-dur { flex: 0 0 64px; font-size: 12px; }
+.plan-episode-row .ep-scene-count { flex: 0 0 52px; font-size: 12px; }
 .plan-episode-row .ep-enter { flex: 0 0 auto; padding: 2px 10px; font-size: 12px; }
 .input-sm { padding: 5px 8px; font-size: 13px; min-height: 30px; }
 .textarea-sm { padding: 5px 8px; font-size: 13px; min-height: 30px; resize: vertical; }

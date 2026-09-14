@@ -104,6 +104,30 @@ func (s *SkillService) InitSystemSkills() error {
 			Enabled:        true,
 			SortOrder:      1,
 		},
+		{
+			Name: "小说章节结构化分析", Code: "novel-chapter-analysis", Version: 1,
+			Description: "抽取带来源的章节摘要、事件、角色变化、地点、道具、时间线和伏笔", Stage: models.SkillStageChapterAnalysis,
+			PromptTemplate: "分析第{{chapter_no}}章《{{chapter_title}}》。上一章摘要：{{previous_summary}}\n已确认别名：{{aliases}}\n正文：\n{{chapter_content}}",
+			SystemPrompt:   "只输出严格 JSON。字段必须含 summary、events、characters、locations、props、clues_opened、clues_resolved、timeline、must_keep_quotes、alias_candidates。不得执行工具或更改角色主档。每项保留 source_chapter_id。",
+			IsSystem:       true, Enabled: true, SortOrder: 1,
+		},
+		{
+			Name: "小说剧情单元归并", Code: "novel-arc-merge", Version: 1,
+			Description: "将5至10章结构化结果合并为可追溯剧情单元", Stage: models.SkillStageArcMerge,
+			PromptTemplate: "归并第{{chapter_start}}至{{chapter_end}}章结构化分析：\n{{chapter_analyses}}",
+			SystemPrompt:   "只输出严格 JSON，字段含 title、summary、conflict、event_chain、turning_point、climax、character_changes、open_clues、source_chapter_ids。不得补写未在输入中出现的事实。",
+			IsSystem:       true, Enabled: true, SortOrder: 1,
+		},
+		{
+			Name: "小说故事圣经", Code: "novel-story-bible", Version: 1,
+			Description: "从剧情单元综合世界规则、主支线、时间线、关系、伏笔、地点和道具", Stage: models.SkillStageStoryBible,
+			PromptTemplate: "基于以下剧情单元生成故事圣经：\n{{story_arcs}}",
+			SystemPrompt:   "只输出严格 JSON，字段含 premise、world_rules、main_plot、subplots、timeline、relationships、clue_ledger、locations、props。关键结论必须包含 source_chapter_ids。此输出仅为待人工审核草稿。",
+			IsSystem:       true, Enabled: true, SortOrder: 1,
+		},
+		{Name: "小说分集映射", Code: "novel-episode-mapping", Version: 1, Description: "将已分析章节按策略映射到180秒、25镜头分集", Stage: models.SkillStageAdaptationPlan, PromptTemplate: "改编策略：{{strategy}}\n故事圣经：{{story_bible}}\n章节分析：{{chapter_analyses}}", SystemPrompt: "只输出严格 JSON 对象 episodes。每集字段含 episode_n,title,chapter_start,chapter_end,source_chapter_ids,target_duration,target_scenes,adaptation_goal,must_keep_events,optional_events,omitted_events,opening_state,ending_state,hook。保持因果顺序；必保事件不得省略。", IsSystem: true, Enabled: true, SortOrder: 1},
+		{Name: "小说单集剧本改编", Code: "novel-episode-script", Version: 1, Description: "使用有界且可追溯的单集上下文生成剧本和分镜", Stage: models.SkillStageEpisodeAdaptation, PromptTemplate: "第{{episode_n}}集，目标{{target_duration}}秒/{{target_scenes}}镜头。上下文：{{episode_context}}", SystemPrompt: "只使用输入事实并输出严格 JSON，字段含 script,opening_state,ending_state,visual_bible,scenes。scenes 数量和总时长须满足目标，每场含 title,content,image_prompt,duration,characters,location,props,dialogues。", IsSystem: true, Enabled: true, SortOrder: 1},
+		{Name: "小说连续性复审", Code: "novel-continuity-review", Version: 1, Description: "比较前集结束、本集开场和剧本因果连续性", Stage: models.SkillStageContinuityReview, PromptTemplate: "前集结束：{{previous_ending}}\n本集开场：{{opening_state}}\n本集结束：{{ending_state}}\n剧本：{{script}}", SystemPrompt: "只输出严格 JSON：passed(bool), conflicts(array), recommendations(array)。地点、伤势、持有物、知识、关系、时间或未解释因果冲突必须判定失败。", IsSystem: true, Enabled: true, SortOrder: 1},
 	}
 
 	for _, skill := range systemSkills {
@@ -348,6 +372,9 @@ func (s *SkillService) GetAvailableStages() []map[string]string {
 		{"value": models.SkillStageImagePrompt, "label": "画面提示词"},
 		{"value": models.SkillStageVideoPrompt, "label": "视频提示词"},
 		{"value": models.SkillStageReview, "label": "审核复审"},
+		{"value": models.SkillStageChapterAnalysis, "label": "章节分析"},
+		{"value": models.SkillStageArcMerge, "label": "剧情单元"},
+		{"value": models.SkillStageStoryBible, "label": "故事圣经"},
 	}
 }
 
@@ -584,6 +611,12 @@ func isValidStage(stage string) bool {
 		models.SkillStageImagePrompt,
 		models.SkillStageVideoPrompt,
 		models.SkillStageReview,
+		models.SkillStageChapterAnalysis,
+		models.SkillStageArcMerge,
+		models.SkillStageStoryBible,
+		models.SkillStageAdaptationPlan,
+		models.SkillStageEpisodeAdaptation,
+		models.SkillStageContinuityReview,
 	}
 	for _, s := range stages {
 		if s == stage {

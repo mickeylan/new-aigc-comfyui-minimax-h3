@@ -25,7 +25,11 @@
       <div class="section-head">
         <div>
           <span class="overline">TIMELINE</span>
-          <h2>时间轴（{{ scenes.length }} 个场景）</h2>
+          <h2>时间轴（{{ scenes.length }} 个场景）
+            <span v-if="targetDuration" class="dur-progress" :class="durProgressClass">
+              {{ fmtDur(accumulatedDuration) }} / {{ fmtDur(targetDuration) }} ({{ durProgressPercent }}%)
+            </span>
+          </h2>
           <p class="sub">点击场景选中，可拖拽调整顺序；右侧面板编辑配音与字幕</p>
         </div>
       </div>
@@ -212,6 +216,40 @@ const dragFrom = ref(null)
 const activeEpN = ref(1)
 const epIndex = ref(0)
 const epCount = ref(1)
+
+// 目标时长与累计时长计算
+const targetDuration = computed(() => {
+  const p = project.value
+  if (!p?.plan) return 0
+  try {
+    const plan = JSON.parse(p.plan)
+    const ep = plan.episodes?.find(e => e.n === activeEpN.value)
+    return ep?.target_duration || 180
+  } catch { return 180 }
+})
+const targetScenes = computed(() => {
+  const p = project.value
+  if (!p?.plan) return 25
+  try {
+    const plan = JSON.parse(p.plan)
+    const ep = plan.episodes?.find(e => e.n === activeEpN.value)
+    return ep?.target_scenes || 25
+  } catch { return 25 }
+})
+const accumulatedDuration = computed(() =>
+  scenes.value.reduce((sum, s) => sum + (Number(s.video_dur) || Number(s.duration) || 0), 0)
+)
+const durProgressPercent = computed(() => {
+  if (!targetDuration.value) return 0
+  return Math.round((accumulatedDuration.value / targetDuration.value) * 100)
+})
+const durProgressClass = computed(() => {
+  const p = durProgressPercent.value
+  if (p > 105) return 'dur-over'
+  if (p > 95) return 'dur-ok'
+  if (p > 80) return 'dur-near'
+  return 'dur-early'
+})
 
 function id() { return route.params.id }
 function outputUrl(path) { return `/api/output/0/${path}` }
@@ -441,6 +479,12 @@ onUnmounted(() => { clearInterval(timer) })
 }
 .tl-btn:disabled { opacity: 0.35; cursor: default; }
 .tl-empty-hint { padding: 40px; color: var(--text-tertiary); }
+
+.dur-progress { font-size: 14px; font-weight: 600; margin-left: 8px; }
+.dur-progress.dur-early { color: var(--text-secondary); }
+.dur-progress.dur-near { color: #f59e0b; }
+.dur-progress.dur-ok { color: #22c55e; }
+.dur-progress.dur-over { color: #ef4444; }
 
 .preview-card { padding: 16px; }
 .editor-video { width: 100%; border-radius: 12px; background: #000; max-height: 420px; }

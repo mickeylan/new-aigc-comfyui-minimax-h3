@@ -74,11 +74,13 @@ type dramaPlan struct {
 		Description string `json:"description"` // 环境描述（空间/建筑/光线氛围）
 	} `json:"locations"` // 主要场景地点（供分镜画面保持环境一致）
 	Episodes []struct {
-		N     int    `json:"n"`
-		Title string `json:"title"`
-		Brief string `json:"brief"` // 核心冲突/爽点一句话
-		Hook  string `json:"hook"`  // 钩子类型
-		Tag   string `json:"tag"`   // 🔥关键集 💰付费卡点
+		N              int     `json:"n"`
+		Title          string  `json:"title"`
+		Brief          string  `json:"brief"`           // 核心冲突/爽点一句话
+		Hook           string  `json:"hook"`            // 钩子类型
+		Tag            string  `json:"tag"`             // 🔥关键集 💰付费卡点
+		TargetDuration float64 `json:"target_duration"` // 目标总时长（秒），默认 180
+		TargetScenes   int     `json:"target_scenes"`   // 目标镜头数，默认 25
 	} `json:"episodes"` // 分集目录
 }
 
@@ -122,15 +124,27 @@ func planSystemPrompt() string {
   "villains": [{"layer": "小反派/中反派/大反派/隐藏反派", "name": "名字", "motif": "动机与行为模式"}],
   "props": [{"name": "道具名", "description": "关键道具外观（形状/材质/颜色/标志性细节），贯穿全剧反复出现，供画面生成保持一致"}],
   "locations": [{"name": "场景名", "description": "主要场景环境（空间/建筑/陈设/光线氛围），供画面生成保持一致"}],
-  "episodes": [{"n": 1, "title": "集标题", "brief": "核心冲突或爽点一句话", "hook": "钩子类型（悬念钩/反转钩/情绪钩/信息钩/危机钩）", "tag": "🔥或💰或空"}]
+  "episodes": [{"n": 1, "title": "集标题", "brief": "核心冲突或爽点一句话", "hook": "钩子类型（悬念钩/反转钩/情绪钩/信息钩/危机钩）", "tag": "🔥或💰或空", "target_duration": 180, "target_scenes": 25}]
 }
-3. episodes 必须覆盖全集数（与用户配置的集数一致），体现三幕节奏；前10集至少3个🔥和2个💰；🔥占比25-35%，💰占比10-15%。
+3. episodes 必须覆盖全集数（与用户配置的集数一致），体现三幕节奏；前10集至少3个🔥和2个💰；🔥占比25-35%，💰占比10-15%。每集必须设定 target_duration（约180秒，即3分钟）和 target_scenes（约25个镜头，单镜3-15秒）。
 4. 必须从故事创意中识别并生成 2~8 个主要角色（包括主角、关键配角和反派）；每个角色必须完整填写 characters 模板的全部字段。appearance 必须覆盖性别呈现、年龄感、发型发色、脸型、眼神、妆造、眉形、肤色、体型和特殊标记；wardrobe_detail 必须覆盖款式、配色、配饰和材质。角色由用户审核修改后再用于生图，禁止返回空 characters。
 5. 必须给出贯穿全剧的关键道具清单 props（2~8 项，如信物/武器/法宝/手机等反复出现、影响剧情的物件）与主要场景清单 locations（2~8 个地点），每项给出具体外观/环境描述；后续分镜只引用这些名称，系统会用它们生成参考图保证道具与场景全剧一致。`
 }
 
 // scriptFromPlanSystemPrompt 阶段 2 系统提示词：依据创作方案渲染分镜场景
-func scriptFromPlanSystemPrompt() string {
+// targetDuration: 目标总时长（秒），默认 180
+// targetScenes: 目标镜头数，默认 25
+func scriptFromPlanSystemPrompt(targetDuration float64, targetScenes int) string {
+	// 兼容旧项目缺失字段
+	if targetDuration <= 0 {
+		targetDuration = 180
+	}
+	if targetScenes <= 0 {
+		targetScenes = 25
+	}
+	// 单镜时长范围：3-15 秒
+	minSceneDur, maxSceneDur := 3, 15
+
 	return `你是专业的漫剧编剧与分镜师。根据给定的创作方案，把故事转化为一条适合"文生图 + 图生视频"流水线的分镜序列。
 要求：
 1. 只输出一个合法的 JSON 对象，不要输出任何解释、Markdown 代码块标记或其它文字。
@@ -151,13 +165,17 @@ func scriptFromPlanSystemPrompt() string {
     }
   ]
 }
-3. 输出 6~10 个场景，每个场景是一段 3~8 秒的独立短视频片段；根据对白长度与动作复杂度设置 duration。
-4. 人物一致性至关重要：同一角色在多个场景出现时，image_prompt 必须严格沿用创作方案中该角色的 trait（外貌特征）与 style（服装造型），且所有场景画风描述保持一致。
-5. 每个场景必须在 characters 数组中列出该场出场的角色名（须与创作方案中的角色名完全一致；无出场角色则为空数组）。
-6. 每个场景必须在 dialogues 数组中列出该场的对白与旁白（character 为说话人角色名，空字符串表示旁白；用于配音与字幕）。无对白则为空数组。
-7. 第一个场景尽量给出大场景/环境交代，后续场景聚焦人物动作与剧情推进。
-8. 剧情节奏参考创作方案中的节奏曲线：开头要有钩子，中段冲突升级，结尾留悬念。
-9. 道具与场景一致性：每个场景的 location 与 props 名称必须完全取自创作方案的 locations/props 清单（系统会用同名资产参考图锁定画面中该场景环境与道具外观），不得随意改名；只有确属剧情新出现的道具才允许新名称。`
+【时长约束（必须严格遵循）】
+- 总时长预算：约 ` + fmt.Sprintf("%.0f", targetDuration) + ` 秒
+- 镜头数要求：` + fmt.Sprintf("%d", targetScenes) + ` 个镜头
+- 单镜时长范围：` + fmt.Sprintf("%d", minSceneDur) + `~` + fmt.Sprintf("%d", maxSceneDur) + ` 秒（根据对白长度与动作复杂度灵活调整）
+- 所有镜头时长之和应尽量接近总时长预算（允许 ±10% 偏差）
+3. 人物一致性至关重要：同一角色在多个场景出现时，image_prompt 必须严格沿用创作方案中该角色的 trait（外貌特征）与 style（服装造型），且所有场景画风描述保持一致。
+4. 每个场景必须在 characters 数组中列出该场出场的角色名（须与创作方案中的角色名完全一致；无出场角色则为空数组）。
+5. 每个场景必须在 dialogues 数组中列出该场的对白与旁白（character 为说话人角色名，空字符串表示旁白；用于配音与字幕）。无对白则为空数组。
+6. 第一个场景尽量给出大场景/环境交代，后续场景聚焦人物动作与剧情推进。
+7. 剧情节奏参考创作方案中的节奏曲线：开头要有钩子，中段冲突升级，结尾留悬念。
+8. 道具与场景一致性：每个场景的 location 与 props 名称必须完全取自创作方案的 locations/props 清单（系统会用同名资产参考图锁定画面中该场景环境与道具外观），不得随意改名；只有确属剧情新出现的道具才允许新名称。`
 }
 
 // GeneratePlan 阶段 1：按 short-drama 方法论生成创作方案（存 project.plan）
@@ -286,11 +304,13 @@ func completePlanCharacter(ch planCharacter) bool {
 		strings.TrimSpace(ch.ColorPalette) != ""
 }
 
-// PlanEpisodeUpdate 每集可编辑字段（标题 / 剧情提示词）
+// PlanEpisodeUpdate 每集可编辑字段（标题 / 剧情提示词 / 目标时长 / 目标镜头数）
 type PlanEpisodeUpdate struct {
-	N     int    `json:"n"`
-	Title string `json:"title"`
-	Brief string `json:"brief"`
+	N              int     `json:"n"`
+	Title          string  `json:"title"`
+	Brief          string  `json:"brief"`
+	TargetDuration float64 `json:"target_duration"` // 目标总时长（秒），默认 180
+	TargetScenes   int     `json:"target_scenes"`   // 目标镜头数，默认 25
 }
 
 // UpdatePlanEpisodes 修改创作方案中分集目录的标题与剧情提示词（按集号 n 匹配）。
@@ -321,6 +341,16 @@ func (s *ProjectService) UpdatePlanEpisodes(p *models.Project, updates []PlanEpi
 		}
 		if u.Brief != "" && u.Brief != plan.Episodes[i].Brief {
 			plan.Episodes[i].Brief = u.Brief
+			changed = true
+		}
+		// 更新目标时长（0 表示未修改，保留旧值）
+		if u.TargetDuration > 0 && u.TargetDuration != plan.Episodes[i].TargetDuration {
+			plan.Episodes[i].TargetDuration = u.TargetDuration
+			changed = true
+		}
+		// 更新目标镜头数（0 表示未修改，保留旧值）
+		if u.TargetScenes > 0 && u.TargetScenes != plan.Episodes[i].TargetScenes {
+			plan.Episodes[i].TargetScenes = u.TargetScenes
 			changed = true
 		}
 	}

@@ -51,6 +51,14 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.Skill{},
 		&models.ProjectSkillConfig{},
 		&models.SkillAuditLog{},
+		&models.Chapter{},
+		&models.ChapterTask{},
+		&models.StoryArc{},
+		&models.StoryBible{},
+		&models.AdaptationStrategy{},
+		&models.EpisodeAdaptation{},
+		&models.CharacterAliasCandidate{},
+		&models.NovelJob{},
 	); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
