@@ -39,10 +39,11 @@ func characterAccessoryConstraint(ch *models.Character) string {
 }
 
 func buildCharacterAnchorPrompt(project *models.Project, ch *models.Character) string {
-	return "Use the supplied face portrait as the immutable identity reference. Generate exactly one front-facing full-body standing portrait of the same person, preserving face, exact visual age, hairstyle and art style. " +
-		"角色完整服装档案：" + strings.TrimSpace(ch.WardrobeDetail) + "。" + characterAccessoryConstraint(ch) + "指定鞋履：" + characterFootwear(project, ch) + "。" +
-		"Show the complete outfit from head to toe. Both feet and both shoes must be fully visible inside the frame; shoes must match the era, culture, outfit colors, material and identity exactly. " +
-		"时代与文化必须服从项目设定「" + project.Genre + " / " + project.Style + "」。纯白背景，中性站姿，单人单视图，禁止改变脸、年龄、发型、服装，禁止赤脚、裸足、露趾、裁脚、遮脚、现代高跟鞋、运动鞋、现代皮鞋、日式木屐、多人、拼图、文字和水印。"
+	return "【构图硬约束】生成一张单人正面全身站立图，必须从头顶到鞋底完整入镜，人物垂直居中，头顶留白，鞋底下方留白，双腿、双脚和左右两只鞋全部清晰可见，人物占画面高度约85%，绝对不是半身图、胸像、头像或膝盖以上构图。" +
+		"角色身份与外貌：单一角色「" + ch.Name + "」，" + strings.TrimSpace(ch.Appearance) + "，" + strings.TrimSpace(ch.Trait) + "；保持准确视觉年龄、五官、脸型、发型和体型。" +
+		"角色完整服装档案：" + strings.TrimSpace(ch.WardrobeDetail) + "。" + characterAccessoryConstraint(ch) +
+		"【鞋履硬约束】指定鞋履：" + characterFootwear(project, ch) + "；左右两只鞋必须完整穿在脚上、同款同色，鞋面、鞋头与鞋底轮廓清楚可见，长裙下摆不得遮住鞋。" +
+		"时代与文化必须服从项目设定「" + project.Genre + " / " + project.Style + "」。纯白背景，中性自然站姿，单人单视图，禁止赤脚、裸足、露趾、缺鞋、裁脚、遮脚、坐姿、跪姿、现代高跟鞋、运动鞋、现代皮鞋、日式木屐、多人、拼图、文字和水印。"
 }
 
 func buildCharacterSheetPrompt(project *models.Project, ch *models.Character) string {
@@ -67,17 +68,16 @@ func (s *ProjectService) StartCharacterSheet(ch *models.Character) (string, erro
 	if s.tasks == nil {
 		return "", fmt.Errorf("角色四视图生成依赖 ComfyUI 任务服务")
 	}
-	if strings.TrimSpace(ch.ClothingAnchor) == "" {
-		if s.sheetTaskActive(ch.AnchorTaskID) {
-			s.db.Model(ch).Update("sheet_after_anchor", true)
-			return "", fmt.Errorf("%w：角色「%s」正在生成全身服装锚点", errSheetActive, ch.Name)
-		}
-		return "anchor", s.startCharacterAnchor(ch)
+	if s.sheetTaskActive(ch.AnchorTaskID) {
+		s.db.Model(ch).Update("sheet_after_anchor", true)
+		return "", fmt.Errorf("%w：角色「%s」正在生成全身服装锚点", errSheetActive, ch.Name)
 	}
 	if s.sheetTaskActive(ch.SheetTaskID) {
 		return "", fmt.Errorf("%w：角色「%s」正在生成四视图", errSheetActive, ch.Name)
 	}
-	return "sheet", s.startFinalCharacterSheet(ch)
+	// Every explicit click rebuilds the anchor first. Reusing an older half-body or
+	// barefoot anchor would make the final sheet repeat the same defect indefinitely.
+	return "anchor", s.startCharacterAnchor(ch)
 }
 
 func (s *ProjectService) startCharacterAnchor(ch *models.Character) error {
@@ -92,13 +92,13 @@ func (s *ProjectService) startCharacterAnchor(ch *models.Character) error {
 	task, err := s.tasks.CreateTask(CreateTaskReq{
 		TemplateID: tpl.ID,
 		Prompt:     buildCharacterAnchorPrompt(&project, ch),
-		Files:      map[string][]FileMeta{"source_image": {{TaskID: fmt.Sprint(ch.ProjectID), Name: ch.Portrait}}},
 	})
 	if err != nil {
 		return fmt.Errorf("创建角色全身服装锚点任务失败: %w", err)
 	}
 	if err := s.db.Model(&models.Character{}).Where("id = ?", ch.ID).Updates(map[string]any{
-		"anchor_task_id": task.TaskID, "anchor_error": "", "sheet_error": "", "sheet_after_anchor": true,
+		"clothing_anchor": "", "anchor_task_id": task.TaskID, "anchor_error": "",
+		"sheet": "", "sheet_task_id": "", "sheet_error": "", "sheet_after_anchor": true,
 	}).Error; err != nil {
 		_ = s.tasks.CancelTask(task.TaskID)
 		return err

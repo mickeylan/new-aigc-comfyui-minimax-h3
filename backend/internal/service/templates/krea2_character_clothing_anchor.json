@@ -1,59 +1,214 @@
 {
-  "name": "Krea2 角色全身服装锚点",
+  "name": "Krea2 角色全身服装佩饰锚点",
   "code": "krea2_character_clothing_anchor",
-  "description": "以角色正面特写锁定身份，生成完整含鞋履的正面全身服装锚点。",
+  "description": "根据角色档案独立生成从头顶到鞋底完整入镜的正面全身站立图，固定服装、佩饰和鞋履。",
   "inputs": [
-    { "key": "source_image", "type": "image", "label": "角色正面特写", "required": true },
-    { "key": "prompt", "type": "prompt", "label": "全身服装锚点指令", "required": true },
-    { "key": "width", "type": "int", "label": "输出宽度", "default": 768, "min": 512, "max": 2048, "step": 8 },
-    { "key": "height", "type": "int", "label": "输出高度", "default": 1344, "min": 512, "max": 2048, "step": 8 },
-    { "key": "seed", "type": "int", "label": "随机种子", "default": -1, "min": -1 },
-    { "key": "steps", "type": "int", "label": "采样步数", "default": 10, "min": 1, "max": 50 },
-    { "key": "unet_name", "type": "string", "label": "unet_name", "default": "krea2\\Krea2-Moody-Mix-premium_int8_convrot.safetensors" },
-    { "key": "clip_name", "type": "string", "label": "clip_name", "default": "krea2\\qwen3vl_4b_fp8_scaled.safetensors" },
-    { "key": "vae_name", "type": "string", "label": "vae_name", "default": "qwen_image_vae.safetensors" }
+    {
+      "key": "prompt",
+      "type": "prompt",
+      "label": "全身服装佩饰与鞋履提示词",
+      "required": true
+    },
+    {
+      "key": "width",
+      "type": "int",
+      "label": "宽度",
+      "default": 768,
+      "min": 256,
+      "max": 2048,
+      "step": 8
+    },
+    {
+      "key": "height",
+      "type": "int",
+      "label": "高度",
+      "default": 1344,
+      "min": 256,
+      "max": 2048,
+      "step": 8
+    },
+    {
+      "key": "seed",
+      "type": "int",
+      "label": "随机种子",
+      "default": -1,
+      "min": -1
+    },
+    {
+      "key": "steps",
+      "type": "int",
+      "label": "第一阶段步数",
+      "default": 8,
+      "min": 1,
+      "max": 50
+    },
+    {
+      "key": "cfg",
+      "type": "float",
+      "label": "CFG",
+      "default": 1,
+      "min": 0.1,
+      "max": 20,
+      "step": 0.1
+    },
+    {
+      "key": "unet_name",
+      "type": "string",
+      "label": "unet_name",
+      "default": "krea2\\Krea2-Moody-Mix-premium_int8_convrot.safetensors"
+    },
+    {
+      "key": "clip_name",
+      "type": "string",
+      "label": "clip_name",
+      "default": "krea2\\qwen3vl_4b_fp8_scaled.safetensors"
+    },
+    {
+      "key": "vae_name",
+      "type": "string",
+      "label": "vae_name",
+      "default": "qwen_image_vae.safetensors"
+    }
   ],
   "workflow": {
-    "21": { "class_type": "CLIPLoader", "inputs": { "clip_name": "{{clip_name}}", "type": "krea2", "device": "default" } },
-    "17": { "class_type": "LoadImage", "inputs": { "image": "{{img:source_image}}" } },
-    "18": {
-      "class_type": "ImageResizeKJv2",
+    "26": {
+      "class_type": "UNETLoader",
       "inputs": {
-        "image": ["17", 0], "width": 768, "height": 1344, "upscale_method": "lanczos",
-        "keep_proportion": "pad", "pad_color": "255, 255, 255", "crop_position": "center", "divisible_by": 2, "device": "cpu"
+        "unet_name": "{{unet_name}}",
+        "weight_dtype": "default"
       }
     },
-    "25": { "class_type": "UNETLoader", "inputs": { "unet_name": "{{unet_name}}", "weight_dtype": "default" } },
-    "9": { "class_type": "VAELoader", "inputs": { "vae_name": "{{vae_name}}" } },
-    "20": { "class_type": "VAEEncode", "inputs": { "pixels": ["18", 0], "vae": ["9", 0] } },
-    "23": {
-      "class_type": "Krea2EditModelPatch",
+    "29": {
+      "class_type": "CLIPLoader",
       "inputs": {
-        "model": ["25", 0], "source_latent": ["20", 0], "vae": ["9", 0], "source_image": ["18", 0],
-        "ref_boost": 1, "ref_boost_a": 1, "fit_mode": "fit"
+        "clip_name": "{{clip_name}}",
+        "type": "krea2",
+        "device": "default"
       }
     },
     "24": {
-      "class_type": "Krea2EditGroundedEncode",
-      "inputs": { "clip": ["21", 0], "image": ["18", 0], "prompt": "{{prompt}}", "grounding_px": 0, "system_prompt": "" }
+      "class_type": "VAELoader",
+      "inputs": {
+        "vae_name": "{{vae_name}}"
+      }
+    },
+    "25": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "clip": [
+          "29",
+          0
+        ],
+        "text": "{{prompt}}"
+      }
+    },
+    "15": {
+      "class_type": "ConditioningZeroOut",
+      "inputs": {
+        "conditioning": [
+          "25",
+          0
+        ]
+      }
+    },
+    "16": {
+      "class_type": "EmptyLatentImage",
+      "inputs": {
+        "width": "{{width}}",
+        "height": "{{height}}",
+        "batch_size": 1
+      }
+    },
+    "21": {
+      "class_type": "KSamplerAdvanced",
+      "inputs": {
+        "model": [
+          "26",
+          0
+        ],
+        "positive": [
+          "25",
+          0
+        ],
+        "negative": [
+          "15",
+          0
+        ],
+        "latent_image": [
+          "16",
+          0
+        ],
+        "noise_seed": "{{seed}}",
+        "add_noise": "enable",
+        "steps": "{{steps}}",
+        "cfg": "{{cfg}}",
+        "sampler_name": "euler",
+        "scheduler": "simple",
+        "start_at_step": 0,
+        "end_at_step": "{{steps}}",
+        "return_with_leftover_noise": "disable"
+      }
     },
     "22": {
-      "class_type": "Krea2EditGroundedEncode",
+      "class_type": "LatentUpscaleBy",
       "inputs": {
-        "clip": ["21", 0], "image": ["18", 0],
-        "prompt": "barefoot, bare feet, naked feet, exposed toes, missing shoes, cropped feet, hidden feet, mismatched footwear, high heels, sneakers, modern leather shoes, Japanese geta, wooden clogs, multiple people, split screen, text, watermark",
-        "grounding_px": 768, "system_prompt": ""
+        "samples": [
+          "21",
+          0
+        ],
+        "upscale_method": "bicubic",
+        "scale_by": 1.5
       }
     },
-    "7": { "class_type": "EmptySD3LatentImage", "inputs": { "width": "{{width}}", "height": "{{height}}", "batch_size": 1 } },
-    "14": {
+    "13": {
       "class_type": "KSampler",
       "inputs": {
-        "model": ["23", 0], "positive": ["24", 0], "negative": ["22", 0], "latent_image": ["7", 0],
-        "seed": "{{seed}}", "steps": "{{steps}}", "cfg": 1, "sampler_name": "euler", "scheduler": "simple", "denoise": 1
+        "model": [
+          "26",
+          0
+        ],
+        "positive": [
+          "25",
+          0
+        ],
+        "negative": [
+          "15",
+          0
+        ],
+        "latent_image": [
+          "22",
+          0
+        ],
+        "seed": "{{seed}}",
+        "steps": 4,
+        "cfg": "{{cfg}}",
+        "sampler_name": "euler",
+        "scheduler": "simple",
+        "denoise": 0.54
       }
     },
-    "11": { "class_type": "VAEDecode", "inputs": { "samples": ["14", 0], "vae": ["9", 0] } },
-    "5": { "class_type": "SaveImage", "inputs": { "images": ["11", 0], "filename_prefix": "krea2/character_anchor_{{task_id}}" } }
+    "18": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": [
+          "13",
+          0
+        ],
+        "vae": [
+          "24",
+          0
+        ]
+      }
+    },
+    "6": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "images": [
+          "18",
+          0
+        ],
+        "filename_prefix": "krea2/character_anchor_{{task_id}}"
+      }
+    }
   }
 }
