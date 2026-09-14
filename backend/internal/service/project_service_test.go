@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -11,6 +12,18 @@ import (
 
 	"comfyui-console/internal/models"
 )
+
+type stubTextProvider struct {
+	response string
+	calls    int
+}
+
+func (s *stubTextProvider) Name() string                      { return "stub" }
+func (s *stubTextProvider) HealthCheck(context.Context) error { return nil }
+func (s *stubTextProvider) Chat(_, _ string) (string, error) {
+	s.calls++
+	return s.response, nil
+}
 
 func TestScriptFromPlanPromptMatchesStoryboardSchema(t *testing.T) {
 	prompt := scriptFromPlanSystemPrompt()
@@ -357,6 +370,75 @@ func TestUpdateProjectStatus(t *testing.T) {
 	ps.db.First(&p1, p.ID)
 	if p1.Status != "finished" {
 		t.Fatalf("finished 状态不应被覆盖, got %s", p1.Status)
+	}
+}
+
+func TestEnsurePlanCharactersExtractsFromStoryWhenPlanOmittedThem(t *testing.T) {
+	provider := &stubTextProvider{response: `{"characters":[{"name":"林夏","role":"女主","arc":"从逃避到担当","trait":"长发杏眼","style":"白风衣","appearance":"二十多岁女性，黑色长发，杏眼，清瘦","personality":"坚韧","background":"普通职员","relationships":"受陆川控制","emotions":"克制","habits":"握项链","wardrobe_detail":"白色羊毛风衣，银色项链","lighting_mood":"柔和冷光","color_palette":"白灰银"},{"name":"陆川","role":"反派总裁","arc":"控制欲逐渐失控","trait":"短发窄眼","style":"黑西装","appearance":"三十岁男性，短发，窄眼，高大","personality":"偏执","background":"集团继承人","relationships":"控制林夏","emotions":"冷峻","habits":"整理袖扣","wardrobe_detail":"黑色羊毛西装，金色袖扣","lighting_mood":"硬朗侧光","color_palette":"黑金"}]}`}
+	ps := &ProjectService{textProvider: provider}
+	p := &models.Project{Synopsis: "林夏被陆川控制后反抗并逃离", Genre: "都市悬疑", Style: "真人写实"}
+	plan := &dramaPlan{Logline: "逃离控制", Core: "自由与控制"}
+
+	if err := ps.ensurePlanCharacters(p, plan); err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 1 || len(plan.Characters) != 2 || plan.Characters[0].Name != "林夏" {
+		t.Fatalf("角色自动抽取失败: calls=%d characters=%+v", provider.calls, plan.Characters)
+	}
+}
+
+func TestEnsurePlanCharactersKeepsCompletePlanCharacters(t *testing.T) {
+	provider := &stubTextProvider{response: `{}`}
+	ps := &ProjectService{textProvider: provider}
+	plan := &dramaPlan{Characters: []planCharacter{
+		{Name: "林夏", Role: "女主", Trait: "长发杏眼", Style: "白风衣", Appearance: "年轻女性", Personality: "坚韧", Background: "职员", Relationships: "对手", Emotions: "克制", Habits: "握项链", WardrobeDetail: "羊毛风衣", LightingMood: "柔光", ColorPalette: "白灰"},
+		{Name: "陆川", Role: "反派", Trait: "短发窄眼", Style: "黑西装", Appearance: "高大男性", Personality: "偏执", Background: "总裁", Relationships: "对手", Emotions: "冷峻", Habits: "理袖扣", WardrobeDetail: "羊毛西装", LightingMood: "侧光", ColorPalette: "黑金"},
+	}}
+	if err := ps.ensurePlanCharacters(&models.Project{}, plan); err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("完整角色不应再次调用 LLM，calls=%d", provider.calls)
+	}
+}
+
+func TestStartCharacterPortraitRequiresApprovedProfileAndPrompt(t *testing.T) {
+	ps := newTestProjectService(t)
+	ch := &models.Character{Name: "林夏", ProfileStatus: models.ProfileStatusDraft}
+	if err := ps.StartCharacterPortrait(ch); err == nil || !strings.Contains(err.Error(), "审核通过") {
+		t.Fatalf("草稿档案应拒绝生图，err=%v", err)
+	}
+	ch.ProfileStatus = models.ProfileStatusApproved
+	if err := ps.StartCharacterPortrait(ch); err == nil || !strings.Contains(err.Error(), "参考像提示词") {
+		t.Fatalf("缺少提示词应拒绝生图，err=%v", err)
+	}
+}
+
+func TestUpdateCharacterInvalidatesPortrait(t *testing.T) {
+	ps := newTestProjectService(t)
+	ch := models.Character{ProjectID: 1, Name: "林夏", Trait: "长发", ReferencePrompt: "旧提示词", Portrait: "old.png", ProfileStatus: models.ProfileStatusApproved, ReviewNote: "通过"}
+	ps.db.Create(&ch)
+	if err := ps.UpdateCharacter(&ch, models.Character{Name: "林夏", Trait: "短发"}); err != nil {
+		t.Fatal(err)
+	}
+	var got models.Character
+	ps.db.First(&got, ch.ID)
+	if got.Portrait != "" || got.ReferencePrompt != "" || got.ReviewNote != "" || got.ProfileStatus != models.ProfileStatusDraft {
+		t.Fatalf("角色形象编辑未使派生状态失效: %+v", got)
+	}
+}
+
+func TestPlanBackfillInvalidatesDerivedProfileState(t *testing.T) {
+	ps := newTestProjectService(t)
+	p := models.Project{Title: "t"}
+	ps.db.Create(&p)
+	ch := models.Character{ProjectID: p.ID, Name: "林夏", Role: "女主", ReferencePrompt: "旧提示词", Portrait: "old.png", ProfileStatus: models.ProfileStatusApproved, ReviewNote: "通过"}
+	ps.db.Create(&ch)
+	ps.upsertCharactersFromPlan(&p, &dramaPlan{Characters: []planCharacter{{Name: "林夏", Appearance: "补全外貌"}}})
+	var got models.Character
+	ps.db.First(&got, ch.ID)
+	if got.Appearance != "补全外貌" || got.ReferencePrompt != "" || got.Portrait != "" || got.ReviewNote != "" || got.ProfileStatus != models.ProfileStatusDraft {
+		t.Fatalf("方案回填未清除旧派生状态: %+v", got)
 	}
 }
 

@@ -13,6 +13,29 @@ import (
 	"comfyui-console/internal/models"
 )
 
+func TestGenerateCharacterPortraitPreconditionReturns4xx(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.Project{}, &models.Character{}); err != nil {
+		t.Fatal(err)
+	}
+	p := models.Project{Title: "p", Synopsis: "s"}
+	db.Create(&p)
+	ch := models.Character{ProjectID: p.ID, Name: "林夏", ProfileStatus: models.ProfileStatusDraft}
+	db.Create(&ch)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(p.ID), 10)}, {Key: "cid", Value: strconv.FormatUint(uint64(ch.ID), 10)}}
+	svc := &Service{DB: db, Projects: &ProjectService{db: db}}
+	svc.HandleGenerateCharacterPortrait(c)
+	if w.Code != 409 {
+		t.Fatalf("档案未审核应返回 409，实际 %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestLoadSceneRejectsCrossProjectScene(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})

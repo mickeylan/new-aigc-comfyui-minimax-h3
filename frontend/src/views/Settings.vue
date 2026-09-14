@@ -343,7 +343,7 @@ onMounted(async () => {
   }
 })
 
-async function save() {
+async function save(showFeedback = true) {
   error.value = ''
   success.value = ''
   saving.value = true
@@ -360,12 +360,17 @@ async function save() {
     payload.ali_tts_extra = aliExtraText.value
     await api.saveSettings(payload)
     saved.value = true
-    success.value = '配置已保存，立即生效'
-    setTimeout(() => { success.value = '' }, 3000)
+    if (showFeedback) {
+      success.value = '配置已保存，立即生效'
+      setTimeout(() => { success.value = '' }, 3000)
+    }
     if (form.value.volc_api_key) apiKeyPlaceholder.value = ''
     if (form.value.ali_api_key) aliKeyPlaceholder.value = ''
+    if (form.value.minimax_coding_api_key) miniMaxKeyPlaceholder.value = ''
+    return true
   } catch (e) {
     error.value = e.response?.data?.error || e.message || '保存失败'
+    return false
   } finally {
     saving.value = false
   }
@@ -377,6 +382,8 @@ async function test(type) {
   testResult.value = ''
   testing.value = type
   try {
+    // 文本 provider 选择和连接参数必须先持久化；否则后端会测试上一次保存的 provider。
+    if (type === 'text' && !(await save(false))) return
     const { data } = type === 'text' ? await api.testText() : type === 'tts' ? await api.testTTS() : await api.testImage()
     testResultOk.value = data.ok
     testResult.value = data.message

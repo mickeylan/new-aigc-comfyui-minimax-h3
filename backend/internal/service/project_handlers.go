@@ -555,7 +555,7 @@ func (s *Service) HandleGenerateCharacterPortrait(c *gin.Context) {
 		return
 	}
 	if err := s.Projects.StartCharacterPortrait(ch); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(200, gin.H{"ok": true, "message": fmt.Sprintf("角色「%s」标准像生成中", ch.Name)})
@@ -565,6 +565,10 @@ func (s *Service) HandleGenerateCharacterPortrait(c *gin.Context) {
 func (s *Service) HandleUploadCharacterPortrait(c *gin.Context) {
 	ch, ok := s.loadCharacter(c)
 	if !ok {
+		return
+	}
+	if ch.ProfileStatus != models.ProfileStatusApproved {
+		c.JSON(409, gin.H{"error": "请先审核通过角色档案，再上传标准像"})
 		return
 	}
 	file, header, err := c.Request.FormFile("file")
@@ -1331,6 +1335,169 @@ func serveLocalFile(c *gin.Context, full string, fi os.FileInfo) {
 	c.Header("Content-Length", strconv.FormatInt(size, 10))
 	c.Status(http.StatusOK)
 	_, _ = io.Copy(c.Writer, f)
+}
+
+// ---------- 角色档案（LumxAI 风格结构化角色提示词 + 审核工作流） ----------
+
+// HandleGenerateCharacterProfile 使用 LLM 为角色生成完整的结构化档案
+func (s *Service) HandleGenerateCharacterProfile(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	ch, ok := s.loadCharacter(c)
+	if !ok {
+		return
+	}
+
+	if err := s.CharacterProfiles.GenerateProfile(ch, p, p.Plan); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 刷新角色数据
+	var updated models.Character
+	s.DB.First(&updated, ch.ID)
+	s.Projects.PushProject(nil)
+	c.JSON(200, gin.H{
+		"character":      updated,
+		"profile_fields": s.CharacterProfiles.GetProfileFields(&updated),
+		"message":        fmt.Sprintf("角色「%s」档案已生成", ch.Name),
+	})
+}
+
+// HandleGenerateReferencePrompt 单独生成角色的参考像提示词
+func (s *Service) HandleGenerateReferencePrompt(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	ch, ok := s.loadCharacter(c)
+	if !ok {
+		return
+	}
+
+	prompt, err := s.CharacterProfiles.GenerateReferencePrompt(ch, p)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 刷新角色数据
+	var updated models.Character
+	s.DB.First(&updated, ch.ID)
+	s.Projects.PushProject(nil)
+	c.JSON(200, gin.H{
+		"character": updated,
+		"prompt":    prompt,
+		"message":   fmt.Sprintf("角色「%s」参考像提示词已生成", ch.Name),
+	})
+}
+
+// HandleUpdateCharacterProfile 手动更新角色档案字段
+func (s *Service) HandleUpdateCharacterProfile(c *gin.Context) {
+	ch, ok := s.loadCharacter(c)
+	if !ok {
+		return
+	}
+	var req models.Character
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": "参数错误"})
+		return
+	}
+
+	if err := s.CharacterProfiles.UpdateProfile(ch, req); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
+	var updated models.Character
+	s.DB.First(&updated, ch.ID)
+	s.Projects.PushProject(nil)
+	c.JSON(200, gin.H{
+		"character":      updated,
+		"profile_fields": s.CharacterProfiles.GetProfileFields(&updated),
+	})
+}
+
+// HandleApproveCharacterProfile 审核通过角色档案
+func (s *Service) HandleApproveCharacterProfile(c *gin.Context) {
+	ch, ok := s.loadCharacter(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Note string `json:"note"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		req.Note = ""
+	}
+
+	if err := s.CharacterProfiles.ApproveProfile(ch, req.Note); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+
+	var updated models.Character
+	s.DB.First(&updated, ch.ID)
+	s.Projects.PushProject(nil)
+	c.JSON(200, gin.H{
+		"character": updated,
+		"message":   fmt.Sprintf("角色「%s」档案已审核通过", ch.Name),
+	})
+}
+
+// HandleRejectCharacterProfile 驳回角色档案
+func (s *Service) HandleRejectCharacterProfile(c *gin.Context) {
+	ch, ok := s.loadCharacter(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": "请提供驳回原因"})
+		return
+	}
+	if strings.TrimSpace(req.Reason) == "" {
+		c.JSON(400, gin.H{"error": "驳回原因不能为空"})
+		return
+	}
+
+	if err := s.CharacterProfiles.RejectProfile(ch, req.Reason); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
+	var updated models.Character
+	s.DB.First(&updated, ch.ID)
+	s.Projects.PushProject(nil)
+	c.JSON(200, gin.H{
+		"character": updated,
+		"message":   fmt.Sprintf("角色「%s」档案已驳回，请根据意见修改后重新提交审核", ch.Name),
+	})
+}
+
+// HandleResetCharacterProfile 将角色档案重置为草稿状态
+func (s *Service) HandleResetCharacterProfile(c *gin.Context) {
+	ch, ok := s.loadCharacter(c)
+	if !ok {
+		return
+	}
+
+	if err := s.CharacterProfiles.ResetToDraft(ch); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
+	var updated models.Character
+	s.DB.First(&updated, ch.ID)
+	s.Projects.PushProject(nil)
+	c.JSON(200, gin.H{
+		"character": updated,
+		"message":   fmt.Sprintf("角色「%s」档案已重置为草稿状态", ch.Name),
+	})
 }
 
 var _ = gorm.ErrRecordNotFound

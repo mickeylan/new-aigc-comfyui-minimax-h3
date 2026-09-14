@@ -102,6 +102,14 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.DELETE("/api/projects/:id/characters/:cid", svc.HandleDeleteCharacter)
 	r.POST("/api/projects/:id/characters/:cid/portrait", svc.HandleGenerateCharacterPortrait)
 	r.POST("/api/projects/:id/characters/:cid/portrait/upload", svc.HandleUploadCharacterPortrait)
+
+	// 角色档案（LumxAI 风格结构化角色提示词 + 审核工作流）
+	r.POST("/api/projects/:id/characters/:cid/profile", svc.HandleGenerateCharacterProfile)                // LLM 生成完整角色档案
+	r.POST("/api/projects/:id/characters/:cid/profile/generate-prompt", svc.HandleGenerateReferencePrompt) // 单独生成参考像提示词
+	r.PUT("/api/projects/:id/characters/:cid/profile", svc.HandleUpdateCharacterProfile)                   // 手动更新角色档案字段
+	r.POST("/api/projects/:id/characters/:cid/profile/approve", svc.HandleApproveCharacterProfile)         // 审核通过
+	r.POST("/api/projects/:id/characters/:cid/profile/reject", svc.HandleRejectCharacterProfile)           // 审核驳回
+	r.POST("/api/projects/:id/characters/:cid/profile/reset", svc.HandleResetCharacterProfile)             // 重置为草稿
 	// 角色语音（预设音色 / 参考语音复刻）
 	r.POST("/api/projects/:id/characters/:cid/voice/upload", svc.HandleUploadCharacterVoice)
 	r.POST("/api/projects/:id/characters/:cid/voice/clone", svc.HandleCloneCharacterVoice)
@@ -115,6 +123,25 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/assets/:kind/:aid/image", svc.HandleGenerateAssetImage)
 	r.POST("/api/projects/:id/assets/:kind/:aid/image/upload", svc.HandleUploadAssetImage)
 	r.GET("/api/input/:taskid/*path", svc.HandleInputFile)
+
+	// 创作技能管理
+	r.GET("/api/skills", svc.HandleListSkills)                        // 列出所有技能
+	r.GET("/api/skills/stages", svc.HandleListSkillStages)            // 获取所有可用阶段
+	r.GET("/api/skills/stats", svc.HandleSkillStats)                  // 技能统计
+	r.GET("/api/skills/:id", svc.HandleGetSkill)                      // 获取单个技能
+	r.POST("/api/skills", svc.HandleCreateSkill)                      // 创建自定义技能
+	r.PUT("/api/skills/:id", svc.HandleUpdateSkill)                   // 更新技能
+	r.DELETE("/api/skills/:id", svc.HandleDeleteSkill)                // 删除自定义技能
+	r.POST("/api/skills/:id/upgrade", svc.HandleUpgradeSkill)         // 升级系统技能
+	r.GET("/api/skills/history/:code", svc.HandleSkillVersionHistory) // 获取版本历史
+	r.POST("/api/skills/:id/preview", svc.HandlePreviewSkillPrompt)   // 预览提示词装配
+
+	// 项目级技能配置
+	r.GET("/api/projects/:id/skills", svc.HandleGetProjectSkills)            // 获取项目技能配置
+	r.POST("/api/projects/:id/skills", svc.HandleSetProjectSkill)            // 设置项目技能
+	r.DELETE("/api/projects/:id/skills/:stage", svc.HandleResetProjectSkill) // 重置项目技能
+	r.GET("/api/projects/:id/skills/effective", svc.HandleGetEffectiveSkill) // 获取有效技能
+	r.GET("/api/projects/:id/skills/audit", svc.HandleGetSkillAuditLogs)     // 获取审计日志
 
 	// 素材库
 	r.GET("/api/materials", svc.HandleListMaterials)

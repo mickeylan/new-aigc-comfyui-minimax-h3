@@ -29,6 +29,23 @@ func readRef(name string) string {
 	return string(data)
 }
 
+type planCharacter struct {
+	Name           string `json:"name"`
+	Role           string `json:"role"`
+	Arc            string `json:"arc"`
+	Trait          string `json:"trait"`
+	Style          string `json:"style"`
+	Appearance     string `json:"appearance"`
+	Personality    string `json:"personality"`
+	Background     string `json:"background"`
+	Relationships  string `json:"relationships"`
+	Emotions       string `json:"emotions"`
+	Habits         string `json:"habits"`
+	WardrobeDetail string `json:"wardrobe_detail"`
+	LightingMood   string `json:"lighting_mood"`
+	ColorPalette   string `json:"color_palette"`
+}
+
 // 创作方案 JSON 结构（阶段 1 输出）
 type dramaPlan struct {
 	Title   string `json:"title"`   // 剧名
@@ -39,17 +56,11 @@ type dramaPlan struct {
 		Range string `json:"range"`
 		Event string `json:"event"`
 	} `json:"acts"` // 三幕结构
-	Rhythm       string `json:"rhythm"`       // 节奏曲线要点
-	Paywall      string `json:"paywall"`      // 付费卡点规划
-	Satisfaction string `json:"satisfaction"` // 爽感矩阵
-	Characters   []struct {
-		Name  string `json:"name"`
-		Role  string `json:"role"`  // 身份
-		Arc   string `json:"arc"`   // 弧光
-		Trait string `json:"trait"` // 外貌特征（用于画面一致性）
-		Style string `json:"style"` // 服装/造型
-	} `json:"characters"` // 主要角色（含外貌，供分镜画面一致）
-	Villains []struct {
+	Rhythm       string          `json:"rhythm"`       // 节奏曲线要点
+	Paywall      string          `json:"paywall"`      // 付费卡点规划
+	Satisfaction string          `json:"satisfaction"` // 爽感矩阵
+	Characters   []planCharacter `json:"characters"`   // 主要角色（含外貌，供分镜画面一致）
+	Villains     []struct {
 		Layer string `json:"layer"` // 小/中/大/隐藏反派
 		Name  string `json:"name"`
 		Motif string `json:"motif"`
@@ -107,14 +118,14 @@ func planSystemPrompt() string {
   "rhythm": "全剧节奏曲线设计（起势/攀升/风暴/决战配比）",
   "paywall": "付费卡点规划（占全集10-15%，标注卡点集数与悬念设计）",
   "satisfaction": "爽感矩阵配比（打脸/逆袭/甜宠/虐心/悬疑/燃/搞笑/感动）",
-  "characters": [{"name": "角色名", "role": "身份", "arc": "人物弧光", "trait": "外貌特征（发型/五官/体型，供画面生成保持一致）", "style": "服装造型"}],
+  "characters": [{"name":"角色名","role":"身份","arc":"人物弧光","trait":"外貌摘要","style":"服装摘要","appearance":"性别呈现、年龄感、发型发色、脸型、眼神、妆造、眉形、肤色、体型和特殊标记","personality":"核心性格与行为模式","background":"出身、经历、动机和目标","relationships":"与主要角色的关系","emotions":"典型表情和肢体语言","habits":"习惯动作和口头禅","wardrobe_detail":"服装款式、配色、配饰和材质","lighting_mood":"适合角色的光影氛围","color_palette":"主色、辅色和点缀色"}],
   "villains": [{"layer": "小反派/中反派/大反派/隐藏反派", "name": "名字", "motif": "动机与行为模式"}],
   "props": [{"name": "道具名", "description": "关键道具外观（形状/材质/颜色/标志性细节），贯穿全剧反复出现，供画面生成保持一致"}],
   "locations": [{"name": "场景名", "description": "主要场景环境（空间/建筑/陈设/光线氛围），供画面生成保持一致"}],
   "episodes": [{"n": 1, "title": "集标题", "brief": "核心冲突或爽点一句话", "hook": "钩子类型（悬念钩/反转钩/情绪钩/信息钩/危机钩）", "tag": "🔥或💰或空"}]
 }
 3. episodes 必须覆盖全集数（与用户配置的集数一致），体现三幕节奏；前10集至少3个🔥和2个💰；🔥占比25-35%，💰占比10-15%。
-4. 每个主要角色必须给出 trait（外貌特征）与 style（服装造型），后续分镜画面需要保持人物一致。
+4. 必须从故事创意中识别并生成 2~8 个主要角色（包括主角、关键配角和反派）；每个角色必须完整填写 characters 模板的全部字段。appearance 必须覆盖性别呈现、年龄感、发型发色、脸型、眼神、妆造、眉形、肤色、体型和特殊标记；wardrobe_detail 必须覆盖款式、配色、配饰和材质。角色由用户审核修改后再用于生图，禁止返回空 characters。
 5. 必须给出贯穿全剧的关键道具清单 props（2~8 项，如信物/武器/法宝/手机等反复出现、影响剧情的物件）与主要场景清单 locations（2~8 个地点），每项给出具体外观/环境描述；后续分镜只引用这些名称，系统会用它们生成参考图保证道具与场景全剧一致。`
 }
 
@@ -173,13 +184,16 @@ func (s *ProjectService) GeneratePlan(p *models.Project) (*models.Project, error
 	}
 	user.WriteString("请按系统要求输出创作方案 JSON。")
 
-	raw, err := s.textProvider.Chat(planSystemPrompt(), user.String())
+	raw, err := s.chatWithSkill(p.ID, models.SkillStagePlan, planSystemPrompt(), user.String(), map[string]string{"project_info": user.String(), "episode_count": fmt.Sprint(p.Episodes)})
 	if err != nil {
 		return nil, err
 	}
 	res, err := parsePlanJSON(raw)
 	if err != nil {
 		return nil, fmt.Errorf("方案解析失败（可重试）: %w", err)
+	}
+	if err := s.ensurePlanCharacters(p, res); err != nil {
+		return nil, err
 	}
 	planJSON, _ := json.Marshal(res)
 	status := "plan_done"
@@ -201,6 +215,75 @@ func (s *ProjectService) GeneratePlan(p *models.Project) (*models.Project, error
 	// 抽取关键道具与主要场景为独立资产（跨分镜一致性参考图）
 	s.upsertAssetsFromPlan(&fresh, res)
 	return &fresh, nil
+}
+
+// ensurePlanCharacters 在方案模型漏掉角色时，使用同一个文本 provider 专门分析故事并补齐角色。
+// 这使“创建项目”始终先由 AI 建立可审核的角色草稿，而不是要求用户从零手工录入。
+func (s *ProjectService) ensurePlanCharacters(p *models.Project, plan *dramaPlan) error {
+	valid := make([]planCharacter, 0, len(plan.Characters))
+	for _, ch := range plan.Characters {
+		ch.Name = strings.TrimSpace(ch.Name)
+		ch.Role = strings.TrimSpace(ch.Role)
+		ch.Arc = strings.TrimSpace(ch.Arc)
+		ch.Trait = strings.TrimSpace(ch.Trait)
+		ch.Style = strings.TrimSpace(ch.Style)
+		if completePlanCharacter(ch) {
+			valid = append(valid, ch)
+		}
+	}
+	if len(valid) >= 2 {
+		plan.Characters = valid
+		return nil
+	}
+
+	system := `你是影视角色设定师。请分析用户提供的故事内容，生成供用户审核和修改的主要角色草稿。只输出合法 JSON，不要输出 Markdown 或解释。格式：{"characters":[{"name":"角色名","role":"主角/关键配角/反派及身份","arc":"人物目标、冲突与成长弧线","trait":"稳定外貌摘要","style":"固定服装摘要","appearance":"性别呈现、年龄感、发型发色、脸型、眼神、妆造、眉形、肤色、体型和特殊标记","personality":"核心性格与行为模式","background":"出身、经历、动机和目标","relationships":"与主要角色的关系","emotions":"典型表情和肢体语言","habits":"习惯动作和口头禅","wardrobe_detail":"服装款式、配色、配饰和材质","lighting_mood":"适合角色的光影氛围","color_palette":"主色、辅色和点缀色"}]}。必须生成 2~8 个角色并完整填写全部字段，覆盖主角、关键配角和反派。`
+	user := "故事内容：" + p.Synopsis
+	if p.Genre != "" {
+		user += "\n题材：" + p.Genre
+	}
+	if p.Style != "" {
+		user += "\n画风：" + p.Style
+	}
+	if plan.Core != "" {
+		user += "\n核心冲突：" + plan.Core
+	}
+	raw, err := s.chatWithSkill(p.ID, models.SkillStageCharacter, system, user, map[string]string{"character_info": user})
+	if err != nil {
+		return fmt.Errorf("AI 角色分析失败: %w", err)
+	}
+	var result struct {
+		Characters []planCharacter `json:"characters"`
+	}
+	text := strings.TrimSpace(raw)
+	start, end := strings.Index(text, "{"), strings.LastIndex(text, "}")
+	if start < 0 || end <= start || json.Unmarshal([]byte(text[start:end+1]), &result) != nil {
+		return fmt.Errorf("AI 角色分析结果不是合法 JSON，请重试")
+	}
+	plan.Characters = nil
+	for _, ch := range result.Characters {
+		ch.Name = strings.TrimSpace(ch.Name)
+		ch.Role = strings.TrimSpace(ch.Role)
+		ch.Arc = strings.TrimSpace(ch.Arc)
+		ch.Trait = strings.TrimSpace(ch.Trait)
+		ch.Style = strings.TrimSpace(ch.Style)
+		if completePlanCharacter(ch) {
+			plan.Characters = append(plan.Characters, ch)
+		}
+	}
+	if len(plan.Characters) < 2 {
+		return fmt.Errorf("AI 未能从故事中识别出至少 2 个完整角色，请重试生成创作方案")
+	}
+	return nil
+}
+
+func completePlanCharacter(ch planCharacter) bool {
+	return strings.TrimSpace(ch.Name) != "" && strings.TrimSpace(ch.Role) != "" &&
+		strings.TrimSpace(ch.Trait) != "" && strings.TrimSpace(ch.Style) != "" &&
+		strings.TrimSpace(ch.Appearance) != "" && strings.TrimSpace(ch.Personality) != "" &&
+		strings.TrimSpace(ch.Background) != "" && strings.TrimSpace(ch.Relationships) != "" &&
+		strings.TrimSpace(ch.Emotions) != "" && strings.TrimSpace(ch.Habits) != "" &&
+		strings.TrimSpace(ch.WardrobeDetail) != "" && strings.TrimSpace(ch.LightingMood) != "" &&
+		strings.TrimSpace(ch.ColorPalette) != ""
 }
 
 // PlanEpisodeUpdate 每集可编辑字段（标题 / 剧情提示词）

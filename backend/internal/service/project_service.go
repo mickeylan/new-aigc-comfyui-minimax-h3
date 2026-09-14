@@ -32,6 +32,7 @@ type ProjectService struct {
 	stopped       chan struct{}
 	imageSem      chan struct{} // 文生图并发限制（火山 API QPS），默认 3
 	materials     *MaterialService
+	skills        *SkillService
 	assetMu       sync.Mutex    // 资产参考图生成去重（流水线轮询会重复触发）
 	assetInflight map[uint]bool // 生成中的资产 ID
 }
@@ -45,6 +46,25 @@ func NewProjectService(cfg *config.Config, db *gorm.DB, textProvider TextProvide
 		imageSem:  make(chan struct{}, 3),
 		materials: materials,
 	}
+}
+
+func (s *ProjectService) chatWithSkill(projectID uint, stage, system, user string, params map[string]string) (string, error) {
+	if s.skills == nil {
+		return s.textProvider.Chat(system, user)
+	}
+	return s.skills.ChatWithSkill(projectID, stage, s.textProvider, system, user, params)
+}
+
+func (s *ProjectService) applyPromptSkill(projectID uint, stage, prompt string, params map[string]string) string {
+	if s.skills == nil {
+		return prompt
+	}
+	_, addition, skill, err := s.skills.ApplyPrompt(projectID, stage, "", "", params)
+	if err != nil || skill == nil || strings.TrimSpace(addition) == "" {
+		return prompt
+	}
+	_ = s.skills.LogSkillUsage(projectID, stage, skill, prompt, len(prompt)+len(addition), 0, true, "")
+	return prompt + "\n\n" + addition
 }
 
 // ---------- 项目 ----------
@@ -209,6 +229,12 @@ func (s *ProjectService) DeleteProject(id uint) error {
 			return err
 		}
 		if err := tx.Where("project_id = ?", id).Delete(&models.MergeTask{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ?", id).Delete(&models.ProjectSkillConfig{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ?", id).Delete(&models.SkillAuditLog{}).Error; err != nil {
 			return err
 		}
 		return tx.Delete(&models.Project{}, id).Error
@@ -402,7 +428,7 @@ func (s *ProjectService) GenerateScript(p *models.Project, episodeN int) (*model
 		user.WriteString("请按系统要求输出剧本 JSON。")
 	}
 
-	raw, err := s.textProvider.Chat(system, user.String())
+	raw, err := s.chatWithSkill(p.ID, models.SkillStageStoryboard, system, user.String(), map[string]string{"episode_n": fmt.Sprint(episodeN), "story_prompt": p.Synopsis, "characters": p.Plan})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -446,7 +472,7 @@ func (s *ProjectService) GenerateScriptFromText(p *models.Project, episodeN int,
 		system = scriptSystemPrompt
 	}
 
-	raw, err := s.textProvider.Chat(system, user.String())
+	raw, err := s.chatWithSkill(p.ID, models.SkillStageStoryboard, system, user.String(), map[string]string{"episode_n": fmt.Sprint(episodeN), "story_prompt": scriptText, "characters": p.Plan})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -465,7 +491,7 @@ func (s *ProjectService) ExpandScript(p *models.Project, episodeN int, scriptTex
 	}
 	system := "你是专业的漫剧编剧。根据用户提供的本集剧本正文进行扩写：丰富场景环境描写、人物动作与表情、对白与冲突细节，保持原有剧情走向、人物关系与核心冲突不变，节奏更紧凑有张力。只输出扩写后的完整剧本正文（纯文本，按场景分段，含动作描写与对白），不要输出 JSON、Markdown 标记或任何解释。"
 	user := fmt.Sprintf("第 %d 集「%s」剧本正文，请扩写：\n\n%s", episodeN, epTitle, scriptText)
-	return s.textProvider.Chat(system, user)
+	return s.chatWithSkill(p.ID, models.SkillStageStoryboard, system, user, map[string]string{"episode_n": fmt.Sprint(episodeN), "story_prompt": scriptText})
 }
 
 // generateScriptCore 解析 LLM 输出并落库（替换指定集的分镜场景）
@@ -721,6 +747,7 @@ func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string) (tplC
 	}
 	// 结尾再次强调无字幕约束
 	prompt += "\n\n再次强调：严禁画面出现任何文字/字幕/水印/对话框，对白只用声音表达（Do NOT render any text or subtitles on screen）"
+	prompt = s.applyPromptSkill(sc.ProjectID, models.SkillStageVideoPrompt, prompt, map[string]string{"scene_content": sc.Content, "duration": fmt.Sprint(sc.Duration)})
 
 	// 固定使用 i2v：仅首帧（ref2v 多参考图易跑偏，弃用）
 	return "minimax_h3_i2v", prompt, map[string][]FileMeta{
@@ -828,7 +855,7 @@ func (s *ProjectService) CreateCharacter(ch models.Character) (*models.Character
 	return &ch, nil
 }
 
-// UpdateCharacter 编辑角色（改名需保证项目内唯一）；不影响已生成的标准像
+// UpdateCharacter 编辑角色（改名需保证项目内唯一）；形象相关字段变化会使旧标准像失效。
 func (s *ProjectService) UpdateCharacter(ch *models.Character, req models.Character) error {
 	updates := map[string]any{}
 	newName := strings.TrimSpace(req.Name)
@@ -840,10 +867,22 @@ func (s *ProjectService) UpdateCharacter(ch *models.Character, req models.Charac
 		}
 		updates["name"] = newName
 	}
-	updates["role"] = strings.TrimSpace(req.Role)
-	updates["trait"] = strings.TrimSpace(req.Trait)
-	updates["style"] = strings.TrimSpace(req.Style)
+	role, trait, style := strings.TrimSpace(req.Role), strings.TrimSpace(req.Trait), strings.TrimSpace(req.Style)
+	updates["role"] = role
+	updates["trait"] = trait
+	updates["style"] = style
 	updates["voice"] = strings.TrimSpace(req.Voice) // 预设音色；参考语音（voice_ref/voice_id）由独立接口管理
+	effectiveName := ch.Name
+	if newName != "" {
+		effectiveName = newName
+	}
+	if effectiveName != ch.Name || role != ch.Role || trait != ch.Trait || style != ch.Style {
+		updates["profile_status"] = models.ProfileStatusDraft
+		updates["review_note"] = ""
+		updates["reference_prompt"] = ""
+		updates["portrait"] = ""
+		updates["profile_version"] = gorm.Expr("profile_version + 1")
+	}
 	if err := s.db.Model(ch).Updates(updates).Error; err != nil {
 		return err
 	}
@@ -894,13 +933,33 @@ func (s *ProjectService) upsertCharactersFromPlan(p *models.Project, plan *drama
 			if strings.TrimSpace(existing.Style) == "" && strings.TrimSpace(pc.Style) != "" {
 				updates["style"] = pc.Style
 			}
+			for key, pair := range map[string][2]string{
+				"appearance": {existing.Appearance, pc.Appearance}, "personality": {existing.Personality, pc.Personality},
+				"background": {existing.Background, pc.Background}, "relationships": {existing.Relationships, pc.Relationships},
+				"emotions": {existing.Emotions, pc.Emotions}, "habits": {existing.Habits, pc.Habits},
+				"wardrobe_detail": {existing.WardrobeDetail, pc.WardrobeDetail}, "lighting_mood": {existing.LightingMood, pc.LightingMood},
+				"color_palette": {existing.ColorPalette, pc.ColorPalette},
+			} {
+				if strings.TrimSpace(pair[0]) == "" && strings.TrimSpace(pair[1]) != "" {
+					updates[key] = pair[1]
+				}
+			}
 			if len(updates) > 0 {
+				updates["profile_status"] = models.ProfileStatusDraft
+				updates["profile_version"] = gorm.Expr("profile_version + 1")
+				updates["reference_prompt"] = ""
+				updates["review_note"] = ""
+				updates["portrait"] = ""
 				s.db.Model(&existing).Updates(updates)
 			}
 			continue
 		}
 		s.db.Create(&models.Character{
 			ProjectID: p.ID, Name: name, Role: pc.Role, Trait: pc.Trait, Style: pc.Style, Source: "auto",
+			Appearance: pc.Appearance, Personality: pc.Personality, Background: pc.Background,
+			Relationships: pc.Relationships, Emotions: pc.Emotions, Habits: pc.Habits,
+			WardrobeDetail: pc.WardrobeDetail, LightingMood: pc.LightingMood, ColorPalette: pc.ColorPalette,
+			ProfileStatus: models.ProfileStatusDraft, ProfileVersion: 1,
 		})
 	}
 	s.pushProject(nil)
@@ -909,15 +968,23 @@ func (s *ProjectService) upsertCharactersFromPlan(p *models.Project, plan *drama
 // GenerateAllPortraits 一键生成全部缺少标准像的角色
 func (s *ProjectService) GenerateAllPortraits(p *models.Project) (int, error) {
 	var chars []models.Character
-	s.db.Where("project_id = ? AND portrait = ''", p.ID).Find(&chars)
+	s.db.Where("project_id = ? AND portrait = '' AND profile_status = ? AND reference_prompt != ''", p.ID, models.ProfileStatusApproved).Find(&chars)
 	for i := range chars {
-		s.StartCharacterPortrait(&chars[i])
+		if err := s.StartCharacterPortrait(&chars[i]); err != nil {
+			return i, err
+		}
 	}
 	return len(chars), nil
 }
 
 // StartCharacterPortrait 异步生成角色标准像（文生图，限流并发）
 func (s *ProjectService) StartCharacterPortrait(ch *models.Character) error {
+	if ch.ProfileStatus != models.ProfileStatusApproved {
+		return fmt.Errorf("请先审核通过角色「%s」的详细档案", ch.Name)
+	}
+	if strings.TrimSpace(ch.ReferencePrompt) == "" {
+		return fmt.Errorf("请先为角色「%s」生成或填写参考像提示词", ch.Name)
+	}
 	go func() {
 		if err := s.generateCharacterPortrait(ch); err != nil {
 			log.Printf("[character %d] portrait failed: %v", ch.ID, err)
@@ -988,17 +1055,32 @@ func styleDescriptor(style string) string {
 }
 
 func buildPortraitPrompt(p *models.Project, ch *models.Character) string {
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 8)
 	if desc := styleDescriptor(p.Style); desc != "" {
 		parts = append(parts, desc)
 	}
-	if strings.TrimSpace(ch.Trait) != "" {
-		parts = append(parts, ch.Trait)
+	if prompt := strings.TrimSpace(ch.ReferencePrompt); prompt != "" {
+		parts = append(parts, prompt)
+	} else {
+		if appearance := strings.TrimSpace(ch.Appearance); appearance != "" {
+			parts = append(parts, "人物外貌必须严格固定："+appearance)
+		} else if trait := strings.TrimSpace(ch.Trait); trait != "" {
+			parts = append(parts, "人物外貌必须严格固定："+trait)
+		}
+		if wardrobe := strings.TrimSpace(ch.WardrobeDetail); wardrobe != "" {
+			parts = append(parts, "服装与材质必须严格固定："+wardrobe)
+		} else if style := strings.TrimSpace(ch.Style); style != "" {
+			parts = append(parts, "服装造型必须严格固定："+style)
+		}
+		if palette := strings.TrimSpace(ch.ColorPalette); palette != "" {
+			parts = append(parts, "角色配色："+palette)
+		}
+		if lighting := strings.TrimSpace(ch.LightingMood); lighting != "" {
+			parts = append(parts, "布光："+lighting)
+		}
 	}
-	if strings.TrimSpace(ch.Style) != "" {
-		parts = append(parts, ch.Style)
-	}
-	parts = append(parts, "角色标准像，半身肖像，正面，中性纯色背景，高质量，居中构图")
+	// 主参考像保持单人单视图，避免多视图设定图被后续参考图模型误识别为多人。
+	parts = append(parts, "单一角色，正面半身头像，直视镜头，中性自然表情，纯白干净背景，影棚级柔和布光，居中对称构图，高分辨率角色标准参考像，禁止多人、拼图、文字、水印和复杂背景")
 	return strings.Join(parts, "，")
 }
 
@@ -1067,7 +1149,8 @@ func (s *ProjectService) buildSceneImagePrompt(sc *models.Scene) string {
 	if prompt := strings.TrimSpace(sc.ImagePrompt); prompt != "" {
 		parts = append(parts, "当前分镜："+prompt)
 	}
-	return strings.Join(parts, "\n")
+	prompt := strings.Join(parts, "\n")
+	return s.applyPromptSkill(sc.ProjectID, models.SkillStageImagePrompt, prompt, map[string]string{"original_prompt": prompt, "character_definitions": s.characterContextForScene(sc), "style_requirements": p.Style})
 }
 
 // parseSceneCharacters 解析场景出场角色（逗号分隔）
@@ -1453,8 +1536,7 @@ func (s *ProjectService) advancePipeline(projectID uint) {
 			s.failPipeline(p.ID, err, true)
 			return
 		}
-		// 触发角色标准像与道具/场景参考图生成（异步，供后续分镜画面锁定一致性）
-		s.GenerateAllPortraits(fresh)
+		// 角色仅生成可审核的档案草稿，不在用户审核前自动生成人像；道具/场景参考图仍可异步准备。
 		s.GenerateAllAssetImages(fresh, "")
 		s.db.Model(&models.Project{}).Where("id = ? AND pipeline_stage = ?", p.ID, "plan_running").Update("pipeline_stage", "script")
 		go s.advancePipeline(fresh.ID)
@@ -1480,6 +1562,14 @@ func (s *ProjectService) advancePipeline(projectID uint) {
 		}
 		go s.advancePipeline(p.ID)
 	case "images":
+		// 分镜画面依赖角色标准像；在画面生成前执行审核门控，避免先生成无角色参考的废图。
+		var unapproved, missingPortraits int64
+		s.db.Model(&models.Character{}).Where("project_id = ? AND profile_status != ?", p.ID, models.ProfileStatusApproved).Count(&unapproved)
+		s.db.Model(&models.Character{}).Where("project_id = ? AND portrait = ''", p.ID).Count(&missingPortraits)
+		if unapproved > 0 || missingPortraits > 0 {
+			s.failPipeline(p.ID, fmt.Errorf("角色资产尚未就绪：%d 个档案待审核，%d 个角色缺少标准像；请完成审核和标准像生成后重试", unapproved, missingPortraits), true)
+			return
+		}
 		var scenes []models.Scene
 		if err := s.db.Where("project_id = ? AND episode_n = ? AND generation = ?", p.ID, episodeN, p.Generation).Order("`order`").Find(&scenes).Error; err != nil || len(scenes) == 0 {
 			s.failPipeline(p.ID, fmt.Errorf("没有可生成的分镜场景"), true)
@@ -1509,11 +1599,11 @@ func (s *ProjectService) advancePipeline(projectID uint) {
 		s.db.Model(&models.Project{}).Where("id = ? AND pipeline_stage = ?", p.ID, "images").Update("pipeline_stage", "videos")
 		go s.advancePipeline(p.ID)
 	case "videos":
-		// 确保角色标准像就绪（ref2v 锁角色依赖）：未就绪则触发并等待下一轮，避免系统性退化为 i2v
+		// 角色标准像必须经过“档案审核 → 提示词确认 → 人工触发生成”，自动流水线不得绕过审核。
 		var pendingPortraits int64
 		s.db.Model(&models.Character{}).Where("project_id = ? AND portrait = ''", p.ID).Count(&pendingPortraits)
 		if pendingPortraits > 0 {
-			s.GenerateAllPortraits(&p)
+			s.failPipeline(p.ID, fmt.Errorf("仍有 %d 个角色缺少已审核的标准像，请审核角色档案并生成标准像后重试", pendingPortraits), true)
 			return
 		}
 		// 确保道具/场景参考图就绪（分镜画面一致性依赖）

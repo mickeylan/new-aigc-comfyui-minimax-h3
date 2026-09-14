@@ -15,11 +15,11 @@ import (
 var templateFS embed.FS
 
 type templateFile struct {
-	Name         string                   `json:"name"`
-	Code         string                   `json:"code"`
-	Description  string                   `json:"description"`
-	Inputs       []map[string]any         `json:"inputs"`
-	Workflow     map[string]map[string]any `json:"workflow"`
+	Name        string                    `json:"name"`
+	Code        string                    `json:"code"`
+	Description string                    `json:"description"`
+	Inputs      []map[string]any          `json:"inputs"`
+	Workflow    map[string]map[string]any `json:"workflow"`
 }
 
 // InitSystemTemplates 初始化内置模板到 DB

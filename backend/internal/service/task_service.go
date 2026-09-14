@@ -112,6 +112,11 @@ func normalizeTemplateFiles(tpl *models.Template, params map[string]any, files m
 
 	for _, input := range inputs {
 		if !fileInputTypes[input.Type] {
+			// 自动任务通常只传业务参数；模板声明的模型文件等默认值在服务端补齐，
+			// 同时仍允许调用方显式覆盖，以便只换模型而不改工作流。
+			if _, exists := params[input.Key]; !exists && input.Default != nil {
+				params[input.Key] = input.Default
+			}
 			continue
 		}
 		items := files[input.Key]

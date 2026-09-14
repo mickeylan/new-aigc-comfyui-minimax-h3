@@ -100,8 +100,8 @@
           <p class="sub">统一角色外貌、道具与场景环境，并可锁定角色音色；分镜画面生成时自动注入设定与参考图，保证跨集一致</p>
         </div>
         <div class="section-actions">
-          <button v-if="assetTab === 'char'" class="btn btn-ghost btn-sm" :disabled="busy || charsWithoutPortrait === 0" @click="allPortraits">
-            一键生成标准像 ({{ charsWithoutPortrait }})
+          <button v-if="assetTab === 'char'" class="btn btn-ghost btn-sm" :disabled="busy || approvedCharsWithoutPortrait === 0" @click="allPortraits">
+            一键生成已审核标准像 ({{ approvedCharsWithoutPortrait }})
           </button>
           <button v-else class="btn btn-ghost btn-sm" :disabled="busy || assetsWithoutImage === 0" @click="allAssetImages">
             一键生成{{ assetKindLabel }}图 ({{ assetsWithoutImage }})
@@ -136,7 +136,8 @@
               <span v-else-if="ch.voice" class="char-voice">🎵 音色：{{ ch.voice }}</span>
               <span class="char-appear">出场 {{ characterCounts[ch.id] || 0 }} 场</span>
               <div class="char-actions">
-                <button class="btn btn-sm btn-secondary" :disabled="busy" @click="genPortrait(ch)">
+                <button class="btn btn-sm btn-secondary" :disabled="busy || ch.profile_status !== 'approved' || !ch.reference_prompt" @click="genPortrait(ch)"
+                  :title="ch.profile_status !== 'approved' ? '请先审核通过角色档案' : !ch.reference_prompt ? '请先生成或填写参考像提示词' : ''">
                   {{ ch.portrait ? '重生成标准像' : '生成标准像' }}
                 </button>
                 <button class="btn btn-sm btn-ghost" :disabled="busy || ch._uploading" @click="uploadPortrait(ch)">
@@ -159,7 +160,8 @@
           </div>
         </div>
         <div v-else class="card empty-inline">
-          暂无角色。生成创作方案后会自动抽取角色，也可点击「新建角色」手动添加。
+          <template v-if="pipelineActive || generatingPlan">AI 正在分析故事并生成角色草稿，请稍候。生成后你可以审核、修改、删除或补充角色。</template>
+          <template v-else>暂无角色。请先生成创作方案，AI 会从故事内容自动生成角色草稿；「新建角色」仅用于审核后的人工补充。</template>
         </div>
       </div>
 
@@ -530,38 +532,181 @@
 
     <!-- 角色新建/编辑弹窗 -->
     <div v-if="editingCharacter" class="modal-mask" @click.self="editingCharacter = null">
+      <div class="modal card modal-lg">
+        <h2>{{ editingCharacter === 'new' ? '新建角色' : '编辑角色' }} <span v-if="editingCharacter !== 'new' && editingCharacter.name">「{{ editingCharacter.name }}」</span></h2>
+
+        <!-- 角色编辑标签页（仅已保存的角色显示档案标签） -->
+        <div v-if="editingCharacter !== 'new'" class="char-edit-tabs">
+          <button class="char-edit-tab" :class="{ active: charProfileTab === 'basic' }" @click="charProfileTab = 'basic'">基础信息</button>
+          <button class="char-edit-tab" :class="{ active: charProfileTab === 'profile' }" @click="charProfileTab = 'profile'">
+            详细档案 <span v-if="editingCharacter.profile_status" :class="'badge ' + profileStatusClass(editingCharacter.profile_status)">{{ profileStatusText(editingCharacter.profile_status) }}</span>
+          </button>
+          <button class="char-edit-tab" :class="{ active: charProfileTab === 'prompt' }" @click="charProfileTab = 'prompt'">参考像提示词</button>
+        </div>
+
+        <!-- 基础信息标签页 -->
+        <div v-if="charProfileTab === 'basic'">
+          <div class="field">
+            <label>角色名 <span class="req">必填</span></label>
+            <input v-model="charForm.name" class="input" placeholder="如：林夏" />
+          </div>
+          <div class="field">
+            <label>身份 <span class="optional">可选</span></label>
+            <input v-model="charForm.role" class="input" placeholder="主角 / 女主 / 反派 / 配角…" />
+          </div>
+          <div class="field">
+            <label>外貌特征 <span class="optional">用于保证人物一致</span></label>
+            <textarea v-model="charForm.trait" class="textarea" rows="3"
+              placeholder="发型、五官、体型、年龄感、肤色…" />
+          </div>
+          <div class="field">
+            <label>服装造型</label>
+            <textarea v-model="charForm.style" class="textarea" rows="2"
+              placeholder="标志性服装、配饰、主色调…" />
+          </div>
+          <div class="field">
+            <label>配音音色 <span class="optional">可选，预设音色 ID</span></label>
+            <input v-model="charForm.voice" class="input" list="voice-presets" placeholder="如 Cherry / Ethan；留空使用平台设置的音色映射" />
+            <datalist id="voice-presets">
+              <option v-for="v in voicePresets" :key="v" :value="v" />
+            </datalist>
+            <div class="field-hint">角色级音色优先于平台设置的角色音色映射；上传参考语音复刻的音色优先级最高（在角色卡片上传）</div>
+          </div>
+        </div>
+
+        <!-- 详细档案标签页（LumxAI 风格） -->
+        <div v-if="charProfileTab === 'profile'">
+          <div class="profile-hint">
+            <p>💡 AI 将从故事内容中提取角色的详细特征，生成包含外貌、性格、背景、关系等多维度的结构化档案。</p>
+            <div class="profile-actions">
+              <button class="btn btn-secondary btn-sm" :disabled="generatingProfile || editingCharacter === 'new'" @click="generateCharacterProfile">
+                {{ generatingProfile ? 'AI 生成中…' : '🤖 AI 生成完整档案' }}
+              </button>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>外貌描述</label>
+            <textarea v-model="charProfileForm.appearance" class="textarea" rows="4"
+              placeholder="发型（形状/长度/颜色/质感）、脸型、眉眼（形状/眼神特点）、鼻型、唇形、肤色、身材、特殊标记…" />
+          </div>
+          <div class="field">
+            <label>性格特点</label>
+            <textarea v-model="charProfileForm.personality" class="textarea" rows="3"
+              placeholder="MBTI 性格类型、核心性格标签、行为模式、情绪表达习惯…" />
+          </div>
+          <div class="field">
+            <label>背景故事</label>
+            <textarea v-model="charProfileForm.background" class="textarea" rows="4"
+              placeholder="出身背景、成长经历、关键事件、角色动机、个人目标与欲望…" />
+          </div>
+          <div class="field">
+            <label>关系图谱</label>
+            <textarea v-model="charProfileForm.relationships" class="textarea" rows="3"
+              placeholder="与其他角色的关系描述（亲子/恋人/朋友/敌人等），关系动态变化…" />
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>情绪表达</label>
+              <textarea v-model="charProfileForm.emotions" class="textarea" rows="2"
+                placeholder="喜怒哀乐的表现形式，面部表情和肢体语言特点…" />
+            </div>
+            <div class="field">
+              <label>习惯动作</label>
+              <textarea v-model="charProfileForm.habits" class="textarea" rows="2"
+                placeholder="小动作、口头禅、紧张/放松时的标志性行为…" />
+            </div>
+          </div>
+          <div class="field">
+            <label>服装细节</label>
+            <textarea v-model="charProfileForm.wardrobe_detail" class="textarea" rows="3"
+              placeholder="材质、颜色、款式、重要配饰、随时间变化的造型演变…" />
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>光影氛围</label>
+              <input v-model="charProfileForm.lighting_mood" class="input"
+                placeholder="柔和/硬朗/戏剧性、暖色调/冷色调…" />
+            </div>
+            <div class="field">
+              <label>角色色调</label>
+              <input v-model="charProfileForm.color_palette" class="input"
+                placeholder="主色调、辅色调、点缀色…" />
+            </div>
+          </div>
+
+          <!-- 审核工作流 -->
+          <div class="profile-review" v-if="editingCharacter !== 'new'">
+            <h4>审核工作流</h4>
+            <div class="review-status">
+              <span :class="'badge ' + profileStatusClass(editingCharacter.profile_status)">
+                {{ profileStatusText(editingCharacter.profile_status) }}
+              </span>
+              <span v-if="editingCharacter.review_note" class="review-note">{{ editingCharacter.review_note }}</span>
+            </div>
+            <div class="review-actions">
+              <button class="btn btn-sm btn-secondary" :disabled="busy || editingCharacter === 'new'" @click="saveCharacterProfile">
+                {{ busy ? '保存中…' : '💾 保存档案' }}
+              </button>
+              <button class="btn btn-sm btn-primary" :disabled="busy" @click="approveCharacterProfile('审核通过')">
+                ✓ 审核通过
+              </button>
+              <button class="btn btn-sm btn-danger" :disabled="busy" @click="showRejectDialog">
+                ✗ 驳回修改
+              </button>
+              <button class="btn btn-sm btn-ghost" :disabled="busy" @click="resetCharacterProfile">
+                重置为草稿
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 参考像提示词标签页 -->
+        <div v-if="charProfileTab === 'prompt'">
+          <div class="profile-hint">
+            <p>💡 基于角色档案生成适合当前角色标准像流程的高质量单人参考像提示词。</p>
+            <div class="profile-actions">
+              <button class="btn btn-secondary btn-sm" :disabled="generatingPrompt || editingCharacter === 'new'" @click="generateReferencePrompt">
+                {{ generatingPrompt ? '生成中…' : '生成参考像提示词' }}
+              </button>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>参考像提示词</label>
+            <textarea v-model="charProfileForm.reference_prompt" class="textarea" rows="8"
+              placeholder="系统将根据角色档案生成高质量的参考像提示词，也可手动编辑…" />
+            <div class="field-hint">提示词应包含人物正面/3/4侧面照描述、精确外貌特征、服装造型、场景环境、光影氛围、构图方式、画风描述。</div>
+          </div>
+
+          <div v-if="charProfileForm.reference_prompt" class="prompt-preview">
+            <h4>提示词预览</h4>
+            <pre class="prompt-text">{{ charProfileForm.reference_prompt }}</pre>
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <button class="btn btn-ghost" @click="editingCharacter = null">关闭</button>
+          <button class="btn" :disabled="busy || !charForm.name.trim()" @click="saveCharacter">
+            {{ busy ? '保存中…' : '保存基础信息' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 驳回原因弹窗 -->
+    <div v-if="showRejectModal" class="modal-mask" @click.self="showRejectModal = false">
       <div class="modal card">
-        <h2>{{ editingCharacter === 'new' ? '新建角色' : '编辑角色' }}</h2>
+        <h2>驳回角色档案</h2>
         <div class="field">
-          <label>角色名 <span class="req">必填</span></label>
-          <input v-model="charForm.name" class="input" placeholder="如：林夏" />
-        </div>
-        <div class="field">
-          <label>身份 <span class="optional">可选</span></label>
-          <input v-model="charForm.role" class="input" placeholder="主角 / 女主 / 反派 / 配角…" />
-        </div>
-        <div class="field">
-          <label>外貌特征 <span class="optional">用于保证人物一致</span></label>
-          <textarea v-model="charForm.trait" class="textarea" rows="3"
-            placeholder="发型、五官、体型、年龄感、肤色…" />
-        </div>
-        <div class="field">
-          <label>服装造型</label>
-          <textarea v-model="charForm.style" class="textarea" rows="2"
-            placeholder="标志性服装、配饰、主色调…" />
-        </div>
-        <div class="field">
-          <label>配音音色 <span class="optional">可选，预设音色 ID</span></label>
-          <input v-model="charForm.voice" class="input" list="voice-presets" placeholder="如 Cherry / Ethan；留空使用平台设置的音色映射" />
-          <datalist id="voice-presets">
-            <option v-for="v in voicePresets" :key="v" :value="v" />
-          </datalist>
-          <div class="field-hint">角色级音色优先于平台设置的角色音色映射；上传参考语音复刻的音色优先级最高（在角色卡片上传）</div>
+          <label>驳回原因 <span class="req">必填</span></label>
+          <textarea v-model="rejectReason" class="textarea" rows="4"
+            placeholder="请说明需要修改的内容…" />
         </div>
         <div class="modal-actions">
-          <button class="btn btn-ghost" @click="editingCharacter = null">取消</button>
-          <button class="btn" :disabled="busy || !charForm.name.trim()" @click="saveCharacter">
-            {{ busy ? '保存中…' : '保存' }}
+          <button class="btn btn-ghost" @click="showRejectModal = false">取消</button>
+          <button class="btn btn-danger" :disabled="busy || !rejectReason.trim()" @click="confirmReject">
+            {{ busy ? '提交中…' : '确认驳回' }}
           </button>
         </div>
       </div>
@@ -651,6 +796,33 @@ const curEpDubReady = computed(() => {
 })
 const editingCharacter = ref(null)
 const charForm = reactive({ name: '', role: '', trait: '', style: '', voice: '' })
+
+// 角色档案（LumxAI 风格）状态
+const charProfileTab = ref('basic') // basic / profile / prompt
+const charProfileForm = reactive({
+  appearance: '', personality: '', background: '', relationships: '',
+  emotions: '', habits: '', wardrobe_detail: '', lighting_mood: '',
+  color_palette: '', reference_prompt: ''
+})
+const generatingProfile = ref(false)
+const generatingPrompt = ref(false)
+const profileStatusClass = (status) => ({
+  draft: 'badge-gray', approved: 'badge-green', rejected: 'badge-red'
+}[status] || 'badge-gray')
+const profileStatusText = (status) => ({
+  draft: '草稿', approved: '已审核', rejected: '已驳回'
+}[status] || status)
+const showRejectModal = ref(false)
+const rejectReason = ref('')
+function showRejectDialog() {
+  rejectReason.value = ''
+  showRejectModal.value = true
+}
+async function confirmReject() {
+  showRejectModal.value = false
+  await rejectCharacterProfile(rejectReason.value)
+}
+
 // 道具/场景资产 + 角色语音
 const assetTab = ref('char') // char / prop / location
 const assets = ref([])
@@ -691,6 +863,7 @@ const imageReadyScenes = computed(() => scenes.value.filter(s => s.status === 'i
 const imageCount = computed(() => scenes.value.filter(s => s.image_file).length)
 const videoReadyCount = computed(() => scenes.value.filter(s => s.status === 'video_ready').length)
 const allPortraitsReady = computed(() => characters.value.length > 0 && characters.value.every(c => c.portrait))
+const approvedCharsWithoutPortrait = computed(() => characters.value.filter(c => !c.portrait && c.profile_status === 'approved' && c.reference_prompt).length)
 const propAssets = computed(() => assets.value.filter(a => a.kind === 'prop'))
 const locationAssets = computed(() => assets.value.filter(a => a.kind === 'location'))
 const currentAssets = computed(() => (assetTab.value === 'location' ? locationAssets.value : propAssets.value))
@@ -966,7 +1139,6 @@ async function generatePlan() {
 }
 
 // ---------- 角色资产 ----------
-const charsWithoutPortrait = computed(() => characters.value.filter(c => !c.portrait).length)
 function charPortraitUrl(ch) {
   return api.inputUrl(project.value.id, ch.portrait)
 }
@@ -1030,6 +1202,20 @@ function openCreateCharacter() {
 }
 function openEditCharacter(ch) {
   Object.assign(charForm, { name: ch.name, role: ch.role, trait: ch.trait, style: ch.style, voice: ch.voice || '' })
+  // 加载 LumxAI 风格档案字段
+  Object.assign(charProfileForm, {
+    appearance: ch.appearance || '',
+    personality: ch.personality || '',
+    background: ch.background || '',
+    relationships: ch.relationships || '',
+    emotions: ch.emotions || '',
+    habits: ch.habits || '',
+    wardrobe_detail: ch.wardrobe_detail || '',
+    lighting_mood: ch.lighting_mood || '',
+    color_palette: ch.color_palette || '',
+    reference_prompt: ch.reference_prompt || ''
+  })
+  charProfileTab.value = 'basic'
   editingCharacter.value = ch
 }
 async function saveCharacter() {
@@ -1056,6 +1242,143 @@ async function removeCharacter(ch) {
     await load()
   } catch (e) {
     toast.show(e.response?.data?.error || '删除失败')
+  }
+}
+
+// ---------- 角色档案（LumxAI 风格） ----------
+async function generateCharacterProfile() {
+  if (!editingCharacter.value || editingCharacter.value === 'new') {
+    toast.show('请先保存角色后再生成档案')
+    return
+  }
+  generatingProfile.value = true
+  try {
+    const { data } = await api.generateCharacterProfile(id(), editingCharacter.value.id)
+    // 更新当前编辑的角色数据
+    editingCharacter.value = data.character
+    Object.assign(charProfileForm, {
+      appearance: data.character.appearance || '',
+      personality: data.character.personality || '',
+      background: data.character.background || '',
+      relationships: data.character.relationships || '',
+      emotions: data.character.emotions || '',
+      habits: data.character.habits || '',
+      wardrobe_detail: data.character.wardrobe_detail || '',
+      lighting_mood: data.character.lighting_mood || '',
+      color_palette: data.character.color_palette || '',
+      reference_prompt: data.character.reference_prompt || ''
+    })
+    // 更新角色列表中的数据
+    const idx = characters.value.findIndex(c => c.id === data.character.id)
+    if (idx !== -1) characters.value[idx] = data.character
+    toast.show(data.message || '角色档案已生成')
+    await load()
+  } catch (e) {
+    toast.show(e.response?.data?.error || '生成档案失败')
+  } finally {
+    generatingProfile.value = false
+  }
+}
+
+async function generateReferencePrompt() {
+  if (!editingCharacter.value || editingCharacter.value === 'new') {
+    toast.show('请先保存角色后再生成参考像提示词')
+    return
+  }
+  generatingPrompt.value = true
+  try {
+    // 提示词必须基于当前表单；先保存完整档案，避免使用数据库中的旧内容。
+    const saved = await api.updateCharacterProfile(id(), editingCharacter.value.id, { ...charProfileForm })
+    editingCharacter.value = saved.data.character
+    const { data } = await api.generateReferencePrompt(id(), editingCharacter.value.id)
+    charProfileForm.reference_prompt = data.prompt
+    editingCharacter.value = data.character
+    const idx = characters.value.findIndex(c => c.id === data.character.id)
+    if (idx !== -1) characters.value[idx] = data.character
+    toast.show(data.message || '参考像提示词已生成')
+    await load()
+  } catch (e) {
+    toast.show(e.response?.data?.error || '生成提示词失败')
+  } finally {
+    generatingPrompt.value = false
+  }
+}
+
+async function saveCharacterProfile() {
+  if (!editingCharacter.value || editingCharacter.value === 'new') {
+    toast.show('请先保存角色后再编辑档案')
+    return
+  }
+  busy.value = true
+  try {
+    const { data } = await api.updateCharacterProfile(id(), editingCharacter.value.id, { ...charProfileForm })
+    editingCharacter.value = data.character
+    const idx = characters.value.findIndex(c => c.id === data.character.id)
+    if (idx !== -1) characters.value[idx] = data.character
+    toast.show('角色档案已保存')
+    await load()
+  } catch (e) {
+    toast.show(e.response?.data?.error || '保存失败')
+  } finally {
+    busy.value = false
+  }
+}
+
+async function approveCharacterProfile(note = '') {
+  if (!editingCharacter.value || editingCharacter.value === 'new') return
+  busy.value = true
+  try {
+    // 审核必须针对当前表单内容，先完整保存，避免批准数据库中的旧版本。
+    const saved = await api.updateCharacterProfile(id(), editingCharacter.value.id, { ...charProfileForm })
+    editingCharacter.value = saved.data.character
+    const { data } = await api.approveCharacterProfile(id(), editingCharacter.value.id, note)
+    editingCharacter.value = data.character
+    const idx = characters.value.findIndex(c => c.id === data.character.id)
+    if (idx !== -1) characters.value[idx] = data.character
+    toast.show(data.message || '角色档案已审核通过')
+    await load()
+  } catch (e) {
+    toast.show(e.response?.data?.error || '审核失败')
+  } finally {
+    busy.value = false
+  }
+}
+
+async function rejectCharacterProfile(reason) {
+  if (!editingCharacter.value || editingCharacter.value === 'new') return
+  if (!reason || !reason.trim()) {
+    toast.show('请提供驳回原因')
+    return
+  }
+  busy.value = true
+  try {
+    const { data } = await api.rejectCharacterProfile(id(), editingCharacter.value.id, reason)
+    editingCharacter.value = data.character
+    const idx = characters.value.findIndex(c => c.id === data.character.id)
+    if (idx !== -1) characters.value[idx] = data.character
+    toast.show(data.message || '角色档案已驳回')
+    await load()
+  } catch (e) {
+    toast.show(e.response?.data?.error || '操作失败')
+  } finally {
+    busy.value = false
+  }
+}
+
+async function resetCharacterProfile() {
+  if (!editingCharacter.value || editingCharacter.value === 'new') return
+  busy.value = true
+  try {
+    const { data } = await api.resetCharacterProfile(id(), editingCharacter.value.id)
+    editingCharacter.value = data.character
+    const idx = characters.value.findIndex(c => c.id === data.character.id)
+    if (idx !== -1) characters.value[idx] = data.character
+    toast.show(data.message || '角色档案已重置为草稿')
+    await load()
+  } catch (e) {
+    toast.show(e.response?.data?.error || '操作失败')
+  } finally {
+    busy.value = false
   }
 }
 
@@ -1652,6 +1975,82 @@ onBeforeUnmount(() => {
 .error-notice { background: rgba(255, 69, 58, 0.1); color: var(--red); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
 @keyframes pop { from { transform: scale(0.94); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+/* 角色档案编辑样式 */
+.modal-lg { max-width: 800px; }
+.char-edit-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+}
+.char-edit-tab {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1.5px solid var(--border);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.char-edit-tab:hover { border-color: var(--accent); color: var(--accent); }
+.char-edit-tab.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.profile-hint {
+  background: var(--accent-soft);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+.profile-hint p { margin: 0 0 10px; }
+.profile-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.field-row { display: flex; gap: 16px; }
+.field-row .field { flex: 1; }
+.profile-review {
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 10px;
+  padding: 16px;
+  margin-top: 20px;
+}
+.profile-review h4 { margin: 0 0 12px; font-size: 14px; color: var(--text); }
+.review-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.review-note { font-size: 13px; color: var(--text-secondary); }
+.review-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.prompt-preview {
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 10px;
+  padding: 16px;
+  margin-top: 12px;
+}
+.prompt-preview h4 { margin: 0 0 10px; font-size: 14px; color: var(--text); }
+.prompt-text {
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.04);
+  padding: 12px;
+  border-radius: 6px;
+}
+.badge-green { background: rgba(34, 197, 94, 0.15); color: #16a34a; }
+.badge-red { background: rgba(239, 68, 68, 0.12); color: #dc2626; }
+
 @media (max-width: 780px) {
   .project-head { flex-direction: column; }
   .scene-grid { grid-template-columns: 1fr; }
@@ -1659,5 +2058,7 @@ onBeforeUnmount(() => {
   .viewer-panel { width: calc(100vw - 24px); max-height: calc(100vh - 24px); }
   .viewer-img { max-height: calc(100vh - 176px); }
   .viewer-hint { display: none; }
+  .modal-lg { max-width: 100%; }
+  .field-row { flex-direction: column; }
 }
 </style>

@@ -20,18 +20,20 @@ import (
 
 // Service 聚合所有子服务
 type Service struct {
-	Cfg              *config.Config
-	DB               *gorm.DB
-	Mgr              *InstanceManager
-	Mon              *GPUMonitor
-	Tasks            *TaskService
-	Hub              *Hub
-	Upload           *UploadManager
-	Remote           *RemoteExec
-	Volc             *VolcClient
-	Projects         *ProjectService
-	Materials        *MaterialService
-	TextProviderFact *TextProviderFactory // 文生文 provider 工厂（运行时按设置动态选择）
+	Cfg               *config.Config
+	DB                *gorm.DB
+	Mgr               *InstanceManager
+	Mon               *GPUMonitor
+	Tasks             *TaskService
+	Hub               *Hub
+	Upload            *UploadManager
+	Remote            *RemoteExec
+	Volc              *VolcClient
+	Projects          *ProjectService
+	Materials         *MaterialService
+	TextProviderFact  *TextProviderFactory     // 文生文 provider 工厂（运行时按设置动态选择）
+	CharacterProfiles *CharacterProfileService // 角色档案服务
+	Skills            *SkillService            // 创作技能管理服务
 }
 
 func New(cfg *config.Config, db *gorm.DB) *Service {
@@ -48,8 +50,15 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 
 	// 工厂自身实现 TextProvider，并在每次调用时按数据库设置动态选择实现。
 	textProviderFact := NewTextProviderFactory(volc)
+	skills := NewSkillService(db)
 	projects := NewProjectService(cfg, db, textProviderFact, volc, tasks, remote, upload, hub, materials)
-	return &Service{Cfg: cfg, DB: db, Mgr: mgr, Mon: mon, Tasks: tasks, Hub: hub, Upload: upload, Remote: remote, Volc: volc, Projects: projects, Materials: materials, TextProviderFact: textProviderFact}
+	projects.skills = skills
+	charProfiles := NewCharacterProfileService(db, textProviderFact)
+	charProfiles.skills = skills
+	if err := skills.InitSystemSkills(); err != nil {
+		log.Printf("[skills] init system skills failed: %v", err)
+	}
+	return &Service{Cfg: cfg, DB: db, Mgr: mgr, Mon: mon, Tasks: tasks, Hub: hub, Upload: upload, Remote: remote, Volc: volc, Projects: projects, Materials: materials, TextProviderFact: textProviderFact, CharacterProfiles: charProfiles, Skills: skills}
 }
 
 // comfyHost 返回 ComfyUI 实例所在主机（docker 模式为容器名，远程模式为算力节点 IP，本地模式为本机）
@@ -598,6 +607,237 @@ func parseRange(rng string, size int64) (start, end int64, ok bool) {
 		return 0, 0, false
 	}
 	return start, end, true
+}
+
+// ---------- Skill 技能管理 ----------
+
+func (s *Service) HandleListSkills(c *gin.Context) {
+	stage := c.Query("stage")
+	enabledOnly := c.Query("enabled") == "true"
+	skills, err := s.Skills.ListSkills(stage, enabledOnly)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, skills)
+}
+
+func (s *Service) HandleGetSkill(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid skill id"})
+		return
+	}
+	skill, err := s.Skills.GetSkill(uint(id))
+	if err != nil {
+		c.JSON(404, gin.H{"error": "skill not found"})
+		return
+	}
+	c.JSON(200, skill)
+}
+
+func (s *Service) HandleCreateSkill(c *gin.Context) {
+	var skill models.Skill
+	if err := c.ShouldBindJSON(&skill); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	created, err := s.Skills.CreateSkill(skill)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(201, created)
+}
+
+func (s *Service) HandleUpdateSkill(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid skill id"})
+		return
+	}
+	var updates map[string]any
+	if err := c.ShouldBindJSON(&updates); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	skill, err := s.Skills.UpdateSkill(uint(id), updates)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, skill)
+}
+
+func (s *Service) HandleDeleteSkill(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid skill id"})
+		return
+	}
+	if err := s.Skills.DeleteSkill(uint(id)); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"message": "skill deleted"})
+}
+
+func (s *Service) HandleUpgradeSkill(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid skill id"})
+		return
+	}
+	var req struct {
+		Version        int    `json:"version"`
+		PromptTemplate string `json:"prompt_template"`
+		SystemPrompt   string `json:"system_prompt"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	skill, err := s.Skills.UpgradeSkill(uint(id), req.Version, req.PromptTemplate, req.SystemPrompt)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(201, skill)
+}
+
+func (s *Service) HandleListSkillStages(c *gin.Context) {
+	stages := s.Skills.GetAvailableStages()
+	c.JSON(200, stages)
+}
+
+func (s *Service) HandleSkillVersionHistory(c *gin.Context) {
+	code := c.Param("code")
+	history, err := s.Skills.SkillVersionHistory(code)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, history)
+}
+
+func (s *Service) HandleSkillStats(c *gin.Context) {
+	countByStage, err := s.Skills.CountSkillsByStage()
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, countByStage)
+}
+
+// 项目级技能配置
+func (s *Service) HandleGetProjectSkills(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	configs, err := s.Skills.GetProjectConfig(p.ID)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, configs)
+}
+
+func (s *Service) HandleSetProjectSkill(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Stage   string `json:"stage" binding:"required"`
+		SkillID *uint  `json:"skill_id"`
+		Enabled bool   `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	config, err := s.Skills.SetProjectSkillConfig(p.ID, req.Stage, req.SkillID, req.Enabled)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, config)
+}
+
+func (s *Service) HandleResetProjectSkill(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	stage := c.Param("stage")
+	if err := s.Skills.ResetProjectStageConfig(p.ID, stage); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"message": "reset to system default"})
+}
+
+func (s *Service) HandleGetEffectiveSkill(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	stage := c.Query("stage")
+	if stage == "" {
+		c.JSON(400, gin.H{"error": "stage is required"})
+		return
+	}
+	skill, err := s.Skills.GetEffectiveSkill(p.ID, stage)
+	if err != nil {
+		c.JSON(404, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, skill)
+}
+
+// 技能审计日志
+func (s *Service) HandleGetSkillAuditLogs(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	stage := c.Query("stage")
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	logs, err := s.Skills.GetSkillAuditLogs(p.ID, stage, limit)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, logs)
+}
+
+// 预览技能提示词装配
+func (s *Service) HandlePreviewSkillPrompt(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid skill id"})
+		return
+	}
+	var req struct {
+		Params map[string]string `json:"params"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	skill, err := s.Skills.GetSkill(uint(id))
+	if err != nil {
+		c.JSON(404, gin.H{"error": "skill not found"})
+		return
+	}
+	systemPrompt, userPrompt := s.Skills.AssemblePrompt(skill, req.Params)
+	c.JSON(200, gin.H{
+		"skill_id":      skill.ID,
+		"skill_name":    skill.Name,
+		"system_prompt": systemPrompt,
+		"user_prompt":   userPrompt,
+	})
 }
 
 // ---------- WS ----------

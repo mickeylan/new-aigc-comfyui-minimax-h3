@@ -83,6 +83,15 @@ export const api = {
     })
   },
   generateAllPortraits: (id) => http.post(`/projects/${id}/characters/portraits`),
+
+  // 角色档案（LumxAI 风格结构化角色提示词 + 审核工作流）
+  generateCharacterProfile: (id, cid) => http.post(`/projects/${id}/characters/${cid}/profile`, null, { timeout: 300000 }),
+  generateReferencePrompt: (id, cid) => http.post(`/projects/${id}/characters/${cid}/profile/generate-prompt`, null, { timeout: 300000 }),
+  updateCharacterProfile: (id, cid, data) => http.put(`/projects/${id}/characters/${cid}/profile`, data),
+  approveCharacterProfile: (id, cid, note) => http.post(`/projects/${id}/characters/${cid}/profile/approve`, { note }),
+  rejectCharacterProfile: (id, cid, reason) => http.post(`/projects/${id}/characters/${cid}/profile/reject`, { reason }),
+  resetCharacterProfile: (id, cid) => http.post(`/projects/${id}/characters/${cid}/profile/reset`),
+
   // 角色语音（预设音色 / 参考语音复刻）
   uploadCharacterVoice: (id, cid, file) => {
     const fd = new FormData()
@@ -139,7 +148,25 @@ export const api = {
   materialUrl: (path) => {
     const i = path.indexOf('/')
     return i > 0 ? `/api/input/${path.slice(0, i)}/${path.slice(i + 1)}` : `/api/input/${path}`
-  }
+  },
+
+  // 创作技能管理
+  listSkills: (params) => http.get('/skills', { params }),
+  getSkill: (id) => http.get(`/skills/${id}`),
+  createSkill: (data) => http.post('/skills', data),
+  updateSkill: (id, data) => http.put(`/skills/${id}`, data),
+  deleteSkill: (id) => http.delete(`/skills/${id}`),
+  upgradeSkill: (id, data) => http.post(`/skills/${id}/upgrade`, data),
+  skillVersionHistory: (code) => http.get(`/skills/history/${code}`),
+  skillStats: () => http.get('/skills/stats'),
+  previewSkillPrompt: (id, params) => http.post(`/skills/${id}/preview`, { params }),
+  skillStages: () => http.get('/skills/stages'),
+  // 项目级技能配置
+  projectSkills: (id) => http.get(`/projects/${id}/skills`),
+  setProjectSkill: (id, data) => http.post(`/projects/${id}/skills`, data),
+  resetProjectSkill: (id, stage) => http.delete(`/projects/${id}/skills/${stage}`),
+  effectiveSkill: (id, stage) => http.get(`/projects/${id}/skills/effective?stage=${stage}`),
+  skillAuditLogs: (id, params) => http.get(`/projects/${id}/skills/audit`, { params }),
 }
 
 export function wsUrl() {

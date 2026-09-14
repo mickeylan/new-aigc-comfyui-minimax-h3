@@ -142,22 +142,48 @@ type Scene struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
+// CharacterProfileStatus 角色档案审核状态
+type CharacterProfileStatus string
+
+const (
+	ProfileStatusDraft    CharacterProfileStatus = "draft"    // 草稿（AI 生成，待审核）
+	ProfileStatusApproved CharacterProfileStatus = "approved" // 已审核通过
+	ProfileStatusRejected CharacterProfileStatus = "rejected" // 已驳回，需修改
+)
+
 // Character 角色卡：项目内可复用的人物资产，统一外貌/服装设定以保证跨场景一致性
+// 扩展支持 LumxAI 风格的结构化角色档案，包含详细外貌描述、性格设定、背景故事、关系图谱
 type Character struct {
-	ID         uint      `gorm:"primaryKey" json:"id"`
-	ProjectID  uint      `gorm:"column:project_id;index;uniqueIndex:idx_character_project_name" json:"project_id"`
-	Name       string    `gorm:"uniqueIndex:idx_character_project_name" json:"name"` // 项目内唯一
-	Role       string    `json:"role"`                                               // 身份：主角/女主/反派/配角…
-	Trait      string    `gorm:"type:text" json:"trait"`                             // 外貌特征（发型/五官/体型）
-	Style      string    `gorm:"type:text" json:"style"`                             // 服装造型
-	Portrait   string    `json:"portrait"`                                           // 标准参考像文件名（input/<project_id>/ 下）
-	Voice      string    `json:"voice"`                                              // 预设 TTS 音色 ID（角色级，配音优先于平台角色映射）
-	VoiceRef   string    `gorm:"column:voice_ref" json:"voice_ref"`                  // 参考语音文件名（input/<project_id>/ 下）
-	VoiceID    string    `gorm:"column:voice_id" json:"voice_id"`                    // 参考语音注册的复刻音色 ID（阿里云 qwen-voice-enrollment）
-	VoiceModel string    `gorm:"column:voice_model" json:"voice_model"`              // 复刻音色绑定的合成模型（须与注册时 target_model 一致）
-	Source     string    `json:"source"`                                             // auto(方案抽取) / manual(手动新建)
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID         uint   `gorm:"primaryKey" json:"id"`
+	ProjectID  uint   `gorm:"column:project_id;index;uniqueIndex:idx_character_project_name" json:"project_id"`
+	Name       string `gorm:"uniqueIndex:idx_character_project_name" json:"name"` // 项目内唯一
+	Role       string `json:"role"`                                               // 身份：主角/女主/反派/配角…
+	Trait      string `gorm:"type:text" json:"trait"`                             // 外貌特征（发型/五官/体型）
+	Style      string `gorm:"type:text" json:"style"`                             // 服装造型
+	Portrait   string `json:"portrait"`                                           // 标准参考像文件名（input/<project_id>/ 下）
+	Voice      string `json:"voice"`                                              // 预设 TTS 音色 ID（角色级，配音优先于平台角色映射）
+	VoiceRef   string `gorm:"column:voice_ref" json:"voice_ref"`                  // 参考语音文件名（input/<project_id>/ 下）
+	VoiceID    string `gorm:"column:voice_id" json:"voice_id"`                    // 参考语音注册的复刻音色 ID（阿里云 qwen-voice-enrollment）
+	VoiceModel string `gorm:"column:voice_model" json:"voice_model"`              // 复刻音色绑定的合成模型（须与注册时 target_model 一致）
+	Source     string `json:"source"`                                             // auto(方案抽取) / manual(手动新建)
+
+	// --- LumxAI 风格结构化角色档案字段 ---
+	Appearance      string                 `gorm:"type:text" json:"appearance"`                               // 详细外貌描述（发型/发色/脸型/眉眼/鼻嘴/肤色/体型/特殊标记）
+	Personality     string                 `gorm:"type:text" json:"personality"`                              // 性格特点（MBTI/行为模式/情绪表达习惯）
+	Background      string                 `gorm:"type:text" json:"background"`                               // 背景故事（出身/经历/动机/目标）
+	Relationships   string                 `gorm:"type:text" json:"relationships"`                            // 关系图谱（与其他角色的关系描述）
+	Emotions        string                 `gorm:"type:text" json:"emotions"`                                 // 情绪表达方式（喜怒哀乐的表现形式）
+	Habits          string                 `gorm:"type:text" json:"habits"`                                   // 习惯动作（小动作/口头禅/特殊习惯）
+	WardrobeDetail  string                 `gorm:"type:text" json:"wardrobe_detail"`                          // 服装细节（材质/颜色/配饰/随时间变化的造型）
+	LightingMood    string                 `gorm:"column:lighting_mood" json:"lighting_mood"`                 // 光影氛围偏好（适合该角色的打光风格）
+	ColorPalette    string                 `gorm:"column:color_palette" json:"color_palette"`                 // 角色色调（主色/辅色/点缀色）
+	ReferencePrompt string                 `gorm:"type:text" json:"reference_prompt"`                         // 生成的参考像提示词（高质量单人标准像）
+	ProfileStatus   CharacterProfileStatus `gorm:"column:profile_status;default:draft" json:"profile_status"` // 档案审核状态
+	ReviewNote      string                 `gorm:"type:text" json:"review_note"`                              // 审核意见（驳回原因或备注）
+	ProfileVersion  int                    `gorm:"column:profile_version;default:0" json:"profile_version"`   // 档案版本号（用于追踪修改历史）
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Asset 视觉资产卡：道具（prop）/场景（location）参考图，项目内可复用，跨分镜保持一致
@@ -217,4 +243,65 @@ type Dialogue struct {
 	Error     string    `json:"error"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Skill 创作技能模板：提供阶段化提示词装配，支持系统内置与项目级覆盖
+// Skill 仅作为提示词模板，不拥有执行权限（无网络/Shell/文件/数据库访问）
+type Skill struct {
+	ID             uint      `gorm:"primaryKey" json:"id"`
+	Name           string    `gorm:"index" json:"name"`                                           // 技能名称（版本之间共享 Name）
+	Code           string    `gorm:"index;uniqueIndex:idx_skill_code_version" json:"code"`        // 技能代码（与 Version 组成唯一版本标识）
+	Version        int       `gorm:"default:1;uniqueIndex:idx_skill_code_version" json:"version"` // 版本号（每次更新递增）
+	Description    string    `gorm:"type:text" json:"description"`                                // 技能描述与用途说明
+	Stage          string    `gorm:"column:stage;index" json:"stage"`                             // 适用阶段：plan/character/storyboard/image_prompt/video_prompt/review
+	PromptTemplate string    `gorm:"type:text" json:"prompt_template"`                            // 提示词模板（支持 {{param}} 占位符）
+	SystemPrompt   string    `gorm:"type:text" json:"system_prompt"`                              // 系统提示词片段（追加到主 system prompt）
+	IsSystem       bool      `gorm:"column:is_system;default:false" json:"is_system"`             // 是否系统内置（系统技能不可删除，只可升级版本）
+	Enabled        bool      `gorm:"default:true" json:"enabled"`                                 // 是否启用
+	SortOrder      int       `gorm:"default:0" json:"sort_order"`                                 // 排序顺序（同一阶段内）
+	ParentID       *uint     `gorm:"column:parent_id" json:"parent_id"`                           // 父技能 ID（用于版本追踪，null 表示无父版本）
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// SkillStage 技能适用阶段常量
+const (
+	SkillStagePlan        = "plan"         // 创作方案阶段
+	SkillStageCharacter   = "character"    // 角色设定阶段
+	SkillStageStoryboard  = "storyboard"   // 分镜剧本阶段
+	SkillStageImagePrompt = "image_prompt" // 画面提示词阶段
+	SkillStageVideoPrompt = "video_prompt" // 视频提示词阶段
+	SkillStageReview      = "review"       // 审核/复审阶段
+)
+
+// ProjectSkillConfig 项目级技能配置：支持项目选择特定技能或覆盖系统默认
+type ProjectSkillConfig struct {
+	ID              uint      `gorm:"primaryKey" json:"id"`
+	ProjectID       uint      `gorm:"column:project_id;uniqueIndex:idx_proj_stage" json:"project_id"` // 项目 ID
+	Stage           string    `gorm:"column:stage;uniqueIndex:idx_proj_stage" json:"stage"`           // 阶段（与 ProjectSkillConfig 唯一索引）
+	SkillID         *uint     `gorm:"column:skill_id" json:"skill_id"`                                // 选中技能 ID（nil 表示使用系统默认）
+	Enabled         bool      `gorm:"default:true" json:"enabled"`                                    // 该阶段是否启用技能注入
+	VersionSnapshot int       `gorm:"column:version_snapshot" json:"version_snapshot"`                // 生成时锁定的技能版本
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+
+	// 关联
+	Skill *Skill `gorm:"foreignKey:SkillID" json:"skill,omitempty"`
+}
+
+// SkillAuditLog 技能使用审计日志：记录每次生成使用的技能版本
+type SkillAuditLog struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	ProjectID    uint      `gorm:"column:project_id;index" json:"project_id"`
+	Stage        string    `gorm:"column:stage;index" json:"stage"`             // 阶段
+	SkillID      uint      `gorm:"column:skill_id" json:"skill_id"`             // 使用的技能 ID
+	SkillName    string    `gorm:"column:skill_name" json:"skill_name"`         // 技能名称快照
+	SkillVersion int       `gorm:"column:skill_version" json:"skill_version"`   // 使用的技能版本
+	SkillCode    string    `gorm:"column:skill_code" json:"skill_code"`         // 技能代码快照
+	InputHash    string    `gorm:"column:input_hash;size:64" json:"input_hash"` // 输入内容哈希（用于复现）
+	OutputLength int       `gorm:"column:output_length" json:"output_length"`   // 输出长度
+	DurationMS   int64     `gorm:"column:duration_ms" json:"duration_ms"`       // 生成耗时（毫秒）
+	Success      bool      `gorm:"default:true" json:"success"`                 // 是否成功
+	Error        string    `gorm:"type:text" json:"error"`                      // 错误信息（如有）
+	CreatedAt    time.Time `json:"created_at"`
 }

@@ -63,6 +63,13 @@ func TestMiniMaxH3TemplatesRenderWithoutPlaceholders(t *testing.T) {
 			"ref_videos": {{TaskID: "draft", Name: "ref.mp4"}},
 			"ref_audios": {{TaskID: "draft", Name: "ref.wav"}},
 		}},
+		{file: "krea2_character_portrait.json"},
+		{file: "krea2_character_sheet.json", files: map[string][]FileMeta{
+			"source_image": {{TaskID: "draft", Name: "portrait.png"}},
+		}},
+		{file: "minimax_h3_storyboard_candidates_selflift.json", files: map[string][]FileMeta{
+			"ref_images": {{TaskID: "draft", Name: "character.png"}, {TaskID: "draft", Name: "location.png"}},
+		}},
 	}
 
 	service := &TaskService{}
@@ -82,6 +89,26 @@ func TestMiniMaxH3TemplatesRenderWithoutPlaceholders(t *testing.T) {
 				t.Fatalf("工作流仍有未渲染占位符: %s", encoded)
 			}
 		})
+	}
+}
+
+func TestTemplateScalarDefaultsCanBeOverridden(t *testing.T) {
+	tpl := loadTemplateForTest(t, "krea2_character_portrait.json")
+	params := baseParams()
+	if err := normalizeTemplateFiles(&tpl, params, nil); err != nil {
+		t.Fatal(err)
+	}
+	if params["unet_name"] == nil {
+		t.Fatal("模型默认值未注入")
+	}
+	params["unet_name"] = "Krea2/new-version.safetensors"
+	workflow, err := (&TaskService{}).RenderWorkflow(&tpl, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(workflow)
+	if !strings.Contains(string(encoded), "Krea2/new-version.safetensors") {
+		t.Fatalf("模型覆盖未生效: %s", encoded)
 	}
 }
 
