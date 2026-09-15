@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"os"
+	"runtime"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,15 +22,15 @@ type ServerConfig struct {
 }
 
 type ComfyConfig struct {
-	ComfyDir       string `yaml:"comfy_dir"`
-	BasePort       int    `yaml:"base_port"`
-	GPUCount       int    `yaml:"gpu_count"`
-	ReserveVRAM    int    `yaml:"reserve_vram"`
-	ForceFP16      bool   `yaml:"force_fp16"`
-	EnableManager  bool   `yaml:"enable_manager"`
-	Mode           string `yaml:"mode"`             // ssh(默认)/docker/local: 实例调度方式
+	ComfyDir        string `yaml:"comfy_dir"`
+	BasePort        int    `yaml:"base_port"`
+	GPUCount        int    `yaml:"gpu_count"`
+	ReserveVRAM     int    `yaml:"reserve_vram"`
+	ForceFP16       bool   `yaml:"force_fp16"`
+	EnableManager   bool   `yaml:"enable_manager"`
+	Mode            string `yaml:"mode"`             // ssh(默认)/docker/local: 实例调度方式
 	ContainerPrefix string `yaml:"container_prefix"` // docker 模式容器名前缀, 如 comfyui-gpu
-	Network        string `yaml:"network"`          // docker 模式容器网络名, 用于内网解析容器名
+	Network         string `yaml:"network"`          // docker 模式容器网络名, 用于内网解析容器名
 }
 
 type StorageConfig struct {
@@ -45,10 +46,10 @@ type GPUConfig struct {
 
 // RemoteConfig SSH 远程算力节点配置；Host 为空时按本地模式运行（与旧版本一致）。
 type RemoteConfig struct {
-	Host     string `yaml:"host"`
-	Port     int    `yaml:"port"`
-	User     string `yaml:"user"`
-	Password string `yaml:"password"`
+	Host          string `yaml:"host"`
+	Port          int    `yaml:"port"`
+	User          string `yaml:"user"`
+	Password      string `yaml:"password"`
 	PrivateKey    string `yaml:"private_key"`    // 私钥文件路径（优先于 password）
 	KeyPassphrase string `yaml:"key_passphrase"` // 私钥口令（可选）
 }
@@ -58,17 +59,21 @@ func (r RemoteConfig) Enabled() bool {
 }
 
 func Default() *Config {
+	comfyDir, mode := "/opt/comfyUI", "ssh"
+	if runtime.GOOS == "windows" {
+		comfyDir, mode = `K:\ComfyUI`, "local"
+	}
 	return &Config{
 		Server: ServerConfig{Addr: "0.0.0.0:18000"},
 		Comfy: ComfyConfig{
-			ComfyDir:       "/opt/comfyUI",
-			BasePort:       8188,
-			GPUCount:       8,
-			ReserveVRAM:    6,
-			ForceFP16:      true,
-			Mode:           "ssh",
+			ComfyDir:        comfyDir,
+			BasePort:        8188,
+			GPUCount:        8,
+			ReserveVRAM:     6,
+			ForceFP16:       true,
+			Mode:            mode,
 			ContainerPrefix: "comfyui-gpu",
-			Network:        "comfyui-console_default",
+			Network:         "comfyui-console_default",
 		},
 		Storage: StorageConfig{
 			DBPath:  "data/console.db",

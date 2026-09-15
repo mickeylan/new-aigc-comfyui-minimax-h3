@@ -374,7 +374,7 @@
                 {{ sc.status === 'video_ready' ? '重新生成视频' : (sc.video_retries > 0 ? '重试视频' : '生成视频') }}
               </button>
               <button class="btn btn-sm btn-ghost" @click="viewImage(sc)">查看画面</button>
-              <button v-if="sc.video_task_id" class="btn btn-sm btn-ghost" @click="viewVideoTask(sc)">查看视频提示词</button>
+              <button class="btn btn-sm btn-ghost" @click="viewVideoPrompt(sc)">生成/编辑视频提示词</button>
             </template>
             <span v-if="sc.status === 'failed' && sc.error" class="fail-msg">{{ sc.error }}</span>
           </div>
@@ -414,7 +414,7 @@
 
       <div class="card merge-card">
         <div class="merge-select">
-          <span class="merge-hint">合并时自动烧录字幕；各场景 H3 视频已同步对白配音，成片保留原音轨</span>
+          <span class="merge-hint">默认不烧录字幕；可按需勾选“烧录字幕”。各场景 H3 原音轨可独立选择是否保留。</span>
           <button v-for="sc in curReadyScenes" :key="sc.id" class="merge-chip active" disabled>
             <span class="chip-n">{{ sc.order }}</span>
             <span class="chip-title">{{ sc.title || '场景' }}</span>
@@ -504,7 +504,7 @@
     </div>
 
     <div v-if="videoTaskDetail" class="modal-mask" @click.self="videoTaskDetail = null">
-      <div class="modal card video-task-modal"><h2>视频提示词与任务详情</h2><p><strong>上次任务模板：</strong>{{ videoTaskDetail.template_name }}</p><label>下次生成使用的动作正文<textarea v-model="videoTaskPromptDraft" class="textarea" rows="12" /></label><div class="field-hint">可修改动作、结束状态和运镜。系统会在提交时固定加入首帧锚定、连续性约束和 H3 六段结构；清空后恢复自动生成。</div><details><summary>上次实际提交的提示词</summary><pre class="task-prompt">{{ videoTaskDetail.prompt }}</pre></details><details><summary>上次实际参数与输入图片</summary><pre class="task-prompt">{{ formatTaskParams(videoTaskDetail.params_json) }}</pre></details><div class="modal-actions"><button class="btn btn-ghost" @click="videoTaskDetail = null">取消</button><button class="btn" :disabled="savingVideoPrompt" @click="saveVideoPrompt">{{ savingVideoPrompt ? '保存中…' : '保存提示词' }}</button></div></div>
+      <div class="modal card video-task-modal"><h2>生成/编辑视频提示词</h2><p><strong>计划模板：</strong>{{ videoTaskDetail.template || videoTaskDetail.template_name }}　<strong>参数：</strong>{{ videoTaskDetail.width }}×{{ videoTaskDetail.height }} / {{ videoTaskDetail.duration }}秒 / {{ videoTaskDetail.fps }} FPS</p><label>动作正文（生成前可修改）<textarea v-model="videoTaskPromptDraft" class="textarea" rows="12" /></label><div class="field-hint">保存后用于下一次生成。系统固定加入首帧锚定、连续性约束和 H3 六段结构。</div><details open><summary>当前将提交的完整提示词</summary><pre class="task-prompt">{{ previewVideoFullPrompt }}</pre></details><details v-if="videoTaskDetail.history_prompt"><summary>上次实际提交的提示词</summary><pre class="task-prompt">{{ videoTaskDetail.history_prompt }}</pre></details><details v-if="videoTaskDetail.params_json"><summary>上次实际参数与输入图片</summary><pre class="task-prompt">{{ formatTaskParams(videoTaskDetail.params_json) }}</pre></details><div class="modal-actions"><button class="btn btn-ghost" @click="videoTaskDetail = null">取消</button><button class="btn" :disabled="savingVideoPrompt" @click="saveVideoPrompt">{{ savingVideoPrompt ? '保存中…' : '保存提示词' }}</button></div></div>
     </div>
 
     <!-- 项目信息编辑弹窗 -->
@@ -851,7 +851,7 @@ const characters = ref([])
 const characterCounts = ref({})
 const dialogues = ref([])
 const dubMergeOn = ref(true)
-const mergeSub = ref(true)
+const mergeSub = ref(false)
 const mergeDub = ref(true)
 const curEpDubReady = computed(() => {
   const ids = currentScenes.value.map(s => s.id)
@@ -1102,13 +1102,17 @@ function videoProgress(sc) {
 function imageUrl(sc) {
   return api.inputUrl(project.value.id, sc.image_file)
 }
-async function viewVideoTask(sc) {
+async function viewVideoPrompt(sc) {
   try {
-    const { data } = await api.task(sc.video_task_id)
-    videoTaskDetail.value = data
+    const { data: preview } = await api.sceneVideoPrompt(id(), sc.id)
+    let history = null
+    if (sc.video_task_id) {
+      try { history = (await api.task(sc.video_task_id)).data } catch { /* 历史任务不可用不影响生成前编辑 */ }
+    }
+    videoTaskDetail.value = { ...preview, history_prompt: history?.prompt || '', params_json: history?.params_json || '' }
     videoTaskScene.value = sc
-    videoTaskPromptDraft.value = sc.video_prompt || extractVideoDetail(data.prompt)
-  } catch (e) { toast.error(e.response?.data?.error || '读取视频任务详情失败') }
+    videoTaskPromptDraft.value = preview.prompt || ''
+  } catch (e) { toast.error(e.response?.data?.error || '生成视频提示词失败') }
 }
 async function saveVideoPrompt() {
   savingVideoPrompt.value = true
@@ -1120,10 +1124,11 @@ async function saveVideoPrompt() {
   } catch (e) { toast.error(e.response?.data?.error || '保存视频提示词失败') }
   finally { savingVideoPrompt.value = false }
 }
-function extractVideoDetail(prompt) {
-  const m = String(prompt || '').match(/detailed_description:\s*([\s\S]*?)(?=\n\s*overall_soundscape:|$)/i)
-  return m ? m[1].trim() : ''
-}
+const previewVideoFullPrompt = computed(() => {
+  const current = videoTaskDetail.value?.full_prompt || ''
+  if (!current) return ''
+  return current.replace(/(detailed_description:\s*[\s\S]*?)(?=\n\s*overall_soundscape:)/i, `detailed_description:\n[Shot 1] 首先严格保持输入首帧构图、人物位置、服装、道具与场景布局。短暂静止后开始运动。 ${videoTaskPromptDraft.value}。摄影机运动必须写明类型、幅度和速度，且全程只使用一种连续运镜。\n`)
+})
 function formatTaskParams(raw) { try { return JSON.stringify(JSON.parse(raw || '{}'), null, 2) } catch { return raw || '' } }
 
 function videoUrl(sc) {
@@ -1754,7 +1759,7 @@ async function dubAll() {
 async function mergeAll() {
   busy.value = true
   try {
-    const { data } = await api.mergeAllScenes(id())
+    const { data } = await api.mergeAllScenes(id(), { dub: mergeDub.value, subtitles: mergeSub.value })
     toast.show(data.message || '整剧合并已启动')
     refreshSoon()
   } catch (e) {

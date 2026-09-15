@@ -220,7 +220,22 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 	if generated {
 		prompt = defaultSceneVideoAction(sc)
 	}
-	c.JSON(http.StatusOK, gin.H{"prompt": prompt, "generated": generated})
+	var project models.Project
+	if err := s.DB.First(&project, sc.ProjectID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	var dubs []models.Dialogue
+	s.DB.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
+	preview := *sc
+	preview.VideoPrompt = prompt
+	fullPrompt := buildMiniMaxH3Prompt(&preview, &project, dubs)
+	width, height := aspectVideoSize(project.AspectRatio, s.Projects.videoResolution())
+	c.JSON(http.StatusOK, gin.H{
+		"prompt": prompt, "full_prompt": fullPrompt, "generated": generated,
+		"template": "minimax_h3_i2v", "width": width, "height": height,
+		"duration": normalizeSceneDuration(sc.Duration), "fps": 24, "steps": 20,
+	})
 }
 
 func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
@@ -534,7 +549,15 @@ func (s *Service) HandleCreateAllMerges(c *gin.Context) {
 	if !ok {
 		return
 	}
-	n, err := s.Projects.CreateAllMerges(p)
+	var req struct {
+		Dub       bool `json:"dub"`
+		Subtitles bool `json:"subtitles"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	n, err := s.Projects.CreateAllMerges(p, req.Dub, req.Subtitles)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return

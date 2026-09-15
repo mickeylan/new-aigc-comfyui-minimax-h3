@@ -70,7 +70,7 @@ export const api = {
   updateSceneVideoPrompt: (id, sid, prompt) => http.put(`/projects/${id}/scenes/${sid}/video/prompt`, { prompt }),
   cancelSceneVideo: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/video/cancel`),
   mergeScenes: (id, payload) => http.post(`/projects/${id}/merge`, payload),
-  mergeAllScenes: (id) => http.post(`/projects/${id}/merge-all`),
+  mergeAllScenes: (id, payload = {}) => http.post(`/projects/${id}/merge-all`, payload),
   merges: (id) => http.get(`/projects/${id}/merges`),
   // 角色资产
   characters: (id) => http.get(`/projects/${id}/characters`),

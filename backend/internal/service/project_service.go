@@ -1,6 +1,8 @@
 package service
 
 import (
+	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -8,6 +10,9 @@ import (
 	"io"
 	"log"
 	"math"
+	"os"
+	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -2705,7 +2710,44 @@ func (s *ProjectService) CreateMergeTask(p *models.Project, sceneIDs []uint, dub
 	return &mt, nil
 }
 
-// runMerge 后台执行合并：远程 ffmpeg filter_complex concat → output_workers/gpu0/merged/
+func (s *ProjectService) mediaPath(parts ...string) string {
+	if s.remote != nil && s.remote.Enabled() {
+		all := append([]string{filepath.ToSlash(s.cfg.Comfy.ComfyDir)}, parts...)
+		return path.Join(all...)
+	}
+	all := append([]string{s.cfg.Comfy.ComfyDir}, parts...)
+	return filepath.Join(all...)
+}
+
+func localFFmpegPath() (string, error) {
+	if p, err := exec.LookPath("ffmpeg"); err == nil {
+		return p, nil
+	}
+	for _, p := range []string{`D:\tools\ffmpeg\bin\ffmpeg.exe`, `C:\ffmpeg\bin\ffmpeg.exe`} {
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("Windows 本机未找到 ffmpeg.exe，请将其加入 PATH")
+}
+
+func runLocalProgram(program string, args []string, timeout time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, program, args...)
+	var output bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &output, &output
+	err := cmd.Run()
+	if ctx.Err() == context.DeadlineExceeded {
+		return output.String(), fmt.Errorf("命令执行超时")
+	}
+	if err != nil {
+		return output.String(), fmt.Errorf("%s: %w: %s", program, err, strings.TrimSpace(output.String()))
+	}
+	return output.String(), nil
+}
+
+// runMerge 后台执行合并：Windows 本机直接执行 ffmpeg.exe；Linux/SSH 使用远端 shell。
 // dub=true 保留各场景 H3 原音轨（对白已在生成时同步进视频），subtitles=true 按场景时长均分生成 SRT 字幕并烧录进画面。
 func (s *ProjectService) runMerge(p *models.Project, mt *models.MergeTask, dub, subtitles bool) {
 	claim := s.db.Model(&models.MergeTask{}).Where("id = ? AND status = ?", mt.ID, "pending").Update("status", "running")
@@ -2715,6 +2757,7 @@ func (s *ProjectService) runMerge(p *models.Project, mt *models.MergeTask, dub, 
 
 	ids := strings.Split(mt.SceneOrder, ",")
 	inputs := make([]string, 0, len(ids))
+	inputPaths := make([]string, 0, len(ids))
 	filters := make([]string, 0, len(ids))
 	audioCount := 0
 	videoDurs := make([]sceneVideo, 0, len(ids))
@@ -2726,8 +2769,38 @@ func (s *ProjectService) runMerge(p *models.Project, mt *models.MergeTask, dub, 
 			s.failMerge(mt, p, fmt.Sprintf("场景 %d 视频信息缺失", id))
 			return
 		}
-		abs := filepath.Join(s.cfg.Comfy.ComfyDir, "output_workers", fmt.Sprintf("gpu%d", *sc.VideoGPU), sc.VideoFile)
+		abs := s.mediaPath("output_workers", fmt.Sprintf("gpu%d", *sc.VideoGPU), filepath.FromSlash(sc.VideoFile))
+		if (s.remote == nil || !s.remote.Enabled()) && sc.VideoInputFile != "" {
+			// 本机优先使用已下载的项目视频副本。切换过运行目录时副本可能不在
+			// 当前 ComfyUI input 下，此时从原任务的 /view 重新下载恢复。
+			abs = filepath.Join(s.upload.InputDir(), fmt.Sprint(sc.ProjectID), filepath.FromSlash(sc.VideoInputFile))
+			if _, err := os.Stat(abs); err != nil {
+				var task models.Task
+				if dbErr := s.db.Where("task_id = ?", sc.VideoTaskID).First(&task).Error; dbErr != nil || task.Port == nil {
+					s.failMerge(mt, p, fmt.Sprintf("场景 %d 的本地视频副本不存在，且原任务不可恢复", sc.Order))
+					return
+				}
+				subfolder, filename := filepath.ToSlash(filepath.Dir(sc.VideoFile)), filepath.Base(sc.VideoFile)
+				if subfolder == "." {
+					subfolder = ""
+				}
+				data, downloadErr := NewComfyClient(s.tasks.comfyHostForPort(*task.Port), *task.Port).DownloadOutput(filename, subfolder, "output")
+				if downloadErr != nil {
+					s.failMerge(mt, p, "重新下载场景视频失败: "+downloadErr.Error())
+					return
+				}
+				if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+					s.failMerge(mt, p, err.Error())
+					return
+				}
+				if err := os.WriteFile(abs, data, 0o644); err != nil {
+					s.failMerge(mt, p, "恢复场景视频失败: "+err.Error())
+					return
+				}
+			}
+		}
 		inputs = append(inputs, "-i", shellQuote(abs))
+		inputPaths = append(inputPaths, abs)
 		hasAudio, err := s.remoteFileHasAudio(abs)
 		if err != nil {
 			s.failMerge(mt, p, err.Error())
@@ -2746,9 +2819,9 @@ func (s *ProjectService) runMerge(p *models.Project, mt *models.MergeTask, dub, 
 	}
 
 	outName := fmt.Sprintf("merged/%s_merged_%d.mp4", projectFileTag(p), mt.ID)
-	outAbs := filepath.Join(s.cfg.Comfy.ComfyDir, "output_workers", "gpu0", outName)
+	outAbs := s.mediaPath("output_workers", "gpu0", filepath.FromSlash(outName))
 	srtName := strings.TrimSuffix(outName, ".mp4") + ".srt"
-	srtAbs := filepath.Join(s.cfg.Comfy.ComfyDir, "output_workers", "gpu0", srtName)
+	srtAbs := s.mediaPath("output_workers", "gpu0", filepath.FromSlash(srtName))
 
 	// 1) 生成 SRT 字幕：按场景顺序与时长均分对白（无 TTS 依赖）
 	sceneIDs := make([]uint, len(ids))
@@ -2796,16 +2869,36 @@ func (s *ProjectService) runMerge(p *models.Project, mt *models.MergeTask, dub, 
 	}
 	filterComplex := strings.Join(ffilters, ";")
 
-	cmd := fmt.Sprintf(
-		"%s; mkdir -p %s; \"$FF\" -y %s -filter_complex %s %s -c:v libx264 -crf 18 -preset medium -pix_fmt yuv420p -movflags +faststart %s",
-		ffmpegResolveCmd, shellQuote(filepath.Dir(outAbs)),
-		strings.Join(inputs, " "), shellQuote(filterComplex), mapArgs, shellQuote(outAbs),
-	)
-
-	log.Printf("[merge %d] %s", mt.ID, cmd)
-	if _, err := s.remote.RunTimeout(cmd, 30*time.Minute); err != nil {
-		s.failMerge(mt, p, err.Error())
-		return
+	if s.remote == nil || !s.remote.Enabled() {
+		if err := os.MkdirAll(filepath.Dir(outAbs), 0o755); err != nil {
+			s.failMerge(mt, p, err.Error())
+			return
+		}
+		ffmpeg, err := localFFmpegPath()
+		if err != nil {
+			s.failMerge(mt, p, err.Error())
+			return
+		}
+		args := []string{"-y"}
+		for _, input := range inputPaths {
+			args = append(args, "-i", input)
+		}
+		args = append(args, "-filter_complex", filterComplex, "-map", "[v]")
+		if dub && audioCount == len(ids) && audioCount > 0 {
+			args = append(args, "-map", "[a]", "-c:a", "aac", "-b:a", "192k")
+		}
+		args = append(args, "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p", "-movflags", "+faststart", outAbs)
+		if _, err := runLocalProgram(ffmpeg, args, 30*time.Minute); err != nil {
+			s.failMerge(mt, p, err.Error())
+			return
+		}
+	} else {
+		cmd := fmt.Sprintf("%s; mkdir -p %s; $FF -y %s -filter_complex %s %s -c:v libx264 -crf 18 -preset medium -pix_fmt yuv420p -movflags +faststart %s", ffmpegResolveCmd, shellQuote(path.Dir(outAbs)), strings.Join(inputs, " "), shellQuote(filterComplex), mapArgs, shellQuote(outAbs))
+		log.Printf("[merge %d] %s", mt.ID, cmd)
+		if _, err := s.remote.RunTimeout(cmd, 30*time.Minute); err != nil {
+			s.failMerge(mt, p, err.Error())
+			return
+		}
 	}
 	s.db.Model(mt).Updates(map[string]any{
 		"status": "success", "output_file": outName, "subtitle": subtitles, "error": "",
@@ -2823,7 +2916,7 @@ func (s *ProjectService) writeMergeSRT(p *models.Project, mt *models.MergeTask, 
 		s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
 		dur := normalizeSceneDuration(sc.Duration)
 		if sc.VideoFile != "" && sc.VideoGPU != nil {
-			abs := filepath.Join(s.cfg.Comfy.ComfyDir, "output_workers", fmt.Sprintf("gpu%d", *sc.VideoGPU), sc.VideoFile)
+			abs := s.mediaPath("output_workers", fmt.Sprintf("gpu%d", *sc.VideoGPU), filepath.FromSlash(sc.VideoFile))
 			if mi, err := s.remote.ProbeMedia(abs); err == nil && mi.Duration > 0 {
 				dur = mi.Duration
 			}
@@ -2954,7 +3047,7 @@ func (s *ProjectService) buildDubTimeline(p *models.Project, episodeN int, scene
 
 // remoteMediaDuration 远程探测音频/视频时长（秒），用 ffmpeg -i 解析
 func (s *ProjectService) remoteMediaDuration(abs string) (float64, error) {
-	cmd := fmt.Sprintf(`%s; "$FF" -i %s 2>&1 | grep -oP 'Duration: \K[0-9:.]+' | head -1`, ffmpegResolveCmd, shellQuote(abs))
+	cmd := fmt.Sprintf(`%s; $FF -i %s 2>&1 | grep -oP 'Duration: \K[0-9:.]+' | head -1`, ffmpegResolveCmd, shellQuote(abs))
 	out, err := s.remote.RunTimeout(cmd, 30*time.Second)
 	if err != nil {
 		return 0, err
@@ -2975,11 +3068,15 @@ func (s *ProjectService) remoteMediaDuration(abs string) (float64, error) {
 
 // escapeFilterPath ffmpeg filter 内路径转义（冒号/引号/逗号）
 func escapeFilterPath(p string) string {
-	p = strings.ReplaceAll(p, "\\", "\\\\")
-	p = strings.ReplaceAll(p, ":", "\\:")
-	p = strings.ReplaceAll(p, "'", "\\'")
-	p = strings.ReplaceAll(p, ",", "\\,")
-	return p
+	// FFmpeg filter 参数有自己的转义规则，与宿主 Shell 无关。统一斜杠后
+	// 转义 Windows 盘符冒号及 filter 分隔符；整个值用单引号包裹。
+	p = filepath.ToSlash(p)
+	p = strings.ReplaceAll(p, "'", `\'`)
+	p = strings.ReplaceAll(p, ":", `\:`)
+	p = strings.ReplaceAll(p, ",", `\,`)
+	p = strings.ReplaceAll(p, "[", `\[`)
+	p = strings.ReplaceAll(p, "]", `\]`)
+	return "'" + p + "'"
 }
 
 // writeEpisodeSRT 按真实音频时间轴写出 SRT 字幕（UTF-8 BOM 兼容 Windows）
@@ -3008,10 +3105,24 @@ func (s *ProjectService) writeEpisodeSRT(mt *models.MergeTask, srtAbs string, se
 	return nil
 }
 
-const ffmpegResolveCmd = `FF=$(command -v ffmpeg 2>/dev/null); if [ -z "$FF" ]; then for PY in python /opt/miniconda3/envs/comfyenv/bin/python /opt/miniconda3/envs/comfyenv/bin/python /opt/miniconda3/envs/wan22/bin/python; do FF=$($PY -c "import imageio_ffmpeg,sys;sys.stdout.write(imageio_ffmpeg.get_ffmpeg_exe())" 2>/dev/null); [ -n "$FF" ] && break; done; fi; if [ -z "$FF" ]; then for F in /usr/bin/ffmpeg /usr/local/bin/ffmpeg /opt/miniconda3/envs/*/lib/python3.*/site-packages/imageio_ffmpeg/binaries/ffmpeg-*; do [ -x "$F" ] && { FF=$F; break; }; done; fi; [ -z "$FF" ] && FF=ffmpeg`
+const ffmpegResolveCmd = `FF=$(command -v ffmpeg 2>/dev/null); if [ -z $FF ]; then for PY in python /opt/miniconda3/envs/comfyenv/bin/python /opt/miniconda3/envs/wan22/bin/python; do FF=$($PY -c 'import imageio_ffmpeg,sys;sys.stdout.write(imageio_ffmpeg.get_ffmpeg_exe())' 2>/dev/null); [ -n $FF ] && break; done; fi; if [ -z $FF ]; then for F in /usr/bin/ffmpeg /usr/local/bin/ffmpeg /opt/miniconda3/envs/*/lib/python3.*/site-packages/imageio_ffmpeg/binaries/ffmpeg-*; do [ -x $F ] && { FF=$F; break; }; done; fi; [ -z $FF ] && FF=ffmpeg`
 
-func (s *ProjectService) remoteFileHasAudio(path string) (bool, error) {
-	cmd := fmt.Sprintf(`%s; if ! command -v "$FF" >/dev/null 2>&1 && [ ! -x "$FF" ]; then echo unknown; elif "$FF" -i %s 2>&1 | grep -q "Audio:"; then echo yes; else echo no; fi`, ffmpegResolveCmd, shellQuote(path))
+func (s *ProjectService) remoteFileHasAudio(filePath string) (bool, error) {
+	if s.remote == nil || !s.remote.Enabled() {
+		ffmpeg, err := localFFmpegPath()
+		if err != nil {
+			return false, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, ffmpeg, "-hide_banner", "-i", filePath)
+		output, _ := cmd.CombinedOutput() // ffmpeg -i 没有输出目标时通常返回非零，仍可解析流信息。
+		if ctx.Err() == context.DeadlineExceeded {
+			return false, fmt.Errorf("检测场景音轨超时")
+		}
+		return strings.Contains(string(output), "Audio:"), nil
+	}
+	cmd := fmt.Sprintf(`%s; if ! command -v $FF >/dev/null 2>&1 && [ ! -x $FF ]; then echo unknown; elif $FF -i %s 2>&1 | grep -q 'Audio:'; then echo yes; else echo no; fi`, ffmpegResolveCmd, shellQuote(filePath))
 	out, err := s.remote.RunTimeout(cmd, 30*time.Second)
 	if err != nil {
 		return false, fmt.Errorf("检测场景音轨失败: %w", err)
@@ -3045,7 +3156,7 @@ func (s *ProjectService) ListMerges(projectID uint) ([]models.MergeTask, error) 
 }
 
 // CreateAllMerges 整剧一键合并：对所有含就绪视频的集各创建一个合并任务
-func (s *ProjectService) CreateAllMerges(p *models.Project) (int, error) {
+func (s *ProjectService) CreateAllMerges(p *models.Project, dub, subtitles bool) (int, error) {
 	var episodes []int
 	if err := s.db.Model(&models.Scene{}).Where("project_id = ? AND status = ?", p.ID, "video_ready").
 		Distinct("episode_n").Order("episode_n").Pluck("episode_n", &episodes).Error; err != nil {
@@ -3065,7 +3176,7 @@ func (s *ProjectService) CreateAllMerges(p *models.Project) (int, error) {
 		for i := range scenes {
 			ids[i] = scenes[i].ID
 		}
-		if _, err := s.CreateMergeTask(p, ids, true, true); err == nil {
+		if _, err := s.CreateMergeTask(p, ids, dub, subtitles); err == nil {
 			count++
 		}
 	}
@@ -3101,7 +3212,7 @@ func (s *ProjectService) EditorData(p *models.Project, episodeN int) (map[string
 		es := editorScene{Scene: sc}
 		if sc.VideoFile != "" && sc.VideoGPU != nil {
 			es.VideoURL = fmt.Sprintf("/api/output/%d/%s", *sc.VideoGPU, sc.VideoFile)
-			abs := filepath.Join(s.cfg.Comfy.ComfyDir, "output_workers", fmt.Sprintf("gpu%d", *sc.VideoGPU), sc.VideoFile)
+			abs := s.mediaPath("output_workers", fmt.Sprintf("gpu%d", *sc.VideoGPU), filepath.FromSlash(sc.VideoFile))
 			if mi, err := s.remote.ProbeMedia(abs); err == nil && mi.Duration > 0 {
 				es.VideoDur = mi.Duration
 			}
@@ -3155,7 +3266,7 @@ func (s *ProjectService) EditorSubtitleTimelineRaw(p *models.Project, scenes []m
 	for i, sc := range scenes {
 		d := normalizeSceneDuration(sc.Duration)
 		if sc.VideoFile != "" && sc.VideoGPU != nil {
-			abs := filepath.Join(s.cfg.Comfy.ComfyDir, "output_workers", fmt.Sprintf("gpu%d", *sc.VideoGPU), sc.VideoFile)
+			abs := s.mediaPath("output_workers", fmt.Sprintf("gpu%d", *sc.VideoGPU), filepath.FromSlash(sc.VideoFile))
 			if mi, err := s.remote.ProbeMedia(abs); err == nil && mi.Duration > 0 {
 				d = mi.Duration
 			}
