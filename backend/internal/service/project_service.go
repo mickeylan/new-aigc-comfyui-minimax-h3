@@ -2048,10 +2048,36 @@ func (s *ProjectService) failSceneImage(sc *models.Scene, token, errMsg string) 
 
 // ---------- 场景视频生成（本地 L40 / MiniMax H3 i2v） ----------
 
+// restoreLegacyProjectInput 兼容 Windows 上曾使用 Linux 默认 /opt/comfyUI 时，
+// Go 将其落在当前盘符根目录的旧文件。找到后复制到当前配置的 input 目录。
+func (s *ProjectService) restoreLegacyProjectInput(projectID uint, name string) error {
+	if name == "" || s.upload == nil || s.remote == nil || s.remote.Enabled() {
+		return nil
+	}
+	target := filepath.Join(s.upload.InputDir(), fmt.Sprint(projectID), filepath.Base(name))
+	if _, err := os.Stat(target); err == nil {
+		return nil
+	}
+	wd, _ := os.Getwd()
+	volume := filepath.VolumeName(wd)
+	legacy := filepath.Join(volume+string(os.PathSeparator), "opt", "comfyUI", "input", fmt.Sprint(projectID), filepath.Base(name))
+	data, err := os.ReadFile(legacy)
+	if err != nil {
+		return fmt.Errorf("分镜图片不存在: %s（旧目录 %s 也未找到）", target, legacy)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(target, data, 0o644)
+}
+
 // GenerateSceneVideo 创建场景视频任务：首帧图 = 文生图画面，提示词 = 场景正文
 func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene) error {
 	if sc.ImageFile == "" {
 		return fmt.Errorf("场景 %d 尚未生成画面", sc.Order)
+	}
+	if err := s.restoreLegacyProjectInput(sc.ProjectID, sc.ImageFile); err != nil {
+		return err
 	}
 	claim := s.db.Model(&models.Scene{}).
 		Where("id = ? AND project_id = ? AND generation = ? AND status IN ? AND image_file != ''",
