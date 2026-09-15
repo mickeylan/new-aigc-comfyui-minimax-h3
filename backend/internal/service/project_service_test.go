@@ -804,13 +804,18 @@ func TestBuildSceneVideoSpec(t *testing.T) {
 
 	// 当前分镜 + 两个角色参考图 → ref2v；四视图优先，标准像兜底。
 	sc := &models.Scene{ProjectID: p.ID, ImageFile: "scene_1.png", Characters: "林夏, 陆川"}
-	code, _, files := ps.buildSceneVideoSpec(sc, "1")
+	code, prompt, files := ps.buildSceneVideoSpec(sc, "1")
 	if code != "minimax_h3_ref2v" {
 		t.Fatalf("有角色参考应走 ref2v, got %s", code)
 	}
 	refs := files["ref_images"]
 	if len(refs) != 3 || refs[0].Name != "scene_1.png" || refs[1].Name != "lin-sheet.png" || refs[2].Name != "lu.png" {
 		t.Fatalf("参考图顺序或回退错误: %+v", refs)
+	}
+	for _, want := range []string{"【参考图绑定】", "<Picture 1>", "<Picture 2>", "【动作与时间推进】", "【摄影机】", "【声音】", "NO text"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("H3 prompt missing %q: %s", want, prompt)
+		}
 	}
 
 	// 无出场角色 → i2v，first_frame 单图

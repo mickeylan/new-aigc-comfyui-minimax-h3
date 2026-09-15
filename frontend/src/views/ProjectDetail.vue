@@ -166,6 +166,7 @@
                   {{ ch.sheet_task_id ? '四视图生成中…' : ch.sheet ? '重生成四视图' : '生成四视图' }}
                 </button>
                 <button v-if="ch.sheet" class="btn btn-sm btn-ghost" @click="viewCharacterSheet(ch)">查看四视图</button>
+                <router-link :to="`/projects/${id()}/characters/${ch.id}/looks`" class="btn btn-sm btn-secondary">造型资产</router-link>
                 <button class="btn btn-sm btn-ghost" @click="openEditCharacter(ch)">编辑</button>
                 <button class="btn btn-sm btn-danger" @click="removeCharacter(ch)">删除</button>
               </div>

@@ -116,6 +116,25 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/characters/:cid/voice/upload", svc.HandleUploadCharacterVoice)
 	r.POST("/api/projects/:id/characters/:cid/voice/clone", svc.HandleCloneCharacterVoice)
 	r.POST("/api/projects/:id/characters/:cid/voice/clear", svc.HandleClearCharacterVoice)
+	// 角色造型资产（CharacterLook：独立于角色档案的造型变体）
+	r.GET("/api/projects/:id/characters/:cid/looks", svc.HandleListCharacterLooks)                            // 角色的所有造型
+	r.POST("/api/projects/:id/characters/:cid/looks", svc.HandleCreateCharacterLook)                          // 创建造型
+	r.POST("/api/projects/:id/characters/:cid/looks/expand-preview", svc.HandlePreviewCharacterLookExpansion) // 新建时 AI 扩写预览
+	r.GET("/api/projects/:id/characters/:cid/looks/:lid", svc.HandleGetCharacterLook)                         // 获取单个造型
+	r.PUT("/api/projects/:id/characters/:cid/looks/:lid", svc.HandleUpdateCharacterLook)                      // 更新造型
+	r.DELETE("/api/projects/:id/characters/:cid/looks/:lid", svc.HandleDeleteCharacterLook)                   // 删除造型
+	r.POST("/api/projects/:id/characters/:cid/looks/:lid/expand", svc.HandleExpandCharacterLookDescription)   // AI 扩写描述
+	r.POST("/api/projects/:id/characters/:cid/looks/:lid/prompt", svc.HandleGenerateCharacterLookPrompt)      // 生成参考图提示词
+	r.POST("/api/projects/:id/characters/:cid/looks/:lid/image", svc.HandleGenerateCharacterLookImage)        // 生成参考图
+	r.POST("/api/projects/:id/characters/:cid/looks/:lid/image/upload", svc.HandleUploadCharacterLookImage)   // 上传参考图
+	r.POST("/api/projects/:id/characters/:cid/looks/:lid/approve", svc.HandleApproveCharacterLook)            // 审核通过
+	r.POST("/api/projects/:id/characters/:cid/looks/:lid/reject", svc.HandleRejectCharacterLook)              // 审核驳回
+	r.POST("/api/projects/:id/characters/:cid/looks/:lid/publish", svc.HandlePublishCharacterLook)            // 发布造型
+	// 场景/镜头造型关联
+	r.GET("/api/projects/:id/scenes/:sid/looks", svc.HandleGetSceneLooks)    // 获取场景造型关联
+	r.PUT("/api/projects/:id/scenes/:sid/looks", svc.HandleAssignSceneLooks) // 设置场景造型关联
+	r.GET("/api/projects/:id/shots/:shid/looks", svc.HandleGetShotLooks)     // 获取镜头造型关联
+	r.PUT("/api/projects/:id/shots/:shid/looks", svc.HandleAssignShotLooks)  // 设置镜头造型关联
 	// 视觉资产（道具 / 场景，跨分镜一致性参考图）
 	r.GET("/api/projects/:id/assets/:kind", svc.HandleListAssets)
 	r.POST("/api/projects/:id/assets/:kind/redesign", svc.HandleRedesignAssetDescription)

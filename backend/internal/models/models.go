@@ -609,3 +609,69 @@ type StylePreset struct {
 	CreatedAt      time.Time           `json:"created_at"`
 	UpdatedAt      time.Time           `json:"updated_at"`
 }
+
+// CharacterLookStatus 角色造型审核状态
+type CharacterLookStatus string
+
+const (
+	LookStatusDraft     CharacterLookStatus = "draft"     // 草稿（AI 生成，待审核）
+	LookStatusApproved  CharacterLookStatus = "approved"  // 已审核通过
+	LookStatusRejected  CharacterLookStatus = "rejected"  // 已驳回，需修改
+	LookStatusPublished CharacterLookStatus = "published" // 已发布，可用于生成
+)
+
+// CharacterLook 角色造型资产：项目内可复用的角色外观变体（服装/发型/配饰等）
+// 独立于 Character.profile，支持按场景/镜头选择的造型变体，覆盖服装、鞋履、发型、发饰、首饰、包等
+type CharacterLook struct {
+	ID            uint                `gorm:"primaryKey" json:"id"`
+	ProjectID     uint                `gorm:"column:project_id;index;uniqueIndex:idx_look_project_character_name" json:"project_id"`
+	CharacterID   uint                `gorm:"column:character_id;index;uniqueIndex:idx_look_project_character_name" json:"character_id"`
+	Name          string              `gorm:"uniqueIndex:idx_look_project_character_name" json:"name"`     // 项目内同名角色下唯一
+	Category      string              `json:"category"`                                                    // 造型分类：clothing(服装)/shoes(鞋履)/hair(发型)/hair_accessory(发饰)/jewelry(首饰)/bag(包)/full(完整造型)
+	Description   string              `gorm:"type:text" json:"description"`                                // 造型详细描述（AI 扩写或手动编辑）
+	Image         string              `json:"image"`                                                       // 参考图文件名（input/<project_id>/ 下）
+	ImageTaskID   string              `gorm:"column:image_task_id;index" json:"image_task_id"`             // Krea2 参考图生成任务
+	ImageError    string              `gorm:"column:image_error;type:text" json:"image_error"`             // 参考图生成错误
+	Prompt        string              `gorm:"type:text" json:"prompt"`                                     // 参考图提示词
+	Priority      int                 `gorm:"default:0" json:"priority"`                                   // 优先级（数字越大优先级越高，用于 MiniMax H3 排序）
+	IsShotRelated bool                `gorm:"column:is_shot_related;default:false" json:"is_shot_related"` // 是否镜头相关（MiniMax H3 仅纳入为 true 的造型）
+	IsDefault     bool                `gorm:"column:is_default;default:false;index" json:"is_default"`     // 角色标准像阶段自动建立的默认造型
+	AuditStatus   CharacterLookStatus `gorm:"column:audit_status;default:draft" json:"audit_status"`       // 审核状态
+	AuditNote     string              `gorm:"column:audit_note;type:text" json:"audit_note"`               // 审核意见
+	AuditVersion  int                 `gorm:"column:audit_version;default:0" json:"audit_version"`         // 审核版本号
+	Source        string              `json:"source"`                                                      // auto(AI 扩写)/manual(手动新建)
+	Version       int                 `gorm:"default:1" json:"version"`                                    // 版本号
+	CreatedAt     time.Time           `json:"created_at"`
+	UpdatedAt     time.Time           `json:"updated_at"`
+
+	// 关联
+	Character *Character `gorm:"foreignKey:CharacterID" json:"character,omitempty"`
+}
+
+// SceneCharacterLook 场景-造型关联表：建立 Scene 与 CharacterLook 的多对多关系
+type SceneCharacterLook struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	SceneID    uint      `gorm:"column:scene_id;index;uniqueIndex:idx_scl_scene_look" json:"scene_id"`
+	LookID     uint      `gorm:"column:look_id;index;uniqueIndex:idx_scl_scene_look" json:"look_id"`
+	Order      int       `gorm:"default:0" json:"order"`                              // 场景内造型顺序
+	IsFeatured bool      `gorm:"column:is_featured;default:false" json:"is_featured"` // 是否为主推造型（画面重点）
+	CreatedAt  time.Time `json:"created_at"`
+
+	// 关联
+	Scene *Scene         `gorm:"foreignKey:SceneID" json:"scene,omitempty"`
+	Look  *CharacterLook `gorm:"foreignKey:LookID" json:"look,omitempty"`
+}
+
+// ShotCharacterLook 镜头-造型关联表：建立 Shot 与 CharacterLook 的多对多关系
+type ShotCharacterLook struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	ShotID     uint      `gorm:"column:shot_id;index;uniqueIndex:idx_shcl_shot_look" json:"shot_id"`
+	LookID     uint      `gorm:"column:look_id;index;uniqueIndex:idx_shcl_shot_look" json:"look_id"`
+	Order      int       `gorm:"default:0" json:"order"`                              // 镜头内造型顺序
+	IsFeatured bool      `gorm:"column:is_featured;default:false" json:"is_featured"` // 是否为主推造型
+	CreatedAt  time.Time `json:"created_at"`
+
+	// 关联
+	Shot *Shot          `gorm:"foreignKey:ShotID" json:"shot,omitempty"`
+	Look *CharacterLook `gorm:"foreignKey:LookID" json:"look,omitempty"`
+}

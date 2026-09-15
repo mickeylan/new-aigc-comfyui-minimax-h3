@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -134,12 +135,18 @@ func (s *PromptWorkshopService) TranslatePrompt(entityType string, entityID uint
 func (s *PromptWorkshopService) recordVersion(entityType string, entityID uint, content string, action PromptAction, metadata map[string]any) error {
 	metadataJSON, _ := json.Marshal(metadata)
 
+	createdAt := time.Now()
+	var latest models.PromptVersion
+	if s.db.Where("entity_type = ? AND entity_id = ?", entityType, entityID).Order("created_at DESC, id DESC").First(&latest).Error == nil && !createdAt.After(latest.CreatedAt) {
+		createdAt = latest.CreatedAt.Add(time.Nanosecond)
+	}
 	version := models.PromptVersion{
 		EntityType: entityType,
 		EntityID:   entityID,
 		Content:    content,
 		Action:     string(action),
 		Metadata:   string(metadataJSON),
+		CreatedAt:  createdAt,
 	}
 
 	return s.db.Create(&version).Error
@@ -153,7 +160,7 @@ func (s *PromptWorkshopService) GetHistory(entityType string, entityID uint, lim
 
 	var versions []models.PromptVersion
 	if err := s.db.Where("entity_type = ? AND entity_id = ?", entityType, entityID).
-		Order("created_at DESC").
+		Order("created_at DESC, id DESC").
 		Limit(limit).
 		Find(&versions).Error; err != nil {
 		return nil, err
@@ -247,7 +254,7 @@ func (s *PromptWorkshopService) DeleteOldHistory(entityType string, entityID uin
 	var keepIDs []uint
 	if err := s.db.Model(&models.PromptVersion{}).
 		Where("entity_type = ? AND entity_id = ?", entityType, entityID).
-		Order("created_at DESC").
+		Order("created_at DESC, id DESC").
 		Limit(keepCount).
 		Pluck("id", &keepIDs).Error; err != nil {
 		return 0, err
@@ -294,7 +301,7 @@ func (s *PromptWorkshopService) GetHistoryStatistics(entityType string, entityID
 	// 获取最新版本
 	var latest models.PromptVersion
 	latestErr := s.db.Where("entity_type = ? AND entity_id = ?", entityType, entityID).
-		Order("created_at DESC").First(&latest).Error
+		Order("created_at DESC, id DESC").First(&latest).Error
 
 	return map[string]any{
 		"total_versions": total,

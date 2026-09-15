@@ -11,6 +11,7 @@ const routes = [
   { path: '/projects/new', name: 'project-new', component: () => import('../views/ProjectNew.vue') },
   { path: '/projects/:id', name: 'project-detail', component: () => import('../views/ProjectDetail.vue') },
   { path: '/projects/:id/editor', name: 'project-editor', component: () => import('../views/ProjectEditor.vue') },
+  { path: '/projects/:id/characters/:cid/looks', name: 'character-looks', component: () => import('../views/CharacterLooks.vue') },
   { path: '/projects/:id/novel', name: 'project-novel', component: () => import('../views/NovelImport.vue') },
   { path: '/projects/:id/story-bible', name: 'story-bible', component: () => import('../views/StoryBible.vue') },
   { path: '/projects/:id/adaptation', name: 'adaptation', component: () => import('../views/AdaptationPlan.vue') },

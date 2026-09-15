@@ -36,6 +36,7 @@ type Service struct {
 	Adaptations       *AdaptationService       // 小说分集改编服务
 	TextProviderFact  *TextProviderFactory     // 文生文 provider 工厂（运行时按设置动态选择）
 	CharacterProfiles *CharacterProfileService // 角色档案服务
+	CharacterLooks    *CharacterLookService    // 角色造型服务
 	Skills            *SkillService            // 创作技能管理服务
 	Shots             *ShotService             // 镜头层服务
 	PromptWorkshop    *PromptWorkshopService   // 提示词工作台服务
@@ -69,6 +70,9 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	shots := NewShotService(db)
 	promptWorkshop := NewPromptWorkshopService(db, textProviderFact)
 	stylePresets := NewStylePresetService(db)
+	charLooks := NewCharacterLookService(db, textProviderFact)
+	charLooks.SetDeps(tasks, remote, upload)
+	projects.characterLooks = charLooks
 
 	// 初始化系统预设
 	if err := skills.InitSystemSkills(); err != nil {
@@ -85,8 +89,8 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 		Cfg: cfg, DB: db, Mgr: mgr, Mon: mon, Tasks: tasks, Hub: hub, Upload: upload,
 		Remote: remote, Volc: volc, Projects: projects, Materials: materials,
 		Novel: novel, NovelAnalysis: novelAnalysis, Adaptations: adaptations,
-		TextProviderFact: textProviderFact, CharacterProfiles: charProfiles, Skills: skills,
-		Shots: shots, PromptWorkshop: promptWorkshop, StylePresets: stylePresets,
+		TextProviderFact: textProviderFact, CharacterProfiles: charProfiles, CharacterLooks: charLooks,
+		Skills: skills, Shots: shots, PromptWorkshop: promptWorkshop, StylePresets: stylePresets,
 	}
 }
 

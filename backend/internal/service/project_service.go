@@ -22,19 +22,20 @@ import (
 
 // ProjectService 漫剧项目：剧本（文生文）→ 分镜画面（文生图）→ 视频（本地 L40）→ 合并成片
 type ProjectService struct {
-	cfg          *config.Config
-	db           *gorm.DB
-	textProvider TextProvider // 文生文 provider（支持火山 / llama.cpp 等）
-	volc         *VolcClient  // 保留用于图片生成
-	ali          *AliyunTTS
-	tasks        *TaskService
-	remote       *RemoteExec
-	upload       *UploadManager
-	hub          *Hub
-	stopped      chan struct{}
-	materials    *MaterialService
-	skills       *SkillService
-	assetMu      sync.Mutex // 串行化资产参考图任务创建，避免并发重复排队
+	cfg            *config.Config
+	db             *gorm.DB
+	textProvider   TextProvider // 文生文 provider（支持火山 / llama.cpp 等）
+	volc           *VolcClient  // 保留用于图片生成
+	ali            *AliyunTTS
+	tasks          *TaskService
+	remote         *RemoteExec
+	upload         *UploadManager
+	hub            *Hub
+	stopped        chan struct{}
+	materials      *MaterialService
+	skills         *SkillService
+	characterLooks *CharacterLookService
+	assetMu        sync.Mutex // 串行化资产参考图任务创建，避免并发重复排队
 }
 
 func NewProjectService(cfg *config.Config, db *gorm.DB, textProvider TextProvider, volc *VolcClient, tasks *TaskService, remote *RemoteExec, upload *UploadManager, hub *Hub, materials *MaterialService) *ProjectService {
@@ -834,50 +835,49 @@ func (s *ProjectService) sceneCharacterPortraits(sc *models.Scene) []models.Char
 	return ordered
 }
 
-// buildSceneVideoSpec 构造场景视频的模板/prompt/素材：
-// 固定使用 i2v（仅首帧）：MiniMax H3 参考视频生成（ref2v）多参考图易跑偏，不再使用。
-// 场景对白直接注入 prompt，让 H3 同步生成带人声的音轨（无需后期 TTS 配音）；
-// 同时强制禁止画面中出现文字/字幕（字幕由合并阶段统一烧录）。
+// buildSceneVideoSpec 按 MiniMax H3 图生视频规则组织引用、动作、摄影机、光线、风格和声音。
 func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string) (tplCode, promptText string, files map[string][]FileMeta) {
-	// 强制约束（开头置顶 + 结尾重申，中英双语）：i2v 画面纯净，禁止任何文字/字幕
-	const noTextPrefix = "【强制要求·画面纯净】画面中禁止出现任何文字、字幕、对话气泡、水印、台标、UI 元素或任何语言的字符；所有对白仅通过人声表达，绝不在画面上显示任何文字。\nStrict rule: NO text, subtitles, captions, speech bubbles, watermarks, logos, on-screen UI, or written characters of any language may appear in the video. All dialogue must be conveyed through voice/audio only, never rendered as on-screen text.\n\n"
-	prompt := noTextPrefix
+	refs, refLines := s.sceneVideoReferenceFiles(sc, pid)
 	var p models.Project
-	if err := s.db.First(&p, sc.ProjectID).Error; err == nil {
-		if desc := styleDescriptor(p.Style); desc != "" {
-			prompt += desc
-		}
-	}
-	if content := strings.TrimSpace(sc.Content); content != "" {
-		prompt += "\n" + content
-	}
-	// 注入该场景对白，让 H3 生成对应人声
+	_ = s.db.First(&p, sc.ProjectID).Error
 	var dubs []models.Dialogue
 	s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
+	prompt := buildMiniMaxH3Prompt(sc, &p, refLines, dubs, len(refs) > 1)
+	prompt = s.applyPromptSkill(sc.ProjectID, models.SkillStageVideoPrompt, prompt, map[string]string{
+		"scene_content": sc.Content, "start_state": "以当前分镜画面为起始状态", "end_state": "完成本镜主要动作后自然停留", "duration": fmt.Sprint(sc.Duration),
+	})
+	if len(refs) > 1 {
+		return "minimax_h3_ref2v", prompt, map[string][]FileMeta{"ref_images": refs}
+	}
+	return "minimax_h3_i2v", prompt, map[string][]FileMeta{"first_frame": {{TaskID: pid, Name: sc.ImageFile}}}
+}
+
+func buildMiniMaxH3Prompt(sc *models.Scene, p *models.Project, refLines []string, dubs []models.Dialogue, referenceMode bool) string {
+	parts := []string{"【MiniMax H3 视频提示词】"}
+	if referenceMode {
+		parts = append(parts, "【参考图绑定】\n"+strings.Join(refLines, "\n")+"\n<Picture 1> 只负责当前镜头的起始构图、人物位置和环境；其余 Picture 只负责对应角色、造型、场景或道具的身份与外观。不得交换引用对象，不得把四视图、参考图或拼图结构复现在视频中。")
+	} else {
+		parts = append(parts, "【起始画面】严格从输入首帧继续运动，保持首帧人物身份、服装、空间布局和画面风格，不重新设计画面。")
+	}
+	parts = append(parts, "【主体】"+strings.TrimSpace(sc.Title), "【动作与时间推进】在约"+fmt.Sprintf("%.0f", sc.Duration)+"秒内，"+strings.TrimSpace(sc.Content)+"。只安排一个连续、物理可执行的主要动作，明确动作先后与结束状态，避免瞬移、变形、换装和新增人物。", "【摄影机】镜头运动单一且平滑；若分镜未指定运镜则保持稳定机位，仅做轻微自然呼吸感。不要无理由环绕、快速变焦、甩镜或切镜。")
+	if p != nil && strings.TrimSpace(p.Style) != "" {
+		parts = append(parts, "【光线与视觉风格】保持项目画风「"+p.Style+"」及输入图的光向、色温、材质和时空连续性。")
+	}
 	if len(dubs) > 0 {
-		var lines []string
+		lines := make([]string, 0, len(dubs))
 		for _, d := range dubs {
 			who := strings.TrimSpace(d.Character)
 			if who == "" {
 				who = "旁白"
 			}
-			lines = append(lines, who+"说："+strings.TrimSpace(d.Text))
+			lines = append(lines, who+"："+strings.TrimSpace(d.Text))
 		}
-		prompt += "\n\n对白（请按顺序自然说出以下台词，生成清晰的人声音轨）：\n" + strings.Join(lines, "\n")
+		parts = append(parts, "【声音与对白】按顺序自然说出，口型、说话人和情绪匹配：\n"+strings.Join(lines, "\n")+"\n只生成匹配场景的环境声和必要动作声，不添加无关音乐或额外台词。")
+	} else {
+		parts = append(parts, "【声音】只生成与画面匹配的自然环境声和动作声，不添加对白。")
 	}
-	// 结尾再次强调无字幕约束
-	prompt += "\n\n再次强调：严禁画面出现任何文字/字幕/水印/对话框，对白只用声音表达（Do NOT render any text or subtitles on screen）"
-	prompt = s.applyPromptSkill(sc.ProjectID, models.SkillStageVideoPrompt, prompt, map[string]string{"scene_content": sc.Content, "duration": fmt.Sprint(sc.Duration)})
-
-	// 有角色/资产参考时使用 H3 ref2v。图1保留当前分镜构图，其余主体优先使用四视图，
-	// 并严格受模板最多 9 张参考图的输入限制；没有额外参考时仍走首帧 i2v。
-	refs, refLines := s.sceneVideoReferenceFiles(sc, pid)
-	if len(refs) > 1 {
-		prompt += "\n\n参考图片映射：\n" + strings.Join(refLines, "\n") +
-			"\n以 <Picture 1> 为镜头构图和动作起点，并严格保持其他 Picture 中对应人物、道具和场景的外观一致。"
-		return "minimax_h3_ref2v", prompt, map[string][]FileMeta{"ref_images": refs}
-	}
-	return "minimax_h3_i2v", prompt, map[string][]FileMeta{"first_frame": {{TaskID: pid, Name: sc.ImageFile}}}
+	parts = append(parts, "【硬约束】NO text, subtitles, captions, speech bubbles, watermarks, logos, UI, or written characters. 画面中严禁文字、字幕、水印、对话框；保持人物脸部、肢体、服装、造型和道具稳定。")
+	return strings.Join(parts, "\n\n")
 }
 
 func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) ([]FileMeta, []string) {
@@ -896,6 +896,16 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 		}
 		refs = append(refs, FileMeta{TaskID: pid, Name: name})
 		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」%s", len(refs), ch.Name, kind))
+	}
+	for _, look := range s.sceneCharacterLooks(sc, true) {
+		if len(refs) >= maxSceneReferenceImages {
+			break
+		}
+		if look.Image == "" {
+			continue
+		}
+		refs = append(refs, FileMeta{TaskID: pid, Name: look.Image})
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色造型「%s」（%s）", len(refs), look.Name, LookCategoryLabel(look.Category)))
 	}
 	for _, a := range s.sceneMatchedAssets(sc) {
 		if len(refs) >= maxSceneReferenceImages {
@@ -1503,6 +1513,39 @@ func (s *ProjectService) characterContextForScene(sc *models.Scene) string {
 	return "【角色设定（必须严格遵守，保证人物一致）】\n" + strings.Join(lines, "\n")
 }
 
+func (s *ProjectService) sceneCharacterLooks(sc *models.Scene, shotRelatedOnly bool) []models.CharacterLook {
+	var looks []models.CharacterLook
+	q := s.db.Model(&models.CharacterLook{}).
+		Joins("JOIN scene_character_looks ON scene_character_looks.look_id = character_looks.id").
+		Where("scene_character_looks.scene_id = ? AND character_looks.project_id = ? AND character_looks.audit_status IN ?", sc.ID, sc.ProjectID, []models.CharacterLookStatus{models.LookStatusApproved, models.LookStatusPublished})
+	if shotRelatedOnly {
+		q = q.Where("character_looks.is_shot_related = ?", true)
+	}
+	_ = q.Order("scene_character_looks.is_featured DESC, character_looks.priority DESC, character_looks.id").Find(&looks).Error
+	return looks
+}
+
+func (s *ProjectService) characterLookContextForScene(sc *models.Scene) string {
+	looks := s.sceneCharacterLooks(sc, false)
+	if len(looks) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(looks))
+	for _, look := range looks {
+		desc := strings.TrimSpace(look.Description)
+		if desc == "" {
+			desc = strings.TrimSpace(look.Prompt)
+		}
+		if desc != "" {
+			lines = append(lines, fmt.Sprintf("- %s「%s」：%s", LookCategoryLabel(look.Category), look.Name, desc))
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "【当前场景角色造型（必须严格遵守）】\n" + strings.Join(lines, "\n")
+}
+
 // buildSceneImagePrompt 拼装场景文生图提示词：强画风约束 → 画风/视觉基准 → 角色设定 → 道具/场景设定 → 当前分镜
 func (s *ProjectService) buildSceneImagePrompt(sc *models.Scene) string {
 	parts := make([]string, 0, 6)
@@ -1520,6 +1563,9 @@ func (s *ProjectService) buildSceneImagePrompt(sc *models.Scene) string {
 	}
 	if charCtx := s.characterContextForScene(sc); charCtx != "" {
 		parts = append(parts, charCtx)
+	}
+	if lookCtx := s.characterLookContextForScene(sc); lookCtx != "" {
+		parts = append(parts, lookCtx)
 	}
 	if assetCtx := s.assetContextForScene(sc); assetCtx != "" {
 		parts = append(parts, assetCtx)
@@ -1716,6 +1762,16 @@ func (s *ProjectService) sceneImageReferenceFiles(sc *models.Scene) ([]FileMeta,
 		}
 		refs = append(refs, FileMeta{TaskID: pid, Name: name})
 		lines = append(lines, fmt.Sprintf("- 图%d：角色「%s」%s", len(refs), ch.Name, kind))
+	}
+	for _, look := range s.sceneCharacterLooks(sc, false) {
+		if len(refs) >= maxSceneReferenceImages {
+			break
+		}
+		if look.Image == "" {
+			continue
+		}
+		refs = append(refs, FileMeta{TaskID: pid, Name: look.Image})
+		lines = append(lines, fmt.Sprintf("- 图%d：角色造型「%s」（%s）", len(refs), look.Name, LookCategoryLabel(look.Category)))
 	}
 	for _, a := range s.sceneMatchedAssets(sc) {
 		if len(refs) >= maxSceneReferenceImages {
@@ -1932,6 +1988,9 @@ func (s *ProjectService) WatchSceneVideos() {
 			case <-ticker.C:
 				s.syncCharacterPortraits()
 				s.syncAssetImages()
+				if s.characterLooks != nil {
+					s.characterLooks.SyncImages()
+				}
 				s.syncSheets()
 				s.syncSceneImages()
 				s.syncSceneVideos()

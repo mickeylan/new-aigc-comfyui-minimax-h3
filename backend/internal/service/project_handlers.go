@@ -582,9 +582,19 @@ func (s *Service) HandleDeleteCharacter(c *gin.Context) {
 }
 
 func (s *Service) HandleGenerateCharacterPortrait(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
 	ch, ok := s.loadCharacter(c)
 	if !ok {
 		return
+	}
+	if s.CharacterLooks != nil {
+		if _, err := s.CharacterLooks.EnsureDefaultLook(ch, p); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "创建默认造型失败: " + err.Error()})
+			return
+		}
 	}
 	if err := s.Projects.StartCharacterPortrait(ch); err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
@@ -1482,6 +1492,12 @@ func (s *Service) HandleGenerateReferencePrompt(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+	if s.CharacterLooks != nil {
+		if _, err := s.CharacterLooks.EnsureDefaultLook(ch, p); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "创建默认造型失败: " + err.Error()})
+			return
+		}
 	}
 
 	// 刷新角色数据
