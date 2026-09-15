@@ -570,8 +570,15 @@ func TestGenerateReferencePromptKeepsFaceFocusedPortrait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(prompt, "正面半身头像") || strings.Contains(prompt, "正面全身立姿") {
-		t.Fatalf("reference portrait should remain face-focused: %s", prompt)
+	for _, want := range []string{"单人正面大头贴", "22岁女性", "黑色长发", "肩部以上构图"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("reference portrait missing %q: %s", want, prompt)
+		}
+	}
+	for _, forbidden := range []string{"正面全身立姿", "白色交领仙裙", "银色腰封", "禁止显老", "法令纹"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("reference portrait mixed %q: %s", forbidden, prompt)
+		}
 	}
 }
 
@@ -633,16 +640,16 @@ func TestBuildAssetPromptAndSizeUseKrea2ReferenceConventions(t *testing.T) {
 	}
 }
 
-func TestBuildPortraitPromptDoesNotDuplicateStyleAndKeepsYouthAnchor(t *testing.T) {
+func TestBuildPortraitPromptDoesNotAppendNegativePrompt(t *testing.T) {
 	p := &models.Project{Style: "真人写实"}
-	ch := &models.Character{Appearance: "22岁女性，黑色长发", ReferencePrompt: "22岁青年女性，年龄视觉必须严格锁定为22岁，超写实真人照片风格"}
+	ch := &models.Character{Appearance: "22岁女性，黑色长发", ReferencePrompt: "22岁青年女性，超写实真人照片风格"}
 	prompt := buildPortraitPrompt(p, ch)
 	if strings.Count(prompt, "超写实真人照片风格") != 1 {
 		t.Fatalf("style duplicated: %s", prompt)
 	}
-	for _, want := range []string{"22岁青年女性", "禁止显老", "法令纹", "眼袋"} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("prompt missing %q: %s", want, prompt)
+	for _, forbidden := range []string{"禁止显老", "法令纹", "眼袋", "负面提示词"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("prompt should not append %q at cfg=1: %s", forbidden, prompt)
 		}
 	}
 }

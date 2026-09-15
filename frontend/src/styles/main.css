@@ -279,10 +279,12 @@ a.link-more:hover, .link-more:hover { text-decoration: underline; }
 
 /* 动画 */
 @keyframes fadeUp {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
-.fade-up { animation: fadeUp 0.45s ease both; }
+/* 页面祖先不能保留 transform，否则后代 position: fixed 弹窗会相对整张长页面定位，
+   而不是相对当前浏览器视口定位。 */
+.fade-up { animation: fadeUp 0.35s ease both; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 .pulse { animation: pulse 1.6s ease-in-out infinite; }
 

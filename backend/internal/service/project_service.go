@@ -1464,11 +1464,7 @@ func buildPortraitPrompt(p *models.Project, ch *models.Character) string {
 			parts = append(parts, "布光："+lighting)
 		}
 	}
-	// 主参考像保持单人单视图；年龄约束放在结尾再次锚定，抵消身份和古装语义造成的成熟化。
-	if anchor := characterAgeAnchor(ch.Appearance, ch.Trait); anchor != "" {
-		parts = append(parts, anchor)
-	}
-	parts = append(parts, "单一角色，正面半身头像，直视镜头，自然放松表情，纯白干净背景，柔和均匀自然光，居中对称构图，高分辨率真实角色参考照，禁止显老、年龄漂移、中年感、法令纹、眼袋、深皱纹、松弛皮肤、厚重妆容、复古影楼感、多人、拼图、文字、水印和复杂背景")
+	parts = append(parts, "单一角色，正面半身头像，直视镜头，自然放松表情，纯白干净背景，柔和均匀自然光，居中对称构图，高分辨率角色参考照")
 	return strings.Join(parts, "，")
 }
 

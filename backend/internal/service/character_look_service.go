@@ -52,7 +52,7 @@ var ValidLookCategories = map[string]bool{
 	"hair_accessory": true, // 发饰
 	"jewelry":        true, // 首饰
 	"bag":            true, // 包
-	"full":           true, // 完整造型
+	"full":           true, // 兼容旧数据；新建不再使用
 }
 
 // LookCategoryLabel 造型分类中文名
@@ -64,7 +64,7 @@ func LookCategoryLabel(category string) string {
 		"hair_accessory": "发饰",
 		"jewelry":        "首饰",
 		"bag":            "包",
-		"full":           "完整造型",
+		"full":           "旧版组合造型",
 	}
 	if l, ok := labels[category]; ok {
 		return l
@@ -102,6 +102,9 @@ func (s *CharacterLookService) CreateLook(look models.CharacterLook) (*models.Ch
 	if look.Category != "" && !ValidLookCategories[look.Category] {
 		return nil, fmt.Errorf("无效的造型分类：%s", look.Category)
 	}
+	if look.Category == "full" {
+		return nil, fmt.Errorf("请分别创建服装、鞋履、发型、发饰、首饰或包；不要把多种资产放进一个编辑框")
+	}
 	look.Source = "manual"
 	look.IsDefault = false // 默认造型只能由标准像流程建立，客户端新增均为派生造型。
 	look.AuditStatus = models.LookStatusDraft
@@ -117,53 +120,108 @@ func (s *CharacterLookService) CreateLook(look models.CharacterLook) (*models.Ch
 // EnsureDefaultLook 根据角色标准像所用服装与配饰，幂等建立一套待审核默认造型。
 // 已被用户编辑的默认造型不会被后续角色档案更新覆盖。
 func (s *CharacterLookService) EnsureDefaultLook(char *models.Character, project *models.Project) (*models.CharacterLook, error) {
+	looks, err := s.EnsureDefaultLooks(char, project)
+	if err != nil {
+		return nil, err
+	}
+	if len(looks) == 0 {
+		return nil, fmt.Errorf("未提取到默认造型资产")
+	}
+	return &looks[0], nil
+}
+
+// EnsureDefaultLooks 将角色档案中的造型目录拆成独立资产；一条记录只代表一件资产或一套明确服装。
+func (s *CharacterLookService) EnsureDefaultLooks(char *models.Character, project *models.Project) ([]models.CharacterLook, error) {
 	if char == nil || project == nil {
 		return nil, fmt.Errorf("角色和项目不能为空")
 	}
-	description := strings.TrimSpace(char.WardrobeDetail)
-	if description == "" {
-		description = strings.TrimSpace(char.Style)
+	source := strings.TrimSpace(char.WardrobeDetail)
+	if source == "" {
+		source = strings.TrimSpace(char.Style)
 	}
-	if description == "" {
+	if source == "" {
 		return nil, fmt.Errorf("角色缺少服装与配饰描述")
 	}
-	var existing models.CharacterLook
-	err := s.db.Where("project_id = ? AND character_id = ? AND is_default = ?", project.ID, char.ID, true).First(&existing).Error
-	if err == nil {
-		// manual 表示用户已经接管，禁止自动覆盖。
-		if existing.Source == "manual" {
-			return &existing, nil
-		}
-		existing.Description = description
-		existing.Prompt = defaultLookPrompt(char, project, description)
-		existing.AuditStatus = models.LookStatusDraft
-		existing.AuditNote = ""
-		existing.Version++
-		existing.Image, existing.ImageTaskID, existing.ImageError = "", "", ""
-		if err := s.db.Save(&existing).Error; err != nil {
-			return nil, err
-		}
-		return &existing, nil
-	}
-	if err != gorm.ErrRecordNotFound {
+	assets, err := s.extractLookAssets(source, project)
+	if err != nil {
 		return nil, err
 	}
-	look := &models.CharacterLook{ProjectID: project.ID, CharacterID: char.ID, Name: "默认造型", Category: "full", Description: description, Prompt: defaultLookPrompt(char, project, description), Priority: 100, IsDefault: true, IsShotRelated: true, AuditStatus: models.LookStatusDraft, Source: "auto_default", Version: 1}
-	if err := s.db.Create(look).Error; err != nil {
-		return nil, err
+	if len(assets) == 0 {
+		return nil, fmt.Errorf("未从角色档案提取到造型资产")
 	}
-	return look, nil
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		// 仅替换系统自动建立且尚未被用户接管的默认资产。
+		if err := tx.Where("project_id = ? AND character_id = ? AND is_default = ? AND source = ?", project.ID, char.ID, true, "auto_default").Delete(&models.CharacterLook{}).Error; err != nil {
+			return err
+		}
+		for i := range assets {
+			assets[i].ProjectID, assets[i].CharacterID = project.ID, char.ID
+			assets[i].IsDefault, assets[i].Source = true, "auto_default"
+			assets[i].AuditStatus, assets[i].Priority, assets[i].Version = models.LookStatusDraft, 100-i, 1
+			assets[i].Prompt = buildLookAssetPrompt(assets[i].Category, assets[i].Name, assets[i].Description, project)
+			var existing models.CharacterLook
+			if tx.Where("project_id = ? AND character_id = ? AND name = ?", project.ID, char.ID, assets[i].Name).First(&existing).Error == nil {
+				continue
+			}
+			if err := tx.Create(&assets[i]).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return assets, err
 }
 
-func defaultLookPrompt(char *models.Character, project *models.Project, description string) string {
-	parts := []string{"角色默认造型参考图", "单一角色「" + char.Name + "」", "外貌与身份必须保持一致：" + strings.TrimSpace(char.Appearance), "从头顶到鞋底完整入镜的正面全身自然站姿", "默认服装、鞋履、发型、发饰、首饰与包必须精确遵守：" + description}
-	if project.Style != "" {
-		parts = append(parts, "项目画风："+project.Style)
+func (s *CharacterLookService) extractLookAssets(source string, project *models.Project) ([]models.CharacterLook, error) {
+	if s.textProvider == nil {
+		return []models.CharacterLook{{Name: "默认服装", Category: "clothing", Description: source}}, nil
 	}
-	if char.ColorPalette != "" {
-		parts = append(parts, "固定配色："+char.ColorPalette)
+	system := `把角色造型目录拆成独立资产。只输出严格 JSON：{"assets":[{"name":"名称","category":"clothing|shoes|hair|hair_accessory|jewelry|bag","description":"只描述这一件资产"}]}。不同颜色或场合的服装必须分别列出；每件鞋、发型、发饰、首饰、包分别列出；不得输出人物外貌、身份、动作或剧情说明；兵器、法宝、玉佩剧情道具和绣帕不属于造型资产，不输出。`
+	user := fmt.Sprintf("项目题材：%s\n画风：%s\n待拆分造型目录：\n%s", project.Genre, project.Style, source)
+	raw, err := s.textProvider.Chat(system, user)
+	if err != nil {
+		return nil, fmt.Errorf("拆分默认造型资产失败: %w", err)
 	}
-	parts = append(parts, "纯净中性背景，柔和影棚光，人物居中，双脚和全部佩饰清晰可见，禁止换脸、年龄漂移、裁脚、赤脚、多人、拼图、文字和水印")
+	var result struct {
+		Assets []models.CharacterLook `json:"assets"`
+	}
+	if err := parseJSONObject(raw, &result); err != nil {
+		return nil, fmt.Errorf("解析默认造型资产失败: %w", err)
+	}
+	out := make([]models.CharacterLook, 0, len(result.Assets))
+	for _, asset := range result.Assets {
+		asset.Name, asset.Description = strings.TrimSpace(asset.Name), strings.TrimSpace(asset.Description)
+		if asset.Name == "" || asset.Description == "" || asset.Category == "full" || !ValidLookCategories[asset.Category] {
+			continue
+		}
+		out = append(out, asset)
+	}
+	return out, nil
+}
+
+func defaultLookPrompt(_ *models.Character, project *models.Project, description string) string {
+	return buildLookAssetPrompt("full", "默认造型", description, project)
+}
+
+// buildLookAssetPrompt 只描述当前造型资产本身；人物身份由独立定妆照负责。
+func buildLookAssetPrompt(category, name, description string, project *models.Project) string {
+	subject := map[string]string{
+		"clothing":       "一套服装",
+		"shoes":          "一双鞋履",
+		"hair":           "一个发型设计",
+		"hair_accessory": "一件发饰",
+		"jewelry":        "一件首饰",
+		"bag":            "一个包",
+		"full":           "一套完整穿搭组合",
+	}[category]
+	if subject == "" {
+		subject = "一件造型资产"
+	}
+	parts := []string{subject + "「" + strings.TrimSpace(name) + "」", strings.TrimSpace(description)}
+	if project != nil && strings.TrimSpace(project.Style) != "" {
+		parts = append(parts, "视觉风格："+strings.TrimSpace(project.Style))
+	}
+	parts = append(parts, "独立造型资产参考图，干净中性背景，完整展示材质、颜色、结构和细节")
 	return strings.Join(parts, "，")
 }
 
@@ -248,14 +306,11 @@ func (s *CharacterLookService) PreviewExpansion(look *models.CharacterLook, char
 	if s.textProvider == nil {
 		return nil, fmt.Errorf("文本生成服务未配置")
 	}
-	charInfo := ""
-	if char != nil {
-		charInfo = fmt.Sprintf("角色名：%s\n角色定位：%s\n外貌特征：%s\n角色基础服装：%s", char.Name, char.Role, char.Appearance, char.WardrobeDetail)
-	}
-	system := `你是专业的影视角色造型设计师和 Krea2 提示词工程师。把用户的简单造型描述扩写为详细设计，并生成一条可直接生图的提示词。
-只输出严格 JSON：{"description":"中文详细造型描述","prompt":"中文为主、必要英文摄影词的Krea2自然语言提示词"}。
-要求：description 明确材质、颜色、款式、佩戴位置、数量、左右侧及适用剧情；prompt 保留角色身份和准确年龄，突出当前造型类别，包含构图、背景、光线与项目画风。服装和完整造型用单人全身参考图；鞋履、发型、发饰、首饰、包使用能清晰展示目标部位的单人局部或中景。不得增加用户未要求的兵器、法宝、人物、文字或水印，不得改变角色五官和身份。`
-	user := fmt.Sprintf("项目：%s\n题材：%s\n画风：%s\n%s\n造型分类：%s\n造型名称：%s\n用户简述：%s", project.Title, project.Genre, project.Style, charInfo, LookCategoryLabel(look.Category), look.Name, look.Description)
+	_ = char // 人物身份由独立定妆照管理，禁止混入造型资产提示词。
+	system := `你是专业的影视造型资产设计师。把用户对一个造型资产的简单描述扩写为详细设计，并生成一条可直接生图的资产提示词。
+只输出严格 JSON：{"description":"中文详细资产描述","prompt":"Krea2自然语言资产提示词"}。
+description 和 prompt 都只能描述当前这一件资产，明确材质、颜色、款式、结构和细节。不要描述人物姓名、年龄、身份、脸、身体、姿势或人物构图；不要混入角色档案、整套人物形象、兵器或法宝。服装只画服装，鞋履只画鞋履，发饰只画发饰，首饰只画首饰，包只画包。`
+	user := fmt.Sprintf("项目题材：%s\n画风：%s\n资产分类：%s\n资产名称：%s\n用户简述：%s", project.Genre, project.Style, LookCategoryLabel(look.Category), look.Name, look.Description)
 	output, err := s.textProvider.Chat(system, user)
 	if err != nil {
 		return nil, fmt.Errorf("AI 扩写造型失败: %w", err)
@@ -267,6 +322,15 @@ func (s *CharacterLookService) PreviewExpansion(look *models.CharacterLook, char
 	result.Description, result.Prompt = strings.TrimSpace(result.Description), strings.TrimSpace(result.Prompt)
 	if len([]rune(result.Description)) < 20 || len([]rune(result.Prompt)) < 20 {
 		return nil, fmt.Errorf("AI 返回的造型描述或提示词过短，请重试")
+	}
+	characterName := ""
+	if char != nil {
+		characterName = char.Name
+	}
+	for _, forbidden := range []string{characterName, "角色外貌", "人物形象", "单一角色", "全身站立", "头肩定妆照"} {
+		if strings.TrimSpace(forbidden) != "" && strings.Contains(result.Prompt, forbidden) {
+			return nil, fmt.Errorf("AI 把人物形象混入资产提示词，请重试")
+		}
 	}
 	return &result, nil
 }
@@ -290,67 +354,8 @@ func (s *CharacterLookService) GeneratePrompt(look *models.CharacterLook, char *
 		return "", fmt.Errorf("请先填写或生成造型描述")
 	}
 
-	// 构建提示词
-	var parts []string
-	parts = append(parts, "角色造型参考图")
-
-	if char != nil {
-		if char.Name != "" {
-			parts = append(parts, fmt.Sprintf("角色「%s」", char.Name))
-		}
-		if char.Role != "" {
-			parts = append(parts, fmt.Sprintf("身份：%s", char.Role))
-		}
-	}
-
-	parts = append(parts, fmt.Sprintf("造型分类：%s", LookCategoryLabel(look.Category)))
-	parts = append(parts, fmt.Sprintf("造型名称：%s", look.Name))
-
-	// 添加造型描述
-	desc := strings.TrimSpace(look.Description)
-	if desc != "" {
-		parts = append(parts, fmt.Sprintf("造型详细描述：%s", desc))
-	}
-
-	// 添加角色外貌特征（用于发型等需要参考的内容）
-	if char != nil && char.Appearance != "" {
-		parts = append(parts, fmt.Sprintf("角色外貌特征：%s", strings.TrimSpace(char.Appearance)))
-	}
-
-	// 添加角色服装细节
-	if char != nil && char.WardrobeDetail != "" {
-		parts = append(parts, fmt.Sprintf("角色服装细节：%s", strings.TrimSpace(char.WardrobeDetail)))
-	}
-
-	// 添加项目画风
-	if project != nil && project.Style != "" {
-		if desc := styleDescriptor(project.Style); desc != "" {
-			parts = append(parts, desc)
-		}
-	}
-
-	// 添加角色色调
-	if char != nil && char.ColorPalette != "" {
-		parts = append(parts, fmt.Sprintf("角色色调：%s", strings.TrimSpace(char.ColorPalette)))
-	}
-
-	// 添加通用约束
-	categorySpecific := map[string]string{
-		"clothing":       "正面或侧面全身照，清晰展示服装款式、配色和材质",
-		"shoes":          "特写或中景，清晰展示鞋型、材质和颜色",
-		"hair":           "头部特写或上半身，清晰展示发型和发色",
-		"hair_accessory": "头部特写，清晰展示发饰",
-		"jewelry":        "特写或中景，清晰展示首饰细节",
-		"bag":            "中景或特写，清晰展示包的款式和材质",
-		"full":           "全身照，清晰展示从头到脚的完整造型",
-	}
-
-	if constraint, ok := categorySpecific[look.Category]; ok {
-		parts = append(parts, constraint)
-	}
-
-	parts = append(parts, "干净背景，高质量，禁止文字、水印、多人")
-	prompt := strings.Join(parts, "，")
+	_ = char // 造型资产提示词不得混入人物形象提示词。
+	prompt := buildLookAssetPrompt(look.Category, look.Name, look.Description, project)
 
 	// 更新提示词
 	updates := map[string]any{

@@ -148,11 +148,31 @@ func characterAgeAnchor(appearance, trait string) string {
 	if err != nil || age < 1 || age > 99 {
 		return ""
 	}
-	anchor := fmt.Sprintf("年龄视觉必须严格锁定为%d岁，与真实%d岁青年人的面部骨骼和皮肤状态一致", age, age)
-	if age <= 30 {
-		anchor += "，年轻面部比例，紧致平滑肌肤，饱满面中，自然清晰下颌线，眼神清澈，轻盈自然妆容，禁止显老、成熟脸、中年感、法令纹、眼袋、深皱纹、松弛皮肤和厚重妆容"
-	}
+	anchor := fmt.Sprintf("%d岁人物", age)
 	return anchor
+}
+
+func portraitFaceIdentity(appearance, trait string) string {
+	text := strings.TrimSpace(appearance)
+	if text == "" {
+		text = strings.TrimSpace(trait)
+	}
+	keywords := []string{"岁", "发", "额头", "脸", "眉", "眼", "鼻", "唇", "肤", "耳", "下巴", "痣", "疤", "雀斑"}
+	clauses := strings.FieldsFunc(text, func(r rune) bool { return r == '，' || r == '。' || r == '；' || r == '\n' })
+	out := make([]string, 0, 12)
+	for _, clause := range clauses {
+		clause = strings.TrimSpace(clause)
+		for _, keyword := range keywords {
+			if strings.Contains(clause, keyword) {
+				out = append(out, clause)
+				break
+			}
+		}
+		if len(out) >= 12 {
+			break
+		}
+	}
+	return strings.Join(out, "，")
 }
 
 func ageSubject(appearance, trait string) string {
@@ -170,46 +190,19 @@ func ageSubject(appearance, trait string) string {
 	return match[1] + "岁" + gender
 }
 
-// GenerateReferencePrompt 按审核后的结构化档案编译稳定的单人参考像提示词。
-// 这里采用 LumxAI 的人物维度与设定图规范，但保持单人单视图，避免后续参考图模型误判为多人。
+// GenerateReferencePrompt 只生成脸部身份用的大头贴提示词；服装、鞋履和配饰由 CharacterLook 单独生成。
 func (s *CharacterProfileService) GenerateReferencePrompt(char *models.Character, project *models.Project) (string, error) {
-	appearance := strings.TrimSpace(char.Appearance)
+	appearance := portraitFaceIdentity(char.Appearance, char.Trait)
 	if appearance == "" {
-		appearance = strings.TrimSpace(char.Trait)
+		return "", fmt.Errorf("请先完善角色脸部与发型描述")
 	}
-	wardrobe := strings.TrimSpace(char.WardrobeDetail)
-	if wardrobe == "" {
-		wardrobe = strings.TrimSpace(char.Style)
-	}
-	if appearance == "" || wardrobe == "" {
-		return "", fmt.Errorf("请先完善角色外貌与服装档案")
-	}
-	parts := []string{"人物角色标准参考像"}
-	if subject := ageSubject(appearance, char.Trait); subject != "" {
-		parts = append(parts, subject)
-	}
-	if anchor := characterAgeAnchor(appearance, char.Trait); anchor != "" {
-		parts = append(parts, anchor)
-	}
-	parts = append(parts, "单一角色「"+char.Name+"」")
-	if char.Role != "" {
-		parts = append(parts, "身份气质："+char.Role)
-	}
-	parts = append(parts, "外貌必须精确一致："+appearance, "服饰款式、配色、配饰与材质必须精确一致："+wardrobe)
-	if char.ColorPalette != "" {
-		parts = append(parts, "角色固定配色："+char.ColorPalette)
-	}
+	parts := []string{"单人正面大头贴", appearance}
 	if project != nil {
 		if desc := styleDescriptor(project.Style); desc != "" {
 			parts = append(parts, desc)
 		}
 	}
-	if char.LightingMood != "" {
-		parts = append(parts, "影棚布光："+char.LightingMood)
-	}
-	parts = append(parts,
-		"正面半身头像，直视镜头，自然放松表情，肩颈端正，纯白干净背景，柔和均匀自然光，居中对称构图，高分辨率真实角色参考照",
-		"禁止显老、年龄漂移、中年感、法令纹、眼袋、深皱纹、松弛皮肤、厚重妆容、复古影楼感、多人、分屏、拼图、三视图、复杂背景、文字、水印、畸形五官和畸形肢体")
+	parts = append(parts, "头发完整入镜，脸部居中，直视镜头，自然表情，肩部以上构图，纯白背景，柔和均匀光线")
 	prompt := strings.Join(parts, "，")
 	updates := map[string]any{
 		"reference_prompt": prompt,

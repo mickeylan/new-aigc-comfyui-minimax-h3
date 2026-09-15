@@ -85,9 +85,14 @@ func TestGenerateReferencePromptCompilesLumxDimensions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"26岁青年女性", "年龄视觉必须严格锁定为26岁", "年轻面部比例", "紧致平滑肌肤", "黑色长发", "羊毛风衣", "银色", "真人照片风格", "单一角色", "禁止显老"} {
+	for _, want := range []string{"26岁女性", "黑色长发", "鹅蛋脸", "杏眼", "真人照片风格", "单人正面大头贴", "肩部以上构图"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("提示词缺少 %q: %s", want, prompt)
+		}
+	}
+	for _, forbidden := range []string{"羊毛风衣", "深灰内搭", "银色项链", "角色固定配色", "影棚布光", "禁止显老", "法令纹", "眼袋"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("大头贴提示词混入 %q: %s", forbidden, prompt)
 		}
 	}
 	var got models.Character

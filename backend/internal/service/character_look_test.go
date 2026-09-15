@@ -41,7 +41,7 @@ func TestLookCategoryLabel(t *testing.T) {
 		{"hair_accessory", "发饰"},
 		{"jewelry", "首饰"},
 		{"bag", "包"},
-		{"full", "完整造型"},
+		{"full", "旧版组合造型"},
 		{"unknown", "unknown"},
 	}
 
@@ -334,9 +334,9 @@ func TestShotLookAssignment(t *testing.T) {
 	look, _ := service.CreateLook(models.CharacterLook{
 		ProjectID:     p.ID,
 		CharacterID:   ch.ID,
-		Name:          "近景特写",
-		Category:      "full",
-		Description:   "镜头中需要保持一致的完整造型",
+		Name:          "战斗服装",
+		Category:      "clothing",
+		Description:   "镜头中需要保持一致的黑色战斗服装",
 		IsShotRelated: true,
 		Priority:      100,
 	})
@@ -430,39 +430,61 @@ func TestGetLookReferenceImages(t *testing.T) {
 	}
 }
 
-func TestEnsureDefaultLookFromPortraitWardrobe(t *testing.T) {
+func TestEnsureDefaultLooksSplitsWardrobeCatalog(t *testing.T) {
 	db := setupTestDB(t)
-	svc := NewCharacterLookService(db, nil)
-	project := models.Project{Title: "测试", Style: "真人电影感"}
+	provider := &stubTextProvider{response: `{"assets":[{"name":"浅蓝常服","category":"clothing","description":"浅蓝色立领斜襟布衫与浅蓝色长裙"},{"name":"鹅黄常服","category":"clothing","description":"鹅黄色对襟布衫与鹅黄色长裙"},{"name":"珍珠耳坠","category":"jewelry","description":"一对淡粉色圆润珍珠耳坠"},{"name":"梅花绣鞋","category":"shoes","description":"浅蓝色布面梅花绣鞋"}]}`}
+	svc := NewCharacterLookService(db, provider)
+	project := models.Project{Title: "测试", Style: "国漫"}
 	db.Create(&project)
-	char := models.Character{ProjectID: project.ID, Name: "林夏", Appearance: "25岁女性，黑色长发", WardrobeDetail: "象牙白风衣，银色项链，黑色包头短靴"}
+	char := models.Character{ProjectID: project.ID, Name: "林采微", WardrobeDetail: "浅蓝与鹅黄两套常服，珍珠耳坠，梅花绣鞋"}
 	db.Create(&char)
-	look, err := svc.EnsureDefaultLook(&char, &project)
+	looks, err := svc.EnsureDefaultLooks(&char, &project)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !look.IsDefault || look.Category != "full" || look.AuditStatus != models.LookStatusDraft {
-		t.Fatalf("unexpected default look: %#v", look)
+	if len(looks) != 4 {
+		t.Fatalf("expected four separate assets, got %#v", looks)
 	}
-	for _, want := range []string{"象牙白风衣", "银色项链", "黑色包头短靴", "从头顶到鞋底"} {
-		if !strings.Contains(look.Description+look.Prompt, want) {
-			t.Fatalf("default look missing %q", want)
+	for _, look := range looks {
+		if look.Category == "full" || strings.Contains(look.Prompt, char.Name) {
+			t.Fatalf("asset not separated: %#v", look)
 		}
-	}
-	again, err := svc.EnsureDefaultLook(&char, &project)
-	if err != nil || again.ID != look.ID {
-		t.Fatalf("default look must be idempotent: %#v %v", again, err)
 	}
 	var count int64
 	db.Model(&models.CharacterLook{}).Where("character_id = ? AND is_default = ?", char.ID, true).Count(&count)
-	if count != 1 {
-		t.Fatalf("expected one default look, got %d", count)
+	if count != 4 {
+		t.Fatalf("expected four persisted assets, got %d", count)
+	}
+}
+
+func TestGenerateLookPromptContainsOnlyOneAsset(t *testing.T) {
+	db := setupTestDB(t)
+	svc := NewCharacterLookService(db, nil)
+	project := models.Project{Title: "测试", Style: "国漫"}
+	db.Create(&project)
+	char := models.Character{ProjectID: project.ID, Name: "林采微", Role: "女主", Appearance: "黑色长发，鹅蛋脸", WardrobeDetail: "浅蓝长裙，银色项链"}
+	db.Create(&char)
+	look := models.CharacterLook{ProjectID: project.ID, CharacterID: char.ID, Name: "珍珠耳坠", Category: "jewelry", Description: "一对淡粉色圆润珍珠耳坠，银质耳钩"}
+	db.Create(&look)
+	prompt, err := svc.GeneratePrompt(&look, &char, &project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"一件首饰", "珍珠耳坠", "银质耳钩", "国漫"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("asset prompt missing %q: %s", want, prompt)
+		}
+	}
+	for _, forbidden := range []string{"林采微", "女主", "黑色长发", "鹅蛋脸", "浅蓝长裙", "角色外貌", "单一角色", "全身照"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("asset prompt mixed character content %q: %s", forbidden, prompt)
+		}
 	}
 }
 
 func TestExpandLookGeneratesDescriptionAndPrompt(t *testing.T) {
 	db := setupTestDB(t)
-	provider := &stubTextProvider{response: `{"description":"深蓝色丝绒长裙，银线收边，搭配同色包头鞋，适合正式宴会场景。","prompt":"单一年轻女性角色全身站立，穿深蓝色丝绒长裙与同色包头鞋，银线细节清晰，纯色背景，柔和影棚光，电影写实风格，无文字水印。"}`}
+	provider := &stubTextProvider{response: `{"description":"深蓝色丝绒长裙，银线收边，搭配同色包头鞋，适合正式宴会场景。","prompt":"一套深蓝色丝绒晚礼服穿搭组合，银线收边，搭配同色包头鞋，材质和结构清晰，纯色背景，电影写实风格。"}`}
 	svc := NewCharacterLookService(db, provider)
 	project := models.Project{Title: "测试", Genre: "都市", Style: "真人电影感"}
 	db.Create(&project)
@@ -475,7 +497,7 @@ func TestExpandLookGeneratesDescriptionAndPrompt(t *testing.T) {
 	}
 	var got models.CharacterLook
 	db.First(&got, look.ID)
-	if !strings.Contains(got.Description, "深蓝色") || !strings.Contains(got.Prompt, "全身站立") {
+	if !strings.Contains(got.Description, "深蓝色") || !strings.Contains(got.Prompt, "穿搭组合") {
 		t.Fatalf("unexpected expanded look: %#v", got)
 	}
 	if got.AuditStatus != models.LookStatusDraft || got.Image != "" {
