@@ -210,17 +210,56 @@ func (s *Service) HandleRedesignScenePrompt(c *gin.Context) {
 	c.JSON(200, gin.H{"prompt": prompt})
 }
 
+func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
+	sc, ok := s.loadScene(c)
+	if !ok {
+		return
+	}
+	prompt := strings.TrimSpace(sc.VideoPrompt)
+	generated := prompt == ""
+	if generated {
+		prompt = defaultSceneVideoAction(sc)
+	}
+	c.JSON(http.StatusOK, gin.H{"prompt": prompt, "generated": generated})
+}
+
+func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
+	sc, ok := s.loadScene(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	prompt := strings.TrimSpace(req.Prompt)
+	if issues := ValidateVideoPrompt(prompt, sc.Characters, sc.LocationName, sc.Props); len(issues) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": strings.Join(issues, "；")})
+		return
+	}
+	if err := s.DB.Model(sc).Update("video_prompt", prompt).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "video_prompt": prompt})
+}
+
 func (s *Service) HandleUpdateScene(c *gin.Context) {
 	sc, ok := s.loadScene(c)
 	if !ok {
 		return
 	}
 	var req struct {
-		Title       string `json:"title"`
-		Content     string `json:"content"`
-		ImagePrompt string `json:"image_prompt"`
-		VisualType  string `json:"visual_type"`
-		MegaType    string `json:"mega_type"`
+		Title       string  `json:"title"`
+		Content     string  `json:"content"`
+		ImagePrompt string  `json:"image_prompt"`
+		VideoPrompt string  `json:"video_prompt"`
+		Duration    float64 `json:"duration"`
+		VisualType  string  `json:"visual_type"`
+		MegaType    string  `json:"mega_type"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": "参数错误"})
@@ -230,7 +269,15 @@ func (s *Service) HandleUpdateScene(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "场景正文和画面提示词不能为空"})
 		return
 	}
-	if err := s.Projects.UpdateScene(sc, req.Title, req.Content, req.ImagePrompt, req.VisualType, req.MegaType); err != nil {
+	if req.Duration < 3 || req.Duration > 15 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "分镜时长必须在 3–15 秒之间"})
+		return
+	}
+	if err := s.Projects.UpdateScene(sc, req.Title, req.Content, req.ImagePrompt, req.Duration, req.VisualType, req.MegaType); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if err := s.DB.Model(sc).Update("video_prompt", strings.TrimSpace(req.VideoPrompt)).Error; err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}

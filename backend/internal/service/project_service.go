@@ -328,36 +328,82 @@ func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, err
 		return "", err
 	}
 	characterContext := s.characterContextForScene(sc)
+	lookContext := s.characterLookContextForScene(sc)
 	assetContext := s.assetContextForScene(sc)
-	system := `你是专业影视美术指导和分镜提示词设计师。请把场景资料重构成可直接用于 Krea2 生图的单幅画面提示词。
+	shotContext := s.sceneShotContext(sc)
+	_, referenceLines, explicitReferences := s.selectedSceneReferenceFiles(sc, "krea2")
+	if !explicitReferences {
+		_, referenceLines = s.sceneImageReferenceFiles(sc)
+	}
+	referenceContext := "无可用参考图"
+	if len(referenceLines) > 0 {
+		referenceContext = strings.Join(referenceLines, "\n")
+	}
+	system := `你是专业影视分镜美术指导。请根据剧情资料设计一张可直接用于 Krea2 生图、并可作为 MiniMax H3 视频起始帧的静态提示图提示词。
 必须遵守：
-1. 忠实于场景正文，不新增角色、道具、地点或剧情；角色名、人数和动作必须准确。
-2. 严格使用角色档案的年龄、五官、发型、服装和鞋履，使用资产档案的材质、颜色、空间布局和时代文化。
-3. 明确主体及位置、动作瞬间、表情视线、前中后景、景别、机位、镜头焦段、构图、光源方向、色彩、材质和氛围。
-4. 这是单幅画面，不描述时间序列，不生成拼图、四视图、字幕、文字、水印或画外内容。
-5. 不要使用“高清、杰作”等空泛标签堆砌；所有描述必须可见、具体且不互相冲突。
-只输出重新设计后的完整中文提示词，不要解释、标题、Markdown 或 JSON。`
-	user := fmt.Sprintf("项目：%s\n题材：%s\n画风：%s\n故事：%s\n场景标题：%s\n场景正文：%s\n原画面提示词：%s\n出场角色：%s\n地点：%s\n道具：%s\n\n角色权威档案：\n%s\n\n场景与道具权威档案：\n%s",
+1. 先理解本场剧情因果、人物关系和当前镜头意图，再选择最有叙事信息量的单一静止瞬间；不得只是堆砌人物与环境名词。
+2. 输出必须严格使用以下八段格式，每段都必须有实际内容：
+【画面用途】MiniMax H3起始帧
+【参考图绑定】逐行原样保留资料中提供的 <Picture N> 编号，并说明它只约束哪个人物、造型、场景或道具；无参考图时写“无”
+【剧情瞬间】说明本图对应剧情中的准确瞬间
+【主体与空间】人物数量、身份、前中后景位置、视线、空间关系、场景与关键道具
+【动作定格】只描述一个可见动作瞬间及姿态，不写连续动作过程
+【摄影机】景别、机位、焦段、构图；以镜头设计为准
+【光线与风格】光源方向、色温、氛围、材质和项目画风
+【连续性硬约束】人物、造型、场景、道具一致性，以及禁止新增无关主体、文字、字幕、水印、拼图和四视图
+3. 画面必须适合后续 H3 从该起始状态继续运动：姿态应有明确动作势能，但不能同时描述起点和终点，不能写时间序列、镜头运动过程或多个连续事件。
+4. 严格使用已审核的角色档案和当前场景造型；不得擅自换装、换发型、增减佩饰、鞋履、包、兵器或法宝。
+5. 忠实于场景正文和镜头设计，不新增角色、地点、道具或剧情；人物数量和空间关系必须准确。
+6. 不使用“高清、杰作”等空泛标签，所有描述必须具体、可见且互不冲突。
+只输出八段完整中文提示词，不要解释、Markdown 代码块或 JSON。`
+	user := fmt.Sprintf("项目：%s\n题材：%s\n画风：%s\n故事梗概：%s\n场景标题：%s\n场景剧情：%s\n原画面提示词：%s\n出场角色：%s\n地点：%s\n道具：%s\n场景时长：%.1f秒\n\n本次实际提交的参考图（编号和生成任务上传顺序完全一致）：\n%s\n\n导演镜头设计：\n%s\n\n角色权威档案：\n%s\n\n当前场景角色造型：\n%s\n\n场景与道具权威档案：\n%s",
 		project.Title, project.Genre, project.Style, project.Synopsis, sc.Title, sc.Content, sc.ImagePrompt,
-		sc.Characters, sc.LocationName, sc.Props, characterContext, assetContext)
+		sc.Characters, sc.LocationName, sc.Props, sc.Duration, referenceContext, shotContext, characterContext, lookContext, assetContext)
 	output, err := s.textProvider.Chat(system, user)
 	if err != nil {
 		return "", fmt.Errorf("AI 重新设计场景提示词失败: %w", err)
 	}
 	output = strings.TrimSpace(output)
+	output = strings.TrimPrefix(output, "```json")
 	output = strings.TrimPrefix(output, "```")
 	output = strings.TrimSuffix(output, "```")
 	output = strings.TrimSpace(output)
+	var sections map[string]any
+	if json.Unmarshal([]byte(output), &sections) == nil {
+		ordered := []string{"【画面用途】", "【参考图绑定】", "【剧情瞬间】", "【主体与空间】", "【动作定格】", "【摄影机】", "【光线与风格】", "【连续性硬约束】"}
+		lines := make([]string, 0, len(ordered))
+		for _, heading := range ordered {
+			value, ok := sections[heading]
+			if !ok {
+				value, ok = sections[strings.Trim(heading, "【】")]
+			}
+			if ok {
+				lines = append(lines, heading+strings.TrimSpace(fmt.Sprint(value)))
+			}
+		}
+		if len(lines) > 0 {
+			output = strings.Join(lines, "\n")
+		}
+	}
 	if len([]rune(output)) < 20 {
 		return "", fmt.Errorf("AI 返回的场景提示词过短，请重试")
+	}
+	for _, heading := range []string{"【画面用途】", "【参考图绑定】", "【剧情瞬间】", "【主体与空间】", "【动作定格】", "【摄影机】", "【光线与风格】", "【连续性硬约束】"} {
+		if !strings.Contains(output, heading) {
+			return "", fmt.Errorf("AI 返回内容不符合 MiniMax H3 起始帧格式，缺少%s，请重试", heading)
+		}
 	}
 	return output, nil
 }
 
 // UpdateScene 编辑场景文案。修改 image_prompt 会清空已生成画面与视频（需重新生成）；
 // 仅修改 content/title 时保留画面、清空已生成视频（需重新生成视频）。
-func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imagePrompt string, visual ...string) error {
+func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imagePrompt string, duration float64, visual ...string) error {
 	updates := map[string]any{}
+	durationChanged := duration > 0 && sc.Duration != duration
+	if duration > 0 {
+		updates["duration"] = duration
+	}
 	if title != "" {
 		updates["title"] = title
 	}
@@ -386,16 +432,18 @@ func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imageProm
 		updates["image_file"] = ""
 		updates["video_task_id"] = ""
 		updates["video_file"] = ""
+		updates["video_input_file"] = ""
 		updates["video_gpu"] = nil
 		updates["image_retries"] = 0
 		updates["video_retries"] = 0
 		updates["image_token"] = ""
 		updates["status"] = "pending"
 		updates["error"] = ""
-	} else if content != "" && sc.Content != content {
-		// 只改正文：保留画面，视频需重新生成
+	} else if (content != "" && sc.Content != content) || durationChanged {
+		// 修改正文或时长：保留画面，视频需重新生成
 		updates["video_task_id"] = ""
 		updates["video_file"] = ""
+		updates["video_input_file"] = ""
 		updates["video_gpu"] = nil
 		updates["video_retries"] = 0
 		if sc.VideoFile != "" || sc.VideoTaskID != "" {
@@ -409,7 +457,7 @@ func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imageProm
 	if err := s.db.Model(sc).Updates(updates).Error; err != nil {
 		return err
 	}
-	if (imageChanged || (content != "" && sc.Content != content)) && sc.VideoTaskID != "" && s.tasks != nil {
+	if (imageChanged || (content != "" && sc.Content != content) || durationChanged) && sc.VideoTaskID != "" && s.tasks != nil {
 		if err := s.tasks.CancelTask(sc.VideoTaskID); err != nil && !strings.Contains(err.Error(), "已结束") {
 			log.Printf("[scene %d] cancel stale video task %s failed: %v", sc.ID, sc.VideoTaskID, err)
 		}
@@ -753,10 +801,12 @@ func normalizeSceneDuration(duration float64) float64 {
 }
 
 // aspectVideoSize 画幅 + 分辨率档位对应的视频尺寸（i2v，须 step 32 对齐）
-// resolution: "720p"/"1080p"/"2k"，默认 720p；按短边定档，16:9 横屏 / 9:16 竖屏宽高互换
+// resolution: "480p"/"720p"/"1080p"/"2k"，默认 480p；尺寸按 32 对齐。
 func aspectVideoSize(aspect, resolution string) (int, int) {
-	w, h := 1280, 704 // 720p 横屏默认
+	w, h := 832, 480 // 测试机默认 480p 横屏
 	switch resolution {
+	case "720p":
+		w, h = 1280, 704
 	case "1080p":
 		w, h = 1920, 1088
 	case "2k":
@@ -771,21 +821,23 @@ func aspectVideoSize(aspect, resolution string) (int, int) {
 			return 1920, 1920
 		case "2k":
 			return 2560, 2560
-		default:
+		case "720p":
 			return 1024, 1024
+		default:
+			return 512, 512
 		}
 	default: // 16:9 横屏
 		return w, h
 	}
 }
 
-// videoResolution 读取平台设置的视频分辨率档位（默认 720p）
+// videoResolution 读取平台设置的视频分辨率档位（测试机默认 480p）
 func (s *ProjectService) videoResolution() string {
 	var st models.Setting
 	if err := s.db.Where("key = ?", "video_resolution").First(&st).Error; err == nil && st.Value != "" {
 		return st.Value
 	}
-	return "720p"
+	return "480p"
 }
 
 // aspectImageSize 画幅对应的文生图尺寸（须满足 seedream 5.0 像素数 ≥ 3686400，且比例与视频一致避免首帧变形）
@@ -837,52 +889,150 @@ func (s *ProjectService) sceneCharacterPortraits(sc *models.Scene) []models.Char
 
 // buildSceneVideoSpec 按 MiniMax H3 图生视频规则组织引用、动作、摄影机、光线、风格和声音。
 func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string) (tplCode, promptText string, files map[string][]FileMeta) {
-	refs, refLines := s.sceneVideoReferenceFiles(sc, pid)
 	var p models.Project
 	_ = s.db.First(&p, sc.ProjectID).Error
 	var dubs []models.Dialogue
 	s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
-	prompt := buildMiniMaxH3Prompt(sc, &p, refLines, dubs, len(refs) > 1)
-	prompt = s.applyPromptSkill(sc.ProjectID, models.SkillStageVideoPrompt, prompt, map[string]string{
-		"scene_content": sc.Content, "start_state": "以当前分镜画面为起始状态", "end_state": "完成本镜主要动作后自然停留", "duration": fmt.Sprint(sc.Duration),
-	})
-	if len(refs) > 1 {
-		return "minimax_h3_ref2v", prompt, map[string][]FileMeta{"ref_images": refs}
-	}
+	// The reference-to-video node treats Picture 1 as a soft visual reference and may
+	// freely redraw the opening. The storyboard frame already incorporates the selected
+	// character/look/location/prop references, so formal scene video must use i2v to make
+	// that approved frame the hard first frame.
+	prompt := buildMiniMaxH3Prompt(sc, &p, dubs)
 	return "minimax_h3_i2v", prompt, map[string][]FileMeta{"first_frame": {{TaskID: pid, Name: sc.ImageFile}}}
 }
 
-func buildMiniMaxH3Prompt(sc *models.Scene, p *models.Project, refLines []string, dubs []models.Dialogue, referenceMode bool) string {
-	parts := []string{"【MiniMax H3 视频提示词】"}
-	if referenceMode {
-		parts = append(parts, "【参考图绑定】\n"+strings.Join(refLines, "\n")+"\n<Picture 1> 只负责当前镜头的起始构图、人物位置和环境；其余 Picture 只负责对应角色、造型、场景或道具的身份与外观。不得交换引用对象，不得把四视图、参考图或拼图结构复现在视频中。")
-	} else {
-		parts = append(parts, "【起始画面】严格从输入首帧继续运动，保持首帧人物身份、服装、空间布局和画面风格，不重新设计画面。")
+func defaultSceneVideoAction(sc *models.Scene) string {
+	content := strings.TrimSpace(sc.Content)
+	if content == "" {
+		content = "主体从首帧静止状态开始一个连续、物理可执行的动作，并自然停留在结束状态"
 	}
-	parts = append(parts, "【主体】"+strings.TrimSpace(sc.Title), "【动作与时间推进】在约"+fmt.Sprintf("%.0f", sc.Duration)+"秒内，"+strings.TrimSpace(sc.Content)+"。只安排一个连续、物理可执行的主要动作，明确动作先后与结束状态，避免瞬移、变形、换装和新增人物。", "【摄影机】镜头运动单一且平滑；若分镜未指定运镜则保持稳定机位，仅做轻微自然呼吸感。不要无理由环绕、快速变焦、甩镜或切镜。")
-	if p != nil && strings.TrimSpace(p.Style) != "" {
-		parts = append(parts, "【光线与视觉风格】保持项目画风「"+p.Style+"」及输入图的光向、色温、材质和时空连续性。")
+	return content + "。动作必须表现为可见的肢体轨迹、接触点、表情变化或物体位移；摄影机采用固定机位，保持小幅度、低速度的自然稳定运动"
+}
+
+// buildMiniMaxH3Prompt 按 H3 官方六段结构生成视频提示词。
+// subject_definitions / summary / retention_analysis / overall_soundscape / non_diegetic_music
+// 由系统确定性生成；detailed_description 来自用户编辑或系统生成。
+func buildMiniMaxH3Prompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue) string {
+	charStr := strings.TrimSpace(sc.Characters)
+	locStr := strings.TrimSpace(sc.LocationName)
+	propStr := strings.TrimSpace(sc.Props)
+	styleStr := ""
+	if p != nil {
+		styleStr = strings.TrimSpace(p.Style)
 	}
+
+	var buf strings.Builder
+	// subject_definitions：首帧是唯一视觉基准，角色/场景/道具均以此为锚点
+	buf.WriteString("subject_definitions:\n")
+	buf.WriteString("输入首帧是当前镜头的唯一视觉基准。")
+	if charStr != "" {
+		buf.WriteString(" 人物身份、服装、体态和表情均以输入首帧为准：")
+		buf.WriteString(" " + charStr + "。")
+	}
+	if locStr != "" {
+		buf.WriteString(" 场景空间与陈设以输入首帧为准：")
+		buf.WriteString(" " + locStr + "。")
+	}
+	if propStr != "" {
+		buf.WriteString(" 道具形态与位置以输入首帧为准：")
+		buf.WriteString(" " + propStr + "。")
+	}
+	if styleStr != "" {
+		buf.WriteString(" 视觉风格：")
+		buf.WriteString(" " + styleStr + "。")
+	}
+	buf.WriteString("\n\n")
+
+	// summary
+	buf.WriteString("summary:\n")
+	buf.WriteString("[video continuation] ")
+	buf.WriteString("在约")
+	buf.WriteString(fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)))
+	buf.WriteString("秒内，")
+	buf.WriteString(strings.TrimSpace(sc.Content))
+	buf.WriteString("\n\n")
+
+	// retention_analysis
+	buf.WriteString("retention_analysis:\n")
+	buf.WriteString("输入首帧中的人物面部、服装比例、身体朝向、空间位置、场景结构、道具形态和光线方向必须持续保持。")
+	buf.WriteString(" 禁止人物换装、变形、瞬移或增减。")
+	buf.WriteString(" 禁止新增未在首帧中出现的人物、场景或道具。 NO text, subtitles, captions, speech bubbles, watermarks, logos, UI, or written characters.")
+	buf.WriteString("\n\n")
+
+	// detailed_description：用户可编辑正文；系统壳和首帧约束不可被覆盖。
+	buf.WriteString("detailed_description:\n")
+	buf.WriteString("[Shot 1] 首先严格保持输入首帧构图、人物位置、服装、道具与场景布局。短暂静止后开始运动。 ")
+	body := strings.TrimSpace(sc.VideoPrompt)
+	if body == "" {
+		body = defaultSceneVideoAction(sc)
+	}
+	buf.WriteString(body)
+	buf.WriteString("。摄影机运动必须写明类型、幅度和速度，且全程只使用一种连续运镜。\n\n")
+
+	// overall_soundscape
+	buf.WriteString("overall_soundscape:\n")
 	if len(dubs) > 0 {
-		lines := make([]string, 0, len(dubs))
+		var speaker string
 		for _, d := range dubs {
-			who := strings.TrimSpace(d.Character)
-			if who == "" {
-				who = "旁白"
+			speaker = strings.TrimSpace(d.Character)
+			if speaker == "" {
+				speaker = "旁白"
 			}
-			lines = append(lines, who+"："+strings.TrimSpace(d.Text))
+			buf.WriteString("说话人：")
+			buf.WriteString(speaker)
+			buf.WriteString("；")
+			buf.WriteString(strings.TrimSpace(d.Text))
+			buf.WriteString("。")
 		}
-		parts = append(parts, "【声音与对白】按顺序自然说出，口型、说话人和情绪匹配：\n"+strings.Join(lines, "\n")+"\n只生成匹配场景的环境声和必要动作声，不添加无关音乐或额外台词。")
+		buf.WriteString(" 环境声和动作声与画面同步。")
 	} else {
-		parts = append(parts, "【声音】只生成与画面匹配的自然环境声和动作声，不添加对白。")
+		buf.WriteString("自然环境声和物理动作声，画面内动作产生的声音。")
 	}
-	parts = append(parts, "【硬约束】NO text, subtitles, captions, speech bubbles, watermarks, logos, UI, or written characters. 画面中严禁文字、字幕、水印、对话框；保持人物脸部、肢体、服装、造型和道具稳定。")
-	return strings.Join(parts, "\n\n")
+	buf.WriteString("\n\n")
+
+	// non_diegetic_music
+	buf.WriteString("non_diegetic_music:\n")
+	buf.WriteString("N/A")
+
+	return buf.String()
+}
+
+// ValidateVideoPrompt 检查用户编辑的 detailed_description 是否符合 H3 契约。
+// 返回问题列表，空列表表示通过校验。
+func ValidateVideoPrompt(detailText, charStr, locStr, propStr string) []string {
+	_ = charStr
+	_ = locStr
+	_ = propStr
+	text := strings.TrimSpace(detailText)
+	if text == "" {
+		return nil // 清空表示恢复系统自动生成
+	}
+	var issues []string
+	for _, kw := range []string{"请确认", "请回复", "请上传", "请选择", "please confirm", "please reply", "```"} {
+		if strings.Contains(strings.ToLower(text), strings.ToLower(kw)) {
+			issues = append(issues, "请移除无关交互或格式标记："+kw)
+		}
+	}
+	// 用户只编辑动作正文，不能覆盖由系统维护的 H3 契约段。
+	for _, heading := range []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:"} {
+		if strings.Contains(strings.ToLower(text), heading) {
+			issues = append(issues, "这里只填写动作正文，请移除固定字段："+heading)
+		}
+	}
+	if len([]rune(text)) > 4000 {
+		issues = append(issues, "视频动作提示词不能超过 4000 字")
+	}
+	return issues
 }
 
 func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) ([]FileMeta, []string) {
 	refs := []FileMeta{{TaskID: pid, Name: sc.ImageFile}}
 	lines := []string{"- <Picture 1>：当前分镜画面（构图与动作起点）"}
+	if selected, selectedLines, explicit := s.selectedSceneReferenceFiles(sc, "h3"); explicit {
+		refs = append(refs, selected...)
+		lines = append(lines, selectedLines...)
+		return refs, lines
+	}
 	for _, ch := range s.sceneCharacterPortraits(sc) {
 		if len(refs) >= maxSceneReferenceImages {
 			break
@@ -1521,6 +1671,25 @@ func (s *ProjectService) sceneCharacterLooks(sc *models.Scene, shotRelatedOnly b
 	return looks
 }
 
+func (s *ProjectService) sceneShotContext(sc *models.Scene) string {
+	var shots []models.Shot
+	if err := s.db.Where("scene_id = ?", sc.ID).Order("order_num").Find(&shots).Error; err != nil || len(shots) == 0 {
+		return "未设置结构化镜头；根据场景剧情选择一个最有叙事信息量的起始画面"
+	}
+	lines := make([]string, 0, len(shots))
+	for _, shot := range shots {
+		parts := []string{fmt.Sprintf("镜头%d", shot.Order)}
+		for _, value := range []string{shot.Description, "景别：" + shot.ShotType, "机位：" + shot.CameraAngle, "运镜意图：" + shot.CameraMovement, "情绪：" + shot.Emotion, "主体：" + shot.PromptSubject, "动作：" + shot.PromptAction, "构图：" + shot.PromptCamera, "光线：" + shot.PromptLighting, "风格：" + shot.PromptStyle} {
+			value = strings.TrimSpace(value)
+			if value != "" && !strings.HasSuffix(value, "：") {
+				parts = append(parts, value)
+			}
+		}
+		lines = append(lines, "- "+strings.Join(parts, "；"))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (s *ProjectService) characterLookContextForScene(sc *models.Scene) string {
 	looks := s.sceneCharacterLooks(sc, false)
 	if len(looks) == 0 {
@@ -1690,20 +1859,23 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 		return fmt.Errorf("Krea2 分镜画面生成依赖 ComfyUI 任务服务")
 	}
 
-	refs, lines := s.sceneImageReferenceFiles(sc)
-	if len(refs) > 0 {
-		prompt += "\n\n参考图映射：\n" + strings.Join(lines, "\n") +
-			fmt.Sprintf("\n严格保持图1至图%d中对应人物、道具与场景的身份和外观一致，仅按当前分镜调整构图、动作、表情与镜头。不要把四视图画成拼图，不要复制参考图背景。", len(refs))
+	refs, lines, explicitRefs := s.selectedSceneReferenceFiles(sc, "krea2")
+	if !explicitRefs {
+		refs, lines = s.sceneImageReferenceFiles(sc)
 	}
-
-	templateCode := "krea2_storyboard_reference"
 	if len(refs) == 0 {
-		// Krea2 编辑工作流至少需要一张参考图；纯文生图仍走同一套本地 Krea2 基础模型。
-		templateCode = "krea2_asset_reference"
+		s.failSceneImage(sc, token, "MiniMax H3 SelfLift 分镜候选至少需要选择一张参考图")
+		return fmt.Errorf("MiniMax H3 SelfLift 分镜候选至少需要选择一张参考图")
 	}
+	if len(refs) > maxSceneReferenceImages {
+		refs, lines = refs[:maxSceneReferenceImages], lines[:maxSceneReferenceImages]
+	}
+	prompt += "\n\n【参考图绑定】\n" + strings.Join(lines, "\n") + "\n严格保持各 Picture 对应人物、造型、场景或道具的身份与外观；不要把参考图或四视图拼图复现在候选视频中。"
+
+	templateCode := "minimax_h3_storyboard_candidates_selflift"
 	var tpl models.Template
 	if err := s.db.Where("code = ? AND enabled = ?", templateCode, true).First(&tpl).Error; err != nil {
-		msg := "未找到已启用的 Krea2 分镜画面模板 " + templateCode
+		msg := "未找到已启用的 MiniMax H3 分镜候选模板 " + templateCode
 		s.failSceneImage(sc, token, msg)
 		return fmt.Errorf("%s", msg)
 	}
@@ -1716,7 +1888,7 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 	task, err := s.tasks.CreateTask(CreateTaskReq{
 		TemplateID: tpl.ID,
 		Prompt:     prompt,
-		Params:     map[string]any{"width": width, "height": height},
+		Params:     map[string]any{"width": width, "height": height, "length": 5, "duration": 0.21, "fps": 24},
 		Files:      map[string][]FileMeta{"ref_images": refs},
 	})
 	if err != nil {
@@ -1757,7 +1929,7 @@ func (s *ProjectService) sceneImageReferenceFiles(sc *models.Scene) ([]FileMeta,
 			continue
 		}
 		refs = append(refs, FileMeta{TaskID: pid, Name: name})
-		lines = append(lines, fmt.Sprintf("- 图%d：角色「%s」%s", len(refs), ch.Name, kind))
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」%s", len(refs), ch.Name, kind))
 	}
 	for _, look := range s.sceneCharacterLooks(sc, false) {
 		if len(refs) >= maxSceneReferenceImages {
@@ -1767,7 +1939,7 @@ func (s *ProjectService) sceneImageReferenceFiles(sc *models.Scene) ([]FileMeta,
 			continue
 		}
 		refs = append(refs, FileMeta{TaskID: pid, Name: look.Image})
-		lines = append(lines, fmt.Sprintf("- 图%d：角色造型「%s」（%s）", len(refs), look.Name, LookCategoryLabel(look.Category)))
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色造型「%s」（%s）", len(refs), look.Name, LookCategoryLabel(look.Category)))
 	}
 	for _, a := range s.sceneMatchedAssets(sc) {
 		if len(refs) >= maxSceneReferenceImages {
@@ -1781,7 +1953,7 @@ func (s *ProjectService) sceneImageReferenceFiles(sc *models.Scene) ([]FileMeta,
 			continue
 		}
 		refs = append(refs, FileMeta{TaskID: pid, Name: name})
-		lines = append(lines, fmt.Sprintf("- 图%d：%s「%s」%s", len(refs), AssetKindLabel(a.Kind), a.Name, kind))
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：%s「%s」%s", len(refs), AssetKindLabel(a.Kind), a.Name, kind))
 	}
 	return refs, lines
 }
@@ -2218,7 +2390,7 @@ func (s *ProjectService) syncSceneImages() {
 		case "success":
 			file, _ := resultImageOf(&task)
 			if file == "" || task.Port == nil || s.tasks == nil || s.upload == nil {
-				s.failSceneImage(sc, sc.ImageToken, "Krea2 分镜任务成功但未返回可用图片")
+				s.failSceneImage(sc, sc.ImageToken, "MiniMax H3 分镜候选任务成功但未返回可用帧")
 				continue
 			}
 			subfolder, filename := filepath.ToSlash(filepath.Dir(file)), filepath.Base(file)
@@ -2227,7 +2399,7 @@ func (s *ProjectService) syncSceneImages() {
 			}
 			data, err := NewComfyClient(s.tasks.comfyHostForPort(*task.Port), *task.Port).DownloadOutput(filename, subfolder, "output")
 			if err != nil {
-				s.failSceneImage(sc, sc.ImageToken, "读取 Krea2 分镜图片失败: "+err.Error())
+				s.failSceneImage(sc, sc.ImageToken, "读取 MiniMax H3 分镜候选帧失败: "+err.Error())
 				continue
 			}
 			ext := filepath.Ext(file)
@@ -2346,13 +2518,30 @@ func (s *ProjectService) syncSceneVideos() {
 			}
 		case "success":
 			file, gpu := resultVideoOf(&task)
-			if file == "" || gpu == nil {
-				s.retryOrFailVideo(sc, "任务成功但未返回视频文件或 GPU 信息")
+			if file == "" || gpu == nil || task.Port == nil || s.upload == nil {
+				s.retryOrFailVideo(sc, "任务成功但未返回视频文件、端口或 GPU 信息")
+				changed = true
+				continue
+			}
+			subfolder, filename := filepath.ToSlash(filepath.Dir(file)), filepath.Base(file)
+			if subfolder == "." {
+				subfolder = ""
+			}
+			data, err := NewComfyClient(s.tasks.comfyHostForPort(*task.Port), *task.Port).DownloadOutput(filename, subfolder, "output")
+			if err != nil {
+				s.retryOrFailVideo(sc, "下载生成视频失败: "+err.Error())
+				changed = true
+				continue
+			}
+			localName := fmt.Sprintf("scene_video_g%d_%d_%d%s", sc.Generation, sc.Order, time.Now().UnixNano(), filepath.Ext(file))
+			localPath, _, err := s.upload.SaveFile(fmt.Sprint(sc.ProjectID), "video", localName, data)
+			if err != nil {
+				s.retryOrFailVideo(sc, "保存生成视频失败: "+err.Error())
 				changed = true
 				continue
 			}
 			s.db.Model(sc).Updates(map[string]any{
-				"status": "video_ready", "error": "", "video_file": file, "video_gpu": *gpu,
+				"status": "video_ready", "error": "", "video_file": file, "video_input_file": filepath.Base(localPath), "video_gpu": *gpu,
 			})
 			changed = true
 		case "failed", "cancelled":

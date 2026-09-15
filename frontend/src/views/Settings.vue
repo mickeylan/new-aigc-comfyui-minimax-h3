@@ -159,7 +159,8 @@
         <div class="field">
           <label for="video_resolution">视频分辨率</label>
           <select id="video_resolution" v-model="form.video_resolution" class="input">
-            <option value="720p">720p（默认，快）</option>
+            <option value="480p">480p（测试机默认，最快）</option>
+            <option value="720p">720p（较清晰）</option>
             <option value="1080p">1080p（更清晰）</option>
             <option value="2k">2K（最清晰，慢）</option>
           </select>

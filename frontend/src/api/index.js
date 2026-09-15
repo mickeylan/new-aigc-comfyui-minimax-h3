@@ -35,6 +35,7 @@ export const api = {
   },
   outputUrl: (gpu, path) => `/api/output/${gpu}/${path}`,
   mediaInfo: (gpu, path) => http.get(`/media/${gpu}/${path}`),
+  task: (taskId) => http.get(`/tasks/${taskId}`),
 
   // 平台设置（火山引擎）
   settings: () => http.get('/settings'),
@@ -65,6 +66,8 @@ export const api = {
   redesignScenePrompt: (id, sid, brief) => http.post(`/projects/${id}/scenes/${sid}/prompt/redesign`, { brief }, { timeout: 300000 }),
   generateSceneImage: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/image`),
   generateSceneVideo: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/video`),
+  sceneVideoPrompt: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/video/prompt`),
+  updateSceneVideoPrompt: (id, sid, prompt) => http.put(`/projects/${id}/scenes/${sid}/video/prompt`, { prompt }),
   cancelSceneVideo: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/video/cancel`),
   mergeScenes: (id, payload) => http.post(`/projects/${id}/merge`, payload),
   mergeAllScenes: (id) => http.post(`/projects/${id}/merge-all`),
@@ -105,6 +108,8 @@ export const api = {
   },
   cloneCharacterVoice: (id, cid) => http.post(`/projects/${id}/characters/${cid}/voice/clone`, null, { timeout: 120000 }),
   clearCharacterVoice: (id, cid) => http.post(`/projects/${id}/characters/${cid}/voice/clear`),
+  sceneReferences: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/references`),
+  updateSceneReferences: (id, sid, references) => http.put(`/projects/${id}/scenes/${sid}/references`, { references }),
   // 视觉资产（kind: prop=道具 / location=场景）
   assets: (id, kind) => http.get(`/projects/${id}/assets/${kind}`),
   redesignAssetDescription: (id, kind, data) => http.post(`/projects/${id}/assets/${kind}/redesign`, data, { timeout: 300000 }),

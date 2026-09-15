@@ -374,11 +374,12 @@
                 {{ sc.status === 'video_ready' ? '重新生成视频' : (sc.video_retries > 0 ? '重试视频' : '生成视频') }}
               </button>
               <button class="btn btn-sm btn-ghost" @click="viewImage(sc)">查看画面</button>
+              <button v-if="sc.video_task_id" class="btn btn-sm btn-ghost" @click="viewVideoTask(sc)">查看视频提示词</button>
             </template>
             <span v-if="sc.status === 'failed' && sc.error" class="fail-msg">{{ sc.error }}</span>
           </div>
 
-          <div v-if="sc.video_file && sc.video_gpu !== null && sc.video_gpu !== undefined" class="video-box">
+          <div v-if="sc.video_input_file || (sc.video_file && sc.video_gpu !== null && sc.video_gpu !== undefined)" class="video-box">
             <video :src="videoUrl(sc)" controls preload="metadata" class="scene-video"></video>
             <a class="btn btn-sm btn-ghost download" :href="videoUrl(sc) + '?download=1'">下载</a>
           </div>
@@ -449,11 +450,16 @@
 
     <!-- 场景编辑弹窗 -->
     <div v-if="editingScene" class="modal-mask" @click.self="editingScene = null">
-      <div class="modal card">
+      <div class="modal card scene-edit-modal">
         <h2>编辑场景 {{ editingScene.order }}</h2>
         <div class="field">
           <label>场景标题</label>
           <input v-model="sceneForm.title" class="input" />
+        </div>
+        <div class="field">
+          <label>分镜时长（秒）</label>
+          <input v-model.number="sceneForm.duration" class="input" type="number" min="3" max="15" step="0.1" />
+          <div class="field-hint">允许 3–15 秒；该数值控制实际生成帧数，修改后需要重新生成视频。</div>
         </div>
         <div class="field">
           <label>场景正文（视频提示词）</label>
@@ -478,7 +484,14 @@
           <div class="field-label-actions"><label>画面提示词（输入简单说明后交给 AI 设计）</label><button class="btn btn-sm btn-secondary" :disabled="redesigningScenePrompt || !sceneForm.content.trim()" @click="redesignScenePrompt">{{ redesigningScenePrompt ? 'AI 设计中…' : 'AI 重新设计' }}</button></div>
           <textarea v-model="sceneForm.image_prompt" class="textarea" rows="6"
             placeholder="可先只写简单意图，例如：女主在雨夜宗门大殿发现玉佩；点击 AI 重新设计补全人物、环境、构图、镜头和光影。" />
-          <div class="field-hint">以出场角色的标准人像图为底图生成画面（多角色传多张参考图锁人物）；修改画面提示词会清空已生成的画面与视频，需要重新生成</div>
+          <div class="field-hint">AI 会按 MiniMax H3 起始帧格式生成八段式提示图描述；修改后需保存并重新生成画面。</div>
+        </div>
+        <div class="field"><label>视频动作正文（可手工修改）</label><textarea v-model="sceneForm.video_prompt" class="textarea" rows="6" placeholder="填写可见动作、结束状态和运镜；留空则自动生成。首帧、连续性和 H3 六段契约由系统固定保护。" /></div>
+        <div class="field">
+          <label>参考图库（按选择顺序对应 Picture 编号）</label>
+          <div v-if="!sceneReferenceCandidates.length" class="field-hint">暂无可用图片，请先生成或上传角色、造型、场景、道具参考图。</div>
+          <div class="reference-picker"><div v-for="ref in sceneReferenceCandidates" :key="ref.key" class="reference-option" :class="{ selected: referenceIndex(ref) >= 0 }"><img :src="api.inputUrl(id(), ref.image)" @click="toggleSceneReference(ref)"><div><strong>{{ referenceIndex(ref) >= 0 ? `${kreaPictureNumber(ref) ? `场景图 Picture ${kreaPictureNumber(ref)}` : '不用于场景图'} / ${h3PictureNumber(ref) ? `H3 Picture ${h3PictureNumber(ref)}` : '不用于H3'}` : '未选择' }}</strong><span>{{ ref.label }}</span><div v-if="referenceIndex(ref) >= 0" class="reference-flags"><label><input v-model="selectedSceneReferences[referenceIndex(ref)].use_krea2" type="checkbox"> 场景图</label><label><input v-model="selectedSceneReferences[referenceIndex(ref)].use_h3" type="checkbox"> H3</label><button type="button" @click="moveReference(referenceIndex(ref), -1)">↑</button><button type="button" @click="moveReference(referenceIndex(ref), 1)">↓</button></div></div></div></div>
+          <div class="field-hint">点击缩略图选择或取消。SelfLift 分镜候选可选择 1–9 张“场景图”参考图；正式 H3 的 Picture 1 是抽取后的起始帧，所选 H3 图片从 Picture 2 开始，最多 8 张。</div>
         </div>
         <div v-if="sceneError" class="notice error-notice">{{ sceneError }}</div>
         <div class="modal-actions">
@@ -488,6 +501,10 @@
           </button>
         </div>
       </div>
+    </div>
+
+    <div v-if="videoTaskDetail" class="modal-mask" @click.self="videoTaskDetail = null">
+      <div class="modal card video-task-modal"><h2>视频提示词与任务详情</h2><p><strong>上次任务模板：</strong>{{ videoTaskDetail.template_name }}</p><label>下次生成使用的动作正文<textarea v-model="videoTaskPromptDraft" class="textarea" rows="12" /></label><div class="field-hint">可修改动作、结束状态和运镜。系统会在提交时固定加入首帧锚定、连续性约束和 H3 六段结构；清空后恢复自动生成。</div><details><summary>上次实际提交的提示词</summary><pre class="task-prompt">{{ videoTaskDetail.prompt }}</pre></details><details><summary>上次实际参数与输入图片</summary><pre class="task-prompt">{{ formatTaskParams(videoTaskDetail.params_json) }}</pre></details><div class="modal-actions"><button class="btn btn-ghost" @click="videoTaskDetail = null">取消</button><button class="btn" :disabled="savingVideoPrompt" @click="saveVideoPrompt">{{ savingVideoPrompt ? '保存中…' : '保存提示词' }}</button></div></div>
     </div>
 
     <!-- 项目信息编辑弹窗 -->
@@ -882,6 +899,10 @@ const voicePresets = ['Cherry', 'Ethan', 'Chelsie', 'Serena', 'Nofish', 'Dylan',
 const showScript = ref(false)
 const showPlan = ref(false)
 const viewer = ref(null)
+const videoTaskDetail = ref(null)
+const videoTaskScene = ref(null)
+const videoTaskPromptDraft = ref('')
+const savingVideoPrompt = ref(false)
 const viewerMask = ref(null)
 const busy = ref(false)
 const generatingScript = ref(false)
@@ -899,7 +920,9 @@ const savingProject = ref(false)
 const sceneError = ref('')
 const projectError = ref('')
 const loadError = ref('')
-const sceneForm = reactive({ title: '', content: '', image_prompt: '', visual_type: 'normal', mega_type: 'architecture' })
+const sceneForm = reactive({ title: '', content: '', duration: 5, image_prompt: '', video_prompt: '', visual_type: 'normal', mega_type: 'architecture' })
+const sceneReferenceCandidates = ref([])
+const selectedSceneReferences = ref([])
 const projectForm = reactive({ title: '', genre: '', style: '', synopsis: '', audience: '', tone: '', ending: '', episodes: 10, aspect_ratio: '16:9' })
 let timer = null
 let wsTimer = null
@@ -1079,8 +1102,32 @@ function videoProgress(sc) {
 function imageUrl(sc) {
   return api.inputUrl(project.value.id, sc.image_file)
 }
+async function viewVideoTask(sc) {
+  try {
+    const { data } = await api.task(sc.video_task_id)
+    videoTaskDetail.value = data
+    videoTaskScene.value = sc
+    videoTaskPromptDraft.value = sc.video_prompt || extractVideoDetail(data.prompt)
+  } catch (e) { toast.error(e.response?.data?.error || '读取视频任务详情失败') }
+}
+async function saveVideoPrompt() {
+  savingVideoPrompt.value = true
+  try {
+    await api.updateSceneVideoPrompt(id(), videoTaskScene.value.id, videoTaskPromptDraft.value)
+    videoTaskScene.value.video_prompt = videoTaskPromptDraft.value.trim()
+    toast.success('视频提示词已保存，下次重新生成视频时生效')
+    videoTaskDetail.value = null
+  } catch (e) { toast.error(e.response?.data?.error || '保存视频提示词失败') }
+  finally { savingVideoPrompt.value = false }
+}
+function extractVideoDetail(prompt) {
+  const m = String(prompt || '').match(/detailed_description:\s*([\s\S]*?)(?=\n\s*overall_soundscape:|$)/i)
+  return m ? m[1].trim() : ''
+}
+function formatTaskParams(raw) { try { return JSON.stringify(JSON.parse(raw || '{}'), null, 2) } catch { return raw || '' } }
+
 function videoUrl(sc) {
-  return api.outputUrl(sc.video_gpu, sc.video_file)
+  return sc.video_input_file ? api.inputUrl(project.value.id, sc.video_input_file) : api.outputUrl(sc.video_gpu, sc.video_file)
 }
 function outputUrl(gpu, path) {
   return api.outputUrl(gpu, path)
@@ -1801,20 +1848,41 @@ async function removeProject() {
 
 // ---------- 编辑 ----------
 
-function openEditScene(sc) {
+async function openEditScene(sc) {
   sceneError.value = ''
   editingScene.value = sc
   Object.assign(sceneForm, {
-    title: sc.title, content: sc.content, image_prompt: sc.image_prompt,
+    title: sc.title, content: sc.content, duration: Number(sc.duration) || 5, image_prompt: sc.image_prompt, video_prompt: sc.video_prompt || '',
     visual_type: sc.visual_type || 'normal', mega_type: sc.mega_type || 'architecture'
   })
+  try {
+    const [{ data }, { data: videoPrompt }] = await Promise.all([
+      api.sceneReferences(id(), sc.id),
+      api.sceneVideoPrompt(id(), sc.id)
+    ])
+    sceneReferenceCandidates.value = data.candidates || []
+    selectedSceneReferences.value = (data.references || []).map(x => ({ ...x }))
+    sceneForm.video_prompt = videoPrompt.prompt || ''
+  } catch (e) {
+    sceneReferenceCandidates.value = []
+    selectedSceneReferences.value = []
+    sceneError.value = e.response?.data?.error || '加载参考图库失败'
+  }
 }
+
+function referenceKey(ref) { return `${ref.source_type}:${ref.source_id}:${ref.variant}` }
+function referenceIndex(ref) { const key = referenceKey(ref); return selectedSceneReferences.value.findIndex(x => referenceKey(x) === key) }
+function kreaPictureNumber(ref) { const key = referenceKey(ref); const active = selectedSceneReferences.value.filter(x => x.use_krea2); const i = active.findIndex(x => referenceKey(x) === key); return i >= 0 ? i + 1 : null }
+function h3PictureNumber(ref) { const key = referenceKey(ref); const active = selectedSceneReferences.value.filter(x => x.use_h3); const i = active.findIndex(x => referenceKey(x) === key); return i >= 0 ? i + 2 : null }
+function toggleSceneReference(ref) { const i = referenceIndex(ref); if (i >= 0) selectedSceneReferences.value.splice(i, 1); else selectedSceneReferences.value.push({ source_type: ref.source_type, source_id: ref.source_id, variant: ref.variant, use_krea2: true, use_h3: true }) }
+function moveReference(index, delta) { const target = index + delta; if (target < 0 || target >= selectedSceneReferences.value.length) return; const [item] = selectedSceneReferences.value.splice(index, 1); selectedSceneReferences.value.splice(target, 0, item) }
 
 async function redesignScenePrompt() {
   if (!editingScene.value || !sceneForm.content.trim()) return
   redesigningScenePrompt.value = true
   sceneError.value = ''
   try {
+    await api.updateSceneReferences(id(), editingScene.value.id, selectedSceneReferences.value)
     const { data } = await api.redesignScenePrompt(id(), editingScene.value.id, sceneForm.content.trim())
     sceneForm.image_prompt = data.prompt
     toast.success('场景画面提示词已由 AI 重新设计，请确认后保存')
@@ -1832,10 +1900,13 @@ async function saveScene() {
     await api.updateScene(id(), editingScene.value.id, {
       title: sceneForm.title,
       content: sceneForm.content,
+      duration: Number(sceneForm.duration),
       image_prompt: sceneForm.image_prompt,
+      video_prompt: sceneForm.video_prompt,
       visual_type: sceneForm.visual_type,
       mega_type: sceneForm.mega_type
     })
+    await api.updateSceneReferences(id(), editingScene.value.id, selectedSceneReferences.value)
     const promptChanged = sceneForm.image_prompt !== editingScene.value.image_prompt
     editingScene.value = null
     await load()
@@ -2217,6 +2288,13 @@ onBeforeUnmount(() => {
   padding: 12px;
   border-radius: 6px;
 }
+.scene-edit-modal { width: min(920px, 94vw); max-height: calc(100vh - 48px); overflow-y: auto; }
+.video-task-modal { width: min(900px, 94vw); max-height: calc(100vh - 48px); overflow-y: auto; }
+.task-prompt { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-secondary); padding: 14px; border-radius: 8px; font-size: 12px; line-height: 1.6; }
+.field-label-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.reference-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; margin-top: 8px; }
+.reference-option { display: grid; grid-template-columns: auto 46px 1fr; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
+.reference-option img { width: 46px; height: 46px; object-fit: cover; border-radius: 6px; }
 .badge-green { background: rgba(34, 197, 94, 0.15); color: #16a34a; }
 .badge-red { background: rgba(239, 68, 68, 0.12); color: #dc2626; }
 

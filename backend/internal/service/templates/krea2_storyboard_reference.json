@@ -1,7 +1,7 @@
 {
   "name": "Krea2 分镜参考图",
   "code": "krea2_storyboard_reference",
-  "description": "以角色、道具或场景权威参考图为基础，生成项目画幅的分镜画面。", 
+  "description": "以角色、道具或场景权威参考图为基础，生成项目画幅的分镜画面。",
   "inputs": [
     {
       "key": "ref_images",
@@ -66,7 +66,7 @@
       "type": "string",
       "label": "vae_name",
       "default": "qwen_image_vae.safetensors"
-    },
+    }
   ],
   "workflow": {
     "21": {

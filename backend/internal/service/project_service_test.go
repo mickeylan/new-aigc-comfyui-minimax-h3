@@ -26,6 +26,19 @@ func (s *stubTextProvider) Chat(_, _ string) (string, error) {
 	return s.response, nil
 }
 
+type captureTextProvider struct {
+	response string
+	system   string
+	user     string
+}
+
+func (s *captureTextProvider) Name() string                      { return "capture" }
+func (s *captureTextProvider) HealthCheck(context.Context) error { return nil }
+func (s *captureTextProvider) Chat(system, user string) (string, error) {
+	s.system, s.user = system, user
+	return s.response, nil
+}
+
 type sequenceTextProvider struct {
 	responses []string
 	calls     int
@@ -386,7 +399,7 @@ func TestUpdateSceneLogic(t *testing.T) {
 	}
 
 	// 仅修改正文：保留画面，清空视频，状态回 image_ready
-	if err := ps.UpdateScene(&sc, "", "c2", ""); err != nil {
+	if err := ps.UpdateScene(&sc, "", "c2", "", sc.Duration); err != nil {
 		t.Fatal(err)
 	}
 	var after models.Scene
@@ -398,8 +411,18 @@ func TestUpdateSceneLogic(t *testing.T) {
 		t.Fatalf("status = %s", after.Status)
 	}
 
+	// 修改时长：保留画面、清空视频，并使用新时长。
+	if err := ps.UpdateScene(&after, "", "", "", 15); err != nil {
+		t.Fatal(err)
+	}
+	var timed models.Scene
+	ps.db.First(&timed, sc.ID)
+	if timed.Duration != 15 || timed.ImageFile == "" || timed.VideoFile != "" || timed.VideoTaskID != "" || timed.Status != "image_ready" {
+		t.Fatalf("修改时长后的失效状态错误: %+v", timed)
+	}
+
 	// 修改画面提示词：画面+视频全部清空，状态回 pending
-	if err := ps.UpdateScene(&after, "", "", "p2"); err != nil {
+	if err := ps.UpdateScene(&after, "", "", "p2", after.Duration); err != nil {
 		t.Fatal(err)
 	}
 	var after2 models.Scene
@@ -534,7 +557,7 @@ func TestEnsurePlanCharactersKeepsCompletePlanCharacters(t *testing.T) {
 
 func TestRedesignSceneImagePromptUsesProjectAndAssetContext(t *testing.T) {
 	ps := newTestProjectService(t)
-	provider := &stubTextProvider{response: "电影级全景，古典宗门大殿，林舒身穿白色仙裙，青玉佩悬于腰间，晨雾体积光，低机位纵深构图"}
+	provider := &stubTextProvider{response: "【画面用途】MiniMax H3起始帧\n【参考图绑定】无\n【剧情瞬间】林舒进入古典宗门大殿\n【主体与空间】林舒身穿白色仙裙位于长阶前景，青玉佩悬于腰间\n【动作定格】右脚刚踏上长阶\n【摄影机】电影级全景，低机位纵深构图\n【光线与风格】晨雾体积光，国风写实\n【连续性硬约束】无新增人物，无文字水印"}
 	ps.textProvider = provider
 	project := models.Project{Title: "问仙", Genre: "古典修仙", Style: "国风写实", Synopsis: "宗门试炼"}
 	if err := ps.db.Create(&project).Error; err != nil {
@@ -579,6 +602,95 @@ func TestGenerateReferencePromptKeepsFaceFocusedPortrait(t *testing.T) {
 		if strings.Contains(prompt, forbidden) {
 			t.Fatalf("reference portrait mixed %q: %s", forbidden, prompt)
 		}
+	}
+}
+
+func TestRedesignScenePromptUsesShotsLooksAndH3StartFrameFormat(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Shot{}, &models.CharacterLook{}, &models.SceneCharacterLook{}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &captureTextProvider{response: "【画面用途】MiniMax H3起始帧\n【参考图绑定】无\n【剧情瞬间】林舒拔剑挡在陆川身前\n【主体与空间】林舒位于前景中央\n【动作定格】剑刚出鞘\n【摄影机】中近景低机位\n【光线与风格】冷月逆光\n【连续性硬约束】无新增人物，无文字"}
+	ps.textProvider = provider
+	p := models.Project{Title: "问仙", Genre: "修仙", Style: "国风写实", Synopsis: "宗门试炼"}
+	if err := ps.db.Create(&p).Error; err != nil {
+		t.Fatal(err)
+	}
+	sc := models.Scene{ProjectID: p.ID, Title: "护卫", Content: "林舒拔剑挡在陆川身前", Characters: "林舒,陆川", LocationName: "山门"}
+	if err := ps.db.Create(&sc).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.db.Create(&models.Shot{SceneID: sc.ID, Order: 1, ShotType: "中近景", CameraAngle: "低机位", CameraMovement: "缓慢推进", Description: "林舒拔剑护住陆川", Emotion: "警觉"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	look := models.CharacterLook{ProjectID: p.ID, CharacterID: 1, Name: "战斗绣鞋", Category: "shoes", Description: "黑色云纹软底靴", AuditStatus: models.LookStatusApproved}
+	if err := ps.db.Create(&look).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.db.Create(&models.SceneCharacterLook{SceneID: sc.ID, LookID: look.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err := ps.RedesignSceneImagePrompt(&sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"MiniMax H3起始帧", "剧情瞬间", "连续性硬约束"} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("result missing %q: %s", want, result)
+		}
+	}
+	for _, want := range []string{"林舒拔剑护住陆川", "中近景", "低机位", "缓慢推进", "战斗绣鞋", "黑色云纹软底靴"} {
+		if !strings.Contains(provider.user, want) {
+			t.Fatalf("AI context missing %q: %s", want, provider.user)
+		}
+	}
+	if !strings.Contains(provider.system, "MiniMax H3 视频起始帧") || !strings.Contains(provider.system, "单一静止瞬间") {
+		t.Fatalf("wrong system prompt: %s", provider.system)
+	}
+}
+
+func TestExplicitSceneReferencesControlKrea2AndH3Order(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.CharacterLook{}, &models.SceneCharacterLook{}); err != nil {
+		t.Fatal(err)
+	}
+	p := models.Project{Title: "refs"}
+	ps.db.Create(&p)
+	sc := models.Scene{ProjectID: p.ID, ImageFile: "start.png"}
+	ps.db.Create(&sc)
+	ch := models.Character{ProjectID: p.ID, Name: "林舒", Portrait: "face.png", Sheet: "sheet.png"}
+	ps.db.Create(&ch)
+	a := models.Asset{ProjectID: p.ID, Kind: AssetKindProp, Name: "灵剑", Image: "sword.png"}
+	ps.db.Create(&a)
+	selected := []SceneReferenceSelection{
+		{SourceType: "asset", SourceID: a.ID, Variant: "image", UseKrea2: true, UseH3: true},
+		{SourceType: "character", SourceID: ch.ID, Variant: "portrait", UseKrea2: true, UseH3: false},
+	}
+	if err := ps.SaveSceneReferences(&sc, selected); err != nil {
+		t.Fatal(err)
+	}
+	ps.db.First(&sc, sc.ID)
+	sc.ImageFile = "start.png"
+	sc.ImageTaskID = "image-task"
+	sc.VideoFile = "old.mp4"
+	sc.VideoTaskID = "video-task"
+	sc.Status = "video_ready"
+	ps.db.Save(&sc)
+	if err := ps.SaveSceneReferences(&sc, selected); err != nil {
+		t.Fatal(err)
+	}
+	var unchanged models.Scene
+	ps.db.First(&unchanged, sc.ID)
+	if unchanged.ImageFile != "start.png" || unchanged.ImageTaskID != "image-task" || unchanged.VideoFile != "old.mp4" || unchanged.Status != "video_ready" {
+		t.Fatalf("重复保存相同参考图不应清空产物: %+v", unchanged)
+	}
+	imageRefs, imageLines, explicit := ps.selectedSceneReferenceFiles(&unchanged, "krea2")
+	if !explicit || len(imageRefs) != 2 || imageRefs[0].Name != "sword.png" || imageRefs[1].Name != "face.png" || !strings.Contains(imageLines[0], "<Picture 1>") {
+		t.Fatalf("Krea2 refs=%+v lines=%v", imageRefs, imageLines)
+	}
+	videoRefs, videoLines := ps.sceneVideoReferenceFiles(&sc, fmt.Sprint(p.ID))
+	if len(videoRefs) != 2 || videoRefs[0].Name != "start.png" || videoRefs[1].Name != "sword.png" || !strings.Contains(videoLines[1], "<Picture 2>") {
+		t.Fatalf("H3 refs=%+v lines=%v", videoRefs, videoLines)
 	}
 }
 
@@ -781,11 +893,14 @@ func TestAspectSizeMapping(t *testing.T) {
 		vw, vh             int
 		img                string
 	}{
+		{"16:9", "480p", 832, 480, "2560x1440"},
 		{"16:9", "720p", 1280, 704, "2560x1440"},
 		{"16:9", "1080p", 1920, 1088, "2560x1440"},
 		{"16:9", "2k", 2560, 1440, "2560x1440"},
+		{"9:16", "480p", 480, 832, "1440x2560"},
 		{"9:16", "720p", 704, 1280, "1440x2560"},
 		{"9:16", "1080p", 1088, 1920, "1440x2560"},
+		{"1:1", "480p", 512, 512, "1920x1920"},
 		{"1:1", "720p", 1024, 1024, "1920x1920"},
 		{"1:1", "1080p", 1920, 1920, "1920x1920"},
 		{"", "720p", 1280, 704, "2560x1440"}, // 默认横屏
@@ -801,7 +916,7 @@ func TestAspectSizeMapping(t *testing.T) {
 	}
 }
 
-// TestBuildSceneVideoSpec 验证有权威角色参考时走 ref2v，否则保持首帧 i2v。
+// TestBuildSceneVideoSpec 验证正式视频始终以审核后的场景图作为硬首帧。
 func TestBuildSceneVideoSpec(t *testing.T) {
 	ps := newTestProjectService(t)
 	p := models.Project{Title: "t", Synopsis: "s", AspectRatio: "16:9"}
@@ -809,27 +924,18 @@ func TestBuildSceneVideoSpec(t *testing.T) {
 	ps.db.Create(&models.Character{ProjectID: p.ID, Name: "林夏", Portrait: "lin.png", Sheet: "lin-sheet.png"})
 	ps.db.Create(&models.Character{ProjectID: p.ID, Name: "陆川", Portrait: "lu.png"})
 
-	// 当前分镜 + 两个角色参考图 → ref2v；四视图优先，标准像兜底。
 	sc := &models.Scene{ProjectID: p.ID, ImageFile: "scene_1.png", Characters: "林夏, 陆川"}
 	code, prompt, files := ps.buildSceneVideoSpec(sc, "1")
-	if code != "minimax_h3_ref2v" {
-		t.Fatalf("有角色参考应走 ref2v, got %s", code)
+	if code != "minimax_h3_i2v" || len(files["first_frame"]) != 1 || files["first_frame"][0].Name != "scene_1.png" {
+		t.Fatalf("正式视频必须走 i2v 硬首帧, got %s %v", code, files)
 	}
-	refs := files["ref_images"]
-	if len(refs) != 3 || refs[0].Name != "scene_1.png" || refs[1].Name != "lin-sheet.png" || refs[2].Name != "lu.png" {
-		t.Fatalf("参考图顺序或回退错误: %+v", refs)
-	}
-	for _, want := range []string{"【参考图绑定】", "<Picture 1>", "<Picture 2>", "【动作与时间推进】", "【摄影机】", "【声音】", "NO text"} {
+	for _, want := range []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:", "唯一视觉基准", "[Shot 1]", "NO text"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("H3 prompt missing %q: %s", want, prompt)
 		}
 	}
-
-	// 无出场角色 → i2v，first_frame 单图
-	sc2 := &models.Scene{ProjectID: p.ID, ImageFile: "scene_2.png", Characters: ""}
-	code2, _, files2 := ps.buildSceneVideoSpec(sc2, "1")
-	if code2 != "minimax_h3_i2v" || len(files2["first_frame"]) != 1 {
-		t.Fatalf("无角色应走 i2v/first_frame, got %s %v", code2, files2)
+	if strings.Contains(prompt, "【参考图绑定】") {
+		t.Fatalf("i2v prompt should not pretend soft refs are hard: %s", prompt)
 	}
 }
 
@@ -853,6 +959,49 @@ func TestFormatSRTTime(t *testing.T) {
 }
 
 // TestWriteSRTEntry SRT 字幕条目格式（含说话人前缀）
+func TestBuildMiniMaxH3PromptUsesSixSectionContract(t *testing.T) {
+	sc := &models.Scene{
+		Title: "重逢", Content: "舒寒抬起右手，指尖触碰上官若琳的脸颊",
+		Characters: "舒寒, 上官若琳", LocationName: "玉霄宫内殿", Props: "元婴玉佩", Duration: 8,
+	}
+	p := &models.Project{Style: "古风修仙写实"}
+	prompt := buildMiniMaxH3Prompt(sc, p, nil)
+	fields := []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:"}
+	last := -1
+	for _, field := range fields {
+		pos := strings.Index(prompt, field)
+		if pos < 0 {
+			t.Fatalf("prompt missing %s: %s", field, prompt)
+		}
+		if pos <= last {
+			t.Fatalf("field order invalid at %s", field)
+		}
+		last = pos
+	}
+	for _, want := range []string{"唯一视觉基准", "舒寒, 上官若琳", "玉霄宫内殿", "元婴玉佩", "[Shot 1]", "短暂静止后", "N/A"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestValidateVideoPromptProtectsSystemContract(t *testing.T) {
+	issues := ValidateVideoPrompt("请确认。subject_definitions: 覆盖系统定义", "舒寒", "玉霄宫", "")
+	joined := strings.Join(issues, "|")
+	for _, want := range []string{"无关交互", "固定字段"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("issues missing %q: %v", want, issues)
+		}
+	}
+	good := "舒寒右手从腰侧抬起，指尖向前移动并停在对方脸颊前。摄影机以小幅慢速向前推进。"
+	if got := ValidateVideoPrompt(good, "舒寒", "玉霄宫", ""); len(got) != 0 {
+		t.Fatalf("valid prompt rejected: %v", got)
+	}
+	if got := ValidateVideoPrompt("", "舒寒", "玉霄宫", ""); len(got) != 0 {
+		t.Fatalf("empty prompt should restore automatic generation: %v", got)
+	}
+}
+
 func TestWriteSRTEntry(t *testing.T) {
 	var sb strings.Builder
 	writeSRTEntry(&sb, 1, 0, 2.5, "林夏", "你来了。")
