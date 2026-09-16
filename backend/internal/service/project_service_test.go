@@ -1099,6 +1099,35 @@ func TestBuildMiniMaxH3RefPromptUsesLastPictureAsOpeningFrame(t *testing.T) {
 	}
 }
 
+func TestGenerateSceneVideoActionDoesNotRecycleOldVisualDescription(t *testing.T) {
+	ps := newTestProjectService(t)
+	provider := &captureTextProvider{response: "[Shot 1] 本段视频从 <Picture 2> 的静止画面开始。雷晓飞轻敲桌面，随后警觉地转头。"}
+	ps.textProvider = provider
+	project := models.Project{Title: "测试"}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.db.Create(&models.Character{ProjectID: project.ID, Name: "雷晓飞", Sheet: "leixiaofei-sheet.png"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	sc := &models.Scene{ProjectID: project.ID, Characters: "雷晓飞", ImageFile: "storyboard.png", Content: "雷晓飞轻敲桌面，随后警觉地转头", VideoPrompt: "雷晓飞穿着蓝色粗布短褐，暖黄阳光照亮八仙桌。"}
+	out, err := ps.GenerateSceneVideoAction(sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(provider.user, "蓝色粗布短褐") || strings.Contains(provider.user, "暖黄阳光") || strings.Contains(provider.user, "当前动作草稿") {
+		t.Fatalf("old visual draft must not be recycled: %s", provider.user)
+	}
+	for _, want := range []string{"四视图负责人物外貌与服装", "不得复述或猜测服装款式与颜色", "正文最多三句"} {
+		if !strings.Contains(provider.system, want) {
+			t.Fatalf("system missing %q: %s", want, provider.system)
+		}
+	}
+	if strings.Contains(out, "雷晓飞") || !strings.Contains(out, "<Subject 1>轻敲桌面") {
+		t.Fatalf("character must use Subject binding: %s", out)
+	}
+}
+
 func TestBuildMiniMaxH3RefPromptUsesSubjectTagAndDoesNotDuplicateOpening(t *testing.T) {
 	lines := []string{"- <Picture 1>：角色「雷晓飞」四视图", "- <Picture 2>：场景「雷记面馆」参考图", "- <Picture 3>：当前分镜画面（0.00秒起始构图与动作起点）"}
 	sc := &models.Scene{VideoPrompt: "[Shot 1] 本段视频从 <Picture 3> 的静止画面开始，雷晓飞侧身坐在桌旁，雷晓飞抬起右手。", Duration: 9}

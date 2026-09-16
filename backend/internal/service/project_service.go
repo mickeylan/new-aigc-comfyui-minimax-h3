@@ -967,15 +967,12 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	if s.textProvider == nil {
 		return "", fmt.Errorf("文本生成服务未配置")
 	}
-	var p models.Project
-	if err := s.db.First(&p, sc.ProjectID).Error; err != nil {
-		return "", err
-	}
 	_, refLines := s.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
 	openingPicture := openingPictureTag(refLines)
-	system := fmt.Sprintf(`你是 MiniMax H3 Ref2VA 视频提示词编辑。只输出简洁的 detailed_description 正文，不输出字段名、subject_definitions、summary、retention_analysis、解释、规则、禁止清单或 Markdown。
-正文必须以 [Shot 1] 开头，只写一次“本段视频从 %s 的静止画面开始”。实际参考绑定中的角色必须始终使用对应的 <Subject N>，不得再写角色姓名。参考图已提供的服装、外貌、场景陈设和光线不再复述。只描述剧情明确要求的主体动作、表情变化和必要运镜；不得自行添加服装、道具、环境细节，不得编造厘米、角度、频率、速度等机械数值，不得新增角色、对白或剧情。`, openingPicture)
-	user := fmt.Sprintf("项目画风：%s\n目标时长：%.1f秒\n场景：%s\n剧情：%s\n当前动作草稿：%s\n实际参考绑定：\n%s", p.Style, normalizeSceneDuration(sc.Duration), sc.LocationName, sc.Content, sc.VideoPrompt, strings.Join(refLines, "\n"))
+	system := fmt.Sprintf(`你是 MiniMax H3 Ref2VA 视频动作编辑。只输出简洁的 detailed_description 正文，不输出字段名、解释、规则或 Markdown。
+正文最多三句：第一句以 [Shot 1] 开头，只写“本段视频从 %s 的静止画面开始”；第二句只写剧情要求的动作和表情；确有运镜时第三句写运镜。
+实际参考绑定中的角色必须始终使用对应的 <Subject N>，不得再写角色姓名。四视图负责人物外貌与服装，场景图负责环境，分镜图负责构图与初始状态；正文不得复述或猜测服装款式与颜色、外貌、场景陈设、光线、构图和静态姿态。不得编造厘米、角度、频率、速度等数值，不得新增角色、对白、道具或剧情。`, openingPicture)
+	user := fmt.Sprintf("目标时长：%.1f秒\n剧情动作来源：%s\n实际参考绑定：\n%s", normalizeSceneDuration(sc.Duration), sc.Content, strings.Join(refLines, "\n"))
 	out, err := s.textProvider.Chat(system, user)
 	if err != nil {
 		return "", fmt.Errorf("AI 生成视频动作提示词失败: %w", err)
