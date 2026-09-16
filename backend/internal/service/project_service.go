@@ -2511,7 +2511,7 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		Prompt:     promptText,
 		Params: map[string]any{
 			"width": videoW, "height": videoH, "duration": normalizeSceneDuration(sc.Duration),
-			"steps": 20, "cfg": 1.0, "fps": 24, "seed": -1, "ref_image_size": "max",
+			"steps": 8, "cfg": 1.0, "fps": 24, "seed": -1, "ref_image_size": "match",
 		},
 		Files: videoFiles,
 	})
