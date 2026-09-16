@@ -1099,14 +1099,6 @@ func TestBuildMiniMaxH3RefPromptUsesLastPictureAsOpeningFrame(t *testing.T) {
 	}
 }
 
-func TestValidateFullH3PromptRejectsConflictingCameraMotion(t *testing.T) {
-	prompt := "subject_definitions:\n<Picture 3> 是开始画面\n\nsummary:\n从图开始\n\nretention_analysis:\n保留\n\ndetailed_description:\n[Shot 1] 从 <Picture 3> 开始。摄影机采用固定机位，缓慢向前推进。\n\noverall_soundscape:\n环境声\n\nnon_diegetic_music:\nN/A"
-	issues := ValidateFullH3PromptForReferences(prompt, []string{"- <Picture 1>：角色四视图", "- <Picture 2>：场景图", "- <Picture 3>：当前分镜画面"})
-	if !strings.Contains(strings.Join(issues, "|"), "摄影机描述冲突") {
-		t.Fatalf("expected camera conflict, got %v", issues)
-	}
-}
-
 func TestValidateVideoPromptProtectsSystemContract(t *testing.T) {
 	issues := ValidateVideoPrompt("请确认。subject_definitions: 覆盖系统定义", "舒寒", "玉霄宫", "")
 	joined := strings.Join(issues, "|")

@@ -974,7 +974,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	_, refLines := s.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
 	openingPicture := openingPictureTag(refLines)
 	system := fmt.Sprintf(`你是 MiniMax H3 Ref2VA 视频提示词编辑。只输出 detailed_description 正文，不输出字段名、subject_definitions、summary、retention_analysis、解释、规则、禁止清单或 Markdown。
-正文必须以 [Shot 1] 开头，第一句明确“本段视频从 %s 的静止画面开始”，先建立其构图、主体初始姿态与场景，再使用已定义的 <Subject N> 描述目标时长内的连续可见动作。写清肢体轨迹、接触点、表情和物体状态变化。摄影机运动必须自然写入画面，并明确一种连续运镜；固定机位不得同时描述推进、拉远、摇移或跟拍。不得新增角色、对白、道具或剧情。`, openingPicture)
+正文必须以 [Shot 1] 开头，第一句明确“本段视频从 %s 的静止画面开始”，先建立其构图、主体初始姿态与场景，再使用已定义的 <Subject N> 描述目标时长内的连续可见动作。写清肢体轨迹、接触点、表情和物体状态变化。摄影机运动自然写入画面。不得新增角色、对白、道具或剧情。`, openingPicture)
 	user := fmt.Sprintf("项目画风：%s\n目标时长：%.1f秒\n场景：%s\n剧情：%s\n当前动作草稿：%s\n实际参考绑定：\n%s", p.Style, normalizeSceneDuration(sc.Duration), sc.LocationName, sc.Content, sc.VideoPrompt, strings.Join(refLines, "\n"))
 	out, err := s.textProvider.Chat(system, user)
 	if err != nil {
@@ -1170,14 +1170,6 @@ func ValidateFullH3PromptForReferences(prompt string, referenceLines []string) [
 	detail := h3PromptSection(prompt, "detailed_description:")
 	if !strings.Contains(h3PromptSection(prompt, "subject_definitions:"), opening) || !strings.Contains(detail, opening) {
 		issues = append(issues, "开始画面必须引用实际最后一张分镜图 "+opening)
-	}
-	if strings.Contains(detail, "固定机位") {
-		for _, movement := range []string{"推进", "推近", "拉远", "摇摄", "摇移", "跟拍", "环绕"} {
-			if strings.Contains(detail, movement) {
-				issues = append(issues, "摄影机描述冲突：固定机位不能同时"+movement)
-				break
-			}
-		}
 	}
 	return issues
 }
