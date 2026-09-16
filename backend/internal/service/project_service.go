@@ -920,8 +920,8 @@ func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string, templ
 	if sc.ImageFile == "" {
 		return "minimax_h3_t2v", prompt, nil
 	}
-	// 有首帧图时用 i2v 硬首帧保持构图一致性
-	return "minimax_h3_i2v", prompt, map[string][]FileMeta{"first_frame": {{TaskID: pid, Name: sc.ImageFile}}}
+	// 有首帧图时默认使用 Ref2VA 多参考：Picture 1 为分镜起始帧，其余为人物/造型/道具。
+	return "minimax_h3_ref2v", prompt, nil
 }
 
 // buildVideoFilesForTemplate 根据模板构建所需文件映射；不支持的模板返回 nil。
@@ -957,14 +957,77 @@ func (s *ProjectService) buildVideoFilesForTemplate(sc *models.Scene, pid, tplCo
 func defaultSceneVideoAction(sc *models.Scene) string {
 	content := strings.TrimSpace(sc.Content)
 	if content == "" {
-		content = "主体从首帧静止状态开始一个连续、物理可执行的动作，并自然停留在结束状态"
+		return "[Shot 1] 画面从输入首帧开始，主体完成一个连续可见的动作并自然停下。摄影机保持静止。"
 	}
-	return content + "。动作必须表现为可见的肢体轨迹、接触点、表情变化或物体位移；摄影机采用固定机位，保持小幅度、低速度的自然稳定运动"
+	return "[Shot 1] 画面从输入首帧开始。" + content
+}
+
+// GenerateSceneVideoAction 用文本模型生成用户可审核编辑的 Ref2VA detailed_description 正文。
+func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, error) {
+	if s.textProvider == nil {
+		return "", fmt.Errorf("文本生成服务未配置")
+	}
+	var p models.Project
+	if err := s.db.First(&p, sc.ProjectID).Error; err != nil {
+		return "", err
+	}
+	system := `你是 MiniMax H3 Ref2VA 视频提示词编辑。只输出 detailed_description 正文，不输出字段名、subject_definitions、summary、retention_analysis、解释、规则、禁止清单或 Markdown。
+正文必须以 [Shot 1] 开头，使用输入中已经定义的 <Subject N>，描述目标时长内的连续可见画面。写清构图、主体位置、环境与光线、肢体轨迹、接触点、表情和物体状态变化。摄影机运动必须自然写入画面，并明确类型、幅度和速度；全程只使用一种连续运镜。不得新增角色、对白、道具或剧情。`
+	user := fmt.Sprintf("项目画风：%s\n目标时长：%.1f秒\n场景：%s\n剧情：%s\n当前动作草稿：%s", p.Style, normalizeSceneDuration(sc.Duration), sc.LocationName, sc.Content, sc.VideoPrompt)
+	out, err := s.textProvider.Chat(system, user)
+	if err != nil {
+		return "", fmt.Errorf("AI 生成视频动作提示词失败: %w", err)
+	}
+	out = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(out), "```"), "```"))
+	if !strings.HasPrefix(out, "[Shot 1]") {
+		out = "[Shot 1] " + out
+	}
+	if issues := ValidateVideoPrompt(out, sc.Characters, sc.LocationName, sc.Props); len(issues) > 0 {
+		return "", fmt.Errorf("AI 返回的视频动作提示词不合格: %s", strings.Join(issues, "；"))
+	}
+	return out, nil
 }
 
 // buildMiniMaxH3Prompt 按 H3 官方六段结构生成视频提示词。
 // subject_definitions / summary / retention_analysis / overall_soundscape / non_diegetic_music
 // 由系统确定性生成；detailed_description 来自用户编辑或系统生成。
+func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue, referenceLines []string) string {
+	definitions, retention, subjects := h3StoryboardSubjects(referenceLines)
+	body := strings.TrimSpace(sc.VideoPrompt)
+	if body == "" {
+		body = defaultSceneVideoAction(sc)
+	}
+	if !strings.HasPrefix(body, "[Shot 1]") {
+		body = "[Shot 1] " + body
+	}
+	style := ""
+	if p != nil {
+		style = strings.TrimSpace(p.Style)
+	}
+	if style != "" {
+		body = strings.Replace(body, "[Shot 1]", style+"风格。\n[Shot 1]", 1)
+	}
+	var dialogue []string
+	for _, d := range dubs {
+		if text := strings.TrimSpace(d.Text); text != "" {
+			speaker := strings.TrimSpace(d.Character)
+			if speaker == "" {
+				speaker = "旁白"
+			}
+			dialogue = append(dialogue, speaker+"说道：<d>[中文] "+text+"</d>")
+		}
+	}
+	if len(dialogue) > 0 {
+		body += " " + strings.Join(dialogue, " ")
+	}
+	return "subject_definitions:\n" + strings.Join(definitions, "\n") +
+		"\n\nsummary:\n[reference generation] " + strings.Join(subjects, "、") + "共同构成目标视频，在约" + fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)) + "秒内完成本镜动作。" +
+		"\n\nretention_analysis:\n" + strings.Join(retention, "\n") +
+		"\n\ndetailed_description:\n" + body +
+		"\n\noverall_soundscape:\n自然环境声与画面内物理动作声同步。" +
+		"\n\nnon_diegetic_music:\nN/A"
+}
+
 func buildMiniMaxH3Prompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue) string {
 	charStr := strings.TrimSpace(sc.Characters)
 	locStr := strings.TrimSpace(sc.LocationName)
@@ -2315,15 +2378,12 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	tplCode, promptText, videoFiles := s.buildSceneVideoSpec(sc, pid, sc.VideoTemplate)
 	// ref2v 模板需要注入场景参考图（分镜图 + 用户选择的造型/场景/道具资产）
 	if tplCode == "minimax_h3_ref2v" || tplCode == "minimax_h3_ref2v_single" {
-		refFiles := []FileMeta{}
-		var refLines []string
-		if refs, lines, explicit := s.selectedSceneReferenceFiles(sc, "h3"); explicit && len(refs) > 0 {
-			refFiles, refLines = refs, lines
-		} else if refs, lines := s.sceneVideoReferenceFiles(sc, pid); len(refs) > 0 {
-			refFiles, refLines = refs, lines
-		}
+		// Picture 1 永远是已确认分镜起始帧；额外多参考从 Picture 2 开始。
+		refFiles, refLines := s.sceneVideoReferenceFiles(sc, pid)
 		if len(refFiles) > 0 {
-			promptText += "\n\n【参考图绑定】\n" + strings.Join(refLines, "\n") + "\n严格保持各 Picture 对应人物、造型、场景或道具的身份与外观。"
+			var dubs []models.Dialogue
+			s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
+			promptText = buildMiniMaxH3RefPrompt(sc, p, dubs, refLines)
 			if videoFiles == nil {
 				videoFiles = map[string][]FileMeta{}
 			}

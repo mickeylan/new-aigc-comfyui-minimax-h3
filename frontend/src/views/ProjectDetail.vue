@@ -512,7 +512,7 @@
     </div>
 
     <div v-if="videoTaskDetail" class="modal-mask" @click.self="videoTaskDetail = null">
-      <div class="modal card video-task-modal"><h2>生成/编辑视频提示词</h2><div class="field-row"><div class="field"><label>视频模板</label><select v-model="videoTaskTemplate" class="input"><option value="minimax_h3_ref2v">多图参考生视频（推荐，有场景参考图时优先）</option><option value="minimax_h3_i2v">图生视频（首帧硬锚定）</option><option value="minimax_h3_first_last">首尾帧生视频（需指定首帧和尾帧图片）</option></select></div><div class="field"><label>尺寸 / 时长 / 帧率</label><p class="info-text">{{ videoTaskDetail.width }}×{{ videoTaskDetail.height }} / {{ videoTaskDetail.duration }}秒 / {{ videoTaskDetail.fps }} FPS</p></div></div><div v-if="videoTaskTemplate === 'minimax_h3_first_last'" class="field-row"><div class="field"><label>首帧图片</label><select v-model="videoTaskFirstFrame" class="input"><option value="">请选择…</option><option v-if="videoTaskScene.image_file" :value="videoTaskScene.image_file">分镜画面（当前场景）</option></select></div><div class="field"><label>尾帧图片</label><select v-model="videoTaskLastFrame" class="input"><option value="">请选择…</option><option v-if="videoTaskScene.image_file" :value="videoTaskScene.image_file">分镜画面（当前场景）</option></select></div></div><label>动作正文（生成前可修改）<textarea v-model="videoTaskPromptDraft" class="textarea" rows="12" /></label><div class="field-hint">保存后用于下一次生成。系统固定加入首帧锚定、连续性约束和 H3 六段结构。<b v-if="videoTaskTemplate === 'minimax_h3_first_last'">　⚠ 首尾帧模板已选择，请确认首帧和尾帧图片已正确指定。</b></div><details open><summary>当前将提交的完整提示词</summary><pre class="task-prompt">{{ previewVideoFullPrompt }}</pre></details><details v-if="videoTaskDetail.history_prompt"><summary>上次实际提交的提示词</summary><pre class="task-prompt">{{ videoTaskDetail.history_prompt }}</pre></details><details v-if="videoTaskDetail.params_json"><summary>上次实际参数与输入图片</summary><pre class="task-prompt">{{ formatTaskParams(videoTaskDetail.params_json) }}</pre></details><div class="modal-actions"><button class="btn btn-ghost" @click="videoTaskDetail = null">取消</button><button class="btn" :disabled="savingVideoPrompt" @click="saveVideoPrompt">{{ savingVideoPrompt ? '保存中…' : '保存提示词' }}</button></div></div>
+      <div class="modal card video-task-modal"><h2>生成/编辑视频提示词</h2><div class="field-row"><div class="field"><label>视频模板</label><select v-model="videoTaskTemplate" class="input"><option value="minimax_h3_ref2v">多图参考生视频（推荐，有场景参考图时优先）</option><option value="minimax_h3_i2v">图生视频（首帧硬锚定）</option><option value="minimax_h3_first_last">首尾帧生视频（需指定首帧和尾帧图片）</option></select></div><div class="field"><label>尺寸 / 时长 / 帧率</label><p class="info-text">{{ videoTaskDetail.width }}×{{ videoTaskDetail.height }} / {{ videoTaskDetail.duration }}秒 / {{ videoTaskDetail.fps }} FPS</p></div></div><div v-if="videoTaskTemplate === 'minimax_h3_first_last'" class="field-row"><div class="field"><label>首帧图片</label><select v-model="videoTaskFirstFrame" class="input"><option value="">请选择…</option><option v-if="videoTaskScene.image_file" :value="videoTaskScene.image_file">分镜画面（当前场景）</option></select></div><div class="field"><label>尾帧图片</label><select v-model="videoTaskLastFrame" class="input"><option value="">请选择…</option><option v-if="videoTaskScene.image_file" :value="videoTaskScene.image_file">分镜画面（当前场景）</option></select></div></div><div class="field-label-actions"><label>动作正文（生成前可直接修改）</label><button class="btn btn-sm btn-secondary" :disabled="regeneratingVideoPrompt" @click="regenerateVideoPrompt">{{ regeneratingVideoPrompt ? 'AI 生成中…' : 'AI 重新生成' }}</button></div><textarea v-model="videoTaskPromptDraft" class="textarea" rows="12" /><div class="field-hint">保存后用于下一次生成。系统固定加入首帧锚定、连续性约束和 H3 六段结构。<b v-if="videoTaskTemplate === 'minimax_h3_first_last'">　⚠ 首尾帧模板已选择，请确认首帧和尾帧图片已正确指定。</b></div><details open><summary>当前将提交的完整提示词</summary><pre class="task-prompt">{{ previewVideoFullPrompt }}</pre></details><details v-if="videoTaskDetail.history_prompt"><summary>上次实际提交的提示词</summary><pre class="task-prompt">{{ videoTaskDetail.history_prompt }}</pre></details><details v-if="videoTaskDetail.params_json"><summary>上次实际参数与输入图片</summary><pre class="task-prompt">{{ formatTaskParams(videoTaskDetail.params_json) }}</pre></details><div class="modal-actions"><button class="btn btn-ghost" @click="videoTaskDetail = null">取消</button><button class="btn" :disabled="savingVideoPrompt" @click="saveVideoPrompt">{{ savingVideoPrompt ? '保存中…' : '保存提示词' }}</button></div></div>
     </div>
 
     <!-- 项目信息编辑弹窗 -->
@@ -914,6 +914,7 @@ const videoTaskTemplate = ref('minimax_h3_ref2v')
 const videoTaskFirstFrame = ref('')
 const videoTaskLastFrame = ref('')
 const savingVideoPrompt = ref(false)
+const regeneratingVideoPrompt = ref(false)
 const viewerMask = ref(null)
 const busy = ref(false)
 const generatingScript = ref(false)
@@ -1130,6 +1131,17 @@ async function viewVideoPrompt(sc) {
     videoTaskLastFrame.value = sc.video_last_frame_img || ''
   } catch (e) { toast.error(e.response?.data?.error || '生成视频提示词失败') }
 }
+async function regenerateVideoPrompt() {
+  if (!videoTaskScene.value) return
+  regeneratingVideoPrompt.value = true
+  try {
+    const { data } = await api.regenerateSceneVideoPrompt(id(), videoTaskScene.value.id)
+    videoTaskPromptDraft.value = data.prompt || ''
+    videoTaskDetail.value = { ...videoTaskDetail.value, full_prompt: data.full_prompt || videoTaskDetail.value?.full_prompt || '' }
+    toast.success('AI 已重新生成动作提示词，可继续修改后保存')
+  } catch (e) { toast.error(e.response?.data?.error || 'AI 重新生成失败') }
+  finally { regeneratingVideoPrompt.value = false }
+}
 async function saveVideoPrompt() {
   if (videoTaskTemplate.value === 'minimax_h3_first_last' && (!videoTaskFirstFrame.value || !videoTaskLastFrame.value)) {
     toast.show('首尾帧模板需要同时指定首帧图片和尾帧图片')
@@ -1150,7 +1162,8 @@ async function saveVideoPrompt() {
 const previewVideoFullPrompt = computed(() => {
   const current = videoTaskDetail.value?.full_prompt || ''
   if (!current) return ''
-  return current.replace(/(detailed_description:\s*[\s\S]*?)(?=\n\s*overall_soundscape:)/i, `detailed_description:\n[Shot 1] 首先严格保持输入首帧构图、人物位置、服装、道具与场景布局。短暂静止后开始运动。 ${videoTaskPromptDraft.value}。摄影机运动必须写明类型、幅度和速度，且全程只使用一种连续运镜。\n`)
+  const body = String(videoTaskPromptDraft.value || '').trim()
+  return current.replace(/(detailed_description:\s*[\s\S]*?)(?=\n\s*overall_soundscape:)/i, `detailed_description:\n${body}\n`)
 })
 function formatTaskParams(raw) { try { return JSON.stringify(JSON.parse(raw || '{}'), null, 2) } catch { return raw || '' } }
 

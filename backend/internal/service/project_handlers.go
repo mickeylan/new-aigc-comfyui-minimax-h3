@@ -229,13 +229,37 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 	s.DB.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
 	preview := *sc
 	preview.VideoPrompt = prompt
-	fullPrompt := buildMiniMaxH3Prompt(&preview, &project, dubs)
+	_, refLines := s.Projects.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
+	fullPrompt := buildMiniMaxH3RefPrompt(&preview, &project, dubs, refLines)
 	width, height := aspectVideoSize(project.AspectRatio, s.Projects.videoResolution())
 	c.JSON(http.StatusOK, gin.H{
 		"prompt": prompt, "full_prompt": fullPrompt, "generated": generated,
-		"template": "minimax_h3_i2v", "width": width, "height": height,
+		"template": "minimax_h3_ref2v", "width": width, "height": height,
 		"duration": normalizeSceneDuration(sc.Duration), "fps": 24, "steps": 20,
 	})
+}
+
+func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
+	sc, ok := s.loadScene(c)
+	if !ok {
+		return
+	}
+	prompt, err := s.Projects.GenerateSceneVideoAction(sc)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	var project models.Project
+	if err := s.DB.First(&project, sc.ProjectID).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	var dubs []models.Dialogue
+	s.DB.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
+	preview := *sc
+	preview.VideoPrompt = prompt
+	refs, lines := s.Projects.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
+	c.JSON(200, gin.H{"prompt": prompt, "full_prompt": buildMiniMaxH3RefPrompt(&preview, &project, dubs, lines), "reference_count": len(refs)})
 }
 
 func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {

@@ -1009,7 +1009,7 @@ func TestAspectSizeMapping(t *testing.T) {
 	}
 }
 
-// TestBuildSceneVideoSpec 验证正式视频始终以审核后的场景图作为硬首帧。
+// TestBuildSceneVideoSpec 验证有分镜图时默认走 Ref2VA 多参考模板。
 func TestBuildSceneVideoSpec(t *testing.T) {
 	ps := newTestProjectService(t)
 	p := models.Project{Title: "t", Synopsis: "s", AspectRatio: "16:9"}
@@ -1019,8 +1019,8 @@ func TestBuildSceneVideoSpec(t *testing.T) {
 
 	sc := &models.Scene{ProjectID: p.ID, ImageFile: "scene_1.png", Characters: "林夏, 陆川", VideoTemplate: ""}
 	code, prompt, files := ps.buildSceneVideoSpec(sc, "1", "")
-	if code != "minimax_h3_i2v" || len(files["first_frame"]) != 1 || files["first_frame"][0].Name != "scene_1.png" {
-		t.Fatalf("正式视频必须走 i2v 硬首帧, got %s %v", code, files)
+	if code != "minimax_h3_ref2v" || len(files) != 0 {
+		t.Fatalf("正式视频默认必须走 ref2v，多参考文件在提交阶段统一装配, got %s %v", code, files)
 	}
 	for _, want := range []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:", "唯一视觉基准", "[Shot 1]", "NO text"} {
 		if !strings.Contains(prompt, want) {
@@ -1028,7 +1028,7 @@ func TestBuildSceneVideoSpec(t *testing.T) {
 		}
 	}
 	if strings.Contains(prompt, "【参考图绑定】") {
-		t.Fatalf("i2v prompt should not pretend soft refs are hard: %s", prompt)
+		t.Fatalf("Ref2VA prompt must use structured subject definitions, not an appended binding block: %s", prompt)
 	}
 }
 
