@@ -233,8 +233,11 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 	preview := *sc
 	preview.VideoPrompt = actionPrompt
 	_, refLines := s.Projects.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
-	// 固定契约、Subject绑定与结构化对白始终按当前数据重建；用户只编辑动作正文。
-	fullPrompt := buildMiniMaxH3RefPrompt(&preview, &project, dubs, refLines)
+	// 用户保存的完整提示词是权威值；只有空值或参考图编号失效时才重建。
+	fullPrompt := strings.TrimSpace(sc.VideoFullPrompt)
+	if fullPrompt == "" || len(ValidateFullH3PromptForReferences(fullPrompt, refLines)) > 0 {
+		fullPrompt = buildMiniMaxH3RefPrompt(&preview, &project, dubs, refLines)
+	}
 	width, height := aspectVideoSize(project.AspectRatio, s.Projects.videoResolution())
 	c.JSON(http.StatusOK, gin.H{
 		"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "generated": generated,

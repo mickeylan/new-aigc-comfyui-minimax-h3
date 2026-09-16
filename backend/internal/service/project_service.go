@@ -2667,14 +2667,15 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		if len(refFiles) > 0 {
 			var dubs []models.Dialogue
 			s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
-			actionPrompt := canonicalVideoAction(sc.VideoFullPrompt, refLines)
-			if actionPrompt == "" {
-				actionPrompt = canonicalVideoAction(sc.VideoPrompt, refLines)
+			// 用户保存的完整提示词是权威值；提交时原样使用。只有空值或
+			// 参考图编号失效时，才根据当前Scene/Shot/Dialogue重新构建。
+			promptText = strings.TrimSpace(sc.VideoFullPrompt)
+			if promptText == "" || len(ValidateFullH3PromptForReferences(promptText, refLines)) > 0 {
+				actionPrompt := canonicalVideoAction(sc.VideoPrompt, refLines)
+				preview := *sc
+				preview.VideoPrompt = actionPrompt
+				promptText = buildMiniMaxH3RefPrompt(&preview, p, dubs, refLines)
 			}
-			preview := *sc
-			preview.VideoPrompt = actionPrompt
-			// 固定契约、Subject绑定与结构化对白始终按当前Scene/Shot/Dialogue重建。
-			promptText = buildMiniMaxH3RefPrompt(&preview, p, dubs, refLines)
 			if videoFiles == nil {
 				videoFiles = map[string][]FileMeta{}
 			}

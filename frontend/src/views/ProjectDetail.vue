@@ -1149,8 +1149,9 @@ async function saveVideoPrompt(generateAfterSave = false) {
   }
   savingVideoPrompt.value = true
   try {
-    await api.updateSceneVideoPrompt(id(), videoTaskScene.value.id, { prompt: videoTaskPromptDraft.value, template: videoTaskTemplate.value, first_frame_img: videoTaskFirstFrame.value, last_frame_img: videoTaskLastFrame.value })
-    videoTaskScene.value.video_full_prompt = videoTaskPromptDraft.value.trim()
+    const { data } = await api.updateSceneVideoPrompt(id(), videoTaskScene.value.id, { prompt: videoTaskPromptDraft.value, template: videoTaskTemplate.value, first_frame_img: videoTaskFirstFrame.value, last_frame_img: videoTaskLastFrame.value })
+    videoTaskPromptDraft.value = data.video_full_prompt || videoTaskPromptDraft.value.trim()
+    videoTaskScene.value.video_full_prompt = videoTaskPromptDraft.value
     videoTaskScene.value.video_template = videoTaskTemplate.value
     videoTaskScene.value.video_first_frame_img = videoTaskFirstFrame.value
     videoTaskScene.value.video_last_frame_img = videoTaskLastFrame.value
