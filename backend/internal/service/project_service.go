@@ -342,26 +342,18 @@ func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, err
 	if len(referenceLines) > 0 {
 		referenceContext = strings.Join(referenceLines, "\n")
 	}
-	system := `你是 MiniMax H3 SelfLift 分镜图提示词编辑。生图与生视频遵循同一套 H3 Ref2VA 引用协议；区别是本任务只生成一个静止分镜画面，不描述连续画面。
-严格输出六段：
-subject_definitions:
-每张实际使用的图片定义一个主体，格式为“<Subject N> 是 <Picture N> 中的素材名。”。N从1连续编号，Subject与Picture必须同号。只有素材名时不得补写外貌、发型、服装、性别或体型。
-
-summary:
-必须以“[reference generation]”开头，使用<Subject N>概括目标静止画面。
-
-retention_analysis:
-每个Subject单独一行，格式为“<Subject N> (出现在 [Shot 1]): fully_preserved - 已提供的主体信息。”；不得虚构参考资料中没有的特征。
-
-detailed_description:
-以“[Shot 1]”开头，明确使用对应<Subject N>，只描述单一静止画面中的主体位置、动作定格、可见表情、环境、景别、静态机位、构图和光线。不得描述连续动作、时间推进、推拉摇移跟升降或切镜。人物造型由Picture控制，不重复改写人物外貌和服装。
-
-overall_soundscape:
-N/A
-
-non_diegetic_music:
-N/A
-只输出六段正文，不要解释或Markdown。`
+	framingRule := ""
+	if len(parseSceneCharacters(sc.Characters)) > 0 {
+		framingRule = "\n本场有人物：优先中景、中近景或近景，保证主要人物面部清晰并占据足够像素；避免远景、大远景和人物在画面中过小。只有剧情必须交代宏大空间时才可用全景，但人物脸部仍须清晰可辨。"
+	}
+	system := `你是 MiniMax H3 SelfLift 分镜图提示词编辑。本任务只设计一个静止分镜画面。
+Subject与Picture的真实身份绑定由系统根据实际上传文件生成，你不得生成或改写subject_definitions、summary、retention_analysis、overall_soundscape或non_diegetic_music。
+你只输出一段以“[Shot 1]”开头的detailed_description正文：
+1. 必须使用资料中实际提供的<Subject N>编号，不得写“素材名”“主体信息”等占位词。
+2. 只描述一个明确静止瞬间中的主体位置、动作定格、可见表情、环境、景别、静态机位、构图与光线。
+3. 不得描述连续动作、时间推进、推拉摇移跟升降或切镜。
+4. 人物身份与造型、场景和道具由Picture及权威资料控制，不得新增或猜测资料中没有的内容。
+5. 只输出正文，不要标题、解释、Markdown或JSON。` + framingRule
 	user := fmt.Sprintf("项目：%s\n题材：%s\n画风：%s\n场景标题：%s\n场景剧情：%s\n地点：%s\n道具：%s\n\n本次实际提交的参考图（编号与上传顺序一致）：\n%s\n\n当前镜头设计：\n%s\n\n场景与道具资料：\n%s",
 		project.Title, project.Genre, project.Style, sc.Title, sc.Content,
 		sc.LocationName, sc.Props, referenceContext, shotContext, assetContext)
@@ -374,43 +366,31 @@ N/A
 	output = strings.TrimPrefix(output, "```")
 	output = strings.TrimSuffix(output, "```")
 	output = sanitizeH3ReferencePrompt(strings.TrimSpace(output))
-	var sections map[string]any
-	if json.Unmarshal([]byte(output), &sections) == nil {
-		ordered := []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:"}
-		lines := make([]string, 0, len(ordered))
-		for _, heading := range ordered {
-			value, ok := sections[heading]
-			if !ok {
-				value, ok = sections[strings.Trim(heading, "【】")]
-			}
-			if ok {
-				lines = append(lines, heading+strings.TrimSpace(fmt.Sprint(value)))
-			}
-		}
-		if len(lines) > 0 {
-			output = strings.Join(lines, "\n")
+	// 兼容模型仍返回旧六段格式：只采纳镜头正文，真实引用绑定由代码生成。
+	if detail := h3PromptSection(output, "detailed_description:"); detail != "" {
+		output = detail
+	}
+	output = strings.TrimSpace(output)
+	if !strings.HasPrefix(output, "[Shot 1]") {
+		return "", fmt.Errorf("AI 返回的场景提示词必须以 [Shot 1] 开头，请重试")
+	}
+	for _, placeholder := range []string{"素材名", "已提供的主体信息", "主体信息"} {
+		if strings.Contains(output, placeholder) {
+			return "", fmt.Errorf("AI 返回内容仍含无意义占位词“%s”，请重试", placeholder)
 		}
 	}
 	if len([]rune(output)) < 20 {
 		return "", fmt.Errorf("AI 返回的场景提示词过短，请重试")
 	}
-	for _, heading := range []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:"} {
-		if !strings.Contains(output, heading) {
-			return "", fmt.Errorf("AI 返回内容不符合 MiniMax H3 六段格式，缺少%s，请重试", heading)
+	preview := *sc
+	preview.ImagePrompt = output
+	result := buildH3StoryboardPrompt(&preview, &project, referenceLines)
+	for _, placeholder := range []string{"素材名", "已提供的主体信息"} {
+		if strings.Contains(result, placeholder) {
+			return "", fmt.Errorf("生成的引用绑定仍含无意义占位词“%s”", placeholder)
 		}
 	}
-	if len(referenceLines) > 0 {
-		for i := range referenceLines {
-			n := i + 1
-			if !strings.Contains(output, fmt.Sprintf("<Picture %d>", n)) || !strings.Contains(output, fmt.Sprintf("<Subject %d>", n)) {
-				return "", fmt.Errorf("AI 返回内容未按 H3 协议绑定 <Picture %d> 与 <Subject %d>，请重试", n, n)
-			}
-		}
-	}
-	if !strings.Contains(h3PromptSection(output, "summary:"), "[reference generation]") || !strings.Contains(h3PromptSection(output, "detailed_description:"), "[Shot 1]") {
-		return "", fmt.Errorf("AI 返回内容缺少 [reference generation] 或 [Shot 1]，请重试")
-	}
-	return output, nil
+	return result, nil
 }
 
 // UpdateScene 编辑场景文案。修改 image_prompt 会清空已生成画面与视频（需重新生成）；
@@ -920,7 +900,7 @@ func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string, templ
 	if sc.ImageFile == "" {
 		return "minimax_h3_t2v", prompt, nil
 	}
-	// 有首帧图时默认使用 Ref2VA 多参考：Picture 1 为分镜起始帧，其余为人物/造型/道具。
+	// 有首帧图时使用与分镜候选参数一致的 SelfLift Ref2VA 多参考模板。
 	return "minimax_h3_ref2v", prompt, nil
 }
 
@@ -1031,10 +1011,28 @@ func useSubjectTags(text string, referenceLines []string) string {
 	return text
 }
 
+func normalizeVideoActionPrompt(prompt string) string {
+	text := strings.TrimSpace(prompt)
+	// 历史版本可能把完整六段提示词误存进 video_prompt，并在每次重建时递归嵌套。
+	// 最内层（最后一个）detailed_description 才是用户真正的动作正文。
+	if i := strings.LastIndex(strings.ToLower(text), "detailed_description:"); i >= 0 {
+		text = strings.TrimSpace(text[i+len("detailed_description:"):])
+		lower := strings.ToLower(text)
+		end := len(text)
+		for _, heading := range []string{"overall_soundscape:", "non_diegetic_music:"} {
+			if j := strings.Index(lower, heading); j >= 0 && j < end {
+				end = j
+			}
+		}
+		text = strings.TrimSpace(text[:end])
+	}
+	return text
+}
+
 func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue, referenceLines []string) string {
 	definitions, retention, subjects := h3StoryboardSubjects(referenceLines)
 	openingPicture := openingPictureTag(referenceLines)
-	body := strings.TrimSpace(sc.VideoPrompt)
+	body := normalizeVideoActionPrompt(sc.VideoPrompt)
 	if body == "" {
 		body = defaultSceneVideoAction(sc)
 	}
@@ -1125,7 +1123,7 @@ func buildMiniMaxH3Prompt(sc *models.Scene, p *models.Project, dubs []models.Dia
 	// detailed_description：用户可编辑正文；系统壳和首帧约束不可被覆盖。
 	buf.WriteString("detailed_description:\n")
 	buf.WriteString("[Shot 1] 首先严格保持输入首帧构图、人物位置、服装、道具与场景布局。短暂静止后开始运动。 ")
-	body := strings.TrimSpace(sc.VideoPrompt)
+	body := normalizeVideoActionPrompt(sc.VideoPrompt)
 	if body == "" {
 		body = defaultSceneVideoAction(sc)
 	}
@@ -1170,12 +1168,17 @@ func ValidateFullH3Prompt(prompt string) []string {
 	issues := []string{}
 	fields := []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:"}
 	last := -1
+	lower := strings.ToLower(text)
 	for _, field := range fields {
-		pos := strings.Index(text, field)
-		if pos < 0 {
+		count := strings.Count(lower, field)
+		if count == 0 {
 			issues = append(issues, "缺少 "+field)
 			continue
 		}
+		if count != 1 {
+			issues = append(issues, field+"只能出现一次，禁止嵌套完整提示词")
+		}
+		pos := strings.Index(lower, field)
 		if pos < last {
 			issues = append(issues, "H3字段顺序错误")
 			break
@@ -1193,10 +1196,12 @@ func ValidateFullH3Prompt(prompt string) []string {
 
 func ValidateFullH3PromptForReferences(prompt string, referenceLines []string) []string {
 	issues := ValidateFullH3Prompt(prompt)
-	opening := openingPictureTag(referenceLines)
-	detail := h3PromptSection(prompt, "detailed_description:")
-	if !strings.Contains(h3PromptSection(prompt, "subject_definitions:"), opening) || !strings.Contains(detail, opening) {
-		issues = append(issues, "开始画面必须引用实际最后一张分镜图 "+opening)
+	// Ref2VA 中分镜图只是可选参考，不是强制首帧；仅校验提示词引用的 Picture
+	// 没有超出实际上传数量，不要求 detailed_description 必须从某张图开始。
+	for n := len(referenceLines) + 1; n <= maxSceneReferenceImages; n++ {
+		if strings.Contains(prompt, fmt.Sprintf("<Picture %d>", n)) || strings.Contains(prompt, fmt.Sprintf("<Subject %d>", n)) {
+			issues = append(issues, fmt.Sprintf("引用了未上传的 Picture/Subject %d", n))
+		}
 	}
 	return issues
 }
@@ -1228,22 +1233,25 @@ func ValidateVideoPrompt(detailText, charStr, locStr, propStr string) []string {
 }
 
 func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) ([]FileMeta, []string) {
-	// 人物、造型、场景和道具参考在前；当前分镜起始图固定放在最后，避免 Subject 1 被误当成人物。
-	refs := []FileMeta{}
-	lines := []string{}
+	// Ref2VA/SelfLift 对输入顺序敏感：已确认的分镜图必须连接到 ref_image_0，
+	// 即 <Picture 1>，作为视频的起始构图；其余身份、造型和资产引用依次后移。
+	refs := []FileMeta{{TaskID: pid, Name: sc.ImageFile}}
+	lines := []string{"- <Picture 1>：当前分镜画面（0.00秒起始构图与动作起点）"}
 	if selected, selectedLines, explicit := s.selectedSceneReferenceFiles(sc, "h3"); explicit {
 		if len(selected) >= maxSceneReferenceImages {
 			selected = selected[:maxSceneReferenceImages-1]
 			selectedLines = selectedLines[:maxSceneReferenceImages-1]
 		}
 		refs = append(refs, selected...)
-		lines = append(lines, selectedLines...)
-		refs = append(refs, FileMeta{TaskID: pid, Name: sc.ImageFile})
-		lines = append(lines, fmt.Sprintf("- <Picture %d>：当前分镜画面（0.00秒起始构图与动作起点）", len(refs)))
+		for i, line := range selectedLines {
+			oldTag := fmt.Sprintf("<Picture %d>", i+1)
+			newTag := fmt.Sprintf("<Picture %d>", i+2)
+			lines = append(lines, strings.Replace(line, oldTag, newTag, 1))
+		}
 		return refs, lines
 	}
 	for _, ch := range s.sceneCharacterPortraits(sc) {
-		if len(refs) >= maxSceneReferenceImages-1 {
+		if len(refs) >= maxSceneReferenceImages {
 			break
 		}
 		name, kind := ch.Sheet, "四视图"
@@ -1260,7 +1268,7 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 		if outfit.Character != nil && !s.sceneHasCharacter(sc, outfit.Character.Name) {
 			continue
 		}
-		if len(refs) >= maxSceneReferenceImages-1 {
+		if len(refs) >= maxSceneReferenceImages {
 			break
 		}
 		name, kind := outfit.Sheet, "套装四视图"
@@ -1278,7 +1286,7 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」造型套装「%s」%s", len(refs), charName, outfit.Name, kind))
 	}
 	for _, a := range s.sceneMatchedAssets(sc) {
-		if len(refs) >= maxSceneReferenceImages-1 {
+		if len(refs) >= maxSceneReferenceImages {
 			break
 		}
 		name, kind := a.Image, "参考图"
@@ -1291,8 +1299,6 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 		refs = append(refs, FileMeta{TaskID: pid, Name: name})
 		lines = append(lines, fmt.Sprintf("- <Picture %d>：%s「%s」%s", len(refs), AssetKindLabel(a.Kind), a.Name, kind))
 	}
-	refs = append(refs, FileMeta{TaskID: pid, Name: sc.ImageFile})
-	lines = append(lines, fmt.Sprintf("- <Picture %d>：当前分镜画面（0.00秒起始构图与动作起点）", len(refs)))
 	return refs, lines
 }
 
@@ -1985,6 +1991,7 @@ func (s *ProjectService) buildSceneImagePrompt(sc *models.Scene) string {
 	}
 	if charCtx := s.characterContextForScene(sc); charCtx != "" {
 		parts = append(parts, charCtx)
+		parts = append(parts, "【人物景别硬约束】优先中景、中近景或近景，主要人物面部必须清晰并占据足够像素；避免远景、大远景及人物在画面中过小。仅当剧情必须交代宏大空间时允许全景，但人物脸部仍须清晰可辨，禁止因景别过远造成崩脸或五官模糊")
 	}
 	if lookCtx := s.characterLookContextForScene(sc); lookCtx != "" {
 		parts = append(parts, lookCtx)
@@ -2002,6 +2009,19 @@ func (s *ProjectService) buildSceneImagePrompt(sc *models.Scene) string {
 		return s.applyPromptSkill(sc.ProjectID, models.SkillStageMegastructure, prompt, params)
 	}
 	return s.applyPromptSkill(sc.ProjectID, models.SkillStageImagePrompt, prompt, params)
+}
+
+// sceneImageSize returns full-HD-or-larger storyboard dimensions for the project aspect ratio.
+func sceneImageSize(p *models.Project) (int, int) {
+	if p != nil {
+		switch strings.TrimSpace(p.AspectRatio) {
+		case "9:16":
+			return 1080, 1920
+		case "1:1":
+			return 1920, 1920
+		}
+	}
+	return 1920, 1080
 }
 
 func normalizeVisualType(value, text string) string {
@@ -2245,8 +2265,10 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 		s.failSceneImage(sc, token, err.Error())
 		return err
 	}
-	prompt := buildH3StoryboardPrompt(sc, &p, lines)
-	width, height := assetImageSize(&p, AssetKindLocation)
+	// SelfLift 场景图沿用已验证的自然语言生图提示词；参考图仍按 ref_images
+	// 顺序传入。Ref2VA 六段契约只用于视频，不用于这次 5 帧静态候选采样。
+	prompt := s.buildSceneImagePrompt(sc)
+	width, height := sceneImageSize(&p)
 	task, err := s.tasks.CreateTask(CreateTaskReq{
 		TemplateID: tpl.ID,
 		Prompt:     prompt,
@@ -3194,7 +3216,9 @@ func resultVideoOf(task *models.Task) (string, *int) {
 		return "", nil
 	}
 	for _, f := range files {
-		if f["type"] == "videos" || (f["type"] == "images" && isVideoExt(f["filename"])) {
+		// ComfyUI 的不同视频保存节点会把 mp4 放在 videos、images 或 gifs 字段；
+		// 文件扩展名才是稳定信号，不能按输出字段类型排除有效视频。
+		if f["type"] == "videos" || isVideoExt(f["filename"]) {
 			sub, name := f["subfolder"], f["filename"]
 			if sub != "" {
 				return sub + "/" + name, task.GPUIndex

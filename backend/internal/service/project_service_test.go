@@ -211,16 +211,18 @@ func TestRebalanceScriptDurationsRejectsImpossibleTarget(t *testing.T) {
 
 func TestResultVideoOf(t *testing.T) {
 	gpu := 3
-	task := models.Task{
-		ResultFiles: `[{"type":"images","filename":"a.png","subfolder":""},{"type":"videos","filename":"minimax_00001_.mp4","subfolder":"minimax"}]`,
-		GPUIndex:    &gpu,
-	}
-	file, idx := resultVideoOf(&task)
-	if file != "minimax/minimax_00001_.mp4" {
-		t.Fatalf("file = %q", file)
-	}
-	if idx == nil || *idx != 3 {
-		t.Fatalf("gpu = %v", idx)
+	for _, resultFiles := range []string{
+		`[{"type":"images","filename":"a.png","subfolder":""},{"type":"videos","filename":"minimax_00001_.mp4","subfolder":"minimax"}]`,
+		`[{"type":"gifs","filename":"minimax_00001-audio.mp4","subfolder":"minimax"}]`,
+	} {
+		task := models.Task{ResultFiles: resultFiles, GPUIndex: &gpu}
+		file, idx := resultVideoOf(&task)
+		if !strings.HasPrefix(file, "minimax/") || !strings.HasSuffix(file, ".mp4") {
+			t.Fatalf("file = %q for %s", file, resultFiles)
+		}
+		if idx == nil || *idx != 3 {
+			t.Fatalf("gpu = %v", idx)
+		}
 	}
 }
 
@@ -557,7 +559,7 @@ func TestEnsurePlanCharactersKeepsCompletePlanCharacters(t *testing.T) {
 
 func TestRedesignSceneImagePromptUsesProjectAndAssetContext(t *testing.T) {
 	ps := newTestProjectService(t)
-	provider := &stubTextProvider{response: "subject_definitions:\n无参考图\n\nsummary:\n[reference generation] 林舒进入古典宗门大殿\n\nretention_analysis:\n保持场景结构\n\ndetailed_description:\n[Shot 1] 林舒右脚刚踏上长阶，电影级全景，低机位纵深构图，晨雾体积光，国风写实\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"}
+	provider := &stubTextProvider{response: "subject_definitions:\n<Subject 1> 是 <Picture 1> 中的素材名。\n\nsummary:\n[reference generation] 林舒进入古典宗门大殿\n\nretention_analysis:\n<Subject 1> (出现在 [Shot 1]): fully_preserved - 已提供的主体信息。\n\ndetailed_description:\n[Shot 1] 林舒右脚刚踏上长阶，电影级全景，低机位纵深构图，晨雾体积光，国风写实\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"}
 	ps.textProvider = provider
 	project := models.Project{Title: "问仙", Genre: "古典修仙", Style: "国风写实", Synopsis: "宗门试炼"}
 	if err := ps.db.Create(&project).Error; err != nil {
@@ -568,14 +570,24 @@ func TestRedesignSceneImagePromptUsesProjectAndAssetContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	ps.db.Create(&models.Character{ProjectID: project.ID, Name: "林舒", Appearance: "22岁女性，黑色长发", WardrobeDetail: "白色交领仙裙，中式绣鞋"})
-	ps.db.Create(&models.Asset{ProjectID: project.ID, Kind: AssetKindLocation, Name: "宗门大殿", Description: "石柱、长阶、云雾"})
-	ps.db.Create(&models.Asset{ProjectID: project.ID, Kind: AssetKindProp, Name: "元婴玉佩", Description: "青玉材质、金色纹路"})
+	ps.db.Create(&models.Asset{ProjectID: project.ID, Kind: AssetKindLocation, Name: "宗门大殿", Description: "石柱、长阶、云雾", Image: "hall.png"})
+	ps.db.Create(&models.Asset{ProjectID: project.ID, Kind: AssetKindProp, Name: "元婴玉佩", Description: "青玉材质、金色纹路", Image: "jade.png"})
 	prompt, err := ps.RedesignSceneImagePrompt(&scene)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if provider.calls != 1 || !strings.Contains(prompt, "宗门大殿") {
 		t.Fatalf("prompt=%q calls=%d", prompt, provider.calls)
+	}
+	for _, forbidden := range []string{"素材名", "已提供的主体信息"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("prompt retained placeholder %q: %s", forbidden, prompt)
+		}
+	}
+	for _, want := range []string{"<Subject 1> 是 <Picture 1>", "场景「宗门大殿」", "<Subject 2> 是 <Picture 2>", "道具「元婴玉佩」"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing deterministic binding %q: %s", want, prompt)
+		}
 	}
 }
 
@@ -644,7 +656,7 @@ func TestRedesignScenePromptUsesShotsLooksAndH3StartFrameFormat(t *testing.T) {
 			t.Fatalf("AI context missing %q: %s", want, provider.user)
 		}
 	}
-	if !strings.Contains(provider.system, "MiniMax H3 SelfLift") || !strings.Contains(provider.system, "同一套 H3 Ref2VA 引用协议") {
+	if !strings.Contains(provider.system, "MiniMax H3 SelfLift") || !strings.Contains(provider.system, "真实身份绑定由系统") || !strings.Contains(provider.system, "不得写“素材名”") || !strings.Contains(provider.system, "避免远景、大远景") {
 		t.Fatalf("wrong system prompt: %s", provider.system)
 	}
 }
@@ -689,8 +701,8 @@ func TestExplicitSceneReferencesControlKrea2AndH3Order(t *testing.T) {
 		t.Fatalf("SelfLift refs=%+v lines=%v", imageRefs, imageLines)
 	}
 	videoRefs, videoLines := ps.sceneVideoReferenceFiles(&sc, fmt.Sprint(p.ID))
-	if len(videoRefs) != 2 || videoRefs[0].Name != "sword.png" || videoRefs[1].Name != "start.png" || !strings.Contains(videoLines[1], "<Picture 2>") || !strings.Contains(videoLines[1], "当前分镜画面") {
-		t.Fatalf("H3 must put storyboard opening image last: refs=%+v lines=%v", videoRefs, videoLines)
+	if len(videoRefs) != 2 || videoRefs[0].Name != "start.png" || videoRefs[1].Name != "sword.png" || !strings.Contains(videoLines[0], "<Picture 1>") || !strings.Contains(videoLines[0], "当前分镜画面") || !strings.Contains(videoLines[1], "<Picture 2>") {
+		t.Fatalf("H3 must connect storyboard opening image as Picture 1: refs=%+v lines=%v", videoRefs, videoLines)
 	}
 }
 
@@ -753,11 +765,11 @@ func TestExplicitSceneLocationStillAddsVisibleCharacterSheet(t *testing.T) {
 	}
 	ps.db.First(&sc, sc.ID)
 	files, lines, explicit := ps.selectedSceneReferenceFiles(&sc, "krea2")
-	if !explicit || len(files) != 2 || files[0].Name != "noodle-shop.png" || files[1].Name != "lead-sheet.png" {
-		t.Fatalf("explicit location must be followed by visible character sheet: files=%+v lines=%v", files, lines)
+	if !explicit || len(files) != 2 || files[0].Name != "lead-sheet.png" || files[1].Name != "noodle-shop.png" {
+		t.Fatalf("SelfLift references must put visible character before location: files=%+v lines=%v", files, lines)
 	}
 	prompt := buildH3StoryboardPrompt(&sc, &p, lines)
-	for _, want := range []string{"<Subject 1> 是 <Picture 1>", "雷记面馆", "<Subject 2> 是 <Picture 2>", "雷晓飞", "[reference generation] <Subject 1>、<Subject 2>"} {
+	for _, want := range []string{"<Subject 1> 是 <Picture 1>", "雷晓飞", "<Subject 2> 是 <Picture 2>", "雷记面馆", "[reference generation] <Subject 1>、<Subject 2>"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q: %s", want, prompt)
 		}
@@ -842,6 +854,15 @@ func TestBuildAssetPromptAndSizeUseKrea2ReferenceConventions(t *testing.T) {
 	}
 	if w, h := assetImageSize(p, AssetKindLocation); w != 1344 || h != 768 {
 		t.Fatalf("location size = %dx%d", w, h)
+	}
+	for _, tc := range []struct {
+		aspect string
+		w, h   int
+	}{{"16:9", 1920, 1080}, {"9:16", 1080, 1920}, {"1:1", 1920, 1920}} {
+		p.AspectRatio = tc.aspect
+		if w, h := sceneImageSize(p); w != tc.w || h != tc.h {
+			t.Fatalf("scene %s size = %dx%d, want %dx%d", tc.aspect, w, h, tc.w, tc.h)
+		}
 	}
 }
 
@@ -959,7 +980,7 @@ func TestBuildSceneImagePrompt(t *testing.T) {
 	ps.db.Create(&models.Character{ProjectID: p.ID, Name: "林夏", Trait: "长发", Style: "白风衣"})
 	sc := &models.Scene{ProjectID: p.ID, Characters: "林夏", ImagePrompt: "林夏站在月台"}
 	prompt := ps.buildSceneImagePrompt(sc)
-	for _, want := range []string{"国漫插画风格", "严禁真实照片风格", "角色设定", "- 林夏：长发", "统一暗色调", "画风：国漫", "当前分镜：林夏站在月台"} {
+	for _, want := range []string{"国漫插画风格", "严禁真实照片风格", "角色设定", "- 林夏：长发", "人物景别硬约束", "优先中景、中近景或近景", "避免远景、大远景", "统一暗色调", "画风：国漫", "当前分镜：林夏站在月台"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("拼装缺少 %q: %q", want, prompt)
 		}
@@ -1009,7 +1030,7 @@ func TestAspectSizeMapping(t *testing.T) {
 	}
 }
 
-// TestBuildSceneVideoSpec 验证有分镜图时默认走 Ref2VA 多参考模板。
+// TestBuildSceneVideoSpec 验证有分镜图时默认走 SelfLift Ref2VA 多参考模板。
 func TestBuildSceneVideoSpec(t *testing.T) {
 	ps := newTestProjectService(t)
 	p := models.Project{Title: "t", Synopsis: "s", AspectRatio: "16:9"}
@@ -1078,17 +1099,17 @@ func TestBuildMiniMaxH3PromptUsesSixSectionContract(t *testing.T) {
 	}
 }
 
-func TestBuildMiniMaxH3RefPromptUsesLastPictureAsOpeningFrame(t *testing.T) {
-	sc := &models.Scene{Content: "雷晓飞敲击桌面", VideoPrompt: "[Shot 1] <Subject 1>抬起手指后再次落向桌面。", Duration: 9}
-	lines := []string{"- <Picture 1>：角色「雷晓飞」四视图", "- <Picture 2>：场景「雷记面馆」参考图", "- <Picture 3>：当前分镜画面（0.00秒起始构图与动作起点）"}
+func TestBuildMiniMaxH3RefPromptUsesFirstPictureAsOpeningFrame(t *testing.T) {
+	sc := &models.Scene{Content: "雷晓飞敲击桌面", VideoPrompt: "[Shot 1] <Subject 2>抬起手指后再次落向桌面。", Duration: 9}
+	lines := []string{"- <Picture 1>：当前分镜画面（0.00秒起始构图与动作起点）", "- <Picture 2>：角色「雷晓飞」四视图", "- <Picture 3>：场景「雷记面馆」参考图"}
 	prompt := buildMiniMaxH3RefPrompt(sc, &models.Project{Style: "3D国漫"}, nil, lines)
 	for _, want := range []string{
-		"<Subject 1> 是 <Picture 1> 中的角色「雷晓飞」四视图",
-		"<Picture 3> 是 [Shot 1] 在 0.00 秒的开始画面",
-		"[keyframe completion + reference generation] 目标视频从 <Picture 3> 开始",
-		"<Picture 3> ([Shot 1] 开始画面): fully_preserved",
-		"[Shot 1] 本段视频从 <Picture 3> 的静止画面开始",
-		"<Subject 1>抬起手指",
+		"<Subject 2> 是 <Picture 2> 中的角色「雷晓飞」四视图",
+		"<Picture 1> 是 [Shot 1] 在 0.00 秒的开始画面",
+		"[keyframe completion + reference generation] 目标视频从 <Picture 1> 开始",
+		"<Picture 1> ([Shot 1] 开始画面): fully_preserved",
+		"[Shot 1] 本段视频从 <Picture 1> 的静止画面开始",
+		"<Subject 2>抬起手指",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("Ref2VA prompt missing %q: %s", want, prompt)
@@ -1101,7 +1122,7 @@ func TestBuildMiniMaxH3RefPromptUsesLastPictureAsOpeningFrame(t *testing.T) {
 
 func TestGenerateSceneVideoActionDoesNotRecycleOldVisualDescription(t *testing.T) {
 	ps := newTestProjectService(t)
-	provider := &captureTextProvider{response: "[Shot 1] 本段视频从 <Picture 2> 的静止画面开始。雷晓飞轻敲桌面，随后警觉地转头。"}
+	provider := &captureTextProvider{response: "[Shot 1] 本段视频从 <Picture 1> 的静止画面开始。雷晓飞轻敲桌面，随后警觉地转头。"}
 	ps.textProvider = provider
 	project := models.Project{Title: "测试"}
 	if err := ps.db.Create(&project).Error; err != nil {
@@ -1123,21 +1144,43 @@ func TestGenerateSceneVideoActionDoesNotRecycleOldVisualDescription(t *testing.T
 			t.Fatalf("system missing %q: %s", want, provider.system)
 		}
 	}
-	if strings.Contains(out, "雷晓飞") || !strings.Contains(out, "<Subject 1>轻敲桌面") {
+	if strings.Contains(out, "雷晓飞") || !strings.Contains(out, "<Subject 2>轻敲桌面") {
 		t.Fatalf("character must use Subject binding: %s", out)
 	}
 }
 
 func TestBuildMiniMaxH3RefPromptUsesSubjectTagAndDoesNotDuplicateOpening(t *testing.T) {
-	lines := []string{"- <Picture 1>：角色「雷晓飞」四视图", "- <Picture 2>：场景「雷记面馆」参考图", "- <Picture 3>：当前分镜画面（0.00秒起始构图与动作起点）"}
-	sc := &models.Scene{VideoPrompt: "[Shot 1] 本段视频从 <Picture 3> 的静止画面开始，雷晓飞侧身坐在桌旁，雷晓飞抬起右手。", Duration: 9}
+	lines := []string{"- <Picture 1>：当前分镜画面（0.00秒起始构图与动作起点）", "- <Picture 2>：角色「雷晓飞」四视图", "- <Picture 3>：场景「雷记面馆」参考图"}
+	sc := &models.Scene{VideoPrompt: "[Shot 1] 本段视频从 <Picture 1> 的静止画面开始，雷晓飞侧身坐在桌旁，雷晓飞抬起右手。", Duration: 9}
 	prompt := buildMiniMaxH3RefPrompt(sc, nil, nil, lines)
 	detail := h3PromptSection(prompt, "detailed_description:")
-	if strings.Count(detail, "本段视频从 <Picture 3> 的静止画面开始") != 1 {
+	if strings.Count(detail, "本段视频从 <Picture 1> 的静止画面开始") != 1 {
 		t.Fatalf("opening must appear once: %s", detail)
 	}
-	if strings.Contains(detail, "雷晓飞") || strings.Count(detail, "<Subject 1>") != 2 {
+	if strings.Contains(detail, "雷晓飞") || strings.Count(detail, "<Subject 2>") != 2 {
 		t.Fatalf("character name must be replaced by Subject tag: %s", detail)
+	}
+}
+
+func TestNestedFullPromptIsReducedToInnermostAction(t *testing.T) {
+	inner := "[Shot 1] <Subject 3>勾起<Subject 2>的脸庞，深吻其红唇。本段无对白。"
+	nested := "subject_definitions:\nouter\n\ndetailed_description:\n[Shot 1] subject_definitions:\ninner\n\nsummary:\nx\n\nretention_analysis:\nx\n\ndetailed_description:\n" + inner + "\n\noverall_soundscape:\nx\n\nnon_diegetic_music:\nN/A"
+	if got := normalizeVideoActionPrompt(nested); got != inner {
+		t.Fatalf("normalized action = %q, want %q", got, inner)
+	}
+	lines := []string{"- <Picture 1>：当前分镜画面", "- <Picture 2>：角色「上官若琳」四视图", "- <Picture 3>：角色「舒寒」四视图"}
+	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: nested, Duration: 8}, nil, nil, lines)
+	for _, heading := range []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:"} {
+		if strings.Count(prompt, heading) != 1 {
+			t.Fatalf("heading %s duplicated in %s", heading, prompt)
+		}
+	}
+}
+
+func TestValidateFullH3PromptRejectsNestedContract(t *testing.T) {
+	prompt := "subject_definitions:\nx\nsummary:\nx\nretention_analysis:\nx\ndetailed_description:\n[Shot 1] subject_definitions:\nnested\noverall_soundscape:\nx\nnon_diegetic_music:\nN/A"
+	if issues := strings.Join(ValidateFullH3Prompt(prompt), "|"); !strings.Contains(issues, "只能出现一次") {
+		t.Fatalf("nested contract was accepted: %s", issues)
 	}
 }
 

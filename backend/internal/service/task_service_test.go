@@ -148,16 +148,17 @@ func TestRef2VWorkflowConnectsAllThreeImagesInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, tc := range []struct{ node, name string }{{"137", "1/char-sheet.png"}, {"139", "1/location.png"}, {"141", "1/storyboard.png"}} {
+	nodeIDs := []string{"137", "139", "144"}
+	for i, tc := range []struct{ node, name string }{{"137", "1/char-sheet.png"}, {"139", "1/location.png"}, {"144", "1/storyboard.png"}} {
 		node := workflow[tc.node].(map[string]any)
 		inputs := node["inputs"].(map[string]any)
 		if inputs["image"] != tc.name {
 			t.Fatalf("ref_image_%d rendered as %#v, want %s", i, inputs["image"], tc.name)
 		}
 	}
-	refNode := workflow["416"].(map[string]any)["inputs"].(map[string]any)["ref_images"].(map[string]any)
-	for i, nodeID := range []string{"137", "139", "141"} {
-		ref := refNode[fmt.Sprintf("ref_image_%d", i)].([]any)
+	refInputs := workflow["416"].(map[string]any)["inputs"].(map[string]any)
+	for i, nodeID := range nodeIDs {
+		ref := refInputs[fmt.Sprintf("ref_images.ref_image_%d", i)].([]any)
 		if ref[0] != nodeID {
 			t.Fatalf("ref_image_%d connects node %#v, want %s", i, ref[0], nodeID)
 		}

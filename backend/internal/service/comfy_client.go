@@ -86,7 +86,14 @@ func (c *ComfyClient) SubmitPrompt(workflow map[string]any, clientID string) (st
 		"prompt":    workflow,
 		"client_id": clientID,
 	})
-	resp, err := c.HTTP.Post(c.baseURL()+"/prompt", "application/json", bytes.NewReader(body))
+	// 大型 H3 工作流在显存紧张或 ComfyUI 正在释放模型时，/prompt 的校验响应
+	// 可能超过通用查询所用的 30 秒。此时请求可能已被 ComfyUI 接收，过早超时会
+	// 把任务误标失败并丢失 prompt_id，后续即使成功也无法同步结果。
+	submitHTTP := *c.HTTP
+	if submitHTTP.Timeout < 5*time.Minute {
+		submitHTTP.Timeout = 5 * time.Minute
+	}
+	resp, err := submitHTTP.Post(c.baseURL()+"/prompt", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}

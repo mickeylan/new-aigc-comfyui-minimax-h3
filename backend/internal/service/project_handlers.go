@@ -287,7 +287,12 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": strings.Join(issues, "；")})
 		return
 	}
-	updates := map[string]any{"video_full_prompt": prompt, "video_prompt": h3PromptSection(prompt, "detailed_description:")}
+	actionPrompt := normalizeVideoActionPrompt(prompt)
+	if issues := ValidateVideoPrompt(actionPrompt, sc.Characters, sc.LocationName, sc.Props); len(issues) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": strings.Join(issues, "；")})
+		return
+	}
+	updates := map[string]any{"video_full_prompt": prompt, "video_prompt": actionPrompt}
 	if strings.TrimSpace(req.Template) != "" {
 		updates["video_template"] = strings.TrimSpace(req.Template)
 	}

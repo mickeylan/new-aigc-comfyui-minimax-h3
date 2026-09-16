@@ -155,14 +155,16 @@ func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target st
 		}
 
 		priority := func(r SceneReferenceSelection) int {
-			c, ok := byKey[referenceKey(r)]
-			if ok && c.Category == AssetKindLocation {
+			// SelfLift 对前序图片权重更敏感：人物身份图必须先于环境图，
+			// 否则模型容易复刻空场景而忽略动作主体。
+			if r.SourceType == "character" {
 				return 0
 			}
-			if r.SourceType == "character" {
+			if r.SourceType == "look" {
 				return 1
 			}
-			if r.SourceType == "look" {
+			c, ok := byKey[referenceKey(r)]
+			if ok && c.Category == AssetKindLocation {
 				return 2
 			}
 			return 3
