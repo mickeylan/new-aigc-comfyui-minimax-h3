@@ -679,11 +679,61 @@ func (s *Service) HandleGenerateCharacterPortrait(c *gin.Context) {
 			return
 		}
 	}
+	// 严格去重：已有任务时优先找回现成图片，绝不自动重复提交 GPU 任务。
+	if ch.PortraitTaskID != "" {
+		current, err := s.Projects.RecoverCharacterPortrait(ch)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if current.Portrait != "" {
+			c.JSON(http.StatusOK, gin.H{"ok": true, "recovered": true, "message": "已找回生成完成的标准像", "portrait": current.Portrait})
+			return
+		}
+		if current.PortraitTaskID != "" {
+			c.JSON(http.StatusConflict, gin.H{"error": "标准像任务仍在处理或等待认领，请先点击“检查生成结果”；确认无法恢复后再重置状态"})
+			return
+		}
+		ch = current
+	}
 	if err := s.Projects.StartCharacterPortrait(ch); err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(200, gin.H{"ok": true, "message": fmt.Sprintf("角色「%s」标准像生成中", ch.Name)})
+}
+
+func (s *Service) HandleRecoverCharacterPortrait(c *gin.Context) {
+	ch, ok := s.loadCharacter(c)
+	if !ok {
+		return
+	}
+	current, err := s.Projects.RecoverCharacterPortrait(ch)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	var task *models.Task
+	if current.PortraitTaskID != "" {
+		var found models.Task
+		if s.DB.Where("task_id = ?", current.PortraitTaskID).First(&found).Error == nil {
+			task = &found
+		}
+	}
+	c.JSON(200, gin.H{"character": current, "task": task})
+}
+
+func (s *Service) HandleResetCharacterPortrait(c *gin.Context) {
+	ch, ok := s.loadCharacter(c)
+	if !ok {
+		return
+	}
+	if err := s.Projects.ResetCharacterPortraitTask(ch); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	s.Projects.PushProject(nil)
+	c.JSON(200, gin.H{"ok": true})
 }
 
 // HandleUploadCharacterPortrait 上传角色照片作为标准像（替代文生图）
@@ -724,7 +774,10 @@ func (s *Service) HandleUploadCharacterPortrait(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	if err := s.DB.Model(&models.Character{}).Where("id = ?", ch.ID).Update("portrait", filepath.Base(path)).Error; err != nil {
+	if ch.PortraitTaskID != "" && s.Tasks != nil {
+		_ = s.Tasks.CancelTask(ch.PortraitTaskID)
+	}
+	if err := s.DB.Model(&models.Character{}).Where("id = ?", ch.ID).Updates(map[string]any{"portrait": filepath.Base(path), "portrait_task_id": "", "portrait_error": ""}).Error; err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}

@@ -1248,9 +1248,7 @@ func (s *TaskService) RefreshTaskResult(taskID string) {
 	if err := s.db.Where("task_id = ?", taskID).First(&task).Error; err != nil {
 		return
 	}
-	if task.Status == "failed" || task.Status == "cancelled" {
-		return
-	}
+	// 即使本地曾误标 failed/cancelled，也先尝试找回实际已生成的文件。
 	if task.Port != nil && task.ComfyPromptID != "" {
 		client := NewComfyClient(s.comfyHostForPort(*task.Port), *task.Port)
 		if history, err := client.GetHistory(task.ComfyPromptID); err == nil && historyHasPrompt(history, task.ComfyPromptID) {

@@ -15,13 +15,18 @@ func TestHistoryHasPromptSupportsKeyedAndDirectResponses(t *testing.T) {
 }
 
 func TestMatchesTaskOutputNameAllowsTemplatePrefix(t *testing.T) {
-	id := "look-123"
-	for _, name := range []string{"look-123.png", "character_look-123_00001.png", "asset_look-123.webp"} {
-		if !matchesTaskOutputName(name, id) {
-			t.Fatalf("expected %q to match %q", name, id)
+	cases := map[string][]string{
+		"look-123":                     {"look-123.png", "character_look-123_00001.png", "asset_look-123.webp"},
+		"20260916-122622-ce50634b0e8f": {"character_20260916-122622-ce50634b0e8f_00001_.png"},
+	}
+	for id, names := range cases {
+		for _, name := range names {
+			if !matchesTaskOutputName(name, id) {
+				t.Fatalf("expected %q to match %q", name, id)
+			}
 		}
 	}
-	if matchesTaskOutputName("other.png", id) {
+	if matchesTaskOutputName("other.png", "look-123") {
 		t.Fatal("unrelated output matched task")
 	}
 }

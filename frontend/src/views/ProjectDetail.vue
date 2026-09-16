@@ -155,9 +155,11 @@
               <span v-if="ch.sheet_error" class="fail-msg">{{ ch.sheet_error }}</span>
               <div class="char-actions">
                 <button class="btn btn-sm btn-secondary" :disabled="busy || !!ch.portrait_task_id || ch.profile_status !== 'approved' || !ch.reference_prompt" @click="genPortrait(ch)"
-                  :title="ch.profile_status !== 'approved' ? '请先审核通过角色档案' : !ch.reference_prompt ? '请先生成或填写参考像提示词' : ''">
-                  {{ ch.portrait_task_id ? 'Krea2 生成中…' : ch.portrait ? 'Krea2 重生成标准像' : 'Krea2 生成标准像' }}
+                  :title="ch.profile_status !== 'approved' ? '请先审核通过角色档案' : !ch.reference_prompt ? '请先生成或填写参考像提示词' : ch.portrait_task_id ? '已有任务，不会重复提交；请先检查生成结果' : ''">
+                  {{ ch.portrait_task_id ? '已有标准像任务' : ch.portrait ? 'Krea2 重生成标准像' : 'Krea2 生成标准像' }}
                 </button>
+                <button v-if="ch.portrait_task_id" class="btn btn-sm btn-ghost" :disabled="ch._recovering" @click="recoverPortrait(ch)">{{ch._recovering?'检查中…':'检查生成结果'}}</button>
+                <button v-if="ch.portrait_task_id" class="btn btn-sm btn-danger" :disabled="ch._resetting" @click="resetPortrait(ch)">{{ch._resetting?'重置中…':'重置生成状态'}}</button>
                 <button class="btn btn-sm btn-ghost" :disabled="busy || ch._uploading" @click="uploadPortrait(ch)">
                   {{ ch._uploading ? '上传中…' : '上传图片替换' }}
                 </button>
@@ -1335,6 +1337,25 @@ async function genPortrait(ch) {
   } catch (e) {
     toast.show(e.response?.data?.error || '生成失败')
   }
+}
+async function recoverPortrait(ch) {
+  ch._recovering = true
+  try {
+    const { data } = await api.recoverCharacterPortrait(id(), ch.id)
+    const current = data.character || {}
+    if (current.portrait) toast.success('已找到并回写标准像')
+    else if (current.portrait_error) toast.error(current.portrait_error)
+    else toast.show(`任务状态：${data.task?.status || '未知'}，尚未发现可用图片`)
+    await load()
+  } catch (e) { toast.error(e.response?.data?.error || '检查生成结果失败') }
+  finally { ch._recovering = false }
+}
+async function resetPortrait(ch) {
+  if (!confirm(`重置角色“${ch.name}”的标准像生成状态？旧任务将被取消。`)) return
+  ch._resetting = true
+  try { await api.resetCharacterPortrait(id(), ch.id); await load(); toast.success('生成状态已重置，可以重新生图') }
+  catch (e) { toast.error(e.response?.data?.error || '重置失败') }
+  finally { ch._resetting = false }
 }
 async function genCharacterSheet(ch) {
   try {

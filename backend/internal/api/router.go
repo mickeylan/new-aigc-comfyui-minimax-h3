@@ -107,6 +107,8 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.PUT("/api/projects/:id/characters/:cid", svc.HandleUpdateCharacter)
 	r.DELETE("/api/projects/:id/characters/:cid", svc.HandleDeleteCharacter)
 	r.POST("/api/projects/:id/characters/:cid/portrait", svc.HandleGenerateCharacterPortrait)
+	r.POST("/api/projects/:id/characters/:cid/portrait/recover", svc.HandleRecoverCharacterPortrait)
+	r.POST("/api/projects/:id/characters/:cid/portrait/reset", svc.HandleResetCharacterPortrait)
 	r.POST("/api/projects/:id/characters/:cid/portrait/upload", svc.HandleUploadCharacterPortrait)
 	r.POST("/api/projects/:id/characters/:cid/sheet", svc.HandleGenerateCharacterSheet)
 

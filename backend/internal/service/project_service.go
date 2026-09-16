@@ -2554,6 +2554,98 @@ func (s *ProjectService) syncSceneImages() {
 	}
 }
 
+// RecoverCharacterPortrait 立即协调一个角色的标准像任务并尝试回写结果。
+func (s *ProjectService) RecoverCharacterPortrait(ch *models.Character) (*models.Character, error) {
+	if strings.TrimSpace(ch.PortraitTaskID) == "" {
+		var current models.Character
+		if err := s.db.First(&current, ch.ID).Error; err != nil {
+			return nil, err
+		}
+		return &current, nil
+	}
+	// 先扫描磁盘，避免 task 记录缺失时 sync 清掉唯一可用于认领图片的 task_id。
+	if err := s.recoverCharacterPortraitFromDisk(ch); err != nil {
+		return nil, err
+	}
+	var diskCurrent models.Character
+	if err := s.db.First(&diskCurrent, ch.ID).Error; err == nil && diskCurrent.Portrait != "" {
+		return &diskCurrent, nil
+	}
+	if s.tasks != nil {
+		s.tasks.RefreshTaskResult(ch.PortraitTaskID)
+	}
+	s.syncCharacterPortraits()
+	var current models.Character
+	if err := s.db.First(&current, ch.ID).Error; err != nil {
+		return nil, err
+	}
+	if current.Portrait == "" && current.PortraitTaskID != "" {
+		if err := s.recoverCharacterPortraitFromDisk(&current); err != nil {
+			return nil, err
+		}
+		_ = s.db.First(&current, ch.ID).Error
+	}
+	return &current, nil
+}
+
+// recoverCharacterPortraitFromDisk 不依赖任务表/history/WS，直接认领服务器上已生成的图片。
+func (s *ProjectService) recoverCharacterPortraitFromDisk(ch *models.Character) error {
+	if s.tasks == nil || s.remote == nil || s.upload == nil || ch.PortraitTaskID == "" {
+		return nil
+	}
+	roots := []string{filepath.Join(s.cfg.Comfy.ComfyDir, "output")}
+	for gpu := 0; gpu < s.cfg.Comfy.GPUCount; gpu++ {
+		roots = append(roots, filepath.Join(s.cfg.Comfy.ComfyDir, "output_workers", fmt.Sprintf("gpu%d", gpu)))
+	}
+	for _, root := range roots {
+		for _, file := range s.tasks.findTaskOutputs(root, ch.PortraitTaskID) {
+			if file["type"] != "images" {
+				continue
+			}
+			source := filepath.Join(root, filepath.FromSlash(file["subfolder"]), file["filename"])
+			reader, err := s.remote.Open(source)
+			if err != nil {
+				continue
+			}
+			data, readErr := io.ReadAll(reader)
+			_ = reader.Close()
+			if readErr != nil || len(data) == 0 {
+				continue
+			}
+			ext := filepath.Ext(file["filename"])
+			if ext == "" {
+				ext = detectImageExt(data)
+			}
+			if ext == "" {
+				ext = ".png"
+			}
+			name := fmt.Sprintf("char_%d_%d%s", ch.ID, time.Now().UnixNano(), ext)
+			path, _, err := s.upload.SaveFile(fmt.Sprint(ch.ProjectID), "image", name, data)
+			if err != nil {
+				return err
+			}
+			res := s.db.Model(&models.Character{}).Where("id = ? AND portrait_task_id = ?", ch.ID, ch.PortraitTaskID).Updates(map[string]any{"portrait": filepath.Base(path), "portrait_task_id": "", "portrait_error": ""})
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected > 0 {
+				s.pushProject(nil)
+				return nil
+			}
+		}
+	}
+	return nil
+}
+
+// ResetCharacterPortraitTask 清除卡死的任务绑定，不删除已存在的标准像。
+func (s *ProjectService) ResetCharacterPortraitTask(ch *models.Character) error {
+	if ch.PortraitTaskID != "" && s.tasks != nil {
+		_ = s.tasks.CancelTask(ch.PortraitTaskID)
+	}
+	return s.db.Model(&models.Character{}).Where("id = ? AND project_id = ?", ch.ID, ch.ProjectID).
+		Updates(map[string]any{"portrait_task_id": "", "portrait_error": ""}).Error
+}
+
 func (s *ProjectService) syncCharacterPortraits() {
 	var chars []models.Character
 	if err := s.db.Where("portrait_task_id != ''").Find(&chars).Error; err != nil {
@@ -2562,13 +2654,22 @@ func (s *ProjectService) syncCharacterPortraits() {
 	changed := false
 	for i := range chars {
 		ch := &chars[i]
-		var task models.Task
-		if err := s.db.Where("task_id = ?", ch.PortraitTaskID).First(&task).Error; err != nil {
-			s.db.Model(ch).Where("portrait_task_id = ?", ch.PortraitTaskID).Updates(map[string]any{"portrait_task_id": "", "portrait_error": "标准像任务记录不存在，请重新生成"})
+		// 即使任务记录丢失，也先用角色保存的 task_id 扫描实际输出。
+		_ = s.recoverCharacterPortraitFromDisk(ch)
+		var refreshed models.Character
+		_ = s.db.First(&refreshed, ch.ID).Error
+		if refreshed.Portrait != "" || refreshed.PortraitTaskID == "" {
 			changed = true
 			continue
 		}
-		needsRefresh := task.Status != "failed" && task.Status != "cancelled" && (task.Status != "success" || strings.TrimSpace(task.ResultFiles) == "" || task.ResultFiles == "[]")
+		var task models.Task
+		if err := s.db.Where("task_id = ?", ch.PortraitTaskID).First(&task).Error; err != nil {
+			s.db.Model(ch).Where("portrait_task_id = ?", ch.PortraitTaskID).Updates(map[string]any{"portrait_task_id": "", "portrait_error": "标准像任务记录不存在，且未在输出目录找到图片"})
+			changed = true
+			continue
+		}
+		// 即使本地误标失败/取消，也先查history和输出目录找回实际已生成的图片。
+		needsRefresh := task.Status != "success" || strings.TrimSpace(task.ResultFiles) == "" || task.ResultFiles == "[]"
 		if s.tasks != nil && needsRefresh {
 			s.tasks.RefreshTaskResult(task.TaskID)
 			_ = s.db.Where("task_id = ?", ch.PortraitTaskID).First(&task).Error
