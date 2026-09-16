@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -937,9 +938,9 @@ func (s *ProjectService) buildVideoFilesForTemplate(sc *models.Scene, pid, tplCo
 func defaultSceneVideoAction(sc *models.Scene) string {
 	content := strings.TrimSpace(sc.Content)
 	if content == "" {
-		return "[Shot 1] 画面从输入首帧开始，主体完成一个连续可见的动作并自然停下。摄影机保持静止。"
+		return "[Shot 1] 主体完成一个连续可见的动作并自然停下。摄影机保持静止。"
 	}
-	return "[Shot 1] 画面从输入首帧开始。" + content
+	return "[Shot 1] " + content
 }
 
 // GenerateSceneVideoAction 用文本模型生成用户可审核编辑的 Ref2VA detailed_description 正文。
@@ -949,15 +950,37 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	}
 	_, refLines := s.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
 	openingPicture := openingPictureTag(refLines)
+	shotContext := s.sceneShotContext(sc)
+	var dubs []models.Dialogue
+	s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
+	dialogueContext := "无结构化对白；禁止生成说话、旁白或人声"
+	if valid := validSceneDialogues(dubs); len(valid) > 0 {
+		lines := make([]string, 0, len(valid))
+		for _, d := range valid {
+			speaker := strings.TrimSpace(d.Character)
+			if speaker == "" {
+				speaker = "旁白"
+			}
+			lines = append(lines, speaker+"："+strings.TrimSpace(d.Text))
+		}
+		dialogueContext = strings.Join(lines, "\n")
+	}
 	system := fmt.Sprintf(`你是 MiniMax H3 Ref2VA 视频动作编辑。只输出简洁的 detailed_description 正文，不输出字段名、解释、规则或 Markdown。
-正文最多三句：第一句以 [Shot 1] 开头，只写“本段视频从 %s 的静止画面开始”；第二句只写剧情要求的动作和表情；确有运镜时第三句写运镜。
-实际参考绑定中的角色必须始终使用对应的 <Subject N>，不得再写角色姓名。四视图负责人物外貌与服装，场景图负责环境，分镜图负责构图与初始状态；正文不得复述或猜测服装款式与颜色、外貌、场景陈设、光线、构图和静态姿态。不得编造厘米、角度、频率、速度等数值，不得新增角色、对白、道具或剧情。`, openingPicture)
-	user := fmt.Sprintf("目标时长：%.1f秒\n剧情动作来源：%s\n实际参考绑定：\n%s", normalizeSceneDuration(sc.Duration), sc.Content, strings.Join(refLines, "\n"))
+正文必须忠实执行场景剧情与结构化Shot导演设计，不能只看参考图脑补情节。Scene决定剧情因果，Shot决定本镜主体、准确动作、情绪、景别、机位和运镜，结构化Dialogue决定是否说话及台词内容；三者均不得擅自增删或改写。
+第一句以 [Shot 1] 开头，说明画面可从%s参考状态开始；随后按Shot顺序写可执行动作与表情，确有导演运镜时再写运镜。不得新增角色、动作、对白、道具、地点或剧情。
+Dialogue只决定人物是否开口及对应口型时机；对白文本将由系统确定性加入，你不得在正文输出台词、<d>标签或改写台词。
+正文中的人物必须使用【场景剧情】和【Shot导演设计】里的真实角色名，禁止自行填写或猜测任何<Subject N>编号。系统会在AI返回后依据实际上传顺序，把真实角色名确定性转换为正确Subject编号。
+四视图只负责人物身份与服装，场景图只负责环境；不得从参考图反推剧情，不得复述或猜测外貌、服装、陈设。`, openingPicture)
+	user := fmt.Sprintf("目标时长：%.1f秒\n\n【场景剧情（权威）】\n%s\n\n【Shot导演设计（权威，按顺序执行）】\n%s\n\n【结构化对白（权威）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s", normalizeSceneDuration(sc.Duration), sc.Content, shotContext, dialogueContext, strings.Join(refLines, "\n"))
 	out, err := s.textProvider.Chat(system, user)
 	if err != nil {
 		return "", fmt.Errorf("AI 生成视频动作提示词失败: %w", err)
 	}
 	out = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(out), "```"), "```"))
+	if strings.Contains(out, "<Subject ") {
+		return "", fmt.Errorf("AI 错误地自行填写了 Subject 编号，请重试；人物必须先使用真实角色名")
+	}
+	out = stripPromptDialogueNarration(out)
 	out = useSubjectTags(out, refLines)
 	if !strings.HasPrefix(out, "[Shot 1]") {
 		out = "[Shot 1] " + out
@@ -985,6 +1008,36 @@ func openingPictureTag(referenceLines []string) string {
 		}
 	}
 	return fmt.Sprintf("<Picture %d>", len(referenceLines))
+}
+
+func subjectTagsToNames(text string, referenceLines []string) string {
+	for i, line := range referenceLines {
+		marker := "角色「"
+		start := strings.Index(line, marker)
+		if start < 0 {
+			continue
+		}
+		start += len(marker)
+		end := strings.Index(line[start:], "」")
+		if end < 0 {
+			continue
+		}
+		name := strings.TrimSpace(line[start : start+end])
+		if name != "" {
+			text = strings.ReplaceAll(text, fmt.Sprintf("<Subject %d>", i+1), name)
+		}
+	}
+	return text
+}
+
+func canonicalVideoAction(prompt string, referenceLines []string) string {
+	text := subjectTagsToNames(normalizeVideoActionPrompt(prompt), referenceLines)
+	text = stripPromptDialogueNarration(text)
+	// 剩余 Subject 指向分镜图、场景或道具，并非角色；旧提示词语义已不可靠。
+	if strings.Contains(text, "<Subject ") {
+		return ""
+	}
+	return strings.TrimSpace(text)
 }
 
 func useSubjectTags(text string, referenceLines []string) string {
@@ -1029,43 +1082,72 @@ func normalizeVideoActionPrompt(prompt string) string {
 	return text
 }
 
-func videoPromptForbidsSpeech(prompt string) bool {
-	lower := strings.ToLower(prompt)
-	for _, marker := range []string{"无对白", "没有对白", "不要说话", "禁止说话", "无人声", "no dialogue", "no speech", "no voice"} {
-		if strings.Contains(lower, marker) {
-			return true
+var (
+	h3DialogueTagPattern      = regexp.MustCompile(`(?is)<d>.*?</d>`)
+	dialogueNarrationPattern  = regexp.MustCompile(`(?:<Subject [0-9]+>|[\p{Han}]{1,12})(?:说道|说|问道|答道)[：:]?\s*`)
+	quotedDialoguePattern     = regexp.MustCompile(`[“\"][^”\"]*[”\"]`)
+	repeatedShotMarkerPattern = regexp.MustCompile(`(?:\[Shot 1\]\s*){2,}`)
+)
+
+func stripPromptDialogueNarration(prompt string) string {
+	text := h3DialogueTagPattern.ReplaceAllString(prompt, "")
+	text = quotedDialoguePattern.ReplaceAllString(text, "")
+	text = dialogueNarrationPattern.ReplaceAllString(text, "")
+	text = repeatedShotMarkerPattern.ReplaceAllString(text, "[Shot 1] ")
+	return strings.TrimSpace(text)
+}
+
+func validSceneDialogues(dubs []models.Dialogue) []models.Dialogue {
+	valid := make([]models.Dialogue, 0, len(dubs))
+	for _, d := range dubs {
+		if strings.TrimSpace(d.Text) != "" {
+			valid = append(valid, d)
 		}
 	}
-	return false
+	return valid
 }
 
-func videoPromptRequestsSpeech(prompt string) bool {
-	// 只有正文中明确存在 H3 对白标签才生成语音。数据库剧本对白、人物嘴部动作、
-	// “说话”等泛化描述都不能隐式开启人声，避免模型自行编造台词。
-	return strings.Contains(strings.ToLower(prompt), "<d>") && strings.Contains(strings.ToLower(prompt), "</d>")
+func stripH3DialogueTags(prompt string) string {
+	return strings.TrimSpace(h3DialogueTagPattern.ReplaceAllString(prompt, ""))
 }
 
-func videoAudioContractMatches(action, fullPrompt string, dubs []models.Dialogue) bool {
-	soundscape := h3PromptSection(fullPrompt, "overall_soundscape:")
-	if videoPromptForbidsSpeech(action) || !videoPromptRequestsSpeech(action) || len(dubs) == 0 {
-		return strings.Contains(soundscape, "无人声") && strings.Contains(soundscape, "无说话声")
+func stripStructuredDialogueFromAction(prompt string, dubs []models.Dialogue) string {
+	text := stripPromptDialogueNarration(prompt)
+	for _, d := range validSceneDialogues(dubs) {
+		text = strings.ReplaceAll(text, strings.TrimSpace(d.Text), "")
 	}
-	return strings.Contains(fullPrompt, "<d>") && strings.Contains(soundscape, "禁止新增对白")
+	for _, residue := range []string{"随后说出台词", "然后说出台词", "说出台词", "随后说：", "然后说：", "说道：", "“”", `""`} {
+		text = strings.ReplaceAll(text, residue, "")
+	}
+	text = strings.ReplaceAll(text, "。。", "。")
+	return strings.TrimSpace(text)
+}
+
+func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
+	valid := validSceneDialogues(dubs)
+	soundscape := h3PromptSection(fullPrompt, "overall_soundscape:")
+	if len(valid) == 0 {
+		return !strings.Contains(strings.ToLower(fullPrompt), "<d>") && strings.Contains(soundscape, "无人声") && strings.Contains(soundscape, "无说话声")
+	}
+	if !strings.Contains(soundscape, "禁止新增对白") {
+		return false
+	}
+	for _, d := range valid {
+		if !strings.Contains(fullPrompt, "<d>[中文] "+strings.TrimSpace(d.Text)+"</d>") {
+			return false
+		}
+	}
+	return true
 }
 
 func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue, referenceLines []string) string {
 	definitions, retention, subjects := h3StoryboardSubjects(referenceLines)
-	openingPicture := openingPictureTag(referenceLines)
-	body := normalizeVideoActionPrompt(sc.VideoPrompt)
+	body := canonicalVideoAction(sc.VideoPrompt, referenceLines)
 	if body == "" {
 		body = defaultSceneVideoAction(sc)
 	}
 	body = strings.TrimSpace(strings.TrimPrefix(body, "[Shot 1]"))
 	body = useSubjectTags(body, referenceLines)
-	opening := "本段视频从 " + openingPicture + " 的静止画面开始"
-	if !strings.Contains(body, opening) {
-		body = opening + "。" + body
-	}
 	body = "[Shot 1] " + body
 	style := ""
 	if p != nil {
@@ -1074,16 +1156,23 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 	if style != "" {
 		body = strings.Replace(body, "[Shot 1]", style+"风格。\n[Shot 1]", 1)
 	}
-	_ = dubs // 剧本对白不再自动注入；只有用户正文中的 <d> 标签可开启语音。
-	allowSpeech := !videoPromptForbidsSpeech(body) && videoPromptRequestsSpeech(body)
+	body = stripStructuredDialogueFromAction(body, dubs)
+	validDialogues := validSceneDialogues(dubs)
 	soundscape := "仅自然环境声和画面内物理动作声同步。无对白、无人声、无旁白、无语音、无说话声、无吟唱；人物嘴部不得做说话口型。"
-	if allowSpeech {
-		soundscape = "仅生成 <d> 标签中明确指定的对白，以及自然环境声和画面内物理动作声；禁止新增对白、旁白、含混人声或吟唱。"
+	if len(validDialogues) > 0 {
+		for _, d := range validDialogues {
+			speaker := strings.TrimSpace(d.Character)
+			if speaker == "" {
+				speaker = "旁白"
+			} else {
+				speaker = useSubjectTags(speaker, referenceLines)
+			}
+			body += " " + speaker + "说道：<d>[中文] " + strings.TrimSpace(d.Text) + "</d>"
+		}
+		soundscape = "按顺序准确生成 <d> 标签中由结构化剧情指定的对白，以及自然环境声和画面内物理动作声；禁止遗漏、改写或新增对白，禁止额外旁白、含混人声或吟唱。"
 	}
-	definitions = append([]string{openingPicture + " 是 [Shot 1] 在 0.00 秒的开始画面，定义本段视频的起始构图、主体位置和场景状态。"}, definitions...)
-	retention = append([]string{openingPicture + " ([Shot 1] 开始画面): fully_preserved - 起始构图、主体初始姿态、空间位置与场景状态。"}, retention...)
 	return "subject_definitions:\n" + strings.Join(definitions, "\n") +
-		"\n\nsummary:\n[keyframe completion + reference generation] 目标视频从 " + openingPicture + " 开始，" + strings.Join(subjects, "、") + "共同构成画面，在约" + fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)) + "秒内完成本镜动作。" +
+		"\n\nsummary:\n[reference generation] " + strings.Join(subjects, "、") + "提供人物、场景及可选分镜状态参考，在约" + fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)) + "秒内严格执行本镜剧情与Shot设计。" +
 		"\n\nretention_analysis:\n" + strings.Join(retention, "\n") +
 		"\n\ndetailed_description:\n" + body +
 		"\n\noverall_soundscape:\n" + soundscape +
@@ -1140,18 +1229,25 @@ func buildMiniMaxH3Prompt(sc *models.Scene, p *models.Project, dubs []models.Dia
 	// detailed_description：用户可编辑正文；系统壳和首帧约束不可被覆盖。
 	buf.WriteString("detailed_description:\n")
 	buf.WriteString("[Shot 1] 首先严格保持输入首帧构图、人物位置、服装、道具与场景布局。短暂静止后开始运动。 ")
-	body := normalizeVideoActionPrompt(sc.VideoPrompt)
+	body := stripH3DialogueTags(normalizeVideoActionPrompt(sc.VideoPrompt))
 	if body == "" {
 		body = defaultSceneVideoAction(sc)
 	}
 	buf.WriteString(body)
 	buf.WriteString("。摄影机运动必须写明类型、幅度和速度，且全程只使用一种连续运镜。\n\n")
 
-	// overall_soundscape
+	// overall_soundscape：结构化 Dialogue 是唯一对白事实来源。
 	buf.WriteString("overall_soundscape:\n")
-	_ = dubs // 剧本对白不再自动注入；只有用户正文中的 <d> 标签可开启语音。
-	if !videoPromptForbidsSpeech(body) && videoPromptRequestsSpeech(body) {
-		buf.WriteString("仅生成 <d> 标签中明确指定的对白及同步环境声、动作声；禁止新增对白、旁白、含混人声或吟唱。")
+	validDialogues := validSceneDialogues(dubs)
+	if len(validDialogues) > 0 {
+		for _, d := range validDialogues {
+			speaker := strings.TrimSpace(d.Character)
+			if speaker == "" {
+				speaker = "旁白"
+			}
+			buf.WriteString(speaker + "说道：<d>[中文] " + strings.TrimSpace(d.Text) + "</d>。")
+		}
+		buf.WriteString(" 仅生成以上结构化对白及同步环境声、动作声；禁止遗漏、改写或新增对白。")
 	} else {
 		buf.WriteString("仅自然环境声和物理动作声。无对白、无人声、无旁白、无语音、无说话声、无吟唱；人物嘴部不得做说话口型。")
 	}
@@ -1239,25 +1335,58 @@ func ValidateVideoPrompt(detailText, charStr, locStr, propStr string) []string {
 }
 
 func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) ([]FileMeta, []string) {
-	// Ref2VA/SelfLift 对输入顺序敏感：已确认的分镜图必须连接到 ref_image_0，
-	// 即 <Picture 1>，作为视频的起始构图；其余身份、造型和资产引用依次后移。
-	refs := []FileMeta{{TaskID: pid, Name: sc.ImageFile}}
-	lines := []string{"- <Picture 1>：当前分镜画面（0.00秒起始构图与动作起点）"}
+	// 用户验证的业务顺序：人物/造型在前，场景/道具随后，当前分镜图最后。
+	// H3不依赖图片权重顺序；这里保持稳定顺序以确保 Picture/Subject 编号可读且不漂移。
+	refs := []FileMeta{}
+	lines := []string{}
+	appendStoryboard := func() {
+		if sc.ImageFile == "" || len(refs) >= maxSceneReferenceImages {
+			return
+		}
+		refs = append(refs, FileMeta{TaskID: pid, Name: sc.ImageFile})
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：当前分镜画面（可选构图与动作状态参考）", len(refs)))
+	}
 	if selected, selectedLines, explicit := s.selectedSceneReferenceFiles(sc, "h3"); explicit {
-		if len(selected) >= maxSceneReferenceImages {
-			selected = selected[:maxSceneReferenceImages-1]
-			selectedLines = selectedLines[:maxSceneReferenceImages-1]
+		// 显式选择按Scene人物出场顺序 → 其余人物造型 → 场景 → 道具及其他。
+		used := make([]bool, len(selected))
+		appendSelected := func(i int) {
+			if i < 0 || i >= len(selected) || i >= len(selectedLines) || used[i] || len(refs) >= maxSceneReferenceImages-1 {
+				return
+			}
+			used[i] = true
+			refs = append(refs, selected[i])
+			description := strings.TrimSpace(selectedLines[i])
+			if parts := strings.SplitN(description, "：", 2); len(parts) == 2 {
+				description = strings.TrimSpace(parts[1])
+			}
+			lines = append(lines, fmt.Sprintf("- <Picture %d>：%s", len(refs), description))
 		}
-		refs = append(refs, selected...)
-		for i, line := range selectedLines {
-			oldTag := fmt.Sprintf("<Picture %d>", i+1)
-			newTag := fmt.Sprintf("<Picture %d>", i+2)
-			lines = append(lines, strings.Replace(line, oldTag, newTag, 1))
+		for _, name := range parseSceneCharacters(sc.Characters) {
+			marker := "角色「" + name + "」"
+			for i, line := range selectedLines {
+				if strings.Contains(line, marker) {
+					appendSelected(i)
+				}
+			}
 		}
+		for priority := 0; priority < 3; priority++ {
+			for i, line := range selectedLines {
+				linePriority := 2
+				if strings.Contains(line, "角色「") {
+					linePriority = 0
+				} else if strings.Contains(line, "场景「") {
+					linePriority = 1
+				}
+				if linePriority == priority {
+					appendSelected(i)
+				}
+			}
+		}
+		appendStoryboard()
 		return refs, lines
 	}
 	for _, ch := range s.sceneCharacterPortraits(sc) {
-		if len(refs) >= maxSceneReferenceImages {
+		if len(refs) >= maxSceneReferenceImages-1 {
 			break
 		}
 		name, kind := ch.Sheet, "四视图"
@@ -1274,7 +1403,7 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 		if outfit.Character != nil && !s.sceneHasCharacter(sc, outfit.Character.Name) {
 			continue
 		}
-		if len(refs) >= maxSceneReferenceImages {
+		if len(refs) >= maxSceneReferenceImages-1 {
 			break
 		}
 		name, kind := outfit.Sheet, "套装四视图"
@@ -1292,7 +1421,7 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」造型套装「%s」%s", len(refs), charName, outfit.Name, kind))
 	}
 	for _, a := range s.sceneMatchedAssets(sc) {
-		if len(refs) >= maxSceneReferenceImages {
+		if len(refs) >= maxSceneReferenceImages-1 {
 			break
 		}
 		name, kind := a.Image, "参考图"
@@ -1305,6 +1434,7 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 		refs = append(refs, FileMeta{TaskID: pid, Name: name})
 		lines = append(lines, fmt.Sprintf("- <Picture %d>：%s「%s」%s", len(refs), AssetKindLabel(a.Kind), a.Name, kind))
 	}
+	appendStoryboard()
 	return refs, lines
 }
 
@@ -2517,16 +2647,14 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		if len(refFiles) > 0 {
 			var dubs []models.Dialogue
 			s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
-			promptText = strings.TrimSpace(sc.VideoFullPrompt)
-			actionPrompt := normalizeVideoActionPrompt(promptText)
+			actionPrompt := canonicalVideoAction(sc.VideoFullPrompt, refLines)
 			if actionPrompt == "" {
-				actionPrompt = normalizeVideoActionPrompt(sc.VideoPrompt)
+				actionPrompt = canonicalVideoAction(sc.VideoPrompt, refLines)
 			}
-			if promptText == "" || len(ValidateFullH3PromptForReferences(promptText, refLines)) > 0 || !videoAudioContractMatches(actionPrompt, promptText, dubs) {
-				preview := *sc
-				preview.VideoPrompt = actionPrompt
-				promptText = buildMiniMaxH3RefPrompt(&preview, p, dubs, refLines)
-			}
+			preview := *sc
+			preview.VideoPrompt = actionPrompt
+			// 固定契约、Subject绑定与结构化对白始终按当前Scene/Shot/Dialogue重建。
+			promptText = buildMiniMaxH3RefPrompt(&preview, p, dubs, refLines)
 			if videoFiles == nil {
 				videoFiles = map[string][]FileMeta{}
 			}

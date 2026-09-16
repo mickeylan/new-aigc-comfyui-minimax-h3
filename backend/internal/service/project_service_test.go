@@ -701,8 +701,8 @@ func TestExplicitSceneReferencesControlKrea2AndH3Order(t *testing.T) {
 		t.Fatalf("SelfLift refs=%+v lines=%v", imageRefs, imageLines)
 	}
 	videoRefs, videoLines := ps.sceneVideoReferenceFiles(&sc, fmt.Sprint(p.ID))
-	if len(videoRefs) != 2 || videoRefs[0].Name != "start.png" || videoRefs[1].Name != "sword.png" || !strings.Contains(videoLines[0], "<Picture 1>") || !strings.Contains(videoLines[0], "当前分镜画面") || !strings.Contains(videoLines[1], "<Picture 2>") {
-		t.Fatalf("H3 must connect storyboard opening image as Picture 1: refs=%+v lines=%v", videoRefs, videoLines)
+	if len(videoRefs) != 2 || videoRefs[0].Name != "sword.png" || videoRefs[1].Name != "start.png" || !strings.Contains(videoLines[0], "<Picture 1>") || !strings.Contains(videoLines[1], "<Picture 2>") || !strings.Contains(videoLines[1], "当前分镜画面") {
+		t.Fatalf("H3 must keep selected references first and storyboard last: refs=%+v lines=%v", videoRefs, videoLines)
 	}
 }
 
@@ -1099,17 +1099,15 @@ func TestBuildMiniMaxH3PromptUsesSixSectionContract(t *testing.T) {
 	}
 }
 
-func TestBuildMiniMaxH3RefPromptUsesFirstPictureAsOpeningFrame(t *testing.T) {
-	sc := &models.Scene{Content: "雷晓飞敲击桌面", VideoPrompt: "[Shot 1] <Subject 2>抬起手指后再次落向桌面。", Duration: 9}
-	lines := []string{"- <Picture 1>：当前分镜画面（0.00秒起始构图与动作起点）", "- <Picture 2>：角色「雷晓飞」四视图", "- <Picture 3>：场景「雷记面馆」参考图"}
+func TestBuildMiniMaxH3RefPromptUsesStoryboardAsOptionalLastReference(t *testing.T) {
+	sc := &models.Scene{Content: "雷晓飞敲击桌面", VideoPrompt: "[Shot 1] 雷晓飞抬起手指后再次落向桌面。", Duration: 9}
+	lines := []string{"- <Picture 1>：角色「雷晓飞」四视图", "- <Picture 2>：场景「雷记面馆」参考图", "- <Picture 3>：当前分镜画面（可选构图与动作状态参考）"}
 	prompt := buildMiniMaxH3RefPrompt(sc, &models.Project{Style: "3D国漫"}, nil, lines)
 	for _, want := range []string{
-		"<Subject 2> 是 <Picture 2> 中的角色「雷晓飞」四视图",
-		"<Picture 1> 是 [Shot 1] 在 0.00 秒的开始画面",
-		"[keyframe completion + reference generation] 目标视频从 <Picture 1> 开始",
-		"<Picture 1> ([Shot 1] 开始画面): fully_preserved",
-		"[Shot 1] 本段视频从 <Picture 1> 的静止画面开始",
-		"<Subject 2>抬起手指",
+		"<Subject 1> 是 <Picture 1> 中的角色「雷晓飞」四视图",
+		"<Subject 3> 是 <Picture 3> 中的当前分镜画面",
+		"[reference generation] <Subject 1>、<Subject 2>、<Subject 3>提供人物、场景及可选分镜状态参考",
+		"<Subject 1>抬起手指",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("Ref2VA prompt missing %q: %s", want, prompt)
@@ -1122,6 +1120,9 @@ func TestBuildMiniMaxH3RefPromptUsesFirstPictureAsOpeningFrame(t *testing.T) {
 
 func TestGenerateSceneVideoActionDoesNotRecycleOldVisualDescription(t *testing.T) {
 	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}); err != nil {
+		t.Fatal(err)
+	}
 	provider := &captureTextProvider{response: "[Shot 1] 本段视频从 <Picture 1> 的静止画面开始。雷晓飞轻敲桌面，随后警觉地转头。"}
 	ps.textProvider = provider
 	project := models.Project{Title: "测试"}
@@ -1132,6 +1133,11 @@ func TestGenerateSceneVideoActionDoesNotRecycleOldVisualDescription(t *testing.T
 		t.Fatal(err)
 	}
 	sc := &models.Scene{ProjectID: project.ID, Characters: "雷晓飞", ImageFile: "storyboard.png", Content: "雷晓飞轻敲桌面，随后警觉地转头", VideoPrompt: "雷晓飞穿着蓝色粗布短褐，暖黄阳光照亮八仙桌。"}
+	if err := ps.db.Create(sc).Error; err != nil {
+		t.Fatal(err)
+	}
+	ps.db.Create(&models.Shot{SceneID: sc.ID, Order: 1, Description: "雷晓飞听见门外脚步后敲桌示警", ShotType: "中近景", CameraAngle: "平视", CameraMovement: "缓慢推进", PromptAction: "右手食指敲击桌面一次后转头看门口", Emotion: "警觉"})
+	ps.db.Create(&models.Dialogue{ProjectID: project.ID, SceneID: sc.ID, Order: 1, Character: "雷晓飞", Text: "谁在门外？"})
 	out, err := ps.GenerateSceneVideoAction(sc)
 	if err != nil {
 		t.Fatal(err)
@@ -1139,25 +1145,30 @@ func TestGenerateSceneVideoActionDoesNotRecycleOldVisualDescription(t *testing.T
 	if strings.Contains(provider.user, "蓝色粗布短褐") || strings.Contains(provider.user, "暖黄阳光") || strings.Contains(provider.user, "当前动作草稿") {
 		t.Fatalf("old visual draft must not be recycled: %s", provider.user)
 	}
-	for _, want := range []string{"四视图负责人物外貌与服装", "不得复述或猜测服装款式与颜色", "正文最多三句"} {
+	for _, want := range []string{"忠实执行场景剧情与结构化Shot导演设计", "结构化Dialogue决定是否说话", "不得从参考图反推剧情"} {
 		if !strings.Contains(provider.system, want) {
 			t.Fatalf("system missing %q: %s", want, provider.system)
 		}
 	}
-	if strings.Contains(out, "雷晓飞") || !strings.Contains(out, "<Subject 2>轻敲桌面") {
+	for _, want := range []string{"雷晓飞轻敲桌面，随后警觉地转头", "雷晓飞听见门外脚步后敲桌示警", "右手食指敲击桌面一次后转头看门口", "中近景", "缓慢推进", "雷晓飞：谁在门外？"} {
+		if !strings.Contains(provider.user, want) {
+			t.Fatalf("video AI context missing %q: %s", want, provider.user)
+		}
+	}
+	if strings.Contains(out, "雷晓飞") || !strings.Contains(out, "<Subject 1>轻敲桌面") {
 		t.Fatalf("character must use Subject binding: %s", out)
 	}
 }
 
-func TestBuildMiniMaxH3RefPromptUsesSubjectTagAndDoesNotDuplicateOpening(t *testing.T) {
-	lines := []string{"- <Picture 1>：当前分镜画面（0.00秒起始构图与动作起点）", "- <Picture 2>：角色「雷晓飞」四视图", "- <Picture 3>：场景「雷记面馆」参考图"}
-	sc := &models.Scene{VideoPrompt: "[Shot 1] 本段视频从 <Picture 1> 的静止画面开始，雷晓飞侧身坐在桌旁，雷晓飞抬起右手。", Duration: 9}
+func TestBuildMiniMaxH3RefPromptUsesSubjectTagWithoutForcingStoryboardStart(t *testing.T) {
+	lines := []string{"- <Picture 1>：角色「雷晓飞」四视图", "- <Picture 2>：场景「雷记面馆」参考图", "- <Picture 3>：当前分镜画面（可选构图与动作状态参考）"}
+	sc := &models.Scene{VideoPrompt: "[Shot 1] 雷晓飞侧身坐在桌旁，雷晓飞抬起右手。", Duration: 9}
 	prompt := buildMiniMaxH3RefPrompt(sc, nil, nil, lines)
 	detail := h3PromptSection(prompt, "detailed_description:")
-	if strings.Count(detail, "本段视频从 <Picture 1> 的静止画面开始") != 1 {
-		t.Fatalf("opening must appear once: %s", detail)
+	if strings.Contains(detail, "本段视频从 <Picture 3> 的静止画面开始") {
+		t.Fatalf("storyboard start must not be forced: %s", detail)
 	}
-	if strings.Contains(detail, "雷晓飞") || strings.Count(detail, "<Subject 2>") != 2 {
+	if strings.Contains(detail, "雷晓飞") || strings.Count(detail, "<Subject 1>") != 2 {
 		t.Fatalf("character name must be replaced by Subject tag: %s", detail)
 	}
 }
@@ -1184,15 +1195,44 @@ func TestValidateFullH3PromptRejectsNestedContract(t *testing.T) {
 	}
 }
 
-func TestNoDialoguePromptSuppressesStoredDialogueAndVoice(t *testing.T) {
-	lines := []string{"- <Picture 1>：当前分镜画面", "- <Picture 2>：角色「上官若琳」四视图"}
-	sc := &models.Scene{VideoPrompt: "[Shot 1] <Subject 2>轻轻转头。本段无对白。", Duration: 8}
-	dubs := []models.Dialogue{{Character: "上官若琳", Text: "这句数据库残留对白不能出现"}}
+func TestCharacterNamesMapToActualReferenceSubjects(t *testing.T) {
+	lines := []string{
+		"- <Picture 1>：角色「舒寒」四视图",
+		"- <Picture 2>：角色「上官若琳」四视图",
+		"- <Picture 3>：场景「玉霄宫·内殿」参考图",
+		"- <Picture 4>：当前分镜画面（可选构图与动作状态参考）",
+	}
+	sc := &models.Scene{VideoPrompt: "[Shot 1] 舒寒环抱上官若琳，舒寒低头靠近上官若琳耳畔。", Duration: 15}
+	dubs := []models.Dialogue{{Character: "舒寒", Text: "这不是太想你了吗。"}, {Character: "上官若琳", Text: "今晚有得是时间。"}}
 	prompt := buildMiniMaxH3RefPrompt(sc, nil, dubs, lines)
-	for _, forbidden := range []string{"这句数据库残留对白不能出现", "<d>"} {
-		if strings.Contains(prompt, forbidden) {
-			t.Fatalf("no-dialogue prompt leaked %q: %s", forbidden, prompt)
+	for _, want := range []string{
+		"<Subject 1> 是 <Picture 1> 中的角色「舒寒」四视图",
+		"<Subject 2> 是 <Picture 2> 中的角色「上官若琳」四视图",
+		"<Subject 4> 是 <Picture 4> 中的当前分镜画面",
+		"<Subject 1>环抱<Subject 2>",
+		"<Subject 1>说道：<d>[中文] 这不是太想你了吗。</d>",
+		"<Subject 2>说道：<d>[中文] 今晚有得是时间。</d>",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("character mapping missing %q: %s", want, prompt)
 		}
+	}
+	if strings.Contains(prompt, "<Subject 4>环抱") {
+		t.Fatalf("storyboard reference was used as a character: %s", prompt)
+	}
+	for _, dialogue := range []string{"这不是太想你了吗。", "今晚有得是时间。"} {
+		if strings.Count(prompt, dialogue) != 1 {
+			t.Fatalf("dialogue %q must appear exactly once: %s", dialogue, prompt)
+		}
+	}
+}
+
+func TestSceneWithoutStructuredDialogueForbidsVoice(t *testing.T) {
+	lines := []string{"- <Picture 1>：当前分镜画面", "- <Picture 2>：角色「上官若琳」四视图"}
+	sc := &models.Scene{VideoPrompt: "[Shot 1] <Subject 2>轻轻转头。", Duration: 8}
+	prompt := buildMiniMaxH3RefPrompt(sc, nil, nil, lines)
+	if strings.Contains(prompt, "<d>") {
+		t.Fatalf("dialogue tag appeared without structured dialogue: %s", prompt)
 	}
 	for _, want := range []string{"无对白", "无人声", "无旁白", "无说话声", "人物嘴部不得做说话口型"} {
 		if !strings.Contains(prompt, want) {
@@ -1201,27 +1241,24 @@ func TestNoDialoguePromptSuppressesStoredDialogueAndVoice(t *testing.T) {
 	}
 }
 
-func TestStoredDialogueIsIgnoredWithoutExplicitSpeechAction(t *testing.T) {
+func TestStructuredDialogueIsAlwaysIncluded(t *testing.T) {
 	lines := []string{"- <Picture 1>：当前分镜画面"}
-	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] 人物抬头。", Duration: 8}, nil, []models.Dialogue{{Character: "林夏", Text: "数据库对白"}}, lines)
-	if strings.Contains(prompt, "数据库对白") || strings.Contains(prompt, "<d>") {
-		t.Fatalf("stored dialogue leaked without explicit speech action: %s", prompt)
-	}
-	if !strings.Contains(prompt, "无人声") || !strings.Contains(prompt, "无说话声") {
-		t.Fatalf("silent action lacks no-voice contract: %s", prompt)
+	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] 人物抬头。", Duration: 8}, nil, []models.Dialogue{{Character: "林夏", Text: "你来了"}}, lines)
+	for _, want := range []string{"林夏说道：<d>[中文] 你来了</d>", "禁止遗漏、改写或新增对白"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("structured dialogue missing %q: %s", want, prompt)
+		}
 	}
 }
 
-func TestOnlyExplicitDialogueTagEnablesSpeech(t *testing.T) {
+func TestStructuredDialogueOverridesStalePromptDialogue(t *testing.T) {
 	lines := []string{"- <Picture 1>：当前分镜画面"}
-	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] 人物抬头说道：<d>[中文] 你来了</d>", Duration: 8}, nil, []models.Dialogue{{Character: "林夏", Text: "数据库旧对白"}}, lines)
-	if strings.Contains(prompt, "数据库旧对白") {
-		t.Fatalf("stored dialogue must never be injected automatically: %s", prompt)
+	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] 人物抬头说道：<d>[中文] 错误旧台词</d>", Duration: 8}, nil, []models.Dialogue{{Character: "林夏", Text: "正确结构化台词"}}, lines)
+	if strings.Contains(prompt, "错误旧台词") {
+		t.Fatalf("stale prompt dialogue was retained: %s", prompt)
 	}
-	for _, want := range []string{"<d>[中文] 你来了</d>", "禁止新增对白、旁白、含混人声或吟唱"} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("dialogue constraint missing %q: %s", want, prompt)
-		}
+	if !strings.Contains(prompt, "林夏说道：<d>[中文] 正确结构化台词</d>") {
+		t.Fatalf("structured dialogue missing: %s", prompt)
 	}
 }
 
