@@ -557,7 +557,7 @@ func TestEnsurePlanCharactersKeepsCompletePlanCharacters(t *testing.T) {
 
 func TestRedesignSceneImagePromptUsesProjectAndAssetContext(t *testing.T) {
 	ps := newTestProjectService(t)
-	provider := &stubTextProvider{response: "subject_definitions:\n无参考图\n\nsummary:\n林舒进入古典宗门大殿\n\nretention_analysis:\n保持场景结构\n\ndetailed_description:\n林舒右脚刚踏上长阶，电影级全景，低机位纵深构图，晨雾体积光，国风写实\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"}
+	provider := &stubTextProvider{response: "subject_definitions:\n无参考图\n\nsummary:\n[reference generation] 林舒进入古典宗门大殿\n\nretention_analysis:\n保持场景结构\n\ndetailed_description:\n[Shot 1] 林舒右脚刚踏上长阶，电影级全景，低机位纵深构图，晨雾体积光，国风写实\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"}
 	ps.textProvider = provider
 	project := models.Project{Title: "问仙", Genre: "古典修仙", Style: "国风写实", Synopsis: "宗门试炼"}
 	if err := ps.db.Create(&project).Error; err != nil {
@@ -610,7 +610,7 @@ func TestRedesignScenePromptUsesShotsLooksAndH3StartFrameFormat(t *testing.T) {
 	if err := ps.db.AutoMigrate(&models.Shot{}, &models.CharacterLook{}, &models.SceneCharacterLook{}); err != nil {
 		t.Fatal(err)
 	}
-	provider := &captureTextProvider{response: "subject_definitions:\n无参考图\n\nsummary:\n林舒挡在陆川身前\n\nretention_analysis:\n保持主体\n\ndetailed_description:\n剑刚出鞘，中近景低机位，冷月逆光\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"}
+	provider := &captureTextProvider{response: "subject_definitions:\n无参考图\n\nsummary:\n[reference generation] 林舒挡在陆川身前\n\nretention_analysis:\n保持主体\n\ndetailed_description:\n[Shot 1] 剑刚出鞘，中近景低机位，冷月逆光\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"}
 	ps.textProvider = provider
 	p := models.Project{Title: "问仙", Genre: "修仙", Style: "国风写实", Synopsis: "宗门试炼"}
 	if err := ps.db.Create(&p).Error; err != nil {
@@ -644,7 +644,7 @@ func TestRedesignScenePromptUsesShotsLooksAndH3StartFrameFormat(t *testing.T) {
 			t.Fatalf("AI context missing %q: %s", want, provider.user)
 		}
 	}
-	if !strings.Contains(provider.system, "MiniMax H3 SelfLift") || !strings.Contains(provider.system, "严格输出 H3 六段结构") {
+	if !strings.Contains(provider.system, "MiniMax H3 SelfLift") || !strings.Contains(provider.system, "同一套 H3 Ref2VA 引用协议") {
 		t.Fatalf("wrong system prompt: %s", provider.system)
 	}
 }
@@ -742,6 +742,18 @@ func TestBuildH3StoryboardPromptRemovesRedundantWardrobeText(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "雷晓飞独自坐于八仙桌旁，右手轻敲桌面") {
 		t.Fatalf("visible action was lost: %s", prompt)
+	}
+	for _, want := range []string{
+		"<Subject 1> 是 <Picture 1> 中的场景雷记面馆。",
+		"<Subject 2> 是 <Picture 2> 中的角色雷晓飞四视图。",
+		"[reference generation] <Subject 1>、<Subject 2>",
+		"<Subject 1> (出现在 [Shot 1]): fully_preserved",
+		"<Subject 2> (出现在 [Shot 1]): fully_preserved",
+		"detailed_description:\n[Shot 1] 画面中的参考主体为<Subject 1>、<Subject 2>。",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("H3 storyboard prompt missing %q: %s", want, prompt)
+		}
 	}
 }
 

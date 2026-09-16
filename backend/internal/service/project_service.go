@@ -342,25 +342,26 @@ func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, err
 	if len(referenceLines) > 0 {
 		referenceContext = strings.Join(referenceLines, "\n")
 	}
-	system := `你是 MiniMax H3 SelfLift 分镜提示词编辑。严格输出 H3 六段结构：
+	system := `你是 MiniMax H3 SelfLift 分镜图提示词编辑。生图与生视频遵循同一套 H3 Ref2VA 引用协议；区别是本任务只生成一个静止分镜画面，不描述连续画面。
+严格输出六段：
 subject_definitions:
-逐行原样保留输入中实际上传的 <Picture N> 绑定；人物参考图负责人物身份与造型，场景参考图只负责环境。
+每张实际使用的图片定义一个主体，格式为“<Subject N> 是 <Picture N> 中的素材名。”。N从1连续编号，Subject与Picture必须同号。只有素材名时不得补写外貌、发型、服装、性别或体型。
 
 summary:
-一句话概括要生成的静态起始帧。
+必须以“[reference generation]”开头，使用<Subject N>概括目标静止画面。
 
 retention_analysis:
-说明应保留参考图中的人物身份、造型、场景结构和画风，不扩写人物外貌。
+每个Subject单独一行，格式为“<Subject N> (出现在 [Shot 1]): fully_preserved - 已提供的主体信息。”；不得虚构参考资料中没有的特征。
 
 detailed_description:
-只描述当前静止画面的主体数量与位置、一个动作定格、表情、景别、静态机位、构图和光线。人物只写姓名，不描述服装、发型、五官、性别或体型；不得写“符合角色设定”“与参考图一致”“身着某类服装”等占位文字，人物身份与全部造型只由对应 Picture 控制。不得写推进、摇移、环绕等视频运镜，不得加入未出场人物。
+以“[Shot 1]”开头，明确使用对应<Subject N>，只描述单一静止画面中的主体位置、动作定格、可见表情、环境、景别、静态机位、构图和光线。不得描述连续动作、时间推进、推拉摇移跟升降或切镜。人物造型由Picture控制，不重复改写人物外貌和服装。
 
 overall_soundscape:
 N/A
 
 non_diegetic_music:
 N/A
-只输出六段正文，不要解释或 Markdown。`
+只输出六段正文，不要解释或Markdown。`
 	user := fmt.Sprintf("项目：%s\n题材：%s\n画风：%s\n场景标题：%s\n场景剧情：%s\n地点：%s\n道具：%s\n\n本次实际提交的参考图（编号与上传顺序一致）：\n%s\n\n当前镜头设计：\n%s\n\n场景与道具资料：\n%s",
 		project.Title, project.Genre, project.Style, sc.Title, sc.Content,
 		sc.LocationName, sc.Props, referenceContext, shotContext, assetContext)
@@ -397,6 +398,17 @@ N/A
 		if !strings.Contains(output, heading) {
 			return "", fmt.Errorf("AI 返回内容不符合 MiniMax H3 六段格式，缺少%s，请重试", heading)
 		}
+	}
+	if len(referenceLines) > 0 {
+		for i := range referenceLines {
+			n := i + 1
+			if !strings.Contains(output, fmt.Sprintf("<Picture %d>", n)) || !strings.Contains(output, fmt.Sprintf("<Subject %d>", n)) {
+				return "", fmt.Errorf("AI 返回内容未按 H3 协议绑定 <Picture %d> 与 <Subject %d>，请重试", n, n)
+			}
+		}
+	}
+	if !strings.Contains(h3PromptSection(output, "summary:"), "[reference generation]") || !strings.Contains(h3PromptSection(output, "detailed_description:"), "[Shot 1]") {
+		return "", fmt.Errorf("AI 返回内容缺少 [reference generation] 或 [Shot 1]，请重试")
 	}
 	return output, nil
 }
@@ -1958,7 +1970,28 @@ func h3PromptSection(prompt, heading string) string {
 	return strings.TrimSpace(rest[:end])
 }
 
+func h3StoryboardSubjects(referenceLines []string) (definitions, retention, subjectRefs []string) {
+	for i, line := range referenceLines {
+		n := i + 1
+		desc := strings.TrimSpace(strings.TrimPrefix(line, "-"))
+		if cut := strings.Index(desc, "："); cut >= 0 {
+			desc = strings.TrimSpace(desc[cut+len("："):])
+		}
+		for _, suffix := range []string{"，人物身份与造型以参考图为准", "，环境与起始构图以参考图为准"} {
+			desc = strings.TrimSuffix(desc, suffix)
+		}
+		if desc == "" {
+			desc = fmt.Sprintf("参考素材%d", n)
+		}
+		definitions = append(definitions, fmt.Sprintf("<Subject %d> 是 <Picture %d> 中的%s。", n, n, desc))
+		retention = append(retention, fmt.Sprintf("<Subject %d> (出现在 [Shot 1]): fully_preserved - %s。", n, desc))
+		subjectRefs = append(subjectRefs, fmt.Sprintf("<Subject %d>", n))
+	}
+	return definitions, retention, subjectRefs
+}
+
 func buildH3StoryboardPrompt(sc *models.Scene, p *models.Project, referenceLines []string) string {
+	definitions, retention, subjects := h3StoryboardSubjects(referenceLines)
 	detail := sanitizeH3ReferencePrompt(h3PromptSection(sc.ImagePrompt, "detailed_description:"))
 	if detail == "" {
 		detail = sanitizeH3ReferencePrompt(strings.TrimSpace(sc.ImagePrompt))
@@ -1966,19 +1999,20 @@ func buildH3StoryboardPrompt(sc *models.Scene, p *models.Project, referenceLines
 	if detail == "" {
 		detail = strings.TrimSpace(sc.Content)
 	}
+	detail = strings.TrimSpace(strings.TrimPrefix(detail, "[Shot 1]"))
 	style := ""
 	if p != nil {
 		style = strings.TrimSpace(p.Style)
 	}
-	return "subject_definitions:\n" + strings.Join(referenceLines, "\n") +
-		"\n\nsummary:\n" + strings.TrimSpace(sc.Content) +
-		"\n\nretention_analysis:\n各 <Picture N> 只控制其明确绑定的主体；人物身份与造型、场景结构和项目画风保持参考图一致。" +
-		"\n\ndetailed_description:\n" + detail + func() string {
-		if style != "" {
-			return "\n视觉风格：" + style
-		}
-		return ""
-	}() +
+	summary := "[reference generation] " + strings.Join(subjects, "、") + "共同构成目标静止分镜画面：" + strings.TrimSpace(sc.Content)
+	detailPrefix := "[Shot 1] 画面中的参考主体为" + strings.Join(subjects, "、") + "。"
+	if style != "" {
+		detail += "\n视觉风格：" + style
+	}
+	return "subject_definitions:\n" + strings.Join(definitions, "\n") +
+		"\n\nsummary:\n" + summary +
+		"\n\nretention_analysis:\n" + strings.Join(retention, "\n") +
+		"\n\ndetailed_description:\n" + detailPrefix + detail +
 		"\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"
 }
 
