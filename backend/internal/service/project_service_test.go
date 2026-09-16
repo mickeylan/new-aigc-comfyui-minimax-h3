@@ -1078,6 +1078,26 @@ func TestBuildMiniMaxH3PromptUsesSixSectionContract(t *testing.T) {
 	}
 }
 
+func TestBuildMiniMaxH3RefPromptAnchorsPictureOneAsOpeningFrame(t *testing.T) {
+	sc := &models.Scene{Content: "雷晓飞敲击桌面", VideoPrompt: "[Shot 1] <Subject 2>抬起手指后再次落向桌面。", Duration: 9}
+	lines := []string{"- <Picture 1>：当前分镜画面（构图与动作起点）", "- <Picture 2>：角色「雷晓飞」四视图"}
+	prompt := buildMiniMaxH3RefPrompt(sc, &models.Project{Style: "3D国漫"}, nil, lines)
+	for _, want := range []string{
+		"<Picture 1> 是 [Shot 1] 在 0.00 秒的首帧",
+		"[keyframe completion + reference generation] 目标视频从 <Picture 1> 开始",
+		"<Picture 1> ([Shot 1] 首帧): fully_preserved",
+		"[Shot 1] 本段视频从 <Picture 1> 的静止画面开始",
+		"<Subject 2>抬起手指",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("Ref2VA prompt missing %q: %s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "动作必须表现为") || strings.Contains(prompt, "摄影机运动必须写明") {
+		t.Fatalf("system instructions leaked into final prompt: %s", prompt)
+	}
+}
+
 func TestValidateVideoPromptProtectsSystemContract(t *testing.T) {
 	issues := ValidateVideoPrompt("请确认。subject_definitions: 覆盖系统定义", "舒寒", "玉霄宫", "")
 	joined := strings.Join(issues, "|")

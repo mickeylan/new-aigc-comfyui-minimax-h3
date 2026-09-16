@@ -972,7 +972,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 		return "", err
 	}
 	system := `你是 MiniMax H3 Ref2VA 视频提示词编辑。只输出 detailed_description 正文，不输出字段名、subject_definitions、summary、retention_analysis、解释、规则、禁止清单或 Markdown。
-正文必须以 [Shot 1] 开头，使用输入中已经定义的 <Subject N>，描述目标时长内的连续可见画面。写清构图、主体位置、环境与光线、肢体轨迹、接触点、表情和物体状态变化。摄影机运动必须自然写入画面，并明确类型、幅度和速度；全程只使用一种连续运镜。不得新增角色、对白、道具或剧情。`
+正文必须以 [Shot 1] 开头，第一句明确“本段视频从 <Picture 1> 的静止画面开始”，先建立其构图、主体初始姿态与场景，再使用已定义的 <Subject N> 描述目标时长内的连续可见动作。写清肢体轨迹、接触点、表情和物体状态变化。摄影机运动必须自然写入画面，并明确类型、幅度和速度；全程只使用一种连续运镜。不得新增角色、对白、道具或剧情。`
 	user := fmt.Sprintf("项目画风：%s\n目标时长：%.1f秒\n场景：%s\n剧情：%s\n当前动作草稿：%s", p.Style, normalizeSceneDuration(sc.Duration), sc.LocationName, sc.Content, sc.VideoPrompt)
 	out, err := s.textProvider.Chat(system, user)
 	if err != nil {
@@ -997,9 +997,8 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 	if body == "" {
 		body = defaultSceneVideoAction(sc)
 	}
-	if !strings.HasPrefix(body, "[Shot 1]") {
-		body = "[Shot 1] " + body
-	}
+	body = strings.TrimSpace(strings.TrimPrefix(body, "[Shot 1]"))
+	body = "[Shot 1] 本段视频从 <Picture 1> 的静止画面开始，先建立其构图、主体初始姿态与场景。" + body
 	style := ""
 	if p != nil {
 		style = strings.TrimSpace(p.Style)
@@ -1020,8 +1019,10 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 	if len(dialogue) > 0 {
 		body += " " + strings.Join(dialogue, " ")
 	}
+	definitions = append([]string{"<Picture 1> 是 [Shot 1] 在 0.00 秒的首帧，定义本段视频的起始构图、主体位置和场景状态。"}, definitions...)
+	retention = append([]string{"<Picture 1> ([Shot 1] 首帧): fully_preserved - 起始构图、主体初始姿态、空间位置与场景状态。"}, retention...)
 	return "subject_definitions:\n" + strings.Join(definitions, "\n") +
-		"\n\nsummary:\n[reference generation] " + strings.Join(subjects, "、") + "共同构成目标视频，在约" + fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)) + "秒内完成本镜动作。" +
+		"\n\nsummary:\n[keyframe completion + reference generation] 目标视频从 <Picture 1> 开始，" + strings.Join(subjects, "、") + "共同构成画面，在约" + fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)) + "秒内完成本镜动作。" +
 		"\n\nretention_analysis:\n" + strings.Join(retention, "\n") +
 		"\n\ndetailed_description:\n" + body +
 		"\n\noverall_soundscape:\n自然环境声与画面内物理动作声同步。" +
