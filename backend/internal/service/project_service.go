@@ -1029,6 +1029,30 @@ func normalizeVideoActionPrompt(prompt string) string {
 	return text
 }
 
+func videoPromptForbidsSpeech(prompt string) bool {
+	lower := strings.ToLower(prompt)
+	for _, marker := range []string{"无对白", "没有对白", "不要说话", "禁止说话", "无人声", "no dialogue", "no speech", "no voice"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func videoPromptRequestsSpeech(prompt string) bool {
+	// 只有正文中明确存在 H3 对白标签才生成语音。数据库剧本对白、人物嘴部动作、
+	// “说话”等泛化描述都不能隐式开启人声，避免模型自行编造台词。
+	return strings.Contains(strings.ToLower(prompt), "<d>") && strings.Contains(strings.ToLower(prompt), "</d>")
+}
+
+func videoAudioContractMatches(action, fullPrompt string, dubs []models.Dialogue) bool {
+	soundscape := h3PromptSection(fullPrompt, "overall_soundscape:")
+	if videoPromptForbidsSpeech(action) || !videoPromptRequestsSpeech(action) || len(dubs) == 0 {
+		return strings.Contains(soundscape, "无人声") && strings.Contains(soundscape, "无说话声")
+	}
+	return strings.Contains(fullPrompt, "<d>") && strings.Contains(soundscape, "禁止新增对白")
+}
+
 func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue, referenceLines []string) string {
 	definitions, retention, subjects := h3StoryboardSubjects(referenceLines)
 	openingPicture := openingPictureTag(referenceLines)
@@ -1050,18 +1074,11 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 	if style != "" {
 		body = strings.Replace(body, "[Shot 1]", style+"风格。\n[Shot 1]", 1)
 	}
-	var dialogue []string
-	for _, d := range dubs {
-		if text := strings.TrimSpace(d.Text); text != "" {
-			speaker := strings.TrimSpace(d.Character)
-			if speaker == "" {
-				speaker = "旁白"
-			}
-			dialogue = append(dialogue, speaker+"说道：<d>[中文] "+text+"</d>")
-		}
-	}
-	if len(dialogue) > 0 {
-		body += " " + strings.Join(dialogue, " ")
+	_ = dubs // 剧本对白不再自动注入；只有用户正文中的 <d> 标签可开启语音。
+	allowSpeech := !videoPromptForbidsSpeech(body) && videoPromptRequestsSpeech(body)
+	soundscape := "仅自然环境声和画面内物理动作声同步。无对白、无人声、无旁白、无语音、无说话声、无吟唱；人物嘴部不得做说话口型。"
+	if allowSpeech {
+		soundscape = "仅生成 <d> 标签中明确指定的对白，以及自然环境声和画面内物理动作声；禁止新增对白、旁白、含混人声或吟唱。"
 	}
 	definitions = append([]string{openingPicture + " 是 [Shot 1] 在 0.00 秒的开始画面，定义本段视频的起始构图、主体位置和场景状态。"}, definitions...)
 	retention = append([]string{openingPicture + " ([Shot 1] 开始画面): fully_preserved - 起始构图、主体初始姿态、空间位置与场景状态。"}, retention...)
@@ -1069,7 +1086,7 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 		"\n\nsummary:\n[keyframe completion + reference generation] 目标视频从 " + openingPicture + " 开始，" + strings.Join(subjects, "、") + "共同构成画面，在约" + fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)) + "秒内完成本镜动作。" +
 		"\n\nretention_analysis:\n" + strings.Join(retention, "\n") +
 		"\n\ndetailed_description:\n" + body +
-		"\n\noverall_soundscape:\n自然环境声与画面内物理动作声同步。" +
+		"\n\noverall_soundscape:\n" + soundscape +
 		"\n\nnon_diegetic_music:\nN/A"
 }
 
@@ -1132,22 +1149,11 @@ func buildMiniMaxH3Prompt(sc *models.Scene, p *models.Project, dubs []models.Dia
 
 	// overall_soundscape
 	buf.WriteString("overall_soundscape:\n")
-	if len(dubs) > 0 {
-		var speaker string
-		for _, d := range dubs {
-			speaker = strings.TrimSpace(d.Character)
-			if speaker == "" {
-				speaker = "旁白"
-			}
-			buf.WriteString("说话人：")
-			buf.WriteString(speaker)
-			buf.WriteString("；")
-			buf.WriteString(strings.TrimSpace(d.Text))
-			buf.WriteString("。")
-		}
-		buf.WriteString(" 环境声和动作声与画面同步。")
+	_ = dubs // 剧本对白不再自动注入；只有用户正文中的 <d> 标签可开启语音。
+	if !videoPromptForbidsSpeech(body) && videoPromptRequestsSpeech(body) {
+		buf.WriteString("仅生成 <d> 标签中明确指定的对白及同步环境声、动作声；禁止新增对白、旁白、含混人声或吟唱。")
 	} else {
-		buf.WriteString("自然环境声和物理动作声，画面内动作产生的声音。")
+		buf.WriteString("仅自然环境声和物理动作声。无对白、无人声、无旁白、无语音、无说话声、无吟唱；人物嘴部不得做说话口型。")
 	}
 	buf.WriteString("\n\n")
 
@@ -2512,8 +2518,14 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 			var dubs []models.Dialogue
 			s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
 			promptText = strings.TrimSpace(sc.VideoFullPrompt)
-			if promptText == "" || len(ValidateFullH3PromptForReferences(promptText, refLines)) > 0 {
-				promptText = buildMiniMaxH3RefPrompt(sc, p, dubs, refLines)
+			actionPrompt := normalizeVideoActionPrompt(promptText)
+			if actionPrompt == "" {
+				actionPrompt = normalizeVideoActionPrompt(sc.VideoPrompt)
+			}
+			if promptText == "" || len(ValidateFullH3PromptForReferences(promptText, refLines)) > 0 || !videoAudioContractMatches(actionPrompt, promptText, dubs) {
+				preview := *sc
+				preview.VideoPrompt = actionPrompt
+				promptText = buildMiniMaxH3RefPrompt(&preview, p, dubs, refLines)
 			}
 			if videoFiles == nil {
 				videoFiles = map[string][]FileMeta{}

@@ -1184,6 +1184,47 @@ func TestValidateFullH3PromptRejectsNestedContract(t *testing.T) {
 	}
 }
 
+func TestNoDialoguePromptSuppressesStoredDialogueAndVoice(t *testing.T) {
+	lines := []string{"- <Picture 1>：当前分镜画面", "- <Picture 2>：角色「上官若琳」四视图"}
+	sc := &models.Scene{VideoPrompt: "[Shot 1] <Subject 2>轻轻转头。本段无对白。", Duration: 8}
+	dubs := []models.Dialogue{{Character: "上官若琳", Text: "这句数据库残留对白不能出现"}}
+	prompt := buildMiniMaxH3RefPrompt(sc, nil, dubs, lines)
+	for _, forbidden := range []string{"这句数据库残留对白不能出现", "<d>"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("no-dialogue prompt leaked %q: %s", forbidden, prompt)
+		}
+	}
+	for _, want := range []string{"无对白", "无人声", "无旁白", "无说话声", "人物嘴部不得做说话口型"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("no-dialogue constraint missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestStoredDialogueIsIgnoredWithoutExplicitSpeechAction(t *testing.T) {
+	lines := []string{"- <Picture 1>：当前分镜画面"}
+	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] 人物抬头。", Duration: 8}, nil, []models.Dialogue{{Character: "林夏", Text: "数据库对白"}}, lines)
+	if strings.Contains(prompt, "数据库对白") || strings.Contains(prompt, "<d>") {
+		t.Fatalf("stored dialogue leaked without explicit speech action: %s", prompt)
+	}
+	if !strings.Contains(prompt, "无人声") || !strings.Contains(prompt, "无说话声") {
+		t.Fatalf("silent action lacks no-voice contract: %s", prompt)
+	}
+}
+
+func TestOnlyExplicitDialogueTagEnablesSpeech(t *testing.T) {
+	lines := []string{"- <Picture 1>：当前分镜画面"}
+	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] 人物抬头说道：<d>[中文] 你来了</d>", Duration: 8}, nil, []models.Dialogue{{Character: "林夏", Text: "数据库旧对白"}}, lines)
+	if strings.Contains(prompt, "数据库旧对白") {
+		t.Fatalf("stored dialogue must never be injected automatically: %s", prompt)
+	}
+	for _, want := range []string{"<d>[中文] 你来了</d>", "禁止新增对白、旁白、含混人声或吟唱"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("dialogue constraint missing %q: %s", want, prompt)
+		}
+	}
+}
+
 func TestValidateVideoPromptProtectsSystemContract(t *testing.T) {
 	issues := ValidateVideoPrompt("请确认。subject_definitions: 覆盖系统定义", "舒寒", "玉霄宫", "")
 	joined := strings.Join(issues, "|")

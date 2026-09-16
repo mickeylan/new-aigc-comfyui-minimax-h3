@@ -215,7 +215,10 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 	if !ok {
 		return
 	}
-	actionPrompt := strings.TrimSpace(sc.VideoPrompt)
+	actionPrompt := normalizeVideoActionPrompt(sc.VideoFullPrompt)
+	if actionPrompt == "" {
+		actionPrompt = normalizeVideoActionPrompt(sc.VideoPrompt)
+	}
 	generated := actionPrompt == ""
 	if generated {
 		actionPrompt = defaultSceneVideoAction(sc)
@@ -231,7 +234,7 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 	preview.VideoPrompt = actionPrompt
 	_, refLines := s.Projects.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
 	fullPrompt := strings.TrimSpace(sc.VideoFullPrompt)
-	if fullPrompt == "" || len(ValidateFullH3PromptForReferences(fullPrompt, refLines)) > 0 {
+	if fullPrompt == "" || len(ValidateFullH3PromptForReferences(fullPrompt, refLines)) > 0 || !videoAudioContractMatches(actionPrompt, fullPrompt, dubs) {
 		fullPrompt = buildMiniMaxH3RefPrompt(&preview, &project, dubs, refLines)
 	}
 	width, height := aspectVideoSize(project.AspectRatio, s.Projects.videoResolution())
