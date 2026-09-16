@@ -410,10 +410,10 @@ func (s *CharacterLookService) PublishLook(id uint) error {
 	return s.db.Model(&look).Update("audit_status", models.LookStatusPublished).Error
 }
 
-// StartImageGeneration 使用本地 Krea2 异步生成造型参考图。
+// StartImageGeneration 使用 MiniMax H3 以角色定妆照为脸部锚点生成竖版造型参考图。
 func (s *CharacterLookService) StartImageGeneration(look *models.CharacterLook) error {
 	if s.tasks == nil {
-		return fmt.Errorf("Krea2 造型参考图生成依赖 ComfyUI 任务服务")
+		return fmt.Errorf("造型参考图生成依赖 ComfyUI 任务服务")
 	}
 	if look.AuditStatus != models.LookStatusApproved && look.AuditStatus != models.LookStatusPublished {
 		return fmt.Errorf("请先审核通过造型")
@@ -421,11 +421,21 @@ func (s *CharacterLookService) StartImageGeneration(look *models.CharacterLook) 
 	if strings.TrimSpace(look.Prompt) == "" {
 		return fmt.Errorf("请先生成或填写参考图提示词")
 	}
-	var tpl models.Template
-	if err := s.db.Where("code = ? AND enabled = ?", "krea2_asset_reference", true).First(&tpl).Error; err != nil {
-		return fmt.Errorf("未找到已启用的 Krea2 资产参考图模板")
+	var ch models.Character
+	if err := s.db.First(&ch, look.CharacterID).Error; err != nil {
+		return fmt.Errorf("未找到角色: %w", err)
 	}
-	task, err := s.tasks.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: look.Prompt, Params: map[string]any{"width": 1024, "height": 1024}})
+	tpl, err := s.findLookTemplate()
+	if err != nil {
+		return err
+	}
+	prompt := fmt.Sprintf("<Picture 1>=定妆照（脸部身份锚点，严格保持该人物五官），%s", strings.TrimSpace(look.Prompt))
+	task, err := s.tasks.CreateTask(CreateTaskReq{
+		TemplateID: tpl.ID,
+		Prompt:     prompt,
+		Params:     map[string]any{"width": 928, "height": 1664}, // 9:16 竖版
+		Files:      map[string][]FileMeta{"ref_images": {{TaskID: fmt.Sprintf("%d", look.ProjectID), Name: ch.Portrait}}},
+	})
 	if err != nil {
 		return err
 	}
@@ -439,6 +449,19 @@ func (s *CharacterLookService) StartImageGeneration(look *models.CharacterLook) 
 		}
 	}()
 	return nil
+}
+
+// findLookTemplate 查找造型资产参考图模板，优先 H3，否则降级 Krea2。
+func (s *CharacterLookService) findLookTemplate() (*models.Template, error) {
+	var tpl models.Template
+	if err := s.db.Where("code = ? AND enabled = ?", "minimax_h3_look_reference", true).First(&tpl).Error; err == nil {
+		return &tpl, nil
+	}
+	if err := s.db.Where("code = ? AND enabled = ?", "krea2_asset_reference", true).First(&tpl).Error; err == nil {
+		log.Printf("[character_look] H3 造型模板未启用，降级使用 Krea2")
+		return &tpl, nil
+	}
+	return nil, fmt.Errorf("未找到已启用的造型参考图模板（minimax_h3_look_reference 或 krea2_asset_reference）")
 }
 
 func (s *CharacterLookService) SyncImages() {
