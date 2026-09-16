@@ -922,11 +922,18 @@ func (s *ProjectService) buildVideoFilesForTemplate(sc *models.Scene, pid, tplCo
 		return map[string][]FileMeta{"first_frame": {{TaskID: pid, Name: sc.ImageFile}}}
 	case "minimax_h3_first_last":
 		files := map[string][]FileMeta{}
-		if sc.ImageFile != "" {
-			files["first_frame"] = []FileMeta{{TaskID: pid, Name: sc.ImageFile}}
+		// 首帧：用户明确指定的，否则用分镜图
+		firstImg := strings.TrimSpace(sc.VideoFirstFrameImg)
+		if firstImg == "" {
+			firstImg = sc.ImageFile
 		}
-		if sc.VideoInputFile != "" {
-			files["last_frame"] = []FileMeta{{TaskID: pid, Name: sc.VideoInputFile}}
+		if firstImg != "" {
+			files["first_frame"] = []FileMeta{{TaskID: pid, Name: firstImg}}
+		}
+		// 尾帧：用户明确指定的
+		lastImg := strings.TrimSpace(sc.VideoLastFrameImg)
+		if lastImg != "" {
+			files["last_frame"] = []FileMeta{{TaskID: pid, Name: lastImg}}
 		}
 		return files
 	case "minimax_h3_ref2v", "minimax_h3_ref2v_single", "minimax_h3_t2v":
@@ -2121,6 +2128,26 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	videoW, videoH := aspectVideoSize(p.AspectRatio, s.videoResolution())
 	pid := fmt.Sprintf("%d", p.ID)
 	tplCode, promptText, videoFiles := s.buildSceneVideoSpec(sc, pid, sc.VideoTemplate)
+	// ref2v 模板需要注入场景参考图（分镜图 + 用户选择的造型/场景/道具资产）
+	if tplCode == "minimax_h3_ref2v" || tplCode == "minimax_h3_ref2v_single" {
+		refFiles := []FileMeta{}
+		var refLines []string
+		if refs, lines, explicit := s.selectedSceneReferenceFiles(sc, "h3"); explicit && len(refs) > 0 {
+			refFiles, refLines = refs, lines
+		} else if refs, lines := s.sceneVideoReferenceFiles(sc, pid); len(refs) > 0 {
+			refFiles, refLines = refs, lines
+		}
+		if len(refFiles) > 0 {
+			promptText += "\n\n【参考图绑定】\n" + strings.Join(refLines, "\n") + "\n严格保持各 Picture 对应人物、造型、场景或道具的身份与外观。"
+			if videoFiles == nil {
+				videoFiles = map[string][]FileMeta{}
+			}
+			videoFiles["ref_images"] = append(videoFiles["ref_images"], refFiles...)
+		}
+	}
+	if tplCode == "minimax_h3_first_last" && (videoFiles == nil || len(videoFiles["first_frame"]) == 0 || len(videoFiles["last_frame"]) == 0) {
+		return fmt.Errorf("首尾帧模板需要同时指定首帧图片和尾帧图片，请在「生成/编辑视频提示词」中选择")
+	}
 	var tpl models.Template
 	if err := s.db.Where("code = ?", tplCode).First(&tpl).Error; err != nil {
 		return fmt.Errorf("未找到视频模板 %s，请检查系统模板", tplCode)
