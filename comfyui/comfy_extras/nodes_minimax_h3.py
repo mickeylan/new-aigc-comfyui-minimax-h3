@@ -177,6 +177,7 @@ class MiniMaxH3ReferenceToVideo(io.ComfyNode):
                 io.Int.Input("length", default=124, min=5, max=3600, step=17, tooltip="Frame count at 24 fps, (124 = ~5s, trained range is ~124-362)"),
                 io.Combo.Input("ref_image_size", options=["match", "max"], default="match",
                     tooltip="Reference image sizing. 'match' scales each ref (down only, keeping aspect) to the generation's pixel area; 'max' uses the reference pipeline's 2048px short edge for best identity fidelity. Reference tokens ride through every sampling step, so 'max' can be several times slower."),
+                io.Image.Input("first_frame", optional=True, tooltip="Optional hard frame-0 anchor; presented as Picture 1 before other references."),
                 io.Autogrow.Input("ref_images", optional=True,
                     template=io.Autogrow.TemplatePrefix(
                         input=io.Image.Input("ref_image", tooltip="Reference image (downscaled to 2048 short edge if larger, never upscaled)"),
@@ -209,11 +210,20 @@ class MiniMaxH3ReferenceToVideo(io.ComfyNode):
 
     @classmethod
     def execute(cls, clip, vae, audio_vae, prompt, width, height, length, ref_image_size="match",
-                ref_images=None, ref_videos=None, ref_video_audios=None, ref_audios=None) -> io.NodeOutput:
+                first_frame=None, ref_images=None, ref_videos=None, ref_video_audios=None, ref_audios=None) -> io.NodeOutput:
         latent, frame_count = _empty_av_latent(width, height, length)
 
         ref_items = []   # for the tokenizer presentation, in request order
         ref_blocks = []  # for the DiT payload, same order
+        keyframes = []
+
+        if first_frame is not None:
+            # The approved storyboard is both Picture 1 and an actual frame-0 keyframe.
+            img = _resize(first_frame[:1], width, height, "disabled")
+            z = vae.encode(img)
+            ref_items.append({"type": "image", "data": img})
+            ref_blocks.append({"kind": "image", "latent_h": height // 16, "latent_w": width // 16, "latent": z})
+            keyframes.append({"resolved_frame_index": 0, "latent": z})
 
         for img in (ref_images or {}).values():
             if img is None:
@@ -275,8 +285,14 @@ class MiniMaxH3ReferenceToVideo(io.ComfyNode):
 
         tokens = clip.tokenize(prompt, minimax_ref_items=ref_items)
         cond = clip.encode_from_tokens_scheduled(tokens)
+        values = {}
         if ref_blocks:
-            cond = node_helpers.conditioning_set_values(cond, {"minimax_refs": ref_blocks})
+            values["minimax_refs"] = ref_blocks
+        if keyframes:
+            values["minimax_keyframes"] = keyframes
+            values["minimax_frame_count"] = frame_count
+        if values:
+            cond = node_helpers.conditioning_set_values(cond, values)
         return io.NodeOutput(cond, latent)
 
 

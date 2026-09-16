@@ -59,7 +59,8 @@ func TestMiniMaxH3TemplatesRenderWithoutPlaceholders(t *testing.T) {
 			"last_frame":  {{TaskID: "draft", Name: "last.png"}},
 		}},
 		{file: "minimax_h3_ref2v.json", files: map[string][]FileMeta{
-			"ref_images": {{TaskID: "draft", Name: "ref.png"}},
+			"first_frame": {{TaskID: "draft", Name: "storyboard.png"}},
+			"ref_images":  {{TaskID: "draft", Name: "ref.png"}},
 			"ref_videos": {{TaskID: "draft", Name: "ref.mp4"}},
 			"ref_audios": {{TaskID: "draft", Name: "ref.wav"}},
 		}},
@@ -116,6 +117,7 @@ func TestReferenceFilesExpandToIndexedPlaceholders(t *testing.T) {
 	tpl := loadTemplateForTest(t, "minimax_h3_ref2v.json")
 	params := baseParams()
 	files := map[string][]FileMeta{
+		"first_frame": {{TaskID: "draft", Name: "storyboard.png"}},
 		"ref_images": {
 			{TaskID: "draft", Name: "one.png"},
 			{TaskID: "draft", Name: "two.png"},

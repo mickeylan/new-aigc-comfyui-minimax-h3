@@ -1,7 +1,7 @@
 {
   "name": "MiniMax H3 参考视频生成",
   "code": "minimax_h3_ref2v",
-  "description": "输入参考图片(0-9)、参考视频(0-3)、参考音频(0-3)，生成风格一致的新视频。提示词中用 <Picture i> / <Video k> / <Audio j> 引用。",
+  "description": "以分镜图作为0秒硬首帧，并输入额外参考图片(0-8)、参考视频(0-3)、参考音频(0-3)。首帧为 <Picture 1>，额外图片从 <Picture 2> 开始。",
   "inputs": [
     {
       "key": "prompt",
@@ -11,11 +11,17 @@
       "help": "可用 <Picture 1> <Video 1> <Audio 1> 引用素材"
     },
     {
+      "key": "first_frame",
+      "type": "image",
+      "label": "分镜起始帧（Picture 1，硬锚定到0秒）",
+      "required": true
+    },
+    {
       "key": "ref_images",
       "type": "images",
-      "label": "参考图片(0-9)",
+      "label": "额外参考图片(Picture 2-9)",
       "required": false,
-      "max_count": 9
+      "max_count": 8
     },
     {
       "key": "ref_videos",
@@ -158,6 +164,10 @@
         "height": "{{height}}",
         "length": "{{length}}",
         "ref_image_size": "{{ref_image_size}}",
+        "first_frame": [
+          "109",
+          0
+        ],
         "ref_images": {
           "ref_image_0": [
             "110",
@@ -303,6 +313,12 @@
         "filename_prefix": "minimax/{{task_id}}",
         "format": "mp4",
         "codec": "auto"
+      }
+    },
+    "109": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "{{img:first_frame}}"
       }
     },
     "110": {
