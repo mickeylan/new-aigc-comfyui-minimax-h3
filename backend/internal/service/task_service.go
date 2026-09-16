@@ -985,14 +985,26 @@ func (s *TaskService) handleWSEvent(taskID string, type_ string, data map[string
 		}
 		s.push(&task)
 	case "executing":
-		node, _ := data["node"].(string)
-		if node != "" {
-			task.CurrentNode = node
+		node, hasNode := data["node"]
+		promptID, _ := data["prompt_id"].(string)
+		// 部分 ComfyUI 版本不会发送 execution_success，而以 executing(node=null)
+		// 表示当前 prompt 已完成。只处理属于本任务的完成事件。
+		if (!hasNode || node == nil) && (promptID == "" || promptID == task.ComfyPromptID) {
+			// history 写入可能略晚于 WS 完成事件；异步协调，避免把短暂缺失误判为失败。
+			go func(id string) {
+				time.Sleep(500 * time.Millisecond)
+				s.reconcile(id)
+			}(task.TaskID)
+			return
+		}
+		nodeID, _ := node.(string)
+		if nodeID != "" {
+			task.CurrentNode = nodeID
 			if task.Status != "running" {
 				task.Status = "running"
 			}
 			s.db.Model(&task).Updates(map[string]any{
-				"status": task.Status, "current_node": node,
+				"status": task.Status, "current_node": nodeID,
 			})
 		}
 		s.push(&task)
@@ -1204,20 +1216,25 @@ func (s *TaskService) reconcile(taskID string) {
 	if task.Status != "running" && task.Status != "queued" {
 		return
 	}
+	if task.Port == nil || task.ComfyPromptID == "" {
+		return
+	}
 	c := NewComfyClient(s.comfyHostForPort(*task.Port), *task.Port)
+	// 不等待实例全局队列清空：同一实例持续有其他任务时，本任务可能早已完成。
+	// 每次协调都先按 prompt_id 查询自己的 history。
+	if hist, err := c.GetHistory(task.ComfyPromptID); err == nil {
+		if _, ok := hist[task.ComfyPromptID]; ok {
+			s.finishTask(&task)
+			return
+		}
+	}
 	load, err := c.GetLoad()
 	if err != nil {
 		return
 	}
 	if load.QueueRunning == 0 && load.QueuePending == 0 {
-		// 队列为空但任务还标记为运行: 查 history
-		hist, herr := c.GetHistory(task.ComfyPromptID)
-		if herr != nil || len(hist) == 0 {
-			// ComfyUI 重启后内存 history 丢失：尝试扫描输出目录按任务 ID 恢复结果
-			s.recoverFromOutput(&task)
-			return
-		}
-		s.finishTask(&task)
+		// 队列已空且 history 不存在，通常是 ComfyUI 重启丢失内存记录。
+		s.recoverFromOutput(&task)
 	}
 }
 

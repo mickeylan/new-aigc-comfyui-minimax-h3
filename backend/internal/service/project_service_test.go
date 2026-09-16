@@ -593,12 +593,12 @@ func TestGenerateReferencePromptKeepsFaceFocusedPortrait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"单人正面大头贴", "22岁女性", "黑色长发", "肩部以上构图"} {
+	for _, want := range []string{"单人正面大头贴", "22岁女性", "黑色长发", "肩部以上构图", "白色交领仙裙", "银色腰封", "衣料完整覆盖肩部与胸口"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("reference portrait missing %q: %s", want, prompt)
 		}
 	}
-	for _, forbidden := range []string{"正面全身立姿", "白色交领仙裙", "银色腰封", "禁止显老", "法令纹"} {
+	for _, forbidden := range []string{"正面全身立姿", "禁止显老", "法令纹"} {
 		if strings.Contains(prompt, forbidden) {
 			t.Fatalf("reference portrait mixed %q: %s", forbidden, prompt)
 		}

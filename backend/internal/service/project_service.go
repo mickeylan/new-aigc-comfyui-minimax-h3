@@ -1078,25 +1078,29 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 		if len(refs) >= maxSceneReferenceImages {
 			break
 		}
-		name, kind := ch.Sheet, "四视图"
-		if name == "" {
-			name, kind = ch.Portrait, "标准像"
-		}
-		if name == "" {
+		if ch.Portrait == "" {
 			continue
 		}
-		refs = append(refs, FileMeta{TaskID: pid, Name: name})
-		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」%s", len(refs), ch.Name, kind))
+		refs = append(refs, FileMeta{TaskID: pid, Name: ch.Portrait})
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」定妆照（只锁定脸部身份）", len(refs), ch.Name))
 	}
-	for _, look := range s.sceneCharacterLooks(sc, true) {
+	for _, outfit := range s.sceneCharacterOutfits(sc) {
 		if len(refs) >= maxSceneReferenceImages {
 			break
 		}
-		if look.Image == "" {
+		name, kind := outfit.Sheet, "套装四视图"
+		if name == "" {
+			name, kind = outfit.Image, "竖版套装图"
+		}
+		if name == "" {
 			continue
 		}
-		refs = append(refs, FileMeta{TaskID: pid, Name: look.Image})
-		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色造型「%s」（%s）", len(refs), look.Name, LookCategoryLabel(look.Category)))
+		charName := "角色"
+		if outfit.Character != nil {
+			charName = outfit.Character.Name
+		}
+		refs = append(refs, FileMeta{TaskID: pid, Name: name})
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」造型套装「%s」%s", len(refs), charName, outfit.Name, kind))
 	}
 	for _, a := range s.sceneMatchedAssets(sc) {
 		if len(refs) >= maxSceneReferenceImages {
@@ -1478,7 +1482,37 @@ func (s *ProjectService) DeleteCharacter(projectID, id uint) error {
 			log.Printf("[character %d] cleanup portrait %s failed: %v", ch.ID, path, err)
 		}
 	}
-	if err := s.db.Where("id = ?", id).Delete(&models.Character{}).Error; err != nil {
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		var outfitIDs, lookIDs []uint
+		tx.Model(&models.CharacterOutfit{}).Where("character_id = ?", id).Pluck("id", &outfitIDs)
+		tx.Model(&models.CharacterLook{}).Where("character_id = ?", id).Pluck("id", &lookIDs)
+		if len(outfitIDs) > 0 {
+			if err := tx.Where("outfit_id IN ?", outfitIDs).Delete(&models.CharacterOutfitLook{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("outfit_id IN ?", outfitIDs).Delete(&models.SceneCharacterOutfit{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("outfit_id IN ?", outfitIDs).Delete(&models.ShotCharacterOutfit{}).Error; err != nil {
+				return err
+			}
+		}
+		if len(lookIDs) > 0 {
+			if err := tx.Where("look_id IN ?", lookIDs).Delete(&models.SceneCharacterLook{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("look_id IN ?", lookIDs).Delete(&models.ShotCharacterLook{}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("character_id = ?", id).Delete(&models.CharacterOutfit{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("character_id = ?", id).Delete(&models.CharacterLook{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("id = ?", id).Delete(&models.Character{}).Error
+	}); err != nil {
 		return err
 	}
 	s.pushProject(nil)
@@ -1643,11 +1677,7 @@ func buildPortraitPrompt(p *models.Project, ch *models.Character) string {
 		} else if trait := strings.TrimSpace(ch.Trait); trait != "" {
 			parts = append(parts, "人物外貌必须严格固定："+trait)
 		}
-		if wardrobe := strings.TrimSpace(ch.WardrobeDetail); wardrobe != "" {
-			parts = append(parts, "服装与材质必须严格固定："+wardrobe)
-		} else if style := strings.TrimSpace(ch.Style); style != "" {
-			parts = append(parts, "服装造型必须严格固定："+style)
-		}
+		parts = append(parts, "本次标准像唯一妆造："+portraitStyling(ch))
 		if palette := strings.TrimSpace(ch.ColorPalette); palette != "" {
 			parts = append(parts, "角色配色："+palette)
 		}
@@ -1655,8 +1685,8 @@ func buildPortraitPrompt(p *models.Project, ch *models.Character) string {
 			parts = append(parts, "布光："+lighting)
 		}
 	}
-	parts = append(parts, "单一角色，正面半身头像，直视镜头，自然放松表情，纯白干净背景，柔和均匀自然光，居中对称构图，高分辨率角色参考照")
-	return strings.Join(parts, "，")
+	parts = append(parts, "单一角色，正面肩部以上头像，头发、发型与头饰完整入镜，直视镜头，自然放松表情，本次唯一上衣的领口、颜色、材质清楚可见，衣料完整覆盖肩部与胸口，纯白干净背景，柔和均匀自然光，居中对称构图，高分辨率角色参考照")
+	return normalizePortraitStyle(strings.Join(parts, "，"), p)
 }
 
 // characterContextForScene 拼装场景出场角色的权威设定文本，前置注入以纠偏 LLM 描述漂移
@@ -1698,6 +1728,15 @@ func (s *ProjectService) characterContextForScene(sc *models.Scene) string {
 		return ""
 	}
 	return "【角色设定（必须严格遵守，保证人物一致）】\n" + strings.Join(lines, "\n")
+}
+
+func (s *ProjectService) sceneCharacterOutfits(sc *models.Scene) []models.CharacterOutfit {
+	var outfits []models.CharacterOutfit
+	_ = s.db.Model(&models.CharacterOutfit{}).
+		Joins("JOIN scene_character_outfits ON scene_character_outfits.outfit_id = character_outfits.id").
+		Where("scene_character_outfits.scene_id = ? AND character_outfits.project_id = ? AND character_outfits.audit_status IN ?", sc.ID, sc.ProjectID, []models.CharacterLookStatus{models.LookStatusApproved, models.LookStatusPublished}).
+		Preload("Character").Order("scene_character_outfits.id").Find(&outfits).Error
+	return outfits
 }
 
 func (s *ProjectService) sceneCharacterLooks(sc *models.Scene, shotRelatedOnly bool) []models.CharacterLook {
@@ -1962,25 +2001,29 @@ func (s *ProjectService) sceneImageReferenceFiles(sc *models.Scene) ([]FileMeta,
 	refs := make([]FileMeta, 0, maxSceneReferenceImages)
 	lines := make([]string, 0, maxSceneReferenceImages)
 	for _, ch := range s.sceneCharacterPortraits(sc) {
-		name, kind := ch.Sheet, "四视图"
-		if name == "" {
-			name, kind = ch.Portrait, "标准像"
-		}
-		if name == "" || len(refs) >= maxSceneReferenceImages {
+		if ch.Portrait == "" || len(refs) >= maxSceneReferenceImages {
 			continue
 		}
-		refs = append(refs, FileMeta{TaskID: pid, Name: name})
-		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」%s", len(refs), ch.Name, kind))
+		refs = append(refs, FileMeta{TaskID: pid, Name: ch.Portrait})
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」定妆照（只锁定脸部身份）", len(refs), ch.Name))
 	}
-	for _, look := range s.sceneCharacterLooks(sc, false) {
+	for _, outfit := range s.sceneCharacterOutfits(sc) {
 		if len(refs) >= maxSceneReferenceImages {
 			break
 		}
-		if look.Image == "" {
+		name, kind := outfit.Sheet, "套装四视图"
+		if name == "" {
+			name, kind = outfit.Image, "竖版套装图"
+		}
+		if name == "" {
 			continue
 		}
-		refs = append(refs, FileMeta{TaskID: pid, Name: look.Image})
-		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色造型「%s」（%s）", len(refs), look.Name, LookCategoryLabel(look.Category)))
+		charName := "角色"
+		if outfit.Character != nil {
+			charName = outfit.Character.Name
+		}
+		refs = append(refs, FileMeta{TaskID: pid, Name: name})
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」造型套装「%s」%s", len(refs), charName, outfit.Name, kind))
 	}
 	for _, a := range s.sceneMatchedAssets(sc) {
 		if len(refs) >= maxSceneReferenceImages {
@@ -2245,6 +2288,7 @@ func (s *ProjectService) WatchSceneVideos() {
 				s.syncAssetImages()
 				if s.characterLooks != nil {
 					s.characterLooks.SyncImages()
+					s.characterLooks.SyncOutfitImages()
 				}
 				s.syncSheets()
 				s.syncSceneImages()

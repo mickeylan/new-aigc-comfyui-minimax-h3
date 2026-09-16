@@ -106,7 +106,7 @@ func (s *Service) comfyHostForPort(port int) string {
 
 // Start 启动后台服务
 func (s *Service) Start() {
-	if err := InitSystemTemplates(s.DB); err != nil {
+	if err := InitSystemTemplates(s.DB, s.Cfg.TemplatesDir); err != nil {
 		log.Printf("[templates] seed failed: %v", err)
 	}
 	if s.Remote.Enabled() {
@@ -279,6 +279,15 @@ func (s *Service) HandleListTemplates(c *gin.Context) {
 	var list []models.Template
 	s.DB.Where("enabled = ?", true).Order("id").Find(&list)
 	c.JSON(200, list)
+}
+
+// HandleReloadTemplates 从运行时模板目录重新载入 JSON，无需重启或重新编译。
+func (s *Service) HandleReloadTemplates(c *gin.Context) {
+	if err := InitSystemTemplates(s.DB, s.Cfg.TemplatesDir); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true, "message": "模板已重新加载"})
 }
 
 // ---------- 任务 ----------

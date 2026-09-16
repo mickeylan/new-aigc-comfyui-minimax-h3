@@ -488,6 +488,12 @@
         </div>
         <div class="field"><label>视频动作正文（可手工修改）</label><textarea v-model="sceneForm.video_prompt" class="textarea" rows="6" placeholder="填写可见动作、结束状态和运镜；留空则自动生成。首帧、连续性和 H3 六段契约由系统固定保护。" /></div>
         <div class="field">
+          <label>本场角色造型套装</label>
+          <div v-if="!sceneCharactersForOutfits().length" class="field-hint">本场未识别到项目角色。</div>
+          <div v-for="ch in sceneCharactersForOutfits()" :key="ch.id" class="outfit-select-row"><strong>{{ch.name}}</strong><select v-model.number="selectedSceneOutfits[ch.id]" class="input"><option :value="0">未选择（使用默认）</option><option v-for="o in sceneOutfitOptions[ch.id]||[]" :key="o.id" :value="o.id" :disabled="o.audit_status!=='approved'&&o.audit_status!=='published'">{{o.name}} · {{o.audit_status}}</option></select><router-link :to="`/projects/${id()}/characters/${ch.id}/looks`" class="btn btn-sm btn-ghost">管理造型</router-link></div>
+          <div class="field-hint">每个角色在一个场景中选择一套完整造型；镜头未单独覆盖时继承本场选择。</div>
+        </div>
+        <div class="field">
           <label>参考图库（按选择顺序对应 Picture 编号）</label>
           <div v-if="!sceneReferenceCandidates.length" class="field-hint">暂无可用图片，请先生成或上传角色、造型、场景、道具参考图。</div>
           <div class="reference-picker"><div v-for="ref in sceneReferenceCandidates" :key="ref.key" class="reference-option" :class="{ selected: referenceIndex(ref) >= 0 }"><img :src="api.inputUrl(id(), ref.image)" @click="toggleSceneReference(ref)"><div><strong>{{ referenceIndex(ref) >= 0 ? `${kreaPictureNumber(ref) ? `场景图 Picture ${kreaPictureNumber(ref)}` : '不用于场景图'} / ${h3PictureNumber(ref) ? `H3 Picture ${h3PictureNumber(ref)}` : '不用于H3'}` : '未选择' }}</strong><span>{{ ref.label }}</span><div v-if="referenceIndex(ref) >= 0" class="reference-flags"><label><input v-model="selectedSceneReferences[referenceIndex(ref)].use_krea2" type="checkbox"> 场景图</label><label><input v-model="selectedSceneReferences[referenceIndex(ref)].use_h3" type="checkbox"> H3</label><button type="button" @click="moveReference(referenceIndex(ref), -1)">↑</button><button type="button" @click="moveReference(referenceIndex(ref), 1)">↓</button></div></div></div></div>
@@ -926,6 +932,8 @@ const loadError = ref('')
 const sceneForm = reactive({ title: '', content: '', duration: 5, image_prompt: '', video_prompt: '', visual_type: 'normal', mega_type: 'architecture' })
 const sceneReferenceCandidates = ref([])
 const selectedSceneReferences = ref([])
+const sceneOutfitOptions = ref({})
+const selectedSceneOutfits = ref({})
 const projectForm = reactive({ title: '', genre: '', style: '', synopsis: '', audience: '', tone: '', ending: '', episodes: 10, aspect_ratio: '16:9' })
 let timer = null
 let wsTimer = null
@@ -1874,12 +1882,17 @@ async function openEditScene(sc) {
     visual_type: sc.visual_type || 'normal', mega_type: sc.mega_type || 'architecture'
   })
   try {
-    const [{ data }, { data: videoPrompt }] = await Promise.all([
+    const sceneChars = sceneCharactersForOutfits(sc)
+    const [{ data }, { data: videoPrompt }, { data: assigned }, outfitLists] = await Promise.all([
       api.sceneReferences(id(), sc.id),
-      api.sceneVideoPrompt(id(), sc.id)
+      api.sceneVideoPrompt(id(), sc.id),
+      api.sceneOutfits(id(), sc.id),
+      Promise.all(sceneChars.map(ch => api.characterOutfits(id(), ch.id).then(r=>({cid:ch.id,rows:r.data||[]}))))
     ])
     sceneReferenceCandidates.value = data.candidates || []
     selectedSceneReferences.value = (data.references || []).map(x => ({ ...x }))
+    sceneOutfitOptions.value = Object.fromEntries(outfitLists.map(x=>[x.cid,x.rows]))
+    selectedSceneOutfits.value = Object.fromEntries((assigned||[]).map(x=>[x.character_id,x.outfit_id]))
     sceneForm.video_prompt = videoPrompt.prompt || ''
   } catch (e) {
     sceneReferenceCandidates.value = []
@@ -1888,6 +1901,7 @@ async function openEditScene(sc) {
   }
 }
 
+function sceneCharactersForOutfits(sc=editingScene.value) { const names=String(sc?.characters||'').split(/[，,、]/).map(x=>x.trim()).filter(Boolean); return characters.value.filter(ch=>names.includes(ch.name)) }
 function referenceKey(ref) { return `${ref.source_type}:${ref.source_id}:${ref.variant}` }
 function referenceIndex(ref) { const key = referenceKey(ref); return selectedSceneReferences.value.findIndex(x => referenceKey(x) === key) }
 function kreaPictureNumber(ref) { const key = referenceKey(ref); const active = selectedSceneReferences.value.filter(x => x.use_krea2); const i = active.findIndex(x => referenceKey(x) === key); return i >= 0 ? i + 1 : null }
@@ -1925,6 +1939,7 @@ async function saveScene() {
       mega_type: sceneForm.mega_type
     })
     await api.updateSceneReferences(id(), editingScene.value.id, selectedSceneReferences.value)
+    await api.updateSceneOutfits(id(), editingScene.value.id, Object.entries(selectedSceneOutfits.value).filter(([,oid])=>Number(oid)>0).map(([cid,oid])=>({character_id:Number(cid),outfit_id:Number(oid)})))
     const promptChanged = sceneForm.image_prompt !== editingScene.value.image_prompt
     editingScene.value = null
     await load()
@@ -2313,6 +2328,7 @@ onBeforeUnmount(() => {
 .reference-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; margin-top: 8px; }
 .reference-option { display: grid; grid-template-columns: auto 46px 1fr; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
 .reference-option img { width: 46px; height: 46px; object-fit: cover; border-radius: 6px; }
+.outfit-select-row { display: grid; grid-template-columns: minmax(90px, auto) minmax(220px, 1fr) auto; align-items: center; gap: 10px; margin-top: 8px; }
 .badge-green { background: rgba(34, 197, 94, 0.15); color: #16a34a; }
 .badge-red { background: rgba(239, 68, 68, 0.12); color: #dc2626; }
 

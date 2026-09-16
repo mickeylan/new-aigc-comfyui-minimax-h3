@@ -244,23 +244,24 @@ func (s *CharacterLookService) UpdateLook(id uint, req models.CharacterLook) (*m
 		updates["name"] = strings.TrimSpace(req.Name)
 	}
 
-	if req.Category != "" {
-		if !ValidLookCategories[req.Category] {
+	if req.Category != "" && req.Category != look.Category {
+		if !ValidLookCategories[req.Category] || req.Category == "full" {
 			return nil, fmt.Errorf("无效的造型分类：%s", req.Category)
 		}
 		updates["category"] = req.Category
 	}
-
-	if req.Description != "" {
-		updates["description"] = strings.TrimSpace(req.Description)
+	if value := strings.TrimSpace(req.Description); value != "" && value != look.Description {
+		updates["description"] = value
 	}
-
-	if req.Prompt != "" {
-		updates["prompt"] = strings.TrimSpace(req.Prompt)
+	if value := strings.TrimSpace(req.Prompt); value != "" && value != look.Prompt {
+		updates["prompt"] = value
 	}
-
-	updates["priority"] = req.Priority
-	updates["is_shot_related"] = req.IsShotRelated
+	if req.Priority != look.Priority {
+		updates["priority"] = req.Priority
+	}
+	if req.IsShotRelated != look.IsShotRelated {
+		updates["is_shot_related"] = req.IsShotRelated
+	}
 
 	// 任何修改都需要重新审核
 	if len(updates) > 0 {
@@ -272,6 +273,9 @@ func (s *CharacterLookService) UpdateLook(id uint, req models.CharacterLook) (*m
 		updates["image"] = ""
 		updates["image_task_id"] = ""
 		updates["image_error"] = ""
+		if look.ImageTaskID != "" && s.tasks != nil {
+			_ = s.tasks.CancelTask(look.ImageTaskID)
+		}
 	}
 
 	if err := s.db.Model(&look).Updates(updates).Error; err != nil {
@@ -410,10 +414,10 @@ func (s *CharacterLookService) PublishLook(id uint) error {
 	return s.db.Model(&look).Update("audit_status", models.LookStatusPublished).Error
 }
 
-// StartImageGeneration 使用 MiniMax H3 以角色定妆照为脸部锚点生成竖版造型参考图。
+// StartImageGeneration 生成单件独立造型资产图；完整人物换装由 CharacterOutfit 负责。
 func (s *CharacterLookService) StartImageGeneration(look *models.CharacterLook) error {
 	if s.tasks == nil {
-		return fmt.Errorf("造型参考图生成依赖 ComfyUI 任务服务")
+		return fmt.Errorf("造型资产图生成依赖 ComfyUI 任务服务")
 	}
 	if look.AuditStatus != models.LookStatusApproved && look.AuditStatus != models.LookStatusPublished {
 		return fmt.Errorf("请先审核通过造型")
@@ -421,21 +425,14 @@ func (s *CharacterLookService) StartImageGeneration(look *models.CharacterLook) 
 	if strings.TrimSpace(look.Prompt) == "" {
 		return fmt.Errorf("请先生成或填写参考图提示词")
 	}
-	var ch models.Character
-	if err := s.db.First(&ch, look.CharacterID).Error; err != nil {
-		return fmt.Errorf("未找到角色: %w", err)
+	if strings.TrimSpace(look.ImageTaskID) != "" {
+		return fmt.Errorf("造型资产图正在生成，请勿重复提交")
 	}
-	tpl, err := s.findLookTemplate()
-	if err != nil {
-		return err
+	var tpl models.Template
+	if err := s.db.Where("code = ? AND enabled = ?", "krea2_asset_reference", true).First(&tpl).Error; err != nil {
+		return fmt.Errorf("未找到已启用的独立造型资产模板 krea2_asset_reference")
 	}
-	prompt := fmt.Sprintf("<Picture 1>=定妆照（脸部身份锚点，严格保持该人物五官），%s", strings.TrimSpace(look.Prompt))
-	task, err := s.tasks.CreateTask(CreateTaskReq{
-		TemplateID: tpl.ID,
-		Prompt:     prompt,
-		Params:     map[string]any{"width": 928, "height": 1664}, // 9:16 竖版
-		Files:      map[string][]FileMeta{"ref_images": {{TaskID: fmt.Sprintf("%d", look.ProjectID), Name: ch.Portrait}}},
-	})
+	task, err := s.tasks.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: look.Prompt, Params: map[string]any{"width": 1024, "height": 1024}})
 	if err != nil {
 		return err
 	}
@@ -451,17 +448,13 @@ func (s *CharacterLookService) StartImageGeneration(look *models.CharacterLook) 
 	return nil
 }
 
-// findLookTemplate 查找造型资产参考图模板，优先 H3，否则降级 Krea2。
+// findLookTemplate 只允许使用支持参考图身份锚定的 H3 造型模板。
 func (s *CharacterLookService) findLookTemplate() (*models.Template, error) {
 	var tpl models.Template
-	if err := s.db.Where("code = ? AND enabled = ?", "minimax_h3_look_reference", true).First(&tpl).Error; err == nil {
-		return &tpl, nil
+	if err := s.db.Where("code = ? AND enabled = ?", "minimax_h3_look_reference", true).First(&tpl).Error; err != nil {
+		return nil, fmt.Errorf("未找到已启用的 H3 造型参考图模板 minimax_h3_look_reference")
 	}
-	if err := s.db.Where("code = ? AND enabled = ?", "krea2_asset_reference", true).First(&tpl).Error; err == nil {
-		log.Printf("[character_look] H3 造型模板未启用，降级使用 Krea2")
-		return &tpl, nil
-	}
-	return nil, fmt.Errorf("未找到已启用的造型参考图模板（minimax_h3_look_reference 或 krea2_asset_reference）")
+	return &tpl, nil
 }
 
 func (s *CharacterLookService) SyncImages() {
@@ -473,7 +466,7 @@ func (s *CharacterLookService) SyncImages() {
 		look := &looks[i]
 		var task models.Task
 		if s.db.Where("task_id = ?", look.ImageTaskID).First(&task).Error != nil {
-			s.db.Model(look).Updates(map[string]any{"image_task_id": "", "image_error": "任务不存在，请重新生成"})
+			s.db.Model(look).Where("image_task_id = ?", look.ImageTaskID).Updates(map[string]any{"image_task_id": "", "image_error": "任务不存在，请重新生成"})
 			continue
 		}
 		if task.Status == "failed" || task.Status == "cancelled" {
@@ -485,7 +478,7 @@ func (s *CharacterLookService) SyncImages() {
 		}
 		file, _ := resultImageOf(&task)
 		if file == "" || task.Port == nil || s.upload == nil {
-			s.db.Model(look).Updates(map[string]any{"image_task_id": "", "image_error": "任务成功但未返回图片"})
+			s.db.Model(look).Where("image_task_id = ?", task.TaskID).Updates(map[string]any{"image_task_id": "", "image_error": "任务成功但未返回图片"})
 			continue
 		}
 		sub, name := filepath.ToSlash(filepath.Dir(file)), filepath.Base(file)
@@ -494,7 +487,7 @@ func (s *CharacterLookService) SyncImages() {
 		}
 		data, err := NewComfyClient(s.tasks.comfyHostForPort(*task.Port), *task.Port).DownloadOutput(name, sub, "output")
 		if err != nil {
-			s.db.Model(look).Updates(map[string]any{"image_task_id": "", "image_error": err.Error()})
+			s.db.Model(look).Where("image_task_id = ?", task.TaskID).Updates(map[string]any{"image_task_id": "", "image_error": err.Error()})
 			continue
 		}
 		ext := filepath.Ext(file)
@@ -503,7 +496,7 @@ func (s *CharacterLookService) SyncImages() {
 		}
 		path, _, err := s.upload.SaveFile(fmt.Sprint(look.ProjectID), "image", fmt.Sprintf("look_%d%s", look.ID, ext), data)
 		if err != nil {
-			s.db.Model(look).Updates(map[string]any{"image_task_id": "", "image_error": err.Error()})
+			s.db.Model(look).Where("image_task_id = ?", task.TaskID).Updates(map[string]any{"image_task_id": "", "image_error": err.Error()})
 			continue
 		}
 		s.db.Model(look).Where("image_task_id = ?", task.TaskID).Updates(map[string]any{"image": filepath.Base(path), "image_task_id": "", "image_error": ""})
@@ -734,6 +727,9 @@ func (s *CharacterLookService) SaveUploadedImage(look *models.CharacterLook, fil
 	path, _, err := s.upload.SaveFile(fmt.Sprint(look.ProjectID), "image", fmt.Sprintf("look_%d%s", look.ID, ext), data)
 	if err != nil {
 		return err
+	}
+	if look.ImageTaskID != "" && s.tasks != nil {
+		_ = s.tasks.CancelTask(look.ImageTaskID)
 	}
 	return s.db.Model(look).Updates(map[string]any{"image": filepath.Base(path), "image_task_id": "", "image_error": ""}).Error
 }

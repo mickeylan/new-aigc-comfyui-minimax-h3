@@ -85,12 +85,12 @@ func TestGenerateReferencePromptCompilesLumxDimensions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"26岁女性", "黑色长发", "鹅蛋脸", "杏眼", "真人照片风格", "单人正面大头贴", "肩部以上构图"} {
+	for _, want := range []string{"26岁女性", "黑色长发", "鹅蛋脸", "杏眼", "真人照片风格", "单人正面大头贴", "肩部以上构图", "象牙白羊毛风衣", "深灰内搭", "银色项链", "衣料完整覆盖肩部与胸口"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("提示词缺少 %q: %s", want, prompt)
 		}
 	}
-	for _, forbidden := range []string{"羊毛风衣", "深灰内搭", "银色项链", "角色固定配色", "影棚布光", "禁止显老", "法令纹", "眼袋"} {
+	for _, forbidden := range []string{"角色固定配色", "影棚布光", "禁止显老", "法令纹", "眼袋"} {
 		if strings.Contains(prompt, forbidden) {
 			t.Fatalf("大头贴提示词混入 %q: %s", forbidden, prompt)
 		}
@@ -99,6 +99,34 @@ func TestGenerateReferencePromptCompilesLumxDimensions(t *testing.T) {
 	ps.db.First(&got, ch.ID)
 	if got.ProfileStatus != models.ProfileStatusApproved || got.ReviewNote != "旧审核" || got.Portrait != "" {
 		t.Fatalf("已审核档案生成确定性提示词后应保持审核状态并清除旧标准像: %+v", got)
+	}
+}
+
+func TestPortraitStylingSelectsOneCoherentLook(t *testing.T) {
+	ch := &models.Character{
+		Appearance:     "乌黑长发及腰，日常梳低挽发髻，用一根素雅木簪固定。鹅蛋脸，丹凤眼。",
+		WardrobeDetail: "日常服装——浅蓝与鹅黄两套常服。浅蓝色装扮：浅蓝色立领斜襟布衫，白色里衣，浅蓝腰带。鹅黄色装扮：鹅黄色对襟布衫。工作装束：挽起袖口。重要场合造型：月白礼服。",
+	}
+	style := portraitStyling(ch)
+	for _, want := range []string{"低挽发髻", "木簪", "浅蓝色立领斜襟布衫", "白色里衣"} {
+		if !strings.Contains(style, want) {
+			t.Fatalf("styling missing %q: %s", want, style)
+		}
+	}
+	for _, forbidden := range []string{"鹅黄色对襟", "工作装束", "月白礼服"} {
+		if strings.Contains(style, forbidden) {
+			t.Fatalf("styling mixed alternative %q: %s", forbidden, style)
+		}
+	}
+}
+
+func TestPortraitPromptRemovesConflictingRealisticSuffixForAnime(t *testing.T) {
+	prompt := normalizePortraitStyle("国漫插画风格，肩部以上构图，写实风格", &models.Project{Style: "国漫插画"})
+	if strings.Contains(prompt, "，写实风格") {
+		t.Fatalf("conflicting style remains: %s", prompt)
+	}
+	if !strings.Contains(prompt, "国漫插画风格") {
+		t.Fatalf("primary style lost: %s", prompt)
 	}
 }
 

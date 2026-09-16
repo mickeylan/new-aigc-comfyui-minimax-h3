@@ -36,6 +36,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 
 	// 模板
 	r.GET("/api/templates", svc.HandleListTemplates)
+	r.POST("/api/templates/reload", svc.HandleReloadTemplates)
 
 	// 任务
 	r.GET("/api/tasks", svc.HandleListTasks)
@@ -134,11 +135,24 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/characters/:cid/looks/:lid/approve", svc.HandleApproveCharacterLook)            // 审核通过
 	r.POST("/api/projects/:id/characters/:cid/looks/:lid/reject", svc.HandleRejectCharacterLook)              // 审核驳回
 	r.POST("/api/projects/:id/characters/:cid/looks/:lid/publish", svc.HandlePublishCharacterLook)            // 发布造型
+	// 角色造型套装（由独立造型资产组合）
+	r.GET("/api/projects/:id/characters/:cid/outfits", svc.HandleListCharacterOutfits)
+	r.POST("/api/projects/:id/characters/:cid/outfits", svc.HandleCreateCharacterOutfit)
+	r.PUT("/api/projects/:id/characters/:cid/outfits/:oid", svc.HandleUpdateCharacterOutfit)
+	r.DELETE("/api/projects/:id/characters/:cid/outfits/:oid", svc.HandleDeleteCharacterOutfit)
+	r.POST("/api/projects/:id/characters/:cid/outfits/:oid/approve", svc.HandleApproveCharacterOutfit)
+	r.POST("/api/projects/:id/characters/:cid/outfits/:oid/image", svc.HandleGenerateCharacterOutfitImage)
+	r.POST("/api/projects/:id/characters/:cid/outfits/:oid/image/upload", svc.HandleUploadCharacterOutfitImage)
+	r.POST("/api/projects/:id/characters/:cid/outfits/:oid/sheet", svc.HandleGenerateCharacterOutfitSheet)
 	// 场景/镜头造型关联
 	r.GET("/api/projects/:id/scenes/:sid/looks", svc.HandleGetSceneLooks)    // 获取场景造型关联
 	r.PUT("/api/projects/:id/scenes/:sid/looks", svc.HandleAssignSceneLooks) // 设置场景造型关联
-	r.GET("/api/projects/:id/shots/:shid/looks", svc.HandleGetShotLooks)     // 获取镜头造型关联
-	r.PUT("/api/projects/:id/shots/:shid/looks", svc.HandleAssignShotLooks)  // 设置镜头造型关联
+	r.GET("/api/projects/:id/scenes/:sid/outfits", svc.HandleGetSceneOutfits)
+	r.PUT("/api/projects/:id/scenes/:sid/outfits", svc.HandleAssignSceneOutfits)
+	r.GET("/api/projects/:id/shots/:shid/looks", svc.HandleGetShotLooks)    // 获取镜头造型关联
+	r.PUT("/api/projects/:id/shots/:shid/looks", svc.HandleAssignShotLooks) // 设置镜头造型关联
+	r.GET("/api/projects/:id/shots/:shid/outfits", svc.HandleGetShotOutfits)
+	r.PUT("/api/projects/:id/shots/:shid/outfits", svc.HandleAssignShotOutfits)
 	// 视觉资产（道具 / 场景，跨分镜一致性参考图）
 	r.GET("/api/projects/:id/assets/:kind", svc.HandleListAssets)
 	r.POST("/api/projects/:id/assets/:kind/redesign", svc.HandleRedesignAssetDescription)

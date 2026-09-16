@@ -175,6 +175,75 @@ func portraitFaceIdentity(appearance, trait string) string {
 	return strings.Join(out, "，")
 }
 
+// portraitStyling 从审核档案中选择一套确定的标准照妆造，不混合替换造型。
+// 优先第一套明确日常服装，并保留与其相邻的发型、头饰描述。
+func portraitStyling(char *models.Character) string {
+	wardrobe := strings.TrimSpace(char.WardrobeDetail)
+	if wardrobe == "" {
+		wardrobe = strings.TrimSpace(char.Style)
+	}
+	if wardrobe == "" {
+		return "简洁合体的中性基础上衣，衣料完整覆盖肩部与胸口"
+	}
+
+	selected := wardrobe
+	// 常见多套档案按第二套/工作装/正式装截断，只取首套确定造型。
+	for _, marker := range []string{"鹅黄色装扮：", "第二套", "另一套", "工作装束", "工作装：", "重要场合造型", "正式场合", "礼服造型"} {
+		if i := strings.Index(selected, marker); i > 0 {
+			selected = selected[:i]
+		}
+	}
+	// 去掉目录式前言，从第一套明确服装开始。
+	for _, marker := range []string{"浅蓝色装扮：", "第一套：", "日常装扮：", "日常服装："} {
+		if i := strings.Index(selected, marker); i >= 0 {
+			selected = selected[i+len(marker):]
+			break
+		}
+	}
+	clauses := strings.FieldsFunc(selected, func(r rune) bool { return r == '。' || r == '；' || r == '\n' })
+	kept := make([]string, 0, 4)
+	for _, clause := range clauses {
+		clause = strings.TrimSpace(clause)
+		if clause == "" {
+			continue
+		}
+		if strings.Contains(clause, "代表") || strings.Contains(clause, "象征") || strings.Contains(clause, "气质") {
+			continue
+		}
+		kept = append(kept, clause)
+		if len(kept) >= 4 {
+			break
+		}
+	}
+	style := strings.Join(kept, "，")
+	if style == "" {
+		style = "简洁合体的基础上衣，衣料完整覆盖肩部与胸口"
+	}
+
+	// 发型和头饰优先使用外貌档案中的确定描述，最多两句。
+	hair := make([]string, 0, 2)
+	for _, clause := range strings.FieldsFunc(char.Appearance+"。"+char.Trait, func(r rune) bool { return r == '。' || r == '；' || r == '\n' }) {
+		clause = strings.TrimSpace(clause)
+		if clause == "" {
+			continue
+		}
+		if strings.Contains(clause, "发髻") || strings.Contains(clause, "发型") || strings.Contains(clause, "头饰") || strings.Contains(clause, "木簪") || strings.Contains(clause, "发簪") {
+			hair = append(hair, clause)
+			if len(hair) >= 2 {
+				break
+			}
+		}
+	}
+	if len(hair) > 0 {
+		style = strings.Join(hair, "，") + "，" + style
+	}
+	runes := []rune(style)
+	if len(runes) > 360 {
+		style = string(runes[:360])
+	}
+	return style
+}
+
 func ageSubject(appearance, trait string) string {
 	match := characterAgePattern.FindStringSubmatch(appearance + "，" + trait)
 	if len(match) < 2 {
@@ -196,14 +265,14 @@ func (s *CharacterProfileService) GenerateReferencePrompt(char *models.Character
 	if appearance == "" {
 		return "", fmt.Errorf("请先完善角色脸部与发型描述")
 	}
-	parts := []string{"单人正面大头贴", appearance}
+	parts := []string{"单人正面大头贴", appearance, "本次标准像唯一妆造：" + portraitStyling(char)}
 	if project != nil {
 		if desc := styleDescriptor(project.Style); desc != "" {
 			parts = append(parts, desc)
 		}
 	}
-	parts = append(parts, "头发完整入镜，脸部居中，直视镜头，自然表情，肩部以上构图，纯白背景，柔和均匀光线")
-	prompt := strings.Join(parts, "，")
+	parts = append(parts, "头发、发型与头饰完整入镜，脸部居中，直视镜头，自然表情，肩部以上构图，本次唯一上衣的领口、颜色、材质清楚可见，衣料完整覆盖肩部与胸口，纯白背景，柔和均匀光线")
+	prompt := normalizePortraitStyle(strings.Join(parts, "，"), project)
 	updates := map[string]any{
 		"reference_prompt": prompt,
 		"portrait":         "",
@@ -224,6 +293,20 @@ func (s *CharacterProfileService) GenerateReferencePrompt(char *models.Character
 		return "", err
 	}
 	return prompt, nil
+}
+
+// normalizePortraitStyle 删除与项目主画风直接冲突的泛化尾词，避免同一提示词同时要求动漫与写实。
+func normalizePortraitStyle(prompt string, project *models.Project) string {
+	if project == nil {
+		return prompt
+	}
+	style := strings.ToLower(strings.TrimSpace(project.Style))
+	if strings.Contains(style, "国漫") || strings.Contains(style, "日漫") || strings.Contains(style, "韩漫") || strings.Contains(style, "动画") || strings.Contains(style, "插画") {
+		for _, conflicting := range []string{"，写实风格", "，真人写实", "，真实照片风格", "，超写实"} {
+			prompt = strings.ReplaceAll(prompt, conflicting, "")
+		}
+	}
+	return prompt
 }
 
 func validateCharacterProfile(char *models.Character) error {
