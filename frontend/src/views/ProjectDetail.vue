@@ -496,10 +496,10 @@
           <div class="field-hint">每个角色在一个场景中选择一套完整造型；镜头未单独覆盖时继承本场选择。</div>
         </div>
         <div class="field">
-          <label>参考图库（按选择顺序对应 Picture 编号）</label>
-          <div v-if="!sceneReferenceCandidates.length" class="field-hint">暂无可用图片，请先生成或上传角色、造型、场景、道具参考图。</div>
-          <div class="reference-picker"><div v-for="ref in sceneReferenceCandidates" :key="ref.key" class="reference-option" :class="{ selected: referenceIndex(ref) >= 0 }"><img :src="api.inputUrl(id(), ref.image)" @click="toggleSceneReference(ref)"><div><strong>{{ referenceIndex(ref) >= 0 ? `${kreaPictureNumber(ref) ? `场景图 Picture ${kreaPictureNumber(ref)}` : '不用于场景图'} / ${h3PictureNumber(ref) ? `H3 Picture ${h3PictureNumber(ref)}` : '不用于H3'}` : '未选择' }}</strong><span>{{ ref.label }}</span><div v-if="referenceIndex(ref) >= 0" class="reference-flags"><label><input v-model="selectedSceneReferences[referenceIndex(ref)].use_krea2" type="checkbox"> 场景图</label><label><input v-model="selectedSceneReferences[referenceIndex(ref)].use_h3" type="checkbox"> H3</label><button type="button" @click="moveReference(referenceIndex(ref), -1)">↑</button><button type="button" @click="moveReference(referenceIndex(ref), 1)">↓</button></div></div></div></div>
-          <div class="field-hint">点击缩略图选择或取消。SelfLift 分镜候选可选择 1–9 张“场景图”参考图；正式 H3 的 Picture 1 是抽取后的起始帧，所选 H3 图片从 Picture 2 开始，最多 8 张。</div>
+          <label>参考图片</label>
+          <div v-if="!sceneReferenceCandidates.length" class="field-hint">暂无可用图片，请先生成或上传人物四视图、造型、场景或道具参考图。</div>
+          <div class="reference-picker"><div v-for="ref in sceneReferenceCandidates" :key="ref.key" class="reference-option" :class="{ selected: referenceIndex(ref) >= 0 }"><img :src="api.inputUrl(id(), ref.image)" @click="toggleSceneReference(ref)"><div><strong>{{ referenceIndex(ref) >= 0 ? `${selectedSceneReferences[referenceIndex(ref)].use_krea2 ? '用于生成分镜图' : '不用于分镜图'} / ${selectedSceneReferences[referenceIndex(ref)].use_h3 ? '用于后续视频参考' : '不用于后续视频'}` : '未选择' }}</strong><span>{{ ref.label }}</span><div v-if="referenceIndex(ref) >= 0" class="reference-flags"><label><input v-model="selectedSceneReferences[referenceIndex(ref)].use_krea2" type="checkbox"> 生成分镜图时使用</label><label><input v-model="selectedSceneReferences[referenceIndex(ref)].use_h3" type="checkbox"> 后续视频时使用</label><button type="button" @click="moveReference(referenceIndex(ref), -1)">↑</button><button type="button" @click="moveReference(referenceIndex(ref), 1)">↓</button></div></div></div></div>
+          <div class="field-hint"><strong>生成分镜图：</strong>SelfLift 使用场景、当前出场人物四视图、造型和道具参考图，最多 9 张；出场人物四视图会自动补入。<br><strong>生成后续视频：</strong>已确认的分镜图作为起始帧；这里只选择需要额外提供给视频模型的人物、造型或道具参考图，最多 8 张。</div>
         </div>
         <div v-if="sceneError" class="notice error-notice">{{ sceneError }}</div>
         <div class="modal-actions">
@@ -1925,8 +1925,6 @@ async function openEditScene(sc) {
 function sceneCharactersForOutfits(sc=editingScene.value) { const names=String(sc?.characters||'').split(/[，,、]/).map(x=>x.trim()).filter(Boolean); return characters.value.filter(ch=>names.includes(ch.name)) }
 function referenceKey(ref) { return `${ref.source_type}:${ref.source_id}:${ref.variant}` }
 function referenceIndex(ref) { const key = referenceKey(ref); return selectedSceneReferences.value.findIndex(x => referenceKey(x) === key) }
-function kreaPictureNumber(ref) { const key = referenceKey(ref); const active = selectedSceneReferences.value.filter(x => x.use_krea2); const i = active.findIndex(x => referenceKey(x) === key); return i >= 0 ? i + 1 : null }
-function h3PictureNumber(ref) { const key = referenceKey(ref); const active = selectedSceneReferences.value.filter(x => x.use_h3); const i = active.findIndex(x => referenceKey(x) === key); return i >= 0 ? i + 2 : null }
 function toggleSceneReference(ref) { const i = referenceIndex(ref); if (i >= 0) selectedSceneReferences.value.splice(i, 1); else selectedSceneReferences.value.push({ source_type: ref.source_type, source_id: ref.source_id, variant: ref.variant, use_krea2: true, use_h3: true }) }
 function moveReference(index, delta) { const target = index + delta; if (target < 0 || target >= selectedSceneReferences.value.length) return; const [item] = selectedSceneReferences.value.splice(index, 1); selectedSceneReferences.value.splice(target, 0, item) }
 

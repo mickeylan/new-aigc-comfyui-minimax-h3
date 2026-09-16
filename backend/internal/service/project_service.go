@@ -2016,6 +2016,38 @@ func buildH3StoryboardPrompt(sc *models.Scene, p *models.Project, referenceLines
 		"\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"
 }
 
+func (s *ProjectService) missingSceneCharacterReferences(sc *models.Scene, refs []FileMeta) []string {
+	present := map[string]bool{}
+	for _, ref := range refs {
+		present[ref.Name] = true
+	}
+	names := parseSceneCharacters(sc.Characters)
+	if len(names) == 0 {
+		return nil
+	}
+	var chars []models.Character
+	s.db.Where("project_id = ? AND name IN ?", sc.ProjectID, names).Find(&chars)
+	byName := map[string]models.Character{}
+	for _, ch := range chars {
+		byName[ch.Name] = ch
+	}
+	missing := []string{}
+	for _, name := range names {
+		ch, ok := byName[name]
+		if !ok || !s.sceneHasCharacter(sc, name) {
+			continue
+		}
+		file := ch.Sheet
+		if file == "" {
+			file = ch.Portrait
+		}
+		if file == "" || !present[file] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
+}
+
 func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token string) error {
 	if s.tasks == nil {
 		s.failSceneImage(sc, token, "MiniMax H3 SelfLift 场景图生成依赖 ComfyUI 任务服务")
@@ -2032,6 +2064,11 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 	}
 	if len(refs) > maxSceneReferenceImages {
 		refs, lines = refs[:maxSceneReferenceImages], lines[:maxSceneReferenceImages]
+	}
+	if missing := s.missingSceneCharacterReferences(sc, refs); len(missing) > 0 {
+		msg := "当前镜头人物缺少实际上传的四视图或标准像参考：" + strings.Join(missing, "、")
+		s.failSceneImage(sc, token, msg)
+		return fmt.Errorf("%s", msg)
 	}
 
 	templateCode := "minimax_h3_storyboard_candidates_selflift"

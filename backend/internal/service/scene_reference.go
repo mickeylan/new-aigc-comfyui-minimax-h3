@@ -129,6 +129,31 @@ func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target st
 		byKey[c.Key] = c
 	}
 	if target == "krea2" { // legacy field name; this target is MiniMax H3 SelfLift scene generation
+		// 可见角色的身份参考是场景生成的必需输入。旧项目可能显式列表里只有场景图，
+		// 此时自动补四视图（标准像兜底），避免 H3 在没有人物参考时自行脑补。
+		selectedKeys := make(map[string]bool, len(selected))
+		selectedCharacterIDs := map[uint]bool{}
+		for _, r := range selected {
+			selectedKeys[referenceKey(r)] = true
+			if r.SourceType == "character" && r.UseKrea2 {
+				selectedCharacterIDs[r.SourceID] = true
+			}
+		}
+		for _, ch := range s.sceneCharacterPortraits(sc) {
+			if selectedCharacterIDs[ch.ID] {
+				continue
+			}
+			variant := "sheet"
+			if ch.Sheet == "" {
+				variant = "portrait"
+			}
+			ref := SceneReferenceSelection{SourceType: "character", SourceID: ch.ID, Variant: variant, UseKrea2: true}
+			if !selectedKeys[referenceKey(ref)] {
+				selected = append(selected, ref)
+				selectedKeys[referenceKey(ref)] = true
+			}
+		}
+
 		priority := func(r SceneReferenceSelection) int {
 			c, ok := byKey[referenceKey(r)]
 			if ok && c.Category == AssetKindLocation {

@@ -734,6 +734,36 @@ func TestSceneReferencesExcludeOffscreenCharacterFromShot(t *testing.T) {
 	}
 }
 
+func TestExplicitSceneLocationStillAddsVisibleCharacterSheet(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Shot{}); err != nil {
+		t.Fatal(err)
+	}
+	p := models.Project{Title: "穿越"}
+	ps.db.Create(&p)
+	sc := models.Scene{ProjectID: p.ID, Characters: "雷晓飞", Content: "雷晓飞独坐面馆", LocationName: "雷记面馆"}
+	ps.db.Create(&sc)
+	lead := models.Character{ProjectID: p.ID, Name: "雷晓飞", Portrait: "lead-face.png", Sheet: "lead-sheet.png"}
+	ps.db.Create(&lead)
+	location := models.Asset{ProjectID: p.ID, Kind: AssetKindLocation, Name: "雷记面馆", Image: "noodle-shop.png"}
+	ps.db.Create(&location)
+	ps.db.Create(&models.Shot{SceneID: sc.ID, Order: 1, PromptSubject: "雷晓飞独坐桌旁"})
+	if err := ps.SaveSceneReferences(&sc, []SceneReferenceSelection{{SourceType: "asset", SourceID: location.ID, Variant: "image", UseKrea2: true}}); err != nil {
+		t.Fatal(err)
+	}
+	ps.db.First(&sc, sc.ID)
+	files, lines, explicit := ps.selectedSceneReferenceFiles(&sc, "krea2")
+	if !explicit || len(files) != 2 || files[0].Name != "noodle-shop.png" || files[1].Name != "lead-sheet.png" {
+		t.Fatalf("explicit location must be followed by visible character sheet: files=%+v lines=%v", files, lines)
+	}
+	prompt := buildH3StoryboardPrompt(&sc, &p, lines)
+	for _, want := range []string{"<Subject 1> 是 <Picture 1>", "雷记面馆", "<Subject 2> 是 <Picture 2>", "雷晓飞", "[reference generation] <Subject 1>、<Subject 2>"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
 func TestBuildH3StoryboardPromptRemovesRedundantWardrobeText(t *testing.T) {
 	sc := &models.Scene{Content: "雷晓飞独坐面馆", ImagePrompt: "subject_definitions:\n旧绑定\n\ndetailed_description:\n雷晓飞独自坐于八仙桌旁，身着符合角色设定的现代服装，右手轻敲桌面。"}
 	prompt := buildH3StoryboardPrompt(sc, &models.Project{Style: "3D国漫"}, []string{"<Picture 1>：场景雷记面馆", "<Picture 2>：角色雷晓飞四视图"})
