@@ -133,6 +133,37 @@ func TestReferenceFilesExpandToIndexedPlaceholders(t *testing.T) {
 	}
 }
 
+func TestRef2VWorkflowConnectsAllThreeImagesInOrder(t *testing.T) {
+	tpl := loadTemplateForTest(t, "minimax_h3_ref2v.json")
+	params := baseParams()
+	files := map[string][]FileMeta{"ref_images": {
+		{TaskID: "1", Name: "char-sheet.png"},
+		{TaskID: "1", Name: "location.png"},
+		{TaskID: "1", Name: "storyboard.png"},
+	}}
+	if err := normalizeTemplateFiles(&tpl, params, files); err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := (&TaskService{}).RenderWorkflow(&tpl, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, tc := range []struct{ node, name string }{{"110", "1/char-sheet.png"}, {"111", "1/location.png"}, {"112", "1/storyboard.png"}} {
+		node := workflow[tc.node].(map[string]any)
+		inputs := node["inputs"].(map[string]any)
+		if inputs["image"] != tc.name {
+			t.Fatalf("ref_image_%d rendered as %#v, want %s", i, inputs["image"], tc.name)
+		}
+	}
+	refNode := workflow["6"].(map[string]any)["inputs"].(map[string]any)["ref_images"].(map[string]any)
+	for i, nodeID := range []string{"110", "111", "112"} {
+		ref := refNode[fmt.Sprintf("ref_image_%d", i)].([]any)
+		if ref[0] != nodeID {
+			t.Fatalf("ref_image_%d connects node %#v, want %s", i, ref[0], nodeID)
+		}
+	}
+}
+
 func TestRequiredTemplateFilesAreValidated(t *testing.T) {
 	tpl := loadTemplateForTest(t, "minimax_h3_first_last.json")
 	err := normalizeTemplateFiles(&tpl, baseParams(), map[string][]FileMeta{

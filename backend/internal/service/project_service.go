@@ -1167,9 +1167,17 @@ func ValidateFullH3Prompt(prompt string) []string {
 func ValidateFullH3PromptForReferences(prompt string, referenceLines []string) []string {
 	issues := ValidateFullH3Prompt(prompt)
 	opening := openingPictureTag(referenceLines)
-	if !strings.Contains(h3PromptSection(prompt, "subject_definitions:"), opening) ||
-		!strings.Contains(h3PromptSection(prompt, "detailed_description:"), opening) {
+	detail := h3PromptSection(prompt, "detailed_description:")
+	if !strings.Contains(h3PromptSection(prompt, "subject_definitions:"), opening) || !strings.Contains(detail, opening) {
 		issues = append(issues, "开始画面必须引用实际最后一张分镜图 "+opening)
+	}
+	if strings.Contains(detail, "固定机位") {
+		for _, movement := range []string{"推进", "推近", "拉远", "摇摄", "摇移", "跟拍", "环绕"} {
+			if strings.Contains(detail, movement) {
+				issues = append(issues, "摄影机描述冲突：固定机位不能同时"+movement)
+				break
+			}
+		}
 	}
 	return issues
 }
@@ -2445,6 +2453,13 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	if claim.RowsAffected == 0 {
 		return fmt.Errorf("场景 %d 已在生成或状态已变化", sc.Order)
 	}
+	// 状态认领后重新读取数据库，确保使用刚保存的完整提示词、模板和参考图配置，
+	// 不允许调用方持有的旧 Scene 快照进入 ComfyUI 任务。
+	var latest models.Scene
+	if err := s.db.First(&latest, sc.ID).Error; err != nil {
+		return fmt.Errorf("重新读取场景最新配置失败: %w", err)
+	}
+	sc = &latest
 	videoW, videoH := aspectVideoSize(p.AspectRatio, s.videoResolution())
 	pid := fmt.Sprintf("%d", p.ID)
 	tplCode, promptText, videoFiles := s.buildSceneVideoSpec(sc, pid, sc.VideoTemplate)
@@ -2477,7 +2492,7 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		Prompt:     promptText,
 		Params: map[string]any{
 			"width": videoW, "height": videoH, "duration": normalizeSceneDuration(sc.Duration),
-			"steps": 20, "cfg": 1.0, "fps": 24, "seed": -1, "ref_image_size": "match",
+			"steps": 20, "cfg": 1.0, "fps": 24, "seed": -1, "ref_image_size": "max",
 		},
 		Files: videoFiles,
 	})

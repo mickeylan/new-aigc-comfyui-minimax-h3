@@ -512,7 +512,7 @@
     </div>
 
     <div v-if="videoTaskDetail" class="modal-mask" @click.self="videoTaskDetail = null">
-      <div class="modal card video-task-modal"><h2>生成/编辑视频提示词</h2><div class="field-row"><div class="field"><label>视频模板</label><select v-model="videoTaskTemplate" class="input"><option value="minimax_h3_ref2v">多图参考生视频（推荐，有场景参考图时优先）</option><option value="minimax_h3_i2v">图生视频（首帧硬锚定）</option><option value="minimax_h3_first_last">首尾帧生视频（需指定首帧和尾帧图片）</option></select></div><div class="field"><label>尺寸 / 时长 / 帧率</label><p class="info-text">{{ videoTaskDetail.width }}×{{ videoTaskDetail.height }} / {{ videoTaskDetail.duration }}秒 / {{ videoTaskDetail.fps }} FPS</p></div></div><div v-if="videoTaskTemplate === 'minimax_h3_first_last'" class="field-row"><div class="field"><label>首帧图片</label><select v-model="videoTaskFirstFrame" class="input"><option value="">请选择…</option><option v-if="videoTaskScene.image_file" :value="videoTaskScene.image_file">分镜画面（当前场景）</option></select></div><div class="field"><label>尾帧图片</label><select v-model="videoTaskLastFrame" class="input"><option value="">请选择…</option><option v-if="videoTaskScene.image_file" :value="videoTaskScene.image_file">分镜画面（当前场景）</option></select></div></div><div class="field-label-actions"><label>最终提交给 H3 的完整提示词（可直接修改）</label><button class="btn btn-sm btn-secondary" :disabled="regeneratingVideoPrompt" @click="regenerateVideoPrompt">{{ regeneratingVideoPrompt ? 'AI 生成中…' : 'AI 重新生成完整提示词' }}</button></div><textarea v-model="videoTaskPromptDraft" class="textarea" rows="20" /><div class="field-hint">这里显示并保存最终六段 Ref2VA 提示词；生成视频时原样提交，不会再被系统覆盖。<b v-if="videoTaskTemplate === 'minimax_h3_first_last'">　⚠ 首尾帧模板已选择，请确认首帧和尾帧图片已正确指定。</b></div><details open><summary>当前将提交的完整提示词</summary><pre class="task-prompt">{{ previewVideoFullPrompt }}</pre></details><details v-if="videoTaskDetail.history_prompt"><summary>上次实际提交的提示词</summary><pre class="task-prompt">{{ videoTaskDetail.history_prompt }}</pre></details><details v-if="videoTaskDetail.params_json"><summary>上次实际参数与输入图片</summary><pre class="task-prompt">{{ formatTaskParams(videoTaskDetail.params_json) }}</pre></details><div class="modal-actions"><button class="btn btn-ghost" @click="videoTaskDetail = null">取消</button><button class="btn" :disabled="savingVideoPrompt" @click="saveVideoPrompt">{{ savingVideoPrompt ? '保存中…' : '保存提示词' }}</button></div></div>
+      <div class="modal card video-task-modal"><h2>生成/编辑视频提示词</h2><div class="field-row"><div class="field"><label>视频模板</label><select v-model="videoTaskTemplate" class="input"><option value="minimax_h3_ref2v">多图参考生视频（推荐，有场景参考图时优先）</option><option value="minimax_h3_i2v">图生视频（首帧硬锚定）</option><option value="minimax_h3_first_last">首尾帧生视频（需指定首帧和尾帧图片）</option></select></div><div class="field"><label>尺寸 / 时长 / 帧率</label><p class="info-text">{{ videoTaskDetail.width }}×{{ videoTaskDetail.height }} / {{ videoTaskDetail.duration }}秒 / {{ videoTaskDetail.fps }} FPS</p></div></div><div v-if="videoTaskTemplate === 'minimax_h3_first_last'" class="field-row"><div class="field"><label>首帧图片</label><select v-model="videoTaskFirstFrame" class="input"><option value="">请选择…</option><option v-if="videoTaskScene.image_file" :value="videoTaskScene.image_file">分镜画面（当前场景）</option></select></div><div class="field"><label>尾帧图片</label><select v-model="videoTaskLastFrame" class="input"><option value="">请选择…</option><option v-if="videoTaskScene.image_file" :value="videoTaskScene.image_file">分镜画面（当前场景）</option></select></div></div><div class="field-label-actions"><label>最终提交给 H3 的完整提示词（可直接修改）</label><button class="btn btn-sm btn-secondary" :disabled="regeneratingVideoPrompt" @click="regenerateVideoPrompt">{{ regeneratingVideoPrompt ? 'AI 生成中…' : 'AI 重新生成完整提示词' }}</button></div><textarea v-model="videoTaskPromptDraft" class="textarea" rows="20" /><div class="field-hint">这里显示并保存最终六段 Ref2VA 提示词；生成视频时原样提交，不会再被系统覆盖。<b v-if="videoTaskTemplate === 'minimax_h3_first_last'">　⚠ 首尾帧模板已选择，请确认首帧和尾帧图片已正确指定。</b></div><details open><summary>当前将提交的完整提示词</summary><pre class="task-prompt">{{ previewVideoFullPrompt }}</pre></details><details v-if="videoTaskDetail.history_prompt"><summary>上次实际提交的提示词</summary><pre class="task-prompt">{{ videoTaskDetail.history_prompt }}</pre></details><details v-if="videoTaskDetail.params_json"><summary>上次实际参数与输入图片</summary><pre class="task-prompt">{{ formatTaskParams(videoTaskDetail.params_json) }}</pre></details><div class="modal-actions"><button class="btn btn-ghost" @click="videoTaskDetail = null">取消</button><button class="btn btn-secondary" :disabled="savingVideoPrompt" @click="saveVideoPrompt(false)">保存提示词</button><button class="btn" :disabled="savingVideoPrompt" @click="saveVideoPrompt(true)">{{ savingVideoPrompt ? '处理中…' : '保存最新提示词并生成视频' }}</button></div></div>
     </div>
 
     <!-- 项目信息编辑弹窗 -->
@@ -1142,7 +1142,7 @@ async function regenerateVideoPrompt() {
   } catch (e) { toast.error(e.response?.data?.error || 'AI 重新生成失败') }
   finally { regeneratingVideoPrompt.value = false }
 }
-async function saveVideoPrompt() {
+async function saveVideoPrompt(generateAfterSave = false) {
   if (videoTaskTemplate.value === 'minimax_h3_first_last' && (!videoTaskFirstFrame.value || !videoTaskLastFrame.value)) {
     toast.show('首尾帧模板需要同时指定首帧图片和尾帧图片')
     return
@@ -1154,7 +1154,13 @@ async function saveVideoPrompt() {
     videoTaskScene.value.video_template = videoTaskTemplate.value
     videoTaskScene.value.video_first_frame_img = videoTaskFirstFrame.value
     videoTaskScene.value.video_last_frame_img = videoTaskLastFrame.value
-    toast.success('视频提示词和模板已保存，下次生成视频时生效')
+    if (generateAfterSave) {
+      await api.generateSceneVideo(id(), videoTaskScene.value.id)
+      toast.success('已保存最新提示词并创建视频任务')
+      refreshSoon()
+    } else {
+      toast.success('视频提示词和模板已保存，下次生成视频时生效')
+    }
     videoTaskDetail.value = null
   } catch (e) { toast.error(e.response?.data?.error || '保存视频提示词失败') }
   finally { savingVideoPrompt.value = false }
