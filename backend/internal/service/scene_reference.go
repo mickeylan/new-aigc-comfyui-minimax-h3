@@ -133,7 +133,7 @@ func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target st
 			continue
 		}
 		c, ok := byKey[referenceKey(r)]
-		if !ok {
+		if !ok || !s.sceneReferenceIsRelevant(sc, r) {
 			continue
 		}
 		refs = append(refs, FileMeta{TaskID: fmt.Sprint(sc.ProjectID), Name: c.Image})

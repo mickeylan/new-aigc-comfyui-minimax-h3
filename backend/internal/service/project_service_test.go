@@ -557,7 +557,7 @@ func TestEnsurePlanCharactersKeepsCompletePlanCharacters(t *testing.T) {
 
 func TestRedesignSceneImagePromptUsesProjectAndAssetContext(t *testing.T) {
 	ps := newTestProjectService(t)
-	provider := &stubTextProvider{response: "【画面用途】MiniMax H3起始帧\n【参考图绑定】无\n【剧情瞬间】林舒进入古典宗门大殿\n【主体与空间】林舒身穿白色仙裙位于长阶前景，青玉佩悬于腰间\n【动作定格】右脚刚踏上长阶\n【摄影机】电影级全景，低机位纵深构图\n【光线与风格】晨雾体积光，国风写实\n【连续性硬约束】无新增人物，无文字水印"}
+	provider := &stubTextProvider{response: "【画面】林舒进入古典宗门大殿，青玉佩悬于腰间\n【动作】右脚刚踏上长阶\n【摄影机】电影级全景，低机位纵深构图\n【光线与风格】晨雾体积光，国风写实"}
 	ps.textProvider = provider
 	project := models.Project{Title: "问仙", Genre: "古典修仙", Style: "国风写实", Synopsis: "宗门试炼"}
 	if err := ps.db.Create(&project).Error; err != nil {
@@ -610,7 +610,7 @@ func TestRedesignScenePromptUsesShotsLooksAndH3StartFrameFormat(t *testing.T) {
 	if err := ps.db.AutoMigrate(&models.Shot{}, &models.CharacterLook{}, &models.SceneCharacterLook{}); err != nil {
 		t.Fatal(err)
 	}
-	provider := &captureTextProvider{response: "【画面用途】MiniMax H3起始帧\n【参考图绑定】无\n【剧情瞬间】林舒拔剑挡在陆川身前\n【主体与空间】林舒位于前景中央\n【动作定格】剑刚出鞘\n【摄影机】中近景低机位\n【光线与风格】冷月逆光\n【连续性硬约束】无新增人物，无文字"}
+	provider := &captureTextProvider{response: "【画面】林舒挡在陆川身前\n【动作】剑刚出鞘\n【摄影机】中近景低机位\n【光线与风格】冷月逆光"}
 	ps.textProvider = provider
 	p := models.Project{Title: "问仙", Genre: "修仙", Style: "国风写实", Synopsis: "宗门试炼"}
 	if err := ps.db.Create(&p).Error; err != nil {
@@ -634,17 +634,22 @@ func TestRedesignScenePromptUsesShotsLooksAndH3StartFrameFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"MiniMax H3起始帧", "剧情瞬间", "连续性硬约束"} {
+	for _, want := range []string{"【画面】", "【动作】", "【摄影机】", "【光线与风格】"} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("result missing %q: %s", want, result)
 		}
 	}
-	for _, want := range []string{"林舒拔剑护住陆川", "中近景", "低机位", "缓慢推进", "战斗绣鞋", "黑色云纹软底靴"} {
+	for _, unwanted := range []string{"画面用途", "连续性硬约束", "禁止"} {
+		if strings.Contains(result, unwanted) {
+			t.Fatalf("result contains %q: %s", unwanted, result)
+		}
+	}
+	for _, want := range []string{"林舒拔剑护住陆川", "中近景", "低机位", "缓慢推进"} {
 		if !strings.Contains(provider.user, want) {
 			t.Fatalf("AI context missing %q: %s", want, provider.user)
 		}
 	}
-	if !strings.Contains(provider.system, "MiniMax H3 视频起始帧") || !strings.Contains(provider.system, "单一静止瞬间") {
+	if !strings.Contains(provider.system, "参考图已经负责人物身份") || !strings.Contains(provider.system, "一个静止剧情瞬间") {
 		t.Fatalf("wrong system prompt: %s", provider.system)
 	}
 }
@@ -691,6 +696,43 @@ func TestExplicitSceneReferencesControlKrea2AndH3Order(t *testing.T) {
 	videoRefs, videoLines := ps.sceneVideoReferenceFiles(&sc, fmt.Sprint(p.ID))
 	if len(videoRefs) != 2 || videoRefs[0].Name != "start.png" || videoRefs[1].Name != "sword.png" || !strings.Contains(videoLines[1], "<Picture 2>") {
 		t.Fatalf("H3 refs=%+v lines=%v", videoRefs, videoLines)
+	}
+}
+
+func TestSceneReferencesExcludeOffscreenCharacterFromShot(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Shot{}); err != nil {
+		t.Fatal(err)
+	}
+	p := models.Project{Title: "穿越"}
+	ps.db.Create(&p)
+	sc := models.Scene{ProjectID: p.ID, Characters: "雷晓飞,雷婶", Content: "雷晓飞独坐面馆"}
+	ps.db.Create(&sc)
+	lead := models.Character{ProjectID: p.ID, Name: "雷晓飞", Portrait: "lead-face.png", Sheet: "lead-sheet.png"}
+	aunt := models.Character{ProjectID: p.ID, Name: "雷婶", Portrait: "aunt-face.png", Sheet: "aunt-sheet.png"}
+	ps.db.Create(&lead)
+	ps.db.Create(&aunt)
+	ps.db.Create(&models.Shot{SceneID: sc.ID, Order: 1, PromptSubject: "雷晓飞独坐桌旁"})
+	refs := []SceneReferenceSelection{
+		{SourceType: "character", SourceID: lead.ID, Variant: "sheet", UseKrea2: true, UseH3: true},
+		{SourceType: "character", SourceID: aunt.ID, Variant: "sheet", UseKrea2: true, UseH3: true},
+	}
+	if err := ps.SaveSceneReferences(&sc, refs); err != nil {
+		t.Fatal(err)
+	}
+	files, lines, explicit := ps.selectedSceneReferenceFiles(&sc, "krea2")
+	if !explicit || len(files) != 1 || files[0].Name != "lead-sheet.png" {
+		t.Fatalf("files=%+v lines=%v", files, lines)
+	}
+	if strings.Contains(strings.Join(lines, "\n"), "雷婶") {
+		t.Fatalf("offscreen character leaked into references: %v", lines)
+	}
+	autoFiles, autoLines := ps.sceneImageReferenceFiles(&sc)
+	if len(autoFiles) != 1 || autoFiles[0].Name != "lead-sheet.png" || strings.Contains(strings.Join(autoLines, "\n"), "雷婶") {
+		t.Fatalf("automatic references must prefer the visible lead's sheet only: files=%+v lines=%v", autoFiles, autoLines)
+	}
+	if !strings.Contains(autoLines[0], "四视图") {
+		t.Fatalf("reference binding must identify the uploaded sheet: %v", autoLines)
 	}
 }
 

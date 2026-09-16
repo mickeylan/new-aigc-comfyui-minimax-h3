@@ -332,8 +332,6 @@ func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, err
 	if err := s.db.First(&project, sc.ProjectID).Error; err != nil {
 		return "", err
 	}
-	characterContext := s.characterContextForScene(sc)
-	lookContext := s.characterLookContextForScene(sc)
 	assetContext := s.assetContextForScene(sc)
 	shotContext := s.sceneShotContext(sc)
 	_, referenceLines, explicitReferences := s.selectedSceneReferenceFiles(sc, "krea2")
@@ -344,26 +342,22 @@ func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, err
 	if len(referenceLines) > 0 {
 		referenceContext = strings.Join(referenceLines, "\n")
 	}
-	system := `你是专业影视分镜美术指导。请根据剧情资料设计一张可直接用于 Krea2 生图、并可作为 MiniMax H3 视频起始帧的静态提示图提示词。
-必须遵守：
-1. 先理解本场剧情因果、人物关系和当前镜头意图，再选择最有叙事信息量的单一静止瞬间；不得只是堆砌人物与环境名词。
-2. 输出必须严格使用以下八段格式，每段都必须有实际内容：
-【画面用途】MiniMax H3起始帧
-【参考图绑定】逐行原样保留资料中提供的 <Picture N> 编号，并说明它只约束哪个人物、造型、场景或道具；无参考图时写“无”
-【剧情瞬间】说明本图对应剧情中的准确瞬间
-【主体与空间】人物数量、身份、前中后景位置、视线、空间关系、场景与关键道具
-【动作定格】只描述一个可见动作瞬间及姿态，不写连续动作过程
-【摄影机】景别、机位、焦段、构图；以镜头设计为准
-【光线与风格】光源方向、色温、氛围、材质和项目画风
-【连续性硬约束】人物、造型、场景、道具一致性，以及禁止新增无关主体、文字、字幕、水印、拼图和四视图
-3. 画面必须适合后续 H3 从该起始状态继续运动：姿态应有明确动作势能，但不能同时描述起点和终点，不能写时间序列、镜头运动过程或多个连续事件。
-4. 严格使用已审核的角色档案和当前场景造型；不得擅自换装、换发型、增减佩饰、鞋履、包、兵器或法宝。
-5. 忠实于场景正文和镜头设计，不新增角色、地点、道具或剧情；人物数量和空间关系必须准确。
-6. 不使用“高清、杰作”等空泛标签，所有描述必须具体、可见且互不冲突。
-只输出八段完整中文提示词，不要解释、Markdown 代码块或 JSON。`
-	user := fmt.Sprintf("项目：%s\n题材：%s\n画风：%s\n故事梗概：%s\n场景标题：%s\n场景剧情：%s\n原画面提示词：%s\n出场角色：%s\n地点：%s\n道具：%s\n场景时长：%.1f秒\n\n本次实际提交的参考图（编号和生成任务上传顺序完全一致）：\n%s\n\n导演镜头设计：\n%s\n\n角色权威档案：\n%s\n\n当前场景角色造型：\n%s\n\n场景与道具权威档案：\n%s",
-		project.Title, project.Genre, project.Style, project.Synopsis, sc.Title, sc.Content, sc.ImagePrompt,
-		sc.Characters, sc.LocationName, sc.Props, sc.Duration, referenceContext, shotContext, characterContext, lookContext, assetContext)
+	system := `你是影视分镜提示词编辑。根据剧情和镜头设计，写一条简洁的 MiniMax H3 SelfLift 场景图提示词，生成结果作为后续视频起始帧。
+规则：
+1. 参考图已经负责人物身份、脸部和造型一致性。不得把角色档案中的年龄、五官、发型、肤色、体型、服装或配饰再次改写进提示词；只用 <Picture N> 指明对应主体，并写“以参考图为准”。
+2. 只保留本画面实际出现的人物、场景和道具参考图；不得提及不出场角色，也不得写“不出现某人”。
+3. 描述一个静止剧情瞬间，只写可见的主体位置、动作、构图和光线；不要解释意图，不写连续动作过程。
+4. 不输出“画面用途”“连续性硬约束”“禁止”“不得”“无”等控制性或否定性内容，不添加字幕、水印、拼图等无关词。
+5. 输出严格使用以下五段；无参考图时省略【参考图】，不得写“无”：
+【参考图】逐行列出实际使用的 <Picture N> 及主体，例如“<Picture 1>：雷晓飞，人物身份与造型以参考图为准”
+【画面】剧情瞬间与主体空间关系
+【动作】单一动作定格
+【摄影机】景别、机位、焦段、构图
+【光线与风格】光源、氛围和项目画风
+只输出最终提示词，不要解释、Markdown 或 JSON。`
+	user := fmt.Sprintf("项目：%s\n题材：%s\n画风：%s\n场景标题：%s\n场景剧情：%s\n地点：%s\n道具：%s\n\n本次实际提交的参考图（编号与上传顺序一致）：\n%s\n\n当前镜头设计：\n%s\n\n场景与道具资料：\n%s",
+		project.Title, project.Genre, project.Style, sc.Title, sc.Content,
+		sc.LocationName, sc.Props, referenceContext, shotContext, assetContext)
 	output, err := s.textProvider.Chat(system, user)
 	if err != nil {
 		return "", fmt.Errorf("AI 重新设计场景提示词失败: %w", err)
@@ -375,7 +369,7 @@ func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, err
 	output = strings.TrimSpace(output)
 	var sections map[string]any
 	if json.Unmarshal([]byte(output), &sections) == nil {
-		ordered := []string{"【画面用途】", "【参考图绑定】", "【剧情瞬间】", "【主体与空间】", "【动作定格】", "【摄影机】", "【光线与风格】", "【连续性硬约束】"}
+		ordered := []string{"【参考图】", "【画面】", "【动作】", "【摄影机】", "【光线与风格】"}
 		lines := make([]string, 0, len(ordered))
 		for _, heading := range ordered {
 			value, ok := sections[heading]
@@ -393,9 +387,14 @@ func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, err
 	if len([]rune(output)) < 20 {
 		return "", fmt.Errorf("AI 返回的场景提示词过短，请重试")
 	}
-	for _, heading := range []string{"【画面用途】", "【参考图绑定】", "【剧情瞬间】", "【主体与空间】", "【动作定格】", "【摄影机】", "【光线与风格】", "【连续性硬约束】"} {
+	for _, heading := range []string{"【画面】", "【动作】", "【摄影机】", "【光线与风格】"} {
 		if !strings.Contains(output, heading) {
-			return "", fmt.Errorf("AI 返回内容不符合 MiniMax H3 起始帧格式，缺少%s，请重试", heading)
+			return "", fmt.Errorf("AI 返回内容不符合起始帧格式，缺少%s，请重试", heading)
+		}
+	}
+	for _, forbidden := range []string{"【画面用途】", "【连续性硬约束】", "【禁止】"} {
+		if strings.Contains(output, forbidden) {
+			return "", fmt.Errorf("AI 返回内容包含多余控制段%s，请重试", forbidden)
 		}
 	}
 	return output, nil
@@ -885,7 +884,7 @@ func (s *ProjectService) sceneCharacterPortraits(sc *models.Scene) []models.Char
 	}
 	ordered := make([]models.Character, 0, len(chars))
 	for _, n := range names {
-		if c, ok := byName[n]; ok {
+		if c, ok := byName[n]; ok && s.sceneHasCharacter(sc, c.Name) {
 			ordered = append(ordered, c)
 		}
 	}
@@ -1085,6 +1084,9 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」定妆照（只锁定脸部身份）", len(refs), ch.Name))
 	}
 	for _, outfit := range s.sceneCharacterOutfits(sc) {
+		if outfit.Character != nil && !s.sceneHasCharacter(sc, outfit.Character.Name) {
+			continue
+		}
 		if len(refs) >= maxSceneReferenceImages {
 			break
 		}
@@ -1935,11 +1937,11 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 		return fmt.Errorf("场景缺少提示词")
 	}
 	if s.tasks == nil {
-		s.failSceneImage(sc, token, "Krea2 分镜画面生成依赖 ComfyUI 任务服务")
-		return fmt.Errorf("Krea2 分镜画面生成依赖 ComfyUI 任务服务")
+		s.failSceneImage(sc, token, "MiniMax H3 SelfLift 场景图生成依赖 ComfyUI 任务服务")
+		return fmt.Errorf("MiniMax H3 SelfLift 场景图生成依赖 ComfyUI 任务服务")
 	}
 
-	refs, lines, explicitRefs := s.selectedSceneReferenceFiles(sc, "krea2")
+	refs, lines, explicitRefs := s.selectedSceneReferenceFiles(sc, "krea2") // krea2 是旧数据库字段名，此处实际提交给 H3 SelfLift
 	if !explicitRefs {
 		refs, lines = s.sceneImageReferenceFiles(sc)
 	}
@@ -1950,7 +1952,7 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 	if len(refs) > maxSceneReferenceImages {
 		refs, lines = refs[:maxSceneReferenceImages], lines[:maxSceneReferenceImages]
 	}
-	prompt += "\n\n【参考图绑定】\n" + strings.Join(lines, "\n") + "\n严格保持各 Picture 对应人物、造型、场景或道具的身份与外观；不要把参考图或四视图拼图复现在候选视频中。"
+	prompt += "\n\n【参考图】\n" + strings.Join(lines, "\n")
 
 	templateCode := "minimax_h3_storyboard_candidates_selflift"
 	var tpl models.Template
@@ -1972,7 +1974,7 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 		Files:      map[string][]FileMeta{"ref_images": refs},
 	})
 	if err != nil {
-		s.failSceneImage(sc, token, "创建 Krea2 分镜画面任务失败: "+err.Error())
+		s.failSceneImage(sc, token, "创建 MiniMax H3 SelfLift 场景图任务失败: "+err.Error())
 		return err
 	}
 	bound := s.db.Model(&models.Scene{}).
@@ -1987,7 +1989,7 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 	}
 	go func() {
 		if err := s.tasks.Execute(task.TaskID); err != nil && !errors.Is(err, errNoFreeGPU) {
-			log.Printf("[project %d] scene %d execute Krea2 task %s failed: %v", sc.ProjectID, sc.Order, task.TaskID, err)
+			log.Printf("[project %d] scene %d execute MiniMax H3 SelfLift task %s failed: %v", sc.ProjectID, sc.Order, task.TaskID, err)
 		}
 	}()
 	s.pushProject(nil)
@@ -2001,13 +2003,23 @@ func (s *ProjectService) sceneImageReferenceFiles(sc *models.Scene) ([]FileMeta,
 	refs := make([]FileMeta, 0, maxSceneReferenceImages)
 	lines := make([]string, 0, maxSceneReferenceImages)
 	for _, ch := range s.sceneCharacterPortraits(sc) {
-		if ch.Portrait == "" || len(refs) >= maxSceneReferenceImages {
+		if len(refs) >= maxSceneReferenceImages {
+			break
+		}
+		name, kind := ch.Sheet, "四视图"
+		if name == "" {
+			name, kind = ch.Portrait, "标准像"
+		}
+		if name == "" {
 			continue
 		}
-		refs = append(refs, FileMeta{TaskID: pid, Name: ch.Portrait})
-		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」定妆照（只锁定脸部身份）", len(refs), ch.Name))
+		refs = append(refs, FileMeta{TaskID: pid, Name: name})
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」%s，人物身份与造型以参考图为准", len(refs), ch.Name, kind))
 	}
 	for _, outfit := range s.sceneCharacterOutfits(sc) {
+		if outfit.Character != nil && !s.sceneHasCharacter(sc, outfit.Character.Name) {
+			continue
+		}
 		if len(refs) >= maxSceneReferenceImages {
 			break
 		}

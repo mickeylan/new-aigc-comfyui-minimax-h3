@@ -483,10 +483,10 @@
           <div class="field-hint">巨构模式强化尺度参照、大气分层、结构可读性、重量感和镜头构图，不改变剧情主体。</div>
         </div>
         <div class="field">
-          <div class="field-label-actions"><label>画面提示词（输入简单说明后交给 AI 设计）</label><button class="btn btn-sm btn-secondary" :disabled="redesigningScenePrompt || !sceneForm.content.trim()" @click="redesignScenePrompt">{{ redesigningScenePrompt ? 'AI 设计中…' : 'AI 重新设计' }}</button></div>
+          <div class="field-label-actions"><label>H3 起始帧画面提示词</label><button class="btn btn-sm btn-secondary" :disabled="redesigningScenePrompt || !sceneForm.content.trim()" @click="redesignScenePrompt">{{ redesigningScenePrompt ? '生成中…' : '生成 H3 起始帧提示词' }}</button></div>
           <textarea v-model="sceneForm.image_prompt" class="textarea" rows="6"
-            placeholder="可先只写简单意图，例如：女主在雨夜宗门大殿发现玉佩；点击 AI 重新设计补全人物、环境、构图、镜头和光影。" />
-          <div class="field-hint">AI 会按 MiniMax H3 起始帧格式生成八段式提示图描述；修改后需保存并重新生成画面。</div>
+            placeholder="根据当前剧情、镜头设计和已选参考图，生成简洁的 H3 起始帧画面、动作、摄影机与光线描述。" />
+          <div class="field-hint">人物身份与造型由参考图控制；提示词只描述当前镜头中实际出现的主体、动作、构图和光线。修改后需保存并重新生成画面。</div>
         </div>
         <div class="field"><label>视频动作正文（可手工修改）</label><textarea v-model="sceneForm.video_prompt" class="textarea" rows="6" placeholder="填写可见动作、结束状态和运镜；留空则自动生成。首帧、连续性和 H3 六段契约由系统固定保护。" /></div>
         <div class="field">
