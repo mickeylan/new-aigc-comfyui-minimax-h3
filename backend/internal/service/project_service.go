@@ -2387,11 +2387,7 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 			if videoFiles == nil {
 				videoFiles = map[string][]FileMeta{}
 			}
-			// 分镜图既是 Picture 1，又硬锚定到第0帧；其余素材从 Picture 2 开始。
-			videoFiles["first_frame"] = []FileMeta{refFiles[0]}
-			if len(refFiles) > 1 {
-				videoFiles["ref_images"] = append(videoFiles["ref_images"], refFiles[1:]...)
-			}
+			videoFiles["ref_images"] = append(videoFiles["ref_images"], refFiles...)
 		}
 	}
 	if tplCode == "minimax_h3_first_last" && (videoFiles == nil || len(videoFiles["first_frame"]) == 0 || len(videoFiles["last_frame"]) == 0) {
