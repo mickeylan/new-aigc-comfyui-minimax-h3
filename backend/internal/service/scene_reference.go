@@ -114,7 +114,7 @@ func (s *ProjectService) SaveSceneReferences(sc *models.Scene, refs []SceneRefer
 	data, _ := json.Marshal(refs)
 	return s.db.Model(sc).Updates(map[string]any{
 		"reference_images_json": string(data), "image_file": "", "image_task_id": "",
-		"video_file": "", "video_input_file": "", "video_task_id": "", "video_gpu": nil,
+		"video_file": "", "video_input_file": "", "video_task_id": "", "video_gpu": nil, "video_full_prompt": "",
 		"status": "pending", "error": "",
 	}).Error
 }
@@ -179,11 +179,7 @@ func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target st
 			continue
 		}
 		refs = append(refs, FileMeta{TaskID: fmt.Sprint(sc.ProjectID), Name: c.Image})
-		pictureNumber := len(refs)
-		if target == "h3" {
-			pictureNumber++
-		}
-		lines = append(lines, fmt.Sprintf("- <Picture %d>：%s", pictureNumber, c.Label))
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：%s", len(refs), c.Label))
 	}
 	return refs, lines, true
 }

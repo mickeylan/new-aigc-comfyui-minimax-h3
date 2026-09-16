@@ -689,8 +689,8 @@ func TestExplicitSceneReferencesControlKrea2AndH3Order(t *testing.T) {
 		t.Fatalf("SelfLift refs=%+v lines=%v", imageRefs, imageLines)
 	}
 	videoRefs, videoLines := ps.sceneVideoReferenceFiles(&sc, fmt.Sprint(p.ID))
-	if len(videoRefs) != 2 || videoRefs[0].Name != "start.png" || videoRefs[1].Name != "sword.png" || !strings.Contains(videoLines[1], "<Picture 2>") {
-		t.Fatalf("H3 refs=%+v lines=%v", videoRefs, videoLines)
+	if len(videoRefs) != 2 || videoRefs[0].Name != "sword.png" || videoRefs[1].Name != "start.png" || !strings.Contains(videoLines[1], "<Picture 2>") || !strings.Contains(videoLines[1], "当前分镜画面") {
+		t.Fatalf("H3 must put storyboard opening image last: refs=%+v lines=%v", videoRefs, videoLines)
 	}
 }
 
@@ -1078,16 +1078,17 @@ func TestBuildMiniMaxH3PromptUsesSixSectionContract(t *testing.T) {
 	}
 }
 
-func TestBuildMiniMaxH3RefPromptAnchorsPictureOneAsOpeningFrame(t *testing.T) {
-	sc := &models.Scene{Content: "雷晓飞敲击桌面", VideoPrompt: "[Shot 1] <Subject 2>抬起手指后再次落向桌面。", Duration: 9}
-	lines := []string{"- <Picture 1>：当前分镜画面（构图与动作起点）", "- <Picture 2>：角色「雷晓飞」四视图"}
+func TestBuildMiniMaxH3RefPromptUsesLastPictureAsOpeningFrame(t *testing.T) {
+	sc := &models.Scene{Content: "雷晓飞敲击桌面", VideoPrompt: "[Shot 1] <Subject 1>抬起手指后再次落向桌面。", Duration: 9}
+	lines := []string{"- <Picture 1>：角色「雷晓飞」四视图", "- <Picture 2>：场景「雷记面馆」参考图", "- <Picture 3>：当前分镜画面（0.00秒起始构图与动作起点）"}
 	prompt := buildMiniMaxH3RefPrompt(sc, &models.Project{Style: "3D国漫"}, nil, lines)
 	for _, want := range []string{
-		"<Picture 1> 是 [Shot 1] 在 0.00 秒的首帧",
-		"[keyframe completion + reference generation] 目标视频从 <Picture 1> 开始",
-		"<Picture 1> ([Shot 1] 首帧): fully_preserved",
-		"[Shot 1] 本段视频从 <Picture 1> 的静止画面开始",
-		"<Subject 2>抬起手指",
+		"<Subject 1> 是 <Picture 1> 中的角色「雷晓飞」四视图",
+		"<Picture 3> 是 [Shot 1] 在 0.00 秒的开始画面",
+		"[keyframe completion + reference generation] 目标视频从 <Picture 3> 开始",
+		"<Picture 3> ([Shot 1] 开始画面): fully_preserved",
+		"[Shot 1] 本段视频从 <Picture 3> 的静止画面开始",
+		"<Subject 1>抬起手指",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("Ref2VA prompt missing %q: %s", want, prompt)

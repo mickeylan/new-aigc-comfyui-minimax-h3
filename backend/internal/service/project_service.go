@@ -971,9 +971,11 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	if err := s.db.First(&p, sc.ProjectID).Error; err != nil {
 		return "", err
 	}
-	system := `你是 MiniMax H3 Ref2VA 视频提示词编辑。只输出 detailed_description 正文，不输出字段名、subject_definitions、summary、retention_analysis、解释、规则、禁止清单或 Markdown。
-正文必须以 [Shot 1] 开头，第一句明确“本段视频从 <Picture 1> 的静止画面开始”，先建立其构图、主体初始姿态与场景，再使用已定义的 <Subject N> 描述目标时长内的连续可见动作。写清肢体轨迹、接触点、表情和物体状态变化。摄影机运动必须自然写入画面，并明确类型、幅度和速度；全程只使用一种连续运镜。不得新增角色、对白、道具或剧情。`
-	user := fmt.Sprintf("项目画风：%s\n目标时长：%.1f秒\n场景：%s\n剧情：%s\n当前动作草稿：%s", p.Style, normalizeSceneDuration(sc.Duration), sc.LocationName, sc.Content, sc.VideoPrompt)
+	_, refLines := s.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
+	openingPicture := openingPictureTag(refLines)
+	system := fmt.Sprintf(`你是 MiniMax H3 Ref2VA 视频提示词编辑。只输出 detailed_description 正文，不输出字段名、subject_definitions、summary、retention_analysis、解释、规则、禁止清单或 Markdown。
+正文必须以 [Shot 1] 开头，第一句明确“本段视频从 %s 的静止画面开始”，先建立其构图、主体初始姿态与场景，再使用已定义的 <Subject N> 描述目标时长内的连续可见动作。写清肢体轨迹、接触点、表情和物体状态变化。摄影机运动必须自然写入画面，并明确一种连续运镜；固定机位不得同时描述推进、拉远、摇移或跟拍。不得新增角色、对白、道具或剧情。`, openingPicture)
+	user := fmt.Sprintf("项目画风：%s\n目标时长：%.1f秒\n场景：%s\n剧情：%s\n当前动作草稿：%s\n实际参考绑定：\n%s", p.Style, normalizeSceneDuration(sc.Duration), sc.LocationName, sc.Content, sc.VideoPrompt, strings.Join(refLines, "\n"))
 	out, err := s.textProvider.Chat(system, user)
 	if err != nil {
 		return "", fmt.Errorf("AI 生成视频动作提示词失败: %w", err)
@@ -991,14 +993,31 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 // buildMiniMaxH3Prompt 按 H3 官方六段结构生成视频提示词。
 // subject_definitions / summary / retention_analysis / overall_soundscape / non_diegetic_music
 // 由系统确定性生成；detailed_description 来自用户编辑或系统生成。
+func openingPictureTag(referenceLines []string) string {
+	for _, line := range referenceLines {
+		if !strings.Contains(line, "当前分镜画面") {
+			continue
+		}
+		start := strings.Index(line, "<Picture ")
+		if start < 0 {
+			continue
+		}
+		if end := strings.Index(line[start:], ">"); end >= 0 {
+			return line[start : start+end+1]
+		}
+	}
+	return fmt.Sprintf("<Picture %d>", len(referenceLines))
+}
+
 func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue, referenceLines []string) string {
 	definitions, retention, subjects := h3StoryboardSubjects(referenceLines)
+	openingPicture := openingPictureTag(referenceLines)
 	body := strings.TrimSpace(sc.VideoPrompt)
 	if body == "" {
 		body = defaultSceneVideoAction(sc)
 	}
 	body = strings.TrimSpace(strings.TrimPrefix(body, "[Shot 1]"))
-	body = "[Shot 1] 本段视频从 <Picture 1> 的静止画面开始，先建立其构图、主体初始姿态与场景。" + body
+	body = "[Shot 1] 本段视频从 " + openingPicture + " 的静止画面开始，先建立其构图、主体初始姿态与场景。" + body
 	style := ""
 	if p != nil {
 		style = strings.TrimSpace(p.Style)
@@ -1019,10 +1038,10 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 	if len(dialogue) > 0 {
 		body += " " + strings.Join(dialogue, " ")
 	}
-	definitions = append([]string{"<Picture 1> 是 [Shot 1] 在 0.00 秒的首帧，定义本段视频的起始构图、主体位置和场景状态。"}, definitions...)
-	retention = append([]string{"<Picture 1> ([Shot 1] 首帧): fully_preserved - 起始构图、主体初始姿态、空间位置与场景状态。"}, retention...)
+	definitions = append([]string{openingPicture + " 是 [Shot 1] 在 0.00 秒的开始画面，定义本段视频的起始构图、主体位置和场景状态。"}, definitions...)
+	retention = append([]string{openingPicture + " ([Shot 1] 开始画面): fully_preserved - 起始构图、主体初始姿态、空间位置与场景状态。"}, retention...)
 	return "subject_definitions:\n" + strings.Join(definitions, "\n") +
-		"\n\nsummary:\n[keyframe completion + reference generation] 目标视频从 <Picture 1> 开始，" + strings.Join(subjects, "、") + "共同构成画面，在约" + fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)) + "秒内完成本镜动作。" +
+		"\n\nsummary:\n[keyframe completion + reference generation] 目标视频从 " + openingPicture + " 开始，" + strings.Join(subjects, "、") + "共同构成画面，在约" + fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)) + "秒内完成本镜动作。" +
 		"\n\nretention_analysis:\n" + strings.Join(retention, "\n") +
 		"\n\ndetailed_description:\n" + body +
 		"\n\noverall_soundscape:\n自然环境声与画面内物理动作声同步。" +
@@ -1136,11 +1155,21 @@ func ValidateFullH3Prompt(prompt string) []string {
 		}
 		last = pos
 	}
-	if !strings.Contains(text, "<Picture 1>") {
-		issues = append(issues, "缺少 <Picture 1> 起始帧引用")
+	if !strings.Contains(text, "<Picture ") {
+		issues = append(issues, "缺少参考图片引用")
 	}
 	if !strings.Contains(h3PromptSection(text, "detailed_description:"), "[Shot 1]") {
 		issues = append(issues, "detailed_description 缺少 [Shot 1]")
+	}
+	return issues
+}
+
+func ValidateFullH3PromptForReferences(prompt string, referenceLines []string) []string {
+	issues := ValidateFullH3Prompt(prompt)
+	opening := openingPictureTag(referenceLines)
+	if !strings.Contains(h3PromptSection(prompt, "subject_definitions:"), opening) ||
+		!strings.Contains(h3PromptSection(prompt, "detailed_description:"), opening) {
+		issues = append(issues, "开始画面必须引用实际最后一张分镜图 "+opening)
 	}
 	return issues
 }
@@ -1172,28 +1201,39 @@ func ValidateVideoPrompt(detailText, charStr, locStr, propStr string) []string {
 }
 
 func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) ([]FileMeta, []string) {
-	refs := []FileMeta{{TaskID: pid, Name: sc.ImageFile}}
-	lines := []string{"- <Picture 1>：当前分镜画面（构图与动作起点）"}
+	// 人物、造型、场景和道具参考在前；当前分镜起始图固定放在最后，避免 Subject 1 被误当成人物。
+	refs := []FileMeta{}
+	lines := []string{}
 	if selected, selectedLines, explicit := s.selectedSceneReferenceFiles(sc, "h3"); explicit {
+		if len(selected) >= maxSceneReferenceImages {
+			selected = selected[:maxSceneReferenceImages-1]
+			selectedLines = selectedLines[:maxSceneReferenceImages-1]
+		}
 		refs = append(refs, selected...)
 		lines = append(lines, selectedLines...)
+		refs = append(refs, FileMeta{TaskID: pid, Name: sc.ImageFile})
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：当前分镜画面（0.00秒起始构图与动作起点）", len(refs)))
 		return refs, lines
 	}
 	for _, ch := range s.sceneCharacterPortraits(sc) {
-		if len(refs) >= maxSceneReferenceImages {
+		if len(refs) >= maxSceneReferenceImages-1 {
 			break
 		}
-		if ch.Portrait == "" {
+		name, kind := ch.Sheet, "四视图"
+		if name == "" {
+			name, kind = ch.Portrait, "定妆照"
+		}
+		if name == "" {
 			continue
 		}
-		refs = append(refs, FileMeta{TaskID: pid, Name: ch.Portrait})
-		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」定妆照（只锁定脸部身份）", len(refs), ch.Name))
+		refs = append(refs, FileMeta{TaskID: pid, Name: name})
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」%s", len(refs), ch.Name, kind))
 	}
 	for _, outfit := range s.sceneCharacterOutfits(sc) {
 		if outfit.Character != nil && !s.sceneHasCharacter(sc, outfit.Character.Name) {
 			continue
 		}
-		if len(refs) >= maxSceneReferenceImages {
+		if len(refs) >= maxSceneReferenceImages-1 {
 			break
 		}
 		name, kind := outfit.Sheet, "套装四视图"
@@ -1211,7 +1251,7 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」造型套装「%s」%s", len(refs), charName, outfit.Name, kind))
 	}
 	for _, a := range s.sceneMatchedAssets(sc) {
-		if len(refs) >= maxSceneReferenceImages {
+		if len(refs) >= maxSceneReferenceImages-1 {
 			break
 		}
 		name, kind := a.Image, "参考图"
@@ -1224,6 +1264,8 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 		refs = append(refs, FileMeta{TaskID: pid, Name: name})
 		lines = append(lines, fmt.Sprintf("- <Picture %d>：%s「%s」%s", len(refs), AssetKindLabel(a.Kind), a.Name, kind))
 	}
+	refs = append(refs, FileMeta{TaskID: pid, Name: sc.ImageFile})
+	lines = append(lines, fmt.Sprintf("- <Picture %d>：当前分镜画面（0.00秒起始构图与动作起点）", len(refs)))
 	return refs, lines
 }
 
@@ -2408,13 +2450,13 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	tplCode, promptText, videoFiles := s.buildSceneVideoSpec(sc, pid, sc.VideoTemplate)
 	// ref2v 模板需要注入场景参考图（分镜图 + 用户选择的造型/场景/道具资产）
 	if tplCode == "minimax_h3_ref2v" || tplCode == "minimax_h3_ref2v_single" {
-		// Picture 1 永远是已确认分镜起始帧；额外多参考从 Picture 2 开始。
+		// 人物/场景等参考在前，已确认的分镜起始图固定作为最后一张 Picture。
 		refFiles, refLines := s.sceneVideoReferenceFiles(sc, pid)
 		if len(refFiles) > 0 {
 			var dubs []models.Dialogue
 			s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
 			promptText = strings.TrimSpace(sc.VideoFullPrompt)
-			if promptText == "" {
+			if promptText == "" || len(ValidateFullH3PromptForReferences(promptText, refLines)) > 0 {
 				promptText = buildMiniMaxH3RefPrompt(sc, p, dubs, refLines)
 			}
 			if videoFiles == nil {

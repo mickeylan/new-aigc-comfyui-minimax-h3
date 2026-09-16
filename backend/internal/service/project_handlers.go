@@ -231,7 +231,7 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 	preview.VideoPrompt = actionPrompt
 	_, refLines := s.Projects.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
 	fullPrompt := strings.TrimSpace(sc.VideoFullPrompt)
-	if fullPrompt == "" {
+	if fullPrompt == "" || len(ValidateFullH3PromptForReferences(fullPrompt, refLines)) > 0 {
 		fullPrompt = buildMiniMaxH3RefPrompt(&preview, &project, dubs, refLines)
 	}
 	width, height := aspectVideoSize(project.AspectRatio, s.Projects.videoResolution())
@@ -282,7 +282,8 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 		return
 	}
 	prompt := strings.TrimSpace(req.Prompt)
-	if issues := ValidateFullH3Prompt(prompt); len(issues) > 0 {
+	_, refLines := s.Projects.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
+	if issues := ValidateFullH3PromptForReferences(prompt, refLines); len(issues) > 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": strings.Join(issues, "；")})
 		return
 	}
