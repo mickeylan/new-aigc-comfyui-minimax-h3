@@ -1116,6 +1116,35 @@ func buildMiniMaxH3Prompt(sc *models.Scene, p *models.Project, dubs []models.Dia
 
 // ValidateVideoPrompt 检查用户编辑的 detailed_description 是否符合 H3 契约。
 // 返回问题列表，空列表表示通过校验。
+func ValidateFullH3Prompt(prompt string) []string {
+	text := strings.TrimSpace(prompt)
+	if text == "" {
+		return []string{"完整提示词不能为空"}
+	}
+	issues := []string{}
+	fields := []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:"}
+	last := -1
+	for _, field := range fields {
+		pos := strings.Index(text, field)
+		if pos < 0 {
+			issues = append(issues, "缺少 "+field)
+			continue
+		}
+		if pos < last {
+			issues = append(issues, "H3字段顺序错误")
+			break
+		}
+		last = pos
+	}
+	if !strings.Contains(text, "<Picture 1>") {
+		issues = append(issues, "缺少 <Picture 1> 起始帧引用")
+	}
+	if !strings.Contains(h3PromptSection(text, "detailed_description:"), "[Shot 1]") {
+		issues = append(issues, "detailed_description 缺少 [Shot 1]")
+	}
+	return issues
+}
+
 func ValidateVideoPrompt(detailText, charStr, locStr, propStr string) []string {
 	_ = charStr
 	_ = locStr
@@ -2384,7 +2413,10 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		if len(refFiles) > 0 {
 			var dubs []models.Dialogue
 			s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
-			promptText = buildMiniMaxH3RefPrompt(sc, p, dubs, refLines)
+			promptText = strings.TrimSpace(sc.VideoFullPrompt)
+			if promptText == "" {
+				promptText = buildMiniMaxH3RefPrompt(sc, p, dubs, refLines)
+			}
 			if videoFiles == nil {
 				videoFiles = map[string][]FileMeta{}
 			}

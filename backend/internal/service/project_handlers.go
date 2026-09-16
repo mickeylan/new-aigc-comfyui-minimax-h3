@@ -215,10 +215,10 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 	if !ok {
 		return
 	}
-	prompt := strings.TrimSpace(sc.VideoPrompt)
-	generated := prompt == ""
+	actionPrompt := strings.TrimSpace(sc.VideoPrompt)
+	generated := actionPrompt == ""
 	if generated {
-		prompt = defaultSceneVideoAction(sc)
+		actionPrompt = defaultSceneVideoAction(sc)
 	}
 	var project models.Project
 	if err := s.DB.First(&project, sc.ProjectID).Error; err != nil {
@@ -228,12 +228,15 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 	var dubs []models.Dialogue
 	s.DB.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
 	preview := *sc
-	preview.VideoPrompt = prompt
+	preview.VideoPrompt = actionPrompt
 	_, refLines := s.Projects.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
-	fullPrompt := buildMiniMaxH3RefPrompt(&preview, &project, dubs, refLines)
+	fullPrompt := strings.TrimSpace(sc.VideoFullPrompt)
+	if fullPrompt == "" {
+		fullPrompt = buildMiniMaxH3RefPrompt(&preview, &project, dubs, refLines)
+	}
 	width, height := aspectVideoSize(project.AspectRatio, s.Projects.videoResolution())
 	c.JSON(http.StatusOK, gin.H{
-		"prompt": prompt, "full_prompt": fullPrompt, "generated": generated,
+		"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "generated": generated,
 		"template": "minimax_h3_ref2v", "width": width, "height": height,
 		"duration": normalizeSceneDuration(sc.Duration), "fps": 24, "steps": 20,
 	})
@@ -244,7 +247,7 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 	if !ok {
 		return
 	}
-	prompt, err := s.Projects.GenerateSceneVideoAction(sc)
+	actionPrompt, err := s.Projects.GenerateSceneVideoAction(sc)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
@@ -257,9 +260,10 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 	var dubs []models.Dialogue
 	s.DB.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
 	preview := *sc
-	preview.VideoPrompt = prompt
+	preview.VideoPrompt = actionPrompt
 	refs, lines := s.Projects.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
-	c.JSON(200, gin.H{"prompt": prompt, "full_prompt": buildMiniMaxH3RefPrompt(&preview, &project, dubs, lines), "reference_count": len(refs)})
+	fullPrompt := buildMiniMaxH3RefPrompt(&preview, &project, dubs, lines)
+	c.JSON(200, gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs)})
 }
 
 func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
@@ -268,7 +272,7 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Prompt        string `json:"prompt"`
+		Prompt        string `json:"prompt"`          // 用户编辑后的完整 H3 提示词
 		Template      string `json:"template"`        // 可选：用户指定视频模板
 		FirstFrameImg string `json:"first_frame_img"` // 首尾帧模板的首帧图
 		LastFrameImg  string `json:"last_frame_img"`  // 首尾帧模板的尾帧图
@@ -278,11 +282,11 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 		return
 	}
 	prompt := strings.TrimSpace(req.Prompt)
-	if issues := ValidateVideoPrompt(prompt, sc.Characters, sc.LocationName, sc.Props); len(issues) > 0 {
+	if issues := ValidateFullH3Prompt(prompt); len(issues) > 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": strings.Join(issues, "；")})
 		return
 	}
-	updates := map[string]any{"video_prompt": prompt}
+	updates := map[string]any{"video_full_prompt": prompt, "video_prompt": h3PromptSection(prompt, "detailed_description:")}
 	if strings.TrimSpace(req.Template) != "" {
 		updates["video_template"] = strings.TrimSpace(req.Template)
 	}
@@ -296,7 +300,7 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "video_prompt": prompt})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "video_full_prompt": prompt})
 }
 
 func (s *Service) HandleUpdateScene(c *gin.Context) {

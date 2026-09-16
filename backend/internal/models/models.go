@@ -164,13 +164,14 @@ type Scene struct {
 	ImageTaskID         string    `gorm:"column:image_task_id;index" json:"image_task_id"`      // 关联 Krea2 分镜画面任务
 	VideoTaskID         string    `gorm:"column:video_task_id" json:"video_task_id"`            // 关联视频生成任务
 	VideoGPU            *int      `gorm:"column:video_gpu" json:"video_gpu"`
-	VideoFile           string    `gorm:"column:video_file" json:"video_file"`                       // ComfyUI 输出相对路径（合并使用）
-	VideoInputFile      string    `gorm:"column:video_input_file" json:"video_input_file"`           // 下载到项目 input 目录的浏览器可播放副本
-	VideoPrompt         string    `gorm:"column:video_prompt;type:text" json:"video_prompt"`         // 用户可编辑的正式视频提示词
-	VideoTemplate       string    `gorm:"column:video_template" json:"video_template"`               // 视频模板（minimax_h3_i2v/ref2v/t2v/first_last 等；空则自动选择）
-	VideoFirstFrameImg  string    `gorm:"column:video_first_frame_img" json:"video_first_frame_img"` // 首尾帧模板的首帧图文件名
-	VideoLastFrameImg   string    `gorm:"column:video_last_frame_img" json:"video_last_frame_img"`   // 首尾帧模板的尾帧图文件名
-	Status              string    `json:"status"`                                                    // pending/image_pending/image_ready/video_pending/video_running/video_ready/failed
+	VideoFile           string    `gorm:"column:video_file" json:"video_file"`                         // ComfyUI 输出相对路径（合并使用）
+	VideoInputFile      string    `gorm:"column:video_input_file" json:"video_input_file"`             // 下载到项目 input 目录的浏览器可播放副本
+	VideoPrompt         string    `gorm:"column:video_prompt;type:text" json:"video_prompt"`           // 用户可编辑的动作正文
+	VideoFullPrompt     string    `gorm:"column:video_full_prompt;type:text" json:"video_full_prompt"` // 用户审核后最终提交的完整 H3 提示词
+	VideoTemplate       string    `gorm:"column:video_template" json:"video_template"`                 // 视频模板（minimax_h3_i2v/ref2v/t2v/first_last 等；空则自动选择）
+	VideoFirstFrameImg  string    `gorm:"column:video_first_frame_img" json:"video_first_frame_img"`   // 首尾帧模板的首帧图文件名
+	VideoLastFrameImg   string    `gorm:"column:video_last_frame_img" json:"video_last_frame_img"`     // 首尾帧模板的尾帧图文件名
+	Status              string    `json:"status"`                                                      // pending/image_pending/image_ready/video_pending/video_running/video_ready/failed
 	Error               string    `json:"error"`
 	ImageRetries        int       `gorm:"column:image_retries" json:"image_retries"`     // 画面生成已重试次数
 	VideoRetries        int       `gorm:"column:video_retries" json:"video_retries"`     // 视频生成已重试次数
