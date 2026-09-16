@@ -557,6 +557,26 @@ func TestEnsurePlanCharactersKeepsCompletePlanCharacters(t *testing.T) {
 	}
 }
 
+func TestAIStoryboardDetailUsesH3SubjectsAndDropsDialogueText(t *testing.T) {
+	detail := `[Shot 1] 舒寒环抱上官若琳，上官若琳嘴唇微张，正说出那句：“元婴再生之力！你突破元婴了？！”中近景双人构图。`
+	lines := []string{
+		"- <Picture 1>：角色「舒寒」四视图",
+		"- <Picture 2>：角色「上官若琳」四视图",
+		"- <Picture 3>：场景「玉霄宫·内殿」参考图",
+	}
+	got := useSubjectTags(sanitizeStoryboardAIDetail(detail), lines)
+	for _, want := range []string{"[Shot 1]", "<Subject 1>环抱<Subject 2>", "<Subject 2>嘴唇微张", "中近景双人构图"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("sanitized storyboard missing %q: %s", want, got)
+		}
+	}
+	for _, forbidden := range []string{"舒寒", "上官若琳", "元婴再生之力", "突破元婴", "正说出那句", "“", "”"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("sanitized storyboard retained %q: %s", forbidden, got)
+		}
+	}
+}
+
 func TestRedesignSceneImagePromptUsesProjectAndAssetContext(t *testing.T) {
 	ps := newTestProjectService(t)
 	provider := &stubTextProvider{response: "subject_definitions:\n<Subject 1> 是 <Picture 1> 中的素材名。\n\nsummary:\n[reference generation] 林舒进入古典宗门大殿\n\nretention_analysis:\n<Subject 1> (出现在 [Shot 1]): fully_preserved - 已提供的主体信息。\n\ndetailed_description:\n[Shot 1] 林舒右脚刚踏上长阶，电影级全景，低机位纵深构图，晨雾体积光，国风写实\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"}

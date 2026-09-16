@@ -323,6 +323,20 @@ func (s *ProjectService) UpdateProject(p *models.Project, req models.Project) er
 	return s.db.Model(p).Updates(updates).Error
 }
 
+var (
+	storyboardDialogueTagPattern = regexp.MustCompile(`(?is)<d>.*?</d>`)
+	storyboardQuotedTextPattern  = regexp.MustCompile(`[“\"][^”\"]*[”\"]`)
+)
+
+func sanitizeStoryboardAIDetail(detail string) string {
+	text := storyboardDialogueTagPattern.ReplaceAllString(detail, "")
+	text = storyboardQuotedTextPattern.ReplaceAllString(text, "")
+	for _, residue := range []string{"正说出那句：", "正说出那句", "正在说出：", "正在说出", "说出台词：", "说出台词", "对白内容：", "对白内容"} {
+		text = strings.ReplaceAll(text, residue, "")
+	}
+	return strings.TrimSpace(strings.ReplaceAll(text, "。。", "。"))
+}
+
 // RedesignSceneImagePrompt asks the configured text provider to rebuild a production-ready
 // image prompt from authoritative project, character, location and prop data.
 func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, error) {
@@ -350,11 +364,12 @@ func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, err
 	system := `你是 MiniMax H3 SelfLift 分镜图提示词编辑。本任务只设计一个静止分镜画面。
 Subject与Picture的真实身份绑定由系统根据实际上传文件生成，你不得生成或改写subject_definitions、summary、retention_analysis、overall_soundscape或non_diegetic_music。
 你只输出一段以“[Shot 1]”开头的detailed_description正文：
-1. 必须使用资料中实际提供的<Subject N>编号，不得写“素材名”“主体信息”等占位词。
+1. 人物必须使用场景资料中的真实角色名，禁止自行猜测或输出任何<Subject N>编号；系统会在返回后按实际图片顺序确定性转换。
 2. 只描述一个明确静止瞬间中的主体位置、动作定格、可见表情、环境、景别、静态机位、构图与光线。
-3. 不得描述连续动作、时间推进、推拉摇移跟升降或切镜。
-4. 人物身份与造型、场景和道具由Picture及权威资料控制，不得新增或猜测资料中没有的内容。
-5. 只输出正文，不要标题、解释、Markdown或JSON。` + framingRule
+3. 这是静态分镜图：禁止写对白原文、引号台词、<d>标签、“正在说出某句”等语言内容；如剧情含对白，只能描述可见的嘴部状态和表情。
+4. 不得描述连续动作、时间推进、推拉摇移跟升降或切镜。
+5. 人物身份与造型、场景和道具由Picture及权威资料控制，不得新增或猜测资料中没有的内容。
+6. 不得写“素材名”“主体信息”等占位词。只输出正文，不要标题、解释、Markdown或JSON。` + framingRule
 	user := fmt.Sprintf("项目：%s\n题材：%s\n画风：%s\n场景标题：%s\n场景剧情：%s\n地点：%s\n道具：%s\n\n本次实际提交的参考图（编号与上传顺序一致）：\n%s\n\n当前镜头设计：\n%s\n\n场景与道具资料：\n%s",
 		project.Title, project.Genre, project.Style, sc.Title, sc.Content,
 		sc.LocationName, sc.Props, referenceContext, shotContext, assetContext)
@@ -375,6 +390,11 @@ Subject与Picture的真实身份绑定由系统根据实际上传文件生成，
 	if !strings.HasPrefix(output, "[Shot 1]") {
 		return "", fmt.Errorf("AI 返回的场景提示词必须以 [Shot 1] 开头，请重试")
 	}
+	if strings.Contains(output, "<Subject ") {
+		return "", fmt.Errorf("AI 错误地自行填写了 Subject 编号，请重试；人物必须使用真实角色名")
+	}
+	output = sanitizeStoryboardAIDetail(output)
+	output = useSubjectTags(output, referenceLines)
 	for _, placeholder := range []string{"素材名", "已提供的主体信息", "主体信息"} {
 		if strings.Contains(output, placeholder) {
 			return "", fmt.Errorf("AI 返回内容仍含无意义占位词“%s”，请重试", placeholder)
