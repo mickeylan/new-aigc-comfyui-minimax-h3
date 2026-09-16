@@ -353,7 +353,7 @@ retention_analysis:
 说明应保留参考图中的人物身份、造型、场景结构和画风，不扩写人物外貌。
 
 detailed_description:
-只描述当前静止画面的主体数量与位置、一个动作定格、景别、静态机位、构图和光线。不得写推进、摇移、环绕等视频运镜，不得加入未出场人物。
+只描述当前静止画面的主体数量与位置、一个动作定格、表情、景别、静态机位、构图和光线。人物只写姓名，不描述服装、发型、五官、性别或体型；不得写“符合角色设定”“与参考图一致”“身着某类服装”等占位文字，人物身份与全部造型只由对应 Picture 控制。不得写推进、摇移、环绕等视频运镜，不得加入未出场人物。
 
 overall_soundscape:
 N/A
@@ -372,7 +372,7 @@ N/A
 	output = strings.TrimPrefix(output, "```json")
 	output = strings.TrimPrefix(output, "```")
 	output = strings.TrimSuffix(output, "```")
-	output = strings.TrimSpace(output)
+	output = sanitizeH3ReferencePrompt(strings.TrimSpace(output))
 	var sections map[string]any
 	if json.Unmarshal([]byte(output), &sections) == nil {
 		ordered := []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:"}
@@ -1928,6 +1928,20 @@ func (s *ProjectService) claimSceneImage(sc *models.Scene) (string, error) {
 	return token, nil
 }
 
+func sanitizeH3ReferencePrompt(prompt string) string {
+	replacer := strings.NewReplacer(
+		"身着符合角色设定的现代服装，", "",
+		"身着符合角色设定的现代服装。", "",
+		"身着符合角色设定的服装，", "",
+		"身着符合角色设定的服装。", "",
+		"穿着与参考图一致的服装，", "",
+		"穿着与参考图一致的服装。", "",
+		"造型与参考图一致，", "",
+		"造型与参考图一致。", "",
+	)
+	return strings.TrimSpace(replacer.Replace(prompt))
+}
+
 func h3PromptSection(prompt, heading string) string {
 	start := strings.Index(prompt, heading)
 	if start < 0 {
@@ -1945,9 +1959,9 @@ func h3PromptSection(prompt, heading string) string {
 }
 
 func buildH3StoryboardPrompt(sc *models.Scene, p *models.Project, referenceLines []string) string {
-	detail := h3PromptSection(sc.ImagePrompt, "detailed_description:")
+	detail := sanitizeH3ReferencePrompt(h3PromptSection(sc.ImagePrompt, "detailed_description:"))
 	if detail == "" {
-		detail = strings.TrimSpace(sc.ImagePrompt)
+		detail = sanitizeH3ReferencePrompt(strings.TrimSpace(sc.ImagePrompt))
 	}
 	if detail == "" {
 		detail = strings.TrimSpace(sc.Content)

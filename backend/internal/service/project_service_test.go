@@ -734,6 +734,17 @@ func TestSceneReferencesExcludeOffscreenCharacterFromShot(t *testing.T) {
 	}
 }
 
+func TestBuildH3StoryboardPromptRemovesRedundantWardrobeText(t *testing.T) {
+	sc := &models.Scene{Content: "雷晓飞独坐面馆", ImagePrompt: "subject_definitions:\n旧绑定\n\ndetailed_description:\n雷晓飞独自坐于八仙桌旁，身着符合角色设定的现代服装，右手轻敲桌面。"}
+	prompt := buildH3StoryboardPrompt(sc, &models.Project{Style: "3D国漫"}, []string{"<Picture 1>：场景雷记面馆", "<Picture 2>：角色雷晓飞四视图"})
+	if strings.Contains(prompt, "符合角色设定") || strings.Contains(prompt, "现代服装") {
+		t.Fatalf("redundant wardrobe text leaked: %s", prompt)
+	}
+	if !strings.Contains(prompt, "雷晓飞独自坐于八仙桌旁，右手轻敲桌面") {
+		t.Fatalf("visible action was lost: %s", prompt)
+	}
+}
+
 func TestBuildCharacterSheetPromptLocksHistoricalFootwear(t *testing.T) {
 	p := &models.Project{Genre: "古典修仙", Style: "国风仙侠", Synopsis: "中国古代宗门修炼故事"}
 	ch := &models.Character{Name: "林舒", Appearance: "22岁女性", WardrobeDetail: "白色交领仙裙，银色腰封"}
