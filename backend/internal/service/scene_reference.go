@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 
 	"comfyui-console/internal/models"
@@ -126,6 +127,22 @@ func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target st
 	byKey := map[string]SceneReferenceCandidate{}
 	for _, c := range s.sceneReferenceCandidates(sc) {
 		byKey[c.Key] = c
+	}
+	if target == "krea2" { // legacy field name; this target is MiniMax H3 SelfLift scene generation
+		priority := func(r SceneReferenceSelection) int {
+			c, ok := byKey[referenceKey(r)]
+			if ok && c.Category == AssetKindLocation {
+				return 0
+			}
+			if r.SourceType == "character" {
+				return 1
+			}
+			if r.SourceType == "look" {
+				return 2
+			}
+			return 3
+		}
+		sort.SliceStable(selected, func(i, j int) bool { return priority(selected[i]) < priority(selected[j]) })
 	}
 	refs, lines := []FileMeta{}, []string{}
 	for _, r := range selected {

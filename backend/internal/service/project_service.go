@@ -342,19 +342,25 @@ func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, err
 	if len(referenceLines) > 0 {
 		referenceContext = strings.Join(referenceLines, "\n")
 	}
-	system := `你是影视分镜提示词编辑。根据剧情和镜头设计，写一条简洁的 MiniMax H3 SelfLift 场景图提示词，生成结果作为后续视频起始帧。
-规则：
-1. 参考图已经负责人物身份、脸部和造型一致性。不得把角色档案中的年龄、五官、发型、肤色、体型、服装或配饰再次改写进提示词；只用 <Picture N> 指明对应主体，并写“以参考图为准”。
-2. 只保留本画面实际出现的人物、场景和道具参考图；不得提及不出场角色，也不得写“不出现某人”。
-3. 描述一个静止剧情瞬间，只写可见的主体位置、动作、构图和光线；不要解释意图，不写连续动作过程。
-4. 不输出“画面用途”“连续性硬约束”“禁止”“不得”“无”等控制性或否定性内容，不添加字幕、水印、拼图等无关词。
-5. 输出严格使用以下五段；无参考图时省略【参考图】，不得写“无”：
-【参考图】逐行列出实际使用的 <Picture N> 及主体，例如“<Picture 1>：雷晓飞，人物身份与造型以参考图为准”
-【画面】剧情瞬间与主体空间关系
-【动作】单一动作定格
-【摄影机】景别、机位、焦段、构图
-【光线与风格】光源、氛围和项目画风
-只输出最终提示词，不要解释、Markdown 或 JSON。`
+	system := `你是 MiniMax H3 SelfLift 分镜提示词编辑。严格输出 H3 六段结构：
+subject_definitions:
+逐行原样保留输入中实际上传的 <Picture N> 绑定；人物参考图负责人物身份与造型，场景参考图只负责环境。
+
+summary:
+一句话概括要生成的静态起始帧。
+
+retention_analysis:
+说明应保留参考图中的人物身份、造型、场景结构和画风，不扩写人物外貌。
+
+detailed_description:
+只描述当前静止画面的主体数量与位置、一个动作定格、景别、静态机位、构图和光线。不得写推进、摇移、环绕等视频运镜，不得加入未出场人物。
+
+overall_soundscape:
+N/A
+
+non_diegetic_music:
+N/A
+只输出六段正文，不要解释或 Markdown。`
 	user := fmt.Sprintf("项目：%s\n题材：%s\n画风：%s\n场景标题：%s\n场景剧情：%s\n地点：%s\n道具：%s\n\n本次实际提交的参考图（编号与上传顺序一致）：\n%s\n\n当前镜头设计：\n%s\n\n场景与道具资料：\n%s",
 		project.Title, project.Genre, project.Style, sc.Title, sc.Content,
 		sc.LocationName, sc.Props, referenceContext, shotContext, assetContext)
@@ -369,7 +375,7 @@ func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, err
 	output = strings.TrimSpace(output)
 	var sections map[string]any
 	if json.Unmarshal([]byte(output), &sections) == nil {
-		ordered := []string{"【参考图】", "【画面】", "【动作】", "【摄影机】", "【光线与风格】"}
+		ordered := []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:"}
 		lines := make([]string, 0, len(ordered))
 		for _, heading := range ordered {
 			value, ok := sections[heading]
@@ -387,14 +393,9 @@ func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, err
 	if len([]rune(output)) < 20 {
 		return "", fmt.Errorf("AI 返回的场景提示词过短，请重试")
 	}
-	for _, heading := range []string{"【画面】", "【动作】", "【摄影机】", "【光线与风格】"} {
+	for _, heading := range []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:"} {
 		if !strings.Contains(output, heading) {
-			return "", fmt.Errorf("AI 返回内容不符合起始帧格式，缺少%s，请重试", heading)
-		}
-	}
-	for _, forbidden := range []string{"【画面用途】", "【连续性硬约束】", "【禁止】"} {
-		if strings.Contains(output, forbidden) {
-			return "", fmt.Errorf("AI 返回内容包含多余控制段%s，请重试", forbidden)
+			return "", fmt.Errorf("AI 返回内容不符合 MiniMax H3 六段格式，缺少%s，请重试", heading)
 		}
 	}
 	return output, nil
@@ -1927,15 +1928,47 @@ func (s *ProjectService) claimSceneImage(sc *models.Scene) (string, error) {
 	return token, nil
 }
 
+func h3PromptSection(prompt, heading string) string {
+	start := strings.Index(prompt, heading)
+	if start < 0 {
+		return ""
+	}
+	start += len(heading)
+	rest := prompt[start:]
+	end := len(rest)
+	for _, next := range []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:"} {
+		if i := strings.Index(rest, next); i >= 0 && i < end {
+			end = i
+		}
+	}
+	return strings.TrimSpace(rest[:end])
+}
+
+func buildH3StoryboardPrompt(sc *models.Scene, p *models.Project, referenceLines []string) string {
+	detail := h3PromptSection(sc.ImagePrompt, "detailed_description:")
+	if detail == "" {
+		detail = strings.TrimSpace(sc.ImagePrompt)
+	}
+	if detail == "" {
+		detail = strings.TrimSpace(sc.Content)
+	}
+	style := ""
+	if p != nil {
+		style = strings.TrimSpace(p.Style)
+	}
+	return "subject_definitions:\n" + strings.Join(referenceLines, "\n") +
+		"\n\nsummary:\n" + strings.TrimSpace(sc.Content) +
+		"\n\nretention_analysis:\n各 <Picture N> 只控制其明确绑定的主体；人物身份与造型、场景结构和项目画风保持参考图一致。" +
+		"\n\ndetailed_description:\n" + detail + func() string {
+		if style != "" {
+			return "\n视觉风格：" + style
+		}
+		return ""
+	}() +
+		"\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"
+}
+
 func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token string) error {
-	prompt := s.buildSceneImagePrompt(sc)
-	if prompt == "" {
-		prompt = sc.Content
-	}
-	if prompt == "" {
-		s.failSceneImage(sc, token, "场景缺少提示词")
-		return fmt.Errorf("场景缺少提示词")
-	}
 	if s.tasks == nil {
 		s.failSceneImage(sc, token, "MiniMax H3 SelfLift 场景图生成依赖 ComfyUI 任务服务")
 		return fmt.Errorf("MiniMax H3 SelfLift 场景图生成依赖 ComfyUI 任务服务")
@@ -1952,7 +1985,6 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 	if len(refs) > maxSceneReferenceImages {
 		refs, lines = refs[:maxSceneReferenceImages], lines[:maxSceneReferenceImages]
 	}
-	prompt += "\n\n【参考图】\n" + strings.Join(lines, "\n")
 
 	templateCode := "minimax_h3_storyboard_candidates_selflift"
 	var tpl models.Template
@@ -1966,6 +1998,7 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 		s.failSceneImage(sc, token, err.Error())
 		return err
 	}
+	prompt := buildH3StoryboardPrompt(sc, &p, lines)
 	width, height := assetImageSize(&p, AssetKindLocation)
 	task, err := s.tasks.CreateTask(CreateTaskReq{
 		TemplateID: tpl.ID,
@@ -1996,12 +2029,21 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 	return nil
 }
 
-// sceneImageReferenceFiles selects at most nine authoritative references in prompt order:
-// character sheets (portrait fallback), location image, then prop sheets (image fallback).
+// sceneImageReferenceFiles follows H3 reference semantics: Picture 1 anchors environment/composition;
+// later pictures identify visible characters/outfits and props.
 func (s *ProjectService) sceneImageReferenceFiles(sc *models.Scene) ([]FileMeta, []string) {
 	pid := fmt.Sprint(sc.ProjectID)
 	refs := make([]FileMeta, 0, maxSceneReferenceImages)
 	lines := make([]string, 0, maxSceneReferenceImages)
+	assets := s.sceneMatchedAssets(sc)
+	for _, a := range assets {
+		if a.Kind != AssetKindLocation || a.Image == "" {
+			continue
+		}
+		refs = append(refs, FileMeta{TaskID: pid, Name: a.Image})
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：场景「%s」环境与起始构图以参考图为准", len(refs), a.Name))
+		break
+	}
 	for _, ch := range s.sceneCharacterPortraits(sc) {
 		if len(refs) >= maxSceneReferenceImages {
 			break
@@ -2037,7 +2079,10 @@ func (s *ProjectService) sceneImageReferenceFiles(sc *models.Scene) ([]FileMeta,
 		refs = append(refs, FileMeta{TaskID: pid, Name: name})
 		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」造型套装「%s」%s", len(refs), charName, outfit.Name, kind))
 	}
-	for _, a := range s.sceneMatchedAssets(sc) {
+	for _, a := range assets {
+		if a.Kind == AssetKindLocation {
+			continue
+		}
 		if len(refs) >= maxSceneReferenceImages {
 			break
 		}

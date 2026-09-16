@@ -557,7 +557,7 @@ func TestEnsurePlanCharactersKeepsCompletePlanCharacters(t *testing.T) {
 
 func TestRedesignSceneImagePromptUsesProjectAndAssetContext(t *testing.T) {
 	ps := newTestProjectService(t)
-	provider := &stubTextProvider{response: "【画面】林舒进入古典宗门大殿，青玉佩悬于腰间\n【动作】右脚刚踏上长阶\n【摄影机】电影级全景，低机位纵深构图\n【光线与风格】晨雾体积光，国风写实"}
+	provider := &stubTextProvider{response: "subject_definitions:\n无参考图\n\nsummary:\n林舒进入古典宗门大殿\n\nretention_analysis:\n保持场景结构\n\ndetailed_description:\n林舒右脚刚踏上长阶，电影级全景，低机位纵深构图，晨雾体积光，国风写实\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"}
 	ps.textProvider = provider
 	project := models.Project{Title: "问仙", Genre: "古典修仙", Style: "国风写实", Synopsis: "宗门试炼"}
 	if err := ps.db.Create(&project).Error; err != nil {
@@ -610,7 +610,7 @@ func TestRedesignScenePromptUsesShotsLooksAndH3StartFrameFormat(t *testing.T) {
 	if err := ps.db.AutoMigrate(&models.Shot{}, &models.CharacterLook{}, &models.SceneCharacterLook{}); err != nil {
 		t.Fatal(err)
 	}
-	provider := &captureTextProvider{response: "【画面】林舒挡在陆川身前\n【动作】剑刚出鞘\n【摄影机】中近景低机位\n【光线与风格】冷月逆光"}
+	provider := &captureTextProvider{response: "subject_definitions:\n无参考图\n\nsummary:\n林舒挡在陆川身前\n\nretention_analysis:\n保持主体\n\ndetailed_description:\n剑刚出鞘，中近景低机位，冷月逆光\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"}
 	ps.textProvider = provider
 	p := models.Project{Title: "问仙", Genre: "修仙", Style: "国风写实", Synopsis: "宗门试炼"}
 	if err := ps.db.Create(&p).Error; err != nil {
@@ -634,14 +634,9 @@ func TestRedesignScenePromptUsesShotsLooksAndH3StartFrameFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"【画面】", "【动作】", "【摄影机】", "【光线与风格】"} {
+	for _, want := range []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:"} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("result missing %q: %s", want, result)
-		}
-	}
-	for _, unwanted := range []string{"画面用途", "连续性硬约束", "禁止"} {
-		if strings.Contains(result, unwanted) {
-			t.Fatalf("result contains %q: %s", unwanted, result)
 		}
 	}
 	for _, want := range []string{"林舒拔剑护住陆川", "中近景", "低机位", "缓慢推进"} {
@@ -649,7 +644,7 @@ func TestRedesignScenePromptUsesShotsLooksAndH3StartFrameFormat(t *testing.T) {
 			t.Fatalf("AI context missing %q: %s", want, provider.user)
 		}
 	}
-	if !strings.Contains(provider.system, "参考图已经负责人物身份") || !strings.Contains(provider.system, "一个静止剧情瞬间") {
+	if !strings.Contains(provider.system, "MiniMax H3 SelfLift") || !strings.Contains(provider.system, "严格输出 H3 六段结构") {
 		t.Fatalf("wrong system prompt: %s", provider.system)
 	}
 }
@@ -690,8 +685,8 @@ func TestExplicitSceneReferencesControlKrea2AndH3Order(t *testing.T) {
 		t.Fatalf("重复保存相同参考图不应清空产物: %+v", unchanged)
 	}
 	imageRefs, imageLines, explicit := ps.selectedSceneReferenceFiles(&unchanged, "krea2")
-	if !explicit || len(imageRefs) != 2 || imageRefs[0].Name != "sword.png" || imageRefs[1].Name != "face.png" || !strings.Contains(imageLines[0], "<Picture 1>") {
-		t.Fatalf("Krea2 refs=%+v lines=%v", imageRefs, imageLines)
+	if !explicit || len(imageRefs) != 2 || imageRefs[0].Name != "face.png" || imageRefs[1].Name != "sword.png" || !strings.Contains(imageLines[0], "<Picture 1>") {
+		t.Fatalf("SelfLift refs=%+v lines=%v", imageRefs, imageLines)
 	}
 	videoRefs, videoLines := ps.sceneVideoReferenceFiles(&sc, fmt.Sprint(p.ID))
 	if len(videoRefs) != 2 || videoRefs[0].Name != "start.png" || videoRefs[1].Name != "sword.png" || !strings.Contains(videoLines[1], "<Picture 2>") {
@@ -712,6 +707,9 @@ func TestSceneReferencesExcludeOffscreenCharacterFromShot(t *testing.T) {
 	aunt := models.Character{ProjectID: p.ID, Name: "雷婶", Portrait: "aunt-face.png", Sheet: "aunt-sheet.png"}
 	ps.db.Create(&lead)
 	ps.db.Create(&aunt)
+	ps.db.Create(&models.Asset{ProjectID: p.ID, Kind: AssetKindLocation, Name: "雷记面馆", Image: "noodle-shop.png"})
+	sc.LocationName = "雷记面馆"
+	ps.db.Save(&sc)
 	ps.db.Create(&models.Shot{SceneID: sc.ID, Order: 1, PromptSubject: "雷晓飞独坐桌旁"})
 	refs := []SceneReferenceSelection{
 		{SourceType: "character", SourceID: lead.ID, Variant: "sheet", UseKrea2: true, UseH3: true},
@@ -728,11 +726,11 @@ func TestSceneReferencesExcludeOffscreenCharacterFromShot(t *testing.T) {
 		t.Fatalf("offscreen character leaked into references: %v", lines)
 	}
 	autoFiles, autoLines := ps.sceneImageReferenceFiles(&sc)
-	if len(autoFiles) != 1 || autoFiles[0].Name != "lead-sheet.png" || strings.Contains(strings.Join(autoLines, "\n"), "雷婶") {
-		t.Fatalf("automatic references must prefer the visible lead's sheet only: files=%+v lines=%v", autoFiles, autoLines)
+	if len(autoFiles) != 2 || autoFiles[0].Name != "noodle-shop.png" || autoFiles[1].Name != "lead-sheet.png" || strings.Contains(strings.Join(autoLines, "\n"), "雷婶") {
+		t.Fatalf("automatic references must use environment first and visible lead sheet second: files=%+v lines=%v", autoFiles, autoLines)
 	}
-	if !strings.Contains(autoLines[0], "四视图") {
-		t.Fatalf("reference binding must identify the uploaded sheet: %v", autoLines)
+	if !strings.Contains(autoLines[0], "环境与起始构图") || !strings.Contains(autoLines[1], "四视图") {
+		t.Fatalf("reference bindings must match uploaded files: %v", autoLines)
 	}
 }
 
