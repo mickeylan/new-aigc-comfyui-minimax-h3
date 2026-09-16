@@ -67,7 +67,7 @@ export const api = {
   generateSceneImage: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/image`),
   generateSceneVideo: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/video`),
   sceneVideoPrompt: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/video/prompt`),
-  updateSceneVideoPrompt: (id, sid, prompt) => http.put(`/projects/${id}/scenes/${sid}/video/prompt`, { prompt }),
+  updateSceneVideoPrompt: (id, sid, payload) => http.put(`/projects/${id}/scenes/${sid}/video/prompt`, payload),
   cancelSceneVideo: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/video/cancel`),
   mergeScenes: (id, payload) => http.post(`/projects/${id}/merge`, payload),
   mergeAllScenes: (id, payload = {}) => http.post(`/projects/${id}/merge-all`, payload),

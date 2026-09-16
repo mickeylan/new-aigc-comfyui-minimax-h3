@@ -893,17 +893,46 @@ func (s *ProjectService) sceneCharacterPortraits(sc *models.Scene) []models.Char
 }
 
 // buildSceneVideoSpec 按 MiniMax H3 图生视频规则组织引用、动作、摄影机、光线、风格和声音。
-func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string) (tplCode, promptText string, files map[string][]FileMeta) {
+// templateOverride 为空则按场景是否有首帧图自动选择；非空则强制使用指定模板。
+func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string, templateOverride string) (tplCode, promptText string, files map[string][]FileMeta) {
 	var p models.Project
 	_ = s.db.First(&p, sc.ProjectID).Error
 	var dubs []models.Dialogue
 	s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
-	// The reference-to-video node treats Picture 1 as a soft visual reference and may
-	// freely redraw the opening. The storyboard frame already incorporates the selected
-	// character/look/location/prop references, so formal scene video must use i2v to make
-	// that approved frame the hard first frame.
 	prompt := buildMiniMaxH3Prompt(sc, &p, dubs)
+	// 用户明确指定了模板
+	if templateOverride != "" {
+		return templateOverride, prompt, s.buildVideoFilesForTemplate(sc, pid, templateOverride)
+	}
+	// 无首帧图时降级为纯文字
+	if sc.ImageFile == "" {
+		return "minimax_h3_t2v", prompt, nil
+	}
+	// 有首帧图时用 i2v 硬首帧保持构图一致性
 	return "minimax_h3_i2v", prompt, map[string][]FileMeta{"first_frame": {{TaskID: pid, Name: sc.ImageFile}}}
+}
+
+// buildVideoFilesForTemplate 根据模板构建所需文件映射；不支持的模板返回 nil。
+func (s *ProjectService) buildVideoFilesForTemplate(sc *models.Scene, pid, tplCode string) map[string][]FileMeta {
+	switch tplCode {
+	case "minimax_h3_i2v", "minimax_h3_storyboard_candidates_selflift":
+		if sc.ImageFile == "" {
+			return nil
+		}
+		return map[string][]FileMeta{"first_frame": {{TaskID: pid, Name: sc.ImageFile}}}
+	case "minimax_h3_first_last":
+		files := map[string][]FileMeta{}
+		if sc.ImageFile != "" {
+			files["first_frame"] = []FileMeta{{TaskID: pid, Name: sc.ImageFile}}
+		}
+		if sc.VideoInputFile != "" {
+			files["last_frame"] = []FileMeta{{TaskID: pid, Name: sc.VideoInputFile}}
+		}
+		return files
+	case "minimax_h3_ref2v", "minimax_h3_ref2v_single", "minimax_h3_t2v":
+		return nil
+	}
+	return nil
 }
 
 func defaultSceneVideoAction(sc *models.Scene) string {
@@ -2091,7 +2120,7 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	}
 	videoW, videoH := aspectVideoSize(p.AspectRatio, s.videoResolution())
 	pid := fmt.Sprintf("%d", p.ID)
-	tplCode, promptText, videoFiles := s.buildSceneVideoSpec(sc, pid)
+	tplCode, promptText, videoFiles := s.buildSceneVideoSpec(sc, pid, sc.VideoTemplate)
 	var tpl models.Template
 	if err := s.db.Where("code = ?", tplCode).First(&tpl).Error; err != nil {
 		return fmt.Errorf("未找到视频模板 %s，请检查系统模板", tplCode)

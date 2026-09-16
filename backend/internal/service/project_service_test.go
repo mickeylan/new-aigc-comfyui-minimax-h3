@@ -924,8 +924,8 @@ func TestBuildSceneVideoSpec(t *testing.T) {
 	ps.db.Create(&models.Character{ProjectID: p.ID, Name: "林夏", Portrait: "lin.png", Sheet: "lin-sheet.png"})
 	ps.db.Create(&models.Character{ProjectID: p.ID, Name: "陆川", Portrait: "lu.png"})
 
-	sc := &models.Scene{ProjectID: p.ID, ImageFile: "scene_1.png", Characters: "林夏, 陆川"}
-	code, prompt, files := ps.buildSceneVideoSpec(sc, "1")
+	sc := &models.Scene{ProjectID: p.ID, ImageFile: "scene_1.png", Characters: "林夏, 陆川", VideoTemplate: ""}
+	code, prompt, files := ps.buildSceneVideoSpec(sc, "1", "")
 	if code != "minimax_h3_i2v" || len(files["first_frame"]) != 1 || files["first_frame"][0].Name != "scene_1.png" {
 		t.Fatalf("正式视频必须走 i2v 硬首帧, got %s %v", code, files)
 	}

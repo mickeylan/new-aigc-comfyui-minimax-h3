@@ -244,7 +244,8 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Prompt string `json:"prompt"`
+		Prompt   string `json:"prompt"`
+		Template string `json:"template"` // 可选：用户指定视频模板
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -255,7 +256,11 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": strings.Join(issues, "；")})
 		return
 	}
-	if err := s.DB.Model(sc).Update("video_prompt", prompt).Error; err != nil {
+	updates := map[string]any{"video_prompt": prompt}
+	if strings.TrimSpace(req.Template) != "" {
+		updates["video_template"] = strings.TrimSpace(req.Template)
+	}
+	if err := s.DB.Model(sc).Updates(updates).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

@@ -504,7 +504,7 @@
     </div>
 
     <div v-if="videoTaskDetail" class="modal-mask" @click.self="videoTaskDetail = null">
-      <div class="modal card video-task-modal"><h2>生成/编辑视频提示词</h2><p><strong>计划模板：</strong>{{ videoTaskDetail.template || videoTaskDetail.template_name }}　<strong>参数：</strong>{{ videoTaskDetail.width }}×{{ videoTaskDetail.height }} / {{ videoTaskDetail.duration }}秒 / {{ videoTaskDetail.fps }} FPS</p><label>动作正文（生成前可修改）<textarea v-model="videoTaskPromptDraft" class="textarea" rows="12" /></label><div class="field-hint">保存后用于下一次生成。系统固定加入首帧锚定、连续性约束和 H3 六段结构。</div><details open><summary>当前将提交的完整提示词</summary><pre class="task-prompt">{{ previewVideoFullPrompt }}</pre></details><details v-if="videoTaskDetail.history_prompt"><summary>上次实际提交的提示词</summary><pre class="task-prompt">{{ videoTaskDetail.history_prompt }}</pre></details><details v-if="videoTaskDetail.params_json"><summary>上次实际参数与输入图片</summary><pre class="task-prompt">{{ formatTaskParams(videoTaskDetail.params_json) }}</pre></details><div class="modal-actions"><button class="btn btn-ghost" @click="videoTaskDetail = null">取消</button><button class="btn" :disabled="savingVideoPrompt" @click="saveVideoPrompt">{{ savingVideoPrompt ? '保存中…' : '保存提示词' }}</button></div></div>
+      <div class="modal card video-task-modal"><h2>生成/编辑视频提示词</h2><div class="field-row"><div class="field"><label>视频模板</label><select v-model="videoTaskTemplate" class="input"><option value="minimax_h3_ref2v">多图参考生视频（推荐，有场景参考图时优先）</option><option value="minimax_h3_i2v">图生视频（首帧硬锚定）</option><option value="minimax_h3_first_last">首尾帧生视频（需场景已有视频）</option></select></div><div class="field"><label>尺寸 / 时长 / 帧率</label><p class="info-text">{{ videoTaskDetail.width }}×{{ videoTaskDetail.height }} / {{ videoTaskDetail.duration }}秒 / {{ videoTaskDetail.fps }} FPS</p></div></div><label>动作正文（生成前可修改）<textarea v-model="videoTaskPromptDraft" class="textarea" rows="12" /></label><div class="field-hint">保存后用于下一次生成。系统固定加入首帧锚定、连续性约束和 H3 六段结构。</div><details open><summary>当前将提交的完整提示词</summary><pre class="task-prompt">{{ previewVideoFullPrompt }}</pre></details><details v-if="videoTaskDetail.history_prompt"><summary>上次实际提交的提示词</summary><pre class="task-prompt">{{ videoTaskDetail.history_prompt }}</pre></details><details v-if="videoTaskDetail.params_json"><summary>上次实际参数与输入图片</summary><pre class="task-prompt">{{ formatTaskParams(videoTaskDetail.params_json) }}</pre></details><div class="modal-actions"><button class="btn btn-ghost" @click="videoTaskDetail = null">取消</button><button class="btn" :disabled="savingVideoPrompt" @click="saveVideoPrompt">{{ savingVideoPrompt ? '保存中…' : '保存提示词' }}</button></div></div>
     </div>
 
     <!-- 项目信息编辑弹窗 -->
@@ -902,6 +902,7 @@ const viewer = ref(null)
 const videoTaskDetail = ref(null)
 const videoTaskScene = ref(null)
 const videoTaskPromptDraft = ref('')
+const videoTaskTemplate = ref('minimax_h3_ref2v')
 const savingVideoPrompt = ref(false)
 const viewerMask = ref(null)
 const busy = ref(false)
@@ -1112,14 +1113,16 @@ async function viewVideoPrompt(sc) {
     videoTaskDetail.value = { ...preview, history_prompt: history?.prompt || '', params_json: history?.params_json || '' }
     videoTaskScene.value = sc
     videoTaskPromptDraft.value = preview.prompt || ''
+    videoTaskTemplate.value = sc.video_template || 'minimax_h3_ref2v'
   } catch (e) { toast.error(e.response?.data?.error || '生成视频提示词失败') }
 }
 async function saveVideoPrompt() {
   savingVideoPrompt.value = true
   try {
-    await api.updateSceneVideoPrompt(id(), videoTaskScene.value.id, videoTaskPromptDraft.value)
+    await api.updateSceneVideoPrompt(id(), videoTaskScene.value.id, { prompt: videoTaskPromptDraft.value, template: videoTaskTemplate.value })
     videoTaskScene.value.video_prompt = videoTaskPromptDraft.value.trim()
-    toast.success('视频提示词已保存，下次重新生成视频时生效')
+    videoTaskScene.value.video_template = videoTaskTemplate.value
+    toast.success('视频提示词和模板已保存，下次生成视频时生效')
     videoTaskDetail.value = null
   } catch (e) { toast.error(e.response?.data?.error || '保存视频提示词失败') }
   finally { savingVideoPrompt.value = false }
