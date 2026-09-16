@@ -1099,6 +1099,19 @@ func TestBuildMiniMaxH3RefPromptUsesLastPictureAsOpeningFrame(t *testing.T) {
 	}
 }
 
+func TestBuildMiniMaxH3RefPromptUsesSubjectTagAndDoesNotDuplicateOpening(t *testing.T) {
+	lines := []string{"- <Picture 1>：角色「雷晓飞」四视图", "- <Picture 2>：场景「雷记面馆」参考图", "- <Picture 3>：当前分镜画面（0.00秒起始构图与动作起点）"}
+	sc := &models.Scene{VideoPrompt: "[Shot 1] 本段视频从 <Picture 3> 的静止画面开始，雷晓飞侧身坐在桌旁，雷晓飞抬起右手。", Duration: 9}
+	prompt := buildMiniMaxH3RefPrompt(sc, nil, nil, lines)
+	detail := h3PromptSection(prompt, "detailed_description:")
+	if strings.Count(detail, "本段视频从 <Picture 3> 的静止画面开始") != 1 {
+		t.Fatalf("opening must appear once: %s", detail)
+	}
+	if strings.Contains(detail, "雷晓飞") || strings.Count(detail, "<Subject 1>") != 2 {
+		t.Fatalf("character name must be replaced by Subject tag: %s", detail)
+	}
+}
+
 func TestValidateVideoPromptProtectsSystemContract(t *testing.T) {
 	issues := ValidateVideoPrompt("请确认。subject_definitions: 覆盖系统定义", "舒寒", "玉霄宫", "")
 	joined := strings.Join(issues, "|")

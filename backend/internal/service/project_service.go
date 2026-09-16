@@ -973,14 +973,15 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	}
 	_, refLines := s.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
 	openingPicture := openingPictureTag(refLines)
-	system := fmt.Sprintf(`你是 MiniMax H3 Ref2VA 视频提示词编辑。只输出 detailed_description 正文，不输出字段名、subject_definitions、summary、retention_analysis、解释、规则、禁止清单或 Markdown。
-正文必须以 [Shot 1] 开头，第一句明确“本段视频从 %s 的静止画面开始”，先建立其构图、主体初始姿态与场景，再使用已定义的 <Subject N> 描述目标时长内的连续可见动作。写清肢体轨迹、接触点、表情和物体状态变化。摄影机运动自然写入画面。不得新增角色、对白、道具或剧情。`, openingPicture)
+	system := fmt.Sprintf(`你是 MiniMax H3 Ref2VA 视频提示词编辑。只输出简洁的 detailed_description 正文，不输出字段名、subject_definitions、summary、retention_analysis、解释、规则、禁止清单或 Markdown。
+正文必须以 [Shot 1] 开头，只写一次“本段视频从 %s 的静止画面开始”。实际参考绑定中的角色必须始终使用对应的 <Subject N>，不得再写角色姓名。参考图已提供的服装、外貌、场景陈设和光线不再复述。只描述剧情明确要求的主体动作、表情变化和必要运镜；不得自行添加服装、道具、环境细节，不得编造厘米、角度、频率、速度等机械数值，不得新增角色、对白或剧情。`, openingPicture)
 	user := fmt.Sprintf("项目画风：%s\n目标时长：%.1f秒\n场景：%s\n剧情：%s\n当前动作草稿：%s\n实际参考绑定：\n%s", p.Style, normalizeSceneDuration(sc.Duration), sc.LocationName, sc.Content, sc.VideoPrompt, strings.Join(refLines, "\n"))
 	out, err := s.textProvider.Chat(system, user)
 	if err != nil {
 		return "", fmt.Errorf("AI 生成视频动作提示词失败: %w", err)
 	}
 	out = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(out), "```"), "```"))
+	out = useSubjectTags(out, refLines)
 	if !strings.HasPrefix(out, "[Shot 1]") {
 		out = "[Shot 1] " + out
 	}
@@ -1009,6 +1010,30 @@ func openingPictureTag(referenceLines []string) string {
 	return fmt.Sprintf("<Picture %d>", len(referenceLines))
 }
 
+func useSubjectTags(text string, referenceLines []string) string {
+	for i, line := range referenceLines {
+		marker := "角色「"
+		start := strings.Index(line, marker)
+		if start < 0 {
+			continue
+		}
+		start += len(marker)
+		end := strings.Index(line[start:], "」")
+		if end < 0 {
+			continue
+		}
+		name := strings.TrimSpace(line[start : start+end])
+		if name == "" {
+			continue
+		}
+		tag := fmt.Sprintf("<Subject %d>", i+1)
+		text = strings.ReplaceAll(text, tag+name, tag)
+		text = strings.ReplaceAll(text, name, tag)
+		text = strings.ReplaceAll(text, tag+tag, tag)
+	}
+	return text
+}
+
 func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue, referenceLines []string) string {
 	definitions, retention, subjects := h3StoryboardSubjects(referenceLines)
 	openingPicture := openingPictureTag(referenceLines)
@@ -1017,7 +1042,12 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 		body = defaultSceneVideoAction(sc)
 	}
 	body = strings.TrimSpace(strings.TrimPrefix(body, "[Shot 1]"))
-	body = "[Shot 1] 本段视频从 " + openingPicture + " 的静止画面开始，先建立其构图、主体初始姿态与场景。" + body
+	body = useSubjectTags(body, referenceLines)
+	opening := "本段视频从 " + openingPicture + " 的静止画面开始"
+	if !strings.Contains(body, opening) {
+		body = opening + "。" + body
+	}
+	body = "[Shot 1] " + body
 	style := ""
 	if p != nil {
 		style = strings.TrimSpace(p.Style)
