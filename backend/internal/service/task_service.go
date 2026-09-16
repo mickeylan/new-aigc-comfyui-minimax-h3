@@ -1238,6 +1238,11 @@ func (s *TaskService) reconcile(taskID string) {
 	}
 }
 
+// RefreshTaskResult 主动按任务自己的 prompt_id 协调结果，供业务轮询在 WS 丢失时兜底。
+func (s *TaskService) RefreshTaskResult(taskID string) {
+	s.reconcile(taskID)
+}
+
 // StartRecovery 启动后台恢复循环：扫描所有 running/queued 任务，
 // 处理平台重启 / 实例重启后遗留的卡死任务（WS 监听器已丢失的场景）
 func (s *TaskService) StartRecovery() {

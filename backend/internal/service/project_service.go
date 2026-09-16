@@ -2566,6 +2566,10 @@ func (s *ProjectService) syncCharacterPortraits() {
 		if err := s.db.Where("task_id = ?", ch.PortraitTaskID).First(&task).Error; err != nil {
 			continue
 		}
+		if s.tasks != nil && (task.Status == "queued" || task.Status == "running") {
+			s.tasks.RefreshTaskResult(task.TaskID)
+			_ = s.db.Where("task_id = ?", ch.PortraitTaskID).First(&task).Error
+		}
 		switch task.Status {
 		case "failed", "cancelled":
 			msg := task.Error
