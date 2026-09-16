@@ -1148,8 +1148,13 @@ func (s *TaskService) finishTask(task *models.Task) {
 	}
 	item, ok := hist[task.ComfyPromptID].(map[string]any)
 	if !ok {
-		s.failTask(task, "历史记录缺失")
-		return
+		// 兼容代理将 /history/{id} 的内部对象直接作为响应根节点返回。
+		if _, hasOutputs := hist["outputs"]; hasOutputs {
+			item, ok = hist, true
+		}
+	}
+	if !ok {
+		return // history 可能仍在落盘，交由下一次轮询或输出目录恢复
 	}
 	status, _ := item["status"].(map[string]any)
 	statusStr, _ := status["status_str"].(string)
@@ -1222,11 +1227,9 @@ func (s *TaskService) reconcile(taskID string) {
 	c := NewComfyClient(s.comfyHostForPort(*task.Port), *task.Port)
 	// 不等待实例全局队列清空：同一实例持续有其他任务时，本任务可能早已完成。
 	// 每次协调都先按 prompt_id 查询自己的 history。
-	if hist, err := c.GetHistory(task.ComfyPromptID); err == nil {
-		if _, ok := hist[task.ComfyPromptID]; ok {
-			s.finishTask(&task)
-			return
-		}
+	if hist, err := c.GetHistory(task.ComfyPromptID); err == nil && historyHasPrompt(hist, task.ComfyPromptID) {
+		s.finishTask(&task)
+		return
 	}
 	load, err := c.GetLoad()
 	if err != nil {
@@ -1238,9 +1241,37 @@ func (s *TaskService) reconcile(taskID string) {
 	}
 }
 
-// RefreshTaskResult 主动按任务自己的 prompt_id 协调结果，供业务轮询在 WS 丢失时兜底。
+// RefreshTaskResult 主动按任务自己的 prompt_id 查询 history。
+// 不依赖本地 status：服务重启或事件丢失时，已提交任务可能错误停留在 pending。
 func (s *TaskService) RefreshTaskResult(taskID string) {
-	s.reconcile(taskID)
+	var task models.Task
+	if err := s.db.Where("task_id = ?", taskID).First(&task).Error; err != nil {
+		return
+	}
+	if task.Status == "failed" || task.Status == "cancelled" {
+		return
+	}
+	if task.Port != nil && task.ComfyPromptID != "" {
+		client := NewComfyClient(s.comfyHostForPort(*task.Port), *task.Port)
+		if history, err := client.GetHistory(task.ComfyPromptID); err == nil && historyHasPrompt(history, task.ComfyPromptID) {
+			s.finishTask(&task)
+			return
+		}
+	}
+	// history/WS可能丢失，或任务已标记success但result_files为空；直接扫描实际输出。
+	if strings.TrimSpace(task.ResultFiles) == "" || task.ResultFiles == "[]" || task.Status != "success" {
+		s.tryRecoverTaskOutput(&task)
+	}
+}
+
+func historyHasPrompt(history map[string]any, promptID string) bool {
+	if _, ok := history[promptID]; ok {
+		return true
+	}
+	// 部分代理会把 /history/{id} 的内部对象直接返回。
+	_, hasOutputs := history["outputs"]
+	_, hasStatus := history["status"]
+	return hasOutputs || hasStatus
 }
 
 // StartRecovery 启动后台恢复循环：扫描所有 running/queued 任务，
@@ -1276,33 +1307,49 @@ func (s *TaskService) recoverStuckTasks() {
 	}
 }
 
-// recoverFromOutput 实例重启丢失 history 时，扫描 output_workers/gpuN 目录按任务 ID 恢复任务结果。
+// recoverFromOutput 实例重启丢失 history 时，从可能的输出目录恢复任务结果。
 func (s *TaskService) recoverFromOutput(task *models.Task) {
-	if task.GPUIndex == nil {
-		s.failTask(task, "执行中断: 实例已重启且无法定位输出")
+	if s.tryRecoverTaskOutput(task) {
 		return
 	}
-	root := filepath.Join(s.cfg.Comfy.ComfyDir, "output_workers", fmt.Sprintf("gpu%d", *task.GPUIndex))
-	matches := s.findTaskOutputs(root, task.TaskID)
+	s.failTask(task, "执行中断: 实例已重启, 未发现输出文件")
+}
+
+// tryRecoverTaskOutput 同时兼容多GPU output_workers 和标准 ComfyUI/output。
+func (s *TaskService) tryRecoverTaskOutput(task *models.Task) bool {
+	roots := []string{filepath.Join(s.cfg.Comfy.ComfyDir, "output")}
+	if task.GPUIndex != nil {
+		roots = append([]string{filepath.Join(s.cfg.Comfy.ComfyDir, "output_workers", fmt.Sprintf("gpu%d", *task.GPUIndex))}, roots...)
+	}
+	var matches []map[string]string
+	seen := map[string]bool{}
+	for _, root := range roots {
+		for _, file := range s.findTaskOutputs(root, task.TaskID) {
+			key := file["subfolder"] + "/" + file["filename"]
+			if !seen[key] {
+				matches = append(matches, file)
+				seen[key] = true
+			}
+		}
+	}
 	if len(matches) == 0 {
-		s.failTask(task, "执行中断: 实例已重启, 未发现输出文件")
-		return
+		return false
 	}
 	filesJSON, _ := json.Marshal(matches)
 	now := time.Now()
-	s.db.Model(task).Updates(map[string]any{
-		"status": "success", "progress": 100, "result_files": string(filesJSON),
-		"finished_at": now, "error": "",
-	})
-	task.Status = "success"
-	task.Progress = 100
-	task.ResultFiles = string(filesJSON)
+	s.db.Model(task).Updates(map[string]any{"status": "success", "progress": 100, "result_files": string(filesJSON), "finished_at": now, "error": ""})
+	task.Status, task.Progress, task.ResultFiles = "success", 100, string(filesJSON)
 	s.push(task)
 	s.stopListener(task.TaskID)
 	log.Printf("[task] %s 从输出目录恢复完成: %d 个文件", task.TaskID, len(matches))
+	return true
 }
 
 // findTaskOutputs 递归扫描目录，按任务 ID 匹配输出文件
+func matchesTaskOutputName(name, taskID string) bool {
+	return taskID != "" && strings.Contains(name, taskID)
+}
+
 func (s *TaskService) findTaskOutputs(root, taskID string) []map[string]string {
 	var out []map[string]string
 	var walk func(dir, sub string)
@@ -1316,7 +1363,8 @@ func (s *TaskService) findTaskOutputs(root, taskID string) []map[string]string {
 				walk(filepath.Join(dir, e.Name()), filepath.Join(sub, e.Name()))
 				continue
 			}
-			if strings.HasPrefix(e.Name(), taskID) {
+			// 模板通常输出 character_<task_id> 或 asset_<task_id>，不能只判断前缀。
+			if matchesTaskOutputName(e.Name(), taskID) {
 				ext := strings.ToLower(filepath.Ext(e.Name()))
 				ftype := "images"
 				switch ext {

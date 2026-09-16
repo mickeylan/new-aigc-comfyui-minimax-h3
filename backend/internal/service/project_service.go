@@ -2564,9 +2564,12 @@ func (s *ProjectService) syncCharacterPortraits() {
 		ch := &chars[i]
 		var task models.Task
 		if err := s.db.Where("task_id = ?", ch.PortraitTaskID).First(&task).Error; err != nil {
+			s.db.Model(ch).Where("portrait_task_id = ?", ch.PortraitTaskID).Updates(map[string]any{"portrait_task_id": "", "portrait_error": "标准像任务记录不存在，请重新生成"})
+			changed = true
 			continue
 		}
-		if s.tasks != nil && (task.Status == "queued" || task.Status == "running") {
+		needsRefresh := task.Status != "failed" && task.Status != "cancelled" && (task.Status != "success" || strings.TrimSpace(task.ResultFiles) == "" || task.ResultFiles == "[]")
+		if s.tasks != nil && needsRefresh {
 			s.tasks.RefreshTaskResult(task.TaskID)
 			_ = s.db.Where("task_id = ?", ch.PortraitTaskID).First(&task).Error
 		}
@@ -2579,8 +2582,8 @@ func (s *ProjectService) syncCharacterPortraits() {
 			s.db.Model(ch).Where("portrait_task_id = ?", task.TaskID).Updates(map[string]any{"portrait_task_id": "", "portrait_error": msg})
 			changed = true
 		case "success":
-			file, gpu := resultImageOf(&task)
-			if file == "" || gpu == nil || task.Port == nil || s.upload == nil {
+			file, _ := resultImageOf(&task)
+			if file == "" || task.Port == nil || s.upload == nil {
 				s.db.Model(ch).Where("portrait_task_id = ?", task.TaskID).Updates(map[string]any{"portrait_task_id": "", "portrait_error": "Krea2 任务成功但未返回可用图片"})
 				changed = true
 				continue
