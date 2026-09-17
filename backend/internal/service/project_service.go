@@ -2531,6 +2531,11 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 	}
 	// 使用本次实际上传的 refs/lines 编译引用绑定，确保 Picture 编号与文件顺序一致。
 	prompt := buildH3StoryboardPrompt(sc, &p, lines)
+	refNames := make([]string, 0, len(refs))
+	for i, ref := range refs {
+		refNames = append(refNames, fmt.Sprintf("Picture %d=%s/%s", i+1, ref.TaskID, ref.Name))
+	}
+	log.Printf("[storyboard-submit] project=%d scene=%d template=%s refs=[%s]\nprompt:\n%s", sc.ProjectID, sc.ID, templateCode, strings.Join(refNames, ", "), prompt)
 	width, height := sceneImageSize(&p)
 	task, err := s.tasks.CreateTask(CreateTaskReq{
 		TemplateID: tpl.ID,
@@ -2798,6 +2803,13 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	if tplCode == "minimax_h3_first_last" && (videoFiles == nil || len(videoFiles["first_frame"]) == 0 || len(videoFiles["last_frame"]) == 0) {
 		return fmt.Errorf("首尾帧模板需要同时指定首帧图片和尾帧图片，请在「生成/编辑视频提示词」中选择")
 	}
+	videoFileNames := []string{}
+	for _, key := range []string{"ref_images", "first_frame", "last_frame"} {
+		for i, ref := range videoFiles[key] {
+			videoFileNames = append(videoFileNames, fmt.Sprintf("%s[%d]=%s/%s", key, i, ref.TaskID, ref.Name))
+		}
+	}
+	log.Printf("[video-submit] project=%d scene=%d template=%s files=[%s]\nprompt:\n%s", sc.ProjectID, sc.ID, tplCode, strings.Join(videoFileNames, ", "), promptText)
 	var tpl models.Template
 	if err := s.db.Where("code = ?", tplCode).First(&tpl).Error; err != nil {
 		return fmt.Errorf("未找到视频模板 %s，请检查系统模板", tplCode)

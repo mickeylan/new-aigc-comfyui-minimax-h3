@@ -173,6 +173,40 @@ func TestRef2VWorkflowConnectsAllThreeImagesInOrder(t *testing.T) {
 	}
 }
 
+func TestStoryboardSelfLiftWorkflowConnectsReferenceImages(t *testing.T) {
+	tpl := loadTemplateForTest(t, "minimax_h3_storyboard_candidates_selflift.json")
+	params := baseParams()
+	files := map[string][]FileMeta{"ref_images": {
+		{TaskID: "1", Name: "char-sheet.png"},
+		{TaskID: "1", Name: "location.png"},
+	}}
+	if err := normalizeTemplateFiles(&tpl, params, files); err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := (&TaskService{}).RenderWorkflow(&tpl, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, tc := range []struct{ node, name string }{{"137", "1/char-sheet.png"}, {"139", "1/location.png"}} {
+		node := workflow[tc.node].(map[string]any)
+		inputs := node["inputs"].(map[string]any)
+		if inputs["image"] != tc.name {
+			t.Fatalf("ref_image_%d rendered as %#v, want %s", i, inputs["image"], tc.name)
+		}
+	}
+	refInputs := workflow["416"].(map[string]any)["inputs"].(map[string]any)
+	for i, nodeID := range []string{"137", "139"} {
+		key := fmt.Sprintf("ref_images.ref_image_%d", i)
+		ref, ok := refInputs[key].([]any)
+		if !ok || ref[0] != nodeID {
+			t.Fatalf("%s not connected to node %s: %#v", key, nodeID, refInputs[key])
+		}
+	}
+	if _, nested := refInputs["ref_images"]; nested {
+		t.Fatal("SelfLift API workflow must use flattened Autogrow keys, not nested ref_images")
+	}
+}
+
 func TestRequiredTemplateFilesAreValidated(t *testing.T) {
 	tpl := loadTemplateForTest(t, "minimax_h3_first_last.json")
 	err := normalizeTemplateFiles(&tpl, baseParams(), map[string][]FileMeta{
