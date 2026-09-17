@@ -226,6 +226,18 @@ func TestResultVideoOf(t *testing.T) {
 	}
 }
 
+func TestEditorSceneVideoURLPrefersDownloadedProjectCopy(t *testing.T) {
+	gpu := 3
+	sc := &models.Scene{VideoInputFile: "scene_video.mp4", VideoFile: "remote/output.mp4", VideoGPU: &gpu}
+	if got := editorSceneVideoURL(42, sc); got != "/api/input/42/scene_video.mp4" {
+		t.Fatalf("video url = %q", got)
+	}
+	sc.VideoInputFile = ""
+	if got := editorSceneVideoURL(42, sc); got != "/api/output/3/remote/output.mp4" {
+		t.Fatalf("legacy output url = %q", got)
+	}
+}
+
 func TestDetectImageExt(t *testing.T) {
 	png := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00}
 	jpg := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00}

@@ -3960,6 +3960,16 @@ func (s *ProjectService) ListSceneDialogues(sceneID uint) ([]models.Dialogue, er
 	return list, nil
 }
 
+func editorSceneVideoURL(projectID uint, sc *models.Scene) string {
+	if sc.VideoInputFile != "" {
+		return fmt.Sprintf("/api/input/%d/%s", projectID, sc.VideoInputFile)
+	}
+	if sc.VideoFile != "" && sc.VideoGPU != nil {
+		return fmt.Sprintf("/api/output/%d/%s", *sc.VideoGPU, sc.VideoFile)
+	}
+	return ""
+}
+
 // EditorData 剪辑台数据：场景（含视频时长与资源 URL）+ 对白 + 按真实音频对齐的字幕时间轴
 func (s *ProjectService) EditorData(p *models.Project, episodeN int) (map[string]any, error) {
 	var scenes []models.Scene
@@ -3978,8 +3988,16 @@ func (s *ProjectService) EditorData(p *models.Project, episodeN int) (map[string
 	sceneIDs := make([]uint, 0, len(scenes))
 	for _, sc := range scenes {
 		es := editorScene{Scene: sc}
-		if sc.VideoFile != "" && sc.VideoGPU != nil {
-			es.VideoURL = fmt.Sprintf("/api/output/%d/%s", *sc.VideoGPU, sc.VideoFile)
+		// 完成同步后会把视频复制到项目 input 目录。该副本跨 GPU、跨 ComfyUI
+		// 实例均可访问，剪辑台应与项目详情一样优先使用它，而不是原 worker 输出。
+		if sc.VideoInputFile != "" {
+			es.VideoURL = editorSceneVideoURL(p.ID, &sc)
+			abs := filepath.Join(s.upload.InputDir(), fmt.Sprint(p.ID), filepath.FromSlash(sc.VideoInputFile))
+			if mi, err := s.remote.ProbeMedia(abs); err == nil && mi.Duration > 0 {
+				es.VideoDur = mi.Duration
+			}
+		} else if sc.VideoFile != "" && sc.VideoGPU != nil {
+			es.VideoURL = editorSceneVideoURL(p.ID, &sc)
 			abs := s.mediaPath("output_workers", fmt.Sprintf("gpu%d", *sc.VideoGPU), filepath.FromSlash(sc.VideoFile))
 			if mi, err := s.remote.ProbeMedia(abs); err == nil && mi.Duration > 0 {
 				es.VideoDur = mi.Duration

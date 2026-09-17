@@ -75,10 +75,11 @@
           </div>
         </div>
         <div class="card preview-card">
-          <video v-if="selected.video_url" :src="selected.video_url" controls autoplay class="editor-video"></video>
+          <video v-if="selected.video_url" :key="selected.video_url" :src="selected.video_url" controls preload="metadata" class="editor-video"></video>
+          <img v-else-if="selected.image_url" :key="selected.image_url" :src="selected.image_url" class="editor-image" alt="当前场景分镜图" />
           <div v-else class="preview-empty">
             <span class="ph-icon">🎞️</span>
-            <p>该场景视频未就绪</p>
+            <p>该场景尚未生成分镜图或视频</p>
           </div>
           <div class="duration-edit">
             <label>目标时长</label>
@@ -518,6 +519,7 @@ onUnmounted(() => { clearInterval(timer) })
 
 .preview-card { padding: 16px; }
 .editor-video { width: 100%; border-radius: 12px; background: #000; max-height: 420px; }
+.editor-image { display: block; width: 100%; max-height: 520px; object-fit: contain; border-radius: 12px; background: #000; }
 .preview-empty { height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--text-tertiary); }
 .duration-edit { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; color: var(--text-secondary); }
 .dur-unit { color: var(--text-tertiary); }
