@@ -758,10 +758,10 @@ func TestSceneReferencesExcludeOffscreenCharacterFromShot(t *testing.T) {
 		t.Fatalf("offscreen character leaked into references: %v", lines)
 	}
 	autoFiles, autoLines := ps.sceneImageReferenceFiles(&sc)
-	if len(autoFiles) != 2 || autoFiles[0].Name != "noodle-shop.png" || autoFiles[1].Name != "lead-sheet.png" || strings.Contains(strings.Join(autoLines, "\n"), "雷婶") {
-		t.Fatalf("automatic references must use environment first and visible lead sheet second: files=%+v lines=%v", autoFiles, autoLines)
+	if len(autoFiles) != 2 || autoFiles[0].Name != "lead-sheet.png" || autoFiles[1].Name != "noodle-shop.png" || strings.Contains(strings.Join(autoLines, "\n"), "雷婶") {
+		t.Fatalf("automatic references must match explicit order: visible character first, environment second: files=%+v lines=%v", autoFiles, autoLines)
 	}
-	if !strings.Contains(autoLines[0], "环境与起始构图") || !strings.Contains(autoLines[1], "四视图") {
+	if !strings.Contains(autoLines[0], "四视图") || !strings.Contains(autoLines[1], "环境与起始构图") {
 		t.Fatalf("reference bindings must match uploaded files: %v", autoLines)
 	}
 }
@@ -804,6 +804,9 @@ func TestBuildH3StoryboardPromptRemovesRedundantWardrobeText(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "雷晓飞独自坐于八仙桌旁，右手轻敲桌面") {
 		t.Fatalf("visible action was lost: %s", prompt)
+	}
+	if strings.Contains(h3PromptSection(prompt, "summary:"), sc.Content) {
+		t.Fatalf("static storyboard summary must not repeat multi-step scene narrative: %s", prompt)
 	}
 	for _, want := range []string{
 		"<Subject 1> 是 <Picture 1> 中的场景雷记面馆。",

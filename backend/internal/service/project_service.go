@@ -2353,7 +2353,7 @@ func buildH3StoryboardPrompt(sc *models.Scene, p *models.Project, referenceLines
 	if p != nil {
 		style = strings.TrimSpace(p.Style)
 	}
-	summary := "[reference generation] " + strings.Join(subjects, "、") + "共同构成目标静止分镜画面：" + strings.TrimSpace(sc.Content)
+	summary := "[reference generation] " + strings.Join(subjects, "、") + "共同构成一张目标静止分镜画面。"
 	detailPrefix := "[Shot 1] 画面中的参考主体为" + strings.Join(subjects, "、") + "。"
 	if style != "" {
 		detail += "\n视觉风格：" + style
@@ -2403,6 +2403,13 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 		return fmt.Errorf("MiniMax H3 SelfLift 场景图生成依赖 ComfyUI 任务服务")
 	}
 
+	// 认领后重新读取最新 Scene，避免提交调用方持有的旧提示词或旧参考图快照。
+	var latest models.Scene
+	if err := s.db.First(&latest, sc.ID).Error; err != nil {
+		s.failSceneImage(sc, token, err.Error())
+		return err
+	}
+	sc = &latest
 	refs, lines, explicitRefs := s.selectedSceneReferenceFiles(sc, "krea2") // krea2 是旧数据库字段名，此处实际提交给 H3 SelfLift
 	if !explicitRefs {
 		refs, lines = s.sceneImageReferenceFiles(sc)
@@ -2432,9 +2439,8 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 		s.failSceneImage(sc, token, err.Error())
 		return err
 	}
-	// SelfLift 场景图沿用已验证的自然语言生图提示词；参考图仍按 ref_images
-	// 顺序传入。Ref2VA 六段契约只用于视频，不用于这次 5 帧静态候选采样。
-	prompt := s.buildSceneImagePrompt(sc)
+	// 使用本次实际上传的 refs/lines 编译引用绑定，确保 Picture 编号与文件顺序一致。
+	prompt := buildH3StoryboardPrompt(sc, &p, lines)
 	width, height := sceneImageSize(&p)
 	task, err := s.tasks.CreateTask(CreateTaskReq{
 		TemplateID: tpl.ID,
@@ -2465,21 +2471,13 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 	return nil
 }
 
-// sceneImageReferenceFiles follows H3 reference semantics: Picture 1 anchors environment/composition;
-// later pictures identify visible characters/outfits and props.
+// sceneImageReferenceFiles uses the same stable order as explicit selection:
+// visible characters, their outfits, the location, then plot props.
 func (s *ProjectService) sceneImageReferenceFiles(sc *models.Scene) ([]FileMeta, []string) {
 	pid := fmt.Sprint(sc.ProjectID)
 	refs := make([]FileMeta, 0, maxSceneReferenceImages)
 	lines := make([]string, 0, maxSceneReferenceImages)
 	assets := s.sceneMatchedAssets(sc)
-	for _, a := range assets {
-		if a.Kind != AssetKindLocation || a.Image == "" {
-			continue
-		}
-		refs = append(refs, FileMeta{TaskID: pid, Name: a.Image})
-		lines = append(lines, fmt.Sprintf("- <Picture %d>：场景「%s」环境与起始构图以参考图为准", len(refs), a.Name))
-		break
-	}
 	for _, ch := range s.sceneCharacterPortraits(sc) {
 		if len(refs) >= maxSceneReferenceImages {
 			break
@@ -2514,6 +2512,14 @@ func (s *ProjectService) sceneImageReferenceFiles(sc *models.Scene) ([]FileMeta,
 		}
 		refs = append(refs, FileMeta{TaskID: pid, Name: name})
 		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」造型套装「%s」%s", len(refs), charName, outfit.Name, kind))
+	}
+	for _, a := range assets {
+		if a.Kind != AssetKindLocation || a.Image == "" || len(refs) >= maxSceneReferenceImages {
+			continue
+		}
+		refs = append(refs, FileMeta{TaskID: pid, Name: a.Image})
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：场景「%s」环境与起始构图以参考图为准", len(refs), a.Name))
+		break
 	}
 	for _, a := range assets {
 		if a.Kind == AssetKindLocation {
