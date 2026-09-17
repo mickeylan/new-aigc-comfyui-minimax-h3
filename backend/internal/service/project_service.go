@@ -1046,6 +1046,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 		dialogueContext = strings.Join(lines, "\n")
 	}
 	system := fmt.Sprintf(`你是 MiniMax H3 Ref2VA 视频动作编辑。只输出简洁的 detailed_description 正文，不输出字段名、解释、规则或 Markdown。
+输出正文必须使用英文；角色姓名可保留原文以便系统绑定，但除此之外不得输出中文。真实中文对白由系统另行加入，你不得翻译或复述对白。
 正文必须忠实执行场景剧情与结构化Shot导演设计，不能只看参考图脑补情节。Scene决定剧情因果，Shot决定本镜主体、准确动作、情绪、景别、机位和运镜，结构化Dialogue决定是否说话及台词内容；三者均不得擅自增删或改写。
 第一句以 [Shot 1] 开头，说明画面可从%s参考状态开始；随后按Shot顺序写可执行动作与表情，确有导演运镜时再写运镜。不得新增角色、动作、对白、道具、地点或剧情。
 Dialogue只决定人物是否开口及对应口型时机；对白文本将由系统确定性加入，你不得在正文输出台词、<d>标签或改写台词。
@@ -1177,10 +1178,29 @@ func stripPromptDialogueNarration(prompt string) string {
 	return strings.TrimSpace(text)
 }
 
+var dialogueStageDirectionPattern = regexp.MustCompile(`[（(\[【][^）)\]】]*(?:动作|动作描写|表情|神态|镜头|画面|运镜|抚摸|轻抚|输送|转身|走向|看向|停顿|沉默|环境|音效)[^）)\]】]*[）)\]】]`)
+
+func spokenDialogueText(text string) string {
+	text = strings.TrimSpace(dialogueStageDirectionPattern.ReplaceAllString(text, ""))
+	text = strings.TrimSpace(strings.Trim(text, "，,。；;：:"))
+	if text == "" {
+		return ""
+	}
+	// 纯舞台提示即使没有括号，也不是可发声台词。
+	lower := strings.ToLower(text)
+	for _, prefix := range []string{"动作描写", "动作：", "动作:", "镜头描写", "镜头：", "镜头:", "画面描写", "旁白说明", "音效：", "音效:"} {
+		if strings.HasPrefix(lower, prefix) {
+			return ""
+		}
+	}
+	return text
+}
+
 func validSceneDialogues(dubs []models.Dialogue) []models.Dialogue {
 	valid := make([]models.Dialogue, 0, len(dubs))
 	for _, d := range dubs {
-		if strings.TrimSpace(d.Text) != "" {
+		d.Text = spokenDialogueText(d.Text)
+		if d.Text != "" {
 			valid = append(valid, d)
 		}
 	}
@@ -1203,17 +1223,49 @@ func stripStructuredDialogueFromAction(prompt string, dubs []models.Dialogue) st
 	return strings.TrimSpace(text)
 }
 
+func dialogueSpeakerIDs(dubs []models.Dialogue) []int {
+	ids := make([]int, len(dubs))
+	bySpeaker := map[string]int{}
+	next := 1
+	for i, d := range dubs {
+		key := strings.TrimSpace(d.Character)
+		if key == "" {
+			key = "__narrator__"
+		}
+		id, ok := bySpeaker[key]
+		if !ok {
+			id = next
+			bySpeaker[key] = id
+			next++
+		}
+		ids[i] = id
+	}
+	return ids
+}
+
+func h3SoundscapeContract(hasDialogue bool) string {
+	if hasDialogue {
+		return "Quiet ambient room tone and subtle synchronized physical movement sounds continue beneath the explicitly written dialogue. No other voices, narration, commentary, inner monologue, indistinct vocalization, singing, or additional speech are audible."
+	}
+	return "Only quiet ambient room tone and synchronized physical movement sounds are audible. There are no voices, dialogue, narration, commentary, inner monologue, indistinct vocalization, speech, or singing; every character keeps their mouth closed."
+}
+
 func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 	valid := validSceneDialogues(dubs)
 	soundscape := h3PromptSection(fullPrompt, "overall_soundscape:")
-	if len(valid) == 0 {
-		return !strings.Contains(strings.ToLower(fullPrompt), "<d>") && strings.Contains(soundscape, "无人声") && strings.Contains(soundscape, "无说话声")
-	}
-	if !strings.Contains(soundscape, "禁止新增对白") {
+	if strings.Contains(soundscape, "<d>") || strings.Contains(soundscape, "</d>") {
 		return false
 	}
-	for _, d := range valid {
-		if !strings.Contains(fullPrompt, "<d>[中文] "+strings.TrimSpace(d.Text)+"</d>") {
+	if len(valid) == 0 {
+		return !strings.Contains(strings.ToLower(fullPrompt), "<d>") && strings.Contains(soundscape, "There are no voices") && strings.Contains(soundscape, "every character keeps their mouth closed")
+	}
+	if !strings.Contains(soundscape, "No other voices") || !strings.Contains(soundscape, "additional speech") {
+		return false
+	}
+	speakerIDs := dialogueSpeakerIDs(valid)
+	for i, d := range valid {
+		text := strings.TrimSpace(d.Text)
+		if !strings.Contains(fullPrompt, fmt.Sprintf("(S%d)", speakerIDs[i])) || (!strings.Contains(fullPrompt, "<d>[Chinese] "+text+"</d>") && !strings.Contains(fullPrompt, "<d>[中文] "+text+"</d>")) {
 			return false
 		}
 	}
@@ -1245,18 +1297,18 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 		}
 	}
 	validDialogues := validSceneDialogues(dubs)
-	soundscape := "仅自然环境声和画面内物理动作声同步。无对白、无人声、无旁白、无语音、无说话声、无吟唱；人物嘴部不得做说话口型。"
+	soundscape := h3SoundscapeContract(len(validDialogues) > 0)
 	if len(validDialogues) > 0 {
-		for _, d := range validDialogues {
+		speakerIDs := dialogueSpeakerIDs(validDialogues)
+		for i, d := range validDialogues {
 			speaker := strings.TrimSpace(d.Character)
 			if speaker == "" {
-				speaker = "旁白"
+				speaker = fmt.Sprintf("The narrator (S%d)", speakerIDs[i])
 			} else {
-				speaker = useSubjectTags(speaker, referenceLines)
+				speaker = useSubjectTags(speaker, referenceLines) + fmt.Sprintf(" (S%d)", speakerIDs[i])
 			}
-			body += " " + speaker + "说道：<d>[中文] " + strings.TrimSpace(d.Text) + "</d>"
+			body += " " + speaker + " speaks once with clear articulation, <d>[Chinese] " + strings.TrimSpace(d.Text) + "</d>. The speaker then closes their mouth."
 		}
-		soundscape = "按顺序准确生成 <d> 标签中由结构化剧情指定的对白，以及自然环境声和画面内物理动作声；禁止遗漏、改写或新增对白，禁止额外旁白、含混人声或吟唱。"
 	}
 	return "subject_definitions:\n" + strings.Join(definitions, "\n") +
 		"\n\nsummary:\n[reference generation] " + strings.Join(subjects, "、") + "提供人物、场景及可选分镜状态参考，在约" + fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)) + "秒内严格执行本镜剧情与Shot设计。" +
@@ -1327,16 +1379,19 @@ func buildMiniMaxH3Prompt(sc *models.Scene, p *models.Project, dubs []models.Dia
 	buf.WriteString("overall_soundscape:\n")
 	validDialogues := validSceneDialogues(dubs)
 	if len(validDialogues) > 0 {
-		for _, d := range validDialogues {
+		speakerIDs := dialogueSpeakerIDs(validDialogues)
+		for i, d := range validDialogues {
 			speaker := strings.TrimSpace(d.Character)
 			if speaker == "" {
-				speaker = "旁白"
+				speaker = fmt.Sprintf("The narrator (S%d)", speakerIDs[i])
+			} else {
+				speaker += fmt.Sprintf(" (S%d)", speakerIDs[i])
 			}
-			buf.WriteString(speaker + "说道：<d>[中文] " + strings.TrimSpace(d.Text) + "</d>。")
+			buf.WriteString(speaker + " speaks once with clear articulation, <d>[Chinese] " + strings.TrimSpace(d.Text) + "</d>. The speaker then closes their mouth. ")
 		}
-		buf.WriteString(" 仅生成以上结构化对白及同步环境声、动作声；禁止遗漏、改写或新增对白。")
+		buf.WriteString(" " + h3SoundscapeContract(true))
 	} else {
-		buf.WriteString("仅自然环境声和物理动作声。无对白、无人声、无旁白、无语音、无说话声、无吟唱；人物嘴部不得做说话口型。")
+		buf.WriteString(h3SoundscapeContract(false))
 	}
 	buf.WriteString("\n\n")
 
@@ -2444,9 +2499,18 @@ func buildH3StoryboardPrompt(sc *models.Scene, p *models.Project, referenceLines
 		style = strings.TrimSpace(p.Style)
 	}
 	summary := "[reference generation] " + strings.Join(subjects, "、") + "共同构成一张目标静止分镜画面。"
-	detailPrefix := "[Shot 1] 画面中的参考主体为" + strings.Join(subjects, "、") + "。"
+	subjectSentence := "画面中的参考主体为" + strings.Join(subjects, "、") + "。"
+	// 已保存的提示词可能已经由本函数编译过；再次提交必须保持幂等，避免重复前缀和画风。
+	for strings.HasPrefix(detail, subjectSentence) {
+		detail = strings.TrimSpace(strings.TrimPrefix(detail, subjectSentence))
+	}
+	detailPrefix := "[Shot 1] " + subjectSentence
 	if style != "" {
-		detail += "\n视觉风格：" + style
+		styleLine := "视觉风格：" + style
+		for strings.Contains(detail, styleLine) {
+			detail = strings.TrimSpace(strings.Replace(detail, styleLine, "", 1))
+		}
+		detail += "\n" + styleLine
 	}
 	return "subject_definitions:\n" + strings.Join(definitions, "\n") +
 		"\n\nsummary:\n" + summary +
@@ -2788,8 +2852,11 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 			// 用户保存的完整提示词是权威值；提交时原样使用。只有空值或
 			// 参考图编号失效时，才根据当前Scene/Shot/Dialogue重新构建。
 			promptText = strings.TrimSpace(sc.VideoFullPrompt)
-			if promptText == "" || len(ValidateFullH3PromptForReferences(promptText, refLines)) > 0 {
-				actionPrompt := canonicalVideoAction(sc.VideoPrompt, refLines)
+			if promptText == "" || len(ValidateFullH3PromptForReferences(promptText, refLines)) > 0 || !videoAudioContractMatches(promptText, dubs) {
+				actionPrompt := canonicalVideoAction(promptText, refLines)
+				if actionPrompt == "" {
+					actionPrompt = canonicalVideoAction(sc.VideoPrompt, refLines)
+				}
 				preview := *sc
 				preview.VideoPrompt = actionPrompt
 				promptText = buildMiniMaxH3RefPrompt(&preview, p, dubs, refLines)

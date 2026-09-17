@@ -807,7 +807,7 @@ func TestSceneVideoContinuityReferencesReplaceStoryboardWithTailFrame(t *testing
 	}
 }
 
-func TestSceneReferencesExcludeOffscreenCharacterFromShot(t *testing.T) {
+func TestExplicitSceneReferencesHonorUserSelectionWhileAutomaticReferencesStayRelevant(t *testing.T) {
 	ps := newTestProjectService(t)
 	if err := ps.db.AutoMigrate(&models.Shot{}); err != nil {
 		t.Fatal(err)
@@ -832,11 +832,11 @@ func TestSceneReferencesExcludeOffscreenCharacterFromShot(t *testing.T) {
 		t.Fatal(err)
 	}
 	files, lines, explicit := ps.selectedSceneReferenceFiles(&sc, "krea2")
-	if !explicit || len(files) != 1 || files[0].Name != "lead-sheet.png" {
-		t.Fatalf("files=%+v lines=%v", files, lines)
+	if !explicit || len(files) != 2 || files[0].Name != "lead-sheet.png" || files[1].Name != "aunt-sheet.png" {
+		t.Fatalf("explicit user selections must all be submitted: files=%+v lines=%v", files, lines)
 	}
-	if strings.Contains(strings.Join(lines, "\n"), "雷婶") {
-		t.Fatalf("offscreen character leaked into references: %v", lines)
+	if !strings.Contains(strings.Join(lines, "\n"), "雷婶") {
+		t.Fatalf("explicitly selected character was silently dropped: %v", lines)
 	}
 	autoFiles, autoLines := ps.sceneImageReferenceFiles(&sc)
 	if len(autoFiles) != 2 || autoFiles[0].Name != "lead-sheet.png" || autoFiles[1].Name != "noodle-shop.png" || strings.Contains(strings.Join(autoLines, "\n"), "雷婶") {
@@ -874,6 +874,19 @@ func TestExplicitSceneLocationStillAddsVisibleCharacterSheet(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q: %s", want, prompt)
 		}
+	}
+}
+
+func TestBuildH3StoryboardPromptIsIdempotent(t *testing.T) {
+	lines := []string{"- <Picture 1>：角色「雷晓飞」四视图", "- <Picture 2>：场景「雷记面馆」参考图"}
+	sc := &models.Scene{Content: "雷晓飞站在面馆", ImagePrompt: "[Shot 1] 画面中的参考主体为<Subject 1>、<Subject 2>。画面中的参考主体为<Subject 1>、<Subject 2>。<Subject 1>站在桌旁。\n视觉风格：3D国漫\n视觉风格：3D国漫"}
+	prompt := buildH3StoryboardPrompt(sc, &models.Project{Style: "3D国漫"}, lines)
+	detail := h3PromptSection(prompt, "detailed_description:")
+	if strings.Count(detail, "画面中的参考主体为") != 1 {
+		t.Fatalf("subject prefix duplicated: %s", detail)
+	}
+	if strings.Count(detail, "视觉风格：3D国漫") != 1 {
+		t.Fatalf("style must appear exactly once: %s", detail)
 	}
 }
 
@@ -1314,8 +1327,8 @@ func TestCharacterNamesMapToActualReferenceSubjects(t *testing.T) {
 		"<Subject 2> 是 <Picture 2> 中的角色「上官若琳」四视图",
 		"<Subject 4> 是 <Picture 4> 中的当前分镜画面",
 		"<Subject 1>环抱<Subject 2>",
-		"<Subject 1>说道：<d>[中文] 这不是太想你了吗。</d>",
-		"<Subject 2>说道：<d>[中文] 今晚有得是时间。</d>",
+		"<Subject 1> (S1) speaks once with clear articulation, <d>[Chinese] 这不是太想你了吗。</d>",
+		"<Subject 2> (S2) speaks once with clear articulation, <d>[Chinese] 今晚有得是时间。</d>",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("character mapping missing %q: %s", want, prompt)
@@ -1331,6 +1344,29 @@ func TestCharacterNamesMapToActualReferenceSubjects(t *testing.T) {
 	}
 }
 
+func TestActionDescriptionIsNeverConvertedToDialogue(t *testing.T) {
+	lines := []string{"- <Picture 1>：角色「舒寒」四视图", "- <Picture 2>：场景「内殿」参考图"}
+	dubs := []models.Dialogue{{Character: "舒寒", Text: "(动作描写：抚摸脸庞，输送力量)"}}
+	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] 舒寒抬手抚摸对方脸庞。", Duration: 8}, nil, dubs, lines)
+	for _, forbidden := range []string{"<d>", "动作描写", "抚摸脸庞，输送力量", "(S1)"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("action direction leaked into spoken dialogue as %q: %s", forbidden, prompt)
+		}
+	}
+	for _, want := range []string{"There are no voices", "no voices, dialogue, narration", "every character keeps their mouth closed"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("silent contract missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestDialogueKeepsSpeechAndDropsInlineStageDirection(t *testing.T) {
+	got := validSceneDialogues([]models.Dialogue{{Character: "舒寒", Text: "（轻抚她的脸庞）你终于醒了。"}})
+	if len(got) != 1 || got[0].Text != "你终于醒了" {
+		t.Fatalf("dialogue normalization = %+v", got)
+	}
+}
+
 func TestSceneWithoutStructuredDialogueForbidsVoice(t *testing.T) {
 	lines := []string{"- <Picture 1>：当前分镜画面", "- <Picture 2>：角色「上官若琳」四视图"}
 	sc := &models.Scene{VideoPrompt: "[Shot 1] <Subject 2>轻轻转头。", Duration: 8}
@@ -1338,7 +1374,7 @@ func TestSceneWithoutStructuredDialogueForbidsVoice(t *testing.T) {
 	if strings.Contains(prompt, "<d>") {
 		t.Fatalf("dialogue tag appeared without structured dialogue: %s", prompt)
 	}
-	for _, want := range []string{"无对白", "无人声", "无旁白", "无说话声", "人物嘴部不得做说话口型"} {
+	for _, want := range []string{"There are no voices", "no voices, dialogue, narration", "indistinct vocalization", "every character keeps their mouth closed"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("no-dialogue constraint missing %q: %s", want, prompt)
 		}
@@ -1348,10 +1384,35 @@ func TestSceneWithoutStructuredDialogueForbidsVoice(t *testing.T) {
 func TestStructuredDialogueIsAlwaysIncluded(t *testing.T) {
 	lines := []string{"- <Picture 1>：当前分镜画面"}
 	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] 人物抬头。", Duration: 8}, nil, []models.Dialogue{{Character: "林夏", Text: "你来了"}}, lines)
-	for _, want := range []string{"林夏说道：<d>[中文] 你来了</d>", "禁止遗漏、改写或新增对白"} {
+	for _, want := range []string{"林夏 (S1) speaks once with clear articulation, <d>[Chinese] 你来了</d>", "No other voices", "narration", "indistinct vocalization", "additional speech"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("structured dialogue missing %q: %s", want, prompt)
 		}
+	}
+}
+
+func TestSoundscapeContainsNoFakeDialogueTagAndSpeakerIDsAreStable(t *testing.T) {
+	lines := []string{"- <Picture 1>：角色「林夏」四视图", "- <Picture 2>：角色「陆川」四视图"}
+	dubs := []models.Dialogue{{Character: "林夏", Text: "第一句。"}, {Character: "陆川", Text: "回应。"}, {Character: "林夏", Text: "第二句。"}}
+	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] 林夏看向陆川。", Duration: 8}, nil, dubs, lines)
+	soundscape := h3PromptSection(prompt, "overall_soundscape:")
+	if strings.Contains(soundscape, "<d>") || strings.Contains(soundscape, "</d>") {
+		t.Fatalf("soundscape must not contain fake dialogue tags: %s", soundscape)
+	}
+	if strings.Count(prompt, "<Subject 1> (S1)") != 2 || strings.Count(prompt, "<Subject 2> (S2)") != 1 || strings.Contains(prompt, "(S3)") {
+		t.Fatalf("speaker IDs must be stable by speaker: %s", prompt)
+	}
+}
+
+func TestLegacyNAudioContractIsRejectedBeforeSubmission(t *testing.T) {
+	dubs := []models.Dialogue{{Character: "林夏", Text: "你来了"}}
+	legacy := "detailed_description:\n[Shot 1] 林夏说道：<d>[中文] 你来了</d>\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"
+	if videoAudioContractMatches(legacy, dubs) {
+		t.Fatalf("legacy N/A soundscape must be rebuilt before submission: %s", legacy)
+	}
+	current := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] 林夏抬头。", Duration: 8}, nil, dubs, []string{"- <Picture 1>：当前分镜画面"})
+	if !videoAudioContractMatches(current, dubs) {
+		t.Fatalf("current speaker/audio contract rejected: %s", current)
 	}
 }
 
@@ -1361,7 +1422,7 @@ func TestStructuredDialogueOverridesStalePromptDialogue(t *testing.T) {
 	if strings.Contains(prompt, "错误旧台词") {
 		t.Fatalf("stale prompt dialogue was retained: %s", prompt)
 	}
-	if !strings.Contains(prompt, "林夏说道：<d>[中文] 正确结构化台词</d>") {
+	if !strings.Contains(prompt, "林夏 (S1) speaks once with clear articulation, <d>[Chinese] 正确结构化台词</d>") {
 		t.Fatalf("structured dialogue missing: %s", prompt)
 	}
 }

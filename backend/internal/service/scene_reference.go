@@ -177,9 +177,12 @@ func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target st
 			continue
 		}
 		c, ok := byKey[referenceKey(r)]
-		if !ok || !s.sceneReferenceIsRelevant(sc, r) {
+		if !ok {
 			continue
 		}
+		// 显式勾选是用户的最终决定。不要再按Shot/Characters元数据静默丢弃，
+		// 否则界面显示已选三张，实际提示词和任务却只提交两张。
+		// 自动补入的角色仍由 sceneCharacterPortraits 按镜头可见性筛选。
 		refs = append(refs, FileMeta{TaskID: fmt.Sprint(sc.ProjectID), Name: c.Image})
 		lines = append(lines, fmt.Sprintf("- <Picture %d>：%s", len(refs), c.Label))
 	}

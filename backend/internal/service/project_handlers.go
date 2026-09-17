@@ -240,7 +240,7 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 	continuity, refs, refLines := s.sceneVideoPromptContinuity(sc)
 	// 用户保存的完整提示词是权威值；只有空值或参考图编号失效时才按实际上传顺序重建。
 	fullPrompt := strings.TrimSpace(sc.VideoFullPrompt)
-	if fullPrompt == "" || len(ValidateFullH3PromptForReferences(fullPrompt, refLines)) > 0 {
+	if fullPrompt == "" || len(ValidateFullH3PromptForReferences(fullPrompt, refLines)) > 0 || !videoAudioContractMatches(fullPrompt, dubs) {
 		fullPrompt = buildMiniMaxH3RefPrompt(&preview, &project, dubs, refLines)
 	}
 	width, height := aspectVideoSize(project.AspectRatio, s.Projects.videoResolution())
