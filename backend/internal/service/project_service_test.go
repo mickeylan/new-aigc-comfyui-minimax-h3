@@ -776,7 +776,7 @@ func TestExplicitSceneReferencesControlKrea2AndH3Order(t *testing.T) {
 	}
 }
 
-func TestSceneVideoContinuityReferencesKeepStoryboardAndAppendTailFrame(t *testing.T) {
+func TestSceneVideoContinuityReferencesReplaceStoryboardWithTailFrame(t *testing.T) {
 	ps := newTestProjectService(t)
 	if err := ps.db.AutoMigrate(&models.FrameCandidate{}, &models.SceneContinuity{}); err != nil {
 		t.Fatal(err)
@@ -793,14 +793,14 @@ func TestSceneVideoContinuityReferencesKeepStoryboardAndAppendTailFrame(t *testi
 	ps.continuity = NewContinuityService(nil, ps.db, nil)
 
 	files, lines, cfg := ps.sceneVideoContinuityReferences(&current, fmt.Sprint(project.ID))
-	if cfg == nil || len(files) != 2 || files[0].Name != "storyboard.png" || files[1].Name != "tail.png" {
-		t.Fatalf("continuity refs must retain storyboard then append tail frame: files=%+v cfg=%+v", files, cfg)
+	if cfg == nil || len(files) != 1 || files[0].Name != "tail.png" {
+		t.Fatalf("continuity refs must replace storyboard with tail frame: files=%+v cfg=%+v", files, cfg)
 	}
-	if !strings.Contains(lines[0], "当前分镜画面") || !strings.Contains(lines[1], "本镜 0.00 秒唯一开始画面") {
-		t.Fatalf("unexpected continuity bindings: %v", lines)
+	if strings.Contains(strings.Join(lines, "\n"), "当前分镜画面") || !strings.Contains(lines[0], "本镜 0.00 秒唯一开始画面") {
+		t.Fatalf("storyboard and tail frame must be mutually exclusive: %v", lines)
 	}
 	prompt := buildMiniMaxH3RefPrompt(&current, &project, nil, lines)
-	for _, required := range []string{"必须从 <Picture 2> 完整一致的画面开始", "<Picture 2> 定义本镜 0.00 秒画面，不是普通参考图"} {
+	for _, required := range []string{"必须从 <Picture 1> 完整一致的画面开始", "<Picture 1> 定义本镜 0.00 秒画面，不是普通参考图"} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("continuity prompt missing %q: %s", required, prompt)
 		}

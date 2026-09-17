@@ -1430,16 +1430,21 @@ func (s *ProjectService) sceneVideoContinuityReferences(sc *models.Scene, pid st
 	if err != nil || cfg == nil || cfg.Status != "ready" || cfg.SelectedFrame == nil || cfg.Mode != models.ContinuityModeContinue {
 		return refs, lines, cfg
 	}
-	// 当前分镜图仍作为本镜场景/构图参考；上一镜选定尾帧追加在最后，明确绑定为 0.00 秒开始画面。
-	// 达到九图上限时，只裁掉分镜图之前优先级最低的一项，始终保留当前分镜图和衔接帧。
-	if len(refs) >= maxSceneReferenceImages {
-		storyboard := refs[len(refs)-1]
-		storyboardLine := lines[len(lines)-1]
-		refs = append(refs[:maxSceneReferenceImages-2], storyboard)
-		lines = append(lines[:maxSceneReferenceImages-2], storyboardLine)
+	// Continue 模式下，当前分镜图与上一镜尾帧互斥：保留人物、造型、场景和道具参考，
+	// 但用上一镜选定尾帧替换当前分镜图，避免两张完整构图竞争起始画面。
+	replacedStoryboard := false
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.Contains(lines[i], "当前分镜画面") {
+			refs[i] = FileMeta{TaskID: pid, Name: cfg.SelectedFrame.ImageFile}
+			lines[i] = fmt.Sprintf("- <Picture %d>：上一镜确认尾帧（本镜 0.00 秒唯一开始画面）", i+1)
+			replacedStoryboard = true
+			break
+		}
 	}
-	refs = append(refs, FileMeta{TaskID: pid, Name: cfg.SelectedFrame.ImageFile})
-	lines = append(lines, fmt.Sprintf("- <Picture %d>：上一镜确认尾帧（本镜 0.00 秒唯一开始画面）", len(refs)))
+	if !replacedStoryboard && len(refs) < maxSceneReferenceImages {
+		refs = append(refs, FileMeta{TaskID: pid, Name: cfg.SelectedFrame.ImageFile})
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：上一镜确认尾帧（本镜 0.00 秒唯一开始画面）", len(refs)))
+	}
 	for i, line := range lines {
 		description := strings.TrimSpace(line)
 		if parts := strings.SplitN(description, "：", 2); len(parts) == 2 {

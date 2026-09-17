@@ -237,7 +237,7 @@ func (s *ContinuityService) PrepareScene(scene *models.Scene) error {
 	if cfg.Mode == models.ContinuityModeBridge {
 		scene.VideoTemplate, scene.VideoFirstFrameImg, scene.VideoLastFrameImg = "minimax_h3_first_last", cfg.SelectedFrame.ImageFile, scene.ImageFile
 	} else {
-		// Continue mode keeps Ref2VA so character sheets, scene reference, storyboard and tail frame can all be submitted.
+		// Continue mode keeps Ref2VA references, but its selected tail frame replaces the current storyboard image.
 		scene.VideoTemplate, scene.VideoFirstFrameImg, scene.VideoLastFrameImg = "minimax_h3_ref2v", "", ""
 	}
 	return nil
