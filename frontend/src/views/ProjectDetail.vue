@@ -377,6 +377,7 @@
               </button>
               <button class="btn btn-sm btn-ghost" @click="viewImage(sc)">查看画面</button>
               <button class="btn btn-sm btn-ghost" @click="viewVideoPrompt(sc)">生成/编辑视频提示词</button>
+              <button class="btn btn-sm btn-secondary" @click="openContinuity(sc)">连续性设置</button>
             </template>
             <span v-if="sc.status === 'failed' && sc.error" class="fail-msg">{{ sc.error }}</span>
           </div>
@@ -808,6 +809,20 @@
       </div>
     </div>
 
+    <!-- 视频分镜连续性弹窗 -->
+    <div v-if="continuityScene" class="modal-mask" @click.self="continuityScene = null">
+      <div class="modal card continuity-modal">
+        <FrameSelector
+          :project-id="Number(id())"
+          :scene-id="continuityScene.id"
+          :scene-order="continuityScene.order"
+          @close="continuityScene = null"
+          @frame-selected="onContinuityFrameSelected"
+          @applied="onContinuityApplied"
+        />
+      </div>
+    </div>
+
     <!-- 图片查看弹窗 -->
     <div v-if="viewer" class="modal-mask viewer-mask" tabindex="-1" ref="viewerMask" @click.self="closeViewer" @keydown.esc="closeViewer">
       <div class="viewer-panel" role="dialog" aria-modal="true" aria-label="图片预览">
@@ -846,6 +861,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { useAppStore } from '../stores/app'
 import { useToastStore } from '../stores/toast'
+import FrameSelector from '../components/FrameSelector.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -907,6 +923,7 @@ const voicePresets = ['Cherry', 'Ethan', 'Chelsie', 'Serena', 'Nofish', 'Dylan',
 const showScript = ref(false)
 const showPlan = ref(false)
 const viewer = ref(null)
+const continuityScene = ref(null)
 const videoTaskDetail = ref(null)
 const videoTaskScene = ref(null)
 const videoTaskPromptDraft = ref('')
@@ -1116,6 +1133,18 @@ function videoProgress(sc) {
 function imageUrl(sc) {
   return api.inputUrl(project.value.id, sc.image_file)
 }
+function openContinuity(sc) {
+  continuityScene.value = sc
+}
+function onContinuityFrameSelected(frame) {
+  toast.success(frame.source === 'manual_upload' ? '高清衔接帧已替换' : `已选择第 ${frame.frame_index + 1} 张衔接帧`)
+}
+async function onContinuityApplied() {
+  continuityScene.value = null
+  await load()
+  toast.success('连续性生成方式已保存')
+}
+
 async function viewVideoPrompt(sc) {
   try {
     const { data: preview } = await api.sceneVideoPrompt(id(), sc.id)
@@ -2356,6 +2385,7 @@ onBeforeUnmount(() => {
   border-radius: 6px;
 }
 .scene-edit-modal { width: min(920px, 94vw); max-height: calc(100vh - 48px); overflow-y: auto; }
+.continuity-modal { width: min(1000px, 94vw); padding: 0; max-height: calc(100vh - 48px); overflow-y: auto; }
 .video-task-modal { width: min(900px, 94vw); max-height: calc(100vh - 48px); overflow-y: auto; }
 .task-prompt { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-secondary); padding: 14px; border-radius: 8px; font-size: 12px; line-height: 1.6; }
 .field-label-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
