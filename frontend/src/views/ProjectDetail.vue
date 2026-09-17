@@ -818,13 +818,16 @@
     </div>
 
     <!-- 视频分镜连续性弹窗 -->
-    <div v-if="continuityScene" class="modal-mask" @click.self="continuityScene = null">
+    <div v-if="continuityScene" class="modal-mask" @click.self="closeContinuity">
       <div class="modal card continuity-modal">
         <FrameSelector
           :project-id="Number(id())"
           :scene-id="continuityScene.id"
           :scene-order="continuityScene.order"
-          @close="continuityScene = null"
+          :source-scene-id="continuitySourceScene?.id || 0"
+          :source-scene-order="continuitySourceScene?.order || 0"
+          :source-video-ready="!!(continuitySourceScene?.video_input_file || continuitySourceScene?.video_file)"
+          @close="closeContinuity"
           @frame-selected="onContinuityFrameSelected"
           @applied="onContinuityApplied"
         />
@@ -932,6 +935,7 @@ const showScript = ref(false)
 const showPlan = ref(false)
 const viewer = ref(null)
 const continuityScene = ref(null)
+const continuitySourceScene = ref(null)
 const videoTaskDetail = ref(null)
 const videoTaskScene = ref(null)
 const videoTaskPromptDraft = ref('')
@@ -1143,12 +1147,19 @@ function imageUrl(sc) {
 }
 function openContinuity(sc) {
   continuityScene.value = sc
+  continuitySourceScene.value = scenes.value
+    .filter(candidate => candidate.episode_n === sc.episode_n && candidate.generation === sc.generation && candidate.order < sc.order)
+    .sort((a, b) => b.order - a.order)[0] || null
+}
+function closeContinuity() {
+  continuityScene.value = null
+  continuitySourceScene.value = null
 }
 function onContinuityFrameSelected(frame) {
   toast.success(frame.source === 'manual_upload' ? '高清衔接帧已替换' : `已选择第 ${frame.frame_index + 1} 张衔接帧`)
 }
 async function onContinuityApplied() {
-  continuityScene.value = null
+  closeContinuity()
   await load()
   toast.success('连续性生成方式已保存')
 }
