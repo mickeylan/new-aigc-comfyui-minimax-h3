@@ -224,24 +224,19 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 	if actionPrompt == "" {
 		actionPrompt = normalizeVideoActionPrompt(sc.VideoPrompt)
 	}
-	generated := actionPrompt == ""
-	if generated {
-		actionPrompt = defaultSceneVideoAction(sc)
-	}
+	hasSavedPrompt := strings.TrimSpace(sc.VideoFullPrompt) != ""
 	var project models.Project
 	if err := s.DB.First(&project, sc.ProjectID).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	var dubs []models.Dialogue
-	s.DB.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
-	preview := *sc
-	preview.VideoPrompt = actionPrompt
 	continuity, refs, refLines := s.sceneVideoPromptContinuity(sc)
-	// 用户保存的完整提示词是权威值；只有空值或参考图编号失效时才按实际上传顺序重建。
+	// 查看/编辑接口只读取用户保存值，绝不自动生成或重建。
+	// 参考图变化仅返回校验问题，由用户决定修改或明确点击 AI 重新生成。
 	fullPrompt := strings.TrimSpace(sc.VideoFullPrompt)
-	if fullPrompt == "" || len(ValidateFullH3PromptForReferences(fullPrompt, refLines)) > 0 || !videoAudioContractMatches(fullPrompt, dubs) {
-		fullPrompt = buildMiniMaxH3RefPrompt(&preview, &project, dubs, refLines)
+	promptIssues := []string{}
+	if hasSavedPrompt {
+		promptIssues = ValidateFullH3PromptForReferences(fullPrompt, refLines)
 	}
 	width, height := aspectVideoSize(project.AspectRatio, s.Projects.videoResolution())
 	template := strings.TrimSpace(sc.VideoTemplate)
@@ -249,7 +244,8 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 		template = "minimax_h3_ref2v"
 	}
 	response := gin.H{
-		"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "generated": generated,
+		"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt,
+		"has_saved_prompt": hasSavedPrompt, "prompt_issues": promptIssues,
 		"template": template, "width": width, "height": height, "reference_count": len(refs),
 		"duration": normalizeSceneDuration(sc.Duration), "fps": 24, "steps": 20,
 	}
@@ -319,6 +315,7 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": strings.Join(issues, "；")})
 		return
 	}
+	// 保存接口只校验并原样持久化用户内容，不重写对白、音频段或视觉正文。
 	actionPrompt := normalizeVideoActionPrompt(prompt)
 	if issues := ValidateVideoPrompt(actionPrompt, sc.Characters, sc.LocationName, sc.Props); len(issues) > 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": strings.Join(issues, "；")})

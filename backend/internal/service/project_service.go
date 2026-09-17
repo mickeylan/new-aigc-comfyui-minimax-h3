@@ -1046,13 +1046,14 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 		dialogueContext = strings.Join(lines, "\n")
 	}
 	system := fmt.Sprintf(`你是 MiniMax H3 Ref2VA 视频动作编辑。只输出简洁的 detailed_description 正文，不输出字段名、解释、规则或 Markdown。
-输出正文必须使用英文；角色姓名可保留原文以便系统绑定，但除此之外不得输出中文。真实中文对白由系统另行加入，你不得翻译或复述对白。
-正文必须忠实执行场景剧情与结构化Shot导演设计，不能只看参考图脑补情节。Scene决定剧情因果，Shot决定本镜主体、准确动作、情绪、景别、机位和运镜，结构化Dialogue决定是否说话及台词内容；三者均不得擅自增删或改写。
-第一句以 [Shot 1] 开头，说明画面可从%s参考状态开始；随后按Shot顺序写可执行动作与表情，确有导演运镜时再写运镜。不得新增角色、动作、对白、道具、地点或剧情。
-Dialogue只决定人物是否开口及对应口型时机；对白文本将由系统确定性加入，你不得在正文输出台词、<d>标签或改写台词。
+输出正文使用用户当前使用的语言，保持自然、清晰、易于人工审核和修改。真实对白由系统另行加入，你不得翻译、复述或自行补写对白。
+正文是给视频模型执行的镜头指令，不是剧本复述。只保留当前镜头实际可见的主体位置、一个主要动作、必要的表情变化和一种运镜，使用3至5句简短明确的句子。
+忠实采用Scene与结构化Shot，但不得复述剧情背景、人物关系、前因后果、心理活动、内心想法、氛围解释或观众感受；禁止“仿佛想说什么”“未说出口的问题”“沉默中充满”等文学化语言暗示。
+第一句以 [Shot 1] 开头，说明画面可从%s参考状态开始；随后直接写动作与镜头。不得新增角色、动作、对白、道具、地点或剧情。
+Dialogue只决定人物是否开口及必要口型时机；对白文本将由系统确定性加入，你不得在正文输出台词、<d>标签或改写台词。无结构化对白时，人物保持闭口，不得描写嘴唇微张、欲言又止或任何说话暗示。
 正文中的人物必须使用【场景剧情】和【Shot导演设计】里的真实角色名，禁止自行填写或猜测任何<Subject N>编号。系统会在AI返回后依据实际上传顺序，把真实角色名确定性转换为正确Subject编号。
 四视图只负责人物身份与服装，场景图只负责环境；不得从参考图反推剧情，不得复述或猜测外貌、服装、陈设。`, openingPicture)
-	user := fmt.Sprintf("目标时长：%.1f秒\n\n【场景剧情（权威）】\n%s\n\n【Shot导演设计（权威，按顺序执行）】\n%s\n\n【结构化对白（权威）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s", normalizeSceneDuration(sc.Duration), sc.Content, shotContext, dialogueContext, strings.Join(refLines, "\n"))
+	user := fmt.Sprintf("目标时长：%.1f秒。只提取执行本镜所必需的信息，不要把以下资料逐段复述进输出。\n\n【场景剧情（仅作事实边界）】\n%s\n\n【Shot导演设计（动作与镜头权威）】\n%s\n\n【结构化对白（仅判断口型时机）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s", normalizeSceneDuration(sc.Duration), sc.Content, shotContext, dialogueContext, strings.Join(refLines, "\n"))
 	out, err := s.textProvider.Chat(system, user)
 	if err != nil {
 		return "", fmt.Errorf("AI 生成视频动作提示词失败: %w", err)
@@ -1199,6 +1200,11 @@ func spokenDialogueText(text string) string {
 func validSceneDialogues(dubs []models.Dialogue) []models.Dialogue {
 	valid := make([]models.Dialogue, 0, len(dubs))
 	for _, d := range dubs {
+		// 空说话人不等于旁白。只有用户或结构化剧本明确标记了角色、旁白、
+		// 画外音或独白，才允许成为发声事件；否则它只是剧情描述。
+		if strings.TrimSpace(d.Character) == "" {
+			continue
+		}
 		d.Text = spokenDialogueText(d.Text)
 		if d.Text != "" {
 			valid = append(valid, d)
@@ -1245,9 +1251,55 @@ func dialogueSpeakerIDs(dubs []models.Dialogue) []int {
 
 func h3SoundscapeContract(hasDialogue bool) string {
 	if hasDialogue {
-		return "Quiet ambient room tone and subtle synchronized physical movement sounds continue beneath the explicitly written dialogue. No other voices, narration, commentary, inner monologue, indistinct vocalization, singing, or additional speech are audible."
+		return "安静的室内环境底噪与画面中明确可见的物理动作声持续存在。除详细描述中明确标注的对白外，不出现其他人声、旁白、解说、内心独白、含混发声、吟唱或额外对白。"
 	}
-	return "Only quiet ambient room tone and synchronized physical movement sounds are audible. There are no voices, dialogue, narration, commentary, inner monologue, indistinct vocalization, speech, or singing; every character keeps their mouth closed."
+	return "仅有安静的环境底噪与画面中明确可见的物理动作声。全程无对白、无人声、无旁白、无解说、无内心独白、无含混发声、无说话声、无吟唱；所有人物始终闭口。"
+}
+
+func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLines []string) string {
+	valid := validSceneDialogues(dubs)
+	if len(valid) == 0 {
+		return strings.TrimSpace(body)
+	}
+	speakerIDs := dialogueSpeakerIDs(valid)
+	for i, d := range valid {
+		speaker := strings.TrimSpace(d.Character)
+		if speaker == "" {
+			speaker = fmt.Sprintf("旁白者 (S%d)", speakerIDs[i])
+		} else {
+			speaker = useSubjectTags(speaker, referenceLines) + fmt.Sprintf(" (S%d)", speakerIDs[i])
+		}
+		body += " " + speaker + "清晰说出：<d>[Chinese] " + strings.TrimSpace(d.Text) + "</d>。说完后闭口。"
+	}
+	return strings.TrimSpace(body)
+}
+
+// normalizeSavedH3Audio only rebuilds dialogue and soundscape sections. All user-edited
+// reference definitions, summary, retention rules, visual action and camera text remain intact.
+func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines []string) string {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return ""
+	}
+	detail := normalizeVideoActionPrompt(prompt)
+	detail = stripStructuredDialogueFromAction(detail, dubs)
+	if !strings.HasPrefix(detail, "[Shot 1]") {
+		detail = "[Shot 1] " + detail
+	}
+	detail = appendStructuredDialogue(detail, dubs, referenceLines)
+	sections := []struct{ heading, body string }{
+		{"subject_definitions:", h3PromptSection(prompt, "subject_definitions:")},
+		{"summary:", h3PromptSection(prompt, "summary:")},
+		{"retention_analysis:", h3PromptSection(prompt, "retention_analysis:")},
+		{"detailed_description:", detail},
+		{"overall_soundscape:", h3SoundscapeContract(len(validSceneDialogues(dubs)) > 0)},
+		{"non_diegetic_music:", h3PromptSection(prompt, "non_diegetic_music:")},
+	}
+	parts := make([]string, 0, len(sections))
+	for _, section := range sections {
+		parts = append(parts, section.heading+"\n"+strings.TrimSpace(section.body))
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
@@ -1257,9 +1309,9 @@ func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 		return false
 	}
 	if len(valid) == 0 {
-		return !strings.Contains(strings.ToLower(fullPrompt), "<d>") && strings.Contains(soundscape, "There are no voices") && strings.Contains(soundscape, "every character keeps their mouth closed")
+		return !strings.Contains(strings.ToLower(fullPrompt), "<d>") && strings.Contains(soundscape, "全程无对白") && strings.Contains(soundscape, "所有人物始终闭口")
 	}
-	if !strings.Contains(soundscape, "No other voices") || !strings.Contains(soundscape, "additional speech") {
+	if !strings.Contains(soundscape, "不出现其他人声") || !strings.Contains(soundscape, "额外对白") {
 		return false
 	}
 	speakerIDs := dialogueSpeakerIDs(valid)
@@ -1298,18 +1350,7 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 	}
 	validDialogues := validSceneDialogues(dubs)
 	soundscape := h3SoundscapeContract(len(validDialogues) > 0)
-	if len(validDialogues) > 0 {
-		speakerIDs := dialogueSpeakerIDs(validDialogues)
-		for i, d := range validDialogues {
-			speaker := strings.TrimSpace(d.Character)
-			if speaker == "" {
-				speaker = fmt.Sprintf("The narrator (S%d)", speakerIDs[i])
-			} else {
-				speaker = useSubjectTags(speaker, referenceLines) + fmt.Sprintf(" (S%d)", speakerIDs[i])
-			}
-			body += " " + speaker + " speaks once with clear articulation, <d>[Chinese] " + strings.TrimSpace(d.Text) + "</d>. The speaker then closes their mouth."
-		}
-	}
+	body = appendStructuredDialogue(body, validDialogues, referenceLines)
 	return "subject_definitions:\n" + strings.Join(definitions, "\n") +
 		"\n\nsummary:\n[reference generation] " + strings.Join(subjects, "、") + "提供人物、场景及可选分镜状态参考，在约" + fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)) + "秒内严格执行本镜剧情与Shot设计。" +
 		"\n\nretention_analysis:\n" + strings.Join(retention, "\n") +
@@ -2852,7 +2893,7 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 			// 用户保存的完整提示词是权威值；提交时原样使用。只有空值或
 			// 参考图编号失效时，才根据当前Scene/Shot/Dialogue重新构建。
 			promptText = strings.TrimSpace(sc.VideoFullPrompt)
-			if promptText == "" || len(ValidateFullH3PromptForReferences(promptText, refLines)) > 0 || !videoAudioContractMatches(promptText, dubs) {
+			if promptText == "" || len(ValidateFullH3PromptForReferences(promptText, refLines)) > 0 {
 				actionPrompt := canonicalVideoAction(promptText, refLines)
 				if actionPrompt == "" {
 					actionPrompt = canonicalVideoAction(sc.VideoPrompt, refLines)
@@ -2860,6 +2901,9 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 				preview := *sc
 				preview.VideoPrompt = actionPrompt
 				promptText = buildMiniMaxH3RefPrompt(&preview, p, dubs, refLines)
+			} else {
+				// 只规范结构化对白和音频段，绝不覆盖用户编辑的视觉动作与镜头正文。
+				promptText = normalizeSavedH3Audio(promptText, dubs, refLines)
 			}
 			if videoFiles == nil {
 				videoFiles = map[string][]FileMeta{}

@@ -1262,7 +1262,7 @@ func TestGenerateSceneVideoActionDoesNotRecycleOldVisualDescription(t *testing.T
 	if strings.Contains(provider.user, "蓝色粗布短褐") || strings.Contains(provider.user, "暖黄阳光") || strings.Contains(provider.user, "当前动作草稿") {
 		t.Fatalf("old visual draft must not be recycled: %s", provider.user)
 	}
-	for _, want := range []string{"忠实执行场景剧情与结构化Shot导演设计", "结构化Dialogue决定是否说话", "不得从参考图反推剧情"} {
+	for _, want := range []string{"镜头指令，不是剧本复述", "一个主要动作", "3至5句", "不得复述剧情背景", "无结构化对白时，人物保持闭口", "不得从参考图反推剧情"} {
 		if !strings.Contains(provider.system, want) {
 			t.Fatalf("system missing %q: %s", want, provider.system)
 		}
@@ -1327,8 +1327,8 @@ func TestCharacterNamesMapToActualReferenceSubjects(t *testing.T) {
 		"<Subject 2> 是 <Picture 2> 中的角色「上官若琳」四视图",
 		"<Subject 4> 是 <Picture 4> 中的当前分镜画面",
 		"<Subject 1>环抱<Subject 2>",
-		"<Subject 1> (S1) speaks once with clear articulation, <d>[Chinese] 这不是太想你了吗。</d>",
-		"<Subject 2> (S2) speaks once with clear articulation, <d>[Chinese] 今晚有得是时间。</d>",
+		"<Subject 1> (S1)清晰说出：<d>[Chinese] 这不是太想你了吗。</d>",
+		"<Subject 2> (S2)清晰说出：<d>[Chinese] 今晚有得是时间。</d>",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("character mapping missing %q: %s", want, prompt)
@@ -1344,6 +1344,29 @@ func TestCharacterNamesMapToActualReferenceSubjects(t *testing.T) {
 	}
 }
 
+func TestEmptySpeakerPlotTextIsNeverConvertedToNarration(t *testing.T) {
+	lines := []string{"- <Picture 1>：角色「雷晓飞」四视图", "- <Picture 2>：角色「林采微」四视图"}
+	dubs := []models.Dialogue{{Character: "", Text: "四目相对，一瞬间的静默，却似有千言万语"}}
+	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] 雷晓飞与林采微四目相对。", Duration: 8}, nil, dubs, lines)
+	for _, forbidden := range []string{"旁白者", "The narrator", "<d>", "千言万语", "(S1)"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("empty-speaker plot text became narration as %q: %s", forbidden, prompt)
+		}
+	}
+	for _, want := range []string{"全程无对白", "无人声", "无旁白", "所有人物始终闭口"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("silent contract missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestExplicitNarrationRemainsAllowed(t *testing.T) {
+	got := validSceneDialogues([]models.Dialogue{{Character: "旁白", Text: "夜色笼罩山城。"}, {Character: "独白", Text: "我必须找到他。"}})
+	if len(got) != 2 || got[0].Character != "旁白" || got[1].Character != "独白" {
+		t.Fatalf("explicit narration/monologue was removed: %+v", got)
+	}
+}
+
 func TestActionDescriptionIsNeverConvertedToDialogue(t *testing.T) {
 	lines := []string{"- <Picture 1>：角色「舒寒」四视图", "- <Picture 2>：场景「内殿」参考图"}
 	dubs := []models.Dialogue{{Character: "舒寒", Text: "(动作描写：抚摸脸庞，输送力量)"}}
@@ -1353,7 +1376,7 @@ func TestActionDescriptionIsNeverConvertedToDialogue(t *testing.T) {
 			t.Fatalf("action direction leaked into spoken dialogue as %q: %s", forbidden, prompt)
 		}
 	}
-	for _, want := range []string{"There are no voices", "no voices, dialogue, narration", "every character keeps their mouth closed"} {
+	for _, want := range []string{"全程无对白", "无人声", "无旁白", "所有人物始终闭口"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("silent contract missing %q: %s", want, prompt)
 		}
@@ -1374,7 +1397,7 @@ func TestSceneWithoutStructuredDialogueForbidsVoice(t *testing.T) {
 	if strings.Contains(prompt, "<d>") {
 		t.Fatalf("dialogue tag appeared without structured dialogue: %s", prompt)
 	}
-	for _, want := range []string{"There are no voices", "no voices, dialogue, narration", "indistinct vocalization", "every character keeps their mouth closed"} {
+	for _, want := range []string{"全程无对白", "无人声", "无旁白", "无含混发声", "所有人物始终闭口"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("no-dialogue constraint missing %q: %s", want, prompt)
 		}
@@ -1384,7 +1407,7 @@ func TestSceneWithoutStructuredDialogueForbidsVoice(t *testing.T) {
 func TestStructuredDialogueIsAlwaysIncluded(t *testing.T) {
 	lines := []string{"- <Picture 1>：当前分镜画面"}
 	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] 人物抬头。", Duration: 8}, nil, []models.Dialogue{{Character: "林夏", Text: "你来了"}}, lines)
-	for _, want := range []string{"林夏 (S1) speaks once with clear articulation, <d>[Chinese] 你来了</d>", "No other voices", "narration", "indistinct vocalization", "additional speech"} {
+	for _, want := range []string{"林夏 (S1)清晰说出：<d>[Chinese] 你来了</d>", "不出现其他人声", "旁白", "含混发声", "额外对白"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("structured dialogue missing %q: %s", want, prompt)
 		}
@@ -1401,6 +1424,21 @@ func TestSoundscapeContainsNoFakeDialogueTagAndSpeakerIDsAreStable(t *testing.T)
 	}
 	if strings.Count(prompt, "<Subject 1> (S1)") != 2 || strings.Count(prompt, "<Subject 2> (S2)") != 1 || strings.Contains(prompt, "(S3)") {
 		t.Fatalf("speaker IDs must be stable by speaker: %s", prompt)
+	}
+}
+
+func TestNormalizeSavedH3AudioPreservesUserEditedVisualPrompt(t *testing.T) {
+	custom := "KEEP_MY_CUSTOM_CAMERA_MOVE"
+	prompt := "subject_definitions:\nsubject\n\nsummary:\nsummary\n\nretention_analysis:\nretention\n\ndetailed_description:\n[Shot 1] " + custom + "。错误旧对白：<d>[Chinese] 不要保留</d>\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"
+	dubs := []models.Dialogue{{Character: "林夏", Text: "正确对白"}}
+	got := normalizeSavedH3Audio(prompt, dubs, []string{"- <Picture 1>：角色「林夏」四视图"})
+	for _, want := range []string{custom, "subject_definitions:\nsubject", "summary:\nsummary", "retention_analysis:\nretention", "<Subject 1> (S1)", "<d>[Chinese] 正确对白</d>"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("normalized prompt lost %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "不要保留") || strings.Contains(h3PromptSection(got, "overall_soundscape:"), "<d>") {
+		t.Fatalf("stale dialogue/audio leaked: %s", got)
 	}
 }
 
@@ -1422,7 +1460,7 @@ func TestStructuredDialogueOverridesStalePromptDialogue(t *testing.T) {
 	if strings.Contains(prompt, "错误旧台词") {
 		t.Fatalf("stale prompt dialogue was retained: %s", prompt)
 	}
-	if !strings.Contains(prompt, "林夏 (S1) speaks once with clear articulation, <d>[Chinese] 正确结构化台词</d>") {
+	if !strings.Contains(prompt, "林夏 (S1)清晰说出：<d>[Chinese] 正确结构化台词</d>") {
 		t.Fatalf("structured dialogue missing: %s", prompt)
 	}
 }

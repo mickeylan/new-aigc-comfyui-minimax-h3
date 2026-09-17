@@ -339,7 +339,7 @@ type Dialogue struct {
 	SceneID   uint      `gorm:"column:scene_id;index" json:"scene_id"`
 	ProjectID uint      `gorm:"column:project_id;index" json:"project_id"`
 	Order     int       `json:"order"`                 // 场景内句序（从 1 开始）
-	Character string    `json:"character"`             // 说话人角色名（空表示旁白）
+	Character string    `json:"character"`             // 明确的说话人角色名；旁白/独白必须显式标记，空值不发声
 	Text      string    `gorm:"type:text" json:"text"` // 台词正文
 	Voice     string    `json:"voice"`                 // TTS 音色（voice_type）
 	AudioFile string    `json:"audio_file"`            // 合成音频文件名（input/<pid>/dub/ 下）
