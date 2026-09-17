@@ -33,7 +33,7 @@
     </section>
 
     <p v-if="error" class="warning">{{ error }}</p>
-    <div class="actions"><button class="btn" :disabled="saving || (mode !== 'independent' && !sourceSceneId)" @click="saveMode">{{ saving ? '保存中…' : '保存生成方式' }}</button></div>
+    <div class="actions"><button class="btn btn-secondary" :disabled="saving || (mode !== 'independent' && !sourceSceneId)" @click="saveMode(false)">{{ saving ? '保存中…' : '仅保存' }}</button><button class="btn" :disabled="saving || (mode !== 'independent' && (!sourceSceneId || !selectedFrameId))" @click="saveMode(true)">{{ saving ? '处理中…' : '保存并编辑视频提示词' }}</button></div>
   </div>
 </template>
 
@@ -111,7 +111,7 @@ async function replaceFrame(event) {
     emit('frame-selected', replaced)
   } catch (e) { error.value = e.response?.data?.error || e.message }
 }
-async function saveMode() {
+async function saveMode(openPrompt) {
   saving.value = true
   error.value = ''
   try {
@@ -121,7 +121,7 @@ async function saveMode() {
       if (selectedFrameId.value) payload.frame_id = selectedFrameId.value
     }
     continuity.value = (await api.configureContinuity(props.projectId, props.sceneId, payload)).data.continuity
-    emit('applied', continuity.value)
+    emit('applied', continuity.value, openPrompt)
   } catch (e) { error.value = e.response?.data?.error || e.message }
   finally { saving.value = false }
 }

@@ -210,6 +210,22 @@ func (s *Service) HandleRedesignScenePrompt(c *gin.Context) {
 	c.JSON(200, gin.H{"prompt": prompt})
 }
 
+func (s *Service) sceneVideoPromptContinuity(sc *models.Scene) (*models.SceneContinuity, []FileMeta, []string) {
+	refs, lines := s.Projects.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
+	if s.Continuity == nil {
+		return nil, refs, lines
+	}
+	cfg, err := s.Continuity.Get(sc.ProjectID, sc.ID)
+	if err != nil || cfg == nil || cfg.Status != "ready" || cfg.SelectedFrame == nil {
+		return cfg, refs, lines
+	}
+	if cfg.Mode == models.ContinuityModeContinue && len(refs) > 0 {
+		refs[len(refs)-1] = FileMeta{TaskID: fmt.Sprint(sc.ProjectID), Name: cfg.SelectedFrame.ImageFile}
+		lines[len(lines)-1] = fmt.Sprintf("- <Picture %d>：上一镜确认衔接帧（0.00秒开始状态）", len(lines))
+	}
+	return cfg, refs, lines
+}
+
 func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 	sc, ok := s.loadScene(c)
 	if !ok {
@@ -232,18 +248,36 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 	s.DB.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
 	preview := *sc
 	preview.VideoPrompt = actionPrompt
-	_, refLines := s.Projects.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
+	continuity, refs, refLines := s.sceneVideoPromptContinuity(sc)
 	// 用户保存的完整提示词是权威值；只有空值或参考图编号失效时才重建。
 	fullPrompt := strings.TrimSpace(sc.VideoFullPrompt)
 	if fullPrompt == "" || len(ValidateFullH3PromptForReferences(fullPrompt, refLines)) > 0 {
 		fullPrompt = buildMiniMaxH3RefPrompt(&preview, &project, dubs, refLines)
 	}
 	width, height := aspectVideoSize(project.AspectRatio, s.Projects.videoResolution())
-	c.JSON(http.StatusOK, gin.H{
+	template := strings.TrimSpace(sc.VideoTemplate)
+	if template == "" {
+		template = "minimax_h3_ref2v"
+	}
+	response := gin.H{
 		"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "generated": generated,
-		"template": "minimax_h3_ref2v", "width": width, "height": height,
+		"template": template, "width": width, "height": height, "reference_count": len(refs),
 		"duration": normalizeSceneDuration(sc.Duration), "fps": 24, "steps": 20,
-	})
+	}
+	if continuity != nil {
+		response["continuity_mode"] = continuity.Mode
+		response["continuity_status"] = continuity.Status
+		response["continuity_source_scene_id"] = continuity.SourceSceneID
+		if continuity.SelectedFrame != nil {
+			response["continuity_frame"] = s.frameResponses([]models.FrameCandidate{*continuity.SelectedFrame})[0]
+			if continuity.Mode == models.ContinuityModeBridge {
+				response["template"] = "minimax_h3_first_last"
+				response["first_frame_img"] = continuity.SelectedFrame.ImageFile
+				response["last_frame_img"] = sc.ImageFile
+			}
+		}
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
@@ -265,9 +299,14 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 	s.DB.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
 	preview := *sc
 	preview.VideoPrompt = actionPrompt
-	refs, lines := s.Projects.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
+	continuity, refs, lines := s.sceneVideoPromptContinuity(sc)
 	fullPrompt := buildMiniMaxH3RefPrompt(&preview, &project, dubs, lines)
-	c.JSON(200, gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs)})
+	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs)}
+	if continuity != nil && continuity.SelectedFrame != nil {
+		response["continuity_mode"] = continuity.Mode
+		response["continuity_frame"] = s.frameResponses([]models.FrameCandidate{*continuity.SelectedFrame})[0]
+	}
+	c.JSON(200, response)
 }
 
 func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
@@ -286,7 +325,7 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 		return
 	}
 	prompt := strings.TrimSpace(req.Prompt)
-	_, refLines := s.Projects.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
+	_, _, refLines := s.sceneVideoPromptContinuity(sc)
 	if issues := ValidateFullH3PromptForReferences(prompt, refLines); len(issues) > 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": strings.Join(issues, "；")})
 		return

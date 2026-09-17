@@ -74,11 +74,11 @@ func TestContinuityPreConfigureWithoutFrame(t *testing.T) {
 	if cfg.SourceSceneID == nil || *cfg.SourceSceneID != s1.ID || cfg.Status != "waiting" || cfg.SelectedFrameID != nil {
 		t.Fatalf("unexpected pre-config continuity: %+v", cfg)
 	}
-	// PrepareScene should not block; falls through to independent
+	// The mode may be preconfigured, but generation must wait for a selected source frame.
 	var prepared models.Scene
 	db.First(&prepared, s2.ID)
-	if err := svc.PrepareScene(&prepared); err != nil {
-		t.Fatal(err)
+	if err := svc.PrepareScene(&prepared); err == nil {
+		t.Fatal("expected generation to be blocked until a source frame is selected")
 	}
 	// Now select a frame for s1
 	frame := models.FrameCandidate{ProjectID: p.ID, SceneID: s1.ID, VideoTaskID: s1.VideoTaskID, FrameIndex: 21, ImageFile: "end.png"}

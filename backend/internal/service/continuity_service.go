@@ -225,7 +225,7 @@ func (s *ContinuityService) PrepareScene(scene *models.Scene) error {
 		return nil
 	}
 	if cfg.Status == "waiting" || cfg.SelectedFrame == nil {
-		return nil
+		return fmt.Errorf("请先选择上一镜的末尾帧；该帧将作为本镜 0.00 秒的开始画面")
 	}
 	if cfg.Status != "ready" {
 		return fmt.Errorf("连续性尚未就绪: %s", cfg.Status)
