@@ -41,6 +41,7 @@ type ProjectService struct {
 	materials      *MaterialService
 	skills         *SkillService
 	characterLooks *CharacterLookService
+	continuity     *ContinuityService
 	assetMu        sync.Mutex // 串行化资产参考图任务创建，避免并发重复排队
 }
 
@@ -217,11 +218,21 @@ func (s *ProjectService) DeleteProject(id uint) error {
 		if err := tx.Where("project_id = ?", id).Find(&scenes).Error; err != nil {
 			return err
 		}
+		sceneIDs := make([]uint, 0, len(scenes))
 		for _, sc := range scenes {
+			sceneIDs = append(sceneIDs, sc.ID)
 			if sc.VideoTaskID != "" {
 				tx.Where("task_id = ?", sc.VideoTaskID).Delete(&models.Event{})
 				tx.Where("task_id = ?", sc.VideoTaskID).Delete(&models.Task{})
 			}
+		}
+		if len(sceneIDs) > 0 {
+			if err := tx.Where("scene_id IN ? OR source_scene_id IN ?", sceneIDs, sceneIDs).Delete(&models.SceneContinuity{}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("project_id = ?", id).Delete(&models.FrameCandidate{}).Error; err != nil {
+			return err
 		}
 		if err := tx.Where("project_id = ?", id).Delete(&models.Material{}).Error; err != nil {
 			return err
@@ -1016,7 +1027,7 @@ Dialogue只决定人物是否开口及对应口型时机；对白文本将由系
 // 由系统确定性生成；detailed_description 来自用户编辑或系统生成。
 func openingPictureTag(referenceLines []string) string {
 	for _, line := range referenceLines {
-		if !strings.Contains(line, "当前分镜画面") {
+		if !strings.Contains(line, "当前分镜画面") && !strings.Contains(line, "衔接帧") {
 			continue
 		}
 		start := strings.Index(line, "<Picture ")
@@ -2640,6 +2651,16 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	if err := s.restoreLegacyProjectInput(sc.ProjectID, sc.ImageFile); err != nil {
 		return err
 	}
+	var latest models.Scene
+	if err := s.db.First(&latest, sc.ID).Error; err != nil {
+		return err
+	}
+	sc = &latest
+	if s.continuity != nil {
+		if err := s.continuity.PrepareScene(sc); err != nil {
+			return err
+		}
+	}
 	claim := s.db.Model(&models.Scene{}).
 		Where("id = ? AND project_id = ? AND generation = ? AND status IN ? AND image_file != ''",
 			sc.ID, p.ID, sc.Generation, []string{"image_ready", "video_ready", "failed"}).
@@ -2650,13 +2671,9 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	if claim.RowsAffected == 0 {
 		return fmt.Errorf("场景 %d 已在生成或状态已变化", sc.Order)
 	}
-	// 状态认领后重新读取数据库，确保使用刚保存的完整提示词、模板和参考图配置，
-	// 不允许调用方持有的旧 Scene 快照进入 ComfyUI 任务。
-	var latest models.Scene
-	if err := s.db.First(&latest, sc.ID).Error; err != nil {
-		return fmt.Errorf("重新读取场景最新配置失败: %w", err)
+	if s.continuity != nil {
+		s.continuity.InvalidateDependents(sc.ID, "来源视频重新生成，请重新选择衔接帧")
 	}
-	sc = &latest
 	videoW, videoH := aspectVideoSize(p.AspectRatio, s.videoResolution())
 	pid := fmt.Sprintf("%d", p.ID)
 	tplCode, promptText, videoFiles := s.buildSceneVideoSpec(sc, pid, sc.VideoTemplate)
@@ -2664,6 +2681,12 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	if tplCode == "minimax_h3_ref2v" || tplCode == "minimax_h3_ref2v_single" {
 		// 人物/场景等参考在前，已确认的分镜起始图固定作为最后一张 Picture。
 		refFiles, refLines := s.sceneVideoReferenceFiles(sc, pid)
+		if s.continuity != nil {
+			if frame, mode, err := s.continuity.ContinuationFrame(sc.ID); err == nil && mode == models.ContinuityModeContinue && frame != nil && len(refFiles) > 0 {
+				refFiles[len(refFiles)-1] = FileMeta{TaskID: pid, Name: frame.ImageFile}
+				refLines[len(refLines)-1] = fmt.Sprintf("- <Picture %d>：上一镜确认衔接帧（0.00秒开始状态）", len(refLines))
+			}
+		}
 		if len(refFiles) > 0 {
 			var dubs []models.Dialogue
 			s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
@@ -3276,6 +3299,15 @@ func (s *ProjectService) syncSceneVideos() {
 			s.db.Model(sc).Updates(map[string]any{
 				"status": "video_ready", "error": "", "video_file": file, "video_input_file": filepath.Base(localPath), "video_gpu": *gpu,
 			})
+			if s.continuity != nil {
+				ready := *sc
+				ready.Status, ready.VideoFile, ready.VideoInputFile, ready.VideoGPU = "video_ready", file, filepath.Base(localPath), gpu
+				go func(scene models.Scene) {
+					if _, err := s.continuity.ExtractFrameCandidates(scene.ProjectID, scene.ID, DefaultCandidateFrameCount); err != nil {
+						log.Printf("[continuity] scene %d extract frames failed: %v", scene.ID, err)
+					}
+				}(ready)
+			}
 			changed = true
 		case "failed", "cancelled":
 			msg := task.Error

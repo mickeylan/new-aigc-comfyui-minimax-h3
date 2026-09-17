@@ -682,3 +682,54 @@ type ShotCharacterLook struct {
 	Shot *Shot          `gorm:"foreignKey:ShotID" json:"shot,omitempty"`
 	Look *CharacterLook `gorm:"foreignKey:LookID" json:"look,omitempty"`
 }
+
+// ========== 视频分镜连续性 ==========
+
+const (
+	ContinuityModeIndependent = "independent"
+	ContinuityModeContinue    = "continue_from_previous"
+	ContinuityModeBridge      = "bridge_to_storyboard"
+)
+
+// FrameCandidateType 帧候选类型
+type FrameCandidateType string
+
+const (
+	FrameCandidateCandidate FrameCandidateType = "candidate" // 待选帧（从视频提取）
+	FrameCandidateSelected  FrameCandidateType = "selected"  // 已选帧（人工选择作为衔接帧）
+)
+
+// FrameCandidate 是某次视频任务末尾提取的候选衔接帧。
+type FrameCandidate struct {
+	ID          uint               `gorm:"primaryKey" json:"id"`
+	ProjectID   uint               `gorm:"index" json:"project_id"`
+	SceneID     uint               `gorm:"index;uniqueIndex:idx_scene_video_frame" json:"scene_id"`
+	VideoTaskID string             `gorm:"index;uniqueIndex:idx_scene_video_frame" json:"video_task_id"`
+	Type        FrameCandidateType `gorm:"default:candidate" json:"type"`
+	FrameIndex  int                `gorm:"uniqueIndex:idx_scene_video_frame" json:"frame_index"`
+	TimestampMS int64              `json:"timestamp_ms"`
+	ImageFile   string             `json:"image_file"` // input/<projectID> 下的相对文件名
+	SelectedAt  *time.Time         `json:"selected_at,omitempty"`
+	CreatedAt   time.Time          `json:"created_at"`
+}
+
+// SceneContinuity 是当前 Scene 对上一 Scene 的显式依赖。
+type SceneContinuity struct {
+	ID                uint            `gorm:"primaryKey" json:"id"`
+	SceneID           uint            `gorm:"uniqueIndex" json:"scene_id"`
+	Mode              string          `gorm:"default:independent;index" json:"mode"`
+	SourceMode        string          `gorm:"default:auto_previous" json:"source_mode"`
+	SourceSceneID     *uint           `gorm:"index" json:"source_scene_id,omitempty"`
+	SelectedFrameID   *uint           `gorm:"index" json:"selected_frame_id,omitempty"`
+	SourceVideoTaskID string          `gorm:"index" json:"source_video_task_id"`
+	Status            string          `gorm:"default:not_required;index" json:"status"`
+	Error             string          `gorm:"type:text" json:"error"`
+	Version           int             `gorm:"default:1" json:"version"`
+	AnalysisStatus    string          `gorm:"default:not_started" json:"analysis_status"`
+	AnalysisJSON      string          `gorm:"type:text" json:"analysis_json,omitempty"`
+	AnalysisModel     string          `json:"analysis_model,omitempty"`
+	AnalysisVersion   int             `gorm:"default:0" json:"analysis_version"`
+	SelectedFrame     *FrameCandidate `gorm:"foreignKey:SelectedFrameID" json:"selected_frame,omitempty"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
+}

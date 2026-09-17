@@ -69,8 +69,9 @@
             <h2>场景 {{ selected.order }} · {{ selected.title || '未命名' }}</h2>
             <p class="sub">{{ selected.content }}</p>
           </div>
-          <div class="section-actions" v-if="selected.video_url">
-            <a class="btn btn-sm btn-ghost" :href="selected.video_url + '?download=1'">下载视频</a>
+          <div class="section-actions">
+            <a v-if="selected.video_url" class="btn btn-sm btn-ghost" :href="selected.video_url + '?download=1'">下载视频</a>
+            <button class="btn btn-sm btn-secondary" @click="showFrameSelector = true">连续性设置</button>
           </div>
         </div>
         <div class="card preview-card">
@@ -164,6 +165,20 @@
 
     <ShotDirectorEditor v-if="selected" :project-id="id()" :scene-id="selected.id" />
 
+    <!-- 帧选择弹窗 -->
+    <div v-if="showFrameSelector && selected" class="modal-overlay" @click.self="showFrameSelector = false">
+      <div class="modal-content modal-large">
+        <FrameSelector
+          :project-id="id()"
+          :scene-id="selected.id"
+          :scene-order="selected.order"
+          @close="showFrameSelector = false"
+          @frame-selected="onFrameSelected"
+          @applied="onContinuityApplied"
+        />
+      </div>
+    </div>
+
     <!-- 合并记录 -->
     <section class="section" v-if="merges.length">
       <div class="section-head">
@@ -198,6 +213,7 @@ import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { useToastStore } from '../stores/toast'
 import ShotDirectorEditor from '../components/ShotDirectorEditor.vue'
+import FrameSelector from '../components/FrameSelector.vue'
 
 const route = useRoute()
 const toast = useToastStore()
@@ -219,6 +235,7 @@ const dragFrom = ref(null)
 const activeEpN = ref(1)
 const epIndex = ref(0)
 const epCount = ref(1)
+const showFrameSelector = ref(false)
 
 // 目标时长与累计时长计算
 const targetDuration = computed(() => {
@@ -290,9 +307,8 @@ async function load() {
     dialogues.value = (data.dialogues || []).map(d => ({ ...d }))
     subtitles.value = data.subtitles || []
     syncDraftTexts()
-    if (!selected.value || !scenes.value.find(s => s.id === selected.value.id)) {
-      selected.value = scenes.value.find(s => s.status === 'video_ready') || scenes.value[0] || null
-    }
+    const selectedId = selected.value?.id
+    selected.value = (selectedId && scenes.value.find(s => s.id === selectedId)) || scenes.value.find(s => s.status === 'video_ready') || scenes.value[0] || null
     if (selected.value) durationInput.value = selected.value.duration || 5
     epNums()
     await loadMerges()
@@ -441,6 +457,17 @@ function switchEp(dir) {
   load()
 }
 
+// 帧选择回调
+function onFrameSelected(frame) {
+  toast.show(`已选择衔接帧 #${frame.frame_index}`)
+}
+
+function onContinuityApplied(result) {
+  toast.show('连续性配置已应用到视频生成参数')
+  showFrameSelector.value = false
+  load() // 刷新场景数据
+}
+
 function mergeStatusText(s) { return { pending: '等待中', running: '合并中', success: '成片完成', failed: '失败' }[s] || s }
 function mergeBadgeClass(s) { return { pending: 'badge-gray', running: 'badge-orange', success: 'badge-green', failed: 'badge-red' }[s] || 'badge-gray' }
 
@@ -525,4 +552,28 @@ onUnmounted(() => { clearInterval(timer) })
 .panel-empty { padding: 30px; text-align: center; color: var(--text-tertiary); }
 .merge-opt { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--text-secondary); cursor: pointer; white-space: nowrap; }
 .merge-opt input { width: 14px; height: 14px; cursor: pointer; margin: 0; }
+
+/* 弹窗样式 */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: var(--card);
+  border-radius: 12px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.modal-large {
+  width: 90vw;
+  max-width: 1000px;
+}
 </style>

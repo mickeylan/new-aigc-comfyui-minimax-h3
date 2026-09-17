@@ -232,6 +232,13 @@ export const api = {
   reviewAdaptation: (id, episode, overrideReason = '') => http.post(`/projects/${id}/adaptations/${episode}/review`, { override_reason: overrideReason }, { timeout: 300000 }),
   adaptationContext: (id, episode) => http.get(`/projects/${id}/adaptations/${episode}/context`),
   novelUsage: (id) => http.get(`/projects/${id}/novel/usage`),
+
+  // 视频分镜连续性
+  extractFrameCandidates: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/continuity/frames/extract`, {}, { timeout: 180000 }),
+  getFrameCandidates: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/continuity/frames`),
+  selectFrame: (id, sid, frameId) => http.put(`/projects/${id}/scenes/${sid}/continuity/frames/select`, { frame_id: frameId }),
+  getContinuity: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/continuity`),
+  configureContinuity: (id, sid, data) => http.put(`/projects/${id}/scenes/${sid}/continuity`, data),
 }
 
 export function wsUrl() {

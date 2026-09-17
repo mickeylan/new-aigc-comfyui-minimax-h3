@@ -69,6 +69,8 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.CharacterOutfitLook{},
 		&models.SceneCharacterOutfit{},
 		&models.ShotCharacterOutfit{},
+		&models.FrameCandidate{},
+		&models.SceneContinuity{},
 	); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}

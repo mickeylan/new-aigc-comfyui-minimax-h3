@@ -237,6 +237,13 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.PUT("/api/projects/:id/shots/:shid", svc.HandleUpdateShot)
 	r.DELETE("/api/projects/:id/shots/:shid", svc.HandleDeleteShot)
 
+	// 视频分镜连续性：来源视频末尾22帧、人工选帧、续接/首尾桥接配置
+	r.POST("/api/projects/:id/scenes/:sid/continuity/frames/extract", svc.HandleExtractFrameCandidates)
+	r.GET("/api/projects/:id/scenes/:sid/continuity/frames", svc.HandleGetFrameCandidates)
+	r.PUT("/api/projects/:id/scenes/:sid/continuity/frames/select", svc.HandleSelectFrame)
+	r.GET("/api/projects/:id/scenes/:sid/continuity", svc.HandleGetContinuity)
+	r.PUT("/api/projects/:id/scenes/:sid/continuity", svc.HandleConfigureContinuity)
+
 	// 提示词工作台
 	r.POST("/api/prompts/build", svc.HandleBuildPrompt)         // 构建提示词
 	r.POST("/api/prompts/optimize", svc.HandleOptimizePrompt)   // 优化提示词

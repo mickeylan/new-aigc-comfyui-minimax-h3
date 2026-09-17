@@ -41,6 +41,7 @@ type Service struct {
 	Shots             *ShotService             // 镜头层服务
 	PromptWorkshop    *PromptWorkshopService   // 提示词工作台服务
 	StylePresets      *StylePresetService      // 风格预设服务
+	Continuity        *ContinuityService       // 视频分镜连续性服务
 }
 
 func New(cfg *config.Config, db *gorm.DB) *Service {
@@ -73,6 +74,8 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	charLooks := NewCharacterLookService(db, textProviderFact)
 	charLooks.SetDeps(tasks, remote, upload)
 	projects.characterLooks = charLooks
+	continuity := NewContinuityService(cfg, db, remote)
+	projects.continuity = continuity
 
 	// 初始化系统预设
 	if err := skills.InitSystemSkills(); err != nil {
@@ -91,6 +94,7 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 		Novel: novel, NovelAnalysis: novelAnalysis, Adaptations: adaptations,
 		TextProviderFact: textProviderFact, CharacterProfiles: charProfiles, CharacterLooks: charLooks,
 		Skills: skills, Shots: shots, PromptWorkshop: promptWorkshop, StylePresets: stylePresets,
+		Continuity: continuity,
 	}
 }
 
