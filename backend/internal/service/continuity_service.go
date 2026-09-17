@@ -34,11 +34,14 @@ func NewContinuityService(cfg *config.Config, db *gorm.DB, remote *RemoteExec, u
 
 func (s *ContinuityService) previousScene(scene *models.Scene) (*models.Scene, error) {
 	var previous models.Scene
-	err := s.db.Where("project_id = ? AND episode_n = ? AND generation = ? AND `order` < ?", scene.ProjectID, scene.EpisodeN, scene.Generation, scene.Order).Order("`order` DESC").First(&previous).Error
-	if err == gorm.ErrRecordNotFound {
+	result := s.db.Where("project_id = ? AND episode_n = ? AND generation = ? AND `order` < ?", scene.ProjectID, scene.EpisodeN, scene.Generation, scene.Order).Order("`order` DESC").Limit(1).Find(&previous)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
 		return nil, nil
 	}
-	return &previous, err
+	return &previous, nil
 }
 
 func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, count int) ([]models.FrameCandidate, error) {
@@ -143,7 +146,9 @@ func (s *ContinuityService) Configure(projectID, sceneID uint, req ConfigureCont
 	}
 	cfg := models.SceneContinuity{SceneID: sceneID, Mode: req.Mode, SourceMode: req.SourceMode, Status: "not_required", Version: 1}
 	var old models.SceneContinuity
-	if s.db.Where("scene_id = ?", sceneID).First(&old).Error == nil {
+	if result := s.db.Where("scene_id = ?", sceneID).Limit(1).Find(&old); result.Error != nil {
+		return nil, result.Error
+	} else if result.RowsAffected > 0 {
 		cfg.ID, cfg.Version = old.ID, old.Version+1
 	}
 	if req.Mode != models.ContinuityModeIndependent {
@@ -157,8 +162,11 @@ func (s *ContinuityService) Configure(projectID, sceneID uint, req ConfigureCont
 		} else {
 			source, _ = s.previousScene(&scene)
 		}
-		if source == nil || source.ID == scene.ID || source.EpisodeN != scene.EpisodeN || source.Generation != scene.Generation {
-			return nil, fmt.Errorf("没有可用的上一场景")
+		if source == nil {
+			return nil, fmt.Errorf("当前是本集第一镜，不能使用上一镜续接或首尾桥接，请选择独立多参考生成")
+		}
+		if source.ID == scene.ID || source.EpisodeN != scene.EpisodeN || source.Generation != scene.Generation {
+			return nil, fmt.Errorf("来源场景不属于当前分集或版本")
 		}
 		var frame models.FrameCandidate
 		q := s.db.Where("scene_id = ? AND video_task_id = ?", source.ID, source.VideoTaskID)
