@@ -425,6 +425,48 @@ Subject与Picture的真实身份绑定由系统根据实际上传文件生成，
 	return result, nil
 }
 
+// ReplaceSceneImage 以人工上传图片替换分镜图，并使所有基于旧图的视频状态失效。
+func (s *ProjectService) ReplaceSceneImage(sc *models.Scene, imageFile string) error {
+	if sc == nil || sc.ID == 0 || strings.TrimSpace(imageFile) == "" {
+		return fmt.Errorf("场景和分镜图不能为空")
+	}
+	oldImageTaskID, oldVideoTaskID := sc.ImageTaskID, sc.VideoTaskID
+	updates := map[string]any{
+		"image_file":            filepath.Base(imageFile),
+		"image_token":           "",
+		"image_task_id":         "",
+		"video_task_id":         "",
+		"video_file":            "",
+		"video_input_file":      "",
+		"video_gpu":             nil,
+		"video_full_prompt":     "",
+		"video_first_frame_img": "",
+		"video_last_frame_img":  "",
+		"video_retries":         0,
+		"status":                "image_ready",
+		"error":                 "",
+	}
+	if err := s.db.Model(&models.Scene{}).Where("id = ? AND project_id = ?", sc.ID, sc.ProjectID).Updates(updates).Error; err != nil {
+		return err
+	}
+	if s.tasks != nil {
+		for _, taskID := range []string{oldImageTaskID, oldVideoTaskID} {
+			if taskID == "" {
+				continue
+			}
+			if err := s.tasks.CancelTask(taskID); err != nil && !strings.Contains(err.Error(), "已结束") {
+				log.Printf("[scene %d] cancel stale task %s failed: %v", sc.ID, taskID, err)
+			}
+		}
+	}
+	if s.continuity != nil {
+		s.continuity.InvalidateDependents(sc.ID, "来源分镜图已替换，请重新生成视频并选择衔接帧")
+	}
+	s.updateProjectStatus(sc.ProjectID)
+	s.pushProject(nil)
+	return nil
+}
+
 // UpdateScene 编辑场景文案。修改 image_prompt 会清空已生成画面与视频（需重新生成）；
 // 仅修改 content/title 时保留画面、清空已生成视频（需重新生成视频）。
 func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imagePrompt string, duration float64, visual ...string) error {

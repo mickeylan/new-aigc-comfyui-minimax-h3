@@ -256,6 +256,44 @@ func TestDetectImageExt(t *testing.T) {
 	}
 }
 
+func TestUploadedSceneImageExtRejectsNonImage(t *testing.T) {
+	png := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}
+	jpg := []byte{0xff, 0xd8, 0xff, 0xe0}
+	webp := []byte{'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'E', 'B', 'P'}
+	if uploadedSceneImageExt(png) != ".png" || uploadedSceneImageExt(jpg) != ".jpg" || uploadedSceneImageExt(webp) != ".webp" {
+		t.Fatal("expected supported image signatures")
+	}
+	if got := uploadedSceneImageExt([]byte("not an image")); got != "" {
+		t.Fatalf("expected invalid content to be rejected, got %q", got)
+	}
+}
+
+func TestReplaceSceneImageInvalidatesVideoAndGenerationToken(t *testing.T) {
+	ps := newTestProjectService(t)
+	project := models.Project{Title: "p", Status: "ready"}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	gpu := 1
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 1, ImageFile: "old.png", ImageToken: "old-token", ImageTaskID: "image-task", VideoTaskID: "video-task", VideoFile: "old.mp4", VideoInputFile: "old-input.mp4", VideoGPU: &gpu, VideoFullPrompt: "stale", Status: "video_ready"}
+	if err := ps.db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.ReplaceSceneImage(&scene, "replacement.png"); err != nil {
+		t.Fatal(err)
+	}
+	var got models.Scene
+	if err := ps.db.First(&got, scene.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.ImageFile != "replacement.png" || got.ImageToken != "" || got.ImageTaskID != "" || got.Status != "image_ready" || got.Error != "" {
+		t.Fatalf("unexpected image state: %+v", got)
+	}
+	if got.VideoTaskID != "" || got.VideoFile != "" || got.VideoInputFile != "" || got.VideoGPU != nil || got.VideoFullPrompt != "" {
+		t.Fatalf("stale video state retained: %+v", got)
+	}
+}
+
 // newTestProjectService 内存 SQLite 初始化
 func newTestProjectService(t *testing.T) *ProjectService {
 	t.Helper()

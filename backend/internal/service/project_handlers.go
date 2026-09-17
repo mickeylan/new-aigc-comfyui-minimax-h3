@@ -517,13 +517,14 @@ func (s *Service) HandleUploadSceneImage(c *gin.Context) {
 	if !ok {
 		return
 	}
-	file, header, err := c.Request.FormFile("file")
+	file, _, err := c.Request.FormFile("file")
 	if err != nil {
 		c.JSON(400, gin.H{"error": "file required: " + err.Error()})
 		return
 	}
 	defer file.Close()
-	data, err := io.ReadAll(file)
+	const maxSceneImageBytes = 25 * 1024 * 1024
+	data, err := io.ReadAll(io.LimitReader(file, maxSceneImageBytes+1))
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -532,16 +533,14 @@ func (s *Service) HandleUploadSceneImage(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "空文件"})
 		return
 	}
-	if len(data) > 25*1024*1024 {
+	if len(data) > maxSceneImageBytes {
 		c.JSON(400, gin.H{"error": "文件不超过 25 MB"})
 		return
 	}
-	ext := filepath.Ext(header.Filename)
+	ext := uploadedSceneImageExt(data)
 	if ext == "" {
-		ext = detectImageExt(data)
-	}
-	if ext == "" {
-		ext = ".jpg"
+		c.JSON(400, gin.H{"error": "仅支持有效的 PNG/JPG/WebP 图片"})
+		return
 	}
 	name := fmt.Sprintf("scene_%d_%d%s", sc.ID, time.Now().UnixNano(), ext)
 	path, _, err := s.Upload.SaveFile(fmt.Sprintf("%d", p.ID), "image", name, data)
@@ -549,21 +548,24 @@ func (s *Service) HandleUploadSceneImage(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	// Cancel any active generation task
-	if sc.ImageTaskID != "" && s.Tasks != nil {
-		_ = s.Tasks.CancelTask(sc.ImageTaskID)
-	}
-	if err := s.DB.Model(&models.Scene{}).Where("id = ?", sc.ID).Updates(map[string]any{
-		"image_file":    filepath.Base(path),
-		"image_task_id": "",
-		"image_error":   "",
-		"status":        "image_ready",
-	}).Error; err != nil {
+	if err := s.Projects.ReplaceSceneImage(sc, filepath.Base(path)); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	s.Projects.PushProject(nil)
-	c.JSON(200, gin.H{"ok": true, "message": "分镜图已上传", "image_file": filepath.Base(path)})
+	c.JSON(200, gin.H{"ok": true, "message": "分镜图已上传，旧视频已失效", "image_file": filepath.Base(path)})
+}
+
+func uploadedSceneImageExt(data []byte) string {
+	switch {
+	case len(data) >= 8 && string(data[:8]) == "\x89PNG\r\n\x1a\n":
+		return ".png"
+	case len(data) >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff:
+		return ".jpg"
+	case len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP":
+		return ".webp"
+	default:
+		return ""
+	}
 }
 
 // HandleGenerateAllImages 一键生成当前集全部画面（query episode_n 过滤，默认全部）

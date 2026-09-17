@@ -361,7 +361,7 @@
                   {{ sc._working ? '生成中…' : (sc.status === 'failed' && sc.image_retries > 0 ? '重试画面' : '生成画面') }}
                 </button>
                 <label class="btn btn-sm btn-ghost" :class="{ disabled: busy || sc._working }">
-                  上传分镜图<input type="file" accept="image/png,image/jpeg,image/webp" hidden @change="e => uploadSceneImage(sc, e)" />
+                  上传分镜图<input type="file" accept="image/png,image/jpeg,image/webp" :disabled="busy || sc._working" hidden @change="e => uploadSceneImage(sc, e)" />
                 </label>
               </template>
             </template>
@@ -370,7 +370,7 @@
                 {{ sc._working ? '生成中…' : '重新生成画面' }}
               </button>
               <label class="btn btn-sm btn-ghost" :class="{ disabled: busy || sc._working || isVideoWorking(sc) }">
-                替换分镜图<input type="file" accept="image/png,image/jpeg,image/webp" hidden @change="e => uploadSceneImage(sc, e)" />
+                替换分镜图<input type="file" accept="image/png,image/jpeg,image/webp" :disabled="busy || sc._working || isVideoWorking(sc)" hidden @change="e => uploadSceneImage(sc, e)" />
               </label>
               <!-- 视频：画面就绪即可单独触发；就绪后仍可重新生成 -->
               <span v-if="isVideoWorking(sc)" class="working">
@@ -1902,15 +1902,12 @@ async function genImage(sc) {
 async function uploadSceneImage(sc, event) {
   const file = event.target.files?.[0]
   event.target.value = ''
-  if (!file) return
+  if (!file || busy.value || sc._working || isVideoWorking(sc)) return
   sc._working = true
   try {
     const { data } = await api.uploadSceneImage(id(), sc.id, file)
-    sc.image_file = data.image_file
-    sc.image_task_id = ''
-    sc.image_error = ''
-    sc.status = 'image_ready'
     toast.show(data.message || '分镜图已上传')
+    await load()
   } catch (e) {
     toast.show('上传分镜图失败：' + (e.response?.data?.error || e.message))
   } finally {
