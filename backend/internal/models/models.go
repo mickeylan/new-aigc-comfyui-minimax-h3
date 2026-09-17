@@ -701,16 +701,18 @@ const (
 
 // FrameCandidate 是某次视频任务末尾提取的候选衔接帧。
 type FrameCandidate struct {
-	ID          uint               `gorm:"primaryKey" json:"id"`
-	ProjectID   uint               `gorm:"index" json:"project_id"`
-	SceneID     uint               `gorm:"index;uniqueIndex:idx_scene_video_frame" json:"scene_id"`
-	VideoTaskID string             `gorm:"index;uniqueIndex:idx_scene_video_frame" json:"video_task_id"`
-	Type        FrameCandidateType `gorm:"default:candidate" json:"type"`
-	FrameIndex  int                `gorm:"uniqueIndex:idx_scene_video_frame" json:"frame_index"`
-	TimestampMS int64              `json:"timestamp_ms"`
-	ImageFile   string             `json:"image_file"` // input/<projectID> 下的相对文件名
-	SelectedAt  *time.Time         `json:"selected_at,omitempty"`
-	CreatedAt   time.Time          `json:"created_at"`
+	ID                uint               `gorm:"primaryKey" json:"id"`
+	ProjectID         uint               `gorm:"index" json:"project_id"`
+	SceneID           uint               `gorm:"index;uniqueIndex:idx_scene_video_frame" json:"scene_id"`
+	VideoTaskID       string             `gorm:"index;uniqueIndex:idx_scene_video_frame" json:"video_task_id"`
+	Type              FrameCandidateType `gorm:"default:candidate" json:"type"`
+	FrameIndex        int                `gorm:"uniqueIndex:idx_scene_video_frame" json:"frame_index"`
+	TimestampMS       int64              `json:"timestamp_ms"`
+	ImageFile         string             `json:"image_file"` // input/<projectID> 下的当前有效图片
+	OriginalImageFile string             `json:"original_image_file,omitempty"`
+	Source            string             `gorm:"default:extracted" json:"source"` // extracted/manual_upload
+	SelectedAt        *time.Time         `json:"selected_at,omitempty"`
+	CreatedAt         time.Time          `json:"created_at"`
 }
 
 // SceneContinuity 是当前 Scene 对上一 Scene 的显式依赖。

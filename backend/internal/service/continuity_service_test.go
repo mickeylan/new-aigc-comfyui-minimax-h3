@@ -17,11 +17,14 @@ func newContinuityTestService(t *testing.T) (*ContinuityService, *gorm.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.FrameCandidate{}, &models.SceneContinuity{}); err != nil {
+	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.FrameCandidate{}, &models.SceneContinuity{}, &models.UploadFile{}); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
-	return NewContinuityService(cfg, db, NewRemoteExec(config.RemoteConfig{})), db
+	cfg.Comfy.ComfyDir = t.TempDir()
+	remote := NewRemoteExec(config.RemoteConfig{})
+	upload := NewUploadManager(cfg, db, remote)
+	return NewContinuityService(cfg, db, remote, upload), db
 }
 
 func TestContinuitySelectAndConfigureContinue(t *testing.T) {
@@ -52,6 +55,31 @@ func TestContinuitySelectAndConfigureContinue(t *testing.T) {
 	got, mode, err := svc.ContinuationFrame(s2.ID)
 	if err != nil || mode != models.ContinuityModeContinue || got == nil || got.ImageFile != "end.png" {
 		t.Fatalf("frame=%+v mode=%s err=%v", got, mode, err)
+	}
+}
+
+func TestContinuityReplaceSelectedFramePreservesOriginalAndInvalidatesDependent(t *testing.T) {
+	svc, db := newContinuityTestService(t)
+	p := models.Project{Title: "p"}
+	db.Create(&p)
+	s1 := models.Scene{ProjectID: p.ID, VideoTaskID: "task-1", Status: "video_ready"}
+	s2 := models.Scene{ProjectID: p.ID}
+	db.Create(&s1)
+	db.Create(&s2)
+	frame := models.FrameCandidate{ProjectID: p.ID, SceneID: s1.ID, VideoTaskID: "task-1", Type: models.FrameCandidateSelected, ImageFile: "original.png", Source: "extracted"}
+	db.Create(&frame)
+	db.Create(&models.SceneContinuity{SceneID: s2.ID, Mode: models.ContinuityModeContinue, SourceSceneID: &s1.ID, SelectedFrameID: &frame.ID, SourceVideoTaskID: "task-1", Status: "ready"})
+	replaced, err := svc.ReplaceSelectedFrame(p.ID, s1.ID, "hd.png", []byte("image-data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replaced.Source != "manual_upload" || replaced.OriginalImageFile != "original.png" || replaced.ImageFile == "original.png" {
+		t.Fatalf("unexpected replaced frame: %+v", replaced)
+	}
+	var dependent models.SceneContinuity
+	db.Where("scene_id = ?", s2.ID).First(&dependent)
+	if dependent.Status != "source_invalidated" {
+		t.Fatalf("dependent status=%s", dependent.Status)
 	}
 }
 

@@ -74,7 +74,7 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	charLooks := NewCharacterLookService(db, textProviderFact)
 	charLooks.SetDeps(tasks, remote, upload)
 	projects.characterLooks = charLooks
-	continuity := NewContinuityService(cfg, db, remote)
+	continuity := NewContinuityService(cfg, db, remote, upload)
 	projects.continuity = continuity
 
 	// 初始化系统预设

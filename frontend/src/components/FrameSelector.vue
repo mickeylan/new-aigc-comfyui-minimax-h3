@@ -13,6 +13,10 @@
         </button>
       </div>
       <p v-else class="empty">尚无候选帧</p>
+      <div v-if="selectedOutput" class="replace-row">
+        <span>当前衔接帧：{{ selectedOutput.source === 'manual_upload' ? '用户高清替换图' : '视频原始抽帧' }}</span>
+        <label class="btn btn-sm btn-secondary">上传高清图替换<input hidden type="file" accept="image/png,image/jpeg,image/webp" @change="replaceFrame" /></label>
+      </div>
     </section>
 
     <section class="block">
@@ -44,20 +48,23 @@ const continuity = ref(null)
 const mode = ref('independent')
 const loading = ref(false)
 const saving = ref(false)
+const selectedOutput = ref(null)
 
 async function load() {
   const [fr, cfg] = await Promise.all([api.getFrameCandidates(props.projectId, props.sceneId), api.getContinuity(props.projectId, props.sceneId)])
   frames.value = fr.data.frames || []
+  selectedOutput.value = frames.value.find(f => f.selected) || null
   continuity.value = cfg.data.continuity || null
   mode.value = continuity.value?.mode || 'independent'
 }
 async function extract() { loading.value = true; try { frames.value = (await api.extractFrameCandidates(props.projectId, props.sceneId)).data.frames || [] } finally { loading.value = false } }
-async function select(frame) { const selected = (await api.selectFrame(props.projectId, props.sceneId, frame.id)).data.frame; frames.value = frames.value.map(f => ({ ...f, selected: f.id === selected.id })); emit('frame-selected', selected) }
+async function select(frame) { const selected = (await api.selectFrame(props.projectId, props.sceneId, frame.id)).data.frame; frames.value = frames.value.map(f => f.id === selected.id ? selected : ({ ...f, selected: false })); selectedOutput.value = selected; emit('frame-selected', selected) }
+async function replaceFrame(event) { const file = event.target.files?.[0]; event.target.value = ''; if (!file) return; const form = new FormData(); form.append('file', file); const replaced = (await api.replaceSelectedFrame(props.projectId, props.sceneId, form)).data.frame; frames.value = frames.value.map(f => f.id === replaced.id ? replaced : f); selectedOutput.value = replaced; emit('frame-selected', replaced) }
 async function saveMode() { saving.value = true; try { continuity.value = (await api.configureContinuity(props.projectId, props.sceneId, { mode: mode.value, source_mode: 'auto_previous' })).data.continuity; emit('applied', continuity.value) } finally { saving.value = false } }
 function timeLabel(ms) { const value = Number(ms || 0); return value < 0 ? `${(value / 1000).toFixed(3)}s（距结尾）` : `${(value / 1000).toFixed(3)}s` }
 onMounted(() => load().catch(() => {}))
 </script>
 
 <style scoped>
-.continuity-panel{padding:20px;background:var(--card);color:var(--text-primary);border-radius:12px}.panel-head{display:flex;justify-content:space-between;align-items:center}.block{margin-top:18px;padding:14px;border:1px solid var(--border);border-radius:8px}.block h4{margin:0 0 8px}.hint,.empty{color:var(--text-secondary);font-size:13px}.actions{margin-top:12px;display:flex;gap:8px}.frame-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(135px,1fr));gap:10px;margin-top:12px}.frame{padding:0;overflow:hidden;border:2px solid transparent;border-radius:6px;background:var(--bg-secondary);color:var(--text-secondary);cursor:pointer}.frame.selected{border-color:#4caf50}.frame img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover}.frame span{display:block;padding:5px;font-size:11px}.input{width:100%;padding:8px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);border-radius:6px}.warning{margin-top:10px;padding:8px;color:#ffb74d;background:rgba(255,152,0,.12);border-radius:6px}.source-frame{display:flex;align-items:center;gap:12px;margin-top:12px}.source-frame img{width:160px;aspect-ratio:16/9;object-fit:cover;border-radius:6px}
+.continuity-panel{padding:20px;background:var(--card);color:var(--text-primary);border-radius:12px}.panel-head{display:flex;justify-content:space-between;align-items:center}.block{margin-top:18px;padding:14px;border:1px solid var(--border);border-radius:8px}.block h4{margin:0 0 8px}.hint,.empty{color:var(--text-secondary);font-size:13px}.actions{margin-top:12px;display:flex;gap:8px}.frame-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(135px,1fr));gap:10px;margin-top:12px}.frame{padding:0;overflow:hidden;border:2px solid transparent;border-radius:6px;background:var(--bg-secondary);color:var(--text-secondary);cursor:pointer}.frame.selected{border-color:#4caf50}.frame img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover}.frame span{display:block;padding:5px;font-size:11px}.input{width:100%;padding:8px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);border-radius:6px}.warning{margin-top:10px;padding:8px;color:#ffb74d;background:rgba(255,152,0,.12);border-radius:6px}.source-frame{display:flex;align-items:center;gap:12px;margin-top:12px}.source-frame img{width:160px;aspect-ratio:16/9;object-fit:cover;border-radius:6px}.replace-row{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:12px;padding:10px;background:var(--bg-secondary);border-radius:6px;font-size:13px}
 </style>

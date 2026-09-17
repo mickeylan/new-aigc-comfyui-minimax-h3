@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -20,10 +21,15 @@ type ContinuityService struct {
 	cfg    *config.Config
 	db     *gorm.DB
 	remote *RemoteExec
+	upload *UploadManager
 }
 
-func NewContinuityService(cfg *config.Config, db *gorm.DB, remote *RemoteExec) *ContinuityService {
-	return &ContinuityService{cfg: cfg, db: db, remote: remote}
+func NewContinuityService(cfg *config.Config, db *gorm.DB, remote *RemoteExec, uploads ...*UploadManager) *ContinuityService {
+	var upload *UploadManager
+	if len(uploads) > 0 {
+		upload = uploads[0]
+	}
+	return &ContinuityService{cfg: cfg, db: db, remote: remote, upload: upload}
 }
 
 func (s *ContinuityService) previousScene(scene *models.Scene) (*models.Scene, error) {
@@ -72,7 +78,7 @@ func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, coun
 		if _, err := s.remote.Stat(filepath.Join(inputDir, name)); err != nil {
 			continue
 		}
-		candidates = append(candidates, models.FrameCandidate{ProjectID: projectID, SceneID: sceneID, VideoTaskID: scene.VideoTaskID, Type: models.FrameCandidateCandidate, FrameIndex: i - 1, TimestampMS: int64(i-count) * 1000 / 24, ImageFile: name})
+		candidates = append(candidates, models.FrameCandidate{ProjectID: projectID, SceneID: sceneID, VideoTaskID: scene.VideoTaskID, Type: models.FrameCandidateCandidate, FrameIndex: i - 1, TimestampMS: int64(i-count) * 1000 / 24, ImageFile: name, Source: "extracted"})
 	}
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("ffmpeg未产生候选帧")
@@ -221,6 +227,42 @@ func (s *ContinuityService) InvalidateDependents(sourceSceneID uint, reason stri
 func (s *ContinuityService) invalidateSceneVideo(sceneID uint) {
 	s.db.Model(&models.Scene{}).Where("id = ?", sceneID).Updates(map[string]any{"video_task_id": "", "video_file": "", "video_input_file": "", "video_gpu": nil, "status": gorm.Expr("CASE WHEN image_file != '' THEN 'image_ready' ELSE status END")})
 }
+func (s *ContinuityService) ReplaceSelectedFrame(projectID, sceneID uint, filename string, data []byte) (*models.FrameCandidate, error) {
+	if s.upload == nil {
+		return nil, fmt.Errorf("上传服务未配置")
+	}
+	ext := strings.ToLower(filepath.Ext(filename))
+	if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".webp" {
+		return nil, fmt.Errorf("仅支持 PNG/JPG/WebP")
+	}
+	var frame models.FrameCandidate
+	if err := s.db.Where("project_id = ? AND scene_id = ? AND type = ?", projectID, sceneID, models.FrameCandidateSelected).First(&frame).Error; err != nil {
+		return nil, fmt.Errorf("请先选择一张衔接帧")
+	}
+	var scene models.Scene
+	if err := s.db.Where("id = ? AND project_id = ?", sceneID, projectID).First(&scene).Error; err != nil {
+		return nil, fmt.Errorf("场景不存在")
+	}
+	if frame.VideoTaskID != scene.VideoTaskID {
+		return nil, fmt.Errorf("已选帧来自旧视频，请重新提取")
+	}
+	name := fmt.Sprintf("continuity_s%d_manual_%d%s", sceneID, time.Now().UnixNano(), ext)
+	path, _, err := s.upload.SaveFile(fmt.Sprint(projectID), "image", name, data)
+	if err != nil {
+		return nil, err
+	}
+	original := frame.OriginalImageFile
+	if original == "" {
+		original = frame.ImageFile
+	}
+	if err := s.db.Model(&frame).Updates(map[string]any{"image_file": filepath.Base(path), "original_image_file": original, "source": "manual_upload"}).Error; err != nil {
+		return nil, err
+	}
+	frame.ImageFile, frame.OriginalImageFile, frame.Source = filepath.Base(path), original, "manual_upload"
+	s.InvalidateDependents(sceneID, "来源衔接帧已被高清图替换，请重新确认连续性配置")
+	return &frame, nil
+}
+
 func (s *ContinuityService) FrameURL(frame models.FrameCandidate) string {
 	return fmt.Sprintf("/api/input/%d/%s", frame.ProjectID, filepath.ToSlash(frame.ImageFile))
 }
