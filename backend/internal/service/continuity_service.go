@@ -117,7 +117,20 @@ func (s *ContinuityService) SelectFrame(projectID, sceneID, frameID uint) (*mode
 		if err := tx.Model(&models.FrameCandidate{}).Where("scene_id = ?", sceneID).Updates(map[string]any{"type": models.FrameCandidateCandidate, "selected_at": nil}).Error; err != nil {
 			return err
 		}
-		return tx.Model(&frame).Updates(map[string]any{"type": models.FrameCandidateSelected, "selected_at": now}).Error
+		if err := tx.Model(&frame).Updates(map[string]any{"type": models.FrameCandidateSelected, "selected_at": now}).Error; err != nil {
+			return err
+		}
+		// Propagate selection to downstream continuities
+		if err := tx.Model(&models.SceneContinuity{}).
+			Where("source_scene_id = ? AND source_video_task_id = ? AND status = ?", sceneID, frame.VideoTaskID, "waiting").
+			Updates(map[string]any{
+				"selected_frame_id": frame.ID,
+				"status":            "ready",
+				"version":           gorm.Expr("version + 1"),
+			}).Error; err != nil {
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -168,17 +181,21 @@ func (s *ContinuityService) Configure(projectID, sceneID uint, req ConfigureCont
 		if source.ID == scene.ID || source.EpisodeN != scene.EpisodeN || source.Generation != scene.Generation {
 			return nil, fmt.Errorf("来源场景不属于当前分集或版本")
 		}
-		var frame models.FrameCandidate
-		q := s.db.Where("scene_id = ? AND video_task_id = ?", source.ID, source.VideoTaskID)
+		cfg.SourceSceneID, cfg.SourceVideoTaskID = &source.ID, source.VideoTaskID
+		cfg.Status = "waiting"
 		if req.FrameID > 0 {
-			q = q.Where("id = ?", req.FrameID)
+			var frame models.FrameCandidate
+			if s.db.Where("id = ? AND scene_id = ? AND video_task_id = ?", req.FrameID, source.ID, source.VideoTaskID).First(&frame).Error == nil {
+				cfg.SelectedFrameID = &frame.ID
+				cfg.Status = "ready"
+			}
 		} else {
-			q = q.Where("type = ?", models.FrameCandidateSelected).Order("frame_index DESC")
+			var frame models.FrameCandidate
+			if s.db.Where("scene_id = ? AND video_task_id = ? AND type = ?", source.ID, source.VideoTaskID, models.FrameCandidateSelected).Order("frame_index DESC").First(&frame).Error == nil {
+				cfg.SelectedFrameID = &frame.ID
+				cfg.Status = "ready"
+			}
 		}
-		if q.First(&frame).Error != nil {
-			return nil, fmt.Errorf("上一场景尚未选择有效衔接帧")
-		}
-		cfg.SourceSceneID, cfg.SelectedFrameID, cfg.SourceVideoTaskID, cfg.Status = &source.ID, &frame.ID, source.VideoTaskID, "ready"
 		if cfg.SourceMode == "" {
 			cfg.SourceMode = "auto_previous"
 		}
@@ -207,7 +224,10 @@ func (s *ContinuityService) PrepareScene(scene *models.Scene) error {
 	if cfg.Mode == models.ContinuityModeIndependent {
 		return nil
 	}
-	if cfg.Status != "ready" || cfg.SelectedFrame == nil {
+	if cfg.Status == "waiting" || cfg.SelectedFrame == nil {
+		return nil
+	}
+	if cfg.Status != "ready" {
 		return fmt.Errorf("连续性尚未就绪: %s", cfg.Status)
 	}
 	var source models.Scene
@@ -224,10 +244,21 @@ func (s *ContinuityService) ContinuationFrame(sceneID uint) (*models.FrameCandid
 	if err := s.db.Preload("SelectedFrame").Where("scene_id = ?", sceneID).First(&cfg).Error; err != nil {
 		return nil, "", err
 	}
-	if cfg.Mode != models.ContinuityModeContinue || cfg.SelectedFrame == nil || cfg.Status != "ready" {
+	if cfg.Mode != models.ContinuityModeContinue {
 		return nil, cfg.Mode, nil
 	}
-	return cfg.SelectedFrame, cfg.Mode, nil
+	// If SelectedFrame is already loaded (not nil), use it
+	if cfg.SelectedFrame != nil && cfg.Status == "ready" {
+		return cfg.SelectedFrame, cfg.Mode, nil
+	}
+	// Status is waiting; look up latest selected frame from source scene
+	if cfg.Status == "waiting" && cfg.SourceSceneID != nil {
+		var frame models.FrameCandidate
+		if s.db.Where("scene_id = ? AND video_task_id = ? AND type = ?", *cfg.SourceSceneID, cfg.SourceVideoTaskID, models.FrameCandidateSelected).Order("frame_index DESC").First(&frame).Error == nil {
+			return &frame, cfg.Mode, nil
+		}
+	}
+	return nil, cfg.Mode, nil
 }
 func (s *ContinuityService) InvalidateDependents(sourceSceneID uint, reason string) {
 	s.db.Model(&models.SceneContinuity{}).Where("source_scene_id = ? AND mode != ?", sourceSceneID, models.ContinuityModeIndependent).Updates(map[string]any{"status": "source_invalidated", "error": reason, "version": gorm.Expr("version + 1")})

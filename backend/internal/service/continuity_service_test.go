@@ -58,6 +58,46 @@ func TestContinuitySelectAndConfigureContinue(t *testing.T) {
 	}
 }
 
+func TestContinuityPreConfigureWithoutFrame(t *testing.T) {
+	svc, db := newContinuityTestService(t)
+	p := models.Project{Title: "p"}
+	db.Create(&p)
+	s1 := models.Scene{ProjectID: p.ID, EpisodeN: 1, Generation: 1, Order: 1, Status: "video_ready", VideoTaskID: "task-1", VideoInputFile: "one.mp4", ImageFile: "one.png"}
+	s2 := models.Scene{ProjectID: p.ID, EpisodeN: 1, Generation: 1, Order: 2, Status: "image_ready", ImageFile: "two.png"}
+	db.Create(&s1)
+	db.Create(&s2)
+	// No frame selected yet; configure should succeed with status=waiting
+	cfg, err := svc.Configure(p.ID, s2.ID, ConfigureContinuityRequest{Mode: models.ContinuityModeContinue})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SourceSceneID == nil || *cfg.SourceSceneID != s1.ID || cfg.Status != "waiting" || cfg.SelectedFrameID != nil {
+		t.Fatalf("unexpected pre-config continuity: %+v", cfg)
+	}
+	// PrepareScene should not block; falls through to independent
+	var prepared models.Scene
+	db.First(&prepared, s2.ID)
+	if err := svc.PrepareScene(&prepared); err != nil {
+		t.Fatal(err)
+	}
+	// Now select a frame for s1
+	frame := models.FrameCandidate{ProjectID: p.ID, SceneID: s1.ID, VideoTaskID: s1.VideoTaskID, FrameIndex: 21, ImageFile: "end.png"}
+	db.Create(&frame)
+	if _, err := svc.SelectFrame(p.ID, s1.ID, frame.ID); err != nil {
+		t.Fatal(err)
+	}
+	// ContinuationFrame should now return the selected frame
+	got, mode, err := svc.ContinuationFrame(s2.ID)
+	if err != nil || mode != models.ContinuityModeContinue || got == nil || got.ImageFile != "end.png" {
+		t.Fatalf("frame=%+v mode=%s err=%v", got, mode, err)
+	}
+	// Reload config; status should be ready
+	cfg2, _ := svc.Get(p.ID, s2.ID)
+	if cfg2.Status != "ready" || cfg2.SelectedFrameID == nil || *cfg2.SelectedFrameID != frame.ID {
+		t.Fatalf("expected ready with selected frame: %+v", cfg2)
+	}
+}
+
 func TestContinuityReplaceSelectedFramePreservesOriginalAndInvalidatesDependent(t *testing.T) {
 	svc, db := newContinuityTestService(t)
 	p := models.Project{Title: "p"}
