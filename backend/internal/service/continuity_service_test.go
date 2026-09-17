@@ -52,6 +52,9 @@ func TestContinuitySelectAndConfigureContinue(t *testing.T) {
 	if err := svc.PrepareScene(&prepared); err != nil {
 		t.Fatal(err)
 	}
+	if prepared.VideoTemplate != "minimax_h3_ref2v" || prepared.VideoFirstFrameImg != "" || prepared.VideoLastFrameImg != "" {
+		t.Fatalf("continue mode must retain multi-reference workflow: %+v", prepared)
+	}
 	got, mode, err := svc.ContinuationFrame(s2.ID)
 	if err != nil || mode != models.ContinuityModeContinue || got == nil || got.ImageFile != "end.png" {
 		t.Fatalf("frame=%+v mode=%s err=%v", got, mode, err)

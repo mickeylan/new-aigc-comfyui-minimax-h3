@@ -211,18 +211,7 @@ func (s *Service) HandleRedesignScenePrompt(c *gin.Context) {
 }
 
 func (s *Service) sceneVideoPromptContinuity(sc *models.Scene) (*models.SceneContinuity, []FileMeta, []string) {
-	refs, lines := s.Projects.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
-	if s.Continuity == nil {
-		return nil, refs, lines
-	}
-	cfg, err := s.Continuity.Get(sc.ProjectID, sc.ID)
-	if err != nil || cfg == nil || cfg.Status != "ready" || cfg.SelectedFrame == nil {
-		return cfg, refs, lines
-	}
-	if cfg.Mode == models.ContinuityModeContinue && len(refs) > 0 {
-		refs[len(refs)-1] = FileMeta{TaskID: fmt.Sprint(sc.ProjectID), Name: cfg.SelectedFrame.ImageFile}
-		lines[len(lines)-1] = fmt.Sprintf("- <Picture %d>：上一镜确认衔接帧（0.00秒开始状态）", len(lines))
-	}
+	refs, lines, cfg := s.Projects.sceneVideoContinuityReferences(sc, fmt.Sprint(sc.ProjectID))
 	return cfg, refs, lines
 }
 
@@ -249,7 +238,7 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 	preview := *sc
 	preview.VideoPrompt = actionPrompt
 	continuity, refs, refLines := s.sceneVideoPromptContinuity(sc)
-	// 用户保存的完整提示词是权威值；只有空值或参考图编号失效时才重建。
+	// 用户保存的完整提示词是权威值；只有空值或参考图编号失效时才按实际上传顺序重建。
 	fullPrompt := strings.TrimSpace(sc.VideoFullPrompt)
 	if fullPrompt == "" || len(ValidateFullH3PromptForReferences(fullPrompt, refLines)) > 0 {
 		fullPrompt = buildMiniMaxH3RefPrompt(&preview, &project, dubs, refLines)

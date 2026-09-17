@@ -236,6 +236,9 @@ func (s *ContinuityService) PrepareScene(scene *models.Scene) error {
 	}
 	if cfg.Mode == models.ContinuityModeBridge {
 		scene.VideoTemplate, scene.VideoFirstFrameImg, scene.VideoLastFrameImg = "minimax_h3_first_last", cfg.SelectedFrame.ImageFile, scene.ImageFile
+	} else {
+		// Continue mode keeps Ref2VA so character sheets, scene reference, storyboard and tail frame can all be submitted.
+		scene.VideoTemplate, scene.VideoFirstFrameImg, scene.VideoLastFrameImg = "minimax_h3_ref2v", "", ""
 	}
 	return nil
 }
@@ -264,7 +267,11 @@ func (s *ContinuityService) InvalidateDependents(sourceSceneID uint, reason stri
 	s.db.Model(&models.SceneContinuity{}).Where("source_scene_id = ? AND mode != ?", sourceSceneID, models.ContinuityModeIndependent).Updates(map[string]any{"status": "source_invalidated", "error": reason, "version": gorm.Expr("version + 1")})
 }
 func (s *ContinuityService) invalidateSceneVideo(sceneID uint) {
-	s.db.Model(&models.Scene{}).Where("id = ?", sceneID).Updates(map[string]any{"video_task_id": "", "video_file": "", "video_input_file": "", "video_gpu": nil, "status": gorm.Expr("CASE WHEN image_file != '' THEN 'image_ready' ELSE status END")})
+	s.db.Model(&models.Scene{}).Where("id = ?", sceneID).Updates(map[string]any{
+		"video_task_id": "", "video_file": "", "video_input_file": "", "video_gpu": nil,
+		"video_full_prompt": "", "video_template": "", "video_first_frame_img": "", "video_last_frame_img": "",
+		"status": gorm.Expr("CASE WHEN image_file != '' THEN 'image_ready' ELSE status END"),
+	})
 }
 func (s *ContinuityService) ReplaceSelectedFrame(projectID, sceneID uint, filename string, data []byte) (*models.FrameCandidate, error) {
 	if s.upload == nil {

@@ -965,7 +965,10 @@ func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string, templ
 	_ = s.db.First(&p, sc.ProjectID).Error
 	var dubs []models.Dialogue
 	s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
-	prompt := buildMiniMaxH3Prompt(sc, &p, dubs)
+	prompt := strings.TrimSpace(sc.VideoFullPrompt)
+	if prompt == "" {
+		prompt = buildMiniMaxH3Prompt(sc, &p, dubs)
+	}
 	// 用户明确指定了模板
 	if templateOverride != "" {
 		return templateOverride, prompt, s.buildVideoFilesForTemplate(sc, pid, templateOverride)
@@ -982,10 +985,14 @@ func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string, templ
 func (s *ProjectService) buildVideoFilesForTemplate(sc *models.Scene, pid, tplCode string) map[string][]FileMeta {
 	switch tplCode {
 	case "minimax_h3_i2v", "minimax_h3_storyboard_candidates_selflift":
-		if sc.ImageFile == "" {
+		firstImg := strings.TrimSpace(sc.VideoFirstFrameImg)
+		if firstImg == "" {
+			firstImg = sc.ImageFile
+		}
+		if firstImg == "" {
 			return nil
 		}
-		return map[string][]FileMeta{"first_frame": {{TaskID: pid, Name: sc.ImageFile}}}
+		return map[string][]FileMeta{"first_frame": {{TaskID: pid, Name: firstImg}}}
 	case "minimax_h3_first_last":
 		files := map[string][]FileMeta{}
 		// 首帧：用户明确指定的，否则用分镜图
@@ -1069,7 +1076,7 @@ Dialogue只决定人物是否开口及对应口型时机；对白文本将由系
 // 由系统确定性生成；detailed_description 来自用户编辑或系统生成。
 func openingPictureTag(referenceLines []string) string {
 	for _, line := range referenceLines {
-		if !strings.Contains(line, "当前分镜画面") && !strings.Contains(line, "衔接帧") {
+		if !strings.Contains(line, "当前分镜画面") && !strings.Contains(line, "衔接帧") && !strings.Contains(line, "确认尾帧") {
 			continue
 		}
 		start := strings.Index(line, "<Picture ")
@@ -1230,6 +1237,13 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 		body = strings.Replace(body, "[Shot 1]", style+"风格。\n[Shot 1]", 1)
 	}
 	body = stripStructuredDialogueFromAction(body, dubs)
+	for _, line := range referenceLines {
+		if strings.Contains(line, "上一镜确认尾帧") {
+			startPicture := openingPictureTag([]string{line})
+			body = "[Shot 1] 本视频必须从 " + startPicture + " 完整一致的画面开始；" + startPicture + " 定义本镜 0.00 秒画面，不是普通参考图。保持该画面构图、人物位置、姿态、服装和场景状态，随后继续本镜动作。 " + strings.TrimSpace(strings.TrimPrefix(body, "[Shot 1]"))
+			break
+		}
+	}
 	validDialogues := validSceneDialogues(dubs)
 	soundscape := "仅自然环境声和画面内物理动作声同步。无对白、无人声、无旁白、无语音、无说话声、无吟唱；人物嘴部不得做说话口型。"
 	if len(validDialogues) > 0 {
@@ -1405,6 +1419,35 @@ func ValidateVideoPrompt(detailText, charStr, locStr, propStr string) []string {
 		issues = append(issues, "视频动作提示词不能超过 4000 字")
 	}
 	return issues
+}
+
+func (s *ProjectService) sceneVideoContinuityReferences(sc *models.Scene, pid string) ([]FileMeta, []string, *models.SceneContinuity) {
+	refs, lines := s.sceneVideoReferenceFiles(sc, pid)
+	if s.continuity == nil {
+		return refs, lines, nil
+	}
+	cfg, err := s.continuity.Get(sc.ProjectID, sc.ID)
+	if err != nil || cfg == nil || cfg.Status != "ready" || cfg.SelectedFrame == nil || cfg.Mode != models.ContinuityModeContinue {
+		return refs, lines, cfg
+	}
+	// 当前分镜图仍作为本镜场景/构图参考；上一镜选定尾帧追加在最后，明确绑定为 0.00 秒开始画面。
+	// 达到九图上限时，只裁掉分镜图之前优先级最低的一项，始终保留当前分镜图和衔接帧。
+	if len(refs) >= maxSceneReferenceImages {
+		storyboard := refs[len(refs)-1]
+		storyboardLine := lines[len(lines)-1]
+		refs = append(refs[:maxSceneReferenceImages-2], storyboard)
+		lines = append(lines[:maxSceneReferenceImages-2], storyboardLine)
+	}
+	refs = append(refs, FileMeta{TaskID: pid, Name: cfg.SelectedFrame.ImageFile})
+	lines = append(lines, fmt.Sprintf("- <Picture %d>：上一镜确认尾帧（本镜 0.00 秒唯一开始画面）", len(refs)))
+	for i, line := range lines {
+		description := strings.TrimSpace(line)
+		if parts := strings.SplitN(description, "：", 2); len(parts) == 2 {
+			description = strings.TrimSpace(parts[1])
+		}
+		lines[i] = fmt.Sprintf("- <Picture %d>：%s", i+1, description)
+	}
+	return refs, lines, cfg
 }
 
 func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) ([]FileMeta, []string) {
@@ -2727,14 +2770,8 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	tplCode, promptText, videoFiles := s.buildSceneVideoSpec(sc, pid, sc.VideoTemplate)
 	// ref2v 模板需要注入场景参考图（分镜图 + 用户选择的造型/场景/道具资产）
 	if tplCode == "minimax_h3_ref2v" || tplCode == "minimax_h3_ref2v_single" {
-		// 人物/场景等参考在前，已确认的分镜起始图固定作为最后一张 Picture。
-		refFiles, refLines := s.sceneVideoReferenceFiles(sc, pid)
-		if s.continuity != nil {
-			if frame, mode, err := s.continuity.ContinuationFrame(sc.ID); err == nil && mode == models.ContinuityModeContinue && frame != nil && len(refFiles) > 0 {
-				refFiles[len(refFiles)-1] = FileMeta{TaskID: pid, Name: frame.ImageFile}
-				refLines[len(refLines)-1] = fmt.Sprintf("- <Picture %d>：上一镜确认衔接帧（0.00秒开始状态）", len(refLines))
-			}
-		}
+		// 当前分镜图保留为场景/构图参考；连续模式再将上一镜选定尾帧追加为最后一张 Picture（0.00秒开始画面）。
+		refFiles, refLines, _ := s.sceneVideoContinuityReferences(sc, pid)
 		if len(refFiles) > 0 {
 			var dubs []models.Dialogue
 			s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
