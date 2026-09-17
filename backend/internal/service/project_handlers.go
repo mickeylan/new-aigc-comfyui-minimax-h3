@@ -507,6 +507,65 @@ func (s *Service) HandleGenerateSceneImage(c *gin.Context) {
 	c.JSON(200, gin.H{"ok": true, "message": fmt.Sprintf("场景 %d 画面生成中", sc.Order)})
 }
 
+// HandleUploadSceneImage 上传分镜图替代 AI 生成（最大 25 MB，PNG/JPG/WebP）
+func (s *Service) HandleUploadSceneImage(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	sc, ok := s.loadScene(c)
+	if !ok {
+		return
+	}
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(400, gin.H{"error": "file required: " + err.Error()})
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if len(data) == 0 {
+		c.JSON(400, gin.H{"error": "空文件"})
+		return
+	}
+	if len(data) > 25*1024*1024 {
+		c.JSON(400, gin.H{"error": "文件不超过 25 MB"})
+		return
+	}
+	ext := filepath.Ext(header.Filename)
+	if ext == "" {
+		ext = detectImageExt(data)
+	}
+	if ext == "" {
+		ext = ".jpg"
+	}
+	name := fmt.Sprintf("scene_%d_%d%s", sc.ID, time.Now().UnixNano(), ext)
+	path, _, err := s.Upload.SaveFile(fmt.Sprintf("%d", p.ID), "image", name, data)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	// Cancel any active generation task
+	if sc.ImageTaskID != "" && s.Tasks != nil {
+		_ = s.Tasks.CancelTask(sc.ImageTaskID)
+	}
+	if err := s.DB.Model(&models.Scene{}).Where("id = ?", sc.ID).Updates(map[string]any{
+		"image_file":    filepath.Base(path),
+		"image_task_id": "",
+		"image_error":   "",
+		"status":        "image_ready",
+	}).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	s.Projects.PushProject(nil)
+	c.JSON(200, gin.H{"ok": true, "message": "分镜图已上传", "image_file": filepath.Base(path)})
+}
+
 // HandleGenerateAllImages 一键生成当前集全部画面（query episode_n 过滤，默认全部）
 func (s *Service) HandleGenerateAllImages(c *gin.Context) {
 	p, ok := s.loadProject(c)

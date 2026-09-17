@@ -65,6 +65,14 @@ export const api = {
   updateScene: (id, sid, data) => http.patch(`/projects/${id}/scenes/${sid}`, data),
   redesignScenePrompt: (id, sid, brief) => http.post(`/projects/${id}/scenes/${sid}/prompt/redesign`, { brief }, { timeout: 300000 }),
   generateSceneImage: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/image`),
+  uploadSceneImage: (id, sid, file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return http.post(`/projects/${id}/scenes/${sid}/image/upload`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 60000
+    })
+  },
   generateSceneVideo: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/video`),
   sceneVideoPrompt: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/video/prompt`),
   regenerateSceneVideoPrompt: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/video/prompt/regenerate`, null, { timeout: 300000 }),

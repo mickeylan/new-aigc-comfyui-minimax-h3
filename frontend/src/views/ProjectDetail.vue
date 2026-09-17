@@ -356,14 +356,22 @@
               <span v-if="sc.status === 'image_pending'" class="working">
                 <span class="dot blue pulse"></span>画面生成中…
               </span>
-              <button v-else class="btn btn-sm btn-secondary" :disabled="busy || sc._working" @click="genImage(sc)">
-                {{ sc._working ? '生成中…' : (sc.status === 'failed' && sc.image_retries > 0 ? '重试画面' : '生成画面') }}
-              </button>
+              <template v-else>
+                <button class="btn btn-sm btn-secondary" :disabled="busy || sc._working" @click="genImage(sc)">
+                  {{ sc._working ? '生成中…' : (sc.status === 'failed' && sc.image_retries > 0 ? '重试画面' : '生成画面') }}
+                </button>
+                <label class="btn btn-sm btn-ghost" :class="{ disabled: busy || sc._working }">
+                  上传分镜图<input type="file" accept="image/png,image/jpeg,image/webp" hidden @change="e => uploadSceneImage(sc, e)" />
+                </label>
+              </template>
             </template>
             <template v-else>
               <button class="btn btn-sm btn-secondary" :disabled="busy || sc._working || isVideoWorking(sc)" @click="genImage(sc)">
                 {{ sc._working ? '生成中…' : '重新生成画面' }}
               </button>
+              <label class="btn btn-sm btn-ghost" :class="{ disabled: busy || sc._working || isVideoWorking(sc) }">
+                替换分镜图<input type="file" accept="image/png,image/jpeg,image/webp" hidden @change="e => uploadSceneImage(sc, e)" />
+              </label>
               <!-- 视频：画面就绪即可单独触发；就绪后仍可重新生成 -->
               <span v-if="isVideoWorking(sc)" class="working">
                 <span class="dot blue pulse"></span>{{ videoProgress(sc) }}
@@ -1887,6 +1895,25 @@ async function genImage(sc) {
     refreshSoon()
   } catch (e) {
     toast.show('生成画面失败：' + (e.response?.data?.error || e.message))
+    sc._working = false
+  }
+}
+
+async function uploadSceneImage(sc, event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+  sc._working = true
+  try {
+    const { data } = await api.uploadSceneImage(id(), sc.id, file)
+    sc.image_file = data.image_file
+    sc.image_task_id = ''
+    sc.image_error = ''
+    sc.status = 'image_ready'
+    toast.show(data.message || '分镜图已上传')
+  } catch (e) {
+    toast.show('上传分镜图失败：' + (e.response?.data?.error || e.message))
+  } finally {
     sc._working = false
   }
 }
