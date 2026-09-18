@@ -340,19 +340,20 @@ type Material struct {
 
 // Dialogue 场景对白：用于 TTS 配音与 SRT 字幕生成
 type Dialogue struct {
-	ID         uint      `gorm:"primaryKey" json:"id"`
-	SceneID    uint      `gorm:"column:scene_id;index" json:"scene_id"`
-	ProjectID  uint      `gorm:"column:project_id;index" json:"project_id"`
-	Order      int       `json:"order"`                                                  // 场景内句序（从 1 开始）
-	Character  string    `json:"character"`                                              // 对白/内心独白为角色名；旁白可为“旁白”
-	SpeechType string    `gorm:"column:speech_type;default:dialogue" json:"speech_type"` // dialogue/narration/monologue
-	Text       string    `gorm:"type:text" json:"text"`                                  // 仅可发声原文；空说话人且无明确类型时不发声
-	Voice      string    `json:"voice"`                                                  // TTS 音色（voice_type）
-	AudioFile  string    `json:"audio_file"`                                             // 合成音频文件名（input/<pid>/dub/ 下）
-	Status     string    `json:"status"`                                                 // pending/synthesizing/ready/failed
-	Error      string    `json:"error"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID                 uint      `gorm:"primaryKey" json:"id"`
+	SceneID            uint      `gorm:"column:scene_id;index" json:"scene_id"`
+	ProjectID          uint      `gorm:"column:project_id;index" json:"project_id"`
+	Order              int       `json:"order"`                                                  // 场景内句序（从 1 开始）
+	Character          string    `json:"character"`                                              // 对白/内心独白为角色名；旁白可为“旁白”
+	SpeechType         string    `gorm:"column:speech_type;default:dialogue" json:"speech_type"` // dialogue/narration/monologue
+	H3VoiceDescription string    `gorm:"-" json:"-"`                                             // H3临时说话者声音身份，不持久化
+	Text               string    `gorm:"type:text" json:"text"`                                  // 仅可发声原文；空说话人且无明确类型时不发声
+	Voice              string    `json:"voice"`                                                  // TTS 音色（voice_type）
+	AudioFile          string    `json:"audio_file"`                                             // 合成音频文件名（input/<pid>/dub/ 下）
+	Status             string    `json:"status"`                                                 // pending/synthesizing/ready/failed
+	Error              string    `json:"error"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 // Skill 创作技能模板：提供阶段化提示词装配，支持系统内置与项目级覆盖

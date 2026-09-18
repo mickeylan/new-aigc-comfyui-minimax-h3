@@ -15,6 +15,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1258,9 +1259,10 @@ func normalizeScriptSpeech(speechType, character string) (string, string) {
 }
 
 var (
-	explicitSceneSpeechPattern = regexp.MustCompile(`(内心独白|旁白|画外音)\s*[:：]\s*["“‘']?`)
-	standardSceneSpeechPattern = regexp.MustCompile(`【(对白|旁白|内心独白)(?:[｜|]([^】]+))?】\s*`)
-	quotedThoughtPattern       = regexp.MustCompile(`(?:心想|暗自想道|心中说道|心中想道|默念)\s*[:：]?\s*["“]([^"”]+)["”]`)
+	explicitSceneSpeechPattern  = regexp.MustCompile(`(内心独白|旁白|画外音)\s*[:：]\s*["“‘']?`)
+	standardSceneSpeechPattern  = regexp.MustCompile(`【(对白|旁白|内心独白)(?:[｜|]([^】]+))?】\s*`)
+	quotedThoughtPattern        = regexp.MustCompile(`(?:心想|暗自想道|心中说道|心中想道|默念)\s*[:：]?\s*["“]([^"”]+)["”]`)
+	offscreenVoiceSpeechPattern = regexp.MustCompile(`(?:门外|屋外|画外|身后)?[^。！？!?\r\n]{0,12}?(?:传来|响起)([\p{Han}]{2,4})(?:清脆悦耳|清脆|悦耳|温柔|低沉|沙哑|熟悉|陌生|焦急|急促|平静)*的声音(?:说道|说|喊道|叫道)\s*[:：]?\s*["“]([^"”]+)["”]`)
 )
 
 func sceneCharacterNameList(characters string) []string {
@@ -1268,9 +1270,61 @@ func sceneCharacterNameList(characters string) []string {
 		return r == ',' || r == '，' || r == '、' || r == ';' || r == '；' || r == '\n'
 	})
 	out := make([]string, 0, len(parts))
+	seen := map[string]bool{}
 	for _, part := range parts {
-		if name := strings.TrimSpace(part); name != "" {
+		if name := strings.TrimSpace(part); name != "" && !seen[name] {
+			seen[name] = true
 			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func sceneSpeechCharacterNames(sc *models.Scene) []string {
+	return sceneCharacterNameList(strings.Join([]string{sc.Characters, sc.VisibleCharacters, sc.VoiceCharacters}, ","))
+}
+
+func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Dialogue {
+	type foundSpeech struct {
+		pos      int
+		dialogue models.Dialogue
+	}
+	found := make([]foundSpeech, 0)
+	for _, name := range names {
+		// 接受“林采薇说道：\"...\"”“传来林采薇的声音说道：\"...\"”等明确发声写法。
+		// 必须同时具备已知角色名、明确说话动词和引号原文，避免把剧情说明猜成对白。
+		pattern := regexp.MustCompile(regexp.QuoteMeta(name) + `[^。！？!?\r\n]{0,30}?(?:说道|说|问道|答道|喊道|叫道|开口道)\s*[:：]?\s*["“]([^"”]+)["”]`)
+		for _, match := range pattern.FindAllStringSubmatchIndex(content, -1) {
+			lead := content[match[0]+len(name) : match[2]]
+			shadowed := false
+			for _, other := range names {
+				if other != name && strings.Contains(lead, other) {
+					shadowed = true
+					break
+				}
+			}
+			if shadowed {
+				continue // a nearer known character owns the speaking verb
+			}
+			text := strings.TrimSpace(content[match[2]:match[3]])
+			if text != "" {
+				found = append(found, foundSpeech{pos: match[0], dialogue: models.Dialogue{Character: name, SpeechType: "dialogue", Text: text}})
+			}
+		}
+	}
+	sort.SliceStable(found, func(i, j int) bool { return found[i].pos < found[j].pos })
+	out := make([]models.Dialogue, 0, len(found))
+	for _, item := range found {
+		duplicate := false
+		for _, existing := range out {
+			if existing.Character == item.dialogue.Character && existing.Text == item.dialogue.Text {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			item.dialogue.Order = len(out) + 1
+			out = append(out, item.dialogue)
 		}
 	}
 	return out
@@ -1293,8 +1347,34 @@ func explicitSceneSpeech(sc *models.Scene) []models.Dialogue {
 	if content == "" {
 		return nil
 	}
-	names := sceneCharacterNameList(sc.Characters)
+	names := sceneSpeechCharacterNames(sc)
 	out := make([]models.Dialogue, 0)
+	// 原文明确写出“门外传来某人的声音说道”时，直接提取画外说话人。
+	// 该句式本身已同时提供姓名、发声动作和引号原文，不依赖Scene角色字段。
+	for _, match := range offscreenVoiceSpeechPattern.FindAllStringSubmatchIndex(content, -1) {
+		speaker := strings.TrimSpace(content[match[2]:match[3]])
+		text := strings.TrimSpace(content[match[4]:match[5]])
+		if speaker != "" && text != "" {
+			matchedText := content[match[0]:match[1]]
+			voiceDescription := "门外的" + speaker
+			if strings.Contains(matchedText, "清脆悦耳") {
+				voiceDescription += "，声音清脆悦耳"
+			} else if strings.Contains(matchedText, "清脆") {
+				voiceDescription += "，声音清脆"
+			}
+			out = append(out, models.Dialogue{Character: speaker, SpeechType: "dialogue", H3VoiceDescription: voiceDescription, Text: text, Order: len(out) + 1})
+			known := false
+			for _, name := range names {
+				if name == speaker {
+					known = true
+					break
+				}
+			}
+			if !known {
+				names = append(names, speaker)
+			}
+		}
+	}
 	// Preferred authoring format: 【对白｜角色】、【旁白】、【内心独白｜角色】.
 	standard := standardSceneSpeechPattern.FindAllStringSubmatchIndex(content, -1)
 	for i, match := range standard {
@@ -1363,7 +1443,23 @@ func explicitSceneSpeech(sc *models.Scene) []models.Dialogue {
 		out = append(out, d)
 	}
 
-	// Conservative natural-language fallback. A quoted thought and an unambiguous
+	// Conservative natural-language dialogue fallback. It requires a known character,
+	// an explicit speaking verb and quoted source text; voice-only characters are included.
+	for _, extracted := range explicitlyQuotedCharacterSpeech(content, names) {
+		duplicate := false
+		for _, existing := range out {
+			if existing.SpeechType == "dialogue" && existing.Character == extracted.Character && strings.TrimSpace(existing.Text) == strings.TrimSpace(extracted.Text) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			extracted.Order = len(out) + 1
+			out = append(out, extracted)
+		}
+	}
+
+	// Conservative natural-language thought fallback. A quoted thought and an unambiguous
 	// character are both required; unquoted mood/psychology prose is ignored.
 	for _, match := range quotedThoughtPattern.FindAllStringSubmatchIndex(content, -1) {
 		text := strings.TrimSpace(content[match[2]:match[3]])
@@ -1400,14 +1496,25 @@ func explicitSceneSpeech(sc *models.Scene) []models.Dialogue {
 func mergeExplicitSceneSpeech(sc *models.Scene, dubs []models.Dialogue) []models.Dialogue {
 	out := append([]models.Dialogue(nil), dubs...)
 	for _, extracted := range explicitSceneSpeech(sc) {
-		duplicate := false
-		for _, existing := range validSceneDialogues(out) {
-			if existing.SpeechType == extracted.SpeechType && strings.TrimSpace(existing.Text) == strings.TrimSpace(extracted.Text) {
-				duplicate = true
-				break
+		matched := false
+		for i := range out {
+			existingType, existingCharacter := normalizeScriptSpeech(out[i].SpeechType, out[i].Character)
+			if existingType != extracted.SpeechType || strings.TrimSpace(out[i].Text) != strings.TrimSpace(extracted.Text) {
+				continue
 			}
+			matched = true
+			// 场景原文同时具备角色名、明确说话动词和引号原文时，说话人是
+			// 确定事实；用它纠正早期模型生成的同文本错误说话人。
+			if existingCharacter != extracted.Character {
+				out[i].Character = extracted.Character
+				out[i].SpeechType = extracted.SpeechType
+			}
+			if extracted.H3VoiceDescription != "" {
+				out[i].H3VoiceDescription = extracted.H3VoiceDescription
+			}
+			break
 		}
-		if !duplicate {
+		if !matched {
 			extracted.Order = len(out) + 1
 			out = append(out, extracted)
 		}
@@ -1415,10 +1522,38 @@ func mergeExplicitSceneSpeech(sc *models.Scene, dubs []models.Dialogue) []models
 	return out
 }
 
+func sameCharacterNameVariant(a, b string) bool {
+	normalize := func(v string) string { return strings.ReplaceAll(strings.TrimSpace(v), "薇", "微") }
+	return normalize(a) != "" && normalize(a) == normalize(b)
+}
+
 func (s *ProjectService) sceneVideoDialogues(sc *models.Scene) []models.Dialogue {
 	var dubs []models.Dialogue
 	s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
-	return mergeExplicitSceneSpeech(sc, dubs)
+	dubs = mergeExplicitSceneSpeech(sc, dubs)
+	var characters []models.Character
+	s.db.Where("project_id = ?", sc.ProjectID).Find(&characters)
+	for i := range dubs {
+		if dubs[i].H3VoiceDescription == "" {
+			continue
+		}
+		for _, ch := range characters {
+			if !sameCharacterNameVariant(ch.Name, dubs[i].Character) {
+				continue
+			}
+			profile := ch.Role + " " + ch.Appearance + " " + ch.Trait
+			if strings.Contains(profile, "女") || strings.Contains(profile, "少女") {
+				dubs[i].H3VoiceDescription = strings.Replace(dubs[i].H3VoiceDescription, "门外的"+dubs[i].Character, "门外的年轻女性"+dubs[i].Character, 1)
+				if strings.Contains(dubs[i].H3VoiceDescription, "声音清脆悦耳") {
+					dubs[i].H3VoiceDescription = strings.Replace(dubs[i].H3VoiceDescription, "声音清脆悦耳", "使用清脆悦耳的女声", 1)
+				} else {
+					dubs[i].H3VoiceDescription = strings.Replace(dubs[i].H3VoiceDescription, "声音清脆", "使用清脆的女声", 1)
+				}
+			}
+			break
+		}
+	}
+	return dubs
 }
 
 func validSceneDialogues(dubs []models.Dialogue) []models.Dialogue {
@@ -1492,7 +1627,11 @@ func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLine
 	speakerIDs := dialogueSpeakerIDs(valid)
 	for i, d := range valid {
 		speakerName := strings.TrimSpace(d.Character)
-		speaker := useSubjectTags(speakerName, referenceLines) + fmt.Sprintf(" (S%d)", speakerIDs[i])
+		speaker := useSubjectTags(speakerName, referenceLines)
+		if strings.TrimSpace(d.H3VoiceDescription) != "" {
+			speaker = strings.TrimSpace(d.H3VoiceDescription)
+		}
+		speaker += fmt.Sprintf(" (S%d)", speakerIDs[i])
 		text := strings.TrimSpace(d.Text)
 		crossShot := strings.Contains(text, "<scenetrans>")
 		cutoff := strings.Contains(text, "<cutoff>")
@@ -1540,8 +1679,8 @@ func buildH3T2VAPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialog
 // buildH3I2VAPrompt binds Picture 1 to the actual 0.00-second first frame.
 func buildH3I2VAPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue) string {
 	body := strings.TrimSpace(strings.TrimPrefix(h3TimelineBody(sc, p, dubs), "[Shot 1]"))
-	body = "[Shot 1] <Picture 1> is fully preserved as the 0.00-second first frame, including its composition, subjects, clothing, spatial layout, props, lighting, and visual style. " + body
-	return "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.\n\n" +
+	body = "[Shot 1] 以<Picture 1>作为目标视频0.00秒的实际首帧，完整保持其构图、主体、服装、空间布局、道具、光线与视觉风格。" + body
+	return "目标视频的参考图时间对齐：<Picture 1>（来自[Shot 1]）对应目标视频0.00秒。\n\n" +
 		"integrated_multimodal_description:\n" + body +
 		"\n\noverall_soundscape:\n" + h3SoundscapeContract(len(validSceneDialogues(dubs)) > 0) +
 		"\n\nnon_diegetic_music:\nN/A"
@@ -1551,9 +1690,9 @@ func buildH3I2VAPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialog
 func buildH3FL2VAPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue) string {
 	duration := normalizeSceneDuration(sc.Duration)
 	body := strings.TrimSpace(strings.TrimPrefix(h3TimelineBody(sc, p, dubs), "[Shot 1]"))
-	body = "[Shot 1] The shot begins in the exact state, framing, and spatial arrangement established by <Picture 1>. " + body +
-		" The visible motion continuously narrows the difference between both keyframes and settles into the pose, spacing, lighting, and composition established by <Picture 2> at the end of the shot."
-	return fmt.Sprintf("How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the %.2f-second mark of the target video.\n\n", duration) +
+	body = "[Shot 1] 镜头从<Picture 1>确定的状态、构图和空间关系开始。" + body +
+		"画面动作连续推进，最终在本镜结束时准确落到<Picture 2>确定的姿态、间距、光线和构图。"
+	return fmt.Sprintf("目标视频的参考图时间对齐：<Picture 1>（来自[Shot 1]）对应目标视频0.00秒；<Picture 2>（来自[Shot 1]）对应目标视频%.2f秒。\n\n", duration) +
 		"integrated_multimodal_description:\n" + body +
 		"\n\noverall_soundscape:\n" + h3SoundscapeContract(len(validSceneDialogues(dubs)) > 0) +
 		"\n\nnon_diegetic_music:\nN/A"
@@ -1574,7 +1713,7 @@ func compileH3PromptForTemplate(template string, sc *models.Scene, p *models.Pro
 
 func isH3KeyframePrompt(prompt string) bool {
 	lower := strings.ToLower(strings.TrimSpace(prompt))
-	return strings.HasPrefix(lower, "for the target video") || strings.HasPrefix(lower, "how the reference pictures align") || strings.HasPrefix(lower, "integrated_multimodal_description:")
+	return strings.HasPrefix(lower, "目标视频的参考图时间对齐") || strings.HasPrefix(lower, "for the target video") || strings.HasPrefix(lower, "how the reference pictures align") || strings.HasPrefix(lower, "integrated_multimodal_description:")
 }
 
 func validateH3KeyframePrompt(prompt, template string) []string {
@@ -1585,10 +1724,10 @@ func validateH3KeyframePrompt(prompt, template string) []string {
 			issues = append(issues, heading+" 必须且只能出现一次")
 		}
 	}
-	if template == "minimax_h3_i2v" && !strings.HasPrefix(text, "For the target video, at 0.00 seconds") {
+	if template == "minimax_h3_i2v" && !strings.HasPrefix(text, "目标视频的参考图时间对齐：<Picture 1>") {
 		issues = append(issues, "I2VA 必须以 0.00 秒首帧对齐指令开头")
 	}
-	if template == "minimax_h3_first_last" && !strings.HasPrefix(text, "How the reference pictures align with the target video") {
+	if template == "minimax_h3_first_last" && !strings.HasPrefix(text, "目标视频的参考图时间对齐：<Picture 1>") {
 		issues = append(issues, "FL2VA 必须以首尾帧时间对齐指令开头")
 	}
 	return issues

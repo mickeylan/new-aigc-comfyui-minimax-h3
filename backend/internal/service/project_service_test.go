@@ -1445,6 +1445,65 @@ func TestNaturalQuotedThoughtFallbackIsConservative(t *testing.T) {
 	}
 }
 
+func TestQuotedOffscreenCharacterDialogueIsRecoveredFromSceneContent(t *testing.T) {
+	sc := &models.Scene{
+		Characters:        "雷晓飞",
+		VisibleCharacters: "雷晓飞",
+		VoiceCharacters:   "", // 即使上游漏填画外角色，也必须从原文明确信息恢复
+		Content:           `雷晓飞刚迈出几步，门外突然传来林采薇清脆悦耳的声音说道："雷叔、雷婶，早上好，我过来了。"那声音如山间清泉，又似黄莺出谷。雷晓飞脚步一顿，回首望向门口方向。`,
+		VideoPrompt:       "[Shot 1] 雷晓飞迈出几步后停下，回头看向门口。",
+		Duration:          8,
+	}
+	dubs := mergeExplicitSceneSpeech(sc, nil)
+	if len(dubs) != 1 || dubs[0].Character != "林采薇" || dubs[0].SpeechType != "dialogue" || dubs[0].Text != "雷叔、雷婶，早上好，我过来了。" {
+		t.Fatalf("off-screen quoted dialogue extraction = %+v", dubs)
+	}
+	prompt := buildMiniMaxH3RefPrompt(sc, nil, dubs, []string{"- <Picture 1>：角色「雷晓飞」四视图"})
+	for _, want := range []string{"门外的林采薇，声音清脆悦耳 (S1)说：<d>[Chinese] 雷叔、雷婶，早上好，我过来了。</d>", "<Subject 1>迈出几步后停下"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("off-screen dialogue missing %q: %s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "山间清泉") || strings.Contains(prompt, "黄莺出谷") {
+		t.Fatalf("voice description leaked into spoken text: %s", prompt)
+	}
+}
+
+func TestExplicitSceneSpeakerCorrectsWrongStoredSpeaker(t *testing.T) {
+	sc := &models.Scene{
+		Characters:        "雷晓飞",
+		VisibleCharacters: "雷晓飞",
+		VoiceCharacters:   "林采薇",
+		Content:           `门外传来林采薇的声音说道："雷叔、雷婶，早上好，我过来了。"`,
+	}
+	stored := []models.Dialogue{{Character: "雷晓飞", SpeechType: "dialogue", Text: "雷叔、雷婶，早上好，我过来了。", Order: 1}}
+	got := mergeExplicitSceneSpeech(sc, stored)
+	if len(got) != 1 || got[0].Character != "林采薇" || got[0].SpeechType != "dialogue" {
+		t.Fatalf("explicit source speaker did not correct stored speaker: %+v", got)
+	}
+	prompt := buildMiniMaxH3RefPrompt(sc, nil, got, []string{"- <Picture 1>：角色「雷晓飞」四视图"})
+	if !strings.Contains(prompt, "门外的林采薇 (S1)说：<d>[Chinese] 雷叔、雷婶，早上好，我过来了。</d>") || strings.Contains(prompt, "雷晓飞 (S1)说") {
+		t.Fatalf("prompt used wrong speaker: %s", prompt)
+	}
+}
+
+func TestOffscreenFemaleVoiceUsesCharacterProfile(t *testing.T) {
+	ps := newTestProjectService(t)
+	p := models.Project{Title: "测试"}
+	ps.db.Create(&p)
+	ps.db.Create(&models.Character{ProjectID: p.ID, Name: "林采微", Role: "女主", Appearance: "年轻女性"})
+	sc := &models.Scene{ProjectID: p.ID, Content: `门外传来林采薇清脆悦耳的声音说道："我过来了。"`}
+	ps.db.Create(sc)
+	dubs := ps.sceneVideoDialogues(sc)
+	if len(dubs) != 1 || !strings.Contains(dubs[0].H3VoiceDescription, "年轻女性林采薇") || !strings.Contains(dubs[0].H3VoiceDescription, "清脆悦耳的女声") {
+		t.Fatalf("female voice identity missing: %+v", dubs)
+	}
+	prompt := buildMiniMaxH3RefPrompt(sc, nil, dubs, nil)
+	if !strings.Contains(prompt, "门外的年轻女性林采薇，使用清脆悦耳的女声 (S1)说：<d>[Chinese] 我过来了。</d>") {
+		t.Fatalf("female voice direction missing: %s", prompt)
+	}
+}
+
 func TestExplicitMonologueInSceneContentIsIncludedInH3Prompt(t *testing.T) {
 	sc := &models.Scene{
 		Characters:  "林采微",
@@ -1647,7 +1706,7 @@ func TestH3KeyframePromptContractsAndDialoguePlacement(t *testing.T) {
 	sc := &models.Scene{VideoPrompt: "[Shot 1] 林夏抬头看向门口。", Duration: 8}
 	dubs := []models.Dialogue{{Character: "林夏", Text: "你来了。"}}
 	i2v := buildH3I2VAPrompt(sc, &models.Project{Style: "3D国漫"}, dubs)
-	if !strings.HasPrefix(i2v, "For the target video, at 0.00 seconds") {
+	if !strings.HasPrefix(i2v, "目标视频的参考图时间对齐：<Picture 1>") {
 		t.Fatalf("I2VA alignment instruction missing: %s", i2v)
 	}
 	for _, heading := range []string{"integrated_multimodal_description:", "overall_soundscape:", "non_diegetic_music:"} {
@@ -1663,7 +1722,7 @@ func TestH3KeyframePromptContractsAndDialoguePlacement(t *testing.T) {
 	}
 
 	fl2v := buildH3FL2VAPrompt(sc, nil, nil)
-	if !strings.HasPrefix(fl2v, "How the reference pictures align with the target video") || !strings.Contains(fl2v, "8.00-second mark") {
+	if !strings.HasPrefix(fl2v, "目标视频的参考图时间对齐：<Picture 1>") || !strings.Contains(fl2v, "8.00秒") {
 		t.Fatalf("FL2VA alignment instruction missing: %s", fl2v)
 	}
 }
