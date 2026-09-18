@@ -1376,6 +1376,36 @@ func TestExplicitNarrationAndMonologueRemainAllowed(t *testing.T) {
 	}
 }
 
+func TestStandardSceneSpeechFormat(t *testing.T) {
+	sc := &models.Scene{Characters: "林采微, 雷晓飞", Content: "【动作】林采微望向门外。\n【对白｜雷晓飞】我去看看。\n【旁白】夜色渐深。\n【内心独白｜林采微】他还会回来吗？"}
+	dubs := explicitSceneSpeech(sc)
+	if len(dubs) != 3 {
+		t.Fatalf("standard speech count = %d: %+v", len(dubs), dubs)
+	}
+	want := []models.Dialogue{
+		{Character: "雷晓飞", SpeechType: "dialogue", Text: "我去看看。"},
+		{Character: "旁白", SpeechType: "narration", Text: "夜色渐深。"},
+		{Character: "林采微", SpeechType: "monologue", Text: "他还会回来吗？"},
+	}
+	for i := range want {
+		if dubs[i].Character != want[i].Character || dubs[i].SpeechType != want[i].SpeechType || dubs[i].Text != want[i].Text {
+			t.Fatalf("standard speech %d = %+v, want %+v", i, dubs[i], want[i])
+		}
+	}
+}
+
+func TestNaturalQuotedThoughtFallbackIsConservative(t *testing.T) {
+	sc := &models.Scene{Characters: "林采微", Content: `林采微望着门外，心想：“他还会回来吗？”随后眼眶微红。`}
+	dubs := explicitSceneSpeech(sc)
+	if len(dubs) != 1 || dubs[0].Character != "林采微" || dubs[0].SpeechType != "monologue" || dubs[0].Text != "他还会回来吗？" {
+		t.Fatalf("natural quoted thought = %+v", dubs)
+	}
+	unmarked := explicitSceneSpeech(&models.Scene{Characters: "林采微", Content: "林采微望着门外，心绪起伏，眼眶微红。"})
+	if len(unmarked) != 0 {
+		t.Fatalf("unquoted psychology became speech: %+v", unmarked)
+	}
+}
+
 func TestExplicitMonologueInSceneContentIsIncludedInH3Prompt(t *testing.T) {
 	sc := &models.Scene{
 		Characters:  "林采微",

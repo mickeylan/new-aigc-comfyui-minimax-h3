@@ -283,6 +283,7 @@
       <div class="card script-card" v-if="showScript">
         <textarea v-model="scriptDraft" class="textarea script-edit" rows="10"
           :placeholder="'编辑第' + activeEpN + '集剧本正文…'" @input="scriptDirty = true" />
+        <div class="field-hint">推荐格式：`【动作】画面描述`、`【对白｜角色名】原文`、`【旁白】原文`、`【内心独白｜角色名】原文`。旧格式和常见自然写法会尽量兼容，但不会把普通心理或氛围描写擅自转换成发声。</div>
         <div class="script-edit-bar">
           <span v-if="scriptDirty" class="script-dirty-hint">已修改，未保存</span>
           <span v-else-if="!scriptDraft.trim()" class="script-dirty-hint">该集剧本尚未生成，可直接编写或点击「重新生成剧本」</span>

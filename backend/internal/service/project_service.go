@@ -568,7 +568,7 @@ const scriptSystemPrompt = `你是一位专业的漫剧编剧与分镜师。根�
 1. 只输出一个合法的 JSON 对象，不要输出任何解释、Markdown 代码块标记或其它文字。
 2. JSON 结构固定为：
 {
-  "script": "完整剧本正文（按场景分段，含动作描写与对白）",
+  "script": "完整剧本正文。每段发声内容使用固定标签：【动作】画面描述、【对白｜角色名】原文、【旁白】原文、【内心独白｜角色名】原文",
   "visual_bible": "主要角色的固定外貌、服装、色彩与全片统一画风；后续每个画面提示词都必须遵守",
   "scenes": [
     {
@@ -588,7 +588,7 @@ const scriptSystemPrompt = `你是一位专业的漫剧编剧与分镜师。根�
 3. 默认按约 180 秒单集规划 20~30 个镜头；每个镜头为 3~15 秒的独立视频片段，所有镜头 duration 之和应在 162~198 秒内。
 4. 人物一致性至关重要：同一角色在多个场景出现时，image_prompt 必须重复其外貌特征（发型、服装颜色、体型），且所有场景画风描述保持一致。
 5. 每个场景必须在 characters 数组中列出该场出场的角色名（须与角色卡或创作方案中的角色名完全一致；无出场角色则为空数组）。
-6. 逐场检查故事正文和分镜内容中的明确发声标注，并忠实提取到 dialogues：“旁白/画外音：原文”使用 narration，“角色名内心独白：原文”使用 monologue，“角色名：原文”使用 dialogue。只复制标注后的原文，不改写、不概括、不补充。不得把“他心里疑惑”“气氛压抑”等心理、动作或氛围描写转换成独白或旁白。speech_type 只能是 dialogue、narration 或 monologue；dialogue/monologue 的 character 必须是角色名，narration 的 character 固定为“旁白”。正文和分镜内容均未明确出现可发声内容时必须为空数组。
+6. script 正文优先使用固定格式：【动作】画面描述、【对白｜角色名】原文、【旁白】原文、【内心独白｜角色名】原文。逐场检查故事正文和分镜内容中的明确发声标注，并忠实提取到 dialogues：“旁白/画外音：原文”使用 narration，“角色名内心独白：原文”使用 monologue，“角色名：原文”使用 dialogue。只复制标注后的原文，不改写、不概括、不补充。不得把“他心里疑惑”“气氛压抑”等心理、动作或氛围描写转换成独白或旁白。speech_type 只能是 dialogue、narration 或 monologue；dialogue/monologue 的 character 必须是角色名，narration 的 character 固定为“旁白”。正文和分镜内容均未明确出现可发声内容时必须为空数组。
 7. 第一个场景尽量给出大场景/环境交代，后续场景聚焦人物动作与剧情推进。
 8. 道具与场景一致性：贯穿剧情的关键道具（信物/武器等）与主要地点必须在 props/location 中用统一名称标出（系统会用同名资产参考图锁定其外观），同一道具/地点在不同场景中名称必须完全相同。`
 
@@ -1237,7 +1237,11 @@ func normalizeScriptSpeech(speechType, character string) (string, string) {
 	return "", ""
 }
 
-var explicitSceneSpeechPattern = regexp.MustCompile(`(内心独白|旁白|画外音)\s*[:：]\s*["“‘']?`)
+var (
+	explicitSceneSpeechPattern = regexp.MustCompile(`(内心独白|旁白|画外音)\s*[:：]\s*["“‘']?`)
+	standardSceneSpeechPattern = regexp.MustCompile(`【(对白|旁白|内心独白)(?:[｜|]([^】]+))?】\s*`)
+	quotedThoughtPattern       = regexp.MustCompile(`(?:心想|暗自想道|心中说道|心中想道|默念)\s*[:：]?\s*["“]([^"”]+)["”]`)
+)
 
 func sceneCharacterNameList(characters string) []string {
 	parts := strings.FieldsFunc(characters, func(r rune) bool {
@@ -1254,17 +1258,58 @@ func sceneCharacterNameList(characters string) []string {
 
 // explicitSceneSpeech extracts only explicitly labelled narration/monologue text.
 // It never promotes ordinary thoughts, mood or action prose into spoken content.
+func labelledSpeechText(content string, start, end int) string {
+	segment := content[start:end]
+	if quoteEnd := strings.IndexAny(segment, `"”'’“`); quoteEnd >= 0 {
+		segment = segment[:quoteEnd]
+	} else if lineEnd := strings.IndexAny(segment, "\r\n"); lineEnd >= 0 {
+		segment = segment[:lineEnd]
+	}
+	return strings.TrimSpace(strings.TrimRight(strings.TrimSpace(segment), "，,；;"))
+}
+
 func explicitSceneSpeech(sc *models.Scene) []models.Dialogue {
 	content := strings.TrimSpace(sc.Content)
 	if content == "" {
 		return nil
 	}
-	matches := explicitSceneSpeechPattern.FindAllStringSubmatchIndex(content, -1)
-	if len(matches) == 0 {
-		return nil
-	}
 	names := sceneCharacterNameList(sc.Characters)
-	out := make([]models.Dialogue, 0, len(matches))
+	out := make([]models.Dialogue, 0)
+	// Preferred authoring format: 【对白｜角色】、【旁白】、【内心独白｜角色】.
+	standard := standardSceneSpeechPattern.FindAllStringSubmatchIndex(content, -1)
+	for i, match := range standard {
+		kind := content[match[2]:match[3]]
+		character := ""
+		if match[4] >= 0 {
+			character = strings.TrimSpace(content[match[4]:match[5]])
+		}
+		end := len(content)
+		if i+1 < len(standard) {
+			end = standard[i+1][0]
+		}
+		text := labelledSpeechText(content, match[1], end)
+		if text == "" {
+			continue
+		}
+		d := models.Dialogue{Character: character, Text: text, Order: len(out) + 1}
+		switch kind {
+		case "旁白":
+			d.Character, d.SpeechType = "旁白", "narration"
+		case "内心独白":
+			d.SpeechType = "monologue"
+		case "对白":
+			d.SpeechType = "dialogue"
+		}
+		if d.SpeechType != "narration" && d.Character == "" && len(names) == 1 {
+			d.Character = names[0]
+		}
+		if d.SpeechType == "narration" || d.Character != "" {
+			out = append(out, d)
+		}
+	}
+
+	// Backward-compatible explicit labels, used only for portions not represented above.
+	matches := explicitSceneSpeechPattern.FindAllStringSubmatchIndex(content, -1)
 	for i, match := range matches {
 		label := content[match[2]:match[3]]
 		start := match[1]
@@ -1272,14 +1317,7 @@ func explicitSceneSpeech(sc *models.Scene) []models.Dialogue {
 		if i+1 < len(matches) {
 			end = matches[i+1][0]
 		}
-		segment := content[start:end]
-		if quoteEnd := strings.IndexAny(segment, `"”'’“`); quoteEnd >= 0 {
-			segment = segment[:quoteEnd]
-		} else if lineEnd := strings.IndexAny(segment, "\r\n"); lineEnd >= 0 {
-			segment = segment[:lineEnd]
-		}
-		text := strings.TrimSpace(segment)
-		text = strings.TrimSpace(strings.TrimRight(text, "，,；;"))
+		text := labelledSpeechText(content, start, end)
 		if text == "" {
 			continue
 		}
@@ -1303,6 +1341,38 @@ func explicitSceneSpeech(sc *models.Scene) []models.Dialogue {
 			d.Character, d.SpeechType = speaker, "monologue"
 		}
 		out = append(out, d)
+	}
+
+	// Conservative natural-language fallback. A quoted thought and an unambiguous
+	// character are both required; unquoted mood/psychology prose is ignored.
+	for _, match := range quotedThoughtPattern.FindAllStringSubmatchIndex(content, -1) {
+		text := strings.TrimSpace(content[match[2]:match[3]])
+		if text == "" {
+			continue
+		}
+		prefix := content[:match[0]]
+		bestPos, speaker := -1, ""
+		for _, name := range names {
+			if pos := strings.LastIndex(prefix, name); pos > bestPos {
+				bestPos, speaker = pos, name
+			}
+		}
+		if speaker == "" && len(names) == 1 {
+			speaker = names[0]
+		}
+		if speaker == "" {
+			continue
+		}
+		duplicate := false
+		for _, existing := range out {
+			if existing.SpeechType == "monologue" && existing.Character == speaker && strings.TrimSpace(existing.Text) == text {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			out = append(out, models.Dialogue{Character: speaker, SpeechType: "monologue", Text: text, Order: len(out) + 1})
+		}
 	}
 	return out
 }
