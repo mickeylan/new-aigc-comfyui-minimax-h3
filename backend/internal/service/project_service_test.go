@@ -1376,6 +1376,32 @@ func TestExplicitNarrationAndMonologueRemainAllowed(t *testing.T) {
 	}
 }
 
+func TestExplicitMonologueInSceneContentIsIncludedInH3Prompt(t *testing.T) {
+	sc := &models.Scene{
+		Characters:  "林采微",
+		Content:     `雷晓飞离开后，林采微望着他的背影，心绪起伏。她长这么大，头一次见有人一听她的名字就说出含义。内心独白："采微是母亲临终前为她取的，寓意盼望父亲速归……“，想到此处，她不禁眼眶微红。`,
+		VideoPrompt: "[Shot 1] 林采微站在门边，目光追随雷晓飞离去的背影，眼眶微红。",
+		Duration:    8,
+	}
+	dubs := mergeExplicitSceneSpeech(sc, nil)
+	if len(dubs) != 1 || dubs[0].SpeechType != "monologue" || dubs[0].Character != "林采微" || dubs[0].Text != "采微是母亲临终前为她取的，寓意盼望父亲速归……" {
+		t.Fatalf("explicit monologue extraction = %+v", dubs)
+	}
+	prompt := buildMiniMaxH3RefPrompt(sc, nil, dubs, []string{"- <Picture 1>：角色「林采微」四视图"})
+	want := `<Subject 1> (S1)内心独白：<d>[Chinese] 采微是母亲临终前为她取的，寓意盼望父亲速归……</d>`
+	if !strings.Contains(prompt, want) {
+		t.Fatalf("explicit monologue missing from H3 prompt: %s", prompt)
+	}
+}
+
+func TestExplicitNarrationInSceneContentIsIncludedButNotInvented(t *testing.T) {
+	sc := &models.Scene{Characters: "林采微", Content: `旁白：“夜色渐深。” 林采微心绪起伏。`}
+	dubs := mergeExplicitSceneSpeech(sc, nil)
+	if len(dubs) != 1 || dubs[0].SpeechType != "narration" || dubs[0].Text != "夜色渐深。" {
+		t.Fatalf("explicit narration extraction = %+v", dubs)
+	}
+}
+
 func TestUnmarkedPlotTextIsNotGuessedAsNarration(t *testing.T) {
 	got := validSceneDialogues([]models.Dialogue{{Character: "", Text: "夜色笼罩山城。"}})
 	if len(got) != 0 {

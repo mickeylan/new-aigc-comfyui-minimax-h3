@@ -280,8 +280,7 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	var dubs []models.Dialogue
-	s.DB.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
+	dubs := s.Projects.sceneVideoDialogues(sc)
 	preview := *sc
 	preview.VideoPrompt = actionPrompt
 	continuity, refs, lines := s.sceneVideoPromptContinuity(sc)

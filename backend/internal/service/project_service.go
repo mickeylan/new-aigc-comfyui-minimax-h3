@@ -968,8 +968,7 @@ func (s *ProjectService) sceneCharacterPortraits(sc *models.Scene) []models.Char
 func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string, templateOverride string) (tplCode, promptText string, files map[string][]FileMeta) {
 	var p models.Project
 	_ = s.db.First(&p, sc.ProjectID).Error
-	var dubs []models.Dialogue
-	s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
+	dubs := s.sceneVideoDialogues(sc)
 	prompt := strings.TrimSpace(sc.VideoFullPrompt)
 	compile := func(code string) string {
 		if prompt != "" {
@@ -1050,8 +1049,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	_, refLines := s.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
 	openingPicture := openingPictureTag(refLines)
 	shotContext := s.sceneShotContext(sc)
-	var dubs []models.Dialogue
-	s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
+	dubs := s.sceneVideoDialogues(sc)
 	dialogueContext := "无结构化对白；禁止生成说话、旁白或人声"
 	if valid := validSceneDialogues(dubs); len(valid) > 0 {
 		lines := make([]string, 0, len(valid))
@@ -1237,6 +1235,100 @@ func normalizeScriptSpeech(speechType, character string) (string, string) {
 		}
 	}
 	return "", ""
+}
+
+var explicitSceneSpeechPattern = regexp.MustCompile(`(内心独白|旁白|画外音)\s*[:：]\s*["“‘']?`)
+
+func sceneCharacterNameList(characters string) []string {
+	parts := strings.FieldsFunc(characters, func(r rune) bool {
+		return r == ',' || r == '，' || r == '、' || r == ';' || r == '；' || r == '\n'
+	})
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if name := strings.TrimSpace(part); name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// explicitSceneSpeech extracts only explicitly labelled narration/monologue text.
+// It never promotes ordinary thoughts, mood or action prose into spoken content.
+func explicitSceneSpeech(sc *models.Scene) []models.Dialogue {
+	content := strings.TrimSpace(sc.Content)
+	if content == "" {
+		return nil
+	}
+	matches := explicitSceneSpeechPattern.FindAllStringSubmatchIndex(content, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	names := sceneCharacterNameList(sc.Characters)
+	out := make([]models.Dialogue, 0, len(matches))
+	for i, match := range matches {
+		label := content[match[2]:match[3]]
+		start := match[1]
+		end := len(content)
+		if i+1 < len(matches) {
+			end = matches[i+1][0]
+		}
+		segment := content[start:end]
+		if quoteEnd := strings.IndexAny(segment, `"”'’“`); quoteEnd >= 0 {
+			segment = segment[:quoteEnd]
+		} else if lineEnd := strings.IndexAny(segment, "\r\n"); lineEnd >= 0 {
+			segment = segment[:lineEnd]
+		}
+		text := strings.TrimSpace(segment)
+		text = strings.TrimSpace(strings.TrimRight(text, "，,；;"))
+		if text == "" {
+			continue
+		}
+		d := models.Dialogue{Text: text, Order: len(out) + 1}
+		if label == "旁白" || label == "画外音" {
+			d.Character, d.SpeechType = "旁白", "narration"
+		} else {
+			prefix := content[:match[0]]
+			bestPos, speaker := -1, ""
+			for _, name := range names {
+				if pos := strings.LastIndex(prefix, name); pos > bestPos {
+					bestPos, speaker = pos, name
+				}
+			}
+			if speaker == "" && len(names) == 1 {
+				speaker = names[0]
+			}
+			if speaker == "" {
+				continue
+			}
+			d.Character, d.SpeechType = speaker, "monologue"
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
+func mergeExplicitSceneSpeech(sc *models.Scene, dubs []models.Dialogue) []models.Dialogue {
+	out := append([]models.Dialogue(nil), dubs...)
+	for _, extracted := range explicitSceneSpeech(sc) {
+		duplicate := false
+		for _, existing := range validSceneDialogues(out) {
+			if existing.SpeechType == extracted.SpeechType && strings.TrimSpace(existing.Text) == strings.TrimSpace(extracted.Text) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			extracted.Order = len(out) + 1
+			out = append(out, extracted)
+		}
+	}
+	return out
+}
+
+func (s *ProjectService) sceneVideoDialogues(sc *models.Scene) []models.Dialogue {
+	var dubs []models.Dialogue
+	s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
+	return mergeExplicitSceneSpeech(sc, dubs)
 }
 
 func validSceneDialogues(dubs []models.Dialogue) []models.Dialogue {
@@ -3061,8 +3153,7 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		// 当前分镜图保留为场景/构图参考；连续模式再将上一镜选定尾帧追加为最后一张 Picture（0.00秒开始画面）。
 		refFiles, refLines, _ := s.sceneVideoContinuityReferences(sc, pid)
 		if len(refFiles) > 0 {
-			var dubs []models.Dialogue
-			s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
+			dubs := s.sceneVideoDialogues(sc)
 			// 已保存且引用编号合法时，video_full_prompt 是唯一权威值，正式提交时逐字使用；
 			// 只有空值或引用编号失效时才重建，禁止在生成阶段再次规范化或回退到旧动作正文。
 			promptText = resolveRef2VSubmissionPrompt(sc, p, dubs, refLines)
