@@ -1290,12 +1290,12 @@ func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLine
 		cutoff := strings.Contains(text, "<cutoff>")
 		text = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(text, "<scenetrans>", ""), "<cutoff>", ""))
 		if isNarrationSpeaker(speakerName) {
-			body += " " + speaker + "以画外旁白说出：<d>[Chinese] " + text + "</d>，同时画面中人物嘴唇始终闭合。"
+			body += " " + speaker + "画外音：<d>[Chinese] " + text + "</d>。"
 		} else {
-			body += " " + speaker + "清晰说出：<d>[Chinese] " + text + "</d>。"
+			body += " " + speaker + "说：<d>[Chinese] " + text + "</d>。"
 		}
 		if crossShot {
-			body += " <scenetrans>该说话者的同一句对白音频跨镜头切换无缝延续，后续镜头继续使用相同的说话者ID。"
+			body += "<scenetrans>"
 		}
 		if cutoff {
 			body += "<cutoff>"

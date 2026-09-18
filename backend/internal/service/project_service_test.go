@@ -1327,8 +1327,8 @@ func TestCharacterNamesMapToActualReferenceSubjects(t *testing.T) {
 		"<Subject 2> 是 <Picture 2> 中的角色「上官若琳」四视图",
 		"<Subject 4> 是 <Picture 4> 中的当前分镜画面",
 		"<Subject 1>环抱<Subject 2>",
-		"<Subject 1> (S1)清晰说出：<d>[Chinese] 这不是太想你了吗。</d>",
-		"<Subject 2> (S2)清晰说出：<d>[Chinese] 今晚有得是时间。</d>",
+		"<Subject 1> (S1)说：<d>[Chinese] 这不是太想你了吗。</d>",
+		"<Subject 2> (S2)说：<d>[Chinese] 今晚有得是时间。</d>",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("character mapping missing %q: %s", want, prompt)
@@ -1407,7 +1407,7 @@ func TestSceneWithoutStructuredDialogueForbidsVoice(t *testing.T) {
 func TestStructuredDialogueIsAlwaysIncluded(t *testing.T) {
 	lines := []string{"- <Picture 1>：当前分镜画面"}
 	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] 人物抬头。", Duration: 8}, nil, []models.Dialogue{{Character: "林夏", Text: "你来了"}}, lines)
-	for _, want := range []string{"林夏 (S1)清晰说出：<d>[Chinese] 你来了</d>", "不出现其他人声", "旁白", "含混发声", "额外对白"} {
+	for _, want := range []string{"林夏 (S1)说：<d>[Chinese] 你来了</d>", "不出现其他人声", "旁白", "含混发声", "额外对白"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("structured dialogue missing %q: %s", want, prompt)
 		}
@@ -1460,7 +1460,7 @@ func TestStructuredDialogueOverridesStalePromptDialogue(t *testing.T) {
 	if strings.Contains(prompt, "错误旧台词") {
 		t.Fatalf("stale prompt dialogue was retained: %s", prompt)
 	}
-	if !strings.Contains(prompt, "林夏 (S1)清晰说出：<d>[Chinese] 正确结构化台词</d>") {
+	if !strings.Contains(prompt, "林夏 (S1)说：<d>[Chinese] 正确结构化台词</d>") {
 		t.Fatalf("structured dialogue missing: %s", prompt)
 	}
 }
@@ -1508,7 +1508,7 @@ func TestH3KeyframePromptContractsAndDialoguePlacement(t *testing.T) {
 			t.Fatalf("I2VA field %s missing or duplicated: %s", heading, i2v)
 		}
 	}
-	if !strings.Contains(h3IntegratedDescription(i2v), "林夏 (S1)清晰说出：<d>[Chinese] 你来了。</d>") {
+	if !strings.Contains(h3IntegratedDescription(i2v), "林夏 (S1)说：<d>[Chinese] 你来了。</d>") {
 		t.Fatalf("dialogue must be in the timeline with stable speaker ID: %s", i2v)
 	}
 	if strings.Contains(h3PromptSection(i2v, "overall_soundscape:"), "你来了") {
@@ -1525,7 +1525,7 @@ func TestH3NarrationAndCameraConflictValidation(t *testing.T) {
 	sc := &models.Scene{VideoPrompt: "[Shot 1] 人物保持闭口，镜头保持固定。", Duration: 5}
 	prompt := buildH3T2VAPrompt(sc, nil, []models.Dialogue{{Character: "旁白", Text: "夜色降临。"}})
 	detail := h3IntegratedDescription(prompt)
-	for _, want := range []string{"(S1)", "画外旁白", "<d>[Chinese] 夜色降临。</d>", "嘴唇始终闭合"} {
+	for _, want := range []string{"旁白 (S1)画外音：<d>[Chinese] 夜色降临。</d>"} {
 		if !strings.Contains(detail, want) {
 			t.Fatalf("narration rule missing %q: %s", want, prompt)
 		}
@@ -1542,13 +1542,16 @@ func TestH3CrossShotDialogueMarkers(t *testing.T) {
 		{Character: "林夏", Text: "这句话会被截断——<cutoff>"},
 	}
 	body := appendStructuredDialogue("[Shot 1] 林夏向前走。[Shot 2] At 00:03.000, the shot cuts to her face.", dubs, nil)
-	for _, want := range []string{"林夏 (S1)", "<scenetrans>", "对白音频跨镜头切换无缝延续", "<cutoff>"} {
+	for _, want := range []string{"林夏 (S1)", "</d>。<scenetrans>", "<cutoff>"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("cross-shot dialogue missing %q: %s", want, body)
 		}
 	}
 	if strings.Contains(body, "(S2)") {
 		t.Fatalf("same speaker changed ID across shots: %s", body)
+	}
+	if strings.Contains(body, "对白音频跨镜头") || strings.Contains(body, "嘴唇") || strings.Contains(body, "闭口") {
+		t.Fatalf("explanatory prose leaked into dialogue timeline: %s", body)
 	}
 }
 
