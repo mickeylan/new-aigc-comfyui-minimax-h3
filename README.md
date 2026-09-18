@@ -10,9 +10,9 @@
 [![Go](https://img.shields.io/badge/Go-1.25-blue)](backend/go.mod)
 [![Vue](https://img.shields.io/badge/Vue-3-green)](frontend/package.json)
 
-ComfyStudio 是一个基于 **Go + Vue3** 的 ComfyUI 多卡管理平台：管理 **8×NVIDIA L40** 算力节点，内置 **MiniMax H3** 工作流（文生视频 / 图生视频 / 首尾帧 / 参考视频），自动把任务调度到最空闲的 GPU，前端实时展示**节点级生成进度**与显卡占用，生成结果在线预览并解析视频元数据。
+ComfyStudio 是一个基于 **Go + Vue3** 的 ComfyUI 多卡生成平台与 AI 漫剧制作工作台。平台支持可配置数量的本地或远程 GPU（参考部署为 **8×NVIDIA L40**），内置 MiniMax H3 与 Krea2 工作流，自动把任务调度到最空闲的实例，并实时展示节点进度、显卡占用和生成结果。
 
-平台还内置 **AI 漫剧工作台**：一条流水线完成「剧本 → 分镜画面 → 场景视频 → 合并成片」的漫剧制作，支持**角色资产库**（跨场景人物一致）、**道具/场景资产库**（跨分镜道具与环境一致）、**角色音色绑定**（预设音色或参考语音复刻，全剧配音一致）、**对白配音（TTS）与 SRT 字幕**。
+漫剧工作台支持两条创作路径：**故事梗概创作**，以及 **长篇小说导入与改编**。完整流程覆盖「文本分析 → 创作方案 / Story Bible → 角色与视觉资产审核 → 分镜与导演镜头 → 分镜图 → H3 视频 → 连续性选帧 → 配音字幕 → 剪辑合并」，强调人工审核、参考图绑定、提示词可编辑和跨镜头一致性，而不是直接黑盒生成。
 
 ---
 
@@ -54,18 +54,20 @@ ComfyStudio 是一个基于 **Go + Vue3** 的 ComfyUI 多卡管理平台：管�
 
 | 能力 | 说明 |
 |---|---|
-| 多卡调度 | 8×L40，任务自动分配到**队列最短 + 显存最闲**的 GPU |
+| 多卡调度 | GPU 数量可配置；参考部署为 8×L40，任务自动分配到**队列最短 + 显存最闲**的实例 |
 | 实时进度 | WS 推送 ComfyUI 0.30+ 节点级进度（`progress_state`），生成中封顶 99% |
-| MiniMax H3 | 4 个工作流模板：文生视频 / 图生视频 / 首尾帧 / 参考视频 |
+| MiniMax H3 | T2VA / I2VA / FL2VA / Ref2VA 分离编译，支持多参考、首尾帧和完整提示词人工审核 |
 | 任务恢复 | 平台/实例重启后自动 reconcile 卡死任务，history 丢失时按任务 ID 兜底恢复结果 |
 | 远程算力 | SSH/SFTP 管理远程 ComfyUI 节点（实例启停、素材上传、结果读取） |
 | 视频元数据 | 纯手写解析 MP4/图片（分辨率/时长/大小/编码），不依赖 ffprobe |
-| 漫剧工作台 | 剧本（火山文生文）→ 分镜（火山文生图）→ 视频（本地 L40）→ 合并成片 |
-| 角色资产库 | 角色卡（trait/style/标准像）自动抽取，ref2v 锁角色保证跨场景一致 |
+| 漫剧工作台 | 梗概或长篇小说 → 分析/方案 → 资产审核 → 分镜图 → H3 视频 → 连续性 → 剪辑成片 |
+| 角色与造型资产 | 结构化角色档案、审核、标准像、四视图、独立 CharacterLook 与可组合 CharacterOutfit |
 | 道具/场景资产 | 关键道具与主要场景自动建卡 + 参考图（生成或上传），分镜画面按 location/props 注入参考图锁定外观 |
 | 角色音色绑定 | 角色级预设音色，或上传 10~20 秒参考语音复刻音色（qwen-voice-enrollment），全剧配音一致 |
-| TTS 配音 | 火山 Ark `/audio/speech` 合成对白，直出 SRT 字幕（UTF-8 BOM） |
-| 模拟模式 | `simulate: true` 时按模板参考耗时模拟进度，无需 GPU 即可体验全流程 |
+| TTS 配音 | 阿里云 Qwen TTS / 音色复刻，支持对白编辑、重配音与 SRT 字幕 |
+| 视频连续性 | 从上一镜末尾提取 22 帧候选，人工选帧或替换，并支持独立、续接和首尾桥接模式 |
+| Skill 与提示词 | 版本化系统/自定义 Skill、项目级启停、提示词预览、历史、回滚与审计 |
+| 模拟模式 | `simulate: true` 时按模板参考耗时模拟进度，无需 GPU 即可体验基础任务流程 |
 
 ---
 
@@ -82,19 +84,19 @@ graph TB
         S[(SQLite<br/>console.db)]
     end
 
-    subgraph GPUNODE[算力宿主机 · 8×L40]
+    subgraph GPUNODE[算力宿主机 · 多 GPU / 参考 8×L40]
         F[ComfyUI ×8<br/>GPU 0~7 · 端口 8188~8195]
         M[ffmpeg 合并<br/>成片 concat + 音轨]
     end
 
-    V[火山引擎 Ark<br/>文生文 · 文生图 · TTS]
+    V[AI 服务<br/>Ark / llama.cpp / MiniMax Coding Plan<br/>图像服务 · 阿里云 TTS]
 
     B -- "HTTP / WS 实时进度" --> C
     C -- "GORM SQL 读写" --> S
     C -- "SSH/SFTP 管理 + HTTP/WS 提交" --> F
     F -- "节点级进度 WS 回传" --> C
     C -- "SSH 触发视频合并" --> M
-    C -- "HTTPS 文生文/图/TTS" --> V
+    C -- "HTTPS / 本地 API：文本、图像、TTS" --> V
 ```
 
 ### 组件说明
@@ -103,10 +105,10 @@ graph TB
 |---|---|---|
 | 浏览器前端 | Vue3 + Vite | Dashboard / 任务创建 / 任务详情 / 实例管理 / GPU 看板 / 漫剧工作台 / 平台设置，WS 实时刷新 |
 | console 后端 | Go + Gin | 任务调度、模板渲染、ComfyUI 通信、GPU 监控、实例管理、漫剧流水线、平台设置（单二进制，前端 embed） |
-| SQLite | GORM | 任务 / 模板 / 实例 / 项目 / 场景 / 角色 / 设置 持久化 |
-| ComfyUI ×8 | 宿主机裸进程 | MiniMax H3 推理（t2v / i2v / 首尾帧 / ref2v），每卡一实例，端口 8188~8195 |
+| SQLite | GORM | 任务、模板、项目、章节、Story Bible、场景/镜头、角色/造型、Skill、连续性与设置持久化 |
+| ComfyUI 多实例 | 本地 / SSH / Docker | MiniMax H3 视频、Krea2 人物/资产/分镜图生成；参考部署每卡一实例 |
 | ffmpeg | 远程命令 | 按场景顺序 concat 拼接成片并保留音轨（libx264/AAC） |
-| 火山引擎 Ark | 云 API | 文生文（剧本生成 / 分镜提示词）、文生图（Seedream 5.0）、TTS 对白配音 |
+| AI 服务 | 云 API / 本地模型 | 文本模型支持 Ark、llama.cpp、MiniMax Coding Plan；图像模型可配置；配音使用阿里云 Qwen TTS |
 
 ### 任务执行数据流
 
@@ -129,7 +131,7 @@ sequenceDiagram
     F-->>C: execution_success → GET /history 提取结果
     C->>S: 更新任务状态与结果
 
-    Note over C,V: 漫剧流水线（可选）：<br/>C->>V 文生文剧本 → 文生图分镜 → 本地视频 → ffmpeg 合并
+    Note over C,V: 漫剧流水线（可选）：<br/>文本分析 → 资产审核 → Krea2/H3 分镜 → H3 视频 → 连续性 → ffmpeg 合并
 ```
 
 ---
@@ -151,21 +153,24 @@ sequenceDiagram
 
 ### AI 漫剧工作台
 
-- [x] **一键流水线**：创建项目 → 生成创作方案（自动抽取角色卡）→ 剧本 → 分镜画面 → 场景视频 → 合并成片，服务重启可恢复
-- [x] **项目状态机**：draft → script_done → producing → ready → finished
-- [x] **场景状态机**：待画面 → 画面生成中 → 画面就绪 → 视频排队/生成中 → 视频就绪
-- [x] **角色资产库**：角色卡（trait/style/标准像），重复抽取幂等、不覆盖手动编辑；文生图注入权威设定纠偏描述漂移
-- [x] **角色标准像**：基于 trait 文生图生成，角色面板支持编辑/重新生成/出场统计
-- [x] **道具/场景资产库**：创作方案自动抽取关键道具与主要场景建卡（分镜引用未建卡的也会自动补建），参考图支持文生图（道具特写/场景空镜）或上传替换；分镜画面按 `location`/`props` 匹配注入参考图与文字设定，保证同一道具/场景全剧外观一致
-- [x] **流水线一致性门控**：分镜画面前置等待引用的道具/场景参考图就绪，视频阶段等待全部资产参考图就绪
-- [x] **角色音色绑定**：角色卡可选预设音色（优先于平台角色映射），或上传 10~20 秒参考语音经 qwen-voice-enrollment 注册复刻音色（合成走 qwen3-tts-vc，单条对白音色可覆盖），保证全剧角色声音一致
-- [x] **画幅选择**：横屏 16:9 / 竖屏 9:16 / 方形 1:1，画面按画幅比例文生图、视频按画幅分辨率
-- [x] **ref2v 锁角色**：有标准像时切 ref2v（`ref_images=[首帧+角色标准像]`），无角色自动回退 i2v
-- [x] **视频失败重试**：场景视频任务失败自动重试（最多 2 次）
-- [x] **视频合并**：按场景顺序 concat 拼接并保留一致音轨（libx264/AAC）
-- [x] **对白配音**：剧本自动拆分场景对白（Dialogue 模型），火山 Ark 合成 mp3，在线试听
-- [x] **SRT 字幕**：按场景时长均分时间轴，按集下载（UTF-8 BOM 兼容 Windows 播放器）
-- [x] **文生图并发控制**：一键生成画面限流 3 并发，避免火山 API 限流
+- [x] **双入口创作**：支持故事梗概生成，也支持 TXT/Markdown 长篇小说导入、章节识别、拆分、合并与重排
+- [x] **长篇改编流水线**：章节分析 → 5~10 章故事弧 → 别名审核 → Story Bible 人工批准 → 改编策略 → 分集剧本 → 连续性审查；任务可恢复
+- [x] **单集预算**：默认约 180 秒、25 个镜头，分集目标可编辑；单镜时长 3~15 秒，剪辑台显示累计进度
+- [x] **角色档案审核**：故事生成后由 LLM 自动抽取完整角色草稿，支持编辑、批准、驳回和重新生成；变更会使下游资产失效
+- [x] **标准像与四视图**：Krea2 生成角色大头标准像和四视图；标准像提示词保持简洁，不混入多套服装、负面词或冗长设定
+- [x] **独立造型与套装**：CharacterLook 管理服装、鞋履、发型/发饰、首饰、包等单件资产；CharacterOutfit 将已审核资产组合为套装，可按场景选择、按镜头覆盖
+- [x] **道具与场景资产**：武器、法宝和剧情物品继续作为 `prop`；主要地点作为 `location`，均可生成/上传参考图并跨镜头复用
+- [x] **人物用途分类**：区分画面可见、仅发声、仅提及；只有明确可见人物缺少参考图时才阻塞分镜生成
+- [x] **导演镜头层**：Scene 下可编辑 Shot 的幕结构、景别、机位、运镜、时长、动作、情绪、对白和五段导演提示词
+- [x] **H3 分镜图**：SelfLift 按最终上传顺序绑定 `<Picture N>` / `<Subject N>`，只描述单一静态起始画面
+- [x] **H3 视频协议**：T2VA/I2VA/FL2VA 使用关键帧三字段协议，Ref2VA 使用六段协议；对白、旁白、内心独白保留原文
+- [x] **视频提示词审核**：GPU 提交前可 AI 重新生成、直接编辑、保存并预览完整提示词；剧情、人物或参考图变化后标记旧提示词失效
+- [x] **视频连续性**：从上一镜末尾提取 22 帧供人工选择/替换，支持独立生成、上一镜续接、上一镜尾帧到当前分镜图的首尾桥接
+- [x] **参考图治理**：人物、造型、场景、道具有序绑定；最多 9 张，超限时显示候选数、提交数和取舍优先级
+- [x] **受限 Skill 框架**：系统/自定义 Skill 版本管理、项目级启停、提示词装配和审计；Skill 不具备网络、Shell、文件或数据库执行权限
+- [x] **可配置文本模型**：支持火山 Ark、本地 llama.cpp 与 MiniMax Coding Plan，生成路径通过统一 TextProvider 解析
+- [x] **角色音色与字幕**：阿里云 Qwen 音色复刻/合成，支持对白编辑与重新配音，并生成 UTF-8 BOM SRT
+- [x] **剪辑与合并**：剪辑台预览分镜图和场景视频、调整时长与顺序，最终由 ffmpeg 合并并保留音轨
 
 ---
 
@@ -176,8 +181,8 @@ sequenceDiagram
 | 后端 | Go 1.25 + Gin + GORM(SQLite) + gorilla/websocket + pkg/sftp |
 | 前端 | Vue3 + Vite + Pinia + Vue Router（苹果风格设计系统，无 UI 库，黑白主题切换） |
 | 数据库 | SQLite（`/opt/comfyui-console/data/console.db`） |
-| 推理 | ComfyUI（MiniMax H3，8×NVIDIA L40 裸进程） |
-| 云服务 | 火山引擎 Ark（文生文 / 文生图 Seedream 5.0 / TTS） |
+| 推理 | ComfyUI（MiniMax H3 + Krea2，多实例；参考部署 8×NVIDIA L40） |
+| AI 服务 | 文本：Ark / llama.cpp / MiniMax Coding Plan；图像：可配置云模型 + 本地 Krea2；语音：阿里云 Qwen TTS |
 | 部署 | 单二进制（前端 embed），Docker / 裸进程两种方式 |
 
 ---
@@ -188,7 +193,7 @@ sequenceDiagram
 
 | 形态 | 说明 | 适用 |
 |---|---|---|
-| **console 容器 + ComfyUI 裸进程**（默认） | console 跑 Docker 容器（前端 embed + Go 单二进制 + SQLite），8 个 ComfyUI 实例为**宿主机裸进程**（`start-multi-gpu.sh` 管理），console 经 **SSH** 启停实例、经 **SFTP** 读写素材/结果 | 生产（推荐，本仓库默认架构） |
+| **console 容器 + ComfyUI 裸进程**（默认） | console 跑 Docker 容器（前端 embed + Go 单二进制 + SQLite），多个 ComfyUI 实例为**宿主机裸进程**（`start-multi-gpu.sh` 管理），console 经 **SSH** 启停实例、经 **SFTP** 读写素材/结果 | 生产（推荐；8×L40 为已验证参考配置） |
 | **全容器（compose 管理 ComfyUI）** | `comfy.mode: docker`，console 经 SSH 在宿主执行 `docker compose` 管理 `comfyui-gpu{N}` 容器（CDI 绑卡，共享挂载 models） | 容器化隔离需求 |
 | **本地模式** | `comfy.mode: local`，ComfyUI 与本机 console 同机裸进程，`remote.host` 留空 | 单机开发测试 |
 
@@ -212,7 +217,7 @@ sequenceDiagram
 | **MiniMax H3 模型权重** | DiT 模型 ×2 + Qwen3-VL 文本编码器 + 视频/音频 VAE（共 5 个文件） | 宿主机 `/opt/comfyUI/models/` 下对应子目录（见「H3 模型部署」） | 手动下载放置 |
 | **start-multi-gpu.sh** | 宿主机多卡实例启停脚本（start/stop/restart/status） | 宿主机 `/opt/comfyUI/start-multi-gpu.sh` | 仓库 `shell/start-multi-gpu.sh`（部署前按实际路径/卡数修改） |
 | **SSH 凭证** | console → 宿主机 免密管理（私钥优先于密码） | `config.yaml` 的 `remote` 段 + `/opt/comfyui-console/ssh_key` | 自行生成/配置 |
-| **火山引擎 Ark API Key** | 文生文（剧本）/ 文生图（分镜）/ TTS（配音） | 平台设置页（存 SQLite，打码回显） | 火山引擎控制台申请 |
+| **AI 服务凭证** | 文本、图像、阿里云 TTS 与音色复刻 | 平台设置页（存 SQLite，敏感值打码回显） | 对应服务控制台申请 |
 | **NVIDIA 驱动 + nvidia-container-toolkit** | GPU 监控（nvidia-smi）+ 容器 GPU 访问（CDI） | 宿主机 | 官方驱动 + `nvidia-ctk cdi generate` |
 | **Docker + compose v2** | console 容器运行 | 宿主机 | 官方安装脚本 |
 
@@ -445,13 +450,18 @@ ssh root@<server> "cd /opt/comfyui-console && bash -c 'nohup ./console-linux-amd
 │   │   ├── api/router.go          # 路由
 │   │   ├── config/                # 配置加载
 │   │   ├── database/              # SQLite 初始化 + 自动迁移
-│   │   ├── models/                # 数据模型 (Task/Template/Instance/UploadFile/Event)
+│   │   ├── models/                # 任务、项目、小说、角色/造型、镜头、Skill、连续性等模型
 │   │   ├── service/
 │   │   │   ├── handlers.go        # API Handlers（ClearTasks / Output / MediaInfo / WS）
 │   │   │   ├── task_service.go    # 任务创建/调度/渲染/WS进度/simulate
-│   │   │   ├── project_service.go # 漫剧项目：剧本/分镜/视频/合并 + 状态轮询
+│   │   │   ├── project_service.go # 漫剧项目：剧本/分镜/H3视频/合并 + 状态轮询
+│   │   │   ├── novel_*            # 小说导入、章节分析、Story Bible 与改编服务
+│   │   │   ├── character_*        # 角色档案、造型与套装审核/生成
+│   │   │   ├── continuity_*       # 视频尾帧候选、选帧、桥接与失效传播
+│   │   │   ├── skill_service.go   # 受限 Skill 版本、项目配置与审计
+│   │   │   ├── text_provider.go   # Ark / llama.cpp / MiniMax Coding Plan 统一文本接口
 │   │   │   ├── project_handlers.go# 漫剧项目与平台设置 Handlers
-│   │   │   ├── volc_engine.go     # 火山引擎 Ark 客户端（文生文/文生图/音频/设置）
+│   │   │   ├── volc_engine.go     # 火山引擎 Ark 客户端
 │   │   │   ├── comfy_client.go    # ComfyUI HTTP 客户端 (prompt/queue/history)
 │   │   │   ├── ws_client.go       # ComfyUI WS 监听 + 前端推送 Hub
 │   │   │   ├── instance_manager.go# 实例启停（SSH 调 start-multi-gpu.sh）
@@ -459,13 +469,13 @@ ssh root@<server> "cd /opt/comfyui-console && bash -c 'nohup ./console-linux-amd
 │   │   │   ├── remote.go          # SSH/SFTP 远程执行
 │   │   │   ├── media_probe.go     # MP4/图片 元数据解析
 │   │   │   ├── template_seed.go   # 系统模板种子化 + 素材上传管理
-│   │   │   └── templates/         # 4 个工作流模板 JSON (embed)
+│   │   │   └── templates/         # 通用 H3 + 漫剧专用 H3/Krea2 工作流 JSON（embed，可运行时覆盖）
 │   │   └── static/dist            # 前端构建产物 (embed)
 │   └── deploy.sh                  # 传统二进制部署脚本
 ├── comfyui/                       # ComfyUI fork 代码（含 MiniMax H3 模型实现）
 ├── frontend/                      # Vue3 前端
 │   └── src/
-│       ├── views/                 # Dashboard/Tasks/Instances/Projects/Settings 等
+│       ├── views/                 # 项目/小说/Story Bible/改编/剪辑/造型/Skill/素材/任务等
 │       ├── styles/main.css        # 苹果风格设计系统（黑白主题）
 │       ├── api/index.js           # API + WS 客户端
 │       └── stores/app.js
@@ -488,7 +498,7 @@ ssh root@<server> "cd /opt/comfyui-console && bash -c 'nohup ./console-linux-amd
 | POST | `/api/instances/:id/start · stop · restart` | 实例启停（id=GPU序号，SSH 调 start-multi-gpu.sh） |
 | POST | `/api/instances/start-all · stop-all · restart-all` | 一键启停 / 重启全部（异步） |
 | GET | `/api/gpus` | GPU 实时状态 |
-| GET | `/api/templates` | 工作流模板（4 个） |
+| GET | `/api/templates` | 通用 H3 与漫剧专用 H3/Krea2 工作流模板 |
 | GET | `/api/tasks · /api/tasks/:id` | 任务列表（分页/筛选）/ 详情 |
 | POST | `/api/tasks` | 创建任务（提交后自动调度执行） |
 | DELETE | `/api/tasks` | 清空已结束任务（存在活动任务时拒绝） |
@@ -499,13 +509,14 @@ ssh root@<server> "cd /opt/comfyui-console && bash -c 'nohup ./console-linux-amd
 | GET | `/api/input/:taskid/*path` | ComfyUI input 目录文件（分镜画面预览） |
 | WS | `/api/ws` | 实时推送（实例/GPU快照、任务进度） |
 
-### 平台设置（火山引擎 Ark）
+### 平台设置与模型提供方
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/settings` | 读取设置（API Key 打码） |
 | PUT | `/api/settings` | 保存设置（API Key/接口地址/模型/画面尺寸） |
-| POST | `/api/settings/test-text · test-image` | 测试文生文 / 文生图连通性 |
+| POST | `/api/settings/test-text · test-image` | 测试当前文本 / 图像提供方连通性 |
+| POST | `/api/templates/reload` | 重载运行时工作流模板，无需重新编译内置资源 |
 
 ### 漫剧项目
 
@@ -513,11 +524,11 @@ ssh root@<server> "cd /opt/comfyui-console && bash -c 'nohup ./console-linux-amd
 |---|---|---|
 | GET/POST | `/api/projects` | 项目列表 / 新建项目 |
 | GET/PUT/DELETE | `/api/projects/:id` | 详情（含场景与合并列表）/ 编辑 / 删除 |
-| POST | `/api/projects/:id/generate` | 一键持久化流水线（剧本→画面→视频→合并） |
+| POST | `/api/projects/:id/generate` | 一键持久化流水线（方案/剧本→资产→画面→视频→合并） |
 | POST | `/api/projects/:id/script` | 生成剧本（文生文，自动拆分场景） |
 | POST | `/api/projects/:id/images` | 一键生成全部画面（文生图，限流 3 并发） |
-| POST | `/api/projects/:id/videos` | 一键生成全部视频（本地 L40 i2v） |
-| PATCH | `/api/projects/:id/scenes/:sid` | 编辑场景（改画面提示词自动重置下游产物） |
+| POST | `/api/projects/:id/videos` | 按场景配置批量生成 H3 视频（Ref2VA / I2VA / FL2VA 等） |
+| PUT | `/api/projects/:id/scenes/:sid` | 编辑场景、人物用途、画面/视频动作提示词；源数据变化使完整视频提示词失效 |
 | POST | `/api/projects/:id/scenes/:sid/image` | 生成单场景画面 |
 | POST | `/api/projects/:id/scenes/:sid/video` | 生成单场景视频 |
 | POST | `/api/projects/:id/merge` | 合并选中场景为成片（ffmpeg） |
@@ -549,12 +560,27 @@ ssh root@<server> "cd /opt/comfyui-console && bash -c 'nohup ./console-linux-amd
 | POST | `/api/projects/:id/assets/:kind/:aid/image/upload` | 上传图片作为资产参考图（multipart `file`） |
 | POST | `/api/projects/:id/assets/:kind/images` | 一键生成该类别全部缺图资产 |
 
+### 新增业务域
+
+| 业务域 | 路径前缀 / 代表接口 | 说明 |
+|---|---|---|
+| 小说改编 | `/api/projects/:id/novel/*`、`story-bible`、`adaptation/*` | 导入章节、分析、故事弧、Story Bible 审核、分集改编与连续性审查 |
+| 角色档案 | `/api/projects/:id/characters/:cid/profile/*` | 档案生成、编辑、批准、驳回、重置和标准像提示词 |
+| 造型与套装 | `/api/projects/:id/characters/:cid/looks`、`outfits` | 独立造型、组合套装、审核、图片/四视图与场景/镜头分配 |
+| 导演镜头 | `/api/projects/:id/scenes/:sid/shots` | Shot CRUD、导演提示词扩写和场景聚合 |
+| 场景参考图 | `/api/projects/:id/scenes/:sid/references` | 有序参考图选择、用途开关和最终 Picture 编号绑定 |
+| H3 提示词 | `/api/projects/:id/scenes/:sid/video/prompt` | 获取、AI 重生成、保存并校验最终提交提示词 |
+| 视频连续性 | `/api/projects/:id/scenes/:sid/continuity/*` | 抽取尾帧候选、人工确认/替换及续接/桥接配置 |
+| Skill | `/api/skills/*`、`/api/projects/:id/skills/*` | 版本、项目启停、预览与审计 |
+| 提示词工坊 | `/api/prompts/*` | 构建、优化、翻译、历史与回滚 |
+| 素材与剪辑 | `/api/materials`、`/api/projects/:id/editor` | 素材管理、时间线预览、顺序/时长编辑 |
+
 ### 对白配音与字幕
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/projects/:id/scenes/:sid/dialogues` | 场景对白列表 |
-| POST | `/api/projects/:id/scenes/:sid/dub` | 合成场景对白配音（TTS） |
+| GET/PUT | `/api/projects/:id/scenes/:sid/dialogues` | 场景对白、旁白和内心独白列表 / 编辑 |
+| POST | `/api/projects/:id/scenes/:sid/dub` | 使用阿里云 Qwen TTS 合成或重新合成场景语音 |
 | POST | `/api/projects/:id/dub` | 一键合成项目全部对白配音 |
 | GET | `/api/projects/:id/srt?episode_n=N` | 下载该集 SRT 字幕 |
 
@@ -562,33 +588,32 @@ ssh root@<server> "cd /opt/comfyui-console && bash -c 'nohup ./console-linux-amd
 
 ## 测试验证
 
-**单元测试**（`backend/internal/service/task_service_test.go`，不依赖 GPU/DB）：
-
-- 4 个模板 `RenderWorkflow` 渲染后无残留占位符 ✅
-- 复数素材展开为索引占位符（`ref_image_0`/`ref_image_1`）✅
-- 必填素材缺失校验 ✅
-- 实例调度排序（队列短优先 → 显存大优先）✅
+提交前建议运行完整检查：
 
 ```bash
-cd backend && go test ./internal/service/
+go -C backend test ./...
+go -C backend build ./...
+npm --prefix frontend test
+npm --prefix frontend run build
+git diff --check
 ```
 
-**端到端验证**（真实 8×L40 + ComfyUI）：
+当前自动测试覆盖工作流渲染、素材展开与必填校验、多卡调度、角色/造型资产、小说分析与改编、H3 各任务协议、参考图编号、对白/旁白/独白、连续性选帧与桥接、提示词失效和媒体结果识别。
 
-- 4 个模板任务全部创建成功，工作流渲染后成功提交至 ComfyUI，并 success 生成 MP4 ✅
-- 自动调度到不同 GPU 并行执行，节点级进度正常推进 ✅
-- 生成 MP4（1280×704 / h264 / ~5.2s），`/api/media` 返回正确元数据 ✅
-- 一键 `start-all` / `stop-all` / `restart-all`：8 实例启停正常 ✅
+历史上已在真实 8×L40 环境验证通用 H3 模板提交、并行调度、节点级进度、MP4 元数据与多实例启停。Krea2、SelfLift、多参考 Ref2VA 和连续性模式依赖实际模型、自定义节点及运行时模板；迁移到新机器后仍应分别执行真实生成验收，不能仅以单元测试代替。
 
 ---
 
 ## 已知问题
 
-- ComfyUI 0.30+ 的 WS 事件为 `progress_state`/`execution_success` 格式（非旧版 `progress`/`executing.prompt`）。
+- ComfyUI 完成事件兼容 `execution_success` 与 `executing(node=null)`；平台按任务 `prompt_id` 查询 history，避免等待整个队列清空。
 - `SaveVideo.codec` 为 DynamicCombo 类型，API 提交须用字符串 `"auto"`（不可用对象格式）。
-- 素材上传后存于 ComfyUI 共享 `input/<task_id>/` 目录（8 实例共用 input）。
+- 素材上传后存于 ComfyUI 共享 `input/<task_id>/`；跨机器预览优先使用下载到项目 input 目录的副本。
 - 平台/实例重启后，`running`/`queued` 任务由后台恢复循环自动 reconcile；`pending` 任务需手动重试。
-- 模拟模式跳过渲染与 ComfyUI 提交，仅验证前端进度/状态机全流程。
+- 运行时模板目录会覆盖内置模板；修改 JSON 后需重启后端或调用 `POST /api/templates/reload`。
+- H3 最多提交 9 张参考图；超限时按人物、造型、场景、道具优先级取舍，并在提示词编辑窗口显示警告。
+- 已保存的完整视频提示词在剧情、人物分类、对白或参考图变化后会标记失效，必须重新生成或人工确认保存。
+- 模拟模式跳过真实 ComfyUI 推理，只验证任务调度、前端进度和状态机。
 
 ---
 
