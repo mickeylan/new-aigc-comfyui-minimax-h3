@@ -1292,7 +1292,7 @@ func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLine
 		if isNarrationSpeaker(speakerName) {
 			body += " " + speaker + "以画外旁白说出：<d>[Chinese] " + text + "</d>，同时画面中人物嘴唇始终闭合。"
 		} else {
-			body += " " + speaker + "清晰说出：<d>[Chinese] " + text + "</d>。说完后闭口。"
+			body += " " + speaker + "清晰说出：<d>[Chinese] " + text + "</d>。"
 		}
 		if crossShot {
 			body += " <scenetrans>该说话者的同一句对白音频跨镜头切换无缝延续，后续镜头继续使用相同的说话者ID。"
@@ -1431,6 +1431,20 @@ func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 		}
 	}
 	return true
+}
+
+func resolveRef2VSubmissionPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue, referenceLines []string) string {
+	saved := strings.TrimSpace(sc.VideoFullPrompt)
+	if saved != "" && len(ValidateFullH3PromptForReferences(saved, referenceLines)) == 0 {
+		return saved
+	}
+	actionPrompt := canonicalVideoAction(saved, referenceLines)
+	if actionPrompt == "" {
+		actionPrompt = canonicalVideoAction(sc.VideoPrompt, referenceLines)
+	}
+	preview := *sc
+	preview.VideoPrompt = actionPrompt
+	return buildMiniMaxH3RefPrompt(&preview, p, dubs, referenceLines)
 }
 
 func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue, referenceLines []string) string {
@@ -3020,21 +3034,9 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		if len(refFiles) > 0 {
 			var dubs []models.Dialogue
 			s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
-			// 用户保存的完整提示词是权威值；提交时原样使用。只有空值或
-			// 参考图编号失效时，才根据当前Scene/Shot/Dialogue重新构建。
-			promptText = strings.TrimSpace(sc.VideoFullPrompt)
-			if promptText == "" || len(ValidateFullH3PromptForReferences(promptText, refLines)) > 0 {
-				actionPrompt := canonicalVideoAction(promptText, refLines)
-				if actionPrompt == "" {
-					actionPrompt = canonicalVideoAction(sc.VideoPrompt, refLines)
-				}
-				preview := *sc
-				preview.VideoPrompt = actionPrompt
-				promptText = buildMiniMaxH3RefPrompt(&preview, p, dubs, refLines)
-			} else {
-				// 只规范结构化对白和音频段，绝不覆盖用户编辑的视觉动作与镜头正文。
-				promptText = normalizeSavedH3Audio(promptText, dubs, refLines)
-			}
+			// 已保存且引用编号合法时，video_full_prompt 是唯一权威值，正式提交时逐字使用；
+			// 只有空值或引用编号失效时才重建，禁止在生成阶段再次规范化或回退到旧动作正文。
+			promptText = resolveRef2VSubmissionPrompt(sc, p, dubs, refLines)
 			if videoFiles == nil {
 				videoFiles = map[string][]FileMeta{}
 			}

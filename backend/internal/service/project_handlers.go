@@ -351,11 +351,17 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 	if strings.TrimSpace(req.LastFrameImg) != "" {
 		updates["video_last_frame_img"] = strings.TrimSpace(req.LastFrameImg)
 	}
-	if err := s.DB.Model(sc).Updates(updates).Error; err != nil {
+	result := s.DB.Model(&models.Scene{}).Where("id = ? AND project_id = ?", sc.ID, sc.ProjectID).Updates(updates)
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
+		return
+	}
+	var saved models.Scene
+	if err := s.DB.Select("video_full_prompt", "video_template", "video_first_frame_img", "video_last_frame_img").First(&saved, sc.ID).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "video_full_prompt": prompt})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "video_full_prompt": saved.VideoFullPrompt, "video_template": saved.VideoTemplate, "first_frame_img": saved.VideoFirstFrameImg, "last_frame_img": saved.VideoLastFrameImg})
 }
 
 func (s *Service) HandleUpdateScene(c *gin.Context) {

@@ -1482,6 +1482,20 @@ func TestValidateVideoPromptProtectsSystemContract(t *testing.T) {
 	}
 }
 
+func TestResolveRef2VSubmissionPromptUsesLatestSavedTextVerbatim(t *testing.T) {
+	lines := []string{"- <Picture 1>：角色「林夏」四视图", "- <Picture 2>：场景「庭院」参考图"}
+	scene := &models.Scene{VideoPrompt: "[Shot 1] 旧动作。", Duration: 8}
+	latest := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] 最新人工修改的动作，右手抬起并停在胸前。", Duration: 8}, nil, nil, lines)
+	scene.VideoFullPrompt = latest
+	got := resolveRef2VSubmissionPrompt(scene, nil, nil, lines)
+	if got != latest {
+		t.Fatalf("saved prompt changed before submission:\nwant:\n%s\n\ngot:\n%s", latest, got)
+	}
+	if strings.Contains(got, "旧动作") {
+		t.Fatalf("stale action leaked into submission: %s", got)
+	}
+}
+
 func TestH3KeyframePromptContractsAndDialoguePlacement(t *testing.T) {
 	sc := &models.Scene{VideoPrompt: "[Shot 1] 林夏抬头看向门口。", Duration: 8}
 	dubs := []models.Dialogue{{Character: "林夏", Text: "你来了。"}}
