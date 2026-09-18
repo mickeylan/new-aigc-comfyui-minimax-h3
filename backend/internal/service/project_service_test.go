@@ -1360,10 +1360,26 @@ func TestEmptySpeakerPlotTextIsNeverConvertedToNarration(t *testing.T) {
 	}
 }
 
-func TestExplicitNarrationRemainsAllowed(t *testing.T) {
-	got := validSceneDialogues([]models.Dialogue{{Character: "旁白", Text: "夜色笼罩山城。"}, {Character: "独白", Text: "我必须找到他。"}})
-	if len(got) != 2 || got[0].Character != "旁白" || got[1].Character != "独白" {
+func TestExplicitNarrationAndMonologueRemainAllowed(t *testing.T) {
+	got := validSceneDialogues([]models.Dialogue{
+		{Character: "旁白", SpeechType: "narration", Text: "夜色笼罩山城。"},
+		{Character: "雷晓飞", SpeechType: "monologue", Text: "我必须找到他。"},
+	})
+	if len(got) != 2 || got[0].SpeechType != "narration" || got[1].SpeechType != "monologue" {
 		t.Fatalf("explicit narration/monologue was removed: %+v", got)
+	}
+	prompt := appendStructuredDialogue("[Shot 1] 雷晓飞站在门前。", got, []string{"- <Picture 1>：角色「雷晓飞」四视图"})
+	for _, want := range []string{"旁白 (S1)画外音：<d>[Chinese] 夜色笼罩山城。</d>", "<Subject 1> (S2)内心独白：<d>[Chinese] 我必须找到他。</d>"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("explicit speech missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestUnmarkedPlotTextIsNotGuessedAsNarration(t *testing.T) {
+	got := validSceneDialogues([]models.Dialogue{{Character: "", Text: "夜色笼罩山城。"}})
+	if len(got) != 0 {
+		t.Fatalf("unmarked plot text became narration: %+v", got)
 	}
 }
 

@@ -539,8 +539,9 @@ func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imageProm
 // ---------- 剧本生成（文生文） ----------
 
 type scriptDialogue struct {
-	Character string `json:"character"`
-	Text      string `json:"text"`
+	Character  string `json:"character"`
+	SpeechType string `json:"speech_type"`
+	Text       string `json:"text"`
 }
 
 type scriptScene struct {
@@ -580,14 +581,14 @@ const scriptSystemPrompt = `你是一位专业的漫剧编剧与分镜师。根�
       "props": ["该场景出现的关键道具名（同一道具须用同一名称；无则为空数组）"],
       "visual_type": "normal 或 megastructure（仅巨型建筑、巨兽、地质奇观、巨型机械、超现实巨构使用后者）",
       "mega_type": "architecture/creature/geological/mechanical/surreal，非巨构留空",
-      "dialogues": [{"character": "角色名", "text": "台词"}, {"character": "", "text": "旁白"}]
+      "dialogues": [{"character": "角色名", "speech_type": "dialogue", "text": "角色说出的原文"}, {"character": "旁白", "speech_type": "narration", "text": "正文明确写出的旁白原文"}, {"character": "角色名", "speech_type": "monologue", "text": "正文明确写出的内心独白原文"}]
     }
   ]
 }
 3. 默认按约 180 秒单集规划 20~30 个镜头；每个镜头为 3~15 秒的独立视频片段，所有镜头 duration 之和应在 162~198 秒内。
 4. 人物一致性至关重要：同一角色在多个场景出现时，image_prompt 必须重复其外貌特征（发型、服装颜色、体型），且所有场景画风描述保持一致。
 5. 每个场景必须在 characters 数组中列出该场出场的角色名（须与角色卡或创作方案中的角色名完全一致；无出场角色则为空数组）。
-6. 每个场景必须在 dialogues 数组中列出该场的对白与旁白（character 为说话人角色名，空字符串表示旁白；用于配音与字幕）。无对白则为空数组。
+6. 逐场检查故事正文和分镜内容中的明确发声标注，并忠实提取到 dialogues：“旁白/画外音：原文”使用 narration，“角色名内心独白：原文”使用 monologue，“角色名：原文”使用 dialogue。只复制标注后的原文，不改写、不概括、不补充。不得把“他心里疑惑”“气氛压抑”等心理、动作或氛围描写转换成独白或旁白。speech_type 只能是 dialogue、narration 或 monologue；dialogue/monologue 的 character 必须是角色名，narration 的 character 固定为“旁白”。正文和分镜内容均未明确出现可发声内容时必须为空数组。
 7. 第一个场景尽量给出大场景/环境交代，后续场景聚焦人物动作与剧情推进。
 8. 道具与场景一致性：贯穿剧情的关键道具（信物/武器等）与主要地点必须在 props/location 中用统一名称标出（系统会用同名资产参考图锁定其外观），同一道具/地点在不同场景中名称必须完全相同。`
 
@@ -778,9 +779,13 @@ func (s *ProjectService) generateScriptCore(p *models.Project, episodeN int, raw
 				if strings.TrimSpace(d.Text) == "" {
 					continue
 				}
+				speechType, character := normalizeScriptSpeech(d.SpeechType, d.Character)
+				if speechType == "" {
+					continue
+				}
 				if err := tx.Create(&models.Dialogue{
 					SceneID: scene.ID, ProjectID: p.ID, Order: j + 1,
-					Character: strings.TrimSpace(d.Character), Text: strings.TrimSpace(d.Text), Status: "pending",
+					Character: character, SpeechType: speechType, Text: strings.TrimSpace(d.Text), Status: "pending",
 				}).Error; err != nil {
 					return err
 				}
@@ -1212,12 +1217,33 @@ func spokenDialogueText(text string) string {
 	return text
 }
 
+func normalizeScriptSpeech(speechType, character string) (string, string) {
+	t := strings.ToLower(strings.TrimSpace(speechType))
+	character = strings.TrimSpace(character)
+	// 兼容旧数据的显式标签，但绝不把空说话人或普通剧情说明猜成旁白。
+	if isNarrationSpeaker(character) {
+		t = "narration"
+	} else if strings.Contains(character, "独白") && (t == "" || t == "dialogue") {
+		t = "monologue"
+	} else if t == "" && character != "" {
+		t = "dialogue"
+	}
+	switch t {
+	case "narration":
+		return t, "旁白"
+	case "monologue", "dialogue":
+		if character != "" {
+			return t, character
+		}
+	}
+	return "", ""
+}
+
 func validSceneDialogues(dubs []models.Dialogue) []models.Dialogue {
 	valid := make([]models.Dialogue, 0, len(dubs))
 	for _, d := range dubs {
-		// 空说话人不等于旁白。只有用户或结构化剧本明确标记了角色、旁白、
-		// 画外音或独白，才允许成为发声事件；否则它只是剧情描述。
-		if strings.TrimSpace(d.Character) == "" {
+		d.SpeechType, d.Character = normalizeScriptSpeech(d.SpeechType, d.Character)
+		if d.SpeechType == "" {
 			continue
 		}
 		d.Text = spokenDialogueText(d.Text)
@@ -1289,9 +1315,12 @@ func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLine
 		crossShot := strings.Contains(text, "<scenetrans>")
 		cutoff := strings.Contains(text, "<cutoff>")
 		text = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(text, "<scenetrans>", ""), "<cutoff>", ""))
-		if isNarrationSpeaker(speakerName) {
+		switch d.SpeechType {
+		case "narration":
 			body += " " + speaker + "画外音：<d>[Chinese] " + text + "</d>。"
-		} else {
+		case "monologue":
+			body += " " + speaker + "内心独白：<d>[Chinese] " + text + "</d>。"
+		default:
 			body += " " + speaker + "说：<d>[Chinese] " + text + "</d>。"
 		}
 		if crossShot {
@@ -4446,7 +4475,7 @@ func (s *ProjectService) EditorSubtitleTimelineRaw(p *models.Project, scenes []m
 }
 
 // UpdateDialogue 编辑对白文本/音色/角色；修改后重置为 pending 以便重新合成
-func (s *ProjectService) UpdateDialogue(p *models.Project, did uint, text, voice, character string) (*models.Dialogue, error) {
+func (s *ProjectService) UpdateDialogue(p *models.Project, did uint, text, voice, character, speechType string) (*models.Dialogue, error) {
 	var d models.Dialogue
 	if err := s.db.Where("id = ? AND project_id = ?", did, p.ID).First(&d).Error; err != nil {
 		return nil, fmt.Errorf("对白不存在")
@@ -4460,6 +4489,18 @@ func (s *ProjectService) UpdateDialogue(p *models.Project, did uint, text, voice
 	}
 	if character != "" {
 		updates["character"] = character
+	}
+	if speechType != "" {
+		speechCharacter := character
+		if strings.TrimSpace(speechCharacter) == "" {
+			speechCharacter = d.Character
+		}
+		normalized, normalizedCharacter := normalizeScriptSpeech(speechType, speechCharacter)
+		if normalized == "" {
+			return nil, fmt.Errorf("发声类型必须是 dialogue、narration 或 monologue")
+		}
+		updates["speech_type"] = normalized
+		updates["character"] = normalizedCharacter
 	}
 	if len(updates) > 0 {
 		updates["status"] = "pending"

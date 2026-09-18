@@ -1397,15 +1397,16 @@ func (s *Service) HandleUpdateDialogue(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Text      string `json:"text"`
-		Voice     string `json:"voice"`
-		Character string `json:"character"`
+		Text       string `json:"text"`
+		Voice      string `json:"voice"`
+		Character  string `json:"character"`
+		SpeechType string `json:"speech_type"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": "参数错误"})
 		return
 	}
-	d, err := s.Projects.UpdateDialogue(p, uint(did), req.Text, req.Voice, req.Character)
+	d, err := s.Projects.UpdateDialogue(p, uint(did), req.Text, req.Voice, req.Character, req.SpeechType)
 	if err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return

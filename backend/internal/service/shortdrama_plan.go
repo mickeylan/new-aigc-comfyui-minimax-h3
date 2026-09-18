@@ -161,7 +161,7 @@ func scriptFromPlanSystemPrompt(targetDuration float64, targetScenes int) string
       "characters": ["出场角色名1", "角色名2"],
       "location": "该场景地点名（须与创作方案 locations 中的名称完全一致；无明确地点则为空字符串）",
       "props": ["该场景出现的关键道具名（与创作方案 props 中的名称完全一致；无则为空数组）"],
-      "dialogues": [{"character": "角色名", "text": "台词"}, {"character": "", "text": "旁白"}]
+      "dialogues": [{"character": "角色名", "speech_type": "dialogue", "text": "角色说出的原文"}, {"character": "旁白", "speech_type": "narration", "text": "正文明确写出的旁白原文"}, {"character": "角色名", "speech_type": "monologue", "text": "正文明确写出的内心独白原文"}]
     }
   ]
 }
@@ -172,7 +172,7 @@ func scriptFromPlanSystemPrompt(targetDuration float64, targetScenes int) string
 - 所有镜头时长之和应尽量接近总时长预算（允许 ±10% 偏差）
 3. 人物一致性至关重要：同一角色在多个场景出现时，image_prompt 必须严格沿用创作方案中该角色的 trait（外貌特征）与 style（服装造型），且所有场景画风描述保持一致。
 4. 每个场景必须在 characters 数组中列出该场出场的角色名（须与创作方案中的角色名完全一致；无出场角色则为空数组）。
-5. 每个场景必须在 dialogues 数组中列出该场的对白与旁白（character 为说话人角色名，空字符串表示旁白；用于配音与字幕）。无对白则为空数组。
+5. 逐场检查故事正文和分镜内容中的明确发声标注，并忠实提取到 dialogues：“旁白/画外音：原文”使用 narration，“角色名内心独白：原文”使用 monologue，“角色名：原文”使用 dialogue。只复制标注后的原文，不改写、不概括、不补充。不得把“他心里疑惑”“气氛压抑”等心理、动作或氛围描写转换成独白或旁白。speech_type 只能是 dialogue、narration 或 monologue；dialogue/monologue 的 character 必须是角色名，narration 的 character 固定为“旁白”。正文和分镜内容均未明确出现可发声内容时必须为空数组。
 6. 第一个场景尽量给出大场景/环境交代，后续场景聚焦人物动作与剧情推进。
 7. 剧情节奏参考创作方案中的节奏曲线：开头要有钩子，中段冲突升级，结尾留悬念。
 8. 道具与场景一致性：每个场景的 location 与 props 名称必须完全取自创作方案的 locations/props 清单（系统会用同名资产参考图锁定画面中该场景环境与道具外观），不得随意改名；只有确属剧情新出现的道具才允许新名称。`
