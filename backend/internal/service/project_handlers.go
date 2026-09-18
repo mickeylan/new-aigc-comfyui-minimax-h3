@@ -245,8 +245,9 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 	}
 	response := gin.H{
 		"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt,
-		"has_saved_prompt": hasSavedPrompt, "prompt_issues": promptIssues,
-		"template": template, "width": width, "height": height, "reference_count": len(refs),
+		"has_saved_prompt": hasSavedPrompt, "prompt_stale": sc.PromptStale, "prompt_issues": promptIssues,
+		"reference_limit_warning": s.Projects.sceneVideoReferenceWarning(sc, len(refs)),
+		"template":                template, "width": width, "height": height, "reference_count": len(refs),
 		"duration": normalizeSceneDuration(sc.Duration), "fps": 24, "steps": 20,
 	}
 	if continuity != nil {
@@ -284,7 +285,14 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 	preview := *sc
 	preview.VideoPrompt = actionPrompt
 	continuity, refs, lines := s.sceneVideoPromptContinuity(sc)
-	template := strings.TrimSpace(sc.VideoTemplate)
+	var req struct {
+		Template string `json:"template"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	template := strings.TrimSpace(req.Template)
+	if template == "" {
+		template = strings.TrimSpace(sc.VideoTemplate)
+	}
 	if continuity != nil && continuity.Status == "ready" && continuity.Mode == models.ContinuityModeBridge {
 		template = "minimax_h3_first_last"
 	}
@@ -340,7 +348,7 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": strings.Join(issues, "；")})
 		return
 	}
-	updates := map[string]any{"video_full_prompt": prompt, "video_prompt": actionPrompt}
+	updates := map[string]any{"video_full_prompt": prompt, "video_prompt": actionPrompt, "prompt_stale": false}
 	if strings.TrimSpace(req.Template) != "" {
 		updates["video_template"] = strings.TrimSpace(req.Template)
 	}
@@ -392,6 +400,7 @@ func (s *Service) HandleUpdateScene(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "分镜时长必须在 3–15 秒之间"})
 		return
 	}
+	sourceChanged := strings.TrimSpace(req.Content) != strings.TrimSpace(sc.Content) || strings.TrimSpace(req.ImagePrompt) != strings.TrimSpace(sc.ImagePrompt) || req.Duration != sc.Duration || strings.TrimSpace(req.VideoPrompt) != strings.TrimSpace(sc.VideoPrompt) || strings.TrimSpace(req.VisibleCharacters) != strings.TrimSpace(sc.VisibleCharacters) || strings.TrimSpace(req.VoiceCharacters) != strings.TrimSpace(sc.VoiceCharacters) || strings.TrimSpace(req.MentionedCharacters) != strings.TrimSpace(sc.MentionedCharacters)
 	if err := s.Projects.UpdateScene(sc, req.Title, req.Content, req.ImagePrompt, req.Duration, req.VisualType, req.MegaType); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -403,6 +412,7 @@ func (s *Service) HandleUpdateScene(c *gin.Context) {
 		"mentioned_characters": strings.TrimSpace(req.MentionedCharacters),
 		"character_roles_set":  true,
 		"characters":           strings.TrimSpace(req.VisibleCharacters),
+		"prompt_stale":         sc.PromptStale || (strings.TrimSpace(sc.VideoFullPrompt) != "" && sourceChanged),
 	}
 	if err := s.DB.Model(sc).Updates(roleUpdates).Error; err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})

@@ -478,9 +478,7 @@
           <textarea v-model="sceneForm.content" class="textarea" rows="3"
             placeholder="描述画面动作、镜头运动、对白…" />
         </div>
-        <div class="field"><label>画面实际出场人物</label><input v-model="sceneForm.visible_characters" class="input" placeholder="逗号分隔；只有这些人物需要四视图" /><div class="field-hint">仅填写本镜最终画面中真实可见的人物。回忆、照片或倒影中确实被画出时也算可见。</div></div>
-        <div class="field"><label>仅发声人物</label><input v-model="sceneForm.voice_characters" class="input" placeholder="画外对白或内心独白发声者，逗号分隔" /></div>
-        <div class="field"><label>仅被提及人物</label><input v-model="sceneForm.mentioned_characters" class="input" placeholder="只在剧情、对白或独白中被提到，逗号分隔" /><div class="field-hint">仅发声和仅被提及人物不会要求四视图，也不会作为画面主体。</div></div>
+        <div class="field"><label>人物用途</label><div v-if="characters.length" class="role-grid"><div v-for="ch in characters" :key="ch.id" class="role-row"><strong>{{ ch.name }}</strong><label><input type="checkbox" :checked="sceneRoleHas('visible', ch.name)" @change="toggleSceneRole('visible', ch.name, $event.target.checked)" /> 画面可见</label><label><input type="checkbox" :checked="sceneRoleHas('voice', ch.name)" @change="toggleSceneRole('voice', ch.name, $event.target.checked)" /> 发声</label><label><input type="checkbox" :checked="sceneRoleHas('mentioned', ch.name)" @change="toggleSceneRole('mentioned', ch.name, $event.target.checked)" /> 仅提及</label></div></div><div v-else class="field-hint">请先建立角色资产。</div><div class="field-hint">可见与发声可同时勾选；“仅提及”与二者互斥。只有画面可见人物需要四视图。</div></div>
         <div class="field">
           <label>视觉类型</label>
           <select v-model="sceneForm.visual_type" class="input">
@@ -525,7 +523,7 @@
     </div>
 
     <div v-if="videoTaskDetail" class="modal-mask" @click.self="videoTaskDetail = null">
-      <div class="modal card video-task-modal"><h2>编辑视频提示词</h2><div v-if="videoTaskDetail.continuity_frame" class="continuity-prompt-source"><img :src="videoTaskDetail.continuity_frame.image_url" /><div><b>已使用上一镜末尾帧</b><p>连续性模式：{{ continuityModeLabel(videoTaskDetail.continuity_mode) }}</p><p>{{ formatFrameTime(videoTaskDetail.continuity_frame.timestamp_ms) }}</p></div></div><div v-else-if="videoTaskDetail.continuity_mode && videoTaskDetail.continuity_mode !== 'independent'" class="warning">连续性已配置，但上一镜末尾帧尚未就绪。</div><div class="field-row"><div class="field"><label>视频模板</label><select v-model="videoTaskTemplate" class="input"><option value="minimax_h3_ref2v">多图参考生视频（推荐，有场景参考图时优先）</option><option value="minimax_h3_i2v">图生视频（首帧硬锚定）</option><option value="minimax_h3_first_last">首尾帧生视频（需指定首帧和尾帧图片）</option></select></div><div class="field"><label>尺寸 / 时长 / 帧率</label><p class="info-text">{{ videoTaskDetail.width }}×{{ videoTaskDetail.height }} / {{ videoTaskDetail.duration }}秒 / {{ videoTaskDetail.fps }} FPS</p></div></div><div v-if="videoTaskTemplate === 'minimax_h3_first_last'" class="field-row"><div class="field"><label>首帧图片</label><select v-model="videoTaskFirstFrame" class="input"><option value="">请选择…</option><option v-if="videoTaskScene.image_file" :value="videoTaskScene.image_file">分镜画面（当前场景）</option></select></div><div class="field"><label>尾帧图片</label><select v-model="videoTaskLastFrame" class="input"><option value="">请选择…</option><option v-if="videoTaskScene.image_file" :value="videoTaskScene.image_file">分镜画面（当前场景）</option></select></div></div><div class="field-label-actions"><label>最终提交给 H3 的完整提示词（可直接修改）</label><button class="btn btn-sm btn-secondary" :disabled="regeneratingVideoPrompt" @click="regenerateVideoPrompt">{{ regeneratingVideoPrompt ? 'AI 生成中…' : 'AI 重新生成完整提示词' }}</button></div><textarea v-model="videoTaskPromptDraft" class="textarea" rows="20" /><div v-if="!videoTaskDetail.has_saved_prompt" class="warning">当前没有已保存的视频提示词。编辑窗口不会自动生成；请手工填写，或明确点击“AI 重新生成完整提示词”。</div><div v-if="videoTaskDetail.prompt_issues?.length" class="warning">参考图已变化：{{ videoTaskDetail.prompt_issues.join('；') }}。系统不会自动覆盖，请手工调整或明确点击 AI 重新生成。</div><div class="field-hint">这里原样显示已保存的最终六段 Ref2VA 提示词；打开编辑窗口不会自动生成或重建。<b v-if="videoTaskTemplate === 'minimax_h3_first_last'">　⚠ 首尾帧模板已选择，请确认首帧和尾帧图片已正确指定。</b></div><details open><summary>当前将提交的完整提示词</summary><pre class="task-prompt">{{ previewVideoFullPrompt }}</pre></details><details v-if="videoTaskDetail.history_prompt"><summary>上次实际提交的提示词</summary><pre class="task-prompt">{{ videoTaskDetail.history_prompt }}</pre></details><details v-if="videoTaskDetail.params_json"><summary>上次实际参数与输入图片</summary><pre class="task-prompt">{{ formatTaskParams(videoTaskDetail.params_json) }}</pre></details><div class="modal-actions"><button class="btn btn-ghost" @click="videoTaskDetail = null">取消</button><button class="btn btn-secondary" :disabled="savingVideoPrompt" @click="saveVideoPrompt(false)">保存提示词</button><button class="btn" :disabled="savingVideoPrompt" @click="saveVideoPrompt(true)">{{ savingVideoPrompt ? '处理中…' : '保存最新提示词并生成视频' }}</button></div></div>
+      <div class="modal card video-task-modal"><h2>编辑视频提示词</h2><div v-if="videoTaskDetail.continuity_frame" class="continuity-prompt-source"><img :src="videoTaskDetail.continuity_frame.image_url" /><div><b>已使用上一镜末尾帧</b><p>连续性模式：{{ continuityModeLabel(videoTaskDetail.continuity_mode) }}</p><p>{{ formatFrameTime(videoTaskDetail.continuity_frame.timestamp_ms) }}</p></div></div><div v-else-if="videoTaskDetail.continuity_mode && videoTaskDetail.continuity_mode !== 'independent'" class="warning">连续性已配置，但上一镜末尾帧尚未就绪。</div><div class="field-row"><div class="field"><label>视频模板</label><select v-model="videoTaskTemplate" class="input"><option value="minimax_h3_ref2v">多图参考生视频（推荐，有场景参考图时优先）</option><option value="minimax_h3_i2v">图生视频（首帧硬锚定）</option><option value="minimax_h3_first_last">首尾帧生视频（需指定首帧和尾帧图片）</option></select></div><div class="field"><label>尺寸 / 时长 / 帧率</label><p class="info-text">{{ videoTaskDetail.width }}×{{ videoTaskDetail.height }} / {{ videoTaskDetail.duration }}秒 / {{ videoTaskDetail.fps }} FPS</p></div></div><div v-if="videoTaskTemplate === 'minimax_h3_first_last'" class="field-row"><div class="field"><label>首帧图片</label><select v-model="videoTaskFirstFrame" class="input"><option value="">请选择…</option><option v-if="videoTaskScene.image_file" :value="videoTaskScene.image_file">分镜画面（当前场景）</option></select></div><div class="field"><label>尾帧图片</label><select v-model="videoTaskLastFrame" class="input"><option value="">请选择…</option><option v-if="videoTaskScene.image_file" :value="videoTaskScene.image_file">分镜画面（当前场景）</option></select></div></div><div class="field-label-actions"><label>最终提交给 H3 的完整提示词（可直接修改）</label><button class="btn btn-sm btn-secondary" :disabled="regeneratingVideoPrompt" @click="regenerateVideoPrompt">{{ regeneratingVideoPrompt ? 'AI 生成中…' : 'AI 重新生成完整提示词' }}</button></div><textarea v-model="videoTaskPromptDraft" class="textarea" rows="20" /><div v-if="videoTaskTemplate !== videoTaskDetail.template" class="warning">模板已切换，现有提示词协议不会直接复用。请点击“AI 重新生成完整提示词”生成新模板对应协议后再保存。</div><div v-if="videoTaskDetail.reference_limit_warning" class="warning">{{ videoTaskDetail.reference_limit_warning }}</div><div v-if="videoTaskDetail.prompt_stale" class="warning">分镜剧情、人物分类或参考图已变化。请重新生成或人工确认并保存当前完整提示词后再生成视频。</div><div v-if="!videoTaskDetail.has_saved_prompt" class="warning">当前没有已保存的视频提示词。编辑窗口不会自动生成；请手工填写，或明确点击“AI 重新生成完整提示词”。</div><div v-if="videoTaskDetail.prompt_issues?.length" class="warning">参考图已变化：{{ videoTaskDetail.prompt_issues.join('；') }}。系统不会自动覆盖，请手工调整或明确点击 AI 重新生成。</div><div class="field-hint">这里原样显示已保存的最终六段 Ref2VA 提示词；打开编辑窗口不会自动生成或重建。<b v-if="videoTaskTemplate === 'minimax_h3_first_last'">　⚠ 首尾帧模板已选择，请确认首帧和尾帧图片已正确指定。</b></div><details open><summary>当前将提交的完整提示词</summary><pre class="task-prompt">{{ previewVideoFullPrompt }}</pre></details><details v-if="videoTaskDetail.history_prompt"><summary>上次实际提交的提示词</summary><pre class="task-prompt">{{ videoTaskDetail.history_prompt }}</pre></details><details v-if="videoTaskDetail.params_json"><summary>上次实际参数与输入图片</summary><pre class="task-prompt">{{ formatTaskParams(videoTaskDetail.params_json) }}</pre></details><div class="modal-actions"><button class="btn btn-ghost" @click="videoTaskDetail = null">取消</button><button class="btn btn-secondary" :disabled="savingVideoPrompt" @click="saveVideoPrompt(false)">保存提示词</button><button class="btn" :disabled="savingVideoPrompt" @click="saveVideoPrompt(true)">{{ savingVideoPrompt ? '处理中…' : '保存最新提示词并生成视频' }}</button></div></div>
     </div>
 
     <!-- 项目信息编辑弹窗 -->
@@ -966,6 +964,16 @@ const sceneError = ref('')
 const projectError = ref('')
 const loadError = ref('')
 const sceneForm = reactive({ title: '', content: '', duration: 5, image_prompt: '', video_prompt: '', visible_characters: '', voice_characters: '', mentioned_characters: '', visual_type: 'normal', mega_type: 'architecture' })
+const roleField = { visible: 'visible_characters', voice: 'voice_characters', mentioned: 'mentioned_characters' }
+const roleNames = value => String(value || '').split(/[,，、;；\n]/).map(v => v.trim()).filter(Boolean)
+function sceneRoleHas(role, name) { return roleNames(sceneForm[roleField[role]]).includes(name) }
+function setSceneRole(role, names) { sceneForm[roleField[role]] = [...new Set(names)].join(', ') }
+function toggleSceneRole(role, name, checked) {
+  const names = roleNames(sceneForm[roleField[role]])
+  setSceneRole(role, checked ? [...names, name] : names.filter(item => item !== name))
+  if (checked && role === 'mentioned') { setSceneRole('visible', roleNames(sceneForm.visible_characters).filter(item => item !== name)); setSceneRole('voice', roleNames(sceneForm.voice_characters).filter(item => item !== name)) }
+  if (checked && role !== 'mentioned') setSceneRole('mentioned', roleNames(sceneForm.mentioned_characters).filter(item => item !== name))
+}
 const sceneReferenceCandidates = ref([])
 const selectedSceneReferences = ref([])
 const sceneOutfitOptions = ref({})
@@ -1192,9 +1200,9 @@ async function regenerateVideoPrompt() {
   if (!videoTaskScene.value) return
   regeneratingVideoPrompt.value = true
   try {
-    const { data } = await api.regenerateSceneVideoPrompt(id(), videoTaskScene.value.id)
+    const { data } = await api.regenerateSceneVideoPrompt(id(), videoTaskScene.value.id, { template: videoTaskTemplate.value })
     videoTaskPromptDraft.value = data.full_prompt || data.prompt || ''
-    videoTaskDetail.value = { ...videoTaskDetail.value, full_prompt: videoTaskPromptDraft.value }
+    videoTaskDetail.value = { ...videoTaskDetail.value, full_prompt: videoTaskPromptDraft.value, template: data.template || videoTaskTemplate.value, prompt_stale: false }
     toast.success('AI 已重新生成完整 H3 提示词，可继续修改后保存')
   } catch (e) { toast.error(e.response?.data?.error || 'AI 重新生成失败') }
   finally { regeneratingVideoPrompt.value = false }
@@ -2447,6 +2455,9 @@ onBeforeUnmount(() => {
 .reference-option { display: grid; grid-template-columns: auto 46px 1fr; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
 .reference-option img { width: 46px; height: 46px; object-fit: cover; border-radius: 6px; }
 .outfit-select-row { display: grid; grid-template-columns: minmax(90px, auto) minmax(220px, 1fr) auto; align-items: center; gap: 10px; margin-top: 8px; }
+.role-grid { display: grid; gap: 8px; }
+.role-row { display: grid; grid-template-columns: minmax(100px, 1fr) repeat(3, minmax(90px, auto)); gap: 12px; align-items: center; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+.role-row label { display: flex; align-items: center; gap: 6px; margin: 0; }
 .badge-green { background: rgba(34, 197, 94, 0.15); color: #16a34a; }
 .badge-red { background: rgba(239, 68, 68, 0.12); color: #dc2626; }
 

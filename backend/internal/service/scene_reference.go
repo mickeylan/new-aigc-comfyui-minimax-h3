@@ -113,8 +113,8 @@ func (s *ProjectService) SaveSceneReferences(sc *models.Scene, refs []SceneRefer
 	}
 	data, _ := json.Marshal(refs)
 	return s.db.Model(sc).Updates(map[string]any{
-		"reference_images_json": string(data), "image_file": "", "image_task_id": "",
-		"video_file": "", "video_input_file": "", "video_task_id": "", "video_gpu": nil, "video_full_prompt": "",
+		"reference_images_json": string(data), "prompt_stale": strings.TrimSpace(sc.VideoFullPrompt) != "", "image_file": "", "image_task_id": "",
+		"video_file": "", "video_input_file": "", "video_task_id": "", "video_gpu": nil,
 		"status": "pending", "error": "",
 	}).Error
 }

@@ -1593,6 +1593,42 @@ func TestValidateVideoPromptProtectsSystemContract(t *testing.T) {
 	}
 }
 
+func TestSceneSourceChangesMarkSavedPromptStale(t *testing.T) {
+	ps := newTestProjectService(t)
+	p := models.Project{Title: "提示词失效"}
+	ps.db.Create(&p)
+	sc := models.Scene{ProjectID: p.ID, Content: "旧正文", ImagePrompt: "旧画面", Duration: 8, VideoFullPrompt: "saved prompt", Status: "image_ready"}
+	ps.db.Create(&sc)
+	if err := ps.UpdateScene(&sc, "", "新正文", "旧画面", 8); err != nil {
+		t.Fatal(err)
+	}
+	ps.db.First(&sc, sc.ID)
+	if !sc.PromptStale || sc.VideoFullPrompt != "saved prompt" {
+		t.Fatalf("source change must retain but stale saved prompt: %+v", sc)
+	}
+}
+
+func TestReferenceLimitWarningIsExplicit(t *testing.T) {
+	ps := newTestProjectService(t)
+	p := models.Project{Title: "参考图"}
+	ps.db.Create(&p)
+	sc := models.Scene{ProjectID: p.ID, ImageFile: "storyboard.png", Characters: "甲,乙,丙,丁,戊", VisibleCharacters: "甲,乙,丙,丁,戊", CharacterRolesSet: true}
+	ps.db.Create(&sc)
+	for _, name := range []string{"甲", "乙", "丙", "丁", "戊"} {
+		ps.db.Create(&models.Character{ProjectID: p.ID, Name: name, Sheet: name + ".png"})
+	}
+	for i := 0; i < 5; i++ {
+		ps.db.Create(&models.Asset{ProjectID: p.ID, Kind: AssetKindProp, Name: fmt.Sprintf("道具%d", i), Image: fmt.Sprintf("prop%d.png", i)})
+	}
+	sc.Props = "道具0,道具1,道具2,道具3,道具4"
+	ps.db.Save(&sc)
+	refs, _ := ps.sceneVideoReferenceFiles(&sc, fmt.Sprint(p.ID))
+	warning := ps.sceneVideoReferenceWarning(&sc, len(refs))
+	if warning == "" || !strings.Contains(warning, "实际提交") {
+		t.Fatalf("reference truncation must be visible: refs=%d warning=%q", len(refs), warning)
+	}
+}
+
 func TestResolveRef2VSubmissionPromptUsesLatestSavedTextVerbatim(t *testing.T) {
 	lines := []string{"- <Picture 1>：角色「林夏」四视图", "- <Picture 2>：场景「庭院」参考图"}
 	scene := &models.Scene{VideoPrompt: "[Shot 1] 旧动作。", Duration: 8}

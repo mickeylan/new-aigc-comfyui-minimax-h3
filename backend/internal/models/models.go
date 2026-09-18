@@ -177,9 +177,10 @@ type Scene struct {
 	VideoLastFrameImg   string    `gorm:"column:video_last_frame_img" json:"video_last_frame_img"`     // 首尾帧模板的尾帧图文件名
 	Status              string    `json:"status"`                                                      // pending/image_pending/image_ready/video_pending/video_running/video_ready/failed
 	Error               string    `json:"error"`
-	ImageRetries        int       `gorm:"column:image_retries" json:"image_retries"`     // 画面生成已重试次数
-	VideoRetries        int       `gorm:"column:video_retries" json:"video_retries"`     // 视频生成已重试次数
-	ShotCount           int       `gorm:"column:shot_count;default:0" json:"shot_count"` // 镜头数量
+	PromptStale         bool      `gorm:"column:prompt_stale;default:false" json:"prompt_stale"` // 来源变化后需重新确认完整视频提示词
+	ImageRetries        int       `gorm:"column:image_retries" json:"image_retries"`             // 画面生成已重试次数
+	VideoRetries        int       `gorm:"column:video_retries" json:"video_retries"`             // 视频生成已重试次数
+	ShotCount           int       `gorm:"column:shot_count;default:0" json:"shot_count"`         // 镜头数量
 	CreatedAt           time.Time `json:"created_at"`
 	UpdatedAt           time.Time `json:"updated_at"`
 }

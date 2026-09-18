@@ -500,6 +500,7 @@ func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imageProm
 		imageChanged = imageChanged || sc.ImagePrompt != imagePrompt
 	}
 	if imageChanged {
+		updates["prompt_stale"] = strings.TrimSpace(sc.VideoFullPrompt) != ""
 		updates["image_file"] = ""
 		updates["video_task_id"] = ""
 		updates["video_file"] = ""
@@ -511,7 +512,8 @@ func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imageProm
 		updates["status"] = "pending"
 		updates["error"] = ""
 	} else if (content != "" && sc.Content != content) || durationChanged {
-		// 修改正文或时长：保留画面，视频需重新生成
+		// 修改正文或时长：保留画面，视频需重新生成；已审核完整提示词需要重新确认。
+		updates["prompt_stale"] = strings.TrimSpace(sc.VideoFullPrompt) != ""
 		updates["video_task_id"] = ""
 		updates["video_file"] = ""
 		updates["video_input_file"] = ""
@@ -1889,6 +1891,24 @@ func (s *ProjectService) sceneVideoContinuityReferences(sc *models.Scene, pid st
 	return refs, lines, cfg
 }
 
+func (s *ProjectService) sceneVideoReferenceWarning(sc *models.Scene, actual int) string {
+	desired := 1 // current storyboard frame
+	if selected, explicit := parseSceneReferences(sc); explicit {
+		desired = 1
+		for _, ref := range selected {
+			if ref.UseH3 && s.sceneReferenceIsRelevant(sc, ref) {
+				desired++
+			}
+		}
+	} else {
+		desired += len(s.sceneCharacterPortraits(sc)) + len(s.sceneCharacterOutfits(sc)) + len(s.sceneMatchedAssets(sc))
+	}
+	if desired > actual {
+		return fmt.Sprintf("参考图上限为 %d 张，本镜候选 %d 张，实际提交 %d 张；系统按人物、造型、场景、道具优先级取舍", maxSceneReferenceImages, desired, actual)
+	}
+	return ""
+}
+
 func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) ([]FileMeta, []string) {
 	// 用户验证的业务顺序：人物/造型在前，场景/道具随后，当前分镜图最后。
 	// H3不依赖图片权重顺序；这里保持稳定顺序以确保 Picture/Subject 编号可读且不漂移。
@@ -3222,6 +3242,9 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		return err
 	}
 	sc = &latest
+	if sc.PromptStale && strings.TrimSpace(sc.VideoFullPrompt) != "" {
+		return fmt.Errorf("场景 %d 的剧情、人物或参考图已变化，请重新生成或确认视频提示词后再生成", sc.Order)
+	}
 	if s.continuity != nil {
 		if err := s.continuity.PrepareScene(sc); err != nil {
 			return err
@@ -4695,6 +4718,9 @@ func (s *ProjectService) UpdateDialogue(p *models.Project, did uint, text, voice
 	}
 	if err := s.db.Model(&d).Updates(updates).Error; err != nil {
 		return nil, err
+	}
+	if len(updates) > 0 {
+		_ = s.db.Model(&models.Scene{}).Where("id = ? AND video_full_prompt != ''", d.SceneID).Update("prompt_stale", true).Error
 	}
 	s.pushProject(p)
 	s.db.First(&d, did)
