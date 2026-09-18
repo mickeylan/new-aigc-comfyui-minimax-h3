@@ -1160,7 +1160,7 @@ func TestBuildSceneVideoSpec(t *testing.T) {
 	if code != "minimax_h3_ref2v" || len(files) != 0 {
 		t.Fatalf("正式视频默认必须走 ref2v，多参考文件在提交阶段统一装配, got %s %v", code, files)
 	}
-	for _, want := range []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:", "唯一视觉基准", "[Shot 1]", "NO text"} {
+	for _, want := range []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:", "<Subject 1>", "<Picture 1>", "[reference generation]", "[Shot 1]"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("H3 prompt missing %q: %s", want, prompt)
 		}
@@ -1385,7 +1385,7 @@ func TestActionDescriptionIsNeverConvertedToDialogue(t *testing.T) {
 
 func TestDialogueKeepsSpeechAndDropsInlineStageDirection(t *testing.T) {
 	got := validSceneDialogues([]models.Dialogue{{Character: "舒寒", Text: "（轻抚她的脸庞）你终于醒了。"}})
-	if len(got) != 1 || got[0].Text != "你终于醒了" {
+	if len(got) != 1 || got[0].Text != "你终于醒了。" {
 		t.Fatalf("dialogue normalization = %+v", got)
 	}
 }
@@ -1479,6 +1479,62 @@ func TestValidateVideoPromptProtectsSystemContract(t *testing.T) {
 	}
 	if got := ValidateVideoPrompt("", "舒寒", "玉霄宫", ""); len(got) != 0 {
 		t.Fatalf("empty prompt should restore automatic generation: %v", got)
+	}
+}
+
+func TestH3KeyframePromptContractsAndDialoguePlacement(t *testing.T) {
+	sc := &models.Scene{VideoPrompt: "[Shot 1] 林夏抬头看向门口。", Duration: 8}
+	dubs := []models.Dialogue{{Character: "林夏", Text: "你来了。"}}
+	i2v := buildH3I2VAPrompt(sc, &models.Project{Style: "3D国漫"}, dubs)
+	if !strings.HasPrefix(i2v, "For the target video, at 0.00 seconds") {
+		t.Fatalf("I2VA alignment instruction missing: %s", i2v)
+	}
+	for _, heading := range []string{"integrated_multimodal_description:", "overall_soundscape:", "non_diegetic_music:"} {
+		if strings.Count(i2v, heading) != 1 {
+			t.Fatalf("I2VA field %s missing or duplicated: %s", heading, i2v)
+		}
+	}
+	if !strings.Contains(h3IntegratedDescription(i2v), "林夏 (S1)清晰说出：<d>[Chinese] 你来了。</d>") {
+		t.Fatalf("dialogue must be in the timeline with stable speaker ID: %s", i2v)
+	}
+	if strings.Contains(h3PromptSection(i2v, "overall_soundscape:"), "你来了") {
+		t.Fatalf("soundscape must not repeat dialogue: %s", i2v)
+	}
+
+	fl2v := buildH3FL2VAPrompt(sc, nil, nil)
+	if !strings.HasPrefix(fl2v, "How the reference pictures align with the target video") || !strings.Contains(fl2v, "8.00-second mark") {
+		t.Fatalf("FL2VA alignment instruction missing: %s", fl2v)
+	}
+}
+
+func TestH3NarrationAndCameraConflictValidation(t *testing.T) {
+	sc := &models.Scene{VideoPrompt: "[Shot 1] 人物保持闭口，镜头保持固定。", Duration: 5}
+	prompt := buildH3T2VAPrompt(sc, nil, []models.Dialogue{{Character: "旁白", Text: "夜色降临。"}})
+	detail := h3IntegratedDescription(prompt)
+	for _, want := range []string{"(S1)", "画外旁白", "<d>[Chinese] 夜色降临。</d>", "嘴唇始终闭合"} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("narration rule missing %q: %s", want, prompt)
+		}
+	}
+	issues := strings.Join(ValidateVideoPrompt("镜头保持固定，同时缓慢推进并跟随人物。", "", "", ""), "|")
+	if !strings.Contains(issues, "运镜冲突") {
+		t.Fatalf("camera conflict was not rejected: %s", issues)
+	}
+}
+
+func TestH3CrossShotDialogueMarkers(t *testing.T) {
+	dubs := []models.Dialogue{
+		{Character: "林夏", Text: "我还没有说完。<scenetrans>"},
+		{Character: "林夏", Text: "这句话会被截断——<cutoff>"},
+	}
+	body := appendStructuredDialogue("[Shot 1] 林夏向前走。[Shot 2] At 00:03.000, the shot cuts to her face.", dubs, nil)
+	for _, want := range []string{"林夏 (S1)", "<scenetrans>", "对白音频跨镜头切换无缝延续", "<cutoff>"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("cross-shot dialogue missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "(S2)") {
+		t.Fatalf("same speaker changed ID across shots: %s", body)
 	}
 }
 

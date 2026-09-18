@@ -285,8 +285,15 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 	preview := *sc
 	preview.VideoPrompt = actionPrompt
 	continuity, refs, lines := s.sceneVideoPromptContinuity(sc)
-	fullPrompt := buildMiniMaxH3RefPrompt(&preview, &project, dubs, lines)
-	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs)}
+	template := strings.TrimSpace(sc.VideoTemplate)
+	if continuity != nil && continuity.Status == "ready" && continuity.Mode == models.ContinuityModeBridge {
+		template = "minimax_h3_first_last"
+	}
+	if template == "" {
+		template = "minimax_h3_ref2v"
+	}
+	fullPrompt := compileH3PromptForTemplate(template, &preview, &project, dubs, lines)
+	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "template": template}
 	if continuity != nil && continuity.SelectedFrame != nil {
 		response["continuity_mode"] = continuity.Mode
 		response["continuity_frame"] = s.frameResponses([]models.FrameCandidate{*continuity.SelectedFrame})[0]
@@ -311,12 +318,25 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 	}
 	prompt := strings.TrimSpace(req.Prompt)
 	_, _, refLines := s.sceneVideoPromptContinuity(sc)
-	if issues := ValidateFullH3PromptForReferences(prompt, refLines); len(issues) > 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": strings.Join(issues, "；")})
+	template := strings.TrimSpace(req.Template)
+	if template == "" {
+		template = strings.TrimSpace(sc.VideoTemplate)
+	}
+	var contractIssues []string
+	if template == "minimax_h3_t2v" || template == "minimax_h3_i2v" || template == "minimax_h3_first_last" {
+		contractIssues = validateH3KeyframePrompt(prompt, template)
+	} else {
+		contractIssues = ValidateFullH3PromptForReferences(prompt, refLines)
+	}
+	if len(contractIssues) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": strings.Join(contractIssues, "；")})
 		return
 	}
 	// 保存接口只校验并原样持久化用户内容，不重写对白、音频段或视觉正文。
 	actionPrompt := normalizeVideoActionPrompt(prompt)
+	if isH3KeyframePrompt(prompt) {
+		actionPrompt = h3IntegratedDescription(prompt)
+	}
 	if issues := ValidateVideoPrompt(actionPrompt, sc.Characters, sc.LocationName, sc.Props); len(issues) > 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": strings.Join(issues, "；")})
 		return
