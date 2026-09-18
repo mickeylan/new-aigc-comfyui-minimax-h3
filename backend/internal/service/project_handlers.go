@@ -369,13 +369,16 @@ func (s *Service) HandleUpdateScene(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Title       string  `json:"title"`
-		Content     string  `json:"content"`
-		ImagePrompt string  `json:"image_prompt"`
-		VideoPrompt string  `json:"video_prompt"`
-		Duration    float64 `json:"duration"`
-		VisualType  string  `json:"visual_type"`
-		MegaType    string  `json:"mega_type"`
+		Title               string  `json:"title"`
+		Content             string  `json:"content"`
+		ImagePrompt         string  `json:"image_prompt"`
+		VideoPrompt         string  `json:"video_prompt"`
+		VisibleCharacters   string  `json:"visible_characters"`
+		VoiceCharacters     string  `json:"voice_characters"`
+		MentionedCharacters string  `json:"mentioned_characters"`
+		Duration            float64 `json:"duration"`
+		VisualType          string  `json:"visual_type"`
+		MegaType            string  `json:"mega_type"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": "参数错误"})
@@ -393,7 +396,15 @@ func (s *Service) HandleUpdateScene(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	if err := s.DB.Model(sc).Update("video_prompt", strings.TrimSpace(req.VideoPrompt)).Error; err != nil {
+	roleUpdates := map[string]any{
+		"video_prompt":         strings.TrimSpace(req.VideoPrompt),
+		"visible_characters":   strings.TrimSpace(req.VisibleCharacters),
+		"voice_characters":     strings.TrimSpace(req.VoiceCharacters),
+		"mentioned_characters": strings.TrimSpace(req.MentionedCharacters),
+		"character_roles_set":  true,
+		"characters":           strings.TrimSpace(req.VisibleCharacters),
+	}
+	if err := s.DB.Model(sc).Updates(roleUpdates).Error; err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}

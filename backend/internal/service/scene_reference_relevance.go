@@ -8,6 +8,14 @@ import (
 
 func (s *ProjectService) sceneHasCharacter(sc *models.Scene, name string) bool {
 	name = strings.TrimSpace(name)
+	if sc.CharacterRolesSet {
+		for _, item := range parseSceneCharacters(sc.VisibleCharacters) {
+			if strings.TrimSpace(item) == name {
+				return true
+			}
+		}
+		return false
+	}
 	var shots []models.Shot
 	_ = s.db.Where("scene_id = ?", sc.ID).Order("order_num").Find(&shots).Error
 	structured := ""

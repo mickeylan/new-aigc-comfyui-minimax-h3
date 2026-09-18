@@ -158,7 +158,10 @@ func scriptFromPlanSystemPrompt(targetDuration float64, targetScenes int) string
       "content": "该场景的视频提示词：描述画面动作、镜头运动（如推近/摇镜）、人物表情与对白，现在时态，1~3 句",
       "image_prompt": "该场景的静态画面提示词（用于文生图）：包含主体人物外貌特征、服装、场景环境、光影氛围、构图与画风描述",
       "duration": 5,
-      "characters": ["出场角色名1", "角色名2"],
+      "characters": ["兼容字段：与 visible_characters 相同"],
+      "visible_characters": ["本镜最终画面中实际可见的角色"],
+      "voice_characters": ["本镜只发声但不在画面中出现的角色"],
+      "mentioned_characters": ["仅在剧情说明、对白或独白中被提及的角色"],
       "location": "该场景地点名（须与创作方案 locations 中的名称完全一致；无明确地点则为空字符串）",
       "props": ["该场景出现的关键道具名（与创作方案 props 中的名称完全一致；无则为空数组）"],
       "dialogues": [{"character": "角色名", "speech_type": "dialogue", "text": "角色说出的原文"}, {"character": "旁白", "speech_type": "narration", "text": "正文明确写出的旁白原文"}, {"character": "角色名", "speech_type": "monologue", "text": "正文明确写出的内心独白原文"}]
@@ -171,7 +174,7 @@ func scriptFromPlanSystemPrompt(targetDuration float64, targetScenes int) string
 - 单镜时长范围：` + fmt.Sprintf("%d", minSceneDur) + `~` + fmt.Sprintf("%d", maxSceneDur) + ` 秒（根据对白长度与动作复杂度灵活调整）
 - 所有镜头时长之和应尽量接近总时长预算（允许 ±10% 偏差）
 3. 人物一致性至关重要：同一角色在多个场景出现时，image_prompt 必须严格沿用创作方案中该角色的 trait（外貌特征）与 style（服装造型），且所有场景画风描述保持一致。
-4. 每个场景必须在 characters 数组中列出该场出场的角色名（须与创作方案中的角色名完全一致；无出场角色则为空数组）。
+4. 必须区分人物用途：visible_characters 只列本镜最终画面中真实可见的人物；voice_characters 只列画外对白或内心独白的发声者；mentioned_characters 只列剧情说明、对白或独白中被提到但不会出现在画面中的人物。名字出现在文字中不等于画面出场。characters 为兼容字段，必须与 visible_characters 完全相同；只有 visible_characters 会要求人物四视图。
 5. script 正文优先使用固定格式：【动作】画面描述、【对白｜角色名】原文、【旁白】原文、【内心独白｜角色名】原文。逐场检查故事正文和分镜内容中的明确发声标注，并忠实提取到 dialogues：“旁白/画外音：原文”使用 narration，“角色名内心独白：原文”使用 monologue，“角色名：原文”使用 dialogue。只复制标注后的原文，不改写、不概括、不补充。不得把“他心里疑惑”“气氛压抑”等心理、动作或氛围描写转换成独白或旁白。speech_type 只能是 dialogue、narration 或 monologue；dialogue/monologue 的 character 必须是角色名，narration 的 character 固定为“旁白”。正文和分镜内容均未明确出现可发声内容时必须为空数组。
 6. 第一个场景尽量给出大场景/环境交代，后续场景聚焦人物动作与剧情推进。
 7. 剧情节奏参考创作方案中的节奏曲线：开头要有钩子，中段冲突升级，结尾留悬念。

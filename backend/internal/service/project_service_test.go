@@ -847,6 +847,45 @@ func TestExplicitSceneReferencesHonorUserSelectionWhileAutomaticReferencesStayRe
 	}
 }
 
+func TestCharacterRoleClassificationOnlyRequiresVisibleReferences(t *testing.T) {
+	ps := newTestProjectService(t)
+	p := models.Project{Title: "分类"}
+	ps.db.Create(&p)
+	visible := models.Character{ProjectID: p.ID, Name: "林采微", Sheet: "lin-sheet.png"}
+	mentioned := models.Character{ProjectID: p.ID, Name: "雷晓飞"}
+	ps.db.Create(&visible)
+	ps.db.Create(&mentioned)
+	sc := models.Scene{
+		ProjectID: p.ID, Characters: "林采微", VisibleCharacters: "林采微",
+		VoiceCharacters: "林采微", MentionedCharacters: "雷晓飞", CharacterRolesSet: true,
+		Content: "林采微望着雷晓飞离开的方向。",
+	}
+	ps.db.Create(&sc)
+	if ps.sceneHasCharacter(&sc, "雷晓飞") {
+		t.Fatal("mentioned-only character was treated as visible")
+	}
+	missing := ps.missingSceneCharacterReferences(&sc, []FileMeta{{TaskID: "1", Name: "lin-sheet.png"}})
+	if len(missing) != 0 {
+		t.Fatalf("mentioned-only character incorrectly required a sheet: %v", missing)
+	}
+	refs, lines := ps.sceneImageReferenceFiles(&sc)
+	if len(refs) != 1 || refs[0].Name != "lin-sheet.png" || strings.Contains(strings.Join(lines, "\n"), "雷晓飞") {
+		t.Fatalf("visual refs must include only visible cast: refs=%+v lines=%v", refs, lines)
+	}
+}
+
+func TestCharacterRoleClassificationSupportsNoVisibleCast(t *testing.T) {
+	ps := newTestProjectService(t)
+	p := models.Project{Title: "画外音"}
+	ps.db.Create(&p)
+	ps.db.Create(&models.Character{ProjectID: p.ID, Name: "雷晓飞"})
+	sc := models.Scene{ProjectID: p.ID, CharacterRolesSet: true, VoiceCharacters: "雷晓飞", MentionedCharacters: "雷婶"}
+	ps.db.Create(&sc)
+	if ps.sceneHasCharacter(&sc, "雷晓飞") || len(ps.missingSceneCharacterReferences(&sc, nil)) != 0 {
+		t.Fatal("voice-only scene must not require a visual character reference")
+	}
+}
+
 func TestExplicitSceneLocationStillAddsVisibleCharacterSheet(t *testing.T) {
 	ps := newTestProjectService(t)
 	if err := ps.db.AutoMigrate(&models.Shot{}); err != nil {

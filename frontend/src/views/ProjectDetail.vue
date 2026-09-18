@@ -478,6 +478,9 @@
           <textarea v-model="sceneForm.content" class="textarea" rows="3"
             placeholder="描述画面动作、镜头运动、对白…" />
         </div>
+        <div class="field"><label>画面实际出场人物</label><input v-model="sceneForm.visible_characters" class="input" placeholder="逗号分隔；只有这些人物需要四视图" /><div class="field-hint">仅填写本镜最终画面中真实可见的人物。回忆、照片或倒影中确实被画出时也算可见。</div></div>
+        <div class="field"><label>仅发声人物</label><input v-model="sceneForm.voice_characters" class="input" placeholder="画外对白或内心独白发声者，逗号分隔" /></div>
+        <div class="field"><label>仅被提及人物</label><input v-model="sceneForm.mentioned_characters" class="input" placeholder="只在剧情、对白或独白中被提到，逗号分隔" /><div class="field-hint">仅发声和仅被提及人物不会要求四视图，也不会作为画面主体。</div></div>
         <div class="field">
           <label>视觉类型</label>
           <select v-model="sceneForm.visual_type" class="input">
@@ -962,7 +965,7 @@ const savingProject = ref(false)
 const sceneError = ref('')
 const projectError = ref('')
 const loadError = ref('')
-const sceneForm = reactive({ title: '', content: '', duration: 5, image_prompt: '', video_prompt: '', visual_type: 'normal', mega_type: 'architecture' })
+const sceneForm = reactive({ title: '', content: '', duration: 5, image_prompt: '', video_prompt: '', visible_characters: '', voice_characters: '', mentioned_characters: '', visual_type: 'normal', mega_type: 'architecture' })
 const sceneReferenceCandidates = ref([])
 const selectedSceneReferences = ref([])
 const sceneOutfitOptions = ref({})
@@ -1987,6 +1990,8 @@ async function openEditScene(sc) {
   editingScene.value = sc
   Object.assign(sceneForm, {
     title: sc.title, content: sc.content, duration: Number(sc.duration) || 5, image_prompt: sc.image_prompt, video_prompt: sc.video_prompt || '',
+    visible_characters: sc.character_roles_set ? (sc.visible_characters || '') : (sc.characters || ''),
+    voice_characters: sc.voice_characters || '', mentioned_characters: sc.mentioned_characters || '',
     visual_type: sc.visual_type || 'normal', mega_type: sc.mega_type || 'architecture'
   })
   try {
@@ -2041,6 +2046,9 @@ async function saveScene() {
       duration: Number(sceneForm.duration),
       image_prompt: sceneForm.image_prompt,
       video_prompt: sceneForm.video_prompt,
+      visible_characters: sceneForm.visible_characters,
+      voice_characters: sceneForm.voice_characters,
+      mentioned_characters: sceneForm.mentioned_characters,
       visual_type: sceneForm.visual_type,
       mega_type: sceneForm.mega_type
     })

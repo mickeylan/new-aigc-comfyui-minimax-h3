@@ -149,20 +149,24 @@ type Scene struct {
 	EpisodeN            int       `gorm:"column:episode_n;default:1;uniqueIndex:idx_scene_project_generation_episode_order" json:"episode_n"` // 所属集数（从 1 开始）
 	Order               int       `gorm:"uniqueIndex:idx_scene_project_generation_episode_order" json:"order"`                                // 场景序号（从 1 开始）
 	Generation          uint      `gorm:"uniqueIndex:idx_scene_project_generation_episode_order" json:"generation"`
-	Title               string    `json:"title"`                                                // 场景标题
-	Content             string    `json:"content"`                                              // 场景正文（作为视频提示词）
-	ImagePrompt         string    `json:"image_prompt"`                                         // 文生图提示词
-	ReferenceImagesJSON string    `gorm:"column:reference_images_json;type:text" json:"-"`      // 用户指定的有序参考图及 Krea2/H3 用途
-	Duration            float64   `gorm:"default:5" json:"duration"`                            // 场景目标时长（秒）
-	Characters          string    `json:"characters"`                                           // 出场角色名（逗号分隔），用于一致性注入
-	LocationName        string    `gorm:"column:location_name" json:"location"`                 // 场景地点名（对应 location 资产，用于环境一致性注入）
-	Props               string    `json:"props"`                                                // 出场关键道具名（逗号分隔），用于道具一致性注入
-	VisualType          string    `gorm:"column:visual_type;default:normal" json:"visual_type"` // normal/megastructure
-	MegaType            string    `gorm:"column:mega_type" json:"mega_type"`                    // architecture/creature/geological/mechanical/surreal
-	ImageFile           string    `json:"image_file"`                                           // 首帧图文件名（input/<project_id>/ 下）
-	ImageToken          string    `gorm:"column:image_token" json:"-"`                          // 单次生成令牌，防止并发或过期结果回写
-	ImageTaskID         string    `gorm:"column:image_task_id;index" json:"image_task_id"`      // 关联 Krea2 分镜画面任务
-	VideoTaskID         string    `gorm:"column:video_task_id" json:"video_task_id"`            // 关联视频生成任务
+	Title               string    `json:"title"`                                                               // 场景标题
+	Content             string    `json:"content"`                                                             // 场景正文（作为视频提示词）
+	ImagePrompt         string    `json:"image_prompt"`                                                        // 文生图提示词
+	ReferenceImagesJSON string    `gorm:"column:reference_images_json;type:text" json:"-"`                     // 用户指定的有序参考图及 Krea2/H3 用途
+	Duration            float64   `gorm:"default:5" json:"duration"`                                           // 场景目标时长（秒）
+	Characters          string    `json:"characters"`                                                          // 兼容字段：旧数据中的出场角色名
+	VisibleCharacters   string    `gorm:"column:visible_characters" json:"visible_characters"`                 // 画面中实际可见角色，逗号分隔；仅此类要求视觉参考
+	VoiceCharacters     string    `gorm:"column:voice_characters" json:"voice_characters"`                     // 仅发声但不在画面中的角色，逗号分隔
+	MentionedCharacters string    `gorm:"column:mentioned_characters" json:"mentioned_characters"`             // 仅在剧情、对白或独白中被提及的角色
+	CharacterRolesSet   bool      `gorm:"column:character_roles_set;default:false" json:"character_roles_set"` // 是否已明确完成可见/发声/提及分类
+	LocationName        string    `gorm:"column:location_name" json:"location"`                                // 场景地点名（对应 location 资产，用于环境一致性注入）
+	Props               string    `json:"props"`                                                               // 出场关键道具名（逗号分隔），用于道具一致性注入
+	VisualType          string    `gorm:"column:visual_type;default:normal" json:"visual_type"`                // normal/megastructure
+	MegaType            string    `gorm:"column:mega_type" json:"mega_type"`                                   // architecture/creature/geological/mechanical/surreal
+	ImageFile           string    `json:"image_file"`                                                          // 首帧图文件名（input/<project_id>/ 下）
+	ImageToken          string    `gorm:"column:image_token" json:"-"`                                         // 单次生成令牌，防止并发或过期结果回写
+	ImageTaskID         string    `gorm:"column:image_task_id;index" json:"image_task_id"`                     // 关联 Krea2 分镜画面任务
+	VideoTaskID         string    `gorm:"column:video_task_id" json:"video_task_id"`                           // 关联视频生成任务
 	VideoGPU            *int      `gorm:"column:video_gpu" json:"video_gpu"`
 	VideoFile           string    `gorm:"column:video_file" json:"video_file"`                         // ComfyUI 输出相对路径（合并使用）
 	VideoInputFile      string    `gorm:"column:video_input_file" json:"video_input_file"`             // 下载到项目 input 目录的浏览器可播放副本

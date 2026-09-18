@@ -545,16 +545,19 @@ type scriptDialogue struct {
 }
 
 type scriptScene struct {
-	Title       string           `json:"title"`
-	Content     string           `json:"content"`
-	ImagePrompt string           `json:"image_prompt"`
-	Duration    float64          `json:"duration"`
-	Characters  []string         `json:"characters"`
-	Location    string           `json:"location"`
-	Props       []string         `json:"props"`
-	VisualType  string           `json:"visual_type"`
-	MegaType    string           `json:"mega_type"`
-	Dialogues   []scriptDialogue `json:"dialogues"`
+	Title               string           `json:"title"`
+	Content             string           `json:"content"`
+	ImagePrompt         string           `json:"image_prompt"`
+	Duration            float64          `json:"duration"`
+	Characters          []string         `json:"characters"`
+	VisibleCharacters   []string         `json:"visible_characters"`
+	VoiceCharacters     []string         `json:"voice_characters"`
+	MentionedCharacters []string         `json:"mentioned_characters"`
+	Location            string           `json:"location"`
+	Props               []string         `json:"props"`
+	VisualType          string           `json:"visual_type"`
+	MegaType            string           `json:"mega_type"`
+	Dialogues           []scriptDialogue `json:"dialogues"`
 }
 
 type scriptResult struct {
@@ -576,7 +579,10 @@ const scriptSystemPrompt = `你是一位专业的漫剧编剧与分镜师。根�
       "content": "该场景的视频提示词：描述画面动作、镜头运动（如推近/摇镜）、人物表情与对白，现在时态，1~3 句",
       "image_prompt": "该场景的静态画面提示词（用于文生图）：包含主体人物外貌特征、服装、场景环境、光影氛围、构图与画风描述",
       "duration": 5,
-      "characters": ["出场角色名1", "角色名2"],
+      "characters": ["兼容字段：与 visible_characters 相同"],
+      "visible_characters": ["本镜最终画面中实际可见的角色"],
+      "voice_characters": ["本镜只发声但不在画面中出现的角色"],
+      "mentioned_characters": ["仅在剧情说明、对白或独白中被提及的角色"],
       "location": "该场景地点名（同一地点多场景须用同一名称，保证环境一致；无明确地点则为空字符串）",
       "props": ["该场景出现的关键道具名（同一道具须用同一名称；无则为空数组）"],
       "visual_type": "normal 或 megastructure（仅巨型建筑、巨兽、地质奇观、巨型机械、超现实巨构使用后者）",
@@ -587,7 +593,7 @@ const scriptSystemPrompt = `你是一位专业的漫剧编剧与分镜师。根�
 }
 3. 默认按约 180 秒单集规划 20~30 个镜头；每个镜头为 3~15 秒的独立视频片段，所有镜头 duration 之和应在 162~198 秒内。
 4. 人物一致性至关重要：同一角色在多个场景出现时，image_prompt 必须重复其外貌特征（发型、服装颜色、体型），且所有场景画风描述保持一致。
-5. 每个场景必须在 characters 数组中列出该场出场的角色名（须与角色卡或创作方案中的角色名完全一致；无出场角色则为空数组）。
+5. 必须区分人物用途：visible_characters 只列本镜最终画面中真实可见的人物（包括回忆画面、照片、倒影中确实被画出的角色）；voice_characters 只列画外对白或内心独白的发声者；mentioned_characters 只列剧情说明、对白或独白中被提到但不会出现在画面中的人物。人物名字出现在文字中不等于画面出场。characters 为兼容字段，必须与 visible_characters 完全相同。只有 visible_characters 会要求人物四视图。
 6. script 正文优先使用固定格式：【动作】画面描述、【对白｜角色名】原文、【旁白】原文、【内心独白｜角色名】原文。逐场检查故事正文和分镜内容中的明确发声标注，并忠实提取到 dialogues：“旁白/画外音：原文”使用 narration，“角色名内心独白：原文”使用 monologue，“角色名：原文”使用 dialogue。只复制标注后的原文，不改写、不概括、不补充。不得把“他心里疑惑”“气氛压抑”等心理、动作或氛围描写转换成独白或旁白。speech_type 只能是 dialogue、narration 或 monologue；dialogue/monologue 的 character 必须是角色名，narration 的 character 固定为“旁白”。正文和分镜内容均未明确出现可发声内容时必须为空数组。
 7. 第一个场景尽量给出大场景/环境交代，后续场景聚焦人物动作与剧情推进。
 8. 道具与场景一致性：贯穿剧情的关键道具（信物/武器等）与主要地点必须在 props/location 中用统一名称标出（系统会用同名资产参考图锁定其外观），同一道具/地点在不同场景中名称必须完全相同。`
@@ -759,15 +765,20 @@ func (s *ProjectService) generateScriptCore(p *models.Project, episodeN int, raw
 			return err
 		}
 		for i, sc := range res.Scenes {
+			visibleNames := sceneVisibleNames(sc)
 			scene := models.Scene{
 				ProjectID: p.ID, EpisodeN: episodeN, Order: i + 1, Generation: newGeneration,
 				Title: sc.Title, Content: sc.Content,
 				ImagePrompt: sc.ImagePrompt, Duration: normalizeSceneDuration(sc.Duration), Status: "pending",
-				Characters:   joinSceneCharacters(sc.Characters),
-				LocationName: strings.TrimSpace(sc.Location),
-				Props:        joinSceneCharacters(sc.Props),
-				VisualType:   normalizeVisualType(sc.VisualType, sc.Title+" "+sc.Content+" "+sc.ImagePrompt),
-				MegaType:     normalizeMegaType(sc.MegaType),
+				Characters:          joinSceneCharacters(visibleNames),
+				VisibleCharacters:   joinSceneCharacters(visibleNames),
+				VoiceCharacters:     joinSceneCharacters(sc.VoiceCharacters),
+				MentionedCharacters: joinSceneCharacters(sc.MentionedCharacters),
+				CharacterRolesSet:   true,
+				LocationName:        strings.TrimSpace(sc.Location),
+				Props:               joinSceneCharacters(sc.Props),
+				VisualType:          normalizeVisualType(sc.VisualType, sc.Title+" "+sc.Content+" "+sc.ImagePrompt),
+				MegaType:            normalizeMegaType(sc.MegaType),
 			}
 			if scene.Title == "" {
 				scene.Title = fmt.Sprintf("场景 %d", i+1)
@@ -939,9 +950,16 @@ func (s *ProjectService) projectImageSize(projectID uint) string {
 
 const maxSceneReferenceImages = 9
 
-// sceneCharacterPortraits 收集场景出场角色的参考像（四视图优先，标准像兜底，按出场顺序）
+func visibleSceneCharacterNames(sc *models.Scene) []string {
+	if sc.CharacterRolesSet {
+		return parseSceneCharacters(sc.VisibleCharacters)
+	}
+	return parseSceneCharacters(sc.Characters)
+}
+
+// sceneCharacterPortraits 收集场景实际可见角色的参考像（四视图优先，标准像兜底，按出场顺序）
 func (s *ProjectService) sceneCharacterPortraits(sc *models.Scene) []models.Character {
-	names := parseSceneCharacters(sc.Characters)
+	names := visibleSceneCharacterNames(sc)
 	if len(names) == 0 {
 		return nil
 	}
@@ -1898,7 +1916,7 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 			}
 			lines = append(lines, fmt.Sprintf("- <Picture %d>：%s", len(refs), description))
 		}
-		for _, name := range parseSceneCharacters(sc.Characters) {
+		for _, name := range visibleSceneCharacterNames(sc) {
 			marker := "角色「" + name + "」"
 			for i, line := range selectedLines {
 				if strings.Contains(line, marker) {
@@ -2738,6 +2756,13 @@ func parseSceneCharacters(raw string) []string {
 	return out
 }
 
+func sceneVisibleNames(sc scriptScene) []string {
+	if len(sc.VisibleCharacters) > 0 {
+		return sc.VisibleCharacters
+	}
+	return sc.Characters
+}
+
 // joinSceneCharacters 角色名切片 → 逗号分隔字符串
 func joinSceneCharacters(names []string) string {
 	out := make([]string, 0, len(names))
@@ -2900,7 +2925,7 @@ func (s *ProjectService) missingSceneCharacterReferences(sc *models.Scene, refs 
 	for _, ref := range refs {
 		present[ref.Name] = true
 	}
-	names := parseSceneCharacters(sc.Characters)
+	names := visibleSceneCharacterNames(sc)
 	if len(names) == 0 {
 		return nil
 	}
