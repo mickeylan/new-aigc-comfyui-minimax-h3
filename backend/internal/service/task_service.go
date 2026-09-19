@@ -1058,6 +1058,13 @@ func (s *TaskService) handleWSEvent(taskID string, type_ string, data map[string
 	if err := s.db.Where("task_id = ?", taskID).First(&task).Error; err != nil {
 		return
 	}
+	// Some ComfyUI/proxy variants accept /prompt but omit prompt_id in the HTTP response.
+	// WS execution events still carry the authoritative ID; persist it before history lookup.
+	if eventPromptID, _ := data["prompt_id"].(string); eventPromptID != "" && task.ComfyPromptID == "" {
+		if result := s.db.Model(&task).Where("comfy_prompt_id = ''").Update("comfy_prompt_id", eventPromptID); result.Error == nil && result.RowsAffected == 1 {
+			task.ComfyPromptID = eventPromptID
+		}
+	}
 
 	switch type_ {
 	case "execution_start":
@@ -1222,10 +1229,20 @@ func (s *TaskService) nodeWeights(task *models.Task) map[string]float64 {
 
 // finishTask 查询 history 提取结果
 func (s *TaskService) finishTask(task *models.Task) {
+	// A completed ComfyUI execution must not be reported failed merely because history is
+	// delayed, unavailable, or the submit response omitted prompt_id. Prefer the actual file.
+	if task.Port == nil || strings.TrimSpace(task.ComfyPromptID) == "" {
+		if !s.tryRecoverTaskOutput(task) {
+			log.Printf("[task] %s completed but prompt_id/history unavailable; waiting for output recovery", task.TaskID)
+		}
+		return
+	}
 	c := NewComfyClient(s.comfyHostForPort(*task.Port), *task.Port)
 	hist, err := c.GetHistory(task.ComfyPromptID)
 	if err != nil {
-		s.failTask(task, "结果查询失败: "+err.Error())
+		if !s.tryRecoverTaskOutput(task) {
+			log.Printf("[task] %s history unavailable (%v); waiting for output recovery", task.TaskID, err)
+		}
 		return
 	}
 	item, ok := hist[task.ComfyPromptID].(map[string]any)

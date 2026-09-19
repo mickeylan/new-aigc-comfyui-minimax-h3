@@ -369,6 +369,9 @@ func (s *Service) HandleClearTasks(c *gin.Context) {
 }
 
 func (s *Service) HandleGetTask(c *gin.Context) {
+	if s.Tasks != nil {
+		s.Tasks.RefreshTaskResult(c.Param("id"))
+	}
 	var task models.Task
 	if err := s.DB.Where("task_id = ?", c.Param("id")).First(&task).Error; err != nil {
 		c.JSON(404, gin.H{"error": "task not found"})
