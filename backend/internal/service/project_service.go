@@ -3420,19 +3420,6 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 			return err
 		}
 	}
-	claim := s.db.Model(&models.Scene{}).
-		Where("id = ? AND project_id = ? AND generation = ? AND status IN ? AND image_file != ''",
-			sc.ID, p.ID, sc.Generation, []string{"image_ready", "video_ready", "failed"}).
-		Updates(map[string]any{"status": "video_creating", "error": "", "video_task_id": "", "video_file": "", "video_gpu": nil})
-	if claim.Error != nil {
-		return claim.Error
-	}
-	if claim.RowsAffected == 0 {
-		return fmt.Errorf("场景 %d 已在生成或状态已变化", sc.Order)
-	}
-	if s.continuity != nil {
-		s.continuity.InvalidateDependents(sc.ID, "来源视频重新生成，请重新选择衔接帧")
-	}
 	videoW, videoH := aspectVideoSize(p.AspectRatio, s.videoResolution())
 	pid := fmt.Sprintf("%d", p.ID)
 	assemble := func(override string) (string, string, map[string][]FileMeta) {
@@ -3466,6 +3453,16 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 			return fmt.Errorf("所选视频模板不可用且回退模板也不可用: %w", selectionErr)
 		}
 	}
+	claim := s.db.Model(&models.Scene{}).
+		Where("id = ? AND project_id = ? AND generation = ? AND status IN ? AND image_file != ''",
+			sc.ID, p.ID, sc.Generation, []string{"image_ready", "video_ready", "failed"}).
+		Updates(map[string]any{"status": "video_creating", "error": ""})
+	if claim.Error != nil {
+		return claim.Error
+	}
+	if claim.RowsAffected == 0 {
+		return fmt.Errorf("场景 %d 已在生成或状态已变化", sc.Order)
+	}
 	videoFileNames := []string{}
 	for _, key := range []string{"ref_images", "first_frame", "last_frame"} {
 		for i, ref := range videoFiles[key] {
@@ -3488,7 +3485,8 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		return err
 	}
 	updated := s.db.Model(&models.Scene{}).Where("id = ? AND generation = ? AND status = ?", sc.ID, sc.Generation, "video_creating").Updates(map[string]any{
-		"video_task_id": task.TaskID, "status": "video_pending", "error": "",
+		"video_task_id": task.TaskID, "video_file": "", "video_input_file": "", "video_gpu": nil,
+		"status": "video_pending", "error": "",
 	})
 	if updated.Error != nil || updated.RowsAffected == 0 {
 		_ = s.tasks.CancelTask(task.TaskID)
@@ -3496,6 +3494,9 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 			return updated.Error
 		}
 		return fmt.Errorf("场景 %d 视频任务已过期", sc.Order)
+	}
+	if s.continuity != nil {
+		s.continuity.InvalidateDependents(sc.ID, "来源视频重新生成，请重新选择衔接帧")
 	}
 	go func() {
 		// 视频生成并发由 TaskService 全局限流（video_concurrency 平台设置），此处直接提交
@@ -4003,7 +4004,10 @@ func (s *ProjectService) syncCharacterPortraits() {
 				continue
 			}
 			res := s.db.Model(ch).Where("portrait_task_id = ?", task.TaskID).Updates(map[string]any{"portrait": filepath.Base(path), "portrait_task_id": "", "portrait_error": ""})
-			changed = changed || res.RowsAffected > 0
+			if res.RowsAffected > 0 {
+				registerSelectedAssetVariant(s.db, ch.ProjectID, VariantCharacterPortrait, ch.ID, filepath.Base(path), task.Prompt, "krea2_task:"+task.TaskID)
+				changed = true
+			}
 		}
 	}
 	if changed {
@@ -4973,12 +4977,16 @@ type DialogueUpdateInput struct {
 }
 
 func dialogueSpeed(d models.Dialogue) float64 {
-	if d.Speed <= 0 { return 1 }
+	if d.Speed <= 0 {
+		return 1
+	}
 	return d.Speed
 }
 
 func dialogueVolume(d models.Dialogue) float64 {
-	if d.Volume <= 0 && d.ID == 0 { return 1 }
+	if d.Volume <= 0 && d.ID == 0 {
+		return 1
+	}
 	return d.Volume
 }
 
@@ -5049,20 +5057,36 @@ func (s *ProjectService) UpdateDialogueFields(p *models.Project, did uint, input
 		}
 	}
 	if input.Offset != nil {
-		if *input.Offset < -60 || *input.Offset > 60 { return nil, fmt.Errorf("offset 需在 -60~60 秒之间") }
-		if *input.Offset != d.Offset { updates["offset"] = *input.Offset }
+		if *input.Offset < -60 || *input.Offset > 60 {
+			return nil, fmt.Errorf("offset 需在 -60~60 秒之间")
+		}
+		if *input.Offset != d.Offset {
+			updates["offset"] = *input.Offset
+		}
 	}
 	if input.Speed != nil {
-		if *input.Speed < 0.5 || *input.Speed > 2 { return nil, fmt.Errorf("speed 需在 0.5~2 之间") }
-		if *input.Speed != dialogueSpeed(d) { updates["speed"], audioChanged = *input.Speed, true }
+		if *input.Speed < 0.5 || *input.Speed > 2 {
+			return nil, fmt.Errorf("speed 需在 0.5~2 之间")
+		}
+		if *input.Speed != dialogueSpeed(d) {
+			updates["speed"], audioChanged = *input.Speed, true
+		}
 	}
 	if input.Pitch != nil {
-		if *input.Pitch < -12 || *input.Pitch > 12 { return nil, fmt.Errorf("pitch 需在 -12~12 半音之间") }
-		if *input.Pitch != d.Pitch { updates["pitch"], audioChanged = *input.Pitch, true }
+		if *input.Pitch < -12 || *input.Pitch > 12 {
+			return nil, fmt.Errorf("pitch 需在 -12~12 半音之间")
+		}
+		if *input.Pitch != d.Pitch {
+			updates["pitch"], audioChanged = *input.Pitch, true
+		}
 	}
 	if input.Volume != nil {
-		if *input.Volume < 0 || *input.Volume > 4 { return nil, fmt.Errorf("volume 需在 0~4 之间") }
-		if *input.Volume != dialogueVolume(d) { updates["volume"], audioChanged = *input.Volume, true }
+		if *input.Volume < 0 || *input.Volume > 4 {
+			return nil, fmt.Errorf("volume 需在 0~4 之间")
+		}
+		if *input.Volume != dialogueVolume(d) {
+			updates["volume"], audioChanged = *input.Volume, true
+		}
 	}
 	if input.Emotion != nil && strings.TrimSpace(*input.Emotion) != d.Emotion {
 		updates["emotion"], audioChanged = strings.TrimSpace(*input.Emotion), true
@@ -5152,7 +5176,9 @@ func (s *ProjectService) StartDialogueTTS(d *models.Dialogue) error {
 		return fmt.Errorf("对白已在合成或已完成")
 	}
 	// Refetch after claiming so synthesis and its hash use the latest persisted controls.
-	if err := s.db.First(d, d.ID).Error; err != nil { return err }
+	if err := s.db.First(d, d.ID).Error; err != nil {
+		return err
+	}
 	go func() {
 		if err := s.synthesizeDialogue(d); err != nil {
 			log.Printf("[dialogue %d] tts failed: %v", d.ID, err)
@@ -5226,18 +5252,32 @@ func (s *ProjectService) GenerateProjectDubs(p *models.Project) (int, error) {
 // the episode's project-owned scenes so dialogue IDs from another project cannot leak in.
 func (s *ProjectService) GenerateEpisodeDubs(p *models.Project, episodeN int, staleOnly bool) (int, error) {
 	var sceneIDs []uint
-	if err := s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ?", p.ID, episodeN, p.Generation).Pluck("id", &sceneIDs).Error; err != nil { return 0, err }
-	if len(sceneIDs) == 0 { return 0, nil }
+	if err := s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ?", p.ID, episodeN, p.Generation).Pluck("id", &sceneIDs).Error; err != nil {
+		return 0, err
+	}
+	if len(sceneIDs) == 0 {
+		return 0, nil
+	}
 	var dubs []models.Dialogue
-	if err := s.db.Where("project_id = ? AND scene_id IN ?", p.ID, sceneIDs).Order("scene_id, `order`").Find(&dubs).Error; err != nil { return 0, err }
+	if err := s.db.Where("project_id = ? AND scene_id IN ?", p.ID, sceneIDs).Order("scene_id, `order`").Find(&dubs).Error; err != nil {
+		return 0, err
+	}
 	count := 0
 	for i := range dubs {
 		d := &dubs[i]
 		stale := d.AudioStale || d.AudioFile == "" || d.AudioHash == "" || d.AudioHash != dialogueAudioHash(*d)
-		if staleOnly && !stale { continue }
-		if d.Status == "synthesizing" { continue }
-		if stale { _ = s.db.Model(d).Updates(map[string]any{"status": "pending", "audio_stale": true, "audio_stale_reason": "配音输入摘要已变化"}).Error }
-		if err := s.StartDialogueTTS(d); err == nil { count++ }
+		if staleOnly && !stale {
+			continue
+		}
+		if d.Status == "synthesizing" {
+			continue
+		}
+		if stale {
+			_ = s.db.Model(d).Updates(map[string]any{"status": "pending", "audio_stale": true, "audio_stale_reason": "配音输入摘要已变化"}).Error
+		}
+		if err := s.StartDialogueTTS(d); err == nil {
+			count++
+		}
 	}
 	return count, nil
 }
@@ -5245,7 +5285,9 @@ func (s *ProjectService) GenerateEpisodeDubs(p *models.Project, episodeN int, st
 // EpisodeDubPreview returns the effective QA timeline and project-owned dialogue state.
 func (s *ProjectService) EpisodeDubPreview(p *models.Project, episodeN int) (map[string]any, error) {
 	data, err := s.EditorData(p, episodeN)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{"episode_n": episodeN, "dialogues": data["dialogues"], "timeline": data["subtitles"]}, nil
 }
 
@@ -5253,9 +5295,19 @@ func (s *ProjectService) EpisodeDubPreview(p *models.Project, episodeN int) (map
 // Providers which do not accept these controls retain them for deterministic preview/merge filters.
 func (s *ProjectService) ApplyDialoguePreview(p *models.Project, did uint) (*models.Dialogue, error) {
 	var d models.Dialogue
-	if err := s.db.Where("id = ? AND project_id = ?", did, p.ID).First(&d).Error; err != nil { return nil, fmt.Errorf("对白不存在") }
-	if strings.TrimSpace(d.AudioFile) == "" { return nil, fmt.Errorf("当前对白没有可应用的音频") }
-	if err := s.db.Model(&d).Updates(map[string]any{"audio_hash": dialogueAudioHash(d), "audio_stale": false, "audio_stale_reason": "", "status": "ready", "error": "", "audio_revision": d.AudioRevision + 1}).Error; err != nil { return nil, err }
+	if err := s.db.Where("id = ? AND project_id = ?", did, p.ID).First(&d).Error; err != nil {
+		return nil, fmt.Errorf("对白不存在")
+	}
+	if strings.TrimSpace(d.AudioFile) == "" {
+		return nil, fmt.Errorf("当前对白没有可应用的音频")
+	}
+	currentHash := dialogueAudioHash(d)
+	if d.AudioHash == "" || d.AudioHash != currentHash || d.AudioStale {
+		return nil, fmt.Errorf("试听音频与当前文本、音色或表演参数不一致，请先重新合成")
+	}
+	if err := s.db.Model(&d).Updates(map[string]any{"audio_stale": false, "audio_stale_reason": "", "status": "ready", "error": ""}).Error; err != nil {
+		return nil, err
+	}
 	s.db.First(&d, d.ID)
 	return &d, nil
 }
@@ -5263,10 +5315,16 @@ func (s *ProjectService) ApplyDialoguePreview(p *models.Project, did uint) (*mod
 // RevertDialogueAudio swaps current and previous audio without deleting either revision.
 func (s *ProjectService) RevertDialogueAudio(p *models.Project, did uint) (*models.Dialogue, error) {
 	var d models.Dialogue
-	if err := s.db.Where("id = ? AND project_id = ?", did, p.ID).First(&d).Error; err != nil { return nil, fmt.Errorf("对白不存在") }
-	if strings.TrimSpace(d.PreviousAudioFile) == "" { return nil, fmt.Errorf("没有可回退的上一版音频") }
+	if err := s.db.Where("id = ? AND project_id = ?", did, p.ID).First(&d).Error; err != nil {
+		return nil, fmt.Errorf("对白不存在")
+	}
+	if strings.TrimSpace(d.PreviousAudioFile) == "" {
+		return nil, fmt.Errorf("没有可回退的上一版音频")
+	}
 	current, previous := d.AudioFile, d.PreviousAudioFile
-	if err := s.db.Model(&d).Updates(map[string]any{"audio_file": previous, "previous_audio_file": current, "audio_revision": d.AudioRevision + 1, "status": "ready", "audio_stale": true, "audio_stale_reason": "已回退到上一版音频"}).Error; err != nil { return nil, err }
+	if err := s.db.Model(&d).Updates(map[string]any{"audio_file": previous, "previous_audio_file": current, "audio_revision": d.AudioRevision + 1, "status": "ready", "audio_stale": true, "audio_stale_reason": "已回退到上一版音频"}).Error; err != nil {
+		return nil, err
+	}
 	s.db.First(&d, d.ID)
 	return &d, nil
 }

@@ -97,8 +97,12 @@ func (s *CharacterHistoryService) List(projectID uint, characterID *uint) ([]Cha
 		return nil, gorm.ErrRecordNotFound
 	}
 
+	var project models.Project
+	if err := s.db.First(&project, projectID).Error; err != nil {
+		return nil, err
+	}
 	var scenes []models.Scene
-	if err := s.db.Where("project_id = ?", projectID).Order("episode_n, `order`, id").Find(&scenes).Error; err != nil {
+	if err := s.db.Where("project_id = ? AND generation = ?", projectID, project.Generation).Order("episode_n, `order`, id").Find(&scenes).Error; err != nil {
 		return nil, err
 	}
 	sceneIDs := make([]uint, 0, len(scenes))

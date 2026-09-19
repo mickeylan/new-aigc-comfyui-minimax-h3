@@ -171,13 +171,8 @@ func previewToDatabase(tx *gorm.DB, project *models.Project, episodeN int, previ
 	for _, scene := range oldScenes {
 		ids = append(ids, scene.ID)
 	}
-	if len(ids) > 0 {
-		if err := tx.Where("scene_id IN ?", ids).Delete(&models.Shot{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("project_id = ? AND scene_id IN ?", project.ID, ids).Delete(&models.Dialogue{}).Error; err != nil {
-			return err
-		}
+	if err := deleteSceneDependents(tx, project.ID, ids); err != nil {
+		return err
 	}
 	if err := tx.Where("project_id = ? AND episode_n = ?", project.ID, episodeN).Delete(&models.Scene{}).Error; err != nil {
 		return err

@@ -87,7 +87,8 @@ func (s *PlaygroundService) Create(input CreatePlaygroundRunInput) ([]models.Pla
 			Files:      input.Files,
 		})
 		if createErr != nil {
-			return runs, createErr
+			s.cleanupCreatedBatch(runs)
+			return nil, createErr
 		}
 		run := models.PlaygroundRun{
 			Mode: input.Mode, Template: template.Code, Prompt: input.Prompt,
@@ -96,11 +97,19 @@ func (s *PlaygroundService) Create(input CreatePlaygroundRunInput) ([]models.Pla
 		}
 		if err := s.db.Create(&run).Error; err != nil {
 			_ = s.db.Delete(task).Error
-			return runs, err
+			s.cleanupCreatedBatch(runs)
+			return nil, err
 		}
 		runs = append(runs, run)
 	}
 	return runs, nil
+}
+
+func (s *PlaygroundService) cleanupCreatedBatch(runs []models.PlaygroundRun) {
+	for _, run := range runs {
+		_ = s.db.Where("task_id = ? AND status = ?", run.TaskID, "pending").Delete(&models.Task{}).Error
+		_ = s.db.Delete(&models.PlaygroundRun{}, run.ID).Error
+	}
 }
 
 func nonNilMap(value map[string]any) map[string]any {
@@ -212,6 +221,14 @@ func (s *PlaygroundService) Promote(id uint, resultIndex int) (*models.Material,
 		return nil, fmt.Errorf("result filename is invalid")
 	}
 	subfolder := strings.Trim(strings.ReplaceAll(fmt.Sprint(results[resultIndex]["subfolder"]), "\\", "/"), "/")
+	cleanSubfolder := filepath.ToSlash(filepath.Clean(filepath.FromSlash(subfolder)))
+	if cleanSubfolder == "." {
+		cleanSubfolder = ""
+	}
+	if filepath.IsAbs(filepath.FromSlash(cleanSubfolder)) || cleanSubfolder == ".." || strings.HasPrefix(cleanSubfolder, "../") || strings.Contains(cleanSubfolder, "/../") {
+		return nil, fmt.Errorf("result subfolder is invalid")
+	}
+	subfolder = cleanSubfolder
 	kind := resultMaterialType(fmt.Sprint(results[resultIndex]["type"]), filename)
 
 	var task models.Task
@@ -219,7 +236,12 @@ func (s *PlaygroundService) Promote(id uint, resultIndex int) (*models.Material,
 		return nil, err
 	}
 	if s.materials != nil && s.materials.cfg != nil && s.materials.remote != nil && s.materials.upload != nil && task.GPUIndex != nil {
-		outputPath := filepath.Join(s.materials.cfg.Comfy.ComfyDir, "output_workers", fmt.Sprintf("gpu%d", *task.GPUIndex), filepath.FromSlash(subfolder), filename)
+		outputRoot := filepath.Join(s.materials.cfg.Comfy.ComfyDir, "output_workers", fmt.Sprintf("gpu%d", *task.GPUIndex))
+		outputPath := filepath.Join(outputRoot, filepath.FromSlash(subfolder), filename)
+		rel, relErr := filepath.Rel(outputRoot, outputPath)
+		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("result path escapes output directory")
+		}
 		file, openErr := s.materials.remote.Open(outputPath)
 		if openErr != nil {
 			return nil, openErr

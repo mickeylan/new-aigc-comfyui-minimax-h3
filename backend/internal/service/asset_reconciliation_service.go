@@ -196,8 +196,30 @@ func rewriteSceneNameReferences(tx *gorm.DB, projectID uint, entityType, from, t
 			}
 		}
 		if len(updates) > 0 {
+			updates["prompt_stale"] = true
+			updates["image_task_id"], updates["image_file"] = "", ""
+			updates["video_task_id"], updates["video_file"], updates["video_input_file"] = "", "", ""
+			updates["video_gpu"], updates["status"] = nil, "pending"
 			if err := tx.Model(sc).Updates(updates).Error; err != nil {
 				return err
+			}
+			if err := MarkSceneCandidatesStale(tx, projectID, sc.ID, "", "资产对账已改变权威引用"); err != nil {
+				return err
+			}
+		}
+	}
+	if entityType == "character" {
+		var dialogues []models.Dialogue
+		if err := tx.Where("project_id = ?", projectID).Find(&dialogues).Error; err != nil {
+			return err
+		}
+		for _, dialogue := range dialogues {
+			if normalizeCanonName(dialogue.Character) == normalizeCanonName(from) {
+				if err := tx.Model(&dialogue).Updates(map[string]any{
+					"character": to, "audio_stale": true, "audio_stale_reason": "角色资产对账已更新说话者身份", "status": "pending",
+				}).Error; err != nil {
+					return err
+				}
 			}
 		}
 	}

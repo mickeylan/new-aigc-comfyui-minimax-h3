@@ -431,7 +431,10 @@ func (s *ProjectService) syncAssetImages() {
 			res := s.db.Model(a).Where("image_task_id = ?", task.TaskID).Updates(map[string]any{
 				"image": filepath.Base(path), "image_task_id": "", "image_error": "",
 			})
-			changed = changed || res.RowsAffected > 0
+			if res.RowsAffected > 0 {
+				registerSelectedAssetVariant(s.db, a.ProjectID, VariantAssetImage, a.ID, filepath.Base(path), task.Prompt, "krea2_task:"+task.TaskID)
+				changed = true
+			}
 		}
 	}
 	if changed {

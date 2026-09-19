@@ -5,6 +5,10 @@
       <div class="field-row"><label>模式<select v-model="form.mode" class="input"><option v-for="mode in modes" :key="mode" :value="mode">{{ mode }}</option></select></label><label>模型模板<select v-model="form.template" class="input"><option v-for="item in templates" :key="item.template_code" :value="item.template_code">{{ item.name }}</option></select></label><label>批量<input v-model.number="form.batch_count" type="number" min="1" max="4" class="input" /></label></div>
       <label>提示词<textarea v-model="form.prompt" class="textarea" rows="5" /></label>
       <label>参数 JSON<textarea v-model="paramsText" class="textarea mono" rows="4" placeholder='{"width":1024,"height":1024}' /></label>
+      <label>参考图片（可多选）<input type="file" accept="image/*" multiple @change="uploadReferences($event, 'ref_images')" /></label>
+      <label>首帧图片<input type="file" accept="image/*" @change="uploadReferences($event, 'first_frame')" /></label>
+      <label>尾帧图片<input type="file" accept="image/*" @change="uploadReferences($event, 'last_frame')" /></label>
+      <p class="sub" v-if="uploadedCount">已上传 {{ uploadedCount }} 个输入文件</p>
       <button class="btn" :disabled="busy || !form.template" @click="generate">{{ busy ? '提交中…' : '批量生成' }}</button>
     </section>
     <section class="section"><div class="section-head"><h2>历史结果</h2><span class="sub">勾选两项可比较</span></div><div class="catalog-grid">
@@ -22,14 +26,16 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { api } from '../api'
 import { useToastStore } from '../stores/toast'
-const toast = useToastStore(); const catalog = ref([]); const runs = ref([]); const busy = ref(false); const compareIds = ref([]); const paramsText = ref('{}')
+const toast = useToastStore(); const catalog = ref([]); const runs = ref([]); const busy = ref(false); const compareIds = ref([]); const paramsText = ref('{}'); const files = ref({})
 const form = reactive({ mode: 'text-to-image', template: '', prompt: '', batch_count: 1 })
 const modes = computed(() => [...new Set(catalog.value.map(v => v.mode))])
 const templates = computed(() => catalog.value.filter(v => v.mode === form.mode))
 const compared = computed(() => runs.value.filter(v => compareIds.value.includes(v.id)))
+const uploadedCount = computed(() => Object.values(files.value).reduce((n, rows) => n + rows.length, 0))
 watch(() => form.mode, () => { form.template = templates.value[0]?.template_code || '' })
-async function load(){ try { const [cat,res]=await Promise.all([api.modelCatalog(),api.playgroundRuns()]); catalog.value=cat.data?.items||[]; runs.value=res.data||[]; if(!form.template){form.mode=modes.value[0]||'';form.template=templates.value[0]?.template_code||''} } catch(e){toast.error(e.response?.data?.error||'加载失败')} }
-async function generate(){ busy.value=true; try{const params=JSON.parse(paramsText.value||'{}');await api.createPlaygroundRun({...form,params,files:{}});toast.success('试验任务已提交');await load()}catch(e){toast.error(e.response?.data?.error||e.message||'提交失败')}finally{busy.value=false} }
+async function load(){ try { const [cat,res]=await Promise.all([api.modelCatalog(),api.playgroundRuns()]); catalog.value=cat.data?.items||[]; runs.value=res.data?.items||[]; if(!form.template){form.mode=modes.value[0]||'';form.template=templates.value[0]?.template_code||''} } catch(e){toast.error(e.response?.data?.error||'加载失败')} }
+async function uploadReferences(event, slot){ const selected=[...(event.target.files||[])]; if(!selected.length)return; busy.value=true; try{const taskId=`playground-${Date.now()}`; const rows=[]; for(const file of selected){const {data}=await api.upload(file,'image',taskId);rows.push({task_id:data.task_id,name:data.name})} files.value={...files.value,[slot]:rows};toast.success('输入图片已上传')}catch(e){toast.error(e.response?.data?.error||'上传失败')}finally{busy.value=false} }
+async function generate(){ busy.value=true; try{const params=JSON.parse(paramsText.value||'{}');await api.createPlaygroundRun({...form,params,files:files.value});toast.success('试验任务已提交');files.value={};await load()}catch(e){toast.error(e.response?.data?.error||e.message||'提交失败')}finally{busy.value=false} }
 async function star(run){await api.starPlaygroundRun(run.id,!run.starred);run.starred=!run.starred}
 async function promote(run){try{await api.promotePlaygroundRun(run.id,0);toast.success('结果已加入素材库')}catch(e){toast.error(e.response?.data?.error||'提升失败')}}
 onMounted(load)

@@ -1041,6 +1041,7 @@ func (s *Service) HandleUploadCharacterPortrait(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
+	registerSelectedAssetVariant(s.DB, ch.ProjectID, VariantCharacterPortrait, ch.ID, filepath.Base(path), ch.ReferencePrompt, "manual_upload")
 	s.Projects.PushProject(nil)
 	c.JSON(200, gin.H{"ok": true, "message": "照片已设为角色标准像", "portrait": filepath.Base(path)})
 }
@@ -1303,6 +1304,7 @@ func (s *Service) HandleUploadAssetImage(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
+	registerSelectedAssetVariant(s.DB, a.ProjectID, VariantAssetImage, a.ID, filepath.Base(path), a.Description, "manual_upload")
 	// 上传结果优先：取消旧生成任务，且同步器的 task-id 条件可阻止旧结果覆盖上传图片。
 	if a.ImageTaskID != "" && s.Tasks != nil {
 		if err := s.Tasks.CancelTask(a.ImageTaskID); err != nil && !strings.Contains(err.Error(), "已结束") {
@@ -1627,47 +1629,89 @@ func (s *Service) HandleGenerateProjectDub(c *gin.Context) {
 
 func episodeNumberParam(c *gin.Context) (int, bool) {
 	n, err := strconv.Atoi(c.Param("number"))
-	if err != nil || n <= 0 { c.JSON(400, gin.H{"error": "invalid episode number"}); return 0, false }
+	if err != nil || n <= 0 {
+		c.JSON(400, gin.H{"error": "invalid episode number"})
+		return 0, false
+	}
 	return n, true
 }
 
 // HandleGenerateEpisodeDub submits stale dialogue only unless stale_only=false is explicit.
 func (s *Service) HandleGenerateEpisodeDub(c *gin.Context) {
-	p, ok := s.loadProject(c); if !ok { return }
-	number, ok := episodeNumberParam(c); if !ok { return }
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	number, ok := episodeNumberParam(c)
+	if !ok {
+		return
+	}
 	staleOnly := c.DefaultQuery("stale_only", "true") != "false"
 	n, err := s.Projects.GenerateEpisodeDubs(p, number, staleOnly)
-	if err != nil { c.JSON(500, gin.H{"error": err.Error()}); return }
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(202, gin.H{"ok": true, "count": n, "stale_only": staleOnly, "message": fmt.Sprintf("已提交 %d 条过期对白配音", n)})
 }
 
 func (s *Service) HandleEpisodeDubPreview(c *gin.Context) {
-	p, ok := s.loadProject(c); if !ok { return }
-	number, ok := episodeNumberParam(c); if !ok { return }
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	number, ok := episodeNumberParam(c)
+	if !ok {
+		return
+	}
 	data, err := s.Projects.EpisodeDubPreview(p, number)
-	if err != nil { c.JSON(500, gin.H{"error": err.Error()}); return }
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(200, data)
 }
 
 func dialogueIDParam(c *gin.Context) (uint, bool) {
 	id, err := strconv.ParseUint(c.Param("did"), 10, 32)
-	if err != nil || id == 0 { c.JSON(400, gin.H{"error": "invalid dialogue id"}); return 0, false }
+	if err != nil || id == 0 {
+		c.JSON(400, gin.H{"error": "invalid dialogue id"})
+		return 0, false
+	}
 	return uint(id), true
 }
 
 func (s *Service) HandleApplyDialoguePreview(c *gin.Context) {
-	p, ok := s.loadProject(c); if !ok { return }
-	did, ok := dialogueIDParam(c); if !ok { return }
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	did, ok := dialogueIDParam(c)
+	if !ok {
+		return
+	}
 	d, err := s.Projects.ApplyDialoguePreview(p, did)
-	if err != nil { c.JSON(400, gin.H{"error": err.Error()}); return }
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(200, d)
 }
 
 func (s *Service) HandleRevertDialogueAudio(c *gin.Context) {
-	p, ok := s.loadProject(c); if !ok { return }
-	did, ok := dialogueIDParam(c); if !ok { return }
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	did, ok := dialogueIDParam(c)
+	if !ok {
+		return
+	}
 	d, err := s.Projects.RevertDialogueAudio(p, did)
-	if err != nil { c.JSON(400, gin.H{"error": err.Error()}); return }
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(200, d)
 }
 

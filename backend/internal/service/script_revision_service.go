@@ -148,13 +148,8 @@ func (s *ScriptRevisionService) Restore(projectID, revisionID uint) (*models.Scr
 		for _, scene := range currentScenes {
 			currentIDs = append(currentIDs, scene.ID)
 		}
-		if len(currentIDs) > 0 {
-			if err := tx.Where("scene_id IN ?", currentIDs).Delete(&models.Shot{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("project_id = ? AND scene_id IN ?", projectID, currentIDs).Delete(&models.Dialogue{}).Error; err != nil {
-				return err
-			}
+		if err := deleteSceneDependents(tx, projectID, currentIDs); err != nil {
+			return err
 		}
 		if err := tx.Where("project_id = ? AND episode_n = ?", projectID, episodeN).Delete(&models.Scene{}).Error; err != nil {
 			return err
@@ -202,12 +197,33 @@ func (s *ScriptRevisionService) Restore(projectID, revisionID uint) (*models.Scr
 			}
 		}
 
-		project := detail.Snapshot.Project
-		return tx.Model(&models.Project{}).Where("id = ?", projectID).Updates(map[string]any{
-			"script": project.Script, "scripts": project.Scripts, "visual_bible": project.VisualBible,
-			"status": project.Status, "error": project.Error, "generation": project.Generation,
-			"pipeline_stage": project.PipelineStage, "pipeline_episode": project.PipelineEpisode,
-		}).Error
+		// A revision is episode-scoped. Merge only this episode's script text and never
+		// rewind project generation, pipeline state, other episodes, or global visual bible.
+		var current models.Project
+		if err := tx.First(&current, projectID).Error; err != nil {
+			return err
+		}
+		var currentScripts, snapshotScripts map[string]string
+		_ = json.Unmarshal([]byte(current.Scripts), &currentScripts)
+		_ = json.Unmarshal([]byte(detail.Snapshot.Project.Scripts), &snapshotScripts)
+		if currentScripts == nil {
+			currentScripts = map[string]string{}
+		}
+		key := fmt.Sprint(episodeN)
+		if value, ok := snapshotScripts[key]; ok {
+			currentScripts[key] = value
+		} else {
+			delete(currentScripts, key)
+		}
+		merged, err := json.Marshal(currentScripts)
+		if err != nil {
+			return err
+		}
+		updates := map[string]any{"scripts": string(merged)}
+		if episodeN == 1 {
+			updates["script"] = detail.Snapshot.Project.Script
+		}
+		return tx.Model(&models.Project{}).Where("id = ?", projectID).Updates(updates).Error
 	})
 	return safetyRevision, err
 }

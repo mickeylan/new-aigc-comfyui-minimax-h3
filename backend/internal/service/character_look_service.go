@@ -499,7 +499,10 @@ func (s *CharacterLookService) SyncImages() {
 			s.db.Model(look).Where("image_task_id = ?", task.TaskID).Updates(map[string]any{"image_task_id": "", "image_error": err.Error()})
 			continue
 		}
-		s.db.Model(look).Where("image_task_id = ?", task.TaskID).Updates(map[string]any{"image": filepath.Base(path), "image_task_id": "", "image_error": ""})
+		res := s.db.Model(look).Where("image_task_id = ?", task.TaskID).Updates(map[string]any{"image": filepath.Base(path), "image_task_id": "", "image_error": ""})
+		if res.RowsAffected > 0 {
+			registerSelectedAssetVariant(s.db, look.ProjectID, VariantCharacterLook, look.ID, filepath.Base(path), task.Prompt, "krea2_task:"+task.TaskID)
+		}
 	}
 }
 
