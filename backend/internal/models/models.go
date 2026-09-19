@@ -366,22 +366,23 @@ type AssetVariant struct {
 
 // MergeTask 视频合并任务（把多个场景视频合并剪辑成片）
 type MergeTask struct {
-	ID             uint      `gorm:"primaryKey" json:"id"`
-	ProjectID      uint      `gorm:"column:project_id;index" json:"project_id"`
-	EpisodeN       int       `gorm:"column:episode_n;default:1" json:"episode_n"` // 所属集数
-	Title          string    `json:"title"`
-	SceneOrder     string    `json:"scene_order"` // 按序合并的场景 ID（逗号分隔）
-	Generation     uint      `gorm:"index" json:"generation"`
-	Status         string    `json:"status"`                        // pending/running/success/failed
-	OutputFile     string    `json:"output_file"`                   // 合并输出文件（相对 output_workers/gpu0/ 路径）
-	Subtitle       bool      `gorm:"default:false" json:"subtitle"` // 是否生成了配音字幕（SRT 与成片同名）
-	NativeVolume   float64   `gorm:"column:native_volume;default:1" json:"native_volume"`
-	DialogueVolume float64   `gorm:"column:dialogue_volume;default:1" json:"dialogue_volume"`
-	BGMVolume      float64   `gorm:"column:bgm_volume;default:1" json:"bgm_volume"`
-	DialogueMix    bool      `gorm:"column:dialogue_mix;default:false" json:"dialogue_mix"`
-	Error          string    `json:"error"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID                     uint      `gorm:"primaryKey" json:"id"`
+	ProjectID              uint      `gorm:"column:project_id;index" json:"project_id"`
+	EpisodeN               int       `gorm:"column:episode_n;default:1" json:"episode_n"` // 所属集数
+	Title                  string    `json:"title"`
+	SceneOrder             string    `json:"scene_order"`                                        // 按序合并的场景 ID（逗号分隔）
+	SceneVideoFingerprints string    `gorm:"column:scene_video_fingerprints;type:text" json:"-"` // 提交时的视频输入快照，防止过期合并结果发布
+	Generation             uint      `gorm:"index" json:"generation"`
+	Status                 string    `json:"status"`                        // pending/running/success/failed
+	OutputFile             string    `json:"output_file"`                   // 合并输出文件（相对 output_workers/gpu0/ 路径）
+	Subtitle               bool      `gorm:"default:false" json:"subtitle"` // 是否生成了配音字幕（SRT 与成片同名）
+	NativeVolume           float64   `gorm:"column:native_volume;default:1" json:"native_volume"`
+	DialogueVolume         float64   `gorm:"column:dialogue_volume;default:1" json:"dialogue_volume"`
+	BGMVolume              float64   `gorm:"column:bgm_volume;default:1" json:"bgm_volume"`
+	DialogueMix            bool      `gorm:"column:dialogue_mix;default:false" json:"dialogue_mix"`
+	Error                  string    `json:"error"`
+	CreatedAt              time.Time `json:"created_at"`
+	UpdatedAt              time.Time `json:"updated_at"`
 }
 
 // Material 素材库：生成的图片/视频自动入库，也支持手动上传管理
@@ -429,6 +430,7 @@ type Dialogue struct {
 	Delivery           string    `gorm:"type:text" json:"delivery"`                                         // 表演/语气说明
 	AudioFile          string    `json:"audio_file"`                                                        // 当前合成/已应用预览音频
 	PreviousAudioFile  string    `gorm:"column:previous_audio_file" json:"previous_audio_file"`             // 最近一次替换前的音频，可一键回退
+	PreviousAudioHash  string    `gorm:"column:previous_audio_hash;size:64" json:"-"`
 	AudioRevision      int       `gorm:"column:audio_revision;default:0" json:"audio_revision"`
 	AudioHash          string    `gorm:"column:audio_hash;size:64" json:"audio_hash"` // 生成当前音频时的输入摘要
 	AudioToken         string    `gorm:"column:audio_token;size:64;index" json:"-"`   // 防止迟到合成覆盖新输入

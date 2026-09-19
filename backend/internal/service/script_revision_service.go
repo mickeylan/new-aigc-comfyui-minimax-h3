@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"comfyui-console/internal/models"
 	"gorm.io/gorm"
@@ -180,22 +181,46 @@ func (s *ScriptRevisionService) Restore(projectID, revisionID uint) (*models.Scr
 			if item.Scene.ProjectID != projectID || item.Scene.EpisodeN != episodeN {
 				return fmt.Errorf("script revision scene mismatch")
 			}
-			item.Scene.Generation = current.Generation
-			if err := tx.Create(&item.Scene).Error; err != nil {
+			snapshotSceneID := item.Scene.ID
+			scene := item.Scene
+			// Revisions restore editorial content, never old generated assets or in-flight task state.
+			scene.ID = 0
+			scene.Generation = current.Generation
+			scene.ImageFile, scene.ImageToken, scene.ImageTaskID = "", "", ""
+			scene.VideoTaskID, scene.VideoFile, scene.VideoInputFile, scene.VideoFullPrompt = "", "", "", ""
+			scene.VideoGPU = nil
+			scene.VideoFirstFrameImg, scene.VideoLastFrameImg = "", ""
+			scene.ImageCandidateParentID, scene.VideoCandidateParentID = nil, nil
+			scene.Status, scene.Error, scene.PromptStale = "pending", "", true
+			scene.ImageRetries, scene.VideoRetries = 0, 0
+			scene.ShotCount = len(item.Shots)
+			scene.CreatedAt, scene.UpdatedAt = time.Time{}, time.Time{}
+			if err := tx.Create(&scene).Error; err != nil {
 				return err
 			}
-			for _, shot := range item.Shots {
-				if shot.SceneID != item.Scene.ID {
+			for _, storedShot := range item.Shots {
+				if storedShot.SceneID != snapshotSceneID {
 					return fmt.Errorf("script revision shot mismatch")
 				}
+				shot := storedShot
+				shot.ID, shot.SceneID = 0, scene.ID
+				shot.CreatedAt, shot.UpdatedAt = time.Time{}, time.Time{}
 				if err := tx.Create(&shot).Error; err != nil {
 					return err
 				}
 			}
-			for _, dialogue := range item.Dialogues {
-				if dialogue.ProjectID != projectID || dialogue.SceneID != item.Scene.ID {
+			for _, storedDialogue := range item.Dialogues {
+				if storedDialogue.ProjectID != projectID || storedDialogue.SceneID != snapshotSceneID {
 					return fmt.Errorf("script revision dialogue mismatch")
 				}
+				dialogue := storedDialogue
+				dialogue.ID, dialogue.SceneID = 0, scene.ID
+				dialogue.AudioFile, dialogue.PreviousAudioFile = "", ""
+				dialogue.AudioHash, dialogue.AudioToken = "", ""
+				dialogue.AudioRevision = 0
+				dialogue.AudioStale, dialogue.AudioStaleReason = true, "剧本版本已恢复，需重新合成"
+				dialogue.Status, dialogue.Error = "pending", ""
+				dialogue.CreatedAt, dialogue.UpdatedAt = time.Time{}, time.Time{}
 				if err := tx.Create(&dialogue).Error; err != nil {
 					return err
 				}

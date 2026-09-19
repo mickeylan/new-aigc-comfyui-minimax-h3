@@ -25,7 +25,7 @@ func safetyDB(t *testing.T, extra ...any) *gorm.DB {
 }
 
 func TestSafeFileSegmentRejectsTraversal(t *testing.T) {
-	for _, value := range []string{"../secret", `..\\secret`, "/absolute", `C:\\absolute`, "a/b"} {
+	for _, value := range []string{"../secret", `..\\secret`, "/absolute", `\\server\\share`, `C:\\absolute`, "C:relative", "a/b", `a\\b`, "bad\x00name", "line\nbreak"} {
 		if _, err := safeFileSegment(value, "test"); err == nil {
 			t.Fatalf("unsafe segment accepted: %q", value)
 		}

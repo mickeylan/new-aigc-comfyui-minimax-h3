@@ -3,7 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
+	"strconv"
 	"strings"
 
 	"comfyui-console/internal/models"
@@ -37,15 +37,24 @@ func (s *AssetVariantService) List(projectID uint, entityType string, entityID u
 func (s *AssetVariantService) Register(v models.AssetVariant) (*models.AssetVariant, error) {
 	v.EntityType = strings.TrimSpace(strings.ToLower(v.EntityType))
 	v.File = strings.TrimSpace(v.File)
-	if v.File == "" || filepath.IsAbs(v.File) || strings.HasPrefix(filepath.ToSlash(filepath.Clean(v.File)), "../") {
+	if _, err := safeFileSegment(v.File, "variant file"); err != nil {
 		return nil, fmt.Errorf("invalid variant file")
 	}
 	if err := validateVariantOwner(s.db, v.ProjectID, v.EntityType, v.EntityID); err != nil {
 		return nil, err
 	}
+	if err := validateProjectImageUpload(s.db, v.ProjectID, v.File); err != nil {
+		return nil, err
+	}
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		if v.Selected {
+			if err := validateProjectImageUpload(tx, v.ProjectID, v.File); err != nil {
+				return err
+			}
 			if err := setVariantEntityFile(tx, v.ProjectID, v.EntityType, v.EntityID, v.File); err != nil {
+				return err
+			}
+			if err := invalidateVariantConsumers(tx, v.ProjectID, v.EntityType, v.EntityID); err != nil {
 				return err
 			}
 			if err := tx.Model(&models.AssetVariant{}).Where("project_id = ? AND entity_type = ? AND entity_id = ?", v.ProjectID, v.EntityType, v.EntityID).Update("selected", false).Error; err != nil {
@@ -69,7 +78,13 @@ func (s *AssetVariantService) Select(projectID, variantID uint) (*models.AssetVa
 		if err := validateVariantOwner(tx, projectID, row.EntityType, row.EntityID); err != nil {
 			return err
 		}
+		if err := validateProjectImageUpload(tx, projectID, row.File); err != nil {
+			return err
+		}
 		if err := setVariantEntityFile(tx, projectID, row.EntityType, row.EntityID, row.File); err != nil {
+			return err
+		}
+		if err := invalidateVariantConsumers(tx, projectID, row.EntityType, row.EntityID); err != nil {
 			return err
 		}
 		if err := tx.Model(&models.AssetVariant{}).Where("project_id = ? AND entity_type = ? AND entity_id = ?", projectID, row.EntityType, row.EntityID).Update("selected", false).Error; err != nil {
@@ -102,6 +117,9 @@ func (s *AssetVariantService) Delete(projectID, variantID uint) error {
 	}
 	if row.Selected {
 		return fmt.Errorf("selected variant cannot be deleted")
+	}
+	if err := validateVariantOwner(s.db, projectID, row.EntityType, row.EntityID); err != nil {
+		return err
 	}
 	return s.db.Delete(&row).Error
 }
@@ -139,6 +157,180 @@ func validateVariantOwner(db *gorm.DB, projectID uint, entityType string, entity
 	}
 	if count == 0 {
 		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+func validateProjectImageUpload(db *gorm.DB, projectID uint, file string) error {
+	var count int64
+	err := db.Model(&models.UploadFile{}).
+		Where("task_id = ? AND type = ? AND name = ?", strconv.FormatUint(uint64(projectID), 10), "image", file).
+		Count(&count).Error
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("variant file is not a project-owned image upload")
+	}
+	return nil
+}
+
+func variantConsumerSceneIDs(tx *gorm.DB, projectID uint, entityType string, entityID uint) ([]uint, error) {
+	ids := map[uint]struct{}{}
+	add := func(rows []uint) {
+		for _, id := range rows {
+			ids[id] = struct{}{}
+		}
+	}
+	var rows []uint
+	switch entityType {
+	case VariantCharacterPortrait, VariantCharacterSheet:
+		var character models.Character
+		if err := tx.Where("id = ? AND project_id = ?", entityID, projectID).First(&character).Error; err != nil {
+			return nil, err
+		}
+		var scenes []models.Scene
+		if err := tx.Where("project_id = ?", projectID).Find(&scenes).Error; err != nil {
+			return nil, err
+		}
+		name := normalizeCanonName(character.Name)
+		for _, scene := range scenes {
+			for _, field := range []string{scene.VisibleCharacters, scene.Characters} {
+				for _, token := range parseSceneCharacters(field) {
+					if normalizeCanonName(token) == name {
+						ids[scene.ID] = struct{}{}
+					}
+				}
+			}
+		}
+		if err := tx.Table("scene_character_looks AS scl").Select("DISTINCT scl.scene_id").
+			Joins("JOIN character_looks AS cl ON cl.id = scl.look_id").
+			Joins("JOIN scenes AS s ON s.id = scl.scene_id").
+			Where("cl.character_id = ? AND s.project_id = ?", entityID, projectID).Pluck("scl.scene_id", &rows).Error; err != nil {
+			return nil, err
+		}
+		add(rows)
+		rows = nil
+		if err := tx.Table("shot_character_looks AS shcl").Select("DISTINCT shots.scene_id").
+			Joins("JOIN character_looks AS cl ON cl.id = shcl.look_id").Joins("JOIN shots ON shots.id = shcl.shot_id").
+			Joins("JOIN scenes AS s ON s.id = shots.scene_id").Where("cl.character_id = ? AND s.project_id = ?", entityID, projectID).
+			Pluck("shots.scene_id", &rows).Error; err != nil {
+			return nil, err
+		}
+		add(rows)
+		rows = nil
+		if err := tx.Table("scene_character_outfits AS sco").Select("DISTINCT sco.scene_id").
+			Joins("JOIN scenes AS s ON s.id = sco.scene_id").Where("sco.character_id = ? AND s.project_id = ?", entityID, projectID).
+			Pluck("sco.scene_id", &rows).Error; err != nil {
+			return nil, err
+		}
+		add(rows)
+		rows = nil
+		if err := tx.Table("shot_character_outfits AS shco").Select("DISTINCT shots.scene_id").
+			Joins("JOIN shots ON shots.id = shco.shot_id").Joins("JOIN scenes AS s ON s.id = shots.scene_id").
+			Where("shco.character_id = ? AND s.project_id = ?", entityID, projectID).Pluck("shots.scene_id", &rows).Error; err != nil {
+			return nil, err
+		}
+		add(rows)
+	case VariantCharacterLook:
+		if err := tx.Table("scene_character_looks AS scl").Select("DISTINCT scl.scene_id").
+			Joins("JOIN scenes AS s ON s.id = scl.scene_id").Where("scl.look_id = ? AND s.project_id = ?", entityID, projectID).
+			Pluck("scl.scene_id", &rows).Error; err != nil {
+			return nil, err
+		}
+		add(rows)
+		rows = nil
+		if err := tx.Table("shot_character_looks AS shcl").Select("DISTINCT shots.scene_id").
+			Joins("JOIN shots ON shots.id = shcl.shot_id").Joins("JOIN scenes AS s ON s.id = shots.scene_id").
+			Where("shcl.look_id = ? AND s.project_id = ?", entityID, projectID).Pluck("shots.scene_id", &rows).Error; err != nil {
+			return nil, err
+		}
+		add(rows)
+	case VariantAssetImage, VariantAssetSheet:
+		var asset models.Asset
+		if err := tx.Where("id = ? AND project_id = ?", entityID, projectID).First(&asset).Error; err != nil {
+			return nil, err
+		}
+		var scenes []models.Scene
+		if err := tx.Where("project_id = ?", projectID).Find(&scenes).Error; err != nil {
+			return nil, err
+		}
+		name := normalizeCanonName(asset.Name)
+		for _, scene := range scenes {
+			matched := asset.Kind == AssetKindLocation && normalizeCanonName(scene.LocationName) == name
+			if asset.Kind == AssetKindProp {
+				for _, token := range parseSceneCharacters(scene.Props) {
+					matched = matched || normalizeCanonName(token) == name
+				}
+			}
+			if matched {
+				ids[scene.ID] = struct{}{}
+			}
+		}
+	}
+	out := make([]uint, 0, len(ids))
+	for id := range ids {
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+func invalidateVariantConsumers(tx *gorm.DB, projectID uint, entityType string, entityID uint) error {
+	direct, err := variantConsumerSceneIDs(tx, projectID, entityType, entityID)
+	if err != nil {
+		return err
+	}
+	reason := "视觉资产候选已切换"
+	seen := map[uint]struct{}{}
+	queue := make([]uint, 0, len(direct))
+	for _, sceneID := range direct {
+		seen[sceneID] = struct{}{}
+		queue = append(queue, sceneID)
+		if err := tx.Model(&models.Scene{}).Where("id = ? AND project_id = ?", sceneID, projectID).Updates(map[string]any{
+			"image_file": "", "image_token": "", "image_task_id": "", "image_candidate_parent_id": nil,
+			"video_task_id": "", "video_file": "", "video_input_file": "", "video_gpu": nil,
+			"video_full_prompt": "", "video_template": "", "video_first_frame_img": "", "video_last_frame_img": "",
+			"video_candidate_parent_id": nil, "image_retries": 0, "video_retries": 0,
+			"status": "pending", "error": "", "prompt_stale": true,
+		}).Error; err != nil {
+			return err
+		}
+		if err := MarkSceneCandidatesStale(tx, projectID, sceneID, "", reason); err != nil {
+			return err
+		}
+	}
+	for len(queue) > 0 {
+		sourceID := queue[0]
+		queue = queue[1:]
+		var configs []models.SceneContinuity
+		if err := tx.Where("source_scene_id = ? AND mode != ?", sourceID, models.ContinuityModeIndependent).Find(&configs).Error; err != nil {
+			return err
+		}
+		for _, cfg := range configs {
+			var dependent models.Scene
+			if err := tx.Where("id = ? AND project_id = ?", cfg.SceneID, projectID).First(&dependent).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					continue
+				}
+				return err
+			}
+			if err := tx.Model(&models.SceneContinuity{}).Where("id = ?", cfg.ID).Updates(map[string]any{
+				"status": "source_invalidated", "error": reason, "selected_frame_id": nil, "version": gorm.Expr("version + 1"),
+			}).Error; err != nil {
+				return err
+			}
+			if _, exists := seen[dependent.ID]; exists {
+				continue
+			}
+			seen[dependent.ID] = struct{}{}
+			queue = append(queue, dependent.ID)
+			if err := invalidateSceneVideoTx(tx, projectID, dependent.ID, reason); err != nil {
+				return err
+			}
+			if err := tx.Model(&models.Scene{}).Where("id = ? AND project_id = ?", dependent.ID, projectID).Update("prompt_stale", true).Error; err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

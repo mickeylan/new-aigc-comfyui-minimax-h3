@@ -239,7 +239,10 @@ func previewToDatabase(tx *gorm.DB, project *models.Project, episodeN int, previ
 	if err != nil {
 		return err
 	}
-	updates := map[string]any{"scripts": string(encoded), "script": scripts[episodeN]}
+	updates := map[string]any{"scripts": string(encoded)}
+	if episodeN == 1 {
+		updates["script"] = scripts[episodeN]
+	}
 	return tx.Model(&models.Project{}).Where("id = ?", project.ID).Updates(updates).Error
 }
 

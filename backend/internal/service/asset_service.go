@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"comfyui-console/internal/models"
+	"gorm.io/gorm"
 )
 
 // ---------- 视觉资产（Asset Bible：道具 / 场景） ----------
@@ -170,7 +171,12 @@ func (s *ProjectService) DeleteAsset(projectID, id uint) error {
 			log.Printf("[asset %d] cleanup image %s failed: %v", a.ID, path, err)
 		}
 	}
-	if err := s.db.Where("id = ?", id).Delete(&models.Asset{}).Error; err != nil {
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("project_id = ? AND entity_id = ? AND entity_type IN ?", projectID, id, []string{VariantAssetImage, VariantAssetSheet}).Delete(&models.AssetVariant{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("id = ? AND project_id = ?", id, projectID).Delete(&models.Asset{}).Error
+	}); err != nil {
 		return err
 	}
 	s.pushProject(nil)

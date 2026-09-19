@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -86,8 +87,12 @@ func (s *Service) HandleBranchGenerationCandidate(c *gin.Context) {
 		if err := tx.Model(&models.GenerationCandidate{}).Where("project_id = ? AND entity_type = ? AND entity_id = ? AND media_type = ?", p.ID, "scene", scene.ID, candidate.MediaType).Update("is_current", false).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&models.GenerationCandidate{}).Where("id = ? AND stale = ?", candidate.ID, false).Updates(map[string]any{"is_current": true, "review_status": "accepted"}).Error; err != nil {
-			return err
+		claimed := tx.Model(&models.GenerationCandidate{}).Where("id = ? AND project_id = ? AND stale = ?", candidate.ID, p.ID, false).Updates(map[string]any{"is_current": true, "review_status": "accepted"})
+		if claimed.Error != nil {
+			return claimed.Error
+		}
+		if claimed.RowsAffected != 1 {
+			return fmt.Errorf("候选已过期或状态已变化")
 		}
 		updates := map[string]any{"error": ""}
 		if candidate.MediaType == "image" {

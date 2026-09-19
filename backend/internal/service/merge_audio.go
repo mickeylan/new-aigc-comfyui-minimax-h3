@@ -18,12 +18,12 @@ import (
 
 // mergeAudioInput describes an additional FFmpeg audio input after the scene videos.
 type mergeAudioInput struct {
-	Index    int
-	Start    float64
-	Duration float64
-	Volume   float64
-	FadeIn   float64
-	FadeOut  float64
+	Index          int
+	Start          float64
+	Duration       float64
+	Volume         float64
+	FadeIn         float64
+	FadeOut        float64
 	Loop           bool
 	Kind           string
 	SourceDuration float64
@@ -58,9 +58,17 @@ func ffnum(value float64) string {
 // atempoChain keeps each FFmpeg atempo stage inside its supported 0.5..2 range.
 func atempoChain(value float64) string {
 	var out strings.Builder
-	for value > 2 { out.WriteString(",atempo=2.000"); value /= 2 }
-	for value < 0.5 { out.WriteString(",atempo=0.500"); value /= 0.5 }
-	if math.Abs(value-1) > 0.0001 { out.WriteString(",atempo=" + ffnum(value)) }
+	for value > 2 {
+		out.WriteString(",atempo=2.000")
+		value /= 2
+	}
+	for value < 0.5 {
+		out.WriteString(",atempo=0.500")
+		value /= 0.5
+	}
+	if math.Abs(value-1) > 0.0001 {
+		out.WriteString(",atempo=" + ffnum(value))
+	}
 	return out.String()
 }
 
@@ -93,14 +101,18 @@ func buildMergeAudioGraph(videoCount int, nativeReady bool, totalDuration, nativ
 			duration = totalDuration - input.Start
 		}
 		sourceDuration := duration
-		if input.SourceDuration > 0 { sourceDuration = input.SourceDuration }
+		if input.SourceDuration > 0 {
+			sourceDuration = input.SourceDuration
+		}
 		chain := fmt.Sprintf("[%d:a]atrim=start=0:end=%s,asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo", input.Index, ffnum(sourceDuration))
 		if input.Pitch != 0 {
 			factor := math.Pow(2, input.Pitch/12)
 			chain += fmt.Sprintf(",asetrate=%s,aresample=48000", ffnum(48000*factor))
 			chain += atempoChain(1 / factor)
 		}
-		if input.Speed > 0 && math.Abs(input.Speed-1) > 0.0001 { chain += atempoChain(input.Speed) }
+		if input.Speed > 0 && math.Abs(input.Speed-1) > 0.0001 {
+			chain += atempoChain(input.Speed)
+		}
 		chain += ",volume=" + ffnum(input.Volume)
 		if input.FadeIn > 0 {
 			fade := input.FadeIn
@@ -163,48 +175,13 @@ func (s *Service) HandleCreateAudioMerge(c *gin.Context) {
 }
 
 func (s *ProjectService) createAudioMergeTask(p *models.Project, sceneIDs []uint, dub, subtitles bool, audio MergeAudioOptions) (*models.MergeTask, error) {
-	if len(sceneIDs) < 2 {
-		return nil, fmt.Errorf("请至少选择 2 个场景进行合并")
-	}
-	var active int64
-	if err := s.db.Model(&models.MergeTask{}).Where("project_id = ? AND generation = ? AND status IN ?", p.ID, p.Generation, []string{"pending", "running"}).Count(&active).Error; err != nil {
+	mt, scenes, err := s.createMergeTaskRecord(p, sceneIDs, audio)
+	if err != nil {
 		return nil, err
 	}
-	if active > 0 {
-		return nil, fmt.Errorf("已有进行中的合并任务，请等待完成")
-	}
-	var scenes []models.Scene
-	episodeN := 0
-	for _, id := range sceneIDs {
-		var scene models.Scene
-		if err := s.db.Where("id = ? AND project_id = ?", id, p.ID).First(&scene).Error; err != nil {
-			return nil, fmt.Errorf("场景 %d 不属于该项目", id)
-		}
-		if scene.Status != "video_ready" || scene.VideoFile == "" || scene.VideoGPU == nil {
-			return nil, fmt.Errorf("场景 %d 的视频尚未完成，请先生成视频", scene.Order)
-		}
-		currentEpisode := scene.EpisodeN
-		if currentEpisode <= 0 {
-			currentEpisode = 1
-		}
-		if episodeN == 0 {
-			episodeN = currentEpisode
-		} else if currentEpisode != episodeN {
-			return nil, fmt.Errorf("不能合并不同集的场景：第%d集与第%d集", episodeN, currentEpisode)
-		}
-		scenes = append(scenes, scene)
-	}
-	ids := make([]string, len(sceneIDs))
-	for i, id := range sceneIDs {
-		ids[i] = strconv.FormatUint(uint64(id), 10)
-	}
-	mt := models.MergeTask{ProjectID: p.ID, EpisodeN: episodeN, Title: fmt.Sprintf("第%d集 · %s", episodeN, p.Title), SceneOrder: strings.Join(ids, ","), Status: "pending", Generation: p.Generation, NativeVolume: audio.NativeVolume, DialogueVolume: audio.DialogueVolume, BGMVolume: audio.BGMVolume, DialogueMix: audio.DialogueMix}
-	if err := s.db.Create(&mt).Error; err != nil {
-		return nil, err
-	}
-	go s.runAudioMerge(p, &mt, scenes, dub, subtitles)
+	go s.runAudioMerge(p, mt, scenes, dub, subtitles)
 	s.pushProject(p)
-	return &mt, nil
+	return mt, nil
 }
 
 func (s *ProjectService) audioMixMediaPath(projectID uint, file string) (string, error) {
@@ -220,11 +197,17 @@ func (s *ProjectService) audioMixMediaPath(projectID uint, file string) (string,
 }
 
 func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, scenes []models.Scene, dub, subtitles bool) {
-	claim := s.db.Model(&models.MergeTask{}).Where("id = ? AND status = ?", mt.ID, "pending").Update("status", "running")
+	claim := s.db.Model(&models.MergeTask{}).Where("id = ? AND project_id = ? AND generation = ? AND status = ?", mt.ID, mt.ProjectID, mt.Generation, "pending").Update("status", "running")
 	if claim.Error != nil || claim.RowsAffected == 0 {
 		return
 	}
 	fail := func(err error) { s.failMerge(mt, p, err.Error()) }
+	currentScenes, err := s.validateMergeInputs(s.db, mt)
+	if err != nil {
+		fail(err)
+		return
+	}
+	scenes = currentScenes
 	inputPaths := make([]string, 0, len(scenes)+8)
 	remoteInputs := make([]string, 0, len(scenes)+8)
 	videoDurs := make([]sceneVideo, 0, len(scenes))
@@ -377,6 +360,9 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 			return
 		}
 	}
-	s.db.Model(mt).Updates(map[string]any{"status": "success", "output_file": outName, "subtitle": subtitles, "error": ""})
+	if err := s.completeMergeIfCurrent(mt, outName, subtitles); err != nil {
+		fail(fmt.Errorf("合并结果已隔离: %w", err))
+		return
+	}
 	s.finishMergeProject(p)
 }

@@ -290,8 +290,15 @@ func (s *CharacterLookService) UpdateLook(id uint, req models.CharacterLook) (*m
 // DeleteLook 删除造型
 func (s *CharacterLookService) DeleteLook(id uint) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
+		var look models.CharacterLook
+		if err := tx.First(&look, id).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ? AND entity_type = ? AND entity_id = ?", look.ProjectID, VariantCharacterLook, look.ID).Delete(&models.AssetVariant{}).Error; err != nil {
+			return err
+		}
 		// 删除造型
-		if err := tx.Delete(&models.CharacterLook{}, id).Error; err != nil {
+		if err := tx.Delete(&look).Error; err != nil {
 			return err
 		}
 		// 清理关联

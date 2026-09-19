@@ -7,9 +7,11 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	"gorm.io/gorm"
 
@@ -155,8 +157,19 @@ func (m *UploadManager) InputDir() string {
 }
 
 func safeFileSegment(value, label string) (string, error) {
-	value = filepath.Clean(value)
-	if value == "" || value == "." || value == ".." || filepath.IsAbs(value) || filepath.Base(value) != value {
+	value = strings.TrimSpace(value)
+	invalid := value == "" || value == "." || value == ".." ||
+		strings.ContainsAny(value, `/\\`) ||
+		(len(value) >= 2 && ((value[0] >= 'A' && value[0] <= 'Z') || (value[0] >= 'a' && value[0] <= 'z')) && value[1] == ':')
+	if !invalid {
+		for _, r := range value {
+			if unicode.IsControl(r) {
+				invalid = true
+				break
+			}
+		}
+	}
+	if invalid {
 		return "", fmt.Errorf("%s 路径无效", label)
 	}
 	return value, nil
@@ -171,22 +184,31 @@ func (m *UploadManager) SaveFile(taskID, ftype, filename string, data []byte) (s
 	if filename, err = safeFileSegment(filename, "文件名"); err != nil {
 		return "", 0, err
 	}
-	if ftype != "image" && ftype != "video" && ftype != "audio" {
+	if ftype != "image" && ftype != "video" && ftype != "audio" && ftype != "novel" && ftype != "document" {
 		return "", 0, fmt.Errorf("文件类型无效")
 	}
-	path := filepath.ToSlash(filepath.Join(taskID, filename))
-	root := filepath.Clean(m.InputDir())
-	target := filepath.Join(root, filepath.FromSlash(path))
-	rel, err := filepath.Rel(root, target)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", 0, fmt.Errorf("上传路径越界")
+	relPath := path.Join(taskID, filename)
+	var target string
+	if m.remote != nil && m.remote.Enabled() {
+		// SFTP and remote shells always use POSIX paths, even when the API server runs on Windows.
+		target = path.Join(filepath.ToSlash(m.InputDir()), relPath)
+	} else {
+		root := filepath.Clean(m.InputDir())
+		target = filepath.Join(root, filepath.FromSlash(relPath))
+		rel, err := filepath.Rel(root, target)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return "", 0, fmt.Errorf("上传路径越界")
+		}
+	}
+	if m.remote == nil {
+		return "", 0, fmt.Errorf("上传服务未配置")
 	}
 	if err := m.remote.WriteFile(target, data, 0o644); err != nil {
 		return "", 0, err
 	}
-	rec := models.UploadFile{TaskID: taskID, Type: ftype, Name: filename, Path: path, Size: int64(len(data))}
+	rec := models.UploadFile{TaskID: taskID, Type: ftype, Name: filename, Path: relPath, Size: int64(len(data))}
 	if err := m.db.Create(&rec).Error; err != nil {
 		return "", 0, err
 	}
-	return path, int64(len(data)), nil
+	return relPath, int64(len(data)), nil
 }
