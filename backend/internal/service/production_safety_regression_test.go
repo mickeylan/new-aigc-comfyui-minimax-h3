@@ -24,6 +24,17 @@ func safetyDB(t *testing.T, extra ...any) *gorm.DB {
 	return db
 }
 
+func TestSafeFileSegmentRejectsTraversal(t *testing.T) {
+	for _, value := range []string{"../secret", `..\\secret`, "/absolute", `C:\\absolute`, "a/b"} {
+		if _, err := safeFileSegment(value, "test"); err == nil {
+			t.Fatalf("unsafe segment accepted: %q", value)
+		}
+	}
+	if got, err := safeFileSegment("safe-file.png", "test"); err != nil || got != "safe-file.png" {
+		t.Fatalf("safe segment rejected: %q %v", got, err)
+	}
+}
+
 func TestScriptRevisionRestoreDoesNotRewindOtherEpisodesOrGeneration(t *testing.T) {
 	db := safetyDB(t)
 	project := models.Project{Title: "p", Generation: 3, PipelineStage: "videos", Scripts: `{"1":"old one","2":"keep two"}`}
@@ -43,6 +54,10 @@ func TestScriptRevisionRestoreDoesNotRewindOtherEpisodesOrGeneration(t *testing.
 	db.First(&project, project.ID)
 	if project.Generation != 9 || project.PipelineStage != "finished" {
 		t.Fatalf("global project state rewound: %+v", project)
+	}
+	var restored models.Scene
+	if err := db.Where("project_id = ? AND episode_n = ?", project.ID, 1).First(&restored).Error; err != nil || restored.Generation != project.Generation {
+		t.Fatalf("restored scene not mapped to current generation: %+v err=%v", restored, err)
 	}
 	var scripts map[string]string
 	_ = json.Unmarshal([]byte(project.Scripts), &scripts)

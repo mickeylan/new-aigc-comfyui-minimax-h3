@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -153,19 +154,39 @@ func (m *UploadManager) InputDir() string {
 	return m.cfg.Comfy.ComfyDir + "/input"
 }
 
+func safeFileSegment(value, label string) (string, error) {
+	value = filepath.Clean(value)
+	if value == "" || value == "." || value == ".." || filepath.IsAbs(value) || filepath.Base(value) != value {
+		return "", fmt.Errorf("%s 路径无效", label)
+	}
+	return value, nil
+}
+
 // SaveFile 保存上传文件到 ComfyUI input 目录（远程模式走 SFTP），返回 input 相对路径 (taskId/filename)
 func (m *UploadManager) SaveFile(taskID, ftype, filename string, data []byte) (string, int64, error) {
-	path := taskID + "/" + filename
-	if err := m.remote.WriteFile(m.InputDir()+"/"+path, data, 0o644); err != nil {
+	var err error
+	if taskID, err = safeFileSegment(taskID, "task_id"); err != nil {
 		return "", 0, err
 	}
-	rec := models.UploadFile{
-		TaskID: taskID,
-		Type:   ftype,
-		Name:   filename,
-		Path:   path,
-		Size:   int64(len(data)),
+	if filename, err = safeFileSegment(filename, "文件名"); err != nil {
+		return "", 0, err
 	}
-	m.db.Create(&rec)
+	if ftype != "image" && ftype != "video" && ftype != "audio" {
+		return "", 0, fmt.Errorf("文件类型无效")
+	}
+	path := filepath.ToSlash(filepath.Join(taskID, filename))
+	root := filepath.Clean(m.InputDir())
+	target := filepath.Join(root, filepath.FromSlash(path))
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", 0, fmt.Errorf("上传路径越界")
+	}
+	if err := m.remote.WriteFile(target, data, 0o644); err != nil {
+		return "", 0, err
+	}
+	rec := models.UploadFile{TaskID: taskID, Type: ftype, Name: filename, Path: path, Size: int64(len(data))}
+	if err := m.db.Create(&rec).Error; err != nil {
+		return "", 0, err
+	}
 	return path, int64(len(data)), nil
 }

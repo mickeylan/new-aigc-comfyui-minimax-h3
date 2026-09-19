@@ -97,13 +97,21 @@ func (s *CharacterHistoryService) List(projectID uint, characterID *uint) ([]Cha
 		return nil, gorm.ErrRecordNotFound
 	}
 
-	var project models.Project
-	if err := s.db.First(&project, projectID).Error; err != nil {
+	var allScenes []models.Scene
+	if err := s.db.Where("project_id = ?", projectID).Order("episode_n, generation DESC, `order`, id").Find(&allScenes).Error; err != nil {
 		return nil, err
 	}
+	latestGeneration := map[int]uint{}
 	var scenes []models.Scene
-	if err := s.db.Where("project_id = ? AND generation = ?", projectID, project.Generation).Order("episode_n, `order`, id").Find(&scenes).Error; err != nil {
-		return nil, err
+	for _, scene := range allScenes {
+		gen, seen := latestGeneration[scene.EpisodeN]
+		if !seen {
+			latestGeneration[scene.EpisodeN] = scene.Generation
+			gen = scene.Generation
+		}
+		if scene.Generation == gen {
+			scenes = append(scenes, scene)
+		}
 	}
 	sceneIDs := make([]uint, 0, len(scenes))
 	for _, scene := range scenes {

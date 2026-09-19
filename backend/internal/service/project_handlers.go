@@ -1407,6 +1407,7 @@ func (s *Service) HandleUploadCharacterVoice(c *gin.Context) {
 			return
 		}
 	}
+	_ = invalidateCharacterDialogueAudio(s.DB, ch.ProjectID, ch.Name, "角色音色配置已更新")
 	s.Projects.PushProject(nil)
 	resp := gin.H{"ok": true, "voice_ref": filepath.Base(path), "voice_id": ""}
 	if cloneErr != nil {
@@ -1452,6 +1453,7 @@ func (s *Service) HandleCloneCharacterVoice(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
+	_ = invalidateCharacterDialogueAudio(s.DB, ch.ProjectID, ch.Name, "角色复刻音色已更新")
 	s.Projects.PushProject(nil)
 	c.JSON(200, gin.H{"ok": true, "voice_id": voiceID, "message": "复刻音色注册成功"})
 }
@@ -1473,6 +1475,7 @@ func (s *Service) HandleClearCharacterVoice(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
+	_ = invalidateCharacterDialogueAudio(s.DB, ch.ProjectID, ch.Name, "角色音色配置已清除")
 	s.Projects.PushProject(nil)
 	c.JSON(200, gin.H{"ok": true, "message": "角色语音配置已清除"})
 }

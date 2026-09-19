@@ -108,6 +108,7 @@ export const api = {
   reviewCandidate: (id, cid, status, reason = '') => http.patch(`/projects/${id}/candidates/${cid}/review`, { status, reason }),
   selectCandidate: (id, cid) => http.post(`/projects/${id}/candidates/${cid}/select`),
   branchCandidate: (id, cid) => http.post(`/projects/${id}/candidates/${cid}/branch`),
+  retryCandidate: (id, cid) => http.post(`/projects/${id}/candidates/${cid}/retry`),
   uploadSceneImage: (id, sid, file) => {
     const fd = new FormData()
     fd.append('file', file)

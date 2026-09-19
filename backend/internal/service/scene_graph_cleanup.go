@@ -54,6 +54,20 @@ func deleteSceneDependents(tx *gorm.DB, projectID uint, sceneIDs []uint) error {
 	if err := deleteIfTable(tx, &models.SharedAssetReference{}, "project_id = ? AND scene_id IN ?", projectID, sceneIDs); err != nil {
 		return err
 	}
+	if tx.Migrator().HasTable(&models.Material{}) {
+		var materialIDs []uint
+		if err := tx.Model(&models.Material{}).Where("project_id = ? AND scene_id IN ?", projectID, sceneIDs).Pluck("id", &materialIDs).Error; err != nil {
+			return err
+		}
+		if len(materialIDs) > 0 {
+			if err := deleteIfTable(tx, &models.SharedAssetReference{}, "material_id IN ?", materialIDs); err != nil {
+				return err
+			}
+			if err := deleteIfTable(tx, &models.Material{}, "id IN ?", materialIDs); err != nil {
+				return err
+			}
+		}
+	}
 	if err := deleteIfTable(tx, &models.Dialogue{}, "project_id = ? AND scene_id IN ?", projectID, sceneIDs); err != nil {
 		return err
 	}

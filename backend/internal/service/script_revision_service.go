@@ -139,6 +139,10 @@ func (s *ScriptRevisionService) Restore(projectID, revisionID uint) (*models.Scr
 		if err != nil {
 			return err
 		}
+		var current models.Project
+		if err := tx.First(&current, projectID).Error; err != nil {
+			return err
+		}
 
 		var currentScenes []models.Scene
 		if err := tx.Where("project_id = ? AND episode_n = ?", projectID, episodeN).Find(&currentScenes).Error; err != nil {
@@ -176,6 +180,7 @@ func (s *ScriptRevisionService) Restore(projectID, revisionID uint) (*models.Scr
 			if item.Scene.ProjectID != projectID || item.Scene.EpisodeN != episodeN {
 				return fmt.Errorf("script revision scene mismatch")
 			}
+			item.Scene.Generation = current.Generation
 			if err := tx.Create(&item.Scene).Error; err != nil {
 				return err
 			}
@@ -199,10 +204,6 @@ func (s *ScriptRevisionService) Restore(projectID, revisionID uint) (*models.Scr
 
 		// A revision is episode-scoped. Merge only this episode's script text and never
 		// rewind project generation, pipeline state, other episodes, or global visual bible.
-		var current models.Project
-		if err := tx.First(&current, projectID).Error; err != nil {
-			return err
-		}
 		var currentScripts, snapshotScripts map[string]string
 		_ = json.Unmarshal([]byte(current.Scripts), &currentScripts)
 		_ = json.Unmarshal([]byte(detail.Snapshot.Project.Scripts), &snapshotScripts)

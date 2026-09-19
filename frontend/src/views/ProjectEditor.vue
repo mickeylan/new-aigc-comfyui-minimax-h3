@@ -618,8 +618,8 @@ function candidateUrl(candidate) {
   return `/api/output/${candidate.video_gpu ?? 0}/${candidate.file}`
 }
 async function retryCandidate(candidate) {
-  try { await api.rerunTask(candidate.task_id); toast.success('已使用原任务参数提交重试') }
-  catch (e) { toast.error(e.response?.data?.error || '原任务不可重试') }
+  try { await api.retryCandidate(id(), candidate.id); toast.success('已使用候选快照提交重试') }
+  catch (e) { toast.error(e.response?.data?.error || '候选不可重试') }
 }
 async function branchCandidate(candidate) {
   try { await api.branchCandidate(id(), candidate.id); toast.success('已从该候选创建生成分支'); setTimeout(loadCandidates, 1500) }

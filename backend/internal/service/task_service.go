@@ -152,6 +152,30 @@ func normalizeTemplateFiles(tpl *models.Template, params map[string]any, files m
 	return nil
 }
 
+func (s *TaskService) validateUploadedFiles(files map[string][]FileMeta) error {
+	for _, items := range files {
+		for _, file := range items {
+			taskID, err := safeFileSegment(file.TaskID, "素材 task_id")
+			if err != nil {
+				return err
+			}
+			name, err := safeFileSegment(file.Name, "素材文件名")
+			if err != nil {
+				return err
+			}
+			var upload models.UploadFile
+			if err := s.db.Where("task_id = ? AND name = ?", taskID, name).Order("id DESC").First(&upload).Error; err != nil {
+				return fmt.Errorf("素材未登记或已失效: %s/%s", taskID, name)
+			}
+			expected := filepath.ToSlash(filepath.Join(taskID, name))
+			if filepath.ToSlash(filepath.Clean(upload.Path)) != expected {
+				return fmt.Errorf("素材路径记录无效: %s", expected)
+			}
+		}
+	}
+	return nil
+}
+
 // ---------- 工作流渲染 ----------
 
 var (
@@ -582,6 +606,9 @@ func (s *TaskService) CreateTask(req CreateTaskReq) (*models.Task, error) {
 	if err := normalizeTemplateFiles(&tpl, params, req.Files); err != nil {
 		return nil, err
 	}
+	if err := s.validateUploadedFiles(req.Files); err != nil {
+		return nil, err
+	}
 	params["_task_id"] = taskID
 	// prompt 始终写入参数；图生视频与首尾帧模板允许空提示词。
 	params["prompt"] = req.Prompt
@@ -644,6 +671,13 @@ func (s *TaskService) syncInputFilesToInstance(client *ComfyClient, params map[s
 			taskID, _ := v["task_id"].(string)
 			name, _ := v["name"].(string)
 			if taskID != "" && name != "" {
+				var err error
+				if taskID, err = safeFileSegment(taskID, "素材 task_id"); err != nil {
+					return err
+				}
+				if name, err = safeFileSegment(name, "素材文件名"); err != nil {
+					return err
+				}
 				rel := filepath.ToSlash(filepath.Join(taskID, name))
 				if seen[rel] {
 					return nil

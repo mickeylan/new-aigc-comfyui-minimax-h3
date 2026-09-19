@@ -8,6 +8,7 @@ import (
 	"log"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -494,7 +495,7 @@ func (s *CharacterLookService) SyncImages() {
 		if ext == "" {
 			ext = ".png"
 		}
-		path, _, err := s.upload.SaveFile(fmt.Sprint(look.ProjectID), "image", fmt.Sprintf("look_%d%s", look.ID, ext), data)
+		path, _, err := s.upload.SaveFile(fmt.Sprint(look.ProjectID), "image", fmt.Sprintf("look_%d_%d%s", look.ID, time.Now().UnixNano(), ext), data)
 		if err != nil {
 			s.db.Model(look).Where("image_task_id = ?", task.TaskID).Updates(map[string]any{"image_task_id": "", "image_error": err.Error()})
 			continue
@@ -727,14 +728,18 @@ func (s *CharacterLookService) SaveUploadedImage(look *models.CharacterLook, fil
 	if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".webp" {
 		return fmt.Errorf("仅支持 PNG/JPG/WebP")
 	}
-	path, _, err := s.upload.SaveFile(fmt.Sprint(look.ProjectID), "image", fmt.Sprintf("look_%d%s", look.ID, ext), data)
+	path, _, err := s.upload.SaveFile(fmt.Sprint(look.ProjectID), "image", fmt.Sprintf("look_%d_%d%s", look.ID, time.Now().UnixNano(), ext), data)
 	if err != nil {
 		return err
 	}
 	if look.ImageTaskID != "" && s.tasks != nil {
 		_ = s.tasks.CancelTask(look.ImageTaskID)
 	}
-	return s.db.Model(look).Updates(map[string]any{"image": filepath.Base(path), "image_task_id": "", "image_error": ""}).Error
+	if err := s.db.Model(look).Updates(map[string]any{"image": filepath.Base(path), "image_task_id": "", "image_error": ""}).Error; err != nil {
+		return err
+	}
+	registerSelectedAssetVariant(s.db, look.ProjectID, VariantCharacterLook, look.ID, filepath.Base(path), look.Prompt, "manual_upload")
+	return nil
 }
 
 func (s *CharacterLookService) readFile(path string) (string, error) {

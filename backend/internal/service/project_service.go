@@ -4590,11 +4590,10 @@ func (s *ProjectService) buildDubTimeline(p *models.Project, episodeN int, scene
 	if len(dubs) == 0 {
 		return nil, 0, false, nil
 	}
-	// 校验全部 ready（存在 pending/failed/synthesizing 则回退）
+	// Dialogue mixing is explicit: never silently publish stale or mismatched speech.
 	for _, d := range dubs {
-		if d.Status != "ready" {
-			log.Printf("[merge] 对白 %d 状态 %s，回退原音轨合并", d.ID, d.Status)
-			return nil, 0, false, nil
+		if d.Status != "ready" || d.AudioStale || strings.TrimSpace(d.AudioFile) == "" || d.AudioHash == "" || d.AudioHash != s.effectiveDialogueAudioHash(d) {
+			return nil, 0, false, fmt.Errorf("对白 %d 的音频未就绪或已过期，请先重新合成", d.ID)
 		}
 	}
 	byScene := map[uint][]models.Dialogue{}
@@ -4998,6 +4997,12 @@ func dialogueAudioHash(d models.Dialogue) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))
 }
 
+func (s *ProjectService) effectiveDialogueAudioHash(d models.Dialogue) string {
+	voice, voiceID, model := s.dubVoiceFor(&d)
+	raw := dialogueAudioHash(d) + "\x00" + voice + "\x00" + voiceID + "\x00" + model
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))
+}
+
 // UpdateDialogue keeps the legacy service API while the HTTP API uses patch-like pointer fields.
 func (s *ProjectService) UpdateDialogue(p *models.Project, did uint, text, voice, character, speechType string) (*models.Dialogue, error) {
 	input := DialogueUpdateInput{}
@@ -5100,7 +5105,7 @@ func (s *ProjectService) UpdateDialogueFields(p *models.Project, did uint, input
 	}
 	if audioChanged {
 		// Keep the current file available for QA/revert; stale-only dubbing will replace it.
-		updates["status"], updates["error"] = "pending", ""
+		updates["status"], updates["error"], updates["audio_token"] = "pending", "", ""
 		updates["audio_stale"], updates["audio_stale_reason"] = true, "配音输入或 QA 参数已修改"
 	}
 	if err := s.db.Model(&d).Updates(updates).Error; err != nil {
@@ -5167,8 +5172,9 @@ func (s *ProjectService) dubVoiceFor(d *models.Dialogue) (string, string, string
 
 // StartDialogueTTS 异步合成单条对白（占位防并发）
 func (s *ProjectService) StartDialogueTTS(d *models.Dialogue) error {
+	token := fmt.Sprintf("tts-%d-%d", d.ID, time.Now().UnixNano())
 	claim := s.db.Model(&models.Dialogue{}).Where("id = ? AND status <> ?", d.ID, "synthesizing").
-		Updates(map[string]any{"status": "synthesizing", "error": ""})
+		Updates(map[string]any{"status": "synthesizing", "audio_token": token, "error": ""})
 	if claim.Error != nil {
 		return claim.Error
 	}
@@ -5179,21 +5185,22 @@ func (s *ProjectService) StartDialogueTTS(d *models.Dialogue) error {
 	if err := s.db.First(d, d.ID).Error; err != nil {
 		return err
 	}
+	hash := s.effectiveDialogueAudioHash(*d)
 	go func() {
-		if err := s.synthesizeDialogue(d); err != nil {
+		if err := s.synthesizeDialogue(d, token, hash); err != nil {
 			log.Printf("[dialogue %d] tts failed: %v", d.ID, err)
 		}
 	}()
 	return nil
 }
 
-func (s *ProjectService) synthesizeDialogue(d *models.Dialogue) error {
+func (s *ProjectService) synthesizeDialogue(d *models.Dialogue, token, inputHash string) error {
 	if s.upload == nil {
-		s.db.Model(&models.Dialogue{}).Where("id = ?", d.ID).Updates(map[string]any{"status": "failed", "error": "存储未配置"})
+		s.db.Model(&models.Dialogue{}).Where("id = ? AND audio_token = ?", d.ID, token).Updates(map[string]any{"status": "failed", "error": "存储未配置"})
 		return fmt.Errorf("存储未配置")
 	}
 	if strings.TrimSpace(d.Text) == "" {
-		s.db.Model(&models.Dialogue{}).Where("id = ?", d.ID).Updates(map[string]any{"status": "ready", "audio_file": "", "previous_audio_file": d.AudioFile, "audio_revision": d.AudioRevision + 1, "audio_hash": dialogueAudioHash(*d), "audio_stale": false, "audio_stale_reason": "", "error": ""})
+		s.db.Model(&models.Dialogue{}).Where("id = ? AND audio_token = ?", d.ID, token).Updates(map[string]any{"status": "ready", "audio_file": "", "previous_audio_file": d.AudioFile, "audio_revision": d.AudioRevision + 1, "audio_hash": inputHash, "audio_token": "", "audio_stale": false, "audio_stale_reason": "", "error": ""})
 		return nil
 	}
 	// 后期配音：阿里云 TTS（DashScope）；角色绑定参考语音时用复刻音色合成
@@ -5210,18 +5217,18 @@ func (s *ProjectService) synthesizeDialogue(d *models.Dialogue) error {
 		err = fmt.Errorf("TTS 未配置（请到平台设置配置阿里云语音服务）")
 	}
 	if err != nil {
-		s.db.Model(&models.Dialogue{}).Where("id = ?", d.ID).Updates(map[string]any{"status": "failed", "error": err.Error()})
+		s.db.Model(&models.Dialogue{}).Where("id = ? AND audio_token = ?", d.ID, token).Updates(map[string]any{"status": "failed", "error": err.Error()})
 		return err
 	}
 	name := fmt.Sprintf("dub_%d_%d.mp3", d.ID, time.Now().UnixNano())
 	path, _, err := s.upload.SaveFile(fmt.Sprintf("%d", d.ProjectID), "audio", name, data)
 	if err != nil {
-		s.db.Model(&models.Dialogue{}).Where("id = ?", d.ID).Updates(map[string]any{"status": "failed", "error": err.Error()})
+		s.db.Model(&models.Dialogue{}).Where("id = ? AND audio_token = ?", d.ID, token).Updates(map[string]any{"status": "failed", "error": err.Error()})
 		return err
 	}
-	s.db.Model(&models.Dialogue{}).Where("id = ?", d.ID).Updates(map[string]any{
+	s.db.Model(&models.Dialogue{}).Where("id = ? AND audio_token = ?", d.ID, token).Updates(map[string]any{
 		"status": "ready", "audio_file": filepath.Base(path), "previous_audio_file": d.AudioFile,
-		"audio_revision": d.AudioRevision + 1, "audio_hash": dialogueAudioHash(*d),
+		"audio_revision": d.AudioRevision + 1, "audio_hash": inputHash, "audio_token": "",
 		"audio_stale": false, "audio_stale_reason": "", "error": "",
 	})
 	s.pushProject(nil)
@@ -5265,7 +5272,7 @@ func (s *ProjectService) GenerateEpisodeDubs(p *models.Project, episodeN int, st
 	count := 0
 	for i := range dubs {
 		d := &dubs[i]
-		stale := d.AudioStale || d.AudioFile == "" || d.AudioHash == "" || d.AudioHash != dialogueAudioHash(*d)
+		stale := d.AudioStale || d.AudioFile == "" || d.AudioHash == "" || d.AudioHash != s.effectiveDialogueAudioHash(*d)
 		if staleOnly && !stale {
 			continue
 		}
@@ -5301,7 +5308,7 @@ func (s *ProjectService) ApplyDialoguePreview(p *models.Project, did uint) (*mod
 	if strings.TrimSpace(d.AudioFile) == "" {
 		return nil, fmt.Errorf("当前对白没有可应用的音频")
 	}
-	currentHash := dialogueAudioHash(d)
+	currentHash := s.effectiveDialogueAudioHash(d)
 	if d.AudioHash == "" || d.AudioHash != currentHash || d.AudioStale {
 		return nil, fmt.Errorf("试听音频与当前文本、音色或表演参数不一致，请先重新合成")
 	}

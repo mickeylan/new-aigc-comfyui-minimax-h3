@@ -206,6 +206,18 @@ func rewriteSceneNameReferences(tx *gorm.DB, projectID uint, entityType, from, t
 			if err := MarkSceneCandidatesStale(tx, projectID, sc.ID, "", "资产对账已改变权威引用"); err != nil {
 				return err
 			}
+			var dependents []models.SceneContinuity
+			if err := tx.Where("source_scene_id = ? AND mode != ?", sc.ID, models.ContinuityModeIndependent).Find(&dependents).Error; err != nil {
+				return err
+			}
+			for _, dependency := range dependents {
+				if err := tx.Model(&dependency).Updates(map[string]any{"status": "source_invalidated", "error": "上游资产对账已变化"}).Error; err != nil {
+					return err
+				}
+				if err := invalidateSceneVideoTx(tx, projectID, dependency.SceneID, "上游资产对账已变化"); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	if entityType == "character" {

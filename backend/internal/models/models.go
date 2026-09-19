@@ -431,6 +431,7 @@ type Dialogue struct {
 	PreviousAudioFile  string    `gorm:"column:previous_audio_file" json:"previous_audio_file"`             // 最近一次替换前的音频，可一键回退
 	AudioRevision      int       `gorm:"column:audio_revision;default:0" json:"audio_revision"`
 	AudioHash          string    `gorm:"column:audio_hash;size:64" json:"audio_hash"` // 生成当前音频时的输入摘要
+	AudioToken         string    `gorm:"column:audio_token;size:64;index" json:"-"`   // 防止迟到合成覆盖新输入
 	AudioStale         bool      `gorm:"column:audio_stale;default:false" json:"audio_stale"`
 	AudioStaleReason   string    `gorm:"column:audio_stale_reason" json:"audio_stale_reason"`
 	Status             string    `json:"status"` // pending/synthesizing/ready/failed
