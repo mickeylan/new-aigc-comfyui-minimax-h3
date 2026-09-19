@@ -67,7 +67,7 @@ func TestSharedAssetReferenceRoutesAndMaterialDeleteConflict(t *testing.T) {
 	if response.Code != http.StatusConflict {
 		t.Fatalf("referenced material delete status=%d body=%s", response.Code, response.Body.String())
 	}
-	response = request(http.MethodPut, fmt.Sprintf("%s/%d", base, ref.ID), fmt.Sprintf(`{"material_id":%d,"mode":"copy","local_file":"copy.png"}`, material.ID))
+	response = request(http.MethodPut, fmt.Sprintf("%s/%d", base, ref.ID), fmt.Sprintf(`{"material_id":%d,"mode":"live"}`, material.ID))
 	if response.Code != http.StatusOK {
 		t.Fatalf("update status=%d body=%s", response.Code, response.Body.String())
 	}

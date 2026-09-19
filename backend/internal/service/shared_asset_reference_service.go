@@ -3,7 +3,10 @@ package service
 import (
 	"errors"
 	"fmt"
+	"io"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"comfyui-console/internal/models"
 	"gorm.io/gorm"
@@ -12,11 +15,16 @@ import (
 var ErrSharedAssetReferenceNotFound = errors.New("shared asset reference not found")
 
 type SharedAssetReferenceService struct {
-	db *gorm.DB
+	db     *gorm.DB
+	upload *UploadManager
 }
 
-func NewSharedAssetReferenceService(db *gorm.DB) *SharedAssetReferenceService {
-	return &SharedAssetReferenceService{db: db}
+func NewSharedAssetReferenceService(db *gorm.DB, uploads ...*UploadManager) *SharedAssetReferenceService {
+	service := &SharedAssetReferenceService{db: db}
+	if len(uploads) > 0 {
+		service.upload = uploads[0]
+	}
+	return service
 }
 
 type SharedAssetReferenceInput struct {
@@ -140,19 +148,39 @@ func (s *SharedAssetReferenceService) duplicateExists(ref *models.SharedAssetRef
 }
 
 func (s *SharedAssetReferenceService) resolveCopyPath(ref *models.SharedAssetReference) error {
-	if ref.Mode != "copy" || ref.LocalFile != "" {
+	if ref.Mode != "copy" {
 		return nil
+	}
+	if s.upload == nil || s.upload.remote == nil {
+		return fmt.Errorf("copy mode storage is unavailable")
 	}
 	var material models.Material
 	if err := s.db.First(&material, ref.MaterialID).Error; err != nil {
 		return err
 	}
-	if strings.TrimSpace(material.Path) == "" {
-		return fmt.Errorf("material has no file to copy")
+	clean := filepath.Clean(strings.TrimSpace(material.Path))
+	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("material has no valid file to copy")
 	}
-	// Material paths are immutable file locations. Copy mode snapshots that location,
-	// while live mode resolves Material.Path each time candidates are requested.
-	ref.LocalFile = material.Path
+	source, err := s.upload.remote.Open(filepath.Join(s.upload.InputDir(), clean))
+	if err != nil {
+		return fmt.Errorf("open material copy source: %w", err)
+	}
+	data, readErr := io.ReadAll(source)
+	closeErr := source.Close()
+	if readErr != nil {
+		return fmt.Errorf("read material copy source: %w", readErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close material copy source: %w", closeErr)
+	}
+	ext := filepath.Ext(clean)
+	name := fmt.Sprintf("shared_asset_%d_%d%s", ref.MaterialID, time.Now().UnixNano(), ext)
+	copied, _, err := s.upload.SaveFile(fmt.Sprint(ref.ProjectID), material.Type, name, data)
+	if err != nil {
+		return fmt.Errorf("save material copy: %w", err)
+	}
+	ref.LocalFile = filepath.ToSlash(copied)
 	return nil
 }
 

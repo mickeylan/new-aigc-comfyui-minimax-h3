@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Instance 表示一个 ComfyUI 实例（每 GPU 一个）
 type Instance struct {
@@ -48,26 +51,43 @@ type UploadFile struct {
 
 // Task 生成任务
 type Task struct {
-	ID            uint       `gorm:"primaryKey" json:"id"`
-	TaskID        string     `gorm:"column:task_id;uniqueIndex" json:"task_id"`
-	TemplateID    uint       `gorm:"column:template_id" json:"template_id"`
-	TemplateName  string     `gorm:"column:template_name" json:"template_name"`
-	Prompt        string     `json:"prompt"`
-	ParamsJSON    string     `gorm:"type:text" json:"params_json"`
-	InputsJSON    string     `gorm:"type:text" json:"inputs_json"`
-	InstanceID    *uint      `gorm:"column:instance_id" json:"instance_id"`
-	GPUIndex      *int       `gorm:"column:gpu_index" json:"gpu_index"`
-	Port          *int       `gorm:"column:port" json:"port"`
-	ComfyPromptID string     `gorm:"column:comfy_prompt_id" json:"comfy_prompt_id"`
-	Status        string     `json:"status"` // pending/queued/running/success/failed/cancelled
-	Progress      float64    `json:"progress"`
-	CurrentNode   string     `gorm:"column:current_node" json:"current_node"`
-	Error         string     `json:"error"`
-	ResultFiles   string     `gorm:"column:result_files;type:text" json:"result_files"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
-	StartedAt     *time.Time `gorm:"column:started_at" json:"started_at"`
-	FinishedAt    *time.Time `gorm:"column:finished_at" json:"finished_at"`
+	ID                uint       `gorm:"primaryKey" json:"id"`
+	TaskID            string     `gorm:"column:task_id;uniqueIndex" json:"task_id"`
+	TemplateID        uint       `gorm:"column:template_id" json:"template_id"`
+	TemplateName      string     `gorm:"column:template_name" json:"template_name"`
+	Prompt            string     `json:"prompt"`
+	ParamsJSON        string     `gorm:"type:text" json:"params_json"`
+	InputsJSON        string     `gorm:"type:text" json:"inputs_json"`
+	ProvenanceJSON    string     `gorm:"column:provenance_json;type:text" json:"provenance_json"`
+	ParentCandidateID *uint      `gorm:"column:parent_candidate_id;index" json:"parent_candidate_id,omitempty"`
+	InstanceID        *uint      `gorm:"column:instance_id" json:"instance_id"`
+	GPUIndex          *int       `gorm:"column:gpu_index" json:"gpu_index"`
+	Port              *int       `gorm:"column:port" json:"port"`
+	ComfyPromptID     string     `gorm:"column:comfy_prompt_id" json:"comfy_prompt_id"`
+	Status            string     `json:"status"` // pending/queued/running/success/failed/cancelled
+	Progress          float64    `json:"progress"`
+	CurrentNode       string     `gorm:"column:current_node" json:"current_node"`
+	Error             string     `json:"error"`
+	ResultFiles       string     `gorm:"column:result_files;type:text" json:"result_files"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	StartedAt         *time.Time `gorm:"column:started_at" json:"started_at"`
+	FinishedAt        *time.Time `gorm:"column:finished_at" json:"finished_at"`
+}
+
+// PlaygroundRun is a project-free generation snapshot backed by a normal Task.
+type PlaygroundRun struct {
+	ID        uint            `gorm:"primaryKey" json:"id"`
+	Mode      string          `gorm:"index" json:"mode"`
+	Template  string          `gorm:"index" json:"template"`
+	Prompt    string          `gorm:"type:text" json:"prompt"`
+	Params    json.RawMessage `gorm:"type:text" json:"params"`
+	Files     json.RawMessage `gorm:"type:text" json:"files"`
+	TaskID    string          `gorm:"column:task_id;uniqueIndex" json:"task_id"`
+	Status    string          `gorm:"index" json:"status"`
+	Result    json.RawMessage `gorm:"type:text" json:"result"`
+	Starred   bool            `gorm:"index;default:false" json:"starred"`
+	CreatedAt time.Time       `gorm:"index" json:"created_at"`
 }
 
 // Event 任务事件日志
@@ -327,6 +347,23 @@ type Asset struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+// AssetVariant preserves alternate generated/uploaded images for a project-owned visual entity.
+// EntityType identifies the target field (character_portrait, character_sheet,
+// character_look, asset_image, or asset_sheet); EntityID is the owning row ID.
+type AssetVariant struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	ProjectID  uint      `gorm:"column:project_id;index:idx_asset_variant_entity" json:"project_id"`
+	EntityType string    `gorm:"column:entity_type;size:40;index:idx_asset_variant_entity" json:"entity_type"`
+	EntityID   uint      `gorm:"column:entity_id;index:idx_asset_variant_entity" json:"entity_id"`
+	File       string    `gorm:"column:file;not null" json:"file"`
+	Prompt     string    `gorm:"type:text" json:"prompt"`
+	Provenance string    `gorm:"type:text" json:"provenance"`
+	Selected   bool      `gorm:"default:false;index" json:"selected"`
+	Favorite   bool      `gorm:"default:false;index" json:"favorite"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
 // MergeTask 视频合并任务（把多个场景视频合并剪辑成片）
 type MergeTask struct {
 	ID             uint      `gorm:"primaryKey" json:"id"`
@@ -361,6 +398,17 @@ type Material struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// ScriptRevision 保存某一集完整剧本层级的不可变 JSON 快照。
+type ScriptRevision struct {
+	ID               uint      `gorm:"primaryKey" json:"id"`
+	ProjectID        uint      `gorm:"column:project_id;index:idx_script_revision_project_created" json:"project_id"`
+	EpisodeN         int       `gorm:"column:episode_n;default:1;index" json:"episode_n"`
+	Reason           string    `gorm:"size:120" json:"reason"`
+	SourceRevisionID *uint     `gorm:"column:source_revision_id;index" json:"source_revision_id,omitempty"`
+	SnapshotJSON     string    `gorm:"column:snapshot_json;type:text" json:"-"`
+	CreatedAt        time.Time `gorm:"index:idx_script_revision_project_created,sort:desc" json:"created_at"`
+}
+
 // Dialogue 场景对白：用于 TTS 配音与 SRT 字幕生成
 type Dialogue struct {
 	ID                 uint      `gorm:"primaryKey" json:"id"`
@@ -373,7 +421,16 @@ type Dialogue struct {
 	Text               string    `gorm:"type:text" json:"text"`                                             // 仅可发声原文；空说话人且无明确类型时不发声
 	Voice              string    `json:"voice"`                                                             // TTS 音色（voice_type）
 	Position           float64   `gorm:"default:0" json:"position"`                                         // 场景内起始位置（秒；0 表示自动顺排）
-	AudioFile          string    `json:"audio_file"`                                                        // 合成音频文件名（input/<pid>/dub/ 下）
+	Offset             float64   `gorm:"default:0" json:"offset"`                                           // 相对自动/指定位置的微调秒数，可为负
+	Speed              float64   `gorm:"default:1" json:"speed"`                                            // 播放/合并速度（0.5~2）
+	Pitch              float64   `gorm:"default:0" json:"pitch"`                                            // 音高半音（-12~12）
+	Volume             float64   `gorm:"default:1" json:"volume"`                                           // 单句增益（0~4）
+	Emotion            string    `json:"emotion"`                                                           // 供应商支持时传入，否则仅持久化供 QA
+	Delivery           string    `gorm:"type:text" json:"delivery"`                                         // 表演/语气说明
+	AudioFile          string    `json:"audio_file"`                                                        // 当前合成/已应用预览音频
+	PreviousAudioFile  string    `gorm:"column:previous_audio_file" json:"previous_audio_file"`             // 最近一次替换前的音频，可一键回退
+	AudioRevision      int       `gorm:"column:audio_revision;default:0" json:"audio_revision"`
+	AudioHash          string    `gorm:"column:audio_hash;size:64" json:"audio_hash"` // 生成当前音频时的输入摘要
 	AudioStale         bool      `gorm:"column:audio_stale;default:false" json:"audio_stale"`
 	AudioStaleReason   string    `gorm:"column:audio_stale_reason" json:"audio_stale_reason"`
 	Status             string    `json:"status"` // pending/synthesizing/ready/failed
@@ -798,6 +855,20 @@ type AudioLayer struct {
 	StaleReason string    `json:"stale_reason"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// PromptPolicyOverride stores an inherited prompt policy at one project hierarchy scope.
+type PromptPolicyOverride struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	ProjectID uint      `gorm:"index;uniqueIndex:idx_prompt_policy_scope" json:"project_id"`
+	EpisodeID *uint     `gorm:"index;uniqueIndex:idx_prompt_policy_scope" json:"episode_id,omitempty"`
+	SceneID   *uint     `gorm:"index;uniqueIndex:idx_prompt_policy_scope" json:"scene_id,omitempty"`
+	ShotID    *uint     `gorm:"index;uniqueIndex:idx_prompt_policy_scope" json:"shot_id,omitempty"`
+	PolicyKey string    `gorm:"size:100;index;uniqueIndex:idx_prompt_policy_scope" json:"policy_key"`
+	Content   string    `gorm:"type:text" json:"content"`
+	Version   int       `gorm:"default:1" json:"version"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // SharedAssetReference makes global/project assets explicit and prevents deletion while referenced.

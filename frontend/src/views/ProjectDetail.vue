@@ -120,6 +120,7 @@
           <button v-else class="btn btn-ghost btn-sm" :disabled="busy || assetsWithoutImage === 0" @click="allAssetImages">
             一键 Krea2 生成{{ assetKindLabel }}参考图 ({{ assetsWithoutImage }})
           </button>
+          <button class="btn btn-ghost btn-sm" :disabled="reconciliationBusy" @click="reviewAssetReconciliation">{{ reconciliationBusy ? '对账中…' : '资产名称对账' }}</button>
           <button v-if="assetTab === 'char'" class="btn btn-secondary btn-sm" @click="openCreateCharacter">＋ 新建角色</button>
           <button v-else class="btn btn-secondary btn-sm" @click="openCreateAsset">＋ 新建{{ assetKindLabel }}</button>
         </div>
@@ -149,6 +150,30 @@
               <span v-if="ch.voice_id" class="char-voice" title="已用参考语音注册复刻音色，配音音色全剧一致">🎤 复刻音色（参考语音）</span>
               <span v-else-if="ch.voice" class="char-voice">🎵 音色：{{ ch.voice }}</span>
               <span class="char-appear">出场 {{ characterCounts[ch.id] || 0 }} 场</span>
+              <button class="char-history-toggle" :disabled="historyLoading === ch.id" @click.stop="toggleCharacterHistory(ch)">
+                {{ historyLoading === ch.id ? '历史加载中…' : openHistoryCharacterID === ch.id ? '收起历史' : '查看历史' }}
+              </button>
+              <div v-if="openHistoryCharacterID === ch.id" class="char-history-popover">
+                <template v-if="characterHistory[ch.id]">
+                  <div class="char-history-summary">
+                    <b>最近出现</b>
+                    <span v-if="characterHistory[ch.id].last_seen">第{{ characterHistory[ch.id].last_seen.episode_n }}集 · 场{{ characterHistory[ch.id].last_seen.scene_order }}{{ characterHistory[ch.id].last_seen.shot_order ? ` · 镜${characterHistory[ch.id].last_seen.shot_order}` : '' }}</span>
+                    <span v-else>尚未出现</span>
+                  </div>
+                  <div class="char-history-tags">
+                    <span v-for="episode in characterHistory[ch.id].episodes" :key="episode.number" class="tag tag-gray">
+                      第{{ episode.number }}集 {{ episode.scenes.length }}场 / {{ historyShotCount(episode) }}镜
+                    </span>
+                  </div>
+                  <div class="char-history-context">
+                    <span v-if="characterHistory[ch.id].last_approved_look">造型：{{ characterHistory[ch.id].last_approved_look.name }}</span>
+                    <span v-if="characterHistory[ch.id].last_approved_outfit">套装：{{ characterHistory[ch.id].last_approved_outfit.name }}</span>
+                    <span v-if="characterHistory[ch.id].props.length">道具：{{ characterHistory[ch.id].props.map(p => p.name).join('、') }}</span>
+                    <span v-if="characterHistory[ch.id].voice_config.voice_id || characterHistory[ch.id].voice_config.voice">音色：{{ characterHistory[ch.id].voice_config.voice_id ? '复刻音色' : characterHistory[ch.id].voice_config.voice }}</span>
+                  </div>
+                </template>
+                <span v-else class="field-hint">暂无历史数据</span>
+              </div>
               <span v-if="ch.portrait_task_id" class="char-voice">⏳ Krea2 标准像生成中</span>
               <span v-if="ch.portrait_error" class="fail-msg">{{ ch.portrait_error }}</span>
               <span v-if="ch.sheet_task_id" class="char-voice">⏳ 角色四视图生成中</span>
@@ -168,6 +193,8 @@
                   {{ ch.sheet_task_id ? '四视图生成中…' : ch.sheet ? '重生成四视图' : '生成四视图' }}
                 </button>
                 <button v-if="ch.sheet" class="btn btn-sm btn-ghost" @click="viewCharacterSheet(ch)">查看四视图</button>
+                <button class="btn btn-sm btn-ghost" @click="openVariants('character_portrait', ch.id, ch.name + ' · 标准像')">标准像版本</button>
+                <button class="btn btn-sm btn-ghost" @click="openVariants('character_sheet', ch.id, ch.name + ' · 四视图')">四视图版本</button>
                 <router-link :to="`/projects/${id()}/characters/${ch.id}/looks`" class="btn btn-sm btn-secondary">造型资产</router-link>
                 <button class="btn btn-sm btn-ghost" @click="openEditCharacter(ch)">编辑</button>
                 <button class="btn btn-sm btn-danger" @click="removeCharacter(ch)">删除</button>
@@ -222,6 +249,8 @@
                   {{ a.sheet_task_id ? '四视图生成中…' : a.sheet ? '重生成四视图' : '生成四视图' }}
                 </button>
                 <button v-if="a.kind === 'prop' && a.sheet" class="btn btn-sm btn-ghost" @click="viewPropSheet(a)">查看四视图</button>
+                <button class="btn btn-sm btn-ghost" @click="openVariants('asset_image', a.id, a.name + ' · 参考图')">参考图版本</button>
+                <button v-if="a.kind === 'prop'" class="btn btn-sm btn-ghost" @click="openVariants('asset_sheet', a.id, a.name + ' · 四视图')">四视图版本</button>
                 <button class="btn btn-sm btn-ghost" @click="openEditAsset(a)">编辑</button>
                 <button class="btn btn-sm btn-danger" @click="removeAsset(a)">删除</button>
               </div>
@@ -269,6 +298,14 @@
           <p class="sub">修改本集剧本正文后点击「保存并 AI 重新生成分镜」，将按新剧本重建该集的分镜场景</p>
         </div>
         <div class="section-actions">
+          <button class="btn btn-ghost btn-sm" :disabled="revisionBusy" @click="createRevision">
+            {{ revisionBusy ? '保存中…' : '📌 保存版本' }}
+          </button>
+          <button class="btn btn-ghost btn-sm" :disabled="revisionBusy" @click="toggleRevisions">
+            {{ showRevisions ? '收起版本' : '版本历史' }}
+          </button>
+          <button class="btn btn-ghost btn-sm" :disabled="screenplayBusy" @click="importScreenplay">{{ screenplayBusy ? '导入中…' : '导入剧本' }}</button>
+          <a v-for="format in ['fountain', 'fdx', 'txt']" :key="format" class="btn btn-ghost btn-sm" :href="api.screenplayExportUrl(id(), activeEpN, format)">导出 {{ format.toUpperCase() }}</a>
           <button class="btn btn-secondary btn-sm" :disabled="busy || expandingScript || !scriptDraft.trim()" @click="aiExpand">
             {{ expandingScript ? 'AI 扩写中…' : '✨ AI 扩写' }}
           </button>
@@ -278,6 +315,17 @@
           <button class="btn btn-ghost btn-sm" @click="showScript = !showScript">
             {{ showScript ? '收起' : '展开' }}
           </button>
+        </div>
+      </div>
+      <div class="card revision-card" v-if="showRevisions">
+        <div v-if="revisionBusy" class="field-hint">正在读取版本…</div>
+        <div v-else-if="!scriptRevisions.length" class="field-hint">本集还没有已保存版本。</div>
+        <div v-for="revision in scriptRevisions" :key="revision.id" class="revision-row">
+          <div>
+            <strong>{{ revisionReason(revision.reason) }}</strong>
+            <span class="field-hint">{{ formatRevisionTime(revision.created_at) }}</span>
+          </div>
+          <button class="btn btn-danger btn-sm" :disabled="revisionBusy" @click="restoreRevision(revision)">恢复</button>
         </div>
       </div>
       <div class="card script-card" v-if="showScript">
@@ -290,6 +338,20 @@
           <button class="btn btn-sm btn-secondary" :disabled="busy || scriptRendering || !scriptDirty" @click="saveAndRender">
             {{ scriptRendering ? 'AI 生成中…' : '💾 保存并 AI 重新生成分镜' }}
           </button>
+        </div>
+      </div>
+    </section>
+
+    <section class="section compact-tool-section">
+      <div class="section-head">
+        <div><span class="overline">PROMPT POLICY</span><h2>提示词策略覆盖</h2><p class="sub">按项目维护图像/视频提示词策略，并查看当前生效来源。</p></div>
+        <div class="section-actions"><button class="btn btn-sm btn-ghost" :disabled="policyBusy" @click="loadPromptPolicies">刷新</button><button class="btn btn-sm btn-secondary" :disabled="policyBusy" @click="editPromptPolicy()">新增项目覆盖</button></div>
+      </div>
+      <div class="card compact-list">
+        <div v-if="!promptPolicies.length" class="field-hint">暂无项目策略覆盖。</div>
+        <div v-for="policy in promptPolicies" :key="policy.id" class="revision-row">
+          <div><strong>{{ policy.policy_key }}</strong><span class="field-hint">{{ policyScope(policy) }} · v{{ policy.version }} · {{ policy.content }}</span></div>
+          <div class="section-actions"><button class="btn btn-sm btn-ghost" @click="showEffectivePolicy(policy)">查看生效</button><button class="btn btn-sm btn-secondary" @click="editPromptPolicy(policy)">编辑</button><button class="btn btn-sm btn-danger" @click="removePromptPolicy(policy)">删除</button></div>
         </div>
       </div>
     </section>
@@ -836,6 +898,21 @@
       </div>
     </div>
 
+    <!-- 资产图片版本 -->
+    <div v-if="variantTarget" class="modal-mask" @click.self="variantTarget = null">
+      <div class="modal card">
+        <h2>{{ variantTarget.label }}</h2>
+        <p class="field-hint">生成与上传产生的历史版本。收藏版本不会被自动清理。</p>
+        <div v-if="variantBusy" class="field-hint">版本加载中…</div>
+        <div v-else-if="!assetVariantRows.length" class="empty-inline">暂无历史版本。</div>
+        <div v-for="variant in assetVariantRows" :key="variant.id" class="revision-row">
+          <div><strong>{{ variant.file }}</strong><span class="field-hint">{{ variant.provenance || '未记录来源' }} · {{ formatRevisionTime(variant.created_at) }}</span></div>
+          <div class="section-actions"><span v-if="variant.selected" class="tag">当前</span><button class="btn btn-sm btn-ghost" @click="toggleVariantFavorite(variant)">{{ variant.favorite ? '★ 已收藏' : '☆ 收藏' }}</button><button class="btn btn-sm btn-secondary" :disabled="variant.selected" @click="selectVariant(variant)">设为当前</button></div>
+        </div>
+        <div class="modal-actions"><button class="btn btn-ghost" @click="variantTarget = null">关闭</button></div>
+      </div>
+    </div>
+
     <!-- 图片查看弹窗 -->
     <div v-if="viewer" class="modal-mask viewer-mask" tabindex="-1" ref="viewerMask" @click.self="closeViewer" @keydown.esc="closeViewer">
       <div class="viewer-panel" role="dialog" aria-modal="true" aria-label="图片预览">
@@ -886,6 +963,9 @@ const scenes = ref([])
 const merges = ref([])
 const characters = ref([])
 const characterCounts = ref({})
+const characterHistory = reactive({})
+const openHistoryCharacterID = ref(null)
+const historyLoading = ref(null)
 const dialogues = ref([])
 const dubMergeOn = ref(true)
 const mergeSub = ref(false)
@@ -934,6 +1014,16 @@ const assetForm = reactive({ name: '', description: '' })
 const redesigningAsset = ref(false)
 const voicePresets = ['Cherry', 'Ethan', 'Chelsie', 'Serena', 'Nofish', 'Dylan', 'Jada', 'Peter', 'Sunny', 'Luna']
 const showScript = ref(false)
+const showRevisions = ref(false)
+const scriptRevisions = ref([])
+const revisionBusy = ref(false)
+const screenplayBusy = ref(false)
+const policyBusy = ref(false)
+const promptPolicies = ref([])
+const reconciliationBusy = ref(false)
+const variantBusy = ref(false)
+const variantTarget = ref(null)
+const assetVariantRows = ref([])
 const showPlan = ref(false)
 const viewer = ref(null)
 const continuityScene = ref(null)
@@ -1073,6 +1163,8 @@ async function selectEp(n) {
   activeEpN.value = episodeN
   syncEpisodeQuery(episodeN)
   scriptDirty.value = false
+  showRevisions.value = false
+  scriptRevisions.value = []
   scenePage.value = 1
   await load()
   await nextTick()
@@ -1334,6 +1426,183 @@ function refreshSoon() {
   timer = setTimeout(load, 400)
 }
 
+async function importScreenplay() {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '.fountain,.fdx,.txt,text/plain,application/xml'
+  input.onchange = async () => {
+    const file = input.files?.[0]
+    if (!file) return
+    screenplayBusy.value = true
+    try {
+      const { data: preview } = await api.previewScreenplayImport(id(), activeEpN.value, file)
+      const headings = (preview.scenes || []).slice(0, 5).map((scene, index) => `${index + 1}. ${scene.heading}`).join('\n')
+      if (!window.confirm(`导入预览：${preview.scene_count} 场、${preview.element_count} 个元素\n${headings}\n\n应用后将替换本集场景、镜头与对白，是否继续？`)) return
+      await api.applyScreenplayImport(id(), activeEpN.value, preview)
+      scriptDirty.value = false
+      await load()
+      toast.success('剧本已导入，原内容已保存为安全版本')
+    } catch (e) {
+      toast.error('剧本导入失败：' + (e.response?.data?.error || e.message))
+    } finally {
+      screenplayBusy.value = false
+    }
+  }
+  input.click()
+}
+
+function policyScope(policy) {
+  if (policy.shot_id) return `镜头 #${policy.shot_id}`
+  if (policy.scene_id) return `场景 #${policy.scene_id}`
+  if (policy.episode_id) return `分集 #${policy.episode_id}`
+  return '项目级'
+}
+async function loadPromptPolicies() {
+  policyBusy.value = true
+  try {
+    const { data } = await api.promptPolicyOverrides(id())
+    promptPolicies.value = data || []
+  } catch (e) {
+    toast.error('提示词策略加载失败：' + (e.response?.data?.error || e.message))
+  } finally {
+    policyBusy.value = false
+  }
+}
+async function editPromptPolicy(policy = null) {
+  const key = policy?.policy_key || window.prompt('策略键（如 image_prompt_polish）', 'image_prompt_polish')
+  if (!key) return
+  const content = window.prompt('策略内容', policy?.content || '')
+  if (!content?.trim()) return
+  policyBusy.value = true
+  try {
+    if (policy) await api.updatePromptPolicyOverride(id(), policy.id, content)
+    else await api.createPromptPolicyOverride(id(), { policy_key: key.trim(), content: content.trim() })
+    await loadPromptPolicies()
+    toast.success('提示词策略已保存')
+  } catch (e) {
+    toast.error('策略保存失败：' + (e.response?.data?.error || e.message))
+  } finally {
+    policyBusy.value = false
+  }
+}
+async function showEffectivePolicy(policy) {
+  try {
+    const { data } = await api.effectivePromptPolicy(id(), { policy_key: policy.policy_key, system_default: '' })
+    window.alert(`生效来源：${data.source}${data.source_id ? ` #${data.source_id}` : ''}\n版本：${data.version}\n\n${data.content || '（空）'}`)
+  } catch (e) { toast.error('查询生效策略失败：' + (e.response?.data?.error || e.message)) }
+}
+async function removePromptPolicy(policy) {
+  if (!window.confirm(`删除 ${policy.policy_key} 的${policyScope(policy)}覆盖？`)) return
+  try { await api.deletePromptPolicyOverride(id(), policy.id); await loadPromptPolicies(); toast.success('策略覆盖已删除') }
+  catch (e) { toast.error('删除失败：' + (e.response?.data?.error || e.message)) }
+}
+
+function splitNames(value) { return String(value || '').split(/[，,\n]/).map(v => v.trim()).filter(Boolean) }
+async function reviewAssetReconciliation() {
+  const charactersInput = window.prompt('待对账角色名（逗号或换行分隔）', '')
+  if (charactersInput === null) return
+  const locationsInput = window.prompt('待对账场景名（逗号或换行分隔）', '')
+  if (locationsInput === null) return
+  const propsInput = window.prompt('待对账道具名（逗号或换行分隔）', '')
+  if (propsInput === null) return
+  reconciliationBusy.value = true
+  try {
+    const { data } = await api.reconcileAssetsPreview(id(), { characters: splitNames(charactersInput), locations: splitNames(locationsInput), props: splitNames(propsInput) })
+    const decisions = []
+    for (const suggestion of (data.suggestions || [])) {
+      const detail = suggestion.target_name ? `匹配“${suggestion.target_name}”` : '未匹配现有资产'
+      const action = window.prompt(`${suggestion.entity_type}「${suggestion.proposed_name}」：${detail}\n操作：merge / create-local / skip`, suggestion.recommended)
+      if (action === null) return
+      decisions.push({ entity_type: suggestion.entity_type, proposed_name: suggestion.proposed_name, action: action.trim(), target_id: suggestion.target_id || 0 })
+    }
+    if (!decisions.length) { toast.info('没有需要对账的名称'); return }
+    if (!window.confirm(`确认应用 ${decisions.length} 条资产对账决定？`)) return
+    await api.applyAssetReconciliation(id(), decisions)
+    await load()
+    toast.success('资产对账已应用')
+  } catch (e) {
+    toast.error('资产对账失败：' + (e.response?.data?.error || e.message))
+  } finally { reconciliationBusy.value = false }
+}
+async function loadVariants() {
+  if (!variantTarget.value) return
+  variantBusy.value = true
+  try {
+    const { data } = await api.assetVariants(id(), variantTarget.value.entityType, variantTarget.value.entityId)
+    assetVariantRows.value = data.variants || []
+  } catch (e) { toast.error('资产版本加载失败：' + (e.response?.data?.error || e.message)) }
+  finally { variantBusy.value = false }
+}
+async function openVariants(entityType, entityId, label) {
+  variantTarget.value = { entityType, entityId, label }
+  assetVariantRows.value = []
+  await loadVariants()
+}
+async function selectVariant(variant) {
+  try { await api.selectAssetVariant(id(), variant.id); await Promise.all([loadVariants(), load()]); toast.success('已切换当前资产版本') }
+  catch (e) { toast.error('切换失败：' + (e.response?.data?.error || e.message)) }
+}
+async function toggleVariantFavorite(variant) {
+  try { await api.favoriteAssetVariant(id(), variant.id, !variant.favorite); await loadVariants() }
+  catch (e) { toast.error('收藏失败：' + (e.response?.data?.error || e.message)) }
+}
+
+const revisionReasonLabels = {
+  manual: '手动保存',
+  before_script_replace: '重建分镜前自动保存',
+  before_script_expand: 'AI 扩写前自动保存',
+  before_restore: '恢复前安全保存'
+}
+function revisionReason(reason) { return revisionReasonLabels[reason] || reason || '剧本版本' }
+function formatRevisionTime(value) { return value ? new Date(value).toLocaleString() : '' }
+async function loadRevisions() {
+  revisionBusy.value = true
+  try {
+    const { data } = await api.scriptRevisions(id(), activeEpN.value)
+    scriptRevisions.value = data || []
+  } catch (e) {
+    toast.error('版本历史加载失败：' + (e.response?.data?.error || e.message))
+  } finally {
+    revisionBusy.value = false
+  }
+}
+async function toggleRevisions() {
+  showRevisions.value = !showRevisions.value
+  if (showRevisions.value) await loadRevisions()
+}
+async function createRevision() {
+  const reason = window.prompt('版本说明（可选）', 'manual')
+  if (reason === null) return
+  revisionBusy.value = true
+  try {
+    await api.createScriptRevision(id(), activeEpN.value, reason.trim() || 'manual')
+    toast.success('当前剧本版本已保存')
+    const { data } = await api.scriptRevisions(id(), activeEpN.value)
+    scriptRevisions.value = data || []
+    showRevisions.value = true
+  } catch (e) {
+    toast.error('保存版本失败：' + (e.response?.data?.error || e.message))
+  } finally {
+    revisionBusy.value = false
+  }
+}
+async function restoreRevision(revision) {
+  if (!window.confirm(`确定恢复 ${formatRevisionTime(revision.created_at)} 的版本？当前状态会先自动保存，随后替换本集剧本、场景、镜头和对白。`)) return
+  revisionBusy.value = true
+  try {
+    await api.restoreScriptRevision(id(), revision.id)
+    scriptDirty.value = false
+    await load()
+    const { data } = await api.scriptRevisions(id(), activeEpN.value)
+    scriptRevisions.value = data || []
+    toast.success('剧本版本已恢复')
+  } catch (e) {
+    toast.error('恢复版本失败：' + (e.response?.data?.error || e.message))
+  } finally {
+    revisionBusy.value = false
+  }
+}
+
 async function regenerateScript() {
   busy.value = true
   generatingScript.value = true
@@ -1491,6 +1760,26 @@ async function uploadPortrait(ch) {
     }
   }
   input.click()
+}
+function historyShotCount(episode) {
+  return (episode?.scenes || []).reduce((total, scene) => total + (scene.shots?.length || 0), 0)
+}
+async function toggleCharacterHistory(ch) {
+  if (openHistoryCharacterID.value === ch.id) {
+    openHistoryCharacterID.value = null
+    return
+  }
+  openHistoryCharacterID.value = ch.id
+  historyLoading.value = ch.id
+  try {
+    const { data } = await api.characterHistory(id(), ch.id)
+    characterHistory[ch.id] = data.characters?.[0] || null
+  } catch (e) {
+    openHistoryCharacterID.value = null
+    toast.error('角色历史加载失败：' + (e.response?.data?.error || e.message))
+  } finally {
+    historyLoading.value = null
+  }
 }
 function openCreateCharacter() {
   Object.assign(charForm, { name: '', role: '', trait: '', style: '', voice: '' })
@@ -2135,6 +2424,7 @@ watch(
 
 onMounted(() => {
   load()
+  loadPromptPolicies()
   wsTimer = setInterval(() => {
     if (store.lastEvent || store.lastProjectUpdate) refreshSoon()
   }, 1000)
@@ -2243,6 +2533,12 @@ onBeforeUnmount(() => {
 .char-role { font-size: 11px; padding: 2px 9px; border-radius: 980px; background: var(--accent-soft); color: var(--accent); }
 .char-trait, .char-style { margin: 4px 0 0; font-size: 12px; color: var(--text-secondary); line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .char-appear { margin-top: 6px; font-size: 12px; color: var(--text-tertiary); }
+.char-history-toggle { align-self: flex-start; margin-top: 5px; padding: 0; border: 0; background: transparent; color: var(--accent); font-size: 12px; cursor: pointer; }
+.char-history-toggle:disabled { opacity: .55; cursor: wait; }
+.char-history-popover { margin-top: 7px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-secondary); font-size: 11px; color: var(--text-secondary); }
+.char-history-summary { display: flex; justify-content: space-between; gap: 8px; }
+.char-history-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+.char-history-context { display: flex; flex-direction: column; gap: 3px; margin-top: 7px; }
 .char-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .empty-inline { padding: 18px; color: var(--text-tertiary); font-size: 13px; text-align: center; }
 .field .req { color: var(--red); margin-left: 4px; font-weight: 400; }
@@ -2374,6 +2670,10 @@ onBeforeUnmount(() => {
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
 .field-row + .field { margin-top: 14px; }
 .field-hint { font-size: 12px; color: var(--text-tertiary); margin-top: 5px; }
+.revision-card { margin-bottom: 12px; padding: 8px 16px; }
+.revision-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.revision-row:last-child { border-bottom: 0; }
+.revision-row .field-hint { display: block; }
 .notice { border-radius: 12px; padding: 10px 14px; font-size: 13px; margin-top: 14px; }
 .error-notice { background: rgba(255, 69, 58, 0.1); color: var(--red); }
 .project-failure-notice { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 20px; background: rgba(255, 69, 58, 0.1); color: var(--red); border: 1px solid rgba(255, 69, 58, 0.22); }

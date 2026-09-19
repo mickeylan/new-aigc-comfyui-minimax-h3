@@ -65,6 +65,7 @@ const navItems = [
   { to: '/skills', label: '漫剧 Skill', icon: '◇' },
   { to: '/materials', label: '素材库', icon: '▧' },
   { to: '/create', label: '创建任务', icon: '＋' },
+  { to: '/playground', label: '生成试验场', icon: '◫' },
   { to: '/dashboard', label: '总览', icon: '⌁' },
   { to: '/tasks', label: '任务中心', icon: '◷' },
   { to: '/instances', label: '实例管理', icon: '◉' },

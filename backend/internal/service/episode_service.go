@@ -133,7 +133,7 @@ func UpdateProjectEpisode(db *gorm.DB, projectID uint, number int, updates map[s
 	}
 	if value, ok := updates["status"].(string); ok {
 		switch value {
-		case "draft", "planned", "producing", "ready", "completed":
+		case "draft", "planned", "producing", "ready", "approved", "completed":
 			allowed["status"] = value
 		default:
 			return nil, fmt.Errorf("无效的Episode状态")

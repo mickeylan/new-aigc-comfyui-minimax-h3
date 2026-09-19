@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path"
@@ -23,8 +24,11 @@ type mergeAudioInput struct {
 	Volume   float64
 	FadeIn   float64
 	FadeOut  float64
-	Loop     bool
-	Kind     string
+	Loop           bool
+	Kind           string
+	SourceDuration float64
+	Speed          float64
+	Pitch          float64
 }
 
 type mergeAudioGraph struct {
@@ -32,8 +36,32 @@ type mergeAudioGraph struct {
 	Label   string
 }
 
+func buildNormalizedVideoGraph(videoCount, width, height int) []string {
+	if videoCount <= 0 || width <= 0 || height <= 0 {
+		return nil
+	}
+	filters := make([]string, 0, videoCount+2)
+	var concat strings.Builder
+	for i := 0; i < videoCount; i++ {
+		label := fmt.Sprintf("vnorm%d", i)
+		filters = append(filters, fmt.Sprintf("[%d:v]scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1[%s]", i, width, height, width, height, label))
+		fmt.Fprintf(&concat, "[%s]", label)
+	}
+	filters = append(filters, concat.String()+fmt.Sprintf("concat=n=%d:v=1:a=0[vc]", videoCount), "[vc]fps=24[v]")
+	return filters
+}
+
 func ffnum(value float64) string {
 	return strconv.FormatFloat(value, 'f', 3, 64)
+}
+
+// atempoChain keeps each FFmpeg atempo stage inside its supported 0.5..2 range.
+func atempoChain(value float64) string {
+	var out strings.Builder
+	for value > 2 { out.WriteString(",atempo=2.000"); value /= 2 }
+	for value < 0.5 { out.WriteString(",atempo=0.500"); value /= 0.5 }
+	if math.Abs(value-1) > 0.0001 { out.WriteString(",atempo=" + ffnum(value)) }
+	return out.String()
 }
 
 // buildMergeAudioGraph builds only the audio portion of filter_complex. An empty label means
@@ -64,7 +92,16 @@ func buildMergeAudioGraph(videoCount int, nativeReady bool, totalDuration, nativ
 		if input.Start+duration > totalDuration {
 			duration = totalDuration - input.Start
 		}
-		chain := fmt.Sprintf("[%d:a]atrim=start=0:end=%s,asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=%s", input.Index, ffnum(duration), ffnum(input.Volume))
+		sourceDuration := duration
+		if input.SourceDuration > 0 { sourceDuration = input.SourceDuration }
+		chain := fmt.Sprintf("[%d:a]atrim=start=0:end=%s,asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo", input.Index, ffnum(sourceDuration))
+		if input.Pitch != 0 {
+			factor := math.Pow(2, input.Pitch/12)
+			chain += fmt.Sprintf(",asetrate=%s,aresample=48000", ffnum(48000*factor))
+			chain += atempoChain(1 / factor)
+		}
+		if input.Speed > 0 && math.Abs(input.Speed-1) > 0.0001 { chain += atempoChain(input.Speed) }
+		chain += ",volume=" + ffnum(input.Volume)
 		if input.FadeIn > 0 {
 			fade := input.FadeIn
 			if fade > duration {
@@ -137,6 +174,7 @@ func (s *ProjectService) createAudioMergeTask(p *models.Project, sceneIDs []uint
 		return nil, fmt.Errorf("已有进行中的合并任务，请等待完成")
 	}
 	var scenes []models.Scene
+	episodeN := 0
 	for _, id := range sceneIDs {
 		var scene models.Scene
 		if err := s.db.Where("id = ? AND project_id = ?", id, p.ID).First(&scene).Error; err != nil {
@@ -145,15 +183,20 @@ func (s *ProjectService) createAudioMergeTask(p *models.Project, sceneIDs []uint
 		if scene.Status != "video_ready" || scene.VideoFile == "" || scene.VideoGPU == nil {
 			return nil, fmt.Errorf("场景 %d 的视频尚未完成，请先生成视频", scene.Order)
 		}
+		currentEpisode := scene.EpisodeN
+		if currentEpisode <= 0 {
+			currentEpisode = 1
+		}
+		if episodeN == 0 {
+			episodeN = currentEpisode
+		} else if currentEpisode != episodeN {
+			return nil, fmt.Errorf("不能合并不同集的场景：第%d集与第%d集", episodeN, currentEpisode)
+		}
 		scenes = append(scenes, scene)
 	}
 	ids := make([]string, len(sceneIDs))
 	for i, id := range sceneIDs {
 		ids[i] = strconv.FormatUint(uint64(id), 10)
-	}
-	episodeN := scenes[0].EpisodeN
-	if episodeN <= 0 {
-		episodeN = 1
 	}
 	mt := models.MergeTask{ProjectID: p.ID, EpisodeN: episodeN, Title: fmt.Sprintf("第%d集 · %s", episodeN, p.Title), SceneOrder: strings.Join(ids, ","), Status: "pending", Generation: p.Generation, NativeVolume: audio.NativeVolume, DialogueVolume: audio.DialogueVolume, BGMVolume: audio.BGMVolume, DialogueMix: audio.DialogueMix}
 	if err := s.db.Create(&mt).Error; err != nil {
@@ -187,6 +230,7 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 	videoDurs := make([]sceneVideo, 0, len(scenes))
 	nativeCount := 0
 	totalDuration := 0.0
+	firstWidth, firstHeight := 0, 0
 	for _, scene := range scenes {
 		abs := s.mediaPath("output_workers", fmt.Sprintf("gpu%d", *scene.VideoGPU), filepath.FromSlash(scene.VideoFile))
 		if (s.remote == nil || !s.remote.Enabled()) && scene.VideoInputFile != "" {
@@ -203,9 +247,23 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 			nativeCount++
 		}
 		dur := normalizeSceneDuration(scene.Duration)
-		if s.remote != nil {
-			if info, err := s.remote.ProbeMedia(abs); err == nil && info.Duration > 0 {
-				dur = info.Duration
+		if s.remote == nil {
+			fail(fmt.Errorf("媒体探测服务不可用"))
+			return
+		}
+		info, err := s.remote.ProbeMedia(abs)
+		if err != nil {
+			fail(fmt.Errorf("探测场景 %d 视频失败: %w", scene.Order, err))
+			return
+		}
+		if info.Duration > 0 {
+			dur = info.Duration
+		}
+		if firstWidth == 0 {
+			firstWidth, firstHeight = info.Width, info.Height
+			if firstWidth <= 0 || firstHeight <= 0 {
+				fail(fmt.Errorf("无法读取首个场景视频尺寸"))
+				return
 			}
 		}
 		videoDurs = append(videoDurs, sceneVideo{abs: abs, dur: dur})
@@ -250,16 +308,12 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 				idx := len(inputPaths)
 				inputPaths = append(inputPaths, segment.AudioAbs)
 				remoteInputs = append(remoteInputs, "-i", shellQuote(segment.AudioAbs))
-				extras = append(extras, mergeAudioInput{Index: idx, Start: segment.Start, Duration: segment.End - segment.Start, Volume: mt.DialogueVolume, Kind: "dialogue"})
+				extras = append(extras, mergeAudioInput{Index: idx, Start: segment.Start, Duration: segment.End - segment.Start, SourceDuration: segment.SourceDur, Volume: mt.DialogueVolume * segment.Volume, Speed: segment.Speed, Pitch: segment.Pitch, Kind: "dialogue"})
 			}
 		}
 	}
 
-	var concatHead strings.Builder
-	for i := range scenes {
-		fmt.Fprintf(&concatHead, "[%d:v]", i)
-	}
-	filters := []string{concatHead.String() + fmt.Sprintf("concat=n=%d:v=1:a=0[vc]", len(scenes)), "[vc]fps=24[v]"}
+	filters := buildNormalizedVideoGraph(len(scenes), firstWidth, firstHeight)
 	outName := fmt.Sprintf("merged/%s_merged_%d.mp4", projectFileTag(p), mt.ID)
 	outAbs := s.mediaPath("output_workers", "gpu0", filepath.FromSlash(outName))
 	if subtitles {

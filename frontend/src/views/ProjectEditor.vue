@@ -111,6 +111,8 @@
             <h2>配音 · 字幕</h2>
           </div>
           <div class="section-actions">
+            <button class="btn btn-sm btn-ghost" :disabled="busy" @click="previewEpisodeDub">预览本集时间线</button>
+            <button class="btn btn-sm btn-secondary" :disabled="busy || !staleDialogueCount" @click="dubStaleEpisode">仅生成过期配音 ({{ staleDialogueCount }})</button>
             <button class="btn btn-sm btn-secondary" :disabled="busy || sceneDubs(selected).length === 0" @click="dubScene(selected)">
               生成/重试本场景配音
             </button>
@@ -134,6 +136,7 @@
                 <span class="dub-state" :class="{ fail: d.status === 'failed' }">
                   {{ d.status === 'ready' ? '✅ 已合成' : d.status === 'synthesizing' ? '合成中…' : d.status === 'failed' ? '失败' : '待合成' }}
                 </span>
+                <span v-if="d.audio_stale" class="fail-msg" :title="d.audio_stale_reason">需更新</span>
               </div>
               <textarea v-model="d._text" class="textarea dub-text" rows="2" @blur="saveDub(d)"></textarea>
               <div class="dub-voice-row">
@@ -149,9 +152,18 @@
                   </optgroup>
                 </select>
               </div>
+              <div class="dub-qa-grid">
+                <label>语速<input type="number" class="input input-sm" min="0.5" max="2" step="0.1" v-model.number="d.speed" @change="saveDub(d)" /></label>
+                <label>音高<input type="number" class="input input-sm" min="-12" max="12" step="1" v-model.number="d.pitch" @change="saveDub(d)" /></label>
+                <label>音量<input type="number" class="input input-sm" min="0" max="4" step="0.1" v-model.number="d.volume" @change="saveDub(d)" /></label>
+                <label>偏移(s)<input type="number" class="input input-sm" min="-60" max="60" step="0.1" v-model.number="d.offset" @change="saveDub(d)" /></label>
+                <label class="dub-emotion">情绪<input class="input input-sm" v-model="d.emotion" placeholder="如：克制、愤怒" @change="saveDub(d)" /></label>
+              </div>
               <div class="dub-actions">
-                <audio v-if="d.status === 'ready' && d.audio_file" :src="d.audio_file" controls preload="none" class="dl-audio"></audio>
+                <audio v-if="d.audio_file" :src="d.audio_file" controls preload="none" class="dl-audio"></audio>
                 <button class="btn btn-sm btn-secondary" :disabled="busy" @click="redub(d)">🔊 重新合成</button>
+                <button class="btn btn-sm btn-ghost" :disabled="busy || !d.audio_file" @click="applyDubPreview(d)">应用试听</button>
+                <button class="btn btn-sm btn-ghost" :disabled="busy || !d.previous_audio_file" @click="revertDubAudio(d)">回退音频</button>
               </div>
             </div>
           </div>
@@ -299,6 +311,7 @@ const durProgressPercent = computed(() => {
   if (!targetDuration.value) return 0
   return Math.round((accumulatedDuration.value / targetDuration.value) * 100)
 })
+const staleDialogueCount = computed(() => dialogues.value.filter(d => d.audio_stale || !d.audio_file).length)
 const durProgressClass = computed(() => {
   const p = durProgressPercent.value
   if (p > 105) return 'dur-over'
@@ -325,6 +338,10 @@ function syncDraftTexts() {
   for (const d of dialogues.value) {
     if (d._text === undefined) d._text = d.text
     if (d._voice === undefined) d._voice = d.voice || ''
+    if (!d.speed) d.speed = 1
+    if (d.volume == null) d.volume = 1
+    if (d.pitch == null) d.pitch = 0
+    if (d.offset == null) d.offset = 0
   }
 }
 
@@ -420,18 +437,46 @@ async function saveDuration() {
 }
 
 async function saveDub(d) {
-  const text = (d._text || '').trim()
-  const voice = (d._voice || '').trim()
-  if (text === d.text && voice === (d.voice || '')) return
+  const payload = {
+    text: (d._text || '').trim(), voice: (d._voice || '').trim(),
+    speed: Number(d.speed), pitch: Number(d.pitch), volume: Number(d.volume),
+    emotion: (d.emotion || '').trim(), offset: Number(d.offset)
+  }
   try {
-    await api.updateDialogue(id(), d.id, { text, voice })
-    d.text = text
-    d.voice = voice
-    d.status = 'pending'
-    toast.show('对白已更新，请重新合成配音')
+    const { data } = await api.updateDialogue(id(), d.id, payload)
+    Object.assign(d, data, { _text: data.text, _voice: data.voice || '' })
+    toast.show('对白与试听参数已保存')
   } catch (e) {
     toast.error(e.response?.data?.error || '保存对白失败')
   }
+}
+
+async function previewEpisodeDub() {
+  busy.value = true
+  try {
+    const { data } = await api.episodeDubPreview(id(), activeEpN.value)
+    const lines = (data.timeline || []).slice(0, 20).map(row => `${Number(row.start).toFixed(1)}–${Number(row.end).toFixed(1)}s ${row.character || '旁白'}：${row.text}`)
+    window.alert(`第${activeEpN.value}集配音时间线（${(data.dialogues || []).length}条）\n\n${lines.join('\n') || '暂无对白'}`)
+  } catch (e) { toast.error(e.response?.data?.error || '配音预览失败') }
+  finally { busy.value = false }
+}
+async function dubStaleEpisode() {
+  busy.value = true
+  try {
+    const { data } = await api.generateEpisodeDub(id(), activeEpN.value, true)
+    toast.show(data.message || `已提交 ${data.count || 0} 条过期配音`)
+    setTimeout(load, 3000)
+  } catch (e) { toast.error(e.response?.data?.error || '过期配音生成失败') }
+  finally { busy.value = false }
+}
+async function applyDubPreview(d) {
+  try { const { data } = await api.applyDialoguePreview(id(), d.id); Object.assign(d, data); toast.success('试听版本已应用') }
+  catch (e) { toast.error(e.response?.data?.error || '应用试听失败') }
+}
+async function revertDubAudio(d) {
+  if (!window.confirm('回退到上一版音频？')) return
+  try { const { data } = await api.revertDialogueAudio(id(), d.id); Object.assign(d, data); toast.success('已回退上一版音频') }
+  catch (e) { toast.error(e.response?.data?.error || '回退失败') }
 }
 
 async function redub(d) {
@@ -694,8 +739,12 @@ onUnmounted(() => { clearInterval(timer) })
 .dub-state.fail { background: rgba(220, 38, 38, 0.1); color: var(--red); }
 .dub-text { font-size: 13px; }
 .dub-voice-row { margin: 8px 0; }
-.dub-actions { display: flex; align-items: center; gap: 8px; }
-.dub-actions .dl-audio { flex: 1; }
+.dub-qa-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 8px 0; }
+.dub-qa-grid label { color: var(--text-tertiary); font-size: 10px; }
+.dub-qa-grid .input { width: 100%; margin-top: 3px; }
+.dub-qa-grid .dub-emotion { grid-column: span 4; }
+.dub-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dub-actions .dl-audio { flex: 1; min-width: 200px; }
 
 .sub-item {
   display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px;

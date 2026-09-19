@@ -17,7 +17,7 @@ func newContinuityTestService(t *testing.T) (*ContinuityService, *gorm.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.FrameCandidate{}, &models.SceneContinuity{}, &models.UploadFile{}); err != nil {
+	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.FrameCandidate{}, &models.GenerationCandidate{}, &models.SceneContinuity{}, &models.UploadFile{}); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
@@ -105,8 +105,8 @@ func TestContinuityReplaceSelectedFramePreservesOriginalAndInvalidatesDependent(
 	svc, db := newContinuityTestService(t)
 	p := models.Project{Title: "p"}
 	db.Create(&p)
-	s1 := models.Scene{ProjectID: p.ID, VideoTaskID: "task-1", Status: "video_ready"}
-	s2 := models.Scene{ProjectID: p.ID}
+	s1 := models.Scene{ProjectID: p.ID, EpisodeN: 1, Generation: 1, Order: 1, VideoTaskID: "task-1", Status: "video_ready"}
+	s2 := models.Scene{ProjectID: p.ID, EpisodeN: 1, Generation: 1, Order: 2}
 	db.Create(&s1)
 	db.Create(&s2)
 	frame := models.FrameCandidate{ProjectID: p.ID, SceneID: s1.ID, VideoTaskID: "task-1", Type: models.FrameCandidateSelected, ImageFile: "original.png", Source: "extracted"}

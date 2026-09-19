@@ -551,12 +551,13 @@ func rankInstanceLoads(loads []instanceLoad) {
 // ---------- 任务创建与执行 ----------
 
 type CreateTaskReq struct {
-	TemplateID uint                  `json:"template_id"`
-	Prompt     string                `json:"prompt"`
-	Params     map[string]any        `json:"params"`
-	Files      map[string][]FileMeta `json:"files"` // param_key -> 文件列表
-	ForcePort  *int                  `json:"force_port,omitempty"`
-	Seed       *int64                `json:"seed,omitempty"`
+	TemplateID        uint                  `json:"template_id"`
+	Prompt            string                `json:"prompt"`
+	Params            map[string]any        `json:"params"`
+	Files             map[string][]FileMeta `json:"files"` // param_key -> 文件列表
+	ForcePort         *int                  `json:"force_port,omitempty"`
+	Seed              *int64                `json:"seed,omitempty"`
+	ParentCandidateID *uint                 `json:"-"`
 }
 
 type FileMeta struct {
@@ -589,19 +590,49 @@ func (s *TaskService) CreateTask(req CreateTaskReq) (*models.Task, error) {
 	}
 
 	paramsJSON, _ := json.Marshal(params)
+	inputsJSON, _ := json.Marshal(req.Files)
 	task := models.Task{
-		TaskID:       taskID,
-		TemplateID:   tpl.ID,
-		TemplateName: tpl.Name,
-		Prompt:       req.Prompt,
-		ParamsJSON:   string(paramsJSON),
-		Status:       "pending",
+		TaskID:            taskID,
+		TemplateID:        tpl.ID,
+		TemplateName:      tpl.Name,
+		Prompt:            req.Prompt,
+		ParamsJSON:        string(paramsJSON),
+		InputsJSON:        string(inputsJSON),
+		ParentCandidateID: req.ParentCandidateID,
+		Status:            "pending",
 	}
 	if err := s.db.Create(&task).Error; err != nil {
 		return nil, err
 	}
 	s.push(&task)
 	return &task, nil
+}
+
+// CloneTaskSnapshot retries or branches from the exact persisted task inputs rather than
+// rebuilding them from a mutable Scene. The output task ID is the only changed parameter.
+func (s *TaskService) CloneTaskSnapshot(sourceTaskID string, parentCandidateID *uint) (*models.Task, error) {
+	var source models.Task
+	if err := s.db.Where("task_id = ?", sourceTaskID).First(&source).Error; err != nil {
+		return nil, err
+	}
+	var params map[string]any
+	if err := json.Unmarshal([]byte(source.ParamsJSON), &params); err != nil {
+		return nil, fmt.Errorf("任务参数快照损坏: %w", err)
+	}
+	newID := s.NewTaskID()
+	params["_task_id"] = newID
+	params["prompt"] = source.Prompt
+	paramsJSON, _ := json.Marshal(params)
+	clone := models.Task{
+		TaskID: newID, TemplateID: source.TemplateID, TemplateName: source.TemplateName,
+		Prompt: source.Prompt, ParamsJSON: string(paramsJSON), InputsJSON: source.InputsJSON,
+		ParentCandidateID: parentCandidateID, Status: "pending",
+	}
+	if err := s.db.Create(&clone).Error; err != nil {
+		return nil, err
+	}
+	s.push(&clone)
+	return &clone, nil
 }
 
 func (s *TaskService) syncInputFilesToInstance(client *ComfyClient, params map[string]any) error {

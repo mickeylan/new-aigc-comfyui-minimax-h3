@@ -4,6 +4,7 @@ const routes = [
   { path: '/', redirect: '/projects' },
   { path: '/dashboard', name: 'dashboard', component: () => import('../views/Dashboard.vue') },
   { path: '/create', name: 'create', component: () => import('../views/CreateTask.vue') },
+  { path: '/playground', name: 'playground', component: () => import('../views/Playground.vue') },
   { path: '/tasks', name: 'tasks', component: () => import('../views/Tasks.vue') },
   { path: '/tasks/:id', name: 'task-detail', component: () => import('../views/TaskDetail.vue') },
   { path: '/instances', name: 'instances', component: () => import('../views/Instances.vue') },

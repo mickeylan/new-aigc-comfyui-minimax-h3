@@ -303,7 +303,7 @@ func newTestProjectService(t *testing.T) *ProjectService {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.Character{}, &models.Asset{}, &models.MergeTask{}, &models.Task{}, &models.GenerationCandidate{}); err != nil {
+	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.Character{}, &models.Asset{}, &models.MergeTask{}, &models.Task{}, &models.GenerationCandidate{}, &models.Episode{}, &models.PromptPolicyOverride{}); err != nil {
 		t.Fatal(err)
 	}
 	ps := NewProjectService(nil, db, nil, nil, nil, nil, nil, nil, nil)
@@ -415,8 +415,8 @@ func TestRecoverInterruptedProjectWork(t *testing.T) {
 	if video.Status != "image_ready" {
 		t.Fatalf("视频创建任务未恢复: %+v", video)
 	}
-	if merge.Status != "pending" {
-		t.Fatalf("合并任务未恢复: %+v", merge)
+	if merge.Status != "failed" || merge.Error == "" {
+		t.Fatalf("中断的合并任务应明确失败并允许用户重试: %+v", merge)
 	}
 	if p.PipelineStage != "script" {
 		t.Fatalf("剧本阶段未恢复: %+v", p)

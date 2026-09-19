@@ -59,12 +59,8 @@ func TestSharedAssetReferenceCRUDValidatesOwnershipAndMode(t *testing.T) {
 	if _, err := svc.Create(project.ID, SharedAssetReferenceInput{MaterialID: global.ID, ShotID: &otherShot.ID}); err == nil {
 		t.Fatal("accepted shot owned by another project")
 	}
-	copyRef, err := svc.Create(project.ID, SharedAssetReferenceInput{MaterialID: global.ID, Mode: "copy"})
-	if err != nil || copyRef.LocalFile != global.Path {
-		t.Fatalf("copy mode did not snapshot material path: ref=%+v err=%v", copyRef, err)
-	}
-	if err := svc.Delete(project.ID, copyRef.ID); err != nil {
-		t.Fatal(err)
+	if _, err := svc.Create(project.ID, SharedAssetReferenceInput{MaterialID: global.ID, Mode: "copy"}); err == nil {
+		t.Fatal("copy mode without configured storage was accepted")
 	}
 
 	ref, err := svc.Create(project.ID, SharedAssetReferenceInput{
@@ -79,14 +75,16 @@ func TestSharedAssetReferenceCRUDValidatesOwnershipAndMode(t *testing.T) {
 	if _, err := svc.Create(project.ID, SharedAssetReferenceInput{MaterialID: global.ID, SceneID: &scene.ID, ShotID: &shot.ID}); err == nil {
 		t.Fatal("accepted duplicate reference")
 	}
-	updated, err := svc.Update(project.ID, ref.ID, SharedAssetReferenceInput{
+	if _, err := svc.Update(project.ID, ref.ID, SharedAssetReferenceInput{
 		MaterialID: global.ID, SceneID: &scene.ID, ShotID: &shot.ID, Mode: "copy", LocalFile: "copies/global.png",
-	})
-	if err != nil {
-		t.Fatal(err)
+	}); err == nil {
+		t.Fatal("copy update without configured storage was accepted")
 	}
-	if updated.Mode != "copy" || updated.LocalFile != "copies/global.png" {
-		t.Fatalf("copy update not persisted: %+v", updated)
+	updated, err := svc.Update(project.ID, ref.ID, SharedAssetReferenceInput{
+		MaterialID: global.ID, SceneID: &scene.ID, ShotID: &shot.ID, Mode: "live",
+	})
+	if err != nil || updated.Mode != "live" {
+		t.Fatalf("live update failed: %+v err=%v", updated, err)
 	}
 	views, err := svc.List(project.ID)
 	if err != nil || len(views) != 1 || views[0].Material.ID != global.ID {

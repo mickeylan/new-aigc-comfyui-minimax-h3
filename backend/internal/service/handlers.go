@@ -45,6 +45,9 @@ type Service struct {
 	Continuity            *ContinuityService           // 视频分镜连续性服务
 	AudioLayers           *AudioLayerService           // 声景、音效与背景音乐层
 	SharedAssetReferences *SharedAssetReferenceService // 显式共享素材引用
+	AssetVariants         *AssetVariantService         // 视觉资产生成/上传变体
+	AssetReconciliation   *AssetReconciliationService  // 项目资产名称对账
+	ScriptRevisions       *ScriptRevisionService       // 剧本安全快照
 }
 
 func New(cfg *config.Config, db *gorm.DB) *Service {
@@ -80,7 +83,10 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	continuity := NewContinuityService(cfg, db, remote, upload)
 	projects.continuity = continuity
 	audioLayers := NewAudioLayerService(db)
-	sharedAssetReferences := NewSharedAssetReferenceService(db)
+	sharedAssetReferences := NewSharedAssetReferenceService(db, upload)
+	assetVariants := NewAssetVariantService(db)
+	assetReconciliation := NewAssetReconciliationService(db)
+	scriptRevisions := NewScriptRevisionService(db)
 
 	// 初始化系统预设
 	if err := skills.InitSystemSkills(); err != nil {
@@ -100,6 +106,7 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 		TextProviderFact: textProviderFact, CharacterProfiles: charProfiles, CharacterLooks: charLooks,
 		Skills: skills, Shots: shots, PromptWorkshop: promptWorkshop, StylePresets: stylePresets,
 		Continuity: continuity, AudioLayers: audioLayers, SharedAssetReferences: sharedAssetReferences,
+		AssetVariants: assetVariants, AssetReconciliation: assetReconciliation, ScriptRevisions: scriptRevisions,
 	}
 }
 

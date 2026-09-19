@@ -120,15 +120,20 @@ func (s *ContinuityService) SelectFrame(projectID, sceneID, frameID uint) (*mode
 		if err := tx.Model(&frame).Updates(map[string]any{"type": models.FrameCandidateSelected, "selected_at": now}).Error; err != nil {
 			return err
 		}
-		// Propagate selection to downstream continuities
-		if err := tx.Model(&models.SceneContinuity{}).
-			Where("source_scene_id = ? AND source_video_task_id = ? AND status = ?", sceneID, frame.VideoTaskID, "waiting").
-			Updates(map[string]any{
-				"selected_frame_id": frame.ID,
-				"status":            "ready",
-				"version":           gorm.Expr("version + 1"),
-			}).Error; err != nil {
+		// A different selected tail frame changes every dependent Scene's continuity input.
+		var dependentIDs []uint
+		if err := tx.Model(&models.SceneContinuity{}).Where("source_scene_id = ? AND source_video_task_id = ?", sceneID, frame.VideoTaskID).Pluck("scene_id", &dependentIDs).Error; err != nil {
 			return err
+		}
+		if err := tx.Model(&models.SceneContinuity{}).
+			Where("source_scene_id = ? AND source_video_task_id = ?", sceneID, frame.VideoTaskID).
+			Updates(map[string]any{"selected_frame_id": frame.ID, "status": "ready", "error": "", "version": gorm.Expr("version + 1")}).Error; err != nil {
+			return err
+		}
+		for _, dependentID := range dependentIDs {
+			if err := invalidateSceneVideoTx(tx, projectID, dependentID, "连续性衔接帧已变化"); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -264,14 +269,43 @@ func (s *ContinuityService) ContinuationFrame(sceneID uint) (*models.FrameCandid
 	return nil, cfg.Mode, nil
 }
 func (s *ContinuityService) InvalidateDependents(sourceSceneID uint, reason string) {
-	s.db.Model(&models.SceneContinuity{}).Where("source_scene_id = ? AND mode != ?", sourceSceneID, models.ContinuityModeIndependent).Updates(map[string]any{"status": "source_invalidated", "error": reason, "version": gorm.Expr("version + 1")})
+	_ = s.db.Transaction(func(tx *gorm.DB) error {
+		var configs []models.SceneContinuity
+		if err := tx.Where("source_scene_id = ? AND mode != ?", sourceSceneID, models.ContinuityModeIndependent).Find(&configs).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&models.SceneContinuity{}).Where("source_scene_id = ? AND mode != ?", sourceSceneID, models.ContinuityModeIndependent).Updates(map[string]any{"status": "source_invalidated", "error": reason, "version": gorm.Expr("version + 1")}).Error; err != nil {
+			return err
+		}
+		for _, cfg := range configs {
+			var scene models.Scene
+			if err := tx.Select("project_id").First(&scene, cfg.SceneID).Error; err != nil {
+				return err
+			}
+			if err := invalidateSceneVideoTx(tx, scene.ProjectID, cfg.SceneID, reason); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 func (s *ContinuityService) invalidateSceneVideo(sceneID uint) {
-	s.db.Model(&models.Scene{}).Where("id = ?", sceneID).Updates(map[string]any{
+	var scene models.Scene
+	if s.db.Select("project_id").First(&scene, sceneID).Error == nil {
+		_ = invalidateSceneVideoTx(s.db, scene.ProjectID, sceneID, "连续性输入已变化")
+	}
+}
+
+func invalidateSceneVideoTx(db *gorm.DB, projectID, sceneID uint, reason string) error {
+	if err := db.Model(&models.Scene{}).Where("id = ? AND project_id = ?", sceneID, projectID).Updates(map[string]any{
 		"video_task_id": "", "video_file": "", "video_input_file": "", "video_gpu": nil,
 		"video_full_prompt": "", "video_template": "", "video_first_frame_img": "", "video_last_frame_img": "",
+		"video_candidate_parent_id": nil, "video_retries": 0,
 		"status": gorm.Expr("CASE WHEN image_file != '' THEN 'image_ready' ELSE status END"),
-	})
+	}).Error; err != nil {
+		return err
+	}
+	return MarkSceneCandidatesStale(db, projectID, sceneID, "video", reason)
 }
 func (s *ContinuityService) ReplaceSelectedFrame(projectID, sceneID uint, filename string, data []byte) (*models.FrameCandidate, error) {
 	if s.upload == nil {

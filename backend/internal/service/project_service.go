@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -391,7 +392,11 @@ Subject与Picture的真实身份绑定由系统根据实际上传文件生成，
 	user := fmt.Sprintf("项目：%s\n题材：%s\n画风：%s\n场景标题：%s\n场景剧情：%s\n地点：%s\n道具：%s\n\n本次实际提交的参考图（编号与上传顺序一致）：\n%s\n\n当前镜头设计：\n%s\n\n场景与道具资料：\n%s",
 		project.Title, project.Genre, project.Style, sc.Title, sc.Content,
 		sc.LocationName, sc.Props, referenceContext, shotContext, assetContext)
-	output, err := s.textProvider.Chat(system, user)
+	policy, err := NewPromptPolicyService(s.db).Resolve(PromptPolicyContext{ProjectID: sc.ProjectID, SceneID: &sc.ID}, PromptPolicyImagePolish, system)
+	if err != nil {
+		return "", fmt.Errorf("解析画面提示词策略失败: %w", err)
+	}
+	output, err := s.textProvider.Chat(policy.Content, user)
 	if err != nil {
 		return "", fmt.Errorf("AI 重新设计场景提示词失败: %w", err)
 	}
@@ -755,8 +760,14 @@ func (s *ProjectService) generateScriptCore(p *models.Project, episodeN int, raw
 	s.cancelProjectTasks(p.ID)
 	newGeneration := p.Generation + 1
 
-	// 事务写入剧本与场景（仅替换当前集场景）
+	// 事务写入剧本与场景（仅替换当前集场景）。快照与替换同事务提交，
+	// 避免共享工作区中生成失败留下“有修改、无恢复点”的状态。
 	err = s.db.Transaction(func(tx *gorm.DB) error {
+		if tx.Migrator().HasTable(&models.ScriptRevision{}) {
+			if _, err := createScriptRevisionTx(tx, p.ID, episodeN, "before_script_replace", nil); err != nil {
+				return err
+			}
+		}
 		for _, old := range oldScenes {
 			if old.VideoTaskID != "" {
 				if err := tx.Where("task_id = ?", old.VideoTaskID).Delete(&models.Event{}).Error; err != nil {
@@ -1108,7 +1119,11 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 正文中的人物必须使用【场景剧情】和【Shot导演设计】里的真实角色名，禁止自行填写或猜测任何<Subject N>编号。系统会在AI返回后依据实际上传顺序，把真实角色名确定性转换为正确Subject编号。
 四视图只负责人物身份与服装，场景图只负责环境；不得从参考图反推剧情，不得复述或猜测外貌、服装、陈设。`, openingPicture)
 	user := fmt.Sprintf("目标时长：%.1f秒。只提取执行本镜所必需的信息，不要把以下资料逐段复述进输出。\n\n【场景剧情（仅作事实边界）】\n%s\n\n【Shot导演设计（动作与镜头权威）】\n%s\n\n【结构化对白（仅判断口型时机）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s", normalizeSceneDuration(sc.Duration), sc.Content, shotContext, dialogueContext, strings.Join(refLines, "\n"))
-	out, err := s.textProvider.Chat(system, user)
+	policy, err := NewPromptPolicyService(s.db).Resolve(PromptPolicyContext{ProjectID: sc.ProjectID, SceneID: &sc.ID}, PromptPolicyVideoPolish, system)
+	if err != nil {
+		return "", fmt.Errorf("解析视频提示词策略失败: %w", err)
+	}
+	out, err := s.textProvider.Chat(policy.Content, user)
 	if err != nil {
 		return "", fmt.Errorf("AI 生成视频动作提示词失败: %w", err)
 	}
@@ -3177,10 +3192,11 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 	log.Printf("[storyboard-submit] project=%d scene=%d template=%s refs=[%s]\nprompt:\n%s", sc.ProjectID, sc.ID, templateCode, strings.Join(refNames, ", "), prompt)
 	width, height := sceneImageSize(&p)
 	task, err := s.tasks.CreateTask(CreateTaskReq{
-		TemplateID: tpl.ID,
-		Prompt:     prompt,
-		Params:     map[string]any{"width": width, "height": height, "length": 5, "duration": 0.21, "fps": 24},
-		Files:      map[string][]FileMeta{"ref_images": refs},
+		TemplateID:        tpl.ID,
+		Prompt:            prompt,
+		Params:            map[string]any{"width": width, "height": height, "length": 5, "duration": 0.21, "fps": 24},
+		Files:             map[string][]FileMeta{"ref_images": refs},
+		ParentCandidateID: sc.ImageCandidateParentID,
 	})
 	if err != nil {
 		s.failSceneImage(sc, token, "创建 MiniMax H3 SelfLift 场景图任务失败: "+err.Error())
@@ -3419,24 +3435,36 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	}
 	videoW, videoH := aspectVideoSize(p.AspectRatio, s.videoResolution())
 	pid := fmt.Sprintf("%d", p.ID)
-	tplCode, promptText, videoFiles := s.buildSceneVideoSpec(sc, pid, sc.VideoTemplate)
-	// ref2v 模板需要注入场景参考图（分镜图 + 用户选择的造型/场景/道具资产）
-	if tplCode == "minimax_h3_ref2v" || tplCode == "minimax_h3_ref2v_single" {
-		// 当前分镜图保留为场景/构图参考；连续模式再将上一镜选定尾帧追加为最后一张 Picture（0.00秒开始画面）。
-		refFiles, refLines, _ := s.sceneVideoContinuityReferences(sc, pid)
-		if len(refFiles) > 0 {
-			dubs := s.sceneVideoDialogues(sc)
-			// 已保存且引用编号合法时，video_full_prompt 是唯一权威值，正式提交时逐字使用；
-			// 只有空值或引用编号失效时才重建，禁止在生成阶段再次规范化或回退到旧动作正文。
-			promptText = resolveRef2VSubmissionPrompt(sc, p, dubs, refLines)
-			if videoFiles == nil {
-				videoFiles = map[string][]FileMeta{}
+	assemble := func(override string) (string, string, map[string][]FileMeta) {
+		code, prompt, files := s.buildSceneVideoSpec(sc, pid, override)
+		if code == "minimax_h3_ref2v" || code == "minimax_h3_ref2v_single" {
+			// Current storyboard and continuity frames are assembled before capability validation,
+			// so the catalog validates the exact request that will be submitted.
+			refFiles, refLines, _ := s.sceneVideoContinuityReferences(sc, pid)
+			if len(refFiles) > 0 {
+				prompt = resolveRef2VSubmissionPrompt(sc, p, s.sceneVideoDialogues(sc), refLines)
+				if files == nil {
+					files = map[string][]FileMeta{}
+				}
+				files["ref_images"] = append(files["ref_images"], refFiles...)
 			}
-			videoFiles["ref_images"] = append(videoFiles["ref_images"], refFiles...)
 		}
+		return code, prompt, files
 	}
-	if tplCode == "minimax_h3_first_last" && (videoFiles == nil || len(videoFiles["first_frame"]) == 0 || len(videoFiles["last_frame"]) == 0) {
-		return fmt.Errorf("首尾帧模板需要同时指定首帧图片和尾帧图片，请在「生成/编辑视频提示词」中选择")
+	tplCode, promptText, videoFiles := assemble(sc.VideoTemplate)
+	duration := normalizeSceneDuration(sc.Duration)
+	catalog := NewModelCatalogService(s.db)
+	tpl, selectionErr := catalog.ValidateVideoSelection(tplCode, videoFiles, duration)
+	if selectionErr != nil {
+		fallbackCode := "minimax_h3_ref2v"
+		if tplCode == fallbackCode {
+			return selectionErr
+		}
+		tplCode, promptText, videoFiles = assemble(fallbackCode)
+		tpl, selectionErr = catalog.ValidateVideoSelection(tplCode, videoFiles, duration)
+		if selectionErr != nil {
+			return fmt.Errorf("所选视频模板不可用且回退模板也不可用: %w", selectionErr)
+		}
 	}
 	videoFileNames := []string{}
 	for _, key := range []string{"ref_images", "first_frame", "last_frame"} {
@@ -3445,10 +3473,6 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		}
 	}
 	log.Printf("[video-submit] project=%d scene=%d template=%s files=[%s]\nprompt:\n%s", sc.ProjectID, sc.ID, tplCode, strings.Join(videoFileNames, ", "), promptText)
-	var tpl models.Template
-	if err := s.db.Where("code = ?", tplCode).First(&tpl).Error; err != nil {
-		return fmt.Errorf("未找到视频模板 %s，请检查系统模板", tplCode)
-	}
 	task, err := s.tasks.CreateTask(CreateTaskReq{
 		TemplateID: tpl.ID,
 		Prompt:     promptText,
@@ -3456,7 +3480,8 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 			"width": videoW, "height": videoH, "duration": normalizeSceneDuration(sc.Duration),
 			"steps": 8, "cfg": 1.0, "fps": 24, "seed": -1, "ref_image_size": "match",
 		},
-		Files: videoFiles,
+		Files:             videoFiles,
+		ParentCandidateID: sc.VideoCandidateParentID,
 	})
 	if err != nil {
 		s.failScene(sc, "创建视频任务失败: "+err.Error())
@@ -3554,15 +3579,18 @@ func (s *ProjectService) WatchSceneVideos() {
 }
 
 func (s *ProjectService) recoverInterruptedProjects() {
-	// TaskService 会恢复持久化的 queued/running Krea2 任务；只有尚未绑定任务的旧式占位需要回退。
+	// TaskService recovers durable tasks. Never detach a Scene from a persisted task: the
+	// project synchronizer will project its eventual success/failure back to that same Scene.
 	s.db.Model(&models.Scene{}).Where("status = ? AND image_task_id = ''", "image_pending").
 		Updates(map[string]any{"status": "pending", "image_token": "", "error": "服务重启，画面任务已重新排队"})
-	s.db.Model(&models.Scene{}).Where("status = ?", "video_creating").
-		Updates(map[string]any{"status": "image_ready", "error": "服务重启，视频任务已重新排队"})
-	// video_pending/video_running 在重启后其 ComfyUI 任务已失活（进程内 goroutine 不会恢复），回退到 image_ready 重新排队
-	s.db.Model(&models.Scene{}).Where("status IN ?", []string{"video_pending", "video_running"}).
-		Updates(map[string]any{"status": "image_ready", "video_task_id": "", "video_file": "", "video_gpu": nil, "error": "服务重启，视频任务已重新排队"})
-	s.db.Model(&models.MergeTask{}).Where("status = ?", "running").Update("status", "pending")
+	s.db.Model(&models.Scene{}).Where("status = ? AND video_task_id = ''", "video_creating").
+		Updates(map[string]any{"status": "image_ready", "error": "服务重启，视频任务未创建，请重试"})
+	s.db.Model(&models.Scene{}).Where("status IN ? AND (video_task_id = '' OR NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.task_id = scenes.video_task_id))", []string{"video_pending", "video_running"}).
+		Updates(map[string]any{"status": "image_ready", "video_task_id": "", "video_file": "", "video_input_file": "", "video_gpu": nil, "error": "服务重启，视频任务记录缺失，请重试"})
+	// Auto-pipeline merges are restartable from immutable SceneOrder. Manual merges have no
+	// owner loop after restart, so fail explicitly instead of remaining pending forever.
+	s.db.Exec("UPDATE merge_tasks SET status = 'pending', error = '' WHERE status = 'running' AND EXISTS (SELECT 1 FROM projects WHERE projects.id = merge_tasks.project_id AND projects.auto_generate = ? AND projects.pipeline_stage = ?)", true, "merge")
+	s.db.Exec("UPDATE merge_tasks SET status = 'failed', error = ? WHERE status = 'running'", "服务重启，合并已中断，请重试")
 	s.db.Model(&models.Project{}).Where("pipeline_stage = ?", "script_running").Update("pipeline_stage", "script")
 	s.db.Model(&models.Project{}).Where("pipeline_stage = ?", "plan_running").Update("pipeline_stage", "plan")
 	s.db.Model(&models.Project{}).Where("pipeline_stage = ?", "script_manual").
@@ -3724,7 +3752,13 @@ func (s *ProjectService) advancePipeline(projectID uint) {
 		}
 		switch mt.Status {
 		case "pending":
-			go s.runMerge(&p, &mt, true, true)
+			var scenes []models.Scene
+			ids := sceneIDsFromStrings(strings.Split(mt.SceneOrder, ","))
+			if err := s.db.Where("project_id = ? AND id IN ?", p.ID, ids).Order("`order`").Find(&scenes).Error; err != nil || len(scenes) != len(ids) {
+				s.failPipeline(p.ID, fmt.Errorf("合并场景快照不可用"), true)
+				return
+			}
+			go s.runAudioMerge(&p, &mt, scenes, true, true)
 		case "failed":
 			s.failPipeline(p.ID, fmt.Errorf("合并成片失败: %s", mt.Error), true)
 		case "success":
@@ -3799,9 +3833,9 @@ func (s *ProjectService) syncSceneImages() {
 			}
 			candidate, captureErr := NewGenerationCandidateService(s.db).CaptureSceneSuccess(SceneCandidateCapture{
 				ProjectID: sc.ProjectID, SceneID: sc.ID, MediaType: "image", TaskID: task.TaskID,
-				File: filepath.Base(path), Prompt: task.Prompt, References: sc.ReferenceImagesJSON,
+				File: filepath.Base(path), Prompt: task.Prompt, References: task.InputsJSON,
 				Params: task.ParamsJSON, Provenance: map[string]any{"template_id": task.TemplateID, "template_name": task.TemplateName, "port": task.Port, "gpu": task.GPUIndex, "result_files": task.ResultFiles},
-				ParentCandidateID: sc.ImageCandidateParentID, ExpectedTaskID: task.TaskID,
+				ParentCandidateID: task.ParentCandidateID, ExpectedTaskID: task.TaskID,
 			})
 			if captureErr != nil {
 				if !strings.Contains(captureErr.Error(), "已过期") {
@@ -4013,6 +4047,8 @@ func (s *ProjectService) syncSceneVideos() {
 			continue
 		}
 		switch task.Status {
+		case "pending":
+			// Startup task recovery owns execution; retain the binding.
 		case "running", "queued":
 			if sc.Status != "video_running" {
 				s.db.Model(sc).Updates(map[string]any{"status": "video_running"})
@@ -4021,7 +4057,7 @@ func (s *ProjectService) syncSceneVideos() {
 		case "success":
 			file, gpu := resultVideoOf(&task)
 			if file == "" || gpu == nil || task.Port == nil || s.upload == nil {
-				s.retryOrFailVideo(sc, "任务成功但未返回视频文件、端口或 GPU 信息")
+				s.retryOrFailVideo(sc, &task, "任务成功但未返回视频文件、端口或 GPU 信息")
 				changed = true
 				continue
 			}
@@ -4031,23 +4067,23 @@ func (s *ProjectService) syncSceneVideos() {
 			}
 			data, err := NewComfyClient(s.tasks.comfyHostForPort(*task.Port), *task.Port).DownloadOutput(filename, subfolder, "output")
 			if err != nil {
-				s.retryOrFailVideo(sc, "下载生成视频失败: "+err.Error())
+				s.retryOrFailVideo(sc, &task, "下载生成视频失败: "+err.Error())
 				changed = true
 				continue
 			}
 			localName := fmt.Sprintf("scene_video_g%d_%d_%d%s", sc.Generation, sc.Order, time.Now().UnixNano(), filepath.Ext(file))
 			localPath, _, err := s.upload.SaveFile(fmt.Sprint(sc.ProjectID), "video", localName, data)
 			if err != nil {
-				s.retryOrFailVideo(sc, "保存生成视频失败: "+err.Error())
+				s.retryOrFailVideo(sc, &task, "保存生成视频失败: "+err.Error())
 				changed = true
 				continue
 			}
 			_, captureErr := NewGenerationCandidateService(s.db).CaptureSceneSuccess(SceneCandidateCapture{
 				ProjectID: sc.ProjectID, SceneID: sc.ID, MediaType: "video", TaskID: task.TaskID,
 				File: file, VideoInputFile: filepath.Base(localPath), VideoGPU: gpu, Prompt: task.Prompt,
-				References: sc.ReferenceImagesJSON, Params: task.ParamsJSON,
+				References: task.InputsJSON, Params: task.ParamsJSON,
 				Provenance:        map[string]any{"template_id": task.TemplateID, "template_name": task.TemplateName, "port": task.Port, "gpu": task.GPUIndex, "result_files": task.ResultFiles},
-				ParentCandidateID: sc.VideoCandidateParentID, ExpectedTaskID: task.TaskID,
+				ParentCandidateID: task.ParentCandidateID, ExpectedTaskID: task.TaskID,
 			})
 			if captureErr != nil {
 				if !strings.Contains(captureErr.Error(), "已过期") {
@@ -4070,7 +4106,7 @@ func (s *ProjectService) syncSceneVideos() {
 			if msg == "" {
 				msg = task.Status
 			}
-			s.retryOrFailVideo(sc, msg)
+			s.retryOrFailVideo(sc, &task, msg)
 			changed = true
 		}
 	}
@@ -4080,22 +4116,21 @@ func (s *ProjectService) syncSceneVideos() {
 	}
 }
 
-func (s *ProjectService) retryOrFailVideo(sc *models.Scene, msg string) {
-	if sc.VideoRetries < 2 {
+func (s *ProjectService) retryOrFailVideo(sc *models.Scene, failedTask *models.Task, msg string) {
+	if sc.VideoRetries < 2 && s.tasks != nil && failedTask != nil {
 		retries := sc.VideoRetries + 1
-		s.db.Model(sc).Updates(map[string]any{
-			"status": "image_ready", "video_retries": retries, "error": "",
-			"video_task_id": "", "video_file": "", "video_gpu": nil,
-		})
-		go func(scene models.Scene) {
-			var p models.Project
-			if err := s.db.First(&p, scene.ProjectID).Error; err == nil {
-				scene.Status = "image_ready"
-				_ = s.GenerateSceneVideo(&p, &scene)
+		retry, err := s.tasks.CloneTaskSnapshot(failedTask.TaskID, failedTask.ParentCandidateID)
+		if err == nil {
+			bound := s.db.Model(&models.Scene{}).
+				Where("id = ? AND video_task_id = ?", sc.ID, failedTask.TaskID).
+				Updates(map[string]any{"status": "video_pending", "video_retries": retries, "error": "", "video_task_id": retry.TaskID, "video_file": "", "video_input_file": "", "video_gpu": nil})
+			if bound.Error == nil && bound.RowsAffected == 1 {
+				go func() { _ = s.tasks.Execute(retry.TaskID) }()
+				log.Printf("[project %d] scene %d video 失败自动重试 %d/2: %s", sc.ProjectID, sc.Order, retries, msg)
+				return
 			}
-		}(*sc)
-		log.Printf("[project %d] scene %d video 失败自动重试 %d/2: %s", sc.ProjectID, sc.Order, retries, msg)
-		return
+			_ = s.db.Delete(retry).Error
+		}
 	}
 	s.db.Model(sc).Updates(map[string]any{
 		"status": "failed", "error": "视频生成失败: " + msg,
@@ -4206,51 +4241,9 @@ func (s *ProjectService) CreateMergeTask(p *models.Project, sceneIDs []uint, dub
 }
 
 func (s *ProjectService) CreateMergeTaskWithAudio(p *models.Project, sceneIDs []uint, dub, subtitles bool, audio MergeAudioOptions) (*models.MergeTask, error) {
-	if len(sceneIDs) < 2 {
-		return nil, fmt.Errorf("请至少选择 2 个场景进行合并")
-	}
-	// 防同代重复创建（advancePipeline 并发兜底，避免双 goroutine 各建一条 MergeTask）
-	var dup int64
-	s.db.Model(&models.MergeTask{}).Where("project_id = ? AND generation = ? AND status IN ?", p.ID, p.Generation, []string{"pending", "running"}).Count(&dup)
-	if dup > 0 {
-		return nil, fmt.Errorf("已有进行中的合并任务，请等待完成")
-	}
-	// 校验所有场景视频就绪
-	for _, id := range sceneIDs {
-		var sc models.Scene
-		if err := s.db.First(&sc, id).Error; err != nil {
-			return nil, fmt.Errorf("场景 %d 不存在", id)
-		}
-		if sc.ProjectID != p.ID {
-			return nil, fmt.Errorf("场景 %d 不属于该项目", id)
-		}
-		if sc.Status != "video_ready" || sc.VideoFile == "" {
-			return nil, fmt.Errorf("场景 %d 的视频尚未完成，请先生成视频", sc.Order)
-		}
-	}
-	ids := make([]string, len(sceneIDs))
-	for i, id := range sceneIDs {
-		ids[i] = fmt.Sprintf("%d", id)
-	}
-	// 记录所属集号（取第一个场景的集号）
-	episodeN := 1
-	if len(sceneIDs) > 0 {
-		var first models.Scene
-		if err := s.db.First(&first, sceneIDs[0]).Error; err == nil && first.EpisodeN > 0 {
-			episodeN = first.EpisodeN
-		}
-	}
-	mt := models.MergeTask{
-		ProjectID: p.ID, EpisodeN: episodeN, Title: fmt.Sprintf("第%d集 · %s", episodeN, p.Title),
-		SceneOrder: strings.Join(ids, ","), Status: "pending", Generation: p.Generation,
-		NativeVolume: audio.NativeVolume, DialogueVolume: audio.DialogueVolume, BGMVolume: audio.BGMVolume, DialogueMix: audio.DialogueMix,
-	}
-	if err := s.db.Create(&mt).Error; err != nil {
-		return nil, err
-	}
-	go s.runMerge(p, &mt, dub, subtitles)
-	s.pushProject(p)
-	return &mt, nil
+	// All production entry points share the mix-aware implementation so ready audio layers,
+	// dialogue and native audio cannot be silently ignored by one endpoint.
+	return s.createAudioMergeTask(p, sceneIDs, dub, subtitles, audio)
 }
 
 func (s *ProjectService) mediaPath(parts ...string) string {
@@ -4576,6 +4569,10 @@ type dubSegment struct {
 	Character  string
 	Text       string
 	AudioAbs   string // TTS 音频绝对路径（空表示无音频）
+	SourceDur  float64
+	Speed      float64
+	Pitch      float64
+	Volume     float64
 }
 
 // buildDubTimeline 构建该集对白时间轴：
@@ -4626,20 +4623,24 @@ func (s *ProjectService) buildDubTimeline(p *models.Project, episodeN int, scene
 			if d.Position > 0 {
 				cursor = sceneStart + d.Position
 			}
+			start := math.Max(sceneStart, cursor+d.Offset)
 			audioAbs := ""
-			dur := 2.0 // 无音频时的兜底时长
+			sourceDur := 2.0 // 无音频时的兜底时长
 			if d.AudioFile != "" {
 				audioAbs = filepath.Join(s.cfg.Comfy.ComfyDir, "input", fmt.Sprintf("%d", p.ID), d.AudioFile)
 				if ad, err := s.remoteMediaDuration(audioAbs); err == nil && ad > 0 {
-					dur = ad
+					sourceDur = ad
 				}
 			}
+			speed := dialogueSpeed(d)
+			dur := sourceDur / speed
 			segs = append(segs, dubSegment{
 				DialogueID: d.ID, SceneID: d.SceneID,
-				Start: cursor, End: cursor + dur,
+				Start: start, End: start + dur,
 				Character: d.Character, Text: d.Text, AudioAbs: audioAbs,
+				SourceDur: sourceDur, Speed: speed, Pitch: d.Pitch, Volume: dialogueVolume(d),
 			})
-			cursor += dur + gap
+			cursor = start + dur + gap
 		}
 		if cursor > sceneStart+sceneDur[i] {
 			global = cursor // 对白超出场景视频时长时顺延时间轴
@@ -4855,6 +4856,9 @@ func (s *ProjectService) EditorData(p *models.Project, episodeN int) (map[string
 		if dubs[i].AudioFile != "" {
 			dubs[i].AudioFile = fmt.Sprintf("/api/input/%d/%s", p.ID, dubs[i].AudioFile)
 		}
+		if dubs[i].PreviousAudioFile != "" {
+			dubs[i].PreviousAudioFile = fmt.Sprintf("/api/input/%d/%s", p.ID, dubs[i].PreviousAudioFile)
+		}
 	}
 
 	// 字幕时间轴（真实音频对齐；配音未就绪时按场景时长均分占位）
@@ -4910,12 +4914,14 @@ func (s *ProjectService) EditorSubtitleTimelineRaw(p *models.Project, scenes []m
 				if d.Position > 0 {
 					cursor = global + d.Position
 				}
+				start := math.Max(global, cursor+d.Offset)
+				dur := seg / dialogueSpeed(d)
 				out = append(out, map[string]any{
 					"dialogue_id": d.ID, "scene_id": d.SceneID, "scene_order": sc.Order,
 					"character": d.Character, "text": d.Text,
-					"start": cursor, "end": cursor + seg, "status": d.Status,
+					"start": start, "end": start + dur, "status": d.Status, "offset": d.Offset,
 				})
-				cursor += seg
+				cursor = start + dur
 			}
 			global += sceneDur[i]
 			continue
@@ -4924,6 +4930,7 @@ func (s *ProjectService) EditorSubtitleTimelineRaw(p *models.Project, scenes []m
 			if d.Position > 0 {
 				cursor = global + d.Position
 			}
+			start := math.Max(global, cursor+d.Offset)
 			dur := 2.0
 			if d.AudioFile != "" {
 				// AudioFile 可能为 URL（/api/input/pid/name），取文件名后拼真实路径
@@ -4933,12 +4940,13 @@ func (s *ProjectService) EditorSubtitleTimelineRaw(p *models.Project, scenes []m
 					dur = ad
 				}
 			}
+			dur /= dialogueSpeed(d)
 			out = append(out, map[string]any{
 				"dialogue_id": d.ID, "scene_id": d.SceneID, "scene_order": sc.Order,
 				"character": d.Character, "text": d.Text,
-				"start": cursor, "end": cursor + dur, "status": d.Status,
+				"start": start, "end": start + dur, "status": d.Status, "offset": d.Offset,
 			})
-			cursor += dur + gap
+			cursor = start + dur + gap
 		}
 		if cursor > global+sceneDur[i] {
 			global = cursor
@@ -4955,7 +4963,31 @@ type DialogueUpdateInput struct {
 	Character          *string  `json:"character"`
 	SpeechType         *string  `json:"speech_type"`
 	Position           *float64 `json:"position"`
+	Offset             *float64 `json:"offset"`
+	Speed              *float64 `json:"speed"`
+	Pitch              *float64 `json:"pitch"`
+	Volume             *float64 `json:"volume"`
+	Emotion            *string  `json:"emotion"`
+	Delivery           *string  `json:"delivery"`
 	H3VoiceDescription *string  `json:"h3_voice_description"`
+}
+
+func dialogueSpeed(d models.Dialogue) float64 {
+	if d.Speed <= 0 { return 1 }
+	return d.Speed
+}
+
+func dialogueVolume(d models.Dialogue) float64 {
+	if d.Volume <= 0 && d.ID == 0 { return 1 }
+	return d.Volume
+}
+
+// dialogueAudioHash identifies all persisted inputs which determine a QA audio rendition.
+func dialogueAudioHash(d models.Dialogue) string {
+	raw := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%.4f\x00%.4f\x00%.4f\x00%s\x00%s",
+		strings.TrimSpace(d.Text), strings.TrimSpace(d.Character), strings.TrimSpace(d.SpeechType), strings.TrimSpace(d.Voice),
+		dialogueSpeed(d), d.Pitch, dialogueVolume(d), strings.TrimSpace(d.Emotion), strings.TrimSpace(d.Delivery))
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))
 }
 
 // UpdateDialogue keeps the legacy service API while the HTTP API uses patch-like pointer fields.
@@ -5016,13 +5048,36 @@ func (s *ProjectService) UpdateDialogueFields(p *models.Project, did uint, input
 			updates["position"] = *input.Position
 		}
 	}
+	if input.Offset != nil {
+		if *input.Offset < -60 || *input.Offset > 60 { return nil, fmt.Errorf("offset 需在 -60~60 秒之间") }
+		if *input.Offset != d.Offset { updates["offset"] = *input.Offset }
+	}
+	if input.Speed != nil {
+		if *input.Speed < 0.5 || *input.Speed > 2 { return nil, fmt.Errorf("speed 需在 0.5~2 之间") }
+		if *input.Speed != dialogueSpeed(d) { updates["speed"], audioChanged = *input.Speed, true }
+	}
+	if input.Pitch != nil {
+		if *input.Pitch < -12 || *input.Pitch > 12 { return nil, fmt.Errorf("pitch 需在 -12~12 半音之间") }
+		if *input.Pitch != d.Pitch { updates["pitch"], audioChanged = *input.Pitch, true }
+	}
+	if input.Volume != nil {
+		if *input.Volume < 0 || *input.Volume > 4 { return nil, fmt.Errorf("volume 需在 0~4 之间") }
+		if *input.Volume != dialogueVolume(d) { updates["volume"], audioChanged = *input.Volume, true }
+	}
+	if input.Emotion != nil && strings.TrimSpace(*input.Emotion) != d.Emotion {
+		updates["emotion"], audioChanged = strings.TrimSpace(*input.Emotion), true
+	}
+	if input.Delivery != nil && strings.TrimSpace(*input.Delivery) != d.Delivery {
+		updates["delivery"], audioChanged = strings.TrimSpace(*input.Delivery), true
+	}
 	if input.H3VoiceDescription != nil && strings.TrimSpace(*input.H3VoiceDescription) != d.H3VoiceDescription {
 		updates["h3_voice_description"] = strings.TrimSpace(*input.H3VoiceDescription)
 		promptChanged = true
 	}
 	if audioChanged {
-		updates["status"], updates["audio_file"], updates["error"] = "pending", "", ""
-		updates["audio_stale"], updates["audio_stale_reason"] = true, "对白文本或音色已修改"
+		// Keep the current file available for QA/revert; stale-only dubbing will replace it.
+		updates["status"], updates["error"] = "pending", ""
+		updates["audio_stale"], updates["audio_stale_reason"] = true, "配音输入或 QA 参数已修改"
 	}
 	if err := s.db.Model(&d).Updates(updates).Error; err != nil {
 		return nil, err
@@ -5088,7 +5143,7 @@ func (s *ProjectService) dubVoiceFor(d *models.Dialogue) (string, string, string
 
 // StartDialogueTTS 异步合成单条对白（占位防并发）
 func (s *ProjectService) StartDialogueTTS(d *models.Dialogue) error {
-	claim := s.db.Model(&models.Dialogue{}).Where("id = ? AND status IN ?", d.ID, []string{"pending", "failed"}).
+	claim := s.db.Model(&models.Dialogue{}).Where("id = ? AND status <> ?", d.ID, "synthesizing").
 		Updates(map[string]any{"status": "synthesizing", "error": ""})
 	if claim.Error != nil {
 		return claim.Error
@@ -5096,6 +5151,8 @@ func (s *ProjectService) StartDialogueTTS(d *models.Dialogue) error {
 	if claim.RowsAffected == 0 {
 		return fmt.Errorf("对白已在合成或已完成")
 	}
+	// Refetch after claiming so synthesis and its hash use the latest persisted controls.
+	if err := s.db.First(d, d.ID).Error; err != nil { return err }
 	go func() {
 		if err := s.synthesizeDialogue(d); err != nil {
 			log.Printf("[dialogue %d] tts failed: %v", d.ID, err)
@@ -5110,7 +5167,7 @@ func (s *ProjectService) synthesizeDialogue(d *models.Dialogue) error {
 		return fmt.Errorf("存储未配置")
 	}
 	if strings.TrimSpace(d.Text) == "" {
-		s.db.Model(&models.Dialogue{}).Where("id = ?", d.ID).Updates(map[string]any{"status": "ready", "audio_file": "", "audio_stale": false, "audio_stale_reason": "", "error": ""})
+		s.db.Model(&models.Dialogue{}).Where("id = ?", d.ID).Updates(map[string]any{"status": "ready", "audio_file": "", "previous_audio_file": d.AudioFile, "audio_revision": d.AudioRevision + 1, "audio_hash": dialogueAudioHash(*d), "audio_stale": false, "audio_stale_reason": "", "error": ""})
 		return nil
 	}
 	// 后期配音：阿里云 TTS（DashScope）；角色绑定参考语音时用复刻音色合成
@@ -5136,7 +5193,11 @@ func (s *ProjectService) synthesizeDialogue(d *models.Dialogue) error {
 		s.db.Model(&models.Dialogue{}).Where("id = ?", d.ID).Updates(map[string]any{"status": "failed", "error": err.Error()})
 		return err
 	}
-	s.db.Model(&models.Dialogue{}).Where("id = ?", d.ID).Updates(map[string]any{"status": "ready", "audio_file": filepath.Base(path), "audio_stale": false, "audio_stale_reason": "", "error": ""})
+	s.db.Model(&models.Dialogue{}).Where("id = ?", d.ID).Updates(map[string]any{
+		"status": "ready", "audio_file": filepath.Base(path), "previous_audio_file": d.AudioFile,
+		"audio_revision": d.AudioRevision + 1, "audio_hash": dialogueAudioHash(*d),
+		"audio_stale": false, "audio_stale_reason": "", "error": "",
+	})
 	s.pushProject(nil)
 	return nil
 }
@@ -5159,6 +5220,55 @@ func (s *ProjectService) GenerateProjectDubs(p *models.Project) (int, error) {
 		_ = s.StartDialogueTTS(&dubs[i])
 	}
 	return len(dubs), nil
+}
+
+// GenerateEpisodeDubs submits only stale/mismatched dialogue by default, scoped through
+// the episode's project-owned scenes so dialogue IDs from another project cannot leak in.
+func (s *ProjectService) GenerateEpisodeDubs(p *models.Project, episodeN int, staleOnly bool) (int, error) {
+	var sceneIDs []uint
+	if err := s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ?", p.ID, episodeN, p.Generation).Pluck("id", &sceneIDs).Error; err != nil { return 0, err }
+	if len(sceneIDs) == 0 { return 0, nil }
+	var dubs []models.Dialogue
+	if err := s.db.Where("project_id = ? AND scene_id IN ?", p.ID, sceneIDs).Order("scene_id, `order`").Find(&dubs).Error; err != nil { return 0, err }
+	count := 0
+	for i := range dubs {
+		d := &dubs[i]
+		stale := d.AudioStale || d.AudioFile == "" || d.AudioHash == "" || d.AudioHash != dialogueAudioHash(*d)
+		if staleOnly && !stale { continue }
+		if d.Status == "synthesizing" { continue }
+		if stale { _ = s.db.Model(d).Updates(map[string]any{"status": "pending", "audio_stale": true, "audio_stale_reason": "配音输入摘要已变化"}).Error }
+		if err := s.StartDialogueTTS(d); err == nil { count++ }
+	}
+	return count, nil
+}
+
+// EpisodeDubPreview returns the effective QA timeline and project-owned dialogue state.
+func (s *ProjectService) EpisodeDubPreview(p *models.Project, episodeN int) (map[string]any, error) {
+	data, err := s.EditorData(p, episodeN)
+	if err != nil { return nil, err }
+	return map[string]any{"episode_n": episodeN, "dialogues": data["dialogues"], "timeline": data["subtitles"]}, nil
+}
+
+// ApplyDialoguePreview approves the current persisted controls for the current audio rendition.
+// Providers which do not accept these controls retain them for deterministic preview/merge filters.
+func (s *ProjectService) ApplyDialoguePreview(p *models.Project, did uint) (*models.Dialogue, error) {
+	var d models.Dialogue
+	if err := s.db.Where("id = ? AND project_id = ?", did, p.ID).First(&d).Error; err != nil { return nil, fmt.Errorf("对白不存在") }
+	if strings.TrimSpace(d.AudioFile) == "" { return nil, fmt.Errorf("当前对白没有可应用的音频") }
+	if err := s.db.Model(&d).Updates(map[string]any{"audio_hash": dialogueAudioHash(d), "audio_stale": false, "audio_stale_reason": "", "status": "ready", "error": "", "audio_revision": d.AudioRevision + 1}).Error; err != nil { return nil, err }
+	s.db.First(&d, d.ID)
+	return &d, nil
+}
+
+// RevertDialogueAudio swaps current and previous audio without deleting either revision.
+func (s *ProjectService) RevertDialogueAudio(p *models.Project, did uint) (*models.Dialogue, error) {
+	var d models.Dialogue
+	if err := s.db.Where("id = ? AND project_id = ?", did, p.ID).First(&d).Error; err != nil { return nil, fmt.Errorf("对白不存在") }
+	if strings.TrimSpace(d.PreviousAudioFile) == "" { return nil, fmt.Errorf("没有可回退的上一版音频") }
+	current, previous := d.AudioFile, d.PreviousAudioFile
+	if err := s.db.Model(&d).Updates(map[string]any{"audio_file": previous, "previous_audio_file": current, "audio_revision": d.AudioRevision + 1, "status": "ready", "audio_stale": true, "audio_stale_reason": "已回退到上一版音频"}).Error; err != nil { return nil, err }
+	s.db.First(&d, d.ID)
+	return &d, nil
 }
 
 // EpisodeSRT 生成指定集的 SRT 字幕（按场景顺序、场内对白均分时长），返回字幕正文与条数
