@@ -15,6 +15,7 @@ export const api = {
   restartAll: () => http.post('/instances/restart-all'),
   gpus: () => http.get('/gpus'),
   templates: () => http.get('/templates'),
+  modelCatalog: () => http.get('/model-catalog'),
   tasks: (params) => http.get('/tasks', { params }),
   clearTasks: () => http.delete('/tasks'),
   task: (id) => http.get(`/tasks/${id}`),
@@ -48,6 +49,10 @@ export const api = {
   projects: () => http.get('/projects'),
   createProject: (data) => http.post('/projects', data),
   project: (id) => http.get(`/projects/${id}`),
+  projectEpisodes: (id) => http.get(`/projects/${id}/episodes`),
+  createProjectEpisode: (id, data) => http.post(`/projects/${id}/episodes`, data),
+  updateProjectEpisode: (id, number, data) => http.patch(`/projects/${id}/episodes/${number}`, data),
+  deleteProjectEpisode: (id, number) => http.delete(`/projects/${id}/episodes/${number}`),
   updateProject: (id, data) => http.put(`/projects/${id}`, data),
   deleteProject: (id) => http.delete(`/projects/${id}`),
   generateScript: (id, episodeN) => http.post(`/projects/${id}/script?episode_n=${episodeN || 1}`, null, { timeout: 300000 }),
@@ -65,6 +70,9 @@ export const api = {
   updateScene: (id, sid, data) => http.patch(`/projects/${id}/scenes/${sid}`, data),
   redesignScenePrompt: (id, sid, brief) => http.post(`/projects/${id}/scenes/${sid}/prompt/redesign`, { brief }, { timeout: 300000 }),
   generateSceneImage: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/image`),
+  sceneCandidates: (id, sid, mediaType = '') => http.get(`/projects/${id}/scenes/${sid}/candidates`, { params: mediaType ? { media_type: mediaType } : {} }),
+  reviewCandidate: (id, cid, status, reason = '') => http.patch(`/projects/${id}/candidates/${cid}/review`, { status, reason }),
+  selectCandidate: (id, cid) => http.post(`/projects/${id}/candidates/${cid}/select`),
   uploadSceneImage: (id, sid, file) => {
     const fd = new FormData()
     fd.append('file', file)
@@ -195,6 +203,7 @@ export const api = {
   sceneShots: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/shots`),
   replaceSceneShots: (id, sid, shots) => http.post(`/projects/${id}/scenes/${sid}/shots`, { shots }),
   updateShot: (id, shotId, data) => http.put(`/projects/${id}/shots/${shotId}`, data),
+  expandShotDirectorPrompt: (id, shotId, data) => http.post(`/projects/${id}/shots/${shotId}/director-expand`, data, { timeout: 300000 }),
   deleteShot: (id, shotId) => http.delete(`/projects/${id}/shots/${shotId}`),
   buildPrompt: (data) => http.post('/prompts/build', data),
   optimizePrompt: (data) => http.post('/prompts/optimize', data, { timeout: 300000 }),

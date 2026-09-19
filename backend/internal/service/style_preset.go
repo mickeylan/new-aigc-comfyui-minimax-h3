@@ -310,6 +310,13 @@ type SceneContext struct {
 	TimeOfDay  string   `json:"time_of_day"` // 时段
 }
 
+type StyleRecommendation struct {
+	Preset        models.StylePreset `json:"preset"`
+	Score         int                `json:"score"`
+	MatchedFields []string           `json:"matched_fields"`
+	Reasons       []string           `json:"reasons"`
+}
+
 // GetRecommendations 获取推荐预设
 func (s *StylePresetService) GetRecommendations(ctx SceneContext, limit int) ([]models.StylePreset, error) {
 	if limit <= 0 {
@@ -371,6 +378,41 @@ func (s *StylePresetService) GetRecommendations(ctx SceneContext, limit int) ([]
 	}
 
 	return presets, nil
+}
+
+func (s *StylePresetService) GetRecommendationsWithReasons(ctx SceneContext, limit int) ([]StyleRecommendation, error) {
+	presets, err := s.GetRecommendations(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]StyleRecommendation, 0, len(presets))
+	for _, preset := range presets {
+		search := strings.ToLower(strings.Join([]string{preset.UseCases, preset.RecommendedFor, preset.SceneTypes, preset.Tags}, " "))
+		matched, reasons, score := []string{}, []string{}, 0
+		for field, value := range map[string]string{"题材": ctx.Genre, "基调": ctx.Tone, "场景类型": ctx.SceneType, "光线": ctx.Lighting, "时段": ctx.TimeOfDay} {
+			value = strings.TrimSpace(value)
+			if value != "" && strings.Contains(search, strings.ToLower(value)) {
+				matched = append(matched, field)
+				reasons = append(reasons, fmt.Sprintf("匹配%s“%s”", field, value))
+				score += 20
+			}
+		}
+		for _, tag := range ctx.Tags {
+			if tag = strings.TrimSpace(tag); tag != "" && strings.Contains(search, strings.ToLower(tag)) {
+				matched = append(matched, "标签")
+				reasons = append(reasons, "匹配标签“"+tag+"”")
+				score += 10
+			}
+		}
+		if preset.IsRecommended {
+			score += 5
+		}
+		if len(reasons) == 0 {
+			reasons = s.generateReasons(&preset)
+		}
+		result = append(result, StyleRecommendation{Preset: preset, Score: score, MatchedFields: matched, Reasons: reasons})
+	}
+	return result, nil
 }
 
 // GetPresetWithReasons 获取带推荐理由的预设

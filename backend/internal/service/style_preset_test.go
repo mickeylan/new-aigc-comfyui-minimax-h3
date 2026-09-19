@@ -151,6 +151,21 @@ func TestStylePresetService_GetRecommendations(t *testing.T) {
 	}
 }
 
+func TestStylePresetService_GetRecommendationsWithReasons(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	svc := NewStylePresetService(db)
+	svc.InitSystemPresets()
+	recs, err := svc.GetRecommendationsWithReasons(SceneContext{Genre: "复仇", Tone: "暗黑", SceneType: "夜景"}, 5)
+	if err != nil || len(recs) == 0 {
+		t.Fatalf("recommendations=%+v err=%v", recs, err)
+	}
+	for _, rec := range recs {
+		if rec.Preset.ID == 0 || len(rec.Reasons) == 0 {
+			t.Fatalf("recommendation lacks explanation: %+v", rec)
+		}
+	}
+}
+
 func TestStylePresetService_GetCategories(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	svc := NewStylePresetService(db)

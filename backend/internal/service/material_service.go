@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,8 @@ import (
 	"comfyui-console/internal/config"
 	"comfyui-console/internal/models"
 )
+
+var ErrMaterialReferenced = errors.New("material is referenced by a project")
 
 // MaterialService 素材库：场景生成图片自动入库 + 手动上传管理
 type MaterialService struct {
@@ -82,6 +85,13 @@ func (m *MaterialService) Delete(id uint) error {
 	var mat models.Material
 	if err := m.db.First(&mat, id).Error; err != nil {
 		return err
+	}
+	var referenceCount int64
+	if err := m.db.Model(&models.SharedAssetReference{}).Where("material_id = ?", id).Count(&referenceCount).Error; err != nil {
+		return err
+	}
+	if referenceCount > 0 {
+		return ErrMaterialReferenced
 	}
 	// 删除 input 文件（场景共享素材不物理删除，避免影响场景引用）
 	if mat.Source == "upload" {

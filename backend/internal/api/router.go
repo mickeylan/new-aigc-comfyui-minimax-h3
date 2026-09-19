@@ -34,9 +34,10 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	// GPU 监控
 	r.GET("/api/gpus", svc.HandleListGPUs)
 
-	// 模板
+	// 模板与只读模型能力目录
 	r.GET("/api/templates", svc.HandleListTemplates)
 	r.POST("/api/templates/reload", svc.HandleReloadTemplates)
+	r.GET("/api/model-catalog", svc.HandleListModelCatalog)
 
 	// 任务
 	r.GET("/api/tasks", svc.HandleListTasks)
@@ -67,6 +68,10 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.GET("/api/projects", svc.HandleListProjects)
 	r.POST("/api/projects", svc.HandleCreateProject)
 	r.GET("/api/projects/:id", svc.HandleGetProject)
+	r.GET("/api/projects/:id/episodes", svc.HandleGetProjectEpisodes)
+	r.POST("/api/projects/:id/episodes", svc.HandleCreateProjectEpisode)
+	r.PATCH("/api/projects/:id/episodes/:number", svc.HandleUpdateProjectEpisode)
+	r.DELETE("/api/projects/:id/episodes/:number", svc.HandleDeleteProjectEpisode)
 	r.PUT("/api/projects/:id", svc.HandleUpdateProject)
 	r.DELETE("/api/projects/:id", svc.HandleDeleteProject)
 	r.POST("/api/projects/:id/script", svc.HandleGenerateScript)
@@ -83,6 +88,9 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.PUT("/api/projects/:id/scenes/:sid/references", svc.HandleUpdateSceneReferences)
 	r.POST("/api/projects/:id/scenes/:sid/image", svc.HandleGenerateSceneImage)
 	r.POST("/api/projects/:id/scenes/:sid/image/upload", svc.HandleUploadSceneImage)
+	r.GET("/api/projects/:id/scenes/:sid/candidates", svc.HandleListSceneCandidates)
+	r.PATCH("/api/projects/:id/candidates/:cid/review", svc.HandleReviewGenerationCandidate)
+	r.POST("/api/projects/:id/candidates/:cid/select", svc.HandleSelectGenerationCandidate)
 	r.POST("/api/projects/:id/scenes/:sid/video", svc.HandleGenerateSceneVideo)
 	r.GET("/api/projects/:id/scenes/:sid/video/prompt", svc.HandleGetSceneVideoPrompt)
 	r.POST("/api/projects/:id/scenes/:sid/video/prompt/regenerate", svc.HandleRegenerateSceneVideoPrompt)
@@ -91,6 +99,11 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/merge", svc.HandleCreateMerge)
 	r.POST("/api/projects/:id/merge-all", svc.HandleCreateAllMerges)
 	r.GET("/api/projects/:id/merges", svc.HandleListMerges)
+	// 声景、音效与背景音乐层（仅管理已有音频，不调用生成供应商）
+	r.GET("/api/projects/:id/audio-layers", svc.HandleListAudioLayers)
+	r.POST("/api/projects/:id/audio-layers", svc.HandleCreateAudioLayer)
+	r.PUT("/api/projects/:id/audio-layers/:aid", svc.HandleUpdateAudioLayer)
+	r.DELETE("/api/projects/:id/audio-layers/:aid", svc.HandleDeleteAudioLayer)
 	// 对白配音与字幕
 	r.GET("/api/projects/:id/scenes/:sid/dialogues", svc.HandleListSceneDialogues)
 	r.POST("/api/projects/:id/scenes/:sid/dub", svc.HandleGenerateSceneDub)
@@ -192,6 +205,12 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.GET("/api/materials", svc.HandleListMaterials)
 	r.POST("/api/materials", svc.HandleUploadMaterial)
 	r.DELETE("/api/materials/:id", svc.HandleDeleteMaterial)
+	// 用户显式创建的共享素材引用，以及全局+项目引用的有效素材视图
+	r.GET("/api/projects/:id/shared-asset-references", svc.HandleListSharedAssetReferences)
+	r.POST("/api/projects/:id/shared-asset-references", svc.HandleCreateSharedAssetReference)
+	r.PUT("/api/projects/:id/shared-asset-references/:rid", svc.HandleUpdateSharedAssetReference)
+	r.DELETE("/api/projects/:id/shared-asset-references/:rid", svc.HandleDeleteSharedAssetReference)
+	r.GET("/api/projects/:id/shared-assets/effective", svc.HandleListEffectiveSharedAssets)
 
 	// 小说改编项目（source_type=novel）
 	r.POST("/api/projects/novel", svc.HandleCreateNovelProject)                    // 创建小说改编项目
@@ -236,6 +255,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/scenes/:sid/shots", svc.HandleCreateShots)
 	r.GET("/api/projects/:id/scenes/:sid/shots", svc.HandleGetSceneShots)
 	r.PUT("/api/projects/:id/shots/:shid", svc.HandleUpdateShot)
+	r.POST("/api/projects/:id/shots/:shid/director-expand", svc.HandleExpandShotDirectorPrompt)
 	r.DELETE("/api/projects/:id/shots/:shid", svc.HandleDeleteShot)
 
 	// 视频分镜连续性：来源视频末尾22帧、人工选帧、续接/首尾桥接配置

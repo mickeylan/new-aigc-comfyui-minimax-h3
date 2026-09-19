@@ -67,6 +67,34 @@ func TestSkillService_InitSystemSkills(t *testing.T) {
 	}
 }
 
+func TestSkillService_CuratedDirectorSkills(t *testing.T) {
+	db := newTestDB(t)
+	svc := NewSkillService(db)
+	if err := svc.InitSystemSkills(); err != nil {
+		t.Fatal(err)
+	}
+	for _, code := range []string{"director-visual-beat-decomposition", "director-shot-packet", "director-faithful-prompt-polish"} {
+		var skills []models.Skill
+		if err := db.Where("code = ?", code).Find(&skills).Error; err != nil {
+			t.Fatal(err)
+		}
+		if len(skills) != 1 || !skills[0].IsSystem || !skills[0].Enabled || skills[0].Version != 1 {
+			t.Fatalf("curated skill %s = %+v", code, skills)
+		}
+		if strings.TrimSpace(skills[0].PromptTemplate) == "" || strings.TrimSpace(skills[0].SystemPrompt) == "" {
+			t.Fatalf("curated skill %s lacks prompt contract", code)
+		}
+	}
+	if err := svc.InitSystemSkills(); err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	db.Model(&models.Skill{}).Where("code IN ?", []string{"director-visual-beat-decomposition", "director-shot-packet", "director-faithful-prompt-polish"}).Count(&count)
+	if count != 3 {
+		t.Fatalf("curated skills are not idempotent: count=%d", count)
+	}
+}
+
 func TestSkillService_CreateSkill(t *testing.T) {
 	db := newTestDB(t)
 	svc := NewSkillService(db)
@@ -604,6 +632,26 @@ func TestSkillService_ChatWithSkillInjectsAndAudits(t *testing.T) {
 	}
 	if len(logs) != 1 || !logs[0].Success || logs[0].SkillVersion != 1 {
 		t.Fatalf("unexpected audit: %+v", logs)
+	}
+}
+
+func TestSkillService_ConfiguredOrFallbackDirectorSkillAudits(t *testing.T) {
+	db := newTestDB(t)
+	svc := NewSkillService(db)
+	if err := svc.InitSystemSkills(); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "director"}
+	db.Create(&project)
+	provider := &stubTextProvider{response: `{"subject":"人物","action":"抬手","camera":"中景","lighting":"侧光","style":"国漫"}`}
+	out, err := svc.ChatWithConfiguredOrFallbackSkill(project.ID, models.SkillStageVideoPrompt, "director-shot-packet", provider, "", "", map[string]string{"scene_content": "人物抬手", "duration": "2"})
+	if err != nil || !strings.Contains(out, `"subject"`) {
+		t.Fatalf("fallback director skill failed: out=%q err=%v", out, err)
+	}
+	var logs []models.SkillAuditLog
+	db.Where("project_id = ? AND skill_code = ?", project.ID, "director-shot-packet").Find(&logs)
+	if len(logs) != 1 || !logs[0].Success {
+		t.Fatalf("fallback director skill audit=%+v", logs)
 	}
 }
 

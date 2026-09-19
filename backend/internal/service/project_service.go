@@ -235,6 +235,9 @@ func (s *ProjectService) DeleteProject(id uint) error {
 		if err := tx.Where("project_id = ?", id).Delete(&models.FrameCandidate{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("project_id = ?", id).Delete(&models.SharedAssetReference{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("project_id = ?", id).Delete(&models.Material{}).Error; err != nil {
 			return err
 		}
@@ -251,6 +254,9 @@ func (s *ProjectService) DeleteProject(id uint) error {
 			return err
 		}
 		if err := tx.Where("project_id = ?", id).Delete(&models.Dialogue{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ?", id).Delete(&models.AudioLayer{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Where("project_id = ?", id).Delete(&models.MergeTask{}).Error; err != nil {
@@ -4146,8 +4152,32 @@ func resultVideoOf(task *models.Task) (string, *int) {
 
 // ---------- 视频合并（ffmpeg concat） ----------
 
-// CreateMergeTask 创建合并任务
+type MergeAudioOptions struct {
+	NativeVolume   float64
+	DialogueVolume float64
+	BGMVolume      float64
+	DialogueMix    bool
+}
+
+func mergeAudioOptions(native, dialogue, bgm *float64) (MergeAudioOptions, error) {
+	options := MergeAudioOptions{NativeVolume: 1, DialogueVolume: 1, BGMVolume: 1, DialogueMix: dialogue != nil}
+	for value, target := range map[*float64]*float64{native: &options.NativeVolume, dialogue: &options.DialogueVolume, bgm: &options.BGMVolume} {
+		if value != nil {
+			if *value < 0 || *value > 4 {
+				return options, fmt.Errorf("合并音量需在 0~4")
+			}
+			*target = *value
+		}
+	}
+	return options, nil
+}
+
+// CreateMergeTask preserves the pre-audio-layer defaults for internal and legacy callers.
 func (s *ProjectService) CreateMergeTask(p *models.Project, sceneIDs []uint, dub, subtitles bool) (*models.MergeTask, error) {
+	return s.CreateMergeTaskWithAudio(p, sceneIDs, dub, subtitles, MergeAudioOptions{NativeVolume: 1, DialogueVolume: 1, BGMVolume: 1})
+}
+
+func (s *ProjectService) CreateMergeTaskWithAudio(p *models.Project, sceneIDs []uint, dub, subtitles bool, audio MergeAudioOptions) (*models.MergeTask, error) {
 	if len(sceneIDs) < 2 {
 		return nil, fmt.Errorf("请至少选择 2 个场景进行合并")
 	}
@@ -4185,6 +4215,7 @@ func (s *ProjectService) CreateMergeTask(p *models.Project, sceneIDs []uint, dub
 	mt := models.MergeTask{
 		ProjectID: p.ID, EpisodeN: episodeN, Title: fmt.Sprintf("第%d集 · %s", episodeN, p.Title),
 		SceneOrder: strings.Join(ids, ","), Status: "pending", Generation: p.Generation,
+		NativeVolume: audio.NativeVolume, DialogueVolume: audio.DialogueVolume, BGMVolume: audio.BGMVolume, DialogueMix: audio.DialogueMix,
 	}
 	if err := s.db.Create(&mt).Error; err != nil {
 		return nil, err
@@ -4201,6 +4232,25 @@ func (s *ProjectService) mediaPath(parts ...string) string {
 	}
 	all := append([]string{s.cfg.Comfy.ComfyDir}, parts...)
 	return filepath.Join(all...)
+}
+
+func (s *ProjectService) audioLayerMediaPath(projectID uint, file string) (string, error) {
+	clean := filepath.Clean(strings.TrimSpace(file))
+	if clean == "." || filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+		return "", fmt.Errorf("音频层文件路径无效")
+	}
+	return s.mediaPath("input", strconv.FormatUint(uint64(projectID), 10), clean), nil
+}
+
+func sceneIDsFromStrings(values []string) []uint {
+	ids := make([]uint, 0, len(values))
+	for _, value := range values {
+		id, err := strconv.ParseUint(value, 10, 32)
+		if err == nil && id > 0 {
+			ids = append(ids, uint(id))
+		}
+	}
+	return ids
 }
 
 func localFFmpegPath() (string, error) {
@@ -4300,6 +4350,46 @@ func (s *ProjectService) runMerge(p *models.Project, mt *models.MergeTask, dub, 
 		}
 		videoDurs = append(videoDurs, sceneVideo{abs: abs, dur: dur})
 		scenes = append(scenes, sc)
+	}
+
+	// Audio-layer and dialogue inputs are opt-in additions. The legacy path remains byte-for-byte
+	// equivalent at default volumes when no ready layer exists and dialogue_volume is omitted.
+	var layers []models.AudioLayer
+	_ = s.db.Where("project_id = ? AND episode_n = ? AND status = ? AND muted = ? AND file != ''", p.ID, mt.EpisodeN, "ready", false).
+		Order("start_time, id").Find(&layers).Error
+	audioInputIndex := len(inputPaths)
+	layerInputIndexes := make([]int, 0, len(layers))
+	validLayers := make([]models.AudioLayer, 0, len(layers))
+	for _, layer := range layers {
+		abs, err := s.audioLayerMediaPath(p.ID, layer.File)
+		if err != nil {
+			s.failMerge(mt, p, err.Error())
+			return
+		}
+		inputs = append(inputs, "-i", shellQuote(abs))
+		inputPaths = append(inputPaths, abs)
+		layerInputIndexes = append(layerInputIndexes, audioInputIndex)
+		audioInputIndex++
+		validLayers = append(validLayers, layer)
+	}
+	var dialogueSegments []dubSegment
+	if mt.DialogueMix && mt.DialogueVolume > 0 {
+		segments, _, ready, err := s.buildDubTimeline(p, mt.EpisodeN, sceneIDsFromStrings(ids), videoDurs)
+		if err != nil {
+			s.failMerge(mt, p, err.Error())
+			return
+		}
+		if ready {
+			for _, segment := range segments {
+				if segment.AudioAbs == "" {
+					continue
+				}
+				inputs = append(inputs, "-i", shellQuote(segment.AudioAbs))
+				inputPaths = append(inputPaths, segment.AudioAbs)
+				dialogueSegments = append(dialogueSegments, segment)
+				audioInputIndex++
+			}
+		}
 	}
 
 	outName := fmt.Sprintf("merged/%s_merged_%d.mp4", projectFileTag(p), mt.ID)
@@ -4505,6 +4595,9 @@ func (s *ProjectService) buildDubTimeline(p *models.Project, episodeN int, scene
 		}
 		cursor := sceneStart + 0.4
 		for _, d := range list {
+			if d.Position > 0 {
+				cursor = sceneStart + d.Position
+			}
 			audioAbs := ""
 			dur := 2.0 // 无音频时的兜底时长
 			if d.AudioFile != "" {
@@ -4786,6 +4879,9 @@ func (s *ProjectService) EditorSubtitleTimelineRaw(p *models.Project, scenes []m
 		if !ready {
 			seg := sceneDur[i] / float64(len(list))
 			for _, d := range list {
+				if d.Position > 0 {
+					cursor = global + d.Position
+				}
 				out = append(out, map[string]any{
 					"dialogue_id": d.ID, "scene_id": d.SceneID, "scene_order": sc.Order,
 					"character": d.Character, "text": d.Text,
@@ -4797,6 +4893,9 @@ func (s *ProjectService) EditorSubtitleTimelineRaw(p *models.Project, scenes []m
 			continue
 		}
 		for _, d := range list {
+			if d.Position > 0 {
+				cursor = global + d.Position
+			}
 			dur := 2.0
 			if d.AudioFile != "" {
 				// AudioFile 可能为 URL（/api/input/pid/name），取文件名后拼真实路径
@@ -4822,43 +4921,85 @@ func (s *ProjectService) EditorSubtitleTimelineRaw(p *models.Project, scenes []m
 	return out
 }
 
-// UpdateDialogue 编辑对白文本/音色/角色；修改后重置为 pending 以便重新合成
+type DialogueUpdateInput struct {
+	Text               *string  `json:"text"`
+	Voice              *string  `json:"voice"`
+	Character          *string  `json:"character"`
+	SpeechType         *string  `json:"speech_type"`
+	Position           *float64 `json:"position"`
+	H3VoiceDescription *string  `json:"h3_voice_description"`
+}
+
+// UpdateDialogue keeps the legacy service API while the HTTP API uses patch-like pointer fields.
 func (s *ProjectService) UpdateDialogue(p *models.Project, did uint, text, voice, character, speechType string) (*models.Dialogue, error) {
+	input := DialogueUpdateInput{}
+	if text != "" {
+		input.Text = &text
+	}
+	if voice != "" {
+		input.Voice = &voice
+	}
+	if character != "" {
+		input.Character = &character
+	}
+	if speechType != "" {
+		input.SpeechType = &speechType
+	}
+	return s.UpdateDialogueFields(p, did, input)
+}
+
+// UpdateDialogueFields persists timeline/H3 metadata and invalidates synthesized audio only
+// when a field that affects speech output changes.
+func (s *ProjectService) UpdateDialogueFields(p *models.Project, did uint, input DialogueUpdateInput) (*models.Dialogue, error) {
 	var d models.Dialogue
 	if err := s.db.Where("id = ? AND project_id = ?", did, p.ID).First(&d).Error; err != nil {
 		return nil, fmt.Errorf("对白不存在")
 	}
 	updates := map[string]any{}
-	if text != "" {
-		updates["text"] = text
+	audioChanged, promptChanged := false, false
+	if input.Text != nil && *input.Text != d.Text {
+		updates["text"], audioChanged, promptChanged = strings.TrimSpace(*input.Text), true, true
 	}
-	if voice != "" {
-		updates["voice"] = voice
+	if input.Voice != nil && *input.Voice != d.Voice {
+		updates["voice"], audioChanged = strings.TrimSpace(*input.Voice), true
 	}
-	if character != "" {
-		updates["character"] = character
-	}
-	if speechType != "" {
-		speechCharacter := character
-		if strings.TrimSpace(speechCharacter) == "" {
-			speechCharacter = d.Character
+	character := d.Character
+	if input.Character != nil {
+		character = strings.TrimSpace(*input.Character)
+		if character != d.Character {
+			updates["character"], audioChanged, promptChanged = character, true, true
 		}
-		normalized, normalizedCharacter := normalizeScriptSpeech(speechType, speechCharacter)
+	}
+	if input.SpeechType != nil {
+		normalized, normalizedCharacter := normalizeScriptSpeech(*input.SpeechType, character)
 		if normalized == "" {
 			return nil, fmt.Errorf("发声类型必须是 dialogue、narration 或 monologue")
 		}
-		updates["speech_type"] = normalized
-		updates["character"] = normalizedCharacter
+		if normalized != d.SpeechType || normalizedCharacter != d.Character {
+			updates["speech_type"], updates["character"] = normalized, normalizedCharacter
+			audioChanged, promptChanged = true, true
+		}
 	}
-	if len(updates) > 0 {
-		updates["status"] = "pending"
-		updates["audio_file"] = ""
-		updates["error"] = ""
+	if input.Position != nil {
+		if *input.Position < 0 {
+			return nil, fmt.Errorf("position 不可为负数")
+		}
+		if *input.Position != d.Position {
+			updates["position"] = *input.Position
+		}
+	}
+	if input.H3VoiceDescription != nil && strings.TrimSpace(*input.H3VoiceDescription) != d.H3VoiceDescription {
+		updates["h3_voice_description"] = strings.TrimSpace(*input.H3VoiceDescription)
+		promptChanged = true
+	}
+	if audioChanged {
+		updates["status"], updates["audio_file"], updates["error"] = "pending", "", ""
+		updates["audio_stale"], updates["audio_stale_reason"] = true, "对白文本或音色已修改"
 	}
 	if err := s.db.Model(&d).Updates(updates).Error; err != nil {
 		return nil, err
 	}
-	if len(updates) > 0 {
+	if promptChanged {
 		_ = s.db.Model(&models.Scene{}).Where("id = ? AND video_full_prompt != ''", d.SceneID).Update("prompt_stale", true).Error
 	}
 	s.pushProject(p)
@@ -4941,7 +5082,7 @@ func (s *ProjectService) synthesizeDialogue(d *models.Dialogue) error {
 		return fmt.Errorf("存储未配置")
 	}
 	if strings.TrimSpace(d.Text) == "" {
-		s.db.Model(&models.Dialogue{}).Where("id = ?", d.ID).Updates(map[string]any{"status": "ready", "audio_file": "", "error": ""})
+		s.db.Model(&models.Dialogue{}).Where("id = ?", d.ID).Updates(map[string]any{"status": "ready", "audio_file": "", "audio_stale": false, "audio_stale_reason": "", "error": ""})
 		return nil
 	}
 	// 后期配音：阿里云 TTS（DashScope）；角色绑定参考语音时用复刻音色合成
@@ -4967,7 +5108,7 @@ func (s *ProjectService) synthesizeDialogue(d *models.Dialogue) error {
 		s.db.Model(&models.Dialogue{}).Where("id = ?", d.ID).Updates(map[string]any{"status": "failed", "error": err.Error()})
 		return err
 	}
-	s.db.Model(&models.Dialogue{}).Where("id = ?", d.ID).Updates(map[string]any{"status": "ready", "audio_file": filepath.Base(path), "error": ""})
+	s.db.Model(&models.Dialogue{}).Where("id = ?", d.ID).Updates(map[string]any{"status": "ready", "audio_file": filepath.Base(path), "audio_stale": false, "audio_stale_reason": "", "error": ""})
 	s.pushProject(nil)
 	return nil
 }

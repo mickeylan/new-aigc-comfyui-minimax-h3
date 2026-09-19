@@ -68,6 +68,7 @@ const navItems = [
   { to: '/dashboard', label: '总览', icon: '⌁' },
   { to: '/tasks', label: '任务中心', icon: '◷' },
   { to: '/instances', label: '实例管理', icon: '◉' },
+  { to: '/model-catalog', label: '模型目录', icon: '▦' },
   { to: '/settings', label: '平台设置', icon: '⚙' }
 ]
 function toastIcon(type) {

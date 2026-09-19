@@ -7,7 +7,7 @@
           <router-link :to="`/projects/${id()}`" class="back">← 返回项目</router-link>
         </div>
         <h1>🎬 剪辑台 · {{ project.title }}</h1>
-        <p class="synopsis">第{{ activeEpN }}集 · 时间轴预览 / 配音 / 字幕 编辑</p>
+        <p class="synopsis">第{{ activeEpN }}集 · {{ currentEpisode?.title || '未命名' }} · 目标{{ targetDuration }}秒 / {{ targetScenes }}场 <button class="btn btn-xs btn-ghost" @click="editCurrentEpisode">编辑本集</button></p>
       </div>
       <div class="head-actions">
         <button class="btn btn-ghost btn-sm" :disabled="epIndex <= 0" @click="switchEp(-1)">← 上一集</button>
@@ -164,7 +164,18 @@
       </section>
     </div>
 
-    <ShotDirectorEditor v-if="selected" :project-id="id()" :scene-id="selected.id" />
+    <ShotDirectorEditor v-if="selected" :project-id="id()" :scene-id="selected.id" :genre="project?.genre || ''" :tone="project?.tone || ''" :scene-title="selected.title || ''" :scene-content="selected.content || ''" />
+
+    <section class="section" v-if="selected">
+      <div class="section-head"><div><span class="overline">TAKES</span><h2>生成候选与审核</h2><p class="sub">保留场景图片和视频历史；设为当前不会删除其他候选。</p></div><button class="btn btn-sm btn-ghost" @click="loadCandidates">刷新</button></div>
+      <div class="card" v-if="candidates.length">
+        <div v-for="candidate in candidates" :key="candidate.id" class="merge-item">
+          <div class="merge-info"><span class="badge" :class="candidate.is_current ? 'badge-green' : candidate.review_status === 'rejected' ? 'badge-red' : 'badge-gray'">{{ candidate.media_type }} · {{ candidate.is_current ? '当前' : candidate.review_status }}</span><span>{{ candidate.file }}</span><span v-if="candidate.stale" class="fail-msg">已过期：{{ candidate.stale_reason }}</span></div>
+          <div class="merge-links"><button class="btn btn-sm btn-secondary" :disabled="candidate.is_current || candidate.stale" @click="selectCandidate(candidate)">设为当前</button><button class="btn btn-sm btn-ghost" :disabled="candidate.review_status === 'rejected'" @click="rejectCandidate(candidate)">拒绝</button></div>
+        </div>
+      </div>
+      <div class="card empty" v-else>当前还没有可审核候选；已有场景结果会在刷新时自动纳入。</div>
+    </section>
 
     <!-- 帧选择弹窗 -->
     <div v-if="showFrameSelector && selected" class="modal-overlay" @click.self="showFrameSelector = false">
@@ -220,10 +231,12 @@ const route = useRoute()
 const toast = useToastStore()
 
 const project = ref(null)
+const episodes = ref([])
 const scenes = ref([])
 const dialogues = ref([])
 const subtitles = ref([])
 const merges = ref([])
+const candidates = ref([])
 const selected = ref(null)
 const tab = ref('dub')
 const busy = ref(false)
@@ -239,24 +252,9 @@ const epCount = ref(1)
 const showFrameSelector = ref(false)
 
 // 目标时长与累计时长计算
-const targetDuration = computed(() => {
-  const p = project.value
-  if (!p?.plan) return 0
-  try {
-    const plan = JSON.parse(p.plan)
-    const ep = plan.episodes?.find(e => e.n === activeEpN.value)
-    return ep?.target_duration || 180
-  } catch { return 180 }
-})
-const targetScenes = computed(() => {
-  const p = project.value
-  if (!p?.plan) return 25
-  try {
-    const plan = JSON.parse(p.plan)
-    const ep = plan.episodes?.find(e => e.n === activeEpN.value)
-    return ep?.target_scenes || 25
-  } catch { return 25 }
-})
+const currentEpisode = computed(() => episodes.value.find(row => row.episode?.number === activeEpN.value)?.episode || null)
+const targetDuration = computed(() => currentEpisode.value?.target_duration || 180)
+const targetScenes = computed(() => currentEpisode.value?.target_scenes || 25)
 const accumulatedDuration = computed(() =>
   scenes.value.reduce((sum, s) => sum + (Number(s.video_dur) || Number(s.duration) || 0), 0)
 )
@@ -294,7 +292,8 @@ function syncDraftTexts() {
 }
 
 function epNums() {
-  const set = new Set(scenes.value.map(s => s.episode_n || 1))
+  const set = new Set(episodes.value.map(row => row.episode?.number).filter(Boolean))
+  if (!set.size) scenes.value.forEach(s => set.add(s.episode_n || 1))
   const arr = [...set].sort((a, b) => a - b)
   epCount.value = Math.max(1, arr.length)
   return arr
@@ -302,16 +301,18 @@ function epNums() {
 
 async function load() {
   try {
-    const { data } = await api.editorData(id(), activeEpN.value)
+    const [{ data }, episodeRes] = await Promise.all([api.editorData(id(), activeEpN.value), api.projectEpisodes(id())])
     project.value = data.project
+    episodes.value = episodeRes.data || []
     scenes.value = data.scenes || []
     dialogues.value = (data.dialogues || []).map(d => ({ ...d }))
     subtitles.value = data.subtitles || []
     syncDraftTexts()
     const selectedId = selected.value?.id
     selected.value = (selectedId && scenes.value.find(s => s.id === selectedId)) || scenes.value.find(s => s.status === 'video_ready') || scenes.value[0] || null
-    if (selected.value) durationInput.value = selected.value.duration || 5
-    epNums()
+    if (selected.value) { durationInput.value = selected.value.duration || 5; await loadCandidates() } else candidates.value = []
+    const episodeNumbers = epNums()
+    epIndex.value = Math.max(0, episodeNumbers.indexOf(activeEpN.value))
     await loadMerges()
   } catch (e) {
     toast.error(e.response?.data?.error || '加载剪辑台失败')
@@ -448,6 +449,37 @@ async function mergeEpisode() {
   } finally {
     curMerging.value = false
   }
+}
+
+async function loadCandidates() {
+  if (!selected.value) { candidates.value = []; return }
+  try { const { data } = await api.sceneCandidates(id(), selected.value.id); candidates.value = data || [] }
+  catch (e) { toast.error(e.response?.data?.error || '加载候选失败') }
+}
+async function selectCandidate(candidate) {
+  try { await api.selectCandidate(id(), candidate.id); toast.success('已设为当前候选'); await load() }
+  catch (e) { toast.error(e.response?.data?.error || '选择候选失败') }
+}
+async function rejectCandidate(candidate) {
+  const reason = window.prompt('请输入拒绝原因', candidate.review_reason || '')
+  if (reason === null) return
+  try { await api.reviewCandidate(id(), candidate.id, 'rejected', reason.trim()); toast.success('候选已拒绝'); await loadCandidates() }
+  catch (e) { toast.error(e.response?.data?.error || '审核候选失败') }
+}
+
+async function editCurrentEpisode() {
+  const episode = currentEpisode.value
+  if (!episode) return
+  const title = window.prompt('本集标题', episode.title || '')
+  if (title === null) return
+  const duration = Number(window.prompt('目标时长（秒）', String(episode.target_duration || 180)))
+  const sceneCount = Number(window.prompt('目标场景数', String(episode.target_scenes || 25)))
+  if (!title.trim() || duration <= 0 || sceneCount < 1) { toast.error('标题、目标时长或场景数无效'); return }
+  try {
+    await api.updateProjectEpisode(id(), episode.number, { title: title.trim(), target_duration: duration, target_scenes: Math.round(sceneCount) })
+    toast.success('本集信息已保存')
+    await load()
+  } catch (e) { toast.error(e.response?.data?.error || '保存本集信息失败') }
 }
 
 function switchEp(dir) {

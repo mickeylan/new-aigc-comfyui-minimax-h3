@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -16,7 +17,11 @@ func newTestDBWithNewModels(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.Shot{}, &models.PromptVersion{}, &models.StylePreset{}); err != nil {
+	if err := db.AutoMigrate(
+		&models.Project{}, &models.Episode{}, &models.Scene{}, &models.Shot{}, &models.PromptVersion{}, &models.StylePreset{},
+		&models.Character{}, &models.CharacterLook{}, &models.ShotCharacterLook{},
+		&models.CharacterOutfit{}, &models.ShotCharacterOutfit{},
+	); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -54,6 +59,47 @@ func TestShotServiceStoresManualDirectorStructure(t *testing.T) {
 	}
 }
 
+func TestShotServiceReplacePreservesIDsAndRejectsForeignShot(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "test"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
+	otherScene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 2}
+	db.Create(&scene)
+	db.Create(&otherScene)
+	svc := NewShotService(db)
+	initial, err := svc.ReplaceShots(scene.ID, []models.Shot{
+		{ShotType: "wide", Duration: 1, Description: "first"},
+		{ShotType: "close", Duration: 2, Description: "second"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstID, secondID := initial[0].ID, initial[1].ID
+	updated, err := svc.ReplaceShots(scene.ID, []models.Shot{
+		{ID: secondID, ShotType: "close", Duration: 2, Description: "second updated"},
+		{ID: firstID, ShotType: "wide", Duration: 1, Description: "first updated"},
+		{ShotType: "medium", Duration: 1.5, Description: "new"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated) != 3 || updated[0].ID != secondID || updated[1].ID != firstID || updated[2].ID == 0 {
+		t.Fatalf("shot IDs/order were not preserved: %+v", updated)
+	}
+	foreign, err := svc.ReplaceShots(otherScene.ID, []models.Shot{{ShotType: "wide", Duration: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ReplaceShots(scene.ID, []models.Shot{{ID: foreign[0].ID, ShotType: "wide", Duration: 1}}); err == nil || !strings.Contains(err.Error(), "不属于当前场景") {
+		t.Fatalf("foreign shot ID accepted: %v", err)
+	}
+	remaining, _ := svc.GetSceneShots(scene.ID)
+	if len(remaining) != 3 || remaining[0].ID != secondID {
+		t.Fatalf("failed replacement mutated existing shots: %+v", remaining)
+	}
+}
+
 func TestShotServiceReplaceIsTransactionalAndValidates(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	scene := models.Scene{ProjectID: 1, EpisodeN: 1, Order: 1}
@@ -71,6 +117,103 @@ func TestShotServiceReplaceIsTransactionalAndValidates(t *testing.T) {
 	if len(shots) != 1 || shots[0].ShotType != "wide" {
 		t.Fatalf("existing shots changed: %+v", shots)
 	}
+}
+
+func TestShotServiceSaveRecordsCanonicalDeduplicatedManualPrompt(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "prompt history"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, Order: 1}
+	db.Create(&scene)
+	svc := NewShotService(db)
+
+	shots, err := svc.ReplaceShots(scene.ID, []models.Shot{{
+		ShotType: "close", Duration: 2, PromptSubject: "  face  ", PromptAction: "turns\nslowly",
+		PromptCamera: "close-up", PromptLighting: "moonlight", PromptStyle: "film",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "face\nturns slowly\nclose-up\nmoonlight\nfilm"
+	var versions []models.PromptVersion
+	db.Where("project_id = ? AND entity_type = ? AND entity_id = ?", project.ID, "shot", shots[0].ID).Find(&versions)
+	if len(versions) != 1 || versions[0].Action != "manual" || versions[0].Content != want {
+		t.Fatalf("manual prompt versions = %+v, want content %q", versions, want)
+	}
+
+	if _, err := svc.ReplaceShots(scene.ID, shots); err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	db.Model(&models.PromptVersion{}).Where("project_id = ? AND entity_type = ? AND entity_id = ?", project.ID, "shot", shots[0].ID).Count(&count)
+	if count != 1 {
+		t.Fatalf("same prompt produced %d versions", count)
+	}
+
+	if _, err := svc.UpdateShot(shots[0].ID, map[string]any{"prompt_style": "noir"}); err != nil {
+		t.Fatal(err)
+	}
+	db.Model(&models.PromptVersion{}).Where("project_id = ? AND entity_type = ? AND entity_id = ?", project.ID, "shot", shots[0].ID).Count(&count)
+	if count != 2 {
+		t.Fatalf("changed prompt produced %d versions", count)
+	}
+}
+
+func TestShotServiceRemovalCleansAssociationsAndRetainsPromptHistory(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "cleanup"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, Order: 1}
+	db.Create(&scene)
+	svc := NewShotService(db)
+	shots, err := svc.ReplaceShots(scene.ID, []models.Shot{
+		{ShotType: "wide", Duration: 1, PromptSubject: "first"},
+		{ShotType: "close", Duration: 1, PromptSubject: "second"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	character := models.Character{ProjectID: project.ID, Name: "actor"}
+	if err := db.Create(&character).Error; err != nil {
+		t.Fatal(err)
+	}
+	for i, shot := range shots {
+		look := models.CharacterLook{ProjectID: project.ID, CharacterID: character.ID, Name: fmt.Sprintf("look-%d", i)}
+		outfit := models.CharacterOutfit{ProjectID: project.ID, CharacterID: character.ID, Name: fmt.Sprintf("outfit-%d", i)}
+		if err := db.Create(&look).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Create(&outfit).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Create(&models.ShotCharacterLook{ShotID: shot.ID, LookID: look.ID}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Create(&models.ShotCharacterOutfit{ShotID: shot.ID, CharacterID: character.ID, OutfitID: outfit.ID}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := svc.ReplaceShots(scene.ID, []models.Shot{shots[0]}); err != nil {
+		t.Fatal(err)
+	}
+	assertShotReferences := func(shotID uint, wantAssociations, wantVersions int64) {
+		t.Helper()
+		var looks, outfits, versions int64
+		db.Model(&models.ShotCharacterLook{}).Where("shot_id = ?", shotID).Count(&looks)
+		db.Model(&models.ShotCharacterOutfit{}).Where("shot_id = ?", shotID).Count(&outfits)
+		db.Model(&models.PromptVersion{}).Where("project_id = ? AND entity_type = 'shot' AND entity_id = ?", project.ID, shotID).Count(&versions)
+		if looks != wantAssociations || outfits != wantAssociations || versions != wantVersions {
+			t.Fatalf("shot %d refs: looks=%d outfits=%d versions=%d", shotID, looks, outfits, versions)
+		}
+	}
+	assertShotReferences(shots[1].ID, 0, 1)
+	assertShotReferences(shots[0].ID, 1, 1)
+
+	if err := svc.DeleteShot(shots[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	assertShotReferences(shots[0].ID, 0, 1)
 }
 
 func TestShotServiceDeleteUpdatesCount(t *testing.T) {

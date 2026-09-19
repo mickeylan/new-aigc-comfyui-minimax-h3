@@ -42,6 +42,7 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.Event{},
 		&models.Setting{},
 		&models.Project{},
+		&models.Episode{},
 		&models.Scene{},
 		&models.MergeTask{},
 		&models.Material{},
@@ -70,6 +71,9 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.SceneCharacterOutfit{},
 		&models.ShotCharacterOutfit{},
 		&models.FrameCandidate{},
+		&models.GenerationCandidate{},
+		&models.AudioLayer{},
+		&models.SharedAssetReference{},
 		&models.SceneContinuity{},
 	); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)

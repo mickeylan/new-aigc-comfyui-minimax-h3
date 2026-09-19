@@ -151,7 +151,79 @@ func (s *Service) HandleGetProject(c *gin.Context) {
 	assetCounts, _ := s.Projects.AssetSceneCounts(uint(id))
 	var dialogues []models.Dialogue
 	s.DB.Where("project_id = ?", uint(id)).Order("scene_id, `order`").Find(&dialogues)
-	c.JSON(200, gin.H{"project": p, "scenes": scenes, "merges": merges, "characters": chars, "character_counts": counts, "assets": assets, "asset_counts": assetCounts, "dialogues": dialogues})
+	episodes, _ := ProjectEpisodeHierarchy(s.DB, uint(id))
+	c.JSON(200, gin.H{"project": p, "episodes": episodes, "scenes": scenes, "merges": merges, "characters": chars, "character_counts": counts, "assets": assets, "asset_counts": assetCounts, "dialogues": dialogues})
+}
+
+func (s *Service) HandleCreateProjectEpisode(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	var episode models.Episode
+	if err := c.ShouldBindJSON(&episode); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	created, err := CreateProjectEpisode(s.DB, p.ID, episode)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, created)
+}
+
+func (s *Service) HandleUpdateProjectEpisode(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	number, err := strconv.Atoi(c.Param("number"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode number"})
+		return
+	}
+	var updates map[string]any
+	if err := c.ShouldBindJSON(&updates); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	updated, err := UpdateProjectEpisode(s.DB, p.ID, number, updates)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, updated)
+}
+
+func (s *Service) HandleDeleteProjectEpisode(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	number, err := strconv.Atoi(c.Param("number"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode number"})
+		return
+	}
+	if err := DeleteProjectEpisode(s.DB, p.ID, number); err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (s *Service) HandleGetProjectEpisodes(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	episodes, err := ProjectEpisodeHierarchy(s.DB, p.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, episodes)
 }
 
 func (s *Service) HandleDeleteProject(c *gin.Context) {
@@ -710,15 +782,23 @@ func (s *Service) HandleCreateMerge(c *gin.Context) {
 		return
 	}
 	var req struct {
-		SceneIDs  []uint `json:"scene_ids"`
-		Dub       bool   `json:"dub"`       // true=保留原音轨(默认), false=静音
-		Subtitles bool   `json:"subtitles"` // true=烧录字幕(默认), false=不烧录
+		SceneIDs       []uint   `json:"scene_ids"`
+		Dub            bool     `json:"dub"`       // true=保留原音轨(默认), false=静音
+		Subtitles      bool     `json:"subtitles"` // true=烧录字幕(默认), false=不烧录
+		NativeVolume   *float64 `json:"native_volume"`
+		DialogueVolume *float64 `json:"dialogue_volume"`
+		BGMVolume      *float64 `json:"bgm_volume"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": "参数错误"})
 		return
 	}
-	mt, err := s.Projects.CreateMergeTask(p, req.SceneIDs, req.Dub, req.Subtitles)
+	options, err := mergeAudioOptions(req.NativeVolume, req.DialogueVolume, req.BGMVolume)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	mt, err := s.Projects.CreateMergeTaskWithAudio(p, req.SceneIDs, req.Dub, req.Subtitles, options)
 	if err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
@@ -1416,17 +1496,12 @@ func (s *Service) HandleUpdateDialogue(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "invalid dialogue id"})
 		return
 	}
-	var req struct {
-		Text       string `json:"text"`
-		Voice      string `json:"voice"`
-		Character  string `json:"character"`
-		SpeechType string `json:"speech_type"`
-	}
+	var req DialogueUpdateInput
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": "参数错误"})
 		return
 	}
-	d, err := s.Projects.UpdateDialogue(p, uint(did), req.Text, req.Voice, req.Character, req.SpeechType)
+	d, err := s.Projects.UpdateDialogueFields(p, uint(did), req)
 	if err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
@@ -1620,6 +1695,10 @@ func (s *Service) HandleDeleteMaterial(c *gin.Context) {
 		return
 	}
 	if err := s.Materials.Delete(uint(id)); err != nil {
+		if errors.Is(err, ErrMaterialReferenced) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}

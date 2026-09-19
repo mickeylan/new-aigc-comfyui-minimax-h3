@@ -17,6 +17,7 @@ const routes = [
   { path: '/projects/:id/adaptation', name: 'adaptation', component: () => import('../views/AdaptationPlan.vue') },
   { path: '/skills', name: 'skills', component: () => import('../views/Skills.vue') },
   { path: '/materials', name: 'materials', component: () => import('../views/Materials.vue') },
+  { path: '/model-catalog', name: 'model-catalog', component: () => import('../views/ModelCatalog.vue') },
   { path: '/settings', name: 'settings', component: () => import('../views/Settings.vue') }
 ]
 

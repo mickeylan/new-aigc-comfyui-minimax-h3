@@ -6,6 +6,86 @@ import (
 	"comfyui-console/internal/models"
 )
 
+func TestPromptWorkshopProjectIsolationAndDraftHistory(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	svc := NewPromptWorkshopService(db, nil)
+	p1 := models.Project{Title: "p1"}
+	p2 := models.Project{Title: "p2"}
+	db.Create(&p1)
+	db.Create(&p2)
+	s1 := models.Scene{ProjectID: p1.ID, Order: 1}
+	s2 := models.Scene{ProjectID: p2.ID, Order: 1}
+	db.Create(&s1)
+	db.Create(&s2)
+	shot1 := models.Shot{SceneID: s1.ID, Order: 1, ShotType: "中景", Duration: 2}
+	shot2 := models.Shot{SceneID: s2.ID, Order: 1, ShotType: "中景", Duration: 2}
+	db.Create(&shot1)
+	db.Create(&shot2)
+
+	if _, err := svc.BuildPromptForProject(p1.ID, "shot", shot1.ID, "{{subject}}", map[string]string{"subject": "镜头一"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.BuildPromptForProject(p1.ID, "shot", shot2.ID, "x", nil); err == nil {
+		t.Fatal("cross-project shot was accepted")
+	}
+	history, err := svc.GetHistoryForProject(p1.ID, "shot", shot1.ID, 10)
+	if err != nil || len(history) != 1 || history[0].ProjectID != p1.ID {
+		t.Fatalf("scoped history = %+v, err=%v", history, err)
+	}
+	if _, err := svc.GetHistoryForProject(p2.ID, "shot", shot1.ID, 10); err == nil {
+		t.Fatal("cross-project history was accepted")
+	}
+	if _, err := svc.RollbackForProject(p2.ID, "shot", shot2.ID, history[0].ID); err == nil {
+		t.Fatal("cross-project rollback was accepted")
+	}
+	if _, err := svc.BuildPromptForProject(p1.ID, "shot", 0, "draft {{subject}}", map[string]string{"subject": "镜头"}); err != nil {
+		t.Fatal(err)
+	}
+	var draftCount int64
+	db.Model(&models.PromptVersion{}).Where("project_id = ? AND entity_id = 0", p1.ID).Count(&draftCount)
+	if draftCount != 0 {
+		t.Fatalf("unsaved draft wrote %d history rows", draftCount)
+	}
+}
+
+func TestPromptWorkshopShotActionsNormalizeFivePartsAndRejectProse(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "five parts"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, Order: 1}
+	db.Create(&scene)
+	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "close", Duration: 1}
+	db.Create(&shot)
+	provider := &stubTextProvider{response: "```json\n{\"subject\":\"face\",\"action\":\"turns\",\"camera\":\"close-up\",\"lighting\":\"moonlight\",\"style\":\"film\"}\n```"}
+	svc := NewPromptWorkshopService(db, provider)
+
+	got, err := svc.OptimizePromptForProject(project.ID, "shot", shot.ID, "original", "context")
+	want := "face\nturns\nclose-up\nmoonlight\nfilm"
+	if err != nil || got != want {
+		t.Fatalf("normalized optimize = %q, err=%v", got, err)
+	}
+	provider.response = "人物\n转身\n近景\n月光\n电影感"
+	got, err = svc.TranslatePromptForProject(project.ID, "shot", shot.ID, want, "zh")
+	if err != nil || got != provider.response {
+		t.Fatalf("normalized translate = %q, err=%v", got, err)
+	}
+
+	var count int64
+	db.Model(&models.PromptVersion{}).Where("project_id = ? AND entity_type = 'shot' AND entity_id = ?", project.ID, shot.ID).Count(&count)
+	if count != 2 {
+		t.Fatalf("valid actions recorded %d versions", count)
+	}
+	provider.response = "Here is an improved prompt with arbitrary prose."
+	got, err = svc.OptimizePromptForProject(project.ID, "shot", shot.ID, want, "context")
+	if err == nil || got != want {
+		t.Fatalf("invalid prose accepted: got=%q err=%v", got, err)
+	}
+	db.Model(&models.PromptVersion{}).Where("project_id = ? AND entity_type = 'shot' AND entity_id = ?", project.ID, shot.ID).Count(&count)
+	if count != 2 {
+		t.Fatalf("invalid output recorded history; count=%d", count)
+	}
+}
+
 func TestPromptWorkshopService_BuildPrompt(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	svc := NewPromptWorkshopService(db, nil)

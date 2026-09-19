@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -20,28 +21,30 @@ import (
 
 // Service 聚合所有子服务
 type Service struct {
-	Cfg               *config.Config
-	DB                *gorm.DB
-	Mgr               *InstanceManager
-	Mon               *GPUMonitor
-	Tasks             *TaskService
-	Hub               *Hub
-	Upload            *UploadManager
-	Remote            *RemoteExec
-	Volc              *VolcClient
-	Projects          *ProjectService
-	Materials         *MaterialService
-	Novel             *NovelService            // 小说改编服务
-	NovelAnalysis     *NovelAnalysisService    // 小说分层分析服务
-	Adaptations       *AdaptationService       // 小说分集改编服务
-	TextProviderFact  *TextProviderFactory     // 文生文 provider 工厂（运行时按设置动态选择）
-	CharacterProfiles *CharacterProfileService // 角色档案服务
-	CharacterLooks    *CharacterLookService    // 角色造型服务
-	Skills            *SkillService            // 创作技能管理服务
-	Shots             *ShotService             // 镜头层服务
-	PromptWorkshop    *PromptWorkshopService   // 提示词工作台服务
-	StylePresets      *StylePresetService      // 风格预设服务
-	Continuity        *ContinuityService       // 视频分镜连续性服务
+	Cfg                   *config.Config
+	DB                    *gorm.DB
+	Mgr                   *InstanceManager
+	Mon                   *GPUMonitor
+	Tasks                 *TaskService
+	Hub                   *Hub
+	Upload                *UploadManager
+	Remote                *RemoteExec
+	Volc                  *VolcClient
+	Projects              *ProjectService
+	Materials             *MaterialService
+	Novel                 *NovelService                // 小说改编服务
+	NovelAnalysis         *NovelAnalysisService        // 小说分层分析服务
+	Adaptations           *AdaptationService           // 小说分集改编服务
+	TextProviderFact      *TextProviderFactory         // 文生文 provider 工厂（运行时按设置动态选择）
+	CharacterProfiles     *CharacterProfileService     // 角色档案服务
+	CharacterLooks        *CharacterLookService        // 角色造型服务
+	Skills                *SkillService                // 创作技能管理服务
+	Shots                 *ShotService                 // 镜头层服务
+	PromptWorkshop        *PromptWorkshopService       // 提示词工作台服务
+	StylePresets          *StylePresetService          // 风格预设服务
+	Continuity            *ContinuityService           // 视频分镜连续性服务
+	AudioLayers           *AudioLayerService           // 声景、音效与背景音乐层
+	SharedAssetReferences *SharedAssetReferenceService // 显式共享素材引用
 }
 
 func New(cfg *config.Config, db *gorm.DB) *Service {
@@ -76,6 +79,8 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	projects.characterLooks = charLooks
 	continuity := NewContinuityService(cfg, db, remote, upload)
 	projects.continuity = continuity
+	audioLayers := NewAudioLayerService(db)
+	sharedAssetReferences := NewSharedAssetReferenceService(db)
 
 	// 初始化系统预设
 	if err := skills.InitSystemSkills(); err != nil {
@@ -94,7 +99,7 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 		Novel: novel, NovelAnalysis: novelAnalysis, Adaptations: adaptations,
 		TextProviderFact: textProviderFact, CharacterProfiles: charProfiles, CharacterLooks: charLooks,
 		Skills: skills, Shots: shots, PromptWorkshop: promptWorkshop, StylePresets: stylePresets,
-		Continuity: continuity,
+		Continuity: continuity, AudioLayers: audioLayers, SharedAssetReferences: sharedAssetReferences,
 	}
 }
 
@@ -982,6 +987,65 @@ func (s *Service) HandleUpdateShot(c *gin.Context) {
 	c.JSON(200, updated)
 }
 
+func (s *Service) HandleExpandShotDirectorPrompt(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	shotID, err := strconv.ParseUint(c.Param("shid"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid shot id"})
+		return
+	}
+	var shot models.Shot
+	if err := s.DB.Joins("JOIN scenes ON scenes.id = shots.scene_id").
+		Where("shots.id = ? AND scenes.project_id = ?", shotID, p.ID).First(&shot).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "shot not found"})
+		return
+	}
+	var req struct {
+		Description  string `json:"description"`
+		StartState   string `json:"start_state"`
+		EndState     string `json:"end_state"`
+		AssetContext string `json:"asset_context"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	description := strings.TrimSpace(req.Description)
+	if description == "" {
+		description = shot.Description
+	}
+	baseSystem := "只输出合法JSON对象，不要Markdown或解释。字段必须且只能包含subject、action、camera、lighting、style，所有值均为字符串。"
+	baseUser := "请将当前单镜整理为五段导演提示词草稿，供用户审核后保存。"
+	output, err := s.Skills.ChatWithConfiguredOrFallbackSkill(p.ID, models.SkillStageVideoPrompt, "director-shot-packet", s.TextProviderFact, baseSystem, baseUser, map[string]string{
+		"scene_content": description, "asset_context": req.AssetContext,
+		"start_state": req.StartState, "end_state": req.EndState,
+		"duration": fmt.Sprintf("%.1f", shot.Duration),
+	})
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	clean := strings.TrimSpace(output)
+	clean = strings.TrimPrefix(clean, "```json")
+	clean = strings.TrimPrefix(clean, "```")
+	clean = strings.TrimSuffix(clean, "```")
+	var result struct {
+		Subject  string `json:"subject"`
+		Action   string `json:"action"`
+		Camera   string `json:"camera"`
+		Lighting string `json:"lighting"`
+		Style    string `json:"style"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(clean)), &result); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "导演Skill返回的五段JSON无效: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
 func (s *Service) HandleDeleteShot(c *gin.Context) {
 	p, ok := s.loadProject(c)
 	if !ok {
@@ -1017,6 +1081,7 @@ func (s *Service) HandleDeleteShot(c *gin.Context) {
 // ---------- Prompt Workshop 提示词工作台 ----------
 func (s *Service) HandleBuildPrompt(c *gin.Context) {
 	var req struct {
+		ProjectID  uint              `json:"project_id"`
 		EntityType string            `json:"entity_type"`
 		EntityID   uint              `json:"entity_id"`
 		Template   string            `json:"template"`
@@ -1027,7 +1092,7 @@ func (s *Service) HandleBuildPrompt(c *gin.Context) {
 		return
 	}
 
-	result, err := s.PromptWorkshop.BuildPrompt(req.EntityType, req.EntityID, req.Template, req.Params)
+	result, err := s.PromptWorkshop.BuildPromptForProject(req.ProjectID, req.EntityType, req.EntityID, req.Template, req.Params)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -1037,6 +1102,7 @@ func (s *Service) HandleBuildPrompt(c *gin.Context) {
 
 func (s *Service) HandleOptimizePrompt(c *gin.Context) {
 	var req struct {
+		ProjectID  uint   `json:"project_id"`
 		EntityType string `json:"entity_type"`
 		EntityID   uint   `json:"entity_id"`
 		Prompt     string `json:"prompt"`
@@ -1047,7 +1113,7 @@ func (s *Service) HandleOptimizePrompt(c *gin.Context) {
 		return
 	}
 
-	result, err := s.PromptWorkshop.OptimizePrompt(req.EntityType, req.EntityID, req.Prompt, req.Context)
+	result, err := s.PromptWorkshop.OptimizePromptForProject(req.ProjectID, req.EntityType, req.EntityID, req.Prompt, req.Context)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -1057,6 +1123,7 @@ func (s *Service) HandleOptimizePrompt(c *gin.Context) {
 
 func (s *Service) HandleTranslatePrompt(c *gin.Context) {
 	var req struct {
+		ProjectID  uint   `json:"project_id"`
 		EntityType string `json:"entity_type"`
 		EntityID   uint   `json:"entity_id"`
 		Prompt     string `json:"prompt"`
@@ -1067,7 +1134,7 @@ func (s *Service) HandleTranslatePrompt(c *gin.Context) {
 		return
 	}
 
-	result, err := s.PromptWorkshop.TranslatePrompt(req.EntityType, req.EntityID, req.Prompt, req.TargetLang)
+	result, err := s.PromptWorkshop.TranslatePromptForProject(req.ProjectID, req.EntityType, req.EntityID, req.Prompt, req.TargetLang)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -1076,11 +1143,12 @@ func (s *Service) HandleTranslatePrompt(c *gin.Context) {
 }
 
 func (s *Service) HandleGetPromptHistory(c *gin.Context) {
+	projectID, _ := strconv.ParseUint(c.Query("project_id"), 10, 32)
 	entityType := c.Query("entity_type")
 	entityID, _ := strconv.ParseUint(c.Query("entity_id"), 10, 32)
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 
-	history, err := s.PromptWorkshop.GetHistory(entityType, uint(entityID), limit)
+	history, err := s.PromptWorkshop.GetHistoryForProject(uint(projectID), entityType, uint(entityID), limit)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -1090,6 +1158,7 @@ func (s *Service) HandleGetPromptHistory(c *gin.Context) {
 
 func (s *Service) HandleRollbackPrompt(c *gin.Context) {
 	var req struct {
+		ProjectID  uint   `json:"project_id"`
 		EntityType string `json:"entity_type"`
 		EntityID   uint   `json:"entity_id"`
 		VersionID  uint   `json:"version_id"`
@@ -1099,7 +1168,7 @@ func (s *Service) HandleRollbackPrompt(c *gin.Context) {
 		return
 	}
 
-	result, err := s.PromptWorkshop.Rollback(req.EntityType, req.EntityID, req.VersionID)
+	result, err := s.PromptWorkshop.RollbackForProject(req.ProjectID, req.EntityType, req.EntityID, req.VersionID)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -1170,8 +1239,8 @@ func (s *Service) HandleGetRecommendations(c *gin.Context) {
 	if raw := strings.TrimSpace(c.Query("tags")); raw != "" {
 		tags = strings.Split(raw, ",")
 	}
-	recommendations, err := s.StylePresets.GetRecommendations(
-		SceneContext{Genre: c.Query("genre"), Tone: c.Query("tone"), SceneType: c.Query("scene_type"), Tags: tags},
+	recommendations, err := s.StylePresets.GetRecommendationsWithReasons(
+		SceneContext{Genre: c.Query("genre"), Tone: c.Query("tone"), SceneType: c.Query("scene_type"), Tags: tags, Lighting: c.Query("lighting"), TimeOfDay: c.Query("time_of_day")},
 		limit,
 	)
 	if err != nil {

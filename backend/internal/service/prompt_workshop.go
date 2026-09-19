@@ -27,6 +27,50 @@ func NewPromptWorkshopService(db *gorm.DB, textProvider TextProvider) *PromptWor
 	}
 }
 
+func (s *PromptWorkshopService) validateEntityOwnership(projectID uint, entityType string, entityID uint) error {
+	if projectID == 0 {
+		return fmt.Errorf("project_id 不能为空")
+	}
+	if entityID == 0 {
+		return nil // 未保存草稿可处理，但不得写历史
+	}
+	switch entityType {
+	case "scene":
+		var count int64
+		if err := s.db.Model(&models.Scene{}).Where("id = ? AND project_id = ?", entityID, projectID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			return fmt.Errorf("场景不属于当前项目")
+		}
+	case "shot":
+		var count int64
+		if err := s.db.Model(&models.Shot{}).
+			Joins("JOIN scenes ON scenes.id = shots.scene_id").
+			Where("shots.id = ? AND scenes.project_id = ?", entityID, projectID).
+			Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			return fmt.Errorf("镜头不属于当前项目")
+		}
+	case "skill":
+		var projectCount, skillCount int64
+		if err := s.db.Model(&models.Project{}).Where("id = ?", projectID).Count(&projectCount).Error; err != nil {
+			return err
+		}
+		if err := s.db.Model(&models.Skill{}).Where("id = ?", entityID).Count(&skillCount).Error; err != nil {
+			return err
+		}
+		if projectCount == 0 || skillCount == 0 {
+			return fmt.Errorf("项目或技能不存在")
+		}
+	default:
+		return fmt.Errorf("不支持的 entity_type: %s", entityType)
+	}
+	return nil
+}
+
 // PromptAction 提示词操作类型
 type PromptAction string
 
@@ -39,6 +83,17 @@ const (
 
 // BuildPrompt 构建提示词（基于模板和参数）
 func (s *PromptWorkshopService) BuildPrompt(entityType string, entityID uint, template string, params map[string]string) (string, error) {
+	return s.buildPrompt(0, entityType, entityID, template, params)
+}
+
+func (s *PromptWorkshopService) BuildPromptForProject(projectID uint, entityType string, entityID uint, template string, params map[string]string) (string, error) {
+	if err := s.validateEntityOwnership(projectID, entityType, entityID); err != nil {
+		return "", err
+	}
+	return s.buildPrompt(projectID, entityType, entityID, template, params)
+}
+
+func (s *PromptWorkshopService) buildPrompt(projectID uint, entityType string, entityID uint, template string, params map[string]string) (string, error) {
 	result := template
 
 	// 替换占位符
@@ -48,7 +103,7 @@ func (s *PromptWorkshopService) BuildPrompt(entityType string, entityID uint, te
 	}
 
 	// 记录历史
-	if err := s.recordVersion(entityType, entityID, result, PromptActionBuild, map[string]any{
+	if err := s.recordVersion(projectID, entityType, entityID, result, PromptActionBuild, map[string]any{
 		"template": template,
 		"params":   params,
 	}); err != nil {
@@ -60,6 +115,17 @@ func (s *PromptWorkshopService) BuildPrompt(entityType string, entityID uint, te
 
 // OptimizePrompt 优化提示词（使用 AI 增强）
 func (s *PromptWorkshopService) OptimizePrompt(entityType string, entityID uint, prompt string, context string) (string, error) {
+	return s.optimizePrompt(0, entityType, entityID, prompt, context)
+}
+
+func (s *PromptWorkshopService) OptimizePromptForProject(projectID uint, entityType string, entityID uint, prompt string, context string) (string, error) {
+	if err := s.validateEntityOwnership(projectID, entityType, entityID); err != nil {
+		return prompt, err
+	}
+	return s.optimizePrompt(projectID, entityType, entityID, prompt, context)
+}
+
+func (s *PromptWorkshopService) optimizePrompt(projectID uint, entityType string, entityID uint, prompt string, context string) (string, error) {
 	if s.textProvider == nil {
 		return prompt, fmt.Errorf("文本生成服务未配置")
 	}
@@ -71,6 +137,9 @@ func (s *PromptWorkshopService) OptimizePrompt(entityType string, entityID uint,
 4. 添加风格一致性描述
 
 只输出优化后的提示词，不要其他解释。`
+	if entityType == "shot" {
+		systemPrompt = `优化单镜头的五段导演提示词。仅输出 JSON 对象，不要 Markdown 或解释。对象必须包含五个非空字符串字段：subject（主体与五官）、action（姿态与动作）、camera（摄影机与构图）、lighting（光线与氛围）、style（视觉风格与质感）。不得合并或遗漏字段。`
+	}
 
 	userPrompt := fmt.Sprintf("原始提示词：\n%s\n\n上下文信息：\n%s", prompt, context)
 
@@ -79,11 +148,17 @@ func (s *PromptWorkshopService) OptimizePrompt(entityType string, entityID uint,
 		return prompt, fmt.Errorf("优化失败: %w", err)
 	}
 
-	// 清理输出
+	// 清理并验证输出。镜头工作台只接受可无歧义还原到五个字段的结果。
 	output = strings.TrimSpace(output)
+	if entityType == "shot" {
+		output, err = normalizeShotPromptOutput(output)
+		if err != nil {
+			return prompt, fmt.Errorf("优化失败: %w", err)
+		}
+	}
 
 	// 记录历史
-	if err := s.recordVersion(entityType, entityID, output, PromptActionOptimize, map[string]any{
+	if err := s.recordVersion(projectID, entityType, entityID, output, PromptActionOptimize, map[string]any{
 		"original": prompt,
 		"context":  context,
 	}); err != nil {
@@ -95,6 +170,17 @@ func (s *PromptWorkshopService) OptimizePrompt(entityType string, entityID uint,
 
 // TranslatePrompt 翻译提示词（支持中↔英）
 func (s *PromptWorkshopService) TranslatePrompt(entityType string, entityID uint, prompt string, targetLang string) (string, error) {
+	return s.translatePrompt(0, entityType, entityID, prompt, targetLang)
+}
+
+func (s *PromptWorkshopService) TranslatePromptForProject(projectID uint, entityType string, entityID uint, prompt string, targetLang string) (string, error) {
+	if err := s.validateEntityOwnership(projectID, entityType, entityID); err != nil {
+		return prompt, err
+	}
+	return s.translatePrompt(projectID, entityType, entityID, prompt, targetLang)
+}
+
+func (s *PromptWorkshopService) translatePrompt(projectID uint, entityType string, entityID uint, prompt string, targetLang string) (string, error) {
 	if s.textProvider == nil {
 		return prompt, fmt.Errorf("文本生成服务未配置")
 	}
@@ -111,17 +197,26 @@ func (s *PromptWorkshopService) TranslatePrompt(entityType string, entityID uint
 	default:
 		return prompt, fmt.Errorf("不支持的目标语言: %s", targetLang)
 	}
+	if entityType == "shot" {
+		systemPrompt += " Return only a JSON object with exactly five non-empty string fields: subject, action, camera, lighting, style. Do not use Markdown or add explanations."
+	}
 
 	output, err := s.textProvider.Chat(systemPrompt, userPrompt)
 	if err != nil {
 		return prompt, fmt.Errorf("翻译失败: %w", err)
 	}
 
-	// 清理输出
+	// 清理并验证输出。镜头工作台只接受可无歧义还原到五个字段的结果。
 	output = strings.TrimSpace(output)
+	if entityType == "shot" {
+		output, err = normalizeShotPromptOutput(output)
+		if err != nil {
+			return prompt, fmt.Errorf("翻译失败: %w", err)
+		}
+	}
 
 	// 记录历史
-	if err := s.recordVersion(entityType, entityID, output, PromptActionTranslate, map[string]any{
+	if err := s.recordVersion(projectID, entityType, entityID, output, PromptActionTranslate, map[string]any{
 		"original":    prompt,
 		"target_lang": targetLang,
 	}); err != nil {
@@ -131,16 +226,62 @@ func (s *PromptWorkshopService) TranslatePrompt(entityType string, entityID uint
 	return output, nil
 }
 
+func normalizeShotPromptOutput(output string) (string, error) {
+	cleaned := strings.TrimSpace(output)
+	if strings.HasPrefix(cleaned, "```") {
+		lines := strings.Split(cleaned, "\n")
+		if len(lines) >= 3 && strings.HasPrefix(strings.TrimSpace(lines[0]), "```") && strings.TrimSpace(lines[len(lines)-1]) == "```" {
+			cleaned = strings.TrimSpace(strings.Join(lines[1:len(lines)-1], "\n"))
+		}
+	}
+
+	parts := make([]string, 0, 5)
+	if strings.HasPrefix(cleaned, "{") {
+		var value map[string]any
+		if err := json.Unmarshal([]byte(cleaned), &value); err != nil {
+			return "", fmt.Errorf("镜头提示词 JSON 无效: %w", err)
+		}
+		for _, keys := range [][]string{{"subject", "prompt_subject"}, {"action", "prompt_action"}, {"camera", "prompt_camera"}, {"lighting", "prompt_lighting"}, {"style", "prompt_style"}} {
+			part := ""
+			for _, key := range keys {
+				if text, ok := value[key].(string); ok {
+					part = text
+					break
+				}
+			}
+			parts = append(parts, part)
+		}
+	} else {
+		lines := strings.Split(strings.ReplaceAll(cleaned, "\r\n", "\n"), "\n")
+		if len(lines) != 5 {
+			return "", fmt.Errorf("镜头提示词必须是五行或包含五段字段的 JSON")
+		}
+		parts = append(parts, lines...)
+	}
+
+	for i := range parts {
+		parts[i] = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(parts[i], "\r\n", " "), "\n", " "))
+		if parts[i] == "" {
+			return "", fmt.Errorf("镜头提示词第 %d 段不能为空", i+1)
+		}
+	}
+	return strings.Join(parts, "\n"), nil
+}
+
 // recordVersion 记录提示词版本历史
-func (s *PromptWorkshopService) recordVersion(entityType string, entityID uint, content string, action PromptAction, metadata map[string]any) error {
+func (s *PromptWorkshopService) recordVersion(projectID uint, entityType string, entityID uint, content string, action PromptAction, metadata map[string]any) error {
+	if entityID == 0 {
+		return nil
+	}
 	metadataJSON, _ := json.Marshal(metadata)
 
 	createdAt := time.Now()
 	var latest models.PromptVersion
-	if s.db.Where("entity_type = ? AND entity_id = ?", entityType, entityID).Order("created_at DESC, id DESC").First(&latest).Error == nil && !createdAt.After(latest.CreatedAt) {
+	if s.db.Where("project_id = ? AND entity_type = ? AND entity_id = ?", projectID, entityType, entityID).Order("created_at DESC, id DESC").First(&latest).Error == nil && !createdAt.After(latest.CreatedAt) {
 		createdAt = latest.CreatedAt.Add(time.Nanosecond)
 	}
 	version := models.PromptVersion{
+		ProjectID:  projectID,
 		EntityType: entityType,
 		EntityID:   entityID,
 		Content:    content,
@@ -154,12 +295,23 @@ func (s *PromptWorkshopService) recordVersion(entityType string, entityID uint, 
 
 // GetHistory 获取提示词版本历史
 func (s *PromptWorkshopService) GetHistory(entityType string, entityID uint, limit int) ([]models.PromptVersion, error) {
+	return s.getHistory(0, entityType, entityID, limit)
+}
+
+func (s *PromptWorkshopService) GetHistoryForProject(projectID uint, entityType string, entityID uint, limit int) ([]models.PromptVersion, error) {
+	if err := s.validateEntityOwnership(projectID, entityType, entityID); err != nil {
+		return nil, err
+	}
+	return s.getHistory(projectID, entityType, entityID, limit)
+}
+
+func (s *PromptWorkshopService) getHistory(projectID uint, entityType string, entityID uint, limit int) ([]models.PromptVersion, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 
 	var versions []models.PromptVersion
-	if err := s.db.Where("entity_type = ? AND entity_id = ?", entityType, entityID).
+	if err := s.db.Where("project_id = ? AND entity_type = ? AND entity_id = ?", projectID, entityType, entityID).
 		Order("created_at DESC, id DESC").
 		Limit(limit).
 		Find(&versions).Error; err != nil {
@@ -180,23 +332,30 @@ func (s *PromptWorkshopService) GetVersion(versionID uint) (*models.PromptVersio
 
 // Rollback 回滚到指定版本
 func (s *PromptWorkshopService) Rollback(entityType string, entityID uint, versionID uint) (string, error) {
-	version, err := s.GetVersion(versionID)
-	if err != nil {
+	return s.rollback(0, entityType, entityID, versionID)
+}
+
+func (s *PromptWorkshopService) RollbackForProject(projectID uint, entityType string, entityID uint, versionID uint) (string, error) {
+	if err := s.validateEntityOwnership(projectID, entityType, entityID); err != nil {
+		return "", err
+	}
+	return s.rollback(projectID, entityType, entityID, versionID)
+}
+
+func (s *PromptWorkshopService) rollback(projectID uint, entityType string, entityID uint, versionID uint) (string, error) {
+	var version models.PromptVersion
+	if err := s.db.Where("id = ? AND project_id = ?", versionID, projectID).First(&version).Error; err != nil {
 		return "", fmt.Errorf("获取版本失败: %w", err)
 	}
-
 	if version.EntityType != entityType || version.EntityID != entityID {
 		return "", fmt.Errorf("版本不匹配")
 	}
-
-	// 记录回滚操作到历史
-	if err := s.recordVersion(entityType, entityID, version.Content, PromptActionManual, map[string]any{
+	if err := s.recordVersion(projectID, entityType, entityID, version.Content, PromptActionManual, map[string]any{
 		"rollback_from_version": versionID,
 		"action":                "rollback",
 	}); err != nil {
 		// 历史记录失败不阻塞主流程
 	}
-
 	return version.Content, nil
 }
 

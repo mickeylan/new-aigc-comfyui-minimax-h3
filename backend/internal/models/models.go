@@ -142,6 +142,20 @@ type Project struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// Episode 是项目内可持久化的集级聚合。Scene.EpisodeN 在兼容期继续保留。
+type Episode struct {
+	ID             uint      `gorm:"primaryKey" json:"id"`
+	ProjectID      uint      `gorm:"column:project_id;uniqueIndex:idx_episode_project_number" json:"project_id"`
+	Number         int       `gorm:"column:episode_number;uniqueIndex:idx_episode_project_number" json:"number"`
+	Title          string    `json:"title"`
+	TargetDuration float64   `gorm:"column:target_duration;default:180" json:"target_duration"`
+	TargetScenes   int       `gorm:"column:target_scenes;default:25" json:"target_scenes"`
+	Status         string    `gorm:"default:draft;index" json:"status"`
+	Version        int       `gorm:"default:1" json:"version"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
 // Scene 分镜场景（项目内顺序片段）
 type Scene struct {
 	ID                  uint      `gorm:"primaryKey" json:"id"`
@@ -318,8 +332,12 @@ type MergeTask struct {
 	Generation uint      `gorm:"index" json:"generation"`
 	Status     string    `json:"status"`                        // pending/running/success/failed
 	OutputFile string    `json:"output_file"`                   // 合并输出文件（相对 output_workers/gpu0/ 路径）
-	Subtitle   bool      `gorm:"default:false" json:"subtitle"` // 是否生成了配音字幕（SRT 与成片同名）
-	Error      string    `json:"error"`
+	Subtitle       bool      `gorm:"default:false" json:"subtitle"` // 是否生成了配音字幕（SRT 与成片同名）
+	NativeVolume  float64   `gorm:"column:native_volume;default:1" json:"native_volume"`
+	DialogueVolume float64  `gorm:"column:dialogue_volume;default:1" json:"dialogue_volume"`
+	BGMVolume     float64   `gorm:"column:bgm_volume;default:1" json:"bgm_volume"`
+	DialogueMix   bool      `gorm:"column:dialogue_mix;default:false" json:"dialogue_mix"`
+	Error          string    `json:"error"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }
@@ -346,11 +364,14 @@ type Dialogue struct {
 	Order              int       `json:"order"`                                                  // 场景内句序（从 1 开始）
 	Character          string    `json:"character"`                                              // 对白/内心独白为角色名；旁白可为“旁白”
 	SpeechType         string    `gorm:"column:speech_type;default:dialogue" json:"speech_type"` // dialogue/narration/monologue
-	H3VoiceDescription string    `gorm:"-" json:"-"`                                             // H3临时说话者声音身份，不持久化
+	H3VoiceDescription string    `gorm:"column:h3_voice_description;type:text" json:"h3_voice_description"` // H3 说话者声音身份
 	Text               string    `gorm:"type:text" json:"text"`                                  // 仅可发声原文；空说话人且无明确类型时不发声
-	Voice              string    `json:"voice"`                                                  // TTS 音色（voice_type）
-	AudioFile          string    `json:"audio_file"`                                             // 合成音频文件名（input/<pid>/dub/ 下）
-	Status             string    `json:"status"`                                                 // pending/synthesizing/ready/failed
+	Voice              string    `json:"voice"`                                                   // TTS 音色（voice_type）
+	Position           float64   `gorm:"default:0" json:"position"`                              // 场景内起始位置（秒；0 表示自动顺排）
+	AudioFile          string    `json:"audio_file"`                                              // 合成音频文件名（input/<pid>/dub/ 下）
+	AudioStale         bool      `gorm:"column:audio_stale;default:false" json:"audio_stale"`
+	AudioStaleReason   string    `gorm:"column:audio_stale_reason" json:"audio_stale_reason"`
+	Status             string    `json:"status"` // pending/synthesizing/ready/failed
 	Error              string    `json:"error"`
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
@@ -723,6 +744,66 @@ type FrameCandidate struct {
 }
 
 // SceneContinuity 是当前 Scene 对上一 Scene 的显式依赖。
+// GenerationCandidate preserves immutable Scene image/video takes and their reproducible inputs.
+type GenerationCandidate struct {
+	ID                uint       `gorm:"primaryKey" json:"id"`
+	ProjectID         uint       `gorm:"index;uniqueIndex:idx_candidate_task_media" json:"project_id"`
+	EntityType        string     `gorm:"index" json:"entity_type"`
+	EntityID          uint       `gorm:"index" json:"entity_id"`
+	MediaType         string     `gorm:"index;uniqueIndex:idx_candidate_task_media" json:"media_type"`
+	TaskID            string     `gorm:"index;uniqueIndex:idx_candidate_task_media" json:"task_id"`
+	File              string     `json:"file"`
+	PromptSnapshot    string     `gorm:"type:text" json:"prompt_snapshot"`
+	ReferencesJSON    string     `gorm:"type:text" json:"references_json"`
+	ParamsJSON        string     `gorm:"type:text" json:"params_json"`
+	ProvenanceJSON    string     `gorm:"type:text" json:"provenance_json"`
+	ReviewStatus      string     `gorm:"default:pending;index" json:"review_status"`
+	ReviewReason      string     `gorm:"type:text" json:"review_reason"`
+	ParentCandidateID *uint      `gorm:"index" json:"parent_candidate_id,omitempty"`
+	IsCurrent         bool       `gorm:"default:false;index" json:"is_current"`
+	Stale             bool       `gorm:"default:false;index" json:"stale"`
+	StaleReason       string     `json:"stale_reason"`
+	ReviewedAt        *time.Time `json:"reviewed_at,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
+// AudioLayer stores non-dialogue soundscape/SFX/BGM independently from H3 native audio.
+type AudioLayer struct {
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	ProjectID   uint      `gorm:"index" json:"project_id"`
+	EpisodeN    int       `gorm:"index" json:"episode_n"`
+	SceneID     *uint     `gorm:"index" json:"scene_id,omitempty"`
+	Kind        string    `gorm:"index" json:"kind"`
+	Name        string    `json:"name"`
+	File        string    `json:"file"`
+	Description string    `gorm:"type:text" json:"description"`
+	StartTime   float64   `json:"start_time"`
+	EndTime     float64   `json:"end_time"`
+	Volume      float64   `gorm:"default:1" json:"volume"`
+	FadeIn      float64   `json:"fade_in"`
+	FadeOut     float64   `json:"fade_out"`
+	Loop        bool      `json:"loop"`
+	Muted       bool      `json:"muted"`
+	Status      string    `gorm:"default:draft;index" json:"status"`
+	Stale       bool      `gorm:"default:false" json:"stale"`
+	StaleReason string    `json:"stale_reason"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// SharedAssetReference makes global/project assets explicit and prevents deletion while referenced.
+type SharedAssetReference struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	MaterialID uint      `gorm:"index;uniqueIndex:idx_shared_asset_ref" json:"material_id"`
+	ProjectID  uint      `gorm:"index;uniqueIndex:idx_shared_asset_ref" json:"project_id"`
+	SceneID    *uint     `gorm:"index;uniqueIndex:idx_shared_asset_ref" json:"scene_id,omitempty"`
+	ShotID     *uint     `gorm:"index;uniqueIndex:idx_shared_asset_ref" json:"shot_id,omitempty"`
+	Mode       string    `gorm:"default:live" json:"mode"`
+	LocalFile  string    `json:"local_file,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 type SceneContinuity struct {
 	ID                uint            `gorm:"primaryKey" json:"id"`
 	SceneID           uint            `gorm:"uniqueIndex" json:"scene_id"`

@@ -53,7 +53,14 @@ func (s *ShotService) CreateShot(sceneID uint, shot models.Shot) (*models.Shot, 
 		return nil, err
 	}
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		projectID, err := projectIDForScene(tx, sceneID)
+		if err != nil {
+			return err
+		}
 		if err := tx.Create(&shot).Error; err != nil {
+			return err
+		}
+		if err := recordManualShotPrompt(tx, projectID, shot); err != nil {
 			return err
 		}
 		return updateSceneShotCount(tx, sceneID)
@@ -63,24 +70,83 @@ func (s *ShotService) CreateShot(sceneID uint, shot models.Shot) (*models.Shot, 
 	return &shot, nil
 }
 
-// ReplaceShots stores the five director stages supplied by the user as-is. It deliberately
-// does not split prose by character count, because that destroys action and dialogue semantics.
+// ReplaceShots stores the supplied director shots as-is while preserving IDs for existing
+// shots. Stable IDs keep prompt history and shot-level asset associations attached across saves.
 func (s *ShotService) ReplaceShots(sceneID uint, shots []models.Shot) ([]models.Shot, error) {
 	if len(shots) == 0 {
 		return nil, fmt.Errorf("至少需要一个镜头")
 	}
 	for i := range shots {
-		shots[i].ID, shots[i].SceneID, shots[i].Order = 0, sceneID, i+1
+		shots[i].SceneID, shots[i].Order = sceneID, i+1
 		if err := validateShot(&shots[i]); err != nil {
 			return nil, fmt.Errorf("镜头 %d: %w", i+1, err)
 		}
 	}
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("scene_id = ?", sceneID).Delete(&models.Shot{}).Error; err != nil {
+		projectID, err := projectIDForScene(tx, sceneID)
+		if err != nil {
 			return err
 		}
-		if err := tx.Create(&shots).Error; err != nil {
+		var existing []models.Shot
+		if err := tx.Where("scene_id = ?", sceneID).Order("order_num, id").Find(&existing).Error; err != nil {
 			return err
+		}
+		existingByID := make(map[uint]models.Shot, len(existing))
+		for _, shot := range existing {
+			existingByID[shot.ID] = shot
+		}
+		keep := make(map[uint]bool, len(shots))
+		// Move existing rows out of the positive order range first to avoid the unique
+		// (scene_id, order_num) constraint while the requested order is applied.
+		if len(existing) > 0 {
+			if err := tx.Model(&models.Shot{}).Where("scene_id = ?", sceneID).
+				Update("order_num", gorm.Expr("-id")).Error; err != nil {
+				return err
+			}
+		}
+		for i := range shots {
+			if shots[i].ID == 0 {
+				if err := tx.Create(&shots[i]).Error; err != nil {
+					return err
+				}
+				keep[shots[i].ID] = true
+				continue
+			}
+			if _, ok := existingByID[shots[i].ID]; !ok {
+				return fmt.Errorf("镜头 %d 不属于当前场景", shots[i].ID)
+			}
+			keep[shots[i].ID] = true
+			updates := map[string]any{
+				"order_num": shots[i].Order, "act_type": shots[i].ActType, "shot_type": shots[i].ShotType,
+				"camera_angle": shots[i].CameraAngle, "camera_movement": shots[i].CameraMovement,
+				"duration": shots[i].Duration, "description": shots[i].Description, "dialogue": shots[i].Dialogue,
+				"emotion": shots[i].Emotion, "prompt_subject": shots[i].PromptSubject,
+				"prompt_action": shots[i].PromptAction, "prompt_camera": shots[i].PromptCamera,
+				"prompt_lighting": shots[i].PromptLighting, "prompt_style": shots[i].PromptStyle,
+			}
+			if err := tx.Model(&models.Shot{}).Where("id = ? AND scene_id = ?", shots[i].ID, sceneID).Updates(updates).Error; err != nil {
+				return err
+			}
+		}
+		for _, shot := range existing {
+			if !keep[shot.ID] {
+				if err := deleteShotAssociations(tx, shot.ID); err != nil {
+					return err
+				}
+				if err := tx.Delete(&shot).Error; err != nil {
+					return err
+				}
+			}
+		}
+		var saved []models.Shot
+		if err := tx.Where("scene_id = ?", sceneID).Order("order_num, id").Find(&saved).Error; err != nil {
+			return err
+		}
+		shots = saved
+		for _, shot := range shots {
+			if err := recordManualShotPrompt(tx, projectID, shot); err != nil {
+				return err
+			}
 		}
 		return aggregateShotsIntoScene(tx, sceneID, shots)
 	})
@@ -130,6 +196,17 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 		if err := tx.Model(&shot).Updates(filtered).Error; err != nil {
 			return err
 		}
+		projectID, err := projectIDForScene(tx, shot.SceneID)
+		if err != nil {
+			return err
+		}
+		var saved models.Shot
+		if err := tx.First(&saved, shot.ID).Error; err != nil {
+			return err
+		}
+		if err := recordManualShotPrompt(tx, projectID, saved); err != nil {
+			return err
+		}
 		var shots []models.Shot
 		if err := tx.Where("scene_id = ?", shot.SceneID).Order("order_num, id").Find(&shots).Error; err != nil {
 			return err
@@ -150,6 +227,9 @@ func (s *ShotService) DeleteShot(shotID uint) error {
 		if err := tx.First(&shot, shotID).Error; err != nil {
 			return err
 		}
+		if err := deleteShotAssociations(tx, shot.ID); err != nil {
+			return err
+		}
 		if err := tx.Delete(&shot).Error; err != nil {
 			return err
 		}
@@ -162,6 +242,47 @@ func (s *ShotService) DeleteShot(shotID uint) error {
 		}
 		return aggregateShotsIntoScene(tx, shot.SceneID, shots)
 	})
+}
+
+func canonicalShotPrompt(shot models.Shot) string {
+	parts := []string{shot.PromptSubject, shot.PromptAction, shot.PromptCamera, shot.PromptLighting, shot.PromptStyle}
+	for i := range parts {
+		parts[i] = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(parts[i], "\r\n", " "), "\n", " "))
+	}
+	return strings.Join(parts, "\n")
+}
+
+func projectIDForScene(db *gorm.DB, sceneID uint) (uint, error) {
+	var scene models.Scene
+	if err := db.Select("project_id").First(&scene, sceneID).Error; err != nil {
+		return 0, err
+	}
+	return scene.ProjectID, nil
+}
+
+func recordManualShotPrompt(db *gorm.DB, projectID uint, shot models.Shot) error {
+	content := canonicalShotPrompt(shot)
+	var count int64
+	if err := db.Model(&models.PromptVersion{}).Where(
+		"project_id = ? AND entity_type = ? AND entity_id = ? AND content = ?",
+		projectID, "shot", shot.ID, content,
+	).Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	return db.Create(&models.PromptVersion{
+		ProjectID: projectID, EntityType: "shot", EntityID: shot.ID,
+		Content: content, Action: string(PromptActionManual), Metadata: "{}",
+	}).Error
+}
+
+func deleteShotAssociations(db *gorm.DB, shotID uint) error {
+	if err := db.Where("shot_id = ?", shotID).Delete(&models.ShotCharacterLook{}).Error; err != nil {
+		return err
+	}
+	return db.Where("shot_id = ?", shotID).Delete(&models.ShotCharacterOutfit{}).Error
 }
 
 func aggregateShotsIntoScene(db *gorm.DB, sceneID uint, shots []models.Shot) error {
