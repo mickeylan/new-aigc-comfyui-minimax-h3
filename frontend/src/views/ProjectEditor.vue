@@ -91,9 +91,6 @@
           </div>
           <div class="section-actions">
             <button class="btn btn-sm btn-ghost" @click="moveSceneEpisode">移动到其他集</button>
-            <button class="btn btn-sm btn-secondary" @click="runVisualBeats">视觉节拍拆镜</button>
-            <button class="btn btn-sm btn-secondary" @click="runAssetContinuityReview">资产连续性审查</button>
-            <button class="btn btn-sm btn-secondary" @click="runCoverageReview">镜头覆盖审查</button>
             <button class="btn btn-sm btn-secondary" @click="runFaithfulPolish">忠实润色</button>
             <button class="btn btn-sm" :disabled="busy" @click="generateSelectedImage">生成分镜图</button>
             <button class="btn btn-sm" :disabled="busy || !selected.image_file" @click="prepareVideoPrompt">准备并审核视频提示词</button>
@@ -108,8 +105,7 @@
             <span class="ph-icon">🎞️</span>
             <p>该场景尚未生成分镜图或视频</p>
           </div>
-          <div v-if="visualBeatDraft || polishDraft || assetReviewDraft || coverageReviewDraft" class="workbench scene-skill-draft">
-            <div v-if="visualBeatDraft"><strong>视觉节拍镜头草稿</strong><pre class="prompt-preview">{{ visualBeatDraft }}</pre><button class="btn btn-sm" @click="applyVisualBeats">导入为Shot草稿并保存</button></div>
+          <div v-if="polishDraft || assetReviewDraft || coverageReviewDraft" class="workbench scene-skill-draft">
             <div v-if="polishDraft"><strong>忠实润色草稿</strong><pre class="prompt-preview">{{ polishDraft }}</pre><button class="btn btn-sm" @click="applyPolishDraft">应用到Scene起始帧提示词</button></div>
             <div v-if="assetReviewDraft"><strong>资产连续性审查</strong><pre class="prompt-preview">{{ assetReviewDraft }}</pre></div>
             <div v-if="coverageReviewDraft"><strong>镜头覆盖审查</strong><pre class="prompt-preview">{{ coverageReviewDraft }}</pre></div>

@@ -2828,7 +2828,7 @@ func (s *ProjectService) sceneShotContext(sc *models.Scene) string {
 	lines := make([]string, 0, len(shots))
 	for _, shot := range shots {
 		parts := []string{fmt.Sprintf("镜头%d", shot.Order)}
-		for _, value := range []string{shot.Description, "景别：" + shot.ShotType, "机位：" + shot.CameraAngle, "运镜意图：" + shot.CameraMovement, "情绪：" + shot.Emotion, "主体：" + shot.PromptSubject, "动作：" + shot.PromptAction, "构图：" + shot.PromptCamera, "光线：" + shot.PromptLighting, "风格：" + shot.PromptStyle} {
+		for _, value := range []string{shot.Description, "景别：" + shot.ShotType, "机位：" + shot.CameraAngle, "运镜意图：" + shot.CameraMovement, "起始状态：" + shot.StartState, "结束状态：" + shot.EndState, "转场：" + string(shot.TransitionType) + " " + shot.TransitionNote, "情绪：" + shot.Emotion, "主体：" + shot.PromptSubject, "动作：" + shot.PromptAction, "构图：" + shot.PromptCamera, "光线：" + shot.PromptLighting, "风格：" + shot.PromptStyle} {
 			value = strings.TrimSpace(value)
 			if value != "" && !strings.HasSuffix(value, "：") {
 				parts = append(parts, value)

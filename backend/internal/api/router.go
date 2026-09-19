@@ -103,6 +103,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.PATCH("/api/projects/:id/scenes/:sid", svc.HandleUpdateScene)
 	r.POST("/api/projects/:id/scenes/:sid/reassign-episode", svc.HandleReassignSceneEpisode)
 	r.POST("/api/projects/:id/scenes/:sid/prompt/redesign", svc.HandleRedesignScenePrompt)
+	r.POST("/api/projects/:id/scenes/:sid/shots/director-draft", svc.HandleGenerateSceneDirectorDraft)
 	r.POST("/api/projects/:id/scenes/:sid/skills/visual-beats", svc.HandleVisualBeatDecomposition)
 	r.POST("/api/projects/:id/scenes/:sid/skills/faithful-polish", svc.HandleFaithfulPromptPolish)
 	r.POST("/api/projects/:id/scenes/:sid/skills/asset-continuity-review", svc.HandleAssetContinuityReviewDraft)

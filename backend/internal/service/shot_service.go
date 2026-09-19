@@ -16,7 +16,7 @@ func NewShotService(db *gorm.DB) *ShotService { return &ShotService{db: db} }
 
 var shotUpdateFields = map[string]bool{
 	"order": true, "act_type": true, "shot_type": true, "camera_angle": true, "camera_movement": true,
-	"transition_type": true, "transition_note": true,
+	"transition_type": true, "transition_note": true, "start_state": true, "end_state": true,
 	"duration": true, "description": true, "dialogue": true, "emotion": true,
 	"prompt_subject": true, "prompt_action": true, "prompt_camera": true,
 	"prompt_lighting": true, "prompt_style": true, "negative_prompt": true,
@@ -34,6 +34,8 @@ func validateShot(shot *models.Shot) error {
 	shot.Description = strings.TrimSpace(shot.Description)
 	shot.TransitionType = models.ShotTransitionType(strings.TrimSpace(string(shot.TransitionType)))
 	shot.TransitionNote = strings.TrimSpace(shot.TransitionNote)
+	shot.StartState = strings.TrimSpace(shot.StartState)
+	shot.EndState = strings.TrimSpace(shot.EndState)
 	validTransition := map[models.ShotTransitionType]bool{
 		"": true, models.ShotTransitionCut: true, models.ShotTransitionDissolve: true,
 		models.ShotTransitionFade: true, models.ShotTransitionWipe: true, models.ShotTransitionMatchCut: true,
@@ -129,7 +131,7 @@ func (s *ShotService) ReplaceShots(sceneID uint, shots []models.Shot) ([]models.
 			updates := map[string]any{
 				"order_num": shots[i].Order, "act_type": shots[i].ActType, "shot_type": shots[i].ShotType,
 				"camera_angle": shots[i].CameraAngle, "camera_movement": shots[i].CameraMovement,
-				"transition_type": shots[i].TransitionType, "transition_note": shots[i].TransitionNote,
+				"transition_type": shots[i].TransitionType, "transition_note": shots[i].TransitionNote, "start_state": shots[i].StartState, "end_state": shots[i].EndState,
 				"duration": shots[i].Duration, "description": shots[i].Description, "dialogue": shots[i].Dialogue,
 				"emotion": shots[i].Emotion, "prompt_subject": shots[i].PromptSubject,
 				"prompt_action": shots[i].PromptAction, "prompt_camera": shots[i].PromptCamera,
@@ -203,6 +205,12 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 	}
 	if v, ok := updates["transition_note"].(string); ok {
 		candidate.TransitionNote = v
+	}
+	if v, ok := updates["start_state"].(string); ok {
+		candidate.StartState = v
+	}
+	if v, ok := updates["end_state"].(string); ok {
+		candidate.EndState = v
 	}
 	if v, ok := updates["order"].(float64); ok && v < 1 {
 		return nil, fmt.Errorf("order 必须大于0")

@@ -40,6 +40,8 @@ type episodeEditorialShot struct {
 	CameraMovement string                    `json:"camera_movement"`
 	TransitionType models.ShotTransitionType `json:"transition_type"`
 	TransitionNote string                    `json:"transition_note"`
+	StartState     string                    `json:"start_state"`
+	EndState       string                    `json:"end_state"`
 	Duration       float64                   `json:"duration"`
 	Description    string                    `json:"description"`
 	Dialogue       string                    `json:"dialogue"`
@@ -92,7 +94,7 @@ func episodeEditorialSnapshot(db *gorm.DB, projectID uint, episodeN int) ([]byte
 		for _, shot := range shots {
 			item.Shots = append(item.Shots, episodeEditorialShot{
 				Order: shot.Order, ActType: shot.ActType, ShotType: strings.TrimSpace(shot.ShotType), CameraAngle: strings.TrimSpace(shot.CameraAngle),
-				CameraMovement: strings.TrimSpace(shot.CameraMovement), TransitionType: shot.TransitionType, TransitionNote: strings.TrimSpace(shot.TransitionNote),
+				CameraMovement: strings.TrimSpace(shot.CameraMovement), TransitionType: shot.TransitionType, TransitionNote: strings.TrimSpace(shot.TransitionNote), StartState: strings.TrimSpace(shot.StartState), EndState: strings.TrimSpace(shot.EndState),
 				Duration: shot.Duration, Description: strings.TrimSpace(shot.Description), Dialogue: strings.TrimSpace(shot.Dialogue), Emotion: strings.TrimSpace(shot.Emotion),
 				PromptSubject: strings.TrimSpace(shot.PromptSubject), PromptAction: strings.TrimSpace(shot.PromptAction), PromptCamera: strings.TrimSpace(shot.PromptCamera),
 				PromptLighting: strings.TrimSpace(shot.PromptLighting), PromptStyle: strings.TrimSpace(shot.PromptStyle), NegativePrompt: strings.TrimSpace(shot.NegativePrompt),

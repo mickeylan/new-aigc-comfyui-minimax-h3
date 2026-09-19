@@ -672,6 +672,8 @@ type Shot struct {
 	CameraMovement string             `gorm:"column:camera_movement" json:"camera_movement"`
 	TransitionType ShotTransitionType `gorm:"column:transition_type;index" json:"transition_type"`
 	TransitionNote string             `gorm:"column:transition_note;type:text" json:"transition_note"`
+	StartState     string             `gorm:"column:start_state;type:text" json:"start_state"`
+	EndState       string             `gorm:"column:end_state;type:text" json:"end_state"`
 	Duration       float64            `gorm:"default:1.5" json:"duration"`
 	Description    string             `gorm:"type:text" json:"description"`
 	Dialogue       string             `gorm:"type:text" json:"dialogue"`
