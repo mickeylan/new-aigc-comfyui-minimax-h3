@@ -537,6 +537,15 @@ func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imageProm
 	if err := s.db.Model(sc).Updates(updates).Error; err != nil {
 		return err
 	}
+	if imageChanged {
+		if err := MarkSceneCandidatesStale(s.db, sc.ProjectID, sc.ID, "", "场景画面来源或提示词已修改"); err != nil {
+			return err
+		}
+	} else if (content != "" && sc.Content != content) || durationChanged {
+		if err := MarkSceneCandidatesStale(s.db, sc.ProjectID, sc.ID, "video", "场景正文或时长已修改"); err != nil {
+			return err
+		}
+	}
 	if (imageChanged || (content != "" && sc.Content != content) || durationChanged) && sc.VideoTaskID != "" && s.tasks != nil {
 		if err := s.tasks.CancelTask(sc.VideoTaskID); err != nil && !strings.Contains(err.Error(), "已结束") {
 			log.Printf("[scene %d] cancel stale video task %s failed: %v", sc.ID, sc.VideoTaskID, err)
@@ -3788,10 +3797,19 @@ func (s *ProjectService) syncSceneImages() {
 				s.failSceneImage(sc, sc.ImageToken, "保存 Krea2 分镜图片失败: "+err.Error())
 				continue
 			}
-			res := s.db.Model(&models.Scene{}).Where("id = ? AND image_token = ? AND image_task_id = ?", sc.ID, sc.ImageToken, task.TaskID).Updates(map[string]any{
-				"image_file": filepath.Base(path), "image_token": "", "image_task_id": "", "status": "image_ready", "error": "",
+			candidate, captureErr := NewGenerationCandidateService(s.db).CaptureSceneSuccess(SceneCandidateCapture{
+				ProjectID: sc.ProjectID, SceneID: sc.ID, MediaType: "image", TaskID: task.TaskID,
+				File: filepath.Base(path), Prompt: task.Prompt, References: sc.ReferenceImagesJSON,
+				Params: task.ParamsJSON, Provenance: map[string]any{"template_id": task.TemplateID, "template_name": task.TemplateName, "port": task.Port, "gpu": task.GPUIndex, "result_files": task.ResultFiles},
+				ParentCandidateID: sc.ImageCandidateParentID, ExpectedTaskID: task.TaskID,
 			})
-			if res.RowsAffected > 0 {
+			if captureErr != nil {
+				if !strings.Contains(captureErr.Error(), "已过期") {
+					log.Printf("[candidate] capture image scene=%d task=%s failed: %v", sc.ID, task.TaskID, captureErr)
+				}
+				continue
+			}
+			if candidate != nil {
 				s.updateProjectStatus(sc.ProjectID)
 				s.pushProject(nil)
 			}
@@ -4024,9 +4042,19 @@ func (s *ProjectService) syncSceneVideos() {
 				changed = true
 				continue
 			}
-			s.db.Model(sc).Updates(map[string]any{
-				"status": "video_ready", "error": "", "video_file": file, "video_input_file": filepath.Base(localPath), "video_gpu": *gpu,
+			_, captureErr := NewGenerationCandidateService(s.db).CaptureSceneSuccess(SceneCandidateCapture{
+				ProjectID: sc.ProjectID, SceneID: sc.ID, MediaType: "video", TaskID: task.TaskID,
+				File: file, VideoInputFile: filepath.Base(localPath), VideoGPU: gpu, Prompt: task.Prompt,
+				References: sc.ReferenceImagesJSON, Params: task.ParamsJSON,
+				Provenance:        map[string]any{"template_id": task.TemplateID, "template_name": task.TemplateName, "port": task.Port, "gpu": task.GPUIndex, "result_files": task.ResultFiles},
+				ParentCandidateID: sc.VideoCandidateParentID, ExpectedTaskID: task.TaskID,
 			})
+			if captureErr != nil {
+				if !strings.Contains(captureErr.Error(), "已过期") {
+					log.Printf("[candidate] capture video scene=%d task=%s failed: %v", sc.ID, task.TaskID, captureErr)
+				}
+				continue
+			}
 			if s.continuity != nil {
 				ready := *sc
 				ready.Status, ready.VideoFile, ready.VideoInputFile, ready.VideoGPU = "video_ready", file, filepath.Base(localPath), gpu

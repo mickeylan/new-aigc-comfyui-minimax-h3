@@ -37,6 +37,13 @@ type EffectiveSharedAsset struct {
 	References []models.SharedAssetReference `json:"references"`
 }
 
+type ResolvedSharedAsset struct {
+	Material  models.Material              `json:"material"`
+	Reference *models.SharedAssetReference `json:"reference,omitempty"`
+	Mode      string                       `json:"mode"`
+	Path      string                       `json:"path"`
+}
+
 func normalizeSharedAssetReference(projectID uint, in SharedAssetReferenceInput) (models.SharedAssetReference, error) {
 	mode := strings.ToLower(strings.TrimSpace(in.Mode))
 	if mode == "" {
@@ -46,9 +53,6 @@ func normalizeSharedAssetReference(projectID uint, in SharedAssetReferenceInput)
 		return models.SharedAssetReference{}, fmt.Errorf("mode must be live or copy")
 	}
 	localFile := strings.TrimSpace(in.LocalFile)
-	if mode == "copy" && localFile == "" {
-		return models.SharedAssetReference{}, fmt.Errorf("local_file is required for copy mode")
-	}
 	if mode == "live" {
 		localFile = ""
 	}
@@ -135,12 +139,32 @@ func (s *SharedAssetReferenceService) duplicateExists(ref *models.SharedAssetRef
 	return count > 0, nil
 }
 
+func (s *SharedAssetReferenceService) resolveCopyPath(ref *models.SharedAssetReference) error {
+	if ref.Mode != "copy" || ref.LocalFile != "" {
+		return nil
+	}
+	var material models.Material
+	if err := s.db.First(&material, ref.MaterialID).Error; err != nil {
+		return err
+	}
+	if strings.TrimSpace(material.Path) == "" {
+		return fmt.Errorf("material has no file to copy")
+	}
+	// Material paths are immutable file locations. Copy mode snapshots that location,
+	// while live mode resolves Material.Path each time candidates are requested.
+	ref.LocalFile = material.Path
+	return nil
+}
+
 func (s *SharedAssetReferenceService) Create(projectID uint, in SharedAssetReferenceInput) (*models.SharedAssetReference, error) {
 	ref, err := normalizeSharedAssetReference(projectID, in)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.validateOwnership(&ref); err != nil {
+		return nil, err
+	}
+	if err := s.resolveCopyPath(&ref); err != nil {
 		return nil, err
 	}
 	duplicate, err := s.duplicateExists(&ref, 0)
@@ -151,6 +175,9 @@ func (s *SharedAssetReferenceService) Create(projectID uint, in SharedAssetRefer
 		return nil, fmt.Errorf("shared asset reference already exists")
 	}
 	if err := s.db.Create(&ref).Error; err != nil {
+		return nil, err
+	}
+	if err := s.invalidateDependents(ref, "共享素材引用已添加"); err != nil {
 		return nil, err
 	}
 	return &ref, nil
@@ -171,6 +198,9 @@ func (s *SharedAssetReferenceService) Update(projectID, id uint, in SharedAssetR
 	if err := s.validateOwnership(&ref); err != nil {
 		return nil, err
 	}
+	if err := s.resolveCopyPath(&ref); err != nil {
+		return nil, err
+	}
 	duplicate, err := s.duplicateExists(&ref, id)
 	if err != nil {
 		return nil, err
@@ -185,6 +215,12 @@ func (s *SharedAssetReferenceService) Update(projectID, id uint, in SharedAssetR
 	if err := s.db.Model(&existing).Updates(updates).Error; err != nil {
 		return nil, err
 	}
+	if err := s.invalidateDependents(existing, "共享素材引用已修改"); err != nil {
+		return nil, err
+	}
+	if err := s.invalidateDependents(ref, "共享素材引用已修改"); err != nil {
+		return nil, err
+	}
 	if err := s.db.First(&existing, id).Error; err != nil {
 		return nil, err
 	}
@@ -192,6 +228,13 @@ func (s *SharedAssetReferenceService) Update(projectID, id uint, in SharedAssetR
 }
 
 func (s *SharedAssetReferenceService) Delete(projectID, id uint) error {
+	var existing models.SharedAssetReference
+	if err := s.db.Where("id = ? AND project_id = ?", id, projectID).First(&existing).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrSharedAssetReferenceNotFound
+		}
+		return err
+	}
 	result := s.db.Where("id = ? AND project_id = ?", id, projectID).Delete(&models.SharedAssetReference{})
 	if result.Error != nil {
 		return result.Error
@@ -199,7 +242,7 @@ func (s *SharedAssetReferenceService) Delete(projectID, id uint) error {
 	if result.RowsAffected == 0 {
 		return ErrSharedAssetReferenceNotFound
 	}
-	return nil
+	return s.invalidateDependents(existing, "共享素材引用已移除")
 }
 
 // List returns only references explicitly created by a user for this project.
@@ -221,6 +264,76 @@ func (s *SharedAssetReferenceService) List(projectID uint) ([]SharedAssetReferen
 
 // ListEffective exposes global materials and project-owned materials that have an explicit
 // project reference. Generated/project materials are never enrolled automatically.
+func (s *SharedAssetReferenceService) invalidateDependents(ref models.SharedAssetReference, reason string) error {
+	query := s.db.Model(&models.Scene{}).Where("project_id = ?", ref.ProjectID)
+	if ref.SceneID != nil {
+		query = query.Where("id = ?", *ref.SceneID)
+	} else if ref.ShotID != nil {
+		query = query.Where("id = (SELECT scene_id FROM shots WHERE id = ?)", *ref.ShotID)
+	}
+	var sceneIDs []uint
+	if err := query.Pluck("id", &sceneIDs).Error; err != nil {
+		return err
+	}
+	for _, sceneID := range sceneIDs {
+		if err := s.db.Model(&models.Scene{}).Where("id = ?", sceneID).Update("prompt_stale", true).Error; err != nil {
+			return err
+		}
+		if s.db.Migrator().HasTable(&models.GenerationCandidate{}) {
+			if err := MarkSceneCandidatesStale(s.db, ref.ProjectID, sceneID, "", reason); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// ListResolvedForScene returns image assets applicable to a scene. Global assets are
+// available live by default; explicit project/scene/shot references add scoped live
+// or copy variants. Copy paths remain fixed when the source Material later changes.
+func (s *SharedAssetReferenceService) ListResolvedForScene(projectID, sceneID uint) ([]ResolvedSharedAsset, error) {
+	effective, err := s.ListEffective(projectID)
+	if err != nil {
+		return nil, err
+	}
+	var shotIDs []uint
+	if err := s.db.Model(&models.Shot{}).Where("scene_id = ?", sceneID).Pluck("id", &shotIDs).Error; err != nil {
+		return nil, err
+	}
+	shots := make(map[uint]bool, len(shotIDs))
+	for _, id := range shotIDs {
+		shots[id] = true
+	}
+	out := make([]ResolvedSharedAsset, 0)
+	for _, item := range effective {
+		if item.Material.Type != "image" || strings.TrimSpace(item.Material.Path) == "" {
+			continue
+		}
+		if item.Material.ProjectID == nil {
+			out = append(out, ResolvedSharedAsset{Material: item.Material, Mode: "live", Path: item.Material.Path})
+		}
+		for i := range item.References {
+			ref := item.References[i]
+			applicable := ref.SceneID == nil && ref.ShotID == nil
+			if ref.SceneID != nil && *ref.SceneID == sceneID {
+				applicable = ref.ShotID == nil || shots[*ref.ShotID]
+			} else if ref.SceneID == nil && ref.ShotID != nil {
+				applicable = shots[*ref.ShotID]
+			}
+			if !applicable {
+				continue
+			}
+			path := item.Material.Path
+			if ref.Mode == "copy" {
+				path = ref.LocalFile
+			}
+			copyRef := ref
+			out = append(out, ResolvedSharedAsset{Material: item.Material, Reference: &copyRef, Mode: ref.Mode, Path: path})
+		}
+	}
+	return out, nil
+}
+
 func (s *SharedAssetReferenceService) ListEffective(projectID uint) ([]EffectiveSharedAsset, error) {
 	var refs []models.SharedAssetReference
 	if err := s.db.Where("project_id = ?", projectID).Order("id").Find(&refs).Error; err != nil {

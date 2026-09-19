@@ -139,6 +139,11 @@ func UpdateProjectEpisode(db *gorm.DB, projectID uint, number int, updates map[s
 			return nil, fmt.Errorf("无效的Episode状态")
 		}
 	}
+	for _, field := range []string{"summary", "next_hook", "character_appearances"} {
+		if value, ok := updates[field].(string); ok {
+			allowed[field] = strings.TrimSpace(value)
+		}
+	}
 	allowed["version"] = gorm.Expr("version + 1")
 	if err := db.Model(&episode).Updates(allowed).Error; err != nil {
 		return nil, err

@@ -376,8 +376,8 @@ func TestSkillService_GetAvailableStages(t *testing.T) {
 	svc := NewSkillService(db)
 
 	stages := svc.GetAvailableStages()
-	if len(stages) != 13 {
-		t.Errorf("应该有 13 个阶段，实际 %d", len(stages))
+	if len(stages) != 14 {
+		t.Errorf("应该有 14 个阶段，实际 %d", len(stages))
 	}
 
 	stageSet := make(map[string]bool)
@@ -399,6 +399,7 @@ func TestSkillService_GetAvailableStages(t *testing.T) {
 		models.SkillStageEpisodeAdaptation,
 		models.SkillStageContinuityReview,
 		models.SkillStageMegastructure,
+		models.SkillStageCreativeIntent,
 	}
 
 	for _, expected := range expectedStages {

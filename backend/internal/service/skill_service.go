@@ -135,6 +135,7 @@ func (s *SkillService) InitSystemSkills() error {
 		{Name: "导演视觉节拍拆镜", Code: "director-visual-beat-decomposition", Version: 1, Description: "将剧情节拍拆成可拍摄单镜：一镜一个主要可见动作，明确可见角色、发声者和时长", Stage: models.SkillStageStoryboard, PromptTemplate: "剧情事实：{{story_content}}\n已确认角色：{{characters}}\n地点与道具：{{asset_context}}\n目标时长：{{target_duration}}秒", SystemPrompt: "你是导演分镜师。把输入拆成最少数量的可执行镜头：每镜只承载一个主要可见动作或反应；同一句中存在多个连续动作时按必要节拍拆分；对白原文不得改写；明确区分画面可见角色、只发声角色和仅被提及角色；不得把剧情说明、心理描写或动作描述改成旁白或独白。景别和机位使用受控常用词；时长必须足以完成动作。输出严格JSON，字段为shots数组，每项仅含description,shot_type,camera_angle,camera_movement,duration,visible_characters,voice_characters,dialogues。", IsSystem: true, Enabled: true, SortOrder: 30},
 		{Name: "导演单镜执行包", Code: "director-shot-packet", Version: 1, Description: "把单镜整理为五段导演提示词，并显式约束调度、连续性、声音和结束状态", Stage: models.SkillStageVideoPrompt, PromptTemplate: "镜头事实：{{scene_content}}\n角色与资产：{{asset_context}}\n起始状态：{{start_state}}\n结束状态：{{end_state}}\n时长：{{duration}}秒", SystemPrompt: "只输出当前单镜的五段JSON：subject,action,camera,lighting,style。保持人物身份、空间关系、道具和剧情事实；主体段说明画面位置和调度，动作段只写时长内可完成的主要动作与必要反应，摄影机段只使用一种主运镜，光线段保持时间和光源连续，风格段只描述媒介与质感。不得新增剧情、人物、对白、心理旁白或不在输入中的关键道具；结束状态必须可供下一镜连续使用。", IsSystem: true, Enabled: true, SortOrder: 30},
 		{Name: "忠实最小改动润色", Code: "director-faithful-prompt-polish", Version: 1, Description: "在不改变剧情事实和用户导演决策的前提下，只增强可见、可执行的画面表达", Stage: models.SkillStageImagePrompt, PromptTemplate: "用户原稿：{{original_prompt}}\n不可变事实：{{immutable_facts}}\n允许增强项：{{editable_presentation}}\n用户反馈：{{feedback}}", SystemPrompt: "把不可变事实与可增强表现严格分开。不可变事实包括角色、动作、对白原文、地点、道具、空间关系、镜头目标和用户明确指定的风格；只可增强构图清晰度、动作可见性、光线层次、材质和摄影表达。修订时只修改用户反馈涉及的部分，其他内容逐项保留。禁止新增剧情、情绪结论、人物关系、旁白、独白、对白或资产。只输出润色后的提示词，不输出解释。", IsSystem: true, Enabled: true, SortOrder: 30},
+		{Name: "创作意图澄清", Code: "creative-intent-elicitation", Version: 1, Description: "仅在用户显式触发时提出少量关键问题，或把用户回答整理成不自动执行的 Intent Brief", Stage: models.SkillStageCreativeIntent, PromptTemplate: "项目背景：{{project_context}}\n用户目标：{{user_goal}}\n当前操作：{{action}}\n用户回答：{{answers}}", SystemPrompt: "你是创作意图访谈助手。questions 操作只输出严格JSON对象，字段questions为3至5个简短且能改变创作决策的问题；brief 操作只输出严格JSON对象，字段为goal,audience,tone,non_negotiables,freedoms,open_questions。不得生成剧本、分镜或提示词，不得自动执行任何修改。", IsSystem: true, Enabled: true, SortOrder: 30},
 	}
 
 	for _, skill := range systemSkills {
@@ -386,6 +387,7 @@ func (s *SkillService) GetAvailableStages() []map[string]string {
 		{"value": models.SkillStageEpisodeAdaptation, "label": "小说单集改编"},
 		{"value": models.SkillStageContinuityReview, "label": "连续性复审"},
 		{"value": models.SkillStageMegastructure, "label": "巨构画面提示词"},
+		{"value": models.SkillStageCreativeIntent, "label": "创作意图澄清"},
 	}
 }
 
@@ -678,6 +680,7 @@ func isValidStage(stage string) bool {
 		models.SkillStageEpisodeAdaptation,
 		models.SkillStageContinuityReview,
 		models.SkillStageMegastructure,
+		models.SkillStageCreativeIntent,
 	}
 	for _, s := range stages {
 		if s == stage {

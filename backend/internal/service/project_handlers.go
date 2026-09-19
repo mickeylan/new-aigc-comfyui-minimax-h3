@@ -435,6 +435,12 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
 		return
 	}
+	if prompt != strings.TrimSpace(sc.VideoFullPrompt) || template != strings.TrimSpace(sc.VideoTemplate) {
+		if err := MarkSceneCandidatesStale(s.DB, sc.ProjectID, sc.ID, "video", "视频提示词或模板已修改"); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
 	var saved models.Scene
 	if err := s.DB.Select("video_full_prompt", "video_template", "video_first_frame_img", "video_last_frame_img").First(&saved, sc.ID).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

@@ -12,13 +12,23 @@
       <div class="head-actions">
         <button class="btn btn-ghost btn-sm" :disabled="epIndex <= 0" @click="switchEp(-1)">← 上一集</button>
         <button class="btn btn-ghost btn-sm" :disabled="epIndex >= epCount - 1" @click="switchEp(1)">下一集 →</button>
+        <button class="btn btn-ghost btn-sm" @click="createEpisode">新建集</button>
+        <button class="btn btn-ghost btn-sm" @click="deleteEpisode">删除空集</button>
         <label class="merge-opt"><input type="checkbox" v-model="mergeSub" />烧录字幕</label>
         <label class="merge-opt"><input type="checkbox" v-model="mergeDub" />保留原声</label>
+        <label class="merge-opt">原声 <input class="sub-t" type="number" min="0" max="4" step="0.1" v-model.number="nativeVolume" /></label>
+        <label class="merge-opt">对白 <input class="sub-t" type="number" min="0" max="4" step="0.1" v-model.number="dialogueVolume" /></label>
+        <label class="merge-opt">BGM <input class="sub-t" type="number" min="0" max="4" step="0.1" v-model.number="bgmVolume" /></label>
         <button class="btn btn-lg" :disabled="busy || curMerging || readyVideoCount < 2" @click="mergeEpisode">
           {{ curMerging ? '合并中…' : '⚡ 合并第' + activeEpN + '集成片' }}
         </button>
       </div>
     </div>
+
+    <section class="section">
+      <div class="section-head"><div><span class="overline">CONTINUITY</span><h2>跨集连续性</h2><p class="sub">上一集摘要、末帧、角色出场与下一集钩子。</p></div><div class="section-actions"><button class="btn btn-sm btn-ghost" @click="loadEpisodeContinuity">刷新</button><button class="btn btn-sm btn-secondary" @click="regenerateContinuity">AI重生成</button><button class="btn btn-sm btn-secondary" @click="runCreativeIntent">创作意图澄清</button></div></div>
+      <div class="card" v-if="continuity"><p><strong>上一集摘要：</strong>{{ continuity.previous_summary || '暂无' }}</p><p><strong>结尾钩子：</strong>{{ continuity.previous_hook || '暂无' }}</p><p><strong>本集角色：</strong>{{ (continuity.character_appearances || []).map(v => v.name).join('、') || '暂无' }}</p><div class="merge-links" v-if="continuity.last_scene_images?.length"><span v-for="f in continuity.last_scene_images" :key="f">{{ f }}</span></div><pre v-if="intentDraft" class="prompt-preview">{{ intentDraft }}</pre></div>
+    </section>
 
     <!-- 时间轴 -->
     <section class="section">
@@ -70,6 +80,9 @@
             <p class="sub">{{ selected.content }}</p>
           </div>
           <div class="section-actions">
+            <button class="btn btn-sm btn-ghost" @click="moveSceneEpisode">移动到其他集</button>
+            <button class="btn btn-sm btn-secondary" @click="runVisualBeats">视觉节拍拆镜</button>
+            <button class="btn btn-sm btn-secondary" @click="runFaithfulPolish">忠实润色</button>
             <a v-if="selected.video_url" class="btn btn-sm btn-ghost" :href="selected.video_url + '?download=1'">下载视频</a>
             <button class="btn btn-sm btn-secondary" @click="showFrameSelector = true">连续性设置</button>
           </div>
@@ -166,13 +179,28 @@
 
     <ShotDirectorEditor v-if="selected" :project-id="id()" :scene-id="selected.id" :genre="project?.genre || ''" :tone="project?.tone || ''" :scene-title="selected.title || ''" :scene-content="selected.content || ''" />
 
+    <section class="section">
+      <div class="section-head"><div><span class="overline">SHARED ASSETS</span><h2>共享资产继承</h2><p class="sub">显式引用全局/项目素材，可限定当前场景；生成参考图候选会读取有效引用。</p></div><button class="btn btn-sm btn-secondary" @click="addSharedAsset">引用素材</button></div>
+      <div class="card" v-if="sharedAssets.length"><div v-for="asset in sharedAssets" :key="asset.material.id" class="merge-item"><strong>{{ asset.material.name }}</strong><span>{{ asset.material.type }} · {{ asset.references?.length || 0 }}个引用</span></div></div><div class="card empty" v-else>暂无有效共享资产。</div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><div><span class="overline">AUDIO LAYERS</span><h2>环境声 / 音效 / BGM</h2><p class="sub">填写项目 input 目录内的音频文件名，合并时按时间与音量混入。</p></div><button class="btn btn-sm btn-secondary" @click="addAudioLayer">新增音频层</button></div>
+      <div class="card" v-if="audioLayers.length"><div v-for="layer in audioLayers" :key="layer.id" class="merge-item"><div class="merge-info"><span class="badge badge-gray">{{ layer.kind }}</span><strong>{{ layer.name || layer.file }}</strong><span>{{ layer.start_time }}s → {{ layer.end_time }}s · 音量{{ layer.volume }}</span></div><button class="btn btn-sm btn-ghost" @click="removeAudioLayer(layer)">删除</button></div></div>
+      <div class="card empty" v-else>暂无音频层。</div>
+    </section>
+
     <section class="section" v-if="selected">
       <div class="section-head"><div><span class="overline">TAKES</span><h2>生成候选与审核</h2><p class="sub">保留场景图片和视频历史；设为当前不会删除其他候选。</p></div><button class="btn btn-sm btn-ghost" @click="loadCandidates">刷新</button></div>
       <div class="card" v-if="candidates.length">
         <div v-for="candidate in candidates" :key="candidate.id" class="merge-item">
+          <label><input type="checkbox" :value="candidate.id" v-model="compareCandidateIds" :disabled="!compareCandidateIds.includes(candidate.id) && compareCandidateIds.length >= 2" /> 比较</label>
+          <img v-if="candidate.media_type === 'image'" :src="candidateUrl(candidate)" class="tl-thumb" />
+          <video v-else :src="candidateUrl(candidate)" controls preload="metadata" class="merge-video"></video>
           <div class="merge-info"><span class="badge" :class="candidate.is_current ? 'badge-green' : candidate.review_status === 'rejected' ? 'badge-red' : 'badge-gray'">{{ candidate.media_type }} · {{ candidate.is_current ? '当前' : candidate.review_status }}</span><span>{{ candidate.file }}</span><span v-if="candidate.stale" class="fail-msg">已过期：{{ candidate.stale_reason }}</span></div>
-          <div class="merge-links"><button class="btn btn-sm btn-secondary" :disabled="candidate.is_current || candidate.stale" @click="selectCandidate(candidate)">设为当前</button><button class="btn btn-sm btn-ghost" :disabled="candidate.review_status === 'rejected'" @click="rejectCandidate(candidate)">拒绝</button></div>
+          <div class="merge-links"><button class="btn btn-sm btn-secondary" :disabled="candidate.is_current || candidate.stale" @click="selectCandidate(candidate)">设为当前</button><button class="btn btn-sm btn-secondary" @click="retryCandidate(candidate)">同参数重试</button><button class="btn btn-sm btn-ghost" :disabled="candidate.review_status === 'rejected'" @click="rejectCandidate(candidate)">拒绝</button></div>
         </div>
+        <div v-if="compareCandidates.length === 2" class="editor-split"><div v-for="c in compareCandidates" :key="c.id" class="preview-card"><img v-if="c.media_type === 'image'" :src="candidateUrl(c)" class="editor-image" /><video v-else :src="candidateUrl(c)" controls class="editor-video"></video><pre class="prompt-preview">{{ c.prompt_snapshot }}</pre></div></div>
       </div>
       <div class="card empty" v-else>当前还没有可审核候选；已有场景结果会在刷新时自动纳入。</div>
     </section>
@@ -237,12 +265,20 @@ const dialogues = ref([])
 const subtitles = ref([])
 const merges = ref([])
 const candidates = ref([])
+const compareCandidateIds = ref([])
+const audioLayers = ref([])
+const sharedAssets = ref([])
+const continuity = ref(null)
+const intentDraft = ref('')
 const selected = ref(null)
 const tab = ref('dub')
 const busy = ref(false)
 const curMerging = ref(false)
 const mergeSub = ref(true)
 const mergeDub = ref(true)
+const nativeVolume = ref(1)
+const dialogueVolume = ref(1)
+const bgmVolume = ref(1)
 const durationSaving = ref(false)
 const durationInput = ref(5)
 const dragFrom = ref(null)
@@ -252,6 +288,7 @@ const epCount = ref(1)
 const showFrameSelector = ref(false)
 
 // 目标时长与累计时长计算
+const compareCandidates = computed(() => candidates.value.filter(c => compareCandidateIds.value.includes(c.id)))
 const currentEpisode = computed(() => episodes.value.find(row => row.episode?.number === activeEpN.value)?.episode || null)
 const targetDuration = computed(() => currentEpisode.value?.target_duration || 180)
 const targetScenes = computed(() => currentEpisode.value?.target_scenes || 25)
@@ -313,7 +350,7 @@ async function load() {
     if (selected.value) { durationInput.value = selected.value.duration || 5; await loadCandidates() } else candidates.value = []
     const episodeNumbers = epNums()
     epIndex.value = Math.max(0, episodeNumbers.indexOf(activeEpN.value))
-    await loadMerges()
+    await Promise.all([loadMerges(), loadAudioLayers(), loadSharedAssets(), loadEpisodeContinuity()])
   } catch (e) {
     toast.error(e.response?.data?.error || '加载剪辑台失败')
   }
@@ -441,7 +478,7 @@ async function mergeEpisode() {
   }
   curMerging.value = true
   try {
-    await api.mergeScenes(id(), { scene_ids: ids, dub: mergeDub.value, subtitles: mergeSub.value })
+    await api.mergeAudioScenes(id(), { scene_ids: ids, dub: mergeDub.value, subtitles: mergeSub.value, native_volume: nativeVolume.value, dialogue_volume: dialogueVolume.value, bgm_volume: bgmVolume.value })
     toast.show(`第${activeEpN.value}集合并已启动（配音+字幕）`)
     setTimeout(loadMerges, 3000)
   } catch (e) {
@@ -451,10 +488,93 @@ async function mergeEpisode() {
   }
 }
 
+async function loadEpisodeContinuity() {
+  try { const { data } = await api.episodeContinuity(id(), activeEpN.value); continuity.value = data }
+  catch { continuity.value = null }
+}
+async function regenerateContinuity() {
+  try { await api.regenerateEpisodeContinuity(id(), activeEpN.value); toast.success('连续性摘要已更新'); await loadEpisodeContinuity() }
+  catch (e) { toast.error(e.response?.data?.error || '生成失败') }
+}
+async function createEpisode() {
+  const numbers = epNums(); const number = numbers.length ? Math.max(...numbers) + 1 : 1
+  const title = window.prompt('新集标题', `第${number}集`); if (!title) return
+  try { await api.createProjectEpisode(id(), { number, title, target_duration: 180, target_scenes: 25 }); toast.success('新集已创建'); await load() }
+  catch (e) { toast.error(e.response?.data?.error || '创建失败') }
+}
+async function deleteEpisode() {
+  if (!currentEpisode.value || !window.confirm(`删除空的第${activeEpN.value}集？`)) return
+  try { await api.deleteProjectEpisode(id(), activeEpN.value); activeEpN.value = 1; selected.value = null; await load() }
+  catch (e) { toast.error(e.response?.data?.error || '只能删除不含场景的集') }
+}
+async function moveSceneEpisode() {
+  if (!selected.value) return
+  const number = Number(window.prompt('目标集数', String(activeEpN.value))); if (!number || number === activeEpN.value) return
+  try { await api.reassignSceneEpisode(id(), selected.value.id, number); toast.success('场景已移动'); selected.value = null; await load() }
+  catch (e) { toast.error(e.response?.data?.error || '移动失败') }
+}
+async function runVisualBeats() {
+  try { const { data } = await api.visualBeatDraft(id(), selected.value.id, { target_duration: selected.value.duration }); intentDraft.value = data.draft; toast.success('已生成视觉节拍草稿（未自动保存）') }
+  catch (e) { toast.error(e.response?.data?.error || '生成失败') }
+}
+async function runFaithfulPolish() {
+  const feedback = window.prompt('只描述希望改进的视觉表现', '增强构图和动作可见性'); if (feedback === null) return
+  try { const { data } = await api.faithfulPolishDraft(id(), selected.value.id, { original_prompt: selected.value.image_prompt || '', immutable_facts: selected.value.content || '', editable_presentation: '构图、光线、材质、摄影表达', feedback }); intentDraft.value = data.draft; toast.success('已生成忠实润色草稿（未自动保存）') }
+  catch (e) { toast.error(e.response?.data?.error || '润色失败') }
+}
+async function runCreativeIntent() {
+  const goal = window.prompt('你希望澄清的创作目标', project.value?.synopsis || ''); if (!goal) return
+  try {
+    const questions = await api.creativeIntent(id(), { action: 'questions', user_goal: goal, answers: '' })
+    const answers = window.prompt(`请回答以下问题（可合并回答）：\n${questions.data.draft}`, '')
+    if (answers === null) { intentDraft.value = questions.data.draft; return }
+    const brief = await api.creativeIntent(id(), { action: 'brief', user_goal: goal, answers })
+    intentDraft.value = brief.data.draft; toast.success('Intent Brief已生成（不会自动执行）')
+  } catch (e) { toast.error(e.response?.data?.error || '意图澄清失败') }
+}
+
+async function loadSharedAssets() {
+  try { const { data } = await api.effectiveSharedAssets(id(), selected.value ? { scene_id: selected.value.id } : {}); sharedAssets.value = data || [] }
+  catch { sharedAssets.value = [] }
+}
+async function addSharedAsset() {
+  const materialId = Number(window.prompt('素材库Material ID', '')); if (!materialId) return
+  const mode = window.prompt('引用模式：live 或 copy', 'live') || 'live'
+  const sceneOnly = selected.value && window.confirm('仅引用到当前场景？')
+  try { await api.createSharedAssetReference(id(), { material_id: materialId, mode, scene_id: sceneOnly ? selected.value.id : null }); toast.success('共享资产引用已创建'); await loadSharedAssets() }
+  catch (e) { toast.error(e.response?.data?.error || '引用失败') }
+}
+
+async function loadAudioLayers() {
+  try { const { data } = await api.audioLayers(id(), activeEpN.value); audioLayers.value = data || [] }
+  catch (e) { toast.error(e.response?.data?.error || '加载音频层失败') }
+}
+async function addAudioLayer() {
+  const kind = window.prompt('类型：soundscape / sfx / bgm', 'bgm'); if (!kind) return
+  const file = window.prompt('项目 input 目录中的音频文件名', ''); if (!file) return
+  const name = window.prompt('名称', file) || file
+  const start = Number(window.prompt('开始秒数', '0')); const end = Number(window.prompt('结束秒数', String(targetDuration.value || 180))); const volume = Number(window.prompt('音量（0~2）', '1'))
+  try { await api.createAudioLayer(id(), { episode_n: activeEpN.value, kind, name, file, start_time: start, end_time: end, volume, status: 'ready' }); toast.success('音频层已添加'); await loadAudioLayers() }
+  catch (e) { toast.error(e.response?.data?.error || '添加音频层失败') }
+}
+async function removeAudioLayer(layer) {
+  if (!window.confirm(`删除音频层“${layer.name || layer.file}”？`)) return
+  try { await api.deleteAudioLayer(id(), layer.id); await loadAudioLayers() } catch (e) { toast.error(e.response?.data?.error || '删除失败') }
+}
+
 async function loadCandidates() {
   if (!selected.value) { candidates.value = []; return }
   try { const { data } = await api.sceneCandidates(id(), selected.value.id); candidates.value = data || [] }
   catch (e) { toast.error(e.response?.data?.error || '加载候选失败') }
+}
+function candidateUrl(candidate) {
+  if (candidate.video_input_file) return `/api/input/${id()}/${candidate.video_input_file}`
+  if (candidate.media_type === 'image') return `/api/input/${id()}/${String(candidate.file).split(/[\\/]/).pop()}`
+  return `/api/output/${candidate.video_gpu ?? 0}/${candidate.file}`
+}
+async function retryCandidate(candidate) {
+  try { await api.rerunTask(candidate.task_id); toast.success('已使用原任务参数提交重试') }
+  catch (e) { toast.error(e.response?.data?.error || '原任务不可重试') }
 }
 async function selectCandidate(candidate) {
   try { await api.selectCandidate(id(), candidate.id); toast.success('已设为当前候选'); await load() }

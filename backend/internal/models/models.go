@@ -144,59 +144,64 @@ type Project struct {
 
 // Episode 是项目内可持久化的集级聚合。Scene.EpisodeN 在兼容期继续保留。
 type Episode struct {
-	ID             uint      `gorm:"primaryKey" json:"id"`
-	ProjectID      uint      `gorm:"column:project_id;uniqueIndex:idx_episode_project_number" json:"project_id"`
-	Number         int       `gorm:"column:episode_number;uniqueIndex:idx_episode_project_number" json:"number"`
-	Title          string    `json:"title"`
-	TargetDuration float64   `gorm:"column:target_duration;default:180" json:"target_duration"`
-	TargetScenes   int       `gorm:"column:target_scenes;default:25" json:"target_scenes"`
-	Status         string    `gorm:"default:draft;index" json:"status"`
-	Version        int       `gorm:"default:1" json:"version"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID                   uint      `gorm:"primaryKey" json:"id"`
+	ProjectID            uint      `gorm:"column:project_id;uniqueIndex:idx_episode_project_number" json:"project_id"`
+	Number               int       `gorm:"column:episode_number;uniqueIndex:idx_episode_project_number" json:"number"`
+	Title                string    `json:"title"`
+	TargetDuration       float64   `gorm:"column:target_duration;default:180" json:"target_duration"`
+	TargetScenes         int       `gorm:"column:target_scenes;default:25" json:"target_scenes"`
+	Status               string    `gorm:"default:draft;index" json:"status"`
+	Summary              string    `gorm:"type:text" json:"summary"`
+	NextHook             string    `gorm:"column:next_hook;type:text" json:"next_hook"`
+	CharacterAppearances string    `gorm:"column:character_appearances;type:text" json:"character_appearances"`
+	Version              int       `gorm:"default:1" json:"version"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 // Scene 分镜场景（项目内顺序片段）
 type Scene struct {
-	ID                  uint      `gorm:"primaryKey" json:"id"`
-	ProjectID           uint      `gorm:"column:project_id;index;uniqueIndex:idx_scene_project_generation_episode_order" json:"project_id"`
-	EpisodeN            int       `gorm:"column:episode_n;default:1;uniqueIndex:idx_scene_project_generation_episode_order" json:"episode_n"` // 所属集数（从 1 开始）
-	Order               int       `gorm:"uniqueIndex:idx_scene_project_generation_episode_order" json:"order"`                                // 场景序号（从 1 开始）
-	Generation          uint      `gorm:"uniqueIndex:idx_scene_project_generation_episode_order" json:"generation"`
-	Title               string    `json:"title"`                                                               // 场景标题
-	Content             string    `json:"content"`                                                             // 场景正文（作为视频提示词）
-	ImagePrompt         string    `json:"image_prompt"`                                                        // 文生图提示词
-	ReferenceImagesJSON string    `gorm:"column:reference_images_json;type:text" json:"-"`                     // 用户指定的有序参考图及 Krea2/H3 用途
-	Duration            float64   `gorm:"default:5" json:"duration"`                                           // 场景目标时长（秒）
-	Characters          string    `json:"characters"`                                                          // 兼容字段：旧数据中的出场角色名
-	VisibleCharacters   string    `gorm:"column:visible_characters" json:"visible_characters"`                 // 画面中实际可见角色，逗号分隔；仅此类要求视觉参考
-	VoiceCharacters     string    `gorm:"column:voice_characters" json:"voice_characters"`                     // 仅发声但不在画面中的角色，逗号分隔
-	MentionedCharacters string    `gorm:"column:mentioned_characters" json:"mentioned_characters"`             // 仅在剧情、对白或独白中被提及的角色
-	CharacterRolesSet   bool      `gorm:"column:character_roles_set;default:false" json:"character_roles_set"` // 是否已明确完成可见/发声/提及分类
-	LocationName        string    `gorm:"column:location_name" json:"location"`                                // 场景地点名（对应 location 资产，用于环境一致性注入）
-	Props               string    `json:"props"`                                                               // 出场关键道具名（逗号分隔），用于道具一致性注入
-	VisualType          string    `gorm:"column:visual_type;default:normal" json:"visual_type"`                // normal/megastructure
-	MegaType            string    `gorm:"column:mega_type" json:"mega_type"`                                   // architecture/creature/geological/mechanical/surreal
-	ImageFile           string    `json:"image_file"`                                                          // 首帧图文件名（input/<project_id>/ 下）
-	ImageToken          string    `gorm:"column:image_token" json:"-"`                                         // 单次生成令牌，防止并发或过期结果回写
-	ImageTaskID         string    `gorm:"column:image_task_id;index" json:"image_task_id"`                     // 关联 Krea2 分镜画面任务
-	VideoTaskID         string    `gorm:"column:video_task_id" json:"video_task_id"`                           // 关联视频生成任务
-	VideoGPU            *int      `gorm:"column:video_gpu" json:"video_gpu"`
-	VideoFile           string    `gorm:"column:video_file" json:"video_file"`                         // ComfyUI 输出相对路径（合并使用）
-	VideoInputFile      string    `gorm:"column:video_input_file" json:"video_input_file"`             // 下载到项目 input 目录的浏览器可播放副本
-	VideoPrompt         string    `gorm:"column:video_prompt;type:text" json:"video_prompt"`           // 用户可编辑的动作正文
-	VideoFullPrompt     string    `gorm:"column:video_full_prompt;type:text" json:"video_full_prompt"` // 用户审核后最终提交的完整 H3 提示词
-	VideoTemplate       string    `gorm:"column:video_template" json:"video_template"`                 // 视频模板（minimax_h3_i2v/ref2v/t2v/first_last 等；空则自动选择）
-	VideoFirstFrameImg  string    `gorm:"column:video_first_frame_img" json:"video_first_frame_img"`   // 首尾帧模板的首帧图文件名
-	VideoLastFrameImg   string    `gorm:"column:video_last_frame_img" json:"video_last_frame_img"`     // 首尾帧模板的尾帧图文件名
-	Status              string    `json:"status"`                                                      // pending/image_pending/image_ready/video_pending/video_running/video_ready/failed
-	Error               string    `json:"error"`
-	PromptStale         bool      `gorm:"column:prompt_stale;default:false" json:"prompt_stale"` // 来源变化后需重新确认完整视频提示词
-	ImageRetries        int       `gorm:"column:image_retries" json:"image_retries"`             // 画面生成已重试次数
-	VideoRetries        int       `gorm:"column:video_retries" json:"video_retries"`             // 视频生成已重试次数
-	ShotCount           int       `gorm:"column:shot_count;default:0" json:"shot_count"`         // 镜头数量
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	ID                     uint      `gorm:"primaryKey" json:"id"`
+	ProjectID              uint      `gorm:"column:project_id;index;uniqueIndex:idx_scene_project_generation_episode_order" json:"project_id"`
+	EpisodeN               int       `gorm:"column:episode_n;default:1;uniqueIndex:idx_scene_project_generation_episode_order" json:"episode_n"` // 所属集数（从 1 开始）
+	Order                  int       `gorm:"uniqueIndex:idx_scene_project_generation_episode_order" json:"order"`                                // 场景序号（从 1 开始）
+	Generation             uint      `gorm:"uniqueIndex:idx_scene_project_generation_episode_order" json:"generation"`
+	Title                  string    `json:"title"`                                                               // 场景标题
+	Content                string    `json:"content"`                                                             // 场景正文（作为视频提示词）
+	ImagePrompt            string    `json:"image_prompt"`                                                        // 文生图提示词
+	ReferenceImagesJSON    string    `gorm:"column:reference_images_json;type:text" json:"-"`                     // 用户指定的有序参考图及 Krea2/H3 用途
+	Duration               float64   `gorm:"default:5" json:"duration"`                                           // 场景目标时长（秒）
+	Characters             string    `json:"characters"`                                                          // 兼容字段：旧数据中的出场角色名
+	VisibleCharacters      string    `gorm:"column:visible_characters" json:"visible_characters"`                 // 画面中实际可见角色，逗号分隔；仅此类要求视觉参考
+	VoiceCharacters        string    `gorm:"column:voice_characters" json:"voice_characters"`                     // 仅发声但不在画面中的角色，逗号分隔
+	MentionedCharacters    string    `gorm:"column:mentioned_characters" json:"mentioned_characters"`             // 仅在剧情、对白或独白中被提及的角色
+	CharacterRolesSet      bool      `gorm:"column:character_roles_set;default:false" json:"character_roles_set"` // 是否已明确完成可见/发声/提及分类
+	LocationName           string    `gorm:"column:location_name" json:"location"`                                // 场景地点名（对应 location 资产，用于环境一致性注入）
+	Props                  string    `json:"props"`                                                               // 出场关键道具名（逗号分隔），用于道具一致性注入
+	VisualType             string    `gorm:"column:visual_type;default:normal" json:"visual_type"`                // normal/megastructure
+	MegaType               string    `gorm:"column:mega_type" json:"mega_type"`                                   // architecture/creature/geological/mechanical/surreal
+	ImageFile              string    `json:"image_file"`                                                          // 首帧图文件名（input/<project_id>/ 下）
+	ImageToken             string    `gorm:"column:image_token" json:"-"`                                         // 单次生成令牌，防止并发或过期结果回写
+	ImageTaskID            string    `gorm:"column:image_task_id;index" json:"image_task_id"`                     // 关联 Krea2 分镜画面任务
+	VideoTaskID            string    `gorm:"column:video_task_id" json:"video_task_id"`                           // 关联视频生成任务
+	VideoGPU               *int      `gorm:"column:video_gpu" json:"video_gpu"`
+	VideoFile              string    `gorm:"column:video_file" json:"video_file"`                         // ComfyUI 输出相对路径（合并使用）
+	VideoInputFile         string    `gorm:"column:video_input_file" json:"video_input_file"`             // 下载到项目 input 目录的浏览器可播放副本
+	VideoPrompt            string    `gorm:"column:video_prompt;type:text" json:"video_prompt"`           // 用户可编辑的动作正文
+	VideoFullPrompt        string    `gorm:"column:video_full_prompt;type:text" json:"video_full_prompt"` // 用户审核后最终提交的完整 H3 提示词
+	VideoTemplate          string    `gorm:"column:video_template" json:"video_template"`                 // 视频模板（minimax_h3_i2v/ref2v/t2v/first_last 等；空则自动选择）
+	VideoFirstFrameImg     string    `gorm:"column:video_first_frame_img" json:"video_first_frame_img"`   // 首尾帧模板的首帧图文件名
+	VideoLastFrameImg      string    `gorm:"column:video_last_frame_img" json:"video_last_frame_img"`     // 首尾帧模板的尾帧图文件名
+	Status                 string    `json:"status"`                                                      // pending/image_pending/image_ready/video_pending/video_running/video_ready/failed
+	Error                  string    `json:"error"`
+	PromptStale            bool      `gorm:"column:prompt_stale;default:false" json:"prompt_stale"` // 来源变化后需重新确认完整视频提示词
+	ImageRetries           int       `gorm:"column:image_retries" json:"image_retries"`             // 画面生成已重试次数
+	VideoRetries           int       `gorm:"column:video_retries" json:"video_retries"`             // 视频生成已重试次数
+	ImageCandidateParentID *uint     `gorm:"column:image_candidate_parent_id" json:"-"`             // 当前图片任务的候选分支来源
+	VideoCandidateParentID *uint     `gorm:"column:video_candidate_parent_id" json:"-"`             // 当前视频任务的候选分支来源
+	ShotCount              int       `gorm:"column:shot_count;default:0" json:"shot_count"`         // 镜头数量
+	CreatedAt              time.Time `json:"created_at"`
+	UpdatedAt              time.Time `json:"updated_at"`
 }
 
 // Chapter 小说章节（仅 source_type=novel 的项目使用）
@@ -324,22 +329,22 @@ type Asset struct {
 
 // MergeTask 视频合并任务（把多个场景视频合并剪辑成片）
 type MergeTask struct {
-	ID         uint      `gorm:"primaryKey" json:"id"`
-	ProjectID  uint      `gorm:"column:project_id;index" json:"project_id"`
-	EpisodeN   int       `gorm:"column:episode_n;default:1" json:"episode_n"` // 所属集数
-	Title      string    `json:"title"`
-	SceneOrder string    `json:"scene_order"` // 按序合并的场景 ID（逗号分隔）
-	Generation uint      `gorm:"index" json:"generation"`
-	Status     string    `json:"status"`                        // pending/running/success/failed
-	OutputFile string    `json:"output_file"`                   // 合并输出文件（相对 output_workers/gpu0/ 路径）
+	ID             uint      `gorm:"primaryKey" json:"id"`
+	ProjectID      uint      `gorm:"column:project_id;index" json:"project_id"`
+	EpisodeN       int       `gorm:"column:episode_n;default:1" json:"episode_n"` // 所属集数
+	Title          string    `json:"title"`
+	SceneOrder     string    `json:"scene_order"` // 按序合并的场景 ID（逗号分隔）
+	Generation     uint      `gorm:"index" json:"generation"`
+	Status         string    `json:"status"`                        // pending/running/success/failed
+	OutputFile     string    `json:"output_file"`                   // 合并输出文件（相对 output_workers/gpu0/ 路径）
 	Subtitle       bool      `gorm:"default:false" json:"subtitle"` // 是否生成了配音字幕（SRT 与成片同名）
-	NativeVolume  float64   `gorm:"column:native_volume;default:1" json:"native_volume"`
-	DialogueVolume float64  `gorm:"column:dialogue_volume;default:1" json:"dialogue_volume"`
-	BGMVolume     float64   `gorm:"column:bgm_volume;default:1" json:"bgm_volume"`
-	DialogueMix   bool      `gorm:"column:dialogue_mix;default:false" json:"dialogue_mix"`
+	NativeVolume   float64   `gorm:"column:native_volume;default:1" json:"native_volume"`
+	DialogueVolume float64   `gorm:"column:dialogue_volume;default:1" json:"dialogue_volume"`
+	BGMVolume      float64   `gorm:"column:bgm_volume;default:1" json:"bgm_volume"`
+	DialogueMix    bool      `gorm:"column:dialogue_mix;default:false" json:"dialogue_mix"`
 	Error          string    `json:"error"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // Material 素材库：生成的图片/视频自动入库，也支持手动上传管理
@@ -361,14 +366,14 @@ type Dialogue struct {
 	ID                 uint      `gorm:"primaryKey" json:"id"`
 	SceneID            uint      `gorm:"column:scene_id;index" json:"scene_id"`
 	ProjectID          uint      `gorm:"column:project_id;index" json:"project_id"`
-	Order              int       `json:"order"`                                                  // 场景内句序（从 1 开始）
-	Character          string    `json:"character"`                                              // 对白/内心独白为角色名；旁白可为“旁白”
-	SpeechType         string    `gorm:"column:speech_type;default:dialogue" json:"speech_type"` // dialogue/narration/monologue
+	Order              int       `json:"order"`                                                             // 场景内句序（从 1 开始）
+	Character          string    `json:"character"`                                                         // 对白/内心独白为角色名；旁白可为“旁白”
+	SpeechType         string    `gorm:"column:speech_type;default:dialogue" json:"speech_type"`            // dialogue/narration/monologue
 	H3VoiceDescription string    `gorm:"column:h3_voice_description;type:text" json:"h3_voice_description"` // H3 说话者声音身份
-	Text               string    `gorm:"type:text" json:"text"`                                  // 仅可发声原文；空说话人且无明确类型时不发声
-	Voice              string    `json:"voice"`                                                   // TTS 音色（voice_type）
-	Position           float64   `gorm:"default:0" json:"position"`                              // 场景内起始位置（秒；0 表示自动顺排）
-	AudioFile          string    `json:"audio_file"`                                              // 合成音频文件名（input/<pid>/dub/ 下）
+	Text               string    `gorm:"type:text" json:"text"`                                             // 仅可发声原文；空说话人且无明确类型时不发声
+	Voice              string    `json:"voice"`                                                             // TTS 音色（voice_type）
+	Position           float64   `gorm:"default:0" json:"position"`                                         // 场景内起始位置（秒；0 表示自动顺排）
+	AudioFile          string    `json:"audio_file"`                                                        // 合成音频文件名（input/<pid>/dub/ 下）
 	AudioStale         bool      `gorm:"column:audio_stale;default:false" json:"audio_stale"`
 	AudioStaleReason   string    `gorm:"column:audio_stale_reason" json:"audio_stale_reason"`
 	Status             string    `json:"status"` // pending/synthesizing/ready/failed
@@ -411,6 +416,7 @@ const (
 	SkillStageEpisodeAdaptation = "episode_adaptation"   // 小说单集剧本改编
 	SkillStageContinuityReview  = "continuity_review"    // 小说集间连续性复审
 	SkillStageMegastructure     = "megastructure_prompt" // Krea2 巨构场景提示词增强
+	SkillStageCreativeIntent    = "creative_intent"      // 用户显式触发的创作意图澄清
 )
 
 // ProjectSkillConfig 项目级技能配置：支持项目选择特定技能或覆盖系统默认
@@ -753,6 +759,8 @@ type GenerationCandidate struct {
 	MediaType         string     `gorm:"index;uniqueIndex:idx_candidate_task_media" json:"media_type"`
 	TaskID            string     `gorm:"index;uniqueIndex:idx_candidate_task_media" json:"task_id"`
 	File              string     `json:"file"`
+	VideoInputFile    string     `gorm:"column:video_input_file" json:"video_input_file,omitempty"`
+	VideoGPU          *int       `gorm:"column:video_gpu" json:"video_gpu,omitempty"`
 	PromptSnapshot    string     `gorm:"type:text" json:"prompt_snapshot"`
 	ReferencesJSON    string     `gorm:"type:text" json:"references_json"`
 	ParamsJSON        string     `gorm:"type:text" json:"params_json"`

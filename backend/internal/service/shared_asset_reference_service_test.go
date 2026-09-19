@@ -59,8 +59,12 @@ func TestSharedAssetReferenceCRUDValidatesOwnershipAndMode(t *testing.T) {
 	if _, err := svc.Create(project.ID, SharedAssetReferenceInput{MaterialID: global.ID, ShotID: &otherShot.ID}); err == nil {
 		t.Fatal("accepted shot owned by another project")
 	}
-	if _, err := svc.Create(project.ID, SharedAssetReferenceInput{MaterialID: global.ID, Mode: "copy"}); err == nil {
-		t.Fatal("accepted copy mode without local_file")
+	copyRef, err := svc.Create(project.ID, SharedAssetReferenceInput{MaterialID: global.ID, Mode: "copy"})
+	if err != nil || copyRef.LocalFile != global.Path {
+		t.Fatalf("copy mode did not snapshot material path: ref=%+v err=%v", copyRef, err)
+	}
+	if err := svc.Delete(project.ID, copyRef.ID); err != nil {
+		t.Fatal(err)
 	}
 
 	ref, err := svc.Create(project.ID, SharedAssetReferenceInput{

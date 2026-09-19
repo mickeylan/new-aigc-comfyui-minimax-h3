@@ -303,7 +303,7 @@ func newTestProjectService(t *testing.T) *ProjectService {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.Character{}, &models.Asset{}, &models.MergeTask{}, &models.Task{}); err != nil {
+	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.Character{}, &models.Asset{}, &models.MergeTask{}, &models.Task{}, &models.GenerationCandidate{}); err != nil {
 		t.Fatal(err)
 	}
 	ps := NewProjectService(nil, db, nil, nil, nil, nil, nil, nil, nil)

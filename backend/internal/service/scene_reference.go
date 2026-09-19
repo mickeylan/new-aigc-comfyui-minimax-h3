@@ -58,12 +58,34 @@ func (s *ProjectService) sceneReferenceCandidates(sc *models.Scene) []SceneRefer
 			out = append(out, candidate("asset", a.ID, "sheet", "道具「"+a.Name+"」四视图", a.Kind, a.Sheet))
 		}
 	}
+	shared, _ := NewSharedAssetReferenceService(s.db).ListResolvedForScene(pid, sc.ID)
+	for _, item := range shared {
+		id, variant, scope := item.Material.ID, "global-live", "全局"
+		if item.Reference != nil {
+			id, variant, scope = item.Reference.ID, fmt.Sprintf("ref-%d-%s", item.Reference.ID, item.Mode), "项目"
+			if item.Reference.SceneID != nil {
+				scope = "场景"
+			}
+			if item.Reference.ShotID != nil {
+				scope = "镜头"
+			}
+		}
+		out = append(out, candidate("shared_material", id, variant, fmt.Sprintf("共享素材「%s」· %s/%s", item.Material.Name, scope, item.Mode), "shared", item.Path))
+	}
 	return out
 }
 
 func candidate(kind string, id uint, variant, label, category, image string) SceneReferenceCandidate {
 	r := SceneReferenceSelection{SourceType: kind, SourceID: id, Variant: variant, UseKrea2: true, UseH3: true}
 	return SceneReferenceCandidate{SceneReferenceSelection: r, Key: referenceKey(r), Label: label, Category: category, Image: image}
+}
+
+func fileMetaForSharedMaterial(projectID uint, path string) FileMeta {
+	path = strings.TrimLeft(strings.ReplaceAll(strings.TrimSpace(path), "\\", "/"), "/")
+	if i := strings.Index(path, "/"); i > 0 && i < len(path)-1 {
+		return FileMeta{TaskID: path[:i], Name: path[i+1:]}
+	}
+	return FileMeta{TaskID: fmt.Sprint(projectID), Name: path}
 }
 
 func parseSceneReferences(sc *models.Scene) ([]SceneReferenceSelection, bool) {
@@ -112,11 +134,14 @@ func (s *ProjectService) SaveSceneReferences(sc *models.Scene, refs []SceneRefer
 		return nil
 	}
 	data, _ := json.Marshal(refs)
-	return s.db.Model(sc).Updates(map[string]any{
+	if err := s.db.Model(sc).Updates(map[string]any{
 		"reference_images_json": string(data), "prompt_stale": strings.TrimSpace(sc.VideoFullPrompt) != "", "image_file": "", "image_task_id": "",
 		"video_file": "", "video_input_file": "", "video_task_id": "", "video_gpu": nil,
 		"status": "pending", "error": "",
-	}).Error
+	}).Error; err != nil {
+		return err
+	}
+	return MarkSceneCandidatesStale(s.db, sc.ProjectID, sc.ID, "", "场景参考图已修改")
 }
 
 func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target string) ([]FileMeta, []string, bool) {
@@ -183,7 +208,11 @@ func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target st
 		// 显式勾选是用户的最终决定。不要再按Shot/Characters元数据静默丢弃，
 		// 否则界面显示已选三张，实际提示词和任务却只提交两张。
 		// 自动补入的角色仍由 sceneCharacterPortraits 按镜头可见性筛选。
-		refs = append(refs, FileMeta{TaskID: fmt.Sprint(sc.ProjectID), Name: c.Image})
+		if r.SourceType == "shared_material" {
+			refs = append(refs, fileMetaForSharedMaterial(sc.ProjectID, c.Image))
+		} else {
+			refs = append(refs, FileMeta{TaskID: fmt.Sprint(sc.ProjectID), Name: c.Image})
+		}
 		lines = append(lines, fmt.Sprintf("- <Picture %d>：%s", len(refs), c.Label))
 	}
 	return refs, lines, true

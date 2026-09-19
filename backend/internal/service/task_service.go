@@ -1278,12 +1278,44 @@ func (s *TaskService) StartRecovery() {
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
-		// 启动后立即扫描一次
+		// 启动后先恢复进程退出时遗留的 pending 和尚未提交到 ComfyUI 的孤儿任务。
+		s.recoverStartupOrphans()
 		s.recoverStuckTasks()
 		for range ticker.C {
 			s.recoverStuckTasks()
 		}
 	}()
+}
+
+// recoverStartupOrphans handles tasks whose in-memory executor disappeared on process exit.
+// Tasks already carrying a provider prompt ID are reconciled instead of resubmitted.
+func (s *TaskService) recoverStartupOrphans() {
+	var tasks []models.Task
+	if err := s.db.Where("status IN ?", []string{"pending", "queued", "running"}).Find(&tasks).Error; err != nil {
+		log.Printf("[recover] startup scan failed: %v", err)
+		return
+	}
+	for i := range tasks {
+		task := tasks[i]
+		if task.ComfyPromptID != "" && task.Port != nil {
+			go s.reconcile(task.TaskID)
+			continue
+		}
+		if task.Status != "pending" {
+			if err := s.db.Model(&models.Task{}).Where("id = ? AND status IN ?", task.ID, []string{"queued", "running"}).Updates(map[string]any{
+				"status": "pending", "instance_id": nil, "gpu_index": nil, "port": nil,
+				"started_at": nil, "progress": 0, "current_node": "", "error": "",
+			}).Error; err != nil {
+				log.Printf("[recover] reset orphan task %s failed: %v", task.TaskID, err)
+				continue
+			}
+		}
+		go func(id string) {
+			if err := s.Execute(id); err != nil {
+				log.Printf("[recover] restart task %s failed: %v", id, err)
+			}
+		}(task.TaskID)
+	}
 }
 
 // recoverStuckTasks 扫描 running/queued 任务并触发 reconcile
@@ -1451,9 +1483,11 @@ func (s *TaskService) CancelTask(taskID string) error {
 		}
 		_ = c.Interrupt()
 	}
-	s.db.Model(&task).Updates(map[string]any{"status": "cancelled", "error": "用户取消"})
+	finished := time.Now()
+	s.db.Model(&task).Updates(map[string]any{"status": "cancelled", "error": "用户取消", "finished_at": finished})
 	task.Status = "cancelled"
 	task.Error = "用户取消"
+	task.FinishedAt = &finished
 	s.push(&task)
 	s.stopListener(taskID)
 	return nil

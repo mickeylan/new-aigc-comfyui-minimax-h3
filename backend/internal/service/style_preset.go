@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"gorm.io/gorm"
@@ -301,13 +302,17 @@ func (s *StylePresetService) ApplyPreset(presetID uint, basePrompt string) (stri
 
 // SceneContext 场景上下文（用于推荐匹配）
 type SceneContext struct {
-	Genre      string   `json:"genre"`       // 题材
-	Tone       string   `json:"tone"`        // 基调
-	SceneType  string   `json:"scene_type"`  // 场景类型
-	Characters []string `json:"characters"`  // 角色
-	Tags       []string `json:"tags"`        // 标签
-	Lighting   string   `json:"lighting"`    // 光照
-	TimeOfDay  string   `json:"time_of_day"` // 时段
+	Genre      string   `json:"genre"`
+	Tone       string   `json:"tone"`
+	SceneType  string   `json:"scene_type"`
+	Characters []string `json:"characters"`
+	Tags       []string `json:"tags"`
+	Lighting   string   `json:"lighting"`
+	TimeOfDay  string   `json:"time_of_day"`
+	ActType    string   `json:"act_type"`
+	ShotType   string   `json:"shot_type"`
+	Emotion    string   `json:"emotion"`
+	Camera     string   `json:"camera"`
 }
 
 type StyleRecommendation struct {
@@ -381,20 +386,31 @@ func (s *StylePresetService) GetRecommendations(ctx SceneContext, limit int) ([]
 }
 
 func (s *StylePresetService) GetRecommendationsWithReasons(ctx SceneContext, limit int) ([]StyleRecommendation, error) {
-	presets, err := s.GetRecommendations(ctx, limit)
+	if limit <= 0 {
+		limit = 5
+	}
+	presets, err := s.ListPresets("", nil, false)
 	if err != nil {
 		return nil, err
 	}
 	result := make([]StyleRecommendation, 0, len(presets))
 	for _, preset := range presets {
-		search := strings.ToLower(strings.Join([]string{preset.UseCases, preset.RecommendedFor, preset.SceneTypes, preset.Tags}, " "))
+		search := strings.ToLower(strings.Join([]string{preset.Name, preset.PromptTail, preset.UseCases, preset.RecommendedFor, preset.SceneTypes, preset.Tags}, " "))
 		matched, reasons, score := []string{}, []string{}, 0
-		for field, value := range map[string]string{"题材": ctx.Genre, "基调": ctx.Tone, "场景类型": ctx.SceneType, "光线": ctx.Lighting, "时段": ctx.TimeOfDay} {
-			value = strings.TrimSpace(value)
+		fields := []struct {
+			name, value string
+			weight      int
+		}{
+			{"题材", ctx.Genre, 15}, {"基调", ctx.Tone, 15}, {"场景类型", ctx.SceneType, 15},
+			{"叙事幕", ctx.ActType, 20}, {"景别", ctx.ShotType, 20}, {"情绪", ctx.Emotion, 20},
+			{"光线", ctx.Lighting, 20}, {"摄影机", ctx.Camera, 20}, {"时段", ctx.TimeOfDay, 10},
+		}
+		for _, field := range fields {
+			value := strings.TrimSpace(field.value)
 			if value != "" && strings.Contains(search, strings.ToLower(value)) {
-				matched = append(matched, field)
-				reasons = append(reasons, fmt.Sprintf("匹配%s“%s”", field, value))
-				score += 20
+				matched = append(matched, field.name)
+				reasons = append(reasons, fmt.Sprintf("匹配%s“%s”", field.name, value))
+				score += field.weight
 			}
 		}
 		for _, tag := range ctx.Tags {
@@ -411,6 +427,18 @@ func (s *StylePresetService) GetRecommendationsWithReasons(ctx SceneContext, lim
 			reasons = s.generateReasons(&preset)
 		}
 		result = append(result, StyleRecommendation{Preset: preset, Score: score, MatchedFields: matched, Reasons: reasons})
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].Score == result[j].Score {
+			if result[i].Preset.UsageCount == result[j].Preset.UsageCount {
+				return result[i].Preset.ID < result[j].Preset.ID
+			}
+			return result[i].Preset.UsageCount > result[j].Preset.UsageCount
+		}
+		return result[i].Score > result[j].Score
+	})
+	if len(result) > limit {
+		result = result[:limit]
 	}
 	return result, nil
 }

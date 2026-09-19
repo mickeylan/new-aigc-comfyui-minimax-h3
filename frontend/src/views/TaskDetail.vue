@@ -67,6 +67,8 @@
       </div>
     </div>
 
+    <div class="card" v-if="diagnostics"><h2 class="section-title">运行诊断</h2><div class="params"><div class="param-row"><span class="k">运行时长</span><span class="v">{{ Math.round((diagnostics.elapsed_ms || 0) / 1000) }} 秒</span></div><div class="param-row"><span class="k">供应商标识</span><span class="v mono">{{ JSON.stringify(diagnostics.provider_ids || {}) }}</span></div><div class="param-row"><span class="k">安全错误摘要</span><span class="v">{{ diagnostics.error || '—' }}</span></div></div></div>
+
     <!-- 任务参数（最下）-->
     <div class="card">
       <h2 class="section-title">任务参数</h2>
@@ -93,6 +95,7 @@ import { api, wsUrl } from '../api'
 
 const route = useRoute()
 const task = ref(null)
+const diagnostics = ref(null)
 const params = computed(() => {
   if (!task.value) return {}
   try { return JSON.parse(task.value.params_json) } catch (_) { return {} }
@@ -173,6 +176,7 @@ function nodeLabel(id) { return nodeNames[id] || id }
 async function load() {
   const { data } = await api.task(route.params.id)
   task.value = data
+  try { diagnostics.value = (await api.taskDiagnostics(route.params.id)).data } catch { diagnostics.value = null }
   loadMediaInfo()
 }
 
