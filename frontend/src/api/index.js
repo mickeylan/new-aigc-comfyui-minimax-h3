@@ -80,6 +80,7 @@ export const api = {
   sceneCandidates: (id, sid, mediaType = '') => http.get(`/projects/${id}/scenes/${sid}/candidates`, { params: mediaType ? { media_type: mediaType } : {} }),
   reviewCandidate: (id, cid, status, reason = '') => http.patch(`/projects/${id}/candidates/${cid}/review`, { status, reason }),
   selectCandidate: (id, cid) => http.post(`/projects/${id}/candidates/${cid}/select`),
+  branchCandidate: (id, cid) => http.post(`/projects/${id}/candidates/${cid}/branch`),
   uploadSceneImage: (id, sid, file) => {
     const fd = new FormData()
     fd.append('file', file)

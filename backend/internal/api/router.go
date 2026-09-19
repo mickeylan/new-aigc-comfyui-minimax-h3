@@ -98,6 +98,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.GET("/api/projects/:id/scenes/:sid/candidates", svc.HandleListSceneCandidates)
 	r.PATCH("/api/projects/:id/candidates/:cid/review", svc.HandleReviewGenerationCandidate)
 	r.POST("/api/projects/:id/candidates/:cid/select", svc.HandleSelectGenerationCandidate)
+	r.POST("/api/projects/:id/candidates/:cid/branch", svc.HandleBranchGenerationCandidate)
 	r.POST("/api/projects/:id/scenes/:sid/video", svc.HandleGenerateSceneVideo)
 	r.GET("/api/projects/:id/scenes/:sid/video/prompt", svc.HandleGetSceneVideoPrompt)
 	r.POST("/api/projects/:id/scenes/:sid/video/prompt/regenerate", svc.HandleRegenerateSceneVideoPrompt)

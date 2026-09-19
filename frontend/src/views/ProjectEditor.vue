@@ -198,7 +198,7 @@
           <img v-if="candidate.media_type === 'image'" :src="candidateUrl(candidate)" class="tl-thumb" />
           <video v-else :src="candidateUrl(candidate)" controls preload="metadata" class="merge-video"></video>
           <div class="merge-info"><span class="badge" :class="candidate.is_current ? 'badge-green' : candidate.review_status === 'rejected' ? 'badge-red' : 'badge-gray'">{{ candidate.media_type }} · {{ candidate.is_current ? '当前' : candidate.review_status }}</span><span>{{ candidate.file }}</span><span v-if="candidate.stale" class="fail-msg">已过期：{{ candidate.stale_reason }}</span></div>
-          <div class="merge-links"><button class="btn btn-sm btn-secondary" :disabled="candidate.is_current || candidate.stale" @click="selectCandidate(candidate)">设为当前</button><button class="btn btn-sm btn-secondary" @click="retryCandidate(candidate)">同参数重试</button><button class="btn btn-sm btn-ghost" :disabled="candidate.review_status === 'rejected'" @click="rejectCandidate(candidate)">拒绝</button></div>
+          <div class="merge-links"><button class="btn btn-sm btn-secondary" :disabled="candidate.is_current || candidate.stale" @click="selectCandidate(candidate)">设为当前</button><button class="btn btn-sm btn-secondary" @click="retryCandidate(candidate)">同参数重试</button><button class="btn btn-sm btn-secondary" :disabled="candidate.stale" @click="branchCandidate(candidate)">基于候选分支</button><button class="btn btn-sm btn-ghost" :disabled="candidate.review_status === 'rejected'" @click="rejectCandidate(candidate)">拒绝</button></div>
         </div>
         <div v-if="compareCandidates.length === 2" class="editor-split"><div v-for="c in compareCandidates" :key="c.id" class="preview-card"><img v-if="c.media_type === 'image'" :src="candidateUrl(c)" class="editor-image" /><video v-else :src="candidateUrl(c)" controls class="editor-video"></video><pre class="prompt-preview">{{ c.prompt_snapshot }}</pre></div></div>
       </div>
@@ -575,6 +575,10 @@ function candidateUrl(candidate) {
 async function retryCandidate(candidate) {
   try { await api.rerunTask(candidate.task_id); toast.success('已使用原任务参数提交重试') }
   catch (e) { toast.error(e.response?.data?.error || '原任务不可重试') }
+}
+async function branchCandidate(candidate) {
+  try { await api.branchCandidate(id(), candidate.id); toast.success('已从该候选创建生成分支'); setTimeout(loadCandidates, 1500) }
+  catch (e) { toast.error(e.response?.data?.error || '创建分支失败') }
 }
 async function selectCandidate(candidate) {
   try { await api.selectCandidate(id(), candidate.id); toast.success('已设为当前候选'); await load() }
