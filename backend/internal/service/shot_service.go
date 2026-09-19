@@ -313,53 +313,21 @@ func deleteShotAssociations(db *gorm.DB, shotID uint) error {
 }
 
 func aggregateShotsIntoScene(db *gorm.DB, sceneID uint, shots []models.Shot) error {
-	actLabels := map[models.ShotActType]string{
-		models.ShotActSetup: "建置", models.ShotActRising: "发展", models.ShotActMidpoint: "转折",
-		models.ShotActFalling: "回落", models.ShotActResolution: "收束",
-	}
-	contents := make([]string, 0, len(shots))
-	prompts := make([]string, 0, len(shots))
 	negativePrompts := make([]string, 0, len(shots))
 	seenNegative := map[string]bool{}
-	var duration float64
-	for i, shot := range shots {
-		label := actLabels[shot.ActType]
-		if label == "" {
-			label = actLabels[models.ShotActSetup]
-		}
-		contentParts := []string{fmt.Sprintf("镜头%d·%s（%.1f秒，%s，%s，%s）", i+1, label, shot.Duration, shot.ShotType, shot.CameraAngle, shot.CameraMovement), strings.TrimSpace(shot.Description)}
-		if shot.TransitionType != "" {
-			transition := "转场：" + string(shot.TransitionType)
-			if strings.TrimSpace(shot.TransitionNote) != "" {
-				transition += "（" + strings.TrimSpace(shot.TransitionNote) + "）"
-			}
-			contentParts = append(contentParts, transition)
-		}
-		if shot.Emotion != "" {
-			contentParts = append(contentParts, "情绪："+strings.TrimSpace(shot.Emotion))
-		}
-		if shot.Dialogue != "" {
-			contentParts = append(contentParts, "对白："+strings.TrimSpace(shot.Dialogue))
-		}
-		contents = append(contents, strings.Join(nonEmptyStrings(contentParts), "："))
-		promptParts := nonEmptyStrings([]string{shot.PromptSubject, shot.PromptAction, shot.PromptCamera, shot.PromptLighting, shot.PromptStyle})
-		if len(promptParts) > 0 {
-			prompts = append(prompts, fmt.Sprintf("镜头%d（%s）：%s", i+1, label, strings.Join(promptParts, ", ")))
-		}
+	for _, shot := range shots {
 		if negative := strings.TrimSpace(shot.NegativePrompt); negative != "" && !seenNegative[negative] {
 			seenNegative[negative] = true
 			negativePrompts = append(negativePrompts, negative)
 		}
-		duration += shot.Duration
 	}
 	var scene models.Scene
 	if err := db.Where("id = ?", sceneID).First(&scene).Error; err != nil {
 		return err
 	}
 	if err := db.Model(&scene).Updates(map[string]any{
-		"shot_count": len(shots), "content": strings.Join(contents, "\n"), "image_prompt": strings.Join(prompts, "；"),
-		"negative_prompt": strings.Join(negativePrompts, ", "), "prompt_stale": true,
-		"duration": math.Round(duration*10) / 10, "image_file": "", "image_token": "", "image_task_id": "",
+		"shot_count": len(shots), "negative_prompt": strings.Join(negativePrompts, ", "), "prompt_stale": true,
+		"image_file": "", "image_token": "", "image_task_id": "",
 		"video_task_id": "", "video_file": "", "video_input_file": "", "video_gpu": nil, "video_full_prompt": "",
 		"image_candidate_parent_id": nil, "video_candidate_parent_id": nil, "status": "pending", "error": "",
 	}).Error; err != nil {

@@ -95,6 +95,8 @@
             <button class="btn btn-sm btn-secondary" @click="runAssetContinuityReview">资产连续性审查</button>
             <button class="btn btn-sm btn-secondary" @click="runCoverageReview">镜头覆盖审查</button>
             <button class="btn btn-sm btn-secondary" @click="runFaithfulPolish">忠实润色</button>
+            <button class="btn btn-sm" :disabled="busy" @click="generateSelectedImage">生成分镜图</button>
+            <button class="btn btn-sm" :disabled="busy || !selected.image_file" @click="prepareVideoPrompt">准备并审核视频提示词</button>
             <a v-if="selected.video_url" class="btn btn-sm btn-ghost" :href="selected.video_url + '?download=1'">下载视频</a>
             <button class="btn btn-sm btn-secondary" @click="showFrameSelector = true">连续性设置</button>
           </div>
@@ -106,7 +108,13 @@
             <span class="ph-icon">🎞️</span>
             <p>该场景尚未生成分镜图或视频</p>
           </div>
-          <pre v-if="sceneSkillDraft" class="prompt-preview scene-skill-draft">{{ sceneSkillDraft }}</pre>
+          <div v-if="visualBeatDraft || polishDraft || assetReviewDraft || coverageReviewDraft" class="workbench scene-skill-draft">
+            <div v-if="visualBeatDraft"><strong>视觉节拍镜头草稿</strong><pre class="prompt-preview">{{ visualBeatDraft }}</pre><button class="btn btn-sm" @click="applyVisualBeats">导入为Shot草稿并保存</button></div>
+            <div v-if="polishDraft"><strong>忠实润色草稿</strong><pre class="prompt-preview">{{ polishDraft }}</pre><button class="btn btn-sm" @click="applyPolishDraft">应用到Scene起始帧提示词</button></div>
+            <div v-if="assetReviewDraft"><strong>资产连续性审查</strong><pre class="prompt-preview">{{ assetReviewDraft }}</pre></div>
+            <div v-if="coverageReviewDraft"><strong>镜头覆盖审查</strong><pre class="prompt-preview">{{ coverageReviewDraft }}</pre></div>
+          </div>
+          <div v-if="videoPromptDraft" class="workbench"><strong>最终H3提交提示词（保存后才能生成视频）</strong><textarea v-model="videoPromptDraft" class="textarea" rows="10"/><div class="section-actions"><button class="btn btn-sm" @click="saveReviewedVideoPrompt(false)">保存审核结果</button><button class="btn btn-sm" @click="saveReviewedVideoPrompt(true)">保存并生成视频</button></div></div>
           <div class="duration-edit">
             <label>目标时长</label>
             <input type="number" class="input input-sm" v-model.number="durationInput" min="3" max="15" step="0.5" @change="saveDuration" />
@@ -202,7 +210,7 @@
       </section>
     </div>
 
-    <ShotDirectorEditor v-if="selected" :project-id="id()" :scene-id="selected.id" :genre="project?.genre || ''" :tone="project?.tone || ''" :scene-title="selected.title || ''" :scene-content="selected.content || ''" />
+    <ShotDirectorEditor v-if="selected" :project-id="id()" :scene-id="selected.id" :genre="project?.genre || ''" :tone="project?.tone || ''" :scene-title="selected.title || ''" :scene-content="selected.content || ''" @scene-changed="reloadSelectedScene" />
 
     <section class="section">
       <div class="section-head"><div><span class="overline">SHARED ASSETS</span><h2>共享资产继承</h2><p class="sub">显式引用全局/项目素材，可限定当前场景；生成参考图候选会读取有效引用。</p></div><button class="btn btn-sm btn-secondary" @click="addSharedAsset">引用素材</button></div>
@@ -296,7 +304,12 @@ const audioLayers = ref([])
 const sharedAssets = ref([])
 const continuity = ref(null)
 const intentDraft = ref('')
-const sceneSkillDraft = ref('')
+const visualBeatDraft = ref('')
+const polishDraft = ref('')
+const assetReviewDraft = ref('')
+const coverageReviewDraft = ref('')
+const videoPromptDraft = ref('')
+const videoPromptTemplate = ref('minimax_h3_ref2v')
 const selected = ref(null)
 const tab = ref('dub')
 const busy = ref(false)
@@ -439,9 +452,10 @@ async function loadMerges() {
   } catch { /* ignore */ }
 }
 
+function clearSceneDrafts() { visualBeatDraft.value = ''; polishDraft.value = ''; assetReviewDraft.value = ''; coverageReviewDraft.value = ''; videoPromptDraft.value = '' }
 function selectScene(sc) {
   selected.value = sc
-  sceneSkillDraft.value = ''
+  clearSceneDrafts()
   durationInput.value = sc.duration || 5
   tab.value = 'dub'
 }
@@ -628,22 +642,37 @@ async function moveSceneEpisode() {
   catch (e) { toast.error(e.response?.data?.error || '移动失败') }
 }
 async function runVisualBeats() {
-  try { const { data } = await api.visualBeatDraft(id(), selected.value.id, { target_duration: selected.value.duration }); intentDraft.value = data.draft; toast.success('已生成视觉节拍草稿（未自动保存）') }
+  try { const { data } = await api.visualBeatDraft(id(), selected.value.id, { target_duration: selected.value.duration }); visualBeatDraft.value = data.draft; toast.success('已生成视觉节拍草稿（未自动保存）') }
   catch (e) { toast.error(e.response?.data?.error || '生成失败') }
 }
 async function runAssetContinuityReview() {
-  try { const { data } = await api.assetContinuityReviewDraft(id(), selected.value.id); sceneSkillDraft.value = data.draft; toast.success('已生成资产连续性审查草稿（未自动保存）') }
+  try { const { data } = await api.assetContinuityReviewDraft(id(), selected.value.id); assetReviewDraft.value = data.draft; toast.success('已生成资产连续性审查草稿（未自动保存）') }
   catch (e) { toast.error(e.response?.data?.error || '审查失败') }
 }
 async function runCoverageReview() {
-  try { const { data } = await api.coverageReviewDraft(id(), selected.value.id); sceneSkillDraft.value = data.draft; toast.success('已生成镜头覆盖审查草稿（未自动保存）') }
+  try { const { data } = await api.coverageReviewDraft(id(), selected.value.id); coverageReviewDraft.value = data.draft; toast.success('已生成镜头覆盖审查草稿（未自动保存）') }
   catch (e) { toast.error(e.response?.data?.error || '审查失败') }
 }
 async function runFaithfulPolish() {
   const feedback = window.prompt('只描述希望改进的视觉表现', '增强构图和动作可见性'); if (feedback === null) return
-  try { const { data } = await api.faithfulPolishDraft(id(), selected.value.id, { original_prompt: selected.value.image_prompt || '', immutable_facts: selected.value.content || '', editable_presentation: '构图、光线、材质、摄影表达', feedback }); intentDraft.value = data.draft; toast.success('已生成忠实润色草稿（未自动保存）') }
+  try { const { data } = await api.faithfulPolishDraft(id(), selected.value.id, { original_prompt: selected.value.image_prompt || '', immutable_facts: selected.value.content || '', editable_presentation: '构图、光线、材质、摄影表达', feedback }); polishDraft.value = data.draft; toast.success('已生成忠实润色草稿（未自动保存）') }
   catch (e) { toast.error(e.response?.data?.error || '润色失败') }
 }
+function parseSkillJSON(text) { const clean = String(text || '').trim().replace(/^```json\s*/i, '').replace(/```$/, '').trim(); return JSON.parse(clean) }
+async function applyVisualBeats() {
+  try {
+    const parsed = parseSkillJSON(visualBeatDraft.value); const rows = Array.isArray(parsed) ? parsed : parsed.shots
+    if (!Array.isArray(rows) || !rows.length) throw new Error('草稿中没有shots数组')
+    const shots = rows.map((s, i) => ({ act_type: ['setup','rising','midpoint','falling','resolution'][Math.min(4, Math.floor(i * 5 / rows.length))], shot_type: s.shot_type || '中景', camera_angle: s.camera_angle || '平视', camera_movement: s.camera_movement || '固定', duration: Math.max(0.1, Number(s.duration) || 2), description: s.description || '', dialogue: Array.isArray(s.dialogues) ? s.dialogues.map(d => d.text || d).join('\n') : (s.dialogue || ''), emotion: s.emotion || '', prompt_subject: '', prompt_action: '', prompt_camera: '', prompt_lighting: '', prompt_style: '', negative_prompt: '' }))
+    if (!window.confirm(`将以${shots.length}个镜头替换当前Shot导演设计。Scene剧情正文和起始帧提示词不会被覆盖，是否继续？`)) return
+    await api.replaceSceneShots(id(), selected.value.id, shots); visualBeatDraft.value = ''; await reloadSelectedScene(); toast.success('视觉节拍已导入Shot导演层')
+  } catch (e) { toast.error(e.response?.data?.error || e.message || '视觉节拍草稿格式无效') }
+}
+async function applyPolishDraft() { try { await api.updateScene(id(), selected.value.id, { image_prompt: polishDraft.value }); polishDraft.value = ''; await reloadSelectedScene(); toast.success('润色草稿已应用到Scene起始帧提示词') } catch (e) { toast.error(e.response?.data?.error || '应用失败') } }
+async function generateSelectedImage() { busy.value = true; try { await api.generateSceneImage(id(), selected.value.id); toast.success('分镜图任务已提交，已组合Scene事实、Shot导演设计、参考图与负向约束'); await reloadSelectedScene() } catch (e) { toast.error(e.response?.data?.error || '提交分镜图失败') } finally { busy.value = false } }
+async function prepareVideoPrompt() { busy.value = true; try { const { data } = await api.regenerateSceneVideoPrompt(id(), selected.value.id, {}); videoPromptDraft.value = data.full_prompt || data.prompt || ''; videoPromptTemplate.value = data.template || 'minimax_h3_ref2v'; toast.success('完整H3提示词已生成，请审核后保存') } catch (e) { toast.error(e.response?.data?.error || '生成视频提示词失败') } finally { busy.value = false } }
+async function saveReviewedVideoPrompt(generate) { busy.value = true; try { await api.updateSceneVideoPrompt(id(), selected.value.id, { prompt: videoPromptDraft.value, template: videoPromptTemplate.value }); if (generate) await api.generateSceneVideo(id(), selected.value.id); videoPromptDraft.value = ''; await reloadSelectedScene(); toast.success(generate ? '已保存审核提示词并提交视频' : '视频提示词审核结果已保存') } catch (e) { toast.error(e.response?.data?.error || '保存视频提示词失败') } finally { busy.value = false } }
+async function reloadSelectedScene() { const sid = selected.value?.id; await load(); if (sid) selected.value = scenes.value.find(s => s.id === sid) || selected.value }
 async function runCreativeIntent() {
   const goal = window.prompt('你希望澄清的创作目标', project.value?.synopsis || ''); if (!goal) return
   try {

@@ -3093,6 +3093,9 @@ func buildH3StoryboardPrompt(sc *models.Scene, p *models.Project, referenceLines
 		detail = strings.TrimSpace(sc.Content)
 	}
 	detail = strings.TrimSpace(strings.TrimPrefix(detail, "[Shot 1]"))
+	if negative := strings.TrimSpace(sc.NegativePrompt); negative != "" {
+		detail += "\n负向硬约束：画面中禁止出现" + negative + "。"
+	}
 	style := ""
 	if p != nil {
 		style = strings.TrimSpace(p.Style)
@@ -3192,8 +3195,12 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 		s.failSceneImage(sc, token, err.Error())
 		return err
 	}
-	// 使用本次实际上传的 refs/lines 编译引用绑定，确保 Picture 编号与文件顺序一致。
-	prompt := buildH3StoryboardPrompt(sc, &p, lines)
+	// Scene supplies canonical facts; structured Shots are appended as subordinate director instructions.
+	compiledScene := *sc
+	if shotContext := strings.TrimSpace(s.sceneShotContext(sc)); shotContext != "" {
+		compiledScene.ImagePrompt = strings.TrimSpace(compiledScene.ImagePrompt) + "\n【Shot导演设计】\n" + shotContext
+	}
+	prompt := buildH3StoryboardPrompt(&compiledScene, &p, lines)
 	refNames := make([]string, 0, len(refs))
 	for i, ref := range refs {
 		refNames = append(refNames, fmt.Sprintf("Picture %d=%s/%s", i+1, ref.TaskID, ref.Name))

@@ -32,7 +32,7 @@ func TestShotServiceStoresManualDirectorStructure(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	project := models.Project{Title: "test"}
 	db.Create(&project)
-	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Content: "权威剧情事实", ImagePrompt: "权威起始帧", Duration: 5}
 	db.Create(&scene)
 	svc := NewShotService(db)
 	input := []models.Shot{
@@ -47,16 +47,11 @@ func TestShotServiceStoresManualDirectorStructure(t *testing.T) {
 		t.Fatalf("structure lost: %+v", shots)
 	}
 	db.First(&scene, scene.ID)
-	if scene.ShotCount != 2 || scene.Duration != 4 {
-		t.Fatalf("scene aggregate count=%d duration=%v", scene.ShotCount, scene.Duration)
+	if scene.ShotCount != 2 || scene.Duration != 5 {
+		t.Fatalf("scene count/duration changed: %d/%v", scene.ShotCount, scene.Duration)
 	}
-	for _, want := range []string{"镜头1·建置", "雨夜建立旧宅", "镜头2·转折", "对白：原来如此"} {
-		if !strings.Contains(scene.Content, want) {
-			t.Fatalf("scene content missing %q: %s", want, scene.Content)
-		}
-	}
-	if !strings.Contains(scene.ImagePrompt, "侦探与信件") || scene.Status != "pending" {
-		t.Fatalf("scene prompt/status not aggregated: %+v", scene)
+	if scene.Content != "权威剧情事实" || scene.ImagePrompt != "权威起始帧" || scene.Status != "pending" {
+		t.Fatalf("Shot save overwrote Scene authority: %+v", scene)
 	}
 }
 

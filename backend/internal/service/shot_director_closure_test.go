@@ -1,7 +1,6 @@
 package service
 
 import (
-	"strings"
 	"testing"
 
 	"comfyui-console/internal/models"
@@ -29,7 +28,7 @@ func TestReplaceShotsAllowsEmptyAndInvalidatesSceneGraph(t *testing.T) {
 	db.First(&scene, scene.ID)
 	db.First(&dependent, dependent.ID)
 	db.First(&episode, episode.ID)
-	if scene.ShotCount != 0 || scene.Content != "" || scene.ImagePrompt != "" || scene.ImageFile != "" || scene.VideoInputFile != "" || scene.Status != "pending" {
+	if scene.ShotCount != 0 || scene.Content != "old" || scene.ImagePrompt != "old" || scene.ImageFile != "" || scene.VideoInputFile != "" || scene.Status != "pending" {
 		t.Fatalf("scene not reset: %+v", scene)
 	}
 	if dependent.VideoFile != "" {
@@ -51,7 +50,7 @@ func TestShotTransitionAndNegativePromptAggregateIntoScene(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.First(&scene, scene.ID)
-	if !strings.Contains(scene.Content, "match_cut") || !strings.Contains(scene.Content, "match eyes") || scene.NegativePrompt != "modern cars" {
+	if scene.Content != "" || scene.ImagePrompt != "" || scene.NegativePrompt != "modern cars" {
 		t.Fatalf("director metadata missing: %+v", scene)
 	}
 }
