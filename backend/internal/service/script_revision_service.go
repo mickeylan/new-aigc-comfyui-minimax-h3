@@ -160,19 +160,33 @@ func (s *ScriptRevisionService) Restore(projectID, revisionID uint) (*models.Scr
 			return err
 		}
 
-		if detail.Snapshot.Episode == nil {
-			if err := tx.Where("project_id = ? AND episode_number = ?", projectID, episodeN).Delete(&models.Episode{}).Error; err != nil {
-				return err
-			}
-		} else {
-			episode := *detail.Snapshot.Episode
-			if episode.ProjectID != projectID || episode.Number != episodeN {
+		// Episode is a durable aggregate. Restore only its editorial planning fields; never
+		// rewind identity/timestamps/version, and clear continuity/status derived from the
+		// hierarchy that is about to be replaced.
+		if detail.Snapshot.Episode != nil {
+			stored := detail.Snapshot.Episode
+			if stored.ProjectID != projectID || stored.Number != episodeN {
 				return fmt.Errorf("script revision episode mismatch")
 			}
-			if err := tx.Where("project_id = ? AND episode_number = ?", projectID, episodeN).Delete(&models.Episode{}).Error; err != nil {
-				return err
+			updates := map[string]any{
+				"title": stored.Title, "target_duration": stored.TargetDuration, "target_scenes": stored.TargetScenes,
+				"status": "draft", "summary": "", "next_hook": "", "character_appearances": "",
+				"version": gorm.Expr("version + 1"),
 			}
-			if err := tx.Create(&episode).Error; err != nil {
+			result := tx.Model(&models.Episode{}).Where("project_id = ? AND episode_number = ?", projectID, episodeN).Updates(updates)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				episode := models.Episode{ProjectID: projectID, Number: episodeN, Title: stored.Title, TargetDuration: stored.TargetDuration, TargetScenes: stored.TargetScenes, Status: "draft", Version: 1}
+				if err := tx.Create(&episode).Error; err != nil {
+					return err
+				}
+			}
+		} else {
+			if err := tx.Model(&models.Episode{}).Where("project_id = ? AND episode_number = ?", projectID, episodeN).Updates(map[string]any{
+				"status": "draft", "summary": "", "next_hook": "", "character_appearances": "", "version": gorm.Expr("version + 1"),
+			}).Error; err != nil {
 				return err
 			}
 		}
@@ -216,7 +230,7 @@ func (s *ScriptRevisionService) Restore(projectID, revisionID uint) (*models.Scr
 				dialogue := storedDialogue
 				dialogue.ID, dialogue.SceneID = 0, scene.ID
 				dialogue.AudioFile, dialogue.PreviousAudioFile = "", ""
-				dialogue.AudioHash, dialogue.AudioToken = "", ""
+				dialogue.AudioHash, dialogue.PreviousAudioHash, dialogue.AudioToken = "", "", ""
 				dialogue.AudioRevision = 0
 				dialogue.AudioStale, dialogue.AudioStaleReason = true, "剧本版本已恢复，需重新合成"
 				dialogue.Status, dialogue.Error = "pending", ""

@@ -217,6 +217,27 @@ func TestRequiredTemplateFilesAreValidated(t *testing.T) {
 	}
 }
 
+func TestUploadedFileTypeMustMatchTemplateInputFamily(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.UploadFile{}); err != nil {
+		t.Fatal(err)
+	}
+	upload := models.UploadFile{TaskID: "draft", Type: "audio", Name: "spoof.png", Path: "draft/spoof.png"}
+	if err := db.Create(&upload).Error; err != nil {
+		t.Fatal(err)
+	}
+	tpl := models.Template{InputsJSON: `[{"key":"first_frame","type":"image","label":"首帧"}]`}
+	err = (&TaskService{db: db}).validateUploadedFiles(&tpl, map[string][]FileMeta{
+		"first_frame": {{TaskID: upload.TaskID, Name: upload.Name}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "类型不匹配") {
+		t.Fatalf("expected type-family mismatch, got %v", err)
+	}
+}
+
 func TestRankInstanceLoadsPrefersQueueThenVRAM(t *testing.T) {
 	loads := []instanceLoad{
 		{inst: models.Instance{GPUIndex: 0}, queueLen: 1, vramFree: 80, up: true},

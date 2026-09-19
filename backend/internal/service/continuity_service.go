@@ -135,7 +135,7 @@ func (s *ContinuityService) SelectFrame(projectID, sceneID, frameID uint) (*mode
 				return err
 			}
 		}
-		return nil
+		return invalidateContinuityDependentsTx(tx, projectID, dependentIDs, "连续性衔接帧已变化")
 	})
 	if err != nil {
 		return nil, err
@@ -205,10 +205,17 @@ func (s *ContinuityService) Configure(projectID, sceneID uint, req ConfigureCont
 			cfg.SourceMode = "auto_previous"
 		}
 	}
-	if err := s.db.Save(&cfg).Error; err != nil {
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&cfg).Error; err != nil {
+			return err
+		}
+		if err := invalidateSceneVideoTx(tx, projectID, sceneID, "连续性输入已变化"); err != nil {
+			return err
+		}
+		return invalidateContinuityDependentsTx(tx, projectID, []uint{sceneID}, "连续性输入已变化")
+	}); err != nil {
 		return nil, err
 	}
-	s.invalidateSceneVideo(sceneID)
 	return s.Get(projectID, sceneID)
 }
 func (s *ContinuityService) Get(projectID, sceneID uint) (*models.SceneContinuity, error) {
@@ -270,24 +277,52 @@ func (s *ContinuityService) ContinuationFrame(sceneID uint) (*models.FrameCandid
 }
 func (s *ContinuityService) InvalidateDependents(sourceSceneID uint, reason string) {
 	_ = s.db.Transaction(func(tx *gorm.DB) error {
-		var configs []models.SceneContinuity
-		if err := tx.Where("source_scene_id = ? AND mode != ?", sourceSceneID, models.ContinuityModeIndependent).Find(&configs).Error; err != nil {
+		var scene models.Scene
+		if err := tx.Select("project_id").First(&scene, sourceSceneID).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&models.SceneContinuity{}).Where("source_scene_id = ? AND mode != ?", sourceSceneID, models.ContinuityModeIndependent).Updates(map[string]any{"status": "source_invalidated", "error": reason, "version": gorm.Expr("version + 1")}).Error; err != nil {
+		return invalidateContinuityDependentsTx(tx, scene.ProjectID, []uint{sourceSceneID}, reason)
+	})
+}
+
+// invalidateContinuityDependentsTx invalidates every continuity consumer reachable from
+// sourceSceneIDs. The visited set makes malformed cyclic continuity graphs safe.
+func invalidateContinuityDependentsTx(tx *gorm.DB, projectID uint, sourceSceneIDs []uint, reason string) error {
+	seen := make(map[uint]struct{}, len(sourceSceneIDs))
+	queue := append([]uint(nil), sourceSceneIDs...)
+	for _, id := range sourceSceneIDs {
+		seen[id] = struct{}{}
+	}
+	for len(queue) > 0 {
+		sourceID := queue[0]
+		queue = queue[1:]
+		var configs []models.SceneContinuity
+		if err := tx.Table("scene_continuities").
+			Joins("JOIN scenes ON scenes.id = scene_continuities.scene_id").
+			Where("scene_continuities.source_scene_id = ? AND scene_continuities.mode != ? AND scenes.project_id = ?", sourceID, models.ContinuityModeIndependent, projectID).
+			Find(&configs).Error; err != nil {
 			return err
 		}
 		for _, cfg := range configs {
-			var scene models.Scene
-			if err := tx.Select("project_id").First(&scene, cfg.SceneID).Error; err != nil {
+			if _, ok := seen[cfg.SceneID]; ok {
+				continue
+			}
+			seen[cfg.SceneID] = struct{}{}
+			if err := tx.Model(&models.SceneContinuity{}).Where("id = ?", cfg.ID).Updates(map[string]any{
+				"status": "source_invalidated", "error": reason, "selected_frame_id": nil, "version": gorm.Expr("version + 1"),
+			}).Error; err != nil {
 				return err
 			}
-			if err := invalidateSceneVideoTx(tx, scene.ProjectID, cfg.SceneID, reason); err != nil {
+			if err := invalidateSceneVideoTx(tx, projectID, cfg.SceneID, reason); err != nil {
 				return err
 			}
+			if err := tx.Model(&models.Scene{}).Where("id = ? AND project_id = ?", cfg.SceneID, projectID).Update("prompt_stale", true).Error; err != nil {
+				return err
+			}
+			queue = append(queue, cfg.SceneID)
 		}
-		return nil
-	})
+	}
+	return nil
 }
 func (s *ContinuityService) invalidateSceneVideo(sceneID uint) {
 	var scene models.Scene

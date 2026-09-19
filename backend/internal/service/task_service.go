@@ -152,8 +152,22 @@ func normalizeTemplateFiles(tpl *models.Template, params map[string]any, files m
 	return nil
 }
 
-func (s *TaskService) validateUploadedFiles(files map[string][]FileMeta) error {
-	for _, items := range files {
+func (s *TaskService) validateUploadedFiles(tpl *models.Template, files map[string][]FileMeta) error {
+	var inputs []TemplateInput
+	if err := json.Unmarshal([]byte(tpl.InputsJSON), &inputs); err != nil {
+		return fmt.Errorf("模板输入定义解析失败: %w", err)
+	}
+	expectedTypes := make(map[string]string)
+	for _, input := range inputs {
+		if fileInputTypes[input.Type] {
+			expectedTypes[input.Key] = strings.TrimSuffix(input.Type, "s")
+		}
+	}
+	for key, items := range files {
+		expectedType, exists := expectedTypes[key]
+		if !exists {
+			return fmt.Errorf("模板不接受素材字段: %s", key)
+		}
 		for _, file := range items {
 			taskID, err := safeFileSegment(file.TaskID, "素材 task_id")
 			if err != nil {
@@ -170,6 +184,9 @@ func (s *TaskService) validateUploadedFiles(files map[string][]FileMeta) error {
 			expected := filepath.ToSlash(filepath.Join(taskID, name))
 			if filepath.ToSlash(filepath.Clean(upload.Path)) != expected {
 				return fmt.Errorf("素材路径记录无效: %s", expected)
+			}
+			if upload.Type != expectedType {
+				return fmt.Errorf("素材类型不匹配: %s 需要 %s，实际为 %s", key, expectedType, upload.Type)
 			}
 		}
 	}
@@ -606,7 +623,7 @@ func (s *TaskService) CreateTask(req CreateTaskReq) (*models.Task, error) {
 	if err := normalizeTemplateFiles(&tpl, params, req.Files); err != nil {
 		return nil, err
 	}
-	if err := s.validateUploadedFiles(req.Files); err != nil {
+	if err := s.validateUploadedFiles(&tpl, req.Files); err != nil {
 		return nil, err
 	}
 	params["_task_id"] = taskID

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -176,61 +177,82 @@ func (s *NovelService) ComputeFileHash(data []byte) string {
 	return hex.EncodeToString(hash[:])
 }
 
-// ImportNovel 上传并处理小说文件
+// ValidateNovel validates the complete source before any authoritative project state is changed.
+func (s *NovelService) ValidateNovel(filename string, data []byte) (string, []DetectedChapter, error) {
+	ext := strings.ToLower(filepath.Ext(filename))
+	if ext != ".txt" && ext != ".md" && ext != ".markdown" {
+		return "", nil, fmt.Errorf("仅支持 TXT/MD/MARKDOWN 文件")
+	}
+	if len(data) == 0 {
+		return "", nil, fmt.Errorf("空文件")
+	}
+	cleanText, err := s.CleanUTF8(data)
+	if err != nil {
+		return "", nil, err
+	}
+	if strings.TrimSpace(cleanText) == "" || strings.IndexByte(cleanText, 0) >= 0 {
+		return "", nil, fmt.Errorf("小说文件不包含有效文本")
+	}
+	chapters := s.DetectChapters(cleanText)
+	if len(chapters) == 0 {
+		return "", nil, fmt.Errorf("未识别到有效正文")
+	}
+	return cleanText, chapters, nil
+}
+
+// ImportNovel uploads and processes a novel while preserving the existing source on failure.
 func (s *NovelService) ImportNovel(projectID uint, filename string, data []byte) (*models.Project, error) {
-	var project models.Project
-	if err := s.db.First(&project, projectID).Error; err != nil {
+	return s.importNovel(projectID, filename, data, "")
+}
+
+// ImportNovelWithPath atomically publishes the stored source path with its chapters.
+func (s *NovelService) ImportNovelWithPath(projectID uint, filename string, data []byte, storedPath string) (*models.Project, error) {
+	return s.importNovel(projectID, filename, data, storedPath)
+}
+
+func (s *NovelService) importNovel(projectID uint, filename string, data []byte, storedPath string) (*models.Project, error) {
+	var snapshot models.Project
+	if err := s.db.First(&snapshot, projectID).Error; err != nil {
 		return nil, fmt.Errorf("project not found: %w", err)
 	}
-
-	// 验证项目类型
-	if project.SourceType != models.ProjectSourceNovel {
-		return nil, fmt.Errorf("project is not a novel project (source_type=%s)", project.SourceType)
+	if snapshot.SourceType != models.ProjectSourceNovel {
+		return nil, fmt.Errorf("project is not a novel project (source_type=%s)", snapshot.SourceType)
 	}
-
-	// 检查是否重复上传（通过文件哈希）
+	_, detectedChapters, err := s.ValidateNovel(filename, data)
+	if err != nil {
+		return nil, err
+	}
 	fileHash := s.ComputeFileHash(data)
-	if project.NovelFileHash == fileHash && project.ImportStatus == models.NovelImportCompleted {
-		return nil, fmt.Errorf("duplicate file: this file has already been imported")
-	}
-
-	// 更新导入状态为处理中
-	project.ImportStatus = models.NovelImportProcessing
-	project.ImportError = ""
-	project.NovelFileHash = fileHash
-	if err := s.db.Save(&project).Error; err != nil {
-		return nil, fmt.Errorf("update project status: %w", err)
-	}
-
-	// UTF-8 清洗
-	cleanText, cleanErr := s.CleanUTF8(data)
-	if cleanErr != nil {
-		project.ImportStatus = models.NovelImportFailed
-		project.ImportError = cleanErr.Error()
-		_ = s.db.Save(&project).Error
-		return nil, cleanErr
-	}
-
-	// 章节识别
-	detectedChapters := s.DetectChapters(cleanText)
-
-	// 统计总字数
 	totalWords := 0
 	for _, ch := range detectedChapters {
 		totalWords += s.CountWords(ch.Content)
 	}
 
-	// 增量重导入：相同内容哈希复用分析；仅让变更来源及其下游失效。
-	var oldChapters []models.Chapter
-	if err := s.db.Where("project_id = ?", projectID).Find(&oldChapters).Error; err != nil {
-		return nil, err
-	}
-	byHash := make(map[string][]models.Chapter)
-	for _, old := range oldChapters {
-		byHash[old.ContentHash] = append(byHash[old.ContentHash], old)
-	}
-	changed := len(oldChapters) != len(detectedChapters)
-	if err := s.db.Transaction(func(tx *gorm.DB) error {
+	var project models.Project
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		// Hash/status CAS prevents two validated imports from replacing each other.
+		claim := tx.Model(&models.Project{}).
+			Where("id = ? AND novel_file_hash = ? AND import_status = ?", projectID, snapshot.NovelFileHash, snapshot.ImportStatus).
+			Updates(map[string]any{"novel_file_hash": fileHash, "import_status": models.NovelImportProcessing, "import_error": ""})
+		if claim.Error != nil {
+			return claim.Error
+		}
+		if claim.RowsAffected != 1 {
+			return fmt.Errorf("novel import conflict: source changed while import was being prepared")
+		}
+		if snapshot.NovelFileHash == fileHash && snapshot.ImportStatus == models.NovelImportCompleted {
+			return fmt.Errorf("duplicate file: this file has already been imported")
+		}
+
+		var oldChapters []models.Chapter
+		if err := tx.Where("project_id = ?", projectID).Order("chapter_order ASC, id ASC").Find(&oldChapters).Error; err != nil {
+			return err
+		}
+		byHash := make(map[string][]models.Chapter)
+		for _, old := range oldChapters {
+			byHash[old.ContentHash] = append(byHash[old.ContentHash], old)
+		}
+		changed := len(oldChapters) != len(detectedChapters)
 		if err := tx.Where("project_id = ?", projectID).Delete(&models.Chapter{}).Error; err != nil {
 			return err
 		}
@@ -240,9 +262,16 @@ func (s *NovelService) ImportNovel(projectID uint, filename string, data []byte)
 			if matches := byHash[hash]; len(matches) > 0 {
 				old := matches[0]
 				byHash[hash] = matches[1:]
-				chapter.ID = old.ID
+				chapter.ID, chapter.CreatedAt = old.ID, old.CreatedAt
 				chapter.Summary, chapter.AnalysisJSON, chapter.AnalysisStatus = old.Summary, old.AnalysisJSON, old.AnalysisStatus
 				chapter.AnalysisVersion, chapter.AnalysisHash, chapter.AnalysisError = old.AnalysisVersion, old.AnalysisHash, old.AnalysisError
+				chapter.ManuallyEdited, chapter.IdentifiedBy = old.ManuallyEdited, old.IdentifiedBy
+				if old.ManuallyEdited {
+					chapter.Title = old.Title
+				}
+				if old.Order != chapter.Order || old.Title != ch.Title {
+					changed = true
+				}
 			} else {
 				changed = true
 			}
@@ -261,21 +290,18 @@ func (s *NovelService) ImportNovel(projectID uint, filename string, data []byte)
 				return err
 			}
 		}
-		return nil
-	}); err != nil {
-		project.ImportStatus = models.NovelImportFailed
-		project.ImportError = err.Error()
-		_ = s.db.Save(&project).Error
+		updates := map[string]any{"novel_word_count": totalWords, "import_status": models.NovelImportCompleted, "import_error": ""}
+		if storedPath != "" {
+			updates["novel_file_path"] = storedPath
+		}
+		if err := tx.Model(&models.Project{}).Where("id = ? AND novel_file_hash = ? AND import_status = ?", projectID, fileHash, models.NovelImportProcessing).Updates(updates).Error; err != nil {
+			return err
+		}
+		return tx.First(&project, projectID).Error
+	})
+	if err != nil {
 		return nil, fmt.Errorf("replace chapters: %w", err)
 	}
-
-	// 更新项目状态
-	project.NovelWordCount = totalWords
-	project.ImportStatus = models.NovelImportCompleted
-	if err := s.db.Save(&project).Error; err != nil {
-		return nil, fmt.Errorf("update project: %w", err)
-	}
-
 	return &project, nil
 }
 

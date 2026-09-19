@@ -507,10 +507,7 @@ func (s *CharacterLookService) SyncImages() {
 			s.db.Model(look).Where("image_task_id = ?", task.TaskID).Updates(map[string]any{"image_task_id": "", "image_error": err.Error()})
 			continue
 		}
-		res := s.db.Model(look).Where("image_task_id = ?", task.TaskID).Updates(map[string]any{"image": filepath.Base(path), "image_task_id": "", "image_error": ""})
-		if res.RowsAffected > 0 {
-			registerSelectedAssetVariant(s.db, look.ProjectID, VariantCharacterLook, look.ID, filepath.Base(path), task.Prompt, "krea2_task:"+task.TaskID)
-		}
+		_, _, _ = updateSelectedAsset(s.db, look.ProjectID, VariantCharacterLook, look.ID, filepath.Base(path), task.Prompt, "krea2_task:"+task.TaskID, map[string]any{"image_task_id": "", "image_error": ""}, "image_task_id", task.TaskID)
 	}
 }
 
@@ -742,11 +739,8 @@ func (s *CharacterLookService) SaveUploadedImage(look *models.CharacterLook, fil
 	if look.ImageTaskID != "" && s.tasks != nil {
 		_ = s.tasks.CancelTask(look.ImageTaskID)
 	}
-	if err := s.db.Model(look).Updates(map[string]any{"image": filepath.Base(path), "image_task_id": "", "image_error": ""}).Error; err != nil {
-		return err
-	}
-	registerSelectedAssetVariant(s.db, look.ProjectID, VariantCharacterLook, look.ID, filepath.Base(path), look.Prompt, "manual_upload")
-	return nil
+	_, _, err = updateSelectedAsset(s.db, look.ProjectID, VariantCharacterLook, look.ID, filepath.Base(path), look.Prompt, "manual_upload", map[string]any{"image_task_id": "", "image_error": ""}, "", nil)
+	return err
 }
 
 func (s *CharacterLookService) readFile(path string) (string, error) {

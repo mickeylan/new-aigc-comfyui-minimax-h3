@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"comfyui-console/internal/models"
@@ -63,6 +64,82 @@ func TestScriptRevisionRestoreDoesNotRewindOtherEpisodesOrGeneration(t *testing.
 	_ = json.Unmarshal([]byte(project.Scripts), &scripts)
 	if scripts["1"] != "old one" || scripts["2"] != "newer two" {
 		t.Fatalf("scripts merged incorrectly: %+v", scripts)
+	}
+}
+
+func TestScriptRevisionRestorePreservesEpisodeIdentityAndResetsDerivedState(t *testing.T) {
+	db := safetyDB(t)
+	project := models.Project{Title: "p", Generation: 1}
+	db.Create(&project)
+	episode := models.Episode{ProjectID: project.ID, Number: 1, Title: "snapshot title", TargetDuration: 90, TargetScenes: 12, Status: "approved", Summary: "old summary", NextHook: "old hook", CharacterAppearances: "old", Version: 4}
+	db.Create(&episode)
+	db.Create(&models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 1, Title: "old"})
+	svc := NewScriptRevisionService(db)
+	revision, err := svc.Create(project.ID, 1, "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Model(&episode).Updates(map[string]any{"title": "current", "status": "completed", "summary": "new", "next_hook": "new", "character_appearances": "new", "version": 8})
+	if _, err := svc.Restore(project.ID, revision.ID); err != nil {
+		t.Fatal(err)
+	}
+	var got models.Episode
+	db.First(&got, episode.ID)
+	if got.ID != episode.ID || got.Title != "snapshot title" || got.TargetDuration != 90 || got.TargetScenes != 12 {
+		t.Fatalf("episode editorial restore mismatch: %+v", got)
+	}
+	if got.Status != "draft" || got.Summary != "" || got.NextHook != "" || got.CharacterAppearances != "" || got.Version != 9 {
+		t.Fatalf("episode derived state was not reset: %+v", got)
+	}
+}
+
+func TestCandidateRetryCaptureRejectsParentThatBecameStale(t *testing.T) {
+	db := safetyDB(t)
+	project := models.Project{Title: "p"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, ImageFile: "current.png"}
+	db.Create(&scene)
+	parent := models.GenerationCandidate{ProjectID: project.ID, EntityType: "scene", EntityID: scene.ID, MediaType: "image", TaskID: "parent", File: "current.png", IsCurrent: true, Stale: true}
+	db.Create(&parent)
+	_, err := NewGenerationCandidateService(db).CaptureSceneSuccess(SceneCandidateCapture{ProjectID: project.ID, SceneID: scene.ID, MediaType: "image", TaskID: "retry", File: "retry.png", ParentCandidateID: &parent.ID, RequireParentFresh: true})
+	if err == nil {
+		t.Fatal("stale parent retry was promoted")
+	}
+	db.First(&scene, scene.ID)
+	if scene.ImageFile != "current.png" {
+		t.Fatalf("current scene output changed: %+v", scene)
+	}
+}
+
+func TestEpisodeSRTAppliesPersistedDialogueOffset(t *testing.T) {
+	db := safetyDB(t)
+	project := models.Project{Title: "p"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Duration: 4}
+	db.Create(&scene)
+	db.Create(&models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Text: "line", Offset: 1.5, Speed: 1})
+	srt, count := (&ProjectService{db: db}).EpisodeSRT(&project, 1)
+	if count != 1 || !strings.Contains(srt, "00:00:01,500 --> 00:00:05,500") {
+		t.Fatalf("persisted timing missing from SRT: %q", srt)
+	}
+}
+
+func TestSynthesizeEmptyDialogueCASStoresPreviousHash(t *testing.T) {
+	db := safetyDB(t)
+	project := models.Project{Title: "p"}
+	db.Create(&project)
+	d := models.Dialogue{ProjectID: project.ID, Text: "", Status: "synthesizing", AudioFile: "old.mp3", AudioHash: "old-hash", AudioToken: "current-token", AudioRevision: 2}
+	db.Create(&d)
+	ps := &ProjectService{db: db, upload: &UploadManager{}}
+	if err := ps.synthesizeDialogue(&d, "stale-token", "new-hash"); err == nil {
+		t.Fatal("stale CAS unexpectedly succeeded")
+	}
+	if err := ps.synthesizeDialogue(&d, "current-token", "new-hash"); err != nil {
+		t.Fatal(err)
+	}
+	db.First(&d, d.ID)
+	if d.PreviousAudioHash != "old-hash" || d.AudioHash != "new-hash" || d.AudioRevision != 3 {
+		t.Fatalf("empty dialogue audio history mismatch: %+v", d)
 	}
 }
 

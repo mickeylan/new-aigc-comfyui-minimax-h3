@@ -1037,11 +1037,10 @@ func (s *Service) HandleUploadCharacterPortrait(c *gin.Context) {
 	if ch.PortraitTaskID != "" && s.Tasks != nil {
 		_ = s.Tasks.CancelTask(ch.PortraitTaskID)
 	}
-	if err := s.DB.Model(&models.Character{}).Where("id = ?", ch.ID).Updates(map[string]any{"portrait": filepath.Base(path), "portrait_task_id": "", "portrait_error": ""}).Error; err != nil {
+	if _, _, err := updateSelectedAsset(s.DB, ch.ProjectID, VariantCharacterPortrait, ch.ID, filepath.Base(path), ch.ReferencePrompt, "manual_upload", map[string]any{"portrait_task_id": "", "portrait_error": ""}, "", nil); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	registerSelectedAssetVariant(s.DB, ch.ProjectID, VariantCharacterPortrait, ch.ID, filepath.Base(path), ch.ReferencePrompt, "manual_upload")
 	s.Projects.PushProject(nil)
 	c.JSON(200, gin.H{"ok": true, "message": "照片已设为角色标准像", "portrait": filepath.Base(path)})
 }
@@ -1298,13 +1297,12 @@ func (s *Service) HandleUploadAssetImage(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	if err := s.DB.Model(&models.Asset{}).Where("id = ?", a.ID).Updates(map[string]any{
-		"image": filepath.Base(path), "image_task_id": "", "image_error": "",
-	}).Error; err != nil {
+	if _, _, err := updateSelectedAsset(s.DB, a.ProjectID, VariantAssetImage, a.ID, filepath.Base(path), a.Description, "manual_upload", map[string]any{
+		"image_task_id": "", "image_error": "",
+	}, "", nil); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	registerSelectedAssetVariant(s.DB, a.ProjectID, VariantAssetImage, a.ID, filepath.Base(path), a.Description, "manual_upload")
 	// 上传结果优先：取消旧生成任务，且同步器的 task-id 条件可阻止旧结果覆盖上传图片。
 	if a.ImageTaskID != "" && s.Tasks != nil {
 		if err := s.Tasks.CancelTask(a.ImageTaskID); err != nil && !strings.Contains(err.Error(), "已结束") {

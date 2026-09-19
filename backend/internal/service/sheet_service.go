@@ -139,14 +139,14 @@ func (s *ProjectService) syncSheets() {
 			updates, ok := s.sheetTaskUpdates(ch.SheetTaskID, fmt.Sprintf("char_sheet_%d_%d", ch.ID, time.Now().UnixNano()), ch.ProjectID)
 			if ok {
 				taskID := ch.SheetTaskID
-				res := s.db.Model(ch).Where("sheet_task_id = ?", taskID).Updates(updates)
-				if res.RowsAffected > 0 {
-					if file, _ := updates["sheet"].(string); file != "" {
-						var task models.Task
-						_ = s.db.Where("task_id = ?", taskID).First(&task).Error
-						registerSelectedAssetVariant(s.db, ch.ProjectID, VariantCharacterSheet, ch.ID, file, task.Prompt, "krea2_task:"+taskID)
-					}
-					changed = true
+				if file, _ := updates["sheet"].(string); file != "" {
+					var task models.Task
+					_ = s.db.Where("task_id = ?", taskID).First(&task).Error
+					_, applied, err := updateSelectedAsset(s.db, ch.ProjectID, VariantCharacterSheet, ch.ID, file, task.Prompt, "krea2_task:"+taskID, updates, "sheet_task_id", taskID)
+					changed = changed || (err == nil && applied)
+				} else {
+					res := s.db.Model(ch).Where("sheet_task_id = ?", taskID).Updates(updates)
+					changed = changed || res.RowsAffected > 0
 				}
 			}
 		}
@@ -158,14 +158,14 @@ func (s *ProjectService) syncSheets() {
 			updates, ok := s.sheetTaskUpdates(a.SheetTaskID, fmt.Sprintf("prop_sheet_%d_%d", a.ID, time.Now().UnixNano()), a.ProjectID)
 			if ok {
 				taskID := a.SheetTaskID
-				res := s.db.Model(a).Where("sheet_task_id = ?", taskID).Updates(updates)
-				if res.RowsAffected > 0 {
-					if file, _ := updates["sheet"].(string); file != "" {
-						var task models.Task
-						_ = s.db.Where("task_id = ?", taskID).First(&task).Error
-						registerSelectedAssetVariant(s.db, a.ProjectID, VariantAssetSheet, a.ID, file, task.Prompt, "krea2_task:"+taskID)
-					}
-					changed = true
+				if file, _ := updates["sheet"].(string); file != "" {
+					var task models.Task
+					_ = s.db.Where("task_id = ?", taskID).First(&task).Error
+					_, applied, err := updateSelectedAsset(s.db, a.ProjectID, VariantAssetSheet, a.ID, file, task.Prompt, "krea2_task:"+taskID, updates, "sheet_task_id", taskID)
+					changed = changed || (err == nil && applied)
+				} else {
+					res := s.db.Model(a).Where("sheet_task_id = ?", taskID).Updates(updates)
+					changed = changed || res.RowsAffected > 0
 				}
 			}
 		}

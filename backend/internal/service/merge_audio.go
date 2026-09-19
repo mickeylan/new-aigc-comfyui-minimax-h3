@@ -175,7 +175,7 @@ func (s *Service) HandleCreateAudioMerge(c *gin.Context) {
 }
 
 func (s *ProjectService) createAudioMergeTask(p *models.Project, sceneIDs []uint, dub, subtitles bool, audio MergeAudioOptions) (*models.MergeTask, error) {
-	mt, scenes, err := s.createMergeTaskRecord(p, sceneIDs, audio)
+	mt, scenes, err := s.createMergeTaskRecord(p, sceneIDs, dub, subtitles, audio)
 	if err != nil {
 		return nil, err
 	}
@@ -197,6 +197,8 @@ func (s *ProjectService) audioMixMediaPath(projectID uint, file string) (string,
 }
 
 func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, scenes []models.Scene, dub, subtitles bool) {
+	// Rendering is driven by the persisted request, not mutable goroutine arguments.
+	dub, subtitles = mt.RequestedDub, mt.RequestedSubtitles
 	claim := s.db.Model(&models.MergeTask{}).Where("id = ? AND project_id = ? AND generation = ? AND status = ?", mt.ID, mt.ProjectID, mt.Generation, "pending").Update("status", "running")
 	if claim.Error != nil || claim.RowsAffected == 0 {
 		return

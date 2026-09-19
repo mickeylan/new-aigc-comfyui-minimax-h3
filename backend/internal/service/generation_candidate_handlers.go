@@ -49,6 +49,42 @@ func (s *Service) HandleReviewGenerationCandidate(c *gin.Context) {
 	c.JSON(http.StatusOK, row)
 }
 
+// HandleRetryGenerationCandidate retries the immutable candidate snapshot without claiming it,
+// changing review state, or replacing the Scene's current output. The cloned result is promoted
+// only by the candidate retry synchronizer after it succeeds. Stale snapshots are rejected:
+// promoting their result would reintroduce inputs explicitly invalidated by later editorial work.
+func (s *Service) HandleRetryGenerationCandidate(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("cid"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid candidate id"})
+		return
+	}
+	var candidate models.GenerationCandidate
+	if err := s.DB.Where("id = ? AND project_id = ? AND entity_type = ?", id, p.ID, "scene").First(&candidate).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "candidate not found"})
+		return
+	}
+	if candidate.Stale {
+		c.JSON(http.StatusConflict, gin.H{"error": "过期候选不能重试；其输入已被后续编辑失效"})
+		return
+	}
+	if s.Tasks == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "task service unavailable"})
+		return
+	}
+	retryTask, err := s.Tasks.CloneTaskSnapshot(candidate.TaskID, &candidate.ID)
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "candidate task snapshot unavailable: " + err.Error()})
+		return
+	}
+	go func() { _ = s.Tasks.Execute(retryTask.TaskID) }()
+	c.JSON(http.StatusAccepted, gin.H{"ok": true, "parent_candidate_id": candidate.ID, "task_id": retryTask.TaskID})
+}
+
 func (s *Service) HandleBranchGenerationCandidate(c *gin.Context) {
 	p, ok := s.loadProject(c)
 	if !ok {

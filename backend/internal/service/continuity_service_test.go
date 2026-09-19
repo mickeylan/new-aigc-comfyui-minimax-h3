@@ -147,7 +147,7 @@ func TestContinuityBridgeUsesPreviousFrameAndCurrentStoryboard(t *testing.T) {
 	}
 }
 
-func TestContinuityInvalidatesOnlyDirectDependents(t *testing.T) {
+func TestContinuityInvalidatesTransitiveDependents(t *testing.T) {
 	svc, db := newContinuityTestService(t)
 	p := models.Project{Title: "p"}
 	db.Create(&p)
@@ -163,7 +163,7 @@ func TestContinuityInvalidatesOnlyDirectDependents(t *testing.T) {
 	var c2, c3 models.SceneContinuity
 	db.Where("scene_id = ?", s2.ID).First(&c2)
 	db.Where("scene_id = ?", s3.ID).First(&c3)
-	if c2.Status != "source_invalidated" || c3.Status != "ready" {
+	if c2.Status != "source_invalidated" || c3.Status != "source_invalidated" {
 		t.Fatalf("unexpected statuses: %s %s", c2.Status, c3.Status)
 	}
 }

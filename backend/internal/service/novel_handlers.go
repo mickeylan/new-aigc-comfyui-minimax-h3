@@ -2,7 +2,7 @@ package service
 
 import (
 	"fmt"
-	"io"
+	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -41,6 +41,8 @@ func (s *Service) HandleCreateNovelProject(c *gin.Context) {
 	c.JSON(200, p)
 }
 
+const maxNovelUploadBytes int64 = 20 << 20
+
 // HandleUploadNovel 上传小说文件（TXT/Markdown）
 func (s *Service) HandleUploadNovel(c *gin.Context) {
 	p, ok := s.loadProject(c)
@@ -53,6 +55,7 @@ func (s *Service) HandleUploadNovel(c *gin.Context) {
 		return
 	}
 
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxNovelUploadBytes+uploadMultipartOverhead)
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		c.JSON(400, gin.H{"error": "file required: " + err.Error()})
@@ -60,41 +63,31 @@ func (s *Service) HandleUploadNovel(c *gin.Context) {
 	}
 	defer file.Close()
 
-	data, err := io.ReadAll(file)
+	data, err := readBoundedUpload(file, maxNovelUploadBytes)
 	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": err.Error()})
+		return
+	}
+	if _, _, err := s.Novel.ValidateNovel(header.Filename, data); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if len(data) == 0 {
-		c.JSON(400, gin.H{"error": "空文件"})
-		return
-	}
-
-	// 验证文件类型
 	ext := strings.ToLower(filepath.Ext(header.Filename))
-	if ext != ".txt" && ext != ".md" && ext != ".markdown" {
-		c.JSON(400, gin.H{"error": "仅支持 TXT/MD/MARKDOWN 文件"})
-		return
-	}
-
-	// 保存文件
-	filename := fmt.Sprintf("novel_%d_%d%s", p.ID, header.Size, ext)
+	storedPath := ""
+	fileHash := s.Novel.ComputeFileHash(data)
+	filename := fmt.Sprintf("novel_%d_%s%s", p.ID, fileHash[:12], ext)
 	if s.Upload != nil {
 		path, _, err := s.Upload.SaveFile(fmt.Sprintf("%d", p.ID), "novel", filename, data)
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
-		p.NovelFilePath = filepath.Base(path)
-		if err := s.DB.Model(p).Update("novel_file_path", p.NovelFilePath).Error; err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
-			return
-		}
+		storedPath = filepath.Base(path)
 	}
 
-	// 处理导入
-	updated, err := s.Novel.ImportNovel(p.ID, header.Filename, data)
+	// Chapters and authoritative source path are published in the same transaction.
+	updated, err := s.Novel.ImportNovelWithPath(p.ID, header.Filename, data, storedPath)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return

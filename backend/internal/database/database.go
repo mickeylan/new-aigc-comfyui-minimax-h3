@@ -82,5 +82,19 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 	); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	if err := migrateLegacyDialogueAudioState(db); err != nil {
+		return nil, fmt.Errorf("migrate legacy dialogue audio: %w", err)
+	}
 	return db, nil
+}
+
+// Legacy ready rows predate audio_hash and cannot prove that their audio matches the current
+// speech inputs. Keep the file for QA/recovery, but require an explicit re-synthesis before use.
+func migrateLegacyDialogueAudioState(db *gorm.DB) error {
+	return db.Model(&models.Dialogue{}).
+		Where("status = ? AND (audio_hash IS NULL OR TRIM(audio_hash) = '')", "ready").
+		Updates(map[string]any{
+			"status": "pending", "audio_stale": true,
+			"audio_stale_reason": "旧版配音缺少输入摘要，需重新合成", "audio_token": "",
+		}).Error
 }

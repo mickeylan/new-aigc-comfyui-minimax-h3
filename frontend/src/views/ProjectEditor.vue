@@ -183,7 +183,7 @@
               </div>
               <span class="sub-scene">场景{{ s.scene_order }}</span>
             </div>
-            <p class="sub-hint">时间轴按配音真实时长自动对齐；拖动上方场景条可调整顺序。字幕仅展示，合并时自动烧录。</p>
+            <p class="sub-hint">时间轴按配音真实时长自动对齐；调整字幕时间会保存为该对白的时间偏移，并在合并时生效。</p>
           </div>
         </div>
       </section>
@@ -506,11 +506,20 @@ async function dubScene(sc) {
   }
 }
 
-function shiftSub(i, delta) {
+async function shiftSub(i, delta) {
   const s = subtitles.value[i]
-  s.start = Math.max(0, round1(s.start + delta))
-  s.end = Math.max(s.start + 0.1, round1(s.end + delta))
-  toast.show('字幕时间已微调（合并时生效）')
+  const dialogue = dialogues.value.find(d => d.id === s.dialogue_id)
+  if (!dialogue || !Number.isFinite(delta)) return
+  const offset = round1((Number(dialogue.offset) || 0) + delta)
+  try {
+    const { data } = await api.updateDialogue(id(), dialogue.id, { offset })
+    Object.assign(dialogue, data, { _text: data.text, _voice: data.voice || '' })
+    await load()
+    toast.show('字幕时间偏移已保存')
+  } catch (e) {
+    toast.error(e.response?.data?.error || '保存字幕时间失败')
+    await load()
+  }
 }
 
 const readyVideoCount = computed(() => scenes.value.filter(s => s.status === 'video_ready').length)

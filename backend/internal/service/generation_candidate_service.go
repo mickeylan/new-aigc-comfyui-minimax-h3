@@ -27,6 +27,9 @@ type SceneCandidateCapture struct {
 	ParentCandidateID *uint
 	// ExpectedTaskID prevents a late successful task from replacing a newer Scene task.
 	ExpectedTaskID string
+	// RequireParentFresh is used by detached candidate retries. It prevents a successful
+	// retry from promoting a snapshot that became stale while the task was running.
+	RequireParentFresh bool
 }
 
 func NewGenerationCandidateService(db *gorm.DB) *GenerationCandidateService {
@@ -111,6 +114,18 @@ func (s *GenerationCandidateService) CaptureSceneSuccess(in SceneCandidateCaptur
 		var scene models.Scene
 		if err := tx.Where("id = ? AND project_id = ?", in.SceneID, in.ProjectID).First(&scene).Error; err != nil {
 			return err
+		}
+		if in.RequireParentFresh {
+			if in.ParentCandidateID == nil {
+				return fmt.Errorf("候选重试缺少父候选")
+			}
+			var parent models.GenerationCandidate
+			if err := tx.Where("id = ? AND project_id = ? AND entity_type = ? AND entity_id = ? AND media_type = ?", *in.ParentCandidateID, in.ProjectID, "scene", in.SceneID, in.MediaType).First(&parent).Error; err != nil {
+				return fmt.Errorf("父候选不可用: %w", err)
+			}
+			if parent.Stale {
+				return fmt.Errorf("候选已过期")
+			}
 		}
 		if in.ExpectedTaskID != "" {
 			actual := scene.ImageTaskID

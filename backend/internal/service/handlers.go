@@ -1,6 +1,8 @@
 package service
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -479,35 +482,116 @@ func (s *Service) HandleRerunTask(c *gin.Context) {
 
 // ---------- 文件上传 ----------
 
+const uploadMultipartOverhead int64 = 1 << 20
+
+var uploadLimits = map[string]int64{
+	"image":    20 << 20,
+	"audio":    100 << 20,
+	"video":    512 << 20,
+	"document": 20 << 20,
+}
+
+func readBoundedUpload(file io.Reader, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("文件超过 %d MiB 限制", limit>>20)
+	}
+	return data, nil
+}
+
+func validateUploadContent(ftype, filename string, data []byte) error {
+	ext := strings.ToLower(filepath.Ext(filename))
+	mime := http.DetectContentType(data)
+	allowed := false
+	switch ftype {
+	case "image":
+		allowed = map[string]string{".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}[ext] == mime
+	case "audio":
+		switch ext {
+		case ".mp3":
+			allowed = mime == "audio/mpeg" || (len(data) >= 2 && data[0] == 0xff && data[1]&0xe0 == 0xe0)
+		case ".wav":
+			allowed = len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WAVE"
+		case ".flac":
+			allowed = len(data) >= 4 && string(data[:4]) == "fLaC"
+		case ".m4a", ".aac":
+			allowed = (len(data) >= 12 && string(data[4:8]) == "ftyp") || (len(data) >= 2 && data[0] == 0xff && data[1]&0xf6 == 0xf0)
+		}
+	case "video":
+		switch ext {
+		case ".mp4", ".mov", ".m4v":
+			allowed = len(data) >= 12 && string(data[4:8]) == "ftyp"
+		case ".webm", ".mkv":
+			allowed = len(data) >= 4 && bytes.Equal(data[:4], []byte{0x1a, 0x45, 0xdf, 0xa3})
+		}
+	case "document":
+		switch ext {
+		case ".txt", ".md", ".markdown":
+			allowed = utf8.Valid(data) && !bytes.Contains(data, []byte{0})
+		case ".pdf":
+			allowed = len(data) >= 5 && string(data[:5]) == "%PDF-"
+		case ".docx":
+			if zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data))); err == nil {
+				var contentTypes, document bool
+				for _, f := range zr.File {
+					contentTypes = contentTypes || f.Name == "[Content_Types].xml"
+					document = document || f.Name == "word/document.xml"
+				}
+				allowed = contentTypes && document
+			}
+		}
+	default:
+		return fmt.Errorf("文件类型无效")
+	}
+	if !allowed {
+		return fmt.Errorf("文件扩展名或内容与 %s 类型不匹配", ftype)
+	}
+	return nil
+}
+
 func (s *Service) HandleUpload(c *gin.Context) {
+	// Cap multipart parsing itself; the stricter type-specific cap is enforced while reading the part.
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, uploadLimits["video"]+uploadMultipartOverhead)
 	ftype := c.PostForm("type")
+	if ftype == "" {
+		ftype = "image"
+	}
+	limit, ok := uploadLimits[ftype]
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件类型无效"})
+		return
+	}
 	taskID := c.PostForm("task_id")
 	if taskID == "" {
 		taskID = "console-upload"
 	}
-	if ftype == "" {
-		ftype = "image"
-	}
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
-		c.JSON(400, gin.H{"error": "file required: " + err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file required: " + err.Error()})
 		return
 	}
 	defer file.Close()
 
-	name := header.Filename
-	if name == "" {
-		name = "upload_" + fmt.Sprint(time.Now().UnixNano())
-	}
-	// 生成唯一文件名
-	ext := filepath.Ext(name)
-	name = fmt.Sprintf("%s_%d%s", strings.TrimSuffix(name, ext), time.Now().UnixNano()%1e6, ext)
-
-	data, err := io.ReadAll(file)
+	originalName, err := safeFileSegment(header.Filename, "文件名")
 	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	data, err := readBoundedUpload(file, limit)
+	if err != nil {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": err.Error()})
+		return
+	}
+	if err := validateUploadContent(ftype, originalName, data); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(originalName))
+	name := fmt.Sprintf("%s_%d%s", strings.TrimSuffix(originalName, filepath.Ext(originalName)), time.Now().UnixNano()%1e6, ext)
 	path, size, err := s.Upload.SaveFile(taskID, ftype, name, data)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
