@@ -27,7 +27,17 @@
 
     <section class="section">
       <div class="section-head"><div><span class="overline">CONTINUITY</span><h2>跨集连续性</h2><p class="sub">上一集摘要、末帧、角色出场与下一集钩子。</p></div><div class="section-actions"><button class="btn btn-sm btn-ghost" @click="loadEpisodeContinuity">刷新</button><button class="btn btn-sm btn-secondary" @click="regenerateContinuity">AI重生成</button><button class="btn btn-sm btn-secondary" @click="runCreativeIntent">创作意图澄清</button></div></div>
-      <div class="card" v-if="continuity"><p><strong>上一集摘要：</strong>{{ continuity.previous_summary || '暂无' }}</p><p><strong>结尾钩子：</strong>{{ continuity.previous_hook || '暂无' }}</p><p><strong>本集角色：</strong>{{ (continuity.character_appearances || []).map(v => v.name).join('、') || '暂无' }}</p><div class="merge-links" v-if="continuity.last_scene_images?.length"><span v-for="f in continuity.last_scene_images" :key="f">{{ f }}</span></div><pre v-if="intentDraft" class="prompt-preview">{{ intentDraft }}</pre></div>
+      <div class="card" v-if="continuity"><p><strong>上一集摘要：</strong><span v-if="continuity.previous_episode?.summary_stale" class="badge warn">已过期</span> {{ continuity.previous_summary || '暂无' }}</p><p><strong>结尾钩子：</strong><span v-if="continuity.previous_episode?.next_hook_stale" class="badge warn">已过期</span> {{ continuity.previous_hook || '暂无' }}</p><p><strong>本集角色：</strong>{{ (continuity.character_appearances || []).map(v => v.name).join('、') || '暂无' }}</p><div class="merge-links" v-if="continuity.last_scene_images?.length"><span v-for="f in continuity.last_scene_images" :key="f">{{ f }}</span></div><pre v-if="intentDraft" class="prompt-preview">{{ intentDraft }}</pre></div>
+    </section>
+
+    <section class="section">
+      <details class="card"><summary><strong>项目 Skill 配置与审计</strong></summary>
+        <p class="sub">项目配置仅在 Skill 的 operation 与具体操作契约一致时生效；否则安全回退到系统专用 Skill。</p>
+        <div class="shot-grid two"><label>阶段<select v-model="skillStage" class="input" @change="loadSkillPanel"><option v-for="s in skillStages" :key="s.value" :value="s.value">{{ s.label }}</option></select></label><label>Skill<select v-model="selectedSkillId" class="input"><option value="">使用系统默认</option><option v-for="s in stageSkills" :key="s.id" :value="String(s.id)">{{ s.name }} · {{ s.operation || s.code }} · v{{ s.version }}</option></select></label></div>
+        <div class="section-actions"><button class="btn btn-sm" @click="saveProjectSkill">保存项目配置</button><button class="btn btn-sm btn-ghost" @click="resetProjectSkill">恢复系统默认</button><button class="btn btn-sm btn-ghost" @click="loadSkillAudit">刷新审计</button></div>
+        <p class="sub" v-if="effectiveSkill">当前有效：{{ effectiveSkill.name }}（{{ effectiveSkill.operation || effectiveSkill.code }}）</p>
+        <div v-if="skillAudits.length" class="history"><div v-for="row in skillAudits" :key="row.id" class="history-item">{{ row.stage }} · {{ row.skill_code }} · {{ row.status }} · {{ new Date(row.created_at).toLocaleString() }}</div></div>
+      </details>
     </section>
 
     <!-- 时间轴 -->
@@ -298,6 +308,14 @@ const activeEpN = ref(1)
 const epIndex = ref(0)
 const epCount = ref(1)
 const showFrameSelector = ref(false)
+const skillStages = ref([])
+const allSkills = ref([])
+const projectSkillConfigs = ref([])
+const skillStage = ref('storyboard')
+const selectedSkillId = ref('')
+const effectiveSkill = ref(null)
+const skillAudits = ref([])
+const stageSkills = computed(() => allSkills.value.filter(s => s.stage === skillStage.value && s.enabled))
 
 // 目标时长与累计时长计算
 const compareCandidates = computed(() => candidates.value.filter(c => compareCandidateIds.value.includes(c.id)))
@@ -353,6 +371,37 @@ function epNums() {
   return arr
 }
 
+async function loadSkillPanel() {
+  try {
+    if (!skillStages.value.length) {
+      const [stages, skills, configs] = await Promise.all([api.skillStages(), api.listSkills({ enabled: true }), api.projectSkills(id())])
+      skillStages.value = stages.data || []
+      allSkills.value = skills.data || []
+      projectSkillConfigs.value = configs.data || []
+    }
+    const cfg = projectSkillConfigs.value.find(v => v.stage === skillStage.value)
+    selectedSkillId.value = cfg?.skill_id ? String(cfg.skill_id) : ''
+    const { data } = await api.effectiveSkill(id(), skillStage.value)
+    effectiveSkill.value = data || null
+  } catch (e) { toast.error(e.response?.data?.error || '加载项目 Skill 配置失败') }
+}
+async function saveProjectSkill() {
+  try {
+    if (!selectedSkillId.value) { await api.resetProjectSkill(id(), skillStage.value) }
+    else { await api.setProjectSkill(id(), { stage: skillStage.value, skill_id: Number(selectedSkillId.value), enabled: true }) }
+    projectSkillConfigs.value = (await api.projectSkills(id())).data || []
+    await loadSkillPanel(); toast.success('项目 Skill 配置已保存')
+  } catch (e) { toast.error(e.response?.data?.error || '保存项目 Skill 配置失败') }
+}
+async function resetProjectSkill() {
+  try { await api.resetProjectSkill(id(), skillStage.value); projectSkillConfigs.value = (await api.projectSkills(id())).data || []; await loadSkillPanel(); toast.success('已恢复系统默认 Skill') }
+  catch (e) { toast.error(e.response?.data?.error || '重置 Skill 失败') }
+}
+async function loadSkillAudit() {
+  try { skillAudits.value = (await api.skillAuditLogs(id(), { stage: skillStage.value, limit: 20 })).data || [] }
+  catch (e) { toast.error(e.response?.data?.error || '加载 Skill 审计失败') }
+}
+
 async function load() {
   try {
     const [{ data }, episodeRes] = await Promise.all([api.editorData(id(), activeEpN.value), api.projectEpisodes(id())])
@@ -367,7 +416,7 @@ async function load() {
     if (selected.value) { durationInput.value = selected.value.duration || 5; await loadCandidates() } else candidates.value = []
     const episodeNumbers = epNums()
     epIndex.value = Math.max(0, episodeNumbers.indexOf(activeEpN.value))
-    await Promise.all([loadMerges(), loadAudioLayers(), loadSharedAssets(), loadEpisodeContinuity()])
+    await Promise.all([loadMerges(), loadAudioLayers(), loadSharedAssets(), loadEpisodeContinuity(), loadSkillPanel()])
   } catch (e) {
     toast.error(e.response?.data?.error || '加载剪辑台失败')
   }

@@ -139,6 +139,9 @@ func (s *SkillService) InitSystemSkills() error {
 	}
 
 	for _, skill := range systemSkills {
+		if skill.Operation == "" {
+			skill.Operation = skill.Code
+		}
 		var latest models.Skill
 		err := s.db.Where("code = ?", skill.Code).Order("version DESC, id DESC").First(&latest).Error
 		switch {
@@ -202,6 +205,10 @@ func (s *SkillService) CreateSkill(input models.Skill) (*models.Skill, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	input.Code = strings.TrimSpace(input.Code)
 	input.Stage = strings.TrimSpace(input.Stage)
+	input.Operation = strings.TrimSpace(input.Operation)
+	if input.Operation == "" {
+		input.Operation = input.Code
+	}
 	if input.Name == "" {
 		return nil, fmt.Errorf("技能名称不能为空")
 	}
@@ -233,13 +240,14 @@ func (s *SkillService) UpdateSkill(id uint, updates map[string]any) (*models.Ski
 		allowed["stage"] = true
 		allowed["prompt_template"] = true
 		allowed["system_prompt"] = true
+		allowed["operation"] = true
 	}
 	for field, value := range updates {
 		if !allowed[field] {
 			return nil, fmt.Errorf("不允许修改字段: %s", field)
 		}
 		switch field {
-		case "name", "stage", "description", "prompt_template", "system_prompt":
+		case "name", "stage", "description", "prompt_template", "system_prompt", "operation":
 			if _, ok := value.(string); !ok {
 				return nil, fmt.Errorf("字段 %s 类型无效", field)
 			}
@@ -279,7 +287,7 @@ func (s *SkillService) UpdateSkill(id uint, updates map[string]any) (*models.Ski
 		return &skill, nil
 	}
 	// 自定义 Skill 的内容修改创建不可变新版本，已有项目继续锁定原 SkillID/VersionSnapshot。
-	versioned := !skill.IsSystem && (updates["name"] != nil || updates["stage"] != nil || updates["description"] != nil || updates["prompt_template"] != nil || updates["system_prompt"] != nil)
+	versioned := !skill.IsSystem && (updates["name"] != nil || updates["stage"] != nil || updates["description"] != nil || updates["prompt_template"] != nil || updates["system_prompt"] != nil || updates["operation"] != nil)
 	if versioned {
 		var latest models.Skill
 		if err := s.db.Where("code = ?", skill.Code).Order("version DESC, id DESC").First(&latest).Error; err != nil {
@@ -303,6 +311,11 @@ func (s *SkillService) UpdateSkill(id uint, updates map[string]any) (*models.Ski
 				clone.PromptTemplate = value.(string)
 			case "system_prompt":
 				clone.SystemPrompt = value.(string)
+			case "operation":
+				clone.Operation = strings.TrimSpace(value.(string))
+				if clone.Operation == "" {
+					clone.Operation = clone.Code
+				}
 			case "enabled":
 				clone.Enabled = value.(bool)
 			case "sort_order":
@@ -561,8 +574,17 @@ func (s *SkillService) ChatWithConfiguredOrFallbackSkill(projectID uint, stage, 
 		if err != nil || !configured.Enabled {
 			return "", fmt.Errorf("项目配置的技能不可用")
 		}
-		skill = configured
-	} else {
+		operation := strings.TrimSpace(configured.Operation)
+		if operation == "" {
+			operation = configured.Code
+		}
+		// Stage configuration is broad; it may replace a specialized operation only
+		// when the selected skill explicitly implements the same operation contract.
+		if configured.Stage == stage && operation == fallbackCode {
+			skill = configured
+		}
+	}
+	if skill == nil {
 		skill, err = s.latestEnabledSkillByCode(fallbackCode)
 		if err != nil {
 			return "", err

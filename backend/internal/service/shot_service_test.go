@@ -21,6 +21,7 @@ func newTestDBWithNewModels(t *testing.T) *gorm.DB {
 		&models.Project{}, &models.Episode{}, &models.Scene{}, &models.Shot{}, &models.PromptVersion{}, &models.StylePreset{},
 		&models.Character{}, &models.CharacterLook{}, &models.ShotCharacterLook{},
 		&models.CharacterOutfit{}, &models.ShotCharacterOutfit{},
+		&models.GenerationCandidate{}, &models.FrameCandidate{}, &models.SceneContinuity{}, &models.Dialogue{},
 	); err != nil {
 		t.Fatal(err)
 	}

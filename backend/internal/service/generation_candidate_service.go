@@ -30,6 +30,9 @@ type SceneCandidateCapture struct {
 	// RequireParentFresh is used by detached candidate retries. It prevents a successful
 	// retry from promoting a snapshot that became stale while the task was running.
 	RequireParentFresh bool
+	// FinalizeDerived applies the same downstream invalidation used by normal and detached
+	// task completion. Callers that only backfill candidate history leave this false.
+	FinalizeDerived bool
 }
 
 func NewGenerationCandidateService(db *gorm.DB) *GenerationCandidateService {
@@ -163,12 +166,34 @@ func (s *GenerationCandidateService) CaptureSceneSuccess(in SceneCandidateCaptur
 		if in.MediaType == "image" {
 			updates["image_file"], updates["image_task_id"], updates["image_token"], updates["image_candidate_parent_id"] = in.File, in.TaskID, "", nil
 			updates["status"] = "image_ready"
+			if in.FinalizeDerived {
+				updates["video_file"], updates["video_input_file"], updates["video_task_id"], updates["video_gpu"] = "", "", "", nil
+				updates["video_full_prompt"], updates["video_template"] = "", ""
+				updates["video_first_frame_img"], updates["video_last_frame_img"] = "", ""
+				updates["video_candidate_parent_id"], updates["video_retries"] = nil, 0
+			}
 		} else {
 			updates["video_file"], updates["video_task_id"] = in.File, in.TaskID
 			updates["video_input_file"], updates["video_gpu"], updates["video_candidate_parent_id"] = in.VideoInputFile, in.VideoGPU, nil
 			updates["status"] = "video_ready"
 		}
-		return tx.Model(&models.Scene{}).Where("id = ? AND project_id = ?", in.SceneID, in.ProjectID).Updates(updates).Error
+		if err := tx.Model(&models.Scene{}).Where("id = ? AND project_id = ?", in.SceneID, in.ProjectID).Updates(updates).Error; err != nil {
+			return err
+		}
+		if !in.FinalizeDerived {
+			return nil
+		}
+		reason := "来源视频已更新，请重新选择衔接帧"
+		if in.MediaType == "image" {
+			reason = "来源分镜图已更新，请重新生成视频并选择衔接帧"
+			if err := MarkSceneCandidatesStale(tx, in.ProjectID, in.SceneID, "video", reason); err != nil {
+				return err
+			}
+		}
+		if err := invalidateContinuityDependentsTx(tx, in.ProjectID, []uint{in.SceneID}, reason); err != nil {
+			return err
+		}
+		return tx.Where("project_id = ? AND scene_id = ?", in.ProjectID, in.SceneID).Delete(&models.FrameCandidate{}).Error
 	})
 	return &captured, err
 }

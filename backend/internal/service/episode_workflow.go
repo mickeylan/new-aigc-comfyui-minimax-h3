@@ -1,6 +1,7 @@
 package service
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -100,6 +101,10 @@ func (s *Service) HandleEpisodeContinuity(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "episode not found"})
 		return
 	}
+	if err := refreshEpisodeEditorialStatus(s.DB, &episode); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
 	view := EpisodeContinuityView{Episode: episode, LastSceneImages: []string{}, ProviderID: s.TextProviderFact.Name(), ProviderReady: s.textProviderConfigured()}
 	appearances, err := episodeAppearances(s.DB, p.ID, n)
 	if err != nil {
@@ -110,6 +115,10 @@ func (s *Service) HandleEpisodeContinuity(c *gin.Context) {
 	if n > 1 {
 		var previous models.Episode
 		if s.DB.Where("project_id = ? AND episode_number = ?", p.ID, n-1).First(&previous).Error == nil {
+			if err := refreshEpisodeEditorialStatus(s.DB, &previous); err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
 			view.PreviousEpisode, view.PreviousSummary, view.PreviousHook = &previous, previous.Summary, previous.NextHook
 			var scenes []models.Scene
 			_ = s.DB.Where("project_id = ? AND episode_n = ? AND image_file <> ''", p.ID, n-1).Order("`order` DESC, id DESC").Limit(3).Find(&scenes).Error
@@ -140,20 +149,27 @@ func (s *Service) HandleRegenerateEpisodeContinuity(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "episode not found"})
 		return
 	}
-	var scenes []models.Scene
-	if err := s.DB.Where("project_id = ? AND episode_n = ?", p.ID, n).Order("`order`, id").Find(&scenes).Error; err != nil {
+	generation, err := latestEpisodeGeneration(s.DB, p.ID, n)
+	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	var source strings.Builder
-	for _, scene := range scenes {
-		fmt.Fprintf(&source, "%d. %s：%s\n", scene.Order, scene.Title, scene.Content)
+	var sceneCount int64
+	if err := s.DB.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ?", p.ID, n, generation).Count(&sceneCount).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
 	}
-	if source.Len() == 0 {
+	if sceneCount == 0 {
 		c.JSON(409, gin.H{"error": "本集没有场景，不能生成摘要与钩子"})
 		return
 	}
-	raw, err := s.TextProviderFact.Chat("只输出严格JSON对象，字段summary和next_hook均为字符串。忠实概括输入，不新增剧情、角色或对白。summary不超过180字；next_hook只描述本集结尾已存在的悬念。", source.String())
+	source, err := episodeEditorialSnapshot(s.DB, p.ID, n)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	inputHash := fmt.Sprintf("%x", sha256.Sum256(source))
+	raw, err := s.TextProviderFact.Chat("只输出严格JSON对象，字段summary和next_hook均为字符串。忠实概括输入，不新增剧情、角色或对白。summary不超过180字；next_hook只描述本集结尾已存在的悬念。", string(source))
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
@@ -168,7 +184,7 @@ func (s *Service) HandleRegenerateEpisodeContinuity(c *gin.Context) {
 	}
 	appearances, _ := episodeAppearances(s.DB, p.ID, n)
 	appearanceJSON, _ := json.Marshal(appearances)
-	updated, err := UpdateProjectEpisode(s.DB, p.ID, n, map[string]any{"summary": result.Summary, "next_hook": result.NextHook, "character_appearances": string(appearanceJSON)})
+	updated, err := UpdateProjectEpisode(s.DB, p.ID, n, map[string]any{"summary": result.Summary, "next_hook": result.NextHook, "character_appearances": string(appearanceJSON), "editorial_input_hash": inputHash})
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -202,7 +218,13 @@ func (s *Service) HandleReassignSceneEpisode(c *gin.Context) {
 		if err := tx.Model(&models.Scene{}).Where("project_id = ? AND generation = ? AND episode_n = ?", scene.ProjectID, scene.Generation, req.EpisodeN).Select("COALESCE(MAX(`order`), 0)").Scan(&maxOrder).Error; err != nil {
 			return err
 		}
-		return tx.Model(scene).Updates(map[string]any{"episode_n": req.EpisodeN, "order": maxOrder + 1}).Error
+		if err := tx.Model(scene).Updates(map[string]any{"episode_n": req.EpisodeN, "order": maxOrder + 1}).Error; err != nil {
+			return err
+		}
+		if err := markEpisodeEditorialStale(tx, scene.ProjectID, scene.EpisodeN); err != nil {
+			return err
+		}
+		return markEpisodeEditorialStale(tx, scene.ProjectID, req.EpisodeN)
 	})
 	if err != nil {
 		c.JSON(409, gin.H{"error": err.Error()})

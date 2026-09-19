@@ -10,13 +10,14 @@ import (
 )
 
 type ShotPresetApplication struct {
-	Shot        models.Shot        `json:"shot"`
-	Preset      models.StylePreset `json:"preset"`
-	PromptStyle string             `json:"prompt_style"`
-	Prompt      string             `json:"prompt"`
-	Changed     bool               `json:"changed"`
-	Preview     bool               `json:"preview"`
-	Metadata    map[string]any     `json:"metadata"`
+	Shot           models.Shot        `json:"shot"`
+	Preset         models.StylePreset `json:"preset"`
+	PromptStyle    string             `json:"prompt_style"`
+	NegativePrompt string             `json:"negative_prompt"`
+	Prompt         string             `json:"prompt"`
+	Changed        bool               `json:"changed"`
+	Preview        bool               `json:"preview"`
+	Metadata       map[string]any     `json:"metadata"`
 }
 
 func (s *StylePresetService) RecommendationsForShot(projectID, shotID uint, limit int) ([]StyleRecommendation, error) {
@@ -55,20 +56,23 @@ func (s *StylePresetService) ApplyPresetToShot(projectID, shotID, presetID uint,
 	if err != nil {
 		return nil, err
 	}
-	style, changed := appendPresetTail(shot.PromptStyle, preset.PromptTail)
+	style, styleChanged := appendPresetTail(shot.PromptStyle, preset.PromptTail)
+	negative, negativeChanged := appendPresetTail(shot.NegativePrompt, preset.NegativeTail)
+	changed := styleChanged || negativeChanged
 	previewShot := shot
 	previewShot.PromptStyle = style
+	previewShot.NegativePrompt = negative
 	metadata := map[string]any{"preset_id": preset.ID, "preset_name": preset.Name, "category": preset.Category, "preview": preview}
-	result := &ShotPresetApplication{Shot: previewShot, Preset: *preset, PromptStyle: style, Prompt: canonicalShotPrompt(previewShot), Changed: changed, Preview: preview, Metadata: metadata}
+	result := &ShotPresetApplication{Shot: previewShot, Preset: *preset, PromptStyle: style, NegativePrompt: negative, Prompt: canonicalShotPrompt(previewShot), Changed: changed, Preview: preview, Metadata: metadata}
 	if preview || !changed {
 		return result, nil
 	}
 	metaJSON, _ := json.Marshal(metadata)
 	err = s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&models.Shot{}).Where("id = ?", shot.ID).Update("prompt_style", style).Error; err != nil {
+		if err := tx.Model(&models.Shot{}).Where("id = ?", shot.ID).Updates(map[string]any{"prompt_style": style, "negative_prompt": negative}).Error; err != nil {
 			return err
 		}
-		if err := tx.Create(&models.PromptVersion{ProjectID: projectID, EntityType: "shot", EntityID: shot.ID, Content: result.Prompt, Action: "preset_apply", Metadata: string(metaJSON)}).Error; err != nil {
+		if err := tx.Create(&models.PromptVersion{ProjectID: projectID, EntityType: "shot", EntityID: shot.ID, Content: result.Prompt, Action: "preset_apply", State: PromptVersionStateApplied, Metadata: string(metaJSON)}).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&models.StylePreset{}).Where("id = ?", preset.ID).UpdateColumn("usage_count", gorm.Expr("usage_count + 1")).Error; err != nil {

@@ -1119,22 +1119,44 @@ func (s *Service) HandleExpandShotDirectorPrompt(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	clean := strings.TrimSpace(output)
-	clean = strings.TrimPrefix(clean, "```json")
-	clean = strings.TrimPrefix(clean, "```")
-	clean = strings.TrimSuffix(clean, "```")
-	var result struct {
-		Subject  string `json:"subject"`
-		Action   string `json:"action"`
-		Camera   string `json:"camera"`
-		Lighting string `json:"lighting"`
-		Style    string `json:"style"`
-	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(clean)), &result); err != nil {
+	result, err := parseDirectorShotPacket(output)
+	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "导演Skill返回的五段JSON无效: " + err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+type directorShotPacket struct {
+	Subject  string `json:"subject"`
+	Action   string `json:"action"`
+	Camera   string `json:"camera"`
+	Lighting string `json:"lighting"`
+	Style    string `json:"style"`
+}
+
+func parseDirectorShotPacket(output string) (*directorShotPacket, error) {
+	clean := strings.TrimSpace(output)
+	clean = strings.TrimPrefix(clean, "```json")
+	clean = strings.TrimPrefix(clean, "```")
+	clean = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(clean), "```"))
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(clean), &raw); err != nil {
+		return nil, err
+	}
+	fields := []string{"subject", "action", "camera", "lighting", "style"}
+	if len(raw) != len(fields) {
+		return nil, fmt.Errorf("字段必须且只能包含 %s", strings.Join(fields, "、"))
+	}
+	values := make([]string, len(fields))
+	for i, field := range fields {
+		value, ok := raw[field]
+		if !ok || json.Unmarshal(value, &values[i]) != nil || strings.TrimSpace(values[i]) == "" {
+			return nil, fmt.Errorf("字段 %s 必须是非空字符串", field)
+		}
+		values[i] = strings.TrimSpace(values[i])
+	}
+	return &directorShotPacket{Subject: values[0], Action: values[1], Camera: values[2], Lighting: values[3], Style: values[4]}, nil
 }
 
 func (s *Service) HandleDeleteShot(c *gin.Context) {

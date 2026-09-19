@@ -172,7 +172,11 @@ type Episode struct {
 	TargetScenes         int       `gorm:"column:target_scenes;default:25" json:"target_scenes"`
 	Status               string    `gorm:"default:draft;index" json:"status"`
 	Summary              string    `gorm:"type:text" json:"summary"`
+	SummaryInputHash     string    `gorm:"column:summary_input_hash;size:64" json:"summary_input_hash"`
+	SummaryStale         bool      `gorm:"column:summary_stale;default:false" json:"summary_stale"`
 	NextHook             string    `gorm:"column:next_hook;type:text" json:"next_hook"`
+	NextHookInputHash    string    `gorm:"column:next_hook_input_hash;size:64" json:"next_hook_input_hash"`
+	NextHookStale        bool      `gorm:"column:next_hook_stale;default:false" json:"next_hook_stale"`
 	CharacterAppearances string    `gorm:"column:character_appearances;type:text" json:"character_appearances"`
 	Version              int       `gorm:"default:1" json:"version"`
 	CreatedAt            time.Time `json:"created_at"`
@@ -189,6 +193,7 @@ type Scene struct {
 	Title                  string    `json:"title"`                                                               // 场景标题
 	Content                string    `json:"content"`                                                             // 场景正文（作为视频提示词）
 	ImagePrompt            string    `json:"image_prompt"`                                                        // 文生图提示词
+	NegativePrompt         string    `gorm:"column:negative_prompt;type:text" json:"negative_prompt"`             // 镜头层聚合的负面提示词
 	ReferenceImagesJSON    string    `gorm:"column:reference_images_json;type:text" json:"-"`                     // 用户指定的有序参考图及 Krea2/H3 用途
 	Duration               float64   `gorm:"default:5" json:"duration"`                                           // 场景目标时长（秒）
 	Characters             string    `json:"characters"`                                                          // 兼容字段：旧数据中的出场角色名
@@ -456,6 +461,7 @@ type Skill struct {
 	Stage          string    `gorm:"column:stage;index" json:"stage"`                             // 适用阶段：plan/character/storyboard/image_prompt/video_prompt/review
 	PromptTemplate string    `gorm:"type:text" json:"prompt_template"`                            // 提示词模板（支持 {{param}} 占位符）
 	SystemPrompt   string    `gorm:"type:text" json:"system_prompt"`                              // 系统提示词片段（追加到主 system prompt）
+	Operation      string    `gorm:"column:operation;index" json:"operation"`                     // 精确操作契约；空值向后兼容为 Code
 	IsSystem       bool      `gorm:"column:is_system;default:false" json:"is_system"`             // 是否系统内置（系统技能不可删除，只可升级版本）
 	Enabled        bool      `gorm:"default:true" json:"enabled"`                                 // 是否启用
 	SortOrder      int       `gorm:"default:0" json:"sort_order"`                                 // 排序顺序（同一阶段内）
@@ -638,6 +644,7 @@ type SkillAuditLog struct {
 }
 
 type ShotActType string
+type ShotTransitionType string
 
 const (
 	ShotActSetup      ShotActType = "setup"
@@ -645,39 +652,49 @@ const (
 	ShotActMidpoint   ShotActType = "midpoint"
 	ShotActFalling    ShotActType = "falling"
 	ShotActResolution ShotActType = "resolution"
+
+	ShotTransitionCut      ShotTransitionType = "cut"
+	ShotTransitionDissolve ShotTransitionType = "dissolve"
+	ShotTransitionFade     ShotTransitionType = "fade"
+	ShotTransitionWipe     ShotTransitionType = "wipe"
+	ShotTransitionMatchCut ShotTransitionType = "match_cut"
 )
 
 // Shot 是 Scene 下的导演镜头层。ActType 表示五幕叙事位置，五段提示词描述单镜画面。
 type Shot struct {
-	ID             uint        `gorm:"primaryKey" json:"id"`
-	SceneID        uint        `gorm:"column:scene_id;index;uniqueIndex:idx_shot_scene_order" json:"scene_id"`
-	Order          int         `gorm:"column:order_num;uniqueIndex:idx_shot_scene_order" json:"order"`
-	ActType        ShotActType `gorm:"column:act_type;index" json:"act_type"`
-	ShotType       string      `gorm:"column:shot_type" json:"shot_type"`
-	CameraAngle    string      `gorm:"column:camera_angle" json:"camera_angle"`
-	CameraMovement string      `gorm:"column:camera_movement" json:"camera_movement"`
-	Duration       float64     `gorm:"default:1.5" json:"duration"`
-	Description    string      `gorm:"type:text" json:"description"`
-	Dialogue       string      `gorm:"type:text" json:"dialogue"`
-	Emotion        string      `gorm:"type:text" json:"emotion"`
-	PromptSubject  string      `gorm:"column:prompt_subject;type:text" json:"prompt_subject"`
-	PromptAction   string      `gorm:"column:prompt_action;type:text" json:"prompt_action"`
-	PromptCamera   string      `gorm:"column:prompt_camera;type:text" json:"prompt_camera"`
-	PromptLighting string      `gorm:"column:prompt_lighting;type:text" json:"prompt_lighting"`
-	PromptStyle    string      `gorm:"column:prompt_style;type:text" json:"prompt_style"`
-	CreatedAt      time.Time   `json:"created_at"`
-	UpdatedAt      time.Time   `json:"updated_at"`
+	ID             uint               `gorm:"primaryKey" json:"id"`
+	SceneID        uint               `gorm:"column:scene_id;index;uniqueIndex:idx_shot_scene_order" json:"scene_id"`
+	Order          int                `gorm:"column:order_num;uniqueIndex:idx_shot_scene_order" json:"order"`
+	ActType        ShotActType        `gorm:"column:act_type;index" json:"act_type"`
+	ShotType       string             `gorm:"column:shot_type" json:"shot_type"`
+	CameraAngle    string             `gorm:"column:camera_angle" json:"camera_angle"`
+	CameraMovement string             `gorm:"column:camera_movement" json:"camera_movement"`
+	TransitionType ShotTransitionType `gorm:"column:transition_type;index" json:"transition_type"`
+	TransitionNote string             `gorm:"column:transition_note;type:text" json:"transition_note"`
+	Duration       float64            `gorm:"default:1.5" json:"duration"`
+	Description    string             `gorm:"type:text" json:"description"`
+	Dialogue       string             `gorm:"type:text" json:"dialogue"`
+	Emotion        string             `gorm:"type:text" json:"emotion"`
+	PromptSubject  string             `gorm:"column:prompt_subject;type:text" json:"prompt_subject"`
+	PromptAction   string             `gorm:"column:prompt_action;type:text" json:"prompt_action"`
+	PromptCamera   string             `gorm:"column:prompt_camera;type:text" json:"prompt_camera"`
+	PromptLighting string             `gorm:"column:prompt_lighting;type:text" json:"prompt_lighting"`
+	PromptStyle    string             `gorm:"column:prompt_style;type:text" json:"prompt_style"`
+	NegativePrompt string             `gorm:"column:negative_prompt;type:text" json:"negative_prompt"`
+	CreatedAt      time.Time          `json:"created_at"`
+	UpdatedAt      time.Time          `json:"updated_at"`
 }
 
 // PromptVersion 提示词版本历史
 type PromptVersion struct {
 	ID         uint      `gorm:"primaryKey" json:"id"`
 	ProjectID  uint      `gorm:"column:project_id;index" json:"project_id"`
-	EntityType string    `gorm:"column:entity_type;index" json:"entity_type"` // scene/shot/skill
-	EntityID   uint      `gorm:"column:entity_id;index" json:"entity_id"`     // 关联实体 ID
-	Content    string    `gorm:"column:content;type:text" json:"content"`     // 版本内容
-	Action     string    `gorm:"column:action" json:"action"`                 // build/optimize/translate/manual
-	Metadata   string    `gorm:"column:metadata;type:text" json:"metadata"`   // JSON: model_used, duration, tokens
+	EntityType string    `gorm:"column:entity_type;index" json:"entity_type"`   // scene/shot/skill
+	EntityID   uint      `gorm:"column:entity_id;index" json:"entity_id"`       // 关联实体 ID
+	Content    string    `gorm:"column:content;type:text" json:"content"`       // 版本内容
+	Action     string    `gorm:"column:action" json:"action"`                   // build/optimize/translate/manual/rollback
+	State      string    `gorm:"column:state;default:draft;index" json:"state"` // draft/applied
+	Metadata   string    `gorm:"column:metadata;type:text" json:"metadata"`     // JSON: model_used, duration, tokens
 	CreatedAt  time.Time `json:"created_at"`
 }
 

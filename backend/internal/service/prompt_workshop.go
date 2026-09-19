@@ -79,6 +79,10 @@ const (
 	PromptActionOptimize  PromptAction = "optimize"
 	PromptActionTranslate PromptAction = "translate"
 	PromptActionManual    PromptAction = "manual"
+	PromptActionRollback  PromptAction = "rollback"
+
+	PromptVersionStateDraft   = "draft"
+	PromptVersionStateApplied = "applied"
 )
 
 // BuildPrompt 构建提示词（基于模板和参数）
@@ -286,6 +290,7 @@ func (s *PromptWorkshopService) recordVersion(projectID uint, entityType string,
 		EntityID:   entityID,
 		Content:    content,
 		Action:     string(action),
+		State:      PromptVersionStateDraft,
 		Metadata:   string(metadataJSON),
 		CreatedAt:  createdAt,
 	}
@@ -350,7 +355,7 @@ func (s *PromptWorkshopService) rollback(projectID uint, entityType string, enti
 	if version.EntityType != entityType || version.EntityID != entityID {
 		return "", fmt.Errorf("版本不匹配")
 	}
-	if err := s.recordVersion(projectID, entityType, entityID, version.Content, PromptActionManual, map[string]any{
+	if err := s.recordVersion(projectID, entityType, entityID, version.Content, PromptActionRollback, map[string]any{
 		"rollback_from_version": versionID,
 		"action":                "rollback",
 	}); err != nil {

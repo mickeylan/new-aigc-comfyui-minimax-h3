@@ -16,9 +16,10 @@ func NewShotService(db *gorm.DB) *ShotService { return &ShotService{db: db} }
 
 var shotUpdateFields = map[string]bool{
 	"order": true, "act_type": true, "shot_type": true, "camera_angle": true, "camera_movement": true,
+	"transition_type": true, "transition_note": true,
 	"duration": true, "description": true, "dialogue": true, "emotion": true,
 	"prompt_subject": true, "prompt_action": true, "prompt_camera": true,
-	"prompt_lighting": true, "prompt_style": true,
+	"prompt_lighting": true, "prompt_style": true, "negative_prompt": true,
 }
 
 func validateShot(shot *models.Shot) error {
@@ -31,6 +32,15 @@ func validateShot(shot *models.Shot) error {
 		return fmt.Errorf("act_type 必须是 setup/rising/midpoint/falling/resolution")
 	}
 	shot.Description = strings.TrimSpace(shot.Description)
+	shot.TransitionType = models.ShotTransitionType(strings.TrimSpace(string(shot.TransitionType)))
+	shot.TransitionNote = strings.TrimSpace(shot.TransitionNote)
+	validTransition := map[models.ShotTransitionType]bool{
+		"": true, models.ShotTransitionCut: true, models.ShotTransitionDissolve: true,
+		models.ShotTransitionFade: true, models.ShotTransitionWipe: true, models.ShotTransitionMatchCut: true,
+	}
+	if !validTransition[shot.TransitionType] {
+		return fmt.Errorf("transition_type 必须为空或 cut/dissolve/fade/wipe/match_cut")
+	}
 	if shot.ShotType == "" {
 		return fmt.Errorf("shot_type 不能为空")
 	}
@@ -63,7 +73,10 @@ func (s *ShotService) CreateShot(sceneID uint, shot models.Shot) (*models.Shot, 
 		if err := recordManualShotPrompt(tx, projectID, shot); err != nil {
 			return err
 		}
-		return updateSceneShotCount(tx, sceneID)
+		if err := updateSceneShotCount(tx, sceneID); err != nil {
+			return err
+		}
+		return markEpisodeEditorialStaleByScene(tx, sceneID)
 	}); err != nil {
 		return nil, err
 	}
@@ -73,9 +86,6 @@ func (s *ShotService) CreateShot(sceneID uint, shot models.Shot) (*models.Shot, 
 // ReplaceShots stores the supplied director shots as-is while preserving IDs for existing
 // shots. Stable IDs keep prompt history and shot-level asset associations attached across saves.
 func (s *ShotService) ReplaceShots(sceneID uint, shots []models.Shot) ([]models.Shot, error) {
-	if len(shots) == 0 {
-		return nil, fmt.Errorf("至少需要一个镜头")
-	}
 	for i := range shots {
 		shots[i].SceneID, shots[i].Order = sceneID, i+1
 		if err := validateShot(&shots[i]); err != nil {
@@ -119,10 +129,12 @@ func (s *ShotService) ReplaceShots(sceneID uint, shots []models.Shot) ([]models.
 			updates := map[string]any{
 				"order_num": shots[i].Order, "act_type": shots[i].ActType, "shot_type": shots[i].ShotType,
 				"camera_angle": shots[i].CameraAngle, "camera_movement": shots[i].CameraMovement,
+				"transition_type": shots[i].TransitionType, "transition_note": shots[i].TransitionNote,
 				"duration": shots[i].Duration, "description": shots[i].Description, "dialogue": shots[i].Dialogue,
 				"emotion": shots[i].Emotion, "prompt_subject": shots[i].PromptSubject,
 				"prompt_action": shots[i].PromptAction, "prompt_camera": shots[i].PromptCamera,
 				"prompt_lighting": shots[i].PromptLighting, "prompt_style": shots[i].PromptStyle,
+				"negative_prompt": shots[i].NegativePrompt,
 			}
 			if err := tx.Model(&models.Shot{}).Where("id = ? AND scene_id = ?", shots[i].ID, sceneID).Updates(updates).Error; err != nil {
 				return err
@@ -237,9 +249,6 @@ func (s *ShotService) DeleteShot(shotID uint) error {
 		if err := tx.Where("scene_id = ?", shot.SceneID).Order("order_num, id").Find(&shots).Error; err != nil {
 			return err
 		}
-		if len(shots) == 0 {
-			return updateSceneShotCount(tx, shot.SceneID)
-		}
 		return aggregateShotsIntoScene(tx, shot.SceneID, shots)
 	})
 }
@@ -264,17 +273,27 @@ func recordManualShotPrompt(db *gorm.DB, projectID uint, shot models.Shot) error
 	content := canonicalShotPrompt(shot)
 	var count int64
 	if err := db.Model(&models.PromptVersion{}).Where(
-		"project_id = ? AND entity_type = ? AND entity_id = ? AND content = ?",
-		projectID, "shot", shot.ID, content,
+		"project_id = ? AND entity_type = ? AND entity_id = ? AND content = ? AND state = ?",
+		projectID, "shot", shot.ID, content, PromptVersionStateApplied,
 	).Count(&count).Error; err != nil {
 		return err
 	}
 	if count > 0 {
 		return nil
 	}
+	promoted := db.Model(&models.PromptVersion{}).Where(
+		"project_id = ? AND entity_type = ? AND entity_id = ? AND content = ? AND state = ?",
+		projectID, "shot", shot.ID, content, PromptVersionStateDraft,
+	).Updates(map[string]any{"state": PromptVersionStateApplied, "action": string(PromptActionManual)})
+	if promoted.Error != nil {
+		return promoted.Error
+	}
+	if promoted.RowsAffected > 0 {
+		return nil
+	}
 	return db.Create(&models.PromptVersion{
 		ProjectID: projectID, EntityType: "shot", EntityID: shot.ID,
-		Content: content, Action: string(PromptActionManual), Metadata: "{}",
+		Content: content, Action: string(PromptActionManual), State: PromptVersionStateApplied, Metadata: "{}",
 	}).Error
 }
 
@@ -292,6 +311,8 @@ func aggregateShotsIntoScene(db *gorm.DB, sceneID uint, shots []models.Shot) err
 	}
 	contents := make([]string, 0, len(shots))
 	prompts := make([]string, 0, len(shots))
+	negativePrompts := make([]string, 0, len(shots))
+	seenNegative := map[string]bool{}
 	var duration float64
 	for i, shot := range shots {
 		label := actLabels[shot.ActType]
@@ -299,6 +320,13 @@ func aggregateShotsIntoScene(db *gorm.DB, sceneID uint, shots []models.Shot) err
 			label = actLabels[models.ShotActSetup]
 		}
 		contentParts := []string{fmt.Sprintf("镜头%d·%s（%.1f秒，%s，%s，%s）", i+1, label, shot.Duration, shot.ShotType, shot.CameraAngle, shot.CameraMovement), strings.TrimSpace(shot.Description)}
+		if shot.TransitionType != "" {
+			transition := "转场：" + string(shot.TransitionType)
+			if strings.TrimSpace(shot.TransitionNote) != "" {
+				transition += "（" + strings.TrimSpace(shot.TransitionNote) + "）"
+			}
+			contentParts = append(contentParts, transition)
+		}
 		if shot.Emotion != "" {
 			contentParts = append(contentParts, "情绪："+strings.TrimSpace(shot.Emotion))
 		}
@@ -310,13 +338,35 @@ func aggregateShotsIntoScene(db *gorm.DB, sceneID uint, shots []models.Shot) err
 		if len(promptParts) > 0 {
 			prompts = append(prompts, fmt.Sprintf("镜头%d（%s）：%s", i+1, label, strings.Join(promptParts, ", ")))
 		}
+		if negative := strings.TrimSpace(shot.NegativePrompt); negative != "" && !seenNegative[negative] {
+			seenNegative[negative] = true
+			negativePrompts = append(negativePrompts, negative)
+		}
 		duration += shot.Duration
 	}
-	return db.Model(&models.Scene{}).Where("id = ?", sceneID).Updates(map[string]any{
+	var scene models.Scene
+	if err := db.Where("id = ?", sceneID).First(&scene).Error; err != nil {
+		return err
+	}
+	if err := db.Model(&scene).Updates(map[string]any{
 		"shot_count": len(shots), "content": strings.Join(contents, "\n"), "image_prompt": strings.Join(prompts, "；"),
-		"duration": math.Round(duration*10) / 10, "image_file": "", "image_token": "", "video_task_id": "", "video_file": "", "video_gpu": nil,
-		"status": "pending", "error": "",
-	}).Error
+		"negative_prompt": strings.Join(negativePrompts, ", "), "prompt_stale": true,
+		"duration": math.Round(duration*10) / 10, "image_file": "", "image_token": "", "image_task_id": "",
+		"video_task_id": "", "video_file": "", "video_input_file": "", "video_gpu": nil, "video_full_prompt": "",
+		"image_candidate_parent_id": nil, "video_candidate_parent_id": nil, "status": "pending", "error": "",
+	}).Error; err != nil {
+		return err
+	}
+	if err := MarkSceneCandidatesStale(db, scene.ProjectID, sceneID, "", "导演镜头已修改"); err != nil {
+		return err
+	}
+	if err := db.Where("scene_id = ?", sceneID).Delete(&models.FrameCandidate{}).Error; err != nil {
+		return err
+	}
+	if err := invalidateContinuityDependentsTx(db, scene.ProjectID, []uint{sceneID}, "上游导演镜头已修改"); err != nil {
+		return err
+	}
+	return markEpisodeEditorialStale(db, scene.ProjectID, scene.EpisodeN)
 }
 
 func nonEmptyStrings(values []string) []string {

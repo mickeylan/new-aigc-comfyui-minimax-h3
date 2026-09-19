@@ -21,6 +21,16 @@ type SceneWithShots struct {
 	Shots []models.Shot `json:"shots"`
 }
 
+// latestEpisodeGeneration returns the Scene-owned authoritative generation for one episode.
+// Project.Generation is global and may advance when a different episode is regenerated.
+func latestEpisodeGeneration(db *gorm.DB, projectID uint, episodeN int) (uint, error) {
+	var generation uint
+	err := db.Model(&models.Scene{}).
+		Where("project_id = ? AND episode_n = ?", projectID, episodeN).
+		Select("COALESCE(MAX(generation), 0)").Scan(&generation).Error
+	return generation, err
+}
+
 type episodePlanMeta struct {
 	Episodes []struct {
 		N              int     `json:"n"`
@@ -144,6 +154,24 @@ func UpdateProjectEpisode(db *gorm.DB, projectID uint, number int, updates map[s
 			allowed[field] = strings.TrimSpace(value)
 		}
 	}
+	_, summaryUpdated := allowed["summary"]
+	_, nextHookUpdated := allowed["next_hook"]
+	if summaryUpdated || nextHookUpdated {
+		currentHash, err := episodeEditorialInputHash(db, projectID, number)
+		if err != nil {
+			return nil, err
+		}
+		inputHash := currentHash
+		if generatedHash, ok := updates["editorial_input_hash"].(string); ok && strings.TrimSpace(generatedHash) != "" {
+			inputHash = strings.TrimSpace(generatedHash)
+		}
+		if summaryUpdated {
+			allowed["summary_input_hash"], allowed["summary_stale"] = inputHash, inputHash != currentHash
+		}
+		if nextHookUpdated {
+			allowed["next_hook_input_hash"], allowed["next_hook_stale"] = inputHash, inputHash != currentHash
+		}
+	}
 	allowed["version"] = gorm.Expr("version + 1")
 	if err := db.Model(&episode).Updates(allowed).Error; err != nil {
 		return nil, err
@@ -181,9 +209,17 @@ func ProjectEpisodeHierarchy(db *gorm.DB, projectID uint) ([]EpisodeHierarchy, e
 		return nil, err
 	}
 	result := make([]EpisodeHierarchy, 0, len(episodes))
-	for _, episode := range episodes {
+	for i := range episodes {
+		episode := episodes[i]
+		if err := refreshEpisodeEditorialStatus(db, &episode); err != nil {
+			return nil, err
+		}
+		generation, err := latestEpisodeGeneration(db, projectID, episode.Number)
+		if err != nil {
+			return nil, err
+		}
 		var scenes []models.Scene
-		if err := db.Where("project_id = ? AND episode_n = ?", projectID, episode.Number).Order("generation DESC, `order`, id").Find(&scenes).Error; err != nil {
+		if err := db.Where("project_id = ? AND episode_n = ? AND generation = ?", projectID, episode.Number, generation).Order("`order`, id").Find(&scenes).Error; err != nil {
 			return nil, err
 		}
 		row := EpisodeHierarchy{Episode: episode, Scenes: make([]SceneWithShots, 0, len(scenes))}

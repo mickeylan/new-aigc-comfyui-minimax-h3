@@ -2888,6 +2888,9 @@ func (s *ProjectService) buildSceneImagePrompt(sc *models.Scene) string {
 	if prompt := strings.TrimSpace(sc.ImagePrompt); prompt != "" {
 		parts = append(parts, "当前分镜："+prompt)
 	}
+	if negative := strings.TrimSpace(sc.NegativePrompt); negative != "" {
+		parts = append(parts, "【负向硬约束】画面中禁止出现："+negative)
+	}
 	prompt := strings.Join(parts, "\n")
 	params := map[string]string{"original_prompt": prompt, "character_definitions": s.characterContextForScene(sc), "style_requirements": p.Style}
 	if normalizeVisualType(sc.VisualType, sc.Title+" "+sc.Content+" "+sc.ImagePrompt) == "megastructure" {
@@ -3302,7 +3305,11 @@ func (s *ProjectService) GenerateAllImages(p *models.Project, episodeN int) (int
 	var scenes []models.Scene
 	query := s.db.Where("project_id = ? AND status = ?", p.ID, "pending")
 	if episodeN > 0 {
-		query = query.Where("episode_n = ?", episodeN)
+		generation, err := latestEpisodeGeneration(s.db, p.ID, episodeN)
+		if err != nil {
+			return 0, err
+		}
+		query = query.Where("episode_n = ? AND generation = ?", episodeN, generation)
 	}
 	query.Order("`order`").Find(&scenes)
 	if len(scenes) > 0 {
@@ -3519,7 +3526,11 @@ func (s *ProjectService) GenerateAllVideos(p *models.Project, episodeN int) (int
 	var scenes []models.Scene
 	query := s.db.Where("project_id = ? AND status IN ?", p.ID, []string{"image_ready", "failed"})
 	if episodeN > 0 {
-		query = query.Where("episode_n = ?", episodeN)
+		generation, err := latestEpisodeGeneration(s.db, p.ID, episodeN)
+		if err != nil {
+			return 0, err
+		}
+		query = query.Where("episode_n = ? AND generation = ?", episodeN, generation)
 	}
 	query.Order("`order`").Find(&scenes)
 	if len(scenes) > 0 {
@@ -3664,6 +3675,11 @@ func (s *ProjectService) advancePipeline(projectID uint) {
 		}
 		go s.advancePipeline(p.ID)
 	case "images":
+		generation, err := latestEpisodeGeneration(s.db, p.ID, episodeN)
+		if err != nil {
+			s.failPipeline(p.ID, err, true)
+			return
+		}
 		// 分镜画面依赖角色标准像；在画面生成前执行审核门控，避免先生成无角色参考的废图。
 		var unapproved, missingPortraits int64
 		s.db.Model(&models.Character{}).Where("project_id = ? AND profile_status != ?", p.ID, models.ProfileStatusApproved).Count(&unapproved)
@@ -3673,26 +3689,26 @@ func (s *ProjectService) advancePipeline(projectID uint) {
 			return
 		}
 		var scenes []models.Scene
-		if err := s.db.Where("project_id = ? AND episode_n = ? AND generation = ?", p.ID, episodeN, p.Generation).Order("`order`").Find(&scenes).Error; err != nil || len(scenes) == 0 {
+		if err := s.db.Where("project_id = ? AND episode_n = ? AND generation = ?", p.ID, episodeN, generation).Order("`order`").Find(&scenes).Error; err != nil || len(scenes) == 0 {
 			s.failPipeline(p.ID, fmt.Errorf("没有可生成的分镜场景"), true)
 			return
 		}
 		// 道具/场景参考图优先于分镜画面：分镜图生图需要资产参考图锁定道具与环境外观
-		if s.pendingSceneAssetRefs(p.ID, episodeN, p.Generation) > 0 {
+		if s.pendingSceneAssetRefs(p.ID, episodeN, generation) > 0 {
 			s.GenerateAllAssetImages(&p, "")
 			return
 		}
 		// 文生图失败自动重试一次；达到上限后停止流水线并保留逐场景重试入口。
 		s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ? AND status = ? AND image_file = '' AND image_retries < ?",
-			p.ID, episodeN, p.Generation, "failed", 2).Updates(map[string]any{"status": "pending", "error": ""})
+			p.ID, episodeN, generation, "failed", 2).Updates(map[string]any{"status": "pending", "error": ""})
 		var failed int64
-		s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ? AND status = ?", p.ID, episodeN, p.Generation, "failed").Count(&failed)
+		s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ? AND status = ?", p.ID, episodeN, generation, "failed").Count(&failed)
 		if failed > 0 {
 			s.failPipeline(p.ID, fmt.Errorf("%d 个分镜画面生成失败，请修正后重试", failed), true)
 			return
 		}
 		var waiting int64
-		s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ? AND status IN ?", p.ID, episodeN, p.Generation,
+		s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ? AND status IN ?", p.ID, episodeN, generation,
 			[]string{"pending", "image_pending"}).Count(&waiting)
 		if waiting > 0 {
 			_, _ = s.GenerateAllImages(&p, episodeN)
@@ -3701,6 +3717,11 @@ func (s *ProjectService) advancePipeline(projectID uint) {
 		s.db.Model(&models.Project{}).Where("id = ? AND pipeline_stage = ?", p.ID, "images").Update("pipeline_stage", "videos")
 		go s.advancePipeline(p.ID)
 	case "videos":
+		generation, err := latestEpisodeGeneration(s.db, p.ID, episodeN)
+		if err != nil {
+			s.failPipeline(p.ID, err, true)
+			return
+		}
 		// 角色标准像必须经过“档案审核 → 提示词确认 → 人工触发生成”，自动流水线不得绕过审核。
 		var pendingPortraits int64
 		s.db.Model(&models.Character{}).Where("project_id = ? AND portrait = ''", p.ID).Count(&pendingPortraits)
@@ -3716,14 +3737,14 @@ func (s *ProjectService) advancePipeline(projectID uint) {
 			return
 		}
 		var failed int64
-		s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ? AND status = ?", p.ID, episodeN, p.Generation, "failed").Count(&failed)
+		s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ? AND status = ?", p.ID, episodeN, generation, "failed").Count(&failed)
 		if failed > 0 {
 			s.failPipeline(p.ID, fmt.Errorf("%d 个场景视频生成失败，请修正后重试", failed), true)
 			return
 		}
 		var ready, total, waiting int64
-		s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ?", p.ID, episodeN, p.Generation).Count(&total)
-		s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ? AND status = ?", p.ID, episodeN, p.Generation, "video_ready").Count(&ready)
+		s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ?", p.ID, episodeN, generation).Count(&total)
+		s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ? AND status = ?", p.ID, episodeN, generation, "video_ready").Count(&ready)
 		if total > 0 && ready == total {
 			// 触发对白配音（异步，不阻塞合并）
 			s.GenerateProjectDubs(&p)
@@ -3731,17 +3752,22 @@ func (s *ProjectService) advancePipeline(projectID uint) {
 			go s.advancePipeline(p.ID)
 			return
 		}
-		s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ? AND status IN ?", p.ID, episodeN, p.Generation,
+		s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ? AND status IN ?", p.ID, episodeN, generation,
 			[]string{"video_creating", "video_pending", "video_running"}).Count(&waiting)
 		if waiting == 0 {
 			_, _ = s.GenerateAllVideos(&p, episodeN)
 		}
 	case "merge":
+		generation, err := latestEpisodeGeneration(s.db, p.ID, episodeN)
+		if err != nil {
+			s.failPipeline(p.ID, err, true)
+			return
+		}
 		var mt models.MergeTask
-		err := s.db.Where("project_id = ? AND episode_n = ? AND generation = ?", p.ID, episodeN, p.Generation).Order("id desc").First(&mt).Error
+		err = s.db.Where("project_id = ? AND episode_n = ? AND generation = ?", p.ID, episodeN, generation).Order("id desc").First(&mt).Error
 		if err == gorm.ErrRecordNotFound {
 			var scenes []models.Scene
-			if err := s.db.Where("project_id = ? AND episode_n = ? AND generation = ? AND status = ?", p.ID, episodeN, p.Generation, "video_ready").Order("`order`").Find(&scenes).Error; err != nil {
+			if err := s.db.Where("project_id = ? AND episode_n = ? AND generation = ? AND status = ?", p.ID, episodeN, generation, "video_ready").Order("`order`").Find(&scenes).Error; err != nil {
 				s.failPipeline(p.ID, err, true)
 				return
 			}
@@ -3795,6 +3821,25 @@ func (s *ProjectService) failPipeline(projectID uint, err error, auto bool) {
 	s.pushProject(nil)
 }
 
+// completeSceneCandidate publishes a successful normal or detached task and performs all
+// downstream invalidation atomically with the Scene projection. Video frame extraction is
+// deliberately started only after that transaction commits.
+func (s *ProjectService) completeSceneCandidate(in SceneCandidateCapture) (*models.GenerationCandidate, error) {
+	in.FinalizeDerived = true
+	candidate, err := NewGenerationCandidateService(s.db).CaptureSceneSuccess(in)
+	if err != nil {
+		return nil, err
+	}
+	if in.MediaType == "video" && s.continuity != nil {
+		go func(projectID, sceneID uint) {
+			if _, err := s.continuity.ExtractFrameCandidates(projectID, sceneID, DefaultCandidateFrameCount); err != nil {
+				log.Printf("[continuity] scene %d extract frames failed: %v", sceneID, err)
+			}
+		}(in.ProjectID, in.SceneID)
+	}
+	return candidate, nil
+}
+
 func (s *ProjectService) syncSceneImages() {
 	var scenes []models.Scene
 	if err := s.db.Where("status = ? AND image_task_id != ''", "image_pending").Find(&scenes).Error; err != nil {
@@ -3839,7 +3884,7 @@ func (s *ProjectService) syncSceneImages() {
 				s.failSceneImage(sc, sc.ImageToken, "保存 Krea2 分镜图片失败: "+err.Error())
 				continue
 			}
-			candidate, captureErr := NewGenerationCandidateService(s.db).CaptureSceneSuccess(SceneCandidateCapture{
+			candidate, captureErr := s.completeSceneCandidate(SceneCandidateCapture{
 				ProjectID: sc.ProjectID, SceneID: sc.ID, MediaType: "image", TaskID: task.TaskID,
 				File: filepath.Base(path), Prompt: task.Prompt, References: task.InputsJSON,
 				Params: task.ParamsJSON, Provenance: map[string]any{"template_id": task.TemplateID, "template_name": task.TemplateName, "port": task.Port, "gpu": task.GPUIndex, "result_files": task.ResultFiles},
@@ -4090,7 +4135,7 @@ func (s *ProjectService) syncSceneVideos() {
 				changed = true
 				continue
 			}
-			_, captureErr := NewGenerationCandidateService(s.db).CaptureSceneSuccess(SceneCandidateCapture{
+			_, captureErr := s.completeSceneCandidate(SceneCandidateCapture{
 				ProjectID: sc.ProjectID, SceneID: sc.ID, MediaType: "video", TaskID: task.TaskID,
 				File: file, VideoInputFile: filepath.Base(localPath), VideoGPU: gpu, Prompt: task.Prompt,
 				References: task.InputsJSON, Params: task.ParamsJSON,
@@ -4102,15 +4147,6 @@ func (s *ProjectService) syncSceneVideos() {
 					log.Printf("[candidate] capture video scene=%d task=%s failed: %v", sc.ID, task.TaskID, captureErr)
 				}
 				continue
-			}
-			if s.continuity != nil {
-				ready := *sc
-				ready.Status, ready.VideoFile, ready.VideoInputFile, ready.VideoGPU = "video_ready", file, filepath.Base(localPath), gpu
-				go func(scene models.Scene) {
-					if _, err := s.continuity.ExtractFrameCandidates(scene.ProjectID, scene.ID, DefaultCandidateFrameCount); err != nil {
-						log.Printf("[continuity] scene %d extract frames failed: %v", scene.ID, err)
-					}
-				}(ready)
 			}
 			changed = true
 		case "failed", "cancelled":
@@ -4204,7 +4240,7 @@ func (s *ProjectService) syncDetachedCandidateRetries() {
 		} else {
 			continue
 		}
-		if _, err := NewGenerationCandidateService(s.db).CaptureSceneSuccess(capture); err == nil {
+		if _, err := s.completeSceneCandidate(capture); err == nil {
 			s.pushProject(nil)
 		}
 	}
@@ -4426,8 +4462,8 @@ func (s *ProjectService) createMergeTaskRecord(p *models.Project, sceneIDs []uin
 			fingerprints = append(fingerprints, fingerprint)
 			scenes = append(scenes, scene)
 		}
-		var episodeGeneration uint
-		if err := tx.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ?", current.ID, episodeN).Select("COALESCE(MAX(generation), 0)").Scan(&episodeGeneration).Error; err != nil {
+		episodeGeneration, err := latestEpisodeGeneration(tx, current.ID, episodeN)
+		if err != nil {
 			return err
 		}
 		for _, scene := range scenes {
@@ -4469,8 +4505,8 @@ func (s *ProjectService) validateMergeInputs(tx *gorm.DB, mt *models.MergeTask) 
 		return nil, err
 	}
 	mt = &persisted
-	var episodeGeneration uint
-	if err := tx.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ?", mt.ProjectID, mt.EpisodeN).Select("COALESCE(MAX(generation), 0)").Scan(&episodeGeneration).Error; err != nil {
+	episodeGeneration, err := latestEpisodeGeneration(tx, mt.ProjectID, mt.EpisodeN)
+	if err != nil {
 		return nil, err
 	}
 	if episodeGeneration != mt.Generation {
@@ -5076,9 +5112,8 @@ func (s *ProjectService) CreateAllMerges(p *models.Project, dub, subtitles bool)
 	count := 0
 	var failures []error
 	for _, ep := range episodes {
-		var generation uint
-		if err := s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ?", p.ID, ep).
-			Select("COALESCE(MAX(generation), 0)").Scan(&generation).Error; err != nil {
+		generation, err := latestEpisodeGeneration(s.db, p.ID, ep)
+		if err != nil {
 			failures = append(failures, fmt.Errorf("第%d集: %w", ep, err))
 			continue
 		}
@@ -5125,8 +5160,12 @@ func editorSceneVideoURL(projectID uint, sc *models.Scene) string {
 
 // EditorData 剪辑台数据：场景（含视频时长与资源 URL）+ 对白 + 按真实音频对齐的字幕时间轴
 func (s *ProjectService) EditorData(p *models.Project, episodeN int) (map[string]any, error) {
+	generation, err := latestEpisodeGeneration(s.db, p.ID, episodeN)
+	if err != nil {
+		return nil, err
+	}
 	var scenes []models.Scene
-	if err := s.db.Where("project_id = ? AND episode_n = ? AND generation = ?", p.ID, episodeN, p.Generation).
+	if err := s.db.Where("project_id = ? AND episode_n = ? AND generation = ?", p.ID, episodeN, generation).
 		Order("`order`").Find(&scenes).Error; err != nil {
 		return nil, err
 	}
@@ -5451,11 +5490,8 @@ func (s *ProjectService) ReorderScenes(p *models.Project, sceneIDs []uint) error
 		if err := tx.First(&current, p.ID).Error; err != nil {
 			return err
 		}
-		if current.Generation != p.Generation {
-			return fmt.Errorf("项目版本已变化，请刷新后重试")
-		}
 		var selected []models.Scene
-		if err := tx.Where("id IN ? AND project_id = ? AND generation = ?", sceneIDs, current.ID, current.Generation).Find(&selected).Error; err != nil {
+		if err := tx.Where("id IN ? AND project_id = ?", sceneIDs, current.ID).Find(&selected).Error; err != nil {
 			return err
 		}
 		if len(selected) != len(sceneIDs) {
@@ -5467,8 +5503,17 @@ func (s *ProjectService) ReorderScenes(p *models.Project, sceneIDs []uint) error
 				return fmt.Errorf("不能重排不同集的场景")
 			}
 		}
+		generation, err := latestEpisodeGeneration(tx, current.ID, episodeN)
+		if err != nil {
+			return err
+		}
+		for _, scene := range selected {
+			if scene.Generation != generation {
+				return fmt.Errorf("场景列表包含不属于该集当前版本的场景")
+			}
+		}
 		var expectedIDs []uint
-		if err := tx.Model(&models.Scene{}).Where("project_id = ? AND generation = ? AND episode_n = ?", current.ID, current.Generation, episodeN).Pluck("id", &expectedIDs).Error; err != nil {
+		if err := tx.Model(&models.Scene{}).Where("project_id = ? AND generation = ? AND episode_n = ?", current.ID, generation, episodeN).Pluck("id", &expectedIDs).Error; err != nil {
 			return err
 		}
 		if len(expectedIDs) != len(sceneIDs) {
@@ -5481,7 +5526,7 @@ func (s *ProjectService) ReorderScenes(p *models.Project, sceneIDs []uint) error
 		}
 
 		for i, sid := range sceneIDs {
-			result := tx.Model(&models.Scene{}).Where("id = ? AND project_id = ? AND generation = ? AND episode_n = ?", sid, current.ID, current.Generation, episodeN).
+			result := tx.Model(&models.Scene{}).Where("id = ? AND project_id = ? AND generation = ? AND episode_n = ?", sid, current.ID, generation, episodeN).
 				Update("`order`", -1000000000-i)
 			if result.Error != nil {
 				return result.Error
@@ -5491,7 +5536,7 @@ func (s *ProjectService) ReorderScenes(p *models.Project, sceneIDs []uint) error
 			}
 		}
 		for i, sid := range sceneIDs {
-			result := tx.Model(&models.Scene{}).Where("id = ? AND project_id = ? AND generation = ? AND episode_n = ?", sid, current.ID, current.Generation, episodeN).
+			result := tx.Model(&models.Scene{}).Where("id = ? AND project_id = ? AND generation = ? AND episode_n = ?", sid, current.ID, generation, episodeN).
 				Update("`order`", i+1)
 			if result.Error != nil {
 				return result.Error
@@ -5635,8 +5680,12 @@ func (s *ProjectService) GenerateProjectDubs(p *models.Project) (int, error) {
 // GenerateEpisodeDubs submits only stale/mismatched dialogue by default, scoped through
 // the episode's project-owned scenes so dialogue IDs from another project cannot leak in.
 func (s *ProjectService) GenerateEpisodeDubs(p *models.Project, episodeN int, staleOnly bool) (int, error) {
+	generation, err := latestEpisodeGeneration(s.db, p.ID, episodeN)
+	if err != nil {
+		return 0, err
+	}
 	var sceneIDs []uint
-	if err := s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ?", p.ID, episodeN, p.Generation).Pluck("id", &sceneIDs).Error; err != nil {
+	if err := s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ?", p.ID, episodeN, generation).Pluck("id", &sceneIDs).Error; err != nil {
 		return 0, err
 	}
 	if len(sceneIDs) == 0 {
@@ -5724,8 +5773,12 @@ func (s *ProjectService) RevertDialogueAudio(p *models.Project, did uint) (*mode
 
 // EpisodeSRT 生成指定集的 SRT 字幕（按场景顺序、场内对白均分时长），返回字幕正文与条数
 func (s *ProjectService) EpisodeSRT(p *models.Project, episodeN int) (string, int) {
+	generation, err := latestEpisodeGeneration(s.db, p.ID, episodeN)
+	if err != nil {
+		return "", 0
+	}
 	var scenes []models.Scene
-	s.db.Where("project_id = ? AND episode_n = ?", p.ID, episodeN).Order("`order`").Find(&scenes)
+	s.db.Where("project_id = ? AND episode_n = ? AND generation = ?", p.ID, episodeN, generation).Order("`order`").Find(&scenes)
 	if len(scenes) == 0 {
 		return "", 0
 	}

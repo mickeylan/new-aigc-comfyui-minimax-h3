@@ -234,23 +234,24 @@ func (s *StylePresetService) UpdatePreset(presetID uint, updates map[string]any)
 		return nil, err
 	}
 
-	// 系统预设只允许更新 usage_count
+	allowed := map[string]bool{"name": true, "category": true, "subcategory": true, "prompt_tail": true, "negative_tail": true, "reason": true, "use_cases": true, "scene_types": true, "parameters": true, "preview_url": true, "tags": true, "is_recommended": true, "recommended_for": true}
 	if preset.IsSystem {
-		allowed := map[string]bool{"usage_count": true}
-		filtered := make(map[string]any)
-		for key, value := range updates {
-			if allowed[key] {
-				filtered[key] = value
-			}
+		allowed = map[string]bool{"usage_count": true}
+	}
+	for key := range updates {
+		if !allowed[key] {
+			return nil, fmt.Errorf("不允许修改字段: %s", key)
 		}
-		if err := s.db.Model(&preset).Updates(filtered).Error; err != nil {
-			return nil, err
+	}
+	if name, ok := updates["name"]; ok {
+		value, ok := name.(string)
+		if !ok || strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("预设名称不能为空")
 		}
-	} else {
-		// 自定义预设允许更新更多字段
-		if err := s.db.Model(&preset).Updates(updates).Error; err != nil {
-			return nil, err
-		}
+		updates["name"] = strings.TrimSpace(value)
+	}
+	if err := s.db.Model(&preset).Updates(updates).Error; err != nil {
+		return nil, err
 	}
 
 	s.db.First(&preset, presetID)
