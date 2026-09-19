@@ -106,14 +106,28 @@ func (s *PromptWorkshopService) buildPrompt(projectID uint, entityType string, e
 		result = strings.ReplaceAll(result, placeholder, value)
 	}
 
-	// 记录历史
-	if err := s.recordVersion(projectID, entityType, entityID, result, PromptActionBuild, map[string]any{
-		"template": template,
-		"params":   params,
-	}); err != nil {
-		// 历史记录失败不阻塞主流程
+	_, hasSubject := params["subject"]
+	_, hasAction := params["action"]
+	_, hasCamera := params["camera"]
+	_, hasLighting := params["lighting"]
+	_, hasStyle := params["style"]
+	if entityType == "shot" && hasSubject && hasAction && hasCamera && hasLighting && hasStyle {
+		if strings.Contains(result, "{{") || strings.Contains(result, "}}") {
+			return "", fmt.Errorf("提示词仍包含未替换占位符")
+		}
+		lines := strings.Split(strings.ReplaceAll(result, "\r\n", "\n"), "\n")
+		if len(lines) != 5 {
+			return "", fmt.Errorf("Shot 提示词必须恰好包含五行")
+		}
+		for _, line := range lines {
+			if strings.TrimSpace(line) == "" {
+				return "", fmt.Errorf("Shot 五段提示词不能为空")
+			}
+		}
 	}
-
+	if err := s.recordVersion(projectID, entityType, entityID, result, PromptActionBuild, map[string]any{"template": template, "params": params}); err != nil {
+		return "", err
+	}
 	return result, nil
 }
 

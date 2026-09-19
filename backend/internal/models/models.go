@@ -491,11 +491,12 @@ const (
 // ProjectSkillConfig 项目级技能配置：支持项目选择特定技能或覆盖系统默认
 type ProjectSkillConfig struct {
 	ID              uint      `gorm:"primaryKey" json:"id"`
-	ProjectID       uint      `gorm:"column:project_id;uniqueIndex:idx_proj_stage" json:"project_id"` // 项目 ID
-	Stage           string    `gorm:"column:stage;uniqueIndex:idx_proj_stage" json:"stage"`           // 阶段（与 ProjectSkillConfig 唯一索引）
-	SkillID         *uint     `gorm:"column:skill_id" json:"skill_id"`                                // 选中技能 ID（nil 表示使用系统默认）
-	Enabled         bool      `gorm:"default:true" json:"enabled"`                                    // 该阶段是否启用技能注入
-	VersionSnapshot int       `gorm:"column:version_snapshot" json:"version_snapshot"`                // 生成时锁定的技能版本
+	ProjectID       uint      `gorm:"column:project_id;uniqueIndex:idx_proj_stage_operation" json:"project_id"`
+	Stage           string    `gorm:"column:stage;uniqueIndex:idx_proj_stage_operation" json:"stage"`
+	Operation       string    `gorm:"column:operation;uniqueIndex:idx_proj_stage_operation" json:"operation"`
+	SkillID         *uint     `gorm:"column:skill_id" json:"skill_id"`                 // 选中技能 ID（nil 表示使用系统默认）
+	Enabled         bool      `gorm:"default:true" json:"enabled"`                     // 该阶段是否启用技能注入
+	VersionSnapshot int       `gorm:"column:version_snapshot" json:"version_snapshot"` // 生成时锁定的技能版本
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 

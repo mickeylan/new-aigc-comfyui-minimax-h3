@@ -72,6 +72,8 @@ export const api = {
   reassignSceneEpisode: (id, sid, episodeN) => http.post(`/projects/${id}/scenes/${sid}/reassign-episode`, { episode_n: episodeN }),
   visualBeatDraft: (id, sid, data = {}) => http.post(`/projects/${id}/scenes/${sid}/skills/visual-beats`, data, { timeout: 300000 }),
   faithfulPolishDraft: (id, sid, data) => http.post(`/projects/${id}/scenes/${sid}/skills/faithful-polish`, data, { timeout: 300000 }),
+  assetContinuityReviewDraft: (id, sid, data = {}) => http.post(`/projects/${id}/scenes/${sid}/skills/asset-continuity-review`, data, { timeout: 300000 }),
+  coverageReviewDraft: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/skills/coverage-review`, {}, { timeout: 300000 }),
   creativeIntent: (id, data) => http.post(`/projects/${id}/skills/creative-intent`, data, { timeout: 300000 }),
   promptPolicyOverrides: (id, policyKey = '') => http.get(`/projects/${id}/prompt-policy-overrides`, { params: policyKey ? { policy_key: policyKey } : {} }),
   effectivePromptPolicy: (id, params) => http.get(`/projects/${id}/prompt-policy-effective`, { params }),
@@ -246,8 +248,8 @@ export const api = {
   // 项目级技能配置
   projectSkills: (id) => http.get(`/projects/${id}/skills`),
   setProjectSkill: (id, data) => http.post(`/projects/${id}/skills`, data),
-  resetProjectSkill: (id, stage) => http.delete(`/projects/${id}/skills/${stage}`),
-  effectiveSkill: (id, stage) => http.get(`/projects/${id}/skills/effective?stage=${stage}`),
+  resetProjectSkill: (id, stage, operation) => http.delete(`/projects/${id}/skills/${stage}`, { params: { operation } }),
+  effectiveSkill: (id, stage, operation) => http.get(`/projects/${id}/skills/effective`, { params: { stage, operation } }),
   skillAuditLogs: (id, params) => http.get(`/projects/${id}/skills/audit`, { params }),
 
   // 导演镜头与提示词工作台
@@ -255,6 +257,7 @@ export const api = {
   replaceSceneShots: (id, sid, shots) => http.post(`/projects/${id}/scenes/${sid}/shots`, { shots }),
   updateShot: (id, shotId, data) => http.put(`/projects/${id}/shots/${shotId}`, data),
   expandShotDirectorPrompt: (id, shotId, data) => http.post(`/projects/${id}/shots/${shotId}/director-expand`, data, { timeout: 300000 }),
+  shotStatePromptDraft: (id, shotId, data) => http.post(`/projects/${id}/shots/${shotId}/skills/state-prompt`, data, { timeout: 300000 }),
   shotStyleRecommendations: (id, shotId, limit = 3) => http.get(`/projects/${id}/shots/${shotId}/style-recommendations`, { params: { limit } }),
   applyShotStylePreset: (id, shotId, presetId, preview = false) => http.post(`/projects/${id}/shots/${shotId}/style-preset`, { preset_id: Number(presetId), preview }),
   deleteShot: (id, shotId) => http.delete(`/projects/${id}/shots/${shotId}`),

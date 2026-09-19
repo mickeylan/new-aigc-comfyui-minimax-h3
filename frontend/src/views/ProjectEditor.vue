@@ -33,10 +33,10 @@
     <section class="section">
       <details class="card"><summary><strong>项目 Skill 配置与审计</strong></summary>
         <p class="sub">项目配置仅在 Skill 的 operation 与具体操作契约一致时生效；否则安全回退到系统专用 Skill。</p>
-        <div class="shot-grid two"><label>阶段<select v-model="skillStage" class="input" @change="loadSkillPanel"><option v-for="s in skillStages" :key="s.value" :value="s.value">{{ s.label }}</option></select></label><label>Skill<select v-model="selectedSkillId" class="input"><option value="">使用系统默认</option><option v-for="s in stageSkills" :key="s.id" :value="String(s.id)">{{ s.name }} · {{ s.operation || s.code }} · v{{ s.version }}</option></select></label></div>
+        <div class="shot-grid"><label>阶段<select v-model="skillStage" class="input" @change="onSkillStageChange"><option v-for="s in skillStages" :key="s.value" :value="s.value">{{ s.label }}</option></select></label><label>操作契约<select v-model="skillOperation" class="input" @change="loadSkillPanel"><option v-for="op in stageOperations" :key="op" :value="op">{{ op }}</option></select></label><label>Skill<select v-model="selectedSkillId" class="input"><option value="">使用系统默认</option><option v-for="s in operationSkills" :key="s.id" :value="String(s.id)">{{ s.name }} · v{{ s.version }}</option></select></label></div>
         <div class="section-actions"><button class="btn btn-sm" @click="saveProjectSkill">保存项目配置</button><button class="btn btn-sm btn-ghost" @click="resetProjectSkill">恢复系统默认</button><button class="btn btn-sm btn-ghost" @click="loadSkillAudit">刷新审计</button></div>
         <p class="sub" v-if="effectiveSkill">当前有效：{{ effectiveSkill.name }}（{{ effectiveSkill.operation || effectiveSkill.code }}）</p>
-        <div v-if="skillAudits.length" class="history"><div v-for="row in skillAudits" :key="row.id" class="history-item">{{ row.stage }} · {{ row.skill_code }} · {{ row.status }} · {{ new Date(row.created_at).toLocaleString() }}</div></div>
+        <div v-if="skillAudits.length" class="history"><div v-for="row in skillAudits" :key="row.id" class="history-item">{{ row.stage }} · {{ row.skill_code }} · {{ row.success ? '成功' : ('失败：' + (row.error || '未知错误')) }} · {{ new Date(row.created_at).toLocaleString() }}</div></div>
       </details>
     </section>
 
@@ -92,6 +92,8 @@
           <div class="section-actions">
             <button class="btn btn-sm btn-ghost" @click="moveSceneEpisode">移动到其他集</button>
             <button class="btn btn-sm btn-secondary" @click="runVisualBeats">视觉节拍拆镜</button>
+            <button class="btn btn-sm btn-secondary" @click="runAssetContinuityReview">资产连续性审查</button>
+            <button class="btn btn-sm btn-secondary" @click="runCoverageReview">镜头覆盖审查</button>
             <button class="btn btn-sm btn-secondary" @click="runFaithfulPolish">忠实润色</button>
             <a v-if="selected.video_url" class="btn btn-sm btn-ghost" :href="selected.video_url + '?download=1'">下载视频</a>
             <button class="btn btn-sm btn-secondary" @click="showFrameSelector = true">连续性设置</button>
@@ -104,6 +106,7 @@
             <span class="ph-icon">🎞️</span>
             <p>该场景尚未生成分镜图或视频</p>
           </div>
+          <pre v-if="sceneSkillDraft" class="prompt-preview scene-skill-draft">{{ sceneSkillDraft }}</pre>
           <div class="duration-edit">
             <label>目标时长</label>
             <input type="number" class="input input-sm" v-model.number="durationInput" min="3" max="15" step="0.5" @change="saveDuration" />
@@ -276,6 +279,7 @@ import { api } from '../api'
 import { useToastStore } from '../stores/toast'
 import ShotDirectorEditor from '../components/ShotDirectorEditor.vue'
 import FrameSelector from '../components/FrameSelector.vue'
+import { compatibleSkills, projectSkillConfig, skillOperationOf } from '../utils/directorWorkflow.js'
 
 const route = useRoute()
 const toast = useToastStore()
@@ -292,6 +296,7 @@ const audioLayers = ref([])
 const sharedAssets = ref([])
 const continuity = ref(null)
 const intentDraft = ref('')
+const sceneSkillDraft = ref('')
 const selected = ref(null)
 const tab = ref('dub')
 const busy = ref(false)
@@ -312,10 +317,13 @@ const skillStages = ref([])
 const allSkills = ref([])
 const projectSkillConfigs = ref([])
 const skillStage = ref('storyboard')
+const skillOperation = ref('director-visual-beat-decomposition')
 const selectedSkillId = ref('')
 const effectiveSkill = ref(null)
 const skillAudits = ref([])
 const stageSkills = computed(() => allSkills.value.filter(s => s.stage === skillStage.value && s.enabled))
+const stageOperations = computed(() => [...new Set(stageSkills.value.map(skillOperationOf))].filter(Boolean).sort())
+const operationSkills = computed(() => compatibleSkills(allSkills.value, skillStage.value, skillOperation.value))
 
 // 目标时长与累计时长计算
 const compareCandidates = computed(() => candidates.value.filter(c => compareCandidateIds.value.includes(c.id)))
@@ -379,22 +387,24 @@ async function loadSkillPanel() {
       allSkills.value = skills.data || []
       projectSkillConfigs.value = configs.data || []
     }
-    const cfg = projectSkillConfigs.value.find(v => v.stage === skillStage.value)
+    if (!stageOperations.value.includes(skillOperation.value)) skillOperation.value = stageOperations.value[0] || skillStage.value
+    const cfg = projectSkillConfig(projectSkillConfigs.value, skillStage.value, skillOperation.value)
     selectedSkillId.value = cfg?.skill_id ? String(cfg.skill_id) : ''
-    const { data } = await api.effectiveSkill(id(), skillStage.value)
+    const { data } = await api.effectiveSkill(id(), skillStage.value, skillOperation.value)
     effectiveSkill.value = data || null
   } catch (e) { toast.error(e.response?.data?.error || '加载项目 Skill 配置失败') }
 }
+async function onSkillStageChange() { skillOperation.value = ''; await loadSkillPanel() }
 async function saveProjectSkill() {
   try {
-    if (!selectedSkillId.value) { await api.resetProjectSkill(id(), skillStage.value) }
-    else { await api.setProjectSkill(id(), { stage: skillStage.value, skill_id: Number(selectedSkillId.value), enabled: true }) }
+    if (!selectedSkillId.value) { await api.resetProjectSkill(id(), skillStage.value, skillOperation.value) }
+    else { await api.setProjectSkill(id(), { stage: skillStage.value, operation: skillOperation.value, skill_id: Number(selectedSkillId.value), enabled: true }) }
     projectSkillConfigs.value = (await api.projectSkills(id())).data || []
     await loadSkillPanel(); toast.success('项目 Skill 配置已保存')
   } catch (e) { toast.error(e.response?.data?.error || '保存项目 Skill 配置失败') }
 }
 async function resetProjectSkill() {
-  try { await api.resetProjectSkill(id(), skillStage.value); projectSkillConfigs.value = (await api.projectSkills(id())).data || []; await loadSkillPanel(); toast.success('已恢复系统默认 Skill') }
+  try { await api.resetProjectSkill(id(), skillStage.value, skillOperation.value); projectSkillConfigs.value = (await api.projectSkills(id())).data || []; await loadSkillPanel(); toast.success('已恢复系统默认 Skill') }
   catch (e) { toast.error(e.response?.data?.error || '重置 Skill 失败') }
 }
 async function loadSkillAudit() {
@@ -431,6 +441,7 @@ async function loadMerges() {
 
 function selectScene(sc) {
   selected.value = sc
+  sceneSkillDraft.value = ''
   durationInput.value = sc.duration || 5
   tab.value = 'dub'
 }
@@ -619,6 +630,14 @@ async function moveSceneEpisode() {
 async function runVisualBeats() {
   try { const { data } = await api.visualBeatDraft(id(), selected.value.id, { target_duration: selected.value.duration }); intentDraft.value = data.draft; toast.success('已生成视觉节拍草稿（未自动保存）') }
   catch (e) { toast.error(e.response?.data?.error || '生成失败') }
+}
+async function runAssetContinuityReview() {
+  try { const { data } = await api.assetContinuityReviewDraft(id(), selected.value.id); sceneSkillDraft.value = data.draft; toast.success('已生成资产连续性审查草稿（未自动保存）') }
+  catch (e) { toast.error(e.response?.data?.error || '审查失败') }
+}
+async function runCoverageReview() {
+  try { const { data } = await api.coverageReviewDraft(id(), selected.value.id); sceneSkillDraft.value = data.draft; toast.success('已生成镜头覆盖审查草稿（未自动保存）') }
+  catch (e) { toast.error(e.response?.data?.error || '审查失败') }
 }
 async function runFaithfulPolish() {
   const feedback = window.prompt('只描述希望改进的视觉表现', '增强构图和动作可见性'); if (feedback === null) return

@@ -105,6 +105,8 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/scenes/:sid/prompt/redesign", svc.HandleRedesignScenePrompt)
 	r.POST("/api/projects/:id/scenes/:sid/skills/visual-beats", svc.HandleVisualBeatDecomposition)
 	r.POST("/api/projects/:id/scenes/:sid/skills/faithful-polish", svc.HandleFaithfulPromptPolish)
+	r.POST("/api/projects/:id/scenes/:sid/skills/asset-continuity-review", svc.HandleAssetContinuityReviewDraft)
+	r.POST("/api/projects/:id/scenes/:sid/skills/coverage-review", svc.HandleCoverageReviewDraft)
 	r.POST("/api/projects/:id/skills/creative-intent", svc.HandleCreativeIntent)
 	// 项目资产对账与生成/上传变体
 	r.POST("/api/projects/:id/assets/reconciliation/preview", svc.HandleSuggestAssetReconciliation)
@@ -299,6 +301,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.GET("/api/projects/:id/scenes/:sid/shots", svc.HandleGetSceneShots)
 	r.PUT("/api/projects/:id/shots/:shid", svc.HandleUpdateShot)
 	r.POST("/api/projects/:id/shots/:shid/director-expand", svc.HandleExpandShotDirectorPrompt)
+	r.POST("/api/projects/:id/shots/:shid/skills/state-prompt", svc.HandleShotStatePromptDraft)
 	r.GET("/api/projects/:id/shots/:shid/style-recommendations", svc.HandleShotStyleRecommendations)
 	r.POST("/api/projects/:id/shots/:shid/style-preset", svc.HandleApplyShotStylePreset)
 	r.DELETE("/api/projects/:id/shots/:shid", svc.HandleDeleteShot)

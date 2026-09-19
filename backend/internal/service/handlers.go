@@ -891,15 +891,16 @@ func (s *Service) HandleSetProjectSkill(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Stage   string `json:"stage" binding:"required"`
-		SkillID *uint  `json:"skill_id"`
-		Enabled bool   `json:"enabled"`
+		Stage     string `json:"stage" binding:"required"`
+		Operation string `json:"operation" binding:"required"`
+		SkillID   *uint  `json:"skill_id"`
+		Enabled   bool   `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	config, err := s.Skills.SetProjectSkillConfig(p.ID, req.Stage, req.SkillID, req.Enabled)
+	config, err := s.Skills.SetProjectOperationSkillConfig(p.ID, req.Stage, req.Operation, req.SkillID, req.Enabled)
 	if err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
@@ -913,7 +914,8 @@ func (s *Service) HandleResetProjectSkill(c *gin.Context) {
 		return
 	}
 	stage := c.Param("stage")
-	if err := s.Skills.ResetProjectStageConfig(p.ID, stage); err != nil {
+	operation := c.Query("operation")
+	if err := s.Skills.ResetProjectOperationConfig(p.ID, stage, operation); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -930,7 +932,8 @@ func (s *Service) HandleGetEffectiveSkill(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "stage is required"})
 		return
 	}
-	skill, err := s.Skills.GetEffectiveSkill(p.ID, stage)
+	operation := c.Query("operation")
+	skill, err := s.Skills.GetEffectiveOperationSkill(p.ID, stage, operation)
 	if err != nil {
 		c.JSON(404, gin.H{"error": err.Error()})
 		return

@@ -156,6 +156,10 @@ func (s *SkillService) InitSystemSkills() error {
 			if err := s.db.Create(&skill).Error; err != nil {
 				return fmt.Errorf("upgrade skill %s failed: %w", skill.Code, err)
 			}
+		case strings.TrimSpace(latest.Operation) == "":
+			if err := s.db.Model(&latest).Update("operation", skill.Operation).Error; err != nil {
+				return fmt.Errorf("backfill skill operation %s failed: %w", skill.Code, err)
+			}
 		}
 	}
 	return nil
@@ -418,7 +422,20 @@ func (s *SkillService) GetProjectConfig(projectID uint) ([]models.ProjectSkillCo
 // GetProjectStageConfig 获取项目特定阶段的技能配置
 func (s *SkillService) GetProjectStageConfig(projectID uint, stage string) (*models.ProjectSkillConfig, error) {
 	var config models.ProjectSkillConfig
-	err := s.db.Preload("Skill").Where("project_id = ? AND stage = ?", projectID, stage).First(&config).Error
+	err := s.db.Preload("Skill").Where("project_id = ? AND stage = ?", projectID, stage).Order("id").First(&config).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &config, err
+}
+
+func (s *SkillService) GetProjectOperationConfig(projectID uint, stage, operation string) (*models.ProjectSkillConfig, error) {
+	operation = strings.TrimSpace(operation)
+	if operation == "" {
+		operation = stage
+	}
+	var config models.ProjectSkillConfig
+	err := s.db.Preload("Skill").Where("project_id = ? AND stage = ? AND operation = ?", projectID, stage, operation).First(&config).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
@@ -430,6 +447,24 @@ func (s *SkillService) GetProjectStageConfig(projectID uint, stage string) (*mod
 
 // SetProjectSkillConfig 设置项目特定阶段的技能
 func (s *SkillService) SetProjectSkillConfig(projectID uint, stage string, skillID *uint, enabled bool) (*models.ProjectSkillConfig, error) {
+	operation := stage
+	if skillID != nil {
+		var skill models.Skill
+		if err := s.db.First(&skill, *skillID).Error; err == nil {
+			operation = strings.TrimSpace(skill.Operation)
+			if operation == "" {
+				operation = skill.Code
+			}
+		}
+	}
+	return s.SetProjectOperationSkillConfig(projectID, stage, operation, skillID, enabled)
+}
+
+func (s *SkillService) SetProjectOperationSkillConfig(projectID uint, stage, operation string, skillID *uint, enabled bool) (*models.ProjectSkillConfig, error) {
+	operation = strings.TrimSpace(operation)
+	if operation == "" {
+		operation = stage
+	}
 	if !isValidStage(stage) {
 		return nil, fmt.Errorf("无效的阶段: %s", stage)
 	}
@@ -441,13 +476,20 @@ func (s *SkillService) SetProjectSkillConfig(projectID uint, stage string, skill
 		if skill.Stage != stage {
 			return nil, fmt.Errorf("技能阶段不匹配：期望 %s，实际 %s", stage, skill.Stage)
 		}
+		skillOperation := strings.TrimSpace(skill.Operation)
+		if skillOperation == "" {
+			skillOperation = skill.Code
+		}
+		if skillOperation != operation {
+			return nil, fmt.Errorf("技能操作契约不匹配：期望 %s，实际 %s", operation, skillOperation)
+		}
 		if enabled && !skill.Enabled {
 			return nil, fmt.Errorf("技能已被全局禁用")
 		}
 	}
 
 	var config models.ProjectSkillConfig
-	err := s.db.Where("project_id = ? AND stage = ?", projectID, stage).First(&config).Error
+	err := s.db.Where("project_id = ? AND stage = ? AND operation = ?", projectID, stage, operation).First(&config).Error
 
 	versionSnapshot := 0
 	if skillID != nil {
@@ -462,6 +504,7 @@ func (s *SkillService) SetProjectSkillConfig(projectID uint, stage string, skill
 		config = models.ProjectSkillConfig{
 			ProjectID:       projectID,
 			Stage:           stage,
+			Operation:       operation,
 			SkillID:         skillID,
 			Enabled:         enabled,
 			VersionSnapshot: versionSnapshot,
@@ -492,11 +535,41 @@ func (s *SkillService) SetProjectSkillConfig(projectID uint, stage string, skill
 func (s *SkillService) ResetProjectStageConfig(projectID uint, stage string) error {
 	return s.db.Where("project_id = ? AND stage = ?", projectID, stage).Delete(&models.ProjectSkillConfig{}).Error
 }
+func (s *SkillService) ResetProjectOperationConfig(projectID uint, stage, operation string) error {
+	if operation == "" {
+		operation = stage
+	}
+	return s.db.Where("project_id = ? AND stage = ? AND operation = ?", projectID, stage, operation).Delete(&models.ProjectSkillConfig{}).Error
+}
 
 // GetEffectiveSkill 获取项目阶段的有效技能（项目配置优先，否则系统默认）
 func (s *SkillService) GetEffectiveSkill(projectID uint, stage string) (*models.Skill, error) {
-	// 1. 先查项目配置
 	config, err := s.GetProjectStageConfig(projectID, stage)
+	if err != nil {
+		return nil, err
+	}
+	if config != nil {
+		if !config.Enabled {
+			return nil, nil
+		}
+		if config.SkillID != nil {
+			skill, err := s.GetSkill(*config.SkillID)
+			if err != nil {
+				return nil, err
+			}
+			if !skill.Enabled {
+				return nil, fmt.Errorf("项目配置的技能不可用")
+			}
+			return skill, nil
+		}
+	}
+	return s.GetEffectiveOperationSkill(projectID, stage, stage)
+}
+func (s *SkillService) GetEffectiveOperationSkill(projectID uint, stage, operation string) (*models.Skill, error) {
+	if operation == "" {
+		operation = stage
+	}
+	config, err := s.GetProjectOperationConfig(projectID, stage, operation)
 	if err != nil {
 		return nil, err
 	}
@@ -517,8 +590,11 @@ func (s *SkillService) GetEffectiveSkill(projectID uint, stage string) (*models.
 
 	// 2. 查每个 code 的最新系统版本，再按 sort_order 选择默认
 	var skill models.Skill
-	err = s.db.Where("stage = ? AND enabled = ? AND is_system = ?", stage, true, true).
-		Where("NOT EXISTS (SELECT 1 FROM skills newer WHERE newer.code = skills.code AND newer.version > skills.version)").
+	query := s.db.Where("stage = ? AND enabled = ? AND is_system = ?", stage, true, true)
+	if operation != stage {
+		query = query.Where("COALESCE(NULLIF(operation, ''), code) = ?", operation)
+	}
+	err = query.Where("NOT EXISTS (SELECT 1 FROM skills newer WHERE newer.code = skills.code AND newer.version > skills.version)").
 		Order("sort_order ASC, version DESC, id ASC").
 		First(&skill).Error
 	if err == gorm.ErrRecordNotFound {
@@ -562,7 +638,7 @@ func (s *SkillService) latestEnabledSkillByCode(code string) (*models.Skill, err
 // otherwise it uses the named curated fallback. Every real invocation is audited.
 func (s *SkillService) ChatWithConfiguredOrFallbackSkill(projectID uint, stage, fallbackCode string, provider TextProvider, baseSystem, baseUser string, params map[string]string) (string, error) {
 	var skill *models.Skill
-	config, err := s.GetProjectStageConfig(projectID, stage)
+	config, err := s.GetProjectOperationConfig(projectID, stage, fallbackCode)
 	if err != nil {
 		return "", err
 	}
@@ -603,8 +679,14 @@ func (s *SkillService) ChatWithConfiguredOrFallbackSkill(projectID uint, stage, 
 	if chatErr != nil {
 		errText = chatErr.Error()
 	}
-	_ = s.LogSkillUsage(projectID, stage, skill, user, len(output), time.Since(started).Milliseconds(), chatErr == nil, errText)
-	return output, chatErr
+	auditErr := s.LogSkillUsage(projectID, stage, skill, user, len(output), time.Since(started).Milliseconds(), chatErr == nil, errText)
+	if chatErr != nil {
+		return output, chatErr
+	}
+	if auditErr != nil {
+		return "", fmt.Errorf("Skill 审计写入失败: %w", auditErr)
+	}
+	return output, nil
 }
 
 // ChatWithSkill 执行阶段化文本生成，并记录成功或失败的 Skill 版本审计。
@@ -620,7 +702,10 @@ func (s *SkillService) ChatWithSkill(projectID uint, stage string, provider Text
 		if chatErr != nil {
 			errText = chatErr.Error()
 		}
-		_ = s.LogSkillUsage(projectID, stage, skill, user, len(output), time.Since(started).Milliseconds(), chatErr == nil, errText)
+		auditErr := s.LogSkillUsage(projectID, stage, skill, user, len(output), time.Since(started).Milliseconds(), chatErr == nil, errText)
+		if chatErr == nil && auditErr != nil {
+			return "", fmt.Errorf("Skill 审计写入失败: %w", auditErr)
+		}
 	}
 	return output, chatErr
 }

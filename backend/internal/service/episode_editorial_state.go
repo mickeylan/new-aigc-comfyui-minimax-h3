@@ -20,6 +20,7 @@ type episodeEditorialScene struct {
 	Title               string                     `json:"title"`
 	Content             string                     `json:"content"`
 	ImagePrompt         string                     `json:"image_prompt"`
+	NegativePrompt      string                     `json:"negative_prompt"`
 	VideoPrompt         string                     `json:"video_prompt"`
 	Duration            float64                    `json:"duration"`
 	VisibleCharacters   string                     `json:"visible_characters"`
@@ -48,6 +49,7 @@ type episodeEditorialShot struct {
 	PromptCamera   string                    `json:"prompt_camera"`
 	PromptLighting string                    `json:"prompt_lighting"`
 	PromptStyle    string                    `json:"prompt_style"`
+	NegativePrompt string                    `json:"negative_prompt"`
 }
 
 type episodeEditorialDialogue struct {
@@ -77,7 +79,7 @@ func episodeEditorialSnapshot(db *gorm.DB, projectID uint, episodeN int) ([]byte
 	for _, scene := range scenes {
 		item := episodeEditorialScene{
 			Order: scene.Order, Generation: scene.Generation, Title: strings.TrimSpace(scene.Title),
-			Content: strings.TrimSpace(scene.Content), ImagePrompt: strings.TrimSpace(scene.ImagePrompt),
+			Content: strings.TrimSpace(scene.Content), ImagePrompt: strings.TrimSpace(scene.ImagePrompt), NegativePrompt: strings.TrimSpace(scene.NegativePrompt),
 			VideoPrompt: strings.TrimSpace(scene.VideoPrompt), Duration: scene.Duration,
 			VisibleCharacters: strings.TrimSpace(scene.VisibleCharacters), VoiceCharacters: strings.TrimSpace(scene.VoiceCharacters),
 			MentionedCharacters: strings.TrimSpace(scene.MentionedCharacters), Location: strings.TrimSpace(scene.LocationName),
@@ -93,7 +95,7 @@ func episodeEditorialSnapshot(db *gorm.DB, projectID uint, episodeN int) ([]byte
 				CameraMovement: strings.TrimSpace(shot.CameraMovement), TransitionType: shot.TransitionType, TransitionNote: strings.TrimSpace(shot.TransitionNote),
 				Duration: shot.Duration, Description: strings.TrimSpace(shot.Description), Dialogue: strings.TrimSpace(shot.Dialogue), Emotion: strings.TrimSpace(shot.Emotion),
 				PromptSubject: strings.TrimSpace(shot.PromptSubject), PromptAction: strings.TrimSpace(shot.PromptAction), PromptCamera: strings.TrimSpace(shot.PromptCamera),
-				PromptLighting: strings.TrimSpace(shot.PromptLighting), PromptStyle: strings.TrimSpace(shot.PromptStyle),
+				PromptLighting: strings.TrimSpace(shot.PromptLighting), PromptStyle: strings.TrimSpace(shot.PromptStyle), NegativePrompt: strings.TrimSpace(shot.NegativePrompt),
 			})
 		}
 		var dialogues []models.Dialogue

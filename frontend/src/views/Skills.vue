@@ -123,6 +123,10 @@
             </select>
           </div>
           <div class="form-row">
+            <label>操作契约 *</label>
+            <input type="text" v-model="formData.operation" placeholder="例如：director-shot-packet；必须与调用操作一致" />
+          </div>
+          <div class="form-row">
             <label>描述</label>
             <textarea v-model="formData.description" placeholder="技能用途说明"></textarea>
           </div>
@@ -263,6 +267,7 @@ const formData = ref({
   name: '',
   code: '',
   stage: '',
+  operation: '',
   description: '',
   prompt_template: '',
   system_prompt: ''
@@ -441,6 +446,7 @@ async function editSkill(skill) {
     name: skill.name,
     code: skill.code,
     stage: skill.stage,
+    operation: skill.operation || skill.code,
     description: skill.description,
     prompt_template: skill.prompt_template,
     system_prompt: skill.system_prompt

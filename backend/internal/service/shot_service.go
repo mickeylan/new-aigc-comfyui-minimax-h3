@@ -198,6 +198,15 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 	if v, ok := updates["description"].(string); ok {
 		candidate.Description = v
 	}
+	if v, ok := updates["transition_type"].(string); ok {
+		candidate.TransitionType = models.ShotTransitionType(v)
+	}
+	if v, ok := updates["transition_note"].(string); ok {
+		candidate.TransitionNote = v
+	}
+	if v, ok := updates["order"].(float64); ok && v < 1 {
+		return nil, fmt.Errorf("order 必须大于0")
+	}
 	if v, ok := updates["duration"].(float64); ok {
 		candidate.Duration = v
 	}
@@ -281,15 +290,14 @@ func recordManualShotPrompt(db *gorm.DB, projectID uint, shot models.Shot) error
 	if count > 0 {
 		return nil
 	}
-	promoted := db.Model(&models.PromptVersion{}).Where(
-		"project_id = ? AND entity_type = ? AND entity_id = ? AND content = ? AND state = ?",
-		projectID, "shot", shot.ID, content, PromptVersionStateDraft,
-	).Updates(map[string]any{"state": PromptVersionStateApplied, "action": string(PromptActionManual)})
-	if promoted.Error != nil {
-		return promoted.Error
+	var draft models.PromptVersion
+	err := db.Where("project_id = ? AND entity_type = ? AND entity_id = ? AND content = ? AND state = ?", projectID, "shot", shot.ID, content, PromptVersionStateDraft).
+		Order("id DESC").First(&draft).Error
+	if err == nil {
+		return db.Model(&draft).Update("state", PromptVersionStateApplied).Error
 	}
-	if promoted.RowsAffected > 0 {
-		return nil
+	if err != gorm.ErrRecordNotFound {
+		return err
 	}
 	return db.Create(&models.PromptVersion{
 		ProjectID: projectID, EntityType: "shot", EntityID: shot.ID,

@@ -25,6 +25,11 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 	}
 	// 早期 Skill 原型曾给 name/code 建单列唯一索引；版本化后同一技能必须共享它们。
 	// 在 AutoMigrate 新的 (code, version) 联合唯一索引前清理旧索引，兼容已启动过原型的数据库。
+	if db.Migrator().HasTable(&models.ProjectSkillConfig{}) && db.Migrator().HasIndex(&models.ProjectSkillConfig{}, "idx_proj_stage") {
+		if err := db.Migrator().DropIndex(&models.ProjectSkillConfig{}, "idx_proj_stage"); err != nil {
+			return nil, fmt.Errorf("drop obsolete project skill index: %w", err)
+		}
+	}
 	if db.Migrator().HasTable(&models.Skill{}) {
 		for _, index := range []string{"idx_skills_name", "idx_skills_code"} {
 			if db.Migrator().HasIndex(&models.Skill{}, index) {
@@ -81,6 +86,9 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.SceneContinuity{},
 	); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	if err := db.Exec("UPDATE project_skill_configs SET operation = COALESCE((SELECT CASE WHEN TRIM(operation) <> '' THEN operation ELSE code END FROM skills WHERE skills.id = project_skill_configs.skill_id), stage) WHERE TRIM(COALESCE(operation, '')) = ''").Error; err != nil {
+		return nil, fmt.Errorf("backfill project skill operation: %w", err)
 	}
 	if err := migrateLegacyDialogueAudioState(db); err != nil {
 		return nil, fmt.Errorf("migrate legacy dialogue audio: %w", err)
