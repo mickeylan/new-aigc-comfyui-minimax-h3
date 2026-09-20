@@ -178,6 +178,10 @@
               <span v-if="ch.portrait_error" class="fail-msg">{{ ch.portrait_error }}</span>
               <span v-if="ch.sheet_task_id" class="char-voice">⏳ 角色四视图生成中</span>
               <span v-if="ch.sheet_error" class="fail-msg">{{ ch.sheet_error }}</span>
+              <div class="character-look-entry">
+                <div><strong>新形象与服装</strong><span>为该角色新增服装、鞋履、发型、配饰，再组合成可按场景选择的完整套装。</span></div>
+                <div class="character-look-entry-actions"><router-link :to="`/projects/${id()}/characters/${ch.id}/looks?mode=assets&new=1`" class="btn btn-sm">＋ 设计新造型</router-link><router-link :to="`/projects/${id()}/characters/${ch.id}/looks?mode=outfits`" class="btn btn-sm btn-secondary">管理完整套装</router-link></div>
+              </div>
               <div class="char-actions">
                 <button class="btn btn-sm btn-secondary" :disabled="busy || !!ch.portrait_task_id || ch.profile_status !== 'approved' || !ch.reference_prompt" @click="genPortrait(ch)"
                   :title="ch.profile_status !== 'approved' ? '请先审核通过角色档案' : !ch.reference_prompt ? '请先生成或填写参考像提示词' : ch.portrait_task_id ? '已有任务，不会重复提交；请先检查生成结果' : ''">
@@ -195,8 +199,7 @@
                 <button v-if="ch.sheet" class="btn btn-sm btn-ghost" @click="viewCharacterSheet(ch)">查看四视图</button>
                 <button class="btn btn-sm btn-ghost" @click="openVariants('character_portrait', ch.id, ch.name + ' · 标准像')">标准像版本</button>
                 <button class="btn btn-sm btn-ghost" @click="openVariants('character_sheet', ch.id, ch.name + ' · 四视图')">四视图版本</button>
-                <router-link :to="`/projects/${id()}/characters/${ch.id}/looks`" class="btn btn-sm btn-secondary">造型资产</router-link>
-                <button class="btn btn-sm btn-ghost" @click="openEditCharacter(ch)">编辑</button>
+                <button class="btn btn-sm btn-ghost" @click="openEditCharacter(ch)">编辑角色档案</button>
                 <button class="btn btn-sm btn-danger" @click="removeCharacter(ch)">删除</button>
               </div>
               <div class="char-actions">
@@ -2540,6 +2543,11 @@ onBeforeUnmount(() => {
 .char-history-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
 .char-history-context { display: flex; flex-direction: column; gap: 3px; margin-top: 7px; }
 .char-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.character-look-entry { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 10px; background: var(--accent-soft); }
+.character-look-entry > div:first-child { display: grid; gap: 2px; min-width: 0; }
+.character-look-entry strong { font-size: 13px; color: var(--accent); }
+.character-look-entry span { font-size: 11px; color: var(--text-secondary); line-height: 1.4; }
+.character-look-entry-actions { display: flex; gap: 6px; flex-wrap: wrap; flex: 0 0 auto; }
 .empty-inline { padding: 18px; color: var(--text-tertiary); font-size: 13px; text-align: center; }
 .field .req { color: var(--red); margin-left: 4px; font-weight: 400; }
 .field .optional { color: var(--text-tertiary); font-weight: 400; margin-left: 4px; }
