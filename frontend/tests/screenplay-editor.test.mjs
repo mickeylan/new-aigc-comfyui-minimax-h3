@@ -39,7 +39,7 @@ test('长篇小说剧本页封闭一次性全剧方案入口', () => {
   assert.match(view, /rollingRequired/)
   assert.match(view, /进入长篇滚动改编规划/)
   assert.match(view, /禁止一次生成全剧方案/)
-  assert.match(detail, /project\.source_type !== 'novel' \|\| project\.episodes <= 20/)
+  assert.match(detail, /project\.episodes <= 20/)
 })
 
 test('结构化剧本块支持场景动作对白旁白转场及未保存保护', () => {

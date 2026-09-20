@@ -190,15 +190,23 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 	if batch.Status != BatchStatusDraft && batch.Status != BatchStatusReview {
 		return nil, fmt.Errorf("当前批次状态不允许生成")
 	}
+	var project models.Project
+	if err := s.db.First(&project, projectID).Error; err != nil {
+		return nil, err
+	}
+	outlineMode := project.SourceType != models.ProjectSourceNovel
 	var bible models.StoryBible
 	if err := s.db.Where("project_id = ? AND status = ?", projectID, "approved").First(&bible).Error; err != nil {
-		return nil, fmt.Errorf("需要先审核通过故事圣经")
+		if !outlineMode {
+			return nil, fmt.Errorf("需要先审核通过故事圣经")
+		}
+		bible = models.StoryBible{ProjectID: projectID, Premise: project.Synopsis, MainPlot: project.Plan, Status: "approved"}
 	}
 	var chapters []models.Chapter
 	if err := s.db.Where("project_id = ? AND chapter_order BETWEEN ? AND ? AND analysis_status = ?", projectID, batch.ChapterStart, batch.ChapterEnd, "ready").Order("chapter_order").Find(&chapters).Error; err != nil {
 		return nil, err
 	}
-	if len(chapters) == 0 {
+	if len(chapters) == 0 && !outlineMode {
 		return nil, fmt.Errorf("所选章节尚无已完成分析")
 	}
 	var arcs []models.StoryArc
@@ -212,7 +220,7 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 	if err := q.Order("arc_no").Find(&arcs).Error; err != nil {
 		return nil, err
 	}
-	if len(arcs) == 0 {
+	if len(arcs) == 0 && !outlineMode {
 		return nil, fmt.Errorf("所选章节范围没有故事弧，请先生成并审核故事弧")
 	}
 	for _, arc := range arcs {
@@ -231,7 +239,10 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 	input := map[string]any{"batch": batch, "story_bible": bible, "story_arcs": arcs, "chapter_analyses": chapters, "previous_ending_state": previous.EndingState, "previous_state_snapshot": previousSnapshot, "open_clues": openClues, "required_episode_start": batch.EpisodeStart, "required_episode_end": batch.EpisodeEnd, "required_episode_count": batch.EpisodeCount}
 	payload, _ := json.Marshal(input)
 	_ = s.db.Model(batch).Updates(map[string]any{"status": BatchStatusGenerating, "error": "", "generation": gorm.Expr("generation + 1")}).Error
-	system := fmt.Sprintf("你是长篇小说滚动改编规划师。只输出JSON对象 {\"summary\":\"批次摘要\",\"episodes\":[EpisodeAdaptation字段]}。必须精确生成%d集，集号从%d连续到%d；每集必须含title、chapter_start、chapter_end、source_chapter_ids(JSON数组)、adaptation_goal、opening_state、ending_state、hook、target_duration(默认180)、target_scenes(默认25)。不得重写已完成批次，必须承接previous_ending_state。", batch.EpisodeCount, batch.EpisodeStart, batch.EpisodeEnd)
+	system := fmt.Sprintf("你是长篇故事滚动规划师。只输出JSON对象 {\"summary\":\"批次摘要\",\"episodes\":[EpisodeAdaptation字段]}。必须精确生成%d集，集号从%d连续到%d；每集必须含title、chapter_start、chapter_end、source_chapter_ids(JSON数组)、adaptation_goal、opening_state、ending_state、hook、target_duration(默认180)、target_scenes(默认25)。不得重写已完成批次，必须承接previous_ending_state。", batch.EpisodeCount, batch.EpisodeStart, batch.EpisodeEnd)
+	if outlineMode {
+		system += " 当前项目来自故事梗概而非小说章节；source_chapter_ids固定输出空数组[]，chapter_start和chapter_end可使用0。"
+	}
 	raw, err := s.skills.ChatWithSkill(projectID, models.SkillStageAdaptationPlan, s.provider, system, "", map[string]string{"strategy": string(payload), "story_bible": bibleJSON(bible), "chapter_analyses": string(payload)})
 	if err != nil {
 		s.db.Model(batch).Updates(map[string]any{"status": BatchStatusDraft, "error": err.Error()})
@@ -264,15 +275,24 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 		if ep.TargetScenes == 0 {
 			ep.TargetScenes = 25
 		}
-		if err := validateAdaptation(ep); err != nil {
+		if outlineMode {
+			ep.ChapterStart, ep.ChapterEnd, ep.SourceChapterIDs = 0, 0, "[]"
+			if ep.TargetDuration < 162 || ep.TargetDuration > 198 || ep.TargetScenes < 20 || ep.TargetScenes > 30 {
+				return nil, fmt.Errorf("第%d集: 时长或镜头数超出范围", ep.EpisodeN)
+			}
+		} else if err := validateAdaptation(ep); err != nil {
 			return nil, fmt.Errorf("第%d集: %w", ep.EpisodeN, err)
 		}
 		ep.Status = "draft"
 		ep.Version = 1
 		ep.ContinuityStatus = "pending"
-		ep.SourceDigest, err = s.sourceDigest(projectID, ep.SourceChapterIDs)
-		if err != nil {
-			return nil, err
+		if outlineMode {
+			ep.SourceDigest = novelHash(project.Synopsis + "\n" + project.Plan)
+		} else {
+			ep.SourceDigest, err = s.sourceDigest(projectID, ep.SourceChapterIDs)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	snapshot, _ := json.Marshal(map[string]any{"input": input, "output": json.RawMessage(outputJSON(raw))})

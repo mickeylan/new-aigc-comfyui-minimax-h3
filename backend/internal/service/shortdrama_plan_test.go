@@ -31,11 +31,13 @@ func TestParsePlanJSONAcceptsArrayForScalarString(t *testing.T) {
 	}
 }
 
-func TestGeneratePlanRejectsLargeNovelBeforeCallingProvider(t *testing.T) {
+func TestGeneratePlanRejectsAnyLargeProjectBeforeCallingProvider(t *testing.T) {
 	s := &ProjectService{}
-	_, err := s.GeneratePlan(&models.Project{SourceType: models.ProjectSourceNovel, Episodes: 60})
-	if err == nil || !strings.Contains(err.Error(), "5–20") {
-		t.Fatalf("expected rolling planning rejection, got %v", err)
+	for _, sourceType := range []models.ProjectSourceType{models.ProjectSourceNovel, models.ProjectSourceOutline} {
+		_, err := s.GeneratePlan(&models.Project{SourceType: sourceType, Episodes: 60})
+		if err == nil || !strings.Contains(err.Error(), "5–20") {
+			t.Fatalf("expected rolling planning rejection for %s, got %v", sourceType, err)
+		}
 	}
 }
 

@@ -16,7 +16,7 @@
     <section class="creative-actions card">
       <div>
         <strong>上游创作更新</strong>
-        <p v-if="rollingRequired">这是 {{ project?.episodes }} 集长篇小说，必须按每批5–20集滚动规划，禁止一次生成全剧方案。</p>
+        <p v-if="rollingRequired">这是 {{ project?.episodes }} 集长篇项目，必须按每批5–20集滚动规划，禁止一次生成全剧方案。</p>
         <p v-else>修改项目创意后，先生成创作方案，再重新生成本集剧本；两步都会调用现有项目流水线。</p>
       </div>
       <div class="head-actions">
@@ -119,7 +119,7 @@ const generatingPlan = ref(false)
 const generatingScript = ref(false)
 const planElapsed = ref(0)
 const planProgress = ref(0)
-const rollingRequired = computed(() => project.value?.source_type === 'novel' && Number(project.value?.episodes || 0) > 20)
+const rollingRequired = computed(() => Number(project.value?.episodes || 0) > 20)
 const planStage = computed(() => planElapsed.value < 5 ? '提交故事设定' : planElapsed.value < 30 ? 'AI规划角色与分集' : planElapsed.value < 90 ? '生成完整方案' : '校验并校正分集数量')
 let planTimer = null
 const dirty = ref(false)
@@ -162,7 +162,7 @@ async function save() {
   finally { busy.value = false }
 }
 async function generateCreativePlan() {
-  if (rollingRequired.value) { toast.info('长篇小说请进入滚动改编规划，按每批5–20集生成'); return }
+  if (rollingRequired.value) { toast.info('长篇项目请进入滚动规划，按每批5–20集生成'); return }
   if (dirty.value) { toast.error('请先保存或放弃当前剧本修改，再更新创作方案'); return }
   if (project.value?.plan && !window.confirm('重新生成创作方案会更新角色与分集规划。之后还需重新生成本集剧本，确定继续吗？')) return
   busy.value = true; generatingPlan.value = true
