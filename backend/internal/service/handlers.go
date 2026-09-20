@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -24,33 +25,34 @@ import (
 
 // Service 聚合所有子服务
 type Service struct {
-	Cfg                   *config.Config
-	DB                    *gorm.DB
-	Mgr                   *InstanceManager
-	Mon                   *GPUMonitor
-	Tasks                 *TaskService
-	Hub                   *Hub
-	Upload                *UploadManager
-	Remote                *RemoteExec
-	Volc                  *VolcClient
-	Projects              *ProjectService
-	Materials             *MaterialService
-	Novel                 *NovelService                // 小说改编服务
-	NovelAnalysis         *NovelAnalysisService        // 小说分层分析服务
-	Adaptations           *AdaptationService           // 小说分集改编服务
-	TextProviderFact      *TextProviderFactory         // 文生文 provider 工厂（运行时按设置动态选择）
-	CharacterProfiles     *CharacterProfileService     // 角色档案服务
-	CharacterLooks        *CharacterLookService        // 角色造型服务
-	Skills                *SkillService                // 创作技能管理服务
-	Shots                 *ShotService                 // 镜头层服务
-	PromptWorkshop        *PromptWorkshopService       // 提示词工作台服务
-	StylePresets          *StylePresetService          // 风格预设服务
-	Continuity            *ContinuityService           // 视频分镜连续性服务
-	AudioLayers           *AudioLayerService           // 声景、音效与背景音乐层
-	SharedAssetReferences *SharedAssetReferenceService // 显式共享素材引用
-	AssetVariants         *AssetVariantService         // 视觉资产生成/上传变体
-	AssetReconciliation   *AssetReconciliationService  // 项目资产名称对账
-	ScriptRevisions       *ScriptRevisionService       // 剧本安全快照
+	Cfg                       *config.Config
+	DB                        *gorm.DB
+	Mgr                       *InstanceManager
+	Mon                       *GPUMonitor
+	Tasks                     *TaskService
+	Hub                       *Hub
+	Upload                    *UploadManager
+	Remote                    *RemoteExec
+	Volc                      *VolcClient
+	Projects                  *ProjectService
+	Materials                 *MaterialService
+	Novel                     *NovelService                    // 小说改编服务
+	NovelAnalysis             *NovelAnalysisService            // 小说分层分析服务
+	Adaptations               *AdaptationService               // 小说分集改编服务
+	TextProviderFact          *TextProviderFactory             // 文生文 provider 工厂（运行时按设置动态选择）
+	CharacterProfiles         *CharacterProfileService         // 角色档案服务
+	CharacterLooks            *CharacterLookService            // 角色造型服务
+	CharacterMotionReferences *CharacterMotionReferenceService // 用户上传的角色动态参考
+	Skills                    *SkillService                    // 创作技能管理服务
+	Shots                     *ShotService                     // 镜头层服务
+	PromptWorkshop            *PromptWorkshopService           // 提示词工作台服务
+	StylePresets              *StylePresetService              // 风格预设服务
+	Continuity                *ContinuityService               // 视频分镜连续性服务
+	AudioLayers               *AudioLayerService               // 声景、音效与背景音乐层
+	SharedAssetReferences     *SharedAssetReferenceService     // 显式共享素材引用
+	AssetVariants             *AssetVariantService             // 视觉资产生成/上传变体
+	AssetReconciliation       *AssetReconciliationService      // 项目资产名称对账
+	ScriptRevisions           *ScriptRevisionService           // 剧本安全快照
 }
 
 func New(cfg *config.Config, db *gorm.DB) *Service {
@@ -87,6 +89,7 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	projects.continuity = continuity
 	audioLayers := NewAudioLayerService(db)
 	sharedAssetReferences := NewSharedAssetReferenceService(db, upload)
+	characterMotionReferences := NewCharacterMotionReferenceService(db, upload)
 	assetVariants := NewAssetVariantService(db)
 	assetReconciliation := NewAssetReconciliationService(db)
 	scriptRevisions := NewScriptRevisionService(db)
@@ -109,7 +112,8 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 		TextProviderFact: textProviderFact, CharacterProfiles: charProfiles, CharacterLooks: charLooks,
 		Skills: skills, Shots: shots, PromptWorkshop: promptWorkshop, StylePresets: stylePresets,
 		Continuity: continuity, AudioLayers: audioLayers, SharedAssetReferences: sharedAssetReferences,
-		AssetVariants: assetVariants, AssetReconciliation: assetReconciliation, ScriptRevisions: scriptRevisions,
+		CharacterMotionReferences: characterMotionReferences,
+		AssetVariants:             assetVariants, AssetReconciliation: assetReconciliation, ScriptRevisions: scriptRevisions,
 	}
 }
 
@@ -1197,6 +1201,44 @@ func (s *Service) HandleDeleteShot(c *gin.Context) {
 	c.JSON(200, gin.H{"message": "shot deleted"})
 }
 
+func (s *Service) HandleTextProviderCapabilities(c *gin.Context) {
+	if s.TextProviderFact == nil {
+		c.JSON(http.StatusOK, TextProviderCapability{})
+		return
+	}
+	c.JSON(http.StatusOK, s.TextProviderFact.Capabilities())
+}
+
+func (s *Service) HandleFirstFramePromptPolish(c *gin.Context) {
+	var req struct {
+		Prompt    string `json:"prompt"`
+		ImagePath string `json:"image_path"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	req.ImagePath = strings.TrimSpace(req.ImagePath)
+	if req.ImagePath == "" || filepath.IsAbs(req.ImagePath) || filepath.Base(req.ImagePath) != req.ImagePath || strings.Contains(req.ImagePath, "..") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "image_path 必须是项目 input 目录中的安全文件名"})
+		return
+	}
+	if s.TextProviderFact == nil || !s.TextProviderFact.Capabilities().FirstFrameGroundedPolish {
+		capability := TextProviderCapability{}
+		if s.TextProviderFact != nil {
+			capability = s.TextProviderFact.Capabilities()
+		}
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": ErrMultimodalUnsupported.Error(), "code": "multimodal_unsupported", "capability": capability})
+		return
+	}
+	out, err := s.TextProviderFact.PolishWithFirstFrame("Polish the prompt using the supplied first frame as factual visual grounding. Return only the prompt.", req.Prompt, req.ImagePath)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"prompt": strings.TrimSpace(out), "capability": s.TextProviderFact.Capabilities()})
+}
+
 // ---------- Prompt Workshop 提示词工作台 ----------
 func (s *Service) HandleBuildPrompt(c *gin.Context) {
 	var req struct {
@@ -1226,18 +1268,28 @@ func (s *Service) HandleOptimizePrompt(c *gin.Context) {
 		EntityID   uint   `json:"entity_id"`
 		Prompt     string `json:"prompt"`
 		Context    string `json:"context"`
+		Paired     bool   `json:"paired"`
+		Iterations int    `json:"iterations"`
+		Chinese    string `json:"chinese"`
+		English    string `json:"english"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
 
-	result, err := s.PromptWorkshop.OptimizePromptForProject(req.ProjectID, req.EntityType, req.EntityID, req.Prompt, req.Context)
+	result, err := s.PromptWorkshop.OptimizePromptDetailed(req.ProjectID, req.EntityType, req.EntityID, req.Prompt, req.Context, PromptOptimizationOptions{Paired: req.Paired, Iterations: req.Iterations, Chinese: req.Chinese, English: req.English})
 	if err != nil {
+		var echoErr *PromptOptimizationError
+		if errors.As(err, &echoErr) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": echoErr.Message, "code": echoErr.Code, "metadata": echoErr.Metadata})
+			return
+		}
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{"prompt": result})
+	// prompt remains present for legacy clients; paired clients also receive language fields and metadata.
+	c.JSON(200, result)
 }
 
 func (s *Service) HandleTranslatePrompt(c *gin.Context) {

@@ -899,6 +899,20 @@ type PromptPolicyOverride struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// CharacterMotionReference is a reusable, user-uploaded dynamic video reference.
+// It remains separate from static H3 reference images and does not imply a generation provider.
+type CharacterMotionReference struct {
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	ProjectID   uint      `gorm:"index" json:"project_id"`
+	CharacterID uint      `gorm:"index" json:"character_id"`
+	Name        string    `json:"name"`
+	VideoPath   string    `json:"video_path"`
+	AudioPath   string    `json:"audio_path,omitempty"`
+	Selected    bool      `gorm:"index" json:"selected"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
 // SharedAssetReference makes global/project assets explicit and prevents deletion while referenced.
 type SharedAssetReference struct {
 	ID         uint      `gorm:"primaryKey" json:"id"`

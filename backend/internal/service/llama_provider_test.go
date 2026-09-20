@@ -127,6 +127,14 @@ func TestMiniMaxCodingProviderChatUsesBearerAuth(t *testing.T) {
 	}
 }
 
+func TestTextProviderCapabilitiesDoNotPretendTextOnlyIsMultimodal(t *testing.T) {
+	provider := &stubTextProvider{response: "ok"}
+	capability := TextProviderCapabilities(provider)
+	if capability.MultimodalMessages || capability.FirstFrameGroundedPolish {
+		t.Fatalf("text-only provider advertised multimodal support: %+v", capability)
+	}
+}
+
 func TestStripThinkBlocks(t *testing.T) {
 	got := stripThinkBlocks("<think>内部推理</think>\n{\"ok\":true}")
 	if got != `{"ok":true}` {

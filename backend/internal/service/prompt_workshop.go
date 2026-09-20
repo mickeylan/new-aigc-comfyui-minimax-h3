@@ -4,9 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"gorm.io/gorm"
 
@@ -80,6 +82,7 @@ const (
 	PromptActionTranslate PromptAction = "translate"
 	PromptActionManual    PromptAction = "manual"
 	PromptActionRollback  PromptAction = "rollback"
+	PromptActionPaired    PromptAction = "paired_optimize"
 
 	PromptVersionStateDraft   = "draft"
 	PromptVersionStateApplied = "applied"
@@ -131,6 +134,162 @@ func (s *PromptWorkshopService) buildPrompt(projectID uint, entityType string, e
 	return result, nil
 }
 
+var ErrModelEcho = errors.New("model returned a near-echo of the input")
+
+type PromptOptimizationOptions struct {
+	Paired     bool   `json:"paired"`
+	Iterations int    `json:"iterations"`
+	Chinese    string `json:"chinese,omitempty"`
+	English    string `json:"english,omitempty"`
+}
+
+type PromptOptimizationMetadata struct {
+	Provider       string  `json:"provider,omitempty"`
+	Paired         bool    `json:"paired"`
+	Iterations     int     `json:"iterations"`
+	EchoDetected   bool    `json:"echo_detected"`
+	EchoSimilarity float64 `json:"echo_similarity,omitempty"`
+}
+
+type PromptOptimizationResult struct {
+	Prompt   string                     `json:"prompt,omitempty"`
+	Chinese  string                     `json:"chinese,omitempty"`
+	English  string                     `json:"english,omitempty"`
+	Metadata PromptOptimizationMetadata `json:"metadata"`
+}
+
+type PromptOptimizationError struct {
+	Code     string                     `json:"code"`
+	Message  string                     `json:"message"`
+	Metadata PromptOptimizationMetadata `json:"metadata"`
+}
+
+func (e *PromptOptimizationError) Error() string { return e.Message }
+func (e *PromptOptimizationError) Unwrap() error { return ErrModelEcho }
+
+// OptimizePromptDetailed adds bounded iterative bilingual optimization without changing legacy APIs.
+func (s *PromptWorkshopService) OptimizePromptDetailed(projectID uint, entityType string, entityID uint, prompt, context string, opts PromptOptimizationOptions) (PromptOptimizationResult, error) {
+	if err := s.validateEntityOwnership(projectID, entityType, entityID); err != nil {
+		return PromptOptimizationResult{Prompt: prompt}, err
+	}
+	if !opts.Paired {
+		out, err := s.optimizePrompt(projectID, entityType, entityID, prompt, context)
+		meta := PromptOptimizationMetadata{Iterations: 1}
+		if s.textProvider != nil {
+			meta.Provider = s.textProvider.Name()
+		}
+		return PromptOptimizationResult{Prompt: out, Metadata: meta}, err
+	}
+	if s.textProvider == nil {
+		return PromptOptimizationResult{}, fmt.Errorf("文本生成服务未配置")
+	}
+	if opts.Iterations <= 0 {
+		opts.Iterations = 1
+	}
+	if opts.Iterations > 3 {
+		return PromptOptimizationResult{}, fmt.Errorf("iterations must be between 1 and 3")
+	}
+	zh, en := strings.TrimSpace(opts.Chinese), strings.TrimSpace(opts.English)
+	if zh == "" {
+		zh = strings.TrimSpace(prompt)
+	}
+	if zh == "" && en == "" {
+		return PromptOptimizationResult{}, fmt.Errorf("chinese or english prompt is required")
+	}
+	originalZH, originalEN := zh, en
+	meta := PromptOptimizationMetadata{Provider: s.textProvider.Name(), Paired: true, Iterations: opts.Iterations}
+	for i := 0; i < opts.Iterations; i++ {
+		user := fmt.Sprintf("中文版本：\n%s\n\nEnglish version:\n%s\n\nContext:\n%s", zh, en, context)
+		out, err := s.textProvider.Chat("迭代优化一对语义严格一致的中英文 AI 生图/视频提示词。保留事实，只增强清晰度与可执行性。仅输出 JSON：{\"chinese\":\"...\",\"english\":\"...\"}。不得复述输入或解释。", user)
+		if err != nil {
+			return PromptOptimizationResult{}, fmt.Errorf("优化失败: %w", err)
+		}
+		var pair struct {
+			Chinese string `json:"chinese"`
+			English string `json:"english"`
+		}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(outputWithoutFence(out))), &pair); err != nil {
+			return PromptOptimizationResult{}, fmt.Errorf("优化失败: 双语输出 JSON 无效: %w", err)
+		}
+		pair.Chinese, pair.English = strings.TrimSpace(pair.Chinese), strings.TrimSpace(pair.English)
+		if pair.Chinese == "" || pair.English == "" {
+			return PromptOptimizationResult{}, fmt.Errorf("优化失败: 双语输出不能为空")
+		}
+		sim := maxFloat(textSimilarity(zh, pair.Chinese), textSimilarity(en, pair.English))
+		if sim >= 0.96 {
+			meta.EchoDetected, meta.EchoSimilarity = true, sim
+			return PromptOptimizationResult{Chinese: zh, English: en, Metadata: meta}, &PromptOptimizationError{Code: "model_echo", Message: "模型返回内容与输入近似相同，未创建新版本", Metadata: meta}
+		}
+		zh, en = pair.Chinese, pair.English
+	}
+	if err := s.recordVersion(projectID, entityType, entityID, zh, PromptActionPaired, map[string]any{"original_chinese": originalZH, "original_english": originalEN, "english": en, "iterations": opts.Iterations, "paired": true}); err != nil {
+		return PromptOptimizationResult{}, fmt.Errorf("保存双语提示词版本失败: %w", err)
+	}
+	return PromptOptimizationResult{Prompt: zh, Chinese: zh, English: en, Metadata: meta}, nil
+}
+
+func outputWithoutFence(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "```") {
+		lines := strings.Split(value, "\n")
+		if len(lines) >= 3 && strings.TrimSpace(lines[len(lines)-1]) == "```" {
+			return strings.TrimSpace(strings.Join(lines[1:len(lines)-1], "\n"))
+		}
+	}
+	return value
+}
+
+func normalizedText(value string) []rune {
+	return []rune(strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return unicode.ToLower(r)
+		}
+		return -1
+	}, value))
+}
+
+func textSimilarity(a, b string) float64 {
+	ra, rb := normalizedText(a), normalizedText(b)
+	if len(ra) == 0 || len(rb) == 0 {
+		return 0
+	}
+	if string(ra) == string(rb) {
+		return 1
+	}
+	grams := func(rs []rune) map[string]int {
+		m := map[string]int{}
+		if len(rs) == 1 {
+			m[string(rs)]++
+		}
+		for i := 0; i+1 < len(rs); i++ {
+			m[string(rs[i:i+2])]++
+		}
+		return m
+	}
+	ga, gb := grams(ra), grams(rb)
+	common, total := 0, 0
+	for _, n := range ga {
+		total += n
+	}
+	for _, n := range gb {
+		total += n
+	}
+	for k, n := range ga {
+		if gb[k] < n {
+			common += gb[k]
+		} else {
+			common += n
+		}
+	}
+	return float64(2*common) / float64(total)
+}
+func maxFloat(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 // OptimizePrompt 优化提示词（使用 AI 增强）
 func (s *PromptWorkshopService) OptimizePrompt(entityType string, entityID uint, prompt string, context string) (string, error) {
 	return s.optimizePrompt(0, entityType, entityID, prompt, context)
@@ -173,6 +332,13 @@ func (s *PromptWorkshopService) optimizePrompt(projectID uint, entityType string
 		if err != nil {
 			return prompt, fmt.Errorf("优化失败: %w", err)
 		}
+	}
+	if similarity := textSimilarity(prompt, output); similarity >= 0.96 {
+		meta := PromptOptimizationMetadata{Iterations: 1, EchoDetected: true, EchoSimilarity: similarity}
+		if s.textProvider != nil {
+			meta.Provider = s.textProvider.Name()
+		}
+		return prompt, &PromptOptimizationError{Code: "model_echo", Message: "模型返回内容与输入近似相同，未创建新版本", Metadata: meta}
 	}
 
 	// 记录历史

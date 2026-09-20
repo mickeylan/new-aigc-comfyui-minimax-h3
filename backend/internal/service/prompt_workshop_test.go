@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"testing"
 
 	"comfyui-console/internal/models"
@@ -83,6 +84,31 @@ func TestPromptWorkshopShotActionsNormalizeFivePartsAndRejectProse(t *testing.T)
 	db.Model(&models.PromptVersion{}).Where("project_id = ? AND entity_type = 'shot' AND entity_id = ?", project.ID, shot.ID).Count(&count)
 	if count != 2 {
 		t.Fatalf("invalid output recorded history; count=%d", count)
+	}
+}
+
+func TestPromptWorkshopPairedOptimizationAndEchoMetadata(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "paired"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID}
+	db.Create(&scene)
+	provider := &stubTextProvider{response: `{"chinese":"雨夜中的侦探，电影侧光","english":"detective in rain, cinematic side light"}`}
+	svc := NewPromptWorkshopService(db, provider)
+	result, err := svc.OptimizePromptDetailed(project.ID, "scene", scene.ID, "雨夜侦探", "", PromptOptimizationOptions{Paired: true, Iterations: 1, English: "detective in rain"})
+	if err != nil || result.Chinese == "" || result.English == "" || !result.Metadata.Paired {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	provider.response = `{"chinese":"雨夜侦探","english":"detective in rain"}`
+	result, err = svc.OptimizePromptDetailed(project.ID, "scene", scene.ID, "雨夜侦探", "", PromptOptimizationOptions{Paired: true, Iterations: 1, English: "detective in rain"})
+	var echoErr *PromptOptimizationError
+	if !errors.As(err, &echoErr) || echoErr.Code != "model_echo" || !result.Metadata.EchoDetected {
+		t.Fatalf("expected echo metadata, result=%+v err=%v", result, err)
+	}
+	var count int64
+	db.Model(&models.PromptVersion{}).Where("entity_id = ?", scene.ID).Count(&count)
+	if count != 1 {
+		t.Fatalf("echo wrote history; count=%d", count)
 	}
 }
 

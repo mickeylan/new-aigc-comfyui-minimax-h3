@@ -12,6 +12,20 @@ import (
 )
 
 // TextProvider 文生文 provider 接口（抽象火山 / llama.cpp / OpenAI 等多种后端）
+type TextProviderCapability struct {
+	Provider                 string `json:"provider"`
+	MultimodalMessages       bool   `json:"multimodal_messages"`
+	FirstFrameGroundedPolish bool   `json:"first_frame_grounded_polish"`
+}
+
+// MultimodalTextProvider is optional. A provider must explicitly implement it before image data is sent.
+type MultimodalTextProvider interface {
+	TextProvider
+	ChatWithImage(system, user, imagePath string) (string, error)
+}
+
+var ErrMultimodalUnsupported = fmt.Errorf("selected text provider does not support multimodal messages")
+
 type TextProvider interface {
 	// Name 返回 provider 标识名（用于日志和配置显示）
 	Name() string
@@ -320,6 +334,30 @@ func (f *TextProviderFactory) Chat(system, user string) (string, error) {
 // HealthCheck 检查当前配置选中的 provider。
 func (f *TextProviderFactory) HealthCheck(ctx context.Context) error {
 	return f.Create().HealthCheck(ctx)
+}
+
+func TextProviderCapabilities(provider TextProvider) TextProviderCapability {
+	capability := TextProviderCapability{}
+	if provider == nil {
+		return capability
+	}
+	capability.Provider = provider.Name()
+	_, capability.MultimodalMessages = provider.(MultimodalTextProvider)
+	capability.FirstFrameGroundedPolish = capability.MultimodalMessages
+	return capability
+}
+
+func (f *TextProviderFactory) Capabilities() TextProviderCapability {
+	return TextProviderCapabilities(f.Create())
+}
+
+func (f *TextProviderFactory) PolishWithFirstFrame(system, user, imagePath string) (string, error) {
+	provider := f.Create()
+	multimodal, ok := provider.(MultimodalTextProvider)
+	if !ok {
+		return "", ErrMultimodalUnsupported
+	}
+	return multimodal.ChatWithImage(system, user, imagePath)
 }
 
 // Create 返回当前选中的 TextProvider

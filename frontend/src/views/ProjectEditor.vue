@@ -93,7 +93,7 @@
           <div class="section-actions">
             <button class="btn btn-sm btn-ghost" @click="moveSceneEpisode">移动到其他集</button>
             <button class="btn btn-sm btn-secondary" @click="runFaithfulPolish">忠实润色</button>
-            <details class="director-tools"><summary class="btn btn-sm btn-ghost">高级导演工具</summary><div class="director-tools-menu"><button class="btn btn-sm btn-secondary" :disabled="busy" @click="runVisualBeats">视觉节拍</button><button class="btn btn-sm btn-secondary" :disabled="busy" @click="runAssetContinuityReview">资产连续性审查</button><button class="btn btn-sm btn-secondary" :disabled="busy" @click="runCoverageReview">镜头覆盖审查</button></div></details>
+            <details class="director-tools"><summary class="btn btn-sm btn-ghost">高级导演工具</summary><div class="director-tools-menu"><button class="btn btn-sm btn-secondary" :disabled="busy" @click="runVisualBeats">视觉节拍</button><button class="btn btn-sm btn-secondary" :disabled="busy || !selected?.image_file" @click="runFirstFramePolish">看图润色</button><button class="btn btn-sm btn-secondary" :disabled="busy" @click="runAssetContinuityReview">资产连续性审查</button><button class="btn btn-sm btn-secondary" :disabled="busy" @click="runCoverageReview">镜头覆盖审查</button></div></details>
             <button class="btn btn-sm" :disabled="busy || selected.image_locked" @click="generateSelectedImage">{{ selected.image_locked ? '分镜图已锁定' : '生成分镜图' }}</button>
             <button class="btn btn-sm btn-ghost" @click="setSceneLock('image', !selected.image_locked)">{{ selected.image_locked ? '解锁分镜图' : '锁定分镜图' }}</button>
             <button class="btn btn-sm" :disabled="busy || !selected.image_file || selected.video_locked" @click="prepareVideoPrompt">{{ selected.video_locked ? '视频已锁定' : '准备并审核视频提示词' }}</button>
@@ -659,6 +659,17 @@ async function moveSceneEpisode() {
 async function runVisualBeats() {
   try { const { data } = await api.visualBeatDraft(id(), selected.value.id, { target_duration: selected.value.duration }); visualBeatDraft.value = data.draft; toast.success('已生成视觉节拍草稿（未自动保存）') }
   catch (e) { toast.error(e.response?.data?.error || '生成失败') }
+}
+async function runFirstFramePolish() {
+  busy.value = true
+  try {
+    const { data: capability } = await api.textProviderCapabilities()
+    if (!capability.first_frame_grounded_polish) { toast.error('当前文本模型不支持图片输入，未执行伪多模态润色'); return }
+    const { data } = await api.firstFramePolish({ prompt: selected.value.image_prompt || selected.value.content || '', image_path: selected.value.image_file })
+    polishDraft.value = data.prompt || ''
+    toast.success('已依据实际首帧生成润色草稿（未自动保存）')
+  } catch (e) { toast.error(e.response?.data?.error || '看图润色失败') }
+  finally { busy.value = false }
 }
 async function runAssetContinuityReview() {
   try { const { data } = await api.assetContinuityReviewDraft(id(), selected.value.id); assetReviewDraft.value = data.draft; toast.success('已生成资产连续性审查草稿（未自动保存）') }

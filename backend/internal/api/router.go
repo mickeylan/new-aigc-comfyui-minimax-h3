@@ -72,6 +72,8 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/settings/test-text", svc.HandleTestText)
 	r.POST("/api/settings/test-image", svc.HandleTestImage)
 	r.POST("/api/settings/test-tts", svc.HandleTestTTS)
+	r.GET("/api/text-provider/capabilities", svc.HandleTextProviderCapabilities)
+	r.POST("/api/prompt-workshop/first-frame-polish", svc.HandleFirstFramePromptPolish)
 
 	// 漫剧项目
 	r.GET("/api/projects", svc.HandleListProjects)
@@ -174,6 +176,11 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/characters/:cid/portrait/reset", svc.HandleResetCharacterPortrait)
 	r.POST("/api/projects/:id/characters/:cid/portrait/upload", svc.HandleUploadCharacterPortrait)
 	r.POST("/api/projects/:id/characters/:cid/sheet", svc.HandleGenerateCharacterSheet)
+	// Reusable uploaded motion references; deliberately not injected into static H3 references.
+	r.GET("/api/projects/:id/characters/:cid/motion-references", svc.HandleListCharacterMotionReferences)
+	r.POST("/api/projects/:id/characters/:cid/motion-references", svc.HandleUploadCharacterMotionReference)
+	r.POST("/api/projects/:id/characters/:cid/motion-references/:rid/select", svc.HandleSelectCharacterMotionReference)
+	r.DELETE("/api/projects/:id/characters/:cid/motion-references/:rid", svc.HandleDeleteCharacterMotionReference)
 
 	// 角色档案（LumxAI 风格结构化角色提示词 + 审核工作流）
 	r.POST("/api/projects/:id/characters/:cid/profile", svc.HandleGenerateCharacterProfile)                // LLM 生成完整角色档案
