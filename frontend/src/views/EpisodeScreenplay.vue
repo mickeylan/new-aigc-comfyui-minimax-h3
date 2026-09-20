@@ -13,8 +13,23 @@
       </div>
     </header>
 
+    <section class="creative-actions card">
+      <div>
+        <strong>上游创作更新</strong>
+        <p>修改项目创意后，先生成创作方案，再重新生成本集剧本；两步都会调用现有项目流水线。</p>
+      </div>
+      <div class="head-actions">
+        <button class="btn btn-secondary" :disabled="busy || generatingPlan || !project?.synopsis" @click="generateCreativePlan">
+          {{ generatingPlan ? '方案生成中…' : (project?.plan ? '1. 重新生成创作方案' : '1. 生成创作方案') }}
+        </button>
+        <button class="btn" :disabled="busy || generatingScript || !project?.synopsis" @click="regenerateEpisodeScript">
+          {{ generatingScript ? '剧本生成中…' : `2. 重新生成第${episodeN}集剧本` }}
+        </button>
+      </div>
+    </section>
+
     <section class="pipeline card">
-      <strong>生产链路</strong>
+      <strong>下游生产链路</strong>
       <span class="active">剧本块</span><b>→</b><span>Scene / Dialogue</span><b>→</b><span>AI导演 Shot</span><b>→</b><span>分镜图</span><b>→</b><span>视频 / 配音</span><b>→</b><span>合并</span>
       <router-link class="btn btn-sm btn-secondary" :to="`/projects/${projectId}/editor?episode=${episodeN}`">进入导演与剪辑台</router-link>
     </section>
@@ -88,9 +103,12 @@ const route = useRoute()
 const toast = useToastStore()
 const projectId = Number(route.params.id)
 const episodeN = Number(route.params.episode)
+const project = ref(null)
 const scenes = ref([])
 const loading = ref(true)
 const busy = ref(false)
+const generatingPlan = ref(false)
+const generatingScript = ref(false)
 const dirty = ref(false)
 let keySeq = 0
 const key = () => `draft-${Date.now()}-${++keySeq}`
@@ -101,7 +119,12 @@ const touch = () => { dirty.value = true }
 async function load() {
   if (dirty.value && !window.confirm('重新载入会丢失未保存修改，继续吗？')) return
   loading.value = true
-  try { scenes.value = hydrate((await api.episodeScreenplay(projectId, episodeN)).data); dirty.value = false }
+  try {
+    const [screenplayRes, projectRes] = await Promise.all([api.episodeScreenplay(projectId, episodeN), api.project(projectId)])
+    scenes.value = hydrate(screenplayRes.data)
+    project.value = projectRes.data.project || projectRes.data
+    dirty.value = false
+  }
   catch (e) { toast.error(e.response?.data?.error || '加载结构化剧本失败') }
   finally { loading.value = false }
 }
@@ -125,6 +148,28 @@ async function save() {
   } catch (e) { toast.error(e.response?.data?.error || '保存结构化剧本失败') }
   finally { busy.value = false }
 }
+async function generateCreativePlan() {
+  if (dirty.value) { toast.error('请先保存或放弃当前剧本修改，再更新创作方案'); return }
+  if (project.value?.plan && !window.confirm('重新生成创作方案会更新角色与分集规划。之后还需重新生成本集剧本，确定继续吗？')) return
+  busy.value = true; generatingPlan.value = true
+  try {
+    const { data } = await api.generatePlan(projectId)
+    project.value = data.project || project.value
+    toast.success('创作方案已生成。现在可执行第2步：重新生成本集剧本')
+  } catch (e) { toast.error(e.response?.data?.error || '生成创作方案失败') }
+  finally { generatingPlan.value = false; busy.value = false }
+}
+async function regenerateEpisodeScript() {
+  if (dirty.value) { toast.error('请先保存或放弃当前剧本修改，再重新生成剧本'); return }
+  if (!window.confirm(`重新生成第${episodeN}集剧本会替换本集 Scene、Shot、Dialogue，并使旧媒体失效；系统会先保存安全版本。确定继续吗？`)) return
+  busy.value = true; generatingScript.value = true
+  try {
+    await api.generateScript(projectId, episodeN)
+    await load()
+    toast.success(`第${episodeN}集剧本已按最新创作方案重新生成`)
+  } catch (e) { toast.error(e.response?.data?.error || '重新生成剧本失败') }
+  finally { generatingScript.value = false; busy.value = false }
+}
 function beforeUnload(event) { if (!dirty.value) return; event.preventDefault(); event.returnValue = '' }
 onMounted(() => { window.addEventListener('beforeunload', beforeUnload); load() })
 onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload))
@@ -132,5 +177,5 @@ onBeforeRouteLeave(() => !dirty.value || window.confirm('有未保存的剧本�
 </script>
 
 <style scoped>
-.screenplay-page{max-width:1180px;margin:0 auto;padding-bottom:90px}.screenplay-head{display:flex;justify-content:space-between;gap:24px;align-items:flex-end;margin-bottom:20px}.screenplay-head h1{margin:8px 0}.head-actions,.row-actions,.add-blocks{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.pipeline{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:20px}.pipeline span{padding:5px 9px;border-radius:999px;background:var(--surface-2,#20242d)}.pipeline .active{color:#fff;background:#6257d9}.pipeline .btn{margin-left:auto}.scene-list{display:grid;gap:18px}.scene-card{display:grid;grid-template-columns:64px 1fr;padding:0;overflow:hidden}.scene-index{padding:24px 12px;background:#151821;color:#8f98aa;font-size:22px;font-weight:700;text-align:center}.scene-body{padding:22px}.scene-toolbar,.block-head{display:flex;justify-content:space-between;gap:12px;align-items:center}.block-label{font-size:12px;color:#8f98aa;text-transform:uppercase;letter-spacing:.08em}.heading-input{font-weight:700;font-size:17px;margin:8px 0 18px}.script-block{border-left:3px solid #4f596b;padding:10px 0 10px 14px;margin:10px 0}.block-dialogue{border-color:#6257d9;margin-left:12%}.block-character{border-color:#ce8b42;margin-left:20%;max-width:55%}.block-parenthetical{border-color:#8f98aa;margin-left:17%;max-width:65%}.block-transition{border-color:#4ea77c;margin-left:35%}.block-type{background:transparent;color:inherit;border:0;font-weight:700}.block-text{min-height:86px;margin-top:8px}.character-input,.parenthetical-input,.transition-input{margin-top:8px}.add-blocks{padding-top:10px;border-top:1px solid rgba(255,255,255,.08)}.add-scene{display:block;margin:20px auto}.empty{text-align:center;padding:50px}.save-bar{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:10;display:flex;gap:20px;align-items:center;padding:12px 18px;border-radius:12px;background:#191d27;box-shadow:0 10px 35px #0008}.back{display:block;margin-bottom:8px}@media(max-width:760px){.screenplay-head{align-items:stretch;flex-direction:column}.scene-card{grid-template-columns:42px 1fr}.scene-body{padding:14px}.block-dialogue,.block-character,.block-parenthetical,.block-transition{margin-left:0;max-width:none}.pipeline b{display:none}}
+.screenplay-page{max-width:1180px;margin:0 auto;padding-bottom:90px}.screenplay-head{display:flex;justify-content:space-between;gap:24px;align-items:flex-end;margin-bottom:20px}.screenplay-head h1{margin:8px 0}.head-actions,.row-actions,.add-blocks{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.creative-actions{display:flex;justify-content:space-between;gap:20px;align-items:center;margin-bottom:14px;border-left:4px solid #6257d9}.creative-actions p{margin:5px 0 0;color:#8f98aa}.pipeline{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:20px}.pipeline span{padding:5px 9px;border-radius:999px;background:var(--surface-2,#20242d)}.pipeline .active{color:#fff;background:#6257d9}.pipeline .btn{margin-left:auto}.scene-list{display:grid;gap:18px}.scene-card{display:grid;grid-template-columns:64px 1fr;padding:0;overflow:hidden}.scene-index{padding:24px 12px;background:#151821;color:#8f98aa;font-size:22px;font-weight:700;text-align:center}.scene-body{padding:22px}.scene-toolbar,.block-head{display:flex;justify-content:space-between;gap:12px;align-items:center}.block-label{font-size:12px;color:#8f98aa;text-transform:uppercase;letter-spacing:.08em}.heading-input{font-weight:700;font-size:17px;margin:8px 0 18px}.script-block{border-left:3px solid #4f596b;padding:10px 0 10px 14px;margin:10px 0}.block-dialogue{border-color:#6257d9;margin-left:12%}.block-character{border-color:#ce8b42;margin-left:20%;max-width:55%}.block-parenthetical{border-color:#8f98aa;margin-left:17%;max-width:65%}.block-transition{border-color:#4ea77c;margin-left:35%}.block-type{background:transparent;color:inherit;border:0;font-weight:700}.block-text{min-height:86px;margin-top:8px}.character-input,.parenthetical-input,.transition-input{margin-top:8px}.add-blocks{padding-top:10px;border-top:1px solid rgba(255,255,255,.08)}.add-scene{display:block;margin:20px auto}.empty{text-align:center;padding:50px}.save-bar{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:10;display:flex;gap:20px;align-items:center;padding:12px 18px;border-radius:12px;background:#191d27;box-shadow:0 10px 35px #0008}.back{display:block;margin-bottom:8px}@media(max-width:760px){.screenplay-head{align-items:stretch;flex-direction:column}.scene-card{grid-template-columns:42px 1fr}.scene-body{padding:14px}.block-dialogue,.block-character,.block-parenthetical,.block-transition{margin-left:0;max-width:none}.pipeline b{display:none}}
 </style>

@@ -18,11 +18,11 @@
         <span class="badge" :class="projectBadgeClass">{{ projectStatusText }}</span>
         <button class="btn btn-ghost btn-sm" :disabled="busy" @click="openEditProject">✎ 编辑信息</button>
         <router-link v-if="project.source_type === 'novel'" :to="`/projects/${id()}/novel`" class="btn btn-secondary btn-sm">📚 小说章节</router-link>
-        <button v-if="!project.plan" class="btn btn-secondary btn-sm" :disabled="busy || generatingPlan || !project.synopsis" @click="generatePlan">
-          {{ generatingPlan ? '方案生成中…' : '📋 生成创作方案' }}
+        <button class="btn btn-secondary btn-sm" :disabled="busy || generatingPlan || !project.synopsis" @click="generatePlan">
+          {{ generatingPlan ? '方案生成中…' : (project.plan ? '📋 重新生成创作方案' : '📋 生成创作方案') }}
         </button>
-        <button class="btn btn-ghost btn-sm" :disabled="busy || !project.synopsis" @click="regenerateScript">
-          {{ generatingScript ? '剧本生成中…' : ('🔄 重生第' + activeEpN + '集剧本') }}
+        <button class="btn btn-ghost btn-sm" :disabled="busy || generatingScript || !project.synopsis" @click="regenerateScript">
+          {{ generatingScript ? '剧本生成中…' : ('🔄 重新生成第' + activeEpN + '集剧本') }}
         </button>
         <button class="btn btn-sm" :disabled="busy || pipelineActive || !project.synopsis" @click="startPipeline">
           {{ pipelineActive ? `第${project.pipeline_episode || activeEpN}集生成中…` : `⚡ 一键生成(第${activeEpN}集全流程)` }}
@@ -82,7 +82,7 @@
                 </button>
                 <span v-if="epDirtyCount > 0" class="ep-dirty-hint">{{ epDirtyCount }} 集未保存</span>
               </h4>
-              <p class="plan-hint">点击集数或「进入」切换该集分镜场景；可修改每集标题与剧情提示词，保存后点击「重新生成剧本」使新提示词生效</p>
+              <p class="plan-hint">点击集数或「进入」切换该集分镜场景；修改后先保存分集内容，再点击页面顶部「重新生成第{{ activeEpN }}集剧本」使新提示词生效</p>
               <div v-for="e in epEdits" :key="e.n" class="plan-episode-row"
                 :class="{ 'ep-active': activeEpN === e.n, 'ep-dirty-row': isEpDirty(e) }">
                 <span class="ep-n ep-link" :title="'查看第' + e.n + '集分镜'" @click="selectEp(e.n)">第{{ e.n }}集</span>
@@ -1614,6 +1614,7 @@ async function restoreRevision(revision) {
 }
 
 async function regenerateScript() {
+  if (!window.confirm(`重新生成第${activeEpN.value}集剧本会替换本集现有 Scene、Shot、Dialogue，并使旧媒体失效；系统会先保存安全版本。确定继续吗？`)) return
   busy.value = true
   generatingScript.value = true
   try {
@@ -1664,6 +1665,7 @@ async function aiExpand() {
 }
 
 async function generatePlan() {
+  if (project.value.plan && !window.confirm('重新生成创作方案会更新角色与分集规划。生成后请再重新生成目标集剧本，确定继续吗？')) return
   busy.value = true
   generatingPlan.value = true
   try {
