@@ -157,16 +157,9 @@
             <div class="field-hint">结局走向，HE 为最受欢迎的完本结局</div>
           </div>
           <div class="field">
-            <label>目标集数 <span class="optional">可选</span></label>
-            <select v-model="form.episodes" class="input">
-              <option :value="5">5 集（试播短剧）</option>
-              <option :value="10">10 集</option>
-              <option :value="20">20 集</option>
-              <option :value="40">40 集</option>
-              <option :value="60">60 集（完整长剧）</option>
-              <option :value="0">不指定</option>
-            </select>
-            <div class="field-hint">创作方案按此规划分集目录与付费卡点</div>
+            <label>目标集数</label>
+            <input v-model.number="form.episodes" class="input" type="number" min="1" max="500" step="1" placeholder="例如 12" />
+            <div class="field-hint">允许 1–500 集；创作方案会严格按此数量规划分集目录与付费卡点。</div>
           </div>
         </div>
       </div>

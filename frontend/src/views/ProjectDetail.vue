@@ -34,6 +34,12 @@
       </div>
     </div>
 
+    <div v-if="generatingPlan" class="card plan-generation-progress" role="status" aria-live="polite">
+      <div class="plan-progress-head"><strong>正在生成创作方案</strong><span>{{ planProgressLabel }} · 已等待 {{ planElapsed }} 秒</span></div>
+      <div class="plan-progress-track"><span :style="{ width: planProgress + '%' }"></span></div>
+      <p>AI 正在按目标 {{ project.episodes }} 集规划人物、三幕结构、分集钩子和资产；返回后系统还会严格校验集数，数量不符会自动校正。</p>
+    </div>
+
     <div v-if="project.status === 'failed'" class="notice project-failure-notice" role="alert">
       <div>
         <strong>项目生成异常</strong>
@@ -646,14 +652,8 @@
           </div>
           <div class="field">
             <label>目标集数</label>
-            <select v-model="projectForm.episodes" class="input">
-              <option :value="0">不指定</option>
-              <option :value="5">5 集</option>
-              <option :value="10">10 集</option>
-              <option :value="20">20 集</option>
-              <option :value="40">40 集</option>
-              <option :value="60">60 集</option>
-            </select>
+            <input v-model.number="projectForm.episodes" class="input" type="number" min="1" max="500" step="1" placeholder="例如 12" />
+            <div class="field-hint">允许 1–500 集；重新生成创作方案时会严格按此数量生成。</div>
           </div>
         </div>
         <div class="field">
@@ -1054,6 +1054,10 @@ const viewerMask = ref(null)
 const busy = ref(false)
 const generatingScript = ref(false)
 const generatingPlan = ref(false)
+const planElapsed = ref(0)
+const planProgress = ref(0)
+const planProgressLabel = computed(() => planElapsed.value < 5 ? '提交故事设定' : planElapsed.value < 30 ? 'AI规划分集与角色' : planElapsed.value < 90 ? '生成完整方案' : '校验并校正分集数量')
+let planProgressTimer = null
 const scriptRendering = ref(false)
 const expandingScript = ref(false)
 const scriptDraft = ref('')
@@ -1668,6 +1672,13 @@ async function generatePlan() {
   if (project.value.plan && !window.confirm('重新生成创作方案会更新角色与分集规划。生成后请再重新生成目标集剧本，确定继续吗？')) return
   busy.value = true
   generatingPlan.value = true
+  planElapsed.value = 0
+  planProgress.value = 4
+  clearInterval(planProgressTimer)
+  planProgressTimer = setInterval(() => {
+    planElapsed.value += 1
+    planProgress.value = Math.min(92, 4 + Math.round(88 * (1 - Math.exp(-planElapsed.value / 45))))
+  }, 1000)
   try {
     const { data } = await api.generatePlan(id())
     project.value = data.project
@@ -1676,6 +1687,9 @@ async function generatePlan() {
   } catch (e) {
     toast.show('生成方案失败：' + (e.response?.data?.error || e.message))
   } finally {
+    clearInterval(planProgressTimer)
+    planProgressTimer = null
+    planProgress.value = 100
     busy.value = false
     generatingPlan.value = false
   }
@@ -2445,6 +2459,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  clearInterval(planProgressTimer)
   clearInterval(wsTimer)
   clearInterval(pollTimer)
   clearTimeout(timer)
@@ -2452,6 +2467,12 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.plan-generation-progress { margin: 12px 0 20px; padding: 16px 18px; border-left: 4px solid #6257d9; }
+.plan-progress-head { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+.plan-progress-head span, .plan-generation-progress p { color: var(--text-muted, #8f98aa); }
+.plan-generation-progress p { margin: 9px 0 0; font-size: 13px; }
+.plan-progress-track { height: 9px; overflow: hidden; border-radius: 99px; background: rgba(255,255,255,.09); }
+.plan-progress-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg,#6257d9,#52b8e8); transition: width .8s ease; }
 .project-head {
   display: flex;
   justify-content: space-between;

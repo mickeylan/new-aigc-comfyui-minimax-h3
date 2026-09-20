@@ -26,6 +26,23 @@ func TestParsePlanJSONAcceptsArrayForScalarString(t *testing.T) {
 	}
 }
 
+func TestValidatePlanEpisodeCountRequiresExactContinuousEpisodes(t *testing.T) {
+	plan, err := parsePlanJSON(`{"title":"测试","logline":"测试故事","episodes":[{"n":1,"title":"一","brief":"一"},{"n":2,"title":"二","brief":"二"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validatePlanEpisodeCount(plan, 2); err != nil {
+		t.Fatalf("valid plan rejected: %v", err)
+	}
+	if err := validatePlanEpisodeCount(plan, 10); err == nil {
+		t.Fatal("expected exact count rejection")
+	}
+	plan.Episodes[1].N = 3
+	if err := validatePlanEpisodeCount(plan, 2); err == nil {
+		t.Fatal("expected non-continuous numbering rejection")
+	}
+}
+
 func TestParsePlanJSONStillRejectsMissingRequiredFields(t *testing.T) {
 	if _, err := parsePlanJSON(`{"title":["只有标题"],"episodes":[]}`); err == nil {
 		t.Fatal("expected missing logline/episodes error")

@@ -6,6 +6,7 @@ const view = readFileSync(new URL('../src/views/EpisodeScreenplay.vue', import.m
 const router = readFileSync(new URL('../src/router/index.js', import.meta.url), 'utf8')
 const api = readFileSync(new URL('../src/api/index.js', import.meta.url), 'utf8')
 const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
+const projectNew = readFileSync(new URL('../src/views/ProjectNew.vue', import.meta.url), 'utf8')
 
 test('结构化剧本编辑器可达并写回现有剧本流水线', () => {
   assert.match(router, /episodes\/:episode\/screenplay/)
@@ -23,6 +24,15 @@ test('创意修改后可从项目页和剧本页重新生成方案与剧本', ()
   assert.match(view, /regenerateEpisodeScript/)
   assert.match(view, /1\. 重新生成创作方案/)
   assert.match(view, /2\. 重新生成第/)
+})
+
+test('目标集数支持任意合法值且生成方案有明确进度状态', () => {
+  assert.match(detail, /type="number" min="1" max="500"/)
+  assert.match(projectNew, /type="number" min="1" max="500"/)
+  assert.match(detail, /plan-generation-progress/)
+  assert.match(detail, /已等待 \{\{ planElapsed \}\} 秒/)
+  assert.match(view, /plan-progress/)
+  assert.match(view, /校验并校正分集数量/)
 })
 
 test('结构化剧本块支持场景动作对白旁白转场及未保存保护', () => {

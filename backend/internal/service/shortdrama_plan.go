@@ -213,6 +213,23 @@ func (s *ProjectService) GeneratePlan(p *models.Project) (*models.Project, error
 	if err != nil {
 		return nil, fmt.Errorf("方案解析失败（可重试）: %w", err)
 	}
+	if p.Episodes > 0 {
+		if err := validatePlanEpisodeCount(res, p.Episodes); err != nil {
+			repairSystem := planSystemPrompt() + fmt.Sprintf("\n\n【本次硬性约束】episodes 必须且只能包含 %d 项，n 必须从 1 连续编号到 %d。不得沿用10集等默认数量。", p.Episodes, p.Episodes)
+			repairUser := fmt.Sprintf("用户明确要求总集数为 %d。上一版错误地返回了 %d 集。请依据原始故事信息重新输出完整创作方案 JSON，episodes 精确为 %d 项。\n\n原始故事信息：\n%s", p.Episodes, len(res.Episodes), p.Episodes, user.String())
+			raw, err = s.chatWithSkill(p.ID, models.SkillStagePlan, repairSystem, repairUser, map[string]string{"project_info": user.String(), "episode_count": fmt.Sprint(p.Episodes)})
+			if err != nil {
+				return nil, fmt.Errorf("方案集数校正失败: %w", err)
+			}
+			res, err = parsePlanJSON(raw)
+			if err != nil {
+				return nil, fmt.Errorf("方案集数校正后解析失败: %w", err)
+			}
+			if err := validatePlanEpisodeCount(res, p.Episodes); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if err := s.ensurePlanCharacters(p, res); err != nil {
 		return nil, err
 	}
@@ -236,6 +253,21 @@ func (s *ProjectService) GeneratePlan(p *models.Project) (*models.Project, error
 	// 抽取关键道具与主要场景为独立资产（跨分镜一致性参考图）
 	s.upsertAssetsFromPlan(&fresh, res)
 	return &fresh, nil
+}
+
+func validatePlanEpisodeCount(plan *dramaPlan, expected int) error {
+	if expected < 1 || expected > 500 {
+		return fmt.Errorf("目标集数必须在 1 到 500 之间")
+	}
+	if len(plan.Episodes) != expected {
+		return fmt.Errorf("创作方案集数不符合要求：模型返回 %d 集，用户要求 %d 集；未保存错误方案", len(plan.Episodes), expected)
+	}
+	for i, episode := range plan.Episodes {
+		if episode.N != i+1 {
+			return fmt.Errorf("创作方案集号不连续：第 %d 项的集号为 %d，应为 %d；未保存错误方案", i+1, episode.N, i+1)
+		}
+	}
+	return nil
 }
 
 // ensurePlanCharacters 在方案模型漏掉角色时，使用同一个文本 provider 专门分析故事并补齐角色。

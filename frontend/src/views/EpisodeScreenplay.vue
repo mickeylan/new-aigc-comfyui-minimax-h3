@@ -28,6 +28,12 @@
       </div>
     </section>
 
+    <section v-if="generatingPlan" class="plan-progress card" role="status" aria-live="polite">
+      <div><strong>正在生成创作方案</strong><span>{{ planStage }} · {{ planElapsed }} 秒</span></div>
+      <div class="progress-track"><span :style="{ width: planProgress + '%' }"></span></div>
+      <p>正在按目标 {{ project?.episodes }} 集规划；系统将严格校验集数，错误数量不会保存。</p>
+    </section>
+
     <section class="pipeline card">
       <strong>下游生产链路</strong>
       <span class="active">剧本块</span><b>→</b><span>Scene / Dialogue</span><b>→</b><span>AI导演 Shot</span><b>→</b><span>分镜图</span><b>→</b><span>视频 / 配音</span><b>→</b><span>合并</span>
@@ -94,7 +100,7 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { onBeforeRouteLeave, useRoute } from 'vue-router'
 import { api } from '../api'
 import { useToastStore } from '../stores/toast'
@@ -109,6 +115,10 @@ const loading = ref(true)
 const busy = ref(false)
 const generatingPlan = ref(false)
 const generatingScript = ref(false)
+const planElapsed = ref(0)
+const planProgress = ref(0)
+const planStage = computed(() => planElapsed.value < 5 ? '提交故事设定' : planElapsed.value < 30 ? 'AI规划角色与分集' : planElapsed.value < 90 ? '生成完整方案' : '校验并校正分集数量')
+let planTimer = null
 const dirty = ref(false)
 let keySeq = 0
 const key = () => `draft-${Date.now()}-${++keySeq}`
@@ -152,12 +162,15 @@ async function generateCreativePlan() {
   if (dirty.value) { toast.error('请先保存或放弃当前剧本修改，再更新创作方案'); return }
   if (project.value?.plan && !window.confirm('重新生成创作方案会更新角色与分集规划。之后还需重新生成本集剧本，确定继续吗？')) return
   busy.value = true; generatingPlan.value = true
+  planElapsed.value = 0; planProgress.value = 4
+  clearInterval(planTimer)
+  planTimer = setInterval(() => { planElapsed.value += 1; planProgress.value = Math.min(92, 4 + Math.round(88 * (1 - Math.exp(-planElapsed.value / 45)))) }, 1000)
   try {
     const { data } = await api.generatePlan(projectId)
     project.value = data.project || project.value
     toast.success('创作方案已生成。现在可执行第2步：重新生成本集剧本')
   } catch (e) { toast.error(e.response?.data?.error || '生成创作方案失败') }
-  finally { generatingPlan.value = false; busy.value = false }
+  finally { clearInterval(planTimer); planTimer = null; planProgress.value = 100; generatingPlan.value = false; busy.value = false }
 }
 async function regenerateEpisodeScript() {
   if (dirty.value) { toast.error('请先保存或放弃当前剧本修改，再重新生成剧本'); return }
@@ -172,10 +185,10 @@ async function regenerateEpisodeScript() {
 }
 function beforeUnload(event) { if (!dirty.value) return; event.preventDefault(); event.returnValue = '' }
 onMounted(() => { window.addEventListener('beforeunload', beforeUnload); load() })
-onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload))
+onBeforeUnmount(() => { clearInterval(planTimer); window.removeEventListener('beforeunload', beforeUnload) })
 onBeforeRouteLeave(() => !dirty.value || window.confirm('有未保存的剧本修改，确定离开吗？'))
 </script>
 
 <style scoped>
-.screenplay-page{max-width:1180px;margin:0 auto;padding-bottom:90px}.screenplay-head{display:flex;justify-content:space-between;gap:24px;align-items:flex-end;margin-bottom:20px}.screenplay-head h1{margin:8px 0}.head-actions,.row-actions,.add-blocks{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.creative-actions{display:flex;justify-content:space-between;gap:20px;align-items:center;margin-bottom:14px;border-left:4px solid #6257d9}.creative-actions p{margin:5px 0 0;color:#8f98aa}.pipeline{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:20px}.pipeline span{padding:5px 9px;border-radius:999px;background:var(--surface-2,#20242d)}.pipeline .active{color:#fff;background:#6257d9}.pipeline .btn{margin-left:auto}.scene-list{display:grid;gap:18px}.scene-card{display:grid;grid-template-columns:64px 1fr;padding:0;overflow:hidden}.scene-index{padding:24px 12px;background:#151821;color:#8f98aa;font-size:22px;font-weight:700;text-align:center}.scene-body{padding:22px}.scene-toolbar,.block-head{display:flex;justify-content:space-between;gap:12px;align-items:center}.block-label{font-size:12px;color:#8f98aa;text-transform:uppercase;letter-spacing:.08em}.heading-input{font-weight:700;font-size:17px;margin:8px 0 18px}.script-block{border-left:3px solid #4f596b;padding:10px 0 10px 14px;margin:10px 0}.block-dialogue{border-color:#6257d9;margin-left:12%}.block-character{border-color:#ce8b42;margin-left:20%;max-width:55%}.block-parenthetical{border-color:#8f98aa;margin-left:17%;max-width:65%}.block-transition{border-color:#4ea77c;margin-left:35%}.block-type{background:transparent;color:inherit;border:0;font-weight:700}.block-text{min-height:86px;margin-top:8px}.character-input,.parenthetical-input,.transition-input{margin-top:8px}.add-blocks{padding-top:10px;border-top:1px solid rgba(255,255,255,.08)}.add-scene{display:block;margin:20px auto}.empty{text-align:center;padding:50px}.save-bar{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:10;display:flex;gap:20px;align-items:center;padding:12px 18px;border-radius:12px;background:#191d27;box-shadow:0 10px 35px #0008}.back{display:block;margin-bottom:8px}@media(max-width:760px){.screenplay-head{align-items:stretch;flex-direction:column}.scene-card{grid-template-columns:42px 1fr}.scene-body{padding:14px}.block-dialogue,.block-character,.block-parenthetical,.block-transition{margin-left:0;max-width:none}.pipeline b{display:none}}
+.screenplay-page{max-width:1180px;margin:0 auto;padding-bottom:90px}.screenplay-head{display:flex;justify-content:space-between;gap:24px;align-items:flex-end;margin-bottom:20px}.screenplay-head h1{margin:8px 0}.head-actions,.row-actions,.add-blocks{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.creative-actions{display:flex;justify-content:space-between;gap:20px;align-items:center;margin-bottom:14px;border-left:4px solid #6257d9}.creative-actions p{margin:5px 0 0;color:#8f98aa}.plan-progress{margin-bottom:14px;border-left:4px solid #6257d9}.plan-progress>div:first-child{display:flex;justify-content:space-between;gap:12px}.plan-progress span,.plan-progress p{color:#8f98aa}.progress-track{height:9px;margin-top:10px;overflow:hidden;border-radius:99px;background:#ffffff17}.progress-track span{display:block;height:100%;background:linear-gradient(90deg,#6257d9,#52b8e8);transition:width .8s ease}.pipeline{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:20px}.pipeline span{padding:5px 9px;border-radius:999px;background:var(--surface-2,#20242d)}.pipeline .active{color:#fff;background:#6257d9}.pipeline .btn{margin-left:auto}.scene-list{display:grid;gap:18px}.scene-card{display:grid;grid-template-columns:64px 1fr;padding:0;overflow:hidden}.scene-index{padding:24px 12px;background:#151821;color:#8f98aa;font-size:22px;font-weight:700;text-align:center}.scene-body{padding:22px}.scene-toolbar,.block-head{display:flex;justify-content:space-between;gap:12px;align-items:center}.block-label{font-size:12px;color:#8f98aa;text-transform:uppercase;letter-spacing:.08em}.heading-input{font-weight:700;font-size:17px;margin:8px 0 18px}.script-block{border-left:3px solid #4f596b;padding:10px 0 10px 14px;margin:10px 0}.block-dialogue{border-color:#6257d9;margin-left:12%}.block-character{border-color:#ce8b42;margin-left:20%;max-width:55%}.block-parenthetical{border-color:#8f98aa;margin-left:17%;max-width:65%}.block-transition{border-color:#4ea77c;margin-left:35%}.block-type{background:transparent;color:inherit;border:0;font-weight:700}.block-text{min-height:86px;margin-top:8px}.character-input,.parenthetical-input,.transition-input{margin-top:8px}.add-blocks{padding-top:10px;border-top:1px solid rgba(255,255,255,.08)}.add-scene{display:block;margin:20px auto}.empty{text-align:center;padding:50px}.save-bar{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:10;display:flex;gap:20px;align-items:center;padding:12px 18px;border-radius:12px;background:#191d27;box-shadow:0 10px 35px #0008}.back{display:block;margin-bottom:8px}@media(max-width:760px){.screenplay-head{align-items:stretch;flex-direction:column}.scene-card{grid-template-columns:42px 1fr}.scene-body{padding:14px}.block-dialogue,.block-character,.block-parenthetical,.block-transition{margin-left:0;max-width:none}.pipeline b{display:none}}
 </style>

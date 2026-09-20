@@ -84,6 +84,9 @@ func (s *ProjectService) applyPromptSkill(projectID uint, stage, prompt string, 
 
 // CreateProject 创建项目（仅记录创意，剧本待生成）
 func (s *ProjectService) CreateProject(p models.Project) (*models.Project, error) {
+	if p.Episodes < 0 || p.Episodes > 500 {
+		return nil, fmt.Errorf("目标集数必须在 1 到 500 之间")
+	}
 	if p.Title == "" {
 		p.Title = "未命名项目"
 	}
@@ -308,6 +311,9 @@ func (s *ProjectService) DeleteProject(id uint) error {
 
 // UpdateProject 编辑项目信息（标题/题材/画风/创意）
 func (s *ProjectService) UpdateProject(p *models.Project, req models.Project) error {
+	if req.Episodes < 1 || req.Episodes > 500 {
+		return fmt.Errorf("目标集数必须在 1 到 500 之间")
+	}
 	updates := map[string]any{"genre": req.Genre, "style": req.Style}
 	if req.Title != "" {
 		updates["title"] = req.Title
@@ -330,9 +336,7 @@ func (s *ProjectService) UpdateProject(p *models.Project, req models.Project) er
 	if req.Ending != "" {
 		updates["ending"] = req.Ending
 	}
-	if req.Episodes > 0 {
-		updates["episodes"] = req.Episodes
-	}
+	updates["episodes"] = req.Episodes
 	if req.AspectRatio != "" {
 		updates["aspect_ratio"] = req.AspectRatio
 	}
