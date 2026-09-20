@@ -135,7 +135,7 @@
       <div v-show="assetTab === 'char'">
         <div v-if="characters.length" class="character-grid">
           <div v-for="ch in characters" :key="ch.id" class="card character-card">
-            <div class="char-portrait" @click="viewCharPortrait(ch)">
+            <div class="character-card-main"><div class="char-portrait" @click="viewCharPortrait(ch)">
               <img v-if="ch.portrait" :src="charPortraitUrl(ch)" alt="角色标准像" />
               <div v-else class="char-portrait-ph">{{ (ch.name || '?').slice(0, 1) }}</div>
             </div>
@@ -212,6 +212,7 @@
                 </button>
                 <button v-if="ch.voice || ch.voice_id" class="btn btn-sm btn-ghost" :disabled="busy" @click="clearVoice(ch)">清除语音</button>
               </div>
+            </div>
             </div>
           </div>
         </div>
@@ -2517,7 +2518,7 @@ onBeforeUnmount(() => {
 .plan-episodes h4 { display: flex; align-items: center; }
 .plan-episodes h4 .btn { margin-left: 10px; }
 .stop-video { margin-left: 8px; padding: 2px 10px; font-size: 12px; }
-.character-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+.character-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); gap: 18px; align-items: start; }
 .asset-tabs { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
 .asset-tab {
   padding: 7px 16px; border-radius: 980px; border: 1.5px solid var(--border); background: transparent;
@@ -2526,8 +2527,9 @@ onBeforeUnmount(() => {
 .asset-tab:hover { border-color: var(--accent); color: var(--accent); }
 .asset-tab.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 .char-voice { margin-top: 6px; font-size: 12px; color: var(--accent); font-weight: 600; }
-.character-card { padding: 16px; display: flex; gap: 14px; align-items: flex-start; }
-.char-portrait { flex: 0 0 88px; width: 88px; height: 88px; border-radius: 14px; overflow: hidden; background: rgba(0, 0, 0, 0.04); cursor: zoom-in; }
+.character-card { padding: 0; overflow: hidden; }
+.character-card-main { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 18px; padding: 18px; }
+.char-portrait { width: 132px; aspect-ratio: 3/4; max-height: 176px; border-radius: 14px; overflow: hidden; background: rgba(0, 0, 0, 0.04); cursor: zoom-in; }
 .char-portrait img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .char-portrait-ph { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 34px; font-weight: 700; color: #fff; background: var(--gradient); }
 .char-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -2542,12 +2544,14 @@ onBeforeUnmount(() => {
 .char-history-summary { display: flex; justify-content: space-between; gap: 8px; }
 .char-history-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
 .char-history-context { display: flex; flex-direction: column; gap: 3px; margin-top: 7px; }
-.char-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-.character-look-entry { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 10px; background: var(--accent-soft); }
+.char-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.char-actions .btn { padding: 5px 9px; font-size: 11px; }
+.character-look-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; margin-top: 12px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border)); border-radius: 11px; background: linear-gradient(135deg, var(--accent-soft), transparent); }
 .character-look-entry > div:first-child { display: grid; gap: 2px; min-width: 0; }
 .character-look-entry strong { font-size: 13px; color: var(--accent); }
 .character-look-entry span { font-size: 11px; color: var(--text-secondary); line-height: 1.4; }
-.character-look-entry-actions { display: flex; gap: 6px; flex-wrap: wrap; flex: 0 0 auto; }
+.character-look-entry-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; flex: 0 0 auto; }
+@media (max-width: 720px) { .character-grid { grid-template-columns: 1fr; } .character-card-main { grid-template-columns: 92px minmax(0, 1fr); gap: 12px; padding: 14px; } .char-portrait { width: 92px; } .character-look-entry { grid-template-columns: 1fr; } .character-look-entry-actions { justify-content: flex-start; } }
 .empty-inline { padding: 18px; color: var(--text-tertiary); font-size: 13px; text-align: center; }
 .field .req { color: var(--red); margin-left: 4px; font-weight: 400; }
 .field .optional { color: var(--text-tertiary); font-weight: 400; margin-left: 4px; }

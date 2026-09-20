@@ -25,6 +25,13 @@ test('角色造型页支持从链接直接打开新资产表单并说明使用�
   assert.match(looks, /本场角色造型套装/)
 })
 
+test('角色设计卡使用主信息分区和宽卡布局', () => {
+  assert.match(projectDetail, /class="character-card-main"/)
+  assert.match(projectDetail, /\.character-grid\s*\{[^}]*minmax\(520px, 1fr\)/s)
+  assert.match(projectDetail, /\.character-card-main\s*\{[^}]*grid-template-columns:\s*132px/s)
+  assert.match(projectDetail, /\.character-look-entry\s*\{[^}]*grid-template-columns/s)
+})
+
 test('场景设计按可见角色加载新形象套装', () => {
   assert.match(projectDetail, /character_roles_set\?\(sc\?\.visible_characters/)
   assert.match(projectDetail, /api\.characterOutfits\(id\(\), ch\.id\)/)
