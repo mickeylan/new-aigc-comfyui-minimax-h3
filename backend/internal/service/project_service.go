@@ -3209,11 +3209,8 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 	if len(refs) > maxSceneReferenceImages {
 		refs, lines = refs[:maxSceneReferenceImages], lines[:maxSceneReferenceImages]
 	}
-	if missing := s.missingSceneCharacterReferences(sc, refs); len(missing) > 0 {
-		msg := "当前镜头人物缺少实际上传的四视图或标准像参考：" + strings.Join(missing, "、")
-		s.failSceneImage(sc, token, msg)
-		return fmt.Errorf("%s", msg)
-	}
+	// 参考图由用户最终选择：有新形象、标准像或其他可用参考就按实际列表提交。
+	// 不再因缺少角色标准像/四视图阻止生成，也不静默补回用户取消的旧形象。
 
 	templateCode := "minimax_h3_storyboard_candidates_selflift"
 	var tpl models.Template

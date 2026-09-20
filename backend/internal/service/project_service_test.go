@@ -886,7 +886,7 @@ func TestCharacterRoleClassificationSupportsNoVisibleCast(t *testing.T) {
 	}
 }
 
-func TestExplicitSceneLocationStillAddsVisibleCharacterSheet(t *testing.T) {
+func TestExplicitSceneReferencesDoNotRestoreCancelledCharacterSheet(t *testing.T) {
 	ps := newTestProjectService(t)
 	if err := ps.db.AutoMigrate(&models.Shot{}); err != nil {
 		t.Fatal(err)
@@ -905,14 +905,17 @@ func TestExplicitSceneLocationStillAddsVisibleCharacterSheet(t *testing.T) {
 	}
 	ps.db.First(&sc, sc.ID)
 	files, lines, explicit := ps.selectedSceneReferenceFiles(&sc, "krea2")
-	if !explicit || len(files) != 2 || files[0].Name != "lead-sheet.png" || files[1].Name != "noodle-shop.png" {
-		t.Fatalf("SelfLift references must put visible character before location: files=%+v lines=%v", files, lines)
+	if !explicit || len(files) != 1 || files[0].Name != "noodle-shop.png" {
+		t.Fatalf("explicit references must not restore cancelled character sheet: files=%+v lines=%v", files, lines)
 	}
 	prompt := buildH3StoryboardPrompt(&sc, &p, lines)
-	for _, want := range []string{"<Subject 1> 是 <Picture 1>", "雷晓飞", "<Subject 2> 是 <Picture 2>", "雷记面馆", "[reference generation] <Subject 1>、<Subject 2>"} {
+	for _, want := range []string{"<Subject 1> 是 <Picture 1>", "雷记面馆", "[reference generation] <Subject 1>"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q: %s", want, prompt)
 		}
+	}
+	if strings.Contains(prompt, "<Subject 2>") || strings.Contains(prompt, "lead-sheet") {
+		t.Fatalf("cancelled character reference was restored: %s", prompt)
 	}
 }
 

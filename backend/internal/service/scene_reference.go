@@ -238,44 +238,7 @@ func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target st
 		}
 	}
 	if target == "krea2" { // legacy field name; this target is MiniMax H3 SelfLift scene generation
-		// 可见角色的身份参考是场景生成的必需输入。旧项目可能显式列表里只有场景图，
-		// 此时自动补四视图（标准像兜底），避免 H3 在没有人物参考时自行脑补。
-		selectedCharacterIDs := map[uint]bool{}
-		selectedOutfitIDs := make([]uint, 0)
-		for _, r := range selected {
-			if r.SourceType == "character" && r.UseKrea2 {
-				selectedCharacterIDs[r.SourceID] = true
-			}
-			if r.SourceType == "outfit" && r.UseKrea2 {
-				selectedOutfitIDs = append(selectedOutfitIDs, r.SourceID)
-			}
-		}
-		if len(selectedOutfitIDs) > 0 {
-			var selectedOutfits []models.CharacterOutfit
-			s.db.Where("project_id = ? AND id IN ?", sc.ProjectID, selectedOutfitIDs).Find(&selectedOutfits)
-			for _, outfit := range selectedOutfits {
-				selectedCharacterIDs[outfit.CharacterID] = true
-			}
-		}
-		assignedOutfits := s.sceneOutfitsByCharacter(sc)
-		for _, ch := range s.sceneCharacterPortraits(sc) {
-			if selectedCharacterIDs[ch.ID] {
-				continue
-			}
-			if _, selectedOutfit := assignedOutfits[ch.ID]; selectedOutfit {
-				continue
-			}
-			variant := "sheet"
-			if ch.Sheet == "" {
-				variant = "portrait"
-			}
-			ref := SceneReferenceSelection{SourceType: "character", SourceID: ch.ID, Variant: variant, UseKrea2: true}
-			if !selectedKeys[referenceKey(ref)] {
-				selected = append(selected, ref)
-				selectedKeys[referenceKey(ref)] = true
-			}
-		}
-
+		// 显式参考列表是用户最终决定：不自动补回被取消的标准像或旧四视图。
 		priority := func(r SceneReferenceSelection) int {
 			// SelfLift 对前序图片权重更敏感：人物身份图必须先于环境图，
 			// 否则模型容易复刻空场景而忽略动作主体。
