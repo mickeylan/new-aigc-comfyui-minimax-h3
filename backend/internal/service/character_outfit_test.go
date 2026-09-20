@@ -44,6 +44,9 @@ func TestDesignOutfitCreatesReviewableAssetsAndDraft(t *testing.T) {
 	if outfit.AuditStatus != models.LookStatusDraft || len(outfit.Items) != 4 {
 		t.Fatalf("unexpected outfit: %#v", outfit)
 	}
+	if !strings.Contains(outfit.Description, "用户原始造型要求：雨夜调查记者形象") {
+		t.Fatalf("original concept not retained: %q", outfit.Description)
+	}
 	for _, item := range outfit.Items {
 		if item.Look == nil || item.Look.AuditStatus != models.LookStatusDraft || item.Look.Prompt == "" {
 			t.Fatalf("asset not reviewable: %#v", item.Look)
@@ -72,11 +75,59 @@ func TestListOutfitsDoesNotLeakAcrossCharacters(t *testing.T) {
 	}
 }
 
+func TestOutfitImageAndSheetUseDifferentTemplates(t *testing.T) {
+	if got := outfitTemplateCode(false); got != "minimax_h3_look_reference" {
+		t.Fatalf("outfit image template=%s", got)
+	}
+	if got := outfitTemplateCode(true); got != "krea2_character_sheet" {
+		t.Fatalf("outfit sheet template=%s", got)
+	}
+}
+
 func TestOutfitPromptUsesPortraitAsIdentityAnchorForRedressing(t *testing.T) {
 	prompt := outfitPrompt(&models.CharacterOutfit{Description: "雨夜调查造型"}, false)
-	for _, expected := range []string{"<Subject 1> 是 <Picture 1> 中的当前角色标准像", "fully_preserved", "9:16竖版", "完整头部与清晰正脸自然可见"} {
+	for _, expected := range []string{"<Subject 1> 是 <Picture 1> 中的当前角色标准像", "identity_preserved", "9:16竖版", "完整头部与清晰正脸自然可见"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt missing %q: %s", expected, prompt)
+		}
+	}
+}
+
+func TestDesignOutfitFiltersExplicitlyExcludedBagAndGloves(t *testing.T) {
+	svc, project, character := setupOutfitTestDB(t)
+	svc.textProvider = &stubTextProvider{response: `{"name":"轻装","description":"轻装","assets":[{"name":"外套","category":"clothing","description":"短外套"},{"name":"短靴","category":"shoes","description":"短靴"},{"name":"短发","category":"hair","description":"短发"},{"name":"皮手套","category":"jewelry","description":"黑色手套"},{"name":"手提包","category":"bag","description":"黑色包"}]}`}
+	outfit, err := svc.DesignOutfit(project.ID, character.ID, OutfitDesignInput{Concept: "轻装，不要手套，不要包"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outfit.Items) != 3 {
+		t.Fatalf("excluded assets remained: %#v", outfit.Items)
+	}
+	for _, item := range outfit.Items {
+		if item.Look.Category == "bag" || isGloveText(item.Look.Name+item.Look.Description) {
+			t.Fatalf("excluded asset remained: %#v", item.Look)
+		}
+	}
+}
+
+func TestOutfitPromptMakesAbsentGlovesAndBagPositiveVisibleConstraints(t *testing.T) {
+	prompt := outfitPrompt(&models.CharacterOutfit{Description: "轻便工作造型；不要手套、不要包"}, false)
+	for _, expected := range []string{"原图服装、手部遮挡物和随身包袋不作为本次造型参考", "双手自然裸露且完整可见", "手掌与五指结构清晰", "双肩、双手和腰侧保持空置"} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("prompt missing %q: %s", expected, prompt)
+		}
+	}
+}
+
+func TestOutfitPromptKeepsExplicitGlovesAndBag(t *testing.T) {
+	outfit := &models.CharacterOutfit{Items: []models.CharacterOutfitLook{
+		{Look: &models.CharacterLook{Name: "皮手套", Category: "clothing", Description: "黑色皮手套"}},
+		{Look: &models.CharacterLook{Name: "邮差包", Category: "bag", Description: "棕色邮差包"}},
+	}}
+	prompt := outfitPrompt(outfit, false)
+	for _, absent := range []string{"双手自然裸露且完整可见", "双肩、双手和腰侧保持空置"} {
+		if strings.Contains(prompt, absent) {
+			t.Fatalf("explicit accessory contradicted by %q: %s", absent, prompt)
 		}
 	}
 }
@@ -84,7 +135,7 @@ func TestOutfitPromptUsesPortraitAsIdentityAnchorForRedressing(t *testing.T) {
 func TestOutfitPromptUsesCharacterSheetAsSecondIdentityReference(t *testing.T) {
 	outfit := &models.CharacterOutfit{Items: []models.CharacterOutfitLook{{Look: &models.CharacterLook{Category: "clothing", Description: "深灰风衣", Image: "coat.png"}}}}
 	prompt := outfitPrompt(outfit, true)
-	for _, expected := range []string{"<Subject 1> 是 <Picture 1> 中的当前角色标准像", "<Subject 2> 是 <Picture 2> 中的当前角色四视图", "<Subject 3> 是 <Picture 3> 中的服装参考"} {
+	for _, expected := range []string{"<Subject 1> 是 <Picture 1> 中的当前角色标准像", "旧服装和配饰不沿用", "<Subject 2> 是 <Picture 2> 中的当前角色四视图", "<Subject 3> 是 <Picture 3> 中的服装参考"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt missing %q: %s", expected, prompt)
 		}

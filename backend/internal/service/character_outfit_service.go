@@ -78,9 +78,24 @@ func (s *CharacterLookService) DesignOutfit(projectID, characterID uint, req Out
 		design.Name = strings.TrimSpace(req.Name)
 	}
 	design.Name, design.Description = strings.TrimSpace(design.Name), strings.TrimSpace(design.Description)
+	// 用户原始概念是权威约束，必须随套装保存；不能让 LLM 摘要丢掉“不要手套/不要包”等要求。
+	design.Description = strings.TrimSpace(design.Description + "\n用户原始造型要求：" + concept)
 	if design.Name == "" || len(design.Assets) == 0 || len(design.Assets) > 6 {
 		return nil, fmt.Errorf("AI新形象缺少有效套装名或资产")
 	}
+	excludeBag, excludeGloves := outfitConceptExclusions(concept)
+	filtered := design.Assets[:0]
+	for _, asset := range design.Assets {
+		text := asset.Name + " " + asset.Description
+		if excludeBag && asset.Category == "bag" {
+			continue
+		}
+		if excludeGloves && isGloveText(text) {
+			continue
+		}
+		filtered = append(filtered, asset)
+	}
+	design.Assets = filtered
 	seen := map[string]bool{}
 	for i := range design.Assets {
 		a := &design.Assets[i]
@@ -257,6 +272,20 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 	if outfit.AuditStatus != models.LookStatusApproved && outfit.AuditStatus != models.LookStatusPublished {
 		return fmt.Errorf("请先审核通过套装")
 	}
+	if !sheet {
+		excludeBag, excludeGloves := outfitConceptExclusions(outfit.Description)
+		for _, item := range outfit.Items {
+			if item.Look == nil {
+				continue
+			}
+			if excludeBag && item.Look.Category == "bag" {
+				return fmt.Errorf("套装要求不携带包，但当前组合仍选择了包「%s」；请先编辑组合移除该资产", item.Look.Name)
+			}
+			if excludeGloves && isGloveText(item.Look.Name+" "+item.Look.Description) {
+				return fmt.Errorf("套装要求裸手，但当前组合仍选择了手套「%s」；请先编辑组合移除该资产", item.Look.Name)
+			}
+		}
+	}
 	if sheet && strings.TrimSpace(outfit.Image) == "" {
 		return fmt.Errorf("请先生成或上传竖版套装参考图")
 	}
@@ -270,9 +299,10 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 	if strings.TrimSpace(ch.Portrait) == "" {
 		return fmt.Errorf("请先为角色「%s」生成或上传定妆照", ch.Name)
 	}
-	tpl, err := s.findLookTemplate()
-	if err != nil {
-		return err
+	templateCode := outfitTemplateCode(sheet)
+	var tpl models.Template
+	if err := s.db.Where("code = ? AND enabled = ?", templateCode, true).First(&tpl).Error; err != nil {
+		return fmt.Errorf("未找到已启用的模板 %s", templateCode)
 	}
 	refs := []FileMeta{{TaskID: fmt.Sprint(projectID), Name: ch.Portrait}}
 	hasCharacterSheet := strings.TrimSpace(ch.Sheet) != ""
@@ -299,7 +329,12 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 		return fmt.Errorf("换装提示词未绑定当前角色标准像 Picture 1，已阻止生成")
 	}
 	log.Printf("[outfit-submit] project=%d character=%d(%s) outfit=%d portrait=%s refs=%v prompt=%q", projectID, ch.ID, ch.Name, outfit.ID, ch.Portrait, refs, prompt)
-	task, err := s.tasks.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: prompt, Params: params, Files: map[string][]FileMeta{"ref_images": refs}})
+	files := map[string][]FileMeta{"ref_images": refs}
+	if sheet {
+		files = map[string][]FileMeta{"source_image": refs}
+	}
+	log.Printf("[outfit-submit] template=%s files=%v", templateCode, files)
+	task, err := s.tasks.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: prompt, Params: params, Files: files})
 	if err != nil {
 		return err
 	}
@@ -324,18 +359,48 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 	return nil
 }
 
+func outfitTemplateCode(sheet bool) string {
+	if sheet {
+		return "krea2_character_sheet"
+	}
+	return "minimax_h3_look_reference"
+}
+
+func outfitConceptExclusions(text string) (excludeBag, excludeGloves bool) {
+	compact := strings.NewReplacer(" ", "", "，", ",", "。", ".").Replace(strings.ToLower(text))
+	for _, phrase := range []string{"不要包", "不带包", "不携带包", "无包", "不要包袋", "不带包袋"} {
+		excludeBag = excludeBag || strings.Contains(compact, phrase)
+	}
+	for _, phrase := range []string{"不要手套", "不戴手套", "无手套", "裸手", "露出双手"} {
+		excludeGloves = excludeGloves || strings.Contains(compact, phrase)
+	}
+	return
+}
+
+func isGloveText(text string) bool {
+	return strings.Contains(text, "手套") || strings.Contains(text, "手甲") || strings.Contains(text, "护手")
+}
+
 func outfitPrompt(outfit *models.CharacterOutfit, hasCharacterSheet bool) string {
-	definitions := []string{"<Subject 1> 是 <Picture 1> 中的当前角色标准像，作为脸部身份与画风基准。"}
-	retention := []string{"<Subject 1>: fully_preserved - 保持同一人物的脸部身份、五官、年龄感与画风。"}
+	definitions := []string{"<Subject 1> 是 <Picture 1> 中的当前角色标准像，仅作为脸部身份与画风基准；原图服装、手部遮挡物和随身包袋不作为本次造型参考。"}
+	retention := []string{"<Subject 1>: identity_preserved - 只保持同一人物的脸部身份、五官、年龄感与画风，造型完全以本次设计为准。"}
 	design := []string{strings.TrimSpace(outfit.Description)}
 	pic, subject := 2, 2
 	if hasCharacterSheet {
-		definitions = append(definitions, "<Subject 2> 是 <Picture 2> 中的当前角色四视图，作为头身比例、体态与身体结构基准。")
-		retention = append(retention, "<Subject 2>: fully_preserved - 保持同一人物的头身比例、体态与完整身体结构。")
+		definitions = append(definitions, "<Subject 2> 是 <Picture 2> 中的当前角色四视图，仅作为头身比例、体态与身体结构基准；四视图中的旧服装和配饰不沿用。")
+		retention = append(retention, "<Subject 2>: structure_preserved - 只保持同一人物的头身比例、体态与完整身体结构。")
 		pic, subject = 3, 3
 	}
 	items := append([]models.CharacterOutfitLook(nil), outfit.Items...)
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Order < items[j].Order })
+	hasBag, hasGloves := false, false
+	for _, item := range items {
+		if item.Look != nil {
+			hasBag = hasBag || item.Look.Category == "bag"
+			text := item.Look.Name + " " + item.Look.Description
+			hasGloves = hasGloves || isGloveText(text)
+		}
+	}
 	for _, item := range items {
 		if item.Look == nil {
 			continue
@@ -349,6 +414,12 @@ func outfitPrompt(outfit *models.CharacterOutfit, hasCharacterSheet bool) string
 			subject++
 		}
 		design = append(design, fmt.Sprintf("%s：%s", label, description))
+	}
+	if !hasGloves {
+		design = append(design, "双手自然裸露且完整可见，手掌与五指结构清晰。")
+	}
+	if !hasBag {
+		design = append(design, "双肩、双手和腰侧保持空置，不携带包袋。")
 	}
 	return strings.Join([]string{
 		"subject_definitions:\n" + strings.Join(definitions, "\n"),
