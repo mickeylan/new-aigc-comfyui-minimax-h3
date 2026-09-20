@@ -54,6 +54,35 @@ func TestEnsureProjectEpisodesBackfillsAndBuildsHierarchy(t *testing.T) {
 	}
 }
 
+func TestEnsureProjectEpisodesDoesNotMaterializeRollingTarget(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	if err := db.AutoMigrate(&models.Episode{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "长篇", Episodes: 60, Plan: `{"episodes":[{"n":1,"title":"一"},{"n":60,"title":"六十"}]}`}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureProjectEpisodes(db, project.ID); err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	db.Model(&models.Episode{}).Where("project_id = ?", project.ID).Count(&count)
+	if count != 0 {
+		t.Fatalf("rolling target materialized %d episodes during read", count)
+	}
+	if err := db.Create(&models.Scene{ProjectID: project.ID, EpisodeN: 3, Order: 1}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureProjectEpisodes(db, project.ID); err != nil {
+		t.Fatal(err)
+	}
+	db.Model(&models.Episode{}).Where("project_id = ?", project.ID).Count(&count)
+	if count != 1 {
+		t.Fatalf("existing scene should materialize exactly one episode, got %d", count)
+	}
+}
+
 func TestEpisodeCRUDProtectsReferencedEpisodes(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	if err := db.AutoMigrate(&models.Episode{}); err != nil {

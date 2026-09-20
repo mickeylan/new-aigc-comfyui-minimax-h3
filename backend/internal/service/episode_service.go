@@ -47,8 +47,12 @@ func EnsureProjectEpisodes(db *gorm.DB, projectID uint) error {
 	if err := db.First(&project, projectID).Error; err != nil {
 		return err
 	}
+	// For long projects Episodes is only a planning ceiling. Durable Episode rows are
+	// materialized by approved rolling batches (or existing Scenes), never by reading
+	// the project. This prevents a 60/1000 episode target from causing mass writes.
+	rolling := project.Episodes > DefaultBatchSizeMax
 	metaByNumber := map[int]models.Episode{}
-	if strings.TrimSpace(project.Plan) != "" {
+	if !rolling && strings.TrimSpace(project.Plan) != "" {
 		var plan episodePlanMeta
 		if json.Unmarshal([]byte(project.Plan), &plan) == nil {
 			for _, item := range plan.Episodes {
@@ -62,7 +66,7 @@ func EnsureProjectEpisodes(db *gorm.DB, projectID uint) error {
 	if err := db.Model(&models.Scene{}).Where("project_id = ?", projectID).Distinct("episode_n").Pluck("episode_n", &numbers).Error; err != nil {
 		return err
 	}
-	if len(numbers) == 0 && project.Episodes > 0 {
+	if !rolling && len(numbers) == 0 && project.Episodes > 0 {
 		for n := 1; n <= project.Episodes; n++ {
 			numbers = append(numbers, n)
 		}
