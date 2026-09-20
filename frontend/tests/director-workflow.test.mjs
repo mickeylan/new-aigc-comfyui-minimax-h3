@@ -19,6 +19,14 @@ test('提示词历史明确区分草稿和已应用且保留动作来源', () =>
   assert.equal(promptHistoryLabel({ action: 'rollback', state: 'applied' }), '回滚草稿 · 已应用')
 })
 
+test('视频提示词首尾帧支持连续性帧、当前分镜和自定义上传', () => {
+  const source = readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
+  assert.match(source, /连续性设置：上一镜确认尾帧/)
+  assert.match(source, /上传其他首帧/)
+  assert.match(source, /上传其他尾帧/)
+  assert.match(source, /api\.uploadSceneVideoFrame/)
+})
+
 test('剪辑台保留三个高级导演审查入口和视觉节拍应用入口', () => {
   const source = readFileSync(new URL('../src/views/ProjectEditor.vue', import.meta.url), 'utf8')
   for (const handler of ['runVisualBeats', 'runAssetContinuityReview', 'runCoverageReview', 'applyVisualBeats']) {

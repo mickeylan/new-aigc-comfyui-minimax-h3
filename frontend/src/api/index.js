@@ -126,6 +126,7 @@ export const api = {
   sceneVideoPrompt: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/video/prompt`),
   regenerateSceneVideoPrompt: (id, sid, payload = {}) => http.post(`/projects/${id}/scenes/${sid}/video/prompt/regenerate`, payload, { timeout: 300000 }),
   updateSceneVideoPrompt: (id, sid, payload) => http.put(`/projects/${id}/scenes/${sid}/video/prompt`, payload),
+  uploadSceneVideoFrame: (id, sid, kind, file) => { const form = new FormData(); form.append('file', file); return http.post(`/projects/${id}/scenes/${sid}/video/frame-upload?kind=${kind}`, form, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 }) },
   cancelSceneVideo: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/video/cancel`),
   mergeScenes: (id, payload) => http.post(`/projects/${id}/merge`, payload),
   mergeAudioScenes: (id, payload) => http.post(`/projects/${id}/audio-merge`, payload),

@@ -139,6 +139,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.GET("/api/projects/:id/scenes/:sid/video/prompt", svc.HandleGetSceneVideoPrompt)
 	r.POST("/api/projects/:id/scenes/:sid/video/prompt/regenerate", svc.HandleRegenerateSceneVideoPrompt)
 	r.PUT("/api/projects/:id/scenes/:sid/video/prompt", svc.HandleUpdateSceneVideoPrompt)
+	r.POST("/api/projects/:id/scenes/:sid/video/frame-upload", svc.HandleUploadSceneVideoFrame)
 	r.POST("/api/projects/:id/scenes/:sid/video/cancel", svc.HandleCancelSceneVideo)
 	r.POST("/api/projects/:id/merge", svc.HandleCreateMerge)
 	r.POST("/api/projects/:id/audio-merge", svc.HandleCreateAudioMerge)

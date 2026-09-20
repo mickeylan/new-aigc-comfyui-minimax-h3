@@ -398,6 +398,44 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 	c.JSON(200, response)
 }
 
+func (s *Service) HandleUploadSceneVideoFrame(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	sc, ok := s.loadScene(c)
+	if !ok {
+		return
+	}
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择首帧或尾帧图片"})
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, 25<<20))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".webp" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "仅支持 PNG/JPG/WebP"})
+		return
+	}
+	kind := "first"
+	if c.Query("kind") == "last" {
+		kind = "last"
+	}
+	name := fmt.Sprintf("video_%s_s%d_%d%s", kind, sc.ID, time.Now().UnixNano(), ext)
+	path, _, err := s.Upload.SaveFile(fmt.Sprint(p.ID), "image", name, data)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"file": filepath.Base(path), "kind": kind})
+}
+
 func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 	sc, ok := s.loadScene(c)
 	if !ok {
