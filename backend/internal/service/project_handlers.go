@@ -269,10 +269,28 @@ func (s *Service) HandleRedesignScenePrompt(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Brief string `json:"brief"`
+		Brief      string                    `json:"brief"`
+		Outfits    []OutfitAssignment        `json:"outfits"`
+		References []SceneReferenceSelection `json:"references"`
 	}
-	if err := c.ShouldBindJSON(&req); err == nil && strings.TrimSpace(req.Brief) != "" {
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	if strings.TrimSpace(req.Brief) != "" {
 		sc.Content = strings.TrimSpace(req.Brief)
+	}
+	if err := s.CharacterLooks.AssignSceneOutfits(sc.ProjectID, sc.ID, req.Outfits); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := s.Projects.SaveSceneReferences(sc, req.References); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := s.DB.First(sc, sc.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
 	prompt, err := s.Projects.RedesignSceneImagePrompt(sc)
 	if err != nil {

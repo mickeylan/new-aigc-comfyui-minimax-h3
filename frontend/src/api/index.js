@@ -106,7 +106,7 @@ export const api = {
   generateAllVideos: (id, episodeN) => http.post(`/projects/${id}/videos${episodeN ? `?episode_n=${episodeN}` : ''}`),
   updateScene: (id, sid, data) => http.patch(`/projects/${id}/scenes/${sid}`, data),
   updateSceneLocks: (id, sid, data) => http.patch(`/projects/${id}/scenes/${sid}/locks`, data),
-  redesignScenePrompt: (id, sid, brief) => http.post(`/projects/${id}/scenes/${sid}/prompt/redesign`, { brief }, { timeout: 300000 }),
+  redesignScenePrompt: (id, sid, data) => http.post(`/projects/${id}/scenes/${sid}/prompt/redesign`, typeof data === 'string' ? { brief: data } : data, { timeout: 300000 }),
   generateSceneImage: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/image`),
   sceneCandidates: (id, sid, mediaType = '') => http.get(`/projects/${id}/scenes/${sid}/candidates`, { params: mediaType ? { media_type: mediaType } : {} }),
   reviewCandidate: (id, cid, status, reason = '') => http.patch(`/projects/${id}/candidates/${cid}/review`, { status, reason }),

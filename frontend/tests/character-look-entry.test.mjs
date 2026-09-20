@@ -36,9 +36,7 @@ test('场景设计按可见角色加载新形象套装', () => {
   assert.match(projectDetail, /character_roles_set\?\(sc\?\.visible_characters/)
   assert.match(projectDetail, /api\.characterOutfits\(id\(\), ch\.id\)/)
   assert.match(projectDetail, /const outfitAssignments = Object\.entries\(selectedSceneOutfits\.value\)/)
-  const saveOutfit = projectDetail.indexOf('await api.updateSceneOutfits(id(), editingScene.value.id, outfitAssignments)')
-  const generatePrompt = projectDetail.indexOf('await api.redesignScenePrompt(id(), editingScene.value.id')
-  assert.ok(saveOutfit >= 0 && saveOutfit < generatePrompt, 'AI提示词生成前必须先保存当前新形象套装')
+  assert.match(projectDetail, /api\.redesignScenePrompt\(id\(\), editingScene\.value\.id, \{ brief: sceneForm\.content\.trim\(\), outfits: outfitAssignments, references: selectedSceneReferences\.value \}\)/)
 })
 
 test('新形象图片支持点击查看大图', () => {
