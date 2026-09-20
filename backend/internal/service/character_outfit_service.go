@@ -275,7 +275,11 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 		return err
 	}
 	refs := []FileMeta{{TaskID: fmt.Sprint(projectID), Name: ch.Portrait}}
-	prompt := outfitPrompt(&outfit)
+	hasCharacterSheet := strings.TrimSpace(ch.Sheet) != ""
+	if !sheet && hasCharacterSheet {
+		refs = append(refs, FileMeta{TaskID: fmt.Sprint(projectID), Name: ch.Sheet})
+	}
+	prompt := outfitPrompt(&outfit, hasCharacterSheet)
 	if !sheet && (len(refs) == 0 || strings.TrimSpace(refs[0].Name) == "") {
 		return fmt.Errorf("角色标准像未进入换装参考图列表，已阻止生成")
 	}
@@ -320,11 +324,15 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 	return nil
 }
 
-func outfitPrompt(outfit *models.CharacterOutfit) string {
-	lines := []string{"<Picture 1>=角色原始标准像，只锁定同一张脸、人物身份和项目画风。基于该标准像为角色换装，生成9:16竖版正面全身新形象定妆照；人物从头发顶部到鞋底完整入镜，正面自然站立，完整呈现服装、鞋履、发型与配饰。不得改变人物身份，不得覆盖原标准像。", strings.TrimSpace(outfit.Description)}
+func outfitPrompt(outfit *models.CharacterOutfit, hasCharacterSheet bool) string {
+	lines := []string{"<Picture 1>=当前角色标准像，保持同一张脸、五官、年龄感和项目画风。生成9:16竖版正面全身新形象定妆照，完整头部和清晰正脸自然可见，人物从头发顶部到鞋底完整入镜，正面自然站立。", strings.TrimSpace(outfit.Description)}
+	pic := 2
+	if hasCharacterSheet {
+		lines = append(lines, "<Picture 2>=当前角色四视图，保持同一人物的头身比例、体态和完整身体结构；服装造型以本次新设计为准。")
+		pic = 3
+	}
 	items := append([]models.CharacterOutfitLook(nil), outfit.Items...)
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Order < items[j].Order })
-	pic := 2
 	for _, item := range items {
 		if item.Look == nil {
 			continue
