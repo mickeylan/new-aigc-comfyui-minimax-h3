@@ -321,17 +321,22 @@ func deleteShotAssociations(db *gorm.DB, shotID uint) error {
 }
 
 func aggregateShotsIntoScene(db *gorm.DB, sceneID uint, shots []models.Shot) error {
-	negativePrompts := make([]string, 0, len(shots))
+	negativePrompts := make([]string, 0, len(shots)+1)
 	seenNegative := map[string]bool{}
+	var scene models.Scene
+	if err := db.Where("id = ?", sceneID).First(&scene).Error; err != nil {
+		return err
+	}
+	// Scene 级负向约束可能来自人工编辑，Shot 保存不得将其静默清空。
+	if negative := strings.TrimSpace(scene.NegativePrompt); negative != "" {
+		seenNegative[negative] = true
+		negativePrompts = append(negativePrompts, negative)
+	}
 	for _, shot := range shots {
 		if negative := strings.TrimSpace(shot.NegativePrompt); negative != "" && !seenNegative[negative] {
 			seenNegative[negative] = true
 			negativePrompts = append(negativePrompts, negative)
 		}
-	}
-	var scene models.Scene
-	if err := db.Where("id = ?", sceneID).First(&scene).Error; err != nil {
-		return err
 	}
 	if err := db.Model(&scene).Updates(map[string]any{
 		"shot_count": len(shots), "negative_prompt": strings.Join(negativePrompts, ", "), "prompt_stale": true,

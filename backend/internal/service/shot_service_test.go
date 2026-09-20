@@ -55,6 +55,29 @@ func TestShotServiceStoresManualDirectorStructure(t *testing.T) {
 	}
 }
 
+func TestShotServicePreservesSceneNegativeConstraints(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "negative constraints"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, NegativePrompt: "水印, 现代汽车"}
+	db.Create(&scene)
+	svc := NewShotService(db)
+	if _, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "wide", Duration: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	db.First(&scene, scene.ID)
+	if scene.NegativePrompt != "水印, 现代汽车" {
+		t.Fatalf("scene negative constraints were overwritten: %q", scene.NegativePrompt)
+	}
+	if _, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "close", Duration: 2, NegativePrompt: "畸形手指"}}); err != nil {
+		t.Fatal(err)
+	}
+	db.First(&scene, scene.ID)
+	if !strings.Contains(scene.NegativePrompt, "水印, 现代汽车") || !strings.Contains(scene.NegativePrompt, "畸形手指") {
+		t.Fatalf("shot constraints were not merged safely: %q", scene.NegativePrompt)
+	}
+}
+
 func TestShotServiceReplacePreservesIDsAndRejectsForeignShot(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	project := models.Project{Title: "test"}

@@ -92,6 +92,7 @@
           <div class="section-actions">
             <button class="btn btn-sm btn-ghost" @click="moveSceneEpisode">移动到其他集</button>
             <button class="btn btn-sm btn-secondary" @click="runFaithfulPolish">忠实润色</button>
+            <details class="director-tools"><summary class="btn btn-sm btn-ghost">高级导演工具</summary><div class="director-tools-menu"><button class="btn btn-sm btn-secondary" :disabled="busy" @click="runVisualBeats">视觉节拍</button><button class="btn btn-sm btn-secondary" :disabled="busy" @click="runAssetContinuityReview">资产连续性审查</button><button class="btn btn-sm btn-secondary" :disabled="busy" @click="runCoverageReview">镜头覆盖审查</button></div></details>
             <button class="btn btn-sm" :disabled="busy" @click="generateSelectedImage">生成分镜图</button>
             <button class="btn btn-sm" :disabled="busy || !selected.image_file" @click="prepareVideoPrompt">准备并审核视频提示词</button>
             <a v-if="selected.video_url" class="btn btn-sm btn-ghost" :href="selected.video_url + '?download=1'">下载视频</a>
@@ -105,8 +106,9 @@
             <span class="ph-icon">🎞️</span>
             <p>该场景尚未生成分镜图或视频</p>
           </div>
-          <div v-if="polishDraft || assetReviewDraft || coverageReviewDraft" class="workbench scene-skill-draft">
+          <div v-if="polishDraft || visualBeatDraft || assetReviewDraft || coverageReviewDraft" class="workbench scene-skill-draft">
             <div v-if="polishDraft"><strong>忠实润色草稿</strong><pre class="prompt-preview">{{ polishDraft }}</pre><button class="btn btn-sm" @click="applyPolishDraft">应用到Scene起始帧提示词</button></div>
+            <div v-if="visualBeatDraft"><strong>视觉节拍草稿</strong><pre class="prompt-preview">{{ visualBeatDraft }}</pre><button class="btn btn-sm" @click="applyVisualBeats">导入Shot导演层</button></div>
             <div v-if="assetReviewDraft"><strong>资产连续性审查</strong><pre class="prompt-preview">{{ assetReviewDraft }}</pre></div>
             <div v-if="coverageReviewDraft"><strong>镜头覆盖审查</strong><pre class="prompt-preview">{{ coverageReviewDraft }}</pre></div>
           </div>
@@ -820,6 +822,10 @@ onUnmounted(() => { clearInterval(timer) })
 .dur-progress.dur-ok { color: #22c55e; }
 .dur-progress.dur-over { color: #ef4444; }
 
+.director-tools { position: relative; }
+.director-tools > summary { list-style: none; cursor: pointer; }
+.director-tools > summary::-webkit-details-marker { display: none; }
+.director-tools-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 180px; display: grid; gap: 6px; padding: 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); box-shadow: 0 8px 24px rgba(0,0,0,.18); }
 .preview-card { padding: 16px; }
 .editor-video { width: 100%; border-radius: 12px; background: #000; max-height: 420px; }
 .editor-image { display: block; width: 100%; max-height: 520px; object-fit: contain; border-radius: 12px; background: #000; }

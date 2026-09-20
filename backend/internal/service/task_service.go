@@ -1287,6 +1287,10 @@ func (s *TaskService) finishTask(task *models.Task) {
 			}
 		}
 	}
+	if len(files) == 0 {
+		// history 元数据可能先于 outputs 落盘；保持任务可恢复，不能误报成功并停止监听。
+		return
+	}
 	filesJSON, _ := json.Marshal(files)
 	now := time.Now()
 	s.db.Model(task).Updates(map[string]any{
@@ -1362,13 +1366,34 @@ func (s *TaskService) RefreshTaskResult(taskID string) {
 }
 
 func historyHasPrompt(history map[string]any, promptID string) bool {
-	if _, ok := history[promptID]; ok {
-		return true
+	item, ok := history[promptID].(map[string]any)
+	if !ok {
+		// 部分代理会把 /history/{id} 的内部对象直接返回。
+		item = history
 	}
-	// 部分代理会把 /history/{id} 的内部对象直接返回。
-	_, hasOutputs := history["outputs"]
-	_, hasStatus := history["status"]
-	return hasOutputs || hasStatus
+	status, _ := item["status"].(map[string]any)
+	statusStr := strings.ToLower(strings.TrimSpace(fmt.Sprint(status["status_str"])))
+	if statusStr == "error" {
+		return true // 交给 finishTask 写入明确失败状态
+	}
+	outputs, ok := item["outputs"].(map[string]any)
+	if !ok || len(outputs) == 0 {
+		return false
+	}
+	for _, raw := range outputs {
+		node, _ := raw.(map[string]any)
+		for _, kind := range []string{"videos", "gifs", "images", "audio"} {
+			list, _ := node[kind].([]any)
+			for _, entry := range list {
+				file, _ := entry.(map[string]any)
+				filename, exists := file["filename"]
+				if exists && strings.TrimSpace(fmt.Sprint(filename)) != "" {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // StartRecovery 启动后台恢复循环：扫描所有 running/queued 任务，

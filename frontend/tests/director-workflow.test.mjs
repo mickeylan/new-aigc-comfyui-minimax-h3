@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { compatibleSkills, projectSkillConfig, promptHistoryLabel } from '../src/utils/directorWorkflow.js'
 
 test('项目 Skill 按阶段和 operation 精确隔离', () => {
@@ -16,4 +17,11 @@ test('项目 Skill 按阶段和 operation 精确隔离', () => {
 test('提示词历史明确区分草稿和已应用且保留动作来源', () => {
   assert.equal(promptHistoryLabel({ action: 'optimize', state: 'draft' }), '优化 · 草稿')
   assert.equal(promptHistoryLabel({ action: 'rollback', state: 'applied' }), '回滚草稿 · 已应用')
+})
+
+test('剪辑台保留三个高级导演审查入口和视觉节拍应用入口', () => {
+  const source = readFileSync(new URL('../src/views/ProjectEditor.vue', import.meta.url), 'utf8')
+  for (const handler of ['runVisualBeats', 'runAssetContinuityReview', 'runCoverageReview', 'applyVisualBeats']) {
+    assert.match(source, new RegExp(`@click=["']${handler}["']`), `${handler} 缺少可访问的 UI 入口`)
+  }
 })

@@ -2,15 +2,26 @@ package service
 
 import "testing"
 
-func TestHistoryHasPromptSupportsKeyedAndDirectResponses(t *testing.T) {
-	if !historyHasPrompt(map[string]any{"prompt-1": map[string]any{"outputs": map[string]any{}}}, "prompt-1") {
-		t.Fatal("keyed history was not detected")
+func TestHistoryHasPromptRequiresUsableOutputOrTerminalError(t *testing.T) {
+	fileOutput := map[string]any{"9": map[string]any{"images": []any{map[string]any{"filename": "done.png"}}}}
+	if !historyHasPrompt(map[string]any{"prompt-1": map[string]any{"outputs": fileOutput}}, "prompt-1") {
+		t.Fatal("keyed history with output was not detected")
 	}
-	if !historyHasPrompt(map[string]any{"outputs": map[string]any{}, "status": map[string]any{}}, "prompt-1") {
-		t.Fatal("direct history response was not detected")
+	if !historyHasPrompt(map[string]any{"outputs": fileOutput, "status": map[string]any{"status_str": "success"}}, "prompt-1") {
+		t.Fatal("direct history response with output was not detected")
 	}
-	if historyHasPrompt(map[string]any{}, "prompt-1") {
-		t.Fatal("empty history must not be detected as completed")
+	for name, history := range map[string]map[string]any{
+		"empty":            {},
+		"running metadata": {"status": map[string]any{"status_str": "running"}},
+		"empty outputs":    {"status": map[string]any{"status_str": "success"}, "outputs": map[string]any{}},
+		"missing filename": {"outputs": map[string]any{"9": map[string]any{"images": []any{map[string]any{}}}}},
+	} {
+		if historyHasPrompt(history, "prompt-1") {
+			t.Fatalf("%s history must remain recoverable, not completed", name)
+		}
+	}
+	if !historyHasPrompt(map[string]any{"status": map[string]any{"status_str": "error"}}, "prompt-1") {
+		t.Fatal("terminal error must be handled")
 	}
 }
 
