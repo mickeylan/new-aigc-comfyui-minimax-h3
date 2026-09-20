@@ -385,9 +385,9 @@
             <span class="scene-order" :class="orderColor(sc.order)">{{ sc.order }}</span>
             <div class="scene-title">
               <div>{{ sc.title || '场景 ' + sc.order }}</div>
-              <span class="badge" :class="sceneBadgeClass(sc)">{{ sceneStatusText(sc) }}</span>
+              <div class="scene-meta-row"><span class="badge" :class="sceneBadgeClass(sc)">{{ sceneStatusText(sc) }}</span><span>{{ Number(sc.duration || 0).toFixed(1) }}s</span><span v-if="sc.location_name">{{ sc.location_name }}</span></div>
             </div>
-            <button class="icon-btn" title="编辑场景" @click="openEditScene(sc)">✎</button>
+            <button class="btn btn-sm btn-ghost scene-edit-btn" title="编辑场景" @click="openEditScene(sc)">编辑</button>
           </div>
 
           <div class="scene-preview">
@@ -404,8 +404,7 @@
             </div>
           </div>
 
-          <p class="scene-content">{{ sc.content }}</p>
-          <p v-if="sc.image_prompt" class="scene-prompt">🎨 {{ sc.image_prompt }}</p>
+          <div class="scene-info"><p class="scene-content">{{ sc.content }}</p><details v-if="sc.image_prompt" class="scene-prompt-details"><summary>查看画面提示词</summary><p class="scene-prompt">{{ sc.image_prompt }}</p></details></div>
           <div v-if="sceneDialogues(sc).length" class="scene-dialogues">
             <div v-for="d in sceneDialogues(sc)" :key="d.id" class="dialogue-row">
               <span class="dl-char">{{ d.character || '旁白' }}</span>
@@ -416,7 +415,7 @@
             </div>
           </div>
 
-          <div class="scene-actions">
+          <div class="scene-actions-wrap"><span class="scene-action-label">生成与审核</span><div class="scene-actions">
             <!-- 画面：无图生成，有图重新生成（始终可单独触发） -->
             <template v-if="!sc.image_file">
               <span v-if="sc.status === 'image_pending'" class="working">
@@ -454,7 +453,7 @@
               <button class="btn btn-sm btn-secondary" @click="openContinuity(sc)">连续性设置</button>
             </template>
             <span v-if="sc.status === 'failed' && sc.error" class="fail-msg">{{ sc.error }}</span>
-          </div>
+          </div></div>
 
           <div v-if="sc.video_input_file || (sc.video_file && sc.video_gpu !== null && sc.video_gpu !== undefined)" class="video-box">
             <video :src="videoUrl(sc)" controls preload="metadata" class="scene-video"></video>
@@ -2552,10 +2551,10 @@ onBeforeUnmount(() => {
 .field .req { color: var(--red); margin-left: 4px; font-weight: 400; }
 .field .optional { color: var(--text-tertiary); font-weight: 400; margin-left: 4px; }
 .tag-gray { background: rgba(0, 0, 0, 0.06); color: var(--text-secondary); }
-.scene-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
-.scene-card { padding: 18px; display: flex; flex-direction: column; }
+.scene-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 18px; align-items: start; }
+.scene-card { padding: 0; display: flex; flex-direction: column; overflow: hidden; }
 .scene-active { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.scene-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.scene-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
 .scene-order {
   width: 30px; height: 30px; border-radius: 9px; color: #fff; font-weight: 700; font-size: 14px;
   display: flex; align-items: center; justify-content: center; flex: 0 0 auto;
@@ -2568,14 +2567,16 @@ onBeforeUnmount(() => {
 .icon-pink { background: #ff6482; }
 .icon-indigo { background: #5856d6; }
 .icon-brown { background: #a2845e; }
-.scene-title { flex: 1; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
-.scene-title div { font-weight: 700; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scene-title { flex: 1; display: grid; gap: 5px; min-width: 0; }
+.scene-title > div:first-child { font-weight: 700; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scene-meta-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 11px; font-weight: 500; color: var(--text-tertiary); }
+.scene-edit-btn { flex: 0 0 auto; }
 .icon-btn {
   border: none; background: transparent; color: var(--text-tertiary); font-size: 14px; cursor: pointer;
   padding: 4px 6px; border-radius: 6px; transition: all 0.2s; flex: 0 0 auto;
 }
 .icon-btn:hover { color: var(--accent); background: var(--accent-soft); }
-.scene-preview { border-radius: 12px; overflow: hidden; background: rgba(0, 0, 0, 0.04); margin-bottom: 10px; aspect-ratio: 16/9; }
+.scene-preview { overflow: hidden; background: rgba(0, 0, 0, 0.04); margin: 0; aspect-ratio: 16/9; }
 .scene-img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: zoom-in; }
 .scene-placeholder {
   height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
@@ -2588,16 +2589,15 @@ onBeforeUnmount(() => {
   background: var(--gradient); animation: slide 1.2s ease-in-out infinite;
 }
 @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(320%); } }
-.scene-content {
-  margin: 0 0 6px; font-size: 13px; color: var(--text-secondary); line-height: 1.6;
-  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
-}
-.scene-prompt {
-  margin: 0 0 10px; font-size: 12px; color: var(--text-tertiary); line-height: 1.6;
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
-}
-.scene-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: auto; }
-.scene-dialogues { margin: 0 0 10px; display: flex; flex-direction: column; gap: 5px; }
+.scene-info { padding: 14px 16px 8px; }
+.scene-content { margin: 0; font-size: 13px; color: var(--text-secondary); line-height: 1.65; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.scene-prompt-details { margin-top: 8px; font-size: 12px; color: var(--text-tertiary); }
+.scene-prompt-details summary { cursor: pointer; color: var(--accent); }
+.scene-prompt { margin: 8px 0 0; font-size: 12px; color: var(--text-tertiary); line-height: 1.6; white-space: pre-wrap; }
+.scene-actions-wrap { margin-top: auto; padding: 10px 16px 14px; border-top: 1px solid var(--border); background: rgba(0, 0, 0, 0.018); }
+.scene-action-label { display: block; margin-bottom: 8px; font-size: 10px; font-weight: 700; letter-spacing: .08em; color: var(--text-tertiary); }
+.scene-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.scene-dialogues { margin: 0 16px 12px; display: flex; flex-direction: column; gap: 5px; }
 .dialogue-row { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 9px; border-radius: 8px; background: rgba(0, 0, 0, 0.03); }
 .dl-char { flex: 0 0 auto; font-weight: 700; color: var(--accent); }
 .dl-text { flex: 1; min-width: 0; color: var(--text-secondary); line-height: 1.4; }
@@ -2607,7 +2607,7 @@ onBeforeUnmount(() => {
 .working { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--accent); }
 .ready { font-size: 12px; font-weight: 700; color: var(--green); }
 .fail-msg { font-size: 12px; color: var(--red); }
-.video-box { position: relative; margin-top: 12px; border-radius: 12px; overflow: hidden; background: #000; }
+.video-box { position: relative; margin: 0 16px 16px; border-radius: 12px; overflow: hidden; background: #000; }
 .scene-video { width: 100%; display: block; max-height: 260px; }
 .download { position: absolute; right: 8px; bottom: 8px; background: rgba(0, 0, 0, 0.55); color: #fff; border-color: transparent; }
 .merge-card { padding: 20px; }
