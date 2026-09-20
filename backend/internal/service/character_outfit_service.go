@@ -295,8 +295,8 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 			}
 		}
 	}
-	if !sheet && !strings.Contains(prompt, "<Picture 1>=角色原始标准像") {
-		return fmt.Errorf("换装提示词未绑定角色标准像 Picture 1，已阻止生成")
+	if !sheet && !strings.Contains(prompt, "<Picture 1>=当前角色标准像") {
+		return fmt.Errorf("换装提示词未绑定当前角色标准像 Picture 1，已阻止生成")
 	}
 	log.Printf("[outfit-submit] project=%d character=%d(%s) outfit=%d portrait=%s refs=%v prompt=%q", projectID, ch.ID, ch.Name, outfit.ID, ch.Portrait, refs, prompt)
 	task, err := s.tasks.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: prompt, Params: params, Files: map[string][]FileMeta{"ref_images": refs}})
