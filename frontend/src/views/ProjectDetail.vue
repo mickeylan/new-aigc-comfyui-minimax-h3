@@ -2336,6 +2336,9 @@ async function redesignScenePrompt() {
   redesigningScenePrompt.value = true
   sceneError.value = ''
   try {
+    // AI 生成提示词前先保存当前套装选择，否则后端仍会按数据库中的旧标准造型组装上下文。
+    const outfitAssignments = Object.entries(selectedSceneOutfits.value).filter(([, oid]) => Number(oid) > 0).map(([cid, oid]) => ({ character_id: Number(cid), outfit_id: Number(oid) }))
+    await api.updateSceneOutfits(id(), editingScene.value.id, outfitAssignments)
     await api.updateSceneReferences(id(), editingScene.value.id, selectedSceneReferences.value)
     const { data } = await api.redesignScenePrompt(id(), editingScene.value.id, sceneForm.content.trim())
     sceneForm.image_prompt = data.prompt
