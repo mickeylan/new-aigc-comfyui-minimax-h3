@@ -74,7 +74,7 @@ func TestListOutfitsDoesNotLeakAcrossCharacters(t *testing.T) {
 
 func TestOutfitPromptUsesPortraitAsIdentityAnchorForRedressing(t *testing.T) {
 	prompt := outfitPrompt(&models.CharacterOutfit{Description: "雨夜调查造型"}, false)
-	for _, expected := range []string{"<Picture 1>=当前角色标准像", "保持同一张脸", "9:16竖版正面全身新形象定妆照", "完整头部和清晰正脸自然可见"} {
+	for _, expected := range []string{"<Subject 1> 是 <Picture 1> 中的当前角色标准像", "fully_preserved", "9:16竖版", "完整头部与清晰正脸自然可见"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt missing %q: %s", expected, prompt)
 		}
@@ -84,7 +84,7 @@ func TestOutfitPromptUsesPortraitAsIdentityAnchorForRedressing(t *testing.T) {
 func TestOutfitPromptUsesCharacterSheetAsSecondIdentityReference(t *testing.T) {
 	outfit := &models.CharacterOutfit{Items: []models.CharacterOutfitLook{{Look: &models.CharacterLook{Category: "clothing", Description: "深灰风衣", Image: "coat.png"}}}}
 	prompt := outfitPrompt(outfit, true)
-	for _, expected := range []string{"<Picture 1>=当前角色标准像", "<Picture 2>=当前角色四视图", "<Picture 3>仅参考服装"} {
+	for _, expected := range []string{"<Subject 1> 是 <Picture 1> 中的当前角色标准像", "<Subject 2> 是 <Picture 2> 中的当前角色四视图", "<Subject 3> 是 <Picture 3> 中的服装参考"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt missing %q: %s", expected, prompt)
 		}

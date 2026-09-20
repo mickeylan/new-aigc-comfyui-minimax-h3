@@ -283,7 +283,7 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 	if !sheet && (len(refs) == 0 || strings.TrimSpace(refs[0].Name) == "") {
 		return fmt.Errorf("角色标准像未进入换装参考图列表，已阻止生成")
 	}
-	params := map[string]any{"width": 928, "height": 1664}
+	params := map[string]any{"width": 928, "height": 1664, "ref_image_size": "max"}
 	if sheet {
 		refs = []FileMeta{{TaskID: fmt.Sprint(projectID), Name: outfit.Image}}
 		prompt = "<Picture 1>=已经审核的新形象正面全身定妆照。保持同一个角色、同一张脸、同一发型、同一套服装鞋履配饰，生成四视图设定图：脸部特写、正面全身、侧面全身、背面全身，纯净背景，四个视图彼此一致。"
@@ -295,7 +295,7 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 			}
 		}
 	}
-	if !sheet && !strings.Contains(prompt, "<Picture 1>=当前角色标准像") {
+	if !sheet && !strings.Contains(prompt, "<Subject 1> 是 <Picture 1> 中的当前角色标准像") {
 		return fmt.Errorf("换装提示词未绑定当前角色标准像 Picture 1，已阻止生成")
 	}
 	log.Printf("[outfit-submit] project=%d character=%d(%s) outfit=%d portrait=%s refs=%v prompt=%q", projectID, ch.ID, ch.Name, outfit.ID, ch.Portrait, refs, prompt)
@@ -325,11 +325,14 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 }
 
 func outfitPrompt(outfit *models.CharacterOutfit, hasCharacterSheet bool) string {
-	lines := []string{"<Picture 1>=当前角色标准像，保持同一张脸、五官、年龄感和项目画风。生成9:16竖版正面全身新形象定妆照，完整头部和清晰正脸自然可见，人物从头发顶部到鞋底完整入镜，正面自然站立。", strings.TrimSpace(outfit.Description)}
-	pic := 2
+	definitions := []string{"<Subject 1> 是 <Picture 1> 中的当前角色标准像，作为脸部身份与画风基准。"}
+	retention := []string{"<Subject 1>: fully_preserved - 保持同一人物的脸部身份、五官、年龄感与画风。"}
+	design := []string{strings.TrimSpace(outfit.Description)}
+	pic, subject := 2, 2
 	if hasCharacterSheet {
-		lines = append(lines, "<Picture 2>=当前角色四视图，保持同一人物的头身比例、体态和完整身体结构；服装造型以本次新设计为准。")
-		pic = 3
+		definitions = append(definitions, "<Subject 2> 是 <Picture 2> 中的当前角色四视图，作为头身比例、体态与身体结构基准。")
+		retention = append(retention, "<Subject 2>: fully_preserved - 保持同一人物的头身比例、体态与完整身体结构。")
+		pic, subject = 3, 3
 	}
 	items := append([]models.CharacterOutfitLook(nil), outfit.Items...)
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Order < items[j].Order })
@@ -337,14 +340,24 @@ func outfitPrompt(outfit *models.CharacterOutfit, hasCharacterSheet bool) string
 		if item.Look == nil {
 			continue
 		}
-		line := fmt.Sprintf("%s：%s", LookCategoryLabel(item.Look.Category), strings.TrimSpace(item.Look.Description))
+		label := LookCategoryLabel(item.Look.Category)
+		description := strings.TrimSpace(item.Look.Description)
 		if item.Look.Image != "" {
-			line = fmt.Sprintf("<Picture %d>仅参考%s的材质、颜色与结构；%s", pic, LookCategoryLabel(item.Look.Category), line)
+			definitions = append(definitions, fmt.Sprintf("<Subject %d> 是 <Picture %d> 中的%s参考，只约束该资产的材质、颜色与结构。", subject, pic, label))
+			retention = append(retention, fmt.Sprintf("<Subject %d>: fully_preserved - 保持%s参考的材质、颜色与结构。", subject, label))
 			pic++
+			subject++
 		}
-		lines = append(lines, line)
+		design = append(design, fmt.Sprintf("%s：%s", label, description))
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join([]string{
+		"subject_definitions:\n" + strings.Join(definitions, "\n"),
+		"summary:\n[reference generation] 以当前角色身份参考和本次造型设计生成一张新的角色换装定妆照。",
+		"retention_analysis:\n" + strings.Join(retention, "\n"),
+		"detailed_description:\n" + strings.Join(design, "\n") + "\n9:16竖版，单人正面全身定妆照，完整头部与清晰正脸自然可见，从头发顶部到鞋底完整入镜，正面自然站立。",
+		"overall_soundscape:\nN/A",
+		"non_diegetic_music:\nN/A",
+	}, "\n\n")
 }
 
 func (s *CharacterLookService) SaveOutfitUploadedImage(projectID, characterID, outfitID uint, filename string, data []byte, sheet bool) error {

@@ -48,6 +48,7 @@ func InitSystemTemplates(db *gorm.DB, configuredDir ...string) error {
 		if err := json.Unmarshal(data, &tf); err != nil {
 			return fmt.Errorf("parse template %s: %w", name, err)
 		}
+		normalizeAutogrowInputs(tf.Workflow)
 		inputsJSON, _ := json.Marshal(tf.Inputs)
 		workflowJSON, _ := json.Marshal(tf.Workflow)
 
@@ -69,6 +70,27 @@ func InitSystemTemplates(db *gorm.DB, configuredDir ...string) error {
 		}
 	}
 	return nil
+}
+
+// normalizeAutogrowInputs repairs UI-exported nested Autogrow inputs before persisting templates.
+// ComfyUI API format requires flat keys such as ref_images.ref_image_0.
+func normalizeAutogrowInputs(workflow map[string]map[string]any) {
+	for _, node := range workflow {
+		inputs, ok := node["inputs"].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, groupName := range []string{"ref_images", "ref_videos", "ref_audios"} {
+			group, ok := inputs[groupName].(map[string]any)
+			if !ok {
+				continue
+			}
+			delete(inputs, groupName)
+			for key, value := range group {
+				inputs[groupName+"."+key] = value
+			}
+		}
+	}
 }
 
 func firstString(values []string) string {

@@ -12,6 +12,31 @@ import (
 	"comfyui-console/internal/models"
 )
 
+func TestInitSystemTemplatesFlattensRuntimeAutogrowReferences(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.Template{}); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	data := `{"name":"换装","code":"minimax_h3_look_reference","inputs":[{"key":"ref_images","type":"images","required":true}],"workflow":{"416":{"class_type":"MiniMaxH3ReferenceToVideo","inputs":{"ref_images":{"ref_image_0":["137",0],"ref_image_1":["139",0]}}}}}`
+	if err := os.WriteFile(filepath.Join(dir, "minimax_h3_look_reference.json"), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := InitSystemTemplates(db, dir); err != nil {
+		t.Fatal(err)
+	}
+	var tpl models.Template
+	if err := db.Where("code = ?", "minimax_h3_look_reference").First(&tpl).Error; err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(tpl.WorkflowJSON, `"ref_images":{`) || !strings.Contains(tpl.WorkflowJSON, `"ref_images.ref_image_0"`) {
+		t.Fatalf("runtime Autogrow refs were not flattened: %s", tpl.WorkflowJSON)
+	}
+}
+
 func TestInitSystemTemplatesPrefersRuntimeDirectory(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
