@@ -1747,20 +1747,17 @@ func isH3KeyframePrompt(prompt string) bool {
 }
 
 func validateH3KeyframePrompt(prompt, template string) []string {
+	_ = template
 	text := strings.TrimSpace(prompt)
-	issues := []string{}
-	for _, heading := range []string{"integrated_multimodal_description:", "overall_soundscape:", "non_diegetic_music:"} {
-		if strings.Count(strings.ToLower(text), heading) != 1 {
-			issues = append(issues, heading+" 必须且只能出现一次")
-		}
+	if text == "" {
+		return []string{"视频提示词不能为空"}
 	}
-	if template == "minimax_h3_i2v" && !strings.HasPrefix(text, "目标视频的参考图时间对齐：<Picture 1>") {
-		issues = append(issues, "I2VA 必须以 0.00 秒首帧对齐指令开头")
+	if len([]rune(text)) > 12000 {
+		return []string{"视频提示词不能超过 12000 字"}
 	}
-	if template == "minimax_h3_first_last" && !strings.HasPrefix(text, "目标视频的参考图时间对齐：<Picture 1>") {
-		issues = append(issues, "FL2VA 必须以首尾帧时间对齐指令开头")
-	}
-	return issues
+	// T2VA/I2VA/FL2VA 的推荐结构由生成器负责；用户人工编辑并保存时不再
+	// 强制字段数量、字段顺序或固定首行，避免格式校验阻断有效提示词。
+	return nil
 }
 
 // normalizeSavedH3Audio only rebuilds dialogue and soundscape sections. All user-edited
@@ -1953,33 +1950,12 @@ func ValidateFullH3Prompt(prompt string) []string {
 	if text == "" {
 		return []string{"完整提示词不能为空"}
 	}
-	issues := []string{}
-	fields := []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:"}
-	last := -1
-	lower := strings.ToLower(text)
-	for _, field := range fields {
-		count := strings.Count(lower, field)
-		if count == 0 {
-			issues = append(issues, "缺少 "+field)
-			continue
-		}
-		if count != 1 {
-			issues = append(issues, field+"只能出现一次，禁止嵌套完整提示词")
-		}
-		pos := strings.Index(lower, field)
-		if pos < last {
-			issues = append(issues, "H3字段顺序错误")
-			break
-		}
-		last = pos
+	if len([]rune(text)) > 20000 {
+		return []string{"完整提示词不能超过 20000 字"}
 	}
-	if !strings.Contains(text, "<Picture ") {
-		issues = append(issues, "缺少参考图片引用")
-	}
-	if !strings.Contains(h3PromptSection(text, "detailed_description:"), "[Shot 1]") {
-		issues = append(issues, "detailed_description 缺少 [Shot 1]")
-	}
-	return issues
+	// 推荐的 Ref2VA 六段格式由生成器提供；人工编辑内容不再因标题数量、顺序、
+	// Shot 标签或固定措辞被拒绝。引用与真实上传图片的匹配单独校验。
+	return nil
 }
 
 func ValidateFullH3PromptForReferences(prompt string, referenceLines []string) []string {

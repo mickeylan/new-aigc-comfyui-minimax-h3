@@ -1347,10 +1347,14 @@ func TestNestedFullPromptIsReducedToInnermostAction(t *testing.T) {
 	}
 }
 
-func TestValidateFullH3PromptRejectsNestedContract(t *testing.T) {
-	prompt := "subject_definitions:\nx\nsummary:\nx\nretention_analysis:\nx\ndetailed_description:\n[Shot 1] subject_definitions:\nnested\noverall_soundscape:\nx\nnon_diegetic_music:\nN/A"
-	if issues := strings.Join(ValidateFullH3Prompt(prompt), "|"); !strings.Contains(issues, "只能出现一次") {
-		t.Fatalf("nested contract was accepted: %s", issues)
+func TestValidateFullH3PromptAllowsUserEditedStructure(t *testing.T) {
+	for _, prompt := range []string{
+		"人物转身看向门口，镜头跟随。",
+		"subject_definitions:\nx\ndetailed_description:\n用户自定义正文\nsubject_definitions:\n用户保留的补充说明",
+	} {
+		if issues := ValidateFullH3Prompt(prompt); len(issues) != 0 {
+			t.Fatalf("user-edited prompt was rejected: %v", issues)
+		}
 	}
 }
 
@@ -1702,6 +1706,23 @@ func TestResolveRef2VSubmissionPromptUsesLatestSavedTextVerbatim(t *testing.T) {
 	}
 	if strings.Contains(got, "旧动作") {
 		t.Fatalf("stale action leaked into submission: %s", got)
+	}
+}
+
+func TestH3KeyframePromptValidationDoesNotForceGeneratedFormat(t *testing.T) {
+	for _, template := range []string{"minimax_h3_t2v", "minimax_h3_i2v", "minimax_h3_first_last"} {
+		for _, prompt := range []string{
+			"人物从画面左侧走向门口，镜头缓慢跟随。",
+			"integrated_multimodal_description:\n用户自定义正文，没有固定首行",
+			"integrated_multimodal_description:\n第一段\nintegrated_multimodal_description:\n用户明确保留的第二段",
+		} {
+			if issues := validateH3KeyframePrompt(prompt, template); len(issues) != 0 {
+				t.Fatalf("template=%s prompt=%q unexpectedly rejected: %v", template, prompt, issues)
+			}
+		}
+	}
+	if issues := validateH3KeyframePrompt("  ", "minimax_h3_first_last"); len(issues) != 1 || issues[0] != "视频提示词不能为空" {
+		t.Fatalf("empty prompt validation=%v", issues)
 	}
 }
 
