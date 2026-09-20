@@ -3593,9 +3593,33 @@ func (s *ProjectService) CancelSceneVideo(p *models.Project, sc *models.Scene) e
 	return nil
 }
 
-// WatchSceneVideos 后台轮询场景视频任务状态（3s），任务完成后回写场景
+func (s *ProjectService) syncGenerationOutputs() {
+	s.syncCharacterPortraits()
+	s.syncAssetImages()
+	if s.characterLooks != nil {
+		s.characterLooks.SyncImages()
+		s.characterLooks.SyncOutfitImages()
+	}
+	s.syncSheets()
+	s.syncSceneImages()
+	s.syncSceneVideos()
+	s.syncDetachedCandidateRetries()
+}
+
+func (s *ProjectService) hasRecentGenerationTasks() bool {
+	var count int64
+	cutoff := time.Now().Add(-30 * time.Second)
+	err := s.db.Model(&models.Task{}).
+		Where("status IN ? OR updated_at >= ?", []string{"pending", "queued", "running"}, cutoff).
+		Limit(1).Count(&count).Error
+	return err == nil && count > 0
+}
+
+// WatchSceneVideos polls output tables only while tasks are active or recently completed.
 func (s *ProjectService) WatchSceneVideos() {
 	s.recoverInterruptedProjects()
+	// One startup reconciliation recovers terminal task output left by a previous process.
+	s.syncGenerationOutputs()
 	go func() {
 		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
@@ -3604,16 +3628,9 @@ func (s *ProjectService) WatchSceneVideos() {
 			case <-s.stopped:
 				return
 			case <-ticker.C:
-				s.syncCharacterPortraits()
-				s.syncAssetImages()
-				if s.characterLooks != nil {
-					s.characterLooks.SyncImages()
-					s.characterLooks.SyncOutfitImages()
+				if s.hasRecentGenerationTasks() {
+					s.syncGenerationOutputs()
 				}
-				s.syncSheets()
-				s.syncSceneImages()
-				s.syncSceneVideos()
-				s.syncDetachedCandidateRetries()
 				s.advanceAutoPipelines()
 			}
 		}

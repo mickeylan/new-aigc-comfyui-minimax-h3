@@ -71,9 +71,17 @@ func EnsureProjectEpisodes(db *gorm.DB, projectID uint) error {
 		numbers = append(numbers, n)
 	}
 	sort.Ints(numbers)
+	var existingNumbers []int
+	if err := db.Model(&models.Episode{}).Where("project_id = ?", projectID).Pluck("episode_number", &existingNumbers).Error; err != nil {
+		return err
+	}
+	existing := make(map[int]bool, len(existingNumbers))
+	for _, n := range existingNumbers {
+		existing[n] = true
+	}
 	seen := map[int]bool{}
 	for _, n := range numbers {
-		if n < 1 || seen[n] {
+		if n < 1 || seen[n] || existing[n] {
 			continue
 		}
 		seen[n] = true

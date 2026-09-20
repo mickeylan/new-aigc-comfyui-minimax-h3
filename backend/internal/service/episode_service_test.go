@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"comfyui-console/internal/models"
+	"gorm.io/gorm"
 )
 
 func TestEnsureProjectEpisodesBackfillsAndBuildsHierarchy(t *testing.T) {
@@ -22,8 +23,19 @@ func TestEnsureProjectEpisodesBackfillsAndBuildsHierarchy(t *testing.T) {
 	if err := EnsureProjectEpisodes(db, project.ID); err != nil {
 		t.Fatal(err)
 	}
+	creates := 0
+	if err := db.Callback().Create().Before("gorm:create").Register("test:count_episode_creates", func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Table == "episodes" {
+			creates++
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := EnsureProjectEpisodes(db, project.ID); err != nil {
 		t.Fatal(err)
+	}
+	if creates != 0 {
+		t.Fatalf("idempotent episode read attempted %d writes", creates)
 	}
 	var count int64
 	db.Model(&models.Episode{}).Where("project_id = ?", project.ID).Count(&count)

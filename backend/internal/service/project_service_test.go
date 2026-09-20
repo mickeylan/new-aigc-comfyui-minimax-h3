@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -309,6 +310,26 @@ func newTestProjectService(t *testing.T) *ProjectService {
 	ps := NewProjectService(nil, db, nil, nil, nil, nil, nil, nil, nil)
 	ps.stopped = make(chan struct{})
 	return ps
+}
+
+func TestHasRecentGenerationTasksSkipsIdlePolling(t *testing.T) {
+	ps := newTestProjectService(t)
+	if ps.hasRecentGenerationTasks() {
+		t.Fatal("idle database should not trigger output table scans")
+	}
+	task := models.Task{TaskID: "active", Status: "running"}
+	if err := ps.db.Create(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !ps.hasRecentGenerationTasks() {
+		t.Fatal("active task should trigger output reconciliation")
+	}
+	if err := ps.db.Model(&task).Updates(map[string]any{"status": "success", "updated_at": time.Now().Add(-time.Minute)}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if ps.hasRecentGenerationTasks() {
+		t.Fatal("old terminal task should not keep polling output tables")
+	}
 }
 
 func TestClaimPipelinePersistsTargetEpisode(t *testing.T) {
