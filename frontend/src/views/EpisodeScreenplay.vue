@@ -9,7 +9,7 @@
       </div>
       <div class="head-actions">
         <button class="btn btn-ghost" :disabled="busy" @click="load">重新载入</button>
-        <button class="btn" :disabled="busy || !dirty || !scenes.length" @click="save">{{ busy ? '保存中…' : '保存并同步流水线' }}</button>
+        <button class="btn" :disabled="busy || !scenes.length" :title="!scenes.length ? '请先创建至少一个场景' : '保存当前剧本并同步 Scene、Dialogue 与后续流水线'" @click="save">{{ busy ? '保存中…' : (dirty ? '保存并同步流水线' : '重新同步到流水线') }}</button>
       </div>
     </header>
 
