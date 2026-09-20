@@ -6,6 +6,14 @@ const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.met
 const looks = readFileSync(new URL('../src/views/CharacterLooks.vue', import.meta.url), 'utf8')
 const projectDetail = detail
 
+test('角色编辑弹窗按当前标签保存对应档案字段', () => {
+  assert.match(projectDetail, /@click="saveCurrentCharacterTab"/)
+  assert.match(projectDetail, /charProfileTab\.value === 'basic'/)
+  assert.match(projectDetail, /return saveCharacterProfile\(\)/)
+  assert.match(projectDetail, /保存详细档案/)
+  assert.match(projectDetail, /保存参考像提示词/)
+})
+
 test('角色卡提供明显的新形象和完整套装入口', () => {
   assert.match(detail, /基于标准像换装/)
   assert.match(detail, /AI换装设计/)

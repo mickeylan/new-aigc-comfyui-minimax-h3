@@ -843,8 +843,8 @@
 
         <div class="modal-actions">
           <button class="btn btn-ghost" @click="editingCharacter = null">关闭</button>
-          <button class="btn" :disabled="busy || !charForm.name.trim()" @click="saveCharacter">
-            {{ busy ? '保存中…' : '保存基础信息' }}
+          <button class="btn" :disabled="busy || (charProfileTab === 'basic' && !charForm.name.trim())" @click="saveCurrentCharacterTab">
+            {{ busy ? '保存中…' : (charProfileTab === 'basic' ? '保存基础信息' : charProfileTab === 'profile' ? '保存详细档案' : '保存参考像提示词') }}
           </button>
         </div>
       </div>
@@ -1834,6 +1834,10 @@ function openEditCharacter(ch) {
   })
   charProfileTab.value = 'basic'
   editingCharacter.value = ch
+}
+async function saveCurrentCharacterTab() {
+  if (charProfileTab.value === 'basic' || editingCharacter.value === 'new') return saveCharacter()
+  return saveCharacterProfile()
 }
 async function saveCharacter() {
   if (!charForm.name.trim()) return
