@@ -128,6 +128,35 @@ func validateScreenplayPreview(preview screenplay.Preview) error {
 	return nil
 }
 
+// HandleGetEpisodeScreenplay returns the canonical Scene/Shot/Dialogue hierarchy as
+// editable screenplay blocks. It does not require approval and never mutates project data.
+func (s *Service) HandleGetEpisodeScreenplay(c *gin.Context) {
+	project, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	number, ok := episodeNumberParam(c)
+	if !ok {
+		return
+	}
+	episode, err := loadOwnedEpisode(s.DB, project.ID, number)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "episode not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	preview, err := databaseToPreview(s.DB, project.ID, number, episode.Title)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	preview.Format = screenplay.FormatFountain
+	c.JSON(http.StatusOK, screenplayPreviewResponse{Preview: preview, SceneCount: len(preview.Scenes), ElementCount: preview.ElementCount()})
+}
+
 // HandlePreviewScreenplayImport parses untrusted input but never mutates project data.
 func (s *Service) HandlePreviewScreenplayImport(c *gin.Context) {
 	project, ok := s.loadProject(c)
@@ -297,20 +326,9 @@ func databaseToPreview(db *gorm.DB, projectID uint, episodeN int, title string) 
 	}
 	for _, scene := range scenes {
 		item := screenplay.Scene{Heading: scene.Title, Elements: []screenplay.Element{}}
-		var shots []models.Shot
-		if err := db.Where("scene_id = ?", scene.ID).Order("order_num, id").Find(&shots).Error; err != nil {
-			return preview, err
-		}
-		for _, shot := range shots {
-			typ := "action"
-			if shot.ShotType == "transition" {
-				typ = "transition"
-			}
-			if strings.TrimSpace(shot.Description) != "" {
-				item.Elements = append(item.Elements, screenplay.Element{Type: typ, Text: shot.Description})
-			}
-		}
-		if len(shots) == 0 && strings.TrimSpace(scene.Content) != "" {
+		// Scene.Content is the canonical story source. Shots are downstream director plans and
+		// must not silently replace screenplay action when the editor/export is opened.
+		if strings.TrimSpace(scene.Content) != "" {
 			item.Elements = append(item.Elements, screenplay.Element{Type: "action", Text: scene.Content})
 		}
 		var dialogues []models.Dialogue

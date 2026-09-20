@@ -83,6 +83,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/episodes", svc.HandleCreateProjectEpisode)
 	r.PATCH("/api/projects/:id/episodes/:number", svc.HandleUpdateProjectEpisode)
 	r.DELETE("/api/projects/:id/episodes/:number", svc.HandleDeleteProjectEpisode)
+	r.GET("/api/projects/:id/episodes/:number/screenplay", svc.HandleGetEpisodeScreenplay)
 	r.POST("/api/projects/:id/episodes/:number/screenplay/preview", svc.HandlePreviewScreenplayImport)
 	r.POST("/api/projects/:id/episodes/:number/screenplay/apply", svc.HandleApplyScreenplayImport)
 	r.GET("/api/projects/:id/episodes/:number/screenplay/export/:format", svc.HandleExportScreenplay)

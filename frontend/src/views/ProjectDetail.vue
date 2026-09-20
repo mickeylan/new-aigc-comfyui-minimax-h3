@@ -302,6 +302,7 @@
           <p class="sub">修改本集剧本正文后点击「保存并 AI 重新生成分镜」，将按新剧本重建该集的分镜场景</p>
         </div>
         <div class="section-actions">
+          <router-link class="btn btn-sm" :to="`/projects/${id()}/episodes/${activeEpN}/screenplay`">结构化剧本编辑器</router-link>
           <button class="btn btn-ghost btn-sm" :disabled="revisionBusy" @click="createRevision">
             {{ revisionBusy ? '保存中…' : '📌 保存版本' }}
           </button>

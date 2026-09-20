@@ -59,6 +59,7 @@ export const api = {
   createProjectEpisode: (id, data) => http.post(`/projects/${id}/episodes`, data),
   updateProjectEpisode: (id, number, data) => http.patch(`/projects/${id}/episodes/${number}`, data),
   deleteProjectEpisode: (id, number) => http.delete(`/projects/${id}/episodes/${number}`),
+  episodeScreenplay: (id, number) => http.get(`/projects/${id}/episodes/${number}/screenplay`),
   previewScreenplayImport: (id, number, file, format = '') => {
     const fd = new FormData()
     fd.append('file', file)

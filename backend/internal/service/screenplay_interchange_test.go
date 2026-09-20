@@ -9,6 +9,31 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestDatabaseToPreviewUsesCanonicalSceneContent(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	if err := db.AutoMigrate(&models.Dialogue{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "Project", Generation: 1}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Generation: 1, Title: "INT. ROOM - DAY", Content: "canonical scene action"}
+	if err := db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.Shot{SceneID: scene.ID, Order: 1, ActType: models.ShotActSetup, ShotType: "close-up", Description: "downstream director description"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	preview, err := databaseToPreview(db, project.ID, 1, "Episode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.Scenes) != 1 || len(preview.Scenes[0].Elements) != 1 || preview.Scenes[0].Elements[0].Text != scene.Content {
+		t.Fatalf("screenplay projection must use Scene.Content, got %+v", preview.Scenes)
+	}
+}
+
 func TestScreenplayApplySnapshotsBeforeReplacement(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	if err := db.AutoMigrate(&models.Dialogue{}, &models.ScriptRevision{}); err != nil {
