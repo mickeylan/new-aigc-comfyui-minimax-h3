@@ -28,16 +28,16 @@
     <template v-if="activeTab === 'pipeline'">
       <div class="pipeline-bar card">
         <template v-for="(s, i) in pipelineSkills" :key="s.key">
-          <div class="pipe-node" @click="openSkill(s)" :title="'查看' + s.name">
+          <button type="button" class="pipe-node" @click="openSkill(s)" :title="'查看' + s.name" :aria-label="`查看${s.name}详情`">
             <span class="pipe-n">{{ i + 1 }}</span>
             <span>{{ s.short }}</span>
-          </div>
+          </button>
           <span v-if="i < pipelineSkills.length - 1" class="pipe-arrow">→</span>
         </template>
       </div>
 
       <div class="skill-grid">
-        <article v-for="s in pipelineSkills" :key="s.key" class="card skill-card" @click="openSkill(s)">
+        <article v-for="s in pipelineSkills" :key="s.key" class="card skill-card" role="button" tabindex="0" @click="openSkill(s)" @keydown.enter.prevent="openSkill(s)" @keydown.space.prevent="openSkill(s)">
           <div class="skill-head">
             <span class="skill-icon">{{ s.icon }}</span>
             <div>
@@ -199,16 +199,17 @@
       </div>
     </template>
 
-    <!-- 详情弹窗 -->
-    <div v-if="detail" class="modal-mask" @click.self="detail = null">
-      <div class="modal card skill-detail">
+    <!-- 详情弹窗挂到 body，避免 page 动画 transform 截断 fixed 定位和层级。 -->
+    <Teleport to="body">
+    <div v-if="detail" class="skill-modal-mask" @click.self="closeDetail" @keydown.esc="closeDetail">
+      <div ref="detailDialog" class="skill-modal card skill-detail" role="dialog" aria-modal="true" :aria-labelledby="`skill-detail-${detail.key || detail.id || 'current'}`" tabindex="-1">
         <div class="detail-head">
           <span class="skill-icon">{{ detail.icon || '📋' }}</span>
           <div>
-            <h2>{{ detail.name || detail.code }}</h2>
+            <h2 :id="`skill-detail-${detail.key || detail.id || 'current'}`">{{ detail.name || detail.code }}</h2>
             <span class="skill-stage">{{ getStageLabel(detail.stage) }}</span>
           </div>
-          <button class="btn btn-sm btn-ghost close" @click="detail = null">✕</button>
+          <button class="btn btn-sm btn-ghost close" @click="closeDetail" aria-label="关闭详情">✕</button>
         </div>
 
         <div v-if="!detail.presentation" class="detail-meta">
@@ -223,6 +224,8 @@
           <h4>描述</h4>
           <p>{{ detail.description || '无' }}</p>
         </div>
+
+        <template v-if="detail.presentation"><div class="detail-section"><h4>输入</h4><p>{{ detail.input }}</p></div><div class="detail-section"><h4>输出</h4><p>{{ detail.output }}</p></div><div class="detail-section"><h4>模型 / 工具</h4><p>{{ detail.model }}</p></div><div class="detail-section"><h4>关键参数</h4><p>{{ detail.params }}</p></div><div class="detail-section"><h4>触发方式</h4><p>{{ detail.how }}</p></div><div class="detail-section" v-if="detail.steps?.length"><h4>执行步骤</h4><ol><li v-for="step in detail.steps" :key="step">{{ step }}</li></ol></div><div class="detail-section" v-if="detail.apis?.length"><h4>相关 API</h4><pre class="code-block">{{ detail.apis.map(v => `${v.method} ${v.path}`).join('\n') }}</pre></div></template>
 
         <div class="detail-section" v-if="detail.prompt_template">
           <h4>提示词模板</h4>
@@ -240,15 +243,16 @@
         </div>
 
         <div class="modal-actions">
-          <button class="btn btn-ghost" @click="detail = null">关闭</button>
+          <button class="btn btn-ghost" @click="closeDetail">关闭</button>
         </div>
       </div>
     </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { api } from '../api/index.js'
 
 // 状态
@@ -259,6 +263,8 @@ const filterStage = ref('')
 const showEnabledOnly = ref(false)
 const showCreateForm = ref(false)
 const detail = ref(null)
+const detailDialog = ref(null)
+let detailOpener = null
 const editingSkillId = ref(null)
 const errorMessage = ref('')
 
@@ -465,8 +471,19 @@ async function deleteSkill(skill) {
   }
 }
 
-function viewSkill(skill) {
+function showDetail(skill) {
+  detailOpener = document.activeElement
   detail.value = skill
+  nextTick(() => detailDialog.value?.focus())
+}
+
+function closeDetail() {
+  detail.value = null
+  nextTick(() => detailOpener?.focus?.())
+}
+
+function viewSkill(skill) {
+  showDetail(skill)
 }
 
 function cancelForm() {
@@ -483,11 +500,11 @@ function cancelForm() {
 }
 
 function openSkill(skill) {
-  detail.value = {
+  showDetail({
     ...skill,
     description: skill.what,
     presentation: true
-  }
+  })
 }
 
 function getStageLabel(stage) {
@@ -503,10 +520,14 @@ function getStageLabel(stage) {
 }
 
 // 初始化
+function handleGlobalEscape(event) { if (event.key === 'Escape' && detail.value) closeDetail() }
+
 onMounted(async () => {
+  window.addEventListener('keydown', handleGlobalEscape)
   await fetchStages()
   await fetchSkills()
 })
+onUnmounted(() => window.removeEventListener('keydown', handleGlobalEscape))
 </script>
 
 <style scoped>
@@ -526,7 +547,7 @@ onMounted(async () => {
 
 /* 流水线视图 */
 .pipeline-bar { display: flex; align-items: center; gap: 8px; padding: 14px 18px; margin: 16px 0 24px; flex-wrap: wrap; }
-.pipe-node { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 980px; background: var(--accent-soft); color: var(--accent); cursor: pointer; transition: all 0.2s; }
+.pipe-node { display: inline-flex; align-items: center; gap: 7px; font: inherit; font-size: 13px; font-weight: 600; padding: 6px 12px; border: 0; border-radius: 980px; background: var(--accent-soft); color: var(--accent); cursor: pointer; transition: all 0.2s; }
 .pipe-node:hover { background: var(--accent); color: #fff; }
 .pipe-n { width: 18px; height: 18px; border-radius: 50%; background: var(--accent); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; }
 .pipe-node:hover .pipe-n { background: rgba(255, 255, 255, 0.25); }
@@ -606,7 +627,10 @@ onMounted(async () => {
 .stat-label { font-size: 12px; color: var(--text-tertiary); }
 
 /* 详情弹窗 */
-.skill-detail { max-width: 560px; max-height: 85vh; overflow-y: auto; }
+.skill-modal-mask { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(0, 0, 0, 0.58); backdrop-filter: blur(8px); }
+.skill-modal { width: min(680px, calc(100vw - 32px)); padding: 24px; outline: none; box-shadow: 0 24px 80px rgba(0, 0, 0, 0.32); }
+.skill-detail { max-height: min(85vh, 820px); overflow-y: auto; }
+.skill-detail ol { margin: 0; padding-left: 20px; color: var(--text-secondary); font-size: 13px; line-height: 1.8; }
 .detail-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
 .detail-head h2 { margin: 0; font-size: 18px; }
 .detail-head .close { margin-left: auto; }
