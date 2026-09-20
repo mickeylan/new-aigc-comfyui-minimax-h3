@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"comfyui-console/internal/models"
 	"gorm.io/gorm"
@@ -342,12 +343,25 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 	if err != nil {
 		return err
 	}
+	if !sheet && outfit.SheetTaskID != "" {
+		_ = s.tasks.CancelTask(outfit.SheetTaskID)
+	}
 	field := "image_task_id"
 	errorField := "image_error"
 	if sheet {
 		field, errorField = "sheet_task_id", "sheet_error"
 	}
-	res := s.db.Model(&models.CharacterOutfit{}).Where("id = ? AND "+field+" = ''", outfit.ID).Updates(map[string]any{field: task.TaskID, errorField: ""})
+	updates := map[string]any{field: task.TaskID, errorField: ""}
+	// 新任务开始时立即移除旧展示结果，避免页面继续显示此前 H3 产物。
+	if sheet {
+		updates["sheet"] = ""
+	} else {
+		updates["image"] = ""
+		updates["sheet"] = ""
+		updates["sheet_task_id"] = ""
+		updates["sheet_error"] = "换装定妆照已更新，请重新生成 Krea2 四视图"
+	}
+	res := s.db.Model(&models.CharacterOutfit{}).Where("id = ? AND "+field+" = ''", outfit.ID).Updates(updates)
 	if res.Error != nil || res.RowsAffected == 0 {
 		_ = s.tasks.CancelTask(task.TaskID)
 		if res.Error != nil {
@@ -465,7 +479,7 @@ func (s *CharacterLookService) SaveOutfitUploadedImage(projectID, characterID, o
 	if sheet {
 		prefix, field, taskField, errorField = "outfit_sheet", "sheet", "sheet_task_id", "sheet_error"
 	}
-	path, _, err := s.upload.SaveFile(fmt.Sprint(projectID), "image", fmt.Sprintf("%s_%d%s", prefix, outfitID, ext), data)
+	path, _, err := s.upload.SaveFile(fmt.Sprint(projectID), "image", fmt.Sprintf("%s_%d_%d%s", prefix, outfitID, time.Now().UnixNano(), ext), data)
 	if err != nil {
 		return err
 	}
@@ -476,7 +490,21 @@ func (s *CharacterLookService) SaveOutfitUploadedImage(projectID, characterID, o
 	if taskID != "" && s.tasks != nil {
 		_ = s.tasks.CancelTask(taskID)
 	}
-	return s.db.Model(&outfit).Updates(map[string]any{field: filepath.Base(path), taskField: "", errorField: ""}).Error
+	updates := map[string]any{field: filepath.Base(path), taskField: "", errorField: ""}
+	if !sheet {
+		if outfit.SheetTaskID != "" && s.tasks != nil {
+			_ = s.tasks.CancelTask(outfit.SheetTaskID)
+		}
+		updates["sheet"] = ""
+		updates["sheet_task_id"] = ""
+		updates["sheet_error"] = "换装定妆照已替换，请重新生成 Krea2 四视图"
+	}
+	return s.db.Model(&outfit).Updates(updates).Error
+}
+
+func outfitResultFilename(prefix string, outfitID uint, taskID, ext string) string {
+	safeTask := strings.NewReplacer("-", "_", "/", "_", "\\", "_").Replace(strings.TrimSpace(taskID))
+	return fmt.Sprintf("%s_%d_%s%s", prefix, outfitID, safeTask, ext)
 }
 
 func (s *CharacterLookService) SyncOutfitImages() {
@@ -520,7 +548,7 @@ func (s *CharacterLookService) SyncOutfitImages() {
 			if ext == "" {
 				ext = ".png"
 			}
-			path, _, err := s.upload.SaveFile(fmt.Sprint(outfit.ProjectID), "image", fmt.Sprintf("%s_%d%s", state.prefix, outfit.ID, ext), data)
+			path, _, err := s.upload.SaveFile(fmt.Sprint(outfit.ProjectID), "image", outfitResultFilename(state.prefix, outfit.ID, state.taskID, ext), data)
 			if err != nil {
 				s.db.Model(outfit).Where(state.taskField+" = ?", state.taskID).Updates(map[string]any{state.taskField: "", state.errorField: err.Error()})
 				continue

@@ -30,4 +30,6 @@ test('新形象图片支持点击查看大图', () => {
   assert.match(looks, /class="look-viewer-mask"/)
   assert.match(looks, /role="dialog"/)
   assert.match(looks, /event\.key==='Escape'/)
+  assert.match(looks, /用换装照生成 Krea2 四视图/)
+  assert.match(looks, /Krea2 生成四视图中/)
 })

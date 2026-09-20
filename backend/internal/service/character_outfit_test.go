@@ -75,6 +75,14 @@ func TestListOutfitsDoesNotLeakAcrossCharacters(t *testing.T) {
 	}
 }
 
+func TestOutfitResultFilenameSeparatesRegenerations(t *testing.T) {
+	first := outfitResultFilename("outfit_sheet", 7, "task-a", ".png")
+	second := outfitResultFilename("outfit_sheet", 7, "task-b", ".png")
+	if first == second || !strings.Contains(first, "task_a") || !strings.Contains(second, "task_b") {
+		t.Fatalf("result filenames are not task-specific: %q %q", first, second)
+	}
+}
+
 func TestOutfitImageAndSheetUseDifferentTemplates(t *testing.T) {
 	if got := outfitTemplateCode(false); got != "minimax_h3_look_reference" {
 		t.Fatalf("outfit image template=%s", got)
