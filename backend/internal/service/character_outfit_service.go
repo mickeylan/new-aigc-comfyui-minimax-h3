@@ -64,7 +64,7 @@ func (s *CharacterLookService) DesignOutfit(projectID, characterID uint, req Out
 	}
 	system := `你是影视角色造型设计师。根据用户的完整形象概念，设计一套统一的新造型，并拆成独立资产。
 只输出严格JSON：{"name":"套装名","description":"整套形象说明","assets":[{"name":"资产名","category":"clothing|shoes|hair|hair_accessory|jewelry|bag","description":"材质、颜色、款式、结构细节"}]}。
-必须包含clothing、shoes、hair；其余类别只在概念确实需要时加入。每类最多一个，hair_accessory和jewelry可各一个。资产描述只写该单件资产，不写人物姓名、脸、身体、姿势或构图。不得加入武器、法宝、剧情道具，不得混入多个互斥方案。`
+必须包含clothing和shoes。hair仅在用户明确要求改变发型时加入；用户未提发型时必须沿用角色标准像发型，不得自行设计新发型。hair_accessory、jewelry、bag仅在用户明确要求时加入。每类最多一个。资产描述只写该单件资产，不写人物姓名、脸、身体、姿势或构图。不得加入武器、法宝、剧情道具，不得混入多个互斥方案。`
 	user := fmt.Sprintf("项目题材：%s\n项目画风：%s\n角色：%s（仅用于理解身份，不得写入资产描述）\n用户命名：%s\n新形象概念：%s", project.Genre, project.Style, character.Name, strings.TrimSpace(req.Name), concept)
 	raw, err := s.textProvider.Chat(system, user)
 	if err != nil {
@@ -84,6 +84,7 @@ func (s *CharacterLookService) DesignOutfit(projectID, characterID uint, req Out
 		return nil, fmt.Errorf("AI新形象缺少有效套装名或资产")
 	}
 	excludeBag, excludeGloves := outfitConceptExclusions(concept)
+	changeHair := outfitConceptChangesHair(concept)
 	filtered := design.Assets[:0]
 	for _, asset := range design.Assets {
 		text := asset.Name + " " + asset.Description
@@ -91,6 +92,9 @@ func (s *CharacterLookService) DesignOutfit(projectID, characterID uint, req Out
 			continue
 		}
 		if excludeGloves && isGloveText(text) {
+			continue
+		}
+		if asset.Category == "hair" && !changeHair {
 			continue
 		}
 		filtered = append(filtered, asset)
@@ -108,7 +112,7 @@ func (s *CharacterLookService) DesignOutfit(projectID, characterID uint, req Out
 		}
 		seen[a.Category] = true
 	}
-	for _, required := range []string{"clothing", "shoes", "hair"} {
+	for _, required := range []string{"clothing", "shoes"} {
 		if !seen[required] {
 			return nil, fmt.Errorf("AI新形象缺少%s设计", LookCategoryLabel(required))
 		}
@@ -377,6 +381,16 @@ func outfitConceptExclusions(text string) (excludeBag, excludeGloves bool) {
 	return
 }
 
+func outfitConceptChangesHair(text string) bool {
+	compact := strings.NewReplacer(" ", "", "，", ",", "。", ".").Replace(strings.ToLower(text))
+	for _, term := range []string{"发型", "头发", "长发", "短发", "卷发", "直发", "刘海", "马尾", "发髻", "盘发", "束发", "编发", "染发", "发色"} {
+		if strings.Contains(compact, term) {
+			return true
+		}
+	}
+	return false
+}
+
 func isGloveText(text string) bool {
 	return strings.Contains(text, "手套") || strings.Contains(text, "手甲") || strings.Contains(text, "护手")
 }
@@ -393,10 +407,11 @@ func outfitPrompt(outfit *models.CharacterOutfit, hasCharacterSheet bool) string
 	}
 	items := append([]models.CharacterOutfitLook(nil), outfit.Items...)
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Order < items[j].Order })
-	hasBag, hasGloves := false, false
+	hasBag, hasGloves, hasHair := false, false, false
 	for _, item := range items {
 		if item.Look != nil {
 			hasBag = hasBag || item.Look.Category == "bag"
+			hasHair = hasHair || item.Look.Category == "hair"
 			text := item.Look.Name + " " + item.Look.Description
 			hasGloves = hasGloves || isGloveText(text)
 		}
@@ -415,6 +430,9 @@ func outfitPrompt(outfit *models.CharacterOutfit, hasCharacterSheet bool) string
 		}
 		design = append(design, fmt.Sprintf("%s：%s", label, description))
 	}
+	if !hasHair {
+		design = append(design, "发型完整沿用当前角色标准像，不改变发长、发色、刘海、分缝、卷直状态与束发方式。")
+	}
 	if !hasGloves {
 		design = append(design, "双手自然裸露且完整可见，手掌与五指结构清晰。")
 	}
@@ -425,7 +443,7 @@ func outfitPrompt(outfit *models.CharacterOutfit, hasCharacterSheet bool) string
 		"subject_definitions:\n" + strings.Join(definitions, "\n"),
 		"summary:\n[reference generation] 以当前角色身份参考和本次造型设计生成一张新的角色换装定妆照。",
 		"retention_analysis:\n" + strings.Join(retention, "\n"),
-		"detailed_description:\n" + strings.Join(design, "\n") + "\n9:16竖版，单人正面全身定妆照，完整头部与清晰正脸自然可见，从头发顶部到鞋底完整入镜，正面自然站立。",
+		"detailed_description:\n" + strings.Join(design, "\n") + "\n视觉媒介、渲染方式、材质表现和色彩风格严格沿用当前角色标准像。9:16竖版，单人正面全身定妆照，完整头部与清晰正脸自然可见，从头发顶部到鞋底完整入镜，正面自然站立。",
 		"overall_soundscape:\nN/A",
 		"non_diegetic_music:\nN/A",
 	}, "\n\n")

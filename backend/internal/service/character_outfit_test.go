@@ -41,7 +41,7 @@ func TestDesignOutfitCreatesReviewableAssetsAndDraft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outfit.AuditStatus != models.LookStatusDraft || len(outfit.Items) != 4 {
+	if outfit.AuditStatus != models.LookStatusDraft || len(outfit.Items) != 3 {
 		t.Fatalf("unexpected outfit: %#v", outfit)
 	}
 	if !strings.Contains(outfit.Description, "用户原始造型要求：雨夜调查记者形象") {
@@ -93,6 +93,24 @@ func TestOutfitPromptUsesPortraitAsIdentityAnchorForRedressing(t *testing.T) {
 	}
 }
 
+func TestDesignOutfitDoesNotChangeHairUnlessExplicitlyRequested(t *testing.T) {
+	svc, project, character := setupOutfitTestDB(t)
+	svc.textProvider = &stubTextProvider{response: `{"name":"通勤装","description":"通勤装","assets":[{"name":"外套","category":"clothing","description":"短外套"},{"name":"短靴","category":"shoes","description":"短靴"},{"name":"AI臆造短发","category":"hair","description":"短发"}]}`}
+	outfit, err := svc.DesignOutfit(project.ID, character.ID, OutfitDesignInput{Concept: "换一套通勤服装"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range outfit.Items {
+		if item.Look.Category == "hair" {
+			t.Fatalf("unrequested hairstyle retained: %#v", item.Look)
+		}
+	}
+	prompt := outfitPrompt(outfit, false)
+	if !strings.Contains(prompt, "发型完整沿用当前角色标准像") {
+		t.Fatalf("hair preservation missing: %s", prompt)
+	}
+}
+
 func TestDesignOutfitFiltersExplicitlyExcludedBagAndGloves(t *testing.T) {
 	svc, project, character := setupOutfitTestDB(t)
 	svc.textProvider = &stubTextProvider{response: `{"name":"轻装","description":"轻装","assets":[{"name":"外套","category":"clothing","description":"短外套"},{"name":"短靴","category":"shoes","description":"短靴"},{"name":"短发","category":"hair","description":"短发"},{"name":"皮手套","category":"jewelry","description":"黑色手套"},{"name":"手提包","category":"bag","description":"黑色包"}]}`}
@@ -100,8 +118,8 @@ func TestDesignOutfitFiltersExplicitlyExcludedBagAndGloves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(outfit.Items) != 3 {
-		t.Fatalf("excluded assets remained: %#v", outfit.Items)
+	if len(outfit.Items) != 2 {
+		t.Fatalf("excluded or unrequested assets remained: %#v", outfit.Items)
 	}
 	for _, item := range outfit.Items {
 		if item.Look.Category == "bag" || isGloveText(item.Look.Name+item.Look.Description) {
