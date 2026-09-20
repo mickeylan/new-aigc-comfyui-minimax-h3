@@ -23,6 +23,20 @@ func newTestBatchService(t *testing.T) *BatchPlanningService {
 	return NewBatchPlanningService(db)
 }
 
+func TestPlanningBatchSupportsOutlineProjects(t *testing.T) {
+	s := newTestBatchService(t)
+	if err := s.db.Model(&models.Project{}).Where("id = ?", 1).Update("source_type", models.ProjectSourceOutline).Error; err != nil {
+		t.Fatal(err)
+	}
+	batch, err := s.CreateBatch(1, BatchCreateInput{Title: "梗概第一批", EpisodeStart: 1, EpisodeEnd: 10, ChapterStart: 1, ChapterEnd: 1})
+	if err != nil {
+		t.Fatalf("outline project should support rolling batches: %v", err)
+	}
+	if batch.EpisodeCount != 10 {
+		t.Fatalf("unexpected batch: %+v", batch)
+	}
+}
+
 func TestPlanningBatchRequiresFiveToTwentyEpisodes(t *testing.T) {
 	s := newTestBatchService(t)
 	if _, e := s.CreateBatch(1, BatchCreateInput{Title: "small", EpisodeStart: 1, EpisodeEnd: 4, ChapterStart: 1, ChapterEnd: 3}); e == nil {

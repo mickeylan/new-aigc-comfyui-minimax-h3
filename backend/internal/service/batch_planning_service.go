@@ -94,9 +94,6 @@ func (s *BatchPlanningService) CreateBatch(projectID uint, in BatchCreateInput) 
 	if err := s.db.First(&project, projectID).Error; err != nil {
 		return nil, err
 	}
-	if project.SourceType != models.ProjectSourceNovel {
-		return nil, fmt.Errorf("滚动批次仅用于小说改编项目")
-	}
 	if project.Episodes > 0 && in.EpisodeEnd > project.Episodes {
 		return nil, fmt.Errorf("批次结束集 %d 超过全剧预计 %d 集", in.EpisodeEnd, project.Episodes)
 	}
