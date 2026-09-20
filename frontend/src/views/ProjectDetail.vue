@@ -245,7 +245,7 @@
             <div class="char-body">
               <div class="char-name-row">
                 <span class="char-name">{{ a.name }}</span>
-                <span v-if="a.source === 'auto'" class="tag tag-gray">方案抽取</span>
+                <span v-if="a.source === 'auto'" class="tag tag-gray">方案抽取</span><span v-if="a.kind === 'location' && a.visual_type === 'megastructure'" class="tag badge-mega">巨构 · {{ assetMegaLabel(a.mega_type) }}</span>
               </div>
               <p v-if="a.description" class="char-trait">📝 {{ a.description }}</p>
               <span class="char-appear">出场 {{ assetCounts[a.id] || 0 }} 场</span>
@@ -879,6 +879,12 @@
           <input v-model="assetForm.name" class="input" :placeholder="assetTab === 'prop' ? '如：青铜古镜' : '如：云隐宗大殿'" />
           <div class="field-hint">名称须与剧本分镜中引用的{{ assetKindLabel }}名完全一致，才能自动匹配参考图</div>
         </div>
+        <div v-if="assetTab === 'location'" class="field">
+          <label>场景生成类型</label>
+          <select v-model="assetForm.visual_type" class="input"><option value="normal">普通场景</option><option value="megastructure">巨构场景（Krea2 专项增强）</option></select>
+          <select v-if="assetForm.visual_type === 'megastructure'" v-model="assetForm.mega_type" class="input"><option value="architecture">建筑巨构</option><option value="creature">巨兽/生物</option><option value="geological">自然/地质</option><option value="mechanical">机械/载具</option><option value="surreal">超现实混合</option></select>
+          <div class="field-hint">只影响该场景资产参考图：强化尺度参照、结构可读性、大气分层和重量感，不作用于剧情分镜。</div>
+        </div>
         <div class="field">
           <div class="field-label-actions"><label>简单说明 / AI 设计结果 <span class="optional">用于保证{{ assetKindLabel }}一致</span></label><button class="btn btn-sm btn-secondary" :disabled="redesigningAsset || !assetForm.name.trim() || !assetForm.description.trim()" @click="redesignAssetDescription">{{ redesigningAsset ? 'AI 设计中…' : 'AI 重新设计' }}</button></div>
           <textarea v-model="assetForm.description" class="textarea" rows="6"
@@ -1023,7 +1029,7 @@ const assets = ref([])
 const assetCounts = ref({})
 const editingAsset = ref(null)
 const assetError = ref('')
-const assetForm = reactive({ name: '', description: '' })
+const assetForm = reactive({ name: '', description: '', visual_type: 'normal', mega_type: 'architecture' })
 const redesigningAsset = ref(false)
 const voicePresets = ['Cherry', 'Ethan', 'Chelsie', 'Serena', 'Nofish', 'Dylan', 'Jada', 'Peter', 'Sunny', 'Luna']
 const showScript = ref(false)
@@ -2137,12 +2143,12 @@ function uploadAssetImage(a) {
 }
 function openCreateAsset() {
   assetError.value = ''
-  Object.assign(assetForm, { name: '', description: '' })
+  Object.assign(assetForm, { name: '', description: '', visual_type: 'normal', mega_type: 'architecture' })
   editingAsset.value = 'new'
 }
 function openEditAsset(a) {
   assetError.value = ''
-  Object.assign(assetForm, { name: a.name, description: a.description })
+  Object.assign(assetForm, { name: a.name, description: a.description, visual_type: a.visual_type || 'normal', mega_type: a.mega_type || 'architecture' })
   editingAsset.value = a
 }
 async function redesignAssetDescription() {
@@ -2160,6 +2166,8 @@ async function redesignAssetDescription() {
     redesigningAsset.value = false
   }
 }
+
+function assetMegaLabel(type) { return ({ architecture: '建筑', creature: '巨兽', geological: '地质', mechanical: '机械', surreal: '超现实' }[type] || '建筑') }
 
 async function saveAsset() {
   if (!assetForm.name.trim()) return

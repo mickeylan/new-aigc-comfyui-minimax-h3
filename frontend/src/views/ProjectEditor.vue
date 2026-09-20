@@ -117,18 +117,6 @@
             <div v-if="coverageReviewDraft"><strong>镜头覆盖审查</strong><pre class="prompt-preview">{{ coverageReviewDraft }}</pre></div>
           </div>
           <div v-if="videoPromptDraft" class="workbench"><strong>最终H3提交提示词（保存后才能生成视频）</strong><textarea v-model="videoPromptDraft" class="textarea" rows="10"/><div class="section-actions"><button class="btn btn-sm" @click="saveReviewedVideoPrompt(false)">保存审核结果</button><button class="btn btn-sm" @click="saveReviewedVideoPrompt(true)">保存并生成视频</button></div></div>
-          <div class="scene-visual-edit">
-            <label>场景视觉类型</label>
-            <select v-model="visualTypeInput" class="input input-sm">
-              <option value="normal">普通场景</option>
-              <option value="megastructure">巨构场景（专项增强）</option>
-            </select>
-            <select v-if="visualTypeInput === 'megastructure'" v-model="megaTypeInput" class="input input-sm">
-              <option value="architecture">建筑巨构</option><option value="creature">巨兽/生物</option><option value="geological">自然/地质</option><option value="mechanical">机械/载具</option><option value="surreal">超现实混合</option>
-            </select>
-            <button class="btn btn-sm btn-secondary" :disabled="visualTypeSaving" @click="saveSceneVisualType">{{ visualTypeSaving ? '保存中…' : '保存视觉类型' }}</button>
-            <span class="sub">巨构会强化尺度参照、结构可读性、大气分层和重量感，不改变剧情主体。</span>
-          </div>
           <div class="duration-edit">
             <label>目标时长</label>
             <input type="number" class="input input-sm" v-model.number="durationInput" min="3" max="15" step="0.5" @change="saveDuration" />
@@ -348,9 +336,6 @@ const dialogueVolume = ref(1)
 const bgmVolume = ref(1)
 const durationSaving = ref(false)
 const durationInput = ref(5)
-const visualTypeSaving = ref(false)
-const visualTypeInput = ref('normal')
-const megaTypeInput = ref('architecture')
 const dragFrom = ref(null)
 const activeEpN = ref(1)
 const epIndex = ref(0)
@@ -466,7 +451,7 @@ async function load() {
     syncDraftTexts()
     const selectedId = selected.value?.id
     selected.value = (selectedId && scenes.value.find(s => s.id === selectedId)) || scenes.value.find(s => s.status === 'video_ready') || scenes.value[0] || null
-    if (selected.value) { durationInput.value = selected.value.duration || 5; visualTypeInput.value = selected.value.visual_type || 'normal'; megaTypeInput.value = selected.value.mega_type || 'architecture'; await loadCandidates() } else candidates.value = []
+    if (selected.value) { durationInput.value = selected.value.duration || 5; await loadCandidates() } else candidates.value = []
     const episodeNumbers = epNums()
     epIndex.value = Math.max(0, episodeNumbers.indexOf(activeEpN.value))
     await Promise.all([loadMerges(), loadAudioLayers(), loadSharedAssets(), loadEpisodeContinuity(), loadSkillPanel()])
@@ -488,8 +473,6 @@ function selectScene(sc) {
   selected.value = sc
   clearSceneDrafts()
   durationInput.value = sc.duration || 5
-  visualTypeInput.value = sc.visual_type || 'normal'
-  megaTypeInput.value = sc.mega_type || 'architecture'
   tab.value = 'dub'
 }
 
@@ -526,24 +509,6 @@ async function persistOrder(ids) {
   } catch (e) {
     toast.error(e.response?.data?.error || '保存顺序失败')
   }
-}
-
-async function saveSceneVisualType() {
-  if (!selected.value) return
-  visualTypeSaving.value = true
-  try {
-    await api.updateScene(id(), selected.value.id, {
-      title: selected.value.title || '', content: selected.value.content || '', image_prompt: selected.value.image_prompt || '',
-      video_prompt: selected.value.video_prompt || '', duration: Number(selected.value.duration) || 5,
-      visible_characters: selected.value.visible_characters || '', voice_characters: selected.value.voice_characters || '', mentioned_characters: selected.value.mentioned_characters || '',
-      visual_type: visualTypeInput.value, mega_type: visualTypeInput.value === 'megastructure' ? megaTypeInput.value : ''
-    })
-    selected.value.visual_type = visualTypeInput.value
-    selected.value.mega_type = visualTypeInput.value === 'megastructure' ? megaTypeInput.value : ''
-    toast.success(visualTypeInput.value === 'megastructure' ? '已启用巨构场景增强' : '已切换为普通场景')
-    await reloadSelectedScene()
-  } catch (e) { toast.error(e.response?.data?.error || '保存场景视觉类型失败') }
-  finally { visualTypeSaving.value = false }
 }
 
 async function saveDuration() {
@@ -911,8 +876,7 @@ watch(videoPromptDraft, () => videoDraftSafety?.schedule())
 .editor-video { width: 100%; border-radius: 12px; background: #000; max-height: 420px; }
 .editor-image { display: block; width: 100%; max-height: 520px; object-fit: contain; border-radius: 12px; background: #000; }
 .preview-empty { height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--text-tertiary); }
-.duration-edit,.scene-visual-edit { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; color: var(--text-secondary); flex-wrap: wrap; }
-.scene-visual-edit .sub { flex-basis: 100%; }
+.duration-edit { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; color: var(--text-secondary); }
 .dur-unit { color: var(--text-tertiary); }
 
 .edit-card { padding: 0; }

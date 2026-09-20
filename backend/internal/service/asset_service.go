@@ -119,6 +119,13 @@ func (s *ProjectService) RedesignAssetDescription(p *models.Project, kind, name,
 	return output, nil
 }
 
+func normalizeAssetVisual(kind, visualType, megaType string) (string, string) {
+	if kind != AssetKindLocation || strings.TrimSpace(visualType) != "megastructure" {
+		return "normal", ""
+	}
+	return "megastructure", normalizeMegaType(megaType)
+}
+
 // CreateAsset 手动新建资产
 func (s *ProjectService) CreateAsset(a models.Asset) (*models.Asset, error) {
 	kind, err := normalizeAssetKind(a.Kind)
@@ -131,6 +138,7 @@ func (s *ProjectService) CreateAsset(a models.Asset) (*models.Asset, error) {
 		return nil, fmt.Errorf("%s名不能为空", AssetKindLabel(kind))
 	}
 	a.Source = "manual"
+	a.VisualType, a.MegaType = normalizeAssetVisual(a.Kind, a.VisualType, a.MegaType)
 	a.Image = "" // 新建无参考图
 	if err := s.db.Create(&a).Error; err != nil {
 		return nil, fmt.Errorf("%s名已存在或创建失败: %w", AssetKindLabel(kind), err)
@@ -152,6 +160,11 @@ func (s *ProjectService) UpdateAsset(a *models.Asset, req models.Asset) error {
 		updates["name"] = newName
 	}
 	updates["description"] = strings.TrimSpace(req.Description)
+	visualType, megaType := normalizeAssetVisual(a.Kind, req.VisualType, req.MegaType)
+	if visualType != a.VisualType || megaType != a.MegaType {
+		updates["visual_type"], updates["mega_type"] = visualType, megaType
+		updates["image"], updates["image_task_id"], updates["image_error"] = "", "", ""
+	}
 	if err := s.db.Model(a).Updates(updates).Error; err != nil {
 		return err
 	}
@@ -369,6 +382,10 @@ func buildAssetPrompt(p *models.Project, a *models.Asset) string {
 	parts = append(parts, "场景「"+strings.TrimSpace(a.Name)+"」")
 	if d := strings.TrimSpace(a.Description); d != "" {
 		parts = append(parts, "环境外观必须精确遵守："+d)
+	}
+	if visualType, megaType := normalizeAssetVisual(a.Kind, a.VisualType, a.MegaType); visualType == "megastructure" {
+		label := map[string]string{"architecture": "建筑巨构", "creature": "巨兽/生物巨构", "geological": "自然/地质巨构", "mechanical": "机械/载具巨构", "surreal": "超现实混合巨构"}[megaType]
+		parts = append(parts, "【巨构场景专项】"+label+"，必须使用明确尺度参照、前中后景大气分层、可读的巨型结构、压倒性体量与重量感、广角远景构图；保持环境资产本身，不增加剧情人物")
 	}
 	parts = append(parts, "场景空镜参考图，全景构图，无人物，环境陈设与光影氛围完整清晰，高质量，禁止人物、文字、水印和拼图")
 	return strings.Join(parts, "，")

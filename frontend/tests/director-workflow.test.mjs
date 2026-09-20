@@ -27,12 +27,13 @@ test('视频提示词首尾帧支持连续性帧、当前分镜和自定义上�
   assert.match(source, /api\.uploadSceneVideoFrame/)
 })
 
-test('场景在剪辑台可切换普通与巨构视觉类型', () => {
-  const source = readFileSync(new URL('../src/views/ProjectEditor.vue', import.meta.url), 'utf8')
-  assert.match(source, /巨构场景（专项增强）/)
-  assert.match(source, /v-model="megaTypeInput"/)
-  assert.match(source, /saveSceneVisualType/)
-  assert.match(source, /visual_type: visualTypeInput\.value/)
+test('巨构只在场景资产生成处配置，不进入剧情分镜剪辑台', () => {
+  const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
+  const editor = readFileSync(new URL('../src/views/ProjectEditor.vue', import.meta.url), 'utf8')
+  assert.match(detail, /场景生成类型/)
+  assert.match(detail, /巨构场景（Krea2 专项增强）/)
+  assert.match(detail, /assetForm\.visual_type/)
+  assert.doesNotMatch(editor, /saveSceneVisualType|megaTypeInput|巨构场景（专项增强）/)
 })
 
 test('剪辑台保留三个高级导演审查入口和视觉节拍应用入口', () => {

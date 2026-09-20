@@ -343,6 +343,8 @@ type Asset struct {
 	Kind        string    `gorm:"column:kind;uniqueIndex:idx_asset_project_kind_name" json:"kind"` // prop(道具) / location(场景)
 	Name        string    `gorm:"uniqueIndex:idx_asset_project_kind_name" json:"name"`             // 项目内同类别唯一
 	Description string    `gorm:"type:text" json:"description"`                                    // 外观描述（道具：形状/材质/颜色/细节；场景：空间/建筑/光线氛围）
+	VisualType  string    `gorm:"column:visual_type;default:normal" json:"visual_type"`            // 场景资产：normal/megastructure
+	MegaType    string    `gorm:"column:mega_type" json:"mega_type"`                               // 场景资产巨构类别
 	Image       string    `json:"image"`                                                           // 参考图文件名（input/<project_id>/ 下）
 	ImageTaskID string    `gorm:"column:image_task_id;index" json:"image_task_id"`                 // Krea2 参考图生成任务
 	ImageError  string    `gorm:"column:image_error;type:text" json:"image_error"`                 // 参考图生成错误

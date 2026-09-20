@@ -1013,6 +1013,21 @@ func TestRedesignLocationDescriptionUsesProjectContext(t *testing.T) {
 	}
 }
 
+func TestBuildLocationAssetPromptSupportsMegastructure(t *testing.T) {
+	p := &models.Project{Style: "真人写实", AspectRatio: "16:9"}
+	location := &models.Asset{Kind: AssetKindLocation, Name: "天空巨城", Description: "云海中的庞大城市", VisualType: "megastructure", MegaType: "architecture"}
+	prompt := buildAssetPrompt(p, location)
+	for _, want := range []string{"巨构场景专项", "建筑巨构", "尺度参照", "大气分层", "重量感", "不增加剧情人物"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("megastructure location prompt missing %q: %s", want, prompt)
+		}
+	}
+	prop := &models.Asset{Kind: AssetKindProp, Name: "巨构钥匙", VisualType: "megastructure", MegaType: "architecture"}
+	if strings.Contains(buildAssetPrompt(p, prop), "巨构场景专项") {
+		t.Fatal("prop must not use location megastructure mode")
+	}
+}
+
 func TestBuildAssetPromptAndSizeUseKrea2ReferenceConventions(t *testing.T) {
 	p := &models.Project{Style: "真人写实", AspectRatio: "16:9"}
 	prop := &models.Asset{Kind: AssetKindProp, Name: "元婴玉佩", Description: "青玉材质，金色纹路"}
