@@ -2998,10 +2998,13 @@ func (s *ProjectService) StartSceneImage(sc *models.Scene) error {
 }
 
 func (s *ProjectService) claimSceneImage(sc *models.Scene) (string, error) {
+	if sc.ImageLocked {
+		return "", fmt.Errorf("场景 %d 的分镜图已锁定，请先解锁", sc.Order)
+	}
 	token := fmt.Sprintf("%d-%d", sc.ID, time.Now().UnixNano())
 	claim := s.db.Model(&models.Scene{}).
-		Where("id = ? AND project_id = ? AND generation = ? AND image_token = '' AND status IN ?",
-			sc.ID, sc.ProjectID, sc.Generation, []string{"pending", "failed", "image_ready", "video_ready"}).
+		Where("id = ? AND project_id = ? AND generation = ? AND image_locked = ? AND image_token = '' AND status IN ?",
+			sc.ID, sc.ProjectID, sc.Generation, false, []string{"pending", "failed", "image_ready", "video_ready"}).
 		Updates(map[string]any{
 			"status": "image_pending", "error": "", "image_token": token, "image_task_id": "",
 			"image_retries": gorm.Expr("image_retries + 1"),
@@ -3432,6 +3435,9 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		return err
 	}
 	sc = &latest
+	if sc.VideoLocked {
+		return fmt.Errorf("场景 %d 的视频已锁定，请先解锁", sc.Order)
+	}
 	if sc.PromptStale && strings.TrimSpace(sc.VideoFullPrompt) != "" {
 		return fmt.Errorf("场景 %d 的剧情、人物或参考图已变化，请重新生成或确认视频提示词后再生成", sc.Order)
 	}

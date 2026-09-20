@@ -94,8 +94,10 @@
             <button class="btn btn-sm btn-ghost" @click="moveSceneEpisode">移动到其他集</button>
             <button class="btn btn-sm btn-secondary" @click="runFaithfulPolish">忠实润色</button>
             <details class="director-tools"><summary class="btn btn-sm btn-ghost">高级导演工具</summary><div class="director-tools-menu"><button class="btn btn-sm btn-secondary" :disabled="busy" @click="runVisualBeats">视觉节拍</button><button class="btn btn-sm btn-secondary" :disabled="busy" @click="runAssetContinuityReview">资产连续性审查</button><button class="btn btn-sm btn-secondary" :disabled="busy" @click="runCoverageReview">镜头覆盖审查</button></div></details>
-            <button class="btn btn-sm" :disabled="busy" @click="generateSelectedImage">生成分镜图</button>
-            <button class="btn btn-sm" :disabled="busy || !selected.image_file" @click="prepareVideoPrompt">准备并审核视频提示词</button>
+            <button class="btn btn-sm" :disabled="busy || selected.image_locked" @click="generateSelectedImage">{{ selected.image_locked ? '分镜图已锁定' : '生成分镜图' }}</button>
+            <button class="btn btn-sm btn-ghost" @click="setSceneLock('image', !selected.image_locked)">{{ selected.image_locked ? '解锁分镜图' : '锁定分镜图' }}</button>
+            <button class="btn btn-sm" :disabled="busy || !selected.image_file || selected.video_locked" @click="prepareVideoPrompt">{{ selected.video_locked ? '视频已锁定' : '准备并审核视频提示词' }}</button>
+            <button class="btn btn-sm btn-ghost" @click="setSceneLock('video', !selected.video_locked)">{{ selected.video_locked ? '解锁视频' : '锁定视频' }}</button>
             <a v-if="selected.video_url" class="btn btn-sm btn-ghost" :href="selected.video_url + '?download=1'">下载视频</a>
             <button class="btn btn-sm btn-secondary" @click="showFrameSelector = true">连续性设置</button>
           </div>
@@ -284,7 +286,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { useToastStore } from '../stores/toast'
@@ -292,6 +294,7 @@ import ShotDirectorEditor from '../components/ShotDirectorEditor.vue'
 import FrameSelector from '../components/FrameSelector.vue'
 import CharacterHistoryDrawer from '../components/CharacterHistoryDrawer.vue'
 import { compatibleSkills, projectSkillConfig, skillOperationOf } from '../utils/directorWorkflow.js'
+import { createDraftSafety } from '../utils/draftSafety.js'
 
 const route = useRoute()
 const toast = useToastStore()
@@ -320,6 +323,7 @@ const assetReviewDraft = ref('')
 const coverageReviewDraft = ref('')
 const videoPromptDraft = ref('')
 const videoPromptTemplate = ref('minimax_h3_ref2v')
+let videoDraftSafety
 const selected = ref(null)
 const tab = ref('dub')
 const busy = ref(false)
@@ -462,7 +466,8 @@ async function loadMerges() {
   } catch { /* ignore */ }
 }
 
-function clearSceneDrafts() { visualBeatDraft.value = ''; polishDraft.value = ''; assetReviewDraft.value = ''; coverageReviewDraft.value = ''; videoPromptDraft.value = '' }
+function clearSceneDrafts() { videoDraftSafety?.dispose(); videoDraftSafety = null; visualBeatDraft.value = ''; polishDraft.value = ''; assetReviewDraft.value = ''; coverageReviewDraft.value = ''; videoPromptDraft.value = '' }
+function startVideoDraftSafety() { videoDraftSafety?.dispose(); videoDraftSafety = createDraftSafety({ key: `draft:h3-prompt:${id()}:${selected.value.id}`, getDraft: () => ({ prompt: videoPromptDraft.value, template: videoPromptTemplate.value }), applyDraft: d => { videoPromptDraft.value = d.prompt || ''; videoPromptTemplate.value = d.template || 'minimax_h3_ref2v' }, save: () => saveReviewedVideoPrompt(false) }); videoDraftSafety.start() }
 function selectScene(sc) {
   selected.value = sc
   clearSceneDrafts()
@@ -680,8 +685,9 @@ async function applyVisualBeats() {
 }
 async function applyPolishDraft() { try { await api.updateScene(id(), selected.value.id, { image_prompt: polishDraft.value }); polishDraft.value = ''; await reloadSelectedScene(); toast.success('润色草稿已应用到Scene起始帧提示词') } catch (e) { toast.error(e.response?.data?.error || '应用失败') } }
 async function generateSelectedImage() { busy.value = true; try { await api.generateSceneImage(id(), selected.value.id); toast.success('分镜图任务已提交，已组合Scene事实、Shot导演设计、参考图与负向约束'); await reloadSelectedScene() } catch (e) { toast.error(e.response?.data?.error || '提交分镜图失败') } finally { busy.value = false } }
-async function prepareVideoPrompt() { busy.value = true; try { const { data } = await api.regenerateSceneVideoPrompt(id(), selected.value.id, {}); videoPromptDraft.value = data.full_prompt || data.prompt || ''; videoPromptTemplate.value = data.template || 'minimax_h3_ref2v'; toast.success('完整H3提示词已生成，请审核后保存') } catch (e) { toast.error(e.response?.data?.error || '生成视频提示词失败') } finally { busy.value = false } }
-async function saveReviewedVideoPrompt(generate) { busy.value = true; try { await api.updateSceneVideoPrompt(id(), selected.value.id, { prompt: videoPromptDraft.value, template: videoPromptTemplate.value }); if (generate) await api.generateSceneVideo(id(), selected.value.id); videoPromptDraft.value = ''; await reloadSelectedScene(); toast.success(generate ? '已保存审核提示词并提交视频' : '视频提示词审核结果已保存') } catch (e) { toast.error(e.response?.data?.error || '保存视频提示词失败') } finally { busy.value = false } }
+async function prepareVideoPrompt() { busy.value = true; try { const { data } = await api.regenerateSceneVideoPrompt(id(), selected.value.id, {}); videoPromptDraft.value = data.full_prompt || data.prompt || ''; videoPromptTemplate.value = data.template || 'minimax_h3_ref2v'; startVideoDraftSafety(); toast.success('完整H3提示词已生成，请审核后保存') } catch (e) { toast.error(e.response?.data?.error || '生成视频提示词失败') } finally { busy.value = false } }
+async function saveReviewedVideoPrompt(generate) { busy.value = true; try { await api.updateSceneVideoPrompt(id(), selected.value.id, { prompt: videoPromptDraft.value, template: videoPromptTemplate.value }); if (generate) await api.generateSceneVideo(id(), selected.value.id); videoDraftSafety?.markSaved(); videoPromptDraft.value = ''; await reloadSelectedScene(); toast.success(generate ? '已保存审核提示词并提交视频' : '视频提示词审核结果已保存') } catch (e) { toast.error(e.response?.data?.error || '保存视频提示词失败'); throw e } finally { busy.value = false } }
+async function setSceneLock(kind, locked) { try { const { data } = await api.updateSceneLocks(id(), selected.value.id, { [`${kind}_locked`]: locked }); Object.assign(selected.value, data); toast.success(locked ? '生成结果已锁定' : '生成结果已解锁') } catch (e) { toast.error(e.response?.data?.error || '更新锁定状态失败') } }
 async function reloadSelectedScene() { const sid = selected.value?.id; await load(); if (sid) selected.value = scenes.value.find(s => s.id === sid) || selected.value }
 async function runCreativeIntent() {
   const goal = window.prompt('你希望澄清的创作目标', project.value?.synopsis || ''); if (!goal) return
@@ -809,7 +815,8 @@ onMounted(() => {
   load()
   timer = setInterval(load, 8000)
 })
-onUnmounted(() => { clearInterval(timer) })
+onUnmounted(() => { clearInterval(timer); videoDraftSafety?.dispose() })
+watch(videoPromptDraft, () => videoDraftSafety?.schedule())
 </script>
 
 <style scoped>

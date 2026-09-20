@@ -647,6 +647,36 @@ func (s *Service) HandleGenerateProject(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"ok": true, "project": current, "message": msg})
 }
 
+// HandleUpdateSceneLocks explicitly locks or unlocks generation output overwrite protection.
+func (s *Service) HandleUpdateSceneLocks(c *gin.Context) {
+	sc, ok := s.loadScene(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		ImageLocked *bool `json:"image_locked"`
+		VideoLocked *bool `json:"video_locked"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || (req.ImageLocked == nil && req.VideoLocked == nil) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "至少提供一个锁定状态"})
+		return
+	}
+	updates := map[string]any{}
+	if req.ImageLocked != nil {
+		updates["image_locked"] = *req.ImageLocked
+		sc.ImageLocked = *req.ImageLocked
+	}
+	if req.VideoLocked != nil {
+		updates["video_locked"] = *req.VideoLocked
+		sc.VideoLocked = *req.VideoLocked
+	}
+	if err := s.DB.Model(sc).Updates(updates).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, sc)
+}
+
 // HandleGenerateSceneImage 生成单个场景画面
 func (s *Service) HandleGenerateSceneImage(c *gin.Context) {
 	sc, ok := s.loadScene(c)

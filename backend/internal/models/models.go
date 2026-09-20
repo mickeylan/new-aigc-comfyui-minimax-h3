@@ -206,6 +206,8 @@ type Scene struct {
 	VisualType             string    `gorm:"column:visual_type;default:normal" json:"visual_type"`                // normal/megastructure
 	MegaType               string    `gorm:"column:mega_type" json:"mega_type"`                                   // architecture/creature/geological/mechanical/surreal
 	ImageFile              string    `json:"image_file"`                                                          // 首帧图文件名（input/<project_id>/ 下）
+	ImageLocked            bool      `gorm:"column:image_locked;default:false" json:"image_locked"`               // 禁止生成端点覆盖当前图片
+	VideoLocked            bool      `gorm:"column:video_locked;default:false" json:"video_locked"`               // 禁止生成端点覆盖当前视频
 	ImageToken             string    `gorm:"column:image_token" json:"-"`                                         // 单次生成令牌，防止并发或过期结果回写
 	ImageTaskID            string    `gorm:"column:image_task_id;index" json:"image_task_id"`                     // 关联 Krea2 分镜画面任务
 	VideoTaskID            string    `gorm:"column:video_task_id" json:"video_task_id"`                           // 关联视频生成任务
