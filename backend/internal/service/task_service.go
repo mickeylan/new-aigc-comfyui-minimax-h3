@@ -179,7 +179,20 @@ func (s *TaskService) validateUploadedFiles(tpl *models.Template, files map[stri
 			}
 			var upload models.UploadFile
 			if err := s.db.Where("task_id = ? AND name = ?", taskID, name).Order("id DESC").First(&upload).Error; err != nil {
-				return fmt.Errorf("素材未登记或已失效: %s/%s", taskID, name)
+				// 兼容旧版本直接由 ffmpeg 写入 input、但未登记 UploadFile 的连续性帧。
+				// 只恢复受控 continuity_ 前缀，普通任意路径仍严格拒绝。
+				if expectedType != "image" || !strings.HasPrefix(name, "continuity_") || s.remote == nil {
+					return fmt.Errorf("素材未登记或已失效: %s/%s", taskID, name)
+				}
+				path := filepath.Join(s.cfg.Comfy.ComfyDir, "input", taskID, name)
+				info, statErr := s.remote.Stat(path)
+				if statErr != nil {
+					return fmt.Errorf("素材未登记或已失效: %s/%s", taskID, name)
+				}
+				upload = models.UploadFile{TaskID: taskID, Type: "image", Name: name, Path: filepath.ToSlash(filepath.Join(taskID, name)), Size: info.Size()}
+				if createErr := s.db.Create(&upload).Error; createErr != nil {
+					return fmt.Errorf("登记连续性帧失败: %w", createErr)
+				}
 			}
 			expected := filepath.ToSlash(filepath.Join(taskID, name))
 			if filepath.ToSlash(filepath.Clean(upload.Path)) != expected {

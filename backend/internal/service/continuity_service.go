@@ -76,12 +76,15 @@ func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, coun
 		}
 	}
 	candidates := make([]models.FrameCandidate, 0, count)
+	uploads := make([]models.UploadFile, 0, count)
 	for i := 1; i <= count; i++ {
 		name := fmt.Sprintf("%s%03d.png", prefix, i)
-		if _, err := s.remote.Stat(filepath.Join(inputDir, name)); err != nil {
+		info, err := s.remote.Stat(filepath.Join(inputDir, name))
+		if err != nil {
 			continue
 		}
 		candidates = append(candidates, models.FrameCandidate{ProjectID: projectID, SceneID: sceneID, VideoTaskID: scene.VideoTaskID, Type: models.FrameCandidateCandidate, FrameIndex: i - 1, TimestampMS: int64(i-count) * 1000 / 24, ImageFile: name, Source: "extracted"})
+		uploads = append(uploads, models.UploadFile{TaskID: fmt.Sprint(projectID), Type: "image", Name: name, Path: filepath.ToSlash(filepath.Join(fmt.Sprint(projectID), name)), Size: info.Size()})
 	}
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("ffmpeg未产生候选帧")
@@ -90,7 +93,13 @@ func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, coun
 		if err := tx.Where("scene_id = ?", sceneID).Delete(&models.FrameCandidate{}).Error; err != nil {
 			return err
 		}
-		return tx.Create(&candidates).Error
+		if err := tx.Where("task_id = ? AND name LIKE ?", fmt.Sprint(projectID), prefix+"%").Delete(&models.UploadFile{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&candidates).Error; err != nil {
+			return err
+		}
+		return tx.Create(&uploads).Error
 	})
 	return candidates, err
 }
@@ -227,6 +236,10 @@ func (s *ContinuityService) Get(projectID, sceneID uint) (*models.SceneContinuit
 	return &cfg, err
 }
 func (s *ContinuityService) PrepareScene(scene *models.Scene) error {
+	// 用户在视频提示词窗口明确指定首尾帧时，该选择优先于历史连续性配置。
+	if scene.VideoTemplate == "minimax_h3_first_last" && strings.TrimSpace(scene.VideoFirstFrameImg) != "" && strings.TrimSpace(scene.VideoLastFrameImg) != "" {
+		return nil
+	}
 	var cfg models.SceneContinuity
 	if err := s.db.Preload("SelectedFrame").Where("scene_id = ?", scene.ID).First(&cfg).Error; err == gorm.ErrRecordNotFound {
 		return nil

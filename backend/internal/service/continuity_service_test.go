@@ -61,6 +61,21 @@ func TestContinuitySelectAndConfigureContinue(t *testing.T) {
 	}
 }
 
+func TestManualFirstLastFramesOverrideStaleContinuityConfig(t *testing.T) {
+	svc, db := newContinuityTestService(t)
+	p := models.Project{Title: "p"}
+	db.Create(&p)
+	scene := models.Scene{ProjectID: p.ID, EpisodeN: 1, Generation: 1, Order: 2, VideoTemplate: "minimax_h3_first_last", VideoFirstFrameImg: "new-first.png", VideoLastFrameImg: "new-last.png"}
+	db.Create(&scene)
+	db.Create(&models.SceneContinuity{SceneID: scene.ID, Mode: models.ContinuityModeBridge, Status: "waiting"})
+	if err := svc.PrepareScene(&scene); err != nil {
+		t.Fatalf("manual first/last frames should override stale continuity: %v", err)
+	}
+	if scene.VideoFirstFrameImg != "new-first.png" || scene.VideoLastFrameImg != "new-last.png" {
+		t.Fatalf("manual frames were overwritten: %+v", scene)
+	}
+}
+
 func TestContinuityPreConfigureWithoutFrame(t *testing.T) {
 	svc, db := newContinuityTestService(t)
 	p := models.Project{Title: "p"}

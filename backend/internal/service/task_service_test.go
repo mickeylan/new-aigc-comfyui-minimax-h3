@@ -270,6 +270,35 @@ func TestUploadedFileTypeMustMatchTemplateInputFamily(t *testing.T) {
 	}
 }
 
+func TestLegacyContinuityFrameIsRegisteredOnUse(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.UploadFile{}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Comfy.ComfyDir = t.TempDir()
+	dir := filepath.Join(cfg.Comfy.ComfyDir, "input", "1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	name := "continuity_s1_old_022.png"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := &TaskService{cfg: cfg, db: db, remote: NewRemoteExec(config.RemoteConfig{})}
+	tpl := models.Template{InputsJSON: `[{"key":"first_frame","type":"image","label":"首帧"}]`}
+	if err := svc.validateUploadedFiles(&tpl, map[string][]FileMeta{"first_frame": {{TaskID: "1", Name: name}}}); err != nil {
+		t.Fatalf("legacy continuity frame should be recovered: %v", err)
+	}
+	var upload models.UploadFile
+	if err := db.Where("task_id = ? AND name = ?", "1", name).First(&upload).Error; err != nil || upload.Type != "image" {
+		t.Fatalf("continuity frame was not registered: %+v err=%v", upload, err)
+	}
+}
+
 func TestRankInstanceLoadsPrefersQueueThenVRAM(t *testing.T) {
 	loads := []instanceLoad{
 		{inst: models.Instance{GPUIndex: 0}, queueLen: 1, vramFree: 80, up: true},
