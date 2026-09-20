@@ -733,11 +733,12 @@
         <!-- 详细档案标签页（LumxAI 风格） -->
         <div v-if="charProfileTab === 'profile'">
           <div class="profile-hint">
-            <p>💡 AI 将从故事内容中提取角色的详细特征，生成包含外貌、性格、背景、关系等多维度的结构化档案。</p>
+            <p>💡 AI 将从故事内容中提取角色的详细特征；所有字段均可人工修改。已审核档案修改保存后会自动回到草稿状态。</p>
             <div class="profile-actions">
               <button class="btn btn-secondary btn-sm" :disabled="generatingProfile || editingCharacter === 'new'" @click="generateCharacterProfile">
                 {{ generatingProfile ? 'AI 生成中…' : '🤖 AI 生成完整档案' }}
               </button>
+              <button class="btn btn-sm" :disabled="busy || editingCharacter === 'new'" @click="saveCharacterProfile">{{ busy ? '保存中…' : '💾 保存详细档案' }}</button>
             </div>
           </div>
 
@@ -820,11 +821,12 @@
         <!-- 参考像提示词标签页 -->
         <div v-if="charProfileTab === 'prompt'">
           <div class="profile-hint">
-            <p>💡 基于角色档案生成适合当前角色标准像流程的高质量单人参考像提示词。</p>
+            <p>💡 可由 AI 生成，也可直接人工修改。保存后以文本框中的当前提示词为准；已审核档案会自动回到草稿状态。</p>
             <div class="profile-actions">
               <button class="btn btn-secondary btn-sm" :disabled="generatingPrompt || editingCharacter === 'new'" @click="generateReferencePrompt">
                 {{ generatingPrompt ? '生成中…' : '生成参考像提示词' }}
               </button>
+              <button class="btn btn-sm" :disabled="busy || editingCharacter === 'new'" @click="saveCharacterProfile">{{ busy ? '保存中…' : '💾 保存参考像提示词' }}</button>
             </div>
           </div>
 
