@@ -566,7 +566,7 @@ func (s *CharacterLookService) AssignSceneOutfits(projectID, sceneID uint, assig
 	if err := s.validateOutfitAssignments(projectID, assignments); err != nil {
 		return err
 	}
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("scene_id = ?", sceneID).Delete(&models.SceneCharacterOutfit{}).Error; err != nil {
 			return err
 		}
@@ -575,8 +575,14 @@ func (s *CharacterLookService) AssignSceneOutfits(projectID, sceneID uint, assig
 				return err
 			}
 		}
-		return nil
-	})
+		return tx.Model(&models.Scene{}).Where("id = ?", sceneID).Updates(map[string]any{
+			"image_file": "", "image_task_id": "", "video_file": "", "video_input_file": "", "video_task_id": "", "video_gpu": nil,
+			"prompt_stale": true, "status": "pending", "error": "",
+		}).Error
+	}); err != nil {
+		return err
+	}
+	return MarkSceneCandidatesStale(s.db, projectID, sceneID, "", "场景角色新形象已修改")
 }
 
 func (s *CharacterLookService) validateOutfitAssignments(projectID uint, assignments []OutfitAssignment) error {

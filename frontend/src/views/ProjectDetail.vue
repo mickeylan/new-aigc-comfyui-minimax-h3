@@ -2324,7 +2324,7 @@ async function openEditScene(sc) {
   }
 }
 
-function sceneCharactersForOutfits(sc=editingScene.value) { const names=String(sc?.characters||'').split(/[，,、]/).map(x=>x.trim()).filter(Boolean); return characters.value.filter(ch=>names.includes(ch.name)) }
+function sceneCharactersForOutfits(sc=editingScene.value) { const source=sc?.character_roles_set?(sc?.visible_characters||''):(sc?.characters||sc?.visible_characters||'');const names=String(source).split(/[，,、;；\n]/).map(x=>x.trim()).filter(Boolean);return characters.value.filter(ch=>names.includes(ch.name)) }
 function referenceKey(ref) { return `${ref.source_type}:${ref.source_id}:${ref.variant}` }
 function referenceIndex(ref) { const key = referenceKey(ref); return selectedSceneReferences.value.findIndex(x => referenceKey(x) === key) }
 function toggleSceneReference(ref) { const i = referenceIndex(ref); if (i >= 0) selectedSceneReferences.value.splice(i, 1); else selectedSceneReferences.value.push({ source_type: ref.source_type, source_id: ref.source_id, variant: ref.variant, use_krea2: true, use_h3: true }) }

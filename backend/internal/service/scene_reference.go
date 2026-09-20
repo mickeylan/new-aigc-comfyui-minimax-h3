@@ -48,6 +48,22 @@ func (s *ProjectService) sceneReferenceCandidates(sc *models.Scene) []SceneRefer
 	for _, look := range looks {
 		out = append(out, candidate("look", look.ID, "image", "造型「"+look.Name+"」（"+LookCategoryLabel(look.Category)+"）", "look", look.Image))
 	}
+	var outfits []models.CharacterOutfit
+	s.db.Preload("Character").Where("project_id = ? AND audit_status IN ?", pid, []models.CharacterLookStatus{models.LookStatusApproved, models.LookStatusPublished}).Order("character_id, id").Find(&outfits)
+	for _, outfit := range outfits {
+		image, variant := outfit.Sheet, "sheet"
+		if image == "" {
+			image, variant = outfit.Image, "image"
+		}
+		if image == "" {
+			continue
+		}
+		characterName := "角色"
+		if outfit.Character != nil {
+			characterName = outfit.Character.Name
+		}
+		out = append(out, candidate("outfit", outfit.ID, variant, "角色「"+characterName+"」新形象「"+outfit.Name+"」", "outfit", image))
+	}
 	var assets []models.Asset
 	s.db.Where("project_id = ?", pid).Order("kind, id").Find(&assets)
 	for _, a := range assets {
@@ -153,13 +169,27 @@ func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target st
 	for _, c := range s.sceneReferenceCandidates(sc) {
 		byKey[c.Key] = c
 	}
+	// 场景已分配的新形象是权威造型选择，即使用户保存过显式参考图列表也必须自动补入。
+	selectedKeys := make(map[string]bool, len(selected))
+	for _, r := range selected {
+		selectedKeys[referenceKey(r)] = true
+	}
+	for _, outfit := range s.sceneCharacterOutfits(sc) {
+		variant := "sheet"
+		if outfit.Sheet == "" {
+			variant = "image"
+		}
+		ref := SceneReferenceSelection{SourceType: "outfit", SourceID: outfit.ID, Variant: variant, UseKrea2: true, UseH3: true}
+		if !selectedKeys[referenceKey(ref)] {
+			selected = append(selected, ref)
+			selectedKeys[referenceKey(ref)] = true
+		}
+	}
 	if target == "krea2" { // legacy field name; this target is MiniMax H3 SelfLift scene generation
 		// 可见角色的身份参考是场景生成的必需输入。旧项目可能显式列表里只有场景图，
 		// 此时自动补四视图（标准像兜底），避免 H3 在没有人物参考时自行脑补。
-		selectedKeys := make(map[string]bool, len(selected))
 		selectedCharacterIDs := map[uint]bool{}
 		for _, r := range selected {
-			selectedKeys[referenceKey(r)] = true
 			if r.SourceType == "character" && r.UseKrea2 {
 				selectedCharacterIDs[r.SourceID] = true
 			}
@@ -185,7 +215,7 @@ func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target st
 			if r.SourceType == "character" {
 				return 0
 			}
-			if r.SourceType == "look" {
+			if r.SourceType == "outfit" || r.SourceType == "look" {
 				return 1
 			}
 			c, ok := byKey[referenceKey(r)]

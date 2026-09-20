@@ -9,7 +9,7 @@ import (
 
 func setupOutfitTestDB(t *testing.T) (*CharacterLookService, models.Project, models.Character) {
 	db := setupTestDB(t)
-	if err := db.AutoMigrate(&models.CharacterOutfit{}, &models.CharacterOutfitLook{}, &models.SceneCharacterOutfit{}, &models.ShotCharacterOutfit{}); err != nil {
+	if err := db.AutoMigrate(&models.CharacterOutfit{}, &models.CharacterOutfitLook{}, &models.SceneCharacterOutfit{}, &models.ShotCharacterOutfit{}, &models.GenerationCandidate{}); err != nil {
 		t.Fatal(err)
 	}
 	project := models.Project{Title: "多造型测试"}
@@ -165,6 +165,36 @@ func TestOutfitPromptUsesCharacterSheetAsSecondIdentityReference(t *testing.T) {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt missing %q: %s", expected, prompt)
 		}
+	}
+}
+
+func TestAssignedOutfitSheetIsAvailableAndForcedIntoExplicitSceneReferences(t *testing.T) {
+	svc, project, character := setupOutfitTestDB(t)
+	outfit := models.CharacterOutfit{ProjectID: project.ID, CharacterID: character.ID, Name: "新形象", AuditStatus: models.LookStatusApproved, Image: "new-look.png", Sheet: "new-look-sheet.png"}
+	if err := svc.db.Create(&outfit).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Generation: 1, Title: "场景", Characters: character.Name, ReferenceImagesJSON: "[]"}
+	if err := svc.db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.AssignSceneOutfits(project.ID, scene.ID, []OutfitAssignment{{CharacterID: character.ID, OutfitID: outfit.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	ps := &ProjectService{db: svc.db}
+	candidates := ps.sceneReferenceCandidates(&scene)
+	found := false
+	for _, candidate := range candidates {
+		if candidate.SourceType == "outfit" && candidate.SourceID == outfit.ID && candidate.Variant == "sheet" && candidate.Image == outfit.Sheet {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("new outfit sheet missing from candidates: %#v", candidates)
+	}
+	refs, lines, explicit := ps.selectedSceneReferenceFiles(&scene, "h3")
+	if !explicit || len(refs) != 1 || refs[0].Name != outfit.Sheet || !strings.Contains(lines[0], "新形象") {
+		t.Fatalf("assigned outfit not forced into references: refs=%#v lines=%#v explicit=%v", refs, lines, explicit)
 	}
 }
 
