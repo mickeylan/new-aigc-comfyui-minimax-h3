@@ -169,6 +169,28 @@ func TestOutfitPromptUsesCharacterSheetAsSecondIdentityReference(t *testing.T) {
 	}
 }
 
+func TestExplicitOutfitReferenceRemovesSameCharacterBaseSheet(t *testing.T) {
+	svc, project, character := setupOutfitTestDB(t)
+	character.Sheet = "old-character-sheet.png"
+	if err := svc.db.Save(&character).Error; err != nil {
+		t.Fatal(err)
+	}
+	outfit := models.CharacterOutfit{ProjectID: project.ID, CharacterID: character.ID, Name: "现代衣着造型", AuditStatus: models.LookStatusApproved, Sheet: "modern-sheet.png"}
+	if err := svc.db.Create(&outfit).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID, Characters: character.Name, ReferenceImagesJSON: fmt.Sprintf(`[{"source_type":"outfit","source_id":%d,"variant":"sheet","use_krea2":true,"use_h3":true},{"source_type":"character","source_id":%d,"variant":"sheet","use_krea2":true,"use_h3":true}]`, outfit.ID, character.ID)}
+	ps := &ProjectService{db: svc.db}
+	refs, lines, explicit := ps.selectedSceneReferenceFiles(&scene, "krea2")
+	if !explicit || len(refs) != 1 || refs[0].Name != outfit.Sheet || strings.Contains(strings.Join(lines, "\n"), "角色「"+character.Name+"」四视图") {
+		t.Fatalf("base Subject was not removed: refs=%#v lines=%#v", refs, lines)
+	}
+	normalized := ps.normalizeSceneReferences(project.ID, []SceneReferenceSelection{{SourceType: "outfit", SourceID: outfit.ID, Variant: "sheet"}, {SourceType: "character", SourceID: character.ID, Variant: "sheet"}})
+	if len(normalized) != 1 || normalized[0].SourceType != "outfit" {
+		t.Fatalf("saved refs were not normalized: %#v", normalized)
+	}
+}
+
 func TestAssignedOutfitSheetIsAvailableAndForcedIntoExplicitSceneReferences(t *testing.T) {
 	svc, project, character := setupOutfitTestDB(t)
 	outfit := models.CharacterOutfit{ProjectID: project.ID, CharacterID: character.ID, Name: "新形象", AuditStatus: models.LookStatusApproved, Image: "new-look.png", Sheet: "new-look-sheet.png"}

@@ -115,7 +115,37 @@ func parseSceneReferences(sc *models.Scene) ([]SceneReferenceSelection, bool) {
 	return refs, true
 }
 
+// normalizeSceneReferences makes a selected complete outfit authoritative for that character.
+// A complete outfit image/sheet already contains identity and styling, so keeping the old
+// character portrait/sheet creates two competing Subjects for the same person.
+func (s *ProjectService) normalizeSceneReferences(projectID uint, refs []SceneReferenceSelection) []SceneReferenceSelection {
+	outfitIDs := make([]uint, 0)
+	for _, ref := range refs {
+		if ref.SourceType == "outfit" {
+			outfitIDs = append(outfitIDs, ref.SourceID)
+		}
+	}
+	if len(outfitIDs) == 0 {
+		return refs
+	}
+	var outfits []models.CharacterOutfit
+	s.db.Where("project_id = ? AND id IN ?", projectID, outfitIDs).Find(&outfits)
+	replacedCharacters := map[uint]bool{}
+	for _, outfit := range outfits {
+		replacedCharacters[outfit.CharacterID] = true
+	}
+	filtered := make([]SceneReferenceSelection, 0, len(refs))
+	for _, ref := range refs {
+		if ref.SourceType == "character" && replacedCharacters[ref.SourceID] {
+			continue
+		}
+		filtered = append(filtered, ref)
+	}
+	return filtered
+}
+
 func (s *ProjectService) SaveSceneReferences(sc *models.Scene, refs []SceneReferenceSelection) error {
+	refs = s.normalizeSceneReferences(sc.ProjectID, refs)
 	candidates := s.sceneReferenceCandidates(sc)
 	allowed := make(map[string]bool, len(candidates))
 	for _, c := range candidates {
@@ -165,6 +195,7 @@ func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target st
 	if !explicit {
 		return nil, nil, false
 	}
+	selected = s.normalizeSceneReferences(sc.ProjectID, selected)
 	byKey := map[string]SceneReferenceCandidate{}
 	for _, c := range s.sceneReferenceCandidates(sc) {
 		byKey[c.Key] = c
@@ -210,9 +241,20 @@ func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target st
 		// 可见角色的身份参考是场景生成的必需输入。旧项目可能显式列表里只有场景图，
 		// 此时自动补四视图（标准像兜底），避免 H3 在没有人物参考时自行脑补。
 		selectedCharacterIDs := map[uint]bool{}
+		selectedOutfitIDs := make([]uint, 0)
 		for _, r := range selected {
 			if r.SourceType == "character" && r.UseKrea2 {
 				selectedCharacterIDs[r.SourceID] = true
+			}
+			if r.SourceType == "outfit" && r.UseKrea2 {
+				selectedOutfitIDs = append(selectedOutfitIDs, r.SourceID)
+			}
+		}
+		if len(selectedOutfitIDs) > 0 {
+			var selectedOutfits []models.CharacterOutfit
+			s.db.Where("project_id = ? AND id IN ?", sc.ProjectID, selectedOutfitIDs).Find(&selectedOutfits)
+			for _, outfit := range selectedOutfits {
+				selectedCharacterIDs[outfit.CharacterID] = true
 			}
 		}
 		assignedOutfits := s.sceneOutfitsByCharacter(sc)
