@@ -136,6 +136,35 @@ func TestReferenceFilesExpandToIndexedPlaceholders(t *testing.T) {
 	}
 }
 
+func TestLookReferenceWorkflowBindsPortraitAsPictureOne(t *testing.T) {
+	tpl := loadTemplateForTest(t, "minimax_h3_look_reference.json")
+	params := baseParams()
+	files := map[string][]FileMeta{"ref_images": {
+		{TaskID: "7", Name: "character-portrait.png"},
+		{TaskID: "7", Name: "new-clothing.png"},
+	}}
+	if err := normalizeTemplateFiles(&tpl, params, files); err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := (&TaskService{}).RenderWorkflow(&tpl, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ node, name string }{{"137", "7/character-portrait.png"}, {"139", "7/new-clothing.png"}} {
+		node := workflow[tc.node].(map[string]any)
+		if got := node["inputs"].(map[string]any)["image"]; got != tc.name {
+			t.Fatalf("node %s image=%#v, want %s", tc.node, got, tc.name)
+		}
+	}
+	refInputs := workflow["416"].(map[string]any)["inputs"].(map[string]any)
+	if _, nested := refInputs["ref_images"]; nested {
+		t.Fatalf("SelfLift Autogrow inputs must be flat, got nested ref_images: %#v", refInputs)
+	}
+	if got := refInputs["ref_images.ref_image_0"].([]any)[0]; got != "137" {
+		t.Fatalf("Picture 1 is not portrait node: %#v", got)
+	}
+}
+
 func TestRef2VWorkflowConnectsAllThreeImagesInOrder(t *testing.T) {
 	tpl := loadTemplateForTest(t, "minimax_h3_ref2v.json")
 	params := baseParams()
