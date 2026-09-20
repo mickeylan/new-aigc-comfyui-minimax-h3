@@ -13,6 +13,7 @@
         <button class="btn btn-ghost btn-sm" :disabled="epIndex <= 0" @click="switchEp(-1)">← 上一集</button>
         <button class="btn btn-ghost btn-sm" :disabled="epIndex >= epCount - 1" @click="switchEp(1)">下一集 →</button>
         <button class="btn btn-ghost btn-sm" @click="createEpisode">新建集</button>
+        <button class="btn btn-ghost btn-sm" @click="showCharacterHistory = true">角色历史</button>
         <button class="btn btn-ghost btn-sm" @click="deleteEpisode">删除空集</button>
         <label class="merge-opt"><input type="checkbox" v-model="mergeSub" />烧录字幕</label>
         <label class="merge-opt"><input type="checkbox" v-model="mergeDub" />保留原声</label>
@@ -211,14 +212,16 @@
     <ShotDirectorEditor v-if="selected" :project-id="id()" :scene-id="selected.id" :genre="project?.genre || ''" :tone="project?.tone || ''" :scene-title="selected.title || ''" :scene-content="selected.content || ''" @scene-changed="reloadSelectedScene" />
 
     <section class="section">
-      <div class="section-head"><div><span class="overline">SHARED ASSETS</span><h2>共享资产继承</h2><p class="sub">显式引用全局/项目素材，可限定当前场景；生成参考图候选会读取有效引用。</p></div><button class="btn btn-sm btn-secondary" @click="addSharedAsset">引用素材</button></div>
-      <div class="card" v-if="sharedAssets.length"><div v-for="asset in sharedAssets" :key="asset.material.id" class="merge-item"><strong>{{ asset.material.name }}</strong><span>{{ asset.material.type }} · {{ asset.references?.length || 0 }}个引用</span></div></div><div class="card empty" v-else>暂无有效共享资产。</div>
+      <div class="section-head"><div><span class="overline">SHARED ASSETS</span><h2>共享资产引用</h2><p class="sub">创建、修改或删除项目、场景和镜头级素材引用。</p></div><button class="btn btn-sm btn-secondary" @click="editSharedAsset()">引用素材</button></div>
+      <div class="card" v-if="sharedAssetReferences.length"><div v-for="refRow in sharedAssetReferences" :key="refRow.id" class="merge-item"><div class="merge-info"><strong>{{ refRow.material?.name || `素材 #${refRow.material_id}` }}</strong><span>{{ refRow.mode }} · {{ refRow.shot_id ? `镜头 #${refRow.shot_id}` : refRow.scene_id ? `场景 #${refRow.scene_id}` : '项目级' }}</span></div><div class="merge-links"><button class="btn btn-sm btn-ghost" @click="editSharedAsset(refRow)">编辑</button><button class="btn btn-sm btn-danger" @click="removeSharedAsset(refRow)">删除</button></div></div></div><div class="card empty" v-else>暂无共享资产引用。</div>
+      <form v-if="sharedAssetEditing" class="card inline-form" @submit.prevent="saveSharedAsset"><label>素材<select v-model.number="sharedAssetForm.material_id" class="input" required><option value="">请选择</option><option v-for="m in materials" :key="m.id" :value="m.id">{{ m.name }} · {{ m.type }}</option></select></label><label>模式<select v-model="sharedAssetForm.mode" class="input"><option value="live">实时引用</option><option value="copy">项目副本</option></select></label><label>范围<select v-model="sharedAssetForm.scope" class="input"><option value="project">项目</option><option value="scene" :disabled="!selected">当前场景</option></select></label><div class="section-actions"><button class="btn btn-sm">保存</button><button type="button" class="btn btn-sm btn-ghost" @click="sharedAssetEditing=false">取消</button></div></form>
     </section>
 
     <section class="section">
-      <div class="section-head"><div><span class="overline">AUDIO LAYERS</span><h2>环境声 / 音效 / BGM</h2><p class="sub">填写项目 input 目录内的音频文件名，合并时按时间与音量混入。</p></div><button class="btn btn-sm btn-secondary" @click="addAudioLayer">新增音频层</button></div>
-      <div class="card" v-if="audioLayers.length"><div v-for="layer in audioLayers" :key="layer.id" class="merge-item"><div class="merge-info"><span class="badge badge-gray">{{ layer.kind }}</span><strong>{{ layer.name || layer.file }}</strong><span>{{ layer.start_time }}s → {{ layer.end_time }}s · 音量{{ layer.volume }}</span></div><button class="btn btn-sm btn-ghost" @click="removeAudioLayer(layer)">删除</button></div></div>
+      <div class="section-head"><div><span class="overline">AUDIO LAYERS</span><h2>环境声 / 音效 / BGM</h2><p class="sub">完整编辑范围、淡入淡出、循环、静音与状态。</p></div><button class="btn btn-sm btn-secondary" @click="editAudioLayer()">新增音频层</button></div>
+      <div class="card" v-if="audioLayers.length"><div v-for="layer in audioLayers" :key="layer.id" class="merge-item"><div class="merge-info"><span class="badge badge-gray">{{ layer.kind }}</span><strong>{{ layer.name || layer.file }}</strong><span>{{ layer.start_time }}s → {{ layer.end_time }}s · 音量{{ layer.volume }} · 淡入/出 {{ layer.fade_in }}/{{ layer.fade_out }}s<span v-if="layer.loop"> · 循环</span><span v-if="layer.muted"> · 已静音</span></span></div><div class="merge-links"><button class="btn btn-sm btn-ghost" @click="editAudioLayer(layer)">编辑</button><button class="btn btn-sm btn-danger" @click="removeAudioLayer(layer)">删除</button></div></div></div>
       <div class="card empty" v-else>暂无音频层。</div>
+      <form v-if="audioLayerEditing" class="card inline-form audio-form" @submit.prevent="saveAudioLayer"><label>类型<select v-model="audioLayerForm.kind" class="input"><option value="soundscape">环境声</option><option value="sfx">音效</option><option value="bgm">BGM</option></select></label><label>名称<input v-model="audioLayerForm.name" class="input"></label><label>文件<input v-model="audioLayerForm.file" class="input" required></label><label>场景<select v-model="audioLayerForm.scene_id" class="input"><option :value="null">整集</option><option v-for="sc in scenes" :key="sc.id" :value="sc.id">场景 {{ sc.order }} · {{ sc.title }}</option></select></label><label>开始秒<input v-model.number="audioLayerForm.start_time" type="number" min="0" step="0.1" class="input" required></label><label>结束秒<input v-model.number="audioLayerForm.end_time" type="number" min="0.1" step="0.1" class="input" required></label><label>音量<input v-model.number="audioLayerForm.volume" type="number" min="0" max="2" step="0.1" class="input"></label><label>淡入<input v-model.number="audioLayerForm.fade_in" type="number" min="0" step="0.1" class="input"></label><label>淡出<input v-model.number="audioLayerForm.fade_out" type="number" min="0" step="0.1" class="input"></label><label>状态<select v-model="audioLayerForm.status" class="input"><option value="draft">草稿</option><option value="ready">就绪</option><option value="failed">失败</option></select></label><label class="check"><input v-model="audioLayerForm.loop" type="checkbox"> 循环</label><label class="check"><input v-model="audioLayerForm.muted" type="checkbox"> 静音</label><label class="wide">说明<textarea v-model="audioLayerForm.description" class="textarea" rows="2"></textarea></label><div class="section-actions wide"><button class="btn btn-sm">保存</button><button type="button" class="btn btn-sm btn-ghost" @click="audioLayerEditing=false">取消</button></div></form>
     </section>
 
     <section class="section" v-if="selected">
@@ -229,12 +232,14 @@
           <img v-if="candidate.media_type === 'image'" :src="candidateUrl(candidate)" class="tl-thumb" />
           <video v-else :src="candidateUrl(candidate)" controls preload="metadata" class="merge-video"></video>
           <div class="merge-info"><span class="badge" :class="candidate.is_current ? 'badge-green' : candidate.review_status === 'rejected' ? 'badge-red' : 'badge-gray'">{{ candidate.media_type }} · {{ candidate.is_current ? '当前' : candidate.review_status }}</span><span>{{ candidate.file }}</span><span v-if="candidate.stale" class="fail-msg">已过期：{{ candidate.stale_reason }}</span></div>
-          <div class="merge-links"><button class="btn btn-sm btn-secondary" :disabled="candidate.is_current || candidate.stale" @click="selectCandidate(candidate)">设为当前</button><button class="btn btn-sm btn-secondary" @click="retryCandidate(candidate)">同参数重试</button><button class="btn btn-sm btn-secondary" :disabled="candidate.stale" @click="branchCandidate(candidate)">基于候选分支</button><button class="btn btn-sm btn-ghost" :disabled="candidate.review_status === 'rejected'" @click="rejectCandidate(candidate)">拒绝</button></div>
+          <div class="merge-links"><button class="btn btn-sm btn-secondary" :disabled="candidate.is_current || candidate.stale" @click="selectCandidate(candidate)">设为当前</button><button class="btn btn-sm btn-secondary" @click="retryCandidate(candidate)">同参数重试</button><button class="btn btn-sm btn-secondary" :disabled="candidate.stale" @click="branchCandidate(candidate)">基于候选分支</button><button class="btn btn-sm btn-ghost" :disabled="candidate.review_status === 'rejected'" @click="rejectCandidate(candidate)">拒绝</button><button class="btn btn-sm btn-danger" :disabled="candidate.is_current" @click="removeCandidate(candidate)">删除</button></div>
         </div>
         <div v-if="compareCandidates.length === 2" class="editor-split"><div v-for="c in compareCandidates" :key="c.id" class="preview-card"><img v-if="c.media_type === 'image'" :src="candidateUrl(c)" class="editor-image" /><video v-else :src="candidateUrl(c)" controls class="editor-video"></video><pre class="prompt-preview">{{ c.prompt_snapshot }}</pre></div></div>
       </div>
       <div class="card empty" v-else>当前还没有可审核候选；已有场景结果会在刷新时自动纳入。</div>
     </section>
+
+    <CharacterHistoryDrawer :project-id="id()" :open="showCharacterHistory" @close="showCharacterHistory=false" />
 
     <!-- 帧选择弹窗 -->
     <div v-if="showFrameSelector && selected" class="modal-overlay" @click.self="showFrameSelector = false">
@@ -285,6 +290,7 @@ import { api } from '../api'
 import { useToastStore } from '../stores/toast'
 import ShotDirectorEditor from '../components/ShotDirectorEditor.vue'
 import FrameSelector from '../components/FrameSelector.vue'
+import CharacterHistoryDrawer from '../components/CharacterHistoryDrawer.vue'
 import { compatibleSkills, projectSkillConfig, skillOperationOf } from '../utils/directorWorkflow.js'
 
 const route = useRoute()
@@ -299,7 +305,13 @@ const merges = ref([])
 const candidates = ref([])
 const compareCandidateIds = ref([])
 const audioLayers = ref([])
-const sharedAssets = ref([])
+const audioLayerEditing = ref(false)
+const audioLayerForm = reactive({})
+const sharedAssetReferences = ref([])
+const materials = ref([])
+const sharedAssetEditing = ref(false)
+const sharedAssetForm = reactive({})
+const showCharacterHistory = ref(false)
 const continuity = ref(null)
 const intentDraft = ref('')
 const visualBeatDraft = ref('')
@@ -683,28 +695,38 @@ async function runCreativeIntent() {
 }
 
 async function loadSharedAssets() {
-  try { const { data } = await api.effectiveSharedAssets(id(), selected.value ? { scene_id: selected.value.id } : {}); sharedAssets.value = data || [] }
-  catch { sharedAssets.value = [] }
+  try {
+    const [refs, mats] = await Promise.all([api.sharedAssetReferences(id()), api.materials({ project_id: id() })])
+    sharedAssetReferences.value = refs.data || []
+    materials.value = mats.data || []
+  } catch { sharedAssetReferences.value = [] }
 }
-async function addSharedAsset() {
-  const materialId = Number(window.prompt('素材库Material ID', '')); if (!materialId) return
-  const mode = window.prompt('引用模式：live 或 copy', 'live') || 'live'
-  const sceneOnly = selected.value && window.confirm('仅引用到当前场景？')
-  try { await api.createSharedAssetReference(id(), { material_id: materialId, mode, scene_id: sceneOnly ? selected.value.id : null }); toast.success('共享资产引用已创建'); await loadSharedAssets() }
-  catch (e) { toast.error(e.response?.data?.error || '引用失败') }
+function editSharedAsset(row = null) {
+  Object.assign(sharedAssetForm, { id: row?.id || 0, material_id: row?.material_id || '', mode: row?.mode || 'live', scope: row?.scene_id ? 'scene' : 'project' })
+  sharedAssetEditing.value = true
+}
+async function saveSharedAsset() {
+  const payload = { material_id: Number(sharedAssetForm.material_id), mode: sharedAssetForm.mode, scene_id: sharedAssetForm.scope === 'scene' ? selected.value?.id : null, shot_id: null }
+  try { sharedAssetForm.id ? await api.updateSharedAssetReference(id(), sharedAssetForm.id, payload) : await api.createSharedAssetReference(id(), payload); sharedAssetEditing.value = false; toast.success('共享资产引用已保存'); await loadSharedAssets() }
+  catch (e) { toast.error(e.response?.data?.error || '保存引用失败') }
+}
+async function removeSharedAsset(row) {
+  if (!window.confirm(`删除共享资产引用“${row.material?.name || row.material_id}”？`)) return
+  try { await api.deleteSharedAssetReference(id(), row.id); await loadSharedAssets() } catch (e) { toast.error(e.response?.data?.error || '删除引用失败') }
 }
 
 async function loadAudioLayers() {
   try { const { data } = await api.audioLayers(id(), activeEpN.value); audioLayers.value = data || [] }
   catch (e) { toast.error(e.response?.data?.error || '加载音频层失败') }
 }
-async function addAudioLayer() {
-  const kind = window.prompt('类型：soundscape / sfx / bgm', 'bgm'); if (!kind) return
-  const file = window.prompt('项目 input 目录中的音频文件名', ''); if (!file) return
-  const name = window.prompt('名称', file) || file
-  const start = Number(window.prompt('开始秒数', '0')); const end = Number(window.prompt('结束秒数', String(targetDuration.value || 180))); const volume = Number(window.prompt('音量（0~2）', '1'))
-  try { await api.createAudioLayer(id(), { episode_n: activeEpN.value, kind, name, file, start_time: start, end_time: end, volume, status: 'ready' }); toast.success('音频层已添加'); await loadAudioLayers() }
-  catch (e) { toast.error(e.response?.data?.error || '添加音频层失败') }
+function editAudioLayer(layer = null) {
+  Object.assign(audioLayerForm, { id: layer?.id || 0, episode_n: activeEpN.value, scene_id: layer?.scene_id || null, kind: layer?.kind || 'bgm', name: layer?.name || '', file: layer?.file || '', description: layer?.description || '', start_time: layer?.start_time ?? 0, end_time: layer?.end_time ?? targetDuration.value, volume: layer?.volume ?? 1, fade_in: layer?.fade_in ?? 0, fade_out: layer?.fade_out ?? 0, loop: !!layer?.loop, muted: !!layer?.muted, status: layer?.status || 'ready' })
+  audioLayerEditing.value = true
+}
+async function saveAudioLayer() {
+  const { id: layerId, ...payload } = audioLayerForm
+  try { layerId ? await api.updateAudioLayer(id(), layerId, payload) : await api.createAudioLayer(id(), payload); audioLayerEditing.value = false; toast.success('音频层已保存'); await loadAudioLayers() }
+  catch (e) { toast.error(e.response?.data?.error || '保存音频层失败') }
 }
 async function removeAudioLayer(layer) {
   if (!window.confirm(`删除音频层“${layer.name || layer.file}”？`)) return
@@ -732,6 +754,11 @@ async function branchCandidate(candidate) {
 async function selectCandidate(candidate) {
   try { await api.selectCandidate(id(), candidate.id); toast.success('已设为当前候选'); await load() }
   catch (e) { toast.error(e.response?.data?.error || '选择候选失败') }
+}
+async function removeCandidate(candidate) {
+  if (!window.confirm(`永久删除候选“${candidate.file}”？文件也可能被清理。`)) return
+  try { await api.deleteCandidate(id(), candidate.id); compareCandidateIds.value = compareCandidateIds.value.filter(v => v !== candidate.id); toast.success('候选已删除'); await loadCandidates() }
+  catch (e) { toast.error(e.response?.data?.error || '候选无法删除') }
 }
 async function rejectCandidate(candidate) {
   const reason = window.prompt('请输入拒绝原因', candidate.review_reason || '')
@@ -891,4 +918,10 @@ onUnmounted(() => { clearInterval(timer) })
   width: 90vw;
   max-width: 1000px;
 }
+.inline-form { margin-top: 12px; padding: 16px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.inline-form label { display: grid; gap: 5px; color: var(--text-secondary); font-size: 12px; }
+.audio-form { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.audio-form .wide { grid-column: 1 / -1; }
+.audio-form .check { display: flex; align-items: center; }
+@media (max-width: 760px) { .inline-form, .audio-form { grid-template-columns: 1fr 1fr; } }
 </style>

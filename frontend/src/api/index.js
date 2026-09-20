@@ -112,6 +112,7 @@ export const api = {
   selectCandidate: (id, cid) => http.post(`/projects/${id}/candidates/${cid}/select`),
   branchCandidate: (id, cid) => http.post(`/projects/${id}/candidates/${cid}/branch`),
   retryCandidate: (id, cid) => http.post(`/projects/${id}/candidates/${cid}/retry`),
+  deleteCandidate: (id, cid) => http.delete(`/projects/${id}/candidates/${cid}`),
   uploadSceneImage: (id, sid, file) => {
     const fd = new FormData()
     fd.append('file', file)
@@ -176,7 +177,12 @@ export const api = {
   updateSceneReferences: (id, sid, references) => http.put(`/projects/${id}/scenes/${sid}/references`, { references }),
   sceneOutfits: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/outfits`),
   updateSceneOutfits: (id, sid, outfits) => http.put(`/projects/${id}/scenes/${sid}/outfits`, { outfits }),
+  characterLooks: (id, cid) => http.get(`/projects/${id}/characters/${cid}/looks`),
   characterOutfits: (id, cid) => http.get(`/projects/${id}/characters/${cid}/outfits`),
+  shotLooks: (id, shotId) => http.get(`/projects/${id}/shots/${shotId}/looks`),
+  updateShotLooks: (id, shotId, looks) => http.put(`/projects/${id}/shots/${shotId}/looks`, { looks }),
+  shotOutfits: (id, shotId) => http.get(`/projects/${id}/shots/${shotId}/outfits`),
+  updateShotOutfits: (id, shotId, outfits) => http.put(`/projects/${id}/shots/${shotId}/outfits`, { outfits }),
   // 视觉资产（kind: prop=道具 / location=场景）
   assets: (id, kind) => http.get(`/projects/${id}/assets/${kind}`),
   redesignAssetDescription: (id, kind, data) => http.post(`/projects/${id}/assets/${kind}/redesign`, data, { timeout: 300000 }),
