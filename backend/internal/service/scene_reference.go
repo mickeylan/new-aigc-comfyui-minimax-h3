@@ -174,7 +174,28 @@ func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target st
 	for _, r := range selected {
 		selectedKeys[referenceKey(r)] = true
 	}
-	for _, outfit := range s.sceneCharacterOutfits(sc) {
+	assignedOutfitList := s.sceneCharacterOutfits(sc)
+	assignedOutfits := map[uint]models.CharacterOutfit{}
+	for _, outfit := range assignedOutfitList {
+		assignedOutfits[outfit.CharacterID] = outfit
+	}
+	if len(assignedOutfits) > 0 {
+		filtered := selected[:0]
+		for _, ref := range selected {
+			if ref.SourceType == "character" {
+				if _, replacedByOutfit := assignedOutfits[ref.SourceID]; replacedByOutfit {
+					continue
+				}
+			}
+			filtered = append(filtered, ref)
+		}
+		selected = filtered
+		selectedKeys = make(map[string]bool, len(selected))
+		for _, ref := range selected {
+			selectedKeys[referenceKey(ref)] = true
+		}
+	}
+	for _, outfit := range assignedOutfitList {
 		variant := "sheet"
 		if outfit.Sheet == "" {
 			variant = "image"
@@ -194,8 +215,12 @@ func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target st
 				selectedCharacterIDs[r.SourceID] = true
 			}
 		}
+		assignedOutfits := s.sceneOutfitsByCharacter(sc)
 		for _, ch := range s.sceneCharacterPortraits(sc) {
 			if selectedCharacterIDs[ch.ID] {
+				continue
+			}
+			if _, selectedOutfit := assignedOutfits[ch.ID]; selectedOutfit {
 				continue
 			}
 			variant := "sheet"
@@ -212,10 +237,10 @@ func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target st
 		priority := func(r SceneReferenceSelection) int {
 			// SelfLift 对前序图片权重更敏感：人物身份图必须先于环境图，
 			// 否则模型容易复刻空场景而忽略动作主体。
-			if r.SourceType == "character" {
+			if r.SourceType == "character" || r.SourceType == "outfit" {
 				return 0
 			}
-			if r.SourceType == "outfit" || r.SourceType == "look" {
+			if r.SourceType == "look" {
 				return 1
 			}
 			c, ok := byKey[referenceKey(r)]

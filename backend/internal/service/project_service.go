@@ -2129,7 +2129,11 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 		appendStoryboard()
 		return refs, lines
 	}
+	selectedOutfits := s.sceneOutfitsByCharacter(sc)
 	for _, ch := range s.sceneCharacterPortraits(sc) {
+		if _, selected := selectedOutfits[ch.ID]; selected {
+			continue
+		}
 		if len(refs) >= maxSceneReferenceImages-1 {
 			break
 		}
@@ -3124,6 +3128,21 @@ func buildH3StoryboardPrompt(sc *models.Scene, p *models.Project, referenceLines
 		"\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"
 }
 
+func outfitReferenceFile(outfit models.CharacterOutfit) string {
+	if outfit.Sheet != "" {
+		return outfit.Sheet
+	}
+	return outfit.Image
+}
+
+func (s *ProjectService) sceneOutfitsByCharacter(sc *models.Scene) map[uint]models.CharacterOutfit {
+	out := map[uint]models.CharacterOutfit{}
+	for _, outfit := range s.sceneCharacterOutfits(sc) {
+		out[outfit.CharacterID] = outfit
+	}
+	return out
+}
+
 func (s *ProjectService) missingSceneCharacterReferences(sc *models.Scene, refs []FileMeta) []string {
 	present := map[string]bool{}
 	for _, ref := range refs {
@@ -3139,10 +3158,20 @@ func (s *ProjectService) missingSceneCharacterReferences(sc *models.Scene, refs 
 	for _, ch := range chars {
 		byName[ch.Name] = ch
 	}
+	outfits := s.sceneOutfitsByCharacter(sc)
 	missing := []string{}
 	for _, name := range names {
 		ch, ok := byName[name]
 		if !ok || !s.sceneHasCharacter(sc, name) {
+			continue
+		}
+		// 场景显式选择新形象后，该套装定妆照/四视图就是完整人物视觉参考，
+		// 不再强制同时提交角色旧标准像或旧四视图。
+		if outfit, selected := outfits[ch.ID]; selected {
+			file := outfitReferenceFile(outfit)
+			if file == "" || !present[file] {
+				missing = append(missing, name+"（所选新形象缺少定妆照或四视图）")
+			}
 			continue
 		}
 		file := ch.Sheet
@@ -3247,7 +3276,11 @@ func (s *ProjectService) sceneImageReferenceFiles(sc *models.Scene) ([]FileMeta,
 	refs := make([]FileMeta, 0, maxSceneReferenceImages)
 	lines := make([]string, 0, maxSceneReferenceImages)
 	assets := s.sceneMatchedAssets(sc)
+	selectedOutfits := s.sceneOutfitsByCharacter(sc)
 	for _, ch := range s.sceneCharacterPortraits(sc) {
+		if _, selected := selectedOutfits[ch.ID]; selected {
+			continue
+		}
 		if len(refs) >= maxSceneReferenceImages {
 			break
 		}

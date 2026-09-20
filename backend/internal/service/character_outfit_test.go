@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -174,7 +175,7 @@ func TestAssignedOutfitSheetIsAvailableAndForcedIntoExplicitSceneReferences(t *t
 	if err := svc.db.Create(&outfit).Error; err != nil {
 		t.Fatal(err)
 	}
-	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Generation: 1, Title: "场景", Characters: character.Name, ReferenceImagesJSON: "[]"}
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Generation: 1, Title: "场景", Characters: character.Name, ReferenceImagesJSON: fmt.Sprintf(`[{"source_type":"character","source_id":%d,"variant":"portrait","use_krea2":true,"use_h3":true}]`, character.ID)}
 	if err := svc.db.Create(&scene).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +195,15 @@ func TestAssignedOutfitSheetIsAvailableAndForcedIntoExplicitSceneReferences(t *t
 	}
 	refs, lines, explicit := ps.selectedSceneReferenceFiles(&scene, "h3")
 	if !explicit || len(refs) != 1 || refs[0].Name != outfit.Sheet || !strings.Contains(lines[0], "新形象") {
-		t.Fatalf("assigned outfit not forced into references: refs=%#v lines=%#v explicit=%v", refs, lines, explicit)
+		t.Fatalf("assigned outfit did not replace old character reference: refs=%#v lines=%#v explicit=%v", refs, lines, explicit)
+	}
+	if missing := ps.missingSceneCharacterReferences(&scene, refs); len(missing) != 0 {
+		t.Fatalf("complete selected outfit should satisfy character reference: %v", missing)
+	}
+	scene.ReferenceImagesJSON = ""
+	autoRefs, autoLines := ps.sceneImageReferenceFiles(&scene)
+	if len(autoRefs) != 1 || autoRefs[0].Name != outfit.Sheet || strings.Contains(strings.Join(autoLines, "\n"), "角色「"+character.Name+"」四视图") {
+		t.Fatalf("automatic scene refs should use only selected outfit: refs=%#v lines=%#v", autoRefs, autoLines)
 	}
 }
 
