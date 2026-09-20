@@ -23,3 +23,11 @@ test('角色造型页支持从链接直接打开新资产表单并说明使用�
   assert.match(looks, /推荐流程/)
   assert.match(looks, /本场角色造型套装/)
 })
+
+test('新形象图片支持点击查看大图', () => {
+  assert.match(looks, /openViewer\(o\.image/)
+  assert.match(looks, /openViewer\(o\.sheet/)
+  assert.match(looks, /class="look-viewer-mask"/)
+  assert.match(looks, /role="dialog"/)
+  assert.match(looks, /event\.key==='Escape'/)
+})
