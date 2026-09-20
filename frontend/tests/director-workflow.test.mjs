@@ -27,6 +27,14 @@ test('视频提示词首尾帧支持连续性帧、当前分镜和自定义上�
   assert.match(source, /api\.uploadSceneVideoFrame/)
 })
 
+test('场景在剪辑台可切换普通与巨构视觉类型', () => {
+  const source = readFileSync(new URL('../src/views/ProjectEditor.vue', import.meta.url), 'utf8')
+  assert.match(source, /巨构场景（专项增强）/)
+  assert.match(source, /v-model="megaTypeInput"/)
+  assert.match(source, /saveSceneVisualType/)
+  assert.match(source, /visual_type: visualTypeInput\.value/)
+})
+
 test('剪辑台保留三个高级导演审查入口和视觉节拍应用入口', () => {
   const source = readFileSync(new URL('../src/views/ProjectEditor.vue', import.meta.url), 'utf8')
   for (const handler of ['runVisualBeats', 'runAssetContinuityReview', 'runCoverageReview', 'applyVisualBeats']) {
