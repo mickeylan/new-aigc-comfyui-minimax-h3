@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -167,4 +168,33 @@ func (s *Service) HandleSelectGenerationCandidate(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, row)
+}
+
+// HandleDeleteGenerationCandidate deletes a non-current candidate with no running task and no child branches.
+// Returns 409 Conflict with specific reason when deletion is blocked by business rules.
+func (s *Service) HandleDeleteGenerationCandidate(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("cid"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid candidate id"})
+		return
+	}
+	err = NewGenerationCandidateService(s.DB).Delete(p.ID, uint(id))
+	if err != nil {
+		var delErr *CandidateDeleteError
+		if errors.As(err, &delErr) {
+			c.JSON(http.StatusConflict, gin.H{"error": delErr.Reason})
+			return
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "candidate not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

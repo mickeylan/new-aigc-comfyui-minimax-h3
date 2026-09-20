@@ -131,6 +131,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/candidates/:cid/select", svc.HandleSelectGenerationCandidate)
 	r.POST("/api/projects/:id/candidates/:cid/branch", svc.HandleBranchGenerationCandidate)
 	r.POST("/api/projects/:id/candidates/:cid/retry", svc.HandleRetryGenerationCandidate)
+	r.DELETE("/api/projects/:id/candidates/:cid", svc.HandleDeleteGenerationCandidate)
 	r.POST("/api/projects/:id/scenes/:sid/video", svc.HandleGenerateSceneVideo)
 	r.GET("/api/projects/:id/scenes/:sid/video/prompt", svc.HandleGetSceneVideoPrompt)
 	r.POST("/api/projects/:id/scenes/:sid/video/prompt/regenerate", svc.HandleRegenerateSceneVideoPrompt)

@@ -1,9 +1,11 @@
 package service
 
 import (
+	"errors"
 	"testing"
 
 	"comfyui-console/internal/models"
+	"gorm.io/gorm"
 )
 
 func TestGenerationCandidateReviewAndSelectProjectsToScene(t *testing.T) {
@@ -163,5 +165,141 @@ func TestGenerationCandidateStaleCannotBecomeCurrent(t *testing.T) {
 	}
 	if _, err := svc.SelectCurrent(project.ID, row.ID); err == nil {
 		t.Fatal("stale candidate selected")
+	}
+}
+
+func TestCandidateDeleteRejectsCurrent(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	if err := db.AutoMigrate(&models.GenerationCandidate{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "p"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
+	db.Create(&scene)
+	svc := NewGenerationCandidateService(db)
+	row, _ := svc.CaptureSceneTask(project.ID, scene.ID, "image", "img1", "a.png", "prompt", nil, nil, nil, nil)
+	// row is current by default after capture
+	if err := svc.Delete(project.ID, row.ID); err == nil {
+		t.Fatal("current candidate deleted")
+	} else if err != ErrCandidateIsCurrent {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCandidateDeleteRejectsWithChildren(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	if err := db.AutoMigrate(&models.GenerationCandidate{}, &models.Task{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "p"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
+	db.Create(&scene)
+	svc := NewGenerationCandidateService(db)
+	// Create current candidate (needed to have at least one current)
+	current, _ := svc.CaptureSceneTask(project.ID, scene.ID, "image", "current-task", "current.png", "prompt", nil, nil, nil, nil)
+	// Create a non-current candidate
+	orphan := models.GenerationCandidate{
+		ProjectID: project.ID, EntityType: "scene", EntityID: scene.ID, MediaType: "image",
+		TaskID: "orphan-task", File: "orphan.png", IsCurrent: false,
+	}
+	db.Create(&orphan)
+	// Create a child candidate referencing the orphan
+	child := models.GenerationCandidate{
+		ProjectID: project.ID, EntityType: "scene", EntityID: scene.ID, MediaType: "image",
+		TaskID: "child-task", File: "child.png", ParentCandidateID: &orphan.ID, IsCurrent: false,
+	}
+	db.Create(&child)
+	// Cannot delete orphan with child branch
+	if err := svc.Delete(project.ID, orphan.ID); err == nil {
+		t.Fatal("candidate with children deleted")
+	} else if err != ErrCandidateHasChildren {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Can delete child without children
+	if err := svc.Delete(project.ID, child.ID); err != nil {
+		t.Fatalf("child deletion failed: %v", err)
+	}
+	// Can delete orphan after child is gone
+	if err := svc.Delete(project.ID, orphan.ID); err != nil {
+		t.Fatalf("orphan deletion failed: %v", err)
+	}
+	_ = current // silence unused warning
+}
+
+func TestCandidateDeleteRejectsRunningTask(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	if err := db.AutoMigrate(&models.GenerationCandidate{}, &models.Task{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "p"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
+	db.Create(&scene)
+	svc := NewGenerationCandidateService(db)
+	// Create current candidate
+	current, _ := svc.CaptureSceneTask(project.ID, scene.ID, "video", "current-task", "current.mp4", "prompt", nil, nil, nil, nil)
+	// Create a non-current candidate with a running task
+	orphan := models.GenerationCandidate{
+		ProjectID: project.ID, EntityType: "scene", EntityID: scene.ID, MediaType: "video",
+		TaskID: "running-task", File: "orphan.mp4", IsCurrent: false,
+	}
+	db.Create(&orphan)
+	db.Create(&models.Task{TaskID: "running-task", Status: "running"})
+	// Cannot delete candidate with running task
+	if err := svc.Delete(project.ID, orphan.ID); err == nil {
+		t.Fatal("candidate with running task deleted")
+	} else if err != ErrCandidateTaskRunning {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Completed task is OK to delete
+	db.Model(&models.Task{}).Where("task_id = ?", "running-task").Update("status", "success")
+	if err := svc.Delete(project.ID, orphan.ID); err != nil {
+		t.Fatalf("candidate with completed task deletion failed: %v", err)
+	}
+	_ = current // silence unused warning
+}
+
+func TestCandidateDeleteSuccess(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	if err := db.AutoMigrate(&models.GenerationCandidate{}, &models.Task{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "p"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
+	db.Create(&scene)
+	svc := NewGenerationCandidateService(db)
+	// Create a non-current candidate
+	candidate := models.GenerationCandidate{
+		ProjectID: project.ID, EntityType: "scene", EntityID: scene.ID, MediaType: "image",
+		TaskID: "orphan-task", File: "orphan.png", IsCurrent: false,
+	}
+	db.Create(&candidate)
+	if err := svc.Delete(project.ID, candidate.ID); err != nil {
+		t.Fatalf("orphan candidate deletion failed: %v", err)
+	}
+	var count int64
+	db.Model(&models.GenerationCandidate{}).Where("id = ?", candidate.ID).Count(&count)
+	if count != 0 {
+		t.Fatalf("candidate still exists after deletion")
+	}
+}
+
+func TestCandidateDeleteNotFound(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	if err := db.AutoMigrate(&models.GenerationCandidate{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "p"}
+	db.Create(&project)
+	svc := NewGenerationCandidateService(db)
+	err := svc.Delete(project.ID, 9999)
+	if err == nil {
+		t.Fatal("expected not found error")
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("unexpected error type: %v", err)
 	}
 }

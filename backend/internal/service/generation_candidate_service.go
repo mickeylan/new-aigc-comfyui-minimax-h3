@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -275,4 +276,55 @@ func MarkSceneCandidatesStale(db *gorm.DB, projectID, sceneID uint, mediaType, r
 		q = q.Where("media_type = ?", mediaType)
 	}
 	return q.Updates(map[string]any{"stale": true, "stale_reason": reason, "is_current": false}).Error
+}
+
+// CandidateDeleteError describes why a candidate cannot be deleted.
+type CandidateDeleteError struct {
+	Reason string // human-readable reason
+}
+
+func (e *CandidateDeleteError) Error() string { return e.Reason }
+
+// ErrCandidateHasChildren indicates the candidate has child branches that depend on it.
+var ErrCandidateHasChildren = &CandidateDeleteError{Reason: "候选存在下游分支，不能直接删除"}
+
+// ErrCandidateIsCurrent indicates the candidate is currently selected and must be deselected first.
+var ErrCandidateIsCurrent = &CandidateDeleteError{Reason: "候选当前生效中，请先切换到其他候选"}
+
+// ErrCandidateTaskRunning indicates the candidate's generation task is still running.
+var ErrCandidateTaskRunning = &CandidateDeleteError{Reason: "候选生成任务仍在运行中"}
+
+// Delete removes a candidate after validating preconditions:
+//   - Candidate must not be current
+//   - Candidate must not have child branches (other candidates referencing it as parent)
+//   - Candidate's generation task must not be running
+//
+// Returns ErrCandidateIsCurrent, ErrCandidateHasChildren, or ErrCandidateTaskRunning on conflict.
+func (s *GenerationCandidateService) Delete(projectID, id uint) error {
+	var candidate models.GenerationCandidate
+	if err := s.db.Where("id = ? AND project_id = ?", id, projectID).First(&candidate).Error; err != nil {
+		return err
+	}
+	// Guard: cannot delete current candidate
+	if candidate.IsCurrent {
+		return ErrCandidateIsCurrent
+	}
+	// Guard: cannot delete candidate with children
+	var childCount int64
+	if err := s.db.Model(&models.GenerationCandidate{}).Where("parent_candidate_id = ?", candidate.ID).Count(&childCount).Error; err != nil {
+		return err
+	}
+	if childCount > 0 {
+		return ErrCandidateHasChildren
+	}
+	// Guard: cannot delete candidate whose task is still running
+	var task models.Task
+	if err := s.db.Where("task_id = ? AND status IN ?", candidate.TaskID, []string{"pending", "queued", "running"}).First(&task).Error; err == nil {
+		// Task found and is running
+		return ErrCandidateTaskRunning
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	// Safe to delete
+	return s.db.Delete(&candidate).Error
 }

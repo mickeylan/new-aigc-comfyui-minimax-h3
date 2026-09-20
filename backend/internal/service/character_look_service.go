@@ -540,6 +540,25 @@ func (s *CharacterLookService) UnassignFromScene(sceneID, lookID uint) error {
 
 // AssignToShot 将造型关联到镜头
 func (s *CharacterLookService) AssignToShot(shotID, lookID uint, order int, isFeatured bool) error {
+	// Validate look exists and get its project
+	var look models.CharacterLook
+	if err := s.db.First(&look, lookID).Error; err != nil {
+		return fmt.Errorf("造型不存在")
+	}
+
+	// Validate shot exists and belongs to the same project
+	var shot models.Shot
+	if err := s.db.First(&shot, shotID).Error; err != nil {
+		return fmt.Errorf("镜头不存在")
+	}
+	var scene models.Scene
+	if err := s.db.First(&scene, shot.SceneID).Error; err != nil {
+		return fmt.Errorf("场景不存在")
+	}
+	if scene.ProjectID != look.ProjectID {
+		return fmt.Errorf("造型与镜头不属于同一项目，不能关联")
+	}
+
 	var existing models.ShotCharacterLook
 	err := s.db.Where("shot_id = ? AND look_id = ?", shotID, lookID).First(&existing).Error
 	if err == nil {
