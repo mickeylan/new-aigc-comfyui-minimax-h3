@@ -97,6 +97,11 @@ func (s *Service) HandleReviewPlanningBatch(c *gin.Context) {
 	var v any
 	var err error
 	if req.Action == "approve" {
+		snapshot, snapshotErr := s.BatchPlanning.GetSnapshot(p.ID, id)
+		if snapshotErr != nil || snapshot.Status != "approved" {
+			c.JSON(409, gin.H{"error": "请先生成并审核通过批次状态快照"})
+			return
+		}
 		v, err = s.BatchPlanning.ApproveBatch(p.ID, id, 0, req.Notes)
 	} else if req.Action == "reject" {
 		v, err = s.BatchPlanning.RejectBatch(p.ID, id, 0, req.Notes)

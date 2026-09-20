@@ -14,7 +14,7 @@ func newTestBatchService(t *testing.T) *BatchPlanningService {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = db.AutoMigrate(&models.Project{}, &models.PlanningBatch{}, &models.BatchEpisode{}, &models.EpisodeAdaptation{}, &models.StoryArc{}, &models.Episode{}); err != nil {
+	if err = db.AutoMigrate(&models.Project{}, &models.PlanningBatch{}, &models.BatchEpisode{}, &models.EpisodeAdaptation{}, &models.StoryArc{}, &models.Episode{}, &models.BatchStateSnapshot{}, &models.StoryClue{}); err != nil {
 		t.Fatal(err)
 	}
 	if err = db.Create(&models.Project{ID: 1, Title: "Novel", SourceType: models.ProjectSourceNovel, Episodes: 1800}).Error; err != nil {
@@ -101,6 +101,36 @@ func TestCalculateRollingBatchPlan(t *testing.T) {
 		t.Fatal("expected minimum rejection")
 	}
 }
+func TestRollingStateSnapshotAndClueLifecycle(t *testing.T) {
+	s := newTestBatchService(t)
+	batch, _ := s.CreateBatch(1, BatchCreateInput{Title: "一", EpisodeStart: 1, EpisodeEnd: 5, ChapterStart: 1, ChapterEnd: 5})
+	snapshot, err := s.SaveSnapshot(1, batch.ID, RollingStateInput{CharacterStatesJSON: `{"韩立":{"cultivation":"练气"}}`, RelationshipsJSON: `{}`, WorldStateJSON: `{"location":"七玄门"}`, ClueStateJSON: `[{"clue_key":"掌天瓶","title":"神秘小瓶","status":"open","opened_episode":1}]`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.db.Create(&models.EpisodeAdaptation{ProjectID: 1, EpisodeN: 1, BatchID: &batch.ID, OpeningState: "", EndingState: ""})
+	approved, err := s.ReviewSnapshot(1, batch.ID, true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved.Status != "approved" {
+		t.Fatal("snapshot not approved")
+	}
+	var clue models.StoryClue
+	if err = s.db.Where("project_id = ? AND clue_key = ?", 1, "掌天瓶").First(&clue).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.TransitionClue(1, clue.ID, "resolved", 5, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.TransitionClue(1, clue.ID, "open", 6, false); err == nil {
+		t.Fatal("resolved clue reopened without override")
+	}
+	if snapshot.Version != 1 {
+		t.Fatalf("unexpected snapshot version %d", snapshot.Version)
+	}
+}
+
 func TestBatchContinuityUsesPreviousEndingState(t *testing.T) {
 	s := newTestBatchService(t)
 	first, _ := s.CreateBatch(1, BatchCreateInput{Title: "一", EpisodeStart: 1, EpisodeEnd: 5, ChapterStart: 1, ChapterEnd: 5})

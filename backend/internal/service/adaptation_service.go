@@ -262,11 +262,30 @@ func (s *AdaptationService) Update(projectID uint, episode int, updates map[stri
 	if err := s.db.Where("project_id = ? AND episode_n = ?", projectID, episode).First(&row).Error; err != nil {
 		return nil, err
 	}
-	b, _ := json.Marshal(updates)
+	if row.BatchID != nil {
+		var batch models.PlanningBatch
+		if err := s.db.First(&batch, *row.BatchID).Error; err != nil {
+			return nil, err
+		}
+		if batch.Status == BatchStatusApproved || batch.Status == BatchStatusProduced {
+			return nil, fmt.Errorf("已审核或已生产批次不能修改分集映射")
+		}
+	}
+	allowed := map[string]bool{"title": true, "chapter_start": true, "chapter_end": true, "source_chapter_ids": true, "target_duration": true, "target_scenes": true, "adaptation_goal": true, "must_keep_events": true, "optional_events": true, "omitted_events": true, "opening_state": true, "ending_state": true, "hook": true}
+	filtered := map[string]any{}
+	for key, value := range updates {
+		if allowed[key] {
+			filtered[key] = value
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, fmt.Errorf("没有可更新字段")
+	}
+	b, _ := json.Marshal(filtered)
 	if err := json.Unmarshal(b, &row); err != nil {
 		return nil, err
 	}
-	row.ID, row.ProjectID, row.EpisodeN = row.ID, projectID, episode
+	row.ProjectID, row.EpisodeN = projectID, episode
 	if err := validateAdaptation(&row); err != nil {
 		return nil, err
 	}
@@ -277,6 +296,9 @@ func (s *AdaptationService) Update(projectID uint, episode int, updates map[stri
 	row.SourceDigest, row.Status, row.ContinuityStatus, row.Version = digest, "draft", "pending", row.Version+1
 	if err := s.db.Save(&row).Error; err != nil {
 		return nil, err
+	}
+	if row.BatchID != nil {
+		_ = s.db.Model(&models.BatchStateSnapshot{}).Where("batch_id = ?", *row.BatchID).Updates(map[string]any{"status": "draft", "approved_at": nil}).Error
 	}
 	return &row, nil
 }

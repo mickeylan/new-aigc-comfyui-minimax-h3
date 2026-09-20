@@ -619,6 +619,40 @@ type BatchEpisode struct {
 	EpisodeAdapt *EpisodeAdaptation `gorm:"foreignKey:EpisodeAdaptID" json:"episode_adapt,omitempty"`
 }
 
+// BatchStateSnapshot is the reviewed end-of-batch world/character/clue state injected into the next batch.
+type BatchStateSnapshot struct {
+	ID                  uint       `gorm:"primaryKey" json:"id"`
+	ProjectID           uint       `gorm:"column:project_id;index" json:"project_id"`
+	BatchID             uint       `gorm:"column:batch_id;uniqueIndex" json:"batch_id"`
+	PreviousSnapshotID  *uint      `gorm:"column:previous_snapshot_id;index" json:"previous_snapshot_id,omitempty"`
+	CharacterStatesJSON string     `gorm:"column:character_states_json;type:text" json:"character_states_json"`
+	RelationshipsJSON   string     `gorm:"column:relationships_json;type:text" json:"relationships_json"`
+	WorldStateJSON      string     `gorm:"column:world_state_json;type:text" json:"world_state_json"`
+	ClueStateJSON       string     `gorm:"column:clue_state_json;type:text" json:"clue_state_json"`
+	ReviewJSON          string     `gorm:"column:review_json;type:text" json:"review_json"`
+	Status              string     `gorm:"default:draft;index" json:"status"`
+	Version             int        `gorm:"default:1" json:"version"`
+	ApprovedAt          *time.Time `gorm:"column:approved_at" json:"approved_at,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
+}
+
+// StoryClue is the queryable current clue lifecycle; approved snapshots preserve historical states.
+type StoryClue struct {
+	ID                 uint      `gorm:"primaryKey" json:"id"`
+	ProjectID          uint      `gorm:"column:project_id;uniqueIndex:idx_story_clue_project_key" json:"project_id"`
+	ClueKey            string    `gorm:"column:clue_key;uniqueIndex:idx_story_clue_project_key" json:"clue_key"`
+	Title              string    `json:"title"`
+	Description        string    `gorm:"type:text" json:"description"`
+	Status             string    `gorm:"default:open;index" json:"status"`
+	OpenedEpisode      int       `gorm:"column:opened_episode" json:"opened_episode"`
+	LastTouchedEpisode int       `gorm:"column:last_touched_episode" json:"last_touched_episode"`
+	ResolvedEpisode    int       `gorm:"column:resolved_episode" json:"resolved_episode"`
+	Version            int       `gorm:"default:1" json:"version"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
 // AdaptationStrategy stores the user-approved constraints used to create episode mappings.
 type AdaptationStrategy struct {
 	ID                  uint      `gorm:"primaryKey" json:"id"`

@@ -222,7 +222,13 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 	}
 	var previous models.EpisodeAdaptation
 	_ = s.db.Where("project_id = ? AND episode_n < ?", projectID, batch.EpisodeStart).Order("episode_n DESC").First(&previous).Error
-	input := map[string]any{"batch": batch, "story_bible": bible, "story_arcs": arcs, "chapter_analyses": chapters, "previous_ending_state": previous.EndingState, "required_episode_start": batch.EpisodeStart, "required_episode_end": batch.EpisodeEnd, "required_episode_count": batch.EpisodeCount}
+	var previousSnapshot models.BatchStateSnapshot
+	if batch.PreviousBatchID != nil {
+		_ = s.db.Where("project_id = ? AND batch_id = ? AND status = ?", projectID, *batch.PreviousBatchID, "approved").First(&previousSnapshot).Error
+	}
+	var openClues []models.StoryClue
+	_ = s.db.Where("project_id = ? AND status IN ?", projectID, []string{"open", "developing"}).Order("clue_key").Find(&openClues).Error
+	input := map[string]any{"batch": batch, "story_bible": bible, "story_arcs": arcs, "chapter_analyses": chapters, "previous_ending_state": previous.EndingState, "previous_state_snapshot": previousSnapshot, "open_clues": openClues, "required_episode_start": batch.EpisodeStart, "required_episode_end": batch.EpisodeEnd, "required_episode_count": batch.EpisodeCount}
 	payload, _ := json.Marshal(input)
 	_ = s.db.Model(batch).Updates(map[string]any{"status": BatchStatusGenerating, "error": "", "generation": gorm.Expr("generation + 1")}).Error
 	system := fmt.Sprintf("你是长篇小说滚动改编规划师。只输出JSON对象 {\"summary\":\"批次摘要\",\"episodes\":[EpisodeAdaptation字段]}。必须精确生成%d集，集号从%d连续到%d；每集必须含title、chapter_start、chapter_end、source_chapter_ids(JSON数组)、adaptation_goal、opening_state、ending_state、hook、target_duration(默认180)、target_scenes(默认25)。不得重写已完成批次，必须承接previous_ending_state。", batch.EpisodeCount, batch.EpisodeStart, batch.EpisodeEnd)

@@ -70,6 +70,8 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.NovelJob{},
 		&models.PlanningBatch{},
 		&models.BatchEpisode{},
+		&models.BatchStateSnapshot{},
+		&models.StoryClue{},
 		&models.Shot{},
 		&models.PromptVersion{},
 		&models.StylePreset{},
