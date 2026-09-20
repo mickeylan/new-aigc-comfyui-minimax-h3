@@ -70,6 +70,9 @@ func TestMiniMaxH3TemplatesRenderWithoutPlaceholders(t *testing.T) {
 		{file: "minimax_h3_storyboard_candidates_selflift.json", files: map[string][]FileMeta{
 			"ref_images": {{TaskID: "draft", Name: "character.png"}, {TaskID: "draft", Name: "location.png"}},
 		}},
+		{file: "minimax_h3_look_reference.json", files: map[string][]FileMeta{
+			"ref_images": {{TaskID: "draft", Name: "portrait.png"}, {TaskID: "draft", Name: "clothing.png"}},
+		}},
 	}
 
 	service := &TaskService{}

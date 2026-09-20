@@ -59,6 +59,9 @@ func (s *CharacterLookService) DesignOutfit(projectID, characterID uint, req Out
 	if err := s.db.Where("id = ? AND project_id = ?", characterID, projectID).First(&character).Error; err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(character.Portrait) == "" {
+		return nil, fmt.Errorf("请先为角色「%s」生成或上传标准像；新形象必须绑定标准像设计", character.Name)
+	}
 	system := `你是影视角色造型设计师。根据用户的完整形象概念，设计一套统一的新造型，并拆成独立资产。
 只输出严格JSON：{"name":"套装名","description":"整套形象说明","assets":[{"name":"资产名","category":"clothing|shoes|hair|hair_accessory|jewelry|bag","description":"材质、颜色、款式、结构细节"}]}。
 必须包含clothing、shoes、hair；其余类别只在概念确实需要时加入。每类最多一个，hair_accessory和jewelry可各一个。资产描述只写该单件资产，不写人物姓名、脸、身体、姿势或构图。不得加入武器、法宝、剧情道具，不得混入多个互斥方案。`
@@ -261,7 +264,7 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 		return fmt.Errorf("套装图片正在生成，请勿重复提交")
 	}
 	var ch models.Character
-	if err := s.db.First(&ch, characterID).Error; err != nil {
+	if err := s.db.Where("id = ? AND project_id = ?", characterID, projectID).First(&ch).Error; err != nil {
 		return err
 	}
 	if strings.TrimSpace(ch.Portrait) == "" {
@@ -273,6 +276,9 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 	}
 	refs := []FileMeta{{TaskID: fmt.Sprint(projectID), Name: ch.Portrait}}
 	prompt := outfitPrompt(&outfit)
+	if !sheet && (len(refs) == 0 || strings.TrimSpace(refs[0].Name) == "") {
+		return fmt.Errorf("角色标准像未进入换装参考图列表，已阻止生成")
+	}
 	params := map[string]any{"width": 928, "height": 1664}
 	if sheet {
 		refs = []FileMeta{{TaskID: fmt.Sprint(projectID), Name: outfit.Image}}
@@ -285,6 +291,10 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 			}
 		}
 	}
+	if !sheet && !strings.Contains(prompt, "<Picture 1>=角色原始标准像") {
+		return fmt.Errorf("换装提示词未绑定角色标准像 Picture 1，已阻止生成")
+	}
+	log.Printf("[outfit-submit] project=%d character=%d(%s) outfit=%d portrait=%s refs=%v prompt=%q", projectID, ch.ID, ch.Name, outfit.ID, ch.Portrait, refs, prompt)
 	task, err := s.tasks.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: prompt, Params: params, Files: map[string][]FileMeta{"ref_images": refs}})
 	if err != nil {
 		return err

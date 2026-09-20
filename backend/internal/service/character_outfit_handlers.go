@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"comfyui-console/internal/models"
 	"github.com/gin-gonic/gin"
 )
 
@@ -15,6 +16,11 @@ func outfitParam(c *gin.Context) (uint, bool) {
 		return 0, false
 	}
 	return uint(id), true
+}
+
+func (s *Service) characterBelongsToProject(projectID, characterID uint) bool {
+	var count int64
+	return s.DB.Model(&models.Character{}).Where("id = ? AND project_id = ?", characterID, projectID).Count(&count).Error == nil && count == 1
 }
 
 func characterParam(c *gin.Context) (uint, bool) {
@@ -35,6 +41,10 @@ func (s *Service) HandleListCharacterOutfits(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if !s.characterBelongsToProject(p.ID, cid) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "角色不存在"})
+		return
+	}
 	rows, err := s.CharacterLooks.ListOutfits(p.ID, cid)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -50,6 +60,10 @@ func (s *Service) HandleDesignCharacterOutfit(c *gin.Context) {
 	}
 	cid, ok := characterParam(c)
 	if !ok {
+		return
+	}
+	if !s.characterBelongsToProject(p.ID, cid) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "角色不存在"})
 		return
 	}
 	var req OutfitDesignInput

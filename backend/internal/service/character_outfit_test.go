@@ -23,6 +23,17 @@ func setupOutfitTestDB(t *testing.T) (*CharacterLookService, models.Project, mod
 	return NewCharacterLookService(db, nil), project, character
 }
 
+func TestDesignOutfitRequiresCharacterPortraitBinding(t *testing.T) {
+	svc, project, character := setupOutfitTestDB(t)
+	svc.textProvider = &stubTextProvider{response: `{}`}
+	if err := svc.db.Model(&character).Update("portrait", "").Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.DesignOutfit(project.ID, character.ID, OutfitDesignInput{Concept: "新造型"}); err == nil || !strings.Contains(err.Error(), "必须绑定标准像") {
+		t.Fatalf("expected portrait binding error, got %v", err)
+	}
+}
+
 func TestDesignOutfitCreatesReviewableAssetsAndDraft(t *testing.T) {
 	svc, project, character := setupOutfitTestDB(t)
 	svc.textProvider = &stubTextProvider{response: `{"name":"雨夜调查造型","description":"克制专业的雨夜行动形象","assets":[{"name":"深灰防水风衣","category":"clothing","description":"深灰色防水斜纹面料，中长款收腰风衣"},{"name":"防滑短靴","category":"shoes","description":"黑色低跟防滑皮质短靴"},{"name":"湿发低束","category":"hair","description":"黑色短发向后收束，发束利落"},{"name":"银色耳钉","category":"jewelry","description":"小尺寸哑光银色圆形耳钉"}]}`}
@@ -40,6 +51,24 @@ func TestDesignOutfitCreatesReviewableAssetsAndDraft(t *testing.T) {
 		if item.Look.CharacterID != character.ID || item.Look.ProjectID != project.ID {
 			t.Fatalf("asset ownership mismatch: %#v", item.Look)
 		}
+	}
+}
+
+func TestListOutfitsDoesNotLeakAcrossCharacters(t *testing.T) {
+	svc, project, character := setupOutfitTestDB(t)
+	other := models.Character{ProjectID: project.ID, Name: "另一角色", Portrait: "other.png"}
+	if err := svc.db.Create(&other).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.db.Create(&models.CharacterOutfit{ProjectID: project.ID, CharacterID: character.ID, Name: "角色一套装"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.db.Create(&models.CharacterOutfit{ProjectID: project.ID, CharacterID: other.ID, Name: "角色二套装"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows, err := svc.ListOutfits(project.ID, character.ID)
+	if err != nil || len(rows) != 1 || rows[0].CharacterID != character.ID {
+		t.Fatalf("outfit binding leaked: rows=%#v err=%v", rows, err)
 	}
 }
 
