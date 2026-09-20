@@ -182,7 +182,11 @@ func (s *AdaptationService) Generate(projectID uint) ([]models.EpisodeAdaptation
 	var parsed struct {
 		Episodes []models.EpisodeAdaptation `json:"episodes"`
 	}
-	if err := parseJSONObject(raw, &parsed); err != nil {
+	normalized, normalizeErr := normalizeAdaptationJSON(raw)
+	if normalizeErr != nil {
+		return nil, normalizeErr
+	}
+	if err := parseJSONObject(normalized, &parsed); err != nil {
 		return nil, err
 	}
 	if len(parsed.Episodes) != strategy.TargetEpisodes {
