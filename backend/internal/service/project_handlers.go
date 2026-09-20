@@ -588,6 +588,10 @@ func (s *Service) HandleGeneratePlan(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if p.SourceType == models.ProjectSourceNovel && p.Episodes > DefaultBatchSizeMax {
+		c.JSON(409, gin.H{"error": fmt.Sprintf("长篇小说全剧预计 %d 集，请使用长篇滚动改编规划，按每批 5–20 集生成", p.Episodes), "redirect": fmt.Sprintf("/projects/%d/adaptation", p.ID)})
+		return
+	}
 	if err := s.Projects.ClaimManualScript(p); err != nil {
 		c.JSON(409, gin.H{"error": err.Error()})
 		return

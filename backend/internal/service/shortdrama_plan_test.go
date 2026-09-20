@@ -1,6 +1,11 @@
 package service
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"comfyui-console/internal/models"
+)
 
 func TestParsePlanJSONAcceptsArrayForScalarString(t *testing.T) {
 	raw := `{
@@ -23,6 +28,14 @@ func TestParsePlanJSONAcceptsArrayForScalarString(t *testing.T) {
 	}
 	if plan.Episodes[0].Title != "归来" || plan.Episodes[0].Brief != "故人重逢" {
 		t.Fatalf("episode scalar fields were not normalized: %+v", plan.Episodes[0])
+	}
+}
+
+func TestGeneratePlanRejectsLargeNovelBeforeCallingProvider(t *testing.T) {
+	s := &ProjectService{}
+	_, err := s.GeneratePlan(&models.Project{SourceType: models.ProjectSourceNovel, Episodes: 60})
+	if err == nil || !strings.Contains(err.Error(), "5–20") {
+		t.Fatalf("expected rolling planning rejection, got %v", err)
 	}
 }
 

@@ -152,9 +152,16 @@ func validateAdaptation(v *models.EpisodeAdaptation) error {
 }
 
 func (s *AdaptationService) Generate(projectID uint) ([]models.EpisodeAdaptation, error) {
+	var project models.Project
+	if err := s.db.First(&project, projectID).Error; err != nil {
+		return nil, err
+	}
 	strategy, err := s.GetStrategy(projectID)
 	if err != nil {
 		return nil, fmt.Errorf("adaptation strategy is required")
+	}
+	if project.SourceType == models.ProjectSourceNovel && strategy.TargetEpisodes > DefaultBatchSizeMax {
+		return nil, fmt.Errorf("长篇小说单次分集规划最多 %d 集；当前要求 %d 集，请改用滚动批次", DefaultBatchSizeMax, strategy.TargetEpisodes)
 	}
 	var bible models.StoryBible
 	if err := s.db.Where("project_id = ?", projectID).First(&bible).Error; err != nil || bible.Status != "approved" {

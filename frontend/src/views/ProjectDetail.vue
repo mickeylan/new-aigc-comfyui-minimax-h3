@@ -25,7 +25,7 @@
         <button class="btn btn-ghost btn-sm" :disabled="busy || generatingScript || !project.synopsis" @click="regenerateScript">
           {{ generatingScript ? '剧本生成中…' : ('🔄 重新生成第' + activeEpN + '集剧本') }}
         </button>
-        <button class="btn btn-sm" :disabled="busy || pipelineActive || !project.synopsis" @click="startPipeline">
+        <button v-if="project.source_type !== 'novel' || project.episodes <= 20" class="btn btn-sm" :disabled="busy || pipelineActive || !project.synopsis" @click="startPipeline">
           {{ pipelineActive ? `第${project.pipeline_episode || activeEpN}集生成中…` : `⚡ 一键生成(第${activeEpN}集全流程)` }}
         </button>
         <button class="btn btn-ghost btn-sm" :disabled="busy" @click="dubAll">🎤 全集配音</button>

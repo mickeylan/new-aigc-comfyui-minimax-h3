@@ -183,8 +183,11 @@ func scriptFromPlanSystemPrompt(targetDuration float64, targetScenes int) string
 
 // GeneratePlan 阶段 1：按 short-drama 方法论生成创作方案（存 project.plan）
 func (s *ProjectService) GeneratePlan(p *models.Project) (*models.Project, error) {
+	if p.SourceType == models.ProjectSourceNovel && p.Episodes > DefaultBatchSizeMax {
+		return nil, fmt.Errorf("长篇小说全剧预计 %d 集，禁止一次生成完整方案；请进入长篇滚动改编规划，按每批 5–20 集生成和审核", p.Episodes)
+	}
 	if p.Episodes > 500 {
-		return nil, fmt.Errorf("全剧预计 %d 集，不能一次生成完整方案；请进入长篇小说改编规划，按每批 5–20 集滚动生成", p.Episodes)
+		return nil, fmt.Errorf("全剧预计 %d 集，不能一次生成完整方案；请进入长篇滚动改编规划，按每批 5–20 集生成和审核", p.Episodes)
 	}
 	var user strings.Builder
 	user.WriteString("故事创意：" + p.Synopsis + "\n")
