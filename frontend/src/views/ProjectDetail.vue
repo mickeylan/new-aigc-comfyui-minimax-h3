@@ -18,7 +18,8 @@
         <span class="badge" :class="projectBadgeClass">{{ projectStatusText }}</span>
         <button class="btn btn-ghost btn-sm" :disabled="busy" @click="openEditProject">✎ 编辑信息</button>
         <router-link v-if="project.source_type === 'novel'" :to="`/projects/${id()}/novel`" class="btn btn-secondary btn-sm">📚 小说章节</router-link>
-        <button class="btn btn-secondary btn-sm" :disabled="busy || generatingPlan || !project.synopsis" @click="generatePlan">
+        <router-link v-if="project.source_type === 'novel'" :to="`/projects/${id()}/adaptation`" class="btn btn-secondary btn-sm">🧭 滚动改编规划</router-link>
+        <button v-if="project.source_type !== 'novel' && project.episodes <= 500" class="btn btn-secondary btn-sm" :disabled="busy || generatingPlan || !project.synopsis" @click="generatePlan">
           {{ generatingPlan ? '方案生成中…' : (project.plan ? '📋 重新生成创作方案' : '📋 生成创作方案') }}
         </button>
         <button class="btn btn-ghost btn-sm" :disabled="busy || generatingScript || !project.synopsis" @click="regenerateScript">
@@ -32,6 +33,11 @@
         <a class="btn btn-ghost btn-sm" :href="api.srtUrl(id(), activeEpN)" target="_blank">📜 第{{ activeEpN }}集字幕</a>
         <button class="btn btn-danger btn-sm" @click="removeProject">🗑 删除</button>
       </div>
+    </div>
+
+    <div v-if="project.source_type === 'novel' && project.episodes > 500" class="card plan-generation-progress">
+      <div class="plan-progress-head"><strong>超长篇项目：{{ project.episodes }} 集</strong><router-link :to="`/projects/${id()}/adaptation`" class="btn btn-sm">进入5–20集滚动规划</router-link></div>
+      <p>不会一次生成整部方案。请按故事弧、原文章节和生产批次逐步审核并接入Episode流水线。</p>
     </div>
 
     <div v-if="generatingPlan" class="card plan-generation-progress" role="status" aria-live="polite">
@@ -652,8 +658,8 @@
           </div>
           <div class="field">
             <label>目标集数</label>
-            <input v-model.number="projectForm.episodes" class="input" type="number" min="1" max="500" step="1" placeholder="例如 12" />
-            <div class="field-hint">允许 1–500 集；重新生成创作方案时会严格按此数量生成。</div>
+            <input v-model.number="projectForm.episodes" class="input" type="number" min="1" max="100000" step="1" placeholder="例如 1800" />
+            <div class="field-hint">全剧预计总集数。长篇小说可超过500集，并在改编规划页按5–20集滚动规划。</div>
           </div>
         </div>
         <div class="field">

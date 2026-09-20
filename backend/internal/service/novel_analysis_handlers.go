@@ -3,6 +3,7 @@ package service
 import (
 	"strconv"
 
+	"comfyui-console/internal/models"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -87,6 +88,38 @@ func (s *Service) HandleListNovelArcs(c *gin.Context) {
 	}
 	c.JSON(200, gin.H{"arcs": rows})
 }
+func (s *Service) HandleReviewNovelArc(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	arcID, ok := parseUintParam(c, "aid")
+	if !ok {
+		return
+	}
+	var req struct {
+		Status string `json:"status"`
+		Notes  string `json:"notes"`
+	}
+	if c.ShouldBindJSON(&req) != nil || (req.Status != "approved" && req.Status != "rejected") {
+		c.JSON(400, gin.H{"error": "status must be approved or rejected"})
+		return
+	}
+	updates := map[string]any{"review_status": req.Status, "reviewer_notes": req.Notes, "status": req.Status}
+	result := s.DB.Model(&models.StoryArc{}).Where("id = ? AND project_id = ?", arcID, p.ID).Updates(updates)
+	if result.Error != nil {
+		c.JSON(500, gin.H{"error": result.Error.Error()})
+		return
+	}
+	if result.RowsAffected != 1 {
+		c.JSON(404, gin.H{"error": "story arc not found"})
+		return
+	}
+	var arc models.StoryArc
+	_ = s.DB.First(&arc, arcID).Error
+	c.JSON(200, arc)
+}
+
 func (s *Service) HandleListNovelAliases(c *gin.Context) {
 	p, ok := s.loadProject(c)
 	if !ok {

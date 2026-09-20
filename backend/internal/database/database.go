@@ -68,6 +68,8 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.EpisodeAdaptation{},
 		&models.CharacterAliasCandidate{},
 		&models.NovelJob{},
+		&models.PlanningBatch{},
+		&models.BatchEpisode{},
 		&models.Shot{},
 		&models.PromptVersion{},
 		&models.StylePreset{},

@@ -509,20 +509,28 @@ type ProjectSkillConfig struct {
 // SkillAuditLog 技能使用审计日志：记录每次生成使用的技能版本
 // StoryArc is a 5-10 chapter structured merge product.
 type StoryArc struct {
-	ID             uint      `gorm:"primaryKey" json:"id"`
-	ProjectID      uint      `gorm:"column:project_id;uniqueIndex:idx_story_arc_project_no" json:"project_id"`
-	ArcNo          int       `gorm:"column:arc_no;uniqueIndex:idx_story_arc_project_no" json:"arc_no"`
-	Title          string    `json:"title"`
-	ChapterStart   int       `gorm:"column:chapter_start" json:"chapter_start"`
-	ChapterEnd     int       `gorm:"column:chapter_end" json:"chapter_end"`
-	Summary        string    `gorm:"type:text" json:"summary"`
-	AnalysisJSON   string    `gorm:"column:analysis_json;type:text" json:"analysis_json"`
-	SourceVersions string    `gorm:"column:source_versions;type:text" json:"source_versions"`
-	Status         string    `gorm:"default:draft;index" json:"status"`
-	Version        int       `gorm:"default:1" json:"version"`
-	Error          string    `gorm:"type:text" json:"error"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID             uint   `gorm:"primaryKey" json:"id"`
+	ProjectID      uint   `gorm:"column:project_id;uniqueIndex:idx_story_arc_project_no" json:"project_id"`
+	ArcNo          int    `gorm:"column:arc_no;uniqueIndex:idx_story_arc_project_no" json:"arc_no"`
+	Title          string `json:"title"`
+	ChapterStart   int    `gorm:"column:chapter_start" json:"chapter_start"`
+	ChapterEnd     int    `gorm:"column:chapter_end" json:"chapter_end"`
+	Summary        string `gorm:"type:text" json:"summary"`
+	AnalysisJSON   string `gorm:"column:analysis_json;type:text" json:"analysis_json"`
+	SourceVersions string `gorm:"column:source_versions;type:text" json:"source_versions"`
+	Status         string `gorm:"default:draft;index" json:"status"`
+	Version        int    `gorm:"default:1" json:"version"`
+	Error          string `gorm:"type:text" json:"error"`
+
+	// Batch planning fields
+	BatchID       *uint      `gorm:"column:batch_id;index" json:"batch_id,omitempty"`                 // 所属批次
+	ReviewStatus  string     `gorm:"column:review_status;default:pending;index" json:"review_status"` // pending/approved/rejected
+	ReviewerNotes string     `gorm:"column:reviewer_notes;type:text" json:"reviewer_notes"`           // 审核意见
+	ReviewerID    *uint      `gorm:"column:reviewer_id" json:"reviewer_id,omitempty"`                 // 审核人
+	ReviewedAt    *time.Time `gorm:"column:reviewed_at" json:"reviewed_at,omitempty"`                 // 审核时间
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // StoryBible is the editable, explicitly approved whole-book synthesis.
@@ -545,6 +553,70 @@ type StoryBible struct {
 	Error             string    `gorm:"type:text" json:"error"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+// PlanningBatch represents a rolling batch of episodes (5-20) for phased adaptation.
+// Each batch must be reviewed and approved before the next batch can be generated.
+type PlanningBatch struct {
+	ID             uint   `gorm:"primaryKey" json:"id"`
+	ProjectID      uint   `gorm:"column:project_id;uniqueIndex:idx_batch_project_no" json:"project_id"`
+	BatchNo        int    `gorm:"column:batch_no;uniqueIndex:idx_batch_project_no" json:"batch_no"` // 批次序号（从 1 开始）
+	Title          string `json:"title"`                                                            // 批次标题，如"第一卷 相遇篇"
+	EpisodeStart   int    `gorm:"column:episode_start" json:"episode_start"`                        // 本批次起始集数
+	EpisodeEnd     int    `gorm:"column:episode_end" json:"episode_end"`                            // 本批次结束集数
+	EpisodeCount   int    `gorm:"column:episode_count" json:"episode_count"`                        // 本批次集数
+	ArcRange       string `gorm:"column:arc_range" json:"arc_range"`                                // 关联的故事弧编号/ID
+	ChapterStart   int    `gorm:"column:chapter_start" json:"chapter_start"`                        // 原文章节起点
+	ChapterEnd     int    `gorm:"column:chapter_end" json:"chapter_end"`                            // 原文章节终点
+	Summary        string `gorm:"type:text" json:"summary"`                                         // 批次整体摘要
+	GenerationJSON string `gorm:"column:generation_json;type:text" json:"generation_json"`          // 生成参数及结果快照
+
+	// Status tracking
+	Status        string     `gorm:"default:draft;index" json:"status"`                               // draft/generating/review/approved/produced/cancelled
+	ReviewStatus  string     `gorm:"column:review_status;default:pending;index" json:"review_status"` // pending/approved/rejected
+	ReviewerNotes string     `gorm:"column:reviewer_notes;type:text" json:"reviewer_notes"`
+	ReviewerID    *uint      `gorm:"column:reviewer_id" json:"reviewer_id,omitempty"`
+	ReviewedAt    *time.Time `gorm:"column:reviewed_at" json:"reviewed_at,omitempty"`
+
+	// Batch progress
+	TotalEpisodes int `gorm:"column:total_episodes;default:0" json:"total_episodes"` // 目标集数
+	ApprovedCount int `gorm:"column:approved_count;default:0" json:"approved_count"` // 已审核通过集数
+	ProducedCount int `gorm:"column:produced_count;default:0" json:"produced_count"` // 已进入生产的集数
+
+	// Rolling control
+	PreviousBatchID *uint `gorm:"column:previous_batch_id;index" json:"previous_batch_id,omitempty"` // 前一批次（用于连续性）
+	NextBatchID     *uint `gorm:"column:next_batch_id;index" json:"next_batch_id,omitempty"`         // 下一批次（预留）
+	CanRollNext     bool  `gorm:"column:can_roll_next;default:false" json:"can_roll_next"`           // 是否可以滚动生成下一批
+
+	// Generation lock
+	Generation uint      `gorm:"column:generation;default:0" json:"generation"` // 生成版本，防止旧任务回写
+	Version    int       `gorm:"default:1" json:"version"`
+	Error      string    `gorm:"type:text" json:"error"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+
+	// Associations
+	PreviousBatch *PlanningBatch `gorm:"foreignKey:PreviousBatchID" json:"previous_batch,omitempty"`
+	NextBatch     *PlanningBatch `gorm:"foreignKey:NextBatchID" json:"next_batch,omitempty"`
+}
+
+// BatchEpisode represents the association between a PlanningBatch and EpisodeAdaptation.
+type BatchEpisode struct {
+	ID             uint       `gorm:"primaryKey" json:"id"`
+	BatchID        uint       `gorm:"column:batch_id;uniqueIndex:idx_batch_episode_unique" json:"batch_id"`
+	EpisodeAdaptID uint       `gorm:"column:episode_adapt_id;uniqueIndex:idx_batch_episode_unique" json:"episode_adapt_id"`
+	EpisodeN       int        `gorm:"column:episode_n;index" json:"episode_n"` // 集号
+	BatchOrder     int        `gorm:"column:batch_order" json:"batch_order"`   // 批次内顺序
+	Status         string     `gorm:"default:draft;index" json:"status"`       // draft/approved/produced
+	ReviewNotes    string     `gorm:"column:review_notes;type:text" json:"review_notes"`
+	ReviewerID     *uint      `gorm:"column:reviewer_id" json:"reviewer_id,omitempty"`
+	ReviewedAt     *time.Time `gorm:"column:reviewed_at" json:"reviewed_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+
+	// Associations
+	Batch        *PlanningBatch     `gorm:"foreignKey:BatchID" json:"batch,omitempty"`
+	EpisodeAdapt *EpisodeAdaptation `gorm:"foreignKey:EpisodeAdaptID" json:"episode_adapt,omitempty"`
 }
 
 // AdaptationStrategy stores the user-approved constraints used to create episode mappings.
@@ -573,6 +645,7 @@ type EpisodeAdaptation struct {
 	ID               uint      `gorm:"primaryKey" json:"id"`
 	ProjectID        uint      `gorm:"column:project_id;uniqueIndex:idx_adaptation_project_episode" json:"project_id"`
 	EpisodeN         int       `gorm:"column:episode_n;uniqueIndex:idx_adaptation_project_episode" json:"episode_n"`
+	BatchID          *uint     `gorm:"column:batch_id;index" json:"batch_id,omitempty"` // 所属批次（滚动批次模式）
 	Title            string    `json:"title"`
 	ChapterStart     int       `gorm:"column:chapter_start" json:"chapter_start"`
 	ChapterEnd       int       `gorm:"column:chapter_end" json:"chapter_end"`

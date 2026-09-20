@@ -27,8 +27,8 @@ test('创意修改后可从项目页和剧本页重新生成方案与剧本', ()
 })
 
 test('目标集数支持任意合法值且生成方案有明确进度状态', () => {
-  assert.match(detail, /type="number" min="1" max="500"/)
-  assert.match(projectNew, /type="number" min="1" max="500"/)
+  assert.match(detail, /type="number" min="1" max="100000"/)
+  assert.match(projectNew, /type="number" min="1" max="100000"/)
   assert.match(detail, /plan-generation-progress/)
   assert.match(detail, /已等待 \{\{ planElapsed \}\} 秒/)
   assert.match(view, /plan-progress/)

@@ -39,6 +39,7 @@ type Service struct {
 	Novel                     *NovelService                    // 小说改编服务
 	NovelAnalysis             *NovelAnalysisService            // 小说分层分析服务
 	Adaptations               *AdaptationService               // 小说分集改编服务
+	BatchPlanning             *BatchPlanningService            // 长篇小说滚动批次规划
 	TextProviderFact          *TextProviderFactory             // 文生文 provider 工厂（运行时按设置动态选择）
 	CharacterProfiles         *CharacterProfileService         // 角色档案服务
 	CharacterLooks            *CharacterLookService            // 角色造型服务
@@ -77,6 +78,7 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	novel := NewNovelService(db)
 	novelAnalysis := NewNovelAnalysisService(db, textProviderFact, skills)
 	adaptations := NewAdaptationService(db, textProviderFact, skills, projects)
+	batchPlanning := NewBatchPlanningService(db, textProviderFact, skills)
 
 	// 初始化新服务
 	shots := NewShotService(db)
@@ -108,7 +110,7 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	return &Service{
 		Cfg: cfg, DB: db, Mgr: mgr, Mon: mon, Tasks: tasks, Hub: hub, Upload: upload,
 		Remote: remote, Volc: volc, Projects: projects, Materials: materials,
-		Novel: novel, NovelAnalysis: novelAnalysis, Adaptations: adaptations,
+		Novel: novel, NovelAnalysis: novelAnalysis, Adaptations: adaptations, BatchPlanning: batchPlanning,
 		TextProviderFact: textProviderFact, CharacterProfiles: charProfiles, CharacterLooks: charLooks,
 		Skills: skills, Shots: shots, PromptWorkshop: promptWorkshop, StylePresets: stylePresets,
 		Continuity: continuity, AudioLayers: audioLayers, SharedAssetReferences: sharedAssetReferences,

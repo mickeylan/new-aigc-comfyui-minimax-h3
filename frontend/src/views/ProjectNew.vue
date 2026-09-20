@@ -158,8 +158,8 @@
           </div>
           <div class="field">
             <label>目标集数</label>
-            <input v-model.number="form.episodes" class="input" type="number" min="1" max="500" step="1" placeholder="例如 12" />
-            <div class="field-hint">允许 1–500 集；创作方案会严格按此数量规划分集目录与付费卡点。</div>
+            <input v-model.number="form.episodes" class="input" type="number" min="1" max="100000" step="1" placeholder="例如 1800" />
+            <div class="field-hint">全剧预计总集数；长篇小说将在改编规划页按5–20集滚动生成。</div>
           </div>
         </div>
       </div>
