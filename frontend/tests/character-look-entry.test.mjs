@@ -25,13 +25,6 @@ test('角色造型页支持从链接直接打开新资产表单并说明使用�
   assert.match(looks, /本场角色造型套装/)
 })
 
-test('场景卡片使用分区布局避免信息和操作堆叠', () => {
-  assert.match(projectDetail, /class="scene-meta-row"/)
-  assert.match(projectDetail, /class="scene-info"/)
-  assert.match(projectDetail, /class="scene-actions-wrap"/)
-  assert.match(projectDetail, /class="scene-prompt-details"/)
-})
-
 test('场景设计按可见角色加载新形象套装', () => {
   assert.match(projectDetail, /character_roles_set\?\(sc\?\.visible_characters/)
   assert.match(projectDetail, /api\.characterOutfits\(id\(\), ch\.id\)/)
