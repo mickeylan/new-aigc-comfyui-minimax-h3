@@ -179,8 +179,8 @@
               <span v-if="ch.sheet_task_id" class="char-voice">⏳ 角色四视图生成中</span>
               <span v-if="ch.sheet_error" class="fail-msg">{{ ch.sheet_error }}</span>
               <div class="character-look-entry">
-                <div><strong>新形象与服装</strong><span>为该角色新增服装、鞋履、发型、配饰，再组合成可按场景选择的完整套装。</span></div>
-                <div class="character-look-entry-actions"><router-link :to="`/projects/${id()}/characters/${ch.id}/looks?mode=assets&new=1`" class="btn btn-sm">＋ 设计新造型</router-link><router-link :to="`/projects/${id()}/characters/${ch.id}/looks?mode=outfits`" class="btn btn-sm btn-secondary">管理完整套装</router-link></div>
+                <div><strong>基于标准像换装</strong><span>锁定同一张脸，重新设计服装、鞋履、发型与配饰，生成可按场景选择的新形象。</span></div>
+                <div class="character-look-entry-actions"><router-link :to="`/projects/${id()}/characters/${ch.id}/looks?mode=outfits&design=1`" class="btn btn-sm">＋ AI换装设计</router-link><router-link :to="`/projects/${id()}/characters/${ch.id}/looks?mode=outfits`" class="btn btn-sm btn-secondary">管理完整套装</router-link></div>
               </div>
               <div class="char-actions">
                 <button class="btn btn-sm btn-secondary" :disabled="busy || !!ch.portrait_task_id || ch.profile_status !== 'approved' || !ch.reference_prompt" @click="genPortrait(ch)"

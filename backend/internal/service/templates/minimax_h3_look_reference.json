@@ -1,7 +1,7 @@
 {
-  "name": "MiniMax H3 造型资产参考图",
+  "name": "MiniMax H3 SelfLift 标准像换装",
   "code": "minimax_h3_look_reference",
-  "description": "以角色定妆照为脸部身份锚点生成竖版造型参考图并抽帧。可选注入第二参考图用于发型/配饰参考。",
+  "description": "复用已验证的 SelfLift 多参考链，以角色原始标准像锁定身份，生成 9:16 正面全身新形象定妆照并抽帧；其余参考图约束服装、鞋履、发型和配饰。",
   "inputs": [
     {
       "key": "prompt",

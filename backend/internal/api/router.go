@@ -209,6 +209,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/characters/:cid/looks/:lid/publish", svc.HandlePublishCharacterLook)            // 发布造型
 	// 角色造型套装（由独立造型资产组合）
 	r.GET("/api/projects/:id/characters/:cid/outfits", svc.HandleListCharacterOutfits)
+	r.POST("/api/projects/:id/characters/:cid/outfits/design", svc.HandleDesignCharacterOutfit)
 	r.POST("/api/projects/:id/characters/:cid/outfits", svc.HandleCreateCharacterOutfit)
 	r.PUT("/api/projects/:id/characters/:cid/outfits/:oid", svc.HandleUpdateCharacterOutfit)
 	r.DELETE("/api/projects/:id/characters/:cid/outfits/:oid", svc.HandleDeleteCharacterOutfit)

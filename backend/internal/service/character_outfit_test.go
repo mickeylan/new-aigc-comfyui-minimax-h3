@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"comfyui-console/internal/models"
@@ -20,6 +21,35 @@ func setupOutfitTestDB(t *testing.T) (*CharacterLookService, models.Project, mod
 		t.Fatal(err)
 	}
 	return NewCharacterLookService(db, nil), project, character
+}
+
+func TestDesignOutfitCreatesReviewableAssetsAndDraft(t *testing.T) {
+	svc, project, character := setupOutfitTestDB(t)
+	svc.textProvider = &stubTextProvider{response: `{"name":"雨夜调查造型","description":"克制专业的雨夜行动形象","assets":[{"name":"深灰防水风衣","category":"clothing","description":"深灰色防水斜纹面料，中长款收腰风衣"},{"name":"防滑短靴","category":"shoes","description":"黑色低跟防滑皮质短靴"},{"name":"湿发低束","category":"hair","description":"黑色短发向后收束，发束利落"},{"name":"银色耳钉","category":"jewelry","description":"小尺寸哑光银色圆形耳钉"}]}`}
+	outfit, err := svc.DesignOutfit(project.ID, character.ID, OutfitDesignInput{Concept: "雨夜调查记者形象"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outfit.AuditStatus != models.LookStatusDraft || len(outfit.Items) != 4 {
+		t.Fatalf("unexpected outfit: %#v", outfit)
+	}
+	for _, item := range outfit.Items {
+		if item.Look == nil || item.Look.AuditStatus != models.LookStatusDraft || item.Look.Prompt == "" {
+			t.Fatalf("asset not reviewable: %#v", item.Look)
+		}
+		if item.Look.CharacterID != character.ID || item.Look.ProjectID != project.ID {
+			t.Fatalf("asset ownership mismatch: %#v", item.Look)
+		}
+	}
+}
+
+func TestOutfitPromptUsesPortraitAsIdentityAnchorForRedressing(t *testing.T) {
+	prompt := outfitPrompt(&models.CharacterOutfit{Description: "雨夜调查造型"})
+	for _, expected := range []string{"<Picture 1>=角色原始标准像", "基于该标准像为角色换装", "9:16竖版正面全身新形象定妆照", "不得覆盖原标准像"} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("prompt missing %q: %s", expected, prompt)
+		}
+	}
 }
 
 func TestOutfitCombinesIndependentAssetsAndAssignsPerScene(t *testing.T) {

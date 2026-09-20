@@ -24,6 +24,109 @@ type OutfitAssignment struct {
 	OutfitID    uint `json:"outfit_id"`
 }
 
+type OutfitDesignInput struct {
+	Concept   string `json:"concept"`
+	Name      string `json:"name"`
+	IsDefault bool   `json:"is_default"`
+}
+
+type outfitDesignAsset struct {
+	Name        string `json:"name"`
+	Category    string `json:"category"`
+	Description string `json:"description"`
+}
+
+type outfitDesignResult struct {
+	Name        string              `json:"name"`
+	Description string              `json:"description"`
+	Assets      []outfitDesignAsset `json:"assets"`
+}
+
+// DesignOutfit 把一个完整形象概念拆成独立、可审核的造型资产，并组合为套装草稿。
+func (s *CharacterLookService) DesignOutfit(projectID, characterID uint, req OutfitDesignInput) (*models.CharacterOutfit, error) {
+	concept := strings.TrimSpace(req.Concept)
+	if concept == "" {
+		return nil, fmt.Errorf("请描述想设计的新形象")
+	}
+	if s.textProvider == nil {
+		return nil, fmt.Errorf("文本生成服务未配置")
+	}
+	var project models.Project
+	var character models.Character
+	if err := s.db.First(&project, projectID).Error; err != nil {
+		return nil, err
+	}
+	if err := s.db.Where("id = ? AND project_id = ?", characterID, projectID).First(&character).Error; err != nil {
+		return nil, err
+	}
+	system := `你是影视角色造型设计师。根据用户的完整形象概念，设计一套统一的新造型，并拆成独立资产。
+只输出严格JSON：{"name":"套装名","description":"整套形象说明","assets":[{"name":"资产名","category":"clothing|shoes|hair|hair_accessory|jewelry|bag","description":"材质、颜色、款式、结构细节"}]}。
+必须包含clothing、shoes、hair；其余类别只在概念确实需要时加入。每类最多一个，hair_accessory和jewelry可各一个。资产描述只写该单件资产，不写人物姓名、脸、身体、姿势或构图。不得加入武器、法宝、剧情道具，不得混入多个互斥方案。`
+	user := fmt.Sprintf("项目题材：%s\n项目画风：%s\n角色：%s（仅用于理解身份，不得写入资产描述）\n用户命名：%s\n新形象概念：%s", project.Genre, project.Style, character.Name, strings.TrimSpace(req.Name), concept)
+	raw, err := s.textProvider.Chat(system, user)
+	if err != nil {
+		return nil, fmt.Errorf("AI设计新形象失败: %w", err)
+	}
+	var design outfitDesignResult
+	if err := parseJSONObject(raw, &design); err != nil {
+		return nil, fmt.Errorf("AI新形象结果解析失败: %w", err)
+	}
+	if strings.TrimSpace(req.Name) != "" {
+		design.Name = strings.TrimSpace(req.Name)
+	}
+	design.Name, design.Description = strings.TrimSpace(design.Name), strings.TrimSpace(design.Description)
+	if design.Name == "" || len(design.Assets) == 0 || len(design.Assets) > 6 {
+		return nil, fmt.Errorf("AI新形象缺少有效套装名或资产")
+	}
+	seen := map[string]bool{}
+	for i := range design.Assets {
+		a := &design.Assets[i]
+		a.Name, a.Category, a.Description = strings.TrimSpace(a.Name), strings.TrimSpace(a.Category), strings.TrimSpace(a.Description)
+		if a.Name == "" || a.Description == "" || !ValidLookCategories[a.Category] || a.Category == "full" {
+			return nil, fmt.Errorf("AI返回了无效造型资产")
+		}
+		if seen[a.Category] {
+			return nil, fmt.Errorf("AI返回了重复的%s资产", LookCategoryLabel(a.Category))
+		}
+		seen[a.Category] = true
+	}
+	for _, required := range []string{"clothing", "shoes", "hair"} {
+		if !seen[required] {
+			return nil, fmt.Errorf("AI新形象缺少%s设计", LookCategoryLabel(required))
+		}
+	}
+	var outfit models.CharacterOutfit
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		outfit = models.CharacterOutfit{ProjectID: projectID, CharacterID: characterID, Name: design.Name, Description: design.Description, IsDefault: req.IsDefault, AuditStatus: models.LookStatusDraft, Version: 1}
+		if err := tx.Create(&outfit).Error; err != nil {
+			return err
+		}
+		if req.IsDefault {
+			if err := tx.Model(&models.CharacterOutfit{}).Where("character_id = ? AND id <> ?", characterID, outfit.ID).Update("is_default", false).Error; err != nil {
+				return err
+			}
+		}
+		for i, asset := range design.Assets {
+			look := models.CharacterLook{ProjectID: projectID, CharacterID: characterID, Name: asset.Name, Category: asset.Category, Description: asset.Description, Prompt: buildLookAssetPrompt(asset.Category, asset.Name, asset.Description, &project), Source: "auto", Priority: 50, AuditStatus: models.LookStatusDraft, Version: 1}
+			if err := tx.Create(&look).Error; err != nil {
+				return err
+			}
+			if err := tx.Create(&models.CharacterOutfitLook{OutfitID: outfit.ID, LookID: look.ID, Order: i}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	var saved models.CharacterOutfit
+	if err := s.db.Preload("Items.Look").First(&saved, outfit.ID).Error; err != nil {
+		return nil, err
+	}
+	return &saved, nil
+}
+
 func (s *CharacterLookService) ListOutfits(projectID, characterID uint) ([]models.CharacterOutfit, error) {
 	var outfits []models.CharacterOutfit
 	err := s.db.Preload("Items", func(db *gorm.DB) *gorm.DB { return db.Order("`order`, id") }).Preload("Items.Look").
@@ -173,7 +276,7 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 	params := map[string]any{"width": 928, "height": 1664}
 	if sheet {
 		refs = []FileMeta{{TaskID: fmt.Sprint(projectID), Name: outfit.Image}}
-		prompt = "<Picture 1>=已经审核的完整造型参考图。生成同一个角色、同一张脸、同一发型、同一套服装鞋履配饰的四视图设定图：脸部特写、正面全身、侧面全身、背面全身，纯净背景，四个视图彼此一致。"
+		prompt = "<Picture 1>=已经审核的新形象正面全身定妆照。保持同一个角色、同一张脸、同一发型、同一套服装鞋履配饰，生成四视图设定图：脸部特写、正面全身、侧面全身、背面全身，纯净背景，四个视图彼此一致。"
 		params = map[string]any{"width": 1664, "height": 928}
 	} else {
 		for _, item := range outfit.Items {
@@ -208,7 +311,7 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 }
 
 func outfitPrompt(outfit *models.CharacterOutfit) string {
-	lines := []string{"<Picture 1>=角色定妆照，只锁定脸部身份和项目画风。生成同一角色的9:16竖版完整造型参考图，人物从头发顶部到鞋底完整入镜，正面自然站立。", strings.TrimSpace(outfit.Description)}
+	lines := []string{"<Picture 1>=角色原始标准像，只锁定同一张脸、人物身份和项目画风。基于该标准像为角色换装，生成9:16竖版正面全身新形象定妆照；人物从头发顶部到鞋底完整入镜，正面自然站立，完整呈现服装、鞋履、发型与配饰。不得改变人物身份，不得覆盖原标准像。", strings.TrimSpace(outfit.Description)}
 	items := append([]models.CharacterOutfitLook(nil), outfit.Items...)
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Order < items[j].Order })
 	pic := 2

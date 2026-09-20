@@ -43,6 +43,28 @@ func (s *Service) HandleListCharacterOutfits(c *gin.Context) {
 	c.JSON(200, rows)
 }
 
+func (s *Service) HandleDesignCharacterOutfit(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	cid, ok := characterParam(c)
+	if !ok {
+		return
+	}
+	var req OutfitDesignInput
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	row, err := s.CharacterLooks.DesignOutfit(p.ID, cid, req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, row)
+}
+
 func (s *Service) HandleCreateCharacterOutfit(c *gin.Context) {
 	p, ok := s.loadProject(c)
 	if !ok {
