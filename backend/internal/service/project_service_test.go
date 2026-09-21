@@ -648,6 +648,30 @@ func TestAIStoryboardDetailUsesH3SubjectsAndDropsDialogueText(t *testing.T) {
 	}
 }
 
+func TestRedesignSceneImagePromptUsesQwenContractWhenSelected(t *testing.T) {
+	ps := newTestProjectService(t)
+	provider := &captureTextProvider{response: `{"rewritten_prompt":"国风写实画面中，林舒站在宗门大殿长阶中央，白色交领仙裙被晨光勾勒，青玉玉佩悬于腰间，低机位中近景构图，石柱与云雾形成纵深。","wh_ratio":"9:16","ratio_follow":""}`}
+	ps.textProvider = provider
+	project := models.Project{Title: "问仙", Genre: "古典修仙", Style: "国风写实", AspectRatio: "9:16"}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID, Title: "入殿", Content: "林舒进入宗门大殿", ImageEngine: ImageEngineQwen21, Characters: "林舒", LocationName: "宗门大殿"}
+	if err := ps.db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := ps.RedesignSceneImagePrompt(&scene)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(prompt, "subject_definitions:") || strings.Contains(prompt, "[Shot 1]") {
+		t.Fatalf("Qwen prompt contains H3 format: %s", prompt)
+	}
+	if !strings.Contains(prompt, "林舒") || !strings.Contains(provider.system, "Qwen-Image-2.1") {
+		t.Fatalf("prompt=%q system=%q", prompt, provider.system)
+	}
+}
+
 func TestRedesignSceneImagePromptUsesProjectAndAssetContext(t *testing.T) {
 	ps := newTestProjectService(t)
 	provider := &stubTextProvider{response: "subject_definitions:\n<Subject 1> 是 <Picture 1> 中的素材名。\n\nsummary:\n[reference generation] 林舒进入古典宗门大殿\n\nretention_analysis:\n<Subject 1> (出现在 [Shot 1]): fully_preserved - 已提供的主体信息。\n\ndetailed_description:\n[Shot 1] 林舒右脚刚踏上长阶，电影级全景，低机位纵深构图，晨雾体积光，国风写实\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"}

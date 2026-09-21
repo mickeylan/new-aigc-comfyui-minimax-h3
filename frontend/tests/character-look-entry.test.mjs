@@ -47,7 +47,7 @@ test('场景设计按可见角色加载新形象套装', () => {
   assert.match(projectDetail, /character_roles_set\?\(sc\?\.visible_characters/)
   assert.match(projectDetail, /api\.characterOutfits\(id\(\), ch\.id\)/)
   assert.match(projectDetail, /const outfitAssignments = Object\.entries\(selectedSceneOutfits\.value\)/)
-  assert.match(projectDetail, /api\.redesignScenePrompt\(id\(\), editingScene\.value\.id, \{ brief: sceneForm\.content\.trim\(\), outfits: outfitAssignments, references: selectedSceneReferences\.value \}\)/)
+  assert.match(projectDetail, /api\.redesignScenePrompt\(id\(\), editingScene\.value\.id, \{ brief: sceneForm\.content\.trim\(\), image_engine: sceneForm\.image_engine, outfits: outfitAssignments, references: selectedSceneReferences\.value \}\)/)
 })
 
 test('新形象图片支持点击查看大图', () => {

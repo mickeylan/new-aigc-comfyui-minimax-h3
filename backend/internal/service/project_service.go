@@ -384,6 +384,9 @@ func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, err
 	if len(parseSceneCharacters(sc.Characters)) > 0 {
 		framingRule = "\n本场有人物：优先中景、中近景或近景，保证主要人物面部清晰并占据足够像素；避免远景、大远景和人物在画面中过小。只有剧情必须交代宏大空间时才可用全景，但人物脸部仍须清晰可辨。"
 	}
+	if engine, _ := normalizeSceneImageEngine(sc.ImageEngine); engine == ImageEngineQwen21 {
+		return s.redesignQwenSceneImagePrompt(sc, &project, referenceLines, referenceContext, shotContext, assetContext, framingRule)
+	}
 	system := `你是 MiniMax H3 SelfLift 分镜图提示词编辑。本任务只设计一个静止分镜画面。
 Subject与Picture的真实身份绑定由系统根据实际上传文件生成，你不得生成或改写subject_definitions、summary、retention_analysis、overall_soundscape或non_diegetic_music。
 你只输出一段以“[Shot 1]”开头的detailed_description正文：
@@ -439,6 +442,47 @@ Subject与Picture的真实身份绑定由系统根据实际上传文件生成，
 		}
 	}
 	return result, nil
+}
+
+func (s *ProjectService) redesignQwenSceneImagePrompt(sc *models.Scene, project *models.Project, referenceLines []string, referenceContext, shotContext, assetContext, framingRule string) (string, error) {
+	hasRefs := len(referenceLines) > 0
+	system := qwenImage21T2ISystem
+	if hasRefs {
+		system = qwenImage21EditSystem
+	}
+	user := fmt.Sprintf("User request:\n根据权威剧情设计一个静止分镜画面。项目：%s；题材：%s；画风：%s；场景标题：%s；场景剧情：%s；地点：%s；道具：%s。%s\n\nAdditional fixed context:\n当前镜头设计：%s\n场景与道具资料：%s", project.Title, project.Genre, project.Style, sc.Title, sc.Content, sc.LocationName, sc.Props, framingRule, shotContext, assetContext)
+	if hasRefs {
+		user += "\n\nOrdered input image roles (order is binding):"
+		for i, line := range referenceLines {
+			user += fmt.Sprintf("\n<image%d>: role=外观与身份参考; visible facts=%s", i+1, line)
+		}
+		user += "\n新建构图，不把任何输入图当作画布；ratio_follow必须为空，wh_ratio使用项目画幅。"
+	} else {
+		user += "\n\n无输入参考图。"
+	}
+	user += "\nExplicit output aspect ratio: " + strings.TrimSpace(project.AspectRatio)
+	policy, err := NewPromptPolicyService(s.db).Resolve(PromptPolicyContext{ProjectID: sc.ProjectID, SceneID: &sc.ID}, PromptPolicyImagePolish, system)
+	if err != nil {
+		return "", fmt.Errorf("解析Qwen画面提示词策略失败: %w", err)
+	}
+	raw, err := s.textProvider.Chat(policy.Content, user)
+	if err != nil {
+		return "", fmt.Errorf("AI重新设计Qwen场景提示词失败: %w", err)
+	}
+	prompt, _, _, err := parseQwenImagePromptResult(raw, hasRefs)
+	if err != nil {
+		return "", fmt.Errorf("Qwen场景提示词格式无效: %w", err)
+	}
+	for _, forbidden := range []string{"subject_definitions:", "retention_analysis:", "detailed_description:", "<Subject ", "<Picture ", "素材名", "主体信息"} {
+		if strings.Contains(prompt, forbidden) {
+			return "", fmt.Errorf("Qwen场景提示词错误包含H3结构或占位词“%s”", forbidden)
+		}
+	}
+	if len([]rune(prompt)) < 20 {
+		return "", fmt.Errorf("AI返回的Qwen场景提示词过短，请重试")
+	}
+	_ = referenceContext
+	return prompt, nil
 }
 
 // ReplaceSceneImage 以人工上传图片替换分镜图，并使所有基于旧图的视频状态失效。

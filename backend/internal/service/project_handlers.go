@@ -269,9 +269,10 @@ func (s *Service) HandleRedesignScenePrompt(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Brief      string                    `json:"brief"`
-		Outfits    []OutfitAssignment        `json:"outfits"`
-		References []SceneReferenceSelection `json:"references"`
+		Brief       string                    `json:"brief"`
+		ImageEngine string                    `json:"image_engine"`
+		Outfits     []OutfitAssignment        `json:"outfits"`
+		References  []SceneReferenceSelection `json:"references"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -279,6 +280,12 @@ func (s *Service) HandleRedesignScenePrompt(c *gin.Context) {
 	}
 	if strings.TrimSpace(req.Brief) != "" {
 		sc.Content = strings.TrimSpace(req.Brief)
+	}
+	if engine, err := normalizeSceneImageEngine(req.ImageEngine); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	} else {
+		sc.ImageEngine = engine
 	}
 	if err := s.CharacterLooks.AssignSceneOutfits(sc.ProjectID, sc.ID, req.Outfits); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -292,6 +299,7 @@ func (s *Service) HandleRedesignScenePrompt(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	sc.ImageEngine, _ = normalizeSceneImageEngine(req.ImageEngine)
 	prompt, err := s.Projects.RedesignSceneImagePrompt(sc)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})

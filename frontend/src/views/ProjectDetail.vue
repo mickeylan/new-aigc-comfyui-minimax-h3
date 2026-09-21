@@ -560,9 +560,9 @@
         <div class="field"><label>人物用途</label><div v-if="characters.length" class="role-grid"><div v-for="ch in characters" :key="ch.id" class="role-row"><strong>{{ ch.name }}</strong><label><input type="checkbox" :checked="sceneRoleHas('visible', ch.name)" @change="toggleSceneRole('visible', ch.name, $event.target.checked)" /> 画面可见</label><label><input type="checkbox" :checked="sceneRoleHas('voice', ch.name)" @change="toggleSceneRole('voice', ch.name, $event.target.checked)" /> 发声</label><label><input type="checkbox" :checked="sceneRoleHas('mentioned', ch.name)" @change="toggleSceneRole('mentioned', ch.name, $event.target.checked)" /> 仅提及</label></div></div><div v-else class="field-hint">请先建立角色资产。</div><div class="field-hint">可见与发声可同时勾选；“仅提及”与二者互斥。只有画面可见人物需要四视图。</div></div>
         <div class="field"><label>场景图生成模板</label><select v-model="sceneForm.image_engine" class="input"><option value="minimax_h3">MiniMax H3 SelfLift（当前默认）</option><option value="qwen_image_2_1" :disabled="!qwenSceneTemplateReady">Qwen-Image-2.1{{ qwenSceneTemplateReady ? '' : '（工作流模板未安装）' }}</option></select><div class="field-hint">仅决定剧情场景图工作流；视频仍使用现有 H3 流程。Qwen 模板安装并启用后才可选择。</div></div>
         <div class="field">
-          <div class="field-label-actions"><label>H3 起始帧画面提示词</label><button class="btn btn-sm btn-secondary" :disabled="redesigningScenePrompt || !sceneForm.content.trim()" @click="redesignScenePrompt">{{ redesigningScenePrompt ? '生成中…' : '生成 H3 起始帧提示词' }}</button></div>
+          <div class="field-label-actions"><label>{{sceneForm.image_engine==='qwen_image_2_1'?'Qwen-Image-2.1 场景图提示词':'H3 起始帧画面提示词'}}</label><button class="btn btn-sm btn-secondary" :disabled="redesigningScenePrompt || !sceneForm.content.trim()" @click="redesignScenePrompt">{{ redesigningScenePrompt ? '生成中…' : sceneForm.image_engine==='qwen_image_2_1'?'生成 Qwen-Image-2.1 提示词':'生成 H3 起始帧提示词' }}</button></div>
           <textarea v-model="sceneForm.image_prompt" class="textarea" rows="6"
-            placeholder="根据当前剧情、镜头设计和已选参考图，生成简洁的 H3 起始帧画面、动作、摄影机与光线描述。" />
+            :placeholder="sceneForm.image_engine==='qwen_image_2_1'?'根据剧情和有序 <imageN> 参考图生成 Qwen-Image-2.1 单段画面描述。':'根据当前剧情、镜头设计和已选参考图，生成 H3 六段式起始帧提示词。'" />
           <div class="field-hint">人物身份与造型由参考图控制；提示词只描述当前镜头中实际出现的主体、动作、构图和光线。修改后需保存并重新生成画面。</div>
         </div>
         <div class="field"><label>视频动作正文（可手工修改）</label><textarea v-model="sceneForm.video_prompt" class="textarea" rows="6" placeholder="填写可见动作、结束状态和运镜；留空则自动生成。首帧、连续性和 H3 六段契约由系统固定保护。" /></div>
@@ -2378,7 +2378,7 @@ async function redesignScenePrompt() {
   try {
     // AI 生成提示词前先保存当前套装选择，否则后端仍会按数据库中的旧标准造型组装上下文。
     const outfitAssignments = Object.entries(selectedSceneOutfits.value).filter(([, oid]) => Number(oid) > 0).map(([cid, oid]) => ({ character_id: Number(cid), outfit_id: Number(oid) }))
-    const { data } = await api.redesignScenePrompt(id(), editingScene.value.id, { brief: sceneForm.content.trim(), outfits: outfitAssignments, references: selectedSceneReferences.value })
+    const { data } = await api.redesignScenePrompt(id(), editingScene.value.id, { brief: sceneForm.content.trim(), image_engine: sceneForm.image_engine, outfits: outfitAssignments, references: selectedSceneReferences.value })
     sceneForm.image_prompt = data.prompt
     toast.success('场景画面提示词已由 AI 重新设计，请确认后保存')
   } catch (e) {
