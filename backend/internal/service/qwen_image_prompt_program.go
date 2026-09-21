@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"comfyui-console/internal/models"
 )
 
 const (
@@ -48,10 +50,17 @@ type PromptProgramResult struct {
 	Provider    string `json:"provider"`
 }
 
-type QwenImagePromptProgramService struct{ provider TextProvider }
+type QwenImagePromptProgramService struct {
+	provider TextProvider
+	skills   *SkillService
+}
 
-func NewQwenImagePromptProgramService(provider TextProvider) *QwenImagePromptProgramService {
-	return &QwenImagePromptProgramService{provider: provider}
+func NewQwenImagePromptProgramService(provider TextProvider, skills ...*SkillService) *QwenImagePromptProgramService {
+	var skillService *SkillService
+	if len(skills) > 0 {
+		skillService = skills[0]
+	}
+	return &QwenImagePromptProgramService{provider: provider, skills: skillService}
 }
 
 func (s *QwenImagePromptProgramService) List() []PromptProgram {
@@ -174,7 +183,17 @@ func (s *QwenImagePromptProgramService) Generate(code string, in PromptProgramIn
 	if program.TargetMode == "multi-image-edit" {
 		system = qwenImage21EditSystem
 	}
-	raw, err := s.provider.Chat(system, buildPromptProgramUser(program, in))
+	request := buildPromptProgramUser(program, in)
+	var raw string
+	if s.skills != nil {
+		stage := models.SkillStageQwenImageT2I
+		if program.TargetMode == "multi-image-edit" {
+			stage = models.SkillStageQwenImageEdit
+		}
+		raw, err = s.skills.ChatWithConfiguredOrFallbackSkill(0, stage, program.Code, s.provider, "", "", map[string]string{"request": request})
+	} else {
+		raw, err = s.provider.Chat(system, request)
+	}
 	if err != nil {
 		return PromptProgramResult{}, fmt.Errorf("提示词生成失败: %w", err)
 	}

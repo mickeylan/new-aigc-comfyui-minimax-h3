@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"comfyui-console/internal/models"
 )
 
 type promptProgramStub struct {
@@ -42,6 +44,29 @@ func TestQwenImage21EditPromptBindsReferenceOrder(t *testing.T) {
 	}
 	if got.RatioFollow != "<image2>" || !strings.Contains(p.user, "<image1>: role=人物身份") || !strings.Contains(p.user, "<image2>: role=目标场景") {
 		t.Fatalf("reference order lost: result=%+v user=%s", got, p.user)
+	}
+}
+
+func TestQwenImage21PromptProgramUsesBuiltinSkillAndAudit(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Skill{}, &models.ProjectSkillConfig{}, &models.SkillAuditLog{}); err != nil {
+		t.Fatal(err)
+	}
+	skills := NewSkillService(ps.db)
+	if err := skills.InitSystemSkills(); err != nil {
+		t.Fatal(err)
+	}
+	provider := &promptProgramStub{response: `{"rewritten_prompt":"A wide cinematic scene of a cloud city under warm directional light. The overall composition is monumental and balanced.","wh_ratio":"16:9"}`}
+	service := NewQwenImagePromptProgramService(provider, skills)
+	if _, err := service.Generate(QwenImage21T2IProgram, PromptProgramInput{Brief: "云上巨城"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(provider.system, "finished image") {
+		t.Fatalf("builtin skill system prompt missing: %s", provider.system)
+	}
+	var audit models.SkillAuditLog
+	if err := ps.db.Where("skill_code = ?", QwenImage21T2IProgram).First(&audit).Error; err != nil {
+		t.Fatal("skill invocation was not audited: ", err)
 	}
 }
 

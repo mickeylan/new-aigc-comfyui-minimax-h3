@@ -481,20 +481,22 @@ type Skill struct {
 
 // SkillStage 技能适用阶段常量
 const (
-	SkillStagePlan              = "plan"                 // 创作方案阶段
-	SkillStageCharacter         = "character"            // 角色设定阶段
-	SkillStageStoryboard        = "storyboard"           // 分镜剧本阶段
-	SkillStageImagePrompt       = "image_prompt"         // 画面提示词阶段
-	SkillStageVideoPrompt       = "video_prompt"         // 视频提示词阶段
-	SkillStageReview            = "review"               // 审核/复审阶段
-	SkillStageChapterAnalysis   = "chapter_analysis"     // 小说章节结构化分析
-	SkillStageArcMerge          = "arc_merge"            // 小说剧情单元归并
-	SkillStageStoryBible        = "story_bible"          // 小说故事圣经综合
-	SkillStageAdaptationPlan    = "adaptation_plan"      // 小说分集映射
-	SkillStageEpisodeAdaptation = "episode_adaptation"   // 小说单集剧本改编
-	SkillStageContinuityReview  = "continuity_review"    // 小说集间连续性复审
-	SkillStageMegastructure     = "megastructure_prompt" // Krea2 巨构场景提示词增强
-	SkillStageCreativeIntent    = "creative_intent"      // 用户显式触发的创作意图澄清
+	SkillStagePlan              = "plan"                   // 创作方案阶段
+	SkillStageCharacter         = "character"              // 角色设定阶段
+	SkillStageStoryboard        = "storyboard"             // 分镜剧本阶段
+	SkillStageImagePrompt       = "image_prompt"           // 画面提示词阶段
+	SkillStageVideoPrompt       = "video_prompt"           // 视频提示词阶段
+	SkillStageReview            = "review"                 // 审核/复审阶段
+	SkillStageChapterAnalysis   = "chapter_analysis"       // 小说章节结构化分析
+	SkillStageArcMerge          = "arc_merge"              // 小说剧情单元归并
+	SkillStageStoryBible        = "story_bible"            // 小说故事圣经综合
+	SkillStageAdaptationPlan    = "adaptation_plan"        // 小说分集映射
+	SkillStageEpisodeAdaptation = "episode_adaptation"     // 小说单集剧本改编
+	SkillStageContinuityReview  = "continuity_review"      // 小说集间连续性复审
+	SkillStageMegastructure     = "megastructure_prompt"   // Krea2 巨构场景提示词增强
+	SkillStageCreativeIntent    = "creative_intent"        // 用户显式触发的创作意图澄清
+	SkillStageQwenImageT2I      = "qwen_image_t2i_prompt"  // Qwen-Image-2.1 文生图提示词
+	SkillStageQwenImageEdit     = "qwen_image_edit_prompt" // Qwen-Image-2.1 多图编辑提示词
 )
 
 // ProjectSkillConfig 项目级技能配置：支持项目选择特定技能或覆盖系统默认

@@ -85,7 +85,7 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	// 初始化新服务
 	shots := NewShotService(db)
 	promptWorkshop := NewPromptWorkshopService(db, textProviderFact)
-	qwenImagePromptPrograms := NewQwenImagePromptProgramService(textProviderFact)
+	qwenImagePromptPrograms := NewQwenImagePromptProgramService(textProviderFact, skills)
 	stylePresets := NewStylePresetService(db)
 	charLooks := NewCharacterLookService(db, textProviderFact)
 	charLooks.SetDeps(tasks, remote, upload)
