@@ -195,6 +195,7 @@ type Scene struct {
 	Title                  string    `json:"title"`                                                               // 场景标题
 	Content                string    `json:"content"`                                                             // 场景正文（作为视频提示词）
 	ImagePrompt            string    `json:"image_prompt"`                                                        // 文生图提示词
+	ImageEngine            string    `gorm:"column:image_engine;default:minimax_h3" json:"image_engine"`          // minimax_h3/qwen_image_2_1
 	NegativePrompt         string    `gorm:"column:negative_prompt;type:text" json:"negative_prompt"`             // 镜头层聚合的负面提示词
 	ReferenceImagesJSON    string    `gorm:"column:reference_images_json;type:text" json:"-"`                     // 用户指定的有序参考图及 Krea2/H3 用途
 	Duration               float64   `gorm:"default:5" json:"duration"`                                           // 场景目标时长（秒）
@@ -347,6 +348,8 @@ type Asset struct {
 	Description string    `gorm:"type:text" json:"description"`                                    // 外观描述（道具：形状/材质/颜色/细节；场景：空间/建筑/光线氛围）
 	VisualType  string    `gorm:"column:visual_type;default:normal" json:"visual_type"`            // 场景资产：normal/megastructure
 	MegaType    string    `gorm:"column:mega_type" json:"mega_type"`                               // 场景资产巨构类别
+	ImageEngine string    `gorm:"column:image_engine;default:krea2" json:"image_engine"`           // krea2/qwen_image_2_1
+	VisibleText string    `gorm:"column:visible_text;type:text" json:"visible_text"`               // 必须逐字呈现在图中的可读文字
 	Image       string    `json:"image"`                                                           // 参考图文件名（input/<project_id>/ 下）
 	ImageTaskID string    `gorm:"column:image_task_id;index" json:"image_task_id"`                 // Krea2 参考图生成任务
 	ImageError  string    `gorm:"column:image_error;type:text" json:"image_error"`                 // 参考图生成错误

@@ -3178,11 +3178,16 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 		return err
 	}
 	sc = &latest
-	refs, lines, explicitRefs := s.selectedSceneReferenceFiles(sc, "krea2") // krea2 是旧数据库字段名，此处实际提交给 H3 SelfLift
+	engine, engineErr := normalizeSceneImageEngine(sc.ImageEngine)
+	if engineErr != nil {
+		s.failSceneImage(sc, token, engineErr.Error())
+		return engineErr
+	}
+	refs, lines, explicitRefs := s.selectedSceneReferenceFiles(sc, "krea2") // 旧数据库用途名；实际按 image_engine 提交
 	if !explicitRefs {
 		refs, lines = s.sceneImageReferenceFiles(sc)
 	}
-	if len(refs) == 0 {
+	if len(refs) == 0 && engine == ImageEngineMiniMaxH3 {
 		s.failSceneImage(sc, token, "MiniMax H3 SelfLift 分镜候选至少需要选择一张参考图")
 		return fmt.Errorf("MiniMax H3 SelfLift 分镜候选至少需要选择一张参考图")
 	}
@@ -3193,11 +3198,13 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 	// 不再因缺少角色标准像/四视图阻止生成，也不静默补回用户取消的旧形象。
 
 	templateCode := "minimax_h3_storyboard_candidates_selflift"
-	var tpl models.Template
-	if err := s.db.Where("code = ? AND enabled = ?", templateCode, true).First(&tpl).Error; err != nil {
-		msg := "未找到已启用的 MiniMax H3 分镜候选模板 " + templateCode
-		s.failSceneImage(sc, token, msg)
-		return fmt.Errorf("%s", msg)
+	if engine == ImageEngineQwen21 {
+		templateCode = qwenTemplateCode(len(refs) > 0)
+	}
+	tpl, tplErr := enabledTemplateByCode(s.db, templateCode)
+	if tplErr != nil {
+		s.failSceneImage(sc, token, tplErr.Error())
+		return tplErr
 	}
 	var p models.Project
 	if err := s.db.First(&p, sc.ProjectID).Error; err != nil {
@@ -3210,6 +3217,16 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 		compiledScene.ImagePrompt = strings.TrimSpace(compiledScene.ImagePrompt) + "\n【Shot导演设计】\n" + shotContext
 	}
 	prompt := buildH3StoryboardPrompt(&compiledScene, &p, lines)
+	if engine == ImageEngineQwen21 {
+		prompt = s.buildSceneImagePrompt(&compiledScene)
+		if len(refs) > 0 {
+			var bindings []string
+			for i, line := range lines {
+				bindings = append(bindings, fmt.Sprintf("<image%d>: %s", i+1, line))
+			}
+			prompt = strings.Join(bindings, "\n") + "\n" + prompt
+		}
+	}
 	refNames := make([]string, 0, len(refs))
 	for i, ref := range refs {
 		refNames = append(refNames, fmt.Sprintf("Picture %d=%s/%s", i+1, ref.TaskID, ref.Name))
@@ -3224,7 +3241,7 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 		ParentCandidateID: sc.ImageCandidateParentID,
 	})
 	if err != nil {
-		s.failSceneImage(sc, token, "创建 MiniMax H3 SelfLift 场景图任务失败: "+err.Error())
+		s.failSceneImage(sc, token, "创建场景图任务失败: "+err.Error())
 		return err
 	}
 	bound := s.db.Model(&models.Scene{}).

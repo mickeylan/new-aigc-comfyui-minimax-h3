@@ -249,13 +249,13 @@
               </div>
               <p v-if="a.description" class="char-trait">📝 {{ a.description }}</p>
               <span class="char-appear">出场 {{ assetCounts[a.id] || 0 }} 场</span>
-              <span v-if="a.image_task_id" class="char-voice">⏳ Krea2 参考图生成中</span>
+              <span v-if="a.image_task_id" class="char-voice">⏳ {{ imageEngineLabel(a.image_engine) }} 参考图生成中</span>
               <span v-if="a.image_error" class="fail-msg">{{ a.image_error }}</span>
               <span v-if="a.kind === 'prop' && a.sheet_task_id" class="char-voice">⏳ 道具四视图生成中</span>
               <span v-if="a.kind === 'prop' && a.sheet_error" class="fail-msg">{{ a.sheet_error }}</span>
               <div class="char-actions">
-                <button class="btn btn-sm btn-secondary" :disabled="busy || !!a.image_task_id" @click="genAssetImage(a)">
-                  {{ a.image_task_id ? 'Krea2 生成中…' : a.image ? 'Krea2 重生成参考图' : 'Krea2 生成参考图' }}
+                <button class="btn btn-sm btn-secondary" :disabled="busy || !!a.image_task_id || !assetEngineReady(a)" :title="assetEngineReady(a) ? '' : '所选 Qwen-Image-2.1 工作流模板未安装'" @click="genAssetImage(a)">
+                  {{ a.image_task_id ? imageEngineLabel(a.image_engine) + ' 生成中…' : (a.image ? imageEngineLabel(a.image_engine) + ' 重生成参考图' : imageEngineLabel(a.image_engine) + ' 生成参考图') }}
                 </button>
                 <button class="btn btn-sm btn-ghost" :disabled="busy || a._uploading" @click="uploadAssetImage(a)">
                   {{ a._uploading ? '上传中…' : '上传图片替换' }}
@@ -437,7 +437,7 @@
                 <span class="dot blue pulse"></span>画面生成中…
               </span>
               <template v-else>
-                <button class="btn btn-sm btn-secondary" :disabled="busy || sc._working" @click="genImage(sc)">
+                <button class="btn btn-sm btn-secondary" :disabled="busy || sc._working || !sceneEngineReady(sc)" :title="sceneEngineReady(sc) ? '' : '所选 Qwen-Image-2.1 工作流模板未安装'" @click="genImage(sc)">
                   {{ sc._working ? '生成中…' : (sc.status === 'failed' && sc.image_retries > 0 ? '重试画面' : '生成画面') }}
                 </button>
                 <label class="btn btn-sm btn-ghost" :class="{ disabled: busy || sc._working }">
@@ -446,7 +446,7 @@
               </template>
             </template>
             <template v-else>
-              <button class="btn btn-sm btn-secondary" :disabled="busy || sc._working || isVideoWorking(sc)" @click="genImage(sc)">
+              <button class="btn btn-sm btn-secondary" :disabled="busy || sc._working || isVideoWorking(sc) || !sceneEngineReady(sc)" :title="sceneEngineReady(sc) ? '' : '所选 Qwen-Image-2.1 工作流模板未安装'" @click="genImage(sc)">
                 {{ sc._working ? '生成中…' : '重新生成画面' }}
               </button>
               <label class="btn btn-sm btn-ghost" :class="{ disabled: busy || sc._working || isVideoWorking(sc) }">
@@ -558,20 +558,7 @@
             placeholder="描述画面动作、镜头运动、对白…" />
         </div>
         <div class="field"><label>人物用途</label><div v-if="characters.length" class="role-grid"><div v-for="ch in characters" :key="ch.id" class="role-row"><strong>{{ ch.name }}</strong><label><input type="checkbox" :checked="sceneRoleHas('visible', ch.name)" @change="toggleSceneRole('visible', ch.name, $event.target.checked)" /> 画面可见</label><label><input type="checkbox" :checked="sceneRoleHas('voice', ch.name)" @change="toggleSceneRole('voice', ch.name, $event.target.checked)" /> 发声</label><label><input type="checkbox" :checked="sceneRoleHas('mentioned', ch.name)" @change="toggleSceneRole('mentioned', ch.name, $event.target.checked)" /> 仅提及</label></div></div><div v-else class="field-hint">请先建立角色资产。</div><div class="field-hint">可见与发声可同时勾选；“仅提及”与二者互斥。只有画面可见人物需要四视图。</div></div>
-        <div class="field">
-          <label>视觉类型</label>
-          <select v-model="sceneForm.visual_type" class="input">
-            <option value="normal">普通场景</option>
-            <option value="megastructure">巨构场景（Krea2 专项增强）</option>
-          </select>
-          <div v-if="sceneForm.visual_type === 'megastructure'" class="field">
-            <label>巨构类别</label>
-            <select v-model="sceneForm.mega_type" class="input">
-              <option value="architecture">建筑巨构</option><option value="creature">巨兽/生物</option><option value="geological">自然/地质</option><option value="mechanical">机械/载具</option><option value="surreal">超现实混合</option>
-            </select>
-          </div>
-          <div class="field-hint">巨构模式强化尺度参照、大气分层、结构可读性、重量感和镜头构图，不改变剧情主体。</div>
-        </div>
+        <div class="field"><label>场景图生成模板</label><select v-model="sceneForm.image_engine" class="input"><option value="minimax_h3">MiniMax H3 SelfLift（当前默认）</option><option value="qwen_image_2_1" :disabled="!qwenSceneTemplateReady">Qwen-Image-2.1{{ qwenSceneTemplateReady ? '' : '（工作流模板未安装）' }}</option></select><div class="field-hint">仅决定剧情场景图工作流；视频仍使用现有 H3 流程。Qwen 模板安装并启用后才可选择。</div></div>
         <div class="field">
           <div class="field-label-actions"><label>H3 起始帧画面提示词</label><button class="btn btn-sm btn-secondary" :disabled="redesigningScenePrompt || !sceneForm.content.trim()" @click="redesignScenePrompt">{{ redesigningScenePrompt ? '生成中…' : '生成 H3 起始帧提示词' }}</button></div>
           <textarea v-model="sceneForm.image_prompt" class="textarea" rows="6"
@@ -885,6 +872,8 @@
           <select v-if="assetForm.visual_type === 'megastructure'" v-model="assetForm.mega_type" class="input"><option value="architecture">建筑巨构</option><option value="creature">巨兽/生物</option><option value="geological">自然/地质</option><option value="mechanical">机械/载具</option><option value="surreal">超现实混合</option></select>
           <div class="field-hint">只影响该场景资产参考图：强化尺度参照、结构可读性、大气分层和重量感，不作用于剧情分镜。</div>
         </div>
+        <div class="field"><label>参考图生成模板</label><select v-model="assetForm.image_engine" class="input"><option value="krea2">Krea2（默认）</option><option value="qwen_image_2_1" :disabled="!qwenAssetTemplateReady">Qwen-Image-2.1{{ qwenAssetTemplateReady ? '' : '（工作流模板未安装）' }}</option></select><div class="field-hint">默认使用 Krea2；需要清晰中文时推荐 Qwen-Image-2.1。模板未安装时不可选择。</div></div>
+        <div class="field"><label>画面内可读文字 <span class="optional">可选，需逐字呈现</span></label><textarea v-model="assetForm.visible_text" class="textarea" rows="2" placeholder="例如：天阙宗；留空表示画面不需要文字"/><div v-if="assetForm.visible_text.trim() && !qwenAssetTemplateReady" class="field-hint warn">检测到可读文字，建议安装 Qwen-Image-2.1 文生图模板后生成。</div></div>
         <div class="field">
           <div class="field-label-actions"><label>简单说明 / AI 设计结果 <span class="optional">用于保证{{ assetKindLabel }}一致</span></label><button class="btn btn-sm btn-secondary" :disabled="redesigningAsset || !assetForm.name.trim() || !assetForm.description.trim()" @click="redesignAssetDescription">{{ redesigningAsset ? 'AI 设计中…' : 'AI 重新设计' }}</button></div>
           <textarea v-model="assetForm.description" class="textarea" rows="6"
@@ -1029,7 +1018,8 @@ const assets = ref([])
 const assetCounts = ref({})
 const editingAsset = ref(null)
 const assetError = ref('')
-const assetForm = reactive({ name: '', description: '', visual_type: 'normal', mega_type: 'architecture' })
+const assetForm = reactive({ name: '', description: '', visual_type: 'normal', mega_type: 'architecture', image_engine: 'krea2', visible_text: '' })
+watch(() => assetForm.visible_text, value => { if (String(value || '').trim() && qwenAssetTemplateReady.value) assetForm.image_engine = 'qwen_image_2_1' })
 const redesigningAsset = ref(false)
 const voicePresets = ['Cherry', 'Ethan', 'Chelsie', 'Serena', 'Nofish', 'Dylan', 'Jada', 'Peter', 'Sunny', 'Luna']
 const showScript = ref(false)
@@ -1052,6 +1042,12 @@ const videoTaskScene = ref(null)
 const videoTaskPromptDraft = ref('')
 const videoTaskTemplate = ref('minimax_h3_ref2v')
 const modelCatalog = ref([])
+const hasTemplate = code => modelCatalog.value.some(m => m.template_code === code)
+const qwenAssetTemplateReady = computed(() => hasTemplate('qwen_image_2_1_t2i'))
+const qwenSceneTemplateReady = computed(() => hasTemplate('qwen_image_2_1_t2i') || hasTemplate('qwen_image_2_1_multi_edit'))
+const assetEngineReady = a => (a.image_engine || 'krea2') !== 'qwen_image_2_1' || qwenAssetTemplateReady.value
+const sceneEngineReady = sc => (sc.image_engine || 'minimax_h3') !== 'qwen_image_2_1' || qwenSceneTemplateReady.value
+const imageEngineLabel = engine => engine === 'qwen_image_2_1' ? 'Qwen-Image-2.1' : 'Krea2'
 const videoCatalog = computed(() => {
   const rows = modelCatalog.value.filter(m => String(m.mode || '').includes('video'))
   return rows.length ? rows : [
@@ -1085,7 +1081,7 @@ const savingProject = ref(false)
 const sceneError = ref('')
 const projectError = ref('')
 const loadError = ref('')
-const sceneForm = reactive({ title: '', content: '', duration: 5, image_prompt: '', video_prompt: '', visible_characters: '', voice_characters: '', mentioned_characters: '', visual_type: 'normal', mega_type: 'architecture' })
+const sceneForm = reactive({ title: '', content: '', duration: 5, image_prompt: '', image_engine: 'minimax_h3', video_prompt: '', visible_characters: '', voice_characters: '', mentioned_characters: '', visual_type: 'normal', mega_type: 'architecture' })
 const roleField = { visible: 'visible_characters', voice: 'voice_characters', mentioned: 'mentioned_characters' }
 const roleNames = value => String(value || '').split(/[,，、;；\n]/).map(v => v.trim()).filter(Boolean)
 function sceneRoleHas(role, name) { return roleNames(sceneForm[roleField[role]]).includes(name) }
@@ -2143,12 +2139,12 @@ function uploadAssetImage(a) {
 }
 function openCreateAsset() {
   assetError.value = ''
-  Object.assign(assetForm, { name: '', description: '', visual_type: 'normal', mega_type: 'architecture' })
+  Object.assign(assetForm, { name: '', description: '', visual_type: 'normal', mega_type: 'architecture', image_engine: 'krea2', visible_text: '' })
   editingAsset.value = 'new'
 }
 function openEditAsset(a) {
   assetError.value = ''
-  Object.assign(assetForm, { name: a.name, description: a.description, visual_type: a.visual_type || 'normal', mega_type: a.mega_type || 'architecture' })
+  Object.assign(assetForm, { name: a.name, description: a.description, visual_type: a.visual_type || 'normal', mega_type: a.mega_type || 'architecture', image_engine: a.image_engine || 'krea2', visible_text: a.visible_text || '' })
   editingAsset.value = a
 }
 async function redesignAssetDescription() {
@@ -2345,7 +2341,7 @@ async function openEditScene(sc) {
     title: sc.title, content: sc.content, duration: Number(sc.duration) || 5, image_prompt: sc.image_prompt, video_prompt: sc.video_prompt || '',
     visible_characters: sc.character_roles_set ? (sc.visible_characters || '') : (sc.characters || ''),
     voice_characters: sc.voice_characters || '', mentioned_characters: sc.mentioned_characters || '',
-    visual_type: sc.visual_type || 'normal', mega_type: sc.mega_type || 'architecture'
+    image_engine: sc.image_engine || 'minimax_h3', visual_type: sc.visual_type || 'normal', mega_type: sc.mega_type || 'architecture'
   })
   try {
     const sceneChars = sceneCharactersForOutfits(sc)
@@ -2399,6 +2395,7 @@ async function saveScene() {
       content: sceneForm.content,
       duration: Number(sceneForm.duration),
       image_prompt: sceneForm.image_prompt,
+      image_engine: sceneForm.image_engine,
       video_prompt: sceneForm.video_prompt,
       visible_characters: sceneForm.visible_characters,
       voice_characters: sceneForm.voice_characters,

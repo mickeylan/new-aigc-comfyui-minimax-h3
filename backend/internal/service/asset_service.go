@@ -139,6 +139,11 @@ func (s *ProjectService) CreateAsset(a models.Asset) (*models.Asset, error) {
 	}
 	a.Source = "manual"
 	a.VisualType, a.MegaType = normalizeAssetVisual(a.Kind, a.VisualType, a.MegaType)
+	a.ImageEngine, err = normalizeAssetImageEngine(a.ImageEngine)
+	if err != nil {
+		return nil, err
+	}
+	a.VisibleText = strings.TrimSpace(a.VisibleText)
 	a.Image = "" // 新建无参考图
 	if err := s.db.Create(&a).Error; err != nil {
 		return nil, fmt.Errorf("%s名已存在或创建失败: %w", AssetKindLabel(kind), err)
@@ -160,6 +165,11 @@ func (s *ProjectService) UpdateAsset(a *models.Asset, req models.Asset) error {
 		updates["name"] = newName
 	}
 	updates["description"] = strings.TrimSpace(req.Description)
+	engine, err := normalizeAssetImageEngine(req.ImageEngine)
+	if err != nil {
+		return err
+	}
+	updates["image_engine"], updates["visible_text"] = engine, strings.TrimSpace(req.VisibleText)
 	visualType, megaType := normalizeAssetVisual(a.Kind, req.VisualType, req.MegaType)
 	if visualType != a.VisualType || megaType != a.MegaType {
 		updates["visual_type"], updates["mega_type"] = visualType, megaType
@@ -315,9 +325,17 @@ func (s *ProjectService) StartAssetImage(a *models.Asset) error {
 	if err := s.db.First(&p, current.ProjectID).Error; err != nil {
 		return err
 	}
-	var tpl models.Template
-	if err := s.db.Where("code = ? AND enabled = ?", "krea2_asset_reference", true).First(&tpl).Error; err != nil {
-		return fmt.Errorf("未找到已启用的 Krea2 资产参考图模板")
+	engine, err := normalizeAssetImageEngine(current.ImageEngine)
+	if err != nil {
+		return err
+	}
+	templateCode := "krea2_asset_reference"
+	if engine == ImageEngineQwen21 {
+		templateCode = TemplateQwen21T2I
+	}
+	tpl, err := enabledTemplateByCode(s.db, templateCode)
+	if err != nil {
+		return err
 	}
 	width, height := assetImageSize(&p, current.Kind)
 	task, err := s.tasks.CreateTask(CreateTaskReq{
@@ -326,7 +344,7 @@ func (s *ProjectService) StartAssetImage(a *models.Asset) error {
 		Params:     map[string]any{"width": width, "height": height},
 	})
 	if err != nil {
-		return fmt.Errorf("创建 Krea2 资产参考图任务失败: %w", err)
+		return fmt.Errorf("创建资产参考图任务失败: %w", err)
 	}
 	if err := s.db.Model(&models.Asset{}).Where("id = ?", current.ID).Updates(map[string]any{
 		"image_task_id": task.TaskID, "image_error": "",
@@ -383,11 +401,18 @@ func buildAssetPrompt(p *models.Project, a *models.Asset) string {
 	if d := strings.TrimSpace(a.Description); d != "" {
 		parts = append(parts, "环境外观必须精确遵守："+d)
 	}
+	if text := strings.TrimSpace(a.VisibleText); text != "" {
+		parts = append(parts, "画面中必须逐字清晰呈现可读文字：\""+strings.ReplaceAll(text, "\"", "\\\"")+"\"；不得改写、翻译、遗漏或新增其他文字")
+	}
 	if visualType, megaType := normalizeAssetVisual(a.Kind, a.VisualType, a.MegaType); visualType == "megastructure" {
 		label := map[string]string{"architecture": "建筑巨构", "creature": "巨兽/生物巨构", "geological": "自然/地质巨构", "mechanical": "机械/载具巨构", "surreal": "超现实混合巨构"}[megaType]
 		parts = append(parts, "【巨构场景专项】"+label+"，必须使用明确尺度参照、前中后景大气分层、可读的巨型结构、压倒性体量与重量感、广角远景构图；保持环境资产本身，不增加剧情人物")
 	}
-	parts = append(parts, "场景空镜参考图，全景构图，无人物，环境陈设与光影氛围完整清晰，高质量，禁止人物、文字、水印和拼图")
+	ending := "场景空镜参考图，全景构图，无人物，环境陈设与光影氛围完整清晰，高质量，禁止人物、水印和拼图"
+	if strings.TrimSpace(a.VisibleText) == "" {
+		ending += "，禁止文字"
+	}
+	parts = append(parts, ending)
 	return strings.Join(parts, "，")
 }
 

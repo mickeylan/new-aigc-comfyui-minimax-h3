@@ -514,6 +514,7 @@ func (s *Service) HandleUpdateScene(c *gin.Context) {
 		Title               string  `json:"title"`
 		Content             string  `json:"content"`
 		ImagePrompt         string  `json:"image_prompt"`
+		ImageEngine         string  `json:"image_engine"`
 		VideoPrompt         string  `json:"video_prompt"`
 		VisibleCharacters   string  `json:"visible_characters"`
 		VoiceCharacters     string  `json:"voice_characters"`
@@ -534,12 +535,20 @@ func (s *Service) HandleUpdateScene(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "分镜时长必须在 3–15 秒之间"})
 		return
 	}
-	sourceChanged := strings.TrimSpace(req.Content) != strings.TrimSpace(sc.Content) || strings.TrimSpace(req.ImagePrompt) != strings.TrimSpace(sc.ImagePrompt) || req.Duration != sc.Duration || strings.TrimSpace(req.VideoPrompt) != strings.TrimSpace(sc.VideoPrompt) || strings.TrimSpace(req.VisibleCharacters) != strings.TrimSpace(sc.VisibleCharacters) || strings.TrimSpace(req.VoiceCharacters) != strings.TrimSpace(sc.VoiceCharacters) || strings.TrimSpace(req.MentionedCharacters) != strings.TrimSpace(sc.MentionedCharacters)
+	imageEngine, err := normalizeSceneImageEngine(req.ImageEngine)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	currentImageEngine, _ := normalizeSceneImageEngine(sc.ImageEngine)
+	engineChanged := imageEngine != currentImageEngine
+	sourceChanged := strings.TrimSpace(req.Content) != strings.TrimSpace(sc.Content) || strings.TrimSpace(req.ImagePrompt) != strings.TrimSpace(sc.ImagePrompt) || req.Duration != sc.Duration || strings.TrimSpace(req.VideoPrompt) != strings.TrimSpace(sc.VideoPrompt) || strings.TrimSpace(req.VisibleCharacters) != strings.TrimSpace(sc.VisibleCharacters) || strings.TrimSpace(req.VoiceCharacters) != strings.TrimSpace(sc.VoiceCharacters) || strings.TrimSpace(req.MentionedCharacters) != strings.TrimSpace(sc.MentionedCharacters) || engineChanged
 	if err := s.Projects.UpdateScene(sc, req.Title, req.Content, req.ImagePrompt, req.Duration, req.VisualType, req.MegaType); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 	roleUpdates := map[string]any{
+		"image_engine":         imageEngine,
 		"video_prompt":         strings.TrimSpace(req.VideoPrompt),
 		"visible_characters":   strings.TrimSpace(req.VisibleCharacters),
 		"voice_characters":     strings.TrimSpace(req.VoiceCharacters),
@@ -547,6 +556,10 @@ func (s *Service) HandleUpdateScene(c *gin.Context) {
 		"character_roles_set":  true,
 		"characters":           strings.TrimSpace(req.VisibleCharacters),
 		"prompt_stale":         sc.PromptStale || (strings.TrimSpace(sc.VideoFullPrompt) != "" && sourceChanged),
+	}
+	if engineChanged {
+		roleUpdates["image_file"], roleUpdates["image_task_id"], roleUpdates["video_file"], roleUpdates["video_input_file"], roleUpdates["video_task_id"] = "", "", "", "", ""
+		roleUpdates["status"], roleUpdates["error"] = "pending", ""
 	}
 	if err := s.DB.Model(sc).Updates(roleUpdates).Error; err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -1334,7 +1347,12 @@ func (s *Service) HandleGenerateAssetImage(c *gin.Context) {
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusAccepted, gin.H{"ok": true, "message": fmt.Sprintf("%s「%s」Krea2 参考图任务已提交", AssetKindLabel(a.Kind), a.Name)})
+	engine, _ := normalizeAssetImageEngine(a.ImageEngine)
+	label := "Krea2"
+	if engine == ImageEngineQwen21 {
+		label = "Qwen-Image-2.1"
+	}
+	c.JSON(http.StatusAccepted, gin.H{"ok": true, "message": fmt.Sprintf("%s「%s」%s 参考图任务已提交", AssetKindLabel(a.Kind), a.Name, label)})
 }
 
 func (s *Service) HandleGeneratePropSheet(c *gin.Context) {
