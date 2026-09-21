@@ -16,6 +16,8 @@ export const api = {
   gpus: () => http.get('/gpus'),
   templates: () => http.get('/templates'),
   modelCatalog: () => http.get('/model-catalog'),
+  qwenImagePromptPrograms: () => http.get('/qwen-image-2.1/prompt-programs'),
+  generateQwenImagePrompt: (code, data) => http.post(`/qwen-image-2.1/prompt-programs/${code}/generate`, data, { timeout: 300000 }),
   playgroundRuns: (params = {}) => http.get('/playground/runs', { params }),
   playgroundRun: (id) => http.get(`/playground/runs/${id}`),
   createPlaygroundRun: (data) => http.post('/playground/runs', data),

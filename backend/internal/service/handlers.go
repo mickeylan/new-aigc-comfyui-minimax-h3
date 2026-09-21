@@ -48,6 +48,7 @@ type Service struct {
 	Skills                    *SkillService                    // 创作技能管理服务
 	Shots                     *ShotService                     // 镜头层服务
 	PromptWorkshop            *PromptWorkshopService           // 提示词工作台服务
+	QwenImagePromptPrograms   *QwenImagePromptProgramService   // 独立 Qwen-Image-2.1 提示词程序，不接管现有生成链路
 	StylePresets              *StylePresetService              // 风格预设服务
 	Continuity                *ContinuityService               // 视频分镜连续性服务
 	AudioLayers               *AudioLayerService               // 声景、音效与背景音乐层
@@ -84,6 +85,7 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	// 初始化新服务
 	shots := NewShotService(db)
 	promptWorkshop := NewPromptWorkshopService(db, textProviderFact)
+	qwenImagePromptPrograms := NewQwenImagePromptProgramService(textProviderFact)
 	stylePresets := NewStylePresetService(db)
 	charLooks := NewCharacterLookService(db, textProviderFact)
 	charLooks.SetDeps(tasks, remote, upload)
@@ -113,7 +115,7 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 		Remote: remote, Volc: volc, Projects: projects, Materials: materials,
 		Novel: novel, NovelAnalysis: novelAnalysis, Adaptations: adaptations, BatchPlanning: batchPlanning,
 		TextProviderFact: textProviderFact, CharacterProfiles: charProfiles, CharacterLooks: charLooks,
-		Skills: skills, Shots: shots, PromptWorkshop: promptWorkshop, StylePresets: stylePresets,
+		Skills: skills, Shots: shots, PromptWorkshop: promptWorkshop, QwenImagePromptPrograms: qwenImagePromptPrograms, StylePresets: stylePresets,
 		Continuity: continuity, AudioLayers: audioLayers, SharedAssetReferences: sharedAssetReferences,
 		CharacterMotionReferences: characterMotionReferences,
 		AssetVariants:             assetVariants, AssetReconciliation: assetReconciliation, ScriptRevisions: scriptRevisions,

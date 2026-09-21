@@ -75,6 +75,8 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/settings/test-tts", svc.HandleTestTTS)
 	r.GET("/api/text-provider/capabilities", svc.HandleTextProviderCapabilities)
 	r.POST("/api/prompt-workshop/first-frame-polish", svc.HandleFirstFramePromptPolish)
+	r.GET("/api/qwen-image-2.1/prompt-programs", svc.HandleListQwenImagePromptPrograms)
+	r.POST("/api/qwen-image-2.1/prompt-programs/:code/generate", svc.HandleGenerateQwenImagePrompt)
 
 	// 漫剧项目
 	r.GET("/api/projects", svc.HandleListProjects)
