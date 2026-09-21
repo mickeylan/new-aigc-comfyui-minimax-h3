@@ -45,6 +45,14 @@ test('长篇小说剧本页封闭一次性全剧方案入口', () => {
   assert.match(detail, /project\.episodes <= 20/)
 })
 
+test('结构化剧本配色遵循全局明暗主题且不使用固定黑底', () => {
+  assert.match(view, /background:var\(--card-solid\)/)
+  assert.match(view, /color:var\(--text\)/)
+  assert.match(view, /background:var\(--accent-soft\)/)
+  assert.match(view, /\.block-type option\{background:var\(--card-solid\);color:var\(--text\)\}/)
+  assert.doesNotMatch(view, /background:#151821|background:#191d27|var\(--surface-2,#20242d\)/)
+})
+
 test('结构化剧本块支持场景动作对白旁白转场及未保存保护', () => {
   for (const label of ['新增场景', '＋动作', '＋角色对白', '＋旁白', '＋转场']) assert.ok(view.includes(label))
   assert.match(view, /onBeforeRouteLeave/)
