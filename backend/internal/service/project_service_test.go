@@ -1085,6 +1085,40 @@ func TestBuildAssetPromptAndSizeUseKrea2ReferenceConventions(t *testing.T) {
 	}
 }
 
+func TestBuildQwenSceneExecutionPromptKeepsLocationOnlyAndForbidsPeople(t *testing.T) {
+	ps := newTestProjectService(t)
+	p := models.Project{Title: "问仙"}
+	if err := ps.db.Create(&p).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.db.Create(&models.Character{ProjectID: p.ID, Name: "舒寒", Appearance: "黑色长发"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	sc := models.Scene{ProjectID: p.ID, ImageEngine: ImageEngineQwen21, ImagePrompt: "天阙宗玉霄峰巍峨耸立于云海之上", ReferenceImagesJSON: `[{"source_type":"asset","source_id":22,"variant":"image","use_krea2":true,"use_h3":false}]`}
+	got := ps.buildQwenSceneExecutionPrompt(&sc, []string{"- <Picture 1>：场景「玉霄宫」参考图"})
+	for _, want := range []string{"<image1>: 场景「玉霄宫」参考图", "天阙宗玉霄峰", "零人物", "No people"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prompt missing %q: %s", want, got)
+		}
+	}
+	for _, forbidden := range []string{"舒寒：", "主要角色外貌特征", "当前项目 Skill", "masterpiece", "居中构图、中景、半身像"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("prompt retained unrelated %q: %s", forbidden, got)
+		}
+	}
+}
+
+func TestBuildQwenSceneExecutionPromptAllowsSelectedCharacter(t *testing.T) {
+	ps := newTestProjectService(t)
+	p := models.Project{Title: "问仙"}
+	_ = ps.db.Create(&p).Error
+	sc := models.Scene{ProjectID: p.ID, ImagePrompt: "舒寒站在殿前", ReferenceImagesJSON: `[{"source_type":"character","source_id":1,"variant":"portrait","use_krea2":true,"use_h3":false}]`}
+	got := ps.buildQwenSceneExecutionPrompt(&sc, []string{"- <Picture 1>：角色「舒寒」标准像"})
+	if strings.Contains(got, "零人物") {
+		t.Fatalf("character scene incorrectly forbidden: %s", got)
+	}
+}
+
 func TestBuildPortraitPromptDoesNotAppendNegativePrompt(t *testing.T) {
 	p := &models.Project{Style: "真人写实"}
 	ch := &models.Character{Appearance: "22岁女性，黑色长发", ReferencePrompt: "22岁青年女性，超写实真人照片风格"}

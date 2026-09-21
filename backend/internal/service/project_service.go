@@ -2948,6 +2948,49 @@ func (s *ProjectService) buildSceneImagePrompt(sc *models.Scene) string {
 	return s.applyPromptSkill(sc.ProjectID, models.SkillStageImagePrompt, prompt, params)
 }
 
+func (s *ProjectService) buildQwenSceneExecutionPrompt(sc *models.Scene, referenceLines []string) string {
+	prompt := strings.TrimSpace(sc.ImagePrompt)
+	if prompt == "" {
+		prompt = strings.TrimSpace(sc.Content)
+	}
+	parts := make([]string, 0, len(referenceLines)+3)
+	for i, line := range referenceLines {
+		desc := strings.TrimSpace(line)
+		if fields := strings.SplitN(desc, "：", 2); len(fields) == 2 {
+			desc = strings.TrimSpace(fields[1])
+		}
+		parts = append(parts, fmt.Sprintf("<image%d>: %s；仅提取该图明确指定的外观或环境信息，不得复制图中未要求的人物或其他主体。", i+1, desc))
+	}
+	parts = append(parts, prompt)
+	if !s.qwenScenePromptRequestsPeople(sc, prompt) {
+		parts = append(parts, "【主体硬约束】纯场景空镜，画面中零人物、零人形主体、零人群、零角色剪影；不得因项目角色资料、参考图中的路人或模型习惯自行添加人物。 No people, no person, no human figure, no crowd, no character silhouette.")
+	}
+	if negative := strings.TrimSpace(sc.NegativePrompt); negative != "" {
+		parts = append(parts, "禁止出现："+negative)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func (s *ProjectService) qwenScenePromptRequestsPeople(sc *models.Scene, prompt string) bool {
+	selected, explicit := parseSceneReferences(sc)
+	if explicit {
+		for _, ref := range selected {
+			if ref.UseKrea2 && (ref.SourceType == "character" || ref.SourceType == "look" || ref.SourceType == "outfit") {
+				return true
+			}
+		}
+	}
+	var characters []models.Character
+	if err := s.db.Where("project_id = ?", sc.ProjectID).Find(&characters).Error; err == nil {
+		for _, ch := range characters {
+			if ch.Name != "" && strings.Contains(prompt, ch.Name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // sceneImageSize returns full-HD-or-larger storyboard dimensions for the project aspect ratio.
 func sceneImageSize(p *models.Project) (int, int) {
 	if p != nil {
@@ -3286,14 +3329,7 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 	}
 	prompt := buildH3StoryboardPrompt(&compiledScene, &p, lines)
 	if engine == ImageEngineQwen21 {
-		prompt = s.buildSceneImagePrompt(&compiledScene)
-		if len(refs) > 0 {
-			var bindings []string
-			for i, line := range lines {
-				bindings = append(bindings, fmt.Sprintf("<image%d>: %s", i+1, line))
-			}
-			prompt = strings.Join(bindings, "\n") + "\n" + prompt
-		}
+		prompt = s.buildQwenSceneExecutionPrompt(&compiledScene, lines)
 	}
 	refNames := make([]string, 0, len(refs))
 	for i, ref := range refs {
