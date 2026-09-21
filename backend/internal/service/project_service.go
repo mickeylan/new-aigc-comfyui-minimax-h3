@@ -2686,7 +2686,7 @@ func (s *ProjectService) StartCharacterPortrait(ch *models.Character) error {
 	}
 	params := map[string]any{}
 	if engine == ImageEngineQwen21 {
-		params = map[string]any{"aspect_ratio": "1:1 (Square)", "megapixels": 2.5, "multiple": 8, "reference_resolution": 1024, "steps": 25, "cfg": 1, "negative_prompt": ""}
+		params = qwenPortraitParams()
 	}
 	task, err := s.tasks.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: buildPortraitPrompt(&p, ch), Params: params})
 	if err != nil {

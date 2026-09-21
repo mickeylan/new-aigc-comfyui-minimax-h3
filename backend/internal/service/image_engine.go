@@ -50,6 +50,10 @@ func qwenTemplateCode(hasRefs bool) string {
 	return TemplateQwen21T2I
 }
 
+func qwenPortraitParams() map[string]any {
+	return map[string]any{"aspect_ratio": "9:16 (Portrait Widescreen)", "megapixels": 2.5, "multiple": 8, "reference_resolution": 1024, "steps": 25, "cfg": 1, "negative_prompt": ""}
+}
+
 func qwenAspectRatio(value string) string {
 	switch strings.TrimSpace(value) {
 	case "9:16":

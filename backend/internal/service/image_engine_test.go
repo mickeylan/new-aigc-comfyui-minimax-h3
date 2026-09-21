@@ -21,6 +21,13 @@ func TestImageEngineLegacyDefaultsAndValidation(t *testing.T) {
 		t.Fatal("scene accepted Krea2")
 	}
 }
+func TestQwenPortraitDefaultsToNineBySixteen(t *testing.T) {
+	params := qwenPortraitParams()
+	if params["aspect_ratio"] != "9:16 (Portrait Widescreen)" {
+		t.Fatalf("portrait ratio = %#v", params["aspect_ratio"])
+	}
+}
+
 func TestQwenAssetVisibleTextPrompt(t *testing.T) {
 	p := &models.Project{Style: "真人写实"}
 	a := &models.Asset{Kind: AssetKindLocation, Name: "山门", Description: "青石山门", ImageEngine: ImageEngineQwen21, VisibleText: "天阙宗"}
