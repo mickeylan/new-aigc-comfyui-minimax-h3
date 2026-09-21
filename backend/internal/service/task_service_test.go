@@ -165,6 +165,32 @@ func TestLookReferenceWorkflowBindsPortraitAsPictureOne(t *testing.T) {
 	}
 }
 
+func TestQwenImage21MultiEditWorkflowPrunesMissingImages(t *testing.T) {
+	tpl := loadTemplateForTest(t, "qwen_image_2_1_multi_edit.json")
+	params := map[string]any{"prompt": "以<image1>为身份参考生成新场景", "negative_prompt": "", "aspect_ratio": "16:9 (Widescreen)", "megapixels": 2, "multiple": 32, "reference_resolution": 1024, "seed": 1, "steps": 25, "cfg": 1, "unet_name": `qwen-image2.1\qwen_image_2.1_bf16.safetensors`, "clip_name": `qwen-image2.1\qwen3vl_8b_int8_convrot.safetensors`, "vae_name": `qwen-image2.1\qwen_image_2.1_vae_bf16.safetensors`}
+	files := map[string][]FileMeta{"ref_images": {{TaskID: "1", Name: "identity.png"}}}
+	if err := normalizeTemplateFiles(&tpl, params, files); err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := (&TaskService{}).RenderWorkflow(&tpl, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workflow["470"] == nil || workflow["475"] != nil || workflow["477"] != nil {
+		t.Fatalf("unexpected loaders after pruning: %#v", workflow)
+	}
+	inputs := workflow["459:474"].(map[string]any)["inputs"].(map[string]any)
+	if _, ok := inputs["images.image_1"]; !ok {
+		t.Fatal("image_1 connection missing")
+	}
+	if _, ok := inputs["images.image_2"]; ok {
+		t.Fatal("image_2 connection was not pruned")
+	}
+	if inputs["prompt"] != params["prompt"] {
+		t.Fatalf("prompt mismatch: %#v", inputs["prompt"])
+	}
+}
+
 func TestRef2VWorkflowConnectsAllThreeImagesInOrder(t *testing.T) {
 	tpl := loadTemplateForTest(t, "minimax_h3_ref2v.json")
 	params := baseParams()

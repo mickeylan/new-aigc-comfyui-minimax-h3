@@ -9,7 +9,7 @@
       <label>固定上下文（可选）<textarea v-model="form.context" class="textarea" rows="4" placeholder="角色、场景、风格、必须保留的文本或其他硬约束"></textarea></label>
       <label>明确画幅（可选）<input v-model="form.aspect_ratio" class="input" placeholder="例如 16:9；编辑任务留空时由画布图决定"></label>
       <section v-if="isEdit" class="refs">
-        <div class="section-head"><div><h2>有序参考图职责</h2><p class="sub">顺序将固定映射到 &lt;image1&gt;、&lt;image2&gt;……，以后提交多图模板时必须保持相同顺序。</p></div><button class="btn btn-sm btn-secondary" :disabled="form.references.length>=10" @click="addRef">＋参考图</button></div>
+        <div class="section-head"><div><h2>有序参考图职责</h2><p class="sub">顺序将固定映射到 &lt;image1&gt;、&lt;image2&gt;……，以后提交多图模板时必须保持相同顺序。</p></div><button class="btn btn-sm btn-secondary" :disabled="form.references.length>=16" @click="addRef">＋参考图</button></div>
         <article v-for="(ref,i) in form.references" :key="i" class="ref-row"><strong>&lt;image{{i+1}}&gt;</strong><input v-model="ref.role" class="input" placeholder="职责：人物身份/服装/目标场景/画布"><input v-model="ref.description" class="input" placeholder="可见事实或必须锁定的属性"><button class="btn btn-xs btn-danger" @click="form.references.splice(i,1)">删除</button></article>
       </section>
       <button class="btn" :disabled="busy||!form.brief.trim()||(isEdit&&!form.references.length)" @click="generate">{{busy?'生成中…':'生成 Qwen-Image-2.1 提示词'}}</button>
@@ -24,7 +24,7 @@ import{useToastStore}from'../stores/toast'
 const toast=useToastStore(),programs=ref([]),code=ref('qwen-image-2.1-t2i'),busy=ref(false),error=ref(''),result=ref(null)
 const form=reactive({brief:'',context:'',aspect_ratio:'',references:[]})
 const current=computed(()=>programs.value.find(p=>p.code===code.value)),isEdit=computed(()=>current.value?.target_mode==='multi-image-edit')
-function addRef(){if(form.references.length<10)form.references.push({role:'',description:''})}
+function addRef(){if(form.references.length<16)form.references.push({role:'',description:''})}
 watch(code,()=>{result.value=null;if(isEdit.value&&!form.references.length)addRef()})
 async function load(){try{programs.value=(await api.qwenImagePromptPrograms()).data.items||[]}catch(e){error.value=e.response?.data?.error||e.message}}
 async function generate(){busy.value=true;error.value='';try{result.value=(await api.generateQwenImagePrompt(code.value,{...form,references:form.references.map(v=>({...v}))})).data}catch(e){error.value=e.response?.data?.error||e.message}finally{busy.value=false}}

@@ -3191,8 +3191,12 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 		s.failSceneImage(sc, token, "MiniMax H3 SelfLift 分镜候选至少需要选择一张参考图")
 		return fmt.Errorf("MiniMax H3 SelfLift 分镜候选至少需要选择一张参考图")
 	}
-	if len(refs) > maxSceneReferenceImages {
-		refs, lines = refs[:maxSceneReferenceImages], lines[:maxSceneReferenceImages]
+	maxRefs := maxSceneReferenceImages
+	if engine == ImageEngineQwen21 {
+		maxRefs = 16
+	}
+	if len(refs) > maxRefs {
+		refs, lines = refs[:maxRefs], lines[:maxRefs]
 	}
 	// 参考图由用户最终选择：有新形象、标准像或其他可用参考就按实际列表提交。
 	// 不再因缺少角色标准像/四视图阻止生成，也不静默补回用户取消的旧形象。
@@ -3233,10 +3237,14 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 	}
 	log.Printf("[storyboard-submit] project=%d scene=%d template=%s refs=[%s]\nprompt:\n%s", sc.ProjectID, sc.ID, templateCode, strings.Join(refNames, ", "), prompt)
 	width, height := sceneImageSize(&p)
+	params := map[string]any{"width": width, "height": height, "length": 5, "duration": 0.21, "fps": 24}
+	if engine == ImageEngineQwen21 {
+		params = map[string]any{"aspect_ratio": qwenAspectRatio(p.AspectRatio), "megapixels": 2, "multiple": 32, "reference_resolution": 1024, "steps": 25, "cfg": 1, "negative_prompt": strings.TrimSpace(sc.NegativePrompt)}
+	}
 	task, err := s.tasks.CreateTask(CreateTaskReq{
 		TemplateID:        tpl.ID,
 		Prompt:            prompt,
-		Params:            map[string]any{"width": width, "height": height, "length": 5, "duration": 0.21, "fps": 24},
+		Params:            params,
 		Files:             map[string][]FileMeta{"ref_images": refs},
 		ParentCandidateID: sc.ImageCandidateParentID,
 	})

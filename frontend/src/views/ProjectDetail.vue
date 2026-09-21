@@ -576,7 +576,7 @@
           <label>参考图片</label>
           <div v-if="!sceneReferenceCandidates.length" class="field-hint">暂无可用图片，请先生成或上传人物四视图、造型、场景或道具参考图。</div>
           <div class="reference-picker"><div v-for="ref in sceneReferenceCandidates" :key="ref.key" class="reference-option" :class="{ selected: referenceIndex(ref) >= 0 }"><img :src="api.inputUrl(id(), ref.image)" @click="toggleSceneReference(ref)"><div><strong>{{ referenceIndex(ref) >= 0 ? `${selectedSceneReferences[referenceIndex(ref)].use_krea2 ? '用于生成分镜图' : '不用于分镜图'} / ${selectedSceneReferences[referenceIndex(ref)].use_h3 ? '用于后续视频参考' : '不用于后续视频'}` : '未选择' }}</strong><span>{{ ref.label }}</span><div v-if="referenceIndex(ref) >= 0" class="reference-flags"><label><input v-model="selectedSceneReferences[referenceIndex(ref)].use_krea2" type="checkbox"> 生成分镜图时使用</label><label><input v-model="selectedSceneReferences[referenceIndex(ref)].use_h3" type="checkbox"> 后续视频时使用</label><button type="button" @click="moveReference(referenceIndex(ref), -1)">↑</button><button type="button" @click="moveReference(referenceIndex(ref), 1)">↓</button></div></div></div></div>
-          <div class="field-hint"><strong>生成分镜图：</strong>SelfLift 使用场景、当前出场人物四视图、造型和道具参考图，最多 9 张；出场人物四视图会自动补入。<br><strong>生成后续视频：</strong>已确认的分镜图作为起始帧；这里只选择需要额外提供给视频模型的人物、造型或道具参考图，最多 8 张。</div>
+          <div class="field-hint"><strong>生成场景图：</strong>MiniMax H3 SelfLift 最多 9 张参考图；Qwen-Image-2.1 多图编辑最多 16 张。出场人物四视图会自动补入。<br><strong>生成后续视频：</strong>已确认的分镜图作为起始帧；这里只选择需要额外提供给视频模型的人物、造型或道具参考图，最多 8 张。</div>
         </div>
         <div v-if="sceneError" class="notice error-notice">{{ sceneError }}</div>
         <div class="modal-actions">

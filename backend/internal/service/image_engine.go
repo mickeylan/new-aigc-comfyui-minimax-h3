@@ -49,3 +49,14 @@ func qwenTemplateCode(hasRefs bool) string {
 	}
 	return TemplateQwen21T2I
 }
+
+func qwenAspectRatio(value string) string {
+	switch strings.TrimSpace(value) {
+	case "9:16":
+		return "9:16 (Portrait Widescreen)"
+	case "1:1":
+		return "1:1 (Square)"
+	default:
+		return "16:9 (Widescreen)"
+	}
+}
