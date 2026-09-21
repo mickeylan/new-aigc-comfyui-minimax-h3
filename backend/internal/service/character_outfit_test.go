@@ -229,6 +229,35 @@ func TestAssignedOutfitSheetIsAvailableAndForcedIntoExplicitSceneReferences(t *t
 	}
 }
 
+func TestAssignSceneOutfitsNoOpPreservesGeneratedMedia(t *testing.T) {
+	svc, project, character := setupOutfitTestDB(t)
+	outfit := models.CharacterOutfit{ProjectID: project.ID, CharacterID: character.ID, Name: "常服", AuditStatus: models.LookStatusApproved, Image: "look.png"}
+	if err := svc.db.Create(&outfit).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Generation: 1, Title: "场景", ImageFile: "storyboard.png", VideoFile: "video.mp4", Status: "video_ready"}
+	if err := svc.db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	assignment := []OutfitAssignment{{CharacterID: character.ID, OutfitID: outfit.ID}}
+	if err := svc.AssignSceneOutfits(project.ID, scene.ID, assignment); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.db.Model(&scene).Updates(map[string]any{"image_file": "storyboard.png", "video_file": "video.mp4", "status": "video_ready"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.AssignSceneOutfits(project.ID, scene.ID, assignment); err != nil {
+		t.Fatal(err)
+	}
+	var got models.Scene
+	if err := svc.db.First(&got, scene.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.ImageFile != "storyboard.png" || got.VideoFile != "video.mp4" || got.Status != "video_ready" {
+		t.Fatalf("no-op assignment invalidated media: %+v", got)
+	}
+}
+
 func TestOutfitCombinesIndependentAssetsAndAssignsPerScene(t *testing.T) {
 	svc, project, character := setupOutfitTestDB(t)
 	assets := []models.CharacterLook{

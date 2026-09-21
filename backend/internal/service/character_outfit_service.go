@@ -566,6 +566,26 @@ func (s *CharacterLookService) AssignSceneOutfits(projectID, sceneID uint, assig
 	if err := s.validateOutfitAssignments(projectID, assignments); err != nil {
 		return err
 	}
+	var existing []models.SceneCharacterOutfit
+	if err := s.db.Where("scene_id = ?", sceneID).Find(&existing).Error; err != nil {
+		return err
+	}
+	current := make(map[uint]uint, len(existing))
+	for _, row := range existing {
+		current[row.CharacterID] = row.OutfitID
+	}
+	if len(current) == len(assignments) {
+		same := true
+		for _, a := range assignments {
+			if current[a.CharacterID] != a.OutfitID {
+				same = false
+				break
+			}
+		}
+		if same {
+			return nil
+		}
+	}
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("scene_id = ?", sceneID).Delete(&models.SceneCharacterOutfit{}).Error; err != nil {
 			return err
