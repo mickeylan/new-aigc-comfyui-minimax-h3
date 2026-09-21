@@ -165,6 +165,22 @@ func TestLookReferenceWorkflowBindsPortraitAsPictureOne(t *testing.T) {
 	}
 }
 
+func TestQwenImage21T2IWorkflowRenders(t *testing.T) {
+	tpl := loadTemplateForTest(t, "qwen_image_2_1_t2i.json")
+	params := map[string]any{"prompt": "A square studio portrait", "negative_prompt": "", "aspect_ratio": "1:1 (Square)", "megapixels": 2.5, "multiple": 8, "reference_resolution": 1024, "seed": 1, "steps": 25, "cfg": 1, "unet_name": `qwen-image2.1\qwen_image_2.1_int8_convrot.safetensors`, "clip_name": `qwen-image2.1\qwen3vl_8b_int8_convrot.safetensors`, "vae_name": `qwen-image2.1\qwen_image_2.1_vae_bf16.safetensors`}
+	workflow, err := (&TaskService{}).RenderWorkflow(&tpl, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := workflow["459:452"].(map[string]any)["inputs"].(map[string]any)
+	if inputs["prompt"] != params["prompt"] {
+		t.Fatalf("prompt mismatch: %#v", inputs["prompt"])
+	}
+	if workflow["461"] == nil {
+		t.Fatal("save node missing")
+	}
+}
+
 func TestQwenImage21MultiEditWorkflowPrunesMissingImages(t *testing.T) {
 	tpl := loadTemplateForTest(t, "qwen_image_2_1_multi_edit.json")
 	params := map[string]any{"prompt": "以<image1>为身份参考生成新场景", "negative_prompt": "", "aspect_ratio": "16:9 (Widescreen)", "megapixels": 2, "multiple": 32, "reference_resolution": 1024, "seed": 1, "steps": 25, "cfg": 1, "unet_name": `qwen-image2.1\qwen_image_2.1_bf16.safetensors`, "clip_name": `qwen-image2.1\qwen3vl_8b_int8_convrot.safetensors`, "vae_name": `qwen-image2.1\qwen_image_2.1_vae_bf16.safetensors`}

@@ -338,11 +338,9 @@ func (s *ProjectService) StartAssetImage(a *models.Asset) error {
 		return err
 	}
 	width, height := assetImageSize(&p, current.Kind)
-	task, err := s.tasks.CreateTask(CreateTaskReq{
-		TemplateID: tpl.ID,
-		Prompt:     buildAssetPrompt(&p, &current),
-		Params:     map[string]any{"width": width, "height": height},
-	})
+	params := map[string]any{"width": width, "height": height}
+	if engine == ImageEngineQwen21 { params = map[string]any{"aspect_ratio":qwenAspectRatio(p.AspectRatio),"megapixels":2.5,"multiple":8,"reference_resolution":1024,"steps":25,"cfg":1,"negative_prompt":""} }
+	task, err := s.tasks.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: buildAssetPrompt(&p, &current), Params: params})
 	if err != nil {
 		return fmt.Errorf("创建资产参考图任务失败: %w", err)
 	}

@@ -1,0 +1,30 @@
+{
+  "name": "Qwen-Image-2.1 文生图",
+  "code": "qwen_image_2_1_t2i",
+  "description": "Qwen-Image-2.1 原生文生图模板，适用于人物标准照、场景资产、道具资产及无参考图场景图。",
+  "inputs": [
+    { "key": "prompt", "type": "prompt", "label": "Qwen-Image-2.1 文生图提示词", "required": true },
+    { "key": "negative_prompt", "type": "string", "label": "负面提示词", "default": "" },
+    { "key": "aspect_ratio", "type": "select", "label": "输出画幅", "default": "16:9 (Widescreen)", "options": ["1:1 (Square)", "2:3 (Portrait Photo)", "3:2 (Photo)", "3:4 (Portrait Standard)", "4:3 (Standard)", "9:16 (Portrait Widescreen)", "16:9 (Widescreen)", "21:9 (Ultrawide)"] },
+    { "key": "megapixels", "type": "float", "label": "输出百万像素", "default": 2.5, "min": 0.1, "max": 16, "step": 0.1 },
+    { "key": "multiple", "type": "int", "label": "尺寸倍数", "default": 8, "min": 8, "max": 128, "step": 4 },
+    { "key": "reference_resolution", "type": "int", "label": "文本编码分辨率", "default": 1024, "min": 0, "max": 4096, "step": 32 },
+    { "key": "seed", "type": "int", "label": "随机种子", "default": -1, "min": -1 },
+    { "key": "steps", "type": "int", "label": "采样步数", "default": 25, "min": 1, "max": 100 },
+    { "key": "cfg", "type": "float", "label": "CFG", "default": 1, "min": 0, "max": 20, "step": 0.1 },
+    { "key": "unet_name", "type": "string", "label": "UNET", "default": "qwen-image2.1\\qwen_image_2.1_int8_convrot.safetensors" },
+    { "key": "clip_name", "type": "string", "label": "CLIP", "default": "qwen-image2.1\\qwen3vl_8b_int8_convrot.safetensors" },
+    { "key": "vae_name", "type": "string", "label": "VAE", "default": "qwen-image2.1\\qwen_image_2.1_vae_bf16.safetensors" }
+  ],
+  "workflow": {
+    "13": { "class_type": "ResolutionSelector", "inputs": { "aspect_ratio": "{{aspect_ratio}}", "megapixels": "{{megapixels}}", "multiple": "{{multiple}}" } },
+    "459:451": { "class_type": "UNETLoader", "inputs": { "unet_name": "{{unet_name}}", "weight_dtype": "default" } },
+    "459:452": { "class_type": "TextEncodeQwenImage21", "inputs": { "prompt": "{{prompt}}", "negative_prompt": "{{negative_prompt}}", "resolution": "{{reference_resolution}}", "clip": ["459:453", 0] } },
+    "459:453": { "class_type": "CLIPLoader", "inputs": { "clip_name": "{{clip_name}}", "type": "qwen_image", "device": "default" } },
+    "459:454": { "class_type": "VAELoader", "inputs": { "vae_name": "{{vae_name}}" } },
+    "459:456": { "class_type": "EmptyLatentImage", "inputs": { "width": ["13", 0], "height": ["13", 1], "batch_size": 1 } },
+    "459:458": { "class_type": "KSampler", "inputs": { "seed": "{{seed}}", "steps": "{{steps}}", "cfg": "{{cfg}}", "sampler_name": "euler", "scheduler": "simple", "denoise": 1, "model": ["459:451", 0], "positive": ["459:452", 0], "negative": ["459:452", 1], "latent_image": ["459:456", 0] } },
+    "459:457": { "class_type": "VAEDecode", "inputs": { "samples": ["459:458", 0], "vae": ["459:454", 0] } },
+    "461": { "class_type": "SaveImageAdvanced", "inputs": { "filename_prefix": "Qwen_image_2.1", "format": "png", "format.bit_depth": "8-bit", "format.input_color_space": "sRGB", "images": ["459:457", 0] } }
+  }
+}

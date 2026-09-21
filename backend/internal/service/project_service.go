@@ -2469,6 +2469,7 @@ func (s *ProjectService) CreateCharacter(ch models.Character) (*models.Character
 		return nil, fmt.Errorf("角色名不能为空")
 	}
 	ch.Source = "manual"
+	ch.PortraitEngine, _ = normalizeAssetImageEngine(ch.PortraitEngine)
 	ch.Portrait = "" // 新建无标准像
 	if err := s.db.Create(&ch).Error; err != nil {
 		return nil, fmt.Errorf("角色名已存在或创建失败: %w", err)
@@ -2494,6 +2495,13 @@ func (s *ProjectService) UpdateCharacter(ch *models.Character, req models.Charac
 	updates["trait"] = trait
 	updates["style"] = style
 	updates["voice"] = strings.TrimSpace(req.Voice) // 预设音色；参考语音（voice_ref/voice_id）由独立接口管理
+	portraitEngine, err := normalizeAssetImageEngine(req.PortraitEngine)
+	if err != nil {
+		return err
+	}
+	if portraitEngine != ch.PortraitEngine {
+		updates["portrait_engine"], updates["portrait"], updates["portrait_task_id"], updates["portrait_error"], updates["sheet"], updates["sheet_task_id"], updates["sheet_error"] = portraitEngine, "", "", "", "", "", ""
+	}
 	effectiveName := ch.Name
 	if newName != "" {
 		effectiveName = newName
@@ -2651,7 +2659,7 @@ func (s *ProjectService) StartCharacterPortrait(ch *models.Character) error {
 		return fmt.Errorf("请先为角色「%s」生成或填写参考像提示词", ch.Name)
 	}
 	if s.tasks == nil {
-		return fmt.Errorf("Krea2 生成依赖 ComfyUI 任务服务")
+		return fmt.Errorf("标准像生成依赖 ComfyUI 任务服务")
 	}
 	if ch.PortraitTaskID != "" {
 		var active int64
@@ -2664,11 +2672,23 @@ func (s *ProjectService) StartCharacterPortrait(ch *models.Character) error {
 	if err := s.db.First(&p, ch.ProjectID).Error; err != nil {
 		return err
 	}
-	var tpl models.Template
-	if err := s.db.Where("code = ? AND enabled = ?", "krea2_character_portrait", true).First(&tpl).Error; err != nil {
-		return fmt.Errorf("未找到已启用的 Krea2 角色标准像模板")
+	engine, err := normalizeAssetImageEngine(ch.PortraitEngine)
+	if err != nil {
+		return err
 	}
-	task, err := s.tasks.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: buildPortraitPrompt(&p, ch)})
+	templateCode := "krea2_character_portrait"
+	if engine == ImageEngineQwen21 {
+		templateCode = TemplateQwen21T2I
+	}
+	tpl, err := enabledTemplateByCode(s.db, templateCode)
+	if err != nil {
+		return err
+	}
+	params := map[string]any{}
+	if engine == ImageEngineQwen21 {
+		params = map[string]any{"aspect_ratio": "1:1 (Square)", "megapixels": 2.5, "multiple": 8, "reference_resolution": 1024, "steps": 25, "cfg": 1, "negative_prompt": ""}
+	}
+	task, err := s.tasks.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: buildPortraitPrompt(&p, ch), Params: params})
 	if err != nil {
 		return err
 	}
