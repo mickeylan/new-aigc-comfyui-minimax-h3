@@ -69,8 +69,38 @@ func (s *TaskService) comfyHost() string {
 }
 
 // comfyHostForPort 按端口返回实例所在主机（docker 模式下每个实例是独立容器）
-func (s *TaskService) comfyHostForPort(port int) string {
-	return s.manager.comfyHostOf(port)
+func (s *TaskService) comfyHostForPort(port int) string { return s.manager.comfyHostOf(port) }
+
+func (s *TaskService) instanceForTask(task *models.Task) (*models.Instance, error) {
+	if task.InstanceID != nil {
+		inst, err := s.manager.ByID(*task.InstanceID)
+		if err == nil {
+			return &inst, nil
+		}
+	}
+	if task.Port != nil {
+		inst, err := s.manager.ByPort(*task.Port)
+		if err == nil {
+			return &inst, nil
+		}
+	}
+	return nil, fmt.Errorf("任务 %s 没有可唯一定位的 ComfyUI 实例", task.TaskID)
+}
+
+func (s *TaskService) clientForTask(task *models.Task) (*ComfyClient, error) {
+	inst, err := s.instanceForTask(task)
+	if err != nil {
+		return nil, err
+	}
+	return NewComfyClient(s.manager.comfyHostOfInstance(*inst), inst.Port), nil
+}
+
+func (s *TaskService) comfyHostForTask(task *models.Task) string {
+	inst, err := s.instanceForTask(task)
+	if err != nil {
+		return ""
+	}
+	return s.manager.comfyHostOfInstance(*inst)
 }
 
 // ---------- 任务 ID ----------
@@ -439,25 +469,30 @@ func (s *TaskService) pickInstance(forcePort *int) (*models.Instance, error) {
 		}
 	}
 	if forcePort != nil {
-		for i := range insts {
-			if insts[i].Port == *forcePort {
-				if insts[i].Status != "running" {
-					return nil, fmt.Errorf("实例端口 %d 未运行", *forcePort)
-				}
-				if s.platformPortBusy(insts[i].Port) {
-					return nil, errNoFreeGPU
-				}
-				load := s.probeInstanceLoad(insts[i])
-				if !load.up {
-					return nil, fmt.Errorf("实例端口 %d 无法连接", *forcePort)
-				}
-				if load.queueLen > 0 {
-					return nil, errNoFreeGPU
-				}
-				return &insts[i], nil
-			}
+		forced, err := s.manager.ByPort(*forcePort)
+		if err != nil {
+			return nil, err
 		}
-		return nil, fmt.Errorf("实例端口 %d 不存在", *forcePort)
+		for i := range insts {
+			if insts[i].ID != forced.ID {
+				continue
+			}
+			if insts[i].Status != "running" {
+				return nil, fmt.Errorf("实例 %d 未运行", insts[i].ID)
+			}
+			if s.platformInstanceBusy(insts[i].ID) {
+				return nil, errNoFreeGPU
+			}
+			load := s.probeInstanceLoad(insts[i])
+			if !load.up {
+				return nil, fmt.Errorf("实例 %d 无法连接", insts[i].ID)
+			}
+			if load.queueLen > 0 {
+				return nil, errNoFreeGPU
+			}
+			return &insts[i], nil
+		}
+		return nil, fmt.Errorf("实例不存在")
 	}
 
 	// 收集运行中的实例，并发探测负载。串行探测 8 实例会累加单次 HTTP 延迟，
@@ -472,18 +507,16 @@ func (s *TaskService) pickInstance(forcePort *int) (*models.Instance, error) {
 		return nil, fmt.Errorf("没有运行中的 ComfyUI 实例，请先启动实例")
 	}
 
-	// 平台任务绑定是第一层占用判断。按端口识别具体 ComfyUI 进程，避免只依赖显存缓存或 GPU 序号。
-	var busyPorts []int
-	s.db.Model(&models.Task{}).
-		Where("status IN ? AND port IS NOT NULL", []string{"running", "queued"}).
-		Distinct("port").Pluck("port", &busyPorts)
-	busy := make(map[int]bool, len(busyPorts))
-	for _, port := range busyPorts {
-		busy[port] = true
+	// 平台占用以稳定 instance_id 判断；不同电脑使用相同端口不会互相阻塞。
+	var busyInstanceIDs []uint
+	s.db.Model(&models.Task{}).Where("status IN ? AND instance_id IS NOT NULL", []string{"running", "queued"}).Distinct("instance_id").Pluck("instance_id", &busyInstanceIDs)
+	busy := make(map[uint]bool, len(busyInstanceIDs))
+	for _, id := range busyInstanceIDs {
+		busy[id] = true
 	}
 	free := make([]models.Instance, 0, len(running))
 	for _, inst := range running {
-		if !busy[inst.Port] {
+		if !busy[inst.ID] {
 			free = append(free, inst)
 		}
 	}
@@ -526,16 +559,19 @@ func (s *TaskService) pickInstance(forcePort *int) (*models.Instance, error) {
 	return &idle[0].inst, nil
 }
 
-func (s *TaskService) platformPortBusy(port int) bool {
+func (s *TaskService) platformInstanceBusy(instanceID uint) bool {
 	var active int64
-	s.db.Model(&models.Task{}).
-		Where("status IN ? AND port = ?", []string{"running", "queued"}, port).
-		Count(&active)
+	s.db.Model(&models.Task{}).Where("status IN ? AND instance_id = ?", []string{"running", "queued"}, instanceID).Count(&active)
 	return active > 0
 }
 
+func (s *TaskService) platformPortBusy(port int) bool {
+	inst, err := s.manager.ByPort(port)
+	return err == nil && s.platformInstanceBusy(inst.ID)
+}
+
 func (s *TaskService) probeInstanceLoad(inst models.Instance) instanceLoad {
-	c := NewComfyClient(s.comfyHostForPort(inst.Port), inst.Port)
+	c := NewComfyClient(s.manager.comfyHostOfInstance(inst), inst.Port)
 	result := instanceLoad{inst: inst}
 	// ComfyUI 未就绪或瞬时网络故障时重试，避免把短暂探测失败当成空闲。
 	for attempt := 0; attempt < 3; attempt++ {
@@ -821,7 +857,7 @@ func (s *TaskService) Execute(taskID string) error {
 	s.mu.Unlock()
 
 	clientID := "console-" + taskID
-	c := NewComfyClient(s.comfyHostForPort(inst.Port), inst.Port)
+	c := NewComfyClient(s.manager.comfyHostOfInstance(*inst), inst.Port)
 	if err := s.syncInputFilesToInstance(c, params); err != nil {
 		s.failTask(&task, "同步输入素材失败: "+err.Error())
 		return err
@@ -1041,7 +1077,11 @@ func (s *TaskService) listenWS(task *models.Task, c *ComfyClient) {
 	s.wsActive[task.TaskID] = stop
 	s.wsMu.Unlock()
 
-	ws := NewComfyWSClient(s.comfyHostForPort(*task.Port), *task.Port, "console-"+task.TaskID, func(t string, d map[string]any) {
+	inst, err := s.instanceForTask(task)
+	if err != nil {
+		return
+	}
+	ws := NewComfyWSClient(s.manager.comfyHostOfInstance(*inst), inst.Port, "console-"+task.TaskID, func(t string, d map[string]any) {
 		s.handleWSEvent(task.TaskID, t, d)
 	})
 	ws.Start()
@@ -1250,7 +1290,11 @@ func (s *TaskService) finishTask(task *models.Task) {
 		}
 		return
 	}
-	c := NewComfyClient(s.comfyHostForPort(*task.Port), *task.Port)
+	c, clientErr := s.clientForTask(task)
+	if clientErr != nil {
+		log.Printf("[task] %s endpoint unavailable: %v", task.TaskID, clientErr)
+		return
+	}
 	hist, err := c.GetHistory(task.ComfyPromptID)
 	if err != nil {
 		if !s.tryRecoverTaskOutput(task) {
@@ -1340,7 +1384,10 @@ func (s *TaskService) reconcile(taskID string) {
 	if task.Port == nil || task.ComfyPromptID == "" {
 		return
 	}
-	c := NewComfyClient(s.comfyHostForPort(*task.Port), *task.Port)
+	c, clientErr := s.clientForTask(&task)
+	if clientErr != nil {
+		return
+	}
 	// 不等待实例全局队列清空：同一实例持续有其他任务时，本任务可能早已完成。
 	// 每次协调都先按 prompt_id 查询自己的 history。
 	if hist, err := c.GetHistory(task.ComfyPromptID); err == nil && historyHasPrompt(hist, task.ComfyPromptID) {
@@ -1366,10 +1413,12 @@ func (s *TaskService) RefreshTaskResult(taskID string) {
 	}
 	// 即使本地曾误标 failed/cancelled，也先尝试找回实际已生成的文件。
 	if task.Port != nil && task.ComfyPromptID != "" {
-		client := NewComfyClient(s.comfyHostForPort(*task.Port), *task.Port)
-		if history, err := client.GetHistory(task.ComfyPromptID); err == nil && historyHasPrompt(history, task.ComfyPromptID) {
-			s.finishTask(&task)
-			return
+		client, clientErr := s.clientForTask(&task)
+		if clientErr == nil {
+			if history, err := client.GetHistory(task.ComfyPromptID); err == nil && historyHasPrompt(history, task.ComfyPromptID) {
+				s.finishTask(&task)
+				return
+			}
 		}
 	}
 	// history/WS可能丢失，或任务已标记success但result_files为空；直接扫描实际输出。
@@ -1580,9 +1629,11 @@ func (s *TaskService) RequeueTask(taskID string) error {
 	}
 	// 从原实例队列摘除（不 Interrupt，避免打断同实例正在运行的其他任务）
 	if task.Port != nil && task.ComfyPromptID != "" {
-		c := NewComfyClient(s.comfyHostForPort(*task.Port), *task.Port)
-		if err := c.DeletePrompt(task.ComfyPromptID); err != nil {
-			log.Printf("[task] %s requeue delete prompt failed: %v", taskID, err)
+		c, clientErr := s.clientForTask(&task)
+		if clientErr == nil {
+			if err := c.DeletePrompt(task.ComfyPromptID); err != nil {
+				log.Printf("[task] %s requeue delete prompt failed: %v", taskID, err)
+			}
 		}
 	}
 	s.stopListener(taskID)
@@ -1614,11 +1665,13 @@ func (s *TaskService) CancelTask(taskID string) error {
 		return fmt.Errorf("任务已结束")
 	}
 	if task.Port != nil {
-		c := NewComfyClient(s.comfyHostForPort(*task.Port), *task.Port)
-		if task.ComfyPromptID != "" {
-			_ = c.DeletePrompt(task.ComfyPromptID)
+		c, clientErr := s.clientForTask(&task)
+		if clientErr == nil {
+			if task.ComfyPromptID != "" {
+				_ = c.DeletePrompt(task.ComfyPromptID)
+			}
+			_ = c.Interrupt()
 		}
-		_ = c.Interrupt()
 	}
 	finished := time.Now()
 	s.db.Model(&task).Updates(map[string]any{"status": "cancelled", "error": "用户取消", "finished_at": finished})

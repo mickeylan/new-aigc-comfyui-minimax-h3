@@ -429,7 +429,7 @@ func (s *ProjectService) syncAssetImages() {
 			if subfolder == "." {
 				subfolder = ""
 			}
-			client := NewComfyClient(s.tasks.comfyHostForPort(*task.Port), *task.Port)
+			client := NewComfyClient(s.tasks.comfyHostForTask(&task), *task.Port)
 			data, err := client.DownloadOutput(filename, subfolder, "output")
 			if err != nil {
 				res := s.db.Model(a).Where("image_task_id = ?", task.TaskID).Updates(map[string]any{

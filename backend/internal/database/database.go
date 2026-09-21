@@ -2,6 +2,7 @@ package database
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -17,12 +18,26 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(cfg.Storage.DBPath), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := gorm.Open(sqlite.Open(cfg.Storage.DBPath), &gorm.Config{
+	// WAL lets readers proceed while the single SQLite writer commits. Configure pragmas
+	// in the DSN so every pooled connection receives the same busy timeout and safety policy.
+	params := url.Values{}
+	for _, pragma := range []string{"busy_timeout(10000)", "journal_mode(WAL)", "synchronous(NORMAL)", "foreign_keys(ON)"} {
+		params.Add("_pragma", pragma)
+	}
+	dsn := "file:" + filepath.ToSlash(cfg.Storage.DBPath) + "?" + params.Encode()
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Warn),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("sqlite connection pool: %w", err)
+	}
+	// Keep the pool bounded: SQLite has one writer, while a few readers can benefit from WAL.
+	sqlDB.SetMaxOpenConns(4)
+	sqlDB.SetMaxIdleConns(4)
 	// 早期 Skill 原型曾给 name/code 建单列唯一索引；版本化后同一技能必须共享它们。
 	// 在 AutoMigrate 新的 (code, version) 联合唯一索引前清理旧索引，兼容已启动过原型的数据库。
 	if db.Migrator().HasTable(&models.ProjectSkillConfig{}) && db.Migrator().HasIndex(&models.ProjectSkillConfig{}, "idx_proj_stage") {

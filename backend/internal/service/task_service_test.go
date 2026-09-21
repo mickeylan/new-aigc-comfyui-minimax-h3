@@ -299,6 +299,36 @@ func TestLegacyContinuityFrameIsRegisteredOnUse(t *testing.T) {
 	}
 }
 
+func TestSamePortOnDifferentHostsHasIndependentOccupancy(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.Instance{}, &models.Task{}); err != nil {
+		t.Fatal(err)
+	}
+	instances := []models.Instance{{GPUIndex: 0, Host: "worker-a", Port: 8188}, {GPUIndex: 1, Host: "worker-b", Port: 8188}}
+	if err := db.Create(&instances).Error; err != nil {
+		t.Fatal(err)
+	}
+	port := 8188
+	if err := db.Create(&models.Task{TaskID: "busy-a", Status: "running", InstanceID: &instances[0].ID, Port: &port}).Error; err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	remote := NewRemoteExec(config.RemoteConfig{})
+	svc := &TaskService{cfg: cfg, db: db, manager: NewInstanceManager(cfg, db, remote)}
+	if !svc.platformInstanceBusy(instances[0].ID) {
+		t.Fatal("worker-a should be busy")
+	}
+	if svc.platformInstanceBusy(instances[1].ID) {
+		t.Fatal("worker-b must remain free despite sharing port 8188")
+	}
+	if _, err := svc.manager.ByPort(8188); err == nil {
+		t.Fatal("ambiguous legacy port lookup must fail")
+	}
+}
+
 func TestRankInstanceLoadsPrefersQueueThenVRAM(t *testing.T) {
 	loads := []instanceLoad{
 		{inst: models.Instance{GPUIndex: 0}, queueLen: 1, vramFree: 80, up: true},
@@ -394,7 +424,7 @@ func TestPickInstanceRequiresPlatformAndComfyQueuesIdle(t *testing.T) {
 	busyPort := instances[2].Port
 	mismatchedGPU := 99
 	if err := db.Create(&models.Task{
-		TaskID: "platform-busy", Status: "running", Port: &busyPort, GPUIndex: &mismatchedGPU,
+		TaskID: "platform-busy", Status: "running", InstanceID: &instances[2].ID, Port: &busyPort, GPUIndex: &mismatchedGPU,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}

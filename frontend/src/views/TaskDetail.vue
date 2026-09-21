@@ -216,7 +216,7 @@ function fmtSize(bytes) {
 }
 
 function fileUrl(r) {
-  return api.outputUrl(task.value.gpu_index, (r.subfolder ? r.subfolder + '/' : '') + r.filename)
+  return api.outputUrl(task.value.gpu_index, (r.subfolder ? r.subfolder + '/' : '') + r.filename, task.value.instance_id)
 }
 
 function downloadUrl(r) {

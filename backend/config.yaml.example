@@ -12,6 +12,11 @@ comfy:
   mode: ssh
   container_prefix: comfyui-gpu
   network: comfyui-console_default
+  # 可选：跨电脑实例。实例身份是 host+port，所以不同电脑可以都使用 8188。
+  # managed=false 表示平台只调度，不负责远程启停该 ComfyUI。
+  # instances:
+  #   - { gpu_index: 0, host: "192.168.1.101", port: 8188, managed: false }
+  #   - { gpu_index: 1, host: "192.168.1.102", port: 8188, managed: false }
 
 storage:
   db_path: /opt/comfyui-console/data/console.db

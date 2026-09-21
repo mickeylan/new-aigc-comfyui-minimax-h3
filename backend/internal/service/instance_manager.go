@@ -46,7 +46,22 @@ func (m *InstanceManager) dockerMode() bool {
 // comfyHostOf 返回端口对应实例的可达主机:
 //   - docker 模式: 容器网络内的容器名 (compose 网络 DNS 解析)
 //   - 其他模式: 算力节点 IP / 本机
+func (m *InstanceManager) comfyHostOfInstance(inst models.Instance) string {
+	if strings.TrimSpace(inst.Host) != "" {
+		return inst.Host
+	}
+	if m.dockerMode() {
+		return m.containerName(inst.GPUIndex)
+	}
+	return m.remote.Host()
+}
+
 func (m *InstanceManager) comfyHostOf(port int) string {
+	var rows []models.Instance
+	m.db.Where("port = ?", port).Limit(2).Find(&rows)
+	if len(rows) == 1 {
+		return m.comfyHostOfInstance(rows[0])
+	}
 	if m.dockerMode() {
 		return m.containerName(port - m.cfg.Comfy.BasePort)
 	}
@@ -55,22 +70,26 @@ func (m *InstanceManager) comfyHostOf(port int) string {
 
 // ensureRows 确保 8 个实例记录存在
 func (m *InstanceManager) ensureRows() {
-	var count int64
-	m.db.Model(&models.Instance{}).Count(&count)
-	if count >= int64(m.cfg.Comfy.GPUCount) {
-		return
+	configured := map[int]config.ComfyInstanceConfig{}
+	for _, item := range m.cfg.Comfy.Instances {
+		configured[item.GPUIndex] = item
 	}
 	for gpu := 0; gpu < m.cfg.Comfy.GPUCount; gpu++ {
+		item, explicit := configured[gpu]
+		host, port, managed := "", m.PortOf(gpu), true
+		if explicit {
+			host, managed = strings.TrimSpace(item.Host), item.Managed
+			if item.Port > 0 {
+				port = item.Port
+			}
+		}
 		var inst models.Instance
 		err := m.db.Where("gpu_index = ?", gpu).First(&inst).Error
 		if err == gorm.ErrRecordNotFound {
-			inst = models.Instance{
-				GPUIndex:      gpu,
-				Port:          m.PortOf(gpu),
-				Status:        "stopped",
-				EnableManager: m.cfg.Comfy.EnableManager && gpu == 0,
-			}
+			inst = models.Instance{GPUIndex: gpu, Host: host, Port: port, Managed: managed, Status: "stopped", EnableManager: managed && m.cfg.Comfy.EnableManager && gpu == 0}
 			m.db.Create(&inst)
+		} else if explicit {
+			m.db.Model(&inst).Updates(map[string]any{"host": host, "port": port, "managed": managed})
 		}
 	}
 }
@@ -82,10 +101,20 @@ func (m *InstanceManager) List() []models.Instance {
 	return list
 }
 
-func (m *InstanceManager) ByPort(port int) (models.Instance, error) {
+func (m *InstanceManager) ByID(id uint) (models.Instance, error) {
 	var inst models.Instance
-	err := m.db.Where("port = ?", port).First(&inst).Error
-	return inst, err
+	return inst, m.db.First(&inst, id).Error
+}
+
+func (m *InstanceManager) ByPort(port int) (models.Instance, error) {
+	var rows []models.Instance
+	if err := m.db.Where("port = ?", port).Limit(2).Find(&rows).Error; err != nil {
+		return models.Instance{}, err
+	}
+	if len(rows) != 1 {
+		return models.Instance{}, fmt.Errorf("端口 %d 不唯一，必须使用 instance_id", port)
+	}
+	return rows[0], nil
 }
 
 // FindPID 通过命令行匹配找到实例进程 PID（docker 模式返回 1 表示容器运行中）
@@ -109,7 +138,18 @@ func (m *InstanceManager) FindPID(port int) int {
 	return pid
 }
 
-// Start 启动单个 GPU 实例
+func (m *InstanceManager) StartInstance(id uint) error {
+	inst, err := m.ByID(id)
+	if err != nil {
+		return err
+	}
+	if !inst.Managed {
+		return fmt.Errorf("外部实例由远端电脑管理，平台不负责启动")
+	}
+	return m.Start(inst.GPUIndex)
+}
+
+// Start 启动单个 GPU 实例（兼容内部按逻辑槽位调用）
 func (m *InstanceManager) Start(gpu int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -118,7 +158,10 @@ func (m *InstanceManager) Start(gpu int) error {
 	if err != nil {
 		return err
 	}
-	port := m.PortOf(gpu)
+	if !inst.Managed {
+		return nil
+	}
+	port := inst.Port
 
 	if pid := m.FindPID(port); pid > 0 {
 		m.db.Model(&inst).Updates(map[string]any{
@@ -224,6 +267,17 @@ func shellQuoteAll(args []string) []string {
 	return out
 }
 
+func (m *InstanceManager) StopInstance(id uint) error {
+	inst, err := m.ByID(id)
+	if err != nil {
+		return err
+	}
+	if !inst.Managed {
+		return fmt.Errorf("外部实例由远端电脑管理，平台不负责停止")
+	}
+	return m.Stop(inst.GPUIndex)
+}
+
 // Stop 停止单个实例
 func (m *InstanceManager) Stop(gpu int) error {
 	m.mu.Lock()
@@ -233,7 +287,10 @@ func (m *InstanceManager) Stop(gpu int) error {
 	if err != nil {
 		return err
 	}
-	port := m.PortOf(gpu)
+	if !inst.Managed {
+		return nil
+	}
+	port := inst.Port
 
 	// docker 模式: 停止容器
 	if m.dockerMode() {

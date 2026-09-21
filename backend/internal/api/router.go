@@ -61,6 +61,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	// 文件
 	r.POST("/api/upload", svc.HandleUpload)
 	r.GET("/api/output/:gpu/*path", svc.HandleOutputFile)
+	r.GET("/api/instances/:id/output/*path", svc.HandleInstanceOutputFile)
 	r.GET("/api/media/:gpu/*path", svc.HandleMediaInfo)
 
 	// 实时推送

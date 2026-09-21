@@ -493,7 +493,7 @@ func (s *CharacterLookService) SyncImages() {
 		if sub == "." {
 			sub = ""
 		}
-		data, err := NewComfyClient(s.tasks.comfyHostForPort(*task.Port), *task.Port).DownloadOutput(name, sub, "output")
+		data, err := NewComfyClient(s.tasks.comfyHostForTask(&task), *task.Port).DownloadOutput(name, sub, "output")
 		if err != nil {
 			s.db.Model(look).Where("image_task_id = ?", task.TaskID).Updates(map[string]any{"image_task_id": "", "image_error": err.Error()})
 			continue

@@ -40,7 +40,7 @@ export const api = {
       timeout: 300000
     })
   },
-  outputUrl: (gpu, path) => `/api/output/${gpu}/${path}`,
+  outputUrl: (gpu, path, instanceId = null) => instanceId ? `/api/instances/${instanceId}/output/${path}` : `/api/output/${gpu}/${path}`,
   mediaInfo: (gpu, path) => http.get(`/media/${gpu}/${path}`),
   task: (taskId) => http.get(`/tasks/${taskId}`),
 

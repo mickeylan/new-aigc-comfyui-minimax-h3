@@ -3909,7 +3909,7 @@ func (s *ProjectService) syncSceneImages() {
 			if subfolder == "." {
 				subfolder = ""
 			}
-			data, err := NewComfyClient(s.tasks.comfyHostForPort(*task.Port), *task.Port).DownloadOutput(filename, subfolder, "output")
+			data, err := NewComfyClient(s.tasks.comfyHostForTask(&task), *task.Port).DownloadOutput(filename, subfolder, "output")
 			if err != nil {
 				s.failSceneImage(sc, sc.ImageToken, "读取 MiniMax H3 分镜候选帧失败: "+err.Error())
 				continue
@@ -4083,7 +4083,7 @@ func (s *ProjectService) syncCharacterPortraits() {
 			if subfolder == "." {
 				subfolder = ""
 			}
-			client := NewComfyClient(s.tasks.comfyHostForPort(*task.Port), *task.Port)
+			client := NewComfyClient(s.tasks.comfyHostForTask(&task), *task.Port)
 			data, downloadErr := client.DownloadOutput(filename, subfolder, "output")
 			if downloadErr != nil {
 				s.db.Model(ch).Where("portrait_task_id = ?", task.TaskID).Update("portrait_error", "读取 Krea2 图片失败: "+downloadErr.Error())
@@ -4162,7 +4162,7 @@ func (s *ProjectService) syncSceneVideos() {
 			if subfolder == "." {
 				subfolder = ""
 			}
-			data, err := NewComfyClient(s.tasks.comfyHostForPort(*task.Port), *task.Port).DownloadOutput(filename, subfolder, "output")
+			data, err := NewComfyClient(s.tasks.comfyHostForTask(&task), *task.Port).DownloadOutput(filename, subfolder, "output")
 			if err != nil {
 				s.retryOrFailVideo(sc, &task, "下载生成视频失败: "+err.Error())
 				changed = true
@@ -4244,7 +4244,7 @@ func (s *ProjectService) syncDetachedCandidateRetries() {
 			if subfolder == "." {
 				subfolder = ""
 			}
-			data, err := NewComfyClient(s.tasks.comfyHostForPort(*task.Port), *task.Port).DownloadOutput(filename, subfolder, "output")
+			data, err := NewComfyClient(s.tasks.comfyHostForTask(task), *task.Port).DownloadOutput(filename, subfolder, "output")
 			if err != nil {
 				continue
 			}
@@ -4267,7 +4267,7 @@ func (s *ProjectService) syncDetachedCandidateRetries() {
 			if subfolder == "." {
 				subfolder = ""
 			}
-			data, err := NewComfyClient(s.tasks.comfyHostForPort(*task.Port), *task.Port).DownloadOutput(filename, subfolder, "output")
+			data, err := NewComfyClient(s.tasks.comfyHostForTask(task), *task.Port).DownloadOutput(filename, subfolder, "output")
 			if err != nil {
 				continue
 			}
@@ -4711,7 +4711,7 @@ func (s *ProjectService) runMerge(p *models.Project, mt *models.MergeTask, dub, 
 				if subfolder == "." {
 					subfolder = ""
 				}
-				data, downloadErr := NewComfyClient(s.tasks.comfyHostForPort(*task.Port), *task.Port).DownloadOutput(filename, subfolder, "output")
+				data, downloadErr := NewComfyClient(s.tasks.comfyHostForTask(&task), *task.Port).DownloadOutput(filename, subfolder, "output")
 				if downloadErr != nil {
 					s.failMerge(mt, p, "重新下载场景视频失败: "+downloadErr.Error())
 					return

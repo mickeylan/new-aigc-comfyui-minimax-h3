@@ -196,7 +196,7 @@ func (s *ProjectService) sheetTaskUpdates(taskID, baseName string, projectID uin
 		if subfolder == "." {
 			subfolder = ""
 		}
-		data, err := NewComfyClient(s.tasks.comfyHostForPort(*task.Port), *task.Port).DownloadOutput(filename, subfolder, "output")
+		data, err := NewComfyClient(s.tasks.comfyHostForTask(&task), *task.Port).DownloadOutput(filename, subfolder, "output")
 		if err != nil {
 			return map[string]any{"sheet_task_id": "", "sheet_error": "读取四视图失败: " + err.Error()}, true
 		}

@@ -8,8 +8,10 @@ import (
 // Instance 表示一个 ComfyUI 实例（每 GPU 一个）
 type Instance struct {
 	ID            uint      `gorm:"primaryKey" json:"id"`
-	GPUIndex      int       `gorm:"column:gpu_index;uniqueIndex" json:"gpu_index"`
-	Port          int       `gorm:"column:port" json:"port"`
+	GPUIndex      int       `gorm:"column:gpu_index;uniqueIndex" json:"gpu_index"` // 平台内逻辑槽位，不作为实例身份
+	Host          string    `gorm:"column:host;uniqueIndex:idx_instance_endpoint" json:"host"`
+	Port          int       `gorm:"column:port;uniqueIndex:idx_instance_endpoint" json:"port"`
+	Managed       bool      `gorm:"column:managed;default:true" json:"managed"`
 	Status        string    `gorm:"column:status" json:"status"` // stopped/starting/running/error
 	PID           int       `gorm:"column:pid" json:"pid"`
 	EnableManager bool      `gorm:"column:enable_manager" json:"enable_manager"`
@@ -53,24 +55,24 @@ type UploadFile struct {
 type Task struct {
 	ID                uint       `gorm:"primaryKey" json:"id"`
 	TaskID            string     `gorm:"column:task_id;uniqueIndex" json:"task_id"`
-	TemplateID        uint       `gorm:"column:template_id" json:"template_id"`
+	TemplateID        uint       `gorm:"column:template_id;index:idx_task_status_template,priority:2" json:"template_id"`
 	TemplateName      string     `gorm:"column:template_name" json:"template_name"`
 	Prompt            string     `json:"prompt"`
 	ParamsJSON        string     `gorm:"type:text" json:"params_json"`
 	InputsJSON        string     `gorm:"type:text" json:"inputs_json"`
 	ProvenanceJSON    string     `gorm:"column:provenance_json;type:text" json:"provenance_json"`
 	ParentCandidateID *uint      `gorm:"column:parent_candidate_id;index" json:"parent_candidate_id,omitempty"`
-	InstanceID        *uint      `gorm:"column:instance_id" json:"instance_id"`
+	InstanceID        *uint      `gorm:"column:instance_id;index" json:"instance_id"`
 	GPUIndex          *int       `gorm:"column:gpu_index" json:"gpu_index"`
 	Port              *int       `gorm:"column:port" json:"port"`
 	ComfyPromptID     string     `gorm:"column:comfy_prompt_id" json:"comfy_prompt_id"`
-	Status            string     `json:"status"` // pending/queued/running/success/failed/cancelled
+	Status            string     `gorm:"index:idx_task_status_updated,priority:1;index:idx_task_status_template,priority:1" json:"status"` // pending/queued/running/success/failed/cancelled
 	Progress          float64    `json:"progress"`
 	CurrentNode       string     `gorm:"column:current_node" json:"current_node"`
 	Error             string     `json:"error"`
 	ResultFiles       string     `gorm:"column:result_files;type:text" json:"result_files"`
 	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	UpdatedAt         time.Time  `gorm:"index:idx_task_status_updated,priority:2" json:"updated_at"`
 	StartedAt         *time.Time `gorm:"column:started_at" json:"started_at"`
 	FinishedAt        *time.Time `gorm:"column:finished_at" json:"finished_at"`
 }
@@ -210,7 +212,7 @@ type Scene struct {
 	VideoLocked            bool      `gorm:"column:video_locked;default:false" json:"video_locked"`               // 禁止生成端点覆盖当前视频
 	ImageToken             string    `gorm:"column:image_token" json:"-"`                                         // 单次生成令牌，防止并发或过期结果回写
 	ImageTaskID            string    `gorm:"column:image_task_id;index" json:"image_task_id"`                     // 关联 Krea2 分镜画面任务
-	VideoTaskID            string    `gorm:"column:video_task_id" json:"video_task_id"`                           // 关联视频生成任务
+	VideoTaskID            string    `gorm:"column:video_task_id;index" json:"video_task_id"`                     // 关联视频生成任务
 	VideoGPU               *int      `gorm:"column:video_gpu" json:"video_gpu"`
 	VideoFile              string    `gorm:"column:video_file" json:"video_file"`                         // ComfyUI 输出相对路径（合并使用）
 	VideoInputFile         string    `gorm:"column:video_input_file" json:"video_input_file"`             // 下载到项目 input 目录的浏览器可播放副本
@@ -219,7 +221,7 @@ type Scene struct {
 	VideoTemplate          string    `gorm:"column:video_template" json:"video_template"`                 // 视频模板（minimax_h3_i2v/ref2v/t2v/first_last 等；空则自动选择）
 	VideoFirstFrameImg     string    `gorm:"column:video_first_frame_img" json:"video_first_frame_img"`   // 首尾帧模板的首帧图文件名
 	VideoLastFrameImg      string    `gorm:"column:video_last_frame_img" json:"video_last_frame_img"`     // 首尾帧模板的尾帧图文件名
-	Status                 string    `json:"status"`                                                      // pending/image_pending/image_ready/video_pending/video_running/video_ready/failed
+	Status                 string    `gorm:"index" json:"status"`                                         // pending/image_pending/image_ready/video_pending/video_running/video_ready/failed
 	Error                  string    `json:"error"`
 	PromptStale            bool      `gorm:"column:prompt_stale;default:false" json:"prompt_stale"` // 来源变化后需重新确认完整视频提示词
 	ImageRetries           int       `gorm:"column:image_retries" json:"image_retries"`             // 画面生成已重试次数

@@ -71,7 +71,7 @@
         <div class="inst-top">
           <div class="inst-gpu">
             <span class="inst-chip">GPU {{ inst.gpu_index }}</span>
-            <span class="inst-port">端口 {{ inst.port }}</span>
+            <span class="inst-port">{{ inst.host || '默认主机' }}:{{ inst.port }}</span>
           </div>
           <span class="badge" :class="instBadge(inst.status)">
             <span class="dot" :class="{ pulse: inst.status === 'running' }"></span>{{ instText(inst.status) }}
@@ -105,11 +105,12 @@
         </div>
 
         <div class="inst-actions-row">
-          <button v-if="inst.status === 'running'" class="btn btn-sm btn-secondary"
+          <span v-if="!inst.managed" class="badge badge-gray">外部管理</span>
+          <button v-if="inst.managed && inst.status === 'running'" class="btn btn-sm btn-secondary"
             @click="restart(inst)" :disabled="busy">重启</button>
-          <button v-if="inst.status === 'running'" class="btn btn-sm btn-danger"
+          <button v-if="inst.managed && inst.status === 'running'" class="btn btn-sm btn-danger"
             @click="stop(inst)" :disabled="busy">停止</button>
-          <button v-else class="btn btn-sm" @click="start(inst)" :disabled="busy">启动</button>
+          <button v-else-if="inst.managed" class="btn btn-sm" @click="start(inst)" :disabled="busy">启动</button>
         </div>
       </div>
     </div>
@@ -192,9 +193,9 @@ async function run(fn) {
     busy.value = false
   }
 }
-const start = (inst) => run(() => api.startInstance(inst.gpu_index))
-const stop = (inst) => run(() => api.stopInstance(inst.gpu_index))
-const restart = (inst) => run(() => api.restartInstance(inst.gpu_index))
+const start = (inst) => run(() => api.startInstance(inst.id))
+const stop = (inst) => run(() => api.stopInstance(inst.id))
+const restart = (inst) => run(() => api.restartInstance(inst.id))
 const concurrency = ref(4)
 const startAll = () => {
   openBatch('start')

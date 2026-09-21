@@ -539,7 +539,7 @@ func (s *CharacterLookService) SyncOutfitImages() {
 			if sub == "." {
 				sub = ""
 			}
-			data, err := NewComfyClient(s.tasks.comfyHostForPort(*task.Port), *task.Port).DownloadOutput(name, sub, "output")
+			data, err := NewComfyClient(s.tasks.comfyHostForTask(&task), *task.Port).DownloadOutput(name, sub, "output")
 			if err != nil {
 				s.db.Model(outfit).Where(state.taskField+" = ?", state.taskID).Updates(map[string]any{state.taskField: "", state.errorField: err.Error()})
 				continue

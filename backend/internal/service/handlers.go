@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -165,7 +166,7 @@ func (s *Service) HandleListInstances(c *gin.Context) {
 func (s *Service) refreshInstances(insts *[]models.Instance) {
 	for i := range *insts {
 		inst := &(*insts)[i]
-		client := NewComfyClient(s.comfyHostForPort(inst.Port), inst.Port)
+		client := NewComfyClient(s.Mgr.comfyHostOfInstance(*inst), inst.Port)
 		if err := client.Ping(); err == nil {
 			if inst.Status != "running" {
 				s.DB.Model(inst).Update("status", "running")
@@ -178,6 +179,11 @@ func (s *Service) refreshInstances(insts *[]models.Instance) {
 				})
 			}
 		} else {
+			if !inst.Managed {
+				s.DB.Model(inst).Updates(map[string]any{"status": "stopped", "pid": 0})
+				inst.Status, inst.PID = "stopped", 0
+				continue
+			}
 			// starting/running/error 都必须以实际端口监听为准，避免保留过期 PID。
 			if inst.Status != "stopped" && s.Mgr.FindPID(inst.Port) == 0 {
 				s.DB.Model(inst).Updates(map[string]any{"status": "stopped", "pid": 0})
@@ -189,30 +195,30 @@ func (s *Service) refreshInstances(insts *[]models.Instance) {
 }
 
 func (s *Service) HandleInstanceStart(c *gin.Context) {
-	gpu, err := strconv.Atoi(c.Param("id"))
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(400, gin.H{"error": "invalid id"})
 		return
 	}
-	insts := s.Mgr.List()
-	if gpu < 0 || gpu >= len(insts) {
+	inst, lookupErr := s.Mgr.ByID(uint(id))
+	if lookupErr != nil {
 		c.JSON(404, gin.H{"error": "instance not found"})
 		return
 	}
-	if err := s.Mgr.Start(gpu); err != nil {
+	if err := s.Mgr.StartInstance(uint(id)); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{"ok": true, "message": fmt.Sprintf("GPU %d 实例启动中 (端口 %d)", gpu, s.Mgr.PortOf(gpu))})
+	c.JSON(200, gin.H{"ok": true, "message": fmt.Sprintf("实例 %d (%s:%d) 启动中", inst.ID, s.Mgr.comfyHostOfInstance(inst), inst.Port)})
 }
 
 func (s *Service) HandleInstanceStop(c *gin.Context) {
-	gpu, err := strconv.Atoi(c.Param("id"))
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(400, gin.H{"error": "invalid id"})
 		return
 	}
-	if err := s.Mgr.Stop(gpu); err != nil {
+	if err := s.Mgr.StopInstance(uint(id)); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -220,14 +226,14 @@ func (s *Service) HandleInstanceStop(c *gin.Context) {
 }
 
 func (s *Service) HandleInstanceRestart(c *gin.Context) {
-	gpu, err := strconv.Atoi(c.Param("id"))
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(400, gin.H{"error": "invalid id"})
 		return
 	}
-	_ = s.Mgr.Stop(gpu)
+	_ = s.Mgr.StopInstance(uint(id))
 	time.Sleep(2 * time.Second)
-	if err := s.Mgr.Start(gpu); err != nil {
+	if err := s.Mgr.StartInstance(uint(id)); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -612,6 +618,31 @@ func (s *Service) HandleUpload(c *gin.Context) {
 }
 
 // ---------- 结果文件 ----------
+
+func (s *Service) HandleInstanceOutputFile(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid instance id"})
+		return
+	}
+	inst, err := s.Mgr.ByID(uint(id))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		return
+	}
+	rel := strings.TrimLeft(filepath.ToSlash(c.Param("path")), "/")
+	if rel == "" || strings.Contains(rel, "..") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid path"})
+		return
+	}
+	subfolder := filepath.ToSlash(filepath.Dir(rel))
+	if subfolder == "." {
+		subfolder = ""
+	}
+	query := url.Values{"filename": {filepath.Base(rel)}, "subfolder": {subfolder}, "type": {"output"}}
+	target := fmt.Sprintf("http://%s:%d/view?%s", s.Mgr.comfyHostOfInstance(inst), inst.Port, query.Encode())
+	c.Redirect(http.StatusTemporaryRedirect, target)
+}
 
 // HandleOutputFile 提供任务输出文件静态访问: /api/output/:gpu/*path
 // 支持 HTTP Range(视频拖动播放)、正确 MIME 类型与下载附件头（?download=1）

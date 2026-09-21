@@ -22,16 +22,24 @@ type ServerConfig struct {
 	Addr string `yaml:"addr"`
 }
 
+type ComfyInstanceConfig struct {
+	GPUIndex int    `yaml:"gpu_index"`
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	Managed  bool   `yaml:"managed"`
+}
+
 type ComfyConfig struct {
-	ComfyDir        string `yaml:"comfy_dir"`
-	BasePort        int    `yaml:"base_port"`
-	GPUCount        int    `yaml:"gpu_count"`
-	ReserveVRAM     int    `yaml:"reserve_vram"`
-	ForceFP16       bool   `yaml:"force_fp16"`
-	EnableManager   bool   `yaml:"enable_manager"`
-	Mode            string `yaml:"mode"`             // ssh(默认)/docker/local: 实例调度方式
-	ContainerPrefix string `yaml:"container_prefix"` // docker 模式容器名前缀, 如 comfyui-gpu
-	Network         string `yaml:"network"`          // docker 模式容器网络名, 用于内网解析容器名
+	ComfyDir        string                `yaml:"comfy_dir"`
+	BasePort        int                   `yaml:"base_port"`
+	GPUCount        int                   `yaml:"gpu_count"`
+	ReserveVRAM     int                   `yaml:"reserve_vram"`
+	ForceFP16       bool                  `yaml:"force_fp16"`
+	EnableManager   bool                  `yaml:"enable_manager"`
+	Mode            string                `yaml:"mode"`             // ssh(默认)/docker/local: 实例调度方式
+	ContainerPrefix string                `yaml:"container_prefix"` // docker 模式容器名前缀, 如 comfyui-gpu
+	Network         string                `yaml:"network"`          // docker 模式容器网络名, 用于内网解析容器名
+	Instances       []ComfyInstanceConfig `yaml:"instances"`        // 可选：跨电脑 ComfyUI 端点；身份为 host+port
 }
 
 type StorageConfig struct {
