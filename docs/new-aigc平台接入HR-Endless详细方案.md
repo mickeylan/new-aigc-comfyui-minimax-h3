@@ -400,3 +400,136 @@ replay/checkpoint引用
 6. 用户能审核全局计划并回看实际chunk Prompt；
 7. 旧原生短镜头、多GPU调度和DirectorCS测试工作流不受影响；
 8. 断点、重拍、timeline和最终媒体元数据可由平台追踪。
+
+## 16. 换机续开发注意事项（2026-09-22）
+
+### 16.1 开始前先同步和核对
+
+换到另一台电脑后先执行：
+
+```bash
+git checkout main
+git pull --ff-only origin main
+git status --short
+git log -3 --oneline
+```
+
+本文档首次提交为：
+
+```text
+9325cd2 docs: add HR Endless integration plan
+```
+
+对白自然时长规划已经在以下提交中落地：
+
+```text
+3f32b2f fix: plan shots around natural dialogue timing
+```
+
+不要从 `.rscode/**`、聊天摘要或未提交临时文件恢复实现；必须以 GitHub `main` 上的源码和本文档为准。不要提交 `.rscode/**`、`backend/comfyui-console.exe*`、截图、运行日志或临时生成文件。
+
+### 16.2 当前开发状态
+
+截至本文追加时，HR Endless **尚未正式接入平台**。已完成的是协议设计和接入方案；平台中不应存在可依赖的 HR Endless 后端模型、路由、Service、前端 API 或工作流模板。
+
+如果工作区出现以下未跟踪文件，它们是被中止的自动实现残留，不代表已完成设计，也不应直接提交：
+
+```text
+backend/internal/service/hr_endless_service.go
+backend/internal/service/hr_endless_handlers.go
+```
+
+开始正式开发前应删除这些残留，或逐行审查后从干净分支重新实现。严禁仅因为文件存在就认为Phase A已经完成。
+
+### 16.3 已确认的产品决策
+
+1. 现有 `native` 路径保持不变，继续服务3–15秒普通镜头。
+2. 对白自然时长优先，约180秒只是参考，不是单集硬上限；不得为了总时长压缩对白语速。
+3. 对白或动作使单个导演Shot超过15秒时，UI应提供两种明确选择：
+   - 保持单个连续导演镜头，用户确认后使用 `endless`；
+   - 按语义拆成多个 `native` 镜头。
+4. `auto`只能给出推荐，不能静默把已审核的镜头切换为Endless。
+5. physical chunk是HR内部执行窗口，不能写入平台Shot表、显示为导演镜头或参与平台镜头编号。
+6. 平台Shot和ShotBeat是唯一导演事实来源；HR timeline是执行结果和诊断依据，不能反向覆盖已审核计划。
+7. 不修改现有MiniMax H3原生模板、SelfLift链路和`comfyui/comfy_extras/nodes_minimax_h3.py`来迁就Endless。
+8. 单个Endless Shot内部必须串行；不同Shot仍由平台现有多实例调度并行。
+
+### 16.4 第一阶段的严格实施范围
+
+Phase A只做一条最小可验收闭环：
+
+1. 确认目标机器已经安装HR Endless插件，并记录插件提交哈希、真实节点类名和输入输出schema。
+2. 从HR仓库提供的已验证工作流导入一个运行时模板；不要凭文档猜节点ID或连接。
+3. 为平台Shot增加或等价表达：
+   - `generation_mode: native | endless | auto`
+   - `continuous_take`
+   - `director_policy`
+4. 增加ShotBeat持久化，范围采用半开区间；不创建physical chunk表充当业务镜头。
+5. Go适配器生成并严格校验`HR_H3_PROMPT_PLAN v1`。
+6. 将秒转换为帧并统一对齐到H3 `17k+5`；最后一个beat吸收尾部对齐误差。
+7. 基于最终上传数组建立稳定资产ID到全局Picture序号的映射，并保存mapping hash。
+8. 保存plan schema version、plan hash、资产映射hash和HR timeline sidecar引用。
+9. 前端显示“推荐Endless”，但必须由用户确认；同时提供全局计划和Beat审核。
+10. 只验收一个20–30秒单Shot的完整生成，不提前实现Phase B–D。
+
+第一阶段不包括：chunk级重拍UI、checkpoint管理、跨chunk Qwen高级策略调优、完整timeline诊断器或自动批量迁移旧项目。
+
+### 16.5 实现前必须核实的外部事实
+
+另一台电脑上的Agent不能假设以下内容已知，必须从实际HR插件和ComfyUI实例读取：
+
+- HR插件仓库路径与当前Git提交；
+- `HR H3 Prompt Skill Compiler`和`HR Endless Sampler`的真实`class_type`；
+- `prompt_plan`、`initial_event_ledger`、`reference_set`、`prompt`和`timeline`的真实端口类型；
+- 工作流API JSON中的节点ID、Autogrow键和文件输入格式；
+- timeline sidecar、checkpoint和输出文件在公开协议中的返回方式；
+- `chunk_frames=39`在目标插件版本中的实际含义；
+- 目标GPU、模型、自定义节点及12GB/L40环境能否真实运行。
+
+如文档与插件当前schema冲突，以插件公开schema和实机错误为证据，先更新本文档，再修改平台代码；不得用猜测字段强行提交任务。
+
+### 16.6 数据和迁移安全
+
+- 新表和新字段通过GORM `AutoMigrate`增量加入，不删除或重写现有Shot数据。
+- `generation_mode`的旧数据默认必须是`native`，不能让升级后的旧项目自动进入Endless。
+- Shot/Beat、参考资产、Prompt、连续性输入或时长变化后，必须使旧plan和旧候选失效。
+- plan、资产映射和timeline都必须绑定平台项目、Scene、Shot及任务，防止跨项目引用。
+- 资产长期身份使用稳定ID；`<Picture N>`只属于单次任务，不写成数据库资产身份。
+- 未来未登场人物必须在结构化数据层被过滤，不能只依赖“不要出现”的提示词。
+
+### 16.7 与现有平台能力的兼容检查
+
+开发时重点回归：
+
+- 原生T2VA/I2VA/FL2VA/Ref2VA提示词协议；
+- 当前分镜图、上一镜确认帧及首尾帧连续性；
+- 人物、套装、场景、道具和共享素材的参考顺序与九图上限；
+- 用户保存的合法完整H3提示词仍按原文提交；
+- 对白自然时长估算、15秒边界和“应用建议时长”；
+- 多主机ComfyUI实例按`instance_id`调度，相同端口不互相冲突；
+- 现有候选、锁定、过期传播、重试和输出下载；
+- 未安装HR插件时，原生路径仍能正常启动和生成。
+
+### 16.8 每个可提交阶段的验证要求
+
+至少运行：
+
+```bash
+go -C backend test ./...
+go -C backend build ./...
+npm --prefix frontend test
+npm --prefix frontend run build
+git diff --check
+git status --short
+```
+
+此外Phase A必须在真实ComfyUI上保存以下验收证据：
+
+- 提交给ComfyUI的最终workflow JSON；
+- `HR_H3_PROMPT_PLAN v1`原文、plan hash和资产映射hash；
+- 一个20–30秒单Shot的最终视频；
+- timeline sidecar；
+- 帧数满足`17k+5`的计算与实测结果；
+- 原生短镜头仍可生成的对照结果。
+
+没有真实插件schema和实机生成证据时，只能声明“代码/模板静态接入完成”，不能宣称HR Endless端到端可用。
