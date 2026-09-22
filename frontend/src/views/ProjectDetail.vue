@@ -421,6 +421,11 @@
           <p class="scene-content">{{ sc.content }}</p>
           <p v-if="sc.image_prompt" class="scene-prompt">🎨 {{ sc.image_prompt }}</p>
           <div v-if="sceneDialogues(sc).length" class="scene-dialogues">
+            <div class="dialogue-budget" :class="{ danger: dialogueBudget(sc).overflow }">
+              对白预计 {{ dialogueBudget(sc).minimum.toFixed(1) }} 秒 · 镜头 {{ Number(sc.duration || 0).toFixed(1) }} 秒
+              <span v-if="dialogueBudget(sc).overflow">{{ dialogueBudget(sc).minimum > 15 ? '需拆分镜头' : '时长不足' }}</span>
+              <button v-if="dialogueBudget(sc).overflow && dialogueBudget(sc).minimum <= 15" class="btn btn-xs btn-ghost" :disabled="busy" @click="applyDialogueDuration(sc)">应用建议时长</button>
+            </div>
             <div v-for="d in sceneDialogues(sc)" :key="d.id" class="dialogue-row">
               <span class="dl-char">{{ d.character || '旁白' }}</span>
               <span class="dl-text">{{ d.text }}</span>
@@ -2198,6 +2203,37 @@ async function removeAsset(a) {
 function sceneDialogues(sc) {
   return dialogues.value.filter(d => d.scene_id === sc.id)
 }
+function dialogueBudget(sc) {
+  const list = sceneDialogues(sc).filter(d => String(d.text || '').trim())
+  if (!list.length) return { minimum: 0, overflow: false }
+  let seconds = 1.2
+  let previous = ''
+  for (const d of list) {
+    const text = String(d.text || '').trim()
+    const chars = [...text].filter(ch => !/\s|[，,、；;:：。.!！?？…]/u.test(ch)).length
+    const commas = (text.match(/[，,、；;:：]/gu) || []).length
+    const stops = (text.match(/[。.!！?？]/gu) || []).length
+    const ellipses = (text.match(/…/gu) || []).length
+    const speaker = `${d.character || ''}\u0000${d.speech_type || ''}`
+    if (previous && previous !== speaker) seconds += 0.35
+    seconds += chars / 3.8 + commas * 0.2 + stops * 0.45 + ellipses * 0.3
+    previous = speaker
+  }
+  const minimum = Math.ceil(seconds * 2) / 2
+  return { minimum, overflow: minimum > Number(sc.duration || 0) + 0.05 }
+}
+async function applyDialogueDuration(sc) {
+  const duration = dialogueBudget(sc).minimum
+  if (!duration || duration > 15) return
+  busy.value = true
+  try {
+    await api.updateScene(id(), sc.id, { title: sc.title, content: sc.content, image_prompt: sc.image_prompt, duration })
+    await load()
+    toast.show(`已将镜头时长调整为 ${duration.toFixed(1)} 秒`)
+  } catch (e) {
+    toast.error(e.response?.data?.error || '应用建议时长失败')
+  } finally { busy.value = false }
+}
 function dubAudioUrl(d) {
   return api.dubAudioUrl(project.value.id, d.audio_file)
 }
@@ -2651,6 +2687,9 @@ onBeforeUnmount(() => {
 }
 .scene-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: auto; }
 .scene-dialogues { margin: 0 0 10px; display: flex; flex-direction: column; gap: 5px; }
+.dialogue-budget { font-size: 12px; color: var(--text-secondary); }
+.dialogue-budget.danger { color: var(--red); font-weight: 700; }
+.dialogue-budget span { margin-left: 6px; }
 .dialogue-row { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 9px; border-radius: 8px; background: rgba(0, 0, 0, 0.03); }
 .dl-char { flex: 0 0 auto; font-weight: 700; color: var(--accent); }
 .dl-text { flex: 1; min-width: 0; color: var(--text-secondary); line-height: 1.4; }

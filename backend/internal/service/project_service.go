@@ -662,7 +662,7 @@ const scriptSystemPrompt = `你是一位专业的漫剧编剧与分镜师。根�
     }
   ]
 }
-3. 默认按约 180 秒单集规划 20~30 个镜头；每个镜头为 3~15 秒的独立视频片段，所有镜头 duration 之和应在 162~198 秒内。
+3. 默认以约 180 秒、20~30 个镜头作为节奏参考，但自然对白优先，总时长允许超过目标。每镜为 3~15 秒独立视频片段；按约 3.8 个汉字/秒估算对白，并计入标点停顿、说话人切换及至少 1.2 秒镜头余量。对白自然说完需要超过 15 秒时，必须按完整句子、说话人或动作节点拆成连续镜头，不得删改对白或通过提高语速压缩。
 4. 人物一致性至关重要：同一角色在多个场景出现时，image_prompt 必须重复其外貌特征（发型、服装颜色、体型），且所有场景画风描述保持一致。
 5. 必须区分人物用途：visible_characters 只列本镜最终画面中真实可见的人物（包括回忆画面、照片、倒影中确实被画出的角色）；voice_characters 只列画外对白或内心独白的发声者；mentioned_characters 只列剧情说明、对白或独白中被提到但不会出现在画面中的人物。人物名字出现在文字中不等于画面出场。characters 为兼容字段，必须与 visible_characters 完全相同。只有 visible_characters 会要求人物四视图。
 6. script 正文优先使用固定格式：【动作】画面描述、【对白｜角色名】原文、【旁白】原文、【内心独白｜角色名】原文。逐场检查故事正文和分镜内容中的明确发声标注，并忠实提取到 dialogues：“旁白/画外音：原文”使用 narration，“角色名内心独白：原文”使用 monologue，“角色名：原文”使用 dialogue。只复制标注后的原文，不改写、不概括、不补充。不得把“他心里疑惑”“气氛压抑”等心理、动作或氛围描写转换成独白或旁白。speech_type 只能是 dialogue、narration 或 monologue；dialogue/monologue 的 character 必须是角色名，narration 的 character 固定为“旁白”。正文和分镜内容均未明确出现可发声内容时必须为空数组。
@@ -795,8 +795,8 @@ func (s *ProjectService) generateScriptCore(p *models.Project, episodeN int, raw
 	if targetScenes <= 0 {
 		targetScenes = 25
 	}
-	// 本地小模型常给出足量分镜但沿用 5 秒默认值，导致总时长远低于方案预算。
-	// 在镜头数足以承载目标时，按原有时长比例确定性重平衡到目标值，不额外消耗一次 LLM 重试。
+	// 对白自然语速是硬约束：先按完整句子/说话人拆分超长镜头，再以目标总时长作为可超出的参考下限。
+	splitScenesForDialogueDuration(res)
 	rebalanceScriptDurations(res, targetDuration)
 	if err := validateScriptResult(res, targetDuration, targetScenes); err != nil {
 		return nil, nil, fmt.Errorf("剧本结构不完整（可重试）: %w", err)
@@ -2210,14 +2210,26 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 	return refs, lines
 }
 
-// rebalanceScriptDurations keeps every scene within the supported 3–15 second range
-// and preserves relative duration weights while matching the episode budget.
+// rebalanceScriptDurations treats the episode target as a reference minimum. It may add
+// breathing room to short scenes, but never shortens a scene below its natural dialogue floor.
 func rebalanceScriptDurations(res *scriptResult, target float64) bool {
 	if res == nil || len(res.Scenes) == 0 || target <= 0 {
 		return false
 	}
-	if target < float64(len(res.Scenes))*3 || target > float64(len(res.Scenes))*15 {
-		return false
+	floors := make([]float64, len(res.Scenes))
+	minimumTotal := 0.0
+	for i := range res.Scenes {
+		floors[i] = sceneDialogueDurationFloor(res.Scenes[i])
+		if current := normalizeSceneDuration(res.Scenes[i].Duration); current > floors[i] {
+			floors[i] = current
+		}
+		minimumTotal += floors[i]
+	}
+	if minimumTotal >= target {
+		for i := range res.Scenes {
+			res.Scenes[i].Duration = floors[i]
+		}
+		return true
 	}
 	weights := make([]float64, len(res.Scenes))
 	for i, scene := range res.Scenes {
@@ -2226,12 +2238,12 @@ func rebalanceScriptDurations(res *scriptResult, target float64) bool {
 			weights[i] = 5
 		}
 	}
-	remaining := target
+	remaining := target - minimumTotal
 	active := make(map[int]bool, len(weights))
 	for i := range weights {
 		active[i] = true
 	}
-	values := make([]float64, len(weights))
+	values := append([]float64(nil), floors...)
 	for len(active) > 0 {
 		weightTotal := 0.0
 		for i := range active {
@@ -2239,18 +2251,19 @@ func rebalanceScriptDurations(res *scriptResult, target float64) bool {
 		}
 		changed := false
 		for i := range active {
-			value := remaining * weights[i] / weightTotal
-			if value < 3 {
-				values[i], remaining, changed = 3, remaining-3, true
-				delete(active, i)
-			} else if value > 15 {
-				values[i], remaining, changed = 15, remaining-15, true
+			addition := remaining * weights[i] / weightTotal
+			if values[i]+addition > maxSceneVideoDuration {
+				capacity := maxSceneVideoDuration - values[i]
+				if capacity < 0 {
+					capacity = 0
+				}
+				values[i], remaining, changed = maxSceneVideoDuration, remaining-capacity, true
 				delete(active, i)
 			}
 		}
 		if !changed {
 			for i := range active {
-				values[i] = remaining * weights[i] / weightTotal
+				values[i] += remaining * weights[i] / weightTotal
 			}
 			break
 		}
@@ -2264,7 +2277,7 @@ func rebalanceScriptDurations(res *scriptResult, target float64) bool {
 	delta := math.Round((target-total)*10) / 10
 	for i := len(values) - 1; i >= 0 && math.Abs(delta) >= 0.05; i-- {
 		adjusted := values[i] + delta
-		if adjusted >= 3 && adjusted <= 15 {
+		if adjusted >= floors[i] && adjusted <= maxSceneVideoDuration {
 			values[i] = adjusted
 			delta = 0
 		}
@@ -2293,25 +2306,14 @@ func validateScriptResult(res *scriptResult, targets ...any) error {
 			targetScenes = v
 		}
 	}
-	// targetScenes 是创作目标而非固定协议。硬下限由单镜最长 15 秒决定；
-	// 另保留目标值 60% 的节奏底线，避免把整集压缩成少量超长镜头。
-	minScenes := int(math.Ceil(targetDuration / 15))
-	paceMin := int(math.Ceil(float64(targetScenes) * 0.6))
-	if paceMin > minScenes {
-		minScenes = paceMin
+	// 总时长不是硬上限；镜头数仍保留宽松的节奏底线，避免整集退化成少量超长镜头。
+	minScenes := int(math.Ceil(float64(targetScenes) * 0.6))
+	if minScenes < 1 {
+		minScenes = 1
 	}
-	maxScenes := targetScenes + 5
-	capacityMax := int(math.Floor(targetDuration / 3))
-	if maxScenes > capacityMax {
-		maxScenes = capacityMax
+	if len(res.Scenes) < minScenes {
+		return fmt.Errorf("分镜数量至少应为 %d 个（目标 %d 个的节奏底线），实际为 %d 个", minScenes, targetScenes, len(res.Scenes))
 	}
-	if maxScenes < minScenes {
-		maxScenes = minScenes
-	}
-	if len(res.Scenes) < minScenes || len(res.Scenes) > maxScenes {
-		return fmt.Errorf("分镜数量应为 %d~%d 个（目标 %d 个，并满足单镜 3~15 秒），实际为 %d 个", minScenes, maxScenes, targetScenes, len(res.Scenes))
-	}
-	totalDuration := 0.0
 	for i, sc := range res.Scenes {
 		if strings.TrimSpace(sc.Content) == "" || strings.TrimSpace(sc.ImagePrompt) == "" {
 			return fmt.Errorf("场景 %d 缺少视频或画面提示词", i+1)
@@ -2319,12 +2321,8 @@ func validateScriptResult(res *scriptResult, targets ...any) error {
 		if sc.Duration < 3 || sc.Duration > 15 {
 			return fmt.Errorf("场景 %d 时长必须为 3~15 秒", i+1)
 		}
-		totalDuration += sc.Duration
 	}
-	minDuration, maxDuration := targetDuration*0.9, targetDuration*1.1
-	if totalDuration < minDuration || totalDuration > maxDuration {
-		return fmt.Errorf("分镜总时长应为 %.0f~%.0f 秒，实际为 %.0f 秒", minDuration, maxDuration, totalDuration)
-	}
+	_ = targetDuration
 	return nil
 }
 
@@ -3570,6 +3568,14 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		return err
 	}
 	sc = &latest
+	dialogues := s.sceneVideoDialogues(sc)
+	minimumSpeechDuration := modelDialoguesMinDuration(dialogues)
+	if minimumSpeechDuration > maxSceneVideoDuration {
+		return fmt.Errorf("场景 %d 的对白自然朗读预计需要 %.1f 秒，超过单个视频 15 秒上限，请先拆分镜头；系统不会通过加快语速压缩对白", sc.Order, minimumSpeechDuration)
+	}
+	if minimumSpeechDuration > sc.Duration+0.05 {
+		return fmt.Errorf("场景 %d 当前时长 %.1f 秒不足以自然说完对白，预计至少需要 %.1f 秒，请先应用建议时长", sc.Order, sc.Duration, minimumSpeechDuration)
+	}
 	if sc.VideoLocked {
 		return fmt.Errorf("场景 %d 的视频已锁定，请先解锁", sc.Order)
 	}

@@ -168,11 +168,12 @@ func scriptFromPlanSystemPrompt(targetDuration float64, targetScenes int) string
     }
   ]
 }
-【时长约束（必须严格遵循）】
-- 总时长预算：约 ` + fmt.Sprintf("%.0f", targetDuration) + ` 秒
-- 镜头数要求：` + fmt.Sprintf("%d", targetScenes) + ` 个镜头
-- 单镜时长范围：` + fmt.Sprintf("%d", minSceneDur) + `~` + fmt.Sprintf("%d", maxSceneDur) + ` 秒（根据对白长度与动作复杂度灵活调整）
-- 所有镜头时长之和应尽量接近总时长预算（允许 ±10% 偏差）
+【时长规划】
+- 总时长参考：约 ` + fmt.Sprintf("%.0f", targetDuration) + ` 秒；这是节奏参考而非上限，自然对白需要时允许超过
+- 镜头数参考：约 ` + fmt.Sprintf("%d", targetScenes) + ` 个镜头
+- 单镜时长范围：` + fmt.Sprintf("%d", minSceneDur) + `~` + fmt.Sprintf("%d", maxSceneDur) + ` 秒
+- 按约 3.8 个汉字/秒估算自然对白，并计入标点停顿、说话人切换和至少 1.2 秒镜头余量
+- 对白自然说完需要超过 15 秒时，按完整句子、说话人或动作节点拆为连续镜头；不得删改对白或提高语速来凑总时长
 3. 人物一致性至关重要：同一角色在多个场景出现时，image_prompt 必须严格沿用创作方案中该角色的 trait（外貌特征）与 style（服装造型），且所有场景画风描述保持一致。
 4. 必须区分人物用途：visible_characters 只列本镜最终画面中真实可见的人物；voice_characters 只列画外对白或内心独白的发声者；mentioned_characters 只列剧情说明、对白或独白中被提到但不会出现在画面中的人物。名字出现在文字中不等于画面出场。characters 为兼容字段，必须与 visible_characters 完全相同；只有 visible_characters 会要求人物四视图。
 5. script 正文优先使用固定格式：【动作】画面描述、【对白｜角色名】原文、【旁白】原文、【内心独白｜角色名】原文。逐场检查故事正文和分镜内容中的明确发声标注，并忠实提取到 dialogues：“旁白/画外音：原文”使用 narration，“角色名内心独白：原文”使用 monologue，“角色名：原文”使用 dialogue。只复制标注后的原文，不改写、不概括、不补充。不得把“他心里疑惑”“气氛压抑”等心理、动作或氛围描写转换成独白或旁白。speech_type 只能是 dialogue、narration 或 monologue；dialogue/monologue 的 character 必须是角色名，narration 的 character 固定为“旁白”。正文和分镜内容均未明确出现可发声内容时必须为空数组。

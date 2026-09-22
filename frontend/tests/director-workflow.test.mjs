@@ -27,6 +27,16 @@ test('视频提示词首尾帧支持连续性帧、当前分镜和自定义上�
   assert.match(source, /api\.uploadSceneVideoFrame/)
 })
 
+test('场景卡展示对白自然时长预算和拆镜警告', () => {
+  const source = readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
+  assert.match(source, /对白预计/)
+  assert.match(source, /需拆分镜头/)
+  assert.match(source, /chars \/ 3\.8/)
+  assert.match(source, /dialogue-budget/)
+  assert.match(source, /应用建议时长/)
+  assert.match(source, /applyDialogueDuration/)
+})
+
 test('巨构只在场景资产生成处配置，不进入剧情分镜剪辑台', () => {
   const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
   const editor = readFileSync(new URL('../src/views/ProjectEditor.vue', import.meta.url), 'utf8')
