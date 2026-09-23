@@ -80,6 +80,42 @@ func parseSceneDirectorDraft(output string) (*sceneDirectorDraft, error) {
 	return &draft, nil
 }
 
+func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue) string {
+	var lines []string
+	for i, d := range dialogues {
+		lines = append(lines, fmt.Sprintf("D%d｜%s｜%s", i+1, strings.TrimSpace(d.Character), strings.TrimSpace(d.Text)))
+	}
+	return `按对白自然语速和语义停顿拆成多个3–15秒Native H3镜头。可以交替使用说话人近景、听者反应、画外音承载的反应镜头和双人镜头。硬规则：
+1. Dialogue字段只能填下列结构化对白的连续原文片段，不得改写、增删、重复或创造旁白；无发声镜头必须为空。
+2. 所有镜头Dialogue按顺序拼接后必须逐字等于下列完整对白原文按顺序拼接的结果。
+3. 同一句可跨镜，但后镜必须承接前镜，不能重新起句；听者反应镜头可由当前说话人画外音连续承载。
+4. 每镜3–15秒，一个主要情绪、一个主要动作、一种主要构图和明确结束状态。
+5. 对白自然时长决定总时长，不得压缩语速，也不得用重复动作填时长。
+结构化对白：
+` + strings.Join(lines, "\n")
+}
+
+func canonicalDialogueText(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), "")
+}
+
+func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
+	var expected, actual strings.Builder
+	for _, d := range dialogues {
+		expected.WriteString(canonicalDialogueText(d.Text))
+	}
+	for i, shot := range draft.Shots {
+		if shot.Duration < 3 || shot.Duration > 15 {
+			return fmt.Errorf("对白拆镜%d时长必须为3至15秒", i+1)
+		}
+		actual.WriteString(canonicalDialogueText(shot.Dialogue))
+	}
+	if actual.String() != expected.String() {
+		return fmt.Errorf("导演草稿对白未逐字覆盖结构化对白，禁止遗漏、改写、重复或新增")
+	}
+	return nil
+}
+
 func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	scene, ok := s.loadScene(c)
 	if !ok {
@@ -92,6 +128,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	var req struct {
 		Brief        string `json:"brief"`
 		Requirements string `json:"requirements"`
+		Mode         string `json:"mode"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
@@ -110,15 +147,35 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	output, err := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, "director-scene-draft", s.TextProviderFact, "只输出完整合法JSON，不要Markdown或解释。", "生成完整Scene导演方案草稿；只预览，不保存。", map[string]string{"scene_facts": scene.Content, "asset_context": assets, "brief": req.Brief, "requirements": req.Requirements, "target_duration": fmt.Sprintf("%.1f", scene.Duration)})
+	operation, instruction := "director-scene-draft", "生成完整Scene导演方案草稿；只预览，不保存。"
+	var dialogues []models.Dialogue
+	dialogueDuration := 0.0
+	if req.Mode == "dialogue_rhythm" {
+		if err := s.DB.Where("scene_id = ? AND project_id = ?", scene.ID, scene.ProjectID).Order("order ASC, id ASC").Find(&dialogues).Error; err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		dialogues = validSceneDialogues(dialogues)
+		if len(dialogues) == 0 {
+			c.JSON(400, gin.H{"error": "当前Scene没有可用于拆镜的结构化对白"})
+			return
+		}
+		dialogueDuration = modelDialoguesMinDuration(dialogues)
+		instruction = dialogueRhythmDirectorInstruction(dialogues)
+		req.Requirements = strings.TrimSpace(req.Requirements + "\n" + instruction)
+	}
+	output, err := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出完整合法JSON，不要Markdown或解释。", instruction, map[string]string{"scene_facts": scene.Content, "asset_context": assets, "brief": req.Brief, "requirements": req.Requirements, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration))})
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
 	draft, err := parseSceneDirectorDraft(output)
+	if err == nil && req.Mode == "dialogue_rhythm" {
+		err = validateDialogueRhythmDraft(draft, dialogues)
+	}
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "AI导演方案格式无效: " + err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{"draft": draft, "skill_code": "director-scene-draft", "provider_id": s.TextProviderFact.Name(), "audited": true})
+	c.JSON(200, gin.H{"draft": draft, "skill_code": "director-scene-draft", "provider_id": s.TextProviderFact.Name(), "audited": true, "mode": req.Mode, "dialogue_duration": dialogueDuration})
 }

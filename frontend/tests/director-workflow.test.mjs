@@ -37,6 +37,14 @@ test('场景卡展示对白自然时长预算和拆镜警告', () => {
   assert.match(source, /applyDialogueDuration/)
 })
 
+test('AI导演支持可审核的长对白Native拆镜', () => {
+  const source = readFileSync(new URL('../src/components/ShotDirectorEditor.vue', import.meta.url), 'utf8')
+  assert.match(source, /按对白节奏拆成Native镜头/)
+  assert.match(source, /generateDirectorDraft\('dialogue_rhythm'\)/)
+  assert.match(source, /3–15秒镜头/)
+  assert.match(source, /dialogue_duration/)
+})
+
 test('巨构只在场景资产生成处配置，不进入剧情分镜剪辑台', () => {
   const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
   const editor = readFileSync(new URL('../src/views/ProjectEditor.vue', import.meta.url), 'utf8')
