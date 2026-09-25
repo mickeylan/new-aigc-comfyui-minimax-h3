@@ -444,6 +444,28 @@ Subject与Picture的真实身份绑定由系统根据实际上传文件生成，
 	return result, nil
 }
 
+var qwenReferenceLinePrefixPattern = regexp.MustCompile(`^\s*-?\s*<Picture\s+[0-9]+>\s*[：:]?\s*`)
+
+func ensureQwenSceneReferenceBindings(prompt string, referenceLines []string) string {
+	prompt = strings.TrimSpace(prompt)
+	bindings := make([]string, 0, len(referenceLines))
+	for i, line := range referenceLines {
+		tag := fmt.Sprintf("<image%d>", i+1)
+		if strings.Contains(prompt, tag) {
+			continue
+		}
+		description := strings.TrimSpace(qwenReferenceLinePrefixPattern.ReplaceAllString(strings.TrimSpace(line), ""))
+		if description == "" {
+			description = "第" + strconv.Itoa(i+1) + "张参考图"
+		}
+		bindings = append(bindings, fmt.Sprintf("%s仅作为%s的外观来源，不要求该素材中的主体必须出现在画面中", tag, description))
+	}
+	if len(bindings) == 0 {
+		return prompt
+	}
+	return strings.Join(bindings, "；") + "。" + prompt
+}
+
 func validateQwenScenePrompt(prompt string, referenceCount int) error {
 	trimmed := strings.TrimSpace(prompt)
 	if trimmed == "" {
@@ -512,6 +534,7 @@ func (s *ProjectService) redesignQwenSceneImagePrompt(sc *models.Scene, project 
 	if len([]rune(prompt)) < 20 {
 		return "", fmt.Errorf("AI返回的Qwen场景提示词过短，请重试")
 	}
+	prompt = ensureQwenSceneReferenceBindings(prompt, referenceLines)
 	if err := validateQwenScenePrompt(prompt, len(referenceLines)); err != nil {
 		return "", fmt.Errorf("Qwen场景提示词不符合专用规则: %w", err)
 	}

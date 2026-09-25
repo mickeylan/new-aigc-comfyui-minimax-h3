@@ -1137,6 +1137,30 @@ func TestValidateQwenScenePromptRejectsGenericInstructionAndMissingReferences(t 
 	}
 }
 
+func TestEnsureQwenSceneReferenceBindingsDeterministicallyAddsMissingImages(t *testing.T) {
+	got := ensureQwenSceneReferenceBindings(
+		"以<image2>中的桃花林作为环境来源，上官若彤在暖色侧光下神情焦急。",
+		[]string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：场景「梵心桃花林」参考图", "- <Picture 3>：角色「上官若彤」四视图"},
+	)
+	for _, tag := range []string{"<image1>", "<image2>", "<image3>"} {
+		if !strings.Contains(got, tag) {
+			t.Fatalf("missing %s: %s", tag, got)
+		}
+	}
+	if strings.Count(got, "<image2>") != 1 {
+		t.Fatalf("existing binding duplicated: %s", got)
+	}
+	if strings.Contains(got, "<Picture") {
+		t.Fatalf("H3 picture tag leaked: %s", got)
+	}
+	if !strings.Contains(got, "不要求该素材中的主体必须出现在画面中") {
+		t.Fatalf("optional visibility constraint missing: %s", got)
+	}
+	if err := validateQwenScenePrompt(got, 3); err != nil {
+		t.Fatalf("completed prompt invalid: %v", err)
+	}
+}
+
 func TestBuildQwenSceneExecutionPromptKeepsLocationOnlyAndForbidsPeople(t *testing.T) {
 	ps := newTestProjectService(t)
 	p := models.Project{Title: "问仙"}
