@@ -1122,6 +1122,10 @@ func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string, templ
 	_ = s.db.First(&p, sc.ProjectID).Error
 	dubs := s.sceneVideoDialogues(sc)
 	prompt := strings.TrimSpace(sc.VideoFullPrompt)
+	if prompt != "" && isH3KeyframePrompt(prompt) {
+		_, refLines := s.sceneVideoReferenceFiles(sc, pid)
+		prompt = normalizeSavedH3Audio(prompt, dubs, refLines)
+	}
 	compile := func(code string) string {
 		if prompt != "" {
 			return prompt
@@ -1714,11 +1718,14 @@ var speechPerformanceNarrationPatterns = []struct {
 	pattern *regexp.Regexp
 	replace string
 }{
-	{regexp.MustCompile(`语气(?:加重|放缓|急促|稍快|稍慢)?地?(?:陈述|说明|强调|说出)[^，。；]*`), "唇部随本镜结构化对白自然开合"},
-	{regexp.MustCompile(`语速(?:稍快|稍慢|加快|放缓)[^，。；]*`), "唇部随本镜结构化对白自然开合"},
-	{regexp.MustCompile(`(?:说完|话音落下|对白结束)后?停顿`), "对白结束后闭口停顿"},
-	{regexp.MustCompile(`说出(?:时间期限|威胁内容|结论|问题|功力顶峰|无用功)`), "完成本镜结构化对白后闭口"},
-	{regexp.MustCompile(`(?:继续)?(?:陈述|说明|强调)(?:威胁|时间压力|紧迫性|担忧)`), "唇部随本镜结构化对白自然开合"},
+	// H3 may vocalise prose outside <d> when it still contains speech semantics. Convert
+	// every performance direction to directly observable facial/mouth state only.
+	{regexp.MustCompile(`语气(?:加重|放缓|急促|稍快|稍慢)?(?:地)?(?:陈述|说明|强调|说出)?[^，。；]*`), "眉心与目光的紧张感增强"},
+	{regexp.MustCompile(`语速(?:稍快|稍慢|加快|放缓)[^，。；]*`), "唇部自然开合"},
+	{regexp.MustCompile(`(?:说完|讲完|问完|回答完|话音落下|对白结束)(?:后)?(?:短暂)?(?:停顿|暂停)`), "唇部停止开合并闭合，维持一瞬静止"},
+	{regexp.MustCompile(`(?:开口)?(?:说出|说完|陈述|说明|强调|询问|回答)(?:姐姐)?(?:十年[^，。；]*)?(?:时间期限|威胁内容|结论|问题|功力顶峰|无用功|威胁|时间压力|紧迫性|担忧)?`), "唇部自然开合"},
+	{regexp.MustCompile(`(?:继续)?(?:说|讲|问|回答|陈述|说明|强调)[^，。；]*`), "唇部自然开合"},
+	{regexp.MustCompile(`出(?:威胁内容|时间期限|结论|问题)`), "目光保持凝重"},
 }
 
 func visualiseSpeechPerformanceNarration(text string, hasDialogue bool) string {
@@ -1726,12 +1733,19 @@ func visualiseSpeechPerformanceNarration(text string, hasDialogue bool) string {
 		text = rule.pattern.ReplaceAllString(text, rule.replace)
 	}
 	if !hasDialogue {
-		text = strings.ReplaceAll(text, "唇部随本镜结构化对白自然开合", "保持闭口")
-		text = strings.ReplaceAll(text, "对白结束后闭口停顿", "保持闭口停顿")
-		text = strings.ReplaceAll(text, "完成本镜结构化对白后闭口", "保持闭口")
+		text = strings.ReplaceAll(text, "唇部自然开合", "唇部保持闭合")
 	}
-	for strings.Contains(text, "唇部随本镜结构化对白自然开合，唇部随本镜结构化对白自然开合") {
-		text = strings.ReplaceAll(text, "唇部随本镜结构化对白自然开合，唇部随本镜结构化对白自然开合", "唇部随本镜结构化对白自然开合")
+	for _, duplicate := range []string{
+		"唇部自然开合，唇部自然开合",
+		"唇部停止开合并闭合，维持一瞬静止，唇部自然开合",
+	} {
+		for strings.Contains(text, duplicate) {
+			replacement := "唇部自然开合"
+			if strings.HasPrefix(duplicate, "唇部停止") {
+				replacement = "唇部停止开合并闭合，维持一瞬静止"
+			}
+			text = strings.ReplaceAll(text, duplicate, replacement)
+		}
 	}
 	return text
 }
@@ -1914,7 +1928,12 @@ func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines
 		{"overall_soundscape:", h3SoundscapeContract(len(validSceneDialogues(dubs)) > 0)},
 		{"non_diegetic_music:", h3PromptSection(prompt, "non_diegetic_music:")},
 	}
-	parts := make([]string, 0, len(sections))
+	parts := make([]string, 0, len(sections)+1)
+	if index := strings.Index(strings.ToLower(prompt), "subject_definitions:"); index > 0 {
+		if prefix := strings.TrimSpace(prompt[:index]); prefix != "" {
+			parts = append(parts, prefix)
+		}
+	}
 	for _, section := range sections {
 		parts = append(parts, section.heading+"\n"+strings.TrimSpace(section.body))
 	}
@@ -1946,7 +1965,7 @@ func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 func resolveRef2VSubmissionPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue, referenceLines []string) string {
 	saved := strings.TrimSpace(sc.VideoFullPrompt)
 	if saved != "" && len(ValidateFullH3PromptForReferences(saved, referenceLines)) == 0 {
-		return saved
+		return normalizeSavedH3Audio(saved, dubs, referenceLines)
 	}
 	actionPrompt := canonicalVideoAction(saved, referenceLines)
 	if actionPrompt == "" {

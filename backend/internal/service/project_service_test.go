@@ -1945,7 +1945,7 @@ func TestH3ActionConvertsSpeechStageDirectionsToSilentVisualCues(t *testing.T) {
 			t.Fatalf("retained speech-stage narration %q: %s", forbidden, got)
 		}
 	}
-	for _, want := range []string{"唇部随本镜结构化对白自然开合", "对白结束后闭口停顿"} {
+	for _, want := range []string{"眉心与目光的紧张感增强", "唇部停止开合并闭合，维持一瞬静止", "唇部自然开合"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing visual cue %q: %s", want, got)
 		}
@@ -1953,6 +1953,59 @@ func TestH3ActionConvertsSpeechStageDirectionsToSilentVisualCues(t *testing.T) {
 	full := appendStructuredDialogue(got, dubs, nil)
 	if strings.Count(full, "<d>") != 1 || !strings.Contains(full, "<d>[Chinese] 这十年你都没有怎么好好闭关修炼过。</d>") {
 		t.Fatalf("structured dialogue not sole spoken text: %s", full)
+	}
+}
+
+func TestH3ActionRemovesBareSpeechDirectionsReportedByUser(t *testing.T) {
+	action := `[Shot 1] 语气加重，眉心微蹙，镜头固定不动，说完暂停，眉心紧锁。`
+	dubs := []models.Dialogue{{Character: "上官若彤", SpeechType: "dialogue", Text: "还有不到四十年。"}}
+	got := stripStructuredDialogueFromAction(action, dubs)
+	for _, forbidden := range []string{"语气", "说完", "暂停", "对白", "结构化"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("retained vocal semantic %q: %s", forbidden, got)
+		}
+	}
+	for _, want := range []string{"眉心与目光的紧张感增强", "镜头固定不动", "唇部停止开合并闭合，维持一瞬静止", "眉心紧锁"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing visual state %q: %s", want, got)
+		}
+	}
+}
+
+func TestNormalizeSavedH3AudioRemovesImplicitDuplicateSpeechAndPreservesAlignment(t *testing.T) {
+	prompt := `目标视频的参考图时间对齐：<Picture 1>对应0.00秒；<Picture 2>对应14.00秒。
+
+subject_definitions:
+<Subject 1> 是角色参考。
+
+summary:
+测试
+
+retention_analysis:
+测试
+
+detailed_description:
+[Shot 1] <Subject 1>从参考状态开始陈述，语气加重，眉心微蹙，镜头固定不动，说完暂停，眉心紧锁。
+[Shot 2] 语速稍快，强调时间紧迫。
+[Shot 3] 出威胁内容，语气沉重。 <Subject 1> (S1)说：<d>[Chinese] 旧错误对白</d>。
+
+overall_soundscape:
+旧声音
+
+non_diegetic_music:
+N/A`
+	dubs := []models.Dialogue{{Character: "上官若彤", SpeechType: "dialogue", Text: "这十年你都没有怎么好好闭关修炼过。还有不到四十年，太运宗就会派更强的弟子，"}}
+	got := normalizeSavedH3Audio(prompt, dubs, []string{"<Subject 1> 是 <Picture 1> 中的角色「上官若彤」四视图。"})
+	if !strings.HasPrefix(got, "目标视频的参考图时间对齐") {
+		t.Fatalf("alignment prefix lost: %s", got)
+	}
+	for _, forbidden := range []string{"开始陈述", "语气", "说完", "暂停", "语速", "强调时间", "出威胁内容", "旧错误对白"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("retained implicit/old speech %q: %s", forbidden, got)
+		}
+	}
+	if strings.Count(got, "<d>") != 1 || strings.Count(got, dubs[0].Text) != 1 {
+		t.Fatalf("dialogue was not rebuilt exactly once: %s", got)
 	}
 }
 

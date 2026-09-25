@@ -461,6 +461,12 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 	}
 	prompt := strings.TrimSpace(req.Prompt)
 	_, _, refLines := s.sceneVideoPromptContinuity(sc)
+	dubs := s.Projects.sceneVideoDialogues(sc)
+	if isH3KeyframePrompt(prompt) {
+		// User visual edits remain authoritative, but spoken content is always rebuilt from
+		// structured Dialogue so stage directions cannot become a second speech source.
+		prompt = normalizeSavedH3Audio(prompt, dubs, refLines)
+	}
 	template := strings.TrimSpace(req.Template)
 	if template == "" {
 		template = strings.TrimSpace(sc.VideoTemplate)
