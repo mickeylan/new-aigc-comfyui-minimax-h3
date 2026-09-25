@@ -120,6 +120,78 @@ func normalizeDialogueRhythmDraftDurations(draft *sceneDirectorDraft) {
 	}
 }
 
+func restoreDialogueRhythmDraftText(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
+	if draft == nil {
+		return fmt.Errorf("导演草稿为空")
+	}
+	var source []rune
+	breaks := map[int]bool{}
+	for _, d := range dialogues {
+		text := []rune(strings.TrimSpace(d.Text))
+		for _, r := range text {
+			source = append(source, r)
+			if strings.ContainsRune("。！？!?；;，,、", r) {
+				breaks[len(source)] = true
+			}
+		}
+		breaks[len(source)] = true
+	}
+	if len(source) == 0 {
+		return nil
+	}
+	indices := make([]int, 0, len(draft.Shots))
+	weights := make([]int, 0, len(draft.Shots))
+	for i := range draft.Shots {
+		if strings.TrimSpace(draft.Shots[i].Dialogue) == "" {
+			continue
+		}
+		indices = append(indices, i)
+		weight := len([]rune(canonicalDialogueText(draft.Shots[i].Dialogue)))
+		if weight < 1 {
+			weight = 1
+		}
+		weights = append(weights, weight)
+	}
+	if len(indices) == 0 {
+		return fmt.Errorf("导演草稿没有承载结构化对白的镜头")
+	}
+	totalWeight := 0
+	for _, weight := range weights {
+		totalWeight += weight
+	}
+	start, usedWeight := 0, 0
+	for pos, shotIndex := range indices {
+		end := len(source)
+		if pos < len(indices)-1 {
+			usedWeight += weights[pos]
+			target := int(math.Round(float64(len(source)) * float64(usedWeight) / float64(totalWeight)))
+			minEnd, maxEnd := start+1, len(source)-(len(indices)-pos-1)
+			if target < minEnd {
+				target = minEnd
+			}
+			if target > maxEnd {
+				target = maxEnd
+			}
+			end = target
+			for distance := 0; distance <= len(source); distance++ {
+				left, right := target-distance, target+distance
+				if left >= minEnd && breaks[left] {
+					end = left
+					break
+				}
+				if right <= maxEnd && breaks[right] {
+					end = right
+					break
+				}
+			}
+		}
+		draft.Shots[shotIndex].Dialogue = string(source[start:end])
+		draft.Shots[shotIndex].Checks = append(draft.Shots[shotIndex].Checks, "对白由系统按结构化Dialogue原文连续回填，禁止模型改写")
+		start = end
+	}
+	return nil
+}
+
 func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
 	var expected, actual strings.Builder
 	for _, d := range dialogues {
@@ -207,6 +279,13 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 			return
 		}
 		draft, err = validateDraft(repaired)
+		if err != nil && strings.Contains(err.Error(), "导演草稿对白未逐字覆盖结构化对白") && draft != nil {
+			if restoreErr := restoreDialogueRhythmDraftText(draft, dialogues); restoreErr != nil {
+				err = restoreErr
+			} else {
+				err = validateDialogueRhythmDraft(draft, dialogues)
+			}
+		}
 	}
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "AI导演方案自动修复后仍无效: " + err.Error()})

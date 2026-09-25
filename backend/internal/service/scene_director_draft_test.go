@@ -78,6 +78,23 @@ func TestValidateDialogueRhythmDraftRejectsShotOverNativeMaximum(t *testing.T) {
 	}
 }
 
+func TestRestoreDialogueRhythmDraftTextUsesAuthoritativeDialogue(t *testing.T) {
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Dialogue: "姐姐，你十年没修炼。", Duration: 8}, {Dialogue: "来得及吗？", Duration: 7}, {Dialogue: "", Duration: 3}}}
+	dialogues := []models.Dialogue{{Text: "姐姐，自从你跟太运宗使者比试之后，这十年你都没有怎么好好闭关修炼过。"}, {Text: "还有不到四十年，这样真的来得及吗？"}}
+	if err := restoreDialogueRhythmDraftText(draft, dialogues); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
+		t.Fatal(err)
+	}
+	if draft.Shots[2].Dialogue != "" {
+		t.Fatalf("reaction shot received dialogue: %q", draft.Shots[2].Dialogue)
+	}
+	if !strings.Contains(draft.Shots[0].Dialogue, "太运宗") || !strings.Contains(draft.Shots[1].Dialogue, "来得及吗") {
+		t.Fatalf("unexpected split: %#v", draft.Shots)
+	}
+}
+
 func TestParseSceneDirectorDraftNamesMissingRequiredField(t *testing.T) {
 	broken := strings.Replace(validSceneDirectorDraft, `"camera_movement":"固定"`, `"camera_movement":""`, 1)
 	_, err := parseSceneDirectorDraft(broken)
