@@ -53,15 +53,19 @@ func TestMaterializeShotsCreatesNativeScenesAndPreservesDialogue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(created) != 3 {
-		t.Fatalf("created=%d", len(created))
+	if len(created) != 1 || created[0].Duration != 13 || created[0].ShotCount != 3 {
+		t.Fatalf("created=%+v", created)
 	}
 	var scenes []models.Scene
 	if err := db.Where("project_id=?", project.ID).Order("`order`").Find(&scenes).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(scenes) != 5 || scenes[0].ID != before.ID || scenes[4].ID != after.ID || scenes[4].ImageFile != "keep.png" {
+	if len(scenes) != 3 || scenes[0].ID != before.ID || scenes[2].ID != after.ID || scenes[2].ImageFile != "keep.png" {
 		t.Fatalf("scenes=%+v", scenes)
+	}
+	var childShots []models.Shot
+	if err := db.Where("scene_id = ?", created[0].ID).Order("order_num").Find(&childShots).Error; err != nil || len(childShots) != 3 {
+		t.Fatalf("child shots=%+v err=%v", childShots, err)
 	}
 	var joined string
 	for _, sc := range created {
@@ -79,6 +83,25 @@ func TestMaterializeShotsCreatesNativeScenesAndPreservesDialogue(t *testing.T) {
 	}
 	if joined != "姐姐，你还好吗？我很好。" {
 		t.Fatalf("joined=%q", joined)
+	}
+}
+
+func TestGroupNativeShotsPacksAdjacentShotsUpToFifteenSeconds(t *testing.T) {
+	durations := []float64{4, 3, 3, 5, 5, 4, 5, 4, 4, 3, 4, 5, 4}
+	shots := make([]models.Shot, len(durations))
+	fragments := make([][]dialogueFragment, len(durations))
+	for i, duration := range durations {
+		shots[i] = models.Shot{ID: uint(i + 1), Duration: duration}
+	}
+	groups := groupNativeShots(shots, fragments)
+	if len(groups) != 4 {
+		t.Fatalf("groups=%d", len(groups))
+	}
+	want := []float64{15, 14, 15, 9}
+	for i := range groups {
+		if groups[i].Duration != want[i] {
+			t.Fatalf("group %d duration=%v want=%v", i, groups[i].Duration, want[i])
+		}
 	}
 }
 

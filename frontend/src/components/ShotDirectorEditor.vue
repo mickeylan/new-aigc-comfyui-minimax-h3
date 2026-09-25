@@ -8,7 +8,8 @@
       <label>补充要求（可选）<textarea v-model="directorRequirements" class="textarea" rows="2" placeholder="例如：情绪克制、保留原对白、不要远景、禁止旁白" /></label>
       <div class="director-actions"><button class="btn" :disabled="generatingDirector || !directorBrief.trim()" @click="generateDirectorDraft('standard')">{{ generatingDirector ? `AI导演处理中 · ${directorElapsed}秒` : 'AI生成完整导演方案' }}</button><button class="btn btn-secondary" :disabled="generatingDirector || !directorBrief.trim()" @click="generateDirectorDraft('dialogue_rhythm')">{{ generatingDirector&&directorRequestMode==='dialogue_rhythm'?`对白拆镜处理中 · ${directorElapsed}秒`:'按对白节奏拆成Native镜头' }}</button></div><p v-if="generatingDirector" class="director-progress" role="status">正在调用本地文生文模型生成并严格校验草稿；若首次结果缺字段或对白不完整，系统会自动修复一次，因此可能需要数分钟。请勿刷新或切换场景。</p><p class="sub">长对白模式会读取结构化Dialogue，按自然语速拆成3–15秒镜头；对白必须逐字覆盖且草稿确认前不会保存。</p>
     </div>
-    <div v-if="shots.length > 1 && shots.every(s=>s.id)" class="card materialize-card"><div><strong>已保存 {{shots.length}} 个导演镜头，但尚未进入项目分镜列表</strong><p>当前仍是1个Scene下的Shot规划，图片和视频生成只识别Scene。请执行转换，转换后会在时间轴和项目分镜中显示为{{shots.length}}个可独立生成的Native场景。</p></div><button class="btn" :disabled="materializing || saving" @click="materializeNativeScenes">{{materializing?'正在转换…':`加入分镜并拆成${shots.length}个可制作场景`}}</button></div>
+    <div v-if="isPreviouslySplitScene" class="card materialize-card"><div><strong>当前属于已拆开的短Scene组</strong><p>可以把同组相邻短Scene按15秒上限重新合并；每个原镜头仍作为内部Shot保留，不会丢失构图、动作或台词。</p></div><button class="btn" :disabled="materializing" @click="regroupExistingScenes">{{materializing?'正在合并…':'重新合并过碎场景'}}</button></div>
+    <div v-else-if="shots.length > 1 && shots.every(s=>s.id)" class="card materialize-card"><div><strong>已保存 {{shots.length}} 个导演Shot，但尚未进入项目分镜列表</strong><p>转换时会按原顺序把相邻短Shot合并到同一个Native场景，每个场景总时长不超过15秒；不同构图和镜头切换仍作为内部Shot保留，不会拆得过碎。</p></div><button class="btn" :disabled="materializing || saving" @click="materializeNativeScenes">{{materializing?'正在转换…':`按15秒上限合并并加入分镜`}}</button></div>
     <div v-if="directorDraft" class="card director-draft"><div class="section-head"><div><strong>{{directorDraftMode==='dialogue_rhythm'?'对白节奏拆镜草稿':'AI导演草稿'}} · {{ directorDraft.shots.length }}镜</strong><p class="sub">尚未保存，确认后才替换当前Shot设计。<span v-if="directorDraftMode==='dialogue_rhythm'"> 对白自然时长约{{directorDialogueDuration.toFixed(1)}}秒。</span></p></div><div class="section-actions"><button class="btn btn-sm btn-ghost" @click="directorDraft=null">放弃</button><button class="btn btn-sm" :disabled="saving" @click="confirmDirectorDraft">确认导入并保存</button></div></div><div v-for="(s,i) in directorDraft.shots" :key="i" class="draft-shot"><strong>{{ i+1 }}. {{ s.description }}</strong><span>{{ s.shot_type }} · {{ s.camera_angle }} · {{ s.camera_movement }} · {{ s.duration }}秒</span><p>{{ s.start_state }} → {{ s.end_state }}</p><p v-if="s.dialogue" class="draft-dialogue">对白：{{s.dialogue}}</p><details><summary>导演细节与自动检查</summary><p>主体：{{ s.prompt_subject }}</p><p>动作：{{ s.prompt_action }}</p><p>摄影机：{{ s.prompt_camera }}</p><p>光线：{{ s.prompt_lighting }}</p><p>风格：{{ s.prompt_style }}</p><ul><li v-for="check in s.checks" :key="check">{{ check }}</li></ul></details></div></div>
     <details class="card advanced-editor"><summary><strong>高级：逐镜手工编辑</strong>（已有 {{ shots.length }} 镜）</summary><div class="section-actions advanced-actions"><button class="btn btn-sm btn-secondary" @click="createFiveActSkeleton">创建五幕骨架</button><button class="btn btn-sm btn-secondary" @click="addShot">＋ 镜头</button><button class="btn btn-sm" :disabled="saving" @click="saveAll">{{ saving ? '保存中…' : '保存导演设计' }}</button></div>
     <div v-if="loading" class="card empty">加载镜头…</div>
@@ -63,7 +64,7 @@ import { promptHistoryLabel } from '../utils/directorWorkflow.js'
 import { createDraftSafety } from '../utils/draftSafety.js'
 const emit = defineEmits(['scene-changed','scene-materialized'])
 const props = defineProps({ projectId: { type: [String, Number], required: true }, sceneId: { type: [String, Number], required: true }, genre: { type: String, default: '' }, tone: { type: String, default: '' }, sceneTitle: { type: String, default: '' }, sceneContent: { type: String, default: '' } })
-const toast = useToastStore(); const shots = ref([]); const materializing = ref(false); const presets = ref([]); const characters = ref([]); const looks = ref({}); const outfits = ref({}); const loading = ref(false); const saving = ref(false); const generatingDirector = ref(false); const directorElapsed = ref(0); const directorRequestMode = ref('standard'); const directorBrief = ref(''); const directorRequirements = ref(''); const directorDraft = ref(null); const directorDraftMode = ref('standard'); const directorDialogueDuration = ref(0); let directorTimer; let key = 0; let draftSafety
+const toast = useToastStore(); const shots = ref([]); const isPreviouslySplitScene = ref(false); const materializing = ref(false); const presets = ref([]); const characters = ref([]); const looks = ref({}); const outfits = ref({}); const loading = ref(false); const saving = ref(false); const generatingDirector = ref(false); const directorElapsed = ref(0); const directorRequestMode = ref('standard'); const directorBrief = ref(''); const directorRequirements = ref(''); const directorDraft = ref(null); const directorDraftMode = ref('standard'); const directorDialogueDuration = ref(0); let directorTimer; let key = 0; let draftSafety
 const draftValue = () => ({ directorBrief: directorBrief.value, directorRequirements: directorRequirements.value, shots: shots.value })
 function applyLocalDraft(draft) { directorBrief.value = draft.directorBrief || ''; directorRequirements.value = draft.directorRequirements || ''; if (Array.isArray(draft.shots)) shots.value = draft.shots }
 function startDraftSafety() { draftSafety?.dispose(); draftSafety = createDraftSafety({ key: `draft:shot-director:${props.projectId}:${props.sceneId}`, getDraft: draftValue, applyDraft: applyLocalDraft, save: saveAll }); draftSafety.start() }
@@ -76,7 +77,7 @@ function setPrompt(shot, text) { const lines = String(text || '').split(/\r?\n/)
 async function generateDirectorDraft(mode='standard') { generatingDirector.value = true; directorRequestMode.value=mode; directorElapsed.value=0; clearInterval(directorTimer); directorTimer=setInterval(()=>directorElapsed.value++,1000); try { const { data } = await api.sceneDirectorDraft(props.projectId, props.sceneId, { brief: directorBrief.value, requirements: directorRequirements.value, mode }); directorDraft.value = data.draft; directorDraftMode.value = data.mode || mode; directorDialogueDuration.value = Number(data.dialogue_duration)||0; toast.success(mode==='dialogue_rhythm'?'对白节奏拆镜草稿已生成，请逐镜审核':'完整导演草稿已生成，请审核后确认') } catch (e) { toast.error(e.code==='ECONNABORTED'?'AI导演请求超过10分钟仍未返回，请检查文生文服务日志后重试':(e.response?.data?.error || e.message || 'AI导演方案生成失败')) } finally { clearInterval(directorTimer); directorTimer=null; generatingDirector.value = false } }
 async function confirmDirectorDraft() { if (!directorDraft.value?.shots?.length) return; if (shots.value.length && !window.confirm('确认后将替换当前Shot导演设计；Scene剧情和起始帧提示词不会被覆盖。是否继续？')) return; saving.value = true; try { const payload = directorDraft.value.shots.map(({ checks, ...shot }) => shot); const { data } = await api.replaceSceneShots(props.projectId, props.sceneId, payload); shots.value = data.shots.map(hydrate); directorDraft.value = null; emit('scene-changed'); toast.success('AI导演方案已保存，可继续手工微调或生成分镜图') } catch (e) { toast.error(e.response?.data?.error || '保存AI导演方案失败') } finally { saving.value = false } }
 async function load() {
-  directorBrief.value = props.sceneContent || directorBrief.value; directorDraft.value = null; loading.value = true
+  directorBrief.value = props.sceneContent || directorBrief.value; directorDraft.value = null; isPreviouslySplitScene.value=/ · 镜头\d+$/.test(props.sceneTitle||''); loading.value = true
   try {
     const { data } = await api.sceneShots(props.projectId, props.sceneId)
     shots.value = (data?.shots || []).map(hydrate); startDraftSafety()
@@ -94,12 +95,24 @@ async function saveShotAssets(shot) { shot._assetBusy = true; try { const lookRo
 function addShot() { shots.value.push(blank(shots.value.at(-1)?.act_type || 'setup')) }
 function createFiveActSkeleton() { if (shots.value.length && !window.confirm('创建五幕骨架会替换当前尚未保存的镜头，是否继续？')) return; shots.value = acts.map((act, index) => ({ ...blank(act.value), shot_type: index === 0 ? '全景' : index === 2 ? '特写' : '中景', description: `${act.label}：`, duration: 2 })) }
 function removeShot(index) { shots.value.splice(index, 1) }
+async function regroupExistingScenes() {
+  materializing.value=true
+  try {
+    const {data:preview}=await api.previewNativeRegroup(props.projectId,props.sceneId)
+    const lines=(preview.items||[]).map(v=>`${v.order}. ${v.duration}秒 · 合并${(v.shot_ids||[]).length}个原Scene`).join('\n')
+    if(!window.confirm(`将当前同组${preview.shot_count}个短Scene重新合并为${preview.items.length}个Native场景：\n\n${lines}\n\n${preview.warning}\n\n是否继续？`)) return
+    const {data}=await api.regroupNativeScenes(props.projectId,props.sceneId)
+    toast.success(`已重新合并为${data.count}个Native场景，内部Shot保持不变`)
+    emit('scene-materialized',data.first_scene_id)
+  } catch(e) { toast.error(e.response?.data?.error||e.message||'重新合并场景失败') }
+  finally { materializing.value=false }
+}
 async function materializeNativeScenes() {
   materializing.value=true
   try {
     const {data:preview}=await api.previewShotMaterialization(props.projectId,props.sceneId)
-    const lines=(preview.items||[]).map(v=>`${v.order}. ${v.duration}秒 · ${v.title}${v.dialogue?'\n   台词：'+v.dialogue:'\n   无台词'}`).join('\n')
-    if(!window.confirm(`将当前Scene替换为${preview.items.length}个可独立生成图片和视频的Native场景：\n\n${lines}\n\n${preview.warning}\n\n是否继续？`)) return
+    const lines=(preview.items||[]).map(v=>`${v.order}. ${v.duration}秒 · 包含${(v.shot_ids||[]).length}个Shot · ${v.title}${v.dialogue?'\n   台词：'+v.dialogue:'\n   无台词'}`).join('\n')
+    if(!window.confirm(`将${preview.shot_count||shots.value.length}个导演Shot按15秒上限合并为${preview.items.length}个可独立生成图片和视频的Native场景：\n\n${lines}\n\n${preview.warning}\n\n是否继续？`)) return
     const {data}=await api.materializeShots(props.projectId,props.sceneId)
     toast.success(`已拆成${data.count}个可制作场景，可在时间轴逐段生成图片和视频`)
     emit('scene-materialized',data.first_scene_id)

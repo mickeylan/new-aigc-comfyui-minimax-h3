@@ -1105,6 +1105,53 @@ func (s *Service) HandleMaterializeShots(c *gin.Context) {
 	c.JSON(200, gin.H{"scenes": scenes, "count": len(scenes), "first_scene_id": firstID})
 }
 
+func (s *Service) HandlePreviewNativeSceneRegroup(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	sceneID, err := strconv.ParseUint(c.Param("sid"), 10, 32)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid scene id"})
+		return
+	}
+	preview, err := s.Shots.PreviewExistingNativeRegroup(p.ID, uint(sceneID))
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, preview)
+}
+
+func (s *Service) HandleNativeSceneRegroup(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	sceneID, err := strconv.ParseUint(c.Param("sid"), 10, 32)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid scene id"})
+		return
+	}
+	var req struct {
+		Confirm bool `json:"confirm"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || !req.Confirm {
+		c.JSON(400, gin.H{"error": "必须明确确认重新合并场景"})
+		return
+	}
+	scenes, err := s.Shots.RegroupExistingNativeScenes(p.ID, uint(sceneID))
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	firstID := uint(0)
+	if len(scenes) > 0 {
+		firstID = scenes[0].ID
+	}
+	c.JSON(200, gin.H{"scenes": scenes, "count": len(scenes), "first_scene_id": firstID})
+}
+
 func (s *Service) HandleGetSceneShots(c *gin.Context) {
 	p, ok := s.loadProject(c)
 	if !ok {

@@ -336,6 +336,8 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.GET("/api/projects/:id/scenes/:sid/shots", svc.HandleGetSceneShots)
 	r.GET("/api/projects/:id/scenes/:sid/shots/materialization-preview", svc.HandlePreviewShotMaterialization)
 	r.POST("/api/projects/:id/scenes/:sid/shots/materialize", svc.HandleMaterializeShots)
+	r.GET("/api/projects/:id/scenes/:sid/native-regroup-preview", svc.HandlePreviewNativeSceneRegroup)
+	r.POST("/api/projects/:id/scenes/:sid/native-regroup", svc.HandleNativeSceneRegroup)
 	r.PUT("/api/projects/:id/shots/:shid", svc.HandleUpdateShot)
 	r.POST("/api/projects/:id/shots/:shid/director-expand", svc.HandleExpandShotDirectorPrompt)
 	r.POST("/api/projects/:id/shots/:shid/skills/state-prompt", svc.HandleShotStatePromptDraft)
