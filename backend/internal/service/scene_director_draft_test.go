@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"comfyui-console/internal/models"
@@ -74,6 +75,14 @@ func TestValidateDialogueRhythmDraftRejectsShotOverNativeMaximum(t *testing.T) {
 	normalizeDialogueRhythmDraftDurations(draft)
 	if err := validateDialogueRhythmDraft(draft, nil); err == nil {
 		t.Fatal("16秒镜头未被拒绝")
+	}
+}
+
+func TestParseSceneDirectorDraftNamesMissingRequiredField(t *testing.T) {
+	broken := strings.Replace(validSceneDirectorDraft, `"camera_movement":"固定"`, `"camera_movement":""`, 1)
+	_, err := parseSceneDirectorDraft(broken)
+	if err == nil || !strings.Contains(err.Error(), "镜头1的必填字段camera_movement为空") {
+		t.Fatalf("error=%v", err)
 	}
 }
 

@@ -59,10 +59,19 @@ func parseSceneDirectorDraft(output string) (*sceneDirectorDraft, error) {
 	}
 	for i := range draft.Shots {
 		d := &draft.Shots[i]
-		for _, field := range []*string{&d.ShotType, &d.CameraAngle, &d.CameraMovement, &d.Description, &d.StartState, &d.EndState, &d.PromptSubject, &d.PromptAction, &d.PromptCamera, &d.PromptLighting, &d.PromptStyle} {
-			*field = strings.TrimSpace(*field)
-			if *field == "" {
-				return nil, fmt.Errorf("镜头%d存在空的必填导演字段", i+1)
+		required := []struct {
+			name  string
+			value *string
+		}{
+			{"shot_type", &d.ShotType}, {"camera_angle", &d.CameraAngle}, {"camera_movement", &d.CameraMovement},
+			{"description", &d.Description}, {"start_state", &d.StartState}, {"end_state", &d.EndState},
+			{"prompt_subject", &d.PromptSubject}, {"prompt_action", &d.PromptAction}, {"prompt_camera", &d.PromptCamera},
+			{"prompt_lighting", &d.PromptLighting}, {"prompt_style", &d.PromptStyle},
+		}
+		for _, field := range required {
+			*field.value = strings.TrimSpace(*field.value)
+			if *field.value == "" {
+				return nil, fmt.Errorf("镜头%d的必填字段%s为空", i+1, field.name)
 			}
 		}
 		d.Dialogue, d.Emotion, d.TransitionNote, d.NegativePrompt = strings.TrimSpace(d.Dialogue), strings.TrimSpace(d.Emotion), strings.TrimSpace(d.TransitionNote), strings.TrimSpace(d.NegativePrompt)
@@ -181,13 +190,26 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	draft, err := parseSceneDirectorDraft(output)
-	if err == nil && req.Mode == "dialogue_rhythm" {
-		normalizeDialogueRhythmDraftDurations(draft)
-		err = validateDialogueRhythmDraft(draft, dialogues)
+	validateDraft := func(raw string) (*sceneDirectorDraft, error) {
+		draft, parseErr := parseSceneDirectorDraft(raw)
+		if parseErr == nil && req.Mode == "dialogue_rhythm" {
+			normalizeDialogueRhythmDraftDurations(draft)
+			parseErr = validateDialogueRhythmDraft(draft, dialogues)
+		}
+		return draft, parseErr
+	}
+	draft, err := validateDraft(output)
+	if err != nil && req.Mode == "dialogue_rhythm" {
+		repairRequirements := fmt.Sprintf("%s\n上一次草稿校验失败：%s。只修复该错误及其他空必填字段；保持镜头顺序和结构化对白逐字不变。上一次JSON：\n%s", req.Requirements, err.Error(), output)
+		repaired, repairErr := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出修复后的完整合法JSON，不要Markdown或解释。", "修复对白节奏导演草稿；不得改写、遗漏、重复或新增任何对白。", map[string]string{"scene_facts": scene.Content, "asset_context": assets, "brief": req.Brief, "requirements": repairRequirements, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration))})
+		if repairErr != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "AI导演方案自动修复失败: " + repairErr.Error()})
+			return
+		}
+		draft, err = validateDraft(repaired)
 	}
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "AI导演方案格式无效: " + err.Error()})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "AI导演方案自动修复后仍无效: " + err.Error()})
 		return
 	}
 	c.JSON(200, gin.H{"draft": draft, "skill_code": "director-scene-draft", "provider_id": s.TextProviderFact.Name(), "audited": true, "mode": req.Mode, "dialogue_duration": dialogueDuration})
