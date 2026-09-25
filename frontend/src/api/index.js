@@ -271,6 +271,8 @@ export const api = {
   // 导演镜头与提示词工作台
   sceneShots: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/shots`),
   replaceSceneShots: (id, sid, shots) => http.post(`/projects/${id}/scenes/${sid}/shots`, { shots }),
+  previewShotMaterialization: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/shots/materialization-preview`),
+  materializeShots: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/shots/materialize`, { confirm: true }),
   updateShot: (id, shotId, data) => http.put(`/projects/${id}/shots/${shotId}`, data),
   expandShotDirectorPrompt: (id, shotId, data) => http.post(`/projects/${id}/shots/${shotId}/director-expand`, data, { timeout: 300000 }),
   shotStatePromptDraft: (id, shotId, data) => http.post(`/projects/${id}/shots/${shotId}/skills/state-prompt`, data, { timeout: 300000 }),
