@@ -1347,15 +1347,21 @@ func normalizeVideoActionPrompt(prompt string) string {
 
 var (
 	h3DialogueTagPattern      = regexp.MustCompile(`(?is)<d>.*?</d>`)
-	dialogueNarrationPattern  = regexp.MustCompile(`(?:<Subject [0-9]+>|[\p{Han}]{1,12})(?:说道|说|问道|答道)[：:]?\s*`)
+	h3DialogueClausePattern   = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}]{1,20})(?:\s*\(S[0-9]+\))?(?:画外音|内心独白|说|说道|问道|答道)[：:]?\s*<d>.*?</d>[。.]?`)
+	dialogueNarrationPattern  = regexp.MustCompile(`(?:<Subject [0-9]+>|[\p{Han}]{1,12})(?:\s*\(S[0-9]+\))?(?:说道|说|问道|答道)[：:]?\s*`)
+	orphanSpeakerPattern      = regexp.MustCompile(`(?:<Subject [0-9]+>|[\p{Han}]{1,20})\s*\(S[0-9]+\)[。.]?`)
 	quotedDialoguePattern     = regexp.MustCompile(`[“\"][^”\"]*[”\"]`)
 	repeatedShotMarkerPattern = regexp.MustCompile(`(?:\[Shot 1\]\s*){2,}`)
+	emptyH3ShotLinePattern    = regexp.MustCompile(`(?m)^\s*\[Shot\s+[0-9]+(?:\s*\|[^\]]*)?\]\s*[。.]?\s*$\n?`)
 )
 
 func stripPromptDialogueNarration(prompt string) string {
-	text := h3DialogueTagPattern.ReplaceAllString(prompt, "")
+	text := h3DialogueClausePattern.ReplaceAllString(prompt, "")
+	text = h3DialogueTagPattern.ReplaceAllString(text, "")
 	text = quotedDialoguePattern.ReplaceAllString(text, "")
 	text = dialogueNarrationPattern.ReplaceAllString(text, "")
+	text = orphanSpeakerPattern.ReplaceAllString(text, "")
+	text = emptyH3ShotLinePattern.ReplaceAllString(text, "")
 	text = repeatedShotMarkerPattern.ReplaceAllString(text, "[Shot 1] ")
 	return strings.TrimSpace(text)
 }
@@ -1755,6 +1761,42 @@ func visualiseSpeechPerformanceNarration(text string, hasDialogue bool) string {
 
 var h3ShotMarkerPattern = regexp.MustCompile(`\[Shot\s+([0-9]+)(?:\s*\|[^\]]*)?\]`)
 
+func rebuildStructuredShotAction(shots []models.Shot) string {
+	parts := make([]string, 0, len(shots))
+	for i, shot := range shots {
+		visual := strings.Join(nonEmptyStrings([]string{
+			strings.TrimSpace(shot.Description), strings.TrimSpace(shot.PromptSubject),
+			strings.TrimSpace(shot.PromptAction), strings.TrimSpace(shot.PromptCamera),
+			strings.TrimSpace(shot.PromptLighting), strings.TrimSpace(shot.PromptStyle),
+		}), "；")
+		if visual == "" {
+			visual = "保持当前构图与可见状态"
+		}
+		parts = append(parts, fmt.Sprintf("[Shot %d] %s。", i+1, visual))
+	}
+	return strings.Join(parts, "\n")
+}
+
+func ensureStructuredShotMarkers(prompt string, shots []models.Shot) string {
+	if len(shots) <= 1 {
+		return prompt
+	}
+	seen := map[int]bool{}
+	for _, match := range h3ShotMarkerPattern.FindAllStringSubmatch(prompt, -1) {
+		if len(match) == 2 {
+			if n, err := strconv.Atoi(match[1]); err == nil {
+				seen[n] = true
+			}
+		}
+	}
+	for i := 1; i <= len(shots); i++ {
+		if !seen[i] {
+			return rebuildStructuredShotAction(shots)
+		}
+	}
+	return prompt
+}
+
 func applyShotTimeline(prompt string, shots []models.Shot, totalDuration float64) string {
 	if len(shots) == 0 || strings.TrimSpace(prompt) == "" {
 		return prompt
@@ -2071,7 +2113,11 @@ func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines
 	}
 	detail := normalizeVideoActionPrompt(prompt)
 	detail = stripStructuredDialogueFromAction(detail, dubs)
-	if !strings.HasPrefix(detail, "[Shot 1]") {
+	if len(shotSets) > 0 {
+		detail = ensureStructuredShotMarkers(detail, shotSets[0])
+		detail = stripStructuredDialogueFromAction(detail, dubs)
+	}
+	if !strings.HasPrefix(detail, "[Shot 1") {
 		detail = "[Shot 1] " + detail
 	}
 	if len(shotSets) > 0 {

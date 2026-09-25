@@ -1936,6 +1936,28 @@ func TestH3NarrationAndCameraConflictValidation(t *testing.T) {
 	}
 }
 
+func TestNormalizeSavedH3AudioRebuildsCollapsedShotsWithoutDuplicateDialogue(t *testing.T) {
+	prompt := "subject_definitions:\n<Subject 2> 是角色参考。\n\nsummary:\n测试\n\nretention_analysis:\n测试\n\ndetailed_description:\n[Shot 1 | 0.00-5.00秒] <Subject 2> (S1)说：<d>[Chinese] 第一句。</d>。\n[Shot 1 | 0.00-5.00秒] <Subject 2> (S1)说：<d>[Chinese] 第一句。</d>。\n[Shot 1 | 0.00-5.00秒] 三镜动作坍缩。 <Subject 2> (S1)说：<d>[Chinese] 第一句。</d>。\n\noverall_soundscape:\n旧声音\n\nnon_diegetic_music:\nN/A"
+	shots := []models.Shot{{Order: 1, Duration: 5, Description: "第一镜动作", Dialogue: "第一句。"}, {Order: 2, Duration: 4, Description: "第二镜动作", Dialogue: "第二句，"}, {Order: 3, Duration: 5, Description: "第三镜动作", Dialogue: "第三句，"}}
+	dubs := []models.Dialogue{{Character: "上官若彤", SpeechType: "dialogue", Text: "第一句。"}, {Character: "上官若彤", SpeechType: "dialogue", Text: "第二句，"}, {Character: "上官若彤", SpeechType: "dialogue", Text: "第三句，"}}
+	lines := []string{"<Subject 2> 是 <Picture 2> 中的角色「上官若彤」四视图。"}
+	first := applyShotTimeline(normalizeSavedH3Audio(prompt, dubs, lines, shots), shots, 14)
+	second := applyShotTimeline(normalizeSavedH3Audio(first, dubs, lines, shots), shots, 14)
+	if first != second {
+		t.Fatalf("normalization not idempotent:\n%s\n---\n%s", first, second)
+	}
+	for _, text := range []string{"第一句。", "第二句，", "第三句，"} {
+		if strings.Count(first, text) != 1 {
+			t.Fatalf("dialogue duplicated: %s", first)
+		}
+	}
+	for i := 1; i <= 3; i++ {
+		if strings.Count(first, fmt.Sprintf("[Shot %d |", i)) != 1 {
+			t.Fatalf("shot %d marker invalid: %s", i, first)
+		}
+	}
+}
+
 func TestAppendStructuredDialoguePlacesEachLineInsideItsShot(t *testing.T) {
 	body := "[Shot 1 | 0.00-5.00秒] 第一镜动作。\n[Shot 2 | 5.00-9.00秒] 第二镜动作。\n[Shot 3 | 9.00-14.00秒] 第三镜动作。"
 	shots := []models.Shot{{Dialogue: "第一句。"}, {Dialogue: "第二句，"}, {Dialogue: "第三句，"}}
