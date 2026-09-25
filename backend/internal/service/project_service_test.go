@@ -1085,6 +1085,19 @@ func TestBuildAssetPromptAndSizeUseKrea2ReferenceConventions(t *testing.T) {
 	}
 }
 
+func TestValidateQwenScenePromptRejectsGenericInstructionAndMissingReferences(t *testing.T) {
+	if err := validateQwenScenePrompt("设计一个古风仙侠风格的静止分镜画面", 0); err == nil {
+		t.Fatal("generic image-generation instruction accepted as Qwen prompt")
+	}
+	if err := validateQwenScenePrompt("上官若彤站在桃林中，柔和侧光照亮面部。", 2); err == nil || !strings.Contains(err.Error(), "<image1>") {
+		t.Fatalf("missing ordered reference was not rejected: %v", err)
+	}
+	valid := "以<image1>中的上官若彤身份和服饰为人物外观来源，以<image2>中的桃花林为环境来源，人物在画面中央温柔望向姐姐。"
+	if err := validateQwenScenePrompt(valid, 2); err != nil {
+		t.Fatalf("valid Qwen edit prompt rejected: %v", err)
+	}
+}
+
 func TestBuildQwenSceneExecutionPromptKeepsLocationOnlyAndForbidsPeople(t *testing.T) {
 	ps := newTestProjectService(t)
 	p := models.Project{Title: "问仙"}

@@ -252,6 +252,11 @@ func (s *ShotService) Materialize(projectID, sceneID uint) ([]models.Scene, erro
 			if child.ImagePrompt == "" {
 				child.ImagePrompt = child.Content
 			}
+			if engine, _ := normalizeSceneImageEngine(child.ImageEngine); engine == ImageEngineQwen21 {
+				// Grouped Shot fields are not a valid Qwen prompt. Require explicit redesign
+				// through the Qwen T2I/edit Skill instead of silently submitting generic prose.
+				child.ImagePrompt = ""
+			}
 			child.VideoPrompt = strings.TrimSpace(strings.Join(videoParts, "\n"))
 			child.NegativePrompt = strings.TrimSpace(strings.Join(nonEmptyStrings(negativeParts), ", "))
 			resetMaterializedScene(&child, source)

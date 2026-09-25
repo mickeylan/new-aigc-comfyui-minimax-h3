@@ -444,6 +444,25 @@ Subject与Picture的真实身份绑定由系统根据实际上传文件生成，
 	return result, nil
 }
 
+func validateQwenScenePrompt(prompt string, referenceCount int) error {
+	trimmed := strings.TrimSpace(prompt)
+	if trimmed == "" {
+		return fmt.Errorf("提示词为空")
+	}
+	for _, prefix := range []string{"设计一个", "请生成", "请创建", "生成一张", "Create an image", "Generate an image"} {
+		if strings.HasPrefix(strings.ToLower(trimmed), strings.ToLower(prefix)) {
+			return fmt.Errorf("提示词仍是生成指令而不是最终画面描述（以“%s”开头）", prefix)
+		}
+	}
+	for i := 1; i <= referenceCount; i++ {
+		tag := fmt.Sprintf("<image%d>", i)
+		if !strings.Contains(trimmed, tag) {
+			return fmt.Errorf("提示词遗漏有序参考图绑定%s", tag)
+		}
+	}
+	return nil
+}
+
 func (s *ProjectService) redesignQwenSceneImagePrompt(sc *models.Scene, project *models.Project, referenceLines []string, referenceContext, shotContext, assetContext, framingRule string) (string, error) {
 	hasRefs := len(referenceLines) > 0
 	system := qwenImage21T2ISystem
@@ -461,11 +480,17 @@ func (s *ProjectService) redesignQwenSceneImagePrompt(sc *models.Scene, project 
 		user += "\n\n无输入参考图。"
 	}
 	user += "\nExplicit output aspect ratio: " + strings.TrimSpace(project.AspectRatio)
-	policy, err := NewPromptPolicyService(s.db).Resolve(PromptPolicyContext{ProjectID: sc.ProjectID, SceneID: &sc.ID}, PromptPolicyImagePolish, system)
-	if err != nil {
-		return "", fmt.Errorf("解析Qwen画面提示词策略失败: %w", err)
+	stage, operation := models.SkillStageQwenImageT2I, QwenImage21T2IProgram
+	if hasRefs {
+		stage, operation = models.SkillStageQwenImageEdit, QwenImage21EditProgram
 	}
-	raw, err := s.textProvider.Chat(policy.Content, user)
+	var raw string
+	var err error
+	if s.skills != nil {
+		raw, err = s.skills.ChatWithConfiguredOrFallbackSkill(sc.ProjectID, stage, operation, s.textProvider, system, "", map[string]string{"request": user})
+	} else {
+		raw, err = s.textProvider.Chat(system, user)
+	}
 	if err != nil {
 		return "", fmt.Errorf("AI重新设计Qwen场景提示词失败: %w", err)
 	}
@@ -480,6 +505,9 @@ func (s *ProjectService) redesignQwenSceneImagePrompt(sc *models.Scene, project 
 	}
 	if len([]rune(prompt)) < 20 {
 		return "", fmt.Errorf("AI返回的Qwen场景提示词过短，请重试")
+	}
+	if err := validateQwenScenePrompt(prompt, len(referenceLines)); err != nil {
+		return "", fmt.Errorf("Qwen场景提示词不符合专用规则: %w", err)
 	}
 	_ = referenceContext
 	return prompt, nil
@@ -3320,13 +3348,21 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 		s.failSceneImage(sc, token, err.Error())
 		return err
 	}
-	// Scene supplies canonical facts; structured Shots are appended as subordinate director instructions.
+	// Scene supplies canonical facts; structured Shots are appended only for H3.
+	// Qwen prompts must stay one continuous model-specific paragraph; Shot context is
+	// already consumed by the explicit Qwen redesign action and must not be appended raw.
 	compiledScene := *sc
-	if shotContext := strings.TrimSpace(s.sceneShotContext(sc)); shotContext != "" {
-		compiledScene.ImagePrompt = strings.TrimSpace(compiledScene.ImagePrompt) + "\n【Shot导演设计】\n" + shotContext
+	if engine != ImageEngineQwen21 {
+		if shotContext := strings.TrimSpace(s.sceneShotContext(sc)); shotContext != "" {
+			compiledScene.ImagePrompt = strings.TrimSpace(compiledScene.ImagePrompt) + "\n【Shot导演设计】\n" + shotContext
+		}
 	}
 	prompt := buildH3StoryboardPrompt(&compiledScene, &p, lines)
 	if engine == ImageEngineQwen21 {
+		if err := validateQwenScenePrompt(compiledScene.ImagePrompt, len(lines)); err != nil {
+			s.failSceneImage(sc, token, "Qwen场景提示词需要重新生成: "+err.Error())
+			return fmt.Errorf("Qwen场景提示词需要重新生成: %w", err)
+		}
 		prompt = s.buildQwenSceneExecutionPrompt(&compiledScene, lines)
 	}
 	refNames := make([]string, 0, len(refs))
