@@ -1348,7 +1348,7 @@ func normalizeVideoActionPrompt(prompt string) string {
 var (
 	h3DialogueTagPattern      = regexp.MustCompile(`(?is)<d>.*?</d>`)
 	h3DialogueClausePattern   = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}]{1,20})(?:\s*\(S[0-9]+\))?(?:画外音|内心独白|说|说道|问道|答道)[：:]?\s*<d>.*?</d>[。.]?`)
-	dialogueNarrationPattern  = regexp.MustCompile(`(?:<Subject [0-9]+>|[\p{Han}]{1,12})(?:\s*\(S[0-9]+\))?(?:说道|说|问道|答道)[：:]?\s*`)
+	dialogueNarrationPattern  = regexp.MustCompile(`(?:<Subject [0-9]+>(?:\s*\(S[0-9]+\))?(?:说道|说|问道|答道)[：:]?\s*|[\p{Han}]{1,12}(?:\s*\(S[0-9]+\))?(?:说道|问道|答道|说[：:])\s*)`)
 	orphanSpeakerPattern      = regexp.MustCompile(`(?:<Subject [0-9]+>|[\p{Han}]{1,20})\s*\(S[0-9]+\)[。.]?`)
 	quotedDialoguePattern     = regexp.MustCompile(`[“\"][^”\"]*[”\"]`)
 	repeatedShotMarkerPattern = regexp.MustCompile(`(?:\[Shot 1\]\s*){2,}`)
@@ -1733,7 +1733,7 @@ var speechPerformanceNarrationPatterns = []struct {
 	{regexp.MustCompile(`语速(?:稍快|稍慢|加快|放缓)[^，。；]*`), "唇部自然开合"},
 	{regexp.MustCompile(`(?:说完|讲完|问完|回答完|话音落下|对白结束)(?:后)?(?:短暂)?(?:停顿|暂停)`), "唇部停止开合并闭合，维持一瞬静止"},
 	{regexp.MustCompile(`(?:开口)?(?:说出|说完|陈述|说明|强调|询问|回答)(?:姐姐)?(?:十年[^，。；]*)?(?:时间期限|威胁内容|结论|问题|功力顶峰|无用功|威胁|时间压力|紧迫性|担忧)?`), "唇部自然开合"},
-	{regexp.MustCompile(`(?:继续)?(?:说|讲|问|回答|陈述|说明|强调)[^，。；]*`), "唇部自然开合"},
+	{regexp.MustCompile(`(?:继续)?(?:回答|陈述|说明|强调|说|讲|问)[^，。；]*`), "唇部自然开合"},
 	{regexp.MustCompile(`出(?:威胁内容|时间期限|结论|问题)`), "目光保持凝重"},
 }
 
@@ -1756,7 +1756,16 @@ func visualiseSpeechPerformanceNarration(text string, hasDialogue bool) string {
 			text = strings.ReplaceAll(text, duplicate, replacement)
 		}
 	}
-	return text
+	for _, malformed := range []string{"。；", "；。", "；；", "。。"} {
+		for strings.Contains(text, malformed) {
+			replacement := "；"
+			if malformed == "。。" {
+				replacement = "。"
+			}
+			text = strings.ReplaceAll(text, malformed, replacement)
+		}
+	}
+	return strings.TrimSpace(strings.Trim(text, "；， "))
 }
 
 var h3ShotMarkerPattern = regexp.MustCompile(`\[Shot\s+([0-9]+)(?:\s*\|[^\]]*)?\]`)

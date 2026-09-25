@@ -1990,6 +1990,19 @@ func TestApplyShotTimelineUsesPersistedDurationsAndEndsAtSceneDuration(t *testin
 	}
 }
 
+func TestH3ActionDoesNotLeaveTruncatedDescriptionPrefix(t *testing.T) {
+	action := `[Shot 3] 说明太运宗即将派出更强弟子的威胁，眉心与目光的紧张感增强。；近景：淡紫宫装女子，眼神凝重。`
+	got := stripStructuredDialogueFromAction(action, []models.Dialogue{{Character: "上官若彤", SpeechType: "dialogue", Text: "太运宗就会派更强的弟子，"}})
+	for _, forbidden := range []string{"明太运宗", "说明太运宗", "。；", "；。", "；；"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("retained malformed fragment %q: %s", forbidden, got)
+		}
+	}
+	if !strings.Contains(got, "唇部自然开合") || !strings.Contains(got, "近景：淡紫宫装女子") {
+		t.Fatalf("visual content damaged: %s", got)
+	}
+}
+
 func TestH3ActionConvertsSpeechStageDirectionsToSilentVisualCues(t *testing.T) {
 	action := `[Shot 1] 镜头切到上官若彤正面近景，语气加重地陈述姐姐十年没有好好闭关修炼，说完后停顿，眉心紧锁。[Shot 2] 切换到侧面，语速稍快，眼中闪过焦急，强调不到四十年这一紧迫时间期限。[Shot 3] 近景固定，继续陈述威胁。`
 	dubs := []models.Dialogue{{Character: "上官若彤", SpeechType: "dialogue", Text: "这十年你都没有怎么好好闭关修炼过。"}}
