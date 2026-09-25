@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 
-// 全局轻量通知：替代浏览器 alert，右上角堆叠，自动消失
+// 全局通知：普通消息自动消失；错误默认保留，便于阅读和复制。
 export const useToastStore = defineStore('toast', {
   state: () => ({
     items: [],
@@ -18,7 +18,7 @@ export const useToastStore = defineStore('toast', {
       return id
     },
     success(msg, timeout) { return this.show(msg, 'success', timeout) },
-    error(msg, timeout) { return this.show(msg, 'error', timeout ?? 5200) },
+    error(msg, timeout) { return this.show(msg, 'error', timeout ?? 0) },
     info(msg, timeout) { return this.show(msg, 'info', timeout) },
     dismiss(id) {
       const i = this.items.findIndex((x) => x.id === id)

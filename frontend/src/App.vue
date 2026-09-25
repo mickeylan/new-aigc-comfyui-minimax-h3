@@ -38,9 +38,10 @@
     </main>
     <div class="toast-wrap" aria-live="polite">
       <transition-group name="toast">
-        <div v-for="t in toast.items" :key="t.id" class="toast" :class="'toast-' + t.type" @click="toast.dismiss(t.id)">
+        <div v-for="t in toast.items" :key="t.id" class="toast" :class="'toast-' + t.type">
           <span class="toast-icon">{{ toastIcon(t.type) }}</span>
           <span class="toast-msg">{{ t.message }}</span>
+          <span class="toast-actions"><button v-if="t.type === 'error'" type="button" title="复制错误" @click="copyToast(t.message)">复制</button><button type="button" title="关闭" @click="toast.dismiss(t.id)">×</button></span>
         </div>
       </transition-group>
     </div>
@@ -60,6 +61,10 @@ const toast = useToastStore()
 const route = useRoute()
 const staticDemo = import.meta.env.VITE_STATIC_DEMO === 'true'
 const menuOpen = ref(false)
+async function copyToast(message) {
+  try { await navigator.clipboard.writeText(String(message || '')); toast.success('错误信息已复制') }
+  catch { toast.info('复制失败，请选中文字后按 Ctrl+C', 5000) }
+}
 const navItems = [
   { to: '/projects', label: '漫剧工作台', icon: '✦' },
   { to: '/skills', label: '漫剧 Skill', icon: '◇' },
@@ -230,7 +235,7 @@ onBeforeUnmount(() => {
 .nav-menu-btn { display: none; }
 .main { min-height: calc(100vh - var(--nav-h)); }
 .toast-wrap { position: fixed; top: calc(var(--nav-h) + 12px); right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
-.toast { pointer-events: auto; display: flex; align-items: center; gap: 10px; min-width: 240px; max-width: 380px; padding: 12px 16px; border-radius: 14px; background: var(--card-solid); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16); border: 1px solid var(--border); font-size: 13.5px; color: var(--text); cursor: pointer; }
+.toast { pointer-events: auto; display: flex; align-items: flex-start; gap: 10px; min-width: 280px; max-width: min(560px, calc(100vw - 40px)); padding: 12px 12px 12px 16px; border-radius: 14px; background: var(--card-solid); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16); border: 1px solid var(--border); font-size: 13.5px; color: var(--text); }
 .toast-icon { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 13px; font-weight: 700; flex: 0 0 auto; }
 .toast-success { border-color: rgba(52, 199, 89, 0.3); }
 .toast-success .toast-icon { background: var(--green); }
@@ -238,7 +243,10 @@ onBeforeUnmount(() => {
 .toast-error .toast-icon { background: var(--red); }
 .toast-info { border-color: rgba(10, 132, 255, 0.3); }
 .toast-info .toast-icon { background: var(--accent); }
-.toast-msg { line-height: 1.45; }
+.toast-msg { line-height: 1.45; flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.toast-actions { display: flex; gap: 4px; flex: 0 0 auto; }
+.toast-actions button { border: 0; border-radius: 6px; padding: 3px 7px; background: var(--surface-secondary); color: var(--text-secondary); cursor: pointer; font: inherit; }
+.toast-actions button:hover { color: var(--text); background: var(--chip-bg); }
 .toast-enter-active, .toast-leave-active { transition: all 0.28s cubic-bezier(0.2, 0.8, 0.2, 1); }
 .toast-enter-from { opacity: 0; transform: translateX(24px); }
 .toast-leave-to { opacity: 0; transform: translateX(24px); }

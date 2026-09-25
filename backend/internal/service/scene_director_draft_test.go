@@ -48,13 +48,32 @@ func TestValidateDialogueRhythmDraftPreservesDialogueExactly(t *testing.T) {
 	}
 }
 
-func TestValidateDialogueRhythmDraftRejectsNonNativeDuration(t *testing.T) {
+func TestNormalizeDialogueRhythmDraftRaisesShortShotToNativeMinimum(t *testing.T) {
 	draft, err := parseSceneDirectorDraft(validSceneDirectorDraft)
 	if err != nil {
 		t.Fatal(err)
 	}
+	normalizeDialogueRhythmDraftDurations(draft)
+	if draft.Shots[0].Duration != 3 {
+		t.Fatalf("duration=%v, want 3", draft.Shots[0].Duration)
+	}
+	if err := validateDialogueRhythmDraft(draft, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(draft.Shots[0].Checks) < 2 {
+		t.Fatalf("normalization check missing: %#v", draft.Shots[0].Checks)
+	}
+}
+
+func TestValidateDialogueRhythmDraftRejectsShotOverNativeMaximum(t *testing.T) {
+	draft, err := parseSceneDirectorDraft(validSceneDirectorDraft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft.Shots[0].Duration = 16
+	normalizeDialogueRhythmDraftDurations(draft)
 	if err := validateDialogueRhythmDraft(draft, nil); err == nil {
-		t.Fatal("2秒镜头未被拒绝")
+		t.Fatal("16秒镜头未被拒绝")
 	}
 }
 

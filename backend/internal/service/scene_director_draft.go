@@ -99,6 +99,18 @@ func canonicalDialogueText(value string) string {
 	return strings.Join(strings.Fields(strings.TrimSpace(value)), "")
 }
 
+func normalizeDialogueRhythmDraftDurations(draft *sceneDirectorDraft) {
+	if draft == nil {
+		return
+	}
+	for i := range draft.Shots {
+		if draft.Shots[i].Duration > 0 && draft.Shots[i].Duration < 3 {
+			draft.Shots[i].Duration = 3
+			draft.Shots[i].Checks = append(draft.Shots[i].Checks, "系统已将不足3秒的镜头调整为Native H3最短3秒")
+		}
+	}
+}
+
 func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
 	var expected, actual strings.Builder
 	for _, d := range dialogues {
@@ -171,6 +183,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	}
 	draft, err := parseSceneDirectorDraft(output)
 	if err == nil && req.Mode == "dialogue_rhythm" {
+		normalizeDialogueRhythmDraftDurations(draft)
 		err = validateDialogueRhythmDraft(draft, dialogues)
 	}
 	if err != nil {
