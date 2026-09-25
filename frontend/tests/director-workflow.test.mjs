@@ -43,6 +43,10 @@ test('AI导演支持可审核的长对白Native拆镜', () => {
   assert.match(source, /generateDirectorDraft\('dialogue_rhythm'\)/)
   assert.match(source, /3–15秒镜头/)
   assert.match(source, /dialogue_duration/)
+  assert.match(source, /directorElapsed/)
+  assert.match(source, /自动修复一次/)
+  const api = readFileSync(new URL('../src/api/index.js', import.meta.url), 'utf8')
+  assert.match(api, /sceneDirectorDraft:[\s\S]*timeout: 600000/)
 })
 
 test('镜头编辑器兼容characters包装响应', () => {
