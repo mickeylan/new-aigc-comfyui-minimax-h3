@@ -6038,6 +6038,28 @@ func (s *ProjectService) UpdateDialogueFields(p *models.Project, did uint, input
 	return &d, nil
 }
 
+var numberedSceneTitlePattern = regexp.MustCompile(`^场景\s*[0-9]+`)
+
+func renumberSceneTitles(tx *gorm.DB, projectID, generation uint, episodeN int) error {
+	var scenes []models.Scene
+	if err := tx.Where("project_id = ? AND generation = ? AND episode_n = ?", projectID, generation, episodeN).Order("`order`, id").Find(&scenes).Error; err != nil {
+		return err
+	}
+	for _, scene := range scenes {
+		title := strings.TrimSpace(scene.Title)
+		if !numberedSceneTitlePattern.MatchString(title) {
+			continue
+		}
+		updated := numberedSceneTitlePattern.ReplaceAllString(title, fmt.Sprintf("场景%d", scene.Order))
+		if updated != title {
+			if err := tx.Model(&models.Scene{}).Where("id = ?", scene.ID).Update("title", updated).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // ReorderScenes 调整场景顺序：scene_ids 必须是当前版本同一集的完整场景集合。
 func (s *ProjectService) ReorderScenes(p *models.Project, sceneIDs []uint) error {
 	if len(sceneIDs) < 2 {
@@ -6113,7 +6135,7 @@ func (s *ProjectService) ReorderScenes(p *models.Project, sceneIDs []uint) error
 				return fmt.Errorf("场景 %d 在重排期间发生变化", sid)
 			}
 		}
-		return nil
+		return renumberSceneTitles(tx, current.ID, generation, episodeN)
 	})
 }
 

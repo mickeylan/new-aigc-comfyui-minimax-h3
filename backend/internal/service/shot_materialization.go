@@ -318,6 +318,9 @@ func (s *ShotService) Materialize(projectID, sceneID uint) ([]models.Scene, erro
 				return err
 			}
 		}
+		if err := renumberSceneTitles(tx, projectID, source.Generation, source.EpisodeN); err != nil {
+			return err
+		}
 		return markEpisodeEditorialStale(tx, projectID, source.EpisodeN)
 	})
 	return created, err

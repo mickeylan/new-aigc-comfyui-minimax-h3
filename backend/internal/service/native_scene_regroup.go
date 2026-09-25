@@ -197,6 +197,9 @@ func (s *ShotService) RegroupExistingNativeScenes(projectID, selectedID uint) ([
 				return err
 			}
 		}
+		if err := renumberSceneTitles(tx, projectID, run[0].Generation, run[0].EpisodeN); err != nil {
+			return err
+		}
 		return markEpisodeEditorialStale(tx, projectID, run[0].EpisodeN)
 	})
 	return created, err

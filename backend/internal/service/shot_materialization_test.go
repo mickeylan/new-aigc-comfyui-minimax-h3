@@ -105,6 +105,34 @@ func TestGroupNativeShotsPacksAdjacentShotsUpToFifteenSeconds(t *testing.T) {
 	}
 }
 
+func TestRenumberSceneTitlesUpdatesOnlyNumericPrefix(t *testing.T) {
+	db := newShotMaterializationDB(t)
+	project := models.Project{Title: "p", Generation: 1}
+	_ = db.Create(&project).Error
+	scenes := []models.Scene{
+		{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 1, Title: "场景1：开场"},
+		{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 2, Title: "场景3：姐妹重逢 · Native段1"},
+		{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 3, Title: "场景4：后续"},
+		{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 4, Title: "自定义标题"},
+	}
+	for i := range scenes {
+		if err := db.Create(&scenes[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := renumberSceneTitles(db, project.ID, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	var got []models.Scene
+	_ = db.Where("project_id = ?", project.ID).Order("`order`").Find(&got).Error
+	want := []string{"场景1：开场", "场景2：姐妹重逢 · Native段1", "场景3：后续", "自定义标题"}
+	for i := range want {
+		if got[i].Title != want[i] {
+			t.Fatalf("title %d=%q want=%q", i, got[i].Title, want[i])
+		}
+	}
+}
+
 func TestPreviewMaterializationRejectsDialogueDrift(t *testing.T) {
 	db := newShotMaterializationDB(t)
 	p := models.Project{Title: "p", Generation: 1}
