@@ -45,6 +45,11 @@ test('AI导演支持可审核的长对白Native拆镜', () => {
   assert.match(source, /dialogue_duration/)
 })
 
+test('镜头编辑器兼容characters包装响应', () => {
+  const source = readFileSync(new URL('../src/components/ShotDirectorEditor.vue', import.meta.url), 'utf8')
+  assert.match(source, /Array\.isArray\(payload\?\.characters\) \? payload\.characters/)
+})
+
 test('巨构只在场景资产生成处配置，不进入剧情分镜剪辑台', () => {
   const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
   const editor = readFileSync(new URL('../src/views/ProjectEditor.vue', import.meta.url), 'utf8')

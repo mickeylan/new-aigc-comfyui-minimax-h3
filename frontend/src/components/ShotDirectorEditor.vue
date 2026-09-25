@@ -81,7 +81,10 @@ async function load() {
     shots.value = (data?.shots || []).map(hydrate); startDraftSafety()
     const [presetResult, characterResult] = await Promise.allSettled([api.presetRecommendations({ genre: props.genre, tone: props.tone, scene_type: props.sceneTitle, tags: props.sceneContent, limit: 5 }), api.characters(props.projectId)])
     if (presetResult.status === 'fulfilled') presets.value = (presetResult.value.data || []).map(r => ({ ...r.preset, _match_reason: (r.reasons || []).join('；'), _score: r.score }))
-    if (characterResult.status === 'fulfilled') characters.value = characterResult.value.data || []
+    if (characterResult.status === 'fulfilled') {
+      const payload = characterResult.value.data
+      characters.value = Array.isArray(payload) ? payload : (Array.isArray(payload?.characters) ? payload.characters : [])
+    }
     await Promise.allSettled(characters.value.map(async c => { const [l, o] = await Promise.all([api.characterLooks(props.projectId, c.id), api.characterOutfits(props.projectId, c.id)]); looks.value[c.id] = (l.data || []).filter(v => ['approved', 'published'].includes(v.audit_status)); outfits.value[c.id] = (o.data || []).filter(v => ['approved', 'published'].includes(v.audit_status)) }))
     await Promise.allSettled(shots.value.filter(s => s.id).map(async shot => { const [recs, shotLooks, shotOutfits] = await Promise.all([api.shotStyleRecommendations(props.projectId, shot.id, 3), api.shotLooks(props.projectId, shot.id), api.shotOutfits(props.projectId, shot.id)]); shot._presets = (recs.data || []).map(r => ({ ...r.preset, _match_reason: (r.reasons || []).join('；'), _score: r.score })); shot._looks = (shotLooks.data || []).map(v => v.look_id); shot._outfits = Object.fromEntries((shotOutfits.data || []).map(v => [v.character_id, v.outfit_id])) }))
   } catch (e) { toast.error(e.response?.data?.error || e.message || '加载镜头失败') } finally { loading.value = false }
