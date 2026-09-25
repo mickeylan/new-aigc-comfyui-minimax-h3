@@ -399,6 +399,10 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 		template = "minimax_h3_ref2v"
 	}
 	fullPrompt := compileH3PromptForTemplate(template, &preview, &project, dubs, lines)
+	var shots []models.Shot
+	_ = s.DB.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error
+	fullPrompt = normalizeSavedH3Audio(fullPrompt, dubs, lines, shots)
+	fullPrompt = applyShotTimeline(fullPrompt, shots, normalizeSceneDuration(sc.Duration))
 	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "template": template}
 	if continuity != nil && continuity.SelectedFrame != nil {
 		response["continuity_mode"] = continuity.Mode
@@ -465,9 +469,11 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 	dubs := s.Projects.sceneVideoDialogues(sc)
 	if isH3KeyframePrompt(prompt) {
 		// User visual edits remain authoritative, but spoken content is always rebuilt from
-		// structured Dialogue so stage directions cannot become a second speech source.
-		prompt = normalizeSavedH3Audio(prompt, dubs, refLines)
-		prompt = s.Projects.applySceneShotTimeline(sc, prompt)
+		// structured Dialogue and placed in its persisted Shot interval.
+		var shots []models.Shot
+		_ = s.DB.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error
+		prompt = normalizeSavedH3Audio(prompt, dubs, refLines, shots)
+		prompt = applyShotTimeline(prompt, shots, normalizeSceneDuration(sc.Duration))
 	}
 	template := strings.TrimSpace(req.Template)
 	if template == "" {

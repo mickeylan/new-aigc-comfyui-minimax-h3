@@ -1936,6 +1936,25 @@ func TestH3NarrationAndCameraConflictValidation(t *testing.T) {
 	}
 }
 
+func TestAppendStructuredDialoguePlacesEachLineInsideItsShot(t *testing.T) {
+	body := "[Shot 1 | 0.00-5.00秒] 第一镜动作。\n[Shot 2 | 5.00-9.00秒] 第二镜动作。\n[Shot 3 | 9.00-14.00秒] 第三镜动作。"
+	shots := []models.Shot{{Dialogue: "第一句。"}, {Dialogue: "第二句，"}, {Dialogue: "第三句，"}}
+	dubs := []models.Dialogue{
+		{Character: "上官若彤", SpeechType: "dialogue", Text: "第一句。"},
+		{Character: "上官若彤", SpeechType: "dialogue", Text: "第二句，"},
+		{Character: "上官若彤", SpeechType: "dialogue", Text: "第三句，"},
+	}
+	got := appendStructuredDialogueToShots(body, dubs, nil, shots)
+	positions := []int{strings.Index(got, "第一句。"), strings.Index(got, "第二句，"), strings.Index(got, "第三句，")}
+	markers := []int{strings.Index(got, "[Shot 1"), strings.Index(got, "[Shot 2"), strings.Index(got, "[Shot 3")}
+	if !(markers[0] < positions[0] && positions[0] < markers[1] && markers[1] < positions[1] && positions[1] < markers[2] && markers[2] < positions[2]) {
+		t.Fatalf("dialogues not placed in matching shots: %s", got)
+	}
+	if strings.Count(got, "<d>") != 3 {
+		t.Fatalf("unexpected dialogue count: %s", got)
+	}
+}
+
 func TestApplyShotTimelineUsesPersistedDurationsAndEndsAtSceneDuration(t *testing.T) {
 	shots := []models.Shot{{Duration: 4}, {Duration: 3}, {Duration: 7}}
 	got := applyShotTimeline("[Shot 1] 建立画面。\n[Shot 2] 角色反应。\n[Shot 3 | 0-0秒] 收束。", shots, 14)

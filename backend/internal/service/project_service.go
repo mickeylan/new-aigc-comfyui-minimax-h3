@@ -1124,8 +1124,10 @@ func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string, templ
 	prompt := strings.TrimSpace(sc.VideoFullPrompt)
 	if prompt != "" && isH3KeyframePrompt(prompt) {
 		_, refLines := s.sceneVideoReferenceFiles(sc, pid)
-		prompt = normalizeSavedH3Audio(prompt, dubs, refLines)
-		prompt = s.applySceneShotTimeline(sc, prompt)
+		var shots []models.Shot
+		_ = s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error
+		prompt = normalizeSavedH3Audio(prompt, dubs, refLines, shots)
+		prompt = applyShotTimeline(prompt, shots, normalizeSceneDuration(sc.Duration))
 	}
 	compile := func(code string) string {
 		if prompt != "" {
@@ -1846,6 +1848,109 @@ func isNarrationSpeaker(name string) bool {
 	return name == "旁白" || name == "画外音" || name == "voiceover" || name == "narrator"
 }
 
+func renderStructuredDialogue(d models.Dialogue, speakerID int, referenceLines []string) string {
+	speaker := useSubjectTags(strings.TrimSpace(d.Character), referenceLines)
+	if strings.TrimSpace(d.H3VoiceDescription) != "" {
+		speaker = strings.TrimSpace(d.H3VoiceDescription)
+	}
+	speaker += fmt.Sprintf(" (S%d)", speakerID)
+	text := strings.TrimSpace(d.Text)
+	crossShot, cutoff := strings.Contains(text, "<scenetrans>"), strings.Contains(text, "<cutoff>")
+	text = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(text, "<scenetrans>", ""), "<cutoff>", ""))
+	var rendered string
+	switch d.SpeechType {
+	case "narration":
+		rendered = speaker + "画外音：<d>[Chinese] " + text + "</d>。"
+	case "monologue":
+		rendered = speaker + "内心独白：<d>[Chinese] " + text + "</d>。"
+	default:
+		rendered = speaker + "说：<d>[Chinese] " + text + "</d>。"
+	}
+	if crossShot {
+		rendered += "<scenetrans>"
+	}
+	if cutoff {
+		rendered += "<cutoff>"
+	}
+	return rendered
+}
+
+func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, referenceLines []string, shots []models.Shot) string {
+	valid := validSceneDialogues(dubs)
+	if len(valid) == 0 || len(shots) == 0 {
+		return appendStructuredDialogue(body, valid, referenceLines)
+	}
+	var expected, planned strings.Builder
+	for _, d := range valid {
+		expected.WriteString(canonicalDialogueText(d.Text))
+	}
+	for _, shot := range shots {
+		planned.WriteString(canonicalDialogueText(shot.Dialogue))
+	}
+	if expected.String() != planned.String() {
+		return appendStructuredDialogue(body, valid, referenceLines)
+	}
+
+	speakerIDs := dialogueSpeakerIDs(valid)
+	byShot := make(map[int][]string, len(shots))
+	dubIndex, consumed := 0, 0
+	for shotIndex, shot := range shots {
+		target := len([]rune(canonicalDialogueText(shot.Dialogue)))
+		for consumed < target && dubIndex < len(valid) {
+			length := len([]rune(canonicalDialogueText(valid[dubIndex].Text)))
+			if consumed+length > target {
+				return appendStructuredDialogue(body, valid, referenceLines)
+			}
+			byShot[shotIndex+1] = append(byShot[shotIndex+1], renderStructuredDialogue(valid[dubIndex], speakerIDs[dubIndex], referenceLines))
+			consumed += length
+			dubIndex++
+		}
+		if consumed != target {
+			return appendStructuredDialogue(body, valid, referenceLines)
+		}
+		consumed = 0
+	}
+	if dubIndex != len(valid) {
+		return appendStructuredDialogue(body, valid, referenceLines)
+	}
+
+	matches := h3ShotMarkerPattern.FindAllStringSubmatchIndex(body, -1)
+	if len(matches) == 0 {
+		return appendStructuredDialogue(body, valid, referenceLines)
+	}
+	var out strings.Builder
+	for i, match := range matches {
+		start, end := match[0], match[1]
+		if i == 0 {
+			out.WriteString(body[:start])
+		}
+		n, _ := strconv.Atoi(body[match[2]:match[3]])
+		next := len(body)
+		if i+1 < len(matches) {
+			next = matches[i+1][0]
+		}
+		segment := strings.TrimRight(body[start:next], " \n\t")
+		out.WriteString(segment)
+		if lines := byShot[n]; len(lines) > 0 {
+			out.WriteString(" ")
+			out.WriteString(strings.Join(lines, " "))
+		}
+		if next < len(body) {
+			out.WriteString("\n")
+		}
+		_ = end
+	}
+	return strings.TrimSpace(out.String())
+}
+
+func (s *ProjectService) compileSceneStructuredDialogue(sc *models.Scene, body string, dubs []models.Dialogue, referenceLines []string) string {
+	var shots []models.Shot
+	if err := s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
+		return appendStructuredDialogue(body, dubs, referenceLines)
+	}
+	return appendStructuredDialogueToShots(body, dubs, referenceLines, shots)
+}
+
 func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLines []string) string {
 	valid := validSceneDialogues(dubs)
 	if len(valid) == 0 {
@@ -1959,7 +2064,7 @@ func validateH3KeyframePrompt(prompt, template string) []string {
 
 // normalizeSavedH3Audio only rebuilds dialogue and soundscape sections. All user-edited
 // reference definitions, summary, retention rules, visual action and camera text remain intact.
-func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines []string) string {
+func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines []string, shotSets ...[]models.Shot) string {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return ""
@@ -1969,7 +2074,11 @@ func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines
 	if !strings.HasPrefix(detail, "[Shot 1]") {
 		detail = "[Shot 1] " + detail
 	}
-	detail = appendStructuredDialogue(detail, dubs, referenceLines)
+	if len(shotSets) > 0 {
+		detail = appendStructuredDialogueToShots(detail, dubs, referenceLines, shotSets[0])
+	} else {
+		detail = appendStructuredDialogue(detail, dubs, referenceLines)
+	}
 	sections := []struct{ heading, body string }{
 		{"subject_definitions:", h3PromptSection(prompt, "subject_definitions:")},
 		{"summary:", h3PromptSection(prompt, "summary:")},
@@ -3782,7 +3891,12 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 			// so the catalog validates the exact request that will be submitted.
 			refFiles, refLines, _ := s.sceneVideoContinuityReferences(sc, pid)
 			if len(refFiles) > 0 {
-				prompt = resolveRef2VSubmissionPrompt(sc, p, s.sceneVideoDialogues(sc), refLines)
+				dubs := s.sceneVideoDialogues(sc)
+				prompt = resolveRef2VSubmissionPrompt(sc, p, dubs, refLines)
+				var shots []models.Shot
+				_ = s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error
+				prompt = normalizeSavedH3Audio(prompt, dubs, refLines, shots)
+				prompt = applyShotTimeline(prompt, shots, normalizeSceneDuration(sc.Duration))
 				if files == nil {
 					files = map[string][]FileMeta{}
 				}
