@@ -1710,14 +1710,42 @@ func stripH3DialogueTags(prompt string) string {
 	return strings.TrimSpace(h3DialogueTagPattern.ReplaceAllString(prompt, ""))
 }
 
+var speechPerformanceNarrationPatterns = []struct {
+	pattern *regexp.Regexp
+	replace string
+}{
+	{regexp.MustCompile(`语气(?:加重|放缓|急促|稍快|稍慢)?地?(?:陈述|说明|强调|说出)[^，。；]*`), "唇部随本镜结构化对白自然开合"},
+	{regexp.MustCompile(`语速(?:稍快|稍慢|加快|放缓)[^，。；]*`), "唇部随本镜结构化对白自然开合"},
+	{regexp.MustCompile(`(?:说完|话音落下|对白结束)后?停顿`), "对白结束后闭口停顿"},
+	{regexp.MustCompile(`说出(?:时间期限|威胁内容|结论|问题|功力顶峰|无用功)`), "完成本镜结构化对白后闭口"},
+	{regexp.MustCompile(`(?:继续)?(?:陈述|说明|强调)(?:威胁|时间压力|紧迫性|担忧)`), "唇部随本镜结构化对白自然开合"},
+}
+
+func visualiseSpeechPerformanceNarration(text string, hasDialogue bool) string {
+	for _, rule := range speechPerformanceNarrationPatterns {
+		text = rule.pattern.ReplaceAllString(text, rule.replace)
+	}
+	if !hasDialogue {
+		text = strings.ReplaceAll(text, "唇部随本镜结构化对白自然开合", "保持闭口")
+		text = strings.ReplaceAll(text, "对白结束后闭口停顿", "保持闭口停顿")
+		text = strings.ReplaceAll(text, "完成本镜结构化对白后闭口", "保持闭口")
+	}
+	for strings.Contains(text, "唇部随本镜结构化对白自然开合，唇部随本镜结构化对白自然开合") {
+		text = strings.ReplaceAll(text, "唇部随本镜结构化对白自然开合，唇部随本镜结构化对白自然开合", "唇部随本镜结构化对白自然开合")
+	}
+	return text
+}
+
 func stripStructuredDialogueFromAction(prompt string, dubs []models.Dialogue) string {
+	valid := validSceneDialogues(dubs)
 	text := stripPromptDialogueNarration(prompt)
-	for _, d := range validSceneDialogues(dubs) {
+	for _, d := range valid {
 		text = strings.ReplaceAll(text, strings.TrimSpace(d.Text), "")
 	}
 	for _, residue := range []string{"随后说出台词", "然后说出台词", "说出台词", "随后说：", "然后说：", "说道：", "“”", `""`} {
 		text = strings.ReplaceAll(text, residue, "")
 	}
+	text = visualiseSpeechPerformanceNarration(text, len(valid) > 0)
 	text = strings.ReplaceAll(text, "。。", "。")
 	return strings.TrimSpace(text)
 }

@@ -1936,6 +1936,26 @@ func TestH3NarrationAndCameraConflictValidation(t *testing.T) {
 	}
 }
 
+func TestH3ActionConvertsSpeechStageDirectionsToSilentVisualCues(t *testing.T) {
+	action := `[Shot 1] 镜头切到上官若彤正面近景，语气加重地陈述姐姐十年没有好好闭关修炼，说完后停顿，眉心紧锁。[Shot 2] 切换到侧面，语速稍快，眼中闪过焦急，强调不到四十年这一紧迫时间期限。[Shot 3] 近景固定，继续陈述威胁。`
+	dubs := []models.Dialogue{{Character: "上官若彤", SpeechType: "dialogue", Text: "这十年你都没有怎么好好闭关修炼过。"}}
+	got := stripStructuredDialogueFromAction(action, dubs)
+	for _, forbidden := range []string{"语气加重地陈述", "说完后停顿", "语速稍快", "继续陈述威胁"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("retained speech-stage narration %q: %s", forbidden, got)
+		}
+	}
+	for _, want := range []string{"唇部随本镜结构化对白自然开合", "对白结束后闭口停顿"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing visual cue %q: %s", want, got)
+		}
+	}
+	full := appendStructuredDialogue(got, dubs, nil)
+	if strings.Count(full, "<d>") != 1 || !strings.Contains(full, "<d>[Chinese] 这十年你都没有怎么好好闭关修炼过。</d>") {
+		t.Fatalf("structured dialogue not sole spoken text: %s", full)
+	}
+}
+
 func TestH3CrossShotDialogueMarkers(t *testing.T) {
 	dubs := []models.Dialogue{
 		{Character: "林夏", Text: "我还没有说完。<scenetrans>"},
