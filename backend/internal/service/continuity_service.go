@@ -90,7 +90,7 @@ func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, coun
 		return nil, fmt.Errorf("ffmpeg未产生候选帧")
 	}
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("scene_id = ?", sceneID).Delete(&models.FrameCandidate{}).Error; err != nil {
+		if err := detachAndDeleteFrameCandidates(tx, sceneID); err != nil {
 			return err
 		}
 		if err := tx.Where("task_id = ? AND name LIKE ?", fmt.Sprint(projectID), prefix+"%").Delete(&models.UploadFile{}).Error; err != nil {
@@ -102,6 +102,26 @@ func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, coun
 		return tx.Create(&uploads).Error
 	})
 	return candidates, err
+}
+
+func detachAndDeleteFrameCandidates(tx *gorm.DB, sceneID uint) error {
+	var oldFrameIDs []uint
+	if err := tx.Model(&models.FrameCandidate{}).Where("scene_id = ?", sceneID).Pluck("id", &oldFrameIDs).Error; err != nil {
+		return err
+	}
+	if len(oldFrameIDs) > 0 {
+		// SelectedFrameID is a real foreign key. Detach downstream continuity rows before
+		// replacing extracted frames, otherwise SQLite correctly rejects the delete.
+		if err := tx.Model(&models.SceneContinuity{}).Where("selected_frame_id IN ?", oldFrameIDs).Updates(map[string]any{
+			"selected_frame_id": nil,
+			"status":            "waiting",
+			"error":             "来源视频末尾帧已重新提取，请重新选择衔接帧",
+			"version":           gorm.Expr("version + 1"),
+		}).Error; err != nil {
+			return err
+		}
+	}
+	return tx.Where("scene_id = ?", sceneID).Delete(&models.FrameCandidate{}).Error
 }
 
 func (s *ContinuityService) ListFrames(projectID, sceneID uint) ([]models.FrameCandidate, error) {

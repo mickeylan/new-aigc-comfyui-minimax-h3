@@ -27,6 +27,64 @@ func newContinuityTestService(t *testing.T) (*ContinuityService, *gorm.DB) {
 	return NewContinuityService(cfg, db, remote, upload), db
 }
 
+func TestDetachAndDeleteFrameCandidatesClearsContinuityForeignKey(t *testing.T) {
+	_, db := newContinuityTestService(t)
+	project := models.Project{Title: "p"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	source := models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 1, VideoTaskID: "source-video"}
+	dependent := models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 2}
+	if err := db.Create(&source).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&dependent).Error; err != nil {
+		t.Fatal(err)
+	}
+	frame := models.FrameCandidate{ProjectID: project.ID, SceneID: source.ID, VideoTaskID: source.VideoTaskID, FrameIndex: 0, ImageFile: "old.png", Type: models.FrameCandidateSelected}
+	if err := db.Create(&frame).Error; err != nil {
+		t.Fatal(err)
+	}
+	cfg := models.SceneContinuity{SceneID: dependent.ID, Mode: models.ContinuityModeContinue, SourceSceneID: &source.ID, SelectedFrameID: &frame.ID, SourceVideoTaskID: source.VideoTaskID, Status: "ready", Version: 2}
+	if err := db.Create(&cfg).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error { return detachAndDeleteFrameCandidates(tx, source.ID) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&cfg, cfg.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SelectedFrameID != nil || cfg.Status != "waiting" || cfg.Version != 3 || cfg.Error == "" {
+		t.Fatalf("continuity not detached: %+v", cfg)
+	}
+	var count int64
+	if err := db.Model(&models.FrameCandidate{}).Where("scene_id = ?", source.ID).Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("frames count=%d err=%v", count, err)
+	}
+}
+
+func TestConfigureIndependentClearsSelectedFrameReference(t *testing.T) {
+	svc, db := newContinuityTestService(t)
+	project := models.Project{Title: "p"}
+	_ = db.Create(&project).Error
+	source := models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 1, VideoTaskID: "source-video"}
+	current := models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 2}
+	_ = db.Create(&source).Error
+	_ = db.Create(&current).Error
+	frame := models.FrameCandidate{ProjectID: project.ID, SceneID: source.ID, VideoTaskID: source.VideoTaskID, FrameIndex: 0, ImageFile: "old.png"}
+	_ = db.Create(&frame).Error
+	cfg := models.SceneContinuity{SceneID: current.ID, Mode: models.ContinuityModeContinue, SourceSceneID: &source.ID, SelectedFrameID: &frame.ID, SourceVideoTaskID: source.VideoTaskID, Status: "ready"}
+	_ = db.Create(&cfg).Error
+	got, err := svc.Configure(project.ID, current.ID, ConfigureContinuityRequest{Mode: models.ContinuityModeIndependent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Mode != models.ContinuityModeIndependent || got.SelectedFrameID != nil || got.SourceSceneID != nil || got.SourceVideoTaskID != "" || got.Status != "not_required" {
+		t.Fatalf("independent mode retained continuity reference: %+v", got)
+	}
+}
+
 func TestContinuitySelectAndConfigureContinue(t *testing.T) {
 	svc, db := newContinuityTestService(t)
 	p := models.Project{Title: "p"}
