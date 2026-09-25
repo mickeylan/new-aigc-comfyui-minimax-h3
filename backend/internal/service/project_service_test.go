@@ -1936,6 +1936,19 @@ func TestH3NarrationAndCameraConflictValidation(t *testing.T) {
 	}
 }
 
+func TestApplyShotTimelineUsesPersistedDurationsAndEndsAtSceneDuration(t *testing.T) {
+	shots := []models.Shot{{Duration: 4}, {Duration: 3}, {Duration: 7}}
+	got := applyShotTimeline("[Shot 1] 建立画面。\n[Shot 2] 角色反应。\n[Shot 3 | 0-0秒] 收束。", shots, 14)
+	for _, want := range []string{"[Shot 1 | 0.00-4.00秒]", "[Shot 2 | 4.00-7.00秒]", "[Shot 3 | 7.00-14.00秒]"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing timeline %q: %s", want, got)
+		}
+	}
+	if strings.Count(got, "[Shot ") != 3 {
+		t.Fatalf("shot markers changed unexpectedly: %s", got)
+	}
+}
+
 func TestH3ActionConvertsSpeechStageDirectionsToSilentVisualCues(t *testing.T) {
 	action := `[Shot 1] 镜头切到上官若彤正面近景，语气加重地陈述姐姐十年没有好好闭关修炼，说完后停顿，眉心紧锁。[Shot 2] 切换到侧面，语速稍快，眼中闪过焦急，强调不到四十年这一紧迫时间期限。[Shot 3] 近景固定，继续陈述威胁。`
 	dubs := []models.Dialogue{{Character: "上官若彤", SpeechType: "dialogue", Text: "这十年你都没有怎么好好闭关修炼过。"}}

@@ -381,6 +381,7 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 	}
 	dubs := s.Projects.sceneVideoDialogues(sc)
 	preview := *sc
+	actionPrompt = s.Projects.applySceneShotTimeline(sc, actionPrompt)
 	preview.VideoPrompt = actionPrompt
 	continuity, refs, lines := s.sceneVideoPromptContinuity(sc)
 	var req struct {
@@ -466,6 +467,7 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 		// User visual edits remain authoritative, but spoken content is always rebuilt from
 		// structured Dialogue so stage directions cannot become a second speech source.
 		prompt = normalizeSavedH3Audio(prompt, dubs, refLines)
+		prompt = s.Projects.applySceneShotTimeline(sc, prompt)
 	}
 	template := strings.TrimSpace(req.Template)
 	if template == "" {

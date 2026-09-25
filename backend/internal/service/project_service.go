@@ -1125,6 +1125,7 @@ func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string, templ
 	if prompt != "" && isH3KeyframePrompt(prompt) {
 		_, refLines := s.sceneVideoReferenceFiles(sc, pid)
 		prompt = normalizeSavedH3Audio(prompt, dubs, refLines)
+		prompt = s.applySceneShotTimeline(sc, prompt)
 	}
 	compile := func(code string) string {
 		if prompt != "" {
@@ -1748,6 +1749,55 @@ func visualiseSpeechPerformanceNarration(text string, hasDialogue bool) string {
 		}
 	}
 	return text
+}
+
+var h3ShotMarkerPattern = regexp.MustCompile(`\[Shot\s+([0-9]+)(?:\s*\|[^\]]*)?\]`)
+
+func applyShotTimeline(prompt string, shots []models.Shot, totalDuration float64) string {
+	if len(shots) == 0 || strings.TrimSpace(prompt) == "" {
+		return prompt
+	}
+	if totalDuration <= 0 {
+		totalDuration = 0
+		for _, shot := range shots {
+			totalDuration += shot.Duration
+		}
+	}
+	starts, ends := make(map[int]float64, len(shots)), make(map[int]float64, len(shots))
+	cursor := 0.0
+	for i, shot := range shots {
+		start, end := cursor, cursor+shot.Duration
+		if i == len(shots)-1 || end > totalDuration {
+			end = totalDuration
+		}
+		if end < start {
+			end = start
+		}
+		starts[i+1], ends[i+1], cursor = start, end, end
+	}
+	return h3ShotMarkerPattern.ReplaceAllStringFunc(prompt, func(marker string) string {
+		match := h3ShotMarkerPattern.FindStringSubmatch(marker)
+		if len(match) != 2 {
+			return marker
+		}
+		n, err := strconv.Atoi(match[1])
+		if err != nil {
+			return marker
+		}
+		start, ok := starts[n]
+		if !ok {
+			return marker
+		}
+		return fmt.Sprintf("[Shot %d | %.2f-%.2f秒]", n, start, ends[n])
+	})
+}
+
+func (s *ProjectService) applySceneShotTimeline(sc *models.Scene, prompt string) string {
+	var shots []models.Shot
+	if err := s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
+		return prompt
+	}
+	return applyShotTimeline(prompt, shots, normalizeSceneDuration(sc.Duration))
 }
 
 func stripStructuredDialogueFromAction(prompt string, dubs []models.Dialogue) string {
