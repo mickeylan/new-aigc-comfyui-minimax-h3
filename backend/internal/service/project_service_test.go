@@ -672,6 +672,45 @@ func TestRedesignSceneImagePromptUsesQwenContractWhenSelected(t *testing.T) {
 	}
 }
 
+func TestRedesignQwenSceneUsesOnlyFirstShotStaticVisualFacts(t *testing.T) {
+	ps := newTestProjectService(t)
+	provider := &captureTextProvider{response: `{"rewritten_prompt":"真人写实古风画面中，上官若彤身着淡紫宫装站在桃花林内，侧脸焦急而克制，暖色侧光照亮眉眼，中景平视构图。","wh_ratio":"16:9","ratio_follow":""}`}
+	ps.textProvider = provider
+	if err := ps.db.AutoMigrate(&models.Shot{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "舒寒", Genre: "修仙", Style: "真人写实", AspectRatio: "16:9"}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID, Title: "姐妹重逢 · Native段2", Content: "[Shot 1] 第一镜。\n[Shot 2] 第二镜。", ImageEngine: ImageEngineQwen21, Characters: "上官若彤"}
+	if err := ps.db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	shots := []models.Shot{
+		{SceneID: scene.ID, Order: 1, Description: "第一镜", CameraMovement: "static", TransitionType: models.ShotTransitionCut, StartState: "准备说话", EndState: "说完", Dialogue: "原对白", PromptSubject: "淡紫宫装女子上官若彤侧脸", PromptAction: "眉宇焦急，嘴唇微张", PromptCamera: "中景平视", PromptLighting: "暖色侧光", PromptStyle: "真人写实古风", Emotion: "焦急"},
+		{SceneID: scene.ID, Order: 2, Description: "第二镜", CameraMovement: "slow_tracking", StartState: "后续开始", EndState: "后续结束", PromptSubject: "姐姐上官若琳", PromptAction: "转身"},
+	}
+	for i := range shots {
+		if err := ps.db.Create(&shots[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := ps.RedesignSceneImagePrompt(&scene); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"淡紫宫装女子上官若彤侧脸", "眉宇焦急", "中景平视", "暖色侧光"} {
+		if !strings.Contains(provider.user, want) {
+			t.Fatalf("missing first-shot fact %q: %s", want, provider.user)
+		}
+	}
+	for _, forbidden := range []string{"第二镜", "slow_tracking", "准备说话", "说完", "原对白", "转场"} {
+		if strings.Contains(provider.user, forbidden) {
+			t.Fatalf("retained non-static metadata %q: %s", forbidden, provider.user)
+		}
+	}
+}
+
 func TestRedesignSceneImagePromptUsesProjectAndAssetContext(t *testing.T) {
 	ps := newTestProjectService(t)
 	provider := &stubTextProvider{response: "subject_definitions:\n<Subject 1> 是 <Picture 1> 中的素材名。\n\nsummary:\n[reference generation] 林舒进入古典宗门大殿\n\nretention_analysis:\n<Subject 1> (出现在 [Shot 1]): fully_preserved - 已提供的主体信息。\n\ndetailed_description:\n[Shot 1] 林舒右脚刚踏上长阶，电影级全景，低机位纵深构图，晨雾体积光，国风写实\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"}

@@ -385,7 +385,7 @@ func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, err
 		framingRule = "\n本场有人物：优先中景、中近景或近景，保证主要人物面部清晰并占据足够像素；避免远景、大远景和人物在画面中过小。只有剧情必须交代宏大空间时才可用全景，但人物脸部仍须清晰可辨。"
 	}
 	if engine, _ := normalizeSceneImageEngine(sc.ImageEngine); engine == ImageEngineQwen21 {
-		return s.redesignQwenSceneImagePrompt(sc, &project, referenceLines, referenceContext, shotContext, assetContext, framingRule)
+		return s.redesignQwenSceneImagePrompt(sc, &project, referenceLines, referenceContext, s.qwenStaticKeyframeContext(sc), assetContext, framingRule)
 	}
 	system := `你是 MiniMax H3 SelfLift 分镜图提示词编辑。本任务只设计一个静止分镜画面。
 Subject与Picture的真实身份绑定由系统根据实际上传文件生成，你不得生成或改写subject_definitions、summary、retention_analysis、overall_soundscape或non_diegetic_music。
@@ -454,6 +454,11 @@ func validateQwenScenePrompt(prompt string, referenceCount int) error {
 			return fmt.Errorf("提示词仍是生成指令而不是最终画面描述（以“%s”开头）", prefix)
 		}
 	}
+	for _, forbidden := range []string{"核心设计", "起始状态", "结束状态", "转场采用", "运镜意图", "slow_tracking", "语速稍快", "镜头1核心", "镜头2核心", "镜头3核心"} {
+		if strings.Contains(trimmed, forbidden) {
+			return fmt.Errorf("提示词包含非静止画面导演元数据“%s”", forbidden)
+		}
+	}
 	for i := 1; i <= referenceCount; i++ {
 		tag := fmt.Sprintf("<image%d>", i)
 		if !strings.Contains(trimmed, tag) {
@@ -469,7 +474,8 @@ func (s *ProjectService) redesignQwenSceneImagePrompt(sc *models.Scene, project 
 	if hasRefs {
 		system = qwenImage21EditSystem
 	}
-	user := fmt.Sprintf("User request:\n根据权威剧情设计一个静止分镜画面。项目：%s；题材：%s；画风：%s；场景标题：%s；场景剧情：%s；地点：%s；道具：%s。%s\n\nAdditional fixed context:\n当前镜头设计：%s\n场景与道具资料：%s", project.Title, project.Genre, project.Style, sc.Title, sc.Content, sc.LocationName, sc.Props, framingRule, shotContext, assetContext)
+	qwenSceneSystem := system + `\nThis is a single static opening keyframe, not a director plan. Use only the supplied opening-keyframe visual facts. Do not mention project names, scene numbers, shot numbers, core design, dialogue, speech speed, time pressure as an abstract concept, transitions, cuts, camera movement, start state, end state, or future action. Translate emotion into one visible facial expression or pose. Describe only what is visible in the finished still image. Output one concise continuous paragraph.`
+	user := fmt.Sprintf("User request:\n输出一个静止首帧的最终画面描述，不要复述导演参数。题材：%s；画风：%s；地点：%s；道具：%s。%s\n\nOpening-keyframe visual facts (the only Shot facts allowed):\n%s\n\nVerified appearance and environment facts:\n%s", project.Genre, project.Style, sc.LocationName, sc.Props, framingRule, shotContext, assetContext)
 	if hasRefs {
 		user += "\n\nOrdered input image roles (order is binding):"
 		for i, line := range referenceLines {
@@ -487,9 +493,9 @@ func (s *ProjectService) redesignQwenSceneImagePrompt(sc *models.Scene, project 
 	var raw string
 	var err error
 	if s.skills != nil {
-		raw, err = s.skills.ChatWithConfiguredOrFallbackSkill(sc.ProjectID, stage, operation, s.textProvider, system, "", map[string]string{"request": user})
+		raw, err = s.skills.ChatWithConfiguredOrFallbackSkill(sc.ProjectID, stage, operation, s.textProvider, qwenSceneSystem, "", map[string]string{"request": user})
 	} else {
-		raw, err = s.textProvider.Chat(system, user)
+		raw, err = s.textProvider.Chat(qwenSceneSystem, user)
 	}
 	if err != nil {
 		return "", fmt.Errorf("AI重新设计Qwen场景提示词失败: %w", err)
@@ -2892,6 +2898,30 @@ func (s *ProjectService) sceneCharacterLooks(sc *models.Scene, shotRelatedOnly b
 	}
 	_ = q.Order("scene_character_looks.is_featured DESC, character_looks.priority DESC, character_looks.id").Find(&looks).Error
 	return looks
+}
+
+func (s *ProjectService) qwenStaticKeyframeContext(sc *models.Scene) string {
+	var shot models.Shot
+	if err := s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").First(&shot).Error; err != nil {
+		return strings.TrimSpace(sc.Content)
+	}
+	parts := []string{}
+	for _, value := range []string{
+		strings.TrimSpace(shot.PromptSubject),
+		strings.TrimSpace(shot.PromptAction),
+		strings.TrimSpace(shot.PromptCamera),
+		strings.TrimSpace(shot.PromptLighting),
+		strings.TrimSpace(shot.PromptStyle),
+		strings.TrimSpace(shot.Emotion),
+	} {
+		if value != "" {
+			parts = append(parts, value)
+		}
+	}
+	if len(parts) == 0 {
+		return strings.TrimSpace(shot.Description)
+	}
+	return strings.Join(parts, "；")
 }
 
 func (s *ProjectService) sceneShotContext(sc *models.Scene) string {
