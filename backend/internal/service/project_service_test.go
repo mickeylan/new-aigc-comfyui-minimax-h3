@@ -1977,6 +1977,21 @@ func TestAppendStructuredDialoguePlacesEachLineInsideItsShot(t *testing.T) {
 	}
 }
 
+func TestRebuildStructuredShotActionOmitsDescriptionAndAbstractNarration(t *testing.T) {
+	shots := []models.Shot{{Description: "姐妹二人在桃花林中对望，夕阳余晖洒落，画面温馨。太运宗的威胁虽在，但姐妹情深，气氛中既有忧虑也有温情。", PromptSubject: "双人中景：红金与淡紫宫装女子并肩而立，相貌相似气质各异", PromptAction: "姐妹相视，气氛温馨", PromptCamera: "双人中景固定", PromptLighting: "夕阳余晖，温暖金色", PromptStyle: "古风仙侠，温馨结尾"}}
+	got := rebuildStructuredShotAction(shots)
+	for _, forbidden := range []string{"太运宗", "威胁虽在", "姐妹情深", "气氛", "温情", "温馨结尾", "画面温馨"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("retained abstract/repeated prose %q: %s", forbidden, got)
+		}
+	}
+	for _, want := range []string{"红金与淡紫宫装女子并肩而立", "姐妹相视", "双人中景固定", "夕阳余晖", "古风仙侠"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing visible fact %q: %s", want, got)
+		}
+	}
+}
+
 func TestApplyShotTimelineUsesPersistedDurationsAndEndsAtSceneDuration(t *testing.T) {
 	shots := []models.Shot{{Duration: 4}, {Duration: 3}, {Duration: 7}}
 	got := applyShotTimeline("[Shot 1] 建立画面。\n[Shot 2] 角色反应。\n[Shot 3 | 0-0秒] 收束。", shots, 14)

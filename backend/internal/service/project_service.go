@@ -1770,14 +1770,56 @@ func visualiseSpeechPerformanceNarration(text string, hasDialogue bool) string {
 
 var h3ShotMarkerPattern = regexp.MustCompile(`\[Shot\s+([0-9]+)(?:\s*\|[^\]]*)?\]`)
 
+var abstractShotClausePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`[^，。；]*(?:虽在|虽然)[^，。；]*[，,](?:但|然而)[^，。；]*`),
+	regexp.MustCompile(`(?:气氛|氛围)(?:中|里)?[^，。；]*`),
+	regexp.MustCompile(`(?:表现|体现|传达|暗示|象征|烘托|营造)[^，。；]*`),
+	regexp.MustCompile(`(?:剧情|关系|威胁|危机|命运|情节)[^，。；]*(?:背景|意义|核心|主题|情境)[^，。；]*`),
+	regexp.MustCompile(`(?:温馨|紧张|诗意|感人|浪漫)(?:结尾|收束|氛围|气氛)`),
+}
+
+func conciseVisibleShotField(value string) string {
+	value = strings.TrimSpace(value)
+	for _, pattern := range abstractShotClausePatterns {
+		value = pattern.ReplaceAllString(value, "")
+	}
+	clauses := strings.FieldsFunc(value, func(r rune) bool { return r == '；' || r == ';' || r == '。' })
+	seen := map[string]bool{}
+	out := make([]string, 0, len(clauses))
+	for _, clause := range clauses {
+		clause = strings.Trim(strings.TrimSpace(clause), "，,；;。 ")
+		if clause == "" {
+			continue
+		}
+		key := strings.ReplaceAll(strings.ReplaceAll(clause, "，", ""), ",", "")
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, clause)
+	}
+	return strings.Join(out, "，")
+}
+
 func rebuildStructuredShotAction(shots []models.Shot) string {
 	parts := make([]string, 0, len(shots))
 	for i, shot := range shots {
-		visual := strings.Join(nonEmptyStrings([]string{
-			strings.TrimSpace(shot.Description), strings.TrimSpace(shot.PromptSubject),
-			strings.TrimSpace(shot.PromptAction), strings.TrimSpace(shot.PromptCamera),
-			strings.TrimSpace(shot.PromptLighting), strings.TrimSpace(shot.PromptStyle),
-		}), "；")
+		structured := []string{shot.PromptSubject, shot.PromptAction, shot.PromptCamera, shot.PromptLighting, shot.PromptStyle}
+		fields := make([]string, 0, len(structured))
+		for _, field := range structured {
+			if clean := conciseVisibleShotField(field); clean != "" {
+				fields = append(fields, clean)
+			}
+		}
+		// Description is fallback only. Combining it with the five structured fields repeats
+		// story exposition and can make H3 vocalise abstract narrative prose.
+		if len(fields) == 0 {
+			if clean := conciseVisibleShotField(shot.Description); clean != "" {
+				fields = append(fields, clean)
+			}
+		}
+		fields = nonEmptyStrings(fields)
+		visual := strings.Join(fields, "；")
 		if visual == "" {
 			visual = "保持当前构图与可见状态"
 		}
