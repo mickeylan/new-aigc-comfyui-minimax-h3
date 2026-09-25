@@ -151,7 +151,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	var dialogues []models.Dialogue
 	dialogueDuration := 0.0
 	if req.Mode == "dialogue_rhythm" {
-		if err := s.DB.Where("scene_id = ? AND project_id = ?", scene.ID, scene.ProjectID).Order("order ASC, id ASC").Find(&dialogues).Error; err != nil {
+		if err := s.DB.Where("scene_id = ? AND project_id = ?", scene.ID, scene.ProjectID).Order("`order` ASC, `id` ASC").Find(&dialogues).Error; err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
