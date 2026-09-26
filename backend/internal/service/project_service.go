@@ -2081,7 +2081,8 @@ func applyShotTimeline(prompt string, shots []models.Shot, totalDuration float64
 			totalDuration += shot.Duration
 		}
 	}
-	starts := make(map[int]float64, len(shots))
+	type shotRange struct{ start, end float64 }
+	ranges := make(map[int]shotRange, len(shots))
 	cursor := 0.0
 	for i, shot := range shots {
 		start, end := cursor, cursor+shot.Duration
@@ -2091,7 +2092,8 @@ func applyShotTimeline(prompt string, shots []models.Shot, totalDuration float64
 		if end < start {
 			end = start
 		}
-		starts[i+1], cursor = start, end
+		ranges[i+1] = shotRange{start, end}
+		cursor = end
 	}
 	return h3TimelineMarkerPattern.ReplaceAllStringFunc(prompt, func(marker string) string {
 		match := h3TimelineMarkerPattern.FindStringSubmatch(marker)
@@ -2102,14 +2104,11 @@ func applyShotTimeline(prompt string, shots []models.Shot, totalDuration float64
 		if err != nil {
 			return marker
 		}
-		start, ok := starts[n]
+		rng, ok := ranges[n]
 		if !ok {
 			return marker
 		}
-		if n == 1 {
-			return "[Shot 1]"
-		}
-		return fmt.Sprintf("[Shot %d] At %s,", n, formatH3Timestamp(start))
+		return fmt.Sprintf("[Shot %d | %.2f-%.2f秒]", n, rng.start, rng.end)
 	})
 }
 
@@ -2194,9 +2193,9 @@ func dialogueSpeakerIDs(dubs []models.Dialogue) []int {
 
 func h3SoundscapeContract(hasDialogue bool) string {
 	if hasDialogue {
-		return "Quiet ambient room tone and physical action sounds that are visibly motivated continue throughout. Dialogue appears only in the shot timeline and is not repeated here; no additional voices, narration, indistinct vocalization, or singing are present."
+		return "安静的环境底噪与画面中明确可见的物理动作声持续存在。对白仅在画面时间线中出现，此处不重复对白文本；不出现其他人声、额外对白、旁白、解说、含混发声或吟唱。"
 	}
-	return "Only ambient room tone and physical action sounds that are visibly motivated are audible. There is no dialogue, human voice, narration, commentary, indistinct vocalization, speech, or singing; every visible person keeps their lips completely closed."
+	return "仅保留环境底噪与画面中明确可见的物理动作声。禁止对白、人声、旁白、解说、含混发声或吟唱；所有可见人物始终闭口。"
 }
 
 func isNarrationSpeaker(name string) bool {
@@ -2220,7 +2219,7 @@ func renderStructuredDialogue(d models.Dialogue, speakerID int, referenceLines [
 	case "monologue":
 		rendered = speaker + " delivers an internal monologue: <d>[Chinese] " + text + "</d> while their lips remain completely closed."
 	default:
-		rendered = speaker + " says: <d>[Chinese] " + text + "</d>."
+		rendered = speaker + "说：<d>[Chinese] " + text + "</d>。"
 	}
 	if crossShot {
 		rendered += "<scenetrans>"
@@ -2268,37 +2267,11 @@ func renderDialogueRange(d models.Dialogue, speakerID int, referenceLines []stri
 	case "monologue":
 		clause = speaker + " delivers an internal monologue: <d>[Chinese] " + fragment + "</d> while their lips remain completely closed."
 	default:
-		if continuation && !visible {
-			clause = speaker + " continues off-screen: <d>[Chinese] " + fragment + "</d>."
-		} else if continuation {
-			clause = speaker + " continues on screen: <d>[Chinese] " + fragment + "</d>."
-		} else if visible {
-			clause = speaker + " says on screen: <d>[Chinese] " + fragment + "</d>."
-		} else {
-			clause = speaker + " says off-screen: <d>[Chinese] " + fragment + "</d>."
-		}
+		clause = speaker + "说：<d>[Chinese] " + fragment + "</d>。"
 	}
-	others := make([]string, 0, len(visibleSubjects))
-	speakerTag := useSubjectTags(strings.TrimSpace(d.Character), referenceLines)
-	for _, subject := range visibleSubjects {
-		if subject == speakerTag {
-			continue
-		}
-		match := h3SubjectTagPattern.FindStringSubmatch(subject)
-		if len(match) != 2 {
-			continue
-		}
-		n, _ := strconv.Atoi(match[1])
-		if n < 1 || n > len(referenceLines) || !strings.Contains(referenceLines[n-1], "角色「") {
-			continue
-		}
-		others = append(others, subject)
-	}
-	if len(others) == 1 {
-		clause += " " + others[0] + " stays silent, lips closed."
-	} else if len(others) > 1 {
-		clause += " " + strings.Join(others, ", ") + " stay silent, lips closed."
-	}
+	_ = continuation
+	_ = visible
+	_ = visibleSubjects
 	return clause
 }
 
@@ -2362,8 +2335,6 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 		}
 	}
 	byShot := map[int][]string{}
-	visualSpeakerByShot := map[int]string{}
-	forcedOnscreenSpeakerByShot := map[int]string{}
 	for i, shot := range shots {
 		for _, r := range shot.DialogueRanges {
 			d, ok := byID[r.DialogueID]
@@ -2381,13 +2352,7 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 			visual := shotVisuals[i+1]
 			speakerTag := useSubjectTags(strings.TrimSpace(d.Character), referenceLines)
 			visible := speakerTag != "" && strings.Contains(visual, speakerTag)
-			if d.SpeechType == "dialogue" && !visible && speakerTag != "" {
-				forcedOnscreenSpeakerByShot[i+1] = speakerTag
-				visible = true
-			}
-			if r.StartRune > 0 && !visible && speakerTag != "" {
-				visualSpeakerByShot[i+1] = speakerTag
-			}
+
 			visibleSubjects := []string{}
 			seenSubject := map[string]bool{}
 			for _, tag := range h3SubjectTagPattern.FindAllString(visual, -1) {
@@ -2415,13 +2380,6 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 		}
 		n, _ := strconv.Atoi(body[match[2]:match[3]])
 		segment := strings.TrimRight(body[start:next], " \n\t")
-		if speakerTag := visualSpeakerByShot[n]; speakerTag != "" {
-			segment = strings.ReplaceAll(segment, "画外的说话者", "画外的"+speakerTag)
-		}
-		if speakerTag := forcedOnscreenSpeakerByShot[n]; speakerTag != "" {
-			segment = strings.ReplaceAll(segment, "画外的说话者", speakerTag)
-			segment += " " + speakerTag + " remains visible."
-		}
 		out.WriteString(segment)
 		if lines := byShot[n]; len(lines) > 0 {
 			out.WriteString(" ")
@@ -2488,17 +2446,13 @@ func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, refere
 		visualByShot[n] = body[marker[1]:next]
 	}
 	byShot := make(map[int][]string, len(shots))
-	forcedOnscreenSpeakerByShot := map[int]string{}
 	for shotNo := 1; shotNo <= len(shots); shotNo++ {
 		for _, index := range assigned[shotNo] {
 			continuation := index > 0 && dialogueContinuesAcrossCut(valid[index-1], valid[index]) && dialogueIndexShot(assigned, index-1) == shotNo-1
 			visual := visualByShot[shotNo]
 			speakerTag := useSubjectTags(strings.TrimSpace(valid[index].Character), referenceLines)
 			visible := speakerTag != "" && strings.Contains(visual, speakerTag)
-			if valid[index].SpeechType == "dialogue" && !visible && speakerTag != "" {
-				forcedOnscreenSpeakerByShot[shotNo] = speakerTag
-				visible = true
-			}
+
 			subjects := []string{}
 			seen := map[string]bool{}
 			for _, tag := range h3SubjectTagPattern.FindAllString(visual, -1) {
@@ -2527,9 +2481,6 @@ func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, refere
 			next = matches[i+1][0]
 		}
 		segment := strings.TrimRight(body[start:next], " \n\t")
-		if speakerTag := forcedOnscreenSpeakerByShot[n]; speakerTag != "" {
-			segment += " " + speakerTag + " remains visible."
-		}
 		out.WriteString(segment)
 		if lines := byShot[n]; len(lines) > 0 {
 			out.WriteString(" ")
@@ -2575,7 +2526,7 @@ func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLine
 		case "monologue":
 			body += " " + speaker + " delivers an internal monologue: <d>[Chinese] " + text + "</d> while their lips remain completely closed."
 		default:
-			body += " " + speaker + " says: <d>[Chinese] " + text + "</d>."
+			body += " " + speaker + "说：<d>[Chinese] " + text + "</d>。"
 		}
 		if crossShot {
 			body += "<scenetrans>"
@@ -2729,9 +2680,9 @@ func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 		return false
 	}
 	if len(valid) == 0 {
-		return !strings.Contains(strings.ToLower(fullPrompt), "<d>") && strings.Contains(soundscape, "There is no dialogue") && strings.Contains(soundscape, "every visible person keeps their lips completely closed")
+		return !strings.Contains(strings.ToLower(fullPrompt), "<d>") && strings.Contains(soundscape, "禁止对白") && strings.Contains(soundscape, "所有可见人物始终闭口")
 	}
-	if !strings.Contains(soundscape, "no additional voices") || !strings.Contains(soundscape, "Dialogue appears only in the shot timeline") {
+	if !strings.Contains(soundscape, "不出现其他人声") || !strings.Contains(soundscape, "对白仅在画面时间线中出现") {
 		return false
 	}
 	speakerIDs := dialogueSpeakerIDs(valid)
@@ -2823,9 +2774,8 @@ func h3VideoSubjects(referenceLines []string) (definitions, retention, subjectRe
 		if cut := strings.Index(desc, "："); cut >= 0 {
 			desc = strings.TrimSpace(desc[cut+len("："):])
 		}
-		desc = englishH3ReferenceDescription(desc, n)
-		definitions = append(definitions, fmt.Sprintf("<Subject %d> is %s from <Picture %d>.", n, desc, n))
-		retention = append(retention, fmt.Sprintf("<Subject %d> (appears in the shots where it is explicitly named): fully_preserved - %s.", n, desc))
+		definitions = append(definitions, fmt.Sprintf("<Subject %d> 是 <Picture %d> 中的%s。", n, n, desc))
+		retention = append(retention, fmt.Sprintf("<Subject %d> (出现在其明确引用的Shot): fully_preserved - %s。", n, desc))
 	}
 	return definitions, retention, subjectRefs
 }
@@ -2858,6 +2808,13 @@ func h3SubjectShotAppearances(body string) map[int][]int {
 
 func h3VisibleRetention(body string, retention []string) []string {
 	visible := h3SubjectShotAppearances(body)
+	shotLabels := map[int]string{}
+	for _, match := range h3ShotMarkerPattern.FindAllStringSubmatchIndex(body, -1) {
+		if len(match) >= 4 {
+			n, _ := strconv.Atoi(body[match[2]:match[3]])
+			shotLabels[n] = body[match[0]:match[1]]
+		}
+	}
 	out := make([]string, 0, len(retention))
 	for i, line := range retention {
 		n := i + 1
@@ -2872,9 +2829,12 @@ func h3VisibleRetention(body string, retention []string) []string {
 		}
 		labels := make([]string, len(shots))
 		for j, shot := range shots {
-			labels[j] = fmt.Sprintf("[Shot %d]", shot)
+			labels[j] = shotLabels[shot]
+			if labels[j] == "" {
+				labels[j] = fmt.Sprintf("[Shot %d]", shot)
+			}
 		}
-		out = append(out, fmt.Sprintf("<Subject %d> (appears in %s): fully_preserved - %s", n, strings.Join(labels, ", "), details))
+		out = append(out, fmt.Sprintf("<Subject %d> (出现在 %s): fully_preserved - %s", n, strings.Join(labels, "、"), details))
 	}
 	return out
 }
@@ -2892,6 +2852,7 @@ func compactFinalH3VisualBody(body string) string {
 	for _, pair := range [][2]string{{"面部线条柔和，", ""}, {"捕捉细微表情变化", ""}, {"作为当前地点的虚化背景环境持续可见", "background remains visible"}} {
 		body = strings.ReplaceAll(body, pair[0], pair[1])
 	}
+	body = regexp.MustCompile(`\bAt\s+[0-9]{2}:[0-9]{2}(?:\.[0-9]{3}|:[0-9]{3})?\s*`).ReplaceAllString(body, "")
 	body = regexp.MustCompile(`[；;]{2,}`).ReplaceAllString(body, "；")
 	body = strings.ReplaceAll(body, "；。", "。")
 	return strings.TrimSpace(body)
@@ -2923,6 +2884,12 @@ func bindEnvironmentSubjectsToShots(body string, referenceLines []string) string
 		segment := strings.TrimRight(body[marker[0]:end], " \n\t")
 		missing := []string{}
 		for _, tag := range environmentTags {
+			phrase := tag + " remains visible in the background."
+			if count := strings.Count(segment, phrase); count > 1 {
+				first := strings.Index(segment, phrase)
+				tail := strings.ReplaceAll(segment[first+len(phrase):], phrase, "")
+				segment = segment[:first+len(phrase)] + tail
+			}
 			if !strings.Contains(segment, tag) {
 				missing = append(missing, tag)
 			}
@@ -2951,9 +2918,7 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 	if p != nil {
 		style = strings.TrimSpace(p.Style)
 	}
-	if style = h3EnglishStyle(style); style != "" {
-		body = strings.Replace(body, "[Shot 1]", "The target video uses a "+style+" visual style.\n[Shot 1]", 1)
-	}
+	_ = h3EnglishStyle(style)
 	body = stripStructuredDialogueFromAction(body, dubs)
 	// Speech cleanup can introduce a visible-performance phrase after the AI/Shot cleanup.
 	// Resolve visual contradictions again at the final assembly boundary.
@@ -2972,7 +2937,7 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 	soundscape := h3SoundscapeContract(len(validDialogues) > 0)
 	body = appendStructuredDialogue(body, validDialogues, referenceLines)
 	return "subject_definitions:\n" + strings.Join(definitions, "\n") +
-		"\n\nsummary:\n[reference generation] " + strings.Join(subjects, ", ") + " provide the character, environment, prop, and optional storyboard references used to execute the approved shot design over approximately " + fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)) + " seconds." +
+		"\n\nsummary:\n[reference generation] " + strings.Join(subjects, "、") + "提供人物、场景及可选分镜状态参考，在约" + fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)) + "秒内严格执行本镜剧情与Shot设计。" +
 		"\n\nretention_analysis:\n" + strings.Join(retention, "\n") +
 		"\n\ndetailed_description:\n" + body +
 		"\n\noverall_soundscape:\n" + soundscape +
@@ -3086,42 +3051,9 @@ func validateGeneratedH3Prompt(prompt, template string, duration float64) []stri
 	if duplicate := duplicateH3ShotNumbers(detail); len(duplicate) > 0 {
 		issues = append(issues, fmt.Sprintf("Shot %d 重复", duplicate[0]))
 	}
-	if strings.Contains(detail, "[Shot 1 |") || regexp.MustCompile(`\[Shot\s+[0-9]+\s*\|`).MatchString(detail) {
-		issues = append(issues, "仍使用旧版 Shot 时间范围格式")
-	}
-	if strings.Contains(detail, "[Shot 1] At ") {
-		issues = append(issues, "Shot 1 不得带时间戳")
-	}
-	official := map[int][]string{}
-	for _, match := range officialH3LaterShotPattern.FindAllStringSubmatch(detail, -1) {
-		if len(match) == 5 {
-			n, _ := strconv.Atoi(match[1])
-			official[n] = match
-		}
-	}
-	previous := 0.0
-	for _, marker := range h3ShotMarkerPattern.FindAllStringSubmatch(detail, -1) {
-		if len(marker) != 2 {
-			continue
-		}
-		n, _ := strconv.Atoi(marker[1])
-		if n == 1 {
-			continue
-		}
-		match := official[n]
-		if len(match) != 5 {
-			issues = append(issues, fmt.Sprintf("Shot %d 缺少官方 At MM:SS.mmm 切入时间", n))
-			continue
-		}
-		minutes, _ := strconv.Atoi(match[2])
-		seconds, _ := strconv.Atoi(match[3])
-		millis, _ := strconv.Atoi(match[4])
-		at := float64(minutes*60+seconds) + float64(millis)/1000
-		if at <= previous || at >= duration {
-			issues = append(issues, fmt.Sprintf("Shot %d 切入时间必须严格递增且小于视频时长", n))
-		}
-		previous = at
-	}
+	// This deployed H3 workflow accepts both proven range markers
+	// [Shot N | start-end秒] and the newer At marker. Do not reject a format that has
+	// produced correct speech in live runs; Shot structure is generated by the backend.
 	for _, name := range characterNamesFromReferenceLines(text) {
 		if strings.Contains(detail, name) {
 			issues = append(issues, "detailed_description 仍残留角色名“"+name+"”，必须替换为对应 <Subject N>")

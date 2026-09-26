@@ -34,30 +34,22 @@ func TestDialogueRhythmQueryQuotesReservedOrderColumn(t *testing.T) {
 	}
 }
 
-func TestDialogueRhythmInstructionKeepsNormalSpeakerVisible(t *testing.T) {
+func TestDialogueRhythmInstructionAllowsProvenListenerReactionSplit(t *testing.T) {
 	got := dialogueRhythmDirectorInstruction([]models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "继续说话"}})
-	for _, want := range []string{"每个仍承载普通dialogue片段的镜头都必须让真实说话人清晰可见", "纯听者单人镜头只能安排在该句对白结束之后"} {
+	for _, want := range []string{"同一句可以跨镜连续拆分", "纯听者反应画面", "相同说话人ID"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q: %s", want, got)
 		}
 	}
-	if strings.Contains(got, "听者反应镜头可由当前说话人画外音连续承载") {
-		t.Fatalf("unsafe offscreen rule retained: %s", got)
-	}
 }
 
-func TestValidateDialogueRhythmDraftRejectsPureListenerDuringNormalDialogue(t *testing.T) {
+func TestValidateDialogueRhythmDraftAllowsListenerReactionWithSameSpeakerText(t *testing.T) {
 	draft, err := parseSceneDirectorDraft(`{"shots":[{"act_type":"setup","shot_type":"听者反应","camera_angle":"平视","camera_movement":"固定","duration":6,"description":"上官若彤倾听","dialogue":"继续说话","emotion":"平静","transition_type":"cut","transition_note":"","start_state":"上官若彤抬头","end_state":"上官若彤平静","prompt_subject":"上官若彤单人近景","prompt_action":"闭口倾听","prompt_camera":"近景","prompt_lighting":"柔光","prompt_style":"真人写实","negative_prompt":"","checks":[]}]}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dialogues := []models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "继续说话"}}
-	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "必须让该说话人清晰可见") {
-		t.Fatalf("err=%v", err)
-	}
-	draft.Shots[0].PromptSubject = "上官若琳说话，上官若彤倾听的双人近景"
-	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
-		t.Fatalf("two-shot rejected: %v", err)
+	if err := validateDialogueRhythmDraft(draft, []models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "继续说话"}}); err != nil {
+		t.Fatalf("proven listener reaction rejected: %v", err)
 	}
 }
 
