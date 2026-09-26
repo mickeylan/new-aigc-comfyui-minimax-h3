@@ -1329,7 +1329,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		if !allowSubjects && strings.Contains(value, "<Subject ") {
 			return false
 		}
-		if !h3VisualProseIsEnglish(value, sc.Characters) {
+		if !h3VisualProseIsEnglish(value, sc.Characters) || h3VisualDraftResiduePattern.MatchString(value) {
 			return false
 		}
 		if !allowSubjects {
@@ -1971,6 +1971,7 @@ var (
 	h3LipPlaceholderPattern     = regexp.MustCompile(`(?:At\s+MM:SS\.mmm\s*)?(?:开始|继续|随后继续)?口型(?:配合|同步|开合)?(?:，|,|并|随后)*[^；。]*[；。]?`)
 	h3TransitionMetadataPattern = regexp.MustCompile(`(?:转场|transition)[^；。]*(?:dissolve|叠化|cut|fade|wipe)[^；。]*[；。]?`)
 	h3DuplicateFramingPattern   = regexp.MustCompile(`从(?:面部|肩部)?特写(?:过渡至|回到)中近景[，,、；;\s]*从(?:面部|肩部)?特写(?:过渡至|回到)中近景`)
+	h3VisualDraftResiduePattern = regexp.MustCompile(`(?i)MM:SS\.mmm|\b(?:dialogue|voice)\s+continues?\s+off-screen\b|\bshot\s+(?:dissolves?|fades?|wipes?)\b|\b(?:she|he|they)\s+says\s+(?:hand|gaze|eyes|body)\b`)
 )
 
 func resolveH3VisualConflicts(value string) string {
@@ -2990,6 +2991,10 @@ func compactFinalH3VisualBody(body string) string {
 	for _, pair := range [][2]string{{"面部线条柔和，", ""}, {"捕捉细微表情变化", ""}, {"勾勒柔和面部线条", ""}, {"勾勒柔和轮廓", ""}, {"作为当前地点的虚化背景环境持续可见", "background remains visible"}} {
 		body = strings.ReplaceAll(body, pair[0], pair[1])
 	}
+	body = regexp.MustCompile(`(?i)\bat\s+MM:SS\.mmm\b`).ReplaceAllString(body, "")
+	body = regexp.MustCompile(`(?i)\b(?:she|he|they)\s+says\s+hand\s+releasing\b`).ReplaceAllString(body, "her hand releases")
+	body = regexp.MustCompile(`(?i)\b(?:dialogue|voice)\s+continues?\s+off-screen\s+with\s*[;,.]?`).ReplaceAllString(body, "")
+	body = regexp.MustCompile(`(?i)\bshot\s+(?:dissolves?|fades?|wipes?)[^.]*\.`).ReplaceAllString(body, "")
 	body = regexp.MustCompile(`(?i)dialogue mouth movement[^.;]*[.;]?|\btransition\s*\.`).ReplaceAllString(body, "")
 	body = regexp.MustCompile(`(?i)\b(?:dissolve|fade|wipe)\b[，,；;。]?`).ReplaceAllString(body, "")
 	body = regexp.MustCompile(`\bAt\s+[0-9]{2}:[0-9]{2}(?:\.[0-9]{3}|:[0-9]{3})?\s*,?\s*`).ReplaceAllString(body, "")
@@ -3233,6 +3238,9 @@ func validateGeneratedH3Prompt(prompt, template string, duration float64) []stri
 	}
 	if detail != "" && !h3VisualProseIsEnglish(detail, "") {
 		issues = append(issues, "detailed_description视觉与声音叙述必须使用英文，<d>内对白除外")
+	}
+	if h3VisualDraftResiduePattern.MatchString(stripPromptDialogueNarration(detail)) {
+		issues = append(issues, "detailed_description仍包含未替换时间占位符、转场元数据或发声模板残片")
 	}
 	for _, name := range characterNamesFromReferenceLines(text) {
 		if strings.Contains(detail, name) {
