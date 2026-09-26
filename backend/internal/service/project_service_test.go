@@ -1433,7 +1433,7 @@ func TestH3RetentionListsOnlyVisibleShots(t *testing.T) {
 	sc := &models.Scene{VideoPrompt: "[Shot 1] 姐姐 raises her hand. [Shot 2] 妹妹 listens silently.", Duration: 8}
 	prompt := buildMiniMaxH3RefPrompt(sc, nil, nil, lines)
 	retention := h3PromptSection(prompt, "retention_analysis:")
-	for _, want := range []string{"<Subject 1> (appears in [Shot 1])", "<Subject 2> (appears in [Shot 2])", "<Subject 3>: weak_reference"} {
+	for _, want := range []string{"<Subject 1> (appears in [Shot 1])", "<Subject 2> (appears in [Shot 2])", "<Subject 3> (appears in [Shot 1], [Shot 2])"} {
 		if !strings.Contains(retention, want) {
 			t.Fatalf("missing %q: %s", want, retention)
 		}
@@ -2187,7 +2187,7 @@ func TestCrossShotDialogueFragmentsKeepSpeakerIdentityAndListenerSilent(t *testi
 	split := 11
 	shots := []models.Shot{{Order: 1, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: 0, EndRune: split}}}, {Order: 2, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: split, EndRune: len(full)}}}}
 	got := appendStructuredDialogueToShots(body, dubs, []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图"}, shots)
-	for _, want := range []string{"<Subject 1> (S1) says on screen", "<d>[Chinese] " + string(full[:split]) + "</d>", "<Subject 1> (S1) continues speaking in a clearly identified off-screen voice from the previous shot", "<d>[Chinese] " + string(full[split:]) + "</d>", "<Subject 2> are silent listeners and keep their lips completely closed"} {
+	for _, want := range []string{"<Subject 1> (S1) says on screen", "<d>[Chinese] " + string(full[:split]) + "</d>", "<Subject 1> (S1) continues speaking in a clearly identified off-screen voice from the previous shot", "<d>[Chinese] " + string(full[split:]) + "</d>", "<Subject 2> is a silent listener and keeps their lips completely closed"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q:\n%s", want, got)
 		}
@@ -2199,6 +2199,23 @@ func TestCrossShotDialogueFragmentsKeepSpeakerIdentityAndListenerSilent(t *testi
 	}
 	if strings.Count(got, "<d>") != 2 {
 		t.Fatalf("each Shot must carry its exact audible fragment: %s", got)
+	}
+}
+
+func TestBuildH3PromptResolvesReviewedVisualConflicts(t *testing.T) {
+	shots := []models.Shot{{Order: 1, PromptSubject: "上官若琳，红金宫装，中近景", PromptAction: "神情从坚决转为温柔耐心，眉心与目光的紧张感增强，手自然垂落", PromptCamera: "正面机位，缓慢后拉", PromptLighting: "柔和正面光", PromptStyle: "古风仙侠"}, {Order: 2, PromptSubject: "上官若彤，淡紫宫装侧面近景", PromptAction: "泪光渐消，静静倾听", PromptCamera: "侧面机位，轻微摇摄跟随，微微推进", PromptLighting: "柔和侧光", PromptStyle: "古风仙侠"}}
+	action := rebuildStructuredShotAction(shots)
+	lines := []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图", "- <Picture 3>：场景「桃花林」参考图"}
+	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: action, Duration: 11}, nil, []models.Dialogue{{ID: 1, Character: "上官若琳", SpeechType: "dialogue", Text: "第一段，"}, {ID: 2, Character: "上官若琳", SpeechType: "dialogue", Text: "第二段，"}}, lines)
+	for _, want := range []string{"眉心舒展，目光逐渐柔和", "微微推进", "<Subject 3>作为当前地点的虚化背景环境持续可见", "<Subject 3> (appears in [Shot 1], [Shot 2])"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("missing %q: %s", want, prompt)
+		}
+	}
+	for _, bad := range []string{"眉心与目光的紧张感增强", "轻微摇摄跟随", "<Subject 2> are silent listeners"} {
+		if strings.Contains(prompt, bad) {
+			t.Fatalf("retained %q: %s", bad, prompt)
+		}
 	}
 }
 

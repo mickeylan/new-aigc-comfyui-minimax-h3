@@ -1271,7 +1271,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	}
 	untrusted := strings.Contains(out, "<Subject ")
 	out = normalizeVideoActionPrompt(out)
-	out = coalesceDuplicateH3Shots(stripPromptDialogueNarration(out))
+	out = resolveH3VisualConflicts(coalesceDuplicateH3Shots(stripPromptDialogueNarration(out)))
 	if h3VisualProseIsEnglish(out, sc.Characters) {
 		untrusted = true
 	}
@@ -1874,8 +1874,18 @@ var abstractShotClausePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?:温馨|紧张|诗意|感人|浪漫)(?:结尾|收束|氛围|气氛)`),
 }
 
+func resolveH3VisualConflicts(value string) string {
+	if strings.Contains(value, "从坚决转为温柔") || strings.Contains(value, "从坚定转为温柔") || strings.Contains(value, "转为温柔耐心") {
+		value = strings.ReplaceAll(value, "眉心与目光的紧张感增强", "眉心舒展，目光逐渐柔和")
+	}
+	if (strings.Contains(value, "摇摄") || strings.Contains(value, "摇移")) && (strings.Contains(value, "推进") || strings.Contains(value, "推近")) {
+		value = regexp.MustCompile(`(?:轻微|缓慢|小幅)?(?:摇摄|摇移)(?:跟随)?[，,、和与并再\s]*`).ReplaceAllString(value, "")
+	}
+	return value
+}
+
 func conciseVisibleShotField(value string) string {
-	value = strings.TrimSpace(value)
+	value = resolveH3VisualConflicts(strings.TrimSpace(value))
 	for _, pattern := range abstractShotClausePatterns {
 		value = pattern.ReplaceAllString(value, "")
 	}
@@ -2248,11 +2258,22 @@ func renderDialogueRange(d models.Dialogue, speakerID int, referenceLines []stri
 	others := make([]string, 0, len(visibleSubjects))
 	speakerTag := useSubjectTags(strings.TrimSpace(d.Character), referenceLines)
 	for _, subject := range visibleSubjects {
-		if subject != speakerTag {
-			others = append(others, subject)
+		if subject == speakerTag {
+			continue
 		}
+		match := h3SubjectTagPattern.FindStringSubmatch(subject)
+		if len(match) != 2 {
+			continue
+		}
+		n, _ := strconv.Atoi(match[1])
+		if n < 1 || n > len(referenceLines) || !strings.Contains(referenceLines[n-1], "角色「") {
+			continue
+		}
+		others = append(others, subject)
 	}
-	if len(others) > 0 {
+	if len(others) == 1 {
+		clause += " " + others[0] + " is a silent listener and keeps their lips completely closed throughout this shot."
+	} else if len(others) > 1 {
 		clause += " " + strings.Join(others, ", ") + " are silent listeners and keep their lips completely closed throughout this shot."
 	}
 	return clause
@@ -2810,6 +2831,47 @@ func h3VisibleRetention(body string, retention []string) []string {
 	return out
 }
 
+func bindEnvironmentSubjectsToShots(body string, referenceLines []string) string {
+	environmentTags := []string{}
+	for i, line := range referenceLines {
+		if strings.Contains(line, "场景「") || strings.Contains(line, "环境「") {
+			environmentTags = append(environmentTags, fmt.Sprintf("<Subject %d>", i+1))
+		}
+	}
+	if len(environmentTags) == 0 {
+		return body
+	}
+	matches := h3ShotMarkerPattern.FindAllStringSubmatchIndex(body, -1)
+	if len(matches) == 0 {
+		return body
+	}
+	var out strings.Builder
+	for i, marker := range matches {
+		if i == 0 {
+			out.WriteString(body[:marker[0]])
+		}
+		end := len(body)
+		if i+1 < len(matches) {
+			end = matches[i+1][0]
+		}
+		segment := strings.TrimRight(body[marker[0]:end], " \n\t")
+		missing := []string{}
+		for _, tag := range environmentTags {
+			if !strings.Contains(segment, tag) {
+				missing = append(missing, tag)
+			}
+		}
+		out.WriteString(segment)
+		if len(missing) > 0 {
+			out.WriteString(" " + strings.Join(missing, "、") + "作为当前地点的虚化背景环境持续可见。")
+		}
+		if end < len(body) {
+			out.WriteString("\n")
+		}
+	}
+	return strings.TrimSpace(out.String())
+}
+
 func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue, referenceLines []string) string {
 	definitions, retention, subjects := h3VideoSubjects(referenceLines)
 	body := canonicalVideoAction(sc.VideoPrompt, referenceLines)
@@ -2827,6 +2889,7 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 		body = strings.Replace(body, "[Shot 1]", "The target video uses a "+style+" visual style.\n[Shot 1]", 1)
 	}
 	body = stripStructuredDialogueFromAction(body, dubs)
+	body = bindEnvironmentSubjectsToShots(body, referenceLines)
 	for _, line := range referenceLines {
 		if strings.Contains(line, "上一镜确认尾帧") {
 			startPicture := openingPictureTag([]string{line})
