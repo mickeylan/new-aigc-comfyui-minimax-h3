@@ -1831,9 +1831,13 @@ var speechPerformanceNarrationPatterns = []struct {
 }
 
 func visualiseSpeechPerformanceNarration(text string, hasDialogue bool) string {
+	// Protect this visual relation from the broad legacy "说/讲/问" cleanup rules.
+	const offscreenSpeakerToken = "__H3_OFFSCREEN_SPEAKER__"
+	text = strings.ReplaceAll(text, "画外的说话者", offscreenSpeakerToken)
 	for _, rule := range speechPerformanceNarrationPatterns {
 		text = rule.pattern.ReplaceAllString(text, rule.replace)
 	}
+	text = strings.ReplaceAll(text, offscreenSpeakerToken, "画外的说话者")
 	if !hasDialogue {
 		text = strings.ReplaceAll(text, "唇部自然开合", "唇部保持闭合")
 	}
@@ -1884,6 +1888,9 @@ func resolveH3VisualConflicts(value string) string {
 		value = regexp.MustCompile(`(?:轻微|缓慢|小幅)?(?:摇摄|摇移)(?:跟随)?[，,、和与并再\s]*`).ReplaceAllString(value, "")
 	}
 	value = strings.ReplaceAll(value, "缓慢后拉拉开景别", "缓慢后拉，从特写过渡至中近景")
+	value = strings.ReplaceAll(value, "从特写过渡至中近景，从特写回到中近景", "从面部特写过渡至肩部以上中近景")
+	value = strings.ReplaceAll(value, "从特写过渡至中近景，从特写过渡至中近景", "从面部特写过渡至肩部以上中近景")
+	value = strings.ReplaceAll(value, "画外的唇部自然开合", "画外的说话者")
 	value = strings.ReplaceAll(value, "静静倾听姐姐的话语", "始终保持双唇闭合，目光专注地望向画外的说话者")
 	value = strings.ReplaceAll(value, "倾听姐姐的话语", "保持双唇闭合并望向画外的说话者")
 	return value
@@ -2344,6 +2351,7 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 		}
 	}
 	byShot := map[int][]string{}
+	visualSpeakerByShot := map[int]string{}
 	for i, shot := range shots {
 		for _, r := range shot.DialogueRanges {
 			d, ok := byID[r.DialogueID]
@@ -2361,6 +2369,9 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 			visual := shotVisuals[i+1]
 			speakerTag := useSubjectTags(strings.TrimSpace(d.Character), referenceLines)
 			visible := speakerTag != "" && strings.Contains(visual, speakerTag)
+			if r.StartRune > 0 && !visible && speakerTag != "" {
+				visualSpeakerByShot[i+1] = speakerTag
+			}
 			visibleSubjects := []string{}
 			seenSubject := map[string]bool{}
 			for _, tag := range h3SubjectTagPattern.FindAllString(visual, -1) {
@@ -2387,7 +2398,11 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 			next = matches[i+1][0]
 		}
 		n, _ := strconv.Atoi(body[match[2]:match[3]])
-		out.WriteString(strings.TrimRight(body[start:next], " \n\t"))
+		segment := strings.TrimRight(body[start:next], " \n\t")
+		if speakerTag := visualSpeakerByShot[n]; speakerTag != "" {
+			segment = strings.ReplaceAll(segment, "画外的说话者", "画外的"+speakerTag)
+		}
+		out.WriteString(segment)
 		if lines := byShot[n]; len(lines) > 0 {
 			out.WriteString(" ")
 			out.WriteString(strings.Join(lines, " "))

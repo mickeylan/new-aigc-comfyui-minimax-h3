@@ -2181,24 +2181,39 @@ func TestH3HybridLanguageAndSubjectBindingContract(t *testing.T) {
 
 func TestCrossShotDialogueFragmentsKeepSpeakerIdentityAndListenerSilent(t *testing.T) {
 	body := `[Shot 1] <Subject 1> stands in a medium close-up and begins speaking.
-[Shot 2] At 00:05.000, <Subject 2> listens in side profile, her lips moving naturally as she listens without speaking.`
+[Shot 2] At 00:05.000, <Subject 2>侧身倾听，始终保持双唇闭合，目光专注地望向画外的说话者。`
 	dubs := []models.Dialogue{{ID: 1, Character: "上官若琳", SpeechType: "dialogue", Text: "你要代替姐姐去太运宗，其实太运宗倒是个不错的地方，"}}
 	full := []rune(canonicalDialogueText(dubs[0].Text))
 	split := 11
 	shots := []models.Shot{{Order: 1, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: 0, EndRune: split}}}, {Order: 2, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: split, EndRune: len(full)}}}}
 	got := appendStructuredDialogueToShots(body, dubs, []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图"}, shots)
-	for _, want := range []string{"<Subject 1> (S1) says on screen", "<d>[Chinese] " + string(full[:split]) + "</d>", "<Subject 1> (S1) continues speaking in a clearly identified off-screen voice from the previous shot", "<d>[Chinese] " + string(full[split:]) + "</d>", "<Subject 2> is a silent listener and keeps their lips completely closed"} {
+	for _, want := range []string{"<Subject 1> (S1) says on screen", "<d>[Chinese] " + string(full[:split]) + "</d>", "<Subject 1> (S1) continues speaking in a clearly identified off-screen voice from the previous shot", "<d>[Chinese] " + string(full[split:]) + "</d>", "目光专注地望向画外的<Subject 1>", "<Subject 2> is a silent listener and keeps their lips completely closed"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q:\n%s", want, got)
 		}
 	}
-	for _, forbidden := range []string{"her lips moving naturally", "same line continues", "listens without speaking"} {
+	for _, forbidden := range []string{"her lips moving naturally", "same line continues", "listens without speaking", "画外的唇部自然开合", "画外的说话者"} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("retained ambiguous cue %q:\n%s", forbidden, got)
 		}
 	}
 	if strings.Count(got, "<d>") != 2 {
 		t.Fatalf("each Shot must carry its exact audible fragment: %s", got)
+	}
+}
+
+func TestResolveH3VisualConflictsRemovesDuplicateFramingAndProtectsOffscreenSpeaker(t *testing.T) {
+	input := "神情从坚决转为温柔耐心，眉心与目光的紧张感增强；缓慢后拉，从特写过渡至中近景，从特写回到中近景；始终保持双唇闭合，目光专注地望向画外的说话者"
+	got := visualiseSpeechPerformanceNarration(resolveH3VisualConflicts(input), true)
+	for _, want := range []string{"眉心舒展，目光逐渐柔和", "从面部特写过渡至肩部以上中近景", "画外的说话者"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q: %s", want, got)
+		}
+	}
+	for _, bad := range []string{"眉心与目光的紧张感增强", "从特写回到中近景", "画外的唇部自然开合"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("retained %q: %s", bad, got)
+		}
 	}
 }
 
