@@ -51,7 +51,7 @@
           <p v-if="!column.scenes.length" class="board-empty">无</p>
         </div>
       </div>
-      <details class="card preflight"><summary><strong>本集正式生成前检查</strong></summary><div v-for="check in episodePreflight" :key="check.text" :class="check.ok?'check-ok':'check-fail'">{{check.ok?'✓':'✗'}} {{check.text}}</div><div class="section-actions"><button v-if="shotDurationMismatch" class="btn btn-sm btn-secondary" @click="previewAndApplyRetime">修复当前Scene配时</button><button v-if="selected?.prompt_stale" class="btn btn-sm btn-secondary" @click="prepareVideoPrompt">重新准备当前视频提示词</button><button v-if="videoPromptDetail?.continuity_status==='source_invalidated'" class="btn btn-sm btn-secondary" @click="showFrameSelector=true">重新选择连续性尾帧</button><button v-if="staleDialogueCount" class="btn btn-sm btn-secondary" @click="dubStaleEpisode">仅生成过期配音</button></div></details>
+      <details class="card preflight"><summary><strong>本集正式生成前检查</strong></summary><div v-for="check in episodePreflight" :key="check.text" :class="check.ok?'check-ok':'check-fail'">{{check.ok?'✓':'✗'}} {{check.text}}</div><div class="section-actions"><button v-if="scenes.some(s=>s.shot_duration_mismatch)" class="btn btn-sm btn-secondary" @click="selectScene(scenes.find(s=>s.shot_duration_mismatch))">定位首个配时异常Scene</button><button v-if="shotDurationMismatch" class="btn btn-sm btn-secondary" @click="previewAndApplyRetime">修复当前Scene配时</button><button v-if="selected?.prompt_stale" class="btn btn-sm btn-secondary" @click="prepareVideoPrompt">重新准备当前视频提示词</button><button v-if="scenes.some(s=>s.continuity_status==='source_invalidated'||s.continuity_error)" class="btn btn-sm btn-secondary" @click="selectScene(scenes.find(s=>s.continuity_status==='source_invalidated'||s.continuity_error));showFrameSelector=true">修复首个连续性异常</button><button v-if="staleDialogueCount" class="btn btn-sm btn-secondary" @click="dubStaleEpisode">仅生成过期配音</button></div></details>
     </section>
 
     <!-- 时间轴 -->
@@ -409,7 +409,7 @@ const durProgressPercent = computed(() => {
 })
 const staleDialogueCount = computed(() => dialogues.value.filter(d => d.audio_stale || !d.audio_file).length)
 const previousScene = computed(() => { const i = scenes.value.findIndex(s => s.id === selected.value?.id); return i > 0 ? scenes.value[i - 1] : null })
-function productionStage(s) { if(s.status==='failed'||s.error)return'attention'; if(!Number(s.shot_count||0))return'director'; if(!s.image_file)return'image'; if(s.prompt_stale||!String(s.video_full_prompt||'').trim())return'prompt'; if(!s.video_file)return'video'; const dubs=sceneDubs(s); if(dubs.some(d=>d.audio_stale||!d.audio_file))return'audio'; return'ready' }
+function productionStage(s) { if(s.status==='failed'||s.error||s.shot_duration_mismatch)return'attention'; if(!Number(s.shot_count||0))return'director'; if(!s.image_file)return'image'; if(s.prompt_stale||!String(s.video_full_prompt||'').trim())return'prompt'; if(!s.video_file)return'video'; const dubs=sceneDubs(s); if(dubs.some(d=>d.audio_stale||!d.audio_file))return'audio'; return'ready' }
 const productionColumns = computed(() => [
   {key:'director',label:'待导演设计',severity:'normal'},{key:'image',label:'待分镜图',severity:'normal'},{key:'prompt',label:'待视频提示词审核',severity:'warn'},{key:'video',label:'待视频',severity:'normal'},{key:'audio',label:'待配音/音频',severity:'warn'},{key:'ready',label:'已就绪',severity:'success'},{key:'attention',label:'需处理',severity:'error'}
 ].map(column=>({...column,scenes:scenes.value.filter(s=>productionStage(s)===column.key)})))
@@ -419,10 +419,12 @@ const timelineShots = computed(() => { let cursor=0; return selectedShots.value.
 const episodePreflight = computed(() => {
   const checks=[]
   checks.push({ok:scenes.value.every(s=>Number(s.duration)>=3&&Number(s.duration)<=15),text:'所有Scene时长均为3–15秒'})
-  checks.push({ok:!shotDurationMismatch.value,text:'当前Scene内部Shot配时与Scene一致'})
+  const mismatched=scenes.value.filter(s=>s.shot_duration_mismatch)
+  checks.push({ok:mismatched.length===0,text:mismatched.length?`${mismatched.length}个Scene内部Shot配时不一致`:'全Episode内部Shot配时与Scene一致'})
   checks.push({ok:dialogues.value.every(d=>!String(d.text||'').trim()||speakerKind(d)!=='unknown'),text:'所有有文字的Dialogue均明确说话人/旁白/内心独白'})
   checks.push({ok:scenes.value.every(s=>!s.prompt_stale),text:'所有视频提示词均为最新'})
-  checks.push({ok:!videoPromptDetail.value?.continuity_error,text:'当前Scene连续性来源有效'})
+  const invalidContinuity=scenes.value.filter(s=>s.continuity_status==='source_invalidated'||s.continuity_error)
+  checks.push({ok:invalidContinuity.length===0,text:invalidContinuity.length?`${invalidContinuity.length}个Scene连续性来源失效`:'全Episode连续性来源有效'})
   return checks
 })
 const durProgressClass = computed(() => {

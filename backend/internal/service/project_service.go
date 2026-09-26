@@ -6260,15 +6260,47 @@ func (s *ProjectService) EditorData(p *models.Project, episodeN int) (map[string
 	}
 	type editorScene struct {
 		models.Scene
-		VideoURL  string   `json:"video_url"`
-		ImageURL  string   `json:"image_url"`
-		VideoDur  float64  `json:"video_dur"`
-		AudioURLs []string `json:"audio_urls,omitempty"`
+		VideoURL             string   `json:"video_url"`
+		ImageURL             string   `json:"image_url"`
+		VideoDur             float64  `json:"video_dur"`
+		AudioURLs            []string `json:"audio_urls,omitempty"`
+		ShotDurationTotal    float64  `json:"shot_duration_total"`
+		ShotDurationMismatch bool     `json:"shot_duration_mismatch"`
+		ContinuityStatus     string   `json:"continuity_status"`
+		ContinuityError      string   `json:"continuity_error"`
 	}
-	outScenes := make([]editorScene, 0, len(scenes))
 	sceneIDs := make([]uint, 0, len(scenes))
 	for _, sc := range scenes {
-		es := editorScene{Scene: sc}
+		sceneIDs = append(sceneIDs, sc.ID)
+	}
+	shotTotals := map[uint]float64{}
+	if len(sceneIDs) > 0 {
+		var rows []struct {
+			SceneID uint
+			Total   float64
+		}
+		if err := s.db.Model(&models.Shot{}).Select("scene_id, COALESCE(SUM(duration),0) AS total").Where("scene_id IN ?", sceneIDs).Group("scene_id").Scan(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			shotTotals[row.SceneID] = math.Round(row.Total*10) / 10
+		}
+	}
+	continuityByScene := map[uint]models.SceneContinuity{}
+	if len(sceneIDs) > 0 {
+		var rows []models.SceneContinuity
+		if err := s.db.Where("scene_id IN ?", sceneIDs).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			continuityByScene[row.SceneID] = row
+		}
+	}
+	outScenes := make([]editorScene, 0, len(scenes))
+	for _, sc := range scenes {
+		total := shotTotals[sc.ID]
+		cfg := continuityByScene[sc.ID]
+		es := editorScene{Scene: sc, ShotDurationTotal: total, ShotDurationMismatch: sc.ShotCount > 0 && math.Abs(total-sc.Duration) > shotDurationTolerance, ContinuityStatus: cfg.Status, ContinuityError: cfg.Error}
 		// 完成同步后会把视频复制到项目 input 目录。该副本跨 GPU、跨 ComfyUI
 		// 实例均可访问，剪辑台应与项目详情一样优先使用它，而不是原 worker 输出。
 		if sc.VideoInputFile != "" {
@@ -6288,7 +6320,6 @@ func (s *ProjectService) EditorData(p *models.Project, episodeN int) (map[string
 			es.ImageURL = fmt.Sprintf("/api/input/%d/%s", p.ID, sc.ImageFile)
 		}
 		outScenes = append(outScenes, es)
-		sceneIDs = append(sceneIDs, sc.ID)
 	}
 
 	var dubs []models.Dialogue
