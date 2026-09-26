@@ -1437,7 +1437,7 @@ func normalizeVideoActionPrompt(prompt string) string {
 var (
 	h3DialogueTagPattern           = regexp.MustCompile(`(?is)<d>.*?</d>`)
 	h3DialogueClausePattern        = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}]{1,20})(?:\s*\(S[0-9]+\))?(?:画外音|内心独白|说|说道|问道|答道)[：:]?\s*<d>.*?</d>[。.]?`)
-	h3EnglishDialogueClausePattern = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}][\p{Han}A-Za-z0-9，,· \t]{0,80})\s*\(S[0-9]+\)\s*(?:says(?:\s+in\s+an\s+off-screen\s+voiceover|\s+on\s+screen\s+with\s+lip\s+movement\s+synchronized\s+only\s+to\s+this\s+exact\s+text|\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice)?|delivers\s+an\s+internal\s+monologue|continues\s+speaking\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice\s+from\s+the\s+previous\s+shot|continues\s+the\s+same\s+utterance\s+on\s+screen\s+without\s+a\s+speaker\s+change)\s*:\s*<d>.*?</d>(?:\s+while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?(?:\s+The\s+voice\s+remains\s+exclusively\s+[^;\n]+;\s+no\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+No\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+(?:<Subject\s+[0-9]+>(?:,\s*)?)+\s+are\s+silent\s+listeners\s+and\s+keep\s+their\s+lips\s+completely\s+closed\s+throughout\s+this\s+shot[.]?)?`)
+	h3EnglishDialogueClausePattern = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}][\p{Han}A-Za-z0-9，,· \t]{0,80})\s*\(S[0-9]+\)\s*(?:says(?:\s+in\s+an\s+off-screen\s+voiceover|\s+on\s+screen|\s+on\s+screen\s+with\s+lip\s+movement\s+synchronized\s+only\s+to\s+this\s+exact\s+text|\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice)?|delivers\s+an\s+internal\s+monologue|continues\s+speaking\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice\s+from\s+the\s+previous\s+shot|continues(?:\s+the\s+same\s+utterance)?\s+on\s+screen(?:\s+without\s+a\s+speaker\s+change)?)\s*:\s*<d>.*?</d>(?:\s+while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?(?:\s+The\s+voice\s+remains\s+exclusively\s+[^;\n]+;\s+no\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+No\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+(?:<Subject\s+[0-9]+>(?:,\s*)?)+\s+are\s+silent\s+listeners\s+and\s+keep\s+their\s+lips\s+completely\s+closed\s+throughout\s+this\s+shot[.]?)?`)
 	dialogueNarrationPattern       = regexp.MustCompile(`(?:<Subject [0-9]+>(?:\s*\(S[0-9]+\))?(?:说道|说|问道|答道)[：:]?\s*|[\p{Han}]{1,12}(?:\s*\(S[0-9]+\))?(?:说道|问道|答道|说[：:])\s*)`)
 	orphanSpeakerPattern           = regexp.MustCompile(`(?:<Subject [0-9]+>|[\p{Han}]{1,20})\s*\(S[0-9]+\)[。.]?`)
 	quotedDialoguePattern          = regexp.MustCompile(`[“\"][^”\"]*[”\"]`)
@@ -1947,7 +1947,9 @@ func englishH3ShotField(value string) string {
 func rebuildStructuredShotAction(shots []models.Shot) string {
 	parts := make([]string, 0, len(shots))
 	for i, shot := range shots {
-		structured := []string{shot.PromptSubject, shot.PromptAction, shot.PromptCamera, shot.PromptLighting, shot.PromptStyle}
+		// Identity, wardrobe and style are already fixed by Subject definitions and the one
+		// global style preamble. Repeating them in every Shot dilutes action and dialogue.
+		structured := []string{shot.PromptSubject, shot.PromptAction, shot.PromptCamera, shot.PromptLighting}
 		fields := make([]string, 0, len(structured))
 		for _, field := range structured {
 			if clean := conciseVisibleShotField(field); clean != "" {
@@ -2267,13 +2269,13 @@ func renderDialogueRange(d models.Dialogue, speakerID int, referenceLines []stri
 		clause = speaker + " delivers an internal monologue: <d>[Chinese] " + fragment + "</d> while their lips remain completely closed."
 	default:
 		if continuation && !visible {
-			clause = speaker + " continues speaking in a clearly identified off-screen voice from the previous shot: <d>[Chinese] " + fragment + "</d>. The voice remains exclusively " + speaker + "; no visible listener speaks or lip-syncs."
+			clause = speaker + " continues off-screen: <d>[Chinese] " + fragment + "</d>."
 		} else if continuation {
-			clause = speaker + " continues the same utterance on screen without a speaker change: <d>[Chinese] " + fragment + "</d>."
+			clause = speaker + " continues on screen: <d>[Chinese] " + fragment + "</d>."
 		} else if visible {
-			clause = speaker + " says on screen with lip movement synchronized only to this exact text: <d>[Chinese] " + fragment + "</d>."
+			clause = speaker + " says on screen: <d>[Chinese] " + fragment + "</d>."
 		} else {
-			clause = speaker + " says in a clearly identified off-screen voice: <d>[Chinese] " + fragment + "</d>. No visible listener speaks or lip-syncs."
+			clause = speaker + " says off-screen: <d>[Chinese] " + fragment + "</d>."
 		}
 	}
 	others := make([]string, 0, len(visibleSubjects))
@@ -2293,9 +2295,9 @@ func renderDialogueRange(d models.Dialogue, speakerID int, referenceLines []stri
 		others = append(others, subject)
 	}
 	if len(others) == 1 {
-		clause += " " + others[0] + " is a silent listener and keeps their lips completely closed throughout this shot."
+		clause += " " + others[0] + " stays silent, lips closed."
 	} else if len(others) > 1 {
-		clause += " " + strings.Join(others, ", ") + " are silent listeners and keep their lips completely closed throughout this shot."
+		clause += " " + strings.Join(others, ", ") + " stay silent, lips closed."
 	}
 	return clause
 }
@@ -2418,7 +2420,7 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 		}
 		if speakerTag := forcedOnscreenSpeakerByShot[n]; speakerTag != "" {
 			segment = strings.ReplaceAll(segment, "画外的说话者", speakerTag)
-			segment += " " + speakerTag + " remains clearly visible on screen; only " + speakerTag + " lip-syncs to this shot's exact dialogue fragment."
+			segment += " " + speakerTag + " remains visible."
 		}
 		out.WriteString(segment)
 		if lines := byShot[n]; len(lines) > 0 {
@@ -2526,7 +2528,7 @@ func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, refere
 		}
 		segment := strings.TrimRight(body[start:next], " \n\t")
 		if speakerTag := forcedOnscreenSpeakerByShot[n]; speakerTag != "" {
-			segment += " " + speakerTag + " remains clearly visible on screen; only " + speakerTag + " lip-syncs to this shot's exact dialogue fragment."
+			segment += " " + speakerTag + " remains visible."
 		}
 		out.WriteString(segment)
 		if lines := byShot[n]; len(lines) > 0 {
@@ -2877,6 +2879,24 @@ func h3VisibleRetention(body string, retention []string) []string {
 	return out
 }
 
+var h3RedundantVisualClausePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`[；;]?[^；。]*(?:古风仙侠|温柔细腻|柔美内敛|色调(?:以)?[^；。]*)[^；。]*[。；;]?`),
+	regexp.MustCompile(`，身着[^，；。]+`),
+	regexp.MustCompile(`，(?:红金|淡紫)宫装(?:呈现|展现)[^；。]+`),
+}
+
+func compactFinalH3VisualBody(body string) string {
+	for _, pattern := range h3RedundantVisualClausePatterns {
+		body = pattern.ReplaceAllString(body, "")
+	}
+	for _, pair := range [][2]string{{"面部线条柔和，", ""}, {"捕捉细微表情变化", ""}, {"作为当前地点的虚化背景环境持续可见", "background remains visible"}} {
+		body = strings.ReplaceAll(body, pair[0], pair[1])
+	}
+	body = regexp.MustCompile(`[；;]{2,}`).ReplaceAllString(body, "；")
+	body = strings.ReplaceAll(body, "；。", "。")
+	return strings.TrimSpace(body)
+}
+
 func bindEnvironmentSubjectsToShots(body string, referenceLines []string) string {
 	environmentTags := []string{}
 	for i, line := range referenceLines {
@@ -2909,7 +2929,7 @@ func bindEnvironmentSubjectsToShots(body string, referenceLines []string) string
 		}
 		out.WriteString(segment)
 		if len(missing) > 0 {
-			out.WriteString(" " + strings.Join(missing, "、") + "作为当前地点的虚化背景环境持续可见。")
+			out.WriteString(" " + strings.Join(missing, ", ") + " remains visible in the background.")
 		}
 		if end < len(body) {
 			out.WriteString("\n")
@@ -2938,6 +2958,7 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 	// Speech cleanup can introduce a visible-performance phrase after the AI/Shot cleanup.
 	// Resolve visual contradictions again at the final assembly boundary.
 	body = resolveH3VisualConflicts(body)
+	body = compactFinalH3VisualBody(body)
 	body = bindEnvironmentSubjectsToShots(body, referenceLines)
 	for _, line := range referenceLines {
 		if strings.Contains(line, "上一镜确认尾帧") {

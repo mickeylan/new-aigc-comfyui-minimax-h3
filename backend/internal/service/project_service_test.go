@@ -2071,7 +2071,7 @@ func TestAppendStructuredDialogueUsesH3CrossShotContinuationForOneSentence(t *te
 			t.Fatalf("fragment %q missing or duplicated: %s", text, got)
 		}
 	}
-	if strings.Count(got, "continues the same utterance on screen without a speaker change") != 2 || strings.Count(got, "<Subject 1> remains clearly visible on screen") != 3 {
+	if strings.Count(got, "continues on screen") != 2 || strings.Count(got, "<Subject 1> remains visible") != 3 {
 		t.Fatalf("cross-shot visible speaker enforcement missing: %s", got)
 	}
 	if strings.Contains(got, "same line") {
@@ -2101,12 +2101,12 @@ func TestAppendStructuredDialoguePlacesEachLineInsideItsShot(t *testing.T) {
 func TestRebuildStructuredShotActionOmitsDescriptionAndAbstractNarration(t *testing.T) {
 	shots := []models.Shot{{Description: "姐妹二人在桃花林中对望，夕阳余晖洒落，画面温馨。太运宗的威胁虽在，但姐妹情深，气氛中既有忧虑也有温情。", PromptSubject: "双人中景：红金与淡紫宫装女子并肩而立，相貌相似气质各异", PromptAction: "姐妹相视，气氛温馨", PromptCamera: "双人中景固定", PromptLighting: "夕阳余晖，温暖金色", PromptStyle: "古风仙侠，温馨结尾"}}
 	got := rebuildStructuredShotAction(shots)
-	for _, forbidden := range []string{"太运宗", "威胁虽在", "姐妹情深", "气氛", "温情", "温馨结尾", "画面温馨"} {
+	for _, forbidden := range []string{"太运宗", "威胁虽在", "姐妹情深", "气氛", "温情", "温馨结尾", "画面温馨", "古风仙侠"} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("retained abstract/repeated prose %q: %s", forbidden, got)
 		}
 	}
-	for _, want := range []string{"红金与淡紫宫装女子并肩而立", "姐妹相视", "双人中景固定", "夕阳余晖", "古风仙侠"} {
+	for _, want := range []string{"红金与淡紫宫装女子并肩而立", "姐妹相视", "双人中景固定", "夕阳余晖"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing visible fact %q: %s", want, got)
 		}
@@ -2187,7 +2187,7 @@ func TestCrossShotDialogueFragmentsKeepSpeakerIdentityAndListenerSilent(t *testi
 	split := 11
 	shots := []models.Shot{{Order: 1, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: 0, EndRune: split}}}, {Order: 2, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: split, EndRune: len(full)}}}}
 	got := appendStructuredDialogueToShots(body, dubs, []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图"}, shots)
-	for _, want := range []string{"<Subject 1> (S1) says on screen", "<d>[Chinese] " + string(full[:split]) + "</d>", "<Subject 1> remains clearly visible on screen", "<Subject 1> (S1) continues the same utterance on screen without a speaker change", "<d>[Chinese] " + string(full[split:]) + "</d>", "<Subject 2> is a silent listener and keeps their lips completely closed"} {
+	for _, want := range []string{"<Subject 1> (S1) says on screen", "<d>[Chinese] " + string(full[:split]) + "</d>", "<Subject 1> remains visible", "<Subject 1> (S1) continues on screen", "<d>[Chinese] " + string(full[split:]) + "</d>", "<Subject 2> stays silent, lips closed"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q:\n%s", want, got)
 		}
@@ -2237,12 +2237,12 @@ func TestBuildH3PromptResolvesReviewedVisualConflicts(t *testing.T) {
 	action := rebuildStructuredShotAction(shots)
 	lines := []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图", "- <Picture 3>：场景「桃花林」参考图"}
 	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: action, Duration: 11}, nil, []models.Dialogue{{ID: 1, Character: "上官若琳", SpeechType: "dialogue", Text: "第一段，"}, {ID: 2, Character: "上官若琳", SpeechType: "dialogue", Text: "第二段，"}}, lines)
-	for _, want := range []string{"眉心舒展，目光逐渐柔和", "微微推进", "<Subject 3>作为当前地点的虚化背景环境持续可见", "<Subject 3> (appears in [Shot 1], [Shot 2])"} {
+	for _, want := range []string{"眉心舒展，目光逐渐柔和", "微微推进", "<Subject 3> remains visible in the background", "<Subject 3> (appears in [Shot 1], [Shot 2])"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("missing %q: %s", want, prompt)
 		}
 	}
-	for _, bad := range []string{"眉心与目光的紧张感增强", "轻微摇摄跟随", "<Subject 2> are silent listeners"} {
+	for _, bad := range []string{"眉心与目光的紧张感增强", "轻微摇摄跟随", "<Subject 2> are silent listeners", "古风仙侠", "温柔细腻", "柔美内敛", "色调红金偏暖"} {
 		if strings.Contains(prompt, bad) {
 			t.Fatalf("retained %q: %s", bad, prompt)
 		}
