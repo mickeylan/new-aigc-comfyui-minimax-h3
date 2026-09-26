@@ -14,6 +14,8 @@ test('剪辑台提供Scene生产看板和只读双层时间轴', () => {
   assert.match(source, /预览并重新配时/)
   assert.match(source, /shot\._start\.toFixed\(1\)/)
   assert.match(source, /本集正式生成前检查/)
+  assert.match(source, /mismatchedScenes/)
+  assert.match(source, /shot_duration_total/)
   assert.match(source, /未指定说话人/)
 })
 
