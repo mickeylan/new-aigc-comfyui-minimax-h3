@@ -1464,7 +1464,7 @@ func TestGenerateSceneVideoActionDoesNotRecycleOldVisualDescription(t *testing.T
 	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}); err != nil {
 		t.Fatal(err)
 	}
-	provider := &captureTextProvider{response: "[Shot 1] The shot begins from the referenced still frame. 雷晓飞 taps the table once, then turns toward the doorway with an alert expression. The camera pushes in with small amplitude at slow speed."}
+	provider := &captureTextProvider{response: "[Shot 1] 画面从当前构图参考开始，雷晓飞用右手食指轻敲桌面一次，随后警觉地转头望向门口，镜头小幅缓慢推进。"}
 	ps.textProvider = provider
 	project := models.Project{Title: "测试"}
 	if err := ps.db.Create(&project).Error; err != nil {
@@ -1486,7 +1486,7 @@ func TestGenerateSceneVideoActionDoesNotRecycleOldVisualDescription(t *testing.T
 	if strings.Contains(provider.user, "蓝色粗布短褐") || strings.Contains(provider.user, "暖黄阳光") || strings.Contains(provider.user, "当前动作草稿") {
 		t.Fatalf("old visual draft must not be recycled: %s", provider.user)
 	}
-	for _, want := range []string{"镜头指令，不是剧本复述", "一个主要动作", "3至5句", "不得复述剧情背景", "无结构化对白时，人物保持闭口", "不得从参考图反推剧情", "必须使用自然英文"} {
+	for _, want := range []string{"镜头指令，不是剧本复述", "一个主要动作", "3至5句", "不得复述剧情背景", "无结构化对白时，人物保持闭口", "不得从参考图反推剧情", "必须使用自然中文"} {
 		if !strings.Contains(provider.system, want) {
 			t.Fatalf("system missing %q: %s", want, provider.system)
 		}
@@ -1496,7 +1496,7 @@ func TestGenerateSceneVideoActionDoesNotRecycleOldVisualDescription(t *testing.T
 			t.Fatalf("video AI context missing %q: %s", want, provider.user)
 		}
 	}
-	if strings.Contains(out, "雷晓飞") || !strings.Contains(out, "<Subject 1> taps the table") {
+	if strings.Contains(out, "雷晓飞") || !strings.Contains(out, "<Subject 1>用右手食指轻敲桌面") {
 		t.Fatalf("character must use Subject binding: %s", out)
 	}
 }
@@ -1916,7 +1916,7 @@ func TestValidateGeneratedH3PromptRejectsDuplicateAndLegacyShotSyntax(t *testing
 			t.Fatalf("missing validation %q: %s", want, joined)
 		}
 	}
-	good := "subject_definitions:\nx\n\nsummary:\nx\n\nretention_analysis:\nx\n\ndetailed_description:\n[Shot 1] A medium close-up establishes the woman beside the doorway.\n[Shot 2] At 00:05.000, the camera cuts to her sister listening silently.\n\noverall_soundscape:\nx\n\nnon_diegetic_music:\nN/A"
+	good := "subject_definitions:\nx\n\nsummary:\nx\n\nretention_analysis:\nx\n\ndetailed_description:\n[Shot 1] 中近景建立人物站在门边的构图。\n[Shot 2] At 00:05.000, 镜头切到妹妹安静倾听。\n\noverall_soundscape:\nx\n\nnon_diegetic_music:\nN/A"
 	if issues := validateGeneratedH3Prompt(good, "minimax_h3_ref2v", 10); len(issues) != 0 {
 		t.Fatalf("valid generated prompt rejected: %v", issues)
 	}
@@ -2065,7 +2065,7 @@ func TestRebuildStructuredShotActionOmitsDescriptionAndAbstractNarration(t *test
 			t.Fatalf("retained abstract/repeated prose %q: %s", forbidden, got)
 		}
 	}
-	for _, want := range []string{"红金与淡紫宫装女子并肩而立", "姐妹相视", "the camera holds a static two-shot at medium distance", "warm sunset light", "live-action xianxia"} {
+	for _, want := range []string{"红金与淡紫宫装女子并肩而立", "姐妹相视", "双人中景固定", "夕阳余晖", "古风仙侠"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing visible fact %q: %s", want, got)
 		}
@@ -2118,6 +2118,23 @@ func TestH3ActionConvertsSpeechStageDirectionsToSilentVisualCues(t *testing.T) {
 	full := appendStructuredDialogue(got, dubs, nil)
 	if strings.Count(full, "<d>") != 1 || !strings.Contains(full, "<d>[Chinese] 这十年你都没有怎么好好闭关修炼过。</d>") {
 		t.Fatalf("structured dialogue not sole spoken text: %s", full)
+	}
+}
+
+func TestH3HybridLanguageAndSubjectBindingContract(t *testing.T) {
+	lines := []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图"}
+	visual := "[Shot 1] 上官若琳身着红金宫装正面站立，目光由坚定转为温柔，镜头缓慢后拉。\n[Shot 2] At 00:05.000, 上官若彤侧身倾听，双唇保持闭合。"
+	bound := useSubjectTags(visual, lines)
+	if strings.Contains(bound, "上官若琳") || strings.Contains(bound, "上官若彤") || !strings.Contains(bound, "<Subject 1>") || !strings.Contains(bound, "<Subject 2>") {
+		t.Fatalf("subject binding failed: %s", bound)
+	}
+	full := "subject_definitions:\n<Subject 1> is the character 上官若琳 shown in the four-view reference from <Picture 1>.\n<Subject 2> is the character 上官若彤 shown in the four-view reference from <Picture 2>.\n\nsummary:\ntest\n\nretention_analysis:\ntest\n\ndetailed_description:\n" + bound + "\n\noverall_soundscape:\nOnly ambient room tone and physical action sounds that are visibly motivated are audible. There is no dialogue, human voice, narration, commentary, indistinct vocalization, speech, or singing; every visible person keeps their lips completely closed.\n\nnon_diegetic_music:\nN/A"
+	if issues := validateGeneratedH3Prompt(full, "minimax_h3_ref2v", 8); len(issues) > 0 {
+		t.Fatalf("valid hybrid prompt rejected: %v", issues)
+	}
+	bad := strings.Replace(full, bound, "[Shot 1] Shangguan Ruolin stands in front-facing close-up and slowly pulls back.", 1)
+	if issues := strings.Join(validateGeneratedH3Prompt(bad, "minimax_h3_ref2v", 8), "|"); !strings.Contains(issues, "故事画面") {
+		t.Fatalf("English story prose not rejected: %s", issues)
 	}
 }
 

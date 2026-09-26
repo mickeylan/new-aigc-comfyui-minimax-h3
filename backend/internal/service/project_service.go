@@ -1241,13 +1241,13 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 		dialogueContext = strings.Join(lines, "\n")
 	}
 	system := fmt.Sprintf(`你是 MiniMax H3 Ref2VA 视频动作编辑。只输出简洁的 detailed_description 正文，不输出字段名、解释、规则或 Markdown。
-除结构化对白由系统稍后以原语言写入<d>外，你输出的全部视觉、动作、镜头、声音连续性说明必须使用自然英文。不得翻译、复述或自行补写对白。
+你输出的故事画面、人物动作、表情、构图、光线和运镜叙述必须使用自然中文；[Shot N]、At MM:SS.mmm 等固定控制标签以及系统稍后加入的口型、闭口、画外音控制指令使用英文。不得翻译、复述或自行补写对白。
 正文是给视频模型执行的镜头指令，不是剧本复述。只保留当前镜头实际可见的主体位置、一个主要动作、必要的表情变化和一种运镜，使用3至5句简短明确的句子。
 运镜必须自然融入动作句：明确运动类型；仅在确有意义时写小/大幅度和慢/快速，正常速度与中等幅度省略。固定镜头不得同时出现推进、跟随、摇移、升降、环绕或变焦。
 忠实采用Scene与结构化Shot，但不得复述剧情背景、人物关系、前因后果、心理活动、内心想法、氛围解释或观众感受；禁止“仿佛想说什么”“未说出口的问题”“沉默中充满”等文学化语言暗示。
 第一句以 [Shot 1] 开头，说明画面可从%s参考状态开始；随后直接写动作与镜头。不得新增角色、动作、对白、道具、地点或剧情。
 Dialogue只决定人物是否开口及必要口型时机；对白文本将由系统确定性加入，你不得在正文输出台词、<d>标签或改写台词。无结构化对白时，人物保持闭口，不得描写嘴唇微张、欲言又止或任何说话暗示。
-正文中的人物必须使用【场景剧情】和【Shot导演设计】里的真实角色名，禁止自行填写或猜测任何<Subject N>编号。系统会在AI返回后依据实际上传顺序，把真实角色名确定性转换为正确Subject编号。
+正文中的人物必须逐字使用【场景剧情】和【Shot导演设计】里的中文真实角色名；严禁拼音、英文音译、别名，也禁止自行填写或猜测任何<Subject N>编号。系统会依据实际上传顺序，把中文真实角色名确定性转换为正确Subject编号。
 四视图只负责人物身份与服装，场景图只负责环境；不得从参考图反推剧情，不得复述或猜测外貌、服装、陈设。`, openingPicture)
 	user := fmt.Sprintf("目标时长：%.1f秒。只提取执行本镜所必需的信息，不要把以下资料逐段复述进输出。\n\n【场景剧情（仅作事实边界）】\n%s\n\n【Shot导演设计（动作与镜头权威）】\n%s\n\n【结构化对白（仅判断口型时机）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s", normalizeSceneDuration(sc.Duration), sc.Content, shotContext, dialogueContext, strings.Join(refLines, "\n"))
 	policy, err := NewPromptPolicyService(s.db).Resolve(PromptPolicyContext{ProjectID: sc.ProjectID, SceneID: &sc.ID}, PromptPolicyVideoPolish, system)
@@ -1266,10 +1266,15 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	if duplicate := duplicateH3ShotNumbers(out); len(duplicate) > 0 {
 		return "", fmt.Errorf("AI 返回的视频动作提示词重复生成 Shot %d，请重试", duplicate[0])
 	}
-	if !h3VisualProseIsEnglish(out, sc.Characters) {
-		return "", fmt.Errorf("AI 返回的视频动作提示词视觉正文必须使用英文，请重试")
+	if h3VisualProseIsEnglish(out, sc.Characters) {
+		return "", fmt.Errorf("AI 返回的视频故事画面正文必须使用中文，角色名必须使用中文原名，请重试")
 	}
 	out = useSubjectTags(out, refLines)
+	for _, name := range parseSceneCharacters(sc.Characters) {
+		if strings.Contains(out, name) {
+			return "", fmt.Errorf("角色名%s未能绑定到实际Subject，请检查参考图选择", name)
+		}
+	}
 	if !strings.HasPrefix(out, "[Shot 1]") {
 		out = "[Shot 1] " + out
 	}
@@ -1326,6 +1331,34 @@ func canonicalVideoAction(prompt string, referenceLines []string) string {
 		return ""
 	}
 	return strings.TrimSpace(text)
+}
+
+var h3DefinedCharacterNamePattern = regexp.MustCompile(`(?i)the character\s+([^\s.,]+)\s+shown`)
+
+func characterNamesFromReferenceLines(lines ...string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, text := range lines {
+		for _, line := range strings.Split(text, "\n") {
+			name := ""
+			if start := strings.Index(line, "角色「"); start >= 0 {
+				start += len("角色「")
+				if end := strings.Index(line[start:], "」"); end >= 0 {
+					name = strings.TrimSpace(line[start : start+end])
+				}
+			}
+			if name == "" {
+				if match := h3DefinedCharacterNamePattern.FindStringSubmatch(line); len(match) == 2 {
+					name = strings.TrimSpace(match[1])
+				}
+			}
+			if name != "" && !seen[name] {
+				seen[name] = true
+				out = append(out, name)
+			}
+		}
+	}
+	return out
 }
 
 func useSubjectTags(text string, referenceLines []string) string {
@@ -1855,7 +1888,7 @@ func rebuildStructuredShotAction(shots []models.Shot) string {
 		structured := []string{shot.PromptSubject, shot.PromptAction, shot.PromptCamera, shot.PromptLighting, shot.PromptStyle}
 		fields := make([]string, 0, len(structured))
 		for _, field := range structured {
-			if clean := englishH3ShotField(conciseVisibleShotField(field)); clean != "" {
+			if clean := conciseVisibleShotField(field); clean != "" {
 				fields = append(fields, clean)
 			}
 		}
@@ -2910,9 +2943,14 @@ func validateGeneratedH3Prompt(prompt, template string, duration float64) []stri
 	if detail == "" {
 		detail = h3IntegratedDescription(text)
 	}
-	visualOnly := h3DialogueTagPattern.ReplaceAllString(detail, "")
-	if detail != "" && !h3VisualProseIsEnglish(visualOnly, "") {
-		issues = append(issues, "detailed_description 的视觉、动作和镜头正文必须使用英文；中文只允许出现在 <d> 对白内")
+	visualOnly := stripPromptDialogueNarration(h3DialogueTagPattern.ReplaceAllString(detail, ""))
+	if detail != "" && h3VisualProseIsEnglish(visualOnly, "") {
+		issues = append(issues, "detailed_description 的故事画面、动作、表情、构图、光线和运镜叙述必须使用中文；固定控制指令保留英文")
+	}
+	for _, name := range characterNamesFromReferenceLines(text) {
+		if strings.Contains(detail, name) {
+			issues = append(issues, "detailed_description 仍残留角色名“"+name+"”，必须替换为对应 <Subject N>")
+		}
 	}
 	if template == "minimax_h3_ref2v" || template == "minimax_h3_ref2v_single" {
 		for _, heading := range []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:"} {
