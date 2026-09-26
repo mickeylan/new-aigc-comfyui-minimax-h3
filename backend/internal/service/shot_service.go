@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -48,6 +49,70 @@ func validateShot(shot *models.Shot) error {
 	}
 	if shot.Duration <= 0 || shot.Duration > 120 || math.IsNaN(shot.Duration) || math.IsInf(shot.Duration, 0) {
 		return fmt.Errorf("duration 必须在 0 到 120 秒之间")
+	}
+	return nil
+}
+
+func assignShotDialogueRanges(tx *gorm.DB, sceneID uint, shots []models.Shot) error {
+	var dialogues []models.Dialogue
+	if err := tx.Where("scene_id = ?", sceneID).Order("`order`, id").Find(&dialogues).Error; err != nil {
+		return err
+	}
+	canonical := make([][]rune, len(dialogues))
+	groupKeys := make([]string, len(dialogues))
+	groupStarts := make([]int, len(dialogues))
+	groupNo, groupOffset := 0, 0
+	for i := range dialogues {
+		canonical[i] = []rune(canonicalDialogueText(dialogues[i].Text))
+		if i == 0 || !dialogueContinuesAcrossCut(dialogues[i-1], dialogues[i]) {
+			groupNo++
+			groupOffset = 0
+		}
+		groupKeys[i] = fmt.Sprintf("dialogue-group:%d", groupNo)
+		groupStarts[i] = groupOffset
+		groupOffset += len(canonical[i])
+	}
+	dialogueIndex, offset := 0, 0
+	for i := range shots {
+		remaining := len([]rune(canonicalDialogueText(shots[i].Dialogue)))
+		ranges := []models.ShotDialogueRange{}
+		for remaining > 0 && dialogueIndex < len(dialogues) {
+			available := len(canonical[dialogueIndex]) - offset
+			if available <= 0 {
+				dialogueIndex++
+				offset = 0
+				continue
+			}
+			take := remaining
+			if take > available {
+				take = available
+			}
+			ranges = append(ranges, models.ShotDialogueRange{DialogueID: dialogues[dialogueIndex].ID, GroupKey: groupKeys[dialogueIndex], StartRune: groupStarts[dialogueIndex] + offset, EndRune: groupStarts[dialogueIndex] + offset + take})
+			offset += take
+			remaining -= take
+			if offset == len(canonical[dialogueIndex]) {
+				dialogueIndex++
+				offset = 0
+			}
+		}
+		if remaining != 0 {
+			return fmt.Errorf("镜头%d对白无法映射到结构化Dialogue", i+1)
+		}
+		shots[i].DialogueRanges = ranges
+		encoded, err := json.Marshal(ranges)
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&models.Shot{}).Where("id = ? AND scene_id = ?", shots[i].ID, sceneID).Update("dialogue_ranges_json", string(encoded)).Error; err != nil {
+			return err
+		}
+	}
+	for dialogueIndex < len(dialogues) && offset == len(canonical[dialogueIndex]) {
+		dialogueIndex++
+		offset = 0
+	}
+	if dialogueIndex != len(dialogues) || offset != 0 {
+		return fmt.Errorf("导演镜头对白未完整覆盖结构化Dialogue")
 	}
 	return nil
 }
@@ -157,6 +222,12 @@ func (s *ShotService) ReplaceShots(sceneID uint, shots []models.Shot) ([]models.
 			return err
 		}
 		shots = saved
+		if err := assignShotDialogueRanges(tx, sceneID, shots); err != nil {
+			return err
+		}
+		if err := tx.Where("scene_id = ?", sceneID).Order("order_num, id").Find(&shots).Error; err != nil {
+			return err
+		}
 		for _, shot := range shots {
 			if err := recordManualShotPrompt(tx, projectID, shot); err != nil {
 				return err
@@ -164,12 +235,37 @@ func (s *ShotService) ReplaceShots(sceneID uint, shots []models.Shot) ([]models.
 		}
 		return aggregateShotsIntoScene(tx, sceneID, shots)
 	})
+	if err == nil {
+		decorateShotDialogueContinuity(shots)
+	}
 	return shots, err
+}
+
+func decorateShotDialogueContinuity(shots []models.Shot) {
+	for i := range shots {
+		if len(shots[i].DialogueRanges) == 0 {
+			continue
+		}
+		first := shots[i].DialogueRanges[0]
+		shots[i].ContinuesFromPrevious = first.StartRune > 0
+		if i+1 < len(shots) && len(shots[i+1].DialogueRanges) > 0 {
+			next := shots[i+1].DialogueRanges[0]
+			last := shots[i].DialogueRanges[len(shots[i].DialogueRanges)-1]
+			sameGroup := last.GroupKey != "" && last.GroupKey == next.GroupKey
+			if last.GroupKey == "" && next.GroupKey == "" {
+				sameGroup = last.DialogueID == next.DialogueID
+			}
+			shots[i].ContinuesToNext = sameGroup && last.EndRune == next.StartRune
+		}
+	}
 }
 
 func (s *ShotService) GetSceneShots(sceneID uint) ([]models.Shot, error) {
 	var shots []models.Shot
 	err := s.db.Where("scene_id = ?", sceneID).Order("order_num, id").Find(&shots).Error
+	if err == nil {
+		decorateShotDialogueContinuity(shots)
+	}
 	return shots, err
 }
 

@@ -812,6 +812,17 @@ func (s *TaskService) Execute(taskID string) error {
 
 	var params map[string]any
 	_ = json.Unmarshal([]byte(task.ParamsJSON), &params)
+	if isH3VideoPromptTemplate(tpl.Code) {
+		duration := 8.0
+		if raw, ok := params["duration"].(float64); ok && raw > 0 {
+			duration = raw
+		}
+		if issues := validateGeneratedH3Prompt(task.Prompt, tpl.Code, duration); len(issues) > 0 {
+			err := fmt.Errorf("视频任务提示词未通过 MiniMax H3 正式执行校验: %s", strings.Join(issues, "；"))
+			s.failTask(&task, err.Error())
+			return err
+		}
+	}
 
 	// 模拟模式：不连接 ComfyUI，按模板参考耗时模拟进度推进直至成功
 	if s.cfg.Simulate {

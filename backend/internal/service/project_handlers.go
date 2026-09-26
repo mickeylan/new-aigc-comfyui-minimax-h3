@@ -401,6 +401,7 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 	fullPrompt := compileH3PromptForTemplate(template, &preview, &project, dubs, lines)
 	var shots []models.Shot
 	_ = s.DB.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error
+	shots = s.Projects.ensureShotDialogueRanges(sc.ID, shots)
 	fullPrompt = normalizeSavedH3Audio(fullPrompt, dubs, lines, shots)
 	fullPrompt = applyShotTimeline(fullPrompt, shots, normalizeSceneDuration(sc.Duration))
 	if issues := validateGeneratedH3Prompt(fullPrompt, template, normalizeSceneDuration(sc.Duration)); len(issues) > 0 {
@@ -476,6 +477,7 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 		// structured Dialogue and placed in its persisted Shot interval.
 		var shots []models.Shot
 		_ = s.DB.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error
+		shots = s.Projects.ensureShotDialogueRanges(sc.ID, shots)
 		prompt = normalizeSavedH3Audio(prompt, dubs, refLines, shots)
 		prompt = applyShotTimeline(prompt, shots, normalizeSceneDuration(sc.Duration))
 	}

@@ -1428,6 +1428,18 @@ func TestBuildMiniMaxH3PromptUsesSixSectionContract(t *testing.T) {
 	}
 }
 
+func TestH3RetentionListsOnlyVisibleShots(t *testing.T) {
+	lines := []string{"- <Picture 1>：角色「姐姐」四视图", "- <Picture 2>：角色「妹妹」四视图", "- <Picture 3>：场景「庭院」参考图"}
+	sc := &models.Scene{VideoPrompt: "[Shot 1] 姐姐 raises her hand. [Shot 2] 妹妹 listens silently.", Duration: 8}
+	prompt := buildMiniMaxH3RefPrompt(sc, nil, nil, lines)
+	retention := h3PromptSection(prompt, "retention_analysis:")
+	for _, want := range []string{"<Subject 1> (appears in [Shot 1])", "<Subject 2> (appears in [Shot 2])", "<Subject 3>: weak_reference"} {
+		if !strings.Contains(retention, want) {
+			t.Fatalf("missing %q: %s", want, retention)
+		}
+	}
+}
+
 func TestBuildMiniMaxH3RefPromptUsesStoryboardAsOptionalLastReference(t *testing.T) {
 	sc := &models.Scene{Content: "雷晓飞敲击桌面", VideoPrompt: "[Shot 1] 雷晓飞抬起手指后再次落向桌面。", Duration: 9}
 	lines := []string{"- <Picture 1>：角色「雷晓飞」四视图", "- <Picture 2>：场景「雷记面馆」参考图", "- <Picture 3>：当前分镜画面（可选构图与动作状态参考）"}
@@ -1904,7 +1916,7 @@ func TestValidateGeneratedH3PromptRejectsDuplicateAndLegacyShotSyntax(t *testing
 			t.Fatalf("missing validation %q: %s", want, joined)
 		}
 	}
-	good := "subject_definitions:\nx\n\nsummary:\nx\n\nretention_analysis:\nx\n\ndetailed_description:\n[Shot 1] A.\n[Shot 2] At 00:05.000, B.\n\noverall_soundscape:\nx\n\nnon_diegetic_music:\nN/A"
+	good := "subject_definitions:\nx\n\nsummary:\nx\n\nretention_analysis:\nx\n\ndetailed_description:\n[Shot 1] A medium close-up establishes the woman beside the doorway.\n[Shot 2] At 00:05.000, the camera cuts to her sister listening silently.\n\noverall_soundscape:\nx\n\nnon_diegetic_music:\nN/A"
 	if issues := validateGeneratedH3Prompt(good, "minimax_h3_ref2v", 10); len(issues) != 0 {
 		t.Fatalf("valid generated prompt rejected: %v", issues)
 	}
@@ -2048,7 +2060,7 @@ func TestRebuildStructuredShotActionOmitsDescriptionAndAbstractNarration(t *test
 			t.Fatalf("retained abstract/repeated prose %q: %s", forbidden, got)
 		}
 	}
-	for _, want := range []string{"红金与淡紫宫装女子并肩而立", "姐妹相视", "双人中景固定", "夕阳余晖", "古风仙侠"} {
+	for _, want := range []string{"红金与淡紫宫装女子并肩而立", "姐妹相视", "the camera holds a static two-shot at medium distance", "warm sunset light", "live-action xianxia"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing visible fact %q: %s", want, got)
 		}

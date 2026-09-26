@@ -34,6 +34,7 @@ func TestShotServiceStoresManualDirectorStructure(t *testing.T) {
 	db.Create(&project)
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Content: "权威剧情事实", ImagePrompt: "权威起始帧", Duration: 5}
 	db.Create(&scene)
+	db.Create(&models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "侦探", Text: "原来如此"})
 	svc := NewShotService(db)
 	input := []models.Shot{
 		{ActType: models.ShotActSetup, ShotType: "wide", Duration: 1.5, Description: "雨夜建立旧宅", PromptSubject: "雨中的旧宅", PromptCamera: "广角固定", PromptLighting: "冷色月光"},
@@ -52,6 +53,29 @@ func TestShotServiceStoresManualDirectorStructure(t *testing.T) {
 	}
 	if scene.Content != "权威剧情事实" || scene.ImagePrompt != "权威起始帧" || scene.Status != "pending" {
 		t.Fatalf("Shot save overwrote Scene authority: %+v", scene)
+	}
+}
+
+func TestShotServicePersistsExplicitDialogueRangesAcrossCuts(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "ranges"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
+	db.Create(&scene)
+	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "姐姐", Text: "相信姐姐，姐姐不会让你去。"}
+	db.Create(&dialogue)
+	shots, err := NewShotService(db).ReplaceShots(scene.ID, []models.Shot{{ShotType: "close", Duration: 4, Dialogue: "相信姐姐，"}, {ShotType: "reaction", Duration: 5, Dialogue: "姐姐不会让你去。"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shots[0].DialogueRanges) != 1 || shots[0].DialogueRanges[0].DialogueID != dialogue.ID || shots[0].DialogueRanges[0].StartRune != 0 {
+		t.Fatalf("first range=%+v", shots[0].DialogueRanges)
+	}
+	if !shots[0].ContinuesToNext || !shots[1].ContinuesFromPrevious {
+		t.Fatalf("continuity flags missing: %+v %+v", shots[0], shots[1])
+	}
+	if shots[0].DialogueRanges[0].EndRune != shots[1].DialogueRanges[0].StartRune {
+		t.Fatalf("ranges are not contiguous: %+v", shots)
 	}
 }
 

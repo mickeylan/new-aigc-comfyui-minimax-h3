@@ -780,31 +780,43 @@ const (
 	ShotTransitionMatchCut ShotTransitionType = "match_cut"
 )
 
+// ShotDialogueRange binds a Shot to an exact rune range of canonical structured Dialogue.
+// Dialogue remains authoritative; the range only records performance continuity across cuts.
+type ShotDialogueRange struct {
+	DialogueID uint   `json:"dialogue_id"`
+	GroupKey   string `json:"group_key"`
+	StartRune  int    `json:"start_rune"`
+	EndRune    int    `json:"end_rune"`
+}
+
 // Shot 是 Scene 下的导演镜头层。ActType 表示五幕叙事位置，五段提示词描述单镜画面。
 type Shot struct {
-	ID             uint               `gorm:"primaryKey" json:"id"`
-	SceneID        uint               `gorm:"column:scene_id;index;uniqueIndex:idx_shot_scene_order" json:"scene_id"`
-	Order          int                `gorm:"column:order_num;uniqueIndex:idx_shot_scene_order" json:"order"`
-	ActType        ShotActType        `gorm:"column:act_type;index" json:"act_type"`
-	ShotType       string             `gorm:"column:shot_type" json:"shot_type"`
-	CameraAngle    string             `gorm:"column:camera_angle" json:"camera_angle"`
-	CameraMovement string             `gorm:"column:camera_movement" json:"camera_movement"`
-	TransitionType ShotTransitionType `gorm:"column:transition_type;index" json:"transition_type"`
-	TransitionNote string             `gorm:"column:transition_note;type:text" json:"transition_note"`
-	StartState     string             `gorm:"column:start_state;type:text" json:"start_state"`
-	EndState       string             `gorm:"column:end_state;type:text" json:"end_state"`
-	Duration       float64            `gorm:"default:1.5" json:"duration"`
-	Description    string             `gorm:"type:text" json:"description"`
-	Dialogue       string             `gorm:"type:text" json:"dialogue"`
-	Emotion        string             `gorm:"type:text" json:"emotion"`
-	PromptSubject  string             `gorm:"column:prompt_subject;type:text" json:"prompt_subject"`
-	PromptAction   string             `gorm:"column:prompt_action;type:text" json:"prompt_action"`
-	PromptCamera   string             `gorm:"column:prompt_camera;type:text" json:"prompt_camera"`
-	PromptLighting string             `gorm:"column:prompt_lighting;type:text" json:"prompt_lighting"`
-	PromptStyle    string             `gorm:"column:prompt_style;type:text" json:"prompt_style"`
-	NegativePrompt string             `gorm:"column:negative_prompt;type:text" json:"negative_prompt"`
-	CreatedAt      time.Time          `json:"created_at"`
-	UpdatedAt      time.Time          `json:"updated_at"`
+	ID                    uint                `gorm:"primaryKey" json:"id"`
+	SceneID               uint                `gorm:"column:scene_id;index;uniqueIndex:idx_shot_scene_order" json:"scene_id"`
+	Order                 int                 `gorm:"column:order_num;uniqueIndex:idx_shot_scene_order" json:"order"`
+	ActType               ShotActType         `gorm:"column:act_type;index" json:"act_type"`
+	ShotType              string              `gorm:"column:shot_type" json:"shot_type"`
+	CameraAngle           string              `gorm:"column:camera_angle" json:"camera_angle"`
+	CameraMovement        string              `gorm:"column:camera_movement" json:"camera_movement"`
+	TransitionType        ShotTransitionType  `gorm:"column:transition_type;index" json:"transition_type"`
+	TransitionNote        string              `gorm:"column:transition_note;type:text" json:"transition_note"`
+	StartState            string              `gorm:"column:start_state;type:text" json:"start_state"`
+	EndState              string              `gorm:"column:end_state;type:text" json:"end_state"`
+	Duration              float64             `gorm:"default:1.5" json:"duration"`
+	Description           string              `gorm:"type:text" json:"description"`
+	Dialogue              string              `gorm:"type:text" json:"dialogue"` // compatibility display cache; structured Dialogue remains authoritative
+	DialogueRanges        []ShotDialogueRange `gorm:"column:dialogue_ranges_json;type:text;serializer:json" json:"dialogue_ranges"`
+	ContinuesFromPrevious bool                `gorm:"-" json:"continues_from_previous"`
+	ContinuesToNext       bool                `gorm:"-" json:"continues_to_next"`
+	Emotion               string              `gorm:"type:text" json:"emotion"`
+	PromptSubject         string              `gorm:"column:prompt_subject;type:text" json:"prompt_subject"`
+	PromptAction          string              `gorm:"column:prompt_action;type:text" json:"prompt_action"`
+	PromptCamera          string              `gorm:"column:prompt_camera;type:text" json:"prompt_camera"`
+	PromptLighting        string              `gorm:"column:prompt_lighting;type:text" json:"prompt_lighting"`
+	PromptStyle           string              `gorm:"column:prompt_style;type:text" json:"prompt_style"`
+	NegativePrompt        string              `gorm:"column:negative_prompt;type:text" json:"negative_prompt"`
+	CreatedAt             time.Time           `json:"created_at"`
+	UpdatedAt             time.Time           `json:"updated_at"`
 }
 
 // PromptVersion 提示词版本历史

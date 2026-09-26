@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -264,6 +265,7 @@ func (s *ShotService) Materialize(projectID, sceneID uint) ([]models.Scene, erro
 				return err
 			}
 			dialogueOrder := 0
+			groupOffsets := map[uint]int{}
 			for j, shot := range group.Shots {
 				clone := shot
 				clone.ID, clone.SceneID, clone.Order = 0, child.ID, j+1
@@ -282,11 +284,27 @@ func (s *ShotService) Materialize(projectID, sceneID uint) ([]models.Scene, erro
 						return err
 					}
 				}
+				ranges := []models.ShotDialogueRange{}
 				for _, fragment := range group.FragmentSets[j] {
 					dialogueOrder++
+					sourceID := fragment.Source.ID
 					d := fragment.Source
 					resetDialogueForMaterialization(&d, child.ID, dialogueOrder, fragment.Text)
 					if err := tx.Create(&d).Error; err != nil {
+						return err
+					}
+					start := groupOffsets[sourceID]
+					end := start + len(canonicalDialogueRunes(fragment.Text))
+					groupOffsets[sourceID] = end
+					ranges = append(ranges, models.ShotDialogueRange{DialogueID: d.ID, GroupKey: fmt.Sprintf("source-dialogue:%d", sourceID), StartRune: start, EndRune: end})
+				}
+				if len(ranges) > 0 {
+					clone.DialogueRanges = ranges
+					encoded, err := json.Marshal(ranges)
+					if err != nil {
+						return err
+					}
+					if err := tx.Model(&clone).Update("dialogue_ranges_json", string(encoded)).Error; err != nil {
 						return err
 					}
 				}

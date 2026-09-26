@@ -1126,6 +1126,7 @@ func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string, templ
 		_, refLines := s.sceneVideoReferenceFiles(sc, pid)
 		var shots []models.Shot
 		_ = s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error
+		shots = s.ensureShotDialogueRanges(sc.ID, shots)
 		prompt = normalizeSavedH3Audio(prompt, dubs, refLines, shots)
 		prompt = applyShotTimeline(prompt, shots, normalizeSceneDuration(sc.Duration))
 	}
@@ -1832,13 +1833,29 @@ func conciseVisibleShotField(value string) string {
 	return strings.Join(out, "，")
 }
 
+func englishH3ShotField(value string) string {
+	value = strings.TrimSpace(value)
+	replacements := []struct{ old, new string }{
+		{"双人中景固定", "the camera holds a static two-shot at medium distance"}, {"双人中景", "medium two-shot"}, {"中近景", "medium close-up"}, {"大远景", "extreme long shot"}, {"全景", "wide shot"}, {"中景", "medium shot"}, {"近景", "close-up"}, {"特写", "extreme close-up"},
+		{"平视", "eye-level"}, {"俯拍", "high-angle"}, {"仰拍", "low-angle"},
+		{"缓慢推进", "the camera pushes in with small amplitude at slow speed"}, {"轻微推进", "the camera pushes in with small amplitude"}, {"镜头固定不动", "the camera holds a static shot"}, {"固定镜头", "the camera holds a static shot"},
+		{"缓慢后拉", "the camera pulls out with small amplitude at slow speed"}, {"缓慢跟随", "the camera tracks the subject at slow speed"}, {"轻微环绕", "the camera moves in a shallow arc around the subject"},
+		{"夕阳余晖", "warm sunset light"}, {"温暖金色", "warm golden tones"}, {"柔和正面光", "soft frontal lighting"}, {"侧光", "side lighting"},
+		{"古风仙侠", "live-action xianxia"}, {"真人写实", "live-action realistic"},
+	}
+	for _, replacement := range replacements {
+		value = strings.ReplaceAll(value, replacement.old, replacement.new)
+	}
+	return value
+}
+
 func rebuildStructuredShotAction(shots []models.Shot) string {
 	parts := make([]string, 0, len(shots))
 	for i, shot := range shots {
 		structured := []string{shot.PromptSubject, shot.PromptAction, shot.PromptCamera, shot.PromptLighting, shot.PromptStyle}
 		fields := make([]string, 0, len(structured))
 		for _, field := range structured {
-			if clean := conciseVisibleShotField(field); clean != "" {
+			if clean := englishH3ShotField(conciseVisibleShotField(field)); clean != "" {
 				fields = append(fields, clean)
 			}
 		}
@@ -1998,6 +2015,35 @@ func formatH3Timestamp(seconds float64) string {
 	return fmt.Sprintf("%02d:%02d.%03d", totalMillis/60000, (totalMillis/1000)%60, totalMillis%1000)
 }
 
+func (s *ProjectService) ensureShotDialogueRanges(sceneID uint, shots []models.Shot) []models.Shot {
+	hasDialogue := false
+	hasCurrentRanges := true
+	for _, shot := range shots {
+		if strings.TrimSpace(shot.Dialogue) != "" {
+			hasDialogue = true
+			if len(shot.DialogueRanges) == 0 {
+				hasCurrentRanges = false
+			}
+		}
+		for _, r := range shot.DialogueRanges {
+			if !strings.HasPrefix(r.GroupKey, "dialogue-group:") && !strings.HasPrefix(r.GroupKey, "source-dialogue:") {
+				hasCurrentRanges = false
+			}
+		}
+	}
+	if !hasDialogue || hasCurrentRanges {
+		return shots
+	}
+	if err := s.db.Transaction(func(tx *gorm.DB) error { return assignShotDialogueRanges(tx, sceneID, shots) }); err != nil {
+		return shots
+	}
+	var refreshed []models.Shot
+	if err := s.db.Where("scene_id = ?", sceneID).Order("order_num, id").Find(&refreshed).Error; err == nil {
+		return refreshed
+	}
+	return shots
+}
+
 func (s *ProjectService) applySceneShotTimeline(sc *models.Scene, prompt string) string {
 	var shots []models.Shot
 	if err := s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
@@ -2115,8 +2161,105 @@ func renderCrossShotContinuation(d models.Dialogue, speakerID int, referenceLine
 	return speaker + "'s same line " + phrase + "; every visible non-speaking character keeps their lips completely closed."
 }
 
+func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, referenceLines []string, shots []models.Shot) (string, bool) {
+	if len(shots) == 0 {
+		return body, false
+	}
+	hasRanges := false
+	for _, shot := range shots {
+		if len(shot.DialogueRanges) > 0 {
+			hasRanges = true
+			break
+		}
+	}
+	if !hasRanges {
+		return body, false
+	}
+	byID := map[uint]models.Dialogue{}
+	speakerByID := map[uint]int{}
+	ids := dialogueSpeakerIDs(dubs)
+	for i, d := range dubs {
+		byID[d.ID] = d
+		speakerByID[d.ID] = ids[i]
+	}
+	groupText := map[string]string{}
+	groupSpeaker := map[string]models.Dialogue{}
+	seenDialogue := map[string]map[uint]bool{}
+	for _, shot := range shots {
+		for _, r := range shot.DialogueRanges {
+			d, ok := byID[r.DialogueID]
+			if !ok {
+				return body, false
+			}
+			key := r.GroupKey
+			if key == "" {
+				key = fmt.Sprintf("dialogue:%d", r.DialogueID)
+			}
+			if seenDialogue[key] == nil {
+				seenDialogue[key] = map[uint]bool{}
+				groupSpeaker[key] = d
+			}
+			if !seenDialogue[key][d.ID] {
+				groupText[key] += canonicalDialogueText(d.Text)
+				seenDialogue[key][d.ID] = true
+			}
+		}
+	}
+	byShot := map[int][]string{}
+	for i, shot := range shots {
+		for _, r := range shot.DialogueRanges {
+			d, ok := byID[r.DialogueID]
+			if !ok {
+				return body, false
+			}
+			key := r.GroupKey
+			if key == "" {
+				key = fmt.Sprintf("dialogue:%d", r.DialogueID)
+			}
+			if r.StartRune < 0 || r.EndRune <= r.StartRune || r.EndRune > len([]rune(groupText[key])) {
+				return body, false
+			}
+			if r.StartRune == 0 {
+				full := groupSpeaker[key]
+				full.Text = groupText[key]
+				byShot[i+1] = append(byShot[i+1], renderStructuredDialogue(full, speakerByID[d.ID], referenceLines))
+				continue
+			}
+			byShot[i+1] = append(byShot[i+1], renderCrossShotContinuation(d, speakerByID[d.ID], referenceLines, i+1))
+		}
+	}
+	matches := h3ShotMarkerPattern.FindAllStringSubmatchIndex(body, -1)
+	if len(matches) == 0 {
+		return body, false
+	}
+	var out strings.Builder
+	for i, match := range matches {
+		start := match[0]
+		if i == 0 {
+			out.WriteString(body[:start])
+		}
+		next := len(body)
+		if i+1 < len(matches) {
+			next = matches[i+1][0]
+		}
+		n, _ := strconv.Atoi(body[match[2]:match[3]])
+		out.WriteString(strings.TrimRight(body[start:next], " \n\t"))
+		if lines := byShot[n]; len(lines) > 0 {
+			out.WriteString(" ")
+			out.WriteString(strings.Join(lines, " "))
+		}
+		if next < len(body) {
+			out.WriteString("\n")
+		}
+	}
+	return strings.TrimSpace(out.String()), true
+}
+
 func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, referenceLines []string, shots []models.Shot) string {
 	valid := validSceneDialogues(dubs)
+	if explicit, ok := appendExplicitDialogueRangesToShots(body, valid, referenceLines, shots); ok {
+		return explicit
+	}
 	if len(valid) == 0 || len(shots) == 0 {
 		return appendStructuredDialogue(body, valid, referenceLines)
 	}
@@ -2208,6 +2351,7 @@ func (s *ProjectService) compileSceneStructuredDialogue(sc *models.Scene, body s
 	if err := s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
 		return appendStructuredDialogue(body, dubs, referenceLines)
 	}
+	shots = s.ensureShotDialogueRanges(sc.ID, shots)
 	return appendStructuredDialogueToShots(body, dubs, referenceLines, shots)
 }
 
@@ -2480,6 +2624,50 @@ func h3VideoSubjects(referenceLines []string) (definitions, retention, subjectRe
 	return definitions, retention, subjectRefs
 }
 
+var h3SubjectTagPattern = regexp.MustCompile(`<Subject\s+([1-9][0-9]*)>`)
+
+func h3VisibleRetention(body string, retention []string) []string {
+	visible := map[int][]int{}
+	seen := map[int]map[int]bool{}
+	matches := h3ShotMarkerPattern.FindAllStringSubmatchIndex(body, -1)
+	for i, marker := range matches {
+		shotNo, _ := strconv.Atoi(body[marker[2]:marker[3]])
+		end := len(body)
+		if i+1 < len(matches) {
+			end = matches[i+1][0]
+		}
+		for _, tag := range h3SubjectTagPattern.FindAllStringSubmatch(body[marker[1]:end], -1) {
+			n, _ := strconv.Atoi(tag[1])
+			if seen[n] == nil {
+				seen[n] = map[int]bool{}
+			}
+			if !seen[n][shotNo] {
+				visible[n] = append(visible[n], shotNo)
+				seen[n][shotNo] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(retention))
+	for i, line := range retention {
+		n := i + 1
+		details := line
+		if cut := strings.Index(line, " - "); cut >= 0 {
+			details = line[cut+3:]
+		}
+		shots := visible[n]
+		if len(shots) == 0 {
+			out = append(out, fmt.Sprintf("<Subject %d>: weak_reference - %s", n, details))
+			continue
+		}
+		labels := make([]string, len(shots))
+		for j, shot := range shots {
+			labels[j] = fmt.Sprintf("[Shot %d]", shot)
+		}
+		out = append(out, fmt.Sprintf("<Subject %d> (appears in %s): fully_preserved - %s", n, strings.Join(labels, ", "), details))
+	}
+	return out
+}
+
 func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue, referenceLines []string) string {
 	definitions, retention, subjects := h3VideoSubjects(referenceLines)
 	body := canonicalVideoAction(sc.VideoPrompt, referenceLines)
@@ -2504,6 +2692,7 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 			break
 		}
 	}
+	retention = h3VisibleRetention(body, retention)
 	validDialogues := validSceneDialogues(dubs)
 	soundscape := h3SoundscapeContract(len(validDialogues) > 0)
 	body = appendStructuredDialogue(body, validDialogues, referenceLines)
@@ -2603,6 +2792,15 @@ func buildMiniMaxH3Prompt(sc *models.Scene, p *models.Project, dubs []models.Dia
 // 返回问题列表，空列表表示通过校验。
 var officialH3LaterShotPattern = regexp.MustCompile(`\[Shot\s+([2-9][0-9]*)\]\s+At\s+([0-9]{2}):([0-9]{2})\.([0-9]{3}),`)
 
+func isH3VideoPromptTemplate(template string) bool {
+	switch template {
+	case "minimax_h3_t2v", "minimax_h3_i2v", "minimax_h3_first_last", "minimax_h3_ref2v", "minimax_h3_ref2v_single":
+		return true
+	default:
+		return false
+	}
+}
+
 func validateGeneratedH3Prompt(prompt, template string, duration float64) []string {
 	var issues []string
 	text := strings.TrimSpace(prompt)
@@ -2638,6 +2836,14 @@ func validateGeneratedH3Prompt(prompt, template string, duration float64) []stri
 			issues = append(issues, fmt.Sprintf("Shot %d 切入时间必须严格递增且小于视频时长", n))
 		}
 		previous = at
+	}
+	detail := h3PromptSection(text, "detailed_description:")
+	if detail == "" {
+		detail = h3IntegratedDescription(text)
+	}
+	visualOnly := h3DialogueTagPattern.ReplaceAllString(detail, "")
+	if detail != "" && !h3VisualProseIsEnglish(visualOnly, "") {
+		issues = append(issues, "detailed_description 的视觉、动作和镜头正文必须使用英文；中文只允许出现在 <d> 对白内")
 	}
 	if template == "minimax_h3_ref2v" || template == "minimax_h3_ref2v_single" {
 		for _, heading := range []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:"} {
@@ -4288,6 +4494,7 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 				prompt = resolveRef2VSubmissionPrompt(sc, p, dubs, refLines)
 				var shots []models.Shot
 				_ = s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error
+				shots = s.ensureShotDialogueRanges(sc.ID, shots)
 				prompt = normalizeSavedH3Audio(prompt, dubs, refLines, shots)
 				prompt = applyShotTimeline(prompt, shots, normalizeSceneDuration(sc.Duration))
 				if files == nil {
@@ -4312,6 +4519,9 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		if selectionErr != nil {
 			return fmt.Errorf("所选视频模板不可用且回退模板也不可用: %w", selectionErr)
 		}
+	}
+	if issues := validateGeneratedH3Prompt(promptText, tplCode, duration); len(issues) > 0 {
+		return fmt.Errorf("视频提示词未通过 MiniMax H3 正式提交校验: %s", strings.Join(issues, "；"))
 	}
 	claim := s.db.Model(&models.Scene{}).
 		Where("id = ? AND project_id = ? AND generation = ? AND status IN ? AND image_file != ''",
@@ -6328,6 +6538,9 @@ func (s *ProjectService) UpdateDialogueFields(p *models.Project, did uint, input
 	}
 	if promptChanged {
 		_ = s.db.Model(&models.Scene{}).Where("id = ? AND video_full_prompt != ''", d.SceneID).Update("prompt_stale", true).Error
+	}
+	if input.Text != nil && strings.TrimSpace(*input.Text) != strings.TrimSpace(d.Text) {
+		_ = s.db.Model(&models.Shot{}).Where("scene_id = ?", d.SceneID).Updates(map[string]any{"dialogue_ranges_json": "[]", "dialogue": ""}).Error
 	}
 	s.pushProject(p)
 	s.db.First(&d, did)
