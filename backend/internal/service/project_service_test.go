@@ -1896,6 +1896,30 @@ func TestH3KeyframePromptValidationDoesNotForceGeneratedFormat(t *testing.T) {
 	}
 }
 
+func TestValidateGeneratedH3PromptRejectsDuplicateAndLegacyShotSyntax(t *testing.T) {
+	bad := "subject_definitions:\nx\n\nsummary:\nx\n\nretention_analysis:\nx\n\ndetailed_description:\n[Shot 1 | 0.00-5.00秒] A.\n[Shot 1] B.\n[Shot 2] C.\n\noverall_soundscape:\nx\n\nnon_diegetic_music:\nN/A"
+	joined := strings.Join(validateGeneratedH3Prompt(bad, "minimax_h3_ref2v", 10), "|")
+	for _, want := range []string{"Shot 1 重复", "旧版 Shot 时间范围格式", "Shot 2 缺少官方 At MM:SS.mmm"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing validation %q: %s", want, joined)
+		}
+	}
+	good := "subject_definitions:\nx\n\nsummary:\nx\n\nretention_analysis:\nx\n\ndetailed_description:\n[Shot 1] A.\n[Shot 2] At 00:05.000, B.\n\noverall_soundscape:\nx\n\nnon_diegetic_music:\nN/A"
+	if issues := validateGeneratedH3Prompt(good, "minimax_h3_ref2v", 10); len(issues) != 0 {
+		t.Fatalf("valid generated prompt rejected: %v", issues)
+	}
+}
+
+func TestH3EnglishStyleRemovesChineseStyleLabel(t *testing.T) {
+	if got := h3EnglishStyle("真人写实"); got != "live-action realistic" {
+		t.Fatalf("style=%q", got)
+	}
+	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] The woman looks toward the doorway.", Duration: 5}, &models.Project{Style: "真人写实"}, nil, nil)
+	if strings.Contains(prompt, "真人写实") || !strings.Contains(prompt, "live-action realistic visual style") {
+		t.Fatalf("style not normalized: %s", prompt)
+	}
+}
+
 func TestH3KeyframePromptContractsAndDialoguePlacement(t *testing.T) {
 	sc := &models.Scene{VideoPrompt: "[Shot 1] 林夏抬头看向门口。", Duration: 8}
 	dubs := []models.Dialogue{{Character: "林夏", Text: "你来了。"}}
@@ -1941,9 +1965,10 @@ func TestH3NarrationAndCameraConflictValidation(t *testing.T) {
 }
 
 func TestNormalizeSavedH3AudioCoalescesDuplicateShotOneBeforeDialogue(t *testing.T) {
-	prompt := "subject_definitions:\nsubject\n\nsummary:\nsummary\n\nretention_analysis:\nretention\n\ndetailed_description:\n[Shot 1] The target video uses a live-action visual style. <Subject 1> (S1) says: <d>[Chinese] 你要代替姐姐去太运宗，其实太运宗倒是个不错的地方，</d>.\n[Shot 1] Starting from a close-up, <Subject 1> grips her sister's shoulder, then releases her hand as the camera slowly dollies backward. <Subject 1> (S1) says: <d>[Chinese] 你要代替姐姐去太运宗，其实太运宗倒是个不错的地方，</d>.\n\noverall_soundscape:\nold\n\nnon_diegetic_music:\nN/A"
+	prompt := "subject_definitions:\nsubject\n\nsummary:\nsummary\n\nretention_analysis:\nretention\n\ndetailed_description:\nThe target video uses a live-action visual style.\n[Shot 1] <Subject 1> (S1) says: <d>[Chinese] 你要代替姐姐去太运宗，其实太运宗倒是个不错的地方，</d>.\n[Shot 1] Starting from a close-up, <Subject 1> grips her sister's shoulder, then releases her hand as the camera slowly dollies backward. <Subject 1> (S1) says: <d>[Chinese] 你要代替姐姐去太运宗，其实太运宗倒是个不错的地方，</d>.\n[Shot 2] At 00:05.000, Side close-up of her sister listening silently as the camera gently pans and pushes in. <Subject 1> (S1)'s same line continues seamlessly across the cut; every visible non-speaking character keeps their lips completely closed.\n\noverall_soundscape:\nold\n\nnon_diegetic_music:\nN/A"
 	dubs := []models.Dialogue{{Character: "上官若琳", Text: "你要代替姐姐去太运宗，其实太运宗倒是个不错的地方，"}}
-	got := normalizeSavedH3Audio(prompt, dubs, []string{"<Subject 1> 是 <Picture 1> 中的角色「上官若琳」四视图。"}, []models.Shot{{Order: 1, Duration: 8, Dialogue: dubs[0].Text}})
+	shots := []models.Shot{{Order: 1, Duration: 5, Dialogue: dubs[0].Text}, {Order: 2, Duration: 6}}
+	got := normalizeSavedH3Audio(prompt, dubs, []string{"<Subject 1> 是 <Picture 1> 中的角色「上官若琳」四视图。"}, shots)
 	if strings.Count(h3PromptSection(got, "detailed_description:"), "[Shot 1]") != 1 {
 		t.Fatalf("duplicate Shot 1 retained: %s", got)
 	}

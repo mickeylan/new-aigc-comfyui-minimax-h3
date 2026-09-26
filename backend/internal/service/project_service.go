@@ -1796,7 +1796,10 @@ func visualiseSpeechPerformanceNarration(text string, hasDialogue bool) string {
 	return strings.TrimSpace(strings.Trim(text, "；， "))
 }
 
-var h3ShotMarkerPattern = regexp.MustCompile(`\[Shot\s+([0-9]+)(?:\s*\|[^\]]*)?\](?:\s+At\s+[0-9]{2}:[0-9]{2}\.[0-9]{3},)?`)
+var (
+	h3ShotMarkerPattern = regexp.MustCompile(`\[Shot\s+([0-9]+)(?:\s*\|[^\]]*)?\](?:\s+At\s+[0-9]{2}:[0-9]{2}\.[0-9]{3},)?`)
+	h3ShotOnePattern    = regexp.MustCompile(`\[Shot\s+1(?:\s*\||\])`)
+)
 
 var abstractShotClausePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`[^，。；]*(?:虽在|虽然)[^，。；]*[，,](?:但|然而)[^，。；]*`),
@@ -2348,7 +2351,7 @@ func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines
 		detail = ensureStructuredShotMarkers(detail, shotSets[0])
 		detail = stripStructuredDialogueFromAction(detail, dubs)
 	}
-	if !strings.HasPrefix(detail, "[Shot 1") {
+	if !h3ShotOnePattern.MatchString(detail) {
 		detail = "[Shot 1] " + detail
 	}
 	if len(shotSets) > 0 {
@@ -2439,6 +2442,29 @@ func englishH3ReferenceDescription(desc string, n int) string {
 	}
 }
 
+func h3EnglishStyle(style string) string {
+	style = strings.TrimSpace(style)
+	if style == "" {
+		return ""
+	}
+	replacements := []struct{ old, new string }{
+		{"真人写实", "live-action realistic"}, {"真人", "live-action"}, {"写实", "realistic"},
+		{"古风仙侠", "live-action xianxia"}, {"仙侠", "xianxia"}, {"修仙", "xianxia cultivation"},
+		{"国风", "Chinese-inspired"}, {"电影感", "cinematic"}, {"二维动画", "2D animation"},
+		{"2D动画", "2D animation"}, {"三维动画", "3D animation"}, {"3D国漫", "Chinese 3D animation"},
+		{"水彩", "watercolor"}, {"黏土", "claymation"}, {"复古胶片", "vintage film"},
+	}
+	for _, replacement := range replacements {
+		style = strings.ReplaceAll(style, replacement.old, replacement.new)
+	}
+	for _, r := range style {
+		if r >= '\u4e00' && r <= '\u9fff' {
+			return "cinematic visual style"
+		}
+	}
+	return strings.Join(strings.Fields(style), " ")
+}
+
 func h3VideoSubjects(referenceLines []string) (definitions, retention, subjectRefs []string) {
 	_, _, subjectRefs = h3StoryboardSubjects(referenceLines)
 	for i, line := range referenceLines {
@@ -2467,8 +2493,8 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 	if p != nil {
 		style = strings.TrimSpace(p.Style)
 	}
-	if style != "" {
-		body = strings.Replace(body, "[Shot 1]", "The target video uses the "+style+" visual style.\n[Shot 1]", 1)
+	if style = h3EnglishStyle(style); style != "" {
+		body = strings.Replace(body, "[Shot 1]", "The target video uses a "+style+" visual style.\n[Shot 1]", 1)
 	}
 	body = stripStructuredDialogueFromAction(body, dubs)
 	for _, line := range referenceLines {
@@ -2575,6 +2601,54 @@ func buildMiniMaxH3Prompt(sc *models.Scene, p *models.Project, dubs []models.Dia
 
 // ValidateVideoPrompt 检查用户编辑的 detailed_description 是否符合 H3 契约。
 // 返回问题列表，空列表表示通过校验。
+var officialH3LaterShotPattern = regexp.MustCompile(`\[Shot\s+([2-9][0-9]*)\]\s+At\s+([0-9]{2}):([0-9]{2})\.([0-9]{3}),`)
+
+func validateGeneratedH3Prompt(prompt, template string, duration float64) []string {
+	var issues []string
+	text := strings.TrimSpace(prompt)
+	if duplicate := duplicateH3ShotNumbers(text); len(duplicate) > 0 {
+		issues = append(issues, fmt.Sprintf("Shot %d 重复", duplicate[0]))
+	}
+	if strings.Contains(text, "[Shot 1 |") || regexp.MustCompile(`\[Shot\s+[0-9]+\s*\|`).MatchString(text) {
+		issues = append(issues, "仍使用旧版 Shot 时间范围格式")
+	}
+	if strings.Contains(text, "[Shot 1] At ") {
+		issues = append(issues, "Shot 1 不得带时间戳")
+	}
+	markers := h3ShotMarkerPattern.FindAllStringSubmatch(text, -1)
+	previous := -1.0
+	for _, marker := range markers {
+		if len(marker) != 2 {
+			continue
+		}
+		n, _ := strconv.Atoi(marker[1])
+		if n == 1 {
+			continue
+		}
+		match := officialH3LaterShotPattern.FindStringSubmatch(marker[0])
+		if len(match) != 5 {
+			issues = append(issues, fmt.Sprintf("Shot %d 缺少官方 At MM:SS.mmm 切入时间", n))
+			continue
+		}
+		minutes, _ := strconv.Atoi(match[2])
+		seconds, _ := strconv.Atoi(match[3])
+		millis, _ := strconv.Atoi(match[4])
+		at := float64(minutes*60+seconds) + float64(millis)/1000
+		if at <= previous || at >= duration {
+			issues = append(issues, fmt.Sprintf("Shot %d 切入时间必须严格递增且小于视频时长", n))
+		}
+		previous = at
+	}
+	if template == "minimax_h3_ref2v" || template == "minimax_h3_ref2v_single" {
+		for _, heading := range []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:"} {
+			if strings.Count(text, heading) != 1 {
+				issues = append(issues, heading+" 必须且只能出现一次")
+			}
+		}
+	}
+	return issues
+}
+
 func ValidateFullH3Prompt(prompt string) []string {
 	text := strings.TrimSpace(prompt)
 	if text == "" {

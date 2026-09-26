@@ -403,6 +403,10 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 	_ = s.DB.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error
 	fullPrompt = normalizeSavedH3Audio(fullPrompt, dubs, lines, shots)
 	fullPrompt = applyShotTimeline(fullPrompt, shots, normalizeSceneDuration(sc.Duration))
+	if issues := validateGeneratedH3Prompt(fullPrompt, template, normalizeSceneDuration(sc.Duration)); len(issues) > 0 {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "生成的视频提示词不符合 MiniMax H3 官方格式: " + strings.Join(issues, "；")})
+		return
+	}
 	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "template": template}
 	if continuity != nil && continuity.SelectedFrame != nil {
 		response["continuity_mode"] = continuity.Mode
