@@ -1445,7 +1445,7 @@ func TestBuildMiniMaxH3RefPromptUsesStoryboardAsOptionalLastReference(t *testing
 	lines := []string{"- <Picture 1>：角色「雷晓飞」四视图", "- <Picture 2>：场景「雷记面馆」参考图", "- <Picture 3>：当前分镜画面（可选构图与动作状态参考）"}
 	prompt := buildMiniMaxH3RefPrompt(sc, &models.Project{Style: "3D国漫"}, nil, lines)
 	for _, want := range []string{
-		"<Subject 1> is the character shown in the four-view reference from <Picture 1>",
+		"<Subject 1> is the character named 「雷晓飞」 shown in the four-view reference from <Picture 1>",
 		"<Subject 3> is the storyboard composition and action-state reference from <Picture 3>",
 		"[reference generation] Generate a 9-second video from the defined references and shot timeline",
 		"<Subject 1>抬起手指",
@@ -1600,8 +1600,8 @@ func TestCharacterNamesMapToActualReferenceSubjects(t *testing.T) {
 	dubs := []models.Dialogue{{Character: "舒寒", Text: "这不是太想你了吗。"}, {Character: "上官若琳", Text: "今晚有得是时间。"}}
 	prompt := buildMiniMaxH3RefPrompt(sc, nil, dubs, lines)
 	for _, want := range []string{
-		"<Subject 1> is the character shown in the four-view reference from <Picture 1>",
-		"<Subject 2> is the character shown in the four-view reference from <Picture 2>",
+		"<Subject 1> is the character named 「舒寒」 shown in the four-view reference from <Picture 1>",
+		"<Subject 2> is the character named 「上官若琳」 shown in the four-view reference from <Picture 2>",
 		"<Subject 4> is the storyboard composition and action-state reference from <Picture 4>",
 		"<Subject 1> embraces <Subject 2>",
 		"<Subject 1> (S1) says: <d>[Chinese] 这不是太想你了吗。</d>",
@@ -2233,7 +2233,7 @@ func TestCrossShotDialogueFragmentsKeepSpeakerIdentityAndListenerSilent(t *testi
 	split := 11
 	shots := []models.Shot{{Order: 1, PromptSubject: "上官若琳正面中近景", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: 0, EndRune: split}}}, {Order: 2, PromptSubject: "上官若彤侧面近景", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: split, EndRune: len(full)}}}}
 	got := appendStructuredDialogueToShots(body, dubs, []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图"}, shots)
-	for _, want := range []string{"<Subject 1> (S1) says: <d>[Chinese] " + string(full[:split]) + "</d> <scenetrans>", "<Subject 1> (S1)'s words carry over from the previous shot <scenetrans> " + string(full[split:]) + "</d>."} {
+	for _, want := range []string{"<Subject 1> (S1) says: <d>[Chinese] " + string(full[:split]) + "</d> <scenetrans>", "<Subject 1> (S1)'s words carry over from the previous shot <scenetrans> " + string(full[split:]) + "</d>.", "<Subject 2> keeps their lips completely closed while listening."} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q:\n%s", want, got)
 		}

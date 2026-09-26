@@ -2358,6 +2358,17 @@ func renderDialogueRange(d models.Dialogue, speakerID int, referenceLines []stri
 	// block before <scenetrans>, and the next shot carries the same Sx voice forward.
 	if continuesFrom {
 		clause := speaker + "'s words carry over from the previous shot <scenetrans> " + fragment + "</d>."
+		listeners := []string{}
+		for _, subject := range visibleSubjects {
+			if subject != speakerTag && isCharacterSubjectTag(subject, referenceLines) {
+				listeners = append(listeners, subject)
+			}
+		}
+		if len(listeners) == 1 {
+			clause += " " + listeners[0] + " keeps their lips completely closed while listening."
+		} else if len(listeners) > 1 {
+			clause += " " + strings.Join(listeners, " and ") + " keep their lips completely closed while listening."
+		}
 		if continuesTo {
 			clause = strings.TrimSuffix(clause, ".") + " <scenetrans>"
 		}
@@ -2868,13 +2879,13 @@ func englishH3ReferenceDescription(desc string, n int) string {
 	case strings.Contains(desc, "当前分镜画面"):
 		return "the storyboard composition and action-state reference"
 	case strings.Contains(desc, "角色") && name != "":
-		return "the character shown in the four-view reference"
+		return fmt.Sprintf("the character named 「%s」 shown in the four-view reference", name)
 	case strings.Contains(desc, "造型") && name != "":
-		return "the approved character look"
+		return fmt.Sprintf("the approved character look named 「%s」", name)
 	case strings.Contains(desc, "场景") && name != "":
-		return "the referenced environment"
+		return fmt.Sprintf("the referenced environment named 「%s」", name)
 	case strings.Contains(desc, "道具") && name != "":
-		return "the referenced prop"
+		return fmt.Sprintf("the referenced prop named 「%s」", name)
 	case desc != "":
 		return fmt.Sprintf("reference asset %d (%s)", n, desc)
 	default:
@@ -2992,6 +3003,7 @@ func compactFinalH3VisualBody(body string) string {
 		body = strings.ReplaceAll(body, pair[0], pair[1])
 	}
 	body = regexp.MustCompile(`(?i)\bat\s+MM:SS\.mmm\b`).ReplaceAllString(body, "")
+	body = regexp.MustCompile(`(\[Shot\s+[0-9]+\]\s+At\s+[0-9]{2}:[0-9]{2}\.[0-9]{3},)\s*0\s*,`).ReplaceAllString(body, "$1")
 	body = regexp.MustCompile(`(?i)\b(?:she|he|they)\s+says\s+hand\s+releasing\b`).ReplaceAllString(body, "her hand releases")
 	body = regexp.MustCompile(`(?i)\b(?:dialogue|voice)\s+continues?\s+off-screen\s+with\s*[;,.]?`).ReplaceAllString(body, "")
 	body = regexp.MustCompile(`(?i)\bshot\s+(?:dissolves?|fades?|wipes?)[^.]*\.`).ReplaceAllString(body, "")
