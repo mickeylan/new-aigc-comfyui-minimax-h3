@@ -466,8 +466,16 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 	fullPrompt = normalizeSavedH3Audio(fullPrompt, dubs, lines, shots)
 	fullPrompt = applyShotTimeline(fullPrompt, shots, normalizeSceneDuration(sc.Duration))
 	if issues := validateGeneratedH3Prompt(fullPrompt, template, normalizeSceneDuration(sc.Duration)); len(issues) > 0 {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "生成的视频提示词不符合 MiniMax H3 官方格式: " + strings.Join(issues, "；")})
-		return
+		fallbackAction := useSubjectTags(rebuildStructuredShotAction(shots), lines)
+		preview.VideoPrompt = fallbackAction
+		fullPrompt = compileH3PromptForTemplate(template, &preview, &project, dubs, lines)
+		fullPrompt = normalizeSavedH3Audio(fullPrompt, dubs, lines, shots)
+		fullPrompt = applyShotTimeline(fullPrompt, shots, normalizeSceneDuration(sc.Duration))
+		if fallbackIssues := validateGeneratedH3Prompt(fullPrompt, template, normalizeSceneDuration(sc.Duration)); len(fallbackIssues) > 0 {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "结构化Shot无法编译为有效MiniMax H3提示词: " + strings.Join(fallbackIssues, "；")})
+			return
+		}
+		actionPrompt = fallbackAction
 	}
 	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "reference_bindings": sceneVideoReferenceBindings(refs, lines, fullPrompt), "template": template}
 	if continuity != nil && continuity.SelectedFrame != nil {

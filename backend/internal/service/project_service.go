@@ -1259,27 +1259,58 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		return "", fmt.Errorf("AI 生成视频动作提示词失败: %w", err)
 	}
 	out = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(out), "```"), "```"))
-	if strings.Contains(out, "<Subject ") {
-		return "", fmt.Errorf("AI 错误地自行填写了 Subject 编号，请重试；人物必须先使用真实角色名")
+	var shots []models.Shot
+	if err := s.db.Where("scene_id=?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
+		return "", err
 	}
-	out = stripPromptDialogueNarration(out)
-	if duplicate := duplicateH3ShotNumbers(out); len(duplicate) > 0 {
-		return "", fmt.Errorf("AI 返回的视频动作提示词重复生成 Shot %d，请重试", duplicate[0])
+	fallback := func() string {
+		if len(shots) > 0 {
+			return rebuildStructuredShotAction(shots)
+		}
+		return defaultSceneVideoAction(sc)
 	}
+	untrusted := strings.Contains(out, "<Subject ")
+	out = normalizeVideoActionPrompt(out)
+	out = coalesceDuplicateH3Shots(stripPromptDialogueNarration(out))
 	if h3VisualProseIsEnglish(out, sc.Characters) {
-		return "", fmt.Errorf("AI 返回的视频故事画面正文必须使用中文，角色名必须使用中文原名，请重试")
+		untrusted = true
+	}
+	if len(shots) > 0 {
+		markers := h3ShotMarkerPattern.FindAllStringSubmatch(out, -1)
+		seen := map[int]bool{}
+		for _, marker := range markers {
+			if len(marker) != 2 {
+				untrusted = true
+				continue
+			}
+			n, _ := strconv.Atoi(marker[1])
+			if n < 1 || n > len(shots) || seen[n] {
+				untrusted = true
+			}
+			seen[n] = true
+		}
+		if len(seen) != len(shots) {
+			untrusted = true
+		}
+	}
+	if untrusted {
+		out = fallback()
 	}
 	out = useSubjectTags(out, refLines)
 	for _, name := range parseSceneCharacters(sc.Characters) {
 		if strings.Contains(out, name) {
-			return "", fmt.Errorf("角色名%s未能绑定到实际Subject，请检查参考图选择", name)
+			return "", fmt.Errorf("角色名%s没有对应的已选人物参考图，无法绑定到Subject", name)
 		}
 	}
 	if !strings.HasPrefix(out, "[Shot 1]") {
 		out = "[Shot 1] " + out
 	}
+	out = applyShotTimeline(out, shots, normalizeSceneDuration(sc.Duration))
 	if issues := ValidateVideoPrompt(out, sc.Characters, sc.LocationName, sc.Props); len(issues) > 0 {
-		return "", fmt.Errorf("AI 返回的视频动作提示词不合格: %s", strings.Join(issues, "；"))
+		out = useSubjectTags(applyShotTimeline(fallback(), shots, normalizeSceneDuration(sc.Duration)), refLines)
+		if retryIssues := ValidateVideoPrompt(out, sc.Characters, sc.LocationName, sc.Props); len(retryIssues) > 0 {
+			return "", fmt.Errorf("结构化Shot无法生成有效视频动作提示词: %s", strings.Join(retryIssues, "；"))
+		}
 	}
 	return out, nil
 }
@@ -1998,8 +2029,17 @@ func ensureStructuredShotMarkers(prompt string, shots []models.Shot) string {
 	return prompt
 }
 
+var h3TimelineMarkerPattern = regexp.MustCompile(`\[Shot\s+([1-9][0-9]*)(?:\s*\|[^\]]*)?\](?:\s+At\s+[0-9]{2}:[0-9]{2}\.[0-9]{3},)?`)
+
 func applyShotTimeline(prompt string, shots []models.Shot, totalDuration float64) string {
 	if len(shots) == 0 || strings.TrimSpace(prompt) == "" {
+		return prompt
+	}
+	if detail := h3PromptSection(prompt, "detailed_description:"); detail != "" {
+		timed := applyShotTimeline(detail, shots, totalDuration)
+		if timed != detail {
+			return strings.Replace(prompt, detail, timed, 1)
+		}
 		return prompt
 	}
 	if totalDuration <= 0 {
@@ -2020,8 +2060,8 @@ func applyShotTimeline(prompt string, shots []models.Shot, totalDuration float64
 		}
 		starts[i+1], cursor = start, end
 	}
-	return h3ShotMarkerPattern.ReplaceAllStringFunc(prompt, func(marker string) string {
-		match := h3ShotMarkerPattern.FindStringSubmatch(marker)
+	return h3TimelineMarkerPattern.ReplaceAllStringFunc(prompt, func(marker string) string {
+		match := h3TimelineMarkerPattern.FindStringSubmatch(marker)
 		if len(match) != 2 {
 			return marker
 		}
@@ -2906,18 +2946,28 @@ func isH3VideoPromptTemplate(template string) bool {
 func validateGeneratedH3Prompt(prompt, template string, duration float64) []string {
 	var issues []string
 	text := strings.TrimSpace(prompt)
-	if duplicate := duplicateH3ShotNumbers(text); len(duplicate) > 0 {
+	detail := h3PromptSection(text, "detailed_description:")
+	if detail == "" {
+		detail = h3IntegratedDescription(text)
+	}
+	if duplicate := duplicateH3ShotNumbers(detail); len(duplicate) > 0 {
 		issues = append(issues, fmt.Sprintf("Shot %d 重复", duplicate[0]))
 	}
-	if strings.Contains(text, "[Shot 1 |") || regexp.MustCompile(`\[Shot\s+[0-9]+\s*\|`).MatchString(text) {
+	if strings.Contains(detail, "[Shot 1 |") || regexp.MustCompile(`\[Shot\s+[0-9]+\s*\|`).MatchString(detail) {
 		issues = append(issues, "仍使用旧版 Shot 时间范围格式")
 	}
-	if strings.Contains(text, "[Shot 1] At ") {
+	if strings.Contains(detail, "[Shot 1] At ") {
 		issues = append(issues, "Shot 1 不得带时间戳")
 	}
-	markers := h3ShotMarkerPattern.FindAllStringSubmatch(text, -1)
-	previous := -1.0
-	for _, marker := range markers {
+	official := map[int][]string{}
+	for _, match := range officialH3LaterShotPattern.FindAllStringSubmatch(detail, -1) {
+		if len(match) == 5 {
+			n, _ := strconv.Atoi(match[1])
+			official[n] = match
+		}
+	}
+	previous := 0.0
+	for _, marker := range h3ShotMarkerPattern.FindAllStringSubmatch(detail, -1) {
 		if len(marker) != 2 {
 			continue
 		}
@@ -2925,7 +2975,7 @@ func validateGeneratedH3Prompt(prompt, template string, duration float64) []stri
 		if n == 1 {
 			continue
 		}
-		match := officialH3LaterShotPattern.FindStringSubmatch(marker[0])
+		match := official[n]
 		if len(match) != 5 {
 			issues = append(issues, fmt.Sprintf("Shot %d 缺少官方 At MM:SS.mmm 切入时间", n))
 			continue
@@ -2938,10 +2988,6 @@ func validateGeneratedH3Prompt(prompt, template string, duration float64) []stri
 			issues = append(issues, fmt.Sprintf("Shot %d 切入时间必须严格递增且小于视频时长", n))
 		}
 		previous = at
-	}
-	detail := h3PromptSection(text, "detailed_description:")
-	if detail == "" {
-		detail = h3IntegratedDescription(text)
 	}
 	visualOnly := stripPromptDialogueNarration(h3DialogueTagPattern.ReplaceAllString(detail, ""))
 	if detail != "" && h3VisualProseIsEnglish(visualOnly, "") {

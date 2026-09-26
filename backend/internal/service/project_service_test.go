@@ -1501,6 +1501,36 @@ func TestGenerateSceneVideoActionDoesNotRecycleOldVisualDescription(t *testing.T
 	}
 }
 
+func TestGenerateSceneVideoActionFallsBackToStructuredShotsForMalformedAI(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}); err != nil {
+		t.Fatal(err)
+	}
+	ps.textProvider = &captureTextProvider{response: "[Shot 1 | 0.00-5.00秒] Shangguan Ruolin stands close. [Shot 1] duplicate. [Shot 2] At 99:00.000, Shangguan Ruotong listens."}
+	p := models.Project{Title: "p"}
+	ps.db.Create(&p)
+	ps.db.Create(&models.Character{ProjectID: p.ID, Name: "上官若琳", Sheet: "a.png"})
+	ps.db.Create(&models.Character{ProjectID: p.ID, Name: "上官若彤", Sheet: "b.png"})
+	sc := models.Scene{ProjectID: p.ID, Characters: "上官若琳, 上官若彤", Content: "姐妹交谈", Duration: 11, ImageFile: "story.png"}
+	ps.db.Create(&sc)
+	ps.db.Create(&models.Shot{SceneID: sc.ID, Order: 1, ActType: models.ShotActSetup, ShotType: "近景", Duration: 5, PromptSubject: "上官若琳正面近景", PromptAction: "目光由坚定转为温柔", PromptCamera: "镜头缓慢后拉", PromptLighting: "柔和正面光", PromptStyle: "真人写实"})
+	ps.db.Create(&models.Shot{SceneID: sc.ID, Order: 2, ActType: models.ShotActRising, ShotType: "侧面近景", Duration: 6, PromptSubject: "上官若彤侧身倾听", PromptAction: "泪光逐渐平复", PromptCamera: "镜头轻微推进", PromptLighting: "柔和侧光", PromptStyle: "真人写实"})
+	got, err := ps.GenerateSceneVideoAction(&sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"[Shot 1]", "[Shot 2] At 00:05.000,", "<Subject 1>正面近景", "<Subject 2>侧身倾听"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("fallback missing %q: %s", want, got)
+		}
+	}
+	for _, bad := range []string{"Shangguan", "[Shot 1 |", "99:00.000"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("untrusted model structure retained %q: %s", bad, got)
+		}
+	}
+}
+
 func TestBuildMiniMaxH3RefPromptUsesSubjectTagWithoutForcingStoryboardStart(t *testing.T) {
 	lines := []string{"- <Picture 1>：角色「雷晓飞」四视图", "- <Picture 2>：场景「雷记面馆」参考图", "- <Picture 3>：当前分镜画面（可选构图与动作状态参考）"}
 	sc := &models.Scene{VideoPrompt: "[Shot 1] 雷晓飞侧身坐在桌旁，雷晓飞抬起右手。", Duration: 9}
@@ -1905,6 +1935,17 @@ func TestH3KeyframePromptValidationDoesNotForceGeneratedFormat(t *testing.T) {
 	}
 	if issues := validateH3KeyframePrompt("  ", "minimax_h3_first_last"); len(issues) != 1 || issues[0] != "视频提示词不能为空" {
 		t.Fatalf("empty prompt validation=%v", issues)
+	}
+}
+
+func TestApplyShotTimelineDoesNotRewriteRetentionShotReferences(t *testing.T) {
+	prompt := "retention_analysis:\n<Subject 1> (appears in [Shot 2]): fully_preserved.\n\ndetailed_description:\n[Shot 1] 开始。\n[Shot 2] At 00:09.000, 继续。\n\noverall_soundscape:\nx"
+	got := applyShotTimeline(prompt, []models.Shot{{Duration: 5}, {Duration: 6}}, 11)
+	if !strings.Contains(got, "appears in [Shot 2]") || strings.Contains(got, "appears in [Shot 2] At") {
+		t.Fatalf("retention was mutated: %s", got)
+	}
+	if !strings.Contains(got, "[Shot 2] At 00:05.000,") {
+		t.Fatalf("detail timeline not corrected: %s", got)
 	}
 }
 
