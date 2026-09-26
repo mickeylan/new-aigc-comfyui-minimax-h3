@@ -1447,7 +1447,7 @@ func TestBuildMiniMaxH3RefPromptUsesStoryboardAsOptionalLastReference(t *testing
 	for _, want := range []string{
 		"<Subject 1> 是 <Picture 1> 中的角色「雷晓飞」四视图",
 		"<Subject 3> 是 <Picture 3> 中的当前分镜画面（可选构图与动作状态参考）",
-		"[reference generation] <Subject 1>、<Subject 2>、<Subject 3>提供人物、场景及可选分镜状态参考",
+		"[reference generation] 按参考绑定和Shot时间线生成9秒视频",
 		"<Subject 1>抬起手指",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -1456,6 +1456,25 @@ func TestBuildMiniMaxH3RefPromptUsesStoryboardAsOptionalLastReference(t *testing
 	}
 	if strings.Contains(prompt, "动作必须表现为") || strings.Contains(prompt, "摄影机运动必须写明") {
 		t.Fatalf("system instructions leaked into final prompt: %s", prompt)
+	}
+}
+
+func TestClassifyH3SceneModeAndInstructions(t *testing.T) {
+	drama := &models.Scene{Content: "姐姐看着妹妹，停顿后继续解释。"}
+	if got := classifyH3SceneMode(drama, nil, []models.Dialogue{{Character: "姐姐", Text: "相信我。"}}); got != h3SceneDrama {
+		t.Fatalf("drama mode=%s", got)
+	}
+	action := &models.Scene{Content: "两人拔剑交锋，姐姐格挡后反击。"}
+	if got := classifyH3SceneMode(action, nil, nil); got != h3SceneAction {
+		t.Fatalf("action mode=%s", got)
+	}
+	if got := classifyH3SceneMode(action, nil, []models.Dialogue{{Character: "姐姐", Text: "退后。"}}); got != h3SceneMixed {
+		t.Fatalf("mixed mode=%s", got)
+	}
+	for mode, want := range map[h3SceneMode]string{h3SceneDrama: "视线、停顿、距离变化", h3SceneAction: "运动方向、攻防对象", h3SceneMixed: "对白与反应"} {
+		if !strings.Contains(h3SceneModeInstruction(mode), want) {
+			t.Fatalf("%s instruction missing %q", mode, want)
+		}
 	}
 }
 
@@ -1611,7 +1630,7 @@ func TestEmptySpeakerPlotTextIsNeverConvertedToNarration(t *testing.T) {
 			t.Fatalf("empty-speaker plot text became narration as %q: %s", forbidden, prompt)
 		}
 	}
-	for _, want := range []string{"禁止对白", "人声", "旁白", "所有可见人物始终闭口"} {
+	for _, want := range []string{"禁止对白", "人声", "旁白", "人物闭口"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("silent contract missing %q: %s", want, prompt)
 		}
@@ -1765,7 +1784,7 @@ func TestActionDescriptionIsNeverConvertedToDialogue(t *testing.T) {
 			t.Fatalf("action direction leaked into spoken dialogue as %q: %s", forbidden, prompt)
 		}
 	}
-	for _, want := range []string{"禁止对白", "人声", "旁白", "所有可见人物始终闭口"} {
+	for _, want := range []string{"禁止对白", "人声", "旁白", "人物闭口"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("silent contract missing %q: %s", want, prompt)
 		}
@@ -1786,7 +1805,7 @@ func TestSceneWithoutStructuredDialogueForbidsVoice(t *testing.T) {
 	if strings.Contains(prompt, "<d>") {
 		t.Fatalf("dialogue tag appeared without structured dialogue: %s", prompt)
 	}
-	for _, want := range []string{"禁止对白", "人声", "旁白", "含混发声", "所有可见人物始终闭口"} {
+	for _, want := range []string{"禁止对白", "人声", "旁白", "人物闭口"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("no-dialogue constraint missing %q: %s", want, prompt)
 		}
@@ -1796,7 +1815,7 @@ func TestSceneWithoutStructuredDialogueForbidsVoice(t *testing.T) {
 func TestStructuredDialogueIsAlwaysIncluded(t *testing.T) {
 	lines := []string{"- <Picture 1>：当前分镜画面"}
 	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] 人物抬头。", Duration: 8}, nil, []models.Dialogue{{Character: "林夏", Text: "你来了"}}, lines)
-	for _, want := range []string{"林夏 (S1)说：<d>[Chinese] 你来了</d>", "不出现其他人声", "旁白", "含混发声", "对白仅在画面时间线中出现"} {
+	for _, want := range []string{"林夏 (S1)说：<d>[Chinese] 你来了</d>", "禁止其他人声", "旁白", "对白只取Shot内原文"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("structured dialogue missing %q: %s", want, prompt)
 		}
@@ -1828,6 +1847,15 @@ func TestNormalizeSavedH3AudioPreservesUserEditedVisualPrompt(t *testing.T) {
 	}
 	if strings.Contains(got, "不要保留") || strings.Contains(h3PromptSection(got, "overall_soundscape:"), "<d>") {
 		t.Fatalf("stale dialogue/audio leaked: %s", got)
+	}
+}
+
+func TestNormalizeSavedH3AudioNeverCompactsDialogueText(t *testing.T) {
+	line := "她身着红金宫装，神情从悲伤转向信任与期待。"
+	prompt := "subject_definitions:\nsubject\n\nsummary:\nsummary\n\nretention_analysis:\nretention\n\ndetailed_description:\n[Shot 1] 人物停下。\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"
+	got := normalizeSavedH3Audio(prompt, []models.Dialogue{{Character: "林夏", Text: line}}, nil)
+	if !strings.Contains(got, "<d>[Chinese] "+line+"</d>") {
+		t.Fatalf("authoritative dialogue compacted: %s", got)
 	}
 }
 
@@ -2228,6 +2256,22 @@ func TestResolveH3VisualConflictsRemovesDuplicateFramingAndProtectsOffscreenSpea
 	for _, bad := range []string{"眉心与目光的紧张感增强", "从特写回到中近景", "画外的唇部自然开合"} {
 		if strings.Contains(got, bad) {
 			t.Fatalf("retained %q: %s", bad, got)
+		}
+	}
+}
+
+func TestCompactFinalH3PromptRemovesReportedFiller(t *testing.T) {
+	body := `[Shot 1 | 0.00-5.00秒] <Subject 1>身着红金宫装，手从<Subject 2>肩膀缓缓垂落，神情从坚决转为温柔，平缓地唇部自然开合。正面机位缓慢后拉，柔和正面光勾勒柔和面部线条。dissolve。
+[Shot 2 | 5.00-11.00秒] <Subject 2>侧身面向<Subject 1>，眼眶微红，泪光渐消，神情从悲伤转向信任与期待，静静倾听。侧面机位微微推进。侧光勾勒柔和轮廓。`
+	got := compactFinalH3VisualBody(body)
+	for _, want := range []string{"手从<Subject 2>肩膀缓缓垂落", "神情从坚决转为温柔", "正面机位缓慢后拉", "眼眶微红，泪光渐消", "静静倾听", "侧面机位微微推进"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("visible detail lost %q: %s", want, got)
+		}
+	}
+	for _, bad := range []string{"身着红金宫装", "唇部自然开合", "信任与期待", "柔和面部线条", "勾勒柔和轮廓", "dissolve"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("filler retained %q: %s", bad, got)
 		}
 	}
 }

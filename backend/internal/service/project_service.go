@@ -1219,6 +1219,49 @@ func h3VisualProseIsEnglish(text, characterNames string) bool {
 	return latin >= 20 && latin > han*2
 }
 
+type h3SceneMode string
+
+const (
+	h3SceneDrama  h3SceneMode = "文戏"
+	h3SceneAction h3SceneMode = "武戏"
+	h3SceneMixed  h3SceneMode = "文武混合"
+)
+
+var h3ActionCuePattern = regexp.MustCompile(`攻击|格挡|闪避|挥剑|拔剑|刺向|劈向|斩|拳|踢|撞击|追逐|冲锋|交锋|搏斗|战斗|爆炸|开火|射击|扑向|抓住|挣脱|摔倒|击退|击中|防守|反击`)
+
+func classifyH3SceneMode(sc *models.Scene, shots []models.Shot, dubs []models.Dialogue) h3SceneMode {
+	var b strings.Builder
+	b.WriteString(sc.Content)
+	b.WriteString(" ")
+	b.WriteString(sc.VideoPrompt)
+	for _, shot := range shots {
+		for _, value := range []string{shot.ShotType, shot.Description, shot.PromptSubject, shot.PromptAction, shot.CameraMovement} {
+			b.WriteString(" ")
+			b.WriteString(value)
+		}
+	}
+	hasAction := h3ActionCuePattern.MatchString(b.String())
+	hasDialogue := len(validSceneDialogues(dubs)) > 0
+	if hasAction && hasDialogue {
+		return h3SceneMixed
+	}
+	if hasAction {
+		return h3SceneAction
+	}
+	return h3SceneDrama
+}
+
+func h3SceneModeInstruction(mode h3SceneMode) string {
+	switch mode {
+	case h3SceneAction:
+		return "本镜为武戏：优先写清行动意图、运动方向、攻防对象、接触或落空、受力位移与下一动作机会；保持同一空间轴线和道具归属。每个Shot只保留一条可执行动作链和一个主要运镜，禁止用抽象情绪替代动作因果。"
+	case h3SceneMixed:
+		return "本镜为文武混合：对白与反应只保留推动当前行动的信息；动作部分写清方向、接触和结果，文戏部分写清说话人、接收者、站位与必要反应。不得让对白说明动作，不得让动作吞掉原文对白。"
+	default:
+		return "本镜为文戏：优先保留说话人/听者站位、视线、停顿、距离变化、手上正在做的事和必要反应；镜头以稳定构图或一次轻微运动为主。每个Shot最多保留一个表情变化，禁止堆叠微表情、气氛、关系解释和文学暗示。"
+	}
+}
+
 // GenerateSceneVideoAction 用文本模型生成用户可审核编辑的 Ref2VA detailed_description 正文。
 func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, error) {
 	if s.textProvider == nil {
@@ -1228,6 +1271,11 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	openingPicture := openingPictureTag(refLines)
 	shotContext := s.sceneShotContext(sc)
 	dubs := s.sceneVideoDialogues(sc)
+	var shots []models.Shot
+	if err := s.db.Where("scene_id=?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
+		return "", err
+	}
+	sceneMode := classifyH3SceneMode(sc, shots, dubs)
 	dialogueContext := "无结构化对白；禁止生成说话、旁白或人声"
 	if valid := validSceneDialogues(dubs); len(valid) > 0 {
 		lines := make([]string, 0, len(valid))
@@ -1248,7 +1296,8 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 第一句以 [Shot 1] 开头，说明画面可从%s参考状态开始；随后直接写动作与镜头。不得新增角色、动作、对白、道具、地点或剧情。
 Dialogue只决定人物是否开口及必要口型时机；对白文本将由系统确定性加入，你不得在正文输出台词、<d>标签或改写台词。无结构化对白时，人物保持闭口，不得描写嘴唇微张、欲言又止或任何说话暗示。
 正文中的人物必须逐字使用【场景剧情】和【Shot导演设计】里的中文真实角色名；严禁拼音、英文音译、别名，也禁止自行填写或猜测任何<Subject N>编号。系统会依据实际上传顺序，把中文真实角色名确定性转换为正确Subject编号。
-四视图只负责人物身份与服装，场景图只负责环境；不得从参考图反推剧情，不得复述或猜测外貌、服装、陈设。`, openingPicture)
+四视图只负责人物身份与服装，场景图只负责环境；不得从参考图反推剧情，不得复述或猜测外貌、服装、陈设。
+场景类型规则：%s`, openingPicture, h3SceneModeInstruction(sceneMode))
 	user := fmt.Sprintf("目标时长：%.1f秒。只提取执行本镜所必需的信息，不要把以下资料逐段复述进输出。\n\n【场景剧情（仅作事实边界）】\n%s\n\n【Shot导演设计（动作与镜头权威）】\n%s\n\n【结构化对白（仅判断口型时机）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s", normalizeSceneDuration(sc.Duration), sc.Content, shotContext, dialogueContext, strings.Join(refLines, "\n"))
 	policy, err := NewPromptPolicyService(s.db).Resolve(PromptPolicyContext{ProjectID: sc.ProjectID, SceneID: &sc.ID}, PromptPolicyVideoPolish, system)
 	if err != nil {
@@ -1259,10 +1308,6 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		return "", fmt.Errorf("AI 生成视频动作提示词失败: %w", err)
 	}
 	out = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(out), "```"), "```"))
-	var shots []models.Shot
-	if err := s.db.Where("scene_id=?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
-		return "", err
-	}
 	fallback := func() string {
 		if len(shots) > 0 {
 			return rebuildStructuredShotAction(shots)
@@ -2193,9 +2238,9 @@ func dialogueSpeakerIDs(dubs []models.Dialogue) []int {
 
 func h3SoundscapeContract(hasDialogue bool) string {
 	if hasDialogue {
-		return "安静的环境底噪与画面中明确可见的物理动作声持续存在。对白仅在画面时间线中出现，此处不重复对白文本；不出现其他人声、额外对白、旁白、解说、含混发声或吟唱。"
+		return "仅保留环境声和可见动作声；对白只取Shot内原文，禁止其他人声、旁白和吟唱。"
 	}
-	return "仅保留环境底噪与画面中明确可见的物理动作声。禁止对白、人声、旁白、解说、含混发声或吟唱；所有可见人物始终闭口。"
+	return "仅保留环境声和可见动作声；禁止对白、人声、旁白和吟唱，人物闭口。"
 }
 
 func isNarrationSpeaker(name string) bool {
@@ -2646,6 +2691,7 @@ func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines
 	if !h3ShotOnePattern.MatchString(detail) {
 		detail = "[Shot 1] " + detail
 	}
+	detail = compactFinalH3VisualBody(detail)
 	if len(shotSets) > 0 {
 		detail = appendStructuredDialogueToShots(detail, dubs, referenceLines, shotSets[0])
 	} else {
@@ -2680,9 +2726,9 @@ func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 		return false
 	}
 	if len(valid) == 0 {
-		return !strings.Contains(strings.ToLower(fullPrompt), "<d>") && strings.Contains(soundscape, "禁止对白") && strings.Contains(soundscape, "所有可见人物始终闭口")
+		return !strings.Contains(strings.ToLower(fullPrompt), "<d>") && strings.Contains(soundscape, "禁止对白") && strings.Contains(soundscape, "人物闭口")
 	}
-	if !strings.Contains(soundscape, "不出现其他人声") || !strings.Contains(soundscape, "对白仅在画面时间线中出现") {
+	if !strings.Contains(soundscape, "禁止其他人声") || !strings.Contains(soundscape, "对白只取Shot内原文") {
 		return false
 	}
 	speakerIDs := dialogueSpeakerIDs(valid)
@@ -2775,7 +2821,13 @@ func h3VideoSubjects(referenceLines []string) (definitions, retention, subjectRe
 			desc = strings.TrimSpace(desc[cut+len("："):])
 		}
 		definitions = append(definitions, fmt.Sprintf("<Subject %d> 是 <Picture %d> 中的%s。", n, n, desc))
-		retention = append(retention, fmt.Sprintf("<Subject %d> (出现在其明确引用的Shot): fully_preserved - %s。", n, desc))
+		keep := "身份与外观保持"
+		if strings.Contains(line, "场景「") || strings.Contains(line, "环境「") {
+			keep = "环境与空间保持"
+		} else if strings.Contains(line, "分镜画面") {
+			keep = "仅作构图参考"
+		}
+		retention = append(retention, fmt.Sprintf("<Subject %d> (出现在其明确引用的Shot): fully_preserved - %s。", n, keep))
 	}
 	return definitions, retention, subjectRefs
 }
@@ -2841,20 +2893,25 @@ func h3VisibleRetention(body string, retention []string) []string {
 
 var h3RedundantVisualClausePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`[；;]?[^；。]*(?:古风仙侠|温柔细腻|柔美内敛|色调(?:以)?[^；。]*)[^；。]*[。；;]?`),
-	regexp.MustCompile(`，身着[^，；。]+`),
-	regexp.MustCompile(`，(?:红金|淡紫)宫装(?:呈现|展现)[^；。]+`),
+	regexp.MustCompile(`(?:身着|穿着)[^，,；;。]+[，,]`),
+	regexp.MustCompile(`(?:身着|穿着)?(?:红金|淡紫)[^，,；;。]{0,8}宫装[，,]?`),
+	regexp.MustCompile(`(?:平缓地|自然地)?唇部(?:自然)?开合[，,；;。]?`),
+	regexp.MustCompile(`神情从悲伤转向信任与期待[，,；;。]?`),
 }
 
 func compactFinalH3VisualBody(body string) string {
 	for _, pattern := range h3RedundantVisualClausePatterns {
 		body = pattern.ReplaceAllString(body, "")
 	}
-	for _, pair := range [][2]string{{"面部线条柔和，", ""}, {"捕捉细微表情变化", ""}, {"作为当前地点的虚化背景环境持续可见", "background remains visible"}} {
+	for _, pair := range [][2]string{{"面部线条柔和，", ""}, {"捕捉细微表情变化", ""}, {"勾勒柔和面部线条", ""}, {"勾勒柔和轮廓", ""}, {"作为当前地点的虚化背景环境持续可见", "background remains visible"}} {
 		body = strings.ReplaceAll(body, pair[0], pair[1])
 	}
+	body = regexp.MustCompile(`(?i)\b(?:dissolve|fade|wipe)\b[，,；;。]?`).ReplaceAllString(body, "")
 	body = regexp.MustCompile(`\bAt\s+[0-9]{2}:[0-9]{2}(?:\.[0-9]{3}|:[0-9]{3})?\s*`).ReplaceAllString(body, "")
 	body = regexp.MustCompile(`[；;]{2,}`).ReplaceAllString(body, "；")
 	body = strings.ReplaceAll(body, "；。", "。")
+	body = regexp.MustCompile(`[，,]\s*[。；;]`).ReplaceAllString(body, "。")
+	body = regexp.MustCompile(`\s{2,}`).ReplaceAllString(body, " ")
 	return strings.TrimSpace(body)
 }
 
@@ -2906,7 +2963,7 @@ func bindEnvironmentSubjectsToShots(body string, referenceLines []string) string
 }
 
 func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue, referenceLines []string) string {
-	definitions, retention, subjects := h3VideoSubjects(referenceLines)
+	definitions, retention, _ := h3VideoSubjects(referenceLines)
 	body := canonicalVideoAction(sc.VideoPrompt, referenceLines)
 	if body == "" {
 		body = defaultSceneVideoAction(sc)
@@ -2937,7 +2994,7 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 	soundscape := h3SoundscapeContract(len(validDialogues) > 0)
 	body = appendStructuredDialogue(body, validDialogues, referenceLines)
 	return "subject_definitions:\n" + strings.Join(definitions, "\n") +
-		"\n\nsummary:\n[reference generation] " + strings.Join(subjects, "、") + "提供人物、场景及可选分镜状态参考，在约" + fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)) + "秒内严格执行本镜剧情与Shot设计。" +
+		"\n\nsummary:\n[reference generation] 按参考绑定和Shot时间线生成" + fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)) + "秒视频。" +
 		"\n\nretention_analysis:\n" + strings.Join(retention, "\n") +
 		"\n\ndetailed_description:\n" + body +
 		"\n\noverall_soundscape:\n" + soundscape +
