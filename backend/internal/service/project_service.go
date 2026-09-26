@@ -446,19 +446,49 @@ Subject与Picture的真实身份绑定由系统根据实际上传文件生成，
 
 var qwenReferenceLinePrefixPattern = regexp.MustCompile(`^\s*-?\s*<Picture\s+[0-9]+>\s*[：:]?\s*`)
 
+func qwenSceneReferenceRole(line string) string {
+	desc := strings.TrimSpace(qwenReferenceLinePrefixPattern.ReplaceAllString(strings.TrimSpace(line), ""))
+	switch {
+	case strings.Contains(desc, "当前分镜画面"):
+		return "构图与动作状态参考，只提供静态开场构图，不作为必须复刻的画布"
+	case strings.Contains(desc, "角色") && strings.Contains(desc, "四视图"):
+		return desc + "，只提供人物面部身份、年龄感和身体比例"
+	case strings.Contains(desc, "角色") || strings.Contains(desc, "标准像"):
+		return desc + "，只提供人物面部身份与年龄感"
+	case strings.Contains(desc, "造型") || strings.Contains(desc, "套装"):
+		return desc + "，只提供该角色的服装、鞋履、发型、发饰、首饰和随身配件"
+	case strings.Contains(desc, "场景") || strings.Contains(desc, "环境"):
+		return desc + "，只提供环境结构、空间布局、材质与固定陈设"
+	case strings.Contains(desc, "道具"):
+		return desc + "，只提供该道具的准确造型、材质、颜色与结构"
+	default:
+		if desc != "" {
+			return desc + "，只提供已明确说明的可见素材"
+		}
+		return "已上传参考素材，只提供明确指定的可见信息"
+	}
+}
+
 func ensureQwenSceneReferenceBindings(prompt string, referenceLines []string) string {
 	prompt = strings.TrimSpace(prompt)
+	if len(referenceLines) == 0 {
+		return prompt
+	}
+	if len(referenceLines) == 1 {
+		if strings.Contains(prompt, "<image1>") {
+			prompt = strings.ReplaceAll(prompt, "<image1>", "输入图")
+		}
+		if strings.Contains(prompt, "输入图") {
+			return prompt
+		}
+		return "输入图作为" + qwenSceneReferenceRole(referenceLines[0]) + "；输入图不是画布，按剧情首帧建立新构图。" + prompt
+	}
 	bindings := make([]string, 0, len(referenceLines))
 	for i, line := range referenceLines {
 		tag := fmt.Sprintf("<image%d>", i+1)
-		if strings.Contains(prompt, tag) {
-			continue
+		if !strings.Contains(prompt, tag) {
+			bindings = append(bindings, tag+"作为"+qwenSceneReferenceRole(line)+"，不要求该素材中的主体必须出现在画面中")
 		}
-		description := strings.TrimSpace(qwenReferenceLinePrefixPattern.ReplaceAllString(strings.TrimSpace(line), ""))
-		if description == "" {
-			description = "第" + strconv.Itoa(i+1) + "张参考图"
-		}
-		bindings = append(bindings, fmt.Sprintf("%s仅作为%s的外观来源，不要求该素材中的主体必须出现在画面中", tag, description))
 	}
 	if len(bindings) == 0 {
 		return prompt
@@ -481,10 +511,20 @@ func validateQwenScenePrompt(prompt string, referenceCount int) error {
 			return fmt.Errorf("提示词包含非静止画面导演元数据“%s”", forbidden)
 		}
 	}
-	for i := 1; i <= referenceCount; i++ {
-		tag := fmt.Sprintf("<image%d>", i)
-		if !strings.Contains(trimmed, tag) {
-			return fmt.Errorf("提示词遗漏有序参考图绑定%s", tag)
+	if referenceCount == 1 {
+		if strings.Contains(trimmed, "<image1>") {
+			return fmt.Errorf("单张参考图必须自然称为输入图，不使用<image1>")
+		}
+		if !strings.Contains(trimmed, "输入图") && !strings.Contains(strings.ToLower(trimmed), "input image") {
+			return fmt.Errorf("提示词遗漏单张输入图职责")
+		}
+	}
+	if referenceCount > 1 {
+		for i := 1; i <= referenceCount; i++ {
+			tag := fmt.Sprintf("<image%d>", i)
+			if !strings.Contains(trimmed, tag) {
+				return fmt.Errorf("提示词遗漏有序参考图绑定%s", tag)
+			}
 		}
 	}
 	return nil
@@ -501,9 +541,13 @@ func (s *ProjectService) redesignQwenSceneImagePrompt(sc *models.Scene, project 
 	if hasRefs {
 		user += "\n\nOrdered input image roles (order is binding):"
 		for i, line := range referenceLines {
-			user += fmt.Sprintf("\n<image%d>: role=外观与身份参考; visible facts=%s", i+1, line)
+			if len(referenceLines) == 1 {
+				user += "\ninput image: role=" + qwenSceneReferenceRole(line)
+			} else {
+				user += fmt.Sprintf("\n<image%d>: role=%s", i+1, qwenSceneReferenceRole(line))
+			}
 		}
-		user += "\n新建构图，不把任何输入图当作画布；ratio_follow必须为空，wh_ratio使用项目画幅。"
+		user += "\nThis is a new composition built from assigned references, not a restrained canvas edit. No input is the canvas; ratio_follow must be empty and wh_ratio must use the project aspect ratio. Preserve identity by reference binding rather than redescribing faces."
 	} else {
 		user += "\n\n无输入参考图。"
 	}
@@ -4003,10 +4047,15 @@ func (s *ProjectService) StartCharacterPortrait(ch *models.Character) error {
 		return err
 	}
 	params := map[string]any{}
+	prompt := buildPortraitPrompt(&p, ch)
 	if engine == ImageEngineQwen21 {
 		params = qwenPortraitParams()
+		prompt, err = s.buildQwenPortraitPrompt(&p, ch)
+		if err != nil {
+			return err
+		}
 	}
-	task, err := s.tasks.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: buildPortraitPrompt(&p, ch), Params: params})
+	task, err := s.tasks.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: prompt, Params: params})
 	if err != nil {
 		return err
 	}
@@ -4049,6 +4098,33 @@ func styleDescriptor(style string) string {
 	default:
 		return "全片统一采用「" + s + "」画风：所有角色、场景、光影严格保持该风格一致，严禁混入其他画风"
 	}
+}
+
+func (s *ProjectService) buildQwenPortraitPrompt(p *models.Project, ch *models.Character) (string, error) {
+	if s.textProvider == nil {
+		return "", fmt.Errorf("Qwen人物标准像提示词生成需要文本模型")
+	}
+	brief := strings.Join(nonEmptyStrings([]string{"单一角色正面肩部以上标准参考像", strings.TrimSpace(ch.Name), strings.TrimSpace(ch.ReferencePrompt)}), "；")
+	context := strings.Join(nonEmptyStrings([]string{"项目画风：" + strings.TrimSpace(p.Style), "角色身份与档案：" + strings.TrimSpace(ch.Appearance), "唯一妆造：" + portraitStyling(ch), "固定配色：" + strings.TrimSpace(ch.ColorPalette), "布光依据：" + strings.TrimSpace(ch.LightingMood), "构图硬约束：头发、发型与头饰完整入镜，直视镜头，自然中性表情，衣领与肩部服装清晰，纯净背景，只有一个人物，不出现文字"}), "\n")
+	request := buildPromptProgramUser(PromptProgram{TargetMode: "text-to-image"}, PromptProgramInput{Brief: brief, Context: context, AspectRatio: "9:16"})
+	var raw string
+	var err error
+	if s.skills != nil {
+		raw, err = s.skills.ChatWithConfiguredOrFallbackSkill(ch.ProjectID, models.SkillStageQwenImageT2I, QwenImage21T2IProgram, s.textProvider, "", "", map[string]string{"request": request})
+	} else {
+		raw, err = s.textProvider.Chat(qwenImage21T2ISystem, request)
+	}
+	if err != nil {
+		return "", fmt.Errorf("Qwen人物标准像提示词生成失败: %w", err)
+	}
+	prompt, ratio, _, err := parseQwenImagePromptResult(raw, false)
+	if err != nil {
+		return "", fmt.Errorf("Qwen人物标准像提示词格式无效: %w", err)
+	}
+	if ratio != "9:16" {
+		return "", fmt.Errorf("Qwen人物标准像必须返回9:16画幅，实际为%s", ratio)
+	}
+	return prompt, nil
 }
 
 func buildPortraitPrompt(p *models.Project, ch *models.Character) string {
@@ -4252,12 +4328,13 @@ func (s *ProjectService) buildQwenSceneExecutionPrompt(sc *models.Scene, referen
 		prompt = strings.TrimSpace(sc.Content)
 	}
 	parts := make([]string, 0, len(referenceLines)+3)
-	for i, line := range referenceLines {
-		desc := strings.TrimSpace(line)
-		if fields := strings.SplitN(desc, "：", 2); len(fields) == 2 {
-			desc = strings.TrimSpace(fields[1])
+	if len(referenceLines) == 1 {
+		prompt = strings.ReplaceAll(prompt, "<image1>", "输入图")
+		parts = append(parts, "输入图作为"+qwenSceneReferenceRole(referenceLines[0])+"；输入图不是画布，按当前剧情首帧建立新构图，保持未被指定迁移的内容不进入新画面。")
+	} else {
+		for i, line := range referenceLines {
+			parts = append(parts, fmt.Sprintf("<image%d>作为%s；各参考职责保持分离，不混用身份、服装、道具或环境信息。", i+1, qwenSceneReferenceRole(line)))
 		}
-		parts = append(parts, fmt.Sprintf("<image%d>: %s；仅提取该图明确指定的外观或环境信息，不得复制图中未要求的人物或其他主体。", i+1, desc))
 	}
 	parts = append(parts, prompt)
 	if !s.qwenScenePromptRequestsPeople(sc, prompt) {

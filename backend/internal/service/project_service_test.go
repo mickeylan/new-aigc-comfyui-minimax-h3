@@ -1153,8 +1153,13 @@ func TestEnsureQwenSceneReferenceBindingsDeterministicallyAddsMissingImages(t *t
 	if strings.Contains(got, "<Picture") {
 		t.Fatalf("H3 picture tag leaked: %s", got)
 	}
-	if !strings.Contains(got, "不要求该素材中的主体必须出现在画面中") {
-		t.Fatalf("optional visibility constraint missing: %s", got)
+	for _, want := range []string{"面部身份、年龄感和身体比例", "不要求该素材中的主体必须出现在画面中"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("reference-role constraint missing %q: %s", want, got)
+		}
+	}
+	if role := qwenSceneReferenceRole("- <Picture 2>：场景「梵心桃花林」参考图"); !strings.Contains(role, "环境结构、空间布局、材质与固定陈设") {
+		t.Fatalf("location role incomplete: %s", role)
 	}
 	if err := validateQwenScenePrompt(got, 3); err != nil {
 		t.Fatalf("completed prompt invalid: %v", err)
@@ -1170,14 +1175,14 @@ func TestBuildQwenSceneExecutionPromptKeepsLocationOnlyAndForbidsPeople(t *testi
 	if err := ps.db.Create(&models.Character{ProjectID: p.ID, Name: "舒寒", Appearance: "黑色长发"}).Error; err != nil {
 		t.Fatal(err)
 	}
-	sc := models.Scene{ProjectID: p.ID, ImageEngine: ImageEngineQwen21, ImagePrompt: "天阙宗玉霄峰巍峨耸立于云海之上", ReferenceImagesJSON: `[{"source_type":"asset","source_id":22,"variant":"image","use_krea2":true,"use_h3":false}]`}
+	sc := models.Scene{ProjectID: p.ID, ImageEngine: ImageEngineQwen21, ImagePrompt: "以<image1>中的空间为环境来源，天阙宗玉霄峰巍峨耸立于云海之上", ReferenceImagesJSON: `[{"source_type":"asset","source_id":22,"variant":"image","use_krea2":true,"use_h3":false}]`}
 	got := ps.buildQwenSceneExecutionPrompt(&sc, []string{"- <Picture 1>：场景「玉霄宫」参考图"})
-	for _, want := range []string{"<image1>: 场景「玉霄宫」参考图", "天阙宗玉霄峰", "零人物", "No people"} {
+	for _, want := range []string{"输入图作为场景「玉霄宫」参考图", "环境结构、空间布局、材质与固定陈设", "输入图不是画布", "天阙宗玉霄峰", "零人物", "No people"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("prompt missing %q: %s", want, got)
 		}
 	}
-	for _, forbidden := range []string{"舒寒：", "主要角色外貌特征", "当前项目 Skill", "masterpiece", "居中构图、中景、半身像"} {
+	for _, forbidden := range []string{"<image1>", "舒寒：", "主要角色外貌特征", "当前项目 Skill", "masterpiece", "居中构图、中景、半身像"} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("prompt retained unrelated %q: %s", forbidden, got)
 		}
@@ -1192,6 +1197,34 @@ func TestBuildQwenSceneExecutionPromptAllowsSelectedCharacter(t *testing.T) {
 	got := ps.buildQwenSceneExecutionPrompt(&sc, []string{"- <Picture 1>：角色「舒寒」标准像"})
 	if strings.Contains(got, "零人物") {
 		t.Fatalf("character scene incorrectly forbidden: %s", got)
+	}
+}
+
+func TestBuildQwenPortraitPromptUsesT2ISkillContract(t *testing.T) {
+	ps := newTestProjectService(t)
+	provider := &captureTextProvider{response: `{"rewritten_prompt":"A vertical photorealistic portrait photograph of one young adult woman against a clean off-white studio background. Her complete hairstyle and head ornament remain visible, and the clothing neckline is clearly framed. The lighting is soft and even from the front. The overall composition is centred and neutral.","wh_ratio":"9:16"}`}
+	ps.textProvider = provider
+	p := &models.Project{ID: 1, Style: "真人写实"}
+	ch := &models.Character{ProjectID: 1, Name: "上官若琳", Appearance: "青年女性", WardrobeDetail: "红金宫装", ReferencePrompt: "单一角色标准像"}
+	got, err := ps.buildQwenPortraitPrompt(p, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "portrait photograph") || !strings.Contains(provider.system, "400-500 words") {
+		t.Fatalf("Qwen T2I Skill not applied: prompt=%s system=%s", got, provider.system)
+	}
+	for _, want := range []string{"Explicit output aspect ratio: 9:16", "只有一个人物", "不出现文字", "唯一妆造"} {
+		if !strings.Contains(provider.user, want) {
+			t.Fatalf("portrait context missing %q: %s", want, provider.user)
+		}
+	}
+}
+
+func TestBuildQwenPortraitPromptRejectsWrongRatio(t *testing.T) {
+	ps := newTestProjectService(t)
+	ps.textProvider = &captureTextProvider{response: `{"rewritten_prompt":"A square portrait photograph with a clean background and soft light.","wh_ratio":"1:1"}`}
+	if _, err := ps.buildQwenPortraitPrompt(&models.Project{}, &models.Character{Name: "测试", ReferencePrompt: "人物"}); err == nil || !strings.Contains(err.Error(), "9:16") {
+		t.Fatalf("wrong portrait ratio accepted: %v", err)
 	}
 }
 
