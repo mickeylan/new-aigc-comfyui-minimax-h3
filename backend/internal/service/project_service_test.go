@@ -2094,12 +2094,16 @@ func TestAppendStructuredDialogueUsesH3CrossShotContinuationForOneSentence(t *te
 	if strings.Count(got, "<d>") != 3 {
 		t.Fatalf("each Shot must carry its audible fragment: %s", got)
 	}
-	for _, text := range []string{"相信姐姐，", "姐姐无论如何也不会让你去", "罗刹魔域！"} {
-		if strings.Count(got, "<d>[Chinese] "+text+"</d>") != 1 {
-			t.Fatalf("fragment %q missing or duplicated: %s", text, got)
+	var actual strings.Builder
+	for _, match := range h3SpokenTextPattern.FindAllStringSubmatch(got, -1) {
+		if len(match) == 2 {
+			actual.WriteString(canonicalDialogueText(strings.ReplaceAll(match[1], "<scenetrans>", "")))
 		}
 	}
-	if strings.Count(got, "<Subject 1> (S1) says:") != 3 {
+	if actual.String() != canonicalDialogueText("相信姐姐，姐姐无论如何也不会让你去罗刹魔域！") {
+		t.Fatalf("cross-cut dialogue changed: %s", got)
+	}
+	if strings.Count(got, "<Subject 1> (S1)") != 3 {
 		t.Fatalf("stable speaker id missing across split line: %s", got)
 	}
 	if strings.Count(got, "<scenetrans>") != 4 || !strings.Contains(got, "same voice continues uninterrupted across the cut") {
@@ -2213,9 +2217,9 @@ func TestCrossShotDialogueFragmentsKeepSpeakerIdentityAndListenerSilent(t *testi
 	dubs := []models.Dialogue{{ID: 1, Character: "上官若琳", SpeechType: "dialogue", Text: "你要代替姐姐去太运宗，其实太运宗倒是个不错的地方，"}}
 	full := []rune(canonicalDialogueText(dubs[0].Text))
 	split := 11
-	shots := []models.Shot{{Order: 1, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: 0, EndRune: split}}}, {Order: 2, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: split, EndRune: len(full)}}}}
+	shots := []models.Shot{{Order: 1, PromptSubject: "上官若琳正面中近景", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: 0, EndRune: split}}}, {Order: 2, PromptSubject: "上官若彤侧面近景", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: split, EndRune: len(full)}}}}
 	got := appendStructuredDialogueToShots(body, dubs, []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图"}, shots)
-	for _, want := range []string{"<Subject 1> (S1) says:", "<d>[Chinese] " + string(full[:split]) + "</d>", "<d>[Chinese] " + string(full[split:]) + "</d>", "<scenetrans>", "same voice continues uninterrupted across the cut"} {
+	for _, want := range []string{"<Subject 1> (S1) says:", "<d>[Chinese] " + string(full[:split]) + " <scenetrans></d>", "says in an off-screen voiceover: <d>[Chinese] <scenetrans> " + string(full[split:]) + "</d>", "<Subject 2> keeps their lips completely closed", "same voice continues uninterrupted across the cut"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q:\n%s", want, got)
 		}
