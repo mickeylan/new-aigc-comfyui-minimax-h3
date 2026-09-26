@@ -1373,7 +1373,7 @@ func normalizeVideoActionPrompt(prompt string) string {
 var (
 	h3DialogueTagPattern           = regexp.MustCompile(`(?is)<d>.*?</d>`)
 	h3DialogueClausePattern        = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}]{1,20})(?:\s*\(S[0-9]+\))?(?:画外音|内心独白|说|说道|问道|答道)[：:]?\s*<d>.*?</d>[。.]?`)
-	h3EnglishDialogueClausePattern = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}A-Za-z][\p{Han}A-Za-z0-9，,·\s]{0,60})\s*\(S[0-9]+\)\s*(?:says(?:\s+in\s+an\s+off-screen\s+voiceover)?|delivers\s+an\s+internal\s+monologue)\s*:\s*<d>.*?</d>(?:\s+while\s+their\s+lips\s+remain\s+completely\s+closed)?[。.]?`)
+	h3EnglishDialogueClausePattern = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}][\p{Han}A-Za-z0-9，,· \t]{0,80})\s*\(S[0-9]+\)\s*(?:says(?:\s+in\s+an\s+off-screen\s+voiceover|\s+on\s+screen\s+with\s+lip\s+movement\s+synchronized\s+only\s+to\s+this\s+exact\s+text|\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice)?|delivers\s+an\s+internal\s+monologue|continues\s+speaking\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice\s+from\s+the\s+previous\s+shot|continues\s+the\s+same\s+utterance\s+on\s+screen\s+without\s+a\s+speaker\s+change)\s*:\s*<d>.*?</d>(?:\s+while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?(?:\s+The\s+voice\s+remains\s+exclusively\s+[^;\n]+;\s+no\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+No\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+(?:<Subject\s+[0-9]+>(?:,\s*)?)+\s+are\s+silent\s+listeners\s+and\s+keep\s+their\s+lips\s+completely\s+closed\s+throughout\s+this\s+shot[.]?)?`)
 	dialogueNarrationPattern       = regexp.MustCompile(`(?:<Subject [0-9]+>(?:\s*\(S[0-9]+\))?(?:说道|说|问道|答道)[：:]?\s*|[\p{Han}]{1,12}(?:\s*\(S[0-9]+\))?(?:说道|问道|答道|说[：:])\s*)`)
 	orphanSpeakerPattern           = regexp.MustCompile(`(?:<Subject [0-9]+>|[\p{Han}]{1,20})\s*\(S[0-9]+\)[。.]?`)
 	quotedDialoguePattern          = regexp.MustCompile(`[“\"][^”\"]*[”\"]`)
@@ -2148,17 +2148,47 @@ func dialogueContinuesAcrossCut(previous, next models.Dialogue) bool {
 	return !strings.ContainsRune("。！？!?；;.", last)
 }
 
-func renderCrossShotContinuation(d models.Dialogue, speakerID int, referenceLines []string, shotNo int) string {
+func renderDialogueRange(d models.Dialogue, speakerID int, referenceLines []string, fragment string, continuation, visible bool, visibleSubjects []string) string {
 	speaker := useSubjectTags(strings.TrimSpace(d.Character), referenceLines)
 	if strings.TrimSpace(d.H3VoiceDescription) != "" {
 		speaker = strings.TrimSpace(d.H3VoiceDescription)
 	}
 	speaker += fmt.Sprintf(" (S%d)", speakerID)
-	phrase := "continues seamlessly across the cut"
-	if shotNo > 2 {
-		phrase = "carries over from the previous shot and remains audible across the transition"
+	fragment = strings.TrimSpace(fragment)
+	var clause string
+	switch d.SpeechType {
+	case "narration":
+		clause = speaker + " says in an off-screen voiceover: <d>[Chinese] " + fragment + "</d> while their lips remain completely closed."
+	case "monologue":
+		clause = speaker + " delivers an internal monologue: <d>[Chinese] " + fragment + "</d> while their lips remain completely closed."
+	default:
+		if continuation && !visible {
+			clause = speaker + " continues speaking in a clearly identified off-screen voice from the previous shot: <d>[Chinese] " + fragment + "</d>. The voice remains exclusively " + speaker + "; no visible listener speaks or lip-syncs."
+		} else if continuation {
+			clause = speaker + " continues the same utterance on screen without a speaker change: <d>[Chinese] " + fragment + "</d>."
+		} else if visible {
+			clause = speaker + " says on screen with lip movement synchronized only to this exact text: <d>[Chinese] " + fragment + "</d>."
+		} else {
+			clause = speaker + " says in a clearly identified off-screen voice: <d>[Chinese] " + fragment + "</d>. No visible listener speaks or lip-syncs."
+		}
 	}
-	return speaker + "'s same line " + phrase + "; every visible non-speaking character keeps their lips completely closed."
+	others := make([]string, 0, len(visibleSubjects))
+	speakerTag := useSubjectTags(strings.TrimSpace(d.Character), referenceLines)
+	for _, subject := range visibleSubjects {
+		if subject != speakerTag {
+			others = append(others, subject)
+		}
+	}
+	if len(others) > 0 {
+		clause += " " + strings.Join(others, ", ") + " are silent listeners and keep their lips completely closed throughout this shot."
+	}
+	return clause
+}
+
+var listeningLipMovementPattern = regexp.MustCompile(`(?i)(her|his|their)\s+lips?\s+(?:move|moving|part|parting|open|opening)[^.;]*(?:listen|without speaking)[^.;]*[.;]?`)
+
+func enforceSilentListenerLips(body string) string {
+	return listeningLipMovementPattern.ReplaceAllString(body, "$1 lips remain completely closed while listening silently.")
 }
 
 func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, referenceLines []string, shots []models.Shot) (string, bool) {
@@ -2182,8 +2212,18 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 		byID[d.ID] = d
 		speakerByID[d.ID] = ids[i]
 	}
+	body = enforceSilentListenerLips(body)
+	shotVisuals := map[int]string{}
+	bodyMarkers := h3ShotMarkerPattern.FindAllStringSubmatchIndex(body, -1)
+	for i, marker := range bodyMarkers {
+		end := len(body)
+		if i+1 < len(bodyMarkers) {
+			end = bodyMarkers[i+1][0]
+		}
+		n, _ := strconv.Atoi(body[marker[2]:marker[3]])
+		shotVisuals[n] = body[marker[1]:end]
+	}
 	groupText := map[string]string{}
-	groupSpeaker := map[string]models.Dialogue{}
 	seenDialogue := map[string]map[uint]bool{}
 	for _, shot := range shots {
 		for _, r := range shot.DialogueRanges {
@@ -2197,7 +2237,6 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 			}
 			if seenDialogue[key] == nil {
 				seenDialogue[key] = map[uint]bool{}
-				groupSpeaker[key] = d
 			}
 			if !seenDialogue[key][d.ID] {
 				groupText[key] += canonicalDialogueText(d.Text)
@@ -2219,13 +2258,19 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 			if r.StartRune < 0 || r.EndRune <= r.StartRune || r.EndRune > len([]rune(groupText[key])) {
 				return body, false
 			}
-			if r.StartRune == 0 {
-				full := groupSpeaker[key]
-				full.Text = groupText[key]
-				byShot[i+1] = append(byShot[i+1], renderStructuredDialogue(full, speakerByID[d.ID], referenceLines))
-				continue
+			fragment := string([]rune(groupText[key])[r.StartRune:r.EndRune])
+			visual := shotVisuals[i+1]
+			speakerTag := useSubjectTags(strings.TrimSpace(d.Character), referenceLines)
+			visible := speakerTag != "" && strings.Contains(visual, speakerTag)
+			visibleSubjects := []string{}
+			seenSubject := map[string]bool{}
+			for _, tag := range h3SubjectTagPattern.FindAllString(visual, -1) {
+				if !seenSubject[tag] {
+					visibleSubjects = append(visibleSubjects, tag)
+					seenSubject[tag] = true
+				}
 			}
-			byShot[i+1] = append(byShot[i+1], renderCrossShotContinuation(d, speakerByID[d.ID], referenceLines, i+1))
+			byShot[i+1] = append(byShot[i+1], renderDialogueRange(d, speakerByID[d.ID], referenceLines, fragment, r.StartRune > 0, visible, visibleSubjects))
 		}
 	}
 	matches := h3ShotMarkerPattern.FindAllStringSubmatchIndex(body, -1)
@@ -2297,23 +2342,33 @@ func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, refere
 		return appendStructuredDialogue(body, valid, referenceLines)
 	}
 
+	body = enforceSilentListenerLips(body)
+	visualByShot := map[int]string{}
+	bodyMarkers := h3ShotMarkerPattern.FindAllStringSubmatchIndex(body, -1)
+	for i, marker := range bodyMarkers {
+		next := len(body)
+		if i+1 < len(bodyMarkers) {
+			next = bodyMarkers[i+1][0]
+		}
+		n, _ := strconv.Atoi(body[marker[2]:marker[3]])
+		visualByShot[n] = body[marker[1]:next]
+	}
 	byShot := make(map[int][]string, len(shots))
 	for shotNo := 1; shotNo <= len(shots); shotNo++ {
-		indices := assigned[shotNo]
-		for _, index := range indices {
-			if index > 0 && dialogueContinuesAcrossCut(valid[index-1], valid[index]) && dialogueIndexShot(assigned, index-1) == shotNo-1 {
-				byShot[shotNo] = append(byShot[shotNo], renderCrossShotContinuation(valid[index], speakerIDs[index], referenceLines, shotNo))
-				continue
-			}
-			combined := valid[index]
-			for next := index + 1; next < len(valid); next++ {
-				currentShot, nextShot := dialogueIndexShot(assigned, next-1), dialogueIndexShot(assigned, next)
-				if currentShot == 0 || nextShot != currentShot+1 || !dialogueContinuesAcrossCut(valid[next-1], valid[next]) {
-					break
+		for _, index := range assigned[shotNo] {
+			continuation := index > 0 && dialogueContinuesAcrossCut(valid[index-1], valid[index]) && dialogueIndexShot(assigned, index-1) == shotNo-1
+			visual := visualByShot[shotNo]
+			speakerTag := useSubjectTags(strings.TrimSpace(valid[index].Character), referenceLines)
+			visible := speakerTag != "" && strings.Contains(visual, speakerTag)
+			subjects := []string{}
+			seen := map[string]bool{}
+			for _, tag := range h3SubjectTagPattern.FindAllString(visual, -1) {
+				if !seen[tag] {
+					subjects = append(subjects, tag)
+					seen[tag] = true
 				}
-				combined.Text = strings.TrimSpace(combined.Text) + strings.TrimSpace(valid[next].Text)
 			}
-			byShot[shotNo] = append(byShot[shotNo], renderStructuredDialogue(combined, speakerIDs[index], referenceLines))
+			byShot[shotNo] = append(byShot[shotNo], renderDialogueRange(valid[index], speakerIDs[index], referenceLines, valid[index].Text, continuation, visible, subjects))
 		}
 	}
 
@@ -2523,6 +2578,8 @@ func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines
 	return strings.Join(parts, "\n\n")
 }
 
+var h3SpokenTextPattern = regexp.MustCompile(`(?is)<d>\[(?:Chinese|中文)\]\s*(.*?)</d>`)
+
 func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 	valid := validSceneDialogues(dubs)
 	soundscape := h3PromptSection(fullPrompt, "overall_soundscape:")
@@ -2536,13 +2593,20 @@ func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 		return false
 	}
 	speakerIDs := dialogueSpeakerIDs(valid)
+	var expected strings.Builder
 	for i, d := range valid {
-		text := strings.TrimSpace(d.Text)
-		if !strings.Contains(fullPrompt, fmt.Sprintf("(S%d)", speakerIDs[i])) || (!strings.Contains(fullPrompt, "<d>[Chinese] "+text+"</d>") && !strings.Contains(fullPrompt, "<d>[中文] "+text+"</d>")) {
+		expected.WriteString(canonicalDialogueText(d.Text))
+		if !strings.Contains(fullPrompt, fmt.Sprintf("(S%d)", speakerIDs[i])) {
 			return false
 		}
 	}
-	return true
+	var actual strings.Builder
+	for _, match := range h3SpokenTextPattern.FindAllStringSubmatch(fullPrompt, -1) {
+		if len(match) == 2 {
+			actual.WriteString(canonicalDialogueText(match[1]))
+		}
+	}
+	return actual.String() == expected.String()
 }
 
 func resolveRef2VSubmissionPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue, referenceLines []string) string {

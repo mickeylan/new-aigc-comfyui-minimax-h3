@@ -2022,14 +2022,19 @@ func TestAppendStructuredDialogueUsesH3CrossShotContinuationForOneSentence(t *te
 	shots := []models.Shot{{Dialogue: "相信姐姐，"}, {Dialogue: "姐姐无论如何也不会让你去"}, {Dialogue: "罗刹魔域！"}}
 	dubs := []models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "相信姐姐，"}, {Character: "上官若琳", SpeechType: "dialogue", Text: "姐姐无论如何也不会让你去"}, {Character: "上官若琳", SpeechType: "dialogue", Text: "罗刹魔域！"}}
 	got := appendStructuredDialogueToShots(body, dubs, []string{"<Subject 1> 是 <Picture 1> 中的角色「上官若琳」四视图。"}, shots)
-	if strings.Count(got, "<d>") != 1 || !strings.Contains(got, "<d>[Chinese] 相信姐姐，姐姐无论如何也不会让你去罗刹魔域！</d>") {
-		t.Fatalf("cross-shot sentence was not emitted once: %s", got)
+	if strings.Count(got, "<d>") != 3 {
+		t.Fatalf("each Shot must carry its audible fragment: %s", got)
 	}
-	if strings.Count(got, "continues seamlessly across the cut") != 1 || strings.Count(got, "carries over from the previous shot and remains audible across the transition") != 1 {
-		t.Fatalf("official cross-shot continuity phrases missing: %s", got)
+	for _, text := range []string{"相信姐姐，", "姐姐无论如何也不会让你去", "罗刹魔域！"} {
+		if strings.Count(got, "<d>[Chinese] "+text+"</d>") != 1 {
+			t.Fatalf("fragment %q missing or duplicated: %s", text, got)
+		}
 	}
-	if strings.Count(got, "every visible non-speaking character keeps their lips completely closed") != 2 {
-		t.Fatalf("closed-mouth continuity missing: %s", got)
+	if strings.Count(got, "continues speaking in a clearly identified off-screen voice from the previous shot") != 2 {
+		t.Fatalf("cross-shot speaker identity missing: %s", got)
+	}
+	if strings.Contains(got, "same line") {
+		t.Fatalf("ambiguous same-line continuation retained: %s", got)
 	}
 }
 
@@ -2113,6 +2118,29 @@ func TestH3ActionConvertsSpeechStageDirectionsToSilentVisualCues(t *testing.T) {
 	full := appendStructuredDialogue(got, dubs, nil)
 	if strings.Count(full, "<d>") != 1 || !strings.Contains(full, "<d>[Chinese] 这十年你都没有怎么好好闭关修炼过。</d>") {
 		t.Fatalf("structured dialogue not sole spoken text: %s", full)
+	}
+}
+
+func TestCrossShotDialogueFragmentsKeepSpeakerIdentityAndListenerSilent(t *testing.T) {
+	body := `[Shot 1] <Subject 1> stands in a medium close-up and begins speaking.
+[Shot 2] At 00:05.000, <Subject 2> listens in side profile, her lips moving naturally as she listens without speaking.`
+	dubs := []models.Dialogue{{ID: 1, Character: "上官若琳", SpeechType: "dialogue", Text: "你要代替姐姐去太运宗，其实太运宗倒是个不错的地方，"}}
+	full := []rune(canonicalDialogueText(dubs[0].Text))
+	split := 11
+	shots := []models.Shot{{Order: 1, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: 0, EndRune: split}}}, {Order: 2, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: split, EndRune: len(full)}}}}
+	got := appendStructuredDialogueToShots(body, dubs, []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图"}, shots)
+	for _, want := range []string{"<Subject 1> (S1) says on screen", "<d>[Chinese] " + string(full[:split]) + "</d>", "<Subject 1> (S1) continues speaking in a clearly identified off-screen voice from the previous shot", "<d>[Chinese] " + string(full[split:]) + "</d>", "<Subject 2> are silent listeners and keep their lips completely closed"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q:\n%s", want, got)
+		}
+	}
+	for _, forbidden := range []string{"her lips moving naturally", "same line continues", "listens without speaking"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("retained ambiguous cue %q:\n%s", forbidden, got)
+		}
+	}
+	if strings.Count(got, "<d>") != 2 {
+		t.Fatalf("each Shot must carry its exact audible fragment: %s", got)
 	}
 }
 
