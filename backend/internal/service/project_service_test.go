@@ -2173,9 +2173,9 @@ func TestH3HybridLanguageAndSubjectBindingContract(t *testing.T) {
 	if issues := validateGeneratedH3Prompt(full, "minimax_h3_ref2v", 8); len(issues) > 0 {
 		t.Fatalf("valid hybrid prompt rejected: %v", issues)
 	}
-	bad := strings.Replace(full, bound, "[Shot 1] Shangguan Ruolin stands in front-facing close-up and slowly pulls back.", 1)
-	if issues := strings.Join(validateGeneratedH3Prompt(bad, "minimax_h3_ref2v", 8), "|"); !strings.Contains(issues, "故事画面") {
-		t.Fatalf("English story prose not rejected: %s", issues)
+	englishVisual := strings.Replace(full, bound, "[Shot 1] <Subject 1> stands in a front-facing close-up and slowly pulls back.\n[Shot 2] At 00:05.000, <Subject 2> listens silently.", 1)
+	if issues := validateGeneratedH3Prompt(englishVisual, "minimax_h3_ref2v", 8); len(issues) > 0 {
+		t.Fatalf("language choice must not block formal submission: %v", issues)
 	}
 }
 

@@ -3122,10 +3122,6 @@ func validateGeneratedH3Prompt(prompt, template string, duration float64) []stri
 		}
 		previous = at
 	}
-	visualOnly := stripPromptDialogueNarration(h3DialogueTagPattern.ReplaceAllString(detail, ""))
-	if detail != "" && h3VisualProseIsEnglish(visualOnly, "") {
-		issues = append(issues, "detailed_description 的故事画面、动作、表情、构图、光线和运镜叙述必须使用中文；固定控制指令保留英文")
-	}
 	for _, name := range characterNamesFromReferenceLines(text) {
 		if strings.Contains(detail, name) {
 			issues = append(issues, "detailed_description 仍残留角色名“"+name+"”，必须替换为对应 <Subject N>")
