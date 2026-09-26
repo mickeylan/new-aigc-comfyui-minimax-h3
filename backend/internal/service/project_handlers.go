@@ -308,6 +308,27 @@ func (s *Service) HandleRedesignScenePrompt(c *gin.Context) {
 	c.JSON(200, gin.H{"prompt": prompt})
 }
 
+type sceneVideoReferenceBinding struct {
+	Picture  int    `json:"picture"`
+	Subject  int    `json:"subject"`
+	Label    string `json:"label"`
+	TaskID   string `json:"task_id"`
+	Name     string `json:"name"`
+	ImageURL string `json:"image_url"`
+}
+
+func sceneVideoReferenceBindings(refs []FileMeta, lines []string) []sceneVideoReferenceBinding {
+	out := make([]sceneVideoReferenceBinding, 0, len(refs))
+	for i, ref := range refs {
+		label := fmt.Sprintf("Reference %d", i+1)
+		if i < len(lines) {
+			label = strings.TrimSpace(strings.TrimPrefix(lines[i], "-"))
+		}
+		out = append(out, sceneVideoReferenceBinding{Picture: i + 1, Subject: i + 1, Label: label, TaskID: ref.TaskID, Name: ref.Name, ImageURL: fmt.Sprintf("/api/input/%s/%s", ref.TaskID, ref.Name)})
+	}
+	return out
+}
+
 func (s *Service) sceneVideoPromptContinuity(sc *models.Scene) (*models.SceneContinuity, []FileMeta, []string) {
 	refs, lines, cfg := s.Projects.sceneVideoContinuityReferences(sc, fmt.Sprint(sc.ProjectID))
 	return cfg, refs, lines
@@ -347,6 +368,7 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 		"reference_limit_warning": s.Projects.sceneVideoReferenceWarning(sc, len(refs)),
 		"template":                template, "width": width, "height": height, "reference_count": len(refs),
 		"duration": normalizeSceneDuration(sc.Duration), "fps": 24, "steps": 20,
+		"reference_bindings": sceneVideoReferenceBindings(refs, refLines),
 	}
 	if continuity != nil {
 		response["continuity_mode"] = continuity.Mode
@@ -408,7 +430,7 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "生成的视频提示词不符合 MiniMax H3 官方格式: " + strings.Join(issues, "；")})
 		return
 	}
-	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "template": template}
+	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "reference_bindings": sceneVideoReferenceBindings(refs, lines), "template": template}
 	if continuity != nil && continuity.SelectedFrame != nil {
 		response["continuity_mode"] = continuity.Mode
 		response["continuity_frame"] = s.frameResponses([]models.FrameCandidate{*continuity.SelectedFrame})[0]

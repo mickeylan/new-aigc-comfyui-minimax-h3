@@ -13,6 +13,23 @@ import (
 	"comfyui-console/internal/models"
 )
 
+func TestSceneVideoReferenceBindingsPreserveEffectiveOrder(t *testing.T) {
+	refs := []FileMeta{{TaskID: "1", Name: "character.png"}, {TaskID: "1", Name: "location.png"}, {TaskID: "1", Name: "storyboard.png"}}
+	lines := []string{"- <Picture 1>：角色「舒寒」四视图", "- <Picture 2>：场景「内殿」参考图", "- <Picture 3>：当前分镜画面"}
+	got := sceneVideoReferenceBindings(refs, lines)
+	if len(got) != 3 {
+		t.Fatalf("bindings=%+v", got)
+	}
+	for i := range got {
+		if got[i].Picture != i+1 || got[i].Subject != i+1 || got[i].Name != refs[i].Name {
+			t.Fatalf("binding %d=%+v", i, got[i])
+		}
+	}
+	if got[2].ImageURL != "/api/input/1/storyboard.png" {
+		t.Fatalf("url=%q", got[2].ImageURL)
+	}
+}
+
 func TestGenerateCharacterPortraitPreconditionReturns4xx(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})

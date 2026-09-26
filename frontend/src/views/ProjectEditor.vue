@@ -42,6 +42,17 @@
       </details>
     </section>
 
+    <section class="section production-board-section">
+      <div class="section-head"><div><span class="overline">PRODUCTION BOARD</span><h2>本集生产看板</h2><p class="sub">Scene是唯一生产单元；点击卡片定位，不创建第二套状态。</p></div></div>
+      <div class="production-board">
+        <div v-for="column in productionColumns" :key="column.key" class="board-column">
+          <header><strong>{{column.label}}</strong><span>{{column.scenes.length}}</span></header>
+          <button v-for="sc in column.scenes" :key="sc.id" class="board-card" :class="{active:selected?.id===sc.id}" @click="selectScene(sc)"><span>场景{{sc.order}} · {{sc.title||'未命名'}}</span><small>{{sc.shot_count||0}} Shot · {{Number(sc.duration||0).toFixed(1)}}秒</small><small v-if="sc.prompt_stale" class="fail-msg">提示词已过期</small><small v-if="sc.error" class="fail-msg">{{sc.error}}</small></button>
+          <p v-if="!column.scenes.length" class="board-empty">无</p>
+        </div>
+      </div>
+    </section>
+
     <!-- 时间轴 -->
     <section class="section">
       <div class="section-head">
@@ -79,6 +90,30 @@
           </div>
           <div v-if="!scenes.length" class="tl-empty-hint">该集暂无场景，请先在项目页生成分镜</div>
         </div>
+        <div v-if="selected" class="shot-timeline-wrap">
+          <div class="shot-timeline-head"><strong>场景{{selected.order}}内部Shot</strong><span>{{selectedShots.length}}镜 · {{shotDurationTotal.toFixed(1)}}秒 / Scene {{Number(selected.duration||0).toFixed(1)}}秒</span></div>
+          <div class="shot-timeline">
+            <div v-for="shot in selectedShots" :key="shot.id" class="shot-clip" :style="{flexGrow:Math.max(1,Number(shot.duration||1))}"><strong>Shot {{shot.order}}</strong><span>{{shot.shot_type}} · {{shot.camera_movement}}</span><small>{{Number(shot.duration||0).toFixed(1)}}秒</small><div class="shot-flags"><i v-if="shot.continues_from_previous">承接</i><i v-if="shot.continues_to_next">延续</i><i v-if="!shot.dialogue">静音</i></div></div>
+            <p v-if="!selectedShots.length" class="board-empty">当前Scene尚无内部Shot。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section v-if="selected" class="section relation-workbench">
+      <div class="continuity-compare card">
+        <div class="section-head"><div><span class="overline">CONTINUITY COMPARE</span><h2>连续性对比</h2></div><button class="btn btn-sm btn-secondary" @click="showFrameSelector=true">设置连续性</button></div>
+        <div class="compare-grid">
+          <figure><figcaption>上一Scene确认尾帧</figcaption><img v-if="videoPromptDetail?.continuity_frame?.image_url" :src="videoPromptDetail.continuity_frame.image_url"><div v-else class="compare-empty">{{previousScene?'尚未选择确认尾帧':'本集第一Scene'}}</div></figure>
+          <figure><figcaption>当前Scene分镜图</figcaption><img v-if="selected.image_url" :src="selected.image_url"><div v-else class="compare-empty">尚未生成分镜图</div></figure>
+          <figure><figcaption>当前视频首帧</figcaption><img v-if="videoPromptDetail?.first_frame_img" :src="api.inputUrl(id(),videoPromptDetail.first_frame_img)"><img v-else-if="selected.image_url" :src="selected.image_url"><div v-else class="compare-empty">暂无首帧</div></figure>
+        </div>
+        <p class="sub">模式：{{videoPromptDetail?.continuity_mode||'independent'}} · 状态：{{videoPromptDetail?.continuity_status||'not_required'}}</p>
+      </div>
+      <div class="reference-map card">
+        <div class="section-head"><div><span class="overline">REFERENCE MAP</span><h2>Picture ↔ Subject关系</h2><p class="sub">以下顺序就是正式H3提交顺序。</p></div></div>
+        <div v-for="ref in (videoPromptDetail?.reference_bindings||[])" :key="ref.picture" class="reference-row"><img :src="ref.image_url"><div><strong>&lt;Picture {{ref.picture}}&gt; → &lt;Subject {{ref.subject}}&gt;</strong><p>{{ref.label}}</p></div></div>
+        <div v-if="!(videoPromptDetail?.reference_bindings||[]).length" class="board-empty">当前没有有效视频参考图。</div>
       </div>
     </section>
 
@@ -248,9 +283,12 @@
     <div v-if="showFrameSelector && selected" class="modal-overlay" @click.self="showFrameSelector = false">
       <div class="modal-content modal-large">
         <FrameSelector
-          :project-id="id()"
+          :project-id="Number(id())"
           :scene-id="selected.id"
           :scene-order="selected.order"
+          :source-scene-id="previousScene?.id || 0"
+          :source-scene-order="previousScene?.order || 0"
+          :source-video-ready="Boolean(previousScene?.video_url || previousScene?.video_file)"
           @close="showFrameSelector = false"
           @frame-selected="onFrameSelected"
           @applied="onContinuityApplied"
@@ -326,6 +364,9 @@ const videoPromptDraft = ref('')
 const videoPromptTemplate = ref('minimax_h3_ref2v')
 let videoDraftSafety
 const selected = ref(null)
+const selectedShots = ref([])
+const videoPromptDetail = ref(null)
+let selectedDetailToken = 0
 const tab = ref('dub')
 const busy = ref(false)
 const curMerging = ref(false)
@@ -366,6 +407,12 @@ const durProgressPercent = computed(() => {
   return Math.round((accumulatedDuration.value / targetDuration.value) * 100)
 })
 const staleDialogueCount = computed(() => dialogues.value.filter(d => d.audio_stale || !d.audio_file).length)
+const previousScene = computed(() => { const i = scenes.value.findIndex(s => s.id === selected.value?.id); return i > 0 ? scenes.value[i - 1] : null })
+function productionStage(s) { if (s.status==='failed'||s.prompt_stale) return 'failed'; if (s.status==='video_ready'||s.video_file) return 'ready'; if (s.image_file) return 'video'; if (Number(s.shot_count||0)>0) return 'image'; return 'director' }
+const productionColumns = computed(() => [
+  { key:'director', label:'待导演设计' }, { key:'image', label:'待分镜图' }, { key:'video', label:'待视频' }, { key:'ready', label:'已就绪' }, { key:'failed', label:'异常/过期' }
+].map(column => ({...column, scenes:scenes.value.filter(s=>productionStage(s)===column.key)})))
+const shotDurationTotal = computed(() => selectedShots.value.reduce((sum,s)=>sum+Number(s.duration||0),0))
 const durProgressClass = computed(() => {
   const p = durProgressPercent.value
   if (p > 105) return 'dur-over'
@@ -451,7 +498,7 @@ async function load() {
     syncDraftTexts()
     const selectedId = selected.value?.id
     selected.value = (selectedId && scenes.value.find(s => s.id === selectedId)) || scenes.value.find(s => s.status === 'video_ready') || scenes.value[0] || null
-    if (selected.value) { durationInput.value = selected.value.duration || 5; await loadCandidates() } else candidates.value = []
+    if (selected.value) { durationInput.value = selected.value.duration || 5; await Promise.all([loadCandidates(), loadSelectedWorkbench()]) } else { candidates.value = []; selectedShots.value=[]; videoPromptDetail.value=null }
     const episodeNumbers = epNums()
     epIndex.value = Math.max(0, episodeNumbers.indexOf(activeEpN.value))
     await Promise.all([loadMerges(), loadAudioLayers(), loadSharedAssets(), loadEpisodeContinuity(), loadSkillPanel()])
@@ -469,11 +516,21 @@ async function loadMerges() {
 
 function clearSceneDrafts() { videoDraftSafety?.dispose(); videoDraftSafety = null; visualBeatDraft.value = ''; polishDraft.value = ''; assetReviewDraft.value = ''; coverageReviewDraft.value = ''; videoPromptDraft.value = '' }
 function startVideoDraftSafety() { videoDraftSafety?.dispose(); videoDraftSafety = createDraftSafety({ key: `draft:h3-prompt:${id()}:${selected.value.id}`, getDraft: () => ({ prompt: videoPromptDraft.value, template: videoPromptTemplate.value }), applyDraft: d => { videoPromptDraft.value = d.prompt || ''; videoPromptTemplate.value = d.template || 'minimax_h3_ref2v' }, save: () => saveReviewedVideoPrompt(false) }); videoDraftSafety.start() }
+async function loadSelectedWorkbench() {
+  const sceneId = selected.value?.id
+  if (!sceneId) { selectedShots.value=[]; videoPromptDetail.value=null; return }
+  const token = ++selectedDetailToken
+  const [shotsResult,promptResult] = await Promise.allSettled([api.sceneShots(id(),sceneId),api.sceneVideoPrompt(id(),sceneId)])
+  if (token !== selectedDetailToken || selected.value?.id !== sceneId) return
+  selectedShots.value = shotsResult.status==='fulfilled' ? (shotsResult.value.data?.shots||[]) : []
+  videoPromptDetail.value = promptResult.status==='fulfilled' ? promptResult.value.data : null
+}
 function selectScene(sc) {
   selected.value = sc
   clearSceneDrafts()
   durationInput.value = sc.duration || 5
   tab.value = 'dub'
+  loadSelectedWorkbench().catch(()=>{})
 }
 
 function moveScene(i, dir) {
@@ -814,10 +871,10 @@ function onFrameSelected(frame) {
   toast.show(`已选择衔接帧 #${frame.frame_index}`)
 }
 
-function onContinuityApplied(result) {
+function onContinuityApplied(result, openPrompt) {
   toast.show('连续性配置已应用到视频生成参数')
   showFrameSelector.value = false
-  load() // 刷新场景数据
+  load().then(() => { if (openPrompt) prepareVideoPrompt() })
 }
 
 function mergeStatusText(s) { return { pending: '等待中', running: '合并中', success: '成片完成', failed: '失败' }[s] || s }
@@ -837,6 +894,7 @@ watch(videoPromptDraft, () => videoDraftSafety?.schedule())
 .editor-split { display: grid; grid-template-columns: 1.1fr 1fr; gap: 20px; align-items: start; }
 @media (max-width: 980px) { .editor-split { grid-template-columns: 1fr; } }
 
+.production-board{display:grid;grid-template-columns:repeat(5,minmax(180px,1fr));gap:12px;overflow-x:auto}.board-column{min-height:150px;padding:10px;border:1px solid var(--border);border-radius:12px;background:var(--surface-secondary)}.board-column header{display:flex;justify-content:space-between;margin-bottom:8px}.board-card{display:grid;width:100%;gap:4px;margin-bottom:7px;padding:9px;text-align:left;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text-primary);cursor:pointer}.board-card.active{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}.board-card small,.board-empty{color:var(--text-tertiary)}
 .timeline-card { padding: 16px; overflow-x: auto; }
 .timeline { display: flex; gap: 12px; min-width: max-content; }
 .tl-clip {
@@ -862,6 +920,7 @@ watch(videoPromptDraft, () => videoDraftSafety?.schedule())
 }
 .tl-btn:disabled { opacity: 0.35; cursor: default; }
 .tl-empty-hint { padding: 40px; color: var(--text-tertiary); }
+.shot-timeline-wrap{min-width:100%;margin-top:16px;padding-top:14px;border-top:1px solid var(--border)}.shot-timeline-head{display:flex;justify-content:space-between;margin-bottom:8px;color:var(--text-secondary)}.shot-timeline{display:flex;gap:6px;min-width:700px}.shot-clip{display:grid;min-width:120px;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--surface-secondary);font-size:11px}.shot-clip span,.shot-clip small{color:var(--text-tertiary)}.shot-flags{display:flex;gap:4px;margin-top:5px}.shot-flags i{padding:2px 5px;border-radius:5px;background:var(--accent-soft);color:var(--accent);font-style:normal}.relation-workbench{display:grid;grid-template-columns:1.2fr 1fr;gap:16px}.continuity-compare,.reference-map{padding:16px}.compare-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.compare-grid figure{margin:0}.compare-grid figcaption{margin-bottom:6px;font-size:12px;color:var(--text-secondary)}.compare-grid img,.compare-empty{width:100%;aspect-ratio:16/9;object-fit:contain;border-radius:8px;background:#111}.compare-empty{display:flex;align-items:center;justify-content:center;color:#aaa}.reference-row{display:grid;grid-template-columns:88px 1fr;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--border)}.reference-row img{width:88px;aspect-ratio:16/9;object-fit:cover;border-radius:6px}.reference-row p{margin:4px 0;color:var(--text-secondary);font-size:12px}
 
 .dur-progress { font-size: 14px; font-weight: 600; margin-left: 8px; }
 .dur-progress.dur-early { color: var(--text-secondary); }
@@ -943,5 +1002,5 @@ watch(videoPromptDraft, () => videoDraftSafety?.schedule())
 .audio-form { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .audio-form .wide { grid-column: 1 / -1; }
 .audio-form .check { display: flex; align-items: center; }
-@media (max-width: 760px) { .inline-form, .audio-form { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 760px) { .inline-form, .audio-form,.relation-workbench { grid-template-columns: 1fr; }.compare-grid{grid-template-columns:1fr}.production-board{grid-template-columns:repeat(5,220px)} }
 </style>
