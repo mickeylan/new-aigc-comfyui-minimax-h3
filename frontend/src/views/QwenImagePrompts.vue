@@ -1,11 +1,12 @@
 <template>
   <div class="page prompt-page">
-    <header class="page-head"><div><span class="overline">QWEN-IMAGE-2.1</span><h1>提示词生成程序</h1><p class="sub">独立生成文生图或多图编辑提示词；当前只输出提示词，不会提交任务，也不会改变 Krea2 或 MiniMax H3 流程。</p></div></header>
+    <header class="page-head"><div><span class="overline">QWEN-IMAGE-2.1</span><h1>提示词生成程序</h1><p class="sub">独立生成文生图、多图编辑或角色设定卡提示词；当前只输出提示词，不会提交任务，也不会改变 Krea2 四视图或 MiniMax H3 流程。</p></div></header>
     <div v-if="error" class="card error">{{error}}</div>
     <section class="card program-card">
       <label>程序<select v-model="code" class="input"><option v-for="p in programs" :key="p.code" :value="p.code">{{p.name}}</option></select></label>
       <p class="sub">{{current?.description}}</p>
-      <label>原始需求<textarea v-model="form.brief" class="textarea" rows="5" placeholder="输入你希望生成或编辑的画面要求"></textarea></label>
+      <label>原始需求<textarea v-model="form.brief" class="textarea" rows="5" :placeholder="isCharacterCard?'输入角色身份、外貌、服装鞋履、配饰、武器、视觉模式与设定板要求':'输入你希望生成或编辑的画面要求'"></textarea></label>
+      <p v-if="isCharacterCard" class="sub">角色卡会生成独立的 Qwen-Image-2.1 中文提示词，锁定角色DNA、主视觉、三视图、表情和真实设计细节；不会增强或替换现有 Krea2 四视图。</p>
       <label>固定上下文（可选）<textarea v-model="form.context" class="textarea" rows="4" placeholder="角色、场景、风格、必须保留的文本或其他硬约束"></textarea></label>
       <label>明确画幅（可选）<input v-model="form.aspect_ratio" class="input" placeholder="例如 16:9；编辑任务留空时由画布图决定"></label>
       <section v-if="isEdit" class="refs">
@@ -23,7 +24,7 @@ import{api}from'../api'
 import{useToastStore}from'../stores/toast'
 const toast=useToastStore(),programs=ref([]),code=ref('qwen-image-2.1-t2i'),busy=ref(false),error=ref(''),result=ref(null)
 const form=reactive({brief:'',context:'',aspect_ratio:'',references:[]})
-const current=computed(()=>programs.value.find(p=>p.code===code.value)),isEdit=computed(()=>current.value?.target_mode==='multi-image-edit')
+const current=computed(()=>programs.value.find(p=>p.code===code.value)),isEdit=computed(()=>current.value?.target_mode==='multi-image-edit'),isCharacterCard=computed(()=>current.value?.target_mode==='character-card')
 function addRef(){if(form.references.length<16)form.references.push({role:'',description:''})}
 watch(code,()=>{result.value=null;if(isEdit.value&&!form.references.length)addRef()})
 async function load(){try{programs.value=(await api.qwenImagePromptPrograms()).data.items||[]}catch(e){error.value=e.response?.data?.error||e.message}}

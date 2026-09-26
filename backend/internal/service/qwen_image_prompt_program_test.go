@@ -70,6 +70,36 @@ func TestQwenImage21PromptProgramUsesBuiltinSkillAndAudit(t *testing.T) {
 	}
 }
 
+func TestQwenImage21CharacterCardPromptProgram(t *testing.T) {
+	p := &promptProgramStub{response: `{"rewritten_prompt":"东方玄幻角色设定卡，主视觉与正面、侧面、背面保持同一角色身份、服装、鞋履、发型、配饰和武器，画面标签全部使用中文。","wh_ratio":"16:9"}`}
+	s := NewQwenImagePromptProgramService(p)
+	got, err := s.Generate(QwenImage21CharacterCardProgram, PromptProgramInput{Brief: "东方玄幻真人女剑客角色设定卡"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TargetMode != "character-card" || got.WHRatio != "16:9" {
+		t.Fatalf("unexpected card result: %+v", got)
+	}
+	for _, want := range []string{"separate Qwen text-to-image design-card workflow", "never modifies any Krea2 four-view prompt", "footwear", "spirit beasts", "English labels"} {
+		if !strings.Contains(p.system, want) {
+			t.Fatalf("character-card contract missing %q: %s", want, p.system)
+		}
+	}
+}
+
+func TestQwenImage21SystemsAbsorbPromptSkillContracts(t *testing.T) {
+	for _, want := range []string{"400-500 words", "8-14 concrete spatial anchors", "explicit medium noun", "RGBA transparency", "ratio only in wh_ratio"} {
+		if !strings.Contains(qwenImage21T2ISystem, want) {
+			t.Fatalf("T2I contract missing %q", want)
+		}
+	}
+	for _, want := range []string{"With one image, do not emit <image1>", "cite every supplied image individually", "which is canvas", "Outpainting", "positive target states"} {
+		if !strings.Contains(qwenImage21EditSystem, want) {
+			t.Fatalf("edit contract missing %q", want)
+		}
+	}
+}
+
 func TestQwenImage21PromptProgramValidation(t *testing.T) {
 	s := NewQwenImagePromptProgramService(&promptProgramStub{})
 	if _, err := s.Generate(QwenImage21T2IProgram, PromptProgramInput{Brief: "x", References: []PromptReference{{Role: "wrong"}}}); err == nil {

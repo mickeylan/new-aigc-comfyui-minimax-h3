@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	QwenImage21T2IProgram  = "qwen-image-2.1-t2i"
-	QwenImage21EditProgram = "qwen-image-2.1-multi-image-edit"
+	QwenImage21T2IProgram           = "qwen-image-2.1-t2i"
+	QwenImage21EditProgram          = "qwen-image-2.1-multi-image-edit"
+	QwenImage21CharacterCardProgram = "qwen-image-2.1-character-card"
 )
 
 var ErrPromptProgramNotFound = errors.New("prompt program not found")
@@ -65,8 +66,9 @@ func NewQwenImagePromptProgramService(provider TextProvider, skills ...*SkillSer
 
 func (s *QwenImagePromptProgramService) List() []PromptProgram {
 	return []PromptProgram{
-		{Code: QwenImage21T2IProgram, Name: "Qwen-Image-2.1 文生图提示词", TargetModel: "qwen-image-2.1", TargetMode: "text-to-image", MaxReferences: 0, Description: "把简短需求扩写为描述最终画面的英文提示词，并独立返回画幅比例。"},
-		{Code: QwenImage21EditProgram, Name: "Qwen-Image-2.1 多图编辑提示词", TargetModel: "qwen-image-2.1", TargetMode: "multi-image-edit", MaxReferences: 16, Description: "按有序 <imageN> 绑定每张参考图职责，明确修改项、身份来源、画布与保留项。"},
+		{Code: QwenImage21T2IProgram, Name: "Qwen-Image-2.1 文生图提示词", TargetModel: "qwen-image-2.1", TargetMode: "text-to-image", MaxReferences: 0, Description: "把任意长度需求扩写为完整英文观察式画面描述，画幅独立返回，不写进正文。"},
+		{Code: QwenImage21EditProgram, Name: "Qwen-Image-2.1 多图编辑提示词", TargetModel: "qwen-image-2.1", TargetMode: "multi-image-edit", MaxReferences: 16, Description: "区分保守编辑与参考造景，按有序 <imageN> 明确画布、身份和每张图的唯一职责。"},
+		{Code: QwenImage21CharacterCardProgram, Name: "Qwen-Image-2.1 角色设定卡", TargetModel: "qwen-image-2.1", TargetMode: "character-card", MaxReferences: 0, Description: "生成独立的专业角色设定卡提示词；不修改现有 Krea2 四视图流程。"},
 	}
 }
 
@@ -92,8 +94,8 @@ func validatePromptProgramInput(program PromptProgram, in PromptProgramInput) er
 	if in.AspectRatio != "" && !ratioPattern.MatchString(strings.TrimSpace(in.AspectRatio)) {
 		return fmt.Errorf("aspect_ratio 必须是 W:H")
 	}
-	if program.TargetMode == "text-to-image" && len(in.References) != 0 {
-		return fmt.Errorf("文生图程序不接受参考图")
+	if program.TargetMode != "multi-image-edit" && len(in.References) != 0 {
+		return fmt.Errorf("%s 程序不接受参考图", program.Name)
 	}
 	if program.TargetMode == "multi-image-edit" {
 		if len(in.References) == 0 || len(in.References) > program.MaxReferences {
@@ -111,9 +113,11 @@ func validatePromptProgramInput(program PromptProgram, in PromptProgramInput) er
 	return nil
 }
 
-const qwenImage21T2ISystem = `You are a Qwen-Image-2.1 text-to-image prompt rewriting expert. Return exactly one JSON object: {"rewritten_prompt":"...","wh_ratio":"W:H"}. The rewritten_prompt is one continuous English paragraph describing the finished image as an observer, never instructions to an AI. Preserve every user-fixed subject, count, named object, colour, position and exact visible text. Put aspect ratio only in wh_ratio. Establish medium, style, subject and background first; then walk the frame using explicit positions; enumerate concrete elements and materials; state lighting source, direction, quality, shadows and highlights; end with exactly one whole-composition sentence. Keep visible text character-for-character inside straight double quotes in its original script. Do not invent readable text. Do not use quality-booster filler such as masterpiece, 8K or award-winning. Output no Markdown or explanation.`
+const qwenImage21T2ISystem = `You are the Qwen-Image-2.1 text-to-image prompt program. Return exactly one JSON object: {"rewritten_prompt":"...","wh_ratio":"W:H"}. There are no input images. rewritten_prompt is one continuous English paragraph, normally about 20 complete sentences and 400-500 words even for a short brief, observing the finished image in present tense and third person rather than commanding a renderer. Preserve every fixed subject, count, named object, colour, position and exact visible string. Open with orientation, style, an explicit medium noun, subject, background and palette. Walk the frame with 8-14 concrete spatial anchors spanning centre, four sides and corners; enumerate rather than saying several or various; describe observable life stage, pose, materials, texture and occlusion without inventing brands. State lighting source, direction, quality, resulting shadows and highlights in its own sentence. End with exactly one composition overview and nothing after it. Put ratio only in wh_ratio, never in prose. Visible text is character-for-character in straight double quotes and keeps its original script; do not invent uncertain readable text. For RGBA transparency, state transparency at both beginning and end. Never use directives, make sure, masterpiece, best quality, highly detailed, 8K, awards, negative prompts, Markdown or explanation.`
 
-const qwenImage21EditSystem = `You are a Qwen-Image-2.1 multi-image editing prompt rewriting expert. Return exactly one JSON object: {"rewritten_prompt":"...","wh_ratio":"","ratio_follow":"<imageN>"}. Write one continuous actionable paragraph. Edit only attributes explicitly requested, strongly and unmistakably; preserve all untargeted content, identity, exact product design, counts, personal accessories and rendering medium. For two or more images, refer to every image only as <image1>, <image2>, etc., in supplied order; state each image's role and what is taken from it. Support at most sixteen ordered images. Never use 图1, first image or image A. Identify the canvas image when one exists and put it in ratio_follow. For a new composition with no canvas, set ratio_follow to empty and choose wh_ratio. wh_ratio and ratio_follow are mutually exclusive. Never put ratios or resolutions in rewritten_prompt. Do not invent facts absent from the supplied image-role descriptions. Chinese user instruction produces Chinese descriptive prose; English produces English; other languages use English. Exact visible text remains in its required script inside straight double quotes. Output no Markdown or explanation.`
+const qwenImage21EditSystem = `You are the Qwen-Image-2.1 image-editing prompt program. Return exactly one JSON object: {"rewritten_prompt":"...","wh_ratio":"","ratio_follow":"<imageN>"}. This always has input images and rewritten_prompt is one continuous actionable paragraph beginning with an operation verb. First decide whether this is a restrained edit of a canvas or a new composition built from referenced subjects. For restrained edits, change only explicitly named attributes strongly and unmistakably, then preserve all untargeted content in one concise positive preservation clause; never redraw preserved identity by describing facial features. For new compositions, actively construct professional scene, composition, lighting and layout while taking identity and supplied objects directly from their assigned references. With one image, do not emit <image1>; say the image naturally. With two or more, cite every supplied image individually and only as ordered <image1>, <image2>, etc.; state which is canvas, what each source provides, and never compress a range or mix roles. Preserve face identity, personal accessories, exact product design, logos, counts and rendering medium unless explicitly targeted. If removal, movement or reveal exposes an area, specify physically consistent fill, perspective, material, edge, shadow and light. Chinese request gives Chinese prose, English gives English, other languages give English. Visible text is a literal character-for-character string in straight double quotes, with language chosen from explicit request, then existing image language, then request language; never invent uncertain text. Use positive target states, not prohibition lists. Outpainting must say outpainting and explain continuation. Canvas edits set ratio_follow; new compositions set wh_ratio. They are mutually exclusive and ratios/resolutions never enter prose. Output no Markdown or explanation.`
+
+const qwenImage21CharacterCardSystem = `You are the Qwen-Image-2.1 professional character-design-card prompt program. Return exactly one JSON object: {"rewritten_prompt":"...","wh_ratio":"W:H"}. This is a separate Qwen text-to-image design-card workflow and never modifies any Krea2 four-view prompt. Output one continuous Chinese prompt paragraph only inside rewritten_prompt, with no headings, numbered list, Markdown, English labels or explanation. Choose a white or light-grey production sheet for modern, school, science-fiction, mecha or contemporary characters, and a dark ink-toned Eastern-fantasy sheet with restrained Chinese ornament for xianxia, wuxia, mythology and historical fantasy. Respect an explicit CG, 3D or live-action mode; otherwise use refined semi-realistic 2.5D CG. Lock one character DNA across every panel: gender, life stage, body silhouette and proportions, face identity, hairstyle and colour, eye structure and colour, skin, complete outfit, footwear, accessories, weapon, unique marks, theme palette, identity and visual medium. Lay out a dominant full-body key art, clean front/side/back views of the exact same design, a large face and head detail, four to six evidence-based details, distinct expression studies, palette/material swatches, and only weapons, equipment or spirit beasts actually present in the brief. Every view preserves identical hair, clothes, shoes, accessories and weapon geometry. For spirit beasts, preserve real animal anatomy before fantasy additions, keep species-appropriate eyes, and separate human and beast details. Keep orthographic views free of effects; effects remain restrained around key art and never obscure design evidence. All visible labels and profile fields are concise Chinese, occupy at most fifteen percent, contain no English or gibberish, and never cover the character. Put the chosen layout ratio only in wh_ratio, never in rewritten_prompt. Output no quality-booster filler such as 8K, masterpiece or best quality.`
 
 func buildPromptProgramUser(program PromptProgram, in PromptProgramInput) string {
 	var b strings.Builder
@@ -180,15 +184,21 @@ func (s *QwenImagePromptProgramService) Generate(code string, in PromptProgramIn
 		return PromptProgramResult{}, fmt.Errorf("文本生成服务未配置")
 	}
 	system := qwenImage21T2ISystem
-	if program.TargetMode == "multi-image-edit" {
+	switch program.TargetMode {
+	case "multi-image-edit":
 		system = qwenImage21EditSystem
+	case "character-card":
+		system = qwenImage21CharacterCardSystem
 	}
 	request := buildPromptProgramUser(program, in)
 	var raw string
 	if s.skills != nil {
 		stage := models.SkillStageQwenImageT2I
-		if program.TargetMode == "multi-image-edit" {
+		switch program.TargetMode {
+		case "multi-image-edit":
 			stage = models.SkillStageQwenImageEdit
+		case "character-card":
+			stage = models.SkillStageQwenCharacterCard
 		}
 		raw, err = s.skills.ChatWithConfiguredOrFallbackSkill(0, stage, program.Code, s.provider, "", "", map[string]string{"request": request})
 	} else {

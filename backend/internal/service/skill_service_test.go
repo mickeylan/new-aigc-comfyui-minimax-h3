@@ -355,6 +355,7 @@ func TestSkillService_StageValidation(t *testing.T) {
 		models.SkillStageEpisodeAdaptation,
 		models.SkillStageContinuityReview,
 		models.SkillStageMegastructure,
+		models.SkillStageQwenCharacterCard,
 	}
 
 	for _, stage := range validStages {
@@ -376,8 +377,8 @@ func TestSkillService_GetAvailableStages(t *testing.T) {
 	svc := NewSkillService(db)
 
 	stages := svc.GetAvailableStages()
-	if len(stages) != 16 {
-		t.Errorf("应该有 16 个阶段，实际 %d", len(stages))
+	if len(stages) != 17 {
+		t.Errorf("应该有 17 个阶段，实际 %d", len(stages))
 	}
 
 	stageSet := make(map[string]bool)
@@ -402,6 +403,7 @@ func TestSkillService_GetAvailableStages(t *testing.T) {
 		models.SkillStageCreativeIntent,
 		models.SkillStageQwenImageT2I,
 		models.SkillStageQwenImageEdit,
+		models.SkillStageQwenCharacterCard,
 	}
 
 	for _, expected := range expectedStages {
