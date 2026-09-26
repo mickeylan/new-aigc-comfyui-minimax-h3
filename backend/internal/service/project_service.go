@@ -1346,17 +1346,19 @@ func normalizeVideoActionPrompt(prompt string) string {
 }
 
 var (
-	h3DialogueTagPattern      = regexp.MustCompile(`(?is)<d>.*?</d>`)
-	h3DialogueClausePattern   = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}]{1,20})(?:\s*\(S[0-9]+\))?(?:画外音|内心独白|说|说道|问道|答道)[：:]?\s*<d>.*?</d>[。.]?`)
-	dialogueNarrationPattern  = regexp.MustCompile(`(?:<Subject [0-9]+>(?:\s*\(S[0-9]+\))?(?:说道|说|问道|答道)[：:]?\s*|[\p{Han}]{1,12}(?:\s*\(S[0-9]+\))?(?:说道|问道|答道|说[：:])\s*)`)
-	orphanSpeakerPattern      = regexp.MustCompile(`(?:<Subject [0-9]+>|[\p{Han}]{1,20})\s*\(S[0-9]+\)[。.]?`)
-	quotedDialoguePattern     = regexp.MustCompile(`[“\"][^”\"]*[”\"]`)
-	repeatedShotMarkerPattern = regexp.MustCompile(`(?:\[Shot 1\]\s*){2,}`)
-	emptyH3ShotLinePattern    = regexp.MustCompile(`(?m)^\s*\[Shot\s+[0-9]+(?:\s*\|[^\]]*)?\]\s*[。.]?\s*$\n?`)
+	h3DialogueTagPattern       = regexp.MustCompile(`(?is)<d>.*?</d>`)
+	h3DialogueClausePattern    = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}]{1,20})(?:\s*\(S[0-9]+\))?(?:画外音|内心独白|说|说道|问道|答道)[：:]?\s*<d>.*?</d>[。.]?`)
+	dialogueNarrationPattern   = regexp.MustCompile(`(?:<Subject [0-9]+>(?:\s*\(S[0-9]+\))?(?:说道|说|问道|答道)[：:]?\s*|[\p{Han}]{1,12}(?:\s*\(S[0-9]+\))?(?:说道|问道|答道|说[：:])\s*)`)
+	orphanSpeakerPattern       = regexp.MustCompile(`(?:<Subject [0-9]+>|[\p{Han}]{1,20})\s*\(S[0-9]+\)[。.]?`)
+	quotedDialoguePattern      = regexp.MustCompile(`[“\"][^”\"]*[”\"]`)
+	repeatedShotMarkerPattern  = regexp.MustCompile(`(?:\[Shot 1\]\s*){2,}`)
+	emptyH3ShotLinePattern     = regexp.MustCompile(`(?m)^\s*\[Shot\s+[0-9]+(?:\s*\|[^\]]*)?\]\s*[。.]?\s*$\n?`)
+	crossShotContinuityPattern = regexp.MustCompile(`(?m)[^。\n]*\(S[0-9]+\)的同一句对白[^。\n]*本镜非说话角色保持闭口[。.]?`)
 )
 
 func stripPromptDialogueNarration(prompt string) string {
-	text := h3DialogueClausePattern.ReplaceAllString(prompt, "")
+	text := crossShotContinuityPattern.ReplaceAllString(prompt, "")
+	text = h3DialogueClausePattern.ReplaceAllString(text, "")
 	text = h3DialogueTagPattern.ReplaceAllString(text, "")
 	text = quotedDialoguePattern.ReplaceAllString(text, "")
 	text = dialogueNarrationPattern.ReplaceAllString(text, "")
@@ -1968,6 +1970,42 @@ func renderStructuredDialogue(d models.Dialogue, speakerID int, referenceLines [
 	return rendered
 }
 
+func dialogueIndexShot(assigned map[int][]int, dialogueIndex int) int {
+	for shotNo, indices := range assigned {
+		for _, index := range indices {
+			if index == dialogueIndex {
+				return shotNo
+			}
+		}
+	}
+	return 0
+}
+
+func dialogueContinuesAcrossCut(previous, next models.Dialogue) bool {
+	if strings.TrimSpace(previous.Character) != strings.TrimSpace(next.Character) || previous.SpeechType != next.SpeechType {
+		return false
+	}
+	text := strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(previous.Text, "<scenetrans>", ""), "<cutoff>", ""))
+	if text == "" || strings.Contains(previous.Text, "<cutoff>") {
+		return false
+	}
+	last := []rune(text)[len([]rune(text))-1]
+	return !strings.ContainsRune("。！？!?；;.", last)
+}
+
+func renderCrossShotContinuation(d models.Dialogue, speakerID int, referenceLines []string, shotNo int) string {
+	speaker := useSubjectTags(strings.TrimSpace(d.Character), referenceLines)
+	if strings.TrimSpace(d.H3VoiceDescription) != "" {
+		speaker = strings.TrimSpace(d.H3VoiceDescription)
+	}
+	speaker += fmt.Sprintf(" (S%d)", speakerID)
+	phrase := "continues seamlessly across the cut"
+	if shotNo > 2 {
+		phrase = "carries over from the previous shot and remains audible across the transition"
+	}
+	return speaker + "的同一句对白 " + phrase + "；声音跨切镜连续，本镜非说话角色保持闭口。"
+}
+
 func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, referenceLines []string, shots []models.Shot) string {
 	valid := validSceneDialogues(dubs)
 	if len(valid) == 0 || len(shots) == 0 {
@@ -1985,7 +2023,7 @@ func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, refere
 	}
 
 	speakerIDs := dialogueSpeakerIDs(valid)
-	byShot := make(map[int][]string, len(shots))
+	assigned := make(map[int][]int, len(shots))
 	dubIndex, consumed := 0, 0
 	for shotIndex, shot := range shots {
 		target := len([]rune(canonicalDialogueText(shot.Dialogue)))
@@ -1994,7 +2032,7 @@ func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, refere
 			if consumed+length > target {
 				return appendStructuredDialogue(body, valid, referenceLines)
 			}
-			byShot[shotIndex+1] = append(byShot[shotIndex+1], renderStructuredDialogue(valid[dubIndex], speakerIDs[dubIndex], referenceLines))
+			assigned[shotIndex+1] = append(assigned[shotIndex+1], dubIndex)
 			consumed += length
 			dubIndex++
 		}
@@ -2005,6 +2043,26 @@ func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, refere
 	}
 	if dubIndex != len(valid) {
 		return appendStructuredDialogue(body, valid, referenceLines)
+	}
+
+	byShot := make(map[int][]string, len(shots))
+	for shotNo := 1; shotNo <= len(shots); shotNo++ {
+		indices := assigned[shotNo]
+		for _, index := range indices {
+			if index > 0 && dialogueContinuesAcrossCut(valid[index-1], valid[index]) && dialogueIndexShot(assigned, index-1) == shotNo-1 {
+				byShot[shotNo] = append(byShot[shotNo], renderCrossShotContinuation(valid[index], speakerIDs[index], referenceLines, shotNo))
+				continue
+			}
+			combined := valid[index]
+			for next := index + 1; next < len(valid); next++ {
+				currentShot, nextShot := dialogueIndexShot(assigned, next-1), dialogueIndexShot(assigned, next)
+				if currentShot == 0 || nextShot != currentShot+1 || !dialogueContinuesAcrossCut(valid[next-1], valid[next]) {
+					break
+				}
+				combined.Text = strings.TrimSpace(combined.Text) + strings.TrimSpace(valid[next].Text)
+			}
+			byShot[shotNo] = append(byShot[shotNo], renderStructuredDialogue(combined, speakerIDs[index], referenceLines))
+		}
 	}
 
 	matches := h3ShotMarkerPattern.FindAllStringSubmatchIndex(body, -1)

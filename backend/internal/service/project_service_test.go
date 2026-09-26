@@ -1958,16 +1958,32 @@ func TestNormalizeSavedH3AudioRebuildsCollapsedShotsWithoutDuplicateDialogue(t *
 	}
 }
 
+func TestAppendStructuredDialogueUsesH3CrossShotContinuationForOneSentence(t *testing.T) {
+	body := "[Shot 1 | 0.00-4.50秒] 姐姐轻抚妹妹面颊。\n[Shot 2 | 4.50-10.50秒] 切到妹妹含泪倾听。\n[Shot 3 | 10.50-14.00秒] 切回姐姐坚定特写。"
+	shots := []models.Shot{{Dialogue: "相信姐姐，"}, {Dialogue: "姐姐无论如何也不会让你去"}, {Dialogue: "罗刹魔域！"}}
+	dubs := []models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "相信姐姐，"}, {Character: "上官若琳", SpeechType: "dialogue", Text: "姐姐无论如何也不会让你去"}, {Character: "上官若琳", SpeechType: "dialogue", Text: "罗刹魔域！"}}
+	got := appendStructuredDialogueToShots(body, dubs, []string{"<Subject 1> 是 <Picture 1> 中的角色「上官若琳」四视图。"}, shots)
+	if strings.Count(got, "<d>") != 1 || !strings.Contains(got, "<d>[Chinese] 相信姐姐，姐姐无论如何也不会让你去罗刹魔域！</d>") {
+		t.Fatalf("cross-shot sentence was not emitted once: %s", got)
+	}
+	if strings.Count(got, "continues seamlessly across the cut") != 1 || strings.Count(got, "carries over from the previous shot and remains audible across the transition") != 1 {
+		t.Fatalf("official cross-shot continuity phrases missing: %s", got)
+	}
+	if strings.Count(got, "声音跨切镜连续，本镜非说话角色保持闭口") != 2 {
+		t.Fatalf("closed-mouth continuity missing: %s", got)
+	}
+}
+
 func TestAppendStructuredDialoguePlacesEachLineInsideItsShot(t *testing.T) {
 	body := "[Shot 1 | 0.00-5.00秒] 第一镜动作。\n[Shot 2 | 5.00-9.00秒] 第二镜动作。\n[Shot 3 | 9.00-14.00秒] 第三镜动作。"
-	shots := []models.Shot{{Dialogue: "第一句。"}, {Dialogue: "第二句，"}, {Dialogue: "第三句，"}}
+	shots := []models.Shot{{Dialogue: "第一句。"}, {Dialogue: "第二句。"}, {Dialogue: "第三句。"}}
 	dubs := []models.Dialogue{
 		{Character: "上官若彤", SpeechType: "dialogue", Text: "第一句。"},
-		{Character: "上官若彤", SpeechType: "dialogue", Text: "第二句，"},
-		{Character: "上官若彤", SpeechType: "dialogue", Text: "第三句，"},
+		{Character: "上官若彤", SpeechType: "dialogue", Text: "第二句。"},
+		{Character: "上官若彤", SpeechType: "dialogue", Text: "第三句。"},
 	}
 	got := appendStructuredDialogueToShots(body, dubs, nil, shots)
-	positions := []int{strings.Index(got, "第一句。"), strings.Index(got, "第二句，"), strings.Index(got, "第三句，")}
+	positions := []int{strings.Index(got, "第一句。"), strings.Index(got, "第二句。"), strings.Index(got, "第三句。")}
 	markers := []int{strings.Index(got, "[Shot 1"), strings.Index(got, "[Shot 2"), strings.Index(got, "[Shot 3")}
 	if !(markers[0] < positions[0] && positions[0] < markers[1] && markers[1] < positions[1] && positions[1] < markers[2] && markers[2] < positions[2]) {
 		t.Fatalf("dialogues not placed in matching shots: %s", got)
