@@ -2088,26 +2088,30 @@ func TestNormalizeSavedH3AudioRebuildsCollapsedShotsWithoutDuplicateDialogue(t *
 
 func TestAppendStructuredDialogueUsesH3CrossShotContinuationForOneSentence(t *testing.T) {
 	body := "[Shot 1] The elder sister touches her sister's cheek.\n[Shot 2] At 00:04.500, the shot cuts to the younger sister listening.\n[Shot 3] At 00:10.500, the shot cuts back to the elder sister."
-	shots := []models.Shot{{Dialogue: "相信姐姐，"}, {Dialogue: "姐姐无论如何也不会让你去"}, {Dialogue: "罗刹魔域！"}}
+	shots := []models.Shot{{PromptSubject: "上官若琳近景", Dialogue: "相信姐姐，"}, {PromptSubject: "上官若彤反应镜头", Dialogue: "姐姐无论如何也不会让你去"}, {PromptSubject: "上官若琳特写", Dialogue: "罗刹魔域！"}}
 	dubs := []models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "相信姐姐，"}, {Character: "上官若琳", SpeechType: "dialogue", Text: "姐姐无论如何也不会让你去"}, {Character: "上官若琳", SpeechType: "dialogue", Text: "罗刹魔域！"}}
 	got := appendStructuredDialogueToShots(body, dubs, []string{"<Subject 1> 是 <Picture 1> 中的角色「上官若琳」四视图。"}, shots)
-	if strings.Count(got, "<d>") != 3 {
-		t.Fatalf("each Shot must carry its audible fragment: %s", got)
+	for _, want := range []string{"<Subject 1> (S1) says: <d>[Chinese] 相信姐姐，</d> <scenetrans>", "<Subject 1> (S1)'s words carry over from the previous shot <scenetrans> 姐姐无论如何也不会让你去</d> <scenetrans>", "<Subject 1> (S1)'s words carry over from the previous shot <scenetrans> 罗刹魔域！</d>."} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing official cross-cut form %q: %s", want, got)
+		}
+	}
+	if strings.Count(got, "<d>") != 1 || strings.Count(got, "<scenetrans>") != 4 {
+		t.Fatalf("cross-cut tags invalid: %s", got)
 	}
 	var actual strings.Builder
-	for _, match := range h3SpokenTextPattern.FindAllStringSubmatch(got, -1) {
-		if len(match) == 2 {
-			actual.WriteString(canonicalDialogueText(strings.ReplaceAll(match[1], "<scenetrans>", "")))
+	for _, match := range h3AllSpokenTextPattern.FindAllStringSubmatch(got, -1) {
+		fragment := ""
+		if len(match) > 1 {
+			fragment = match[1]
 		}
+		if fragment == "" && len(match) > 2 {
+			fragment = match[2]
+		}
+		actual.WriteString(canonicalDialogueText(fragment))
 	}
 	if actual.String() != canonicalDialogueText("相信姐姐，姐姐无论如何也不会让你去罗刹魔域！") {
 		t.Fatalf("cross-cut dialogue changed: %s", got)
-	}
-	if strings.Count(got, "<Subject 1> (S1)") != 3 {
-		t.Fatalf("stable speaker id missing across split line: %s", got)
-	}
-	if strings.Count(got, "<scenetrans>") != 4 || !strings.Contains(got, "same voice continues uninterrupted across the cut") {
-		t.Fatalf("official cross-cut continuity missing: %s", got)
 	}
 }
 
@@ -2211,6 +2215,16 @@ func TestH3HybridLanguageAndSubjectBindingContract(t *testing.T) {
 	}
 }
 
+func TestH3VisualEnglishGateAcceptsDocumentedCrossCutDialogue(t *testing.T) {
+	prompt := "[Shot 1] <Subject 1> speaks in a steady medium close-up while the camera slowly pushes in: <d>[Chinese] 前半句</d> <scenetrans>\n[Shot 2] At 00:05.000, the camera cuts to the listener. <Subject 1> (S1)'s words carry over from the previous shot <scenetrans> 后半句</d>."
+	if !h3CarryoverDialoguePattern.MatchString(prompt) {
+		t.Fatalf("carryover pattern did not match: %s", prompt)
+	}
+	if !h3VisualProseIsEnglish(prompt, "") {
+		t.Fatalf("documented cross-cut dialogue rejected as visual prose: %s", prompt)
+	}
+}
+
 func TestCrossShotDialogueFragmentsKeepSpeakerIdentityAndListenerSilent(t *testing.T) {
 	body := `[Shot 1] <Subject 1> stands in a medium close-up and begins speaking.
 [Shot 2] At 00:05.000, <Subject 2> listens with closed lips while facing <Subject 1>.`
@@ -2219,18 +2233,18 @@ func TestCrossShotDialogueFragmentsKeepSpeakerIdentityAndListenerSilent(t *testi
 	split := 11
 	shots := []models.Shot{{Order: 1, PromptSubject: "上官若琳正面中近景", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: 0, EndRune: split}}}, {Order: 2, PromptSubject: "上官若彤侧面近景", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: split, EndRune: len(full)}}}}
 	got := appendStructuredDialogueToShots(body, dubs, []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图"}, shots)
-	for _, want := range []string{"<Subject 1> (S1) says:", "<d>[Chinese] " + string(full[:split]) + " <scenetrans></d>", "says in an off-screen voiceover: <d>[Chinese] <scenetrans> " + string(full[split:]) + "</d>", "<Subject 2> keeps their lips completely closed", "same voice continues uninterrupted across the cut"} {
+	for _, want := range []string{"<Subject 1> (S1) says: <d>[Chinese] " + string(full[:split]) + "</d> <scenetrans>", "<Subject 1> (S1)'s words carry over from the previous shot <scenetrans> " + string(full[split:]) + "</d>."} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q:\n%s", want, got)
 		}
 	}
-	for _, forbidden := range []string{"her lips moving naturally", "off-screen voice from the previous shot", "remains clearly visible", "only <Subject 1> lip-syncs"} {
+	for _, forbidden := range []string{"says in an off-screen voiceover", "her lips moving naturally", "off-screen voice from the previous shot", "remains clearly visible", "only <Subject 1> lip-syncs"} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("retained ambiguous cue %q:\n%s", forbidden, got)
 		}
 	}
-	if strings.Count(got, "<d>") != 2 {
-		t.Fatalf("each Shot must carry its exact audible fragment: %s", got)
+	if strings.Count(got, "<d>") != 1 || strings.Count(got, "<scenetrans>") != 2 {
+		t.Fatalf("official cross-cut tags invalid: %s", got)
 	}
 }
 

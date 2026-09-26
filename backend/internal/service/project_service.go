@@ -1203,7 +1203,8 @@ func defaultSceneVideoAction(sc *models.Scene) string {
 }
 
 func h3VisualProseIsEnglish(text, characterNames string) bool {
-	cleaned := h3DialogueTagPattern.ReplaceAllString(text, "")
+	cleaned := h3CarryoverDialoguePattern.ReplaceAllString(text, "")
+	cleaned = h3DialogueTagPattern.ReplaceAllString(cleaned, "")
 	cleaned = regexp.MustCompile(`<[^>]+>|\[Shot[^]]*\]|\bAt\s+\d{2}:\d{2}\.\d{3}`).ReplaceAllString(cleaned, "")
 	for _, name := range parseSceneCharacters(characterNames) {
 		cleaned = strings.ReplaceAll(cleaned, name, "")
@@ -1522,6 +1523,7 @@ func normalizeVideoActionPrompt(prompt string) string {
 
 var (
 	h3DialogueTagPattern           = regexp.MustCompile(`(?is)<d>.*?</d>`)
+	h3CarryoverDialoguePattern     = regexp.MustCompile(`(?is)(?:<Subject\s+[0-9]+>|[^\r\n]{1,100})\s*\(S[0-9]+\)'s\s+words\s+carry\s+over\s+from\s+the\s+previous\s+shot\s*<scenetrans>\s*.*?</d>[.]?`)
 	h3DialogueClausePattern        = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}]{1,20})(?:\s*\(S[0-9]+\))?(?:画外音|内心独白|说|说道|问道|答道)[：:]?\s*<d>.*?</d>[。.]?`)
 	h3EnglishDialogueClausePattern = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}][\p{Han}A-Za-z0-9，,· \t]{0,80})\s*\(S[0-9]+\)\s*(?:says(?:\s+in\s+an\s+off-screen\s+voiceover|\s+on\s+screen|\s+on\s+screen\s+with\s+lip\s+movement\s+synchronized\s+only\s+to\s+this\s+exact\s+text|\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice)?|delivers\s+an\s+internal\s+monologue|continues\s+speaking\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice\s+from\s+the\s+previous\s+shot|continues(?:\s+the\s+same\s+utterance)?\s+on\s+screen(?:\s+without\s+a\s+speaker\s+change)?)\s*:\s*<d>.*?</d>(?:\s+while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?(?:\s+The\s+voice\s+remains\s+exclusively\s+[^;\n]+;\s+no\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+No\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+(?:<Subject\s+[0-9]+>(?:,\s*)?)+\s+are\s+silent\s+listeners\s+and\s+keep\s+their\s+lips\s+completely\s+closed\s+throughout\s+this\s+shot[.]?)?`)
 	dialogueNarrationPattern       = regexp.MustCompile(`(?:<Subject [0-9]+>(?:\s*\(S[0-9]+\))?(?:说道|说|问道|答道)[：:]?\s*|[\p{Han}]{1,12}(?:\s*\(S[0-9]+\))?(?:说道|问道|答道|说[：:])\s*)`)
@@ -1533,7 +1535,8 @@ var (
 )
 
 func stripPromptDialogueNarration(prompt string) string {
-	text := crossShotContinuityPattern.ReplaceAllString(prompt, "")
+	text := h3CarryoverDialoguePattern.ReplaceAllString(prompt, "")
+	text = crossShotContinuityPattern.ReplaceAllString(text, "")
 	text = h3DialogueClausePattern.ReplaceAllString(text, "")
 	text = h3EnglishDialogueClausePattern.ReplaceAllString(text, "")
 	text = h3DialogueTagPattern.ReplaceAllString(text, "")
@@ -2350,11 +2353,14 @@ func renderDialogueRange(d models.Dialogue, speakerID int, referenceLines []stri
 	}
 	speaker += fmt.Sprintf(" (S%d)", speakerID)
 	fragment = strings.TrimSpace(fragment)
+	// The official cross-cut form is not voiceover: the first part closes its <d>
+	// block before <scenetrans>, and the next shot carries the same Sx voice forward.
 	if continuesFrom {
-		fragment = "<scenetrans> " + fragment
-	}
-	if continuesTo {
-		fragment += " <scenetrans>"
+		clause := speaker + "'s words carry over from the previous shot <scenetrans> " + fragment + "</d>."
+		if continuesTo {
+			clause = strings.TrimSuffix(clause, ".") + " <scenetrans>"
+		}
+		return clause
 	}
 	var clause string
 	switch d.SpeechType {
@@ -2381,7 +2387,7 @@ func renderDialogueRange(d models.Dialogue, speakerID int, referenceLines []stri
 		}
 	}
 	if continuesTo {
-		clause += " The same voice continues uninterrupted across the cut."
+		clause = strings.TrimSuffix(clause, ".") + " <scenetrans>"
 	}
 	return clause
 }
@@ -2798,6 +2804,7 @@ func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines
 }
 
 var h3SpokenTextPattern = regexp.MustCompile(`(?is)<d>\[(?:Chinese|中文)\]\s*(.*?)</d>`)
+var h3AllSpokenTextPattern = regexp.MustCompile(`(?is)<d>\[(?:Chinese|中文)\]\s*(.*?)</d>|\(S[0-9]+\)'s words carry over from the previous shot\s*<scenetrans>\s*(.*?)</d>`)
 
 func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 	valid := validSceneDialogues(dubs)
@@ -2820,10 +2827,15 @@ func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 		}
 	}
 	var actual strings.Builder
-	for _, match := range h3SpokenTextPattern.FindAllStringSubmatch(fullPrompt, -1) {
-		if len(match) == 2 {
-			actual.WriteString(canonicalDialogueText(strings.ReplaceAll(strings.ReplaceAll(match[1], "<scenetrans>", ""), "<cutoff>", "")))
+	for _, match := range h3AllSpokenTextPattern.FindAllStringSubmatch(fullPrompt, -1) {
+		fragment := ""
+		if len(match) > 1 {
+			fragment = match[1]
 		}
+		if fragment == "" && len(match) > 2 {
+			fragment = match[2]
+		}
+		actual.WriteString(canonicalDialogueText(strings.ReplaceAll(strings.ReplaceAll(fragment, "<scenetrans>", ""), "<cutoff>", "")))
 	}
 	return actual.String() == expected.String()
 }
