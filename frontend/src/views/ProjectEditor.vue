@@ -47,10 +47,11 @@
       <div class="production-board">
         <div v-for="column in productionColumns" :key="column.key" class="board-column">
           <header><strong>{{column.label}}</strong><span>{{column.scenes.length}}</span></header>
-          <button v-for="sc in column.scenes" :key="sc.id" class="board-card" :class="{active:selected?.id===sc.id}" @click="selectScene(sc)"><span>场景{{sc.order}} · {{sc.title||'未命名'}}</span><small>{{sc.shot_count||0}} Shot · {{Number(sc.duration||0).toFixed(1)}}秒</small><small v-if="sc.prompt_stale" class="fail-msg">提示词已过期</small><small v-if="sc.error" class="fail-msg">{{sc.error}}</small></button>
+          <button v-for="sc in column.scenes" :key="sc.id" class="board-card" :class="[{active:selected?.id===sc.id},'severity-'+column.severity]" @click="selectScene(sc)"><span>场景{{sc.order}} · {{sc.title||'未命名'}}</span><small>{{sc.shot_count||0}} Shot · {{Number(sc.duration||0).toFixed(1)}}秒</small><small v-if="sc.prompt_stale" class="warn-msg">提示词待更新</small><small v-if="sc.error" class="fail-msg">{{sc.error}}</small></button>
           <p v-if="!column.scenes.length" class="board-empty">无</p>
         </div>
       </div>
+      <details class="card preflight"><summary><strong>本集正式生成前检查</strong></summary><div v-for="check in episodePreflight" :key="check.text" :class="check.ok?'check-ok':'check-fail'">{{check.ok?'✓':'✗'}} {{check.text}}</div><div class="section-actions"><button v-if="shotDurationMismatch" class="btn btn-sm btn-secondary" @click="previewAndApplyRetime">修复当前Scene配时</button><button v-if="selected?.prompt_stale" class="btn btn-sm btn-secondary" @click="prepareVideoPrompt">重新准备当前视频提示词</button><button v-if="videoPromptDetail?.continuity_status==='source_invalidated'" class="btn btn-sm btn-secondary" @click="showFrameSelector=true">重新选择连续性尾帧</button><button v-if="staleDialogueCount" class="btn btn-sm btn-secondary" @click="dubStaleEpisode">仅生成过期配音</button></div></details>
     </section>
 
     <!-- 时间轴 -->
@@ -91,9 +92,9 @@
           <div v-if="!scenes.length" class="tl-empty-hint">该集暂无场景，请先在项目页生成分镜</div>
         </div>
         <div v-if="selected" class="shot-timeline-wrap">
-          <div class="shot-timeline-head"><strong>场景{{selected.order}}内部Shot</strong><span>{{selectedShots.length}}镜 · {{shotDurationTotal.toFixed(1)}}秒 / Scene {{Number(selected.duration||0).toFixed(1)}}秒</span></div>
+          <div class="shot-timeline-head"><strong>场景{{selected.order}}内部Shot</strong><span :class="{'fail-msg':shotDurationMismatch}">{{selectedShots.length}}镜 · {{shotDurationTotal.toFixed(1)}}秒 / Scene {{Number(selected.duration||0).toFixed(1)}}秒</span><button v-if="shotDurationMismatch" class="btn btn-xs btn-secondary" @click="previewAndApplyRetime">预览并重新配时</button></div>
           <div class="shot-timeline">
-            <div v-for="shot in selectedShots" :key="shot.id" class="shot-clip" :style="{flexGrow:Math.max(1,Number(shot.duration||1))}"><strong>Shot {{shot.order}}</strong><span>{{shot.shot_type}} · {{shot.camera_movement}}</span><small>{{Number(shot.duration||0).toFixed(1)}}秒</small><div class="shot-flags"><i v-if="shot.continues_from_previous">承接</i><i v-if="shot.continues_to_next">延续</i><i v-if="!shot.dialogue">静音</i></div></div>
+            <div v-for="shot in timelineShots" :key="shot.id" class="shot-clip" :style="{flexGrow:Math.max(1,Number(shot.duration||1))}"><strong>Shot {{shot.order}}</strong><span>{{shot.shot_type}} · {{shot.camera_movement}}</span><small>{{shot._start.toFixed(1)}}–{{shot._end.toFixed(1)}}秒 · {{Number(shot.duration||0).toFixed(1)}}秒</small><div class="shot-flags"><i v-if="shot.continues_from_previous">承接</i><i v-if="shot.continues_to_next">延续</i><i v-if="!shot.dialogue">静音</i></div></div>
             <p v-if="!selectedShots.length" class="board-empty">当前Scene尚无内部Shot。</p>
           </div>
         </div>
@@ -106,13 +107,13 @@
         <div class="compare-grid">
           <figure><figcaption>上一Scene确认尾帧</figcaption><img v-if="videoPromptDetail?.continuity_frame?.image_url" :src="videoPromptDetail.continuity_frame.image_url"><div v-else class="compare-empty">{{previousScene?'尚未选择确认尾帧':'本集第一Scene'}}</div></figure>
           <figure><figcaption>当前Scene分镜图</figcaption><img v-if="selected.image_url" :src="selected.image_url"><div v-else class="compare-empty">尚未生成分镜图</div></figure>
-          <figure><figcaption>当前视频首帧</figcaption><img v-if="videoPromptDetail?.first_frame_img" :src="api.inputUrl(id(),videoPromptDetail.first_frame_img)"><img v-else-if="selected.image_url" :src="selected.image_url"><div v-else class="compare-empty">暂无首帧</div></figure>
+          <figure><figcaption>当前视频真实首帧</figcaption><img v-if="selected.video_first_frame_img" :src="api.inputUrl(id(),selected.video_first_frame_img)"><div v-else class="compare-empty">尚未从成片提取</div><small v-if="!selected.video_first_frame_img&&selected.image_url">提交起始帧为当前分镜图（不是成片实测首帧）</small></figure>
         </div>
         <p class="sub">模式：{{videoPromptDetail?.continuity_mode||'independent'}} · 状态：{{videoPromptDetail?.continuity_status||'not_required'}}</p>
       </div>
       <div class="reference-map card">
         <div class="section-head"><div><span class="overline">REFERENCE MAP</span><h2>Picture ↔ Subject关系</h2><p class="sub">以下顺序就是正式H3提交顺序。</p></div></div>
-        <div v-for="ref in (videoPromptDetail?.reference_bindings||[])" :key="ref.picture" class="reference-row"><img :src="ref.image_url"><div><strong>&lt;Picture {{ref.picture}}&gt; → &lt;Subject {{ref.subject}}&gt;</strong><p>{{ref.label}}</p></div></div>
+        <div v-for="ref in (videoPromptDetail?.reference_bindings||[])" :key="ref.picture" class="reference-row"><img :src="ref.image_url"><div><strong>&lt;Picture {{ref.picture}}&gt;<template v-if="ref.subject"> → &lt;Subject {{ref.subject}}&gt;</template></strong><p>{{ref.identity}} · {{ref.role}} · {{ref.usage}}</p><small>出现范围：{{referenceShotScope(ref)}}</small></div></div>
         <div v-if="!(videoPromptDetail?.reference_bindings||[]).length" class="board-empty">当前没有有效视频参考图。</div>
       </div>
     </section>
@@ -189,7 +190,7 @@
             </div>
             <div v-for="d in sceneDubs(selected)" :key="d.id" class="dub-item" :class="'st-' + d.status">
               <div class="dub-row">
-                <span class="dl-char">{{ d.character || '旁白' }}</span>
+                <span class="dl-char">{{ speakerLabel(d) }}</span>
                 <span class="dl-order">#{{ d.order }}</span>
                 <span class="dub-state" :class="{ fail: d.status === 'failed' }">
                   {{ d.status === 'ready' ? '✅ 已合成' : d.status === 'synthesizing' ? '合成中…' : d.status === 'failed' ? '失败' : '待合成' }}
@@ -236,7 +237,7 @@
                 <input type="number" class="input input-sm sub-t" step="0.1" :value="round1(s.end)" @change="shiftSub(i, +$event.target.value - s.end)" />
               </div>
               <div class="sub-body">
-                <span class="dl-char">{{ s.character || '旁白' }}</span>
+                <span class="dl-char">{{ speakerLabel(s) }}</span>
                 <span class="dl-text">{{ s.text }}</span>
               </div>
               <span class="sub-scene">场景{{ s.scene_order }}</span>
@@ -408,11 +409,22 @@ const durProgressPercent = computed(() => {
 })
 const staleDialogueCount = computed(() => dialogues.value.filter(d => d.audio_stale || !d.audio_file).length)
 const previousScene = computed(() => { const i = scenes.value.findIndex(s => s.id === selected.value?.id); return i > 0 ? scenes.value[i - 1] : null })
-function productionStage(s) { if (s.status==='failed'||s.prompt_stale) return 'failed'; if (s.status==='video_ready'||s.video_file) return 'ready'; if (s.image_file) return 'video'; if (Number(s.shot_count||0)>0) return 'image'; return 'director' }
+function productionStage(s) { if(s.status==='failed'||s.error)return'attention'; if(!Number(s.shot_count||0))return'director'; if(!s.image_file)return'image'; if(s.prompt_stale||!String(s.video_full_prompt||'').trim())return'prompt'; if(!s.video_file)return'video'; const dubs=sceneDubs(s); if(dubs.some(d=>d.audio_stale||!d.audio_file))return'audio'; return'ready' }
 const productionColumns = computed(() => [
-  { key:'director', label:'待导演设计' }, { key:'image', label:'待分镜图' }, { key:'video', label:'待视频' }, { key:'ready', label:'已就绪' }, { key:'failed', label:'异常/过期' }
-].map(column => ({...column, scenes:scenes.value.filter(s=>productionStage(s)===column.key)})))
+  {key:'director',label:'待导演设计',severity:'normal'},{key:'image',label:'待分镜图',severity:'normal'},{key:'prompt',label:'待视频提示词审核',severity:'warn'},{key:'video',label:'待视频',severity:'normal'},{key:'audio',label:'待配音/音频',severity:'warn'},{key:'ready',label:'已就绪',severity:'success'},{key:'attention',label:'需处理',severity:'error'}
+].map(column=>({...column,scenes:scenes.value.filter(s=>productionStage(s)===column.key)})))
 const shotDurationTotal = computed(() => selectedShots.value.reduce((sum,s)=>sum+Number(s.duration||0),0))
+const shotDurationMismatch = computed(() => selectedShots.value.length>0 && Math.abs(shotDurationTotal.value-Number(selected.value?.duration||0))>0.5)
+const timelineShots = computed(() => { let cursor=0; return selectedShots.value.map(shot=>{ const start=cursor; cursor+=Number(shot.duration||0); return {...shot,_start:start,_end:cursor} }) })
+const episodePreflight = computed(() => {
+  const checks=[]
+  checks.push({ok:scenes.value.every(s=>Number(s.duration)>=3&&Number(s.duration)<=15),text:'所有Scene时长均为3–15秒'})
+  checks.push({ok:!shotDurationMismatch.value,text:'当前Scene内部Shot配时与Scene一致'})
+  checks.push({ok:dialogues.value.every(d=>!String(d.text||'').trim()||speakerKind(d)!=='unknown'),text:'所有有文字的Dialogue均明确说话人/旁白/内心独白'})
+  checks.push({ok:scenes.value.every(s=>!s.prompt_stale),text:'所有视频提示词均为最新'})
+  checks.push({ok:!videoPromptDetail.value?.continuity_error,text:'当前Scene连续性来源有效'})
+  return checks
+})
 const durProgressClass = computed(() => {
   const p = durProgressPercent.value
   if (p > 105) return 'dur-over'
@@ -430,6 +442,9 @@ function fmtDur(d) {
   return `${mm}:${ss}`
 }
 function round1(v) { return Math.round(Number(v) * 10) / 10 }
+function speakerKind(row){ const type=String(row?.speech_type||'').toLowerCase(); if(type==='narration')return'narration'; if(type==='monologue'||type==='internal_monologue')return'monologue'; return String(row?.character||'').trim()?'dialogue':'unknown' }
+function speakerLabel(row){ const kind=speakerKind(row); if(kind==='narration')return'旁白'; if(kind==='monologue')return String(row?.character||'').trim()||'内心独白'; if(kind==='unknown')return'未指定说话人'; return row.character }
+function referenceShotScope(ref){ if(ref.role==='storyboard')return'仅起始构图'; if(ref.role==='location')return selectedShots.value.length?'全部Shot':'待导演设计'; const name=String(ref.identity||'').trim(); const hits=selectedShots.value.filter(s=>[s.prompt_subject,s.prompt_action,s.description,s.dialogue].join(' ').includes(name)).map(s=>`Shot ${s.order}`); return hits.join('、')||'外观参考，不强制入镜' }
 
 function sceneDubs(sc) {
   return dialogues.value.filter(d => d.scene_id === sc.id)
@@ -516,6 +531,10 @@ async function loadMerges() {
 
 function clearSceneDrafts() { videoDraftSafety?.dispose(); videoDraftSafety = null; visualBeatDraft.value = ''; polishDraft.value = ''; assetReviewDraft.value = ''; coverageReviewDraft.value = ''; videoPromptDraft.value = '' }
 function startVideoDraftSafety() { videoDraftSafety?.dispose(); videoDraftSafety = createDraftSafety({ key: `draft:h3-prompt:${id()}:${selected.value.id}`, getDraft: () => ({ prompt: videoPromptDraft.value, template: videoPromptTemplate.value }), applyDraft: d => { videoPromptDraft.value = d.prompt || ''; videoPromptTemplate.value = d.template || 'minimax_h3_ref2v' }, save: () => saveReviewedVideoPrompt(false) }); videoDraftSafety.start() }
+async function previewAndApplyRetime() {
+  if(!selected.value)return
+  try { const preview=(await api.previewShotRetime(id(),selected.value.id)).data; const summary=(preview.shots||[]).map(s=>`Shot ${s.order}: ${Number(s.duration).toFixed(1)}秒`).join('\n'); if(!confirm(`当前Shot合计${Number(preview.previous_total).toFixed(1)}秒，将按比例调整至Scene ${Number(preview.scene_duration).toFixed(1)}秒：\n${summary}\n\n确认应用？`))return; await api.applyShotRetime(id(),selected.value.id); await loadSelectedWorkbench(); toast.success('Shot配时已与Scene对齐') } catch(e){ toast.error(e.response?.data?.error||'重新配时失败') }
+}
 async function loadSelectedWorkbench() {
   const sceneId = selected.value?.id
   if (!sceneId) { selectedShots.value=[]; videoPromptDetail.value=null; return }
@@ -602,7 +621,7 @@ async function previewEpisodeDub() {
   busy.value = true
   try {
     const { data } = await api.episodeDubPreview(id(), activeEpN.value)
-    const lines = (data.timeline || []).slice(0, 20).map(row => `${Number(row.start).toFixed(1)}–${Number(row.end).toFixed(1)}s ${row.character || '旁白'}：${row.text}`)
+    const lines = (data.timeline || []).slice(0, 20).map(row => `${Number(row.start).toFixed(1)}–${Number(row.end).toFixed(1)}s ${speakerLabel(row)}：${row.text}`)
     window.alert(`第${activeEpN.value}集配音时间线（${(data.dialogues || []).length}条）\n\n${lines.join('\n') || '暂无对白'}`)
   } catch (e) { toast.error(e.response?.data?.error || '配音预览失败') }
   finally { busy.value = false }
@@ -894,7 +913,7 @@ watch(videoPromptDraft, () => videoDraftSafety?.schedule())
 .editor-split { display: grid; grid-template-columns: 1.1fr 1fr; gap: 20px; align-items: start; }
 @media (max-width: 980px) { .editor-split { grid-template-columns: 1fr; } }
 
-.production-board{display:grid;grid-template-columns:repeat(5,minmax(180px,1fr));gap:12px;overflow-x:auto}.board-column{min-height:150px;padding:10px;border:1px solid var(--border);border-radius:12px;background:var(--surface-secondary)}.board-column header{display:flex;justify-content:space-between;margin-bottom:8px}.board-card{display:grid;width:100%;gap:4px;margin-bottom:7px;padding:9px;text-align:left;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text-primary);cursor:pointer}.board-card.active{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}.board-card small,.board-empty{color:var(--text-tertiary)}
+.production-board{display:grid;grid-template-columns:repeat(7,minmax(180px,1fr));gap:12px;overflow-x:auto}.board-column{min-height:150px;padding:10px;border:1px solid var(--border);border-radius:12px;background:var(--surface-secondary)}.board-column header{display:flex;justify-content:space-between;margin-bottom:8px}.board-card{display:grid;width:100%;gap:4px;margin-bottom:7px;padding:9px;text-align:left;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text-primary);cursor:pointer}.board-card.active{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}.board-card.severity-warn{border-left:3px solid #f59e0b}.board-card.severity-error{border-left:3px solid #ef4444}.board-card.severity-success{border-left:3px solid #22c55e}.board-card small,.board-empty{color:var(--text-tertiary)}.warn-msg{color:#f59e0b}.preflight{margin-top:14px;padding:14px}.preflight summary{cursor:pointer}.check-ok{color:#22c55e;margin-top:7px}.check-fail{color:#ef4444;margin-top:7px}
 .timeline-card { padding: 16px; overflow-x: auto; }
 .timeline { display: flex; gap: 12px; min-width: max-content; }
 .tl-clip {

@@ -270,6 +270,8 @@ export const api = {
 
   // 导演镜头与提示词工作台
   sceneShots: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/shots`),
+  previewShotRetime: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/shots/retime-preview`),
+  applyShotRetime: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/shots/retime`),
   replaceSceneShots: (id, sid, shots) => http.post(`/projects/${id}/scenes/${sid}/shots`, { shots }),
   previewShotMaterialization: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/shots/materialization-preview`),
   materializeShots: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/shots/materialize`, { confirm: true }),

@@ -2197,6 +2197,15 @@ func TestH3VoiceoverUsesOfficialPhraseAndClosesLips(t *testing.T) {
 	}
 }
 
+func TestValidateDialogueSpeakerDoesNotGuessBlankCharacterAsNarration(t *testing.T) {
+	if err := validateDialogueSpeaker(models.Dialogue{ID: 7, Text: "夜色深沉"}); err == nil || !strings.Contains(err.Error(), "未指定说话人") {
+		t.Fatalf("err=%v", err)
+	}
+	if err := validateDialogueSpeaker(models.Dialogue{ID: 8, SpeechType: "narration", Text: "夜色深沉"}); err != nil {
+		t.Fatalf("explicit narration rejected: %v", err)
+	}
+}
+
 func TestWriteSRTEntry(t *testing.T) {
 	var sb strings.Builder
 	writeSRTEntry(&sb, 1, 0, 2.5, "林夏", "你来了。")

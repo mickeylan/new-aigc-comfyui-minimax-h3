@@ -15,6 +15,40 @@ type ShotService struct{ db *gorm.DB }
 
 func NewShotService(db *gorm.DB) *ShotService { return &ShotService{db: db} }
 
+const shotDurationTolerance = 0.5
+
+func shotDurationTotal(shots []models.Shot) float64 {
+	total := 0.0
+	for _, shot := range shots {
+		total += shot.Duration
+	}
+	return math.Round(total*10) / 10
+}
+
+func rebalanceShotDurations(shots []models.Shot, target float64) ([]models.Shot, error) {
+	if len(shots) == 0 || target < 3 || target > 15 {
+		return nil, fmt.Errorf("Scene时长必须为3至15秒且至少包含一个Shot")
+	}
+	total := shotDurationTotal(shots)
+	if total <= 0 {
+		return nil, fmt.Errorf("Shot总时长必须大于0")
+	}
+	result := append([]models.Shot(nil), shots...)
+	used := 0.0
+	for i := range result {
+		if i == len(result)-1 {
+			result[i].Duration = math.Round((target-used)*10) / 10
+		} else {
+			result[i].Duration = math.Round((result[i].Duration/total*target)*10) / 10
+			used += result[i].Duration
+		}
+		if result[i].Duration <= 0 {
+			return nil, fmt.Errorf("Scene时长不足以容纳当前Shot数量")
+		}
+	}
+	return result, nil
+}
+
 var shotUpdateFields = map[string]bool{
 	"order": true, "act_type": true, "shot_type": true, "camera_angle": true, "camera_movement": true,
 	"transition_type": true, "transition_note": true, "start_state": true, "end_state": true,

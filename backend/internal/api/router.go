@@ -334,6 +334,8 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	// Scene 下的导演镜头层（手动结构化数据，不按字符比例切分）
 	r.POST("/api/projects/:id/scenes/:sid/shots", svc.HandleCreateShots)
 	r.GET("/api/projects/:id/scenes/:sid/shots", svc.HandleGetSceneShots)
+	r.GET("/api/projects/:id/scenes/:sid/shots/retime-preview", svc.HandlePreviewShotRetime)
+	r.POST("/api/projects/:id/scenes/:sid/shots/retime", svc.HandleApplyShotRetime)
 	r.GET("/api/projects/:id/scenes/:sid/shots/materialization-preview", svc.HandlePreviewShotMaterialization)
 	r.POST("/api/projects/:id/scenes/:sid/shots/materialize", svc.HandleMaterializeShots)
 	r.GET("/api/projects/:id/scenes/:sid/native-regroup-preview", svc.HandlePreviewNativeSceneRegroup)

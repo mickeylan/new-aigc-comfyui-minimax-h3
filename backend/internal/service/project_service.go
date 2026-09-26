@@ -4462,7 +4462,22 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		return err
 	}
 	sc = &latest
+	var structuredShots []models.Shot
+	if err := s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&structuredShots).Error; err != nil {
+		return err
+	}
+	if len(structuredShots) > 0 {
+		total := shotDurationTotal(structuredShots)
+		if math.Abs(total-sc.Duration) > shotDurationTolerance {
+			return fmt.Errorf("Scene时长%.1f秒与内部Shot总时长%.1f秒不一致，请先预览并应用重新配时", sc.Duration, total)
+		}
+	}
 	dialogues := s.sceneVideoDialogues(sc)
+	for _, dialogue := range dialogues {
+		if err := validateDialogueSpeaker(dialogue); err != nil {
+			return err
+		}
+	}
 	minimumSpeechDuration := modelDialoguesMinDuration(dialogues)
 	if minimumSpeechDuration > maxSceneVideoDuration {
 		return fmt.Errorf("场景 %d 的对白自然朗读预计需要 %.1f 秒，超过单个视频 15 秒上限，请先拆分镜头；系统不会通过加快语速压缩对白", sc.Order, minimumSpeechDuration)
@@ -6675,8 +6690,22 @@ func (s *ProjectService) dubVoiceFor(d *models.Dialogue) (string, string, string
 	return "", "", ""
 }
 
+func validateDialogueSpeaker(d models.Dialogue) error {
+	if spokenDialogueText(d.Text) == "" {
+		return nil
+	}
+	typeName, speaker := normalizeScriptSpeech(d.SpeechType, d.Character)
+	if typeName == "" || speaker == "" {
+		return fmt.Errorf("对白 #%d 未指定说话人；只有明确标记为 narration 的内容才是旁白", d.ID)
+	}
+	return nil
+}
+
 // StartDialogueTTS 异步合成单条对白（占位防并发）
 func (s *ProjectService) StartDialogueTTS(d *models.Dialogue) error {
+	if err := validateDialogueSpeaker(*d); err != nil {
+		return err
+	}
 	token := fmt.Sprintf("tts-%d-%d", d.ID, time.Now().UnixNano())
 	claim := s.db.Model(&models.Dialogue{}).Where("id = ? AND status <> ?", d.ID, "synthesizing").
 		Updates(map[string]any{"status": "synthesizing", "audio_token": token, "error": ""})

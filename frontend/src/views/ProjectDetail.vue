@@ -427,7 +427,7 @@
               <button v-if="dialogueBudget(sc).overflow && dialogueBudget(sc).minimum <= 15" class="btn btn-xs btn-ghost" :disabled="busy" @click="applyDialogueDuration(sc)">应用建议时长</button>
             </div>
             <div v-for="d in sceneDialogues(sc)" :key="d.id" class="dialogue-row">
-              <span class="dl-char">{{ d.character || '旁白' }}</span>
+              <span class="dl-char">{{ dialogueSpeakerLabel(d) }}</span>
               <span class="dl-text">{{ d.text }}</span>
               <audio v-if="d.audio_file && d.status === 'ready'" :src="dubAudioUrl(d)" controls preload="none" class="dl-audio" />
               <span v-else-if="d.status === 'synthesizing'" class="dl-state">合成中…</span>
@@ -2200,6 +2200,12 @@ async function removeAsset(a) {
 }
 
 // ---------- 对白配音与字幕 ----------
+function dialogueSpeakerLabel(d) {
+  const type=String(d?.speech_type||'').toLowerCase()
+  if(type==='narration')return'旁白'
+  if(type==='monologue'||type==='internal_monologue')return String(d?.character||'').trim()||'内心独白'
+  return String(d?.character||'').trim()||'未指定说话人'
+}
 function sceneDialogues(sc) {
   return dialogues.value.filter(d => d.scene_id === sc.id)
 }

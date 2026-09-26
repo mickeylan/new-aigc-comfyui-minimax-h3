@@ -1178,6 +1178,44 @@ func (s *Service) HandleGetSceneShots(c *gin.Context) {
 	c.JSON(200, gin.H{"shots": shots})
 }
 
+func (s *Service) HandlePreviewShotRetime(c *gin.Context) { s.handleShotRetime(c, false) }
+func (s *Service) HandleApplyShotRetime(c *gin.Context)   { s.handleShotRetime(c, true) }
+func (s *Service) handleShotRetime(c *gin.Context, apply bool) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	sceneID, err := strconv.ParseUint(c.Param("sid"), 10, 32)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid scene id"})
+		return
+	}
+	var scene models.Scene
+	if err := s.DB.Where("id=? AND project_id=?", sceneID, p.ID).First(&scene).Error; err != nil {
+		c.JSON(404, gin.H{"error": "scene not found"})
+		return
+	}
+	shots, err := s.Shots.GetSceneShots(uint(sceneID))
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	before := shotDurationTotal(shots)
+	proposed, err := rebalanceShotDurations(shots, scene.Duration)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	if apply {
+		proposed, err = s.Shots.ReplaceShots(uint(sceneID), proposed)
+		if err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	c.JSON(200, gin.H{"shots": proposed, "scene_duration": scene.Duration, "previous_total": before, "proposed_total": shotDurationTotal(proposed), "applied": apply})
+}
+
 func (s *Service) HandleUpdateShot(c *gin.Context) {
 	p, ok := s.loadProject(c)
 	if !ok {

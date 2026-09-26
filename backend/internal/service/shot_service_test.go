@@ -11,6 +11,20 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+func TestRebalanceShotDurationsPreservesRatiosAndExactSceneTotal(t *testing.T) {
+	shots := []models.Shot{{Duration: 1.5}, {Duration: 2.5}}
+	got, err := rebalanceShotDurations(shots, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].Duration != 3.8 || got[1].Duration != 6.2 || shotDurationTotal(got) != 10 {
+		t.Fatalf("retimed=%+v total=%v", got, shotDurationTotal(got))
+	}
+	if shots[0].Duration != 1.5 {
+		t.Fatal("preview mutated original shots")
+	}
+}
+
 func newTestDBWithNewModels(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})

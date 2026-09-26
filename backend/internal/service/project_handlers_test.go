@@ -21,9 +21,18 @@ func TestSceneVideoReferenceBindingsPreserveEffectiveOrder(t *testing.T) {
 		t.Fatalf("bindings=%+v", got)
 	}
 	for i := range got {
-		if got[i].Picture != i+1 || got[i].Subject != i+1 || got[i].Name != refs[i].Name {
+		if got[i].Picture != i+1 || got[i].Name != refs[i].Name {
 			t.Fatalf("binding %d=%+v", i, got[i])
 		}
+	}
+	if got[0].Subject == nil || *got[0].Subject != 1 || got[0].Role != "character" || got[0].Identity != "舒寒" {
+		t.Fatalf("character=%+v", got[0])
+	}
+	if got[1].Subject == nil || got[1].Role != "location" || got[1].Identity != "内殿" {
+		t.Fatalf("location=%+v", got[1])
+	}
+	if got[2].Subject != nil || got[2].Role != "storyboard" {
+		t.Fatalf("storyboard=%+v", got[2])
 	}
 	if got[2].ImageURL != "/api/input/1/storyboard.png" {
 		t.Fatalf("url=%q", got[2].ImageURL)

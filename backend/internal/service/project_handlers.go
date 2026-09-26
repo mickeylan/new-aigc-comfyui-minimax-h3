@@ -310,7 +310,10 @@ func (s *Service) HandleRedesignScenePrompt(c *gin.Context) {
 
 type sceneVideoReferenceBinding struct {
 	Picture  int    `json:"picture"`
-	Subject  int    `json:"subject"`
+	Subject  *int   `json:"subject"`
+	Role     string `json:"role"`
+	Identity string `json:"identity"`
+	Usage    string `json:"usage"`
 	Label    string `json:"label"`
 	TaskID   string `json:"task_id"`
 	Name     string `json:"name"`
@@ -324,7 +327,31 @@ func sceneVideoReferenceBindings(refs []FileMeta, lines []string) []sceneVideoRe
 		if i < len(lines) {
 			label = strings.TrimSpace(strings.TrimPrefix(lines[i], "-"))
 		}
-		out = append(out, sceneVideoReferenceBinding{Picture: i + 1, Subject: i + 1, Label: label, TaskID: ref.TaskID, Name: ref.Name, ImageURL: fmt.Sprintf("/api/input/%s/%s", ref.TaskID, ref.Name)})
+		role, usage := "reference", "外观参考"
+		switch {
+		case strings.Contains(label, "当前分镜") || strings.Contains(label, "开始画面"):
+			role, usage = "storyboard", "起始构图与动作状态"
+		case strings.Contains(label, "场景") || strings.Contains(label, "环境"):
+			role, usage = "location", "环境与空间参考"
+		case strings.Contains(label, "道具"):
+			role, usage = "prop", "道具外观参考"
+		case strings.Contains(label, "造型"):
+			role, usage = "look", "服装、发型与配饰参考"
+		case strings.Contains(label, "角色"):
+			role, usage = "character", "身份、五官与年龄参考"
+		}
+		identity := label
+		if left := strings.Index(label, "「"); left >= 0 {
+			if right := strings.Index(label[left+len("「"):], "」"); right >= 0 {
+				identity = label[left+len("「") : left+len("「")+right]
+			}
+		}
+		var subject *int
+		if role != "storyboard" {
+			value := i + 1
+			subject = &value
+		}
+		out = append(out, sceneVideoReferenceBinding{Picture: i + 1, Subject: subject, Role: role, Identity: identity, Usage: usage, Label: label, TaskID: ref.TaskID, Name: ref.Name, ImageURL: fmt.Sprintf("/api/input/%s/%s", ref.TaskID, ref.Name)})
 	}
 	return out
 }
