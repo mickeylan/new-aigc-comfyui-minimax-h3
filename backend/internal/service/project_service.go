@@ -1135,13 +1135,14 @@ func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string, templ
 		}
 		switch code {
 		case "minimax_h3_t2v":
-			return buildH3T2VAPrompt(sc, &p, dubs)
+			return s.applySceneShotTimeline(sc, buildH3T2VAPrompt(sc, &p, dubs))
 		case "minimax_h3_i2v":
-			return buildH3I2VAPrompt(sc, &p, dubs)
+			return s.applySceneShotTimeline(sc, buildH3I2VAPrompt(sc, &p, dubs))
 		case "minimax_h3_first_last":
-			return buildH3FL2VAPrompt(sc, &p, dubs)
+			return s.applySceneShotTimeline(sc, buildH3FL2VAPrompt(sc, &p, dubs))
 		default:
-			return buildMiniMaxH3Prompt(sc, &p, dubs)
+			_, refLines := s.sceneVideoReferenceFiles(sc, pid)
+			return s.applySceneShotTimeline(sc, buildMiniMaxH3RefPrompt(sc, &p, dubs, refLines))
 		}
 	}
 	if templateOverride != "" {
@@ -1153,7 +1154,7 @@ func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string, templ
 	// 默认模式继续使用 Ref2VA；人物、场景与分镜参考图在提交阶段统一装配。
 	if prompt == "" {
 		_, refLines := s.sceneVideoReferenceFiles(sc, pid)
-		prompt = buildMiniMaxH3RefPrompt(sc, &p, dubs, refLines)
+		prompt = s.applySceneShotTimeline(sc, buildMiniMaxH3RefPrompt(sc, &p, dubs, refLines))
 	}
 	return "minimax_h3_ref2v", prompt, nil
 }
@@ -1195,9 +1196,26 @@ func (s *ProjectService) buildVideoFilesForTemplate(sc *models.Scene, pid, tplCo
 func defaultSceneVideoAction(sc *models.Scene) string {
 	content := strings.TrimSpace(sc.Content)
 	if content == "" {
-		return "[Shot 1] 主体完成一个连续可见的动作并自然停下。摄影机保持静止。"
+		return "[Shot 1] The primary subject performs one continuous visible action and comes to a natural stop. The camera holds a static shot."
 	}
 	return "[Shot 1] " + content
+}
+
+func h3VisualProseIsEnglish(text, characterNames string) bool {
+	cleaned := text
+	for _, name := range parseSceneCharacters(characterNames) {
+		cleaned = strings.ReplaceAll(cleaned, name, "")
+	}
+	latin, han := 0, 0
+	for _, r := range cleaned {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z':
+			latin++
+		case r >= '\u4e00' && r <= '\u9fff':
+			han++
+		}
+	}
+	return latin >= 20 && latin > han*2
 }
 
 // GenerateSceneVideoAction 用文本模型生成用户可审核编辑的 Ref2VA detailed_description 正文。
@@ -1222,7 +1240,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 		dialogueContext = strings.Join(lines, "\n")
 	}
 	system := fmt.Sprintf(`你是 MiniMax H3 Ref2VA 视频动作编辑。只输出简洁的 detailed_description 正文，不输出字段名、解释、规则或 Markdown。
-输出正文使用用户当前使用的语言，保持自然、清晰、易于人工审核和修改。真实对白由系统另行加入，你不得翻译、复述或自行补写对白。
+除结构化对白由系统稍后以原语言写入<d>外，你输出的全部视觉、动作、镜头、声音连续性说明必须使用自然英文。不得翻译、复述或自行补写对白。
 正文是给视频模型执行的镜头指令，不是剧本复述。只保留当前镜头实际可见的主体位置、一个主要动作、必要的表情变化和一种运镜，使用3至5句简短明确的句子。
 运镜必须自然融入动作句：明确运动类型；仅在确有意义时写小/大幅度和慢/快速，正常速度与中等幅度省略。固定镜头不得同时出现推进、跟随、摇移、升降、环绕或变焦。
 忠实采用Scene与结构化Shot，但不得复述剧情背景、人物关系、前因后果、心理活动、内心想法、氛围解释或观众感受；禁止“仿佛想说什么”“未说出口的问题”“沉默中充满”等文学化语言暗示。
@@ -1244,6 +1262,9 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		return "", fmt.Errorf("AI 错误地自行填写了 Subject 编号，请重试；人物必须先使用真实角色名")
 	}
 	out = stripPromptDialogueNarration(out)
+	if !h3VisualProseIsEnglish(out, sc.Characters) {
+		return "", fmt.Errorf("AI 返回的视频动作提示词视觉正文必须使用英文，请重试")
+	}
 	out = useSubjectTags(out, refLines)
 	if !strings.HasPrefix(out, "[Shot 1]") {
 		out = "[Shot 1] " + out
@@ -1346,19 +1367,21 @@ func normalizeVideoActionPrompt(prompt string) string {
 }
 
 var (
-	h3DialogueTagPattern       = regexp.MustCompile(`(?is)<d>.*?</d>`)
-	h3DialogueClausePattern    = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}]{1,20})(?:\s*\(S[0-9]+\))?(?:画外音|内心独白|说|说道|问道|答道)[：:]?\s*<d>.*?</d>[。.]?`)
-	dialogueNarrationPattern   = regexp.MustCompile(`(?:<Subject [0-9]+>(?:\s*\(S[0-9]+\))?(?:说道|说|问道|答道)[：:]?\s*|[\p{Han}]{1,12}(?:\s*\(S[0-9]+\))?(?:说道|问道|答道|说[：:])\s*)`)
-	orphanSpeakerPattern       = regexp.MustCompile(`(?:<Subject [0-9]+>|[\p{Han}]{1,20})\s*\(S[0-9]+\)[。.]?`)
-	quotedDialoguePattern      = regexp.MustCompile(`[“\"][^”\"]*[”\"]`)
-	repeatedShotMarkerPattern  = regexp.MustCompile(`(?:\[Shot 1\]\s*){2,}`)
-	emptyH3ShotLinePattern     = regexp.MustCompile(`(?m)^\s*\[Shot\s+[0-9]+(?:\s*\|[^\]]*)?\]\s*[。.]?\s*$\n?`)
-	crossShotContinuityPattern = regexp.MustCompile(`(?m)[^。\n]*\(S[0-9]+\)的同一句对白[^。\n]*本镜非说话角色保持闭口[。.]?`)
+	h3DialogueTagPattern           = regexp.MustCompile(`(?is)<d>.*?</d>`)
+	h3DialogueClausePattern        = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}]{1,20})(?:\s*\(S[0-9]+\))?(?:画外音|内心独白|说|说道|问道|答道)[：:]?\s*<d>.*?</d>[。.]?`)
+	h3EnglishDialogueClausePattern = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}A-Za-z][\p{Han}A-Za-z0-9，,·\s]{0,60})\s*\(S[0-9]+\)\s*(?:says(?:\s+in\s+an\s+off-screen\s+voiceover)?|delivers\s+an\s+internal\s+monologue)\s*:\s*<d>.*?</d>(?:\s+while\s+their\s+lips\s+remain\s+completely\s+closed)?[。.]?`)
+	dialogueNarrationPattern       = regexp.MustCompile(`(?:<Subject [0-9]+>(?:\s*\(S[0-9]+\))?(?:说道|说|问道|答道)[：:]?\s*|[\p{Han}]{1,12}(?:\s*\(S[0-9]+\))?(?:说道|问道|答道|说[：:])\s*)`)
+	orphanSpeakerPattern           = regexp.MustCompile(`(?:<Subject [0-9]+>|[\p{Han}]{1,20})\s*\(S[0-9]+\)[。.]?`)
+	quotedDialoguePattern          = regexp.MustCompile(`[“\"][^”\"]*[”\"]`)
+	repeatedShotMarkerPattern      = regexp.MustCompile(`(?:\[Shot 1\]\s*){2,}`)
+	emptyH3ShotLinePattern         = regexp.MustCompile(`(?m)^\s*\[Shot\s+[0-9]+(?:\s*\|[^\]]*)?\]\s*[。.]?\s*$\n?`)
+	crossShotContinuityPattern     = regexp.MustCompile(`(?m)(?:<Subject [0-9]+>|[\p{Han}A-Za-z][\p{Han}A-Za-z0-9，,·\s]{0,60})\s*\(S[0-9]+\)(?:的同一句对白|'s same line)[^。\n]*(?:本镜非说话角色保持闭口|every visible non-speaking character keeps their lips completely closed)[。.]?`)
 )
 
 func stripPromptDialogueNarration(prompt string) string {
 	text := crossShotContinuityPattern.ReplaceAllString(prompt, "")
 	text = h3DialogueClausePattern.ReplaceAllString(text, "")
+	text = h3EnglishDialogueClausePattern.ReplaceAllString(text, "")
 	text = h3DialogueTagPattern.ReplaceAllString(text, "")
 	text = quotedDialoguePattern.ReplaceAllString(text, "")
 	text = dialogueNarrationPattern.ReplaceAllString(text, "")
@@ -1770,7 +1793,7 @@ func visualiseSpeechPerformanceNarration(text string, hasDialogue bool) string {
 	return strings.TrimSpace(strings.Trim(text, "；， "))
 }
 
-var h3ShotMarkerPattern = regexp.MustCompile(`\[Shot\s+([0-9]+)(?:\s*\|[^\]]*)?\]`)
+var h3ShotMarkerPattern = regexp.MustCompile(`\[Shot\s+([0-9]+)(?:\s*\|[^\]]*)?\](?:\s+At\s+[0-9]{2}:[0-9]{2}\.[0-9]{3},)?`)
 
 var abstractShotClausePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`[^，。；]*(?:虽在|虽然)[^，。；]*[，,](?:但|然而)[^，。；]*`),
@@ -1860,7 +1883,7 @@ func applyShotTimeline(prompt string, shots []models.Shot, totalDuration float64
 			totalDuration += shot.Duration
 		}
 	}
-	starts, ends := make(map[int]float64, len(shots)), make(map[int]float64, len(shots))
+	starts := make(map[int]float64, len(shots))
 	cursor := 0.0
 	for i, shot := range shots {
 		start, end := cursor, cursor+shot.Duration
@@ -1870,7 +1893,7 @@ func applyShotTimeline(prompt string, shots []models.Shot, totalDuration float64
 		if end < start {
 			end = start
 		}
-		starts[i+1], ends[i+1], cursor = start, end, end
+		starts[i+1], cursor = start, end
 	}
 	return h3ShotMarkerPattern.ReplaceAllStringFunc(prompt, func(marker string) string {
 		match := h3ShotMarkerPattern.FindStringSubmatch(marker)
@@ -1885,8 +1908,19 @@ func applyShotTimeline(prompt string, shots []models.Shot, totalDuration float64
 		if !ok {
 			return marker
 		}
-		return fmt.Sprintf("[Shot %d | %.2f-%.2f秒]", n, start, ends[n])
+		if n == 1 {
+			return "[Shot 1]"
+		}
+		return fmt.Sprintf("[Shot %d] At %s,", n, formatH3Timestamp(start))
 	})
+}
+
+func formatH3Timestamp(seconds float64) string {
+	if seconds < 0 {
+		seconds = 0
+	}
+	totalMillis := int64(math.Round(seconds * 1000))
+	return fmt.Sprintf("%02d:%02d.%03d", totalMillis/60000, (totalMillis/1000)%60, totalMillis%1000)
 }
 
 func (s *ProjectService) applySceneShotTimeline(sc *models.Scene, prompt string) string {
@@ -1933,9 +1967,9 @@ func dialogueSpeakerIDs(dubs []models.Dialogue) []int {
 
 func h3SoundscapeContract(hasDialogue bool) string {
 	if hasDialogue {
-		return "安静的环境底噪与画面中明确可见的物理动作声持续存在。对白仅在画面时间线中出现，此处不重复对白文本；不出现其他人声、额外对白、旁白、解说、含混发声或吟唱。"
+		return "Quiet ambient room tone and physical action sounds that are visibly motivated continue throughout. Dialogue appears only in the shot timeline and is not repeated here; no additional voices, narration, indistinct vocalization, or singing are present."
 	}
-	return "仅有环境底噪与画面中明确可见的物理动作声。全程无对白、无人声、无旁白、无解说、无含混发声、无说话声或吟唱；所有人物始终闭口。"
+	return "Only ambient room tone and physical action sounds that are visibly motivated are audible. There is no dialogue, human voice, narration, commentary, indistinct vocalization, speech, or singing; every visible person keeps their lips completely closed."
 }
 
 func isNarrationSpeaker(name string) bool {
@@ -1955,11 +1989,11 @@ func renderStructuredDialogue(d models.Dialogue, speakerID int, referenceLines [
 	var rendered string
 	switch d.SpeechType {
 	case "narration":
-		rendered = speaker + "画外音：<d>[Chinese] " + text + "</d>。"
+		rendered = speaker + " says in an off-screen voiceover: <d>[Chinese] " + text + "</d> while their lips remain completely closed."
 	case "monologue":
-		rendered = speaker + "内心独白：<d>[Chinese] " + text + "</d>。"
+		rendered = speaker + " delivers an internal monologue: <d>[Chinese] " + text + "</d> while their lips remain completely closed."
 	default:
-		rendered = speaker + "说：<d>[Chinese] " + text + "</d>。"
+		rendered = speaker + " says: <d>[Chinese] " + text + "</d>."
 	}
 	if crossShot {
 		rendered += "<scenetrans>"
@@ -2003,7 +2037,7 @@ func renderCrossShotContinuation(d models.Dialogue, speakerID int, referenceLine
 	if shotNo > 2 {
 		phrase = "carries over from the previous shot and remains audible across the transition"
 	}
-	return speaker + "的同一句对白 " + phrase + "；声音跨切镜连续，本镜非说话角色保持闭口。"
+	return speaker + "'s same line " + phrase + "; every visible non-speaking character keeps their lips completely closed."
 }
 
 func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, referenceLines []string, shots []models.Shot) string {
@@ -2121,11 +2155,11 @@ func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLine
 		text = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(text, "<scenetrans>", ""), "<cutoff>", ""))
 		switch d.SpeechType {
 		case "narration":
-			body += " " + speaker + "画外音：<d>[Chinese] " + text + "</d>。"
+			body += " " + speaker + " says in an off-screen voiceover: <d>[Chinese] " + text + "</d> while their lips remain completely closed."
 		case "monologue":
-			body += " " + speaker + "内心独白：<d>[Chinese] " + text + "</d>。"
+			body += " " + speaker + " delivers an internal monologue: <d>[Chinese] " + text + "</d> while their lips remain completely closed."
 		default:
-			body += " " + speaker + "说：<d>[Chinese] " + text + "</d>。"
+			body += " " + speaker + " says: <d>[Chinese] " + text + "</d>."
 		}
 		if crossShot {
 			body += "<scenetrans>"
@@ -2162,8 +2196,8 @@ func buildH3T2VAPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialog
 // buildH3I2VAPrompt binds Picture 1 to the actual 0.00-second first frame.
 func buildH3I2VAPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue) string {
 	body := strings.TrimSpace(strings.TrimPrefix(h3TimelineBody(sc, p, dubs), "[Shot 1]"))
-	body = "[Shot 1] 以<Picture 1>作为目标视频0.00秒的实际首帧，完整保持其构图、主体、服装、空间布局、道具、光线与视觉风格。" + body
-	return "目标视频的参考图时间对齐：<Picture 1>（来自[Shot 1]）对应目标视频0.00秒。\n\n" +
+	body = "[Shot 1] The shot begins from <Picture 1>, preserving its composition, subjects, clothing, spatial layout, props, lighting, and visual style before the action develops forward. " + body
+	return "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.\n\n" +
 		"integrated_multimodal_description:\n" + body +
 		"\n\noverall_soundscape:\n" + h3SoundscapeContract(len(validSceneDialogues(dubs)) > 0) +
 		"\n\nnon_diegetic_music:\nN/A"
@@ -2172,13 +2206,28 @@ func buildH3I2VAPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialog
 // buildH3FL2VAPrompt describes one continuous path from Picture 1 to Picture 2.
 func buildH3FL2VAPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue) string {
 	duration := normalizeSceneDuration(sc.Duration)
-	body := strings.TrimSpace(strings.TrimPrefix(h3TimelineBody(sc, p, dubs), "[Shot 1]"))
-	body = "[Shot 1] 镜头从<Picture 1>确定的状态、构图和空间关系开始。" + body +
-		"画面动作连续推进，最终在本镜结束时准确落到<Picture 2>确定的姿态、间距、光线和构图。"
-	return fmt.Sprintf("目标视频的参考图时间对齐：<Picture 1>（来自[Shot 1]）对应目标视频0.00秒；<Picture 2>（来自[Shot 1]）对应目标视频%.2f秒。\n\n", duration) +
+	timeline := h3TimelineBody(sc, p, dubs)
+	lastShot := lastH3ShotNumber(timeline)
+	body := strings.TrimSpace(strings.TrimPrefix(timeline, "[Shot 1]"))
+	body = "[Shot 1] The shot begins from the state, composition, and spatial relationships established by <Picture 1>. " + body
+	landing := fmt.Sprintf(" The visible actions and composition progressively converge so that [Shot %d] ends on the pose, spacing, lighting, and final composition established by <Picture 2>.", lastShot)
+	body += landing
+	return fmt.Sprintf("How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot %d) aligns with the %.2f-second mark of the target video.\n\n", lastShot, duration) +
 		"integrated_multimodal_description:\n" + body +
 		"\n\noverall_soundscape:\n" + h3SoundscapeContract(len(validSceneDialogues(dubs)) > 0) +
 		"\n\nnon_diegetic_music:\nN/A"
+}
+
+func lastH3ShotNumber(prompt string) int {
+	last := 1
+	for _, match := range h3ShotMarkerPattern.FindAllStringSubmatch(prompt, -1) {
+		if len(match) == 2 {
+			if n, err := strconv.Atoi(match[1]); err == nil && n > last {
+				last = n
+			}
+		}
+	}
+	return last
 }
 
 func compileH3PromptForTemplate(template string, sc *models.Scene, p *models.Project, dubs []models.Dialogue, referenceLines []string) string {
@@ -2261,9 +2310,9 @@ func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 		return false
 	}
 	if len(valid) == 0 {
-		return !strings.Contains(strings.ToLower(fullPrompt), "<d>") && strings.Contains(soundscape, "全程无对白") && strings.Contains(soundscape, "所有人物始终闭口")
+		return !strings.Contains(strings.ToLower(fullPrompt), "<d>") && strings.Contains(soundscape, "There is no dialogue") && strings.Contains(soundscape, "every visible person keeps their lips completely closed")
 	}
-	if !strings.Contains(soundscape, "不出现其他人声") || !strings.Contains(soundscape, "额外对白") {
+	if !strings.Contains(soundscape, "no additional voices") || !strings.Contains(soundscape, "Dialogue appears only in the shot timeline") {
 		return false
 	}
 	speakerIDs := dialogueSpeakerIDs(valid)
@@ -2290,8 +2339,50 @@ func resolveRef2VSubmissionPrompt(sc *models.Scene, p *models.Project, dubs []mo
 	return buildMiniMaxH3RefPrompt(&preview, p, dubs, referenceLines)
 }
 
+func englishH3ReferenceDescription(desc string, n int) string {
+	name := ""
+	if start := strings.Index(desc, "「"); start >= 0 {
+		if end := strings.Index(desc[start+len("「"):], "」"); end >= 0 {
+			name = desc[start+len("「") : start+len("「")+end]
+		}
+	}
+	switch {
+	case strings.Contains(desc, "上一镜确认尾帧"):
+		return "the confirmed final frame of the previous scene, used as this video's exact 0.00-second opening frame"
+	case strings.Contains(desc, "当前分镜画面"):
+		return "the current storyboard frame, used only as an optional composition and action-state reference"
+	case strings.Contains(desc, "角色") && name != "":
+		return fmt.Sprintf("the character %s shown in the four-view reference", name)
+	case strings.Contains(desc, "造型") && name != "":
+		return fmt.Sprintf("the approved character look %s", name)
+	case strings.Contains(desc, "场景") && name != "":
+		return fmt.Sprintf("the environment %s", name)
+	case strings.Contains(desc, "道具") && name != "":
+		return fmt.Sprintf("the prop %s", name)
+	case desc != "":
+		return fmt.Sprintf("reference asset %d (%s)", n, desc)
+	default:
+		return fmt.Sprintf("reference asset %d", n)
+	}
+}
+
+func h3VideoSubjects(referenceLines []string) (definitions, retention, subjectRefs []string) {
+	_, _, subjectRefs = h3StoryboardSubjects(referenceLines)
+	for i, line := range referenceLines {
+		n := i + 1
+		desc := strings.TrimSpace(strings.TrimPrefix(line, "-"))
+		if cut := strings.Index(desc, "："); cut >= 0 {
+			desc = strings.TrimSpace(desc[cut+len("："):])
+		}
+		desc = englishH3ReferenceDescription(desc, n)
+		definitions = append(definitions, fmt.Sprintf("<Subject %d> is %s from <Picture %d>.", n, desc, n))
+		retention = append(retention, fmt.Sprintf("<Subject %d> (appears in the shots where it is explicitly named): fully_preserved - %s.", n, desc))
+	}
+	return definitions, retention, subjectRefs
+}
+
 func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue, referenceLines []string) string {
-	definitions, retention, subjects := h3StoryboardSubjects(referenceLines)
+	definitions, retention, subjects := h3VideoSubjects(referenceLines)
 	body := canonicalVideoAction(sc.VideoPrompt, referenceLines)
 	if body == "" {
 		body = defaultSceneVideoAction(sc)
@@ -2304,13 +2395,13 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 		style = strings.TrimSpace(p.Style)
 	}
 	if style != "" {
-		body = strings.Replace(body, "[Shot 1]", style+"风格。\n[Shot 1]", 1)
+		body = strings.Replace(body, "[Shot 1]", "The target video uses the "+style+" visual style.\n[Shot 1]", 1)
 	}
 	body = stripStructuredDialogueFromAction(body, dubs)
 	for _, line := range referenceLines {
 		if strings.Contains(line, "上一镜确认尾帧") {
 			startPicture := openingPictureTag([]string{line})
-			body = "[Shot 1] 本视频必须从 " + startPicture + " 完整一致的画面开始；" + startPicture + " 定义本镜 0.00 秒画面，不是普通参考图。保持该画面构图、人物位置、姿态、服装和场景状态，随后继续本镜动作。 " + strings.TrimSpace(strings.TrimPrefix(body, "[Shot 1]"))
+			body = "[Shot 1] The target video begins from " + startPicture + " as its exact 0.00-second first frame, not as a loose visual reference. Preserve its composition, subject positions, poses, clothing, and scene state before the action develops forward. " + strings.TrimSpace(strings.TrimPrefix(body, "[Shot 1]"))
 			break
 		}
 	}
@@ -2318,7 +2409,7 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 	soundscape := h3SoundscapeContract(len(validDialogues) > 0)
 	body = appendStructuredDialogue(body, validDialogues, referenceLines)
 	return "subject_definitions:\n" + strings.Join(definitions, "\n") +
-		"\n\nsummary:\n[reference generation] " + strings.Join(subjects, "、") + "提供人物、场景及可选分镜状态参考，在约" + fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)) + "秒内严格执行本镜剧情与Shot设计。" +
+		"\n\nsummary:\n[reference generation] " + strings.Join(subjects, ", ") + " provide the character, environment, prop, and optional storyboard references used to execute the approved shot design over approximately " + fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)) + " seconds." +
 		"\n\nretention_analysis:\n" + strings.Join(retention, "\n") +
 		"\n\ndetailed_description:\n" + body +
 		"\n\noverall_soundscape:\n" + soundscape +
