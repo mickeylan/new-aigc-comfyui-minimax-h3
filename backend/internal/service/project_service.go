@@ -2326,6 +2326,22 @@ func enforceSilentListenerLips(body string) string {
 	return listeningLipMovementPattern.ReplaceAllString(body, "$1 lips remain completely closed while listening silently.")
 }
 
+func ensureVisibleDialogueSpeakers(segment string, speakers []string) string {
+	missing := make([]string, 0, len(speakers))
+	seen := map[string]bool{}
+	for _, speaker := range speakers {
+		speaker = strings.TrimSpace(speaker)
+		if speaker != "" && !seen[speaker] && !strings.Contains(segment, speaker) {
+			missing = append(missing, speaker)
+			seen[speaker] = true
+		}
+	}
+	if len(missing) == 0 {
+		return strings.TrimSpace(segment)
+	}
+	return strings.TrimSpace(segment) + " " + strings.Join(missing, "、") + "清晰出镜并同步本段口型；其他可见人物闭口。"
+}
+
 func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, referenceLines []string, shots []models.Shot) (string, bool) {
 	if len(shots) == 0 {
 		return body, false
@@ -2380,6 +2396,7 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 		}
 	}
 	byShot := map[int][]string{}
+	requiredVisibleSpeakers := map[int][]string{}
 	for i, shot := range shots {
 		for _, r := range shot.DialogueRanges {
 			d, ok := byID[r.DialogueID]
@@ -2397,6 +2414,11 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 			visual := shotVisuals[i+1]
 			speakerTag := useSubjectTags(strings.TrimSpace(d.Character), referenceLines)
 			visible := speakerTag != "" && strings.Contains(visual, speakerTag)
+			if strings.TrimSpace(d.SpeechType) == "" || d.SpeechType == "dialogue" {
+				if !visible && speakerTag != "" {
+					requiredVisibleSpeakers[i+1] = append(requiredVisibleSpeakers[i+1], speakerTag)
+				}
+			}
 
 			visibleSubjects := []string{}
 			seenSubject := map[string]bool{}
@@ -2424,7 +2446,7 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 			next = matches[i+1][0]
 		}
 		n, _ := strconv.Atoi(body[match[2]:match[3]])
-		segment := strings.TrimRight(body[start:next], " \n\t")
+		segment := ensureVisibleDialogueSpeakers(strings.TrimRight(body[start:next], " \n\t"), requiredVisibleSpeakers[n])
 		out.WriteString(segment)
 		if lines := byShot[n]; len(lines) > 0 {
 			out.WriteString(" ")
@@ -2491,12 +2513,18 @@ func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, refere
 		visualByShot[n] = body[marker[1]:next]
 	}
 	byShot := make(map[int][]string, len(shots))
+	requiredVisibleSpeakers := map[int][]string{}
 	for shotNo := 1; shotNo <= len(shots); shotNo++ {
 		for _, index := range assigned[shotNo] {
 			continuation := index > 0 && dialogueContinuesAcrossCut(valid[index-1], valid[index]) && dialogueIndexShot(assigned, index-1) == shotNo-1
 			visual := visualByShot[shotNo]
 			speakerTag := useSubjectTags(strings.TrimSpace(valid[index].Character), referenceLines)
 			visible := speakerTag != "" && strings.Contains(visual, speakerTag)
+			if strings.TrimSpace(valid[index].SpeechType) == "" || valid[index].SpeechType == "dialogue" {
+				if !visible && speakerTag != "" {
+					requiredVisibleSpeakers[shotNo] = append(requiredVisibleSpeakers[shotNo], speakerTag)
+				}
+			}
 
 			subjects := []string{}
 			seen := map[string]bool{}
@@ -2525,7 +2553,7 @@ func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, refere
 		if i+1 < len(matches) {
 			next = matches[i+1][0]
 		}
-		segment := strings.TrimRight(body[start:next], " \n\t")
+		segment := ensureVisibleDialogueSpeakers(strings.TrimRight(body[start:next], " \n\t"), requiredVisibleSpeakers[n])
 		out.WriteString(segment)
 		if lines := byShot[n]; len(lines) > 0 {
 			out.WriteString(" ")
@@ -2554,6 +2582,13 @@ func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLine
 		return strings.TrimSpace(body)
 	}
 	speakerIDs := dialogueSpeakerIDs(valid)
+	requiredVisible := []string{}
+	for _, d := range valid {
+		if strings.TrimSpace(d.SpeechType) == "" || d.SpeechType == "dialogue" {
+			requiredVisible = append(requiredVisible, useSubjectTags(strings.TrimSpace(d.Character), referenceLines))
+		}
+	}
+	body = ensureVisibleDialogueSpeakers(body, requiredVisible)
 	for i, d := range valid {
 		speakerName := strings.TrimSpace(d.Character)
 		speaker := useSubjectTags(speakerName, referenceLines)

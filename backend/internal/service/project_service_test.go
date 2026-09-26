@@ -2215,7 +2215,7 @@ func TestCrossShotDialogueFragmentsKeepSpeakerIdentityAndListenerSilent(t *testi
 	split := 11
 	shots := []models.Shot{{Order: 1, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: 0, EndRune: split}}}, {Order: 2, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: split, EndRune: len(full)}}}}
 	got := appendStructuredDialogueToShots(body, dubs, []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图"}, shots)
-	for _, want := range []string{"<Subject 1> (S1)说：", "<d>[Chinese] " + string(full[:split]) + "</d>", "<d>[Chinese] " + string(full[split:]) + "</d>"} {
+	for _, want := range []string{"<Subject 1> (S1)说：", "<d>[Chinese] " + string(full[:split]) + "</d>", "<d>[Chinese] " + string(full[split:]) + "</d>", "<Subject 1>清晰出镜并同步本段口型；其他可见人物闭口"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q:\n%s", want, got)
 		}
