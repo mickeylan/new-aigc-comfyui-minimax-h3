@@ -1262,6 +1262,9 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		return "", fmt.Errorf("AI 错误地自行填写了 Subject 编号，请重试；人物必须先使用真实角色名")
 	}
 	out = stripPromptDialogueNarration(out)
+	if duplicate := duplicateH3ShotNumbers(out); len(duplicate) > 0 {
+		return "", fmt.Errorf("AI 返回的视频动作提示词重复生成 Shot %d，请重试", duplicate[0])
+	}
 	if !h3VisualProseIsEnglish(out, sc.Characters) {
 		return "", fmt.Errorf("AI 返回的视频动作提示词视觉正文必须使用英文，请重试")
 	}
@@ -1853,6 +1856,75 @@ func rebuildStructuredShotAction(shots []models.Shot) string {
 	return strings.Join(parts, "\n")
 }
 
+func coalesceDuplicateH3Shots(prompt string) string {
+	matches := h3ShotMarkerPattern.FindAllStringSubmatchIndex(prompt, -1)
+	if len(matches) < 2 {
+		return prompt
+	}
+	prefix := strings.TrimSpace(prompt[:matches[0][0]])
+	order := make([]int, 0, len(matches))
+	parts := map[int][]string{}
+	markers := map[int]string{}
+	for i, match := range matches {
+		n, _ := strconv.Atoi(prompt[match[2]:match[3]])
+		next := len(prompt)
+		if i+1 < len(matches) {
+			next = matches[i+1][0]
+		}
+		content := strings.TrimSpace(prompt[match[1]:next])
+		if _, exists := parts[n]; !exists {
+			order = append(order, n)
+			markers[n] = prompt[match[0]:match[1]]
+		}
+		duplicate := false
+		for _, existing := range parts[n] {
+			if canonicalDialogueText(existing) == canonicalDialogueText(content) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate && content != "" {
+			parts[n] = append(parts[n], content)
+		}
+	}
+	var out strings.Builder
+	if prefix != "" {
+		out.WriteString(prefix)
+		out.WriteString("\n")
+	}
+	for i, n := range order {
+		if i > 0 {
+			out.WriteString("\n")
+		}
+		out.WriteString(markers[n])
+		if len(parts[n]) > 0 {
+			out.WriteString(" ")
+			out.WriteString(strings.Join(parts[n], " "))
+		}
+	}
+	return strings.TrimSpace(out.String())
+}
+
+func duplicateH3ShotNumbers(prompt string) []int {
+	seen, duplicate := map[int]bool{}, map[int]bool{}
+	for _, match := range h3ShotMarkerPattern.FindAllStringSubmatch(prompt, -1) {
+		if len(match) != 2 {
+			continue
+		}
+		n, _ := strconv.Atoi(match[1])
+		if seen[n] {
+			duplicate[n] = true
+		}
+		seen[n] = true
+	}
+	out := make([]int, 0, len(duplicate))
+	for n := range duplicate {
+		out = append(out, n)
+	}
+	sort.Ints(out)
+	return out
+}
+
 func ensureStructuredShotMarkers(prompt string, shots []models.Shot) string {
 	if len(shots) <= 1 {
 		return prompt
@@ -2270,6 +2342,7 @@ func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines
 		return ""
 	}
 	detail := normalizeVideoActionPrompt(prompt)
+	detail = coalesceDuplicateH3Shots(detail)
 	detail = stripStructuredDialogueFromAction(detail, dubs)
 	if len(shotSets) > 0 {
 		detail = ensureStructuredShotMarkers(detail, shotSets[0])

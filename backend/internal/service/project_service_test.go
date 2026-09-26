@@ -1940,6 +1940,23 @@ func TestH3NarrationAndCameraConflictValidation(t *testing.T) {
 	}
 }
 
+func TestNormalizeSavedH3AudioCoalescesDuplicateShotOneBeforeDialogue(t *testing.T) {
+	prompt := "subject_definitions:\nsubject\n\nsummary:\nsummary\n\nretention_analysis:\nretention\n\ndetailed_description:\n[Shot 1] The target video uses a live-action visual style. <Subject 1> (S1) says: <d>[Chinese] 你要代替姐姐去太运宗，其实太运宗倒是个不错的地方，</d>.\n[Shot 1] Starting from a close-up, <Subject 1> grips her sister's shoulder, then releases her hand as the camera slowly dollies backward. <Subject 1> (S1) says: <d>[Chinese] 你要代替姐姐去太运宗，其实太运宗倒是个不错的地方，</d>.\n\noverall_soundscape:\nold\n\nnon_diegetic_music:\nN/A"
+	dubs := []models.Dialogue{{Character: "上官若琳", Text: "你要代替姐姐去太运宗，其实太运宗倒是个不错的地方，"}}
+	got := normalizeSavedH3Audio(prompt, dubs, []string{"<Subject 1> 是 <Picture 1> 中的角色「上官若琳」四视图。"}, []models.Shot{{Order: 1, Duration: 8, Dialogue: dubs[0].Text}})
+	if strings.Count(h3PromptSection(got, "detailed_description:"), "[Shot 1]") != 1 {
+		t.Fatalf("duplicate Shot 1 retained: %s", got)
+	}
+	if strings.Count(got, "<d>") != 1 || strings.Count(got, dubs[0].Text) != 1 {
+		t.Fatalf("dialogue duplicated: %s", got)
+	}
+	for _, want := range []string{"live-action visual style", "Starting from a close-up", "slowly dollies backward"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("merged visual content lost %q: %s", want, got)
+		}
+	}
+}
+
 func TestNormalizeSavedH3AudioRebuildsCollapsedShotsWithoutDuplicateDialogue(t *testing.T) {
 	prompt := "subject_definitions:\n<Subject 2> 是角色参考。\n\nsummary:\n测试\n\nretention_analysis:\n测试\n\ndetailed_description:\n[Shot 1 | 0.00-5.00秒] <Subject 2> (S1)说：<d>[Chinese] 第一句。</d>。\n[Shot 1 | 0.00-5.00秒] <Subject 2> (S1)说：<d>[Chinese] 第一句。</d>。\n[Shot 1 | 0.00-5.00秒] 三镜动作坍缩。 <Subject 2> (S1)说：<d>[Chinese] 第一句。</d>。\n\noverall_soundscape:\n旧声音\n\nnon_diegetic_music:\nN/A"
 	shots := []models.Shot{{Order: 1, Duration: 5, Description: "第一镜动作", Dialogue: "第一句。"}, {Order: 2, Duration: 4, Description: "第二镜动作", Dialogue: "第二句，"}, {Order: 3, Duration: 5, Description: "第三镜动作", Dialogue: "第三句，"}}
