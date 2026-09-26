@@ -94,10 +94,10 @@ func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue) string {
 	for i, d := range dialogues {
 		lines = append(lines, fmt.Sprintf("D%d｜%s｜%s", i+1, strings.TrimSpace(d.Character), strings.TrimSpace(d.Text)))
 	}
-	return `按对白自然语速和语义停顿拆成多个3–15秒Native H3镜头。可以交替使用说话人近景、听者反应、画外音承载的反应镜头和双人镜头。硬规则：
+	return `按对白自然语速和语义停顿拆成多个3–15秒Native H3镜头。可以交替使用说话人近景、包含说话人的双人镜头，以及对白结束后的纯听者反应镜头。硬规则：
 1. Dialogue字段只能填下列结构化对白的连续原文片段，不得改写、增删、重复或创造旁白；无发声镜头必须为空。
 2. 所有镜头Dialogue按顺序拼接后必须逐字等于下列完整对白原文按顺序拼接的结果。
-3. 同一句可跨镜，但后镜必须承接前镜，不能重新起句；听者反应镜头可由当前说话人画外音连续承载。
+3. 同一句可跨镜，但每个仍承载普通dialogue片段的镜头都必须让真实说话人清晰可见并由其同步口型；听者反应必须使用说话人仍在画面内的双人/前后景构图。只有明确speech_type为narration或monologue时才允许纯听者画面承载画外声音；纯听者单人镜头只能安排在该句对白结束之后。
 4. 每镜3–15秒，一个主要情绪、一个主要动作、一种主要构图和明确结束状态。
 5. 对白自然时长决定总时长，不得压缩语速，也不得用重复动作填时长。
 结构化对白：
@@ -194,14 +194,40 @@ func restoreDialogueRhythmDraftText(draft *sceneDirectorDraft, dialogues []model
 
 func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
 	var expected, actual strings.Builder
-	for _, d := range dialogues {
-		expected.WriteString(canonicalDialogueText(d.Text))
+	type span struct {
+		start, end int
+		dialogue   models.Dialogue
 	}
+	spans := []span{}
+	offset := 0
+	for _, d := range dialogues {
+		text := canonicalDialogueText(d.Text)
+		expected.WriteString(text)
+		spans = append(spans, span{offset, offset + len([]rune(text)), d})
+		offset += len([]rune(text))
+	}
+	cursor := 0
 	for i, shot := range draft.Shots {
 		if shot.Duration < 3 || shot.Duration > 15 {
 			return fmt.Errorf("对白拆镜%d时长必须为3至15秒", i+1)
 		}
-		actual.WriteString(canonicalDialogueText(shot.Dialogue))
+		text := canonicalDialogueText(shot.Dialogue)
+		actual.WriteString(text)
+		start, end := cursor, cursor+len([]rune(text))
+		cursor = end
+		if text == "" {
+			continue
+		}
+		visual := strings.Join([]string{shot.PromptSubject, shot.PromptAction, shot.Description, shot.StartState, shot.EndState}, " ")
+		for _, source := range spans {
+			if end <= source.start || start >= source.end || source.dialogue.SpeechType != "dialogue" {
+				continue
+			}
+			speaker := strings.TrimSpace(source.dialogue.Character)
+			if speaker != "" && !strings.Contains(visual, speaker) {
+				return fmt.Errorf("对白拆镜%d承载角色“%s”的普通对白时，必须让该说话人清晰可见；纯听者反应镜头只能放在对白结束后", i+1, speaker)
+			}
+		}
 	}
 	if actual.String() != expected.String() {
 		return fmt.Errorf("导演草稿对白未逐字覆盖结构化对白，禁止遗漏、改写、重复或新增")

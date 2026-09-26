@@ -2361,6 +2361,7 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 	}
 	byShot := map[int][]string{}
 	visualSpeakerByShot := map[int]string{}
+	forcedOnscreenSpeakerByShot := map[int]string{}
 	for i, shot := range shots {
 		for _, r := range shot.DialogueRanges {
 			d, ok := byID[r.DialogueID]
@@ -2378,6 +2379,10 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 			visual := shotVisuals[i+1]
 			speakerTag := useSubjectTags(strings.TrimSpace(d.Character), referenceLines)
 			visible := speakerTag != "" && strings.Contains(visual, speakerTag)
+			if d.SpeechType == "dialogue" && !visible && speakerTag != "" {
+				forcedOnscreenSpeakerByShot[i+1] = speakerTag
+				visible = true
+			}
 			if r.StartRune > 0 && !visible && speakerTag != "" {
 				visualSpeakerByShot[i+1] = speakerTag
 			}
@@ -2410,6 +2415,10 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 		segment := strings.TrimRight(body[start:next], " \n\t")
 		if speakerTag := visualSpeakerByShot[n]; speakerTag != "" {
 			segment = strings.ReplaceAll(segment, "画外的说话者", "画外的"+speakerTag)
+		}
+		if speakerTag := forcedOnscreenSpeakerByShot[n]; speakerTag != "" {
+			segment = strings.ReplaceAll(segment, "画外的说话者", speakerTag)
+			segment += " " + speakerTag + " remains clearly visible on screen; only " + speakerTag + " lip-syncs to this shot's exact dialogue fragment."
 		}
 		out.WriteString(segment)
 		if lines := byShot[n]; len(lines) > 0 {
@@ -2477,12 +2486,17 @@ func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, refere
 		visualByShot[n] = body[marker[1]:next]
 	}
 	byShot := make(map[int][]string, len(shots))
+	forcedOnscreenSpeakerByShot := map[int]string{}
 	for shotNo := 1; shotNo <= len(shots); shotNo++ {
 		for _, index := range assigned[shotNo] {
 			continuation := index > 0 && dialogueContinuesAcrossCut(valid[index-1], valid[index]) && dialogueIndexShot(assigned, index-1) == shotNo-1
 			visual := visualByShot[shotNo]
 			speakerTag := useSubjectTags(strings.TrimSpace(valid[index].Character), referenceLines)
 			visible := speakerTag != "" && strings.Contains(visual, speakerTag)
+			if valid[index].SpeechType == "dialogue" && !visible && speakerTag != "" {
+				forcedOnscreenSpeakerByShot[shotNo] = speakerTag
+				visible = true
+			}
 			subjects := []string{}
 			seen := map[string]bool{}
 			for _, tag := range h3SubjectTagPattern.FindAllString(visual, -1) {
@@ -2511,6 +2525,9 @@ func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, refere
 			next = matches[i+1][0]
 		}
 		segment := strings.TrimRight(body[start:next], " \n\t")
+		if speakerTag := forcedOnscreenSpeakerByShot[n]; speakerTag != "" {
+			segment += " " + speakerTag + " remains clearly visible on screen; only " + speakerTag + " lip-syncs to this shot's exact dialogue fragment."
+		}
 		out.WriteString(segment)
 		if lines := byShot[n]; len(lines) > 0 {
 			out.WriteString(" ")

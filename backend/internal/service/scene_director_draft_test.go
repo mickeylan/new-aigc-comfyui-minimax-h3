@@ -34,6 +34,33 @@ func TestDialogueRhythmQueryQuotesReservedOrderColumn(t *testing.T) {
 	}
 }
 
+func TestDialogueRhythmInstructionKeepsNormalSpeakerVisible(t *testing.T) {
+	got := dialogueRhythmDirectorInstruction([]models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "继续说话"}})
+	for _, want := range []string{"每个仍承载普通dialogue片段的镜头都必须让真实说话人清晰可见", "纯听者单人镜头只能安排在该句对白结束之后"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "听者反应镜头可由当前说话人画外音连续承载") {
+		t.Fatalf("unsafe offscreen rule retained: %s", got)
+	}
+}
+
+func TestValidateDialogueRhythmDraftRejectsPureListenerDuringNormalDialogue(t *testing.T) {
+	draft, err := parseSceneDirectorDraft(`{"shots":[{"act_type":"setup","shot_type":"听者反应","camera_angle":"平视","camera_movement":"固定","duration":6,"description":"上官若彤倾听","dialogue":"继续说话","emotion":"平静","transition_type":"cut","transition_note":"","start_state":"上官若彤抬头","end_state":"上官若彤平静","prompt_subject":"上官若彤单人近景","prompt_action":"闭口倾听","prompt_camera":"近景","prompt_lighting":"柔光","prompt_style":"真人写实","negative_prompt":"","checks":[]}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialogues := []models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "继续说话"}}
+	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "必须让该说话人清晰可见") {
+		t.Fatalf("err=%v", err)
+	}
+	draft.Shots[0].PromptSubject = "上官若琳说话，上官若彤倾听的双人近景"
+	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
+		t.Fatalf("two-shot rejected: %v", err)
+	}
+}
+
 func TestValidateDialogueRhythmDraftPreservesDialogueExactly(t *testing.T) {
 	draft, err := parseSceneDirectorDraft(`{"shots":[{"act_type":"setup","shot_type":"说话人近景","camera_angle":"平视","camera_movement":"固定","duration":8,"description":"若彤开口","dialogue":"姐姐，自从你跟太运宗使者比试之后，","emotion":"担忧","transition_type":"cut","transition_note":"切反应","start_state":"若彤停下","end_state":"若彤继续说","prompt_subject":"若彤面部清晰","prompt_action":"担忧地说话","prompt_camera":"中近景","prompt_lighting":"落日余晖","prompt_style":"真人写实","negative_prompt":"","checks":[]},{"act_type":"rising","shot_type":"听者反应","camera_angle":"平视","camera_movement":"固定","duration":9,"description":"若琳聆听，若彤画外音继续","dialogue":"这十年你都没有怎么好好闭关修炼过。","emotion":"忧虑","transition_type":"cut","transition_note":"","start_state":"若琳安静聆听","end_state":"若琳神情微变","prompt_subject":"若琳反应清晰","prompt_action":"安静聆听","prompt_camera":"反应特写","prompt_lighting":"落日余晖","prompt_style":"真人写实","negative_prompt":"","checks":[]}]}`)
 	if err != nil {

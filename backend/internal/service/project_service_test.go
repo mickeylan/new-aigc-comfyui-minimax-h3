@@ -2071,8 +2071,8 @@ func TestAppendStructuredDialogueUsesH3CrossShotContinuationForOneSentence(t *te
 			t.Fatalf("fragment %q missing or duplicated: %s", text, got)
 		}
 	}
-	if strings.Count(got, "continues speaking in a clearly identified off-screen voice from the previous shot") != 2 {
-		t.Fatalf("cross-shot speaker identity missing: %s", got)
+	if strings.Count(got, "continues the same utterance on screen without a speaker change") != 2 || strings.Count(got, "<Subject 1> remains clearly visible on screen") != 3 {
+		t.Fatalf("cross-shot visible speaker enforcement missing: %s", got)
 	}
 	if strings.Contains(got, "same line") {
 		t.Fatalf("ambiguous same-line continuation retained: %s", got)
@@ -2187,12 +2187,12 @@ func TestCrossShotDialogueFragmentsKeepSpeakerIdentityAndListenerSilent(t *testi
 	split := 11
 	shots := []models.Shot{{Order: 1, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: 0, EndRune: split}}}, {Order: 2, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: split, EndRune: len(full)}}}}
 	got := appendStructuredDialogueToShots(body, dubs, []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图"}, shots)
-	for _, want := range []string{"<Subject 1> (S1) says on screen", "<d>[Chinese] " + string(full[:split]) + "</d>", "<Subject 1> (S1) continues speaking in a clearly identified off-screen voice from the previous shot", "<d>[Chinese] " + string(full[split:]) + "</d>", "目光专注地望向画外的<Subject 1>", "<Subject 2> is a silent listener and keeps their lips completely closed"} {
+	for _, want := range []string{"<Subject 1> (S1) says on screen", "<d>[Chinese] " + string(full[:split]) + "</d>", "<Subject 1> remains clearly visible on screen", "<Subject 1> (S1) continues the same utterance on screen without a speaker change", "<d>[Chinese] " + string(full[split:]) + "</d>", "<Subject 2> is a silent listener and keeps their lips completely closed"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q:\n%s", want, got)
 		}
 	}
-	for _, forbidden := range []string{"her lips moving naturally", "same line continues", "listens without speaking", "画外的唇部自然开合", "画外的说话者"} {
+	for _, forbidden := range []string{"her lips moving naturally", "same line continues", "listens without speaking", "画外的唇部自然开合", "画外的说话者", "off-screen voice from the previous shot"} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("retained ambiguous cue %q:\n%s", forbidden, got)
 		}
