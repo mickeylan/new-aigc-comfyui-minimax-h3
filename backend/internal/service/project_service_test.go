@@ -1433,7 +1433,7 @@ func TestH3RetentionListsOnlyVisibleShots(t *testing.T) {
 	sc := &models.Scene{VideoPrompt: "[Shot 1] 姐姐 raises her hand. [Shot 2] 妹妹 listens silently.", Duration: 8}
 	prompt := buildMiniMaxH3RefPrompt(sc, nil, nil, lines)
 	retention := h3PromptSection(prompt, "retention_analysis:")
-	for _, want := range []string{"<Subject 1> (出现在 [Shot 1])", "<Subject 2> (出现在 [Shot 2])", "<Subject 3> (出现在 [Shot 1]、[Shot 2])"} {
+	for _, want := range []string{"<Subject 1> (appears in [Shot 1])", "<Subject 2> (appears in [Shot 2])", "<Subject 3> (appears in [Shot 1], [Shot 2])"} {
 		if !strings.Contains(retention, want) {
 			t.Fatalf("missing %q: %s", want, retention)
 		}
@@ -1445,9 +1445,9 @@ func TestBuildMiniMaxH3RefPromptUsesStoryboardAsOptionalLastReference(t *testing
 	lines := []string{"- <Picture 1>：角色「雷晓飞」四视图", "- <Picture 2>：场景「雷记面馆」参考图", "- <Picture 3>：当前分镜画面（可选构图与动作状态参考）"}
 	prompt := buildMiniMaxH3RefPrompt(sc, &models.Project{Style: "3D国漫"}, nil, lines)
 	for _, want := range []string{
-		"<Subject 1> 是 <Picture 1> 中的角色「雷晓飞」四视图",
-		"<Subject 3> 是 <Picture 3> 中的当前分镜画面（可选构图与动作状态参考）",
-		"[reference generation] 按参考绑定和Shot时间线生成9秒视频",
+		"<Subject 1> is the character shown in the four-view reference from <Picture 1>",
+		"<Subject 3> is the storyboard composition and action-state reference from <Picture 3>",
+		"[reference generation] Generate a 9-second video from the defined references and shot timeline",
 		"<Subject 1>抬起手指",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -1483,7 +1483,7 @@ func TestGenerateSceneVideoActionDoesNotRecycleOldVisualDescription(t *testing.T
 	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}); err != nil {
 		t.Fatal(err)
 	}
-	provider := &captureTextProvider{response: "[Shot 1] 画面从当前构图参考开始，雷晓飞用右手食指轻敲桌面一次，随后警觉地转头望向门口，镜头小幅缓慢推进。"}
+	provider := &captureTextProvider{response: "[Shot 1] Starting from the current composition, 雷晓飞 taps the table once with his right index finger, then turns toward the doorway as the camera pushes in with small amplitude at slow speed."}
 	ps.textProvider = provider
 	project := models.Project{Title: "测试"}
 	if err := ps.db.Create(&project).Error; err != nil {
@@ -1505,7 +1505,7 @@ func TestGenerateSceneVideoActionDoesNotRecycleOldVisualDescription(t *testing.T
 	if strings.Contains(provider.user, "蓝色粗布短褐") || strings.Contains(provider.user, "暖黄阳光") || strings.Contains(provider.user, "当前动作草稿") {
 		t.Fatalf("old visual draft must not be recycled: %s", provider.user)
 	}
-	for _, want := range []string{"镜头指令，不是剧本复述", "一个主要动作", "3至5句", "不得复述剧情背景", "无结构化对白时，人物保持闭口", "不得从参考图反推剧情", "必须使用自然中文"} {
+	for _, want := range []string{"镜头指令，不是剧本复述", "一个主要动作", "25至45个英文单词", "不得复述剧情背景", "无结构化对白时，人物保持闭口", "不得从参考图反推剧情", "必须全部使用简洁自然的英文"} {
 		if !strings.Contains(provider.system, want) {
 			t.Fatalf("system missing %q: %s", want, provider.system)
 		}
@@ -1515,7 +1515,7 @@ func TestGenerateSceneVideoActionDoesNotRecycleOldVisualDescription(t *testing.T
 			t.Fatalf("video AI context missing %q: %s", want, provider.user)
 		}
 	}
-	if strings.Contains(out, "雷晓飞") || !strings.Contains(out, "<Subject 1>用右手食指轻敲桌面") {
+	if strings.Contains(out, "雷晓飞") || !strings.Contains(out, "<Subject 1> taps the table once") {
 		t.Fatalf("character must use Subject binding: %s", out)
 	}
 }
@@ -1525,7 +1525,7 @@ func TestGenerateSceneVideoActionFallsBackToStructuredShotsForMalformedAI(t *tes
 	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}); err != nil {
 		t.Fatal(err)
 	}
-	ps.textProvider = &captureTextProvider{response: "[Shot 1 | 0.00-5.00秒] Shangguan Ruolin stands close. [Shot 1] duplicate. [Shot 2] At 99:00.000, Shangguan Ruotong listens."}
+	ps.textProvider = &captureTextProvider{response: "[Shot 1] Shangguan Ruolin stands close. [Shot 1] duplicate. [Shot 2] At 99:00.000, Shangguan Ruotong listens."}
 	p := models.Project{Title: "p"}
 	ps.db.Create(&p)
 	ps.db.Create(&models.Character{ProjectID: p.ID, Name: "上官若琳", Sheet: "a.png"})
@@ -1538,7 +1538,7 @@ func TestGenerateSceneVideoActionFallsBackToStructuredShotsForMalformedAI(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"[Shot 1 | 0.00-5.00秒]", "[Shot 2 | 5.00-11.00秒]", "<Subject 1>正面近景", "<Subject 2>侧身倾听"} {
+	for _, want := range []string{"[Shot 1]", "[Shot 2] At 00:05.000,", "<Subject 1>front-facing close-up", "<Subject 2>listens in profile"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("fallback missing %q: %s", want, got)
 		}
@@ -1596,16 +1596,16 @@ func TestCharacterNamesMapToActualReferenceSubjects(t *testing.T) {
 		"- <Picture 3>：场景「玉霄宫·内殿」参考图",
 		"- <Picture 4>：当前分镜画面（可选构图与动作状态参考）",
 	}
-	sc := &models.Scene{VideoPrompt: "[Shot 1] 舒寒环抱上官若琳，舒寒低头靠近上官若琳耳畔。", Duration: 15}
+	sc := &models.Scene{VideoPrompt: "[Shot 1] 舒寒 embraces 上官若琳 and leans close to her ear.", Duration: 15}
 	dubs := []models.Dialogue{{Character: "舒寒", Text: "这不是太想你了吗。"}, {Character: "上官若琳", Text: "今晚有得是时间。"}}
 	prompt := buildMiniMaxH3RefPrompt(sc, nil, dubs, lines)
 	for _, want := range []string{
-		"<Subject 1> 是 <Picture 1> 中的角色「舒寒」四视图",
-		"<Subject 2> 是 <Picture 2> 中的角色「上官若琳」四视图",
-		"<Subject 4> 是 <Picture 4> 中的当前分镜画面（可选构图与动作状态参考）",
-		"<Subject 1>环抱<Subject 2>",
-		"<Subject 1> (S1)说：<d>[Chinese] 这不是太想你了吗。</d>",
-		"<Subject 2> (S2)说：<d>[Chinese] 今晚有得是时间。</d>",
+		"<Subject 1> is the character shown in the four-view reference from <Picture 1>",
+		"<Subject 2> is the character shown in the four-view reference from <Picture 2>",
+		"<Subject 4> is the storyboard composition and action-state reference from <Picture 4>",
+		"<Subject 1> embraces <Subject 2>",
+		"<Subject 1> (S1) says: <d>[Chinese] 这不是太想你了吗。</d>",
+		"<Subject 2> (S2) says: <d>[Chinese] 今晚有得是时间。</d>",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("character mapping missing %q: %s", want, prompt)
@@ -1630,7 +1630,7 @@ func TestEmptySpeakerPlotTextIsNeverConvertedToNarration(t *testing.T) {
 			t.Fatalf("empty-speaker plot text became narration as %q: %s", forbidden, prompt)
 		}
 	}
-	for _, want := range []string{"禁止对白", "人声", "旁白", "人物闭口"} {
+	for _, want := range []string{"No dialogue", "human voice", "narration"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("silent contract missing %q: %s", want, prompt)
 		}
@@ -1697,7 +1697,7 @@ func TestQuotedOffscreenCharacterDialogueIsRecoveredFromSceneContent(t *testing.
 		t.Fatalf("off-screen quoted dialogue extraction = %+v", dubs)
 	}
 	prompt := buildMiniMaxH3RefPrompt(sc, nil, dubs, []string{"- <Picture 1>：角色「雷晓飞」四视图"})
-	for _, want := range []string{"门外的林采薇，声音清脆悦耳 (S1)说：<d>[Chinese] 雷叔、雷婶，早上好，我过来了。</d>", "<Subject 1>迈出几步后停下"} {
+	for _, want := range []string{"门外的林采薇，声音清脆悦耳 (S1) says: <d>[Chinese] 雷叔、雷婶，早上好，我过来了。</d>", "<Subject 1>迈出几步后停下"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("off-screen dialogue missing %q: %s", want, prompt)
 		}
@@ -1720,7 +1720,7 @@ func TestExplicitSceneSpeakerCorrectsWrongStoredSpeaker(t *testing.T) {
 		t.Fatalf("explicit source speaker did not correct stored speaker: %+v", got)
 	}
 	prompt := buildMiniMaxH3RefPrompt(sc, nil, got, []string{"- <Picture 1>：角色「雷晓飞」四视图"})
-	if !strings.Contains(prompt, "门外的林采薇 (S1)说：<d>[Chinese] 雷叔、雷婶，早上好，我过来了。</d>") || strings.Contains(prompt, "雷晓飞 (S1) says") {
+	if !strings.Contains(prompt, "门外的林采薇 (S1) says: <d>[Chinese] 雷叔、雷婶，早上好，我过来了。</d>") || strings.Contains(prompt, "雷晓飞 (S1) says") {
 		t.Fatalf("prompt used wrong speaker: %s", prompt)
 	}
 }
@@ -1737,7 +1737,7 @@ func TestOffscreenFemaleVoiceUsesCharacterProfile(t *testing.T) {
 		t.Fatalf("female voice identity missing: %+v", dubs)
 	}
 	prompt := buildMiniMaxH3RefPrompt(sc, nil, dubs, nil)
-	if !strings.Contains(prompt, "门外的年轻女性林采薇，使用清脆悦耳的女声 (S1)说：<d>[Chinese] 我过来了。</d>") {
+	if !strings.Contains(prompt, "门外的年轻女性林采薇，使用清脆悦耳的女声 (S1) says: <d>[Chinese] 我过来了。</d>") {
 		t.Fatalf("female voice direction missing: %s", prompt)
 	}
 }
@@ -1784,7 +1784,7 @@ func TestActionDescriptionIsNeverConvertedToDialogue(t *testing.T) {
 			t.Fatalf("action direction leaked into spoken dialogue as %q: %s", forbidden, prompt)
 		}
 	}
-	for _, want := range []string{"禁止对白", "人声", "旁白", "人物闭口"} {
+	for _, want := range []string{"No dialogue", "human voice", "narration"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("silent contract missing %q: %s", want, prompt)
 		}
@@ -1805,7 +1805,7 @@ func TestSceneWithoutStructuredDialogueForbidsVoice(t *testing.T) {
 	if strings.Contains(prompt, "<d>") {
 		t.Fatalf("dialogue tag appeared without structured dialogue: %s", prompt)
 	}
-	for _, want := range []string{"禁止对白", "人声", "旁白", "人物闭口"} {
+	for _, want := range []string{"No dialogue", "human voice", "narration"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("no-dialogue constraint missing %q: %s", want, prompt)
 		}
@@ -1815,7 +1815,7 @@ func TestSceneWithoutStructuredDialogueForbidsVoice(t *testing.T) {
 func TestStructuredDialogueIsAlwaysIncluded(t *testing.T) {
 	lines := []string{"- <Picture 1>：当前分镜画面"}
 	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] 人物抬头。", Duration: 8}, nil, []models.Dialogue{{Character: "林夏", Text: "你来了"}}, lines)
-	for _, want := range []string{"林夏 (S1)说：<d>[Chinese] 你来了</d>", "禁止其他人声", "旁白", "对白只取Shot内原文"} {
+	for _, want := range []string{"林夏 (S1) says: <d>[Chinese] 你来了</d>", "no additional voices", "narration", "Dialogue appears only in the shot timeline"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("structured dialogue missing %q: %s", want, prompt)
 		}
@@ -1877,7 +1877,7 @@ func TestStructuredDialogueOverridesStalePromptDialogue(t *testing.T) {
 	if strings.Contains(prompt, "错误旧台词") {
 		t.Fatalf("stale prompt dialogue was retained: %s", prompt)
 	}
-	if !strings.Contains(prompt, "林夏 (S1)说：<d>[Chinese] 正确结构化台词</d>") {
+	if !strings.Contains(prompt, "林夏 (S1) says: <d>[Chinese] 正确结构化台词</d>") {
 		t.Fatalf("structured dialogue missing: %s", prompt)
 	}
 }
@@ -1972,20 +1972,20 @@ func TestApplyShotTimelineDoesNotRewriteRetentionShotReferences(t *testing.T) {
 	if !strings.Contains(got, "appears in [Shot 2]") || strings.Contains(got, "appears in [Shot 2] At") {
 		t.Fatalf("retention was mutated: %s", got)
 	}
-	if !strings.Contains(got, "[Shot 2 | 5.00-11.00秒]") {
+	if !strings.Contains(got, "[Shot 2] At 00:05.000,") {
 		t.Fatalf("detail timeline not corrected: %s", got)
 	}
 }
 
 func TestValidateGeneratedH3PromptRejectsDuplicateAndLegacyShotSyntax(t *testing.T) {
-	bad := "subject_definitions:\nx\n\nsummary:\nx\n\nretention_analysis:\nx\n\ndetailed_description:\n[Shot 1 | 0.00-5.00秒] A.\n[Shot 1] B.\n[Shot 2] C.\n\noverall_soundscape:\nx\n\nnon_diegetic_music:\nN/A"
+	bad := "subject_definitions:\nx\n\nsummary:\nx\n\nretention_analysis:\nx\n\ndetailed_description:\n[Shot 1] A.\n[Shot 1] B.\n[Shot 2] C.\n\noverall_soundscape:\nx\n\nnon_diegetic_music:\nN/A"
 	joined := strings.Join(validateGeneratedH3Prompt(bad, "minimax_h3_ref2v", 10), "|")
 	for _, want := range []string{"Shot 1 重复"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing validation %q: %s", want, joined)
 		}
 	}
-	good := "subject_definitions:\nx\n\nsummary:\nx\n\nretention_analysis:\nx\n\ndetailed_description:\n[Shot 1] 中近景建立人物站在门边的构图。\n[Shot 2] At 00:05.000, 镜头切到妹妹安静倾听。\n\noverall_soundscape:\nx\n\nnon_diegetic_music:\nN/A"
+	good := "subject_definitions:\nx\n\nsummary:\nx\n\nretention_analysis:\nx\n\ndetailed_description:\n[Shot 1] A medium shot frames the woman by the doorway.\n[Shot 2] At 00:05.000, the shot cuts to the younger sister listening.\n\noverall_soundscape:\nQuiet room tone.\n\nnon_diegetic_music:\nN/A"
 	if issues := validateGeneratedH3Prompt(good, "minimax_h3_ref2v", 10); len(issues) != 0 {
 		t.Fatalf("valid generated prompt rejected: %v", issues)
 	}
@@ -2013,7 +2013,7 @@ func TestH3KeyframePromptContractsAndDialoguePlacement(t *testing.T) {
 			t.Fatalf("I2VA field %s missing or duplicated: %s", heading, i2v)
 		}
 	}
-	if !strings.Contains(h3IntegratedDescription(i2v), "林夏 (S1)说：<d>[Chinese] 你来了。</d>") {
+	if !strings.Contains(h3IntegratedDescription(i2v), "林夏 (S1) says: <d>[Chinese] 你来了。</d>") {
 		t.Fatalf("dialogue must be in the timeline with stable speaker ID: %s", i2v)
 	}
 	if strings.Contains(h3PromptSection(i2v, "overall_soundscape:"), "你来了") {
@@ -2064,7 +2064,7 @@ func TestNormalizeSavedH3AudioCoalescesDuplicateShotOneBeforeDialogue(t *testing
 }
 
 func TestNormalizeSavedH3AudioRebuildsCollapsedShotsWithoutDuplicateDialogue(t *testing.T) {
-	prompt := "subject_definitions:\n<Subject 2> 是角色参考。\n\nsummary:\n测试\n\nretention_analysis:\n测试\n\ndetailed_description:\n[Shot 1 | 0.00-5.00秒] <Subject 2> (S1)说：<d>[Chinese] 第一句。</d>。\n[Shot 1 | 0.00-5.00秒] <Subject 2> (S1)说：<d>[Chinese] 第一句。</d>。\n[Shot 1 | 0.00-5.00秒] 三镜动作坍缩。 <Subject 2> (S1)说：<d>[Chinese] 第一句。</d>。\n\noverall_soundscape:\n旧声音\n\nnon_diegetic_music:\nN/A"
+	prompt := "subject_definitions:\n<Subject 2> 是角色参考。\n\nsummary:\n测试\n\nretention_analysis:\n测试\n\ndetailed_description:\n[Shot 1] <Subject 2> (S1) says: <d>[Chinese] 第一句。</d>。\n[Shot 1] <Subject 2> (S1) says: <d>[Chinese] 第一句。</d>。\n[Shot 1] 三镜动作坍缩。 <Subject 2> (S1) says: <d>[Chinese] 第一句。</d>。\n\noverall_soundscape:\n旧声音\n\nnon_diegetic_music:\nN/A"
 	shots := []models.Shot{{Order: 1, Duration: 5, Description: "第一镜动作", Dialogue: "第一句。"}, {Order: 2, Duration: 4, Description: "第二镜动作", Dialogue: "第二句，"}, {Order: 3, Duration: 5, Description: "第三镜动作", Dialogue: "第三句，"}}
 	dubs := []models.Dialogue{{Character: "上官若彤", SpeechType: "dialogue", Text: "第一句。"}, {Character: "上官若彤", SpeechType: "dialogue", Text: "第二句，"}, {Character: "上官若彤", SpeechType: "dialogue", Text: "第三句，"}}
 	lines := []string{"<Subject 2> 是 <Picture 2> 中的角色「上官若彤」四视图。"}
@@ -2078,7 +2078,7 @@ func TestNormalizeSavedH3AudioRebuildsCollapsedShotsWithoutDuplicateDialogue(t *
 			t.Fatalf("dialogue duplicated: %s", first)
 		}
 	}
-	markers := []string{"[Shot 1 | 0.00-5.00秒]", "[Shot 2 | 5.00-9.00秒]", "[Shot 3 | 9.00-14.00秒]"}
+	markers := []string{"[Shot 1]", "[Shot 2] At 00:05.000,", "[Shot 3] At 00:09.000,"}
 	for _, marker := range markers {
 		if strings.Count(first, marker) != 1 {
 			t.Fatalf("shot marker %q invalid: %s", marker, first)
@@ -2087,7 +2087,7 @@ func TestNormalizeSavedH3AudioRebuildsCollapsedShotsWithoutDuplicateDialogue(t *
 }
 
 func TestAppendStructuredDialogueUsesH3CrossShotContinuationForOneSentence(t *testing.T) {
-	body := "[Shot 1 | 0.00-4.50秒] 姐姐轻抚妹妹面颊。\n[Shot 2 | 4.50-10.50秒] 切到妹妹含泪倾听。\n[Shot 3 | 10.50-14.00秒] 切回姐姐坚定特写。"
+	body := "[Shot 1] The elder sister touches her sister's cheek.\n[Shot 2] At 00:04.500, the shot cuts to the younger sister listening.\n[Shot 3] At 00:10.500, the shot cuts back to the elder sister."
 	shots := []models.Shot{{Dialogue: "相信姐姐，"}, {Dialogue: "姐姐无论如何也不会让你去"}, {Dialogue: "罗刹魔域！"}}
 	dubs := []models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "相信姐姐，"}, {Character: "上官若琳", SpeechType: "dialogue", Text: "姐姐无论如何也不会让你去"}, {Character: "上官若琳", SpeechType: "dialogue", Text: "罗刹魔域！"}}
 	got := appendStructuredDialogueToShots(body, dubs, []string{"<Subject 1> 是 <Picture 1> 中的角色「上官若琳」四视图。"}, shots)
@@ -2099,16 +2099,16 @@ func TestAppendStructuredDialogueUsesH3CrossShotContinuationForOneSentence(t *te
 			t.Fatalf("fragment %q missing or duplicated: %s", text, got)
 		}
 	}
-	if strings.Count(got, "<Subject 1> (S1)说：") != 3 {
+	if strings.Count(got, "<Subject 1> (S1) says:") != 3 {
 		t.Fatalf("stable speaker id missing across split line: %s", got)
 	}
-	if strings.Contains(got, "same line") {
-		t.Fatalf("ambiguous same-line continuation retained: %s", got)
+	if strings.Count(got, "<scenetrans>") != 4 || !strings.Contains(got, "same voice continues uninterrupted across the cut") {
+		t.Fatalf("official cross-cut continuity missing: %s", got)
 	}
 }
 
 func TestAppendStructuredDialoguePlacesEachLineInsideItsShot(t *testing.T) {
-	body := "[Shot 1 | 0.00-5.00秒] 第一镜动作。\n[Shot 2 | 5.00-9.00秒] 第二镜动作。\n[Shot 3 | 9.00-14.00秒] 第三镜动作。"
+	body := "[Shot 1] The first action begins.\n[Shot 2] At 00:05.000, the second action begins.\n[Shot 3] At 00:09.000, the third action begins."
 	shots := []models.Shot{{Dialogue: "第一句。"}, {Dialogue: "第二句。"}, {Dialogue: "第三句。"}}
 	dubs := []models.Dialogue{
 		{Character: "上官若彤", SpeechType: "dialogue", Text: "第一句。"},
@@ -2134,7 +2134,7 @@ func TestRebuildStructuredShotActionOmitsDescriptionAndAbstractNarration(t *test
 			t.Fatalf("retained abstract/repeated prose %q: %s", forbidden, got)
 		}
 	}
-	for _, want := range []string{"红金与淡紫宫装女子并肩而立", "姐妹相视", "双人中景固定", "夕阳余晖"} {
+	for _, want := range []string{"medium two-shot", "the camera holds a static two-shot", "warm sunset light", "warm golden tones"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing visible fact %q: %s", want, got)
 		}
@@ -2144,12 +2144,12 @@ func TestRebuildStructuredShotActionOmitsDescriptionAndAbstractNarration(t *test
 func TestApplyShotTimelineUsesPersistedDurationsAndEndsAtSceneDuration(t *testing.T) {
 	shots := []models.Shot{{Duration: 4}, {Duration: 3}, {Duration: 7}}
 	got := applyShotTimeline("[Shot 1] 建立画面。\n[Shot 2] 角色反应。\n[Shot 3 | 0-0秒] 收束。", shots, 14)
-	for _, want := range []string{"[Shot 1 | 0.00-4.00秒]", "[Shot 2 | 4.00-7.00秒]", "[Shot 3 | 7.00-14.00秒]"} {
+	for _, want := range []string{"[Shot 1]", "[Shot 2] At 00:04.000,", "[Shot 3] At 00:07.000,"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing timeline %q: %s", want, got)
 		}
 	}
-	if strings.Count(got, "[Shot ") != 3 || !strings.Contains(got, "秒]") {
+	if strings.Count(got, "[Shot ") != 3 || strings.Contains(got, "秒]") {
 		t.Fatalf("shot markers changed unexpectedly: %s", got)
 	}
 	if again := applyShotTimeline(got, shots, 14); again != got {
@@ -2198,8 +2198,8 @@ func TestH3HybridLanguageAndSubjectBindingContract(t *testing.T) {
 		t.Fatalf("subject binding failed: %s", bound)
 	}
 	full := "subject_definitions:\n<Subject 1> is the character 上官若琳 shown in the four-view reference from <Picture 1>.\n<Subject 2> is the character 上官若彤 shown in the four-view reference from <Picture 2>.\n\nsummary:\ntest\n\nretention_analysis:\ntest\n\ndetailed_description:\n" + bound + "\n\noverall_soundscape:\nOnly ambient room tone and physical action sounds that are visibly motivated are audible. There is no dialogue, human voice, narration, commentary, indistinct vocalization, speech, or singing; every visible person keeps their lips completely closed.\n\nnon_diegetic_music:\nN/A"
-	if issues := validateGeneratedH3Prompt(full, "minimax_h3_ref2v", 8); len(issues) > 0 {
-		t.Fatalf("valid hybrid prompt rejected: %v", issues)
+	if issues := validateGeneratedH3Prompt(full, "minimax_h3_ref2v", 8); len(issues) == 0 {
+		t.Fatal("Chinese visual prose must be rejected by the official English contract")
 	}
 	englishVisual := strings.Replace(full, bound, "[Shot 1] <Subject 1> stands in a front-facing close-up and slowly pulls back.\n[Shot 2] At 00:05.000, <Subject 2> listens silently.", 1)
 	if issues := validateGeneratedH3Prompt(englishVisual, "minimax_h3_ref2v", 8); len(issues) > 0 {
@@ -2209,18 +2209,18 @@ func TestH3HybridLanguageAndSubjectBindingContract(t *testing.T) {
 
 func TestCrossShotDialogueFragmentsKeepSpeakerIdentityAndListenerSilent(t *testing.T) {
 	body := `[Shot 1] <Subject 1> stands in a medium close-up and begins speaking.
-[Shot 2] At 00:05.000, <Subject 2>侧身倾听，始终保持双唇闭合，目光专注地望向画外的说话者。`
+[Shot 2] At 00:05.000, <Subject 2> listens with closed lips while facing <Subject 1>.`
 	dubs := []models.Dialogue{{ID: 1, Character: "上官若琳", SpeechType: "dialogue", Text: "你要代替姐姐去太运宗，其实太运宗倒是个不错的地方，"}}
 	full := []rune(canonicalDialogueText(dubs[0].Text))
 	split := 11
 	shots := []models.Shot{{Order: 1, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: 0, EndRune: split}}}, {Order: 2, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: split, EndRune: len(full)}}}}
 	got := appendStructuredDialogueToShots(body, dubs, []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图"}, shots)
-	for _, want := range []string{"<Subject 1> (S1)说：", "<d>[Chinese] " + string(full[:split]) + "</d>", "<d>[Chinese] " + string(full[split:]) + "</d>", "<Subject 1>清晰出镜并同步本段口型；其他可见人物闭口"} {
+	for _, want := range []string{"<Subject 1> (S1) says:", "<d>[Chinese] " + string(full[:split]) + "</d>", "<d>[Chinese] " + string(full[split:]) + "</d>", "<scenetrans>", "same voice continues uninterrupted across the cut"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q:\n%s", want, got)
 		}
 	}
-	for _, forbidden := range []string{"her lips moving naturally", "same line continues", "listens without speaking", "画外的唇部自然开合", "off-screen voice from the previous shot", "remains visible"} {
+	for _, forbidden := range []string{"her lips moving naturally", "off-screen voice from the previous shot", "remains clearly visible", "only <Subject 1> lip-syncs"} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("retained ambiguous cue %q:\n%s", forbidden, got)
 		}
@@ -2261,8 +2261,8 @@ func TestResolveH3VisualConflictsRemovesDuplicateFramingAndProtectsOffscreenSpea
 }
 
 func TestCompactFinalH3PromptRemovesReportedFiller(t *testing.T) {
-	body := `[Shot 1 | 0.00-5.00秒] <Subject 1>身着红金宫装，手从<Subject 2>肩膀缓缓垂落，神情从坚决转为温柔，平缓地唇部自然开合。正面机位缓慢后拉，柔和正面光勾勒柔和面部线条。dissolve。
-[Shot 2 | 5.00-11.00秒] <Subject 2>侧身面向<Subject 1>，眼眶微红，泪光渐消，神情从悲伤转向信任与期待，静静倾听。侧面机位微微推进。侧光勾勒柔和轮廓。`
+	body := `[Shot 1] <Subject 1>身着红金宫装，手从<Subject 2>肩膀缓缓垂落，神情从坚决转为温柔，平缓地唇部自然开合。正面机位缓慢后拉，柔和正面光勾勒柔和面部线条。dissolve。
+[Shot 2] At 00:05.000, <Subject 2>侧身面向<Subject 1>，眼眶微红，泪光渐消，神情从悲伤转向信任与期待，静静倾听。侧面机位微微推进。侧光勾勒柔和轮廓。`
 	got := compactFinalH3VisualBody(body)
 	for _, want := range []string{"手从<Subject 2>肩膀缓缓垂落", "神情从坚决转为温柔", "正面机位缓慢后拉", "眼眶微红，泪光渐消", "静静倾听", "侧面机位微微推进"} {
 		if !strings.Contains(got, want) {
@@ -2281,7 +2281,7 @@ func TestBuildH3PromptResolvesReviewedVisualConflicts(t *testing.T) {
 	action := rebuildStructuredShotAction(shots)
 	lines := []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图", "- <Picture 3>：场景「桃花林」参考图"}
 	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: action, Duration: 11}, nil, []models.Dialogue{{ID: 1, Character: "上官若琳", SpeechType: "dialogue", Text: "第一段，"}, {ID: 2, Character: "上官若琳", SpeechType: "dialogue", Text: "第二段，"}}, lines)
-	for _, want := range []string{"眉心舒展，目光逐渐柔和", "微微推进", "<Subject 3> remains visible in the background", "<Subject 3> (出现在 [Shot 1]、[Shot 2])"} {
+	for _, want := range []string{"眉心舒展，目光逐渐柔和", "微微推进", "<Subject 3> remains visible in the background", "<Subject 3> (appears in [Shot 1], [Shot 2])"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("missing %q: %s", want, prompt)
 		}
@@ -2324,7 +2324,7 @@ retention_analysis:
 detailed_description:
 [Shot 1] <Subject 1>从参考状态开始陈述，语气加重，眉心微蹙，镜头固定不动，说完暂停，眉心紧锁。
 [Shot 2] 语速稍快，强调时间紧迫。
-[Shot 3] 出威胁内容，语气沉重。 <Subject 1> (S1)说：<d>[Chinese] 旧错误对白</d>。
+[Shot 3] 出威胁内容，语气沉重。 <Subject 1> (S1) says: <d>[Chinese] 旧错误对白</d>。
 
 overall_soundscape:
 旧声音
@@ -2352,7 +2352,7 @@ func TestH3CrossShotDialogueMarkers(t *testing.T) {
 		{Character: "林夏", Text: "这句话会被截断——<cutoff>"},
 	}
 	body := appendStructuredDialogue("[Shot 1] 林夏向前走。[Shot 2] At 00:03.000, the shot cuts to her face.", dubs, nil)
-	for _, want := range []string{"林夏 (S1)", "</d>。<scenetrans>", "<cutoff>"} {
+	for _, want := range []string{"林夏 (S1)", "</d>.<scenetrans>", "<cutoff>"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("cross-shot dialogue missing %q: %s", want, body)
 		}
