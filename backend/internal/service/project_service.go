@@ -1875,12 +1875,17 @@ var abstractShotClausePatterns = []*regexp.Regexp{
 }
 
 func resolveH3VisualConflicts(value string) string {
-	if strings.Contains(value, "从坚决转为温柔") || strings.Contains(value, "从坚定转为温柔") || strings.Contains(value, "转为温柔耐心") {
+	softening := strings.Contains(value, "从坚决转为温柔") || strings.Contains(value, "从坚定转为温柔") || strings.Contains(value, "转为温柔耐心")
+	if softening {
 		value = strings.ReplaceAll(value, "眉心与目光的紧张感增强", "眉心舒展，目光逐渐柔和")
+		value = strings.ReplaceAll(value, "眉心与目光的紧张感加强", "眉心舒展，目光逐渐柔和")
 	}
 	if (strings.Contains(value, "摇摄") || strings.Contains(value, "摇移")) && (strings.Contains(value, "推进") || strings.Contains(value, "推近")) {
 		value = regexp.MustCompile(`(?:轻微|缓慢|小幅)?(?:摇摄|摇移)(?:跟随)?[，,、和与并再\s]*`).ReplaceAllString(value, "")
 	}
+	value = strings.ReplaceAll(value, "缓慢后拉拉开景别", "缓慢后拉，从特写过渡至中近景")
+	value = strings.ReplaceAll(value, "静静倾听姐姐的话语", "始终保持双唇闭合，目光专注地望向画外的说话者")
+	value = strings.ReplaceAll(value, "倾听姐姐的话语", "保持双唇闭合并望向画外的说话者")
 	return value
 }
 
@@ -2889,6 +2894,9 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 		body = strings.Replace(body, "[Shot 1]", "The target video uses a "+style+" visual style.\n[Shot 1]", 1)
 	}
 	body = stripStructuredDialogueFromAction(body, dubs)
+	// Speech cleanup can introduce a visible-performance phrase after the AI/Shot cleanup.
+	// Resolve visual contradictions again at the final assembly boundary.
+	body = resolveH3VisualConflicts(body)
 	body = bindEnvironmentSubjectsToShots(body, referenceLines)
 	for _, line := range referenceLines {
 		if strings.Contains(line, "上一镜确认尾帧") {
