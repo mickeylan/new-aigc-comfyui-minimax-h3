@@ -1878,8 +1878,14 @@ var abstractShotClausePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?:温馨|紧张|诗意|感人|浪漫)(?:结尾|收束|氛围|气氛)`),
 }
 
+var (
+	h3LipPlaceholderPattern     = regexp.MustCompile(`(?:At\s+MM:SS\.mmm\s*)?(?:开始|继续|随后继续)?口型(?:配合|同步|开合)?(?:，|,|并|随后)*[^；。]*[；。]?`)
+	h3TransitionMetadataPattern = regexp.MustCompile(`(?:转场|transition)[^；。]*(?:dissolve|叠化|cut|fade|wipe)[^；。]*[；。]?`)
+	h3DuplicateFramingPattern   = regexp.MustCompile(`从(?:面部|肩部)?特写(?:过渡至|回到)中近景[，,、；;\s]*从(?:面部|肩部)?特写(?:过渡至|回到)中近景`)
+)
+
 func resolveH3VisualConflicts(value string) string {
-	softening := strings.Contains(value, "从坚决转为温柔") || strings.Contains(value, "从坚定转为温柔") || strings.Contains(value, "转为温柔耐心")
+	softening := regexp.MustCompile(`从(?:坚决|坚定)(?:逐渐)?转(?:为|向)温柔`).MatchString(value) || strings.Contains(value, "转为温柔耐心")
 	if softening {
 		value = strings.ReplaceAll(value, "眉心与目光的紧张感增强", "眉心舒展，目光逐渐柔和")
 		value = strings.ReplaceAll(value, "眉心与目光的紧张感加强", "眉心舒展，目光逐渐柔和")
@@ -1887,13 +1893,16 @@ func resolveH3VisualConflicts(value string) string {
 	if (strings.Contains(value, "摇摄") || strings.Contains(value, "摇移")) && (strings.Contains(value, "推进") || strings.Contains(value, "推近")) {
 		value = regexp.MustCompile(`(?:轻微|缓慢|小幅)?(?:摇摄|摇移)(?:跟随)?[，,、和与并再\s]*`).ReplaceAllString(value, "")
 	}
+	value = h3LipPlaceholderPattern.ReplaceAllString(value, "")
+	value = h3TransitionMetadataPattern.ReplaceAllString(value, "")
+	value = strings.ReplaceAll(value, "手从握妹妹肩膀缓缓垂落", "原本向前抬起的手臂缓缓放下，自然垂落至身侧")
 	value = strings.ReplaceAll(value, "缓慢后拉拉开景别", "缓慢后拉，从特写过渡至中近景")
-	value = strings.ReplaceAll(value, "从特写过渡至中近景，从特写回到中近景", "从面部特写过渡至肩部以上中近景")
-	value = strings.ReplaceAll(value, "从特写过渡至中近景，从特写过渡至中近景", "从面部特写过渡至肩部以上中近景")
+	value = h3DuplicateFramingPattern.ReplaceAllString(value, "从面部特写过渡至肩部以上中近景")
 	value = strings.ReplaceAll(value, "画外的唇部自然开合", "画外的说话者")
+	value = strings.ReplaceAll(value, "静静倾听姐姐话语", "始终保持双唇闭合，目光专注地望向画外的说话者")
 	value = strings.ReplaceAll(value, "静静倾听姐姐的话语", "始终保持双唇闭合，目光专注地望向画外的说话者")
 	value = strings.ReplaceAll(value, "倾听姐姐的话语", "保持双唇闭合并望向画外的说话者")
-	return value
+	return strings.TrimSpace(value)
 }
 
 func conciseVisibleShotField(value string) string {

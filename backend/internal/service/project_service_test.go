@@ -2202,6 +2202,21 @@ func TestCrossShotDialogueFragmentsKeepSpeakerIdentityAndListenerSilent(t *testi
 	}
 }
 
+func TestResolveH3VisualConflictsCleansReportedFinalPromptVariants(t *testing.T) {
+	input := "<Subject 1>正面近景，神情从坚决逐渐转为温柔，手从握妹妹肩膀缓缓垂落；镜头缓慢后拉，从特写过渡至中近景，从肩部特写回到中近景；At MM:SS.mmm 开始口型配合，随后继续口型；眉心与目光的紧张感增强；转场dissolve叠化过渡。<Subject 2>静静倾听姐姐话语。"
+	got := resolveH3VisualConflicts(input)
+	for _, want := range []string{"原本向前抬起的手臂缓缓放下，自然垂落至身侧", "从面部特写过渡至肩部以上中近景", "眉心舒展，目光逐渐柔和", "始终保持双唇闭合，目光专注地望向画外的说话者"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q: %s", want, got)
+		}
+	}
+	for _, bad := range []string{"妹妹肩膀", "At MM:SS.mmm", "口型配合", "随后继续口型", "眉心与目光的紧张感增强", "dissolve", "叠化过渡", "静静倾听姐姐话语", "从肩部特写回到中近景"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("retained %q: %s", bad, got)
+		}
+	}
+}
+
 func TestResolveH3VisualConflictsRemovesDuplicateFramingAndProtectsOffscreenSpeaker(t *testing.T) {
 	input := "神情从坚决转为温柔耐心，眉心与目光的紧张感增强；缓慢后拉，从特写过渡至中近景，从特写回到中近景；始终保持双唇闭合，目光专注地望向画外的说话者"
 	got := visualiseSpeechPerformanceNarration(resolveH3VisualConflicts(input), true)
