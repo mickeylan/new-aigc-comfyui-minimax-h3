@@ -1175,7 +1175,20 @@ func (s *Service) HandleGetSceneShots(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{"shots": shots})
+	fragments, err := s.Shots.ResolveDialogueFragments(uint(sceneID), shots)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	type shotResponse struct {
+		models.Shot
+		DialogueFragments []ShotDialogueFragment `json:"dialogue_fragments"`
+	}
+	rows := make([]shotResponse, len(shots))
+	for i, shot := range shots {
+		rows[i] = shotResponse{Shot: shot, DialogueFragments: fragments[shot.ID]}
+	}
+	c.JSON(200, gin.H{"shots": rows})
 }
 
 func (s *Service) HandlePreviewShotRetime(c *gin.Context) { s.handleShotRetime(c, false) }

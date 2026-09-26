@@ -943,8 +943,10 @@ const (
 type FrameCandidateType string
 
 const (
-	FrameCandidateCandidate FrameCandidateType = "candidate" // 待选帧（从视频提取）
-	FrameCandidateSelected  FrameCandidateType = "selected"  // 已选帧（人工选择作为衔接帧）
+	FrameCandidateCandidate  FrameCandidateType = "candidate"   // 待选帧（从视频提取）
+	FrameCandidateSelected   FrameCandidateType = "selected"    // 已选帧（人工选择作为衔接帧）
+	FrameCandidateVideoFirst FrameCandidateType = "video_first" // 成片实际首帧
+	FrameCandidateVideoLast  FrameCandidateType = "video_last"  // 成片实际尾帧
 )
 
 // FrameCandidate 是某次视频任务末尾提取的候选衔接帧。

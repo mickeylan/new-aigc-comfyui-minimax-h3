@@ -2626,7 +2626,7 @@ func h3VideoSubjects(referenceLines []string) (definitions, retention, subjectRe
 
 var h3SubjectTagPattern = regexp.MustCompile(`<Subject\s+([1-9][0-9]*)>`)
 
-func h3VisibleRetention(body string, retention []string) []string {
+func h3SubjectShotAppearances(body string) map[int][]int {
 	visible := map[int][]int{}
 	seen := map[int]map[int]bool{}
 	matches := h3ShotMarkerPattern.FindAllStringSubmatchIndex(body, -1)
@@ -2647,6 +2647,11 @@ func h3VisibleRetention(body string, retention []string) []string {
 			}
 		}
 	}
+	return visible
+}
+
+func h3VisibleRetention(body string, retention []string) []string {
+	visible := h3SubjectShotAppearances(body)
 	out := make([]string, 0, len(retention))
 	for i, line := range retention {
 		n := i + 1
@@ -6260,14 +6265,16 @@ func (s *ProjectService) EditorData(p *models.Project, episodeN int) (map[string
 	}
 	type editorScene struct {
 		models.Scene
-		VideoURL             string   `json:"video_url"`
-		ImageURL             string   `json:"image_url"`
-		VideoDur             float64  `json:"video_dur"`
-		AudioURLs            []string `json:"audio_urls,omitempty"`
-		ShotDurationTotal    float64  `json:"shot_duration_total"`
-		ShotDurationMismatch bool     `json:"shot_duration_mismatch"`
-		ContinuityStatus     string   `json:"continuity_status"`
-		ContinuityError      string   `json:"continuity_error"`
+		VideoURL                 string   `json:"video_url"`
+		ImageURL                 string   `json:"image_url"`
+		VideoDur                 float64  `json:"video_dur"`
+		AudioURLs                []string `json:"audio_urls,omitempty"`
+		ShotDurationTotal        float64  `json:"shot_duration_total"`
+		ShotDurationMismatch     bool     `json:"shot_duration_mismatch"`
+		ContinuityStatus         string   `json:"continuity_status"`
+		ContinuityError          string   `json:"continuity_error"`
+		VideoActualFirstFrameURL string   `json:"video_actual_first_frame_url"`
+		VideoActualLastFrameURL  string   `json:"video_actual_last_frame_url"`
 	}
 	sceneIDs := make([]uint, 0, len(scenes))
 	for _, sc := range scenes {
@@ -6286,6 +6293,19 @@ func (s *ProjectService) EditorData(p *models.Project, episodeN int) (map[string
 			shotTotals[row.SceneID] = math.Round(row.Total*10) / 10
 		}
 	}
+	boundaryByScene := map[uint]map[models.FrameCandidateType]models.FrameCandidate{}
+	if len(sceneIDs) > 0 {
+		var rows []models.FrameCandidate
+		if err := s.db.Where("scene_id IN ? AND type IN ?", sceneIDs, []models.FrameCandidateType{models.FrameCandidateVideoFirst, models.FrameCandidateVideoLast}).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			if boundaryByScene[row.SceneID] == nil {
+				boundaryByScene[row.SceneID] = map[models.FrameCandidateType]models.FrameCandidate{}
+			}
+			boundaryByScene[row.SceneID][row.Type] = row
+		}
+	}
 	continuityByScene := map[uint]models.SceneContinuity{}
 	if len(sceneIDs) > 0 {
 		var rows []models.SceneContinuity
@@ -6300,7 +6320,14 @@ func (s *ProjectService) EditorData(p *models.Project, episodeN int) (map[string
 	for _, sc := range scenes {
 		total := shotTotals[sc.ID]
 		cfg := continuityByScene[sc.ID]
+		boundary := boundaryByScene[sc.ID]
 		es := editorScene{Scene: sc, ShotDurationTotal: total, ShotDurationMismatch: sc.ShotCount > 0 && math.Abs(total-sc.Duration) > shotDurationTolerance, ContinuityStatus: cfg.Status, ContinuityError: cfg.Error}
+		if frame := boundary[models.FrameCandidateVideoFirst]; frame.ImageFile != "" && frame.VideoTaskID == sc.VideoTaskID {
+			es.VideoActualFirstFrameURL = fmt.Sprintf("/api/input/%d/%s", p.ID, frame.ImageFile)
+		}
+		if frame := boundary[models.FrameCandidateVideoLast]; frame.ImageFile != "" && frame.VideoTaskID == sc.VideoTaskID {
+			es.VideoActualLastFrameURL = fmt.Sprintf("/api/input/%d/%s", p.ID, frame.ImageFile)
+		}
 		// 完成同步后会把视频复制到项目 input 目录。该副本跨 GPU、跨 ComfyUI
 		// 实例均可访问，剪辑台应与项目详情一样优先使用它，而不是原 worker 输出。
 		if sc.VideoInputFile != "" {

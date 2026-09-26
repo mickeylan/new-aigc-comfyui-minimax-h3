@@ -309,18 +309,25 @@ func (s *Service) HandleRedesignScenePrompt(c *gin.Context) {
 }
 
 type sceneVideoReferenceBinding struct {
-	Picture  int    `json:"picture"`
-	Subject  *int   `json:"subject"`
-	Role     string `json:"role"`
-	Identity string `json:"identity"`
-	Usage    string `json:"usage"`
-	Label    string `json:"label"`
-	TaskID   string `json:"task_id"`
-	Name     string `json:"name"`
-	ImageURL string `json:"image_url"`
+	Picture       int    `json:"picture"`
+	Subject       *int   `json:"subject"`
+	Role          string `json:"role"`
+	Identity      string `json:"identity"`
+	Usage         string `json:"usage"`
+	ShotOrders    []int  `json:"shot_orders"`
+	RetentionMode string `json:"retention_mode"`
+	Label         string `json:"label"`
+	TaskID        string `json:"task_id"`
+	Name          string `json:"name"`
+	ImageURL      string `json:"image_url"`
 }
 
-func sceneVideoReferenceBindings(refs []FileMeta, lines []string) []sceneVideoReferenceBinding {
+func sceneVideoReferenceBindings(refs []FileMeta, lines []string, prompt string) []sceneVideoReferenceBinding {
+	body := h3PromptSection(prompt, "detailed_description:")
+	if body == "" {
+		body = h3IntegratedDescription(prompt)
+	}
+	appearances := h3SubjectShotAppearances(body)
 	out := make([]sceneVideoReferenceBinding, 0, len(refs))
 	for i, ref := range refs {
 		label := fmt.Sprintf("Reference %d", i+1)
@@ -346,12 +353,17 @@ func sceneVideoReferenceBindings(refs []FileMeta, lines []string) []sceneVideoRe
 				identity = label[left+len("「") : left+len("「")+right]
 			}
 		}
-		var subject *int
-		if role != "storyboard" {
-			value := i + 1
-			subject = &value
+		value := i + 1
+		subject := &value
+		orders := appearances[value]
+		mode := "unresolved"
+		if strings.TrimSpace(prompt) != "" {
+			mode = "weak_reference"
+			if len(orders) > 0 {
+				mode = "fully_preserved"
+			}
 		}
-		out = append(out, sceneVideoReferenceBinding{Picture: i + 1, Subject: subject, Role: role, Identity: identity, Usage: usage, Label: label, TaskID: ref.TaskID, Name: ref.Name, ImageURL: fmt.Sprintf("/api/input/%s/%s", ref.TaskID, ref.Name)})
+		out = append(out, sceneVideoReferenceBinding{Picture: value, Subject: subject, Role: role, Identity: identity, Usage: usage, ShotOrders: orders, RetentionMode: mode, Label: label, TaskID: ref.TaskID, Name: ref.Name, ImageURL: fmt.Sprintf("/api/input/%s/%s", ref.TaskID, ref.Name)})
 	}
 	return out
 }
@@ -395,7 +407,7 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 		"reference_limit_warning": s.Projects.sceneVideoReferenceWarning(sc, len(refs)),
 		"template":                template, "width": width, "height": height, "reference_count": len(refs),
 		"duration": normalizeSceneDuration(sc.Duration), "fps": 24, "steps": 20,
-		"reference_bindings": sceneVideoReferenceBindings(refs, refLines),
+		"reference_bindings": sceneVideoReferenceBindings(refs, refLines, fullPrompt),
 	}
 	if continuity != nil {
 		response["continuity_mode"] = continuity.Mode
@@ -457,7 +469,7 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "生成的视频提示词不符合 MiniMax H3 官方格式: " + strings.Join(issues, "；")})
 		return
 	}
-	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "reference_bindings": sceneVideoReferenceBindings(refs, lines), "template": template}
+	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "reference_bindings": sceneVideoReferenceBindings(refs, lines, fullPrompt), "template": template}
 	if continuity != nil && continuity.SelectedFrame != nil {
 		response["continuity_mode"] = continuity.Mode
 		response["continuity_frame"] = s.frameResponses([]models.FrameCandidate{*continuity.SelectedFrame})[0]

@@ -59,9 +59,11 @@ func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, coun
 	videoPath := filepath.Join(inputDir, filepath.Base(scene.VideoInputFile))
 	prefix := fmt.Sprintf("continuity_s%d_%s_", scene.ID, continuityTaskIDSanitizer.ReplaceAllString(scene.VideoTaskID, "_"))
 	pattern := filepath.Join(inputDir, prefix+"%03d.png")
+	firstPath := filepath.Join(inputDir, prefix+"first.png")
+	lastPath := filepath.Join(inputDir, prefix+"last.png")
 	window := float64(count) / 24.0
 	if s.remote != nil && s.remote.Enabled() {
-		cmd := fmt.Sprintf("%s; $FF -y -sseof -%.6f -i %s -vf fps=24 -frames:v %d %s", ffmpegResolveCmd, window, shellQuote(videoPath), count, shellQuote(pattern))
+		cmd := fmt.Sprintf("%s; $FF -y -i %s -map 0:v:0 -frames:v 1 %s; $FF -y -i %s -map 0:v:0 -fps_mode passthrough -update 1 %s; $FF -y -sseof -%.6f -i %s -vf fps=24 -frames:v %d %s", ffmpegResolveCmd, shellQuote(videoPath), shellQuote(firstPath), shellQuote(videoPath), shellQuote(lastPath), window, shellQuote(videoPath), count, shellQuote(pattern))
 		if _, err := s.remote.RunTimeout(cmd, 2*time.Minute); err != nil {
 			return nil, fmt.Errorf("提取衔接帧失败: %w", err)
 		}
@@ -69,6 +71,12 @@ func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, coun
 		ffmpeg, err := localFFmpegPath()
 		if err != nil {
 			return nil, err
+		}
+		if _, err := runLocalProgram(ffmpeg, []string{"-y", "-i", videoPath, "-map", "0:v:0", "-frames:v", "1", firstPath}, 2*time.Minute); err != nil {
+			return nil, fmt.Errorf("提取真实首帧失败: %w", err)
+		}
+		if _, err := runLocalProgram(ffmpeg, []string{"-y", "-i", videoPath, "-map", "0:v:0", "-fps_mode", "passthrough", "-update", "1", lastPath}, 2*time.Minute); err != nil {
+			return nil, fmt.Errorf("提取真实尾帧失败: %w", err)
 		}
 		args := []string{"-y", "-sseof", fmt.Sprintf("-%.6f", window), "-i", videoPath, "-vf", "fps=24", "-frames:v", fmt.Sprint(count), pattern}
 		if _, err := runLocalProgram(ffmpeg, args, 2*time.Minute); err != nil {
@@ -89,7 +97,24 @@ func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, coun
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("ffmpeg未产生候选帧")
 	}
+	tailCandidates := append([]models.FrameCandidate(nil), candidates...)
+	for _, boundary := range []struct {
+		name  string
+		kind  models.FrameCandidateType
+		index int
+	}{{prefix + "first.png", models.FrameCandidateVideoFirst, -1}, {prefix + "last.png", models.FrameCandidateVideoLast, count}} {
+		info, err := s.remote.Stat(filepath.Join(inputDir, boundary.name))
+		if err != nil {
+			return nil, fmt.Errorf("成片边界帧缺失: %s", boundary.name)
+		}
+		candidates = append(candidates, models.FrameCandidate{ProjectID: projectID, SceneID: sceneID, VideoTaskID: scene.VideoTaskID, Type: boundary.kind, FrameIndex: boundary.index, ImageFile: boundary.name, Source: "extracted"})
+		uploads = append(uploads, models.UploadFile{TaskID: fmt.Sprint(projectID), Type: "image", Name: boundary.name, Path: filepath.ToSlash(filepath.Join(fmt.Sprint(projectID), boundary.name)), Size: info.Size()})
+	}
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var current models.Scene
+		if err := tx.Where("id=? AND project_id=? AND video_task_id=? AND status=?", sceneID, projectID, scene.VideoTaskID, "video_ready").First(&current).Error; err != nil {
+			return fmt.Errorf("视频任务已变化，丢弃过期帧提取结果")
+		}
 		if err := detachAndDeleteFrameCandidates(tx, sceneID); err != nil {
 			return err
 		}
@@ -101,7 +126,7 @@ func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, coun
 		}
 		return tx.Create(&uploads).Error
 	})
-	return candidates, err
+	return tailCandidates, err
 }
 
 func detachAndDeleteFrameCandidates(tx *gorm.DB, sceneID uint) error {
@@ -126,12 +151,16 @@ func detachAndDeleteFrameCandidates(tx *gorm.DB, sceneID uint) error {
 
 func (s *ContinuityService) ListFrames(projectID, sceneID uint) ([]models.FrameCandidate, error) {
 	var frames []models.FrameCandidate
-	err := s.db.Where("project_id = ? AND scene_id = ?", projectID, sceneID).Order("frame_index").Find(&frames).Error
+	var scene models.Scene
+	if err := s.db.Where("id=? AND project_id=?", sceneID, projectID).First(&scene).Error; err != nil {
+		return nil, err
+	}
+	err := s.db.Where("project_id=? AND scene_id=? AND video_task_id=? AND type IN ?", projectID, sceneID, scene.VideoTaskID, []models.FrameCandidateType{models.FrameCandidateCandidate, models.FrameCandidateSelected}).Order("frame_index").Find(&frames).Error
 	return frames, err
 }
 func (s *ContinuityService) SelectFrame(projectID, sceneID, frameID uint) (*models.FrameCandidate, error) {
 	var frame models.FrameCandidate
-	if s.db.Where("id = ? AND project_id = ? AND scene_id = ?", frameID, projectID, sceneID).First(&frame).Error != nil {
+	if s.db.Where("id=? AND project_id=? AND scene_id=? AND type IN ?", frameID, projectID, sceneID, []models.FrameCandidateType{models.FrameCandidateCandidate, models.FrameCandidateSelected}).First(&frame).Error != nil {
 		return nil, fmt.Errorf("候选帧不存在")
 	}
 	var scene models.Scene
@@ -143,7 +172,7 @@ func (s *ContinuityService) SelectFrame(projectID, sceneID, frameID uint) (*mode
 	}
 	now := time.Now()
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&models.FrameCandidate{}).Where("scene_id = ?", sceneID).Updates(map[string]any{"type": models.FrameCandidateCandidate, "selected_at": nil}).Error; err != nil {
+		if err := tx.Model(&models.FrameCandidate{}).Where("scene_id=? AND type IN ?", sceneID, []models.FrameCandidateType{models.FrameCandidateCandidate, models.FrameCandidateSelected}).Updates(map[string]any{"type": models.FrameCandidateCandidate, "selected_at": nil}).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&frame).Updates(map[string]any{"type": models.FrameCandidateSelected, "selected_at": now}).Error; err != nil {

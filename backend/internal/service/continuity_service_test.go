@@ -27,6 +27,26 @@ func newContinuityTestService(t *testing.T) (*ContinuityService, *gorm.DB) {
 	return NewContinuityService(cfg, db, remote, upload), db
 }
 
+func TestBoundaryFramesAreNotSelectableTailCandidates(t *testing.T) {
+	svc, db := newContinuityTestService(t)
+	p := models.Project{Title: "p"}
+	db.Create(&p)
+	sc := models.Scene{ProjectID: p.ID, EpisodeN: 1, Generation: 1, Order: 1, VideoTaskID: "task", Status: "video_ready"}
+	db.Create(&sc)
+	rows := []models.FrameCandidate{{ProjectID: p.ID, SceneID: sc.ID, VideoTaskID: "task", Type: models.FrameCandidateCandidate, FrameIndex: 0, ImageFile: "tail.png"}, {ProjectID: p.ID, SceneID: sc.ID, VideoTaskID: "task", Type: models.FrameCandidateVideoFirst, FrameIndex: -1, ImageFile: "first.png"}, {ProjectID: p.ID, SceneID: sc.ID, VideoTaskID: "task", Type: models.FrameCandidateVideoLast, FrameIndex: 22, ImageFile: "last.png"}}
+	db.Create(&rows)
+	got, err := svc.ListFrames(p.ID, sc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ImageFile != "tail.png" {
+		t.Fatalf("frames=%+v", got)
+	}
+	if _, err := svc.SelectFrame(p.ID, sc.ID, rows[1].ID); err == nil {
+		t.Fatal("actual boundary frame was selectable")
+	}
+}
+
 func TestDetachAndDeleteFrameCandidatesClearsContinuityForeignKey(t *testing.T) {
 	_, db := newContinuityTestService(t)
 	project := models.Project{Title: "p"}

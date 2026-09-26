@@ -16,7 +16,8 @@ import (
 func TestSceneVideoReferenceBindingsPreserveEffectiveOrder(t *testing.T) {
 	refs := []FileMeta{{TaskID: "1", Name: "character.png"}, {TaskID: "1", Name: "location.png"}, {TaskID: "1", Name: "storyboard.png"}}
 	lines := []string{"- <Picture 1>：角色「舒寒」四视图", "- <Picture 2>：场景「内殿」参考图", "- <Picture 3>：当前分镜画面"}
-	got := sceneVideoReferenceBindings(refs, lines)
+	prompt := "detailed_description:\n[Shot 1] <Subject 1> stands in <Subject 2>.\n[Shot 2] <Subject 1> moves away."
+	got := sceneVideoReferenceBindings(refs, lines, prompt)
 	if len(got) != 3 {
 		t.Fatalf("bindings=%+v", got)
 	}
@@ -31,8 +32,11 @@ func TestSceneVideoReferenceBindingsPreserveEffectiveOrder(t *testing.T) {
 	if got[1].Subject == nil || got[1].Role != "location" || got[1].Identity != "内殿" {
 		t.Fatalf("location=%+v", got[1])
 	}
-	if got[2].Subject != nil || got[2].Role != "storyboard" {
+	if got[2].Subject == nil || *got[2].Subject != 3 || got[2].Role != "storyboard" || got[2].RetentionMode != "weak_reference" {
 		t.Fatalf("storyboard=%+v", got[2])
+	}
+	if len(got[0].ShotOrders) != 2 || got[0].ShotOrders[0] != 1 || got[0].ShotOrders[1] != 2 || got[0].RetentionMode != "fully_preserved" {
+		t.Fatalf("appearances=%+v", got[0])
 	}
 	if got[2].ImageURL != "/api/input/1/storyboard.png" {
 		t.Fatalf("url=%q", got[2].ImageURL)

@@ -17,6 +17,8 @@ test('剪辑台提供Scene生产看板和只读双层时间轴', () => {
   assert.match(source, /mismatchedScenes/)
   assert.match(source, /shot_duration_total/)
   assert.match(source, /未指定说话人/)
+  assert.match(source, /dialogue_fragments/)
+  assert.match(source, /fragment\.start_rune/)
 })
 
 test('剪辑台展示连续性三图对比和正式Picture Subject顺序', () => {
@@ -24,6 +26,9 @@ test('剪辑台展示连续性三图对比和正式Picture Subject顺序', () =>
   assert.match(source, /上一Scene确认尾帧/)
   assert.match(source, /当前Scene分镜图/)
   assert.match(source, /当前视频真实首帧/)
+  assert.match(source, /当前视频真实尾帧/)
+  assert.match(source, /video_actual_first_frame_url/)
+  assert.match(source, /video_actual_last_frame_url/)
   assert.match(source, /不是成片实测首帧/)
   assert.match(source, /reference_bindings/)
   assert.match(source, /Picture \{\{ref\.picture\}\}/)
@@ -31,6 +36,8 @@ test('剪辑台展示连续性三图对比和正式Picture Subject顺序', () =>
   assert.match(source, /ref\.identity/)
   assert.match(source, /ref\.usage/)
   assert.match(source, /referenceShotScope/)
+  assert.match(source, /ref\.shot_orders/)
+  assert.match(source, /ref\.retention_mode/)
 })
 
 test('连续性选择器接收真实上一Scene上下文', () => {

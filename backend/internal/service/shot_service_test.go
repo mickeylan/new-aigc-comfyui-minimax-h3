@@ -11,6 +11,24 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+func TestResolveShotDialogueFragmentsUsesAuthoritativeRanges(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	p := models.Project{Title: "p"}
+	db.Create(&p)
+	sc := models.Scene{ProjectID: p.ID, EpisodeN: 1, Generation: 1, Order: 1, Duration: 8}
+	db.Create(&sc)
+	d := models.Dialogue{ProjectID: p.ID, SceneID: sc.ID, Order: 1, Character: "林夏", SpeechType: "dialogue", Text: "你好世界"}
+	db.Create(&d)
+	shots := []models.Shot{{ID: 1, SceneID: sc.ID, Order: 1, DialogueRanges: []models.ShotDialogueRange{{DialogueID: d.ID, GroupKey: "dialogue-group:1", StartRune: 0, EndRune: 2}}}, {ID: 2, SceneID: sc.ID, Order: 2, DialogueRanges: []models.ShotDialogueRange{{DialogueID: d.ID, GroupKey: "dialogue-group:1", StartRune: 2, EndRune: 4}}}}
+	got, err := NewShotService(db).ResolveDialogueFragments(sc.ID, shots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[1][0].Text != "你好" || got[2][0].Text != "世界" || got[1][0].SpeakerLabel != "林夏" {
+		t.Fatalf("fragments=%+v", got)
+	}
+}
+
 func TestRebalanceShotDurationsPreservesRatiosAndExactSceneTotal(t *testing.T) {
 	shots := []models.Shot{{Duration: 1.5}, {Duration: 2.5}}
 	got, err := rebalanceShotDurations(shots, 10)

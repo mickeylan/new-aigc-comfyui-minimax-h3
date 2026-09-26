@@ -275,6 +275,60 @@ func (s *ShotService) ReplaceShots(sceneID uint, shots []models.Shot) ([]models.
 	return shots, err
 }
 
+type ShotDialogueFragment struct {
+	DialogueID   uint   `json:"dialogue_id"`
+	GroupKey     string `json:"group_key"`
+	StartRune    int    `json:"start_rune"`
+	EndRune      int    `json:"end_rune"`
+	Text         string `json:"text"`
+	Character    string `json:"character"`
+	SpeechType   string `json:"speech_type"`
+	SpeakerLabel string `json:"speaker_label"`
+}
+
+func (s *ShotService) ResolveDialogueFragments(sceneID uint, shots []models.Shot) (map[uint][]ShotDialogueFragment, error) {
+	var dialogues []models.Dialogue
+	if err := s.db.Where("scene_id=?", sceneID).Order("`order`, id").Find(&dialogues).Error; err != nil {
+		return nil, err
+	}
+	byID := map[uint]models.Dialogue{}
+	groupOf := map[uint]string{}
+	for _, shot := range shots {
+		for _, r := range shot.DialogueRanges {
+			if _, ok := groupOf[r.DialogueID]; !ok {
+				groupOf[r.DialogueID] = r.GroupKey
+			}
+		}
+	}
+	groups := map[string][]rune{}
+	for _, d := range dialogues {
+		byID[d.ID] = d
+		if key := groupOf[d.ID]; key != "" {
+			groups[key] = append(groups[key], []rune(canonicalDialogueText(d.Text))...)
+		}
+	}
+	out := map[uint][]ShotDialogueFragment{}
+	for _, shot := range shots {
+		for _, r := range shot.DialogueRanges {
+			text := groups[r.GroupKey]
+			if r.StartRune < 0 || r.EndRune < r.StartRune || r.EndRune > len(text) {
+				return nil, fmt.Errorf("Shot %d 对白区间越界", shot.Order)
+			}
+			d, ok := byID[r.DialogueID]
+			if !ok {
+				return nil, fmt.Errorf("Shot %d 引用了不存在的Dialogue", shot.Order)
+			}
+			kind, speaker := normalizeScriptSpeech(d.SpeechType, d.Character)
+			label := speaker
+			if kind == "monologue" && label == "" {
+				label = "内心独白"
+			}
+			out[shot.ID] = append(out[shot.ID], ShotDialogueFragment{DialogueID: r.DialogueID, GroupKey: r.GroupKey, StartRune: r.StartRune, EndRune: r.EndRune, Text: string(text[r.StartRune:r.EndRune]), Character: d.Character, SpeechType: kind, SpeakerLabel: label})
+		}
+	}
+	return out, nil
+}
+
 func decorateShotDialogueContinuity(shots []models.Shot) {
 	for i := range shots {
 		if len(shots[i].DialogueRanges) == 0 {
