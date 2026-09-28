@@ -413,7 +413,7 @@ const durProgressPercent = computed(() => {
 })
 const staleDialogueCount = computed(() => dialogues.value.filter(d => d.audio_stale || !d.audio_file).length)
 const previousScene = computed(() => { const i = scenes.value.findIndex(s => s.id === selected.value?.id); return i > 0 ? scenes.value[i - 1] : null })
-function productionStage(s) { if(s.status==='failed'||s.error||s.shot_duration_mismatch)return'attention'; if(!Number(s.shot_count||0))return'director'; if(!s.image_file)return'image'; if(s.prompt_stale||!String(s.video_full_prompt||'').trim())return'prompt'; if(!s.video_file)return'video'; const dubs=sceneDubs(s); if(dubs.some(d=>d.audio_stale||!d.audio_file))return'audio'; return'ready' }
+function productionStage(s) { if(s.status==='failed'||s.error)return'attention'; if(!Number(s.shot_count||0))return'director'; if(!s.image_file)return'image'; if(s.prompt_stale||!String(s.video_full_prompt||'').trim())return'prompt'; if(!s.video_file)return'video'; const dubs=sceneDubs(s); if(dubs.some(d=>d.audio_stale||!d.audio_file))return'audio'; return'ready' }
 const productionColumns = computed(() => [
   {key:'director',label:'待导演设计',severity:'normal'},{key:'image',label:'待分镜图',severity:'normal'},{key:'prompt',label:'待视频提示词审核',severity:'warn'},{key:'video',label:'待视频',severity:'normal'},{key:'audio',label:'待配音/音频',severity:'warn'},{key:'ready',label:'已就绪',severity:'success'},{key:'attention',label:'需处理',severity:'error'}
 ].map(column=>({...column,scenes:scenes.value.filter(s=>productionStage(s)===column.key)})))

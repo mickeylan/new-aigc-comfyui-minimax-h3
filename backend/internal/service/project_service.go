@@ -4981,12 +4981,6 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	if err := s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&structuredShots).Error; err != nil {
 		return err
 	}
-	if len(structuredShots) > 0 {
-		total := shotDurationTotal(structuredShots)
-		if math.Abs(total-sc.Duration) > shotDurationTolerance {
-			return fmt.Errorf("Scene时长%.1f秒与内部Shot总时长%.1f秒不一致，请先预览并应用重新配时", sc.Duration, total)
-		}
-	}
 	dialogues := s.sceneVideoDialogues(sc)
 	for _, dialogue := range dialogues {
 		if err := validateDialogueSpeaker(dialogue); err != nil {
@@ -6943,7 +6937,11 @@ func buildEpisodePreflight(scenes []models.Scene, shotTotals map[uint]float64, c
 		}
 	}
 	appendCheck("scene_duration", "所有Scene时长均为3–15秒", "时长不在3–15秒", invalidDuration)
-	appendCheck("shot_duration", "全Episode内部Shot配时与Scene一致", "内部Shot配时不一致", mismatch)
+	shotTimingText := "内部Shot配时与Scene一致"
+	if len(mismatch) > 0 {
+		shotTimingText = fmt.Sprintf("%d个Scene的内部Shot合计与Scene时长不同，仅作配时建议，不阻止生成", len(mismatch))
+	}
+	checks = append(checks, episodePreflightCheck{Key: "shot_duration", OK: true, Text: shotTimingText, SceneIDs: mismatch})
 	appendCheck("dialogue_speaker", "所有有文字的Dialogue均明确说话人/旁白/内心独白", "存在未明确说话人的Dialogue", uniqueUintIDs(unknownDialogue))
 	appendCheck("prompt_stale", "所有视频提示词均为最新", "视频提示词已过期", stale)
 	appendCheck("prompt_present", "所有Scene均已保存正式视频提示词", "缺少正式视频提示词", missingPrompt)

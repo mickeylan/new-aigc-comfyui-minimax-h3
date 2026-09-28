@@ -18,6 +18,7 @@ test('剪辑台提供Scene生产看板和只读双层时间轴', () => {
   assert.match(source, /preflightIssueScenes/)
   assert.match(source, /data\.preflight/)
   assert.match(source, /shot_duration_total/)
+  assert.doesNotMatch(source, /s\.error\|\|s\.shot_duration_mismatch/)
   assert.match(source, /未指定说话人/)
   assert.match(source, /dialogue_fragments/)
   assert.match(source, /fragment\.start_rune/)

@@ -1998,10 +1998,23 @@ func TestBuildEpisodePreflightChecksEveryScene(t *testing.T) {
 			failed[check.Key] = true
 		}
 	}
-	for _, key := range []string{"scene_duration", "shot_duration", "dialogue_speaker", "prompt_stale", "prompt_present", "continuity"} {
+	for _, key := range []string{"scene_duration", "dialogue_speaker", "prompt_stale", "prompt_present", "continuity"} {
 		if !failed[key] {
 			t.Fatalf("missing failed check %s: %+v", key, result.Checks)
 		}
+	}
+	for _, check := range result.Checks {
+		if check.Key == "shot_duration" && (!check.OK || !strings.Contains(check.Text, "不阻止生成")) {
+			t.Fatalf("shot timing must be advisory: %+v", check)
+		}
+	}
+}
+
+func TestEpisodePreflightAllowsShotSceneDurationMismatch(t *testing.T) {
+	scenes := []models.Scene{{ID: 1, Duration: 11, ShotCount: 2, VideoFullPrompt: "prompt"}}
+	result := buildEpisodePreflight(scenes, map[uint]float64{1: 9.5}, nil, nil)
+	if !result.Ready || len(result.IssueSceneIDs) > 0 {
+		t.Fatalf("shot timing mismatch blocked preflight: %+v", result)
 	}
 }
 
