@@ -423,7 +423,7 @@
           <div v-if="sceneDialogues(sc).length" class="scene-dialogues">
             <div class="dialogue-budget" :class="{ danger: dialogueBudget(sc).overflow }">
               对白预计 {{ dialogueBudget(sc).minimum.toFixed(1) }} 秒 · 镜头 {{ Number(sc.duration || 0).toFixed(1) }} 秒
-              <span v-if="dialogueBudget(sc).overflow">{{ dialogueBudget(sc).minimum > 15 ? '需拆分镜头' : '时长不足' }}</span>
+              <span v-if="dialogueBudget(sc).overflow">{{ dialogueBudget(sc).minimum > 15 ? '建议拆分镜头' : '建议增加时长' }}（不阻止生成）</span>
               <button v-if="dialogueBudget(sc).overflow && dialogueBudget(sc).minimum <= 15" class="btn btn-xs btn-ghost" :disabled="busy" @click="applyDialogueDuration(sc)">应用建议时长</button>
             </div>
             <div v-for="d in sceneDialogues(sc)" :key="d.id" class="dialogue-row">

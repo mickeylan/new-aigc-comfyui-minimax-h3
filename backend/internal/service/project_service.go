@@ -4990,13 +4990,6 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 			return err
 		}
 	}
-	minimumSpeechDuration := modelDialoguesMinDuration(dialogues)
-	if minimumSpeechDuration > maxSceneVideoDuration {
-		return fmt.Errorf("场景 %d 的对白自然朗读预计需要 %.1f 秒，超过单个视频 15 秒上限，请先拆分镜头；系统不会通过加快语速压缩对白", sc.Order, minimumSpeechDuration)
-	}
-	if minimumSpeechDuration > sc.Duration+0.05 {
-		return fmt.Errorf("场景 %d 当前时长 %.1f 秒不足以自然说完对白，预计至少需要 %.1f 秒，请先应用建议时长", sc.Order, sc.Duration, minimumSpeechDuration)
-	}
 	if sc.VideoLocked {
 		return fmt.Errorf("场景 %d 的视频已锁定，请先解锁", sc.Order)
 	}
