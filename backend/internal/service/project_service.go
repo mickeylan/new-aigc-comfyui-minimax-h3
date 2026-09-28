@@ -1311,6 +1311,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	_, refLines := s.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
 	openingPicture := openingPictureTag(refLines)
 	shotContext := s.sceneShotContext(sc)
+	canonicalSceneContent := normalizeUserH3ShotMarkers(sc.Content)
 	dubs := s.sceneVideoDialogues(sc)
 	var shots []models.Shot
 	if err := s.db.Where("scene_id=?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
@@ -1339,7 +1340,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 正文中的人物身份占位必须逐字使用【场景剧情】和【Shot导演设计】里的中文真实角色名，以便系统确定性替换为正确 <Subject N>；其余视觉叙述使用英文。严禁拼音、英文音译、别名，也禁止自行猜测Subject编号。
 四视图只负责人物身份与服装，场景图只负责环境；不得从参考图反推剧情，不得复述或猜测外貌、服装、陈设。
 场景类型规则：%s`, openingPicture, h3SceneModeInstruction(sceneMode))
-	user := fmt.Sprintf("目标时长：%.1f秒。只提取执行本镜所必需的信息，不要把以下资料逐段复述进输出。\n\n【场景剧情（仅作事实边界）】\n%s\n\n【Shot导演设计（动作与镜头权威）】\n%s\n\n【结构化对白（仅判断口型时机）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s", normalizeSceneDuration(sc.Duration), sc.Content, shotContext, dialogueContext, strings.Join(refLines, "\n"))
+	user := fmt.Sprintf("目标时长：%.1f秒。只提取执行本镜所必需的信息，不要把以下资料逐段复述进输出。场景剧情中已明确存在的每个[Shot N]都必须原序保留，禁止合并或删除。\n\n【场景剧情（仅作事实边界）】\n%s\n\n【Shot导演设计（动作与镜头权威）】\n%s\n\n【结构化对白（仅判断口型时机）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s", normalizeSceneDuration(sc.Duration), canonicalSceneContent, shotContext, dialogueContext, strings.Join(refLines, "\n"))
 	policy, err := NewPromptPolicyService(s.db).Resolve(PromptPolicyContext{ProjectID: sc.ProjectID, SceneID: &sc.ID}, PromptPolicyVideoPolish, system)
 	if err != nil {
 		return "", fmt.Errorf("解析视频提示词策略失败: %w", err)
@@ -1360,6 +1361,14 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	}
 	normalizeAction := func(value string) string {
 		return resolveH3VisualConflicts(coalesceDuplicateH3Shots(stripPromptDialogueNarration(normalizeVideoActionPrompt(value))))
+	}
+	expectedShotCount := len(shots)
+	for _, marker := range h3ShotMarkerPattern.FindAllStringSubmatch(canonicalSceneContent, -1) {
+		if len(marker) == 2 {
+			if n, _ := strconv.Atoi(marker[1]); n > expectedShotCount {
+				expectedShotCount = n
+			}
+		}
 	}
 	actionTrusted := func(value string, allowSubjects bool) bool {
 		// This is a generation-quality routing check, not a save/submission gate.
@@ -1395,19 +1404,19 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 				}
 			}
 		}
-		if len(shots) > 0 {
+		if expectedShotCount > 0 {
 			seen := map[int]bool{}
 			for _, marker := range h3ShotMarkerPattern.FindAllStringSubmatch(value, -1) {
 				if len(marker) != 2 {
 					return false
 				}
 				n, _ := strconv.Atoi(marker[1])
-				if n < 1 || n > len(shots) || seen[n] {
+				if n < 1 || n > expectedShotCount || seen[n] {
 					return false
 				}
 				seen[n] = true
 			}
-			if len(seen) != len(shots) {
+			if len(seen) != expectedShotCount {
 				return false
 			}
 		}
@@ -1421,9 +1430,13 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 			candidate := normalizeAction(strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(repaired), "```"), "```")))
 			if actionTrusted(candidate, true) {
 				out = candidate
+			} else if expectedShotCount > len(shots) {
+				return "", fmt.Errorf("AI未完整保留场景正文中的%d个Shot，请重试", expectedShotCount)
 			} else {
 				out = fallback()
 			}
+		} else if expectedShotCount > len(shots) {
+			return "", fmt.Errorf("AI修复失败，未能保留场景正文中的%d个Shot: %w", expectedShotCount, repairErr)
 		} else {
 			out = fallback()
 		}
@@ -1551,8 +1564,31 @@ func useSubjectTags(text string, referenceLines []string) string {
 	return text
 }
 
+var userH3ShotMarkerPattern = regexp.MustCompile(`(?i)\[Shot\s+([1-9][0-9]*)\](?:\s*AT\s+([0-9]{2}):([0-9]{2})\.([0-9]{2,3})\s*,?)?`)
+
+func normalizeUserH3ShotMarkers(text string) string {
+	return userH3ShotMarkerPattern.ReplaceAllStringFunc(text, func(marker string) string {
+		match := userH3ShotMarkerPattern.FindStringSubmatch(marker)
+		if len(match) != 5 {
+			return marker
+		}
+		n, _ := strconv.Atoi(match[1])
+		if n == 1 {
+			return "[Shot 1]"
+		}
+		if match[2] == "" {
+			return fmt.Sprintf("[Shot %d]", n)
+		}
+		fraction := match[4]
+		if len(fraction) == 2 {
+			fraction += "0"
+		}
+		return fmt.Sprintf("[Shot %d] At %s:%s.%s,", n, match[2], match[3], fraction)
+	})
+}
+
 func normalizeVideoActionPrompt(prompt string) string {
-	text := strings.TrimSpace(prompt)
+	text := normalizeUserH3ShotMarkers(strings.TrimSpace(prompt))
 	// 历史版本可能把完整六段提示词误存进 video_prompt，并在每次重建时递归嵌套。
 	// 最内层（最后一个）detailed_description 才是用户真正的动作正文。
 	if i := strings.LastIndex(strings.ToLower(text), "detailed_description:"); i >= 0 {

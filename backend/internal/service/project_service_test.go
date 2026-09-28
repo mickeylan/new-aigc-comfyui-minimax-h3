@@ -2269,6 +2269,19 @@ func TestRebuildStructuredShotActionCompilesAuditableActionTimeline(t *testing.T
 	}
 }
 
+func TestNormalizeUserShotMarkersPreservesExplicitSceneShots(t *testing.T) {
+	input := "[Shot 1] AT 00:00.00 和煦落日余晖下，舒寒静静伫立。特写\n[Shot 2] AT 00:04.00 特写，上官若琳颤抖的双手捂住嘴，眼中含泪。"
+	got := coalesceDuplicateH3Shots(normalizeVideoActionPrompt(input))
+	for _, want := range []string{"[Shot 1] 和煦落日余晖下", "[Shot 2] At 00:04.000, 特写", "舒寒静静伫立", "上官若琳颤抖的双手"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("explicit Shot lost %q: %s", want, got)
+		}
+	}
+	if strings.Count(got, "[Shot ") != 2 {
+		t.Fatalf("Shot count changed: %s", got)
+	}
+}
+
 func TestApplyShotTimelineUsesPersistedDurationsAndEndsAtSceneDuration(t *testing.T) {
 	shots := []models.Shot{{Duration: 4}, {Duration: 3}, {Duration: 7}}
 	got := applyShotTimeline("[Shot 1] 建立画面。\n[Shot 2] 角色反应。\n[Shot 3 | 0-0秒] 收束。", shots, 14)
