@@ -3003,7 +3003,7 @@ func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 
 func resolveRef2VSubmissionPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue, referenceLines []string) string {
 	saved := strings.TrimSpace(sc.VideoFullPrompt)
-	if saved != "" && len(ValidateFullH3PromptForReferences(saved, referenceLines)) == 0 {
+	if saved != "" {
 		return normalizeSavedH3Audio(saved, dubs, referenceLines)
 	}
 	actionPrompt := canonicalVideoAction(saved, referenceLines)
@@ -5123,9 +5123,6 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		if err := s.restoreLegacyProjectInput(sc.ProjectID, sc.ImageFile); err != nil {
 			return err
 		}
-	}
-	if issues := validateGeneratedH3Prompt(promptText, tplCode, duration); len(issues) > 0 {
-		return fmt.Errorf("视频提示词未通过 MiniMax H3 正式提交校验: %s", strings.Join(issues, "；"))
 	}
 	claimQuery := s.db.Model(&models.Scene{}).Where("id = ? AND project_id = ? AND generation = ? AND status IN ?", sc.ID, p.ID, sc.Generation, []string{"pending", "image_ready", "video_ready", "failed"})
 	if sceneVideoTemplateRequiresImage(tplCode) {

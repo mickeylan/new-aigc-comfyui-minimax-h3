@@ -393,9 +393,6 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 	// 参考图变化仅返回校验问题，由用户决定修改或明确点击 AI 重新生成。
 	fullPrompt := strings.TrimSpace(sc.VideoFullPrompt)
 	promptIssues := []string{}
-	if hasSavedPrompt {
-		promptIssues = ValidateFullH3PromptForReferences(fullPrompt, refLines)
-	}
 	width, height := aspectVideoSize(project.AspectRatio, s.Projects.videoResolution())
 	template := strings.TrimSpace(sc.VideoTemplate)
 	if template == "" {
@@ -543,24 +540,10 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 	if template == "" {
 		template = strings.TrimSpace(sc.VideoTemplate)
 	}
-	var contractIssues []string
-	if template == "minimax_h3_t2v" || template == "minimax_h3_i2v" || template == "minimax_h3_first_last" {
-		contractIssues = validateH3KeyframePrompt(prompt, template)
-	} else {
-		contractIssues = ValidateFullH3PromptForReferences(prompt, refLines)
-	}
-	if len(contractIssues) > 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": strings.Join(contractIssues, "；")})
-		return
-	}
-	// 保存接口只校验并原样持久化用户内容，不重写对白、音频段或视觉正文。
+	// 用户审核后的提示词直接保存；格式建议不再作为保存或生成门槛。
 	actionPrompt := normalizeVideoActionPrompt(prompt)
 	if isH3KeyframePrompt(prompt) {
 		actionPrompt = h3IntegratedDescription(prompt)
-	}
-	if issues := ValidateVideoPrompt(actionPrompt, sc.Characters, sc.LocationName, sc.Props); len(issues) > 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": strings.Join(issues, "；")})
-		return
 	}
 	updates := map[string]any{"video_full_prompt": prompt, "video_prompt": actionPrompt, "prompt_stale": false}
 	if strings.TrimSpace(req.Template) != "" {
