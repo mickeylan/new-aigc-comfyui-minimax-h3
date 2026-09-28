@@ -42,7 +42,7 @@ func TestSavingShotPromotesNewestMatchingDraftWithoutLosingAction(t *testing.T) 
 	db.Create(&project)
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
 	db.Create(&scene)
-	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "medium", Duration: 2, PromptSubject: "s", PromptAction: "a", PromptCamera: "c", PromptLighting: "l", PromptStyle: "style"}
+	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "medium", Duration: 3, PromptSubject: "s", PromptAction: "a", PromptCamera: "c", PromptLighting: "l", PromptStyle: "style"}
 	db.Create(&shot)
 	content := canonicalShotPrompt(shot)
 	first := models.PromptVersion{ProjectID: project.ID, EntityType: "shot", EntityID: shot.ID, Content: content, Action: string(PromptActionBuild), State: PromptVersionStateDraft}

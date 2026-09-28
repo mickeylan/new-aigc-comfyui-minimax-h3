@@ -164,7 +164,11 @@ func (s *ShotService) RegroupExistingNativeScenes(projectID, selectedID uint) ([
 			}
 			keeper.NegativePrompt, keeper.ShotCount = strings.Join(nonEmptyStrings(negatives), ", "), shotOrder
 			resetMaterializedScene(&keeper, keeper)
-			if err := tx.Model(&models.Scene{}).Where("id=?", keeper.ID).Updates(map[string]any{"order": keeper.Order, "title": keeper.Title, "duration": keeper.Duration, "content": keeper.Content, "image_prompt": keeper.ImagePrompt, "video_prompt": keeper.VideoPrompt, "negative_prompt": keeper.NegativePrompt, "shot_count": keeper.ShotCount, "image_file": "", "image_task_id": "", "video_task_id": "", "video_file": "", "video_input_file": "", "video_full_prompt": "", "status": "pending", "prompt_stale": true}).Error; err != nil {
+			updates := sceneDerivedResetUpdates()
+			for key, value := range map[string]any{"order": keeper.Order, "title": keeper.Title, "duration": keeper.Duration, "content": keeper.Content, "image_prompt": keeper.ImagePrompt, "video_prompt": keeper.VideoPrompt, "negative_prompt": keeper.NegativePrompt, "shot_count": keeper.ShotCount} {
+				updates[key] = value
+			}
+			if err := tx.Model(&models.Scene{}).Where("id=?", keeper.ID).Updates(updates).Error; err != nil {
 				return err
 			}
 			created = append(created, keeper)

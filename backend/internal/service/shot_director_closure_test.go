@@ -19,7 +19,7 @@ func TestReplaceShotsAllowsEmptyAndInvalidatesSceneGraph(t *testing.T) {
 	db.Create(&models.SceneContinuity{SceneID: dependent.ID, SourceSceneID: &scene.ID, Mode: models.ContinuityModeContinue, Status: "ready"})
 	db.Create(&models.GenerationCandidate{ProjectID: project.ID, EntityType: "scene", EntityID: scene.ID, MediaType: "video", File: scene.VideoFile, IsCurrent: true})
 	svc := NewShotService(db)
-	if _, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "medium", Duration: 2, Description: "beat"}}); err != nil {
+	if _, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "medium", Duration: 3, Description: "beat"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.ReplaceShots(scene.ID, []models.Shot{}); err != nil {
@@ -45,7 +45,7 @@ func TestShotTransitionAndNegativePromptAggregateIntoScene(t *testing.T) {
 	db.Create(&project)
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
 	db.Create(&scene)
-	_, err := NewShotService(db).ReplaceShots(scene.ID, []models.Shot{{ShotType: "close", Duration: 2, Description: "look", TransitionType: models.ShotTransitionMatchCut, TransitionNote: "match eyes", NegativePrompt: "modern cars"}})
+	_, err := NewShotService(db).ReplaceShots(scene.ID, []models.Shot{{ShotType: "close", Duration: 3, Description: "look", TransitionType: models.ShotTransitionMatchCut, TransitionNote: "match eyes", NegativePrompt: "modern cars"}})
 	if err != nil {
 		t.Fatal(err)
 	}

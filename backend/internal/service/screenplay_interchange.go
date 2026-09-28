@@ -229,7 +229,7 @@ func previewToDatabase(tx *gorm.DB, project *models.Project, episodeN int, previ
 			switch element.Type {
 			case "action", "transition":
 				shotOrder++
-				shot := models.Shot{SceneID: scene.ID, Order: shotOrder, ActType: models.ShotActSetup, ShotType: element.Type, Duration: 1.5, Description: text}
+				shot := models.Shot{SceneID: scene.ID, Order: shotOrder, ActType: models.ShotActSetup, ShotType: element.Type, Duration: 3, Description: text}
 				if err := tx.Create(&shot).Error; err != nil {
 					return err
 				}

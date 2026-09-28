@@ -42,8 +42,16 @@ func rebalanceShotDurations(shots []models.Shot, target float64) ([]models.Shot,
 			result[i].Duration = math.Round((result[i].Duration/total*target)*10) / 10
 			used += result[i].Duration
 		}
-		if result[i].Duration <= 0 {
-			return nil, fmt.Errorf("Scene时长不足以容纳当前Shot数量")
+		if result[i].Duration < 3 || result[i].Duration > 15 {
+			return nil, fmt.Errorf("Scene时长不足以让每个Shot保持3至15秒，请减少Shot数量或调整Scene时长")
+		}
+		if shots[i].Duration > 0 && len(result[i].ActionTimeline) > 0 {
+			ratio := result[i].Duration / shots[i].Duration
+			for j := range result[i].ActionTimeline {
+				result[i].ActionTimeline[j].Start = math.Round(result[i].ActionTimeline[j].Start*ratio*1000) / 1000
+				result[i].ActionTimeline[j].End = math.Round(result[i].ActionTimeline[j].End*ratio*1000) / 1000
+			}
+			result[i].ActionTimeline[len(result[i].ActionTimeline)-1].End = result[i].Duration
 		}
 	}
 	return result, nil
@@ -54,7 +62,7 @@ var shotUpdateFields = map[string]bool{
 	"transition_type": true, "transition_note": true, "start_state": true, "end_state": true,
 	"duration": true, "description": true, "dialogue": true, "emotion": true,
 	"prompt_subject": true, "prompt_action": true, "prompt_camera": true,
-	"prompt_lighting": true, "prompt_style": true, "negative_prompt": true,
+	"prompt_lighting": true, "prompt_style": true, "negative_prompt": true, "action_timeline": true,
 }
 
 func validateShot(shot *models.Shot) error {
@@ -81,8 +89,44 @@ func validateShot(shot *models.Shot) error {
 	if shot.ShotType == "" {
 		return fmt.Errorf("shot_type 不能为空")
 	}
-	if shot.Duration <= 0 || shot.Duration > 120 || math.IsNaN(shot.Duration) || math.IsInf(shot.Duration, 0) {
-		return fmt.Errorf("duration 必须在 0 到 120 秒之间")
+	if shot.Duration < 3 || shot.Duration > 15 || math.IsNaN(shot.Duration) || math.IsInf(shot.Duration, 0) {
+		return fmt.Errorf("每镜时长必须为 3 到 15 秒")
+	}
+	if err := validateShotActionTimeline(shot.ActionTimeline, shot.Duration); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateShotActionTimeline(entries []models.ShotActionTimelineEntry, duration float64) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	if len(entries) > 20 {
+		return fmt.Errorf("动作时间轴最多包含20个区间")
+	}
+	const tolerance = 0.001
+	previousEnd := 0.0
+	for i := range entries {
+		entry := &entries[i]
+		entry.Subject, entry.Action = strings.TrimSpace(entry.Subject), strings.TrimSpace(entry.Action)
+		entry.State, entry.Camera = strings.TrimSpace(entry.State), strings.TrimSpace(entry.Camera)
+		if math.IsNaN(entry.Start) || math.IsInf(entry.Start, 0) || math.IsNaN(entry.End) || math.IsInf(entry.End, 0) {
+			return fmt.Errorf("动作时间轴第%d段时间无效", i+1)
+		}
+		if entry.Start < 0 || entry.End <= entry.Start || entry.End > duration+tolerance {
+			return fmt.Errorf("动作时间轴第%d段必须满足 0 <= start < end <= %.1f", i+1, duration)
+		}
+		if math.Abs(entry.Start-previousEnd) > tolerance {
+			return fmt.Errorf("动作时间轴第%d段必须从%.3f秒连续开始", i+1, previousEnd)
+		}
+		if entry.Subject == "" || entry.Action == "" || entry.State == "" || entry.Camera == "" {
+			return fmt.Errorf("动作时间轴第%d段必须填写主体、动作、状态和摄影机", i+1)
+		}
+		previousEnd = entry.End
+	}
+	if math.Abs(previousEnd-duration) > tolerance {
+		return fmt.Errorf("动作时间轴必须完整覆盖镜头0至%.1f秒", duration)
 	}
 	return nil
 }
@@ -92,9 +136,23 @@ func assignShotDialogueRanges(tx *gorm.DB, sceneID uint, shots []models.Shot) er
 	if err := tx.Where("scene_id = ?", sceneID).Order("`order`, id").Find(&dialogues).Error; err != nil {
 		return err
 	}
+	// Build authoritative rune sequence from structured dialogues.
 	canonical := make([][]rune, len(dialogues))
 	groupKeys := make([]string, len(dialogues))
 	groupStarts := make([]int, len(dialogues))
+	// Validate: concatenation of all shot dialogue texts must equal canonical text byte-for-byte.
+	shotRunes := []rune{}
+	for _, shot := range shots {
+		shotRunes = append(shotRunes, []rune(canonicalDialogueText(shot.Dialogue))...)
+	}
+	authRunes := []rune{}
+	for i := range dialogues {
+		canonical[i] = []rune(canonicalDialogueText(dialogues[i].Text))
+		authRunes = append(authRunes, canonical[i]...)
+	}
+	if string(shotRunes) != string(authRunes) {
+		return fmt.Errorf("镜头台词与结构化Dialogue不一致，请重新生成对白节奏拆镜")
+	}
 	groupNo, groupOffset := 0, 0
 	for i := range dialogues {
 		canonical[i] = []rune(canonicalDialogueText(dialogues[i].Text))
@@ -174,10 +232,14 @@ func (s *ShotService) CreateShot(sceneID uint, shot models.Shot) (*models.Shot, 
 		if err := recordManualShotPrompt(tx, projectID, shot); err != nil {
 			return err
 		}
-		if err := updateSceneShotCount(tx, sceneID); err != nil {
+		var shots []models.Shot
+		if err := tx.Where("scene_id = ?", sceneID).Order("order_num, id").Find(&shots).Error; err != nil {
 			return err
 		}
-		return markEpisodeEditorialStaleByScene(tx, sceneID)
+		if err := assignShotDialogueRanges(tx, sceneID, shots); err != nil {
+			return err
+		}
+		return aggregateShotsIntoScene(tx, sceneID, shots)
 	}); err != nil {
 		return nil, err
 	}
@@ -235,7 +297,7 @@ func (s *ShotService) ReplaceShots(sceneID uint, shots []models.Shot) ([]models.
 				"emotion": shots[i].Emotion, "prompt_subject": shots[i].PromptSubject,
 				"prompt_action": shots[i].PromptAction, "prompt_camera": shots[i].PromptCamera,
 				"prompt_lighting": shots[i].PromptLighting, "prompt_style": shots[i].PromptStyle,
-				"negative_prompt": shots[i].NegativePrompt,
+				"negative_prompt": shots[i].NegativePrompt, "action_timeline_json": shots[i].ActionTimeline,
 			}
 			if err := tx.Model(&models.Shot{}).Where("id = ? AND scene_id = ?", shots[i].ID, sceneID).Updates(updates).Error; err != nil {
 				return err
@@ -267,7 +329,10 @@ func (s *ShotService) ReplaceShots(sceneID uint, shots []models.Shot) ([]models.
 				return err
 			}
 		}
-		return aggregateShotsIntoScene(tx, sceneID, shots)
+		if err := aggregateShotsIntoScene(tx, sceneID, shots); err != nil {
+			return err
+		}
+		return nil
 	})
 	if err == nil {
 		decorateShotDialogueContinuity(shots)
@@ -384,6 +449,36 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 	if v, ok := updates["description"].(string); ok {
 		candidate.Description = v
 	}
+	if v, ok := updates["dialogue"].(string); ok {
+		candidate.Dialogue = v
+	}
+	if v, ok := updates["camera_angle"].(string); ok {
+		candidate.CameraAngle = v
+	}
+	if v, ok := updates["camera_movement"].(string); ok {
+		candidate.CameraMovement = v
+	}
+	if v, ok := updates["emotion"].(string); ok {
+		candidate.Emotion = v
+	}
+	if v, ok := updates["prompt_subject"].(string); ok {
+		candidate.PromptSubject = v
+	}
+	if v, ok := updates["prompt_action"].(string); ok {
+		candidate.PromptAction = v
+	}
+	if v, ok := updates["prompt_camera"].(string); ok {
+		candidate.PromptCamera = v
+	}
+	if v, ok := updates["prompt_lighting"].(string); ok {
+		candidate.PromptLighting = v
+	}
+	if v, ok := updates["prompt_style"].(string); ok {
+		candidate.PromptStyle = v
+	}
+	if v, ok := updates["negative_prompt"].(string); ok {
+		candidate.NegativePrompt = v
+	}
 	if v, ok := updates["transition_type"].(string); ok {
 		candidate.TransitionType = models.ShotTransitionType(v)
 	}
@@ -401,6 +496,14 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 	}
 	if v, ok := updates["duration"].(float64); ok {
 		candidate.Duration = v
+	}
+	if value, ok := updates["action_timeline"]; ok {
+		data, err := json.Marshal(value)
+		if err != nil || json.Unmarshal(data, &candidate.ActionTimeline) != nil {
+			return nil, fmt.Errorf("action_timeline 格式无效")
+		}
+		filtered["action_timeline_json"] = candidate.ActionTimeline
+		delete(filtered, "action_timeline")
 	}
 	if err := validateShot(&candidate); err != nil {
 		return nil, err
@@ -421,6 +524,12 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 			return err
 		}
 		var shots []models.Shot
+		if err := tx.Where("scene_id = ?", shot.SceneID).Order("order_num, id").Find(&shots).Error; err != nil {
+			return err
+		}
+		if err := assignShotDialogueRanges(tx, shot.SceneID, shots); err != nil {
+			return err
+		}
 		if err := tx.Where("scene_id = ?", shot.SceneID).Order("order_num, id").Find(&shots).Error; err != nil {
 			return err
 		}
@@ -448,6 +557,9 @@ func (s *ShotService) DeleteShot(shotID uint) error {
 		}
 		var shots []models.Shot
 		if err := tx.Where("scene_id = ?", shot.SceneID).Order("order_num, id").Find(&shots).Error; err != nil {
+			return err
+		}
+		if err := assignShotDialogueRanges(tx, shot.SceneID, shots); err != nil {
 			return err
 		}
 		return aggregateShotsIntoScene(tx, shot.SceneID, shots)
@@ -522,12 +634,10 @@ func aggregateShotsIntoScene(db *gorm.DB, sceneID uint, shots []models.Shot) err
 			negativePrompts = append(negativePrompts, negative)
 		}
 	}
-	if err := db.Model(&scene).Updates(map[string]any{
-		"shot_count": len(shots), "negative_prompt": strings.Join(negativePrompts, ", "), "prompt_stale": true,
-		"image_file": "", "image_token": "", "image_task_id": "",
-		"video_task_id": "", "video_file": "", "video_input_file": "", "video_gpu": nil, "video_full_prompt": "",
-		"image_candidate_parent_id": nil, "video_candidate_parent_id": nil, "status": "pending", "error": "",
-	}).Error; err != nil {
+	updates := sceneDerivedResetUpdates()
+	updates["shot_count"] = len(shots)
+	updates["negative_prompt"] = strings.Join(negativePrompts, ", ")
+	if err := db.Model(&scene).Updates(updates).Error; err != nil {
 		return err
 	}
 	if err := MarkSceneCandidatesStale(db, scene.ProjectID, sceneID, "", "导演镜头已修改"); err != nil {

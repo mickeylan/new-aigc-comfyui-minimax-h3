@@ -60,6 +60,14 @@ test('AI导演支持可审核的长对白Native拆镜', () => {
   assert.match(api, /sceneDirectorDraft:[\s\S]*timeout: 600000/)
 })
 
+test('长分镜支持可审核动作时间轴并限制3至15秒', () => {
+  const source = readFileSync(new URL('../src/components/ShotDirectorEditor.vue', import.meta.url), 'utf8')
+  assert.match(source, /动作时间轴（长分镜精确控制）/)
+  for (const field of ['subject', 'action', 'state', 'camera']) assert.match(source, new RegExp(`step\\.${field}`))
+  assert.match(source, /min="3" max="15"/)
+  assert.match(source, /action_timeline/)
+})
+
 test('镜头编辑器兼容characters包装响应', () => {
   const source = readFileSync(new URL('../src/components/ShotDirectorEditor.vue', import.meta.url), 'utf8')
   assert.match(source, /Array\.isArray\(payload\?\.characters\) \? payload\.characters/)

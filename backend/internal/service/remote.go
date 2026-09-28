@@ -357,6 +357,26 @@ func (r *RemoteExec) OpenSeek(p string) (io.ReadSeekCloser, error) {
 }
 
 // Size 返回远程文件大小
+func (r *RemoteExec) Remove(p string) error {
+	if r.localPath(p) || !r.Enabled() {
+		err := os.Remove(p)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.dialLocked(); err != nil {
+		return err
+	}
+	err := r.sftpConn.Remove(p)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
 func (r *RemoteExec) Size(p string) (int64, error) {
 	fi, err := r.Stat(p)
 	if err != nil {

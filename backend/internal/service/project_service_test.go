@@ -1982,6 +1982,40 @@ func TestResolveRef2VSubmissionPromptUsesLatestSavedTextVerbatim(t *testing.T) {
 	}
 }
 
+func TestBuildEpisodePreflightChecksEveryScene(t *testing.T) {
+	scenes := []models.Scene{{ID: 1, Duration: 8, ShotCount: 1, VideoFullPrompt: "prompt"}, {ID: 2, Duration: 16, ShotCount: 1, PromptStale: true}}
+	continuity := map[uint]models.SceneContinuity{2: {SceneID: 2, Status: "source_invalidated"}}
+	result := buildEpisodePreflight(scenes, map[uint]float64{1: 8, 2: 10}, continuity, []models.Dialogue{{SceneID: 2, Text: "台词"}})
+	if result.Ready {
+		t.Fatal("invalid episode reported ready")
+	}
+	if len(result.IssueSceneIDs) != 1 || result.IssueSceneIDs[0] != 2 {
+		t.Fatalf("issues=%v", result.IssueSceneIDs)
+	}
+	failed := map[string]bool{}
+	for _, check := range result.Checks {
+		if !check.OK {
+			failed[check.Key] = true
+		}
+	}
+	for _, key := range []string{"scene_duration", "shot_duration", "dialogue_speaker", "prompt_stale", "prompt_present", "continuity"} {
+		if !failed[key] {
+			t.Fatalf("missing failed check %s: %+v", key, result.Checks)
+		}
+	}
+}
+
+func TestSceneVideoTemplateImageRequirementsKeepT2VReachable(t *testing.T) {
+	if sceneVideoTemplateRequiresImage("minimax_h3_t2v") {
+		t.Fatal("T2V must allow generation without a storyboard image")
+	}
+	for _, code := range []string{"minimax_h3_i2v", "minimax_h3_ref2v", "minimax_h3_first_last"} {
+		if !sceneVideoTemplateRequiresImage(code) {
+			t.Fatalf("%s must require image input", code)
+		}
+	}
+}
+
 func TestH3KeyframePromptValidationDoesNotForceGeneratedFormat(t *testing.T) {
 	for _, template := range []string{"minimax_h3_t2v", "minimax_h3_i2v", "minimax_h3_first_last"} {
 		for _, prompt := range []string{
@@ -2179,6 +2213,22 @@ func TestRebuildStructuredShotActionOmitsDescriptionAndAbstractNarration(t *test
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing visible fact %q: %s", want, got)
 		}
+	}
+}
+
+func TestRebuildStructuredShotActionCompilesAuditableActionTimeline(t *testing.T) {
+	shots := []models.Shot{
+		{Duration: 4, ActionTimeline: []models.ShotActionTimelineEntry{{Start: 0, End: 4, Subject: "甲", Action: "起身", State: "站在桌边", Camera: "固定中景"}}},
+		{Duration: 6, ActionTimeline: []models.ShotActionTimelineEntry{{Start: 0, End: 2, Subject: "乙", Action: "回头", State: "看向门口", Camera: "近景"}, {Start: 2, End: 6, Subject: "乙", Action: "走向门口", State: "抵达门口", Camera: "缓慢跟随"}}},
+	}
+	got := rebuildStructuredShotAction(shots)
+	for _, want := range []string{"From 00:00.000 to 00:04.000", "From 00:04.000 to 00:06.000", "From 00:06.000 to 00:10.000", "performs", "visible state", "camera"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %s", want, got)
+		}
+	}
+	if strings.Count(got, "[Shot ") != 2 {
+		t.Fatalf("unexpected shot markers: %s", got)
 	}
 }
 

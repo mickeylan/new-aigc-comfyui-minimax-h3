@@ -192,6 +192,20 @@ func (s *ProjectService) cancelProjectTasks(projectID uint) {
 	}
 }
 
+func (s *ProjectService) CancelStaleSceneTasks(sceneID uint, taskIDs ...string) {
+	if s.tasks == nil {
+		return
+	}
+	for _, taskID := range taskIDs {
+		if strings.TrimSpace(taskID) == "" {
+			continue
+		}
+		if err := s.tasks.CancelTask(taskID); err != nil && !strings.Contains(err.Error(), "已结束") {
+			log.Printf("[scene %d] cancel stale task %s failed: %v", sceneID, taskID, err)
+		}
+	}
+}
+
 func (s *ProjectService) cleanupStaleSceneFiles(projectID uint, scenes []models.Scene) {
 	if s.cfg == nil || s.remote == nil || s.upload == nil {
 		return
@@ -2081,6 +2095,7 @@ func englishH3ShotField(value string) string {
 
 func rebuildStructuredShotAction(shots []models.Shot) string {
 	parts := make([]string, 0, len(shots))
+	shotStart := 0.0
 	for i, shot := range shots {
 		// Identity, wardrobe and style are already fixed by Subject definitions and the one
 		// global style preamble. Repeating them in every Shot dilutes action and dialogue.
@@ -2103,7 +2118,15 @@ func rebuildStructuredShotAction(shots []models.Shot) string {
 		if visual == "" {
 			visual = "保持当前构图与可见状态"
 		}
+		if len(shot.ActionTimeline) > 0 {
+			segments := make([]string, 0, len(shot.ActionTimeline))
+			for _, entry := range shot.ActionTimeline {
+				segments = append(segments, fmt.Sprintf("From %s to %s, %s performs %s; visible state: %s; camera: %s", formatH3Timestamp(shotStart+entry.Start), formatH3Timestamp(shotStart+entry.End), englishH3ShotField(entry.Subject), englishH3ShotField(entry.Action), englishH3ShotField(entry.State), englishH3ShotField(entry.Camera)))
+			}
+			visual = strings.Join(segments, ". ")
+		}
 		parts = append(parts, fmt.Sprintf("[Shot %d] %s。", i+1, visual))
+		shotStart += shot.Duration
 	}
 	return strings.Join(parts, "\n")
 }
@@ -4940,14 +4963,12 @@ func (s *ProjectService) restoreLegacyProjectInput(projectID uint, name string) 
 	return os.WriteFile(target, data, 0o644)
 }
 
-// GenerateSceneVideo 创建场景视频任务：首帧图 = 文生图画面，提示词 = 场景正文
+func sceneVideoTemplateRequiresImage(templateCode string) bool {
+	return templateCode != "minimax_h3_t2v"
+}
+
+// GenerateSceneVideo 创建场景视频任务；T2V可无分镜图，其余模板要求相应画面输入。
 func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene) error {
-	if sc.ImageFile == "" {
-		return fmt.Errorf("场景 %d 尚未生成画面", sc.Order)
-	}
-	if err := s.restoreLegacyProjectInput(sc.ProjectID, sc.ImageFile); err != nil {
-		return err
-	}
 	var latest models.Scene
 	if err := s.db.First(&latest, sc.ID).Error; err != nil {
 		return err
@@ -5017,8 +5038,8 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	tpl, selectionErr := catalog.ValidateVideoSelection(tplCode, videoFiles, duration)
 	if selectionErr != nil {
 		fallbackCode := "minimax_h3_ref2v"
-		if tplCode == fallbackCode {
-			return selectionErr
+		if strings.TrimSpace(sc.VideoTemplate) != "" || tplCode == fallbackCode {
+			return fmt.Errorf("所选视频模板 %s 不支持当前输入或时长: %w", tplCode, selectionErr)
 		}
 		tplCode, promptText, videoFiles = assemble(fallbackCode)
 		tpl, selectionErr = catalog.ValidateVideoSelection(tplCode, videoFiles, duration)
@@ -5026,13 +5047,22 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 			return fmt.Errorf("所选视频模板不可用且回退模板也不可用: %w", selectionErr)
 		}
 	}
+	if sc.ImageFile == "" && sceneVideoTemplateRequiresImage(tplCode) {
+		return fmt.Errorf("场景 %d 尚未生成画面；只有MiniMax H3文生视频模板允许无分镜图生成", sc.Order)
+	}
+	if sc.ImageFile != "" {
+		if err := s.restoreLegacyProjectInput(sc.ProjectID, sc.ImageFile); err != nil {
+			return err
+		}
+	}
 	if issues := validateGeneratedH3Prompt(promptText, tplCode, duration); len(issues) > 0 {
 		return fmt.Errorf("视频提示词未通过 MiniMax H3 正式提交校验: %s", strings.Join(issues, "；"))
 	}
-	claim := s.db.Model(&models.Scene{}).
-		Where("id = ? AND project_id = ? AND generation = ? AND status IN ? AND image_file != ''",
-			sc.ID, p.ID, sc.Generation, []string{"image_ready", "video_ready", "failed"}).
-		Updates(map[string]any{"status": "video_creating", "error": ""})
+	claimQuery := s.db.Model(&models.Scene{}).Where("id = ? AND project_id = ? AND generation = ? AND status IN ?", sc.ID, p.ID, sc.Generation, []string{"pending", "image_ready", "video_ready", "failed"})
+	if sceneVideoTemplateRequiresImage(tplCode) {
+		claimQuery = claimQuery.Where("image_file != ''")
+	}
+	claim := claimQuery.Updates(map[string]any{"status": "video_creating", "error": ""})
 	if claim.Error != nil {
 		return claim.Error
 	}
@@ -6839,6 +6869,7 @@ func (s *ProjectService) EditorData(p *models.Project, episodeN int) (map[string
 	if len(sceneIDs) > 0 {
 		s.db.Where("scene_id IN ?", sceneIDs).Order("scene_id, `order`").Find(&dubs)
 	}
+	preflight := buildEpisodePreflight(scenes, shotTotals, continuityByScene, dubs)
 	for i := range dubs {
 		if dubs[i].AudioFile != "" {
 			dubs[i].AudioFile = fmt.Sprintf("/api/input/%d/%s", p.ID, dubs[i].AudioFile)
@@ -6857,7 +6888,87 @@ func (s *ProjectService) EditorData(p *models.Project, episodeN int) (map[string
 		"scenes":    outScenes,
 		"dialogues": dubs,
 		"subtitles": subs,
+		"preflight": preflight,
 	}, nil
+}
+
+type episodePreflightCheck struct {
+	Key      string `json:"key"`
+	OK       bool   `json:"ok"`
+	Text     string `json:"text"`
+	SceneIDs []uint `json:"scene_ids,omitempty"`
+}
+type episodePreflightResult struct {
+	Ready         bool                    `json:"ready"`
+	Checks        []episodePreflightCheck `json:"checks"`
+	IssueSceneIDs []uint                  `json:"issue_scene_ids"`
+}
+
+func buildEpisodePreflight(scenes []models.Scene, shotTotals map[uint]float64, continuity map[uint]models.SceneContinuity, dialogues []models.Dialogue) episodePreflightResult {
+	checks := []episodePreflightCheck{}
+	issues := map[uint]bool{}
+	appendCheck := func(key, successText, failureText string, ids []uint) {
+		for _, id := range ids {
+			issues[id] = true
+		}
+		text := successText
+		if len(ids) > 0 {
+			text = fmt.Sprintf("%d个Scene%s", len(ids), failureText)
+		}
+		checks = append(checks, episodePreflightCheck{Key: key, OK: len(ids) == 0, Text: text, SceneIDs: ids})
+	}
+	invalidDuration, mismatch, stale, missingPrompt, invalidContinuity := []uint{}, []uint{}, []uint{}, []uint{}, []uint{}
+	for _, scene := range scenes {
+		if scene.Duration < 3 || scene.Duration > 15 {
+			invalidDuration = append(invalidDuration, scene.ID)
+		}
+		if scene.ShotCount > 0 && math.Abs(shotTotals[scene.ID]-scene.Duration) > shotDurationTolerance {
+			mismatch = append(mismatch, scene.ID)
+		}
+		if scene.PromptStale {
+			stale = append(stale, scene.ID)
+		}
+		if strings.TrimSpace(scene.VideoFullPrompt) == "" {
+			missingPrompt = append(missingPrompt, scene.ID)
+		}
+		cfg := continuity[scene.ID]
+		if cfg.Status == "source_invalidated" || strings.TrimSpace(cfg.Error) != "" {
+			invalidContinuity = append(invalidContinuity, scene.ID)
+		}
+	}
+	unknownDialogue := []uint{}
+	for _, dialogue := range dialogues {
+		if strings.TrimSpace(dialogue.Text) == "" {
+			continue
+		}
+		kind, speaker := normalizeScriptSpeech(dialogue.SpeechType, dialogue.Character)
+		if kind == "" || (kind != "narration" && strings.TrimSpace(speaker) == "") {
+			unknownDialogue = append(unknownDialogue, dialogue.SceneID)
+		}
+	}
+	appendCheck("scene_duration", "所有Scene时长均为3–15秒", "时长不在3–15秒", invalidDuration)
+	appendCheck("shot_duration", "全Episode内部Shot配时与Scene一致", "内部Shot配时不一致", mismatch)
+	appendCheck("dialogue_speaker", "所有有文字的Dialogue均明确说话人/旁白/内心独白", "存在未明确说话人的Dialogue", uniqueUintIDs(unknownDialogue))
+	appendCheck("prompt_stale", "所有视频提示词均为最新", "视频提示词已过期", stale)
+	appendCheck("prompt_present", "所有Scene均已保存正式视频提示词", "缺少正式视频提示词", missingPrompt)
+	appendCheck("continuity", "全Episode连续性来源有效", "连续性来源失效", invalidContinuity)
+	issueIDs := make([]uint, 0, len(issues))
+	for id := range issues {
+		issueIDs = append(issueIDs, id)
+	}
+	sort.Slice(issueIDs, func(i, j int) bool { return issueIDs[i] < issueIDs[j] })
+	return episodePreflightResult{Ready: len(issueIDs) == 0, Checks: checks, IssueSceneIDs: issueIDs}
+}
+
+func uniqueUintIDs(ids []uint) []uint {
+	seen, out := map[uint]bool{}, []uint{}
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // EditorSubtitleTimelineRaw 计算该集字幕时间轴（秒），供剪辑台展示：

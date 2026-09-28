@@ -14,7 +14,7 @@
         <button class="btn btn-ghost btn-sm" :disabled="epIndex <= 0" @click="switchEp(-1)">← 上一集</button>
         <button class="btn btn-ghost btn-sm" :disabled="epIndex >= epCount - 1" @click="switchEp(1)">下一集 →</button>
         <button class="btn btn-ghost btn-sm" @click="createEpisode">新建集</button>
-        <button class="btn btn-ghost btn-sm" @click="showCharacterHistory = true">角色历史</button>
+        <button class="btn btn-ghost btn-sm" @click="showCharacterHistory = true">角色历史</button><button class="btn btn-ghost btn-sm" @click="showGeneratedHistory = true">生成历史管理</button>
         <button class="btn btn-ghost btn-sm" @click="deleteEpisode">删除空集</button>
         <label class="merge-opt"><input type="checkbox" v-model="mergeSub" />烧录字幕</label>
         <label class="merge-opt"><input type="checkbox" v-model="mergeDub" />保留原声</label>
@@ -51,7 +51,7 @@
           <p v-if="!column.scenes.length" class="board-empty">无</p>
         </div>
       </div>
-      <details class="card preflight"><summary><strong>本集正式生成前检查</strong></summary><div v-for="check in episodePreflight" :key="check.text" :class="check.ok?'check-ok':'check-fail'">{{check.ok?'✓':'✗'}} {{check.text}}</div><div v-if="mismatchedScenes.length" class="preflight-issues"><button v-for="sc in mismatchedScenes" :key="sc.id" class="preflight-issue" @click="selectScene(sc)"><strong>场景{{sc.order}} · {{sc.title}}</strong><span>Scene {{Number(sc.duration).toFixed(1)}}秒 / Shot {{Number(sc.shot_duration_total).toFixed(1)}}秒</span></button></div><div class="section-actions"><button v-if="mismatchedScenes.length" class="btn btn-sm btn-secondary" @click="selectScene(mismatchedScenes[0])">定位首个配时异常Scene</button><button v-if="shotDurationMismatch" class="btn btn-sm btn-secondary" @click="previewAndApplyRetime">修复当前Scene配时</button><button v-if="selected?.prompt_stale" class="btn btn-sm btn-secondary" @click="prepareVideoPrompt">重新准备当前视频提示词</button><button v-if="scenes.some(s=>s.continuity_status==='source_invalidated'||s.continuity_error)" class="btn btn-sm btn-secondary" @click="selectScene(scenes.find(s=>s.continuity_status==='source_invalidated'||s.continuity_error));showFrameSelector=true">修复首个连续性异常</button><button v-if="staleDialogueCount" class="btn btn-sm btn-secondary" @click="dubStaleEpisode">仅生成过期配音</button></div></details>
+      <details class="card preflight"><summary><strong>本集正式生成前检查</strong></summary><div v-for="check in episodePreflight" :key="check.text" :class="check.ok?'check-ok':'check-fail'">{{check.ok?'✓':'✗'}} {{check.text}}</div><div v-if="preflightIssueScenes.length" class="preflight-issues"><button v-for="sc in preflightIssueScenes" :key="sc.id" class="preflight-issue" @click="selectScene(sc)"><strong>场景{{sc.order}} · {{sc.title}}</strong><span v-if="sc.shot_duration_mismatch">Scene {{Number(sc.duration).toFixed(1)}}秒 / Shot {{Number(sc.shot_duration_total).toFixed(1)}}秒</span><span v-else>存在正式生成前待处理项</span></button></div><div class="section-actions"><button v-if="preflightIssueScenes.length" class="btn btn-sm btn-secondary" @click="selectScene(preflightIssueScenes[0])">定位首个异常Scene</button><button v-if="shotDurationMismatch" class="btn btn-sm btn-secondary" @click="previewAndApplyRetime">修复当前Scene配时</button><button v-if="selected?.prompt_stale" class="btn btn-sm btn-secondary" @click="prepareVideoPrompt">重新准备当前视频提示词</button><button v-if="scenes.some(s=>s.continuity_status==='source_invalidated'||s.continuity_error)" class="btn btn-sm btn-secondary" @click="selectScene(scenes.find(s=>s.continuity_status==='source_invalidated'||s.continuity_error));showFrameSelector=true">修复首个连续性异常</button><button v-if="staleDialogueCount" class="btn btn-sm btn-secondary" @click="dubStaleEpisode">仅生成过期配音</button></div></details>
     </section>
 
     <!-- 时间轴 -->
@@ -279,6 +279,7 @@
     </section>
 
     <CharacterHistoryDrawer :project-id="id()" :open="showCharacterHistory" @close="showCharacterHistory=false" />
+    <GeneratedMediaHistoryDrawer :project-id="id()" :open="showGeneratedHistory" @close="showGeneratedHistory=false" @changed="load" />
 
     <!-- 帧选择弹窗 -->
     <div v-if="showFrameSelector && selected" class="modal-overlay" @click.self="showFrameSelector = false">
@@ -333,6 +334,7 @@ import { useToastStore } from '../stores/toast'
 import ShotDirectorEditor from '../components/ShotDirectorEditor.vue'
 import FrameSelector from '../components/FrameSelector.vue'
 import CharacterHistoryDrawer from '../components/CharacterHistoryDrawer.vue'
+import GeneratedMediaHistoryDrawer from '../components/GeneratedMediaHistoryDrawer.vue'
 import { compatibleSkills, projectSkillConfig, skillOperationOf } from '../utils/directorWorkflow.js'
 import { createDraftSafety } from '../utils/draftSafety.js'
 
@@ -344,6 +346,7 @@ const episodes = ref([])
 const scenes = ref([])
 const dialogues = ref([])
 const subtitles = ref([])
+const serverPreflight = ref(null)
 const merges = ref([])
 const candidates = ref([])
 const compareCandidateIds = ref([])
@@ -355,6 +358,7 @@ const materials = ref([])
 const sharedAssetEditing = ref(false)
 const sharedAssetForm = reactive({})
 const showCharacterHistory = ref(false)
+const showGeneratedHistory = ref(false)
 const continuity = ref(null)
 const intentDraft = ref('')
 const visualBeatDraft = ref('')
@@ -417,16 +421,10 @@ const mismatchedScenes = computed(() => scenes.value.filter(s=>s.shot_duration_m
 const shotDurationTotal = computed(() => selectedShots.value.reduce((sum,s)=>sum+Number(s.duration||0),0))
 const shotDurationMismatch = computed(() => selectedShots.value.length>0 && Math.abs(shotDurationTotal.value-Number(selected.value?.duration||0))>0.5)
 const timelineShots = computed(() => { let cursor=0; return selectedShots.value.map(shot=>{ const start=cursor; cursor+=Number(shot.duration||0); return {...shot,_start:start,_end:cursor} }) })
-const episodePreflight = computed(() => {
-  const checks=[]
-  checks.push({ok:scenes.value.every(s=>Number(s.duration)>=3&&Number(s.duration)<=15),text:'所有Scene时长均为3–15秒'})
-  const mismatched=scenes.value.filter(s=>s.shot_duration_mismatch)
-  checks.push({ok:mismatched.length===0,text:mismatched.length?`${mismatched.length}个Scene内部Shot配时不一致`:'全Episode内部Shot配时与Scene一致'})
-  checks.push({ok:dialogues.value.every(d=>!String(d.text||'').trim()||speakerKind(d)!=='unknown'),text:'所有有文字的Dialogue均明确说话人/旁白/内心独白'})
-  checks.push({ok:scenes.value.every(s=>!s.prompt_stale),text:'所有视频提示词均为最新'})
-  const invalidContinuity=scenes.value.filter(s=>s.continuity_status==='source_invalidated'||s.continuity_error)
-  checks.push({ok:invalidContinuity.length===0,text:invalidContinuity.length?`${invalidContinuity.length}个Scene连续性来源失效`:'全Episode连续性来源有效'})
-  return checks
+const episodePreflight = computed(() => serverPreflight.value?.checks || [])
+const preflightIssueScenes = computed(() => {
+  const ids = new Set(serverPreflight.value?.issue_scene_ids || [])
+  return scenes.value.filter(scene => ids.has(scene.id))
 })
 const durProgressClass = computed(() => {
   const p = durProgressPercent.value
@@ -513,6 +511,7 @@ async function load() {
     scenes.value = data.scenes || []
     dialogues.value = (data.dialogues || []).map(d => ({ ...d }))
     subtitles.value = data.subtitles || []
+    serverPreflight.value = data.preflight || { ready: false, checks: [], issue_scene_ids: [] }
     syncDraftTexts()
     const selectedId = selected.value?.id
     selected.value = (selectedId && scenes.value.find(s => s.id === selectedId)) || scenes.value.find(s => s.status === 'video_ready') || scenes.value[0] || null

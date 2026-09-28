@@ -37,8 +37,8 @@ func TestSharedAssetReferenceCRUDValidatesOwnershipAndMode(t *testing.T) {
 	otherScene := models.Scene{ProjectID: otherProject.ID, EpisodeN: 1, Order: 1}
 	db.Create(&scene)
 	db.Create(&otherScene)
-	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "wide", Duration: 1}
-	otherShot := models.Shot{SceneID: otherScene.ID, Order: 1, ShotType: "wide", Duration: 1}
+	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "wide", Duration: 3}
+	otherShot := models.Shot{SceneID: otherScene.ID, Order: 1, ShotType: "wide", Duration: 3}
 	db.Create(&shot)
 	db.Create(&otherShot)
 	global := models.Material{Name: "global", Type: "image", Source: "upload", Path: "global.png"}

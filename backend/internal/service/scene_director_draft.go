@@ -17,25 +17,26 @@ type sceneDirectorDraft struct {
 	Shots []sceneDirectorDraftShot `json:"shots"`
 }
 type sceneDirectorDraftShot struct {
-	ActType        models.ShotActType        `json:"act_type"`
-	ShotType       string                    `json:"shot_type"`
-	CameraAngle    string                    `json:"camera_angle"`
-	CameraMovement string                    `json:"camera_movement"`
-	Duration       float64                   `json:"duration"`
-	Description    string                    `json:"description"`
-	Dialogue       string                    `json:"dialogue"`
-	Emotion        string                    `json:"emotion"`
-	TransitionType models.ShotTransitionType `json:"transition_type"`
-	TransitionNote string                    `json:"transition_note"`
-	StartState     string                    `json:"start_state"`
-	EndState       string                    `json:"end_state"`
-	PromptSubject  string                    `json:"prompt_subject"`
-	PromptAction   string                    `json:"prompt_action"`
-	PromptCamera   string                    `json:"prompt_camera"`
-	PromptLighting string                    `json:"prompt_lighting"`
-	PromptStyle    string                    `json:"prompt_style"`
-	NegativePrompt string                    `json:"negative_prompt"`
-	Checks         []string                  `json:"checks"`
+	ActType        models.ShotActType               `json:"act_type"`
+	ShotType       string                           `json:"shot_type"`
+	CameraAngle    string                           `json:"camera_angle"`
+	CameraMovement string                           `json:"camera_movement"`
+	Duration       float64                          `json:"duration"`
+	Description    string                           `json:"description"`
+	Dialogue       string                           `json:"dialogue"`
+	Emotion        string                           `json:"emotion"`
+	TransitionType models.ShotTransitionType        `json:"transition_type"`
+	TransitionNote string                           `json:"transition_note"`
+	StartState     string                           `json:"start_state"`
+	EndState       string                           `json:"end_state"`
+	PromptSubject  string                           `json:"prompt_subject"`
+	PromptAction   string                           `json:"prompt_action"`
+	PromptCamera   string                           `json:"prompt_camera"`
+	PromptLighting string                           `json:"prompt_lighting"`
+	PromptStyle    string                           `json:"prompt_style"`
+	NegativePrompt string                           `json:"negative_prompt"`
+	ActionTimeline []models.ShotActionTimelineEntry `json:"action_timeline"`
+	Checks         []string                         `json:"checks"`
 }
 
 func trimJSONFence(value string) string {
@@ -75,10 +76,10 @@ func parseSceneDirectorDraft(output string) (*sceneDirectorDraft, error) {
 			}
 		}
 		d.Dialogue, d.Emotion, d.TransitionNote, d.NegativePrompt = strings.TrimSpace(d.Dialogue), strings.TrimSpace(d.Emotion), strings.TrimSpace(d.TransitionNote), strings.TrimSpace(d.NegativePrompt)
-		if d.Duration <= 0 || d.Duration > 120 || math.IsNaN(d.Duration) || math.IsInf(d.Duration, 0) {
-			return nil, fmt.Errorf("镜头%d时长无效", i+1)
+		if d.Duration < 3 || d.Duration > 15 || math.IsNaN(d.Duration) || math.IsInf(d.Duration, 0) {
+			return nil, fmt.Errorf("镜头%d时长必须为3到15秒", i+1)
 		}
-		shot := models.Shot{ActType: d.ActType, ShotType: d.ShotType, CameraAngle: d.CameraAngle, CameraMovement: d.CameraMovement, TransitionType: d.TransitionType, TransitionNote: d.TransitionNote, StartState: d.StartState, EndState: d.EndState, Duration: d.Duration, Description: d.Description, Dialogue: d.Dialogue, Emotion: d.Emotion, PromptSubject: d.PromptSubject, PromptAction: d.PromptAction, PromptCamera: d.PromptCamera, PromptLighting: d.PromptLighting, PromptStyle: d.PromptStyle, NegativePrompt: d.NegativePrompt}
+		shot := models.Shot{ActType: d.ActType, ShotType: d.ShotType, CameraAngle: d.CameraAngle, CameraMovement: d.CameraMovement, TransitionType: d.TransitionType, TransitionNote: d.TransitionNote, StartState: d.StartState, EndState: d.EndState, Duration: d.Duration, Description: d.Description, Dialogue: d.Dialogue, Emotion: d.Emotion, PromptSubject: d.PromptSubject, PromptAction: d.PromptAction, PromptCamera: d.PromptCamera, PromptLighting: d.PromptLighting, PromptStyle: d.PromptStyle, NegativePrompt: d.NegativePrompt, ActionTimeline: d.ActionTimeline}
 		if err := validateShot(&shot); err != nil {
 			return nil, fmt.Errorf("镜头%d: %w", i+1, err)
 		}

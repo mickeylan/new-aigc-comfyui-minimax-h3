@@ -30,7 +30,7 @@ func TestResolveShotDialogueFragmentsUsesAuthoritativeRanges(t *testing.T) {
 }
 
 func TestRebalanceShotDurationsPreservesRatiosAndExactSceneTotal(t *testing.T) {
-	shots := []models.Shot{{Duration: 1.5}, {Duration: 2.5}}
+	shots := []models.Shot{{Duration: 3.0}, {Duration: 5.0}}
 	got, err := rebalanceShotDurations(shots, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -38,7 +38,7 @@ func TestRebalanceShotDurationsPreservesRatiosAndExactSceneTotal(t *testing.T) {
 	if got[0].Duration != 3.8 || got[1].Duration != 6.2 || shotDurationTotal(got) != 10 {
 		t.Fatalf("retimed=%+v total=%v", got, shotDurationTotal(got))
 	}
-	if shots[0].Duration != 1.5 {
+	if shots[0].Duration != 3.0 {
 		t.Fatal("preview mutated original shots")
 	}
 }
@@ -69,8 +69,8 @@ func TestShotServiceStoresManualDirectorStructure(t *testing.T) {
 	db.Create(&models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "侦探", Text: "原来如此"})
 	svc := NewShotService(db)
 	input := []models.Shot{
-		{ActType: models.ShotActSetup, ShotType: "wide", Duration: 1.5, Description: "雨夜建立旧宅", PromptSubject: "雨中的旧宅", PromptCamera: "广角固定", PromptLighting: "冷色月光"},
-		{ActType: models.ShotActMidpoint, ShotType: "close_up", CameraAngle: "eye_level", CameraMovement: "dolly_in", Duration: 2.5, Description: "角色发现线索", Dialogue: "原来如此", Emotion: "震惊", PromptSubject: "侦探与信件", PromptAction: "拆开信封", PromptCamera: "近景缓慢推进", PromptLighting: "冷色侧光", PromptStyle: "电影写实"},
+		{ActType: models.ShotActSetup, ShotType: "wide", Duration: 3.0, Description: "雨夜建立旧宅", PromptSubject: "雨中的旧宅", PromptCamera: "广角固定", PromptLighting: "冷色月光"},
+		{ActType: models.ShotActMidpoint, ShotType: "close_up", CameraAngle: "eye_level", CameraMovement: "dolly_in", Duration: 5.0, Description: "角色发现线索", Dialogue: "原来如此", Emotion: "震惊", PromptSubject: "侦探与信件", PromptAction: "拆开信封", PromptCamera: "近景缓慢推进", PromptLighting: "冷色侧光", PromptStyle: "电影写实"},
 	}
 	shots, err := svc.ReplaceShots(scene.ID, input)
 	if err != nil {
@@ -118,14 +118,14 @@ func TestShotServicePreservesSceneNegativeConstraints(t *testing.T) {
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, NegativePrompt: "水印, 现代汽车"}
 	db.Create(&scene)
 	svc := NewShotService(db)
-	if _, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "wide", Duration: 2}}); err != nil {
+	if _, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "wide", Duration: 3}}); err != nil {
 		t.Fatal(err)
 	}
 	db.First(&scene, scene.ID)
 	if scene.NegativePrompt != "水印, 现代汽车" {
 		t.Fatalf("scene negative constraints were overwritten: %q", scene.NegativePrompt)
 	}
-	if _, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "close", Duration: 2, NegativePrompt: "畸形手指"}}); err != nil {
+	if _, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "close", Duration: 3, NegativePrompt: "畸形手指"}}); err != nil {
 		t.Fatal(err)
 	}
 	db.First(&scene, scene.ID)
@@ -144,17 +144,17 @@ func TestShotServiceReplacePreservesIDsAndRejectsForeignShot(t *testing.T) {
 	db.Create(&otherScene)
 	svc := NewShotService(db)
 	initial, err := svc.ReplaceShots(scene.ID, []models.Shot{
-		{ShotType: "wide", Duration: 1, Description: "first"},
-		{ShotType: "close", Duration: 2, Description: "second"},
+		{ShotType: "wide", Duration: 3, Description: "first"},
+		{ShotType: "close", Duration: 3, Description: "second"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	firstID, secondID := initial[0].ID, initial[1].ID
 	updated, err := svc.ReplaceShots(scene.ID, []models.Shot{
-		{ID: secondID, ShotType: "close", Duration: 2, Description: "second updated"},
-		{ID: firstID, ShotType: "wide", Duration: 1, Description: "first updated"},
-		{ShotType: "medium", Duration: 1.5, Description: "new"},
+		{ID: secondID, ShotType: "close", Duration: 3, Description: "second updated"},
+		{ID: firstID, ShotType: "wide", Duration: 3, Description: "first updated"},
+		{ShotType: "medium", Duration: 3, Description: "new"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -162,11 +162,11 @@ func TestShotServiceReplacePreservesIDsAndRejectsForeignShot(t *testing.T) {
 	if len(updated) != 3 || updated[0].ID != secondID || updated[1].ID != firstID || updated[2].ID == 0 {
 		t.Fatalf("shot IDs/order were not preserved: %+v", updated)
 	}
-	foreign, err := svc.ReplaceShots(otherScene.ID, []models.Shot{{ShotType: "wide", Duration: 1}})
+	foreign, err := svc.ReplaceShots(otherScene.ID, []models.Shot{{ShotType: "wide", Duration: 3}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.ReplaceShots(scene.ID, []models.Shot{{ID: foreign[0].ID, ShotType: "wide", Duration: 1}}); err == nil || !strings.Contains(err.Error(), "不属于当前场景") {
+	if _, err := svc.ReplaceShots(scene.ID, []models.Shot{{ID: foreign[0].ID, ShotType: "wide", Duration: 3}}); err == nil || !strings.Contains(err.Error(), "不属于当前场景") {
 		t.Fatalf("foreign shot ID accepted: %v", err)
 	}
 	remaining, _ := svc.GetSceneShots(scene.ID)
@@ -180,11 +180,11 @@ func TestShotServiceReplaceIsTransactionalAndValidates(t *testing.T) {
 	scene := models.Scene{ProjectID: 1, EpisodeN: 1, Order: 1}
 	db.Create(&scene)
 	svc := NewShotService(db)
-	_, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "wide", Duration: 1}})
+	_, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "wide", Duration: 3}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "", Duration: 1}})
+	_, err = svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "", Duration: 3}})
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -203,7 +203,7 @@ func TestShotServiceSaveRecordsCanonicalDeduplicatedManualPrompt(t *testing.T) {
 	svc := NewShotService(db)
 
 	shots, err := svc.ReplaceShots(scene.ID, []models.Shot{{
-		ShotType: "close", Duration: 2, PromptSubject: "  face  ", PromptAction: "turns\nslowly",
+		ShotType: "close", Duration: 3, PromptSubject: "  face  ", PromptAction: "turns\nslowly",
 		PromptCamera: "close-up", PromptLighting: "moonlight", PromptStyle: "film",
 	}})
 	if err != nil {
@@ -242,8 +242,8 @@ func TestShotServiceRemovalCleansAssociationsAndRetainsPromptHistory(t *testing.
 	db.Create(&scene)
 	svc := NewShotService(db)
 	shots, err := svc.ReplaceShots(scene.ID, []models.Shot{
-		{ShotType: "wide", Duration: 1, PromptSubject: "first"},
-		{ShotType: "close", Duration: 1, PromptSubject: "second"},
+		{ShotType: "wide", Duration: 3, PromptSubject: "first"},
+		{ShotType: "close", Duration: 3, PromptSubject: "second"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -296,12 +296,96 @@ func TestShotServiceDeleteUpdatesCount(t *testing.T) {
 	scene := models.Scene{ProjectID: 1, EpisodeN: 1, Order: 1}
 	db.Create(&scene)
 	svc := NewShotService(db)
-	shots, _ := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "medium", Duration: 2}})
+	shots, _ := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "medium", Duration: 3}})
 	if err := svc.DeleteShot(shots[0].ID); err != nil {
 		t.Fatal(err)
 	}
 	db.First(&scene, scene.ID)
 	if scene.ShotCount != 0 {
 		t.Fatalf("shot count=%d", scene.ShotCount)
+	}
+}
+
+func TestValidateShotEnforces3To15Seconds(t *testing.T) {
+	tests := []struct {
+		duration float64
+		wantErr  bool
+	}{
+		{2.9, true},
+		{3.0, false},
+		{8.0, false},
+		{15.0, false},
+		{15.1, true},
+		{0, true},
+		{-1, true},
+	}
+	for _, tt := range tests {
+		shot := models.Shot{ShotType: "wide", Duration: tt.duration}
+		err := validateShot(&shot)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("validateShot(duration=%.1f) error=%v, wantErr=%v", tt.duration, err, tt.wantErr)
+		}
+	}
+}
+
+func TestAssignShotDialogueRangesRejectsMismatchedText(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "mismatch"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
+	db.Create(&scene)
+	db.Create(&models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "甲", Text: "你好世界"})
+	// Shot dialogue concatenates to "你好" but structured dialogue is "你好世界" — mismatch.
+	shots := []models.Shot{{ShotType: "wide", Duration: 3, Dialogue: "你好"}, {ShotType: "close", Duration: 3, Dialogue: ""}}
+	err := newDBTx(db, scene.ID, shots)
+	if err == nil || !strings.Contains(err.Error(), "不一致") {
+		t.Fatalf("expected mismatch error, got: %v", err)
+	}
+}
+
+func newDBTx(db *gorm.DB, sceneID uint, shots []models.Shot) error {
+	var result error
+	db.Transaction(func(tx *gorm.DB) error {
+		result = assignShotDialogueRanges(tx, sceneID, shots)
+		return result
+	})
+	return result
+}
+
+func TestShotActionTimelineValidationAndPersistence(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "timeline"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
+	db.Create(&scene)
+	timeline := []models.ShotActionTimelineEntry{
+		{Start: 0, End: 4, Subject: "女主", Action: "走到桌边", State: "停在桌边", Camera: "固定中景"},
+		{Start: 4, End: 8, Subject: "女主", Action: "拿起信件展开", State: "视线落在信上", Camera: "缓慢推近"},
+	}
+	shots, err := NewShotService(db).ReplaceShots(scene.ID, []models.Shot{{ShotType: "中景", Duration: 8, ActionTimeline: timeline}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shots) != 1 || len(shots[0].ActionTimeline) != 2 || shots[0].ActionTimeline[1].End != 8 {
+		t.Fatalf("timeline not persisted: %+v", shots)
+	}
+	bad := shots[0]
+	bad.ActionTimeline[1].Start = 5
+	if err := validateShot(&bad); err == nil || !strings.Contains(err.Error(), "连续") {
+		t.Fatalf("gap must be rejected: %v", err)
+	}
+}
+
+func TestRebalanceShotDurationsScalesActionTimeline(t *testing.T) {
+	shots := []models.Shot{{Duration: 6, ActionTimeline: []models.ShotActionTimelineEntry{
+		{Start: 0, End: 3, Subject: "甲", Action: "起身", State: "站立", Camera: "固定"},
+		{Start: 3, End: 6, Subject: "甲", Action: "走向门口", State: "抵达门口", Camera: "跟随"},
+	}}}
+	got, err := rebalanceShotDurations(shots, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].ActionTimeline[0].End != 6 || got[0].ActionTimeline[1].Start != 6 || got[0].ActionTimeline[1].End != 12 {
+		t.Fatalf("timeline was not scaled: %+v", got[0].ActionTimeline)
 	}
 }

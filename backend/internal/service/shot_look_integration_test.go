@@ -18,7 +18,7 @@ func TestShotLookAssignAndRetrieve(t *testing.T) {
 	db.Create(&project)
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
 	db.Create(&scene)
-	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "medium", Duration: 2}
+	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "medium", Duration: 3}
 	db.Create(&shot)
 	char := models.Character{ProjectID: project.ID, Name: "主角"}
 	db.Create(&char)
@@ -60,7 +60,7 @@ func TestShotLookBatchAssign(t *testing.T) {
 	db.Create(&project)
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
 	db.Create(&scene)
-	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "close_up", Duration: 1.5}
+	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "close_up", Duration: 3.0}
 	db.Create(&shot)
 	char := models.Character{ProjectID: project.ID, Name: "主角"}
 	db.Create(&char)
@@ -118,7 +118,7 @@ func TestShotLookUnassign(t *testing.T) {
 	db.Create(&project)
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
 	db.Create(&scene)
-	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "medium", Duration: 2}
+	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "medium", Duration: 3}
 	db.Create(&shot)
 	char := models.Character{ProjectID: project.ID, Name: "主角"}
 	db.Create(&char)
@@ -161,7 +161,7 @@ func TestShotLookReplacement(t *testing.T) {
 	db.Create(&project)
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
 	db.Create(&scene)
-	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "wide", Duration: 2}
+	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "wide", Duration: 3}
 	db.Create(&shot)
 	char := models.Character{ProjectID: project.ID, Name: "主角"}
 	db.Create(&char)
@@ -207,8 +207,8 @@ func TestShotLookScopedToProject(t *testing.T) {
 	scene2 := models.Scene{ProjectID: project2.ID, EpisodeN: 1, Order: 1}
 	db.Create(&scene1)
 	db.Create(&scene2)
-	shot1 := models.Shot{SceneID: scene1.ID, Order: 1, ShotType: "medium", Duration: 2}
-	shot2 := models.Shot{SceneID: scene2.ID, Order: 1, ShotType: "medium", Duration: 2}
+	shot1 := models.Shot{SceneID: scene1.ID, Order: 1, ShotType: "medium", Duration: 3}
+	shot2 := models.Shot{SceneID: scene2.ID, Order: 1, ShotType: "medium", Duration: 3}
 	db.Create(&shot1)
 	db.Create(&shot2)
 	char1 := models.Character{ProjectID: project1.ID, Name: "角色1"}
@@ -239,7 +239,7 @@ func TestGetShotRelatedLooks(t *testing.T) {
 	db.Create(&project)
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
 	db.Create(&scene)
-	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "medium", Duration: 2}
+	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "medium", Duration: 3}
 	db.Create(&shot)
 	char := models.Character{ProjectID: project.ID, Name: "主角"}
 	db.Create(&char)
@@ -292,7 +292,7 @@ func TestBuildLookContextForShot(t *testing.T) {
 	db.Create(&project)
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
 	db.Create(&scene)
-	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "medium", Duration: 2}
+	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "medium", Duration: 3}
 	db.Create(&shot)
 	char := models.Character{ProjectID: project.ID, Name: "小明"}
 	db.Create(&char)
@@ -346,7 +346,7 @@ func TestGetLooksByShot(t *testing.T) {
 	db.Create(&project)
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
 	db.Create(&scene)
-	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "medium", Duration: 2}
+	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "medium", Duration: 3}
 	db.Create(&shot)
 	char := models.Character{ProjectID: project.ID, Name: "主角"}
 	db.Create(&char)
@@ -396,7 +396,7 @@ func TestShotLookDeleteCascades(t *testing.T) {
 	db.Create(&project)
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
 	db.Create(&scene)
-	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "medium", Duration: 2}
+	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "medium", Duration: 3}
 	db.Create(&shot)
 	char := models.Character{ProjectID: project.ID, Name: "主角"}
 	db.Create(&char)

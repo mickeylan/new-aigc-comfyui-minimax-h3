@@ -33,25 +33,26 @@ type episodeEditorialScene struct {
 }
 
 type episodeEditorialShot struct {
-	Order          int                       `json:"order"`
-	ActType        models.ShotActType        `json:"act_type"`
-	ShotType       string                    `json:"shot_type"`
-	CameraAngle    string                    `json:"camera_angle"`
-	CameraMovement string                    `json:"camera_movement"`
-	TransitionType models.ShotTransitionType `json:"transition_type"`
-	TransitionNote string                    `json:"transition_note"`
-	StartState     string                    `json:"start_state"`
-	EndState       string                    `json:"end_state"`
-	Duration       float64                   `json:"duration"`
-	Description    string                    `json:"description"`
-	Dialogue       string                    `json:"dialogue"`
-	Emotion        string                    `json:"emotion"`
-	PromptSubject  string                    `json:"prompt_subject"`
-	PromptAction   string                    `json:"prompt_action"`
-	PromptCamera   string                    `json:"prompt_camera"`
-	PromptLighting string                    `json:"prompt_lighting"`
-	PromptStyle    string                    `json:"prompt_style"`
-	NegativePrompt string                    `json:"negative_prompt"`
+	Order          int                              `json:"order"`
+	ActType        models.ShotActType               `json:"act_type"`
+	ShotType       string                           `json:"shot_type"`
+	CameraAngle    string                           `json:"camera_angle"`
+	CameraMovement string                           `json:"camera_movement"`
+	TransitionType models.ShotTransitionType        `json:"transition_type"`
+	TransitionNote string                           `json:"transition_note"`
+	StartState     string                           `json:"start_state"`
+	EndState       string                           `json:"end_state"`
+	Duration       float64                          `json:"duration"`
+	Description    string                           `json:"description"`
+	Dialogue       string                           `json:"dialogue"`
+	Emotion        string                           `json:"emotion"`
+	PromptSubject  string                           `json:"prompt_subject"`
+	PromptAction   string                           `json:"prompt_action"`
+	PromptCamera   string                           `json:"prompt_camera"`
+	PromptLighting string                           `json:"prompt_lighting"`
+	PromptStyle    string                           `json:"prompt_style"`
+	NegativePrompt string                           `json:"negative_prompt"`
+	ActionTimeline []models.ShotActionTimelineEntry `json:"action_timeline"`
 }
 
 type episodeEditorialDialogue struct {
@@ -97,7 +98,7 @@ func episodeEditorialSnapshot(db *gorm.DB, projectID uint, episodeN int) ([]byte
 				CameraMovement: strings.TrimSpace(shot.CameraMovement), TransitionType: shot.TransitionType, TransitionNote: strings.TrimSpace(shot.TransitionNote), StartState: strings.TrimSpace(shot.StartState), EndState: strings.TrimSpace(shot.EndState),
 				Duration: shot.Duration, Description: strings.TrimSpace(shot.Description), Dialogue: strings.TrimSpace(shot.Dialogue), Emotion: strings.TrimSpace(shot.Emotion),
 				PromptSubject: strings.TrimSpace(shot.PromptSubject), PromptAction: strings.TrimSpace(shot.PromptAction), PromptCamera: strings.TrimSpace(shot.PromptCamera),
-				PromptLighting: strings.TrimSpace(shot.PromptLighting), PromptStyle: strings.TrimSpace(shot.PromptStyle), NegativePrompt: strings.TrimSpace(shot.NegativePrompt),
+				PromptLighting: strings.TrimSpace(shot.PromptLighting), PromptStyle: strings.TrimSpace(shot.PromptStyle), NegativePrompt: strings.TrimSpace(shot.NegativePrompt), ActionTimeline: shot.ActionTimeline,
 			})
 		}
 		var dialogues []models.Dialogue

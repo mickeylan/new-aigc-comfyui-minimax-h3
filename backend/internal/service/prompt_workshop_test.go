@@ -18,8 +18,8 @@ func TestPromptWorkshopProjectIsolationAndDraftHistory(t *testing.T) {
 	s2 := models.Scene{ProjectID: p2.ID, Order: 1}
 	db.Create(&s1)
 	db.Create(&s2)
-	shot1 := models.Shot{SceneID: s1.ID, Order: 1, ShotType: "中景", Duration: 2}
-	shot2 := models.Shot{SceneID: s2.ID, Order: 1, ShotType: "中景", Duration: 2}
+	shot1 := models.Shot{SceneID: s1.ID, Order: 1, ShotType: "中景", Duration: 3}
+	shot2 := models.Shot{SceneID: s2.ID, Order: 1, ShotType: "中景", Duration: 3}
 	db.Create(&shot1)
 	db.Create(&shot2)
 
@@ -55,7 +55,7 @@ func TestPromptWorkshopShotActionsNormalizeFivePartsAndRejectProse(t *testing.T)
 	db.Create(&project)
 	scene := models.Scene{ProjectID: project.ID, Order: 1}
 	db.Create(&scene)
-	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "close", Duration: 1}
+	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "close", Duration: 3}
 	db.Create(&shot)
 	provider := &stubTextProvider{response: "```json\n{\"subject\":\"face\",\"action\":\"turns\",\"camera\":\"close-up\",\"lighting\":\"moonlight\",\"style\":\"film\"}\n```"}
 	svc := NewPromptWorkshopService(db, provider)

@@ -347,7 +347,7 @@ func TestShotLookAssignment(t *testing.T) {
 	if err := db.Create(&sc).Error; err != nil {
 		t.Fatal(err)
 	}
-	shot := models.Shot{SceneID: sc.ID, Order: 1, ShotType: "特写", Duration: 2.0}
+	shot := models.Shot{SceneID: sc.ID, Order: 1, ShotType: "特写", Duration: 3.0}
 	if err := db.Create(&shot).Error; err != nil {
 		t.Fatal(err)
 	}

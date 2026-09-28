@@ -181,6 +181,14 @@ func resetMaterializedScene(child *models.Scene, source models.Scene) {
 	_ = source
 }
 
+func sceneDerivedResetUpdates() map[string]any {
+	return map[string]any{
+		"image_file": "", "image_token": "", "image_task_id": "", "video_task_id": "", "video_file": "", "video_input_file": "", "video_gpu": nil,
+		"image_candidate_parent_id": nil, "video_candidate_parent_id": nil, "video_full_prompt": "", "video_template": "", "video_first_frame_img": "", "video_last_frame_img": "",
+		"image_locked": false, "video_locked": false, "prompt_stale": true, "status": "pending", "error": "", "image_retries": 0, "video_retries": 0,
+	}
+}
+
 func (s *ShotService) Materialize(projectID, sceneID uint) ([]models.Scene, error) {
 	if _, err := s.PreviewMaterialization(projectID, sceneID); err != nil {
 		return nil, err
@@ -210,15 +218,23 @@ func (s *ShotService) Materialize(projectID, sceneID uint) ([]models.Scene, erro
 
 		var sceneLooks []models.SceneCharacterLook
 		var sceneOutfits []models.SceneCharacterOutfit
-		_ = tx.Where("scene_id = ?", sceneID).Find(&sceneLooks).Error
-		_ = tx.Where("scene_id = ?", sceneID).Find(&sceneOutfits).Error
+		if err := tx.Where("scene_id = ?", sceneID).Find(&sceneLooks).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("scene_id = ?", sceneID).Find(&sceneOutfits).Error; err != nil {
+			return err
+		}
 		shotLooks := map[uint][]models.ShotCharacterLook{}
 		shotOutfits := map[uint][]models.ShotCharacterOutfit{}
 		for _, shot := range shots {
 			var a []models.ShotCharacterLook
 			var b []models.ShotCharacterOutfit
-			_ = tx.Where("shot_id = ?", shot.ID).Find(&a).Error
-			_ = tx.Where("shot_id = ?", shot.ID).Find(&b).Error
+			if err := tx.Where("shot_id = ?", shot.ID).Find(&a).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("shot_id = ?", shot.ID).Find(&b).Error; err != nil {
+				return err
+			}
 			shotLooks[shot.ID], shotOutfits[shot.ID] = a, b
 		}
 		if err := invalidateContinuityDependentsTx(tx, projectID, []uint{sceneID}, "上游场景已按对白节奏拆成Native场景"); err != nil {

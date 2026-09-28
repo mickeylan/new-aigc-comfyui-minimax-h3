@@ -18,7 +18,7 @@ func TestEnsureProjectEpisodesBackfillsAndBuildsHierarchy(t *testing.T) {
 	scene2 := models.Scene{ProjectID: project.ID, EpisodeN: 2, Order: 1, Generation: 1, Title: "后院"}
 	db.Create(&scene1)
 	db.Create(&scene2)
-	db.Create(&models.Shot{SceneID: scene1.ID, Order: 1, ActType: models.ShotActSetup, ShotType: "中景", Duration: 2})
+	db.Create(&models.Shot{SceneID: scene1.ID, Order: 1, ActType: models.ShotActSetup, ShotType: "中景", Duration: 3})
 
 	if err := EnsureProjectEpisodes(db, project.ID); err != nil {
 		t.Fatal(err)

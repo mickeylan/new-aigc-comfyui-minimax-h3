@@ -56,6 +56,7 @@ type Service struct {
 	AssetVariants             *AssetVariantService             // 视觉资产生成/上传变体
 	AssetReconciliation       *AssetReconciliationService      // 项目资产名称对账
 	ScriptRevisions           *ScriptRevisionService           // 剧本安全快照
+	GeneratedMedia            *GeneratedMediaHistoryService    // 统一生成历史与安全清理
 }
 
 func New(cfg *config.Config, db *gorm.DB) *Service {
@@ -98,6 +99,7 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	assetVariants := NewAssetVariantService(db)
 	assetReconciliation := NewAssetReconciliationService(db)
 	scriptRevisions := NewScriptRevisionService(db)
+	generatedMedia := NewGeneratedMediaHistoryService(db, upload)
 
 	// 初始化系统预设
 	if err := skills.InitSystemSkills(); err != nil {
@@ -118,7 +120,7 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 		Skills: skills, Shots: shots, PromptWorkshop: promptWorkshop, QwenImagePromptPrograms: qwenImagePromptPrograms, StylePresets: stylePresets,
 		Continuity: continuity, AudioLayers: audioLayers, SharedAssetReferences: sharedAssetReferences,
 		CharacterMotionReferences: characterMotionReferences,
-		AssetVariants:             assetVariants, AssetReconciliation: assetReconciliation, ScriptRevisions: scriptRevisions,
+		AssetVariants:             assetVariants, AssetReconciliation: assetReconciliation, ScriptRevisions: scriptRevisions, GeneratedMedia: generatedMedia,
 	}
 }
 
@@ -1055,6 +1057,7 @@ func (s *Service) HandleCreateShots(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	s.Projects.CancelStaleSceneTasks(scene.ID, scene.ImageTaskID, scene.VideoTaskID)
 	c.JSON(200, gin.H{"shots": shots, "count": len(shots)})
 }
 
@@ -1225,6 +1228,7 @@ func (s *Service) handleShotRetime(c *gin.Context, apply bool) {
 			c.JSON(400, gin.H{"error": err.Error()})
 			return
 		}
+		s.Projects.CancelStaleSceneTasks(scene.ID, scene.ImageTaskID, scene.VideoTaskID)
 	}
 	c.JSON(200, gin.H{"shots": proposed, "scene_duration": scene.Duration, "previous_total": before, "proposed_total": shotDurationTotal(proposed), "applied": apply})
 }
@@ -1262,9 +1266,10 @@ func (s *Service) HandleUpdateShot(c *gin.Context) {
 
 	updated, err := s.Shots.UpdateShot(uint(shotID), updates)
 	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	s.Projects.CancelStaleSceneTasks(scene.ID, scene.ImageTaskID, scene.VideoTaskID)
 	c.JSON(200, updated)
 }
 
@@ -1375,9 +1380,10 @@ func (s *Service) HandleDeleteShot(c *gin.Context) {
 	}
 
 	if err := s.Shots.DeleteShot(uint(shotID)); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	s.Projects.CancelStaleSceneTasks(scene.ID, scene.ImageTaskID, scene.VideoTaskID)
 	c.JSON(200, gin.H{"message": "shot deleted"})
 }
 

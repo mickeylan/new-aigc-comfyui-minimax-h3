@@ -23,7 +23,7 @@ func TestShotSavePreservesSceneFactsAndDuration(t *testing.T) {
 	db.Create(&project)
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Content: "权威剧情", ImagePrompt: "权威起始帧", Duration: 9}
 	db.Create(&scene)
-	_, err := NewShotService(db).ReplaceShots(scene.ID, []models.Shot{{ShotType: "中景", Duration: 2, Description: "导演动作", PromptAction: "抬手"}})
+	_, err := NewShotService(db).ReplaceShots(scene.ID, []models.Shot{{ShotType: "中景", Duration: 3, Description: "导演动作", PromptAction: "抬手"}})
 	if err != nil {
 		t.Fatal(err)
 	}

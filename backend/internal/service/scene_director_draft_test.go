@@ -7,7 +7,9 @@ import (
 	"comfyui-console/internal/models"
 )
 
-const validSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中景","camera_angle":"平视","camera_movement":"固定","duration":2,"description":"女主走到桌边","dialogue":"","emotion":"警惕","transition_type":"cut","transition_note":"接视线","start_state":"女主站在门边","end_state":"女主停在桌边","prompt_subject":"女主面部清晰","prompt_action":"缓步走到桌边","prompt_camera":"中景平视构图","prompt_lighting":"室内暖侧光","prompt_style":"真人写实电影质感","negative_prompt":"水印，多余人物","checks":["动作可在2秒完成","无新增对白"]}]}`
+const validSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中景","camera_angle":"平视","camera_movement":"固定","duration":3,"description":"女主走到桌边","dialogue":"","emotion":"警惕","transition_type":"cut","transition_note":"接视线","start_state":"女主站在门边","end_state":"女主停在桌边","prompt_subject":"女主面部清晰","prompt_action":"缓步走到桌边","prompt_camera":"中景平视构图","prompt_lighting":"室内暖侧光","prompt_style":"真人写实电影质感","negative_prompt":"水印，多余人物","checks":["动作可在3秒完成","无新增对白"]}]}`
+
+const shortSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中景","camera_angle":"平视","camera_movement":"固定","duration":2,"description":"女主走到桌边","dialogue":"","emotion":"警惕","transition_type":"cut","transition_note":"接视线","start_state":"女主站在门边","end_state":"女主停在桌边","prompt_subject":"女主面部清晰","prompt_action":"缓步走到桌边","prompt_camera":"中景平视构图","prompt_lighting":"室内暖侧光","prompt_style":"真人写实电影质感","negative_prompt":"水印，多余人物","checks":["动作可在2秒完成","无新增对白"]}]}`
 
 func TestDialogueRhythmQueryQuotesReservedOrderColumn(t *testing.T) {
 	db := newTestProjectService(t).db
@@ -74,9 +76,29 @@ func TestValidateDialogueRhythmDraftPreservesDialogueExactly(t *testing.T) {
 }
 
 func TestNormalizeDialogueRhythmDraftRaisesShortShotToNativeMinimum(t *testing.T) {
-	draft, err := parseSceneDirectorDraft(validSceneDirectorDraft)
-	if err != nil {
-		t.Fatal(err)
+	// Build draft directly so we can test normalization without hitting parse-time validation.
+	draft := &sceneDirectorDraft{
+		Shots: []sceneDirectorDraftShot{{
+			ActType:           models.ShotActSetup,
+			ShotType:          "中景",
+			CameraAngle:       "平视",
+			CameraMovement:    "固定",
+			Duration:          2, // below minimum — normalization should raise it
+			Description:       "女主走到桌边",
+			Dialogue:          "",
+			Emotion:           "警惕",
+			TransitionType:    models.ShotTransitionCut,
+			TransitionNote:    "接视线",
+			StartState:        "女主站在门边",
+			EndState:          "女主停在桌边",
+			PromptSubject:     "女主面部清晰",
+			PromptAction:      "缓步走到桌边",
+			PromptCamera:      "中景平视构图",
+			PromptLighting:    "室内暖侧光",
+			PromptStyle:       "真人写实电影质感",
+			NegativePrompt:    "水印，多余人物",
+			Checks:            []string{"动作可在2秒完成", "无新增对白"},
+		}},
 	}
 	normalizeDialogueRhythmDraftDurations(draft)
 	if draft.Shots[0].Duration != 3 {
