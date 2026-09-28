@@ -2280,6 +2280,36 @@ func TestNormalizeUserShotMarkersPreservesExplicitSceneShots(t *testing.T) {
 	if strings.Count(got, "[Shot ") != 2 {
 		t.Fatalf("Shot count changed: %s", got)
 	}
+	ai := "[Shot 1] A familiar man stands among peach blossoms.\n[Shot 2] At 00:07.500, the woman covers her mouth as tears fill her eyes."
+	restored := applyAuthoritativeSceneShotTimeline(ai, input)
+	if !strings.Contains(restored, "[Shot 2] At 00:04.000,") || strings.Contains(restored, "00:07.500") {
+		t.Fatalf("user timeline not restored: %s", restored)
+	}
+}
+
+func TestGenerateSceneVideoActionRepairsFromAuthoritativeSceneShots(t *testing.T) {
+	ps := newTestProjectService(t)
+	_ = ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SharedAssetReference{})
+	provider := &sequenceTextProvider{responses: []string{"[Shot 1] A familiar man stands among drifting peach blossoms.", "[Shot 1] <Subject 1> stands among drifting peach blossoms in warm sunset light.\n[Shot 2] At 00:09.000, <Subject 2> covers her mouth with trembling hands as tears fill her eyes."}}
+	ps.textProvider = provider
+	p := models.Project{Title: "测试"}
+	ps.db.Create(&p)
+	ps.db.Create(&models.Character{ProjectID: p.ID, Name: "舒寒", Sheet: "shu.png"})
+	ps.db.Create(&models.Character{ProjectID: p.ID, Name: "上官若琳", Sheet: "lin.png"})
+	sc := models.Scene{ProjectID: p.ID, Characters: "舒寒,上官若琳", Duration: 8, Content: "[Shot 1] AT 00:00.00 和煦落日余晖下，飘扬桃花里，舒寒静静伫立。特写\n[Shot 2] AT 00:04.00 特写，上官若琳颤抖的双手捂住嘴，莹莹的泪花在眼眶中流出。"}
+	ps.db.Create(&sc)
+	got, err := ps.GenerateSceneVideoAction(&sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"[Shot 1] <Subject 1>", "[Shot 2] At 00:04.000, <Subject 2>", "trembling hands", "tears fill her eyes"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("repaired output missing %q: %s", want, got)
+		}
+	}
+	if provider.calls != 2 {
+		t.Fatalf("expected one repair, calls=%d", provider.calls)
+	}
 }
 
 func TestApplyShotTimelineUsesPersistedDurationsAndEndsAtSceneDuration(t *testing.T) {

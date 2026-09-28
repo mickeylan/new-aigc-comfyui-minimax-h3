@@ -1425,7 +1425,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	out = normalizeAction(out)
 	if !actionTrusted(out, false) {
 		boundDraft := useSubjectTags(out, refLines)
-		repairUser := fmt.Sprintf("Rewrite the draft below into concise official English H3 shot prose. Preserve every [Shot N], <Subject N>, essential visible action, and camera fact. Use one compact 25-45-word paragraph per Shot with no redundant wardrobe, emotion, lighting, or camera phrases. Output no dialogue, <d>, headings, Markdown, or explanation. Draft:\n%s", boundDraft)
+		repairUser := fmt.Sprintf("Rewrite the draft into concise official English H3 shot prose using the authoritative Scene Shots below. The authoritative source controls Shot count, order, timestamps, subjects, visible actions, framing, and emotional reactions. Produce exactly one paragraph for every source [Shot N]; omit, merge, reorder, retime, or invent nothing. Output no dialogue, <d>, headings, Markdown, or explanation.\n\nAUTHORITATIVE SCENE SHOTS:\n%s\n\nINCOMPLETE DRAFT TO REPAIR:\n%s", useSubjectTags(canonicalSceneContent, refLines), boundDraft)
 		if repaired, repairErr := s.textProvider.Chat(system, repairUser); repairErr == nil {
 			candidate := normalizeAction(strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(repaired), "```"), "```")))
 			if actionTrusted(candidate, true) {
@@ -1441,7 +1441,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 			out = fallback()
 		}
 	}
-	out = useSubjectTags(out, refLines)
+	out = applyAuthoritativeSceneShotTimeline(useSubjectTags(out, refLines), canonicalSceneContent)
 	if regexp.MustCompile(`[\p{Han}]`).MatchString(stripPromptDialogueNarration(out)) {
 		return "", fmt.Errorf("AI未能把结构化Shot转换为英文H3视觉描述，请重试")
 	}
@@ -1584,6 +1584,31 @@ func normalizeUserH3ShotMarkers(text string) string {
 			fraction += "0"
 		}
 		return fmt.Sprintf("[Shot %d] At %s:%s.%s,", n, match[2], match[3], fraction)
+	})
+}
+
+func applyAuthoritativeSceneShotTimeline(prompt, sceneContent string) string {
+	source := normalizeUserH3ShotMarkers(sceneContent)
+	markers := map[int]string{}
+	for _, match := range h3ShotMarkerPattern.FindAllStringSubmatch(source, -1) {
+		if len(match) == 2 {
+			n, _ := strconv.Atoi(match[1])
+			markers[n] = match[0]
+		}
+	}
+	if len(markers) == 0 {
+		return prompt
+	}
+	return h3ShotMarkerPattern.ReplaceAllStringFunc(prompt, func(marker string) string {
+		match := h3ShotMarkerPattern.FindStringSubmatch(marker)
+		if len(match) != 2 {
+			return marker
+		}
+		n, _ := strconv.Atoi(match[1])
+		if authoritative, ok := markers[n]; ok {
+			return authoritative
+		}
+		return marker
 	})
 }
 
