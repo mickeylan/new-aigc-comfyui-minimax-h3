@@ -1588,6 +1588,14 @@ func normalizeUserH3ShotMarkers(text string) string {
 }
 
 func applyAuthoritativeSceneShotTimeline(prompt, sceneContent string) string {
+	if detail := h3PromptSection(prompt, "detailed_description:"); detail != "" {
+		updated := applyAuthoritativeSceneShotTimeline(detail, sceneContent)
+		return strings.Replace(prompt, detail, updated, 1)
+	}
+	if integrated := h3IntegratedDescription(prompt); integrated != "" {
+		updated := applyAuthoritativeSceneShotTimeline(integrated, sceneContent)
+		return strings.Replace(prompt, integrated, updated, 1)
+	}
 	source := normalizeUserH3ShotMarkers(sceneContent)
 	markers := map[int]string{}
 	for _, match := range h3ShotMarkerPattern.FindAllStringSubmatch(source, -1) {
