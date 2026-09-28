@@ -2781,8 +2781,9 @@ func buildH3FL2VAPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialo
 	lastShot := lastH3ShotNumber(timeline)
 	body := strings.TrimSpace(strings.TrimPrefix(timeline, "[Shot 1]"))
 	body = "[Shot 1] The shot begins from the state, composition, and spatial relationships established by <Picture 1>. " + body
-	landing := fmt.Sprintf(" The visible actions and composition progressively converge so that [Shot %d] ends on the pose, spacing, lighting, and final composition established by <Picture 2>.", lastShot)
-	body += landing
+	// Append the landing requirement inside the existing final Shot body. Never emit
+	// a second [Shot N] marker: the final reference is a terminal state, not a new cut.
+	body += " Toward the end, the visible motion settles into the exact pose, spacing, object state, camera angle, lighting, and final composition established by Picture 2."
 	return fmt.Sprintf("How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot %d) aligns with the %.2f-second mark of the target video.\n\n", lastShot, duration) +
 		"integrated_multimodal_description:\n" + body +
 		"\n\noverall_soundscape:\n" + h3SoundscapeContract(len(validSceneDialogues(dubs)) > 0) +
@@ -2840,7 +2841,11 @@ func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines
 	if prompt == "" {
 		return ""
 	}
+	keyframeMode := strings.Contains(strings.ToLower(prompt), "integrated_multimodal_description:")
 	detail := normalizeVideoActionPrompt(prompt)
+	if keyframeMode {
+		detail = h3IntegratedDescription(prompt)
+	}
 	detail = coalesceDuplicateH3Shots(detail)
 	detail = stripStructuredDialogueFromAction(detail, dubs)
 	detail = strings.ReplaceAll(detail, "<scenetrans>", "")
@@ -2857,6 +2862,18 @@ func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines
 		detail = appendStructuredDialogueToShots(detail, dubs, referenceLines, shotSets[0])
 	} else {
 		detail = appendStructuredDialogue(detail, dubs, referenceLines)
+	}
+	if keyframeMode {
+		prefix := ""
+		if i := strings.Index(strings.ToLower(prompt), "integrated_multimodal_description:"); i > 0 {
+			prefix = strings.TrimSpace(prompt[:i])
+		}
+		parts := []string{}
+		if prefix != "" {
+			parts = append(parts, prefix)
+		}
+		parts = append(parts, "integrated_multimodal_description:\n"+detail, "overall_soundscape:\n"+h3SoundscapeContract(len(validSceneDialogues(dubs)) > 0), "non_diegetic_music:\n"+strings.TrimSpace(h3PromptSection(prompt, "non_diegetic_music:")))
+		return strings.Join(parts, "\n\n")
 	}
 	sections := []struct{ heading, body string }{
 		{"subject_definitions:", h3PromptSection(prompt, "subject_definitions:")},

@@ -2105,8 +2105,26 @@ func TestH3KeyframePromptContractsAndDialoguePlacement(t *testing.T) {
 	if !strings.HasPrefix(fl2v, "How the reference pictures align with the target video") || !strings.Contains(fl2v, "Picture 2 (from Shot 3) aligns with the 8.00-second mark") {
 		t.Fatalf("FL2VA alignment instruction missing: %s", fl2v)
 	}
-	if !strings.Contains(fl2v, "[Shot 3] ends on") {
-		t.Fatalf("FL2VA final frame not bound to final shot: %s", fl2v)
+	if strings.Count(h3IntegratedDescription(fl2v), "[Shot 3]") != 1 || !strings.Contains(fl2v, "final composition established by Picture 2") {
+		t.Fatalf("FL2VA final frame must land inside the unique final Shot: %s", fl2v)
+	}
+}
+
+func TestNormalizeSavedH3KeyframePromptPreservesThreeFieldContract(t *testing.T) {
+	prompt := "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.\n\nintegrated_multimodal_description:\n[Shot 1] Live-action, the woman raises her gaze.\n\noverall_soundscape:\nOld sound.\n\nnon_diegetic_music:\nN/A"
+	got := normalizeSavedH3Audio(prompt, nil, nil, []models.Shot{{Order: 1, Duration: 6}})
+	if !strings.HasPrefix(got, "For the target video, at 0.00 seconds into the target video") {
+		t.Fatalf("keyframe instruction lost: %s", got)
+	}
+	for _, heading := range []string{"integrated_multimodal_description:", "overall_soundscape:", "non_diegetic_music:"} {
+		if strings.Count(got, heading) != 1 {
+			t.Fatalf("field %s missing or duplicated: %s", heading, got)
+		}
+	}
+	for _, forbidden := range []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("Ref2VA field leaked into keyframe prompt %q: %s", forbidden, got)
+		}
 	}
 }
 
