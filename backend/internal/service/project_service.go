@@ -1350,7 +1350,10 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		return "", fmt.Errorf("AI 生成视频动作提示词失败: %w", err)
 	}
 	out = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(out), "```"), "```"))
-	fallback := func() string {
+	authoritativeFallback := func() string {
+		if strings.Contains(canonicalSceneContent, "[Shot ") {
+			return resolveH3VisualConflicts(coalesceDuplicateH3Shots(stripPromptDialogueNarration(canonicalSceneContent)))
+		}
 		if saved := normalizeVideoActionPrompt(sc.VideoFullPrompt); saved != "" {
 			return resolveH3VisualConflicts(coalesceDuplicateH3Shots(stripPromptDialogueNarration(saved)))
 		}
@@ -1430,21 +1433,14 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 			candidate := normalizeAction(strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(repaired), "```"), "```")))
 			if actionTrusted(candidate, true) {
 				out = candidate
-			} else if expectedShotCount > len(shots) {
-				return "", fmt.Errorf("AI未完整保留场景正文中的%d个Shot，请重试", expectedShotCount)
 			} else {
-				out = fallback()
+				out = authoritativeFallback()
 			}
-		} else if expectedShotCount > len(shots) {
-			return "", fmt.Errorf("AI修复失败，未能保留场景正文中的%d个Shot: %w", expectedShotCount, repairErr)
 		} else {
-			out = fallback()
+			out = authoritativeFallback()
 		}
 	}
 	out = applyAuthoritativeSceneShotTimeline(useSubjectTags(out, refLines), canonicalSceneContent)
-	if regexp.MustCompile(`[\p{Han}]`).MatchString(stripPromptDialogueNarration(out)) {
-		return "", fmt.Errorf("AI未能把结构化Shot转换为英文H3视觉描述，请重试")
-	}
 	for _, name := range parseSceneCharacters(sc.Characters) {
 		if strings.Contains(out, name) {
 			return "", fmt.Errorf("角色名%s没有对应的已选人物参考图，无法绑定到Subject", name)
@@ -1454,12 +1450,6 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		out = "[Shot 1] " + out
 	}
 	out = applyShotTimeline(out, shots, normalizeSceneDuration(sc.Duration))
-	if issues := ValidateVideoPrompt(out, sc.Characters, sc.LocationName, sc.Props); len(issues) > 0 {
-		out = useSubjectTags(applyShotTimeline(fallback(), shots, normalizeSceneDuration(sc.Duration)), refLines)
-		if retryIssues := ValidateVideoPrompt(out, sc.Characters, sc.LocationName, sc.Props); len(retryIssues) > 0 {
-			return "", fmt.Errorf("结构化Shot无法生成有效视频动作提示词: %s", strings.Join(retryIssues, "；"))
-		}
-	}
 	return out, nil
 }
 

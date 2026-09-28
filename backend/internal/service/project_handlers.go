@@ -466,31 +466,6 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 	fullPrompt = normalizeSavedH3Audio(fullPrompt, dubs, lines, shots)
 	fullPrompt = applyAuthoritativeSceneShotTimeline(fullPrompt, sc.Content)
 	fullPrompt = applyShotTimeline(fullPrompt, shots, normalizeSceneDuration(sc.Duration))
-	if issues := validateGeneratedH3Prompt(fullPrompt, template, normalizeSceneDuration(sc.Duration)); len(issues) > 0 {
-		explicitShotCount := 0
-		for _, marker := range h3ShotMarkerPattern.FindAllStringSubmatch(normalizeUserH3ShotMarkers(sc.Content), -1) {
-			if len(marker) == 2 {
-				if n, _ := strconv.Atoi(marker[1]); n > explicitShotCount {
-					explicitShotCount = n
-				}
-			}
-		}
-		if explicitShotCount > len(shots) {
-			c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("生成结果未通过校验，但不会用%d个结构化Shot覆盖Scene正文中的%d个显式Shot: %s", len(shots), explicitShotCount, strings.Join(issues, "；"))})
-			return
-		}
-		fallbackAction := useSubjectTags(rebuildStructuredShotAction(shots), lines)
-		preview.VideoPrompt = fallbackAction
-		fullPrompt = compileH3PromptForTemplate(template, &preview, &project, dubs, lines)
-		fullPrompt = normalizeSavedH3Audio(fullPrompt, dubs, lines, shots)
-		fullPrompt = applyAuthoritativeSceneShotTimeline(fullPrompt, sc.Content)
-		fullPrompt = applyShotTimeline(fullPrompt, shots, normalizeSceneDuration(sc.Duration))
-		if fallbackIssues := validateGeneratedH3Prompt(fullPrompt, template, normalizeSceneDuration(sc.Duration)); len(fallbackIssues) > 0 {
-			c.JSON(http.StatusBadGateway, gin.H{"error": "结构化Shot无法编译为有效MiniMax H3提示词: " + strings.Join(fallbackIssues, "；")})
-			return
-		}
-		actionPrompt = fallbackAction
-	}
 	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "reference_bindings": sceneVideoReferenceBindings(refs, lines, fullPrompt), "template": template}
 	if continuity != nil && continuity.SelectedFrame != nil {
 		response["continuity_mode"] = continuity.Mode

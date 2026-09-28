@@ -2302,6 +2302,28 @@ func TestNormalizeUserShotMarkersPreservesExplicitSceneShots(t *testing.T) {
 	}
 }
 
+func TestGenerateSceneVideoActionFallsBackWithoutBlockingWhenAIStillDropsShot(t *testing.T) {
+	ps := newTestProjectService(t)
+	_ = ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SharedAssetReference{})
+	provider := &sequenceTextProvider{responses: []string{"[Shot 1] A man stands among peach blossoms.", "[Shot 1] A man remains among peach blossoms."}}
+	ps.textProvider = provider
+	p := models.Project{Title: "测试"}
+	ps.db.Create(&p)
+	ps.db.Create(&models.Character{ProjectID: p.ID, Name: "舒寒", Sheet: "shu.png"})
+	ps.db.Create(&models.Character{ProjectID: p.ID, Name: "上官若琳", Sheet: "lin.png"})
+	sc := models.Scene{ProjectID: p.ID, Characters: "舒寒,上官若琳", Duration: 8, Content: "[Shot 1] AT 00:00.00 桃花林中舒寒静静伫立。\n[Shot 2] AT 00:04.00 上官若琳颤抖的双手捂住嘴，眼中含泪。"}
+	ps.db.Create(&sc)
+	got, err := ps.GenerateSceneVideoAction(&sc)
+	if err != nil {
+		t.Fatalf("AI omission must not block: %v", err)
+	}
+	for _, want := range []string{"[Shot 1]", "[Shot 2] At 00:04.000,", "<Subject 1>", "<Subject 2>"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("authoritative fallback missing %q: %s", want, got)
+		}
+	}
+}
+
 func TestGenerateSceneVideoActionRepairsFromAuthoritativeSceneShots(t *testing.T) {
 	ps := newTestProjectService(t)
 	_ = ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SharedAssetReference{})
