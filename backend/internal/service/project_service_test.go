@@ -2291,12 +2291,10 @@ func TestH3HybridLanguageAndSubjectBindingContract(t *testing.T) {
 		t.Fatalf("subject binding failed: %s", bound)
 	}
 	full := "subject_definitions:\n<Subject 1> is the character 上官若琳 shown in the four-view reference from <Picture 1>.\n<Subject 2> is the character 上官若彤 shown in the four-view reference from <Picture 2>.\n\nsummary:\ntest\n\nretention_analysis:\ntest\n\ndetailed_description:\n" + bound + "\n\noverall_soundscape:\nOnly ambient room tone and physical action sounds that are visibly motivated are audible. There is no dialogue, human voice, narration, commentary, indistinct vocalization, speech, or singing; every visible person keeps their lips completely closed.\n\nnon_diegetic_music:\nN/A"
-	if issues := validateGeneratedH3Prompt(full, "minimax_h3_ref2v", 8); len(issues) == 0 {
-		t.Fatal("Chinese visual prose must be rejected by the official English contract")
-	}
-	englishVisual := strings.Replace(full, bound, "[Shot 1] <Subject 1> stands in a front-facing close-up and slowly pulls back.\n[Shot 2] At 00:05.000, <Subject 2> listens silently.", 1)
-	if issues := validateGeneratedH3Prompt(englishVisual, "minimax_h3_ref2v", 8); len(issues) > 0 {
-		t.Fatalf("language choice must not block formal submission: %v", issues)
+	for _, issue := range validateGeneratedH3Prompt(full, "minimax_h3_ref2v", 8) {
+		if strings.Contains(issue, "必须使用英文") {
+			t.Fatalf("language heuristic must not block submission: %v", issue)
+		}
 	}
 }
 
@@ -2304,9 +2302,6 @@ func TestH3VisualEnglishGateAcceptsDocumentedCrossCutDialogue(t *testing.T) {
 	prompt := "[Shot 1] <Subject 1> (S1) says: <d>[Chinese] 前半句-</d> <scenetrans>\n[Shot 2] At 00:05.000, the camera cuts to the listener. <Subject 1> (S1)'s words carry over from the previous shot <scenetrans>后半句</d>."
 	if !h3CarryoverDialoguePattern.MatchString(prompt) {
 		t.Fatalf("carryover pattern did not match: %s", prompt)
-	}
-	if !h3VisualProseIsEnglish(prompt, "") {
-		t.Fatalf("documented cross-cut dialogue rejected as visual prose: %s", prompt)
 	}
 }
 

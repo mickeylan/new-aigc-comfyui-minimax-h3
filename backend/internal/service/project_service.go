@@ -1260,25 +1260,6 @@ func defaultSceneVideoAction(sc *models.Scene) string {
 	return "[Shot 1] " + content
 }
 
-func h3VisualProseIsEnglish(text, characterNames string) bool {
-	cleaned := h3CarryoverDialoguePattern.ReplaceAllString(text, "")
-	cleaned = h3DialogueTagPattern.ReplaceAllString(cleaned, "")
-	cleaned = regexp.MustCompile(`<[^>]+>|\[Shot[^]]*\]|\bAt\s+\d{2}:\d{2}\.\d{3}`).ReplaceAllString(cleaned, "")
-	for _, name := range parseSceneCharacters(characterNames) {
-		cleaned = strings.ReplaceAll(cleaned, name, "")
-	}
-	latin, han := 0, 0
-	for _, r := range cleaned {
-		switch {
-		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z':
-			latin++
-		case r >= '\u4e00' && r <= '\u9fff':
-			han++
-		}
-	}
-	return latin >= 20 && han == 0
-}
-
 type h3SceneMode string
 
 const (
@@ -1370,10 +1351,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	out = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(out), "```"), "```"))
 	fallback := func() string {
 		if saved := normalizeVideoActionPrompt(sc.VideoFullPrompt); saved != "" {
-			saved = resolveH3VisualConflicts(coalesceDuplicateH3Shots(stripPromptDialogueNarration(saved)))
-			if h3VisualProseIsEnglish(saved, sc.Characters) {
-				return saved
-			}
+			return resolveH3VisualConflicts(coalesceDuplicateH3Shots(stripPromptDialogueNarration(saved)))
 		}
 		if len(shots) > 0 {
 			return rebuildStructuredShotAction(shots)
@@ -1387,7 +1365,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		if !allowSubjects && strings.Contains(value, "<Subject ") {
 			return false
 		}
-		if !h3VisualProseIsEnglish(value, sc.Characters) || h3VisualDraftResiduePattern.MatchString(value) {
+		if h3VisualDraftResiduePattern.MatchString(value) {
 			return false
 		}
 		if !allowSubjects {
@@ -3328,9 +3306,6 @@ func validateGeneratedH3Prompt(prompt, template string, duration float64) []stri
 			issues = append(issues, fmt.Sprintf("Shot %d切入时间必须严格递增且小于视频时长", n))
 		}
 		previous = at
-	}
-	if detail != "" && !h3VisualProseIsEnglish(detail, "") {
-		issues = append(issues, "detailed_description视觉与声音叙述必须使用英文，<d>内对白除外")
 	}
 	if h3VisualDraftResiduePattern.MatchString(stripPromptDialogueNarration(detail)) {
 		issues = append(issues, "detailed_description仍包含未替换时间占位符、转场元数据或发声模板残片")
