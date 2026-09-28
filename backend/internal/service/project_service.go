@@ -1362,6 +1362,15 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		return resolveH3VisualConflicts(coalesceDuplicateH3Shots(stripPromptDialogueNarration(normalizeVideoActionPrompt(value))))
 	}
 	actionTrusted := func(value string, allowSubjects bool) bool {
+		// This is a generation-quality routing check, not a save/submission gate.
+		// Verified Chinese character names are replaced by Subject tags below.
+		hanCheck := value
+		for _, name := range parseSceneCharacters(sc.Characters) {
+			hanCheck = strings.ReplaceAll(hanCheck, name, "")
+		}
+		if regexp.MustCompile(`[\p{Han}]`).MatchString(hanCheck) {
+			return false
+		}
 		if !allowSubjects && strings.Contains(value, "<Subject ") {
 			return false
 		}
@@ -1420,6 +1429,9 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		}
 	}
 	out = useSubjectTags(out, refLines)
+	if regexp.MustCompile(`[\p{Han}]`).MatchString(stripPromptDialogueNarration(out)) {
+		return "", fmt.Errorf("AI未能把结构化Shot转换为英文H3视觉描述，请重试")
+	}
 	for _, name := range parseSceneCharacters(sc.Characters) {
 		if strings.Contains(out, name) {
 			return "", fmt.Errorf("角色名%s没有对应的已选人物参考图，无法绑定到Subject", name)
@@ -2404,7 +2416,12 @@ func renderDialogueRange(d models.Dialogue, speakerID int, referenceLines []stri
 	// H3 cross-cut dialogue deliberately opens <d> only in the first shot. The
 	// following shot resumes the same Sx voice after <scenetrans> and closes </d>.
 	if continuesFrom {
-		clause := speaker + "'s words carry over from the previous shot <scenetrans>" + fragment + "</d>."
+		clause := speaker + "'s words carry over from the previous shot <scenetrans>" + fragment
+		if continuesTo {
+			clause = strings.TrimSuffix(strings.TrimSuffix(clause, "，"), ",") + "-</d> <scenetrans>"
+		} else {
+			clause += "</d>."
+		}
 		listeners := []string{}
 		for _, subject := range visibleSubjects {
 			if subject != speakerTag && isCharacterSubjectTag(subject, referenceLines) {
@@ -2415,9 +2432,6 @@ func renderDialogueRange(d models.Dialogue, speakerID int, referenceLines []stri
 			clause += " " + listeners[0] + " keeps their lips completely closed while listening."
 		} else if len(listeners) > 1 {
 			clause += " " + strings.Join(listeners, " and ") + " keep their lips completely closed while listening."
-		}
-		if continuesTo {
-			clause = strings.TrimSuffix(strings.TrimSuffix(clause, "</d>."), "，") + "-</d> <scenetrans>"
 		}
 		return clause
 	}

@@ -2154,10 +2154,10 @@ func TestNormalizeSavedH3AudioRebuildsCollapsedShotsWithoutDuplicateDialogue(t *
 }
 
 func TestAppendStructuredDialogueUsesH3CrossShotContinuationForOneSentence(t *testing.T) {
-	body := "[Shot 1] The elder sister touches her sister's cheek.\n[Shot 2] At 00:04.500, the shot cuts to the younger sister listening.\n[Shot 3] At 00:10.500, the shot cuts back to the elder sister."
+	body := "[Shot 1] <Subject 1> touches her sister's cheek.\n[Shot 2] At 00:04.500, the shot cuts to <Subject 2> listening.\n[Shot 3] At 00:10.500, the shot cuts back to <Subject 1>."
 	shots := []models.Shot{{PromptSubject: "上官若琳近景", Dialogue: "相信姐姐，"}, {PromptSubject: "上官若彤反应镜头", Dialogue: "姐姐无论如何也不会让你去"}, {PromptSubject: "上官若琳特写", Dialogue: "罗刹魔域！"}}
 	dubs := []models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "相信姐姐，"}, {Character: "上官若琳", SpeechType: "dialogue", Text: "姐姐无论如何也不会让你去"}, {Character: "上官若琳", SpeechType: "dialogue", Text: "罗刹魔域！"}}
-	got := appendStructuredDialogueToShots(body, dubs, []string{"<Subject 1> 是 <Picture 1> 中的角色「上官若琳」四视图。"}, shots)
+	got := appendStructuredDialogueToShots(body, dubs, []string{"<Subject 1> 是 <Picture 1> 中的角色「上官若琳」四视图。", "<Subject 2> 是 <Picture 2> 中的角色「上官若彤」四视图。"}, shots)
 	for _, want := range []string{"<Subject 1> (S1) says: <d>[Chinese] 相信姐姐-</d> <scenetrans>", "<Subject 1> (S1)'s words carry over from the previous shot <scenetrans>姐姐无论如何也不会让你去-</d> <scenetrans>", "<Subject 1> (S1)'s words carry over from the previous shot <scenetrans>罗刹魔域！</d>."} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing official cross-cut form %q: %s", want, got)
@@ -2165,6 +2165,10 @@ func TestAppendStructuredDialogueUsesH3CrossShotContinuationForOneSentence(t *te
 	}
 	if strings.Count(got, "<d>") != 1 || strings.Count(got, "</d>") != 3 || strings.Count(got, "<scenetrans>") != 4 {
 		t.Fatalf("cross-cut tags invalid: %s", got)
+	}
+	shot2 := got[strings.Index(got, "[Shot 2]"):strings.Index(got, "[Shot 3]")]
+	if strings.Contains(shot2, "listening.-</d>") || strings.Index(shot2, "-</d> <scenetrans>") > strings.Index(shot2, "keeps their lips completely closed") {
+		t.Fatalf("Shot 2 continuation marker placed after listener clause: %s", shot2)
 	}
 	var actual strings.Builder
 	for _, match := range h3AllSpokenTextPattern.FindAllStringSubmatch(got, -1) {
