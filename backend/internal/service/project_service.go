@@ -3368,6 +3368,9 @@ func validateGeneratedH3Prompt(prompt, template string, duration float64) []stri
 	if detail == "" {
 		detail = h3IntegratedDescription(text)
 	}
+	// Accept semantically equivalent user/model marker spelling before formal
+	// validation (AT/At, 2- or 3-digit fractions, optional comma/spacing).
+	detail = normalizeUserH3ShotMarkers(detail)
 	if duplicate := duplicateH3ShotNumbers(detail); len(duplicate) > 0 {
 		issues = append(issues, fmt.Sprintf("Shot %d 重复", duplicate[0]))
 	}

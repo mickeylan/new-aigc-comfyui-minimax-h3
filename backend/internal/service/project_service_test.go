@@ -2057,6 +2057,21 @@ func TestApplyShotTimelineDoesNotRewriteRetentionShotReferences(t *testing.T) {
 	}
 }
 
+func TestValidateGeneratedH3PromptAcceptsReportedShotTwoTimestamp(t *testing.T) {
+	prompt := "subject_definitions:\n<Subject 2> is a referenced character.\n\nsummary:\ntest\n\nretention_analysis:\ntest\n\ndetailed_description:\n[Shot 1] A man stands among drifting peach blossoms.\n[Shot 2] At 00:04.000, <Subject 2> covers her mouth as tears spill down her cheeks. <Subject 2> (S1) says: <d>[Chinese] 舒寒……</d>.\n\noverall_soundscape:\nDialogue appears only in the shot timeline; no additional voices, narration, or singing are present.\n\nnon_diegetic_music:\nN/A"
+	for _, issue := range validateGeneratedH3Prompt(prompt, "minimax_h3_ref2v", 8) {
+		if strings.Contains(issue, "Shot 2缺少官方At") {
+			t.Fatalf("valid timestamp rejected: %v", issue)
+		}
+	}
+	variant := strings.Replace(prompt, "[Shot 2] At 00:04.000,", "[Shot 2] AT 00:04.00", 1)
+	for _, issue := range validateGeneratedH3Prompt(variant, "minimax_h3_ref2v", 8) {
+		if strings.Contains(issue, "Shot 2缺少官方At") {
+			t.Fatalf("equivalent timestamp rejected: %v", issue)
+		}
+	}
+}
+
 func TestValidateGeneratedH3PromptRejectsDuplicateAndLegacyShotSyntax(t *testing.T) {
 	bad := "subject_definitions:\nx\n\nsummary:\nx\n\nretention_analysis:\nx\n\ndetailed_description:\n[Shot 1] A.\n[Shot 1] B.\n[Shot 2] C.\n\noverall_soundscape:\nx\n\nnon_diegetic_music:\nN/A"
 	joined := strings.Join(validateGeneratedH3Prompt(bad, "minimax_h3_ref2v", 10), "|")
