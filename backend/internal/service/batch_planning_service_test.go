@@ -23,6 +23,23 @@ func newTestBatchService(t *testing.T) *BatchPlanningService {
 	return NewBatchPlanningService(db)
 }
 
+func TestRecoverInterruptedPlanningBatch(t *testing.T) {
+	s := newTestBatchService(t)
+	batch := models.PlanningBatch{ProjectID: 1, BatchNo: 1, Title: "中断批次", EpisodeStart: 1, EpisodeEnd: 5, EpisodeCount: 5, ChapterStart: 1, ChapterEnd: 5, Status: BatchStatusGenerating}
+	if err := s.db.Create(&batch).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecoverInterruptedBatches(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.First(&batch, batch.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if batch.Status != BatchStatusDraft || batch.Error == "" {
+		t.Fatalf("interrupted batch was not recovered: %+v", batch)
+	}
+}
+
 func TestPlanningBatchSupportsOutlineProjects(t *testing.T) {
 	s := newTestBatchService(t)
 	if err := s.db.Model(&models.Project{}).Where("id = ?", 1).Update("source_type", models.ProjectSourceOutline).Error; err != nil {

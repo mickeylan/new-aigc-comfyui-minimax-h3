@@ -140,6 +140,15 @@ func (s *BatchPlanningService) CreateBatch(projectID uint, in BatchCreateInput) 
 	return batch, nil
 }
 
+// RecoverInterruptedBatches resets in-process AI generation left behind by a
+// service restart. There is no persistent worker that can resume these calls.
+func (s *BatchPlanningService) RecoverInterruptedBatches() error {
+	return s.db.Model(&models.PlanningBatch{}).Where("status = ?", BatchStatusGenerating).Updates(map[string]any{
+		"status": BatchStatusDraft,
+		"error":  "方案生成因服务重启中断，请重新点击生成",
+	}).Error
+}
+
 func (s *BatchPlanningService) ListBatches(projectID uint) ([]models.PlanningBatch, error) {
 	var rows []models.PlanningBatch
 	err := s.db.Where("project_id = ?", projectID).Order("batch_no").Find(&rows).Error

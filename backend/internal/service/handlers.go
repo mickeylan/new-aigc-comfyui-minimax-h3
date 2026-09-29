@@ -111,6 +111,9 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	if err := novelAnalysis.RecoverInterruptedJobs(); err != nil {
 		log.Printf("[novel] recover jobs failed: %v", err)
 	}
+	if err := batchPlanning.RecoverInterruptedBatches(); err != nil {
+		log.Printf("[adaptation] recover batches failed: %v", err)
+	}
 
 	return &Service{
 		Cfg: cfg, DB: db, Mgr: mgr, Mon: mon, Tasks: tasks, Hub: hub, Upload: upload,
