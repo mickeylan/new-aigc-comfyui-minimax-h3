@@ -102,6 +102,25 @@ func TestGenerateReferencePromptCompilesLumxDimensions(t *testing.T) {
 	}
 }
 
+func TestGenerateReferencePromptPreservesBeardAndCultivationIdentity(t *testing.T) {
+	ps := newTestProjectService(t)
+	p := models.Project{Title: "问仙", Genre: "古典修仙", Style: "真人写实", Synopsis: "宗门林立，修士争夺大道机缘"}
+	ps.db.Create(&p)
+	ch := models.Character{ProjectID: p.ID, Name: "铁山", Role: "散修刀客，筑基期修士", Appearance: "30岁壮年男子，浓眉如刀，眼窝微陷，古铜肤色，唇上留短髭，下颌蓄有修剪整齐的络腮胡", Trait: "常年独行猎杀妖兽，气息沉稳凌厉", Background: "出身边荒散修，凭刀法踏入筑基期", WardrobeDetail: "黑色粗布劲装，暗红系绳，黑色布靴"}
+	if err := ps.db.Create(&ch).Error; err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := NewCharacterProfileService(ps.db, nil).GenerateReferencePrompt(&ch, &p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"30岁壮年男子", "短髭", "络腮胡", "中国古典修仙世界人物肖像", "修仙者历经吐纳淬体后的沉稳精气神", "古典气韵与身份可信度", "角色身份必须可辨：散修刀客，筑基期修士", "身份经历的可见气质依据", "禁止现代写真"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("cultivation portrait missing %q: %s", want, prompt)
+		}
+	}
+}
+
 func TestPortraitStylingSelectsOneCoherentLook(t *testing.T) {
 	ch := &models.Character{
 		Appearance:     "乌黑长发及腰，日常梳低挽发髻，用一根素雅木簪固定。鹅蛋脸，丹凤眼。",

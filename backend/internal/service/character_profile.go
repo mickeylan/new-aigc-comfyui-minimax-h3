@@ -157,7 +157,7 @@ func portraitFaceIdentity(appearance, trait string) string {
 	if text == "" {
 		text = strings.TrimSpace(trait)
 	}
-	keywords := []string{"岁", "发", "额头", "脸", "眉", "眼", "鼻", "唇", "肤", "耳", "下巴", "痣", "疤", "雀斑"}
+	keywords := []string{"岁", "发", "额头", "脸", "眉", "眼", "鼻", "唇", "肤", "耳", "下巴", "痣", "疤", "雀斑", "胡子", "胡须", "髭", "髯", "络腮胡", "山羊胡"}
 	clauses := strings.FieldsFunc(text, func(r rune) bool { return r == '，' || r == '。' || r == '；' || r == '\n' })
 	out := make([]string, 0, 12)
 	for _, clause := range clauses {
@@ -259,13 +259,56 @@ func ageSubject(appearance, trait string) string {
 	return match[1] + "岁" + gender
 }
 
-// GenerateReferencePrompt 只生成脸部身份用的大头贴提示词；服装、鞋履和配饰由 CharacterLook 单独生成。
+func portraitStoryIdentity(char *models.Character, project *models.Project) string {
+	parts := []string{}
+	if project != nil {
+		world := strings.TrimSpace(project.Genre + " " + project.Synopsis)
+		switch {
+		case strings.Contains(world, "修仙") || strings.Contains(world, "仙侠") || strings.Contains(world, "宗门") || strings.Contains(world, "灵气"):
+			parts = append(parts, "中国古典修仙世界人物肖像，具有修仙者历经吐纳淬体后的沉稳精气神、古典气韵与身份可信度，发式、衣襟、束带和材质符合中国古典修仙世界，禁止现代写真、现代发型和现代服饰")
+		case strings.Contains(world, "武侠") || strings.Contains(world, "古代") || strings.Contains(world, "古装"):
+			parts = append(parts, "中国古典人物肖像，符合故事时代与身份，禁止现代造型")
+		}
+	}
+	role := strings.TrimSpace(char.Role)
+	if role != "" {
+		parts = append(parts, "角色身份必须可辨："+role)
+		switch {
+		case strings.Contains(role, "散修"):
+			parts = append(parts, "呈现常年独行历练形成的警觉、坚韧与不依附宗门的朴素实用气质")
+		case strings.Contains(role, "长老") || strings.Contains(role, "掌门") || strings.Contains(role, "宗主"):
+			parts = append(parts, "呈现长期修行与统御宗门形成的克制威仪，而非世俗官员或普通百姓")
+		case strings.Contains(role, "剑修"):
+			parts = append(parts, "呈现剑修收敛锋锐、身姿挺拔和专注目光")
+		case strings.Contains(role, "刀客") || strings.Contains(role, "刀修"):
+			parts = append(parts, "呈现刀修沉稳强悍、肩颈有力和临战警觉")
+		}
+	}
+	for _, clause := range strings.FieldsFunc(char.Background+"；"+char.Trait, func(r rune) bool { return r == '。' || r == '；' || r == '\n' }) {
+		clause = strings.TrimSpace(clause)
+		if clause == "" {
+			continue
+		}
+		if strings.ContainsAny(clause, "修仙宗门剑刀魔妖仙灵武") || strings.Contains(clause, "散修") || strings.Contains(clause, "长老") || strings.Contains(clause, "掌门") {
+			parts = append(parts, "身份经历的可见气质依据："+clause)
+			break
+		}
+	}
+	return strings.Join(parts, "，")
+}
+
+// GenerateReferencePrompt 生成脸部身份标准像；必须保留档案中的胡须、伤疤等身份特征，
+// 并注入故事世界与角色身份。服装仍只选审核档案中的一套确定妆造。
 func (s *CharacterProfileService) GenerateReferencePrompt(char *models.Character, project *models.Project) (string, error) {
 	appearance := portraitFaceIdentity(char.Appearance, char.Trait)
 	if appearance == "" {
 		return "", fmt.Errorf("请先完善角色脸部与发型描述")
 	}
-	parts := []string{"单人正面大头贴", appearance, "本次标准像唯一妆造：" + portraitStyling(char)}
+	parts := []string{"单人正面大头贴", appearance}
+	if identity := portraitStoryIdentity(char, project); identity != "" {
+		parts = append(parts, identity)
+	}
+	parts = append(parts, "本次标准像唯一妆造："+portraitStyling(char))
 	if project != nil {
 		if desc := styleDescriptor(project.Style); desc != "" {
 			parts = append(parts, desc)
