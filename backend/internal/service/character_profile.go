@@ -262,6 +262,12 @@ func ageSubject(appearance, trait string) string {
 func portraitStoryIdentity(char *models.Character, project *models.Project) string {
 	parts := []string{}
 	if project != nil {
+		if genre := strings.TrimSpace(project.Genre); genre != "" {
+			parts = append(parts, "项目题材："+genre+"，人物设计必须符合该题材的世界观、时代文化与视觉语汇")
+		}
+		if style := strings.TrimSpace(project.Style); style != "" {
+			parts = append(parts, "项目画风："+style+"，成图必须保持该画风")
+		}
 		world := strings.TrimSpace(project.Genre + " " + project.Synopsis)
 		switch {
 		case strings.Contains(world, "修仙") || strings.Contains(world, "仙侠") || strings.Contains(world, "宗门") || strings.Contains(world, "灵气"):

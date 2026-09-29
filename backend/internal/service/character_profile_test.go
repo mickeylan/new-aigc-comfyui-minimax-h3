@@ -114,7 +114,7 @@ func TestGenerateReferencePromptPreservesBeardAndCultivationIdentity(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"30岁壮年男子", "短髭", "络腮胡", "中国古典修仙世界人物肖像", "修仙者历经吐纳淬体后的沉稳精气神", "古典气韵与身份可信度", "角色身份必须可辨：散修刀客，筑基期修士", "身份经历的可见气质依据", "禁止现代写真"} {
+	for _, want := range []string{"30岁壮年男子", "短髭", "络腮胡", "项目题材：古典修仙", "项目画风：真人写实", "中国古典修仙世界人物肖像", "修仙者历经吐纳淬体后的沉稳精气神", "古典气韵与身份可信度", "角色身份必须可辨：散修刀客，筑基期修士", "身份经历的可见气质依据", "禁止现代写真"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("cultivation portrait missing %q: %s", want, prompt)
 		}
