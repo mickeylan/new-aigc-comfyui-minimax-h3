@@ -177,6 +177,31 @@ func (s *ProjectService) claimPipeline(p *models.Project, episodeN int, stopAfte
 	return &current, nil
 }
 
+// ResetGenerationState releases a stale persisted pipeline claim without deleting
+// the existing plan, script, scenes, characters, assets, or generated media.
+func (s *ProjectService) ResetGenerationState(projectID uint) error {
+	var project models.Project
+	if err := s.db.First(&project, projectID).Error; err != nil {
+		return err
+	}
+	s.cancelProjectTasks(projectID)
+	status := "draft"
+	if strings.TrimSpace(project.Plan) != "" {
+		status = "plan_done"
+	}
+	var sceneCount int64
+	if err := s.db.Model(&models.Scene{}).Where("project_id = ?", projectID).Count(&sceneCount).Error; err != nil {
+		return err
+	}
+	if sceneCount > 0 {
+		status = "script_done"
+	}
+	return s.db.Model(&models.Project{}).Where("id = ?", projectID).Updates(map[string]any{
+		"pipeline_stage": "", "pipeline_episode": 0, "auto_generate": false,
+		"stop_after_script": false, "status": status, "error": "",
+	}).Error
+}
+
 // ClaimManualScript 防止手工剧本生成被重复提交。
 func (s *ProjectService) ClaimManualScript(p *models.Project) error {
 	active := []string{"plan", "plan_running", "script", "script_running", "script_manual", "images", "videos", "merge"}

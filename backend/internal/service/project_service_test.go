@@ -1228,6 +1228,32 @@ func TestBuildQwenPortraitPromptRejectsWrongRatio(t *testing.T) {
 	}
 }
 
+func TestResetGenerationStatePreservesExistingProductionData(t *testing.T) {
+	ps := newTestProjectService(t)
+	project := models.Project{Title: "卡住项目", Plan: `{"title":"已有方案"}`, PipelineStage: "script_running", Status: "producing", Error: "旧错误"}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Title: "已有场景"}
+	if err := ps.db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.ResetGenerationState(project.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.db.First(&project, project.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if project.PipelineStage != "" || project.Status != "script_done" || project.Plan == "" || project.Error != "" {
+		t.Fatalf("reset mismatch: %+v", project)
+	}
+	var count int64
+	ps.db.Model(&models.Scene{}).Where("project_id = ?", project.ID).Count(&count)
+	if count != 1 {
+		t.Fatal("reset deleted scenes")
+	}
+}
+
 func TestUpsertProductionEntitiesFromScenesCreatesCharactersLocationsAndProps(t *testing.T) {
 	ps := newTestProjectService(t)
 	project := models.Project{Title: "长篇项目"}

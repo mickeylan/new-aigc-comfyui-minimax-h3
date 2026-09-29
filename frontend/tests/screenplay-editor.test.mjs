@@ -23,6 +23,10 @@ test('结构化剧本编辑器可达并写回现有剧本流水线', () => {
 test('创意修改后可从项目页和剧本页重新生成方案与剧本', () => {
   assert.match(detail, /重新生成创作方案/)
   assert.match(detail, /重新生成第/)
+  assert.match(detail, /解除卡住的生成状态/)
+  assert.match(detail, /从现有方案\/剧本补建资产/)
+  assert.match(detail, /resetProjectGeneration/)
+  assert.match(detail, /syncProjectProductionEntities/)
   assert.match(view, /generateCreativePlan/)
   assert.match(view, /regenerateEpisodeScript/)
   assert.match(view, /1\. 重新生成创作方案/)

@@ -668,6 +668,35 @@ func (s *Service) HandleUpdatePlanEpisodes(c *gin.Context) {
 	c.JSON(200, gin.H{"project": np})
 }
 
+func (s *Service) HandleResetProjectGeneration(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	if err := s.Projects.ResetGenerationState(p.ID); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	fresh, _, err := s.Projects.GetProject(p.ID)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"project": fresh})
+}
+
+func (s *Service) HandleSyncProjectProductionEntities(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	if err := s.Projects.SyncProductionEntitiesFromExistingProject(p); err != nil {
+		c.JSON(409, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true})
+}
+
 // HandleGeneratePlan 阶段 1：按 short-drama 方法论生成创作方案
 func (s *Service) HandleGeneratePlan(c *gin.Context) {
 	p, ok := s.loadProject(c)

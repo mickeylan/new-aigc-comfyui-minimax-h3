@@ -135,7 +135,7 @@ func (s *Service) HandleGenerateAdaptationAssets(c *gin.Context) {
 		return
 	}
 	var scenes []models.Scene
-	if err := s.DB.Where("project_id = ? AND episode_n = ?", p.ID, n).Order("scene_order").Find(&scenes).Error; err != nil {
+	if err := s.DB.Where("project_id = ? AND episode_n = ?", p.ID, n).Order("`order`").Find(&scenes).Error; err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}

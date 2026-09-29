@@ -259,6 +259,30 @@ func (s *ProjectService) GeneratePlan(p *models.Project) (*models.Project, error
 	return &fresh, nil
 }
 
+func (s *ProjectService) SyncProductionEntitiesFromExistingProject(project *models.Project) error {
+	if project == nil {
+		return fmt.Errorf("项目不能为空")
+	}
+	if strings.TrimSpace(project.Plan) != "" {
+		var plan dramaPlan
+		if err := json.Unmarshal([]byte(project.Plan), &plan); err != nil {
+			return fmt.Errorf("现有创作方案无法解析: %w", err)
+		}
+		s.upsertCharactersFromPlan(project, &plan)
+		s.upsertAssetsFromPlan(project, &plan)
+	}
+	var episodes []int
+	if err := s.db.Model(&models.Scene{}).Where("project_id = ?", project.ID).Distinct("episode_n").Order("episode_n").Pluck("episode_n", &episodes).Error; err != nil {
+		return err
+	}
+	for _, episode := range episodes {
+		if err := s.SyncEpisodeProductionEntities(project.ID, episode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validatePlanEpisodeCount(plan *dramaPlan, expected int) error {
 	if expected < 1 || expected > 500 {
 		return fmt.Errorf("目标集数必须在 1 到 500 之间")

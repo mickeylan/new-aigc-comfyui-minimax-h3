@@ -28,7 +28,7 @@
         <button v-if="project.episodes <= 20" class="btn btn-sm" :disabled="busy || pipelineActive || !project.synopsis" @click="startPipeline">
           {{ pipelineActive ? `第${project.pipeline_episode || activeEpN}集生成中…` : `⚡ 一键生成(第${activeEpN}集全流程)` }}
         </button>
-        <button class="btn btn-ghost btn-sm" :disabled="busy" @click="dubAll">🎤 全集配音</button>
+        <button v-if="pipelineActive" class="btn btn-danger btn-sm" :disabled="busy" @click="resetGenerationState">解除卡住的生成状态</button><button class="btn btn-ghost btn-sm" :disabled="busy" @click="dubAll">🎤 全集配音</button>
         <router-link :to="`/projects/${id()}/editor`" class="btn btn-secondary btn-sm">🎬 剪辑台</router-link>
         <a class="btn btn-ghost btn-sm" :href="api.srtUrl(id(), activeEpN)" target="_blank">📜 第{{ activeEpN }}集字幕</a>
         <button class="btn btn-danger btn-sm" @click="removeProject">🗑 删除</button>
@@ -126,6 +126,7 @@
           <p class="sub">统一角色外貌、道具与场景环境，并可锁定角色音色；分镜画面生成时自动注入设定与参考图，保证跨集一致</p>
         </div>
         <div class="section-actions">
+          <button class="btn btn-secondary btn-sm" :disabled="busy" @click="syncProductionEntities">从现有方案/剧本补建资产</button>
           <button v-if="assetTab === 'char'" class="btn btn-ghost btn-sm" :disabled="busy || approvedCharsWithoutPortrait === 0" @click="allPortraits">
             一键生成已审核标准像 ({{ approvedCharsWithoutPortrait }})
           </button>
@@ -1632,6 +1633,20 @@ async function restoreRevision(revision) {
   } finally {
     revisionBusy.value = false
   }
+}
+
+async function resetGenerationState(){
+  if(!window.confirm('仅解除卡住的生成状态，不删除现有方案、剧本、角色、资产或媒体。确定继续吗？'))return
+  busy.value=true
+  try{await api.resetProjectGeneration(id());await load();toast.show('已解除生成锁，可重新生成方案、剧本或启动全流程')}
+  catch(e){toast.show('解除生成状态失败：'+(e.response?.data?.error||e.message))}
+  finally{busy.value=false}
+}
+async function syncProductionEntities(){
+  busy.value=true
+  try{await api.syncProjectProductionEntities(id());await load();toast.show('已从现有方案和剧本补建角色、场景与道具卡')}
+  catch(e){toast.show('补建资产失败：'+(e.response?.data?.error||e.message))}
+  finally{busy.value=false}
 }
 
 async function regenerateScript() {

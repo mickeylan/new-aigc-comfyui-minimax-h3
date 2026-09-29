@@ -104,6 +104,8 @@ export const api = {
   scriptRevisions: (id, episodeN) => http.get(`/projects/${id}/script-revisions`, { params: { episode_n: episodeN } }),
   scriptRevision: (id, revisionId) => http.get(`/projects/${id}/script-revisions/${revisionId}`),
   restoreScriptRevision: (id, revisionId) => http.post(`/projects/${id}/script-revisions/${revisionId}/restore`),
+  resetProjectGeneration: (id) => http.post(`/projects/${id}/generation/reset`),
+  syncProjectProductionEntities: (id) => http.post(`/projects/${id}/production-entities/sync`),
   generatePlan: (id) => http.post(`/projects/${id}/plan`, null, { timeout: 300000 }),
   updatePlanEpisodes: (id, episodes) => http.put(`/projects/${id}/plan/episodes`, { episodes }),
   generateProject: (id, episodeN = 1, autoOnly = false) => {

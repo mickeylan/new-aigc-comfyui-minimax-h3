@@ -101,6 +101,8 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.GET("/api/projects/:id/script-revisions", svc.HandleListScriptRevisions)
 	r.GET("/api/projects/:id/script-revisions/:rid", svc.HandleGetScriptRevision)
 	r.POST("/api/projects/:id/script-revisions/:rid/restore", svc.HandleRestoreScriptRevision)
+	r.POST("/api/projects/:id/generation/reset", svc.HandleResetProjectGeneration)
+	r.POST("/api/projects/:id/production-entities/sync", svc.HandleSyncProjectProductionEntities)
 	r.POST("/api/projects/:id/plan", svc.HandleGeneratePlan)
 	r.PUT("/api/projects/:id/plan/episodes", svc.HandleUpdatePlanEpisodes)
 	r.POST("/api/projects/:id/generate", svc.HandleGenerateProject)
