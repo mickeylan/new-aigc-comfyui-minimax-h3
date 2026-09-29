@@ -195,6 +195,23 @@ func parseArcNumbers(raw string) []int {
 	return out
 }
 
+func normalizeAdaptationJSONWithRepair(provider TextProvider, raw string) (string, string, error) {
+	normalized, parseErr := normalizeAdaptationJSON(raw)
+	if parseErr == nil {
+		return normalized, raw, nil
+	}
+	repairSystem := `你是严格的JSON语法修复器。只允许修复引号、转义、逗号、冒号和括号等JSON语法错误，不得改写、删减、新增或重新规划任何剧情与分集内容。必须完整保留summary、episodes及每个episode的全部字段和值。只输出一个可被标准JSON.parse解析的JSON对象，不要Markdown、解释或代码围栏。`
+	repaired, repairErr := provider.Chat(repairSystem, fmt.Sprintf("解析器错误：%s\n\n待修复原文：\n%s", parseErr.Error(), raw))
+	if repairErr != nil {
+		return "", raw, fmt.Errorf("批次方案JSON解析失败，自动语法修复调用失败: %v；原始错误: %w", repairErr, parseErr)
+	}
+	normalized, repairParseErr := normalizeAdaptationJSON(repaired)
+	if repairParseErr != nil {
+		return "", repaired, fmt.Errorf("批次方案自动修复后仍不是合法JSON: %w", repairParseErr)
+	}
+	return normalized, repaired, nil
+}
+
 func (s *BatchPlanningService) GenerateBatchDraft(projectID, batchID uint) (*PlanningBatchDetail, error) {
 	detail, err := s.generateBatchDraft(projectID, batchID)
 	if err != nil {
@@ -276,10 +293,11 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 		Summary  string                     `json:"summary"`
 		Episodes []models.EpisodeAdaptation `json:"episodes"`
 	}
-	normalized, normalizeErr := normalizeAdaptationJSON(raw)
+	normalized, repairedRaw, normalizeErr := normalizeAdaptationJSONWithRepair(s.provider, raw)
 	if normalizeErr != nil {
 		return nil, normalizeErr
 	}
+	raw = repairedRaw
 	if err := parseJSONObject(normalized, &parsed); err != nil {
 		return nil, err
 	}
