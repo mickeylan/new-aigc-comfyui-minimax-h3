@@ -79,6 +79,8 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.ChapterTask{},
 		&models.StoryArc{},
 		&models.StoryBible{},
+		&models.StoryBibleChange{},
+		&models.AnalysisWindow{},
 		&models.AdaptationStrategy{},
 		&models.EpisodeAdaptation{},
 		&models.CharacterAliasCandidate{},

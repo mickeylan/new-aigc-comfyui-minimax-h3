@@ -280,11 +280,14 @@ func (s *ProjectService) DeleteProject(id uint) error {
 		if err := tx.Model(&models.PlanningBatch{}).Where("project_id = ?", id).Updates(map[string]any{"previous_batch_id": nil, "next_batch_id": nil}).Error; err != nil {
 			return err
 		}
+		if err := tx.Model(&models.AnalysisWindow{}).Where("project_id = ?", id).Update("previous_window_id", nil).Error; err != nil {
+			return err
+		}
 		for _, model := range []any{
 			&models.PromptPolicyOverride{}, &models.SharedAssetReference{}, &models.FrameCandidate{},
 			&models.GenerationCandidate{}, &models.AudioLayer{}, &models.CharacterMotionReference{},
 			&models.PromptVersion{}, &models.ScriptRevision{}, &models.BatchStateSnapshot{},
-			&models.StoryClue{}, &models.EpisodeAdaptation{},
+			&models.StoryClue{}, &models.StoryBibleChange{}, &models.AnalysisWindow{}, &models.EpisodeAdaptation{},
 			&models.AdaptationStrategy{}, &models.PlanningBatch{}, &models.CharacterOutfit{},
 			&models.CharacterLook{}, &models.AssetVariant{}, &models.Episode{},
 		} {

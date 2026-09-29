@@ -35,7 +35,7 @@ func TestDeleteProjectRemovesProductionGraph(t *testing.T) {
 	if err := db.AutoMigrate(
 		&models.Episode{}, &models.ScriptRevision{}, &models.MergeTask{}, &models.Material{}, &models.Asset{}, &models.AssetVariant{},
 		&models.Dialogue{}, &models.ProjectSkillConfig{}, &models.SkillAuditLog{}, &models.Chapter{}, &models.ChapterTask{},
-		&models.StoryArc{}, &models.StoryBible{}, &models.AdaptationStrategy{}, &models.EpisodeAdaptation{},
+		&models.StoryArc{}, &models.StoryBible{}, &models.StoryBibleChange{}, &models.AnalysisWindow{}, &models.AdaptationStrategy{}, &models.EpisodeAdaptation{},
 		&models.CharacterAliasCandidate{}, &models.NovelJob{}, &models.PlanningBatch{}, &models.BatchEpisode{},
 		&models.BatchStateSnapshot{}, &models.StoryClue{}, &models.PromptVersion{}, &models.CharacterOutfit{},
 		&models.CharacterOutfitLook{}, &models.SceneCharacterOutfit{}, &models.ShotCharacterOutfit{}, &models.FrameCandidate{},

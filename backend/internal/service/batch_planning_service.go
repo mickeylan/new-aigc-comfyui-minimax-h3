@@ -116,7 +116,25 @@ func (s *BatchPlanningService) CreateBatch(projectID uint, in BatchCreateInput) 
 		return nil, err
 	}
 	batch := &models.PlanningBatch{ProjectID: projectID, BatchNo: batchNo, Title: strings.TrimSpace(in.Title), EpisodeStart: in.EpisodeStart, EpisodeEnd: in.EpisodeEnd, EpisodeCount: count, TotalEpisodes: count, ChapterStart: in.ChapterStart, ChapterEnd: in.ChapterEnd, ArcRange: strings.TrimSpace(in.ArcRange), Status: BatchStatusDraft, ReviewStatus: ReviewStatusPending, PreviousBatchID: previous, Version: 1}
-	if err := s.db.Create(batch).Error; err != nil {
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(batch).Error; err != nil {
+			return err
+		}
+		// Automatically bind the production batch to the approved analysis window
+		// that owns its chapter range. Outline projects and legacy flows remain unbound.
+		var window models.AnalysisWindow
+		if err := tx.Where("project_id = ? AND chapter_start <= ? AND chapter_end >= ? AND status IN ?", projectID, in.ChapterStart, in.ChapterEnd, []models.AnalysisWindowStatus{models.WindowStatusReady, models.WindowStatusApproved}).Order("window_no DESC").First(&window).Error; err == nil {
+			if window.PlanningBatchID != nil && *window.PlanningBatchID != batch.ID {
+				return fmt.Errorf("analysis window is already bound to another production batch")
+			}
+			if err := tx.Model(&window).Update("planning_batch_id", batch.ID).Error; err != nil {
+				return err
+			}
+		} else if err != gorm.ErrRecordNotFound {
+			return err
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	return batch, nil

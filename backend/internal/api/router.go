@@ -306,6 +306,24 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/story-bible/generate", svc.HandleGenerateStoryBible)
 	r.PUT("/api/projects/:id/story-bible", svc.HandleUpdateStoryBible)
 	r.POST("/api/projects/:id/story-bible/approve", svc.HandleApproveStoryBible)
+	r.GET("/api/projects/:id/story-bible/changes", svc.HandleListStoryBibleChanges)
+	r.POST("/api/projects/:id/analysis-windows/:wid/story-bible-change", svc.HandleProposeStoryBibleChange)
+	r.POST("/api/projects/:id/story-bible/changes/:cid/review", svc.HandleReviewStoryBibleChange)
+
+	// Analysis Window（滚动分析窗口）
+	r.GET("/api/projects/:id/analysis-windows", svc.HandleListAnalysisWindows)            // 窗口列表
+	r.POST("/api/projects/:id/analysis-windows", svc.HandleCreateAnalysisWindow)          // 创建窗口
+	r.GET("/api/projects/:id/analysis-windows/suggestion", svc.HandleGetWindowSuggestion) // 窗口建议
+	r.GET("/api/projects/:id/analysis-windows/:wid", svc.HandleGetAnalysisWindow)         // 窗口详情
+	r.PATCH("/api/projects/:id/analysis-windows/:wid/extend", svc.HandleExtendAnalysisWindow)
+	r.POST("/api/projects/:id/analysis-windows/:wid/analyze", svc.HandleAnalyzeAnalysisWindow) // 分析窗口内章节
+	r.GET("/api/projects/:id/analysis-windows/:wid/progress", svc.HandleGetWindowProgress)     // 窗口进度
+	r.GET("/api/projects/:id/analysis-windows/:wid/context", svc.HandleGetWindowContext)       // 窗口上下文章节
+	r.POST("/api/projects/:id/analysis-windows/:wid/approve", svc.HandleApproveAnalysisWindow) // 审核通过窗口
+	r.POST("/api/projects/:id/analysis-windows/:wid/production-batch", svc.HandleBindAnalysisWindowBatch)
+	r.POST("/api/projects/:id/analysis-windows/:wid/commit", svc.HandleCommitAnalysisWindow) // 提交窗口（锁定）
+	r.POST("/api/projects/:id/analysis-windows/:wid/advance", svc.HandleAdvanceToNextWindow) // 推进到下一窗口
+
 	r.GET("/api/projects/:id/novel/jobs", svc.HandleListNovelJobs)
 	r.POST("/api/projects/:id/novel/jobs/:jid/retry", svc.HandleRetryNovelJob)
 	r.POST("/api/projects/:id/novel/jobs/:jid/cancel", svc.HandleCancelNovelJob)

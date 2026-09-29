@@ -14,7 +14,7 @@ func newTestBatchService(t *testing.T) *BatchPlanningService {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = db.AutoMigrate(&models.Project{}, &models.PlanningBatch{}, &models.BatchEpisode{}, &models.EpisodeAdaptation{}, &models.StoryArc{}, &models.Episode{}, &models.BatchStateSnapshot{}, &models.StoryClue{}); err != nil {
+	if err = db.AutoMigrate(&models.Project{}, &models.PlanningBatch{}, &models.BatchEpisode{}, &models.EpisodeAdaptation{}, &models.StoryArc{}, &models.Episode{}, &models.BatchStateSnapshot{}, &models.StoryClue{}, &models.AnalysisWindow{}); err != nil {
 		t.Fatal(err)
 	}
 	if err = db.Create(&models.Project{ID: 1, Title: "Novel", SourceType: models.ProjectSourceNovel, Episodes: 1800}).Error; err != nil {
@@ -34,6 +34,24 @@ func TestPlanningBatchSupportsOutlineProjects(t *testing.T) {
 	}
 	if batch.EpisodeCount != 10 {
 		t.Fatalf("unexpected batch: %+v", batch)
+	}
+}
+
+func TestPlanningBatchAutoBindsOwningAnalysisWindow(t *testing.T) {
+	s := newTestBatchService(t)
+	window := models.AnalysisWindow{ProjectID: 1, WindowNo: 1, ChapterStart: 1, ChapterEnd: 10, ContextStart: 1, ContextEnd: 15, Status: models.WindowStatusApproved}
+	if err := s.db.Create(&window).Error; err != nil {
+		t.Fatal(err)
+	}
+	batch, err := s.CreateBatch(1, BatchCreateInput{Title: "第一批", EpisodeStart: 1, EpisodeEnd: 5, ChapterStart: 1, ChapterEnd: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.First(&window, window.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if window.PlanningBatchID == nil || *window.PlanningBatchID != batch.ID {
+		t.Fatalf("window not bound: %+v", window)
 	}
 }
 

@@ -545,7 +545,22 @@ type StoryArc struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// StoryBible is the editable, explicitly approved whole-book synthesis.
+// StoryBibleChange is an auditable incremental proposal produced by a later
+// analysis window. It never mutates the approved bible before human review.
+type StoryBibleChange struct {
+	ID             uint      `gorm:"primaryKey" json:"id"`
+	ProjectID      uint      `gorm:"column:project_id;index" json:"project_id"`
+	WindowID       *uint     `gorm:"column:window_id;index" json:"window_id,omitempty"`
+	BaseVersion    int       `gorm:"column:base_version" json:"base_version"`
+	CandidateJSON  string    `gorm:"column:candidate_json;type:text" json:"candidate_json"`
+	SourceVersions string    `gorm:"column:source_versions;type:text" json:"source_versions"`
+	Status         string    `gorm:"default:pending;index" json:"status"`
+	ReviewNote     string    `gorm:"column:review_note;type:text" json:"review_note"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// StoryBible is the editable, explicitly approved synthesis known so far.
 type StoryBible struct {
 	ID                uint      `gorm:"primaryKey" json:"id"`
 	ProjectID         uint      `gorm:"column:project_id;uniqueIndex" json:"project_id"`
@@ -747,6 +762,43 @@ type NovelJob struct {
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 	FinishedAt   *time.Time `json:"finished_at"`
+}
+
+// AnalysisWindowStatus 分析窗口状态
+type AnalysisWindowStatus string
+
+const (
+	WindowStatusPending   AnalysisWindowStatus = "pending"   // 待处理
+	WindowStatusAnalysing AnalysisWindowStatus = "analysing" // 分析中
+	WindowStatusReady     AnalysisWindowStatus = "ready"     // 已完成分析，待审核
+	WindowStatusApproved  AnalysisWindowStatus = "approved"  // 已审核通过
+	WindowStatusCommitted AnalysisWindowStatus = "committed" // 已提交（锁定）
+	WindowStatusStale     AnalysisWindowStatus = "stale"     // 已过期
+)
+
+// AnalysisWindow represents a rolling chapter analysis window for long novels.
+// Default window size is 10 chapters with optional lookahead context.
+type AnalysisWindow struct {
+	ID               uint                 `gorm:"primaryKey" json:"id"`
+	ProjectID        uint                 `gorm:"column:project_id;uniqueIndex:idx_analysis_window_project_no" json:"project_id"`
+	WindowNo         int                  `gorm:"column:window_no;uniqueIndex:idx_analysis_window_project_no" json:"window_no"` // 窗口序号（从 1 开始）
+	ChapterStart     int                  `gorm:"column:chapter_start" json:"chapter_start"`                                    // 目标分析章节起点
+	ChapterEnd       int                  `gorm:"column:chapter_end" json:"chapter_end"`                                        // 目标分析章节终点
+	ContextStart     int                  `gorm:"column:context_start" json:"context_start"`                                    // 预读上下文起点（可 < ChapterStart）
+	ContextEnd       int                  `gorm:"column:context_end" json:"context_end"`                                        // 预读上下文终点（可 > ChapterEnd）
+	WindowSize       int                  `gorm:"column:window_size;default:10" json:"window_size"`                             // 窗口大小（默认 10 章）
+	Status           AnalysisWindowStatus `gorm:"column:status;default:pending;index" json:"status"`                            // 窗口状态
+	ReviewStatus     string               `gorm:"column:review_status;default:pending;index" json:"review_status"`
+	CommittedAt      *time.Time           `gorm:"column:committed_at" json:"committed_at,omitempty"`
+	PreviousWindowID *uint                `gorm:"column:previous_window_id;index" json:"previous_window_id,omitempty"`
+	PlanningBatchID  *uint                `gorm:"column:planning_batch_id;index" json:"planning_batch_id,omitempty"`
+	Summary          string               `gorm:"column:summary;type:text" json:"summary"` // 窗口摘要
+	Version          int                  `gorm:"default:1" json:"version"`
+	CreatedAt        time.Time            `json:"created_at"`
+	UpdatedAt        time.Time            `json:"updated_at"`
+
+	// Associations
+	PreviousWindow *AnalysisWindow `gorm:"foreignKey:PreviousWindowID" json:"previous_window,omitempty"`
 }
 
 type SkillAuditLog struct {
