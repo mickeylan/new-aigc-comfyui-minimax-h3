@@ -2539,10 +2539,7 @@ onBeforeUnmount(() => {
 .plan-progress-track { height: 9px; overflow: hidden; border-radius: 99px; background: rgba(255,255,255,.09); }
 .plan-progress-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg,#6257d9,#52b8e8); transition: width .8s ease; }
 .project-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 20px;
+  display: block;
   padding: 14px 0;
   position: sticky;
   top: var(--nav-h);
@@ -2550,9 +2547,10 @@ onBeforeUnmount(() => {
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
+.project-head > :first-child { min-width: 0; width: 100%; }
 .head-links .back { color: var(--text-secondary); font-size: 13px; text-decoration: none; }
 .back:hover { color: var(--accent); }
-.project-head h1 { margin: 10px 0 6px; font-size: 30px; }
+.project-head h1 { margin: 10px 0 6px; max-width: 100%; font-size: 30px; line-height: 1.2; white-space: normal; word-break: break-word; overflow-wrap: break-word; }
 .synopsis { margin: 0 0 8px; color: var(--text-secondary); font-size: 13px; max-width: 720px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .meta-tags { display: flex; gap: 8px; }
 .tag {
@@ -2560,7 +2558,7 @@ onBeforeUnmount(() => {
   background: var(--accent-soft); color: var(--accent);
 }
 .tag-orange { background: rgba(255, 159, 10, 0.14); color: #c47f00; }
-.head-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; flex-wrap: wrap; }
+.head-actions { display: flex; align-items: center; justify-content: flex-start; gap: 8px; flex-wrap: wrap; width: 100%; max-width: none; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
 .steps-bar { display: flex; align-items: center; gap: 12px; padding: 14px 20px; margin: 18px 0 26px; flex-wrap: wrap; }
 .step { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--text-secondary); }
 .step-n {
@@ -2882,7 +2880,8 @@ onBeforeUnmount(() => {
 .badge-red { background: rgba(239, 68, 68, 0.12); color: #dc2626; }
 
 @media (max-width: 780px) {
-  .project-head { flex-direction: column; }
+  .project-head h1 { font-size: 25px; }
+  .head-actions { gap: 6px; }
   .scene-grid { grid-template-columns: 1fr; }
   .viewer-mask { padding: 12px; }
   .viewer-panel { width: calc(100vw - 24px); max-height: calc(100vh - 24px); }
