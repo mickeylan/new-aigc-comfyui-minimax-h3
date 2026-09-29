@@ -114,12 +114,12 @@ func TestGenerateReferencePromptPreservesBeardAndCultivationIdentity(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"30岁壮年男子", "短髭", "络腮胡", "项目题材：古典修仙", "项目画风：真人写实", "中国古典修仙世界人物肖像", "修仙者历经吐纳淬体后的沉稳精气神", "古典气韵与身份可信度", "角色身份必须可辨：散修刀客，筑基期修士", "身份经历的可见气质依据", "禁止现代写真"} {
+	for _, want := range []string{"30岁壮年男子", "短髭", "络腮胡", "题材：古典修仙", "画风：真人写实", "中国古典修仙世界", "身份：散修刀客，筑基期修士", "禁止现代造型"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("cultivation portrait missing %q: %s", want, prompt)
 		}
 	}
-	if genreAt, faceAt := strings.Index(prompt, "项目题材：古典修仙"), strings.Index(prompt, "30岁壮年男子"); genreAt < 0 || faceAt < 0 || genreAt > faceAt {
+	if genreAt, faceAt := strings.Index(prompt, "题材：古典修仙"), strings.Index(prompt, "30岁壮年男子"); genreAt < 0 || faceAt < 0 || genreAt > faceAt {
 		t.Fatalf("project genre must precede long character details: %s", prompt)
 	}
 }
@@ -145,13 +145,49 @@ func TestGenerateReferencePromptInfersXianxiaStyleForFoxCharacter(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"题材风格：古风仙侠与东方玄幻", "修仙妖族世界观", "画面风格：古风仙侠人物设定", "中国古典修仙世界人物肖像", "17-18岁年轻狐女"} {
+	for _, want := range []string{"题材：古风仙侠、东方玄幻", "画风：古风仙侠人物设定、东方幻想美学", "中国古典修仙世界", "17-18岁年轻狐女"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("fox portrait missing inferred genre %q: %s", want, prompt)
 		}
 	}
-	if genreAt, faceAt := strings.Index(prompt, "题材风格："), strings.Index(prompt, "17-18岁年轻狐女"); genreAt < 0 || faceAt < 0 || genreAt > faceAt {
+	if genreAt, faceAt := strings.Index(prompt, "题材："), strings.Index(prompt, "17-18岁年轻狐女"); genreAt < 0 || faceAt < 0 || genreAt > faceAt {
 		t.Fatalf("inferred genre must precede character details: %s", prompt)
+	}
+	for _, forbidden := range []string{"角色身份必须可辨：配角", "想要融入普通人的生活", "身份经历的可见气质依据"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("portrait prompt includes non-visual narrative %q: %s", forbidden, prompt)
+		}
+	}
+}
+
+func TestGenerateReferencePromptOmitsMotivationAndNonVisibleWardrobe(t *testing.T) {
+	ps := newTestProjectService(t)
+	p := models.Project{Title: "血刀会", Genre: "古风仙侠"}
+	ps.db.Create(&p)
+	ch := models.Character{
+		ProjectID:      p.ID,
+		Role:           "配角",
+		Appearance:     "30岁左右的清瘦青年男性，面容清癯古拙，剑眉斜飞，双目细长有神，鼻梁挺直，唇薄色淡，皮肤偏白，头顶挽成道士发髻以乌木簪固定",
+		Background:     "出身低微，从杂役爬到外堂弟子，渴望立功进入内堂获得修炼资源，此次追捕狐女是进阶的重要机会",
+		Trait:          "善于钻营投机取巧但修为平平",
+		WardrobeDetail: "30岁左右的清瘦青年男性，面容清癯，身穿洗得发白的青色道袍，道袍下摆略有磨损，足踏黑色薄底布靴，手持白马尾拂尘，日常服饰：上身青色交领道袍以粗麻布制成，衣袖宽大",
+	}
+	if err := ps.db.Create(&ch).Error; err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := NewCharacterProfileService(ps.db, nil).GenerateReferencePrompt(&ch, &p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"题材：古风仙侠", "30岁左右的清瘦青年男性", "青色道袍"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("concise portrait missing %q: %s", want, prompt)
+		}
+	}
+	for _, forbidden := range []string{"配角", "出身低微", "渴望立功", "追捕狐女", "投机取巧", "布靴", "手持白马尾拂尘"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("concise portrait includes non-visual or out-of-frame detail %q: %s", forbidden, prompt)
+		}
 	}
 }
 
@@ -161,12 +197,12 @@ func TestPortraitStylingSelectsOneCoherentLook(t *testing.T) {
 		WardrobeDetail: "日常服装——浅蓝与鹅黄两套常服。浅蓝色装扮：浅蓝色立领斜襟布衫，白色里衣，浅蓝腰带。鹅黄色装扮：鹅黄色对襟布衫。工作装束：挽起袖口。重要场合造型：月白礼服。",
 	}
 	style := portraitStyling(ch)
-	for _, want := range []string{"低挽发髻", "木簪", "浅蓝色立领斜襟布衫", "白色里衣"} {
+	for _, want := range []string{"浅蓝色立领斜襟布衫", "白色里衣"} {
 		if !strings.Contains(style, want) {
 			t.Fatalf("styling missing %q: %s", want, style)
 		}
 	}
-	for _, forbidden := range []string{"鹅黄色对襟", "工作装束", "月白礼服"} {
+	for _, forbidden := range []string{"低挽发髻", "木簪", "鹅黄色对襟", "工作装束", "月白礼服"} {
 		if strings.Contains(style, forbidden) {
 			t.Fatalf("styling mixed alternative %q: %s", forbidden, style)
 		}

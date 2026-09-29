@@ -175,8 +175,8 @@ func portraitFaceIdentity(appearance, trait string) string {
 	return strings.Join(out, "，")
 }
 
-// portraitStyling 从审核档案中选择一套确定的标准照妆造，不混合替换造型。
-// 优先第一套明确日常服装，并保留与其相邻的发型、头饰描述。
+// portraitStyling 只保留肩部头像中实际可见的一套上衣信息。
+// 发型已由 portraitFaceIdentity 输出；鞋履、武器、身材、动机和经历不进入标准像提示词。
 func portraitStyling(char *models.Character) string {
 	wardrobe := strings.TrimSpace(char.WardrobeDetail)
 	if wardrobe == "" {
@@ -185,61 +185,48 @@ func portraitStyling(char *models.Character) string {
 	if wardrobe == "" {
 		return "简洁合体的中性基础上衣，衣料完整覆盖肩部与胸口"
 	}
-
-	selected := wardrobe
-	// 常见多套档案按第二套/工作装/正式装截断，只取首套确定造型。
 	for _, marker := range []string{"鹅黄色装扮：", "第二套", "另一套", "工作装束", "工作装：", "重要场合造型", "正式场合", "礼服造型"} {
-		if i := strings.Index(selected, marker); i > 0 {
-			selected = selected[:i]
+		if i := strings.Index(wardrobe, marker); i > 0 {
+			wardrobe = wardrobe[:i]
 		}
 	}
-	// 去掉目录式前言，从第一套明确服装开始。
-	for _, marker := range []string{"浅蓝色装扮：", "第一套：", "日常装扮：", "日常服装："} {
-		if i := strings.Index(selected, marker); i >= 0 {
-			selected = selected[i+len(marker):]
+	for _, marker := range []string{"第一套：", "日常装扮：", "日常服装："} {
+		if i := strings.Index(wardrobe, marker); i >= 0 {
+			wardrobe = wardrobe[i+len(marker):]
 			break
 		}
 	}
-	clauses := strings.FieldsFunc(selected, func(r rune) bool { return r == '。' || r == '；' || r == '\n' })
-	kept := make([]string, 0, 4)
-	for _, clause := range clauses {
+	clothingWords := "衣衫袍裙领襟袖肩胸布绸丝麻纹色带搭"
+	excludedWords := []string{"岁", "男性", "女性", "身形", "面容", "眉", "眼", "鼻", "唇", "皮肤", "发髻", "头发", "发丝", "簪", "鞋", "靴", "足踏", "手持", "武器", "拂尘", "经历", "渴望", "机会", "修为", "性格"}
+	kept := make([]string, 0, 5)
+	seen := map[string]bool{}
+	for _, clause := range strings.FieldsFunc(wardrobe, func(r rune) bool { return r == '，' || r == '。' || r == '；' || r == '\n' }) {
 		clause = strings.TrimSpace(clause)
-		if clause == "" {
+		if clause == "" || !strings.ContainsAny(clause, clothingWords) {
 			continue
 		}
-		if strings.Contains(clause, "代表") || strings.Contains(clause, "象征") || strings.Contains(clause, "气质") {
-			continue
-		}
-		kept = append(kept, clause)
-		if len(kept) >= 4 {
-			break
-		}
-	}
-	style := strings.Join(kept, "，")
-	if style == "" {
-		style = "简洁合体的基础上衣，衣料完整覆盖肩部与胸口"
-	}
-
-	// 发型和头饰优先使用外貌档案中的确定描述，最多两句。
-	hair := make([]string, 0, 2)
-	for _, clause := range strings.FieldsFunc(char.Appearance+"。"+char.Trait, func(r rune) bool { return r == '。' || r == '；' || r == '\n' }) {
-		clause = strings.TrimSpace(clause)
-		if clause == "" {
-			continue
-		}
-		if strings.Contains(clause, "发髻") || strings.Contains(clause, "发型") || strings.Contains(clause, "头饰") || strings.Contains(clause, "木簪") || strings.Contains(clause, "发簪") {
-			hair = append(hair, clause)
-			if len(hair) >= 2 {
+		excluded := false
+		for _, word := range excludedWords {
+			if strings.Contains(clause, word) {
+				excluded = true
 				break
 			}
 		}
+		if excluded || seen[clause] {
+			continue
+		}
+		seen[clause] = true
+		kept = append(kept, clause)
+		if len(kept) >= 5 {
+			break
+		}
 	}
-	if len(hair) > 0 {
-		style = strings.Join(hair, "，") + "，" + style
+	if len(kept) == 0 {
+		return "简洁合体的基础上衣，衣料完整覆盖肩部与胸口"
 	}
-	runes := []rune(style)
-	if len(runes) > 360 {
-		style = string(runes[:360])
+	style := strings.Join(kept, "，")
+	if runes := []rune(style); len(runes) > 180 {
+		style = string(runes[:180])
 	}
 	return style
 }
@@ -272,46 +259,25 @@ func portraitStoryIdentity(char *models.Character, project *models.Project) stri
 	isCultivation := strings.Contains(world, "修仙") || strings.Contains(world, "仙侠") || strings.Contains(world, "宗门") || strings.Contains(world, "灵气") || strings.ContainsAny(world, "狐妖魔仙灵")
 	isHistorical := strings.Contains(world, "武侠") || strings.Contains(world, "古代") || strings.Contains(world, "古装") || strings.Contains(world, "罗衣") || strings.Contains(world, "襦裙")
 	if genre != "" {
-		parts = append(parts, "项目题材："+genre+"，人物设计必须符合该题材的世界观、时代文化与视觉语汇")
+		parts = append(parts, "题材："+genre)
 	} else if isCultivation {
-		parts = append(parts, "题材风格：古风仙侠与东方玄幻，人物设计必须符合修仙妖族世界观、中国古典时代文化与仙侠视觉语汇")
+		parts = append(parts, "题材：古风仙侠、东方玄幻")
 	} else if isHistorical {
-		parts = append(parts, "题材风格：中国古典幻想，人物设计必须符合古代时代文化与东方视觉语汇")
+		parts = append(parts, "题材：中国古典幻想")
 	}
 	if style != "" {
-		parts = append(parts, "项目画风："+style+"，成图必须保持该画风")
+		parts = append(parts, "画风："+style)
 	} else if isCultivation {
-		parts = append(parts, "画面风格：古风仙侠人物设定，东方幻想美学，禁止现代写真造型与现代服饰")
+		parts = append(parts, "画风：古风仙侠人物设定、东方幻想美学")
 	}
-	switch {
-	case isCultivation:
-		parts = append(parts, "中国古典修仙世界人物肖像，具有修仙者历经吐纳淬体后的沉稳精气神或妖族人物天生的灵气，并保持古典气韵与身份可信度，发式、衣襟、束带和材质符合中国古典修仙世界，禁止现代写真造型、现代发型和现代服饰")
-	case isHistorical:
-		parts = append(parts, "中国古典人物肖像，符合故事时代与身份，禁止现代造型")
+	if isCultivation {
+		parts = append(parts, "中国古典修仙世界，禁止现代造型与现代服饰")
+	} else if isHistorical {
+		parts = append(parts, "中国古典时代人物，禁止现代造型")
 	}
 	role := strings.TrimSpace(char.Role)
-	if role != "" {
-		parts = append(parts, "角色身份必须可辨："+role)
-		switch {
-		case strings.Contains(role, "散修"):
-			parts = append(parts, "呈现常年独行历练形成的警觉、坚韧与不依附宗门的朴素实用气质")
-		case strings.Contains(role, "长老") || strings.Contains(role, "掌门") || strings.Contains(role, "宗主"):
-			parts = append(parts, "呈现长期修行与统御宗门形成的克制威仪，而非世俗官员或普通百姓")
-		case strings.Contains(role, "剑修"):
-			parts = append(parts, "呈现剑修收敛锋锐、身姿挺拔和专注目光")
-		case strings.Contains(role, "刀客") || strings.Contains(role, "刀修"):
-			parts = append(parts, "呈现刀修沉稳强悍、肩颈有力和临战警觉")
-		}
-	}
-	for _, clause := range strings.FieldsFunc(char.Background+"；"+char.Trait, func(r rune) bool { return r == '。' || r == '；' || r == '\n' }) {
-		clause = strings.TrimSpace(clause)
-		if clause == "" {
-			continue
-		}
-		if strings.ContainsAny(clause, "修仙宗门剑刀魔妖仙灵武") || strings.Contains(clause, "散修") || strings.Contains(clause, "长老") || strings.Contains(clause, "掌门") {
-			parts = append(parts, "身份经历的可见气质依据："+clause)
-			break
-		}
+	if role != "" && role != "主角" && role != "配角" && role != "男主" && role != "女主" {
+		parts = append(parts, "身份："+role)
 	}
 	return strings.Join(parts, "，")
 }
