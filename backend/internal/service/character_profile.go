@@ -310,10 +310,12 @@ func (s *CharacterProfileService) GenerateReferencePrompt(char *models.Character
 	if appearance == "" {
 		return "", fmt.Errorf("请先完善角色脸部与发型描述")
 	}
-	parts := []string{"单人正面大头贴", appearance}
+	parts := []string{"单人正面大头贴"}
+	// 题材与画风放在提示词最前部，避免被后续的长外貌和服装描述淹没。
 	if identity := portraitStoryIdentity(char, project); identity != "" {
 		parts = append(parts, identity)
 	}
+	parts = append(parts, appearance)
 	parts = append(parts, "本次标准像唯一妆造："+portraitStyling(char))
 	if project != nil {
 		if desc := styleDescriptor(project.Style); desc != "" {

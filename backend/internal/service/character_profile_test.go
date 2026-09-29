@@ -119,6 +119,9 @@ func TestGenerateReferencePromptPreservesBeardAndCultivationIdentity(t *testing.
 			t.Fatalf("cultivation portrait missing %q: %s", want, prompt)
 		}
 	}
+	if genreAt, faceAt := strings.Index(prompt, "项目题材：古典修仙"), strings.Index(prompt, "30岁壮年男子"); genreAt < 0 || faceAt < 0 || genreAt > faceAt {
+		t.Fatalf("project genre must precede long character details: %s", prompt)
+	}
 }
 
 func TestPortraitStylingSelectsOneCoherentLook(t *testing.T) {
