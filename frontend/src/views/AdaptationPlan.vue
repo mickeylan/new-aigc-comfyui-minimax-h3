@@ -52,7 +52,7 @@
             <div><input v-model="ep.title" class="input"><span>第{{ep.episode_n}}集 · 章节{{ep.chapter_start}}–{{ep.chapter_end}} · {{episodeStatusLabel(ep.status)}}</span></div>
             <textarea v-model="ep.adaptation_goal" class="textarea" rows="2" placeholder="本集改编目标"></textarea>
             <div class="state-grid"><label>开始状态<textarea v-model="ep.opening_state" class="textarea" rows="2"></textarea></label><label>结束状态<textarea v-model="ep.ending_state" class="textarea" rows="2"></textarea></label><label>结尾钩子<textarea v-model="ep.hook" class="textarea" rows="2"></textarea></label></div>
-            <div class="actions"><button class="btn btn-xs btn-secondary" :disabled="batch.status==='approved'||busy" @click="saveEpisode(ep)">保存映射</button><button type="button" class="btn btn-xs" :class="{'btn-secondary':ep.status!=='approved'}" :disabled="busy" :title="episodeScriptHint(ep)" @click="script(ep)">生成本集剧本</button><button v-if="ep.status==='scripted'" type="button" class="btn btn-xs btn-secondary" :disabled="busy" @click="reviewEpisode(ep)">连续性复审</button><router-link class="btn btn-xs btn-ghost" :to="`/projects/${id}/episodes/${ep.episode_n}/screenplay`">结构化编辑</router-link></div>
+            <div class="actions"><button class="btn btn-xs btn-secondary" :disabled="batch.status==='approved'||busy" @click="saveEpisode(ep)">保存映射</button><button type="button" class="btn btn-xs" :class="{'btn-secondary':ep.status!=='approved'}" :disabled="busy" :title="episodeScriptHint(ep)" @click="script(ep)">生成本集剧本</button><button v-if="ep.status==='scripted'" type="button" class="btn btn-xs btn-secondary" :disabled="busy" @click="reviewEpisode(ep)">连续性复审</button><button v-if="ep.status==='scripted'||ep.status==='reviewed'" type="button" class="btn btn-xs btn-secondary" :disabled="busy" @click="generateAssets(ep)">AI补全角色/场景/道具</button><button v-if="ep.status==='scripted'||ep.status==='reviewed'" type="button" class="btn btn-xs btn-ghost" :disabled="busy" @click="syncAssets(ep)">仅同步缺失卡片</button><router-link class="btn btn-xs btn-ghost" :to="`/projects/${id}/episodes/${ep.episode_n}/screenplay`">结构化编辑</router-link></div>
           </article>
           <section v-if="snapshot?.batch_id===batch.id" class="snapshot-editor">
             <h4>批次结束状态快照 <span class="badge">{{snapshot.status}}</span></h4>
@@ -99,6 +99,8 @@ async function generateSnapshot(batch){await run(async()=>{snapshot.value=(await
 const saveSnapshot=batch=>run(async()=>{snapshot.value=(await api.saveBatchSnapshot(id,batch.id,{character_states_json:snapshot.value.character_states_json,relationships_json:snapshot.value.relationships_json,world_state_json:snapshot.value.world_state_json,clue_state_json:snapshot.value.clue_state_json})).data})
 async function approveSnapshot(batch){const override=window.prompt('连续性不一致时的人工覆盖理由（无则留空）','');if(override===null)return;await run(async()=>{snapshot.value=(await api.reviewBatchSnapshot(id,batch.id,true,override)).data})}
 async function copyError(){try{await navigator.clipboard.writeText(error.value)}catch{window.prompt('复制错误信息',error.value)}}
+async function generateAssets(ep){await run(async()=>{const {data}=await api.generateAdaptationAssets(id,ep.episode_n);window.alert(`已补全 ${data.characters||0} 个角色档案、${data.assets||0} 个场景/道具设定`)})}
+async function syncAssets(ep){await run(()=>api.syncAdaptationAssets(id,ep.episode_n))}
 async function reviewEpisode(ep){
   const override=window.prompt('连续性冲突时的人工覆盖理由（无则留空）','')
   if(override===null)return

@@ -364,6 +364,8 @@ export const api = {
   updateAdaptation: (id, episode, data) => http.put(`/projects/${id}/adaptations/${episode}`, data),
   approveAdaptation: (id, episode) => http.post(`/projects/${id}/adaptations/${episode}/approve`),
   generateAdaptationScript: (id, episode) => http.post(`/projects/${id}/adaptations/${episode}/script`, {}, { timeout: 300000 }),
+  syncAdaptationAssets: (id, episode) => http.post(`/projects/${id}/adaptations/${episode}/assets/sync`),
+  generateAdaptationAssets: (id, episode) => http.post(`/projects/${id}/adaptations/${episode}/assets/generate`, {}, { timeout: 300000 }),
   reviewAdaptation: (id, episode, overrideReason = '') => http.post(`/projects/${id}/adaptations/${episode}/review`, { override_reason: overrideReason }, { timeout: 300000 }),
   adaptationContext: (id, episode) => http.get(`/projects/${id}/adaptations/${episode}/context`),
   novelUsage: (id) => http.get(`/projects/${id}/novel/usage`),

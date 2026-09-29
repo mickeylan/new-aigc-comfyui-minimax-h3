@@ -1228,6 +1228,46 @@ func TestBuildQwenPortraitPromptRejectsWrongRatio(t *testing.T) {
 	}
 }
 
+func TestUpsertProductionEntitiesFromScenesCreatesCharactersLocationsAndProps(t *testing.T) {
+	ps := newTestProjectService(t)
+	project := models.Project{Title: "长篇项目"}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	scenes := []scriptScene{{VisibleCharacters: []string{"林采微"}, VoiceCharacters: []string{"掌柜", "旁白"}, Location: "临江客栈", Props: []string{"青玉令牌"}}}
+	if err := ps.upsertProductionEntitiesFromScenes(project.ID, scenes); err != nil {
+		t.Fatal(err)
+	}
+	var characters []models.Character
+	if err := ps.db.Where("project_id = ?", project.ID).Order("name").Find(&characters).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(characters) != 2 {
+		t.Fatalf("characters=%+v", characters)
+	}
+	for _, character := range characters {
+		if character.ProfileStatus != models.ProfileStatusDraft || character.Source != "auto" {
+			t.Fatalf("unexpected character: %+v", character)
+		}
+	}
+	var assets []models.Asset
+	if err := ps.db.Where("project_id = ?", project.ID).Order("kind,name").Find(&assets).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(assets) != 2 {
+		t.Fatalf("assets=%+v", assets)
+	}
+	if err := ps.upsertProductionEntitiesFromScenes(project.ID, scenes); err != nil {
+		t.Fatal(err)
+	}
+	var characterCount, assetCount int64
+	ps.db.Model(&models.Character{}).Where("project_id = ?", project.ID).Count(&characterCount)
+	ps.db.Model(&models.Asset{}).Where("project_id = ?", project.ID).Count(&assetCount)
+	if characterCount != 2 || assetCount != 2 {
+		t.Fatalf("not idempotent: characters=%d assets=%d", characterCount, assetCount)
+	}
+}
+
 func TestBuildPortraitPromptDoesNotAppendNegativePrompt(t *testing.T) {
 	p := &models.Project{Style: "真人写实"}
 	ch := &models.Character{Appearance: "22岁女性，黑色长发", ReferencePrompt: "22岁青年女性，超写实真人照片风格"}

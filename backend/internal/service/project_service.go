@@ -1083,8 +1083,11 @@ func (s *ProjectService) generateScriptCore(p *models.Project, episodeN int, raw
 		return nil, nil, err
 	}
 	s.cleanupStaleSceneFiles(p.ID, oldScenes)
-	// 分镜引用的道具/地点若尚未建卡，自动补建（source=auto，供参考图生成与一致性注入）
-	s.upsertAssetsFromScenes(p.ID, res.Scenes)
+	// 剧本落库后同步建立本集首次出现的角色、地点和道具卡。角色保持
+	// draft，等待用户审核/补全，不根据文本臆造外貌。
+	if err := s.upsertProductionEntitiesFromScenes(p.ID, res.Scenes); err != nil {
+		return nil, nil, fmt.Errorf("剧本已生成，但同步角色与资产失败: %w", err)
+	}
 
 	s.pushProject(p)
 	return s.GetProject(p.ID)

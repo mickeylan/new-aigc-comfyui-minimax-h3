@@ -348,6 +348,8 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/adaptations/approve", svc.HandleApproveAdaptations)
 	r.GET("/api/projects/:id/adaptations/:episode/context", svc.HandleAdaptationContext)
 	r.POST("/api/projects/:id/adaptations/:episode/script", svc.HandleGenerateAdaptationScript)
+	r.POST("/api/projects/:id/adaptations/:episode/assets/sync", svc.HandleSyncAdaptationAssets)
+	r.POST("/api/projects/:id/adaptations/:episode/assets/generate", svc.HandleGenerateAdaptationAssets)
 	r.POST("/api/projects/:id/adaptations/scripts", svc.HandleBatchGenerateAdaptationScripts)
 	r.POST("/api/projects/:id/adaptations/:episode/review", svc.HandleReviewAdaptation)
 	r.POST("/api/projects/:id/adaptations/review", svc.HandleBatchReviewAdaptations)

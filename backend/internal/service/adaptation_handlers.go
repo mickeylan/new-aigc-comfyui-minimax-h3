@@ -1,6 +1,8 @@
 package service
 
 import (
+	"encoding/json"
+	"fmt"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -119,6 +121,75 @@ func (s *Service) HandleApproveAdaptations(c *gin.Context) {
 	}
 	c.JSON(200, gin.H{"ok": true})
 }
+func (s *Service) HandleGenerateAdaptationAssets(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	n, ok := episodeParam(c)
+	if !ok {
+		return
+	}
+	if err := s.Projects.SyncEpisodeProductionEntities(p.ID, n); err != nil {
+		c.JSON(409, gin.H{"error": err.Error()})
+		return
+	}
+	var scenes []models.Scene
+	if err := s.DB.Where("project_id = ? AND episode_n = ?", p.ID, n).Order("scene_order").Find(&scenes).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	contextJSON, _ := json.Marshal(scenes)
+	var characters []models.Character
+	if err := s.DB.Where("project_id = ? AND (appearance = '' OR appearance IS NULL)", p.ID).Find(&characters).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	generatedCharacters := 0
+	for i := range characters {
+		if err := s.CharacterProfiles.GenerateProfile(&characters[i], p, string(contextJSON)); err != nil {
+			c.JSON(502, gin.H{"error": fmt.Sprintf("角色「%s」AI档案生成失败: %v", characters[i].Name, err)})
+			return
+		}
+		generatedCharacters++
+	}
+	var assets []models.Asset
+	if err := s.DB.Where("project_id = ? AND (description = '' OR description IS NULL)", p.ID).Find(&assets).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	generatedAssets := 0
+	for i := range assets {
+		description, err := s.Projects.RedesignAssetDescription(p, assets[i].Kind, assets[i].Name, fmt.Sprintf("依据第%d集已生成场景补充资产设定。场景上下文：%s", n, string(contextJSON)))
+		if err != nil {
+			c.JSON(502, gin.H{"error": fmt.Sprintf("%s「%s」AI描述生成失败: %v", assets[i].Kind, assets[i].Name, err)})
+			return
+		}
+		if err := s.DB.Model(&assets[i]).Update("description", description).Error; err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		generatedAssets++
+	}
+	c.JSON(200, gin.H{"ok": true, "characters": generatedCharacters, "assets": generatedAssets})
+}
+
+func (s *Service) HandleSyncAdaptationAssets(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	n, ok := episodeParam(c)
+	if !ok {
+		return
+	}
+	if err := s.Projects.SyncEpisodeProductionEntities(p.ID, n); err != nil {
+		c.JSON(409, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true})
+}
+
 func (s *Service) HandleGenerateAdaptationScript(c *gin.Context) {
 	p, ok := s.loadProject(c)
 	if !ok {

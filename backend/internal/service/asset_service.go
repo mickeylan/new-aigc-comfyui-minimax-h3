@@ -246,31 +246,79 @@ func (s *ProjectService) upsertAssetsFromPlan(p *models.Project, plan *dramaPlan
 
 // upsertAssetsFromScenes 分镜引用的道具/地点若尚未建卡则自动补建（source=auto），
 // 保证后续参考图生成与一致性注入可按名称匹配。
-func (s *ProjectService) upsertAssetsFromScenes(projectID uint, scenes []scriptScene) {
+func (s *ProjectService) upsertProductionEntitiesFromScenes(projectID uint, scenes []scriptScene) error {
 	type key struct{ kind, name string }
-	seen := map[key]bool{}
-	var add []models.Asset
+	seenAssets := map[key]bool{}
+	seenCharacters := map[string]bool{}
+	var assets []models.Asset
+	var characters []models.Character
 	for _, sc := range scenes {
-		if loc := strings.TrimSpace(sc.Location); loc != "" && !seen[key{AssetKindLocation, loc}] {
-			seen[key{AssetKindLocation, loc}] = true
-			add = append(add, models.Asset{ProjectID: projectID, Kind: AssetKindLocation, Name: loc, Source: "auto"})
+		if loc := strings.TrimSpace(sc.Location); loc != "" && !seenAssets[key{AssetKindLocation, loc}] {
+			seenAssets[key{AssetKindLocation, loc}] = true
+			assets = append(assets, models.Asset{ProjectID: projectID, Kind: AssetKindLocation, Name: loc, Source: "auto"})
 		}
 		for _, pn := range sc.Props {
 			name := strings.TrimSpace(pn)
-			if name == "" || seen[key{AssetKindProp, name}] {
+			if name == "" || seenAssets[key{AssetKindProp, name}] {
 				continue
 			}
-			seen[key{AssetKindProp, name}] = true
-			add = append(add, models.Asset{ProjectID: projectID, Kind: AssetKindProp, Name: name, Source: "auto"})
+			seenAssets[key{AssetKindProp, name}] = true
+			assets = append(assets, models.Asset{ProjectID: projectID, Kind: AssetKindProp, Name: name, Source: "auto"})
+		}
+		for _, name := range append(sceneVisibleNames(sc), sc.VoiceCharacters...) {
+			name = strings.TrimSpace(name)
+			if name == "" || name == "旁白" || seenCharacters[name] {
+				continue
+			}
+			seenCharacters[name] = true
+			characters = append(characters, models.Character{ProjectID: projectID, Name: name, Source: "auto", ProfileStatus: models.ProfileStatusDraft})
 		}
 	}
-	for i := range add {
-		var cnt int64
-		s.db.Model(&models.Asset{}).Where("project_id = ? AND kind = ? AND name = ?", projectID, add[i].Kind, add[i].Name).Count(&cnt)
-		if cnt == 0 {
-			s.db.Create(&add[i])
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		for i := range assets {
+			var existing models.Asset
+			err := tx.Where("project_id = ? AND kind = ? AND name = ?", projectID, assets[i].Kind, assets[i].Name).First(&existing).Error
+			if err == gorm.ErrRecordNotFound {
+				if err := tx.Create(&assets[i]).Error; err != nil {
+					return err
+				}
+			} else if err != nil {
+				return err
+			}
 		}
+		for i := range characters {
+			var existing models.Character
+			err := tx.Where("project_id = ? AND name = ?", projectID, characters[i].Name).First(&existing).Error
+			if err == gorm.ErrRecordNotFound {
+				if err := tx.Create(&characters[i]).Error; err != nil {
+					return err
+				}
+			} else if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (s *ProjectService) SyncEpisodeProductionEntities(projectID uint, episodeN int) error {
+	var scenes []models.Scene
+	if err := s.db.Where("project_id = ? AND episode_n = ?", projectID, episodeN).Find(&scenes).Error; err != nil {
+		return err
 	}
+	if len(scenes) == 0 {
+		return fmt.Errorf("第%d集尚无已生成场景", episodeN)
+	}
+	converted := make([]scriptScene, 0, len(scenes))
+	for _, scene := range scenes {
+		converted = append(converted, scriptScene{
+			Location:          scene.LocationName,
+			Props:             parseSceneCharacters(scene.Props),
+			VisibleCharacters: parseSceneCharacters(scene.VisibleCharacters),
+			VoiceCharacters:   parseSceneCharacters(scene.VoiceCharacters),
+		})
+	}
+	return s.upsertProductionEntitiesFromScenes(projectID, converted)
 }
 
 var errAssetImageActive = errors.New("资产参考图正在生成")
@@ -339,7 +387,9 @@ func (s *ProjectService) StartAssetImage(a *models.Asset) error {
 	}
 	width, height := assetImageSize(&p, current.Kind)
 	params := map[string]any{"width": width, "height": height}
-	if engine == ImageEngineQwen21 { params = map[string]any{"aspect_ratio":qwenAspectRatio(p.AspectRatio),"megapixels":2.5,"multiple":8,"reference_resolution":1024,"steps":25,"cfg":1,"negative_prompt":""} }
+	if engine == ImageEngineQwen21 {
+		params = map[string]any{"aspect_ratio": qwenAspectRatio(p.AspectRatio), "megapixels": 2.5, "multiple": 8, "reference_resolution": 1024, "steps": 25, "cfg": 1, "negative_prompt": ""}
+	}
 	task, err := s.tasks.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: buildAssetPrompt(&p, &current), Params: params})
 	if err != nil {
 		return fmt.Errorf("创建资产参考图任务失败: %w", err)
