@@ -124,6 +124,37 @@ func TestGenerateReferencePromptPreservesBeardAndCultivationIdentity(t *testing.
 	}
 }
 
+func TestGenerateReferencePromptInfersXianxiaStyleForFoxCharacter(t *testing.T) {
+	ps := newTestProjectService(t)
+	p := models.Project{Title: "狐女"}
+	if err := ps.db.Create(&p).Error; err != nil {
+		t.Fatal(err)
+	}
+	ch := models.Character{
+		ProjectID:      p.ID,
+		Name:           "小狐",
+		Role:           "配角",
+		Appearance:     "17-18岁年轻狐女，乌黑秀发束成双髻，一双琥珀色大眼睛",
+		Trait:          "想要融入普通人的生活又无法完全隐藏妖精的身份",
+		WardrobeDetail: "鹅黄色罗衣，交领襦裙，淡青色云纹",
+	}
+	if err := ps.db.Create(&ch).Error; err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := NewCharacterProfileService(ps.db, nil).GenerateReferencePrompt(&ch, &p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"题材风格：古风仙侠与东方玄幻", "修仙妖族世界观", "画面风格：古风仙侠人物设定", "中国古典修仙世界人物肖像", "17-18岁年轻狐女"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("fox portrait missing inferred genre %q: %s", want, prompt)
+		}
+	}
+	if genreAt, faceAt := strings.Index(prompt, "题材风格："), strings.Index(prompt, "17-18岁年轻狐女"); genreAt < 0 || faceAt < 0 || genreAt > faceAt {
+		t.Fatalf("inferred genre must precede character details: %s", prompt)
+	}
+}
+
 func TestPortraitStylingSelectsOneCoherentLook(t *testing.T) {
 	ch := &models.Character{
 		Appearance:     "乌黑长发及腰，日常梳低挽发髻，用一根素雅木簪固定。鹅蛋脸，丹凤眼。",

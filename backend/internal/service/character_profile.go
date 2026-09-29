@@ -261,20 +261,33 @@ func ageSubject(appearance, trait string) string {
 
 func portraitStoryIdentity(char *models.Character, project *models.Project) string {
 	parts := []string{}
+	genre, style, synopsis := "", "", ""
 	if project != nil {
-		if genre := strings.TrimSpace(project.Genre); genre != "" {
-			parts = append(parts, "项目题材："+genre+"，人物设计必须符合该题材的世界观、时代文化与视觉语汇")
-		}
-		if style := strings.TrimSpace(project.Style); style != "" {
-			parts = append(parts, "项目画风："+style+"，成图必须保持该画风")
-		}
-		world := strings.TrimSpace(project.Genre + " " + project.Synopsis)
-		switch {
-		case strings.Contains(world, "修仙") || strings.Contains(world, "仙侠") || strings.Contains(world, "宗门") || strings.Contains(world, "灵气"):
-			parts = append(parts, "中国古典修仙世界人物肖像，具有修仙者历经吐纳淬体后的沉稳精气神、古典气韵与身份可信度，发式、衣襟、束带和材质符合中国古典修仙世界，禁止现代写真、现代发型和现代服饰")
-		case strings.Contains(world, "武侠") || strings.Contains(world, "古代") || strings.Contains(world, "古装"):
-			parts = append(parts, "中国古典人物肖像，符合故事时代与身份，禁止现代造型")
-		}
+		genre = strings.TrimSpace(project.Genre)
+		style = strings.TrimSpace(project.Style)
+		synopsis = strings.TrimSpace(project.Synopsis)
+	}
+	characterContext := strings.Join([]string{char.Role, char.Appearance, char.Trait, char.Background, char.WardrobeDetail}, " ")
+	world := strings.TrimSpace(genre + " " + synopsis + " " + characterContext)
+	isCultivation := strings.Contains(world, "修仙") || strings.Contains(world, "仙侠") || strings.Contains(world, "宗门") || strings.Contains(world, "灵气") || strings.ContainsAny(world, "狐妖魔仙灵")
+	isHistorical := strings.Contains(world, "武侠") || strings.Contains(world, "古代") || strings.Contains(world, "古装") || strings.Contains(world, "罗衣") || strings.Contains(world, "襦裙")
+	if genre != "" {
+		parts = append(parts, "项目题材："+genre+"，人物设计必须符合该题材的世界观、时代文化与视觉语汇")
+	} else if isCultivation {
+		parts = append(parts, "题材风格：古风仙侠与东方玄幻，人物设计必须符合修仙妖族世界观、中国古典时代文化与仙侠视觉语汇")
+	} else if isHistorical {
+		parts = append(parts, "题材风格：中国古典幻想，人物设计必须符合古代时代文化与东方视觉语汇")
+	}
+	if style != "" {
+		parts = append(parts, "项目画风："+style+"，成图必须保持该画风")
+	} else if isCultivation {
+		parts = append(parts, "画面风格：古风仙侠人物设定，东方幻想美学，禁止现代写真造型与现代服饰")
+	}
+	switch {
+	case isCultivation:
+		parts = append(parts, "中国古典修仙世界人物肖像，具有修仙者历经吐纳淬体后的沉稳精气神或妖族人物天生的灵气，并保持古典气韵与身份可信度，发式、衣襟、束带和材质符合中国古典修仙世界，禁止现代写真造型、现代发型和现代服饰")
+	case isHistorical:
+		parts = append(parts, "中国古典人物肖像，符合故事时代与身份，禁止现代造型")
 	}
 	role := strings.TrimSpace(char.Role)
 	if role != "" {
