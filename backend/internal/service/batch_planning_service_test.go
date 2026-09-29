@@ -5,6 +5,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+	"strings"
 	"testing"
 )
 
@@ -150,6 +151,23 @@ func TestCalculateRollingBatchPlan(t *testing.T) {
 		t.Fatal("expected minimum rejection")
 	}
 }
+func TestGenerateSnapshotRequiresApprovedMappingsAndScripts(t *testing.T) {
+	s := newTestBatchService(t)
+	s.provider = &mockTextProviderForTest{}
+	s.skills = NewSkillService(s.db)
+	batch, err := s.CreateBatch(1, BatchCreateInput{Title: "一", EpisodeStart: 1, EpisodeEnd: 5, ChapterStart: 1, ChapterEnd: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.db.Model(batch).Update("status", BatchStatusApproved)
+	for n := 1; n <= 5; n++ {
+		s.db.Create(&models.EpisodeAdaptation{ProjectID: 1, EpisodeN: n, BatchID: &batch.ID, Status: "approved"})
+	}
+	if _, err := s.GenerateSnapshot(1, batch.ID); err == nil || !strings.Contains(err.Error(), "尚缺") {
+		t.Fatalf("missing scripts were not explained: %v", err)
+	}
+}
+
 func TestRollingStateSnapshotAndClueLifecycle(t *testing.T) {
 	s := newTestBatchService(t)
 	batch, _ := s.CreateBatch(1, BatchCreateInput{Title: "一", EpisodeStart: 1, EpisodeEnd: 5, ChapterStart: 1, ChapterEnd: 5})

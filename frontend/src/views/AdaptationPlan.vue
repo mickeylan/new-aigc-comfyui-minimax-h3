@@ -34,7 +34,7 @@
     </section>
 
     <section>
-      <div class="section-head"><div><h2>规划批次</h2><p class="sub">顺序：生成方案 → 生成并审核批次状态快照 → 审核通过并应用Episode → 逐集生成剧本。未完成前置步骤时，点击按钮会显示具体原因。</p></div></div>
+      <div class="section-head"><div><h2>规划批次</h2><p class="sub">顺序：生成方案 → 审核并应用Episode映射 → 逐集生成剧本 → 生成并审核批次结束快照 → 推进下一窗口。</p></div></div>
       <div v-if="!batches.length" class="card empty">尚未创建批次。</div>
       <article v-for="batch in batches" :key="batch.id" class="card batch" :class="`status-${batch.status}`">
         <header><div><h3>批次{{batch.batch_no}} · {{batch.title}}</h3><p>第{{batch.episode_start}}–{{batch.episode_end}}集 · 原文章节{{batch.chapter_start}}–{{batch.chapter_end}} · 故事弧{{batch.arc_range || '自动匹配'}}</p></div><span class="badge">{{ statusLabel(batch.status) }}</span></header>
@@ -42,8 +42,8 @@
         <div v-if="generating === batch.id" class="progress"><div><strong>AI正在生成本批分集映射</strong><span>{{elapsed}}秒</span></div><div class="track"><span :style="{width:progress+'%'}"></span></div><small>正在加载故事圣经、故事弧、章节分析和上一批结束状态，并校验集数连续性。</small></div>
         <div class="actions">
           <button type="button" class="btn btn-sm" :disabled="generating===batch.id || batch.status==='approved' || batch.status==='produced'" @click.stop="generate(batch)">{{generating===batch.id?'正在生成…':(batch.status==='review'?'重新生成草稿':'生成本批方案')}}</button>
-          <button class="btn btn-sm btn-secondary" :disabled="busy || batch.status!=='review'" @click="generateSnapshot(batch)">生成批次状态快照</button>
-          <button class="btn btn-sm btn-secondary" :disabled="busy || batch.status!=='review'" @click="review(batch,'approve')">审核通过并应用Episode</button>
+          <button class="btn btn-sm btn-secondary" :disabled="busy || (batch.status!=='approved' && batch.status!=='produced')" :title="batch.status==='review'?'先审核并应用Episode映射，生成剧本后再制作批次结束快照':''" @click="generateSnapshot(batch)">生成批次结束快照</button>
+          <button class="btn btn-sm btn-secondary" :disabled="busy || batch.status!=='review'" @click="review(batch,'approve')">审核方案并应用Episode</button>
           <button class="btn btn-sm btn-ghost" :disabled="busy || batch.status!=='review'" @click="review(batch,'reject')">退回修改</button>
           <button class="btn btn-sm btn-ghost" @click="toggleDetail(batch)">{{detail?.batch?.id===batch.id?'收起':'查看分集'}}</button>
         </div>
@@ -52,7 +52,7 @@
             <div><input v-model="ep.title" class="input"><span>第{{ep.episode_n}}集 · 章节{{ep.chapter_start}}–{{ep.chapter_end}} · {{episodeStatusLabel(ep.status)}}</span></div>
             <textarea v-model="ep.adaptation_goal" class="textarea" rows="2" placeholder="本集改编目标"></textarea>
             <div class="state-grid"><label>开始状态<textarea v-model="ep.opening_state" class="textarea" rows="2"></textarea></label><label>结束状态<textarea v-model="ep.ending_state" class="textarea" rows="2"></textarea></label><label>结尾钩子<textarea v-model="ep.hook" class="textarea" rows="2"></textarea></label></div>
-            <div class="actions"><button class="btn btn-xs btn-secondary" :disabled="batch.status==='approved'||busy" @click="saveEpisode(ep)">保存映射</button><button type="button" class="btn btn-xs" :class="{'btn-secondary':ep.status!=='approved'}" :disabled="busy" :title="episodeScriptHint(ep)" @click="script(ep)">生成本集剧本</button><router-link class="btn btn-xs btn-ghost" :to="`/projects/${id}/episodes/${ep.episode_n}/screenplay`">结构化编辑</router-link></div>
+            <div class="actions"><button class="btn btn-xs btn-secondary" :disabled="batch.status==='approved'||busy" @click="saveEpisode(ep)">保存映射</button><button type="button" class="btn btn-xs" :class="{'btn-secondary':ep.status!=='approved'}" :disabled="busy" :title="episodeScriptHint(ep)" @click="script(ep)">生成本集剧本</button><button v-if="ep.status==='scripted'" type="button" class="btn btn-xs btn-secondary" :disabled="busy" @click="reviewEpisode(ep)">连续性复审</button><router-link class="btn btn-xs btn-ghost" :to="`/projects/${id}/episodes/${ep.episode_n}/screenplay`">结构化编辑</router-link></div>
           </article>
           <section v-if="snapshot?.batch_id===batch.id" class="snapshot-editor">
             <h4>批次结束状态快照 <span class="badge">{{snapshot.status}}</span></h4>
@@ -80,7 +80,7 @@ const batchCount=computed(()=>Number(form.episode_end)-Number(form.episode_start
 const approvedEnd=computed(()=>Math.max(0,...batches.value.filter(v=>v.status==='approved'||v.status==='produced').map(v=>v.episode_end)))
 const statusLabel=s=>({draft:'待生成',generating:'生成中',review:'待审核',approved:'已审核',produced:'已生产',cancelled:'已取消'}[s]||s)
 const episodeStatusLabel=s=>({draft:'映射待审核',approved:'映射已审核',scripted:'剧本已生成',reviewed:'连续性已通过'}[s]||s)
-const episodeScriptHint=ep=>ep.status==='approved'?'生成本集剧本':'需先生成并审核批次状态快照，再点击“审核通过并应用Episode”'
+const episodeScriptHint=ep=>ep.status==='approved'?'生成本集剧本':'需先点击批次上的“审核方案并应用Episode”'
 async function load(){try{const [p,a,b]=await Promise.all([api.project(id),api.novelArcs(id),api.planningBatches(id)]);project.value=p.data.project||p.data;arcs.value=a.data.arcs||a.data||[];batches.value=b.data.batches||[];totalTarget.value=b.data.total_episode_target||0;if(!form.title){form.episode_start=nextStart.value;form.episode_end=nextStart.value+9;form.title=`第${batches.value.length+1}批`}}catch(e){error.value=e.response?.data?.error||e.message}}
 async function run(fn){busy.value=true;error.value='';try{await fn();await load()}catch(e){error.value=e.response?.data?.error||e.message}finally{busy.value=false}}
 const createBatch=()=>run(async()=>{await api.createPlanningBatch(id,{...form});form.title='';detail.value=null})
@@ -99,12 +99,17 @@ async function generateSnapshot(batch){await run(async()=>{snapshot.value=(await
 const saveSnapshot=batch=>run(async()=>{snapshot.value=(await api.saveBatchSnapshot(id,batch.id,{character_states_json:snapshot.value.character_states_json,relationships_json:snapshot.value.relationships_json,world_state_json:snapshot.value.world_state_json,clue_state_json:snapshot.value.clue_state_json})).data})
 async function approveSnapshot(batch){const override=window.prompt('连续性不一致时的人工覆盖理由（无则留空）','');if(override===null)return;await run(async()=>{snapshot.value=(await api.reviewBatchSnapshot(id,batch.id,true,override)).data})}
 async function copyError(){try{await navigator.clipboard.writeText(error.value)}catch{window.prompt('复制错误信息',error.value)}}
+async function reviewEpisode(ep){
+  const override=window.prompt('连续性冲突时的人工覆盖理由（无则留空）','')
+  if(override===null)return
+  await run(async()=>{await api.reviewAdaptation(id,ep.episode_n,override);detail.value=(await api.planningBatch(id,ep.batch_id)).data})
+}
 function script(ep){
   if(ep.status!=='approved'){
-    error.value=`第${ep.episode_n}集映射尚未审核。请先生成并审核批次状态快照，再点击“审核通过并应用Episode”。`
+    error.value=`第${ep.episode_n}集映射尚未审核。请先点击当前批次上的“审核方案并应用Episode”。`
     return
   }
-  return run(()=>api.generateAdaptationScript(id,ep.episode_n))
+  return run(async()=>{await api.generateAdaptationScript(id,ep.episode_n);detail.value=(await api.planningBatch(id,ep.batch_id)).data})
 }
 onMounted(load);onBeforeUnmount(()=>clearInterval(timer))
 </script>

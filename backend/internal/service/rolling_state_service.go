@@ -73,8 +73,17 @@ func (s *BatchPlanningService) GenerateSnapshot(projectID, batchID uint) (*model
 	if err != nil {
 		return nil, err
 	}
-	if detail.Batch.Status != BatchStatusReview && detail.Batch.Status != BatchStatusApproved {
-		return nil, fmt.Errorf("请先生成批次分集草稿")
+	if detail.Batch.Status != BatchStatusApproved && detail.Batch.Status != BatchStatusProduced {
+		return nil, fmt.Errorf("请先审核批次方案并应用Episode映射")
+	}
+	missingScripts := make([]string, 0)
+	for _, episode := range detail.Episodes {
+		if strings.TrimSpace(episode.Script) == "" {
+			missingScripts = append(missingScripts, fmt.Sprintf("第%d集", episode.EpisodeN))
+		}
+	}
+	if len(missingScripts) > 0 {
+		return nil, fmt.Errorf("请先生成本批全部剧本，尚缺：%s", strings.Join(missingScripts, "、"))
 	}
 	var bible models.StoryBible
 	if err = s.db.Where("project_id = ? AND status = ?", projectID, "approved").First(&bible).Error; err != nil {
