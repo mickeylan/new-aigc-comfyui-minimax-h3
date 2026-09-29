@@ -195,6 +195,29 @@ func parseArcNumbers(raw string) []int {
 	return out
 }
 
+func fillEpisodeSourceChapterIDs(ep *models.EpisodeAdaptation, chapters []models.Chapter) error {
+	var ids []uint
+	if strings.TrimSpace(ep.SourceChapterIDs) != "" && json.Unmarshal([]byte(ep.SourceChapterIDs), &ids) == nil && len(ids) > 0 {
+		return nil
+	}
+	if ep.ChapterStart < 1 || ep.ChapterEnd < ep.ChapterStart {
+		return fmt.Errorf("invalid chapter range")
+	}
+	ids = ids[:0]
+	for _, chapter := range chapters {
+		if chapter.Order >= ep.ChapterStart && chapter.Order <= ep.ChapterEnd {
+			ids = append(ids, chapter.ID)
+		}
+	}
+	expected := ep.ChapterEnd - ep.ChapterStart + 1
+	if len(ids) != expected {
+		return fmt.Errorf("chapter range %d-%d is not fully covered by ready source chapters", ep.ChapterStart, ep.ChapterEnd)
+	}
+	raw, _ := json.Marshal(ids)
+	ep.SourceChapterIDs = string(raw)
+	return nil
+}
+
 func normalizeAdaptationJSONWithRepair(provider TextProvider, raw string) (string, string, error) {
 	normalized, parseErr := normalizeAdaptationJSON(raw)
 	if parseErr == nil {
@@ -247,8 +270,16 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 	if err := s.db.Where("project_id = ? AND chapter_order BETWEEN ? AND ? AND analysis_status = ?", projectID, batch.ChapterStart, batch.ChapterEnd, "ready").Order("chapter_order").Find(&chapters).Error; err != nil {
 		return nil, err
 	}
-	if len(chapters) == 0 && !outlineMode {
-		return nil, fmt.Errorf("所选章节尚无已完成分析")
+	if !outlineMode {
+		expected := batch.ChapterEnd - batch.ChapterStart + 1
+		if len(chapters) != expected {
+			return nil, fmt.Errorf("所选章节尚未全部完成分析：需要%d章，当前仅%d章ready", expected, len(chapters))
+		}
+		for _, chapter := range chapters {
+			if chapter.AnalysisHash == "" || chapter.AnalysisHash != chapter.ContentHash {
+				return nil, fmt.Errorf("第%d章分析已过期，请重新分析后再生成批次方案", chapter.Order)
+			}
+		}
 	}
 	var arcs []models.StoryArc
 	arcNos := parseArcNumbers(batch.ArcRange)
@@ -277,10 +308,14 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 	}
 	var openClues []models.StoryClue
 	_ = s.db.Where("project_id = ? AND status IN ?", projectID, []string{"open", "developing"}).Order("clue_key").Find(&openClues).Error
-	input := map[string]any{"batch": batch, "story_bible": bible, "story_arcs": arcs, "chapter_analyses": chapters, "previous_ending_state": previous.EndingState, "previous_state_snapshot": previousSnapshot, "open_clues": openClues, "required_episode_start": batch.EpisodeStart, "required_episode_end": batch.EpisodeEnd, "required_episode_count": batch.EpisodeCount}
+	chapterIDByOrder := map[int]uint{}
+	for _, chapter := range chapters {
+		chapterIDByOrder[chapter.Order] = chapter.ID
+	}
+	input := map[string]any{"batch": batch, "story_bible": bible, "story_arcs": arcs, "chapter_analyses": chapters, "chapter_id_by_order": chapterIDByOrder, "previous_ending_state": previous.EndingState, "previous_state_snapshot": previousSnapshot, "open_clues": openClues, "required_episode_start": batch.EpisodeStart, "required_episode_end": batch.EpisodeEnd, "required_episode_count": batch.EpisodeCount}
 	payload, _ := json.Marshal(input)
 	_ = s.db.Model(batch).Updates(map[string]any{"status": BatchStatusGenerating, "error": "", "generation": gorm.Expr("generation + 1")}).Error
-	system := fmt.Sprintf("你是长篇故事滚动规划师。只输出JSON对象 {\"summary\":\"批次摘要\",\"episodes\":[EpisodeAdaptation字段]}。必须精确生成%d集，集号从%d连续到%d；每集必须含title、chapter_start、chapter_end、source_chapter_ids(JSON数组)、adaptation_goal、opening_state、ending_state、hook、target_duration(默认180)、target_scenes(默认25)。不得重写已完成批次，必须承接previous_ending_state。", batch.EpisodeCount, batch.EpisodeStart, batch.EpisodeEnd)
+	system := fmt.Sprintf("你是长篇故事滚动规划师。只输出JSON对象 {\"summary\":\"批次摘要\",\"episodes\":[EpisodeAdaptation字段]}。必须精确生成%d集，集号从%d连续到%d；每集必须含title、chapter_start、chapter_end、source_chapter_ids(必须使用chapter_id_by_order中的数据库ID组成非空JSON数组；不得填写章节序号)、adaptation_goal、opening_state、ending_state、hook、target_duration(默认180)、target_scenes(默认25)。不得重写已完成批次，必须承接previous_ending_state。", batch.EpisodeCount, batch.EpisodeStart, batch.EpisodeEnd)
 	if outlineMode {
 		system += " 当前项目来自故事梗概而非小说章节；source_chapter_ids固定输出空数组[]，chapter_start和chapter_end可使用0。"
 	}
@@ -326,8 +361,13 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 			if ep.TargetDuration < 162 || ep.TargetDuration > 198 || ep.TargetScenes < 20 || ep.TargetScenes > 30 {
 				return nil, fmt.Errorf("第%d集: 时长或镜头数超出范围", ep.EpisodeN)
 			}
-		} else if err := validateAdaptation(ep); err != nil {
-			return nil, fmt.Errorf("第%d集: %w", ep.EpisodeN, err)
+		} else {
+			if err := fillEpisodeSourceChapterIDs(ep, chapters); err != nil {
+				return nil, fmt.Errorf("第%d集: %w", ep.EpisodeN, err)
+			}
+			if err := validateAdaptation(ep); err != nil {
+				return nil, fmt.Errorf("第%d集: %w", ep.EpisodeN, err)
+			}
 		}
 		ep.Status = "draft"
 		ep.Version = 1

@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"comfyui-console/internal/models"
 )
 
 type adaptationRepairProvider struct {
@@ -36,6 +38,27 @@ func TestNormalizeAdaptationJSONRepairsSyntaxOnce(t *testing.T) {
 	}
 	if !strings.Contains(provider.system, "不得改写") || !strings.Contains(provider.user, "invalid character") {
 		t.Fatalf("repair was not constrained: %q / %q", provider.system, provider.user)
+	}
+}
+
+func TestFillEpisodeSourceChapterIDsFromChapterRange(t *testing.T) {
+	ep := models.EpisodeAdaptation{ChapterStart: 2, ChapterEnd: 3, SourceChapterIDs: "[]"}
+	chapters := []models.Chapter{{ID: 101, Order: 1}, {ID: 205, Order: 2}, {ID: 309, Order: 3}}
+	if err := fillEpisodeSourceChapterIDs(&ep, chapters); err != nil {
+		t.Fatal(err)
+	}
+	if ep.SourceChapterIDs != `[205,309]` {
+		t.Fatalf("source ids=%s", ep.SourceChapterIDs)
+	}
+}
+
+func TestFillEpisodeSourceChapterIDsPreservesValidModelIDs(t *testing.T) {
+	ep := models.EpisodeAdaptation{ChapterStart: 2, ChapterEnd: 3, SourceChapterIDs: `[205]`}
+	if err := fillEpisodeSourceChapterIDs(&ep, []models.Chapter{{ID: 205, Order: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	if ep.SourceChapterIDs != `[205]` {
+		t.Fatalf("valid ids changed: %s", ep.SourceChapterIDs)
 	}
 }
 
