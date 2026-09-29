@@ -169,6 +169,13 @@ func TestUpdateProfileAllowsClearingAndResetsApproval(t *testing.T) {
 	}
 }
 
+func TestValidateCharacterProfileAllowsOptionalRole(t *testing.T) {
+	char := &models.Character{Name: "无明确身份角色", Appearance: "青年女性，黑色长发，清晰五官", Personality: "冷静", Background: "暂未揭示", Relationships: "暂无", Emotions: "克制", Habits: "轻敲桌面", WardrobeDetail: "深色长衫与布靴", LightingMood: "柔和侧光", ColorPalette: "深蓝灰", ReferencePrompt: "单人正面大头贴"}
+	if err := validateCharacterProfile(char); err != nil {
+		t.Fatalf("optional role blocked review: %v", err)
+	}
+}
+
 func TestGenerateProfileClearsDerivedState(t *testing.T) {
 	ps := newTestProjectService(t)
 	provider := &stubTextProvider{response: `{"name":"林夏","role":"女主","appearance":"新外貌","personality":"坚韧","background":"背景","relationships":"关系","emotions":"克制","habits":"握项链","wardrobe_detail":"白风衣","lighting_mood":"柔光","color_palette":"白灰"}`}

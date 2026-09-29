@@ -700,7 +700,7 @@
             <input v-model="charForm.name" class="input" placeholder="如：林夏" />
           </div>
           <div class="field">
-            <label>身份 <span class="optional">可选</span></label>
+            <label>身份定位 <span class="optional">可选，不影响档案审核</span></label>
             <input v-model="charForm.role" class="input" placeholder="主角 / 女主 / 反派 / 配角…" />
           </div>
           <div class="field">

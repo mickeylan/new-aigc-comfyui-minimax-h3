@@ -312,7 +312,7 @@ func normalizePortraitStyle(prompt string, project *models.Project) string {
 func validateCharacterProfile(char *models.Character) error {
 	missing := make([]string, 0, 10)
 	for label, value := range map[string]string{
-		"角色名": char.Name, "身份": char.Role, "外貌描述": char.Appearance, "性格特点": char.Personality,
+		"角色名": char.Name, "外貌描述": char.Appearance, "性格特点": char.Personality,
 		"背景故事": char.Background, "关系图谱": char.Relationships, "情绪表达": char.Emotions,
 		"习惯动作": char.Habits, "服装细节": char.WardrobeDetail, "光影氛围": char.LightingMood, "角色色调": char.ColorPalette,
 	} {
@@ -417,8 +417,7 @@ func parseCharacterProfileJSON(raw string) (*characterProfileResult, error) {
 	}
 
 	// 档案必须足以支撑人物一致性与后续参考像生成。
-	if strings.TrimSpace(result.Name) == "" || strings.TrimSpace(result.Role) == "" ||
-		strings.TrimSpace(result.Appearance) == "" || strings.TrimSpace(result.Personality) == "" ||
+	if strings.TrimSpace(result.Name) == "" || strings.TrimSpace(result.Appearance) == "" || strings.TrimSpace(result.Personality) == "" ||
 		strings.TrimSpace(result.Background) == "" || strings.TrimSpace(result.Relationships) == "" ||
 		strings.TrimSpace(result.Emotions) == "" || strings.TrimSpace(result.Habits) == "" ||
 		strings.TrimSpace(result.WardrobeDetail) == "" || strings.TrimSpace(result.LightingMood) == "" ||
