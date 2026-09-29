@@ -35,10 +35,17 @@ func NewNovelAnalysisService(db *gorm.DB, provider TextProvider, skills *SkillSe
 
 func (s *NovelAnalysisService) RecoverInterruptedJobs() error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&models.NovelJob{}).Where("status = ?", "running").Updates(map[string]any{"status": "pending", "error": "interrupted; retry to resume"}).Error; err != nil {
+		now := time.Now()
+		// Novel jobs execute in-process and there is no persistent worker that can
+		// resume queued work after a restart. Keeping them pending permanently blocks
+		// new jobs, so interrupted work must become explicitly retryable instead.
+		if err := tx.Model(&models.NovelJob{}).Where("status IN ?", []string{"pending", "running"}).Updates(map[string]any{"status": "failed", "error": "interrupted by service restart; retry to resume", "finished_at": &now}).Error; err != nil {
 			return err
 		}
-		return tx.Model(&models.Chapter{}).Where("analysis_status = ?", "running").Update("analysis_status", "pending").Error
+		if err := tx.Model(&models.Chapter{}).Where("analysis_status = ?", "running").Update("analysis_status", "pending").Error; err != nil {
+			return err
+		}
+		return tx.Model(&models.AnalysisWindow{}).Where("status = ?", models.WindowStatusAnalysing).Updates(map[string]any{"status": models.WindowStatusPending, "summary": "analysis interrupted by service restart; retry to resume"}).Error
 	})
 }
 
@@ -65,13 +72,6 @@ func parseJSONObject(raw string, target any) error {
 }
 
 func (s *NovelAnalysisService) newJob(projectID uint, typ string, start, end, total int) (*models.NovelJob, error) {
-	var active int64
-	if err := s.db.Model(&models.NovelJob{}).Where("project_id = ? AND type = ? AND status IN ?", projectID, typ, []string{"pending", "running"}).Count(&active).Error; err != nil {
-		return nil, err
-	}
-	if active > 0 {
-		return nil, fmt.Errorf("a %s job is already active for this project", typ)
-	}
 	skill, err := s.skills.GetEffectiveSkill(projectID, typ)
 	if err != nil {
 		return nil, err
@@ -80,7 +80,22 @@ func (s *NovelAnalysisService) newJob(projectID uint, typ string, start, end, to
 	if skill != nil {
 		job.SkillID, job.SkillVersion = &skill.ID, skill.Version
 	}
-	return job, s.db.Create(job).Error
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		// Pending is an interrupted legacy state, not a live queue: no worker can
+		// consume it. Retire it so users can start or retry analysis immediately.
+		if err := tx.Model(&models.NovelJob{}).Where("project_id = ? AND type = ? AND status = ?", projectID, typ, "pending").Updates(map[string]any{"status": "failed", "error": "superseded by a new retry", "finished_at": time.Now()}).Error; err != nil {
+			return err
+		}
+		var active int64
+		if err := tx.Model(&models.NovelJob{}).Where("project_id = ? AND type = ? AND status = ?", projectID, typ, "running").Count(&active).Error; err != nil {
+			return err
+		}
+		if active > 0 {
+			return fmt.Errorf("a %s job is already active for this project", typ)
+		}
+		return tx.Create(job).Error
+	})
+	return job, err
 }
 
 func (s *NovelAnalysisService) finishJob(job *models.NovelJob, failed int) error {
