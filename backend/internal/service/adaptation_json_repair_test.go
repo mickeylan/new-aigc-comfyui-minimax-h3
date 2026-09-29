@@ -41,6 +41,24 @@ func TestNormalizeAdaptationJSONRepairsSyntaxOnce(t *testing.T) {
 	}
 }
 
+func TestConstrainEpisodeChapterRangeToBatch(t *testing.T) {
+	batch := models.PlanningBatch{ChapterStart: 1, ChapterEnd: 8}
+	ep := models.EpisodeAdaptation{EpisodeN: 9, ChapterStart: 9, ChapterEnd: 9}
+	constrainEpisodeChapterRange(&ep, &batch)
+	if ep.ChapterStart != 8 || ep.ChapterEnd != 8 {
+		t.Fatalf("range not constrained: %+v", ep)
+	}
+}
+
+func TestConstrainEpisodeChapterRangeKeepsValidRange(t *testing.T) {
+	batch := models.PlanningBatch{ChapterStart: 1, ChapterEnd: 8}
+	ep := models.EpisodeAdaptation{ChapterStart: 3, ChapterEnd: 5}
+	constrainEpisodeChapterRange(&ep, &batch)
+	if ep.ChapterStart != 3 || ep.ChapterEnd != 5 {
+		t.Fatalf("valid range changed: %+v", ep)
+	}
+}
+
 func TestFillEpisodeSourceChapterIDsFromChapterRange(t *testing.T) {
 	ep := models.EpisodeAdaptation{ChapterStart: 2, ChapterEnd: 3, SourceChapterIDs: "[]"}
 	chapters := []models.Chapter{{ID: 101, Order: 1}, {ID: 205, Order: 2}, {ID: 309, Order: 3}}

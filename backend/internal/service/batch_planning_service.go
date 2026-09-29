@@ -195,6 +195,27 @@ func parseArcNumbers(raw string) []int {
 	return out
 }
 
+func constrainEpisodeChapterRange(ep *models.EpisodeAdaptation, batch *models.PlanningBatch) {
+	// Models sometimes confuse episode numbers with chapter numbers (for example,
+	// episode 9 -> chapter 9 in a batch that only covers chapters 1-8). Keep the
+	// narrative mapping but clamp provenance to the user-selected source window.
+	if ep.ChapterStart < batch.ChapterStart {
+		ep.ChapterStart = batch.ChapterStart
+	}
+	if ep.ChapterStart > batch.ChapterEnd {
+		ep.ChapterStart = batch.ChapterEnd
+	}
+	if ep.ChapterEnd < batch.ChapterStart {
+		ep.ChapterEnd = batch.ChapterStart
+	}
+	if ep.ChapterEnd > batch.ChapterEnd {
+		ep.ChapterEnd = batch.ChapterEnd
+	}
+	if ep.ChapterEnd < ep.ChapterStart {
+		ep.ChapterEnd = ep.ChapterStart
+	}
+}
+
 func fillEpisodeSourceChapterIDs(ep *models.EpisodeAdaptation, chapters []models.Chapter) error {
 	if ep.ChapterStart < 1 || ep.ChapterEnd < ep.ChapterStart {
 		return fmt.Errorf("invalid chapter range")
@@ -314,7 +335,7 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 	input := map[string]any{"batch": batch, "story_bible": bible, "story_arcs": arcs, "chapter_analyses": chapters, "chapter_id_by_order": chapterIDByOrder, "previous_ending_state": previous.EndingState, "previous_state_snapshot": previousSnapshot, "open_clues": openClues, "required_episode_start": batch.EpisodeStart, "required_episode_end": batch.EpisodeEnd, "required_episode_count": batch.EpisodeCount}
 	payload, _ := json.Marshal(input)
 	_ = s.db.Model(batch).Updates(map[string]any{"status": BatchStatusGenerating, "error": "", "generation": gorm.Expr("generation + 1")}).Error
-	system := fmt.Sprintf("你是长篇故事滚动规划师。只输出JSON对象 {\"summary\":\"批次摘要\",\"episodes\":[EpisodeAdaptation字段]}。必须精确生成%d集，集号从%d连续到%d；每集必须含title、chapter_start、chapter_end、source_chapter_ids(必须使用chapter_id_by_order中的数据库ID组成非空JSON数组；不得填写章节序号)、adaptation_goal、opening_state、ending_state、hook、target_duration(默认180)、target_scenes(默认25)。不得重写已完成批次，必须承接previous_ending_state。", batch.EpisodeCount, batch.EpisodeStart, batch.EpisodeEnd)
+	system := fmt.Sprintf("你是长篇故事滚动规划师。只输出JSON对象 {\"summary\":\"批次摘要\",\"episodes\":[EpisodeAdaptation字段]}。必须精确生成%d集，集号从%d连续到%d；每集必须含title、chapter_start、chapter_end、source_chapter_ids(必须使用chapter_id_by_order中的数据库ID组成非空JSON数组；不得填写章节序号)、adaptation_goal、opening_state、ending_state、hook、target_duration(默认180)、target_scenes(默认25)。每集chapter_start和chapter_end必须位于本批次原文章节%d至%d内；集数可以多于章节数，此时允许相邻多集引用同一章，绝不可把集号当成章节号。不得重写已完成批次，必须承接previous_ending_state。", batch.EpisodeCount, batch.EpisodeStart, batch.EpisodeEnd, batch.ChapterStart, batch.ChapterEnd)
 	if outlineMode {
 		system += " 当前项目来自故事梗概而非小说章节；source_chapter_ids固定输出空数组[]，chapter_start和chapter_end可使用0。"
 	}
@@ -361,6 +382,7 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 				return nil, fmt.Errorf("第%d集: 时长或镜头数超出范围", ep.EpisodeN)
 			}
 		} else {
+			constrainEpisodeChapterRange(ep, batch)
 			if err := fillEpisodeSourceChapterIDs(ep, chapters); err != nil {
 				return nil, fmt.Errorf("第%d集: %w", ep.EpisodeN, err)
 			}
