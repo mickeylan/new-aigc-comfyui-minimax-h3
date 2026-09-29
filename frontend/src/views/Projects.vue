@@ -87,6 +87,7 @@
         <div class="project-foot">
           <span v-if="item.project.style" class="tag">{{ item.project.style }}</span>
           <span v-if="item.project.genre" class="tag tag-gray">{{ item.project.genre }}</span>
+          <button class="btn btn-sm btn-danger project-delete" :disabled="deletingId === item.project.id" @click.stop="removeProject(item.project)">{{ deletingId === item.project.id ? '删除中…' : '删除' }}</button>
           <span class="go" aria-hidden="true"><span>→</span></span>
         </div>
       </article>
@@ -125,6 +126,7 @@ const projects = ref([])
 const loading = ref(true)
 const initialized = ref(false)
 const videoAlert = ref([])
+const deletingId = ref(null)
 const prevReady = new Map()
 let pollTimer = null
 
@@ -178,6 +180,20 @@ function openCreate() {
 
 function openProject(id) {
   router.push(`/projects/${id}`)
+}
+
+async function removeProject(project) {
+  if (!window.confirm(`确定删除项目「${project.title}」？项目数据及项目目录中的生成文件将被删除，此操作不可恢复。`)) return
+  deletingId.value = project.id
+  try {
+    await api.deleteProject(project.id)
+    prevReady.delete(project.id)
+    await load()
+  } catch (e) {
+    window.alert('删除项目失败：' + (e.response?.data?.error || e.message || '未知错误'))
+  } finally {
+    deletingId.value = null
+  }
 }
 
 function formatTime(value) {

@@ -108,7 +108,8 @@ func (s *Service) HandleListProjects(c *gin.Context) {
 func (s *Service) HandleCreateProject(c *gin.Context) {
 	var req struct {
 		models.Project
-		SourceType string `json:"source_type"` // outline(默认)/novel
+		SourceType  string `json:"source_type"` // outline(默认)/novel
+		CreateToken string `json:"create_token"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": "参数错误"})
@@ -117,6 +118,9 @@ func (s *Service) HandleCreateProject(c *gin.Context) {
 	if req.Synopsis == "" {
 		c.JSON(400, gin.H{"error": "请填写故事创意"})
 		return
+	}
+	if token := strings.TrimSpace(req.CreateToken); token != "" {
+		req.Project.CreateToken = &token
 	}
 	// 设置来源类型（默认梗概）
 	if req.SourceType == "novel" {

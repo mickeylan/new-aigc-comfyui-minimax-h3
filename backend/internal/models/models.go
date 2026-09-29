@@ -131,6 +131,7 @@ const (
 // Project 漫剧项目：选题 → 创作方案 → 剧本 → 分镜画面 → 视频 → 合并成片
 type Project struct {
 	ID              uint              `gorm:"primaryKey" json:"id"`
+	CreateToken     *string           `gorm:"column:create_token;size:64;uniqueIndex" json:"-"`
 	Title           string            `json:"title"`
 	SourceType      ProjectSourceType `gorm:"column:source_type;default:outline" json:"source_type"` // 项目来源类型：outline(梗概)/novel(小说改编)
 	Genre           string            `json:"genre"`                                                 // 题材（可选，支持组合如"科幻+悬疑"）

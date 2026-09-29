@@ -17,7 +17,8 @@ import (
 // HandleCreateNovelProject 创建小说改编项目
 func (s *Service) HandleCreateNovelProject(c *gin.Context) {
 	var req struct {
-		Title string `json:"title"`
+		Title       string `json:"title"`
+		CreateToken string `json:"create_token"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": "参数错误"})
@@ -34,11 +35,15 @@ func (s *Service) HandleCreateNovelProject(c *gin.Context) {
 		AspectRatio:  "16:9",
 		ImportStatus: models.NovelImportPending,
 	}
-	if err := s.DB.Create(&p).Error; err != nil {
+	if token := strings.TrimSpace(req.CreateToken); token != "" {
+		p.CreateToken = &token
+	}
+	created, err := s.Projects.CreateProject(p)
+	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(200, p)
+	c.JSON(200, created)
 }
 
 const maxNovelUploadBytes int64 = 20 << 20

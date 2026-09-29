@@ -84,6 +84,16 @@ func (s *ProjectService) applyPromptSkill(projectID uint, stage, prompt string, 
 
 // CreateProject 创建项目（仅记录创意，剧本待生成）
 func (s *ProjectService) CreateProject(p models.Project) (*models.Project, error) {
+	if p.CreateToken != nil && strings.TrimSpace(*p.CreateToken) != "" {
+		var existing models.Project
+		if err := s.db.Where("create_token = ?", strings.TrimSpace(*p.CreateToken)).First(&existing).Error; err == nil {
+			return &existing, nil
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+		token := strings.TrimSpace(*p.CreateToken)
+		p.CreateToken = &token
+	}
 	if p.Episodes < 0 || p.Episodes > 100000 {
 		return nil, fmt.Errorf("全剧预计集数必须在 1 到 100000 之间")
 	}
@@ -100,6 +110,12 @@ func (s *ProjectService) CreateProject(p models.Project) (*models.Project, error
 		p.SourceType = models.ProjectSourceOutline // 默认梗概项目
 	}
 	if err := s.db.Create(&p).Error; err != nil {
+		if p.CreateToken != nil {
+			var existing models.Project
+			if lookupErr := s.db.Where("create_token = ?", *p.CreateToken).First(&existing).Error; lookupErr == nil {
+				return &existing, nil
+			}
+		}
 		return nil, err
 	}
 	return &p, nil
@@ -233,6 +249,52 @@ func (s *ProjectService) DeleteProject(id uint) error {
 	s.db.Where("project_id = ?", id).Find(&scenesForCleanup)
 	s.db.Where("project_id = ?", id).Find(&mergesForCleanup)
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		// New production tables carry foreign keys to scenes, shots, characters, looks,
+		// outfits and adaptation batches. Remove those leaves first so project deletion
+		// remains valid as the schema grows.
+		sceneIDsQuery := tx.Model(&models.Scene{}).Select("id").Where("project_id = ?", id)
+		shotIDs := tx.Model(&models.Shot{}).Select("id").Where("scene_id IN (?)", sceneIDsQuery)
+		lookIDs := tx.Model(&models.CharacterLook{}).Select("id").Where("project_id = ?", id)
+		outfitIDs := tx.Model(&models.CharacterOutfit{}).Select("id").Where("project_id = ?", id)
+		batchIDs := tx.Model(&models.PlanningBatch{}).Select("id").Where("project_id = ?", id)
+		adaptIDs := tx.Model(&models.EpisodeAdaptation{}).Select("id").Where("project_id = ?", id)
+		for _, deletion := range []struct {
+			model any
+			query string
+			args  []any
+		}{
+			{&models.ShotCharacterLook{}, "shot_id IN (?)", []any{shotIDs}},
+			{&models.ShotCharacterOutfit{}, "shot_id IN (?)", []any{shotIDs}},
+			{&models.SceneCharacterLook{}, "scene_id IN (?)", []any{sceneIDsQuery}},
+			{&models.SceneCharacterOutfit{}, "scene_id IN (?)", []any{sceneIDsQuery}},
+			{&models.CharacterOutfitLook{}, "outfit_id IN (?) OR look_id IN (?)", []any{outfitIDs, lookIDs}},
+			{&models.BatchEpisode{}, "batch_id IN (?) OR episode_adapt_id IN (?)", []any{batchIDs, adaptIDs}},
+		} {
+			if err := tx.Where(deletion.query, deletion.args...).Delete(deletion.model).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Model(&models.ScriptRevision{}).Where("project_id = ?", id).Update("source_revision_id", nil).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&models.PlanningBatch{}).Where("project_id = ?", id).Updates(map[string]any{"previous_batch_id": nil, "next_batch_id": nil}).Error; err != nil {
+			return err
+		}
+		for _, model := range []any{
+			&models.PromptPolicyOverride{}, &models.SharedAssetReference{}, &models.FrameCandidate{},
+			&models.GenerationCandidate{}, &models.AudioLayer{}, &models.CharacterMotionReference{},
+			&models.PromptVersion{}, &models.ScriptRevision{}, &models.BatchStateSnapshot{},
+			&models.StoryClue{}, &models.EpisodeAdaptation{},
+			&models.AdaptationStrategy{}, &models.PlanningBatch{}, &models.CharacterOutfit{},
+			&models.CharacterLook{}, &models.AssetVariant{}, &models.Episode{},
+		} {
+			if err := tx.Where("project_id = ?", id).Delete(model).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("scene_id IN (?)", sceneIDsQuery).Delete(&models.Shot{}).Error; err != nil {
+			return err
+		}
 		var scenes []models.Scene
 		if err := tx.Where("project_id = ?", id).Find(&scenes).Error; err != nil {
 			return err
@@ -2090,6 +2152,11 @@ func resolveH3VisualConflicts(value string) string {
 	if (strings.Contains(value, "摇摄") || strings.Contains(value, "摇移")) && (strings.Contains(value, "推进") || strings.Contains(value, "推近")) {
 		value = regexp.MustCompile(`(?:轻微|缓慢|小幅)?(?:摇摄|摇移)(?:跟随)?[，,、和与并再\s]*`).ReplaceAllString(value, "")
 	}
+	lower := strings.ToLower(value)
+	moving := strings.Contains(value, "推进") || strings.Contains(value, "推近") || strings.Contains(value, "后拉") || strings.Contains(value, "拉远") || strings.Contains(value, "跟随") || strings.Contains(value, "平移") || strings.Contains(lower, "pushes in") || strings.Contains(lower, "pulls out") || strings.Contains(lower, "tracking") || strings.Contains(lower, "camera moves")
+	if moving {
+		value = regexp.MustCompile(`(?i)(?:固定机位|镜头保持固定|摄影机保持静止|the camera (?:holds|remains) (?:a )?static(?: shot)?|static camera)[，,、；;.]?\s*`).ReplaceAllString(value, "")
+	}
 	value = h3LipPlaceholderPattern.ReplaceAllString(value, "")
 	value = h3TransitionMetadataPattern.ReplaceAllString(value, "")
 	value = strings.ReplaceAll(value, "手从握妹妹肩膀缓缓垂落", "原本向前抬起的手臂缓缓放下，自然垂落至身侧")
@@ -2532,6 +2599,16 @@ func enforceSilentListenerLips(body string) string {
 	return listeningLipMovementPattern.ReplaceAllString(body, "$1 lips remain completely closed while listening silently.")
 }
 
+func reconcileShotSpeechState(segment string, continuesFrom, continuesTo bool) string {
+	if continuesFrom {
+		segment = regexp.MustCompile(`(?i)\b(?:is |stands |sits )?(?:ready|prepares?) to speak[.,;]?\s*`).ReplaceAllString(segment, "")
+	}
+	if continuesTo {
+		segment = regexp.MustCompile(`(?i)\b(?:she|he|they|<Subject\s+[0-9]+>)?\s*(?:finishes|stops|has finished) speaking[.,;]?\s*`).ReplaceAllString(segment, "")
+	}
+	return strings.TrimSpace(segment)
+}
+
 func isCharacterSubjectTag(tag string, referenceLines []string) bool {
 	match := h3SubjectTagPattern.FindStringSubmatch(tag)
 	if len(match) != 2 {
@@ -2621,7 +2698,35 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 					seenSubject[tag] = true
 				}
 			}
-			byShot[i+1] = append(byShot[i+1], renderDialogueRange(d, speakerByID[d.ID], referenceLines, fragment, r.StartRune > 0, r.EndRune < len([]rune(groupText[key])), visible, visibleSubjects))
+			// Carryover is a cut-level relationship, not a property of an arbitrary
+			// fragment. Only contiguous ranges in distinct adjacent shots may emit it.
+			continuesFrom := false
+			if i > 0 {
+				for _, previous := range shots[i-1].DialogueRanges {
+					previousKey := previous.GroupKey
+					if previousKey == "" {
+						previousKey = fmt.Sprintf("dialogue:%d", previous.DialogueID)
+					}
+					if previousKey == key && previous.EndRune == r.StartRune {
+						continuesFrom = true
+						break
+					}
+				}
+			}
+			continuesTo := false
+			if i+1 < len(shots) {
+				for _, nextRange := range shots[i+1].DialogueRanges {
+					nextKey := nextRange.GroupKey
+					if nextKey == "" {
+						nextKey = fmt.Sprintf("dialogue:%d", nextRange.DialogueID)
+					}
+					if nextKey == key && r.EndRune == nextRange.StartRune {
+						continuesTo = true
+						break
+					}
+				}
+			}
+			byShot[i+1] = append(byShot[i+1], renderDialogueRange(d, speakerByID[d.ID], referenceLines, fragment, continuesFrom, continuesTo, visible, visibleSubjects))
 		}
 	}
 	matches := h3ShotMarkerPattern.FindAllStringSubmatchIndex(body, -1)
@@ -2640,8 +2745,15 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 		}
 		n, _ := strconv.Atoi(body[match[2]:match[3]])
 		segment := ensureVisibleDialogueSpeakers(strings.TrimRight(body[start:next], " \n\t"), requiredVisibleSpeakers[n])
+		lines := byShot[n]
+		continuesFrom, continuesTo := false, false
+		for _, line := range lines {
+			continuesFrom = continuesFrom || strings.Contains(line, "carry over from the previous shot")
+			continuesTo = continuesTo || strings.HasSuffix(line, "<scenetrans>")
+		}
+		segment = reconcileShotSpeechState(segment, continuesFrom, continuesTo)
 		out.WriteString(segment)
-		if lines := byShot[n]; len(lines) > 0 {
+		if len(lines) > 0 {
 			out.WriteString(" ")
 			out.WriteString(strings.Join(lines, " "))
 		}
@@ -3124,7 +3236,6 @@ func h3VisibleRetention(body string, retention []string) []string {
 		}
 		shots := visible[n]
 		if len(shots) == 0 {
-			out = append(out, fmt.Sprintf("<Subject %d>: weak_reference - %s", n, details))
 			continue
 		}
 		labels := make([]string, len(shots))
@@ -3242,10 +3353,13 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 			break
 		}
 	}
-	retention = h3VisibleRetention(body, retention)
 	validDialogues := validSceneDialogues(dubs)
 	soundscape := h3SoundscapeContract(len(validDialogues) > 0)
 	body = appendStructuredDialogue(body, validDialogues, referenceLines)
+	// Keep every submitted Picture binding in subject_definitions. A storyboard or
+	// identity anchor may constrain the opening even when its Subject tag is not
+	// repeated in the action prose. Retention remains limited to visible subjects.
+	retention = h3VisibleRetention(body, retention)
 	return "subject_definitions:\n" + strings.Join(definitions, "\n") +
 		"\n\nsummary:\n[reference generation] Generate a " + fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)) + "-second video from the defined references and shot timeline." +
 		"\n\nretention_analysis:\n" + strings.Join(retention, "\n") +

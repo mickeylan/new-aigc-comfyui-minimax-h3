@@ -2619,6 +2619,38 @@ func TestValidateDialogueSpeakerDoesNotGuessBlankCharacterAsNarration(t *testing
 	}
 }
 
+func TestExplicitDialogueRangesOnlyCarryAcrossDistinctAdjacentShots(t *testing.T) {
+	dub := models.Dialogue{ID: 1, Character: "林夏", SpeechType: "dialogue", Text: "甲乙丙丁"}
+	body := "[Shot 1] <Subject 1> is ready to speak and finishes speaking.\n[Shot 2] At 00:02.000, <Subject 1> is ready to speak and finishes speaking."
+	shots := []models.Shot{
+		{Order: 1, PromptSubject: "林夏", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "g", StartRune: 0, EndRune: 1}, {DialogueID: 1, GroupKey: "g", StartRune: 1, EndRune: 2}}},
+		{Order: 2, PromptSubject: "林夏", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "g", StartRune: 2, EndRune: 4}}},
+	}
+	got := appendStructuredDialogueToShots(body, []models.Dialogue{dub}, []string{"- <Picture 1>：角色「林夏」四视图"}, shots)
+	shot1 := got[:strings.Index(got, "[Shot 2]")]
+	shot2 := got[strings.Index(got, "[Shot 2]"):]
+	if strings.Count(shot1, "<scenetrans>") != 1 || strings.Count(shot2, "<scenetrans>") != 1 {
+		t.Fatalf("scenetrans must occur once per side of the actual cut: %s", got)
+	}
+	if strings.Contains(shot1, "finishes speaking") || strings.Contains(shot2, "ready to speak") {
+		t.Fatalf("speech state conflicts were not reconciled: %s", got)
+	}
+	if strings.HasSuffix(strings.TrimSpace(got), "<scenetrans>") {
+		t.Fatalf("final shot continues past the video: %s", got)
+	}
+}
+
+func TestH3NormalizationRemovesStaticCameraConflictAndUnusedRetention(t *testing.T) {
+	got := resolveH3VisualConflicts("The camera remains static, then pulls out while tracking the subject.")
+	if strings.Contains(strings.ToLower(got), "static") || !strings.Contains(got, "pulls out") {
+		t.Fatalf("camera conflict not normalized: %s", got)
+	}
+	retention := h3VisibleRetention("[Shot 1] <Subject 2> stands.", []string{"<Subject 1> - face.", "<Subject 2> - clothing."})
+	if len(retention) != 1 || strings.Contains(retention[0], "Subject 1") || !strings.Contains(retention[0], "[Shot 1]") {
+		t.Fatalf("retention was not constrained to used subjects/shots: %#v", retention)
+	}
+}
+
 func TestWriteSRTEntry(t *testing.T) {
 	var sb strings.Builder
 	writeSRTEntry(&sb, 1, 0, 2.5, "林夏", "你来了。")

@@ -2371,9 +2371,13 @@ async function allVideos() {
 }
 
 async function removeProject() {
-  if (!confirm(`确定删除项目「${project.value.title}」？该操作不可恢复。`)) return
-  await api.deleteProject(id())
-  router.push('/projects')
+  if (!confirm(`确定删除项目「${project.value.title}」？项目数据及项目目录中的生成文件将被删除，此操作不可恢复。`)) return
+  try {
+    await api.deleteProject(id())
+    router.push('/projects')
+  } catch (e) {
+    toast.error('删除项目失败：' + (e.response?.data?.error || e.message || '未知错误'))
+  }
 }
 
 // ---------- 编辑 ----------

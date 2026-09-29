@@ -223,12 +223,14 @@ const error = ref('')
 const customStyle = ref('')
 const sourceType = ref('outline')
 const novelFile = ref(null)
+const createToken = ref('')
 const form = reactive({ title: '', genre: '', style: '', synopsis: '', audience: '', tone: '', ending: '', episodes: 10, aspect_ratio: '9:16' })
 
 const endingLabel = computed(() => ({ HE: 'HE（大团圆）', BE: 'BE（悲剧）', OE: 'OE（开放式）' }[form.ending] || '不限'))
 const effectiveStyle = computed(() => form.style === '__custom' ? customStyle.value.trim() : form.style)
 
 async function create() {
+  if (creating.value) return
   error.value = ''
   if (sourceType.value === 'outline' && !form.synopsis.trim()) {
     error.value = '请填写故事创意'
@@ -239,14 +241,15 @@ async function create() {
     return
   }
   creating.value = true
+  if (!createToken.value) createToken.value = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`
   try {
     if (sourceType.value === 'novel') {
-      const { data } = await api.createNovelProject({ title: form.title.trim() || novelFile.value.name.replace(/\.[^.]+$/, '') })
+      const { data } = await api.createNovelProject({ title: form.title.trim() || novelFile.value.name.replace(/\.[^.]+$/, ''), create_token: createToken.value })
       await api.uploadNovel(data.id, novelFile.value)
       router.push(`/projects/${data.id}/novel`)
       return
     }
-    const payload = { ...form, synopsis: form.synopsis.trim(), style: effectiveStyle.value, source_type: 'outline' }
+    const payload = { ...form, synopsis: form.synopsis.trim(), style: effectiveStyle.value, source_type: 'outline', create_token: createToken.value }
     const { data } = await api.createProject(payload)
     try {
       await api.generateProject(data.id, 1, true)
