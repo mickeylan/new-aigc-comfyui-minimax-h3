@@ -374,6 +374,12 @@ func (s *NovelAnalysisService) GenerateBible(projectID uint) (*models.StoryBible
 		_ = s.finishJob(job, 1)
 		return nil, job, err
 	}
+	if strings.TrimSpace(parsed.Premise) == "" || parsed.WorldRules == nil || parsed.MainPlot == nil {
+		err = fmt.Errorf("模型返回的故事圣经内容不完整，缺少核心前提、世界规则或主线；未创建可审核草稿")
+		job.Error = err.Error()
+		_ = s.finishJob(job, 1)
+		return nil, job, err
+	}
 	marshal := func(v any) string { b, _ := json.Marshal(v); return string(b) }
 	versions := map[string]int{}
 	for _, arc := range arcs {
@@ -518,6 +524,23 @@ func (s *NovelAnalysisService) UpdateBible(projectID uint, updates map[string]an
 	return s.GetBible(projectID)
 }
 
+func validateStoryBibleDraft(bible *models.StoryBible) error {
+	missing := make([]string, 0, 3)
+	if strings.TrimSpace(bible.Premise) == "" {
+		missing = append(missing, "核心前提")
+	}
+	if strings.TrimSpace(bible.WorldRules) == "" || strings.TrimSpace(bible.WorldRules) == "null" {
+		missing = append(missing, "世界规则")
+	}
+	if strings.TrimSpace(bible.MainPlot) == "" || strings.TrimSpace(bible.MainPlot) == "null" {
+		missing = append(missing, "主线")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("故事圣经草稿内容不完整，缺少：%s；请先生成或补全后再审核", strings.Join(missing, "、"))
+	}
+	return nil
+}
+
 func (s *NovelAnalysisService) ApproveBible(projectID uint) (*models.StoryBible, error) {
 	bible, err := s.GetBible(projectID)
 	if err != nil {
@@ -525,6 +548,9 @@ func (s *NovelAnalysisService) ApproveBible(projectID uint) (*models.StoryBible,
 	}
 	if bible.Status != "draft" {
 		return nil, fmt.Errorf("only a current draft can be approved")
+	}
+	if err := validateStoryBibleDraft(bible); err != nil {
+		return nil, err
 	}
 	if err := s.db.Model(bible).Update("status", "approved").Error; err != nil {
 		return nil, err

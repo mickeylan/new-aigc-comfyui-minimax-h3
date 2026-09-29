@@ -542,6 +542,24 @@ func TestReviewBibleChangeRequiresMatchingApprovedBase(t *testing.T) {
 	}
 }
 
+func TestApproveBibleRejectsEmptyDraft(t *testing.T) {
+	svc, db := newTestNovelAnalysisService(t)
+	projectID := setupTestProjectWithChapters(t, db, 10)
+	if err := db.Create(&models.StoryBible{ProjectID: projectID, Status: "draft", Version: 1}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ApproveBible(projectID); err == nil {
+		t.Fatal("empty story bible was approved")
+	}
+	var saved models.StoryBible
+	if err := db.Where("project_id = ?", projectID).First(&saved).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.Status != "draft" {
+		t.Fatalf("empty bible status changed: %+v", saved)
+	}
+}
+
 func TestGenerateBibleDoesNotOverwriteApprovedVersion(t *testing.T) {
 	svc, db := newTestNovelAnalysisService(t)
 	projectID := setupTestProjectWithChapters(t, db, 10)

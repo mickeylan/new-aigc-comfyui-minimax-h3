@@ -1,7 +1,7 @@
 <template>
   <div class="page fade-up">
     <div class="head-links"><router-link :to="`/projects/${id}`" class="back">← 返回项目</router-link></div>
-    <div class="page-head"><div><h1>长篇小说导入</h1><p class="sub">按章节窗口滚动分析和生产，不必等待整本小说分析完成。</p></div><div class="head-actions"><router-link :to="`/projects/${id}/story-bible`" class="btn">故事圣经 →</router-link></div></div>
+    <div class="page-head"><div><h1>长篇小说导入</h1><p class="sub">按章节窗口滚动分析和生产，不必等待整本小说分析完成。</p></div><div class="head-actions"><router-link :to="`/projects/${id}/story-bible`" class="btn">{{bible ? (bible.status==='draft'?'审核故事圣经 →':'查看故事圣经 →') : '生成故事圣经 →'}}</router-link></div></div>
     <section class="card upload-card">
       <input ref="picker" type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" hidden @change="upload" />
       <button class="btn" :disabled="busy" @click="picker.click()">{{ busy ? '处理中…' : '上传或替换小说' }}</button>
