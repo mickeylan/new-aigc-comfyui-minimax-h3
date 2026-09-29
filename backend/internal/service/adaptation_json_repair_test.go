@@ -52,13 +52,24 @@ func TestFillEpisodeSourceChapterIDsFromChapterRange(t *testing.T) {
 	}
 }
 
-func TestFillEpisodeSourceChapterIDsPreservesValidModelIDs(t *testing.T) {
-	ep := models.EpisodeAdaptation{ChapterStart: 2, ChapterEnd: 3, SourceChapterIDs: `[205]`}
+func TestFillEpisodeSourceChapterIDsReplacesModelChapterNumbers(t *testing.T) {
+	ep := models.EpisodeAdaptation{ChapterStart: 2, ChapterEnd: 3, SourceChapterIDs: `[2,3]`}
+	chapters := []models.Chapter{{ID: 205, Order: 2}, {ID: 309, Order: 3}}
+	if err := fillEpisodeSourceChapterIDs(&ep, chapters); err != nil {
+		t.Fatal(err)
+	}
+	if ep.SourceChapterIDs != `[205,309]` {
+		t.Fatalf("model-generated ids were not replaced: %s", ep.SourceChapterIDs)
+	}
+}
+
+func TestFillEpisodeSourceChapterIDsReplacesForeignIDs(t *testing.T) {
+	ep := models.EpisodeAdaptation{ChapterStart: 2, ChapterEnd: 2, SourceChapterIDs: `[999999]`}
 	if err := fillEpisodeSourceChapterIDs(&ep, []models.Chapter{{ID: 205, Order: 2}}); err != nil {
 		t.Fatal(err)
 	}
 	if ep.SourceChapterIDs != `[205]` {
-		t.Fatalf("valid ids changed: %s", ep.SourceChapterIDs)
+		t.Fatalf("foreign id survived: %s", ep.SourceChapterIDs)
 	}
 }
 

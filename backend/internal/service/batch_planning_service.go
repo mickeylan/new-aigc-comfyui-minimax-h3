@@ -196,14 +196,13 @@ func parseArcNumbers(raw string) []int {
 }
 
 func fillEpisodeSourceChapterIDs(ep *models.EpisodeAdaptation, chapters []models.Chapter) error {
-	var ids []uint
-	if strings.TrimSpace(ep.SourceChapterIDs) != "" && json.Unmarshal([]byte(ep.SourceChapterIDs), &ids) == nil && len(ids) > 0 {
-		return nil
-	}
 	if ep.ChapterStart < 1 || ep.ChapterEnd < ep.ChapterStart {
 		return fmt.Errorf("invalid chapter range")
 	}
-	ids = ids[:0]
+	// chapter_start/chapter_end are chapter order numbers, but this field must
+	// contain database primary keys. Derive them from project-scoped rows rather
+	// than trusting IDs invented by the model.
+	ids := make([]uint, 0, ep.ChapterEnd-ep.ChapterStart+1)
 	for _, chapter := range chapters {
 		if chapter.Order >= ep.ChapterStart && chapter.Order <= ep.ChapterEnd {
 			ids = append(ids, chapter.ID)
