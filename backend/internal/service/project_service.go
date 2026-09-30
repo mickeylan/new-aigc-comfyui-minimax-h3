@@ -4381,7 +4381,8 @@ func buildPortraitPrompt(p *models.Project, ch *models.Character) string {
 	parts := make([]string, 0, 8)
 	if prompt := strings.TrimSpace(ch.ReferencePrompt); prompt != "" {
 		// GenerateReferencePrompt 已包含项目画风，避免再次叠加造成影楼化和成熟化。
-		parts = append(parts, prompt)
+		// 兼容修复前保存的旧提示词：提交生图前剔除腰部以下描述，保证大头照构图。
+		parts = append(parts, sanitizePortraitHeadshotPrompt(prompt))
 	} else {
 		if anchor := characterAgeAnchor(ch.Appearance, ch.Trait); anchor != "" {
 			parts = append(parts, ageSubject(ch.Appearance, ch.Trait), anchor)

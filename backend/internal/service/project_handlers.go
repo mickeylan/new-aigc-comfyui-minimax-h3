@@ -1165,7 +1165,12 @@ func (s *Service) HandleGenerateCharacterPortrait(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{"ok": true, "message": fmt.Sprintf("角色「%s」标准像生成中", ch.Name)})
+	var queued models.Character
+	if err := s.DB.Select("portrait_task_id").First(&queued, ch.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "标准像任务已创建，但读取任务状态失败: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"ok": true, "task_id": queued.PortraitTaskID, "status": "pending", "message": fmt.Sprintf("角色「%s」标准像任务已进入调度队列", ch.Name)})
 }
 
 func (s *Service) HandleRecoverCharacterPortrait(c *gin.Context) {

@@ -102,6 +102,30 @@ func TestGenerateReferencePromptCompilesLumxDimensions(t *testing.T) {
 	}
 }
 
+func TestGenerateReferencePromptExcludesBelowShoulderWardrobeDetails(t *testing.T) {
+	ps := newTestProjectService(t)
+	p := models.Project{Title: "问仙", Genre: "古风仙侠、东方玄幻", Style: "古风仙侠人物设定、东方幻想美学"}
+	ps.db.Create(&p)
+	ch := models.Character{ProjectID: p.ID, Name: "清虚道人",
+		Appearance:     "30岁左右的清瘦青年男性，面容清癯古拙，剑眉斜飞，双目细长有神，鼻梁挺直，唇薄色淡，皮肤偏白，头顶挽成道士发髻以乌木簪固定，身穿一件洗得有些发白的青色道袍，道袍下摆略有磨损",
+		WardrobeDetail: "日常服饰：上身青色交领道袍以粗麻布制成颜色洗褪成淡青色，衣袖宽大袖口收紧以便施展法术，腰部系一条黑色丝绦，下摆长至膝下配有暗纹刺绣，脚穿黑色布靴"}
+	ps.db.Create(&ch)
+	prompt, err := NewCharacterProfileService(ps.db, nil).GenerateReferencePrompt(&ch, &p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"单人正面大头贴", "肩部以上构图", "青色交领道袍", "粗麻布", "衣袖"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("portrait prompt missing %q: %s", want, prompt)
+		}
+	}
+	for _, forbidden := range []string{"洗得有些发白", "道袍下摆", "腰部", "黑色丝绦", "膝下", "暗纹刺绣", "布靴"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("headshot prompt contains below-shoulder detail %q: %s", forbidden, prompt)
+		}
+	}
+}
+
 func TestGenerateReferencePromptPreservesBeardAndCultivationIdentity(t *testing.T) {
 	ps := newTestProjectService(t)
 	p := models.Project{Title: "问仙", Genre: "古典修仙", Style: "真人写实", Synopsis: "宗门林立，修士争夺大道机缘"}

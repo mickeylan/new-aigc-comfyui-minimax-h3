@@ -495,9 +495,13 @@ func (s *TaskService) pickInstance(forcePort *int) (*models.Instance, error) {
 		return nil, fmt.Errorf("实例不存在")
 	}
 
-	// 收集运行中的实例，并发探测负载。串行探测 8 实例会累加单次 HTTP 延迟，
-	// 并发后总耗时由最慢的一个实例决定。
+	// 复用上面刚完成的并发探测结果。旧实现会立即对同一批实例再探测一次，
+	// 使每次标准像等任务调度平白等待第二轮 HTTP 请求。
 	var running []models.Instance
+	loadByID := make(map[uint]instanceLoad, len(discovered))
+	for _, load := range discovered {
+		loadByID[load.inst.ID] = load
+	}
 	for i := range insts {
 		if insts[i].Status == "running" {
 			running = append(running, insts[i])
@@ -525,16 +529,13 @@ func (s *TaskService) pickInstance(forcePort *int) (*models.Instance, error) {
 	}
 	running = free
 
-	loads := make([]instanceLoad, len(running))
-	var wg sync.WaitGroup
-	for i := range running {
-		wg.Add(1)
-		go func(idx int, inst models.Instance) {
-			defer wg.Done()
-			loads[idx] = s.probeInstanceLoad(inst)
-		}(i, running[i])
+	loads := make([]instanceLoad, 0, len(running))
+	for _, inst := range running {
+		if load, ok := loadByID[inst.ID]; ok {
+			load.inst = inst
+			loads = append(loads, load)
+		}
 	}
-	wg.Wait()
 
 	// ComfyUI 队列是第二层占用判断，用于拦截绕过平台直接提交到进程的任务。
 	// 只有平台无活动任务且 ComfyUI 队列为零的实例才进入显存排序。
@@ -880,8 +881,8 @@ func (s *TaskService) Execute(taskID string) error {
 	return nil
 }
 
-// queueRetryWhenFree GPU 全忙时启动后台重试循环：每 10s 探测一次空闲实例，
-// 有空闲则重新 Execute 提交。任务取消/状态变化或失败时退出循环。
+// queueRetryWhenFree GPU 全忙时启动后台重试循环：首次 1 秒后重试，随后每 2 秒探测。
+// 避免短任务刚释放 GPU 后，新提交的标准像仍无反馈地等待最多 10 秒。任务取消/状态变化或失败时退出循环。
 // 通过 retrying 标记保证每个任务只有一个重试循环，避免重试风暴。
 func (s *TaskService) queueRetryWhenFree(taskID string) {
 	s.retryMu.Lock()
@@ -898,9 +899,10 @@ func (s *TaskService) queueRetryWhenFree(taskID string) {
 			delete(s.retrying, taskID)
 			s.retryMu.Unlock()
 		}()
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
+		timer := time.NewTimer(time.Second)
+		defer timer.Stop()
+		for {
+			<-timer.C
 			var cur models.Task
 			if err := s.db.Where("task_id = ?", taskID).First(&cur).Error; err != nil {
 				return
@@ -917,6 +919,7 @@ func (s *TaskService) queueRetryWhenFree(taskID string) {
 				// 其他错误已由 Execute failTask，退出
 				return
 			}
+			timer.Reset(2 * time.Second)
 		}
 	}()
 }

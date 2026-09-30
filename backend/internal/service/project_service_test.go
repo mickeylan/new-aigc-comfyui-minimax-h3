@@ -1308,6 +1308,22 @@ func TestBuildPortraitPromptDoesNotAppendNegativePrompt(t *testing.T) {
 	}
 }
 
+func TestBuildPortraitPromptSanitizesLegacyFullBodyDetails(t *testing.T) {
+	p := &models.Project{Genre: "古风仙侠", Style: "东方幻想美学"}
+	ch := &models.Character{ReferencePrompt: "单人正面大头贴，30岁青年男性，青色交领道袍粗麻材质，腰部系黑色丝绦，下摆长至膝下，黑色布靴，肩部以上构图"}
+	prompt := buildPortraitPrompt(p, ch)
+	for _, want := range []string{"单人正面大头贴", "青色交领道袍粗麻材质", "肩部以上头像"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("sanitized prompt missing %q: %s", want, prompt)
+		}
+	}
+	for _, forbidden := range []string{"腰部", "丝绦", "下摆", "膝下", "布靴"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("legacy prompt retained %q: %s", forbidden, prompt)
+		}
+	}
+}
+
 func TestStartCharacterPortraitRequiresApprovedProfileAndPrompt(t *testing.T) {
 	ps := newTestProjectService(t)
 	ch := &models.Character{Name: "林夏", ProfileStatus: models.ProfileStatusDraft}

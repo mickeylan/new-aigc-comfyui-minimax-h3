@@ -25,7 +25,8 @@ test('项目详情可直接打开统一生成图片历史并删除旧版本', ()
 
 test('角色标准像提交过程有即时和持续状态反馈', () => {
   assert.match(detail, /正在创建标准像任务，请稍候/)
-  assert.match(detail, /标准像任务已提交，正在排队或生成/)
+  assert.match(detail, /标准像任务 .* 已提交，正在调度或生成/)
+  assert.match(detail, /data\.task_id/)
   assert.match(detail, /_portraitSubmitting = true/)
   assert.match(detail, /标准像任务创建失败/)
 })

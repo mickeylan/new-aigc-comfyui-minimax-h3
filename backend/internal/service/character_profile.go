@@ -157,7 +157,8 @@ func portraitFaceIdentity(appearance, trait string) string {
 	if text == "" {
 		text = strings.TrimSpace(trait)
 	}
-	keywords := []string{"岁", "发", "额头", "脸", "眉", "眼", "鼻", "唇", "肤", "耳", "下巴", "痣", "疤", "雀斑", "胡子", "胡须", "髭", "髯", "络腮胡", "山羊胡"}
+	// 不使用单字“发”，否则“洗得发白”等服装描述会被误判为头发身份特征。
+	keywords := []string{"岁", "头发", "发型", "发丝", "发髻", "长发", "短发", "披发", "额头", "脸", "眉", "眼", "鼻", "唇", "肤", "耳", "下巴", "痣", "疤", "雀斑", "胡子", "胡须", "髭", "髯", "络腮胡", "山羊胡"}
 	clauses := strings.FieldsFunc(text, func(r rune) bool { return r == '，' || r == '。' || r == '；' || r == '\n' })
 	out := make([]string, 0, 12)
 	for _, clause := range clauses {
@@ -177,6 +178,28 @@ func portraitFaceIdentity(appearance, trait string) string {
 
 // portraitStyling 只保留肩部头像中实际可见的一套上衣信息。
 // 发型已由 portraitFaceIdentity 输出；鞋履、武器、身材、动机和经历不进入标准像提示词。
+func truncatePortraitLowerBody(clause string) string {
+	clause = strings.TrimSpace(clause)
+	cut := len(clause)
+	for _, marker := range []string{"腰部", "腰间", "腰下", "下摆", "及膝", "膝下", "下装", "长裤", "裤腿", "半身裙", "长裙", "鞋", "靴", "足踏"} {
+		if i := strings.Index(clause, marker); i >= 0 && i < cut {
+			cut = i
+		}
+	}
+	return strings.TrimSpace(clause[:cut])
+}
+
+func sanitizePortraitHeadshotPrompt(prompt string) string {
+	clauses := strings.FieldsFunc(prompt, func(r rune) bool { return r == '，' || r == '。' || r == '；' || r == '\n' })
+	kept := make([]string, 0, len(clauses))
+	for _, clause := range clauses {
+		if upper := truncatePortraitLowerBody(clause); upper != "" {
+			kept = append(kept, upper)
+		}
+	}
+	return strings.Join(kept, "，")
+}
+
 func portraitStyling(char *models.Character) string {
 	wardrobe := strings.TrimSpace(char.WardrobeDetail)
 	if wardrobe == "" {
@@ -202,6 +225,9 @@ func portraitStyling(char *models.Character) string {
 	seen := map[string]bool{}
 	for _, clause := range strings.FieldsFunc(wardrobe, func(r rune) bool { return r == '，' || r == '。' || r == '；' || r == '\n' }) {
 		clause = strings.TrimSpace(clause)
+		// 标准像是肩部以上头像。档案常把上衣、腰带、下摆和鞋履写在同一句，
+		// 必须在第一个下半身结构词之前截断，避免模型被“腰部/及膝/鞋底”等词诱导成全身照。
+		clause = truncatePortraitLowerBody(clause)
 		if clause == "" || !strings.ContainsAny(clause, clothingWords) {
 			continue
 		}

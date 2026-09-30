@@ -189,7 +189,7 @@
                 <span v-else class="field-hint">暂无历史数据</span>
               </div>
               <span v-if="ch._portraitSubmitting" class="char-voice">⏳ 正在创建标准像任务，请稍候…</span>
-              <span v-else-if="ch.portrait_task_id" class="char-voice">⏳ 标准像任务已提交，正在排队或生成</span>
+              <span v-else-if="ch.portrait_task_id" class="char-voice">⏳ 标准像任务 {{ ch.portrait_task_id }} 已提交，正在调度或生成</span>
               <span v-if="ch.portrait_error" class="fail-msg">{{ ch.portrait_error }}</span>
               <span v-if="ch.sheet_task_id" class="char-voice">⏳ 角色四视图生成中</span>
               <span v-if="ch.sheet_error" class="fail-msg">{{ ch.sheet_error }}</span>
@@ -1761,7 +1761,7 @@ async function genPortrait(ch) {
   toast.show(`正在为角色「${ch.name}」创建标准像任务，请稍候…`)
   try {
     const { data } = await api.generateCharacterPortrait(id(), ch.id)
-    toast.success(data?.message || `角色「${ch.name}」标准像任务已提交，正在排队生成`)
+    toast.success(`${data?.message || `角色「${ch.name}」标准像任务已提交`}${data?.task_id ? `（任务 ${data.task_id}）` : ''}`)
     await load()
   } catch (e) {
     toast.error(`标准像任务创建失败：${e.response?.data?.error || e.message || '未知错误'}`)
