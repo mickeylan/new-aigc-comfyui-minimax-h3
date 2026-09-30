@@ -231,27 +231,31 @@ func authoritativeCharacterAgeRange(char *models.Character, sourceContext string
 	}
 	contextRunes := []rune(sourceContext)
 	nameRunes := []rune(name)
+	isBoundary := func(r rune) bool { return strings.ContainsRune("。！？；\n{}[]", r) }
 	for start := 0; start+len(nameRunes) <= len(contextRunes); start++ {
 		if string(contextRunes[start:start+len(nameRunes)]) != name {
 			continue
 		}
-		right := start + len(nameRunes) + 120
-		if right > len(contextRunes) {
-			right = len(contextRunes)
+		// 只在同一句、紧邻角色名的短描述中认定年龄。宽窗口会把其他角色的年龄
+		// 错归给“马脸男子”等描述性名字。
+		afterEnd := start + len(nameRunes)
+		for afterEnd < len(contextRunes) && afterEnd < start+len(nameRunes)+40 && !isBoundary(contextRunes[afterEnd]) {
+			afterEnd++
 		}
-		// 优先角色名之后的直接描述，避免把前一句其他角色的年龄误归给当前角色。
-		if minAge, maxAge, ok := explicitCharacterAgeRange(string(contextRunes[start+len(nameRunes) : right])); ok {
+		if minAge, maxAge, ok := explicitCharacterAgeRange(string(contextRunes[start+len(nameRunes) : afterEnd])); ok {
 			return minAge, maxAge, true
 		}
-		left := start - 80
-		if left < 0 {
-			left = 0
+		beforeStart := start
+		for beforeStart > 0 && beforeStart > start-24 && !isBoundary(contextRunes[beforeStart-1]) {
+			beforeStart--
 		}
-		if minAge, maxAge, ok := explicitCharacterAgeRange(string(contextRunes[left:start])); ok {
+		if minAge, maxAge, ok := explicitCharacterAgeRange(string(contextRunes[beforeStart:start])); ok {
 			return minAge, maxAge, true
 		}
 	}
-	return explicitCharacterAgeRange(strings.Join([]string{char.Appearance, char.Trait, char.Background}, "\n"))
+	// 小说上下文没有把年龄直接绑定到该角色时，不猜测年龄，也不使用可能由旧 AI
+	// 生成的档案年龄冒充原文事实。
+	return 0, 0, false
 }
 
 func validateProfileAgeAgainstSources(appearance string, char *models.Character, sourceContext string) error {

@@ -94,6 +94,11 @@ func TestValidateProfileAgeAgainstNovelSource(t *testing.T) {
 	if err := validateProfileAgeAgainstSources("六七岁女童，狐女幼童体态", liu, mixedSource); err != nil {
 		t.Fatalf("Chinese child age near character must override stale profile age: %v", err)
 	}
+	man := &models.Character{Name: "马脸男子"}
+	unrelatedAge := `柳乐儿十二岁时曾见过此人。后来马脸男子拦住去路，书中没有交代他的年龄。`
+	if err := validateProfileAgeAgainstSources("三十余岁男子，面部狭长", man, unrelatedAge); err != nil {
+		t.Fatalf("unbound nearby age must not be attributed to character: %v", err)
+	}
 }
 
 func TestParseCharacterProfileJSONInvalid(t *testing.T) {
