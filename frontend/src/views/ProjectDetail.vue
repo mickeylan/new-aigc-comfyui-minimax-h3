@@ -187,7 +187,8 @@
                 </template>
                 <span v-else class="field-hint">暂无历史数据</span>
               </div>
-              <span v-if="ch.portrait_task_id" class="char-voice">⏳ Krea2 标准像生成中</span>
+              <span v-if="ch._portraitSubmitting" class="char-voice">⏳ 正在创建标准像任务，请稍候…</span>
+              <span v-else-if="ch.portrait_task_id" class="char-voice">⏳ 标准像任务已提交，正在排队或生成</span>
               <span v-if="ch.portrait_error" class="fail-msg">{{ ch.portrait_error }}</span>
               <span v-if="ch.sheet_task_id" class="char-voice">⏳ 角色四视图生成中</span>
               <span v-if="ch.sheet_error" class="fail-msg">{{ ch.sheet_error }}</span>
@@ -196,9 +197,9 @@
                 <div class="character-look-entry-actions"><router-link :to="`/projects/${id()}/characters/${ch.id}/looks?mode=outfits&design=1`" class="btn btn-sm">＋ AI换装设计</router-link><router-link :to="`/projects/${id()}/characters/${ch.id}/looks?mode=outfits`" class="btn btn-sm btn-secondary">管理完整套装</router-link></div>
               </div>
               <div class="char-actions">
-                <button class="btn btn-sm btn-secondary" :disabled="busy || !!ch.portrait_task_id || ch.profile_status !== 'approved' || !ch.reference_prompt || !portraitEngineReady(ch)" @click="genPortrait(ch)"
+                <button class="btn btn-sm btn-secondary" :disabled="busy || ch._portraitSubmitting || !!ch.portrait_task_id || ch.profile_status !== 'approved' || !ch.reference_prompt || !portraitEngineReady(ch)" @click="genPortrait(ch)"
                   :title="ch.profile_status !== 'approved' ? '请先审核通过角色档案' : !ch.reference_prompt ? '请先生成或填写参考像提示词' : !portraitEngineReady(ch) ? '所选 Qwen-Image-2.1 工作流模板未安装' : ch.portrait_task_id ? '已有任务，不会重复提交；请先检查生成结果' : ''">
-                  {{ ch.portrait_task_id ? '已有标准像任务' : ch.portrait ? imageEngineLabel(ch.portrait_engine) + ' 重生成标准像' : imageEngineLabel(ch.portrait_engine) + ' 生成标准像' }}
+                  {{ ch._portraitSubmitting ? '正在提交任务…' : ch.portrait_task_id ? '标准像生成中…' : ch.portrait ? imageEngineLabel(ch.portrait_engine) + ' 重生成标准像' : imageEngineLabel(ch.portrait_engine) + ' 生成标准像' }}
                 </button>
                 <button v-if="ch.portrait_task_id" class="btn btn-sm btn-ghost" :disabled="ch._recovering" @click="recoverPortrait(ch)">{{ch._recovering?'检查中…':'检查生成结果'}}</button>
                 <button v-if="ch.portrait_task_id" class="btn btn-sm btn-danger" :disabled="ch._resetting" @click="resetPortrait(ch)">{{ch._resetting?'重置中…':'重置生成状态'}}</button>
@@ -1750,11 +1751,17 @@ async function allPortraits() {
   }
 }
 async function genPortrait(ch) {
+  if (ch._portraitSubmitting || ch.portrait_task_id) return
+  ch._portraitSubmitting = true
+  toast.show(`正在为角色「${ch.name}」创建标准像任务，请稍候…`)
   try {
-    await api.generateCharacterPortrait(id(), ch.id)
-    refreshSoon()
+    const { data } = await api.generateCharacterPortrait(id(), ch.id)
+    toast.success(data?.message || `角色「${ch.name}」标准像任务已提交，正在排队生成`)
+    await load()
   } catch (e) {
-    toast.show(e.response?.data?.error || '生成失败')
+    toast.error(`标准像任务创建失败：${e.response?.data?.error || e.message || '未知错误'}`)
+  } finally {
+    ch._portraitSubmitting = false
   }
 }
 async function recoverPortrait(ch) {

@@ -17,6 +17,13 @@ test('角色编辑弹窗按当前标签保存对应档案字段', () => {
   assert.ok((projectDetail.match(/@click="saveCharacterProfile"/g) || []).length >= 3)
 })
 
+test('角色标准像提交过程有即时和持续状态反馈', () => {
+  assert.match(detail, /正在创建标准像任务，请稍候/)
+  assert.match(detail, /标准像任务已提交，正在排队或生成/)
+  assert.match(detail, /_portraitSubmitting = true/)
+  assert.match(detail, /标准像任务创建失败/)
+})
+
 test('角色卡提供明显的新形象和完整套装入口', () => {
   assert.match(detail, /基于标准像换装/)
   assert.match(detail, /AI换装设计/)
