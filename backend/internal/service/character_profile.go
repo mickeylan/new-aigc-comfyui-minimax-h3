@@ -119,12 +119,19 @@ func (s *CharacterProfileService) GenerateProfile(char *models.Character, projec
 	if err != nil {
 		return fmt.Errorf("解析角色档案失败: %w", err)
 	}
-	if strings.TrimSpace(result.Name) != strings.TrimSpace(char.Name) {
-		return fmt.Errorf("角色档案名称不匹配：期望「%s」，模型返回「%s」", char.Name, result.Name)
+	expectedName := strings.TrimSpace(char.Name)
+	returnedName := strings.TrimSpace(result.Name)
+	if returnedName != expectedName {
+		// 模型常把原名补成“原名（真名/别名）”。角色库主键仍以现有规范名为准，
+		// 别名信息留在背景/关系字段，不因这种扩写阻断整份档案。
+		if strings.HasPrefix(returnedName, expectedName+"（") || strings.HasPrefix(returnedName, expectedName+"(") {
+			result.Name = expectedName
+		} else {
+			return fmt.Errorf("角色档案名称不匹配：期望「%s」，模型返回「%s」", char.Name, result.Name)
+		}
 	}
-	if err := validateProfileAgeAgainstSources(result.Appearance, char, planJSON); err != nil {
-		return err
-	}
+	// 年龄信息可能来自未明确绑定的上下文或模型的视觉设计选择，不再作为保存阻断条件。
+	// 小说明确年龄仍通过系统提示约束，最终由用户审核档案。
 
 	// 更新角色档案
 	updates := map[string]any{

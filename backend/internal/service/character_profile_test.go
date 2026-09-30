@@ -101,6 +101,30 @@ func TestValidateProfileAgeAgainstNovelSource(t *testing.T) {
 	}
 }
 
+func TestGenerateProfileAcceptsExpandedAliasAndDoesNotBlockOnAge(t *testing.T) {
+	ps := newTestProjectService(t)
+	project := models.Project{Title: "小说改编"}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	character := models.Character{ProjectID: project.ID, Name: "神秘男子", ProfileStatus: models.ProfileStatusDraft}
+	if err := ps.db.Create(&character).Error; err != nil {
+		t.Fatal(err)
+	}
+	provider := &stubTextProvider{response: `{"name":"神秘男子（柳石）","role":"配角","appearance":"三十余岁男子，面容冷峻","personality":"谨慎","background":"身份隐秘","relationships":"与主角暂时同行","emotions":"沉默时目光锐利","habits":"下意识握住刀柄","wardrobe_detail":"深色劲装，黑色布靴","lighting_mood":"冷色侧光","color_palette":"黑灰色"}`}
+	service := NewCharacterProfileService(ps.db, provider)
+	if err := service.GenerateProfile(&character, &project, `神秘男子在十二岁少年身后现身，原文未说明其年龄。`); err != nil {
+		t.Fatal(err)
+	}
+	var got models.Character
+	if err := ps.db.First(&got, character.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Appearance != "三十余岁男子，面容冷峻" {
+		t.Fatalf("profile was not saved: %+v", got)
+	}
+}
+
 func TestParseCharacterProfileJSONInvalid(t *testing.T) {
 	cases := []string{
 		`{"name":"林夏"}`, // 缺少必要字段
