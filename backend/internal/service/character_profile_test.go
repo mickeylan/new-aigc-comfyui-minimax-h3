@@ -213,7 +213,7 @@ func TestHistoricalMalePortraitForbidsModernCrewCut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"中国古典男子蓄发", "黑色长发束起为发髻或束发", "严禁现代平头", "寸头", "侧剃", "渐变推剪"} {
+	for _, want := range []string{"具体发型：乌黑长发全部向后梳理", "头顶挽成紧实高发髻", "深褐色木簪横向固定", "额头完整露出", "无刘海", "禁止平头、寸头"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("historical male portrait missing hair constraint %q: %s", want, prompt)
 		}
@@ -221,8 +221,8 @@ func TestHistoricalMalePortraitForbidsModernCrewCut(t *testing.T) {
 	// 即使数据库仍保存旧提示词，正式提交也必须补上时代发型约束。
 	character.ReferencePrompt = "单人正面大头贴，三十余岁男子，深色交领短打"
 	submission := buildPortraitPrompt(&project, &character)
-	if !strings.Contains(submission, "严禁现代平头") || !strings.Contains(submission, "中国古典男子蓄发") {
-		t.Fatalf("portrait submission omitted historical hair constraint: %s", submission)
+	if !strings.Contains(submission, "具体发型：乌黑长发全部向后梳理") || !strings.Contains(submission, "头顶挽成紧实高发髻") {
+		t.Fatalf("portrait submission omitted concrete historical hairstyle: %s", submission)
 	}
 }
 

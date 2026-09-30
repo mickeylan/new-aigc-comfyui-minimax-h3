@@ -420,27 +420,32 @@ func historicalPortraitHairConstraint(char *models.Character, project *models.Pr
 	if !isHistorical {
 		return ""
 	}
-	hair := portraitFaceIdentity(char.Appearance, char.Trait)
-	hasDeclaredHair := false
-	for _, keyword := range []string{"头发", "发型", "发丝", "发髻", "长发", "短发", "披发", "束发", "冠", "簪"} {
-		if strings.Contains(hair, keyword) {
-			hasDeclaredHair = true
+	hairKeywords := []string{"头发", "发型", "发丝", "发髻", "长发", "短发", "披发", "束发", "冠", "簪"}
+	declared := make([]string, 0, 2)
+	for _, clause := range strings.FieldsFunc(char.Appearance+"，"+char.Trait, func(r rune) bool { return r == '，' || r == '。' || r == '；' || r == '\n' }) {
+		clause = strings.TrimSpace(clause)
+		for _, keyword := range hairKeywords {
+			if strings.Contains(clause, keyword) {
+				declared = append(declared, clause)
+				break
+			}
+		}
+		if len(declared) >= 2 {
 			break
 		}
 	}
-	base := "发型必须符合中国古典时代与仙侠语境，严禁现代平头、寸头、板寸、圆寸、锅盖头、飞机头、莫西干、侧剃、渐变推剪和现代短发造型"
-	if hasDeclaredHair {
-		return "严格保持档案中已声明的头发长度、发型、发髻与头饰；" + base
+	if len(declared) > 0 {
+		return "具体发型：" + strings.Join(declared, "，")
 	}
 	male := strings.Contains(context, "男性") || strings.Contains(context, "男子") || strings.Contains(context, "男孩") || strings.Contains(context, "男童")
 	female := strings.Contains(context, "女性") || strings.Contains(context, "女子") || strings.Contains(context, "女孩") || strings.Contains(context, "女童")
 	if male {
-		return "未明确发型时采用中国古典男子蓄发：黑色长发束起为发髻或束发，以发带、木簪或冠固定；" + base
+		return "具体发型：乌黑长发全部向后梳理，在头顶挽成紧实高发髻，用一根深褐色木簪横向固定，额头完整露出，两鬓整齐，无刘海，无披散碎发；禁止平头、寸头、侧剃和现代短发"
 	}
 	if female {
-		return "未明确发型时采用中国古典女子长发与传统发髻，不使用现代短发；" + base
+		return "具体发型：乌黑长发梳成传统古典发髻，用发簪固定，保留整齐鬓发；禁止现代短发"
 	}
-	return base
+	return "具体发型：中国古典蓄发并束起，以传统发簪固定；禁止现代短发"
 }
 
 func portraitStoryIdentity(char *models.Character, project *models.Project) string {

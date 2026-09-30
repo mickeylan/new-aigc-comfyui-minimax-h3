@@ -67,6 +67,26 @@ func TestSkillService_InitSystemSkills(t *testing.T) {
 	}
 }
 
+func TestCharacterSkillRequiresConcreteHistoricalHairstyle(t *testing.T) {
+	db := newTestDB(t)
+	svc := NewSkillService(db)
+	if err := svc.InitSystemSkills(); err != nil {
+		t.Fatal(err)
+	}
+	var skill models.Skill
+	if err := db.Where("code = ?", "character-standard").Order("version DESC").First(&skill).Error; err != nil {
+		t.Fatal(err)
+	}
+	if skill.Version != 2 {
+		t.Fatalf("character skill version=%d, want 2", skill.Version)
+	}
+	for _, want := range []string{"具体发色", "梳理方向", "发髻或束发的位置与形状", "乌黑长发全部向后梳理", "紧实高发髻", "深褐木簪横向固定"} {
+		if !strings.Contains(skill.PromptTemplate+skill.SystemPrompt, want) {
+			t.Fatalf("character skill missing concrete hairstyle rule %q", want)
+		}
+	}
+}
+
 func TestSkillService_CuratedDirectorSkills(t *testing.T) {
 	db := newTestDB(t)
 	svc := NewSkillService(db)
