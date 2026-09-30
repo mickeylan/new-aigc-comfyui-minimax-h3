@@ -51,6 +51,17 @@ func TestParseCharacterProfileJSON(t *testing.T) {
 	}
 }
 
+func TestParseCharacterProfileJSONRepairsCommaAfterKnownObjectKey(t *testing.T) {
+	raw := `{"name":"柳乐儿","role":"配角","appearance":"六七岁狐女","personality":"机敏","background":"幼年逃亡","relationships", {"舒寒":"同伴"},"emotions":"惊慌时睁大眼睛","habits":"抱紧拨浪鼓","wardrobe_detail":"鹅黄罗衣，软底绣鞋","lighting_mood":"柔和日光","color_palette":"鹅黄与翠绿"}`
+	result, err := parseCharacterProfileJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Name != "柳乐儿" || !strings.Contains(result.Relationships, "舒寒") {
+		t.Fatalf("malformed known-key separator was not repaired: %+v", result)
+	}
+}
+
 func TestParseCharacterProfileJSONNormalizesStructuredFields(t *testing.T) {
 	raw := `{"name":"马脸男子","role":"配角","appearance":"马脸，细长眼","personality":["谨慎","善于观察"],"background":"外堂弟子","relationships":{"狐女":{"relation":"追捕目标","attitude":"戒备"},"同伴":"临时合作"},"emotions":"紧张时眯眼","habits":"握紧刀柄","wardrobe_detail":"青色道袍，黑色布靴","lighting_mood":"冷色侧光","color_palette":"青灰色"}`
 	result, err := parseCharacterProfileJSON(raw)

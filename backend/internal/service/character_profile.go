@@ -625,7 +625,17 @@ func profileValueText(value any) string {
 	}
 }
 
+func repairCharacterProfileKeySeparators(jsonStr string) string {
+	for _, field := range characterProfileStringFields {
+		// 仅修复固定 schema 字段在键后误写逗号的已知模型漂移："relationships", {...}
+		pattern := regexp.MustCompile(`("` + regexp.QuoteMeta(field) + `"\s*),\s*(["{\[])`)
+		jsonStr = pattern.ReplaceAllString(jsonStr, `${1}:$2`)
+	}
+	return jsonStr
+}
+
 func normalizeCharacterProfileScalarStrings(jsonStr string) (string, error) {
+	jsonStr = repairCharacterProfileKeySeparators(jsonStr)
 	var object map[string]any
 	if err := json.Unmarshal([]byte(jsonStr), &object); err != nil {
 		return "", err
