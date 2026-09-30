@@ -184,6 +184,20 @@ func (s *Service) HandleGenerateAdaptationAssets(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
+	// 已审核档案通常保持不动；但若其年龄已与本集权威小说原文冲突，也必须进入修复队列。
+	var approvedCharacters []models.Character
+	if err := s.DB.Where("project_id = ? AND profile_status = ?", p.ID, models.ProfileStatusApproved).Find(&approvedCharacters).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	for i := range approvedCharacters {
+		if err := validateProfileAgeAgainstSources(approvedCharacters[i].Appearance, &models.Character{Name: approvedCharacters[i].Name}, string(contextJSON)); err != nil {
+			repair := approvedCharacters[i]
+			repair.Appearance = "" // 不把已判定错误的年龄再次作为“不可改写事实”发给模型。
+			repair.Trait = ""
+			characters = append(characters, repair)
+		}
+	}
 	generatedCharacters := 0
 	for i := range characters {
 		if err := s.CharacterProfiles.GenerateProfile(&characters[i], p, string(contextJSON)); err != nil {
