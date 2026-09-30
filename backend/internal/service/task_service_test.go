@@ -45,6 +45,41 @@ func baseParams() map[string]any {
 	}
 }
 
+func TestCreateTaskResolvesNegativeSeedToUniquePersistedSeeds(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.Template{}, &models.Task{}); err != nil {
+		t.Fatal(err)
+	}
+	tpl := loadTemplateForTest(t, "krea2_character_portrait.json")
+	if err := db.Create(&tpl).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := &TaskService{db: db, hub: NewHub()}
+	first, err := svc.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: "角色一"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: "角色二"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var firstParams, secondParams map[string]any
+	if err := json.Unmarshal([]byte(first.ParamsJSON), &firstParams); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(second.ParamsJSON), &secondParams); err != nil {
+		t.Fatal(err)
+	}
+	firstSeed, firstOK := firstParams["seed"].(float64)
+	secondSeed, secondOK := secondParams["seed"].(float64)
+	if !firstOK || !secondOK || firstSeed < 0 || secondSeed < 0 || firstSeed == secondSeed {
+		t.Fatalf("negative seed was not resolved uniquely: first=%v second=%v", firstParams["seed"], secondParams["seed"])
+	}
+}
+
 func TestMiniMaxH3TemplatesRenderWithoutPlaceholders(t *testing.T) {
 	tests := []struct {
 		file  string

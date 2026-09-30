@@ -111,6 +111,30 @@ func (s *TaskService) NewTaskID() string {
 	return time.Now().Format("20060102-150405-") + hex.EncodeToString(b)
 }
 
+func randomGenerationSeed() int64 {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return time.Now().UnixNano() & 0x7fffffffffffffff
+	}
+	return int64(binary.BigEndian.Uint64(b[:]) & 0x7fffffffffffffff)
+}
+
+func seedRequestsRandom(value any) bool {
+	switch seed := value.(type) {
+	case int:
+		return seed < 0
+	case int64:
+		return seed < 0
+	case float64:
+		return seed < 0
+	case json.Number:
+		parsed, err := seed.Int64()
+		return err == nil && parsed < 0
+	default:
+		return false
+	}
+}
+
 // ---------- 模板 ----------
 
 type TemplateInput struct {
@@ -272,11 +296,9 @@ func (s *TaskService) RenderWorkflow(tpl *models.Template, params map[string]any
 	if _, ok := params["seed"]; !ok {
 		params["seed"] = 0
 	}
-	// seed=-1 表示随机
-	if seed, ok := params["seed"].(float64); ok && seed == -1 {
-		b := make([]byte, 8)
-		_, _ = rand.Read(b)
-		params["seed"] = int64(int(seed)) + int64(binary.BigEndian.Uint64(b)%1_000_000_000)
+	// 兼容旧任务快照中的 -1；新任务会在 CreateTask 时固化实际随机种子。
+	if seedRequestsRandom(params["seed"]) {
+		params["seed"] = randomGenerationSeed()
 	}
 
 	// 第一轮: 替换标量占位符。缺参数时收集首个错误，统一向外抛出，
@@ -681,6 +703,11 @@ func (s *TaskService) CreateTask(req CreateTaskReq) (*models.Task, error) {
 	params["prompt"] = req.Prompt
 	if req.Seed != nil {
 		params["seed"] = *req.Seed
+	}
+	// ComfyUI API 不会像前端 seed 控件那样自动处理 -1。创建任务时将其解析为
+	// 一个真实随机种子并写入快照，确保每次 Krea2 标准照重生成使用不同噪声且可追溯。
+	if seedRequestsRandom(params["seed"]) {
+		params["seed"] = randomGenerationSeed()
 	}
 
 	paramsJSON, _ := json.Marshal(params)
