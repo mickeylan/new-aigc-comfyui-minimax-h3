@@ -177,7 +177,10 @@ func (s *Service) HandleGenerateAdaptationAssets(c *gin.Context) {
 	}
 	contextJSON, _ := json.Marshal(profileContext)
 	var characters []models.Character
-	if err := s.DB.Where("project_id = ? AND (appearance = '' OR appearance IS NULL)", p.ID).Find(&characters).Error; err != nil {
+	// “AI补全”也负责重新生成尚未审核的草稿/驳回档案。旧逻辑只检查 appearance
+	// 是否为空，导致错误但非空的档案永远显示“补全0个”且无法纠正。
+	profileIncomplete := `(appearance = '' OR appearance IS NULL OR personality = '' OR personality IS NULL OR background = '' OR background IS NULL OR relationships = '' OR relationships IS NULL OR emotions = '' OR emotions IS NULL OR habits = '' OR habits IS NULL OR wardrobe_detail = '' OR wardrobe_detail IS NULL OR lighting_mood = '' OR lighting_mood IS NULL OR color_palette = '' OR color_palette IS NULL)`
+	if err := s.DB.Where("project_id = ? AND (profile_status <> ? OR "+profileIncomplete+")", p.ID, models.ProfileStatusApproved).Find(&characters).Error; err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
