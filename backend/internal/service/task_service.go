@@ -112,11 +112,26 @@ func (s *TaskService) NewTaskID() string {
 }
 
 func randomGenerationSeed() int64 {
+	// ParamsJSON is decoded into map[string]any before workflow rendering, so JSON numbers
+	// become float64. Keep seeds below 1e9 to preserve the integer exactly and ensure
+	// fmt.Sprint never emits scientific notation that ComfyUI's INT validator rejects.
+	const seedRange = uint64(1_000_000_000)
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return time.Now().UnixNano() & 0x7fffffffffffffff
+		return time.Now().UnixNano() % int64(seedRange)
 	}
-	return int64(binary.BigEndian.Uint64(b[:]) & 0x7fffffffffffffff)
+	return int64(binary.BigEndian.Uint64(b[:]) % seedRange)
+}
+
+func templateScalarString(value any) string {
+	switch number := value.(type) {
+	case float64:
+		return strconv.FormatFloat(number, 'f', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(number), 'f', -1, 32)
+	default:
+		return fmt.Sprint(value)
+	}
 }
 
 func seedRequestsRandom(value any) bool {
@@ -324,7 +339,7 @@ func (s *TaskService) RenderWorkflow(tpl *models.Template, params map[string]any
 				}
 				return m
 			}
-			return fmt.Sprint(v)
+			return templateScalarString(v)
 		})
 		return replaced
 	})

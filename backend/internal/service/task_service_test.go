@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -75,8 +76,23 @@ func TestCreateTaskResolvesNegativeSeedToUniquePersistedSeeds(t *testing.T) {
 	}
 	firstSeed, firstOK := firstParams["seed"].(float64)
 	secondSeed, secondOK := secondParams["seed"].(float64)
-	if !firstOK || !secondOK || firstSeed < 0 || secondSeed < 0 || firstSeed == secondSeed {
-		t.Fatalf("negative seed was not resolved uniquely: first=%v second=%v", firstParams["seed"], secondParams["seed"])
+	if !firstOK || !secondOK || firstSeed < 0 || secondSeed < 0 || firstSeed >= 1_000_000_000 || secondSeed >= 1_000_000_000 || firstSeed == secondSeed {
+		t.Fatalf("negative seed was not resolved to unique safe integers: first=%v second=%v", firstParams["seed"], secondParams["seed"])
+	}
+	workflow, err := svc.RenderWorkflow(&tpl, firstParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSampler := workflow["21"].(map[string]any)["inputs"].(map[string]any)["noise_seed"]
+	secondSampler := workflow["13"].(map[string]any)["inputs"].(map[string]any)["seed"]
+	for _, rendered := range []any{firstSampler, secondSampler} {
+		text := fmt.Sprint(rendered)
+		if strings.ContainsAny(text, "eE+.") {
+			t.Fatalf("seed rendered in non-integer form: %q", text)
+		}
+		if _, err := strconv.ParseInt(text, 10, 64); err != nil {
+			t.Fatalf("seed is not parseable by ComfyUI: %q: %v", text, err)
+		}
 	}
 }
 
