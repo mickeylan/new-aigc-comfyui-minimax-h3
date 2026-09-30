@@ -156,6 +156,30 @@ func (s *CharacterProfileService) GenerateProfile(char *models.Character, projec
 
 var characterAgePattern = regexp.MustCompile(`(?:年龄(?:为|约|：|:)?\s*)?(\d{1,2})\s*岁`)
 var characterAgeRangePattern = regexp.MustCompile(`(\d{1,2})\s*(?:到|至|[-~～—])\s*(\d{1,2})\s*岁`)
+var chineseCharacterAgeRangePattern = regexp.MustCompile(`([一二三四五六七八九十两]+)\s*(?:到|至|、|[-~～—])?\s*([一二三四五六七八九十两]+)?\s*岁`)
+
+func chineseAgeNumber(text string) (int, bool) {
+	values := map[rune]int{'一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
+	runes := []rune(text)
+	if len(runes) == 1 {
+		value, ok := values[runes[0]]
+		return value, ok
+	}
+	if len(runes) == 2 && runes[0] == '十' {
+		value, ok := values[runes[1]]
+		return 10 + value, ok
+	}
+	if len(runes) == 2 && runes[1] == '十' {
+		value, ok := values[runes[0]]
+		return value * 10, ok
+	}
+	if len(runes) == 3 && runes[1] == '十' {
+		tens, ok1 := values[runes[0]]
+		ones, ok2 := values[runes[2]]
+		return tens*10 + ones, ok1 && ok2
+	}
+	return 0, false
+}
 
 func explicitCharacterAgeRange(text string) (int, int, bool) {
 	if match := characterAgeRangePattern.FindStringSubmatch(text); len(match) == 3 {
@@ -171,16 +195,39 @@ func explicitCharacterAgeRange(text string) (int, int, bool) {
 			return age, age, true
 		}
 	}
+	if match := chineseCharacterAgeRangePattern.FindStringSubmatch(text); len(match) >= 2 {
+		first, second := match[1], ""
+		if len(match) >= 3 {
+			second = match[2]
+		}
+		firstRunes := []rune(first)
+		if second == "" && len(firstRunes) == 2 && firstRunes[0] != '十' && firstRunes[1] != '十' {
+			minAge, ok1 := chineseAgeNumber(string(firstRunes[0]))
+			maxAge, ok2 := chineseAgeNumber(string(firstRunes[1]))
+			if ok1 && ok2 && maxAge >= minAge {
+				return minAge, maxAge, true
+			}
+		}
+		minAge, ok := chineseAgeNumber(first)
+		if ok && minAge > 0 {
+			maxAge := minAge
+			if second != "" {
+				if parsed, valid := chineseAgeNumber(second); valid {
+					maxAge = parsed
+				}
+			}
+			if maxAge >= minAge {
+				return minAge, maxAge, true
+			}
+		}
+	}
 	return 0, 0, false
 }
 
 func authoritativeCharacterAgeRange(char *models.Character, sourceContext string) (int, int, bool) {
-	if minAge, maxAge, ok := explicitCharacterAgeRange(strings.Join([]string{char.Appearance, char.Trait, char.Background}, "\n")); ok {
-		return minAge, maxAge, true
-	}
 	name := strings.TrimSpace(char.Name)
 	if name == "" {
-		return 0, 0, false
+		return explicitCharacterAgeRange(strings.Join([]string{char.Appearance, char.Trait, char.Background}, "\n"))
 	}
 	contextRunes := []rune(sourceContext)
 	nameRunes := []rune(name)
@@ -188,18 +235,23 @@ func authoritativeCharacterAgeRange(char *models.Character, sourceContext string
 		if string(contextRunes[start:start+len(nameRunes)]) != name {
 			continue
 		}
-		left, right := start-120, start+len(nameRunes)+240
-		if left < 0 {
-			left = 0
-		}
+		right := start + len(nameRunes) + 120
 		if right > len(contextRunes) {
 			right = len(contextRunes)
 		}
-		if minAge, maxAge, ok := explicitCharacterAgeRange(string(contextRunes[left:right])); ok {
+		// 优先角色名之后的直接描述，避免把前一句其他角色的年龄误归给当前角色。
+		if minAge, maxAge, ok := explicitCharacterAgeRange(string(contextRunes[start+len(nameRunes) : right])); ok {
+			return minAge, maxAge, true
+		}
+		left := start - 80
+		if left < 0 {
+			left = 0
+		}
+		if minAge, maxAge, ok := explicitCharacterAgeRange(string(contextRunes[left:start])); ok {
 			return minAge, maxAge, true
 		}
 	}
-	return 0, 0, false
+	return explicitCharacterAgeRange(strings.Join([]string{char.Appearance, char.Trait, char.Background}, "\n"))
 }
 
 func validateProfileAgeAgainstSources(appearance string, char *models.Character, sourceContext string) error {

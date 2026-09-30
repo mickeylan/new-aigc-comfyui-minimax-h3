@@ -78,6 +78,11 @@ func TestValidateProfileAgeAgainstNovelSource(t *testing.T) {
 	if err := validateProfileAgeAgainstSources("6到7岁狐女，幼童体态", char, source); err != nil {
 		t.Fatalf("matching novel age rejected: %v", err)
 	}
+	liu := &models.Character{Name: "柳乐儿", Appearance: "18岁江南少女"}
+	mixedSource := `其他角色是一名18岁少女。柳乐儿随即显出原形，她本是六七岁狐女，仍是幼童体态。`
+	if err := validateProfileAgeAgainstSources("六七岁女童，狐女幼童体态", liu, mixedSource); err != nil {
+		t.Fatalf("Chinese child age near character must override stale profile age: %v", err)
+	}
 }
 
 func TestParseCharacterProfileJSONInvalid(t *testing.T) {

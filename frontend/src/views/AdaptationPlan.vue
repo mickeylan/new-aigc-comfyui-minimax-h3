@@ -43,8 +43,9 @@
         <div class="actions">
           <button type="button" class="btn btn-sm" :disabled="generating===batch.id || batch.status==='approved' || batch.status==='produced'" @click.stop="generate(batch)">{{generating===batch.id?'正在生成…':(batch.status==='review'?'重新生成草稿':'生成本批方案')}}</button>
           <button class="btn btn-sm btn-secondary" :disabled="busy || (batch.status!=='approved' && batch.status!=='produced')" :title="batch.status==='review'?'先审核并应用Episode映射，生成剧本后再制作批次结束快照':''" @click="generateSnapshot(batch)">生成批次结束快照</button>
-          <button class="btn btn-sm btn-secondary" :disabled="batch.status!=='review' || generating===batch.id" :title="batch.status==='review'?'审核当前草稿并把本批Episode映射标记为已审核':'仅待审核批次可执行'" @click="review(batch,'approve')">审核方案并应用Episode</button>
-          <button class="btn btn-sm btn-ghost" :disabled="batch.status!=='review' || generating===batch.id" @click="review(batch,'reject')">退回修改</button>
+          <button v-if="batch.status==='review'" class="btn btn-sm" type="button" @click.stop="review(batch,'approve')">审核方案并应用Episode</button>
+          <button v-else class="btn btn-sm btn-secondary" type="button" disabled :title="`当前批次状态：${statusLabel(batch.status)}`">审核方案并应用Episode</button>
+          <button v-if="batch.status==='review'" class="btn btn-sm btn-ghost" type="button" @click.stop="review(batch,'reject')">退回修改</button>
           <button class="btn btn-sm btn-ghost" @click="toggleDetail(batch)">{{detail?.batch?.id===batch.id?'收起':'查看分集'}}</button>
         </div>
         <div v-if="detail?.batch?.id===batch.id" class="episode-list">
