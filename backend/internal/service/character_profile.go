@@ -133,6 +133,8 @@ func (s *CharacterProfileService) GenerateProfile(char *models.Character, projec
 	}
 	// 年龄信息可能来自未明确绑定的上下文或模型的视觉设计选择，不再作为保存阻断条件。
 	// 小说明确年龄仍通过系统提示约束，最终由用户审核档案。
+	// 时代常识做确定性收口：古典非僧侣角色不得保留模型臆造的现代短发。
+	result.Appearance = normalizeGeneratedHistoricalHair(result.Appearance, char, project, planJSON)
 
 	// 更新角色档案
 	updates := map[string]any{
@@ -411,14 +413,78 @@ func ageSubject(appearance, trait string) string {
 	return match[1] + "岁" + gender
 }
 
-func historicalPortraitHairConstraint(char *models.Character, project *models.Project) string {
+const defaultHistoricalMaleHair = "乌黑长发全部向后梳理，在头顶挽成紧实高发髻，以深褐色木簪横向固定，额头完整露出，两鬓整齐，无刘海，无披散碎发"
+const defaultHistoricalFemaleHair = "乌黑长发梳成传统古典发髻，以发簪固定，保留整齐鬓发"
+
+func isHistoricalCharacterContext(char *models.Character, project *models.Project, extra string) bool {
 	genre, synopsis := "", ""
 	if project != nil {
 		genre, synopsis = project.Genre, project.Synopsis
 	}
-	context := strings.Join([]string{genre, synopsis, char.Role, char.Appearance, char.Trait, char.WardrobeDetail}, " ")
-	isHistorical := strings.Contains(context, "修仙") || strings.Contains(context, "仙侠") || strings.Contains(context, "武侠") || strings.Contains(context, "古代") || strings.Contains(context, "古装") || strings.Contains(context, "宗门") || strings.ContainsAny(context, "狐妖魔仙灵")
-	if !isHistorical {
+	context := strings.Join([]string{genre, synopsis, char.Role, char.Appearance, char.Trait, char.WardrobeDetail, extra}, " ")
+	return strings.Contains(context, "修仙") || strings.Contains(context, "仙侠") || strings.Contains(context, "武侠") || strings.Contains(context, "古代") || strings.Contains(context, "古装") || strings.Contains(context, "宗门") || strings.ContainsAny(context, "狐妖魔仙灵")
+}
+
+func normalizeGeneratedHistoricalHair(appearance string, char *models.Character, project *models.Project, sourceContext string) string {
+	if !isHistoricalCharacterContext(char, project, sourceContext) {
+		return appearance
+	}
+	context := strings.Join([]string{char.Role, appearance, sourceContext}, " ")
+	if strings.Contains(context, "和尚") || strings.Contains(context, "僧人") || strings.Contains(context, "僧侣") || strings.Contains(context, "剃度") {
+		return appearance
+	}
+	male := strings.Contains(context, "男性") || strings.Contains(context, "男子") || strings.Contains(context, "男孩") || strings.Contains(context, "男童")
+	female := strings.Contains(context, "女性") || strings.Contains(context, "女子") || strings.Contains(context, "女孩") || strings.Contains(context, "女童")
+	forbidden := []string{"平头", "寸头", "板寸", "圆寸", "锅盖头", "飞机头", "莫西干", "侧剃", "渐变推剪", "一寸短发", "短发"}
+	hasForbidden := false
+	for _, word := range forbidden {
+		if strings.Contains(appearance, word) {
+			hasForbidden = true
+			break
+		}
+	}
+	hasHair := false
+	for _, word := range []string{"头发", "发型", "发丝", "发髻", "长发", "披发", "束发", "冠", "簪"} {
+		if strings.Contains(appearance, word) {
+			hasHair = true
+			break
+		}
+	}
+	if hasHair && !hasForbidden {
+		return appearance
+	}
+	kept := make([]string, 0, 12)
+	inModernHairBlock := false
+	for _, clause := range strings.FieldsFunc(appearance, func(r rune) bool { return r == '，' || r == '。' || r == '；' || r == '\n' }) {
+		clause = strings.TrimSpace(clause)
+		if clause == "" {
+			continue
+		}
+		if inModernHairBlock && strings.ContainsAny(clause, "脸眉眼鼻唇肤颧颌胡须疤痣") {
+			inModernHairBlock = false
+		}
+		remove := inModernHairBlock
+		for _, word := range append(forbidden, "头发", "发型", "发丝", "发髻", "鬓角") {
+			if strings.Contains(clause, word) {
+				remove = true
+				inModernHairBlock = true
+				break
+			}
+		}
+		if !remove {
+			kept = append(kept, clause)
+		}
+	}
+	if male {
+		kept = append(kept, "具体发型："+defaultHistoricalMaleHair)
+	} else if female {
+		kept = append(kept, "具体发型："+defaultHistoricalFemaleHair)
+	}
+	return strings.Join(kept, "，")
+}
+
+func historicalPortraitHairConstraint(char *models.Character, project *models.Project) string {
+	if !isHistoricalCharacterContext(char, project, "") {
 		return ""
 	}
 	hairKeywords := []string{"头发", "发型", "发丝", "发髻", "长发", "短发", "披发", "束发", "冠", "簪"}
@@ -438,6 +504,7 @@ func historicalPortraitHairConstraint(char *models.Character, project *models.Pr
 	if len(declared) > 0 {
 		return "具体发型：" + strings.Join(declared, "，")
 	}
+	context := strings.Join([]string{char.Role, char.Appearance, char.Trait, char.WardrobeDetail}, " ")
 	male := strings.Contains(context, "男性") || strings.Contains(context, "男子") || strings.Contains(context, "男孩") || strings.Contains(context, "男童")
 	female := strings.Contains(context, "女性") || strings.Contains(context, "女子") || strings.Contains(context, "女孩") || strings.Contains(context, "女童")
 	if male {

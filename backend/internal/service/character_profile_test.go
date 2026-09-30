@@ -101,6 +101,28 @@ func TestValidateProfileAgeAgainstNovelSource(t *testing.T) {
 	}
 }
 
+func TestGenerateProfileReplacesModernHairInHistoricalContext(t *testing.T) {
+	ps := newTestProjectService(t)
+	project := models.Project{Title: "问仙", Genre: "古风仙侠"}
+	ps.db.Create(&project)
+	character := models.Character{ProjectID: project.ID, Name: "壮汉", Role: "配角", ProfileStatus: models.ProfileStatusDraft}
+	ps.db.Create(&character)
+	provider := &stubTextProvider{response: `{"name":"壮汉","role":"配角","appearance":"四十余岁男子，发型为短发平头，发丝粗硬如铁针，长度约一寸，全部向上竖立，鬓角刮得干净利落，方脸，古铜色皮肤","personality":"凶悍","background":"江湖散修","relationships":"独来独往","emotions":"怒目而视","habits":"握拳","wardrobe_detail":"粗布短褐，黑色布靴","lighting_mood":"硬朗侧光","color_palette":"灰褐色"}`}
+	if err := NewCharacterProfileService(ps.db, provider).GenerateProfile(&character, &project, "古代修仙世界，原文未强调发型"); err != nil {
+		t.Fatal(err)
+	}
+	var got models.Character
+	ps.db.First(&got, character.ID)
+	for _, forbidden := range []string{"短发平头", "长度约一寸", "向上竖立", "鬓角刮得干净"} {
+		if strings.Contains(got.Appearance, forbidden) {
+			t.Fatalf("modern hairstyle survived %q: %s", forbidden, got.Appearance)
+		}
+	}
+	if !strings.Contains(got.Appearance, defaultHistoricalMaleHair) {
+		t.Fatalf("historical default hairstyle missing: %s", got.Appearance)
+	}
+}
+
 func TestGenerateProfileAcceptsExpandedAliasAndDoesNotBlockOnAge(t *testing.T) {
 	ps := newTestProjectService(t)
 	project := models.Project{Title: "小说改编"}
