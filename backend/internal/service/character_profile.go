@@ -154,8 +154,11 @@ func (s *CharacterProfileService) GenerateProfile(char *models.Character, projec
 		"sheet":            "",
 		"sheet_task_id":    "",
 		"sheet_error":      "",
-		"trait":            coalesceField(char.Trait, result.Appearance),
-		"style":            coalesceField(char.Style, result.WardrobeDetail),
+		// AI 重新生成完整档案时，同步刷新角色卡基础摘要，避免基础信息继续显示旧内容。
+		// 角色名保持数据库中的规范名；身份、外貌摘要和服装摘要以本次审核草稿为准。
+		"role":  strings.TrimSpace(result.Role),
+		"trait": strings.TrimSpace(result.Appearance),
+		"style": strings.TrimSpace(result.WardrobeDetail),
 	}
 
 	return s.db.Model(char).Updates(updates).Error

@@ -17,6 +17,13 @@ test('角色编辑弹窗按当前标签保存对应档案字段', () => {
   assert.ok((projectDetail.match(/@click="saveCharacterProfile"/g) || []).length >= 3)
 })
 
+test('AI重新生成完整档案同步刷新角色基础信息', () => {
+  assert.match(projectDetail, /Object\.assign\(charForm, \{/)
+  assert.match(projectDetail, /role: data\.character\.role/)
+  assert.match(projectDetail, /trait: data\.character\.trait/)
+  assert.match(projectDetail, /style: data\.character\.style/)
+})
+
 test('项目详情可直接打开统一生成图片历史并删除旧版本', () => {
   assert.match(detail, /生成图片历史/)
   assert.match(detail, /GeneratedMediaHistoryDrawer/)

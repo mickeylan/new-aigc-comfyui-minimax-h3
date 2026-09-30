@@ -107,7 +107,7 @@ func TestGenerateProfileAcceptsExpandedAliasAndDoesNotBlockOnAge(t *testing.T) {
 	if err := ps.db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
-	character := models.Character{ProjectID: project.ID, Name: "神秘男子", ProfileStatus: models.ProfileStatusDraft}
+	character := models.Character{ProjectID: project.ID, Name: "神秘男子", Role: "旧身份", Trait: "旧外貌", Style: "旧服装", ProfileStatus: models.ProfileStatusDraft}
 	if err := ps.db.Create(&character).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -122,6 +122,9 @@ func TestGenerateProfileAcceptsExpandedAliasAndDoesNotBlockOnAge(t *testing.T) {
 	}
 	if got.Appearance != "三十余岁男子，面容冷峻" {
 		t.Fatalf("profile was not saved: %+v", got)
+	}
+	if got.Role != "配角" || got.Trait != got.Appearance || got.Style != got.WardrobeDetail {
+		t.Fatalf("AI profile must refresh basic role/trait/style summaries: %+v", got)
 	}
 }
 

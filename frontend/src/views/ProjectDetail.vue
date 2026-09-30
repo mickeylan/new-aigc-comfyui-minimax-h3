@@ -1913,8 +1913,16 @@ async function generateCharacterProfile() {
   generatingProfile.value = true
   try {
     const { data } = await api.generateCharacterProfile(id(), editingCharacter.value.id)
-    // 更新当前编辑的角色数据
+    // 更新当前编辑的角色数据，并同步刷新“基础信息”标签中的身份、外貌和服装摘要。
     editingCharacter.value = data.character
+    Object.assign(charForm, {
+      name: data.character.name || '',
+      role: data.character.role || '',
+      trait: data.character.trait || '',
+      style: data.character.style || '',
+      voice: data.character.voice || '',
+      portrait_engine: data.character.portrait_engine || 'krea2'
+    })
     Object.assign(charProfileForm, {
       appearance: data.character.appearance || '',
       personality: data.character.personality || '',
