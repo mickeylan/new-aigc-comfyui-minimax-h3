@@ -139,7 +139,43 @@ func (s *Service) HandleGenerateAdaptationAssets(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	contextJSON, _ := json.Marshal(scenes)
+	// 角色档案必须同时参考当前生产场景、该集对应小说原文和已审核故事圣经。
+	// 仅传 scenes 会丢失原文中的年龄、种族等硬事实，导致模型凭空补全。
+	var adaptation models.EpisodeAdaptation
+	_ = s.DB.Where("project_id = ? AND episode_n = ?", p.ID, n).First(&adaptation).Error
+	var bible models.StoryBible
+	_ = s.DB.Where("project_id = ?", p.ID).First(&bible).Error
+	var sourceChapterIDs []uint
+	_ = json.Unmarshal([]byte(adaptation.SourceChapterIDs), &sourceChapterIDs)
+	var chapters []models.Chapter
+	chapterQuery := s.DB.Where("project_id = ?", p.ID).Order("chapter_order")
+	if len(sourceChapterIDs) > 0 {
+		chapterQuery = chapterQuery.Where("id IN ?", sourceChapterIDs)
+	} else if adaptation.ChapterStart > 0 && adaptation.ChapterEnd >= adaptation.ChapterStart {
+		chapterQuery = chapterQuery.Where("chapter_order BETWEEN ? AND ?", adaptation.ChapterStart, adaptation.ChapterEnd)
+	} else {
+		chapterQuery = chapterQuery.Where("1 = 0")
+	}
+	if err := chapterQuery.Find(&chapters).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	profileContext := struct {
+		Instruction string                   `json:"instruction"`
+		Episode     int                      `json:"episode"`
+		Adaptation  models.EpisodeAdaptation `json:"adaptation"`
+		StoryBible  models.StoryBible        `json:"story_bible"`
+		Chapters    []models.Chapter         `json:"source_chapters"`
+		Scenes      []models.Scene           `json:"production_scenes"`
+	}{
+		Instruction: "小说原文和已审核故事圣经是角色年龄、性别、种族、身份、外貌的权威来源；不得猜测或改写。",
+		Episode:     n,
+		Adaptation:  adaptation,
+		StoryBible:  bible,
+		Chapters:    chapters,
+		Scenes:      scenes,
+	}
+	contextJSON, _ := json.Marshal(profileContext)
 	var characters []models.Character
 	if err := s.DB.Where("project_id = ? AND (appearance = '' OR appearance IS NULL)", p.ID).Find(&characters).Error; err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})

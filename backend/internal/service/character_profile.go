@@ -65,7 +65,8 @@ const characterProfileSystemPrompt = `你是一位专业的漫剧角色设计师
 4. 每个字段都要有实质性内容，不要为空。
 5. appearance 和 wardrobe_detail 要足够详细，能支撑高质量的参考像生成。
 6. 如果输入或故事明确给出年龄，appearance 必须在开头原样保留准确年龄（例如“22岁青年女性”），不得用“成熟、资深、威严”等身份语义改变视觉年龄；30岁以下角色应描述符合该年龄的面部骨骼、紧致皮肤和自然妆容，禁止擅自增加法令纹、眼袋、皱纹或中年感。
-7. wardrobe_detail 必须明确写出鞋履。鞋履严格符合故事时代、地域文化、身份和服装：中国古典/修仙/武侠角色使用布靴、皂靴、云头履或绣鞋等中式鞋履；除非故事明确要求，禁止赤脚、现代高跟鞋、运动鞋、皮鞋、日式木屐及跨时代跨文化鞋款。`
+7. wardrobe_detail 必须明确写出鞋履。鞋履严格符合故事时代、地域文化、身份和服装：中国古典/修仙/武侠角色使用布靴、皂靴、云头履或绣鞋等中式鞋履；除非故事明确要求，禁止赤脚、现代高跟鞋、运动鞋、皮鞋、日式木屐及跨时代跨文化鞋款。
+8. 小说原文、已有角色资料和创作方案中的年龄、性别、种族、身份及外貌是不可改写的事实。不得把儿童改成少年或成人，不得把狐女等种族改成普通人，不得自行添加江南、书香门第等来源中不存在的设定。缺少资料时宁可写“原文未明确”，禁止猜测。`
 
 // GenerateProfile 使用 LLM 从故事中生成角色详细档案
 func (s *CharacterProfileService) GenerateProfile(char *models.Character, project *models.Project, planJSON string) error {
@@ -75,11 +76,23 @@ func (s *CharacterProfileService) GenerateProfile(char *models.Character, projec
 	if char.Role != "" {
 		user.WriteString(fmt.Sprintf("角色定位：%s\n", char.Role))
 	}
+	if char.Appearance != "" {
+		user.WriteString(fmt.Sprintf("已有外貌事实（不可改写）：%s\n", char.Appearance))
+	}
 	if char.Trait != "" {
-		user.WriteString(fmt.Sprintf("已知外貌特征：%s\n", char.Trait))
+		user.WriteString(fmt.Sprintf("已有角色特征（不可冲突）：%s\n", char.Trait))
 	}
 	if char.Style != "" {
-		user.WriteString(fmt.Sprintf("已知服装风格：%s\n", char.Style))
+		user.WriteString(fmt.Sprintf("已有服装事实（不可改写）：%s\n", char.Style))
+	}
+	if char.Background != "" {
+		user.WriteString(fmt.Sprintf("已有背景事实（不可改写）：%s\n", char.Background))
+	}
+	if project.Genre != "" {
+		user.WriteString(fmt.Sprintf("项目题材：%s\n", project.Genre))
+	}
+	if project.Style != "" {
+		user.WriteString(fmt.Sprintf("项目画风：%s\n", project.Style))
 	}
 
 	if project.Synopsis != "" {
@@ -108,6 +121,9 @@ func (s *CharacterProfileService) GenerateProfile(char *models.Character, projec
 	}
 	if strings.TrimSpace(result.Name) != strings.TrimSpace(char.Name) {
 		return fmt.Errorf("角色档案名称不匹配：期望「%s」，模型返回「%s」", char.Name, result.Name)
+	}
+	if err := validateProfileAgeAgainstSources(result.Appearance, char, planJSON); err != nil {
+		return err
 	}
 
 	// 更新角色档案
@@ -139,6 +155,61 @@ func (s *CharacterProfileService) GenerateProfile(char *models.Character, projec
 }
 
 var characterAgePattern = regexp.MustCompile(`(?:年龄(?:为|约|：|:)?\s*)?(\d{1,2})\s*岁`)
+var characterAgeRangePattern = regexp.MustCompile(`(\d{1,2})\s*(?:到|至|[-~～—])\s*(\d{1,2})\s*岁`)
+
+func explicitCharacterAgeRange(text string) (int, int, bool) {
+	if match := characterAgeRangePattern.FindStringSubmatch(text); len(match) == 3 {
+		minAge, err1 := strconv.Atoi(match[1])
+		maxAge, err2 := strconv.Atoi(match[2])
+		if err1 == nil && err2 == nil && minAge > 0 && maxAge >= minAge {
+			return minAge, maxAge, true
+		}
+	}
+	if match := characterAgePattern.FindStringSubmatch(text); len(match) >= 2 {
+		age, err := strconv.Atoi(match[1])
+		if err == nil && age > 0 {
+			return age, age, true
+		}
+	}
+	return 0, 0, false
+}
+
+func authoritativeCharacterAgeRange(char *models.Character, sourceContext string) (int, int, bool) {
+	if minAge, maxAge, ok := explicitCharacterAgeRange(strings.Join([]string{char.Appearance, char.Trait, char.Background}, "\n")); ok {
+		return minAge, maxAge, true
+	}
+	name := strings.TrimSpace(char.Name)
+	if name == "" {
+		return 0, 0, false
+	}
+	contextRunes := []rune(sourceContext)
+	nameRunes := []rune(name)
+	for start := 0; start+len(nameRunes) <= len(contextRunes); start++ {
+		if string(contextRunes[start:start+len(nameRunes)]) != name {
+			continue
+		}
+		left, right := start-120, start+len(nameRunes)+240
+		if left < 0 {
+			left = 0
+		}
+		if right > len(contextRunes) {
+			right = len(contextRunes)
+		}
+		if minAge, maxAge, ok := explicitCharacterAgeRange(string(contextRunes[left:right])); ok {
+			return minAge, maxAge, true
+		}
+	}
+	return 0, 0, false
+}
+
+func validateProfileAgeAgainstSources(appearance string, char *models.Character, sourceContext string) error {
+	minAge, maxAge, hasSourceAge := authoritativeCharacterAgeRange(char, sourceContext)
+	generatedMin, generatedMax, hasGeneratedAge := explicitCharacterAgeRange(appearance)
+	if hasSourceAge && (!hasGeneratedAge || generatedMin < minAge || generatedMax > maxAge) {
+		return fmt.Errorf("角色档案年龄与小说原文冲突：原文为%d到%d岁，生成外貌为「%s」", minAge, maxAge, appearance)
+	}
+	return nil
+}
 
 func characterAgeAnchor(appearance, trait string) string {
 	match := characterAgePattern.FindStringSubmatch(appearance + "，" + trait)

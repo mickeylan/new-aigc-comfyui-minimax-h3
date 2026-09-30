@@ -69,6 +69,17 @@ func TestParseCharacterProfileJSONNormalizesStructuredFields(t *testing.T) {
 	}
 }
 
+func TestValidateProfileAgeAgainstNovelSource(t *testing.T) {
+	char := &models.Character{Name: "菜头"}
+	source := `{"source_chapters":[{"content":"舒寒带着菜头离开。菜头是一名6到7岁的狐女，仍是幼童体态。"}]}`
+	if err := validateProfileAgeAgainstSources("18岁江南少女，鹅蛋脸", char, source); err == nil {
+		t.Fatal("expected novel age conflict to be rejected")
+	}
+	if err := validateProfileAgeAgainstSources("6到7岁狐女，幼童体态", char, source); err != nil {
+		t.Fatalf("matching novel age rejected: %v", err)
+	}
+}
+
 func TestParseCharacterProfileJSONInvalid(t *testing.T) {
 	cases := []string{
 		`{"name":"林夏"}`, // 缺少必要字段
