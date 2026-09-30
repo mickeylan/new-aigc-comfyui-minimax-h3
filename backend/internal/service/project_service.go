@@ -4403,6 +4403,10 @@ func buildPortraitPrompt(p *models.Project, ch *models.Character) string {
 			parts = append(parts, "布光："+lighting)
 		}
 	}
+	// 提交时再次注入时代发型硬约束，兼容尚未重新生成 reference_prompt 的旧角色。
+	if hair := historicalPortraitHairConstraint(ch, p); hair != "" {
+		parts = append(parts, hair)
+	}
 	parts = append(parts, "单一角色，正面肩部以上头像，头发、发型与头饰完整入镜，直视镜头，自然放松表情，本次唯一上衣的领口、颜色、材质清楚可见，衣料完整覆盖肩部与胸口，纯白干净背景，柔和均匀自然光，居中对称构图，高分辨率角色参考照")
 	return normalizePortraitStyle(strings.Join(parts, "，"), p)
 }

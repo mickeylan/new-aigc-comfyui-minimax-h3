@@ -203,6 +203,29 @@ func TestGenerateReferencePromptExcludesBelowShoulderWardrobeDetails(t *testing.
 	}
 }
 
+func TestHistoricalMalePortraitForbidsModernCrewCut(t *testing.T) {
+	ps := newTestProjectService(t)
+	project := models.Project{Title: "问仙", Genre: "古典修仙", Style: "真人写实"}
+	ps.db.Create(&project)
+	character := models.Character{ProjectID: project.ID, Name: "马脸男子", Role: "追兵", Appearance: "三十余岁男子，面部狭长，颧骨高耸，眼窝深陷，皮肤粗糙黝黑", WardrobeDetail: "深色交领短打，粗麻布材质"}
+	ps.db.Create(&character)
+	prompt, err := NewCharacterProfileService(ps.db, nil).GenerateReferencePrompt(&character, &project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"中国古典男子蓄发", "黑色长发束起为发髻或束发", "严禁现代平头", "寸头", "侧剃", "渐变推剪"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("historical male portrait missing hair constraint %q: %s", want, prompt)
+		}
+	}
+	// 即使数据库仍保存旧提示词，正式提交也必须补上时代发型约束。
+	character.ReferencePrompt = "单人正面大头贴，三十余岁男子，深色交领短打"
+	submission := buildPortraitPrompt(&project, &character)
+	if !strings.Contains(submission, "严禁现代平头") || !strings.Contains(submission, "中国古典男子蓄发") {
+		t.Fatalf("portrait submission omitted historical hair constraint: %s", submission)
+	}
+}
+
 func TestGenerateReferencePromptPreservesBeardAndCultivationIdentity(t *testing.T) {
 	ps := newTestProjectService(t)
 	p := models.Project{Title: "问仙", Genre: "古典修仙", Style: "真人写实", Synopsis: "宗门林立，修士争夺大道机缘"}

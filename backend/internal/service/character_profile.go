@@ -410,6 +410,39 @@ func ageSubject(appearance, trait string) string {
 	return match[1] + "岁" + gender
 }
 
+func historicalPortraitHairConstraint(char *models.Character, project *models.Project) string {
+	genre, synopsis := "", ""
+	if project != nil {
+		genre, synopsis = project.Genre, project.Synopsis
+	}
+	context := strings.Join([]string{genre, synopsis, char.Role, char.Appearance, char.Trait, char.WardrobeDetail}, " ")
+	isHistorical := strings.Contains(context, "修仙") || strings.Contains(context, "仙侠") || strings.Contains(context, "武侠") || strings.Contains(context, "古代") || strings.Contains(context, "古装") || strings.Contains(context, "宗门") || strings.ContainsAny(context, "狐妖魔仙灵")
+	if !isHistorical {
+		return ""
+	}
+	hair := portraitFaceIdentity(char.Appearance, char.Trait)
+	hasDeclaredHair := false
+	for _, keyword := range []string{"头发", "发型", "发丝", "发髻", "长发", "短发", "披发", "束发", "冠", "簪"} {
+		if strings.Contains(hair, keyword) {
+			hasDeclaredHair = true
+			break
+		}
+	}
+	base := "发型必须符合中国古典时代与仙侠语境，严禁现代平头、寸头、板寸、圆寸、锅盖头、飞机头、莫西干、侧剃、渐变推剪和现代短发造型"
+	if hasDeclaredHair {
+		return "严格保持档案中已声明的头发长度、发型、发髻与头饰；" + base
+	}
+	male := strings.Contains(context, "男性") || strings.Contains(context, "男子") || strings.Contains(context, "男孩") || strings.Contains(context, "男童")
+	female := strings.Contains(context, "女性") || strings.Contains(context, "女子") || strings.Contains(context, "女孩") || strings.Contains(context, "女童")
+	if male {
+		return "未明确发型时采用中国古典男子蓄发：黑色长发束起为发髻或束发，以发带、木簪或冠固定；" + base
+	}
+	if female {
+		return "未明确发型时采用中国古典女子长发与传统发髻，不使用现代短发；" + base
+	}
+	return base
+}
+
 func portraitStoryIdentity(char *models.Character, project *models.Project) string {
 	parts := []string{}
 	genre, style, synopsis := "", "", ""
@@ -457,6 +490,9 @@ func (s *CharacterProfileService) GenerateReferencePrompt(char *models.Character
 	// 题材与画风放在提示词最前部，避免被后续的长外貌和服装描述淹没。
 	if identity := portraitStoryIdentity(char, project); identity != "" {
 		parts = append(parts, identity)
+	}
+	if hair := historicalPortraitHairConstraint(char, project); hair != "" {
+		parts = append(parts, hair)
 	}
 	parts = append(parts, appearance)
 	parts = append(parts, "本次标准像唯一妆造："+portraitStyling(char))
