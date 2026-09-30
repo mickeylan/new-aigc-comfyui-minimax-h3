@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -462,13 +463,73 @@ func (s *CharacterProfileService) GetProfileFields(char *models.Character) map[s
 
 // --- 内部辅助函数 ---
 
+var characterProfileStringFields = []string{
+	"name", "role", "appearance", "personality", "background", "relationships", "emotions", "habits",
+	"wardrobe_detail", "lighting_mood", "color_palette",
+}
+
+// profileValueText 将模型偶尔返回的数组/对象稳定压平成可编辑文本，避免一个字段类型漂移
+// 导致整份角色档案丢失。对象键排序保证结果可复现。
+func profileValueText(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(typed)
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := profileValueText(item); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "；")
+	case map[string]any:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			if text := profileValueText(typed[key]); text != "" {
+				parts = append(parts, key+"："+text)
+			}
+		}
+		return strings.Join(parts, "；")
+	default:
+		return strings.TrimSpace(fmt.Sprint(typed))
+	}
+}
+
+func normalizeCharacterProfileScalarStrings(jsonStr string) (string, error) {
+	var object map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &object); err != nil {
+		return "", err
+	}
+	for _, field := range characterProfileStringFields {
+		if value, ok := object[field]; ok {
+			object[field] = profileValueText(value)
+		}
+	}
+	normalized, err := json.Marshal(object)
+	if err != nil {
+		return "", err
+	}
+	return string(normalized), nil
+}
+
 // parseCharacterProfileJSON 解析 LLM 返回的角色档案 JSON
 func parseCharacterProfileJSON(raw string) (*characterProfileResult, error) {
 	// 尝试提取 JSON（处理 markdown 代码块包裹）
 	jsonStr := extractJSON(raw)
+	normalized, err := normalizeCharacterProfileScalarStrings(jsonStr)
+	if err != nil {
+		return nil, fmt.Errorf("JSON 解析失败: %w", err)
+	}
 
 	var result characterProfileResult
-	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+	if err := json.Unmarshal([]byte(normalized), &result); err != nil {
 		return nil, fmt.Errorf("JSON 解析失败: %w", err)
 	}
 

@@ -51,6 +51,24 @@ func TestParseCharacterProfileJSON(t *testing.T) {
 	}
 }
 
+func TestParseCharacterProfileJSONNormalizesStructuredFields(t *testing.T) {
+	raw := `{"name":"马脸男子","role":"配角","appearance":"马脸，细长眼","personality":["谨慎","善于观察"],"background":"外堂弟子","relationships":{"狐女":{"relation":"追捕目标","attitude":"戒备"},"同伴":"临时合作"},"emotions":"紧张时眯眼","habits":"握紧刀柄","wardrobe_detail":"青色道袍，黑色布靴","lighting_mood":"冷色侧光","color_palette":"青灰色"}`
+	result, err := parseCharacterProfileJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"狐女", "追捕目标", "戒备", "同伴", "临时合作"} {
+		if !strings.Contains(result.Relationships, want) {
+			t.Fatalf("normalized relationships missing %q: %s", want, result.Relationships)
+		}
+	}
+	for _, want := range []string{"谨慎", "善于观察"} {
+		if !strings.Contains(result.Personality, want) {
+			t.Fatalf("normalized personality missing %q: %s", want, result.Personality)
+		}
+	}
+}
+
 func TestParseCharacterProfileJSONInvalid(t *testing.T) {
 	cases := []string{
 		`{"name":"林夏"}`, // 缺少必要字段
