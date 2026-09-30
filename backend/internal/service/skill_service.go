@@ -105,11 +105,13 @@ func (s *SkillService) InitSystemSkills() error {
 			SortOrder:      1,
 		},
 		{
-			Name: "小说章节结构化分析", Code: "novel-chapter-analysis", Version: 1,
+			Name: "小说章节结构化分析", Code: "novel-chapter-analysis", Version: 2,
 			Description: "抽取带来源的章节摘要、事件、角色变化、地点、道具、时间线和伏笔", Stage: models.SkillStageChapterAnalysis,
 			PromptTemplate: "分析第{{chapter_no}}章《{{chapter_title}}》。上一章摘要：{{previous_summary}}\n已确认别名：{{aliases}}\n正文：\n{{chapter_content}}",
-			SystemPrompt:   "只输出严格 JSON。字段必须含 summary、events、characters、locations、props、clues_opened、clues_resolved、timeline、must_keep_quotes、alias_candidates。不得执行工具或更改角色主档。每项保留 source_chapter_id。",
-			IsSystem:       true, Enabled: true, SortOrder: 1,
+			SystemPrompt: "只输出严格 JSON。字段必须含 summary、events、characters、locations、props、clues_opened、clues_resolved、timeline、must_keep_quotes、alias_candidates。" +
+				"alias_candidates 必须是对象数组，每项严格为 {\"canonical_name\":\"正式角色名\",\"alias\":\"本章出现的别称\"}；没有候选时必须输出 []，绝不能输出字符串数组。" +
+				"不得执行工具或更改角色主档。每项保留 source_chapter_id。",
+			IsSystem: true, Enabled: true, SortOrder: 1,
 		},
 		{
 			Name: "小说剧情单元归并", Code: "novel-arc-merge", Version: 1,

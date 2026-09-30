@@ -29,6 +29,27 @@ type NovelAnalysisService struct {
 	skills   *SkillService
 }
 
+type chapterAliasCandidate struct {
+	CanonicalName string `json:"canonical_name"`
+	Alias         string `json:"alias"`
+}
+
+type chapterAnalysisResult struct {
+	Summary         string                  `json:"summary"`
+	AliasCandidates []chapterAliasCandidate `json:"alias_candidates"`
+}
+
+func parseChapterAnalysis(raw string) (chapterAnalysisResult, error) {
+	var result chapterAnalysisResult
+	err := parseJSONObject(raw, &result)
+	return result, err
+}
+
+func isAliasCandidateSchemaError(err error) bool {
+	var typeErr *json.UnmarshalTypeError
+	return errors.As(err, &typeErr) && strings.HasPrefix(typeErr.Field, "alias_candidates")
+}
+
 func NewNovelAnalysisService(db *gorm.DB, provider TextProvider, skills *SkillService) *NovelAnalysisService {
 	return &NovelAnalysisService{db: db, provider: provider, skills: skills}
 }
@@ -165,16 +186,22 @@ func (s *NovelAnalysisService) analyzeChapter(job *models.NovelJob, chapter *mod
 		s.failChapter(chapter.ID, err)
 		return err
 	}
-	var result struct {
-		Summary         string `json:"summary"`
-		AliasCandidates []struct {
-			CanonicalName string `json:"canonical_name"`
-			Alias         string `json:"alias"`
-		} `json:"alias_candidates"`
-	}
-	if err := parseJSONObject(output, &result); err != nil || strings.TrimSpace(result.Summary) == "" {
+	result, parseErr := parseChapterAnalysis(output)
+	if isAliasCandidateSchemaError(parseErr) {
+		output, err = s.skills.ChatWithSkill(chapter.ProjectID, models.SkillStageChapterAnalysis, s.provider,
+			"CORRECTION REQUIRED: return the complete chapter analysis as strict JSON. alias_candidates must be an array of objects shaped exactly as {\"canonical_name\":\"formal character name\",\"alias\":\"alias found in this chapter\"}; use [] when there are no candidates. Never return strings inside alias_candidates.",
+			"The previous response used an invalid alias_candidates element type. Re-analyze the same chapter and return one complete corrected JSON object, not a patch.",
+			map[string]string{"chapter_no": strconv.Itoa(chapter.Order), "chapter_title": chapter.Title, "previous_summary": previous.Summary, "aliases": aliases, "chapter_content": chapter.Content})
 		if err == nil {
-			err = fmt.Errorf("analysis summary is required")
+			result, parseErr = parseChapterAnalysis(output)
+		}
+	}
+	if err != nil || parseErr != nil || strings.TrimSpace(result.Summary) == "" {
+		if err == nil {
+			err = parseErr
+			if err == nil {
+				err = fmt.Errorf("analysis summary is required")
+			}
 		}
 		s.failChapter(chapter.ID, err)
 		return err
