@@ -367,7 +367,8 @@ export const api = {
   approveAdaptation: (id, episode) => http.post(`/projects/${id}/adaptations/${episode}/approve`),
   generateAdaptationScript: (id, episode) => http.post(`/projects/${id}/adaptations/${episode}/script`, {}, { timeout: 300000 }),
   syncAdaptationAssets: (id, episode) => http.post(`/projects/${id}/adaptations/${episode}/assets/sync`),
-  generateAdaptationAssets: (id, episode) => http.post(`/projects/${id}/adaptations/${episode}/assets/generate`, {}, { timeout: 300000 }),
+  // 后端逐项补全当前集引用的角色与资产，允许较慢的本地模型完成。
+  generateAdaptationAssets: (id, episode) => http.post(`/projects/${id}/adaptations/${episode}/assets/generate`, {}, { timeout: 1200000 }),
   reviewAdaptation: (id, episode, overrideReason = '') => http.post(`/projects/${id}/adaptations/${episode}/review`, { override_reason: overrideReason }, { timeout: 300000 }),
   adaptationContext: (id, episode) => http.get(`/projects/${id}/adaptations/${episode}/context`),
   novelUsage: (id) => http.get(`/projects/${id}/novel/usage`),

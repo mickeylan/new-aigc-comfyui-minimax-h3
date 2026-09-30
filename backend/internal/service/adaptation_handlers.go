@@ -3,7 +3,9 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -176,17 +178,48 @@ func (s *Service) HandleGenerateAdaptationAssets(c *gin.Context) {
 		Scenes:      scenes,
 	}
 	contextJSON, _ := json.Marshal(profileContext)
+	characterSet := map[string]bool{}
+	assetSet := map[string]bool{}
+	for _, scene := range scenes {
+		for _, raw := range []string{scene.Characters, scene.VisibleCharacters, scene.VoiceCharacters} {
+			for _, name := range parseSceneCharacters(raw) {
+				characterSet[name] = true
+			}
+		}
+		if name := strings.TrimSpace(scene.LocationName); name != "" {
+			assetSet[AssetKindLocation+"\x00"+name] = true
+		}
+		for _, name := range parseSceneCharacters(scene.Props) {
+			assetSet[AssetKindProp+"\x00"+name] = true
+		}
+	}
+	characterNames := make([]string, 0, len(characterSet))
+	for name := range characterSet {
+		characterNames = append(characterNames, name)
+	}
+	sort.Strings(characterNames)
 	var characters []models.Character
-	// “AI补全”也负责重新生成尚未审核的草稿/驳回档案。旧逻辑只检查 appearance
-	// 是否为空，导致错误但非空的档案永远显示“补全0个”且无法纠正。
+	// 只补全本集实际引用的角色。旧逻辑扫描整个项目并串行调用 AI，角色越多越容易超过 HTTP 超时。
 	profileIncomplete := `(appearance = '' OR appearance IS NULL OR personality = '' OR personality IS NULL OR background = '' OR background IS NULL OR relationships = '' OR relationships IS NULL OR emotions = '' OR emotions IS NULL OR habits = '' OR habits IS NULL OR wardrobe_detail = '' OR wardrobe_detail IS NULL OR lighting_mood = '' OR lighting_mood IS NULL OR color_palette = '' OR color_palette IS NULL)`
-	if err := s.DB.Where("project_id = ? AND (profile_status <> ? OR "+profileIncomplete+")", p.ID, models.ProfileStatusApproved).Find(&characters).Error; err != nil {
+	characterQuery := s.DB.Where("project_id = ? AND (profile_status <> ? OR "+profileIncomplete+")", p.ID, models.ProfileStatusApproved)
+	if len(characterNames) == 0 {
+		characterQuery = characterQuery.Where("1 = 0")
+	} else {
+		characterQuery = characterQuery.Where("name IN ?", characterNames)
+	}
+	if err := characterQuery.Find(&characters).Error; err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 	// 已审核档案通常保持不动；但若其年龄已与本集权威小说原文冲突，也必须进入修复队列。
 	var approvedCharacters []models.Character
-	if err := s.DB.Where("project_id = ? AND profile_status = ?", p.ID, models.ProfileStatusApproved).Find(&approvedCharacters).Error; err != nil {
+	approvedQuery := s.DB.Where("project_id = ? AND profile_status = ?", p.ID, models.ProfileStatusApproved)
+	if len(characterNames) == 0 {
+		approvedQuery = approvedQuery.Where("1 = 0")
+	} else {
+		approvedQuery = approvedQuery.Where("name IN ?", characterNames)
+	}
+	if err := approvedQuery.Find(&approvedCharacters).Error; err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -206,10 +239,16 @@ func (s *Service) HandleGenerateAdaptationAssets(c *gin.Context) {
 		}
 		generatedCharacters++
 	}
-	var assets []models.Asset
-	if err := s.DB.Where("project_id = ? AND (description = '' OR description IS NULL)", p.ID).Find(&assets).Error; err != nil {
+	var missingAssets []models.Asset
+	if err := s.DB.Where("project_id = ? AND (description = '' OR description IS NULL)", p.ID).Find(&missingAssets).Error; err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
+	}
+	assets := make([]models.Asset, 0, len(missingAssets))
+	for _, asset := range missingAssets {
+		if assetSet[asset.Kind+"\x00"+strings.TrimSpace(asset.Name)] {
+			assets = append(assets, asset)
+		}
 	}
 	generatedAssets := 0
 	for i := range assets {
