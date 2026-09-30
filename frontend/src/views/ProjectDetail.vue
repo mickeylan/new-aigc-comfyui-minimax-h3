@@ -29,6 +29,7 @@
           {{ pipelineActive ? `第${project.pipeline_episode || activeEpN}集生成中…` : `⚡ 一键生成(第${activeEpN}集全流程)` }}
         </button>
         <button v-if="pipelineActive" class="btn btn-danger btn-sm" :disabled="busy" @click="resetGenerationState">解除卡住的生成状态</button><button class="btn btn-ghost btn-sm" :disabled="busy" @click="dubAll">🎤 全集配音</button>
+        <button class="btn btn-secondary btn-sm" @click="showGeneratedHistory = true">🖼 生成图片历史</button>
         <router-link :to="`/projects/${id()}/editor`" class="btn btn-secondary btn-sm">🎬 剪辑台</router-link>
         <a class="btn btn-ghost btn-sm" :href="api.srtUrl(id(), activeEpN)" target="_blank">📜 第{{ activeEpN }}集字幕</a>
         <button class="btn btn-danger btn-sm" @click="removeProject">🗑 删除</button>
@@ -929,6 +930,8 @@
       </div>
     </div>
 
+    <GeneratedMediaHistoryDrawer :project-id="id()" :open="showGeneratedHistory" @close="showGeneratedHistory=false" @changed="load" />
+
     <!-- 图片查看弹窗 -->
     <div v-if="viewer" class="modal-mask viewer-mask" tabindex="-1" ref="viewerMask" @click.self="closeViewer" @keydown.esc="closeViewer">
       <div class="viewer-panel" role="dialog" aria-modal="true" aria-label="图片预览">
@@ -968,6 +971,7 @@ import { api } from '../api'
 import { useAppStore } from '../stores/app'
 import { useToastStore } from '../stores/toast'
 import FrameSelector from '../components/FrameSelector.vue'
+import GeneratedMediaHistoryDrawer from '../components/GeneratedMediaHistoryDrawer.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -1070,6 +1074,7 @@ const videoTaskLastFrame = ref('')
 const savingVideoPrompt = ref(false)
 const regeneratingVideoPrompt = ref(false)
 const viewerMask = ref(null)
+const showGeneratedHistory = ref(false)
 const busy = ref(false)
 const generatingScript = ref(false)
 const generatingPlan = ref(false)

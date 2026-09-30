@@ -17,6 +17,12 @@ test('角色编辑弹窗按当前标签保存对应档案字段', () => {
   assert.ok((projectDetail.match(/@click="saveCharacterProfile"/g) || []).length >= 3)
 })
 
+test('项目详情可直接打开统一生成图片历史并删除旧版本', () => {
+  assert.match(detail, /生成图片历史/)
+  assert.match(detail, /GeneratedMediaHistoryDrawer/)
+  assert.match(detail, /showGeneratedHistory = true/)
+})
+
 test('角色标准像提交过程有即时和持续状态反馈', () => {
   assert.match(detail, /正在创建标准像任务，请稍候/)
   assert.match(detail, /标准像任务已提交，正在排队或生成/)
