@@ -1849,7 +1849,7 @@ func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Di
 	for _, name := range names {
 		// 接受“林采薇说道：\"...\"”“传来林采薇的声音说道：\"...\"”等明确发声写法。
 		// 必须同时具备已知角色名、明确说话动词和引号原文，避免把剧情说明猜成对白。
-		pattern := regexp.MustCompile(regexp.QuoteMeta(name) + `[^。！？!?\r\n]{0,30}?(?:说道|说|问道|答道|喊道|叫道|开口道)\s*[:：]?\s*["“]([^"”]+)["”]`)
+		pattern := regexp.MustCompile(regexp.QuoteMeta(name) + `[^。！？!?\r\n]{0,30}?(?:厉喝|怒喝|大喝|喝道|喝喊|喊道|叫道|高喊|说道|说|问道|答道|开口道)\s*[:：]?\s*["“]([^"”]+)["”]`)
 		for _, match := range pattern.FindAllStringSubmatchIndex(content, -1) {
 			lead := content[match[0]+len(name) : match[2]]
 			shadowed := false
