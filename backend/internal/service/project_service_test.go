@@ -1771,6 +1771,29 @@ func TestExplicitNarrationAndMonologueRemainAllowed(t *testing.T) {
 	}
 }
 
+func TestLeadingQuotedShoutUsesOnlyVoiceCharacter(t *testing.T) {
+	sc := &models.Scene{
+		Characters:        "柳乐儿,虬髯大汉",
+		VisibleCharacters: "柳乐儿,虬髯大汉",
+		VoiceCharacters:   "虬髯大汉",
+		Content:           "“妖孽，哪里跑！”后方远处蓦然传来男子厉喝，声震荒野。女童闻言身子一颤，脸色唰白。",
+	}
+	dubs := explicitSceneSpeech(sc)
+	if len(dubs) != 1 || dubs[0].Character != "虬髯大汉" || dubs[0].SpeechType != "dialogue" || dubs[0].Text != "妖孽，哪里跑！" {
+		t.Fatalf("leading quoted shout = %+v", dubs)
+	}
+	lines := []string{"- <Picture 1>：角色「柳乐儿」四视图", "- <Picture 2>：角色「虬髯大汉」四视图", "- <Picture 3>：场景「辽阔荒地」参考图", "- <Picture 4>：当前分镜画面"}
+	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] <Subject 1> falters.\n[Shot 2] At 00:04.000, <Subject 2> charges through dust.", Duration: 8}, nil, dubs, lines)
+	for _, want := range []string{"<Subject 2> (S1) says:", "<d>[Chinese] 妖孽，哪里跑！</d>", "no additional voices"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("compiled prompt missing %q: %s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "No dialogue, human voice") {
+		t.Fatalf("spoken scene was compiled as silent: %s", prompt)
+	}
+}
+
 func TestStandardSceneSpeechFormat(t *testing.T) {
 	sc := &models.Scene{Characters: "林采微, 雷晓飞", Content: "【动作】林采微望向门外。\n【对白｜雷晓飞】我去看看。\n【旁白】夜色渐深。\n【内心独白｜林采微】他还会回来吗？"}
 	dubs := explicitSceneSpeech(sc)
@@ -1913,6 +1936,22 @@ func TestDialogueKeepsSpeechAndDropsInlineStageDirection(t *testing.T) {
 	got := validSceneDialogues([]models.Dialogue{{Character: "舒寒", Text: "（轻抚她的脸庞）你终于醒了。"}})
 	if len(got) != 1 || got[0].Text != "你终于醒了。" {
 		t.Fatalf("dialogue normalization = %+v", got)
+	}
+}
+
+func TestExplicitQuotedSpeechRequiresStructuredDialogue(t *testing.T) {
+	content := "“妖孽，哪里跑！”后方远处蓦然传来男子厉喝，声震荒野。女童闻言身子一颤。"
+	if got := explicitUnstructuredSceneSpeech(content, nil); got != "妖孽，哪里跑！" {
+		t.Fatalf("explicit speech detection=%q", got)
+	}
+	if err := requireStructuredSceneSpeech(content, nil); err == nil || !strings.Contains(err.Error(), "结构化Dialogue为空") || !strings.Contains(err.Error(), "妖孽，哪里跑") {
+		t.Fatalf("missing actionable structured-dialogue error: %v", err)
+	}
+	if err := requireStructuredSceneSpeech(content, []models.Dialogue{{Character: "虬髯大汉", SpeechType: "dialogue", Text: "妖孽，哪里跑！"}}); err != nil {
+		t.Fatalf("valid structured dialogue rejected: %v", err)
+	}
+	if got := explicitUnstructuredSceneSpeech("石碑刻着“太虚门”三个字。", nil); got != "" {
+		t.Fatalf("visible quoted text was mistaken for speech: %q", got)
 	}
 }
 

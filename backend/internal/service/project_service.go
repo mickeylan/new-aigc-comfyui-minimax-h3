@@ -1406,6 +1406,9 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	shotContext := s.sceneShotContext(sc)
 	canonicalSceneContent := normalizeUserH3ShotMarkers(sc.Content)
 	dubs := s.sceneVideoDialogues(sc)
+	if err := requireStructuredSceneSpeech(sc.Content, dubs); err != nil {
+		return "", err
+	}
 	var shots []models.Shot
 	if err := s.db.Where("scene_id=?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
 		return "", err
@@ -1793,6 +1796,7 @@ var (
 	standardSceneSpeechPattern  = regexp.MustCompile(`【(对白|旁白|内心独白)(?:[｜|]([^】]+))?】\s*`)
 	quotedThoughtPattern        = regexp.MustCompile(`(?:心想|暗自想道|心中说道|心中想道|默念)\s*[:：]?\s*["“]([^"”]+)["”]`)
 	offscreenVoiceSpeechPattern = regexp.MustCompile(`(?:门外|屋外|画外|身后)?[^。！？!?\r\n]{0,12}?(?:传来|响起)([\p{Han}]{2,4})(?:清脆悦耳|清脆|悦耳|温柔|低沉|沙哑|熟悉|陌生|焦急|急促|平静)*的声音(?:说道|说|喊道|叫道)\s*[:：]?\s*["“]([^"”]+)["”]`)
+	leadingQuoteSpeechPattern   = regexp.MustCompile(`["“]([^"”]{1,200})["”][^。！？!?\r\n]{0,50}?(?:传来|响起)?[^。！？!?\r\n]{0,20}?(?:男子|男人|大汉|女子|女人|少女|女童|男童|老人|老者)?(?:厉喝|怒喝|大喝|喝道|喊道|叫道|说道|说)`)
 )
 
 func sceneCharacterNameList(characters string) []string {
@@ -1905,6 +1909,28 @@ func explicitSceneSpeech(sc *models.Scene) []models.Dialogue {
 			}
 		}
 	}
+	// 小说常把引号对白写在前面，再于后文注明“远处男子厉喝”。当本场恰好
+	// 只有一个结构化画外发声角色时，该角色是确定归属，不需要模型猜测。
+	voiceNames := sceneCharacterNameList(sc.VoiceCharacters)
+	if len(voiceNames) == 1 {
+		for _, match := range leadingQuoteSpeechPattern.FindAllStringSubmatchIndex(content, -1) {
+			text := strings.TrimSpace(content[match[2]:match[3]])
+			if text == "" {
+				continue
+			}
+			duplicate := false
+			for _, existing := range out {
+				if existing.SpeechType == "dialogue" && existing.Character == voiceNames[0] && strings.TrimSpace(existing.Text) == text {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				out = append(out, models.Dialogue{Character: voiceNames[0], SpeechType: "dialogue", Text: text, Order: len(out) + 1})
+			}
+		}
+	}
+
 	// Preferred authoring format: 【对白｜角色】、【旁白】、【内心独白｜角色】.
 	standard := standardSceneSpeechPattern.FindAllStringSubmatchIndex(content, -1)
 	for i, match := range standard {
@@ -2084,6 +2110,46 @@ func (s *ProjectService) sceneVideoDialogues(sc *models.Scene) []models.Dialogue
 		}
 	}
 	return dubs
+}
+
+var quotedSceneSpeechPattern = regexp.MustCompile(`[“「]([^”」]{1,200})[”」]`)
+var sceneSpeechAttributionPattern = regexp.MustCompile(`说|说道|开口|喊|叫|喝|厉喝|怒喝|低语|问道|答道|传来.{0,12}(?:声音|嗓音|男声|女声)`)
+
+func explicitUnstructuredSceneSpeech(content string, dubs []models.Dialogue) string {
+	if len(validSceneDialogues(dubs)) > 0 {
+		return ""
+	}
+	runes := []rune(content)
+	indices := quotedSceneSpeechPattern.FindAllStringSubmatchIndex(content, -1)
+	for _, match := range indices {
+		if len(match) < 4 {
+			continue
+		}
+		quoted := strings.TrimSpace(content[match[2]:match[3]])
+		if quoted == "" {
+			continue
+		}
+		startRunes := len([]rune(content[:match[0]]))
+		endRunes := len([]rune(content[:match[1]]))
+		from, to := startRunes-24, endRunes+60
+		if from < 0 {
+			from = 0
+		}
+		if to > len(runes) {
+			to = len(runes)
+		}
+		if sceneSpeechAttributionPattern.MatchString(string(runes[from:to])) {
+			return quoted
+		}
+	}
+	return ""
+}
+
+func requireStructuredSceneSpeech(content string, dubs []models.Dialogue) error {
+	if quoted := explicitUnstructuredSceneSpeech(content, dubs); quoted != "" {
+		return fmt.Errorf("Scene正文含明确对白“%s”，但结构化Dialogue为空；请在结构化剧本中添加真实说话人和逐字对白并保存后重试，系统不会猜测说话人或把该句静默删除", quoted)
+	}
+	return nil
 }
 
 func validSceneDialogues(dubs []models.Dialogue) []models.Dialogue {
@@ -5211,6 +5277,9 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		return err
 	}
 	dialogues := s.sceneVideoDialogues(sc)
+	if err := requireStructuredSceneSpeech(sc.Content, dialogues); err != nil {
+		return err
+	}
 	for _, dialogue := range dialogues {
 		if err := validateDialogueSpeaker(dialogue); err != nil {
 			return err
