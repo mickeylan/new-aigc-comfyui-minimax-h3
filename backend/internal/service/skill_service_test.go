@@ -98,7 +98,10 @@ func TestH3CombatSkillUsesAssetsInsteadOfWeaponEnumeration(t *testing.T) {
 		t.Fatal(err)
 	}
 	contract := skill.SystemPrompt + skill.PromptTemplate
-	for _, want := range []string{"实际资产", "禁止用通用武器替换", "仙术对轰", "正常实时速度", "结构化Dialogue"} {
+	if skill.Version != 2 {
+		t.Fatalf("combat skill version=%d, want 2", skill.Version)
+	}
+	for _, want := range []string{"实际资产", "不得用通用资产替换", "仙术", "正常实时速度", "结构化Dialogue", "身体结构", "攻击线", "未完成动量", "不强制多阶段", "主要摄影机任务"} {
 		if !strings.Contains(contract, want) {
 			t.Fatalf("combat skill missing %q: %s", want, contract)
 		}
