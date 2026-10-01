@@ -1403,20 +1403,10 @@ func classifyH3SceneMode(sc *models.Scene, shots []models.Shot, dubs []models.Di
 
 var h3SlowMotionCuePattern = regexp.MustCompile(`(?i)slow[ -]?motion|bullet time|in slow motion|slowly|gradually|lingering pause|缓缓|慢慢|逐渐|慢动作|慢镜头|子弹时间|悬停展示`)
 var h3RealTimeCuePattern = regexp.MustCompile(`(?i)real[- ]time|at full speed|immediately|instantly|rapidly|swiftly|in one sharp motion|实时速度|立即|瞬间|迅速`)
-var h3AttackMotionPattern = regexp.MustCompile(`(?i)launch|lunge|charge|strike|slash|thrust|attack|hurtl|collid|blast|bite|冲|扑|咬|斩|刺|劈|轰|撞|射出|射向|飞射|飞向`)
-var h3DefenderResponsePattern = regexp.MustCompile(`(?i)blocks?|parr(?:y|ies)|dodges?|evades?|counters?|slashes?|strikes?|pivots?|sidesteps?|recoils?|is knocked|deflects?|braces?|guards?|raises?[^.]{0,30}(?:blade|sword|weapon)|snaps?[^.]{0,30}into guard|steps? back|shifts?[^.]{0,20}stance|格挡|闪避|侧身|反击|挥刀|举刀|架刀|后撤|退步|防御姿态|劈开|斩断|震退|倒飞|落地`)
 
 func h3ActionTempoContractMatches(value string) bool {
 	check := strings.NewReplacer("no slow motion", "", "no bullet time", "", "no lingering pause", "", "无慢动作", "", "禁止慢动作", "", "禁止子弹时间", "", "禁止停顿", "").Replace(strings.ToLower(value))
-	if h3SlowMotionCuePattern.MatchString(check) || !h3RealTimeCuePattern.MatchString(value) {
-		return false
-	}
-	// 攻击已进入画面时，正文必须包含可见的防守、闪避、反击或受力结果，
-	// 不能只让被攻击者站立、持械、观察。
-	if h3AttackMotionPattern.MatchString(value) && !h3DefenderResponsePattern.MatchString(value) {
-		return false
-	}
-	return true
+	return !h3SlowMotionCuePattern.MatchString(check) && h3RealTimeCuePattern.MatchString(value)
 }
 
 func enforceH3ActionTempo(value string, mode h3SceneMode) string {
@@ -1430,26 +1420,12 @@ func enforceH3ActionTempo(value string, mode h3SceneMode) string {
 	return strings.TrimSpace(value)
 }
 
-var h3ArmedSubjectPattern = regexp.MustCompile(`(?i)(<Subject\s+[0-9]+>)[^\n.]{0,120}(?:grips?|holds?|wields?|carries?|raises?|持|握|提|举)[^\n.]{0,50}(?:blade|sword|knife|saber|weapon|podao|刀|剑|朴刀)`)
-
-func completeNeutralCombatResponse(value string) (string, bool) {
-	if !h3AttackMotionPattern.MatchString(value) || h3DefenderResponsePattern.MatchString(value) || regexp.MustCompile(`[\p{Han}]`).MatchString(value) {
-		return value, h3ActionTempoContractMatches(value)
-	}
-	match := h3ArmedSubjectPattern.FindStringSubmatch(value)
-	if len(match) < 2 {
-		return value, false
-	}
-	addition := fmt.Sprintf(" %s instantly pivots, snaps the held weapon into guard, and takes one sharp defensive step back without deciding whether the incoming attack hits.", match[1])
-	return enforceH3ActionTempo(strings.TrimSpace(value)+addition, h3SceneAction), true
-}
-
 func combatActionRepairRequest(authoritative, draft string, duration float64) string {
 	return fmt.Sprintf(`Rewrite this combat or spell-clash draft into concise official English H3 shot prose. Return only the detailed_description body.
 Hard requirements:
 - Preserve every authoritative Shot number, order, subject, weapon, spell, location and stated outcome; add no new combatant, power, injury, victory or defeat.
 - Motion starts immediately at full real-time speed. Resolve the main burst of motion within the opening 1–2 seconds instead of stretching it across %.1f seconds; use the remaining time only for visible recoil, displaced dust/grass, recovery stance or a brief aftermath already supported by the facts.
-- Every incoming attack gets an immediate visible response in the same Shot. If the source does not state hit/miss/block outcome, add only a neutral non-outcome reaction such as snapping the held weapon into guard, pivoting, bracing or taking one sharp defensive step; do not decide whether the attack hits.
+- Every incoming attack gets an immediate visible response in the same Shot. Derive that response from the authoritative character state, actual referenced asset, spatial relation and established capability. If the source does not state the outcome, choose a visible response that changes no hit/miss/block, injury, victory or defeat fact.
 - State direction, target, weapon/spell ownership, response and end pose. No standing still and watching, no slow motion, bullet time, hovering display, prolonged charge or lingering pause.
 - Visual prose must be English except exact structured dialogue. Do not output dialogue, headings, Markdown or explanation.
 
@@ -1506,14 +1482,14 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 正文是给视频模型执行的镜头指令，不是剧本复述。每个Shot只写一个紧凑英文段落，约25至45个英文单词：当前构图与主体位置、一个主要动作或状态变化、一种运镜，以及必要光线。不得用分号堆砌同义短语。
 运镜必须自然融入动作句：明确运动类型；仅在确有意义时写小/大幅度和慢/快速，正常速度与中等幅度省略。固定镜头不得同时出现推进、跟随、摇移、升降、环绕或变焦。
 忠实采用Scene与结构化Shot，但不得复述剧情背景、人物关系、前因后果、心理活动、内心想法、氛围解释或观众感受；禁止“仿佛想说什么”“未说出口的问题”“沉默中充满”等文学化语言暗示。
-第一句以 [Shot 1] 开头，说明画面可从%s参考状态开始；随后直接写动作与镜头。不得新增角色、对白、道具、地点、胜负、伤亡或剧情结果。武戏中若原文只写来袭动作而未写防守结果，必须补充不改变胜负的即时中性反应（迅速转身、将已持武器架入防御、急退一步或收紧架势），不得让被攻击者站立观察。
+第一句以 [Shot 1] 开头，说明画面可从%s参考状态开始；随后直接写动作与镜头。不得新增角色、对白、道具、地点、胜负、伤亡或剧情结果。武戏中若原文只写来袭动作而未写应对，必须依据实际人物状态、资产、空间关系和既有能力设计不改变剧情结果的即时可见应对，不得让被攻击者站立观察。
 Dialogue只决定人物是否开口及必要口型时机；对白文本将由系统确定性加入，你不得在正文输出台词、<d>标签或改写台词。无结构化对白时，人物保持闭口，不得描写嘴唇微张、欲言又止或任何说话暗示。
 正文中的人物身份占位必须逐字使用【场景剧情】和【Shot导演设计】里的中文真实角色名，以便系统确定性替换为正确 <Subject N>；其余视觉叙述使用英文。严禁拼音、英文音译、别名，也禁止自行猜测Subject编号。
 四视图只负责人物身份与服装，场景图只负责环境；不得从参考图反推剧情，不得复述或猜测外貌、服装、陈设。
 场景类型规则：%s`, openingPicture, h3SceneModeInstruction(sceneMode))
 	actionTask := ""
 	if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
-		actionTask = "\n\n【武戏硬任务】动作必须从开头立即以正常实时速度启动；来袭攻击必须在同一Shot中触发立即可见的响应。原文未给出命中或胜负时，只能补充中性反应：迅速转身、将已经持有的武器架入防御、急退一步或收紧防御架势；不得生成站立观察，不得擅自决定命中、击杀、受伤或胜负。主要动作爆发应在开头1–2秒完成，余下时间表现草叶、尘土、衣物回弹和恢复架势，禁止把接近过程拉满整段。"
+		actionTask = "\n\n【武戏硬任务】动作必须从开头立即以正常实时速度启动；来袭攻击必须在同一Shot中触发立即可见的响应。武器、法宝、灵兽、术法和能量形态只能读取下方Scene、Shot与实际参考绑定，不得用通用武器替换，不得创造未提供的装备或术法。原文未给出命中或胜负时，只能设计不改变结果的即时可见应对，不得生成站立观察，不得擅自决定命中、击杀、受伤或胜负。主要动作爆发应在开头1–2秒完成，余下时间只延续权威事实中已有的环境反馈与结束状态，禁止把接近过程拉满整段。"
 	}
 	user := fmt.Sprintf("目标时长：%.1f秒。只提取执行本镜所必需的信息，不要把以下资料逐段复述进输出。场景剧情中已明确存在的每个[Shot N]都必须原序保留，禁止合并或删除。%s\n\n【场景剧情（仅作事实边界）】\n%s\n\n【Shot导演设计（动作与镜头权威）】\n%s\n\n【结构化对白（仅判断口型时机）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s", normalizeSceneDuration(sc.Duration), actionTask, canonicalSceneContent, shotContext, dialogueContext, strings.Join(refLines, "\n"))
 	policy, err := NewPromptPolicyService(s.db).Resolve(PromptPolicyContext{ProjectID: sc.ProjectID, SceneID: &sc.ID}, PromptPolicyVideoPolish, system)
@@ -1633,12 +1609,8 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 			candidate = enforceH3ActionTempo(useSubjectTags(candidate, refLines), sceneMode)
 			if actionTrusted(candidate, true) && !regexp.MustCompile(`[\p{Han}]`).MatchString(candidate) {
 				out = candidate
-			} else if completed, ok := completeNeutralCombatResponse(candidate); ok && actionTrusted(completed, true) {
-				// AI 已完成英文主体动作但漏掉即时防御时，后端只补不改变胜负的
-				// 中性架刀/转身/退步，不再把同一校验错误交给用户处理。
-				out = completed
 			} else {
-				return "", fmt.Errorf("AI武戏动作补全失败：模型没有返回可识别的英文攻击主体与持械防御者，无法安全补全且不改变剧情结果")
+				return "", fmt.Errorf("AI武戏动作补全失败：模型仍未返回符合Shot结构的英文实时动作正文")
 			}
 		}
 	}
