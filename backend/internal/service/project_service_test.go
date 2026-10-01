@@ -1135,6 +1135,9 @@ func TestValidateQwenScenePromptRejectsGenericInstructionAndMissingReferences(t 
 	if err := validateQwenScenePrompt(valid, 2); err != nil {
 		t.Fatalf("valid Qwen edit prompt rejected: %v", err)
 	}
+	if err := validateQwenScenePrompt("使用输入图提取人物身份，在荒地中近景略微俯拍跟拍幼女奔跑。", 1); err == nil || !strings.Contains(err.Error(), "跟拍") {
+		t.Fatalf("moving-camera wording was not rejected: %v", err)
+	}
 }
 
 func TestEnsureQwenSceneReferenceBindingsDeterministicallyAddsMissingImages(t *testing.T) {
@@ -1177,7 +1180,7 @@ func TestBuildQwenSceneExecutionPromptKeepsLocationOnlyAndForbidsPeople(t *testi
 	}
 	sc := models.Scene{ProjectID: p.ID, ImageEngine: ImageEngineQwen21, ImagePrompt: "以<image1>中的空间为环境来源，天阙宗玉霄峰巍峨耸立于云海之上", ReferenceImagesJSON: `[{"source_type":"asset","source_id":22,"variant":"image","use_krea2":true,"use_h3":false}]`}
 	got := ps.buildQwenSceneExecutionPrompt(&sc, []string{"- <Picture 1>：场景「玉霄宫」参考图"})
-	for _, want := range []string{"输入图作为场景「玉霄宫」参考图", "环境结构、空间布局、材质与固定陈设", "输入图不是画布", "天阙宗玉霄峰", "零人物", "No people"} {
+	for _, want := range []string{"使用输入图仅提取场景「玉霄宫」参考图", "环境结构、空间布局、材质与固定陈设", "独立新画布中重构一个静止剧情首帧", "天阙宗玉霄峰", "零人物", "No people"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("prompt missing %q: %s", want, got)
 		}

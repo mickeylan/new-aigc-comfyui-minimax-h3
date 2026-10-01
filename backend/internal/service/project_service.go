@@ -585,7 +585,7 @@ func ensureQwenSceneReferenceBindings(prompt string, referenceLines []string) st
 		if strings.Contains(prompt, "输入图") {
 			return prompt
 		}
-		return "输入图作为" + qwenSceneReferenceRole(referenceLines[0]) + "；输入图不是画布，按剧情首帧建立新构图。" + prompt
+		return "使用输入图仅提取" + qwenSceneReferenceRole(referenceLines[0]) + "，在独立新画布中重构一个静止剧情首帧；" + prompt
 	}
 	bindings := make([]string, 0, len(referenceLines))
 	for i, line := range referenceLines {
@@ -610,7 +610,7 @@ func validateQwenScenePrompt(prompt string, referenceCount int) error {
 			return fmt.Errorf("提示词仍是生成指令而不是最终画面描述（以“%s”开头）", prefix)
 		}
 	}
-	for _, forbidden := range []string{"核心设计", "起始状态", "结束状态", "转场采用", "运镜意图", "slow_tracking", "语速稍快", "镜头1核心", "镜头2核心", "镜头3核心"} {
+	for _, forbidden := range []string{"核心设计", "起始状态", "结束状态", "转场采用", "运镜意图", "slow_tracking", "语速稍快", "镜头1核心", "镜头2核心", "镜头3核心", "跟拍", "推镜", "拉镜", "摇镜", "镜头跟随", "镜头推进", "镜头后拉", "连续动作"} {
 		if strings.Contains(trimmed, forbidden) {
 			return fmt.Errorf("提示词包含非静止画面导演元数据“%s”", forbidden)
 		}
@@ -640,7 +640,7 @@ func (s *ProjectService) redesignQwenSceneImagePrompt(sc *models.Scene, project 
 	if hasRefs {
 		system = qwenImage21EditSystem
 	}
-	qwenSceneSystem := system + `\nThis is a single static opening keyframe, not a director plan. Use only the supplied opening-keyframe visual facts. Do not mention project names, scene numbers, shot numbers, core design, dialogue, speech speed, time pressure as an abstract concept, transitions, cuts, camera movement, start state, end state, or future action. Translate emotion into one visible facial expression or pose. Describe only what is visible in the finished still image. Output one concise continuous paragraph.`
+	qwenSceneSystem := system + `\nThis is a Qwen-Image-2.1 single static opening-keyframe prompt, not a director plan. Follow the selected Qwen T2I or image-edit contract exactly. Use only supplied opening-keyframe visual facts. For a referenced new composition, begin with a concrete operation verb and bind each input to one explicit source responsibility; no input is the canvas. Then state the finished frame's medium/style, subject count and identity source, exact frozen pose, prop ownership, foreground/midground/background spatial anchors, camera framing and fixed viewpoint, environment materials, palette, light source/direction/quality, cast shadows and highlights, and end with one composition summary. Do not mention project/scene/shot numbers, dialogue, timing, transitions, cuts, camera movement, start/end state, future action, or abstract emotion. Never write tracking, pan, tilt, dolly, push-in or pull-out language. Convert motion into one frozen body pose with visible dust, fabric and hair state. Output one continuous paragraph in the request language inside rewritten_prompt.`
 	user := fmt.Sprintf("User request:\n输出一个静止首帧的最终画面描述，不要复述导演参数。题材：%s；画风：%s；地点：%s；道具：%s。%s\n\nOpening-keyframe visual facts (the only Shot facts allowed):\n%s\n\nVerified appearance and environment facts:\n%s", project.Genre, project.Style, sc.LocationName, sc.Props, framingRule, shotContext, assetContext)
 	if hasRefs {
 		user += "\n\nOrdered input image roles (order is binding):"
@@ -4585,7 +4585,7 @@ func (s *ProjectService) buildQwenSceneExecutionPrompt(sc *models.Scene, referen
 	parts := make([]string, 0, len(referenceLines)+3)
 	if len(referenceLines) == 1 {
 		prompt = strings.ReplaceAll(prompt, "<image1>", "输入图")
-		parts = append(parts, "输入图作为"+qwenSceneReferenceRole(referenceLines[0])+"；输入图不是画布，按当前剧情首帧建立新构图，保持未被指定迁移的内容不进入新画面。")
+		parts = append(parts, "使用输入图仅提取"+qwenSceneReferenceRole(referenceLines[0])+"，在独立新画布中重构一个静止剧情首帧，未指定迁移的内容不进入新画面。")
 	} else {
 		for i, line := range referenceLines {
 			parts = append(parts, fmt.Sprintf("<image%d>作为%s；各参考职责保持分离，不混用身份、服装、道具或环境信息。", i+1, qwenSceneReferenceRole(line)))
