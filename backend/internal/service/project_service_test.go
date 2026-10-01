@@ -1644,7 +1644,8 @@ func TestGenerateSceneVideoActionRepairsStaticCombatInsteadOfOnlyReturningValida
 	ps.textProvider = provider
 	project := models.Project{Title: "测试"}
 	ps.db.Create(&project)
-	sc := models.Scene{ProjectID: project.ID, SceneMode: "武戏", Duration: 10, Content: "齐人高杂草丛中，五六条青色长蛇射出，蛇口大张朝虬髯大汉狠狠咬去。虬髯大汉持朴刀而立，目光警惕。"}
+	stale := "[Shot 1] 齐人高杂草丛中，五六条青色长蛇射出，蛇口大张朝<Subject 2>狠狠咬去。青光闪烁，幻术逼真。<Subject 2>持朴刀而立，目光警惕。"
+	sc := models.Scene{ProjectID: project.ID, SceneMode: "武戏", Duration: 10, Content: "齐人高杂草丛中，五六条青色长蛇射出，蛇口大张朝虬髯大汉狠狠咬去。虬髯大汉持朴刀而立，目光警惕。", VideoFullPrompt: "subject_definitions:\nold\n\ndetailed_description:\n" + stale}
 	ps.db.Create(&sc)
 	got, err := ps.GenerateSceneVideoAction(&sc)
 	if err != nil {
@@ -1660,6 +1661,9 @@ func TestGenerateSceneVideoActionRepairsStaticCombatInsteadOfOnlyReturningValida
 	}
 	if regexp.MustCompile(`[\p{Han}]`).MatchString(got) {
 		t.Fatalf("combat repair retained Chinese visual prose: %s", got)
+	}
+	if strings.Contains(got, stale) || strings.Contains(got, "幻术逼真") {
+		t.Fatalf("regeneration recycled stale VideoFullPrompt: %s", got)
 	}
 }
 

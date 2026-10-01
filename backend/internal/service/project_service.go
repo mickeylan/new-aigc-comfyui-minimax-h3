@@ -1517,15 +1517,15 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		return "", fmt.Errorf("AI 生成视频动作提示词失败: %w", err)
 	}
 	out = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(out), "```"), "```"))
+	// “重新生成”必须只使用当前Scene/Shot事实。旧VideoFullPrompt是上一版审核结果，
+	// 只能由查看/正式提交路径读取，绝不能在AI失败时偷偷回填，否则每次点击都会
+	// 返回完全相同的旧提示词，看起来像模型从未执行。
 	authoritativeFallback := func() string {
-		if strings.Contains(canonicalSceneContent, "[Shot ") {
-			return resolveH3VisualConflicts(coalesceDuplicateH3Shots(stripPromptDialogueNarration(canonicalSceneContent)))
-		}
-		if saved := normalizeVideoActionPrompt(sc.VideoFullPrompt); saved != "" {
-			return resolveH3VisualConflicts(coalesceDuplicateH3Shots(stripPromptDialogueNarration(saved)))
-		}
 		if len(shots) > 0 {
 			return rebuildStructuredShotAction(shots)
+		}
+		if strings.Contains(canonicalSceneContent, "[Shot ") {
+			return resolveH3VisualConflicts(coalesceDuplicateH3Shots(stripPromptDialogueNarration(canonicalSceneContent)))
 		}
 		return defaultSceneVideoAction(sc)
 	}
@@ -1595,6 +1595,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		}
 		return true
 	}
+	generationSource := "initial_model"
 	out = normalizeAction(out)
 	if !actionTrusted(out, false) {
 		boundDraft := useSubjectTags(out, refLines)
@@ -1603,11 +1604,14 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 			candidate := normalizeAction(strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(repaired), "```"), "```")))
 			if actionTrusted(candidate, true) {
 				out = candidate
+				generationSource = "general_repair"
 			} else {
 				out = authoritativeFallback()
+				generationSource = "current_scene_fallback"
 			}
 		} else {
 			out = authoritativeFallback()
+			generationSource = "current_scene_fallback"
 		}
 	}
 	out = useSubjectTags(out, refLines)
@@ -1625,6 +1629,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 			candidate = enforceH3ActionTempo(useSubjectTags(candidate, refLines), sceneMode)
 			if actionTrusted(candidate, true) && !regexp.MustCompile(`[\p{Han}]`).MatchString(candidate) {
 				out = candidate
+				generationSource = "combat_skill_repair"
 			} else {
 				return "", fmt.Errorf("AI武戏动作补全失败：模型仍未返回符合Shot结构的英文实时动作正文")
 			}
@@ -1640,6 +1645,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		out = "[Shot 1] " + out
 	}
 	out = applyShotTimeline(out, shots, normalizeSceneDuration(sc.Duration))
+	log.Printf("[h3-prompt] regenerated scene=%d mode=%s source=%s shots=%d chars=%d", sc.ID, sceneMode, generationSource, expectedShotCount, len([]rune(out)))
 	return out, nil
 }
 
