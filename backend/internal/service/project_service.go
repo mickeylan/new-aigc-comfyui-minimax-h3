@@ -1361,7 +1361,7 @@ const (
 	h3SceneMixed  h3SceneMode = "文武混合"
 )
 
-var h3ActionCuePattern = regexp.MustCompile(`攻击|格挡|闪避|挥剑|拔剑|刺向|劈向|斩|拳|踢|撞击|追逐|冲锋|交锋|搏斗|战斗|爆炸|开火|射击|扑向|抓住|挣脱|摔倒|击退|击中|防守|反击|施法|法术|剑气|刀气|灵力|灵气|真气|掌印|雷法|火球|冰锥|符箓|法宝|对轰|能量碰撞|冲击波|护盾|结界`)
+var h3ActionCuePattern = regexp.MustCompile(`攻击|格挡|闪避|挥剑|挥刀|拔剑|拔刀|刺向|劈向|斩|咬向|咬去|扑咬|蛇口大张|射出|飞射|拳|踢|撞击|追逐|冲锋|交锋|搏斗|战斗|爆炸|开火|射击|扑向|抓住|挣脱|摔倒|击退|击中|防守|反击|施法|法术|剑气|刀气|灵力|灵气|真气|掌印|雷法|火球|冰锥|符箓|法宝|对轰|能量碰撞|冲击波|护盾|结界`)
 
 func normalizeH3SceneMode(value string) (h3SceneMode, error) {
 	switch mode := h3SceneMode(strings.TrimSpace(value)); mode {
@@ -1403,11 +1403,12 @@ func classifyH3SceneMode(sc *models.Scene, shots []models.Shot, dubs []models.Di
 
 var h3SlowMotionCuePattern = regexp.MustCompile(`(?i)slow[ -]?motion|bullet time|in slow motion|slowly|gradually|lingering pause|缓缓|慢慢|逐渐|慢动作|慢镜头|子弹时间|悬停展示`)
 var h3RealTimeCuePattern = regexp.MustCompile(`(?i)real[- ]time|at full speed|immediately|instantly|rapidly|swiftly|in one sharp motion|实时速度|立即|瞬间|迅速`)
-var h3AttackMotionPattern = regexp.MustCompile(`(?i)launch|lunge|charge|strike|slash|thrust|attack|hurtl|collid|blast|冲|扑|斩|刺|劈|轰|撞|射向|飞向`)
+var h3AttackMotionPattern = regexp.MustCompile(`(?i)launch|lunge|charge|strike|slash|thrust|attack|hurtl|collid|blast|bite|冲|扑|咬|斩|刺|劈|轰|撞|射出|射向|飞射|飞向`)
 var h3DefenderResponsePattern = regexp.MustCompile(`(?i)blocks?|parr(?:y|ies)|dodges?|evades?|counters?|slashes?|strikes?|pivots?|sidesteps?|recoils?|is knocked|deflects?|格挡|闪避|侧身|反击|挥刀|劈开|斩断|震退|倒飞|落地`)
 
 func h3ActionTempoContractMatches(value string) bool {
-	if h3SlowMotionCuePattern.MatchString(value) || !h3RealTimeCuePattern.MatchString(value) {
+	check := strings.NewReplacer("no slow motion", "", "no bullet time", "", "no lingering pause", "", "无慢动作", "", "禁止慢动作", "", "禁止子弹时间", "", "禁止停顿", "").Replace(strings.ToLower(value))
+	if h3SlowMotionCuePattern.MatchString(check) || !h3RealTimeCuePattern.MatchString(value) {
 		return false
 	}
 	// 攻击已进入画面时，正文必须包含可见的防守、闪避、反击或受力结果，
@@ -1583,8 +1584,17 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 			out = authoritativeFallback()
 		}
 	}
+	out = useSubjectTags(out, refLines)
 	out = enforceH3ActionTempo(out, sceneMode)
-	out = applyAuthoritativeSceneShotTimeline(useSubjectTags(out, refLines), canonicalSceneContent)
+	if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
+		if !h3ActionTempoContractMatches(out) {
+			return "", fmt.Errorf("武戏提示词仍缺少实时攻防结果：攻击发起后必须在当前Shot内明确格挡、闪避、反击、命中、受力位移或落地；已拒绝回退为人物站立观察的慢动作提示词")
+		}
+		if regexp.MustCompile(`[\p{Han}]`).MatchString(out) {
+			return "", fmt.Errorf("武戏提示词修复失败后仍含中文视觉正文，已拒绝回退提交；请先用“按武戏/仙术节拍拆成Native镜头”补全当前Shot的攻防结果")
+		}
+	}
+	out = applyAuthoritativeSceneShotTimeline(out, canonicalSceneContent)
 	for _, name := range parseSceneCharacters(sc.Characters) {
 		if strings.Contains(out, name) {
 			return "", fmt.Errorf("角色名%s没有对应的已选人物参考图，无法绑定到Subject", name)

@@ -1604,6 +1604,10 @@ func TestClassifyH3SceneModeAndInstructions(t *testing.T) {
 }
 
 func TestH3ActionTempoRejectsStaticDefenderAndEnforcesRealtime(t *testing.T) {
+	snakeScene := &models.Scene{Content: "齐人高杂草丛中，五六条青色长蛇射出，蛇口大张朝大汉狠狠咬去。"}
+	if got := classifyH3SceneMode(snakeScene, nil, nil); got != h3SceneAction {
+		t.Fatalf("snake attack was not classified as action: %s", got)
+	}
 	bad := "[Shot 1] six green snakes launch from the grass toward the bearded man as he grips his blade in a guarded stance and scans them."
 	if h3ActionTempoContractMatches(bad) {
 		t.Fatal("static defender combat prompt passed action tempo contract")
@@ -1617,6 +1621,9 @@ func TestH3ActionTempoRejectsStaticDefenderAndEnforcesRealtime(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("tempo enforcement missing %q: %s", want, got)
 		}
+	}
+	if !h3ActionTempoContractMatches(got) {
+		t.Fatalf("negative no-slow-motion clause incorrectly failed contract: %s", got)
 	}
 	if got := enforceH3ActionTempo("[Shot 1] two sisters talk quietly.", h3SceneDrama); strings.Contains(got, "real-time speed") {
 		t.Fatalf("drama prompt received combat tempo suffix: %s", got)
