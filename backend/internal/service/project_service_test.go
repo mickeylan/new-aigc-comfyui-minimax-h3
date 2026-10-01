@@ -1775,8 +1775,7 @@ func TestLeadingQuotedShoutUsesOnlyVoiceCharacter(t *testing.T) {
 	sc := &models.Scene{
 		Characters:        "柳乐儿,虬髯大汉",
 		VisibleCharacters: "柳乐儿,虬髯大汉",
-		VoiceCharacters:   "虬髯大汉",
-		Content:           "“妖孽，哪里跑！”后方远处蓦然传来男子厉喝，声震荒野。女童闻言身子一颤，脸色唰白。",
+		Content:           "“妖孽，哪里跑！”后方远处蓦然传来男子厉喝，声震荒野。女童闻言身子一颤，脸色唰白，脚步踉跄。镜头切至后方追来的虬髯大汉身影，单手提刀，尘土飞扬。",
 	}
 	dubs := explicitSceneSpeech(sc)
 	if len(dubs) != 1 || dubs[0].Character != "虬髯大汉" || dubs[0].SpeechType != "dialogue" || dubs[0].Text != "妖孽，哪里跑！" {

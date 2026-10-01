@@ -1818,6 +1818,28 @@ func sceneSpeechCharacterNames(sc *models.Scene) []string {
 	return sceneCharacterNameList(strings.Join([]string{sc.Characters, sc.VisibleCharacters, sc.VoiceCharacters}, ","))
 }
 
+func trailingQuotedSpeechSpeaker(content string, match []int, names []string) string {
+	if len(match) < 4 || !leadingQuoteSpeechPattern.MatchString(content[match[0]:]) {
+		return ""
+	}
+	after := []rune(content[match[1]:])
+	if len(after) > 100 {
+		after = after[:100]
+	}
+	window := string(after)
+	matched := ""
+	for _, name := range names {
+		if !strings.Contains(window, name) {
+			continue
+		}
+		if matched != "" && matched != name {
+			return ""
+		}
+		matched = name
+	}
+	return matched
+}
+
 func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Dialogue {
 	type foundSpeech struct {
 		pos      int
@@ -1912,22 +1934,31 @@ func explicitSceneSpeech(sc *models.Scene) []models.Dialogue {
 	// 小说常把引号对白写在前面，再于后文注明“远处男子厉喝”。当本场恰好
 	// 只有一个结构化画外发声角色时，该角色是确定归属，不需要模型猜测。
 	voiceNames := sceneCharacterNameList(sc.VoiceCharacters)
-	if len(voiceNames) == 1 {
-		for _, match := range leadingQuoteSpeechPattern.FindAllStringSubmatchIndex(content, -1) {
-			text := strings.TrimSpace(content[match[2]:match[3]])
-			if text == "" {
-				continue
+	for _, match := range leadingQuoteSpeechPattern.FindAllStringSubmatchIndex(content, -1) {
+		text := strings.TrimSpace(content[match[2]:match[3]])
+		if text == "" {
+			continue
+		}
+		speaker := ""
+		if len(voiceNames) == 1 {
+			speaker = voiceNames[0]
+		} else {
+			// 若VoiceCharacters尚未结构化，但后续动作紧接着明确点名唯一角色，
+			// 仍按原文事实绑定；多个候选时保持拒绝，不做猜测。
+			speaker = trailingQuotedSpeechSpeaker(content, match, names)
+		}
+		if speaker == "" {
+			continue
+		}
+		duplicate := false
+		for _, existing := range out {
+			if existing.SpeechType == "dialogue" && existing.Character == speaker && strings.TrimSpace(existing.Text) == text {
+				duplicate = true
+				break
 			}
-			duplicate := false
-			for _, existing := range out {
-				if existing.SpeechType == "dialogue" && existing.Character == voiceNames[0] && strings.TrimSpace(existing.Text) == text {
-					duplicate = true
-					break
-				}
-			}
-			if !duplicate {
-				out = append(out, models.Dialogue{Character: voiceNames[0], SpeechType: "dialogue", Text: text, Order: len(out) + 1})
-			}
+		}
+		if !duplicate {
+			out = append(out, models.Dialogue{Character: speaker, SpeechType: "dialogue", Text: text, Order: len(out) + 1})
 		}
 	}
 
