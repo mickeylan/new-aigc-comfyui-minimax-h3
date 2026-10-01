@@ -1,6 +1,6 @@
 <template>
   <div class="continuity-panel">
-    <div class="panel-head"><h3>第{{ sceneOrder }}镜 · 输入连续性</h3><button type="button" class="btn btn-sm btn-ghost" @click="$emit('close')">关闭</button></div>
+    <div class="panel-head"><h3>第{{ sceneOrder }}镜 · 输入连续性</h3><button class="btn btn-sm btn-ghost" @click="$emit('close')">关闭</button></div>
 
     <section class="block">
       <h4>本镜生成方式</h4>
@@ -18,15 +18,14 @@
       <h4>选择第{{ sourceSceneOrder }}镜的末尾帧</h4>
       <p class="hint">这里展示的是上一镜视频末尾约1秒的22帧候选。选中的图片将作为当前第{{ sceneOrder }}镜的起始衔接帧。</p>
       <p v-if="!sourceVideoReady" class="warning">第{{ sourceSceneOrder }}镜视频尚未完成，请先生成上一镜视频。</p>
-      <div v-else class="actions"><button type="button" class="btn btn-sm" :disabled="loading" @click="extract">{{ loading ? '提取中…' : '重新提取上一镜末尾22帧' }}</button></div>
+      <div v-else class="actions"><button class="btn btn-sm" :disabled="loading" @click="extract">{{ loading ? '提取中…' : '重新提取上一镜末尾22帧' }}</button></div>
       <div v-if="frames.length" class="frame-grid">
-        <button v-for="f in frames" :key="f.id" type="button" class="frame" :class="{ selected: f.id === selectedFrameId }" @click="select(f)">
+        <button v-for="f in frames" :key="f.id" class="frame" :class="{ selected: f.id === selectedFrameId }" @click="select(f)">
           <img :src="f.image_url" :alt="`上一镜候选帧${f.frame_index + 1}`" />
           <span>{{ f.frame_index + 1 }}/{{ frames.length }} · {{ timeLabel(f.timestamp_ms) }}</span>
         </button>
       </div>
       <p v-else-if="sourceVideoReady" class="empty">尚无候选帧，可点击上方按钮重新提取。</p>
-      <p v-if="frames.length && !selectedFrameId" class="warning">请点击选择一张末尾帧后再保存。</p>
       <div v-if="selectedOutput" class="replace-row">
         <span>已选上一镜末尾帧：{{ selectedOutput.source === 'manual_upload' ? '用户高清替换图' : timeLabel(selectedOutput.timestamp_ms) }}</span>
         <label class="btn btn-sm btn-secondary">上传高清图替换<input hidden type="file" accept="image/png,image/jpeg,image/webp" @change="replaceFrame" /></label>
@@ -34,7 +33,7 @@
     </section>
 
     <p v-if="error" class="warning">{{ error }}</p>
-    <div class="actions"><button type="button" class="btn btn-secondary" :disabled="saving || (mode !== 'independent' && (!sourceSceneId || !selectedFrameId))" @click="saveMode(false)">{{ saving ? '保存中…' : '仅保存' }}</button><button type="button" class="btn" :disabled="saving || (mode !== 'independent' && (!sourceSceneId || !selectedFrameId))" @click="saveMode(true)">{{ saving ? '处理中…' : '保存并编辑视频提示词' }}</button></div>
+    <div class="actions"><button class="btn btn-secondary" :disabled="saving || (mode !== 'independent' && !sourceSceneId)" @click="saveMode(false)">{{ saving ? '保存中…' : '仅保存' }}</button><button class="btn" :disabled="saving || (mode !== 'independent' && (!sourceSceneId || !selectedFrameId))" @click="saveMode(true)">{{ saving ? '处理中…' : '保存并编辑视频提示词' }}</button></div>
   </div>
 </template>
 
@@ -81,19 +80,8 @@ async function extract() {
   error.value = ''
   try {
     frames.value = (await api.extractFrameCandidates(props.projectId, props.sourceSceneId)).data.frames || []
-    // 重新提取会删除旧候选及旧选择。默认选中最接近视频结尾的一帧，
-    // 恢复原先“提取成功即可继续”的交互，同时仍允许用户改选任意候选。
-    const last = frames.value[frames.value.length - 1]
-    if (last?.id) {
-      const selected = (await api.selectFrame(props.projectId, props.sourceSceneId, Number(last.id))).data.frame
-      frames.value = frames.value.map(f => Number(f.id) === Number(selected.id) ? selected : ({ ...f, selected: false }))
-      selectedOutput.value = selected
-      selectedFrameId.value = Number(selected.id)
-      emit('frame-selected', selected)
-    } else {
-      selectedOutput.value = null
-      selectedFrameId.value = 0
-    }
+    selectedOutput.value = null
+    selectedFrameId.value = 0
   } catch (e) {
     error.value = e.response?.data?.error || e.message
   } finally { loading.value = false }
@@ -101,9 +89,7 @@ async function extract() {
 async function select(frame) {
   error.value = ''
   try {
-    const frameId = Number(frame?.id || 0)
-    if (!frameId) throw new Error('候选帧ID缺失，请重新提取上一镜末尾帧')
-    const selected = (await api.selectFrame(props.projectId, props.sourceSceneId, frameId)).data.frame
+    const selected = (await api.selectFrame(props.projectId, props.sourceSceneId, frame.id)).data.frame
     frames.value = frames.value.map(f => f.id === selected.id ? selected : ({ ...f, selected: false }))
     selectedOutput.value = selected
     selectedFrameId.value = selected.id
