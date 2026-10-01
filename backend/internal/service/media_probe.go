@@ -2,24 +2,28 @@ package service
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 // MediaInfo 视频/图片文件元数据
 type MediaInfo struct {
-	Width     int     `json:"width"`
-	Height    int     `json:"height"`
-	Duration  float64 `json:"duration"` // 秒
-	Size      int64   `json:"size"`
-	MimeType  string  `json:"mime_type"`
-	IsVideo   bool    `json:"is_video"`
-	IsImage   bool    `json:"is_image"`
-	Bitrate   int64   `json:"bitrate,omitempty"`
-	VideoCodec string `json:"video_codec,omitempty"`
+	Width      int     `json:"width"`
+	Height     int     `json:"height"`
+	Duration   float64 `json:"duration"` // 秒
+	Size       int64   `json:"size"`
+	MimeType   string  `json:"mime_type"`
+	IsVideo    bool    `json:"is_video"`
+	IsImage    bool    `json:"is_image"`
+	Bitrate    int64   `json:"bitrate,omitempty"`
+	VideoCodec string  `json:"video_codec,omitempty"`
 }
 
 var errBoxNotFound = errors.New("box not found")
@@ -52,9 +56,76 @@ func (r *RemoteExec) ProbeMedia(p string) (*MediaInfo, error) {
 		return r.probeWebP(p, info)
 	case ".mp4", ".mov", ".m4v", ".webm", ".mkv":
 		info.IsVideo = true
-		return r.probeMP4(p, info)
+		parsed, probeErr := r.probeMP4(p, info)
+		if probeErr != nil {
+			return nil, probeErr
+		}
+		// 部分 MiniMax/ComfyUI MP4 的 moov box 超过内置4MB窗口。文件在
+		// Windows本机时使用ffprobe兜底，避免明明可播放却误报“无法读取尺寸”。
+		if !r.Enabled() && (parsed.Width <= 0 || parsed.Height <= 0) {
+			if fallback, err := probeLocalVideoWithFFprobe(p, parsed); err == nil {
+				return fallback, nil
+			}
+		}
+		return parsed, nil
 	}
 	return info, nil
+}
+
+func localFFprobePath() (string, error) {
+	if p, err := exec.LookPath("ffprobe"); err == nil {
+		return p, nil
+	}
+	if ffmpeg, err := localFFmpegPath(); err == nil {
+		candidate := filepath.Join(filepath.Dir(ffmpeg), "ffprobe.exe")
+		if _, statErr := os.Stat(candidate); statErr == nil {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("Windows 本机未找到 ffprobe.exe")
+}
+
+func probeLocalVideoWithFFprobe(path string, base *MediaInfo) (*MediaInfo, error) {
+	ffprobe, err := localFFprobePath()
+	if err != nil {
+		return nil, err
+	}
+	out, err := exec.Command(ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,codec_name,bit_rate", "-show_entries", "format=duration,bit_rate", "-of", "json", path).Output()
+	if err != nil {
+		return nil, err
+	}
+	var payload struct {
+		Streams []struct {
+			Width     int    `json:"width"`
+			Height    int    `json:"height"`
+			CodecName string `json:"codec_name"`
+			BitRate   string `json:"bit_rate"`
+		} `json:"streams"`
+		Format struct {
+			Duration string `json:"duration"`
+			BitRate  string `json:"bit_rate"`
+		} `json:"format"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		return nil, err
+	}
+	if len(payload.Streams) == 0 || payload.Streams[0].Width <= 0 || payload.Streams[0].Height <= 0 {
+		return nil, fmt.Errorf("ffprobe未返回视频尺寸")
+	}
+	info := *base
+	info.Width, info.Height = payload.Streams[0].Width, payload.Streams[0].Height
+	info.VideoCodec = payload.Streams[0].CodecName
+	if duration, parseErr := strconv.ParseFloat(payload.Format.Duration, 64); parseErr == nil {
+		info.Duration = duration
+	}
+	bitrate := payload.Streams[0].BitRate
+	if bitrate == "" {
+		bitrate = payload.Format.BitRate
+	}
+	if value, parseErr := strconv.ParseInt(bitrate, 10, 64); parseErr == nil {
+		info.Bitrate = value
+	}
+	return &info, nil
 }
 
 // readAt 从远程文件随机读取
