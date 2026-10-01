@@ -1363,7 +1363,23 @@ const (
 
 var h3ActionCuePattern = regexp.MustCompile(`攻击|格挡|闪避|挥剑|拔剑|刺向|劈向|斩|拳|踢|撞击|追逐|冲锋|交锋|搏斗|战斗|爆炸|开火|射击|扑向|抓住|挣脱|摔倒|击退|击中|防守|反击|施法|法术|剑气|刀气|灵力|灵气|真气|掌印|雷法|火球|冰锥|符箓|法宝|对轰|能量碰撞|冲击波|护盾|结界`)
 
+func normalizeH3SceneMode(value string) (h3SceneMode, error) {
+	switch mode := h3SceneMode(strings.TrimSpace(value)); mode {
+	case "":
+		return "", nil
+	case h3SceneDrama, h3SceneAction, h3SceneMixed:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("场景类型仅支持文戏、武戏或文武混合")
+	}
+}
+
 func classifyH3SceneMode(sc *models.Scene, shots []models.Shot, dubs []models.Dialogue) h3SceneMode {
+	if sc != nil {
+		if explicit, err := normalizeH3SceneMode(sc.SceneMode); err == nil && explicit != "" {
+			return explicit
+		}
+	}
 	var b strings.Builder
 	b.WriteString(sc.Content)
 	b.WriteString(" ")

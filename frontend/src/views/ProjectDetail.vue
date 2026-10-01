@@ -561,6 +561,11 @@
           <div class="field-hint">允许 3–15 秒；该数值控制实际生成帧数，修改后需要重新生成视频。</div>
         </div>
         <div class="field">
+          <label>导演类型</label>
+          <select v-model="sceneForm.scene_mode" class="input"><option value="">自动判断（兼容旧场景）</option><option value="文戏">文戏</option><option value="武戏">武戏 / 追逐 / 近身攻防 / 仙术对轰</option><option value="文武混合">文武混合</option></select>
+          <div class="field-hint">选择后，AI导演拆镜与MiniMax H3视频提示词将使用对应规则；武戏强调3–6秒实时动作、碰撞结果和禁止慢动作。</div>
+        </div>
+        <div class="field">
           <label>场景正文（视频提示词）</label>
           <textarea v-model="sceneForm.content" class="textarea" rows="3"
             placeholder="描述画面动作、镜头运动、对白…" />
@@ -1095,7 +1100,7 @@ const savingProject = ref(false)
 const sceneError = ref('')
 const projectError = ref('')
 const loadError = ref('')
-const sceneForm = reactive({ title: '', content: '', duration: 5, image_prompt: '', image_engine: 'minimax_h3', video_prompt: '', visible_characters: '', voice_characters: '', mentioned_characters: '', visual_type: 'normal', mega_type: 'architecture' })
+const sceneForm = reactive({ title: '', content: '', duration: 5, scene_mode: '', image_prompt: '', image_engine: 'minimax_h3', video_prompt: '', visible_characters: '', voice_characters: '', mentioned_characters: '', visual_type: 'normal', mega_type: 'architecture' })
 const roleField = { visible: 'visible_characters', voice: 'voice_characters', mentioned: 'mentioned_characters' }
 const roleNames = value => String(value || '').split(/[,，、;；\n]/).map(v => v.trim()).filter(Boolean)
 function sceneRoleHas(role, name) { return roleNames(sceneForm[roleField[role]]).includes(name) }
@@ -2421,7 +2426,7 @@ async function openEditScene(sc) {
   sceneError.value = ''
   editingScene.value = sc
   Object.assign(sceneForm, {
-    title: sc.title, content: sc.content, duration: Number(sc.duration) || 5, image_prompt: sc.image_prompt, video_prompt: sc.video_prompt || '',
+    title: sc.title, content: sc.content, duration: Number(sc.duration) || 5, scene_mode: sc.scene_mode || '', image_prompt: sc.image_prompt, video_prompt: sc.video_prompt || '',
     visible_characters: sc.character_roles_set ? (sc.visible_characters || '') : (sc.characters || ''),
     voice_characters: sc.voice_characters || '', mentioned_characters: sc.mentioned_characters || '',
     image_engine: sc.image_engine || 'minimax_h3', visual_type: sc.visual_type || 'normal', mega_type: sc.mega_type || 'architecture'
@@ -2479,6 +2484,7 @@ async function saveScene() {
       duration: Number(sceneForm.duration),
       image_prompt: sceneForm.image_prompt,
       image_engine: sceneForm.image_engine,
+      scene_mode: sceneForm.scene_mode,
       video_prompt: sceneForm.video_prompt,
       visible_characters: sceneForm.visible_characters,
       voice_characters: sceneForm.voice_characters,

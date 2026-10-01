@@ -70,6 +70,18 @@ test('AI导演支持可审核的武戏和仙术实时动作拆镜', () => {
   assert.match(source, /实时速度、碰撞结果和空间连续性/)
 })
 
+test('场景可显式选择文戏武戏或文武混合并用于提示词生成', () => {
+  const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
+  const editor = readFileSync(new URL('../src/views/ProjectEditor.vue', import.meta.url), 'utf8')
+  for (const value of ['文戏', '武戏', '文武混合']) {
+    assert.match(detail, new RegExp(`value="${value}"`))
+    assert.match(editor, new RegExp(`value="${value}"`))
+  }
+  assert.match(detail, /scene_mode: sceneForm\.scene_mode/)
+  assert.match(editor, /scene_mode: sceneModeInput\.value/)
+  assert.match(editor, /:scene-mode="selected\.scene_mode \|\| ''"/)
+})
+
 test('长分镜支持可审核动作时间轴并限制3至15秒', () => {
   const source = readFileSync(new URL('../src/components/ShotDirectorEditor.vue', import.meta.url), 'utf8')
   assert.match(source, /动作时间轴（长分镜精确控制）/)

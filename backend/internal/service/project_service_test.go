@@ -1589,6 +1589,13 @@ func TestClassifyH3SceneModeAndInstructions(t *testing.T) {
 	if got := classifyH3SceneMode(action, nil, []models.Dialogue{{Character: "姐姐", Text: "退后。"}}); got != h3SceneMixed {
 		t.Fatalf("mixed mode=%s", got)
 	}
+	explicitDrama := &models.Scene{SceneMode: "文戏", Content: "两人拔剑交锋，剑气爆炸。"}
+	if got := classifyH3SceneMode(explicitDrama, nil, nil); got != h3SceneDrama {
+		t.Fatalf("explicit scene mode did not override heuristic: %s", got)
+	}
+	if _, err := normalizeH3SceneMode("慢镜头"); err == nil {
+		t.Fatal("invalid scene mode accepted")
+	}
 	for mode, want := range map[h3SceneMode]string{h3SceneDrama: "视线、停顿、距离变化", h3SceneAction: "运动方向、攻防对象", h3SceneMixed: "对白与反应"} {
 		if !strings.Contains(h3SceneModeInstruction(mode), want) {
 			t.Fatalf("%s instruction missing %q", mode, want)

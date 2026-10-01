@@ -5,6 +5,7 @@
     </div>
     <div class="card ai-director-card">
       <label>场景概况<textarea v-model="directorBrief" class="textarea" rows="4" placeholder="默认使用Scene剧情；可补充你希望这段怎么拍" /></label>
+      <p class="sub">当前导演类型：{{ props.sceneMode || '自动判断' }}。AI完整导演方案与后续H3提示词将采用该类型规则。</p>
       <label>补充要求（可选）<textarea v-model="directorRequirements" class="textarea" rows="2" placeholder="例如：情绪克制、保留原对白、不要远景、禁止旁白" /></label>
       <div class="director-actions"><button class="btn" :disabled="generatingDirector || !directorBrief.trim()" @click="generateDirectorDraft('standard')">{{ generatingDirector ? `AI导演处理中 · ${directorElapsed}秒` : 'AI生成完整导演方案' }}</button><button class="btn btn-secondary" :disabled="generatingDirector || !directorBrief.trim()" @click="generateDirectorDraft('dialogue_rhythm')">{{ generatingDirector&&directorRequestMode==='dialogue_rhythm'?`对白拆镜处理中 · ${directorElapsed}秒`:'按对白节奏拆成Native镜头' }}</button><button class="btn btn-secondary" :disabled="generatingDirector || !directorBrief.trim()" @click="generateDirectorDraft('action_rhythm')">{{ generatingDirector&&directorRequestMode==='action_rhythm'?`武戏拆镜处理中 · ${directorElapsed}秒`:'按武戏/仙术节拍拆成Native镜头' }}</button></div><p v-if="generatingDirector" class="director-progress" role="status">正在调用本地文生文模型生成并严格校验草稿；若首次结果缺字段或对白不完整，系统会自动修复一次，因此可能需要数分钟。请勿刷新或切换场景。</p><p class="sub">长对白模式会读取结构化Dialogue并拆成3–15秒镜头；武戏/仙术模式按3–6秒实时动作结果拆镜，限制慢动作与多重运镜。两种草稿均须审核确认后才保存。</p>
     </div>
@@ -64,7 +65,7 @@ import { useToastStore } from '../stores/toast'
 import { promptHistoryLabel } from '../utils/directorWorkflow.js'
 import { createDraftSafety } from '../utils/draftSafety.js'
 const emit = defineEmits(['scene-changed','scene-materialized'])
-const props = defineProps({ projectId: { type: [String, Number], required: true }, sceneId: { type: [String, Number], required: true }, genre: { type: String, default: '' }, tone: { type: String, default: '' }, sceneTitle: { type: String, default: '' }, sceneContent: { type: String, default: '' } })
+const props = defineProps({ projectId: { type: [String, Number], required: true }, sceneId: { type: [String, Number], required: true }, genre: { type: String, default: '' }, tone: { type: String, default: '' }, sceneTitle: { type: String, default: '' }, sceneContent: { type: String, default: '' }, sceneMode: { type: String, default: '' } })
 const toast = useToastStore(); const shots = ref([]); const isPreviouslySplitScene = ref(false); const materializing = ref(false); const presets = ref([]); const characters = ref([]); const looks = ref({}); const outfits = ref({}); const loading = ref(false); const saving = ref(false); const generatingDirector = ref(false); const directorElapsed = ref(0); const directorRequestMode = ref('standard'); const directorBrief = ref(''); const directorRequirements = ref(''); const directorDraft = ref(null); const directorDraftMode = ref('standard'); const directorDialogueDuration = ref(0); let directorTimer; let key = 0; let draftSafety
 const draftValue = () => ({ directorBrief: directorBrief.value, directorRequirements: directorRequirements.value, shots: shots.value })
 function applyLocalDraft(draft) { directorBrief.value = draft.directorBrief || ''; directorRequirements.value = draft.directorRequirements || ''; if (Array.isArray(draft.shots)) shots.value = draft.shots }

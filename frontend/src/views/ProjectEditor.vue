@@ -154,6 +154,12 @@
           </div>
           <div v-if="videoPromptDraft" class="workbench"><strong>最终H3提交提示词（保存后才能生成视频）</strong><textarea v-model="videoPromptDraft" class="textarea" rows="10"/><div class="section-actions"><button class="btn btn-sm" @click="saveReviewedVideoPrompt(false)">保存审核结果</button><button class="btn btn-sm" @click="saveReviewedVideoPrompt(true)">保存并生成视频</button></div></div>
           <div class="duration-edit">
+            <label>导演类型</label>
+            <select class="input input-sm" v-model="sceneModeInput" @change="saveSceneMode"><option value="">自动判断</option><option value="文戏">文戏</option><option value="武戏">武戏 / 仙术对轰</option><option value="文武混合">文武混合</option></select>
+            <button class="btn btn-sm btn-secondary" :disabled="sceneModeSaving" @click="saveSceneMode">{{ sceneModeSaving ? '保存中…' : '保存类型' }}</button>
+            <span class="dur-unit">生成分镜与H3提示词时使用对应导演规则</span>
+          </div>
+          <div class="duration-edit">
             <label>目标时长</label>
             <input type="number" class="input input-sm" v-model.number="durationInput" min="3" max="15" step="0.5" @change="saveDuration" />
             <span class="dur-unit">秒</span>
@@ -248,7 +254,7 @@
       </section>
     </div>
 
-    <ShotDirectorEditor v-if="selected" :project-id="id()" :scene-id="selected.id" :genre="project?.genre || ''" :tone="project?.tone || ''" :scene-title="selected.title || ''" :scene-content="selected.content || ''" @scene-changed="reloadSelectedScene" @scene-materialized="handleShotMaterialized" />
+    <ShotDirectorEditor v-if="selected" :project-id="id()" :scene-id="selected.id" :genre="project?.genre || ''" :tone="project?.tone || ''" :scene-title="selected.title || ''" :scene-content="selected.content || ''" :scene-mode="selected.scene_mode || ''" @scene-changed="reloadSelectedScene" @scene-materialized="handleShotMaterialized" />
 
     <section class="section">
       <div class="section-head"><div><span class="overline">SHARED ASSETS</span><h2>共享资产引用</h2><p class="sub">创建、修改或删除项目、场景和镜头级素材引用。</p></div><button class="btn btn-sm btn-secondary" @click="editSharedAsset()">引用素材</button></div>
@@ -382,6 +388,8 @@ const dialogueVolume = ref(1)
 const bgmVolume = ref(1)
 const durationSaving = ref(false)
 const durationInput = ref(5)
+const sceneModeSaving = ref(false)
+const sceneModeInput = ref('')
 const dragFrom = ref(null)
 const activeEpN = ref(1)
 const epIndex = ref(0)
@@ -515,7 +523,7 @@ async function load() {
     syncDraftTexts()
     const selectedId = selected.value?.id
     selected.value = (selectedId && scenes.value.find(s => s.id === selectedId)) || scenes.value.find(s => s.status === 'video_ready') || scenes.value[0] || null
-    if (selected.value) { durationInput.value = selected.value.duration || 5; await Promise.all([loadCandidates(), loadSelectedWorkbench()]) } else { candidates.value = []; selectedShots.value=[]; videoPromptDetail.value=null }
+    if (selected.value) { durationInput.value = selected.value.duration || 5; sceneModeInput.value = selected.value.scene_mode || ''; await Promise.all([loadCandidates(), loadSelectedWorkbench()]) } else { candidates.value = []; selectedShots.value=[]; videoPromptDetail.value=null }
     const episodeNumbers = epNums()
     epIndex.value = Math.max(0, episodeNumbers.indexOf(activeEpN.value))
     await Promise.all([loadMerges(), loadAudioLayers(), loadSharedAssets(), loadEpisodeContinuity(), loadSkillPanel()])
@@ -550,6 +558,7 @@ function selectScene(sc) {
   selected.value = sc
   clearSceneDrafts()
   durationInput.value = sc.duration || 5
+  sceneModeInput.value = sc.scene_mode || ''
   tab.value = 'dub'
   loadSelectedWorkbench().catch(()=>{})
 }
@@ -587,6 +596,24 @@ async function persistOrder(ids) {
   } catch (e) {
     toast.error(e.response?.data?.error || '保存顺序失败')
   }
+}
+
+async function saveSceneMode() {
+  if (!selected.value) return
+  sceneModeSaving.value = true
+  try {
+    const sc = selected.value
+    const { data } = await api.updateScene(id(), sc.id, {
+      title: sc.title || '', content: sc.content || '', image_prompt: sc.image_prompt || '', image_engine: sc.image_engine || 'minimax_h3',
+      scene_mode: sceneModeInput.value, video_prompt: sc.video_prompt || '', duration: Number(sc.duration || 5),
+      visible_characters: sc.visible_characters || sc.characters || '', voice_characters: sc.voice_characters || '', mentioned_characters: sc.mentioned_characters || '',
+      visual_type: sc.visual_type || 'normal', mega_type: sc.mega_type || ''
+    })
+    Object.assign(selected.value, data)
+    sceneModeInput.value = data.scene_mode || ''
+    toast.success(`导演类型已设为${data.scene_mode || '自动判断'}；现有完整视频提示词已标记待更新`)
+  } catch (e) { toast.error(e.response?.data?.error || '保存导演类型失败') }
+  finally { sceneModeSaving.value = false }
 }
 
 async function saveDuration() {

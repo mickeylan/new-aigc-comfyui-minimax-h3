@@ -588,6 +588,7 @@ func (s *Service) HandleUpdateScene(c *gin.Context) {
 		Content             string  `json:"content"`
 		ImagePrompt         string  `json:"image_prompt"`
 		ImageEngine         string  `json:"image_engine"`
+		SceneMode           string  `json:"scene_mode"`
 		VideoPrompt         string  `json:"video_prompt"`
 		VisibleCharacters   string  `json:"visible_characters"`
 		VoiceCharacters     string  `json:"voice_characters"`
@@ -613,15 +614,22 @@ func (s *Service) HandleUpdateScene(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	sceneMode, err := normalizeH3SceneMode(req.SceneMode)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	currentImageEngine, _ := normalizeSceneImageEngine(sc.ImageEngine)
 	engineChanged := imageEngine != currentImageEngine
-	sourceChanged := strings.TrimSpace(req.Content) != strings.TrimSpace(sc.Content) || strings.TrimSpace(req.ImagePrompt) != strings.TrimSpace(sc.ImagePrompt) || req.Duration != sc.Duration || strings.TrimSpace(req.VideoPrompt) != strings.TrimSpace(sc.VideoPrompt) || strings.TrimSpace(req.VisibleCharacters) != strings.TrimSpace(sc.VisibleCharacters) || strings.TrimSpace(req.VoiceCharacters) != strings.TrimSpace(sc.VoiceCharacters) || strings.TrimSpace(req.MentionedCharacters) != strings.TrimSpace(sc.MentionedCharacters) || engineChanged
+	modeChanged := string(sceneMode) != strings.TrimSpace(sc.SceneMode)
+	sourceChanged := strings.TrimSpace(req.Content) != strings.TrimSpace(sc.Content) || strings.TrimSpace(req.ImagePrompt) != strings.TrimSpace(sc.ImagePrompt) || req.Duration != sc.Duration || strings.TrimSpace(req.VideoPrompt) != strings.TrimSpace(sc.VideoPrompt) || strings.TrimSpace(req.VisibleCharacters) != strings.TrimSpace(sc.VisibleCharacters) || strings.TrimSpace(req.VoiceCharacters) != strings.TrimSpace(sc.VoiceCharacters) || strings.TrimSpace(req.MentionedCharacters) != strings.TrimSpace(sc.MentionedCharacters) || engineChanged || modeChanged
 	if err := s.Projects.UpdateScene(sc, req.Title, req.Content, req.ImagePrompt, req.Duration, req.VisualType, req.MegaType); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 	roleUpdates := map[string]any{
 		"image_engine":         imageEngine,
+		"scene_mode":           string(sceneMode),
 		"video_prompt":         strings.TrimSpace(req.VideoPrompt),
 		"visible_characters":   strings.TrimSpace(req.VisibleCharacters),
 		"voice_characters":     strings.TrimSpace(req.VoiceCharacters),

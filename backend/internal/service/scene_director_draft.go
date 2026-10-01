@@ -349,6 +349,14 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		}
 		req.Requirements = strings.TrimSpace(req.Requirements + "\n" + instruction)
 	}
+	if req.Mode == "standard" {
+		var modeDialogues []models.Dialogue
+		_ = s.DB.Where("scene_id = ? AND project_id = ?", scene.ID, scene.ProjectID).Order("`order` ASC, `id` ASC").Find(&modeDialogues).Error
+		resolvedMode := classifyH3SceneMode(scene, nil, modeDialogues)
+		modeInstruction := h3SceneModeInstruction(resolvedMode)
+		instruction = strings.TrimSpace(instruction + "\n" + modeInstruction)
+		req.Requirements = strings.TrimSpace(req.Requirements + "\n用户选择的导演类型：" + string(resolvedMode) + "。\n" + modeInstruction)
+	}
 	output, err := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出完整合法JSON，不要Markdown或解释。", instruction, map[string]string{"scene_facts": scene.Content, "asset_context": assets, "brief": req.Brief, "requirements": req.Requirements, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration))})
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})

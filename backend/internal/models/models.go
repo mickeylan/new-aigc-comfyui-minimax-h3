@@ -197,6 +197,7 @@ type Scene struct {
 	Content                string    `json:"content"`                                                             // 场景正文（作为视频提示词）
 	ImagePrompt            string    `json:"image_prompt"`                                                        // 文生图提示词
 	ImageEngine            string    `gorm:"column:image_engine;default:minimax_h3" json:"image_engine"`          // minimax_h3/qwen_image_2_1
+	SceneMode              string    `gorm:"column:scene_mode" json:"scene_mode"`                                 // 文戏/武戏/文武混合；空值兼容旧数据并自动判断
 	NegativePrompt         string    `gorm:"column:negative_prompt;type:text" json:"negative_prompt"`             // 镜头层聚合的负面提示词
 	ReferenceImagesJSON    string    `gorm:"column:reference_images_json;type:text" json:"-"`                     // 用户指定的有序参考图及 Krea2/H3 用途
 	Duration               float64   `gorm:"default:5" json:"duration"`                                           // 场景目标时长（秒）
