@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"comfyui-console/internal/models"
@@ -103,6 +104,57 @@ func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue) string {
 5. 对白自然时长决定总时长，不得压缩语速，也不得用重复动作填时长。
 结构化对白：
 ` + strings.Join(lines, "\n")
+}
+
+func actionRhythmDirectorInstruction(dialogues []models.Dialogue) string {
+	dialogueRule := "本场没有结构化对白；所有Shot的dialogue必须为空，禁止新增喊声、旁白或咒语。"
+	if len(dialogues) > 0 {
+		lines := make([]string, 0, len(dialogues))
+		for i, d := range dialogues {
+			lines = append(lines, fmt.Sprintf("D%d｜%s｜%s", i+1, strings.TrimSpace(d.Character), strings.TrimSpace(d.Text)))
+		}
+		dialogueRule = "结构化对白仍是唯一发声来源；各Shot的dialogue只能按顺序承载以下原文，拼接后必须逐字一致，不得把招式、动作或爆炸声写成对白：\n" + strings.Join(lines, "\n")
+	}
+	return `按武戏、追逐、近身攻防或仙术对轰的动作节拍拆成可审核的Native H3镜头。保持Scene为生产单元，Shot只作为内部导演节拍；不使用Endless。硬规则：
+1. 每个Shot为3–6秒，只承载一个可验证结果：位移完成、一次攻击命中/落空/被挡、一次闪避完成、一次法术释放、一次碰撞爆发或一次受力落点。禁止把冲刺、蓄力、连续挥砍、碰撞和落地塞进同一长镜。
+2. 动作按实时速度执行：立即启动、快速完成、撞击后立刻产生位移；禁止慢动作、子弹时间、逐渐、缓缓、悬停展示、长时间蓄力、戏剧性停顿和命中后定格。
+3. description与prompt_action必须明确主体、起点、运动方向、目标、武器/法术归属、命中或落空、受力方向及本Shot结束姿态；仙术对轰还必须明确双方能量来源、飞行方向、碰撞点和爆发后的空间结果。
+4. 每个Shot只能使用一种主要摄影机策略。主体高速移动时优先固定机位、短促横移或有限跟随；禁止同时推拉摇移、环绕和变焦，禁止用慢运镜拖慢动作。
+5. 相邻Shot的start_state必须逐项承接上一Shot的end_state，保持人物左右位置、朝向、距离、武器持有者、伤势、法术状态和空间轴线连续。
+6. prompt_action必须包含“实时速度、迅速完成、无慢动作停顿”的明确约束；negative_prompt必须包含“慢动作、子弹时间、悬停、动作拖沓、重复动作”。
+7. ` + dialogueRule
+}
+
+var slowActionDraftPattern = regexp.MustCompile(`慢动作|慢镜头|子弹时间|缓缓|逐渐|慢慢|悬停|长时间蓄力|戏剧性停顿|定格展示|slow[ -]?motion|bullet time|lingering|gradually`)
+
+func validateActionRhythmDraft(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
+	if draft == nil || len(draft.Shots) == 0 {
+		return fmt.Errorf("武戏拆镜草稿为空")
+	}
+	for i, shot := range draft.Shots {
+		if shot.Duration < 3 || shot.Duration > 6 {
+			return fmt.Errorf("武戏拆镜%d时长必须为3至6秒，避免动作被摊成慢镜头", i+1)
+		}
+		combined := strings.Join([]string{shot.Description, shot.PromptAction, shot.PromptCamera, shot.TransitionNote}, " ")
+		combined = strings.NewReplacer("无慢动作停顿", "", "无慢动作", "", "no slow motion", "").Replace(strings.ToLower(combined))
+		if slowActionDraftPattern.MatchString(combined) {
+			return fmt.Errorf("武戏拆镜%d包含慢动作或拖延表达", i+1)
+		}
+		for _, want := range []string{"实时速度", "无慢动作"} {
+			if !strings.Contains(shot.PromptAction, want) {
+				return fmt.Errorf("武戏拆镜%d的prompt_action缺少“%s”约束", i+1, want)
+			}
+		}
+		for _, want := range []string{"慢动作", "子弹时间", "动作拖沓"} {
+			if !strings.Contains(shot.NegativePrompt, want) {
+				return fmt.Errorf("武戏拆镜%d的negative_prompt缺少“%s”", i+1, want)
+			}
+		}
+		if i > 0 && (strings.TrimSpace(shot.StartState) == "" || strings.TrimSpace(draft.Shots[i-1].EndState) == "") {
+			return fmt.Errorf("武戏拆镜%d缺少与上一镜衔接的起止状态", i+1)
+		}
+	}
+	return validateDialogueRhythmDraft(draft, dialogues)
 }
 
 func canonicalDialogueText(value string) string {
@@ -279,18 +331,22 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	operation, instruction := "director-scene-draft", "生成完整Scene导演方案草稿；只预览，不保存。"
 	var dialogues []models.Dialogue
 	dialogueDuration := 0.0
-	if req.Mode == "dialogue_rhythm" {
+	if req.Mode == "dialogue_rhythm" || req.Mode == "action_rhythm" {
 		if err := s.DB.Where("scene_id = ? AND project_id = ?", scene.ID, scene.ProjectID).Order("`order` ASC, `id` ASC").Find(&dialogues).Error; err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
 		dialogues = validSceneDialogues(dialogues)
-		if len(dialogues) == 0 {
-			c.JSON(400, gin.H{"error": "当前Scene没有可用于拆镜的结构化对白"})
-			return
+		if req.Mode == "dialogue_rhythm" {
+			if len(dialogues) == 0 {
+				c.JSON(400, gin.H{"error": "当前Scene没有可用于拆镜的结构化对白"})
+				return
+			}
+			dialogueDuration = modelDialoguesMinDuration(dialogues)
+			instruction = dialogueRhythmDirectorInstruction(dialogues)
+		} else {
+			instruction = actionRhythmDirectorInstruction(dialogues)
 		}
-		dialogueDuration = modelDialoguesMinDuration(dialogues)
-		instruction = dialogueRhythmDirectorInstruction(dialogues)
 		req.Requirements = strings.TrimSpace(req.Requirements + "\n" + instruction)
 	}
 	output, err := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出完整合法JSON，不要Markdown或解释。", instruction, map[string]string{"scene_facts": scene.Content, "asset_context": assets, "brief": req.Brief, "requirements": req.Requirements, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration))})
@@ -303,13 +359,19 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		if parseErr == nil && req.Mode == "dialogue_rhythm" {
 			normalizeDialogueRhythmDraftDurations(draft)
 			parseErr = validateDialogueRhythmDraft(draft, dialogues)
+		} else if parseErr == nil && req.Mode == "action_rhythm" {
+			parseErr = validateActionRhythmDraft(draft, dialogues)
 		}
 		return draft, parseErr
 	}
 	draft, err := validateDraft(output)
-	if err != nil && req.Mode == "dialogue_rhythm" {
-		repairRequirements := fmt.Sprintf("%s\n上一次草稿校验失败：%s。只修复该错误及其他空必填字段；保持镜头顺序和结构化对白逐字不变。上一次JSON：\n%s", req.Requirements, err.Error(), output)
-		repaired, repairErr := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出修复后的完整合法JSON，不要Markdown或解释。", "修复对白节奏导演草稿；不得改写、遗漏、重复或新增任何对白。", map[string]string{"scene_facts": scene.Content, "asset_context": assets, "brief": req.Brief, "requirements": repairRequirements, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration))})
+	if err != nil && (req.Mode == "dialogue_rhythm" || req.Mode == "action_rhythm") {
+		repairRequirements := fmt.Sprintf("%s\n上一次草稿校验失败：%s。只修复该错误及其他空必填字段；保持镜头顺序、剧情事实和结构化对白逐字不变。上一次JSON：\n%s", req.Requirements, err.Error(), output)
+		repairInstruction := "修复对白节奏导演草稿；不得改写、遗漏、重复或新增任何对白。"
+		if req.Mode == "action_rhythm" {
+			repairInstruction = "修复武戏/仙术动作节拍草稿；保持实时速度、单一动作结果、空间轴线和结构化对白，不得使用慢动作。"
+		}
+		repaired, repairErr := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出修复后的完整合法JSON，不要Markdown或解释。", repairInstruction, map[string]string{"scene_facts": scene.Content, "asset_context": assets, "brief": req.Brief, "requirements": repairRequirements, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration))})
 		if repairErr != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "AI导演方案自动修复失败: " + repairErr.Error()})
 			return

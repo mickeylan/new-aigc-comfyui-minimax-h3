@@ -61,6 +61,15 @@ test('AI导演支持可审核的长对白Native拆镜', () => {
   assert.match(api, /sceneDirectorDraft:[\s\S]*timeout: 600000/)
 })
 
+test('AI导演支持可审核的武戏和仙术实时动作拆镜', () => {
+  const source = readFileSync(new URL('../src/components/ShotDirectorEditor.vue', import.meta.url), 'utf8')
+  assert.match(source, /按武戏\/仙术节拍拆成Native镜头/)
+  assert.match(source, /generateDirectorDraft\('action_rhythm'\)/)
+  assert.match(source, /武戏\/仙术节拍草稿/)
+  assert.match(source, /3–6秒实时动作结果/)
+  assert.match(source, /实时速度、碰撞结果和空间连续性/)
+})
+
 test('长分镜支持可审核动作时间轴并限制3至15秒', () => {
   const source = readFileSync(new URL('../src/components/ShotDirectorEditor.vue', import.meta.url), 'utf8')
   assert.match(source, /动作时间轴（长分镜精确控制）/)

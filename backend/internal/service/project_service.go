@@ -1361,7 +1361,7 @@ const (
 	h3SceneMixed  h3SceneMode = "文武混合"
 )
 
-var h3ActionCuePattern = regexp.MustCompile(`攻击|格挡|闪避|挥剑|拔剑|刺向|劈向|斩|拳|踢|撞击|追逐|冲锋|交锋|搏斗|战斗|爆炸|开火|射击|扑向|抓住|挣脱|摔倒|击退|击中|防守|反击`)
+var h3ActionCuePattern = regexp.MustCompile(`攻击|格挡|闪避|挥剑|拔剑|刺向|劈向|斩|拳|踢|撞击|追逐|冲锋|交锋|搏斗|战斗|爆炸|开火|射击|扑向|抓住|挣脱|摔倒|击退|击中|防守|反击|施法|法术|剑气|刀气|灵力|灵气|真气|掌印|雷法|火球|冰锥|符箓|法宝|对轰|能量碰撞|冲击波|护盾|结界`)
 
 func classifyH3SceneMode(sc *models.Scene, shots []models.Shot, dubs []models.Dialogue) h3SceneMode {
 	var b strings.Builder
@@ -1388,9 +1388,9 @@ func classifyH3SceneMode(sc *models.Scene, shots []models.Shot, dubs []models.Di
 func h3SceneModeInstruction(mode h3SceneMode) string {
 	switch mode {
 	case h3SceneAction:
-		return "本镜为武戏：优先写清行动意图、运动方向、攻防对象、接触或落空、受力位移与下一动作机会；保持同一空间轴线和道具归属。每个Shot只保留一条可执行动作链和一个主要运镜，禁止用抽象情绪替代动作因果。"
+		return "本镜为武戏或仙术对轰：每个Shot只保留一个可验证结果，写清主体起点、实时速度、运动方向、攻防对象、武器或法术归属、接触/落空/被挡、受力位移及结束姿态；仙术必须写清能量来源、飞行方向、碰撞点与爆发后的空间结果。动作立即启动并迅速完成，按正常实时速度呈现，no slow motion, no bullet time, no lingering pause。保持空间轴线；只用固定机位、短促横移或一次有限跟随，禁止多重运镜拖慢动作。"
 	case h3SceneMixed:
-		return "本镜为文武混合：对白与反应只保留推动当前行动的信息；动作部分写清方向、接触和结果，文戏部分写清说话人、接收者、站位与必要反应。不得让对白说明动作，不得让动作吞掉原文对白。"
+		return "本镜为文武混合：结构化对白与反应逐字保留；动作仍按实时速度迅速完成，写清方向、接触和结果，文戏写清说话人、接收者、站位与必要反应。不得让对白说明动作，不得让动作吞掉原文对白；no slow motion, no bullet time, no lingering pause。"
 	default:
 		return "本镜为文戏：优先保留说话人/听者站位、视线、停顿、距离变化、手上正在做的事和必要反应；镜头以稳定构图或一次轻微运动为主。每个Shot最多保留一个表情变化，禁止堆叠微表情、气氛、关系解释和文学暗示。"
 	}

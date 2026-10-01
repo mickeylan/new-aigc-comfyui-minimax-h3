@@ -79,25 +79,25 @@ func TestNormalizeDialogueRhythmDraftRaisesShortShotToNativeMinimum(t *testing.T
 	// Build draft directly so we can test normalization without hitting parse-time validation.
 	draft := &sceneDirectorDraft{
 		Shots: []sceneDirectorDraftShot{{
-			ActType:           models.ShotActSetup,
-			ShotType:          "中景",
-			CameraAngle:       "平视",
-			CameraMovement:    "固定",
-			Duration:          2, // below minimum — normalization should raise it
-			Description:       "女主走到桌边",
-			Dialogue:          "",
-			Emotion:           "警惕",
-			TransitionType:    models.ShotTransitionCut,
-			TransitionNote:    "接视线",
-			StartState:        "女主站在门边",
-			EndState:          "女主停在桌边",
-			PromptSubject:     "女主面部清晰",
-			PromptAction:      "缓步走到桌边",
-			PromptCamera:      "中景平视构图",
-			PromptLighting:    "室内暖侧光",
-			PromptStyle:       "真人写实电影质感",
-			NegativePrompt:    "水印，多余人物",
-			Checks:            []string{"动作可在2秒完成", "无新增对白"},
+			ActType:        models.ShotActSetup,
+			ShotType:       "中景",
+			CameraAngle:    "平视",
+			CameraMovement: "固定",
+			Duration:       2, // below minimum — normalization should raise it
+			Description:    "女主走到桌边",
+			Dialogue:       "",
+			Emotion:        "警惕",
+			TransitionType: models.ShotTransitionCut,
+			TransitionNote: "接视线",
+			StartState:     "女主站在门边",
+			EndState:       "女主停在桌边",
+			PromptSubject:  "女主面部清晰",
+			PromptAction:   "缓步走到桌边",
+			PromptCamera:   "中景平视构图",
+			PromptLighting: "室内暖侧光",
+			PromptStyle:    "真人写实电影质感",
+			NegativePrompt: "水印，多余人物",
+			Checks:         []string{"动作可在2秒完成", "无新增对白"},
 		}},
 	}
 	normalizeDialogueRhythmDraftDurations(draft)
@@ -138,6 +138,49 @@ func TestRestoreDialogueRhythmDraftTextUsesAuthoritativeDialogue(t *testing.T) {
 	}
 	if !strings.Contains(draft.Shots[0].Dialogue, "太运宗") || !strings.Contains(draft.Shots[1].Dialogue, "来得及吗") {
 		t.Fatalf("unexpected split: %#v", draft.Shots)
+	}
+}
+
+func TestActionRhythmInstructionCoversCombatAndSpellClashes(t *testing.T) {
+	got := actionRhythmDirectorInstruction(nil)
+	for _, want := range []string{"武戏", "仙术对轰", "3–6秒", "实时速度", "碰撞点", "无慢动作停顿", "不使用Endless"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("action instruction missing %q: %s", want, got)
+		}
+	}
+}
+
+func TestValidateActionRhythmDraftRejectsSlowMotionAndLongBeats(t *testing.T) {
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{
+		ActType: models.ShotActRising, ShotType: "中景", CameraAngle: "平视", CameraMovement: "固定", Duration: 4,
+		Description: "剑修从画面左侧蹬地前冲，一剑被护盾挡开，身体向左后方落地", StartState: "剑修在左，术修在右", EndState: "剑修落在左后方，术修护盾仍在",
+		PromptSubject: "剑修与术修保持左右位置", PromptAction: "实时速度立即前冲，一剑迅速完成并被护盾挡开，无慢动作停顿", PromptCamera: "固定中景", PromptLighting: "日光", PromptStyle: "仙侠写实",
+		NegativePrompt: "慢动作，子弹时间，悬停，动作拖沓，重复动作", TransitionType: models.ShotTransitionCut,
+	}}}
+	if err := validateActionRhythmDraft(draft, nil); err != nil {
+		t.Fatalf("valid action beat rejected: %v", err)
+	}
+	draft.Shots[0].Duration = 8
+	if err := validateActionRhythmDraft(draft, nil); err == nil || !strings.Contains(err.Error(), "3至6秒") {
+		t.Fatalf("long action beat accepted: %v", err)
+	}
+	draft.Shots[0].Duration = 4
+	draft.Shots[0].PromptAction = "剑修缓缓挥剑，实时速度，无慢动作"
+	if err := validateActionRhythmDraft(draft, nil); err == nil || !strings.Contains(err.Error(), "慢动作或拖延") {
+		t.Fatalf("slow action language accepted: %v", err)
+	}
+}
+
+func TestH3ClassifiesSpellClashAsAction(t *testing.T) {
+	scene := &models.Scene{Content: "两名修士同时施法，剑气与雷法在半空对轰，冲击波击碎地面。"}
+	if got := classifyH3SceneMode(scene, nil, nil); got != h3SceneAction {
+		t.Fatalf("spell clash mode=%s", got)
+	}
+	instruction := h3SceneModeInstruction(h3SceneAction)
+	for _, want := range []string{"仙术对轰", "no slow motion", "碰撞点"} {
+		if !strings.Contains(instruction, want) {
+			t.Fatalf("H3 action instruction missing %q: %s", want, instruction)
+		}
 	}
 }
 
