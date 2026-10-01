@@ -87,6 +87,29 @@ func TestCharacterSkillRequiresConcreteHistoricalHairstyle(t *testing.T) {
 	}
 }
 
+func TestH3CombatSkillUsesAssetsInsteadOfWeaponEnumeration(t *testing.T) {
+	db := newTestDB(t)
+	svc := NewSkillService(db)
+	if err := svc.InitSystemSkills(); err != nil {
+		t.Fatal(err)
+	}
+	var skill models.Skill
+	if err := db.Where("code = ?", h3CombatActionSkillCode).Order("version DESC").First(&skill).Error; err != nil {
+		t.Fatal(err)
+	}
+	contract := skill.SystemPrompt + skill.PromptTemplate
+	for _, want := range []string{"实际资产", "禁止用通用武器替换", "仙术对轰", "正常实时速度", "结构化Dialogue"} {
+		if !strings.Contains(contract, want) {
+			t.Fatalf("combat skill missing %q: %s", want, contract)
+		}
+	}
+	for _, forbidden := range []string{"blade|sword", "knife|saber", "podao|刀"} {
+		if strings.Contains(contract, forbidden) {
+			t.Fatalf("combat skill contains weapon enumeration %q", forbidden)
+		}
+	}
+}
+
 func TestSkillService_CuratedDirectorSkills(t *testing.T) {
 	db := newTestDB(t)
 	svc := NewSkillService(db)

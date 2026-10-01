@@ -1663,6 +1663,17 @@ func TestGenerateSceneVideoActionRepairsStaticCombatInsteadOfOnlyReturningValida
 	}
 }
 
+func TestEffectiveGenerationSystemKeepsCombatContractWhenPolicyOverrides(t *testing.T) {
+	base := "H3核心契约：正常实时速度，禁止慢动作"
+	policy := &EffectivePromptPolicy{Content: "项目偏好：低机位", Source: "project"}
+	got := effectiveGenerationSystem(base, policy)
+	for _, want := range []string{base, policy.Content, "不可覆盖", "武戏实时动作契约"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("effective system missing %q: %s", want, got)
+		}
+	}
+}
+
 func TestCombatActionRepairRequestUsesNeutralReactionWhenOutcomeUnknown(t *testing.T) {
 	got := combatActionRepairRequest("蛇扑向持刀男子", "男子站立观察", 10)
 	for _, want := range []string{"opening 1–2 seconds", "actual referenced asset", "changes no hit/miss/block", "victory or defeat"} {

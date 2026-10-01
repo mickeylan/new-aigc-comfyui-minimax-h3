@@ -1355,6 +1355,8 @@ func defaultSceneVideoAction(sc *models.Scene) string {
 
 type h3SceneMode string
 
+const h3CombatActionSkillCode = "minimax-h3-combat-action"
+
 const (
 	h3SceneDrama  h3SceneMode = "文戏"
 	h3SceneAction h3SceneMode = "武戏"
@@ -1418,6 +1420,13 @@ func enforceH3ActionTempo(value string, mode h3SceneMode) string {
 		value = strings.TrimSpace(value) + " All combat and spell motion unfolds at full real-time speed with immediate acceleration, no slow motion, no bullet time, and no lingering pause."
 	}
 	return strings.TrimSpace(value)
+}
+
+func effectiveGenerationSystem(system string, policy *EffectivePromptPolicy) string {
+	if policy == nil || policy.Source == "system_default" || strings.TrimSpace(policy.Content) == "" || strings.TrimSpace(policy.Content) == strings.TrimSpace(system) {
+		return system
+	}
+	return strings.TrimSpace(system) + "\n\n【项目Prompt Policy补充】\n" + strings.TrimSpace(policy.Content) + "\n\n【不可覆盖】以上补充不得删除、放宽或替代前面的H3格式、结构化Dialogue、Subject绑定及武戏实时动作契约。"
 }
 
 func combatActionRepairRequest(authoritative, draft string, duration float64) string {
@@ -1496,7 +1505,14 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	if err != nil {
 		return "", fmt.Errorf("解析视频提示词策略失败: %w", err)
 	}
-	out, err := s.textProvider.Chat(policy.Content, user)
+	effectiveSystem := effectiveGenerationSystem(system, policy)
+	chatAction := func(request string) (string, error) {
+		if (sceneMode == h3SceneAction || sceneMode == h3SceneMixed) && s.skills != nil {
+			return s.skills.ChatWithConfiguredOrFallbackSkill(sc.ProjectID, models.SkillStageVideoPrompt, h3CombatActionSkillCode, s.textProvider, effectiveSystem, "", map[string]string{"request": request})
+		}
+		return s.textProvider.Chat(effectiveSystem, request)
+	}
+	out, err := chatAction(user)
 	if err != nil {
 		return "", fmt.Errorf("AI 生成视频动作提示词失败: %w", err)
 	}
@@ -1583,7 +1599,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	if !actionTrusted(out, false) {
 		boundDraft := useSubjectTags(out, refLines)
 		repairUser := fmt.Sprintf("Rewrite the draft into concise official English H3 shot prose using the authoritative Scene Shots below. The authoritative source controls Shot count, order, timestamps, subjects, visible actions, framing, and emotional reactions. Produce exactly one paragraph for every source [Shot N]; omit, merge, reorder, retime, or invent nothing. For combat or spell clashes, motion begins immediately at full real-time speed; each attack must reach a visible block, dodge, counter, impact, displacement, or landing within that Shot. Never leave a threatened defender merely standing, gripping a weapon, or watching. No slow motion, bullet time, hovering display, prolonged charging, or lingering pause. Output no dialogue, <d>, headings, Markdown, or explanation.\n\nAUTHORITATIVE SCENE SHOTS:\n%s\n\nINCOMPLETE DRAFT TO REPAIR:\n%s", useSubjectTags(canonicalSceneContent, refLines), boundDraft)
-		if repaired, repairErr := s.textProvider.Chat(system, repairUser); repairErr == nil {
+		if repaired, repairErr := chatAction(repairUser); repairErr == nil {
 			candidate := normalizeAction(strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(repaired), "```"), "```")))
 			if actionTrusted(candidate, true) {
 				out = candidate
@@ -1601,7 +1617,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		if !combatValid {
 			repairSource := useSubjectTags(authoritativeFallback(), refLines)
 			repairRequest := combatActionRepairRequest(repairSource, out, sc.Duration)
-			repaired, repairErr := s.textProvider.Chat(system, repairRequest)
+			repaired, repairErr := chatAction(repairRequest)
 			if repairErr != nil {
 				return "", fmt.Errorf("AI武戏动作补全失败: %w", repairErr)
 			}
