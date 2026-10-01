@@ -1430,6 +1430,22 @@ func enforceH3ActionTempo(value string, mode h3SceneMode) string {
 	return strings.TrimSpace(value)
 }
 
+func combatActionRepairRequest(authoritative, draft string, duration float64) string {
+	return fmt.Sprintf(`Rewrite this combat or spell-clash draft into concise official English H3 shot prose. Return only the detailed_description body.
+Hard requirements:
+- Preserve every authoritative Shot number, order, subject, weapon, spell, location and stated outcome; add no new combatant, power, injury, victory or defeat.
+- Motion starts immediately at full real-time speed. Resolve the main burst of motion within the opening 1–2 seconds instead of stretching it across %.1f seconds; use the remaining time only for visible recoil, displaced dust/grass, recovery stance or a brief aftermath already supported by the facts.
+- Every incoming attack gets an immediate visible response in the same Shot. If the source does not state hit/miss/block outcome, add only a neutral non-outcome reaction such as snapping the held weapon into guard, pivoting, bracing or taking one sharp defensive step; do not decide whether the attack hits.
+- State direction, target, weapon/spell ownership, response and end pose. No standing still and watching, no slow motion, bullet time, hovering display, prolonged charge or lingering pause.
+- Visual prose must be English except exact structured dialogue. Do not output dialogue, headings, Markdown or explanation.
+
+AUTHORITATIVE FACTS:
+%s
+
+FAILED DRAFT:
+%s`, normalizeSceneDuration(duration), authoritative, draft)
+}
+
 func h3SceneModeInstruction(mode h3SceneMode) string {
 	switch mode {
 	case h3SceneAction:
@@ -1587,11 +1603,21 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	out = useSubjectTags(out, refLines)
 	out = enforceH3ActionTempo(out, sceneMode)
 	if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
-		if !h3ActionTempoContractMatches(out) {
-			return "", fmt.Errorf("武戏提示词仍缺少实时攻防结果：攻击发起后必须在当前Shot内明确格挡、闪避、反击、命中、受力位移或落地；已拒绝回退为人物站立观察的慢动作提示词")
-		}
-		if regexp.MustCompile(`[\p{Han}]`).MatchString(out) {
-			return "", fmt.Errorf("武戏提示词修复失败后仍含中文视觉正文，已拒绝回退提交；请先用“按武戏/仙术节拍拆成Native镜头”补全当前Shot的攻防结果")
+		combatValid := h3ActionTempoContractMatches(out) && !regexp.MustCompile(`[\p{Han}]`).MatchString(out)
+		if !combatValid {
+			repairSource := useSubjectTags(authoritativeFallback(), refLines)
+			repairRequest := combatActionRepairRequest(repairSource, out, sc.Duration)
+			repaired, repairErr := s.textProvider.Chat(system, repairRequest)
+			if repairErr != nil {
+				return "", fmt.Errorf("AI武戏动作补全失败: %w", repairErr)
+			}
+			candidate := normalizeAction(strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(repaired), "```"), "```")))
+			candidate = enforceH3ActionTempo(useSubjectTags(candidate, refLines), sceneMode)
+			if actionTrusted(candidate, true) && !regexp.MustCompile(`[\p{Han}]`).MatchString(candidate) {
+				out = candidate
+			} else {
+				return "", fmt.Errorf("AI武戏动作补全结果仍不合格：必须生成英文实时攻防动作，并让来袭动作在当前Shot内触发立即可见的防守、闪避、反击、受力或中性戒备反应")
+			}
 		}
 	}
 	out = applyAuthoritativeSceneShotTimeline(out, canonicalSceneContent)

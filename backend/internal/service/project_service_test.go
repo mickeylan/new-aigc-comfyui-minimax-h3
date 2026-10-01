@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -1627,6 +1628,47 @@ func TestH3ActionTempoRejectsStaticDefenderAndEnforcesRealtime(t *testing.T) {
 	}
 	if got := enforceH3ActionTempo("[Shot 1] two sisters talk quietly.", h3SceneDrama); strings.Contains(got, "real-time speed") {
 		t.Fatalf("drama prompt received combat tempo suffix: %s", got)
+	}
+}
+
+func TestGenerateSceneVideoActionRepairsStaticCombatInsteadOfOnlyReturningValidationError(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SharedAssetReference{}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &sequenceTextProvider{responses: []string{
+		"[Shot 1] six green snakes launch toward the bearded man while he stands and watches.",
+		"[Shot 1] six green snakes move toward the bearded man while he grips his blade.",
+		"[Shot 1] six green snakes burst from the grass at full speed; the bearded man instantly pivots and snaps his blade into guard, taking one sharp step back as grass and dust recoil around him.",
+	}}
+	ps.textProvider = provider
+	project := models.Project{Title: "测试"}
+	ps.db.Create(&project)
+	sc := models.Scene{ProjectID: project.ID, SceneMode: "武戏", Duration: 10, Content: "齐人高杂草丛中，五六条青色长蛇射出，蛇口大张朝虬髯大汉狠狠咬去。虬髯大汉持朴刀而立，目光警惕。"}
+	ps.db.Create(&sc)
+	got, err := ps.GenerateSceneVideoAction(&sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 3 {
+		t.Fatalf("calls=%d, want initial + general repair + combat repair", provider.calls)
+	}
+	for _, want := range []string{"at full speed", "instantly pivots", "snaps his blade into guard", "one sharp step back"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("combat repair missing %q: %s", want, got)
+		}
+	}
+	if regexp.MustCompile(`[\p{Han}]`).MatchString(got) {
+		t.Fatalf("combat repair retained Chinese visual prose: %s", got)
+	}
+}
+
+func TestCombatActionRepairRequestUsesNeutralReactionWhenOutcomeUnknown(t *testing.T) {
+	got := combatActionRepairRequest("蛇扑向持刀男子", "男子站立观察", 10)
+	for _, want := range []string{"opening 1–2 seconds", "neutral non-outcome reaction", "do not decide whether the attack hits", "snapping the held weapon into guard"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("combat repair request missing %q: %s", want, got)
+		}
 	}
 }
 
