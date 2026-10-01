@@ -1603,6 +1603,26 @@ func TestClassifyH3SceneModeAndInstructions(t *testing.T) {
 	}
 }
 
+func TestH3ActionTempoRejectsStaticDefenderAndEnforcesRealtime(t *testing.T) {
+	bad := "[Shot 1] six green snakes launch from the grass toward the bearded man as he grips his blade in a guarded stance and scans them."
+	if h3ActionTempoContractMatches(bad) {
+		t.Fatal("static defender combat prompt passed action tempo contract")
+	}
+	good := "[Shot 1] six green snakes launch at full speed; the bearded man instantly pivots and slashes once, deflecting them sideways before planting his feet."
+	if !h3ActionTempoContractMatches(good) {
+		t.Fatal("real-time combat response rejected")
+	}
+	got := enforceH3ActionTempo("[Shot 1] the swordsman blocks the strike.", h3SceneAction)
+	for _, want := range []string{"full real-time speed", "immediate acceleration", "no slow motion", "no bullet time"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("tempo enforcement missing %q: %s", want, got)
+		}
+	}
+	if got := enforceH3ActionTempo("[Shot 1] two sisters talk quietly.", h3SceneDrama); strings.Contains(got, "real-time speed") {
+		t.Fatalf("drama prompt received combat tempo suffix: %s", got)
+	}
+}
+
 func TestGenerateSceneVideoActionDoesNotRecycleOldVisualDescription(t *testing.T) {
 	ps := newTestProjectService(t)
 	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}); err != nil {

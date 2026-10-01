@@ -1401,6 +1401,34 @@ func classifyH3SceneMode(sc *models.Scene, shots []models.Shot, dubs []models.Di
 	return h3SceneDrama
 }
 
+var h3SlowMotionCuePattern = regexp.MustCompile(`(?i)slow[ -]?motion|bullet time|in slow motion|slowly|gradually|lingering pause|缓缓|慢慢|逐渐|慢动作|慢镜头|子弹时间|悬停展示`)
+var h3RealTimeCuePattern = regexp.MustCompile(`(?i)real[- ]time|at full speed|immediately|instantly|rapidly|swiftly|in one sharp motion|实时速度|立即|瞬间|迅速`)
+var h3AttackMotionPattern = regexp.MustCompile(`(?i)launch|lunge|charge|strike|slash|thrust|attack|hurtl|collid|blast|冲|扑|斩|刺|劈|轰|撞|射向|飞向`)
+var h3DefenderResponsePattern = regexp.MustCompile(`(?i)blocks?|parr(?:y|ies)|dodges?|evades?|counters?|slashes?|strikes?|pivots?|sidesteps?|recoils?|is knocked|deflects?|格挡|闪避|侧身|反击|挥刀|劈开|斩断|震退|倒飞|落地`)
+
+func h3ActionTempoContractMatches(value string) bool {
+	if h3SlowMotionCuePattern.MatchString(value) || !h3RealTimeCuePattern.MatchString(value) {
+		return false
+	}
+	// 攻击已进入画面时，正文必须包含可见的防守、闪避、反击或受力结果，
+	// 不能只让被攻击者站立、持械、观察。
+	if h3AttackMotionPattern.MatchString(value) && !h3DefenderResponsePattern.MatchString(value) {
+		return false
+	}
+	return true
+}
+
+func enforceH3ActionTempo(value string, mode h3SceneMode) string {
+	if mode != h3SceneAction && mode != h3SceneMixed {
+		return value
+	}
+	value = h3SlowMotionCuePattern.ReplaceAllString(value, "")
+	if !h3RealTimeCuePattern.MatchString(value) {
+		value = strings.TrimSpace(value) + " All combat and spell motion unfolds at full real-time speed with immediate acceleration, no slow motion, no bullet time, and no lingering pause."
+	}
+	return strings.TrimSpace(value)
+}
+
 func h3SceneModeInstruction(mode h3SceneMode) string {
 	switch mode {
 	case h3SceneAction:
@@ -1519,6 +1547,9 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 				}
 			}
 		}
+		if (sceneMode == h3SceneAction || sceneMode == h3SceneMixed) && !h3ActionTempoContractMatches(value) {
+			return false
+		}
 		if expectedShotCount > 0 {
 			seen := map[int]bool{}
 			for _, marker := range h3ShotMarkerPattern.FindAllStringSubmatch(value, -1) {
@@ -1540,7 +1571,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	out = normalizeAction(out)
 	if !actionTrusted(out, false) {
 		boundDraft := useSubjectTags(out, refLines)
-		repairUser := fmt.Sprintf("Rewrite the draft into concise official English H3 shot prose using the authoritative Scene Shots below. The authoritative source controls Shot count, order, timestamps, subjects, visible actions, framing, and emotional reactions. Produce exactly one paragraph for every source [Shot N]; omit, merge, reorder, retime, or invent nothing. Output no dialogue, <d>, headings, Markdown, or explanation.\n\nAUTHORITATIVE SCENE SHOTS:\n%s\n\nINCOMPLETE DRAFT TO REPAIR:\n%s", useSubjectTags(canonicalSceneContent, refLines), boundDraft)
+		repairUser := fmt.Sprintf("Rewrite the draft into concise official English H3 shot prose using the authoritative Scene Shots below. The authoritative source controls Shot count, order, timestamps, subjects, visible actions, framing, and emotional reactions. Produce exactly one paragraph for every source [Shot N]; omit, merge, reorder, retime, or invent nothing. For combat or spell clashes, motion begins immediately at full real-time speed; each attack must reach a visible block, dodge, counter, impact, displacement, or landing within that Shot. Never leave a threatened defender merely standing, gripping a weapon, or watching. No slow motion, bullet time, hovering display, prolonged charging, or lingering pause. Output no dialogue, <d>, headings, Markdown, or explanation.\n\nAUTHORITATIVE SCENE SHOTS:\n%s\n\nINCOMPLETE DRAFT TO REPAIR:\n%s", useSubjectTags(canonicalSceneContent, refLines), boundDraft)
 		if repaired, repairErr := s.textProvider.Chat(system, repairUser); repairErr == nil {
 			candidate := normalizeAction(strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(repaired), "```"), "```")))
 			if actionTrusted(candidate, true) {
@@ -1552,6 +1583,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 			out = authoritativeFallback()
 		}
 	}
+	out = enforceH3ActionTempo(out, sceneMode)
 	out = applyAuthoritativeSceneShotTimeline(useSubjectTags(out, refLines), canonicalSceneContent)
 	for _, name := range parseSceneCharacters(sc.Characters) {
 		if strings.Contains(out, name) {
