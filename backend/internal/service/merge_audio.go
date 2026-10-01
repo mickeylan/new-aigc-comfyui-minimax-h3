@@ -238,7 +238,7 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 		}
 		info, err := s.remote.ProbeMedia(abs)
 		if err != nil {
-			fail(fmt.Errorf("探测场景 %d 视频失败: %w", scene.Order, err))
+			fail(fmt.Errorf("探测场景 %d 视频失败（文件=%s）: %w", scene.Order, abs, err))
 			return
 		}
 		if info.Duration > 0 {

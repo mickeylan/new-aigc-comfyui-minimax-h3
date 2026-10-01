@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,16 +61,34 @@ func (r *RemoteExec) ProbeMedia(p string) (*MediaInfo, error) {
 		if probeErr != nil {
 			return nil, probeErr
 		}
-		// 部分 MiniMax/ComfyUI MP4 的 moov box 超过内置4MB窗口。文件在
-		// Windows本机时使用ffprobe兜底，避免明明可播放却误报“无法读取尺寸”。
-		if !r.Enabled() && (parsed.Width <= 0 || parsed.Height <= 0) {
-			if fallback, err := probeLocalVideoWithFFprobe(p, parsed); err == nil {
+		if parsed.Width > 0 && parsed.Height > 0 {
+			return parsed, nil
+		}
+		// 部分 MiniMax/ComfyUI MP4 的 moov box 超过内置4MB窗口。不能根据
+		// Remote配置推断文件是否可在本机读取；Windows共享盘在SSH模式下也可能
+		// 是本地可访问的。实际以路径可读性决定是否调用ffprobe。
+		localReadable := r.canProbeMediaLocally(p)
+		log.Printf("[media-probe] internal parser returned %dx%d duration=%.3fs size=%d path=%q remote=%t local_readable=%t", parsed.Width, parsed.Height, parsed.Duration, parsed.Size, p, r.Enabled(), localReadable)
+		if localReadable {
+			fallback, fallbackErr := probeLocalVideoWithFFprobe(p, parsed)
+			if fallbackErr == nil {
+				log.Printf("[media-probe] ffprobe succeeded width=%d height=%d duration=%.3fs codec=%s path=%q", fallback.Width, fallback.Height, fallback.Duration, fallback.VideoCodec, p)
 				return fallback, nil
 			}
+			log.Printf("[media-probe] ffprobe failed path=%q error=%v", p, fallbackErr)
+			return parsed, fmt.Errorf("内部解析未取得视频尺寸，ffprobe兜底失败: %w", fallbackErr)
 		}
-		return parsed, nil
+		return parsed, fmt.Errorf("内部解析未取得视频尺寸，且当前媒体路径不能由本机ffprobe读取（remote=%t path=%q size=%d）", r.Enabled(), p, parsed.Size)
 	}
 	return info, nil
+}
+
+func (r *RemoteExec) canProbeMediaLocally(path string) bool {
+	if !r.Enabled() || r.localPath(path) {
+		return true
+	}
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func localFFprobePath() (string, error) {
