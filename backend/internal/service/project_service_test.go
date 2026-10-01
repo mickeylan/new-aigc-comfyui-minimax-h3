@@ -1672,6 +1672,27 @@ func TestCombatActionRepairRequestUsesNeutralReactionWhenOutcomeUnknown(t *testi
 	}
 }
 
+func TestCompleteNeutralCombatResponseAddsGuardWithoutInventingOutcome(t *testing.T) {
+	draft := "[Shot 1] six green snakes launch at full speed toward <Subject 2> as <Subject 2> grips a podao and watches them."
+	got, ok := completeNeutralCombatResponse(draft)
+	if !ok {
+		t.Fatalf("neutral combat completion failed: %s", got)
+	}
+	for _, want := range []string{"<Subject 2> instantly pivots", "snaps the held weapon into guard", "one sharp defensive step back", "without deciding whether the incoming attack hits"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("neutral completion missing %q: %s", want, got)
+		}
+	}
+	for _, forbidden := range []string{"kills", "cuts the snake", "is bitten", "wins"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("neutral completion invented outcome %q: %s", forbidden, got)
+		}
+	}
+	if !h3ActionTempoContractMatches(got) {
+		t.Fatalf("completed prompt still violates action contract: %s", got)
+	}
+}
+
 func TestGenerateSceneVideoActionDoesNotRecycleOldVisualDescription(t *testing.T) {
 	ps := newTestProjectService(t)
 	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}); err != nil {
