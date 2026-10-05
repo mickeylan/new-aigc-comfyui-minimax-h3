@@ -32,7 +32,10 @@ try {
     $env:CGO_LDFLAGS = "-L$($GoImportLibraryDir.Replace('\','/')) -lindextts"
     Push-Location $backend
     try {
-        go build -tags indextts -o (Join-Path $output "comfyui-console.exe") .
+        # Go's Windows external linker can emit malformed DWARF section RVAs when this
+        # large embedded frontend is linked through MinGW. Release binaries must strip
+        # DWARF so SizeOfImage and section layout remain valid for CreateProcess.
+        go build -tags indextts -ldflags "-s -w" -o (Join-Path $output "comfyui-console.exe") .
         if ($LASTEXITCODE -ne 0) { throw "Go IndexTTS build failed with exit code $LASTEXITCODE" }
     } finally { Pop-Location }
 } finally {
@@ -42,6 +45,19 @@ try {
 
 Copy-Item -LiteralPath (Join-Path $backend "config.yaml.example") -Destination (Join-Path $output "config.yaml.example") -Force
 $app = Get-Item -LiteralPath (Join-Path $output "comfyui-console.exe")
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class IndexTTSBinaryProbe {
+    [DllImport("kernel32", SetLastError=true, CharSet=CharSet.Unicode)]
+    public static extern bool GetBinaryTypeW(string path, out uint binaryType);
+}
+'@
+$binaryType = 0
+if (-not [IndexTTSBinaryProbe]::GetBinaryTypeW($app.FullName, [ref]$binaryType) -or $binaryType -ne 6) {
+    $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    throw "Packaged application is not a loadable 64-bit Windows executable (type=$binaryType error=$errorCode)"
+}
 $summary = [ordered]@{
     package = "comfyui-console-win64-indextts"
     index_tts_abi = $runtime.abi_version
