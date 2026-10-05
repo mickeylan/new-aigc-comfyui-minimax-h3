@@ -14,6 +14,7 @@ const routes = [
   { path: '/projects/:id', name: 'project-detail', component: () => import('../views/ProjectDetail.vue') },
   { path: '/projects/:id/editor', name: 'project-editor', component: () => import('../views/ProjectEditor.vue') },
   { path: '/projects/:id/episodes/:episode/screenplay', name: 'episode-screenplay', component: () => import('../views/EpisodeScreenplay.vue') },
+  { path: '/projects/:id/episodes/:episode/voice', name: 'episode-voice-studio', component: () => import('../views/EpisodeVoiceStudio.vue') },
   { path: '/projects/:id/characters/:cid/looks', name: 'character-looks', component: () => import('../views/CharacterLooks.vue') },
   { path: '/projects/:id/novel', name: 'project-novel', component: () => import('../views/NovelImport.vue') },
   { path: '/projects/:id/story-bible', name: 'story-bible', component: () => import('../views/StoryBible.vue') },

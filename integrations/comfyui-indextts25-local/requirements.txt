@@ -1,0 +1,17 @@
+# Additive dependencies only. Never downgrade ComfyUI's shared runtime.
+# Tested against the host's Transformers 5.10.1 / NumPy 1.26.4 / Librosa 0.11.0.
+accelerate>=1.8.1
+fugashi>=1.2.0
+librosa>=0.11.0
+munch>=4.0.0
+omegaconf>=2.3.0
+openai-whisper>=20231117
+tiktoken>=0.7.0
+transformers>=5.10.1,<6
+unidic-lite>=1.0
+wetext>=0.0.9; sys_platform != "linux"
+WeTextProcessing>=1.2.0; sys_platform == "linux"
+
+# Install descript-audiotools==0.7.2 with --no-deps in a shared ComfyUI
+# environment: its obsolete protobuf<3.20 declaration conflicts with current
+# ComfyUI. Runtime-only dependencies are documented in README.md.

@@ -223,8 +223,22 @@ export const api = {
   generateProjectDub: (id) => http.post(`/projects/${id}/dub`),
   generateEpisodeDub: (id, ep, staleOnly = true) => http.post(`/projects/${id}/episodes/${ep}/dub`, null, { params: { stale_only: staleOnly } }),
   episodeDubPreview: (id, ep) => http.get(`/projects/${id}/episodes/${ep}/dub/preview`),
+  episodeDubBatches: (id, ep) => http.get(`/projects/${id}/episodes/${ep}/dub/batches`),
+  retryEpisodeDubBatch: (id, ep, batchId) => http.post(`/projects/${id}/episodes/${ep}/dub/batches/${batchId}/retry`),
+  exportEpisodeDialogue: (id, ep) => http.post(`/projects/${id}/episodes/${ep}/dub/export`),
+  exportEpisodeDialogueStems: (id, ep) => http.post(`/projects/${id}/episodes/${ep}/dub/stems/export`),
+  episodeVoiceStudio: (id, ep) => http.get(`/projects/${id}/episodes/${ep}/voice-studio`),
+  previewEpisodeSRT: (id, ep, file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return http.post(`/projects/${id}/episodes/${ep}/dub/srt/preview`, fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+  },
+  applyEpisodeSRT: (id, ep, previewToken) => http.post(`/projects/${id}/episodes/${ep}/dub/srt/apply`, { preview_token: previewToken }),
   applyDialoguePreview: (id, did) => http.post(`/projects/${id}/dialogues/${did}/preview/apply`),
   revertDialogueAudio: (id, did) => http.post(`/projects/${id}/dialogues/${did}/audio/revert`),
+  dialogueAudioCandidates: (id, did) => http.get(`/projects/${id}/dialogues/${did}/audio-candidates`),
+  reviewDialogueAudioCandidate: (id, did, cid, data) => http.patch(`/projects/${id}/dialogues/${did}/audio-candidates/${cid}/review`, data),
+  selectDialogueAudioCandidate: (id, did, cid) => http.post(`/projects/${id}/dialogues/${did}/audio-candidates/${cid}/select`),
   srtUrl: (id, ep) => `/api/projects/${id}/srt?episode_n=${ep || 1}`,
   dubAudioUrl: (pid, file) => `/api/input/${pid}/${file}`,
   inputUrl: (taskId, path) => `/api/input/${taskId}/${path}`,

@@ -18,7 +18,9 @@ func main() {
 	}
 
 	svc := service.New(cfg, db)
-	svc.Start()
+	if err := svc.Start(); err != nil {
+		log.Fatalf("start service failed: %v", err)
+	}
 	defer svc.Stop()
 
 	r := api.NewRouter(cfg, svc)

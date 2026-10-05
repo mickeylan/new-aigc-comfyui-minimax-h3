@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "source": "https://huggingface.co/spaces/IndexTeam/IndexTTS-2-Demo",
+  "notice": "Official IndexTTS demo reference audio. Voice traits intentionally remain unclassified until reviewed.",
+  "voices": [
+    {"file": "official-demo/voice_01.wav", "label": "官方示例音色 01", "source": "IndexTeam/IndexTTS-2-Demo", "language": "ZH", "tags": ["official-demo", "unclassified"]},
+    {"file": "official-demo/voice_02.wav", "label": "官方示例音色 02", "source": "IndexTeam/IndexTTS-2-Demo", "language": "ZH", "tags": ["official-demo", "unclassified"]},
+    {"file": "official-demo/voice_03.wav", "label": "官方示例音色 03", "source": "IndexTeam/IndexTTS-2-Demo", "language": "ZH", "tags": ["official-demo", "unclassified"]},
+    {"file": "official-demo/voice_04.wav", "label": "官方示例音色 04", "source": "IndexTeam/IndexTTS-2-Demo", "language": "ZH", "tags": ["official-demo", "unclassified"]},
+    {"file": "official-demo/voice_05.wav", "label": "官方示例音色 05", "source": "IndexTeam/IndexTTS-2-Demo", "language": "ZH", "tags": ["official-demo", "unclassified"]},
+    {"file": "official-demo/voice_06.wav", "label": "官方示例音色 06", "source": "IndexTeam/IndexTTS-2-Demo", "language": "ZH", "tags": ["official-demo", "unclassified"]},
+    {"file": "official-demo/voice_07.wav", "label": "官方示例音色 07", "source": "IndexTeam/IndexTTS-2-Demo", "language": "ZH", "tags": ["official-demo", "unclassified"]},
+    {"file": "official-demo/voice_08.wav", "label": "官方示例音色 08", "source": "IndexTeam/IndexTTS-2-Demo", "language": "ZH", "tags": ["official-demo", "unclassified"]},
+    {"file": "official-demo/voice_09.wav", "label": "官方示例音色 09", "source": "IndexTeam/IndexTTS-2-Demo", "language": "ZH", "tags": ["official-demo", "unclassified"]},
+    {"file": "official-demo/voice_11.wav", "label": "官方示例音色 11", "source": "IndexTeam/IndexTTS-2-Demo", "language": "ZH", "tags": ["official-demo", "unclassified"]},
+    {"file": "official-demo/voice_12.wav", "label": "官方示例音色 12", "source": "IndexTeam/IndexTTS-2-Demo", "language": "ZH", "tags": ["official-demo", "unclassified"]}
+  ]
+}

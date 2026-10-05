@@ -25,6 +25,7 @@ import (
 	"gorm.io/gorm"
 
 	"comfyui-console/internal/config"
+	"comfyui-console/internal/indextts"
 	"comfyui-console/internal/models"
 )
 
@@ -35,6 +36,7 @@ type ProjectService struct {
 	textProvider   TextProvider // 文生文 provider（支持火山 / llama.cpp 等）
 	volc           *VolcClient  // 保留用于图片生成
 	ali            *AliyunTTS
+	indexTTS       *LocalIndexTTS
 	tasks          *TaskService
 	remote         *RemoteExec
 	upload         *UploadManager
@@ -52,6 +54,7 @@ func NewProjectService(cfg *config.Config, db *gorm.DB, textProvider TextProvide
 		cfg: cfg, db: db, textProvider: textProvider, volc: volc, tasks: tasks,
 		remote: remote, upload: upload, hub: hub,
 		ali:       NewAliyunTTS(db),
+		indexTTS:  NewLocalIndexTTS(cfg, db),
 		stopped:   make(chan struct{}),
 		materials: materials,
 	}
@@ -6993,8 +6996,10 @@ func (s *ProjectService) buildDubTimeline(p *models.Project, episodeN int, scene
 			sourceDur := 2.0 // 无音频时的兜底时长
 			if d.AudioFile != "" {
 				audioAbs = filepath.Join(s.cfg.Comfy.ComfyDir, "input", fmt.Sprintf("%d", p.ID), d.AudioFile)
-				if ad, err := s.remoteMediaDuration(audioAbs); err == nil && ad > 0 {
-					sourceDur = ad
+				if s.remote != nil {
+					if info, err := s.remote.ProbeMedia(audioAbs); err == nil && info.Duration > 0 {
+						sourceDur = info.Duration
+					}
 				}
 			}
 			speed := dialogueSpeed(d)
@@ -7513,6 +7518,14 @@ func dialogueAudioHash(d models.Dialogue) string {
 }
 
 func (s *ProjectService) effectiveDialogueAudioHash(d models.Dialogue) string {
+	if s.indexTTS != nil && s.indexTTS.Enabled() {
+		reference, err := s.indexTTS.ReferenceFingerprint(d)
+		if err != nil {
+			reference = "invalid-reference:" + err.Error()
+		}
+		raw := dialogueAudioHash(d) + "\x00index-tts-rust\x00" + s.indexTTS.Fingerprint() + "\x00" + reference
+		return fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))
+	}
 	voice, voiceID, model := s.dubVoiceFor(&d)
 	raw := dialogueAudioHash(d) + "\x00" + voice + "\x00" + voiceID + "\x00" + model
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))
@@ -7625,6 +7638,9 @@ func (s *ProjectService) UpdateDialogueFields(p *models.Project, did uint, input
 	}
 	if err := s.db.Model(&d).Updates(updates).Error; err != nil {
 		return nil, err
+	}
+	if audioChanged {
+		_ = markDialogueAudioCandidatesStale(s.db, d.ProjectID, d.ID, "对白、角色音色或配音参数已修改")
 	}
 	if promptChanged {
 		_ = s.db.Model(&models.Scene{}).Where("id = ? AND video_full_prompt != ''", d.SceneID).Update("prompt_stale", true).Error
@@ -7778,21 +7794,33 @@ func validateDialogueSpeaker(d models.Dialogue) error {
 
 // StartDialogueTTS 异步合成单条对白（占位防并发）
 func (s *ProjectService) StartDialogueTTS(d *models.Dialogue) error {
+	_, _, err := s.startDialogueTTS(d)
+	return err
+}
+
+// startDialogueTTS returns the exact CAS claim and input digest so persistent
+// batch tracking can observe this attempt without weakening Dialogue ownership.
+func (s *ProjectService) startDialogueTTS(d *models.Dialogue) (string, string, error) {
 	if err := validateDialogueSpeaker(*d); err != nil {
-		return err
+		return "", "", err
 	}
 	token := fmt.Sprintf("tts-%d-%d", d.ID, time.Now().UnixNano())
 	claim := s.db.Model(&models.Dialogue{}).Where("id = ? AND status <> ?", d.ID, "synthesizing").
 		Updates(map[string]any{"status": "synthesizing", "audio_token": token, "error": ""})
 	if claim.Error != nil {
-		return claim.Error
+		return "", "", claim.Error
 	}
 	if claim.RowsAffected == 0 {
-		return fmt.Errorf("对白已在合成或已完成")
+		return "", "", fmt.Errorf("对白已在合成或已完成")
 	}
 	// Refetch after claiming so synthesis and its hash use the latest persisted controls.
 	if err := s.db.First(d, d.ID).Error; err != nil {
-		return err
+		s.db.Model(&models.Dialogue{}).Where("id = ? AND audio_token = ?", d.ID, token).Updates(map[string]any{"status": "failed", "audio_token": "", "error": err.Error()})
+		return "", "", err
+	}
+	if err := validateDialogueSpeaker(*d); err != nil {
+		s.db.Model(&models.Dialogue{}).Where("id = ? AND audio_token = ?", d.ID, token).Updates(map[string]any{"status": "failed", "error": err.Error()})
+		return "", "", err
 	}
 	hash := s.effectiveDialogueAudioHash(*d)
 	go func() {
@@ -7800,7 +7828,7 @@ func (s *ProjectService) StartDialogueTTS(d *models.Dialogue) error {
 			log.Printf("[dialogue %d] tts failed: %v", d.ID, err)
 		}
 	}()
-	return nil
+	return token, hash, nil
 }
 
 func (s *ProjectService) synthesizeDialogue(d *models.Dialogue, token, inputHash string) error {
@@ -7822,39 +7850,63 @@ func (s *ProjectService) synthesizeDialogue(d *models.Dialogue, token, inputHash
 		}
 		return nil
 	}
-	// 后期配音：阿里云 TTS（DashScope）；角色绑定参考语音时用复刻音色合成
 	var data []byte
 	var err error
-	voice, voiceID, vcModel := s.dubVoiceFor(d)
-	if s.ali != nil && s.ali.Config().Configured() {
-		if voiceID != "" {
-			data, err = s.ali.TextToSpeechVC(d.Text, voiceID, vcModel)
-		} else {
-			data, err = s.ali.TextToSpeech(d.Text, d.Character, voice)
+	extension, provider, runtimeVersion, voiceIdentity := ".mp3", "aliyun", "", ""
+	sampleRate, channels, duration := uint32(0), uint32(0), 0.0
+	var generationInfo indextts.GenerationInfo
+	if s.indexTTS != nil && s.indexTTS.Enabled() {
+		var synthesis LocalIndexTTSSynthesis
+		synthesis, err = s.indexTTS.Synthesize(context.Background(), *d)
+		data, generationInfo = synthesis.WAV, synthesis.Info
+		extension, provider, runtimeVersion = ".wav", "index_tts_rust", s.indexTTS.Fingerprint()
+		voiceIdentity, _ = s.indexTTS.ReferenceFingerprint(*d)
+		sampleRate, channels = 22050, 1
+		if len(data) >= 44 {
+			duration = float64(len(data)-44) / 2 / float64(sampleRate)
 		}
 	} else {
-		err = fmt.Errorf("TTS 未配置（请到平台设置配置阿里云语音服务）")
+		voice, voiceID, vcModel := s.dubVoiceFor(d)
+		voiceIdentity = voice
+		if voiceID != "" {
+			voiceIdentity = voiceID
+		}
+		runtimeVersion = vcModel
+		if s.ali != nil && s.ali.Config().Configured() {
+			if voiceID != "" {
+				data, err = s.ali.TextToSpeechVC(d.Text, voiceID, vcModel)
+			} else {
+				data, err = s.ali.TextToSpeech(d.Text, d.Character, voice)
+			}
+		} else {
+			err = fmt.Errorf("本地 IndexTTS 未启用，且阿里云 TTS 未配置")
+		}
 	}
 	if err != nil {
 		s.db.Model(&models.Dialogue{}).Where("id = ? AND audio_token = ?", d.ID, token).Updates(map[string]any{"status": "failed", "error": err.Error()})
 		return err
 	}
-	name := fmt.Sprintf("dub_%d_%d.mp3", d.ID, time.Now().UnixNano())
+	name := fmt.Sprintf("dub_%d_%s%s", d.ID, inputHash[:16], extension)
 	path, _, err := s.upload.SaveFile(fmt.Sprintf("%d", d.ProjectID), "audio", name, data)
 	if err != nil {
 		s.db.Model(&models.Dialogue{}).Where("id = ? AND audio_token = ?", d.ID, token).Updates(map[string]any{"status": "failed", "error": err.Error()})
 		return err
 	}
-	result := s.db.Model(&models.Dialogue{}).Where("id = ? AND audio_token = ?", d.ID, token).Updates(map[string]any{
-		"status": "ready", "audio_file": filepath.Base(path), "previous_audio_file": d.AudioFile, "previous_audio_hash": d.AudioHash,
-		"audio_revision": d.AudioRevision + 1, "audio_hash": inputHash, "audio_token": "",
-		"audio_stale": false, "audio_stale_reason": "", "error": "",
-	})
-	if result.Error != nil {
-		return result.Error
+	language := ""
+	if s.cfg != nil {
+		language = s.cfg.IndexTTS.Language
 	}
-	if result.RowsAffected != 1 {
-		return fmt.Errorf("对白合成结果已过期")
+	_, err = s.captureDialogueAudio(dialogueAudioCapture{
+		ProjectID: d.ProjectID, DialogueID: d.ID, Token: token, InputHash: inputHash,
+		Provider: provider, RuntimeVersion: runtimeVersion, VoiceIdentity: voiceIdentity,
+		Params: map[string]any{"language": language, "seed": generationInfo.Seed, "speed": dialogueSpeed(*d), "emotion": d.Emotion, "delivery": d.Delivery,
+			"semantic_tokens": generationInfo.SemanticTokens, "generated_seconds": generationInfo.GeneratedSeconds,
+			"total_ms": generationInfo.Total.Milliseconds(), "gpt_ms": generationInfo.GPT.Milliseconds(), "s2mel_ms": generationInfo.S2Mel.Milliseconds(),
+			"bigvgan_ms": generationInfo.BigVGAN.Milliseconds(), "peak": generationInfo.Peak, "rms": generationInfo.RMS, "silence_ratio": generationInfo.SilenceRatio},
+		File: filepath.Base(path), SampleRate: sampleRate, Channels: channels, Duration: duration,
+	})
+	if err != nil {
+		return err
 	}
 	s.pushProject(nil)
 	return nil
@@ -7883,31 +7935,14 @@ func (s *ProjectService) GenerateProjectDubs(p *models.Project) (int, error) {
 // GenerateEpisodeDubs submits only stale/mismatched dialogue by default, scoped through
 // the episode's project-owned scenes so dialogue IDs from another project cannot leak in.
 func (s *ProjectService) GenerateEpisodeDubs(p *models.Project, episodeN int, staleOnly bool) (int, error) {
-	generation, err := latestEpisodeGeneration(s.db, p.ID, episodeN)
+	_, dubs, err := s.episodeDialoguesForSynthesis(p, episodeN, staleOnly)
 	if err != nil {
-		return 0, err
-	}
-	var sceneIDs []uint
-	if err := s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND generation = ?", p.ID, episodeN, generation).Pluck("id", &sceneIDs).Error; err != nil {
-		return 0, err
-	}
-	if len(sceneIDs) == 0 {
-		return 0, nil
-	}
-	var dubs []models.Dialogue
-	if err := s.db.Where("project_id = ? AND scene_id IN ?", p.ID, sceneIDs).Order("scene_id, `order`").Find(&dubs).Error; err != nil {
 		return 0, err
 	}
 	count := 0
 	for i := range dubs {
 		d := &dubs[i]
 		stale := d.AudioStale || d.AudioFile == "" || d.AudioHash == "" || d.AudioHash != s.effectiveDialogueAudioHash(*d)
-		if staleOnly && !stale {
-			continue
-		}
-		if d.Status == "synthesizing" {
-			continue
-		}
 		if stale {
 			_ = s.db.Model(d).Updates(map[string]any{"status": "pending", "audio_stale": true, "audio_stale_reason": "配音输入摘要已变化"}).Error
 		}
@@ -8060,7 +8095,17 @@ func (s *ProjectService) PushProject(p *models.Project) {
 	s.pushProject(p)
 }
 
+func (s *ProjectService) StartIndexTTS() error {
+	if s.indexTTS == nil {
+		return nil
+	}
+	return s.indexTTS.Start()
+}
+
 func (s *ProjectService) Stop() {
+	if s.indexTTS != nil {
+		_ = s.indexTTS.Close()
+	}
 	close(s.stopped)
 }
 

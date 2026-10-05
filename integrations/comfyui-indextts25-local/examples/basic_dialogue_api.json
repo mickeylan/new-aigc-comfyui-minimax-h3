@@ -1,0 +1,35 @@
+{
+  "1": {
+    "class_type": "IndexTTS25LocalModelLoader",
+    "inputs": {
+      "source_dir": "E:\\mickeylan\\ai\\index-tts",
+      "model_dir": "E:\\mickeylan\\ai\\index-tts\\checkpoints",
+      "device": "auto",
+      "precision": "auto"
+    }
+  },
+  "2": {
+    "class_type": "LoadAudio",
+    "inputs": {
+      "audio": "reference.wav"
+    }
+  },
+  "3": {
+    "class_type": "IndexTTS25LocalGenerate",
+    "inputs": {
+      "model": ["1", 0],
+      "speaker_audio": ["2", 0],
+      "text": "相信姐姐，姐姐无论如何也不会让你去罗刹魔域！",
+      "language": "ZH",
+      "duration_factor": 1.0,
+      "seed": 0
+    }
+  },
+  "4": {
+    "class_type": "SaveAudio",
+    "inputs": {
+      "audio": ["3", 0],
+      "filename_prefix": "indextts25/dialogue"
+    }
+  }
+}

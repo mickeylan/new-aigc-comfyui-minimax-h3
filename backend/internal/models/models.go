@@ -462,6 +462,86 @@ type Dialogue struct {
 	UpdatedAt          time.Time `json:"updated_at"`
 }
 
+// VoiceStudioSRTImport is a short-lived, project-scoped preview snapshot used for transactional SRT metadata application.
+type VoiceStudioSRTImport struct {
+	ID           uint       `gorm:"primaryKey" json:"id"`
+	Token        string     `gorm:"size:64;uniqueIndex" json:"token"`
+	ProjectID    uint       `gorm:"column:project_id;index" json:"project_id"`
+	EpisodeN     int        `gorm:"column:episode_n;index" json:"episode_n"`
+	Generation   uint       `gorm:"index" json:"generation"`
+	DialogueHash string     `gorm:"column:dialogue_hash;size:64" json:"dialogue_hash"`
+	SourceHash   string     `gorm:"column:source_hash;size:64" json:"source_hash"`
+	PayloadJSON  string     `gorm:"column:payload_json;type:text" json:"-"`
+	Status       string     `gorm:"size:32;default:preview" json:"status"`
+	ExpiresAt    time.Time  `gorm:"column:expires_at;index" json:"expires_at"`
+	AppliedAt    *time.Time `gorm:"column:applied_at" json:"applied_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+// DialogueSynthesisBatch is a durable episode-scoped TTS submission. Counts are
+// denormalized so polling clients do not need to scan every item.
+type DialogueSynthesisBatch struct {
+	ID             uint       `gorm:"primaryKey" json:"id"`
+	ProjectID      uint       `gorm:"column:project_id;index:idx_dialogue_batch_episode_created" json:"project_id"`
+	EpisodeN       int        `gorm:"column:episode_n;index:idx_dialogue_batch_episode_created" json:"episode_n"`
+	Generation     uint       `gorm:"default:0" json:"generation"`
+	StaleOnly      bool       `gorm:"column:stale_only;default:true" json:"stale_only"`
+	Status         string     `gorm:"size:32;default:queued;index" json:"status"` // queued/running/completed/failed
+	TotalItems     int        `gorm:"column:total_items;default:0" json:"total_items"`
+	CompletedItems int        `gorm:"column:completed_items;default:0" json:"completed_items"`
+	FailedItems    int        `gorm:"column:failed_items;default:0" json:"failed_items"`
+	Progress       float64    `gorm:"default:0" json:"progress"`
+	Error          string     `gorm:"type:text" json:"error"`
+	StartedAt      *time.Time `gorm:"column:started_at" json:"started_at,omitempty"`
+	FinishedAt     *time.Time `gorm:"column:finished_at" json:"finished_at,omitempty"`
+	CreatedAt      time.Time  `gorm:"index:idx_dialogue_batch_episode_created,sort:desc" json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+// DialogueSynthesisItem records the outcome of one dialogue attempt. AudioToken
+// ties progress to the exact Dialogue CAS claim and is intentionally not exposed.
+type DialogueSynthesisItem struct {
+	ID         uint       `gorm:"primaryKey" json:"id"`
+	BatchID    uint       `gorm:"column:batch_id;index;uniqueIndex:idx_dialogue_batch_item" json:"batch_id"`
+	DialogueID uint       `gorm:"column:dialogue_id;index;uniqueIndex:idx_dialogue_batch_item" json:"dialogue_id"`
+	SceneID    uint       `gorm:"column:scene_id;index" json:"scene_id"`
+	ItemOrder  int        `gorm:"column:item_order" json:"order"`
+	Status     string     `gorm:"size:32;default:queued;index" json:"status"` // queued/running/completed/failed
+	Attempts   int        `gorm:"default:0" json:"attempts"`
+	InputHash  string     `gorm:"column:input_hash;size:64" json:"input_hash"`
+	AudioToken string     `gorm:"column:audio_token;size:64;index" json:"-"`
+	Error      string     `gorm:"type:text" json:"error"`
+	StartedAt  *time.Time `gorm:"column:started_at" json:"started_at,omitempty"`
+	FinishedAt *time.Time `gorm:"column:finished_at" json:"finished_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+// DialogueAudioCandidate retains immutable local/cloud speech takes while Dialogue.AudioFile remains the selected production projection.
+type DialogueAudioCandidate struct {
+	ID             uint       `gorm:"primaryKey" json:"id"`
+	ProjectID      uint       `gorm:"column:project_id;index;uniqueIndex:idx_dialogue_audio_take" json:"project_id"`
+	DialogueID     uint       `gorm:"column:dialogue_id;index;uniqueIndex:idx_dialogue_audio_take" json:"dialogue_id"`
+	InputHash      string     `gorm:"column:input_hash;size:64;index;uniqueIndex:idx_dialogue_audio_take" json:"input_hash"`
+	Provider       string     `gorm:"size:64;uniqueIndex:idx_dialogue_audio_take" json:"provider"`
+	RuntimeVersion string     `gorm:"column:runtime_version;size:128" json:"runtime_version"`
+	VoiceIdentity  string     `gorm:"column:voice_identity;type:text" json:"voice_identity"`
+	ParamsJSON     string     `gorm:"column:params_json;type:text" json:"params_json"`
+	File           string     `gorm:"type:text" json:"file"`
+	SampleRate     uint32     `gorm:"column:sample_rate" json:"sample_rate"`
+	Channels       uint32     `json:"channels"`
+	Duration       float64    `json:"duration"`
+	ReviewStatus   string     `gorm:"column:review_status;size:32;default:pending;index" json:"review_status"`
+	ReviewReason   string     `gorm:"column:review_reason;type:text" json:"review_reason"`
+	IsCurrent      bool       `gorm:"column:is_current;default:false;index" json:"is_current"`
+	Stale          bool       `gorm:"default:false;index" json:"stale"`
+	StaleReason    string     `gorm:"column:stale_reason;type:text" json:"stale_reason"`
+	ReviewedAt     *time.Time `gorm:"column:reviewed_at" json:"reviewed_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
 // Skill 创作技能模板：提供阶段化提示词装配，支持系统内置与项目级覆盖
 // Skill 仅作为提示词模板，不拥有执行权限（无网络/Shell/文件/数据库访问）
 type Skill struct {

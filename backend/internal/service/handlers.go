@@ -138,7 +138,15 @@ func (s *Service) comfyHostForPort(port int) string {
 }
 
 // Start 启动后台服务
-func (s *Service) Start() {
+func (s *Service) Start() error {
+	if err := s.Projects.StartIndexTTS(); err != nil {
+		// 本地配音是可选能力。DLL、模型或 CUDA 不可用时保持平台其余功能正常，
+		// 仅在用户实际提交本地配音时返回该错误。
+		log.Printf("[index-tts] local voice runtime unavailable: %v", err)
+	}
+	if err := s.Projects.RecoverDialogueSynthesisBatches(); err != nil {
+		log.Printf("[dialogue-batch] recover batches failed: %v", err)
+	}
 	if err := InitSystemTemplates(s.DB, s.Cfg.TemplatesDir); err != nil {
 		log.Printf("[templates] seed failed: %v", err)
 	}
@@ -152,6 +160,7 @@ func (s *Service) Start() {
 	s.Mon.Start()
 	s.Tasks.StartRecovery()
 	s.Projects.WatchSceneVideos()
+	return nil
 }
 
 func (s *Service) Stop() {

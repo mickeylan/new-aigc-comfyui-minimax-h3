@@ -8,6 +8,9 @@ backend/dev.log
 frontend/dev.log
 frontend/dev-error.log
 backend/internal/static/dist/*
+**/__pycache__/
+.pytest_cache/
+*.py[cod]
 .spec-workflow/templates/*
 /short-drama-tmp/
 

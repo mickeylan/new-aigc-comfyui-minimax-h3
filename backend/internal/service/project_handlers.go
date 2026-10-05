@@ -31,6 +31,32 @@ func (s *Service) HandleGetSettings(c *gin.Context) {
 	settings["llama_model"] = s.Volc.GetSetting(SettingLlamaModel, DefaultLlamaModel)
 	settings[SettingMiniMaxBaseURL] = s.Volc.GetSetting(SettingMiniMaxBaseURL, "")
 	settings[SettingMiniMaxModel] = s.Volc.GetSetting(SettingMiniMaxModel, DefaultMiniMaxModel)
+	settings["tts_provider"] = "aliyun"
+	settings["index_tts_enabled"] = "false"
+	settings["index_tts_available"] = "false"
+	settings["index_tts_error"] = ""
+	if s.Cfg != nil && s.Cfg.IndexTTS.Enabled {
+		settings["tts_provider"] = "index_tts_rust"
+		settings["index_tts_enabled"] = "true"
+		settings["index_tts_device_index"] = strconv.Itoa(s.Cfg.IndexTTS.DeviceIndex)
+		if s.Projects != nil && s.Projects.indexTTS != nil {
+			_, available, runtimeError := s.Projects.indexTTS.Status()
+			settings["index_tts_available"] = strconv.FormatBool(available)
+			settings["index_tts_error"] = runtimeError
+			capabilities, info, health := s.Projects.indexTTS.RuntimeDetails()
+			settings["index_tts_abi"] = fmt.Sprintf("%d.%d", capabilities.ABIMajor, capabilities.ABIMinor)
+			settings["index_tts_runtime_version"] = info.RuntimeVersion
+			settings["index_tts_model_version"] = info.ModelVersion
+			settings["index_tts_model_manifest"] = info.ManifestSHA256
+			settings["index_tts_backend"] = info.Backend
+			settings["index_tts_device"] = info.Device
+			settings["index_tts_voice_cache"] = strconv.FormatBool(capabilities.SupportsVoiceCache)
+			settings["index_tts_emotion_text"] = strconv.FormatBool(capabilities.SupportsEmotionText)
+			settings["index_tts_request_cancel"] = strconv.FormatBool(capabilities.SupportsRequestCancel)
+			settings["index_tts_device_healthy"] = strconv.FormatBool(health.DeviceHealthy)
+			settings["index_tts_voice_cache_entries"] = strconv.FormatUint(health.VoiceCacheEntries, 10)
+		}
+	}
 	c.JSON(200, settings)
 }
 
@@ -1860,7 +1886,7 @@ func episodeNumberParam(c *gin.Context) (int, bool) {
 	return n, true
 }
 
-// HandleGenerateEpisodeDub submits stale dialogue only unless stale_only=false is explicit.
+// HandleGenerateEpisodeDub creates a durable batch. stale_only defaults to true.
 func (s *Service) HandleGenerateEpisodeDub(c *gin.Context) {
 	p, ok := s.loadProject(c)
 	if !ok {
@@ -1871,12 +1897,125 @@ func (s *Service) HandleGenerateEpisodeDub(c *gin.Context) {
 		return
 	}
 	staleOnly := c.DefaultQuery("stale_only", "true") != "false"
-	n, err := s.Projects.GenerateEpisodeDubs(p, number, staleOnly)
+	detail, err := s.Projects.CreateEpisodeDialogueSynthesisBatch(p, number, staleOnly)
 	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(202, gin.H{"ok": true, "count": n, "stale_only": staleOnly, "message": fmt.Sprintf("已提交 %d 条过期对白配音", n)})
+	c.JSON(http.StatusAccepted, gin.H{
+		"ok": true, "count": detail.Batch.TotalItems, "stale_only": staleOnly,
+		"batch": detail.Batch, "items": detail.Items,
+		"message": fmt.Sprintf("已提交 %d 条对白配音", detail.Batch.TotalItems),
+	})
+}
+
+func dialogueBatchIDParam(c *gin.Context) (uint, bool) {
+	id, err := strconv.ParseUint(c.Param("bid"), 10, 64)
+	if err != nil || id == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid batch id"})
+		return 0, false
+	}
+	return uint(id), true
+}
+
+func (s *Service) HandleListEpisodeDialogueSynthesisBatches(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	number, ok := episodeNumberParam(c)
+	if !ok {
+		return
+	}
+	batches, err := s.Projects.ListEpisodeDialogueSynthesisBatches(p.ID, number)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, batches)
+}
+
+func (s *Service) HandleGetEpisodeDialogueSynthesisBatch(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	number, ok := episodeNumberParam(c)
+	if !ok {
+		return
+	}
+	batchID, ok := dialogueBatchIDParam(c)
+	if !ok {
+		return
+	}
+	detail, err := s.Projects.GetEpisodeDialogueSynthesisBatch(p.ID, number, batchID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "配音批次不存在"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, detail)
+}
+
+func (s *Service) HandleRetryEpisodeDialogueSynthesisBatch(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	number, ok := episodeNumberParam(c)
+	if !ok {
+		return
+	}
+	batchID, ok := dialogueBatchIDParam(c)
+	if !ok {
+		return
+	}
+	detail, err := s.Projects.RetryEpisodeDialogueSynthesisBatch(p.ID, number, batchID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "配音批次不存在"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, detail)
+}
+
+func (s *Service) handleEpisodeDialogueWAVExport(c *gin.Context, stems bool) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	number, ok := episodeNumberParam(c)
+	if !ok {
+		return
+	}
+	result, err := s.Projects.ExportEpisodeDialogueWAV(p, number, stems)
+	if errors.Is(err, ErrDialogueExportEpisodeNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "该集不存在"})
+		return
+	}
+	if errors.Is(err, ErrDialogueExportNotReady) {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func (s *Service) HandleExportEpisodeDialogueWAV(c *gin.Context) {
+	s.handleEpisodeDialogueWAVExport(c, false)
+}
+
+func (s *Service) HandleExportEpisodeDialogueStems(c *gin.Context) {
+	s.handleEpisodeDialogueWAVExport(c, true)
 }
 
 func (s *Service) HandleEpisodeDubPreview(c *gin.Context) {
@@ -1894,6 +2033,94 @@ func (s *Service) HandleEpisodeDubPreview(c *gin.Context) {
 		return
 	}
 	c.JSON(200, data)
+}
+
+func (s *Service) HandleEpisodeVoiceStudio(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	number, ok := episodeNumberParam(c)
+	if !ok {
+		return
+	}
+	data, err := s.Projects.VoiceStudioData(p, number)
+	if errors.Is(err, ErrVoiceStudioEpisodeNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "该集不存在"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, data)
+}
+
+func (s *Service) HandlePreviewEpisodeSRT(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	number, ok := episodeNumberParam(c)
+	if !ok {
+		return
+	}
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择 SRT 文件"})
+		return
+	}
+	const maxSRTBytes = 2 << 20
+	if file.Size <= 0 || file.Size > maxSRTBytes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "SRT 文件必须小于 2 MB"})
+		return
+	}
+	opened, err := file.Open()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无法读取 SRT 文件"})
+		return
+	}
+	defer opened.Close()
+	content, err := io.ReadAll(io.LimitReader(opened, maxSRTBytes+1))
+	if err != nil || len(content) > maxSRTBytes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无法读取 SRT 文件"})
+		return
+	}
+	preview, err := s.Projects.PreviewStructuredSRT(p, number, string(content))
+	if errors.Is(err, ErrVoiceStudioEpisodeNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "该集不存在"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, preview)
+}
+
+func (s *Service) HandleApplyEpisodeSRT(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	number, ok := episodeNumberParam(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		PreviewToken string `json:"preview_token"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	result, err := s.Projects.ApplyStructuredSRT(p, number, req.PreviewToken)
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	s.Projects.pushProject(p)
+	c.JSON(http.StatusOK, result)
 }
 
 func dialogueIDParam(c *gin.Context) (uint, bool) {
@@ -1920,6 +2147,88 @@ func (s *Service) HandleApplyDialoguePreview(c *gin.Context) {
 		return
 	}
 	c.JSON(200, d)
+}
+
+func audioCandidateIDParam(c *gin.Context) (uint, bool) {
+	id, err := strconv.ParseUint(c.Param("cid"), 10, 32)
+	if err != nil || id == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid audio candidate id"})
+		return 0, false
+	}
+	return uint(id), true
+}
+
+func (s *Service) HandleListDialogueAudioCandidates(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	did, ok := dialogueIDParam(c)
+	if !ok {
+		return
+	}
+	rows, err := s.Projects.ListDialogueAudioCandidates(p.ID, did)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	for i := range rows {
+		if rows[i].File != "" {
+			rows[i].File = fmt.Sprintf("/api/input/%d/%s", p.ID, rows[i].File)
+		}
+	}
+	c.JSON(http.StatusOK, rows)
+}
+
+func (s *Service) HandleReviewDialogueAudioCandidate(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	did, ok := dialogueIDParam(c)
+	if !ok {
+		return
+	}
+	cid, ok := audioCandidateIDParam(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Status string `json:"status"`
+		Reason string `json:"reason"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	row, err := s.Projects.ReviewDialogueAudioCandidate(p.ID, did, cid, req.Status, req.Reason)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, row)
+}
+
+func (s *Service) HandleSelectDialogueAudioCandidate(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	did, ok := dialogueIDParam(c)
+	if !ok {
+		return
+	}
+	cid, ok := audioCandidateIDParam(c)
+	if !ok {
+		return
+	}
+	row, err := s.Projects.SelectDialogueAudioCandidate(p.ID, did, cid)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	s.Projects.pushProject(p)
+	c.JSON(http.StatusOK, row)
 }
 
 func (s *Service) HandleRevertDialogueAudio(c *gin.Context) {

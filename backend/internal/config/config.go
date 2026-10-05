@@ -9,13 +9,14 @@ import (
 )
 
 type Config struct {
-	Server       ServerConfig  `yaml:"server"`
-	Comfy        ComfyConfig   `yaml:"comfy"`
-	Storage      StorageConfig `yaml:"storage"`
-	GPU          GPUConfig     `yaml:"gpu"`
-	Remote       RemoteConfig  `yaml:"remote"`
-	TemplatesDir string        `yaml:"templates_dir"` // 运行时模板目录；修改 JSON 后可直接重新加载，无需重新编译
-	Simulate     bool          `yaml:"simulate"`      // 模拟模式：不连接 ComfyUI，任务按参考耗时模拟执行
+	Server       ServerConfig   `yaml:"server"`
+	Comfy        ComfyConfig    `yaml:"comfy"`
+	Storage      StorageConfig  `yaml:"storage"`
+	GPU          GPUConfig      `yaml:"gpu"`
+	Remote       RemoteConfig   `yaml:"remote"`
+	IndexTTS     IndexTTSConfig `yaml:"indextts"`
+	TemplatesDir string         `yaml:"templates_dir"` // 运行时模板目录；修改 JSON 后可直接重新加载，无需重新编译
+	Simulate     bool           `yaml:"simulate"`      // 模拟模式：不连接 ComfyUI，任务按参考耗时模拟执行
 }
 
 type ServerConfig struct {
@@ -51,6 +52,16 @@ type GPUConfig struct {
 	NVSMICmd   string   `yaml:"nvidia_smi"`
 	MonitorInt int      `yaml:"monitor_interval_seconds"`
 	BusIDs     []string `yaml:"bus_ids"`
+}
+
+type IndexTTSConfig struct {
+	Enabled        bool   `yaml:"enabled"`
+	ModelDir       string `yaml:"model_dir"`
+	DeviceIndex    int    `yaml:"device_index"`
+	Language       string `yaml:"language"`
+	DefaultVoice   string `yaml:"default_voice"`
+	TimeoutSeconds int    `yaml:"timeout_seconds"`
+	QueueSize      int    `yaml:"queue_size"`
 }
 
 // RemoteConfig SSH 远程算力节点配置；Host 为空时按本地模式运行（与旧版本一致）。
@@ -91,6 +102,11 @@ func Default() *Config {
 		GPU: GPUConfig{
 			NVSMICmd:   "nvidia-smi",
 			MonitorInt: 3,
+		},
+		IndexTTS: IndexTTSConfig{
+			Language:       "ZH",
+			TimeoutSeconds: 300,
+			QueueSize:      32,
 		},
 	}
 }

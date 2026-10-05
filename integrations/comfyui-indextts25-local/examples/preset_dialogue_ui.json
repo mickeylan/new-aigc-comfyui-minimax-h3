@@ -1,0 +1,94 @@
+{
+  "last_node_id": 4,
+  "last_link_id": 3,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "IndexTTS25LocalModelLoader",
+      "pos": [0, 0],
+      "size": [460, 220],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {"name": "source_dir", "type": "STRING", "widget": {"name": "source_dir"}, "link": null},
+        {"name": "model_dir", "type": "STRING", "widget": {"name": "model_dir"}, "link": null},
+        {"name": "device", "type": "COMBO", "widget": {"name": "device"}, "link": null},
+        {"name": "precision", "type": "COMBO", "widget": {"name": "precision"}, "link": null}
+      ],
+      "outputs": [{"name": "model", "type": "INDEXTTS25_LOCAL_MODEL", "links": [1]}],
+      "properties": {"Node name for S&R": "IndexTTS25LocalModelLoader"},
+      "widgets_values": ["E:\\mickeylan\\ai\\index-tts", "E:\\mickeylan\\ai\\index-tts\\checkpoints", "auto", "auto"],
+      "title": "加载本地 IndexTTS-2.5"
+    },
+    {
+      "id": 2,
+      "type": "IndexTTS25LocalPresetVoice",
+      "pos": [0, 300],
+      "size": [460, 240],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {"name": "preset_voice", "type": "COMBO", "widget": {"name": "preset_voice"}, "link": null},
+        {"name": "selection_mode", "type": "COMBO", "widget": {"name": "selection_mode"}, "link": null},
+        {"name": "seed", "type": "INT", "widget": {"name": "seed"}, "link": null},
+        {"name": "refresh_token", "type": "INT", "widget": {"name": "refresh_token"}, "link": null}
+      ],
+      "outputs": [
+        {"name": "speaker_audio", "type": "AUDIO", "links": [2]},
+        {"name": "voice_key", "type": "STRING", "links": []},
+        {"name": "voice_info", "type": "STRING", "links": []}
+      ],
+      "properties": {"Node name for S&R": "IndexTTS25LocalPresetVoice"},
+      "widgets_values": ["official-demo/voice_01.wav", "selected", 20261002, "fixed", 0],
+      "title": "选择预置音色（也可按seed随机）"
+    },
+    {
+      "id": 3,
+      "type": "IndexTTS25LocalGenerate",
+      "pos": [600, 80],
+      "size": [500, 340],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {"name": "model", "type": "INDEXTTS25_LOCAL_MODEL", "link": 1},
+        {"name": "speaker_audio", "type": "AUDIO", "link": 2},
+        {"name": "text", "type": "STRING", "widget": {"name": "text"}, "link": null},
+        {"name": "language", "type": "COMBO", "widget": {"name": "language"}, "link": null},
+        {"name": "duration_factor", "type": "FLOAT", "widget": {"name": "duration_factor"}, "link": null},
+        {"name": "seed", "type": "INT", "widget": {"name": "seed"}, "link": null}
+      ],
+      "outputs": [{"name": "audio", "type": "AUDIO", "links": [3]}],
+      "properties": {"Node name for S&R": "IndexTTS25LocalGenerate"},
+      "widgets_values": ["相信姐姐，姐姐无论如何也不会让你去罗刹魔域！", "ZH", 1.0, 20261002, "fixed"],
+      "title": "用预置音色生成对白"
+    },
+    {
+      "id": 4,
+      "type": "SaveAudio",
+      "pos": [1220, 150],
+      "size": [360, 150],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {"name": "audio", "type": "AUDIO", "link": 3},
+        {"name": "filename_prefix", "type": "STRING", "widget": {"name": "filename_prefix"}, "link": null}
+      ],
+      "outputs": [{"name": "audio", "type": "AUDIO", "links": []}],
+      "properties": {"Node name for S&R": "SaveAudio", "cnr_id": "comfy-core"},
+      "widgets_values": ["IndexTTS25_Local/preset_dialogue"]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 3, 0, "INDEXTTS25_LOCAL_MODEL"],
+    [2, 2, 0, 3, 1, "AUDIO"],
+    [3, 3, 0, 4, 0, "AUDIO"]
+  ],
+  "groups": [{"title": "IndexTTS-2.5 预置音色测试", "bounding": [-40, -60, 1680, 660], "color": "#3f789e", "font_size": 24, "flags": {}}],
+  "config": {},
+  "extra": {"ds": {"scale": 0.85, "offset": [80, 80]}},
+  "version": 0.4
+}

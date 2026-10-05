@@ -26,6 +26,17 @@ gpu:
   nvidia_smi: /usr/bin/nvidia-smi
   monitor_interval_seconds: 3
 
+# 全本地 IndexTTS-2.5。Windows CUDA 发布版需使用 -tags indextts 构建，
+# 并将 indextts.dll、ONNX Runtime、CUDA 与 cuDNN DLL 放在程序目录。
+indextts:
+  enabled: false
+  model_dir: ""
+  device_index: 0
+  language: ZH
+  default_voice: ""
+  timeout_seconds: 300
+  queue_size: 32
+
 # SSH 远程算力节点（单机 docker 部署：console 经 SSH 密钥在宿主执行 docker / SFTP 读写）
 # 注意: 复制本文件为 config.yaml 后填写真实主机与认证信息，切勿提交密钥到仓库
 remote:

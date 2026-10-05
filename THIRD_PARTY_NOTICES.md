@@ -26,3 +26,14 @@ Portions of the MiniMax H3 combat-direction prompt design were adapted from the 
 - Copyright: Copyright (c) 2026 Terry Jia
 
 The adapted concepts include per-participant body/asset/ability tracking, readable attack-response-contact-displacement chains, continuity of momentum and possession, duration-bounded choreography, non-invented outcomes, and one motivated camera task per shot. The implementation is independently integrated into this repository's existing Go Skill system and Scene/Shot authority model.
+
+## IndexTTS 2.5
+
+The optional local ComfyUI integration under `integrations/comfyui-indextts25-local` calls the official IndexTTS 2.5 inference API and does not redistribute model weights.
+
+- Source: https://github.com/index-tts/index-tts
+- Local source reviewed: `E:\mickeylan\ai\index-tts`
+- License: bilibili Model Use License Agreement
+- Developer: Bilibili Index Team
+
+The integration includes a copy of the model license and disclaimer. Users must obtain authorization for cloned voices and comply with the model license and applicable law. The node implementation is a clean, minimal integration; the separate `comfyui-indextts25-t8` repository was inspected only as a behavioral reference and its extended workflow implementation was not copied.
