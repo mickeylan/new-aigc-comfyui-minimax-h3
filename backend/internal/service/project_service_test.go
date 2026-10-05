@@ -1540,7 +1540,7 @@ func TestBuildMiniMaxH3PromptUsesSixSectionContract(t *testing.T) {
 		}
 		last = pos
 	}
-	for _, want := range []string{"唯一视觉基准", "舒寒, 上官若琳", "玉霄宫内殿", "元婴玉佩", "[Shot 1]", "短暂静止后", "N/A"} {
+	for _, want := range []string{"唯一视觉基准", "舒寒, 上官若琳", "玉霄宫内殿", "元婴玉佩", "[Shot 1]", "短暂静止后", "No non-diegetic music", "No background music"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q: %s", want, prompt)
 		}
@@ -2118,6 +2118,46 @@ func TestNormalizeSavedH3AudioNeverCompactsDialogueText(t *testing.T) {
 	got := normalizeSavedH3Audio(prompt, []models.Dialogue{{Character: "林夏", Text: line}}, nil)
 	if !strings.Contains(got, "<d>[Chinese] "+line+"</d>") {
 		t.Fatalf("authoritative dialogue compacted: %s", got)
+	}
+}
+
+func TestSilentH3PromptUsesExplicitNoMusicContract(t *testing.T) {
+	lines := []string{
+		"- <Picture 1>：角色「舒寒」四视图",
+		"- <Picture 2>：角色「上官若琳」四视图",
+		"- <Picture 3>：场景「天阙宗玉霄宫梵心桃花林」",
+		"- <Picture 4>：当前分镜画面",
+	}
+	scene := &models.Scene{Duration: 6, VideoPrompt: "[Shot 1] From the state shown in <Picture 4>, <Subject 2> gently tilts and shakes her head. <Subject 1> cups her face in both hands and leans in slowly. <Subject 3> remains visible in the background."}
+	prompt := buildMiniMaxH3RefPrompt(scene, nil, nil, lines)
+	soundscape := h3PromptSection(prompt, "overall_soundscape:")
+	music := h3PromptSection(prompt, "non_diegetic_music:")
+	for _, want := range []string{"Only natural location ambience", "No dialogue", "musical tones", "rhythmic score"} {
+		if !strings.Contains(soundscape, want) {
+			t.Fatalf("silent soundscape missing %q: %s", want, prompt)
+		}
+	}
+	for _, want := range []string{"No non-diegetic music", "No background music", "score", "soundtrack", "melody", "musical ambience"} {
+		if !strings.Contains(music, want) {
+			t.Fatalf("music prohibition missing %q: %s", want, prompt)
+		}
+	}
+	if strings.TrimSpace(music) == "N/A" || strings.Contains(prompt, "non_diegetic_music:\nN/A") {
+		t.Fatalf("ambiguous N/A music contract remained: %s", prompt)
+	}
+	if !videoAudioContractMatches(prompt, nil) {
+		t.Fatalf("explicit silent/no-music contract rejected: %s", prompt)
+	}
+}
+
+func TestNormalizeSavedH3AudioReplacesAmbiguousMusicNA(t *testing.T) {
+	legacy := "subject_definitions:\nsubject\n\nsummary:\nsummary\n\nretention_analysis:\nretention\n\ndetailed_description:\n[Shot 1] Two people remain still.\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"
+	got := normalizeSavedH3Audio(legacy, nil, nil)
+	if strings.Contains(got, "non_diegetic_music:\nN/A") || !strings.Contains(got, h3NoMusicContract()) {
+		t.Fatalf("legacy music contract was not hardened: %s", got)
+	}
+	if !strings.Contains(h3PromptSection(got, "overall_soundscape:"), "No dialogue") {
+		t.Fatalf("legacy soundscape was not hardened: %s", got)
 	}
 }
 

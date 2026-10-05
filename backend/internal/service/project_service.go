@@ -2702,9 +2702,13 @@ func dialogueSpeakerIDs(dubs []models.Dialogue) []int {
 
 func h3SoundscapeContract(hasDialogue bool) string {
 	if hasDialogue {
-		return "Quiet ambient sound and physically motivated action sounds continue throughout. Dialogue appears only in the shot timeline; no additional voices, narration, or singing are present."
+		return "Only natural location ambience and physically motivated diegetic action sounds are present. Dialogue appears only in the shot timeline; no additional voices, narration, singing, humming, musical tones, or rhythmic score are present."
 	}
-	return "Quiet ambient sound and physically motivated action sounds continue throughout. No dialogue, human voice, narration, or singing is present."
+	return "Only natural location ambience and physically motivated diegetic action sounds are present. No dialogue, human voice, narration, singing, humming, musical tones, or rhythmic score are present."
+}
+
+func h3NoMusicContract() string {
+	return "No non-diegetic music. No background music, score, soundtrack, melody, instrumental music, vocal music, or musical ambience at any point."
 }
 
 func isNarrationSpeaker(name string) bool {
@@ -3163,7 +3167,7 @@ func buildH3T2VAPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialog
 	body := h3TimelineBody(sc, p, dubs)
 	return "integrated_multimodal_description:\n" + body +
 		"\n\noverall_soundscape:\n" + h3SoundscapeContract(len(validSceneDialogues(dubs)) > 0) +
-		"\n\nnon_diegetic_music:\nN/A"
+		"\n\nnon_diegetic_music:\n" + h3NoMusicContract()
 }
 
 // buildH3I2VAPrompt binds Picture 1 to the actual 0.00-second first frame.
@@ -3173,7 +3177,7 @@ func buildH3I2VAPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialog
 	return "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.\n\n" +
 		"integrated_multimodal_description:\n" + body +
 		"\n\noverall_soundscape:\n" + h3SoundscapeContract(len(validSceneDialogues(dubs)) > 0) +
-		"\n\nnon_diegetic_music:\nN/A"
+		"\n\nnon_diegetic_music:\n" + h3NoMusicContract()
 }
 
 // buildH3FL2VAPrompt describes one continuous path from Picture 1 to Picture 2.
@@ -3189,7 +3193,7 @@ func buildH3FL2VAPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialo
 	return fmt.Sprintf("How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot %d) aligns with the %.2f-second mark of the target video.\n\n", lastShot, duration) +
 		"integrated_multimodal_description:\n" + body +
 		"\n\noverall_soundscape:\n" + h3SoundscapeContract(len(validSceneDialogues(dubs)) > 0) +
-		"\n\nnon_diegetic_music:\nN/A"
+		"\n\nnon_diegetic_music:\n" + h3NoMusicContract()
 }
 
 func lastH3ShotNumber(prompt string) int {
@@ -3274,7 +3278,7 @@ func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines
 		if prefix != "" {
 			parts = append(parts, prefix)
 		}
-		parts = append(parts, "integrated_multimodal_description:\n"+detail, "overall_soundscape:\n"+h3SoundscapeContract(len(validSceneDialogues(dubs)) > 0), "non_diegetic_music:\n"+strings.TrimSpace(h3PromptSection(prompt, "non_diegetic_music:")))
+		parts = append(parts, "integrated_multimodal_description:\n"+detail, "overall_soundscape:\n"+h3SoundscapeContract(len(validSceneDialogues(dubs)) > 0), "non_diegetic_music:\n"+h3NoMusicContract())
 		return strings.Join(parts, "\n\n")
 	}
 	sections := []struct{ heading, body string }{
@@ -3283,7 +3287,7 @@ func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines
 		{"retention_analysis:", h3PromptSection(prompt, "retention_analysis:")},
 		{"detailed_description:", detail},
 		{"overall_soundscape:", h3SoundscapeContract(len(validSceneDialogues(dubs)) > 0)},
-		{"non_diegetic_music:", h3PromptSection(prompt, "non_diegetic_music:")},
+		{"non_diegetic_music:", h3NoMusicContract()},
 	}
 	parts := make([]string, 0, len(sections)+1)
 	if index := strings.Index(strings.ToLower(prompt), "subject_definitions:"); index > 0 {
@@ -3309,6 +3313,10 @@ func canonicalH3PromptDialogueFragment(fragment string) string {
 func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 	valid := validSceneDialogues(dubs)
 	soundscape := h3PromptSection(fullPrompt, "overall_soundscape:")
+	music := strings.ToLower(h3PromptSection(fullPrompt, "non_diegetic_music:"))
+	if !strings.Contains(music, "no non-diegetic music") || !strings.Contains(music, "no background music") {
+		return false
+	}
 	if strings.Contains(soundscape, "<d>") || strings.Contains(soundscape, "</d>") {
 		return false
 	}
@@ -3596,7 +3604,7 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 		"\n\nretention_analysis:\n" + strings.Join(retention, "\n") +
 		"\n\ndetailed_description:\n" + body +
 		"\n\noverall_soundscape:\n" + soundscape +
-		"\n\nnon_diegetic_music:\nN/A"
+		"\n\nnon_diegetic_music:\n" + h3NoMusicContract()
 }
 
 func buildMiniMaxH3Prompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue) string {
@@ -3678,7 +3686,7 @@ func buildMiniMaxH3Prompt(sc *models.Scene, p *models.Project, dubs []models.Dia
 
 	// non_diegetic_music
 	buf.WriteString("non_diegetic_music:\n")
-	buf.WriteString("N/A")
+	buf.WriteString(h3NoMusicContract())
 
 	return buf.String()
 }
