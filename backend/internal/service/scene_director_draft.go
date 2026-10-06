@@ -77,6 +77,17 @@ func parseSceneDirectorDraft(output string) (*sceneDirectorDraft, error) {
 			}
 		}
 		d.Dialogue, d.Emotion, d.TransitionNote, d.NegativePrompt = strings.TrimSpace(d.Dialogue), strings.TrimSpace(d.Emotion), strings.TrimSpace(d.TransitionNote), strings.TrimSpace(d.NegativePrompt)
+		// action_timeline is optional for a simple single-action Shot. Some models emit
+		// one empty/incomplete placeholder object despite being asked for []. Dropping
+		// that one placeholder is deterministic and safer than inventing subject/action/
+		// state/camera values. Multi-segment timelines remain strict and must be repaired.
+		if len(d.ActionTimeline) == 1 {
+			entry := d.ActionTimeline[0]
+			if strings.TrimSpace(entry.Subject) == "" || strings.TrimSpace(entry.Action) == "" || strings.TrimSpace(entry.State) == "" || strings.TrimSpace(entry.Camera) == "" {
+				d.ActionTimeline = []models.ShotActionTimelineEntry{}
+				d.Checks = append(d.Checks, "系统已移除模型输出的不完整单段动作时间轴；简单镜头不要求动作时间轴")
+			}
+		}
 		if d.Duration < 3 || d.Duration > 15 || math.IsNaN(d.Duration) || math.IsInf(d.Duration, 0) {
 			return nil, fmt.Errorf("镜头%d时长必须为3到15秒", i+1)
 		}

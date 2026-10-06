@@ -11,6 +11,27 @@ const validSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中�
 
 const shortSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中景","camera_angle":"平视","camera_movement":"固定","duration":2,"description":"女主走到桌边","dialogue":"","emotion":"警惕","transition_type":"cut","transition_note":"接视线","start_state":"女主站在门边","end_state":"女主停在桌边","prompt_subject":"女主面部清晰","prompt_action":"缓步走到桌边","prompt_camera":"中景平视构图","prompt_lighting":"室内暖侧光","prompt_style":"真人写实电影质感","negative_prompt":"水印，多余人物","checks":["动作可在2秒完成","无新增对白"]}]}`
 
+func TestParseSceneDirectorDraftDropsSingleIncompleteTimelinePlaceholder(t *testing.T) {
+	raw := strings.Replace(validSceneDirectorDraft, `"checks":["动作可在3秒完成","无新增对白"]`, `"action_timeline":[{"start":0,"end":3,"subject":"","action":"走到桌边","state":"停下","camera":"固定"}],"checks":["动作可在3秒完成","无新增对白"]`, 1)
+	draft, err := parseSceneDirectorDraft(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(draft.Shots[0].ActionTimeline) != 0 {
+		t.Fatalf("incomplete placeholder timeline retained: %+v", draft.Shots[0].ActionTimeline)
+	}
+	if !strings.Contains(strings.Join(draft.Shots[0].Checks, "\n"), "不完整单段动作时间轴") {
+		t.Fatalf("normalization was not audited: %+v", draft.Shots[0].Checks)
+	}
+}
+
+func TestParseSceneDirectorDraftKeepsMultiSegmentTimelineStrict(t *testing.T) {
+	raw := strings.Replace(validSceneDirectorDraft, `"checks":["动作可在3秒完成","无新增对白"]`, `"action_timeline":[{"start":0,"end":1.5,"subject":"","action":"走近","state":"移动中","camera":"固定"},{"start":1.5,"end":3,"subject":"女主","action":"停下","state":"桌边","camera":"固定"}],"checks":["动作可在3秒完成","无新增对白"]`, 1)
+	if _, err := parseSceneDirectorDraft(raw); err == nil || !strings.Contains(err.Error(), "动作时间轴第1段必须填写主体") {
+		t.Fatalf("multi-segment incomplete timeline was accepted: %v", err)
+	}
+}
+
 func TestDialogueRhythmQueryQuotesReservedOrderColumn(t *testing.T) {
 	db := newTestProjectService(t).db
 	if err := db.AutoMigrate(&models.Dialogue{}); err != nil {
