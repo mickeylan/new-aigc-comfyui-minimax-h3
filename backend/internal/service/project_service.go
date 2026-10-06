@@ -576,6 +576,19 @@ func qwenSceneReferenceRole(line string) string {
 	}
 }
 
+func qwenSceneReferenceIsLocation(line string) bool {
+	desc := strings.TrimSpace(qwenReferenceLinePrefixPattern.ReplaceAllString(strings.TrimSpace(line), ""))
+	return strings.Contains(desc, "场景") || strings.Contains(desc, "环境")
+}
+
+func qwenSceneReferenceBinding(tag, line string) string {
+	role := qwenSceneReferenceRole(line)
+	if qwenSceneReferenceIsLocation(line) {
+		return tag + "作为" + role + "；当前画面必须发生在该环境中，严格保持其建筑结构、空间布局、材质和固定陈设关系"
+	}
+	return tag + "作为" + role + "，仅当Scene或Shot要求对应主体出镜时才将其放入画面"
+}
+
 func ensureQwenSceneReferenceBindings(prompt string, referenceLines []string) string {
 	prompt = strings.TrimSpace(prompt)
 	if len(referenceLines) == 0 {
@@ -588,13 +601,14 @@ func ensureQwenSceneReferenceBindings(prompt string, referenceLines []string) st
 		if strings.Contains(prompt, "输入图") {
 			return prompt
 		}
-		return "使用输入图仅提取" + qwenSceneReferenceRole(referenceLines[0]) + "，在独立新画布中重构一个静止剧情首帧；" + prompt
+		binding := qwenSceneReferenceBinding("输入图", referenceLines[0])
+		return binding + "；在独立新画布中重构一个静止剧情首帧；" + prompt
 	}
 	bindings := make([]string, 0, len(referenceLines))
 	for i, line := range referenceLines {
 		tag := fmt.Sprintf("<image%d>", i+1)
 		if !strings.Contains(prompt, tag) {
-			bindings = append(bindings, tag+"作为"+qwenSceneReferenceRole(line)+"，不要求该素材中的主体必须出现在画面中")
+			bindings = append(bindings, qwenSceneReferenceBinding(tag, line))
 		}
 	}
 	if len(bindings) == 0 {
