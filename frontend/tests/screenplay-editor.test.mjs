@@ -42,11 +42,13 @@ test('目标集数支持任意合法值且生成方案有明确进度状态', ()
   assert.match(view, /校验并校正分集数量/)
 })
 
-test('长篇小说剧本页封闭一次性全剧方案入口', () => {
+test('长篇小说封闭一次性全剧方案但保留本集AI重生成纠错入口', () => {
   assert.match(view, /rollingRequired/)
   assert.match(view, /进入长篇滚动改编规划/)
   assert.match(view, /禁止一次生成全剧方案/)
   assert.match(detail, /project\.episodes <= 20/)
+  assert.match(view, /@click="regenerateEpisodeScript"/)
+  assert.match(detail, /@click="regenerateScript"/)
 })
 
 test('结构化剧本配色遵循全局明暗主题且不使用固定黑底', () => {

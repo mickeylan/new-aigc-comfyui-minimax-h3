@@ -24,8 +24,8 @@
         <button v-else class="btn btn-secondary" :disabled="busy || generatingPlan || !project?.synopsis" @click="generateCreativePlan">
           {{ generatingPlan ? '方案生成中…' : (project?.plan ? '1. 重新生成创作方案' : '1. 生成创作方案') }}
         </button>
-        <button v-if="!rollingRequired" class="btn" :disabled="busy || generatingScript || !project?.synopsis" @click="regenerateEpisodeScript">
-          {{ generatingScript ? '剧本生成中…' : `2. 重新生成第${episodeN}集剧本` }}
+        <button class="btn" :disabled="busy || generatingScript || !project?.synopsis" @click="regenerateEpisodeScript">
+          {{ generatingScript ? '剧本生成中…' : `${rollingRequired ? 'AI' : '2.'} 重新生成第${episodeN}集剧本` }}
         </button>
       </div>
     </section>
@@ -181,7 +181,7 @@ async function generateCreativePlan() {
 }
 async function regenerateEpisodeScript() {
   if (dirty.value) { toast.error('请先保存或放弃当前剧本修改，再重新生成剧本'); return }
-  if (!window.confirm(`重新生成第${episodeN}集剧本会替换本集 Scene、Shot、Dialogue，并使旧媒体失效；系统会先保存安全版本。确定继续吗？`)) return
+  if (!window.confirm(`AI重新生成第${episodeN}集剧本会读取上一集完整生产内容、自动排重并替换本集 Scene、Shot、Dialogue；旧媒体会失效，系统会先保存安全版本。确定继续吗？`)) return
   busy.value = true; generatingScript.value = true
   try {
     await api.generateScript(projectId, episodeN)

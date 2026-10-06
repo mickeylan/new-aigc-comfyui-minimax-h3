@@ -22,7 +22,7 @@
         <button v-if="project.episodes <= 20" class="btn btn-secondary btn-sm" :disabled="busy || generatingPlan || !project.synopsis" @click="generatePlan">
           {{ generatingPlan ? '方案生成中…' : (project.plan ? '📋 重新生成创作方案' : '📋 生成创作方案') }}
         </button>
-        <button v-if="project.episodes <= 20" class="btn btn-ghost btn-sm" :disabled="busy || generatingScript || !project.synopsis" @click="regenerateScript">
+        <button class="btn btn-ghost btn-sm" :disabled="busy || generatingScript || !project.synopsis" @click="regenerateScript">
           {{ generatingScript ? '剧本生成中…' : ('🔄 重新生成第' + activeEpN + '集剧本') }}
         </button>
         <button v-if="project.episodes <= 20" class="btn btn-sm" :disabled="busy || pipelineActive || !project.synopsis" @click="startPipeline">
@@ -355,7 +355,7 @@
         <div class="script-edit-bar">
           <span v-if="scriptDirty" class="script-dirty-hint">已修改，未保存</span>
           <span v-else-if="!scriptDraft.trim()" class="script-dirty-hint">该集剧本尚未生成，可直接编写或点击「重新生成剧本」</span>
-          <button class="btn btn-sm btn-secondary" :disabled="busy || scriptRendering || !scriptDirty" @click="saveAndRender">
+          <button class="btn btn-sm btn-secondary" :disabled="busy || scriptRendering || !scriptDraft.trim()" title="使用当前剧本重新拆分Scene；如需AI重写重复剧情，请点击页面顶部“AI重新生成本集剧本”" @click="saveAndRender">
             {{ scriptRendering ? 'AI 生成中…' : '💾 保存并 AI 重新生成分镜' }}
           </button>
         </div>

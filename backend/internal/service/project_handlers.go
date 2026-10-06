@@ -818,10 +818,6 @@ func (s *Service) HandleGenerateScript(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if p.Episodes > 20 {
-		c.JSON(http.StatusConflict, gin.H{"error": "长篇项目必须通过滚动改编规划生成本集剧本：先审核本集Episode映射，并通过上一集连续性检查；禁止绕过规划直接生成"})
-		return
-	}
 	if err := s.Projects.ClaimManualScript(p); err != nil {
 		c.JSON(409, gin.H{"error": err.Error()})
 		return
