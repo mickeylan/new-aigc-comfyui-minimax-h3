@@ -46,6 +46,78 @@ func trimJSONFence(value string) string {
 	value = strings.TrimPrefix(value, "```")
 	return strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(value), "```"))
 }
+func joinDirectorField(first, second string) string {
+	first, second = strings.TrimSpace(first), strings.TrimSpace(second)
+	if first == "" {
+		return second
+	}
+	if second == "" || second == first {
+		return first
+	}
+	return first + "；" + second
+}
+
+func mergeDirectorShotPair(first, second sceneDirectorDraftShot) sceneDirectorDraftShot {
+	firstDuration := first.Duration
+	first.Duration += second.Duration
+	first.Description = joinDirectorField(first.Description, second.Description)
+	first.Dialogue += second.Dialogue
+	first.Emotion = joinDirectorField(first.Emotion, second.Emotion)
+	first.EndState = second.EndState
+	first.PromptSubject = joinDirectorField(first.PromptSubject, second.PromptSubject)
+	first.PromptAction = joinDirectorField(first.PromptAction, second.PromptAction)
+	first.PromptCamera = joinDirectorField(first.PromptCamera, second.PromptCamera)
+	first.PromptLighting = joinDirectorField(first.PromptLighting, second.PromptLighting)
+	first.PromptStyle = joinDirectorField(first.PromptStyle, second.PromptStyle)
+	first.NegativePrompt = joinDirectorField(first.NegativePrompt, second.NegativePrompt)
+	first.TransitionType, first.TransitionNote = second.TransitionType, second.TransitionNote
+	if len(first.ActionTimeline) > 0 && len(second.ActionTimeline) > 0 {
+		combined := append([]models.ShotActionTimelineEntry(nil), first.ActionTimeline...)
+		for _, entry := range second.ActionTimeline {
+			entry.Start += firstDuration
+			entry.End += firstDuration
+			combined = append(combined, entry)
+		}
+		first.ActionTimeline = combined
+	} else {
+		// A partial merged timeline would contain an uncovered time gap. The timeline is
+		// optional, so discard it instead of inventing action facts for the missing part.
+		first.ActionTimeline = []models.ShotActionTimelineEntry{}
+	}
+	first.Checks = append(first.Checks, second.Checks...)
+	first.Checks = append(first.Checks, "系统已将不足3秒的相邻镜头合并为一个Native H3镜头")
+	return first
+}
+
+func normalizeShortDirectorShots(draft *sceneDirectorDraft) error {
+	if draft == nil {
+		return nil
+	}
+	for i := 0; i < len(draft.Shots); {
+		shot := draft.Shots[i]
+		if shot.Duration <= 0 || shot.Duration >= 3 {
+			i++
+			continue
+		}
+		if i+1 < len(draft.Shots) && shot.Duration+draft.Shots[i+1].Duration <= 15 {
+			draft.Shots[i] = mergeDirectorShotPair(shot, draft.Shots[i+1])
+			draft.Shots = append(draft.Shots[:i+1], draft.Shots[i+2:]...)
+			continue
+		}
+		if i > 0 && draft.Shots[i-1].Duration+shot.Duration <= 15 {
+			draft.Shots[i-1] = mergeDirectorShotPair(draft.Shots[i-1], shot)
+			draft.Shots = append(draft.Shots[:i], draft.Shots[i+1:]...)
+			i--
+			if i < 0 {
+				i = 0
+			}
+			continue
+		}
+		return fmt.Errorf("镜头%d时长%.1f秒，无法与相邻镜头合并到3至15秒范围", i+1, shot.Duration)
+	}
+	return nil
+}
+
 func parseSceneDirectorDraft(output string) (*sceneDirectorDraft, error) {
 	dec := json.NewDecoder(bytes.NewBufferString(trimJSONFence(output)))
 	dec.DisallowUnknownFields()
@@ -58,6 +130,22 @@ func parseSceneDirectorDraft(output string) (*sceneDirectorDraft, error) {
 	}
 	if len(draft.Shots) == 0 || len(draft.Shots) > 30 {
 		return nil, fmt.Errorf("导演草稿镜头数必须为1至30")
+	}
+	for i := range draft.Shots {
+		d := &draft.Shots[i]
+		// action_timeline is optional for a simple single-action Shot. Some models emit
+		// one empty/incomplete placeholder object despite being asked for []. Dropping
+		// that one placeholder is deterministic and safer than inventing missing facts.
+		if len(d.ActionTimeline) == 1 {
+			entry := d.ActionTimeline[0]
+			if strings.TrimSpace(entry.Subject) == "" || strings.TrimSpace(entry.Action) == "" || strings.TrimSpace(entry.State) == "" || strings.TrimSpace(entry.Camera) == "" {
+				d.ActionTimeline = []models.ShotActionTimelineEntry{}
+				d.Checks = append(d.Checks, "系统已移除模型输出的不完整单段动作时间轴；简单镜头不要求动作时间轴")
+			}
+		}
+	}
+	if err := normalizeShortDirectorShots(&draft); err != nil {
+		return nil, err
 	}
 	for i := range draft.Shots {
 		d := &draft.Shots[i]
@@ -77,17 +165,6 @@ func parseSceneDirectorDraft(output string) (*sceneDirectorDraft, error) {
 			}
 		}
 		d.Dialogue, d.Emotion, d.TransitionNote, d.NegativePrompt = strings.TrimSpace(d.Dialogue), strings.TrimSpace(d.Emotion), strings.TrimSpace(d.TransitionNote), strings.TrimSpace(d.NegativePrompt)
-		// action_timeline is optional for a simple single-action Shot. Some models emit
-		// one empty/incomplete placeholder object despite being asked for []. Dropping
-		// that one placeholder is deterministic and safer than inventing subject/action/
-		// state/camera values. Multi-segment timelines remain strict and must be repaired.
-		if len(d.ActionTimeline) == 1 {
-			entry := d.ActionTimeline[0]
-			if strings.TrimSpace(entry.Subject) == "" || strings.TrimSpace(entry.Action) == "" || strings.TrimSpace(entry.State) == "" || strings.TrimSpace(entry.Camera) == "" {
-				d.ActionTimeline = []models.ShotActionTimelineEntry{}
-				d.Checks = append(d.Checks, "系统已移除模型输出的不完整单段动作时间轴；简单镜头不要求动作时间轴")
-			}
-		}
 		if d.Duration < 3 || d.Duration > 15 || math.IsNaN(d.Duration) || math.IsInf(d.Duration, 0) {
 			return nil, fmt.Errorf("镜头%d时长必须为3到15秒", i+1)
 		}

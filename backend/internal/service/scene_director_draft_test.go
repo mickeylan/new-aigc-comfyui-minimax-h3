@@ -11,6 +11,34 @@ const validSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中�
 
 const shortSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中景","camera_angle":"平视","camera_movement":"固定","duration":2,"description":"女主走到桌边","dialogue":"","emotion":"警惕","transition_type":"cut","transition_note":"接视线","start_state":"女主站在门边","end_state":"女主停在桌边","prompt_subject":"女主面部清晰","prompt_action":"缓步走到桌边","prompt_camera":"中景平视构图","prompt_lighting":"室内暖侧光","prompt_style":"真人写实电影质感","negative_prompt":"水印，多余人物","checks":["动作可在2秒完成","无新增对白"]}]}`
 
+func TestParseSceneDirectorDraftMergesShortShotIntoFollowingShot(t *testing.T) {
+	raw := `{"shots":[{"act_type":"setup","shot_type":"特写","camera_angle":"平视","camera_movement":"固定","duration":2,"description":"若琳抬眼","dialogue":"相信姐姐，","emotion":"坚定","transition_type":"cut","transition_note":"切双人景","start_state":"若琳垂眼","end_state":"若琳抬眼","prompt_subject":"若琳特写","prompt_action":"抬眼","prompt_camera":"固定特写","prompt_lighting":"夕阳","prompt_style":"古风仙侠","negative_prompt":"文字","checks":[]},{"act_type":"rising","shot_type":"双人中景","camera_angle":"平视","camera_movement":"固定","duration":5,"description":"若琳握住若彤的手","dialogue":"姐姐会保护你。","emotion":"温柔坚定","transition_type":"cut","transition_note":"接下一镜","start_state":"若琳抬眼","end_state":"姐妹相握","prompt_subject":"姐妹双人中景","prompt_action":"若琳握住若彤的手","prompt_camera":"固定中景","prompt_lighting":"夕阳余晖","prompt_style":"古风仙侠","negative_prompt":"文字","checks":[]}]}`
+	draft, err := parseSceneDirectorDraft(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(draft.Shots) != 1 || draft.Shots[0].Duration != 7 {
+		t.Fatalf("merged shots = %+v", draft.Shots)
+	}
+	shot := draft.Shots[0]
+	if shot.Dialogue != "相信姐姐，姐姐会保护你。" || shot.StartState != "若琳垂眼" || shot.EndState != "姐妹相握" {
+		t.Fatalf("authority/order lost: %+v", shot)
+	}
+	if shot.TransitionNote != "接下一镜" || !strings.Contains(shot.PromptAction, "抬眼；若琳握住若彤的手") {
+		t.Fatalf("merged direction invalid: %+v", shot)
+	}
+}
+
+func TestParseSceneDirectorDraftRejectsShortShotThatCannotMergeWithinLimit(t *testing.T) {
+	raw := strings.Replace(validSceneDirectorDraft, `"duration":3`, `"duration":2`, 1)
+	second := strings.TrimSuffix(strings.TrimPrefix(validSceneDirectorDraft, `{"shots":[`), `]}`)
+	second = strings.Replace(second, `"duration":3`, `"duration":14`, 1)
+	raw = strings.TrimSuffix(raw, `]}`) + `,` + second + `]}`
+	if _, err := parseSceneDirectorDraft(raw); err == nil || !strings.Contains(err.Error(), "无法与相邻镜头合并") {
+		t.Fatalf("unmergeable short shot accepted: %v", err)
+	}
+}
+
 func TestParseSceneDirectorDraftDropsSingleIncompleteTimelinePlaceholder(t *testing.T) {
 	raw := strings.Replace(validSceneDirectorDraft, `"checks":["动作可在3秒完成","无新增对白"]`, `"action_timeline":[{"start":0,"end":3,"subject":"","action":"走到桌边","state":"停下","camera":"固定"}],"checks":["动作可在3秒完成","无新增对白"]`, 1)
 	draft, err := parseSceneDirectorDraft(raw)
