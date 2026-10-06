@@ -1157,7 +1157,7 @@ func TestEnsureQwenSceneReferenceBindingsDeterministicallyAddsMissingImages(t *t
 	if strings.Contains(got, "<Picture") {
 		t.Fatalf("H3 picture tag leaked: %s", got)
 	}
-	for _, want := range []string{"面部身份、年龄感和身体比例", "仅当Scene或Shot要求对应主体出镜时才将其放入画面"} {
+	for _, want := range []string{"严格遵循<image1>", "严格遵循<image2>", "严格遵循<image3>", "人物身份、面部、年龄感与身体比例参考"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("reference-role constraint missing %q: %s", want, got)
 		}
@@ -1167,11 +1167,13 @@ func TestEnsureQwenSceneReferenceBindingsDeterministicallyAddsMissingImages(t *t
 		t.Fatalf("location role incomplete: %s", role)
 	}
 	locationBinding := qwenSceneReferenceBinding("<image3>", "- <Picture 3>：场景「玉霄宫寝殿」参考图")
-	if !strings.Contains(locationBinding, "当前画面必须发生在该环境中") || !strings.Contains(locationBinding, "严格保持其建筑结构、空间布局、材质和固定陈设关系") {
-		t.Fatalf("location reference was treated as optional: %s", locationBinding)
+	if !strings.Contains(locationBinding, "严格遵循<image3>") || !strings.Contains(locationBinding, "环境结构、空间布局、材质与固定陈设参考") {
+		t.Fatalf("location reference was not authoritative: %s", locationBinding)
 	}
-	if strings.Contains(locationBinding, "不要求") || strings.Contains(locationBinding, "仅当Scene或Shot要求") {
-		t.Fatalf("location reference contains optional-subject wording: %s", locationBinding)
+	for _, forbidden := range []string{"不要求", "仅当Scene或Shot要求", "只提供", "不作为必须复刻"} {
+		if strings.Contains(got, forbidden) || strings.Contains(locationBinding, forbidden) {
+			t.Fatalf("reference binding contains weakening policy %q: %s", forbidden, got)
+		}
 	}
 	if err := validateQwenScenePrompt(got, 3); err != nil {
 		t.Fatalf("completed prompt invalid: %v", err)

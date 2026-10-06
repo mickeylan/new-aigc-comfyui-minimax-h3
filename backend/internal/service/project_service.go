@@ -557,36 +557,36 @@ func qwenSceneReferenceRole(line string) string {
 	desc := strings.TrimSpace(qwenReferenceLinePrefixPattern.ReplaceAllString(strings.TrimSpace(line), ""))
 	switch {
 	case strings.Contains(desc, "当前分镜画面"):
-		return "构图与动作状态参考，只提供静态开场构图，不作为必须复刻的画布"
+		return "静态开场构图与动作状态参考"
 	case strings.Contains(desc, "角色") && strings.Contains(desc, "四视图"):
-		return desc + "，只提供人物面部身份、年龄感和身体比例"
+		return desc + "的人物身份、面部、年龄感与身体比例参考"
 	case strings.Contains(desc, "角色") || strings.Contains(desc, "标准像"):
-		return desc + "，只提供人物面部身份与年龄感"
+		return desc + "的人物身份、面部与年龄感参考"
 	case strings.Contains(desc, "造型") || strings.Contains(desc, "套装"):
-		return desc + "，只提供该角色的服装、鞋履、发型、发饰、首饰和随身配件"
+		return desc + "的服装、鞋履、发型、发饰、首饰与随身配件参考"
 	case strings.Contains(desc, "场景") || strings.Contains(desc, "环境"):
-		return desc + "，只提供环境结构、空间布局、材质与固定陈设"
+		return desc + "的环境结构、空间布局、材质与固定陈设参考"
 	case strings.Contains(desc, "道具"):
-		return desc + "，只提供该道具的准确造型、材质、颜色与结构"
+		return desc + "的造型、材质、颜色与结构参考"
 	default:
 		if desc != "" {
-			return desc + "，只提供已明确说明的可见素材"
+			return desc + "参考"
 		}
-		return "已上传参考素材，只提供明确指定的可见信息"
+		return "参考素材"
 	}
 }
 
+func qwenSceneReferenceDescription(line string) string {
+	return strings.TrimSpace(qwenReferenceLinePrefixPattern.ReplaceAllString(strings.TrimSpace(line), ""))
+}
+
 func qwenSceneReferenceIsLocation(line string) bool {
-	desc := strings.TrimSpace(qwenReferenceLinePrefixPattern.ReplaceAllString(strings.TrimSpace(line), ""))
+	desc := qwenSceneReferenceDescription(line)
 	return strings.Contains(desc, "场景") || strings.Contains(desc, "环境")
 }
 
 func qwenSceneReferenceBinding(tag, line string) string {
-	role := qwenSceneReferenceRole(line)
-	if qwenSceneReferenceIsLocation(line) {
-		return tag + "作为" + role + "；当前画面必须发生在该环境中，严格保持其建筑结构、空间布局、材质和固定陈设关系"
-	}
-	return tag + "作为" + role + "，仅当Scene或Shot要求对应主体出镜时才将其放入画面"
+	return "严格遵循" + tag + "的" + qwenSceneReferenceRole(line)
 }
 
 func ensureQwenSceneReferenceBindings(prompt string, referenceLines []string) string {
@@ -595,24 +595,21 @@ func ensureQwenSceneReferenceBindings(prompt string, referenceLines []string) st
 		return prompt
 	}
 	if len(referenceLines) == 1 {
-		if strings.Contains(prompt, "<image1>") {
-			prompt = strings.ReplaceAll(prompt, "<image1>", "输入图")
-		}
-		if strings.Contains(prompt, "输入图") {
-			return prompt
-		}
-		binding := qwenSceneReferenceBinding("输入图", referenceLines[0])
-		return binding + "；在独立新画布中重构一个静止剧情首帧；" + prompt
+		prompt = strings.ReplaceAll(prompt, "<image1>", "该参考素材")
+		prompt = strings.ReplaceAll(prompt, "输入图", "该参考素材")
+		return qwenSceneReferenceBinding("输入图", referenceLines[0]) + "；" + prompt
 	}
 	bindings := make([]string, 0, len(referenceLines))
 	for i, line := range referenceLines {
 		tag := fmt.Sprintf("<image%d>", i+1)
-		if !strings.Contains(prompt, tag) {
-			bindings = append(bindings, qwenSceneReferenceBinding(tag, line))
+		bindings = append(bindings, qwenSceneReferenceBinding(tag, line))
+		// Keep each ordered tag exactly once in the authoritative binding. The visual
+		// body uses the concrete asset identity instead of repeating control syntax.
+		desc := qwenSceneReferenceDescription(line)
+		if desc == "" {
+			desc = "对应参考素材"
 		}
-	}
-	if len(bindings) == 0 {
-		return prompt
+		prompt = strings.ReplaceAll(prompt, tag, desc)
 	}
 	return strings.Join(bindings, "；") + "。" + prompt
 }
