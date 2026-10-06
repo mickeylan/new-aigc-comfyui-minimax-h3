@@ -256,7 +256,7 @@
       </section>
     </div>
 
-    <ShotDirectorEditor v-if="selected" :project-id="id()" :scene-id="selected.id" :genre="project?.genre || ''" :tone="project?.tone || ''" :scene-title="selected.title || ''" :scene-content="selected.content || ''" :scene-mode="selected.scene_mode || ''" @scene-changed="reloadSelectedScene" @scene-materialized="handleShotMaterialized" />
+    <ShotDirectorEditor v-if="selected" :key="`shot-director-${selected.id}`" :project-id="id()" :scene-id="selected.id" :genre="project?.genre || ''" :tone="project?.tone || ''" :scene-title="selected.title || ''" :scene-content="selected.content || ''" :scene-mode="selected.scene_mode || ''" @scene-changed="reloadSelectedScene" @scene-materialized="handleShotMaterialized" />
 
     <section class="section">
       <div class="section-head"><div><span class="overline">SHARED ASSETS</span><h2>共享资产引用</h2><p class="sub">创建、修改或删除项目、场景和镜头级素材引用。</p></div><button class="btn btn-sm btn-secondary" @click="editSharedAsset()">引用素材</button></div>
@@ -807,7 +807,22 @@ async function generateSelectedImage() { busy.value = true; try { await api.gene
 async function prepareVideoPrompt() { busy.value = true; try { const { data } = await api.regenerateSceneVideoPrompt(id(), selected.value.id, {}); videoPromptDraft.value = data.full_prompt || data.prompt || ''; videoPromptTemplate.value = data.template || 'minimax_h3_ref2v'; startVideoDraftSafety(); toast.success('完整H3提示词已生成，请审核后保存') } catch (e) { toast.error(e.response?.data?.error || '生成视频提示词失败') } finally { busy.value = false } }
 async function saveReviewedVideoPrompt(generate) { busy.value = true; try { await api.updateSceneVideoPrompt(id(), selected.value.id, { prompt: videoPromptDraft.value, template: videoPromptTemplate.value }); if (generate) await api.generateSceneVideo(id(), selected.value.id); videoDraftSafety?.markSaved(); videoPromptDraft.value = ''; await reloadSelectedScene(); toast.success(generate ? '已保存审核提示词并提交视频' : '视频提示词审核结果已保存') } catch (e) { toast.error(e.response?.data?.error || '保存视频提示词失败'); throw e } finally { busy.value = false } }
 async function setSceneLock(kind, locked) { try { const { data } = await api.updateSceneLocks(id(), selected.value.id, { [`${kind}_locked`]: locked }); Object.assign(selected.value, data); toast.success(locked ? '生成结果已锁定' : '生成结果已解锁') } catch (e) { toast.error(e.response?.data?.error || '更新锁定状态失败') } }
-async function reloadSelectedScene() { const sid = selected.value?.id; await load(); if (sid) selected.value = scenes.value.find(s => s.id === sid) || selected.value }
+async function reloadSelectedScene() {
+  const sid = selected.value?.id
+  await load()
+  if (!sid) return
+  const current = scenes.value.find(scene => scene.id === sid)
+  if (current) {
+    selected.value = current
+    return
+  }
+  selected.value = scenes.value[0] || null
+  if (selected.value) {
+    durationInput.value = selected.value.duration || 5
+    sceneModeInput.value = selected.value.scene_mode || ''
+    await loadSelectedWorkbench()
+  }
+}
 async function handleShotMaterialized(firstSceneId) { await load(); selected.value = scenes.value.find(s => s.id === Number(firstSceneId)) || scenes.value[0] || null; if (selected.value) { durationInput.value = selected.value.duration || 5; await loadCandidates() } }
 async function runCreativeIntent() {
   const goal = window.prompt('你希望澄清的创作目标', project.value?.synopsis || ''); if (!goal) return

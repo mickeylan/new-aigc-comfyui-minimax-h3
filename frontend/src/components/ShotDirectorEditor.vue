@@ -121,10 +121,15 @@ async function regroupExistingScenes() {
     const {data:preview}=await api.previewNativeRegroup(props.projectId,props.sceneId)
     const lines=(preview.items||[]).map(v=>`${v.order}. ${v.duration}秒 · 合并${(v.shot_ids||[]).length}个原Scene`).join('\n')
     if(!window.confirm(`将当前同组${preview.shot_count}个短Scene重新合并为${preview.items.length}个Native场景：\n\n${lines}\n\n${preview.warning}\n\n是否继续？`)) return
-    const {data}=await api.regroupNativeScenes(props.projectId,props.sceneId)
+    const {data}=await api.regroupNativeScenes(props.projectId,preview.source_scene_id)
     toast.success(`已重新合并为${data.count}个Native场景，内部Shot保持不变`)
     emit('scene-materialized',data.first_scene_id)
-  } catch(e) { toast.error(e.response?.data?.error||e.message||'重新合并场景失败') }
+  } catch(e) {
+    if (e.response?.status === 404 || e.response?.data?.error === 'scene not found') {
+      emit('scene-changed')
+      toast.error('当前场景已被替换，剪辑台已刷新；请在新场景上重新操作')
+    } else toast.error(e.response?.data?.error||e.message||'重新合并场景失败')
+  }
   finally { materializing.value=false }
 }
 async function materializeNativeScenes() {
@@ -133,10 +138,15 @@ async function materializeNativeScenes() {
     const {data:preview}=await api.previewShotMaterialization(props.projectId,props.sceneId)
     const lines=(preview.items||[]).map(v=>`${v.order}. ${v.duration}秒 · 包含${(v.shot_ids||[]).length}个Shot · ${v.title}${v.dialogue?'\n   台词：'+v.dialogue:'\n   无台词'}`).join('\n')
     if(!window.confirm(`将${preview.shot_count||shots.value.length}个导演Shot按15秒上限合并为${preview.items.length}个可独立生成图片和视频的Native场景：\n\n${lines}\n\n${preview.warning}\n\n是否继续？`)) return
-    const {data}=await api.materializeShots(props.projectId,props.sceneId)
+    const {data}=await api.materializeShots(props.projectId,preview.source_scene_id)
     toast.success(`已拆成${data.count}个可制作场景，可在时间轴逐段生成图片和视频`)
     emit('scene-materialized',data.first_scene_id)
-  } catch(e) { toast.error(e.response?.data?.error||e.message||'拆成可制作场景失败') }
+  } catch(e) {
+    if (e.response?.status === 404 || e.response?.data?.error === 'scene not found') {
+      emit('scene-changed')
+      toast.error('当前场景已被替换，剪辑台已刷新；请在新场景上重新操作')
+    } else toast.error(e.response?.data?.error||e.message||'拆成可制作场景失败')
+  }
   finally { materializing.value=false }
 }
 async function saveAll() { saving.value = true; try { const payload = shots.value.map(({ _key, _preset, _presets, _history, _busy, _stateDraft, _looks, _outfits, _assetBusy, _pairedEnglish, scene_id, created_at, updated_at, order, ...s }) => s); const { data } = await api.replaceSceneShots(props.projectId, props.sceneId, payload); shots.value = data.shots.map(hydrate); draftSafety?.markSaved(); emit('scene-changed'); toast.success('导演镜头已保存，场景事实保持不变，旧生成结果已失效') } catch (e) { toast.error(e.response?.data?.error || '保存镜头失败'); throw e } finally { saving.value = false } }
