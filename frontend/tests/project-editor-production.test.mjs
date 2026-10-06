@@ -24,6 +24,15 @@ test('剪辑台提供Scene生产看板和只读双层时间轴', () => {
   assert.match(source, /fragment\.start_rune/)
 })
 
+test('剪辑台场景时间轴保留独立可见横向滚动条', () => {
+  assert.match(source, /class="timeline-scroll"/)
+  assert.match(source, /aria-label="场景时间轴横向滚动区"/)
+  assert.match(source, /\.timeline-scroll\s*\{[^}]*overflow-x:\s*scroll/s)
+  assert.match(source, /scrollbar-gutter:\s*stable/)
+  assert.match(source, /\.timeline-scroll::-webkit-scrollbar\s*\{\s*height:\s*12px/)
+  assert.doesNotMatch(source, /\.timeline-card\s*\{[^}]*overflow-x:\s*auto/s)
+})
+
 test('剪辑台展示连续性三图对比和正式Picture Subject顺序', () => {
   assert.match(source, /CONTINUITY COMPARE/)
   assert.match(source, /上一Scene确认尾帧/)

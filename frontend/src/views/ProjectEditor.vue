@@ -68,7 +68,8 @@
         </div>
       </div>
       <div class="card timeline-card">
-        <div class="timeline">
+        <div class="timeline-scroll" aria-label="场景时间轴横向滚动区" tabindex="0">
+          <div class="timeline">
           <div v-for="(sc, i) in scenes" :key="sc.id"
             class="tl-clip" :class="{ 'tl-active': selected?.id === sc.id }"
             :draggable="true"
@@ -90,6 +91,7 @@
             </div>
           </div>
           <div v-if="!scenes.length" class="tl-empty-hint">该集暂无场景，请先在项目页生成分镜</div>
+          </div>
         </div>
         <div v-if="selected" class="shot-timeline-wrap">
           <div class="shot-timeline-head"><strong>场景{{selected.order}}内部Shot</strong><span :class="{'fail-msg':shotDurationMismatch}">{{selectedShots.length}}镜 · {{shotDurationTotal.toFixed(1)}}秒 / Scene {{Number(selected.duration||0).toFixed(1)}}秒</span><button v-if="shotDurationMismatch" class="btn btn-xs btn-secondary" @click="previewAndApplyRetime">预览并重新配时</button></div>
@@ -943,8 +945,17 @@ watch(videoPromptDraft, () => videoDraftSafety?.schedule())
 @media (max-width: 980px) { .editor-split { grid-template-columns: 1fr; } }
 
 .production-board{display:grid;grid-template-columns:repeat(7,minmax(180px,1fr));gap:12px;overflow-x:auto}.board-column{min-height:150px;padding:10px;border:1px solid var(--border);border-radius:12px;background:var(--surface-secondary)}.board-column header{display:flex;justify-content:space-between;margin-bottom:8px}.board-card{display:grid;width:100%;gap:4px;margin-bottom:7px;padding:9px;text-align:left;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text-primary);cursor:pointer}.board-card.active{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}.board-card.severity-warn{border-left:3px solid #f59e0b}.board-card.severity-error{border-left:3px solid #ef4444}.board-card.severity-success{border-left:3px solid #22c55e}.board-card small,.board-empty{color:var(--text-tertiary)}.warn-msg{color:#f59e0b}.preflight{margin-top:14px;padding:14px}.preflight summary{cursor:pointer}.preflight-issues{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:7px;margin:12px 0}.preflight-issue{display:flex;justify-content:space-between;gap:8px;padding:8px;border:1px solid #ef4444;border-radius:8px;background:rgba(239,68,68,.06);color:var(--text-primary);cursor:pointer;text-align:left}.preflight-issue span{color:var(--text-secondary);font-size:12px;white-space:nowrap}.check-ok{color:#22c55e;margin-top:7px}.check-fail{color:#ef4444;margin-top:7px}
-.timeline-card { padding: 16px; overflow-x: auto; }
-.timeline { display: flex; gap: 12px; min-width: max-content; }
+.timeline-card { padding: 16px; overflow: visible; }
+.timeline-scroll {
+  width: 100%; overflow-x: scroll; overflow-y: hidden; padding: 2px 0 12px;
+  scrollbar-gutter: stable; scrollbar-width: auto; overscroll-behavior-x: contain;
+}
+.timeline-scroll::-webkit-scrollbar { height: 12px; }
+.timeline-scroll::-webkit-scrollbar-track { background: var(--surface-secondary); border-radius: 999px; }
+.timeline-scroll::-webkit-scrollbar-thumb { background: var(--text-tertiary); border: 3px solid var(--surface-secondary); border-radius: 999px; }
+.timeline-scroll::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+.timeline-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 8px; }
+.timeline { display: flex; gap: 12px; width: max-content; min-width: 100%; }
 .tl-clip {
   width: 168px; flex: 0 0 auto; border-radius: 12px; border: 2px solid var(--border);
   overflow: hidden; cursor: pointer; background: var(--card); transition: all 0.2s; position: relative;
