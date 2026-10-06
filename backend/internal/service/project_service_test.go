@@ -1680,7 +1680,7 @@ func TestEffectiveGenerationSystemKeepsCombatContractWhenPolicyOverrides(t *test
 
 func TestNormalizeGeneratedH3ActionRepairsReportedEleventhDraft(t *testing.T) {
 	draft := `[Shot 1] The shot begins from the state, composition, and spatial relationships established by <Picture 1>. 真人写实风格。 At MM:00.000, camera glides through mist into the Vanshen Peach Grove. Rising from <Picture 3> pose, <Subject 1>swings the peach branch as a sword, movements sharp and dragon-like with qi flowing outward like a rainbow, instantly transitioning into butterfly-light forms as falling petals swirl around her spinning figure. Toward the end, the visible motion settles into the exact pose, spacing, object state, camera angle, lighting, and final composition established by Picture 2. 旁白 (S1) says in an off-screen voiceover: <d>[Chinese] 上官若琳，天阙宗宗主之女，玉霄宫历代宫主。六十年前八场连胜，击败太运玄金榜第九名，震惊云上天。</d> while their lips remain completely closed.`
-	got := normalizeGeneratedH3Action(draft, true, 1, h3SceneAction, []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：确认尾帧", "- <Picture 3>：角色造型"}, "[Shot 1] 原始动作")
+	got := normalizeGeneratedH3Action(draft, true, 1, h3SceneAction, []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：确认尾帧", "- <Picture 3>：角色造型"}, "[Shot 1] 原始动作", "[Shot 1] <Subject 1> 原始动作")
 	for _, forbidden := range []string{"真人写实", "At MM:00.000", "<Subject 1>swings", "<d>", "上官若琳，天阙宗宗主之女"} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("reported malformed residue %q remained: %s", forbidden, got)
@@ -1693,6 +1693,17 @@ func TestNormalizeGeneratedH3ActionRepairsReportedEleventhDraft(t *testing.T) {
 	}
 	if regexp.MustCompile(`[\p{Han}]`).MatchString(got) {
 		t.Fatalf("Chinese visual prose remained: %s", got)
+	}
+}
+
+func TestNormalizeGeneratedH3ActionRestoresAuthoritativeSubjects(t *testing.T) {
+	draft := "[Shot 1] At full speed, the attacker crosses the clearing and the defender pivots aside."
+	authoritative := "[Shot 1] <Subject 1> attacks <Subject 2>."
+	got := normalizeGeneratedH3Action(draft, true, 1, h3SceneAction, nil, "[Shot 1] source", authoritative)
+	for _, want := range []string{"<Subject 1>", "<Subject 2>", "participate in this shot", "At full speed"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("authoritative Subject binding missing %q: %s", want, got)
+		}
 	}
 }
 

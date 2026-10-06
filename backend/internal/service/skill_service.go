@@ -444,15 +444,14 @@ func (s *SkillService) GetProjectOperationConfig(projectID uint, stage, operatio
 	if operation == "" {
 		operation = stage
 	}
-	var config models.ProjectSkillConfig
-	err := s.db.Preload("Skill").Where("project_id = ? AND stage = ? AND operation = ?", projectID, stage, operation).First(&config).Error
-	if err == gorm.ErrRecordNotFound {
-		return nil, nil
-	}
-	if err != nil {
+	var configs []models.ProjectSkillConfig
+	if err := s.db.Preload("Skill").Where("project_id = ? AND stage = ? AND operation = ?", projectID, stage, operation).Limit(1).Find(&configs).Error; err != nil {
 		return nil, err
 	}
-	return &config, nil
+	if len(configs) == 0 {
+		return nil, nil
+	}
+	return &configs[0], nil
 }
 
 // SetProjectSkillConfig 设置项目特定阶段的技能

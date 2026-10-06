@@ -1425,7 +1425,66 @@ func enforceH3ActionTempo(value string, mode h3SceneMode) string {
 	return strings.TrimSpace(value)
 }
 
-func normalizeGeneratedH3Action(value string, allowSubjects bool, expectedShotCount int, mode h3SceneMode, referenceLines []string, canonicalSceneContent string) string {
+func subjectTagsByH3Shot(value string) map[int][]string {
+	matches := h3ShotMarkerPattern.FindAllStringSubmatchIndex(value, -1)
+	out := map[int][]string{}
+	for i, match := range matches {
+		if len(match) < 4 {
+			continue
+		}
+		n, _ := strconv.Atoi(value[match[2]:match[3]])
+		end := len(value)
+		if i+1 < len(matches) {
+			end = matches[i+1][0]
+		}
+		seen := map[string]bool{}
+		for _, tag := range h3SubjectTagPattern.FindAllString(value[match[1]:end], -1) {
+			if !seen[tag] {
+				seen[tag] = true
+				out[n] = append(out[n], tag)
+			}
+		}
+	}
+	return out
+}
+
+func restoreAuthoritativeSubjectTags(candidate, authoritative string) string {
+	required := subjectTagsByH3Shot(authoritative)
+	if len(required) == 0 {
+		return candidate
+	}
+	matches := h3ShotMarkerPattern.FindAllStringSubmatchIndex(candidate, -1)
+	if len(matches) == 0 {
+		return candidate
+	}
+	var out strings.Builder
+	for i, match := range matches {
+		start := match[0]
+		if i == 0 {
+			out.WriteString(candidate[:start])
+		}
+		end := len(candidate)
+		if i+1 < len(matches) {
+			end = matches[i+1][0]
+		}
+		block := candidate[start:end]
+		n, _ := strconv.Atoi(candidate[match[2]:match[3]])
+		missing := make([]string, 0)
+		for _, tag := range required[n] {
+			if !strings.Contains(block, tag) {
+				missing = append(missing, tag)
+			}
+		}
+		if len(missing) > 0 {
+			relativeMarkerEnd := match[1] - start
+			block = block[:relativeMarkerEnd] + " " + strings.Join(missing, " and ") + " participate in this shot." + block[relativeMarkerEnd:]
+		}
+		out.WriteString(block)
+	}
+	return strings.TrimSpace(out.String())
+}
+
+func normalizeGeneratedH3Action(value string, allowSubjects bool, expectedShotCount int, mode h3SceneMode, referenceLines []string, canonicalSceneContent, authoritativeAction string) string {
 	value = resolveH3VisualConflicts(coalesceDuplicateH3Shots(stripPromptDialogueNarration(normalizeVideoActionPrompt(strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(value), "```"), "```"))))))
 	value = englishH3ShotField(value)
 	// Models sometimes copy the documentation placeholder literally (for example
@@ -1439,7 +1498,11 @@ func normalizeGeneratedH3Action(value string, allowSubjects bool, expectedShotCo
 	if expectedShotCount == 1 && len(h3ShotMarkerPattern.FindAllStringSubmatch(value, -1)) == 0 {
 		value = "[Shot 1] " + strings.TrimSpace(value)
 	}
-	return applyAuthoritativeSceneShotTimeline(value, canonicalSceneContent)
+	value = applyAuthoritativeSceneShotTimeline(value, canonicalSceneContent)
+	if allowSubjects && (mode == h3SceneAction || mode == h3SceneMixed) {
+		value = restoreAuthoritativeSubjectTags(value, authoritativeAction)
+	}
+	return value
 }
 
 func effectiveGenerationSystem(system string, policy *EffectivePromptPolicy) string {
@@ -1557,8 +1620,9 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 			}
 		}
 	}
+	authoritativeBoundAction := useSubjectTags(authoritativeFallback(), refLines)
 	prepareGeneratedAction := func(value string, allowSubjects bool) string {
-		return normalizeGeneratedH3Action(value, allowSubjects, expectedShotCount, sceneMode, refLines, canonicalSceneContent)
+		return normalizeGeneratedH3Action(value, allowSubjects, expectedShotCount, sceneMode, refLines, canonicalSceneContent, authoritativeBoundAction)
 	}
 	actionTrusted := func(value string, allowSubjects bool) bool {
 		// This is a generation-quality routing check, not a save/submission gate.
@@ -1583,7 +1647,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 				}
 			}
 		}
-		if allowSubjects && len(refLines) > 0 && !strings.Contains(value, "<Subject ") {
+		if allowSubjects && len(subjectTagsByH3Shot(authoritativeBoundAction)) > 0 && !strings.Contains(value, "<Subject ") {
 			return false
 		}
 		if allowSubjects {
@@ -1627,7 +1691,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		if h3VisualDraftResiduePattern.MatchString(value) {
 			issues = append(issues, "仍含字段标题、模板残留或解释文字")
 		}
-		if len(refLines) > 0 && !strings.Contains(value, "<Subject ") {
+		if len(subjectTagsByH3Shot(authoritativeBoundAction)) > 0 && !strings.Contains(value, "<Subject ") {
 			issues = append(issues, "缺少Subject绑定")
 		}
 		if !h3ActionTempoContractMatches(value) {
