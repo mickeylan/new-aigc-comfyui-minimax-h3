@@ -3,7 +3,9 @@ package config
 import (
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -111,18 +113,69 @@ func Default() *Config {
 	}
 }
 
+func executableDir() string {
+	executable, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(executable)
+	if err == nil {
+		executable = resolved
+	}
+	return filepath.Dir(executable)
+}
+
+func resolveConfigPath() string {
+	if explicit := strings.TrimSpace(os.Getenv("COMFYUI_CONSOLE_CONFIG")); explicit != "" {
+		if absolute, err := filepath.Abs(explicit); err == nil {
+			return absolute
+		}
+		return filepath.Clean(explicit)
+	}
+	if dir := executableDir(); dir != "" {
+		candidate := filepath.Join(dir, "config.yaml")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	if absolute, err := filepath.Abs("config.yaml"); err == nil {
+		return absolute
+	}
+	return "config.yaml"
+}
+
+func resolveConfiguredPath(value, baseDir string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || filepath.IsAbs(value) {
+		return filepath.Clean(value)
+	}
+	return filepath.Clean(filepath.Join(baseDir, value))
+}
+
 func Load() *Config {
 	cfg := Default()
-	if _, err := os.Stat("config.yaml"); err == nil {
-		data, err := os.ReadFile("config.yaml")
+	configPath := resolveConfigPath()
+	configDir := filepath.Dir(configPath)
+	if _, err := os.Stat(configPath); err == nil {
+		data, err := os.ReadFile(configPath)
 		if err != nil {
-			log.Fatalf("read config.yaml: %v", err)
+			log.Fatalf("read %s: %v", configPath, err)
 		}
 		if err := yaml.Unmarshal(data, cfg); err != nil {
-			log.Fatalf("parse config.yaml: %v", err)
+			log.Fatalf("parse %s: %v", configPath, err)
 		}
+		log.Printf("[config] loaded %s", configPath)
 	} else {
-		log.Printf("[config] config.yaml not found, use default config")
+		if dir := executableDir(); dir != "" {
+			configDir = dir
+		}
+		log.Printf("[config] %s not found, use default config", configPath)
 	}
+	cfg.Storage.DBPath = resolveConfiguredPath(cfg.Storage.DBPath, configDir)
+	cfg.Storage.DataDir = resolveConfiguredPath(cfg.Storage.DataDir, configDir)
+	if cfg.TemplatesDir != "" {
+		cfg.TemplatesDir = resolveConfiguredPath(cfg.TemplatesDir, configDir)
+	}
+	log.Printf("[config] sqlite=%s data_dir=%s", cfg.Storage.DBPath, cfg.Storage.DataDir)
 	return cfg
 }

@@ -2,6 +2,7 @@ package database
 
 import (
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -15,6 +16,12 @@ import (
 )
 
 func Init(cfg *config.Config) (*gorm.DB, error) {
+	dbPath, err := filepath.Abs(cfg.Storage.DBPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve sqlite path: %w", err)
+	}
+	cfg.Storage.DBPath = filepath.Clean(dbPath)
+	log.Printf("[database] opening sqlite %s", cfg.Storage.DBPath)
 	if err := os.MkdirAll(filepath.Dir(cfg.Storage.DBPath), 0o755); err != nil {
 		return nil, err
 	}

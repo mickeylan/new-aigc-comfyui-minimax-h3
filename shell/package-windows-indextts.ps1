@@ -21,9 +21,35 @@ if ($runtime.abi_version -ne "1.5" -or $runtime.backend -ne "cuda") {
     throw "Expected IndexTTS CUDA ABI 1.5 runtime, found ABI $($runtime.abi_version) backend $($runtime.backend)"
 }
 
-if (Test-Path -LiteralPath $output) { Remove-Item -LiteralPath $output -Recurse -Force }
-New-Item -ItemType Directory -Path $output -Force | Out-Null
-Copy-Item -Path (Join-Path $RustRuntimeDir "*") -Destination $output -Recurse -Force
+# Deployment refresh must never remove production SQLite/configuration. Preserve them
+# outside the output tree while replacing runtime binaries and libraries.
+$preserve = Join-Path ([IO.Path]::GetTempPath()) ("comfyui-console-preserve-" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $preserve -Force | Out-Null
+try {
+    if (Test-Path -LiteralPath $output) {
+        foreach ($name in @("data", "config.yaml")) {
+            $source = Join-Path $output $name
+            if (Test-Path -LiteralPath $source) { Move-Item -LiteralPath $source -Destination $preserve -Force }
+        }
+        Remove-Item -LiteralPath $output -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $output -Force | Out-Null
+    Copy-Item -Path (Join-Path $RustRuntimeDir "*") -Destination $output -Recurse -Force
+    foreach ($name in @("data", "config.yaml")) {
+        $saved = Join-Path $preserve $name
+        if (Test-Path -LiteralPath $saved) { Move-Item -LiteralPath $saved -Destination $output -Force }
+    }
+} finally {
+    New-Item -ItemType Directory -Path $output -Force | Out-Null
+    foreach ($name in @("data", "config.yaml")) {
+        $saved = Join-Path $preserve $name
+        $destination = Join-Path $output $name
+        if ((Test-Path -LiteralPath $saved) -and -not (Test-Path -LiteralPath $destination)) {
+            Move-Item -LiteralPath $saved -Destination $output -Force
+        }
+    }
+    Remove-Item -LiteralPath $preserve -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 $oldCGO = $env:CGO_ENABLED
 $oldFlags = $env:CGO_LDFLAGS
@@ -44,6 +70,9 @@ try {
 }
 
 Copy-Item -LiteralPath (Join-Path $backend "config.yaml.example") -Destination (Join-Path $output "config.yaml.example") -Force
+if (-not (Test-Path -LiteralPath (Join-Path $output "config.yaml"))) {
+    Copy-Item -LiteralPath (Join-Path $backend "config.yaml.example") -Destination (Join-Path $output "config.yaml") -Force
+}
 $app = Get-Item -LiteralPath (Join-Path $output "comfyui-console.exe")
 Add-Type -TypeDefinition @'
 using System;
