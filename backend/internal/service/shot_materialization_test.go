@@ -86,6 +86,13 @@ func TestMaterializeShotsCreatesNativeScenesAndPreservesDialogue(t *testing.T) {
 	}
 }
 
+func TestNativeSceneBaseTitleRemovesRepeatedSegmentSuffixes(t *testing.T) {
+	got := nativeSceneBaseTitle("场景26：真相大白 · Native段1 · Native段1")
+	if got != "场景26：真相大白" {
+		t.Fatalf("base title=%q", got)
+	}
+}
+
 func TestGroupNativeShotsPacksAdjacentShotsUpToFifteenSeconds(t *testing.T) {
 	durations := []float64{4, 3, 3, 5, 5, 4, 5, 4, 4, 3, 4, 5, 4}
 	shots := make([]models.Shot, len(durations))

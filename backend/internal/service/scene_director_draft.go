@@ -254,9 +254,19 @@ func normalizeDialogueRhythmDraftDurations(draft *sceneDirectorDraft) {
 		return
 	}
 	for i := range draft.Shots {
-		if draft.Shots[i].Duration > 0 && draft.Shots[i].Duration < 3 {
-			draft.Shots[i].Duration = 3
-			draft.Shots[i].Checks = append(draft.Shots[i].Checks, "系统已将不足3秒的镜头调整为Native H3最短3秒")
+		shot := &draft.Shots[i]
+		minimum := 3.0
+		if text := strings.TrimSpace(shot.Dialogue); text != "" {
+			// Reserve visible performance time around the estimated natural speech. This
+			// prevents a long line from being squeezed into an arbitrary 3–5 second Shot.
+			minimum = math.Ceil((dialogueTextDuration(text)+0.6)*2) / 2
+			if minimum < 3 {
+				minimum = 3
+			}
+		}
+		if shot.Duration > 0 && shot.Duration < minimum {
+			shot.Duration = minimum
+			shot.Checks = append(shot.Checks, fmt.Sprintf("系统已按对白自然语速将镜头时长调整为%.1f秒", minimum))
 		}
 	}
 }

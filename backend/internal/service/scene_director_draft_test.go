@@ -1,6 +1,7 @@
 package service
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -158,6 +159,18 @@ func TestNormalizeDialogueRhythmDraftRaisesShortShotToNativeMinimum(t *testing.T
 	}
 	if len(draft.Shots[0].Checks) < 2 {
 		t.Fatalf("normalization check missing: %#v", draft.Shots[0].Checks)
+	}
+}
+
+func TestNormalizeDialogueRhythmDraftUsesNaturalSpeechFloor(t *testing.T) {
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 5, Dialogue: "自化元婴的设想来自于诸天宇。当年火云刹那之变，足以证明余天成的真实身份。"}}}
+	normalizeDialogueRhythmDraftDurations(draft)
+	minimum := math.Ceil((dialogueTextDuration(draft.Shots[0].Dialogue)+0.6)*2) / 2
+	if draft.Shots[0].Duration != minimum || minimum <= 5 {
+		t.Fatalf("duration=%v minimum=%v", draft.Shots[0].Duration, minimum)
+	}
+	if !strings.Contains(strings.Join(draft.Shots[0].Checks, "\n"), "对白自然语速") {
+		t.Fatalf("missing audit check: %+v", draft.Shots[0].Checks)
 	}
 }
 

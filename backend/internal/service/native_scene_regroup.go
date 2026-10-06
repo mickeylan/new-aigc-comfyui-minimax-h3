@@ -10,7 +10,14 @@ import (
 	"gorm.io/gorm"
 )
 
-var materializedShotTitlePattern = regexp.MustCompile(`^(.*) · 镜头([0-9]+)$`)
+var (
+	materializedShotTitlePattern = regexp.MustCompile(`^(.*) · 镜头([0-9]+)$`)
+	nativeSegmentSuffixPattern   = regexp.MustCompile(`(?:\s*·\s*Native段[0-9]+)+$`)
+)
+
+func nativeSceneBaseTitle(title string) string {
+	return strings.TrimSpace(nativeSegmentSuffixPattern.ReplaceAllString(strings.TrimSpace(title), ""))
+}
 
 type existingNativeGroup struct {
 	Scenes   []models.Scene
@@ -27,7 +34,7 @@ func materializedSceneBase(title string) (string, int, bool) {
 	if err != nil {
 		return "", 0, false
 	}
-	return match[1], n, true
+	return nativeSceneBaseTitle(match[1]), n, true
 }
 
 func (s *ShotService) loadMaterializedSceneRun(db *gorm.DB, projectID, selectedID uint) ([]models.Scene, string, error) {

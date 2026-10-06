@@ -120,7 +120,7 @@ func buildShotMaterializationPreview(scene models.Scene, groups []nativeShotGrou
 		for _, shot := range group.Shots {
 			ids = append(ids, shot.ID)
 		}
-		items = append(items, ShotMaterializationItem{ShotID: ids[0], ShotIDs: ids, Order: i + 1, Title: fmt.Sprintf("%s · Native段%d", strings.TrimSpace(scene.Title), i+1), Duration: group.Duration, Content: groupedDescriptions(group.Shots), Dialogue: groupedDialogue(group.Shots)})
+		items = append(items, ShotMaterializationItem{ShotID: ids[0], ShotIDs: ids, Order: i + 1, Title: fmt.Sprintf("%s · Native段%d", nativeSceneBaseTitle(scene.Title), i+1), Duration: group.Duration, Content: groupedDescriptions(group.Shots), Dialogue: groupedDialogue(group.Shots)})
 	}
 	return ShotMaterializationPreview{SourceSceneID: scene.ID, ShotCount: shotCount, Items: items, Warning: "确认后将按15秒上限把相邻导演Shot合并为Native场景并替换原场景；每个场景内部仍保留不同Shot。原场景图片、视频、配音及连续性结果会失效。"}
 }
@@ -257,7 +257,7 @@ func (s *ShotService) Materialize(projectID, sceneID uint) ([]models.Scene, erro
 		for i, group := range groups {
 			child := source
 			child.ID, child.Order = 0, source.Order+i
-			child.Title = fmt.Sprintf("%s · Native段%d", strings.TrimSpace(source.Title), i+1)
+			child.Title = fmt.Sprintf("%s · Native段%d", nativeSceneBaseTitle(source.Title), i+1)
 			child.Content, child.Duration, child.ShotCount = groupedDescriptions(group.Shots), group.Duration, len(group.Shots)
 			promptParts, videoParts, negativeParts := []string{}, []string{}, []string{source.NegativePrompt}
 			for j, shot := range group.Shots {
