@@ -491,6 +491,10 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 	if err != nil {
 		return nil, err
 	}
+	raw, err = s.projects.repairCrossEpisodeDuplicates(projectID, episode, raw)
+	if err != nil {
+		return nil, err
+	}
 	var p models.Project
 	if err := s.db.First(&p, projectID).Error; err != nil {
 		return nil, err

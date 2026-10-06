@@ -348,6 +348,58 @@ func TestPreviousEpisodeProductionFactsIncludesScenesDialogueAndScript(t *testin
 	}
 }
 
+func TestCrossEpisodeDuplicateIssuesDetectsPriorAndInternalRepeats(t *testing.T) {
+	ps := newTestProjectService(t)
+	project := models.Project{Title: "问仙"}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	prior := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 8, Title: "元婴真相", Content: "舒寒握住若琳双手，解释自己的肉身就是元婴，若琳震惊地认出这是自化元婴。"}
+	if err := ps.db.Create(&prior).Error; err != nil {
+		t.Fatal(err)
+	}
+	result := &scriptResult{Scenes: []scriptScene{
+		{Content: "舒寒握住若琳的双手，解释自己的肉身就是元婴，若琳震惊认出这是自化元婴。"},
+		{Content: "上官若琳开始分析诸天宇与火云刹那，推断舒寒的真实经历。"},
+		{Content: "上官若琳开始分析诸天宇与火云刹那，推断舒寒的真实经历。"},
+	}}
+	issues, err := ps.crossEpisodeDuplicateIssues(project.ID, 2, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(issues, "\n")
+	for _, want := range []string{"上一集Scene 8", "新草稿场景3与场景2重复"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing duplicate issue %q: %s", want, joined)
+		}
+	}
+}
+
+func TestRepairCrossEpisodeDuplicatesRepairsOnceBeforePersistence(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Dialogue{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "问仙"}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.db.Create(&models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Title: "重逢", Content: "舒寒与若琳在桃花林重逢相拥，互诉百年思念。"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	duplicate := `{"script":"重复","visual_bible":"古风","scenes":[{"title":"重复重逢","content":"舒寒与若琳在桃花林重逢相拥，互诉百年思念。","image_prompt":"桃花林","duration":5,"characters":[],"visible_characters":[],"voice_characters":[],"mentioned_characters":[],"location":"桃花林","props":[],"visual_type":"normal","mega_type":"","dialogues":[]}]}`
+	repaired := `{"script":"继续","visual_bible":"古风","scenes":[{"title":"启程","content":"次日清晨，舒寒与若琳离开宗门，前往陌生边境调查异象。","image_prompt":"山门晨光","duration":5,"characters":[],"visible_characters":[],"voice_characters":[],"mentioned_characters":[],"location":"宗门山门","props":[],"visual_type":"normal","mega_type":"","dialogues":[]}]}`
+	provider := &sequenceTextProvider{responses: []string{repaired}}
+	ps.textProvider = provider
+	got, err := ps.repairCrossEpisodeDuplicates(project.ID, 2, duplicate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 1 || !strings.Contains(got, "前往陌生边境") {
+		t.Fatalf("repair calls=%d got=%s", provider.calls, got)
+	}
+}
+
 func TestGenerateScriptInjectsPreviousEpisodeAsDedupAuthority(t *testing.T) {
 	ps := newTestProjectService(t)
 	if err := ps.db.AutoMigrate(&models.Dialogue{}); err != nil {

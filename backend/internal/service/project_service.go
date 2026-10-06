@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"gorm.io/gorm"
 
@@ -953,6 +954,103 @@ func (s *ProjectService) previousEpisodeProductionFacts(projectID uint, episodeN
 	return strings.TrimSpace(out.String()), nil
 }
 
+func scriptSceneSimilarity(first, second string) float64 {
+	normalize := func(value string) []rune {
+		out := make([]rune, 0, len([]rune(value)))
+		for _, r := range strings.ToLower(value) {
+			if unicode.IsLetter(r) || unicode.IsNumber(r) {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	grams := func(value string) map[string]struct{} {
+		runes := normalize(value)
+		out := map[string]struct{}{}
+		for i := 0; i+1 < len(runes); i++ {
+			out[string(runes[i:i+2])] = struct{}{}
+		}
+		return out
+	}
+	a, b := grams(first), grams(second)
+	if len(a) < 6 || len(b) < 6 {
+		return 0
+	}
+	intersection := 0
+	for gram := range a {
+		if _, ok := b[gram]; ok {
+			intersection++
+		}
+	}
+	union := len(a) + len(b) - intersection
+	if union == 0 {
+		return 0
+	}
+	return float64(intersection) / float64(union)
+}
+
+func (s *ProjectService) crossEpisodeDuplicateIssues(projectID uint, episodeN int, result *scriptResult) ([]string, error) {
+	if result == nil {
+		return nil, nil
+	}
+	issues := []string{}
+	for i := range result.Scenes {
+		for j := 0; j < i; j++ {
+			if score := scriptSceneSimilarity(result.Scenes[i].Content, result.Scenes[j].Content); score >= 0.48 {
+				issues = append(issues, fmt.Sprintf("新草稿场景%d与场景%d重复（相似度%.0f%%）", i+1, j+1, score*100))
+			}
+		}
+	}
+	if episodeN <= 1 {
+		return issues, nil
+	}
+	var previous []models.Scene
+	if err := s.db.Where("project_id = ? AND episode_n = ?", projectID, episodeN-1).Order("`order` ASC, id ASC").Find(&previous).Error; err != nil {
+		return nil, err
+	}
+	for i, current := range result.Scenes {
+		for _, prior := range previous {
+			if score := scriptSceneSimilarity(current.Content, prior.Content); score >= 0.48 {
+				issues = append(issues, fmt.Sprintf("新草稿场景%d与上一集Scene %d「%s」重复（相似度%.0f%%）", i+1, prior.Order, prior.Title, score*100))
+			}
+		}
+	}
+	return issues, nil
+}
+
+func (s *ProjectService) repairCrossEpisodeDuplicates(projectID uint, episodeN int, raw string) (string, error) {
+	parsed, err := parseScriptJSON(raw)
+	if err != nil {
+		return raw, nil // Syntax repair remains owned by generateScriptCore.
+	}
+	issues, err := s.crossEpisodeDuplicateIssues(projectID, episodeN, parsed)
+	if err != nil || len(issues) == 0 {
+		return raw, err
+	}
+	previous, err := s.previousEpisodeProductionFacts(projectID, episodeN)
+	if err != nil {
+		return "", err
+	}
+	system := "你是分集剧本排重修复器。只输出完整合法JSON。保持JSON结构、非重复场景、角色事实、当前集目标和对白字段；只重写列出的重复场景，使其从上一集结尾继续并产生新的剧情推进。不得用回忆、概述、换措辞或重复信息揭示来伪装重复。"
+	user := "检测到以下重复：\n- " + strings.Join(issues, "\n- ") + "\n\n上一集生产权威：\n" + previous + "\n\n待修复JSON：\n" + raw
+	repaired, err := s.chatWithSkill(projectID, models.SkillStageStoryboard, system, user, map[string]string{"episode_n": fmt.Sprint(episodeN), "duplicate_issues": strings.Join(issues, "；")})
+	if err != nil {
+		return "", fmt.Errorf("跨集重复自动修复失败: %w", err)
+	}
+	candidate, err := parseScriptJSON(repaired)
+	if err != nil {
+		return "", fmt.Errorf("跨集重复自动修复返回非法JSON: %w", err)
+	}
+	remaining, err := s.crossEpisodeDuplicateIssues(projectID, episodeN, candidate)
+	if err != nil {
+		return "", err
+	}
+	if len(remaining) > 0 {
+		return "", fmt.Errorf("跨集重复自动修复后仍重复，未覆盖现有剧本: %s", strings.Join(remaining, "；"))
+	}
+	return repaired, nil
+}
+
 // GenerateScript 生成分镜剧本：已有创作方案时按方案渲染（两阶段流程），否则直接文生文。
 // episodeN 指定当前制作集数（默认 1），只生成该集的分镜场景并替换该集旧场景。
 func (s *ProjectService) GenerateScript(p *models.Project, episodeN int) (*models.Project, []models.Scene, error) {
@@ -992,6 +1090,10 @@ func (s *ProjectService) GenerateScript(p *models.Project, episodeN int) (*model
 	}
 
 	raw, err := s.chatWithSkill(p.ID, models.SkillStageStoryboard, system, user.String(), map[string]string{"episode_n": fmt.Sprint(episodeN), "story_prompt": p.Synopsis, "characters": p.Plan})
+	if err != nil {
+		return nil, nil, err
+	}
+	raw, err = s.repairCrossEpisodeDuplicates(p.ID, episodeN, raw)
 	if err != nil {
 		return nil, nil, err
 	}
