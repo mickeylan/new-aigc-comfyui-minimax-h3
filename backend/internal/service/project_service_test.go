@@ -348,6 +348,33 @@ func TestPreviousEpisodeProductionFactsIncludesScenesDialogueAndScript(t *testin
 	}
 }
 
+func TestPreviousEpisodeProductionFactsNeverDropsEpisodeEnding(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Dialogue{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "长篇"}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 40; i++ {
+		content := strings.Repeat("前段剧情内容", 80)
+		if i == 40 {
+			content = "上一集结尾已经揭示异界经历，并约定次日调查宗门异象。"
+		}
+		if err := ps.db.Create(&models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: i, Title: fmt.Sprintf("场景%d", i), Content: content}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	facts, err := ps.previousEpisodeProductionFacts(project.ID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(facts, "Scene 40") || !strings.Contains(facts, "次日调查宗门异象") {
+		t.Fatalf("episode ending dropped from context: bytes=%d", len(facts))
+	}
+}
+
 func TestCrossEpisodeDuplicateIssuesDetectsPriorAndInternalRepeats(t *testing.T) {
 	ps := newTestProjectService(t)
 	project := models.Project{Title: "问仙"}

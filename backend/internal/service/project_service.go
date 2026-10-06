@@ -889,7 +889,7 @@ const scriptSystemPrompt = `你是一位专业的漫剧编剧与分镜师。根�
 7. 第一个场景尽量给出大场景/环境交代，后续场景聚焦人物动作与剧情推进。
 8. 道具与场景一致性：贯穿剧情的关键道具（信物/武器等）与主要地点必须在 props/location 中用统一名称标出（系统会用同名资产参考图锁定其外观），同一道具/地点在不同场景中名称必须完全相同。`
 
-const previousEpisodeContextLimit = 24000
+const previousEpisodeContextLimit = 48000
 
 func boundedUTF8Text(value string, maxBytes int) string {
 	if maxBytes <= 0 {
@@ -929,17 +929,26 @@ func (s *ProjectService) previousEpisodeProductionFacts(projectID uint, episodeN
 		out.WriteString("【已完成Scene与Dialogue（生产权威）】\n")
 	}
 	for _, scene := range scenes {
-		line := fmt.Sprintf("Scene %d「%s」：%s\n", scene.Order, strings.TrimSpace(scene.Title), strings.TrimSpace(scene.Content))
+		// Include every Scene, including the episode ending. Per-Scene compaction avoids
+		// the old failure where early scenes exhausted the budget and hid the ending.
+		content := boundedUTF8Text(scene.Content, 900)
+		line := fmt.Sprintf("Scene %d「%s」：%s\n", scene.Order, strings.TrimSpace(scene.Title), content)
 		if out.Len()+len(line) > previousEpisodeContextLimit {
-			break
+			line = fmt.Sprintf("Scene %d「%s」\n", scene.Order, strings.TrimSpace(scene.Title))
 		}
-		out.WriteString(line)
+		if out.Len()+len(line) <= previousEpisodeContextLimit {
+			out.WriteString(line)
+		}
+	}
+	// Dialogue is appended only after every Scene summary is represented, so it can
+	// never crowd the episode ending out of the context.
+	for _, scene := range scenes {
 		var dialogues []models.Dialogue
 		if err := s.db.Where("project_id = ? AND scene_id = ?", projectID, scene.ID).Order("`order` ASC, id ASC").Find(&dialogues).Error; err != nil {
 			return "", err
 		}
 		for _, dialogue := range validSceneDialogues(dialogues) {
-			line = fmt.Sprintf("  %s（%s）：%s\n", strings.TrimSpace(dialogue.Character), strings.TrimSpace(dialogue.SpeechType), strings.TrimSpace(dialogue.Text))
+			line := fmt.Sprintf("Scene %d对白｜%s（%s）：%s\n", scene.Order, strings.TrimSpace(dialogue.Character), strings.TrimSpace(dialogue.SpeechType), boundedUTF8Text(dialogue.Text, 600))
 			if out.Len()+len(line) > previousEpisodeContextLimit {
 				break
 			}

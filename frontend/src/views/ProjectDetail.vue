@@ -330,7 +330,10 @@
             {{ expandingScript ? 'AI 扩写中…' : '✨ AI 扩写' }}
           </button>
           <button class="btn btn-secondary btn-sm" :disabled="busy || scriptRendering || !scriptDraft.trim()" @click="saveAndRender">
-            {{ scriptRendering ? 'AI 生成中…' : '💾 保存并 AI 重新生成分镜' }}
+            {{ scriptRendering ? '重建中…' : '💾 按当前剧本重建分镜（不重写剧本）' }}
+          </button>
+          <button class="btn btn-sm" :disabled="busy || generatingScript || !project.synopsis" @click="regenerateScript">
+            {{ generatingScript ? 'AI排重重写中…' : ('✨ AI重新生成第' + activeEpN + '集剧本（自动排重）') }}
           </button>
           <button class="btn btn-ghost btn-sm" @click="showScript = !showScript">
             {{ showScript ? '收起' : '展开' }}
@@ -355,8 +358,11 @@
         <div class="script-edit-bar">
           <span v-if="scriptDirty" class="script-dirty-hint">已修改，未保存</span>
           <span v-else-if="!scriptDraft.trim()" class="script-dirty-hint">该集剧本尚未生成，可直接编写或点击「重新生成剧本」</span>
-          <button class="btn btn-sm btn-secondary" :disabled="busy || scriptRendering || !scriptDraft.trim()" title="使用当前剧本重新拆分Scene；如需AI重写重复剧情，请点击页面顶部“AI重新生成本集剧本”" @click="saveAndRender">
-            {{ scriptRendering ? 'AI 生成中…' : '💾 保存并 AI 重新生成分镜' }}
+          <button class="btn btn-sm btn-secondary" :disabled="busy || scriptRendering || !scriptDraft.trim()" title="只按当前文本重新拆分Scene，不会重写重复剧情" @click="saveAndRender">
+            {{ scriptRendering ? '重建中…' : '💾 按当前剧本重建分镜（不重写剧本）' }}
+          </button>
+          <button class="btn btn-sm" :disabled="busy || generatingScript || !project.synopsis" @click="regenerateScript">
+            {{ generatingScript ? 'AI排重重写中…' : ('✨ AI重新生成第' + activeEpN + '集剧本（自动排重）') }}
           </button>
         </div>
       </div>
