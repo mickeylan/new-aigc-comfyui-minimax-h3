@@ -1425,6 +1425,23 @@ func enforceH3ActionTempo(value string, mode h3SceneMode) string {
 	return strings.TrimSpace(value)
 }
 
+func normalizeGeneratedH3Action(value string, allowSubjects bool, expectedShotCount int, mode h3SceneMode, referenceLines []string, canonicalSceneContent string) string {
+	value = resolveH3VisualConflicts(coalesceDuplicateH3Shots(stripPromptDialogueNarration(normalizeVideoActionPrompt(strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(value), "```"), "```"))))))
+	value = englishH3ShotField(value)
+	// Models sometimes copy the documentation placeholder literally (for example
+	// "At MM:00.000,"). Timing is server-owned: remove every placeholder form,
+	// then restore authoritative cut times from the Scene/Shot timeline below.
+	value = regexp.MustCompile(`(?i)\bAt\s+(?:MM|[0-9]{2}):(?:SS|[0-9]{2})\.(?:mmm|[0-9]{3}),?\s*`).ReplaceAllString(value, "")
+	if allowSubjects {
+		value = useSubjectTags(value, referenceLines)
+	}
+	value = regexp.MustCompile(`(<Subject\s+[0-9]+>)([A-Za-z])`).ReplaceAllString(value, "$1 $2")
+	if expectedShotCount == 1 && len(h3ShotMarkerPattern.FindAllStringSubmatch(value, -1)) == 0 {
+		value = "[Shot 1] " + strings.TrimSpace(value)
+	}
+	return applyAuthoritativeSceneShotTimeline(value, canonicalSceneContent)
+}
+
 func effectiveGenerationSystem(system string, policy *EffectivePromptPolicy) string {
 	if policy == nil || policy.Source == "system_default" || strings.TrimSpace(policy.Content) == "" || strings.TrimSpace(policy.Content) == strings.TrimSpace(system) {
 		return system
@@ -1532,9 +1549,6 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		}
 		return defaultSceneVideoAction(sc)
 	}
-	normalizeAction := func(value string) string {
-		return resolveH3VisualConflicts(coalesceDuplicateH3Shots(stripPromptDialogueNarration(normalizeVideoActionPrompt(value))))
-	}
 	expectedShotCount := len(shots)
 	for _, marker := range h3ShotMarkerPattern.FindAllStringSubmatch(canonicalSceneContent, -1) {
 		if len(marker) == 2 {
@@ -1542,6 +1556,9 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 				expectedShotCount = n
 			}
 		}
+	}
+	prepareGeneratedAction := func(value string, allowSubjects bool) string {
+		return normalizeGeneratedH3Action(value, allowSubjects, expectedShotCount, sceneMode, refLines, canonicalSceneContent)
 	}
 	actionTrusted := func(value string, allowSubjects bool) bool {
 		// This is a generation-quality routing check, not a save/submission gate.
@@ -1598,13 +1615,46 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		}
 		return true
 	}
+	actionTrustIssues := func(value string) string {
+		issues := make([]string, 0, 5)
+		hanCheck := value
+		for _, name := range parseSceneCharacters(sc.Characters) {
+			hanCheck = strings.ReplaceAll(hanCheck, name, "")
+		}
+		if regexp.MustCompile(`[\p{Han}]`).MatchString(hanCheck) {
+			issues = append(issues, "仍含未翻译的中文视觉正文")
+		}
+		if h3VisualDraftResiduePattern.MatchString(value) {
+			issues = append(issues, "仍含字段标题、模板残留或解释文字")
+		}
+		if len(refLines) > 0 && !strings.Contains(value, "<Subject ") {
+			issues = append(issues, "缺少Subject绑定")
+		}
+		if !h3ActionTempoContractMatches(value) {
+			issues = append(issues, "缺少正常实时速度或仍含慢动作措辞")
+		}
+		seen := map[int]bool{}
+		for _, marker := range h3ShotMarkerPattern.FindAllStringSubmatch(value, -1) {
+			if len(marker) == 2 {
+				n, _ := strconv.Atoi(marker[1])
+				seen[n] = true
+			}
+		}
+		if len(seen) != expectedShotCount {
+			issues = append(issues, fmt.Sprintf("Shot数量为%d，期望%d", len(seen), expectedShotCount))
+		}
+		if len(issues) == 0 {
+			return "未知结构问题"
+		}
+		return strings.Join(issues, "；")
+	}
 	generationSource := "initial_model"
-	out = normalizeAction(out)
+	out = prepareGeneratedAction(out, false)
 	if !actionTrusted(out, false) {
 		boundDraft := useSubjectTags(out, refLines)
 		repairUser := fmt.Sprintf("Rewrite the draft into concise official English H3 shot prose using the authoritative Scene Shots below. The authoritative source controls Shot count, order, timestamps, subjects, visible actions, framing, and emotional reactions. Produce exactly one paragraph for every source [Shot N]; omit, merge, reorder, retime, or invent nothing. For combat or spell clashes, motion begins immediately at full real-time speed; each attack must reach a visible block, dodge, counter, impact, displacement, or landing within that Shot. Never leave a threatened defender merely standing, gripping a weapon, or watching. No slow motion, bullet time, hovering display, prolonged charging, or lingering pause. Output no dialogue, <d>, headings, Markdown, or explanation.\n\nAUTHORITATIVE SCENE SHOTS:\n%s\n\nINCOMPLETE DRAFT TO REPAIR:\n%s", useSubjectTags(canonicalSceneContent, refLines), boundDraft)
 		if repaired, repairErr := chatAction(repairUser); repairErr == nil {
-			candidate := normalizeAction(strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(repaired), "```"), "```")))
+			candidate := prepareGeneratedAction(repaired, true)
 			if actionTrusted(candidate, true) {
 				out = candidate
 				generationSource = "general_repair"
@@ -1628,13 +1678,12 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 			if repairErr != nil {
 				return "", fmt.Errorf("AI武戏动作补全失败: %w", repairErr)
 			}
-			candidate := normalizeAction(strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(repaired), "```"), "```")))
-			candidate = enforceH3ActionTempo(useSubjectTags(candidate, refLines), sceneMode)
+			candidate := enforceH3ActionTempo(prepareGeneratedAction(repaired, true), sceneMode)
 			if actionTrusted(candidate, true) && !regexp.MustCompile(`[\p{Han}]`).MatchString(candidate) {
 				out = candidate
 				generationSource = "combat_skill_repair"
 			} else {
-				return "", fmt.Errorf("AI武戏动作补全失败：模型仍未返回符合Shot结构的英文实时动作正文")
+				return "", fmt.Errorf("AI武戏动作补全失败：%s", actionTrustIssues(candidate))
 			}
 		}
 	}
@@ -2433,7 +2482,7 @@ func englishH3ShotField(value string) string {
 		{"缓慢推进", "the camera pushes in with small amplitude at slow speed"}, {"轻微推进", "the camera pushes in with small amplitude"}, {"镜头固定不动", "the camera holds a static shot"}, {"固定镜头", "the camera holds a static shot"},
 		{"缓慢后拉", "the camera pulls out with small amplitude at slow speed"}, {"缓慢跟随", "the camera tracks the subject at slow speed"}, {"轻微环绕", "the camera moves in a shallow arc around the subject"},
 		{"夕阳余晖", "warm sunset light"}, {"温暖金色", "warm golden tones"}, {"柔和正面光", "soft frontal lighting"}, {"侧光", "side lighting"},
-		{"古风仙侠", "live-action xianxia"}, {"真人写实", "live-action realistic"},
+		{"古风仙侠", "live-action xianxia"}, {"真人写实", "live-action realistic"}, {"风格", " style"},
 		{"正面", "front-facing "}, {"侧身倾听", "listens in profile"}, {"目光由坚定转为温柔", "her gaze softens from resolve"}, {"泪光逐渐平复", "tears gradually subside"}, {"镜头", "the camera "}, {"柔和侧光", "soft side lighting"}, {"柔和side lighting", "soft side lighting"},
 	}
 	for _, replacement := range replacements {
@@ -2702,7 +2751,7 @@ func dialogueSpeakerIDs(dubs []models.Dialogue) []int {
 
 func h3SoundscapeContract(hasDialogue bool) string {
 	if hasDialogue {
-		return "Only natural location ambience and physically motivated diegetic action sounds are present. Dialogue appears only in the shot timeline; no additional voices, narration, singing, humming, musical tones, or rhythmic score are present."
+		return "Only natural location ambience and physically motivated diegetic action sounds are present. Structured speech, including any dialogue, narration, or internal monologue, appears only in the shot timeline; no additional speech, voices, narration, singing, humming, musical tones, or rhythmic score are present."
 	}
 	return "Only natural location ambience and physically motivated diegetic action sounds are present. No dialogue, human voice, narration, singing, humming, musical tones, or rhythmic score are present."
 }
@@ -3323,7 +3372,7 @@ func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 	if len(valid) == 0 {
 		return !strings.Contains(strings.ToLower(fullPrompt), "<d>") && strings.Contains(soundscape, "No dialogue") && strings.Contains(soundscape, "human voice")
 	}
-	if !strings.Contains(soundscape, "no additional voices") || !strings.Contains(soundscape, "Dialogue appears only in the shot timeline") {
+	if !strings.Contains(soundscape, "no additional speech") || !strings.Contains(soundscape, "Structured speech") || !strings.Contains(soundscape, "appears only in the shot timeline") {
 		return false
 	}
 	speakerIDs := dialogueSpeakerIDs(valid)

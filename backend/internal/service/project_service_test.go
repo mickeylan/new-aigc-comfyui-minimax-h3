@@ -1678,6 +1678,24 @@ func TestEffectiveGenerationSystemKeepsCombatContractWhenPolicyOverrides(t *test
 	}
 }
 
+func TestNormalizeGeneratedH3ActionRepairsReportedEleventhDraft(t *testing.T) {
+	draft := `[Shot 1] The shot begins from the state, composition, and spatial relationships established by <Picture 1>. 真人写实风格。 At MM:00.000, camera glides through mist into the Vanshen Peach Grove. Rising from <Picture 3> pose, <Subject 1>swings the peach branch as a sword, movements sharp and dragon-like with qi flowing outward like a rainbow, instantly transitioning into butterfly-light forms as falling petals swirl around her spinning figure. Toward the end, the visible motion settles into the exact pose, spacing, object state, camera angle, lighting, and final composition established by Picture 2. 旁白 (S1) says in an off-screen voiceover: <d>[Chinese] 上官若琳，天阙宗宗主之女，玉霄宫历代宫主。六十年前八场连胜，击败太运玄金榜第九名，震惊云上天。</d> while their lips remain completely closed.`
+	got := normalizeGeneratedH3Action(draft, true, 1, h3SceneAction, []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：确认尾帧", "- <Picture 3>：角色造型"}, "[Shot 1] 原始动作")
+	for _, forbidden := range []string{"真人写实", "At MM:00.000", "<Subject 1>swings", "<d>", "上官若琳，天阙宗宗主之女"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("reported malformed residue %q remained: %s", forbidden, got)
+		}
+	}
+	for _, want := range []string{"[Shot 1]", "live-action realistic style", "<Subject 1> swings", "instantly transitioning"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("normalized action missing %q: %s", want, got)
+		}
+	}
+	if regexp.MustCompile(`[\p{Han}]`).MatchString(got) {
+		t.Fatalf("Chinese visual prose remained: %s", got)
+	}
+}
+
 func TestCombatActionRepairRequestUsesNeutralReactionWhenOutcomeUnknown(t *testing.T) {
 	got := combatActionRepairRequest("蛇扑向持刀男子", "男子站立观察", 10)
 	for _, want := range []string{"opening 1–2 seconds", "actual referenced asset", "changes no hit/miss/block", "victory or defeat"} {
@@ -1889,7 +1907,7 @@ func TestLeadingQuotedShoutUsesOnlyVoiceCharacter(t *testing.T) {
 	}
 	lines := []string{"- <Picture 1>：角色「柳乐儿」四视图", "- <Picture 2>：角色「虬髯大汉」四视图", "- <Picture 3>：场景「辽阔荒地」参考图", "- <Picture 4>：当前分镜画面"}
 	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] <Subject 1> falters.\n[Shot 2] At 00:04.000, <Subject 2> charges through dust.", Duration: 8}, nil, dubs, lines)
-	for _, want := range []string{"<Subject 2> (S1) says:", "<d>[Chinese] 妖孽，哪里跑！</d>", "no additional voices"} {
+	for _, want := range []string{"<Subject 2> (S1) says:", "<d>[Chinese] 妖孽，哪里跑！</d>", "no additional speech"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("compiled prompt missing %q: %s", want, prompt)
 		}
@@ -2077,7 +2095,7 @@ func TestSceneWithoutStructuredDialogueForbidsVoice(t *testing.T) {
 func TestStructuredDialogueIsAlwaysIncluded(t *testing.T) {
 	lines := []string{"- <Picture 1>：当前分镜画面"}
 	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] 人物抬头。", Duration: 8}, nil, []models.Dialogue{{Character: "林夏", Text: "你来了"}}, lines)
-	for _, want := range []string{"林夏 (S1) says: <d>[Chinese] 你来了</d>", "no additional voices", "narration", "Dialogue appears only in the shot timeline"} {
+	for _, want := range []string{"林夏 (S1) says: <d>[Chinese] 你来了</d>", "no additional speech", "narration", "Structured speech", "appears only in the shot timeline"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("structured dialogue missing %q: %s", want, prompt)
 		}
