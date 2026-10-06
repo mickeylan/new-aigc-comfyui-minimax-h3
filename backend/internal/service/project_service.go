@@ -6246,30 +6246,6 @@ func resultImageOf(task *models.Task) (string, *int) {
 	return "", nil
 }
 
-func sceneMustMuteGeneratedAudio(dubs []models.Dialogue) bool {
-	return len(validSceneDialogues(dubs)) == 0
-}
-
-func stripGeneratedVideoAudio(file string) error {
-	if strings.TrimSpace(file) == "" {
-		return fmt.Errorf("视频文件路径为空")
-	}
-	ffmpeg, err := localFFmpegPath()
-	if err != nil {
-		return fmt.Errorf("无对白场景必须移除生成音轨，但未找到 FFmpeg: %w", err)
-	}
-	ext := filepath.Ext(file)
-	temp := strings.TrimSuffix(file, ext) + ".silent.tmp" + ext
-	defer os.Remove(temp)
-	if _, err := runLocalProgram(ffmpeg, []string{"-y", "-i", file, "-map", "0:v:0", "-c:v", "copy", "-an", temp}, 5*time.Minute); err != nil {
-		return fmt.Errorf("移除无对白场景的生成音轨失败: %w", err)
-	}
-	if err := os.Rename(temp, file); err != nil {
-		return fmt.Errorf("发布无声视频失败: %w", err)
-	}
-	return nil
-}
-
 func (s *ProjectService) syncSceneVideos() {
 	var scenes []models.Scene
 	if err := s.db.Where("status IN ?", []string{"video_pending", "video_running"}).
@@ -6319,13 +6295,6 @@ func (s *ProjectService) syncSceneVideos() {
 				s.retryOrFailVideo(sc, &task, "保存生成视频失败: "+err.Error())
 				changed = true
 				continue
-			}
-			if sceneMustMuteGeneratedAudio(s.sceneVideoDialogues(sc)) {
-				if err := stripGeneratedVideoAudio(localPath); err != nil {
-					s.retryOrFailVideo(sc, &task, err.Error())
-					changed = true
-					continue
-				}
 			}
 			_, captureErr := s.completeSceneCandidate(SceneCandidateCapture{
 				ProjectID: sc.ProjectID, SceneID: sc.ID, MediaType: "video", TaskID: task.TaskID,
@@ -6427,15 +6396,6 @@ func (s *ProjectService) syncDetachedCandidateRetries() {
 			path, _, err := s.upload.SaveFile(fmt.Sprint(parent.ProjectID), "video", name, data)
 			if err != nil {
 				continue
-			}
-			var scene models.Scene
-			if err := s.db.Where("id = ? AND project_id = ?", parent.EntityID, parent.ProjectID).First(&scene).Error; err != nil {
-				continue
-			}
-			if sceneMustMuteGeneratedAudio(s.sceneVideoDialogues(&scene)) {
-				if err := stripGeneratedVideoAudio(path); err != nil {
-					continue
-				}
 			}
 			capture.File, capture.VideoInputFile, capture.VideoGPU = file, filepath.Base(path), gpu
 		} else {
