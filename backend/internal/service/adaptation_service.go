@@ -28,6 +28,7 @@ type EpisodeContext struct {
 	MainPlot        string            `json:"main_plot"`
 	OpeningState    string            `json:"opening_state"`
 	PreviousEnding  string            `json:"previous_ending_state"`
+	PreviousContent string            `json:"previous_episode_completed_content,omitempty"`
 	NextGoal        string            `json:"next_goal"`
 	ChapterAnalyses []json.RawMessage `json:"chapter_analyses"`
 	Traces          []SourceTrace     `json:"source_traces"`
@@ -380,7 +381,10 @@ func (s *AdaptationService) BuildContext(projectID uint, episode, maxChars int) 
 	if s.db.Where("project_id = ? AND episode_n = ?", projectID, episode-1).First(&prev).Error == nil {
 		ctx.PreviousEnding = prev.EndingState
 	}
-	budget := maxChars - len(ctx.AdaptationRules) - len(ctx.WorldRules) - len(ctx.MainPlot) - len(ctx.OpeningState) - len(ctx.PreviousEnding) - len(ctx.NextGoal)
+	if s.projects != nil {
+		ctx.PreviousContent, _ = s.projects.previousEpisodeProductionFacts(projectID, episode)
+	}
+	budget := maxChars - len(ctx.AdaptationRules) - len(ctx.WorldRules) - len(ctx.MainPlot) - len(ctx.OpeningState) - len(ctx.PreviousEnding) - len(ctx.PreviousContent) - len(ctx.NextGoal)
 	if budget < 0 {
 		budget = 0
 	}
@@ -482,7 +486,8 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 		return nil, err
 	}
 	input, _ := json.Marshal(ctx)
-	raw, err := s.skills.ChatWithSkill(projectID, models.SkillStageEpisodeAdaptation, s.provider, "Adapt only supplied context. Output JSON only.", "", map[string]string{"episode_n": strconv.Itoa(episode), "target_duration": fmt.Sprint(ep.TargetDuration), "target_scenes": strconv.Itoa(ep.TargetScenes), "episode_context": string(input)})
+	system := "只改编提供的上下文并输出JSON。previous_episode_completed_content是上一集已完成内容的排重权威；本集必须从其结尾后继续，严禁重演、改写后重复、重新介绍或回顾其中已经完成的事件、动作、信息揭示、对白与情感节点。"
+	raw, err := s.skills.ChatWithSkill(projectID, models.SkillStageEpisodeAdaptation, s.provider, system, "", map[string]string{"episode_n": strconv.Itoa(episode), "target_duration": fmt.Sprint(ep.TargetDuration), "target_scenes": strconv.Itoa(ep.TargetScenes), "episode_context": string(input)})
 	if err != nil {
 		return nil, err
 	}

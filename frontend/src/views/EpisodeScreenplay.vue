@@ -24,8 +24,8 @@
         <button v-else class="btn btn-secondary" :disabled="busy || generatingPlan || !project?.synopsis" @click="generateCreativePlan">
           {{ generatingPlan ? '方案生成中…' : (project?.plan ? '1. 重新生成创作方案' : '1. 生成创作方案') }}
         </button>
-        <button class="btn" :disabled="busy || generatingScript || !project?.synopsis" @click="regenerateEpisodeScript">
-          {{ generatingScript ? '剧本生成中…' : `${rollingRequired ? '' : '2. '}重新生成第${episodeN}集剧本` }}
+        <button v-if="!rollingRequired" class="btn" :disabled="busy || generatingScript || !project?.synopsis" @click="regenerateEpisodeScript">
+          {{ generatingScript ? '剧本生成中…' : `2. 重新生成第${episodeN}集剧本` }}
         </button>
       </div>
     </section>

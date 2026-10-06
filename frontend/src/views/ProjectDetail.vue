@@ -22,7 +22,7 @@
         <button v-if="project.episodes <= 20" class="btn btn-secondary btn-sm" :disabled="busy || generatingPlan || !project.synopsis" @click="generatePlan">
           {{ generatingPlan ? '方案生成中…' : (project.plan ? '📋 重新生成创作方案' : '📋 生成创作方案') }}
         </button>
-        <button class="btn btn-ghost btn-sm" :disabled="busy || generatingScript || !project.synopsis" @click="regenerateScript">
+        <button v-if="project.episodes <= 20" class="btn btn-ghost btn-sm" :disabled="busy || generatingScript || !project.synopsis" @click="regenerateScript">
           {{ generatingScript ? '剧本生成中…' : ('🔄 重新生成第' + activeEpN + '集剧本') }}
         </button>
         <button v-if="project.episodes <= 20" class="btn btn-sm" :disabled="busy || pipelineActive || !project.synopsis" @click="startPipeline">

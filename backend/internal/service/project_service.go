@@ -888,6 +888,71 @@ const scriptSystemPrompt = `你是一位专业的漫剧编剧与分镜师。根�
 7. 第一个场景尽量给出大场景/环境交代，后续场景聚焦人物动作与剧情推进。
 8. 道具与场景一致性：贯穿剧情的关键道具（信物/武器等）与主要地点必须在 props/location 中用统一名称标出（系统会用同名资产参考图锁定其外观），同一道具/地点在不同场景中名称必须完全相同。`
 
+const previousEpisodeContextLimit = 24000
+
+func boundedUTF8Text(value string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	value = strings.TrimSpace(value)
+	if len(value) <= maxBytes {
+		return value
+	}
+	var out strings.Builder
+	for _, r := range value {
+		if out.Len()+len(string(r)) > maxBytes {
+			break
+		}
+		out.WriteRune(r)
+	}
+	return strings.TrimSpace(out.String())
+}
+
+func (s *ProjectService) previousEpisodeProductionFacts(projectID uint, episodeN int) (string, error) {
+	if episodeN <= 1 {
+		return "", nil
+	}
+	previousN := episodeN - 1
+	var scenes []models.Scene
+	if err := s.db.Where("project_id = ? AND episode_n = ?", projectID, previousN).Order("`order` ASC, id ASC").Find(&scenes).Error; err != nil {
+		return "", err
+	}
+	var scripts map[int]string
+	var project models.Project
+	if err := s.db.Select("scripts").First(&project, projectID).Error; err == nil && strings.TrimSpace(project.Scripts) != "" {
+		_ = json.Unmarshal([]byte(project.Scripts), &scripts)
+	}
+	var out strings.Builder
+	out.WriteString(fmt.Sprintf("第%d集已经发生的权威内容（只能承接，严禁重演、改写后重复或再次介绍）：\n", previousN))
+	if len(scenes) > 0 {
+		out.WriteString("【已完成Scene与Dialogue（生产权威）】\n")
+	}
+	for _, scene := range scenes {
+		line := fmt.Sprintf("Scene %d「%s」：%s\n", scene.Order, strings.TrimSpace(scene.Title), strings.TrimSpace(scene.Content))
+		if out.Len()+len(line) > previousEpisodeContextLimit {
+			break
+		}
+		out.WriteString(line)
+		var dialogues []models.Dialogue
+		if err := s.db.Where("project_id = ? AND scene_id = ?", projectID, scene.ID).Order("`order` ASC, id ASC").Find(&dialogues).Error; err != nil {
+			return "", err
+		}
+		for _, dialogue := range validSceneDialogues(dialogues) {
+			line = fmt.Sprintf("  %s（%s）：%s\n", strings.TrimSpace(dialogue.Character), strings.TrimSpace(dialogue.SpeechType), strings.TrimSpace(dialogue.Text))
+			if out.Len()+len(line) > previousEpisodeContextLimit {
+				break
+			}
+			out.WriteString(line)
+		}
+	}
+	if script := strings.TrimSpace(scripts[previousN]); script != "" && out.Len() < previousEpisodeContextLimit {
+		out.WriteString("【已完成剧本正文（补充排重）】\n")
+		out.WriteString(boundedUTF8Text(script, previousEpisodeContextLimit-out.Len()))
+		out.WriteString("\n")
+	}
+	return strings.TrimSpace(out.String()), nil
+}
+
 // GenerateScript 生成分镜剧本：已有创作方案时按方案渲染（两阶段流程），否则直接文生文。
 // episodeN 指定当前制作集数（默认 1），只生成该集的分镜场景并替换该集旧场景。
 func (s *ProjectService) GenerateScript(p *models.Project, episodeN int) (*models.Project, []models.Scene, error) {
@@ -902,6 +967,13 @@ func (s *ProjectService) GenerateScript(p *models.Project, episodeN int) (*model
 	if p.Style != "" {
 		user.WriteString("画风：" + p.Style + "\n")
 	}
+	previousFacts, err := s.previousEpisodeProductionFacts(p.ID, episodeN)
+	if err != nil {
+		return nil, nil, err
+	}
+	if previousFacts != "" {
+		user.WriteString("\n\n=== 上一集已完成内容（排重权威） ===\n" + previousFacts + "\n")
+	}
 
 	system := scriptSystemPrompt
 	if strings.TrimSpace(p.Plan) != "" {
@@ -912,6 +984,9 @@ func (s *ProjectService) GenerateScript(p *models.Project, episodeN int) (*model
 		user.WriteString(fmt.Sprintf("\n=== 当前制作集 ===\n第 %d 集「%s」\n本集剧情提示词：%s\n目标时长：%.0f秒 | 目标镜头：%d个\n", episodeN, epTitle, epBrief, targetDuration, targetScenes))
 		user.WriteString("请基于创作方案，重点围绕「当前制作集」的剧情提示词，输出该集的分镜剧本 JSON。")
 		system = scriptFromPlanSystemPrompt(targetDuration, targetScenes)
+		if previousFacts != "" {
+			system += "\n上一集已完成剧本、Scene和Dialogue是排重权威。新一集必须从其结尾之后继续；禁止重演、改写后重复、重新介绍或回顾上一集已经完成的事件、动作、信息揭示、对白与情感节点。生成前逐场对照上一集，发现重复必须删除并改为新的剧情推进。"
+		}
 	} else {
 		user.WriteString("请按系统要求输出剧本 JSON。")
 	}

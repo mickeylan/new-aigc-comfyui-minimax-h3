@@ -29,14 +29,19 @@ func (s *stubTextProvider) Chat(_, _ string) (string, error) {
 }
 
 type captureTextProvider struct {
-	response string
-	system   string
-	user     string
+	response    string
+	system      string
+	user        string
+	firstSystem string
+	firstUser   string
 }
 
 func (s *captureTextProvider) Name() string                      { return "capture" }
 func (s *captureTextProvider) HealthCheck(context.Context) error { return nil }
 func (s *captureTextProvider) Chat(system, user string) (string, error) {
+	if s.firstSystem == "" && s.firstUser == "" {
+		s.firstSystem, s.firstUser = system, user
+	}
 	s.system, s.user = system, user
 	return s.response, nil
 }
@@ -311,6 +316,59 @@ func newTestProjectService(t *testing.T) *ProjectService {
 	ps := NewProjectService(nil, db, nil, nil, nil, nil, nil, nil, nil)
 	ps.stopped = make(chan struct{})
 	return ps
+}
+
+func TestPreviousEpisodeProductionFactsIncludesScenesDialogueAndScript(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Dialogue{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "问仙", Scripts: `{"1":"第一集完整剧本：舒寒与若琳已经重逢。"}`}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Title: "真相大白", Content: "若琳已经得知舒寒修成自化元婴。"}
+	if err := ps.db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.db.Create(&models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "舒寒", SpeechType: "dialogue", Text: "元婴就是我的肉体。"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	facts, err := ps.previousEpisodeProductionFacts(project.ID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"严禁重演", "第一集完整剧本", "真相大白", "自化元婴", "元婴就是我的肉体"} {
+		if !strings.Contains(facts, want) {
+			t.Fatalf("previous episode facts missing %q: %s", want, facts)
+		}
+	}
+	if got, err := ps.previousEpisodeProductionFacts(project.ID, 1); err != nil || got != "" {
+		t.Fatalf("episode one previous facts=%q err=%v", got, err)
+	}
+}
+
+func TestGenerateScriptInjectsPreviousEpisodeAsDedupAuthority(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Dialogue{}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &captureTextProvider{response: `{}`}
+	ps.textProvider = provider
+	project := models.Project{Title: "问仙", Synopsis: "继续冒险", Plan: `{"episodes":[{"n":1,"title":"重逢","prompt":"已经重逢","target_duration":180,"target_scenes":25},{"n":2,"title":"启程","prompt":"离开宗门","target_duration":180,"target_scenes":25}]}`}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Title: "重逢", Content: "舒寒与若琳已经重逢相拥。"}
+	if err := ps.db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, _, _ = ps.GenerateScript(&project, 2)
+	for _, want := range []string{"上一集已完成内容（排重权威）", "舒寒与若琳已经重逢相拥", "禁止重演、改写后重复"} {
+		if !strings.Contains(provider.firstUser+provider.firstSystem, want) {
+			t.Fatalf("generation prompt missing %q\nsystem=%s\nuser=%s", want, provider.firstSystem, provider.firstUser)
+		}
+	}
 }
 
 func TestHasRecentGenerationTasksSkipsIdlePolling(t *testing.T) {
