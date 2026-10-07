@@ -36,6 +36,8 @@ type dialogueRhythmShotReview struct {
 	DialogueStart     int                            `json:"dialogue_start_rune"`
 	DialogueEnd       int                            `json:"dialogue_end_rune"`
 	NaturalMinimum    float64                        `json:"natural_minimum"`
+	Ready             bool                           `json:"ready"`
+	BlockingIssues    []string                       `json:"blocking_issues"`
 	Speakers          []string                       `json:"speakers"`
 	Presentation      string                         `json:"presentation"`
 	ContinuesFromPrev bool                           `json:"continues_from_previous"`
@@ -395,6 +397,23 @@ func ordinaryDialogueCarryoverAllowed(shot sceneDirectorDraftShot, speaker strin
 	return carryover && closedLips
 }
 
+func dialogueReviewNaturalMinimum(fragments []dialogueRhythmFragmentReview) float64 {
+	if len(fragments) == 0 {
+		return 3
+	}
+	duration := 0.6
+	previousVoice := ""
+	for _, fragment := range fragments {
+		voice := strings.TrimSpace(fragment.Character) + "\x00" + fragment.SpeechType
+		if previousVoice != "" && voice != previousVoice {
+			duration += speakerChangePause
+		}
+		duration += dialogueTextDuration(fragment.Text)
+		previousVoice = voice
+	}
+	return math.Max(3, math.Ceil(duration*2)/2)
+}
+
 func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dialogue) []dialogueRhythmShotReview {
 	if draft == nil {
 		return []dialogueRhythmShotReview{}
@@ -473,11 +492,15 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 				}
 			}
 		}
-		minimum := 3.0
-		if length > 0 {
-			minimum = math.Max(3, math.Ceil((dialogueTextDuration(shot.Dialogue)+0.6)*2)/2)
+		minimum := dialogueReviewNaturalMinimum(fragments)
+		issues := []string{}
+		if minimum > maxSceneVideoDuration {
+			issues = append(issues, fmt.Sprintf("本镜权威语音自然时长下限%.1f秒超过Native H3的15秒上限，必须继续拆镜", minimum))
 		}
-		reviews = append(reviews, dialogueRhythmShotReview{Shot: i + 1, StartTime: timeCursor, EndTime: timeCursor + shot.Duration, DialogueStart: start, DialogueEnd: end, NaturalMinimum: minimum, Speakers: speakers, Presentation: presentation, ContinuesFromPrev: continuesFrom, ContinuesToNext: continuesTo, Fragments: fragments})
+		if shot.Duration+0.001 < minimum {
+			issues = append(issues, fmt.Sprintf("本镜时长%.1f秒低于权威语音自然时长下限%.1f秒", shot.Duration, minimum))
+		}
+		reviews = append(reviews, dialogueRhythmShotReview{Shot: i + 1, StartTime: timeCursor, EndTime: timeCursor + shot.Duration, DialogueStart: start, DialogueEnd: end, NaturalMinimum: minimum, Ready: len(issues) == 0, BlockingIssues: issues, Speakers: speakers, Presentation: presentation, ContinuesFromPrev: continuesFrom, ContinuesToNext: continuesTo, Fragments: fragments})
 		timeCursor += shot.Duration
 		dialogueCursor = end
 	}
