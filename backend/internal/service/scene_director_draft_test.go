@@ -146,6 +146,33 @@ func TestBuildDialogueRhythmReviewUsesAuthoritativeRangesAndTimeline(t *testing.
 	}
 }
 
+func TestDialogueRhythmReviewUsesAuthoritativeSpeechPresentation(t *testing.T) {
+	tests := []struct {
+		name, speechType, character, want string
+	}{
+		{name: "dialogue", speechType: "dialogue", character: "阿宁", want: "visible_speaker_lipsync"},
+		{name: "narration", speechType: "narration", character: "旁白", want: "narration_voiceover"},
+		{name: "monologue", speechType: "monologue", character: "阿宁", want: "internal_monologue"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "权威原文", ShotType: "近景"}}}
+			review := buildDialogueRhythmReview(draft, []models.Dialogue{{ID: 1, Character: tt.character, SpeechType: tt.speechType, Text: "权威原文"}})
+			if len(review) != 1 || review[0].Presentation != tt.want {
+				t.Fatalf("review=%+v", review)
+			}
+		})
+	}
+	silent := buildDialogueRhythmReview(&sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, ShotType: "空镜"}}}, nil)
+	if len(silent) != 1 || silent[0].Presentation != "silent_visual" {
+		t.Fatalf("silent=%+v", silent)
+	}
+	mixed := buildDialogueRhythmReview(&sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 5, Dialogue: "先说再叙", ShotType: "双人中景"}}}, []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "先说"}, {ID: 2, Character: "旁白", SpeechType: "narration", Text: "再叙"}})
+	if len(mixed) != 1 || mixed[0].Presentation != "mixed_authoritative_speech" {
+		t.Fatalf("mixed=%+v", mixed)
+	}
+}
+
 func TestDialogueRhythmReviewMatchesPersistedRangesAcrossDialogues(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	project := models.Project{Title: "range parity"}

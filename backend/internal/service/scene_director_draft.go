@@ -452,11 +452,24 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 		}
 		presentation := "silent_visual"
 		if length > 0 {
-			presentation = "visible_speaker_lipsync"
-			for _, speaker := range speakers {
-				if ordinaryDialogueCarryoverAllowed(shot, speaker, continuesFrom) {
-					presentation = "listener_reaction_carryover"
-					break
+			types := map[string]bool{}
+			for _, fragment := range fragments {
+				types[fragment.SpeechType] = true
+			}
+			switch {
+			case len(types) > 1:
+				presentation = "mixed_authoritative_speech"
+			case types["narration"]:
+				presentation = "narration_voiceover"
+			case types["monologue"]:
+				presentation = "internal_monologue"
+			default:
+				presentation = "visible_speaker_lipsync"
+				for _, speaker := range speakers {
+					if ordinaryDialogueCarryoverAllowed(shot, speaker, continuesFrom) {
+						presentation = "listener_reaction_carryover"
+						break
+					}
 				}
 			}
 		}
