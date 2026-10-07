@@ -187,9 +187,10 @@ func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue) string {
 	return `按对白自然语速和语义停顿拆成多个3–15秒Native H3镜头。可以交替使用说话人近景、包含说话人的双人/前后景镜头，以及对白结束后的纯听者反应镜头。硬规则：
 1. Dialogue字段只能填下列结构化对白的连续原文片段，不得改写、增删、重复或创造旁白；无发声镜头必须为空。
 2. 所有镜头Dialogue按顺序拼接后必须逐字等于下列完整对白原文按顺序拼接的结果。
-3. 普通dialogue所在镜头必须让真实说话人清晰可见并由其同步口型；听者可以同时出镜但必须闭口。纯听者单人镜头只能放在该段对白结束后。只有明确speech_type为narration或monologue时才允许画面外发声。
-4. 每镜3–15秒，一个主要情绪、一个主要动作、一种主要构图和明确结束状态。
-5. 对白自然时长决定总时长，不得压缩语速，也不得用重复动作填时长。
+3. 普通dialogue默认让真实说话人清晰可见并由其同步口型；也允许同一句对白跨切到纯听者反应镜头，但必须明确写出“原说话人姓名+声音跨切延续”，听者必须闭口，且不得把这种连续对白改写成旁白或独立画外音。只有明确speech_type为narration或monologue时才使用旁白/内心独白语义。
+4. 纯听者反应镜头承载普通对白时只能承接上一镜已经开始的同一句对白；不能在听者镜头中开始一条新对白，也不能改变说话人。
+5. 每镜3–15秒，一个主要情绪、一个主要动作、一种主要构图和明确结束状态。
+6. 对白自然时长决定总时长，不得压缩语速，也不得用重复动作填时长。
 结构化对白：
 ` + strings.Join(lines, "\n")
 }
@@ -343,6 +344,31 @@ func restoreDialogueRhythmDraftText(draft *sceneDirectorDraft, dialogues []model
 	return nil
 }
 
+func ordinaryDialogueCarryoverAllowed(shot sceneDirectorDraftShot, speaker string, startsAfterDialogueStart bool) bool {
+	if !startsAfterDialogueStart || strings.TrimSpace(speaker) == "" {
+		return false
+	}
+	visual := strings.Join([]string{shot.ShotType, shot.Description, shot.PromptSubject, shot.PromptAction, shot.StartState, shot.EndState}, " ")
+	if !strings.Contains(visual, speaker) {
+		return false
+	}
+	carryover := false
+	for _, marker := range []string{"声音跨切延续", "台词跨切延续", "画外继续", "画外音继续", "声音继续", "继续说话"} {
+		if strings.Contains(visual, marker) {
+			carryover = true
+			break
+		}
+	}
+	closedLips := false
+	for _, marker := range []string{"闭口", "双唇闭合", "嘴唇闭合", "不张口", "不做口型"} {
+		if strings.Contains(visual, marker) {
+			closedLips = true
+			break
+		}
+	}
+	return carryover && closedLips
+}
+
 func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
 	var expected, actual strings.Builder
 	for _, d := range dialogues {
@@ -377,7 +403,6 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 		if text == "" {
 			continue
 		}
-		visual := strings.Join([]string{shot.ShotType, shot.Description, shot.PromptSubject, shot.PromptAction, shot.StartState, shot.EndState}, " ")
 		for _, span := range spans {
 			if end <= span.start || start >= span.end {
 				continue
@@ -387,9 +412,14 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 				continue
 			}
 			speaker := strings.TrimSpace(span.dialogue.Character)
-			if speaker != "" && !strings.Contains(visual, speaker) {
-				return fmt.Errorf("对白拆镜%d承载角色“%s”的普通对白时，必须让真实说话人清晰可见；纯听者单人镜头只能放在该段对白结束后", i+1, speaker)
+			if speaker == "" {
+				continue
 			}
+			speakerVisible := strings.Contains(strings.Join([]string{shot.PromptSubject, shot.ShotType}, " "), speaker)
+			if speakerVisible || ordinaryDialogueCarryoverAllowed(shot, speaker, start > span.start) {
+				continue
+			}
+			return fmt.Errorf("对白拆镜%d承载角色“%s”的普通对白时，必须让说话人可见并同步口型，或明确标注同一句对白跨切延续且听者闭口", i+1, speaker)
 		}
 	}
 	return nil

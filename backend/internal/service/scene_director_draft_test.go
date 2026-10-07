@@ -86,27 +86,36 @@ func TestDialogueRhythmQueryQuotesReservedOrderColumn(t *testing.T) {
 	}
 }
 
-func TestDialogueRhythmInstructionRequiresVisibleOrdinarySpeaker(t *testing.T) {
+func TestDialogueRhythmInstructionAllowsAttributedCrossCutListenerReaction(t *testing.T) {
 	got := dialogueRhythmDirectorInstruction([]models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "继续说话"}})
-	for _, want := range []string{"真实说话人清晰可见", "纯听者单人镜头只能放在该段对白结束后", "narration或monologue"} {
+	for _, want := range []string{"声音跨切延续", "听者必须闭口", "不能在听者镜头中开始一条新对白", "不得把这种连续对白改写成旁白或独立画外音", "narration或monologue"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q: %s", want, got)
 		}
 	}
 }
 
-func TestValidateDialogueRhythmDraftRejectsListenerOnlyDuringOrdinaryDialogue(t *testing.T) {
-	draft, err := parseSceneDirectorDraft(`{"shots":[{"act_type":"setup","shot_type":"听者反应","camera_angle":"平视","camera_movement":"固定","duration":6,"description":"上官若彤倾听","dialogue":"继续说话","emotion":"平静","transition_type":"cut","transition_note":"","start_state":"上官若彤抬头","end_state":"上官若彤平静","prompt_subject":"上官若彤单人近景","prompt_action":"闭口倾听","prompt_camera":"近景","prompt_lighting":"柔光","prompt_style":"真人写实","negative_prompt":"","checks":[]}]}`)
+func TestValidateDialogueRhythmDraftAllowsAttributedCrossCutListenerReaction(t *testing.T) {
+	draft, err := parseSceneDirectorDraft(`{"shots":[{"act_type":"setup","shot_type":"说话人近景","camera_angle":"平视","camera_movement":"固定","duration":4,"description":"上官若琳开口","dialogue":"相信姐姐，","emotion":"坚定","transition_type":"cut","transition_note":"切到听者","start_state":"上官若琳看向妹妹","end_state":"上官若琳继续说","prompt_subject":"上官若琳近景","prompt_action":"同步口型说话","prompt_camera":"近景","prompt_lighting":"柔光","prompt_style":"真人写实","negative_prompt":"","checks":[]},{"act_type":"rising","shot_type":"听者反应","camera_angle":"平视","camera_movement":"固定","duration":6,"description":"上官若琳声音跨切延续，上官若彤闭口倾听","dialogue":"姐姐无论如何也不会让你去罗刹魔域！","emotion":"担忧","transition_type":"cut","transition_note":"","start_state":"上官若彤抬头","end_state":"上官若彤神情微变","prompt_subject":"上官若彤单人近景","prompt_action":"双唇闭合倾听，上官若琳声音跨切延续","prompt_camera":"反应近景","prompt_lighting":"柔光","prompt_style":"真人写实","negative_prompt":"","checks":[]}]}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dialogues := []models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "继续说话"}}
-	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "必须让真实说话人清晰可见") {
-		t.Fatalf("err=%v", err)
-	}
-	draft.Shots[0].PromptSubject = "上官若琳与上官若彤双人近景"
+	dialogues := []models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "相信姐姐，姐姐无论如何也不会让你去罗刹魔域！"}}
 	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
-		t.Fatalf("two-shot rejected: %v", err)
+		t.Fatalf("valid cross-cut listener reaction rejected: %v", err)
+	}
+
+	draft.Shots[1].Description = "上官若彤倾听"
+	draft.Shots[1].PromptAction = "双唇闭合倾听"
+	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "明确标注同一句对白跨切延续") {
+		t.Fatalf("unattributed carryover accepted: %v", err)
+	}
+
+	draft.Shots[0].PromptSubject = "上官若彤单人近景"
+	draft.Shots[0].Description = "上官若琳声音跨切延续，上官若彤闭口倾听"
+	draft.Shots[0].PromptAction = "双唇闭合倾听，上官若琳声音跨切延续"
+	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil {
+		t.Fatal("new dialogue incorrectly allowed to start off-screen in listener shot")
 	}
 }
 
