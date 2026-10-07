@@ -37,7 +37,9 @@ type dialogueRhythmShotReview struct {
 	DialogueEnd       int                            `json:"dialogue_end_rune"`
 	NaturalMinimum    float64                        `json:"natural_minimum"`
 	Ready             bool                           `json:"ready"`
+	Status            string                         `json:"status"`
 	BlockingIssues    []string                       `json:"blocking_issues"`
+	Advisories        []string                       `json:"advisories"`
 	EntryBoundary     string                         `json:"entry_boundary"`
 	ExitBoundary      string                         `json:"exit_boundary"`
 	Speakers          []string                       `json:"speakers"`
@@ -502,7 +504,11 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 		if shot.Duration+0.001 < minimum {
 			issues = append(issues, fmt.Sprintf("本镜时长%.1f秒低于权威语音自然时长下限%.1f秒", shot.Duration, minimum))
 		}
-		reviews = append(reviews, dialogueRhythmShotReview{Shot: i + 1, StartTime: timeCursor, EndTime: timeCursor + shot.Duration, DialogueStart: start, DialogueEnd: end, NaturalMinimum: minimum, Ready: len(issues) == 0, BlockingIssues: issues, Speakers: speakers, Presentation: presentation, ContinuesFromPrev: continuesFrom, ContinuesToNext: continuesTo, Fragments: fragments})
+		status := "ready"
+		if len(issues) > 0 {
+			status = "blocked"
+		}
+		reviews = append(reviews, dialogueRhythmShotReview{Shot: i + 1, StartTime: timeCursor, EndTime: timeCursor + shot.Duration, DialogueStart: start, DialogueEnd: end, NaturalMinimum: minimum, Ready: len(issues) == 0, Status: status, BlockingIssues: issues, Advisories: []string{}, Speakers: speakers, Presentation: presentation, ContinuesFromPrev: continuesFrom, ContinuesToNext: continuesTo, Fragments: fragments})
 		timeCursor += shot.Duration
 		dialogueCursor = end
 	}
@@ -521,6 +527,12 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 			review.ExitBoundary = "场景结束"
 		} else {
 			review.ExitBoundary = dialogueBoundaryReason(review.Fragments, reviews[i+1].Fragments, review.ContinuesToNext)
+		}
+		if review.EntryBoundary == "同句跨镜续接" || review.ExitBoundary == "同句跨镜续接" {
+			review.Advisories = append(review.Advisories, "本镜在无标点的同一句中切换，请重点审核口型连续性、听者闭口和声音跨切是否自然")
+			if review.Status == "ready" {
+				review.Status = "attention"
+			}
 		}
 	}
 	return reviews

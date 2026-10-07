@@ -200,6 +200,21 @@ func TestDialogueBoundaryReasonUsesAuthoritativeSemantics(t *testing.T) {
 	}
 }
 
+func TestDialogueRhythmReviewMarksUnpunctuatedCutForAttention(t *testing.T) {
+	dialogue := models.Dialogue{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信姐姐永远不会离开你"}
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
+		{Duration: 4, Dialogue: "相信姐姐永远", ShotType: "阿宁近景", PromptSubject: "阿宁可见"},
+		{Duration: 4, Dialogue: "不会离开你", ShotType: "阿宁近景", PromptSubject: "阿宁可见"},
+	}}
+	review := buildDialogueRhythmReview(draft, []models.Dialogue{dialogue})
+	if len(review) != 2 || review[0].Status != "attention" || review[1].Status != "attention" || !review[0].Ready || !review[1].Ready {
+		t.Fatalf("review=%+v", review)
+	}
+	if len(review[0].Advisories) != 1 || len(review[1].Advisories) != 1 || review[0].ExitBoundary != "同句跨镜续接" || review[1].EntryBoundary != "同句跨镜续接" {
+		t.Fatalf("attention details=%+v", review)
+	}
+}
+
 func TestDialogueRhythmReviewBlocksImpossibleNaturalTiming(t *testing.T) {
 	longText := strings.Repeat("修", 60)
 	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 15, Dialogue: longText, ShotType: "近景"}}}
