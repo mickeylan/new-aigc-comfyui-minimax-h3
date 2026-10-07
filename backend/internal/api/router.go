@@ -161,6 +161,11 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/audio-layers", svc.HandleCreateAudioLayer)
 	r.PUT("/api/projects/:id/audio-layers/:aid", svc.HandleUpdateAudioLayer)
 	r.DELETE("/api/projects/:id/audio-layers/:aid", svc.HandleDeleteAudioLayer)
+	// 非对白功能文字：人物出场、地点、时间、过场与结束卡
+	r.GET("/api/projects/:id/screen-text-cues", svc.HandleListScreenTextCues)
+	r.POST("/api/projects/:id/screen-text-cues", svc.HandleCreateScreenTextCue)
+	r.PUT("/api/projects/:id/screen-text-cues/:cid", svc.HandleUpdateScreenTextCue)
+	r.DELETE("/api/projects/:id/screen-text-cues/:cid", svc.HandleDeleteScreenTextCue)
 	// 对白配音与字幕
 	r.GET("/api/projects/:id/scenes/:sid/dialogues", svc.HandleListSceneDialogues)
 	r.POST("/api/projects/:id/scenes/:sid/dub", svc.HandleGenerateSceneDub)

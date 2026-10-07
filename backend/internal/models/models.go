@@ -1163,6 +1163,32 @@ type AudioLayer struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+// ScreenTextCue stores reviewed, non-dialogue on-screen text such as character
+// introductions, locations, transitions and episode end cards. It never produces speech.
+type ScreenTextCue struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	ProjectID    uint      `gorm:"index;index:idx_screen_text_timeline" json:"project_id"`
+	EpisodeN     int       `gorm:"index;index:idx_screen_text_timeline" json:"episode_n"`
+	SceneID      *uint     `gorm:"index" json:"scene_id,omitempty"`
+	ShotID       *uint     `gorm:"index" json:"shot_id,omitempty"`
+	CharacterID  *uint     `gorm:"index" json:"character_id,omitempty"`
+	Kind         string    `gorm:"size:40;index" json:"kind"`
+	Text         string    `gorm:"type:text" json:"text"`
+	Subtext      string    `gorm:"type:text" json:"subtext"`
+	StartTime    float64   `gorm:"index:idx_screen_text_timeline" json:"start_time"`
+	EndTime      float64   `json:"end_time"`
+	WritingMode  string    `gorm:"size:32" json:"writing_mode"`
+	Anchor       string    `gorm:"size:32" json:"anchor"`
+	StyleCode    string    `gorm:"size:100" json:"style_code"`
+	Animation    string    `gorm:"size:32" json:"animation"`
+	Enabled      bool      `gorm:"default:true;index" json:"enabled"`
+	Order        int       `json:"order"`
+	Source       string    `gorm:"size:32" json:"source"`
+	ReviewStatus string    `gorm:"size:32;default:approved;index" json:"review_status"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
 // PromptPolicyOverride stores an inherited prompt policy at one project hierarchy scope.
 type PromptPolicyOverride struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`

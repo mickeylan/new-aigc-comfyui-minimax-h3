@@ -324,6 +324,9 @@ func (s *ProjectService) DeleteProject(id uint) error {
 				return err
 			}
 		}
+		if err := deleteIfTable(tx, &models.ScreenTextCue{}, "project_id = ?", id); err != nil {
+			return err
+		}
 		if err := tx.Where("scene_id IN (?)", sceneIDsQuery).Delete(&models.Shot{}).Error; err != nil {
 			return err
 		}

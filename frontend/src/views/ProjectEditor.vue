@@ -99,6 +99,11 @@
             <div v-for="shot in timelineShots" :key="shot.id" class="shot-clip" :style="{flexGrow:Math.max(1,Number(shot.duration||1))}"><strong>Shot {{shot.order}}</strong><span>{{shot.shot_type}} · {{shot.camera_movement}}</span><small>{{shot._start.toFixed(1)}}–{{shot._end.toFixed(1)}}秒 · {{Number(shot.duration||0).toFixed(1)}}秒</small><div v-if="shot.dialogue_fragments?.length" class="shot-dialogue"><span v-for="fragment in shot.dialogue_fragments" :key="fragment.dialogue_id+'-'+fragment.start_rune">{{fragment.speaker_label||'未指定说话人'}}：{{fragment.text}} <small>[{{fragment.start_rune}},{{fragment.end_rune}})</small></span></div><div class="shot-flags"><i v-if="shot.continues_from_previous">承接</i><i v-if="shot.continues_to_next">延续</i><i v-if="!shot.dialogue_fragments?.length">静音</i></div></div>
             <p v-if="!selectedShots.length" class="board-empty">当前Scene尚无内部Shot。</p>
           </div>
+          <div class="screen-text-track-head"><strong>功能文字轨（非对白字幕）</strong><button class="btn btn-xs btn-secondary" @click="editScreenTextCue()">添加</button></div>
+          <div class="screen-text-track" aria-label="功能文字时间轴">
+            <button v-for="cue in selectedScreenTextCues" :key="cue.id" class="screen-text-cue" :class="{'cue-disabled':!cue.enabled}" :style="cueTimelineStyle(cue)" @click="editScreenTextCue(cue)" :title="`${cue.start_time}–${cue.end_time}秒 ${cue.text}`"><span>{{screenTextKindLabel(cue.kind)}}</span><strong>{{cue.text}}</strong></button>
+            <span v-if="!selectedScreenTextCues.length" class="screen-text-empty">本Scene尚无人物题名、地点、时间或过场文字</span>
+          </div>
         </div>
       </div>
     </section>
@@ -258,6 +263,29 @@
 
     <ShotDirectorEditor v-if="selected" :key="`shot-director-${selected.id}`" :project-id="id()" :scene-id="selected.id" :genre="project?.genre || ''" :tone="project?.tone || ''" :scene-title="selected.title || ''" :scene-content="selected.content || ''" :scene-mode="selected.scene_mode || ''" @scene-changed="reloadSelectedScene" @scene-materialized="handleShotMaterialized" />
 
+    <section v-if="selected" class="section screen-text-section">
+      <div class="section-head"><div><span class="overline">SCREEN TEXT</span><h2>功能文字（非对白字幕）</h2><p class="sub">用于人物出场、地点、时间、过场和“本集完”；不会进入Dialogue、配音或H3提示词。</p></div><button class="btn btn-sm btn-secondary" @click="editScreenTextCue()">新增功能文字</button></div>
+      <div class="screen-text-grid">
+        <div class="card screen-text-list">
+          <button v-for="cue in selectedScreenTextCues" :key="cue.id" class="screen-text-row" @click="editScreenTextCue(cue)"><span class="badge badge-gray">{{screenTextKindLabel(cue.kind)}}</span><strong>{{cue.text}}</strong><small>{{cue.start_time}}–{{cue.end_time}}秒 · {{cue.writing_mode}}</small></button>
+          <div v-if="!selectedScreenTextCues.length" class="empty">当前Scene暂无功能文字。</div>
+        </div>
+        <form v-if="screenTextEditing" class="card inline-form screen-text-form" @submit.prevent="saveScreenTextCue">
+          <label>类型<select v-model="screenTextForm.kind" class="input"><option value="character_intro">人物出场</option><option value="location">地点</option><option value="time_card">时间</option><option value="transition">过场</option><option value="chapter_title">章回标题</option><option value="story_note">剧情提示</option><option value="end_card">本集完</option><option value="custom">自定义</option></select></label>
+          <label v-if="screenTextForm.kind==='character_intro'">绑定角色<select v-model="screenTextForm.character_id" class="input" required><option :value="null">请选择</option><option v-for="character in characters" :key="character.id" :value="character.id">{{character.name}}</option></select></label>
+          <label>排版<select v-model="screenTextForm.writing_mode" class="input"><option value="horizontal-ltr">中文横排</option><option value="vertical-rl">从上到下、列从右到左</option><option value="vertical-lr">从上到下、列从左到右</option><option value="stacked-upright">单列直立</option></select></label>
+          <label>位置<select v-model="screenTextForm.anchor" class="input"><option value="top_left">左上</option><option value="top_center">上方居中</option><option value="top_right">右上</option><option value="center">居中</option><option value="bottom_left">左下</option><option value="bottom_center">下方居中</option><option value="bottom_right">右下</option><option value="subject_left">人物左侧</option><option value="subject_right">人物右侧</option></select></label>
+          <label>开始秒<input v-model.number="screenTextForm.start_time" type="number" min="0" :max="selected.duration" step="0.1" class="input" required></label><label>结束秒<input v-model.number="screenTextForm.end_time" type="number" min="0.1" :max="selected.duration" step="0.1" class="input" required></label>
+          <label class="wide">主文字<input v-model="screenTextForm.text" class="input" maxlength="200" required></label><label class="wide">副标题<input v-model="screenTextForm.subtext" class="input" maxlength="200"></label>
+          <label>样式<select v-model="screenTextForm.style_code" class="input"><option value="xianxia-character-vertical">仙侠人物竖排</option><option value="xianxia-location-vertical">古装地点竖排</option><option value="historical-time-card">古装时间卡</option><option value="ink-transition-card">水墨过场</option><option value="ink-end-card">水墨结束卡</option><option value="modern-horizontal-caption">简洁横排</option></select></label>
+          <label>动画<select v-model="screenTextForm.animation" class="input"><option value="none">无</option><option value="fade">淡入淡出</option><option value="slide">滑入</option><option value="typewriter">逐字</option><option value="ink_reveal">墨迹显字</option></select></label>
+          <label class="check"><input v-model="screenTextForm.enabled" type="checkbox"> 启用</label>
+          <div class="screen-text-preview wide" :class="screenTextForm.writing_mode?.startsWith('vertical')||screenTextForm.writing_mode==='stacked-upright'?'vertical':'horizontal'"><strong>{{screenTextForm.text||'功能文字预览'}}</strong><small v-if="screenTextForm.subtext">{{screenTextForm.subtext}}</small></div>
+          <div class="section-actions wide"><button class="btn btn-sm">保存</button><button v-if="screenTextForm.id" type="button" class="btn btn-sm btn-danger" @click="removeScreenTextCue(screenTextForm);screenTextEditing=false">删除</button><button type="button" class="btn btn-sm btn-ghost" @click="screenTextEditing=false">取消</button></div>
+        </form>
+      </div>
+    </section>
+
     <section class="section">
       <div class="section-head"><div><span class="overline">SHARED ASSETS</span><h2>共享资产引用</h2><p class="sub">创建、修改或删除项目、场景和镜头级素材引用。</p></div><button class="btn btn-sm btn-secondary" @click="editSharedAsset()">引用素材</button></div>
       <div class="card" v-if="sharedAssetReferences.length"><div v-for="refRow in sharedAssetReferences" :key="refRow.id" class="merge-item"><div class="merge-info"><strong>{{ refRow.material?.name || `素材 #${refRow.material_id}` }}</strong><span>{{ refRow.mode }} · {{ refRow.shot_id ? `镜头 #${refRow.shot_id}` : refRow.scene_id ? `场景 #${refRow.scene_id}` : '项目级' }}</span></div><div class="merge-links"><button class="btn btn-sm btn-ghost" @click="editSharedAsset(refRow)">编辑</button><button class="btn btn-sm btn-danger" @click="removeSharedAsset(refRow)">删除</button></div></div></div><div class="card empty" v-else>暂无共享资产引用。</div>
@@ -361,6 +389,10 @@ const compareCandidateIds = ref([])
 const audioLayers = ref([])
 const audioLayerEditing = ref(false)
 const audioLayerForm = reactive({})
+const screenTextCues = ref([])
+const screenTextEditing = ref(false)
+const screenTextForm = reactive({})
+const characters = ref([])
 const sharedAssetReferences = ref([])
 const materials = ref([])
 const sharedAssetEditing = ref(false)
@@ -431,6 +463,7 @@ const mismatchedScenes = computed(() => scenes.value.filter(s=>s.shot_duration_m
 const shotDurationTotal = computed(() => selectedShots.value.reduce((sum,s)=>sum+Number(s.duration||0),0))
 const shotDurationMismatch = computed(() => selectedShots.value.length>0 && Math.abs(shotDurationTotal.value-Number(selected.value?.duration||0))>0.5)
 const timelineShots = computed(() => { let cursor=0; return selectedShots.value.map(shot=>{ const start=cursor; cursor+=Number(shot.duration||0); return {...shot,_start:start,_end:cursor} }) })
+const selectedScreenTextCues = computed(() => screenTextCues.value.filter(cue => cue.scene_id === selected.value?.id))
 const episodePreflight = computed(() => serverPreflight.value?.checks || [])
 const preflightIssueScenes = computed(() => {
   const ids = new Set(serverPreflight.value?.issue_scene_ids || [])
@@ -528,7 +561,7 @@ async function load() {
     if (selected.value) { durationInput.value = selected.value.duration || 5; sceneModeInput.value = selected.value.scene_mode || ''; await Promise.all([loadCandidates(), loadSelectedWorkbench()]) } else { candidates.value = []; selectedShots.value=[]; videoPromptDetail.value=null }
     const episodeNumbers = epNums()
     epIndex.value = Math.max(0, episodeNumbers.indexOf(activeEpN.value))
-    await Promise.all([loadMerges(), loadAudioLayers(), loadSharedAssets(), loadEpisodeContinuity(), loadSkillPanel()])
+    await Promise.all([loadMerges(), loadAudioLayers(), loadScreenTextCues(), loadSharedAssets(), loadEpisodeContinuity(), loadSkillPanel()])
   } catch (e) {
     toast.error(e.response?.data?.error || '加载剪辑台失败')
   }
@@ -860,6 +893,48 @@ async function loadAudioLayers() {
   try { const { data } = await api.audioLayers(id(), activeEpN.value); audioLayers.value = data || [] }
   catch (e) { toast.error(e.response?.data?.error || '加载音频层失败') }
 }
+async function loadScreenTextCues() {
+  try {
+    const [cueRes, characterRes] = await Promise.all([api.screenTextCues(id(), activeEpN.value), api.characters(id())])
+    screenTextCues.value = cueRes.data || []
+    characters.value = Array.isArray(characterRes.data) ? characterRes.data : (characterRes.data?.characters || [])
+  } catch (e) { toast.error(e.response?.data?.error || '加载功能文字失败') }
+}
+function screenTextKindLabel(kind) { return { character_intro:'人物出场', location:'地点', time_card:'时间', transition:'过场', chapter_title:'章回标题', story_note:'剧情提示', end_card:'本集完', custom:'自定义' }[kind] || kind }
+function cueTimelineStyle(cue) {
+  const duration = Math.max(0.1, Number(selected.value?.duration || 1))
+  const left = Math.max(0, Math.min(100, Number(cue.start_time || 0) / duration * 100))
+  const right = Math.max(left, Math.min(100, Number(cue.end_time || 0) / duration * 100))
+  return { left: `${left}%`, width: `${Math.max(2, right-left)}%` }
+}
+function editScreenTextCue(cue = null) {
+  const duration = Math.max(0.1, Number(selected.value?.duration || 5))
+  Object.assign(screenTextForm, {
+    id: cue?.id || 0, episode_n: activeEpN.value, scene_id: selected.value?.id || null,
+    shot_id: cue?.shot_id || null, character_id: cue?.character_id || null,
+    kind: cue?.kind || 'character_intro', text: cue?.text || '', subtext: cue?.subtext || '',
+    start_time: cue?.start_time ?? 0, end_time: cue?.end_time ?? Math.min(3, duration),
+    writing_mode: cue?.writing_mode || 'vertical-rl', anchor: cue?.anchor || 'top_right',
+    style_code: cue?.style_code || 'xianxia-character-vertical', animation: cue?.animation || 'fade',
+    enabled: cue?.enabled ?? true, order: cue?.order || 0, source: cue?.source || 'manual', review_status: 'approved'
+  })
+  screenTextEditing.value = true
+}
+async function saveScreenTextCue() {
+  const { id: cueId, ...payload } = screenTextForm
+  if (!String(payload.text || '').trim()) { toast.error('功能文字不能为空'); return }
+  try {
+    cueId ? await api.updateScreenTextCue(id(), cueId, payload) : await api.createScreenTextCue(id(), payload)
+    screenTextEditing.value = false
+    toast.success('功能文字已保存')
+    await loadScreenTextCues()
+  } catch (e) { toast.error(e.response?.data?.error || '保存功能文字失败') }
+}
+async function removeScreenTextCue(cue) {
+  if (!window.confirm(`删除功能文字“${cue.text}”？`)) return
+  try { await api.deleteScreenTextCue(id(), cue.id); await loadScreenTextCues() }
+  catch (e) { toast.error(e.response?.data?.error || '删除功能文字失败') }
+}
 function editAudioLayer(layer = null) {
   Object.assign(audioLayerForm, { id: layer?.id || 0, episode_n: activeEpN.value, scene_id: layer?.scene_id || null, kind: layer?.kind || 'bgm', name: layer?.name || '', file: layer?.file || '', description: layer?.description || '', start_time: layer?.start_time ?? 0, end_time: layer?.end_time ?? targetDuration.value, volume: layer?.volume ?? 1, fade_in: layer?.fade_in ?? 0, fade_out: layer?.fade_out ?? 0, loop: !!layer?.loop, muted: !!layer?.muted, status: layer?.status || 'ready' })
   audioLayerEditing.value = true
@@ -995,6 +1070,13 @@ watch(videoPromptDraft, () => videoDraftSafety?.schedule())
 .tl-btn:disabled { opacity: 0.35; cursor: default; }
 .tl-empty-hint { padding: 40px; color: var(--text-tertiary); }
 .shot-timeline-wrap{min-width:100%;margin-top:16px;padding-top:14px;border-top:1px solid var(--border)}.shot-timeline-head{display:flex;justify-content:space-between;margin-bottom:8px;color:var(--text-secondary)}.shot-timeline{display:flex;gap:6px;min-width:700px}.shot-clip{display:grid;min-width:120px;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--surface-secondary);font-size:11px}.shot-clip span,.shot-clip small{color:var(--text-tertiary)}.shot-dialogue{display:grid;gap:3px;margin-top:5px;padding-top:5px;border-top:1px solid var(--border)}.shot-dialogue span{color:var(--text-secondary)}.shot-flags{display:flex;gap:4px;margin-top:5px}.shot-flags i{padding:2px 5px;border-radius:5px;background:var(--accent-soft);color:var(--accent);font-style:normal}.relation-workbench{display:grid;grid-template-columns:1.2fr 1fr;gap:16px}.continuity-compare,.reference-map{padding:16px}.compare-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.compare-grid figure{margin:0}.compare-grid figcaption{margin-bottom:6px;font-size:12px;color:var(--text-secondary)}.compare-grid img,.compare-empty{width:100%;aspect-ratio:16/9;object-fit:contain;border-radius:8px;background:#111}.compare-empty{display:flex;align-items:center;justify-content:center;color:#aaa}.reference-row{display:grid;grid-template-columns:88px 1fr;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--border)}.reference-row img{width:88px;aspect-ratio:16/9;object-fit:cover;border-radius:6px}.reference-row p{margin:4px 0;color:var(--text-secondary);font-size:12px}
+
+.screen-text-track-head{display:flex;align-items:center;justify-content:space-between;margin-top:12px;color:var(--text-secondary)}
+.screen-text-track{position:relative;min-width:700px;height:54px;margin-top:7px;border:1px solid var(--border);border-radius:8px;background:var(--surface-secondary);overflow:hidden}
+.screen-text-cue{position:absolute;top:7px;height:38px;min-width:34px;display:grid;align-content:center;overflow:hidden;padding:3px 7px;border:1px solid var(--accent);border-radius:6px;background:var(--accent-soft);color:var(--text-primary);text-align:left;cursor:pointer}
+.screen-text-cue span{font-size:9px;color:var(--accent)}.screen-text-cue strong{font-size:11px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.screen-text-cue.cue-disabled{opacity:.45}.screen-text-empty{padding:17px;color:var(--text-tertiary);font-size:12px}
+.screen-text-grid{display:grid;grid-template-columns:minmax(260px,.8fr) minmax(420px,1.4fr);gap:16px}.screen-text-list{display:grid;align-content:start;gap:7px;padding:12px}.screen-text-row{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--surface-secondary);color:var(--text-primary);cursor:pointer;text-align:left}.screen-text-row small{color:var(--text-tertiary)}.screen-text-form{grid-template-columns:repeat(2,minmax(0,1fr))}.screen-text-preview{min-height:150px;display:flex;align-items:center;justify-content:center;gap:12px;padding:20px;border:1px dashed var(--border);border-radius:10px;background:linear-gradient(135deg,#202229,#121318);color:#f3dfb4}.screen-text-preview.vertical{writing-mode:vertical-rl;text-orientation:upright;justify-content:flex-start}.screen-text-preview.horizontal{writing-mode:horizontal-tb}.screen-text-preview strong{font-family:serif;font-size:32px;letter-spacing:.16em}.screen-text-preview small{font-size:16px;color:#d1b98b}
+@media (max-width:980px){.screen-text-grid{grid-template-columns:1fr}.screen-text-form{grid-template-columns:1fr}.screen-text-form .wide{grid-column:auto}}
 
 .dur-progress { font-size: 14px; font-weight: 600; margin-left: 8px; }
 .dur-progress.dur-early { color: var(--text-secondary); }
