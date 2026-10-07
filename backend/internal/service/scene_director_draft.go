@@ -17,17 +17,30 @@ import (
 type sceneDirectorDraft struct {
 	Shots []sceneDirectorDraftShot `json:"shots"`
 }
+type dialogueRhythmFragmentReview struct {
+	DialogueID uint   `json:"dialogue_id"`
+	GroupKey   string `json:"group_key"`
+	Character  string `json:"character"`
+	SpeechType string `json:"speech_type"`
+	StartRune  int    `json:"start_rune"`
+	EndRune    int    `json:"end_rune"`
+	LocalStart int    `json:"local_start_rune"`
+	LocalEnd   int    `json:"local_end_rune"`
+	Text       string `json:"text"`
+}
+
 type dialogueRhythmShotReview struct {
-	Shot              int      `json:"shot"`
-	StartTime         float64  `json:"start_time"`
-	EndTime           float64  `json:"end_time"`
-	DialogueStart     int      `json:"dialogue_start_rune"`
-	DialogueEnd       int      `json:"dialogue_end_rune"`
-	NaturalMinimum    float64  `json:"natural_minimum"`
-	Speakers          []string `json:"speakers"`
-	Presentation      string   `json:"presentation"`
-	ContinuesFromPrev bool     `json:"continues_from_previous"`
-	ContinuesToNext   bool     `json:"continues_to_next"`
+	Shot              int                            `json:"shot"`
+	StartTime         float64                        `json:"start_time"`
+	EndTime           float64                        `json:"end_time"`
+	DialogueStart     int                            `json:"dialogue_start_rune"`
+	DialogueEnd       int                            `json:"dialogue_end_rune"`
+	NaturalMinimum    float64                        `json:"natural_minimum"`
+	Speakers          []string                       `json:"speakers"`
+	Presentation      string                         `json:"presentation"`
+	ContinuesFromPrev bool                           `json:"continues_from_previous"`
+	ContinuesToNext   bool                           `json:"continues_to_next"`
+	Fragments         []dialogueRhythmFragmentReview `json:"fragments"`
 }
 
 type sceneDirectorDraftShot struct {
@@ -388,13 +401,22 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 	}
 	type span struct {
 		start, end int
+		groupStart int
+		groupKey   string
+		text       []rune
 		dialogue   models.Dialogue
 	}
-	spans, offset := []span{}, 0
-	for _, dialogue := range dialogues {
-		end := offset + len([]rune(canonicalDialogueText(dialogue.Text)))
-		spans = append(spans, span{offset, end, dialogue})
+	spans, offset, groupNo, groupOffset := []span{}, 0, 0, 0
+	for i, dialogue := range dialogues {
+		text := []rune(canonicalDialogueText(dialogue.Text))
+		if i == 0 || !dialogueContinuesAcrossCut(dialogues[i-1], dialogue) {
+			groupNo++
+			groupOffset = 0
+		}
+		end := offset + len(text)
+		spans = append(spans, span{start: offset, end: end, groupStart: groupOffset, groupKey: fmt.Sprintf("dialogue-group:%d", groupNo), text: text, dialogue: dialogue})
 		offset = end
+		groupOffset += len(text)
 	}
 	reviews := make([]dialogueRhythmShotReview, 0, len(draft.Shots))
 	timeCursor, dialogueCursor := 0.0, 0
@@ -402,16 +424,25 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 		length := len([]rune(canonicalDialogueText(shot.Dialogue)))
 		start, end := dialogueCursor, dialogueCursor+length
 		speakers, seen := []string{}, map[string]bool{}
+		fragments := []dialogueRhythmFragmentReview{}
 		continuesFrom, continuesTo := false, false
 		for _, item := range spans {
 			if end <= item.start || start >= item.end {
 				continue
 			}
+			from := max(start, item.start) - item.start
+			to := min(end, item.end) - item.start
 			name := strings.TrimSpace(item.dialogue.Character)
 			if name != "" && !seen[name] {
 				speakers = append(speakers, name)
 				seen[name] = true
 			}
+			speechType, _ := normalizeScriptSpeech(item.dialogue.SpeechType, item.dialogue.Character)
+			fragments = append(fragments, dialogueRhythmFragmentReview{
+				DialogueID: item.dialogue.ID, GroupKey: item.groupKey, Character: name,
+				SpeechType: speechType, StartRune: item.groupStart + from,
+				EndRune: item.groupStart + to, LocalStart: from, LocalEnd: to, Text: string(item.text[from:to]),
+			})
 			if start > item.start {
 				continuesFrom = true
 			}
@@ -433,7 +464,7 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 		if length > 0 {
 			minimum = math.Max(3, math.Ceil((dialogueTextDuration(shot.Dialogue)+0.6)*2)/2)
 		}
-		reviews = append(reviews, dialogueRhythmShotReview{Shot: i + 1, StartTime: timeCursor, EndTime: timeCursor + shot.Duration, DialogueStart: start, DialogueEnd: end, NaturalMinimum: minimum, Speakers: speakers, Presentation: presentation, ContinuesFromPrev: continuesFrom, ContinuesToNext: continuesTo})
+		reviews = append(reviews, dialogueRhythmShotReview{Shot: i + 1, StartTime: timeCursor, EndTime: timeCursor + shot.Duration, DialogueStart: start, DialogueEnd: end, NaturalMinimum: minimum, Speakers: speakers, Presentation: presentation, ContinuesFromPrev: continuesFrom, ContinuesToNext: continuesTo, Fragments: fragments})
 		timeCursor += shot.Duration
 		dialogueCursor = end
 	}

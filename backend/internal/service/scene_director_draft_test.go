@@ -124,7 +124,7 @@ func TestBuildDialogueRhythmReviewUsesAuthoritativeRangesAndTimeline(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	dialogues := []models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "相信姐姐，姐姐不会让你去。"}}
+	dialogues := []models.Dialogue{{ID: 41, Character: "上官若琳", SpeechType: "dialogue", Text: "相信姐姐，姐姐不会让你去。"}}
 	review := buildDialogueRhythmReview(draft, dialogues)
 	if len(review) != 3 {
 		t.Fatalf("review=%+v", review)
@@ -132,10 +132,16 @@ func TestBuildDialogueRhythmReviewUsesAuthoritativeRangesAndTimeline(t *testing.
 	if review[0].StartTime != 0 || review[0].EndTime != 4 || review[0].DialogueStart != 0 || !review[0].ContinuesToNext || review[0].Presentation != "visible_speaker_lipsync" {
 		t.Fatalf("first=%+v", review[0])
 	}
+	if len(review[0].Fragments) != 1 || review[0].Fragments[0].DialogueID != 41 || review[0].Fragments[0].GroupKey != "dialogue-group:1" || review[0].Fragments[0].LocalStart != 0 || review[0].Fragments[0].Text != "相信姐姐，" {
+		t.Fatalf("first fragments=%+v", review[0].Fragments)
+	}
 	if review[1].StartTime != 4 || review[1].EndTime != 10 || !review[1].ContinuesFromPrev || review[1].Presentation != "listener_reaction_carryover" || len(review[1].Speakers) != 1 || review[1].Speakers[0] != "上官若琳" {
 		t.Fatalf("second=%+v", review[1])
 	}
-	if review[2].StartTime != 10 || review[2].EndTime != 13 || review[2].Presentation != "silent_visual" || review[2].DialogueStart != review[2].DialogueEnd {
+	if len(review[1].Fragments) != 1 || review[1].Fragments[0].DialogueID != 41 || review[1].Fragments[0].LocalStart != len([]rune("相信姐姐，")) || review[1].Fragments[0].Text != "姐姐不会让你去。" {
+		t.Fatalf("second fragments=%+v", review[1].Fragments)
+	}
+	if review[2].StartTime != 10 || review[2].EndTime != 13 || review[2].Presentation != "silent_visual" || review[2].DialogueStart != review[2].DialogueEnd || len(review[2].Fragments) != 0 {
 		t.Fatalf("third=%+v", review[2])
 	}
 }
