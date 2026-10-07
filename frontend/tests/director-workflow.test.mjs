@@ -67,6 +67,8 @@ test('AI导演支持可审核的长对白Native拆镜', () => {
   assert.match(source, /对白区间回读校验失败/)
   assert.match(source, /directorDialogueSnapshot/)
   assert.match(source, /data\.dialogue_snapshot/)
+  assert.match(source, /abandonDirectorDraft/)
+  assert.match(source, /directorDialogueSnapshot\.value = ''/)
   assert.match(source, /replaceSceneShots\(props\.projectId, props\.sceneId, payload, directorDialogueSnapshot\.value\)/)
   const apiSource = readFileSync(new URL('../src/api/index.js', import.meta.url), 'utf8')
   assert.match(apiSource, /dialogue_snapshot: dialogueSnapshot/)
