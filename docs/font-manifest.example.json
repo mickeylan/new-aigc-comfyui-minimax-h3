@@ -1,0 +1,19 @@
+[
+  {
+    "code": "noto-sans-sc",
+    "display_name": "Noto Sans SC",
+    "family": "Noto Sans SC",
+    "file": "NotoSansSC-VF.ttf",
+    "sha256": "REPLACE_WITH_EXACT_FILE_SHA256",
+    "version": "PIN_EXACT_VERSION",
+    "license_id": "OFL-1.1",
+    "license_file": "licenses/OFL-1.1.txt",
+    "source_url": "https://github.com/notofonts/noto-cjk",
+    "commercial_use": true,
+    "redistribution": true,
+    "embedding": true,
+    "supports_chinese": true,
+    "supports_vertical": true,
+    "enabled": true
+  }
+]

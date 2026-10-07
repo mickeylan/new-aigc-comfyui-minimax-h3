@@ -53,6 +53,7 @@ type Service struct {
 	Continuity                *ContinuityService               // 视频分镜连续性服务
 	AudioLayers               *AudioLayerService               // 声景、音效与背景音乐层
 	ScreenTexts               *ScreenTextService               // 非对白功能文字层
+	Fonts                     *FontRegistry                    // 发行字体许可证与哈希白名单
 	SharedAssetReferences     *SharedAssetReferenceService     // 显式共享素材引用
 	AssetVariants             *AssetVariantService             // 视觉资产生成/上传变体
 	AssetReconciliation       *AssetReconciliationService      // 项目资产名称对账
@@ -96,6 +97,7 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	projects.continuity = continuity
 	audioLayers := NewAudioLayerService(db)
 	screenTexts := NewScreenTextService(db)
+	fonts := NewFontRegistry(cfg.Storage.DataDir)
 	sharedAssetReferences := NewSharedAssetReferenceService(db, upload)
 	characterMotionReferences := NewCharacterMotionReferenceService(db, upload)
 	assetVariants := NewAssetVariantService(db)
@@ -123,7 +125,7 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 		Novel: novel, NovelAnalysis: novelAnalysis, Adaptations: adaptations, BatchPlanning: batchPlanning,
 		TextProviderFact: textProviderFact, CharacterProfiles: charProfiles, CharacterLooks: charLooks,
 		Skills: skills, Shots: shots, PromptWorkshop: promptWorkshop, QwenImagePromptPrograms: qwenImagePromptPrograms, StylePresets: stylePresets,
-		Continuity: continuity, AudioLayers: audioLayers, ScreenTexts: screenTexts, SharedAssetReferences: sharedAssetReferences,
+		Continuity: continuity, AudioLayers: audioLayers, ScreenTexts: screenTexts, Fonts: fonts, SharedAssetReferences: sharedAssetReferences,
 		CharacterMotionReferences: characterMotionReferences,
 		AssetVariants:             assetVariants, AssetReconciliation: assetReconciliation, ScriptRevisions: scriptRevisions, GeneratedMedia: generatedMedia,
 	}

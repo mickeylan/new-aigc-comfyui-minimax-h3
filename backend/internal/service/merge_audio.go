@@ -301,13 +301,53 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 	filters := buildNormalizedVideoGraph(len(scenes), firstWidth, firstHeight)
 	outName := fmt.Sprintf("merged/%s_merged_%d.mp4", projectFileTag(p), mt.ID)
 	outAbs := s.mediaPath("output_workers", "gpu0", filepath.FromSlash(outName))
+	textFilters := make([]string, 0, 2)
 	if subtitles {
 		srtAbs := s.mediaPath("output_workers", "gpu0", filepath.FromSlash(strings.TrimSuffix(outName, ".mp4")+".srt"))
 		if err := s.writeMergeSRT(p, mt, srtAbs, scenes); err != nil {
 			fail(err)
 			return
 		}
-		filters[1] = fmt.Sprintf("[vc]fps=24,subtitles=filename=%s:force_style=FontName\\=Noto Sans CJK SC\\,FontSize\\=14\\,MarginV\\=28[v]", escapeFilterPath(srtAbs))
+		textFilters = append(textFilters, fmt.Sprintf("subtitles=filename=%s:force_style=FontName\\=Noto Sans SC\\,FontSize\\=28\\,MarginV\\=56", escapeFilterPath(srtAbs)))
+
+		var cues []models.ScreenTextCue
+		selectedIDs := sceneIDsFromStrings(strings.Split(mt.SceneOrder, ","))
+		if err := s.db.Where("project_id = ? AND episode_n = ? AND enabled = ? AND review_status = ? AND (scene_id IS NULL OR scene_id IN ?)", p.ID, mt.EpisodeN, true, "approved", selectedIDs).Order("start_time, `order`, id").Find(&cues).Error; err != nil {
+			fail(err)
+			return
+		}
+		if len(cues) > 0 {
+			registry := NewFontRegistry(s.cfg.Storage.DataDir)
+			font, err := registry.Approved("noto-sans-sc")
+			if err != nil {
+				fail(fmt.Errorf("功能文字正式导出被阻止: %w", err))
+				return
+			}
+			if _, err := registry.FilePath(font); err != nil {
+				fail(err)
+				return
+			}
+			assData, count := buildScreenTextASS(cues, scenes, videoDurs, firstWidth, firstHeight, font.Family)
+			if count > 0 {
+				assAbs := s.mediaPath("output_workers", "gpu0", filepath.FromSlash(strings.TrimSuffix(outName, ".mp4")+".screen.ass"))
+				if err := s.remote.WriteFile(assAbs, assData, 0o644); err != nil {
+					fail(err)
+					return
+				}
+				textFilters = append(textFilters, fmt.Sprintf("subtitles=filename=%s:fontsdir=%s", escapeFilterPath(assAbs), escapeFilterPath(registry.Root())))
+				log.Printf("[audio merge %d] 功能文字 ASS 已生成: %s (%d 条)", mt.ID, assAbs, count)
+			}
+		}
+	}
+	if len(textFilters) > 0 {
+		filters[len(filters)-1] = "[vc]fps=24," + textFilters[0] + "[vtext0]"
+		for i := 1; i < len(textFilters); i++ {
+			inputLabel := fmt.Sprintf("vtext%d", i-1)
+			outputLabel := fmt.Sprintf("vtext%d", i)
+			filters = append(filters, fmt.Sprintf("[%s]%s[%s]", inputLabel, textFilters[i], outputLabel))
+		}
+		lastLabel := fmt.Sprintf("vtext%d", len(textFilters)-1)
+		filters = append(filters, fmt.Sprintf("[%s]null[v]", lastLabel))
 	}
 	audioGraph := buildMergeAudioGraph(len(scenes), dub && nativeCount == len(scenes), totalDuration, mt.NativeVolume, extras)
 	if audioGraph.Filters != "" {

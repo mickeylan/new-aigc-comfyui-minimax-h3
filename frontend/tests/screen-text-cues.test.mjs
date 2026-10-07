@@ -22,6 +22,8 @@ test('功能文字轨支持中文横排和古装竖排且不使用Canvas', () =>
   assert.match(editor, /writing-mode:vertical-rl/)
   assert.match(editor, /selectedScreenTextCues/)
   assert.doesNotMatch(editor, /<canvas/i)
+  assert.match(api, /approvedFonts:/)
+  assert.match(editor, /许可证与SHA-256校验/)
 })
 
 test('功能文字首版覆盖人物地点时间过场和本集完', () => {

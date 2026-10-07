@@ -6746,18 +6746,30 @@ type mergeAudioLayerFingerprint struct {
 	Status                     string
 }
 
+type mergeScreenTextCueFingerprint struct {
+	ID, ProjectID                  uint
+	EpisodeN, Order                int
+	SceneID, ShotID, CharacterID   *uint
+	Kind, Text, Subtext            string
+	StartTime, EndTime             float64
+	WritingMode, Anchor, StyleCode string
+	Animation, ReviewStatus        string
+	Enabled                        bool
+}
+
 type mergeInputSnapshot struct {
-	Version           int                          `json:"version"`
-	EpisodeGeneration uint                         `json:"episode_generation"`
-	Videos            []sceneVideoFingerprint      `json:"videos"`
-	Dialogues         []mergeDialogueFingerprint   `json:"dialogues"`
-	AudioLayers       []mergeAudioLayerFingerprint `json:"audio_layers"`
-	Dub               bool                         `json:"dub"`
-	Subtitles         bool                         `json:"subtitles"`
-	NativeVolume      float64                      `json:"native_volume"`
-	DialogueVolume    float64                      `json:"dialogue_volume"`
-	BGMVolume         float64                      `json:"bgm_volume"`
-	DialogueMix       bool                         `json:"dialogue_mix"`
+	Version           int                             `json:"version"`
+	EpisodeGeneration uint                            `json:"episode_generation"`
+	Videos            []sceneVideoFingerprint         `json:"videos"`
+	Dialogues         []mergeDialogueFingerprint      `json:"dialogues"`
+	AudioLayers       []mergeAudioLayerFingerprint    `json:"audio_layers"`
+	ScreenTextCues    []mergeScreenTextCueFingerprint `json:"screen_text_cues"`
+	Dub               bool                            `json:"dub"`
+	Subtitles         bool                            `json:"subtitles"`
+	NativeVolume      float64                         `json:"native_volume"`
+	DialogueVolume    float64                         `json:"dialogue_volume"`
+	BGMVolume         float64                         `json:"bgm_volume"`
+	DialogueMix       bool                            `json:"dialogue_mix"`
 }
 
 func fingerprintSceneVideo(scene models.Scene) (sceneVideoFingerprint, error) {
@@ -6890,7 +6902,7 @@ func (s *ProjectService) validateMergeInputs(tx *gorm.DB, mt *models.MergeTask) 
 		return nil, err
 	}
 	if mt.InputSnapshot == "" || !bytes.Equal([]byte(mt.InputSnapshot), actualSnapshot) {
-		return nil, fmt.Errorf("合并任务已过期：对白、音频层、字幕或合并设置已变化")
+		return nil, fmt.Errorf("合并任务已过期：对白、音频层、功能文字、字幕或合并设置已变化")
 	}
 	return scenes, nil
 }
@@ -7203,13 +7215,21 @@ func (s *ProjectService) writeMergeSRT(p *models.Project, mt *models.MergeTask, 
 			global += dur
 			continue
 		}
-		seg := dur / float64(len(dubs))
+		valid := make([]models.Dialogue, 0, len(dubs))
 		for _, d := range dubs {
-			if strings.TrimSpace(d.Text) == "" {
-				continue
+			if strings.TrimSpace(d.Text) != "" {
+				valid = append(valid, d)
 			}
+		}
+		if len(valid) == 0 {
+			global += dur
+			continue
+		}
+		seg := dur / float64(len(valid))
+		sceneStart := global
+		for lineIndex, d := range valid {
 			idx++
-			start := global + seg
+			start := sceneStart + float64(lineIndex)*seg
 			sb.WriteString(fmt.Sprintf("%d\n%s --> %s\n", idx,
 				formatSRTTime(start), formatSRTTime(start+seg)))
 			line := strings.TrimSpace(d.Text)
@@ -7217,8 +7237,8 @@ func (s *ProjectService) writeMergeSRT(p *models.Project, mt *models.MergeTask, 
 				line = d.Character + "：" + line
 			}
 			sb.WriteString(line + "\n\n")
-			global = start + seg
 		}
+		global += dur
 	}
 	data := []byte{0xEF, 0xBB, 0xBF}
 	data = append(data, []byte(sb.String())...)

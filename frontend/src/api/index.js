@@ -151,6 +151,7 @@ export const api = {
   createScreenTextCue: (id, data) => http.post(`/projects/${id}/screen-text-cues`, data),
   updateScreenTextCue: (id, cid, data) => http.put(`/projects/${id}/screen-text-cues/${cid}`, data),
   deleteScreenTextCue: (id, cid) => http.delete(`/projects/${id}/screen-text-cues/${cid}`),
+  approvedFonts: () => http.get('/fonts'),
   // 角色资产
   characters: (id) => http.get(`/projects/${id}/characters`),
   characterHistory: (id, characterId) => http.get(`/projects/${id}/characters/history`, { params: characterId ? { character_id: characterId } : {} }),

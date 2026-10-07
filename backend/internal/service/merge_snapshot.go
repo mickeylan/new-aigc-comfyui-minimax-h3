@@ -10,10 +10,10 @@ import (
 // captureMergeInputSnapshot records every database input that can affect the rendered merge.
 func (s *ProjectService) captureMergeInputSnapshot(tx *gorm.DB, projectID uint, episodeN int, generation uint, videos []sceneVideoFingerprint, sceneIDs []uint, dub, subtitles bool, audio MergeAudioOptions) ([]byte, error) {
 	snapshot := mergeInputSnapshot{
-		Version: 1, EpisodeGeneration: generation, Videos: videos,
+		Version: 2, EpisodeGeneration: generation, Videos: videos,
 		Dub: dub, Subtitles: subtitles, NativeVolume: audio.NativeVolume,
 		DialogueVolume: audio.DialogueVolume, BGMVolume: audio.BGMVolume, DialogueMix: audio.DialogueMix,
-		Dialogues: []mergeDialogueFingerprint{}, AudioLayers: []mergeAudioLayerFingerprint{},
+		Dialogues: []mergeDialogueFingerprint{}, AudioLayers: []mergeAudioLayerFingerprint{}, ScreenTextCues: []mergeScreenTextCueFingerprint{},
 	}
 	if subtitles || audio.DialogueMix {
 		var dialogues []models.Dialogue
@@ -40,6 +40,25 @@ func (s *ProjectService) captureMergeInputSnapshot(tx *gorm.DB, projectID uint, 
 			Volume: layer.Volume, FadeIn: layer.FadeIn, FadeOut: layer.FadeOut, Loop: layer.Loop,
 			Muted: layer.Muted, Stale: layer.Stale, Status: layer.Status,
 		})
+	}
+	if tx.Migrator().HasTable(&models.ScreenTextCue{}) {
+		var cues []models.ScreenTextCue
+		query := tx.Where("project_id = ? AND episode_n = ? AND enabled = ? AND review_status = ?", projectID, episodeN, true, "approved")
+		if len(sceneIDs) > 0 {
+			query = query.Where("scene_id IS NULL OR scene_id IN ?", sceneIDs)
+		}
+		if err := query.Order("start_time, `order`, id").Find(&cues).Error; err != nil {
+			return nil, err
+		}
+		for _, cue := range cues {
+			snapshot.ScreenTextCues = append(snapshot.ScreenTextCues, mergeScreenTextCueFingerprint{
+				ID: cue.ID, ProjectID: cue.ProjectID, EpisodeN: cue.EpisodeN, SceneID: cue.SceneID,
+				ShotID: cue.ShotID, CharacterID: cue.CharacterID, Kind: cue.Kind, Text: cue.Text,
+				Subtext: cue.Subtext, StartTime: cue.StartTime, EndTime: cue.EndTime,
+				WritingMode: cue.WritingMode, Anchor: cue.Anchor, StyleCode: cue.StyleCode,
+				Animation: cue.Animation, Enabled: cue.Enabled, Order: cue.Order, ReviewStatus: cue.ReviewStatus,
+			})
+		}
 	}
 	return json.Marshal(snapshot)
 }

@@ -43,6 +43,52 @@ func TestMergeUsesLatestGenerationPerEpisodeAndAllowsParallelEpisodes(t *testing
 	}
 }
 
+func TestMergeSnapshotRejectsScreenTextMutation(t *testing.T) {
+	db := safetyDB(t, &models.MergeTask{}, &models.ScreenTextCue{})
+	project := models.Project{Title: "series", Generation: 1}
+	db.Create(&project)
+	a := readyMergeScene(project.ID, 1, 1, 1, "a", "a.mp4")
+	b := readyMergeScene(project.ID, 1, 2, 1, "b", "b.mp4")
+	db.Create(&a)
+	db.Create(&b)
+	cue := models.ScreenTextCue{ProjectID: project.ID, EpisodeN: 1, SceneID: &a.ID, Kind: "location", Text: "玉霄宫", StartTime: 0, EndTime: 2, WritingMode: "horizontal-ltr", Anchor: "top_right", Enabled: true, ReviewStatus: "approved"}
+	db.Create(&cue)
+	svc := &ProjectService{db: db}
+	merge, _, err := svc.createMergeTaskRecord(&project, []uint{a.ID, b.ID}, false, false, MergeAudioOptions{NativeVolume: 1, DialogueVolume: 1, BGMVolume: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.validateMergeInputs(db, merge); err != nil {
+		t.Fatalf("fresh snapshot rejected: %v", err)
+	}
+	db.Model(&cue).Update("text", "太运宗")
+	if _, err := svc.validateMergeInputs(db, merge); err == nil {
+		t.Fatal("screen text mutation did not invalidate merge snapshot")
+	}
+}
+
+func TestMergeSnapshotExcludesUnselectedOrUnapprovedScreenText(t *testing.T) {
+	db := safetyDB(t, &models.MergeTask{}, &models.ScreenTextCue{})
+	project := models.Project{Title: "series", Generation: 1}
+	db.Create(&project)
+	a := readyMergeScene(project.ID, 1, 1, 1, "a", "a.mp4")
+	b := readyMergeScene(project.ID, 1, 2, 1, "b", "b.mp4")
+	other := readyMergeScene(project.ID, 1, 3, 1, "c", "c.mp4")
+	db.Create(&a)
+	db.Create(&b)
+	db.Create(&other)
+	db.Create(&models.ScreenTextCue{ProjectID: project.ID, EpisodeN: 1, SceneID: &other.ID, Kind: "location", Text: "未选场景", StartTime: 0, EndTime: 1, Enabled: true, ReviewStatus: "approved"})
+	db.Create(&models.ScreenTextCue{ProjectID: project.ID, EpisodeN: 1, SceneID: &a.ID, Kind: "location", Text: "未审核", StartTime: 0, EndTime: 1, Enabled: true, ReviewStatus: "draft"})
+	svc := &ProjectService{db: db}
+	merge, _, err := svc.createMergeTaskRecord(&project, []uint{a.ID, b.ID}, false, false, MergeAudioOptions{NativeVolume: 1, DialogueVolume: 1, BGMVolume: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.validateMergeInputs(db, merge); err != nil {
+		t.Fatalf("excluded cues changed snapshot: %v", err)
+	}
+}
+
 func TestMergeSnapshotRejectsDialogueMutation(t *testing.T) {
 	db := safetyDB(t, &models.MergeTask{})
 	project := models.Project{Title: "series", Generation: 1}
