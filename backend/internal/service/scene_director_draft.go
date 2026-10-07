@@ -38,6 +38,8 @@ type dialogueRhythmShotReview struct {
 	NaturalMinimum    float64                        `json:"natural_minimum"`
 	Ready             bool                           `json:"ready"`
 	BlockingIssues    []string                       `json:"blocking_issues"`
+	EntryBoundary     string                         `json:"entry_boundary"`
+	ExitBoundary      string                         `json:"exit_boundary"`
 	Speakers          []string                       `json:"speakers"`
 	Presentation      string                         `json:"presentation"`
 	ContinuesFromPrev bool                           `json:"continues_from_previous"`
@@ -504,7 +506,48 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 		timeCursor += shot.Duration
 		dialogueCursor = end
 	}
+	for i := range reviews {
+		review := &reviews[i]
+		if len(review.Fragments) == 0 {
+			review.EntryBoundary, review.ExitBoundary = "静默镜头", "静默镜头"
+			continue
+		}
+		if i == 0 {
+			review.EntryBoundary = "场景开始"
+		} else {
+			review.EntryBoundary = dialogueBoundaryReason(reviews[i-1].Fragments, review.Fragments, review.ContinuesFromPrev)
+		}
+		if i == len(reviews)-1 {
+			review.ExitBoundary = "场景结束"
+		} else {
+			review.ExitBoundary = dialogueBoundaryReason(review.Fragments, reviews[i+1].Fragments, review.ContinuesToNext)
+		}
+	}
 	return reviews
+}
+
+func dialogueBoundaryReason(before, after []dialogueRhythmFragmentReview, sameDialogueContinuation bool) string {
+	if sameDialogueContinuation {
+		return "同句跨镜续接"
+	}
+	if len(before) == 0 || len(after) == 0 {
+		return "静默边界"
+	}
+	left, right := before[len(before)-1], after[0]
+	if left.SpeechType != right.SpeechType {
+		return "语音类型切换"
+	}
+	if strings.TrimSpace(left.Character) != strings.TrimSpace(right.Character) {
+		return "说话人切换"
+	}
+	if left.DialogueID != right.DialogueID {
+		return "Dialogue边界"
+	}
+	text := []rune(strings.TrimSpace(left.Text))
+	if len(text) > 0 && strings.ContainsRune("，,、；;：:。.!！?？…", text[len(text)-1]) {
+		return "标点停顿"
+	}
+	return "Dialogue边界"
 }
 
 func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {

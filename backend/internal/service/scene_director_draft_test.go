@@ -129,19 +129,19 @@ func TestBuildDialogueRhythmReviewUsesAuthoritativeRangesAndTimeline(t *testing.
 	if len(review) != 3 {
 		t.Fatalf("review=%+v", review)
 	}
-	if review[0].StartTime != 0 || review[0].EndTime != 4 || review[0].DialogueStart != 0 || !review[0].ContinuesToNext || review[0].Presentation != "visible_speaker_lipsync" {
+	if review[0].StartTime != 0 || review[0].EndTime != 4 || review[0].DialogueStart != 0 || !review[0].ContinuesToNext || review[0].Presentation != "visible_speaker_lipsync" || review[0].EntryBoundary != "场景开始" || review[0].ExitBoundary != "同句跨镜续接" {
 		t.Fatalf("first=%+v", review[0])
 	}
 	if len(review[0].Fragments) != 1 || review[0].Fragments[0].DialogueID != 41 || review[0].Fragments[0].GroupKey != "dialogue-group:1" || review[0].Fragments[0].LocalStart != 0 || review[0].Fragments[0].Text != "相信姐姐，" {
 		t.Fatalf("first fragments=%+v", review[0].Fragments)
 	}
-	if review[1].StartTime != 4 || review[1].EndTime != 10 || !review[1].ContinuesFromPrev || review[1].Presentation != "listener_reaction_carryover" || len(review[1].Speakers) != 1 || review[1].Speakers[0] != "上官若琳" {
+	if review[1].StartTime != 4 || review[1].EndTime != 10 || !review[1].ContinuesFromPrev || review[1].Presentation != "listener_reaction_carryover" || len(review[1].Speakers) != 1 || review[1].Speakers[0] != "上官若琳" || review[1].EntryBoundary != "同句跨镜续接" || review[1].ExitBoundary != "静默边界" {
 		t.Fatalf("second=%+v", review[1])
 	}
 	if len(review[1].Fragments) != 1 || review[1].Fragments[0].DialogueID != 41 || review[1].Fragments[0].LocalStart != len([]rune("相信姐姐，")) || review[1].Fragments[0].Text != "姐姐不会让你去。" {
 		t.Fatalf("second fragments=%+v", review[1].Fragments)
 	}
-	if review[2].StartTime != 10 || review[2].EndTime != 13 || review[2].Presentation != "silent_visual" || review[2].DialogueStart != review[2].DialogueEnd || len(review[2].Fragments) != 0 {
+	if review[2].StartTime != 10 || review[2].EndTime != 13 || review[2].Presentation != "silent_visual" || review[2].DialogueStart != review[2].DialogueEnd || len(review[2].Fragments) != 0 || review[2].EntryBoundary != "静默镜头" || review[2].ExitBoundary != "静默镜头" {
 		t.Fatalf("third=%+v", review[2])
 	}
 }
@@ -170,6 +170,32 @@ func TestDialogueRhythmReviewUsesAuthoritativeSpeechPresentation(t *testing.T) {
 	mixed := buildDialogueRhythmReview(&sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 5, Dialogue: "先说再叙", ShotType: "双人中景"}}}, []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "先说"}, {ID: 2, Character: "旁白", SpeechType: "narration", Text: "再叙"}})
 	if len(mixed) != 1 || mixed[0].Presentation != "mixed_authoritative_speech" {
 		t.Fatalf("mixed=%+v", mixed)
+	}
+}
+
+func TestDialogueBoundaryReasonUsesAuthoritativeSemantics(t *testing.T) {
+	fragment := func(id uint, character, speechType, text string) []dialogueRhythmFragmentReview {
+		return []dialogueRhythmFragmentReview{{DialogueID: id, Character: character, SpeechType: speechType, Text: text}}
+	}
+	cases := []struct {
+		name          string
+		before, after []dialogueRhythmFragmentReview
+		continuation  bool
+		want          string
+	}{
+		{"continuation", fragment(1, "甲", "dialogue", "继续"), fragment(1, "甲", "dialogue", "说"), true, "同句跨镜续接"},
+		{"silent", nil, fragment(1, "甲", "dialogue", "说"), false, "静默边界"},
+		{"speech type", fragment(1, "甲", "dialogue", "说完。"), fragment(2, "旁白", "narration", "叙述"), false, "语音类型切换"},
+		{"speaker", fragment(1, "甲", "dialogue", "说完。"), fragment(2, "乙", "dialogue", "回答"), false, "说话人切换"},
+		{"dialogue", fragment(1, "甲", "dialogue", "说完。"), fragment(2, "甲", "dialogue", "再说"), false, "Dialogue边界"},
+		{"punctuation", fragment(1, "甲", "dialogue", "停顿，"), fragment(1, "甲", "dialogue", "继续"), false, "标点停顿"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := dialogueBoundaryReason(tc.before, tc.after, tc.continuation); got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		})
 	}
 }
 
