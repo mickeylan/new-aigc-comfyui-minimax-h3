@@ -119,6 +119,27 @@ func TestValidateDialogueRhythmDraftAllowsAttributedCrossCutListenerReaction(t *
 	}
 }
 
+func TestBuildDialogueRhythmReviewUsesAuthoritativeRangesAndTimeline(t *testing.T) {
+	draft, err := parseSceneDirectorDraft(`{"shots":[{"act_type":"setup","shot_type":"说话人近景","camera_angle":"平视","camera_movement":"固定","duration":4,"description":"上官若琳开口","dialogue":"相信姐姐，","emotion":"坚定","transition_type":"cut","transition_note":"","start_state":"开口","end_state":"继续说","prompt_subject":"上官若琳近景","prompt_action":"同步口型","prompt_camera":"近景","prompt_lighting":"柔光","prompt_style":"真人写实","negative_prompt":"","checks":[]},{"act_type":"rising","shot_type":"听者反应","camera_angle":"平视","camera_movement":"固定","duration":6,"description":"上官若琳声音跨切延续，上官若彤闭口倾听","dialogue":"姐姐不会让你去。","emotion":"担忧","transition_type":"cut","transition_note":"","start_state":"倾听","end_state":"神情微变","prompt_subject":"上官若彤单人近景","prompt_action":"双唇闭合，上官若琳声音跨切延续","prompt_camera":"反应近景","prompt_lighting":"柔光","prompt_style":"真人写实","negative_prompt":"","checks":[]},{"act_type":"resolution","shot_type":"反应近景","camera_angle":"平视","camera_movement":"固定","duration":3,"description":"上官若彤沉默反应","dialogue":"","emotion":"释然","transition_type":"cut","transition_note":"","start_state":"神情微变","end_state":"轻轻点头","prompt_subject":"上官若彤近景","prompt_action":"闭口点头","prompt_camera":"反应近景","prompt_lighting":"柔光","prompt_style":"真人写实","negative_prompt":"","checks":[]}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialogues := []models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "相信姐姐，姐姐不会让你去。"}}
+	review := buildDialogueRhythmReview(draft, dialogues)
+	if len(review) != 3 {
+		t.Fatalf("review=%+v", review)
+	}
+	if review[0].StartTime != 0 || review[0].EndTime != 4 || review[0].DialogueStart != 0 || !review[0].ContinuesToNext || review[0].Presentation != "visible_speaker_lipsync" {
+		t.Fatalf("first=%+v", review[0])
+	}
+	if review[1].StartTime != 4 || review[1].EndTime != 10 || !review[1].ContinuesFromPrev || review[1].Presentation != "listener_reaction_carryover" || len(review[1].Speakers) != 1 || review[1].Speakers[0] != "上官若琳" {
+		t.Fatalf("second=%+v", review[1])
+	}
+	if review[2].StartTime != 10 || review[2].EndTime != 13 || review[2].Presentation != "silent_visual" || review[2].DialogueStart != review[2].DialogueEnd {
+		t.Fatalf("third=%+v", review[2])
+	}
+}
+
 func TestValidateDialogueRhythmDraftPreservesDialogueExactly(t *testing.T) {
 	draft, err := parseSceneDirectorDraft(`{"shots":[{"act_type":"setup","shot_type":"说话人近景","camera_angle":"平视","camera_movement":"固定","duration":8,"description":"若彤开口","dialogue":"姐姐，自从你跟太运宗使者比试之后，","emotion":"担忧","transition_type":"cut","transition_note":"切反应","start_state":"若彤停下","end_state":"若彤继续说","prompt_subject":"若彤面部清晰","prompt_action":"担忧地说话","prompt_camera":"中近景","prompt_lighting":"落日余晖","prompt_style":"真人写实","negative_prompt":"","checks":[]},{"act_type":"rising","shot_type":"听者反应","camera_angle":"平视","camera_movement":"固定","duration":9,"description":"若琳聆听，若彤画外音继续","dialogue":"这十年你都没有怎么好好闭关修炼过。","emotion":"忧虑","transition_type":"cut","transition_note":"","start_state":"若琳安静聆听","end_state":"若琳神情微变","prompt_subject":"若琳反应清晰","prompt_action":"安静聆听","prompt_camera":"反应特写","prompt_lighting":"落日余晖","prompt_style":"真人写实","negative_prompt":"","checks":[]}]}`)
 	if err != nil {

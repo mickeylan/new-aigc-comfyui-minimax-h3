@@ -17,6 +17,19 @@ import (
 type sceneDirectorDraft struct {
 	Shots []sceneDirectorDraftShot `json:"shots"`
 }
+type dialogueRhythmShotReview struct {
+	Shot              int      `json:"shot"`
+	StartTime         float64  `json:"start_time"`
+	EndTime           float64  `json:"end_time"`
+	DialogueStart     int      `json:"dialogue_start_rune"`
+	DialogueEnd       int      `json:"dialogue_end_rune"`
+	NaturalMinimum    float64  `json:"natural_minimum"`
+	Speakers          []string `json:"speakers"`
+	Presentation      string   `json:"presentation"`
+	ContinuesFromPrev bool     `json:"continues_from_previous"`
+	ContinuesToNext   bool     `json:"continues_to_next"`
+}
+
 type sceneDirectorDraftShot struct {
 	ActType        models.ShotActType               `json:"act_type"`
 	ShotType       string                           `json:"shot_type"`
@@ -369,6 +382,64 @@ func ordinaryDialogueCarryoverAllowed(shot sceneDirectorDraftShot, speaker strin
 	return carryover && closedLips
 }
 
+func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dialogue) []dialogueRhythmShotReview {
+	if draft == nil {
+		return []dialogueRhythmShotReview{}
+	}
+	type span struct {
+		start, end int
+		dialogue   models.Dialogue
+	}
+	spans, offset := []span{}, 0
+	for _, dialogue := range dialogues {
+		end := offset + len([]rune(canonicalDialogueText(dialogue.Text)))
+		spans = append(spans, span{offset, end, dialogue})
+		offset = end
+	}
+	reviews := make([]dialogueRhythmShotReview, 0, len(draft.Shots))
+	timeCursor, dialogueCursor := 0.0, 0
+	for i, shot := range draft.Shots {
+		length := len([]rune(canonicalDialogueText(shot.Dialogue)))
+		start, end := dialogueCursor, dialogueCursor+length
+		speakers, seen := []string{}, map[string]bool{}
+		continuesFrom, continuesTo := false, false
+		for _, item := range spans {
+			if end <= item.start || start >= item.end {
+				continue
+			}
+			name := strings.TrimSpace(item.dialogue.Character)
+			if name != "" && !seen[name] {
+				speakers = append(speakers, name)
+				seen[name] = true
+			}
+			if start > item.start {
+				continuesFrom = true
+			}
+			if end < item.end {
+				continuesTo = true
+			}
+		}
+		presentation := "silent_visual"
+		if length > 0 {
+			presentation = "visible_speaker_lipsync"
+			for _, speaker := range speakers {
+				if ordinaryDialogueCarryoverAllowed(shot, speaker, continuesFrom) {
+					presentation = "listener_reaction_carryover"
+					break
+				}
+			}
+		}
+		minimum := 3.0
+		if length > 0 {
+			minimum = math.Max(3, math.Ceil((dialogueTextDuration(shot.Dialogue)+0.6)*2)/2)
+		}
+		reviews = append(reviews, dialogueRhythmShotReview{Shot: i + 1, StartTime: timeCursor, EndTime: timeCursor + shot.Duration, DialogueStart: start, DialogueEnd: end, NaturalMinimum: minimum, Speakers: speakers, Presentation: presentation, ContinuesFromPrev: continuesFrom, ContinuesToNext: continuesTo})
+		timeCursor += shot.Duration
+		dialogueCursor = end
+	}
+	return reviews
+}
+
 func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
 	var expected, actual strings.Builder
 	for _, d := range dialogues {
@@ -525,5 +596,9 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "AI导演方案自动修复后仍无效: " + err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{"draft": draft, "skill_code": "director-scene-draft", "provider_id": s.TextProviderFact.Name(), "audited": true, "mode": req.Mode, "dialogue_duration": dialogueDuration})
+	response := gin.H{"draft": draft, "skill_code": "director-scene-draft", "provider_id": s.TextProviderFact.Name(), "audited": true, "mode": req.Mode, "dialogue_duration": dialogueDuration}
+	if req.Mode == "dialogue_rhythm" {
+		response["dialogue_review"] = buildDialogueRhythmReview(draft, dialogues)
+	}
+	c.JSON(200, response)
 }
