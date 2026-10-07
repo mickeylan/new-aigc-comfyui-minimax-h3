@@ -26,7 +26,7 @@ func TestFontRegistryRequiresApprovedLicenseFilesAndHash(t *testing.T) {
 	}
 	entries := []FontRegistryEntry{{
 		Code: "noto-sans-sc", DisplayName: "Noto Sans SC", Family: "Noto Sans SC", File: "NotoSansSC.ttf",
-		SHA256: hash, LicenseID: "OFL-1.1", LicenseFile: filepath.Join("licenses", "OFL.txt"),
+		SHA256: hash, LicenseID: "OFL-1.1", LicenseFile: "licenses/OFL.txt",
 		CommercialUse: true, Redistribution: true, Embedding: true, SupportsChinese: true, Enabled: true,
 	}}
 	data, _ := json.Marshal(entries)
@@ -59,7 +59,7 @@ func TestFontRegistryRejectsUnknownLicenseAndTraversal(t *testing.T) {
 	if err := os.MkdirAll(fonts, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	entries := []FontRegistryEntry{{Code: "unsafe", File: `..\outside.ttf`, LicenseID: "unknown", CommercialUse: true, Redistribution: true, Embedding: true, SupportsChinese: true, Enabled: true}}
+	entries := []FontRegistryEntry{{Code: "unsafe", File: "../outside.ttf", LicenseID: "unknown", CommercialUse: true, Redistribution: true, Embedding: true, SupportsChinese: true, Enabled: true}}
 	data, _ := json.Marshal(entries)
 	_ = os.WriteFile(filepath.Join(fonts, fontManifestFile), data, 0o644)
 	registry := NewFontRegistry(root)

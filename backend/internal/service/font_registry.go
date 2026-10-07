@@ -45,13 +45,18 @@ func NewFontRegistry(dataDir string) *FontRegistry {
 
 func safeRegistryFile(root, relative string) (string, error) {
 	relative = strings.TrimSpace(relative)
-	if relative == "" || filepath.IsAbs(relative) {
+	// Manifests are portable artifacts and always use forward slashes. Normalize
+	// them before filepath validation so one signed manifest works on Windows and Linux.
+	if relative == "" || strings.Contains(relative, `\`) || strings.HasPrefix(relative, "/") || filepath.IsAbs(relative) {
 		return "", fmt.Errorf("字体清单路径无效")
 	}
-	clean := filepath.Clean(relative)
-	if clean == "." || clean != relative || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." {
-		return "", fmt.Errorf("字体清单路径无效")
+	parts := strings.Split(relative, "/")
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." || strings.Contains(part, ":") {
+			return "", fmt.Errorf("字体清单路径无效")
+		}
 	}
+	clean := filepath.Join(parts...)
 	path := filepath.Join(root, clean)
 	rel, err := filepath.Rel(root, path)
 	if err != nil || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
