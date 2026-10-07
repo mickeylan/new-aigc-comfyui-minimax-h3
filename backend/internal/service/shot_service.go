@@ -19,7 +19,10 @@ func NewShotService(db *gorm.DB) *ShotService { return &ShotService{db: db} }
 
 const shotDurationTolerance = 0.5
 
-var ErrDialogueSnapshotConflict = errors.New("结构化Dialogue已在导演草稿生成后发生变化，请重新生成对白节奏拆镜草稿")
+var (
+	ErrDialogueSnapshotConflict = errors.New("结构化Dialogue已在导演草稿生成后发生变化，请重新生成对白节奏拆镜草稿")
+	ErrDialogueTimingBlocked    = errors.New("对白节奏导演草稿未通过自然语速审计")
+)
 
 func dialogueSnapshotToken(dialogues []models.Dialogue) string {
 	hash := sha256.New()
@@ -36,6 +39,23 @@ func loadSceneDialogueSnapshot(tx *gorm.DB, sceneID uint) ([]models.Dialogue, st
 	}
 	dialogues = validSceneDialogues(dialogues)
 	return dialogues, dialogueSnapshotToken(dialogues), nil
+}
+
+func validateDialogueShotTiming(shots []models.Shot, dialogues []models.Dialogue) error {
+	draft := &sceneDirectorDraft{Shots: make([]sceneDirectorDraftShot, len(shots))}
+	for i, shot := range shots {
+		draft.Shots[i] = sceneDirectorDraftShot{Duration: shot.Duration, Dialogue: shot.Dialogue, ShotType: shot.ShotType}
+	}
+	issues := []string{}
+	for _, review := range buildDialogueRhythmReview(draft, dialogues) {
+		for _, issue := range review.BlockingIssues {
+			issues = append(issues, fmt.Sprintf("镜头%d：%s", review.Shot, issue))
+		}
+	}
+	if len(issues) > 0 {
+		return fmt.Errorf("%w：%s", ErrDialogueTimingBlocked, strings.Join(issues, "；"))
+	}
+	return nil
 }
 
 func shotDurationTotal(shots []models.Shot) float64 {
@@ -286,12 +306,15 @@ func (s *ShotService) ReplaceShotsWithDialogueSnapshot(sceneID uint, shots []mod
 			return err
 		}
 		if strings.TrimSpace(expectedSnapshot) != "" {
-			_, currentSnapshot, snapshotErr := loadSceneDialogueSnapshot(tx, sceneID)
+			dialogues, currentSnapshot, snapshotErr := loadSceneDialogueSnapshot(tx, sceneID)
 			if snapshotErr != nil {
 				return snapshotErr
 			}
 			if currentSnapshot != strings.TrimSpace(expectedSnapshot) {
 				return ErrDialogueSnapshotConflict
+			}
+			if timingErr := validateDialogueShotTiming(shots, dialogues); timingErr != nil {
+				return timingErr
 			}
 		}
 		var existing []models.Shot

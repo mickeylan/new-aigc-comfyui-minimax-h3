@@ -1075,6 +1075,10 @@ func (s *Service) HandleCreateShots(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
 		}
+		if errors.Is(err, ErrDialogueTimingBlocked) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}

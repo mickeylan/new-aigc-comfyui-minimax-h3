@@ -151,6 +151,57 @@ func TestReplaceShotsRejectsStaleDialogueSnapshotWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestHandleCreateShotsRejectsImpossibleDialogueTimingWithoutMutation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "handler timing"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
+	db.Create(&scene)
+	text := strings.Repeat("修", 60)
+	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "姐姐", SpeechType: "dialogue", Text: text}
+	db.Create(&dialogue)
+	shots, err := NewShotService(db).ReplaceShots(scene.ID, []models.Shot{{ShotType: "close", Duration: 15, Dialogue: text, Description: "保留镜头"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, snapshot, err := loadSceneDialogueSnapshot(db, scene.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.Scene{}).Where("id = ?", scene.ID).Updates(map[string]any{"image_task_id": "image-active", "video_task_id": "video-active"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]any{"dialogue_snapshot": snapshot, "shots": []models.Shot{{ShotType: "wide", Duration: 15, Dialogue: text, Description: "不应写入"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/projects/x/scenes/y/shots", bytes.NewReader(payload))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Params = gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(project.ID), 10)}, {Key: "sid", Value: strconv.FormatUint(uint64(scene.ID), 10)}}
+	service := &Service{DB: db, Shots: NewShotService(db)}
+	service.HandleCreateShots(ctx)
+	if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), ErrDialogueTimingBlocked.Error()) || !strings.Contains(recorder.Body.String(), "必须继续拆镜") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var saved models.Shot
+	if err := db.First(&saved, shots[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.Description != "保留镜头" || saved.ShotType != "close" {
+		t.Fatalf("timing rejection mutated shot: %+v", saved)
+	}
+	var currentScene models.Scene
+	if err := db.First(&currentScene, scene.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if currentScene.ImageTaskID != "image-active" || currentScene.VideoTaskID != "video-active" {
+		t.Fatalf("timing rejection cleared tasks: %+v", currentScene)
+	}
+}
+
 func TestHandleCreateShotsReturnsConflictForStaleDialogueSnapshot(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := newTestDBWithNewModels(t)
