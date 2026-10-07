@@ -82,6 +82,7 @@ func TestScreenTextCueStrictBindingsAndTimeline(t *testing.T) {
 		{EpisodeN: 1, Kind: "character_intro", Text: "未绑定", StartTime: 0, EndTime: 1},
 		{EpisodeN: 1, Kind: "character_intro", CharacterID: &foreignCharacter.ID, Text: "旁人", StartTime: 0, EndTime: 1},
 		{EpisodeN: 1, Kind: "custom", Text: "错误排版", StartTime: 0, EndTime: 1, WritingMode: "sideways"},
+		{EpisodeN: 1, Kind: "custom", Text: "未知样式", StartTime: 0, EndTime: 1, StyleCode: "unlicensed-fancy-font"},
 	}
 	for index, input := range invalid {
 		if _, err := service.Create(p1.ID, input); err == nil {

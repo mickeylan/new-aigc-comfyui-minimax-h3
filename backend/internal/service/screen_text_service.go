@@ -44,6 +44,12 @@ var screenTextKinds = map[string]bool{
 	"end_card": true, "custom": true,
 }
 
+var screenTextStyles = map[string]bool{
+	"xianxia-character-vertical": true, "xianxia-location-vertical": true,
+	"historical-time-card": true, "ink-transition-card": true,
+	"ink-end-card": true, "modern-horizontal-caption": true,
+}
+
 var screenTextWritingModes = map[string]bool{
 	"horizontal-ltr": true, "vertical-rl": true, "vertical-lr": true, "stacked-upright": true,
 }
@@ -97,6 +103,13 @@ func normalizeScreenTextCue(projectID uint, in ScreenTextCueInput) (models.Scree
 		x, y := *in.PositionX, *in.PositionY
 		positionX, positionY = &x, &y
 	}
+	styleCode := strings.ToLower(strings.TrimSpace(in.StyleCode))
+	if styleCode == "" {
+		styleCode = "modern-horizontal-caption"
+	}
+	if !screenTextStyles[styleCode] {
+		return models.ScreenTextCue{}, fmt.Errorf("不支持的功能文字样式")
+	}
 	animation := strings.ToLower(strings.TrimSpace(in.Animation))
 	if animation == "" {
 		animation = "fade"
@@ -126,7 +139,7 @@ func normalizeScreenTextCue(projectID uint, in ScreenTextCueInput) (models.Scree
 		ProjectID: projectID, EpisodeN: in.EpisodeN, SceneID: in.SceneID, ShotID: in.ShotID,
 		CharacterID: in.CharacterID, Kind: kind, Text: text, Subtext: strings.TrimSpace(in.Subtext),
 		StartTime: in.StartTime, EndTime: in.EndTime, WritingMode: writingMode, Anchor: anchor,
-		PositionX: positionX, PositionY: positionY, StyleCode: strings.TrimSpace(in.StyleCode), Animation: animation, Enabled: enabled,
+		PositionX: positionX, PositionY: positionY, StyleCode: styleCode, Animation: animation, Enabled: enabled,
 		Order: in.Order, Source: source, ReviewStatus: reviewStatus,
 	}, nil
 }

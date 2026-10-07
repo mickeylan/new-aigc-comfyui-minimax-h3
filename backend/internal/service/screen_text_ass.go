@@ -92,24 +92,106 @@ func assAlignment(anchor string) int {
 	}
 }
 
-func screenTextToASS(cue models.ScreenTextCue, width, height int) string {
+type screenTextASSStyle struct {
+	FontSize, SubtextSize int
+	PrimaryColor          string
+	OutlineColor          string
+	Outline, Shadow       int
+	Spacing               int
+	ForceCenter           bool
+}
+
+func resolvedScreenTextStyle(cue models.ScreenTextCue) screenTextASSStyle {
+	style := screenTextASSStyle{FontSize: 54, SubtextSize: 28, PrimaryColor: "&H00F4E4C0&", OutlineColor: "&H802B1C12&", Outline: 2, Shadow: 2, Spacing: 3}
+	switch cue.StyleCode {
+	case "xianxia-character-vertical":
+		style.FontSize, style.SubtextSize, style.Spacing = 68, 32, 7
+	case "xianxia-location-vertical":
+		style.FontSize, style.SubtextSize, style.Spacing = 60, 28, 6
+	case "historical-time-card":
+		style.FontSize, style.SubtextSize, style.Spacing = 64, 30, 5
+	case "ink-transition-card":
+		style.FontSize, style.SubtextSize, style.Spacing, style.ForceCenter = 72, 32, 8, true
+		style.PrimaryColor, style.OutlineColor = "&H00E8E3D8&", "&HA0000000&"
+	case "ink-end-card":
+		style.FontSize, style.SubtextSize, style.Spacing, style.ForceCenter = 88, 36, 10, true
+		style.PrimaryColor, style.OutlineColor, style.Outline, style.Shadow = "&H00F2DFC0&", "&H90000000&", 3, 3
+	case "modern-horizontal-caption":
+		style.FontSize, style.SubtextSize, style.Spacing = 46, 26, 2
+		style.PrimaryColor, style.OutlineColor = "&H00FFFFFF&", "&H90000000&"
+	}
+	if cue.Kind == "end_card" || cue.Kind == "chapter_title" {
+		style.ForceCenter = true
+	}
+	return style
+}
+
+func anchorPosition(anchor string, width, height int) (int, int) {
+	points := map[string][2]float64{
+		"top_left": {.1, .1}, "top_center": {.5, .1}, "top_right": {.9, .1},
+		"center": {.5, .5}, "bottom_left": {.1, .9}, "bottom_center": {.5, .9}, "bottom_right": {.9, .9},
+		"subject_left": {.25, .5}, "subject_right": {.75, .5},
+	}
+	point, ok := points[anchor]
+	if !ok {
+		point = points["bottom_center"]
+	}
+	return int(math.Round(point[0] * float64(width))), int(math.Round(point[1] * float64(height)))
+}
+
+func karaokeASSText(value string, duration float64) string {
+	runes := []rune(strings.TrimSpace(value))
+	if len(runes) == 0 {
+		return ""
+	}
+	step := int(math.Max(1, math.Round(duration*100*0.65/float64(len(runes)))))
+	var out strings.Builder
+	for _, r := range runes {
+		fmt.Fprintf(&out, `{\kf%d}%s`, step, escapeASSText(string(r)))
+	}
+	return out.String()
+}
+
+func screenTextToASS(cue models.ScreenTextCue, width, height int, duration float64) string {
 	text := escapeASSText(cue.Text)
 	if cue.WritingMode == "vertical-rl" || cue.WritingMode == "stacked-upright" {
 		text = verticalASSColumns(cue.Text, 8, true)
 	} else if cue.WritingMode == "vertical-lr" {
 		text = verticalASSColumns(cue.Text, 8, false)
 	}
-	if subtext := strings.TrimSpace(cue.Subtext); subtext != "" {
-		text += `\N{\fs28}` + escapeASSText(subtext)
+	style := resolvedScreenTextStyle(cue)
+	if cue.Animation == "typewriter" && cue.WritingMode == "horizontal-ltr" {
+		text = karaokeASSText(cue.Text, duration)
 	}
-	tags := fmt.Sprintf(`{\an%d}`, assAlignment(cue.Anchor))
-	if cue.Anchor == "custom" && cue.PositionX != nil && cue.PositionY != nil {
+	if subtext := strings.TrimSpace(cue.Subtext); subtext != "" {
+		text += fmt.Sprintf(`\N{\fs%d}`, style.SubtextSize) + escapeASSText(subtext)
+	}
+	alignment := assAlignment(cue.Anchor)
+	if style.ForceCenter {
+		alignment = 5
+	}
+	tags := fmt.Sprintf(`{\an%d\fs%d\c%s\3c%s\bord%d\shad%d\fsp%d}`, alignment, style.FontSize, style.PrimaryColor, style.OutlineColor, style.Outline, style.Shadow, style.Spacing)
+	if cue.Anchor == "custom" && cue.PositionX != nil && cue.PositionY != nil && !style.ForceCenter {
 		x := int(math.Round(*cue.PositionX * float64(width)))
 		y := int(math.Round(*cue.PositionY * float64(height)))
 		tags = fmt.Sprintf(`{\an5\pos(%d,%d)}`, x, y)
 	}
-	if cue.Animation == "fade" || cue.Animation == "ink_reveal" {
+	if style.ForceCenter {
+		tags = strings.TrimSuffix(tags, "}") + fmt.Sprintf(`\pos(%d,%d)}`, width/2, height/2)
+	}
+	switch cue.Animation {
+	case "fade":
 		tags = strings.TrimSuffix(tags, "}") + `\fad(250,350)}`
+	case "ink_reveal":
+		// Deterministic fallback until the reviewed transparent-PNG ink mask ships.
+		tags = strings.TrimSuffix(tags, "}") + `\fad(500,450)}`
+	case "slide":
+		x, y := anchorPosition(cue.Anchor, width, height)
+		if cue.Anchor == "custom" && cue.PositionX != nil && cue.PositionY != nil {
+			x, y = int(*cue.PositionX*float64(width)), int(*cue.PositionY*float64(height))
+		}
+		fromX := x + int(math.Round(float64(width)*.08))
+		tags = strings.TrimSuffix(tags, "}") + fmt.Sprintf(`\an5\move(%d,%d,%d,%d,0,450)}`, fromX, y, x, y)
 	}
 	return tags + text
 }
@@ -165,10 +247,10 @@ func buildScreenTextASS(cues []models.ScreenTextCue, scenes []models.Scene, dura
 	var out strings.Builder
 	fmt.Fprintf(&out, "[Script Info]\nScriptType: v4.00+\nPlayResX: %d\nPlayResY: %d\nScaledBorderAndShadow: yes\n\n", width, height)
 	out.WriteString("[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n")
-	fmt.Fprintf(&out, "Style: ScreenText,%s,54,&H00F4E4C0,&H00FFFFFF,&H802B1C12,&H50000000,0,0,0,0,100,100,3,0,1,2,2,2,80,80,60,1\n\n", strings.ReplaceAll(family, ",", ""))
+	fmt.Fprintf(&out, "Style: ScreenText,%s,54,&H00F4E4C0,&HFFFFFFFF,&H802B1C12,&H50000000,0,0,0,0,100,100,3,0,1,2,2,2,80,80,60,1\n\n", strings.ReplaceAll(family, ",", ""))
 	out.WriteString("[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
 	for _, item := range items {
-		fmt.Fprintf(&out, "Dialogue: 1,%s,%s,ScreenText,,0,0,0,,%s\n", assTime(item.Start), assTime(item.End), screenTextToASS(item.Cue, width, height))
+		fmt.Fprintf(&out, "Dialogue: 1,%s,%s,ScreenText,,0,0,0,,%s\n", assTime(item.Start), assTime(item.End), screenTextToASS(item.Cue, width, height, item.End-item.Start))
 	}
 	data := append([]byte{0xEF, 0xBB, 0xBF}, []byte(out.String())...)
 	return data, len(items)

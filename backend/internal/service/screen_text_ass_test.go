@@ -39,6 +39,29 @@ func TestBuildScreenTextASSUsesNormalizedCustomPositionAcrossAspectRatios(t *tes
 	}
 }
 
+func TestScreenTextASSStylesAndAnimationsAreDeterministic(t *testing.T) {
+	fade := screenTextToASS(models.ScreenTextCue{Kind: "character_intro", Text: "上官若琳", StyleCode: "xianxia-character-vertical", WritingMode: "vertical-rl", Anchor: "top_right", Animation: "fade"}, 1920, 1080, 4)
+	for _, want := range []string{`\fs68`, `\fsp7`, `\fad(250,350)`, `上\N官\N若\N琳`} {
+		if !strings.Contains(fade, want) {
+			t.Fatalf("character style missing %q: %s", want, fade)
+		}
+	}
+	endCard := screenTextToASS(models.ScreenTextCue{Kind: "end_card", Text: "本集完", StyleCode: "ink-end-card", Anchor: "top_left", Animation: "ink_reveal"}, 1920, 1080, 3)
+	for _, want := range []string{`\an5`, `\fs88`, `\pos(960,540)`, `\fad(500,450)`} {
+		if !strings.Contains(endCard, want) {
+			t.Fatalf("end-card style missing %q: %s", want, endCard)
+		}
+	}
+	slide := screenTextToASS(models.ScreenTextCue{Text: "三日后", StyleCode: "historical-time-card", Anchor: "top_right", Animation: "slide"}, 1000, 500, 3)
+	if !strings.Contains(slide, `\move(980,50,900,50,0,450)`) {
+		t.Fatalf("slide animation missing: %s", slide)
+	}
+	typewriter := screenTextToASS(models.ScreenTextCue{Text: "与此同时", StyleCode: "modern-horizontal-caption", WritingMode: "horizontal-ltr", Anchor: "center", Animation: "typewriter"}, 1920, 1080, 4)
+	if strings.Count(typewriter, `\kf`) != 4 {
+		t.Fatalf("typewriter karaoke steps invalid: %s", typewriter)
+	}
+}
+
 func TestBuildScreenTextASSExcludesDraftDisabledAndUnselectedScenes(t *testing.T) {
 	scene := models.Scene{ID: 1, Duration: 5}
 	other := uint(2)

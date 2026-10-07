@@ -31,6 +31,8 @@ test('功能文字轨支持中文横排和古装竖排且不使用Canvas', () =>
   assert.match(editor, /screen-text-safe-zone/)
   assert.match(editor, /position_x/)
   assert.match(editor, /position_y/)
+  assert.match(editor, /墨迹显字（当前以慢淡入渲染）/)
+  assert.match(editor, /style-\$\{screenTextForm\.style_code\}/)
 })
 
 test('功能文字首版覆盖人物地点时间过场和本集完', () => {
