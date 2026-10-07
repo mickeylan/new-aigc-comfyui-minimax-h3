@@ -151,6 +151,40 @@ func TestReplaceShotsRejectsStaleDialogueSnapshotWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestReplaceShotsWithSnapshotEnforcesAuthoritativeSpeakerPresentation(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "speaker presentation"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
+	db.Create(&scene)
+	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "姐姐", SpeechType: "dialogue", Text: "相信姐姐，我不会让你去。"}
+	db.Create(&dialogue)
+	_, snapshot, err := loadSceneDialogueSnapshot(db, scene.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewShotService(db)
+	valid := []models.Shot{
+		{ShotType: "姐姐近景", Duration: 4, Dialogue: "相信姐姐，", PromptSubject: "姐姐可见并同步口型"},
+		{ShotType: "妹妹反应近景", Duration: 5, Dialogue: "我不会让你去。", Description: "姐姐声音跨切延续，妹妹闭口倾听", PromptSubject: "妹妹单人近景", PromptAction: "妹妹双唇闭合"},
+	}
+	if _, err := svc.ReplaceShotsWithDialogueSnapshot(scene.ID, valid, snapshot); err != nil {
+		t.Fatalf("valid listener carryover rejected: %v", err)
+	}
+	invalid := append([]models.Shot(nil), valid...)
+	invalid[1].Description, invalid[1].PromptAction = "妹妹倾听", "妹妹注视前方"
+	if _, err := svc.ReplaceShotsWithDialogueSnapshot(scene.ID, invalid, snapshot); !errors.Is(err, ErrDialogueTimingBlocked) || !strings.Contains(err.Error(), "同一句对白跨切延续且听者闭口") {
+		t.Fatalf("invalid carryover error=%v", err)
+	}
+	var saved []models.Shot
+	if err := db.Where("scene_id = ?", scene.ID).Order("order_num, id").Find(&saved).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(saved) != 2 || saved[1].Description != valid[1].Description {
+		t.Fatalf("invalid save mutated shots: %+v", saved)
+	}
+}
+
 func TestHandleCreateShotsRejectsImpossibleDialogueTimingWithoutMutation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := newTestDBWithNewModels(t)
@@ -172,7 +206,7 @@ func TestHandleCreateShotsRejectsImpossibleDialogueTimingWithoutMutation(t *test
 	if err := db.Model(&models.Scene{}).Where("id = ?", scene.ID).Updates(map[string]any{"image_task_id": "image-active", "video_task_id": "video-active"}).Error; err != nil {
 		t.Fatal(err)
 	}
-	payload, err := json.Marshal(map[string]any{"dialogue_snapshot": snapshot, "shots": []models.Shot{{ShotType: "wide", Duration: 15, Dialogue: text, Description: "不应写入"}}})
+	payload, err := json.Marshal(map[string]any{"dialogue_snapshot": snapshot, "shots": []models.Shot{{ShotType: "姐姐近景", Duration: 15, Dialogue: text, Description: "不应写入", PromptSubject: "姐姐可见并同步口型"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

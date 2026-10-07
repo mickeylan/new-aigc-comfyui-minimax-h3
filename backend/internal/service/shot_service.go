@@ -44,7 +44,14 @@ func loadSceneDialogueSnapshot(tx *gorm.DB, sceneID uint) ([]models.Dialogue, st
 func validateDialogueShotTiming(shots []models.Shot, dialogues []models.Dialogue) error {
 	draft := &sceneDirectorDraft{Shots: make([]sceneDirectorDraftShot, len(shots))}
 	for i, shot := range shots {
-		draft.Shots[i] = sceneDirectorDraftShot{Duration: shot.Duration, Dialogue: shot.Dialogue, ShotType: shot.ShotType}
+		draft.Shots[i] = sceneDirectorDraftShot{
+			Duration: shot.Duration, Dialogue: shot.Dialogue, ShotType: shot.ShotType,
+			Description: shot.Description, PromptSubject: shot.PromptSubject, PromptAction: shot.PromptAction,
+			StartState: shot.StartState, EndState: shot.EndState,
+		}
+	}
+	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
+		return fmt.Errorf("%w：%s", ErrDialogueTimingBlocked, err.Error())
 	}
 	issues := []string{}
 	for _, review := range buildDialogueRhythmReview(draft, dialogues) {
