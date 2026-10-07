@@ -6753,6 +6753,7 @@ type mergeScreenTextCueFingerprint struct {
 	SceneID, ShotID, CharacterID   *uint
 	Kind, Text, Subtext            string
 	StartTime, EndTime             float64
+	PositionX, PositionY           *float64
 	WritingMode, Anchor, StyleCode string
 	Animation, ReviewStatus        string
 	Enabled                        bool

@@ -17,23 +17,25 @@ type ScreenTextService struct{ db *gorm.DB }
 func NewScreenTextService(db *gorm.DB) *ScreenTextService { return &ScreenTextService{db: db} }
 
 type ScreenTextCueInput struct {
-	EpisodeN     int     `json:"episode_n"`
-	SceneID      *uint   `json:"scene_id"`
-	ShotID       *uint   `json:"shot_id"`
-	CharacterID  *uint   `json:"character_id"`
-	Kind         string  `json:"kind"`
-	Text         string  `json:"text"`
-	Subtext      string  `json:"subtext"`
-	StartTime    float64 `json:"start_time"`
-	EndTime      float64 `json:"end_time"`
-	WritingMode  string  `json:"writing_mode"`
-	Anchor       string  `json:"anchor"`
-	StyleCode    string  `json:"style_code"`
-	Animation    string  `json:"animation"`
-	Enabled      *bool   `json:"enabled"`
-	Order        int     `json:"order"`
-	Source       string  `json:"source"`
-	ReviewStatus string  `json:"review_status"`
+	EpisodeN     int      `json:"episode_n"`
+	SceneID      *uint    `json:"scene_id"`
+	ShotID       *uint    `json:"shot_id"`
+	CharacterID  *uint    `json:"character_id"`
+	Kind         string   `json:"kind"`
+	Text         string   `json:"text"`
+	Subtext      string   `json:"subtext"`
+	StartTime    float64  `json:"start_time"`
+	EndTime      float64  `json:"end_time"`
+	WritingMode  string   `json:"writing_mode"`
+	Anchor       string   `json:"anchor"`
+	PositionX    *float64 `json:"position_x"`
+	PositionY    *float64 `json:"position_y"`
+	StyleCode    string   `json:"style_code"`
+	Animation    string   `json:"animation"`
+	Enabled      *bool    `json:"enabled"`
+	Order        int      `json:"order"`
+	Source       string   `json:"source"`
+	ReviewStatus string   `json:"review_status"`
 }
 
 var screenTextKinds = map[string]bool{
@@ -49,7 +51,7 @@ var screenTextWritingModes = map[string]bool{
 var screenTextAnchors = map[string]bool{
 	"top_left": true, "top_center": true, "top_right": true, "center": true,
 	"bottom_left": true, "bottom_center": true, "bottom_right": true,
-	"subject_left": true, "subject_right": true,
+	"subject_left": true, "subject_right": true, "custom": true,
 }
 
 func normalizeScreenTextCue(projectID uint, in ScreenTextCueInput) (models.ScreenTextCue, error) {
@@ -84,6 +86,17 @@ func normalizeScreenTextCue(projectID uint, in ScreenTextCueInput) (models.Scree
 	if !screenTextAnchors[anchor] {
 		return models.ScreenTextCue{}, fmt.Errorf("不支持的文字位置")
 	}
+	var positionX, positionY *float64
+	if anchor == "custom" {
+		if in.PositionX == nil || in.PositionY == nil || !isFinite(*in.PositionX) || !isFinite(*in.PositionY) {
+			return models.ScreenTextCue{}, fmt.Errorf("自定义位置必须填写有效的 position_x 和 position_y")
+		}
+		if *in.PositionX < 0.05 || *in.PositionX > 0.95 || *in.PositionY < 0.05 || *in.PositionY > 0.95 {
+			return models.ScreenTextCue{}, fmt.Errorf("自定义位置必须位于画面 5%%~95%% 安全区")
+		}
+		x, y := *in.PositionX, *in.PositionY
+		positionX, positionY = &x, &y
+	}
 	animation := strings.ToLower(strings.TrimSpace(in.Animation))
 	if animation == "" {
 		animation = "fade"
@@ -113,7 +126,7 @@ func normalizeScreenTextCue(projectID uint, in ScreenTextCueInput) (models.Scree
 		ProjectID: projectID, EpisodeN: in.EpisodeN, SceneID: in.SceneID, ShotID: in.ShotID,
 		CharacterID: in.CharacterID, Kind: kind, Text: text, Subtext: strings.TrimSpace(in.Subtext),
 		StartTime: in.StartTime, EndTime: in.EndTime, WritingMode: writingMode, Anchor: anchor,
-		StyleCode: strings.TrimSpace(in.StyleCode), Animation: animation, Enabled: enabled,
+		PositionX: positionX, PositionY: positionY, StyleCode: strings.TrimSpace(in.StyleCode), Animation: animation, Enabled: enabled,
 		Order: in.Order, Source: source, ReviewStatus: reviewStatus,
 	}, nil
 }
@@ -201,7 +214,8 @@ func (s *ScreenTextService) Update(projectID, id uint, in ScreenTextCueInput) (*
 		"episode_n": cue.EpisodeN, "scene_id": cue.SceneID, "shot_id": cue.ShotID,
 		"character_id": cue.CharacterID, "kind": cue.Kind, "text": cue.Text, "subtext": cue.Subtext,
 		"start_time": cue.StartTime, "end_time": cue.EndTime, "writing_mode": cue.WritingMode,
-		"anchor": cue.Anchor, "style_code": cue.StyleCode, "animation": cue.Animation,
+		"anchor": cue.Anchor, "position_x": cue.PositionX, "position_y": cue.PositionY,
+		"style_code": cue.StyleCode, "animation": cue.Animation,
 		"enabled": cue.Enabled, "order": cue.Order, "source": cue.Source, "review_status": cue.ReviewStatus,
 	}
 	if err := s.db.Model(&existing).Updates(updates).Error; err != nil {

@@ -26,6 +26,19 @@ func TestBuildScreenTextASSUsesSceneOffsetsAndVerticalChinese(t *testing.T) {
 	}
 }
 
+func TestBuildScreenTextASSUsesNormalizedCustomPositionAcrossAspectRatios(t *testing.T) {
+	x, y := .9, .1
+	cue := models.ScreenTextCue{Text: "人物题名", StartTime: 0, EndTime: 2, WritingMode: "vertical-rl", Anchor: "custom", PositionX: &x, PositionY: &y, Enabled: true, ReviewStatus: "approved"}
+	wide, _ := buildScreenTextASS([]models.ScreenTextCue{cue}, []models.Scene{{ID: 1, Duration: 3}}, []sceneVideo{{dur: 3}}, 1920, 1080, "Noto Sans SC")
+	portrait, _ := buildScreenTextASS([]models.ScreenTextCue{cue}, []models.Scene{{ID: 1, Duration: 3}}, []sceneVideo{{dur: 3}}, 1080, 1920, "Noto Sans SC")
+	if !strings.Contains(string(wide), `\an5\pos(1728,108)`) {
+		t.Fatalf("wide custom position wrong:\n%s", wide)
+	}
+	if !strings.Contains(string(portrait), `\an5\pos(972,192)`) {
+		t.Fatalf("portrait custom position wrong:\n%s", portrait)
+	}
+}
+
 func TestBuildScreenTextASSExcludesDraftDisabledAndUnselectedScenes(t *testing.T) {
 	scene := models.Scene{ID: 1, Duration: 5}
 	other := uint(2)

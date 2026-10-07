@@ -1180,6 +1180,8 @@ type ScreenTextCue struct {
 	EndTime      float64   `json:"end_time"`
 	WritingMode  string    `gorm:"size:32" json:"writing_mode"`
 	Anchor       string    `gorm:"size:32" json:"anchor"`
+	PositionX    *float64  `json:"position_x,omitempty"`
+	PositionY    *float64  `json:"position_y,omitempty"`
 	StyleCode    string    `gorm:"size:100" json:"style_code"`
 	Animation    string    `gorm:"size:32" json:"animation"`
 	Enabled      bool      `gorm:"default:true;index" json:"enabled"`

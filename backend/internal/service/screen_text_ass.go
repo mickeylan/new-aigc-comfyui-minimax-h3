@@ -92,7 +92,7 @@ func assAlignment(anchor string) int {
 	}
 }
 
-func screenTextToASS(cue models.ScreenTextCue) string {
+func screenTextToASS(cue models.ScreenTextCue, width, height int) string {
 	text := escapeASSText(cue.Text)
 	if cue.WritingMode == "vertical-rl" || cue.WritingMode == "stacked-upright" {
 		text = verticalASSColumns(cue.Text, 8, true)
@@ -103,6 +103,11 @@ func screenTextToASS(cue models.ScreenTextCue) string {
 		text += `\N{\fs28}` + escapeASSText(subtext)
 	}
 	tags := fmt.Sprintf(`{\an%d}`, assAlignment(cue.Anchor))
+	if cue.Anchor == "custom" && cue.PositionX != nil && cue.PositionY != nil {
+		x := int(math.Round(*cue.PositionX * float64(width)))
+		y := int(math.Round(*cue.PositionY * float64(height)))
+		tags = fmt.Sprintf(`{\an5\pos(%d,%d)}`, x, y)
+	}
 	if cue.Animation == "fade" || cue.Animation == "ink_reveal" {
 		tags = strings.TrimSuffix(tags, "}") + `\fad(250,350)}`
 	}
@@ -163,7 +168,7 @@ func buildScreenTextASS(cues []models.ScreenTextCue, scenes []models.Scene, dura
 	fmt.Fprintf(&out, "Style: ScreenText,%s,54,&H00F4E4C0,&H00FFFFFF,&H802B1C12,&H50000000,0,0,0,0,100,100,3,0,1,2,2,2,80,80,60,1\n\n", strings.ReplaceAll(family, ",", ""))
 	out.WriteString("[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
 	for _, item := range items {
-		fmt.Fprintf(&out, "Dialogue: 1,%s,%s,ScreenText,,0,0,0,,%s\n", assTime(item.Start), assTime(item.End), screenTextToASS(item.Cue))
+		fmt.Fprintf(&out, "Dialogue: 1,%s,%s,ScreenText,,0,0,0,,%s\n", assTime(item.Start), assTime(item.End), screenTextToASS(item.Cue, width, height))
 	}
 	data := append([]byte{0xEF, 0xBB, 0xBF}, []byte(out.String())...)
 	return data, len(items)

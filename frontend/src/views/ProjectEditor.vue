@@ -275,13 +275,14 @@
           <label>类型<select v-model="screenTextForm.kind" class="input"><option value="character_intro">人物出场</option><option value="location">地点</option><option value="time_card">时间</option><option value="transition">过场</option><option value="chapter_title">章回标题</option><option value="story_note">剧情提示</option><option value="end_card">本集完</option><option value="custom">自定义</option></select></label>
           <label v-if="screenTextForm.kind==='character_intro'">绑定角色<select v-model="screenTextForm.character_id" class="input" required><option :value="null">请选择</option><option v-for="character in characters" :key="character.id" :value="character.id">{{character.name}}</option></select></label>
           <label>排版<select v-model="screenTextForm.writing_mode" class="input"><option value="horizontal-ltr">中文横排</option><option value="vertical-rl">从上到下、列从右到左</option><option value="vertical-lr">从上到下、列从左到右</option><option value="stacked-upright">单列直立</option></select></label>
-          <label>位置<select v-model="screenTextForm.anchor" class="input"><option value="top_left">左上</option><option value="top_center">上方居中</option><option value="top_right">右上</option><option value="center">居中</option><option value="bottom_left">左下</option><option value="bottom_center">下方居中</option><option value="bottom_right">右下</option><option value="subject_left">人物左侧</option><option value="subject_right">人物右侧</option></select></label>
+          <label>位置<select v-model="screenTextForm.anchor" class="input"><option value="top_left">左上</option><option value="top_center">上方居中</option><option value="top_right">右上</option><option value="center">居中</option><option value="bottom_left">左下</option><option value="bottom_center">下方居中</option><option value="bottom_right">右下</option><option value="subject_left">人物左侧</option><option value="subject_right">人物右侧</option><option value="custom">自定义精确位置</option></select></label>
+          <label v-if="screenTextForm.anchor==='custom'">水平位置<input v-model.number="screenTextForm.position_x" type="number" min="0.05" max="0.95" step="0.01" class="input" required></label><label v-if="screenTextForm.anchor==='custom'">垂直位置<input v-model.number="screenTextForm.position_y" type="number" min="0.05" max="0.95" step="0.01" class="input" required></label>
           <label>开始秒<input v-model.number="screenTextForm.start_time" type="number" min="0" :max="selected.duration" step="0.1" class="input" required></label><label>结束秒<input v-model.number="screenTextForm.end_time" type="number" min="0.1" :max="selected.duration" step="0.1" class="input" required></label>
           <label class="wide">主文字<input v-model="screenTextForm.text" class="input" maxlength="200" required></label><label class="wide">副标题<input v-model="screenTextForm.subtext" class="input" maxlength="200"></label>
           <label>样式<select v-model="screenTextForm.style_code" class="input"><option value="xianxia-character-vertical">仙侠人物竖排</option><option value="xianxia-location-vertical">古装地点竖排</option><option value="historical-time-card">古装时间卡</option><option value="ink-transition-card">水墨过场</option><option value="ink-end-card">水墨结束卡</option><option value="modern-horizontal-caption">简洁横排</option></select></label>
           <label>动画<select v-model="screenTextForm.animation" class="input"><option value="none">无</option><option value="fade">淡入淡出</option><option value="slide">滑入</option><option value="typewriter">逐字</option><option value="ink_reveal">墨迹显字</option></select></label>
           <label class="check"><input v-model="screenTextForm.enabled" type="checkbox"> 启用</label>
-          <div class="screen-text-preview wide" :class="screenTextForm.writing_mode?.startsWith('vertical')||screenTextForm.writing_mode==='stacked-upright'?'vertical':'horizontal'"><strong>{{screenTextForm.text||'功能文字预览'}}</strong><small v-if="screenTextForm.subtext">{{screenTextForm.subtext}}</small></div>
+          <div class="screen-text-preview wide" :style="selected?.image_url?{backgroundImage:`linear-gradient(rgba(0,0,0,.16),rgba(0,0,0,.16)),url(${selected.image_url})`}:{}" @click="setScreenTextPosition" title="点击画面设置自定义位置"><div class="screen-text-safe-zone"></div><div class="screen-text-preview-copy" :class="screenTextForm.writing_mode?.startsWith('vertical')||screenTextForm.writing_mode==='stacked-upright'?'vertical':'horizontal'" :style="screenTextPreviewPosition"><strong>{{screenTextForm.text||'功能文字预览'}}</strong><small v-if="screenTextForm.subtext">{{screenTextForm.subtext}}</small></div></div>
           <div class="section-actions wide"><button class="btn btn-sm">保存</button><button v-if="screenTextForm.id" type="button" class="btn btn-sm btn-danger" @click="removeScreenTextCue(screenTextForm);screenTextEditing=false">删除</button><button type="button" class="btn btn-sm btn-ghost" @click="screenTextEditing=false">取消</button></div>
         </form>
       </div>
@@ -467,6 +468,12 @@ const shotDurationTotal = computed(() => selectedShots.value.reduce((sum,s)=>sum
 const shotDurationMismatch = computed(() => selectedShots.value.length>0 && Math.abs(shotDurationTotal.value-Number(selected.value?.duration||0))>0.5)
 const timelineShots = computed(() => { let cursor=0; return selectedShots.value.map(shot=>{ const start=cursor; cursor+=Number(shot.duration||0); return {...shot,_start:start,_end:cursor} }) })
 const selectedScreenTextCues = computed(() => screenTextCues.value.filter(cue => cue.scene_id === selected.value?.id))
+const screenTextPreviewPosition = computed(() => {
+  if (screenTextForm.anchor === 'custom') return { left: `${Number(screenTextForm.position_x || .5) * 100}%`, top: `${Number(screenTextForm.position_y || .5) * 100}%` }
+  const points = { top_left:[.12,.12], top_center:[.5,.12], top_right:[.88,.12], center:[.5,.5], bottom_left:[.12,.88], bottom_center:[.5,.88], bottom_right:[.88,.88], subject_left:[.25,.5], subject_right:[.75,.5] }
+  const point = points[screenTextForm.anchor] || [.5,.88]
+  return { left:`${point[0]*100}%`, top:`${point[1]*100}%` }
+})
 const episodePreflight = computed(() => serverPreflight.value?.checks || [])
 const preflightIssueScenes = computed(() => {
   const ids = new Set(serverPreflight.value?.issue_scene_ids || [])
@@ -919,14 +926,24 @@ function editScreenTextCue(cue = null) {
     kind: cue?.kind || 'character_intro', text: cue?.text || '', subtext: cue?.subtext || '',
     start_time: cue?.start_time ?? 0, end_time: cue?.end_time ?? Math.min(3, duration),
     writing_mode: cue?.writing_mode || 'vertical-rl', anchor: cue?.anchor || 'top_right',
+    position_x: cue?.position_x ?? .5, position_y: cue?.position_y ?? .5,
     style_code: cue?.style_code || 'xianxia-character-vertical', animation: cue?.animation || 'fade',
     enabled: cue?.enabled ?? true, order: cue?.order || 0, source: cue?.source || 'manual', review_status: 'approved'
   })
   screenTextEditing.value = true
 }
+function setScreenTextPosition(event) {
+  const rect = event.currentTarget.getBoundingClientRect()
+  const x = Math.min(.95, Math.max(.05, (event.clientX - rect.left) / rect.width))
+  const y = Math.min(.95, Math.max(.05, (event.clientY - rect.top) / rect.height))
+  screenTextForm.anchor = 'custom'
+  screenTextForm.position_x = Math.round(x * 1000) / 1000
+  screenTextForm.position_y = Math.round(y * 1000) / 1000
+}
 async function saveScreenTextCue() {
   const { id: cueId, ...payload } = screenTextForm
   if (!String(payload.text || '').trim()) { toast.error('功能文字不能为空'); return }
+  if (payload.anchor !== 'custom') { payload.position_x = null; payload.position_y = null }
   try {
     cueId ? await api.updateScreenTextCue(id(), cueId, payload) : await api.createScreenTextCue(id(), payload)
     screenTextEditing.value = false
@@ -1080,7 +1097,7 @@ watch(videoPromptDraft, () => videoDraftSafety?.schedule())
 .screen-text-track{position:relative;min-width:700px;height:54px;margin-top:7px;border:1px solid var(--border);border-radius:8px;background:var(--surface-secondary);overflow:hidden}
 .screen-text-cue{position:absolute;top:7px;height:38px;min-width:34px;display:grid;align-content:center;overflow:hidden;padding:3px 7px;border:1px solid var(--accent);border-radius:6px;background:var(--accent-soft);color:var(--text-primary);text-align:left;cursor:pointer}
 .screen-text-cue span{font-size:9px;color:var(--accent)}.screen-text-cue strong{font-size:11px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.screen-text-cue.cue-disabled{opacity:.45}.screen-text-empty{padding:17px;color:var(--text-tertiary);font-size:12px}
-.screen-text-grid{display:grid;grid-template-columns:minmax(260px,.8fr) minmax(420px,1.4fr);gap:16px}.screen-text-list{display:grid;align-content:start;gap:7px;padding:12px}.screen-text-row{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--surface-secondary);color:var(--text-primary);cursor:pointer;text-align:left}.screen-text-row small{color:var(--text-tertiary)}.screen-text-form{grid-template-columns:repeat(2,minmax(0,1fr))}.screen-text-preview{min-height:150px;display:flex;align-items:center;justify-content:center;gap:12px;padding:20px;border:1px dashed var(--border);border-radius:10px;background:linear-gradient(135deg,#202229,#121318);color:#f3dfb4}.screen-text-preview.vertical{writing-mode:vertical-rl;text-orientation:upright;justify-content:flex-start}.screen-text-preview.horizontal{writing-mode:horizontal-tb}.screen-text-preview strong{font-family:serif;font-size:32px;letter-spacing:.16em}.screen-text-preview small{font-size:16px;color:#d1b98b}
+.screen-text-grid{display:grid;grid-template-columns:minmax(260px,.8fr) minmax(420px,1.4fr);gap:16px}.screen-text-list{display:grid;align-content:start;gap:7px;padding:12px}.screen-text-row{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--surface-secondary);color:var(--text-primary);cursor:pointer;text-align:left}.screen-text-row small{color:var(--text-tertiary)}.screen-text-form{grid-template-columns:repeat(2,minmax(0,1fr))}.screen-text-preview{position:relative;min-height:260px;overflow:hidden;border:1px dashed var(--border);border-radius:10px;background-color:#121318;background-position:center;background-size:cover;color:#f3dfb4;cursor:crosshair}.screen-text-safe-zone{position:absolute;inset:5%;border:1px dashed rgba(255,255,255,.38);pointer-events:none}.screen-text-preview-copy{position:absolute;display:flex;align-items:center;gap:12px;transform:translate(-50%,-50%);max-width:88%;max-height:88%;filter:drop-shadow(0 2px 3px #000);pointer-events:none}.screen-text-preview-copy.vertical{writing-mode:vertical-rl;text-orientation:upright}.screen-text-preview-copy.horizontal{writing-mode:horizontal-tb}.screen-text-preview-copy strong{font-family:"Noto Sans SC",sans-serif;font-size:32px;letter-spacing:.16em}.screen-text-preview-copy small{font-size:16px;color:#d1b98b}
 @media (max-width:980px){.screen-text-grid{grid-template-columns:1fr}.screen-text-form{grid-template-columns:1fr}.screen-text-form .wide{grid-column:auto}}
 
 .dur-progress { font-size: 14px; font-weight: 600; margin-left: 8px; }

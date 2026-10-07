@@ -7,7 +7,8 @@ import (
 	"comfyui-console/internal/models"
 )
 
-func boolPointer(value bool) *bool { return &value }
+func boolPointer(value bool) *bool        { return &value }
+func floatPointer(value float64) *float64 { return &value }
 
 func TestScreenTextCueCRUDAndProjectIsolation(t *testing.T) {
 	db := safetyDB(t, &models.Project{}, &models.Scene{}, &models.Shot{}, &models.Character{}, &models.ScreenTextCue{})
@@ -86,5 +87,31 @@ func TestScreenTextCueStrictBindingsAndTimeline(t *testing.T) {
 		if _, err := service.Create(p1.ID, input); err == nil {
 			t.Fatalf("invalid cue %d accepted: %+v", index, input)
 		}
+	}
+}
+
+func TestScreenTextCueCustomPositionStaysInsideSafeArea(t *testing.T) {
+	valid, err := normalizeScreenTextCue(1, ScreenTextCueInput{EpisodeN: 1, Kind: "location", Text: "玉霄宫", StartTime: 0, EndTime: 2, Anchor: "custom", PositionX: floatPointer(.9), PositionY: floatPointer(.1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if valid.PositionX == nil || valid.PositionY == nil || *valid.PositionX != .9 || *valid.PositionY != .1 {
+		t.Fatalf("custom position lost: %+v", valid)
+	}
+	for _, input := range []ScreenTextCueInput{
+		{EpisodeN: 1, Kind: "location", Text: "缺坐标", StartTime: 0, EndTime: 1, Anchor: "custom"},
+		{EpisodeN: 1, Kind: "location", Text: "越界", StartTime: 0, EndTime: 1, Anchor: "custom", PositionX: floatPointer(.99), PositionY: floatPointer(.5)},
+		{EpisodeN: 1, Kind: "location", Text: "负数", StartTime: 0, EndTime: 1, Anchor: "custom", PositionX: floatPointer(.5), PositionY: floatPointer(-.1)},
+	} {
+		if _, err := normalizeScreenTextCue(1, input); err == nil {
+			t.Fatalf("invalid custom position accepted: %+v", input)
+		}
+	}
+	preset, err := normalizeScreenTextCue(1, ScreenTextCueInput{EpisodeN: 1, Kind: "location", Text: "预设", StartTime: 0, EndTime: 1, Anchor: "top_right", PositionX: floatPointer(.4), PositionY: floatPointer(.4)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preset.PositionX != nil || preset.PositionY != nil {
+		t.Fatalf("preset retained stale custom coordinates: %+v", preset)
 	}
 }

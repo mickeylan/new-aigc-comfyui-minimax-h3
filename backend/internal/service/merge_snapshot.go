@@ -55,6 +55,7 @@ func (s *ProjectService) captureMergeInputSnapshot(tx *gorm.DB, projectID uint, 
 				ID: cue.ID, ProjectID: cue.ProjectID, EpisodeN: cue.EpisodeN, SceneID: cue.SceneID,
 				ShotID: cue.ShotID, CharacterID: cue.CharacterID, Kind: cue.Kind, Text: cue.Text,
 				Subtext: cue.Subtext, StartTime: cue.StartTime, EndTime: cue.EndTime,
+				PositionX: cue.PositionX, PositionY: cue.PositionY,
 				WritingMode: cue.WritingMode, Anchor: cue.Anchor, StyleCode: cue.StyleCode,
 				Animation: cue.Animation, Enabled: cue.Enabled, Order: cue.Order, ReviewStatus: cue.ReviewStatus,
 			})
