@@ -527,9 +527,6 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 }
 
 func dialogueBoundaryReason(before, after []dialogueRhythmFragmentReview, sameDialogueContinuation bool) string {
-	if sameDialogueContinuation {
-		return "同句跨镜续接"
-	}
 	if len(before) == 0 || len(after) == 0 {
 		return "静默边界"
 	}
@@ -546,6 +543,9 @@ func dialogueBoundaryReason(before, after []dialogueRhythmFragmentReview, sameDi
 	text := []rune(strings.TrimSpace(left.Text))
 	if len(text) > 0 && strings.ContainsRune("，,、；;：:。.!！?？…", text[len(text)-1]) {
 		return "标点停顿"
+	}
+	if sameDialogueContinuation {
+		return "同句跨镜续接"
 	}
 	return "Dialogue边界"
 }

@@ -129,13 +129,13 @@ func TestBuildDialogueRhythmReviewUsesAuthoritativeRangesAndTimeline(t *testing.
 	if len(review) != 3 {
 		t.Fatalf("review=%+v", review)
 	}
-	if review[0].StartTime != 0 || review[0].EndTime != 4 || review[0].DialogueStart != 0 || !review[0].ContinuesToNext || review[0].Presentation != "visible_speaker_lipsync" || review[0].EntryBoundary != "场景开始" || review[0].ExitBoundary != "同句跨镜续接" {
+	if review[0].StartTime != 0 || review[0].EndTime != 4 || review[0].DialogueStart != 0 || !review[0].ContinuesToNext || review[0].Presentation != "visible_speaker_lipsync" || review[0].EntryBoundary != "场景开始" || review[0].ExitBoundary != "标点停顿" {
 		t.Fatalf("first=%+v", review[0])
 	}
 	if len(review[0].Fragments) != 1 || review[0].Fragments[0].DialogueID != 41 || review[0].Fragments[0].GroupKey != "dialogue-group:1" || review[0].Fragments[0].LocalStart != 0 || review[0].Fragments[0].Text != "相信姐姐，" {
 		t.Fatalf("first fragments=%+v", review[0].Fragments)
 	}
-	if review[1].StartTime != 4 || review[1].EndTime != 10 || !review[1].ContinuesFromPrev || review[1].Presentation != "listener_reaction_carryover" || len(review[1].Speakers) != 1 || review[1].Speakers[0] != "上官若琳" || review[1].EntryBoundary != "同句跨镜续接" || review[1].ExitBoundary != "静默边界" {
+	if review[1].StartTime != 4 || review[1].EndTime != 10 || !review[1].ContinuesFromPrev || review[1].Presentation != "listener_reaction_carryover" || len(review[1].Speakers) != 1 || review[1].Speakers[0] != "上官若琳" || review[1].EntryBoundary != "标点停顿" || review[1].ExitBoundary != "静默边界" {
 		t.Fatalf("second=%+v", review[1])
 	}
 	if len(review[1].Fragments) != 1 || review[1].Fragments[0].DialogueID != 41 || review[1].Fragments[0].LocalStart != len([]rune("相信姐姐，")) || review[1].Fragments[0].Text != "姐姐不会让你去。" {
@@ -189,6 +189,7 @@ func TestDialogueBoundaryReasonUsesAuthoritativeSemantics(t *testing.T) {
 		{"speaker", fragment(1, "甲", "dialogue", "说完。"), fragment(2, "乙", "dialogue", "回答"), false, "说话人切换"},
 		{"dialogue", fragment(1, "甲", "dialogue", "说完。"), fragment(2, "甲", "dialogue", "再说"), false, "Dialogue边界"},
 		{"punctuation", fragment(1, "甲", "dialogue", "停顿，"), fragment(1, "甲", "dialogue", "继续"), false, "标点停顿"},
+		{"punctuation overrides continuation", fragment(1, "甲", "dialogue", "停顿，"), fragment(1, "甲", "dialogue", "继续"), true, "标点停顿"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
