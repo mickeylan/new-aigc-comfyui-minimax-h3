@@ -166,6 +166,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.GET("/api/projects/:id/screen-text-cues/preflight", svc.HandleScreenTextPreflight)
 	r.POST("/api/projects/:id/screen-text-cues", svc.HandleCreateScreenTextCue)
 	r.PUT("/api/projects/:id/screen-text-cues/:cid", svc.HandleUpdateScreenTextCue)
+	r.GET("/api/projects/:id/screen-text-cues/:cid/render-preview", svc.HandleRenderScreenTextPreview)
 	r.DELETE("/api/projects/:id/screen-text-cues/:cid", svc.HandleDeleteScreenTextCue)
 	r.GET("/api/fonts", svc.HandleListApprovedFonts)
 	// 对白配音与字幕

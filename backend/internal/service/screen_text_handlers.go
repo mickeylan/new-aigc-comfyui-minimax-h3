@@ -42,6 +42,31 @@ func (s *Service) HandleScreenTextPreflight(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+func (s *Service) HandleRenderScreenTextPreview(c *gin.Context) {
+	project, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	cueID, err := strconv.ParseUint(c.Param("cid"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid screen text cue id"})
+		return
+	}
+	width, _ := strconv.Atoi(c.Query("width"))
+	height, _ := strconv.Atoi(c.Query("height"))
+	data, err := s.ScreenTexts.RenderPreviewPNG(project.ID, uint(cueID), width, height, s.Fonts)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, ErrScreenTextCueNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.Data(http.StatusOK, "image/png", data)
+}
+
 func (s *Service) HandleCreateScreenTextCue(c *gin.Context) {
 	project, ok := s.loadProject(c)
 	if !ok {
