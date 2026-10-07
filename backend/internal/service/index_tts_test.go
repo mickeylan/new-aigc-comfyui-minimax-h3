@@ -58,6 +58,39 @@ func TestLocalIndexTTSStartupFailureIsReportedWithoutBecomingAvailable(t *testin
 	}
 }
 
+func TestLocalIndexTTSStartDefersCUDAmodelLoad(t *testing.T) {
+	modelDir := t.TempDir()
+	local := NewLocalIndexTTS(&config.Config{IndexTTS: config.IndexTTSConfig{Enabled: true, ModelDir: modelDir}}, safetyDB(t))
+	loads := 0
+	model := &fakeIndexModel{}
+	local.loadModel = func(path string, device int) (indextts.Model, error) {
+		loads++
+		if path != modelDir || device != 0 {
+			t.Fatalf("unexpected load path/device: %s %d", path, device)
+		}
+		return model, nil
+	}
+	if err := local.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if loads != 0 || local.model != nil {
+		t.Fatalf("startup eagerly loaded CUDA model: loads=%d model=%v", loads, local.model)
+	}
+	configured, available, statusError := local.Status()
+	if !configured || !available || statusError != "" {
+		t.Fatalf("lazy runtime not ready: configured=%v available=%v error=%q", configured, available, statusError)
+	}
+	if err := local.ensureModelLoaded(); err != nil {
+		t.Fatal(err)
+	}
+	if loads != 1 || local.model == nil {
+		t.Fatalf("first use did not load model once: loads=%d", loads)
+	}
+	if err := local.ensureModelLoaded(); err != nil || loads != 1 {
+		t.Fatalf("model reloaded: loads=%d err=%v", loads, err)
+	}
+}
+
 func TestLocalIndexTTSSynthesizesCharacterVoiceRef(t *testing.T) {
 	db := safetyDB(t, &models.Character{}, &models.Task{})
 	root := t.TempDir()

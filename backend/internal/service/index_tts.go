@@ -30,17 +30,18 @@ type LocalIndexTTS struct {
 	startupError string
 	queue        chan struct{}
 	closed       bool
+	loadModel    func(string, int) (indextts.Model, error)
 }
 
 func NewLocalIndexTTS(cfg *config.Config, db *gorm.DB) *LocalIndexTTS {
 	if cfg == nil {
-		return &LocalIndexTTS{db: db, voices: map[string]indextts.Voice{}, queue: make(chan struct{}, 1)}
+		return &LocalIndexTTS{db: db, voices: map[string]indextts.Voice{}, queue: make(chan struct{}, 1), loadModel: indextts.LoadCUDA}
 	}
 	size := cfg.IndexTTS.QueueSize
 	if size <= 0 {
 		size = 32
 	}
-	return &LocalIndexTTS{cfg: cfg.IndexTTS, comfyDir: cfg.Comfy.ComfyDir, db: db, voices: map[string]indextts.Voice{}, queue: make(chan struct{}, size)}
+	return &LocalIndexTTS{cfg: cfg.IndexTTS, comfyDir: cfg.Comfy.ComfyDir, db: db, voices: map[string]indextts.Voice{}, queue: make(chan struct{}, size), loadModel: indextts.LoadCUDA}
 }
 
 func (s *LocalIndexTTS) Enabled() bool { return s != nil && s.cfg.Enabled }
@@ -51,7 +52,7 @@ func (s *LocalIndexTTS) Available() bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.model != nil && s.startupError == "" && !s.closed
+	return s.startupError == "" && !s.closed
 }
 
 func (s *LocalIndexTTS) RuntimeDetails() (indextts.Capabilities, indextts.ModelInfo, indextts.Health) {
@@ -73,7 +74,7 @@ func (s *LocalIndexTTS) Status() (bool, bool, string) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.cfg.Enabled, s.model != nil && s.startupError == "" && !s.closed, s.startupError
+	return s.cfg.Enabled, s.startupError == "" && !s.closed, s.startupError
 }
 
 func (s *LocalIndexTTS) setStartupError(err error) error {
@@ -94,19 +95,45 @@ func (s *LocalIndexTTS) Start() error {
 	if strings.TrimSpace(s.cfg.ModelDir) == "" {
 		return s.setStartupError(fmt.Errorf("IndexTTS 已启用但 model_dir 为空"))
 	}
-	model, err := indextts.LoadCUDA(s.cfg.ModelDir, s.cfg.DeviceIndex)
-	if err != nil {
-		return s.setStartupError(fmt.Errorf("加载本地 IndexTTS CUDA 模型失败: %w", err))
+	if info, err := os.Stat(s.cfg.ModelDir); err != nil || !info.IsDir() {
+		if err == nil {
+			err = fmt.Errorf("不是目录")
+		}
+		return s.setStartupError(fmt.Errorf("IndexTTS model_dir 不可用: %w", err))
 	}
+	// Startup is deliberately VRAM-free. The CUDA model is loaded on the first
+	// explicit synthesis request, after the shared-GPU conflict check succeeds.
 	s.mu.Lock()
+	s.fingerprint = s.modelFingerprint("deferred-cuda-load")
+	s.startupError = ""
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *LocalIndexTTS) ensureModelLoaded() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("本地 IndexTTS 已关闭")
+	}
+	if s.model != nil {
+		return nil
+	}
+	loader := s.loadModel
+	if loader == nil {
+		loader = indextts.LoadCUDA
+	}
+	model, err := loader(s.cfg.ModelDir, s.cfg.DeviceIndex)
+	if err != nil {
+		s.startupError = fmt.Sprintf("按需加载本地 IndexTTS CUDA 模型失败: %v", err)
+		return fmt.Errorf("%s", s.startupError)
+	}
 	s.model = model
 	s.capabilities = model.Capabilities()
 	if info, infoErr := model.Info(); infoErr == nil {
 		s.modelInfo = info
 	}
-	s.fingerprint = s.modelFingerprint(model.Version())
 	s.startupError = ""
-	s.mu.Unlock()
 	return nil
 }
 
@@ -226,6 +253,9 @@ func (s *LocalIndexTTS) Synthesize(ctx context.Context, d models.Dialogue) (Loca
 		defer func() { <-s.queue }()
 	default:
 		return LocalIndexTTSSynthesis{}, fmt.Errorf("本地 IndexTTS 队列已满，请稍后重试")
+	}
+	if err := s.ensureModelLoaded(); err != nil {
+		return LocalIndexTTSSynthesis{}, err
 	}
 	path, err := s.referenceFor(d)
 	if err != nil {
