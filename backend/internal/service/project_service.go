@@ -6700,6 +6700,7 @@ type MergeAudioOptions struct {
 	DialogueVolume float64
 	BGMVolume      float64
 	DialogueMix    bool
+	ScreenText     bool
 }
 
 func mergeAudioOptions(native, dialogue, bgm *float64) (MergeAudioOptions, error) {
@@ -6770,6 +6771,7 @@ type mergeInputSnapshot struct {
 	DialogueVolume    float64                         `json:"dialogue_volume"`
 	BGMVolume         float64                         `json:"bgm_volume"`
 	DialogueMix       bool                            `json:"dialogue_mix"`
+	ScreenText        bool                            `json:"screen_text"`
 }
 
 func fingerprintSceneVideo(scene models.Scene) (sceneVideoFingerprint, error) {
@@ -6852,7 +6854,7 @@ func (s *ProjectService) createMergeTaskRecord(p *models.Project, sceneIDs []uin
 		for i, id := range sceneIDs {
 			ids[i] = strconv.FormatUint(uint64(id), 10)
 		}
-		mt = models.MergeTask{ProjectID: current.ID, EpisodeN: episodeN, Title: fmt.Sprintf("第%d集 · %s", episodeN, current.Title), SceneOrder: strings.Join(ids, ","), SceneVideoFingerprints: string(encoded), InputSnapshot: string(snapshot), Status: "pending", Generation: episodeGeneration, RequestedDub: dub, RequestedSubtitles: subtitles, NativeVolume: audio.NativeVolume, DialogueVolume: audio.DialogueVolume, BGMVolume: audio.BGMVolume, DialogueMix: audio.DialogueMix}
+		mt = models.MergeTask{ProjectID: current.ID, EpisodeN: episodeN, Title: fmt.Sprintf("第%d集 · %s", episodeN, current.Title), SceneOrder: strings.Join(ids, ","), SceneVideoFingerprints: string(encoded), InputSnapshot: string(snapshot), Status: "pending", Generation: episodeGeneration, RequestedDub: dub, RequestedSubtitles: subtitles, RequestedScreenText: audio.ScreenText, NativeVolume: audio.NativeVolume, DialogueVolume: audio.DialogueVolume, BGMVolume: audio.BGMVolume, DialogueMix: audio.DialogueMix}
 		return tx.Create(&mt).Error
 	})
 	if err != nil {
@@ -6897,7 +6899,7 @@ func (s *ProjectService) validateMergeInputs(tx *gorm.DB, mt *models.MergeTask) 
 		}
 		scenes = append(scenes, scene)
 	}
-	actualSnapshot, err := s.captureMergeInputSnapshot(tx, mt.ProjectID, mt.EpisodeN, mt.Generation, fingerprints, orderedIDs, mt.RequestedDub, mt.RequestedSubtitles, MergeAudioOptions{NativeVolume: mt.NativeVolume, DialogueVolume: mt.DialogueVolume, BGMVolume: mt.BGMVolume, DialogueMix: mt.DialogueMix})
+	actualSnapshot, err := s.captureMergeInputSnapshot(tx, mt.ProjectID, mt.EpisodeN, mt.Generation, fingerprints, orderedIDs, mt.RequestedDub, mt.RequestedSubtitles, MergeAudioOptions{NativeVolume: mt.NativeVolume, DialogueVolume: mt.DialogueVolume, BGMVolume: mt.BGMVolume, DialogueMix: mt.DialogueMix, ScreenText: mt.RequestedScreenText})
 	if err != nil {
 		return nil, err
 	}

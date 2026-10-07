@@ -51,6 +51,17 @@ func buildNormalizedVideoGraph(videoCount, width, height int) []string {
 	return filters
 }
 
+func applyMergeTextFilters(filters []string, textFilters []string) []string {
+	if len(textFilters) == 0 || len(filters) == 0 {
+		return filters
+	}
+	filters[len(filters)-1] = "[vc]fps=24," + textFilters[0] + "[vtext0]"
+	for i := 1; i < len(textFilters); i++ {
+		filters = append(filters, fmt.Sprintf("[vtext%d]%s[vtext%d]", i-1, textFilters[i], i))
+	}
+	return append(filters, fmt.Sprintf("[vtext%d]null[v]", len(textFilters)-1))
+}
+
 func ffnum(value float64) string {
 	return strconv.FormatFloat(value, 'f', 3, 64)
 }
@@ -153,6 +164,7 @@ func (s *Service) HandleCreateAudioMerge(c *gin.Context) {
 		SceneIDs       []uint   `json:"scene_ids"`
 		Dub            bool     `json:"dub"`
 		Subtitles      bool     `json:"subtitles"`
+		ScreenText     bool     `json:"screen_text"`
 		NativeVolume   *float64 `json:"native_volume"`
 		DialogueVolume *float64 `json:"dialogue_volume"`
 		BGMVolume      *float64 `json:"bgm_volume"`
@@ -166,6 +178,7 @@ func (s *Service) HandleCreateAudioMerge(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	options.ScreenText = req.ScreenText
 	mt, err := s.Projects.createAudioMergeTask(p, req.SceneIDs, req.Dub, req.Subtitles, options)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -199,6 +212,7 @@ func (s *ProjectService) audioMixMediaPath(projectID uint, file string) (string,
 func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, scenes []models.Scene, dub, subtitles bool) {
 	// Rendering is driven by the persisted request, not mutable goroutine arguments.
 	dub, subtitles = mt.RequestedDub, mt.RequestedSubtitles
+	screenText := mt.RequestedScreenText
 	claim := s.db.Model(&models.MergeTask{}).Where("id = ? AND project_id = ? AND generation = ? AND status = ?", mt.ID, mt.ProjectID, mt.Generation, "pending").Update("status", "running")
 	if claim.Error != nil || claim.RowsAffected == 0 {
 		return
@@ -309,7 +323,8 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 			return
 		}
 		textFilters = append(textFilters, fmt.Sprintf("subtitles=filename=%s:force_style=FontName\\=Noto Sans SC\\,FontSize\\=28\\,MarginV\\=56", escapeFilterPath(srtAbs)))
-
+	}
+	if screenText {
 		var cues []models.ScreenTextCue
 		selectedIDs := sceneIDsFromStrings(strings.Split(mt.SceneOrder, ","))
 		if err := s.db.Where("project_id = ? AND episode_n = ? AND enabled = ? AND review_status = ? AND (scene_id IS NULL OR scene_id IN ?)", p.ID, mt.EpisodeN, true, "approved", selectedIDs).Order("start_time, `order`, id").Find(&cues).Error; err != nil {
@@ -339,16 +354,7 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 			}
 		}
 	}
-	if len(textFilters) > 0 {
-		filters[len(filters)-1] = "[vc]fps=24," + textFilters[0] + "[vtext0]"
-		for i := 1; i < len(textFilters); i++ {
-			inputLabel := fmt.Sprintf("vtext%d", i-1)
-			outputLabel := fmt.Sprintf("vtext%d", i)
-			filters = append(filters, fmt.Sprintf("[%s]%s[%s]", inputLabel, textFilters[i], outputLabel))
-		}
-		lastLabel := fmt.Sprintf("vtext%d", len(textFilters)-1)
-		filters = append(filters, fmt.Sprintf("[%s]null[v]", lastLabel))
-	}
+	filters = applyMergeTextFilters(filters, textFilters)
 	audioGraph := buildMergeAudioGraph(len(scenes), dub && nativeCount == len(scenes), totalDuration, mt.NativeVolume, extras)
 	if audioGraph.Filters != "" {
 		filters = append(filters, audioGraph.Filters)

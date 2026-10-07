@@ -10,9 +10,9 @@ import (
 // captureMergeInputSnapshot records every database input that can affect the rendered merge.
 func (s *ProjectService) captureMergeInputSnapshot(tx *gorm.DB, projectID uint, episodeN int, generation uint, videos []sceneVideoFingerprint, sceneIDs []uint, dub, subtitles bool, audio MergeAudioOptions) ([]byte, error) {
 	snapshot := mergeInputSnapshot{
-		Version: 2, EpisodeGeneration: generation, Videos: videos,
+		Version: 3, EpisodeGeneration: generation, Videos: videos,
 		Dub: dub, Subtitles: subtitles, NativeVolume: audio.NativeVolume,
-		DialogueVolume: audio.DialogueVolume, BGMVolume: audio.BGMVolume, DialogueMix: audio.DialogueMix,
+		DialogueVolume: audio.DialogueVolume, BGMVolume: audio.BGMVolume, DialogueMix: audio.DialogueMix, ScreenText: audio.ScreenText,
 		Dialogues: []mergeDialogueFingerprint{}, AudioLayers: []mergeAudioLayerFingerprint{}, ScreenTextCues: []mergeScreenTextCueFingerprint{},
 	}
 	if subtitles || audio.DialogueMix {
@@ -41,7 +41,7 @@ func (s *ProjectService) captureMergeInputSnapshot(tx *gorm.DB, projectID uint, 
 			Muted: layer.Muted, Stale: layer.Stale, Status: layer.Status,
 		})
 	}
-	if tx.Migrator().HasTable(&models.ScreenTextCue{}) {
+	if audio.ScreenText && tx.Migrator().HasTable(&models.ScreenTextCue{}) {
 		var cues []models.ScreenTextCue
 		query := tx.Where("project_id = ? AND episode_n = ? AND enabled = ? AND review_status = ?", projectID, episodeN, true, "approved")
 		if len(sceneIDs) > 0 {

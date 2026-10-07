@@ -5,6 +5,35 @@ import (
 	"testing"
 )
 
+func TestApplyMergeTextFiltersSupportsIndependentLayers(t *testing.T) {
+	cases := []struct {
+		name    string
+		layers  []string
+		wants   []string
+		rejects []string
+	}{
+		{name: "both off", wants: []string{"[vc]fps=24[v]"}, rejects: []string{"vtext"}},
+		{name: "dialogue only", layers: []string{"dialogue"}, wants: []string{"[vc]fps=24,dialogue[vtext0]", "[vtext0]null[v]"}},
+		{name: "screen text only", layers: []string{"screen"}, wants: []string{"[vc]fps=24,screen[vtext0]", "[vtext0]null[v]"}},
+		{name: "both", layers: []string{"dialogue", "screen"}, wants: []string{"[vc]fps=24,dialogue[vtext0]", "[vtext0]screen[vtext1]", "[vtext1]null[v]"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			graph := strings.Join(applyMergeTextFilters(buildNormalizedVideoGraph(2, 1920, 1080), tc.layers), ";")
+			for _, want := range tc.wants {
+				if !strings.Contains(graph, want) {
+					t.Fatalf("missing %q: %s", want, graph)
+				}
+			}
+			for _, reject := range tc.rejects {
+				if strings.Contains(graph, reject) {
+					t.Fatalf("unexpected %q: %s", reject, graph)
+				}
+			}
+		})
+	}
+}
+
 func TestBuildMergeAudioGraphMixesNativeDialogueAndLayers(t *testing.T) {
 	graph := buildMergeAudioGraph(2, true, 12, 0.75, []mergeAudioInput{
 		{Index: 2, Start: 1.25, Duration: 3, Volume: 0.8, FadeIn: 0.5, FadeOut: 1, Kind: "sfx"},

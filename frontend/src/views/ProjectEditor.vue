@@ -16,7 +16,8 @@
         <button class="btn btn-ghost btn-sm" @click="createEpisode">新建集</button>
         <button class="btn btn-ghost btn-sm" @click="showCharacterHistory = true">角色历史</button><button class="btn btn-ghost btn-sm" @click="showGeneratedHistory = true">生成历史管理</button>
         <button class="btn btn-ghost btn-sm" @click="deleteEpisode">删除空集</button>
-        <label class="merge-opt"><input type="checkbox" v-model="mergeSub" />烧录字幕</label>
+        <label class="merge-opt"><input type="checkbox" v-model="mergeSub" />烧录对白字幕</label>
+        <label class="merge-opt"><input type="checkbox" v-model="mergeScreenText" />烧录功能文字</label>
         <label class="merge-opt"><input type="checkbox" v-model="mergeDub" />保留原声</label>
         <label class="merge-opt">原声 <input class="sub-t" type="number" min="0" max="4" step="0.1" v-model.number="nativeVolume" /></label>
         <label class="merge-opt">对白 <input class="sub-t" type="number" min="0" max="4" step="0.1" v-model.number="dialogueVolume" /></label>
@@ -417,6 +418,7 @@ const tab = ref('dub')
 const busy = ref(false)
 const curMerging = ref(false)
 const mergeSub = ref(true)
+const mergeScreenText = ref(true)
 const mergeDub = ref(true)
 const nativeVolume = ref(1)
 const dialogueVolume = ref(1)
@@ -763,8 +765,8 @@ async function mergeEpisode() {
   }
   curMerging.value = true
   try {
-    await api.mergeAudioScenes(id(), { scene_ids: ids, dub: mergeDub.value, subtitles: mergeSub.value, native_volume: nativeVolume.value, dialogue_volume: dialogueVolume.value, bgm_volume: bgmVolume.value })
-    toast.show(`第${activeEpN.value}集合并已启动（配音+字幕）`)
+    await api.mergeAudioScenes(id(), { scene_ids: ids, dub: mergeDub.value, subtitles: mergeSub.value, screen_text: mergeScreenText.value, native_volume: nativeVolume.value, dialogue_volume: dialogueVolume.value, bgm_volume: bgmVolume.value })
+    toast.show(`第${activeEpN.value}集合并已启动（对白字幕：${mergeSub.value?'开':'关'}；功能文字：${mergeScreenText.value?'开':'关'}）`)
     setTimeout(loadMerges, 3000)
   } catch (e) {
     toast.error(e.response?.data?.error || '合并失败')

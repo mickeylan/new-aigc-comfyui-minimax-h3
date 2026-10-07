@@ -393,6 +393,7 @@ type MergeTask struct {
 	Generation             uint      `gorm:"index" json:"generation"`                            // 本集权威场景版本（不等同于项目全局版本）
 	RequestedDub           bool      `gorm:"column:requested_dub;default:false" json:"requested_dub"`
 	RequestedSubtitles     bool      `gorm:"column:requested_subtitles;default:false" json:"requested_subtitles"`
+	RequestedScreenText    bool      `gorm:"column:requested_screen_text;default:false" json:"requested_screen_text"`
 	Status                 string    `json:"status"`                        // pending/running/success/failed
 	OutputFile             string    `json:"output_file"`                   // 合并输出文件（相对 output_workers/gpu0/ 路径）
 	Subtitle               bool      `gorm:"default:false" json:"subtitle"` // 是否生成了配音字幕（SRT 与成片同名）
