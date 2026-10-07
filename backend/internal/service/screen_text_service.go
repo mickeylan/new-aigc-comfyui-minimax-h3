@@ -144,6 +144,54 @@ func normalizeScreenTextCue(projectID uint, in ScreenTextCueInput) (models.Scree
 	}, nil
 }
 
+func (s *ScreenTextService) validateProductionRules(cue *models.ScreenTextCue, excludeID uint) error {
+	if !cue.Enabled || cue.ReviewStatus != "approved" {
+		return nil
+	}
+	if cue.Kind == "character_intro" && cue.CharacterID != nil {
+		var count int64
+		query := s.db.Model(&models.ScreenTextCue{}).Where("project_id = ? AND episode_n = ? AND kind = ? AND character_id = ? AND enabled = ? AND review_status = ?", cue.ProjectID, cue.EpisodeN, "character_intro", *cue.CharacterID, true, "approved")
+		if excludeID > 0 {
+			query = query.Where("id <> ?", excludeID)
+		}
+		if err := query.Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return fmt.Errorf("该角色本集已有已审核的人物出场题名")
+		}
+	}
+	if cue.Kind == "end_card" {
+		if cue.SceneID == nil {
+			return fmt.Errorf("本集完必须绑定本集最后一个场景")
+		}
+		var last models.Scene
+		if err := s.db.Where("project_id = ? AND episode_n = ?", cue.ProjectID, cue.EpisodeN).Order("`order` DESC, id DESC").First(&last).Error; err != nil {
+			return err
+		}
+		if last.ID != *cue.SceneID {
+			return fmt.Errorf("本集完只能绑定本集最后一个场景")
+		}
+		if cue.EndTime < last.Duration-0.001 {
+			return fmt.Errorf("本集完必须持续到最后场景结尾")
+		}
+	}
+	if cue.SceneID != nil {
+		var count int64
+		query := s.db.Model(&models.ScreenTextCue{}).Where("project_id = ? AND episode_n = ? AND scene_id = ? AND anchor = ? AND enabled = ? AND review_status = ? AND start_time < ? AND end_time > ?", cue.ProjectID, cue.EpisodeN, *cue.SceneID, cue.Anchor, true, "approved", cue.EndTime, cue.StartTime)
+		if excludeID > 0 {
+			query = query.Where("id <> ?", excludeID)
+		}
+		if err := query.Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return fmt.Errorf("同一位置已有时间重叠的功能文字，请调整时间或位置")
+		}
+	}
+	return nil
+}
+
 func (s *ScreenTextService) validateBindings(cue *models.ScreenTextCue) error {
 	if cue.SceneID != nil {
 		var scene models.Scene
@@ -202,6 +250,9 @@ func (s *ScreenTextService) Create(projectID uint, in ScreenTextCueInput) (*mode
 	if err := s.validateBindings(&cue); err != nil {
 		return nil, err
 	}
+	if err := s.validateProductionRules(&cue, 0); err != nil {
+		return nil, err
+	}
 	if err := s.db.Create(&cue).Error; err != nil {
 		return nil, err
 	}
@@ -221,6 +272,9 @@ func (s *ScreenTextService) Update(projectID, id uint, in ScreenTextCueInput) (*
 		return nil, err
 	}
 	if err := s.validateBindings(&cue); err != nil {
+		return nil, err
+	}
+	if err := s.validateProductionRules(&cue, id); err != nil {
 		return nil, err
 	}
 	updates := map[string]any{

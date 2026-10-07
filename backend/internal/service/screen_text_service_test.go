@@ -91,6 +91,37 @@ func TestScreenTextCueStrictBindingsAndTimeline(t *testing.T) {
 	}
 }
 
+func TestScreenTextCueProductionRulesPreventDuplicateAndOverlappingTitles(t *testing.T) {
+	db := safetyDB(t, &models.Project{}, &models.Scene{}, &models.Character{}, &models.ScreenTextCue{})
+	project := models.Project{Title: "剧"}
+	db.Create(&project)
+	first := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Duration: 5}
+	last := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 2, Duration: 6}
+	db.Create(&first)
+	db.Create(&last)
+	character := models.Character{ProjectID: project.ID, Name: "上官若琳"}
+	db.Create(&character)
+	service := NewScreenTextService(db)
+	if _, err := service.Create(project.ID, ScreenTextCueInput{EpisodeN: 1, SceneID: &first.ID, CharacterID: &character.ID, Kind: "character_intro", Text: "上官若琳", StartTime: 0, EndTime: 2, Anchor: "top_right"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Create(project.ID, ScreenTextCueInput{EpisodeN: 1, SceneID: &last.ID, CharacterID: &character.ID, Kind: "character_intro", Text: "再次出场", StartTime: 0, EndTime: 2, Anchor: "top_left"}); err == nil {
+		t.Fatal("duplicate character intro accepted")
+	}
+	if _, err := service.Create(project.ID, ScreenTextCueInput{EpisodeN: 1, SceneID: &first.ID, Kind: "location", Text: "重叠地点", StartTime: 1, EndTime: 3, Anchor: "top_right"}); err == nil {
+		t.Fatal("overlapping anchor accepted")
+	}
+	if _, err := service.Create(project.ID, ScreenTextCueInput{EpisodeN: 1, SceneID: &first.ID, Kind: "end_card", Text: "本集完", StartTime: 3, EndTime: 5, Anchor: "center"}); err == nil {
+		t.Fatal("end card on non-final scene accepted")
+	}
+	if _, err := service.Create(project.ID, ScreenTextCueInput{EpisodeN: 1, SceneID: &last.ID, Kind: "end_card", Text: "本集完", StartTime: 4, EndTime: 5.5, Anchor: "center"}); err == nil {
+		t.Fatal("end card not reaching episode end accepted")
+	}
+	if _, err := service.Create(project.ID, ScreenTextCueInput{EpisodeN: 1, SceneID: &last.ID, Kind: "end_card", Text: "本集完", StartTime: 4, EndTime: 6, Anchor: "center"}); err != nil {
+		t.Fatalf("valid end card rejected: %v", err)
+	}
+}
+
 func TestScreenTextCueCustomPositionStaysInsideSafeArea(t *testing.T) {
 	valid, err := normalizeScreenTextCue(1, ScreenTextCueInput{EpisodeN: 1, Kind: "location", Text: "玉霄宫", StartTime: 0, EndTime: 2, Anchor: "custom", PositionX: floatPointer(.9), PositionY: floatPointer(.1)})
 	if err != nil {
