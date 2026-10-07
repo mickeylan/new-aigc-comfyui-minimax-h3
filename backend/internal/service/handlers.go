@@ -1062,14 +1062,19 @@ func (s *Service) HandleCreateShots(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Shots []models.Shot `json:"shots"`
+		Shots            []models.Shot `json:"shots"`
+		DialogueSnapshot string        `json:"dialogue_snapshot"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	shots, err := s.Shots.ReplaceShots(uint(sceneID), req.Shots)
+	shots, err := s.Shots.ReplaceShotsWithDialogueSnapshot(uint(sceneID), req.Shots, req.DialogueSnapshot)
 	if err != nil {
+		if errors.Is(err, ErrDialogueSnapshotConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}

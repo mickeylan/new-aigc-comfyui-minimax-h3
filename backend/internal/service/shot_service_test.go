@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -108,6 +109,39 @@ func TestShotServicePersistsExplicitDialogueRangesAcrossCuts(t *testing.T) {
 	}
 	if shots[0].DialogueRanges[0].EndRune != shots[1].DialogueRanges[0].StartRune {
 		t.Fatalf("ranges are not contiguous: %+v", shots)
+	}
+}
+
+func TestReplaceShotsRejectsStaleDialogueSnapshotWithoutMutation(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "dialogue snapshot"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
+	db.Create(&scene)
+	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "姐姐", SpeechType: "dialogue", Text: "原始对白"}
+	db.Create(&dialogue)
+	svc := NewShotService(db)
+	initial, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "close", Duration: 3, Dialogue: "原始对白", Description: "原始镜头"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, snapshot, err := loadSceneDialogueSnapshot(db, scene.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&dialogue).Updates(map[string]any{"text": "修改对白", "order": 2}).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.ReplaceShotsWithDialogueSnapshot(scene.ID, []models.Shot{{ShotType: "wide", Duration: 3, Dialogue: "修改对白", Description: "不应写入"}}, snapshot)
+	if !errors.Is(err, ErrDialogueSnapshotConflict) {
+		t.Fatalf("error=%v", err)
+	}
+	var saved []models.Shot
+	if err := db.Where("scene_id = ?", scene.ID).Order("order_num, id").Find(&saved).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(saved) != 1 || saved[0].ID != initial[0].ID || saved[0].Description != "原始镜头" || saved[0].Dialogue != "原始对白" {
+		t.Fatalf("stale save mutated shots: %+v", saved)
 	}
 }
 

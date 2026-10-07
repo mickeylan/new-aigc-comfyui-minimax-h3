@@ -630,6 +630,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	response := gin.H{"draft": draft, "skill_code": "director-scene-draft", "provider_id": s.TextProviderFact.Name(), "audited": true, "mode": req.Mode, "dialogue_duration": dialogueDuration}
 	if req.Mode == "dialogue_rhythm" {
 		response["dialogue_review"] = buildDialogueRhythmReview(draft, dialogues)
+		response["dialogue_snapshot"] = dialogueSnapshotToken(dialogues)
 	}
 	c.JSON(200, response)
 }

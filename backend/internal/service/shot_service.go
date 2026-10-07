@@ -1,7 +1,9 @@
 package service
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -16,6 +18,25 @@ type ShotService struct{ db *gorm.DB }
 func NewShotService(db *gorm.DB) *ShotService { return &ShotService{db: db} }
 
 const shotDurationTolerance = 0.5
+
+var ErrDialogueSnapshotConflict = errors.New("结构化Dialogue已在导演草稿生成后发生变化，请重新生成对白节奏拆镜草稿")
+
+func dialogueSnapshotToken(dialogues []models.Dialogue) string {
+	hash := sha256.New()
+	for _, dialogue := range dialogues {
+		fmt.Fprintf(hash, "%d\x00%d\x00%d\x00%s\x00%s\x00%s\n", dialogue.ID, dialogue.SceneID, dialogue.Order, strings.TrimSpace(dialogue.Character), strings.TrimSpace(dialogue.SpeechType), canonicalDialogueText(dialogue.Text))
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil))
+}
+
+func loadSceneDialogueSnapshot(tx *gorm.DB, sceneID uint) ([]models.Dialogue, string, error) {
+	var dialogues []models.Dialogue
+	if err := tx.Where("scene_id = ?", sceneID).Order("`order`, id").Find(&dialogues).Error; err != nil {
+		return nil, "", err
+	}
+	dialogues = validSceneDialogues(dialogues)
+	return dialogues, dialogueSnapshotToken(dialogues), nil
+}
 
 func shotDurationTotal(shots []models.Shot) float64 {
 	total := 0.0
@@ -249,6 +270,10 @@ func (s *ShotService) CreateShot(sceneID uint, shot models.Shot) (*models.Shot, 
 // ReplaceShots stores the supplied director shots as-is while preserving IDs for existing
 // shots. Stable IDs keep prompt history and shot-level asset associations attached across saves.
 func (s *ShotService) ReplaceShots(sceneID uint, shots []models.Shot) ([]models.Shot, error) {
+	return s.ReplaceShotsWithDialogueSnapshot(sceneID, shots, "")
+}
+
+func (s *ShotService) ReplaceShotsWithDialogueSnapshot(sceneID uint, shots []models.Shot, expectedSnapshot string) ([]models.Shot, error) {
 	for i := range shots {
 		shots[i].SceneID, shots[i].Order = sceneID, i+1
 		if err := validateShot(&shots[i]); err != nil {
@@ -259,6 +284,15 @@ func (s *ShotService) ReplaceShots(sceneID uint, shots []models.Shot) ([]models.
 		projectID, err := projectIDForScene(tx, sceneID)
 		if err != nil {
 			return err
+		}
+		if strings.TrimSpace(expectedSnapshot) != "" {
+			_, currentSnapshot, snapshotErr := loadSceneDialogueSnapshot(tx, sceneID)
+			if snapshotErr != nil {
+				return snapshotErr
+			}
+			if currentSnapshot != strings.TrimSpace(expectedSnapshot) {
+				return ErrDialogueSnapshotConflict
+			}
 		}
 		var existing []models.Shot
 		if err := tx.Where("scene_id = ?", sceneID).Order("order_num, id").Find(&existing).Error; err != nil {
