@@ -57,6 +57,10 @@ func TestScreenTextCueRoutes(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("list status=%d body=%s", response.Code, response.Body.String())
 	}
+	response = request(http.MethodGet, base+"/preflight?episode_n=1&width=1080&height=1920", "")
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"font_unverified"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"width":1080`)) {
+		t.Fatalf("preflight status=%d body=%s", response.Code, response.Body.String())
+	}
 	wrongProject := fmt.Sprintf("/api/projects/%d/screen-text-cues/%d", p2.ID, cue.ID)
 	if response = request(http.MethodDelete, wrongProject, ""); response.Code != http.StatusNotFound {
 		t.Fatalf("cross-project delete status=%d body=%s", response.Code, response.Body.String())

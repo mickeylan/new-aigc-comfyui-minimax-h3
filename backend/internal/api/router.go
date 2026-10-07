@@ -163,6 +163,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.DELETE("/api/projects/:id/audio-layers/:aid", svc.HandleDeleteAudioLayer)
 	// 非对白功能文字：人物出场、地点、时间、过场与结束卡
 	r.GET("/api/projects/:id/screen-text-cues", svc.HandleListScreenTextCues)
+	r.GET("/api/projects/:id/screen-text-cues/preflight", svc.HandleScreenTextPreflight)
 	r.POST("/api/projects/:id/screen-text-cues", svc.HandleCreateScreenTextCue)
 	r.PUT("/api/projects/:id/screen-text-cues/:cid", svc.HandleUpdateScreenTextCue)
 	r.DELETE("/api/projects/:id/screen-text-cues/:cid", svc.HandleDeleteScreenTextCue)

@@ -22,6 +22,26 @@ func (s *Service) HandleListScreenTextCues(c *gin.Context) {
 	c.JSON(http.StatusOK, cues)
 }
 
+func (s *Service) HandleScreenTextPreflight(c *gin.Context) {
+	project, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	episodeN, err := strconv.Atoi(c.Query("episode_n"))
+	if err != nil || episodeN <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "episode_n 必须大于 0"})
+		return
+	}
+	width, _ := strconv.Atoi(c.Query("width"))
+	height, _ := strconv.Atoi(c.Query("height"))
+	result, err := s.ScreenTexts.Preflight(project.ID, episodeN, width, height, s.Fonts)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
 func (s *Service) HandleCreateScreenTextCue(c *gin.Context) {
 	project, ok := s.loadProject(c)
 	if !ok {

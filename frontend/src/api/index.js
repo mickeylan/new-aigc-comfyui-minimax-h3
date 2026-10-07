@@ -148,6 +148,7 @@ export const api = {
   updateAudioLayer: (id, aid, data) => http.put(`/projects/${id}/audio-layers/${aid}`, data),
   deleteAudioLayer: (id, aid) => http.delete(`/projects/${id}/audio-layers/${aid}`),
   screenTextCues: (id, episodeN) => http.get(`/projects/${id}/screen-text-cues`, { params: episodeN ? { episode_n: episodeN } : {} }),
+  screenTextPreflight: (id, episodeN, width = 1920, height = 1080) => http.get(`/projects/${id}/screen-text-cues/preflight`, { params: { episode_n: episodeN, width, height } }),
   createScreenTextCue: (id, data) => http.post(`/projects/${id}/screen-text-cues`, data),
   updateScreenTextCue: (id, cid, data) => http.put(`/projects/${id}/screen-text-cues/${cid}`, data),
   deleteScreenTextCue: (id, cid) => http.delete(`/projects/${id}/screen-text-cues/${cid}`),

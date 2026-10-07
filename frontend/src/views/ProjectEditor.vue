@@ -266,6 +266,11 @@
 
     <section v-if="selected" class="section screen-text-section">
       <div class="section-head"><div><span class="overline">SCREEN TEXT</span><h2>功能文字（非对白字幕）</h2><p class="sub">用于人物出场、地点、时间、过场和“本集完”；不会进入Dialogue、配音或H3提示词。</p><p class="font-compliance" :class="approvedFonts.some(font=>font.verified)?'ok':'warn'">{{approvedFonts.some(font=>font.verified)?`已验证 ${approvedFonts.filter(font=>font.verified).length} 套开源中文字体`:'尚未安装通过许可证与SHA-256校验的中文字体；可编辑预览，但正式发行导出将被阻止'}}</p></div><button class="btn btn-sm btn-secondary" @click="editScreenTextCue()">新增功能文字</button></div>
+      <div class="card screen-text-preflight">
+        <div class="screen-text-preflight-head"><strong>最终渲染检查</strong><span v-if="screenTextPreflightLoading">检查中…</span><span v-else-if="screenTextPreflight?.ok" class="check-ok">✓ 可正式导出</span><span v-else class="check-fail">✗ 正式导出将被阻止</span><button class="btn btn-xs btn-secondary" @click="loadScreenTextPreflight">重新检查</button></div>
+        <p v-if="screenTextPreflight">{{screenTextPreflight.width}}×{{screenTextPreflight.height}} · {{screenTextPreflight.font_family || screenTextPreflight.font_code}} · {{screenTextPreflight.previews?.length || 0}} 条已审核文字</p>
+        <div v-for="issue in screenTextPreflight?.issues || []" :key="`${issue.cue_id}-${issue.code}-${issue.message}`" :class="issue.severity==='error'?'check-fail':'screen-text-warning'">{{issue.severity==='error'?'✗':'⚠'}} {{issue.message}}</div>
+      </div>
       <div class="screen-text-grid">
         <div class="card screen-text-list">
           <button v-for="cue in selectedScreenTextCues" :key="cue.id" class="screen-text-row" @click="editScreenTextCue(cue)"><span class="badge badge-gray">{{screenTextKindLabel(cue.kind)}}</span><strong>{{cue.text}}</strong><small>{{cue.start_time}}–{{cue.end_time}}秒 · {{cue.writing_mode}}</small></button>
@@ -392,6 +397,8 @@ const audioLayers = ref([])
 const audioLayerEditing = ref(false)
 const audioLayerForm = reactive({})
 const screenTextCues = ref([])
+const screenTextPreflight = ref(null)
+const screenTextPreflightLoading = ref(false)
 const screenTextEditing = ref(false)
 const screenTextForm = reactive({})
 const characters = ref([])
@@ -903,12 +910,19 @@ async function loadAudioLayers() {
   try { const { data } = await api.audioLayers(id(), activeEpN.value); audioLayers.value = data || [] }
   catch (e) { toast.error(e.response?.data?.error || '加载音频层失败') }
 }
+async function loadScreenTextPreflight() {
+  screenTextPreflightLoading.value = true
+  try { screenTextPreflight.value = (await api.screenTextPreflight(id(), activeEpN.value)).data }
+  catch (e) { screenTextPreflight.value = { ok:false, issues:[{severity:'error',message:e.response?.data?.error || '功能文字导出检查失败'}], previews:[] } }
+  finally { screenTextPreflightLoading.value = false }
+}
 async function loadScreenTextCues() {
   try {
     const [cueRes, characterRes, fontRes] = await Promise.all([api.screenTextCues(id(), activeEpN.value), api.characters(id()), api.approvedFonts()])
     screenTextCues.value = cueRes.data || []
     characters.value = Array.isArray(characterRes.data) ? characterRes.data : (characterRes.data?.characters || [])
     approvedFonts.value = fontRes.data?.fonts || []
+    await loadScreenTextPreflight()
   } catch (e) { toast.error(e.response?.data?.error || '加载功能文字失败') }
 }
 function screenTextKindLabel(kind) { return { character_intro:'人物出场', location:'地点', time_card:'时间', transition:'过场', chapter_title:'章回标题', story_note:'剧情提示', end_card:'本集完', custom:'自定义' }[kind] || kind }
@@ -1092,7 +1106,7 @@ watch(videoPromptDraft, () => videoDraftSafety?.schedule())
 .tl-empty-hint { padding: 40px; color: var(--text-tertiary); }
 .shot-timeline-wrap{min-width:100%;margin-top:16px;padding-top:14px;border-top:1px solid var(--border)}.shot-timeline-head{display:flex;justify-content:space-between;margin-bottom:8px;color:var(--text-secondary)}.shot-timeline{display:flex;gap:6px;min-width:700px}.shot-clip{display:grid;min-width:120px;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--surface-secondary);font-size:11px}.shot-clip span,.shot-clip small{color:var(--text-tertiary)}.shot-dialogue{display:grid;gap:3px;margin-top:5px;padding-top:5px;border-top:1px solid var(--border)}.shot-dialogue span{color:var(--text-secondary)}.shot-flags{display:flex;gap:4px;margin-top:5px}.shot-flags i{padding:2px 5px;border-radius:5px;background:var(--accent-soft);color:var(--accent);font-style:normal}.relation-workbench{display:grid;grid-template-columns:1.2fr 1fr;gap:16px}.continuity-compare,.reference-map{padding:16px}.compare-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.compare-grid figure{margin:0}.compare-grid figcaption{margin-bottom:6px;font-size:12px;color:var(--text-secondary)}.compare-grid img,.compare-empty{width:100%;aspect-ratio:16/9;object-fit:contain;border-radius:8px;background:#111}.compare-empty{display:flex;align-items:center;justify-content:center;color:#aaa}.reference-row{display:grid;grid-template-columns:88px 1fr;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--border)}.reference-row img{width:88px;aspect-ratio:16/9;object-fit:cover;border-radius:6px}.reference-row p{margin:4px 0;color:var(--text-secondary);font-size:12px}
 
-.font-compliance{margin:6px 0 0;font-size:12px}.font-compliance.ok{color:#22c55e}.font-compliance.warn{color:#f59e0b}
+.font-compliance{margin:6px 0 0;font-size:12px}.font-compliance.ok{color:#22c55e}.font-compliance.warn{color:#f59e0b}.screen-text-preflight{margin-bottom:14px;padding:14px}.screen-text-preflight-head{display:flex;align-items:center;gap:12px}.screen-text-preflight-head button{margin-left:auto}.screen-text-preflight p{margin:7px 0;color:var(--text-secondary);font-size:12px}.screen-text-warning{color:#f59e0b;font-size:12px}
 .screen-text-track-head{display:flex;align-items:center;justify-content:space-between;margin-top:12px;color:var(--text-secondary)}
 .screen-text-track{position:relative;min-width:700px;height:54px;margin-top:7px;border:1px solid var(--border);border-radius:8px;background:var(--surface-secondary);overflow:hidden}
 .screen-text-cue{position:absolute;top:7px;height:38px;min-width:34px;display:grid;align-content:center;overflow:hidden;padding:3px 7px;border:1px solid var(--accent);border-radius:6px;background:var(--accent-soft);color:var(--text-primary);text-align:left;cursor:pointer}
