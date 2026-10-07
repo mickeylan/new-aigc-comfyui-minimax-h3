@@ -146,6 +146,53 @@ func TestBuildDialogueRhythmReviewUsesAuthoritativeRangesAndTimeline(t *testing.
 	}
 }
 
+func TestDialogueRhythmReviewMatchesPersistedRangesAcrossDialogues(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "range parity"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Duration: 10}
+	db.Create(&scene)
+	dialogues := []models.Dialogue{
+		{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "姐姐", SpeechType: "dialogue", Text: "相信姐姐，"},
+		{ProjectID: project.ID, SceneID: scene.ID, Order: 2, Character: "姐姐", SpeechType: "dialogue", Text: "我不会让你去。"},
+		{ProjectID: project.ID, SceneID: scene.ID, Order: 3, Character: "妹妹", SpeechType: "dialogue", Text: "我知道了。"},
+	}
+	for i := range dialogues {
+		if err := db.Create(&dialogues[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
+		{Duration: 5, Dialogue: "相信姐姐，我不会", ShotType: "双人中景"},
+		{Duration: 5, Dialogue: "让你去。我知道了。", ShotType: "双人近景"},
+	}}
+	review := buildDialogueRhythmReview(draft, dialogues)
+	if len(review) != 2 || len(review[0].Fragments) != 2 || len(review[1].Fragments) != 2 {
+		t.Fatalf("review fragments=%+v", review)
+	}
+	saved, err := NewShotService(db).ReplaceShots(scene.ID, []models.Shot{{ShotType: "双人中景", Duration: 5, Dialogue: draft.Shots[0].Dialogue}, {ShotType: "双人近景", Duration: 5, Dialogue: draft.Shots[1].Dialogue}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range saved {
+		if len(saved[i].DialogueRanges) != len(review[i].Fragments) {
+			t.Fatalf("shot %d ranges=%+v review=%+v", i+1, saved[i].DialogueRanges, review[i].Fragments)
+		}
+		for j, got := range saved[i].DialogueRanges {
+			want := review[i].Fragments[j]
+			if got.DialogueID != want.DialogueID || got.GroupKey != want.GroupKey || got.StartRune != want.StartRune || got.EndRune != want.EndRune {
+				t.Fatalf("shot %d fragment %d persisted=%+v review=%+v", i+1, j+1, got, want)
+			}
+		}
+	}
+	if review[0].Fragments[0].GroupKey != review[0].Fragments[1].GroupKey {
+		t.Fatalf("continued dialogues split groups: %+v", review[0].Fragments)
+	}
+	if review[1].Fragments[0].GroupKey == review[1].Fragments[1].GroupKey {
+		t.Fatalf("different speaker reused group: %+v", review[1].Fragments)
+	}
+}
+
 func TestValidateDialogueRhythmDraftPreservesDialogueExactly(t *testing.T) {
 	draft, err := parseSceneDirectorDraft(`{"shots":[{"act_type":"setup","shot_type":"说话人近景","camera_angle":"平视","camera_movement":"固定","duration":8,"description":"若彤开口","dialogue":"姐姐，自从你跟太运宗使者比试之后，","emotion":"担忧","transition_type":"cut","transition_note":"切反应","start_state":"若彤停下","end_state":"若彤继续说","prompt_subject":"若彤面部清晰","prompt_action":"担忧地说话","prompt_camera":"中近景","prompt_lighting":"落日余晖","prompt_style":"真人写实","negative_prompt":"","checks":[]},{"act_type":"rising","shot_type":"听者反应","camera_angle":"平视","camera_movement":"固定","duration":9,"description":"若琳聆听，若彤画外音继续","dialogue":"这十年你都没有怎么好好闭关修炼过。","emotion":"忧虑","transition_type":"cut","transition_note":"","start_state":"若琳安静聆听","end_state":"若琳神情微变","prompt_subject":"若琳反应清晰","prompt_action":"安静聆听","prompt_camera":"反应特写","prompt_lighting":"落日余晖","prompt_style":"真人写实","negative_prompt":"","checks":[]}]}`)
 	if err != nil {

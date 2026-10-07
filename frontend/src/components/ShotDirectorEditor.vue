@@ -79,9 +79,23 @@ function draftDialoguePresentation(shot) {
   const visual = [shot.shot_type, shot.description, shot.prompt_subject, shot.prompt_action].join(' ')
   return /声音跨切延续|台词跨切延续|画外继续|画外音继续/.test(visual) ? '听者反应 · 原说话人跨切延续 · 听者闭口' : '说话人可见 · 同步口型'
 }
+function savedDialogueAuditMismatch(review, savedShots) {
+  if (!Array.isArray(review) || !review.length) return ''
+  if (!Array.isArray(savedShots) || savedShots.length !== review.length) return `镜头数量 ${savedShots?.length || 0}/${review.length} 不一致`
+  for (let i = 0; i < review.length; i++) {
+    const expected = review[i]?.fragments || []
+    const actual = savedShots[i]?.dialogue_ranges || []
+    if (expected.length !== actual.length) return `镜头${i + 1} Dialogue片段数量 ${actual.length}/${expected.length} 不一致`
+    for (let j = 0; j < expected.length; j++) {
+      const want = expected[j], got = actual[j]
+      if (Number(got.dialogue_id) !== Number(want.dialogue_id) || got.group_key !== want.group_key || Number(got.start_rune) !== Number(want.start_rune) || Number(got.end_rune) !== Number(want.end_rune)) return `镜头${i + 1}第${j + 1}段持久化区间与审核草稿不一致`
+    }
+  }
+  return ''
+}
 function setPrompt(shot, text) { const lines = String(text || '').split(/\r?\n/).map(v => v.trim()); if (lines.length === 5) { [shot.prompt_subject, shot.prompt_action, shot.prompt_camera, shot.prompt_lighting, shot.prompt_style] = lines; return } const parts = String(text || '').split(/\n|；|;/).map(v => v.trim()).filter(Boolean); if (parts.length >= 5) [shot.prompt_subject, shot.prompt_action, shot.prompt_camera, shot.prompt_lighting, shot.prompt_style] = [parts[0], parts[1], parts[2], parts[3], parts.slice(4).join(', ')]; else shot.prompt_style = text }
 async function generateDirectorDraft(mode='standard') { generatingDirector.value = true; directorRequestMode.value=mode; directorElapsed.value=0; clearInterval(directorTimer); directorTimer=setInterval(()=>directorElapsed.value++,1000); try { const { data } = await api.sceneDirectorDraft(props.projectId, props.sceneId, { brief: directorBrief.value, requirements: directorRequirements.value, mode }); directorDraft.value = data.draft; directorDraftMode.value = data.mode || mode; directorDialogueDuration.value = Number(data.dialogue_duration)||0; directorDialogueReview.value = Array.isArray(data.dialogue_review) ? data.dialogue_review : []; toast.success(mode==='dialogue_rhythm'?'对白节奏拆镜草稿已生成，请逐镜审核':mode==='action_rhythm'?'武戏/仙术节拍草稿已生成，请检查实时速度、碰撞结果和空间连续性':'完整导演草稿已生成，请审核后确认') } catch (e) { toast.error(e.code==='ECONNABORTED'?'AI导演请求超过10分钟仍未返回，请检查文生文服务日志后重试':(e.response?.data?.error || e.message || 'AI导演方案生成失败')) } finally { clearInterval(directorTimer); directorTimer=null; generatingDirector.value = false } }
-async function confirmDirectorDraft() { if (!directorDraft.value?.shots?.length) return; if (shots.value.length && !window.confirm('确认后将替换当前Shot导演设计；Scene剧情和起始帧提示词不会被覆盖。是否继续？')) return; saving.value = true; try { const payload = directorDraft.value.shots.map(({ checks, ...shot }) => shot); const { data } = await api.replaceSceneShots(props.projectId, props.sceneId, payload); shots.value = data.shots.map(hydrate); directorDraft.value = null; emit('scene-changed'); toast.success('AI导演方案已保存，可继续手工微调或生成分镜图') } catch (e) { toast.error(e.response?.data?.error || '保存AI导演方案失败') } finally { saving.value = false } }
+async function confirmDirectorDraft() { if (!directorDraft.value?.shots?.length) return; if (shots.value.length && !window.confirm('确认后将替换当前Shot导演设计；Scene剧情和起始帧提示词不会被覆盖。是否继续？')) return; saving.value = true; try { const payload = directorDraft.value.shots.map(({ checks, ...shot }) => shot); const { data } = await api.replaceSceneShots(props.projectId, props.sceneId, payload); const saved = data.shots || []; const mismatch = savedDialogueAuditMismatch(directorDialogueReview.value, saved); shots.value = saved.map(hydrate); directorDraft.value = null; directorDialogueReview.value = []; emit('scene-changed'); mismatch ? toast.error(`导演方案已保存，但对白区间回读校验失败：${mismatch}。请勿继续生成，重新打开场景检查。`) : toast.success('AI导演方案已保存，Dialogue区间与审核草稿一致') } catch (e) { toast.error(e.response?.data?.error || '保存AI导演方案失败') } finally { saving.value = false } }
 async function load() {
   directorBrief.value = props.sceneContent || directorBrief.value; directorDraft.value = null; isPreviouslySplitScene.value=/ · 镜头\d+$/.test(props.sceneTitle||''); loading.value = true
   try {
