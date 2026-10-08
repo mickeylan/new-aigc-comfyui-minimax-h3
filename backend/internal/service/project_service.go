@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -5919,6 +5920,7 @@ func (s *ProjectService) CancelSceneVideo(p *models.Project, sc *models.Scene) e
 }
 
 func (s *ProjectService) syncGenerationOutputs() {
+	s.syncDialogueAudioTasks()
 	s.syncCharacterPortraits()
 	s.syncAssetImages()
 	if s.characterLooks != nil {
@@ -5963,6 +5965,14 @@ func (s *ProjectService) WatchSceneVideos() {
 }
 
 func (s *ProjectService) recoverInterruptedProjects() {
+	// ComfyUI-backed dialogue tasks are durable and retain their CAS binding across restart.
+	// Native in-process synthesis has no durable task and must fail explicitly for retry.
+	s.db.Model(&models.Dialogue{}).Where("status = ? AND audio_task_id = ''", "synthesizing").Updates(map[string]any{
+		"status": "failed", "audio_token": "", "audio_task_hash": "", "error": "服务重启，本机配音合成已中断，请重试",
+	})
+	s.db.Model(&models.Dialogue{}).Where("status = ? AND audio_task_id <> '' AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.task_id = dialogues.audio_task_id)", "synthesizing").Updates(map[string]any{
+		"status": "failed", "audio_token": "", "audio_task_id": "", "audio_task_hash": "", "error": "服务重启，配音任务记录缺失，请重试",
+	})
 	// TaskService recovers durable tasks. Never detach a Scene from a persisted task: the
 	// project synchronizer will project its eventual success/failure back to that same Scene.
 	s.db.Model(&models.Scene{}).Where("status = ? AND image_task_id = ''", "image_pending").
@@ -6431,6 +6441,120 @@ func (s *ProjectService) syncCharacterPortraits() {
 	if changed {
 		s.pushProject(nil)
 	}
+}
+
+func (s *ProjectService) syncDialogueAudioTasks() {
+	if s.tasks == nil || s.upload == nil {
+		return
+	}
+	var dialogues []models.Dialogue
+	if err := s.db.Where("audio_task_id <> '' AND status = ?", "synthesizing").Find(&dialogues).Error; err != nil {
+		return
+	}
+	changed := false
+	for i := range dialogues {
+		dialogue := &dialogues[i]
+		var task models.Task
+		if err := s.db.Where("task_id = ?", dialogue.AudioTaskID).First(&task).Error; err != nil {
+			continue
+		}
+		switch task.Status {
+		case "pending", "queued", "running":
+			continue
+		case "failed", "cancelled":
+			message := strings.TrimSpace(task.Error)
+			if message == "" {
+				message = "ComfyUI IndexTTS任务" + task.Status
+			}
+			s.db.Model(dialogue).Where("audio_token = ? AND audio_task_id = ?", dialogue.AudioToken, task.TaskID).Updates(map[string]any{
+				"status": "failed", "error": message, "audio_token": "", "audio_task_id": "", "audio_task_hash": "",
+			})
+			changed = true
+		case "success":
+			file, _ := resultAudioOf(&task)
+			if file == "" || task.Port == nil {
+				s.db.Model(dialogue).Where("audio_token = ? AND audio_task_id = ?", dialogue.AudioToken, task.TaskID).Updates(map[string]any{
+					"status": "failed", "error": "任务成功但未返回音频文件或端口", "audio_token": "", "audio_task_id": "", "audio_task_hash": "",
+				})
+				changed = true
+				continue
+			}
+			subfolder, filename := filepath.ToSlash(filepath.Dir(file)), filepath.Base(file)
+			if subfolder == "." {
+				subfolder = ""
+			}
+			data, err := NewComfyClient(s.tasks.comfyHostForTask(&task), *task.Port).DownloadOutput(filename, subfolder, "output")
+			if err != nil {
+				continue
+			}
+			extension := strings.ToLower(filepath.Ext(filename))
+			if extension == "" {
+				extension = ".wav"
+			}
+			hashPrefix := dialogue.AudioTaskHash
+			if len(hashPrefix) > 16 {
+				hashPrefix = hashPrefix[:16]
+			}
+			name := fmt.Sprintf("dub_%d_%s%s", dialogue.ID, hashPrefix, extension)
+			localPath, _, err := s.upload.SaveFile(fmt.Sprint(dialogue.ProjectID), "audio", name, data)
+			if err != nil {
+				continue
+			}
+			rate, channels, duration := pcmWAVInfo(data)
+			_, err = s.captureDialogueAudio(dialogueAudioCapture{
+				ProjectID: dialogue.ProjectID, DialogueID: dialogue.ID, Token: dialogue.AudioToken,
+				InputHash: dialogue.AudioTaskHash, Provider: "index_tts_rust_comfyui",
+				RuntimeVersion: task.TemplateName, VoiceIdentity: strings.TrimSpace(dialogue.Character),
+				Params: map[string]any{"task_id": task.TaskID, "instance_id": task.InstanceID, "gpu": task.GPUIndex, "port": task.Port, "result_files": task.ResultFiles},
+				File:   filepath.Base(localPath), SampleRate: rate, Channels: channels, Duration: duration,
+			})
+			if err != nil && !strings.Contains(err.Error(), "已过期") {
+				log.Printf("[dialogue %d] capture ComfyUI audio task %s failed: %v", dialogue.ID, task.TaskID, err)
+			}
+			changed = changed || err == nil
+		}
+	}
+	if changed {
+		s.pushProject(nil)
+	}
+}
+
+func resultAudioOf(task *models.Task) (string, *int) {
+	var files []map[string]string
+	if json.Unmarshal([]byte(task.ResultFiles), &files) != nil {
+		return "", nil
+	}
+	for _, file := range files {
+		name := file["filename"]
+		ext := strings.ToLower(filepath.Ext(name))
+		if (file["type"] == "audio" || file["type"] == "audios") && (ext == ".wav" || ext == ".flac" || ext == ".mp3" || ext == ".m4a") {
+			if file["subfolder"] != "" {
+				return filepath.ToSlash(filepath.Join(file["subfolder"], name)), task.GPUIndex
+			}
+			return name, task.GPUIndex
+		}
+	}
+	return "", nil
+}
+
+func pcmWAVInfo(data []byte) (uint32, uint32, float64) {
+	if len(data) < 44 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+		return 0, 0, 0
+	}
+	channels := uint32(binary.LittleEndian.Uint16(data[22:24]))
+	rate := binary.LittleEndian.Uint32(data[24:28])
+	bits := uint32(binary.LittleEndian.Uint16(data[34:36]))
+	for offset := 12; offset+8 <= len(data); {
+		size := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		if string(data[offset:offset+4]) == "data" && channels > 0 && rate > 0 && bits > 0 {
+			return rate, channels, float64(size) / float64(rate*channels*(bits/8))
+		}
+		offset += 8 + size
+		if offset%2 != 0 {
+			offset++
+		}
+	}
+	return rate, channels, 0
 }
 
 func resultImageOf(task *models.Task) (string, *int) {
@@ -7877,7 +8001,19 @@ func dialogueAudioHash(d models.Dialogue) string {
 }
 
 func (s *ProjectService) effectiveDialogueAudioHash(d models.Dialogue) string {
-	if s.indexTTS != nil && s.indexTTS.Enabled() {
+	if s.indexTTSExecutionMode() == "comfyui" {
+		reference := ""
+		if s.indexTTS != nil {
+			var err error
+			reference, err = s.indexTTS.ReferenceFingerprint(d)
+			if err != nil {
+				reference = "invalid-reference:" + err.Error()
+			}
+		}
+		raw := dialogueAudioHash(d) + "\x00index-tts-rust-comfyui\x00" + s.cfg.IndexTTS.ModelDir + "\x00" + s.cfg.IndexTTS.DLLPath + "\x00" + reference
+		return fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))
+	}
+	if s.indexTTSExecutionMode() == "native_local" && s.indexTTS != nil && s.indexTTS.Enabled() {
 		reference, err := s.indexTTS.ReferenceFingerprint(d)
 		if err != nil {
 			reference = "invalid-reference:" + err.Error()
@@ -8190,7 +8326,89 @@ func (s *ProjectService) startDialogueTTS(d *models.Dialogue) (string, string, e
 	return token, hash, nil
 }
 
+const indexTTSRustComfyTemplateCode = "indextts_2_5_rust_dialogue"
+
+func (s *ProjectService) indexTTSExecutionMode() string {
+	if s.cfg == nil {
+		if s.indexTTS != nil && s.indexTTS.Enabled() {
+			return "native_local"
+		}
+		return "disabled"
+	}
+	if !s.cfg.IndexTTS.Enabled {
+		return "disabled"
+	}
+	mode := strings.ToLower(strings.TrimSpace(s.cfg.IndexTTS.ExecutionMode))
+	if mode == "" {
+		return "native_local"
+	}
+	return mode
+}
+
+func (s *ProjectService) submitDialogueToComfy(d *models.Dialogue, token, inputHash string) error {
+	if s.tasks == nil {
+		return fmt.Errorf("ComfyUI 任务服务未配置")
+	}
+	var tpl models.Template
+	if err := s.db.Where("code = ? AND enabled = ?", indexTTSRustComfyTemplateCode, true).First(&tpl).Error; err != nil {
+		return fmt.Errorf("未启用模板 %s", indexTTSRustComfyTemplateCode)
+	}
+	var character models.Character
+	if err := s.db.Where("project_id = ? AND name = ?", d.ProjectID, strings.TrimSpace(d.Character)).First(&character).Error; err != nil {
+		return fmt.Errorf("角色“%s”不存在，无法读取参考音频", d.Character)
+	}
+	voiceRef := strings.TrimSpace(character.VoiceRef)
+	if voiceRef == "" {
+		voiceRef = strings.TrimSpace(s.cfg.IndexTTS.DefaultVoice)
+	}
+	if voiceRef == "" {
+		return fmt.Errorf("角色“%s”缺少 VoiceRef", d.Character)
+	}
+	file := fileMetaForSharedMaterial(d.ProjectID, voiceRef)
+	seed, _ := strconv.ParseUint(inputHash[:16], 16, 64)
+	emotionText := strings.TrimSpace(strings.Join([]string{strings.TrimSpace(d.Emotion), strings.TrimSpace(d.Delivery)}, "，"))
+	voiceKey := fmt.Sprintf("project-%d-character-%d", d.ProjectID, character.ID)
+	task, err := s.tasks.CreateTask(CreateTaskReq{
+		TemplateID: tpl.ID,
+		Prompt:     d.Text,
+		Params: map[string]any{
+			"dll_path": s.cfg.IndexTTS.DLLPath, "model_dir": s.cfg.IndexTTS.ModelDir,
+			"device_index": s.cfg.IndexTTS.DeviceIndex, "voice_key": voiceKey,
+			"text": d.Text, "language": s.cfg.IndexTTS.Language, "duration_factor": 1.0,
+			"seed": seed, "emotion_text": emotionText, "emotion_strength": 0.6,
+		},
+		Files: map[string][]FileMeta{"reference_audio": {file}},
+	})
+	if err != nil {
+		return err
+	}
+	claim := s.db.Model(&models.Dialogue{}).Where("id = ? AND audio_token = ? AND status = ?", d.ID, token, "synthesizing").Updates(map[string]any{
+		"audio_task_id": task.TaskID, "audio_task_hash": inputHash,
+	})
+	if claim.Error != nil {
+		_ = s.tasks.CancelTask(task.TaskID)
+		return claim.Error
+	}
+	if claim.RowsAffected != 1 {
+		_ = s.tasks.CancelTask(task.TaskID)
+		return fmt.Errorf("对白合成任务绑定已过期")
+	}
+	go func() {
+		if err := s.tasks.Execute(task.TaskID); err != nil && !errors.Is(err, errNoFreeGPU) && !errors.Is(err, errVideoConcurrencyLimit) {
+			log.Printf("[dialogue %d] ComfyUI IndexTTS task %s dispatch failed: %v", d.ID, task.TaskID, err)
+		}
+	}()
+	return nil
+}
+
 func (s *ProjectService) synthesizeDialogue(d *models.Dialogue, token, inputHash string) error {
+	if s.indexTTSExecutionMode() == "comfyui" {
+		if err := s.submitDialogueToComfy(d, token, inputHash); err != nil {
+			s.db.Model(&models.Dialogue{}).Where("id = ? AND audio_token = ?", d.ID, token).Updates(map[string]any{"status": "failed", "audio_token": "", "audio_task_id": "", "audio_task_hash": "", "error": err.Error()})
+			return err
+		}
+		return nil
+	}
 	if s.upload == nil {
 		s.db.Model(&models.Dialogue{}).Where("id = ? AND audio_token = ?", d.ID, token).Updates(map[string]any{"status": "failed", "error": "存储未配置"})
 		return fmt.Errorf("存储未配置")
@@ -8214,7 +8432,7 @@ func (s *ProjectService) synthesizeDialogue(d *models.Dialogue, token, inputHash
 	extension, provider, runtimeVersion, voiceIdentity := ".mp3", "aliyun", "", ""
 	sampleRate, channels, duration := uint32(0), uint32(0), 0.0
 	var generationInfo indextts.GenerationInfo
-	if s.indexTTS != nil && s.indexTTS.Enabled() {
+	if s.indexTTSExecutionMode() == "native_local" && s.indexTTS != nil && s.indexTTS.Enabled() {
 		var synthesis LocalIndexTTSSynthesis
 		synthesis, err = s.indexTTS.Synthesize(context.Background(), *d)
 		data, generationInfo = synthesis.WAV, synthesis.Info
@@ -8455,7 +8673,7 @@ func (s *ProjectService) PushProject(p *models.Project) {
 }
 
 func (s *ProjectService) StartIndexTTS() error {
-	if s.indexTTS == nil {
+	if s.indexTTS == nil || s.indexTTSExecutionMode() != "native_local" {
 		return nil
 	}
 	return s.indexTTS.Start()

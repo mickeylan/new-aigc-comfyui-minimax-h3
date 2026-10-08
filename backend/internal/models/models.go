@@ -438,7 +438,7 @@ type Dialogue struct {
 	ProjectID          uint      `gorm:"column:project_id;index" json:"project_id"`
 	Order              int       `json:"order"`                                                             // 场景内句序（从 1 开始）
 	Character          string    `json:"character"`                                                         // 对白/内心独白为角色名；旁白可为“旁白”
-	SpeechType         string    `gorm:"column:speech_type;default:dialogue" json:"speech_type"`            // dialogue/narration/monologue
+	SpeechType         string    `gorm:"column:speech_type;default:dialogue" json:"speech_type"`            // dialogue/offscreen_dialogue/narration/monologue
 	H3VoiceDescription string    `gorm:"column:h3_voice_description;type:text" json:"h3_voice_description"` // H3 说话者声音身份
 	Text               string    `gorm:"type:text" json:"text"`                                             // 仅可发声原文；空说话人且无明确类型时不发声
 	Voice              string    `json:"voice"`                                                             // TTS 音色（voice_type）
@@ -455,6 +455,8 @@ type Dialogue struct {
 	AudioRevision      int       `gorm:"column:audio_revision;default:0" json:"audio_revision"`
 	AudioHash          string    `gorm:"column:audio_hash;size:64" json:"audio_hash"` // 生成当前音频时的输入摘要
 	AudioToken         string    `gorm:"column:audio_token;size:64;index" json:"-"`   // 防止迟到合成覆盖新输入
+	AudioTaskID        string    `gorm:"column:audio_task_id;size:64;index" json:"audio_task_id"`
+	AudioTaskHash      string    `gorm:"column:audio_task_hash;size:64" json:"-"`
 	AudioStale         bool      `gorm:"column:audio_stale;default:false" json:"audio_stale"`
 	AudioStaleReason   string    `gorm:"column:audio_stale_reason" json:"audio_stale_reason"`
 	Status             string    `json:"status"` // pending/synthesizing/ready/failed

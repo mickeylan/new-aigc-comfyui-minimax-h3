@@ -1,0 +1,25 @@
+{
+  "name": "IndexTTS 2.5 Rust 单句对白",
+  "code": "indextts_2_5_rust_dialogue",
+  "description": "通过安装了 ComfyUI-IndexTTS25-Rust 的实例生成单句权威对白；保留情绪文本、稳定 seed 和生成报告。",
+  "inputs": [
+    {"key":"reference_audio","type":"audio","label":"角色参考音频","required":true},
+    {"key":"dll_path","type":"string","label":"远端 IndexTTS DLL 路径","required":false,"default":""},
+    {"key":"model_dir","type":"string","label":"远端 IndexTTS 模型目录","required":true,"default":"E:\\models\\indextts25-rust"},
+    {"key":"device_index","type":"int","label":"CUDA 设备索引","required":true,"default":0,"min":-1,"max":31},
+    {"key":"voice_key","type":"string","label":"稳定音色键","required":true},
+    {"key":"text","type":"string","label":"权威对白原文","required":true},
+    {"key":"language","type":"select","label":"语言","required":true,"default":"ZH","options":["ZH","EN","JA","ES","AR"]},
+    {"key":"duration_factor","type":"float","label":"模型时长条件","required":true,"default":1.0,"min":0.5,"max":2.0,"step":0.05},
+    {"key":"seed","type":"int","label":"稳定种子","required":true,"default":0},
+    {"key":"emotion_text","type":"string","label":"情绪与表演文本","required":false,"default":""},
+    {"key":"emotion_strength","type":"float","label":"情绪强度","required":true,"default":0.6,"min":0,"max":1,"step":0.05}
+  ],
+  "workflow": {
+    "1": {"class_type":"IndexTTS25RustModelLoader","inputs":{"dll_path":"{{dll_path}}","model_dir":"{{model_dir}}","device_index":"{{device_index}}"}},
+    "2": {"class_type":"LoadAudio","inputs":{"audio":"{{aud:reference_audio}}"}},
+    "3": {"class_type":"IndexTTS25RustPrepareVoice","inputs":{"model":["1",0],"speaker_audio":["2",0],"voice_key":"{{voice_key}}"}},
+    "4": {"class_type":"IndexTTS25RustGenerate","inputs":{"model":["1",0],"voice":["3",0],"text":"{{text}}","language":"{{language}}","duration_factor":"{{duration_factor}}","seed":"{{seed}}","emotion_text":"{{emotion_text}}","emotion_strength":"{{emotion_strength}}"}},
+    "5": {"class_type":"SaveAudio","inputs":{"audio":["4",0],"filename_prefix":"indextts_rust/dub_{{task_id}}"}}
+  }
+}

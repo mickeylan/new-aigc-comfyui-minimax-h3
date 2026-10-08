@@ -26,11 +26,15 @@ gpu:
   nvidia_smi: /usr/bin/nvidia-smi
   monitor_interval_seconds: 3
 
-# 全本地 IndexTTS-2.5。Windows CUDA 发布版需使用 -tags indextts 构建，
-# 并将 indextts.dll、ONNX Runtime、CUDA 与 cuDNN DLL 放在程序目录。
+# IndexTTS-2.5 执行模式：
+# - comfyui：生产推荐，由现有多 ComfyUI 调度器选择安装了 Rust 节点的空闲实例；远端路径须在每台实例一致。
+# - native_local：显式本机调试，Windows CUDA 发布版需使用 -tags indextts 构建并携带完整运行时。
+# - disabled：禁用。
 indextts:
   enabled: false
+  execution_mode: comfyui
   model_dir: ""
+  dll_path: ""
   device_index: 0
   language: ZH
   default_voice: ""

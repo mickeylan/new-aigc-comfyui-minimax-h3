@@ -70,7 +70,7 @@ func (s *ProjectService) captureDialogueAudio(in dialogueAudioCapture) (*models.
 		result := tx.Model(&dialogue).Where("audio_token = ?", in.Token).Updates(map[string]any{
 			"status": "ready", "audio_file": in.File, "previous_audio_file": dialogue.AudioFile, "previous_audio_hash": dialogue.AudioHash,
 			"audio_revision": dialogue.AudioRevision + 1, "audio_hash": in.InputHash, "audio_token": "",
-			"audio_stale": false, "audio_stale_reason": "", "error": "",
+			"audio_task_id": "", "audio_task_hash": "", "audio_stale": false, "audio_stale_reason": "", "error": "",
 		})
 		if result.Error != nil {
 			return result.Error

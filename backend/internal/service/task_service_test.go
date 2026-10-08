@@ -482,7 +482,7 @@ func TestPickInstanceDiscoversReachableInstanceWithStaleStoppedStatus(t *testing
 	cfg := config.Default()
 	remote := NewRemoteExec(config.RemoteConfig{})
 	svc := &TaskService{cfg: cfg, db: db, manager: NewInstanceManager(cfg, db, remote)}
-	selected, err := svc.pickInstance(nil)
+	selected, err := svc.pickInstance(nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -529,7 +529,7 @@ func TestPickInstanceRequiresPlatformAndComfyQueuesIdle(t *testing.T) {
 	cfg := config.Default()
 	remote := NewRemoteExec(config.RemoteConfig{})
 	svc := &TaskService{cfg: cfg, db: db, manager: NewInstanceManager(cfg, db, remote)}
-	selected, err := svc.pickInstance(nil)
+	selected, err := svc.pickInstance(nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -578,7 +578,7 @@ func TestReserveInstanceDistributesConcurrentTasksAcrossFreeGPUs(t *testing.T) {
 		go func(task *models.Task) {
 			defer wg.Done()
 			<-start
-			inst, err := svc.reserveInstance(task, false, nil)
+			inst, err := svc.reserveInstance(task, false, nil, nil)
 			if err != nil {
 				errs <- err
 				return

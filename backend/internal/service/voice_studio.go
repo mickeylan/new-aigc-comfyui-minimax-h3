@@ -700,10 +700,23 @@ func (s *ProjectService) VoiceStudioData(project *models.Project, episodeN int) 
 	data["tts_provider"] = "aliyun"
 	data["tts_available"] = true
 	data["tts_error"] = ""
-	if s.indexTTS != nil {
+	if s.indexTTSExecutionMode() == "comfyui" {
+		var count int64
+		_ = s.db.Model(&models.Template{}).Where("code = ? AND enabled = ?", indexTTSRustComfyTemplateCode, true).Count(&count).Error
+		data["tts_provider"] = "index_tts_rust_comfyui"
+		data["tts_execution_mode"] = "comfyui"
+		data["tts_available"] = count > 0
+		data["tts_emotion_supported"] = true
+		data["tts_voice_cache_supported"] = true
+		data["tts_request_cancel_supported"] = true
+		if count == 0 {
+			data["tts_error"] = "缺少已启用的 Rust IndexTTS ComfyUI 模板"
+		}
+	} else if s.indexTTS != nil {
 		configured, available, runtimeError := s.indexTTS.Status()
 		if configured {
 			data["tts_provider"] = "index_tts_rust"
+			data["tts_execution_mode"] = "native_local"
 			data["tts_available"] = available
 			data["tts_error"] = runtimeError
 			capabilities, info, health := s.indexTTS.RuntimeDetails()

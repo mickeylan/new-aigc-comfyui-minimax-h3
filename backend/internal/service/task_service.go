@@ -479,7 +479,7 @@ type instanceLoad struct {
 
 // pickInstance 只从平台与 ComfyUI 都确认空闲的实例中选择。
 // 空闲显存仅用于多个空闲实例之间的排序，不能作为实例是否有任务的判断依据。
-func (s *TaskService) pickInstance(forcePort *int) (*models.Instance, error) {
+func (s *TaskService) pickInstance(forcePort *int, requiredClasses []string) (*models.Instance, error) {
 	var insts []models.Instance
 	s.db.Order("gpu_index").Find(&insts)
 	if len(insts) == 0 {
@@ -526,6 +526,9 @@ func (s *TaskService) pickInstance(forcePort *int) (*models.Instance, error) {
 			}
 			if load.queueLen > 0 {
 				return nil, errNoFreeGPU
+			}
+			if err := s.instanceSupportsClasses(insts[i], requiredClasses); err != nil {
+				return nil, err
 			}
 			return &insts[i], nil
 		}
@@ -594,7 +597,57 @@ func (s *TaskService) pickInstance(forcePort *int) (*models.Instance, error) {
 		return nil, fmt.Errorf("没有可用的 ComfyUI 实例")
 	}
 	rankInstanceLoads(idle)
-	return &idle[0].inst, nil
+	if len(requiredClasses) == 0 {
+		return &idle[0].inst, nil
+	}
+	missingByInstance := []string{}
+	for _, load := range idle {
+		if err := s.instanceSupportsClasses(load.inst, requiredClasses); err == nil {
+			return &load.inst, nil
+		} else {
+			missingByInstance = append(missingByInstance, fmt.Sprintf("实例%d: %v", load.inst.ID, err))
+		}
+	}
+	return nil, fmt.Errorf("没有安装所需节点的空闲 ComfyUI 实例: %s", strings.Join(missingByInstance, "; "))
+}
+
+func workflowClassTypes(workflow map[string]any) []string {
+	seen := map[string]bool{}
+	classes := []string{}
+	for _, raw := range workflow {
+		node, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		classType := strings.TrimSpace(fmt.Sprint(node["class_type"]))
+		if classType != "" && !seen[classType] {
+			seen[classType] = true
+			classes = append(classes, classType)
+		}
+	}
+	sort.Strings(classes)
+	return classes
+}
+
+func (s *TaskService) instanceSupportsClasses(inst models.Instance, required []string) error {
+	if len(required) == 0 {
+		return nil
+	}
+	client := NewComfyClient(s.manager.comfyHostOfInstance(inst), inst.Port)
+	info, err := client.GetObjectInfo()
+	if err != nil {
+		return fmt.Errorf("读取节点能力失败: %w", err)
+	}
+	missing := []string{}
+	for _, classType := range required {
+		if _, ok := info[classType]; !ok {
+			missing = append(missing, classType)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("缺少节点 %s", strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 func (s *TaskService) platformInstanceBusy(instanceID uint) bool {
@@ -627,14 +680,14 @@ func (s *TaskService) probeInstanceLoad(inst models.Instance) instanceLoad {
 
 // reserveInstance 在同一调度临界区内完成并发限流、选卡与占用登记。
 // queued 状态在真正提交 ComfyUI 前写入，使后续并发任务能立即避开已预占 GPU。
-func (s *TaskService) reserveInstance(task *models.Task, video bool, forcePort *int) (*models.Instance, error) {
+func (s *TaskService) reserveInstance(task *models.Task, video bool, forcePort *int, requiredClasses []string) (*models.Instance, error) {
 	s.scheduleMu.Lock()
 	defer s.scheduleMu.Unlock()
 
 	if video && s.runningVideoTaskCount() >= s.videoConcurrency() {
 		return nil, errVideoConcurrencyLimit
 	}
-	inst, err := s.pickInstance(forcePort)
+	inst, err := s.pickInstance(forcePort, requiredClasses)
 	if err != nil {
 		return nil, err
 	}
@@ -879,7 +932,7 @@ func (s *TaskService) Execute(taskID string) error {
 
 	// 原子完成选卡与 GPU 预占；并发批量任务会依次拿到不同的空闲 GPU。
 	forcePort := s.forcePortOf(params)
-	inst, err := s.reserveInstance(&task, isVideoTemplateCode(tpl.Code), forcePort)
+	inst, err := s.reserveInstance(&task, isVideoTemplateCode(tpl.Code), forcePort, workflowClassTypes(workflow))
 	if err != nil {
 		if errors.Is(err, errNoFreeGPU) || errors.Is(err, errVideoConcurrencyLimit) {
 			s.queueRetryWhenFree(taskID)
@@ -1371,7 +1424,7 @@ func (s *TaskService) finishTask(task *models.Task) {
 		if !ok {
 			continue
 		}
-		for _, ftype := range []string{"videos", "gifs", "images", "audio"} {
+		for _, ftype := range []string{"videos", "gifs", "images", "audio", "audios"} {
 			list, ok := o[ftype].([]any)
 			if !ok {
 				continue

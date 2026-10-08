@@ -58,7 +58,9 @@ type GPUConfig struct {
 
 type IndexTTSConfig struct {
 	Enabled        bool   `yaml:"enabled"`
+	ExecutionMode  string `yaml:"execution_mode"` // comfyui（生产多实例）/native_local（显式本机调试）/disabled
 	ModelDir       string `yaml:"model_dir"`
+	DLLPath        string `yaml:"dll_path"`
 	DeviceIndex    int    `yaml:"device_index"`
 	Language       string `yaml:"language"`
 	DefaultVoice   string `yaml:"default_voice"`
@@ -106,6 +108,7 @@ func Default() *Config {
 			MonitorInt: 3,
 		},
 		IndexTTS: IndexTTSConfig{
+			ExecutionMode:  "native_local",
 			Language:       "ZH",
 			TimeoutSeconds: 300,
 			QueueSize:      32,

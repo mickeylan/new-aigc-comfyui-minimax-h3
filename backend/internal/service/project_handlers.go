@@ -36,10 +36,24 @@ func (s *Service) HandleGetSettings(c *gin.Context) {
 	settings["index_tts_available"] = "false"
 	settings["index_tts_error"] = ""
 	if s.Cfg != nil && s.Cfg.IndexTTS.Enabled {
+		mode := strings.ToLower(strings.TrimSpace(s.Cfg.IndexTTS.ExecutionMode))
+		if mode == "" {
+			mode = "native_local"
+		}
 		settings["tts_provider"] = "index_tts_rust"
 		settings["index_tts_enabled"] = "true"
+		settings["index_tts_execution_mode"] = mode
 		settings["index_tts_device_index"] = strconv.Itoa(s.Cfg.IndexTTS.DeviceIndex)
-		if s.Projects != nil && s.Projects.indexTTS != nil {
+		if mode == "comfyui" {
+			var count int64
+			if s.DB != nil {
+				_ = s.DB.Model(&models.Template{}).Where("code = ? AND enabled = ?", indexTTSRustComfyTemplateCode, true).Count(&count).Error
+			}
+			settings["index_tts_available"] = strconv.FormatBool(count > 0)
+			if count == 0 {
+				settings["index_tts_error"] = "缺少已启用的 Rust IndexTTS ComfyUI 模板"
+			}
+		} else if s.Projects != nil && s.Projects.indexTTS != nil {
 			_, available, runtimeError := s.Projects.indexTTS.Status()
 			settings["index_tts_available"] = strconv.FormatBool(available)
 			settings["index_tts_error"] = runtimeError
