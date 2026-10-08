@@ -13,6 +13,7 @@ def test_phase_one_nodes_are_separate_from_python_plugin():
         "IndexTTS25RustGenerate",
         "IndexTTS25RustParseSRT",
         "IndexTTS25RustCharacterBatch",
+        "IndexTTS25RustASRReview",
     ]:
         assert name in source
     assert "INDEXTTS25_RUST_MODEL" in source

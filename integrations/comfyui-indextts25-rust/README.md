@@ -38,4 +38,6 @@ Do not point this plugin at an arbitrary ABI build. The loader reports ABI, runt
 - `IndexTTS25RustCharacterBatch` consumes reviewed segment JSON for exactly one character/prepared voice, preserves overlaps on a timeline, reports per-cue overflow, and never truncates or rewrites text.
 - SRT `speed` is reported as the application/FFmpeg playback condition. It is deliberately not passed as IndexTTS `duration_factor`.
 
-Phase 2 connects single-dialogue generation to the existing Go `TaskService`, filters instances by `/object_info`, persists task/CAS bindings and recovers `audio`/`audios` results into `DialogueAudioCandidate`. Phase 4 remains optional ASR and deeper quality diagnostics.
+Phase 2 connects single-dialogue generation to the existing Go `TaskService`, filters instances by `/object_info`, persists task/CAS bindings and recovers `audio`/`audios` results into `DialogueAudioCandidate`.
+
+`IndexTTS25RustASRReview` is optional and local-only. Missing Whisper or checkpoint files produce an explicit `ASR unavailable` error without affecting synthesis. ASR reports edit distance/error rate and never rewrites authoritative Dialogue. Native generation and character-batch reports also expose semantic tokens, stage timings, peak/RMS/silence ratio, slot overflow and stable seed provenance.

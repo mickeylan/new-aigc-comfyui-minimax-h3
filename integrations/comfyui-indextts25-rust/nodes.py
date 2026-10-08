@@ -5,6 +5,7 @@ from pathlib import Path
 
 from comfy_api.latest import ComfyExtension, IO
 
+from .asr import review_audio
 from .srt import preview_report
 from .runtime import (
     RUNTIME_CACHE,
@@ -187,6 +188,33 @@ class IndexTTS25RustCharacterBatch(IO.ComfyNode):
         return IO.NodeOutput(audio, report_json(report))
 
 
+class IndexTTS25RustASRReview(IO.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="IndexTTS25RustASRReview",
+            display_name="IndexTTS 2.5 Rust ASR Review",
+            category=CATEGORY,
+            essentials_category="Audio",
+            description="Optionally compares generated audio with authoritative text. It never rewrites Dialogue and fails explicitly when local ASR is unavailable.",
+            inputs=[
+                IO.Audio.Input("audio"), IO.String.Input("expected_text", multiline=True, default=""),
+                IO.String.Input("whisper_model_path", default=""),
+                IO.Combo.Input("language", options=["zh", "en", "ja", "es", "ar"], default="zh"),
+                IO.Combo.Input("device", options=["cuda", "cpu"], default="cuda"),
+                IO.Float.Input("max_error_rate", default=0.05, min=0.0, max=1.0, step=0.01),
+            ],
+            outputs=[IO.String.Output("transcript"), IO.String.Output("review_json"), IO.Boolean.Output("passed")],
+        )
+
+    @classmethod
+    def execute(cls, audio, expected_text: str, whisper_model_path: str, language: str, device: str, max_error_rate: float):
+        if not expected_text.strip():
+            raise ValueError("expected_text is required")
+        transcript, report = review_audio(audio, expected_text, whisper_model_path, language, device, max_error_rate)
+        return IO.NodeOutput(transcript, report_json(report), bool(report["passed"]))
+
+
 class IndexTTS25RustExtension(ComfyExtension):
     async def get_node_list(self):
         return [
@@ -196,6 +224,7 @@ class IndexTTS25RustExtension(ComfyExtension):
             IndexTTS25RustGenerate,
             IndexTTS25RustParseSRT,
             IndexTTS25RustCharacterBatch,
+            IndexTTS25RustASRReview,
         ]
 
 
