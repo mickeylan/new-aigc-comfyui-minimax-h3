@@ -5,6 +5,7 @@ from pathlib import Path
 
 from comfy_api.latest import ComfyExtension, IO
 
+from .srt import preview_report
 from .runtime import (
     RUNTIME_CACHE,
     ModelHandle,
@@ -137,6 +138,55 @@ class IndexTTS25RustGenerate(IO.ComfyNode):
         return IO.NodeOutput(audio, report_json(report))
 
 
+class IndexTTS25RustParseSRT(IO.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="IndexTTS25RustParseSRT",
+            display_name="IndexTTS 2.5 Rust Structured SRT Preview",
+            category=CATEGORY,
+            description="Parses structured SRT into a read-only production preview. It never rewrites authoritative Dialogue.",
+            inputs=[IO.String.Input("srt_text", multiline=True, default="")],
+            outputs=[IO.String.Output("segments_json"), IO.String.Output("diagnostics_json"), IO.Boolean.Output("valid")],
+        )
+
+    @classmethod
+    def execute(cls, srt_text: str):
+        report = preview_report(srt_text)
+        return IO.NodeOutput(report_json(report["cues"]), report_json(report), bool(report["valid"]))
+
+
+class IndexTTS25RustCharacterBatch(IO.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="IndexTTS25RustCharacterBatch",
+            display_name="IndexTTS 2.5 Rust Character Batch",
+            category=CATEGORY,
+            essentials_category="Audio",
+            description="Synthesizes one character's reviewed SRT segments with prepared-voice reuse and returns a timeline preview plus per-cue QA.",
+            inputs=[
+                ModelType.Input("model"), VoiceType.Input("voice"),
+                IO.String.Input("segments_json", multiline=True, default="[]"),
+                IO.String.Input("character", default=""),
+                IO.Combo.Input("default_language", options=["ZH", "EN", "JA", "ES", "AR"], default="ZH"),
+                IO.Int.Input("base_seed", default=0, min=0, max=0x7FFFFFFFFFFFFFFF),
+                IO.Float.Input("emotion_strength", default=0.6, min=0.0, max=1.0, step=0.05),
+            ],
+            outputs=[IO.Audio.Output("timeline_audio"), IO.String.Output("batch_report_json")],
+        )
+
+    @classmethod
+    def execute(cls, model: ModelHandle, voice: VoiceHandle, segments_json: str, character: str, default_language: str, base_seed: int, emotion_strength: float):
+        import json
+
+        segments = json.loads(segments_json)
+        if not isinstance(segments, list):
+            raise ValueError("segments_json must be an array")
+        audio, report = RUNTIME_CACHE.generate_batch(model, voice, segments, character, default_language, base_seed, emotion_strength)
+        return IO.NodeOutput(audio, report_json(report))
+
+
 class IndexTTS25RustExtension(ComfyExtension):
     async def get_node_list(self):
         return [
@@ -144,6 +194,8 @@ class IndexTTS25RustExtension(ComfyExtension):
             IndexTTS25RustModelLoader,
             IndexTTS25RustPrepareVoice,
             IndexTTS25RustGenerate,
+            IndexTTS25RustParseSRT,
+            IndexTTS25RustCharacterBatch,
         ]
 
 

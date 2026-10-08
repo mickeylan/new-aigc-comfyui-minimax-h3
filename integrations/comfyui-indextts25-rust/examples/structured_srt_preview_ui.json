@@ -1,0 +1,29 @@
+{
+  "last_node_id": 1,
+  "last_link_id": 0,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "IndexTTS25RustParseSRT",
+      "pos": [120, 100],
+      "size": [760, 520],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [{"name":"srt_text","type":"STRING","widget":{"name":"srt_text"},"link":null}],
+      "outputs": [
+        {"name":"segments_json","type":"STRING","links":[]},
+        {"name":"diagnostics_json","type":"STRING","links":[]},
+        {"name":"valid","type":"BOOLEAN","links":[]}
+      ],
+      "properties": {"Node name for S&R":"IndexTTS25RustParseSRT"},
+      "widgets_values": ["1\n00:00:00,000 --> 00:00:03,000\n[voice-studio role=dialogue character=上官若琳 voice=ruolin speed=1.0 emotion=真挚 delivery=恳切 language=ZH seed=42]\n相信姐姐。\n\n2\n00:00:03,000 --> 00:00:05,000\n{\"role\":\"offscreen_dialogue\",\"character\":\"阿宁\",\"emotion\":\"焦急\"}\n门外有人吗？"],
+      "title": "只读解析结构化SRT"
+    }
+  ],
+  "links": [],
+  "groups": [{"title":"IndexTTS 2.5 Rust 结构化SRT预检（不写回Dialogue）","bounding":[60,40,880,650],"color":"#6d5b37","font_size":24,"flags":{}}],
+  "config": {},
+  "extra": {"ds":{"scale":1,"offset":[0,0]}},
+  "version": 0.4
+}

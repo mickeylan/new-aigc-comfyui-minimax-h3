@@ -32,6 +32,10 @@ Do not point this plugin at an arbitrary ABI build. The loader reports ABI, runt
 - `duration_factor` is a model duration condition, not the application's FFmpeg playback-speed control.
 - Outputs are candidates until the Go backend validates token/hash and the user approves them.
 
-## Next phases
+## Structured SRT and character batches
 
-Phase 2 connects these nodes to the existing Go `TaskService` for multi-ComfyUI scheduling and audio result recovery. Phase 3 adds structured character batches/SRT preview reports. Phase 4 adds optional ASR and quality diagnostics.
+- `IndexTTS25RustParseSRT` accepts BOM, CRLF/LF, comma/dot milliseconds, multiline text, JSON metadata and bracket key/value metadata. It supports `dialogue`, `offscreen_dialogue`, `narration` and `monologue` and emits a read-only diagnostic snapshot.
+- `IndexTTS25RustCharacterBatch` consumes reviewed segment JSON for exactly one character/prepared voice, preserves overlaps on a timeline, reports per-cue overflow, and never truncates or rewrites text.
+- SRT `speed` is reported as the application/FFmpeg playback condition. It is deliberately not passed as IndexTTS `duration_factor`.
+
+Phase 2 connects single-dialogue generation to the existing Go `TaskService`, filters instances by `/object_info`, persists task/CAS bindings and recovers `audio`/`audios` results into `DialogueAudioCandidate`. Phase 4 remains optional ASR and deeper quality diagnostics.

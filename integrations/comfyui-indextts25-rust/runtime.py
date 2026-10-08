@@ -329,6 +329,51 @@ class RuntimeCache:
         }
         return {"waveform": waveform.contiguous(), "sample_rate": rate}, report
 
+    def generate_batch(self, model: ModelHandle, voice: VoiceHandle, cues: list[dict[str, Any]], character: str, default_language: str, base_seed: int, emotion_strength: float) -> tuple[dict[str, Any], dict[str, Any]]:
+        selected = [cue for cue in cues if not character.strip() or str(cue.get("character", "")).strip() == character.strip()]
+        if not selected:
+            raise ValueError("no SRT cues match the selected character")
+        characters = {str(cue.get("character", "")).strip() for cue in selected}
+        if len(characters) > 1:
+            raise ValueError("character batch must contain exactly one character voice")
+        generated: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+        max_end, rate = 0.0, 0
+        for offset, cue in enumerate(selected):
+            text = str(cue.get("text", "")).strip()
+            emotion = "，".join(value for value in [str(cue.get("emotion", "")).strip(), str(cue.get("delivery", "")).strip()] if value)
+            seed = int(cue.get("seed", 0)) or int(base_seed) + offset
+            audio, info = self.generate(model, voice, text, str(cue.get("language", default_language)).upper(), seed, 1.0, emotion, emotion_strength)
+            generated.append((cue, audio, info))
+            rate = int(audio["sample_rate"])
+            max_end = max(max_end, float(cue.get("end", 0)), float(cue.get("start", 0)) + audio["waveform"].shape[-1] / rate)
+        channels = max(item[1]["waveform"].shape[1] for item in generated)
+        timeline = torch.zeros((1, channels, max(1, int(round(max_end * rate)))), dtype=torch.float32)
+        reports = []
+        for cue, audio, info in generated:
+            waveform = audio["waveform"]
+            if waveform.shape[1] == 1 and channels > 1:
+                waveform = waveform.expand(1, channels, -1)
+            start = max(0, int(round(float(cue.get("start", 0)) * rate)))
+            end = min(timeline.shape[-1], start + waveform.shape[-1])
+            timeline[..., start:end] += waveform[..., : end - start]
+            generated_seconds = waveform.shape[-1] / rate
+            speed = max(0.5, min(2.0, float(cue.get("speed", 1.0))))
+            playback_seconds = generated_seconds / speed
+            slot_seconds = float(cue.get("end", 0)) - float(cue.get("start", 0))
+            reports.append({
+                "index": cue.get("index"), "character": cue.get("character"), "role": cue.get("role"),
+                "start": cue.get("start"), "end": cue.get("end"), "slot_seconds": slot_seconds,
+                "generated_seconds": generated_seconds, "playback_seconds": playback_seconds,
+                "overflow_seconds": max(0.0, playback_seconds - slot_seconds), "speed": speed,
+                "seed": info.get("seed"), "semantic_tokens": info.get("semantic_tokens"),
+                "status": "overflow" if playback_seconds > slot_seconds + 0.001 else "ok",
+            })
+        peak = float(timeline.abs().max()) if timeline.numel() else 0.0
+        if peak > 1.0:
+            timeline /= peak
+        report = {"version": 1, "character": next(iter(characters)), "cue_count": len(reports), "sample_rate": rate, "duration": timeline.shape[-1] / rate, "peak_before_normalize": peak, "segments": reports}
+        return {"waveform": timeline.contiguous(), "sample_rate": rate}, report
+
     def close(self) -> None:
         with self.lock:
             for voice in self.voices.values():
