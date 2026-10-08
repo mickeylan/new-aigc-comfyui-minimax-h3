@@ -228,6 +228,31 @@ func TestDialogueRhythmReviewMarksUnpunctuatedCutForAttention(t *testing.T) {
 	}
 }
 
+func TestDialogueRhythmReviewKeepsSilentShotFreeOfZeroLengthFragments(t *testing.T) {
+	dialogues := []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "前半句，后半句。"}}
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
+		{Duration: 3, Dialogue: "前半句，", ShotType: "阿宁近景", PromptSubject: "阿宁"},
+		{Duration: 3, Dialogue: "", ShotType: "听者反应", PromptSubject: "阿兰", PromptAction: "闭口倾听"},
+		{Duration: 3, Dialogue: "后半句。", ShotType: "阿宁近景", PromptSubject: "阿宁"},
+	}}
+	review := buildDialogueRhythmReview(draft, dialogues)
+	if len(review) != 3 || len(review[1].Fragments) != 0 || review[1].Presentation != "silent_visual" || review[1].ContinuesFromPrev || review[1].ContinuesToNext {
+		t.Fatalf("silent review=%+v", review[1])
+	}
+}
+
+func TestNormalizeDialogueRhythmReviewDurationsUsesAuthoritativeFragments(t *testing.T) {
+	dialogues := []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "想知道可以啊，刚才迷糊时好像某人叫我哥哥来着，"}}
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: dialogues[0].Text, ShotType: "阿宁近景", PromptSubject: "阿宁"}}}
+	if err := normalizeDialogueRhythmReviewDurations(draft, dialogues); err != nil {
+		t.Fatal(err)
+	}
+	review := buildDialogueRhythmReview(draft, dialogues)
+	if len(review) != 1 || !review[0].Ready || draft.Shots[0].Duration != review[0].NaturalMinimum || len(draft.Shots[0].Checks) != 1 {
+		t.Fatalf("draft=%+v review=%+v", draft, review)
+	}
+}
+
 func TestDialogueRhythmReviewBlocksImpossibleNaturalTiming(t *testing.T) {
 	longText := strings.Repeat("修", 60)
 	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 15, Dialogue: longText, ShotType: "近景"}}}

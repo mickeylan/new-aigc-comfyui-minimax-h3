@@ -304,6 +304,20 @@ func normalizeDialogueRhythmDraftDurations(draft *sceneDirectorDraft) {
 	}
 }
 
+func normalizeDialogueRhythmReviewDurations(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
+	for _, review := range buildDialogueRhythmReview(draft, dialogues) {
+		if review.NaturalMinimum > maxSceneVideoDuration {
+			return fmt.Errorf("对白拆镜%d权威语音自然时长下限%.1f秒超过Native H3的15秒上限，必须继续拆镜", review.Shot, review.NaturalMinimum)
+		}
+		shot := &draft.Shots[review.Shot-1]
+		if shot.Duration+0.001 < review.NaturalMinimum {
+			shot.Duration = review.NaturalMinimum
+			shot.Checks = append(shot.Checks, fmt.Sprintf("系统已按权威Dialogue审计将镜头时长调整为%.1f秒", review.NaturalMinimum))
+		}
+	}
+	return nil
+}
+
 func restoreDialogueRhythmDraftText(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
 	if draft == nil {
 		return fmt.Errorf("导演草稿为空")
@@ -449,28 +463,30 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 		speakers, seen := []string{}, map[string]bool{}
 		fragments := []dialogueRhythmFragmentReview{}
 		continuesFrom, continuesTo := false, false
-		for _, item := range spans {
-			if end <= item.start || start >= item.end {
-				continue
-			}
-			from := max(start, item.start) - item.start
-			to := min(end, item.end) - item.start
-			name := strings.TrimSpace(item.dialogue.Character)
-			if name != "" && !seen[name] {
-				speakers = append(speakers, name)
-				seen[name] = true
-			}
-			speechType, _ := normalizeScriptSpeech(item.dialogue.SpeechType, item.dialogue.Character)
-			fragments = append(fragments, dialogueRhythmFragmentReview{
-				DialogueID: item.dialogue.ID, GroupKey: item.groupKey, Character: name,
-				SpeechType: speechType, StartRune: item.groupStart + from,
-				EndRune: item.groupStart + to, LocalStart: from, LocalEnd: to, Text: string(item.text[from:to]),
-			})
-			if start > item.start {
-				continuesFrom = true
-			}
-			if end < item.end {
-				continuesTo = true
+		if length > 0 {
+			for _, item := range spans {
+				if end <= item.start || start >= item.end {
+					continue
+				}
+				from := max(start, item.start) - item.start
+				to := min(end, item.end) - item.start
+				name := strings.TrimSpace(item.dialogue.Character)
+				if name != "" && !seen[name] {
+					speakers = append(speakers, name)
+					seen[name] = true
+				}
+				speechType, _ := normalizeScriptSpeech(item.dialogue.SpeechType, item.dialogue.Character)
+				fragments = append(fragments, dialogueRhythmFragmentReview{
+					DialogueID: item.dialogue.ID, GroupKey: item.groupKey, Character: name,
+					SpeechType: speechType, StartRune: item.groupStart + from,
+					EndRune: item.groupStart + to, LocalStart: from, LocalEnd: to, Text: string(item.text[from:to]),
+				})
+				if start > item.start {
+					continuesFrom = true
+				}
+				if end < item.end {
+					continuesTo = true
+				}
 			}
 		}
 		presentation := "silent_visual"
@@ -697,6 +713,9 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		if parseErr == nil && req.Mode == "dialogue_rhythm" {
 			normalizeDialogueRhythmDraftDurations(draft)
 			parseErr = validateDialogueRhythmDraft(draft, dialogues)
+			if parseErr == nil {
+				parseErr = normalizeDialogueRhythmReviewDurations(draft, dialogues)
+			}
 		} else if parseErr == nil && req.Mode == "action_rhythm" {
 			parseErr = validateActionRhythmDraft(draft, dialogues)
 		}
@@ -720,6 +739,9 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 				err = restoreErr
 			} else {
 				err = validateDialogueRhythmDraft(draft, dialogues)
+				if err == nil {
+					err = normalizeDialogueRhythmReviewDurations(draft, dialogues)
+				}
 			}
 		}
 	}
