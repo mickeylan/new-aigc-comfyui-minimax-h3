@@ -2115,17 +2115,25 @@ func TestQuotedOffscreenCharacterDialogueIsRecoveredFromSceneContent(t *testing.
 		Duration:          8,
 	}
 	dubs := mergeExplicitSceneSpeech(sc, nil)
-	if len(dubs) != 1 || dubs[0].Character != "林采薇" || dubs[0].SpeechType != "dialogue" || dubs[0].Text != "雷叔、雷婶，早上好，我过来了。" {
+	if len(dubs) != 1 || dubs[0].Character != "林采薇" || dubs[0].SpeechType != "offscreen_dialogue" || dubs[0].Text != "雷叔、雷婶，早上好，我过来了。" {
 		t.Fatalf("off-screen quoted dialogue extraction = %+v", dubs)
 	}
 	prompt := buildMiniMaxH3RefPrompt(sc, nil, dubs, []string{"- <Picture 1>：角色「雷晓飞」四视图"})
-	for _, want := range []string{"门外的林采薇，声音清脆悦耳 (S1) says: <d>[Chinese] 雷叔、雷婶，早上好，我过来了。</d>", "<Subject 1>迈出几步后停下"} {
+	for _, want := range []string{"门外的林采薇，声音清脆悦耳 (S1) says in a clearly identified off-screen voice: <d>[Chinese] 雷叔、雷婶，早上好，我过来了。</d>", "<Subject 1>迈出几步后停下"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("off-screen dialogue missing %q: %s", want, prompt)
 		}
 	}
 	if strings.Contains(prompt, "山间清泉") || strings.Contains(prompt, "黄莺出谷") {
 		t.Fatalf("voice description leaked into spoken text: %s", prompt)
+	}
+}
+
+func TestStandardSceneSpeechParsesNamedOffscreenDialogue(t *testing.T) {
+	scene := &models.Scene{Content: "【动作】门扉轻响。\n【画外对白｜阿宁】门外有人吗？"}
+	got := explicitSceneSpeech(scene)
+	if len(got) != 1 || got[0].Character != "阿宁" || got[0].SpeechType != "offscreen_dialogue" || got[0].Text != "门外有人吗？" {
+		t.Fatalf("offscreen standard speech=%+v", got)
 	}
 }
 
@@ -2138,11 +2146,11 @@ func TestExplicitSceneSpeakerCorrectsWrongStoredSpeaker(t *testing.T) {
 	}
 	stored := []models.Dialogue{{Character: "雷晓飞", SpeechType: "dialogue", Text: "雷叔、雷婶，早上好，我过来了。", Order: 1}}
 	got := mergeExplicitSceneSpeech(sc, stored)
-	if len(got) != 1 || got[0].Character != "林采薇" || got[0].SpeechType != "dialogue" {
+	if len(got) != 1 || got[0].Character != "林采薇" || got[0].SpeechType != "offscreen_dialogue" {
 		t.Fatalf("explicit source speaker did not correct stored speaker: %+v", got)
 	}
 	prompt := buildMiniMaxH3RefPrompt(sc, nil, got, []string{"- <Picture 1>：角色「雷晓飞」四视图"})
-	if !strings.Contains(prompt, "门外的林采薇 (S1) says: <d>[Chinese] 雷叔、雷婶，早上好，我过来了。</d>") || strings.Contains(prompt, "雷晓飞 (S1) says") {
+	if !strings.Contains(prompt, "门外的林采薇 (S1) says in a clearly identified off-screen voice: <d>[Chinese] 雷叔、雷婶，早上好，我过来了。</d>") || strings.Contains(prompt, "雷晓飞 (S1) says") {
 		t.Fatalf("prompt used wrong speaker: %s", prompt)
 	}
 }
@@ -2159,7 +2167,7 @@ func TestOffscreenFemaleVoiceUsesCharacterProfile(t *testing.T) {
 		t.Fatalf("female voice identity missing: %+v", dubs)
 	}
 	prompt := buildMiniMaxH3RefPrompt(sc, nil, dubs, nil)
-	if !strings.Contains(prompt, "门外的年轻女性林采薇，使用清脆悦耳的女声 (S1) says: <d>[Chinese] 我过来了。</d>") {
+	if !strings.Contains(prompt, "门外的年轻女性林采薇，使用清脆悦耳的女声 (S1) says in a clearly identified off-screen voice: <d>[Chinese] 我过来了。</d>") {
 		t.Fatalf("female voice direction missing: %s", prompt)
 	}
 }
@@ -3052,6 +3060,22 @@ func TestH3VoiceoverUsesOfficialPhraseAndClosesLips(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("voiceover contract missing %q: %s", want, body)
 		}
+	}
+}
+
+func TestH3IndependentOffscreenDialogueKeepsNamedSpeaker(t *testing.T) {
+	dialogue := models.Dialogue{Character: "阿宁", SpeechType: "offscreen_dialogue", Text: "门外有人吗？"}
+	got := renderStructuredDialogue(dialogue, 1, nil)
+	for _, want := range []string{"阿宁 (S1) says in a clearly identified off-screen voice", "<d>[Chinese] 门外有人吗？</d>"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("offscreen dialogue missing %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "off-screen voiceover") || strings.Contains(got, "internal monologue") {
+		t.Fatalf("offscreen dialogue misclassified: %s", got)
+	}
+	if speechType, speaker := normalizeScriptSpeech("offscreen_dialogue", "阿宁"); speechType != "offscreen_dialogue" || speaker != "阿宁" {
+		t.Fatalf("normalized=(%q,%q)", speechType, speaker)
 	}
 }
 

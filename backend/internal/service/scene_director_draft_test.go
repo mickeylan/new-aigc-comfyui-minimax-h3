@@ -153,6 +153,7 @@ func TestDialogueRhythmReviewUsesAuthoritativeSpeechPresentation(t *testing.T) {
 		{name: "dialogue", speechType: "dialogue", character: "阿宁", want: "visible_speaker_lipsync"},
 		{name: "narration", speechType: "narration", character: "旁白", want: "narration_voiceover"},
 		{name: "monologue", speechType: "monologue", character: "阿宁", want: "internal_monologue"},
+		{name: "offscreen dialogue", speechType: "offscreen_dialogue", character: "阿宁", want: "offscreen_dialogue"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -170,6 +171,18 @@ func TestDialogueRhythmReviewUsesAuthoritativeSpeechPresentation(t *testing.T) {
 	mixed := buildDialogueRhythmReview(&sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 5, Dialogue: "先说再叙", ShotType: "双人中景"}}}, []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "先说"}, {ID: 2, Character: "旁白", SpeechType: "narration", Text: "再叙"}})
 	if len(mixed) != 1 || mixed[0].Presentation != "mixed_authoritative_speech" {
 		t.Fatalf("mixed=%+v", mixed)
+	}
+}
+
+func TestValidateDialogueRhythmDraftEnforcesIndependentOffscreenSpeaker(t *testing.T) {
+	dialogues := []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "offscreen_dialogue", Text: "门外有人吗？"}}
+	hidden := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 4, Dialogue: "门外有人吗？", ShotType: "室内空镜", PromptSubject: "紧闭的房门"}}}
+	if err := validateDialogueRhythmDraft(hidden, dialogues); err != nil {
+		t.Fatalf("valid offscreen dialogue rejected: %v", err)
+	}
+	visible := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 4, Dialogue: "门外有人吗？", ShotType: "阿宁近景", PromptSubject: "阿宁正面入镜"}}}
+	if err := validateDialogueRhythmDraft(visible, dialogues); err == nil || !strings.Contains(err.Error(), "说话人不得出现在画面主体中") {
+		t.Fatalf("visible offscreen speaker error=%v", err)
 	}
 }
 

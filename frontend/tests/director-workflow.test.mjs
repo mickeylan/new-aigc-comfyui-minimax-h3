@@ -53,6 +53,7 @@ test('AI导演支持可审核的长对白Native拆镜', () => {
   assert.match(source, /说话人可见 · 同步口型/)
   assert.match(source, /旁白 · 不驱动画面人物口型/)
   assert.match(source, /内心独白 · 人物闭口/)
+  assert.match(source, /独立画外对白 · 明确说话人 · 说话人不入镜/)
   assert.match(source, /混合权威语音 · 逐段按类型执行/)
   assert.match(source, /静默镜头 · 无发声/)
   assert.match(source, /draftDialoguePresentation\(directorDialogueReview\[i\]\)/)

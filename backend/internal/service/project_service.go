@@ -881,14 +881,14 @@ const scriptSystemPrompt = `你是一位专业的漫剧编剧与分镜师。根�
       "props": ["该场景出现的关键道具名（同一道具须用同一名称；无则为空数组）"],
       "visual_type": "normal 或 megastructure（仅巨型建筑、巨兽、地质奇观、巨型机械、超现实巨构使用后者）",
       "mega_type": "architecture/creature/geological/mechanical/surreal，非巨构留空",
-      "dialogues": [{"character": "角色名", "speech_type": "dialogue", "text": "角色说出的原文"}, {"character": "旁白", "speech_type": "narration", "text": "正文明确写出的旁白原文"}, {"character": "角色名", "speech_type": "monologue", "text": "正文明确写出的内心独白原文"}]
+      "dialogues": [{"character": "角色名", "speech_type": "dialogue", "text": "角色说出的原文"}, {"character": "角色名", "speech_type": "offscreen_dialogue", "text": "明确由该角色从画外说出的原文"}, {"character": "旁白", "speech_type": "narration", "text": "正文明确写出的旁白原文"}, {"character": "角色名", "speech_type": "monologue", "text": "正文明确写出的内心独白原文"}]
     }
   ]
 }
 3. 默认以约 180 秒、20~30 个镜头作为节奏参考，但自然对白优先，总时长允许超过目标。每镜为 3~15 秒独立视频片段；按约 3.8 个汉字/秒估算对白，并计入标点停顿、说话人切换及至少 1.2 秒镜头余量。对白自然说完需要超过 15 秒时，必须按完整句子、说话人或动作节点拆成连续镜头，不得删改对白或通过提高语速压缩。
 4. 人物一致性至关重要：同一角色在多个场景出现时，image_prompt 必须重复其外貌特征（发型、服装颜色、体型），且所有场景画风描述保持一致。
 5. 必须区分人物用途：visible_characters 只列本镜最终画面中真实可见的人物（包括回忆画面、照片、倒影中确实被画出的角色）；voice_characters 只列画外对白或内心独白的发声者；mentioned_characters 只列剧情说明、对白或独白中被提到但不会出现在画面中的人物。人物名字出现在文字中不等于画面出场。characters 为兼容字段，必须与 visible_characters 完全相同。只有 visible_characters 会要求人物四视图。
-6. script 正文优先使用固定格式：【动作】画面描述、【对白｜角色名】原文、【旁白】原文、【内心独白｜角色名】原文。逐场检查故事正文和分镜内容中的明确发声标注，并忠实提取到 dialogues：“旁白/画外音：原文”使用 narration，“角色名内心独白：原文”使用 monologue，“角色名：原文”使用 dialogue。只复制标注后的原文，不改写、不概括、不补充。不得把“他心里疑惑”“气氛压抑”等心理、动作或氛围描写转换成独白或旁白。speech_type 只能是 dialogue、narration 或 monologue；dialogue/monologue 的 character 必须是角色名，narration 的 character 固定为“旁白”。正文和分镜内容均未明确出现可发声内容时必须为空数组。
+6. script 正文优先使用固定格式：【动作】画面描述、【对白｜角色名】原文、【画外对白｜角色名】原文、【旁白】原文、【内心独白｜角色名】原文。逐场检查故事正文和分镜内容中的明确发声标注，并忠实提取到 dialogues：明确命名角色从画外发声使用 offscreen_dialogue，无角色身份的旁白使用 narration，角色内心独白使用 monologue，角色在画面中说话使用 dialogue。只复制标注后的原文，不改写、不概括、不补充。不得把“他心里疑惑”“气氛压抑”等心理、动作或氛围描写转换成独白或旁白。speech_type 只能是 dialogue、offscreen_dialogue、narration 或 monologue；dialogue/offscreen_dialogue/monologue 的 character 必须是角色名，narration 的 character 固定为“旁白”。正文和分镜内容均未明确出现可发声内容时必须为空数组。
 7. 第一个场景尽量给出大场景/环境交代，后续场景聚焦人物动作与剧情推进。
 8. 道具与场景一致性：贯穿剧情的关键道具（信物/武器等）与主要地点必须在 props/location 中用统一名称标出（系统会用同名资产参考图锁定其外观），同一道具/地点在不同场景中名称必须完全相同。`
 
@@ -2199,7 +2199,7 @@ func normalizeScriptSpeech(speechType, character string) (string, string) {
 	switch t {
 	case "narration":
 		return t, "旁白"
-	case "monologue", "dialogue":
+	case "monologue", "dialogue", "offscreen_dialogue":
 		if character != "" {
 			return t, character
 		}
@@ -2209,7 +2209,7 @@ func normalizeScriptSpeech(speechType, character string) (string, string) {
 
 var (
 	explicitSceneSpeechPattern  = regexp.MustCompile(`(内心独白|旁白|画外音)\s*[:：]\s*["“‘']?`)
-	standardSceneSpeechPattern  = regexp.MustCompile(`【(对白|旁白|内心独白)(?:[｜|]([^】]+))?】\s*`)
+	standardSceneSpeechPattern  = regexp.MustCompile(`【(对白|画外对白|旁白|内心独白)(?:[｜|]([^】]+))?】\s*`)
 	quotedThoughtPattern        = regexp.MustCompile(`(?:心想|暗自想道|心中说道|心中想道|默念)\s*[:：]?\s*["“]([^"”]+)["”]`)
 	offscreenVoiceSpeechPattern = regexp.MustCompile(`(?:门外|屋外|画外|身后)?[^。！？!?\r\n]{0,12}?(?:传来|响起)([\p{Han}]{2,4})(?:清脆悦耳|清脆|悦耳|温柔|低沉|沙哑|熟悉|陌生|焦急|急促|平静)*的声音(?:说道|说|喊道|叫道)\s*[:：]?\s*["“]([^"”]+)["”]`)
 	leadingQuoteSpeechPattern   = regexp.MustCompile(`["“]([^"”]{1,200})["”][^。！？!?\r\n]{0,50}?(?:传来|响起)?[^。！？!?\r\n]{0,20}?(?:男子|男人|大汉|女子|女人|少女|女童|男童|老人|老者)?(?:厉喝|怒喝|大喝|喝道|喊道|叫道|说道|说)`)
@@ -2334,7 +2334,7 @@ func explicitSceneSpeech(sc *models.Scene) []models.Dialogue {
 			} else if strings.Contains(matchedText, "清脆") {
 				voiceDescription += "，声音清脆"
 			}
-			out = append(out, models.Dialogue{Character: speaker, SpeechType: "dialogue", H3VoiceDescription: voiceDescription, Text: text, Order: len(out) + 1})
+			out = append(out, models.Dialogue{Character: speaker, SpeechType: "offscreen_dialogue", H3VoiceDescription: voiceDescription, Text: text, Order: len(out) + 1})
 			known := false
 			for _, name := range names {
 				if name == speaker {
@@ -2368,7 +2368,7 @@ func explicitSceneSpeech(sc *models.Scene) []models.Dialogue {
 		}
 		duplicate := false
 		for _, existing := range out {
-			if existing.SpeechType == "dialogue" && existing.Character == speaker && strings.TrimSpace(existing.Text) == text {
+			if (existing.SpeechType == "dialogue" || existing.SpeechType == "offscreen_dialogue") && existing.Character == speaker && strings.TrimSpace(existing.Text) == text {
 				duplicate = true
 				break
 			}
@@ -2400,6 +2400,8 @@ func explicitSceneSpeech(sc *models.Scene) []models.Dialogue {
 			d.Character, d.SpeechType = "旁白", "narration"
 		case "内心独白":
 			d.SpeechType = "monologue"
+		case "画外对白":
+			d.SpeechType = "offscreen_dialogue"
 		case "对白":
 			d.SpeechType = "dialogue"
 		}
@@ -2451,7 +2453,7 @@ func explicitSceneSpeech(sc *models.Scene) []models.Dialogue {
 	for _, extracted := range explicitlyQuotedCharacterSpeech(content, names) {
 		duplicate := false
 		for _, existing := range out {
-			if existing.SpeechType == "dialogue" && existing.Character == extracted.Character && strings.TrimSpace(existing.Text) == strings.TrimSpace(extracted.Text) {
+			if (existing.SpeechType == "dialogue" || existing.SpeechType == "offscreen_dialogue") && existing.Character == extracted.Character && strings.TrimSpace(existing.Text) == strings.TrimSpace(extracted.Text) {
 				duplicate = true
 				break
 			}
@@ -2502,13 +2504,16 @@ func mergeExplicitSceneSpeech(sc *models.Scene, dubs []models.Dialogue) []models
 		matched := false
 		for i := range out {
 			existingType, existingCharacter := normalizeScriptSpeech(out[i].SpeechType, out[i].Character)
-			if existingType != extracted.SpeechType || strings.TrimSpace(out[i].Text) != strings.TrimSpace(extracted.Text) {
+			if strings.TrimSpace(out[i].Text) != strings.TrimSpace(extracted.Text) {
+				continue
+			}
+			if existingType == "narration" || existingType == "monologue" {
 				continue
 			}
 			matched = true
 			// 场景原文同时具备角色名、明确说话动词和引号原文时，说话人是
 			// 确定事实；用它纠正早期模型生成的同文本错误说话人。
-			if existingCharacter != extracted.Character {
+			if existingCharacter != extracted.Character || existingType != extracted.SpeechType {
 				out[i].Character = extracted.Character
 				out[i].SpeechType = extracted.SpeechType
 			}
@@ -3044,6 +3049,8 @@ func renderStructuredDialogue(d models.Dialogue, speakerID int, referenceLines [
 		rendered = speaker + " says in an off-screen voiceover: <d>[Chinese] " + text + "</d> while their lips remain completely closed."
 	case "monologue":
 		rendered = speaker + " delivers an internal monologue: <d>[Chinese] " + text + "</d> while their lips remain completely closed."
+	case "offscreen_dialogue":
+		rendered = speaker + " says in a clearly identified off-screen voice: <d>[Chinese] " + text + "</d>."
 	default:
 		rendered = speaker + " says: <d>[Chinese] " + text + "</d>."
 	}
@@ -3109,28 +3116,34 @@ func renderDialogueRange(d models.Dialogue, speakerID int, referenceLines []stri
 		}
 		return clause
 	}
+	closedLipListeners := func(clause string) string {
+		listeners := []string{}
+		for _, subject := range visibleSubjects {
+			if subject != speakerTag && isCharacterSubjectTag(subject, referenceLines) {
+				listeners = append(listeners, subject)
+			}
+		}
+		if len(listeners) == 1 {
+			return clause + " " + listeners[0] + " keeps their lips completely closed."
+		}
+		if len(listeners) > 1 {
+			return clause + " " + strings.Join(listeners, " and ") + " keep their lips completely closed."
+		}
+		return clause
+	}
 	var clause string
 	switch d.SpeechType {
 	case "narration":
 		clause = speaker + " says in an off-screen voiceover: <d>[Chinese] " + fragment + "</d> while their lips remain completely closed."
 	case "monologue":
 		clause = speaker + " delivers an internal monologue: <d>[Chinese] " + fragment + "</d> while their lips remain completely closed."
+	case "offscreen_dialogue":
+		clause = closedLipListeners(speaker + " says in a clearly identified off-screen voice: <d>[Chinese] " + fragment + "</d>.")
 	default:
 		if visible {
 			clause = speaker + " says: <d>[Chinese] " + fragment + "</d>."
 		} else {
-			clause = speaker + " says in an off-screen voiceover: <d>[Chinese] " + fragment + "</d>."
-			listeners := []string{}
-			for _, subject := range visibleSubjects {
-				if subject != speakerTag && isCharacterSubjectTag(subject, referenceLines) {
-					listeners = append(listeners, subject)
-				}
-			}
-			if len(listeners) == 1 {
-				clause += " " + listeners[0] + " keeps their lips completely closed."
-			} else if len(listeners) > 1 {
-				clause += " " + strings.Join(listeners, " and ") + " keep their lips completely closed."
-			}
+			clause = closedLipListeners(speaker + " says in an off-screen voiceover: <d>[Chinese] " + fragment + "</d>.")
 		}
 	}
 	if continuesTo {
@@ -3448,6 +3461,8 @@ func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLine
 			body += " " + speaker + " says in an off-screen voiceover: <d>[Chinese] " + text + "</d> while their lips remain completely closed."
 		case "monologue":
 			body += " " + speaker + " delivers an internal monologue: <d>[Chinese] " + text + "</d> while their lips remain completely closed."
+		case "offscreen_dialogue":
+			body += " " + speaker + " says in a clearly identified off-screen voice: <d>[Chinese] " + text + "</d>."
 		default:
 			body += " " + speaker + " says: <d>[Chinese] " + text + "</d>."
 		}
@@ -7918,7 +7933,7 @@ func (s *ProjectService) UpdateDialogueFields(p *models.Project, did uint, input
 	if input.SpeechType != nil {
 		normalized, normalizedCharacter := normalizeScriptSpeech(*input.SpeechType, character)
 		if normalized == "" {
-			return nil, fmt.Errorf("发声类型必须是 dialogue、narration 或 monologue")
+			return nil, fmt.Errorf("发声类型必须是 dialogue、offscreen_dialogue、narration 或 monologue")
 		}
 		if normalized != d.SpeechType || normalizedCharacter != d.Character {
 			updates["speech_type"], updates["character"] = normalized, normalizedCharacter

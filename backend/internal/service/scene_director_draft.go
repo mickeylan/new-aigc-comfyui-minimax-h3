@@ -219,7 +219,7 @@ func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue) string {
 	return `按对白自然语速和语义停顿拆成多个3–15秒Native H3镜头。可以交替使用说话人近景、包含说话人的双人/前后景镜头，以及对白结束后的纯听者反应镜头。硬规则：
 1. Dialogue字段只能填下列结构化对白的连续原文片段，不得改写、增删、重复或创造旁白；无发声镜头必须为空。
 2. 所有镜头Dialogue按顺序拼接后必须逐字等于下列完整对白原文按顺序拼接的结果。
-3. 普通dialogue默认让真实说话人清晰可见并由其同步口型；也允许同一句对白跨切到纯听者反应镜头，但必须明确写出“原说话人姓名+声音跨切延续”，听者必须闭口，且不得把这种连续对白改写成旁白或独立画外音。只有明确speech_type为narration或monologue时才使用旁白/内心独白语义。
+3. 普通dialogue默认让真实说话人清晰可见并由其同步口型；也允许同一句对白跨切到纯听者反应镜头，但必须明确写出“原说话人姓名+声音跨切延续”，听者必须闭口，且不得把这种连续对白改写成旁白或独立画外音。只有明确speech_type为offscreen_dialogue时才设计独立画外对白且说话人不得入镜；只有明确speech_type为narration或monologue时才使用旁白/内心独白语义。
 4. 纯听者反应镜头承载普通对白时只能承接上一镜已经开始的同一句对白；不能在听者镜头中开始一条新对白，也不能改变说话人。
 5. 每镜3–15秒，一个主要情绪、一个主要动作、一种主要构图和明确结束状态。
 6. 对白自然时长决定总时长，不得压缩语速，也不得用重复动作填时长。
@@ -486,6 +486,8 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 				presentation = "narration_voiceover"
 			case types["monologue"]:
 				presentation = "internal_monologue"
+			case types["offscreen_dialogue"]:
+				presentation = "offscreen_dialogue"
 			default:
 				presentation = "visible_speaker_lipsync"
 				for _, speaker := range speakers {
@@ -600,12 +602,19 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 			if end <= span.start || start >= span.end {
 				continue
 			}
-			speechType := strings.TrimSpace(span.dialogue.SpeechType)
-			if speechType != "" && speechType != "dialogue" {
+			speechType, normalizedSpeaker := normalizeScriptSpeech(span.dialogue.SpeechType, span.dialogue.Character)
+			speaker := strings.TrimSpace(normalizedSpeaker)
+			if speaker == "" {
 				continue
 			}
-			speaker := strings.TrimSpace(span.dialogue.Character)
-			if speaker == "" {
+			if speechType == "offscreen_dialogue" {
+				speakerVisible := strings.Contains(strings.Join([]string{shot.PromptSubject, shot.ShotType}, " "), speaker)
+				if speakerVisible {
+					return fmt.Errorf("对白拆镜%d承载角色“%s”的独立画外对白时，说话人不得出现在画面主体中；如需可见口型请改用dialogue", i+1, speaker)
+				}
+				continue
+			}
+			if speechType != "dialogue" {
 				continue
 			}
 			speakerVisible := strings.Contains(strings.Join([]string{shot.PromptSubject, shot.ShotType}, " "), speaker)

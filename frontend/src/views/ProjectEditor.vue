@@ -505,8 +505,8 @@ function fmtDur(d) {
   return `${mm}:${ss}`
 }
 function round1(v) { return Math.round(Number(v) * 10) / 10 }
-function speakerKind(row){ const type=String(row?.speech_type||'').toLowerCase(); if(type==='narration')return'narration'; if(type==='monologue'||type==='internal_monologue')return'monologue'; return String(row?.character||'').trim()?'dialogue':'unknown' }
-function speakerLabel(row){ const kind=speakerKind(row); if(kind==='narration')return'旁白'; if(kind==='monologue')return String(row?.character||'').trim()||'内心独白'; if(kind==='unknown')return'未指定说话人'; return row.character }
+function speakerKind(row){ const type=String(row?.speech_type||'').toLowerCase(); if(type==='narration')return'narration'; if(type==='monologue'||type==='internal_monologue')return'monologue'; if(type==='offscreen_dialogue')return'offscreen'; return String(row?.character||'').trim()?'dialogue':'unknown' }
+function speakerLabel(row){ const kind=speakerKind(row); if(kind==='narration')return'旁白'; if(kind==='monologue')return String(row?.character||'').trim()||'内心独白'; if(kind==='offscreen')return `${String(row?.character||'').trim()||'未指定'}（画外）`; if(kind==='unknown')return'未指定说话人'; return row.character }
 function referenceShotScope(ref){ if(ref.retention_mode==='unresolved')return'尚未生成/保存正式H3提示词'; if(ref.shot_orders?.length)return ref.shot_orders.map(n=>`Shot ${n}`).join('、'); return'弱参考，不强制入镜' }
 
 function sceneDubs(sc) {

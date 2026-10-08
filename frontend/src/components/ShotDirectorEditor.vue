@@ -86,6 +86,7 @@ function draftDialoguePresentation(review) {
     listener_reaction_carryover: '听者反应 · 原说话人跨切延续 · 听者闭口',
     narration_voiceover: '旁白 · 不驱动画面人物口型',
     internal_monologue: '内心独白 · 人物闭口',
+    offscreen_dialogue: '独立画外对白 · 明确说话人 · 说话人不入镜',
     mixed_authoritative_speech: '混合权威语音 · 逐段按类型执行',
     silent_visual: '静默镜头 · 无发声'
   })[review?.presentation] || '服务端呈现类型未知'

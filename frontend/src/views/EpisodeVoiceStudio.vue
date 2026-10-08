@@ -208,7 +208,7 @@ const progressPercent = computed(() => dialogues.value.length ? Math.round(ready
 const slotQASummary = computed(() => studio.value.slot_qa_summary || {})
 const slotQALabel = qa => ({ ok: '通过', overflow: '超出槽位', stale: '音频已过期', missing: '音频缺失/未就绪', duration_missing: '实际时长缺失' })[qa.status] || qa.message || '待核验'
 const formatSeconds = value => Number(value || 0).toFixed(3)
-const speakerLabel = d => d.speech_type === 'narration' ? '旁白' : d.character || (d.speech_type === 'monologue' ? '内心独白' : '未指定说话人')
+const speakerLabel = d => d.speech_type === 'narration' ? '旁白' : d.speech_type === 'offscreen_dialogue' ? `${d.character || '未指定'}（画外）` : d.character || (d.speech_type === 'monologue' ? '内心独白' : '未指定说话人')
 const statusLabel = d => ({ ready: '已就绪', pending: d.audio_stale ? '待更新' : '待生成', synthesizing: '生成中', failed: '生成失败' })[normalizedStatus(d)]
 const audioSource = d => {
   const value = d.audio_url || d.audio_file || ''

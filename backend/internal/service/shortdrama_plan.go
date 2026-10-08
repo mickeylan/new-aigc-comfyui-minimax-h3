@@ -164,7 +164,7 @@ func scriptFromPlanSystemPrompt(targetDuration float64, targetScenes int) string
       "mentioned_characters": ["仅在剧情说明、对白或独白中被提及的角色"],
       "location": "该场景地点名（须与创作方案 locations 中的名称完全一致；无明确地点则为空字符串）",
       "props": ["该场景出现的关键道具名（与创作方案 props 中的名称完全一致；无则为空数组）"],
-      "dialogues": [{"character": "角色名", "speech_type": "dialogue", "text": "角色说出的原文"}, {"character": "旁白", "speech_type": "narration", "text": "正文明确写出的旁白原文"}, {"character": "角色名", "speech_type": "monologue", "text": "正文明确写出的内心独白原文"}]
+      "dialogues": [{"character": "角色名", "speech_type": "dialogue", "text": "角色说出的原文"}, {"character": "角色名", "speech_type": "offscreen_dialogue", "text": "明确由该角色从画外说出的原文"}, {"character": "旁白", "speech_type": "narration", "text": "正文明确写出的旁白原文"}, {"character": "角色名", "speech_type": "monologue", "text": "正文明确写出的内心独白原文"}]
     }
   ]
 }
@@ -176,7 +176,7 @@ func scriptFromPlanSystemPrompt(targetDuration float64, targetScenes int) string
 - 对白自然说完需要超过 15 秒时，按完整句子、说话人或动作节点拆为连续镜头；不得删改对白或提高语速来凑总时长
 3. 人物一致性至关重要：同一角色在多个场景出现时，image_prompt 必须严格沿用创作方案中该角色的 trait（外貌特征）与 style（服装造型），且所有场景画风描述保持一致。
 4. 必须区分人物用途：visible_characters 只列本镜最终画面中真实可见的人物；voice_characters 只列画外对白或内心独白的发声者；mentioned_characters 只列剧情说明、对白或独白中被提到但不会出现在画面中的人物。名字出现在文字中不等于画面出场。characters 为兼容字段，必须与 visible_characters 完全相同；只有 visible_characters 会要求人物四视图。
-5. script 正文优先使用固定格式：【动作】画面描述、【对白｜角色名】原文、【旁白】原文、【内心独白｜角色名】原文。逐场检查故事正文和分镜内容中的明确发声标注，并忠实提取到 dialogues：“旁白/画外音：原文”使用 narration，“角色名内心独白：原文”使用 monologue，“角色名：原文”使用 dialogue。只复制标注后的原文，不改写、不概括、不补充。不得把“他心里疑惑”“气氛压抑”等心理、动作或氛围描写转换成独白或旁白。speech_type 只能是 dialogue、narration 或 monologue；dialogue/monologue 的 character 必须是角色名，narration 的 character 固定为“旁白”。正文和分镜内容均未明确出现可发声内容时必须为空数组。
+5. script 正文优先使用固定格式：【动作】画面描述、【对白｜角色名】原文、【画外对白｜角色名】原文、【旁白】原文、【内心独白｜角色名】原文。逐场检查故事正文和分镜内容中的明确发声标注，并忠实提取到 dialogues：明确命名角色从画外发声使用 offscreen_dialogue，无角色身份的旁白使用 narration，角色内心独白使用 monologue，角色在画面中说话使用 dialogue。只复制标注后的原文，不改写、不概括、不补充。不得把“他心里疑惑”“气氛压抑”等心理、动作或氛围描写转换成独白或旁白。speech_type 只能是 dialogue、offscreen_dialogue、narration 或 monologue；dialogue/offscreen_dialogue/monologue 的 character 必须是角色名，narration 的 character 固定为“旁白”。正文和分镜内容均未明确出现可发声内容时必须为空数组。
 6. 第一个场景尽量给出大场景/环境交代，后续场景聚焦人物动作与剧情推进。
 7. 剧情节奏参考创作方案中的节奏曲线：开头要有钩子，中段冲突升级，结尾留悬念。
 8. 道具与场景一致性：每个场景的 location 与 props 名称必须完全取自创作方案的 locations/props 清单（系统会用同名资产参考图锁定画面中该场景环境与道具外观），不得随意改名；只有确属剧情新出现的道具才允许新名称。`
