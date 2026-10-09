@@ -76,6 +76,7 @@ export const api = {
   sceneDirectorDraft: (id, sid, data = {}) => http.post(`/projects/${id}/scenes/${sid}/shots/director-draft`, data, { timeout: 600000 }),
   combatReferenceSearch: (id, scope, query) => http.get(`/projects/${id}/combat-references/search`, { params: { scope, query } }),
   combatReference: (id, scope, rid) => http.get(`/projects/${id}/combat-references/${scope}/${rid}`),
+  combatShowcaseUrl: (id, scope, rid) => `/api/projects/${id}/combat-references/${scope}/${rid}/showcase`,
   visualBeatDraft: (id, sid, data = {}) => http.post(`/projects/${id}/scenes/${sid}/skills/visual-beats`, data, { timeout: 300000 }),
   faithfulPolishDraft: (id, sid, data) => http.post(`/projects/${id}/scenes/${sid}/skills/faithful-polish`, data, { timeout: 300000 }),
   assetContinuityReviewDraft: (id, sid, data = {}) => http.post(`/projects/${id}/scenes/${sid}/skills/asset-continuity-review`, data, { timeout: 300000 }),

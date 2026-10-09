@@ -22,7 +22,10 @@ test('武戏导演支持确定性资料检索、正文预览和审核后导入',
   assert.match(source, /combat_references/)
   assert.match(source, /generateDirectorDraft\('combat_design'\)/)
   assert.match(source, /item\.scope==='design'/)
+  assert.match(source, /必须确认前置条件/)
+  assert.match(source, /combatShowcaseUrl/)
   assert.match(api, /combat-references\/search/)
+  assert.match(api, /showcase/)
 })
 
 test('提示词历史明确区分草稿和已应用且保留动作来源', () => {

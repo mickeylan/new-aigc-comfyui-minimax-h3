@@ -1,6 +1,10 @@
 server:
   addr: "0.0.0.0:18000"
 
+# 可选：fight-video-create-skill 根目录。配置后UI可直接预览招式/技能GIF；
+# 留空时检索和正文仍可用，只是不提供展示样本。
+combat_reference_dir: ""
+
 comfy:
   comfy_dir: /opt/comfyUI
   base_port: 8188

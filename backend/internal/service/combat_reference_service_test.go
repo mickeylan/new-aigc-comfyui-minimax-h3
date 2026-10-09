@@ -60,6 +60,23 @@ func TestCombatReferenceReadReturnsExactEmbeddedBody(t *testing.T) {
 	}
 }
 
+func TestCombatReferenceShowcaseIsSafeAndScoped(t *testing.T) {
+	service, err := NewCombatReferenceService()
+	if err != nil {
+		t.Fatal(err)
+	}
+	showcase, err := service.Showcase("moves", "27")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(showcase, "27-居合拔刀与重兵器抢线专项.gif") || strings.Contains(showcase, "..") {
+		t.Fatalf("showcase=%q", showcase)
+	}
+	if _, err := service.Showcase("design", "02"); err == nil {
+		t.Fatal("missing showcase accepted")
+	}
+}
+
 func TestCombatReferenceRejectsUnknownScopeAndMissingBody(t *testing.T) {
 	service, err := NewCombatReferenceService()
 	if err != nil {

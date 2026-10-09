@@ -2,6 +2,8 @@ package service
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -41,6 +43,44 @@ func (s *Service) HandleSearchCombatReferences(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+func (s *Service) HandleGetCombatShowcase(c *gin.Context) {
+	if _, ok := s.combatReferenceProject(c); !ok {
+		return
+	}
+	if s.CombatReferences == nil || s.Cfg == nil || strings.TrimSpace(s.Cfg.CombatReferenceDir) == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "战斗展示样本目录未配置"})
+		return
+	}
+	relative, err := s.CombatReferences.Showcase(strings.TrimSpace(c.Param("scope")), strings.TrimSpace(c.Param("rid")))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	root, err := filepath.Abs(s.Cfg.CombatReferenceDir)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "战斗展示样本目录无效"})
+		return
+	}
+	path := filepath.Join(root, filepath.FromSlash(relative))
+	resolved, err := filepath.Abs(path)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "展示样本路径无效"})
+		return
+	}
+	inside, err := filepath.Rel(root, resolved)
+	if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "展示样本路径越界"})
+		return
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || info.IsDir() {
+		c.JSON(http.StatusNotFound, gin.H{"error": "展示样本不存在"})
+		return
+	}
+	c.Header("Cache-Control", "public, max-age=3600")
+	c.File(resolved)
 }
 
 func (s *Service) HandleGetCombatReference(c *gin.Context) {

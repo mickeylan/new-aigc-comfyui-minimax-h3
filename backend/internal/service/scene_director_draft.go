@@ -657,8 +657,9 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		Requirements     string `json:"requirements"`
 		Mode             string `json:"mode"`
 		CombatReferences []struct {
-			Scope string `json:"scope"`
-			ID    string `json:"id"`
+			Scope              string `json:"scope"`
+			ID                 string `json:"id"`
+			ConditionConfirmed bool   `json:"condition_confirmed"`
 		} `json:"combat_references"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -694,6 +695,10 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 			document, readErr := s.CombatReferences.Read(selected.Scope, selected.ID)
 			if readErr != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": readErr.Error()})
+				return
+			}
+			if selected.Scope == "skills" && !selected.ConditionConfirmed {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "采用条件技能前必须明确确认前置条件"})
 				return
 			}
 			if selected.Scope == "design" {

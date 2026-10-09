@@ -249,6 +249,26 @@ func (s *CombatReferenceService) Search(scope, query string) (*CombatReferenceSe
 	return result, nil
 }
 
+func (s *CombatReferenceService) Showcase(scope, id string) (string, error) {
+	items, ok := s.items[strings.TrimSpace(scope)]
+	if !ok {
+		return "", fmt.Errorf("未知战斗资料范围: %s", scope)
+	}
+	metadata, ok := items[strings.TrimSpace(id)]
+	if !ok {
+		return "", fmt.Errorf("战斗资料不存在: %s/%s", scope, id)
+	}
+	showcase := strings.TrimSpace(fmt.Sprint(metadata["showcase"]))
+	if showcase == "" || showcase == "<nil>" {
+		return "", fmt.Errorf("该资料暂无展示样本")
+	}
+	showcase = filepath.ToSlash(filepath.Clean(strings.ReplaceAll(showcase, "\\", "/")))
+	if strings.HasPrefix(showcase, "../") || strings.HasPrefix(showcase, "/") || strings.Contains(showcase, ":") || filepath.Ext(showcase) != ".gif" {
+		return "", fmt.Errorf("展示样本路径无效")
+	}
+	return showcase, nil
+}
+
 func (s *CombatReferenceService) Read(scope, id string) (*CombatReferenceDocument, error) {
 	items, ok := s.items[strings.TrimSpace(scope)]
 	if !ok {
