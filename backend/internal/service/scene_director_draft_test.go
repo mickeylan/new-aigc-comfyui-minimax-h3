@@ -26,6 +26,28 @@ func TestValidateCombatReferenceDraftAllowsLongAuditedTimeline(t *testing.T) {
 	}
 }
 
+func TestNormalizeCombatReferenceDraftContractsAddsOnlyPolicyConstraints(t *testing.T) {
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{PromptAction: "甲挥刀，乙格挡", NegativePrompt: "文字水印", EndState: "甲刀被架开"}, {PromptAction: "乙回刺", NegativePrompt: "文字水印", StartState: "近似但不一致"}}}
+	normalizeCombatReferenceDraftContracts(draft)
+	shot := draft.Shots[0]
+	for _, value := range []string{"实时速度", "无慢动作"} {
+		if !strings.Contains(shot.PromptAction, value) {
+			t.Fatalf("prompt_action=%q", shot.PromptAction)
+		}
+	}
+	for _, value := range []string{"慢动作", "子弹时间", "动作拖沓"} {
+		if !strings.Contains(shot.NegativePrompt, value) {
+			t.Fatalf("negative_prompt=%q", shot.NegativePrompt)
+		}
+	}
+	if !strings.Contains(shot.PromptAction, "甲挥刀，乙格挡") {
+		t.Fatalf("action facts changed: %q", shot.PromptAction)
+	}
+	if draft.Shots[1].StartState != draft.Shots[0].EndState || !strings.Contains(strings.Join(draft.Shots[1].Checks, " "), "确定性对齐") {
+		t.Fatalf("state relay not normalized: %+v", draft.Shots)
+	}
+}
+
 func TestValidateCombatReferenceDraftRequiresTimelineAndExactStateRelay(t *testing.T) {
 	long := combatDraftShot(8, "开始", "结束")
 	if err := validateCombatReferenceDraft(&sceneDirectorDraft{Shots: []sceneDirectorDraftShot{long}}, nil); err == nil || !strings.Contains(err.Error(), "动作时间轴") {
@@ -35,6 +57,24 @@ func TestValidateCombatReferenceDraftRequiresTimelineAndExactStateRelay(t *testi
 	second := combatDraftShot(4, "大致承接但文字不同", "结束")
 	if err := validateCombatReferenceDraft(&sceneDirectorDraft{Shots: []sceneDirectorDraftShot{first, second}}, nil); err == nil || !strings.Contains(err.Error(), "原样承接") {
 		t.Fatalf("state relay error=%v", err)
+	}
+}
+
+func TestParseSceneDirectorDraftAcceptsSingleProjectEnvelope(t *testing.T) {
+	wrapped := `{"project":{"duration":12,"shots":` + strings.TrimSuffix(strings.TrimPrefix(validSceneDirectorDraft, `{"shots":`), `}`) + `}}`
+	draft, err := parseSceneDirectorDraft(wrapped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(draft.Shots) != 1 || draft.Shots[0].Description != "女主走到桌边" {
+		t.Fatalf("draft=%+v", draft)
+	}
+	rootMetadata := `{"title":"雨夜屋顶","duration":12,"shots":` + strings.TrimSuffix(strings.TrimPrefix(validSceneDirectorDraft, `{"shots":`), `}`) + `}`
+	if _, err := parseSceneDirectorDraft(rootMetadata); err != nil {
+		t.Fatalf("root metadata wrapper rejected: %v", err)
+	}
+	if _, err := parseSceneDirectorDraft(`{"project":{"title":"missing shots"},"extra":true}`); err == nil {
+		t.Fatal("envelope without shots was accepted")
 	}
 }
 
@@ -63,6 +103,30 @@ func TestParseSceneDirectorDraftRejectsShortShotThatCannotMergeWithinLimit(t *te
 	raw = strings.TrimSuffix(raw, `]}`) + `,` + second + `]}`
 	if _, err := parseSceneDirectorDraft(raw); err == nil || !strings.Contains(err.Error(), "无法与相邻镜头合并") {
 		t.Fatalf("unmergeable short shot accepted: %v", err)
+	}
+}
+
+func TestParseSceneDirectorDraftNormalizesKnownTransitionAliases(t *testing.T) {
+	raw := strings.Replace(validSceneDirectorDraft, `"transition_type":"cut"`, `"transition_type":"硬切"`, 1)
+	raw = strings.Replace(raw, `"act_type":"setup"`, `"act_type":"climax"`, 1)
+	draft, err := parseSceneDirectorDraft(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.Shots[0].TransitionType != models.ShotTransitionCut || draft.Shots[0].ActType != models.ShotActMidpoint {
+		t.Fatalf("transition=%q act=%q", draft.Shots[0].TransitionType, draft.Shots[0].ActType)
+	}
+}
+
+func TestParseSceneDirectorDraftNormalizesTimelineBoundaries(t *testing.T) {
+	raw := strings.Replace(validSceneDirectorDraft, `"checks":["动作可在3秒完成","无新增对白"]`, `"action_timeline":[{"start":0,"end":1.5,"subject":"女主","action":"走近","state":"移动中","camera":"固定"},{"start":0,"end":1.5,"subject":"女主","action":"停下","state":"桌边","camera":"固定"}],"checks":["动作可在3秒完成","无新增对白"]`, 1)
+	draft, err := parseSceneDirectorDraft(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := draft.Shots[0].ActionTimeline
+	if len(entries) != 2 || math.Abs(entries[1].Start-entries[0].End) > 0.001 || entries[1].End != 3 {
+		t.Fatalf("timeline=%+v", entries)
 	}
 }
 

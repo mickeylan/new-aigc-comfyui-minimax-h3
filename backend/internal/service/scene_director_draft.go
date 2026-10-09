@@ -150,8 +150,100 @@ func normalizeShortDirectorShots(draft *sceneDirectorDraft) error {
 	return nil
 }
 
+func unwrapSceneDirectorDraftEnvelope(output string) string {
+	trimmed := trimJSONFence(output)
+	var root map[string]json.RawMessage
+	if json.Unmarshal([]byte(trimmed), &root) != nil {
+		return trimmed
+	}
+	candidate := root
+	if wrapped, ok := root["project"]; ok {
+		var nested map[string]json.RawMessage
+		if json.Unmarshal(wrapped, &nested) == nil {
+			candidate = nested
+		}
+	}
+	shots := candidate["shots"]
+	if shots == nil {
+		return trimmed
+	}
+	normalized, err := json.Marshal(map[string]json.RawMessage{"shots": shots})
+	if err != nil {
+		return trimmed
+	}
+	return string(normalized)
+}
+
+func normalizeDirectorAct(value models.ShotActType) models.ShotActType {
+	normalized := strings.ToLower(strings.TrimSpace(string(value)))
+	switch normalized {
+	case "setup", "opening", "introduction", "开端", "建立", "起势":
+		return models.ShotActSetup
+	case "rising", "development", "escalation", "发展", "升级", "交锋":
+		return models.ShotActRising
+	case "midpoint", "climax", "turning_point", "中点", "转折", "反击":
+		return models.ShotActMidpoint
+	case "falling", "aftermath", "回落", "收束", "余波":
+		return models.ShotActFalling
+	case "resolution", "ending", "conclusion", "结局", "解决", "结束":
+		return models.ShotActResolution
+	default:
+		return value
+	}
+}
+
+func normalizeDirectorTransition(value models.ShotTransitionType) models.ShotTransitionType {
+	normalized := strings.ToLower(strings.TrimSpace(string(value)))
+	switch normalized {
+	case "", "none", "无", "无转场":
+		return ""
+	case "cut", "硬切", "直切", "直接切换":
+		return models.ShotTransitionCut
+	case "dissolve", "叠化":
+		return models.ShotTransitionDissolve
+	case "fade", "淡入淡出", "淡入", "淡出":
+		return models.ShotTransitionFade
+	case "wipe", "划像":
+		return models.ShotTransitionWipe
+	case "match_cut", "match cut", "匹配剪辑":
+		return models.ShotTransitionMatchCut
+	default:
+		// Transition wording is presentation metadata, not a story fact. Unknown model
+		// aliases are deterministically reduced to the safest supported hard cut.
+		return models.ShotTransitionCut
+	}
+}
+
+func normalizeDirectorActionTimeline(entries []models.ShotActionTimelineEntry, duration float64) {
+	if len(entries) == 0 || duration <= 0 {
+		return
+	}
+	weights := make([]float64, len(entries))
+	total := 0.0
+	for index := range entries {
+		weight := entries[index].End - entries[index].Start
+		if weight <= 0 || math.IsNaN(weight) || math.IsInf(weight, 0) {
+			return
+		}
+		weights[index] = weight
+		total += weight
+	}
+	if total <= 0 {
+		return
+	}
+	previousEnd := 0.0
+	for index := range entries {
+		entries[index].Start = previousEnd
+		entries[index].End = previousEnd + duration*weights[index]/total
+		if index == len(entries)-1 {
+			entries[index].End = duration
+		}
+		previousEnd = entries[index].End
+	}
+}
+
 func parseSceneDirectorDraft(output string) (*sceneDirectorDraft, error) {
-	dec := json.NewDecoder(bytes.NewBufferString(trimJSONFence(output)))
+	dec := json.NewDecoder(bytes.NewBufferString(unwrapSceneDirectorDraftEnvelope(output)))
 	dec.DisallowUnknownFields()
 	var draft sceneDirectorDraft
 	if err := dec.Decode(&draft); err != nil {
@@ -165,6 +257,9 @@ func parseSceneDirectorDraft(output string) (*sceneDirectorDraft, error) {
 	}
 	for i := range draft.Shots {
 		d := &draft.Shots[i]
+		d.ActType = normalizeDirectorAct(d.ActType)
+		d.TransitionType = normalizeDirectorTransition(d.TransitionType)
+		normalizeDirectorActionTimeline(d.ActionTimeline, d.Duration)
 		// action_timeline is optional for a simple single-action Shot. Some models emit
 		// one empty/incomplete placeholder object despite being asked for []. Dropping
 		// that one placeholder is deterministic and safer than inventing missing facts.
@@ -181,6 +276,9 @@ func parseSceneDirectorDraft(output string) (*sceneDirectorDraft, error) {
 	}
 	for i := range draft.Shots {
 		d := &draft.Shots[i]
+		d.ActType = normalizeDirectorAct(d.ActType)
+		d.TransitionType = normalizeDirectorTransition(d.TransitionType)
+		normalizeDirectorActionTimeline(d.ActionTimeline, d.Duration)
 		required := []struct {
 			name  string
 			value *string
@@ -247,6 +345,29 @@ func actionRhythmDirectorInstruction(dialogues []models.Dialogue) string {
 }
 
 var slowActionDraftPattern = regexp.MustCompile(`慢动作|慢镜头|子弹时间|缓缓|逐渐|慢慢|悬停|长时间蓄力|戏剧性停顿|定格展示|slow[ -]?motion|bullet time|lingering|gradually`)
+
+func normalizeCombatReferenceDraftContracts(draft *sceneDirectorDraft) {
+	if draft == nil {
+		return
+	}
+	for index := range draft.Shots {
+		shot := &draft.Shots[index]
+		if index > 0 && strings.TrimSpace(draft.Shots[index-1].EndState) != "" && strings.TrimSpace(shot.StartState) != strings.TrimSpace(draft.Shots[index-1].EndState) {
+			shot.StartState = strings.TrimSpace(draft.Shots[index-1].EndState)
+			shot.Checks = append(shot.Checks, "系统已将本镜start_state确定性对齐上一镜end_state")
+		}
+		for _, constraint := range []string{"实时速度", "无慢动作"} {
+			if !strings.Contains(shot.PromptAction, constraint) {
+				shot.PromptAction = joinDirectorField(shot.PromptAction, constraint)
+			}
+		}
+		for _, constraint := range []string{"慢动作", "子弹时间", "动作拖沓"} {
+			if !strings.Contains(shot.NegativePrompt, constraint) {
+				shot.NegativePrompt = joinDirectorField(shot.NegativePrompt, constraint)
+			}
+		}
+	}
+}
 
 func validateCombatReferenceDraft(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
 	if draft == nil || len(draft.Shots) == 0 {
@@ -778,6 +899,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		} else if parseErr == nil && req.Mode == "action_rhythm" {
 			parseErr = validateActionRhythmDraft(draft, dialogues)
 		} else if parseErr == nil && req.Mode == "combat_design" {
+			normalizeCombatReferenceDraftContracts(draft)
 			parseErr = validateCombatReferenceDraft(draft, dialogues)
 		}
 		return draft, parseErr

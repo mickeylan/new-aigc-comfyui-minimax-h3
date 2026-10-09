@@ -75,6 +75,15 @@ func TestCombatReferenceCompileSelectionAuditsAndRejectsUnsafeChoices(t *testing
 	if len(bundle.Audit) != 2 || len(bundle.Audit[0].ContentSHA256) != 64 || !strings.Contains(bundle.Text, "sha256:") {
 		t.Fatalf("bundle=%+v", bundle)
 	}
+	lowerBundle := strings.ToLower(bundle.Text)
+	for _, forbidden := range []string{"time_range", "system prompt", "输出格式", "```"} {
+		if strings.Contains(lowerBundle, forbidden) {
+			t.Fatalf("compiled prompt leaked source instruction %q: %s", forbidden, bundle.Text)
+		}
+	}
+	if !strings.Contains(bundle.Text, "动作") && !strings.Contains(bundle.Text, "镜头") {
+		t.Fatalf("compiled prompt lost combat mechanisms: %s", bundle.Text)
+	}
 	if _, err := service.CompileSelection([]CombatReferenceSelection{{Scope: "skills", ID: "01"}}, 40000); err == nil || !strings.Contains(err.Error(), "前置条件") {
 		t.Fatalf("unconfirmed skill error=%v", err)
 	}

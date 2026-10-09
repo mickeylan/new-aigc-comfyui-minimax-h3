@@ -132,7 +132,7 @@ func validateShot(shot *models.Shot) error {
 		models.ShotTransitionFade: true, models.ShotTransitionWipe: true, models.ShotTransitionMatchCut: true,
 	}
 	if !validTransition[shot.TransitionType] {
-		return fmt.Errorf("transition_type 必须为空或 cut/dissolve/fade/wipe/match_cut")
+		return fmt.Errorf("transition_type 必须为空或 cut/dissolve/fade/wipe/match_cut（实际%q）", shot.TransitionType)
 	}
 	if shot.ShotType == "" {
 		return fmt.Errorf("shot_type 不能为空")
@@ -166,7 +166,7 @@ func validateShotActionTimeline(entries []models.ShotActionTimelineEntry, durati
 			return fmt.Errorf("动作时间轴第%d段必须满足 0 <= start < end <= %.1f", i+1, duration)
 		}
 		if math.Abs(entry.Start-previousEnd) > tolerance {
-			return fmt.Errorf("动作时间轴第%d段必须从%.3f秒连续开始", i+1, previousEnd)
+			return fmt.Errorf("动作时间轴第%d段必须从%.3f秒连续开始（实际%.3f秒）", i+1, previousEnd, entry.Start)
 		}
 		if entry.Subject == "" || entry.Action == "" || entry.State == "" || entry.Camera == "" {
 			return fmt.Errorf("动作时间轴第%d段必须填写主体、动作、状态和摄影机", i+1)
