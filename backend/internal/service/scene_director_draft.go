@@ -653,14 +653,10 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Brief            string `json:"brief"`
-		Requirements     string `json:"requirements"`
-		Mode             string `json:"mode"`
-		CombatReferences []struct {
-			Scope              string `json:"scope"`
-			ID                 string `json:"id"`
-			ConditionConfirmed bool   `json:"condition_confirmed"`
-		} `json:"combat_references"`
+		Brief            string                     `json:"brief"`
+		Requirements     string                     `json:"requirements"`
+		Mode             string                     `json:"mode"`
+		CombatReferences []CombatReferenceSelection `json:"combat_references"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
@@ -681,36 +677,18 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	}
 	operation, instruction := "director-scene-draft", "生成完整Scene导演方案草稿；只预览，不保存。"
 	combatReferenceText := ""
+	var combatReferenceAudit []CombatReferenceAudit
 	if req.Mode == "combat_design" {
 		if s.CombatReferences == nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "战斗资料库未加载"})
 			return
 		}
-		if len(req.CombatReferences) == 0 || len(req.CombatReferences) > 5 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "请选择1至5项战斗参考资料"})
+		bundle, compileErr := s.CombatReferences.CompileSelection(req.CombatReferences, 30000)
+		if compileErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": compileErr.Error()})
 			return
 		}
-		parts, seenDesign := make([]string, 0, len(req.CombatReferences)), false
-		for _, selected := range req.CombatReferences {
-			document, readErr := s.CombatReferences.Read(selected.Scope, selected.ID)
-			if readErr != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": readErr.Error()})
-				return
-			}
-			if selected.Scope == "skills" && !selected.ConditionConfirmed {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "采用条件技能前必须明确确认前置条件"})
-				return
-			}
-			if selected.Scope == "design" {
-				if seenDesign {
-					c.JSON(http.StatusBadRequest, gin.H{"error": "一次只能选择一个主动作/分镜方案"})
-					return
-				}
-				seenDesign = true
-			}
-			parts = append(parts, fmt.Sprintf("[%s/%s %v]\n%s", selected.Scope, selected.ID, document.Metadata["name"], document.Content))
-		}
-		combatReferenceText = boundedUTF8Text(strings.Join(parts, "\n\n"), 30000)
+		combatReferenceText, combatReferenceAudit = bundle.Text, bundle.Audit
 		operation = "fight-video-action-design"
 		instruction = "依据用户已确认的战斗资料生成可审核的武戏导演方案；资料只提供机制与结构，不得改写权威事实。"
 	}
@@ -793,6 +771,9 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		return
 	}
 	response := gin.H{"draft": draft, "skill_code": operation, "provider_id": s.TextProviderFact.Name(), "audited": true, "mode": req.Mode, "dialogue_duration": dialogueDuration}
+	if req.Mode == "combat_design" {
+		response["combat_reference_audit"] = combatReferenceAudit
+	}
 	if req.Mode == "dialogue_rhythm" {
 		response["dialogue_review"] = buildDialogueRhythmReview(draft, dialogues)
 		response["dialogue_snapshot"] = dialogueSnapshotToken(dialogues)

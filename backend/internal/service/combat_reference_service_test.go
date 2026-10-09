@@ -60,6 +60,29 @@ func TestCombatReferenceReadReturnsExactEmbeddedBody(t *testing.T) {
 	}
 }
 
+func TestCombatReferenceCompileSelectionAuditsAndRejectsUnsafeChoices(t *testing.T) {
+	service, err := NewCombatReferenceService()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := service.CompileSelection([]CombatReferenceSelection{{Scope: "design", ID: "02"}, {Scope: "moves", ID: "27"}}, 40000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.Audit) != 2 || len(bundle.Audit[0].ContentSHA256) != 64 || !strings.Contains(bundle.Text, "sha256:") {
+		t.Fatalf("bundle=%+v", bundle)
+	}
+	if _, err := service.CompileSelection([]CombatReferenceSelection{{Scope: "skills", ID: "01"}}, 40000); err == nil || !strings.Contains(err.Error(), "前置条件") {
+		t.Fatalf("unconfirmed skill error=%v", err)
+	}
+	if _, err := service.CompileSelection([]CombatReferenceSelection{{Scope: "design", ID: "01"}, {Scope: "design", ID: "02"}}, 40000); err == nil || !strings.Contains(err.Error(), "一个主动作") {
+		t.Fatalf("multiple designs error=%v", err)
+	}
+	if _, err := service.CompileSelection([]CombatReferenceSelection{{Scope: "moves", ID: "27"}, {Scope: "moves", ID: "27"}}, 40000); err == nil || !strings.Contains(err.Error(), "重复") {
+		t.Fatalf("duplicate error=%v", err)
+	}
+}
+
 func TestCombatReferenceShowcaseIsSafeAndScoped(t *testing.T) {
 	service, err := NewCombatReferenceService()
 	if err != nil {

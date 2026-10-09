@@ -1,6 +1,7 @@
 package service
 
 import (
+	"crypto/sha256"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -62,6 +63,26 @@ type CombatReferenceDocument struct {
 	ID       string         `json:"id"`
 	Metadata map[string]any `json:"metadata"`
 	Content  string         `json:"content"`
+}
+
+type CombatReferenceSelection struct {
+	Scope              string `json:"scope"`
+	ID                 string `json:"id"`
+	ConditionConfirmed bool   `json:"condition_confirmed"`
+}
+
+type CombatReferenceAudit struct {
+	Scope              string `json:"scope"`
+	ID                 string `json:"id"`
+	Name               string `json:"name"`
+	File               string `json:"file"`
+	ContentSHA256      string `json:"content_sha256"`
+	ConditionConfirmed bool   `json:"condition_confirmed"`
+}
+
+type CombatReferenceBundle struct {
+	Text  string                 `json:"-"`
+	Audit []CombatReferenceAudit `json:"audit"`
 }
 
 type CombatReferenceService struct {
@@ -247,6 +268,46 @@ func (s *CombatReferenceService) Search(scope, query string) (*CombatReferenceSe
 		result.Primary = &primary
 	}
 	return result, nil
+}
+
+func (s *CombatReferenceService) CompileSelection(selections []CombatReferenceSelection, limit int) (*CombatReferenceBundle, error) {
+	if len(selections) == 0 || len(selections) > 5 {
+		return nil, fmt.Errorf("请选择1至5项战斗参考资料")
+	}
+	if limit <= 0 {
+		limit = 30000
+	}
+	parts := make([]string, 0, len(selections))
+	audit := make([]CombatReferenceAudit, 0, len(selections))
+	seen := map[string]bool{}
+	seenDesign := false
+	for _, selected := range selections {
+		selected.Scope, selected.ID = strings.TrimSpace(selected.Scope), strings.TrimSpace(selected.ID)
+		key := selected.Scope + "/" + selected.ID
+		if seen[key] {
+			return nil, fmt.Errorf("战斗资料重复选择: %s", key)
+		}
+		seen[key] = true
+		if selected.Scope == "skills" && !selected.ConditionConfirmed {
+			return nil, fmt.Errorf("采用条件技能前必须明确确认前置条件")
+		}
+		if selected.Scope == "design" {
+			if seenDesign {
+				return nil, fmt.Errorf("一次只能选择一个主动作/分镜方案")
+			}
+			seenDesign = true
+		}
+		document, err := s.Read(selected.Scope, selected.ID)
+		if err != nil {
+			return nil, err
+		}
+		name, file := strings.TrimSpace(fmt.Sprint(document.Metadata["name"])), strings.TrimSpace(fmt.Sprint(document.Metadata["file"]))
+		hash := fmt.Sprintf("%x", sha256.Sum256([]byte(document.Content)))
+		audit = append(audit, CombatReferenceAudit{Scope: selected.Scope, ID: selected.ID, Name: name, File: file, ContentSHA256: hash, ConditionConfirmed: selected.ConditionConfirmed})
+		parts = append(parts, fmt.Sprintf("[%s/%s %s | sha256:%s]\n%s", selected.Scope, selected.ID, name, hash, document.Content))
+	}
+	text := boundedUTF8Text(strings.Join(parts, "\n\n"), limit)
+	return &CombatReferenceBundle{Text: text, Audit: audit}, nil
 }
 
 func (s *CombatReferenceService) Showcase(scope, id string) (string, error) {
