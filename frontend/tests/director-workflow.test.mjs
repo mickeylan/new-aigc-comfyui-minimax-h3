@@ -14,6 +14,17 @@ test('项目 Skill 按阶段和 operation 精确隔离', () => {
   assert.equal(projectSkillConfig(configs, 'video_prompt', 'reference-shot-state-prompt').skill_id, 2)
 })
 
+test('武戏导演支持确定性资料检索、正文预览和审核后导入', () => {
+  const source = readFileSync(new URL('../src/components/ShotDirectorEditor.vue', import.meta.url), 'utf8')
+  const api = readFileSync(new URL('../src/api/index.js', import.meta.url), 'utf8')
+  assert.match(source, /战斗资料驱动设计/)
+  assert.match(source, /combatReferenceSearch/)
+  assert.match(source, /combat_references/)
+  assert.match(source, /generateDirectorDraft\('combat_design'\)/)
+  assert.match(source, /item\.scope==='design'/)
+  assert.match(api, /combat-references\/search/)
+})
+
 test('提示词历史明确区分草稿和已应用且保留动作来源', () => {
   assert.equal(promptHistoryLabel({ action: 'optimize', state: 'draft' }), '优化 · 草稿')
   assert.equal(promptHistoryLabel({ action: 'rollback', state: 'applied' }), '回滚草稿 · 已应用')

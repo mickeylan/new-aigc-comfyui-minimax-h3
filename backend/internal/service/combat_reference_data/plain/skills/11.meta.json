@@ -1,0 +1,7 @@
+{
+  "id": "11",
+  "file": "11-多重魔法门控制.md",
+  "name": "多重魔法门控制",
+  "showcase": "reference/action-storyboard-design/技能库/技能展示样本/11-多重魔法门控制.gif",
+  "retrieval_hint": "单体或群体候选；死亡之门式多方位牵制。选中后必须检查召门权限、门锚、触须承力与关闭条件。"
+}

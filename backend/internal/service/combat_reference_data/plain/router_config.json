@@ -1,0 +1,54 @@
+{
+  "format": 1,
+  "weights": {
+    "scenes": {
+      "title_keywords": 4,
+      "route_keywords": 2,
+      "scene_signatures": 1
+    },
+    "design": {
+      "core_keywords": 3,
+      "plot_signatures": 1
+    },
+    "moves": {
+      "title_keywords": 4,
+      "route_keywords": 2,
+      "technique_signatures": 1
+    },
+    "skills": {
+      "range_keywords": 1
+    },
+    "scripts": {
+      "title_keywords": 4,
+      "script_types": 3,
+      "route_keywords": 2,
+      "scene_signatures": 1
+    }
+  },
+  "weak_min_len": 2,
+  "weak_terms": [
+    "仙侠",
+    "关节",
+    "双人",
+    "对决",
+    "屋顶",
+    "废墟",
+    "战场",
+    "打斗",
+    "技法",
+    "招式",
+    "格挡",
+    "水墨",
+    "清场",
+    "清群",
+    "积水",
+    "能量",
+    "腿法",
+    "贴地",
+    "近身",
+    "连招",
+    "追击",
+    "追逐",
+    "高空"
+  ]
+}

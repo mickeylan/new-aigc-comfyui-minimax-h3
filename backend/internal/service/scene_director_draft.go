@@ -653,9 +653,13 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Brief        string `json:"brief"`
-		Requirements string `json:"requirements"`
-		Mode         string `json:"mode"`
+		Brief            string `json:"brief"`
+		Requirements     string `json:"requirements"`
+		Mode             string `json:"mode"`
+		CombatReferences []struct {
+			Scope string `json:"scope"`
+			ID    string `json:"id"`
+		} `json:"combat_references"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
@@ -675,9 +679,39 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		return
 	}
 	operation, instruction := "director-scene-draft", "生成完整Scene导演方案草稿；只预览，不保存。"
+	combatReferenceText := ""
+	if req.Mode == "combat_design" {
+		if s.CombatReferences == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "战斗资料库未加载"})
+			return
+		}
+		if len(req.CombatReferences) == 0 || len(req.CombatReferences) > 5 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "请选择1至5项战斗参考资料"})
+			return
+		}
+		parts, seenDesign := make([]string, 0, len(req.CombatReferences)), false
+		for _, selected := range req.CombatReferences {
+			document, readErr := s.CombatReferences.Read(selected.Scope, selected.ID)
+			if readErr != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": readErr.Error()})
+				return
+			}
+			if selected.Scope == "design" {
+				if seenDesign {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "一次只能选择一个主动作/分镜方案"})
+					return
+				}
+				seenDesign = true
+			}
+			parts = append(parts, fmt.Sprintf("[%s/%s %v]\n%s", selected.Scope, selected.ID, document.Metadata["name"], document.Content))
+		}
+		combatReferenceText = boundedUTF8Text(strings.Join(parts, "\n\n"), 30000)
+		operation = "fight-video-action-design"
+		instruction = "依据用户已确认的战斗资料生成可审核的武戏导演方案；资料只提供机制与结构，不得改写权威事实。"
+	}
 	var dialogues []models.Dialogue
 	dialogueDuration := 0.0
-	if req.Mode == "dialogue_rhythm" || req.Mode == "action_rhythm" {
+	if req.Mode == "dialogue_rhythm" || req.Mode == "action_rhythm" || req.Mode == "combat_design" {
 		if err := s.DB.Where("scene_id = ? AND project_id = ?", scene.ID, scene.ProjectID).Order("`order` ASC, `id` ASC").Find(&dialogues).Error; err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
@@ -690,7 +724,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 			}
 			dialogueDuration = modelDialoguesMinDuration(dialogues)
 			instruction = dialogueRhythmDirectorInstruction(dialogues)
-		} else {
+		} else if req.Mode == "action_rhythm" {
 			instruction = actionRhythmDirectorInstruction(dialogues)
 		}
 		req.Requirements = strings.TrimSpace(req.Requirements + "\n" + instruction)
@@ -703,7 +737,11 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		instruction = strings.TrimSpace(instruction + "\n" + modeInstruction)
 		req.Requirements = strings.TrimSpace(req.Requirements + "\n用户选择的导演类型：" + string(resolvedMode) + "。\n" + modeInstruction)
 	}
-	output, err := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出完整合法JSON，不要Markdown或解释。", instruction, map[string]string{"scene_facts": scene.Content, "asset_context": assets, "brief": req.Brief, "requirements": req.Requirements, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration))})
+	dialogueContext := ""
+	for _, dialogue := range dialogues {
+		dialogueContext += fmt.Sprintf("[%s|%s] %s\n", dialogue.SpeechType, dialogue.Character, dialogue.Text)
+	}
+	output, err := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出完整合法JSON，不要Markdown或解释。", instruction, map[string]string{"scene_facts": scene.Content, "asset_context": assets, "dialogues": dialogueContext, "brief": req.Brief, "requirements": req.Requirements, "combat_references": combatReferenceText, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration))})
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
@@ -716,19 +754,19 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 			if parseErr == nil {
 				parseErr = normalizeDialogueRhythmReviewDurations(draft, dialogues)
 			}
-		} else if parseErr == nil && req.Mode == "action_rhythm" {
+		} else if parseErr == nil && (req.Mode == "action_rhythm" || req.Mode == "combat_design") {
 			parseErr = validateActionRhythmDraft(draft, dialogues)
 		}
 		return draft, parseErr
 	}
 	draft, err := validateDraft(output)
-	if err != nil && (req.Mode == "dialogue_rhythm" || req.Mode == "action_rhythm") {
+	if err != nil && (req.Mode == "dialogue_rhythm" || req.Mode == "action_rhythm" || req.Mode == "combat_design") {
 		repairRequirements := fmt.Sprintf("%s\n上一次草稿校验失败：%s。只修复该错误及其他空必填字段；保持镜头顺序、剧情事实和结构化对白逐字不变。上一次JSON：\n%s", req.Requirements, err.Error(), output)
 		repairInstruction := "修复对白节奏导演草稿；不得改写、遗漏、重复或新增任何对白。"
-		if req.Mode == "action_rhythm" {
+		if req.Mode == "action_rhythm" || req.Mode == "combat_design" {
 			repairInstruction = "修复武戏/仙术动作节拍草稿；保持实时速度、单一动作结果、空间轴线和结构化对白，不得使用慢动作。"
 		}
-		repaired, repairErr := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出修复后的完整合法JSON，不要Markdown或解释。", repairInstruction, map[string]string{"scene_facts": scene.Content, "asset_context": assets, "brief": req.Brief, "requirements": repairRequirements, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration))})
+		repaired, repairErr := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出修复后的完整合法JSON，不要Markdown或解释。", repairInstruction, map[string]string{"scene_facts": scene.Content, "asset_context": assets, "dialogues": dialogueContext, "brief": req.Brief, "requirements": repairRequirements, "combat_references": combatReferenceText, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration))})
 		if repairErr != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "AI导演方案自动修复失败: " + repairErr.Error()})
 			return
@@ -749,7 +787,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "AI导演方案自动修复后仍无效: " + err.Error()})
 		return
 	}
-	response := gin.H{"draft": draft, "skill_code": "director-scene-draft", "provider_id": s.TextProviderFact.Name(), "audited": true, "mode": req.Mode, "dialogue_duration": dialogueDuration}
+	response := gin.H{"draft": draft, "skill_code": operation, "provider_id": s.TextProviderFact.Name(), "audited": true, "mode": req.Mode, "dialogue_duration": dialogueDuration}
 	if req.Mode == "dialogue_rhythm" {
 		response["dialogue_review"] = buildDialogueRhythmReview(draft, dialogues)
 		response["dialogue_snapshot"] = dialogueSnapshotToken(dialogues)

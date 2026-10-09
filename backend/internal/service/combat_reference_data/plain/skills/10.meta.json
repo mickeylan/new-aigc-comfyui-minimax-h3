@@ -1,0 +1,7 @@
+{
+  "id": "10",
+  "file": "10-召唤空中打击.md",
+  "name": "召唤空中打击",
+  "showcase": "reference/action-storyboard-design/技能库/技能展示样本/10-召唤空中打击.gif",
+  "retrieval_hint": "单体或群体候选；卫星射线式区域能力。选中后必须检查高位节点、坐标接口、射界、供能和冷却。"
+}

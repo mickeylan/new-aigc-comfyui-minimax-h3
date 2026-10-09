@@ -59,6 +59,7 @@ type Service struct {
 	AssetReconciliation       *AssetReconciliationService      // 项目资产名称对账
 	ScriptRevisions           *ScriptRevisionService           // 剧本安全快照
 	GeneratedMedia            *GeneratedMediaHistoryService    // 统一生成历史与安全清理
+	CombatReferences          *CombatReferenceService          // 战斗场景、方案、招式、技能和剧本确定性检索
 }
 
 func New(cfg *config.Config, db *gorm.DB) *Service {
@@ -104,6 +105,10 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	assetReconciliation := NewAssetReconciliationService(db)
 	scriptRevisions := NewScriptRevisionService(db)
 	generatedMedia := NewGeneratedMediaHistoryService(db, upload)
+	combatReferences, combatReferenceErr := NewCombatReferenceService()
+	if combatReferenceErr != nil {
+		log.Printf("[combat-references] load failed: %v", combatReferenceErr)
+	}
 
 	// 初始化系统预设
 	if err := skills.InitSystemSkills(); err != nil {
@@ -128,6 +133,7 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 		Continuity: continuity, AudioLayers: audioLayers, ScreenTexts: screenTexts, Fonts: fonts, SharedAssetReferences: sharedAssetReferences,
 		CharacterMotionReferences: characterMotionReferences,
 		AssetVariants:             assetVariants, AssetReconciliation: assetReconciliation, ScriptRevisions: scriptRevisions, GeneratedMedia: generatedMedia,
+		CombatReferences: combatReferences,
 	}
 }
 
