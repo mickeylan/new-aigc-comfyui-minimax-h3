@@ -1068,10 +1068,11 @@ func (s *Service) HandleCreateShots(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Shots            []models.Shot              `json:"shots"`
-		DialogueSnapshot string                     `json:"dialogue_snapshot"`
-		DirectorSource   string                     `json:"director_source"`
-		CombatReferences []CombatReferenceSelection `json:"combat_references"`
+		Shots                []models.Shot              `json:"shots"`
+		DialogueSnapshot     string                     `json:"dialogue_snapshot"`
+		DirectorSource       string                     `json:"director_source"`
+		CombatReferences     []CombatReferenceSelection `json:"combat_references"`
+		CombatReferenceAudit []CombatReferenceAudit     `json:"combat_reference_audit"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
@@ -1086,6 +1087,10 @@ func (s *Service) HandleCreateShots(c *gin.Context) {
 		bundle, compileErr := s.CombatReferences.CompileSelection(req.CombatReferences, 30000)
 		if compileErr != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": compileErr.Error()})
+			return
+		}
+		if auditErr := ValidateCombatReferenceAudit(req.CombatReferenceAudit, bundle.Audit); auditErr != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": auditErr.Error()})
 			return
 		}
 		auditJSON, marshalErr := json.Marshal(bundle.Audit)

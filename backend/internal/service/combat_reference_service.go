@@ -324,6 +324,18 @@ func (s *CombatReferenceService) CompileSelection(selections []CombatReferenceSe
 	return &CombatReferenceBundle{Text: text, Audit: audit}, nil
 }
 
+func ValidateCombatReferenceAudit(expected, actual []CombatReferenceAudit) error {
+	if len(expected) != len(actual) {
+		return fmt.Errorf("战斗资料在草稿审核后已变化，请重新生成草稿")
+	}
+	for i := range expected {
+		if expected[i].Scope != actual[i].Scope || expected[i].ID != actual[i].ID || expected[i].ContentSHA256 != actual[i].ContentSHA256 || expected[i].ConditionConfirmed != actual[i].ConditionConfirmed {
+			return fmt.Errorf("战斗资料在草稿审核后已变化，请重新生成草稿")
+		}
+	}
+	return nil
+}
+
 func (s *CombatReferenceService) Showcase(scope, id string) (string, error) {
 	items, ok := s.items[strings.TrimSpace(scope)]
 	if !ok {

@@ -84,6 +84,14 @@ func TestCombatReferenceCompileSelectionAuditsAndRejectsUnsafeChoices(t *testing
 	if _, err := service.CompileSelection([]CombatReferenceSelection{{Scope: "moves", ID: "27"}, {Scope: "moves", ID: "27"}}, 40000); err == nil || !strings.Contains(err.Error(), "重复") {
 		t.Fatalf("duplicate error=%v", err)
 	}
+	if err := ValidateCombatReferenceAudit(bundle.Audit, bundle.Audit); err != nil {
+		t.Fatal(err)
+	}
+	changed := append([]CombatReferenceAudit(nil), bundle.Audit...)
+	changed[0].ContentSHA256 = strings.Repeat("0", 64)
+	if err := ValidateCombatReferenceAudit(bundle.Audit, changed); err == nil || !strings.Contains(err.Error(), "重新生成") {
+		t.Fatalf("changed audit accepted: %v", err)
+	}
 }
 
 func TestCombatReferenceShowcaseIsSafeAndScoped(t *testing.T) {
