@@ -248,6 +248,44 @@ func actionRhythmDirectorInstruction(dialogues []models.Dialogue) string {
 
 var slowActionDraftPattern = regexp.MustCompile(`慢动作|慢镜头|子弹时间|缓缓|逐渐|慢慢|悬停|长时间蓄力|戏剧性停顿|定格展示|slow[ -]?motion|bullet time|lingering|gradually`)
 
+func validateCombatReferenceDraft(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
+	if draft == nil || len(draft.Shots) == 0 {
+		return fmt.Errorf("战斗资料导演草稿为空")
+	}
+	for i, shot := range draft.Shots {
+		if shot.Duration < 3 || shot.Duration > 15 {
+			return fmt.Errorf("战斗资料镜头%d时长必须为3至15秒", i+1)
+		}
+		if shot.Duration > 6 && len(shot.ActionTimeline) == 0 {
+			return fmt.Errorf("战斗资料镜头%d超过6秒，必须用动作时间轴证明动作因果和连续覆盖", i+1)
+		}
+		combined := strings.Join([]string{shot.Description, shot.PromptAction, shot.PromptCamera, shot.TransitionNote}, " ")
+		combined = strings.NewReplacer("无慢动作停顿", "", "无慢动作", "", "no slow motion", "").Replace(strings.ToLower(combined))
+		if slowActionDraftPattern.MatchString(combined) {
+			return fmt.Errorf("战斗资料镜头%d包含慢动作或拖延表达", i+1)
+		}
+		for _, want := range []string{"实时速度", "无慢动作"} {
+			if !strings.Contains(shot.PromptAction, want) {
+				return fmt.Errorf("战斗资料镜头%d的prompt_action缺少“%s”约束", i+1, want)
+			}
+		}
+		for _, want := range []string{"慢动作", "子弹时间", "动作拖沓"} {
+			if !strings.Contains(shot.NegativePrompt, want) {
+				return fmt.Errorf("战斗资料镜头%d的negative_prompt缺少“%s”", i+1, want)
+			}
+		}
+		if i > 0 {
+			if strings.TrimSpace(shot.StartState) == "" || strings.TrimSpace(draft.Shots[i-1].EndState) == "" {
+				return fmt.Errorf("战斗资料镜头%d缺少与上一镜衔接的起止状态", i+1)
+			}
+			if strings.TrimSpace(shot.StartState) != strings.TrimSpace(draft.Shots[i-1].EndState) {
+				return fmt.Errorf("战斗资料镜头%d的start_state必须原样承接上一镜end_state", i+1)
+			}
+		}
+	}
+	return validateDialogueRhythmDraft(draft, dialogues)
+}
+
 func validateActionRhythmDraft(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
 	if draft == nil || len(draft.Shots) == 0 {
 		return fmt.Errorf("武戏拆镜草稿为空")
@@ -737,8 +775,10 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 			if parseErr == nil {
 				parseErr = normalizeDialogueRhythmReviewDurations(draft, dialogues)
 			}
-		} else if parseErr == nil && (req.Mode == "action_rhythm" || req.Mode == "combat_design") {
+		} else if parseErr == nil && req.Mode == "action_rhythm" {
 			parseErr = validateActionRhythmDraft(draft, dialogues)
+		} else if parseErr == nil && req.Mode == "combat_design" {
+			parseErr = validateCombatReferenceDraft(draft, dialogues)
 		}
 		return draft, parseErr
 	}

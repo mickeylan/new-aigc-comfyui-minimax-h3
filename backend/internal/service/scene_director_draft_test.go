@@ -12,6 +12,32 @@ const validSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中�
 
 const shortSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中景","camera_angle":"平视","camera_movement":"固定","duration":2,"description":"女主走到桌边","dialogue":"","emotion":"警惕","transition_type":"cut","transition_note":"接视线","start_state":"女主站在门边","end_state":"女主停在桌边","prompt_subject":"女主面部清晰","prompt_action":"缓步走到桌边","prompt_camera":"中景平视构图","prompt_lighting":"室内暖侧光","prompt_style":"真人写实电影质感","negative_prompt":"水印，多余人物","checks":["动作可在2秒完成","无新增对白"]}]}`
 
+func combatDraftShot(duration float64, start, end string) sceneDirectorDraftShot {
+	return sceneDirectorDraftShot{ActType: "rising", ShotType: "中景", CameraAngle: "平视", CameraMovement: "固定", Duration: duration, Description: "甲挥刀抢线，乙横移格挡并后撤落稳", StartState: start, EndState: end, PromptSubject: "甲乙位置与持刀关系清晰", PromptAction: "实时速度，甲迅速挥刀抢线，乙立即横移格挡并后撤落稳，无慢动作停顿", PromptCamera: "固定中景保持空间轴线", PromptLighting: "日间侧光", PromptStyle: "写实武侠", NegativePrompt: "慢动作，子弹时间，悬停，动作拖沓，重复动作", Checks: []string{"攻防结果可见"}}
+}
+
+func TestValidateCombatReferenceDraftAllowsLongAuditedTimeline(t *testing.T) {
+	first := combatDraftShot(8, "甲左乙右相距三米", "甲刀被架向外侧，乙后撤至石柱前")
+	first.ActionTimeline = []models.ShotActionTimelineEntry{{Start: 0, End: 4, Subject: "甲", Action: "挥刀抢线", State: "刀锋接近乙左肩", Camera: "固定中景"}, {Start: 4, End: 8, Subject: "乙", Action: "横移格挡后撤", State: first.EndState, Camera: "固定中景"}}
+	second := combatDraftShot(5, first.EndState, "乙借石柱转向，甲前冲失衡")
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{first, second}}
+	if err := validateCombatReferenceDraft(draft, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateCombatReferenceDraftRequiresTimelineAndExactStateRelay(t *testing.T) {
+	long := combatDraftShot(8, "开始", "结束")
+	if err := validateCombatReferenceDraft(&sceneDirectorDraft{Shots: []sceneDirectorDraftShot{long}}, nil); err == nil || !strings.Contains(err.Error(), "动作时间轴") {
+		t.Fatalf("missing timeline error=%v", err)
+	}
+	first := combatDraftShot(4, "开始", "甲刀被架向外侧")
+	second := combatDraftShot(4, "大致承接但文字不同", "结束")
+	if err := validateCombatReferenceDraft(&sceneDirectorDraft{Shots: []sceneDirectorDraftShot{first, second}}, nil); err == nil || !strings.Contains(err.Error(), "原样承接") {
+		t.Fatalf("state relay error=%v", err)
+	}
+}
+
 func TestParseSceneDirectorDraftMergesShortShotIntoFollowingShot(t *testing.T) {
 	raw := `{"shots":[{"act_type":"setup","shot_type":"特写","camera_angle":"平视","camera_movement":"固定","duration":2,"description":"若琳抬眼","dialogue":"相信姐姐，","emotion":"坚定","transition_type":"cut","transition_note":"切双人景","start_state":"若琳垂眼","end_state":"若琳抬眼","prompt_subject":"若琳特写","prompt_action":"抬眼","prompt_camera":"固定特写","prompt_lighting":"夕阳","prompt_style":"古风仙侠","negative_prompt":"文字","checks":[]},{"act_type":"rising","shot_type":"双人中景","camera_angle":"平视","camera_movement":"固定","duration":5,"description":"若琳握住若彤的手","dialogue":"姐姐会保护你。","emotion":"温柔坚定","transition_type":"cut","transition_note":"接下一镜","start_state":"若琳抬眼","end_state":"姐妹相握","prompt_subject":"姐妹双人中景","prompt_action":"若琳握住若彤的手","prompt_camera":"固定中景","prompt_lighting":"夕阳余晖","prompt_style":"古风仙侠","negative_prompt":"文字","checks":[]}]}`
 	draft, err := parseSceneDirectorDraft(raw)
