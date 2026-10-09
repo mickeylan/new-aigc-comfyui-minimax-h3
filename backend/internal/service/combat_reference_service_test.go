@@ -14,6 +14,9 @@ func TestCombatReferenceSearchRanksStrongDesignMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(result.SourceCommit) != 40 || len(result.SourceContentSHA256) != 64 {
+		t.Fatalf("source manifest missing: %+v", result)
+	}
 	if result.Primary == nil || result.Primary.ID != "02" {
 		t.Fatalf("primary=%+v", result.Primary)
 	}

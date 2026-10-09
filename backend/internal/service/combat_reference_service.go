@@ -13,7 +13,7 @@ import (
 	"unicode"
 )
 
-//go:embed all:combat_reference_data/plain combat_reference_data/SKILL.md
+//go:embed all:combat_reference_data/plain combat_reference_data/SKILL.md combat_reference_data/source-manifest.json
 var combatReferenceFS embed.FS
 
 var combatReferenceScopes = []string{"scenes", "design", "moves", "skills", "scripts"}
@@ -48,14 +48,16 @@ type CombatReferenceCandidate struct {
 }
 
 type CombatReferenceSearchResult struct {
-	Scope              string                     `json:"scope"`
-	Query              string                     `json:"query"`
-	MatchRule          string                     `json:"match_rule"`
-	Primary            *CombatReferenceCandidate  `json:"primary"`
-	Eligible           []CombatReferenceCandidate `json:"eligible"`
-	WeakFallback       bool                       `json:"weak_fallback"`
-	RoutingRules       []any                      `json:"routing_rules"`
-	ConflictResolution []any                      `json:"conflict_resolution"`
+	SourceCommit        string                     `json:"source_commit"`
+	SourceContentSHA256 string                     `json:"source_content_sha256"`
+	Scope               string                     `json:"scope"`
+	Query               string                     `json:"query"`
+	MatchRule           string                     `json:"match_rule"`
+	Primary             *CombatReferenceCandidate  `json:"primary"`
+	Eligible            []CombatReferenceCandidate `json:"eligible"`
+	WeakFallback        bool                       `json:"weak_fallback"`
+	RoutingRules        []any                      `json:"routing_rules"`
+	ConflictResolution  []any                      `json:"conflict_resolution"`
 }
 
 type CombatReferenceDocument struct {
@@ -85,8 +87,14 @@ type CombatReferenceBundle struct {
 	Audit []CombatReferenceAudit `json:"audit"`
 }
 
+type combatSourceManifest struct {
+	SourceCommit  string `json:"source_commit"`
+	ContentSHA256 string `json:"content_sha256"`
+}
+
 type CombatReferenceService struct {
 	config  combatRouterConfig
+	source  combatSourceManifest
 	indexes map[string]combatReferenceIndex
 	items   map[string]map[string]map[string]any
 	content map[string]map[string]string
@@ -97,6 +105,12 @@ func NewCombatReferenceService() (*CombatReferenceService, error) {
 	service := &CombatReferenceService{indexes: map[string]combatReferenceIndex{}, items: map[string]map[string]map[string]any{}, content: map[string]map[string]string{}, weak: map[string]bool{}}
 	if err := readCombatJSON("combat_reference_data/plain/router_config.json", &service.config); err != nil {
 		return nil, err
+	}
+	if err := readCombatJSON("combat_reference_data/source-manifest.json", &service.source); err != nil {
+		return nil, err
+	}
+	if len(service.source.SourceCommit) != 40 || len(service.source.ContentSHA256) != 64 {
+		return nil, fmt.Errorf("战斗资料来源清单无效")
 	}
 	if service.config.WeakMinLen <= 0 {
 		service.config.WeakMinLen = 2
@@ -260,7 +274,7 @@ func (s *CombatReferenceService) Search(scope, query string) (*CombatReferenceSe
 		}
 		return eligible[i].ID < eligible[j].ID
 	})
-	result := &CombatReferenceSearchResult{Scope: scope, Query: query, Eligible: eligible, WeakFallback: len(candidates) > 0 && !hasStrong, RoutingRules: index.RoutingRules, ConflictResolution: index.ConflictResolution, MatchRule: "至少命中一个路由关键词；按唯一命中数与字段权重排序；弱词仅在无强匹配时回退"}
+	result := &CombatReferenceSearchResult{SourceCommit: s.source.SourceCommit, SourceContentSHA256: s.source.ContentSHA256, Scope: scope, Query: query, Eligible: eligible, WeakFallback: len(candidates) > 0 && !hasStrong, RoutingRules: index.RoutingRules, ConflictResolution: index.ConflictResolution, MatchRule: "至少命中一个路由关键词；按唯一命中数与字段权重排序；弱词仅在无强匹配时回退"}
 	if scope == "skills" {
 		result.MatchRule, result.Primary = "技能仅按单体、群体或buff召回候选，不自动选择主技能", nil
 	} else if len(eligible) > 0 {

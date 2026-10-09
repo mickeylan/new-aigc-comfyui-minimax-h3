@@ -1,0 +1,15 @@
+{
+    "format":  1,
+    "source":  "fight-video-create-skill",
+    "source_commit":  "b7a4fdc43a03f1935e725d8354fba053a8438439",
+    "source_dirty":  false,
+    "content_sha256":  "0f54f06114c2e756055ac68847c147629e566c319ed8856b9a872bd316cf54fa",
+    "imported_files":  271,
+    "scopes":  {
+                   "scenes":  27,
+                   "design":  24,
+                   "moves":  38,
+                   "skills":  15,
+                   "scripts":  28
+               }
+}
