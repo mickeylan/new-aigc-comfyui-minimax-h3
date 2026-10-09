@@ -362,7 +362,12 @@ func (s *ShotService) ReplaceShotsWithDialogueSnapshot(sceneID uint, shots []mod
 				"prompt_action": shots[i].PromptAction, "prompt_camera": shots[i].PromptCamera,
 				"prompt_lighting": shots[i].PromptLighting, "prompt_style": shots[i].PromptStyle,
 				"negative_prompt": shots[i].NegativePrompt, "action_timeline_json": shots[i].ActionTimeline,
-				"director_source": shots[i].DirectorSource, "combat_reference_audit_json": shots[i].CombatReferenceAudit,
+			}
+			// Empty provenance means an ordinary edit of an existing Shot. Preserve its
+			// server-authenticated source instead of trusting or clearing client fields.
+			if strings.TrimSpace(shots[i].DirectorSource) != "" {
+				updates["director_source"] = shots[i].DirectorSource
+				updates["combat_reference_audit_json"] = shots[i].CombatReferenceAudit
 			}
 			if err := tx.Model(&models.Shot{}).Where("id = ? AND scene_id = ?", shots[i].ID, sceneID).Updates(updates).Error; err != nil {
 				return err

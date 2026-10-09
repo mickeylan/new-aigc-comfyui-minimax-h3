@@ -354,6 +354,13 @@ func TestShotServiceReplacePreservesIDsAndRejectsForeignShot(t *testing.T) {
 	if len(remaining) != 3 || remaining[0].ID != secondID {
 		t.Fatalf("failed replacement mutated existing shots: %+v", remaining)
 	}
+	preserved, err := svc.ReplaceShots(scene.ID, []models.Shot{{ID: secondID, ShotType: "close", Duration: 3, Description: "manual refinement"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preserved[0].DirectorSource != "fight-video-action-design" || preserved[0].CombatReferenceAudit == "" {
+		t.Fatalf("ordinary edit cleared authenticated provenance: %+v", preserved[0])
+	}
 }
 
 func TestShotServiceReplaceIsTransactionalAndValidates(t *testing.T) {
