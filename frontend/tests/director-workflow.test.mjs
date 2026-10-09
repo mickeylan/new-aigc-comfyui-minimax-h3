@@ -24,6 +24,8 @@ test('武戏导演支持确定性资料检索、正文预览和审核后导入',
   assert.match(source, /item\.scope==='design'/)
   assert.match(source, /必须确认前置条件/)
   assert.match(source, /combatShowcaseUrl/)
+  assert.match(source, /combat_reference_audit_json/)
+  assert.match(source, /战斗资料设计/)
   assert.match(api, /combat-references\/search/)
   assert.match(api, /showcase/)
 })
