@@ -330,7 +330,7 @@ func TestShotServiceReplacePreservesIDsAndRejectsForeignShot(t *testing.T) {
 	}
 	firstID, secondID := initial[0].ID, initial[1].ID
 	updated, err := svc.ReplaceShots(scene.ID, []models.Shot{
-		{ID: secondID, ShotType: "close", Duration: 3, Description: "second updated"},
+		{ID: secondID, ShotType: "close", Duration: 3, Description: "second updated", DirectorSource: "fight-video-action-design", CombatReferenceAudit: `[{"scope":"moves","id":"27"}]`},
 		{ID: firstID, ShotType: "wide", Duration: 3, Description: "first updated"},
 		{ShotType: "medium", Duration: 3, Description: "new"},
 	})
@@ -339,6 +339,9 @@ func TestShotServiceReplacePreservesIDsAndRejectsForeignShot(t *testing.T) {
 	}
 	if len(updated) != 3 || updated[0].ID != secondID || updated[1].ID != firstID || updated[2].ID == 0 {
 		t.Fatalf("shot IDs/order were not preserved: %+v", updated)
+	}
+	if updated[0].DirectorSource != "fight-video-action-design" || !strings.Contains(updated[0].CombatReferenceAudit, `"id":"27"`) {
+		t.Fatalf("director provenance was not persisted: %+v", updated[0])
 	}
 	foreign, err := svc.ReplaceShots(otherScene.ID, []models.Shot{{ShotType: "wide", Duration: 3}})
 	if err != nil {

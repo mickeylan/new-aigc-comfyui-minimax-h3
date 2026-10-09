@@ -1068,12 +1068,41 @@ func (s *Service) HandleCreateShots(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Shots            []models.Shot `json:"shots"`
-		DialogueSnapshot string        `json:"dialogue_snapshot"`
+		Shots            []models.Shot              `json:"shots"`
+		DialogueSnapshot string                     `json:"dialogue_snapshot"`
+		DirectorSource   string                     `json:"director_source"`
+		CombatReferences []CombatReferenceSelection `json:"combat_references"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
+	}
+	directorSource := strings.TrimSpace(req.DirectorSource)
+	if directorSource == "combat_design" {
+		if s.CombatReferences == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "战斗资料库未加载"})
+			return
+		}
+		bundle, compileErr := s.CombatReferences.CompileSelection(req.CombatReferences, 30000)
+		if compileErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": compileErr.Error()})
+			return
+		}
+		auditJSON, marshalErr := json.Marshal(bundle.Audit)
+		if marshalErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "序列化战斗资料审计失败"})
+			return
+		}
+		for i := range req.Shots {
+			req.Shots[i].DirectorSource = "fight-video-action-design"
+			req.Shots[i].CombatReferenceAudit = string(auditJSON)
+		}
+	} else {
+		for i := range req.Shots {
+			// Client-supplied provenance is never trusted for manual or other director paths.
+			req.Shots[i].DirectorSource = ""
+			req.Shots[i].CombatReferenceAudit = ""
+		}
 	}
 	shots, err := s.Shots.ReplaceShotsWithDialogueSnapshot(uint(sceneID), req.Shots, req.DialogueSnapshot)
 	if err != nil {

@@ -303,7 +303,7 @@ export const api = {
   sceneShots: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/shots`),
   previewShotRetime: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/shots/retime-preview`),
   applyShotRetime: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/shots/retime`),
-  replaceSceneShots: (id, sid, shots, dialogueSnapshot = '') => http.post(`/projects/${id}/scenes/${sid}/shots`, { shots, dialogue_snapshot: dialogueSnapshot }),
+  replaceSceneShots: (id, sid, shots, dialogueSnapshot = '', provenance = {}) => http.post(`/projects/${id}/scenes/${sid}/shots`, { shots, dialogue_snapshot: dialogueSnapshot, ...provenance }),
   previewShotMaterialization: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/shots/materialization-preview`),
   materializeShots: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/shots/materialize`, { confirm: true }),
   previewNativeRegroup: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/native-regroup-preview`),
