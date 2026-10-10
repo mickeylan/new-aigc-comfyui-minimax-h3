@@ -27,7 +27,7 @@ func TestValidateCombatReferenceDraftAllowsLongAuditedTimeline(t *testing.T) {
 }
 
 func TestNormalizeCombatReferenceDraftContractsAddsOnlyPolicyConstraints(t *testing.T) {
-	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{PromptAction: "甲挥刀，乙格挡", NegativePrompt: "文字水印", EndState: "甲刀被架开"}, {PromptAction: "乙回刺", NegativePrompt: "文字水印", StartState: "近似但不一致"}}}
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Description: "双方缓缓蓄力后定格展示", PromptAction: "甲挥刀，乙格挡", NegativePrompt: "文字水印", EndState: "甲刀被架开"}, {PromptAction: "乙回刺", NegativePrompt: "文字水印", StartState: "近似但不一致"}}}
 	normalizeCombatReferenceDraftContracts(draft)
 	shot := draft.Shots[0]
 	for _, value := range []string{"实时速度", "无慢动作"} {
@@ -42,6 +42,9 @@ func TestNormalizeCombatReferenceDraftContractsAddsOnlyPolicyConstraints(t *test
 	}
 	if !strings.Contains(shot.PromptAction, "甲挥刀，乙格挡") {
 		t.Fatalf("action facts changed: %q", shot.PromptAction)
+	}
+	if slowActionDraftPattern.MatchString(shot.Description) {
+		t.Fatalf("slow-motion residue was not normalized: %q", shot.Description)
 	}
 	if draft.Shots[1].StartState != draft.Shots[0].EndState || !strings.Contains(strings.Join(draft.Shots[1].Checks, " "), "确定性对齐") {
 		t.Fatalf("state relay not normalized: %+v", draft.Shots)

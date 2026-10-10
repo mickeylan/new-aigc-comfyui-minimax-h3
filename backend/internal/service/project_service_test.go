@@ -1843,6 +1843,14 @@ func TestNormalizeGeneratedH3ActionRepairsReportedEleventhDraft(t *testing.T) {
 	}
 }
 
+func TestNormalizeGeneratedH3ActionCollapsesModelBeatMarkersForOneAuthoritativeShot(t *testing.T) {
+	draft := "[Shot 1] <Subject 1> attacks at full real-time speed. [Shot 2] <Subject 2> blocks and shifts right. [Shot 3] Both redirect the energy upward."
+	got := normalizeGeneratedH3Action(draft, true, 1, h3SceneAction, nil, "[Shot 1] source", "[Shot 1] <Subject 1> attacks <Subject 2>.")
+	if strings.Count(got, "[Shot ") != 1 || !strings.Contains(got, "blocks and shifts right") || !strings.Contains(got, "redirect the energy upward") {
+		t.Fatalf("model beat markers were not safely collapsed: %s", got)
+	}
+}
+
 func TestNormalizeGeneratedH3ActionRestoresAuthoritativeSubjects(t *testing.T) {
 	draft := "[Shot 1] At full speed, the attacker crosses the clearing and the defender pivots aside."
 	authoritative := "[Shot 1] <Subject 1> attacks <Subject 2>."
@@ -1851,6 +1859,19 @@ func TestNormalizeGeneratedH3ActionRestoresAuthoritativeSubjects(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("authoritative Subject binding missing %q: %s", want, got)
 		}
+	}
+}
+
+func TestEnforceH3ActionTempoRemovesAffirmativeSlowCameraDirections(t *testing.T) {
+	input := "[Shot 1] The camera makes a slow push, then retreats at slow speed and freezes on the burst. The defender immediately pivots aside."
+	got := enforceH3ActionTempo(input, h3SceneAction)
+	for _, forbidden := range []string{"slow push", "slow speed", "freezes on the burst"} {
+		if strings.Contains(strings.ToLower(got), forbidden) {
+			t.Fatalf("slow camera residue %q remained: %s", forbidden, got)
+		}
+	}
+	if !h3ActionTempoContractMatches(got) {
+		t.Fatalf("normalized combat prompt violates tempo contract: %s", got)
 	}
 }
 

@@ -1607,7 +1607,7 @@ func classifyH3SceneMode(sc *models.Scene, shots []models.Shot, dubs []models.Di
 	return h3SceneDrama
 }
 
-var h3SlowMotionCuePattern = regexp.MustCompile(`(?i)slow[ -]?motion|bullet time|in slow motion|slowly|gradually|lingering pause|缓缓|慢慢|逐渐|慢动作|慢镜头|子弹时间|悬停展示`)
+var h3SlowMotionCuePattern = regexp.MustCompile(`(?i)slow[ -]?motion|bullet time|in slow motion|slowly|gradually|lingering pause|slow(?:\s+camera)?\s*(?:speed|push|pull|track|tracking|pan|tilt|movement|glide)|freez(?:e|es|ing)\s+(?:on|at)\s+(?:the\s+)?(?:impact|burst|contact)|缓缓|慢慢|逐渐|慢动作|慢镜头|子弹时间|悬停展示`)
 var h3RealTimeCuePattern = regexp.MustCompile(`(?i)real[- ]time|at full speed|immediately|instantly|rapidly|swiftly|in one sharp motion|实时速度|立即|瞬间|迅速`)
 
 func h3ActionTempoContractMatches(value string) bool {
@@ -1696,8 +1696,17 @@ func normalizeGeneratedH3Action(value string, allowSubjects bool, expectedShotCo
 		value = useSubjectTags(value, referenceLines)
 	}
 	value = regexp.MustCompile(`(<Subject\s+[0-9]+>)([A-Za-z])`).ReplaceAllString(value, "$1 $2")
-	if expectedShotCount == 1 && len(h3ShotMarkerPattern.FindAllStringSubmatch(value, -1)) == 0 {
-		value = "[Shot 1] " + strings.TrimSpace(value)
+	if expectedShotCount == 1 {
+		markers := h3ShotMarkerPattern.FindAllStringSubmatch(value, -1)
+		if len(markers) == 0 {
+			value = "[Shot 1] " + strings.TrimSpace(value)
+		} else if len(markers) > 1 {
+			// One authoritative Shot can contain several action beats. Some models emit a
+			// new H3 Shot marker for each beat; collapse only the markers, preserving all
+			// generated action prose as one continuous camera plan.
+			value = h3ShotMarkerPattern.ReplaceAllString(value, " ")
+			value = "[Shot 1] " + strings.Join(strings.Fields(value), " ")
+		}
 	}
 	value = applyAuthoritativeSceneShotTimeline(value, canonicalSceneContent)
 	if allowSubjects && (mode == h3SceneAction || mode == h3SceneMixed) {

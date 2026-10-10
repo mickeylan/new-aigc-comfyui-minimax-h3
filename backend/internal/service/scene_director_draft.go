@@ -188,7 +188,9 @@ func normalizeDirectorAct(value models.ShotActType) models.ShotActType {
 	case "resolution", "ending", "conclusion", "结局", "解决", "结束":
 		return models.ShotActResolution
 	default:
-		return value
+		// Act labels are planning metadata, not story facts. Unknown model labels use the
+		// neutral setup value rather than invalidating an otherwise executable Shot.
+		return models.ShotActSetup
 	}
 }
 
@@ -346,12 +348,23 @@ func actionRhythmDirectorInstruction(dialogues []models.Dialogue) string {
 
 var slowActionDraftPattern = regexp.MustCompile(`慢动作|慢镜头|子弹时间|缓缓|逐渐|慢慢|悬停|长时间蓄力|戏剧性停顿|定格展示|slow[ -]?motion|bullet time|lingering|gradually`)
 
+func normalizeCombatDraftTempoText(value string) string {
+	return strings.NewReplacer(
+		"慢动作", "实时动作", "慢镜头", "实时镜头", "子弹时间", "实时速度", "缓缓", "立即", "逐渐", "随即", "慢慢", "立即", "悬停", "短暂维持", "长时间蓄力", "立即起势", "戏剧性停顿", "动作余势", "定格展示", "清晰展示",
+		"slow-motion", "real-time", "slow motion", "real-time", "bullet time", "real-time speed", "lingering", "brief", "gradually", "then",
+	).Replace(value)
+}
+
 func normalizeCombatReferenceDraftContracts(draft *sceneDirectorDraft) {
 	if draft == nil {
 		return
 	}
 	for index := range draft.Shots {
 		shot := &draft.Shots[index]
+		shot.Description = normalizeCombatDraftTempoText(shot.Description)
+		shot.PromptAction = normalizeCombatDraftTempoText(shot.PromptAction)
+		shot.PromptCamera = normalizeCombatDraftTempoText(shot.PromptCamera)
+		shot.TransitionNote = normalizeCombatDraftTempoText(shot.TransitionNote)
 		if index > 0 && strings.TrimSpace(draft.Shots[index-1].EndState) != "" && strings.TrimSpace(shot.StartState) != strings.TrimSpace(draft.Shots[index-1].EndState) {
 			shot.StartState = strings.TrimSpace(draft.Shots[index-1].EndState)
 			shot.Checks = append(shot.Checks, "系统已将本镜start_state确定性对齐上一镜end_state")
