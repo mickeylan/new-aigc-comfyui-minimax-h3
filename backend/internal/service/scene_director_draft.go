@@ -321,8 +321,9 @@ func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue) string {
 2. 所有镜头Dialogue按顺序拼接后必须逐字等于下列完整对白原文按顺序拼接的结果。
 3. 普通dialogue默认让真实说话人清晰可见并由其同步口型；也允许同一句对白跨切到纯听者反应镜头，但必须明确写出“原说话人姓名+声音跨切延续”，听者必须闭口，且不得把这种连续对白改写成旁白或独立画外音。只有明确speech_type为offscreen_dialogue时才设计独立画外对白且说话人不得入镜；只有明确speech_type为narration或monologue时才使用旁白/内心独白语义。
 4. 纯听者反应镜头承载普通对白时只能承接上一镜已经开始的同一句对白；不能在听者镜头中开始一条新对白，也不能改变说话人。
-5. 每镜3–15秒，一个主要情绪、一个主要动作、一种主要构图和明确结束状态。
-6. 对白自然时长决定总时长，不得压缩语速，也不得用重复动作填时长。
+5. 同一句对白没有逗号、句号、分号、冒号或省略号等停顿依据时，默认禁止在该处切镜；仅允许说话人在前后镜持续可见并同步表演，或按第3、4条明确切到闭口听者反应且原说话人声音跨切延续。
+6. 每镜3–15秒，一个主要情绪、一个主要动作、一种主要构图和明确结束状态。
+7. 对白自然时长决定总时长，不得压缩语速，也不得用重复动作填时长。
 结构化对白：
 ` + strings.Join(lines, "\n")
 }
@@ -718,14 +719,57 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 		} else {
 			review.ExitBoundary = dialogueBoundaryReason(review.Fragments, reviews[i+1].Fragments, review.ContinuesToNext)
 		}
-		if review.EntryBoundary == "同句跨镜续接" || review.ExitBoundary == "同句跨镜续接" {
-			review.Advisories = append(review.Advisories, "本镜在无标点的同一句中切换，请重点审核口型连续性、听者闭口和声音跨切是否自然")
-			if review.Status == "ready" {
-				review.Status = "attention"
-			}
+	}
+	for i := 0; i+1 < len(reviews); i++ {
+		left, right := &reviews[i], &reviews[i+1]
+		if left.ExitBoundary != "同句跨镜续接" || right.EntryBoundary != "同句跨镜续接" || dialogueCutHasValidPerformance(draft.Shots[i], draft.Shots[i+1], *left, *right) {
+			continue
+		}
+		issue := "无标点的同一句对白不得跨镜切分；仅允许说话人持续可见并同步表演，或明确的闭口听者反应声音跨切"
+		for _, review := range []*dialogueRhythmShotReview{left, right} {
+			review.BlockingIssues = append(review.BlockingIssues, issue)
+			review.Ready = false
+			review.Status = "blocked"
 		}
 	}
 	return reviews
+}
+
+func dialogueRhythmBlockingIssuesForShots(shots []models.Shot, dialogues []models.Dialogue) []string {
+	draft := &sceneDirectorDraft{Shots: make([]sceneDirectorDraftShot, len(shots))}
+	for i, shot := range shots {
+		draft.Shots[i] = sceneDirectorDraftShot{ShotType: shot.ShotType, Duration: shot.Duration, Description: shot.Description, Dialogue: shot.Dialogue, StartState: shot.StartState, EndState: shot.EndState, PromptSubject: shot.PromptSubject, PromptAction: shot.PromptAction}
+	}
+	seen := map[string]bool{}
+	var issues []string
+	for _, review := range buildDialogueRhythmReview(draft, dialogues) {
+		for _, issue := range review.BlockingIssues {
+			if !strings.Contains(issue, "无标点的同一句对白不得跨镜切分") || seen[issue] {
+				continue
+			}
+			seen[issue] = true
+			issues = append(issues, issue)
+		}
+	}
+	return issues
+}
+
+func dialogueCutHasValidPerformance(leftShot, rightShot sceneDirectorDraftShot, left, right dialogueRhythmShotReview) bool {
+	if len(left.Fragments) == 0 || len(right.Fragments) == 0 {
+		return false
+	}
+	before, after := left.Fragments[len(left.Fragments)-1], right.Fragments[0]
+	speaker := strings.TrimSpace(before.Character)
+	if before.SpeechType != "dialogue" || after.SpeechType != "dialogue" || before.DialogueID != after.DialogueID || speaker == "" || speaker != strings.TrimSpace(after.Character) {
+		return false
+	}
+	visible := func(shot sceneDirectorDraftShot) bool {
+		return strings.Contains(strings.Join([]string{shot.PromptSubject, shot.ShotType}, " "), speaker)
+	}
+	if left.Presentation == "visible_speaker_lipsync" && right.Presentation == "visible_speaker_lipsync" && visible(leftShot) && visible(rightShot) {
+		return true
+	}
+	return right.Presentation == "listener_reaction_carryover" && ordinaryDialogueCarryoverAllowed(rightShot, speaker, right.ContinuesFromPrev)
 }
 
 func dialogueBoundaryReason(before, after []dialogueRhythmFragmentReview, sameDialogueContinuation bool) string {

@@ -1078,6 +1078,17 @@ func (s *Service) HandleCreateShots(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	if strings.TrimSpace(req.DialogueSnapshot) != "" {
+		var dialogues []models.Dialogue
+		if err := s.DB.Where("scene_id = ?", scene.ID).Order("`order` ASC, `id` ASC").Find(&dialogues).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if issues := dialogueRhythmBlockingIssuesForShots(req.Shots, dialogues); len(issues) > 0 {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "对白拆镜语义边界未通过审核: " + strings.Join(issues, "；")})
+			return
+		}
+	}
 	directorSource := strings.TrimSpace(req.DirectorSource)
 	if directorSource == "combat_design" {
 		if s.CombatReferences == nil {

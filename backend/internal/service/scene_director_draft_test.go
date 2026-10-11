@@ -306,18 +306,62 @@ func TestDialogueBoundaryReasonUsesAuthoritativeSemantics(t *testing.T) {
 	}
 }
 
-func TestDialogueRhythmReviewMarksUnpunctuatedCutForAttention(t *testing.T) {
+func TestDialogueRhythmReviewAllowsVisibleSpeakerPerformanceAcrossUnpunctuatedCut(t *testing.T) {
 	dialogue := models.Dialogue{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信姐姐永远不会离开你"}
 	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
 		{Duration: 4, Dialogue: "相信姐姐永远", ShotType: "阿宁近景", PromptSubject: "阿宁可见"},
 		{Duration: 4, Dialogue: "不会离开你", ShotType: "阿宁近景", PromptSubject: "阿宁可见"},
 	}}
 	review := buildDialogueRhythmReview(draft, []models.Dialogue{dialogue})
-	if len(review) != 2 || review[0].Status != "attention" || review[1].Status != "attention" || !review[0].Ready || !review[1].Ready {
+	if len(review) != 2 || review[0].Status != "ready" || review[1].Status != "ready" || !review[0].Ready || !review[1].Ready {
 		t.Fatalf("review=%+v", review)
 	}
-	if len(review[0].Advisories) != 1 || len(review[1].Advisories) != 1 || review[0].ExitBoundary != "同句跨镜续接" || review[1].EntryBoundary != "同句跨镜续接" {
-		t.Fatalf("attention details=%+v", review)
+	if review[0].ExitBoundary != "同句跨镜续接" || review[1].EntryBoundary != "同句跨镜续接" {
+		t.Fatalf("boundary details=%+v", review)
+	}
+}
+
+func TestDialogueRhythmReviewBlocksUnqualifiedUnpunctuatedCut(t *testing.T) {
+	dialogue := models.Dialogue{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信姐姐永远不会离开你"}
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
+		{Duration: 4, Dialogue: "相信姐姐永远", ShotType: "阿宁近景", PromptSubject: "阿宁可见"},
+		{Duration: 4, Dialogue: "不会离开你", ShotType: "庭院空镜", PromptSubject: "落花"},
+	}}
+	review := buildDialogueRhythmReview(draft, []models.Dialogue{dialogue})
+	if len(review) != 2 || review[0].Ready || review[1].Ready || review[0].Status != "blocked" || review[1].Status != "blocked" {
+		t.Fatalf("review=%+v", review)
+	}
+	if !strings.Contains(strings.Join(review[1].BlockingIssues, "|"), "无标点的同一句对白不得跨镜切分") {
+		t.Fatalf("blocking issue=%+v", review[1])
+	}
+}
+
+func TestDialogueRhythmReviewAllowsClosedLipListenerCarryoverAcrossUnpunctuatedCut(t *testing.T) {
+	dialogue := models.Dialogue{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信姐姐永远不会离开你"}
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
+		{Duration: 4, Dialogue: "相信姐姐永远", ShotType: "阿宁近景", PromptSubject: "阿宁可见"},
+		{Duration: 4, Dialogue: "不会离开你", ShotType: "妹妹反应近景", PromptSubject: "妹妹闭口倾听", PromptAction: "阿宁声音跨切延续，妹妹双唇闭合"},
+	}}
+	review := buildDialogueRhythmReview(draft, []models.Dialogue{dialogue})
+	if len(review) != 2 || !review[0].Ready || !review[1].Ready || review[1].Presentation != "listener_reaction_carryover" {
+		t.Fatalf("review=%+v", review)
+	}
+}
+
+func TestDialogueRhythmBlockingIssuesForSavedShotsMatchesDraftAudit(t *testing.T) {
+	dialogues := []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信姐姐永远不会离开你"}}
+	shots := []models.Shot{
+		{Duration: 4, Dialogue: "相信姐姐永远", ShotType: "阿宁近景", PromptSubject: "阿宁可见"},
+		{Duration: 4, Dialogue: "不会离开你", ShotType: "庭院空镜", PromptSubject: "落花"},
+	}
+	issues := dialogueRhythmBlockingIssuesForShots(shots, dialogues)
+	if len(issues) != 1 || !strings.Contains(issues[0], "无标点的同一句对白不得跨镜切分") {
+		t.Fatalf("issues=%v", issues)
+	}
+	shots[1].ShotType = "阿宁近景"
+	shots[1].PromptSubject = "阿宁可见"
+	if issues := dialogueRhythmBlockingIssuesForShots(shots, dialogues); len(issues) != 0 {
+		t.Fatalf("valid performance blocked: %v", issues)
 	}
 }
 
