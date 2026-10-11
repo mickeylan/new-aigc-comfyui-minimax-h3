@@ -38,7 +38,7 @@ func TestModelCatalogDerivesCurrentTemplateCapabilities(t *testing.T) {
 	if ref.Mode != "reference-to-video" || ref.MaxReferences != 9 || !ref.SupportsAudio {
 		t.Fatalf("ref2v capabilities = %+v", ref)
 	}
-	if ref.Duration == nil || value(ref.Duration.Min) != 3 || value(ref.Duration.Max) != 15 || value(ref.Duration.Default) != 5 {
+	if ref.Duration == nil || value(ref.Duration.Min) != 3 || value(ref.Duration.Max) != maxLongSceneVideoDuration || value(ref.Duration.Default) != 5 {
 		t.Fatalf("ref2v duration = %+v", ref.Duration)
 	}
 

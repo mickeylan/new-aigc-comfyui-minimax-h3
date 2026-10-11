@@ -532,8 +532,11 @@ func TestValidateScriptResultAndDuration(t *testing.T) {
 	if got := normalizeSceneDuration(1); got != 3 {
 		t.Fatalf("最小时长 = %v", got)
 	}
-	if got := normalizeSceneDuration(20); got != 15 {
-		t.Fatalf("最大时长 = %v", got)
+	if got := normalizeSceneDuration(20); got != 20 {
+		t.Fatalf("长视频时长被静默截断 = %v", got)
+	}
+	if got := normalizeSceneDuration(80); got != maxLongSceneVideoDuration {
+		t.Fatalf("资源保护上限 = %v", got)
 	}
 }
 
@@ -2464,7 +2467,7 @@ func TestResolveRef2VSubmissionPromptUsesLatestSavedTextVerbatim(t *testing.T) {
 }
 
 func TestBuildEpisodePreflightChecksEveryScene(t *testing.T) {
-	scenes := []models.Scene{{ID: 1, Duration: 8, ShotCount: 1, VideoFullPrompt: "prompt"}, {ID: 2, Duration: 16, ShotCount: 1, PromptStale: true}}
+	scenes := []models.Scene{{ID: 1, Duration: 8, ShotCount: 1, VideoFullPrompt: "prompt"}, {ID: 2, Duration: 61, ShotCount: 1, PromptStale: true}}
 	continuity := map[uint]models.SceneContinuity{2: {SceneID: 2, Status: "source_invalidated"}}
 	result := buildEpisodePreflight(scenes, map[uint]float64{1: 8, 2: 10}, continuity, []models.Dialogue{{SceneID: 2, Text: "台词"}})
 	if result.Ready {

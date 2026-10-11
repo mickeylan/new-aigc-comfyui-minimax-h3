@@ -169,8 +169,8 @@
           </div>
           <div class="duration-edit">
             <label>目标时长</label>
-            <input type="number" class="input input-sm" v-model.number="durationInput" min="3" max="15" step="0.5" @change="saveDuration" />
-            <span class="dur-unit">秒</span>
+            <input type="number" class="input input-sm" v-model.number="durationInput" min="3" max="60" step="0.5" @change="saveDuration" />
+            <span class="dur-unit">秒<span v-if="durationInput > 15"> · 长视频高显存</span></span>
             <button class="btn btn-sm btn-secondary" :disabled="durationSaving" @click="saveDuration">{{ durationSaving ? '保存中…' : '保存' }}</button>
           </div>
         </div>

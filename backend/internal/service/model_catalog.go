@@ -104,6 +104,10 @@ func catalogEntryFromTemplate(template models.Template) (ModelCatalogEntry, erro
 	}
 	if duration, ok := byKey["duration"]; ok {
 		value := numericCapability(duration)
+		if isVideoTemplateCode(template.Code) && strings.HasPrefix(template.Code, "minimax_h3_") {
+			max := maxLongSceneVideoDuration
+			value.Max = &max
+		}
 		entry.Duration = &value
 	}
 	return entry, nil

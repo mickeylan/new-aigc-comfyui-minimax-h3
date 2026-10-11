@@ -1362,7 +1362,11 @@ func (s *ProjectService) planEpisodeInfo(p *models.Project, n int) (string, stri
 	return "", "", 0, 0
 }
 
-// normalizeSceneDuration 归一化镜头时长为 3-15 秒（兼容旧项目 3-8 秒上限）
+const maxLongSceneVideoDuration = 60.0
+
+// normalizeSceneDuration only protects malformed legacy values. A Scene may be a
+// long H3 generation unit; internal director Shots and dialogue materialization
+// retain their independent 3–15 second limits.
 func normalizeSceneDuration(duration float64) float64 {
 	if duration == 0 {
 		return 5
@@ -1370,8 +1374,8 @@ func normalizeSceneDuration(duration float64) float64 {
 	if duration < 3 {
 		return 3
 	}
-	if duration > 15 {
-		return 15
+	if duration > maxLongSceneVideoDuration {
+		return maxLongSceneVideoDuration
 	}
 	return duration
 }
@@ -4474,8 +4478,8 @@ func validateScriptResult(res *scriptResult, targets ...any) error {
 		if strings.TrimSpace(sc.Content) == "" || strings.TrimSpace(sc.ImagePrompt) == "" {
 			return fmt.Errorf("场景 %d 缺少视频或画面提示词", i+1)
 		}
-		if sc.Duration < 3 || sc.Duration > 15 {
-			return fmt.Errorf("场景 %d 时长必须为 3~15 秒", i+1)
+		if sc.Duration < 3 || sc.Duration > maxLongSceneVideoDuration {
+			return fmt.Errorf("场景 %d 时长必须为 3~%.0f 秒", i+1, maxLongSceneVideoDuration)
 		}
 	}
 	_ = targetDuration
@@ -7879,7 +7883,7 @@ func buildEpisodePreflight(scenes []models.Scene, shotTotals map[uint]float64, c
 	}
 	invalidDuration, mismatch, stale, missingPrompt, invalidContinuity := []uint{}, []uint{}, []uint{}, []uint{}, []uint{}
 	for _, scene := range scenes {
-		if scene.Duration < 3 || scene.Duration > 15 {
+		if scene.Duration < 3 || scene.Duration > maxLongSceneVideoDuration {
 			invalidDuration = append(invalidDuration, scene.ID)
 		}
 		if scene.ShotCount > 0 && math.Abs(shotTotals[scene.ID]-scene.Duration) > shotDurationTolerance {
@@ -7906,7 +7910,7 @@ func buildEpisodePreflight(scenes []models.Scene, shotTotals map[uint]float64, c
 			unknownDialogue = append(unknownDialogue, dialogue.SceneID)
 		}
 	}
-	appendCheck("scene_duration", "所有Scene时长均为3–15秒", "时长不在3–15秒", invalidDuration)
+	appendCheck("scene_duration", fmt.Sprintf("所有Scene时长均为3–%.0f秒", maxLongSceneVideoDuration), fmt.Sprintf("时长不在3–%.0f秒", maxLongSceneVideoDuration), invalidDuration)
 	shotTimingText := "内部Shot配时与Scene一致"
 	if len(mismatch) > 0 {
 		shotTimingText = fmt.Sprintf("%d个Scene的内部Shot合计与Scene时长不同，仅作配时建议，不阻止生成", len(mismatch))
