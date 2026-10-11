@@ -1078,6 +1078,15 @@ func (s *Service) HandleCreateShots(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	var authoritativeDialogues []models.Dialogue
+	if err := s.DB.Where("scene_id = ?", scene.ID).Order("`order`, id").Find(&authoritativeDialogues).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if len(validSceneDialogues(authoritativeDialogues)) > 0 && strings.TrimSpace(req.DialogueSnapshot) == "" {
+		c.JSON(http.StatusConflict, gin.H{"error": "当前Scene含结构化Dialogue，保存导演镜头必须携带dialogue_snapshot；请重新加载场景后再保存"})
+		return
+	}
 	directorSource := strings.TrimSpace(req.DirectorSource)
 	if directorSource == "combat_design" {
 		if s.CombatReferences == nil {
