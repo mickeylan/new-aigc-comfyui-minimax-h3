@@ -452,7 +452,9 @@ func validateActionRhythmDraft(draft *sceneDirectorDraft, dialogues []models.Dia
 }
 
 func canonicalDialogueText(value string) string {
-	return strings.Join(strings.Fields(strings.TrimSpace(value)), "")
+	// Dialogue text is production authority. Normalize only platform newlines;
+	// spaces, line breaks and punctuation inside the spoken text remain exact.
+	return strings.ReplaceAll(value, "\r\n", "\n")
 }
 
 func normalizeDialogueRhythmDraftDurations(draft *sceneDirectorDraft) {

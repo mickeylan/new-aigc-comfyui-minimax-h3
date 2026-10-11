@@ -125,6 +125,22 @@ func TestMaterializedSceneBaseAcceptsLegacyAndNativeSegmentTitles(t *testing.T) 
 	}
 }
 
+func TestPlanDialogueFragmentsPreservesInternalWhitespace(t *testing.T) {
+	dialogues := []models.Dialogue{{ID: 1, Text: "I love you"}}
+	shots := []models.Shot{{Dialogue: "I love "}, {Dialogue: "you"}}
+	fragments, err := planDialogueFragments(shots, dialogues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fragments[0][0].Text != "I love " || fragments[1][0].Text != "you" {
+		t.Fatalf("fragments=%+v", fragments)
+	}
+	shots[0].Dialogue = "Ilove "
+	if _, err := planDialogueFragments(shots, dialogues); err == nil {
+		t.Fatal("whitespace rewrite accepted during materialization")
+	}
+}
+
 func TestNativeSceneBaseTitleRemovesRepeatedSegmentSuffixes(t *testing.T) {
 	got := nativeSceneBaseTitle("场景26：真相大白 · Native段1 · Native段1")
 	if got != "场景26：真相大白" {

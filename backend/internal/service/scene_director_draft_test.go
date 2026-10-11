@@ -279,6 +279,16 @@ func TestValidateDialogueRhythmDraftEnforcesIndependentOffscreenSpeaker(t *testi
 	}
 }
 
+func TestCanonicalDialogueTextPreservesInternalWhitespace(t *testing.T) {
+	if got := canonicalDialogueText("  I love\r\nyou  "); got != "  I love\nyou  " {
+		t.Fatalf("canonical dialogue changed internal whitespace: %q", got)
+	}
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "Ilove you", ShotType: "甲近景", PromptSubject: "甲可见"}}}
+	if err := validateDialogueRhythmDraft(draft, []models.Dialogue{{ID: 1, Character: "甲", SpeechType: "dialogue", Text: "I love you"}}); err == nil {
+		t.Fatal("dialogue whitespace rewrite was accepted")
+	}
+}
+
 func TestDialogueBoundaryReasonUsesAuthoritativeSemantics(t *testing.T) {
 	fragment := func(id uint, character, speechType, text string) []dialogueRhythmFragmentReview {
 		return []dialogueRhythmFragmentReview{{DialogueID: id, Character: character, SpeechType: speechType, Text: text}}

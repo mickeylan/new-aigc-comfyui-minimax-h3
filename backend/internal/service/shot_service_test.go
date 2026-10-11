@@ -185,6 +185,15 @@ func TestReplaceShotsWithSnapshotEnforcesAuthoritativeSpeakerPresentation(t *tes
 	}
 }
 
+func TestDialogueSnapshotDetectsInternalWhitespaceChanges(t *testing.T) {
+	base := []models.Dialogue{{ID: 1, SceneID: 2, Order: 1, Character: "甲", SpeechType: "dialogue", Text: "I love you"}}
+	changed := append([]models.Dialogue(nil), base...)
+	changed[0].Text = "Ilove you"
+	if dialogueSnapshotToken(base) == dialogueSnapshotToken(changed) {
+		t.Fatal("internal whitespace change did not invalidate dialogue snapshot")
+	}
+}
+
 func TestHandleCreateShotsRejectsImpossibleDialogueTimingWithoutMutation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := newTestDBWithNewModels(t)
