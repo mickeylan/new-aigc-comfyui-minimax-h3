@@ -282,6 +282,17 @@ func TestDialogueRhythmReviewUsesAuthoritativeSpeechPresentation(t *testing.T) {
 	}
 }
 
+func TestShotShowsSpeakerRejectsNegatedPresence(t *testing.T) {
+	if !shotShowsSpeaker(sceneDirectorDraftShot{ShotType: "双人中景", PromptSubject: "阿宁与阿兰同框"}, "阿宁") {
+		t.Fatal("explicit two-shot speaker was not visible")
+	}
+	for _, subject := range []string{"画面不含阿宁", "阿宁不入镜", "阿宁画外声音"} {
+		if shotShowsSpeaker(sceneDirectorDraftShot{ShotType: "反应近景", PromptSubject: subject}, "阿宁") {
+			t.Fatalf("negated speaker presence accepted: %s", subject)
+		}
+	}
+}
+
 func TestValidateDialogueRhythmDraftEnforcesIndependentOffscreenSpeaker(t *testing.T) {
 	dialogues := []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "offscreen_dialogue", Text: "门外有人吗？"}}
 	hidden := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 4, Dialogue: "门外有人吗？", ShotType: "室内空镜", PromptSubject: "紧闭的房门"}}}

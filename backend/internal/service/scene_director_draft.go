@@ -578,6 +578,23 @@ func restoreDialogueRhythmDraftText(draft *sceneDirectorDraft, dialogues []model
 	return nil
 }
 
+func shotShowsSpeaker(shot sceneDirectorDraftShot, speaker string) bool {
+	speaker = strings.TrimSpace(speaker)
+	if speaker == "" {
+		return false
+	}
+	visual := strings.Join([]string{shot.PromptSubject, shot.ShotType}, " ")
+	if !strings.Contains(visual, speaker) {
+		return false
+	}
+	for _, marker := range []string{"不含" + speaker, "没有" + speaker, "无" + speaker, speaker + "不入镜", speaker + "未入镜", speaker + "画外"} {
+		if strings.Contains(visual, marker) {
+			return false
+		}
+	}
+	return true
+}
+
 func ordinaryDialogueCarryoverAllowed(shot sceneDirectorDraftShot, speaker string, startsAfterDialogueStart bool) bool {
 	if !startsAfterDialogueStart || strings.TrimSpace(speaker) == "" {
 		return false
@@ -778,10 +795,7 @@ func dialogueCutHasValidPerformance(leftShot, rightShot sceneDirectorDraftShot, 
 	if before.SpeechType != "dialogue" || after.SpeechType != "dialogue" || before.DialogueID != after.DialogueID || speaker == "" || speaker != strings.TrimSpace(after.Character) {
 		return false
 	}
-	visible := func(shot sceneDirectorDraftShot) bool {
-		return strings.Contains(strings.Join([]string{shot.PromptSubject, shot.ShotType}, " "), speaker)
-	}
-	if left.Presentation == "visible_speaker_lipsync" && right.Presentation == "visible_speaker_lipsync" && visible(leftShot) && visible(rightShot) {
+	if left.Presentation == "visible_speaker_lipsync" && right.Presentation == "visible_speaker_lipsync" && shotShowsSpeaker(leftShot, speaker) && shotShowsSpeaker(rightShot, speaker) {
 		return true
 	}
 	return right.Presentation == "listener_reaction_carryover" && ordinaryDialogueCarryoverAllowed(rightShot, speaker, right.ContinuesFromPrev)
@@ -855,7 +869,7 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 				continue
 			}
 			if speechType == "offscreen_dialogue" {
-				speakerVisible := strings.Contains(strings.Join([]string{shot.PromptSubject, shot.ShotType}, " "), speaker)
+				speakerVisible := shotShowsSpeaker(shot, speaker)
 				if speakerVisible {
 					return fmt.Errorf("对白拆镜%d承载角色“%s”的独立画外对白时，说话人不得出现在画面主体中；如需可见口型请改用dialogue", i+1, speaker)
 				}
@@ -886,7 +900,7 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 			if speechType != "dialogue" {
 				continue
 			}
-			speakerVisible := strings.Contains(strings.Join([]string{shot.PromptSubject, shot.ShotType}, " "), speaker)
+			speakerVisible := shotShowsSpeaker(shot, speaker)
 			if speakerVisible || ordinaryDialogueCarryoverAllowed(shot, speaker, start > span.start) {
 				continue
 			}
