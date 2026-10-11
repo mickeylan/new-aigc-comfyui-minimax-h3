@@ -185,6 +185,27 @@ func TestReplaceShotsWithSnapshotEnforcesAuthoritativeSpeakerPresentation(t *tes
 	}
 }
 
+func TestValidateShotCameraContractRejectsConflictsAndMultipleMoves(t *testing.T) {
+	base := models.Shot{ActType: models.ShotActSetup, ShotType: "近景", Duration: 4}
+	staticMove := base
+	staticMove.CameraMovement = "固定机位"
+	staticMove.PromptCamera = "镜头缓慢推进"
+	if err := validateShot(&staticMove); err == nil || !strings.Contains(err.Error(), "运镜冲突") {
+		t.Fatalf("fixed/moving conflict accepted: %v", err)
+	}
+	multiple := base
+	multiple.CameraMovement = "先跟拍再环绕"
+	if err := validateShot(&multiple); err == nil || !strings.Contains(err.Error(), "一种主要运镜") {
+		t.Fatalf("multiple camera moves accepted: %v", err)
+	}
+	valid := base
+	valid.CameraMovement = "跟拍"
+	valid.PromptCamera = "tracking shot follows the subject"
+	if err := validateShot(&valid); err != nil {
+		t.Fatalf("single camera move rejected: %v", err)
+	}
+}
+
 func TestDialogueSnapshotDetectsInternalWhitespaceChanges(t *testing.T) {
 	base := []models.Dialogue{{ID: 1, SceneID: 2, Order: 1, Character: "甲", SpeechType: "dialogue", Text: "I love you"}}
 	changed := append([]models.Dialogue(nil), base...)
