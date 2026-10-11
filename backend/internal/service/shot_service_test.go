@@ -398,6 +398,33 @@ func TestUpdateShotRejectsDialoguePresentationRegressionWithoutMutation(t *testi
 	}
 }
 
+func TestCreateShotRejectsDialogueDuplicationWithoutMutation(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "create dialogue guard"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
+	db.Create(&scene)
+	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信姐姐。"}
+	db.Create(&dialogue)
+	svc := NewShotService(db)
+	if _, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "阿宁近景", Duration: 3, Dialogue: dialogue.Text, PromptSubject: "阿宁可见"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateShot(scene.ID, models.Shot{ShotType: "阿宁近景", Duration: 3, Dialogue: dialogue.Text, PromptSubject: "阿宁可见"}); !errors.Is(err, ErrDialogueTimingBlocked) {
+		t.Fatalf("duplicate dialogue Shot accepted: %v", err)
+	}
+	var count int64
+	if err := db.Model(&models.Shot{}).Where("scene_id = ?", scene.ID).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("rejected creation changed shot count: %d", count)
+	}
+	if _, err := svc.CreateShot(scene.ID, models.Shot{ShotType: "庭院空镜", Duration: 3}); err != nil {
+		t.Fatalf("silent visual Shot rejected: %v", err)
+	}
+}
+
 func TestDeleteShotRejectsAuthoritativeDialogueLossWithoutMutation(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	project := models.Project{Title: "delete dialogue guard"}

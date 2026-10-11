@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 
 	"comfyui-console/internal/models"
@@ -333,6 +334,21 @@ func (s *ShotService) CreateShot(sceneID uint, shot models.Shot) (*models.Shot, 
 		projectID, err := projectIDForScene(tx, sceneID)
 		if err != nil {
 			return err
+		}
+		var proposed []models.Shot
+		if err := tx.Where("scene_id = ?", sceneID).Order("order_num, id").Find(&proposed).Error; err != nil {
+			return err
+		}
+		proposed = append(proposed, shot)
+		sort.SliceStable(proposed, func(i, j int) bool { return proposed[i].Order < proposed[j].Order })
+		var dialogues []models.Dialogue
+		if err := tx.Where("scene_id = ?", sceneID).Order("`order`, id").Find(&dialogues).Error; err != nil {
+			return err
+		}
+		if dialogues = validSceneDialogues(dialogues); len(dialogues) > 0 {
+			if err := validateDialogueShotTiming(proposed, dialogues); err != nil {
+				return err
+			}
 		}
 		if err := tx.Create(&shot).Error; err != nil {
 			return err
