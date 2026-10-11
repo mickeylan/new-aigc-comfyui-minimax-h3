@@ -966,6 +966,7 @@ type Shot struct {
 	PromptStyle           string                    `gorm:"column:prompt_style;type:text" json:"prompt_style"`
 	NegativePrompt        string                    `gorm:"column:negative_prompt;type:text" json:"negative_prompt"`
 	DirectorSource        string                    `gorm:"column:director_source;index" json:"director_source"`
+	DirectorSourceSHA256  string                    `gorm:"column:director_source_sha256;size:64" json:"director_source_sha256"`
 	CombatReferenceAudit  string                    `gorm:"column:combat_reference_audit_json;type:text" json:"combat_reference_audit_json"`
 	CreatedAt             time.Time                 `json:"created_at"`
 	UpdatedAt             time.Time                 `json:"updated_at"`

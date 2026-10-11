@@ -2,6 +2,7 @@ package service
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,28 @@ type ShotService struct{ db *gorm.DB }
 func NewShotService(db *gorm.DB) *ShotService { return &ShotService{db: db} }
 
 const shotDurationTolerance = 0.5
+
+type shotDirectorHashV1 struct {
+	Order                                                                                  int                `json:"order"`
+	ActType                                                                                models.ShotActType `json:"act_type"`
+	ShotType, CameraAngle, CameraMovement                                                  string
+	TransitionType                                                                         models.ShotTransitionType `json:"transition_type"`
+	TransitionNote, StartState, EndState                                                   string
+	Duration                                                                               float64 `json:"duration"`
+	Description, Dialogue, Emotion                                                         string
+	PromptSubject, PromptAction, PromptCamera, PromptLighting, PromptStyle, NegativePrompt string
+	ActionTimeline                                                                         []models.ShotActionTimelineEntry `json:"action_timeline"`
+}
+
+func shotDirectorSHA256(shot models.Shot) string {
+	timeline := shot.ActionTimeline
+	if timeline == nil {
+		timeline = []models.ShotActionTimelineEntry{}
+	}
+	payload, _ := json.Marshal(shotDirectorHashV1{shot.Order, shot.ActType, shot.ShotType, shot.CameraAngle, shot.CameraMovement, shot.TransitionType, shot.TransitionNote, shot.StartState, shot.EndState, shot.Duration, shot.Description, shot.Dialogue, shot.Emotion, shot.PromptSubject, shot.PromptAction, shot.PromptCamera, shot.PromptLighting, shot.PromptStyle, shot.NegativePrompt, timeline})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
 
 var (
 	ErrDialogueSnapshotConflict = errors.New("结构化Dialogue已在导演草稿生成后发生变化，请重新生成对白节奏拆镜草稿")
@@ -370,6 +393,7 @@ func (s *ShotService) ReplaceShotsWithDialogueSnapshot(sceneID uint, shots []mod
 			// server-authenticated source instead of trusting or clearing client fields.
 			if strings.TrimSpace(shots[i].DirectorSource) != "" {
 				updates["director_source"] = shots[i].DirectorSource
+				updates["director_source_sha256"] = shots[i].DirectorSourceSHA256
 				updates["combat_reference_audit_json"] = shots[i].CombatReferenceAudit
 			}
 			if err := tx.Model(&models.Shot{}).Where("id = ? AND scene_id = ?", shots[i].ID, sceneID).Updates(updates).Error; err != nil {

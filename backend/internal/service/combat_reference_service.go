@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"comfyui-console/internal/models"
 )
 
 //go:embed all:combat_reference_data/plain combat_reference_data/SKILL.md combat_reference_data/source-manifest.json
@@ -85,6 +87,50 @@ type CombatReferenceAudit struct {
 type CombatReferenceBundle struct {
 	Text  string                 `json:"-"`
 	Audit []CombatReferenceAudit `json:"audit"`
+}
+
+type CombatProvenanceStatus struct {
+	Status                  string `json:"status"`
+	SourceShotSHA256        string `json:"source_shot_sha256"`
+	CurrentShotSHA256       string `json:"current_shot_sha256"`
+	SourceReferencesSHA256  string `json:"source_references_sha256"`
+	CurrentReferencesSHA256 string `json:"current_references_sha256"`
+	ShotModified            bool   `json:"shot_modified"`
+}
+
+func combatAuditSHA256(audit []CombatReferenceAudit) string {
+	payload, _ := json.Marshal(audit)
+	sum := sha256.Sum256(payload)
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func (s *CombatReferenceService) ProvenanceStatus(shot models.Shot) CombatProvenanceStatus {
+	status := CombatProvenanceStatus{SourceShotSHA256: shot.DirectorSourceSHA256, CurrentShotSHA256: shotDirectorSHA256(shot)}
+	status.ShotModified = status.SourceShotSHA256 == "" || status.SourceShotSHA256 != status.CurrentShotSHA256
+	var stored []CombatReferenceAudit
+	if json.Unmarshal([]byte(shot.CombatReferenceAudit), &stored) != nil || len(stored) == 0 {
+		status.Status = "stale"
+		return status
+	}
+	status.SourceReferencesSHA256 = combatAuditSHA256(stored)
+	selections := make([]CombatReferenceSelection, len(stored))
+	for i, item := range stored {
+		selections[i] = CombatReferenceSelection{Scope: item.Scope, ID: item.ID, ConditionConfirmed: item.ConditionConfirmed}
+	}
+	bundle, err := s.CompileSelection(selections, 30000)
+	if err != nil {
+		status.Status = "stale"
+		return status
+	}
+	status.CurrentReferencesSHA256 = combatAuditSHA256(bundle.Audit)
+	if ValidateCombatReferenceAudit(stored, bundle.Audit) != nil {
+		status.Status = "stale"
+	} else if status.ShotModified {
+		status.Status = "modified"
+	} else {
+		status.Status = "exact"
+	}
+	return status
 }
 
 type combatSourceManifest struct {

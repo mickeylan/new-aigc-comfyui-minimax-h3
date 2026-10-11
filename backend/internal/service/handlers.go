@@ -1099,13 +1099,16 @@ func (s *Service) HandleCreateShots(c *gin.Context) {
 			return
 		}
 		for i := range req.Shots {
+			req.Shots[i].Order = i + 1
 			req.Shots[i].DirectorSource = "fight-video-action-design"
 			req.Shots[i].CombatReferenceAudit = string(auditJSON)
+			req.Shots[i].DirectorSourceSHA256 = shotDirectorSHA256(req.Shots[i])
 		}
 	} else {
 		for i := range req.Shots {
 			// Client-supplied provenance is never trusted for manual or other director paths.
 			req.Shots[i].DirectorSource = ""
+			req.Shots[i].DirectorSourceSHA256 = ""
 			req.Shots[i].CombatReferenceAudit = ""
 		}
 	}
@@ -1250,11 +1253,16 @@ func (s *Service) HandleGetSceneShots(c *gin.Context) {
 	}
 	type shotResponse struct {
 		models.Shot
-		DialogueFragments []ShotDialogueFragment `json:"dialogue_fragments"`
+		DialogueFragments []ShotDialogueFragment  `json:"dialogue_fragments"`
+		CombatProvenance  *CombatProvenanceStatus `json:"combat_provenance,omitempty"`
 	}
 	rows := make([]shotResponse, len(shots))
 	for i, shot := range shots {
 		rows[i] = shotResponse{Shot: shot, DialogueFragments: fragments[shot.ID]}
+		if shot.DirectorSource == "fight-video-action-design" && s.CombatReferences != nil {
+			provenance := s.CombatReferences.ProvenanceStatus(shot)
+			rows[i].CombatProvenance = &provenance
+		}
 	}
 	c.JSON(200, gin.H{"shots": rows})
 }

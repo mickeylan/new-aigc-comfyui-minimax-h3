@@ -1,8 +1,11 @@
 package service
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"comfyui-console/internal/models"
 )
 
 func TestCombatReferenceSearchRanksStrongDesignMatch(t *testing.T) {
@@ -100,6 +103,37 @@ func TestCombatReferenceCompileSelectionAuditsAndRejectsUnsafeChoices(t *testing
 	changed[0].ContentSHA256 = strings.Repeat("0", 64)
 	if err := ValidateCombatReferenceAudit(bundle.Audit, changed); err == nil || !strings.Contains(err.Error(), "重新生成") {
 		t.Fatalf("changed audit accepted: %v", err)
+	}
+}
+
+func TestCombatProvenanceStatusTracksExactModifiedAndStale(t *testing.T) {
+	service, err := NewCombatReferenceService()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := service.CompileSelection([]CombatReferenceSelection{{Scope: "design", ID: "02"}, {Scope: "moves", ID: "27"}}, 40000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audit, _ := json.Marshal(bundle.Audit)
+	shot := models.Shot{Order: 1, DirectorSource: "fight-video-action-design", CombatReferenceAudit: string(audit), Duration: 5, Description: "A blocks and counters."}
+	shot.DirectorSourceSHA256 = shotDirectorSHA256(shot)
+	if status := service.ProvenanceStatus(shot); status.Status != "exact" || status.ShotModified {
+		t.Fatalf("exact status=%+v", status)
+	}
+	shot.Description = "A sidesteps, blocks, and counters."
+	if status := service.ProvenanceStatus(shot); status.Status != "modified" || !status.ShotModified {
+		t.Fatalf("modified status=%+v", status)
+	}
+	var stale []CombatReferenceAudit
+	if err := json.Unmarshal([]byte(shot.CombatReferenceAudit), &stale); err != nil {
+		t.Fatal(err)
+	}
+	stale[0].ContentSHA256 = strings.Repeat("0", 64)
+	staleJSON, _ := json.Marshal(stale)
+	shot.CombatReferenceAudit = string(staleJSON)
+	if status := service.ProvenanceStatus(shot); status.Status != "stale" {
+		t.Fatalf("stale status=%+v", status)
 	}
 }
 
