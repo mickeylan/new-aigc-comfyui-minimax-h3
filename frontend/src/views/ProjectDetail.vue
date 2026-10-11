@@ -563,8 +563,8 @@
         </div>
         <div class="field">
           <label>分镜时长（秒）</label>
-          <input v-model.number="sceneForm.duration" class="input" type="number" min="3" max="60" step="0.1" />
-          <div class="field-hint">允许 3–60 秒；超过15秒会显著增加latent长度、显存占用、生成耗时与失败风险。该数值控制实际生成帧数，修改后需要重新生成视频。</div>
+          <input v-model.number="sceneForm.duration" class="input" type="number" min="3" :max="h3DurationMax" step="0.1" />
+          <div class="field-hint">当前平台生成上限为 {{h3DurationMax}} 秒；普通分镜建议保持3–15秒，只有高显存实例实测通过后才应提高平台上限。</div>
         </div>
         <div class="field">
           <label>导演类型</label>
@@ -1065,6 +1065,7 @@ const videoTaskScene = ref(null)
 const videoTaskPromptDraft = ref('')
 const videoTaskTemplate = ref('minimax_h3_ref2v')
 const modelCatalog = ref([])
+const h3DurationMax = computed(() => Number(modelCatalog.value.find(m => m.template_code === 'minimax_h3_ref2v')?.duration?.max || 15))
 const hasTemplate = code => modelCatalog.value.some(m => m.template_code === code)
 const qwenAssetTemplateReady = computed(() => hasTemplate('qwen_image_2_1_t2i'))
 const qwenSceneTemplateReady = computed(() => hasTemplate('qwen_image_2_1_t2i') || hasTemplate('qwen_image_2_1_multi_edit'))

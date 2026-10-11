@@ -169,8 +169,8 @@
           </div>
           <div class="duration-edit">
             <label>目标时长</label>
-            <input type="number" class="input input-sm" v-model.number="durationInput" min="3" max="60" step="0.5" @change="saveDuration" />
-            <span class="dur-unit">秒<span v-if="durationInput > 15"> · 长视频高显存</span></span>
+            <input type="number" class="input input-sm" v-model.number="durationInput" min="3" :max="h3DurationMax" step="0.5" @change="saveDuration" />
+            <span class="dur-unit">秒 · 当前上限 {{h3DurationMax}}<span v-if="durationInput > 15"> · 长视频高显存</span></span>
             <button class="btn btn-sm btn-secondary" :disabled="durationSaving" @click="saveDuration">{{ durationSaving ? '保存中…' : '保存' }}</button>
           </div>
         </div>
@@ -434,6 +434,7 @@ const dialogueVolume = ref(1)
 const bgmVolume = ref(1)
 const durationSaving = ref(false)
 const durationInput = ref(5)
+const h3DurationMax = ref(15)
 const sceneModeSaving = ref(false)
 const sceneModeInput = ref('')
 const dragFrom = ref(null)
@@ -567,7 +568,9 @@ async function loadSkillAudit() {
 
 async function load() {
   try {
-    const [{ data }, episodeRes] = await Promise.all([api.editorData(id(), activeEpN.value), api.projectEpisodes(id())])
+    const [{ data }, episodeRes, catalogRes] = await Promise.all([api.editorData(id(), activeEpN.value), api.projectEpisodes(id()), api.modelCatalog()])
+    const h3 = (catalogRes.data?.items || []).find(item => item.template_code === 'minimax_h3_ref2v')
+    h3DurationMax.value = Number(h3?.duration?.max || 15)
     project.value = data.project
     episodes.value = episodeRes.data || []
     scenes.value = data.scenes || []

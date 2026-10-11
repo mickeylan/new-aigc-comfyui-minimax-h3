@@ -177,6 +177,10 @@ test('长分镜支持可审核动作时间轴并限制3至15秒', () => {
   for (const field of ['subject', 'action', 'state', 'camera']) assert.match(source, new RegExp(`step\\.${field}`))
   assert.match(source, /min="3" max="15"/)
   assert.match(source, /action_timeline/)
+  const editor = readFileSync(new URL('../src/views/ProjectEditor.vue', import.meta.url), 'utf8')
+  assert.match(editor, /h3DurationMax/)
+  assert.match(editor, /api\.modelCatalog\(\)/)
+  assert.match(editor, /:max="h3DurationMax"/)
 })
 
 test('镜头编辑器兼容characters包装响应', () => {
