@@ -127,6 +127,7 @@ test('AI导演支持可审核的长对白Native拆镜', () => {
   assert.match(source, /尚未进入项目分镜列表/)
   assert.match(source, /不同构图和镜头切换仍作为内部Shot保留/)
   assert.match(source, /重新合并过碎场景/)
+  assert.match(source, /\(\?:镜头\|Native段\)/)
   assert.match(source, /previewNativeRegroup/)
   assert.match(source, /regroupNativeScenes/)
   assert.match(source, /previewShotMaterialization/)

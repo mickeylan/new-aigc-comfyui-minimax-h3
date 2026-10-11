@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	materializedShotTitlePattern = regexp.MustCompile(`^(.*) · 镜头([0-9]+)$`)
+	materializedShotTitlePattern = regexp.MustCompile(`^(.*)\s*·\s*(?:镜头|Native段)([0-9]+)$`)
 	nativeSegmentSuffixPattern   = regexp.MustCompile(`(?:\s*·\s*Native段[0-9]+)+$`)
 )
 

@@ -109,6 +109,22 @@ func TestMaterializeShotsCreatesNativeScenesAndPreservesDialogue(t *testing.T) {
 	}
 }
 
+func TestMaterializedSceneBaseAcceptsLegacyAndNativeSegmentTitles(t *testing.T) {
+	for _, tc := range []struct {
+		title string
+		base  string
+		part  int
+	}{
+		{"场景26：真相大白 · 镜头2", "场景26：真相大白", 2},
+		{"场景26：真相大白 · Native段3", "场景26：真相大白", 3},
+	} {
+		base, part, ok := materializedSceneBase(tc.title)
+		if !ok || base != tc.base || part != tc.part {
+			t.Fatalf("materializedSceneBase(%q)=(%q,%d,%v)", tc.title, base, part, ok)
+		}
+	}
+}
+
 func TestNativeSceneBaseTitleRemovesRepeatedSegmentSuffixes(t *testing.T) {
 	got := nativeSceneBaseTitle("场景26：真相大白 · Native段1 · Native段1")
 	if got != "场景26：真相大白" {
