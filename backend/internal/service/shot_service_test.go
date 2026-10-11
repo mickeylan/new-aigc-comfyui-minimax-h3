@@ -441,6 +441,25 @@ func TestUpdateShotRejectsDialoguePresentationRegressionWithoutMutation(t *testi
 	}
 }
 
+func TestCreateShotAllocatesOrderInsideTransaction(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "transactional create"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
+	db.Create(&scene)
+	svc := NewShotService(db)
+	if _, err := svc.CreateShot(scene.ID, models.Shot{ShotType: "", Duration: 3}); err == nil {
+		t.Fatal("invalid shot was accepted")
+	}
+	created, err := svc.CreateShot(scene.ID, models.Shot{ShotType: "空镜", Duration: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Order != 1 {
+		t.Fatalf("rolled-back create consumed order: %d", created.Order)
+	}
+}
+
 func TestCreateShotRejectsDialogueDuplicationWithoutMutation(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	project := models.Project{Title: "create dialogue guard"}

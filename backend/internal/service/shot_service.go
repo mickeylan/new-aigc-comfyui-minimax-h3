@@ -342,19 +342,19 @@ func assignShotDialogueRanges(tx *gorm.DB, sceneID uint, shots []models.Shot) er
 
 func (s *ShotService) CreateShot(sceneID uint, shot models.Shot) (*models.Shot, error) {
 	shot.ID, shot.SceneID = 0, sceneID
-	if shot.Order <= 0 {
-		var maxOrder int
-		if err := s.db.Model(&models.Shot{}).Where("scene_id = ?", sceneID).Select("COALESCE(MAX(order_num), 0)").Scan(&maxOrder).Error; err != nil {
-			return nil, err
-		}
-		shot.Order = maxOrder + 1
-	}
-	if err := validateShot(&shot); err != nil {
-		return nil, err
-	}
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		projectID, err := projectIDForScene(tx, sceneID)
 		if err != nil {
+			return err
+		}
+		if shot.Order <= 0 {
+			var maxOrder int
+			if err := tx.Model(&models.Shot{}).Where("scene_id = ?", sceneID).Select("COALESCE(MAX(order_num), 0)").Scan(&maxOrder).Error; err != nil {
+				return err
+			}
+			shot.Order = maxOrder + 1
+		}
+		if err := validateShot(&shot); err != nil {
 			return err
 		}
 		var proposed []models.Shot
