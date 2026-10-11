@@ -1741,6 +1741,13 @@ func TestClassifyH3SceneModeAndInstructions(t *testing.T) {
 	if got := classifyH3SceneMode(explicitDrama, nil, nil); got != h3SceneDrama {
 		t.Fatalf("explicit scene mode did not override heuristic: %s", got)
 	}
+	combatShot := []models.Shot{{DirectorSource: "fight-video-action-design", PromptAction: "A blocks and counters."}}
+	if got := classifyH3SceneMode(explicitDrama, combatShot, nil); got != h3SceneAction {
+		t.Fatalf("audited combat Shot did not force combat compiler: %s", got)
+	}
+	if got := classifyH3SceneMode(explicitDrama, combatShot, []models.Dialogue{{Character: "姐姐", Text: "退后。"}}); got != h3SceneMixed {
+		t.Fatalf("combat Shot with dialogue did not use mixed compiler: %s", got)
+	}
 	if _, err := normalizeH3SceneMode("慢镜头"); err == nil {
 		t.Fatal("invalid scene mode accepted")
 	}

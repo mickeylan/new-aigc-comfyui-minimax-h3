@@ -1581,6 +1581,19 @@ func normalizeH3SceneMode(value string) (h3SceneMode, error) {
 }
 
 func classifyH3SceneMode(sc *models.Scene, shots []models.Shot, dubs []models.Dialogue) h3SceneMode {
+	combatDesigned := false
+	for _, shot := range shots {
+		if strings.TrimSpace(shot.DirectorSource) == "fight-video-action-design" {
+			combatDesigned = true
+			break
+		}
+	}
+	if combatDesigned {
+		if len(validSceneDialogues(dubs)) > 0 {
+			return h3SceneMixed
+		}
+		return h3SceneAction
+	}
 	if sc != nil {
 		if explicit, err := normalizeH3SceneMode(sc.SceneMode); err == nil && explicit != "" {
 			return explicit
