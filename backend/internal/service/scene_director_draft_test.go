@@ -181,7 +181,7 @@ func TestDialogueRhythmQueryQuotesReservedOrderColumn(t *testing.T) {
 
 func TestDialogueRhythmInstructionAllowsAttributedCrossCutListenerReaction(t *testing.T) {
 	got := dialogueRhythmDirectorInstruction([]models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "继续说话"}})
-	for _, want := range []string{"声音跨切延续", "听者必须闭口", "不能在听者镜头中开始一条新对白", "不得把这种连续对白改写成旁白或独立画外音", "narration或monologue"} {
+	for _, want := range []string{"声音跨切延续", "听者必须闭口", "不能在听者镜头中开始一条新对白", "不得把这种连续对白改写成旁白或独立画外音", "narration不得驱动画面人物口型", "monologue必须明确人物闭口"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q: %s", want, got)
 		}
@@ -276,6 +276,27 @@ func TestValidateDialogueRhythmDraftEnforcesIndependentOffscreenSpeaker(t *testi
 	visible := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 4, Dialogue: "门外有人吗？", ShotType: "阿宁近景", PromptSubject: "阿宁正面入镜"}}}
 	if err := validateDialogueRhythmDraft(visible, dialogues); err == nil || !strings.Contains(err.Error(), "说话人不得出现在画面主体中") {
 		t.Fatalf("visible offscreen speaker error=%v", err)
+	}
+}
+
+func TestValidateDialogueRhythmDraftEnforcesNarrationAndMonologueLipRules(t *testing.T) {
+	narration := []models.Dialogue{{ID: 1, Character: "旁白", SpeechType: "narration", Text: "夜幕降临。"}}
+	badNarration := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "夜幕降临。", ShotType: "女子近景", PromptAction: "女子同步口型"}}}
+	if err := validateDialogueRhythmDraft(badNarration, narration); err == nil || !strings.Contains(err.Error(), "旁白时不得驱动画面人物口型") {
+		t.Fatalf("narration lip-sync contradiction accepted: %v", err)
+	}
+	goodNarration := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "夜幕降临。", ShotType: "山谷空镜", PromptAction: "薄雾流动"}}}
+	if err := validateDialogueRhythmDraft(goodNarration, narration); err != nil {
+		t.Fatalf("valid narration rejected: %v", err)
+	}
+	monologue := []models.Dialogue{{ID: 2, Character: "阿宁", SpeechType: "monologue", Text: "我必须离开。"}}
+	badMonologue := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "我必须离开。", ShotType: "阿宁近景", PromptSubject: "阿宁凝视前方"}}}
+	if err := validateDialogueRhythmDraft(badMonologue, monologue); err == nil || !strings.Contains(err.Error(), "内心独白时") {
+		t.Fatalf("monologue without closed lips accepted: %v", err)
+	}
+	goodMonologue := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "我必须离开。", ShotType: "阿宁近景", PromptSubject: "阿宁闭口凝视前方", PromptAction: "不做口型"}}}
+	if err := validateDialogueRhythmDraft(goodMonologue, monologue); err != nil {
+		t.Fatalf("valid monologue rejected: %v", err)
 	}
 }
 
