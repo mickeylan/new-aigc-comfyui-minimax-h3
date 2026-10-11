@@ -1728,6 +1728,28 @@ func TestBuildMiniMaxH3RefPromptUsesStoryboardAsOptionalLastReference(t *testing
 	}
 }
 
+func TestValidateCombatShotProvenanceRejectsStaleButAllowsModified(t *testing.T) {
+	service, err := NewCombatReferenceService()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := service.CompileSelection([]CombatReferenceSelection{{Scope: "design", ID: "02"}}, 30000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audit, _ := json.Marshal(bundle.Audit)
+	shot := models.Shot{Order: 1, DirectorSource: "fight-video-action-design", CombatReferenceAudit: string(audit), Duration: 5, Description: "A attacks."}
+	shot.DirectorSourceSHA256 = shotDirectorSHA256(shot)
+	shot.Description = "A attacks while B blocks."
+	if err := validateCombatShotProvenance([]models.Shot{shot}); err != nil {
+		t.Fatalf("modified but reproducible combat shot rejected: %v", err)
+	}
+	shot.CombatReferenceAudit = `[{"scope":"design","id":"missing","content_sha256":"dead"}]`
+	if err := validateCombatShotProvenance([]models.Shot{shot}); err == nil || !strings.Contains(err.Error(), "审计已过期") {
+		t.Fatalf("stale combat shot accepted: %v", err)
+	}
+}
+
 func TestClassifyH3SceneModeAndInstructions(t *testing.T) {
 	drama := &models.Scene{Content: "姐姐看着妹妹，停顿后继续解释。"}
 	if got := classifyH3SceneMode(drama, nil, []models.Dialogue{{Character: "姐姐", Text: "相信我。"}}); got != h3SceneDrama {

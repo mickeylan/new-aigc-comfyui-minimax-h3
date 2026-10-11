@@ -1786,6 +1786,23 @@ func h3SceneModeInstruction(mode h3SceneMode) string {
 }
 
 // GenerateSceneVideoAction 用文本模型生成用户可审核编辑的 Ref2VA detailed_description 正文。
+func validateCombatShotProvenance(shots []models.Shot) error {
+	combatReferences, err := NewCombatReferenceService()
+	if err != nil {
+		return fmt.Errorf("加载战斗资料审计失败: %w", err)
+	}
+	for _, shot := range shots {
+		if strings.TrimSpace(shot.DirectorSource) != "fight-video-action-design" {
+			continue
+		}
+		status := combatReferences.ProvenanceStatus(shot)
+		if status.Status == "stale" {
+			return fmt.Errorf("镜头%d的战斗资料审计已过期或无法复现，请重新生成并审核战斗导演草稿", shot.Order)
+		}
+	}
+	return nil
+}
+
 func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, error) {
 	if s.textProvider == nil {
 		return "", fmt.Errorf("文本生成服务未配置")
@@ -1800,6 +1817,9 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	}
 	var shots []models.Shot
 	if err := s.db.Where("scene_id=?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
+		return "", err
+	}
+	if err := validateCombatShotProvenance(shots); err != nil {
 		return "", err
 	}
 	sceneMode := classifyH3SceneMode(sc, shots, dubs)
