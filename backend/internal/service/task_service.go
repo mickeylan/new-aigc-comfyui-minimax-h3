@@ -746,6 +746,34 @@ type FileMeta struct {
 	Name   string `json:"name"`
 }
 
+func (s *TaskService) validateH3TaskDuration(templateCode string, params map[string]any) error {
+	if !strings.HasPrefix(strings.TrimSpace(templateCode), "minimax_h3_") {
+		return nil
+	}
+	raw, ok := params["duration"]
+	if !ok {
+		return nil
+	}
+	var duration float64
+	switch value := raw.(type) {
+	case float64:
+		duration = value
+	case float32:
+		duration = float64(value)
+	case int:
+		duration = float64(value)
+	case json.Number:
+		duration, _ = value.Float64()
+	case string:
+		duration, _ = strconv.ParseFloat(strings.TrimSpace(value), 64)
+	}
+	limit := configuredH3GenerationDuration(s.db)
+	if duration < 3 || duration > limit {
+		return fmt.Errorf("MiniMax H3任务时长%.1f秒超出当前执行范围3–%.1f秒", duration, limit)
+	}
+	return nil
+}
+
 func (s *TaskService) CreateTask(req CreateTaskReq) (*models.Task, error) {
 	var tpl models.Template
 	if err := s.db.First(&tpl, req.TemplateID).Error; err != nil {
@@ -759,6 +787,9 @@ func (s *TaskService) CreateTask(req CreateTaskReq) (*models.Task, error) {
 	params := req.Params
 	if params == nil {
 		params = map[string]any{}
+	}
+	if err := s.validateH3TaskDuration(tpl.Code, params); err != nil {
+		return nil, err
 	}
 	if err := normalizeTemplateFiles(&tpl, params, req.Files); err != nil {
 		return nil, err
@@ -807,6 +838,13 @@ func (s *TaskService) CloneTaskSnapshot(sourceTaskID string, parentCandidateID *
 	var params map[string]any
 	if err := json.Unmarshal([]byte(source.ParamsJSON), &params); err != nil {
 		return nil, fmt.Errorf("任务参数快照损坏: %w", err)
+	}
+	var template models.Template
+	if err := s.db.First(&template, source.TemplateID).Error; err != nil {
+		return nil, err
+	}
+	if err := s.validateH3TaskDuration(template.Code, params); err != nil {
+		return nil, fmt.Errorf("任务快照不再满足当前执行策略: %w", err)
 	}
 	newID := s.NewTaskID()
 	params["_task_id"] = newID
@@ -908,6 +946,10 @@ func (s *TaskService) Execute(taskID string) error {
 
 	var params map[string]any
 	_ = json.Unmarshal([]byte(task.ParamsJSON), &params)
+	if err := s.validateH3TaskDuration(tpl.Code, params); err != nil {
+		s.failTask(&task, err.Error())
+		return err
+	}
 
 	// 模拟模式：不连接 ComfyUI，按模板参考耗时模拟进度推进直至成功
 	if s.cfg.Simulate {

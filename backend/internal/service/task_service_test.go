@@ -146,6 +146,37 @@ func TestMiniMaxH3TemplatesRenderWithoutPlaceholders(t *testing.T) {
 	}
 }
 
+func TestH3TaskDurationPolicyGuardsCreateAndSnapshotRetry(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.Template{}, &models.Task{}, &models.Setting{}); err != nil {
+		t.Fatal(err)
+	}
+	tpl := models.Template{Name: "H3", Code: "minimax_h3_t2v", Enabled: true, InputsJSON: `[{"key":"duration","type":"float"}]`, WorkflowJSON: `{}`}
+	if err := db.Create(&tpl).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := NewTaskService(&config.Config{}, db, nil, nil, NewHub(), nil)
+	if _, err := svc.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Params: map[string]any{"duration": 20.0}}); err == nil || !strings.Contains(err.Error(), "3–15.0") {
+		t.Fatalf("unsafe long task accepted: %v", err)
+	}
+	if err := db.Create(&models.Setting{Key: settingH3MaxDurationSeconds, Value: "24"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Params: map[string]any{"duration": 20.0}})
+	if err != nil {
+		t.Fatalf("configured long task rejected: %v", err)
+	}
+	if err := db.Model(&models.Setting{}).Where("key = ?", settingH3MaxDurationSeconds).Update("value", "15").Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CloneTaskSnapshot(task.TaskID, nil); err == nil || !strings.Contains(err.Error(), "任务快照不再满足当前执行策略") {
+		t.Fatalf("stale long snapshot retry accepted: %v", err)
+	}
+}
+
 func TestRenderWorkflowKeepsFortySecondDurationAndAlignsFrames(t *testing.T) {
 	tpl := models.Template{WorkflowJSON: `{"1":{"class_type":"Sampler","inputs":{"length":"{{length}}","duration":"{{duration}}"}}}`}
 	params := map[string]any{"duration": 40.0, "fps": 24.0}
