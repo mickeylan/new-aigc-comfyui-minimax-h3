@@ -579,12 +579,16 @@ func restoreDialogueRhythmDraftText(draft *sceneDirectorDraft, dialogues []model
 	return nil
 }
 
+func shotVisualText(shot sceneDirectorDraftShot) string {
+	return strings.Join([]string{shot.ShotType, shot.Description, shot.PromptSubject, shot.PromptAction, shot.StartState, shot.EndState}, " ")
+}
+
 func shotShowsSpeaker(shot sceneDirectorDraftShot, speaker string) bool {
 	speaker = strings.TrimSpace(speaker)
 	if speaker == "" {
 		return false
 	}
-	visual := strings.Join([]string{shot.PromptSubject, shot.ShotType}, " ")
+	visual := shotVisualText(shot)
 	if !strings.Contains(visual, speaker) {
 		return false
 	}
@@ -596,11 +600,31 @@ func shotShowsSpeaker(shot sceneDirectorDraftShot, speaker string) bool {
 	return true
 }
 
+func shotHasLipSync(shot sceneDirectorDraftShot) bool {
+	visual := shotVisualText(shot)
+	for _, marker := range []string{"同步口型", "口型同步", "开口说", "张口说", "嘴唇同步", "lip-sync", "lip sync"} {
+		if strings.Contains(strings.ToLower(visual), strings.ToLower(marker)) {
+			return true
+		}
+	}
+	return false
+}
+
+func shotHasClosedLips(shot sceneDirectorDraftShot) bool {
+	visual := shotVisualText(shot)
+	for _, marker := range []string{"闭口", "双唇闭合", "嘴唇闭合", "不张口", "不做口型", "closed lips", "mouth closed"} {
+		if strings.Contains(strings.ToLower(visual), strings.ToLower(marker)) {
+			return true
+		}
+	}
+	return false
+}
+
 func ordinaryDialogueCarryoverAllowed(shot sceneDirectorDraftShot, speaker string, startsAfterDialogueStart bool) bool {
 	if !startsAfterDialogueStart || strings.TrimSpace(speaker) == "" {
 		return false
 	}
-	visual := strings.Join([]string{shot.ShotType, shot.Description, shot.PromptSubject, shot.PromptAction, shot.StartState, shot.EndState}, " ")
+	visual := shotVisualText(shot)
 	if !strings.Contains(visual, speaker) {
 		return false
 	}
@@ -611,14 +635,8 @@ func ordinaryDialogueCarryoverAllowed(shot sceneDirectorDraftShot, speaker strin
 			break
 		}
 	}
-	closedLips := false
-	for _, marker := range []string{"闭口", "双唇闭合", "嘴唇闭合", "不张口", "不做口型"} {
-		if strings.Contains(visual, marker) {
-			closedLips = true
-			break
-		}
-	}
-	return carryover && closedLips
+	listenerReaction := strings.Contains(visual, "听者") || strings.Contains(visual, "聆听") || strings.Contains(visual, "倾听") || strings.Contains(visual, "反应")
+	return carryover && listenerReaction && shotHasClosedLips(shot) && !shotHasLipSync(shot)
 }
 
 func dialogueReviewNaturalMinimum(fragments []dialogueRhythmFragmentReview) float64 {
@@ -876,7 +894,7 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 				}
 				continue
 			}
-			visual := strings.Join([]string{shot.ShotType, shot.Description, shot.PromptSubject, shot.PromptAction, shot.StartState, shot.EndState}, " ")
+			visual := shotVisualText(shot)
 			if speechType == "narration" {
 				for _, marker := range []string{"同步口型", "开口说", "张口说", "嘴唇同步"} {
 					if strings.Contains(visual, marker) {
@@ -886,15 +904,8 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 				continue
 			}
 			if speechType == "monologue" {
-				closed := false
-				for _, marker := range []string{"闭口", "双唇闭合", "嘴唇闭合", "不张口", "不做口型"} {
-					if strings.Contains(visual, marker) {
-						closed = true
-						break
-					}
-				}
-				if !closed {
-					return fmt.Errorf("对白拆镜%d承载角色“%s”的内心独白时，必须明确人物闭口且不做口型", i+1, speaker)
+				if !shotHasClosedLips(shot) || shotHasLipSync(shot) {
+					return fmt.Errorf("对白拆镜%d承载角色“%s”的内心独白时，必须明确人物闭口且不得同时要求同步口型", i+1, speaker)
 				}
 				continue
 			}
@@ -902,7 +913,10 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 				continue
 			}
 			speakerVisible := shotShowsSpeaker(shot, speaker)
-			if speakerVisible || ordinaryDialogueCarryoverAllowed(shot, speaker, start > span.start) {
+			if speakerVisible && shotHasLipSync(shot) {
+				continue
+			}
+			if ordinaryDialogueCarryoverAllowed(shot, speaker, start > span.start) {
 				continue
 			}
 			return fmt.Errorf("对白拆镜%d承载角色“%s”的普通对白时，必须让说话人可见并同步口型，或明确标注同一句对白跨切延续且听者闭口", i+1, speaker)

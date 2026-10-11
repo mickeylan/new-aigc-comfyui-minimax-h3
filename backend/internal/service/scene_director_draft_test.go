@@ -326,6 +326,24 @@ func TestValidateDialogueRhythmDraftEnforcesNarrationAndMonologueLipRules(t *tes
 	}
 }
 
+func TestValidateDialogueRhythmDraftRejectsContradictorySpeechPresentation(t *testing.T) {
+	dialogue := []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信我。"}}
+	withoutLipSync := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "相信我。", ShotType: "阿宁近景", PromptSubject: "阿宁可见", PromptAction: "阿宁凝视前方"}}}
+	if err := validateDialogueRhythmDraft(withoutLipSync, dialogue); err == nil || !strings.Contains(err.Error(), "同步口型") {
+		t.Fatalf("visible dialogue without lip sync accepted: %v", err)
+	}
+	offscreen := []models.Dialogue{{ID: 2, Character: "阿宁", SpeechType: "offscreen_dialogue", Text: "门外有人吗？"}}
+	visibleInDescription := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 4, Dialogue: "门外有人吗？", ShotType: "室内中景", Description: "阿宁站在画面内开口", PromptSubject: "房门"}}}
+	if err := validateDialogueRhythmDraft(visibleInDescription, offscreen); err == nil || !strings.Contains(err.Error(), "不得出现在画面主体中") {
+		t.Fatalf("offscreen speaker visible in description accepted: %v", err)
+	}
+	monologue := []models.Dialogue{{ID: 3, Character: "阿宁", SpeechType: "monologue", Text: "我必须离开。"}}
+	contradictoryMonologue := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "我必须离开。", ShotType: "阿宁近景", PromptSubject: "阿宁闭口", PromptAction: "不做口型，同时同步口型"}}}
+	if err := validateDialogueRhythmDraft(contradictoryMonologue, monologue); err == nil || !strings.Contains(err.Error(), "不得同时要求同步口型") {
+		t.Fatalf("contradictory monologue accepted: %v", err)
+	}
+}
+
 func TestCanonicalDialogueTextPreservesInternalWhitespace(t *testing.T) {
 	if got := canonicalDialogueText("  I love\r\nyou  "); got != "  I love\nyou  " {
 		t.Fatalf("canonical dialogue changed internal whitespace: %q", got)

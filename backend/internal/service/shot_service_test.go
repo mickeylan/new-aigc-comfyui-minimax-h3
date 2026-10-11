@@ -292,7 +292,7 @@ func TestHandleCreateShotsRejectsUnsupportedDialogueCutWithoutMutation(t *testin
 	text := "相信姐姐永远不会离开你"
 	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: text}
 	db.Create(&dialogue)
-	existing, err := NewShotService(db).ReplaceShots(scene.ID, []models.Shot{{ShotType: "阿宁近景", Duration: 8, Dialogue: text, Description: "保留镜头", PromptSubject: "阿宁可见"}})
+	existing, err := NewShotService(db).ReplaceShots(scene.ID, []models.Shot{{ShotType: "阿宁近景", Duration: 8, Dialogue: text, Description: "保留镜头", PromptSubject: "阿宁可见", PromptAction: "阿宁同步口型"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +304,7 @@ func TestHandleCreateShotsRejectsUnsupportedDialogueCutWithoutMutation(t *testin
 		t.Fatal(err)
 	}
 	requested := []models.Shot{
-		{ShotType: "阿宁近景", Duration: 4, Dialogue: "相信姐姐永远", PromptSubject: "阿宁可见"},
+		{ShotType: "阿宁近景", Duration: 4, Dialogue: "相信姐姐永远", PromptSubject: "阿宁可见", PromptAction: "阿宁同步口型"},
 		{ShotType: "庭院空镜", Duration: 4, Dialogue: "不会离开你", PromptSubject: "落花"},
 	}
 	payload, err := json.Marshal(map[string]any{"dialogue_snapshot": snapshot, "shots": requested})
@@ -344,7 +344,7 @@ func TestHandleCreateShotsRequiresDialogueSnapshot(t *testing.T) {
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
 	db.Create(&scene)
 	db.Create(&models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信姐姐。"})
-	payload, _ := json.Marshal(map[string]any{"shots": []models.Shot{{ShotType: "阿宁近景", Duration: 3, Dialogue: "相信姐姐。", PromptSubject: "阿宁可见"}}})
+	payload, _ := json.Marshal(map[string]any{"shots": []models.Shot{{ShotType: "阿宁近景", Duration: 3, Dialogue: "相信姐姐。", PromptSubject: "阿宁可见", PromptAction: "阿宁同步口型"}}})
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/projects/x/scenes/y/shots", bytes.NewReader(payload))
@@ -424,11 +424,11 @@ func TestUpdateShotRejectsDialoguePresentationRegressionWithoutMutation(t *testi
 	db.Create(&scene)
 	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信姐姐。"}
 	db.Create(&dialogue)
-	shots, err := NewShotService(db).ReplaceShots(scene.ID, []models.Shot{{ShotType: "阿宁近景", Duration: 3, Dialogue: dialogue.Text, PromptSubject: "阿宁可见", Description: "保留描述"}})
+	shots, err := NewShotService(db).ReplaceShots(scene.ID, []models.Shot{{ShotType: "阿宁近景", Duration: 3, Dialogue: dialogue.Text, PromptSubject: "阿宁可见", PromptAction: "阿宁同步口型", Description: "阿宁可见并同步口型；保留描述"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = NewShotService(db).UpdateShot(shots[0].ID, map[string]any{"shot_type": "庭院空镜", "prompt_subject": "落花"})
+	_, err = NewShotService(db).UpdateShot(shots[0].ID, map[string]any{"shot_type": "庭院空镜", "prompt_subject": "落花", "prompt_action": "落花飘动", "description": "庭院空镜"})
 	if !errors.Is(err, ErrDialogueTimingBlocked) {
 		t.Fatalf("presentation regression accepted: %v", err)
 	}
@@ -436,7 +436,7 @@ func TestUpdateShotRejectsDialoguePresentationRegressionWithoutMutation(t *testi
 	if err := db.First(&saved, shots[0].ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if saved.ShotType != "阿宁近景" || saved.PromptSubject != "阿宁可见" || saved.Description != "保留描述" {
+	if saved.ShotType != "阿宁近景" || saved.PromptSubject != "阿宁可见" || saved.Description != "阿宁可见并同步口型；保留描述" {
 		t.Fatalf("rejected update mutated shot: %+v", saved)
 	}
 }
@@ -450,10 +450,10 @@ func TestCreateShotRejectsDialogueDuplicationWithoutMutation(t *testing.T) {
 	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信姐姐。"}
 	db.Create(&dialogue)
 	svc := NewShotService(db)
-	if _, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "阿宁近景", Duration: 3, Dialogue: dialogue.Text, PromptSubject: "阿宁可见"}}); err != nil {
+	if _, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "阿宁近景", Duration: 3, Dialogue: dialogue.Text, PromptSubject: "阿宁可见", PromptAction: "阿宁同步口型", Description: "阿宁可见并同步口型"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.CreateShot(scene.ID, models.Shot{ShotType: "阿宁近景", Duration: 3, Dialogue: dialogue.Text, PromptSubject: "阿宁可见"}); !errors.Is(err, ErrDialogueTimingBlocked) {
+	if _, err := svc.CreateShot(scene.ID, models.Shot{ShotType: "阿宁近景", Duration: 3, Dialogue: dialogue.Text, PromptSubject: "阿宁可见", PromptAction: "阿宁同步口型"}); !errors.Is(err, ErrDialogueTimingBlocked) {
 		t.Fatalf("duplicate dialogue Shot accepted: %v", err)
 	}
 	var count int64
@@ -477,8 +477,8 @@ func TestDeleteShotRejectsAuthoritativeDialogueLossWithoutMutation(t *testing.T)
 	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: "前半句，后半句。"}
 	db.Create(&dialogue)
 	shots, err := NewShotService(db).ReplaceShots(scene.ID, []models.Shot{
-		{ShotType: "阿宁近景", Duration: 3, Dialogue: "前半句，", PromptSubject: "阿宁可见"},
-		{ShotType: "阿宁近景", Duration: 3, Dialogue: "后半句。", PromptSubject: "阿宁可见"},
+		{ShotType: "阿宁近景", Duration: 3, Dialogue: "前半句，", PromptSubject: "阿宁可见", PromptAction: "阿宁同步口型"},
+		{ShotType: "阿宁近景", Duration: 3, Dialogue: "后半句。", PromptSubject: "阿宁可见", PromptAction: "阿宁同步口型"},
 	})
 	if err != nil {
 		t.Fatal(err)
