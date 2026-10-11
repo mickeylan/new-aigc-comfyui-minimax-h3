@@ -4122,16 +4122,43 @@ func ValidateFullH3Prompt(prompt string) []string {
 	return nil
 }
 
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" && !seen[value] {
+			seen[value] = true
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
 func ValidateFullH3PromptForReferences(prompt string, referenceLines []string) []string {
 	issues := ValidateFullH3Prompt(prompt)
-	// Ref2VA 中分镜图只是可选参考，不是强制首帧；仅校验提示词引用的 Picture
-	// 没有超出实际上传数量，不要求 detailed_description 必须从某张图开始。
-	for n := len(referenceLines) + 1; n <= maxSceneReferenceImages; n++ {
-		if strings.Contains(prompt, fmt.Sprintf("<Picture %d>", n)) || strings.Contains(prompt, fmt.Sprintf("<Subject %d>", n)) {
+	// Ref2VA 中分镜图只是可选参考，不是强制首帧；校验提示词中的每一个
+	// Picture/Subject 编号都落在实际上传范围内，不能只检查 1–9 的历史范围。
+	for _, match := range regexp.MustCompile(`<(?:Picture|Subject)\s+([0-9]+)>`).FindAllStringSubmatch(prompt, -1) {
+		if len(match) != 2 {
+			continue
+		}
+		n, _ := strconv.Atoi(match[1])
+		if n < 1 || n > len(referenceLines) {
 			issues = append(issues, fmt.Sprintf("引用了未上传的 Picture/Subject %d", n))
 		}
 	}
-	return issues
+	return uniqueStrings(issues)
+}
+
+func validateFinalH3Submission(prompt, template string, duration float64, referenceLines []string, dubs []models.Dialogue) []string {
+	issues := validateGeneratedH3Prompt(prompt, template, duration)
+	if template == "minimax_h3_ref2v" || template == "minimax_h3_ref2v_single" {
+		issues = append(issues, ValidateFullH3PromptForReferences(prompt, referenceLines)...)
+		if !videoAudioContractMatches(prompt, dubs) {
+			issues = append(issues, "声音契约与结构化Dialogue或禁配乐规则不一致")
+		}
+	}
+	return uniqueStrings(issues)
 }
 
 func ValidateVideoPrompt(detailText, charStr, locStr, propStr string) []string {
@@ -5817,6 +5844,13 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	}
 	if sc.ImageFile == "" && sceneVideoTemplateRequiresImage(tplCode) {
 		return fmt.Errorf("场景 %d 尚未生成画面；只有MiniMax H3文生视频模板允许无分镜图生成", sc.Order)
+	}
+	var finalReferenceLines []string
+	if tplCode == "minimax_h3_ref2v" || tplCode == "minimax_h3_ref2v_single" {
+		_, finalReferenceLines, _ = s.sceneVideoContinuityReferences(sc, pid)
+	}
+	if issues := validateFinalH3Submission(promptText, tplCode, duration, finalReferenceLines, dialogues); len(issues) > 0 {
+		return fmt.Errorf("视频提示词未通过 MiniMax H3 正式提交校验: %s", strings.Join(issues, "；"))
 	}
 	if sc.ImageFile != "" {
 		if err := s.restoreLegacyProjectInput(sc.ProjectID, sc.ImageFile); err != nil {

@@ -2531,6 +2531,23 @@ func TestApplyShotTimelineDoesNotRewriteRetentionShotReferences(t *testing.T) {
 	}
 }
 
+func TestValidateFinalH3SubmissionRejectsUnknownReferencesAndAudioDrift(t *testing.T) {
+	prompt := "subject_definitions:\n<Subject 1> is from <Picture 1>.\n\nsummary:\ntest\n\nretention_analysis:\n<Subject 1> preserved.\n\ndetailed_description:\n[Shot 1] <Subject 1> moves immediately at full real-time speed.\n\noverall_soundscape:\n" + h3SoundscapeContract(false) + "\n\nnon_diegetic_music:\n" + h3NoMusicContract()
+	if issues := validateFinalH3Submission(prompt, "minimax_h3_ref2v", 5, []string{"- <Picture 1>：角色"}, nil); len(issues) != 0 {
+		t.Fatalf("valid final submission rejected: %v", issues)
+	}
+	invalid := strings.Replace(prompt, "<Subject 1> moves", "<Subject 12> moves", 1)
+	issues := strings.Join(validateFinalH3Submission(invalid, "minimax_h3_ref2v", 5, []string{"- <Picture 1>：角色"}, nil), "|")
+	if !strings.Contains(issues, "Picture/Subject 12") {
+		t.Fatalf("unknown reference accepted: %s", issues)
+	}
+	withMusic := strings.Replace(prompt, h3NoMusicContract(), "Cinematic background music.", 1)
+	issues = strings.Join(validateFinalH3Submission(withMusic, "minimax_h3_ref2v", 5, []string{"- <Picture 1>：角色"}, nil), "|")
+	if !strings.Contains(issues, "声音契约") {
+		t.Fatalf("music drift accepted: %s", issues)
+	}
+}
+
 func TestValidateGeneratedH3PromptAcceptsReportedShotTwoTimestamp(t *testing.T) {
 	prompt := "subject_definitions:\n<Subject 2> is a referenced character.\n\nsummary:\ntest\n\nretention_analysis:\ntest\n\ndetailed_description:\n[Shot 1] A man stands among drifting peach blossoms.\n[Shot 2] At 00:04.000, <Subject 2> covers her mouth as tears spill down her cheeks. <Subject 2> (S1) says: <d>[Chinese] 舒寒……</d>.\n\noverall_soundscape:\nDialogue appears only in the shot timeline; no additional voices, narration, or singing are present.\n\nnon_diegetic_music:\nN/A"
 	for _, issue := range validateGeneratedH3Prompt(prompt, "minimax_h3_ref2v", 8) {
