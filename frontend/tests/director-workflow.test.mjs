@@ -103,6 +103,8 @@ test('AI导演支持可审核的长对白Native拆镜', () => {
   assert.match(source, /saving \|\| dialogueAuditBlockingIssues\.length > 0/)
   assert.match(source, /dialogue_review/)
   assert.match(source, /server_repairs/)
+  assert.match(source, /directorErrorMessage/)
+  assert.match(source, /自动修复记录/)
   assert.match(source, /服务端自动修复记录/)
   assert.match(source, /repair\.reason/)
   assert.match(source, /repair\.result/)
