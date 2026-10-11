@@ -595,10 +595,6 @@ func (s *ShotService) GetSceneShots(sceneID uint) ([]models.Shot, error) {
 }
 
 func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.Shot, error) {
-	var shot models.Shot
-	if err := s.db.First(&shot, shotID).Error; err != nil {
-		return nil, err
-	}
 	filtered := map[string]any{}
 	for key, value := range updates {
 		if !shotUpdateFields[key] {
@@ -610,77 +606,82 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 		}
 		filtered[column] = value
 	}
-	// Decode into a copy to apply the same validation before persistence.
-	candidate := shot
-	if v, ok := updates["act_type"].(string); ok {
-		candidate.ActType = models.ShotActType(v)
-	}
-	if v, ok := updates["shot_type"].(string); ok {
-		candidate.ShotType = v
-	}
-	if v, ok := updates["description"].(string); ok {
-		candidate.Description = v
-	}
-	if v, ok := updates["dialogue"].(string); ok {
-		candidate.Dialogue = v
-	}
-	if v, ok := updates["camera_angle"].(string); ok {
-		candidate.CameraAngle = v
-	}
-	if v, ok := updates["camera_movement"].(string); ok {
-		candidate.CameraMovement = v
-	}
-	if v, ok := updates["emotion"].(string); ok {
-		candidate.Emotion = v
-	}
-	if v, ok := updates["prompt_subject"].(string); ok {
-		candidate.PromptSubject = v
-	}
-	if v, ok := updates["prompt_action"].(string); ok {
-		candidate.PromptAction = v
-	}
-	if v, ok := updates["prompt_camera"].(string); ok {
-		candidate.PromptCamera = v
-	}
-	if v, ok := updates["prompt_lighting"].(string); ok {
-		candidate.PromptLighting = v
-	}
-	if v, ok := updates["prompt_style"].(string); ok {
-		candidate.PromptStyle = v
-	}
-	if v, ok := updates["negative_prompt"].(string); ok {
-		candidate.NegativePrompt = v
-	}
-	if v, ok := updates["transition_type"].(string); ok {
-		candidate.TransitionType = models.ShotTransitionType(v)
-	}
-	if v, ok := updates["transition_note"].(string); ok {
-		candidate.TransitionNote = v
-	}
-	if v, ok := updates["start_state"].(string); ok {
-		candidate.StartState = v
-	}
-	if v, ok := updates["end_state"].(string); ok {
-		candidate.EndState = v
-	}
-	if v, ok := updates["order"].(float64); ok && v < 1 {
-		return nil, fmt.Errorf("order 必须大于0")
-	}
-	if v, ok := updates["duration"].(float64); ok {
-		candidate.Duration = v
-	}
-	if value, ok := updates["action_timeline"]; ok {
-		data, err := json.Marshal(value)
-		if err != nil || json.Unmarshal(data, &candidate.ActionTimeline) != nil {
-			return nil, fmt.Errorf("action_timeline 格式无效")
-		}
-		filtered["action_timeline_json"] = candidate.ActionTimeline
-		delete(filtered, "action_timeline")
-	}
-	if err := validateShot(&candidate); err != nil {
-		return nil, err
-	}
+	var shot models.Shot
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&shot, shotID).Error; err != nil {
+			return err
+		}
+		// Decode into a copy of the row read inside this transaction, so validation
+		// and persistence cannot be based on an earlier stale read.
+		candidate := shot
+		if v, ok := updates["act_type"].(string); ok {
+			candidate.ActType = models.ShotActType(v)
+		}
+		if v, ok := updates["shot_type"].(string); ok {
+			candidate.ShotType = v
+		}
+		if v, ok := updates["description"].(string); ok {
+			candidate.Description = v
+		}
+		if v, ok := updates["dialogue"].(string); ok {
+			candidate.Dialogue = v
+		}
+		if v, ok := updates["camera_angle"].(string); ok {
+			candidate.CameraAngle = v
+		}
+		if v, ok := updates["camera_movement"].(string); ok {
+			candidate.CameraMovement = v
+		}
+		if v, ok := updates["emotion"].(string); ok {
+			candidate.Emotion = v
+		}
+		if v, ok := updates["prompt_subject"].(string); ok {
+			candidate.PromptSubject = v
+		}
+		if v, ok := updates["prompt_action"].(string); ok {
+			candidate.PromptAction = v
+		}
+		if v, ok := updates["prompt_camera"].(string); ok {
+			candidate.PromptCamera = v
+		}
+		if v, ok := updates["prompt_lighting"].(string); ok {
+			candidate.PromptLighting = v
+		}
+		if v, ok := updates["prompt_style"].(string); ok {
+			candidate.PromptStyle = v
+		}
+		if v, ok := updates["negative_prompt"].(string); ok {
+			candidate.NegativePrompt = v
+		}
+		if v, ok := updates["transition_type"].(string); ok {
+			candidate.TransitionType = models.ShotTransitionType(v)
+		}
+		if v, ok := updates["transition_note"].(string); ok {
+			candidate.TransitionNote = v
+		}
+		if v, ok := updates["start_state"].(string); ok {
+			candidate.StartState = v
+		}
+		if v, ok := updates["end_state"].(string); ok {
+			candidate.EndState = v
+		}
+		if v, ok := updates["order"].(float64); ok && v < 1 {
+			return fmt.Errorf("order 必须大于0")
+		}
+		if v, ok := updates["duration"].(float64); ok {
+			candidate.Duration = v
+		}
+		if value, ok := updates["action_timeline"]; ok {
+			data, err := json.Marshal(value)
+			if err != nil || json.Unmarshal(data, &candidate.ActionTimeline) != nil {
+				return fmt.Errorf("action_timeline 格式无效")
+			}
+			filtered["action_timeline_json"] = candidate.ActionTimeline
+			delete(filtered, "action_timeline")
+		}
+		if err := validateShot(&candidate); err != nil {
+			return err
+		}
 		var sceneShots []models.Shot
 		if err := tx.Where("scene_id = ?", shot.SceneID).Order("order_num, id").Find(&sceneShots).Error; err != nil {
 			return err
