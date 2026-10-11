@@ -666,6 +666,19 @@ func (s *ShotService) DeleteShot(shotID uint) error {
 		if err := tx.First(&shot, shotID).Error; err != nil {
 			return err
 		}
+		var remaining []models.Shot
+		if err := tx.Where("scene_id = ? AND id <> ?", shot.SceneID, shot.ID).Order("order_num, id").Find(&remaining).Error; err != nil {
+			return err
+		}
+		var dialogues []models.Dialogue
+		if err := tx.Where("scene_id = ?", shot.SceneID).Order("`order`, id").Find(&dialogues).Error; err != nil {
+			return err
+		}
+		if dialogues = validSceneDialogues(dialogues); len(dialogues) > 0 {
+			if err := validateDialogueShotTiming(remaining, dialogues); err != nil {
+				return err
+			}
+		}
 		if err := deleteShotAssociations(tx, shot.ID); err != nil {
 			return err
 		}

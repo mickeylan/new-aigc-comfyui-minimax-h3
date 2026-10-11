@@ -377,6 +377,33 @@ func TestUpdateShotRejectsDialoguePresentationRegressionWithoutMutation(t *testi
 	}
 }
 
+func TestDeleteShotRejectsAuthoritativeDialogueLossWithoutMutation(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "delete dialogue guard"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
+	db.Create(&scene)
+	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: "前半句，后半句。"}
+	db.Create(&dialogue)
+	shots, err := NewShotService(db).ReplaceShots(scene.ID, []models.Shot{
+		{ShotType: "阿宁近景", Duration: 3, Dialogue: "前半句，", PromptSubject: "阿宁可见"},
+		{ShotType: "阿宁近景", Duration: 3, Dialogue: "后半句。", PromptSubject: "阿宁可见"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewShotService(db).DeleteShot(shots[1].ID); !errors.Is(err, ErrDialogueTimingBlocked) {
+		t.Fatalf("dialogue-bearing shot deletion accepted: %v", err)
+	}
+	var count int64
+	if err := db.Model(&models.Shot{}).Where("scene_id = ?", scene.ID).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("rejected deletion changed shot count: %d", count)
+	}
+}
+
 func TestShotServicePreservesSceneNegativeConstraints(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	project := models.Project{Title: "negative constraints"}
