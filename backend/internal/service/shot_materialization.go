@@ -156,7 +156,13 @@ func (s *ShotService) PreviewMaterialization(projectID, sceneID uint) (*ShotMate
 	if err := s.db.Where("scene_id = ? AND project_id = ?", sceneID, projectID).Order("`order` ASC, `id` ASC").Find(&dialogues).Error; err != nil {
 		return nil, err
 	}
-	fragments, err := planDialogueFragments(shots, validSceneDialogues(dialogues))
+	authoritativeDialogues := validSceneDialogues(dialogues)
+	if len(authoritativeDialogues) > 0 {
+		if err := validateDialogueShotTiming(shots, authoritativeDialogues); err != nil {
+			return nil, err
+		}
+	}
+	fragments, err := planDialogueFragments(shots, authoritativeDialogues)
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +216,13 @@ func (s *ShotService) Materialize(projectID, sceneID uint) ([]models.Scene, erro
 		if err := tx.Where("scene_id = ? AND project_id = ?", sceneID, projectID).Order("`order` ASC, `id` ASC").Find(&dialogues).Error; err != nil {
 			return err
 		}
-		fragments, err := planDialogueFragments(shots, validSceneDialogues(dialogues))
+		authoritativeDialogues := validSceneDialogues(dialogues)
+		if len(authoritativeDialogues) > 0 {
+			if err := validateDialogueShotTiming(shots, authoritativeDialogues); err != nil {
+				return err
+			}
+		}
+		fragments, err := planDialogueFragments(shots, authoritativeDialogues)
 		if err != nil {
 			return err
 		}

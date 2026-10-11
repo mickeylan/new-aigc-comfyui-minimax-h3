@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"comfyui-console/internal/models"
@@ -42,9 +43,9 @@ func TestMaterializeShotsCreatesNativeScenesAndPreservesDialogue(t *testing.T) {
 	_ = db.Create(&d1).Error
 	_ = db.Create(&d2).Error
 	shots := []models.Shot{
-		{SceneID: source.ID, Order: 1, ActType: models.ShotActSetup, ShotType: "近景", Duration: 4, Description: "若彤询问", Dialogue: "姐姐，", PromptSubject: "若彤", PromptAction: "询问", PromptCamera: "近景", PromptLighting: "夕阳", PromptStyle: "写实"},
-		{SceneID: source.ID, Order: 2, ActType: models.ShotActRising, ShotType: "反应", Duration: 5, Description: "若琳反应，若彤画外音", Dialogue: "你还好吗？", PromptSubject: "若琳", PromptAction: "聆听", PromptCamera: "特写", PromptLighting: "夕阳", PromptStyle: "写实"},
-		{SceneID: source.ID, Order: 3, ActType: models.ShotActResolution, ShotType: "双人", Duration: 4, Description: "若琳回答", Dialogue: "我很好。", PromptSubject: "姐妹", PromptAction: "回答", PromptCamera: "双人", PromptLighting: "夕阳", PromptStyle: "写实"},
+		{SceneID: source.ID, Order: 1, ActType: models.ShotActSetup, ShotType: "若彤近景", Duration: 4, Description: "若彤询问并同步口型", Dialogue: "姐姐，", PromptSubject: "若彤可见", PromptAction: "若彤同步口型询问", PromptCamera: "近景", PromptLighting: "夕阳", PromptStyle: "写实"},
+		{SceneID: source.ID, Order: 2, ActType: models.ShotActRising, ShotType: "若琳听者反应", Duration: 5, Description: "若琳闭口聆听，若彤声音跨切延续", Dialogue: "你还好吗？", PromptSubject: "若琳可见，若彤不入镜", PromptAction: "若琳保持闭口聆听，若彤声音跨切延续", PromptCamera: "特写", PromptLighting: "夕阳", PromptStyle: "写实"},
+		{SceneID: source.ID, Order: 3, ActType: models.ShotActResolution, ShotType: "若琳近景", Duration: 4, Description: "若琳回答并同步口型", Dialogue: "我很好。", PromptSubject: "若琳可见", PromptAction: "若琳同步口型回答", PromptCamera: "近景", PromptLighting: "夕阳", PromptStyle: "写实"},
 	}
 	for i := range shots {
 		if err := db.Create(&shots[i]).Error; err != nil {
@@ -138,6 +139,38 @@ func TestPlanDialogueFragmentsPreservesInternalWhitespace(t *testing.T) {
 	shots[0].Dialogue = "Ilove "
 	if _, err := planDialogueFragments(shots, dialogues); err == nil {
 		t.Fatal("whitespace rewrite accepted during materialization")
+	}
+}
+
+func TestMaterializationRejectsInvalidDialoguePresentationWithoutMutation(t *testing.T) {
+	db := newShotMaterializationDB(t)
+	project := models.Project{Title: "guard", Generation: 1}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 1, Title: "对白", Duration: 8}
+	db.Create(&scene)
+	db.Create(&models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信姐姐。"})
+	shots := []models.Shot{
+		{SceneID: scene.ID, Order: 1, ActType: models.ShotActSetup, ShotType: "空镜", Duration: 4, Description: "庭院空镜", Dialogue: "相信", PromptSubject: "庭院"},
+		{SceneID: scene.ID, Order: 2, ActType: models.ShotActResolution, ShotType: "空镜", Duration: 4, Description: "庭院空镜", Dialogue: "姐姐。", PromptSubject: "庭院"},
+	}
+	for i := range shots {
+		db.Create(&shots[i])
+	}
+	svc := NewShotService(db)
+	if _, err := svc.PreviewMaterialization(project.ID, scene.ID); err == nil || !strings.Contains(err.Error(), "对白节奏导演草稿未通过自然语速审计") {
+		t.Fatalf("invalid preview accepted: %v", err)
+	}
+	if _, err := svc.Materialize(project.ID, scene.ID); err == nil {
+		t.Fatal("invalid materialization accepted")
+	}
+	var source models.Scene
+	if err := db.First(&source, scene.ID).Error; err != nil {
+		t.Fatalf("source scene was mutated or deleted: %v", err)
+	}
+	var count int64
+	db.Model(&models.Shot{}).Where("scene_id = ?", scene.ID).Count(&count)
+	if count != 2 {
+		t.Fatalf("source shots changed: %d", count)
 	}
 }
 
