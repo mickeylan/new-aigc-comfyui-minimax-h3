@@ -388,10 +388,10 @@ func (v *VolcClient) SetSetting(key, value string) {
 func (v *VolcClient) AllSettings() map[string]string {
 	keys := []string{SettingVolcAPIKey, SettingVolcBaseURL, SettingVolcTextModel, SettingVolcImgModel, SettingVolcImgSize,
 		SettingAliAPIKey, SettingAliBaseURL, SettingAliTTSModel, SettingAliTTSVoice, SettingAliVoiceMale, SettingAliTTSStyle, SettingAliTTSExtra,
-		SettingMiniMaxAPIKey, SettingMiniMaxBaseURL, SettingMiniMaxModel, "video_concurrency", "video_resolution"}
+		SettingMiniMaxAPIKey, SettingMiniMaxBaseURL, SettingMiniMaxModel, "video_concurrency", "video_resolution", settingH3MaxDurationSeconds}
 	defs := []string{"", DefaultVolcBaseURL, DefaultVolcTextModel, DefaultVolcImgModel, DefaultVolcImgSize,
 		"", "https://llm-ebg0fg1ejgmvv30a.cn-beijing.maas.aliyuncs.com", "qwen3-tts-flash", "Cherry", "Ethan", "{}", "{}",
-		"", "", DefaultMiniMaxModel, "4", "480p"}
+		"", "", DefaultMiniMaxModel, "4", "480p", "15"}
 	out := map[string]string{}
 	for i, k := range keys {
 		out[k] = v.GetSetting(k, defs[i])

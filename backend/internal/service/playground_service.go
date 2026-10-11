@@ -59,7 +59,7 @@ func (s *PlaygroundService) Create(input CreatePlaygroundRunInput) ([]models.Pla
 	if err := s.db.Where("code = ? AND enabled = ?", input.Template, true).First(&template).Error; err != nil {
 		return nil, fmt.Errorf("template is not available in model catalog")
 	}
-	entry, err := catalogEntryFromTemplate(template)
+	entry, err := catalogEntryFromTemplate(s.db, template)
 	if err != nil {
 		return nil, fmt.Errorf("invalid template catalog entry: %w", err)
 	}

@@ -166,6 +166,11 @@
           </select>
           <div class="field-hint">场景视频生成分辨率；越高越慢、显存越大</div>
         </div>
+        <div class="field">
+          <label for="h3_max_duration_seconds">MiniMax H3 单任务时长上限（秒）</label>
+          <input id="h3_max_duration_seconds" v-model.number="form.h3_max_duration_seconds" type="number" min="3" max="60" step="1" class="input" />
+          <div class="field-hint">默认15秒。超过15秒只用于已实测的高显存实例；本机约12GB显存不建议提高，30秒以上通常风险很高。该设置是执行门禁，不改变内部Shot的3–15秒规则。</div>
+        </div>
       </div>
 
       <div class="actions-row">
@@ -325,6 +330,9 @@ onMounted(async () => {
     if (!form.value.minimax_coding_model) {
       form.value.minimax_coding_model = 'MiniMax-M2.5'
     }
+    if (!form.value.h3_max_duration_seconds) {
+      form.value.h3_max_duration_seconds = 15
+    }
     aliStyleText.value = data.ali_tts_style || '{}'
     aliExtraText.value = data.ali_tts_extra || '{}'
     if (data.volc_api_key && data.volc_api_key.includes('****')) {
@@ -354,6 +362,7 @@ async function save(showFeedback = true) {
     if (!payload.ali_api_key) delete payload.ali_api_key
     if (!payload.minimax_coding_api_key) delete payload.minimax_coding_api_key
     if (payload.video_concurrency != null) payload.video_concurrency = String(payload.video_concurrency)
+    if (payload.h3_max_duration_seconds != null) payload.h3_max_duration_seconds = String(payload.h3_max_duration_seconds)
     // 校验 JSON
     try { JSON.parse(aliStyleText.value) } catch { throw new Error('角色音色映射不是合法 JSON') }
     try { JSON.parse(aliExtraText.value) } catch { throw new Error('额外参数不是合法 JSON') }

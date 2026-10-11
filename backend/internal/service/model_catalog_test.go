@@ -18,7 +18,7 @@ func TestModelCatalogDerivesCurrentTemplateCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.Template{}); err != nil {
+	if err := db.AutoMigrate(&models.Template{}, &models.Setting{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := InitSystemTemplates(db); err != nil {
@@ -38,8 +38,20 @@ func TestModelCatalogDerivesCurrentTemplateCapabilities(t *testing.T) {
 	if ref.Mode != "reference-to-video" || ref.MaxReferences != 9 || !ref.SupportsAudio {
 		t.Fatalf("ref2v capabilities = %+v", ref)
 	}
-	if ref.Duration == nil || value(ref.Duration.Min) != 3 || value(ref.Duration.Max) != maxLongSceneVideoDuration || value(ref.Duration.Default) != 5 {
+	if ref.Duration == nil || value(ref.Duration.Min) != 3 || value(ref.Duration.Max) != defaultH3GenerationDuration || value(ref.Duration.Default) != 5 {
 		t.Fatalf("ref2v duration = %+v", ref.Duration)
+	}
+	if err := db.Create(&models.Setting{Key: settingH3MaxDurationSeconds, Value: "24"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	custom, err := NewModelCatalogService(db).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range custom {
+		if entry.TemplateCode == "minimax_h3_ref2v" && value(entry.Duration.Max) != 24 {
+			t.Fatalf("configured ref2v max duration = %+v", entry.Duration)
+		}
 	}
 
 	firstLast := byCode["minimax_h3_first_last"]
@@ -69,7 +81,7 @@ func TestModelCatalogOnlyReturnsEnabledTemplatesAndRejectsBadMetadata(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.Template{}); err != nil {
+	if err := db.AutoMigrate(&models.Template{}, &models.Setting{}); err != nil {
 		t.Fatal(err)
 	}
 	templates := []models.Template{
@@ -96,7 +108,7 @@ func TestHandleListModelCatalogResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.Template{}); err != nil {
+	if err := db.AutoMigrate(&models.Template{}, &models.Setting{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&models.Template{

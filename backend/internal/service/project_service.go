@@ -1362,7 +1362,26 @@ func (s *ProjectService) planEpisodeInfo(p *models.Project, n int) (string, stri
 	return "", "", 0, 0
 }
 
-const maxLongSceneVideoDuration = 60.0
+const (
+	maxLongSceneVideoDuration   = 60.0
+	defaultH3GenerationDuration = 15.0
+	settingH3MaxDurationSeconds = "h3_max_duration_seconds"
+)
+
+func configuredH3GenerationDuration(db *gorm.DB) float64 {
+	if db == nil {
+		return defaultH3GenerationDuration
+	}
+	var setting models.Setting
+	if err := db.Where("key = ?", settingH3MaxDurationSeconds).First(&setting).Error; err != nil {
+		return defaultH3GenerationDuration
+	}
+	value, err := strconv.ParseFloat(strings.TrimSpace(setting.Value), 64)
+	if err != nil || value < 3 {
+		return defaultH3GenerationDuration
+	}
+	return math.Min(value, maxLongSceneVideoDuration)
+}
 
 // normalizeSceneDuration only protects malformed legacy values. A Scene may be a
 // long H3 generation unit; internal director Shots and dialogue materialization
@@ -5819,6 +5838,10 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		if err := s.continuity.PrepareScene(sc); err != nil {
 			return err
 		}
+	}
+	durationLimit := configuredH3GenerationDuration(s.db)
+	if sc.Duration > durationLimit {
+		return fmt.Errorf("场景 %d 为 %.1f 秒，超过当前 MiniMax H3 生成上限 %.1f 秒；长视频显著增加显存占用，只有在目标实例实测通过后才应在设置中提高上限", sc.Order, sc.Duration, durationLimit)
 	}
 	videoW, videoH := aspectVideoSize(p.AspectRatio, s.videoResolution())
 	pid := fmt.Sprintf("%d", p.ID)

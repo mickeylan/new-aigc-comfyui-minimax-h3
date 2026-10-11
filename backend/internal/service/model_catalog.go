@@ -63,7 +63,7 @@ func (s *ModelCatalogService) List() ([]ModelCatalogEntry, error) {
 	}
 	entries := make([]ModelCatalogEntry, 0, len(templates))
 	for _, template := range templates {
-		entry, err := catalogEntryFromTemplate(template)
+		entry, err := catalogEntryFromTemplate(s.db, template)
 		if err != nil {
 			return nil, fmt.Errorf("derive catalog entry %s: %w", template.Code, err)
 		}
@@ -72,7 +72,7 @@ func (s *ModelCatalogService) List() ([]ModelCatalogEntry, error) {
 	return entries, nil
 }
 
-func catalogEntryFromTemplate(template models.Template) (ModelCatalogEntry, error) {
+func catalogEntryFromTemplate(db *gorm.DB, template models.Template) (ModelCatalogEntry, error) {
 	var inputs []catalogInput
 	if err := json.Unmarshal([]byte(template.InputsJSON), &inputs); err != nil {
 		return ModelCatalogEntry{}, err
@@ -105,7 +105,7 @@ func catalogEntryFromTemplate(template models.Template) (ModelCatalogEntry, erro
 	if duration, ok := byKey["duration"]; ok {
 		value := numericCapability(duration)
 		if isVideoTemplateCode(template.Code) && strings.HasPrefix(template.Code, "minimax_h3_") {
-			max := maxLongSceneVideoDuration
+			max := configuredH3GenerationDuration(db)
 			value.Max = &max
 		}
 		entry.Duration = &value

@@ -14,7 +14,7 @@ func (s *ModelCatalogService) ValidateVideoSelection(code string, files map[stri
 	if err := s.db.Where("code = ? AND enabled = ?", strings.TrimSpace(code), true).First(&template).Error; err != nil {
 		return nil, fmt.Errorf("视频模板 %s 不可用", code)
 	}
-	entry, err := catalogEntryFromTemplate(template)
+	entry, err := catalogEntryFromTemplate(s.db, template)
 	if err != nil {
 		return nil, fmt.Errorf("视频模板 %s 能力元数据无效: %w", code, err)
 	}
