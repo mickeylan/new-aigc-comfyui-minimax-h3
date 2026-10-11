@@ -146,6 +146,23 @@ func TestMiniMaxH3TemplatesRenderWithoutPlaceholders(t *testing.T) {
 	}
 }
 
+func TestRenderWorkflowKeepsFortySecondDurationAndAlignsFrames(t *testing.T) {
+	tpl := models.Template{WorkflowJSON: `{"1":{"class_type":"Sampler","inputs":{"length":"{{length}}","duration":"{{duration}}"}}}`}
+	params := map[string]any{"duration": 40.0, "fps": 24.0}
+	workflow, err := (&TaskService{}).RenderWorkflow(&tpl, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	length, ok := params["length"].(int)
+	if !ok || length < 960 || length%17 != 5 {
+		t.Fatalf("long video frame alignment invalid: %#v", params["length"])
+	}
+	encoded, _ := json.Marshal(workflow)
+	if !strings.Contains(string(encoded), `"duration":"40"`) {
+		t.Fatalf("duration was truncated in workflow: %s", encoded)
+	}
+}
+
 func TestTemplateScalarDefaultsCanBeOverridden(t *testing.T) {
 	tpl := loadTemplateForTest(t, "krea2_character_portrait.json")
 	params := baseParams()
