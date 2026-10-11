@@ -606,6 +606,26 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 		return nil, err
 	}
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		var sceneShots []models.Shot
+		if err := tx.Where("scene_id = ?", shot.SceneID).Order("order_num, id").Find(&sceneShots).Error; err != nil {
+			return err
+		}
+		for i := range sceneShots {
+			if sceneShots[i].ID == shot.ID {
+				candidate.Order = sceneShots[i].Order
+				sceneShots[i] = candidate
+				break
+			}
+		}
+		var dialogues []models.Dialogue
+		if err := tx.Where("scene_id = ?", shot.SceneID).Order("`order`, id").Find(&dialogues).Error; err != nil {
+			return err
+		}
+		if dialogues = validSceneDialogues(dialogues); len(dialogues) > 0 {
+			if err := validateDialogueShotTiming(sceneShots, dialogues); err != nil {
+				return err
+			}
+		}
 		if err := tx.Model(&shot).Updates(filtered).Error; err != nil {
 			return err
 		}

@@ -343,6 +343,31 @@ func TestHandleCreateShotsReturnsConflictForStaleDialogueSnapshot(t *testing.T) 
 	}
 }
 
+func TestUpdateShotRejectsDialoguePresentationRegressionWithoutMutation(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "update dialogue guard"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
+	db.Create(&scene)
+	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信姐姐。"}
+	db.Create(&dialogue)
+	shots, err := NewShotService(db).ReplaceShots(scene.ID, []models.Shot{{ShotType: "阿宁近景", Duration: 3, Dialogue: dialogue.Text, PromptSubject: "阿宁可见", Description: "保留描述"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewShotService(db).UpdateShot(shots[0].ID, map[string]any{"shot_type": "庭院空镜", "prompt_subject": "落花"})
+	if !errors.Is(err, ErrDialogueTimingBlocked) {
+		t.Fatalf("presentation regression accepted: %v", err)
+	}
+	var saved models.Shot
+	if err := db.First(&saved, shots[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.ShotType != "阿宁近景" || saved.PromptSubject != "阿宁可见" || saved.Description != "保留描述" {
+		t.Fatalf("rejected update mutated shot: %+v", saved)
+	}
+}
+
 func TestShotServicePreservesSceneNegativeConstraints(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	project := models.Project{Title: "negative constraints"}

@@ -1264,7 +1264,12 @@ func (s *Service) HandleGetSceneShots(c *gin.Context) {
 			rows[i].CombatProvenance = &provenance
 		}
 	}
-	c.JSON(200, gin.H{"shots": rows})
+	_, dialogueSnapshot, err := loadSceneDialogueSnapshot(s.DB, uint(sceneID))
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"shots": rows, "dialogue_snapshot": dialogueSnapshot})
 }
 
 func (s *Service) HandlePreviewShotRetime(c *gin.Context) { s.handleShotRetime(c, false) }
