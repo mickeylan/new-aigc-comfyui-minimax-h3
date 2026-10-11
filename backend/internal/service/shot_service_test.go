@@ -185,6 +185,22 @@ func TestReplaceShotsWithSnapshotEnforcesAuthoritativeSpeakerPresentation(t *tes
 	}
 }
 
+func TestValidateShotRejectsExplicitEndlessAndCanvasModes(t *testing.T) {
+	base := models.Shot{ActType: models.ShotActSetup, ShotType: "近景", Duration: 4}
+	for _, description := range []string{"改为使用Endless延长镜头", "Use Endless mode for this shot", "切换Canvas工作流", "Use Canvas workflow"} {
+		shot := base
+		shot.Description = description
+		if err := validateShot(&shot); err == nil || !strings.Contains(err.Error(), "禁止使用Endless或Canvas") {
+			t.Fatalf("prohibited mode %q accepted: %v", description, err)
+		}
+	}
+	allowed := base
+	allowed.Description = "禁止使用Endless，也不得使用Canvas；do not use Endless or Canvas，只制作Native镜头"
+	if err := validateShot(&allowed); err != nil {
+		t.Fatalf("negative constraint was incorrectly rejected: %v", err)
+	}
+}
+
 func TestValidateShotCameraContractRejectsConflictsAndMultipleMoves(t *testing.T) {
 	base := models.Shot{ActType: models.ShotActSetup, ShotType: "近景", Duration: 4}
 	staticMove := base

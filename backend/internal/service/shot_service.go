@@ -170,6 +170,28 @@ func validateShot(shot *models.Shot) error {
 	if err := validateShotCameraContract(*shot); err != nil {
 		return err
 	}
+	if err := validateNativeShotMode(*shot); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateNativeShotMode(shot models.Shot) error {
+	text := strings.ToLower(strings.Join([]string{
+		shot.ShotType, shot.CameraMovement, shot.Description, shot.StartState, shot.EndState,
+		shot.PromptSubject, shot.PromptAction, shot.PromptCamera, shot.PromptStyle,
+	}, " "))
+	for _, negation := range []string{"禁止使用", "不得使用", "不要使用", "do not use", "never use"} {
+		text = strings.ReplaceAll(text, negation, "forbid ")
+	}
+	for _, marker := range []string{
+		"使用endless", "采用endless", "切换endless", "endless mode", "use endless",
+		"使用canvas", "采用canvas", "切换canvas", "canvas workflow", "use canvas",
+	} {
+		if strings.Contains(text, marker) {
+			return fmt.Errorf("导演镜头只能使用3至15秒Native H3流程，禁止使用Endless或Canvas")
+		}
+	}
 	return nil
 }
 
