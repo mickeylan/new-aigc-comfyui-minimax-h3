@@ -61,7 +61,7 @@ func loadSceneDialogueSnapshot(tx *gorm.DB, sceneID uint) ([]models.Dialogue, st
 	if err := tx.Where("scene_id = ?", sceneID).Order("`order`, id").Find(&dialogues).Error; err != nil {
 		return nil, "", err
 	}
-	dialogues = validSceneDialogues(dialogues)
+	dialogues = authoritativeSceneDialogues(dialogues)
 	return dialogues, dialogueSnapshotToken(dialogues), nil
 }
 
@@ -367,7 +367,7 @@ func (s *ShotService) CreateShot(sceneID uint, shot models.Shot) (*models.Shot, 
 		if err := tx.Where("scene_id = ?", sceneID).Order("`order`, id").Find(&dialogues).Error; err != nil {
 			return err
 		}
-		if dialogues = validSceneDialogues(dialogues); len(dialogues) > 0 {
+		if dialogues = authoritativeSceneDialogues(dialogues); len(dialogues) > 0 {
 			if err := validateDialogueShotTiming(proposed, dialogues); err != nil {
 				return err
 			}
@@ -696,7 +696,7 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 		if err := tx.Where("scene_id = ?", shot.SceneID).Order("`order`, id").Find(&dialogues).Error; err != nil {
 			return err
 		}
-		if dialogues = validSceneDialogues(dialogues); len(dialogues) > 0 {
+		if dialogues = authoritativeSceneDialogues(dialogues); len(dialogues) > 0 {
 			if err := validateDialogueShotTiming(sceneShots, dialogues); err != nil {
 				return err
 			}
@@ -749,7 +749,7 @@ func (s *ShotService) DeleteShot(shotID uint) error {
 		if err := tx.Where("scene_id = ?", shot.SceneID).Order("`order`, id").Find(&dialogues).Error; err != nil {
 			return err
 		}
-		if dialogues = validSceneDialogues(dialogues); len(dialogues) > 0 {
+		if dialogues = authoritativeSceneDialogues(dialogues); len(dialogues) > 0 {
 			if err := validateDialogueShotTiming(remaining, dialogues); err != nil {
 				return err
 			}

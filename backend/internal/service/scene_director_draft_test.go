@@ -344,6 +344,17 @@ func TestValidateDialogueRhythmDraftRejectsContradictorySpeechPresentation(t *te
 	}
 }
 
+func TestAuthoritativeSceneDialoguesPreserveExactText(t *testing.T) {
+	input := "  （轻抚她的脸庞）你终于醒了。\r\n别怕。  "
+	got := authoritativeSceneDialogues([]models.Dialogue{{ID: 1, Character: "舒寒", SpeechType: "dialogue", Text: input}})
+	if len(got) != 1 || got[0].Text != "  （轻抚她的脸庞）你终于醒了。\n别怕。  " {
+		t.Fatalf("authoritative Dialogue changed: %+v", got)
+	}
+	if got := authoritativeSceneDialogues([]models.Dialogue{{Character: "舒寒", SpeechType: "dialogue", Text: "（动作描写：轻抚脸庞）"}}); len(got) != 0 {
+		t.Fatalf("pure stage direction became authoritative speech: %+v", got)
+	}
+}
+
 func TestCanonicalDialogueTextPreservesInternalWhitespace(t *testing.T) {
 	if got := canonicalDialogueText("  I love\r\nyou  "); got != "  I love\nyou  " {
 		t.Fatalf("canonical dialogue changed internal whitespace: %q", got)

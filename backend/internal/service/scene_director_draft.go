@@ -981,7 +981,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
-		dialogues = validSceneDialogues(dialogues)
+		dialogues = authoritativeSceneDialogues(dialogues)
 		if req.Mode == "dialogue_rhythm" {
 			if len(dialogues) == 0 {
 				c.JSON(400, gin.H{"error": "当前Scene没有可用于拆镜的结构化对白"})

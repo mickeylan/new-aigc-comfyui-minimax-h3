@@ -2670,6 +2670,19 @@ func requireStructuredSceneSpeech(content string, dubs []models.Dialogue) error 
 	return nil
 }
 
+func authoritativeSceneDialogues(dubs []models.Dialogue) []models.Dialogue {
+	valid := make([]models.Dialogue, 0, len(dubs))
+	for _, d := range dubs {
+		d.SpeechType, d.Character = normalizeScriptSpeech(d.SpeechType, d.Character)
+		if d.SpeechType == "" || spokenDialogueText(d.Text) == "" {
+			continue
+		}
+		d.Text = canonicalDialogueText(d.Text)
+		valid = append(valid, d)
+	}
+	return valid
+}
+
 func validSceneDialogues(dubs []models.Dialogue) []models.Dialogue {
 	valid := make([]models.Dialogue, 0, len(dubs))
 	for _, d := range dubs {

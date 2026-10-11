@@ -1083,7 +1083,7 @@ func (s *Service) HandleCreateShots(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if len(validSceneDialogues(authoritativeDialogues)) > 0 && strings.TrimSpace(req.DialogueSnapshot) == "" {
+	if len(authoritativeSceneDialogues(authoritativeDialogues)) > 0 && strings.TrimSpace(req.DialogueSnapshot) == "" {
 		c.JSON(http.StatusConflict, gin.H{"error": "当前Scene含结构化Dialogue，保存导演镜头必须携带dialogue_snapshot；请重新加载场景后再保存"})
 		return
 	}
