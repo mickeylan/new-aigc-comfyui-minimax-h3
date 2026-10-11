@@ -1,6 +1,8 @@
 package service
 
 import (
+	"fmt"
+	"reflect"
 	"testing"
 
 	"comfyui-console/internal/models"
@@ -66,6 +68,27 @@ func TestMaterializeShotsCreatesNativeScenesAndPreservesDialogue(t *testing.T) {
 	var childShots []models.Shot
 	if err := db.Where("scene_id = ?", created[0].ID).Order("order_num").Find(&childShots).Error; err != nil || len(childShots) != 3 {
 		t.Fatalf("child shots=%+v err=%v", childShots, err)
+	}
+	var childDialogues []models.Dialogue
+	if err := db.Where("scene_id = ?", created[0].ID).Order("`order`, id").Find(&childDialogues).Error; err != nil || len(childDialogues) != 3 {
+		t.Fatalf("child dialogues=%+v err=%v", childDialogues, err)
+	}
+	wantRanges := [][]models.ShotDialogueRange{
+		{{DialogueID: childDialogues[0].ID, GroupKey: fmt.Sprintf("source-dialogue:%d", d1.ID), StartRune: 0, EndRune: 3}},
+		{{DialogueID: childDialogues[1].ID, GroupKey: fmt.Sprintf("source-dialogue:%d", d1.ID), StartRune: 3, EndRune: 8}},
+		{{DialogueID: childDialogues[2].ID, GroupKey: fmt.Sprintf("source-dialogue:%d", d2.ID), StartRune: 0, EndRune: 4}},
+	}
+	for i := range childShots {
+		if !reflect.DeepEqual(childShots[i].DialogueRanges, wantRanges[i]) {
+			t.Fatalf("child shot %d dialogue ranges=%+v want=%+v", i+1, childShots[i].DialogueRanges, wantRanges[i])
+		}
+	}
+	decorated, err := NewShotService(db).GetSceneShots(created[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decorated[0].ContinuesToNext || !decorated[1].ContinuesFromPrevious || decorated[1].ContinuesToNext || decorated[2].ContinuesFromPrevious {
+		t.Fatalf("materialized dialogue continuity=%+v", decorated)
 	}
 	var joined string
 	for _, sc := range created {

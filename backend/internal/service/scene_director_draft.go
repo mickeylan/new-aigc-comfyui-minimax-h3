@@ -961,8 +961,15 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		}
 		return draft, parseErr
 	}
+	type serverRepair struct {
+		Stage  string `json:"stage"`
+		Reason string `json:"reason"`
+		Result string `json:"result"`
+	}
+	serverRepairs := []serverRepair{}
 	draft, err := validateDraft(output)
 	if err != nil && (req.Mode == "dialogue_rhythm" || req.Mode == "action_rhythm" || req.Mode == "combat_design") {
+		initialValidationError := err.Error()
 		repairRequirements := fmt.Sprintf("%s\n上一次草稿校验失败：%s。只修复该错误及其他空必填字段；保持镜头顺序、剧情事实和结构化对白逐字不变。上一次JSON：\n%s", req.Requirements, err.Error(), output)
 		repairInstruction := "修复对白节奏导演草稿；不得改写、遗漏、重复或新增任何对白。"
 		if req.Mode == "action_rhythm" || req.Mode == "combat_design" {
@@ -974,7 +981,13 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 			return
 		}
 		draft, err = validateDraft(repaired)
+		repairResult := "accepted"
+		if err != nil {
+			repairResult = "still_invalid: " + err.Error()
+		}
+		serverRepairs = append(serverRepairs, serverRepair{Stage: "model_repair", Reason: initialValidationError, Result: repairResult})
 		if err != nil && strings.Contains(err.Error(), "导演草稿对白未逐字覆盖结构化对白") && draft != nil {
+			restoreReason := err.Error()
 			if restoreErr := restoreDialogueRhythmDraftText(draft, dialogues); restoreErr != nil {
 				err = restoreErr
 			} else {
@@ -983,13 +996,20 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 					err = normalizeDialogueRhythmReviewDurations(draft, dialogues)
 				}
 			}
+			if strings.TrimSpace(restoreReason) != "" {
+				restoreResult := "accepted"
+				if err != nil {
+					restoreResult = "still_invalid: " + err.Error()
+				}
+				serverRepairs = append(serverRepairs, serverRepair{Stage: "authoritative_dialogue_restore", Reason: restoreReason, Result: restoreResult})
+			}
 		}
 	}
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "AI导演方案自动修复后仍无效: " + err.Error()})
 		return
 	}
-	response := gin.H{"draft": draft, "skill_code": operation, "provider_id": s.TextProviderFact.Name(), "audited": true, "mode": req.Mode, "dialogue_duration": dialogueDuration}
+	response := gin.H{"draft": draft, "skill_code": operation, "provider_id": s.TextProviderFact.Name(), "audited": true, "mode": req.Mode, "dialogue_duration": dialogueDuration, "server_repairs": serverRepairs}
 	if req.Mode == "combat_design" {
 		response["combat_reference_audit"] = combatReferenceAudit
 		response["combat_reference_selection"] = req.CombatReferences
