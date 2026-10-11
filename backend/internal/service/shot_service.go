@@ -320,6 +320,9 @@ func (s *ShotService) ReplaceShotsWithDialogueSnapshot(sceneID uint, shots []mod
 			if currentSnapshot != strings.TrimSpace(expectedSnapshot) {
 				return ErrDialogueSnapshotConflict
 			}
+			if issues := dialogueRhythmBlockingIssuesForShots(shots, dialogues); len(issues) > 0 {
+				return fmt.Errorf("%w: 对白拆镜语义边界未通过审核: %s", ErrDialogueTimingBlocked, strings.Join(issues, "；"))
+			}
 			if timingErr := validateDialogueShotTiming(shots, dialogues); timingErr != nil {
 				return timingErr
 			}

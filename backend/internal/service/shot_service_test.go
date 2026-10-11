@@ -236,6 +236,60 @@ func TestHandleCreateShotsRejectsImpossibleDialogueTimingWithoutMutation(t *test
 	}
 }
 
+func TestHandleCreateShotsRejectsUnsupportedDialogueCutWithoutMutation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "handler semantic boundary"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, ImageTaskID: "image-active", VideoTaskID: "video-active"}
+	db.Create(&scene)
+	text := "相信姐姐永远不会离开你"
+	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: text}
+	db.Create(&dialogue)
+	existing, err := NewShotService(db).ReplaceShots(scene.ID, []models.Shot{{ShotType: "阿宁近景", Duration: 8, Dialogue: text, Description: "保留镜头", PromptSubject: "阿宁可见"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, snapshot, err := loadSceneDialogueSnapshot(db, scene.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.Scene{}).Where("id = ?", scene.ID).Updates(map[string]any{"image_task_id": "image-active", "video_task_id": "video-active"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	requested := []models.Shot{
+		{ShotType: "阿宁近景", Duration: 4, Dialogue: "相信姐姐永远", PromptSubject: "阿宁可见"},
+		{ShotType: "庭院空镜", Duration: 4, Dialogue: "不会离开你", PromptSubject: "落花"},
+	}
+	payload, err := json.Marshal(map[string]any{"dialogue_snapshot": snapshot, "shots": requested})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/projects/x/scenes/y/shots", bytes.NewReader(payload))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Params = gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(project.ID), 10)}, {Key: "sid", Value: strconv.FormatUint(uint64(scene.ID), 10)}}
+	(&Service{DB: db, Shots: NewShotService(db)}).HandleCreateShots(ctx)
+	if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), "无标点的同一句对白不得跨镜切分") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var saved []models.Shot
+	if err := db.Where("scene_id = ?", scene.ID).Find(&saved).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(saved) != 1 || saved[0].ID != existing[0].ID || saved[0].Description != "保留镜头" {
+		t.Fatalf("semantic rejection mutated shots: %+v", saved)
+	}
+	var currentScene models.Scene
+	if err := db.First(&currentScene, scene.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if currentScene.ImageTaskID != "image-active" || currentScene.VideoTaskID != "video-active" {
+		t.Fatalf("semantic rejection cleared tasks: %+v", currentScene)
+	}
+}
+
 func TestHandleCreateShotsReturnsConflictForStaleDialogueSnapshot(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := newTestDBWithNewModels(t)
