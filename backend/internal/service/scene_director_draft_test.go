@@ -81,6 +81,21 @@ func TestParseSceneDirectorDraftAcceptsSingleProjectEnvelope(t *testing.T) {
 	}
 }
 
+func TestDialogueModePreservesShortPerformanceCutBeforeRaisingDuration(t *testing.T) {
+	raw := `{"shots":[{"act_type":"setup","shot_type":"甲近景","camera_angle":"平视","camera_movement":"固定","duration":2,"description":"甲开口","dialogue":"前半句，","emotion":"平静","transition_type":"cut","transition_note":"","start_state":"甲看向乙","end_state":"甲继续说","prompt_subject":"甲可见","prompt_action":"同步口型","prompt_camera":"近景","prompt_lighting":"柔光","prompt_style":"写实","negative_prompt":"","action_timeline":[],"checks":[]},{"act_type":"rising","shot_type":"乙反应近景","camera_angle":"平视","camera_movement":"固定","duration":5,"description":"乙闭口倾听，甲声音跨切延续","dialogue":"后半句。","emotion":"克制","transition_type":"cut","transition_note":"","start_state":"乙看向甲","end_state":"乙继续倾听","prompt_subject":"乙闭口，甲声音跨切延续","prompt_action":"乙双唇闭合不做口型","prompt_camera":"近景","prompt_lighting":"柔光","prompt_style":"写实","negative_prompt":"","action_timeline":[],"checks":[]}]}`
+	draft, err := parseSceneDirectorDraftWithOptions(raw, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(draft.Shots) != 2 || draft.Shots[0].Duration != 2 {
+		t.Fatalf("dialogue performance cut was merged: %+v", draft.Shots)
+	}
+	normalizeDialogueRhythmDraftDurations(draft)
+	if len(draft.Shots) != 2 || draft.Shots[0].Duration < 3 {
+		t.Fatalf("dialogue shot was not raised to Native minimum: %+v", draft.Shots)
+	}
+}
+
 func TestParseSceneDirectorDraftMergesShortShotIntoFollowingShot(t *testing.T) {
 	raw := `{"shots":[{"act_type":"setup","shot_type":"特写","camera_angle":"平视","camera_movement":"固定","duration":2,"description":"若琳抬眼","dialogue":"相信姐姐，","emotion":"坚定","transition_type":"cut","transition_note":"切双人景","start_state":"若琳垂眼","end_state":"若琳抬眼","prompt_subject":"若琳特写","prompt_action":"抬眼","prompt_camera":"固定特写","prompt_lighting":"夕阳","prompt_style":"古风仙侠","negative_prompt":"文字","checks":[]},{"act_type":"rising","shot_type":"双人中景","camera_angle":"平视","camera_movement":"固定","duration":5,"description":"若琳握住若彤的手","dialogue":"姐姐会保护你。","emotion":"温柔坚定","transition_type":"cut","transition_note":"接下一镜","start_state":"若琳抬眼","end_state":"姐妹相握","prompt_subject":"姐妹双人中景","prompt_action":"若琳握住若彤的手","prompt_camera":"固定中景","prompt_lighting":"夕阳余晖","prompt_style":"古风仙侠","negative_prompt":"文字","checks":[]}]}`
 	draft, err := parseSceneDirectorDraft(raw)

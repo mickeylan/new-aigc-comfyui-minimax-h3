@@ -245,6 +245,10 @@ func normalizeDirectorActionTimeline(entries []models.ShotActionTimelineEntry, d
 }
 
 func parseSceneDirectorDraft(output string) (*sceneDirectorDraft, error) {
+	return parseSceneDirectorDraftWithOptions(output, false)
+}
+
+func parseSceneDirectorDraftWithOptions(output string, preserveShortShots bool) (*sceneDirectorDraft, error) {
 	dec := json.NewDecoder(bytes.NewBufferString(unwrapSceneDirectorDraftEnvelope(output)))
 	dec.DisallowUnknownFields()
 	var draft sceneDirectorDraft
@@ -273,8 +277,10 @@ func parseSceneDirectorDraft(output string) (*sceneDirectorDraft, error) {
 			}
 		}
 	}
-	if err := normalizeShortDirectorShots(&draft); err != nil {
-		return nil, err
+	if !preserveShortShots {
+		if err := normalizeShortDirectorShots(&draft); err != nil {
+			return nil, err
+		}
 	}
 	for i := range draft.Shots {
 		d := &draft.Shots[i]
@@ -297,10 +303,17 @@ func parseSceneDirectorDraft(output string) (*sceneDirectorDraft, error) {
 			}
 		}
 		d.Dialogue, d.Emotion, d.TransitionNote, d.NegativePrompt = strings.TrimSpace(d.Dialogue), strings.TrimSpace(d.Emotion), strings.TrimSpace(d.TransitionNote), strings.TrimSpace(d.NegativePrompt)
-		if d.Duration < 3 || d.Duration > 15 || math.IsNaN(d.Duration) || math.IsInf(d.Duration, 0) {
+		if d.Duration <= 0 || d.Duration > 15 || (!preserveShortShots && d.Duration < 3) || math.IsNaN(d.Duration) || math.IsInf(d.Duration, 0) {
 			return nil, fmt.Errorf("镜头%d时长必须为3到15秒", i+1)
 		}
-		shot := models.Shot{ActType: d.ActType, ShotType: d.ShotType, CameraAngle: d.CameraAngle, CameraMovement: d.CameraMovement, TransitionType: d.TransitionType, TransitionNote: d.TransitionNote, StartState: d.StartState, EndState: d.EndState, Duration: d.Duration, Description: d.Description, Dialogue: d.Dialogue, Emotion: d.Emotion, PromptSubject: d.PromptSubject, PromptAction: d.PromptAction, PromptCamera: d.PromptCamera, PromptLighting: d.PromptLighting, PromptStyle: d.PromptStyle, NegativePrompt: d.NegativePrompt, ActionTimeline: d.ActionTimeline}
+		validationDuration := d.Duration
+		if preserveShortShots && validationDuration < 3 {
+			validationDuration = 3
+		}
+		shot := models.Shot{ActType: d.ActType, ShotType: d.ShotType, CameraAngle: d.CameraAngle, CameraMovement: d.CameraMovement, TransitionType: d.TransitionType, TransitionNote: d.TransitionNote, StartState: d.StartState, EndState: d.EndState, Duration: validationDuration, Description: d.Description, Dialogue: d.Dialogue, Emotion: d.Emotion, PromptSubject: d.PromptSubject, PromptAction: d.PromptAction, PromptCamera: d.PromptCamera, PromptLighting: d.PromptLighting, PromptStyle: d.PromptStyle, NegativePrompt: d.NegativePrompt, ActionTimeline: d.ActionTimeline}
+		if preserveShortShots && d.Duration < 3 && len(shot.ActionTimeline) > 0 {
+			normalizeDirectorActionTimeline(shot.ActionTimeline, validationDuration)
+		}
 		if err := validateShot(&shot); err != nil {
 			return nil, fmt.Errorf("镜头%d: %w", i+1, err)
 		}
@@ -970,7 +983,8 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		return
 	}
 	validateDraft := func(raw string) (*sceneDirectorDraft, error) {
-		draft, parseErr := parseSceneDirectorDraft(raw)
+		preserveShortShots := req.Mode == "dialogue_rhythm"
+		draft, parseErr := parseSceneDirectorDraftWithOptions(raw, preserveShortShots)
 		if parseErr == nil && req.Mode == "dialogue_rhythm" {
 			normalizeDialogueRhythmDraftDurations(draft)
 			parseErr = validateDialogueRhythmDraft(draft, dialogues)
