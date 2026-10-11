@@ -1566,7 +1566,7 @@ func (s *ProjectService) buildVideoFilesForTemplate(sc *models.Scene, pid, tplCo
 			files["last_frame"] = []FileMeta{{TaskID: pid, Name: lastImg}}
 		}
 		return files
-	case "minimax_h3_ref2v", "minimax_h3_ref2v_single", "minimax_h3_t2v":
+	case "minimax_h3_ref2v", "minimax_h3_ref2v_single", h3CombatRef2VTemplate, "minimax_h3_t2v":
 		return nil
 	}
 	return nil
@@ -4104,7 +4104,7 @@ var officialH3LaterShotPattern = regexp.MustCompile(`\[Shot\s+([2-9][0-9]*)\]\s+
 
 func isH3VideoPromptTemplate(template string) bool {
 	switch template {
-	case "minimax_h3_t2v", "minimax_h3_i2v", "minimax_h3_first_last", "minimax_h3_ref2v", "minimax_h3_ref2v_single":
+	case "minimax_h3_t2v", "minimax_h3_i2v", "minimax_h3_first_last", "minimax_h3_ref2v", "minimax_h3_ref2v_single", h3CombatRef2VTemplate:
 		return true
 	default:
 		return false
@@ -4168,7 +4168,7 @@ func validateGeneratedH3Prompt(prompt, template string, duration float64) []stri
 			issues = append(issues, "detailed_description 仍残留角色名“"+name+"”，必须替换为对应 <Subject N>")
 		}
 	}
-	if template == "minimax_h3_ref2v" || template == "minimax_h3_ref2v_single" {
+	if isH3Ref2VTemplate(template) {
 		for _, heading := range []string{"subject_definitions:", "summary:", "retention_analysis:", "detailed_description:", "overall_soundscape:", "non_diegetic_music:"} {
 			if strings.Count(text, heading) != 1 {
 				issues = append(issues, heading+" 必须且只能出现一次")
@@ -4221,7 +4221,7 @@ func ValidateFullH3PromptForReferences(prompt string, referenceLines []string) [
 
 func validateFinalH3Submission(prompt, template string, duration float64, referenceLines []string, dubs []models.Dialogue) []string {
 	issues := validateGeneratedH3Prompt(prompt, template, duration)
-	if template == "minimax_h3_ref2v" || template == "minimax_h3_ref2v_single" {
+	if isH3Ref2VTemplate(template) {
 		issues = append(issues, ValidateFullH3PromptForReferences(prompt, referenceLines)...)
 		if !videoAudioContractMatches(prompt, dubs) {
 			issues = append(issues, "声音契约与结构化Dialogue或禁配乐规则不一致")
@@ -5837,6 +5837,26 @@ func (s *ProjectService) restoreLegacyProjectInput(projectID uint, name string) 
 	return os.WriteFile(target, data, 0o644)
 }
 
+const h3CombatRef2VTemplate = "minimax_h3_ref2v_combat"
+
+func isH3Ref2VTemplate(templateCode string) bool {
+	switch strings.TrimSpace(templateCode) {
+	case "minimax_h3_ref2v", "minimax_h3_ref2v_single", h3CombatRef2VTemplate:
+		return true
+	default:
+		return false
+	}
+}
+
+func hasAuditedCombatShots(shots []models.Shot) bool {
+	for _, shot := range shots {
+		if strings.TrimSpace(shot.DirectorSource) == "fight-video-action-design" {
+			return true
+		}
+	}
+	return false
+}
+
 func sceneVideoTemplateRequiresImage(templateCode string) bool {
 	return templateCode != "minimax_h3_t2v"
 }
@@ -5880,7 +5900,7 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	pid := fmt.Sprintf("%d", p.ID)
 	assemble := func(override string) (string, string, map[string][]FileMeta) {
 		code, prompt, files := s.buildSceneVideoSpec(sc, pid, override)
-		if code == "minimax_h3_ref2v" || code == "minimax_h3_ref2v_single" {
+		if isH3Ref2VTemplate(code) {
 			// Current storyboard and continuity frames are assembled before capability validation,
 			// so the catalog validates the exact request that will be submitted.
 			refFiles, refLines, _ := s.sceneVideoContinuityReferences(sc, pid)
@@ -5900,12 +5920,22 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		}
 		return code, prompt, files
 	}
-	tplCode, promptText, videoFiles := assemble(sc.VideoTemplate)
+	requestedTemplate := sc.VideoTemplate
+	if hasAuditedCombatShots(structuredShots) {
+		if err := validateCombatShotProvenance(structuredShots); err != nil {
+			return err
+		}
+		requestedTemplate = h3CombatRef2VTemplate
+	}
+	tplCode, promptText, videoFiles := assemble(requestedTemplate)
 	duration := normalizeSceneDuration(sc.Duration)
 	catalog := NewModelCatalogService(s.db)
 	tpl, selectionErr := catalog.ValidateVideoSelection(tplCode, videoFiles, duration)
 	if selectionErr != nil {
 		fallbackCode := "minimax_h3_ref2v"
+		if tplCode == h3CombatRef2VTemplate {
+			return fmt.Errorf("武戏专用视频模板 %s 不可用，禁止回退普通模板: %w", tplCode, selectionErr)
+		}
 		if strings.TrimSpace(sc.VideoTemplate) != "" || tplCode == fallbackCode {
 			return fmt.Errorf("所选视频模板 %s 不支持当前输入或时长: %w", tplCode, selectionErr)
 		}
@@ -5919,7 +5949,7 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		return fmt.Errorf("场景 %d 尚未生成画面；只有MiniMax H3文生视频模板允许无分镜图生成", sc.Order)
 	}
 	var finalReferenceLines []string
-	if tplCode == "minimax_h3_ref2v" || tplCode == "minimax_h3_ref2v_single" {
+	if isH3Ref2VTemplate(tplCode) {
 		_, finalReferenceLines, _ = s.sceneVideoContinuityReferences(sc, pid)
 	}
 	if issues := validateFinalH3Submission(promptText, tplCode, duration, finalReferenceLines, dialogues); len(issues) > 0 {
