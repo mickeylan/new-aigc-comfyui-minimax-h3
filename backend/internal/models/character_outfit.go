@@ -9,6 +9,7 @@ type CharacterOutfit struct {
 	CharacterID uint                  `gorm:"index;uniqueIndex:idx_outfit_character_name" json:"character_id"`
 	Name        string                `gorm:"uniqueIndex:idx_outfit_character_name" json:"name"`
 	Description string                `gorm:"type:text" json:"description"`
+	ImageEngine string                `gorm:"size:32;default:krea2" json:"image_engine"`
 	IsDefault   bool                  `gorm:"default:false;index" json:"is_default"`
 	AuditStatus CharacterLookStatus   `gorm:"default:draft" json:"audit_status"`
 	AuditNote   string                `gorm:"type:text" json:"audit_note"`

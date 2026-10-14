@@ -16,6 +16,7 @@ import (
 type OutfitInput struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	ImageEngine string `json:"image_engine"`
 	IsDefault   bool   `json:"is_default"`
 	LookIDs     []uint `json:"look_ids"`
 }
@@ -26,9 +27,10 @@ type OutfitAssignment struct {
 }
 
 type OutfitDesignInput struct {
-	Concept   string `json:"concept"`
-	Name      string `json:"name"`
-	IsDefault bool   `json:"is_default"`
+	Concept     string `json:"concept"`
+	Name        string `json:"name"`
+	ImageEngine string `json:"image_engine"`
+	IsDefault   bool   `json:"is_default"`
 }
 
 type outfitDesignAsset struct {
@@ -88,6 +90,10 @@ func (s *CharacterLookService) DesignOutfit(projectID, characterID uint, req Out
 	if concept == "" {
 		return nil, fmt.Errorf("请描述想设计的新形象")
 	}
+	engine, err := normalizeAssetImageEngine(req.ImageEngine)
+	if err != nil {
+		return nil, err
+	}
 	if s.textProvider == nil {
 		return nil, fmt.Errorf("文本生成服务未配置")
 	}
@@ -140,7 +146,7 @@ func (s *CharacterLookService) DesignOutfit(projectID, characterID uint, req Out
 	design.Description = strings.TrimSpace(design.Description + "\n用户原始造型要求：" + concept)
 	var outfit models.CharacterOutfit
 	err = s.db.Transaction(func(tx *gorm.DB) error {
-		outfit = models.CharacterOutfit{ProjectID: projectID, CharacterID: characterID, Name: design.Name, Description: design.Description, IsDefault: req.IsDefault, AuditStatus: models.LookStatusDraft, Version: 1}
+		outfit = models.CharacterOutfit{ProjectID: projectID, CharacterID: characterID, Name: design.Name, Description: design.Description, ImageEngine: engine, IsDefault: req.IsDefault, AuditStatus: models.LookStatusDraft, Version: 1}
 		if err := tx.Create(&outfit).Error; err != nil {
 			return err
 		}
@@ -182,6 +188,10 @@ func (s *CharacterLookService) SaveOutfit(projectID, characterID, outfitID uint,
 	if req.Name == "" {
 		return nil, fmt.Errorf("套装名称不能为空")
 	}
+	engine, err := normalizeAssetImageEngine(req.ImageEngine)
+	if err != nil {
+		return nil, err
+	}
 	looks, err := s.validOutfitLooks(projectID, characterID, req.LookIDs)
 	if err != nil {
 		return nil, err
@@ -192,7 +202,7 @@ func (s *CharacterLookService) SaveOutfit(projectID, characterID, outfitID uint,
 	var outfit models.CharacterOutfit
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		if outfitID == 0 {
-			outfit = models.CharacterOutfit{ProjectID: projectID, CharacterID: characterID, Name: req.Name, Description: strings.TrimSpace(req.Description), IsDefault: req.IsDefault, AuditStatus: models.LookStatusDraft, Version: 1}
+			outfit = models.CharacterOutfit{ProjectID: projectID, CharacterID: characterID, Name: req.Name, Description: strings.TrimSpace(req.Description), ImageEngine: engine, IsDefault: req.IsDefault, AuditStatus: models.LookStatusDraft, Version: 1}
 			if err := tx.Create(&outfit).Error; err != nil {
 				return err
 			}
@@ -200,7 +210,7 @@ func (s *CharacterLookService) SaveOutfit(projectID, characterID, outfitID uint,
 			if err := tx.Where("id = ? AND project_id = ? AND character_id = ?", outfitID, projectID, characterID).First(&outfit).Error; err != nil {
 				return err
 			}
-			if err := tx.Model(&outfit).Updates(map[string]any{"name": req.Name, "description": strings.TrimSpace(req.Description), "is_default": req.IsDefault, "audit_status": models.LookStatusDraft, "audit_note": "", "image": "", "image_task_id": "", "image_error": "", "sheet": "", "sheet_task_id": "", "sheet_error": "", "version": gorm.Expr("version + 1")}).Error; err != nil {
+			if err := tx.Model(&outfit).Updates(map[string]any{"name": req.Name, "description": strings.TrimSpace(req.Description), "image_engine": engine, "is_default": req.IsDefault, "audit_status": models.LookStatusDraft, "audit_note": "", "image": "", "image_task_id": "", "image_error": "", "sheet": "", "sheet_task_id": "", "sheet_error": "", "version": gorm.Expr("version + 1")}).Error; err != nil {
 				return err
 			}
 			if err := tx.Where("outfit_id = ?", outfit.ID).Delete(&models.CharacterOutfitLook{}).Error; err != nil {
@@ -324,10 +334,17 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 	if strings.TrimSpace(ch.Portrait) == "" {
 		return fmt.Errorf("请先为角色「%s」生成或上传定妆照", ch.Name)
 	}
-	templateCode := outfitTemplateCode(sheet)
-	var tpl models.Template
-	if err := s.db.Where("code = ? AND enabled = ?", templateCode, true).First(&tpl).Error; err != nil {
-		return fmt.Errorf("未找到已启用的模板 %s", templateCode)
+	engine := outfit.ImageEngine
+	if engine == "" {
+		engine = ImageEngineKrea2
+	}
+	if _, err := normalizeAssetImageEngine(engine); err != nil {
+		return err
+	}
+	templateCode := outfitTemplateCode(sheet, engine)
+	tpl, err := enabledTemplateByCode(s.db, templateCode)
+	if err != nil {
+		return err
 	}
 	refs := []FileMeta{{TaskID: fmt.Sprint(projectID), Name: ch.Portrait}}
 	hasCharacterSheet := strings.TrimSpace(ch.Sheet) != ""
@@ -335,23 +352,36 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 		refs = append(refs, FileMeta{TaskID: fmt.Sprint(projectID), Name: ch.Sheet})
 	}
 	prompt := outfitPrompt(&outfit, hasCharacterSheet)
+	if !sheet && engine == ImageEngineQwen21 {
+		prompt = outfitQwenPrompt(&outfit, hasCharacterSheet)
+	}
 	if !sheet && (len(refs) == 0 || strings.TrimSpace(refs[0].Name) == "") {
 		return fmt.Errorf("角色标准像未进入换装参考图列表，已阻止生成")
 	}
 	params := map[string]any{"width": 928, "height": 1664, "ref_image_size": "max"}
+	if !sheet && engine == ImageEngineQwen21 {
+		params = qwenPortraitParams()
+	}
 	if sheet {
 		refs = []FileMeta{{TaskID: fmt.Sprint(projectID), Name: outfit.Image}}
 		prompt = "<Picture 1>=已经审核的新形象正面全身定妆照。保持同一个角色、同一张脸、同一发型、同一套服装鞋履配饰，生成四视图设定图：脸部特写、正面全身、侧面全身、背面全身，纯净背景，四个视图彼此一致。"
 		params = map[string]any{"width": 1664, "height": 928}
 	} else {
+		maxRefs := 9
+		if engine == ImageEngineQwen21 {
+			maxRefs = 16
+		}
 		for _, item := range outfit.Items {
-			if item.Look != nil && item.Look.Image != "" && len(refs) < 9 {
+			if item.Look != nil && item.Look.Image != "" && len(refs) < maxRefs {
 				refs = append(refs, FileMeta{TaskID: fmt.Sprint(projectID), Name: item.Look.Image})
 			}
 		}
 	}
-	if !sheet && !strings.Contains(prompt, "<Subject 1> 是 <Picture 1> 中的当前角色标准像") {
+	if !sheet && engine == ImageEngineKrea2 && !strings.Contains(prompt, "<Subject 1> 是 <Picture 1> 中的当前角色标准像") {
 		return fmt.Errorf("换装提示词未绑定当前角色标准像 Picture 1，已阻止生成")
+	}
+	if !sheet && engine == ImageEngineQwen21 && !strings.Contains(prompt, "<image1>") {
+		return fmt.Errorf("Qwen换装提示词未绑定当前角色标准像 <image1>，已阻止生成")
 	}
 	log.Printf("[outfit-submit] project=%d character=%d(%s) outfit=%d portrait=%s refs=%v prompt=%q", projectID, ch.ID, ch.Name, outfit.ID, ch.Portrait, refs, prompt)
 	files := map[string][]FileMeta{"ref_images": refs}
@@ -397,11 +427,14 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 	return nil
 }
 
-func outfitTemplateCode(sheet bool) string {
+func outfitTemplateCode(sheet bool, engine string) string {
 	if sheet {
 		return "krea2_character_sheet"
 	}
-	return "minimax_h3_look_reference"
+	if engine == ImageEngineQwen21 {
+		return TemplateQwen21MultiEdit
+	}
+	return "krea2_storyboard_reference"
 }
 
 func outfitConceptExclusions(text string) (excludeBag, excludeGloves bool) {
@@ -427,6 +460,47 @@ func outfitConceptChangesHair(text string) bool {
 
 func isGloveText(text string) bool {
 	return strings.Contains(text, "手套") || strings.Contains(text, "手甲") || strings.Contains(text, "护手")
+}
+
+func outfitQwenPrompt(outfit *models.CharacterOutfit, hasCharacterSheet bool) string {
+	bindings := []string{"<image1>仅负责当前角色的脸部身份、五官、年龄感和项目画风；忽略其中旧服装、手持物和包袋。"}
+	design := []string{strings.TrimSpace(outfit.Description)}
+	imageIndex := 2
+	if hasCharacterSheet {
+		bindings = append(bindings, "<image2>仅负责同一角色的头身比例、体态和身体结构；忽略其中旧服装与配饰。")
+		imageIndex++
+	}
+	items := append([]models.CharacterOutfitLook(nil), outfit.Items...)
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Order < items[j].Order })
+	hasHair, hasBag, hasGloves := false, false, false
+	for _, item := range items {
+		if item.Look == nil {
+			continue
+		}
+		design = append(design, fmt.Sprintf("%s：%s", LookCategoryLabel(item.Look.Category), strings.TrimSpace(item.Look.Description)))
+		hasHair = hasHair || item.Look.Category == "hair"
+		hasBag = hasBag || item.Look.Category == "bag"
+		hasGloves = hasGloves || isGloveText(item.Look.Name+" "+item.Look.Description)
+		if item.Look.Image != "" {
+			bindings = append(bindings, fmt.Sprintf("<image%d>仅负责%s的材质、颜色与结构，不改变人物身份。", imageIndex, LookCategoryLabel(item.Look.Category)))
+			imageIndex++
+		}
+	}
+	if !hasHair {
+		design = append(design, "发型完整沿用<image1>，不改变发长、发色、刘海、分缝、卷直状态与束发方式。")
+	}
+	if !hasGloves {
+		design = append(design, "双手自然裸露且完整可见，手掌与五指结构清晰。")
+	}
+	if !hasBag {
+		design = append(design, "双肩、双手和腰侧保持空置，不携带包袋。")
+	}
+	return strings.Join([]string{
+		strings.Join(bindings, "\n"),
+		"最终画面是一张9:16竖版单人正面全身换装定妆照。保持<image1>中的同一张脸、五官、年龄感与项目画风，仅将造型替换为以下已审核设计：",
+		strings.Join(design, "\n"),
+		"人物正面自然站立，从头发顶部到鞋底完整入镜，脸部、双手、服装结构与鞋履清晰可见，背景简洁，不添加文字、水印、武器、法宝或剧情道具。",
+	}, "\n\n")
 }
 
 func outfitPrompt(outfit *models.CharacterOutfit, hasCharacterSheet bool) string {

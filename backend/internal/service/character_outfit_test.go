@@ -59,11 +59,11 @@ func TestDesignOutfitRepairsEmptyModelResultOnce(t *testing.T) {
 		`{"name":"玄灰长老造型","description":"沉稳古典","assets":[{"name":"玄灰长老袍","category":"clothing","description":"玄灰色蚕丝云锦交领长袍，银灰云鹤暗纹"},{"name":"黑色皂靴","category":"shoes","description":"黑色布面中式皂靴，低跟防滑软底"}]}`,
 	}}
 	svc.textProvider = provider
-	outfit, err := svc.DesignOutfit(project.ID, character.ID, OutfitDesignInput{Concept: "古典修仙长老造型"})
+	outfit, err := svc.DesignOutfit(project.ID, character.ID, OutfitDesignInput{Concept: "古典修仙长老造型", ImageEngine: ImageEngineQwen21})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if provider.calls != 2 || outfit.Name != "玄灰长老造型" || len(outfit.Items) != 2 {
+	if provider.calls != 2 || outfit.Name != "玄灰长老造型" || outfit.ImageEngine != ImageEngineQwen21 || len(outfit.Items) != 2 {
 		t.Fatalf("repair result=%+v calls=%d", outfit, provider.calls)
 	}
 }
@@ -117,12 +117,28 @@ func TestOutfitResultFilenameSeparatesRegenerations(t *testing.T) {
 	}
 }
 
-func TestOutfitImageAndSheetUseDifferentTemplates(t *testing.T) {
-	if got := outfitTemplateCode(false); got != "minimax_h3_look_reference" {
-		t.Fatalf("outfit image template=%s", got)
+func TestOutfitImageAndSheetUseSelectedTemplates(t *testing.T) {
+	if got := outfitTemplateCode(false, ImageEngineKrea2); got != "krea2_storyboard_reference" {
+		t.Fatalf("krea2 outfit image template=%s", got)
 	}
-	if got := outfitTemplateCode(true); got != "krea2_character_sheet" {
+	if got := outfitTemplateCode(false, ImageEngineQwen21); got != TemplateQwen21MultiEdit {
+		t.Fatalf("qwen outfit image template=%s", got)
+	}
+	if got := outfitTemplateCode(true, ImageEngineQwen21); got != "krea2_character_sheet" {
 		t.Fatalf("outfit sheet template=%s", got)
+	}
+}
+
+func TestOutfitQwenPromptUsesOrderedImageBindings(t *testing.T) {
+	outfit := &models.CharacterOutfit{Description: "玄灰长老造型", Items: []models.CharacterOutfitLook{{Order: 1, Look: &models.CharacterLook{Category: "clothing", Description: "玄灰云锦长袍", Image: "coat.png"}}, {Order: 2, Look: &models.CharacterLook{Category: "shoes", Description: "黑色皂靴", Image: "shoes.png"}}}}
+	prompt := outfitQwenPrompt(outfit, true)
+	for _, expected := range []string{"<image1>", "<image2>", "<image3>", "<image4>", "9:16竖版"} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("qwen prompt missing %q: %s", expected, prompt)
+		}
+	}
+	if strings.Contains(prompt, "<Picture") {
+		t.Fatalf("qwen prompt leaked H3 bindings: %s", prompt)
 	}
 }
 
