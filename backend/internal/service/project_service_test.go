@@ -1958,6 +1958,9 @@ func TestGenerateSceneVideoActionSplitsVisibleDressingStagesWithoutPersistedShot
 	if !strings.Contains(full, "[Shot 2] At 00:08.000,") {
 		t.Fatalf("full prompt lost generated cut timestamp: %s", full)
 	}
+	if !strings.Contains(full, "loose composition reference only; its completed clothing and action state do not define the opening state") {
+		t.Fatalf("completed storyboard state still overrides dressing opening: %s", full)
+	}
 }
 
 func TestH3GeneratedCameraMoveConflict(t *testing.T) {

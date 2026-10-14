@@ -4109,6 +4109,11 @@ func bindEnvironmentSubjectsToShots(body string, referenceLines []string) string
 
 func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue, referenceLines []string) string {
 	definitions, retention, _ := h3VideoSubjects(referenceLines)
+	if suggestedUnstructuredH3ShotCount(sc.Content, normalizeSceneDuration(sc.Duration)) > 1 {
+		for i := range definitions {
+			definitions[i] = strings.ReplaceAll(definitions[i], "the storyboard composition and action-state reference", "a loose composition reference only; its completed clothing and action state do not define the opening state")
+		}
+	}
 	body := canonicalVideoAction(sc.VideoPrompt, referenceLines)
 	if body == "" {
 		body = defaultSceneVideoAction(sc)
