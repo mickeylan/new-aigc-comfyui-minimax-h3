@@ -1817,6 +1817,45 @@ func suggestedUnstructuredH3ShotCount(content string, duration float64) int {
 
 var h3InvisiblePsychologyPattern = regexp.MustCompile(`(?i)\b(?:feels?|felt|becomes?)\s+(?:reassured|relieved|confident|worried|hopeful)|\b(?:inner|internal)\s+(?:thought|feeling|emotion)|\brenewed confidence\b`)
 
+func h3DressingProcessContractMatches(value string) bool {
+	lower := strings.ToLower(value)
+	return strings.Contains(lower, "sleeve") &&
+		(strings.Contains(lower, "lapel") || strings.Contains(lower, "front panel") || strings.Contains(lower, "sash")) &&
+		(strings.Contains(lower, "clasp") || strings.Contains(lower, "fasten"))
+}
+
+func h3ShotCameraMoveConflict(value string) bool {
+	matches := h3ShotMarkerPattern.FindAllStringIndex(value, -1)
+	for i, match := range matches {
+		end := len(value)
+		if i+1 < len(matches) {
+			end = matches[i+1][0]
+		}
+		block := strings.ToLower(value[match[0]:end])
+		categories := 0
+		for _, terms := range [][]string{
+			{"static camera", "camera remains fixed", "camera holds a stable", "camera holds a fixed"},
+			{"push-in", "pushes in", "dolly forward", "dollies forward"},
+			{"pull-out", "pulls out", "dolly backward", "dollies backward"},
+			{"tracking", "tracks ", "lateral track"},
+			{"camera pans", "panning", "pan left", "pan right"},
+			{"camera arcs", "arc around", "orbit"},
+			{"camera zooms", "zoom in", "zoom out"},
+		} {
+			for _, term := range terms {
+				if strings.Contains(block, term) {
+					categories++
+					break
+				}
+			}
+		}
+		if categories > 1 {
+			return true
+		}
+	}
+	return false
+}
+
 // GenerateSceneVideoAction 用文本模型生成用户可审核编辑的 Ref2VA detailed_description 正文。
 func validateCombatShotProvenance(shots []models.Shot) error {
 	combatReferences, err := NewCombatReferenceService()
@@ -1945,7 +1984,10 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		if !allowSubjects && strings.Contains(value, "<Subject ") {
 			return false
 		}
-		if h3VisualDraftResiduePattern.MatchString(value) || h3InvisiblePsychologyPattern.MatchString(value) {
+		if h3VisualDraftResiduePattern.MatchString(value) || h3InvisiblePsychologyPattern.MatchString(value) || h3ShotCameraMoveConflict(value) {
+			return false
+		}
+		if suggestedShotCount > 1 && !h3DressingProcessContractMatches(value) {
 			return false
 		}
 		if !allowSubjects {
@@ -2001,6 +2043,12 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		}
 		if h3InvisiblePsychologyPattern.MatchString(value) {
 			issues = append(issues, "仍含不可见心理活动，必须改写为可见表情或动作")
+		}
+		if suggestedShotCount > 1 && !h3DressingProcessContractMatches(value) {
+			issues = append(issues, "换衣过程缺少穿袖、合襟/束带或披风扣合的可见中间动作")
+		}
+		if h3ShotCameraMoveConflict(value) {
+			issues = append(issues, "单个Shot包含多种主运镜")
 		}
 		if len(subjectTagsByH3Shot(authoritativeBoundAction)) > 0 && !strings.Contains(value, "<Subject ") {
 			issues = append(issues, "缺少Subject绑定")
@@ -3963,7 +4011,6 @@ func compactFinalH3VisualBody(body string) string {
 	body = regexp.MustCompile(`(?i)\bshot\s+(?:dissolves?|fades?|wipes?)[^.]*\.`).ReplaceAllString(body, "")
 	body = regexp.MustCompile(`(?i)dialogue mouth movement[^.;]*[.;]?|\btransition\s*\.`).ReplaceAllString(body, "")
 	body = regexp.MustCompile(`(?i)\b(?:dissolve|fade|wipe)\b[，,；;。]?`).ReplaceAllString(body, "")
-	body = regexp.MustCompile(`\bAt\s+[0-9]{2}:[0-9]{2}(?:\.[0-9]{3}|:[0-9]{3})?\s*,?\s*`).ReplaceAllString(body, "")
 	body = regexp.MustCompile(`[；;]{2,}`).ReplaceAllString(body, "；")
 	body = strings.ReplaceAll(body, "；。", "。")
 	body = regexp.MustCompile(`[，,]\s*[。；;]`).ReplaceAllString(body, "。")

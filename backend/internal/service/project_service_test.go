@@ -1953,6 +1953,22 @@ func TestGenerateSceneVideoActionSplitsVisibleDressingStagesWithoutPersistedShot
 			t.Fatalf("abstract or collapsed action survived %q: %s", forbidden, got)
 		}
 	}
+	sc.VideoPrompt = got
+	full := buildMiniMaxH3RefPrompt(sc, &project, nil, []string{"- <Picture 1>：角色「舒寒」四视图", "- <Picture 2>：角色「上官若琳」四视图", "- <Picture 3>：场景「寝殿」参考图", "- <Picture 4>：当前分镜画面"})
+	if !strings.Contains(full, "[Shot 2] At 00:08.000,") {
+		t.Fatalf("full prompt lost generated cut timestamp: %s", full)
+	}
+}
+
+func TestH3GeneratedCameraMoveConflict(t *testing.T) {
+	bad := "[Shot 1] The camera pulls out, pushes in, and tracks laterally."
+	if !h3ShotCameraMoveConflict(bad) {
+		t.Fatalf("multiple principal camera moves accepted: %s", bad)
+	}
+	good := "[Shot 1] The camera tracks laterally as the subject opens the door."
+	if h3ShotCameraMoveConflict(good) {
+		t.Fatalf("single camera move rejected: %s", good)
+	}
 }
 
 func TestSuggestedUnstructuredH3ShotCount(t *testing.T) {
