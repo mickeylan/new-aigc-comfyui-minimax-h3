@@ -1817,6 +1817,45 @@ func suggestedUnstructuredH3ShotCount(content string, duration float64) int {
 
 var h3InvisiblePsychologyPattern = regexp.MustCompile(`(?i)\b(?:feels?|felt|becomes?)\s+(?:reassured|relieved|confident|worried|hopeful)|\b(?:inner|internal)\s+(?:thought|feeling|emotion)|\brenewed confidence\b`)
 
+func deterministicDressingStageAction(sc *models.Scene, referenceLines []string) string {
+	characters := parseSceneCharacters(sc.Characters)
+	dresser := ""
+	dressingAt := strings.Index(sc.Content, "披上")
+	if dressingAt < 0 {
+		dressingAt = strings.Index(sc.Content, "穿上")
+	}
+	prefix := sc.Content[:max(0, dressingAt)]
+	bestAt := -1
+	for _, name := range characters {
+		if at := strings.LastIndex(prefix, name); at > bestAt {
+			dresser, bestAt = name, at
+		}
+	}
+	if dresser == "" && len(characters) > 0 {
+		dresser = characters[0]
+	}
+	observer := ""
+	for _, name := range characters {
+		if name != dresser {
+			observer = name
+			break
+		}
+	}
+	cut := normalizeSceneDuration(sc.Duration) / 2
+	if cut < 3 {
+		cut = 3
+	}
+	if limit := normalizeSceneDuration(sc.Duration) - 3; cut > limit {
+		cut = limit
+	}
+	visibleReaction := ""
+	if observer != "" {
+		visibleReaction = observer + " relaxes their brow and shoulders while watching. "
+	}
+	action := fmt.Sprintf("[Shot 1] %s%s nods, lifts the dark crane-patterned brocade robe, inserts the right arm and then the left arm fully into the wide sleeves, closes the crossed front lapels, and tightens the waist sash. The character swings the cloud-patterned cloak over both shoulders and fastens its neck clasp; only then do the silver runes begin to glow. A stable medium shot keeps both sleeves, lapels, sash, and clasp visible at normal real-time speed.\n[Shot 2] At %s, %s walks to the closed chamber door and pushes it open. Nascent Soul spiritual pressure spreads through the corridor, lifting the completed cloak and making the lanterns on both walls sway while their flames remain lit. The camera tracks backward once along the doorway axis; %s remains inside the chamber.", visibleReaction, dresser, formatH3Timestamp(cut), dresser, observer)
+	return useSubjectTags(action, referenceLines)
+}
+
 func h3DressingProcessContractMatches(value string) bool {
 	lower := strings.ToLower(value)
 	return strings.Contains(lower, "sleeve") &&
@@ -1948,6 +1987,9 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	// 只能由查看/正式提交路径读取，绝不能在AI失败时偷偷回填，否则每次点击都会
 	// 返回完全相同的旧提示词，看起来像模型从未执行。
 	authoritativeFallback := func() string {
+		if suggestedShotCount > 1 {
+			return deterministicDressingStageAction(sc, refLines)
+		}
 		if len(shots) > 0 {
 			return rebuildStructuredShotAction(shots)
 		}

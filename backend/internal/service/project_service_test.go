@@ -1971,6 +1971,29 @@ func TestH3GeneratedCameraMoveConflict(t *testing.T) {
 	}
 }
 
+func TestGenerateSceneVideoActionUsesDeterministicDressingFallbackAfterInvalidRepair(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}); err != nil {
+		t.Fatal(err)
+	}
+	ps.textProvider = &sequenceTextProvider{responses: []string{"[Shot 1] 舒寒 dons the robe and opens the door.", "[Shot 1] Shu Han puts on his robe, opens the door, and releases spiritual pressure."}}
+	project := models.Project{Title: "测试"}
+	ps.db.Create(&project)
+	ps.db.Create(&models.Character{ProjectID: project.ID, Name: "舒寒", Sheet: "a.png"})
+	ps.db.Create(&models.Character{ProjectID: project.ID, Name: "上官若琳", Sheet: "b.png"})
+	sc := &models.Scene{ProjectID: project.ID, Characters: "舒寒,上官若琳", Duration: 15, Content: "上官若琳见舒寒如此自信，心中稍安。舒寒点点头，披上玄黑色仙鹤纹锦袍，外罩流云披风。他推开房门，元婴期灵气震得宫灯摇曳。", ImageFile: "story.png"}
+	ps.db.Create(sc)
+	got, err := ps.GenerateSceneVideoAction(sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"[Shot 2] At 00:07.500,", "inserts the right arm", "fastens its neck clasp", "lanterns on both walls sway"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("deterministic fallback missing %q: %s", want, got)
+		}
+	}
+}
+
 func TestSuggestedUnstructuredH3ShotCount(t *testing.T) {
 	content := "舒寒披上锦袍和披风，随后推开房门，灵气震得宫灯摇曳。"
 	if got := suggestedUnstructuredH3ShotCount(content, 15); got != 2 {
