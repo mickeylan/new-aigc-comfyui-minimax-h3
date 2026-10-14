@@ -750,6 +750,16 @@
           </div>
 
           <div class="field">
+            <label>性别（权威角色事实）</label>
+            <select v-model="charProfileForm.gender" class="select">
+              <option value="">请选择</option>
+              <option value="男性">男性</option>
+              <option value="女性">女性</option>
+              <option value="原文未明确">原文未明确</option>
+            </select>
+            <div class="field-hint">标准像、造型和视频身份均使用此字段；不得依据姓名、发型或服装猜测。</div>
+          </div>
+          <div class="field">
             <label>外貌描述</label>
             <textarea v-model="charProfileForm.appearance" class="textarea" rows="4"
               placeholder="发型（形状/长度/颜色/质感）、脸型、眉眼（形状/眼神特点）、鼻型、唇形、肤色、身材、特殊标记…" />
@@ -1012,7 +1022,7 @@ const charForm = reactive({ name: '', role: '', trait: '', style: '', voice: '',
 // 角色档案（LumxAI 风格）状态
 const charProfileTab = ref('basic') // basic / profile / prompt
 const charProfileForm = reactive({
-  appearance: '', personality: '', background: '', relationships: '',
+  gender: '', appearance: '', personality: '', background: '', relationships: '',
   emotions: '', habits: '', wardrobe_detail: '', lighting_mood: '',
   color_palette: '', reference_prompt: ''
 })
@@ -1871,6 +1881,7 @@ function openEditCharacter(ch) {
   Object.assign(charForm, { name: ch.name, role: ch.role, trait: ch.trait, style: ch.style, voice: ch.voice || '', portrait_engine: ch.portrait_engine || 'krea2' })
   // 加载 LumxAI 风格档案字段
   Object.assign(charProfileForm, {
+    gender: ch.gender || '',
     appearance: ch.appearance || '',
     personality: ch.personality || '',
     background: ch.background || '',
@@ -1936,6 +1947,7 @@ async function generateCharacterProfile() {
       portrait_engine: data.character.portrait_engine || 'krea2'
     })
     Object.assign(charProfileForm, {
+      gender: data.character.gender || '',
       appearance: data.character.appearance || '',
       personality: data.character.personality || '',
       background: data.character.background || '',

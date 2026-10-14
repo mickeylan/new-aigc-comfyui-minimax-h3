@@ -32,6 +32,7 @@ func NewCharacterProfileService(db *gorm.DB, textProvider TextProvider) *Charact
 type characterProfileResult struct {
 	Name           string `json:"name"`
 	Role           string `json:"role"`
+	Gender         string `json:"gender"`
 	Appearance     string `json:"appearance"`
 	Personality    string `json:"personality"`
 	Background     string `json:"background"`
@@ -51,6 +52,7 @@ const characterProfileSystemPrompt = `你是一位专业的漫剧角色设计师
 {
   "name": "角色名（与输入保持一致）",
   "role": "角色身份定位（主角/女主/反派/配角等）",
+  "gender": "男性、女性或原文未明确（三选一，不得留空）",
   "appearance": "详细外貌描述：发型（形状/长度/颜色/质感）、脸型、眉眼（形状/眼神特点）、鼻型、唇形、肤色、身材（高矮/体型/气质）、特殊标记（胎记/疤痕/饰品等）",
   "personality": "性格特点：MBTI 性格类型、核心性格标签（3-5个）、行为模式、情绪表达习惯、与他人相处方式",
   "background": "背景故事：出身背景、成长经历、关键事件、角色动机、个人目标与欲望、内心冲突与矛盾",
@@ -131,6 +133,29 @@ func (s *CharacterProfileService) GenerateProfile(char *models.Character, projec
 			return fmt.Errorf("角色档案名称不匹配：期望「%s」，模型返回「%s」", char.Name, result.Name)
 		}
 	}
+	// 性别是后续标准像、造型、配音和视频身份的硬事实，不能只隐含在发型或服装里。
+	sourceGender := portraitGenderFromText(strings.Join([]string{char.Gender, char.Role, char.Appearance, char.Trait, char.Background, planJSON, project.Synopsis}, " "))
+	resultGender, genderErr := normalizeCharacterGender(result.Gender)
+	if genderErr != nil {
+		return fmt.Errorf("角色档案性别无效: %w", genderErr)
+	}
+	if resultGender == "" {
+		resultGender = portraitGenderFromText(strings.Join([]string{result.Role, result.Appearance, result.Background}, " "))
+	}
+	if sourceGender != "" && sourceGender != "原文未明确" {
+		if resultGender == "原文未明确" || resultGender == "" {
+			resultGender = sourceGender
+		} else if resultGender != sourceGender {
+			return fmt.Errorf("角色档案性别与权威来源冲突：来源为%s，模型返回%s", sourceGender, resultGender)
+		}
+	}
+	if resultGender == "" {
+		return fmt.Errorf("角色档案缺少gender字段；必须明确为男性、女性或原文未明确")
+	}
+	result.Gender = resultGender
+	if result.Gender != "原文未明确" && portraitGenderFromText(result.Appearance) != result.Gender {
+		result.Appearance = result.Gender + "，" + strings.TrimSpace(result.Appearance)
+	}
 	// 年龄信息可能来自未明确绑定的上下文或模型的视觉设计选择，不再作为保存阻断条件。
 	// 小说明确年龄仍通过系统提示约束，最终由用户审核档案。
 	// 时代常识做确定性收口：古典非僧侣角色不得保留模型臆造的现代短发。
@@ -138,6 +163,7 @@ func (s *CharacterProfileService) GenerateProfile(char *models.Character, projec
 
 	// 更新角色档案
 	updates := map[string]any{
+		"gender":           result.Gender,
 		"appearance":       result.Appearance,
 		"personality":      result.Personality,
 		"background":       result.Background,
@@ -293,8 +319,23 @@ func characterAgeAnchor(appearance, trait string) string {
 	return anchor
 }
 
-func portraitGenderIdentity(char *models.Character) string {
-	text := strings.Join([]string{char.Role, char.Appearance, char.Trait, char.Background, char.WardrobeDetail}, " ")
+func normalizeCharacterGender(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	switch value {
+	case "男性", "男":
+		return "男性", nil
+	case "女性", "女":
+		return "女性", nil
+	case "原文未明确", "未明确", "未知":
+		return "原文未明确", nil
+	case "":
+		return "", nil
+	default:
+		return "", fmt.Errorf("必须为男性、女性或原文未明确（实际%s）", value)
+	}
+}
+
+func portraitGenderFromText(text string) string {
 	female := []string{"女性", "女子", "女人", "女孩", "女童", "少女", "老妇", "狐女", "女主", "女反派", "女长老"}
 	male := []string{"男性", "男子", "男人", "男孩", "男童", "少年郎", "老者", "老翁", "男主", "男反派", "男长老"}
 	for _, marker := range female {
@@ -308,6 +349,13 @@ func portraitGenderIdentity(char *models.Character) string {
 		}
 	}
 	return ""
+}
+
+func portraitGenderIdentity(char *models.Character) string {
+	if gender, err := normalizeCharacterGender(char.Gender); err == nil && gender != "" && gender != "原文未明确" {
+		return gender
+	}
+	return portraitGenderFromText(strings.Join([]string{char.Role, char.Appearance, char.Trait, char.Background, char.WardrobeDetail}, " "))
 }
 
 func portraitFaceIdentity(appearance, trait string) string {
@@ -687,7 +735,7 @@ func (s *CharacterProfileService) ResetToDraft(char *models.Character) error {
 func (s *CharacterProfileService) UpdateProfile(char *models.Character, req models.Character) error {
 	// PUT 表示完整替换审核表单，允许用户显式清空错误字段。
 	updates := map[string]any{
-		"appearance": strings.TrimSpace(req.Appearance), "personality": strings.TrimSpace(req.Personality),
+		"gender": strings.TrimSpace(req.Gender), "appearance": strings.TrimSpace(req.Appearance), "personality": strings.TrimSpace(req.Personality),
 		"background": strings.TrimSpace(req.Background), "relationships": strings.TrimSpace(req.Relationships),
 		"emotions": strings.TrimSpace(req.Emotions), "habits": strings.TrimSpace(req.Habits),
 		"wardrobe_detail": strings.TrimSpace(req.WardrobeDetail), "lighting_mood": strings.TrimSpace(req.LightingMood),
@@ -713,6 +761,7 @@ func (s *CharacterProfileService) GetProfileFields(char *models.Character) map[s
 	return map[string]string{
 		"name":             char.Name,
 		"role":             char.Role,
+		"gender":           char.Gender,
 		"appearance":       char.Appearance,
 		"personality":      char.Personality,
 		"background":       char.Background,
@@ -731,7 +780,7 @@ func (s *CharacterProfileService) GetProfileFields(char *models.Character) map[s
 // --- 内部辅助函数 ---
 
 var characterProfileStringFields = []string{
-	"name", "role", "appearance", "personality", "background", "relationships", "emotions", "habits",
+	"name", "role", "gender", "appearance", "personality", "background", "relationships", "emotions", "habits",
 	"wardrobe_detail", "lighting_mood", "color_palette",
 }
 

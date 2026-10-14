@@ -436,6 +436,24 @@ func TestValidateCharacterProfileAllowsOptionalRole(t *testing.T) {
 	}
 }
 
+func TestGenerateProfileRejectsGenderConflict(t *testing.T) {
+	ps := newTestProjectService(t)
+	provider := &stubTextProvider{response: `{"name":"林夏","role":"女主","gender":"男性","appearance":"30岁男性","personality":"坚韧","background":"背景","relationships":"关系","emotions":"克制","habits":"握项链","wardrobe_detail":"白风衣","lighting_mood":"柔光","color_palette":"白灰"}`}
+	service := NewCharacterProfileService(ps.db, provider)
+	project := models.Project{Title: "测试"}
+	ps.db.Create(&project)
+	character := models.Character{ProjectID: project.ID, Name: "林夏", Role: "女主", Gender: "女性", Appearance: "30岁女性"}
+	ps.db.Create(&character)
+	if err := service.GenerateProfile(&character, &project, ""); err == nil || !strings.Contains(err.Error(), "性别与权威来源冲突") {
+		t.Fatalf("conflicting generated gender accepted: %v", err)
+	}
+	var got models.Character
+	ps.db.First(&got, character.ID)
+	if got.Gender != "女性" || got.Appearance != "30岁女性" {
+		t.Fatalf("conflicting profile mutated character: %+v", got)
+	}
+}
+
 func TestGenerateProfileClearsDerivedState(t *testing.T) {
 	ps := newTestProjectService(t)
 	provider := &stubTextProvider{response: `{"name":"林夏","role":"女主","appearance":"新外貌","personality":"坚韧","background":"背景","relationships":"关系","emotions":"克制","habits":"握项链","wardrobe_detail":"白风衣","lighting_mood":"柔光","color_palette":"白灰"}`}
@@ -451,6 +469,9 @@ func TestGenerateProfileClearsDerivedState(t *testing.T) {
 	ps.db.First(&got, ch.ID)
 	if got.ReferencePrompt != "" || got.ProfileStatus != models.ProfileStatusDraft || got.ReviewNote != "" || got.Portrait != "" {
 		t.Fatalf("重生成档案未清除派生状态: %+v", got)
+	}
+	if got.Gender != "女性" || !strings.Contains(got.Appearance, "女性") {
+		t.Fatalf("AI完整档案未持久化权威性别: %+v", got)
 	}
 }
 

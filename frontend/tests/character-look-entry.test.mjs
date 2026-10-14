@@ -14,6 +14,8 @@ test('角色编辑弹窗按当前标签保存对应档案字段', () => {
   assert.match(projectDetail, /保存参考像提示词/)
   assert.match(projectDetail, /所有字段均可人工修改/)
   assert.match(projectDetail, /可由 AI 生成，也可直接人工修改/)
+  assert.match(projectDetail, /v-model="charProfileForm\.gender"/)
+  assert.match(projectDetail, /性别（权威角色事实）/)
   assert.ok((projectDetail.match(/@click="saveCharacterProfile"/g) || []).length >= 3)
 })
 

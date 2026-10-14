@@ -308,6 +308,7 @@ type Character struct {
 	ProjectID      uint   `gorm:"column:project_id;index;uniqueIndex:idx_character_project_name" json:"project_id"`
 	Name           string `gorm:"uniqueIndex:idx_character_project_name" json:"name"`          // 项目内唯一
 	Role           string `json:"role"`                                                        // 身份：主角/女主/反派/配角…
+	Gender         string `gorm:"column:gender;size:20" json:"gender"`                         // 权威性别：男性/女性/原文未明确
 	Trait          string `gorm:"type:text" json:"trait"`                                      // 外貌特征（发型/五官/体型）
 	Style          string `gorm:"type:text" json:"style"`                                      // 服装造型
 	Portrait       string `json:"portrait"`                                                    // 标准参考像文件名（input/<project_id>/ 下）
