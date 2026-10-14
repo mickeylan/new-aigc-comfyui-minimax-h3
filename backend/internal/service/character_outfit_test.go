@@ -1,12 +1,29 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
 	"comfyui-console/internal/models"
 )
+
+type sequenceOutfitProvider struct {
+	responses []string
+	calls     int
+}
+
+func (p *sequenceOutfitProvider) Name() string                      { return "sequence" }
+func (p *sequenceOutfitProvider) HealthCheck(context.Context) error { return nil }
+func (p *sequenceOutfitProvider) Chat(_, _ string) (string, error) {
+	index := p.calls
+	p.calls++
+	if index >= len(p.responses) {
+		return "", fmt.Errorf("unexpected call")
+	}
+	return p.responses[index], nil
+}
 
 func setupOutfitTestDB(t *testing.T) (*CharacterLookService, models.Project, models.Character) {
 	db := setupTestDB(t)
@@ -32,6 +49,22 @@ func TestDesignOutfitRequiresCharacterPortraitBinding(t *testing.T) {
 	}
 	if _, err := svc.DesignOutfit(project.ID, character.ID, OutfitDesignInput{Concept: "新造型"}); err == nil || !strings.Contains(err.Error(), "必须绑定标准像") {
 		t.Fatalf("expected portrait binding error, got %v", err)
+	}
+}
+
+func TestDesignOutfitRepairsEmptyModelResultOnce(t *testing.T) {
+	svc, project, character := setupOutfitTestDB(t)
+	provider := &sequenceOutfitProvider{responses: []string{
+		`{"name":"","description":"","assets":[]}`,
+		`{"name":"玄灰长老造型","description":"沉稳古典","assets":[{"name":"玄灰长老袍","category":"clothing","description":"玄灰色蚕丝云锦交领长袍，银灰云鹤暗纹"},{"name":"黑色皂靴","category":"shoes","description":"黑色布面中式皂靴，低跟防滑软底"}]}`,
+	}}
+	svc.textProvider = provider
+	outfit, err := svc.DesignOutfit(project.ID, character.ID, OutfitDesignInput{Concept: "古典修仙长老造型"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 2 || outfit.Name != "玄灰长老造型" || len(outfit.Items) != 2 {
+		t.Fatalf("repair result=%+v calls=%d", outfit, provider.calls)
 	}
 }
 

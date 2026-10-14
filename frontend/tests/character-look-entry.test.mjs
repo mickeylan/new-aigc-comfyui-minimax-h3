@@ -47,6 +47,13 @@ test('角色卡提供明显的新形象和完整套装入口', () => {
   assert.match(detail, /管理完整套装/)
 })
 
+test('新形象草稿失败在弹窗内展示可复制错误', () => {
+  assert.match(looks, /designError=ref\(''\)/)
+  assert.match(looks, /v-if="designError"/)
+  assert.match(looks, /designError\.value=e\.message/)
+  assert.match(looks, /user-select:text/)
+})
+
 test('角色造型页支持从链接直接打开新资产表单并说明使用流程', () => {
   assert.match(looks, /r\.query\.design==='1'/)
   assert.match(looks, /基于角色标准像设计新形象/)

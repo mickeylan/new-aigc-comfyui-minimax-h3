@@ -43,6 +43,45 @@ type outfitDesignResult struct {
 	Assets      []outfitDesignAsset `json:"assets"`
 }
 
+func normalizeAndValidateOutfitDesign(design *outfitDesignResult, req OutfitDesignInput) error {
+	if strings.TrimSpace(req.Name) != "" {
+		design.Name = strings.TrimSpace(req.Name)
+	}
+	design.Name, design.Description = strings.TrimSpace(design.Name), strings.TrimSpace(design.Description)
+	if design.Name == "" || len(design.Assets) == 0 || len(design.Assets) > 6 {
+		return fmt.Errorf("缺少有效套装名或资产（assets必须包含1至6项）")
+	}
+	excludeBag, excludeGloves := outfitConceptExclusions(req.Concept)
+	changeHair := outfitConceptChangesHair(req.Concept)
+	filtered := design.Assets[:0]
+	for _, asset := range design.Assets {
+		text := asset.Name + " " + asset.Description
+		if excludeBag && asset.Category == "bag" || excludeGloves && isGloveText(text) || asset.Category == "hair" && !changeHair {
+			continue
+		}
+		filtered = append(filtered, asset)
+	}
+	design.Assets = filtered
+	seen := map[string]bool{}
+	for i := range design.Assets {
+		a := &design.Assets[i]
+		a.Name, a.Category, a.Description = strings.TrimSpace(a.Name), strings.TrimSpace(a.Category), strings.TrimSpace(a.Description)
+		if a.Name == "" || a.Description == "" || !ValidLookCategories[a.Category] || a.Category == "full" {
+			return fmt.Errorf("第%d项资产无效：name、description必填，category必须是clothing/shoes/hair/hair_accessory/jewelry/bag", i+1)
+		}
+		if seen[a.Category] {
+			return fmt.Errorf("重复的%s资产", LookCategoryLabel(a.Category))
+		}
+		seen[a.Category] = true
+	}
+	for _, required := range []string{"clothing", "shoes"} {
+		if !seen[required] {
+			return fmt.Errorf("缺少%s设计", LookCategoryLabel(required))
+		}
+	}
+	return nil
+}
+
 // DesignOutfit 把一个完整形象概念拆成独立、可审核的造型资产，并组合为套装草稿。
 func (s *CharacterLookService) DesignOutfit(projectID, characterID uint, req OutfitDesignInput) (*models.CharacterOutfit, error) {
 	concept := strings.TrimSpace(req.Concept)
@@ -66,58 +105,39 @@ func (s *CharacterLookService) DesignOutfit(projectID, characterID uint, req Out
 	system := `你是影视角色造型设计师。根据用户的完整形象概念，设计一套统一的新造型，并拆成独立资产。
 只输出严格JSON：{"name":"套装名","description":"整套形象说明","assets":[{"name":"资产名","category":"clothing|shoes|hair|hair_accessory|jewelry|bag","description":"材质、颜色、款式、结构细节"}]}。
 必须包含clothing和shoes。hair仅在用户明确要求改变发型时加入；用户未提发型时必须沿用角色标准像发型，不得自行设计新发型。hair_accessory、jewelry、bag仅在用户明确要求时加入。每类最多一个。资产描述只写该单件资产，不写人物姓名、脸、身体、姿势或构图。不得加入武器、法宝、剧情道具，不得混入多个互斥方案。`
-	user := fmt.Sprintf("项目题材：%s\n项目画风：%s\n角色：%s（仅用于理解身份，不得写入资产描述）\n用户命名：%s\n新形象概念：%s", project.Genre, project.Style, character.Name, strings.TrimSpace(req.Name), concept)
+	user := fmt.Sprintf("项目题材：%s\n项目画风：%s\n角色：%s（仅用于理解身份，不得写入资产描述）\n角色性别：%s\n角色身份：%s\n角色现有外貌与发型：%s\n角色标准像提示词：%s\n用户命名：%s\n新形象概念：%s", project.Genre, project.Style, character.Name, character.Gender, character.Role, character.Appearance, character.ReferencePrompt, strings.TrimSpace(req.Name), concept)
 	raw, err := s.textProvider.Chat(system, user)
 	if err != nil {
 		return nil, fmt.Errorf("AI设计新形象失败: %w", err)
 	}
 	var design outfitDesignResult
-	if err := parseJSONObject(raw, &design); err != nil {
-		return nil, fmt.Errorf("AI新形象结果解析失败: %w", err)
+	parseErr := parseJSONObject(raw, &design)
+	if parseErr == nil {
+		parseErr = normalizeAndValidateOutfitDesign(&design, req)
 	}
-	if strings.TrimSpace(req.Name) != "" {
-		design.Name = strings.TrimSpace(req.Name)
+	if parseErr != nil {
+		repairUser := fmt.Sprintf(`原始用户要求：%s
+
+模型上次输出：
+%s
+
+精确错误：%s
+
+请只返回修正后的严格JSON对象。不得解释。必须包含clothing和shoes各一项；每类最多一项；不得返回空assets。`, concept, raw, parseErr.Error())
+		repaired, repairErr := s.textProvider.Chat(system, repairUser)
+		if repairErr != nil {
+			return nil, fmt.Errorf("AI新形象首次结果无效（%v），自动修复调用失败: %w", parseErr, repairErr)
+		}
+		design = outfitDesignResult{}
+		if err := parseJSONObject(repaired, &design); err != nil {
+			return nil, fmt.Errorf("AI新形象自动修复后仍无法解析: %w", err)
+		}
+		if err := normalizeAndValidateOutfitDesign(&design, req); err != nil {
+			return nil, fmt.Errorf("AI新形象自动修复后仍无效: %w", err)
+		}
 	}
-	design.Name, design.Description = strings.TrimSpace(design.Name), strings.TrimSpace(design.Description)
 	// 用户原始概念是权威约束，必须随套装保存；不能让 LLM 摘要丢掉“不要手套/不要包”等要求。
 	design.Description = strings.TrimSpace(design.Description + "\n用户原始造型要求：" + concept)
-	if design.Name == "" || len(design.Assets) == 0 || len(design.Assets) > 6 {
-		return nil, fmt.Errorf("AI新形象缺少有效套装名或资产")
-	}
-	excludeBag, excludeGloves := outfitConceptExclusions(concept)
-	changeHair := outfitConceptChangesHair(concept)
-	filtered := design.Assets[:0]
-	for _, asset := range design.Assets {
-		text := asset.Name + " " + asset.Description
-		if excludeBag && asset.Category == "bag" {
-			continue
-		}
-		if excludeGloves && isGloveText(text) {
-			continue
-		}
-		if asset.Category == "hair" && !changeHair {
-			continue
-		}
-		filtered = append(filtered, asset)
-	}
-	design.Assets = filtered
-	seen := map[string]bool{}
-	for i := range design.Assets {
-		a := &design.Assets[i]
-		a.Name, a.Category, a.Description = strings.TrimSpace(a.Name), strings.TrimSpace(a.Category), strings.TrimSpace(a.Description)
-		if a.Name == "" || a.Description == "" || !ValidLookCategories[a.Category] || a.Category == "full" {
-			return nil, fmt.Errorf("AI返回了无效造型资产")
-		}
-		if seen[a.Category] {
-			return nil, fmt.Errorf("AI返回了重复的%s资产", LookCategoryLabel(a.Category))
-		}
-		seen[a.Category] = true
-	}
-	for _, required := range []string{"clothing", "shoes"} {
-		if !seen[required] {
-			return nil, fmt.Errorf("AI新形象缺少%s设计", LookCategoryLabel(required))
-		}
-	}
 	var outfit models.CharacterOutfit
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		outfit = models.CharacterOutfit{ProjectID: projectID, CharacterID: characterID, Name: design.Name, Description: design.Description, IsDefault: req.IsDefault, AuditStatus: models.LookStatusDraft, Version: 1}
