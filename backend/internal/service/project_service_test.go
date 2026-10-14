@@ -1755,6 +1755,10 @@ func TestClassifyH3SceneModeAndInstructions(t *testing.T) {
 	if got := classifyH3SceneMode(drama, nil, []models.Dialogue{{Character: "姐姐", Text: "相信我。"}}); got != h3SceneDrama {
 		t.Fatalf("drama mode=%s", got)
 	}
+	aura := &models.Scene{Content: "他推开房门，元婴期灵气充斥长廊，将宫灯震得摇曳不定。"}
+	if got := classifyH3SceneMode(aura, nil, nil); got != h3SceneDrama {
+		t.Fatalf("non-combat aura display misclassified as %s", got)
+	}
 	action := &models.Scene{Content: "两人拔剑交锋，姐姐格挡后反击。"}
 	if got := classifyH3SceneMode(action, nil, nil); got != h3SceneAction {
 		t.Fatalf("action mode=%s", got)
@@ -1913,6 +1917,51 @@ func TestCombatActionRepairRequestUsesNeutralReactionWhenOutcomeUnknown(t *testi
 		if !strings.Contains(got, want) {
 			t.Fatalf("combat repair request missing %q: %s", want, got)
 		}
+	}
+}
+
+func TestGenerateSceneVideoActionSplitsVisibleDressingStagesWithoutPersistedShots(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SceneCharacterOutfit{}, &models.CharacterOutfit{}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &sequenceTextProvider{responses: []string{
+		"[Shot 1] 上官若琳 feels reassured as 舒寒 dons the robe, pushes open the door, and releases spiritual pressure.",
+		"[Shot 1] <Subject 2> relaxes her brow while <Subject 1> inserts each arm into the brocade sleeves, closes the crossed lapels, tightens the sash, swings the cloak over both shoulders, and fastens its clasp.\n[Shot 2] At 00:08.000, <Subject 1> walks to the closed door and pushes it open; spiritual pressure spreads through the corridor, lifting his cloak and making the lanterns sway while <Subject 2> remains behind.",
+	}}
+	ps.textProvider = provider
+	project := models.Project{Title: "测试", Style: "真人写实"}
+	ps.db.Create(&project)
+	ps.db.Create(&models.Character{ProjectID: project.ID, Name: "舒寒", Sheet: "shuhan.png"})
+	ps.db.Create(&models.Character{ProjectID: project.ID, Name: "上官若琳", Sheet: "ruolin.png"})
+	sc := &models.Scene{ProjectID: project.ID, EpisodeN: 2, Order: 17, Characters: "舒寒,上官若琳", Duration: 15, Content: "上官若琳见舒寒如此自信，心中稍安。舒寒点点头，披上玄黑色仙鹤纹锦袍，外罩流云披风，银色符文随步伐闪烁。他推开房门，一股凛冽的元婴期灵气顿时充斥整条长廊，将廊道两侧的宫灯震得摇曳不定。", ImageFile: "story.png"}
+	ps.db.Create(sc)
+	got, err := ps.GenerateSceneVideoAction(sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 2 {
+		t.Fatalf("expected one targeted repair, calls=%d", provider.calls)
+	}
+	for _, want := range []string{"[Shot 1]", "[Shot 2] At 00:08.000,", "inserts each arm", "fastens its clasp", "pushes it open"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("dressing action missing %q: %s", want, got)
+		}
+	}
+	for _, forbidden := range []string{"feels reassured", "dons the robe"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("abstract or collapsed action survived %q: %s", forbidden, got)
+		}
+	}
+}
+
+func TestSuggestedUnstructuredH3ShotCount(t *testing.T) {
+	content := "舒寒披上锦袍和披风，随后推开房门，灵气震得宫灯摇曳。"
+	if got := suggestedUnstructuredH3ShotCount(content, 15); got != 2 {
+		t.Fatalf("shot count=%d", got)
+	}
+	if got := suggestedUnstructuredH3ShotCount(content, 6); got != 0 {
+		t.Fatalf("short scene should not be auto-split: %d", got)
 	}
 }
 

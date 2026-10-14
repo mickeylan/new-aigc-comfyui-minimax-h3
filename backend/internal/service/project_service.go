@@ -1590,7 +1590,7 @@ const (
 	h3SceneMixed  h3SceneMode = "文武混合"
 )
 
-var h3ActionCuePattern = regexp.MustCompile(`攻击|格挡|闪避|挥剑|挥刀|拔剑|拔刀|刺向|劈向|斩|咬向|咬去|扑咬|蛇口大张|射出|飞射|拳|踢|撞击|追逐|冲锋|交锋|搏斗|战斗|爆炸|开火|射击|扑向|抓住|挣脱|摔倒|击退|击中|防守|反击|施法|法术|剑气|刀气|灵力|灵气|真气|掌印|雷法|火球|冰锥|符箓|法宝|对轰|能量碰撞|冲击波|护盾|结界`)
+var h3ActionCuePattern = regexp.MustCompile(`攻击|格挡|闪避|挥剑|挥刀|拔剑|拔刀|刺向|劈向|斩|咬向|咬去|扑咬|蛇口大张|射出|飞射|拳|踢|撞击|追逐|冲锋|交锋|搏斗|战斗|爆炸|开火|射击|扑向|抓住|挣脱|摔倒|击退|击中|防守|反击|施法|法术|剑气|刀气|掌印|雷法|火球|冰锥|符箓|法宝|对轰|能量碰撞|冲击波|护盾|结界`)
 
 func normalizeH3SceneMode(value string) (h3SceneMode, error) {
 	switch mode := h3SceneMode(strings.TrimSpace(value)); mode {
@@ -1725,9 +1725,9 @@ func normalizeGeneratedH3Action(value string, allowSubjects bool, expectedShotCo
 	value = resolveH3VisualConflicts(coalesceDuplicateH3Shots(stripPromptDialogueNarration(normalizeVideoActionPrompt(strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(value), "```"), "```"))))))
 	value = englishH3ShotField(value)
 	// Models sometimes copy the documentation placeholder literally (for example
-	// "At MM:00.000,"). Timing is server-owned: remove every placeholder form,
-	// then restore authoritative cut times from the Scene/Shot timeline below.
-	value = regexp.MustCompile(`(?i)\bAt\s+(?:MM|[0-9]{2}):(?:SS|[0-9]{2})\.(?:mmm|[0-9]{3}),?\s*`).ReplaceAllString(value, "")
+	// "At MM:00.000,"). Remove placeholder forms only. Valid numeric timestamps are
+	// preserved for unstructured Scenes; persisted Shot timelines overwrite them below.
+	value = regexp.MustCompile(`(?i)\bAt\s+(?:MM:(?:SS|[0-9]{2})|[0-9]{2}:SS)\.(?:mmm|[0-9]{3}),?\s*`).ReplaceAllString(value, "")
 	if allowSubjects {
 		value = useSubjectTags(value, referenceLines)
 	}
@@ -1785,6 +1785,38 @@ func h3SceneModeInstruction(mode h3SceneMode) string {
 	}
 }
 
+// suggestedUnstructuredH3ShotCount only proposes internal cuts when an unstructured Scene
+// clearly contains several visible production stages. It never changes Scene authority or
+// persists Shots; it prevents a long multi-stage action from being flattened into one summary.
+func suggestedUnstructuredH3ShotCount(content string, duration float64) int {
+	if duration < 9 || strings.Contains(content, "[Shot ") {
+		return 0
+	}
+	groups := 0
+	for _, terms := range [][]string{
+		{"穿上", "披上", "换上", "穿入", "系紧", "扣紧", "整理衣襟", "披风"},
+		{"走向", "推开房门", "推开门", "打开房门", "跨过门槛", "踏入长廊"},
+		{"灵气", "威压", "气息", "宫灯", "灯焰", "震得", "摇曳"},
+	} {
+		matched := false
+		for _, term := range terms {
+			if strings.Contains(content, term) {
+				matched = true
+				break
+			}
+		}
+		if matched {
+			groups++
+		}
+	}
+	if groups >= 2 {
+		return 2
+	}
+	return 0
+}
+
+var h3InvisiblePsychologyPattern = regexp.MustCompile(`(?i)\b(?:feels?|felt|becomes?)\s+(?:reassured|relieved|confident|worried|hopeful)|\b(?:inner|internal)\s+(?:thought|feeling|emotion)|\brenewed confidence\b`)
+
 // GenerateSceneVideoAction 用文本模型生成用户可审核编辑的 Ref2VA detailed_description 正文。
 func validateCombatShotProvenance(shots []models.Shot) error {
 	combatReferences, err := NewCombatReferenceService()
@@ -1823,6 +1855,10 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 		return "", err
 	}
 	sceneMode := classifyH3SceneMode(sc, shots, dubs)
+	suggestedShotCount := 0
+	if len(shots) == 0 {
+		suggestedShotCount = suggestedUnstructuredH3ShotCount(canonicalSceneContent, normalizeSceneDuration(sc.Duration))
+	}
 	dialogueContext := "无结构化对白；禁止生成说话、旁白或人声"
 	if valid := validSceneDialogues(dubs); len(valid) > 0 {
 		lines := make([]string, 0, len(valid))
@@ -1846,8 +1882,11 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 四视图只负责人物身份与服装，场景图只负责环境；不得从参考图反推剧情，不得复述或猜测外貌、服装、陈设。
 场景类型规则：%s`, openingPicture, h3SceneModeInstruction(sceneMode))
 	actionTask := ""
+	if suggestedShotCount > 1 {
+		actionTask += fmt.Sprintf("\n\n【无结构化Shot的可见阶段拆分】当前Scene包含多个连续可见阶段，必须生成恰好%d个内部Shot并保持一个连续视频；Shot 1不得带时间戳，Shot 2必须使用合理的官方At MM:SS.mmm切入时间。第一镜完整表现前一阶段的实际动作步骤，后一镜表现后续动作与环境结果。不得把全部剧情压缩成一个Shot，不得只写dons/puts on而跳过穿袖、合襟、束带、披挂或扣合等原文所要求的可见过程。心理状态必须改写为可见表情或姿态变化。", suggestedShotCount)
+	}
 	if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
-		actionTask = "\n\n【武戏硬任务】动作必须从开头立即以正常实时速度启动；来袭攻击必须在同一Shot中触发立即可见的响应。武器、法宝、灵兽、术法和能量形态只能读取下方Scene、Shot与实际参考绑定，不得用通用武器替换，不得创造未提供的装备或术法。原文未给出命中或胜负时，只能设计不改变结果的即时可见应对，不得生成站立观察，不得擅自决定命中、击杀、受伤或胜负。主要动作爆发应在开头1–2秒完成，余下时间只延续权威事实中已有的环境反馈与结束状态，禁止把接近过程拉满整段。"
+		actionTask += "\n\n【武戏硬任务】动作必须从开头立即以正常实时速度启动；来袭攻击必须在同一Shot中触发立即可见的响应。武器、法宝、灵兽、术法和能量形态只能读取下方Scene、Shot与实际参考绑定，不得用通用武器替换，不得创造未提供的装备或术法。原文未给出命中或胜负时，只能设计不改变结果的即时可见应对，不得生成站立观察，不得擅自决定命中、击杀、受伤或胜负。主要动作爆发应在开头1–2秒完成，余下时间只延续权威事实中已有的环境反馈与结束状态，禁止把接近过程拉满整段。"
 	}
 	user := fmt.Sprintf("目标时长：%.1f秒。只提取执行本镜所必需的信息，不要把以下资料逐段复述进输出。场景剧情中已明确存在的每个[Shot N]都必须原序保留，禁止合并或删除。%s\n\n【场景剧情（仅作事实边界）】\n%s\n\n【Shot导演设计（动作与镜头权威）】\n%s\n\n【结构化对白（仅判断口型时机）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s", normalizeSceneDuration(sc.Duration), actionTask, canonicalSceneContent, shotContext, dialogueContext, strings.Join(refLines, "\n"))
 	policy, err := NewPromptPolicyService(s.db).Resolve(PromptPolicyContext{ProjectID: sc.ProjectID, SceneID: &sc.ID}, PromptPolicyVideoPolish, system)
@@ -1879,6 +1918,9 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		return defaultSceneVideoAction(sc)
 	}
 	expectedShotCount := len(shots)
+	if suggestedShotCount > expectedShotCount {
+		expectedShotCount = suggestedShotCount
+	}
 	for _, marker := range h3ShotMarkerPattern.FindAllStringSubmatch(canonicalSceneContent, -1) {
 		if len(marker) == 2 {
 			if n, _ := strconv.Atoi(marker[1]); n > expectedShotCount {
@@ -1903,7 +1945,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		if !allowSubjects && strings.Contains(value, "<Subject ") {
 			return false
 		}
-		if h3VisualDraftResiduePattern.MatchString(value) {
+		if h3VisualDraftResiduePattern.MatchString(value) || h3InvisiblePsychologyPattern.MatchString(value) {
 			return false
 		}
 		if !allowSubjects {
@@ -1957,6 +1999,9 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		if h3VisualDraftResiduePattern.MatchString(value) {
 			issues = append(issues, "仍含字段标题、模板残留或解释文字")
 		}
+		if h3InvisiblePsychologyPattern.MatchString(value) {
+			issues = append(issues, "仍含不可见心理活动，必须改写为可见表情或动作")
+		}
 		if len(subjectTagsByH3Shot(authoritativeBoundAction)) > 0 && !strings.Contains(value, "<Subject ") {
 			issues = append(issues, "缺少Subject绑定")
 		}
@@ -1982,7 +2027,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	out = prepareGeneratedAction(out, false)
 	if !actionTrusted(out, false) {
 		boundDraft := useSubjectTags(out, refLines)
-		repairUser := fmt.Sprintf("Rewrite the draft into concise official English H3 shot prose using the authoritative Scene Shots below. The authoritative source controls Shot count, order, timestamps, subjects, visible actions, framing, and emotional reactions. Produce exactly one paragraph for every source [Shot N]; omit, merge, reorder, retime, or invent nothing. For combat or spell clashes, motion begins immediately at full real-time speed; each attack must reach a visible block, dodge, counter, impact, displacement, or landing within that Shot. Never leave a threatened defender merely standing, gripping a weapon, or watching. No slow motion, bullet time, hovering display, prolonged charging, or lingering pause. Output no dialogue, <d>, headings, Markdown, or explanation.\n\nAUTHORITATIVE SCENE SHOTS:\n%s\n\nINCOMPLETE DRAFT TO REPAIR:\n%s", useSubjectTags(canonicalSceneContent, refLines), boundDraft)
+		repairUser := fmt.Sprintf("Rewrite the draft into concise official English H3 shot prose using the authoritative Scene facts below. Produce exactly %d Shot paragraphs in original event order; omit, merge, reorder, retime, or invent nothing. Convert psychology into visible facial or posture changes. For dressing, show physical garment handling and intermediate states instead of jumping to the completed outfit. For combat or spell clashes, motion begins immediately at full real-time speed; each attack must reach a visible block, dodge, counter, impact, displacement, or landing within that Shot. Never leave a threatened defender merely standing, gripping a weapon, or watching. No slow motion, bullet time, hovering display, prolonged charging, or lingering pause. Output no dialogue, <d>, headings, Markdown, or explanation.\n\nAUTHORITATIVE SCENE FACTS:\n%s\n\nINCOMPLETE DRAFT TO REPAIR:\n%s", expectedShotCount, useSubjectTags(canonicalSceneContent, refLines), boundDraft)
 		if repaired, repairErr := chatAction(repairUser); repairErr == nil {
 			candidate := prepareGeneratedAction(repaired, true)
 			if actionTrusted(candidate, true) {
@@ -1999,6 +2044,9 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	}
 	out = useSubjectTags(out, refLines)
 	out = enforceH3ActionTempo(out, sceneMode)
+	if suggestedShotCount > 1 && !actionTrusted(out, true) {
+		return "", fmt.Errorf("AI视频动作未能按可见阶段拆成%d个内部Shot：%s", suggestedShotCount, actionTrustIssues(out))
+	}
 	if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
 		combatValid := h3ActionTempoContractMatches(out) && !regexp.MustCompile(`[\p{Han}]`).MatchString(out)
 		if !combatValid {
