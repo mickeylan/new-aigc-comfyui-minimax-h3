@@ -64,7 +64,7 @@ const characterProfileSystemPrompt = `你是一位专业的漫剧角色设计师
 3. 输出的内容应符合漫剧风格，适合后续 AI 生图和视频生成。
 4. 每个字段都要有实质性内容，不要为空。
 5. appearance 和 wardrobe_detail 要足够详细，能支撑高质量的参考像生成。
-6. 如果输入或故事明确给出年龄，appearance 必须在开头原样保留准确年龄（例如“22岁青年女性”），不得用“成熟、资深、威严”等身份语义改变视觉年龄；30岁以下角色应描述符合该年龄的面部骨骼、紧致皮肤和自然妆容，禁止擅自增加法令纹、眼袋、皱纹或中年感。
+6. appearance 必须在开头明确写出角色性别和视觉年龄，例如“55岁男性”或“22岁青年女性”；性别必须来自小说原文、已有角色资料或创作方案，不得猜测。若来源确实未明确，写“性别原文未明确”，不得省略性别。若输入或故事明确给出年龄，必须原样保留准确年龄，不得用“成熟、资深、威严”等身份语义改变视觉年龄；30岁以下角色应描述符合该年龄的面部骨骼、紧致皮肤和自然妆容，禁止擅自增加法令纹、眼袋、皱纹或中年感。
 7. wardrobe_detail 必须明确写出鞋履。鞋履严格符合故事时代、地域文化、身份和服装：中国古典/修仙/武侠角色使用布靴、皂靴、云头履或绣鞋等中式鞋履；除非故事明确要求，禁止赤脚、现代高跟鞋、运动鞋、皮鞋、日式木屐及跨时代跨文化鞋款。
 8. 小说原文、已有角色资料和创作方案中的年龄、性别、种族、身份及外貌是不可改写的事实。不得把儿童改成少年或成人，不得把狐女等种族改成普通人，不得自行添加江南、书香门第等来源中不存在的设定。缺少资料时宁可写“原文未明确”，禁止猜测。
 9. appearance 必须写一套唯一、具体、可直接生图的发型，不能只写“古典发型”“符合时代”或禁止项。必须明确发色、长度、梳理方向、发髻/束发的位置形状和固定物；古典男性原文未写发型时，直接采用“乌黑长发全部向后梳理，在头顶挽成紧实高发髻，以深褐木簪横向固定，额头完整露出、两鬓整齐、无刘海、无披散碎发”。`
@@ -291,6 +291,23 @@ func characterAgeAnchor(appearance, trait string) string {
 	}
 	anchor := fmt.Sprintf("%d岁人物", age)
 	return anchor
+}
+
+func portraitGenderIdentity(char *models.Character) string {
+	text := strings.Join([]string{char.Role, char.Appearance, char.Trait, char.Background, char.WardrobeDetail}, " ")
+	female := []string{"女性", "女子", "女人", "女孩", "女童", "少女", "老妇", "狐女", "女主", "女反派", "女长老"}
+	male := []string{"男性", "男子", "男人", "男孩", "男童", "少年郎", "老者", "老翁", "男主", "男反派", "男长老"}
+	for _, marker := range female {
+		if strings.Contains(text, marker) {
+			return "女性"
+		}
+	}
+	for _, marker := range male {
+		if strings.Contains(text, marker) {
+			return "男性"
+		}
+	}
+	return ""
 }
 
 func portraitFaceIdentity(appearance, trait string) string {
@@ -559,7 +576,11 @@ func (s *CharacterProfileService) GenerateReferencePrompt(char *models.Character
 	if appearance == "" {
 		return "", fmt.Errorf("请先完善角色脸部与发型描述")
 	}
-	parts := []string{"单人正面大头贴"}
+	gender := portraitGenderIdentity(char)
+	if gender == "" {
+		return "", fmt.Errorf("角色档案缺少明确性别；请依据小说原文将男性或女性写入角色身份或外貌后，再生成标准像提示词，系统不会猜测性别")
+	}
+	parts := []string{"单人正面大头贴", "性别：" + gender}
 	// 题材与画风放在提示词最前部，避免被后续的长外貌和服装描述淹没。
 	if identity := portraitStoryIdentity(char, project); identity != "" {
 		parts = append(parts, identity)

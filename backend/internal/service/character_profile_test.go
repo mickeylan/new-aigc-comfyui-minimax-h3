@@ -165,6 +165,31 @@ func TestParseCharacterProfileJSONInvalid(t *testing.T) {
 	}
 }
 
+func TestGenerateReferencePromptRequiresAndEmitsExplicitGender(t *testing.T) {
+	ps := newTestProjectService(t)
+	project := models.Project{Title: "修仙", Genre: "修仙", Style: "真人写实"}
+	ps.db.Create(&project)
+	missing := models.Character{ProjectID: project.ID, Name: "长老", Role: "中反派", Appearance: "约55岁外貌，乌黑长发挽成高发髻，倒三角脸型，眉峰斜飞入鬓", WardrobeDetail: "玄灰色暗纹长老袍"}
+	ps.db.Create(&missing)
+	if _, err := NewCharacterProfileService(ps.db, nil).GenerateReferencePrompt(&missing, &project); err == nil || !strings.Contains(err.Error(), "缺少明确性别") {
+		t.Fatalf("genderless portrait prompt accepted: %v", err)
+	}
+	missing.Background = "男性宗门长老，实际年龄三百余岁"
+	prompt, err := NewCharacterProfileService(ps.db, nil).GenerateReferencePrompt(&missing, &project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "性别：男性") {
+		t.Fatalf("explicit male gender missing: %s", prompt)
+	}
+	female := missing
+	female.Background = "女性宗门长老"
+	prompt, err = NewCharacterProfileService(ps.db, nil).GenerateReferencePrompt(&female, &project)
+	if err != nil || !strings.Contains(prompt, "性别：女性") {
+		t.Fatalf("explicit female gender missing: prompt=%s err=%v", prompt, err)
+	}
+}
+
 func TestGenerateReferencePromptCompilesLumxDimensions(t *testing.T) {
 	ps := newTestProjectService(t)
 	p := models.Project{Title: "测试", Style: "真人写实"}
