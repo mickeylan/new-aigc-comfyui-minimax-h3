@@ -159,6 +159,13 @@ func TestH3TaskDurationPolicyGuardsCreateAndSnapshotRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := NewTaskService(&config.Config{}, db, nil, nil, NewHub(), nil)
+	storyboard := models.Template{Name: "H3 storyboard", Code: "minimax_h3_storyboard_candidates_selflift", Enabled: true, InputsJSON: `[{"key":"duration","type":"float"}]`, WorkflowJSON: `{}`}
+	if err := db.Create(&storyboard).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateTask(CreateTaskReq{TemplateID: storyboard.ID, Params: map[string]any{"duration": 0.21}}); err != nil {
+		t.Fatalf("storyboard frame-batch duration was incorrectly treated as final video duration: %v", err)
+	}
 	if _, err := svc.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Params: map[string]any{"duration": 20.0}}); err == nil || !strings.Contains(err.Error(), "3–15.0") {
 		t.Fatalf("unsafe long task accepted: %v", err)
 	}

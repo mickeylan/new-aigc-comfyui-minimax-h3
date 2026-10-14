@@ -747,7 +747,10 @@ type FileMeta struct {
 }
 
 func (s *TaskService) validateH3TaskDuration(templateCode string, params map[string]any) error {
-	if !strings.HasPrefix(strings.TrimSpace(templateCode), "minimax_h3_") {
+	// This guard applies only to final H3 video workflows. Storyboard candidate and
+	// look-reference workflows also use the minimax_h3_ prefix, but their short
+	// duration controls describe frame batches rather than a 3–N second video.
+	if !isH3VideoPromptTemplate(strings.TrimSpace(templateCode)) {
 		return nil
 	}
 	raw, ok := params["duration"]
