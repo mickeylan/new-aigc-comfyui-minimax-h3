@@ -207,10 +207,21 @@ func (s *CharacterLookService) SaveOutfit(projectID, characterID, outfitID uint,
 				return err
 			}
 		} else {
-			if err := tx.Where("id = ? AND project_id = ? AND character_id = ?", outfitID, projectID, characterID).First(&outfit).Error; err != nil {
+			if err := tx.Preload("Items", func(db *gorm.DB) *gorm.DB { return db.Order("`order`, id") }).Where("id = ? AND project_id = ? AND character_id = ?", outfitID, projectID, characterID).First(&outfit).Error; err != nil {
 				return err
 			}
-			if err := tx.Model(&outfit).Updates(map[string]any{"name": req.Name, "description": strings.TrimSpace(req.Description), "image_engine": engine, "is_default": req.IsDefault, "audit_status": models.LookStatusDraft, "audit_note": "", "image": "", "image_task_id": "", "image_error": "", "sheet": "", "sheet_task_id": "", "sheet_error": "", "version": gorm.Expr("version + 1")}).Error; err != nil {
+			oldEngine := outfit.ImageEngine
+			if oldEngine == "" {
+				oldEngine = ImageEngineKrea2
+			}
+			sameDesign := outfit.Name == req.Name && strings.TrimSpace(outfit.Description) == strings.TrimSpace(req.Description) && outfitLookIDsEqual(outfit.Items, req.LookIDs)
+			engineOnlyChange := sameDesign && oldEngine != engine
+			updates := map[string]any{"name": req.Name, "description": strings.TrimSpace(req.Description), "image_engine": engine, "is_default": req.IsDefault, "image": "", "image_task_id": "", "image_error": "", "sheet": "", "sheet_task_id": "", "sheet_error": "", "version": gorm.Expr("version + 1")}
+			if !engineOnlyChange {
+				updates["audit_status"] = models.LookStatusDraft
+				updates["audit_note"] = ""
+			}
+			if err := tx.Model(&outfit).Updates(updates).Error; err != nil {
 				return err
 			}
 			if err := tx.Where("outfit_id = ?", outfit.ID).Delete(&models.CharacterOutfitLook{}).Error; err != nil {
@@ -237,6 +248,18 @@ func (s *CharacterLookService) SaveOutfit(projectID, characterID, outfitID uint,
 		return nil, err
 	}
 	return &saved, nil
+}
+
+func outfitLookIDsEqual(items []models.CharacterOutfitLook, ids []uint) bool {
+	if len(items) != len(ids) {
+		return false
+	}
+	for i := range items {
+		if items[i].LookID != ids[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *CharacterLookService) validOutfitLooks(projectID, characterID uint, ids []uint) ([]models.CharacterLook, error) {

@@ -109,6 +109,47 @@ func TestListOutfitsDoesNotLeakAcrossCharacters(t *testing.T) {
 	}
 }
 
+func TestSaveOutfitEngineOnlyChangePreservesApproval(t *testing.T) {
+	svc, project, character := setupOutfitTestDB(t)
+	look := models.CharacterLook{ProjectID: project.ID, CharacterID: character.ID, Name: "战袍", Category: "clothing", Description: "玄灰战袍", AuditStatus: models.LookStatusApproved}
+	if err := svc.db.Create(&look).Error; err != nil {
+		t.Fatal(err)
+	}
+	outfit := models.CharacterOutfit{ProjectID: project.ID, CharacterID: character.ID, Name: "护甲战衣", Description: "同一套设计", ImageEngine: ImageEngineKrea2, AuditStatus: models.LookStatusApproved, Image: "old.png", Sheet: "old-sheet.png", Version: 1}
+	if err := svc.db.Create(&outfit).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.db.Create(&models.CharacterOutfitLook{OutfitID: outfit.ID, LookID: look.ID, Order: 0}).Error; err != nil {
+		t.Fatal(err)
+	}
+	saved, err := svc.SaveOutfit(project.ID, character.ID, outfit.ID, OutfitInput{Name: outfit.Name, Description: outfit.Description, ImageEngine: ImageEngineQwen21, LookIDs: []uint{look.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.ImageEngine != ImageEngineQwen21 || saved.AuditStatus != models.LookStatusApproved {
+		t.Fatalf("engine-only change lost approval: %+v", saved)
+	}
+	if saved.Image != "" || saved.Sheet != "" {
+		t.Fatalf("engine-only change retained stale media: %+v", saved)
+	}
+}
+
+func TestSaveOutfitDesignChangeReturnsToDraft(t *testing.T) {
+	svc, project, character := setupOutfitTestDB(t)
+	look := models.CharacterLook{ProjectID: project.ID, CharacterID: character.ID, Name: "战袍", Category: "clothing", Description: "玄灰战袍", AuditStatus: models.LookStatusApproved}
+	svc.db.Create(&look)
+	outfit := models.CharacterOutfit{ProjectID: project.ID, CharacterID: character.ID, Name: "护甲战衣", Description: "旧设计", ImageEngine: ImageEngineKrea2, AuditStatus: models.LookStatusApproved, Version: 1}
+	svc.db.Create(&outfit)
+	svc.db.Create(&models.CharacterOutfitLook{OutfitID: outfit.ID, LookID: look.ID, Order: 0})
+	saved, err := svc.SaveOutfit(project.ID, character.ID, outfit.ID, OutfitInput{Name: outfit.Name, Description: "设计已修改", ImageEngine: ImageEngineQwen21, LookIDs: []uint{look.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.AuditStatus != models.LookStatusDraft {
+		t.Fatalf("changed design must return to draft: %+v", saved)
+	}
+}
+
 func TestOutfitResultFilenameSeparatesRegenerations(t *testing.T) {
 	first := outfitResultFilename("outfit_sheet", 7, "task-a", ".png")
 	second := outfitResultFilename("outfit_sheet", 7, "task-b", ".png")
