@@ -10,7 +10,7 @@ import (
 // captureMergeInputSnapshot records every database input that can affect the rendered merge.
 func (s *ProjectService) captureMergeInputSnapshot(tx *gorm.DB, projectID uint, episodeN int, generation uint, videos []sceneVideoFingerprint, sceneIDs []uint, dub, subtitles bool, audio MergeAudioOptions) ([]byte, error) {
 	snapshot := mergeInputSnapshot{
-		Version: 4, EpisodeGeneration: generation, Videos: videos,
+		Version: 5, EpisodeGeneration: generation, Videos: videos,
 		Dub: dub, Subtitles: subtitles, NativeVolume: audio.NativeVolume,
 		DialogueVolume: audio.DialogueVolume, BGMVolume: audio.BGMVolume, DialogueMix: audio.DialogueMix, ScreenText: audio.ScreenText,
 		Dialogues: []mergeDialogueFingerprint{}, AudioLayers: []mergeAudioLayerFingerprint{}, ScreenTextCues: []mergeScreenTextCueFingerprint{},

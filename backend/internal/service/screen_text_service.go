@@ -210,6 +210,7 @@ func (s *ScreenTextService) validateProductionRules(cue *models.ScreenTextCue, e
 	if cue.Kind == "character_intro" && cue.CharacterID != nil {
 		var count int64
 		query := s.db.Model(&models.ScreenTextCue{}).Where("project_id = ? AND episode_n = ? AND kind = ? AND character_id = ? AND enabled = ? AND review_status = ?", cue.ProjectID, cue.EpisodeN, "character_intro", *cue.CharacterID, true, "approved")
+		query = query.Where("id NOT IN (?)", screenTextCueSlotQuery(s.db.Model(&models.ScreenTextCue{}), *cue).Select("id"))
 		if excludeID > 0 {
 			query = query.Where("id <> ?", excludeID)
 		}
@@ -238,6 +239,7 @@ func (s *ScreenTextService) validateProductionRules(cue *models.ScreenTextCue, e
 	if cue.SceneID != nil {
 		var count int64
 		query := s.db.Model(&models.ScreenTextCue{}).Where("project_id = ? AND episode_n = ? AND scene_id = ? AND anchor = ? AND enabled = ? AND review_status = ? AND start_time < ? AND end_time > ?", cue.ProjectID, cue.EpisodeN, *cue.SceneID, cue.Anchor, true, "approved", cue.EndTime, cue.StartTime)
+		query = query.Where("id NOT IN (?)", screenTextCueSlotQuery(s.db.Model(&models.ScreenTextCue{}), *cue).Select("id"))
 		if excludeID > 0 {
 			query = query.Where("id <> ?", excludeID)
 		}
@@ -303,6 +305,31 @@ func (s *ScreenTextService) List(projectID uint, episodeN int) ([]models.ScreenT
 	return cues, err
 }
 
+func screenTextCueUpdates(cue models.ScreenTextCue) map[string]any {
+	return map[string]any{
+		"episode_n": cue.EpisodeN, "scene_id": cue.SceneID, "shot_id": cue.ShotID,
+		"character_id": cue.CharacterID, "kind": cue.Kind, "text": cue.Text, "subtext": cue.Subtext,
+		"start_time": cue.StartTime, "end_time": cue.EndTime, "writing_mode": cue.WritingMode,
+		"anchor": cue.Anchor, "position_x": cue.PositionX, "position_y": cue.PositionY,
+		"style_code": cue.StyleCode, "font_code": cue.FontCode,
+		"primary_color": cue.PrimaryColor, "subtext_color": cue.SubtextColor, "outline_color": cue.OutlineColor, "shadow_color": cue.ShadowColor,
+		"outline_size": cue.OutlineSize, "shadow_size": cue.ShadowSize, "font_size": cue.FontSize, "subtext_size": cue.SubtextSize, "animation": cue.Animation,
+		"enabled": cue.Enabled, "order": cue.Order, "source": cue.Source, "review_status": cue.ReviewStatus,
+	}
+}
+
+func screenTextCueSlotQuery(tx *gorm.DB, cue models.ScreenTextCue) *gorm.DB {
+	q := tx.Where("project_id = ? AND episode_n = ? AND kind = ? AND start_time = ? AND end_time = ?", cue.ProjectID, cue.EpisodeN, cue.Kind, cue.StartTime, cue.EndTime)
+	for column, value := range map[string]*uint{"scene_id": cue.SceneID, "shot_id": cue.ShotID, "character_id": cue.CharacterID} {
+		if value == nil {
+			q = q.Where(column + " IS NULL")
+		} else {
+			q = q.Where(column+" = ?", *value)
+		}
+	}
+	return q
+}
+
 func (s *ScreenTextService) Create(projectID uint, in ScreenTextCueInput) (*models.ScreenTextCue, error) {
 	cue, err := normalizeScreenTextCue(projectID, in)
 	if err != nil {
@@ -314,7 +341,24 @@ func (s *ScreenTextService) Create(projectID uint, in ScreenTextCueInput) (*mode
 	if err := s.validateProductionRules(&cue, 0); err != nil {
 		return nil, err
 	}
-	if err := s.db.Create(&cue).Error; err != nil {
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		var existing models.ScreenTextCue
+		q := screenTextCueSlotQuery(tx, cue).Order("id").Limit(1)
+		if err := q.First(&existing).Error; err == nil {
+			cue.ID = existing.ID
+			if err := tx.Model(&existing).Updates(screenTextCueUpdates(cue)).Error; err != nil {
+				return err
+			}
+			return screenTextCueSlotQuery(tx, cue).Where("id <> ?", existing.ID).Delete(&models.ScreenTextCue{}).Error
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return tx.Create(&cue).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := s.db.First(&cue, cue.ID).Error; err != nil {
 		return nil, err
 	}
 	return &cue, nil
@@ -338,17 +382,12 @@ func (s *ScreenTextService) Update(projectID, id uint, in ScreenTextCueInput) (*
 	if err := s.validateProductionRules(&cue, id); err != nil {
 		return nil, err
 	}
-	updates := map[string]any{
-		"episode_n": cue.EpisodeN, "scene_id": cue.SceneID, "shot_id": cue.ShotID,
-		"character_id": cue.CharacterID, "kind": cue.Kind, "text": cue.Text, "subtext": cue.Subtext,
-		"start_time": cue.StartTime, "end_time": cue.EndTime, "writing_mode": cue.WritingMode,
-		"anchor": cue.Anchor, "position_x": cue.PositionX, "position_y": cue.PositionY,
-		"style_code": cue.StyleCode, "font_code": cue.FontCode,
-		"primary_color": cue.PrimaryColor, "subtext_color": cue.SubtextColor, "outline_color": cue.OutlineColor, "shadow_color": cue.ShadowColor,
-		"outline_size": cue.OutlineSize, "shadow_size": cue.ShadowSize, "font_size": cue.FontSize, "subtext_size": cue.SubtextSize, "animation": cue.Animation,
-		"enabled": cue.Enabled, "order": cue.Order, "source": cue.Source, "review_status": cue.ReviewStatus,
-	}
-	if err := s.db.Model(&existing).Updates(updates).Error; err != nil {
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&existing).Updates(screenTextCueUpdates(cue)).Error; err != nil {
+			return err
+		}
+		return screenTextCueSlotQuery(tx, cue).Where("id <> ?", id).Delete(&models.ScreenTextCue{}).Error
+	}); err != nil {
 		return nil, err
 	}
 	if err := s.db.First(&existing, id).Error; err != nil {
