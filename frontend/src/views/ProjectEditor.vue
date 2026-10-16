@@ -983,7 +983,7 @@ async function saveScreenTextCue() {
   try {
     cueId ? await api.updateScreenTextCue(id(), cueId, payload) : await api.createScreenTextCue(id(), payload)
     screenTextEditing.value = false
-    toast.success('功能文字已保存')
+    toast.success('功能文字已加入当前分镜；原始Scene视频保持不变，重新合并并开启“烧录功能文字”后写入成片')
     await loadScreenTextCues()
   } catch (e) { toast.error(e.response?.data?.error || '保存功能文字失败') }
   finally { screenTextSaving.value = false }

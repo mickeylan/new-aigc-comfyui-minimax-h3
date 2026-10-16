@@ -1048,6 +1048,7 @@ func (s *Service) HandleCreateMerge(c *gin.Context) {
 		SceneIDs       []uint   `json:"scene_ids"`
 		Dub            bool     `json:"dub"`       // true=保留原音轨(默认), false=静音
 		Subtitles      bool     `json:"subtitles"` // true=烧录字幕(默认), false=不烧录
+		ScreenText     bool     `json:"screen_text"`
 		NativeVolume   *float64 `json:"native_volume"`
 		DialogueVolume *float64 `json:"dialogue_volume"`
 		BGMVolume      *float64 `json:"bgm_volume"`
@@ -1061,6 +1062,7 @@ func (s *Service) HandleCreateMerge(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	options.ScreenText = req.ScreenText
 	mt, err := s.Projects.CreateMergeTaskWithAudio(p, req.SceneIDs, req.Dub, req.Subtitles, options)
 	if err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
@@ -1076,14 +1078,15 @@ func (s *Service) HandleCreateAllMerges(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Dub       bool `json:"dub"`
-		Subtitles bool `json:"subtitles"`
+		Dub        bool `json:"dub"`
+		Subtitles  bool `json:"subtitles"`
+		ScreenText bool `json:"screen_text"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
-	n, err := s.Projects.CreateAllMerges(p, req.Dub, req.Subtitles)
+	n, err := s.Projects.CreateAllMerges(p, req.Dub, req.Subtitles, req.ScreenText)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return

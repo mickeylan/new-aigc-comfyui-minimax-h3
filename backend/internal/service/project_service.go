@@ -7906,7 +7906,7 @@ func (s *ProjectService) ListMerges(projectID uint) ([]models.MergeTask, error) 
 }
 
 // CreateAllMerges 整剧一键合并：对所有含就绪视频的集各创建一个合并任务
-func (s *ProjectService) CreateAllMerges(p *models.Project, dub, subtitles bool) (int, error) {
+func (s *ProjectService) CreateAllMerges(p *models.Project, dub, subtitles, screenText bool) (int, error) {
 	var episodes []int
 	if err := s.db.Model(&models.Scene{}).Where("project_id = ?", p.ID).
 		Distinct("episode_n").Order("episode_n").Pluck("episode_n", &episodes).Error; err != nil {
@@ -7933,7 +7933,7 @@ func (s *ProjectService) CreateAllMerges(p *models.Project, dub, subtitles bool)
 		for i := range scenes {
 			ids[i] = scenes[i].ID
 		}
-		if _, err := s.CreateMergeTask(p, ids, dub, subtitles); err != nil {
+		if _, err := s.CreateMergeTaskWithAudio(p, ids, dub, subtitles, MergeAudioOptions{NativeVolume: 1, DialogueVolume: 1, BGMVolume: 1, ScreenText: screenText}); err != nil {
 			failures = append(failures, fmt.Errorf("第%d集: %w", ep, err))
 			continue
 		}

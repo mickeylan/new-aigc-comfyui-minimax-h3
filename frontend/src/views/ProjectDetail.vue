@@ -510,7 +510,8 @@
         </div>
         <div class="section-actions">
           <button class="btn btn-ghost btn-sm" :disabled="busy" @click="mergeAll">🎬 整剧一键合并</button>
-          <label class="merge-opt"><input type="checkbox" v-model="mergeSub" />烧录字幕</label>
+          <label class="merge-opt"><input type="checkbox" v-model="mergeSub" />烧录对白字幕</label>
+          <label class="merge-opt"><input type="checkbox" v-model="mergeScreenText" />烧录功能字幕/屏幕文字</label>
           <label class="merge-opt"><input type="checkbox" v-model="mergeDub" />保留原声</label>
           <button class="btn btn-lg" :disabled="busy || curVideoReadyCount < 2 || curMerging" @click="autoMergeEpisode">
             ⚡ 合并第{{ activeEpN }}集 {{ curVideoReadyCount }} 个场景
@@ -1011,6 +1012,7 @@ const historyLoading = ref(null)
 const dialogues = ref([])
 const dubMergeOn = ref(true)
 const mergeSub = ref(false)
+const mergeScreenText = ref(true)
 const mergeDub = ref(true)
 const curEpDubReady = computed(() => {
   const ids = currentScenes.value.map(s => s.id)
@@ -1264,9 +1266,9 @@ async function autoMergeEpisode() {
   }
   curMerging.value = true
   try {
-    await api.mergeScenes(id(), { scene_ids: ids, dub: mergeDub.value, subtitles: mergeSub.value })
+    await api.mergeScenes(id(), { scene_ids: ids, dub: mergeDub.value, subtitles: mergeSub.value, screen_text: mergeScreenText.value })
     await load()
-    toast.show(`第${activeEpN.value}集合并任务已启动，完成后可下载成片`)
+    toast.show(`第${activeEpN.value}集合并任务已启动（对白字幕：${mergeSub.value?'开':'关'}；功能文字：${mergeScreenText.value?'开':'关'}），完成后可下载成片`)
   } catch (e) {
     toast.show('合并失败：' + (e.response?.data?.error || e.message))
   } finally {
@@ -2328,7 +2330,7 @@ async function dubAll() {
 async function mergeAll() {
   busy.value = true
   try {
-    const { data } = await api.mergeAllScenes(id(), { dub: mergeDub.value, subtitles: mergeSub.value })
+    const { data } = await api.mergeAllScenes(id(), { dub: mergeDub.value, subtitles: mergeSub.value, screen_text: mergeScreenText.value })
     toast.show(data.message || '整剧合并已启动')
     refreshSoon()
   } catch (e) {
