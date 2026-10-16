@@ -445,7 +445,7 @@
           </div>
 
           <div class="scene-actions">
-            <router-link class="btn btn-sm btn-secondary" :to="{ path: `/projects/${id()}/editor`, query: { episode: sc.episode_n || activeEpN, scene: sc.id, screen_text: 1 } }">＋ 功能字幕/屏幕文字</router-link>
+            <router-link class="btn btn-sm btn-secondary" :to="{ path: `/projects/${id()}/editor`, query: { episode: sc.episode_n || activeEpN, scene: sc.id, screen_text: 1, screen_text_cue: sceneScreenTextCues(sc)[0]?.id || undefined } }">{{sceneScreenTextCues(sc).length?'编辑功能字幕/屏幕文字':'＋ 功能字幕/屏幕文字'}}</router-link>
             <!-- 画面：无图生成，有图重新生成（始终可单独触发） -->
             <template v-if="!sc.image_file">
               <span v-if="sc.status === 'image_pending'" class="working">
@@ -1408,6 +1408,9 @@ function formatTaskParams(raw) { try { return JSON.stringify(JSON.parse(raw || '
 
 function videoUrl(sc) {
   return sc.video_input_file ? api.inputUrl(project.value.id, sc.video_input_file) : api.outputUrl(sc.video_gpu, sc.video_file)
+}
+function sceneScreenTextCues(sc) {
+  return screenTextCues.value.filter(cue => Number(cue.scene_id) === Number(sc.id))
 }
 function activeSceneScreenText(sc) {
   const now = Number(sceneVideoTimes[sc.id] || 0)

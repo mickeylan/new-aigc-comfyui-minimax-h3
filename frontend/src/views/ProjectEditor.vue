@@ -100,9 +100,9 @@
             <div v-for="shot in timelineShots" :key="shot.id" class="shot-clip" :style="{flexGrow:Math.max(1,Number(shot.duration||1))}"><strong>Shot {{shot.order}}</strong><span>{{shot.shot_type}} · {{shot.camera_movement}}</span><small>{{shot._start.toFixed(1)}}–{{shot._end.toFixed(1)}}秒 · {{Number(shot.duration||0).toFixed(1)}}秒</small><div v-if="shot.dialogue_fragments?.length" class="shot-dialogue"><span v-for="fragment in shot.dialogue_fragments" :key="fragment.dialogue_id+'-'+fragment.start_rune">{{fragment.speaker_label||'未指定说话人'}}：{{fragment.text}} <small>[{{fragment.start_rune}},{{fragment.end_rune}})</small></span></div><div class="shot-flags"><i v-if="shot.continues_from_previous">承接</i><i v-if="shot.continues_to_next">延续</i><i v-if="!shot.dialogue_fragments?.length">静音</i></div></div>
             <p v-if="!selectedShots.length" class="board-empty">当前Scene尚无内部Shot。</p>
           </div>
-          <div class="screen-text-track-head"><strong>功能字幕/屏幕文字轨（非对白字幕）</strong><button class="btn btn-xs btn-secondary" @click="editScreenTextCue()">＋ 新增功能字幕</button></div>
+          <div class="screen-text-track-head"><strong>功能字幕/屏幕文字轨（非对白字幕）</strong><button type="button" class="btn btn-xs btn-secondary" @click="editScreenTextCue()">＋ 新增功能字幕</button></div>
           <div class="screen-text-track" aria-label="功能文字时间轴">
-            <button v-for="cue in selectedScreenTextCues" :key="cue.id" class="screen-text-cue" :class="{'cue-disabled':!cue.enabled}" :style="cueTimelineStyle(cue)" @click="editScreenTextCue(cue)" :title="`${cue.start_time}–${cue.end_time}秒 ${cue.text}`"><span>{{screenTextKindLabel(cue.kind)}}</span><strong>{{cue.text}}</strong></button>
+            <button v-for="cue in selectedScreenTextCues" :key="cue.id" type="button" class="screen-text-cue" :class="{'cue-disabled':!cue.enabled}" :style="cueTimelineStyle(cue)" @click="editScreenTextCue(cue)" :title="`${cue.start_time}–${cue.end_time}秒 ${cue.text}`"><span>{{screenTextKindLabel(cue.kind)}}</span><strong>{{cue.text}}</strong></button>
             <span v-if="!selectedScreenTextCues.length" class="screen-text-empty">本Scene尚无人物题名、地点、时间或过场文字</span>
           </div>
         </div>
@@ -273,7 +273,7 @@
       </div>
       <div class="screen-text-grid">
         <div class="card screen-text-list">
-          <button v-for="cue in selectedScreenTextCues" :key="cue.id" class="screen-text-row" @click="editScreenTextCue(cue)"><span class="badge badge-gray">{{screenTextKindLabel(cue.kind)}}</span><strong>{{cue.text}}</strong><small>{{cue.shot_id ? `Shot ${selectedShots.find(s=>s.id===cue.shot_id)?.order || '?'} · ` : ''}}{{cue.start_time}}–{{cue.end_time}}秒 · {{cue.writing_mode}}</small></button>
+          <button v-for="cue in selectedScreenTextCues" :key="cue.id" type="button" class="screen-text-row" @click="editScreenTextCue(cue)"><span class="badge badge-gray">{{screenTextKindLabel(cue.kind)}}</span><strong>{{cue.text}}</strong><small>{{cue.shot_id ? `Shot ${selectedShots.find(s=>s.id===cue.shot_id)?.order || '?'} · ` : ''}}{{cue.start_time}}–{{cue.end_time}}秒 · {{cue.writing_mode}}</small></button>
           <div v-if="!selectedScreenTextCues.length" class="empty">当前Scene暂无功能文字。</div>
         </div>
         <form v-if="screenTextEditing" class="card inline-form screen-text-form" @submit.prevent="saveScreenTextCue">
@@ -1097,7 +1097,16 @@ async function openRequestedScreenTextCue() {
   if (route.query.screen_text !== '1' || !selected.value) return
   await loadSelectedWorkbench()
   await loadScreenTextCues()
-  editScreenTextCue()
+  const requestedCueID = Number(route.query.screen_text_cue || 0)
+  const existing = requestedCueID
+    ? selectedScreenTextCues.value.find(cue => Number(cue.id) === requestedCueID)
+    : (selectedScreenTextCues.value.length === 1 ? selectedScreenTextCues.value[0] : null)
+  if (existing) await editScreenTextCue(existing)
+  else if (!selectedScreenTextCues.value.length) await editScreenTextCue()
+  else {
+    screenTextEditing.value = false
+    toast.info('当前分镜有多条功能文字，请在已有列表中选择要修改的字幕')
+  }
   await nextTick()
   screenTextSection.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
