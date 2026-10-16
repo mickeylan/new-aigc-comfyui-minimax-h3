@@ -59,6 +59,24 @@ func TestScreenTextCueCRUDAndProjectIsolation(t *testing.T) {
 	}
 }
 
+func TestScreenTextCueCanBindSelectedShot(t *testing.T) {
+	db := safetyDB(t, &models.Project{}, &models.Scene{}, &models.Shot{}, &models.Character{}, &models.ScreenTextCue{})
+	project := models.Project{Title: "甲"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 2, Order: 17, Duration: 15}
+	db.Create(&scene)
+	shot := models.Shot{SceneID: scene.ID, Order: 2, Duration: 7.5}
+	db.Create(&shot)
+	service := NewScreenTextService(db)
+	created, err := service.Create(project.ID, ScreenTextCueInput{EpisodeN: 2, SceneID: &scene.ID, ShotID: &shot.ID, Kind: "custom", Text: "元婴威压", StartTime: 7.5, EndTime: 11, WritingMode: "horizontal-ltr", Anchor: "top_center"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ShotID == nil || *created.ShotID != shot.ID {
+		t.Fatalf("shot binding not persisted: %+v", created)
+	}
+}
+
 func TestScreenTextCueStrictBindingsAndTimeline(t *testing.T) {
 	db := safetyDB(t, &models.Project{}, &models.Scene{}, &models.Shot{}, &models.Character{}, &models.ScreenTextCue{})
 	p1 := models.Project{Title: "甲"}

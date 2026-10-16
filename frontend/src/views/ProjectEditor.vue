@@ -100,7 +100,7 @@
             <div v-for="shot in timelineShots" :key="shot.id" class="shot-clip" :style="{flexGrow:Math.max(1,Number(shot.duration||1))}"><strong>Shot {{shot.order}}</strong><span>{{shot.shot_type}} · {{shot.camera_movement}}</span><small>{{shot._start.toFixed(1)}}–{{shot._end.toFixed(1)}}秒 · {{Number(shot.duration||0).toFixed(1)}}秒</small><div v-if="shot.dialogue_fragments?.length" class="shot-dialogue"><span v-for="fragment in shot.dialogue_fragments" :key="fragment.dialogue_id+'-'+fragment.start_rune">{{fragment.speaker_label||'未指定说话人'}}：{{fragment.text}} <small>[{{fragment.start_rune}},{{fragment.end_rune}})</small></span></div><div class="shot-flags"><i v-if="shot.continues_from_previous">承接</i><i v-if="shot.continues_to_next">延续</i><i v-if="!shot.dialogue_fragments?.length">静音</i></div></div>
             <p v-if="!selectedShots.length" class="board-empty">当前Scene尚无内部Shot。</p>
           </div>
-          <div class="screen-text-track-head"><strong>功能文字轨（非对白字幕）</strong><button class="btn btn-xs btn-secondary" @click="editScreenTextCue()">添加</button></div>
+          <div class="screen-text-track-head"><strong>功能字幕/屏幕文字轨（非对白字幕）</strong><button class="btn btn-xs btn-secondary" @click="editScreenTextCue()">＋ 添加到当前分镜</button></div>
           <div class="screen-text-track" aria-label="功能文字时间轴">
             <button v-for="cue in selectedScreenTextCues" :key="cue.id" class="screen-text-cue" :class="{'cue-disabled':!cue.enabled}" :style="cueTimelineStyle(cue)" @click="editScreenTextCue(cue)" :title="`${cue.start_time}–${cue.end_time}秒 ${cue.text}`"><span>{{screenTextKindLabel(cue.kind)}}</span><strong>{{cue.text}}</strong></button>
             <span v-if="!selectedScreenTextCues.length" class="screen-text-empty">本Scene尚无人物题名、地点、时间或过场文字</span>
@@ -264,8 +264,8 @@
 
     <ShotDirectorEditor v-if="selected" :key="`shot-director-${selected.id}`" :project-id="id()" :scene-id="selected.id" :genre="project?.genre || ''" :tone="project?.tone || ''" :scene-title="selected.title || ''" :scene-content="selected.content || ''" :scene-mode="selected.scene_mode || ''" @scene-changed="reloadSelectedScene" @scene-materialized="handleShotMaterialized" />
 
-    <section v-if="selected" class="section screen-text-section">
-      <div class="section-head"><div><span class="overline">SCREEN TEXT</span><h2>功能文字（非对白字幕）</h2><p class="sub">用于人物出场、地点、时间、过场和“本集完”；不会进入Dialogue、配音或H3提示词。</p><p class="font-compliance" :class="approvedFonts.some(font=>font.verified)?'ok':'warn'">{{approvedFonts.some(font=>font.verified)?`已验证 ${approvedFonts.filter(font=>font.verified).length} 套开源中文字体`:'尚未安装通过许可证与SHA-256校验的中文字体；可编辑预览，但正式发行导出将被阻止'}}</p></div><button class="btn btn-sm btn-secondary" @click="editScreenTextCue()">新增功能文字</button></div>
+    <section v-if="selected" ref="screenTextSection" class="section screen-text-section">
+      <div class="section-head"><div><span class="overline">SCREEN TEXT</span><h2>功能字幕 / 屏幕文字（非对白字幕）</h2><p class="sub">用于人物出场、地点、时间、过场和“本集完”；不会进入Dialogue、配音或H3提示词。</p><p class="font-compliance" :class="approvedFonts.some(font=>font.verified)?'ok':'warn'">{{approvedFonts.some(font=>font.verified)?`已验证 ${approvedFonts.filter(font=>font.verified).length} 套开源中文字体`:'尚未安装通过许可证与SHA-256校验的中文字体；可编辑预览，但正式发行导出将被阻止'}}</p></div><button class="btn btn-sm btn-secondary" @click="editScreenTextCue()">新增功能文字</button></div>
       <div class="card screen-text-preflight">
         <div class="screen-text-preflight-head"><strong>最终渲染检查</strong><span v-if="screenTextPreflightLoading">检查中…</span><span v-else-if="screenTextPreflight?.ok" class="check-ok">✓ 可正式导出</span><span v-else class="check-fail">✗ 正式导出将被阻止</span><button class="btn btn-xs btn-secondary" @click="loadScreenTextPreflight">重新检查</button></div>
         <p v-if="screenTextPreflight">{{screenTextPreflight.width}}×{{screenTextPreflight.height}} · {{screenTextPreflight.font_family || screenTextPreflight.font_code}} · {{screenTextPreflight.previews?.length || 0}} 条已审核文字</p>
@@ -273,11 +273,12 @@
       </div>
       <div class="screen-text-grid">
         <div class="card screen-text-list">
-          <button v-for="cue in selectedScreenTextCues" :key="cue.id" class="screen-text-row" @click="editScreenTextCue(cue)"><span class="badge badge-gray">{{screenTextKindLabel(cue.kind)}}</span><strong>{{cue.text}}</strong><small>{{cue.start_time}}–{{cue.end_time}}秒 · {{cue.writing_mode}}</small></button>
+          <button v-for="cue in selectedScreenTextCues" :key="cue.id" class="screen-text-row" @click="editScreenTextCue(cue)"><span class="badge badge-gray">{{screenTextKindLabel(cue.kind)}}</span><strong>{{cue.text}}</strong><small>{{cue.shot_id ? `Shot ${selectedShots.find(s=>s.id===cue.shot_id)?.order || '?'} · ` : ''}}{{cue.start_time}}–{{cue.end_time}}秒 · {{cue.writing_mode}}</small></button>
           <div v-if="!selectedScreenTextCues.length" class="empty">当前Scene暂无功能文字。</div>
         </div>
         <form v-if="screenTextEditing" class="card inline-form screen-text-form" @submit.prevent="saveScreenTextCue">
           <label>类型<select v-model="screenTextForm.kind" class="input"><option value="character_intro">人物出场</option><option value="location">地点</option><option value="time_card">时间</option><option value="transition">过场</option><option value="chapter_title">章回标题</option><option value="story_note">剧情提示</option><option value="end_card">本集完</option><option value="custom">自定义</option></select></label>
+          <label>绑定内部Shot（可选）<select v-model="screenTextForm.shot_id" class="input" @change="applyScreenTextShotRange"><option :value="null">整个当前分镜Scene</option><option v-for="shot in timelineShots" :key="shot.id" :value="shot.id">Shot {{shot.order}} · {{shot._start.toFixed(1)}}–{{shot._end.toFixed(1)}}秒</option></select></label>
           <label v-if="screenTextForm.kind==='character_intro'">绑定角色<select v-model="screenTextForm.character_id" class="input" required><option :value="null">请选择</option><option v-for="character in characters" :key="character.id" :value="character.id">{{character.name}}</option></select></label>
           <label>排版<select v-model="screenTextForm.writing_mode" class="input"><option value="horizontal-ltr">中文横排</option><option value="vertical-rl">从上到下、列从右到左</option><option value="vertical-lr">从上到下、列从左到右</option><option value="stacked-upright">单列直立</option></select></label>
           <label>位置<select v-model="screenTextForm.anchor" class="input"><option value="top_left">左上</option><option value="top_center">上方居中</option><option value="top_right">右上</option><option value="center">居中</option><option value="bottom_left">左下</option><option value="bottom_center">下方居中</option><option value="bottom_right">右下</option><option value="subject_left">人物左侧</option><option value="subject_right">人物右侧</option><option value="custom">自定义精确位置</option></select></label>
@@ -371,7 +372,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { useToastStore } from '../stores/toast'
@@ -401,6 +402,7 @@ const screenTextCues = ref([])
 const screenTextPreflight = ref(null)
 const screenTextPreflightLoading = ref(false)
 const screenTextEditing = ref(false)
+const screenTextSection = ref(null)
 const screenTextForm = reactive({})
 const characters = ref([])
 const approvedFonts = ref([])
@@ -951,6 +953,13 @@ function editScreenTextCue(cue = null) {
   })
   screenTextEditing.value = true
 }
+function applyScreenTextShotRange() {
+  if (!screenTextForm.shot_id) return
+  const shot = timelineShots.value.find(row => Number(row.id) === Number(screenTextForm.shot_id))
+  if (!shot) return
+  screenTextForm.start_time = Math.round(shot._start * 10) / 10
+  screenTextForm.end_time = Math.round(shot._end * 10) / 10
+}
 function setScreenTextPosition(event) {
   const rect = event.currentTarget.getBoundingClientRect()
   const x = Math.min(.95, Math.max(.05, (event.clientX - rect.left) / rect.width))
@@ -1060,9 +1069,26 @@ function onContinuityApplied(result, openPrompt) {
 function mergeStatusText(s) { return { pending: '等待中', running: '合并中', success: '成片完成', failed: '失败' }[s] || s }
 function mergeBadgeClass(s) { return { pending: 'badge-gray', running: 'badge-orange', success: 'badge-green', failed: 'badge-red' }[s] || 'badge-gray' }
 
+async function openRequestedScreenTextCue() {
+  const requestedSceneID = Number(route.query.scene || 0)
+  if (requestedSceneID) {
+    const requested = scenes.value.find(scene => Number(scene.id) === requestedSceneID)
+    if (requested) selectScene(requested)
+  }
+  if (route.query.screen_text !== '1' || !selected.value) return
+  await loadSelectedWorkbench()
+  await loadScreenTextCues()
+  editScreenTextCue()
+  await nextTick()
+  screenTextSection.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
 let timer = null
-onMounted(() => {
-  load()
+onMounted(async () => {
+  const requestedEpisode = Number(route.query.episode || 0)
+  if (requestedEpisode > 0) activeEpN.value = requestedEpisode
+  await load()
+  await openRequestedScreenTextCue()
   timer = setInterval(load, 8000)
 })
 onUnmounted(() => { clearInterval(timer); videoDraftSafety?.dispose() })

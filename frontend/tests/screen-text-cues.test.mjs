@@ -4,11 +4,12 @@ import { readFileSync } from 'node:fs'
 
 const api = readFileSync(new URL('../src/api/index.js', import.meta.url), 'utf8')
 const editor = readFileSync(new URL('../src/views/ProjectEditor.vue', import.meta.url), 'utf8')
+const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
 
 test('功能文字使用独立项目级CRUD而非Dialogue接口', () => {
   for (const name of ['screenTextCues:', 'createScreenTextCue:', 'updateScreenTextCue:', 'deleteScreenTextCue:']) assert.match(api, new RegExp(name))
   assert.match(api, /screen-text-cues/)
-  assert.match(editor, /功能文字（非对白字幕）/)
+  assert.match(editor, /功能字幕 \/ 屏幕文字（非对白字幕）/)
   assert.match(editor, /不会进入Dialogue、配音或H3提示词/)
   assert.match(editor, /api\.createScreenTextCue/)
   assert.match(editor, /api\.updateScreenTextCue/)
@@ -40,6 +41,18 @@ test('功能文字轨支持中文横排和古装竖排且不使用Canvas', () =>
   assert.match(editor, /position_y/)
   assert.match(editor, /墨迹显字（当前以慢淡入渲染）/)
   assert.match(editor, /style-\$\{screenTextForm\.style_code\}/)
+})
+
+test('指定分镜可直接进入功能字幕并绑定内部Shot', () => {
+  assert.match(detail, /功能字幕\/屏幕文字/)
+  assert.match(detail, /screen_text: 1/)
+  assert.match(detail, /scene: sc\.id/)
+  assert.match(editor, /route\.query\.screen_text !== '1'/)
+  assert.match(editor, /screenTextSection\.value\?\.scrollIntoView/)
+  assert.match(editor, /v-model="screenTextForm\.shot_id"/)
+  assert.match(editor, /applyScreenTextShotRange/)
+  assert.match(editor, /shot\._start/)
+  assert.match(editor, /shot\._end/)
 })
 
 test('功能文字首版覆盖人物地点时间过场和本集完', () => {

@@ -210,7 +210,9 @@ func (s *ScreenTextService) validateBindings(cue *models.ScreenTextCue) error {
 			return fmt.Errorf("绑定镜头时必须同时绑定场景")
 		}
 		var count int64
-		if err := s.db.Model(&models.Shot{}).Where("id = ? AND scene_id = ? AND project_id = ?", *cue.ShotID, *cue.SceneID, cue.ProjectID).Count(&count).Error; err != nil {
+		// Shot ownership is inherited from its already-validated Scene. The shots table
+		// intentionally has no project_id column.
+		if err := s.db.Model(&models.Shot{}).Where("id = ? AND scene_id = ?", *cue.ShotID, *cue.SceneID).Count(&count).Error; err != nil {
 			return err
 		}
 		if count == 0 {
