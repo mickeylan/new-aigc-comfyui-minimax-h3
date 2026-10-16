@@ -7182,7 +7182,11 @@ type mergeScreenTextCueFingerprint struct {
 	StartTime, EndTime             float64
 	PositionX, PositionY           *float64
 	WritingMode, Anchor, StyleCode string
+	FontCode                       string
+	PrimaryColor, SubtextColor     string
+	OutlineColor, ShadowColor      string
 	FontSize, SubtextSize          int
+	OutlineSize, ShadowSize        int
 	Animation, ReviewStatus        string
 	Enabled                        bool
 }

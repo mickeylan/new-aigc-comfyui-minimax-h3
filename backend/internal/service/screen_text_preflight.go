@@ -18,6 +18,7 @@ type ScreenTextRenderPreview struct {
 	CueID             uint   `json:"cue_id"`
 	Text              string `json:"text"`
 	StyleCode         string `json:"style_code"`
+	FontCode          string `json:"font_code"`
 	FontFamily        string `json:"font_family"`
 	FontSize          int    `json:"font_size"`
 	SubtextSize       int    `json:"subtext_size"`
@@ -88,16 +89,25 @@ func (s *ScreenTextService) Preflight(projectID uint, episodeN, width, height in
 			result.Issues = append(result.Issues, ScreenTextPreflightIssue{CueID: cue.ID, Severity: "error", Code: "production_rule", Message: err.Error()})
 		}
 		style := resolvedScreenTextStyle(*cue)
+		fontCode := strings.TrimSpace(cue.FontCode)
+		if fontCode == "" {
+			fontCode = result.FontCode
+		}
 		family := result.FontFamily
+		if selected, fontErr := fonts.Approved(fontCode); fontErr != nil {
+			result.Issues = append(result.Issues, ScreenTextPreflightIssue{CueID: cue.ID, Severity: "error", Code: "font_unverified", Message: fontErr.Error()})
+		} else {
+			family = selected.Family
+		}
 		if strings.TrimSpace(family) == "" {
 			family = "Noto Sans SC"
 		}
 		result.Previews = append(result.Previews, ScreenTextRenderPreview{
-			CueID: cue.ID, Text: cue.Text, StyleCode: cue.StyleCode, FontFamily: family,
+			CueID: cue.ID, Text: cue.Text, StyleCode: cue.StyleCode, FontCode: fontCode, FontFamily: family,
 			FontSize: style.FontSize, SubtextSize: style.SubtextSize, PrimaryColor: style.PrimaryColor,
 			OutlineColor: style.OutlineColor, WritingMode: cue.WritingMode, Anchor: cue.Anchor,
 			Animation: cue.Animation, AnimationRendered: renderedAnimation(cue.Animation),
-			ASSEvent: screenTextToASS(*cue, width, height, cue.EndTime-cue.StartTime),
+			ASSEvent: screenTextToASS(*cue, width, height, cue.EndTime-cue.StartTime, family),
 		})
 		if cue.Animation == "ink_reveal" {
 			result.Issues = append(result.Issues, ScreenTextPreflightIssue{CueID: cue.ID, Severity: "warning", Code: "ink_reveal_fallback", Message: "墨迹显字当前按慢淡入渲染，尚未使用透明墨迹遮罩"})

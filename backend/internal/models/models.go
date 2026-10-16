@@ -1189,6 +1189,13 @@ type ScreenTextCue struct {
 	PositionX    *float64  `json:"position_x,omitempty"`
 	PositionY    *float64  `json:"position_y,omitempty"`
 	StyleCode    string    `gorm:"size:100" json:"style_code"`
+	FontCode     string    `gorm:"size:100;default:noto-sans-sc" json:"font_code"`
+	PrimaryColor string    `gorm:"size:16" json:"primary_color"`
+	SubtextColor string    `gorm:"size:16" json:"subtext_color"`
+	OutlineColor string    `gorm:"size:16" json:"outline_color"`
+	ShadowColor  string    `gorm:"size:16" json:"shadow_color"`
+	OutlineSize  int       `gorm:"default:0" json:"outline_size"`
+	ShadowSize   int       `gorm:"default:0" json:"shadow_size"`
 	FontSize     int       `gorm:"default:0" json:"font_size"`
 	SubtextSize  int       `gorm:"default:0" json:"subtext_size"`
 	Animation    string    `gorm:"size:32" json:"animation"`

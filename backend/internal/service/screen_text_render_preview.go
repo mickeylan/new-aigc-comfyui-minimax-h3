@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"comfyui-console/internal/models"
@@ -37,7 +38,11 @@ func (s *ScreenTextService) RenderPreviewPNG(projectID, cueID uint, width, heigh
 		}
 		return nil, err
 	}
-	font, err := fonts.Approved("noto-sans-sc")
+	fontCode := strings.TrimSpace(cue.FontCode)
+	if fontCode == "" {
+		fontCode = "noto-sans-sc"
+	}
+	font, err := fonts.Approved(fontCode)
 	if err != nil {
 		return nil, fmt.Errorf("功能文字预览被阻止: %w", err)
 	}

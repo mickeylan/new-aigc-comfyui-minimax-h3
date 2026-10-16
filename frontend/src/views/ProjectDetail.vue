@@ -1420,7 +1420,7 @@ function sceneScreenTextValue(cue) {
 function sceneScreenTextStyle(cue) {
   const points = { top_left:[10,10], top_center:[50,10], top_right:[90,10], center:[50,50], left_center:[10,50], right_center:[90,50], bottom_left:[10,90], bottom_center:[50,90], bottom_right:[90,90], subject_left:[25,50], subject_right:[75,50] }
   const point = cue.anchor === 'custom' ? [Number(cue.position_x||.5)*100, Number(cue.position_y||.5)*100] : (points[cue.anchor] || points.bottom_center)
-  return { left:`${point[0]}%`, top:`${point[1]}%`, fontSize:cue.font_size>0?`${cue.font_size}px`:undefined, writingMode:String(cue.writing_mode||'').startsWith('vertical')?'vertical-rl':'horizontal-tb' }
+  return { left:`${point[0]}%`, top:`${point[1]}%`, fontSize:cue.font_size>0?`${cue.font_size}px`:undefined, color:cue.primary_color||undefined, WebkitTextStroke:cue.outline_size>0?`${cue.outline_size}px ${cue.outline_color||'#000000'}`:undefined, textShadow:cue.shadow_size>0?`${cue.shadow_size}px ${cue.shadow_size}px ${cue.shadow_size}px ${cue.shadow_color||'#000000'}`:undefined, writingMode:String(cue.writing_mode||'').startsWith('vertical')?'vertical-rl':'horizontal-tb' }
 }
 function outputUrl(gpu, path) {
   return api.outputUrl(gpu, path)

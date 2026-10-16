@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 
 	"comfyui-console/internal/models"
@@ -31,6 +32,13 @@ type ScreenTextCueInput struct {
 	PositionX    *float64 `json:"position_x"`
 	PositionY    *float64 `json:"position_y"`
 	StyleCode    string   `json:"style_code"`
+	FontCode     string   `json:"font_code"`
+	PrimaryColor string   `json:"primary_color"`
+	SubtextColor string   `json:"subtext_color"`
+	OutlineColor string   `json:"outline_color"`
+	ShadowColor  string   `json:"shadow_color"`
+	OutlineSize  int      `json:"outline_size"`
+	ShadowSize   int      `json:"shadow_size"`
 	FontSize     int      `json:"font_size"`
 	SubtextSize  int      `json:"subtext_size"`
 	Animation    string   `json:"animation"`
@@ -50,10 +58,24 @@ var screenTextStyles = map[string]bool{
 	"xianxia-character-vertical": true, "xianxia-location-vertical": true,
 	"historical-time-card": true, "ink-transition-card": true,
 	"ink-end-card": true, "modern-horizontal-caption": true,
+	"xianxia-gold-title": true, "cold-silver-runes": true, "vermilion-seal": true,
 }
 
 var screenTextWritingModes = map[string]bool{
 	"horizontal-ltr": true, "vertical-rl": true, "vertical-lr": true, "stacked-upright": true,
+}
+
+var screenTextHexColor = regexp.MustCompile(`^#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?$`)
+
+func normalizeOptionalScreenTextColor(value, label string) (string, error) {
+	value = strings.ToUpper(strings.TrimSpace(value))
+	if value == "" {
+		return "", nil
+	}
+	if !screenTextHexColor.MatchString(value) {
+		return "", fmt.Errorf("%s必须是 #RRGGBB 或 #RRGGBBAA", label)
+	}
+	return value, nil
 }
 
 var screenTextAnchors = map[string]bool{
@@ -113,6 +135,32 @@ func normalizeScreenTextCue(projectID uint, in ScreenTextCueInput) (models.Scree
 	if !screenTextStyles[styleCode] {
 		return models.ScreenTextCue{}, fmt.Errorf("不支持的功能文字样式")
 	}
+	fontCode := strings.TrimSpace(in.FontCode)
+	if fontCode == "" {
+		fontCode = "noto-sans-sc"
+	}
+	if !regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,99}$`).MatchString(fontCode) {
+		return models.ScreenTextCue{}, fmt.Errorf("字体代码无效")
+	}
+	primaryColor, err := normalizeOptionalScreenTextColor(in.PrimaryColor, "主文字颜色")
+	if err != nil {
+		return models.ScreenTextCue{}, err
+	}
+	subtextColor, err := normalizeOptionalScreenTextColor(in.SubtextColor, "副标题颜色")
+	if err != nil {
+		return models.ScreenTextCue{}, err
+	}
+	outlineColor, err := normalizeOptionalScreenTextColor(in.OutlineColor, "描边颜色")
+	if err != nil {
+		return models.ScreenTextCue{}, err
+	}
+	shadowColor, err := normalizeOptionalScreenTextColor(in.ShadowColor, "阴影颜色")
+	if err != nil {
+		return models.ScreenTextCue{}, err
+	}
+	if in.OutlineSize < 0 || in.OutlineSize > 20 || in.ShadowSize < 0 || in.ShadowSize > 20 {
+		return models.ScreenTextCue{}, fmt.Errorf("描边与阴影大小必须为 0~20")
+	}
 	if in.FontSize < 0 || in.FontSize > 200 {
 		return models.ScreenTextCue{}, fmt.Errorf("主文字字号必须留空使用样式预设，或设置为 1~200")
 	}
@@ -148,7 +196,9 @@ func normalizeScreenTextCue(projectID uint, in ScreenTextCueInput) (models.Scree
 		ProjectID: projectID, EpisodeN: in.EpisodeN, SceneID: in.SceneID, ShotID: in.ShotID,
 		CharacterID: in.CharacterID, Kind: kind, Text: text, Subtext: strings.TrimSpace(in.Subtext),
 		StartTime: in.StartTime, EndTime: in.EndTime, WritingMode: writingMode, Anchor: anchor,
-		PositionX: positionX, PositionY: positionY, StyleCode: styleCode, FontSize: in.FontSize, SubtextSize: in.SubtextSize, Animation: animation, Enabled: enabled,
+		PositionX: positionX, PositionY: positionY, StyleCode: styleCode, FontCode: fontCode,
+		PrimaryColor: primaryColor, SubtextColor: subtextColor, OutlineColor: outlineColor, ShadowColor: shadowColor,
+		OutlineSize: in.OutlineSize, ShadowSize: in.ShadowSize, FontSize: in.FontSize, SubtextSize: in.SubtextSize, Animation: animation, Enabled: enabled,
 		Order: in.Order, Source: source, ReviewStatus: reviewStatus,
 	}, nil
 }
@@ -293,7 +343,9 @@ func (s *ScreenTextService) Update(projectID, id uint, in ScreenTextCueInput) (*
 		"character_id": cue.CharacterID, "kind": cue.Kind, "text": cue.Text, "subtext": cue.Subtext,
 		"start_time": cue.StartTime, "end_time": cue.EndTime, "writing_mode": cue.WritingMode,
 		"anchor": cue.Anchor, "position_x": cue.PositionX, "position_y": cue.PositionY,
-		"style_code": cue.StyleCode, "font_size": cue.FontSize, "subtext_size": cue.SubtextSize, "animation": cue.Animation,
+		"style_code": cue.StyleCode, "font_code": cue.FontCode,
+		"primary_color": cue.PrimaryColor, "subtext_color": cue.SubtextColor, "outline_color": cue.OutlineColor, "shadow_color": cue.ShadowColor,
+		"outline_size": cue.OutlineSize, "shadow_size": cue.ShadowSize, "font_size": cue.FontSize, "subtext_size": cue.SubtextSize, "animation": cue.Animation,
 		"enabled": cue.Enabled, "order": cue.Order, "source": cue.Source, "review_status": cue.ReviewStatus,
 	}
 	if err := s.db.Model(&existing).Updates(updates).Error; err != nil {

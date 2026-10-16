@@ -59,6 +59,19 @@ func TestScreenTextCueCRUDAndProjectIsolation(t *testing.T) {
 	}
 }
 
+func TestScreenTextCueValidatesArtStyleFields(t *testing.T) {
+	cue, err := normalizeScreenTextCue(1, ScreenTextCueInput{EpisodeN: 1, Kind: "custom", Text: "题名", StartTime: 0, EndTime: 2, StyleCode: "xianxia-gold-title", FontCode: "noto-sans-sc", PrimaryColor: "#112233", SubtextColor: "#445566", OutlineColor: "#778899", ShadowColor: "#AABBCC80", OutlineSize: 4, ShadowSize: 5})
+	if err != nil || cue.FontCode != "noto-sans-sc" || cue.PrimaryColor != "#112233" || cue.OutlineSize != 4 || cue.ShadowSize != 5 {
+		t.Fatalf("valid art style rejected: cue=%+v err=%v", cue, err)
+	}
+	if _, err := normalizeScreenTextCue(1, ScreenTextCueInput{EpisodeN: 1, Kind: "custom", Text: "题名", StartTime: 0, EndTime: 2, PrimaryColor: "red"}); err == nil {
+		t.Fatal("invalid color accepted")
+	}
+	if _, err := normalizeScreenTextCue(1, ScreenTextCueInput{EpisodeN: 1, Kind: "custom", Text: "题名", StartTime: 0, EndTime: 2, OutlineSize: 21}); err == nil {
+		t.Fatal("oversized outline accepted")
+	}
+}
+
 func TestScreenTextCueValidatesFontSizeOverrides(t *testing.T) {
 	cue, err := normalizeScreenTextCue(1, ScreenTextCueInput{EpisodeN: 1, Kind: "custom", Text: "题名", StartTime: 0, EndTime: 2, FontSize: 92, SubtextSize: 44})
 	if err != nil || cue.FontSize != 92 || cue.SubtextSize != 44 {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"comfyui-console/internal/models"
@@ -98,14 +99,34 @@ func assAlignment(anchor string) int {
 type screenTextASSStyle struct {
 	FontSize, SubtextSize int
 	PrimaryColor          string
+	SubtextColor          string
 	OutlineColor          string
+	ShadowColor           string
 	Outline, Shadow       int
 	Spacing               int
 	ForceCenter           bool
 }
 
+func hexColorToASS(value, fallback string) string {
+	value = strings.TrimPrefix(strings.TrimSpace(value), "#")
+	if len(value) != 6 && len(value) != 8 {
+		return fallback
+	}
+	rr, gg, bb := value[0:2], value[2:4], value[4:6]
+	aa := "00"
+	if len(value) == 8 {
+		// CSS alpha is opacity; ASS alpha is transparency.
+		if opacity, err := strconv.ParseUint(value[6:8], 16, 8); err == nil {
+			aa = fmt.Sprintf("%02X", 255-opacity)
+		} else {
+			return fallback
+		}
+	}
+	return "&H" + aa + bb + gg + rr + "&"
+}
+
 func resolvedScreenTextStyle(cue models.ScreenTextCue) screenTextASSStyle {
-	style := screenTextASSStyle{FontSize: 54, SubtextSize: 28, PrimaryColor: "&H00F4E4C0&", OutlineColor: "&H802B1C12&", Outline: 2, Shadow: 2, Spacing: 3}
+	style := screenTextASSStyle{FontSize: 54, SubtextSize: 28, PrimaryColor: "&H00F4E4C0&", SubtextColor: "&H00D1B98B&", OutlineColor: "&H802B1C12&", ShadowColor: "&H80000000&", Outline: 2, Shadow: 2, Spacing: 3}
 	switch cue.StyleCode {
 	case "xianxia-character-vertical":
 		style.FontSize, style.SubtextSize, style.Spacing = 68, 32, 7
@@ -121,7 +142,18 @@ func resolvedScreenTextStyle(cue models.ScreenTextCue) screenTextASSStyle {
 		style.PrimaryColor, style.OutlineColor, style.Outline, style.Shadow = "&H00F2DFC0&", "&H90000000&", 3, 3
 	case "modern-horizontal-caption":
 		style.FontSize, style.SubtextSize, style.Spacing = 46, 26, 2
-		style.PrimaryColor, style.OutlineColor = "&H00FFFFFF&", "&H90000000&"
+		style.PrimaryColor, style.SubtextColor, style.OutlineColor = "&H00FFFFFF&", "&H00E0E0E0&", "&H90000000&"
+	case "xianxia-gold-title":
+		style.FontSize, style.SubtextSize, style.Spacing = 76, 34, 8
+		style.PrimaryColor, style.SubtextColor, style.OutlineColor, style.ShadowColor = "&H00A8DFFF&", "&H00B9D7ED&", "&H80402010&", "&H90000000&"
+		style.Outline, style.Shadow = 3, 3
+	case "cold-silver-runes":
+		style.FontSize, style.SubtextSize, style.Spacing = 64, 30, 6
+		style.PrimaryColor, style.SubtextColor, style.OutlineColor, style.ShadowColor = "&H00F5EEE8&", "&H00DAD3CE&", "&H80483830&", "&HA0000000&"
+	case "vermilion-seal":
+		style.FontSize, style.SubtextSize, style.Spacing = 70, 30, 5
+		style.PrimaryColor, style.SubtextColor, style.OutlineColor, style.ShadowColor = "&H003535C8&", "&H005555D8&", "&H00EEEEF8&", "&H70000000&"
+		style.Outline, style.Shadow = 2, 1
 	}
 	if cue.Kind == "end_card" || cue.Kind == "chapter_title" {
 		style.ForceCenter = true
@@ -131,6 +163,16 @@ func resolvedScreenTextStyle(cue models.ScreenTextCue) screenTextASSStyle {
 	}
 	if cue.SubtextSize > 0 {
 		style.SubtextSize = cue.SubtextSize
+	}
+	style.PrimaryColor = hexColorToASS(cue.PrimaryColor, style.PrimaryColor)
+	style.SubtextColor = hexColorToASS(cue.SubtextColor, style.SubtextColor)
+	style.OutlineColor = hexColorToASS(cue.OutlineColor, style.OutlineColor)
+	style.ShadowColor = hexColorToASS(cue.ShadowColor, style.ShadowColor)
+	if cue.OutlineSize > 0 {
+		style.Outline = cue.OutlineSize
+	}
+	if cue.ShadowSize > 0 {
+		style.Shadow = cue.ShadowSize
 	}
 	return style
 }
@@ -179,7 +221,7 @@ func verticalRowsForHeight(height int, style screenTextASSStyle) int {
 	return rows
 }
 
-func screenTextToASS(cue models.ScreenTextCue, width, height int, duration float64) string {
+func screenTextToASS(cue models.ScreenTextCue, width, height int, duration float64, fontFamilies ...string) string {
 	style := resolvedScreenTextStyle(cue)
 	text := escapeASSText(cue.Text)
 	rows := verticalRowsForHeight(height, style)
@@ -192,13 +234,17 @@ func screenTextToASS(cue models.ScreenTextCue, width, height int, duration float
 		text = karaokeASSText(cue.Text, duration)
 	}
 	if subtext := strings.TrimSpace(cue.Subtext); subtext != "" {
-		text += fmt.Sprintf(`\N{\fs%d}`, style.SubtextSize) + escapeASSText(subtext)
+		text += fmt.Sprintf(`\N{\fs%d\c%s}`, style.SubtextSize, style.SubtextColor) + escapeASSText(subtext)
 	}
 	alignment := assAlignment(cue.Anchor)
 	if style.ForceCenter {
 		alignment = 5
 	}
-	tags := fmt.Sprintf(`{\an%d\fs%d\c%s\3c%s\bord%d\shad%d\fsp%d}`, alignment, style.FontSize, style.PrimaryColor, style.OutlineColor, style.Outline, style.Shadow, style.Spacing)
+	fontTag := ""
+	if len(fontFamilies) > 0 && strings.TrimSpace(fontFamilies[0]) != "" {
+		fontTag = `\fn` + strings.ReplaceAll(fontFamilies[0], `\`, "")
+	}
+	tags := fmt.Sprintf(`{\an%d%s\fs%d\c%s\3c%s\4c%s\bord%d\shad%d\fsp%d}`, alignment, fontTag, style.FontSize, style.PrimaryColor, style.OutlineColor, style.ShadowColor, style.Outline, style.Shadow, style.Spacing)
 	if cue.Anchor == "custom" && cue.PositionX != nil && cue.PositionY != nil && !style.ForceCenter {
 		x := int(math.Round(*cue.PositionX * float64(width)))
 		y := int(math.Round(*cue.PositionY * float64(height)))
@@ -224,7 +270,7 @@ func screenTextToASS(cue models.ScreenTextCue, width, height int, duration float
 	return tags + text
 }
 
-func buildScreenTextASS(cues []models.ScreenTextCue, scenes []models.Scene, durations []sceneVideo, width, height int, family string) ([]byte, int) {
+func buildScreenTextASS(cues []models.ScreenTextCue, scenes []models.Scene, durations []sceneVideo, width, height int, family string, registeredFamilies ...map[string]string) ([]byte, int) {
 	if width <= 0 {
 		width = 1920
 	}
@@ -278,7 +324,13 @@ func buildScreenTextASS(cues []models.ScreenTextCue, scenes []models.Scene, dura
 	fmt.Fprintf(&out, "Style: ScreenText,%s,54,&H00F4E4C0,&HFFFFFFFF,&H802B1C12,&H50000000,0,0,0,0,100,100,3,0,1,2,2,2,80,80,60,1\n\n", strings.ReplaceAll(family, ",", ""))
 	out.WriteString("[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
 	for _, item := range items {
-		fmt.Fprintf(&out, "Dialogue: 1,%s,%s,ScreenText,,0,0,0,,%s\n", assTime(item.Start), assTime(item.End), screenTextToASS(item.Cue, width, height, item.End-item.Start))
+		cueFamily := family
+		if len(registeredFamilies) > 0 {
+			if selected := registeredFamilies[0][item.Cue.FontCode]; strings.TrimSpace(selected) != "" {
+				cueFamily = selected
+			}
+		}
+		fmt.Fprintf(&out, "Dialogue: 1,%s,%s,ScreenText,,0,0,0,,%s\n", assTime(item.Start), assTime(item.End), screenTextToASS(item.Cue, width, height, item.End-item.Start, cueFamily))
 	}
 	data := append([]byte{0xEF, 0xBB, 0xBF}, []byte(out.String())...)
 	return data, len(items)

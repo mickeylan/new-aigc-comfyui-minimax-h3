@@ -342,7 +342,23 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 				fail(err)
 				return
 			}
-			assData, count := buildScreenTextASS(cues, scenes, videoDurs, firstWidth, firstHeight, font.Family)
+			families := map[string]string{"noto-sans-sc": font.Family}
+			for _, cue := range cues {
+				code := strings.TrimSpace(cue.FontCode)
+				if code == "" {
+					code = "noto-sans-sc"
+				}
+				if _, exists := families[code]; exists {
+					continue
+				}
+				selected, fontErr := registry.Approved(code)
+				if fontErr != nil {
+					fail(fmt.Errorf("功能文字正式导出被阻止: %w", fontErr))
+					return
+				}
+				families[code] = selected.Family
+			}
+			assData, count := buildScreenTextASS(cues, scenes, videoDurs, firstWidth, firstHeight, font.Family, families)
 			if count > 0 {
 				assAbs := s.mediaPath("output_workers", "gpu0", filepath.FromSlash(strings.TrimSuffix(outName, ".mp4")+".screen.ass"))
 				if err := s.remote.WriteFile(assAbs, assData, 0o644); err != nil {

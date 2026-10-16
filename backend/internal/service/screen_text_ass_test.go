@@ -66,10 +66,20 @@ func TestScreenTextASSVerticalColumnsUseAvailableHeight(t *testing.T) {
 	}
 }
 
+func TestScreenTextASSUsesPerCueColorsFontAndEffects(t *testing.T) {
+	cue := models.ScreenTextCue{Text: "仙门", Subtext: "天阙宗", StyleCode: "xianxia-gold-title", WritingMode: "vertical-rl", Anchor: "right_center", FontCode: "custom-serif", PrimaryColor: "#112233", SubtextColor: "#445566", OutlineColor: "#778899", ShadowColor: "#AABBCC80", OutlineSize: 4, ShadowSize: 5}
+	got := screenTextToASS(cue, 1920, 1080, 3, "Approved Serif")
+	for _, want := range []string{`\fnApproved Serif`, `\c&H00332211&`, `\3c&H00998877&`, `\4c&H7FCCBBAA&`, `\bord4`, `\shad5`, `\N{\fs34\c&H00665544&}`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("styled ASS missing %q: %s", want, got)
+		}
+	}
+}
+
 func TestScreenTextASSUsesPerCueFontSizeOverrides(t *testing.T) {
 	cue := models.ScreenTextCue{Text: "上官若琳", Subtext: "玉霄宫主", StyleCode: "xianxia-character-vertical", WritingMode: "vertical-rl", Anchor: "right_center", FontSize: 92, SubtextSize: 44}
 	got := screenTextToASS(cue, 1920, 1080, 3)
-	for _, want := range []string{`\fs92`, `\N{\fs44}`} {
+	for _, want := range []string{`\fs92`, `\N{\fs44\c&H00D1B98B&}`} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("font size override missing %q: %s", want, got)
 		}
