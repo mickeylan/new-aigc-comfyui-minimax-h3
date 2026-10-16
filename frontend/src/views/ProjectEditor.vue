@@ -100,7 +100,7 @@
             <div v-for="shot in timelineShots" :key="shot.id" class="shot-clip" :style="{flexGrow:Math.max(1,Number(shot.duration||1))}"><strong>Shot {{shot.order}}</strong><span>{{shot.shot_type}} · {{shot.camera_movement}}</span><small>{{shot._start.toFixed(1)}}–{{shot._end.toFixed(1)}}秒 · {{Number(shot.duration||0).toFixed(1)}}秒</small><div v-if="shot.dialogue_fragments?.length" class="shot-dialogue"><span v-for="fragment in shot.dialogue_fragments" :key="fragment.dialogue_id+'-'+fragment.start_rune">{{fragment.speaker_label||'未指定说话人'}}：{{fragment.text}} <small>[{{fragment.start_rune}},{{fragment.end_rune}})</small></span></div><div class="shot-flags"><i v-if="shot.continues_from_previous">承接</i><i v-if="shot.continues_to_next">延续</i><i v-if="!shot.dialogue_fragments?.length">静音</i></div></div>
             <p v-if="!selectedShots.length" class="board-empty">当前Scene尚无内部Shot。</p>
           </div>
-          <div class="screen-text-track-head"><strong>功能字幕/屏幕文字轨（非对白字幕）</strong><button class="btn btn-xs btn-secondary" @click="editScreenTextCue()">＋ 添加到当前分镜</button></div>
+          <div class="screen-text-track-head"><strong>功能字幕/屏幕文字轨（非对白字幕）</strong><button class="btn btn-xs btn-secondary" @click="editScreenTextCue()">＋ 新增功能字幕</button></div>
           <div class="screen-text-track" aria-label="功能文字时间轴">
             <button v-for="cue in selectedScreenTextCues" :key="cue.id" class="screen-text-cue" :class="{'cue-disabled':!cue.enabled}" :style="cueTimelineStyle(cue)" @click="editScreenTextCue(cue)" :title="`${cue.start_time}–${cue.end_time}秒 ${cue.text}`"><span>{{screenTextKindLabel(cue.kind)}}</span><strong>{{cue.text}}</strong></button>
             <span v-if="!selectedScreenTextCues.length" class="screen-text-empty">本Scene尚无人物题名、地点、时间或过场文字</span>
@@ -290,7 +290,7 @@
           <label class="check"><input v-model="screenTextForm.enabled" type="checkbox"> 启用</label>
           <div class="screen-text-preview wide" :style="selected?.image_url?{backgroundImage:`linear-gradient(rgba(0,0,0,.16),rgba(0,0,0,.16)),url(${selected.image_url})`}:{}" @click="setScreenTextPosition" title="点击画面设置自定义位置"><div class="screen-text-safe-zone"></div><img v-if="screenTextForm.id" :src="screenTextRenderPreviewUrl(screenTextForm.id)" class="screen-text-rendered-layer" alt="libass最终透明文字图层"><div v-else class="screen-text-preview-copy" :class="[screenTextForm.writing_mode?.startsWith('vertical')||screenTextForm.writing_mode==='stacked-upright'?'vertical':'horizontal', `style-${screenTextForm.style_code}`]" :style="screenTextPreviewPosition"><strong :style="screenTextForm.font_size>0?{fontSize:`${screenTextForm.font_size}px`}:{}">{{screenTextForm.text||'保存后查看最终libass预览'}}</strong><small v-if="screenTextForm.subtext" :style="screenTextForm.subtext_size>0?{fontSize:`${screenTextForm.subtext_size}px`}:{}">{{screenTextForm.subtext}}</small></div></div>
           <p v-if="screenTextForm.id" class="screen-text-render-note wide">当前显示由正式字体与libass规则生成的透明PNG；修改后请先保存以刷新最终效果。</p>
-          <div class="section-actions wide"><button class="btn btn-sm">保存</button><button v-if="screenTextForm.id" type="button" class="btn btn-sm btn-danger" @click="removeScreenTextCue(screenTextForm);screenTextEditing=false">删除</button><button type="button" class="btn btn-sm btn-ghost" @click="screenTextEditing=false">取消</button></div>
+          <div class="section-actions wide"><button class="btn btn-sm" :disabled="screenTextSaving">{{screenTextSaving?'保存中…':(screenTextForm.id?'保存修改':'添加到当前分镜')}}</button><button v-if="screenTextForm.id" type="button" class="btn btn-sm btn-danger" @click="removeScreenTextCue(screenTextForm);screenTextEditing=false">删除</button><button type="button" class="btn btn-sm btn-ghost" @click="screenTextEditing=false">取消</button></div>
         </form>
       </div>
     </section>
@@ -402,6 +402,7 @@ const screenTextCues = ref([])
 const screenTextPreflight = ref(null)
 const screenTextPreflightLoading = ref(false)
 const screenTextEditing = ref(false)
+const screenTextSaving = ref(false)
 const screenTextSection = ref(null)
 const screenTextForm = reactive({})
 const characters = ref([])
@@ -940,7 +941,7 @@ function cueTimelineStyle(cue) {
   const right = Math.max(left, Math.min(100, Number(cue.end_time || 0) / duration * 100))
   return { left: `${left}%`, width: `${Math.max(2, right-left)}%` }
 }
-function editScreenTextCue(cue = null) {
+async function editScreenTextCue(cue = null) {
   const duration = Math.max(0.1, Number(selected.value?.duration || 5))
   Object.assign(screenTextForm, {
     id: cue?.id || 0, episode_n: activeEpN.value, scene_id: selected.value?.id || null,
@@ -949,10 +950,12 @@ function editScreenTextCue(cue = null) {
     start_time: cue?.start_time ?? 0, end_time: cue?.end_time ?? Math.min(3, duration),
     writing_mode: cue?.writing_mode || 'vertical-rl', anchor: cue?.anchor || 'top_right',
     position_x: cue?.position_x ?? .5, position_y: cue?.position_y ?? .5,
-    style_code: cue?.style_code || 'xianxia-character-vertical', font_size: cue?.font_size || 0, subtext_size: cue?.subtext_size || 0, animation: cue?.animation || 'fade',
+    style_code: cue?.style_code || 'xianxia-character-vertical', font_size: cue?.font_size > 0 ? cue.font_size : null, subtext_size: cue?.subtext_size > 0 ? cue.subtext_size : null, animation: cue?.animation || 'fade',
     enabled: cue?.enabled ?? true, order: cue?.order || 0, source: cue?.source || 'manual', review_status: 'approved'
   })
   screenTextEditing.value = true
+  await nextTick()
+  screenTextSection.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 function applyScreenTextShotRange() {
   if (!screenTextForm.shot_id) return
@@ -970,15 +973,20 @@ function setScreenTextPosition(event) {
   screenTextForm.position_y = Math.round(y * 1000) / 1000
 }
 async function saveScreenTextCue() {
+  if (screenTextSaving.value) return
   const { id: cueId, ...payload } = screenTextForm
   if (!String(payload.text || '').trim()) { toast.error('功能文字不能为空'); return }
   if (payload.anchor !== 'custom') { payload.position_x = null; payload.position_y = null }
+  payload.font_size = Number(payload.font_size) || 0
+  payload.subtext_size = Number(payload.subtext_size) || 0
+  screenTextSaving.value = true
   try {
     cueId ? await api.updateScreenTextCue(id(), cueId, payload) : await api.createScreenTextCue(id(), payload)
     screenTextEditing.value = false
     toast.success('功能文字已保存')
     await loadScreenTextCues()
   } catch (e) { toast.error(e.response?.data?.error || '保存功能文字失败') }
+  finally { screenTextSaving.value = false }
 }
 async function removeScreenTextCue(cue) {
   if (!window.confirm(`删除功能文字“${cue.text}”？`)) return
