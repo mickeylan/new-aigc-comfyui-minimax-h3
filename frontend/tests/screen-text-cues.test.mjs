@@ -52,6 +52,8 @@ test('功能文字轨支持中文横排和古装竖排且不使用Canvas', () =>
   assert.match(editor, /value="bottom_center">下侧水平居中/)
   assert.match(editor, /left_center:\[\.12,\.5\]/)
   assert.match(editor, /right_center:\[\.88,\.5\]/)
+  assert.match(editor, /bottom_center:'translate\(-50%,-100%\)'/)
+  assert.match(editor, /screen-text-preview-copy\.vertical strong[^}]*white-space:nowrap/s)
   assert.match(editor, /v-model\.number="screenTextForm\.font_size"[^>]*min="1"/)
   assert.match(editor, /v-model\.number="screenTextForm\.subtext_size"[^>]*min="1"/)
   assert.match(editor, /v-model\.number="screenTextForm\.subtext_size"/)
