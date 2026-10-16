@@ -123,6 +123,12 @@ func resolvedScreenTextStyle(cue models.ScreenTextCue) screenTextASSStyle {
 	if cue.Kind == "end_card" || cue.Kind == "chapter_title" {
 		style.ForceCenter = true
 	}
+	if cue.FontSize > 0 {
+		style.FontSize = cue.FontSize
+	}
+	if cue.SubtextSize > 0 {
+		style.SubtextSize = cue.SubtextSize
+	}
 	return style
 }
 

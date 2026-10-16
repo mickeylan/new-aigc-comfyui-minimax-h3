@@ -1189,6 +1189,8 @@ type ScreenTextCue struct {
 	PositionX    *float64  `json:"position_x,omitempty"`
 	PositionY    *float64  `json:"position_y,omitempty"`
 	StyleCode    string    `gorm:"size:100" json:"style_code"`
+	FontSize     int       `gorm:"default:0" json:"font_size"`
+	SubtextSize  int       `gorm:"default:0" json:"subtext_size"`
 	Animation    string    `gorm:"size:32" json:"animation"`
 	Enabled      bool      `gorm:"default:true;index" json:"enabled"`
 	Order        int       `json:"order"`

@@ -285,10 +285,10 @@
           <label v-if="screenTextForm.anchor==='custom'">水平位置<input v-model.number="screenTextForm.position_x" type="number" min="0.05" max="0.95" step="0.01" class="input" required></label><label v-if="screenTextForm.anchor==='custom'">垂直位置<input v-model.number="screenTextForm.position_y" type="number" min="0.05" max="0.95" step="0.01" class="input" required></label>
           <label>开始秒<input v-model.number="screenTextForm.start_time" type="number" min="0" :max="selected.duration" step="0.1" class="input" required></label><label>结束秒<input v-model.number="screenTextForm.end_time" type="number" min="0.1" :max="selected.duration" step="0.1" class="input" required></label>
           <label class="wide">主文字<input v-model="screenTextForm.text" class="input" maxlength="200" required></label><label class="wide">副标题<input v-model="screenTextForm.subtext" class="input" maxlength="200"></label>
-          <label>样式<select v-model="screenTextForm.style_code" class="input"><option value="xianxia-character-vertical">仙侠人物竖排</option><option value="xianxia-location-vertical">古装地点竖排</option><option value="historical-time-card">古装时间卡</option><option value="ink-transition-card">水墨过场</option><option value="ink-end-card">水墨结束卡</option><option value="modern-horizontal-caption">简洁横排</option></select></label>
+          <label>主文字字号<input v-model.number="screenTextForm.font_size" type="number" min="12" max="200" step="1" class="input" placeholder="留空使用样式预设"></label><label>副标题字号<input v-model.number="screenTextForm.subtext_size" type="number" min="10" max="120" step="1" class="input" placeholder="留空使用样式预设"></label><label>样式<select v-model="screenTextForm.style_code" class="input"><option value="xianxia-character-vertical">仙侠人物竖排</option><option value="xianxia-location-vertical">古装地点竖排</option><option value="historical-time-card">古装时间卡</option><option value="ink-transition-card">水墨过场</option><option value="ink-end-card">水墨结束卡</option><option value="modern-horizontal-caption">简洁横排</option></select></label>
           <label>动画<select v-model="screenTextForm.animation" class="input"><option value="none">无</option><option value="fade">淡入淡出</option><option value="slide">滑入</option><option value="typewriter">逐字</option><option value="ink_reveal">墨迹显字（当前以慢淡入渲染）</option></select></label>
           <label class="check"><input v-model="screenTextForm.enabled" type="checkbox"> 启用</label>
-          <div class="screen-text-preview wide" :style="selected?.image_url?{backgroundImage:`linear-gradient(rgba(0,0,0,.16),rgba(0,0,0,.16)),url(${selected.image_url})`}:{}" @click="setScreenTextPosition" title="点击画面设置自定义位置"><div class="screen-text-safe-zone"></div><img v-if="screenTextForm.id" :src="screenTextRenderPreviewUrl(screenTextForm.id)" class="screen-text-rendered-layer" alt="libass最终透明文字图层"><div v-else class="screen-text-preview-copy" :class="[screenTextForm.writing_mode?.startsWith('vertical')||screenTextForm.writing_mode==='stacked-upright'?'vertical':'horizontal', `style-${screenTextForm.style_code}`]" :style="screenTextPreviewPosition"><strong>{{screenTextForm.text||'保存后查看最终libass预览'}}</strong><small v-if="screenTextForm.subtext">{{screenTextForm.subtext}}</small></div></div>
+          <div class="screen-text-preview wide" :style="selected?.image_url?{backgroundImage:`linear-gradient(rgba(0,0,0,.16),rgba(0,0,0,.16)),url(${selected.image_url})`}:{}" @click="setScreenTextPosition" title="点击画面设置自定义位置"><div class="screen-text-safe-zone"></div><img v-if="screenTextForm.id" :src="screenTextRenderPreviewUrl(screenTextForm.id)" class="screen-text-rendered-layer" alt="libass最终透明文字图层"><div v-else class="screen-text-preview-copy" :class="[screenTextForm.writing_mode?.startsWith('vertical')||screenTextForm.writing_mode==='stacked-upright'?'vertical':'horizontal', `style-${screenTextForm.style_code}`]" :style="screenTextPreviewPosition"><strong :style="screenTextForm.font_size>0?{fontSize:`${screenTextForm.font_size}px`}:{}">{{screenTextForm.text||'保存后查看最终libass预览'}}</strong><small v-if="screenTextForm.subtext" :style="screenTextForm.subtext_size>0?{fontSize:`${screenTextForm.subtext_size}px`}:{}">{{screenTextForm.subtext}}</small></div></div>
           <p v-if="screenTextForm.id" class="screen-text-render-note wide">当前显示由正式字体与libass规则生成的透明PNG；修改后请先保存以刷新最终效果。</p>
           <div class="section-actions wide"><button class="btn btn-sm">保存</button><button v-if="screenTextForm.id" type="button" class="btn btn-sm btn-danger" @click="removeScreenTextCue(screenTextForm);screenTextEditing=false">删除</button><button type="button" class="btn btn-sm btn-ghost" @click="screenTextEditing=false">取消</button></div>
         </form>
@@ -480,10 +480,11 @@ const shotDurationMismatch = computed(() => selectedShots.value.length>0 && Math
 const timelineShots = computed(() => { let cursor=0; return selectedShots.value.map(shot=>{ const start=cursor; cursor+=Number(shot.duration||0); return {...shot,_start:start,_end:cursor} }) })
 const selectedScreenTextCues = computed(() => screenTextCues.value.filter(cue => cue.scene_id === selected.value?.id))
 const screenTextPreviewPosition = computed(() => {
-  if (screenTextForm.anchor === 'custom') return { left: `${Number(screenTextForm.position_x || .5) * 100}%`, top: `${Number(screenTextForm.position_y || .5) * 100}%` }
+  const sizes = { fontSize: screenTextForm.font_size > 0 ? `${screenTextForm.font_size}px` : undefined, '--screen-subtext-size': screenTextForm.subtext_size > 0 ? `${screenTextForm.subtext_size}px` : undefined }
+  if (screenTextForm.anchor === 'custom') return { ...sizes, left: `${Number(screenTextForm.position_x || .5) * 100}%`, top: `${Number(screenTextForm.position_y || .5) * 100}%` }
   const points = { top_left:[.12,.12], top_center:[.5,.12], top_right:[.88,.12], center:[.5,.5], left_center:[.12,.5], right_center:[.88,.5], bottom_left:[.12,.88], bottom_center:[.5,.88], bottom_right:[.88,.88], subject_left:[.25,.5], subject_right:[.75,.5] }
   const point = points[screenTextForm.anchor] || [.5,.88]
-  return { left:`${point[0]*100}%`, top:`${point[1]*100}%` }
+  return { ...sizes, left:`${point[0]*100}%`, top:`${point[1]*100}%` }
 })
 const episodePreflight = computed(() => serverPreflight.value?.checks || [])
 const preflightIssueScenes = computed(() => {
@@ -948,7 +949,7 @@ function editScreenTextCue(cue = null) {
     start_time: cue?.start_time ?? 0, end_time: cue?.end_time ?? Math.min(3, duration),
     writing_mode: cue?.writing_mode || 'vertical-rl', anchor: cue?.anchor || 'top_right',
     position_x: cue?.position_x ?? .5, position_y: cue?.position_y ?? .5,
-    style_code: cue?.style_code || 'xianxia-character-vertical', animation: cue?.animation || 'fade',
+    style_code: cue?.style_code || 'xianxia-character-vertical', font_size: cue?.font_size || 0, subtext_size: cue?.subtext_size || 0, animation: cue?.animation || 'fade',
     enabled: cue?.enabled ?? true, order: cue?.order || 0, source: cue?.source || 'manual', review_status: 'approved'
   })
   screenTextEditing.value = true

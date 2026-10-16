@@ -39,6 +39,16 @@ func TestBuildScreenTextASSUsesNormalizedCustomPositionAcrossAspectRatios(t *tes
 	}
 }
 
+func TestScreenTextASSUsesPerCueFontSizeOverrides(t *testing.T) {
+	cue := models.ScreenTextCue{Text: "上官若琳", Subtext: "玉霄宫主", StyleCode: "xianxia-character-vertical", WritingMode: "vertical-rl", Anchor: "right_center", FontSize: 92, SubtextSize: 44}
+	got := screenTextToASS(cue, 1920, 1080, 3)
+	for _, want := range []string{`\fs92`, `\N{\fs44}`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("font size override missing %q: %s", want, got)
+		}
+	}
+}
+
 func TestScreenTextASSSupportsLeftAndRightVerticalCenterAnchors(t *testing.T) {
 	left := screenTextToASS(models.ScreenTextCue{Text: "左侧", StyleCode: "xianxia-character-vertical", WritingMode: "vertical-rl", Anchor: "left_center"}, 1920, 1080, 3)
 	if !strings.Contains(left, `\an4`) {

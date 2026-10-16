@@ -59,6 +59,19 @@ func TestScreenTextCueCRUDAndProjectIsolation(t *testing.T) {
 	}
 }
 
+func TestScreenTextCueValidatesFontSizeOverrides(t *testing.T) {
+	cue, err := normalizeScreenTextCue(1, ScreenTextCueInput{EpisodeN: 1, Kind: "custom", Text: "题名", StartTime: 0, EndTime: 2, FontSize: 92, SubtextSize: 44})
+	if err != nil || cue.FontSize != 92 || cue.SubtextSize != 44 {
+		t.Fatalf("valid font sizes rejected: cue=%+v err=%v", cue, err)
+	}
+	if _, err := normalizeScreenTextCue(1, ScreenTextCueInput{EpisodeN: 1, Kind: "custom", Text: "题名", StartTime: 0, EndTime: 2, FontSize: 201}); err == nil {
+		t.Fatal("oversized main font accepted")
+	}
+	if _, err := normalizeScreenTextCue(1, ScreenTextCueInput{EpisodeN: 1, Kind: "custom", Text: "题名", StartTime: 0, EndTime: 2, SubtextSize: 9}); err == nil {
+		t.Fatal("undersized subtext font accepted")
+	}
+}
+
 func TestScreenTextCueAcceptsSideVerticalCenterAnchors(t *testing.T) {
 	for _, anchor := range []string{"left_center", "right_center"} {
 		cue, err := normalizeScreenTextCue(1, ScreenTextCueInput{EpisodeN: 1, Kind: "custom", Text: "题名", StartTime: 0, EndTime: 2, WritingMode: "vertical-rl", Anchor: anchor})

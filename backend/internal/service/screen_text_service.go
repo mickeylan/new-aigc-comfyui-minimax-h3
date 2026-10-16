@@ -31,6 +31,8 @@ type ScreenTextCueInput struct {
 	PositionX    *float64 `json:"position_x"`
 	PositionY    *float64 `json:"position_y"`
 	StyleCode    string   `json:"style_code"`
+	FontSize     int      `json:"font_size"`
+	SubtextSize  int      `json:"subtext_size"`
 	Animation    string   `json:"animation"`
 	Enabled      *bool    `json:"enabled"`
 	Order        int      `json:"order"`
@@ -111,6 +113,12 @@ func normalizeScreenTextCue(projectID uint, in ScreenTextCueInput) (models.Scree
 	if !screenTextStyles[styleCode] {
 		return models.ScreenTextCue{}, fmt.Errorf("不支持的功能文字样式")
 	}
+	if in.FontSize < 0 || in.FontSize > 200 || in.FontSize > 0 && in.FontSize < 12 {
+		return models.ScreenTextCue{}, fmt.Errorf("主文字字号必须留空使用样式预设，或设置为 12~200")
+	}
+	if in.SubtextSize < 0 || in.SubtextSize > 120 || in.SubtextSize > 0 && in.SubtextSize < 10 {
+		return models.ScreenTextCue{}, fmt.Errorf("副标题字号必须留空使用样式预设，或设置为 10~120")
+	}
 	animation := strings.ToLower(strings.TrimSpace(in.Animation))
 	if animation == "" {
 		animation = "fade"
@@ -140,7 +148,7 @@ func normalizeScreenTextCue(projectID uint, in ScreenTextCueInput) (models.Scree
 		ProjectID: projectID, EpisodeN: in.EpisodeN, SceneID: in.SceneID, ShotID: in.ShotID,
 		CharacterID: in.CharacterID, Kind: kind, Text: text, Subtext: strings.TrimSpace(in.Subtext),
 		StartTime: in.StartTime, EndTime: in.EndTime, WritingMode: writingMode, Anchor: anchor,
-		PositionX: positionX, PositionY: positionY, StyleCode: styleCode, Animation: animation, Enabled: enabled,
+		PositionX: positionX, PositionY: positionY, StyleCode: styleCode, FontSize: in.FontSize, SubtextSize: in.SubtextSize, Animation: animation, Enabled: enabled,
 		Order: in.Order, Source: source, ReviewStatus: reviewStatus,
 	}, nil
 }

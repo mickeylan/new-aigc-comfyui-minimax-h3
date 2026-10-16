@@ -61,9 +61,9 @@ func TestMergeSnapshotRejectsScreenTextMutation(t *testing.T) {
 	if _, err := svc.validateMergeInputs(db, merge); err != nil {
 		t.Fatalf("fresh snapshot rejected: %v", err)
 	}
-	db.Model(&cue).Update("text", "太运宗")
+	db.Model(&cue).Update("font_size", 88)
 	if _, err := svc.validateMergeInputs(db, merge); err == nil {
-		t.Fatal("screen text mutation did not invalidate merge snapshot")
+		t.Fatal("screen text font-size mutation did not invalidate merge snapshot")
 	}
 }
 
