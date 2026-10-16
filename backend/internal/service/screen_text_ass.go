@@ -83,9 +83,9 @@ func assAlignment(anchor string) int {
 		return 1
 	case "bottom_right":
 		return 3
-	case "subject_left":
+	case "left_center", "subject_left":
 		return 4
-	case "subject_right":
+	case "right_center", "subject_right":
 		return 6
 	default:
 		return 2
@@ -130,6 +130,7 @@ func anchorPosition(anchor string, width, height int) (int, int) {
 	points := map[string][2]float64{
 		"top_left": {.1, .1}, "top_center": {.5, .1}, "top_right": {.9, .1},
 		"center": {.5, .5}, "bottom_left": {.1, .9}, "bottom_center": {.5, .9}, "bottom_right": {.9, .9},
+		"left_center": {.1, .5}, "right_center": {.9, .5},
 		"subject_left": {.25, .5}, "subject_right": {.75, .5},
 	}
 	point, ok := points[anchor]

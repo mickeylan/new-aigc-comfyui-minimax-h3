@@ -59,6 +59,18 @@ func TestScreenTextCueCRUDAndProjectIsolation(t *testing.T) {
 	}
 }
 
+func TestScreenTextCueAcceptsSideVerticalCenterAnchors(t *testing.T) {
+	for _, anchor := range []string{"left_center", "right_center"} {
+		cue, err := normalizeScreenTextCue(1, ScreenTextCueInput{EpisodeN: 1, Kind: "custom", Text: "题名", StartTime: 0, EndTime: 2, WritingMode: "vertical-rl", Anchor: anchor})
+		if err != nil {
+			t.Fatalf("anchor %s rejected: %v", anchor, err)
+		}
+		if cue.Anchor != anchor {
+			t.Fatalf("anchor=%s want=%s", cue.Anchor, anchor)
+		}
+	}
+}
+
 func TestScreenTextCueCanBindSelectedShot(t *testing.T) {
 	db := safetyDB(t, &models.Project{}, &models.Scene{}, &models.Shot{}, &models.Character{}, &models.ScreenTextCue{})
 	project := models.Project{Title: "甲"}

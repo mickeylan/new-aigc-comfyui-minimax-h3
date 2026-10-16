@@ -39,6 +39,25 @@ func TestBuildScreenTextASSUsesNormalizedCustomPositionAcrossAspectRatios(t *tes
 	}
 }
 
+func TestScreenTextASSSupportsLeftAndRightVerticalCenterAnchors(t *testing.T) {
+	left := screenTextToASS(models.ScreenTextCue{Text: "左侧", StyleCode: "xianxia-character-vertical", WritingMode: "vertical-rl", Anchor: "left_center"}, 1920, 1080, 3)
+	if !strings.Contains(left, `\an4`) {
+		t.Fatalf("left vertical center alignment wrong: %s", left)
+	}
+	leftX, leftY := anchorPosition("left_center", 1920, 1080)
+	if leftX != 192 || leftY != 540 {
+		t.Fatalf("left vertical center position=(%d,%d)", leftX, leftY)
+	}
+	right := screenTextToASS(models.ScreenTextCue{Text: "右侧", StyleCode: "xianxia-character-vertical", WritingMode: "vertical-rl", Anchor: "right_center"}, 1920, 1080, 3)
+	if !strings.Contains(right, `\an6`) {
+		t.Fatalf("right vertical center alignment wrong: %s", right)
+	}
+	rightX, rightY := anchorPosition("right_center", 1920, 1080)
+	if rightX != 1728 || rightY != 540 {
+		t.Fatalf("right vertical center position=(%d,%d)", rightX, rightY)
+	}
+}
+
 func TestScreenTextASSStylesAndAnimationsAreDeterministic(t *testing.T) {
 	fade := screenTextToASS(models.ScreenTextCue{Kind: "character_intro", Text: "上官若琳", StyleCode: "xianxia-character-vertical", WritingMode: "vertical-rl", Anchor: "top_right", Animation: "fade"}, 1920, 1080, 4)
 	for _, want := range []string{`\fs68`, `\fsp7`, `\fad(250,350)`, `上\N官\N若\N琳`} {

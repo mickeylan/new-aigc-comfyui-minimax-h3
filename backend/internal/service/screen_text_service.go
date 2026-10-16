@@ -57,6 +57,7 @@ var screenTextWritingModes = map[string]bool{
 var screenTextAnchors = map[string]bool{
 	"top_left": true, "top_center": true, "top_right": true, "center": true,
 	"bottom_left": true, "bottom_center": true, "bottom_right": true,
+	"left_center": true, "right_center": true,
 	"subject_left": true, "subject_right": true, "custom": true,
 }
 
