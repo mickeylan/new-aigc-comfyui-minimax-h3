@@ -486,8 +486,12 @@
           </div>
 
           <div v-if="sc.video_input_file || (sc.video_file && sc.video_gpu !== null && sc.video_gpu !== undefined)" class="video-box">
-            <video :src="videoUrl(sc)" controls preload="metadata" class="scene-video"></video>
-            <a class="btn btn-sm btn-ghost download" :href="videoUrl(sc) + '?download=1'">下载</a>
+            <div class="scene-video-stage">
+              <video :src="videoUrl(sc)" controls preload="metadata" class="scene-video" @timeupdate="sceneVideoTimes[sc.id]=$event.target.currentTime" @seeked="sceneVideoTimes[sc.id]=$event.target.currentTime"></video>
+              <div v-for="cue in activeSceneScreenText(sc)" :key="cue.id" class="scene-screen-text" :style="sceneScreenTextStyle(cue)"><strong>{{cue.text}}</strong><small v-if="cue.subtext" :style="cue.subtext_size>0?{fontSize:`${cue.subtext_size}px`}:{}">{{cue.subtext}}</small></div>
+            </div>
+            <p v-if="screenTextCues.some(cue=>cue.scene_id===sc.id&&cue.enabled&&cue.review_status==='approved')" class="screen-text-preview-note">当前播放器按本分镜0秒起实时预览功能文字；原始视频不变，正式导出使用同一相对时间。</p>
+            <a class="btn btn-sm btn-ghost download" :href="videoUrl(sc) + '?download=1'">下载原始视频</a>
           </div>
         </div>
       </div>
@@ -1010,6 +1014,8 @@ const characterHistory = reactive({})
 const openHistoryCharacterID = ref(null)
 const historyLoading = ref(null)
 const dialogues = ref([])
+const screenTextCues = ref([])
+const sceneVideoTimes = reactive({})
 const dubMergeOn = ref(true)
 const mergeSub = ref(false)
 const mergeScreenText = ref(true)
@@ -1403,6 +1409,15 @@ function formatTaskParams(raw) { try { return JSON.stringify(JSON.parse(raw || '
 function videoUrl(sc) {
   return sc.video_input_file ? api.inputUrl(project.value.id, sc.video_input_file) : api.outputUrl(sc.video_gpu, sc.video_file)
 }
+function activeSceneScreenText(sc) {
+  const now = Number(sceneVideoTimes[sc.id] || 0)
+  return screenTextCues.value.filter(cue => cue.scene_id === sc.id && cue.enabled && cue.review_status === 'approved' && now >= Number(cue.start_time) && now < Number(cue.end_time))
+}
+function sceneScreenTextStyle(cue) {
+  const points = { top_left:[10,10], top_center:[50,10], top_right:[90,10], center:[50,50], left_center:[10,50], right_center:[90,50], bottom_left:[10,90], bottom_center:[50,90], bottom_right:[90,90], subject_left:[25,50], subject_right:[75,50] }
+  const point = cue.anchor === 'custom' ? [Number(cue.position_x||.5)*100, Number(cue.position_y||.5)*100] : (points[cue.anchor] || points.bottom_center)
+  return { left:`${point[0]}%`, top:`${point[1]}%`, fontSize:cue.font_size>0?`${cue.font_size}px`:undefined, writingMode:String(cue.writing_mode||'').startsWith('vertical')?'vertical-rl':'horizontal-tb' }
+}
 function outputUrl(gpu, path) {
   return api.outputUrl(gpu, path)
 }
@@ -1462,6 +1477,7 @@ async function load() {
     assets.value = nextAssets
     assetCounts.value = data.asset_counts || {}
     dialogues.value = data.dialogues || []
+    try { screenTextCues.value = (await api.screenTextCues(id(), activeEpN.value)).data || [] } catch { screenTextCues.value = [] }
     scenes.value = (data.scenes || []).map(s => {
       s._working = isWorking(s)
       return s
@@ -2771,7 +2787,8 @@ onBeforeUnmount(() => {
 .ready { font-size: 12px; font-weight: 700; color: var(--green); }
 .fail-msg { font-size: 12px; color: var(--red); }
 .video-box { position: relative; margin-top: 12px; border-radius: 12px; overflow: hidden; background: #000; }
-.scene-video { width: 100%; display: block; max-height: 260px; }
+.scene-video-stage{position:relative}.scene-video { width: 100%; display: block; max-height: 260px; }
+.scene-screen-text{position:absolute;z-index:3;display:flex;align-items:center;gap:8px;transform:translate(-50%,-50%);max-width:86%;max-height:86%;color:#f4e4c0;font-family:"Noto Sans SC",sans-serif;font-size:34px;letter-spacing:.12em;text-shadow:0 2px 4px #000,0 0 3px #000;pointer-events:none}.scene-screen-text small{font-size:18px;color:#d1b98b}.screen-text-preview-note{margin:6px 10px 42px;color:#ddd;font-size:11px}
 .download { position: absolute; right: 8px; bottom: 8px; background: rgba(0, 0, 0, 0.55); color: #fff; border-color: transparent; }
 .merge-card { padding: 20px; }
 .merge-select { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 16px; }
