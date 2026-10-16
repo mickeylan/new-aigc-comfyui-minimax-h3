@@ -510,8 +510,8 @@
         </div>
         <div class="section-actions">
           <button class="btn btn-ghost btn-sm" :disabled="busy" @click="mergeAll">🎬 整剧一键合并</button>
-          <label class="merge-opt"><input type="checkbox" v-model="mergeSub" />烧录对白字幕</label>
-          <label class="merge-opt"><input type="checkbox" v-model="mergeScreenText" />烧录功能字幕/屏幕文字</label>
+          <label class="merge-opt" title="默认关闭；仅在需要逐句显示Dialogue时开启"><input type="checkbox" v-model="mergeSub" />烧录Dialogue对白字幕（默认关闭）</label>
+          <label class="merge-opt" title="只烧录已审核的功能文字，不会自动开启对白字幕"><input type="checkbox" v-model="mergeScreenText" />烧录功能字幕/屏幕文字</label>
           <label class="merge-opt"><input type="checkbox" v-model="mergeDub" />保留原声</label>
           <button class="btn btn-lg" :disabled="busy || curVideoReadyCount < 2 || curMerging" @click="autoMergeEpisode">
             ⚡ 合并第{{ activeEpN }}集 {{ curVideoReadyCount }} 个场景

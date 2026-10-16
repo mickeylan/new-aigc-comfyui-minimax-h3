@@ -16,8 +16,8 @@
         <button class="btn btn-ghost btn-sm" @click="createEpisode">新建集</button>
         <button class="btn btn-ghost btn-sm" @click="showCharacterHistory = true">角色历史</button><button class="btn btn-ghost btn-sm" @click="showGeneratedHistory = true">生成历史管理</button>
         <button class="btn btn-ghost btn-sm" @click="deleteEpisode">删除空集</button>
-        <label class="merge-opt"><input type="checkbox" v-model="mergeSub" />烧录对白字幕</label>
-        <label class="merge-opt"><input type="checkbox" v-model="mergeScreenText" />烧录功能文字</label>
+        <label class="merge-opt" title="默认关闭；仅在需要逐句显示Dialogue时开启"><input type="checkbox" v-model="mergeSub" />烧录Dialogue对白字幕（默认关闭）</label>
+        <label class="merge-opt" title="只烧录已审核的功能文字，不会自动开启对白字幕"><input type="checkbox" v-model="mergeScreenText" />烧录功能字幕/屏幕文字</label>
         <label class="merge-opt"><input type="checkbox" v-model="mergeDub" />保留原声</label>
         <label class="merge-opt">原声 <input class="sub-t" type="number" min="0" max="4" step="0.1" v-model.number="nativeVolume" /></label>
         <label class="merge-opt">对白 <input class="sub-t" type="number" min="0" max="4" step="0.1" v-model.number="dialogueVolume" /></label>
@@ -429,7 +429,7 @@ let selectedDetailToken = 0
 const tab = ref('dub')
 const busy = ref(false)
 const curMerging = ref(false)
-const mergeSub = ref(true)
+const mergeSub = ref(false)
 const mergeScreenText = ref(true)
 const mergeDub = ref(true)
 const nativeVolume = ref(1)
