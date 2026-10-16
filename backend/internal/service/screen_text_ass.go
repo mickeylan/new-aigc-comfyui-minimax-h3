@@ -39,7 +39,10 @@ func escapeASSText(value string) string {
 }
 
 func verticalASSColumns(value string, maxRows int, rightToLeft bool) string {
-	runes := []rune(strings.TrimSpace(value))
+	// Spaces in Chinese vertical titles are commonly entered as visual separators.
+	// Treating them as glyph rows creates blank gaps and gives browser previews a wrap point.
+	value = strings.NewReplacer(" ", "", "\t", "", "\u3000", "").Replace(strings.TrimSpace(value))
+	runes := []rune(value)
 	if maxRows <= 0 {
 		maxRows = 8
 	}

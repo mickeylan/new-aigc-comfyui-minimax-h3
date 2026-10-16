@@ -39,6 +39,16 @@ func TestBuildScreenTextASSUsesNormalizedCustomPositionAcrossAspectRatios(t *tes
 	}
 }
 
+func TestScreenTextASSVerticalColumnsIgnoreVisualSeparatorSpaces(t *testing.T) {
+	got := verticalASSColumns("上官若琳  金丹巅峰", 20, true)
+	if strings.Contains(got, " ") || strings.Contains(got, `\N \N`) {
+		t.Fatalf("vertical separator spaces produced blank rows: %q", got)
+	}
+	if got != `上\N官\N若\N琳\N金\N丹\N巅\N峰` {
+		t.Fatalf("vertical title=%q", got)
+	}
+}
+
 func TestScreenTextASSVerticalColumnsUseAvailableHeight(t *testing.T) {
 	cue := models.ScreenTextCue{Text: "天地玄黄宇宙洪荒日月", StyleCode: "xianxia-character-vertical", WritingMode: "vertical-rl", Anchor: "right_center"}
 	tall := screenTextToASS(cue, 1920, 1080, 3)

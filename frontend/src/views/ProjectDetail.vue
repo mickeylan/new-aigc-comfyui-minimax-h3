@@ -488,7 +488,7 @@
           <div v-if="sc.video_input_file || (sc.video_file && sc.video_gpu !== null && sc.video_gpu !== undefined)" class="video-box">
             <div class="scene-video-stage">
               <video :src="videoUrl(sc)" controls preload="metadata" class="scene-video" @timeupdate="sceneVideoTimes[sc.id]=$event.target.currentTime" @seeked="sceneVideoTimes[sc.id]=$event.target.currentTime"></video>
-              <div v-for="cue in activeSceneScreenText(sc)" :key="cue.id" class="scene-screen-text" :style="sceneScreenTextStyle(cue)"><strong>{{cue.text}}</strong><small v-if="cue.subtext" :style="cue.subtext_size>0?{fontSize:`${cue.subtext_size}px`}:{}">{{cue.subtext}}</small></div>
+              <div v-for="cue in activeSceneScreenText(sc)" :key="cue.id" class="scene-screen-text" :style="sceneScreenTextStyle(cue)"><strong>{{sceneScreenTextValue(cue)}}</strong><small v-if="cue.subtext" :style="cue.subtext_size>0?{fontSize:`${cue.subtext_size}px`}:{}">{{cue.subtext}}</small></div>
             </div>
             <p v-if="screenTextCues.some(cue=>cue.scene_id===sc.id&&cue.enabled&&cue.review_status==='approved')" class="screen-text-preview-note">当前播放器按本分镜0秒起实时预览功能文字；原始视频不变，正式导出使用同一相对时间。</p>
             <a class="btn btn-sm btn-ghost download" :href="videoUrl(sc) + '?download=1'">下载原始视频</a>
@@ -1412,6 +1412,10 @@ function videoUrl(sc) {
 function activeSceneScreenText(sc) {
   const now = Number(sceneVideoTimes[sc.id] || 0)
   return screenTextCues.value.filter(cue => cue.scene_id === sc.id && cue.enabled && cue.review_status === 'approved' && now >= Number(cue.start_time) && now < Number(cue.end_time))
+}
+function sceneScreenTextValue(cue) {
+  const value = String(cue.text || '')
+  return String(cue.writing_mode || '').startsWith('vertical') || cue.writing_mode === 'stacked-upright' ? value.replace(/[\s　]+/g, '') : value
 }
 function sceneScreenTextStyle(cue) {
   const points = { top_left:[10,10], top_center:[50,10], top_right:[90,10], center:[50,50], left_center:[10,50], right_center:[90,50], bottom_left:[10,90], bottom_center:[50,90], bottom_right:[90,90], subject_left:[25,50], subject_right:[75,50] }
@@ -2788,7 +2792,7 @@ onBeforeUnmount(() => {
 .fail-msg { font-size: 12px; color: var(--red); }
 .video-box { position: relative; margin-top: 12px; border-radius: 12px; overflow: hidden; background: #000; }
 .scene-video-stage{position:relative}.scene-video { width: 100%; display: block; max-height: 260px; }
-.scene-screen-text{position:absolute;z-index:3;display:flex;align-items:center;gap:8px;transform:translate(-50%,-50%);max-width:86%;max-height:86%;color:#f4e4c0;font-family:"Noto Sans SC",sans-serif;font-size:34px;letter-spacing:.12em;text-shadow:0 2px 4px #000,0 0 3px #000;pointer-events:none}.scene-screen-text small{font-size:18px;color:#d1b98b}.screen-text-preview-note{margin:6px 10px 42px;color:#ddd;font-size:11px}
+.scene-screen-text{position:absolute;z-index:3;display:flex;align-items:center;gap:8px;transform:translate(-50%,-50%);max-width:86%;max-height:86%;white-space:nowrap;color:#f4e4c0;font-family:"Noto Sans SC",sans-serif;font-size:34px;letter-spacing:.12em;text-shadow:0 2px 4px #000,0 0 3px #000;pointer-events:none}.scene-screen-text small{font-size:18px;color:#d1b98b}.screen-text-preview-note{margin:6px 10px 42px;color:#ddd;font-size:11px}
 .download { position: absolute; right: 8px; bottom: 8px; background: rgba(0, 0, 0, 0.55); color: #fff; border-color: transparent; }
 .merge-card { padding: 20px; }
 .merge-select { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 16px; }
