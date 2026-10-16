@@ -159,14 +159,32 @@ func karaokeASSText(value string, duration float64) string {
 	return out.String()
 }
 
-func screenTextToASS(cue models.ScreenTextCue, width, height int, duration float64) string {
-	text := escapeASSText(cue.Text)
-	if cue.WritingMode == "vertical-rl" || cue.WritingMode == "stacked-upright" {
-		text = verticalASSColumns(cue.Text, 8, true)
-	} else if cue.WritingMode == "vertical-lr" {
-		text = verticalASSColumns(cue.Text, 8, false)
+func verticalRowsForHeight(height int, style screenTextASSStyle) int {
+	if height <= 0 {
+		height = 1080
 	}
+	// Use the 5%~95% safe zone instead of a fixed eight-character column.
+	// Font spacing is part of the vertical advance, with a small line-height margin.
+	advance := float64(style.FontSize+style.Spacing) * 1.08
+	if advance < 1 {
+		advance = 1
+	}
+	rows := int(math.Floor(float64(height) * .9 / advance))
+	if rows < 1 {
+		return 1
+	}
+	return rows
+}
+
+func screenTextToASS(cue models.ScreenTextCue, width, height int, duration float64) string {
 	style := resolvedScreenTextStyle(cue)
+	text := escapeASSText(cue.Text)
+	rows := verticalRowsForHeight(height, style)
+	if cue.WritingMode == "vertical-rl" || cue.WritingMode == "stacked-upright" {
+		text = verticalASSColumns(cue.Text, rows, true)
+	} else if cue.WritingMode == "vertical-lr" {
+		text = verticalASSColumns(cue.Text, rows, false)
+	}
 	if cue.Animation == "typewriter" && cue.WritingMode == "horizontal-ltr" {
 		text = karaokeASSText(cue.Text, duration)
 	}

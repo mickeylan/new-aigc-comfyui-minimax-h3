@@ -113,11 +113,11 @@ func normalizeScreenTextCue(projectID uint, in ScreenTextCueInput) (models.Scree
 	if !screenTextStyles[styleCode] {
 		return models.ScreenTextCue{}, fmt.Errorf("不支持的功能文字样式")
 	}
-	if in.FontSize < 0 || in.FontSize > 200 || in.FontSize > 0 && in.FontSize < 12 {
-		return models.ScreenTextCue{}, fmt.Errorf("主文字字号必须留空使用样式预设，或设置为 12~200")
+	if in.FontSize < 0 || in.FontSize > 200 {
+		return models.ScreenTextCue{}, fmt.Errorf("主文字字号必须留空使用样式预设，或设置为 1~200")
 	}
-	if in.SubtextSize < 0 || in.SubtextSize > 120 || in.SubtextSize > 0 && in.SubtextSize < 10 {
-		return models.ScreenTextCue{}, fmt.Errorf("副标题字号必须留空使用样式预设，或设置为 10~120")
+	if in.SubtextSize < 0 || in.SubtextSize > 120 {
+		return models.ScreenTextCue{}, fmt.Errorf("副标题字号必须留空使用样式预设，或设置为 1~120")
 	}
 	animation := strings.ToLower(strings.TrimSpace(in.Animation))
 	if animation == "" {

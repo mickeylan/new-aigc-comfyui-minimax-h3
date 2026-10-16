@@ -39,6 +39,23 @@ func TestBuildScreenTextASSUsesNormalizedCustomPositionAcrossAspectRatios(t *tes
 	}
 }
 
+func TestScreenTextASSVerticalColumnsUseAvailableHeight(t *testing.T) {
+	cue := models.ScreenTextCue{Text: "天地玄黄宇宙洪荒日月", StyleCode: "xianxia-character-vertical", WritingMode: "vertical-rl", Anchor: "right_center"}
+	tall := screenTextToASS(cue, 1920, 1080, 3)
+	if strings.Contains(tall, "　") {
+		t.Fatalf("tall frame wrapped before safe-zone capacity was used: %s", tall)
+	}
+	short := screenTextToASS(cue, 1920, 360, 3)
+	if !strings.Contains(short, "　") {
+		t.Fatalf("short frame did not create required extra column: %s", short)
+	}
+	smallFont := cue
+	smallFont.FontSize = 8
+	if got := verticalRowsForHeight(1080, resolvedScreenTextStyle(smallFont)); got <= 8 {
+		t.Fatalf("small font retained obsolete eight-character limit: rows=%d", got)
+	}
+}
+
 func TestScreenTextASSUsesPerCueFontSizeOverrides(t *testing.T) {
 	cue := models.ScreenTextCue{Text: "上官若琳", Subtext: "玉霄宫主", StyleCode: "xianxia-character-vertical", WritingMode: "vertical-rl", Anchor: "right_center", FontSize: 92, SubtextSize: 44}
 	got := screenTextToASS(cue, 1920, 1080, 3)

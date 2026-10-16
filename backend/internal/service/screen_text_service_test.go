@@ -67,8 +67,12 @@ func TestScreenTextCueValidatesFontSizeOverrides(t *testing.T) {
 	if _, err := normalizeScreenTextCue(1, ScreenTextCueInput{EpisodeN: 1, Kind: "custom", Text: "题名", StartTime: 0, EndTime: 2, FontSize: 201}); err == nil {
 		t.Fatal("oversized main font accepted")
 	}
-	if _, err := normalizeScreenTextCue(1, ScreenTextCueInput{EpisodeN: 1, Kind: "custom", Text: "题名", StartTime: 0, EndTime: 2, SubtextSize: 9}); err == nil {
-		t.Fatal("undersized subtext font accepted")
+	small, err := normalizeScreenTextCue(1, ScreenTextCueInput{EpisodeN: 1, Kind: "custom", Text: "题名", StartTime: 0, EndTime: 2, FontSize: 1, SubtextSize: 1})
+	if err != nil || small.FontSize != 1 || small.SubtextSize != 1 {
+		t.Fatalf("small positive font sizes rejected: cue=%+v err=%v", small, err)
+	}
+	if _, err := normalizeScreenTextCue(1, ScreenTextCueInput{EpisodeN: 1, Kind: "custom", Text: "题名", StartTime: 0, EndTime: 2, FontSize: -1}); err == nil {
+		t.Fatal("negative font size accepted")
 	}
 }
 
