@@ -293,7 +293,7 @@ func (s *ScreenTextService) Update(projectID, id uint, in ScreenTextCueInput) (*
 		"character_id": cue.CharacterID, "kind": cue.Kind, "text": cue.Text, "subtext": cue.Subtext,
 		"start_time": cue.StartTime, "end_time": cue.EndTime, "writing_mode": cue.WritingMode,
 		"anchor": cue.Anchor, "position_x": cue.PositionX, "position_y": cue.PositionY,
-		"style_code": cue.StyleCode, "animation": cue.Animation,
+		"style_code": cue.StyleCode, "font_size": cue.FontSize, "subtext_size": cue.SubtextSize, "animation": cue.Animation,
 		"enabled": cue.Enabled, "order": cue.Order, "source": cue.Source, "review_status": cue.ReviewStatus,
 	}
 	if err := s.db.Model(&existing).Updates(updates).Error; err != nil {

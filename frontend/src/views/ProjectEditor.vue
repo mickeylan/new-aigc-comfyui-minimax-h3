@@ -289,7 +289,7 @@
           <label>动画<select v-model="screenTextForm.animation" class="input"><option value="none">无</option><option value="fade">淡入淡出</option><option value="slide">滑入</option><option value="typewriter">逐字</option><option value="ink_reveal">墨迹显字（当前以慢淡入渲染）</option></select></label>
           <label class="check"><input v-model="screenTextForm.enabled" type="checkbox"> 启用</label>
           <div class="screen-text-preview wide" :style="selected?.image_url?{backgroundImage:`linear-gradient(rgba(0,0,0,.16),rgba(0,0,0,.16)),url(${selected.image_url})`}:{}" @click="setScreenTextPosition" title="点击画面设置自定义位置"><div class="screen-text-safe-zone"></div><img v-if="screenTextForm.id" :src="screenTextRenderPreviewUrl(screenTextForm.id)" class="screen-text-rendered-layer" alt="libass最终透明文字图层"><div v-else class="screen-text-preview-copy" :class="[screenTextForm.writing_mode?.startsWith('vertical')||screenTextForm.writing_mode==='stacked-upright'?'vertical':'horizontal', `style-${screenTextForm.style_code}`]" :style="screenTextPreviewPosition"><strong :style="screenTextForm.font_size>0?{fontSize:`${screenTextForm.font_size}px`}:{}">{{screenTextForm.text||'保存后查看最终libass预览'}}</strong><small v-if="screenTextForm.subtext" :style="screenTextForm.subtext_size>0?{fontSize:`${screenTextForm.subtext_size}px`}:{}">{{screenTextForm.subtext}}</small></div></div>
-          <p v-if="screenTextForm.id" class="screen-text-render-note wide">当前显示由正式字体与libass规则生成的透明PNG；修改后请先保存以刷新最终效果。</p>
+          <p v-if="screenTextForm.id" class="screen-text-render-note wide">当前显示由正式字体与libass规则生成的透明PNG；可直接修改主文字/副标题字号，保存后会强制刷新最终效果。</p>
           <div class="section-actions wide"><button class="btn btn-sm" :disabled="screenTextSaving">{{screenTextSaving?'保存中…':(screenTextForm.id?'保存修改':'添加到当前分镜')}}</button><button v-if="screenTextForm.id" type="button" class="btn btn-sm btn-danger" @click="removeScreenTextCue(screenTextForm);screenTextEditing=false">删除</button><button type="button" class="btn btn-sm btn-ghost" @click="screenTextEditing=false">取消</button></div>
         </form>
       </div>
@@ -502,7 +502,11 @@ const durProgressClass = computed(() => {
 
 function id() { return route.params.id }
 function outputUrl(path) { return `/api/output/0/${path}` }
-function screenTextRenderPreviewUrl(cueId) { return `/api/projects/${id()}/screen-text-cues/${cueId}/render-preview?width=1920&height=1080` }
+function screenTextRenderPreviewUrl(cueId) {
+  const cue = screenTextCues.value.find(row => Number(row.id) === Number(cueId))
+  const version = encodeURIComponent(cue?.updated_at || '')
+  return `/api/projects/${id()}/screen-text-cues/${cueId}/render-preview?width=1920&height=1080&v=${version}`
+}
 function fmtDur(d) {
   const s = Math.round(Number(d) || 0)
   const mm = String(Math.floor(s / 60)).padStart(2, '0')

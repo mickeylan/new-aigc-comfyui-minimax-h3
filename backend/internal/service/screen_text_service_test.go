@@ -40,12 +40,12 @@ func TestScreenTextCueCRUDAndProjectIsolation(t *testing.T) {
 	updated, err := service.Update(p1.ID, created.ID, ScreenTextCueInput{
 		EpisodeN: 1, SceneID: &scene.ID, CharacterID: &character.ID, Kind: "character_intro",
 		Text: "上官若琳", StartTime: 1, EndTime: 2.5, WritingMode: "vertical-rl",
-		Anchor: "subject_left", Animation: "ink_reveal", Enabled: boolPointer(false),
+		Anchor: "subject_left", FontSize: 96, SubtextSize: 42, Animation: "ink_reveal", Enabled: boolPointer(false),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Enabled || updated.Anchor != "subject_left" || updated.Animation != "ink_reveal" {
+	if updated.Enabled || updated.Anchor != "subject_left" || updated.FontSize != 96 || updated.SubtextSize != 42 || updated.Animation != "ink_reveal" {
 		t.Fatalf("update not persisted: %+v", updated)
 	}
 	if _, err := service.Update(p2.ID, created.ID, ScreenTextCueInput{}); !errors.Is(err, ErrScreenTextCueNotFound) {
