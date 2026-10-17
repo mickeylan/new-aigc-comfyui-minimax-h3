@@ -465,6 +465,7 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 	if template == "" {
 		template = "minimax_h3_ref2v"
 	}
+	audioSelection := s.Projects.sceneReviewedAudioSelection(sc)
 	response := gin.H{
 		"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt,
 		"has_saved_prompt": hasSavedPrompt, "prompt_stale": sc.PromptStale, "prompt_issues": promptIssues,
@@ -472,6 +473,12 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 		"template":                template, "width": width, "height": height, "reference_count": len(refs),
 		"duration": normalizeSceneDuration(sc.Duration), "fps": 24, "steps": 20,
 		"reference_bindings": sceneVideoReferenceBindings(refs, refLines, fullPrompt),
+		"reviewed_audio":     audioSelection,
+		"audio_video_templates": []gin.H{
+			{"code": h3AudioDrivenRef2VTemplate, "label": "音频驱动口型/时长（官方）"},
+			{"code": h3AudioDrivenT8EnhancedTemplate, "label": "音频驱动口型/时长（T8 Latent锁定增强）"},
+			{"code": h3VideoThenAudioMuxTemplate, "label": "视频生成后封装音频（不保证口型同步）"},
+		},
 	}
 	if continuity != nil {
 		response["continuity_mode"] = continuity.Mode
@@ -606,6 +613,13 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 	template := strings.TrimSpace(req.Template)
 	if template == "" {
 		template = strings.TrimSpace(sc.VideoTemplate)
+	}
+	if isReviewedAudioVideoTemplate(template) {
+		selection := s.Projects.sceneReviewedAudioSelection(sc)
+		if !selection.Ready {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "所选视频模板需要已审核音频: " + selection.Reason})
+			return
+		}
 	}
 	// 用户审核后的提示词直接保存；格式建议不再作为保存或生成门槛。
 	actionPrompt := normalizeVideoActionPrompt(prompt)

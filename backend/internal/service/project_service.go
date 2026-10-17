@@ -6075,6 +6075,13 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		requestedTemplate = h3CombatRef2VTemplate
 	}
 	tplCode, promptText, videoFiles := assemble(requestedTemplate)
+	if isReviewedAudioVideoTemplate(tplCode) {
+		var err error
+		videoFiles, err = s.attachReviewedSceneAudio(sc, videoFiles)
+		if err != nil {
+			return err
+		}
+	}
 	duration := normalizeSceneDuration(sc.Duration)
 	catalog := NewModelCatalogService(s.db)
 	tpl, selectionErr := catalog.ValidateVideoSelection(tplCode, videoFiles, duration)
@@ -6131,6 +6138,10 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		Params: map[string]any{
 			"width": videoW, "height": videoH, "duration": normalizeSceneDuration(sc.Duration),
 			"steps": 8, "cfg": 1.0, "fps": 24, "seed": -1, "ref_image_size": "match",
+			"audio_scene_start": 0.0, "audio_scene_duration": 0.0, "audio_warmup": 0.0, "audio_cooldown": 0.0,
+			"audio_policy": "source_only", "source_gain_db": 0.0, "generated_gain_db": -12.0,
+			"duck_generated": 0.75, "peak_limit_dbfs": -1.0, "output_sample_rate": "source",
+			"free_vram_override_gb": 0.0, "max_av_delta_ms": 50.0, "fail_on_av_mismatch": true,
 		},
 		Files:             videoFiles,
 		ParentCandidateID: sc.VideoCandidateParentID,
