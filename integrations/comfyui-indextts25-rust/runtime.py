@@ -130,9 +130,17 @@ def resolve_dll(path: str = "") -> Path:
 class NativeLibrary:
     def __init__(self, path: Path):
         self.path = path
+        self.dll_directories = []
         if os.name == "nt":
+            runtime_dir = str(path.parent)
+            current_path = os.environ.get("PATH", "")
+            path_entries = current_path.split(os.pathsep) if current_path else []
+            if runtime_dir.casefold() not in {entry.casefold() for entry in path_entries}:
+                os.environ["PATH"] = runtime_dir + (os.pathsep + current_path if current_path else "")
             if hasattr(os, "add_dll_directory"):
-                os.add_dll_directory(str(path.parent))
+                # Keep the handle alive for CPython imports, while PATH also supports native
+                # loaders such as cudarc that call LoadLibrary by bare CUDA library name.
+                self.dll_directories.append(os.add_dll_directory(runtime_dir))
             sibling_ort = path.parent / "onnxruntime.dll"
             if sibling_ort.is_file():
                 os.environ.setdefault("ORT_DYLIB_PATH", str(sibling_ort))
