@@ -9,6 +9,7 @@ def test_phase_one_nodes_are_separate_from_python_plugin():
     for name in [
         "IndexTTS25RustRuntimeStatus",
         "IndexTTS25RustModelLoader",
+        "IndexTTS25RustModelHealth",
         "IndexTTS25RustPrepareVoice",
         "IndexTTS25RustGenerate",
         "IndexTTS25RustParseSRT",
@@ -27,6 +28,10 @@ def test_runtime_is_lazy_and_uses_rust_abi():
     assert "C.CDLL" in source
     assert "indextts_voice_prepare_pcm" in source
     assert "indextts_generate_result_request_v2" in source
+    assert "indextts_request_cancel" in source
+    assert "watch_request_cancellation" in source
+    assert "processing_interrupted" in source
+    assert "indextts_model_health" in source
     assert "supports_emotion_text" in source
     assert "RUNTIME_CACHE = RuntimeCache()" in source
     assert "NativeLibrary(path)" not in source.split("RUNTIME_CACHE = RuntimeCache()")[1]

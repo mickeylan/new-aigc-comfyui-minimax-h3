@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from runtime import ModelHandle, VoiceHandle, probe_runtime, report_json, validate_audio
+from runtime import ModelHandle, VoiceHandle, probe_runtime, report_json, validate_audio, watch_request_cancellation
 
 
 def test_missing_dll_is_optional_and_reported(tmp_path):
@@ -33,3 +33,27 @@ def test_handles_keep_model_and_voice_identity(tmp_path):
 
 def test_report_json_preserves_chinese():
     assert "悲伤" in report_json({"emotion": "悲伤"})
+
+
+def test_cancellation_watcher_forwards_comfy_interrupt(monkeypatch):
+    import ctypes
+    import threading
+    import runtime
+
+    class FakeFunction:
+        def __init__(self):
+            self.requests = []
+        def __call__(self, request):
+            self.requests.append(request)
+            return 0
+
+    class FakeNative:
+        class Library:
+            indextts_request_cancel = FakeFunction()
+        lib = Library()
+
+    monkeypatch.setattr(runtime, "processing_interrupted", lambda: True)
+    done = threading.Event()
+    request = ctypes.c_void_p(123)
+    watch_request_cancellation(FakeNative(), request, done, poll_seconds=0)
+    assert FakeNative.lib.indextts_request_cancel.requests == [request]

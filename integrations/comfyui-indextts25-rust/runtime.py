@@ -14,6 +14,7 @@ import numpy as np
 import torch
 
 INDEXTTS_OK = 0
+INDEXTTS_CANCELLED = -3
 INDEXTTS_EMOTION_NONE = 0
 INDEXTTS_EMOTION_TEXT = 1
 
@@ -151,6 +152,8 @@ class NativeLibrary:
         lib.indextts_voice_get_info.argtypes = [C.c_void_p, C.POINTER(VoiceInfo)]
         lib.indextts_request_create.argtypes = [C.c_void_p, C.POINTER(C.c_void_p)]
         lib.indextts_generate_result_request_v2.argtypes = [C.c_void_p, C.c_void_p, C.c_void_p, C.POINTER(GenerateOptionsV2), C.POINTER(GenerationResult)]
+        lib.indextts_request_cancel.argtypes = [C.c_void_p]
+        lib.indextts_request_cancel.restype = C.c_int32
         lib.indextts_audio_free.argtypes = [C.POINTER(AudioOut)]
         lib.indextts_request_free.argtypes = [C.c_void_p]
         lib.indextts_voice_free.argtypes = [C.c_void_p]
@@ -215,6 +218,23 @@ class VoiceEntry:
     native: NativeLibrary
     pointer: C.c_void_p
     info: dict[str, Any]
+
+
+def processing_interrupted() -> bool:
+    try:
+        from comfy import model_management
+
+        checker = getattr(model_management, "processing_interrupted", None)
+        return bool(checker and checker())
+    except Exception:
+        return False
+
+
+def watch_request_cancellation(native: NativeLibrary, request: C.c_void_p, done: threading.Event, poll_seconds: float = 0.05) -> None:
+    while not done.wait(poll_seconds):
+        if processing_interrupted():
+            native.lib.indextts_request_cancel(request)
+            return
 
 
 class RuntimeCache:
@@ -301,8 +321,13 @@ class RuntimeCache:
             code = model_entry.native.lib.indextts_request_create(model_entry.pointer, C.byref(request))
             if code != INDEXTTS_OK or not request.value:
                 raise model_entry.native.error("indextts_request_create", code)
+            done = threading.Event()
+            watcher = threading.Thread(target=watch_request_cancellation, args=(model_entry.native, request, done), name="indextts-cancel-watch", daemon=True)
+            watcher.start()
             try:
                 code = model_entry.native.lib.indextts_generate_result_request_v2(model_entry.pointer, request, voice_entry.pointer, C.byref(options), C.byref(result))
+                if code == INDEXTTS_CANCELLED:
+                    raise RuntimeError("IndexTTS generation cancelled by ComfyUI")
                 if code != INDEXTTS_OK:
                     raise model_entry.native.error("indextts_generate_result_request_v2", code)
                 count, channels, rate = int(result.audio.sample_count), int(result.audio.channels), int(result.audio.sample_rate)
@@ -310,6 +335,8 @@ class RuntimeCache:
                     raise RuntimeError("IndexTTS returned empty audio")
                 samples = np.ctypeslib.as_array(result.audio.samples, shape=(count,)).copy()
             finally:
+                done.set()
+                watcher.join(timeout=0.2)
                 if result.audio.samples:
                     model_entry.native.lib.indextts_audio_free(C.byref(result.audio))
                 model_entry.native.lib.indextts_request_free(request)
@@ -328,6 +355,19 @@ class RuntimeCache:
             "model": model_entry.info, "voice": voice_entry.info,
         }
         return {"waveform": waveform.contiguous(), "sample_rate": rate}, report
+
+    def model_health(self, model: ModelHandle) -> dict[str, Any]:
+        entry = self.acquire_model(model)
+        raw = Health()
+        code = entry.native.lib.indextts_model_health(entry.pointer, C.byref(raw))
+        if code != INDEXTTS_OK:
+            raise entry.native.error("indextts_model_health", code)
+        return {
+            "loaded": bool(raw.loaded), "device_healthy": bool(raw.device_healthy),
+            "voice_cache_entries": int(raw.voice_cache_entries), "voice_cache_bytes": int(raw.voice_cache_bytes),
+            "active_requests": int(raw.active_requests), "queued_requests": int(raw.queued_requests),
+            "last_error": _text(raw.last_error), "model": entry.info,
+        }
 
     def generate_batch(self, model: ModelHandle, voice: VoiceHandle, cues: list[dict[str, Any]], character: str, default_language: str, base_seed: int, emotion_strength: float) -> tuple[dict[str, Any], dict[str, Any]]:
         selected = [cue for cue in cues if not character.strip() or str(cue.get("character", "")).strip() == character.strip()]

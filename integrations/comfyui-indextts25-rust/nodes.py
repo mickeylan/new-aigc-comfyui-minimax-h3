@@ -80,6 +80,24 @@ class IndexTTS25RustModelLoader(IO.ComfyNode):
         return IO.NodeOutput(handle, report_json(entry.info))
 
 
+class IndexTTS25RustModelHealth(IO.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="IndexTTS25RustModelHealth",
+            display_name="IndexTTS 2.5 Rust Model Health",
+            category=CATEGORY,
+            description="Reports loaded-device health, active/queued requests and voice-cache use for cluster diagnostics.",
+            inputs=[ModelType.Input("model")],
+            outputs=[IO.Boolean.Output("healthy"), IO.String.Output("health_json")],
+        )
+
+    @classmethod
+    def execute(cls, model: ModelHandle):
+        report = RUNTIME_CACHE.model_health(model)
+        return IO.NodeOutput(bool(report["loaded"] and report["device_healthy"]), report_json(report))
+
+
 class IndexTTS25RustPrepareVoice(IO.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -220,6 +238,7 @@ class IndexTTS25RustExtension(ComfyExtension):
         return [
             IndexTTS25RustRuntimeStatus,
             IndexTTS25RustModelLoader,
+            IndexTTS25RustModelHealth,
             IndexTTS25RustPrepareVoice,
             IndexTTS25RustGenerate,
             IndexTTS25RustParseSRT,
