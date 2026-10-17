@@ -8732,6 +8732,7 @@ func (s *ProjectService) submitDialogueToComfy(d *models.Dialogue, token, inputH
 		return err
 	}
 	seed, _ := strconv.ParseUint(inputHash[:16], 16, 64)
+	seed &= uint64(^uint64(0) >> 1)
 	emotionText := strings.TrimSpace(strings.Join([]string{strings.TrimSpace(d.Emotion), strings.TrimSpace(d.Delivery)}, "，"))
 	voiceKey := fmt.Sprintf("project-%d-character-%d", d.ProjectID, character.ID)
 	task, err := s.tasks.CreateTask(CreateTaskReq{
