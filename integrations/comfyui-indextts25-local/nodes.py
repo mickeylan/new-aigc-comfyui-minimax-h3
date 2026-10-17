@@ -11,8 +11,9 @@ from comfy_api.latest import ComfyExtension, IO
 
 from .asr_review import build_asr_report, transcribe_local
 from .h3_audio_tools import (
-    audio_quality_report, mix_audio_policy, plan_reviewed_audio_video, report_json,
-    production_preflight, slice_audio_window, trim_video_frames,
+    audio_quality_report, connected_reference_count, mix_audio_policy,
+    plan_reviewed_audio_video, production_preflight, report_json,
+    slice_audio_window, trim_video_frames,
 )
 from .preset_voices import (
     library_fingerprint,
@@ -418,19 +419,21 @@ class IndexTTS25H3ProductionPreflight(IO.ComfyNode):
                 IO.Int.Input("width", default=832, min=32, max=16384, step=32),
                 IO.Int.Input("height", default=480, min=32, max=16384, step=32),
                 IO.Int.Input("length", default=124, min=5, max=3600),
-                IO.Int.Input("picture_count", default=9, min=0, max=9),
                 IO.Int.Input("audio_count", default=1, min=1, max=3),
-                IO.Float.Input("free_vram_gb", default=0.0, min=0.0, max=256.0, step=0.1, tooltip="0 means unknown; risk remains advisory."),
+                IO.Float.Input("free_vram_override_gb", default=0.0, min=0.0, max=256.0, step=0.1, tooltip="0 reads the active CUDA device at execution time."),
+                IO.Autogrow.Input("ref_images", optional=True, template=IO.Autogrow.TemplatePrefix(
+                    input=IO.Image.Input("ref_image"), prefix="ref_image_", min=0, max=9)),
             ],
             outputs=[IO.String.Output("conditioned_prompt"), IO.String.Output("production_preflight_json")],
         )
 
     @classmethod
     def execute(cls, conditioned_prompt: str, width: int, height: int, length: int,
-                picture_count: int, audio_count: int, free_vram_gb: float):
+                audio_count: int, free_vram_override_gb: float, ref_images=None):
+        picture_count = connected_reference_count(ref_images)
         report = production_preflight(
             conditioned_prompt, int(width), int(height), int(length),
-            int(picture_count), int(audio_count), float(free_vram_gb),
+            picture_count, int(audio_count), float(free_vram_override_gb),
         )
         return IO.NodeOutput(conditioned_prompt, report_json(report))
 

@@ -193,9 +193,28 @@ def mix_audio_policy(source_audio: dict[str, Any], generated_audio: dict[str, An
     return {"waveform": result.contiguous(), "sample_rate": rate}
 
 
+def cuda_memory_snapshot() -> dict[str, Any]:
+    if not torch.cuda.is_available():
+        return {"available": False, "device": "cpu", "free_gib": 0.0, "total_gib": 0.0}
+    device = torch.cuda.current_device()
+    free_bytes, total_bytes = torch.cuda.mem_get_info(device)
+    return {
+        "available": True, "device": f"cuda:{device}",
+        "free_gib": round(free_bytes / (1024 ** 3), 3),
+        "total_gib": round(total_bytes / (1024 ** 3), 3),
+    }
+
+
+def connected_reference_count(ref_images: Any) -> int:
+    if ref_images is None:
+        return 0
+    values = ref_images.values() if isinstance(ref_images, dict) else ref_images
+    return sum(1 for value in values if value is not None)
+
+
 def production_preflight(
     prompt: str, width: int, height: int, frames: int, picture_count: int,
-    audio_count: int = 1, free_vram_gb: float = 0.0,
+    audio_count: int = 1, free_vram_gb: float = 0.0, memory_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if width <= 0 or height <= 0 or width % 32 or height % 32:
         raise ValueError("H3 width and height must be positive multiples of 32")
@@ -214,21 +233,25 @@ def production_preflight(
         if unavailable_audios:
             issues.append("unavailable Audio " + ",".join(map(str, unavailable_audios)))
         raise ValueError("; ".join(issues))
+    memory = memory_snapshot or cuda_memory_snapshot()
+    measured_free = float(memory.get("free_gib", 0.0) or 0.0)
+    effective_free = float(free_vram_gb) if free_vram_gb > 0 else measured_free
     megapixels = width * height / 1_000_000
     workload = megapixels * (frames / 124.0) * (1.0 + picture_count * 0.08)
     risk = "high" if workload >= 12 else "elevated" if workload >= 6 else "normal"
     warnings = []
     if frames > 362:
         warnings.append("frame count exceeds the approximate official trained range of 362 frames")
-    if free_vram_gb > 0 and free_vram_gb < 12:
-        warnings.append("reported free VRAM is below 12 GiB; queue or lower duration/resolution")
+    if effective_free > 0 and effective_free < 12:
+        warnings.append("measured/overridden free VRAM is below 12 GiB; queue or lower duration/resolution")
     if risk != "normal":
         warnings.append(f"estimated workload risk is {risk}; this is advisory, not a measured VRAM requirement")
     return {
         "width": width, "height": height, "frame_count": frames,
         "duration_seconds": round(frames / FPS, 6), "picture_count": picture_count,
         "audio_count": audio_count, "picture_references": sorted(set(picture_refs)),
-        "audio_references": sorted(set(audio_refs)), "free_vram_gb": float(free_vram_gb),
+        "audio_references": sorted(set(audio_refs)), "free_vram_gb": effective_free,
+        "cuda_memory": memory, "free_vram_source": "override" if free_vram_gb > 0 else "runtime",
         "workload_units": round(workload, 4), "risk": risk, "warnings": warnings,
         "note": "VRAM risk is a deterministic workload heuristic, not a promise of memory consumption.",
     }

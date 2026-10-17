@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 )
@@ -62,6 +63,12 @@ func TestH3AudioDrivenTemplateUsesReviewedAudioAsConditionAndFinalTrack(t *testi
 		t.Fatalf("production preflight=%+v", preflight)
 	}
 	requireConnection(t, preflight.Inputs["conditioned_prompt"], "421", 4)
+	if _, manual := preflight.Inputs["picture_count"]; manual {
+		t.Fatal("production preflight still trusts a manually entered reference count")
+	}
+	for i, node := range []string{"137", "139", "144", "145", "146", "147", "148", "149", "150"} {
+		requireConnection(t, preflight.Inputs[fmt.Sprintf("ref_images.ref_image_%d", i)], node, 0)
+	}
 	requireConnection(t, conditioning.Inputs["prompt"], "427", 0)
 	requireConnection(t, conditioning.Inputs["length"], "421", 1)
 	requireConnection(t, conditioning.Inputs["ref_audios.ref_audio_0"], "421", 0)

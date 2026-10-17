@@ -2,7 +2,8 @@ import pytest
 import torch
 
 from h3_audio_tools import (
-    aligned_h3_frames, audio_quality_report, ensure_primary_audio_binding,
+    aligned_h3_frames, audio_quality_report, connected_reference_count,
+    ensure_primary_audio_binding,
     mix_audio_policy, plan_reviewed_audio_video, production_preflight,
     slice_audio_window, trim_video_frames,
 )
@@ -77,7 +78,13 @@ def test_production_preflight_validates_tags_geometry_and_reports_risk():
     assert report["picture_references"] == [1]
     assert report["audio_references"] == [1]
     assert any("below 12 GiB" in warning for warning in report["warnings"])
+    assert report["free_vram_source"] == "override"
     with pytest.raises(ValueError, match="unavailable Picture"):
         production_preflight("<Picture 2> <Audio 1>", 832, 480, 124, 1)
     with pytest.raises(ValueError, match="multiples of 32"):
         production_preflight("<Audio 1>", 830, 480, 124, 0)
+
+
+def test_connected_reference_count_uses_actual_non_null_inputs():
+    assert connected_reference_count(None) == 0
+    assert connected_reference_count({"ref_image_0": torch.zeros(1), "ref_image_1": None}) == 1
