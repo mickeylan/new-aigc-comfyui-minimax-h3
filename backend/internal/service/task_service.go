@@ -680,13 +680,13 @@ func (s *TaskService) instanceSupportsClasses(inst models.Instance, required []s
 		return nil
 	}
 	client := NewComfyClient(s.manager.comfyHostOfInstance(inst), inst.Port)
-	info, err := client.GetObjectInfo()
-	if err != nil {
-		return fmt.Errorf("读取节点能力失败: %w", err)
-	}
 	missing := []string{}
 	for _, classType := range required {
-		if _, ok := info[classType]; !ok {
+		supported, err := client.HasNodeClass(classType)
+		if err != nil {
+			return fmt.Errorf("读取节点%s能力失败: %w", classType, err)
+		}
+		if !supported {
 			missing = append(missing, classType)
 		}
 	}

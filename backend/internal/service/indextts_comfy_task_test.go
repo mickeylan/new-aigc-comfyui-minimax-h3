@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"comfyui-console/internal/config"
@@ -68,12 +69,17 @@ func TestInstanceSupportsRequiredPythonTTSNodes(t *testing.T) {
 		"IndexTTS25LocalSaveReport": map[string]any{}, "LoadAudio": map[string]any{}, "SaveAudio": map[string]any{},
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/object_info":
-			_ = json.NewEncoder(w).Encode(classes)
-		default:
-			http.NotFound(w, r)
+		const prefix = "/object_info/"
+		if strings.HasPrefix(r.URL.Path, prefix) {
+			name := strings.TrimPrefix(r.URL.Path, prefix)
+			if value, ok := classes[name]; ok {
+				_ = json.NewEncoder(w).Encode(map[string]any{name: value})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+			return
 		}
+		http.NotFound(w, r)
 	}))
 	defer server.Close()
 	cfg := config.Default()

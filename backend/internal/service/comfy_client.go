@@ -199,6 +199,15 @@ func (c *ComfyClient) GetObjectInfo() (map[string]any, error) {
 	return c.getJSON("/object_info", map[string]any{})
 }
 
+func (c *ComfyClient) HasNodeClass(classType string) (bool, error) {
+	info, err := c.getJSON("/object_info/"+url.PathEscape(classType), map[string]any{})
+	if err != nil {
+		return false, err
+	}
+	_, ok := info[classType]
+	return ok, nil
+}
+
 func (c *ComfyClient) getJSON(path string, fallback map[string]any) (map[string]any, error) {
 	resp, err := c.HTTP.Get(c.baseURL() + path)
 	if err != nil {
