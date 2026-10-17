@@ -11,7 +11,7 @@ from comfy_api.latest import ComfyExtension, IO
 
 from .asr_review import build_asr_report, transcribe_local
 from .h3_audio_tools import (
-    audio_quality_report, connected_reference_count, mix_audio_policy,
+    audio_quality_report, connected_reference_count, delivery_sync_audit, mix_audio_policy,
     plan_reviewed_audio_video, production_preflight, report_json,
     slice_audio_window, trim_video_frames,
 )
@@ -487,6 +487,31 @@ class IndexTTS25H3AudioPolicy(IO.ComfyNode):
         return IO.NodeOutput(final, report_json(report))
 
 
+class IndexTTS25H3DeliveryAudit(IO.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="IndexTTS25H3DeliveryAudit", display_name="IndexTTS → H3 Final A/V Delivery Audit",
+            category=CATEGORY,
+            description="Audits final frame/audio duration sync, silence, and clipping before MP4 delivery; optionally blocks mismatched output.",
+            inputs=[
+                IO.Image.Input("frames"), IO.Audio.Input("final_audio"),
+                IO.Float.Input("fps", default=24.0, min=1.0, max=240.0, step=0.001),
+                IO.Float.Input("max_av_delta_ms", default=50.0, min=0.0, max=5000.0, step=1.0),
+                IO.Boolean.Input("fail_on_mismatch", default=True),
+            ],
+            outputs=[
+                IO.Image.Output("frames"), IO.Audio.Output("final_audio"),
+                IO.String.Output("delivery_report_json"), IO.Boolean.Output("passed"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, frames, final_audio, fps: float, max_av_delta_ms: float, fail_on_mismatch: bool):
+        report = delivery_sync_audit(frames, final_audio, fps, max_av_delta_ms, fail_on_mismatch)
+        return IO.NodeOutput(frames, final_audio, report_json(report), report["passed"])
+
+
 class IndexTTS25LocalTimelineMix(IO.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -559,6 +584,7 @@ class IndexTTS25LocalExtension(ComfyExtension):
             IndexTTS25H3ProductionPreflight,
             IndexTTS25H3OutputTrim,
             IndexTTS25H3AudioPolicy,
+            IndexTTS25H3DeliveryAudit,
             IndexTTS25LocalTimelineMix,
             IndexTTS25LocalASRReview,
         ]

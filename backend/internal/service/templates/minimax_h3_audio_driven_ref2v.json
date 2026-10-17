@@ -94,6 +94,20 @@
       "default": 0,
       "min": 0,
       "max": 256
+    },
+    {
+      "key": "max_av_delta_ms",
+      "type": "float",
+      "label": "最大音画时长差毫秒",
+      "default": 50,
+      "min": 0,
+      "max": 5000
+    },
+    {
+      "key": "fail_on_av_mismatch",
+      "type": "bool",
+      "label": "音画时长不一致时阻断",
+      "default": true
     }
   ],
   "workflow": {
@@ -592,12 +606,12 @@
         "pingpong": false,
         "save_output": true,
         "images": [
-          "424",
+          "429",
           0
         ],
         "audio": [
-          "425",
-          0
+          "429",
+          1
         ]
       },
       "class_type": "VHS_VideoCombine",
@@ -816,6 +830,38 @@
       "class_type": "IndexTTS25LocalSaveReport",
       "_meta": {
         "title": "保存正式生产预检报告"
+      }
+    },
+    "429": {
+      "inputs": {
+        "frames": [
+          "424",
+          0
+        ],
+        "final_audio": [
+          "425",
+          0
+        ],
+        "fps": 24,
+        "max_av_delta_ms": "{{max_av_delta_ms}}",
+        "fail_on_mismatch": "{{fail_on_av_mismatch}}"
+      },
+      "class_type": "IndexTTS25H3DeliveryAudit",
+      "_meta": {
+        "title": "最终音画同步/静音/削波交付审计"
+      }
+    },
+    "430": {
+      "inputs": {
+        "report_json": [
+          "429",
+          2
+        ],
+        "filename_prefix": "minimax/delivery_audit_{{task_id}}"
+      },
+      "class_type": "IndexTTS25LocalSaveReport",
+      "_meta": {
+        "title": "保存音画交付审计报告"
       }
     }
   }

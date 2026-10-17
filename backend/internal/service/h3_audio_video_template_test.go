@@ -93,14 +93,23 @@ func TestH3AudioDrivenTemplateUsesReviewedAudioAsConditionAndFinalTrack(t *testi
 	}
 	requireConnection(t, trim.Inputs["frames"], "405", 0)
 	requireConnection(t, trim.Inputs["trim_start_seconds"], "423", 2)
-	requireConnection(t, tpl.Workflow["418"].Inputs["images"], "424", 0)
 	policy := tpl.Workflow["425"]
 	if policy.ClassType != "IndexTTS25H3AudioPolicy" || policy.Inputs["policy"] != "{{audio_policy}}" {
 		t.Fatalf("audio policy=%+v", policy)
 	}
 	requireConnection(t, policy.Inputs["source_audio"], "423", 1)
 	requireConnection(t, policy.Inputs["generated_audio"], "408", 0)
-	requireConnection(t, tpl.Workflow["418"].Inputs["audio"], "425", 0)
+	delivery := tpl.Workflow["429"]
+	if delivery.ClassType != "IndexTTS25H3DeliveryAudit" {
+		t.Fatalf("delivery audit=%+v", delivery)
+	}
+	requireConnection(t, delivery.Inputs["frames"], "424", 0)
+	requireConnection(t, delivery.Inputs["final_audio"], "425", 0)
+	requireConnection(t, tpl.Workflow["418"].Inputs["images"], "429", 0)
+	requireConnection(t, tpl.Workflow["418"].Inputs["audio"], "429", 1)
+	if tpl.Workflow["430"].ClassType != "IndexTTS25LocalSaveReport" {
+		t.Fatal("delivery audit report is not persisted")
+	}
 	if tpl.Workflow["418"].Inputs["trim_to_audio"] != false {
 		t.Fatal("VHS must not perform a second implicit trim after exact frame trimming")
 	}

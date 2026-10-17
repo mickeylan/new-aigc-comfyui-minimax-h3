@@ -3,6 +3,7 @@ import torch
 
 from h3_audio_tools import (
     aligned_h3_frames, audio_quality_report, connected_reference_count,
+    delivery_sync_audit,
     ensure_primary_audio_binding,
     mix_audio_policy, plan_reviewed_audio_video, production_preflight,
     slice_audio_window, trim_video_frames,
@@ -88,3 +89,13 @@ def test_production_preflight_validates_tags_geometry_and_reports_risk():
 def test_connected_reference_count_uses_actual_non_null_inputs():
     assert connected_reference_count(None) == 0
     assert connected_reference_count({"ref_image_0": torch.zeros(1), "ref_image_1": None}) == 1
+
+
+def test_delivery_audit_blocks_large_av_delta_and_reports_quality():
+    frames = torch.zeros(48, 4, 4, 3)
+    report = delivery_sync_audit(frames, audio(2), 24, 1, True)
+    assert report["passed"] is True and report["av_delta_ms"] == pytest.approx(0)
+    with pytest.raises(ValueError, match="duration delta"):
+        delivery_sync_audit(frames, audio(1.5), 24, 50, True)
+    warning = delivery_sync_audit(frames, audio(1.5), 24, 50, False)
+    assert warning["passed"] is False

@@ -212,6 +212,40 @@ def connected_reference_count(ref_images: Any) -> int:
     return sum(1 for value in values if value is not None)
 
 
+def delivery_sync_audit(
+    frames: torch.Tensor, audio: dict[str, Any], fps: float,
+    max_av_delta_ms: float, fail_on_mismatch: bool,
+) -> dict[str, Any]:
+    if not isinstance(frames, torch.Tensor) or frames.ndim != 4 or frames.shape[0] <= 0:
+        raise ValueError("frames must be a non-empty IMAGE batch")
+    if fps <= 0 or max_av_delta_ms < 0:
+        raise ValueError("fps must be positive and max_av_delta_ms cannot be negative")
+    video_seconds = int(frames.shape[0]) / float(fps)
+    audio_seconds = audio_duration_seconds(audio)
+    delta_ms = abs(video_seconds - audio_seconds) * 1000.0
+    quality = audio_quality_report(audio)
+    passed = delta_ms <= float(max_av_delta_ms) and not quality["silent"]
+    issues = []
+    if delta_ms > float(max_av_delta_ms):
+        issues.append(
+            f"audio/video duration delta {delta_ms:.1f}ms exceeds {float(max_av_delta_ms):.1f}ms"
+        )
+    if quality["silent"]:
+        issues.append("final audio is silent")
+    if quality["clipping_ratio"] > 0.001:
+        issues.append("final audio clipping ratio exceeds 0.1%")
+    report = {
+        "frame_count": int(frames.shape[0]), "fps": float(fps),
+        "video_duration_seconds": round(video_seconds, 6),
+        "audio_duration_seconds": round(audio_seconds, 6),
+        "av_delta_ms": round(delta_ms, 3), "max_av_delta_ms": float(max_av_delta_ms),
+        "passed": passed, "issues": issues, "audio_quality": quality,
+    }
+    if fail_on_mismatch and not passed:
+        raise ValueError("; ".join(issues))
+    return report
+
+
 def production_preflight(
     prompt: str, width: int, height: int, frames: int, picture_count: int,
     audio_count: int = 1, free_vram_gb: float = 0.0, memory_snapshot: dict[str, Any] | None = None,
