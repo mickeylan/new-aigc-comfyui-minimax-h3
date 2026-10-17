@@ -10,6 +10,7 @@ import torch
 from comfy_api.latest import ComfyExtension, IO
 
 from .asr_review import build_asr_report, transcribe_local
+from .h3_audio_tools import plan_reviewed_audio_video, report_json
 from .preset_voices import (
     library_fingerprint,
     load_preset_audio,
@@ -339,6 +340,37 @@ class IndexTTS25LocalSRTSingleVoiceGenerate(IO.ComfyNode):
         )
 
 
+class IndexTTS25H3ReviewedAudioPlan(IO.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="IndexTTS25H3ReviewedAudioPlan",
+            display_name="IndexTTS → Official H3 Reviewed Audio Plan",
+            category=CATEGORY,
+            essentials_category="Audio",
+            description="Plans official H3 frame count from reviewed audio, inserts the <Audio 1> binding, and refuses truncation.",
+            inputs=[
+                IO.Audio.Input("reviewed_audio"),
+                IO.String.Input("h3_prompt", multiline=True, default=""),
+                IO.Float.Input("max_duration_seconds", default=15.0, min=3.0, max=60.0, step=0.1),
+            ],
+            outputs=[
+                IO.Audio.Output("reviewed_audio"), IO.Int.Output("length"),
+                IO.Float.Output("render_duration_seconds"), IO.Float.Output("audio_duration_seconds"),
+                IO.String.Output("conditioned_prompt"), IO.String.Output("preflight_report_json"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, reviewed_audio, h3_prompt: str, max_duration_seconds: float):
+        frames, render_duration, audio_duration, prompt, report = plan_reviewed_audio_video(
+            reviewed_audio, h3_prompt, max_duration_seconds
+        )
+        return IO.NodeOutput(
+            reviewed_audio, frames, render_duration, audio_duration, prompt, report_json(report)
+        )
+
+
 class IndexTTS25LocalTimelineMix(IO.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -406,6 +438,7 @@ class IndexTTS25LocalExtension(ComfyExtension):
             IndexTTS25LocalSaveReport,
             IndexTTS25LocalSRTParse,
             IndexTTS25LocalSRTSingleVoiceGenerate,
+            IndexTTS25H3ReviewedAudioPlan,
             IndexTTS25LocalTimelineMix,
             IndexTTS25LocalASRReview,
         ]

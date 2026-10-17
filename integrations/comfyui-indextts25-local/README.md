@@ -8,6 +8,7 @@ A deliberately small, offline-only ComfyUI integration for the official IndexTTS
 - `IndexTTS25LocalGenerate`: accepts ComfyUI `AUDIO`, text, language, duration factor and seed; returns standard ComfyUI `AUDIO`.
 - `IndexTTS25LocalSRTParse`: parses pasted UTF-8 SRT or a local `.srt` path into exact cue text, roles, timing, metadata and diagnostics without synthesis.
 - `IndexTTS25LocalSRTSingleVoiceGenerate`: generates one explicitly selected role and places its cues at authoritative SRT timestamps. Multi-role SRTs require one node/reference voice per role.
+- `IndexTTS25H3ReviewedAudioPlan`: MIT helper around official H3 nodes. It derives the `17k+5` frame count from reviewed audio, blocks over-limit audio instead of truncating Dialogue, adds the `<Audio 1>` contract idempotently, and emits an audit report. It does not replace official H3 conditioning or sampling.
 - `IndexTTS25LocalTimelineMix`: places the next generated line or role stem at an explicit second offset; chain it to assemble a reviewed dialogue timeline.
 - `IndexTTS25LocalASRReview`: uses an existing local Whisper `.pt` checkpoint to compare generated speech with authoritative text. It reports differences and never rewrites the text.
 

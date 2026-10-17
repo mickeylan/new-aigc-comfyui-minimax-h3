@@ -52,16 +52,26 @@ func TestH3AudioDrivenTemplateUsesReviewedAudioAsConditionAndFinalTrack(t *testi
 	if conditioning.ClassType != "MiniMaxH3ReferenceToVideo" {
 		t.Fatalf("conditioning=%s", conditioning.ClassType)
 	}
-	requireConnection(t, conditioning.Inputs["ref_audios.ref_audio_0"], "419", 0)
+	planner := tpl.Workflow["421"]
+	if planner.ClassType != "IndexTTS25H3ReviewedAudioPlan" {
+		t.Fatalf("reviewed audio planner=%+v", planner)
+	}
+	requireConnection(t, planner.Inputs["reviewed_audio"], "419", 0)
+	requireConnection(t, conditioning.Inputs["prompt"], "421", 4)
+	requireConnection(t, conditioning.Inputs["length"], "421", 1)
+	requireConnection(t, conditioning.Inputs["ref_audios.ref_audio_0"], "421", 0)
 	guide := tpl.Workflow["420"]
 	if guide.ClassType != "MiniMaxH3AddGuide" || guide.Inputs["frame_idx"] != float64(0) {
 		t.Fatalf("official audio guide=%+v", guide)
 	}
 	requireConnection(t, guide.Inputs["positive"], "416", 0)
 	requireConnection(t, guide.Inputs["latent"], "416", 1)
-	requireConnection(t, guide.Inputs["audio"], "419", 0)
+	requireConnection(t, guide.Inputs["audio"], "421", 0)
 	requireConnection(t, tpl.Workflow["397"].Inputs["positive"], "420", 0)
-	requireConnection(t, tpl.Workflow["418"].Inputs["audio"], "419", 0)
+	requireConnection(t, tpl.Workflow["418"].Inputs["audio"], "421", 0)
+	if tpl.Workflow["422"].ClassType != "IndexTTS25LocalSaveReport" {
+		t.Fatal("audio-driven preflight report is not persisted")
+	}
 	if tpl.Workflow["418"].Inputs["trim_to_audio"] != true {
 		t.Fatal("final video is not trimmed to reviewed audio")
 	}

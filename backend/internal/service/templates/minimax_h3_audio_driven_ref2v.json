@@ -1,7 +1,7 @@
 {
   "name": "MiniMax H3 已审核音频驱动参考视频",
   "code": "minimax_h3_audio_driven_ref2v",
-  "description": "使用ComfyUI官方MiniMaxH3ReferenceToVideo和MiniMaxH3AddGuide，将已审核IndexTTS音频同时作为<Audio 1>参考及第0帧音频锚，驱动节奏、表演和口型；最终MP4直接保留原IndexTTS音轨。官方音频锚会参与条件生成，但不等同于T8的源latent强制替换。",
+  "description": "使用ComfyUI官方MiniMaxH3ReferenceToVideo和MiniMaxH3AddGuide。项目自有MIT预检节点只负责从已审核IndexTTS音频计算17k+5帧、校验时长并绑定<Audio 1>；官方节点负责参考和音频锚条件，最终MP4保留原IndexTTS音轨。",
   "inputs": [
     {
       "key": "dialogue_audio",
@@ -453,8 +453,8 @@
           0
         ],
         "prompt": [
-          "138",
-          0
+          "421",
+          4
         ],
         "width": [
           "115",
@@ -465,7 +465,7 @@
           1
         ],
         "length": [
-          "131",
+          "421",
           1
         ],
         "ref_image_size": "match",
@@ -506,7 +506,7 @@
           0
         ],
         "ref_audios.ref_audio_0": [
-          "419",
+          "421",
           0
         ]
       },
@@ -546,7 +546,7 @@
           0
         ],
         "audio": [
-          "419",
+          "421",
           0
         ]
       },
@@ -579,7 +579,7 @@
           1
         ],
         "audio": [
-          "419",
+          "421",
           0
         ],
         "frame_idx": 0
@@ -587,6 +587,39 @@
       "class_type": "MiniMaxH3AddGuide",
       "_meta": {
         "title": "官方 MiniMax H3 音频锚（从第0帧驱动）"
+      }
+    },
+    "421": {
+      "inputs": {
+        "reviewed_audio": [
+          "419",
+          0
+        ],
+        "h3_prompt": [
+          "138",
+          0
+        ],
+        "max_duration_seconds": [
+          "132",
+          0
+        ]
+      },
+      "class_type": "IndexTTS25H3ReviewedAudioPlan",
+      "_meta": {
+        "title": "审核音频时长/17k+5/Audio标签预检"
+      }
+    },
+    "422": {
+      "inputs": {
+        "report_json": [
+          "421",
+          5
+        ],
+        "filename_prefix": "minimax/audio_preflight_{{task_id}}"
+      },
+      "class_type": "IndexTTS25LocalSaveReport",
+      "_meta": {
+        "title": "保存音频驱动预检报告"
       }
     }
   }
