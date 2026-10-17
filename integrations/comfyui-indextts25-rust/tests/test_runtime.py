@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from runtime import ModelHandle, VoiceHandle, probe_runtime, report_json, validate_audio, watch_request_cancellation
+from runtime import EmotionHandle, ModelHandle, VoiceHandle, probe_runtime, report_json, validate_audio, watch_request_cancellation
 
 
 def test_missing_dll_is_optional_and_reported(tmp_path):
@@ -29,6 +29,9 @@ def test_handles_keep_model_and_voice_identity(tmp_path):
     assert model.key[-1] == 2
     assert voice.model_key == model.key
     assert "character-7" in voice.voice_key
+    emotion = EmotionHandle(model.key, "emotion-sha")
+    assert emotion.model_key == model.key
+    assert emotion.emotion_key == "emotion-sha"
 
 
 def test_report_json_preserves_chinese():

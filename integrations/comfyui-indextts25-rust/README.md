@@ -9,7 +9,8 @@ They are intentionally separate from `ComfyUI-IndexTTS25-Local`, which remains t
 - `IndexTTS25RustModelLoader`: lazily loads one CPU/CUDA model and returns its immutable runtime/model fingerprint.
 - `IndexTTS25RustModelHealth`: reports device health, active/queued requests and prepared-voice cache use.
 - `IndexTTS25RustPrepareVoice`: prepares and caches a reference voice by stable voice key plus audio hash.
-- `IndexTTS25RustGenerate`: produces standard ComfyUI `AUDIO` and an auditable JSON report, including native emotion-text controls when supported.
+- `IndexTTS25RustPrepareEmotion`: prepares and caches an optional emotion-reference clip when the runtime advertises support.
+- `IndexTTS25RustGenerate`: produces standard ComfyUI `AUDIO` and an auditable JSON report. Emotion text, prepared reference and JSON vector are mutually exclusive and capability-gated.
 
 The module itself never loads the DLL. A missing DLL, CUDA runtime, model, or voice reference fails only the executing node and does not prevent ComfyUI startup. During generation, a ComfyUI interrupt is cooperatively forwarded to the native request through `indextts_request_cancel` instead of leaving CUDA work running in the background.
 

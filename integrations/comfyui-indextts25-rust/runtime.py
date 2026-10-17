@@ -17,6 +17,8 @@ INDEXTTS_OK = 0
 INDEXTTS_CANCELLED = -3
 INDEXTTS_EMOTION_NONE = 0
 INDEXTTS_EMOTION_TEXT = 1
+INDEXTTS_EMOTION_REFERENCE = 2
+INDEXTTS_EMOTION_VECTOR = 3
 
 
 class ModelOptions(C.Structure):
@@ -150,6 +152,8 @@ class NativeLibrary:
         lib.indextts_model_health.argtypes = [C.c_void_p, C.POINTER(Health)]
         lib.indextts_voice_prepare_pcm.argtypes = [C.c_void_p, C.POINTER(C.c_float), C.c_size_t, C.c_uint32, C.c_uint32, C.POINTER(C.c_void_p)]
         lib.indextts_voice_get_info.argtypes = [C.c_void_p, C.POINTER(VoiceInfo)]
+        lib.indextts_emotion_prepare_reference.argtypes = [C.c_void_p, C.c_char_p, C.POINTER(C.c_void_p)]
+        lib.indextts_emotion_free.argtypes = [C.c_void_p]
         lib.indextts_request_create.argtypes = [C.c_void_p, C.POINTER(C.c_void_p)]
         lib.indextts_generate_result_request_v2.argtypes = [C.c_void_p, C.c_void_p, C.c_void_p, C.POINTER(GenerateOptionsV2), C.POINTER(GenerationResult)]
         lib.indextts_request_cancel.argtypes = [C.c_void_p]
@@ -205,6 +209,12 @@ class VoiceHandle:
     voice_key: str
 
 
+@dataclass(frozen=True, slots=True)
+class EmotionHandle:
+    model_key: tuple[str, str, int]
+    emotion_key: str
+
+
 @dataclass(slots=True)
 class ModelEntry:
     native: NativeLibrary
@@ -215,6 +225,13 @@ class ModelEntry:
 
 @dataclass(slots=True)
 class VoiceEntry:
+    native: NativeLibrary
+    pointer: C.c_void_p
+    info: dict[str, Any]
+
+
+@dataclass(slots=True)
+class EmotionEntry:
     native: NativeLibrary
     pointer: C.c_void_p
     info: dict[str, Any]
@@ -242,6 +259,7 @@ class RuntimeCache:
         self.lock = threading.RLock()
         self.models: dict[tuple[str, str, int], ModelEntry] = {}
         self.voices: dict[tuple[tuple[str, str, int], str], VoiceEntry] = {}
+        self.emotions: dict[tuple[tuple[str, str, int], str], EmotionEntry] = {}
 
     def acquire_model(self, handle: ModelHandle) -> ModelEntry:
         with self.lock:
@@ -297,7 +315,41 @@ class RuntimeCache:
             self.voices[cache_key] = VoiceEntry(entry.native, pointer, info)
             return VoiceHandle(model.key, cache_key[1]), info
 
-    def generate(self, model: ModelHandle, voice: VoiceHandle, text: str, language: str, seed: int, duration_factor: float, emotion_text: str, emotion_strength: float) -> tuple[dict[str, Any], dict[str, Any]]:
+    def prepare_emotion(self, model: ModelHandle, audio: dict[str, Any]) -> tuple[EmotionHandle, dict[str, Any]]:
+        import wave
+        import folder_paths
+
+        entry = self.acquire_model(model)
+        if not entry.info.get("supports_emotion_reference"):
+            raise RuntimeError("loaded IndexTTS runtime does not support emotion reference audio")
+        waveform, sample_rate = validate_audio(audio)
+        mono = waveform.mean(dim=1)[0].numpy().astype(np.float32, copy=False)
+        digest = hashlib.sha256(mono.tobytes() + str(sample_rate).encode()).hexdigest()
+        cache_key = (model.key, digest)
+        with self.lock:
+            cached = self.emotions.get(cache_key)
+            if cached:
+                return EmotionHandle(model.key, digest), cached.info
+            root = Path(folder_paths.get_temp_directory()) / "indextts25_rust" / "emotion"
+            root.mkdir(parents=True, exist_ok=True)
+            reference_path = root / f"{digest}.wav"
+            if not reference_path.is_file():
+                pcm = np.rint(np.clip(mono, -1, 1) * 32767).astype(np.int16)
+                with wave.open(str(reference_path), "wb") as output:
+                    output.setnchannels(1)
+                    output.setsampwidth(2)
+                    output.setframerate(sample_rate)
+                    output.writeframes(pcm.tobytes())
+            pointer = C.c_void_p()
+            path_bytes = str(reference_path).encode("utf-8")
+            code = entry.native.lib.indextts_emotion_prepare_reference(entry.pointer, path_bytes, C.byref(pointer))
+            if code != INDEXTTS_OK or not pointer.value:
+                raise entry.native.error("indextts_emotion_prepare_reference", code)
+            info = {"reference_sha256": digest, "sample_rate": sample_rate, "samples": int(mono.size)}
+            self.emotions[cache_key] = EmotionEntry(entry.native, pointer, info)
+            return EmotionHandle(model.key, digest), info
+
+    def generate(self, model: ModelHandle, voice: VoiceHandle, text: str, language: str, seed: int, duration_factor: float, emotion_text: str, emotion_strength: float, emotion_reference: EmotionHandle | None = None, emotion_vector: list[float] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
         model_entry = self.acquire_model(model)
         if voice.model_key != model.key:
             raise ValueError("prepared voice belongs to a different model")
@@ -309,10 +361,36 @@ class RuntimeCache:
         model_entry.native.lib.indextts_generate_options_v2_init(C.byref(options))
         options.base.text, options.base.language = text_bytes, language_bytes
         options.base.seed, options.base.duration_factor = int(seed), float(duration_factor)
+        selected_modes = int(bool(emotion_text.strip())) + int(emotion_reference is not None) + int(bool(emotion_vector))
+        if selected_modes > 1:
+            raise ValueError("emotion text, reference and vector are mutually exclusive")
+        emotion_vector_array = None
+        emotion_report: dict[str, Any] = {"mode": "none", "strength": float(emotion_strength)}
         if emotion_text.strip():
             if not model_entry.info.get("supports_emotion_text"):
                 raise RuntimeError("loaded IndexTTS runtime does not support emotion text")
             options.emotion.mode, options.emotion.text, options.emotion.strength = INDEXTTS_EMOTION_TEXT, emotion_bytes, float(emotion_strength)
+            emotion_report |= {"mode": "text", "text": emotion_text.strip()}
+        elif emotion_reference is not None:
+            if not model_entry.info.get("supports_emotion_reference"):
+                raise RuntimeError("loaded IndexTTS runtime does not support emotion reference audio")
+            if emotion_reference.model_key != model.key:
+                raise ValueError("prepared emotion belongs to a different model")
+            emotion_entry = self.emotions.get((model.key, emotion_reference.emotion_key))
+            if not emotion_entry:
+                raise RuntimeError("prepared emotion is unavailable; run IndexTTS25RustPrepareEmotion again")
+            options.emotion.mode, options.emotion.reference, options.emotion.strength = INDEXTTS_EMOTION_REFERENCE, emotion_entry.pointer, float(emotion_strength)
+            emotion_report |= {"mode": "reference", **emotion_entry.info}
+        elif emotion_vector:
+            if not model_entry.info.get("supports_emotion_vector"):
+                raise RuntimeError("loaded IndexTTS runtime does not support emotion vectors")
+            values = [float(value) for value in emotion_vector]
+            if not values or len(values) > 4096 or not np.isfinite(values).all():
+                raise ValueError("emotion vector must contain 1-4096 finite values")
+            emotion_vector_array = (C.c_float * len(values))(*values)
+            options.emotion.mode, options.emotion.vector = INDEXTTS_EMOTION_VECTOR, emotion_vector_array
+            options.emotion.vector_length, options.emotion.strength = len(values), float(emotion_strength)
+            emotion_report |= {"mode": "vector", "length": len(values), "sha256": hashlib.sha256(np.asarray(values, dtype=np.float32).tobytes()).hexdigest()}
         else:
             options.emotion.mode = INDEXTTS_EMOTION_NONE
         request = C.c_void_p()
@@ -352,7 +430,7 @@ class RuntimeCache:
             "bigvgan_ms": info.bigvgan_ms, "total_ms": info.total_ms,
             "peak": info.peak, "rms": info.rms, "silence_ratio": info.silence_ratio,
             "seed": int(info.seed), "sample_rate": rate, "channels": channels, "samples": samples.size,
-            "model": model_entry.info, "voice": voice_entry.info,
+            "model": model_entry.info, "voice": voice_entry.info, "emotion": emotion_report,
         }
         return {"waveform": waveform.contiguous(), "sample_rate": rate}, report
 
@@ -416,6 +494,9 @@ class RuntimeCache:
 
     def close(self) -> None:
         with self.lock:
+            for emotion in self.emotions.values():
+                emotion.native.lib.indextts_emotion_free(emotion.pointer)
+            self.emotions.clear()
             for voice in self.voices.values():
                 voice.native.lib.indextts_voice_free(voice.pointer)
             self.voices.clear()

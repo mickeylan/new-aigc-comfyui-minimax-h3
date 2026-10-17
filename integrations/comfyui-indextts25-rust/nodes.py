@@ -9,6 +9,7 @@ from .asr import review_audio
 from .srt import preview_report
 from .runtime import (
     RUNTIME_CACHE,
+    EmotionHandle,
     ModelHandle,
     VoiceHandle,
     probe_runtime,
@@ -19,6 +20,7 @@ from .runtime import (
 CATEGORY = "Audio/IndexTTS 2.5 Rust"
 ModelType = IO.Custom("INDEXTTS25_RUST_MODEL")
 VoiceType = IO.Custom("INDEXTTS25_RUST_VOICE")
+EmotionType = IO.Custom("INDEXTTS25_RUST_EMOTION")
 
 
 def _default_dll() -> str:
@@ -121,6 +123,25 @@ class IndexTTS25RustPrepareVoice(IO.ComfyNode):
         return IO.NodeOutput(voice, report_json(info))
 
 
+class IndexTTS25RustPrepareEmotion(IO.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="IndexTTS25RustPrepareEmotion",
+            display_name="IndexTTS 2.5 Rust Prepare Emotion",
+            category=CATEGORY,
+            essentials_category="Audio",
+            description="Prepares and caches an optional emotion-reference clip when the loaded Rust runtime supports it.",
+            inputs=[ModelType.Input("model"), IO.Audio.Input("emotion_audio")],
+            outputs=[EmotionType.Output("emotion"), IO.String.Output("emotion_json")],
+        )
+
+    @classmethod
+    def execute(cls, model: ModelHandle, emotion_audio):
+        emotion, info = RUNTIME_CACHE.prepare_emotion(model, emotion_audio)
+        return IO.NodeOutput(emotion, report_json(info))
+
+
 class IndexTTS25RustGenerate(IO.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -139,16 +160,25 @@ class IndexTTS25RustGenerate(IO.ComfyNode):
                 IO.Int.Input("seed", default=0, min=0, max=0x7FFFFFFFFFFFFFFF, control_after_generate=True),
                 IO.String.Input("emotion_text", multiline=True, default=""),
                 IO.Float.Input("emotion_strength", default=0.6, min=0.0, max=1.0, step=0.05),
+                EmotionType.Input("emotion_reference", optional=True),
+                IO.String.Input("emotion_vector_json", multiline=True, default="", optional=True, tooltip="Optional JSON float array. Mutually exclusive with emotion text/reference."),
             ],
             outputs=[IO.Audio.Output("audio"), IO.String.Output("generation_json")],
         )
 
     @classmethod
-    def execute(cls, model: ModelHandle, voice: VoiceHandle, text: str, language: str, duration_factor: float, seed: int, emotion_text: str, emotion_strength: float):
+    def execute(cls, model: ModelHandle, voice: VoiceHandle, text: str, language: str, duration_factor: float, seed: int, emotion_text: str, emotion_strength: float, emotion_reference: EmotionHandle | None = None, emotion_vector_json: str = ""):
+        import json
+
         content = text.strip()
         if not content:
             raise ValueError("text is required")
-        audio, report = RUNTIME_CACHE.generate(model, voice, content, language, seed, duration_factor, emotion_text.strip(), emotion_strength)
+        emotion_vector = None
+        if emotion_vector_json.strip():
+            emotion_vector = json.loads(emotion_vector_json)
+            if not isinstance(emotion_vector, list):
+                raise ValueError("emotion_vector_json must be a JSON float array")
+        audio, report = RUNTIME_CACHE.generate(model, voice, content, language, seed, duration_factor, emotion_text.strip(), emotion_strength, emotion_reference, emotion_vector)
         report["text_sha256"] = __import__("hashlib").sha256(content.encode("utf-8")).hexdigest()
         report["language"] = language
         report["duration_factor"] = float(duration_factor)
@@ -272,6 +302,7 @@ class IndexTTS25RustExtension(ComfyExtension):
             IndexTTS25RustModelLoader,
             IndexTTS25RustModelHealth,
             IndexTTS25RustPrepareVoice,
+            IndexTTS25RustPrepareEmotion,
             IndexTTS25RustGenerate,
             IndexTTS25RustParseSRT,
             IndexTTS25RustCharacterBatch,

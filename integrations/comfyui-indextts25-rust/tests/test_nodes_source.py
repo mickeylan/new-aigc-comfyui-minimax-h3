@@ -11,6 +11,7 @@ def test_phase_one_nodes_are_separate_from_python_plugin():
         "IndexTTS25RustModelLoader",
         "IndexTTS25RustModelHealth",
         "IndexTTS25RustPrepareVoice",
+        "IndexTTS25RustPrepareEmotion",
         "IndexTTS25RustGenerate",
         "IndexTTS25RustParseSRT",
         "IndexTTS25RustCharacterBatch",
@@ -21,6 +22,8 @@ def test_phase_one_nodes_are_separate_from_python_plugin():
     assert "INDEXTTS25_RUST_MODEL" in source
     assert "INDEXTTS25_RUST_VOICE" in source
     assert "emotion_text" in source
+    assert "emotion_reference" in source
+    assert "emotion_vector_json" in source
     assert "generation_json" in source
 
 
