@@ -16,6 +16,8 @@ A deliberately small, offline-only ComfyUI integration for the official IndexTTS
 - `IndexTTS25H3DeliveryAudit`: compares final frame and audio durations, audits silence/clipping, records the selected audio policy, and hashes final frames/audio before blocking or allowing delivery.
 
 The H3 audit chain records SHA-256 identities for reviewed audio PCM, conditioned prompts, ordered connected reference tensors, final trimmed frames, and final audio. These hashes are reproducibility evidence for the exact in-memory inputs/outputs; they are not inferred from filenames.
+
+The default `minimax_h3_audio_driven_ref2v` template remains official-node-first. An optional `minimax_h3_audio_driven_ref2v_t8_enhanced` template may use the separately installed GPL-3.0-or-later `MiniMaxH3AudioLatentControlT8` node in `lock` mode after official conditioning. This repository does not copy that implementation. Missing T8 nodes must fail capability scheduling explicitly; there is no fallback to the standard template.
 - `IndexTTS25LocalTimelineMix`: places the next generated line or role stem at an explicit second offset; chain it to assemble a reviewed dialogue timeline.
 - `IndexTTS25LocalASRReview`: uses an existing local Whisper `.pt` checkpoint to compare generated speech with authoritative text. It reports differences and never rewrites the text.
 

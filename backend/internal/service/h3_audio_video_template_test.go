@@ -135,6 +135,26 @@ func TestH3AudioDrivenTemplateAvoidsNonOfficialConditioningNode(t *testing.T) {
 	}
 }
 
+func TestH3AudioDrivenT8EnhancedTemplateLocksOfficialLatentWithoutReplacingOfficialConditioning(t *testing.T) {
+	tpl := loadAudioVideoTemplateFixture(t, "minimax_h3_audio_driven_ref2v_t8_enhanced.json")
+	if tpl.Code != h3AudioDrivenT8EnhancedTemplate {
+		t.Fatalf("code=%q", tpl.Code)
+	}
+	if tpl.Workflow["416"].ClassType != "MiniMaxH3ReferenceToVideo" || tpl.Workflow["420"].ClassType != "MiniMaxH3AddGuide" {
+		t.Fatal("enhanced template did not preserve official conditioning nodes")
+	}
+	lock := tpl.Workflow["431"]
+	if lock.ClassType != "MiniMaxH3AudioLatentControlT8" || lock.Inputs["mode"] != "lock" || lock.Inputs["strength"] != float64(0) {
+		t.Fatalf("latent lock=%+v", lock)
+	}
+	requireConnection(t, lock.Inputs["av_latent"], "416", 1)
+	requireConnection(t, lock.Inputs["source_audio"], "421", 0)
+	requireConnection(t, tpl.Workflow["397"].Inputs["latent_image"], "431", 0)
+	if !isH3VideoPromptTemplate(tpl.Code) || !isH3Ref2VTemplate(tpl.Code) {
+		t.Fatal("enhanced template is not protected by final H3 validation")
+	}
+}
+
 func TestH3VideoThenAudioMuxTemplateDoesNotConditionGenerationOnAudio(t *testing.T) {
 	tpl := loadAudioVideoTemplateFixture(t, "minimax_h3_video_then_audio_mux.json")
 	if tpl.Code != h3VideoThenAudioMuxTemplate {

@@ -4246,7 +4246,7 @@ var officialH3LaterShotPattern = regexp.MustCompile(`\[Shot\s+([2-9][0-9]*)\]\s+
 
 func isH3VideoPromptTemplate(template string) bool {
 	switch template {
-	case "minimax_h3_t2v", "minimax_h3_i2v", "minimax_h3_first_last", "minimax_h3_ref2v", "minimax_h3_ref2v_single", h3CombatRef2VTemplate, h3AudioDrivenRef2VTemplate, h3VideoThenAudioMuxTemplate:
+	case "minimax_h3_t2v", "minimax_h3_i2v", "minimax_h3_first_last", "minimax_h3_ref2v", "minimax_h3_ref2v_single", h3CombatRef2VTemplate, h3AudioDrivenRef2VTemplate, h3AudioDrivenT8EnhancedTemplate, h3VideoThenAudioMuxTemplate:
 		return true
 	default:
 		return false
@@ -5980,14 +5980,15 @@ func (s *ProjectService) restoreLegacyProjectInput(projectID uint, name string) 
 }
 
 const (
-	h3CombatRef2VTemplate       = "minimax_h3_ref2v_combat"
-	h3AudioDrivenRef2VTemplate  = "minimax_h3_audio_driven_ref2v"
-	h3VideoThenAudioMuxTemplate = "minimax_h3_video_then_audio_mux"
+	h3CombatRef2VTemplate           = "minimax_h3_ref2v_combat"
+	h3AudioDrivenRef2VTemplate      = "minimax_h3_audio_driven_ref2v"
+	h3AudioDrivenT8EnhancedTemplate = "minimax_h3_audio_driven_ref2v_t8_enhanced"
+	h3VideoThenAudioMuxTemplate     = "minimax_h3_video_then_audio_mux"
 )
 
 func isH3Ref2VTemplate(templateCode string) bool {
 	switch strings.TrimSpace(templateCode) {
-	case "minimax_h3_ref2v", "minimax_h3_ref2v_single", h3CombatRef2VTemplate, h3AudioDrivenRef2VTemplate, h3VideoThenAudioMuxTemplate:
+	case "minimax_h3_ref2v", "minimax_h3_ref2v_single", h3CombatRef2VTemplate, h3AudioDrivenRef2VTemplate, h3AudioDrivenT8EnhancedTemplate, h3VideoThenAudioMuxTemplate:
 		return true
 	default:
 		return false
