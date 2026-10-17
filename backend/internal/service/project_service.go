@@ -6789,11 +6789,24 @@ func (s *ProjectService) syncDialogueAudioTasks() {
 				continue
 			}
 			rate, channels, duration := pcmWAVInfo(data)
+			params := map[string]any{"task_id": task.TaskID, "instance_id": task.InstanceID, "gpu": task.GPUIndex, "port": task.Port, "result_files": task.ResultFiles}
+			if reportFile := resultReportOf(&task); reportFile != "" {
+				reportSubfolder, reportName := filepath.ToSlash(filepath.Dir(reportFile)), filepath.Base(reportFile)
+				if reportSubfolder == "." {
+					reportSubfolder = ""
+				}
+				if reportData, reportErr := NewComfyClient(s.tasks.comfyHostForTask(&task), *task.Port).DownloadOutput(reportName, reportSubfolder, "output"); reportErr == nil && len(reportData) <= 1024*1024 {
+					var report map[string]any
+					if json.Unmarshal(reportData, &report) == nil {
+						params["generation_report"] = report
+					}
+				}
+			}
 			_, err = s.captureDialogueAudio(dialogueAudioCapture{
 				ProjectID: dialogue.ProjectID, DialogueID: dialogue.ID, Token: dialogue.AudioToken,
 				InputHash: dialogue.AudioTaskHash, Provider: "index_tts_rust_comfyui",
 				RuntimeVersion: task.TemplateName, VoiceIdentity: strings.TrimSpace(dialogue.Character),
-				Params: map[string]any{"task_id": task.TaskID, "instance_id": task.InstanceID, "gpu": task.GPUIndex, "port": task.Port, "result_files": task.ResultFiles},
+				Params: params,
 				File:   filepath.Base(localPath), SampleRate: rate, Channels: channels, Duration: duration,
 			})
 			if err != nil && !strings.Contains(err.Error(), "已过期") {
@@ -6805,6 +6818,22 @@ func (s *ProjectService) syncDialogueAudioTasks() {
 	if changed {
 		s.pushProject(nil)
 	}
+}
+
+func resultReportOf(task *models.Task) string {
+	var files []map[string]string
+	if json.Unmarshal([]byte(task.ResultFiles), &files) != nil {
+		return ""
+	}
+	for _, file := range files {
+		if file["type"] == "files" && strings.EqualFold(filepath.Ext(file["filename"]), ".json") {
+			if file["subfolder"] != "" {
+				return filepath.ToSlash(filepath.Join(file["subfolder"], file["filename"]))
+			}
+			return file["filename"]
+		}
+	}
+	return ""
 }
 
 func resultAudioOf(task *models.Task) (string, *int) {

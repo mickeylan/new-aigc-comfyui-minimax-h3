@@ -206,6 +206,38 @@ class IndexTTS25RustCharacterBatch(IO.ComfyNode):
         return IO.NodeOutput(audio, report_json(report))
 
 
+class IndexTTS25RustSaveReport(IO.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="IndexTTS25RustSaveReport",
+            display_name="IndexTTS 2.5 Rust Save Report",
+            category=CATEGORY,
+            description="Persists the auditable generation JSON beside audio so the scheduler can attach native diagnostics to the candidate.",
+            inputs=[IO.String.Input("report_json", multiline=True, default="{}"), IO.String.Input("filename_prefix", default="indextts_rust/report")],
+            is_output_node=True,
+        )
+
+    @classmethod
+    def execute(cls, report_json: str, filename_prefix: str):
+        import json
+        import re
+        import folder_paths
+
+        parsed = json.loads(report_json)
+        content = json.dumps(parsed, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        relative = filename_prefix.replace("\\", "/").strip("/") or "indextts_rust/report"
+        relative = "/".join(re.sub(r"[^0-9A-Za-z._-]+", "_", part) for part in relative.split("/") if part not in {"", ".", ".."})
+        target = Path(folder_paths.get_output_directory()) / f"{relative}.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        output_root = Path(folder_paths.get_output_directory()).resolve()
+        resolved = target.resolve()
+        if output_root not in resolved.parents:
+            raise ValueError("report output escaped the ComfyUI output directory")
+        return IO.NodeOutput(ui={"files": [{"filename": resolved.name, "subfolder": resolved.parent.relative_to(output_root).as_posix(), "type": "output"}]})
+
+
 class IndexTTS25RustASRReview(IO.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -243,6 +275,7 @@ class IndexTTS25RustExtension(ComfyExtension):
             IndexTTS25RustGenerate,
             IndexTTS25RustParseSRT,
             IndexTTS25RustCharacterBatch,
+            IndexTTS25RustSaveReport,
             IndexTTS25RustASRReview,
         ]
 

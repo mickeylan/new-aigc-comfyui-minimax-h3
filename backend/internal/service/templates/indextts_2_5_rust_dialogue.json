@@ -20,6 +20,7 @@
     "2": {"class_type":"LoadAudio","inputs":{"audio":"{{aud:reference_audio}}"}},
     "3": {"class_type":"IndexTTS25RustPrepareVoice","inputs":{"model":["1",0],"speaker_audio":["2",0],"voice_key":"{{voice_key}}"}},
     "4": {"class_type":"IndexTTS25RustGenerate","inputs":{"model":["1",0],"voice":["3",0],"text":"{{text}}","language":"{{language}}","duration_factor":"{{duration_factor}}","seed":"{{seed}}","emotion_text":"{{emotion_text}}","emotion_strength":"{{emotion_strength}}"}},
-    "5": {"class_type":"SaveAudio","inputs":{"audio":["4",0],"filename_prefix":"indextts_rust/dub_{{task_id}}"}}
+    "5": {"class_type":"SaveAudio","inputs":{"audio":["4",0],"filename_prefix":"indextts_rust/dub_{{task_id}}"}},
+    "6": {"class_type":"IndexTTS25RustSaveReport","inputs":{"report_json":["4",1],"filename_prefix":"indextts_rust/report_{{task_id}}"}}
   }
 }

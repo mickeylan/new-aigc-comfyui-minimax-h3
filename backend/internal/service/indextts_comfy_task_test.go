@@ -31,7 +31,7 @@ func TestIndexTTSRustTemplateRendersOrderedAudioWorkflow(t *testing.T) {
 		t.Fatalf("unresolved template: %s", encoded)
 	}
 	classes := workflowClassTypes(workflow)
-	for _, required := range []string{"IndexTTS25RustModelLoader", "IndexTTS25RustPrepareVoice", "IndexTTS25RustGenerate", "LoadAudio", "SaveAudio"} {
+	for _, required := range []string{"IndexTTS25RustModelLoader", "IndexTTS25RustPrepareVoice", "IndexTTS25RustGenerate", "IndexTTS25RustSaveReport", "LoadAudio", "SaveAudio"} {
 		if !containsClass(classes, required) {
 			t.Fatalf("missing class %s: %v", required, classes)
 		}
@@ -59,6 +59,16 @@ func TestInstanceSupportsRequiredRustTTSNodes(t *testing.T) {
 	}
 	if err := svc.instanceSupportsClasses(instance, []string{"MissingRustNode"}); err == nil {
 		t.Fatal("missing custom node was accepted")
+	}
+}
+
+func TestResultReportFindsAuditableJSONSidecar(t *testing.T) {
+	raw, _ := json.Marshal([]map[string]string{
+		{"type": "audio", "filename": "dub.wav", "subfolder": "indextts"},
+		{"type": "files", "filename": "report_task.json", "subfolder": "indextts"},
+	})
+	if got := resultReportOf(&models.Task{ResultFiles: string(raw)}); got != "indextts/report_task.json" {
+		t.Fatalf("report=%q", got)
 	}
 }
 
