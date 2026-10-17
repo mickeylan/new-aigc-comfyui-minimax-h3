@@ -7,151 +7,33 @@ const NODE_TYPES = new Set([
 
 const STYLE = `
 .indextts-srt-panel{display:flex;flex-direction:column;gap:8px;padding:8px;box-sizing:border-box;color:var(--fg-color,#ddd);font:12px sans-serif;background:rgba(20,20,20,.45);border:1px solid #555;border-radius:7px}
-.indextts-srt-actions{display:flex;gap:6px;flex-wrap:wrap}
-.indextts-srt-panel button{border:1px solid #666;border-radius:5px;background:#303030;color:#eee;padding:6px 10px;cursor:pointer}
-.indextts-srt-panel button:hover{background:#414141}
-.indextts-srt-file{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.indextts-srt-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;color:#bbb}
-.indextts-srt-summary span{background:#242424;border-radius:4px;padding:5px}
-.indextts-srt-roles{color:#9fd3ff;white-space:normal;overflow-wrap:anywhere}
-.indextts-srt-warning{color:#ffcb6b;white-space:normal}
+.indextts-srt-actions{display:flex;gap:6px;flex-wrap:wrap}.indextts-srt-panel button,.indextts-srt-editor button{border:1px solid #666;border-radius:5px;background:#303030;color:#eee;padding:6px 10px;cursor:pointer}.indextts-srt-panel button:hover,.indextts-srt-editor button:hover{background:#414141}.indextts-srt-file{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.indextts-srt-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;color:#bbb}.indextts-srt-summary span{background:#242424;border-radius:4px;padding:5px}.indextts-srt-roles{color:#9fd3ff;white-space:normal;overflow-wrap:anywhere}.indextts-srt-warning{color:#ffcb6b;white-space:normal}
+.indextts-srt-dialog{position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;padding:24px}.indextts-srt-editor{width:min(1180px,96vw);height:min(820px,92vh);display:flex;flex-direction:column;background:#171717;color:#eee;border:1px solid #666;border-radius:10px;box-shadow:0 20px 60px #000;overflow:hidden;font:13px sans-serif}.indextts-srt-editor header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#242424;border-bottom:1px solid #444}.indextts-srt-editor h2{font-size:17px;margin:0}.indextts-srt-toolbar{display:flex;gap:7px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid #3b3b3b}.indextts-srt-table-wrap{flex:1;overflow:auto;padding:0 12px}.indextts-srt-table{width:100%;border-collapse:collapse;table-layout:fixed}.indextts-srt-table th{position:sticky;top:0;background:#202020;z-index:1;text-align:left;padding:8px 5px;border-bottom:1px solid #555}.indextts-srt-table td{padding:5px;border-bottom:1px solid #333;vertical-align:top}.indextts-srt-table input,.indextts-srt-table textarea,.indextts-srt-table select{width:100%;box-sizing:border-box;background:#101010;color:#eee;border:1px solid #555;border-radius:4px;padding:6px}.indextts-srt-table textarea{min-height:62px;resize:vertical}.indextts-srt-table .number{width:44px}.indextts-srt-table .time{width:118px}.indextts-srt-table .role{width:108px}.indextts-srt-table .language{width:72px}.indextts-srt-table .seed{width:90px}.indextts-srt-table .ops{width:92px}.indextts-srt-row-invalid{background:rgba(180,45,45,.18)}.indextts-srt-editor footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;border-top:1px solid #444;background:#202020}.indextts-srt-editor-status{color:#bbb;white-space:normal}.indextts-srt-primary{background:#1769aa!important;border-color:#3997dc!important}.indextts-srt-danger{color:#ff9a9a!important}.indextts-srt-hidden{display:none!important}
 `;
 
 const EXAMPLE = `1\n00:00:00,000 --> 00:00:03,000\n[角色=上官若琳; 情绪=克制而欣喜; 语言=ZH]\n姐姐，终于等到你了。\n\n2\n00:00:03,500 --> 00:00:06,000\n[角色=舒寒; 表达=低声]\n我回来了。`;
 
-function installStyle() {
-    if (document.getElementById("indextts-srt-ui-style")) return;
-    const style = document.createElement("style");
-    style.id = "indextts-srt-ui-style";
-    style.textContent = STYLE;
-    document.head.appendChild(style);
+function installStyle(){if(document.getElementById("indextts-srt-ui-style"))return;const style=document.createElement("style");style.id="indextts-srt-ui-style";style.textContent=STYLE;document.head.appendChild(style)}
+function widget(node,name){return node.widgets?.find((item)=>item.name===name)}
+function setWidget(node,name,value){const target=widget(node,name);if(!target)return;target.value=value;target.callback?.(value,app.canvas,node,app.canvas?.graph_mouse);node.graph?.setDirtyCanvas(true,true)}
+function parseClock(value){const match=String(value||"").trim().match(/^(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})$/);if(!match)return null;return Number(match[1])*3600+Number(match[2])*60+Number(match[3])+Number(match[4])/(10**match[4].length)}
+function clock(seconds){const value=Math.max(0,Number(seconds)||0);const hours=Math.floor(value/3600);const minutes=Math.floor((value%3600)/60);const secs=Math.floor(value%60);const millis=Math.round((value-Math.floor(value))*1000);return `${String(hours).padStart(2,"0")}:${String(minutes).padStart(2,"0")}:${String(secs).padStart(2,"0")},${String(millis).padStart(3,"0")}`}
+function timestampSeconds(line){const parts=String(line||"").split(/\s*-->\s*/);if(parts.length!==2)return null;const start=parseClock(parts[0]);const end=parseClock(parts[1].split(/\s+/)[0]);return start===null||end===null?null:[start,end]}
+function metadata(line){const trimmed=String(line||"").trim();if(!/^[\[{（(].*[\]}）)]$/.test(trimmed))return null;if(trimmed.startsWith("{")){try{const value=JSON.parse(trimmed);if(value&&typeof value==="object")return value}catch{}}const body=trimmed.slice(1,-1);const result={};for(const item of body.split(/[;；,，]/)){const pair=item.split(/[:：=]/,2);if(pair.length!==2)continue;const aliases={role:"character",character:"character","角色":"character",voice:"voice","音色":"voice",speed:"speed","语速":"speed",emotion:"emotion","感情":"emotion","情绪":"emotion",delivery:"delivery","表达":"delivery",language:"language","语言":"language",seed:"seed","种子":"seed"};const key=aliases[pair[0].trim().toLowerCase()];if(key)result[key]=pair[1].trim()}return Object.keys(result).length?result:null}
+function parseEditorSRT(text){const normalized=String(text||"").replace(/^\uFEFF/,"").replace(/\r\n?/g,"\n").trim();if(!normalized)return[];const cues=[];for(const [position,block] of normalized.split(/\n\s*\n/).filter(Boolean).entries()){const lines=block.split("\n");let cursor=0;let index=Number(lines[0]?.trim());if(Number.isInteger(index))cursor+=1;else index=position+1;const timing=timestampSeconds(lines[cursor]);if(!timing)continue;cursor+=1;const meta=metadata(lines[cursor]);if(meta)cursor+=1;cues.push({index,start:timing[0],end:timing[1],character:String(meta?.character||""),voice:String(meta?.voice||""),speed:String(meta?.speed||"1"),emotion:String(meta?.emotion||""),delivery:String(meta?.delivery||""),language:String(meta?.language||"ZH").toUpperCase(),seed:String(meta?.seed||""),text:lines.slice(cursor).join("\n").trim()})}return cues}
+function serializeSRT(cues){return cues.map((cue,index)=>{const fields=[];if(cue.character.trim())fields.push(`角色=${cue.character.trim()}`);if(cue.voice.trim())fields.push(`音色=${cue.voice.trim()}`);if(cue.speed.trim()&&cue.speed.trim()!=="1")fields.push(`语速=${cue.speed.trim()}`);if(cue.emotion.trim())fields.push(`情绪=${cue.emotion.trim()}`);if(cue.delivery.trim())fields.push(`表达=${cue.delivery.trim()}`);if(cue.language.trim())fields.push(`语言=${cue.language.trim().toUpperCase()}`);if(cue.seed.trim())fields.push(`种子=${cue.seed.trim()}`);return `${index+1}\n${clock(cue.start)} --> ${clock(cue.end)}\n${fields.length?`[${fields.join("; ")}]\n`:""}${cue.text.trim()}`}).join("\n\n")}
+function inspectSRT(text){const cues=parseEditorSRT(text);const roles=[...new Set(cues.map((cue)=>cue.character.trim()).filter(Boolean))].sort();return{count:cues.length,roles,first:cues.length?Math.min(...cues.map((cue)=>cue.start)):0,last:cues.length?Math.max(...cues.map((cue)=>cue.end)):0}}
+function formatTime(seconds){const minutes=Math.floor(seconds/60);const remain=(seconds-minutes*60).toFixed(1).padStart(4,"0");return`${String(minutes).padStart(2,"0")}:${remain}`}
+function newCue(previous){const start=previous?Number(previous.end)||0:0;return{index:0,start,end:start+3,character:previous?.character||"",voice:previous?.voice||"",speed:previous?.speed||"1",emotion:"",delivery:"",language:previous?.language||"ZH",seed:"",text:""}}
+function downloadSRT(text){const blob=new Blob(["\uFEFF"+text],{type:"application/x-subrip;charset=utf-8"});const url=URL.createObjectURL(blob);const anchor=document.createElement("a");anchor.href=url;anchor.download=`indextts-${new Date().toISOString().replace(/[:.]/g,"-")}.srt`;anchor.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
+
+function openEditor(node,onApplied){let cues=parseEditorSRT(widget(node,"srt_text")?.value||"");const backdrop=document.createElement("div");backdrop.className="indextts-srt-dialog";backdrop.innerHTML=`<section class="indextts-srt-editor" role="dialog" aria-modal="true" aria-label="SRT字幕编辑器"><header><h2>SRT 字幕编辑器</h2><button data-action="close">关闭</button></header><div class="indextts-srt-toolbar"><button data-action="add">＋ 新建字幕</button><button data-action="sort">按时间排序</button><button data-action="renumber">重新编号</button><button data-action="import">导入 SRT</button><button data-action="export">导出 SRT</button><button data-action="example">载入示例</button><input type="file" accept=".srt,application/x-subrip,text/plain" hidden></div><div class="indextts-srt-table-wrap"><table class="indextts-srt-table"><thead><tr><th class="number">#</th><th class="time">开始</th><th class="time">结束</th><th class="role">角色</th><th>字幕正文</th><th>情绪 / 表达</th><th class="language">语言</th><th class="seed">Seed</th><th class="ops">操作</th></tr></thead><tbody></tbody></table></div><footer><div class="indextts-srt-editor-status"></div><div><button data-action="cancel">取消</button> <button class="indextts-srt-primary" data-action="apply">保存到节点</button></div></footer></section>`;document.body.appendChild(backdrop);const body=backdrop.querySelector("tbody");const status=backdrop.querySelector(".indextts-srt-editor-status");const picker=backdrop.querySelector("input[type=file]");
+    const sync=()=>{body.querySelectorAll("tr").forEach((row,index)=>{const cue=cues[index];for(const input of row.querySelectorAll("[data-field]")){const field=input.dataset.field;if(field==="start"||field==="end"){const parsed=parseClock(input.value);if(parsed!==null)cue[field]=parsed}else cue[field]=input.value}cue.index=index+1});validate()};
+    const validate=()=>{let invalid=0;let overlaps=0;const sorted=[...cues].sort((a,b)=>a.start-b.start);for(const [index,cue]of cues.entries()){const row=body.children[index];const bad=!cue.text.trim()||cue.end<=cue.start||cue.start<0;if(row)row.classList.toggle("indextts-srt-row-invalid",bad);if(bad)invalid+=1}for(let i=1;i<sorted.length;i++)if(sorted[i].start<sorted[i-1].end)overlaps+=1;const roles=new Set(cues.map((cue)=>cue.character.trim()).filter(Boolean));status.textContent=`${cues.length} 条字幕 · ${roles.size} 个角色 · ${invalid} 条无效 · ${overlaps} 处重叠（允许混音）`;return invalid===0};
+    const render=()=>{body.innerHTML="";cues.forEach((cue,index)=>{const row=document.createElement("tr");row.innerHTML=`<td>${index+1}</td><td><input data-field="start" value="${clock(cue.start)}"></td><td><input data-field="end" value="${clock(cue.end)}"></td><td><input data-field="character" value=""></td><td><textarea data-field="text"></textarea><input data-field="voice" placeholder="音色标识（可选）"></td><td><input data-field="emotion" placeholder="情绪"><input data-field="delivery" placeholder="表达方式"><input data-field="speed" type="number" min="0.5" max="2" step="0.05"></td><td><select data-field="language"><option>ZH</option><option>EN</option><option>JA</option><option>ES</option><option>AR</option></select></td><td><input data-field="seed" type="number" min="0"></td><td><button data-action="up">↑</button><button data-action="down">↓</button><button class="indextts-srt-danger" data-action="delete">删除</button></td>`;row.querySelector('[data-field="character"]').value=cue.character;row.querySelector('[data-field="text"]').value=cue.text;row.querySelector('[data-field="voice"]').value=cue.voice;row.querySelector('[data-field="emotion"]').value=cue.emotion;row.querySelector('[data-field="delivery"]').value=cue.delivery;row.querySelector('[data-field="speed"]').value=cue.speed;row.querySelector('[data-field="language"]').value=cue.language;row.querySelector('[data-field="seed"]').value=cue.seed;row.oninput=()=>sync();row.querySelector('[data-action="delete"]').onclick=()=>{sync();cues.splice(index,1);render()};row.querySelector('[data-action="up"]').onclick=()=>{sync();if(index>0)[cues[index-1],cues[index]]=[cues[index],cues[index-1]];render()};row.querySelector('[data-action="down"]').onclick=()=>{sync();if(index<cues.length-1)[cues[index+1],cues[index]]=[cues[index],cues[index+1]];render()};body.appendChild(row)});validate()};
+    const close=()=>backdrop.remove();backdrop.querySelector('[data-action="close"]').onclick=close;backdrop.querySelector('[data-action="cancel"]').onclick=close;backdrop.onclick=(event)=>{if(event.target===backdrop)close()};backdrop.querySelector('[data-action="add"]').onclick=()=>{sync();cues.push(newCue(cues.at(-1)));render();body.lastElementChild?.scrollIntoView({behavior:"smooth"})};backdrop.querySelector('[data-action="sort"]').onclick=()=>{sync();cues.sort((a,b)=>a.start-b.start);render()};backdrop.querySelector('[data-action="renumber"]').onclick=()=>{sync();render()};backdrop.querySelector('[data-action="example"]').onclick=()=>{cues=parseEditorSRT(EXAMPLE);render()};backdrop.querySelector('[data-action="import"]').onclick=()=>picker.click();picker.onchange=async()=>{const file=picker.files?.[0];if(!file)return;if(!file.name.toLowerCase().endsWith(".srt")||file.size>2*1024*1024){status.textContent="只能导入不超过 2 MiB 的 .srt 文件";return}cues=parseEditorSRT(await file.text());render()};backdrop.querySelector('[data-action="export"]').onclick=()=>{sync();if(validate())downloadSRT(serializeSRT(cues))};backdrop.querySelector('[data-action="apply"]').onclick=()=>{sync();if(!cues.length){status.textContent="至少需要一条字幕";return}if(!validate()){status.textContent="请修复红色标记的空文本或错误时间范围";return}const text=serializeSRT(cues);setWidget(node,"srt_text",text);setWidget(node,"srt_path","");onApplied(text,"编辑器内容（已保存到节点）");close()};if(!cues.length)cues.push(newCue());render();
 }
 
-function widget(node, name) {
-    return node.widgets?.find((item) => item.name === name);
-}
+function createPanel(node){installStyle();const root=document.createElement("div");root.className="indextts-srt-panel";root.innerHTML=`<div class="indextts-srt-actions"><button type="button" data-action="edit">新建 / 编辑 SRT</button><button type="button" data-action="open">选择 SRT 文件</button><button type="button" data-action="export">导出</button><button type="button" data-action="example">填入示例</button><button type="button" data-action="clear">清空</button></div><input type="file" accept=".srt,application/x-subrip,text/plain" hidden><div class="indextts-srt-file">尚未选择文件，可新建或粘贴 SRT 文本</div><div class="indextts-srt-summary"><span>字幕 0 条</span><span>角色 0 个</span><span>范围 00:00.0</span></div><div class="indextts-srt-roles">角色：未识别</div><div class="indextts-srt-warning"></div>`;const picker=root.querySelector("input[type=file]");const fileLabel=root.querySelector(".indextts-srt-file");const summary=root.querySelector(".indextts-srt-summary");const roles=root.querySelector(".indextts-srt-roles");const warning=root.querySelector(".indextts-srt-warning");const update=(text,filename="")=>{const info=inspectSRT(text||"");fileLabel.textContent=filename||(text?"已载入节点内容":"尚未选择文件，可新建或粘贴 SRT 文本");summary.children[0].textContent=`字幕 ${info.count} 条`;summary.children[1].textContent=`角色 ${info.roles.length} 个`;summary.children[2].textContent=`范围 ${formatTime(info.first)}–${formatTime(info.last)}`;roles.textContent=`角色：${info.roles.join("、")||"未识别"}`;warning.textContent=info.roles.length>1?"多角色字幕：请为每个角色复制一个单角色生成节点，并连接各自参考音频。":info.count===0&&text?"未识别到有效 SRT 时间码，请打开编辑器检查。":"";if(info.roles.length===1&&widget(node,"character")&&!widget(node,"character").value)setWidget(node,"character",info.roles[0])};root.querySelector('[data-action="edit"]').onclick=()=>openEditor(node,update);root.querySelector('[data-action="open"]').onclick=()=>picker.click();root.querySelector('[data-action="export"]').onclick=()=>{const text=widget(node,"srt_text")?.value||"";if(text)downloadSRT(text);else warning.textContent="没有可导出的字幕"};root.querySelector('[data-action="example"]').onclick=()=>{setWidget(node,"srt_text",EXAMPLE);setWidget(node,"srt_path","");update(EXAMPLE,"内置双角色示例（未上传）")};root.querySelector('[data-action="clear"]').onclick=()=>{setWidget(node,"srt_text","");setWidget(node,"srt_path","");picker.value="";update("")};picker.onchange=async()=>{const file=picker.files?.[0];if(!file)return;if(!file.name.toLowerCase().endsWith(".srt")){warning.textContent="请选择 .srt 字幕文件。";return}if(file.size>2*1024*1024){warning.textContent="SRT 文件不能超过 2 MiB。";return}const text=(await file.text()).replace(/^\uFEFF/,"");setWidget(node,"srt_text",text);setWidget(node,"srt_path","");update(text,`${file.name} · ${(file.size/1024).toFixed(1)} KiB · 仅本地读取`)};node.addDOMWidget("indextts_srt_ui","div",root,{serialize:false});node.setSize([Math.max(node.size[0],620),Math.max(node.size[1],650)]);setTimeout(()=>update(widget(node,"srt_text")?.value||""),0)}
 
-function setWidget(node, name, value) {
-    const target = widget(node, name);
-    if (!target) return;
-    target.value = value;
-    target.callback?.(value, app.canvas, node, app.canvas?.graph_mouse);
-    node.graph?.setDirtyCanvas(true, true);
-}
-
-function timestampSeconds(line) {
-    const match = line.match(/^(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})/);
-    if (!match) return null;
-    const seconds = (offset) => Number(match[offset]) * 3600 + Number(match[offset + 1]) * 60 + Number(match[offset + 2]) + Number(match[offset + 3]) / (10 ** match[offset + 3].length);
-    return [seconds(1), seconds(5)];
-}
-
-function inspectSRT(text) {
-    const blocks = text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").trim().split(/\n\s*\n/).filter(Boolean);
-    const roles = new Set();
-    let first = Number.POSITIVE_INFINITY;
-    let last = 0;
-    let valid = 0;
-    for (const block of blocks) {
-        const lines = block.split("\n").map((line) => line.trim());
-        const time = lines.map(timestampSeconds).find(Boolean);
-        if (!time) continue;
-        valid += 1;
-        first = Math.min(first, time[0]);
-        last = Math.max(last, time[1]);
-        for (const line of lines) {
-            const jsonRole = line.match(/["'](?:character|role|角色)["']\s*[:：]\s*["']([^"']+)/i);
-            const pairRole = line.match(/(?:^|[\[{（(;,；，])\s*(?:character|role|角色)\s*[:：=]\s*([^;；,，\]}）)]+)/i);
-            const role = (jsonRole?.[1] || pairRole?.[1] || "").trim();
-            if (role) roles.add(role);
-        }
-    }
-    return { count: valid, roles: [...roles].sort(), first: Number.isFinite(first) ? first : 0, last };
-}
-
-function formatTime(seconds) {
-    const minutes = Math.floor(seconds / 60);
-    const remain = (seconds - minutes * 60).toFixed(1).padStart(4, "0");
-    return `${String(minutes).padStart(2, "0")}:${remain}`;
-}
-
-function createPanel(node) {
-    installStyle();
-    const root = document.createElement("div");
-    root.className = "indextts-srt-panel";
-    root.innerHTML = `
-      <div class="indextts-srt-actions">
-        <button type="button" data-action="open">选择 SRT 文件</button>
-        <button type="button" data-action="example">填入示例</button>
-        <button type="button" data-action="clear">清空</button>
-      </div>
-      <input type="file" accept=".srt,application/x-subrip,text/plain" hidden>
-      <div class="indextts-srt-file">尚未选择文件，可粘贴 SRT 文本</div>
-      <div class="indextts-srt-summary"><span>字幕 0 条</span><span>角色 0 个</span><span>范围 00:00.0</span></div>
-      <div class="indextts-srt-roles">角色：未识别</div>
-      <div class="indextts-srt-warning"></div>`;
-    const picker = root.querySelector("input[type=file]");
-    const fileLabel = root.querySelector(".indextts-srt-file");
-    const summary = root.querySelector(".indextts-srt-summary");
-    const roles = root.querySelector(".indextts-srt-roles");
-    const warning = root.querySelector(".indextts-srt-warning");
-
-    const update = (text, filename = "") => {
-        const info = inspectSRT(text || "");
-        fileLabel.textContent = filename || (text ? "已载入粘贴/示例内容" : "尚未选择文件，可粘贴 SRT 文本");
-        summary.children[0].textContent = `字幕 ${info.count} 条`;
-        summary.children[1].textContent = `角色 ${info.roles.length} 个`;
-        summary.children[2].textContent = `范围 ${formatTime(info.first)}–${formatTime(info.last)}`;
-        roles.textContent = `角色：${info.roles.join("、") || "未识别"}`;
-        warning.textContent = info.roles.length > 1
-            ? "多角色字幕：请为每个角色复制一个单角色生成节点，并连接各自参考音频。"
-            : info.count === 0 && text ? "未识别到有效 SRT 时间码，请检查文件格式。" : "";
-        if (info.roles.length === 1 && widget(node, "character") && !widget(node, "character").value) {
-            setWidget(node, "character", info.roles[0]);
-        }
-    };
-
-    root.querySelector('[data-action="open"]').onclick = () => picker.click();
-    root.querySelector('[data-action="example"]').onclick = () => {
-        setWidget(node, "srt_text", EXAMPLE);
-        setWidget(node, "srt_path", "");
-        update(EXAMPLE, "内置双角色示例（未上传）");
-    };
-    root.querySelector('[data-action="clear"]').onclick = () => {
-        setWidget(node, "srt_text", "");
-        setWidget(node, "srt_path", "");
-        picker.value = "";
-        update("");
-    };
-    picker.onchange = async () => {
-        const file = picker.files?.[0];
-        if (!file) return;
-        if (!file.name.toLowerCase().endsWith(".srt")) {
-            warning.textContent = "请选择 .srt 字幕文件。";
-            return;
-        }
-        if (file.size > 2 * 1024 * 1024) {
-            warning.textContent = "SRT 文件不能超过 2 MiB。";
-            return;
-        }
-        const text = await file.text();
-        setWidget(node, "srt_text", text.replace(/^\uFEFF/, ""));
-        setWidget(node, "srt_path", "");
-        update(text, `${file.name} · ${(file.size / 1024).toFixed(1)} KiB · 仅本地读取`);
-    };
-    node.addDOMWidget("indextts_srt_ui", "div", root, { serialize: false });
-    node.setSize([Math.max(node.size[0], 600), Math.max(node.size[1], 620)]);
-    setTimeout(() => update(widget(node, "srt_text")?.value || ""), 0);
-}
-
-app.registerExtension({
-    name: "ComfyUI.IndexTTS25Local.SRTUI",
-    async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (!NODE_TYPES.has(nodeData.name)) return;
-        const original = nodeType.prototype.onNodeCreated;
-        nodeType.prototype.onNodeCreated = function () {
-            original?.apply(this, arguments);
-            createPanel(this);
-        };
-    },
-});
+app.registerExtension({name:"ComfyUI.IndexTTS25Local.SRTUI",async beforeRegisterNodeDef(nodeType,nodeData){if(!NODE_TYPES.has(nodeData.name))return;const original=nodeType.prototype.onNodeCreated;nodeType.prototype.onNodeCreated=function(){original?.apply(this,arguments);createPanel(this)}}});
