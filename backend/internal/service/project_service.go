@@ -8676,6 +8676,35 @@ func (s *ProjectService) indexTTSExecutionMode() string {
 	return mode
 }
 
+func (s *ProjectService) comfyVoiceFile(projectID uint, voiceRef string) (FileMeta, error) {
+	voiceRef = strings.TrimSpace(voiceRef)
+	if !filepath.IsAbs(voiceRef) {
+		return fileMetaForSharedMaterial(projectID, voiceRef), nil
+	}
+	if s.upload == nil {
+		return FileMeta{}, fmt.Errorf("上传服务未配置，无法导入默认参考音频")
+	}
+	data, err := os.ReadFile(voiceRef)
+	if err != nil {
+		return FileMeta{}, fmt.Errorf("读取参考音频失败: %w", err)
+	}
+	digest := sha256.Sum256(data)
+	ext := strings.ToLower(filepath.Ext(voiceRef))
+	if ext == "" {
+		ext = ".wav"
+	}
+	name := fmt.Sprintf("voice_default_%x%s", digest[:8], ext)
+	taskID := fmt.Sprint(projectID)
+	var existing int64
+	if s.db.Model(&models.UploadFile{}).Where("task_id = ? AND name = ? AND type = ?", taskID, name, "audio").Count(&existing).Error == nil && existing > 0 {
+		return FileMeta{TaskID: taskID, Name: name}, nil
+	}
+	if _, _, err := s.upload.SaveFile(taskID, "audio", name, data); err != nil {
+		return FileMeta{}, fmt.Errorf("导入参考音频失败: %w", err)
+	}
+	return FileMeta{TaskID: taskID, Name: name}, nil
+}
+
 func (s *ProjectService) submitDialogueToComfy(d *models.Dialogue, token, inputHash string) error {
 	if s.tasks == nil {
 		return fmt.Errorf("ComfyUI 任务服务未配置")
@@ -8698,7 +8727,10 @@ func (s *ProjectService) submitDialogueToComfy(d *models.Dialogue, token, inputH
 	if voiceRef == "" {
 		return fmt.Errorf("角色“%s”缺少 VoiceRef", d.Character)
 	}
-	file := fileMetaForSharedMaterial(d.ProjectID, voiceRef)
+	file, err := s.comfyVoiceFile(d.ProjectID, voiceRef)
+	if err != nil {
+		return err
+	}
 	seed, _ := strconv.ParseUint(inputHash[:16], 16, 64)
 	emotionText := strings.TrimSpace(strings.Join([]string{strings.TrimSpace(d.Emotion), strings.TrimSpace(d.Delivery)}, "，"))
 	voiceKey := fmt.Sprintf("project-%d-character-%d", d.ProjectID, character.ID)
