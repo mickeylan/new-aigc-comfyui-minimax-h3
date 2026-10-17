@@ -222,7 +222,7 @@ class ModelCache:
                 model_dir=str(handle.model_dir),
                 device=handle.device,
                 use_bf16=precision == "bfloat16",
-                use_qwen_emo=False,
+                use_qwen_emo=True,
                 use_cuda_kernel=False,
                 use_deepspeed=False,
                 use_accel=False,
