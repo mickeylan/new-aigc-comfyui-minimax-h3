@@ -110,6 +110,9 @@ func TestH3AudioDrivenTemplateUsesReviewedAudioAsConditionAndFinalTrack(t *testi
 	}
 	requireConnection(t, delivery.Inputs["frames"], "424", 0)
 	requireConnection(t, delivery.Inputs["final_audio"], "425", 0)
+	if delivery.Inputs["audio_policy"] != "{{audio_policy}}" {
+		t.Fatalf("delivery audio policy=%+v", delivery.Inputs["audio_policy"])
+	}
 	requireConnection(t, tpl.Workflow["418"].Inputs["images"], "429", 0)
 	requireConnection(t, tpl.Workflow["418"].Inputs["audio"], "429", 1)
 	if tpl.Workflow["430"].ClassType != "IndexTTS25LocalSaveReport" {

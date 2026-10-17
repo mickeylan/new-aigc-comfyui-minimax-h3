@@ -3,8 +3,8 @@ import torch
 
 from h3_audio_tools import (
     aligned_h3_frames, audio_quality_report, connected_reference_count,
-    delivery_sync_audit,
-    ensure_primary_audio_binding,
+    audio_sha256, delivery_sync_audit,
+    ensure_primary_audio_binding, reference_image_fingerprints, tensor_sha256,
     mix_audio_policy, plan_reviewed_audio_video, production_preflight,
     slice_audio_window, trim_video_frames,
 )
@@ -110,5 +110,25 @@ def test_delivery_audit_blocks_large_av_delta_and_reports_quality():
     assert report["passed"] is True and report["av_delta_ms"] == pytest.approx(0)
     with pytest.raises(ValueError, match="duration delta"):
         delivery_sync_audit(frames, audio(1.5), 24, 50, True)
-    warning = delivery_sync_audit(frames, audio(1.5), 24, 50, False)
+    warning = delivery_sync_audit(frames, audio(1.5), 24, 50, False, "mix")
     assert warning["passed"] is False
+    assert warning["audio_policy"] == "mix"
+    assert len(warning["final_frames_sha256"]) == 64
+    assert len(warning["final_audio_sha256"]) == 64
+
+
+def test_content_hashes_are_deterministic_and_reference_ordered():
+    first = torch.zeros(1, 2, 2, 3)
+    second = torch.ones(1, 2, 2, 3)
+    assert tensor_sha256(first) == tensor_sha256(first.clone())
+    assert audio_sha256(audio(1)) == audio_sha256(audio(1))
+    fingerprints = reference_image_fingerprints({"ref_image_1": second, "ref_image_0": first})
+    assert [item["picture"] for item in fingerprints] == [1, 2]
+    assert fingerprints[0]["sha256"] == tensor_sha256(first)
+    report = production_preflight(
+        "<Picture 1> <Picture 2> <Audio 1>", 832, 480, 124, 2,
+        memory_snapshot={"available": False, "device": "cpu", "free_gib": 0, "total_gib": 0},
+        reference_fingerprints=fingerprints,
+    )
+    assert report["reference_images"] == fingerprints
+    assert len(report["conditioned_prompt_sha256"]) == 64

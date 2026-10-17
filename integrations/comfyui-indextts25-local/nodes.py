@@ -12,7 +12,7 @@ from comfy_api.latest import ComfyExtension, IO
 from .asr_review import build_asr_report, transcribe_local
 from .h3_audio_tools import (
     audio_quality_report, connected_reference_count, delivery_sync_audit, mix_audio_policy,
-    plan_reviewed_audio_video, production_preflight, report_json,
+    plan_reviewed_audio_video, production_preflight, reference_image_fingerprints, report_json,
     slice_audio_window, trim_video_frames,
 )
 from .preset_voices import (
@@ -431,9 +431,11 @@ class IndexTTS25H3ProductionPreflight(IO.ComfyNode):
     def execute(cls, conditioned_prompt: str, width: int, height: int, length: int,
                 audio_count: int, free_vram_override_gb: float, ref_images=None):
         picture_count = connected_reference_count(ref_images)
+        fingerprints = reference_image_fingerprints(ref_images)
         report = production_preflight(
             conditioned_prompt, int(width), int(height), int(length),
             picture_count, int(audio_count), float(free_vram_override_gb),
+            reference_fingerprints=fingerprints,
         )
         return IO.NodeOutput(conditioned_prompt, report_json(report))
 
@@ -512,6 +514,7 @@ class IndexTTS25H3DeliveryAudit(IO.ComfyNode):
                 IO.Float.Input("fps", default=24.0, min=1.0, max=240.0, step=0.001),
                 IO.Float.Input("max_av_delta_ms", default=50.0, min=0.0, max=5000.0, step=1.0),
                 IO.Boolean.Input("fail_on_mismatch", default=True),
+                IO.Combo.Input("audio_policy", options=["source_only", "generated_only", "mix"], default="source_only"),
             ],
             outputs=[
                 IO.Image.Output("frames"), IO.Audio.Output("final_audio"),
@@ -520,8 +523,11 @@ class IndexTTS25H3DeliveryAudit(IO.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, frames, final_audio, fps: float, max_av_delta_ms: float, fail_on_mismatch: bool):
-        report = delivery_sync_audit(frames, final_audio, fps, max_av_delta_ms, fail_on_mismatch)
+    def execute(cls, frames, final_audio, fps: float, max_av_delta_ms: float,
+                fail_on_mismatch: bool, audio_policy: str):
+        report = delivery_sync_audit(
+            frames, final_audio, fps, max_av_delta_ms, fail_on_mismatch, audio_policy
+        )
         return IO.NodeOutput(frames, final_audio, report_json(report), report["passed"])
 
 

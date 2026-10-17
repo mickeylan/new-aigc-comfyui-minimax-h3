@@ -13,7 +13,9 @@ A deliberately small, offline-only ComfyUI integration for the official IndexTTS
 - `IndexTTS25H3ProductionPreflight`: validates 32-pixel geometry, `17k+5` frames, and `<Picture>/<Subject>/<Audio>` bounds from the actual connected reference images. It reads current CUDA free/total VRAM at execution time (with an explicit override for remote planning), reports approximate trained-range/workload risk, and never presents the heuristic as measured job memory usage.
 - `IndexTTS25H3OutputTrim`: trims decoded IMAGE frames to the exact reviewed Dialogue interval after an aligned H3 render.
 - `IndexTTS25H3AudioPolicy`: explicitly selects `source_only` (default), `generated_only`, or `mix`; exposes independent source/generated gains, speech-aware generated-track ducking, output sample rate, and a peak limiter. It never silently replaces reviewed speech.
-- `IndexTTS25H3DeliveryAudit`: compares final frame and audio durations, audits silence/clipping, and blocks delivery when the configured A/V delta is exceeded.
+- `IndexTTS25H3DeliveryAudit`: compares final frame and audio durations, audits silence/clipping, records the selected audio policy, and hashes final frames/audio before blocking or allowing delivery.
+
+The H3 audit chain records SHA-256 identities for reviewed audio PCM, conditioned prompts, ordered connected reference tensors, final trimmed frames, and final audio. These hashes are reproducibility evidence for the exact in-memory inputs/outputs; they are not inferred from filenames.
 - `IndexTTS25LocalTimelineMix`: places the next generated line or role stem at an explicit second offset; chain it to assemble a reviewed dialogue timeline.
 - `IndexTTS25LocalASRReview`: uses an existing local Whisper `.pt` checkpoint to compare generated speech with authoritative text. It reports differences and never rewrites the text.
 

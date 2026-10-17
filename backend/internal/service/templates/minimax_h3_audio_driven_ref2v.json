@@ -895,7 +895,8 @@
         ],
         "fps": 24,
         "max_av_delta_ms": "{{max_av_delta_ms}}",
-        "fail_on_mismatch": "{{fail_on_av_mismatch}}"
+        "fail_on_mismatch": "{{fail_on_av_mismatch}}",
+        "audio_policy": "{{audio_policy}}"
       },
       "class_type": "IndexTTS25H3DeliveryAudit",
       "_meta": {

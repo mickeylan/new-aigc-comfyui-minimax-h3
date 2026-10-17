@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -14,6 +15,23 @@ _BINDING_SENTENCE = (
     "The approved dialogue track is <Audio 1>; synchronize the visible speaker's mouth "
     "movements and performance timing to it without adding, omitting, or changing speech."
 )
+
+
+def tensor_sha256(tensor: torch.Tensor) -> str:
+    value = tensor.detach().to(device="cpu").contiguous()
+    digest = hashlib.sha256()
+    digest.update(str(value.dtype).encode("ascii"))
+    digest.update(json.dumps(list(value.shape), separators=(",", ":")).encode("ascii"))
+    digest.update(value.numpy().tobytes(order="C"))
+    return digest.hexdigest()
+
+
+def audio_sha256(audio: dict[str, Any]) -> str:
+    audio_duration_seconds(audio)
+    digest = hashlib.sha256()
+    digest.update(str(int(audio["sample_rate"])).encode("ascii"))
+    digest.update(tensor_sha256(audio["waveform"]).encode("ascii"))
+    return digest.hexdigest()
 
 
 def audio_duration_seconds(audio: dict[str, Any]) -> float:
@@ -82,6 +100,8 @@ def plan_reviewed_audio_video(audio: dict[str, Any], prompt: str, max_duration_s
         "generated_audio_policy": "discard",
         "official_nodes": ["MiniMaxH3ReferenceToVideo", "MiniMaxH3AddGuide"],
         "audio_quality": quality,
+        "reviewed_audio_sha256": audio_sha256(audio),
+        "conditioned_prompt_sha256": hashlib.sha256(conditioned_prompt.encode("utf-8")).hexdigest(),
         "warning": "Official audio anchoring conditions generation but does not hard-lock every sampled audio latent.",
     }
     return frames, render_duration, duration, conditioned_prompt, report
@@ -119,6 +139,9 @@ def slice_audio_window(
         "context_duration_seconds": round(context_duration, 6),
         "trim_start_seconds": round(trim_start, 6),
         "final_duration_seconds": round(duration, 6),
+        "source_audio_sha256": audio_sha256(audio),
+        "context_audio_sha256": audio_sha256(context_audio),
+        "final_source_audio_sha256": audio_sha256(final_audio),
     }
     return context_audio, final_audio, trim_start, duration, report
 
@@ -229,16 +252,36 @@ def cuda_memory_snapshot() -> dict[str, Any]:
     }
 
 
-def connected_reference_count(ref_images: Any) -> int:
+def connected_reference_images(ref_images: Any) -> list[torch.Tensor]:
     if ref_images is None:
-        return 0
-    values = ref_images.values() if isinstance(ref_images, dict) else ref_images
-    return sum(1 for value in values if value is not None)
+        return []
+    if isinstance(ref_images, dict):
+        items = sorted(ref_images.items(), key=lambda item: int(re.search(r"(\d+)$", item[0]).group(1)) if re.search(r"(\d+)$", item[0]) else 0)
+        values = [value for _, value in items]
+    else:
+        values = list(ref_images)
+    return [value for value in values if value is not None]
+
+
+def connected_reference_count(ref_images: Any) -> int:
+    return len(connected_reference_images(ref_images))
+
+
+def reference_image_fingerprints(ref_images: Any) -> list[dict[str, Any]]:
+    result = []
+    for ordinal, image in enumerate(connected_reference_images(ref_images), start=1):
+        if not isinstance(image, torch.Tensor) or image.ndim != 4 or image.shape[0] == 0:
+            raise ValueError(f"reference image {ordinal} must be a non-empty IMAGE batch")
+        result.append({
+            "picture": ordinal, "sha256": tensor_sha256(image),
+            "shape": list(image.shape), "dtype": str(image.dtype),
+        })
+    return result
 
 
 def delivery_sync_audit(
     frames: torch.Tensor, audio: dict[str, Any], fps: float,
-    max_av_delta_ms: float, fail_on_mismatch: bool,
+    max_av_delta_ms: float, fail_on_mismatch: bool, audio_policy: str = "source_only",
 ) -> dict[str, Any]:
     if not isinstance(frames, torch.Tensor) or frames.ndim != 4 or frames.shape[0] <= 0:
         raise ValueError("frames must be a non-empty IMAGE batch")
@@ -264,6 +307,9 @@ def delivery_sync_audit(
         "audio_duration_seconds": round(audio_seconds, 6),
         "av_delta_ms": round(delta_ms, 3), "max_av_delta_ms": float(max_av_delta_ms),
         "passed": passed, "issues": issues, "audio_quality": quality,
+        "audio_policy": audio_policy,
+        "final_frames_sha256": tensor_sha256(frames),
+        "final_audio_sha256": audio_sha256(audio),
     }
     if fail_on_mismatch and not passed:
         raise ValueError("; ".join(issues))
@@ -273,6 +319,7 @@ def delivery_sync_audit(
 def production_preflight(
     prompt: str, width: int, height: int, frames: int, picture_count: int,
     audio_count: int = 1, free_vram_gb: float = 0.0, memory_snapshot: dict[str, Any] | None = None,
+    reference_fingerprints: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if width <= 0 or height <= 0 or width % 32 or height % 32:
         raise ValueError("H3 width and height must be positive multiples of 32")
@@ -311,6 +358,8 @@ def production_preflight(
         "audio_references": sorted(set(audio_refs)), "free_vram_gb": effective_free,
         "cuda_memory": memory, "free_vram_source": "override" if free_vram_gb > 0 else "runtime",
         "workload_units": round(workload, 4), "risk": risk, "warnings": warnings,
+        "conditioned_prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "reference_images": reference_fingerprints or [],
         "note": "VRAM risk is a deterministic workload heuristic, not a promise of memory consumption.",
     }
 
