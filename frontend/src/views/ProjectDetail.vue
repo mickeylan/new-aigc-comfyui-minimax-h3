@@ -34,6 +34,15 @@
         <a class="btn btn-ghost btn-sm" :href="api.srtUrl(id(), activeEpN)" target="_blank">📜 第{{ activeEpN }}集字幕</a>
         <button class="btn btn-danger btn-sm" @click="removeProject">🗑 删除</button>
       </div>
+
+    <nav class="episode-quick-nav" aria-label="快速切换分集">
+      <div class="episode-quick-current"><span>当前分集</span><strong>第{{activeEpN}}集</strong><small v-if="currentEpTitle">{{currentEpTitle}}</small></div>
+      <button type="button" class="btn btn-sm btn-ghost" :disabled="activeEpN<=1" @click="selectEp(activeEpN-1)">← 上一集</button>
+      <label class="episode-quick-select"><span>选择分集</span><select :value="activeEpN" class="input" @change="selectEp(Number($event.target.value))"><option v-for="episode in episodeQuickOptions" :key="episode.n" :value="episode.n">第{{episode.n}}集{{episode.title?' · '+episode.title:''}}</option></select></label>
+      <button type="button" class="btn btn-sm btn-ghost" :disabled="activeEpN>=episodeUpperBound" @click="selectEp(activeEpN+1)">下一集 →</button>
+      <form class="episode-quick-jump" @submit.prevent="jumpToEpisode"><label for="episode-quick-number">跳至第</label><input id="episode-quick-number" v-model.number="episodeJump" type="number" min="1" :max="episodeUpperBound" step="1" class="input" aria-label="输入集数"><span>集</span><button type="submit" class="btn btn-sm btn-secondary">进入</button></form>
+      <div class="episode-neighbours" aria-label="相邻分集快捷入口"><button v-for="episode in episodeNeighbourOptions" :key="episode.n" type="button" class="episode-chip" :class="{active:episode.n===activeEpN}" @click="selectEp(episode.n)">{{episode.n}}</button></div>
+    </nav>
     </div>
 
     <div v-if="project.episodes > 20" class="card plan-generation-progress">
@@ -1232,12 +1241,36 @@ async function saveEpisodes() {
 // ---------- 按集工作区 ----------
 const queryEpisode = Number.parseInt(String(route.query.episode || ''), 10)
 const activeEpN = ref(Number.isInteger(queryEpisode) && queryEpisode > 0 ? queryEpisode : 1)
+const episodeJump = ref(activeEpN.value)
+const episodeUpperBound = computed(() => Math.max(1, Number(project.value?.episodes || 0), ...epEdits.value.map(item => Number(item.n || 0)), ...scenes.value.map(scene => Number(scene.episode_n || 1))))
+const episodeQuickOptions = computed(() => {
+  const upper = episodeUpperBound.value
+  const titles = new Map(epEdits.value.map(item => [Number(item.n), String(item.title || '')]))
+  const numbers = new Set([activeEpN.value])
+  if (upper <= 500) for (let n = 1; n <= upper; n++) numbers.add(n)
+  else {
+    epEdits.value.forEach(item => numbers.add(Number(item.n)))
+    scenes.value.forEach(scene => numbers.add(Number(scene.episode_n || 1)))
+    for (let n = Math.max(1, activeEpN.value - 2); n <= Math.min(upper, activeEpN.value + 2); n++) numbers.add(n)
+  }
+  return [...numbers].filter(n => Number.isInteger(n) && n > 0 && n <= upper).sort((a,b) => a-b).map(n => ({n, title:titles.get(n)||''}))
+})
+const episodeNeighbourOptions = computed(() => {
+  const options = []
+  for (let n = Math.max(1, activeEpN.value - 2); n <= Math.min(episodeUpperBound.value, activeEpN.value + 2); n++) options.push({n})
+  return options
+})
+function jumpToEpisode() {
+  const target = Math.max(1, Math.min(episodeUpperBound.value, Math.trunc(Number(episodeJump.value) || 1)))
+  selectEp(target)
+}
 const curMerging = ref(false)
 async function selectEp(n) {
   const episodeN = Number(n)
   if (!Number.isInteger(episodeN) || episodeN <= 0) return
   if (episodeN !== activeEpN.value && scriptDirty.value && !confirm(`第${activeEpN.value}集剧本有未保存修改，切换后将丢弃？`)) return
   activeEpN.value = episodeN
+  episodeJump.value = episodeN
   syncEpisodeQuery(episodeN)
   scriptDirty.value = false
   showRevisions.value = false
@@ -2680,6 +2713,7 @@ onBeforeUnmount(() => {
 }
 .tag-orange { background: rgba(255, 159, 10, 0.14); color: #c47f00; }
 .head-actions { display: flex; align-items: center; justify-content: flex-start; gap: 8px; flex-wrap: wrap; width: 100%; max-width: none; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.episode-quick-nav{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;padding:9px 10px;border:1px solid var(--border);border-radius:10px;background:var(--surface-secondary);box-shadow:0 4px 16px rgba(0,0,0,.08)}.episode-quick-current{display:flex;align-items:baseline;gap:7px;min-width:160px}.episode-quick-current span,.episode-quick-select span{font-size:11px;color:var(--text-tertiary)}.episode-quick-current strong{color:var(--accent)}.episode-quick-current small{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)}.episode-quick-select{display:flex;align-items:center;gap:6px}.episode-quick-select .input{width:min(310px,32vw);height:32px;padding:4px 8px}.episode-quick-jump{display:flex;align-items:center;gap:5px;color:var(--text-secondary);font-size:12px}.episode-quick-jump .input{width:74px;height:32px;padding:4px 7px}.episode-neighbours{display:flex;gap:4px}.episode-chip{min-width:30px;height:30px;padding:0 7px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--text-secondary);cursor:pointer}.episode-chip:hover,.episode-chip.active{border-color:var(--accent);color:var(--accent)}.episode-chip.active{background:var(--accent-soft);font-weight:700}
 .steps-bar { display: flex; align-items: center; gap: 12px; padding: 14px 20px; margin: 18px 0 26px; flex-wrap: wrap; }
 .step { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--text-secondary); }
 .step-n {
