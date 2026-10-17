@@ -108,6 +108,52 @@
       "type": "bool",
       "label": "音画时长不一致时阻断",
       "default": true
+    },
+    {
+      "key": "source_gain_db",
+      "type": "float",
+      "label": "审核对白增益dB",
+      "default": 0,
+      "min": -60,
+      "max": 24
+    },
+    {
+      "key": "generated_gain_db",
+      "type": "float",
+      "label": "H3环境音增益dB",
+      "default": -12,
+      "min": -60,
+      "max": 24
+    },
+    {
+      "key": "duck_generated",
+      "type": "float",
+      "label": "对白期间压低H3音轨",
+      "default": 0.75,
+      "min": 0,
+      "max": 1
+    },
+    {
+      "key": "peak_limit_dbfs",
+      "type": "float",
+      "label": "最终峰值限制dBFS",
+      "default": -1,
+      "min": -12,
+      "max": 0
+    },
+    {
+      "key": "output_sample_rate",
+      "type": "select",
+      "label": "最终采样率",
+      "default": "source",
+      "options": [
+        "source",
+        "generated",
+        "48000",
+        "44100",
+        "32000",
+        "22050"
+      ]
     }
   ],
   "workflow": {
@@ -737,7 +783,12 @@
         "generated_audio": [
           "408",
           0
-        ]
+        ],
+        "source_gain_db": "{{source_gain_db}}",
+        "generated_gain_db": "{{generated_gain_db}}",
+        "duck_generated": "{{duck_generated}}",
+        "peak_limit_dbfs": "{{peak_limit_dbfs}}",
+        "output_sample_rate": "{{output_sample_rate}}"
       },
       "class_type": "IndexTTS25H3AudioPolicy",
       "_meta": {

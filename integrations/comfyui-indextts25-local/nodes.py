@@ -473,15 +473,28 @@ class IndexTTS25H3AudioPolicy(IO.ComfyNode):
             inputs=[
                 IO.Audio.Input("source_audio"),
                 IO.Combo.Input("policy", options=["source_only", "generated_only", "mix"], default="source_only"),
+                IO.Float.Input("source_gain_db", default=0.0, min=-60.0, max=24.0, step=0.1),
+                IO.Float.Input("generated_gain_db", default=-12.0, min=-60.0, max=24.0, step=0.1),
+                IO.Float.Input("duck_generated", default=0.75, min=0.0, max=1.0, step=0.01),
+                IO.Float.Input("peak_limit_dbfs", default=-1.0, min=-12.0, max=0.0, step=0.1),
+                IO.Combo.Input("output_sample_rate", options=["source", "generated", "48000", "44100", "32000", "22050"], default="source"),
                 IO.Audio.Input("generated_audio", optional=True),
             ],
             outputs=[IO.Audio.Output("final_audio"), IO.String.Output("audio_report_json")],
         )
 
     @classmethod
-    def execute(cls, source_audio, policy: str, generated_audio=None):
-        final = mix_audio_policy(source_audio, generated_audio, policy)
-        report = {"policy": policy, "source": audio_quality_report(source_audio),
+    def execute(cls, source_audio, policy: str, source_gain_db: float, generated_gain_db: float,
+                duck_generated: float, peak_limit_dbfs: float, output_sample_rate: str,
+                generated_audio=None):
+        final = mix_audio_policy(
+            source_audio, generated_audio, policy, source_gain_db, generated_gain_db,
+            duck_generated, peak_limit_dbfs, output_sample_rate,
+        )
+        report = {"policy": policy, "source_gain_db": source_gain_db,
+                  "generated_gain_db": generated_gain_db, "duck_generated": duck_generated,
+                  "peak_limit_dbfs": peak_limit_dbfs, "output_sample_rate": output_sample_rate,
+                  "source": audio_quality_report(source_audio),
                   "generated": audio_quality_report(generated_audio) if generated_audio is not None else None,
                   "final": audio_quality_report(final)}
         return IO.NodeOutput(final, report_json(report))

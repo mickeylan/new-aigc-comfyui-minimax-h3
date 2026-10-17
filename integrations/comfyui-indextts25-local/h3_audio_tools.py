@@ -149,47 +149,71 @@ def trim_video_frames(frames: torch.Tensor, start_seconds: float, duration_secon
     return frames[first:last].contiguous()
 
 
-def mix_audio_policy(source_audio: dict[str, Any], generated_audio: dict[str, Any] | None, policy: str) -> dict[str, Any]:
+def mix_audio_policy(
+    source_audio: dict[str, Any], generated_audio: dict[str, Any] | None, policy: str,
+    source_gain_db: float = 0.0, generated_gain_db: float = -12.0,
+    duck_generated: float = 0.75, peak_limit_dbfs: float = -1.0,
+    output_sample_rate: str = "source",
+) -> dict[str, Any]:
     mode = (policy or "source_only").strip().lower()
-    if mode == "source_only":
-        audio_duration_seconds(source_audio)
-        return source_audio
-    if generated_audio is None:
-        raise ValueError(f"audio policy {mode} requires generated_audio")
-    audio_duration_seconds(generated_audio)
-    if mode == "generated_only":
-        return generated_audio
-    if mode != "mix":
-        raise ValueError(f"unknown audio policy: {policy}")
-    rate = max(int(source_audio["sample_rate"]), int(generated_audio["sample_rate"]))
+    if not -60 <= source_gain_db <= 24 or not -60 <= generated_gain_db <= 24:
+        raise ValueError("audio gains must be between -60 and +24 dB")
+    if not 0 <= duck_generated <= 1 or not -12 <= peak_limit_dbfs <= 0:
+        raise ValueError("invalid ducking or peak limit")
+    source_rate = int(source_audio["sample_rate"])
+    generated_rate = int(generated_audio["sample_rate"]) if generated_audio is not None else source_rate
+    rate_options = {"source": source_rate, "generated": generated_rate, "48000": 48000, "44100": 44100, "32000": 32000, "22050": 22050}
+    if output_sample_rate not in rate_options:
+        raise ValueError(f"unknown output sample rate: {output_sample_rate}")
+    rate = rate_options[output_sample_rate]
+
     def normalized(value):
         waveform = value["waveform"].detach().to(device="cpu", dtype=torch.float32)
         if waveform.ndim == 2:
             waveform = waveform.unsqueeze(0)
-        source_rate = int(value["sample_rate"])
-        if source_rate != rate:
-            target_length = max(1, round(waveform.shape[-1] * rate / source_rate))
+        input_rate = int(value["sample_rate"])
+        if input_rate != rate:
+            target_length = max(1, round(waveform.shape[-1] * rate / input_rate))
             shape = waveform.shape
             waveform = torch.nn.functional.interpolate(
                 waveform.reshape(shape[0] * shape[1], 1, shape[2]),
                 size=target_length, mode="linear", align_corners=False,
             ).reshape(shape[0], shape[1], target_length)
         return waveform
-    source = normalized(source_audio)
-    generated = normalized(generated_audio)
-    channels = max(source.shape[1], generated.shape[1])
-    def channels_of(value):
-        if value.shape[1] == channels:
-            return value
-        return value.mean(dim=1, keepdim=True).expand(-1, channels, -1)
-    source, generated = channels_of(source), channels_of(generated)
-    length = max(source.shape[-1], generated.shape[-1])
-    result = torch.zeros((1, channels, length), dtype=torch.float32)
-    result[..., :source.shape[-1]] += source
-    result[..., :generated.shape[-1]] += generated * 0.25
+
+    source = normalized(source_audio) * (10 ** (source_gain_db / 20.0))
+    if mode == "source_only":
+        return {"waveform": source.contiguous(), "sample_rate": rate}
+    if generated_audio is None:
+        raise ValueError(f"audio policy {mode} requires generated_audio")
+    generated = normalized(generated_audio) * (10 ** (generated_gain_db / 20.0))
+    if mode == "generated_only":
+        result = generated
+    elif mode == "mix":
+        channels = max(source.shape[1], generated.shape[1])
+        def channels_of(value):
+            if value.shape[1] == channels:
+                return value
+            return value.mean(dim=1, keepdim=True).expand(-1, channels, -1)
+        source, generated = channels_of(source), channels_of(generated)
+        length = max(source.shape[-1], generated.shape[-1])
+        source_padded = torch.zeros((1, channels, length), dtype=torch.float32)
+        generated_padded = torch.zeros_like(source_padded)
+        source_padded[..., :source.shape[-1]] = source
+        generated_padded[..., :generated.shape[-1]] = generated
+        activity = source_padded.abs().mean(dim=1, keepdim=True)
+        window = max(1, round(rate * 0.02))
+        if window > 1:
+            activity = torch.nn.functional.avg_pool1d(activity, window, stride=1, padding=window // 2)[..., :length]
+        active = (activity > 0.005).to(torch.float32)
+        generated_padded *= 1.0 - active * float(duck_generated)
+        result = source_padded + generated_padded
+    else:
+        raise ValueError(f"unknown audio policy: {policy}")
+    limit = 10 ** (peak_limit_dbfs / 20.0)
     peak = float(result.abs().max())
-    if peak > 0.98:
-        result *= 0.98 / peak
+    if peak > limit:
+        result *= limit / peak
     return {"waveform": result.contiguous(), "sample_rate": rate}
 
 

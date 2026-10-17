@@ -97,6 +97,11 @@ func TestH3AudioDrivenTemplateUsesReviewedAudioAsConditionAndFinalTrack(t *testi
 	if policy.ClassType != "IndexTTS25H3AudioPolicy" || policy.Inputs["policy"] != "{{audio_policy}}" {
 		t.Fatalf("audio policy=%+v", policy)
 	}
+	for _, key := range []string{"source_gain_db", "generated_gain_db", "duck_generated", "peak_limit_dbfs", "output_sample_rate"} {
+		if policy.Inputs[key] != "{{"+key+"}}" {
+			t.Fatalf("audio policy %s=%+v", key, policy.Inputs[key])
+		}
+	}
 	requireConnection(t, policy.Inputs["source_audio"], "423", 1)
 	requireConnection(t, policy.Inputs["generated_audio"], "408", 0)
 	delivery := tpl.Workflow["429"]

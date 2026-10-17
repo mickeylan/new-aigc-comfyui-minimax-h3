@@ -61,10 +61,23 @@ def test_output_trim_and_audio_policies_are_deterministic():
     frames = torch.zeros(120, 4, 4, 3)
     assert trim_video_frames(frames, 1, 2, 24).shape[0] == 48
     source, generated = audio(1), audio(1)
-    assert mix_audio_policy(source, generated, "source_only") is source
-    assert mix_audio_policy(source, generated, "generated_only") is generated
+    source_only = mix_audio_policy(source, generated, "source_only")
+    generated_only = mix_audio_policy(source, generated, "generated_only")
+    assert torch.equal(source_only["waveform"], source["waveform"])
+    assert torch.allclose(generated_only["waveform"], generated["waveform"] * (10 ** (-12 / 20)))
     mixed = mix_audio_policy(source, generated, "mix")
     assert mixed["waveform"].shape == source["waveform"].shape
+    assert float(mixed["waveform"].abs().max()) <= 10 ** (-1 / 20) + 1e-6
+
+
+def test_audio_mix_ducks_generated_track_during_reviewed_speech():
+    source = {"waveform": torch.cat([torch.full((1, 1, 100), 0.2), torch.zeros(1, 1, 100)], dim=-1), "sample_rate": 1000}
+    generated = {"waveform": torch.full((1, 1, 200), 0.2), "sample_rate": 1000}
+    mixed = mix_audio_policy(source, generated, "mix", 0, 0, 0.75, -1, "source")
+    speech_region = float(mixed["waveform"][..., 20:80].mean())
+    quiet_region = float(mixed["waveform"][..., 130:180].mean())
+    assert speech_region > quiet_region
+    assert quiet_region == pytest.approx(0.2, abs=0.01)
 
 
 def test_quality_audit_rejects_silent_reviewed_audio():
