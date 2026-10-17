@@ -16,6 +16,7 @@ from .preset_voices import (
     preset_options,
     select_preset_voice,
 )
+from .subtitle import cue_dict, parse_structured_srt, read_srt_input
 from .runtime import (
     MODEL_CACHE,
     ModelHandle,
@@ -224,6 +225,120 @@ class IndexTTS25LocalSaveReport(IO.ComfyNode):
         return IO.NodeOutput(ui={"files": [{"filename": target.name, "subfolder": target.parent.relative_to(root).as_posix(), "type": "output"}]})
 
 
+class IndexTTS25LocalSRTParse(IO.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="IndexTTS25LocalSRTParse",
+            display_name="IndexTTS 2.5 Structured SRT Parse",
+            category=CATEGORY,
+            description="Parses an UTF-8 SRT file or pasted SRT without synthesizing or rewriting its text.",
+            inputs=[
+                IO.String.Input("srt_text", multiline=True, default=""),
+                IO.String.Input("srt_path", default="", tooltip="Optional local UTF-8 .srt path. Use either path or pasted text."),
+            ],
+            outputs=[IO.String.Output("cues_json"), IO.String.Output("roles_json"), IO.String.Output("diagnostics_json")],
+        )
+
+    @classmethod
+    def execute(cls, srt_text: str, srt_path: str):
+        cues, diagnostics = parse_structured_srt(read_srt_input(srt_text, srt_path))
+        roles = sorted({cue.character for cue in cues if cue.character})
+        return IO.NodeOutput(
+            json.dumps([cue_dict(cue) for cue in cues], ensure_ascii=False),
+            json.dumps(roles, ensure_ascii=False),
+            json.dumps(diagnostics, ensure_ascii=False),
+        )
+
+
+class IndexTTS25LocalSRTSingleVoiceGenerate(IO.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="IndexTTS25LocalSRTSingleVoiceGenerate",
+            display_name="IndexTTS 2.5 SRT Single Voice Generate",
+            category=CATEGORY,
+            essentials_category="Audio",
+            description="Generates one reviewed character track from SRT and places every cue at its authoritative timestamp. Other roles are skipped.",
+            inputs=[
+                ModelType.Input("model"), IO.Audio.Input("speaker_audio"),
+                IO.String.Input("srt_text", multiline=True, default=""),
+                IO.String.Input("srt_path", default=""),
+                IO.String.Input("character", default="", tooltip="Required when SRT contains named roles; only exact matches are synthesized."),
+                IO.Combo.Input("default_language", options=["ZH", "EN", "JA", "ES", "AR"], default="ZH"),
+                IO.Float.Input("duration_factor", default=1.0, min=0.5, max=2.0, step=0.05),
+                IO.Int.Input("seed", default=0, min=0, max=0x7FFFFFFFFFFFFFFF, control_after_generate=True),
+                IO.Float.Input("emotion_strength", default=0.6, min=0.0, max=1.0, step=0.05),
+                IO.Boolean.Input("fail_on_overflow", default=False),
+            ],
+            outputs=[IO.Audio.Output("timeline_audio"), IO.String.Output("batch_report_json"), IO.String.Output("selected_cues_json")],
+        )
+
+    @classmethod
+    def execute(cls, model: ModelHandle, speaker_audio, srt_text: str, srt_path: str, character: str,
+                default_language: str, duration_factor: float, seed: int, emotion_strength: float,
+                fail_on_overflow: bool):
+        cues, diagnostics = parse_structured_srt(read_srt_input(srt_text, srt_path))
+        requested = character.strip()
+        named_roles = sorted({cue.character for cue in cues if cue.character})
+        if len(named_roles) > 1 and not requested:
+            raise ValueError("SRT contains multiple roles; character is required for a single-voice track")
+        if requested:
+            selected = [cue for cue in cues if cue.character == requested]
+            if not selected:
+                raise ValueError(f"character not found in SRT: {requested}")
+        else:
+            selected = cues
+        reference = reference_wav(speaker_audio)
+        entry = MODEL_CACHE.acquire(model)
+        clips = []
+        starts = []
+        reports = []
+        started = time.perf_counter()
+        with entry.lock:
+            for position, cue in enumerate(selected):
+                cue_seed = int(cue.seed if cue.seed is not None else (int(seed) + position)) & 0x7FFFFFFFFFFFFFFF
+                torch.manual_seed(cue_seed)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed_all(cue_seed)
+                emotion_text = "，".join(part for part in (cue.emotion, cue.delivery) if part)
+                language = cue.language or default_language
+                result = entry.model.infer(
+                    spk_audio_prompt=str(reference), text=cue.text, output_path=None, lang=language,
+                    duration_factor=float(duration_factor), emo_alpha=float(emotion_strength),
+                    use_emo_text=bool(emotion_text), emo_text=emotion_text or None, verbose=False,
+                )
+                minimum = max(0.25, expected_speech_seconds(cue.text, language, duration_factor) * 0.35)
+                audio = result_to_audio(result, minimum_seconds=minimum)
+                actual = audio["waveform"].shape[-1] / int(audio["sample_rate"])
+                slot = cue.end - cue.start
+                overflow = max(0.0, actual - slot)
+                if fail_on_overflow and overflow > 0.001:
+                    raise RuntimeError(f"cue {cue.index} exceeds its SRT slot by {overflow:.3f}s")
+                clips.append(audio)
+                starts.append(cue.start)
+                reports.append({
+                    **cue_dict(cue), "seed": cue_seed, "language": language,
+                    "generated_seconds": round(actual, 6), "slot_seconds": round(slot, 6),
+                    "overflow_seconds": round(overflow, 6), "status": "overflow" if overflow > 0.001 else "ok",
+                    "text_sha256": hashlib.sha256(cue.text.encode("utf-8")).hexdigest(),
+                })
+        mixed, timeline = compose_timeline(clips, starts)
+        report = {
+            "provider": "index_tts_python_comfyui", "mode": "srt_single_voice",
+            "character": requested or (named_roles[0] if len(named_roles) == 1 else ""),
+            "cue_count": len(selected), "source_cue_count": len(cues), "diagnostics": diagnostics,
+            "timeline": timeline, "cues": reports,
+            "sample_rate": mixed["sample_rate"], "channels": int(mixed["waveform"].shape[1]),
+            "duration": mixed["waveform"].shape[-1] / mixed["sample_rate"],
+            "total_ms": round((time.perf_counter() - started) * 1000, 3),
+        }
+        return IO.NodeOutput(
+            mixed, json.dumps(report, ensure_ascii=False, sort_keys=True),
+            json.dumps([cue_dict(cue) for cue in selected], ensure_ascii=False),
+        )
+
+
 class IndexTTS25LocalTimelineMix(IO.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -289,6 +404,8 @@ class IndexTTS25LocalExtension(ComfyExtension):
             IndexTTS25LocalPresetVoice,
             IndexTTS25LocalGenerate,
             IndexTTS25LocalSaveReport,
+            IndexTTS25LocalSRTParse,
+            IndexTTS25LocalSRTSingleVoiceGenerate,
             IndexTTS25LocalTimelineMix,
             IndexTTS25LocalASRReview,
         ]

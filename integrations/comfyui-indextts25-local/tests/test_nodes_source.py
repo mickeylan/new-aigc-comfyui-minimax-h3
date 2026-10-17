@@ -12,3 +12,12 @@ def test_generate_preserves_model_defaults_and_rejects_short_audio():
     assert "use_emo_text=" in execute
     assert "generation_json" in execute
     assert "IndexTTS25LocalSaveReport" in execute
+
+
+def test_srt_nodes_preserve_text_and_require_explicit_role_selection():
+    source = (Path(__file__).parents[1] / "nodes.py").read_text(encoding="utf-8")
+    assert "IndexTTS25LocalSRTParse" in source
+    assert "IndexTTS25LocalSRTSingleVoiceGenerate" in source
+    assert "SRT contains multiple roles; character is required" in source
+    assert "fail_on_overflow" in source
+    assert "parse_structured_srt(read_srt_input" in source

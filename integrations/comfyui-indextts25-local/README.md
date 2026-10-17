@@ -6,7 +6,9 @@ A deliberately small, offline-only ComfyUI integration for the official IndexTTS
 
 - `IndexTTS25LocalModelLoader`: validates local source and model directories and creates a lazy model handle.
 - `IndexTTS25LocalGenerate`: accepts ComfyUI `AUDIO`, text, language, duration factor and seed; returns standard ComfyUI `AUDIO`.
-- `IndexTTS25LocalTimelineMix`: places the next generated line at an explicit second offset; chain it to assemble a reviewed dialogue timeline.
+- `IndexTTS25LocalSRTParse`: parses pasted UTF-8 SRT or a local `.srt` path into exact cue text, roles, timing, metadata and diagnostics without synthesis.
+- `IndexTTS25LocalSRTSingleVoiceGenerate`: generates one explicitly selected role and places its cues at authoritative SRT timestamps. Multi-role SRTs require one node/reference voice per role.
+- `IndexTTS25LocalTimelineMix`: places the next generated line or role stem at an explicit second offset; chain it to assemble a reviewed dialogue timeline.
 - `IndexTTS25LocalASRReview`: uses an existing local Whisper `.pt` checkpoint to compare generated speech with authoritative text. It reports differences and never rewrites the text.
 
 The extension never downloads models, checks for updates, calls cloud APIs, rewrites dialogue, or sends telemetry.
@@ -37,6 +39,7 @@ Two workflow formats are included. The `indextts5_compat/` directory contains th
 - `examples/basic_dialogue_ui.json`: upload/select a custom reference voice with `LoadAudio`; load this directly in the ComfyUI browser UI.
 - `examples/preset_dialogue_ui.json`: choose a local preset voice or select one deterministically by seed; load this directly in the ComfyUI browser UI.
 - `examples/basic_dialogue_api.json`: submit this object to ComfyUI's `/prompt` API; it is not a browser UI workflow.
+- `examples/srt_single_voice_ui.json`: parse and synthesize one selected role from pasted SRT or a local UTF-8 `.srt` file, preserving timestamps and writing an auditable per-cue report.
 
 ```text
 LoadAudio -> IndexTTS25LocalGenerate -> SaveAudio
@@ -50,7 +53,11 @@ The reference audio is mixed to mono, limited to the first 15 seconds, resampled
 
 ## ASR and timeline boundaries
 
-ASR quality review and multi-line dialogue timeline assembly are intentionally separate from synthesis. ASR reports omissions/substitutions but never rewrites authoritative Dialogue text. The timeline mixer only places already-generated lines at explicit offsets and never becomes a second screenplay source.
+ASR quality review and multi-line dialogue timeline assembly are intentionally separate from authoritative text editing. ASR reports omissions/substitutions but never rewrites SRT text. The SRT generator places already parsed cues at explicit offsets and never becomes a second screenplay source.
+
+Structured cue metadata supports `role`/`character`/`角色`, `voice`/`音色`, `speed`/`语速`, `emotion`/`感情`/`情绪`, `delivery`/`表达`, `language`/`语言`, and `seed`/`种子` in either a JSON metadata line or a bracketed key/value line. Cue text is synthesized verbatim. Generated speech longer than its subtitle slot is reported as `overflow` and is never truncated; enable `fail_on_overflow` to stop the workflow instead.
+
+For multiple characters, use one `IndexTTS25LocalSRTSingleVoiceGenerate` node per exact character name and reference voice, then mix the returned role stems. The node refuses an unselected multi-role SRT rather than guessing a speaker or voice.
 
 `IndexTTS25LocalASRReview` requires an existing local OpenAI Whisper `.pt` checkpoint path. It does not download a model. `IndexTTS25LocalTimelineMix` mixes two clips at a time; chain nodes for additional lines, or continue using the application's existing FFmpeg dialogue timeline.
 
