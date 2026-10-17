@@ -44,11 +44,14 @@ func TestInstanceSupportsRequiredRustTTSNodes(t *testing.T) {
 		"IndexTTS25RustGenerate": map[string]any{}, "LoadAudio": map[string]any{}, "SaveAudio": map[string]any{},
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/object_info" {
+		switch r.URL.Path {
+		case "/object_info":
+			_ = json.NewEncoder(w).Encode(classes)
+		case "/indextts25-rust/health":
+			_ = json.NewEncoder(w).Encode(map[string]any{"available": true, "healthy": true})
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		_ = json.NewEncoder(w).Encode(classes)
 	}))
 	defer server.Close()
 	cfg := config.Default()
@@ -59,6 +62,26 @@ func TestInstanceSupportsRequiredRustTTSNodes(t *testing.T) {
 	}
 	if err := svc.instanceSupportsClasses(instance, []string{"MissingRustNode"}); err == nil {
 		t.Fatal("missing custom node was accepted")
+	}
+}
+
+func TestInstanceRejectsUnhealthyRustTTSRuntime(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/object_info" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"IndexTTS25RustGenerate": map[string]any{}})
+			return
+		}
+		if r.URL.Path == "/indextts25-rust/health" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"available": true, "healthy": false})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	cfg := config.Default()
+	svc := &TaskService{cfg: cfg, manager: NewInstanceManager(cfg, nil, NewRemoteExec(config.RemoteConfig{}))}
+	if err := svc.instanceSupportsClasses(models.Instance{Port: comfyTestPort(server)}, []string{"IndexTTS25RustGenerate"}); err == nil {
+		t.Fatal("unhealthy Rust TTS runtime was accepted")
 	}
 }
 

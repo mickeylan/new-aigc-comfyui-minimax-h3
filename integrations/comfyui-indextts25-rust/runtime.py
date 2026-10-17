@@ -434,6 +434,23 @@ class RuntimeCache:
         }
         return {"waveform": waveform.contiguous(), "sample_rate": rate}, report
 
+    def health_snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            models = []
+            for key, entry in self.models.items():
+                raw = Health()
+                code = entry.native.lib.indextts_model_health(entry.pointer, C.byref(raw))
+                if code != INDEXTTS_OK:
+                    models.append({"model_key": list(key), "loaded": True, "device_healthy": False, "error": str(entry.native.error("indextts_model_health", code))})
+                    continue
+                models.append({
+                    "model_key": list(key), "loaded": bool(raw.loaded), "device_healthy": bool(raw.device_healthy),
+                    "voice_cache_entries": int(raw.voice_cache_entries), "voice_cache_bytes": int(raw.voice_cache_bytes),
+                    "active_requests": int(raw.active_requests), "queued_requests": int(raw.queued_requests),
+                    "last_error": _text(raw.last_error), "model": entry.info,
+                })
+            return {"models": models, "loaded_models": len(models), "prepared_voices": len(self.voices), "prepared_emotions": len(self.emotions)}
+
     def model_health(self, model: ModelHandle) -> dict[str, Any]:
         entry = self.acquire_model(model)
         raw = Health()
