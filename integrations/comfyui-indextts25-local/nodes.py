@@ -10,7 +10,10 @@ import torch
 from comfy_api.latest import ComfyExtension, IO
 
 from .asr_review import build_asr_report, transcribe_local
-from .h3_audio_tools import plan_reviewed_audio_video, report_json
+from .h3_audio_tools import (
+    audio_quality_report, mix_audio_policy, plan_reviewed_audio_video, report_json,
+    slice_audio_window, trim_video_frames,
+)
 from .preset_voices import (
     library_fingerprint,
     load_preset_audio,
@@ -340,6 +343,38 @@ class IndexTTS25LocalSRTSingleVoiceGenerate(IO.ComfyNode):
         )
 
 
+class IndexTTS25H3AudioWindow(IO.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="IndexTTS25H3AudioWindow", display_name="IndexTTS → H3 Audio Window",
+            category=CATEGORY, essentials_category="Audio",
+            description="Slices a reviewed long track into an H3 context window and an exact final source segment without rewriting or truncating speech.",
+            inputs=[
+                IO.Audio.Input("reviewed_audio"),
+                IO.Float.Input("scene_start_seconds", default=0.0, min=0.0, max=86400.0, step=0.01),
+                IO.Float.Input("scene_duration_seconds", default=0.0, min=0.0, max=60.0, step=0.01, tooltip="0 uses the remainder of the source track."),
+                IO.Float.Input("warmup_seconds", default=0.0, min=0.0, max=10.0, step=0.01),
+                IO.Float.Input("cooldown_seconds", default=0.0, min=0.0, max=10.0, step=0.01),
+                IO.Float.Input("max_duration_seconds", default=15.0, min=3.0, max=60.0, step=0.1),
+            ],
+            outputs=[
+                IO.Audio.Output("context_audio"), IO.Audio.Output("final_source_audio"),
+                IO.Float.Output("trim_start_seconds"), IO.Float.Output("final_duration_seconds"),
+                IO.String.Output("window_report_json"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, reviewed_audio, scene_start_seconds: float, scene_duration_seconds: float,
+                warmup_seconds: float, cooldown_seconds: float, max_duration_seconds: float):
+        context, final, trim_start, duration, report = slice_audio_window(
+            reviewed_audio, scene_start_seconds, scene_duration_seconds,
+            warmup_seconds, cooldown_seconds, max_duration_seconds,
+        )
+        return IO.NodeOutput(context, final, trim_start, duration, report_json(report))
+
+
 class IndexTTS25H3ReviewedAudioPlan(IO.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -369,6 +404,55 @@ class IndexTTS25H3ReviewedAudioPlan(IO.ComfyNode):
         return IO.NodeOutput(
             reviewed_audio, frames, render_duration, audio_duration, prompt, report_json(report)
         )
+
+
+class IndexTTS25H3OutputTrim(IO.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="IndexTTS25H3OutputTrim", display_name="IndexTTS → H3 Exact Output Trim",
+            category=CATEGORY,
+            description="Trims decoded H3 IMAGE frames to the reviewed dialogue window. Audio is passed separately by policy.",
+            inputs=[
+                IO.Image.Input("frames"),
+                IO.Float.Input("trim_start_seconds", default=0.0, min=0.0, max=60.0, step=0.001),
+                IO.Float.Input("final_duration_seconds", default=5.0, min=0.04, max=60.0, step=0.001),
+                IO.Float.Input("fps", default=24.0, min=1.0, max=240.0, step=0.001),
+            ],
+            outputs=[IO.Image.Output("frames"), IO.String.Output("trim_report_json")],
+        )
+
+    @classmethod
+    def execute(cls, frames, trim_start_seconds: float, final_duration_seconds: float, fps: float):
+        trimmed = trim_video_frames(frames, trim_start_seconds, final_duration_seconds, fps)
+        report = {"input_frames": int(frames.shape[0]), "output_frames": int(trimmed.shape[0]),
+                  "trim_start_seconds": float(trim_start_seconds),
+                  "final_duration_seconds": float(final_duration_seconds), "fps": float(fps)}
+        return IO.NodeOutput(trimmed, report_json(report))
+
+
+class IndexTTS25H3AudioPolicy(IO.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="IndexTTS25H3AudioPolicy", display_name="IndexTTS → H3 Final Audio Policy",
+            category=CATEGORY, essentials_category="Audio",
+            description="Explicitly chooses reviewed source audio, generated H3 audio, or a conservative mix. No silent fallback is allowed.",
+            inputs=[
+                IO.Audio.Input("source_audio"),
+                IO.Combo.Input("policy", options=["source_only", "generated_only", "mix"], default="source_only"),
+                IO.Audio.Input("generated_audio", optional=True),
+            ],
+            outputs=[IO.Audio.Output("final_audio"), IO.String.Output("audio_report_json")],
+        )
+
+    @classmethod
+    def execute(cls, source_audio, policy: str, generated_audio=None):
+        final = mix_audio_policy(source_audio, generated_audio, policy)
+        report = {"policy": policy, "source": audio_quality_report(source_audio),
+                  "generated": audio_quality_report(generated_audio) if generated_audio is not None else None,
+                  "final": audio_quality_report(final)}
+        return IO.NodeOutput(final, report_json(report))
 
 
 class IndexTTS25LocalTimelineMix(IO.ComfyNode):
@@ -438,7 +522,10 @@ class IndexTTS25LocalExtension(ComfyExtension):
             IndexTTS25LocalSaveReport,
             IndexTTS25LocalSRTParse,
             IndexTTS25LocalSRTSingleVoiceGenerate,
+            IndexTTS25H3AudioWindow,
             IndexTTS25H3ReviewedAudioPlan,
+            IndexTTS25H3OutputTrim,
+            IndexTTS25H3AudioPolicy,
             IndexTTS25LocalTimelineMix,
             IndexTTS25LocalASRReview,
         ]

@@ -1,11 +1,14 @@
 import pytest
 import torch
 
-from h3_audio_tools import aligned_h3_frames, ensure_primary_audio_binding, plan_reviewed_audio_video
+from h3_audio_tools import (
+    aligned_h3_frames, audio_quality_report, ensure_primary_audio_binding,
+    mix_audio_policy, plan_reviewed_audio_video, slice_audio_window, trim_video_frames,
+)
 
 
 def audio(seconds: float, sample_rate: int = 22050):
-    return {"waveform": torch.zeros(1, 1, round(seconds * sample_rate)), "sample_rate": sample_rate}
+    return {"waveform": torch.full((1, 1, round(seconds * sample_rate)), 0.1), "sample_rate": sample_rate}
 
 
 def test_aligned_frames_follow_official_17k_plus_5_grid():
@@ -40,3 +43,29 @@ def test_audio_binding_is_idempotent_and_does_not_modify_dialogue_text():
     assert once == twice
     assert once.count("<Audio 1>") == 1
     assert "<d>[Chinese] 原文对白</d>" in once
+
+
+def test_audio_window_preserves_context_and_exact_final_source_segment():
+    source = {"waveform": torch.arange(100, dtype=torch.float32).view(1, 1, -1) / 100, "sample_rate": 10}
+    context, final, trim_start, duration, report = slice_audio_window(source, 2, 3, 1, 1, 15)
+    assert context["waveform"].shape[-1] == 50
+    assert final["waveform"].shape[-1] == 30
+    assert trim_start == 1 and duration == 3
+    assert report["context_start_seconds"] == 1
+
+
+def test_output_trim_and_audio_policies_are_deterministic():
+    frames = torch.zeros(120, 4, 4, 3)
+    assert trim_video_frames(frames, 1, 2, 24).shape[0] == 48
+    source, generated = audio(1), audio(1)
+    assert mix_audio_policy(source, generated, "source_only") is source
+    assert mix_audio_policy(source, generated, "generated_only") is generated
+    mixed = mix_audio_policy(source, generated, "mix")
+    assert mixed["waveform"].shape == source["waveform"].shape
+
+
+def test_quality_audit_rejects_silent_reviewed_audio():
+    silent = {"waveform": torch.zeros(1, 1, 22050), "sample_rate": 22050}
+    assert audio_quality_report(silent)["silent"] is True
+    with pytest.raises(ValueError, match="silent"):
+        plan_reviewed_audio_video(silent, "detailed_description:\n[Shot 1] A", 15)

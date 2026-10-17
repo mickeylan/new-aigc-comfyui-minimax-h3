@@ -1,13 +1,55 @@
 {
   "name": "MiniMax H3 已审核音频驱动参考视频",
   "code": "minimax_h3_audio_driven_ref2v",
-  "description": "使用ComfyUI官方MiniMaxH3ReferenceToVideo和MiniMaxH3AddGuide。项目自有MIT预检节点只负责从已审核IndexTTS音频计算17k+5帧、校验时长并绑定<Audio 1>；官方节点负责参考和音频锚条件，最终MP4保留原IndexTTS音轨。",
+  "description": "官方H3参考/音频锚链路，附带MIT音频窗口、17k+5规划、精确画面裁切、音轨策略与质量审计。默认source_only保留审核后的IndexTTS原音；generated_only和mix必须显式选择。",
   "inputs": [
     {
       "key": "dialogue_audio",
       "type": "audio",
       "label": "已审核人物对白音频",
       "required": true
+    },
+    {
+      "key": "audio_scene_start",
+      "type": "float",
+      "label": "音频片段开始秒",
+      "default": 0,
+      "min": 0
+    },
+    {
+      "key": "audio_scene_duration",
+      "type": "float",
+      "label": "目标对白时长（0=音频剩余部分）",
+      "default": 0,
+      "min": 0,
+      "max": 60
+    },
+    {
+      "key": "audio_warmup",
+      "type": "float",
+      "label": "口型预热秒",
+      "default": 0,
+      "min": 0,
+      "max": 10
+    },
+    {
+      "key": "audio_cooldown",
+      "type": "float",
+      "label": "表演收尾秒",
+      "default": 0,
+      "min": 0,
+      "max": 10
+    },
+    {
+      "key": "audio_policy",
+      "type": "select",
+      "label": "最终音轨策略",
+      "default": "source_only",
+      "options": [
+        "source_only",
+        "generated_only",
+        "mix"
+      ]
     },
     {
       "key": "prompt",
@@ -538,15 +580,15 @@
         "pix_fmt": "yuv420p",
         "crf": 19,
         "save_metadata": true,
-        "trim_to_audio": true,
+        "trim_to_audio": false,
         "pingpong": false,
         "save_output": true,
         "images": [
-          "405",
+          "424",
           0
         ],
         "audio": [
-          "421",
+          "425",
           0
         ]
       },
@@ -592,7 +634,7 @@
     "421": {
       "inputs": {
         "reviewed_audio": [
-          "419",
+          "423",
           0
         ],
         "h3_prompt": [
@@ -620,6 +662,77 @@
       "class_type": "IndexTTS25LocalSaveReport",
       "_meta": {
         "title": "保存音频驱动预检报告"
+      }
+    },
+    "423": {
+      "inputs": {
+        "reviewed_audio": [
+          "419",
+          0
+        ],
+        "scene_start_seconds": "{{audio_scene_start}}",
+        "scene_duration_seconds": "{{audio_scene_duration}}",
+        "warmup_seconds": "{{audio_warmup}}",
+        "cooldown_seconds": "{{audio_cooldown}}",
+        "max_duration_seconds": [
+          "132",
+          0
+        ]
+      },
+      "class_type": "IndexTTS25H3AudioWindow",
+      "_meta": {
+        "title": "审核音频窗口（预热/收尾/无截词）"
+      }
+    },
+    "424": {
+      "inputs": {
+        "frames": [
+          "405",
+          0
+        ],
+        "trim_start_seconds": [
+          "423",
+          2
+        ],
+        "final_duration_seconds": [
+          "423",
+          3
+        ],
+        "fps": 24
+      },
+      "class_type": "IndexTTS25H3OutputTrim",
+      "_meta": {
+        "title": "按审核对白区间精确裁切画面"
+      }
+    },
+    "425": {
+      "inputs": {
+        "source_audio": [
+          "423",
+          1
+        ],
+        "policy": "{{audio_policy}}",
+        "generated_audio": [
+          "408",
+          0
+        ]
+      },
+      "class_type": "IndexTTS25H3AudioPolicy",
+      "_meta": {
+        "title": "最终音轨策略（默认审核原音）"
+      }
+    },
+    "426": {
+      "inputs": {
+        "report_json": [
+          "423",
+          4
+        ],
+        "filename_prefix": "minimax/audio_window_{{task_id}}"
+      },
+      "class_type": "IndexTTS25LocalSaveReport",
+      "_meta": {
+        "title": "保存音频窗口报告"
       }
     }
   }

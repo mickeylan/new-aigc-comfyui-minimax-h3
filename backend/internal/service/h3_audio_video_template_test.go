@@ -56,7 +56,7 @@ func TestH3AudioDrivenTemplateUsesReviewedAudioAsConditionAndFinalTrack(t *testi
 	if planner.ClassType != "IndexTTS25H3ReviewedAudioPlan" {
 		t.Fatalf("reviewed audio planner=%+v", planner)
 	}
-	requireConnection(t, planner.Inputs["reviewed_audio"], "419", 0)
+	requireConnection(t, planner.Inputs["reviewed_audio"], "423", 0)
 	requireConnection(t, conditioning.Inputs["prompt"], "421", 4)
 	requireConnection(t, conditioning.Inputs["length"], "421", 1)
 	requireConnection(t, conditioning.Inputs["ref_audios.ref_audio_0"], "421", 0)
@@ -68,12 +68,29 @@ func TestH3AudioDrivenTemplateUsesReviewedAudioAsConditionAndFinalTrack(t *testi
 	requireConnection(t, guide.Inputs["latent"], "416", 1)
 	requireConnection(t, guide.Inputs["audio"], "421", 0)
 	requireConnection(t, tpl.Workflow["397"].Inputs["positive"], "420", 0)
-	requireConnection(t, tpl.Workflow["418"].Inputs["audio"], "421", 0)
 	if tpl.Workflow["422"].ClassType != "IndexTTS25LocalSaveReport" {
 		t.Fatal("audio-driven preflight report is not persisted")
 	}
-	if tpl.Workflow["418"].Inputs["trim_to_audio"] != true {
-		t.Fatal("final video is not trimmed to reviewed audio")
+	window := tpl.Workflow["423"]
+	if window.ClassType != "IndexTTS25H3AudioWindow" {
+		t.Fatalf("audio window=%+v", window)
+	}
+	trim := tpl.Workflow["424"]
+	if trim.ClassType != "IndexTTS25H3OutputTrim" {
+		t.Fatalf("output trim=%+v", trim)
+	}
+	requireConnection(t, trim.Inputs["frames"], "405", 0)
+	requireConnection(t, trim.Inputs["trim_start_seconds"], "423", 2)
+	requireConnection(t, tpl.Workflow["418"].Inputs["images"], "424", 0)
+	policy := tpl.Workflow["425"]
+	if policy.ClassType != "IndexTTS25H3AudioPolicy" || policy.Inputs["policy"] != "{{audio_policy}}" {
+		t.Fatalf("audio policy=%+v", policy)
+	}
+	requireConnection(t, policy.Inputs["source_audio"], "423", 1)
+	requireConnection(t, policy.Inputs["generated_audio"], "408", 0)
+	requireConnection(t, tpl.Workflow["418"].Inputs["audio"], "425", 0)
+	if tpl.Workflow["418"].Inputs["trim_to_audio"] != false {
+		t.Fatal("VHS must not perform a second implicit trim after exact frame trimming")
 	}
 	if !isH3VideoPromptTemplate(tpl.Code) || !isH3Ref2VTemplate(tpl.Code) {
 		t.Fatal("audio-driven template is not protected by final H3 validation")
