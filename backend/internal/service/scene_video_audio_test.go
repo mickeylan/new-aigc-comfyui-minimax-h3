@@ -2,8 +2,11 @@ package service
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"comfyui-console/internal/config"
 	"comfyui-console/internal/models"
 )
 
@@ -77,6 +80,8 @@ func TestSceneReviewedAudioSelectionRejectsMultipleDialogueAutoConcatenation(t *
 
 func TestSceneReviewedAudioSelectionAcceptsOnlyCurrentMatchingSceneMix(t *testing.T) {
 	svc := newTestProjectService(t)
+	root := t.TempDir()
+	svc.cfg = &config.Config{Comfy: config.ComfyConfig{ComfyDir: root}}
 	db := svc.db
 	if err := db.AutoMigrate(&models.Dialogue{}, &models.DialogueAudioCandidate{}, &models.SceneAudioCandidate{}); err != nil {
 		t.Fatal(err)
@@ -113,12 +118,71 @@ func TestSceneReviewedAudioSelectionAcceptsOnlyCurrentMatchingSceneMix(t *testin
 		t.Fatalf("snapshot=%+v hash=%q err=%v", snapshot, sourceHash, err)
 	}
 	row := models.SceneAudioCandidate{ProjectID: project.ID, SceneID: scene.ID, SourceHash: sourceHash, SourceJSON: "{}", File: "scene-mix.wav", Duration: 8, ReviewStatus: "accepted", IsCurrent: true}
+	dir := filepath.Join(root, "input", fmt.Sprint(project.ID))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, row.File), make([]byte, 128), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Create(&row).Error; err != nil {
 		t.Fatal(err)
 	}
 	got := svc.sceneReviewedAudioSelection(&scene)
 	if !got.Ready || got.SceneCandidate == nil || got.SceneCandidate.ID != row.ID {
 		t.Fatalf("selection=%+v", got)
+	}
+}
+
+func TestSceneReviewedAudioSelectionMarksMissingMixFileStale(t *testing.T) {
+	svc := newTestProjectService(t)
+	svc.cfg = &config.Config{Comfy: config.ComfyConfig{ComfyDir: t.TempDir()}}
+	db := svc.db
+	if err := db.AutoMigrate(&models.Dialogue{}, &models.DialogueAudioCandidate{}, &models.SceneAudioCandidate{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "missing-mix"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID, Order: 1, Duration: 8}
+	if err := db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		d := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: i + 1, Character: "甲", SpeechType: "dialogue", Text: fmt.Sprintf("第%d句", i+1), AudioFile: fmt.Sprintf("take-%d.wav", i), Status: "ready"}
+		if err := db.Create(&d).Error; err != nil {
+			t.Fatal(err)
+		}
+		d.AudioHash = svc.effectiveDialogueAudioHash(d)
+		if err := db.Model(&d).Update("audio_hash", d.AudioHash).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Create(&models.DialogueAudioCandidate{ProjectID: project.ID, DialogueID: d.ID, InputHash: d.AudioHash, Provider: "test", File: d.AudioFile, Duration: 1, ReviewStatus: "accepted", IsCurrent: true}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	var dialogues []models.Dialogue
+	if err := db.Where("scene_id = ?", scene.ID).Order("`order`, id").Find(&dialogues).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, hash, err := svc.currentSceneAudioSnapshot(&scene, dialogues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := models.SceneAudioCandidate{ProjectID: project.ID, SceneID: scene.ID, SourceHash: hash, File: "missing.wav", ReviewStatus: "accepted", IsCurrent: true}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	got := svc.sceneReviewedAudioSelection(&scene)
+	if got.Ready {
+		t.Fatal("missing file became ready")
+	}
+	if err := db.First(&row, row.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !row.Stale || row.IsCurrent {
+		t.Fatalf("row=%+v", row)
 	}
 }
 

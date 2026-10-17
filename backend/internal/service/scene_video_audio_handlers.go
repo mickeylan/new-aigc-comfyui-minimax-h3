@@ -14,12 +14,13 @@ func (s *Service) HandleListSceneAudioCandidates(c *gin.Context) {
 	if !ok {
 		return
 	}
+	selection := s.Projects.sceneReviewedAudioSelection(sc)
 	var rows []models.SceneAudioCandidate
 	if err := s.DB.Where("project_id = ? AND scene_id = ?", sc.ProjectID, sc.ID).Order("created_at DESC, id DESC").Find(&rows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"candidates": rows, "selection": s.Projects.sceneReviewedAudioSelection(sc)})
+	c.JSON(http.StatusOK, gin.H{"candidates": rows, "selection": selection})
 }
 
 func (s *Service) HandleCreateSceneAudioCandidate(c *gin.Context) {
