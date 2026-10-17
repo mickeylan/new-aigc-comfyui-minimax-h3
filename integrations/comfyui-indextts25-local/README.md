@@ -39,7 +39,7 @@ Two workflow formats are included. The `indextts5_compat/` directory contains th
 - `examples/basic_dialogue_ui.json`: upload/select a custom reference voice with `LoadAudio`; load this directly in the ComfyUI browser UI.
 - `examples/preset_dialogue_ui.json`: choose a local preset voice or select one deterministically by seed; load this directly in the ComfyUI browser UI.
 - `examples/basic_dialogue_api.json`: submit this object to ComfyUI's `/prompt` API; it is not a browser UI workflow.
-- `examples/srt_single_voice_ui.json`: parse and synthesize one selected role from pasted SRT or a local UTF-8 `.srt` file, preserving timestamps and writing an auditable per-cue report.
+- `examples/srt_single_voice_ui.json`: parse and synthesize one selected role from pasted SRT or a local UTF-8 `.srt` file, preserving timestamps and writing an auditable per-cue report. The ComfyUI frontend panel provides a local file picker, example/clear actions, cue count, role list, time range, and multi-role guidance; browser-selected files are read locally and are not uploaded to a cloud service.
 
 ```text
 LoadAudio -> IndexTTS25LocalGenerate -> SaveAudio
