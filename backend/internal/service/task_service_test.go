@@ -537,7 +537,7 @@ func TestPickInstanceDiscoversReachableInstanceWithStaleStoppedStatus(t *testing
 	cfg := config.Default()
 	remote := NewRemoteExec(config.RemoteConfig{})
 	svc := &TaskService{cfg: cfg, db: db, manager: NewInstanceManager(cfg, db, remote)}
-	selected, err := svc.pickInstance(nil, nil)
+	selected, err := svc.pickInstance(nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -584,12 +584,41 @@ func TestPickInstanceRequiresPlatformAndComfyQueuesIdle(t *testing.T) {
 	cfg := config.Default()
 	remote := NewRemoteExec(config.RemoteConfig{})
 	svc := &TaskService{cfg: cfg, db: db, manager: NewInstanceManager(cfg, db, remote)}
-	selected, err := svc.pickInstance(nil, nil)
+	selected, err := svc.pickInstance(nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if selected.GPUIndex != 1 {
 		t.Fatalf("应跳过平台占用端口和 ComfyUI 非空队列，实际选择 GPU %d", selected.GPUIndex)
+	}
+}
+
+func TestPickInstancePrefersIdleVoiceAffinityInstance(t *testing.T) {
+	preferredServer := newComfyLoadServer(t, 0, 20<<30)
+	largerServer := newComfyLoadServer(t, 0, 80<<30)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.Instance{}, &models.Task{}); err != nil {
+		t.Fatal(err)
+	}
+	instances := []models.Instance{
+		{GPUIndex: 0, Port: comfyTestPort(preferredServer), Status: "running"},
+		{GPUIndex: 1, Port: comfyTestPort(largerServer), Status: "running"},
+	}
+	if err := db.Create(&instances).Error; err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	remote := NewRemoteExec(config.RemoteConfig{})
+	svc := &TaskService{cfg: cfg, db: db, manager: NewInstanceManager(cfg, db, remote)}
+	selected, err := svc.pickInstance(nil, nil, &instances[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.ID != instances[0].ID {
+		t.Fatalf("selected instance=%d; want affinity instance=%d", selected.ID, instances[0].ID)
 	}
 }
 

@@ -479,7 +479,7 @@ type instanceLoad struct {
 
 // pickInstance 只从平台与 ComfyUI 都确认空闲的实例中选择。
 // 空闲显存仅用于多个空闲实例之间的排序，不能作为实例是否有任务的判断依据。
-func (s *TaskService) pickInstance(forcePort *int, requiredClasses []string) (*models.Instance, error) {
+func (s *TaskService) pickInstance(forcePort *int, requiredClasses []string, preferredInstanceID *uint) (*models.Instance, error) {
 	var insts []models.Instance
 	s.db.Order("gpu_index").Find(&insts)
 	if len(insts) == 0 {
@@ -597,6 +597,13 @@ func (s *TaskService) pickInstance(forcePort *int, requiredClasses []string) (*m
 		return nil, fmt.Errorf("没有可用的 ComfyUI 实例")
 	}
 	rankInstanceLoads(idle)
+	if preferredInstanceID != nil {
+		for _, load := range idle {
+			if load.inst.ID == *preferredInstanceID && s.instanceSupportsClasses(load.inst, requiredClasses) == nil {
+				return &load.inst, nil
+			}
+		}
+	}
 	if len(requiredClasses) == 0 {
 		return &idle[0].inst, nil
 	}
@@ -687,7 +694,14 @@ func (s *TaskService) reserveInstance(task *models.Task, video bool, forcePort *
 	if video && s.runningVideoTaskCount() >= s.videoConcurrency() {
 		return nil, errVideoConcurrencyLimit
 	}
-	inst, err := s.pickInstance(forcePort, requiredClasses)
+	var preferredInstanceID *uint
+	if strings.TrimSpace(task.AffinityKey) != "" {
+		var previous models.Task
+		if s.db.Where("affinity_key = ? AND status = ? AND instance_id IS NOT NULL", task.AffinityKey, "success").Order("finished_at DESC, id DESC").First(&previous).Error == nil {
+			preferredInstanceID = previous.InstanceID
+		}
+	}
+	inst, err := s.pickInstance(forcePort, requiredClasses, preferredInstanceID)
 	if err != nil {
 		return nil, err
 	}
@@ -739,6 +753,7 @@ type CreateTaskReq struct {
 	ForcePort         *int                  `json:"force_port,omitempty"`
 	Seed              *int64                `json:"seed,omitempty"`
 	ParentCandidateID *uint                 `json:"-"`
+	AffinityKey       string                `json:"affinity_key,omitempty"`
 }
 
 type FileMeta struct {
@@ -822,6 +837,7 @@ func (s *TaskService) CreateTask(req CreateTaskReq) (*models.Task, error) {
 		ParamsJSON:        string(paramsJSON),
 		InputsJSON:        string(inputsJSON),
 		ParentCandidateID: req.ParentCandidateID,
+		AffinityKey:       strings.TrimSpace(req.AffinityKey),
 		Status:            "pending",
 	}
 	if err := s.db.Create(&task).Error; err != nil {
@@ -856,7 +872,7 @@ func (s *TaskService) CloneTaskSnapshot(sourceTaskID string, parentCandidateID *
 	clone := models.Task{
 		TaskID: newID, TemplateID: source.TemplateID, TemplateName: source.TemplateName,
 		Prompt: source.Prompt, ParamsJSON: string(paramsJSON), InputsJSON: source.InputsJSON,
-		ParentCandidateID: parentCandidateID, Status: "pending",
+		ParentCandidateID: parentCandidateID, AffinityKey: source.AffinityKey, Status: "pending",
 	}
 	if err := s.db.Create(&clone).Error; err != nil {
 		return nil, err

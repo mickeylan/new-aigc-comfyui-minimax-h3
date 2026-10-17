@@ -62,6 +62,7 @@ type Task struct {
 	InputsJSON        string     `gorm:"type:text" json:"inputs_json"`
 	ProvenanceJSON    string     `gorm:"column:provenance_json;type:text" json:"provenance_json"`
 	ParentCandidateID *uint      `gorm:"column:parent_candidate_id;index" json:"parent_candidate_id,omitempty"`
+	AffinityKey       string     `gorm:"column:affinity_key;size:191;index" json:"affinity_key,omitempty"`
 	InstanceID        *uint      `gorm:"column:instance_id;index" json:"instance_id"`
 	GPUIndex          *int       `gorm:"column:gpu_index" json:"gpu_index"`
 	Port              *int       `gorm:"column:port" json:"port"`

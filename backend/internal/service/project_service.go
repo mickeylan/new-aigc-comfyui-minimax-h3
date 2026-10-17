@@ -8708,7 +8708,8 @@ func (s *ProjectService) submitDialogueToComfy(d *models.Dialogue, token, inputH
 			"text": d.Text, "language": s.cfg.IndexTTS.Language, "duration_factor": 1.0,
 			"seed": seed, "emotion_text": emotionText, "emotion_strength": 0.6,
 		},
-		Files: map[string][]FileMeta{"reference_audio": {file}},
+		Files:       map[string][]FileMeta{"reference_audio": {file}},
+		AffinityKey: "indextts-voice:" + voiceKey,
 	})
 	if err != nil {
 		return err
