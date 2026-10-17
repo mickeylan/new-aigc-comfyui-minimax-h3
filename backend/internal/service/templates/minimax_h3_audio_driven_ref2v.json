@@ -1,7 +1,7 @@
 {
   "name": "MiniMax H3 已审核音频驱动参考视频",
   "code": "minimax_h3_audio_driven_ref2v",
-  "description": "IndexTTS音频作为H3条件驱动表演、口型与节奏，并作为最终音轨；参考图继续约束人物和场景。",
+  "description": "使用ComfyUI官方MiniMaxH3ReferenceToVideo和MiniMaxH3AddGuide，将已审核IndexTTS音频同时作为<Audio 1>参考及第0帧音频锚，驱动节奏、表演和口型；最终MP4直接保留原IndexTTS音轨。官方音频锚会参与条件生成，但不等同于T8的源latent强制替换。",
   "inputs": [
     {
       "key": "dialogue_audio",
@@ -331,7 +331,7 @@
           0
         ],
         "positive": [
-          "416",
+          "420",
           0
         ],
         "negative": [
@@ -397,7 +397,7 @@
     "400": {
       "inputs": {
         "conditioning": [
-          "416",
+          "420",
           0
         ]
       },
@@ -444,7 +444,7 @@
           "128",
           0
         ],
-        "video_vae": [
+        "vae": [
           "119",
           0
         ],
@@ -468,22 +468,7 @@
           "131",
           1
         ],
-        "task_type": "Ref2VA",
-        "audio_mode": "lock_source",
-        "audio_denoise_strength": 0.0,
-        "add_source_as_reference": true,
-        "prompt_primary_audio_ordinal": 1,
-        "strict_prompt_tags": true,
         "ref_image_size": "match",
-        "reference_video_policy": "official_2_to_15s",
-        "drive_audio": [
-          "419",
-          0
-        ],
-        "final_audio": [
-          "419",
-          0
-        ],
         "ref_images.ref_image_0": [
           "137",
           0
@@ -519,11 +504,15 @@
         "ref_images.ref_image_8": [
           "150",
           0
+        ],
+        "ref_audios.ref_audio_0": [
+          "419",
+          0
         ]
       },
-      "class_type": "MiniMaxH3AudioConditioningT8",
+      "class_type": "MiniMaxH3ReferenceToVideo",
       "_meta": {
-        "title": "MiniMax H3 音频驱动条件（口型/节奏/时长条件）"
+        "title": "官方 MiniMax H3 参考图/音频条件"
       }
     },
     "417": {
@@ -557,8 +546,8 @@
           0
         ],
         "audio": [
-          "416",
-          2
+          "419",
+          0
         ]
       },
       "class_type": "VHS_VideoCombine",
@@ -573,6 +562,31 @@
       "class_type": "LoadAudio",
       "_meta": {
         "title": "加载已审核IndexTTS对白"
+      }
+    },
+    "420": {
+      "inputs": {
+        "positive": [
+          "416",
+          0
+        ],
+        "audio_vae": [
+          "120",
+          0
+        ],
+        "latent": [
+          "416",
+          1
+        ],
+        "audio": [
+          "419",
+          0
+        ],
+        "frame_idx": 0
+      },
+      "class_type": "MiniMaxH3AddGuide",
+      "_meta": {
+        "title": "官方 MiniMax H3 音频锚（从第0帧驱动）"
       }
     }
   }

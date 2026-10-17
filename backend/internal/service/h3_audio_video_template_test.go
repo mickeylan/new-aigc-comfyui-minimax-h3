@@ -49,20 +49,33 @@ func TestH3AudioDrivenTemplateUsesReviewedAudioAsConditionAndFinalTrack(t *testi
 		t.Fatalf("audio loader=%+v", tpl.Workflow["419"])
 	}
 	conditioning := tpl.Workflow["416"]
-	if conditioning.ClassType != "MiniMaxH3AudioConditioningT8" {
+	if conditioning.ClassType != "MiniMaxH3ReferenceToVideo" {
 		t.Fatalf("conditioning=%s", conditioning.ClassType)
 	}
-	if conditioning.Inputs["audio_mode"] != "lock_source" || conditioning.Inputs["audio_denoise_strength"] != float64(0) {
-		t.Fatalf("source audio is not locked: %+v", conditioning.Inputs)
+	requireConnection(t, conditioning.Inputs["ref_audios.ref_audio_0"], "419", 0)
+	guide := tpl.Workflow["420"]
+	if guide.ClassType != "MiniMaxH3AddGuide" || guide.Inputs["frame_idx"] != float64(0) {
+		t.Fatalf("official audio guide=%+v", guide)
 	}
-	requireConnection(t, conditioning.Inputs["drive_audio"], "419", 0)
-	requireConnection(t, conditioning.Inputs["final_audio"], "419", 0)
-	requireConnection(t, tpl.Workflow["418"].Inputs["audio"], "416", 2)
+	requireConnection(t, guide.Inputs["positive"], "416", 0)
+	requireConnection(t, guide.Inputs["latent"], "416", 1)
+	requireConnection(t, guide.Inputs["audio"], "419", 0)
+	requireConnection(t, tpl.Workflow["397"].Inputs["positive"], "420", 0)
+	requireConnection(t, tpl.Workflow["418"].Inputs["audio"], "419", 0)
 	if tpl.Workflow["418"].Inputs["trim_to_audio"] != true {
 		t.Fatal("final video is not trimmed to reviewed audio")
 	}
 	if !isH3VideoPromptTemplate(tpl.Code) || !isH3Ref2VTemplate(tpl.Code) {
 		t.Fatal("audio-driven template is not protected by final H3 validation")
+	}
+}
+
+func TestH3AudioDrivenTemplateAvoidsNonOfficialConditioningNode(t *testing.T) {
+	tpl := loadAudioVideoTemplateFixture(t, "minimax_h3_audio_driven_ref2v.json")
+	for id, node := range tpl.Workflow {
+		if node.ClassType == "MiniMaxH3AudioConditioningT8" {
+			t.Fatalf("node %s still uses non-official conditioning", id)
+		}
 	}
 }
 
