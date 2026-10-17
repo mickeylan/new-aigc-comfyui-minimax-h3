@@ -83,6 +83,7 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.DialogueSynthesisBatch{},
 		&models.DialogueSynthesisItem{},
 		&models.DialogueAudioCandidate{},
+		&models.SceneAudioCandidate{},
 		&models.Skill{},
 		&models.ProjectSkillConfig{},
 		&models.SkillAuditLog{},

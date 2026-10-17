@@ -196,6 +196,9 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.GET("/api/projects/:id/dialogues/:did/audio-candidates", svc.HandleListDialogueAudioCandidates)
 	r.PATCH("/api/projects/:id/dialogues/:did/audio-candidates/:cid/review", svc.HandleReviewDialogueAudioCandidate)
 	r.POST("/api/projects/:id/dialogues/:did/audio-candidates/:cid/select", svc.HandleSelectDialogueAudioCandidate)
+	r.GET("/api/projects/:id/scenes/:sid/audio-candidates", svc.HandleListSceneAudioCandidates)
+	r.POST("/api/projects/:id/scenes/:sid/audio-candidates", svc.HandleCreateSceneAudioCandidate)
+	r.PATCH("/api/projects/:id/scenes/:sid/audio-candidates/:cid/review", svc.HandleReviewSceneAudioCandidate)
 	r.PUT("/api/projects/:id/editor/order", svc.HandleReorderScenes)
 	r.PATCH("/api/projects/:id/scenes/:sid/duration", svc.HandleUpdateSceneDuration)
 	// 角色资产
