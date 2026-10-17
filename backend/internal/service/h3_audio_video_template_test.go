@@ -57,7 +57,12 @@ func TestH3AudioDrivenTemplateUsesReviewedAudioAsConditionAndFinalTrack(t *testi
 		t.Fatalf("reviewed audio planner=%+v", planner)
 	}
 	requireConnection(t, planner.Inputs["reviewed_audio"], "423", 0)
-	requireConnection(t, conditioning.Inputs["prompt"], "421", 4)
+	preflight := tpl.Workflow["427"]
+	if preflight.ClassType != "IndexTTS25H3ProductionPreflight" {
+		t.Fatalf("production preflight=%+v", preflight)
+	}
+	requireConnection(t, preflight.Inputs["conditioned_prompt"], "421", 4)
+	requireConnection(t, conditioning.Inputs["prompt"], "427", 0)
 	requireConnection(t, conditioning.Inputs["length"], "421", 1)
 	requireConnection(t, conditioning.Inputs["ref_audios.ref_audio_0"], "421", 0)
 	guide := tpl.Workflow["420"]
@@ -68,8 +73,8 @@ func TestH3AudioDrivenTemplateUsesReviewedAudioAsConditionAndFinalTrack(t *testi
 	requireConnection(t, guide.Inputs["latent"], "416", 1)
 	requireConnection(t, guide.Inputs["audio"], "421", 0)
 	requireConnection(t, tpl.Workflow["397"].Inputs["positive"], "420", 0)
-	if tpl.Workflow["422"].ClassType != "IndexTTS25LocalSaveReport" {
-		t.Fatal("audio-driven preflight report is not persisted")
+	if tpl.Workflow["422"].ClassType != "IndexTTS25LocalSaveReport" || tpl.Workflow["428"].ClassType != "IndexTTS25LocalSaveReport" {
+		t.Fatal("audio and production preflight reports are not persisted")
 	}
 	window := tpl.Workflow["423"]
 	if window.ClassType != "IndexTTS25H3AudioWindow" {

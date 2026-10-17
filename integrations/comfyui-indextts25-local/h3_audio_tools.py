@@ -193,5 +193,46 @@ def mix_audio_policy(source_audio: dict[str, Any], generated_audio: dict[str, An
     return {"waveform": result.contiguous(), "sample_rate": rate}
 
 
+def production_preflight(
+    prompt: str, width: int, height: int, frames: int, picture_count: int,
+    audio_count: int = 1, free_vram_gb: float = 0.0,
+) -> dict[str, Any]:
+    if width <= 0 or height <= 0 or width % 32 or height % 32:
+        raise ValueError("H3 width and height must be positive multiples of 32")
+    if frames < 5 or frames % 17 != 5:
+        raise ValueError("H3 frame count must satisfy 17k+5")
+    if not 0 <= picture_count <= 9 or not 1 <= audio_count <= 3:
+        raise ValueError("H3 supports 0-9 pictures and 1-3 reviewed audio references")
+    picture_refs = [int(value) for value in re.findall(r"<(?:Picture|Subject)\s+(\d+)>", prompt, re.IGNORECASE)]
+    audio_refs = [int(value) for value in re.findall(r"<Audio\s+(\d+)>", prompt, re.IGNORECASE)]
+    unavailable_pictures = sorted({value for value in picture_refs if value < 1 or value > picture_count})
+    unavailable_audios = sorted({value for value in audio_refs if value < 1 or value > audio_count})
+    if unavailable_pictures or unavailable_audios:
+        issues = []
+        if unavailable_pictures:
+            issues.append("unavailable Picture/Subject " + ",".join(map(str, unavailable_pictures)))
+        if unavailable_audios:
+            issues.append("unavailable Audio " + ",".join(map(str, unavailable_audios)))
+        raise ValueError("; ".join(issues))
+    megapixels = width * height / 1_000_000
+    workload = megapixels * (frames / 124.0) * (1.0 + picture_count * 0.08)
+    risk = "high" if workload >= 12 else "elevated" if workload >= 6 else "normal"
+    warnings = []
+    if frames > 362:
+        warnings.append("frame count exceeds the approximate official trained range of 362 frames")
+    if free_vram_gb > 0 and free_vram_gb < 12:
+        warnings.append("reported free VRAM is below 12 GiB; queue or lower duration/resolution")
+    if risk != "normal":
+        warnings.append(f"estimated workload risk is {risk}; this is advisory, not a measured VRAM requirement")
+    return {
+        "width": width, "height": height, "frame_count": frames,
+        "duration_seconds": round(frames / FPS, 6), "picture_count": picture_count,
+        "audio_count": audio_count, "picture_references": sorted(set(picture_refs)),
+        "audio_references": sorted(set(audio_refs)), "free_vram_gb": float(free_vram_gb),
+        "workload_units": round(workload, 4), "risk": risk, "warnings": warnings,
+        "note": "VRAM risk is a deterministic workload heuristic, not a promise of memory consumption.",
+    }
+
+
 def report_json(report: dict[str, Any]) -> str:
     return json.dumps(report, ensure_ascii=False, sort_keys=True)

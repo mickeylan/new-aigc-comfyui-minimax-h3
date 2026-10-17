@@ -12,7 +12,7 @@ from comfy_api.latest import ComfyExtension, IO
 from .asr_review import build_asr_report, transcribe_local
 from .h3_audio_tools import (
     audio_quality_report, mix_audio_policy, plan_reviewed_audio_video, report_json,
-    slice_audio_window, trim_video_frames,
+    production_preflight, slice_audio_window, trim_video_frames,
 )
 from .preset_voices import (
     library_fingerprint,
@@ -406,6 +406,35 @@ class IndexTTS25H3ReviewedAudioPlan(IO.ComfyNode):
         )
 
 
+class IndexTTS25H3ProductionPreflight(IO.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="IndexTTS25H3ProductionPreflight", display_name="IndexTTS → Official H3 Production Preflight",
+            category=CATEGORY,
+            description="Validates official H3 geometry, 17k+5 frames, media tags, and reports deterministic workload/VRAM risk before sampling.",
+            inputs=[
+                IO.String.Input("conditioned_prompt", multiline=True, default=""),
+                IO.Int.Input("width", default=832, min=32, max=16384, step=32),
+                IO.Int.Input("height", default=480, min=32, max=16384, step=32),
+                IO.Int.Input("length", default=124, min=5, max=3600),
+                IO.Int.Input("picture_count", default=9, min=0, max=9),
+                IO.Int.Input("audio_count", default=1, min=1, max=3),
+                IO.Float.Input("free_vram_gb", default=0.0, min=0.0, max=256.0, step=0.1, tooltip="0 means unknown; risk remains advisory."),
+            ],
+            outputs=[IO.String.Output("conditioned_prompt"), IO.String.Output("production_preflight_json")],
+        )
+
+    @classmethod
+    def execute(cls, conditioned_prompt: str, width: int, height: int, length: int,
+                picture_count: int, audio_count: int, free_vram_gb: float):
+        report = production_preflight(
+            conditioned_prompt, int(width), int(height), int(length),
+            int(picture_count), int(audio_count), float(free_vram_gb),
+        )
+        return IO.NodeOutput(conditioned_prompt, report_json(report))
+
+
 class IndexTTS25H3OutputTrim(IO.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -524,6 +553,7 @@ class IndexTTS25LocalExtension(ComfyExtension):
             IndexTTS25LocalSRTSingleVoiceGenerate,
             IndexTTS25H3AudioWindow,
             IndexTTS25H3ReviewedAudioPlan,
+            IndexTTS25H3ProductionPreflight,
             IndexTTS25H3OutputTrim,
             IndexTTS25H3AudioPolicy,
             IndexTTS25LocalTimelineMix,

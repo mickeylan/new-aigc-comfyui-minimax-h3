@@ -3,7 +3,8 @@ import torch
 
 from h3_audio_tools import (
     aligned_h3_frames, audio_quality_report, ensure_primary_audio_binding,
-    mix_audio_policy, plan_reviewed_audio_video, slice_audio_window, trim_video_frames,
+    mix_audio_policy, plan_reviewed_audio_video, production_preflight,
+    slice_audio_window, trim_video_frames,
 )
 
 
@@ -69,3 +70,14 @@ def test_quality_audit_rejects_silent_reviewed_audio():
     assert audio_quality_report(silent)["silent"] is True
     with pytest.raises(ValueError, match="silent"):
         plan_reviewed_audio_video(silent, "detailed_description:\n[Shot 1] A", 15)
+
+
+def test_production_preflight_validates_tags_geometry_and_reports_risk():
+    report = production_preflight("<Picture 1> <Subject 1> <Audio 1>", 832, 480, 124, 1, 1, 11.5)
+    assert report["picture_references"] == [1]
+    assert report["audio_references"] == [1]
+    assert any("below 12 GiB" in warning for warning in report["warnings"])
+    with pytest.raises(ValueError, match="unavailable Picture"):
+        production_preflight("<Picture 2> <Audio 1>", 832, 480, 124, 1)
+    with pytest.raises(ValueError, match="multiples of 32"):
+        production_preflight("<Audio 1>", 830, 480, 124, 0)

@@ -86,6 +86,22 @@
       "label": "Seed",
       "default": -1,
       "min": -1
+    },
+    {
+      "key": "reference_count",
+      "type": "int",
+      "label": "实际参考图数量（用于预检）",
+      "default": 9,
+      "min": 0,
+      "max": 9
+    },
+    {
+      "key": "free_vram_gb",
+      "type": "float",
+      "label": "空闲显存GiB（0=未知，仅风险提示）",
+      "default": 0,
+      "min": 0,
+      "max": 256
     }
   ],
   "workflow": {
@@ -495,8 +511,8 @@
           0
         ],
         "prompt": [
-          "421",
-          4
+          "427",
+          0
         ],
         "width": [
           "115",
@@ -733,6 +749,46 @@
       "class_type": "IndexTTS25LocalSaveReport",
       "_meta": {
         "title": "保存音频窗口报告"
+      }
+    },
+    "427": {
+      "inputs": {
+        "conditioned_prompt": [
+          "421",
+          4
+        ],
+        "width": [
+          "115",
+          0
+        ],
+        "height": [
+          "115",
+          1
+        ],
+        "length": [
+          "421",
+          1
+        ],
+        "picture_count": "{{reference_count}}",
+        "audio_count": 1,
+        "free_vram_gb": "{{free_vram_gb}}"
+      },
+      "class_type": "IndexTTS25H3ProductionPreflight",
+      "_meta": {
+        "title": "正式采样前媒体标签/分辨率/显存风险预检"
+      }
+    },
+    "428": {
+      "inputs": {
+        "report_json": [
+          "427",
+          1
+        ],
+        "filename_prefix": "minimax/production_preflight_{{task_id}}"
+      },
+      "class_type": "IndexTTS25LocalSaveReport",
+      "_meta": {
+        "title": "保存正式生产预检报告"
       }
     }
   }
