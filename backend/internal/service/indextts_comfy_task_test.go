@@ -10,11 +10,35 @@ import (
 	"comfyui-console/internal/models"
 )
 
-func TestIndexTTSRustTemplateRendersOrderedAudioWorkflow(t *testing.T) {
-	tpl := loadTemplateForTest(t, "indextts_2_5_rust_dialogue.json")
+func TestInitSystemTemplatesDisablesLegacyRustComfyWorkflow(t *testing.T) {
+	db := safetyDB(t, &models.Template{})
+	legacy := models.Template{Name: "legacy", Code: "indextts_2_5_rust_dialogue", Enabled: true}
+	if err := db.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := InitSystemTemplates(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("code = ?", legacy.Code).First(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Enabled {
+		t.Fatal("legacy Rust-in-ComfyUI workflow remains enabled")
+	}
+	var current models.Template
+	if err := db.Where("code = ?", indexTTSComfyTemplateCode).First(&current).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !current.Enabled {
+		t.Fatal("Python ComfyUI workflow is disabled")
+	}
+}
+
+func TestIndexTTSComfyTemplateRendersPythonAudioWorkflow(t *testing.T) {
+	tpl := loadTemplateForTest(t, "indextts_2_5_comfyui_dialogue.json")
 	params := map[string]any{
-		"dll_path": "", "model_dir": `E:\models\indextts25-rust`, "device_index": 0,
-		"voice_key": "project-1-character-2", "text": "权威原文", "language": "ZH",
+		"source_dir": `E:\mickeylan\ai\index-tts`, "model_dir": `E:\mickeylan\ai\index-tts\checkpoints`,
+		"device": "auto", "precision": "auto", "text": "权威原文", "language": "ZH",
 		"duration_factor": 1.0, "seed": uint64(42), "emotion_text": "克制而悲伤", "emotion_strength": 0.6,
 		"_task_id": "tts-task",
 	}
@@ -31,24 +55,22 @@ func TestIndexTTSRustTemplateRendersOrderedAudioWorkflow(t *testing.T) {
 		t.Fatalf("unresolved template: %s", encoded)
 	}
 	classes := workflowClassTypes(workflow)
-	for _, required := range []string{"IndexTTS25RustModelLoader", "IndexTTS25RustPrepareVoice", "IndexTTS25RustGenerate", "IndexTTS25RustSaveReport", "LoadAudio", "SaveAudio"} {
+	for _, required := range []string{"IndexTTS25LocalModelLoader", "IndexTTS25LocalGenerate", "IndexTTS25LocalSaveReport", "LoadAudio", "SaveAudio"} {
 		if !containsClass(classes, required) {
 			t.Fatalf("missing class %s: %v", required, classes)
 		}
 	}
 }
 
-func TestInstanceSupportsRequiredRustTTSNodes(t *testing.T) {
+func TestInstanceSupportsRequiredPythonTTSNodes(t *testing.T) {
 	classes := map[string]any{
-		"IndexTTS25RustModelLoader": map[string]any{}, "IndexTTS25RustPrepareVoice": map[string]any{},
-		"IndexTTS25RustGenerate": map[string]any{}, "LoadAudio": map[string]any{}, "SaveAudio": map[string]any{},
+		"IndexTTS25LocalModelLoader": map[string]any{}, "IndexTTS25LocalGenerate": map[string]any{},
+		"IndexTTS25LocalSaveReport": map[string]any{}, "LoadAudio": map[string]any{}, "SaveAudio": map[string]any{},
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/object_info":
 			_ = json.NewEncoder(w).Encode(classes)
-		case "/indextts25-rust/health":
-			_ = json.NewEncoder(w).Encode(map[string]any{"available": true, "healthy": true})
 		default:
 			http.NotFound(w, r)
 		}
@@ -57,31 +79,11 @@ func TestInstanceSupportsRequiredRustTTSNodes(t *testing.T) {
 	cfg := config.Default()
 	svc := &TaskService{cfg: cfg, manager: NewInstanceManager(cfg, nil, NewRemoteExec(config.RemoteConfig{}))}
 	instance := models.Instance{Port: comfyTestPort(server)}
-	if err := svc.instanceSupportsClasses(instance, []string{"IndexTTS25RustGenerate", "SaveAudio"}); err != nil {
+	if err := svc.instanceSupportsClasses(instance, []string{"IndexTTS25LocalGenerate", "SaveAudio"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.instanceSupportsClasses(instance, []string{"MissingRustNode"}); err == nil {
+	if err := svc.instanceSupportsClasses(instance, []string{"MissingPythonTTSNode"}); err == nil {
 		t.Fatal("missing custom node was accepted")
-	}
-}
-
-func TestInstanceRejectsUnhealthyRustTTSRuntime(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/object_info" {
-			_ = json.NewEncoder(w).Encode(map[string]any{"IndexTTS25RustGenerate": map[string]any{}})
-			return
-		}
-		if r.URL.Path == "/indextts25-rust/health" {
-			_ = json.NewEncoder(w).Encode(map[string]any{"available": true, "healthy": false})
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	defer server.Close()
-	cfg := config.Default()
-	svc := &TaskService{cfg: cfg, manager: NewInstanceManager(cfg, nil, NewRemoteExec(config.RemoteConfig{}))}
-	if err := svc.instanceSupportsClasses(models.Instance{Port: comfyTestPort(server)}, []string{"IndexTTS25RustGenerate"}); err == nil {
-		t.Fatal("unhealthy Rust TTS runtime was accepted")
 	}
 }
 

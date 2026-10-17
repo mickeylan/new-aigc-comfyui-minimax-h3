@@ -69,6 +69,11 @@ func InitSystemTemplates(db *gorm.DB, configuredDir ...string) error {
 			return err
 		}
 	}
+	// The ComfyUI production path is the Python workflow. Keep the historical Rust
+	// template record only for task auditability, but never offer it for new tasks.
+	if err := db.Model(&models.Template{}).Where("code = ?", "indextts_2_5_rust_dialogue").Update("enabled", false).Error; err != nil {
+		return err
+	}
 	return nil
 }
 

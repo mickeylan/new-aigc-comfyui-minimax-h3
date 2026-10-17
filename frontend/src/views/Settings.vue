@@ -131,7 +131,7 @@
       <div class="section-head"><div><h2>IndexTTS 2.5 · 执行方式</h2><p class="hint">默认使用ComfyUI集群；Rust本地模式仅在用户明确选择时启用，不会在集群失败后静默回退。</p></div><span class="badge" :class="form.index_tts_available==='true'?'badge-green':'badge-gray'">{{form.index_tts_execution_mode==='disabled'?'已关闭':(form.index_tts_available==='true'?'可用':'待检查')}}</span></div>
       <div class="provider-selector index-tts-modes">
         <button type="button" class="provider-option" :class="{active:form.index_tts_execution_mode==='comfyui'}" @click="form.index_tts_execution_mode='comfyui'">
-          <span class="provider-icon">🖧</span><span class="provider-info"><strong>ComfyUI集群（默认）</strong><span>按节点能力、队列和GPU负载调度Rust IndexTTS工作流</span></span><span v-if="form.index_tts_execution_mode==='comfyui'" class="provider-check">✓</span>
+          <span class="provider-icon">🖧</span><span class="provider-info"><strong>ComfyUI集群（默认）</strong><span>按节点能力、队列和GPU负载调度Python IndexTTS ComfyUI工作流</span></span><span v-if="form.index_tts_execution_mode==='comfyui'" class="provider-check">✓</span>
         </button>
         <button type="button" class="provider-option" :class="{active:form.index_tts_execution_mode==='native_local'}" @click="form.index_tts_execution_mode='native_local'">
           <span class="provider-icon">🦀</span><span class="provider-info"><strong>Rust本地</strong><span>当前后端进程直接调用本机DLL，仅用于明确选择的本机运行/诊断</span></span><span v-if="form.index_tts_execution_mode==='native_local'" class="provider-check">✓</span>

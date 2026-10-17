@@ -1,0 +1,25 @@
+{
+  "name": "IndexTTS 2.5 ComfyUI 单句对白",
+  "code": "indextts_2_5_comfyui_dialogue",
+  "description": "通过ComfyUI原生Python IndexTTS插件生成单句权威对白；不加载Rust DLL，并保留情绪、稳定seed和生成报告。",
+  "inputs": [
+    {"key":"reference_audio","type":"audio","label":"角色参考音频","required":true},
+    {"key":"source_dir","type":"string","label":"IndexTTS源码目录","required":true,"default":"E:\\mickeylan\\ai\\index-tts"},
+    {"key":"model_dir","type":"string","label":"IndexTTS检查点目录","required":true,"default":"E:\\mickeylan\\ai\\index-tts\\checkpoints"},
+    {"key":"device","type":"select","label":"设备","required":true,"default":"auto","options":["auto","cuda:0","cpu"]},
+    {"key":"precision","type":"select","label":"精度","required":true,"default":"auto","options":["auto","bfloat16","float32"]},
+    {"key":"text","type":"string","label":"权威对白原文","required":true},
+    {"key":"language","type":"select","label":"语言","required":true,"default":"ZH","options":["ZH","EN","JA","ES","AR"]},
+    {"key":"duration_factor","type":"float","label":"模型时长条件","required":true,"default":1.0,"min":0.5,"max":2.0,"step":0.05},
+    {"key":"seed","type":"int","label":"稳定种子","required":true,"default":0},
+    {"key":"emotion_text","type":"string","label":"情绪与表演文本","required":false,"default":""},
+    {"key":"emotion_strength","type":"float","label":"情绪强度","required":true,"default":0.6,"min":0,"max":1,"step":0.05}
+  ],
+  "workflow": {
+    "1": {"class_type":"IndexTTS25LocalModelLoader","inputs":{"source_dir":"{{source_dir}}","model_dir":"{{model_dir}}","device":"{{device}}","precision":"{{precision}}"}},
+    "2": {"class_type":"LoadAudio","inputs":{"audio":"{{aud:reference_audio}}"}},
+    "3": {"class_type":"IndexTTS25LocalGenerate","inputs":{"model":["1",0],"speaker_audio":["2",0],"text":"{{text}}","language":"{{language}}","duration_factor":"{{duration_factor}}","seed":"{{seed}}","emotion_text":"{{emotion_text}}","emotion_strength":"{{emotion_strength}}","emotion_vector_json":""}},
+    "4": {"class_type":"SaveAudio","inputs":{"audio":["3",0],"filename_prefix":"indextts_local/dub_{{task_id}}"}},
+    "5": {"class_type":"IndexTTS25LocalSaveReport","inputs":{"report_json":["3",1],"filename_prefix":"indextts_local/report_{{task_id}}"}}
+  }
+}

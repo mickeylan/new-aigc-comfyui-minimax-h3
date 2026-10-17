@@ -49,11 +49,13 @@ func (s *Service) HandleGetSettings(c *gin.Context) {
 		if mode == "comfyui" {
 			var count int64
 			if s.DB != nil {
-				_ = s.DB.Model(&models.Template{}).Where("code = ? AND enabled = ?", indexTTSRustComfyTemplateCode, true).Count(&count).Error
+				_ = s.DB.Model(&models.Template{}).Where("code = ? AND enabled = ?", indexTTSComfyTemplateCode, true).Count(&count).Error
 			}
 			available, clusterError := false, ""
-			if count == 0 {
-				clusterError = "缺少已启用的 Rust IndexTTS ComfyUI 模板"
+			if strings.TrimSpace(s.Cfg.IndexTTS.ComfySourceDir) == "" || strings.TrimSpace(s.Cfg.IndexTTS.ComfyModelDir) == "" {
+				clusterError = "ComfyUI IndexTTS源码目录或检查点目录未配置"
+			} else if count == 0 {
+				clusterError = "缺少已启用的Python IndexTTS ComfyUI模板"
 			} else if s.Tasks != nil {
 				available, clusterError = s.Tasks.IndexTTSClusterStatus()
 			} else {

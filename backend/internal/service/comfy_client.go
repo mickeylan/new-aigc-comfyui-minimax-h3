@@ -199,10 +199,6 @@ func (c *ComfyClient) GetObjectInfo() (map[string]any, error) {
 	return c.getJSON("/object_info", map[string]any{})
 }
 
-func (c *ComfyClient) GetIndexTTSHealth() (map[string]any, error) {
-	return c.getJSON("/indextts25-rust/health", map[string]any{})
-}
-
 func (c *ComfyClient) getJSON(path string, fallback map[string]any) (map[string]any, error) {
 	resp, err := c.HTTP.Get(c.baseURL() + path)
 	if err != nil {

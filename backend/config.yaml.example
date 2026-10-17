@@ -37,8 +37,12 @@ gpu:
 indextts:
   enabled: false
   execution_mode: comfyui
+  # native_local模式
   model_dir: ""
   dll_path: ""
+  # comfyui模式：每台集群实例上的Python IndexTTS源码与检查点目录
+  comfy_source_dir: ""
+  comfy_model_dir: ""
   device_index: 0
   language: ZH
   default_voice: ""

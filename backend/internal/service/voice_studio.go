@@ -702,16 +702,22 @@ func (s *ProjectService) VoiceStudioData(project *models.Project, episodeN int) 
 	data["tts_error"] = ""
 	if s.indexTTSExecutionMode() == "comfyui" {
 		var count int64
-		_ = s.db.Model(&models.Template{}).Where("code = ? AND enabled = ?", indexTTSRustComfyTemplateCode, true).Count(&count).Error
-		data["tts_provider"] = "index_tts_rust_comfyui"
+		_ = s.db.Model(&models.Template{}).Where("code = ? AND enabled = ?", indexTTSComfyTemplateCode, true).Count(&count).Error
+		data["tts_provider"] = "index_tts_python_comfyui"
 		data["tts_execution_mode"] = "comfyui"
-		data["tts_available"] = count > 0
+		available, clusterError := false, ""
+		if s.cfg == nil || strings.TrimSpace(s.cfg.IndexTTS.ComfySourceDir) == "" || strings.TrimSpace(s.cfg.IndexTTS.ComfyModelDir) == "" {
+			clusterError = "ComfyUI IndexTTS源码目录或检查点目录未配置"
+		} else if count == 0 {
+			clusterError = "缺少已启用的Python IndexTTS ComfyUI模板"
+		} else if s.tasks != nil {
+			available, clusterError = s.tasks.IndexTTSClusterStatus()
+		}
+		data["tts_available"] = available
 		data["tts_emotion_supported"] = true
 		data["tts_voice_cache_supported"] = true
-		data["tts_request_cancel_supported"] = true
-		if count == 0 {
-			data["tts_error"] = "缺少已启用的 Rust IndexTTS ComfyUI 模板"
-		}
+		data["tts_request_cancel_supported"] = false
+		data["tts_error"] = clusterError
 	} else if s.indexTTS != nil {
 		configured, available, runtimeError := s.indexTTS.Status()
 		if configured {

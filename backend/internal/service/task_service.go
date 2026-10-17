@@ -651,7 +651,7 @@ func (s *TaskService) IndexTTSClusterStatus() (bool, string) {
 		instanceID uint
 		err        error
 	}
-	required := []string{"IndexTTS25RustModelLoader", "IndexTTS25RustPrepareVoice", "IndexTTS25RustGenerate", "IndexTTS25RustSaveReport", "LoadAudio", "SaveAudio"}
+	required := []string{"IndexTTS25LocalModelLoader", "IndexTTS25LocalGenerate", "IndexTTS25LocalSaveReport", "LoadAudio", "SaveAudio"}
 	results := make(chan probeResult, len(instances))
 	for _, instance := range instances {
 		go func(inst models.Instance) {
@@ -692,25 +692,6 @@ func (s *TaskService) instanceSupportsClasses(inst models.Instance, required []s
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("缺少节点 %s", strings.Join(missing, ", "))
-	}
-	needsIndexTTSHealth := false
-	for _, classType := range required {
-		if classType == "IndexTTS25RustGenerate" {
-			needsIndexTTSHealth = true
-			break
-		}
-	}
-	if needsIndexTTSHealth {
-		health, err := client.GetIndexTTSHealth()
-		if err != nil {
-			return fmt.Errorf("读取 IndexTTS 运行时健康状态失败: %w", err)
-		}
-		if available, _ := health["available"].(bool); !available {
-			return fmt.Errorf("IndexTTS Rust运行时不可用")
-		}
-		if healthy, _ := health["healthy"].(bool); !healthy {
-			return fmt.Errorf("IndexTTS Rust设备不健康")
-		}
 	}
 	return nil
 }

@@ -7,3 +7,8 @@ def test_generate_preserves_model_defaults_and_rejects_short_audio():
     assert "min_new_tokens" not in execute
     assert "num_beams=" not in execute
     assert "result_to_audio(result, minimum_seconds=minimum_seconds)" in execute
+    assert "emo_audio_prompt=" in execute
+    assert "emo_vector=" in execute
+    assert "use_emo_text=" in execute
+    assert "generation_json" in execute
+    assert "IndexTTS25LocalSaveReport" in execute

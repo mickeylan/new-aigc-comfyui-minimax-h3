@@ -6804,7 +6804,7 @@ func (s *ProjectService) syncDialogueAudioTasks() {
 			}
 			_, err = s.captureDialogueAudio(dialogueAudioCapture{
 				ProjectID: dialogue.ProjectID, DialogueID: dialogue.ID, Token: dialogue.AudioToken,
-				InputHash: dialogue.AudioTaskHash, Provider: "index_tts_rust_comfyui",
+				InputHash: dialogue.AudioTaskHash, Provider: "index_tts_python_comfyui",
 				RuntimeVersion: task.TemplateName, VoiceIdentity: strings.TrimSpace(dialogue.Character),
 				Params: params,
 				File:   filepath.Base(localPath), SampleRate: rate, Channels: channels, Duration: duration,
@@ -8649,9 +8649,9 @@ func (s *ProjectService) startDialogueTTS(d *models.Dialogue) (string, string, e
 }
 
 const (
-	indexTTSRustComfyTemplateCode = "indextts_2_5_rust_dialogue"
-	SettingIndexTTSExecutionMode  = "index_tts_execution_mode"
-	DefaultIndexTTSExecutionMode  = "comfyui"
+	indexTTSComfyTemplateCode    = "indextts_2_5_comfyui_dialogue"
+	SettingIndexTTSExecutionMode = "index_tts_execution_mode"
+	DefaultIndexTTSExecutionMode = "comfyui"
 )
 
 func validIndexTTSExecutionMode(mode string) bool {
@@ -8680,9 +8680,12 @@ func (s *ProjectService) submitDialogueToComfy(d *models.Dialogue, token, inputH
 	if s.tasks == nil {
 		return fmt.Errorf("ComfyUI 任务服务未配置")
 	}
+	if s.cfg == nil || strings.TrimSpace(s.cfg.IndexTTS.ComfySourceDir) == "" || strings.TrimSpace(s.cfg.IndexTTS.ComfyModelDir) == "" {
+		return fmt.Errorf("ComfyUI IndexTTS源码目录或检查点目录未配置")
+	}
 	var tpl models.Template
-	if err := s.db.Where("code = ? AND enabled = ?", indexTTSRustComfyTemplateCode, true).First(&tpl).Error; err != nil {
-		return fmt.Errorf("未启用模板 %s", indexTTSRustComfyTemplateCode)
+	if err := s.db.Where("code = ? AND enabled = ?", indexTTSComfyTemplateCode, true).First(&tpl).Error; err != nil {
+		return fmt.Errorf("未启用模板 %s", indexTTSComfyTemplateCode)
 	}
 	var character models.Character
 	if err := s.db.Where("project_id = ? AND name = ?", d.ProjectID, strings.TrimSpace(d.Character)).First(&character).Error; err != nil {
@@ -8703,8 +8706,8 @@ func (s *ProjectService) submitDialogueToComfy(d *models.Dialogue, token, inputH
 		TemplateID: tpl.ID,
 		Prompt:     d.Text,
 		Params: map[string]any{
-			"dll_path": s.cfg.IndexTTS.DLLPath, "model_dir": s.cfg.IndexTTS.ModelDir,
-			"device_index": s.cfg.IndexTTS.DeviceIndex, "voice_key": voiceKey,
+			"source_dir": s.cfg.IndexTTS.ComfySourceDir, "model_dir": s.cfg.IndexTTS.ComfyModelDir,
+			"device": "auto", "precision": "auto",
 			"text": d.Text, "language": s.cfg.IndexTTS.Language, "duration_factor": 1.0,
 			"seed": seed, "emotion_text": emotionText, "emotion_strength": 0.6,
 		},

@@ -59,9 +59,11 @@ type GPUConfig struct {
 
 type IndexTTSConfig struct {
 	Enabled        bool   `yaml:"enabled"`
-	ExecutionMode  string `yaml:"execution_mode"` // comfyui（生产多实例）/native_local（显式本机调试）/disabled
-	ModelDir       string `yaml:"model_dir"`
-	DLLPath        string `yaml:"dll_path"`
+	ExecutionMode  string `yaml:"execution_mode"`   // comfyui（生产多实例）/native_local（显式本机调试）/disabled
+	ModelDir       string `yaml:"model_dir"`        // Rust native_local模型目录
+	DLLPath        string `yaml:"dll_path"`         // Rust native_local DLL
+	ComfySourceDir string `yaml:"comfy_source_dir"` // ComfyUI集群Python IndexTTS源码目录（各实例一致）
+	ComfyModelDir  string `yaml:"comfy_model_dir"`  // ComfyUI集群Python IndexTTS检查点目录（各实例一致）
 	DeviceIndex    int    `yaml:"device_index"`
 	Language       string `yaml:"language"`
 	DefaultVoice   string `yaml:"default_voice"`

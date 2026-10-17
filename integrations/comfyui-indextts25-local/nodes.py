@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import time
 from pathlib import Path
 
 import torch
@@ -139,18 +141,33 @@ class IndexTTS25LocalGenerate(IO.ComfyNode):
                 IO.Combo.Input("language", options=["ZH", "EN", "JA", "ES", "AR"], default="ZH"),
                 IO.Float.Input("duration_factor", default=1.0, min=0.5, max=2.0, step=0.05),
                 IO.Int.Input("seed", default=0, min=0, max=0x7FFFFFFFFFFFFFFF, control_after_generate=True),
+                IO.String.Input("emotion_text", multiline=True, default=""),
+                IO.Float.Input("emotion_strength", default=0.6, min=0.0, max=1.0, step=0.05),
+                IO.Audio.Input("emotion_audio", optional=True),
+                IO.String.Input("emotion_vector_json", multiline=True, default="", optional=True),
             ],
-            outputs=[IO.Audio.Output("audio")],
+            outputs=[IO.Audio.Output("audio"), IO.String.Output("generation_json")],
         )
 
     @classmethod
-    def execute(cls, model: ModelHandle, speaker_audio, text: str, language: str, duration_factor: float, seed: int):
+    def execute(cls, model: ModelHandle, speaker_audio, text: str, language: str, duration_factor: float, seed: int, emotion_text: str = "", emotion_strength: float = 0.6, emotion_audio=None, emotion_vector_json: str = ""):
         content = text.strip()
         if not content:
             raise ValueError("text is required")
+        emotion_vector = None
+        if emotion_vector_json.strip():
+            emotion_vector = json.loads(emotion_vector_json)
+            if not isinstance(emotion_vector, list) or not emotion_vector:
+                raise ValueError("emotion_vector_json must be a non-empty JSON array")
+            emotion_vector = [float(value) for value in emotion_vector]
+        selected_modes = int(bool(emotion_text.strip())) + int(emotion_audio is not None) + int(emotion_vector is not None)
+        if selected_modes > 1:
+            raise ValueError("emotion text, reference audio and vector are mutually exclusive")
         reference = reference_wav(speaker_audio)
+        emotion_reference = reference_wav(emotion_audio) if emotion_audio is not None else None
         expected_seconds = expected_speech_seconds(content, language, duration_factor)
         entry = MODEL_CACHE.acquire(model)
+        started = time.perf_counter()
         with entry.lock:
             torch.manual_seed(int(seed))
             if torch.cuda.is_available():
@@ -161,12 +178,50 @@ class IndexTTS25LocalGenerate(IO.ComfyNode):
                 output_path=None,
                 lang=language,
                 duration_factor=float(duration_factor),
-                # Keep IndexTTS's trained generation defaults. Artificial token
-                # floors can create short, fluent-looking but incorrect speech.
+                emo_audio_prompt=str(emotion_reference) if emotion_reference else None,
+                emo_alpha=float(emotion_strength),
+                emo_vector=emotion_vector,
+                use_emo_text=bool(emotion_text.strip()),
+                emo_text=emotion_text.strip() or None,
                 verbose=False,
             )
         minimum_seconds = max(0.25, expected_seconds * 0.35)
-        return IO.NodeOutput(result_to_audio(result, minimum_seconds=minimum_seconds))
+        audio = result_to_audio(result, minimum_seconds=minimum_seconds)
+        samples = int(audio["waveform"].shape[-1])
+        rate = int(audio["sample_rate"])
+        report = {
+            "provider": "index_tts_python_comfyui", "seed": int(seed), "language": language,
+            "duration_factor": float(duration_factor), "generated_seconds": samples / rate,
+            "sample_rate": rate, "channels": int(audio["waveform"].shape[1]),
+            "total_ms": round((time.perf_counter() - started) * 1000, 3),
+            "text_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            "emotion": {"mode": "text" if emotion_text.strip() else "reference" if emotion_reference else "vector" if emotion_vector else "none", "strength": float(emotion_strength)},
+        }
+        return IO.NodeOutput(audio, json.dumps(report, ensure_ascii=False, sort_keys=True))
+
+
+class IndexTTS25LocalSaveReport(IO.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="IndexTTS25LocalSaveReport", display_name="IndexTTS 2.5 Save Report", category=CATEGORY,
+            inputs=[IO.String.Input("report_json", multiline=True, default="{}"), IO.String.Input("filename_prefix", default="indextts_local/report")],
+            is_output_node=True,
+        )
+
+    @classmethod
+    def execute(cls, report_json: str, filename_prefix: str):
+        import re
+        import folder_paths
+        parsed = json.loads(report_json)
+        relative = "/".join(re.sub(r"[^0-9A-Za-z._-]+", "_", part) for part in filename_prefix.replace("\\", "/").strip("/").split("/") if part not in {"", ".", ".."}) or "indextts_local/report"
+        root = Path(folder_paths.get_output_directory()).resolve()
+        target = (root / f"{relative}.json").resolve()
+        if root not in target.parents:
+            raise ValueError("report output escaped the ComfyUI output directory")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(parsed, ensure_ascii=False, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+        return IO.NodeOutput(ui={"files": [{"filename": target.name, "subfolder": target.parent.relative_to(root).as_posix(), "type": "output"}]})
 
 
 class IndexTTS25LocalTimelineMix(IO.ComfyNode):
@@ -233,6 +288,7 @@ class IndexTTS25LocalExtension(ComfyExtension):
             IndexTTS25LocalModelLoader,
             IndexTTS25LocalPresetVoice,
             IndexTTS25LocalGenerate,
+            IndexTTS25LocalSaveReport,
             IndexTTS25LocalTimelineMix,
             IndexTTS25LocalASRReview,
         ]
