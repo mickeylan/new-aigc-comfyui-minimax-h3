@@ -18,8 +18,12 @@ func TestCaptureAndSelectDialogueAudioCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !first.IsCurrent || first.ReviewStatus != "pending" {
-		t.Fatalf("unexpected first candidate: %+v", first)
+	if first.IsCurrent || first.ReviewStatus != "pending" {
+		t.Fatalf("unreviewed first candidate was promoted: %+v", first)
+	}
+	db.First(&dialogue, dialogue.ID)
+	if dialogue.AudioFile != "" || dialogue.Status != "pending" {
+		t.Fatalf("unreviewed candidate changed production audio: %+v", dialogue)
 	}
 
 	db.Model(&dialogue).Updates(map[string]any{"status": "synthesizing", "audio_token": "second"})
@@ -27,8 +31,8 @@ func TestCaptureAndSelectDialogueAudioCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !second.IsCurrent {
-		t.Fatalf("second candidate is not current: %+v", second)
+	if second.IsCurrent {
+		t.Fatalf("unreviewed second candidate was promoted: %+v", second)
 	}
 
 	selected, err := service.SelectDialogueAudioCandidate(project.ID, dialogue.ID, first.ID)
@@ -39,7 +43,7 @@ func TestCaptureAndSelectDialogueAudioCandidates(t *testing.T) {
 		t.Fatalf("candidate not accepted: %+v", selected)
 	}
 	db.First(&dialogue, dialogue.ID)
-	if dialogue.AudioFile != "first.wav" || dialogue.PreviousAudioFile != "second.mp3" {
+	if dialogue.AudioFile != "first.wav" || dialogue.PreviousAudioFile != "" {
 		t.Fatalf("dialogue projection not switched: %+v", dialogue)
 	}
 }

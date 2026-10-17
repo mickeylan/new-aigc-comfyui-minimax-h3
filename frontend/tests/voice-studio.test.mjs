@@ -18,7 +18,8 @@ test('声音工作台路由、剧本入口与聚合接口已接通', () => {
 
 test('声音工作台提供角色摘要、筛选、进度及逐句表演参数编辑', () => {
   assert.match(view, /本集角色与音色/)
-  assert.match(view, /本地 IndexTTS-2\.5 CUDA/)
+  assert.match(view, /ComfyUI集群 IndexTTS-2\.5/)
+  assert.match(view, /Rust本地 IndexTTS-2\.5 CUDA/)
   assert.match(view, /本地配音暂不可用/)
   assert.match(view, /ttsUnavailable/)
   assert.match(view, /其他功能不受影响/)

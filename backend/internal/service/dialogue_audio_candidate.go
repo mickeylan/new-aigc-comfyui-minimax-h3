@@ -43,11 +43,6 @@ func (s *ProjectService) captureDialogueAudio(in dialogueAudioCapture) (*models.
 			}
 			return err
 		}
-		if err := tx.Model(&models.DialogueAudioCandidate{}).
-			Where("project_id = ? AND dialogue_id = ? AND is_current = ?", in.ProjectID, in.DialogueID, true).
-			Update("is_current", false).Error; err != nil {
-			return err
-		}
 		lookup := tx.Where("project_id = ? AND dialogue_id = ? AND input_hash = ? AND provider = ?", in.ProjectID, in.DialogueID, in.InputHash, in.Provider).First(&candidate)
 		if lookup.Error != nil && lookup.Error != gorm.ErrRecordNotFound {
 			return lookup.Error
@@ -55,7 +50,7 @@ func (s *ProjectService) captureDialogueAudio(in dialogueAudioCapture) (*models.
 		values := map[string]any{
 			"runtime_version": in.RuntimeVersion, "voice_identity": in.VoiceIdentity, "params_json": string(params),
 			"file": in.File, "sample_rate": in.SampleRate, "channels": in.Channels, "duration": in.Duration,
-			"review_status": "pending", "review_reason": "", "reviewed_at": nil, "is_current": true,
+			"review_status": "pending", "review_reason": "", "reviewed_at": nil, "is_current": false,
 			"stale": false, "stale_reason": "",
 		}
 		if lookup.Error == gorm.ErrRecordNotFound {
@@ -67,10 +62,12 @@ func (s *ProjectService) captureDialogueAudio(in dialogueAudioCapture) (*models.
 		if err := tx.Model(&candidate).Updates(values).Error; err != nil {
 			return err
 		}
+		status := "pending"
+		if strings.TrimSpace(dialogue.AudioFile) != "" {
+			status = "ready"
+		}
 		result := tx.Model(&dialogue).Where("audio_token = ?", in.Token).Updates(map[string]any{
-			"status": "ready", "audio_file": in.File, "previous_audio_file": dialogue.AudioFile, "previous_audio_hash": dialogue.AudioHash,
-			"audio_revision": dialogue.AudioRevision + 1, "audio_hash": in.InputHash, "audio_token": "",
-			"audio_task_id": "", "audio_task_hash": "", "audio_stale": false, "audio_stale_reason": "", "error": "",
+			"status": status, "audio_token": "", "audio_task_id": "", "audio_task_hash": "", "error": "",
 		})
 		if result.Error != nil {
 			return result.Error

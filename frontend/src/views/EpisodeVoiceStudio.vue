@@ -198,8 +198,12 @@ const mix = reactive({ subtitles: true, dub: true, nativeVolume: 1, dialogueVolu
 let pollTimer = 0
 
 const episodeTitle = computed(() => studio.value.episode?.title || studio.value.episode_title || '')
-const providerLabel = computed(() => studio.value.tts_provider === 'index_tts_rust' ? (studio.value.tts_available === false ? '本地 IndexTTS-2.5（不可用）' : '本地 IndexTTS-2.5 CUDA') : '兼容语音服务')
-const ttsUnavailable = computed(() => studio.value.tts_provider === 'index_tts_rust' && studio.value.tts_available === false)
+const providerLabel = computed(() => studio.value.tts_provider === 'index_tts_python_comfyui'
+  ? (studio.value.tts_available === false ? 'ComfyUI IndexTTS-2.5（不可用）' : 'ComfyUI集群 IndexTTS-2.5')
+  : studio.value.tts_provider === 'index_tts_rust'
+    ? (studio.value.tts_available === false ? 'Rust本地 IndexTTS-2.5（不可用）' : 'Rust本地 IndexTTS-2.5 CUDA')
+    : '兼容语音服务')
+const ttsUnavailable = computed(() => ['index_tts_python_comfyui', 'index_tts_rust'].includes(studio.value.tts_provider) && studio.value.tts_available === false)
 const normalizedStatus = d => d.status === 'ready' && !d.audio_stale && (d.audio_url || d.audio_file) ? 'ready' : d.status === 'synthesizing' ? 'synthesizing' : d.status === 'failed' ? 'failed' : 'pending'
 const readyCount = computed(() => dialogues.value.filter(d => normalizedStatus(d) === 'ready').length)
 const failedCount = computed(() => dialogues.value.filter(d => normalizedStatus(d) === 'failed').length)

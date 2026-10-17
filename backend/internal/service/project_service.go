@@ -6799,6 +6799,15 @@ func (s *ProjectService) syncDialogueAudioTasks() {
 					var report map[string]any
 					if json.Unmarshal(reportData, &report) == nil {
 						params["generation_report"] = report
+						if rate == 0 {
+							rate = uint32(numericReportValue(report["sample_rate"]))
+						}
+						if channels == 0 {
+							channels = uint32(numericReportValue(report["channels"]))
+						}
+						if duration == 0 {
+							duration = numericReportValue(report["generated_seconds"])
+						}
 					}
 				}
 			}
@@ -6817,6 +6826,25 @@ func (s *ProjectService) syncDialogueAudioTasks() {
 	}
 	if changed {
 		s.pushProject(nil)
+	}
+}
+
+func numericReportValue(value any) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case float32:
+		return float64(typed)
+	case int:
+		return float64(typed)
+	case json.Number:
+		result, _ := typed.Float64()
+		return result
+	case string:
+		result, _ := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		return result
+	default:
+		return 0
 	}
 }
 
