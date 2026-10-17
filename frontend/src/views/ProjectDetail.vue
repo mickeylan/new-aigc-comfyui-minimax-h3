@@ -497,11 +497,24 @@
       </div>
 
       <!-- 场景分页 -->
-      <div v-if="currentScenes.length > scenePageSize" class="pager">
-        <button class="btn btn-sm btn-ghost" :disabled="scenePage <= 1" @click="scenePage--">← 上一页</button>
-        <span class="pager-info">第 {{ scenePage }} / {{ scenePageCount }} 页 · 共 {{ currentScenes.length }} 个场景</span>
-        <button class="btn btn-sm btn-ghost" :disabled="scenePage >= scenePageCount" @click="scenePage++">下一页 →</button>
-      </div>
+      <nav v-if="currentScenes.length > scenePageSize" class="pager" aria-label="分镜分页">
+        <button type="button" class="btn btn-sm btn-ghost" :disabled="scenePage <= 1" @click="goToScenePage(1)">« 首页</button>
+        <button type="button" class="btn btn-sm btn-ghost" :disabled="scenePage <= 1" @click="goToScenePage(scenePage-1)">← 上一页</button>
+        <div class="pager-pages" aria-label="分镜页码">
+          <template v-for="item in scenePageItems" :key="item.key">
+            <span v-if="item.ellipsis" class="pager-ellipsis" aria-hidden="true">…</span>
+            <button v-else type="button" class="pager-page" :class="{active:item.page===scenePage}" :aria-current="item.page===scenePage?'page':undefined" @click="goToScenePage(item.page)">{{item.page}}</button>
+          </template>
+        </div>
+        <button type="button" class="btn btn-sm btn-ghost" :disabled="scenePage >= scenePageCount" @click="goToScenePage(scenePage+1)">下一页 →</button>
+        <button type="button" class="btn btn-sm btn-ghost" :disabled="scenePage >= scenePageCount" @click="goToScenePage(scenePageCount)">末页 »</button>
+        <form class="pager-jump" @submit.prevent="jumpToScenePage">
+          <label for="scene-page-jump">跳至</label>
+          <input id="scene-page-jump" v-model.number="scenePageJump" type="number" min="1" :max="scenePageCount" step="1" class="input" aria-label="输入分镜页码">
+          <button type="submit" class="btn btn-sm btn-secondary">跳转</button>
+        </form>
+        <span class="pager-info">第 {{ scenePage }} / {{ scenePageCount }} 页 · 共 {{ currentScenes.length }} 个分镜</span>
+      </nav>
     </section>
 
     <!-- 合并成片（当前集） -->
@@ -1246,11 +1259,33 @@ const currentScenes = computed(() => scenes.value
 // 场景分页
 const scenePageSize = 6
 const scenePage = ref(1)
+const scenePageJump = ref(1)
 const scenePageCount = computed(() => Math.max(1, Math.ceil(currentScenes.value.length / scenePageSize)))
+const scenePageItems = computed(() => {
+  const total = scenePageCount.value
+  const current = scenePage.value
+  const pages = new Set([1, total])
+  for (let page = Math.max(1, current - 2); page <= Math.min(total, current + 2); page++) pages.add(page)
+  const ordered = [...pages].sort((a, b) => a - b)
+  const items = []
+  ordered.forEach((page, index) => {
+    if (index > 0 && page - ordered[index - 1] > 1) items.push({ key:`ellipsis-${ordered[index - 1]}-${page}`, ellipsis:true })
+    items.push({ key:`page-${page}`, page })
+  })
+  return items
+})
 const pagedScenes = computed(() => {
   const start = (scenePage.value - 1) * scenePageSize
   return currentScenes.value.slice(start, start + scenePageSize)
 })
+function goToScenePage(page) {
+  const parsed = Number(page)
+  if (!Number.isFinite(parsed)) return
+  scenePage.value = Math.max(1, Math.min(scenePageCount.value, Math.trunc(parsed)))
+  scenePageJump.value = scenePage.value
+}
+function jumpToScenePage() { goToScenePage(scenePageJump.value) }
+watch(scenePageCount, count => { if (scenePage.value > count) goToScenePage(count) })
 // 合并历史折叠
 const mergeShowLimit = 3
 const showAllMerges = ref(false)
@@ -2815,8 +2850,9 @@ onBeforeUnmount(() => {
 .merge-chip.active .chip-n { background: var(--accent); color: #fff; }
 .merge-list { border-top: 1px solid var(--border); padding-top: 14px; display: flex; flex-direction: column; gap: 16px; }
 .merge-more { align-self: flex-start; margin-top: 4px; }
-.pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 16px; }
-.pager-info { font-size: 13px; color: var(--text-secondary); }
+.pager { display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px;margin-top:16px; }
+.pager-pages{display:flex;align-items:center;gap:5px}.pager-page{min-width:34px;height:32px;padding:0 8px;border:1px solid var(--border);border-radius:7px;background:var(--surface-secondary);color:var(--text-secondary);cursor:pointer}.pager-page:hover{border-color:var(--accent);color:var(--accent)}.pager-page.active{border-color:var(--accent);background:var(--accent);color:#fff;font-weight:700}.pager-ellipsis{min-width:22px;text-align:center;color:var(--text-tertiary)}
+.pager-jump{display:flex;align-items:center;gap:6px;margin-left:6px;color:var(--text-secondary);font-size:12px}.pager-jump .input{width:68px;height:32px;padding:4px 7px}.pager-info{width:100%;text-align:center;font-size:13px;color:var(--text-secondary)}
 .merge-info { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .merge-time { font-size: 12px; color: var(--text-tertiary); }
 .merge-result { display: flex; gap: 12px; align-items: flex-start; }
