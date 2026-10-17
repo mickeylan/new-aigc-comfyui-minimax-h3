@@ -109,7 +109,7 @@ func Default() *Config {
 			MonitorInt: 3,
 		},
 		IndexTTS: IndexTTSConfig{
-			ExecutionMode:  "native_local",
+			ExecutionMode:  "comfyui",
 			Language:       "ZH",
 			TimeoutSeconds: 300,
 			QueueSize:      32,

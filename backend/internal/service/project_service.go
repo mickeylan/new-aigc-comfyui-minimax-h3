@@ -8619,21 +8619,30 @@ func (s *ProjectService) startDialogueTTS(d *models.Dialogue) (string, string, e
 	return token, hash, nil
 }
 
-const indexTTSRustComfyTemplateCode = "indextts_2_5_rust_dialogue"
+const (
+	indexTTSRustComfyTemplateCode = "indextts_2_5_rust_dialogue"
+	SettingIndexTTSExecutionMode  = "index_tts_execution_mode"
+	DefaultIndexTTSExecutionMode  = "comfyui"
+)
+
+func validIndexTTSExecutionMode(mode string) bool {
+	return mode == "comfyui" || mode == "native_local" || mode == "disabled"
+}
 
 func (s *ProjectService) indexTTSExecutionMode() string {
-	if s.cfg == nil {
-		if s.indexTTS != nil && s.indexTTS.Enabled() {
-			return "native_local"
-		}
+	if s.cfg == nil || !s.cfg.IndexTTS.Enabled {
 		return "disabled"
 	}
-	if !s.cfg.IndexTTS.Enabled {
-		return "disabled"
+	configured := strings.ToLower(strings.TrimSpace(s.cfg.IndexTTS.ExecutionMode))
+	if !validIndexTTSExecutionMode(configured) {
+		configured = DefaultIndexTTSExecutionMode
 	}
-	mode := strings.ToLower(strings.TrimSpace(s.cfg.IndexTTS.ExecutionMode))
-	if mode == "" {
-		return "native_local"
+	if s.volc == nil {
+		return configured
+	}
+	mode := strings.ToLower(strings.TrimSpace(s.volc.GetSetting(SettingIndexTTSExecutionMode, configured)))
+	if !validIndexTTSExecutionMode(mode) {
+		return DefaultIndexTTSExecutionMode
 	}
 	return mode
 }

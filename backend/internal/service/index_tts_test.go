@@ -135,9 +135,10 @@ func TestEffectiveDialogueAudioHashIncludesLocalRuntimeAndVoice(t *testing.T) {
 	voice := filepath.Join(voiceDir, "voice.wav")
 	_ = os.WriteFile(voice, []byte("a"), 0o644)
 	db.Create(&models.Character{ProjectID: 1, Name: "林夏", VoiceRef: "voice.wav"})
-	local := NewLocalIndexTTS(&config.Config{Comfy: config.ComfyConfig{ComfyDir: root}, IndexTTS: config.IndexTTSConfig{Enabled: true}}, db)
+	cfg := &config.Config{Comfy: config.ComfyConfig{ComfyDir: root}, IndexTTS: config.IndexTTSConfig{Enabled: true, ExecutionMode: "native_local"}}
+	local := NewLocalIndexTTS(cfg, db)
 	local.fingerprint = "runtime-a"
-	service := &ProjectService{db: db, indexTTS: local}
+	service := &ProjectService{cfg: cfg, db: db, indexTTS: local}
 	dialogue := models.Dialogue{ProjectID: 1, Character: "林夏", Text: "你好", Speed: 1, Volume: 1}
 	first := service.effectiveDialogueAudioHash(dialogue)
 	local.fingerprint = "runtime-b"

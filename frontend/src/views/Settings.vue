@@ -127,6 +127,26 @@
       </div>
     </div>
 
+    <div class="card settings-card">
+      <div class="section-head"><div><h2>IndexTTS 2.5 · 执行方式</h2><p class="hint">默认使用ComfyUI集群；Rust本地模式仅在用户明确选择时启用，不会在集群失败后静默回退。</p></div><span class="badge" :class="form.index_tts_available==='true'?'badge-green':'badge-gray'">{{form.index_tts_execution_mode==='disabled'?'已关闭':(form.index_tts_available==='true'?'可用':'待检查')}}</span></div>
+      <div class="provider-selector index-tts-modes">
+        <button type="button" class="provider-option" :class="{active:form.index_tts_execution_mode==='comfyui'}" @click="form.index_tts_execution_mode='comfyui'">
+          <span class="provider-icon">🖧</span><span class="provider-info"><strong>ComfyUI集群（默认）</strong><span>按节点能力、队列和GPU负载调度Rust IndexTTS工作流</span></span><span v-if="form.index_tts_execution_mode==='comfyui'" class="provider-check">✓</span>
+        </button>
+        <button type="button" class="provider-option" :class="{active:form.index_tts_execution_mode==='native_local'}" @click="form.index_tts_execution_mode='native_local'">
+          <span class="provider-icon">🦀</span><span class="provider-info"><strong>Rust本地</strong><span>当前后端进程直接调用本机DLL，仅用于明确选择的本机运行/诊断</span></span><span v-if="form.index_tts_execution_mode==='native_local'" class="provider-check">✓</span>
+        </button>
+        <button type="button" class="provider-option" :class="{active:form.index_tts_execution_mode==='disabled'}" @click="form.index_tts_execution_mode='disabled'">
+          <span class="provider-icon">⏸</span><span class="provider-info"><strong>关闭IndexTTS</strong><span>不提交本地或集群IndexTTS任务</span></span><span v-if="form.index_tts_execution_mode==='disabled'" class="provider-check">✓</span>
+        </button>
+      </div>
+      <div class="index-tts-status">
+        <span>当前模式：<b>{{indexTTSModeLabel}}</b></span><span>设备：{{form.index_tts_device || ('GPU '+(form.index_tts_device_index||0))}}</span><span v-if="form.index_tts_runtime_version">Runtime {{form.index_tts_runtime_version}}</span>
+        <p v-if="form.index_tts_error" class="notice error-notice">{{form.index_tts_error}}</p>
+      </div>
+      <div class="actions-row"><button class="btn" :disabled="saving" @click="save">{{saving?'保存中…':'保存IndexTTS执行方式'}}</button></div>
+    </div>
+
     <!-- 火山引擎 文生图配置（始终显示） -->
     <div class="card settings-card">
       <div class="section-head">
@@ -311,11 +331,13 @@ const miniMaxKeyPlaceholder = ref('')
 const apiKeyPlaceholder = ref('')
 
 const aliConfigured = computed(() => !!(form.value.ali_api_key || aliKeyPlaceholder.value))
+const indexTTSModeLabel = computed(() => ({ comfyui:'ComfyUI集群', native_local:'Rust本地', disabled:'已关闭' }[form.value.index_tts_execution_mode] || 'ComfyUI集群'))
 
 onMounted(async () => {
   try {
     const { data } = await api.settings()
     form.value = { ...data }
+    if (!['comfyui','native_local','disabled'].includes(form.value.index_tts_execution_mode)) form.value.index_tts_execution_mode = 'comfyui'
     // 确保 text_provider 有默认值
     if (!form.value.text_provider) {
       form.value.text_provider = 'volcano'

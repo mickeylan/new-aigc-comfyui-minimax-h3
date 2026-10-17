@@ -36,14 +36,16 @@ func (s *Service) HandleGetSettings(c *gin.Context) {
 	settings["index_tts_available"] = "false"
 	settings["index_tts_error"] = ""
 	if s.Cfg != nil && s.Cfg.IndexTTS.Enabled {
-		mode := strings.ToLower(strings.TrimSpace(s.Cfg.IndexTTS.ExecutionMode))
-		if mode == "" {
-			mode = "native_local"
+		mode := DefaultIndexTTSExecutionMode
+		if s.Projects != nil {
+			mode = s.Projects.indexTTSExecutionMode()
 		}
-		settings["tts_provider"] = "index_tts_rust"
-		settings["index_tts_enabled"] = "true"
 		settings["index_tts_execution_mode"] = mode
 		settings["index_tts_device_index"] = strconv.Itoa(s.Cfg.IndexTTS.DeviceIndex)
+		if mode != "disabled" {
+			settings["tts_provider"] = "index_tts_rust"
+			settings["index_tts_enabled"] = "true"
+		}
 		if mode == "comfyui" {
 			var count int64
 			if s.DB != nil {
@@ -53,7 +55,7 @@ func (s *Service) HandleGetSettings(c *gin.Context) {
 			if count == 0 {
 				settings["index_tts_error"] = "缺少已启用的 Rust IndexTTS ComfyUI 模板"
 			}
-		} else if s.Projects != nil && s.Projects.indexTTS != nil {
+		} else if mode == "native_local" && s.Projects != nil && s.Projects.indexTTS != nil {
 			_, available, runtimeError := s.Projects.indexTTS.Status()
 			settings["index_tts_available"] = strconv.FormatBool(available)
 			settings["index_tts_error"] = runtimeError
@@ -85,7 +87,20 @@ func (s *Service) HandleUpdateSettings(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "text_provider 仅支持 llama、minimax_coding 或 volcano"})
 		return
 	}
+	if mode, ok := req[SettingIndexTTSExecutionMode]; ok {
+		mode = strings.ToLower(strings.TrimSpace(mode))
+		if !validIndexTTSExecutionMode(mode) {
+			c.JSON(400, gin.H{"error": "IndexTTS 执行模式仅支持 comfyui、native_local 或 disabled"})
+			return
+		}
+		req[SettingIndexTTSExecutionMode] = mode
+	}
 	s.Volc.UpdateSettings(req)
+	if req[SettingIndexTTSExecutionMode] == "native_local" && s.Projects != nil {
+		if err := s.Projects.StartIndexTTS(); err != nil {
+			log.Printf("[settings] IndexTTS native runtime unavailable: %v", err)
+		}
+	}
 	log.Printf("[settings] text provider: %s", s.TextProviderFact.Name())
 	c.JSON(200, gin.H{"ok": true})
 }
