@@ -636,6 +636,45 @@ func workflowClassTypes(workflow map[string]any) []string {
 	return classes
 }
 
+func (s *TaskService) IndexTTSClusterStatus() (bool, string) {
+	if s == nil || s.db == nil || s.manager == nil {
+		return false, "ComfyUI任务服务未配置"
+	}
+	var instances []models.Instance
+	if err := s.db.Order("gpu_index").Find(&instances).Error; err != nil {
+		return false, err.Error()
+	}
+	if len(instances) == 0 {
+		return false, "没有已登记的ComfyUI实例"
+	}
+	type probeResult struct {
+		instanceID uint
+		err        error
+	}
+	required := []string{"IndexTTS25RustModelLoader", "IndexTTS25RustPrepareVoice", "IndexTTS25RustGenerate", "IndexTTS25RustSaveReport", "LoadAudio", "SaveAudio"}
+	results := make(chan probeResult, len(instances))
+	for _, instance := range instances {
+		go func(inst models.Instance) {
+			results <- probeResult{instanceID: inst.ID, err: s.instanceSupportsClasses(inst, required)}
+		}(instance)
+	}
+	errorsByInstance := make([]string, 0, len(instances))
+	timer := time.NewTimer(3 * time.Second)
+	defer timer.Stop()
+	for range instances {
+		select {
+		case result := <-results:
+			if result.err == nil {
+				return true, ""
+			}
+			errorsByInstance = append(errorsByInstance, fmt.Sprintf("实例%d: %v", result.instanceID, result.err))
+		case <-timer.C:
+			return false, "IndexTTS集群健康检查超时"
+		}
+	}
+	return false, strings.Join(errorsByInstance, "; ")
+}
+
 func (s *TaskService) instanceSupportsClasses(inst models.Instance, required []string) error {
 	if len(required) == 0 {
 		return nil

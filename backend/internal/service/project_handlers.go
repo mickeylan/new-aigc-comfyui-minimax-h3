@@ -51,10 +51,16 @@ func (s *Service) HandleGetSettings(c *gin.Context) {
 			if s.DB != nil {
 				_ = s.DB.Model(&models.Template{}).Where("code = ? AND enabled = ?", indexTTSRustComfyTemplateCode, true).Count(&count).Error
 			}
-			settings["index_tts_available"] = strconv.FormatBool(count > 0)
+			available, clusterError := false, ""
 			if count == 0 {
-				settings["index_tts_error"] = "缺少已启用的 Rust IndexTTS ComfyUI 模板"
+				clusterError = "缺少已启用的 Rust IndexTTS ComfyUI 模板"
+			} else if s.Tasks != nil {
+				available, clusterError = s.Tasks.IndexTTSClusterStatus()
+			} else {
+				clusterError = "ComfyUI任务服务未配置"
 			}
+			settings["index_tts_available"] = strconv.FormatBool(available)
+			settings["index_tts_error"] = clusterError
 		} else if mode == "native_local" && s.Projects != nil && s.Projects.indexTTS != nil {
 			_, available, runtimeError := s.Projects.indexTTS.Status()
 			settings["index_tts_available"] = strconv.FormatBool(available)
