@@ -188,6 +188,9 @@ func (s *ProjectService) SelectDialogueAudioCandidate(projectID, dialogueID, can
 		}).Error; err != nil {
 			return err
 		}
+		if err := markSceneAudioCandidatesStale(tx, projectID, dialogue.SceneID, "Dialogue采用的音频候选已变化"); err != nil {
+			return err
+		}
 		selected = row
 		selected.IsCurrent, selected.ReviewStatus, selected.ReviewedAt = true, "accepted", &now
 		return nil
@@ -196,7 +199,26 @@ func (s *ProjectService) SelectDialogueAudioCandidate(projectID, dialogueID, can
 }
 
 func markDialogueAudioCandidatesStale(tx *gorm.DB, projectID, dialogueID uint, reason string) error {
-	return tx.Model(&models.DialogueAudioCandidate{}).
+	if err := tx.Model(&models.DialogueAudioCandidate{}).
 		Where("project_id = ? AND dialogue_id = ? AND stale = ?", projectID, dialogueID, false).
+		Updates(map[string]any{"stale": true, "stale_reason": reason, "is_current": false}).Error; err != nil {
+		return err
+	}
+	if !tx.Migrator().HasTable(&models.SceneAudioCandidate{}) {
+		return nil
+	}
+	var dialogue models.Dialogue
+	if err := tx.Select("scene_id").Where("id = ? AND project_id = ?", dialogueID, projectID).First(&dialogue).Error; err != nil {
+		return err
+	}
+	return markSceneAudioCandidatesStale(tx, projectID, dialogue.SceneID, reason)
+}
+
+func markSceneAudioCandidatesStale(tx *gorm.DB, projectID, sceneID uint, reason string) error {
+	if sceneID == 0 || !tx.Migrator().HasTable(&models.SceneAudioCandidate{}) {
+		return nil
+	}
+	return tx.Model(&models.SceneAudioCandidate{}).
+		Where("project_id = ? AND scene_id = ? AND stale = ?", projectID, sceneID, false).
 		Updates(map[string]any{"stale": true, "stale_reason": reason, "is_current": false}).Error
 }

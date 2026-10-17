@@ -141,6 +141,8 @@ func (s *ProjectService) attachReviewedSceneAudio(sc *models.Scene, files map[st
 }
 
 func (s *ProjectService) CreateSceneAudioCandidate(sc *models.Scene) (*models.SceneAudioCandidate, error) {
+	s.sceneAudioMu.Lock()
+	defer s.sceneAudioMu.Unlock()
 	if sc == nil || s.cfg == nil {
 		return nil, fmt.Errorf("Scene连续音轨服务未配置")
 	}
@@ -219,6 +221,12 @@ func (s *ProjectService) CreateSceneAudioCandidate(sc *models.Scene) (*models.Sc
 		_ = os.Remove(temp)
 		return nil, err
 	}
+	published := true
+	defer func() {
+		if published {
+			_ = os.Remove(output)
+		}
+	}()
 	candidate := models.SceneAudioCandidate{ProjectID: sc.ProjectID, SceneID: sc.ID, SourceHash: sourceHash, SourceJSON: string(encoded), File: name, Duration: snapshot.SceneDuration, ReviewStatus: "pending"}
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&models.SceneAudioCandidate{}).Where("project_id = ? AND scene_id = ? AND source_hash <> ?", sc.ProjectID, sc.ID, sourceHash).Updates(map[string]any{"stale": true, "stale_reason": "Dialogue或候选来源已变化", "is_current": false}).Error; err != nil {
@@ -229,6 +237,7 @@ func (s *ProjectService) CreateSceneAudioCandidate(sc *models.Scene) (*models.Sc
 	if err != nil {
 		return nil, err
 	}
+	published = false
 	return &candidate, nil
 }
 

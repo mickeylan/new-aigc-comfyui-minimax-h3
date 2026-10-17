@@ -49,6 +49,7 @@ type ProjectService struct {
 	characterLooks *CharacterLookService
 	continuity     *ContinuityService
 	assetMu        sync.Mutex // 串行化资产参考图任务创建，避免并发重复排队
+	sceneAudioMu   sync.Mutex // 串行化Scene连续音轨渲染与发布，避免重复文件和候选
 }
 
 func NewProjectService(cfg *config.Config, db *gorm.DB, textProvider TextProvider, volc *VolcClient, tasks *TaskService, remote *RemoteExec, upload *UploadManager, hub *Hub, materials *MaterialService) *ProjectService {
@@ -813,6 +814,11 @@ func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imageProm
 	}
 	if err := s.db.Model(sc).Updates(updates).Error; err != nil {
 		return err
+	}
+	if durationChanged {
+		if err := markSceneAudioCandidatesStale(s.db, sc.ProjectID, sc.ID, "Scene时长已修改"); err != nil {
+			return err
+		}
 	}
 	if imageChanged {
 		if err := MarkSceneCandidatesStale(s.db, sc.ProjectID, sc.ID, "", "场景画面来源或提示词已修改"); err != nil {
@@ -8418,7 +8424,7 @@ func (s *ProjectService) UpdateDialogueFields(p *models.Project, did uint, input
 		return nil, fmt.Errorf("对白不存在")
 	}
 	updates := map[string]any{}
-	audioChanged, promptChanged := false, false
+	audioChanged, promptChanged, timelineChanged := false, false, false
 	if input.Text != nil && *input.Text != d.Text {
 		updates["text"], audioChanged, promptChanged = strings.TrimSpace(*input.Text), true, true
 	}
@@ -8447,7 +8453,7 @@ func (s *ProjectService) UpdateDialogueFields(p *models.Project, did uint, input
 			return nil, fmt.Errorf("position 不可为负数")
 		}
 		if *input.Position != d.Position {
-			updates["position"] = *input.Position
+			updates["position"], timelineChanged = *input.Position, true
 		}
 	}
 	if input.Offset != nil {
@@ -8455,7 +8461,7 @@ func (s *ProjectService) UpdateDialogueFields(p *models.Project, did uint, input
 			return nil, fmt.Errorf("offset 需在 -60~60 秒之间")
 		}
 		if *input.Offset != d.Offset {
-			updates["offset"] = *input.Offset
+			updates["offset"], timelineChanged = *input.Offset, true
 		}
 	}
 	if input.Speed != nil {
@@ -8463,7 +8469,7 @@ func (s *ProjectService) UpdateDialogueFields(p *models.Project, did uint, input
 			return nil, fmt.Errorf("speed 需在 0.5~2 之间")
 		}
 		if *input.Speed != dialogueSpeed(d) {
-			updates["speed"], audioChanged = *input.Speed, true
+			updates["speed"], audioChanged, timelineChanged = *input.Speed, true, true
 		}
 	}
 	if input.Pitch != nil {
@@ -8471,7 +8477,7 @@ func (s *ProjectService) UpdateDialogueFields(p *models.Project, did uint, input
 			return nil, fmt.Errorf("pitch 需在 -12~12 半音之间")
 		}
 		if *input.Pitch != d.Pitch {
-			updates["pitch"], audioChanged = *input.Pitch, true
+			updates["pitch"], audioChanged, timelineChanged = *input.Pitch, true, true
 		}
 	}
 	if input.Volume != nil {
@@ -8479,7 +8485,7 @@ func (s *ProjectService) UpdateDialogueFields(p *models.Project, did uint, input
 			return nil, fmt.Errorf("volume 需在 0~4 之间")
 		}
 		if *input.Volume != dialogueVolume(d) {
-			updates["volume"], audioChanged = *input.Volume, true
+			updates["volume"], audioChanged, timelineChanged = *input.Volume, true, true
 		}
 	}
 	if input.Emotion != nil && strings.TrimSpace(*input.Emotion) != d.Emotion {
@@ -8502,6 +8508,8 @@ func (s *ProjectService) UpdateDialogueFields(p *models.Project, did uint, input
 	}
 	if audioChanged {
 		_ = markDialogueAudioCandidatesStale(s.db, d.ProjectID, d.ID, "对白、角色音色或配音参数已修改")
+	} else if timelineChanged {
+		_ = markSceneAudioCandidatesStale(s.db, d.ProjectID, d.SceneID, "Dialogue时间线或混音参数已修改")
 	}
 	if promptChanged {
 		_ = s.db.Model(&models.Scene{}).Where("id = ? AND video_full_prompt != ''", d.SceneID).Update("prompt_stale", true).Error

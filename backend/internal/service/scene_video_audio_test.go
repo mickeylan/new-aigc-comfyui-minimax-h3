@@ -122,6 +122,98 @@ func TestSceneReviewedAudioSelectionAcceptsOnlyCurrentMatchingSceneMix(t *testin
 	}
 }
 
+func TestSceneAudioCandidatesBecomeStaleWhenDialogueTimelineChanges(t *testing.T) {
+	svc := newTestProjectService(t)
+	db := svc.db
+	if err := db.AutoMigrate(&models.Dialogue{}, &models.DialogueAudioCandidate{}, &models.SceneAudioCandidate{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "stale-scene-mix"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID, Order: 1}
+	if err := db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Text: "一句", Character: "甲"}
+	if err := db.Create(&dialogue).Error; err != nil {
+		t.Fatal(err)
+	}
+	row := models.SceneAudioCandidate{ProjectID: project.ID, SceneID: scene.ID, SourceHash: "old", File: "old.wav", ReviewStatus: "accepted", IsCurrent: true}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := markSceneAudioCandidatesStale(db, project.ID, scene.ID, "时间线变化"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&row, row.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !row.Stale || row.IsCurrent || row.StaleReason != "时间线变化" {
+		t.Fatalf("row=%+v", row)
+	}
+}
+
+func TestUpdateSceneDurationMarksSceneAudioCandidateStale(t *testing.T) {
+	svc := newTestProjectService(t)
+	db := svc.db
+	if err := db.AutoMigrate(&models.SceneAudioCandidate{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "duration-mix"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID, Order: 1, Duration: 5}
+	if err := db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	row := models.SceneAudioCandidate{ProjectID: project.ID, SceneID: scene.ID, SourceHash: "hash", File: "mix.wav", ReviewStatus: "accepted", IsCurrent: true}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.UpdateScene(&scene, "", "", "", 6); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&row, row.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !row.Stale || row.IsCurrent {
+		t.Fatalf("row=%+v", row)
+	}
+}
+
+func TestDeleteSceneDependentsRemovesSceneAudioCandidates(t *testing.T) {
+	svc := newTestProjectService(t)
+	db := svc.db
+	if err := db.AutoMigrate(&models.SceneAudioCandidate{}, &models.Dialogue{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "delete-mix"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID, Order: 1}
+	if err := db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	row := models.SceneAudioCandidate{ProjectID: project.ID, SceneID: scene.ID, SourceHash: "hash", File: "mix.wav"}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := deleteSceneDependents(db, project.ID, []uint{scene.ID}); err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	if err := db.Model(&models.SceneAudioCandidate{}).Where("scene_id = ?", scene.ID).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("remaining=%d", count)
+	}
+}
+
 func TestReviewedAudioTemplateClassification(t *testing.T) {
 	for _, code := range []string{h3AudioDrivenRef2VTemplate, h3AudioDrivenT8EnhancedTemplate, h3VideoThenAudioMuxTemplate} {
 		if !isReviewedAudioVideoTemplate(code) {
