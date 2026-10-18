@@ -152,6 +152,7 @@ func TestSceneReviewedAudioSelectionAcceptsOnlyCurrentMatchingSceneMix(t *testin
 	filePath := filepath.Join(dir, row.File)
 	writeTestPCM16WAV(t, filePath, 8)
 	row.FileSHA256, row.FileSize, err = sceneAudioFileSHA256(filePath)
+	row.ReviewSourceHash, row.ReviewFileSHA256, row.ReviewConfirmation = row.SourceHash, row.FileSHA256, sceneAudioReviewConfirmationV1
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,6 +173,9 @@ func TestSceneReviewedAudioSelectionAcceptsOnlyCurrentMatchingSceneMix(t *testin
 	accepted, err := svc.ReviewSceneAudioCandidate(&scene, row.ID, "accepted", "", row.SourceHash, row.FileSHA256)
 	if err != nil || !accepted.IsCurrent || accepted.ReviewStatus != "accepted" {
 		t.Fatalf("accepted=%+v err=%v", accepted, err)
+	}
+	if accepted.ReviewSourceHash != accepted.SourceHash || accepted.ReviewFileSHA256 != accepted.FileSHA256 || accepted.ReviewConfirmation != sceneAudioReviewConfirmationV1 {
+		t.Fatalf("review evidence=%+v", accepted)
 	}
 }
 
@@ -222,7 +226,7 @@ func TestSceneReviewedAudioSelectionMarksReplacedMixContentStale(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	row := models.SceneAudioCandidate{ProjectID: project.ID, SceneID: scene.ID, SourceHash: hash, File: "mix.wav", FileSHA256: fileHash, FileSize: fileSize, ReviewStatus: "accepted", IsCurrent: true}
+	row := models.SceneAudioCandidate{ProjectID: project.ID, SceneID: scene.ID, SourceHash: hash, File: "mix.wav", FileSHA256: fileHash, FileSize: fileSize, ReviewStatus: "accepted", ReviewSourceHash: hash, ReviewFileSHA256: fileHash, ReviewConfirmation: sceneAudioReviewConfirmationV1, IsCurrent: true}
 	if err := db.Create(&row).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +282,7 @@ func TestSceneReviewedAudioSelectionMarksDurationMismatchStale(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	row := models.SceneAudioCandidate{ProjectID: project.ID, SceneID: scene.ID, SourceHash: hash, File: "mix.wav", FileSHA256: fileHash, FileSize: fileSize, Duration: 8, ReviewStatus: "accepted", IsCurrent: true}
+	row := models.SceneAudioCandidate{ProjectID: project.ID, SceneID: scene.ID, SourceHash: hash, File: "mix.wav", FileSHA256: fileHash, FileSize: fileSize, Duration: 8, ReviewStatus: "accepted", ReviewSourceHash: hash, ReviewFileSHA256: fileHash, ReviewConfirmation: sceneAudioReviewConfirmationV1, IsCurrent: true}
 	_ = db.Create(&row).Error
 	if got := svc.sceneReviewedAudioSelection(&scene); got.Ready {
 		t.Fatal("duration mismatch became ready")
@@ -325,7 +329,7 @@ func TestSceneReviewedAudioSelectionMarksMissingMixFileStale(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	row := models.SceneAudioCandidate{ProjectID: project.ID, SceneID: scene.ID, SourceHash: hash, File: "missing.wav", FileSHA256: strings.Repeat("a", 64), FileSize: 128, ReviewStatus: "accepted", IsCurrent: true}
+	row := models.SceneAudioCandidate{ProjectID: project.ID, SceneID: scene.ID, SourceHash: hash, File: "missing.wav", FileSHA256: strings.Repeat("a", 64), FileSize: 128, ReviewStatus: "accepted", ReviewSourceHash: hash, ReviewFileSHA256: strings.Repeat("a", 64), ReviewConfirmation: sceneAudioReviewConfirmationV1, IsCurrent: true}
 	if err := db.Create(&row).Error; err != nil {
 		t.Fatal(err)
 	}

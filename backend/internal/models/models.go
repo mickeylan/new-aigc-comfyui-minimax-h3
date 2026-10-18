@@ -527,23 +527,26 @@ type DialogueSynthesisItem struct {
 // SceneAudioCandidate is an immutable, review-gated continuous track derived from accepted Dialogue takes.
 // SourceHash binds ordered Dialogue text/timing/audio-candidate identities so stale mixes cannot feed H3.
 type SceneAudioCandidate struct {
-	ID           uint       `gorm:"primaryKey" json:"id"`
-	ProjectID    uint       `gorm:"column:project_id;index;uniqueIndex:idx_scene_audio_take" json:"project_id"`
-	SceneID      uint       `gorm:"column:scene_id;index;uniqueIndex:idx_scene_audio_take" json:"scene_id"`
-	SourceHash   string     `gorm:"column:source_hash;size:64;uniqueIndex:idx_scene_audio_take" json:"source_hash"`
-	SourceJSON   string     `gorm:"column:source_json;type:text" json:"source_json"`
-	File         string     `gorm:"type:text" json:"file"`
-	FileSHA256   string     `gorm:"column:file_sha256;size:64" json:"file_sha256"`
-	FileSize     int64      `gorm:"column:file_size" json:"file_size"`
-	Duration     float64    `json:"duration"`
-	ReviewStatus string     `gorm:"column:review_status;size:32;default:pending;index" json:"review_status"`
-	ReviewReason string     `gorm:"column:review_reason;type:text" json:"review_reason"`
-	IsCurrent    bool       `gorm:"column:is_current;default:false;index" json:"is_current"`
-	Stale        bool       `gorm:"default:false;index" json:"stale"`
-	StaleReason  string     `gorm:"column:stale_reason;type:text" json:"stale_reason"`
-	ReviewedAt   *time.Time `gorm:"column:reviewed_at" json:"reviewed_at,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID                 uint       `gorm:"primaryKey" json:"id"`
+	ProjectID          uint       `gorm:"column:project_id;index;uniqueIndex:idx_scene_audio_take" json:"project_id"`
+	SceneID            uint       `gorm:"column:scene_id;index;uniqueIndex:idx_scene_audio_take" json:"scene_id"`
+	SourceHash         string     `gorm:"column:source_hash;size:64;uniqueIndex:idx_scene_audio_take" json:"source_hash"`
+	SourceJSON         string     `gorm:"column:source_json;type:text" json:"source_json"`
+	File               string     `gorm:"type:text" json:"file"`
+	FileSHA256         string     `gorm:"column:file_sha256;size:64" json:"file_sha256"`
+	FileSize           int64      `gorm:"column:file_size" json:"file_size"`
+	Duration           float64    `json:"duration"`
+	ReviewStatus       string     `gorm:"column:review_status;size:32;default:pending;index" json:"review_status"`
+	ReviewReason       string     `gorm:"column:review_reason;type:text" json:"review_reason"`
+	ReviewSourceHash   string     `gorm:"column:review_source_hash;size:64" json:"review_source_hash"`
+	ReviewFileSHA256   string     `gorm:"column:review_file_sha256;size:64" json:"review_file_sha256"`
+	ReviewConfirmation string     `gorm:"column:review_confirmation;size:64" json:"review_confirmation"`
+	IsCurrent          bool       `gorm:"column:is_current;default:false;index" json:"is_current"`
+	Stale              bool       `gorm:"default:false;index" json:"stale"`
+	StaleReason        string     `gorm:"column:stale_reason;type:text" json:"stale_reason"`
+	ReviewedAt         *time.Time `gorm:"column:reviewed_at" json:"reviewed_at,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 type DialogueAudioCandidate struct {

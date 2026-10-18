@@ -20,6 +20,8 @@ import (
 
 var ErrSceneAudioReviewConflict = errors.New("Scene音轨审核内容已变化，请刷新后重新审核")
 
+const sceneAudioReviewConfirmationV1 = "native_shot_text_audio_ownership_v1"
+
 func isReviewedAudioVideoTemplate(code string) bool {
 	switch strings.TrimSpace(code) {
 	case h3AudioDrivenRef2VTemplate, h3AudioDrivenT8EnhancedTemplate, h3VideoThenAudioMuxTemplate:
@@ -408,6 +410,10 @@ func (s *ProjectService) sceneReviewedAudioSelection(sc *models.Scene) sceneRevi
 			return sceneReviewedAudio{SourceHash: sourceHash, Reason: fmt.Sprintf("场景包含 %d 条 Dialogue；当前来源尚无已审核的Scene连续音轨", len(dialogues))}
 		}
 		_ = snapshot
+		if candidate.ReviewConfirmation != sceneAudioReviewConfirmationV1 || candidate.ReviewSourceHash != sourceHash || candidate.ReviewFileSHA256 != candidate.FileSHA256 {
+			_ = markSceneAudioCandidatesStale(s.db, sc.ProjectID, sc.ID, "Scene音轨缺少匹配当前内容的审核确认记录")
+			return sceneReviewedAudio{SourceHash: sourceHash, Reason: "Scene音轨缺少匹配当前内容的审核确认记录，请重新审核"}
+		}
 		if _, fileErr := s.sceneAudioCandidateFile(sc, &candidate); fileErr != nil {
 			_ = markSceneAudioCandidatesStale(s.db, sc.ProjectID, sc.ID, fileErr.Error())
 			return sceneReviewedAudio{SourceHash: sourceHash, Reason: fileErr.Error()}
@@ -585,8 +591,12 @@ func (s *ProjectService) ReviewSceneAudioCandidate(sc *models.Scene, candidateID
 				return err
 			}
 			row.IsCurrent = true
+			row.ReviewSourceHash = row.SourceHash
+			row.ReviewFileSHA256 = row.FileSHA256
+			row.ReviewConfirmation = sceneAudioReviewConfirmationV1
 		} else {
 			row.IsCurrent = false
+			row.ReviewSourceHash, row.ReviewFileSHA256, row.ReviewConfirmation = "", "", ""
 		}
 		now := time.Now()
 		row.ReviewStatus, row.ReviewReason, row.ReviewedAt = status, strings.TrimSpace(reason), &now
