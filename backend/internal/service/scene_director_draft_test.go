@@ -343,6 +343,22 @@ func TestShotShowsSpeakerRejectsNegatedPresence(t *testing.T) {
 	}
 }
 
+func TestStructuredOffscreenPresentationDoesNotTreatNameMentionAsVisibility(t *testing.T) {
+	dialogues := []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "offscreen_dialogue", Text: "门外有人吗？"}}
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 4, Dialogue: "门外有人吗？", SpeechPresentation: models.ShotSpeechPresentationOffscreen, ShotType: "室内中景", Description: "屋内女子听见阿宁的声音", PromptSubject: "紧闭的房门"}}}
+	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
+		t.Fatalf("name mention was treated as visibility: %v", err)
+	}
+	draft.Shots[0].Description = "阿宁站在画面内开口说话"
+	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "说话人不得出现在画面主体中") {
+		t.Fatalf("explicit visible offscreen speaker accepted: %v", err)
+	}
+	draft.Shots[0].Description = "阿宁画外说话，屋内女子倾听"
+	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
+		t.Fatalf("explicit offscreen wording rejected: %v", err)
+	}
+}
+
 func TestValidateDialogueRhythmDraftEnforcesIndependentOffscreenSpeaker(t *testing.T) {
 	dialogues := []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "offscreen_dialogue", Text: "门外有人吗？"}}
 	hidden := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 4, Dialogue: "门外有人吗？", ShotType: "室内空镜", PromptSubject: "紧闭的房门"}}}

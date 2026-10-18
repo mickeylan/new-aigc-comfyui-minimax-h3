@@ -633,6 +633,23 @@ func shotShowsSpeaker(shot sceneDirectorDraftShot, speaker string) bool {
 	return strings.Contains(visual, speaker) && !shotExplicitlyExcludesSpeaker(shot, speaker)
 }
 
+func shotExplicitlyShowsSpeaker(shot sceneDirectorDraftShot, speaker string) bool {
+	speaker = strings.TrimSpace(speaker)
+	if speaker == "" || shotExplicitlyExcludesSpeaker(shot, speaker) {
+		return false
+	}
+	visual := strings.ToLower(shotVisualText(shot))
+	for _, marker := range []string{
+		speaker + "入镜", speaker + "在画面内", speaker + "站在画面内", speaker + "位于画面内", speaker + "出现在画面", speaker + "正面入镜",
+		speaker + "近景", speaker + "特写", speaker + "中景", speaker + "全身", speaker + "开口说", speaker + "张口说",
+	} {
+		if strings.Contains(visual, strings.ToLower(marker)) {
+			return true
+		}
+	}
+	return false
+}
+
 func shotHasLipSync(shot sceneDirectorDraftShot) bool {
 	visual := strings.ToLower(shotVisualText(shot))
 	for _, negated := range []string{
@@ -961,6 +978,11 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 					return fmt.Errorf("对白拆镜%d的speech_presentation必须为offscreen_dialogue", i+1)
 				}
 				speakerVisible := shotShowsSpeaker(shot, speaker)
+				if shot.SpeechPresentation == models.ShotSpeechPresentationOffscreen {
+					// The persisted enum establishes that the named speaker is outside the
+					// frame. Text is only used to reject an explicit visual contradiction.
+					speakerVisible = shotExplicitlyShowsSpeaker(shot, speaker)
+				}
 				if speakerVisible {
 					return fmt.Errorf("对白拆镜%d承载角色“%s”的独立画外对白时，说话人不得出现在画面主体中；如需可见口型请改用dialogue", i+1, speaker)
 				}
