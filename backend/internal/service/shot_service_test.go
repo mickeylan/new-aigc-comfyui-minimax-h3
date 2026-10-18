@@ -207,6 +207,49 @@ func TestReplaceShotsWithSnapshotEnforcesAuthoritativeSpeakerPresentation(t *tes
 	}
 }
 
+func TestReplaceShotsRejectsMixedAuthoritativeVoicesWithoutMutation(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "mixed speech rollback"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Status: "video_ready", VideoFile: "keep.mp4"}
+	db.Create(&scene)
+	dialogues := []models.Dialogue{{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: "快走！"}, {ProjectID: project.ID, SceneID: scene.ID, Order: 2, Character: "阿月", SpeechType: "dialogue", Text: "我不走。"}}
+	for i := range dialogues {
+		if err := db.Create(&dialogues[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := NewShotService(db)
+	existing, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "旧镜头", Duration: 3, Dialogue: "快走！", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}, {ShotType: "旧镜头2", Duration: 3, Dialogue: "我不走。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&scene).Updates(map[string]any{"status": "video_ready", "video_file": "keep.mp4"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, snapshot, err := loadSceneDialogueSnapshot(db, scene.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.ReplaceShotsWithDialogueSnapshot(scene.ID, []models.Shot{{ShotType: "错误合并镜头", Duration: 6, Dialogue: "快走！我不走。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}}, snapshot)
+	if !errors.Is(err, ErrDialogueTimingBlocked) || !strings.Contains(err.Error(), "多个权威说话人或语音类型") {
+		t.Fatalf("mixed speech replacement accepted: %v", err)
+	}
+	var saved []models.Shot
+	if err := db.Where("scene_id = ?", scene.ID).Order("order_num").Find(&saved).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(saved) != 2 || saved[0].ID != existing[0].ID || saved[1].ID != existing[1].ID {
+		t.Fatalf("rejected replacement mutated shots: %+v", saved)
+	}
+	if err := db.First(&scene, scene.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if scene.VideoFile != "keep.mp4" || scene.Status != "video_ready" {
+		t.Fatalf("rejected replacement invalidated media: %+v", scene)
+	}
+}
+
 func TestValidateShotRejectsExplicitEndlessAndCanvasModes(t *testing.T) {
 	base := models.Shot{ActType: models.ShotActSetup, ShotType: "近景", Duration: 4}
 	for _, description := range []string{"改为使用Endless延长镜头", "Use Endless mode for this shot", "切换Canvas工作流", "Use Canvas workflow"} {

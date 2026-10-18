@@ -285,6 +285,38 @@ func TestStructuredVisibleSpeakerAllowsClosedListenerInTwoShot(t *testing.T) {
 	}
 }
 
+func TestDialogueRhythmRejectsMixedAuthoritativeVoicesInOneShot(t *testing.T) {
+	dialogues := []models.Dialogue{
+		{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "快走！"},
+		{ID: 2, Character: "阿月", SpeechType: "dialogue", Text: "我不走。"},
+	}
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 6, Dialogue: "快走！我不走。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}}}
+	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "多个权威说话人或语音类型") {
+		t.Fatalf("mixed speakers accepted: %v", err)
+	}
+	review := buildDialogueRhythmReview(draft, dialogues)
+	if len(review) != 1 || review[0].Ready || !strings.Contains(strings.Join(review[0].BlockingIssues, "|"), "多个权威说话人或语音类型") {
+		t.Fatalf("mixed speaker audit not blocked: %+v", review)
+	}
+
+	dialogues[1].Character = "阿宁"
+	dialogues[1].SpeechType = "monologue"
+	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "多个权威说话人或语音类型") {
+		t.Fatalf("mixed speech types accepted: %v", err)
+	}
+}
+
+func TestDialogueRhythmAllowsAdjacentRowsFromSameVoiceInOneShot(t *testing.T) {
+	dialogues := []models.Dialogue{
+		{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "快走！"},
+		{ID: 2, Character: "阿宁", SpeechType: "dialogue", Text: "不要回头。"},
+	}
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 6, Dialogue: "快走！不要回头。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}}}
+	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
+		t.Fatalf("same authoritative voice was incorrectly split: %v", err)
+	}
+}
+
 func TestStructuredListenerPresentationRequiresDistinctNamedListener(t *testing.T) {
 	base := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "相信我，", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}, {Duration: 3, Dialogue: "不要回头。", SpeechPresentation: models.ShotSpeechPresentationListenerCarry}}}
 	dialogues := []models.Dialogue{{Character: "阿宁", SpeechType: "dialogue", Text: "相信我，不要回头。"}}

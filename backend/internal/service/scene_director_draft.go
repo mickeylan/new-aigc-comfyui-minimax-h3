@@ -767,6 +767,7 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 		speakers, seen := []string{}, map[string]bool{}
 		fragments := []dialogueRhythmFragmentReview{}
 		continuesFrom, continuesTo := false, false
+		voiceIdentities := map[string]bool{}
 		if length > 0 {
 			for _, item := range spans {
 				if end <= item.start || start >= item.end {
@@ -779,7 +780,8 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 					speakers = append(speakers, name)
 					seen[name] = true
 				}
-				speechType, _ := normalizeScriptSpeech(item.dialogue.SpeechType, item.dialogue.Character)
+				speechType, normalizedSpeaker := normalizeScriptSpeech(item.dialogue.SpeechType, item.dialogue.Character)
+				voiceIdentities[speechType+"\x00"+strings.TrimSpace(normalizedSpeaker)] = true
 				fragments = append(fragments, dialogueRhythmFragmentReview{
 					DialogueID: item.dialogue.ID, GroupKey: item.groupKey, Character: name,
 					SpeechType: speechType, StartRune: item.groupStart + from,
@@ -823,6 +825,9 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 		}
 		minimum := dialogueReviewNaturalMinimum(fragments)
 		issues := []string{}
+		if len(voiceIdentities) > 1 {
+			issues = append(issues, "本镜跨越多个权威说话人或语音类型，单一speech_presentation无法无歧义表达；必须按说话人或语音类型拆成多个Native镜头")
+		}
 		if minimum > maxSceneVideoDuration {
 			issues = append(issues, fmt.Sprintf("本镜权威语音自然时长下限%.1f秒超过Native H3的15秒上限，必须继续拆镜", minimum))
 		}
@@ -1002,6 +1007,17 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 		cursor = end
 		if text == "" {
 			continue
+		}
+		voiceIdentities := map[string]bool{}
+		for _, span := range spans {
+			if end <= span.start || start >= span.end {
+				continue
+			}
+			speechType, normalizedSpeaker := normalizeScriptSpeech(span.dialogue.SpeechType, span.dialogue.Character)
+			voiceIdentities[speechType+"\x00"+strings.TrimSpace(normalizedSpeaker)] = true
+		}
+		if len(voiceIdentities) > 1 {
+			return fmt.Errorf("对白拆镜%d跨越多个权威说话人或语音类型，必须拆成多个Native镜头", i+1)
 		}
 		for _, span := range spans {
 			if end <= span.start || start >= span.end {
