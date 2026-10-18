@@ -43,9 +43,9 @@ func TestMaterializeShotsCreatesNativeScenesAndPreservesDialogue(t *testing.T) {
 	_ = db.Create(&d1).Error
 	_ = db.Create(&d2).Error
 	shots := []models.Shot{
-		{SceneID: source.ID, Order: 1, ActType: models.ShotActSetup, ShotType: "若彤近景", Duration: 4, Description: "若彤询问并同步口型", Dialogue: "姐姐，", PromptSubject: "若彤可见", PromptAction: "若彤同步口型询问", PromptCamera: "近景", PromptLighting: "夕阳", PromptStyle: "写实"},
-		{SceneID: source.ID, Order: 2, ActType: models.ShotActRising, ShotType: "若琳听者反应", Duration: 5, Description: "若琳闭口聆听，若彤声音跨切延续", Dialogue: "你还好吗？", PromptSubject: "若琳可见，若彤不入镜", PromptAction: "若琳保持闭口聆听，若彤声音跨切延续", PromptCamera: "特写", PromptLighting: "夕阳", PromptStyle: "写实"},
-		{SceneID: source.ID, Order: 3, ActType: models.ShotActResolution, ShotType: "若琳近景", Duration: 4, Description: "若琳回答并同步口型", Dialogue: "我很好。", PromptSubject: "若琳可见", PromptAction: "若琳同步口型回答", PromptCamera: "近景", PromptLighting: "夕阳", PromptStyle: "写实"},
+		{SceneID: source.ID, Order: 1, ActType: models.ShotActSetup, ShotType: "若彤近景", Duration: 4, SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, Description: "若彤询问并同步口型", Dialogue: "姐姐，", PromptSubject: "若彤可见", PromptAction: "若彤同步口型询问", PromptCamera: "近景", PromptLighting: "夕阳", PromptStyle: "写实"},
+		{SceneID: source.ID, Order: 2, ActType: models.ShotActRising, ShotType: "若琳听者反应", Duration: 5, SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ListenerCharacter: "若琳", Description: "若琳闭口聆听，若彤声音跨切延续", Dialogue: "你还好吗？", PromptSubject: "若琳可见，若彤不入镜", PromptAction: "若琳保持闭口聆听，若彤声音跨切延续", PromptCamera: "特写", PromptLighting: "夕阳", PromptStyle: "写实"},
+		{SceneID: source.ID, Order: 3, ActType: models.ShotActResolution, ShotType: "若琳近景", Duration: 4, SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, Description: "若琳回答并同步口型", Dialogue: "我很好。", PromptSubject: "若琳可见", PromptAction: "若琳同步口型回答", PromptCamera: "近景", PromptLighting: "夕阳", PromptStyle: "写实"},
 	}
 	for i := range shots {
 		if err := db.Create(&shots[i]).Error; err != nil {
@@ -83,6 +83,9 @@ func TestMaterializeShotsCreatesNativeScenesAndPreservesDialogue(t *testing.T) {
 		if !reflect.DeepEqual(childShots[i].DialogueRanges, wantRanges[i]) {
 			t.Fatalf("child shot %d dialogue ranges=%+v want=%+v", i+1, childShots[i].DialogueRanges, wantRanges[i])
 		}
+	}
+	if childShots[1].SpeechPresentation != models.ShotSpeechPresentationListenerCarry || childShots[1].ListenerCharacter != "若琳" {
+		t.Fatalf("materialization lost authoritative listener: %+v", childShots[1])
 	}
 	decorated, err := NewShotService(db).GetSceneShots(created[0].ID)
 	if err != nil {
