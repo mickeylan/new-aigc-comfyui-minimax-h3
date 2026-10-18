@@ -1,8 +1,11 @@
 package service
 
 import (
+	"bytes"
+	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -63,6 +66,63 @@ func TestGenerateCharacterPortraitPreconditionReturns4xx(t *testing.T) {
 	svc.HandleGenerateCharacterPortrait(c)
 	if w.Code != 409 {
 		t.Fatalf("档案未审核应返回 409，实际 %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func dialogueCandidateHandlerFixture(t *testing.T) (*gorm.DB, *Service, models.Project, models.Dialogue, models.DialogueAudioCandidate) {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.Project{}, &models.Dialogue{}, &models.DialogueAudioCandidate{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "candidate-handler"}
+	db.Create(&project)
+	dialogue := models.Dialogue{ProjectID: project.ID, Text: "当前对白", Character: "甲", SpeechType: "dialogue", Speed: 1, Volume: 1}
+	db.Create(&dialogue)
+	projects := &ProjectService{db: db}
+	row := models.DialogueAudioCandidate{ProjectID: project.ID, DialogueID: dialogue.ID, InputHash: projects.effectiveDialogueAudioHash(dialogue), File: "take.wav", FileSHA256: strings.Repeat("a", 64), FileSize: 128, ReviewStatus: "pending"}
+	db.Create(&row)
+	return db, &Service{DB: db, Projects: projects}, project, dialogue, row
+}
+
+func dialogueCandidateContext(body string, projectID, dialogueID, candidateID uint) (*gin.Context, *httptest.ResponseRecorder) {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPatch, "/", bytes.NewBufferString(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Params = gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(projectID), 10)}, {Key: "did", Value: strconv.FormatUint(uint64(dialogueID), 10)}, {Key: "cid", Value: strconv.FormatUint(uint64(candidateID), 10)}}
+	return c, w
+}
+
+func TestReviewDialogueAudioCandidateConflictReturns409(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, svc, project, dialogue, row := dialogueCandidateHandlerFixture(t)
+	if err := db.Model(&dialogue).Update("text", "已修改对白").Error; err != nil {
+		t.Fatal(err)
+	}
+	body := `{"status":"accepted","expected_input_hash":"` + row.InputHash + `","expected_file_sha256":"` + row.FileSHA256 + `"}`
+	c, w := dialogueCandidateContext(body, project.ID, dialogue.ID, row.ID)
+	svc.HandleReviewDialogueAudioCandidate(c)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	db.First(&row, row.ID)
+	if row.ReviewStatus != "pending" || row.ReviewConfirmation != "" {
+		t.Fatalf("row mutated: %+v", row)
+	}
+}
+
+func TestSelectDialogueAudioCandidateConflictReturns409(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	_, svc, project, dialogue, row := dialogueCandidateHandlerFixture(t)
+	body := `{"expected_input_hash":"` + row.InputHash + `","expected_file_sha256":"` + row.FileSHA256 + `"}`
+	c, w := dialogueCandidateContext(body, project.ID, dialogue.ID, row.ID)
+	svc.HandleSelectDialogueAudioCandidate(c)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 
