@@ -206,6 +206,13 @@ func TestReplaceShotsWithSnapshotEnforcesAuthoritativeSpeakerPresentation(t *tes
 	if len(saved) != 2 || saved[1].Description != valid[1].Description || saved[1].SpeechPresentation != models.ShotSpeechPresentationListenerCarry || saved[1].ListenerCharacter != "妹妹" {
 		t.Fatalf("invalid save mutated shots or lost presentation/listener: %+v", saved)
 	}
+	updated, err := svc.UpdateShot(saved[1].ID, map[string]any{"listener_character": "  妹妹  "})
+	if err != nil {
+		t.Fatalf("normalized listener update failed: %v", err)
+	}
+	if updated.ListenerCharacter != "妹妹" {
+		t.Fatalf("validated listener was persisted without normalization: %q", updated.ListenerCharacter)
+	}
 }
 
 func TestReplaceShotsRejectsMixedAuthoritativeVoicesWithoutMutation(t *testing.T) {

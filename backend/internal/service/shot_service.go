@@ -741,6 +741,15 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 		if err := validateShot(&candidate); err != nil {
 			return err
 		}
+		// Persist the normalized values that were actually validated, not raw client
+		// strings. Otherwise whitespace can pass ownership checks after trimming but
+		// produce a different listener identity in H3/audio hashes on reload.
+		if _, ok := updates["speech_presentation"]; ok {
+			filtered["speech_presentation"] = candidate.SpeechPresentation
+		}
+		if _, ok := updates["listener_character"]; ok {
+			filtered["listener_character"] = candidate.ListenerCharacter
+		}
 		projectID, err := projectIDForScene(tx, shot.SceneID)
 		if err != nil {
 			return err
