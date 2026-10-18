@@ -133,42 +133,61 @@ func (s *ProjectService) ReviewDialogueAudioCandidate(projectID, dialogueID, can
 	if status != "pending" && status != "accepted" && status != "rejected" {
 		return nil, fmt.Errorf("无效审核状态")
 	}
-	var row models.DialogueAudioCandidate
-	if err := s.db.Where("id = ? AND project_id = ? AND dialogue_id = ?", candidateID, projectID, dialogueID).First(&row).Error; err != nil {
-		return nil, fmt.Errorf("配音候选不存在")
-	}
-	if row.IsCurrent && status == "rejected" {
-		return nil, fmt.Errorf("当前采用的配音不能拒绝，请先选择另一候选")
-	}
-	if status == "accepted" {
-		if strings.TrimSpace(expectedInputHash) == "" || strings.TrimSpace(expectedFileSHA256) == "" || row.InputHash != strings.TrimSpace(expectedInputHash) || row.FileSHA256 != strings.TrimSpace(expectedFileSHA256) {
-			return nil, fmt.Errorf("%w：候选不是用户刚才试听的版本", ErrDialogueAudioReviewConflict)
+	var reviewed models.DialogueAudioCandidate
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var dialogue models.Dialogue
+		if err := tx.Where("id = ? AND project_id = ?", dialogueID, projectID).First(&dialogue).Error; err != nil {
+			return fmt.Errorf("对白不存在")
 		}
-		if err := s.ensureDialogueAudioCandidateFile(projectID, &row); err != nil {
-			return nil, fmt.Errorf("%w：%v", ErrDialogueAudioReviewConflict, err)
+		var row models.DialogueAudioCandidate
+		if err := tx.Where("id = ? AND project_id = ? AND dialogue_id = ?", candidateID, projectID, dialogueID).First(&row).Error; err != nil {
+			return fmt.Errorf("配音候选不存在")
 		}
-	}
-	updates := map[string]any{"review_status": status, "review_reason": strings.TrimSpace(reason)}
-	if status == "accepted" {
-		updates["review_input_hash"] = row.InputHash
-		updates["review_file_sha256"] = row.FileSHA256
-		updates["review_confirmation"] = dialogueAudioReviewConfirmationV1
-		updates["reviewed_at"] = time.Now()
-	} else {
-		updates["review_input_hash"] = ""
-		updates["review_file_sha256"] = ""
-		updates["review_confirmation"] = ""
-		if status == "pending" {
-			updates["reviewed_at"] = nil
-		} else {
+		if row.IsCurrent && status == "rejected" {
+			return fmt.Errorf("当前采用的配音不能拒绝，请先选择另一候选")
+		}
+		if status == "accepted" {
+			if strings.TrimSpace(expectedInputHash) == "" || strings.TrimSpace(expectedFileSHA256) == "" || row.InputHash != strings.TrimSpace(expectedInputHash) || row.FileSHA256 != strings.TrimSpace(expectedFileSHA256) {
+				return fmt.Errorf("%w：候选不是用户刚才试听的版本", ErrDialogueAudioReviewConflict)
+			}
+			if row.Stale || row.InputHash != s.effectiveDialogueAudioHash(dialogue) {
+				return fmt.Errorf("%w：候选与当前对白或音色配置不一致", ErrDialogueAudioReviewConflict)
+			}
+			if err := s.ensureDialogueAudioCandidateFile(projectID, &row); err != nil {
+				return fmt.Errorf("%w：%v", ErrDialogueAudioReviewConflict, err)
+			}
+		}
+		updates := map[string]any{"review_status": status, "review_reason": strings.TrimSpace(reason)}
+		if status == "accepted" {
+			updates["review_input_hash"] = row.InputHash
+			updates["review_file_sha256"] = row.FileSHA256
+			updates["review_confirmation"] = dialogueAudioReviewConfirmationV1
 			updates["reviewed_at"] = time.Now()
+		} else {
+			updates["review_input_hash"] = ""
+			updates["review_file_sha256"] = ""
+			updates["review_confirmation"] = ""
+			if status == "pending" {
+				updates["reviewed_at"] = nil
+			} else {
+				updates["reviewed_at"] = time.Now()
+			}
 		}
-	}
-	if err := s.db.Model(&row).Updates(updates).Error; err != nil {
-		return nil, err
-	}
-	s.db.First(&row, row.ID)
-	return &row, nil
+		result := tx.Model(&models.DialogueAudioCandidate{}).
+			Where("id = ? AND project_id = ? AND dialogue_id = ? AND input_hash = ? AND file_sha256 = ?", row.ID, projectID, dialogueID, row.InputHash, row.FileSHA256).
+			Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("%w：候选在审核期间已变化", ErrDialogueAudioReviewConflict)
+		}
+		if err := tx.First(&reviewed, row.ID).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	return &reviewed, err
 }
 
 func (s *ProjectService) ensureDialogueAudioCandidateFile(projectID uint, candidate *models.DialogueAudioCandidate) error {
