@@ -516,6 +516,18 @@ func TestDeleteSceneDependentsRemovesSceneAudioCandidates(t *testing.T) {
 	}
 }
 
+func TestSceneAudioNeedsMixForSingleDialogueAcrossNativeShots(t *testing.T) {
+	if sceneAudioNeedsMix(1, sceneAudioSnapshot{Shots: []sceneAudioShot{{ID: 1}}}) {
+		t.Fatal("single Dialogue in one Shot should use its reviewed take directly")
+	}
+	if !sceneAudioNeedsMix(1, sceneAudioSnapshot{Shots: []sceneAudioShot{{ID: 1}, {ID: 2}}}) {
+		t.Fatal("single long Dialogue across Shots bypassed Scene mix review")
+	}
+	if !sceneAudioNeedsMix(2, sceneAudioSnapshot{}) {
+		t.Fatal("multiple Dialogues bypassed Scene mix review")
+	}
+}
+
 func TestReviewedAudioTemplateClassification(t *testing.T) {
 	for _, code := range []string{h3AudioDrivenRef2VTemplate, h3AudioDrivenT8EnhancedTemplate, h3VideoThenAudioMuxTemplate} {
 		if !isReviewedAudioVideoTemplate(code) {

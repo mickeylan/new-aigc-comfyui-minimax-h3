@@ -14,6 +14,8 @@ test('H3音频模板只允许已审核且哈希一致的生产候选', () => {
   assert.match(detail, /所选模板需要已审核生产音频/)
   assert.match(detail, /selectedTemplateNeedsReviewedAudio && !reviewedSceneAudioReady/)
   assert.match(detail, /生成Scene连续音轨候选/)
+  assert.match(detail, /reviewed_audio\?\.requires_scene_mix/)
+  assert.match(detail, /请先在声音工作台生成并接受当前Dialogue的配音候选/)
   assert.match(detail, /reviewSceneAudioMix/)
   assert.match(api, /sceneAudioCandidates/)
   assert.match(api, /createSceneAudioCandidate/)

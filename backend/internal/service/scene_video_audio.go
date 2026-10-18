@@ -32,12 +32,13 @@ func isReviewedAudioVideoTemplate(code string) bool {
 }
 
 type sceneReviewedAudio struct {
-	Ready          bool                           `json:"ready"`
-	Reason         string                         `json:"reason,omitempty"`
-	Dialogue       *models.Dialogue               `json:"dialogue,omitempty"`
-	Candidate      *models.DialogueAudioCandidate `json:"candidate,omitempty"`
-	SceneCandidate *models.SceneAudioCandidate    `json:"scene_candidate,omitempty"`
-	SourceHash     string                         `json:"source_hash,omitempty"`
+	Ready            bool                           `json:"ready"`
+	RequiresSceneMix bool                           `json:"requires_scene_mix"`
+	Reason           string                         `json:"reason,omitempty"`
+	Dialogue         *models.Dialogue               `json:"dialogue,omitempty"`
+	Candidate        *models.DialogueAudioCandidate `json:"candidate,omitempty"`
+	SceneCandidate   *models.SceneAudioCandidate    `json:"scene_candidate,omitempty"`
+	SourceHash       string                         `json:"source_hash,omitempty"`
 }
 
 type sceneAudioSource struct {
@@ -73,6 +74,10 @@ type sceneAudioShot struct {
 	Presentation          string                     `json:"presentation"`
 	ContinuesFromPrevious bool                       `json:"continues_from_previous"`
 	ContinuesToNext       bool                       `json:"continues_to_next"`
+}
+
+func sceneAudioNeedsMix(dialogueCount int, snapshot sceneAudioSnapshot) bool {
+	return dialogueCount > 1 || len(snapshot.Shots) > 1
 }
 
 type sceneAudioSnapshot struct {
@@ -403,22 +408,23 @@ func (s *ProjectService) sceneReviewedAudioSelection(sc *models.Scene) sceneRevi
 	if snapshotErr != nil {
 		return sceneReviewedAudio{Reason: snapshotErr.Error()}
 	}
-	if len(dialogues) != 1 {
+	requiresSceneMix := sceneAudioNeedsMix(len(dialogues), snapshot)
+	if requiresSceneMix {
 		var candidate models.SceneAudioCandidate
 		err := s.db.Where("project_id = ? AND scene_id = ? AND source_hash = ? AND is_current = ? AND review_status = ? AND stale = ?", sc.ProjectID, sc.ID, sourceHash, true, "accepted", false).Order("id DESC").First(&candidate).Error
 		if err != nil {
-			return sceneReviewedAudio{SourceHash: sourceHash, Reason: fmt.Sprintf("场景包含 %d 条 Dialogue；当前来源尚无已审核的Scene连续音轨", len(dialogues))}
+			return sceneReviewedAudio{RequiresSceneMix: true, SourceHash: sourceHash, Reason: fmt.Sprintf("场景包含 %d 条 Dialogue 或单条长Dialogue跨 %d 个Native Shot；当前来源尚无已审核的Scene连续音轨", len(dialogues), len(snapshot.Shots))}
 		}
 		_ = snapshot
 		if candidate.ReviewConfirmation != sceneAudioReviewConfirmationV1 || candidate.ReviewSourceHash != sourceHash || candidate.ReviewFileSHA256 != candidate.FileSHA256 {
 			_ = markSceneAudioCandidatesStale(s.db, sc.ProjectID, sc.ID, "Scene音轨缺少匹配当前内容的审核确认记录")
-			return sceneReviewedAudio{SourceHash: sourceHash, Reason: "Scene音轨缺少匹配当前内容的审核确认记录，请重新审核"}
+			return sceneReviewedAudio{RequiresSceneMix: true, SourceHash: sourceHash, Reason: "Scene音轨缺少匹配当前内容的审核确认记录，请重新审核"}
 		}
 		if _, fileErr := s.sceneAudioCandidateFile(sc, &candidate); fileErr != nil {
 			_ = markSceneAudioCandidatesStale(s.db, sc.ProjectID, sc.ID, fileErr.Error())
-			return sceneReviewedAudio{SourceHash: sourceHash, Reason: fileErr.Error()}
+			return sceneReviewedAudio{RequiresSceneMix: true, SourceHash: sourceHash, Reason: fileErr.Error()}
 		}
-		return sceneReviewedAudio{Ready: true, SceneCandidate: &candidate, SourceHash: sourceHash}
+		return sceneReviewedAudio{Ready: true, RequiresSceneMix: true, SceneCandidate: &candidate, SourceHash: sourceHash}
 	}
 	dialogue := dialogues[0]
 	if dialogue.AudioStale || strings.TrimSpace(dialogue.AudioFile) == "" || strings.TrimSpace(dialogue.AudioHash) == "" {
@@ -465,12 +471,15 @@ func (s *ProjectService) CreateSceneAudioCandidate(sc *models.Scene) (*models.Sc
 		return nil, err
 	}
 	dialogues = validSceneDialogues(dialogues)
-	if len(dialogues) < 2 {
-		return nil, fmt.Errorf("Scene连续音轨仅用于包含多条有效 Dialogue 的场景")
+	if len(dialogues) == 0 {
+		return nil, fmt.Errorf("场景没有有效结构化 Dialogue")
 	}
 	snapshot, sourceHash, err := s.currentSceneAudioSnapshot(sc, dialogues)
 	if err != nil {
 		return nil, err
+	}
+	if !sceneAudioNeedsMix(len(dialogues), snapshot) {
+		return nil, fmt.Errorf("Scene连续音轨仅用于多条Dialogue或单条长Dialogue跨多个Native Shot的场景")
 	}
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
