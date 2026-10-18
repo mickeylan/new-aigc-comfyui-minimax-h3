@@ -3034,6 +3034,28 @@ func TestH3VisualEnglishGateAcceptsDocumentedCrossCutDialogue(t *testing.T) {
 	}
 }
 
+func TestStructuredShotPresentationControlsH3DialogueVisibility(t *testing.T) {
+	body := `[Shot 1] A figure holds a steady medium close-up.
+[Shot 2] At 00:04.000, <Subject 2> reacts without speaking.`
+	dubs := []models.Dialogue{{ID: 1, Character: "上官若琳", SpeechType: "dialogue", Text: "相信姐姐，姐姐不会让你去。"}}
+	full := []rune(canonicalDialogueText(dubs[0].Text))
+	split := len([]rune("相信姐姐，"))
+	shots := []models.Shot{
+		{Order: 1, SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, PromptSubject: "人物正面中近景", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: 0, EndRune: split}}},
+		{Order: 2, SpeechPresentation: models.ShotSpeechPresentationListenerCarry, PromptSubject: "上官若彤反应近景", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: split, EndRune: len(full)}}},
+	}
+	got := appendStructuredDialogueToShots(body, dubs, []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图"}, shots)
+	if !strings.Contains(got, "<Subject 1> (S1) says: <d>[Chinese] 相信姐姐-") {
+		t.Fatalf("structured visible speaker was not compiled as on-screen speech: %s", got)
+	}
+	if !strings.Contains(got, "<Subject 1> (S1)'s words carry over from the previous shot") || !strings.Contains(got, "<Subject 2> keeps their lips completely closed while listening") {
+		t.Fatalf("structured listener carryover was not compiled: %s", got)
+	}
+	if strings.Contains(got, "says in an off-screen voiceover") {
+		t.Fatalf("structured visible dialogue became voiceover: %s", got)
+	}
+}
+
 func TestCrossShotDialogueFragmentsKeepSpeakerIdentityAndListenerSilent(t *testing.T) {
 	body := `[Shot 1] <Subject 1> stands in a medium close-up and begins speaking.
 [Shot 2] At 00:05.000, <Subject 2> listens with closed lips while facing <Subject 1>.`

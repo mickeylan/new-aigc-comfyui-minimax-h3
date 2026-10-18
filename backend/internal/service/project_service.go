@@ -3468,7 +3468,14 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 			framing := useSubjectTags(strings.Join([]string{shot.PromptSubject, shot.ShotType}, " "), referenceLines)
 			speakerTag := useSubjectTags(strings.TrimSpace(d.Character), referenceLines)
 			visible := speakerTag != "" && strings.Contains(framing, speakerTag)
-			if strings.TrimSpace(d.SpeechType) == "" || d.SpeechType == "dialogue" {
+			switch shot.SpeechPresentation {
+			case models.ShotSpeechPresentationVisibleSpeaker:
+				visible = true
+			case models.ShotSpeechPresentationListenerCarry, models.ShotSpeechPresentationOffscreen,
+				models.ShotSpeechPresentationNarration, models.ShotSpeechPresentationMonologue:
+				visible = false
+			}
+			if (strings.TrimSpace(d.SpeechType) == "" || d.SpeechType == "dialogue") && shot.SpeechPresentation == "" {
 				if !visible && speakerTag != "" {
 					requiredVisibleSpeakers[i+1] = append(requiredVisibleSpeakers[i+1], speakerTag)
 				}
