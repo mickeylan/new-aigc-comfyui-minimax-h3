@@ -175,6 +175,7 @@ func TestReplaceShotsWithSnapshotEnforcesAuthoritativeSpeakerPresentation(t *tes
 	db := newTestDBWithNewModels(t)
 	project := models.Project{Title: "speaker presentation"}
 	db.Create(&project)
+	db.Create(&models.Character{ProjectID: project.ID, Name: "妹妹"})
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
 	db.Create(&scene)
 	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "姐姐", SpeechType: "dialogue", Text: "相信姐姐，我不会让你去。"}
@@ -569,6 +570,44 @@ func TestRejectedSpeechPresentationUpdateDoesNotInvalidateDerivedMedia(t *testin
 	db.First(&audio, audio.ID)
 	if audio.Stale || !audio.IsCurrent {
 		t.Fatalf("rollback invalidated audio: %+v", audio)
+	}
+}
+
+func TestUpdateShotRejectsListenerOutsideCurrentProjectWithoutMutation(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "listener ownership"}
+	foreignProject := models.Project{Title: "foreign"}
+	db.Create(&project)
+	db.Create(&foreignProject)
+	db.Create(&models.Character{ProjectID: foreignProject.ID, Name: "阿月"})
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Status: "video_ready", VideoFile: "keep.mp4"}
+	db.Create(&scene)
+	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: "不要回头。"}
+	db.Create(&dialogue)
+	svc := NewShotService(db)
+	shots, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "阿宁近景", Duration: 3, Dialogue: dialogue.Text, SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&scene).Updates(map[string]any{"status": "video_ready", "video_file": "keep.mp4"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.UpdateShot(shots[0].ID, map[string]any{"speech_presentation": string(models.ShotSpeechPresentationListenerCarry), "listener_character": "阿月"})
+	if !errors.Is(err, ErrDialogueTimingBlocked) || !strings.Contains(err.Error(), "不是当前项目权威角色") {
+		t.Fatalf("foreign listener accepted: %v", err)
+	}
+	var saved models.Shot
+	if err := db.First(&saved, shots[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.SpeechPresentation != models.ShotSpeechPresentationVisibleSpeaker || saved.ListenerCharacter != "" {
+		t.Fatalf("rejected listener persisted: %+v", saved)
+	}
+	if err := db.First(&scene, scene.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if scene.VideoFile != "keep.mp4" || scene.Status != "video_ready" {
+		t.Fatalf("rejected listener invalidated media: %+v", scene)
 	}
 }
 

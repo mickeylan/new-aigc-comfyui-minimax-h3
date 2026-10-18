@@ -317,6 +317,17 @@ func TestDialogueRhythmAllowsAdjacentRowsFromSameVoiceInOneShot(t *testing.T) {
 	}
 }
 
+func TestDraftListenerMustBeAuthoritativeProjectCharacter(t *testing.T) {
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ListenerCharacter: "拼错姓名"}}}
+	if err := validateDraftListenerCharacters(draft, map[string]bool{"阿月": true}); err == nil || !strings.Contains(err.Error(), "不是当前项目权威角色") {
+		t.Fatalf("unknown listener accepted: %v", err)
+	}
+	draft.Shots[0].ListenerCharacter = "阿月"
+	if err := validateDraftListenerCharacters(draft, map[string]bool{"阿月": true}); err != nil {
+		t.Fatalf("authoritative listener rejected: %v", err)
+	}
+}
+
 func TestStructuredListenerPresentationRequiresDistinctNamedListener(t *testing.T) {
 	base := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "相信我，", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}, {Duration: 3, Dialogue: "不要回头。", SpeechPresentation: models.ShotSpeechPresentationListenerCarry}}}
 	dialogues := []models.Dialogue{{Character: "阿宁", SpeechType: "dialogue", Text: "相信我，不要回头。"}}

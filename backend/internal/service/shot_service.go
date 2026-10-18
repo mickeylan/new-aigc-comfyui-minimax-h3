@@ -353,6 +353,40 @@ func assignShotDialogueRanges(tx *gorm.DB, sceneID uint, shots []models.Shot) er
 	return nil
 }
 
+func validateShotListenerCharacters(db *gorm.DB, projectID uint, shots []models.Shot) error {
+	required := map[string]bool{}
+	for _, shot := range shots {
+		if shot.SpeechPresentation == models.ShotSpeechPresentationListenerCarry {
+			if listener := strings.TrimSpace(shot.ListenerCharacter); listener != "" {
+				required[listener] = true
+			}
+		}
+	}
+	if len(required) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(required))
+	for name := range required {
+		names = append(names, name)
+	}
+	var characters []models.Character
+	if err := db.Select("name").Where("project_id = ? AND name IN ?", projectID, names).Find(&characters).Error; err != nil {
+		return err
+	}
+	for _, character := range characters {
+		delete(required, strings.TrimSpace(character.Name))
+	}
+	if len(required) == 0 {
+		return nil
+	}
+	missing := make([]string, 0, len(required))
+	for name := range required {
+		missing = append(missing, name)
+	}
+	sort.Strings(missing)
+	return fmt.Errorf("%w: 闭口听者不是当前项目权威角色: %s", ErrDialogueTimingBlocked, strings.Join(missing, "、"))
+}
+
 func (s *ShotService) CreateShot(sceneID uint, shot models.Shot) (*models.Shot, error) {
 	shot.ID, shot.SceneID = 0, sceneID
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
@@ -368,6 +402,9 @@ func (s *ShotService) CreateShot(sceneID uint, shot models.Shot) (*models.Shot, 
 			shot.Order = maxOrder + 1
 		}
 		if err := validateShot(&shot); err != nil {
+			return err
+		}
+		if err := validateShotListenerCharacters(tx, projectID, []models.Shot{shot}); err != nil {
 			return err
 		}
 		var proposed []models.Shot
@@ -421,6 +458,9 @@ func (s *ShotService) ReplaceShotsWithDialogueSnapshot(sceneID uint, shots []mod
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		projectID, err := projectIDForScene(tx, sceneID)
 		if err != nil {
+			return err
+		}
+		if err := validateShotListenerCharacters(tx, projectID, shots); err != nil {
 			return err
 		}
 		if strings.TrimSpace(expectedSnapshot) != "" {
@@ -701,6 +741,13 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 		if err := validateShot(&candidate); err != nil {
 			return err
 		}
+		projectID, err := projectIDForScene(tx, shot.SceneID)
+		if err != nil {
+			return err
+		}
+		if err := validateShotListenerCharacters(tx, projectID, []models.Shot{candidate}); err != nil {
+			return err
+		}
 		var sceneShots []models.Shot
 		if err := tx.Where("scene_id = ?", shot.SceneID).Order("order_num, id").Find(&sceneShots).Error; err != nil {
 			return err
@@ -722,10 +769,6 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 			}
 		}
 		if err := tx.Model(&shot).Updates(filtered).Error; err != nil {
-			return err
-		}
-		projectID, err := projectIDForScene(tx, shot.SceneID)
-		if err != nil {
 			return err
 		}
 		var saved models.Shot

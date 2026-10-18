@@ -933,6 +933,22 @@ func dialogueBoundaryReason(before, after []dialogueRhythmFragmentReview, sameDi
 	return "Dialogue边界"
 }
 
+func validateDraftListenerCharacters(draft *sceneDirectorDraft, authoritativeNames map[string]bool) error {
+	if draft == nil {
+		return fmt.Errorf("对白节奏导演草稿为空")
+	}
+	for i, shot := range draft.Shots {
+		if shot.SpeechPresentation != models.ShotSpeechPresentationListenerCarry {
+			continue
+		}
+		listener := strings.TrimSpace(shot.ListenerCharacter)
+		if listener != "" && !authoritativeNames[listener] {
+			return fmt.Errorf("对白拆镜%d的listener_character“%s”不是当前项目权威角色", i+1, listener)
+		}
+	}
+	return nil
+}
+
 func validateGeneratedDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
 	if err := requireStructuredSpeechPresentations(draft); err != nil {
 		return err
@@ -1146,6 +1162,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		instruction = "依据用户已确认的战斗资料生成可审核的武戏导演方案；资料只提供机制与结构，不得改写权威事实。"
 	}
 	var dialogues []models.Dialogue
+	authoritativeCharacterNames := map[string]bool{}
 	dialogueDuration := 0.0
 	if req.Mode == "dialogue_rhythm" || req.Mode == "action_rhythm" || req.Mode == "combat_design" {
 		if err := s.DB.Where("scene_id = ? AND project_id = ?", scene.ID, scene.ProjectID).Order("`order` ASC, `id` ASC").Find(&dialogues).Error; err != nil {
@@ -1154,6 +1171,14 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		}
 		dialogues = authoritativeSceneDialogues(dialogues)
 		if req.Mode == "dialogue_rhythm" {
+			var characters []models.Character
+			if err := s.DB.Select("name").Where("project_id = ?", scene.ProjectID).Find(&characters).Error; err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+			for _, character := range characters {
+				authoritativeCharacterNames[strings.TrimSpace(character.Name)] = true
+			}
 			if len(dialogues) == 0 {
 				c.JSON(400, gin.H{"error": "当前Scene没有可用于拆镜的结构化对白"})
 				return
@@ -1188,6 +1213,9 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		if parseErr == nil && req.Mode == "dialogue_rhythm" {
 			normalizeDialogueRhythmDraftDurations(draft)
 			parseErr = validateGeneratedDialogueRhythmDraft(draft, dialogues)
+			if parseErr == nil {
+				parseErr = validateDraftListenerCharacters(draft, authoritativeCharacterNames)
+			}
 		} else if parseErr == nil && req.Mode == "action_rhythm" {
 			parseErr = validateActionRhythmDraft(draft, dialogues)
 		} else if parseErr == nil && req.Mode == "combat_design" {
@@ -1228,6 +1256,9 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 				err = restoreErr
 			} else {
 				err = validateGeneratedDialogueRhythmDraft(draft, dialogues)
+				if err == nil {
+					err = validateDraftListenerCharacters(draft, authoritativeCharacterNames)
+				}
 			}
 			if strings.TrimSpace(restoreReason) != "" {
 				restoreResult := "accepted"
