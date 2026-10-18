@@ -20,6 +20,8 @@ test('对白节奏镜头持久化结构化发声呈现而非只猜提示词', ()
   assert.match(source, /v-model="shot\.speech_presentation"/)
   assert.match(source, /listener_reaction_carryover/)
   assert.match(source, /speech_presentation: s\.speech_presentation \|\| ''/)
+  assert.match(source, /savedShots\[i\]\?\.speech_presentation/)
+  assert.match(source, /发声呈现.*与审核草稿.*不一致/)
 })
 
 test('武戏导演支持确定性资料检索、正文预览和审核后导入', () => {

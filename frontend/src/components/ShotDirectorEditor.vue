@@ -113,6 +113,9 @@ function savedDialogueAuditMismatch(review, savedShots) {
   if (!Array.isArray(review) || !review.length) return ''
   if (!Array.isArray(savedShots) || savedShots.length !== review.length) return `镜头数量 ${savedShots?.length || 0}/${review.length} 不一致`
   for (let i = 0; i < review.length; i++) {
+    const expectedPresentation = String(review[i]?.presentation || '')
+    const savedPresentation = String(savedShots[i]?.speech_presentation || '')
+    if (savedPresentation !== expectedPresentation) return `镜头${i + 1}发声呈现 ${savedPresentation || '空'} 与审核草稿 ${expectedPresentation || '空'} 不一致`
     const expected = review[i]?.fragments || []
     const actual = savedShots[i]?.dialogue_ranges || []
     if (expected.length !== actual.length) return `镜头${i + 1} Dialogue片段数量 ${actual.length}/${expected.length} 不一致`
