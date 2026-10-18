@@ -462,6 +462,72 @@ func TestUpdateShotRejectsDialoguePresentationRegressionWithoutMutation(t *testi
 	}
 }
 
+func TestUpdateShotSpeechPresentationInvalidatesDerivedMedia(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "speech presentation invalidation"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Status: "video_ready", Duration: 3, VideoFile: "old.mp4", VideoInputFile: "old-input.mp4", VideoTaskID: "video-task", VideoFullPrompt: "old prompt"}
+	db.Create(&scene)
+	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信我。"}
+	db.Create(&dialogue)
+	svc := NewShotService(db)
+	shots, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "阿宁近景", Duration: 3, Dialogue: dialogue.Text, PromptSubject: "阿宁可见", PromptAction: "同步口型"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&scene).Updates(map[string]any{"status": "video_ready", "video_file": "old.mp4", "video_input_file": "old-input.mp4", "video_task_id": "video-task", "video_full_prompt": "old prompt"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	audio := models.SceneAudioCandidate{ProjectID: project.ID, SceneID: scene.ID, SourceHash: "old-audio", File: "mix.wav", ReviewStatus: "accepted", IsCurrent: true}
+	db.Create(&audio)
+	if _, err := svc.UpdateShot(shots[0].ID, map[string]any{"speech_presentation": string(models.ShotSpeechPresentationVisibleSpeaker)}); err != nil {
+		t.Fatal(err)
+	}
+	var saved models.Shot
+	db.First(&saved, shots[0].ID)
+	if saved.SpeechPresentation != models.ShotSpeechPresentationVisibleSpeaker {
+		t.Fatalf("presentation=%q", saved.SpeechPresentation)
+	}
+	db.First(&scene, scene.ID)
+	if scene.VideoFile != "" || scene.VideoInputFile != "" || scene.VideoTaskID != "" || scene.VideoFullPrompt != "" || scene.Status != "pending" {
+		t.Fatalf("derived scene state survived: %+v", scene)
+	}
+	db.First(&audio, audio.ID)
+	if !audio.Stale || audio.IsCurrent {
+		t.Fatalf("scene audio remained eligible: %+v", audio)
+	}
+}
+
+func TestRejectedSpeechPresentationUpdateDoesNotInvalidateDerivedMedia(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "speech presentation rollback"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Status: "pending", Duration: 3}
+	db.Create(&scene)
+	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信我。"}
+	db.Create(&dialogue)
+	svc := NewShotService(db)
+	shots, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "阿宁近景", Duration: 3, Dialogue: dialogue.Text, SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, PromptSubject: "阿宁可见"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio := models.SceneAudioCandidate{ProjectID: project.ID, SceneID: scene.ID, SourceHash: "reviewed", File: "mix.wav", ReviewStatus: "accepted", IsCurrent: true}
+	db.Create(&audio)
+	_, err = svc.UpdateShot(shots[0].ID, map[string]any{"speech_presentation": string(models.ShotSpeechPresentationOffscreen)})
+	if !errors.Is(err, ErrDialogueTimingBlocked) {
+		t.Fatalf("conflicting presentation accepted: %v", err)
+	}
+	var saved models.Shot
+	db.First(&saved, shots[0].ID)
+	if saved.SpeechPresentation != models.ShotSpeechPresentationVisibleSpeaker {
+		t.Fatalf("rejected update persisted: %+v", saved)
+	}
+	db.First(&audio, audio.ID)
+	if audio.Stale || !audio.IsCurrent {
+		t.Fatalf("rollback invalidated audio: %+v", audio)
+	}
+}
+
 func TestCreateShotAllocatesOrderInsideTransaction(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	project := models.Project{Title: "transactional create"}
