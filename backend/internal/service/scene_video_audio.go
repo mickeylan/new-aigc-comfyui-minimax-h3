@@ -2,10 +2,12 @@ package service
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -96,6 +98,73 @@ func sceneAudioFileSHA256(path string) (string, int64, error) {
 	return hex.EncodeToString(digest.Sum(nil)), size, nil
 }
 
+type sceneMixWAVInfo struct {
+	SampleRate uint32
+	Channels   uint16
+	Bits       uint16
+	DataBytes  uint32
+	Duration   float64
+}
+
+func inspectPCM16WAV(path string) (sceneMixWAVInfo, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return sceneMixWAVInfo{}, err
+	}
+	defer file.Close()
+	var header [12]byte
+	if _, err := io.ReadFull(file, header[:]); err != nil || string(header[:4]) != "RIFF" || string(header[8:]) != "WAVE" {
+		return sceneMixWAVInfo{}, fmt.Errorf("不是有效RIFF/WAVE文件")
+	}
+	info := sceneMixWAVInfo{}
+	formatFound, dataFound := false, false
+	for {
+		var chunk [8]byte
+		if _, err := io.ReadFull(file, chunk[:]); err != nil {
+			break
+		}
+		size := binary.LittleEndian.Uint32(chunk[4:])
+		switch string(chunk[:4]) {
+		case "fmt ":
+			if size < 16 {
+				return info, fmt.Errorf("WAV fmt块无效")
+			}
+			payload := make([]byte, size)
+			if _, err := io.ReadFull(file, payload); err != nil {
+				return info, err
+			}
+			if binary.LittleEndian.Uint16(payload[0:2]) != 1 {
+				return info, fmt.Errorf("Scene音轨必须为PCM WAV")
+			}
+			info.Channels = binary.LittleEndian.Uint16(payload[2:4])
+			info.SampleRate = binary.LittleEndian.Uint32(payload[4:8])
+			info.Bits = binary.LittleEndian.Uint16(payload[14:16])
+			formatFound = true
+		case "data":
+			info.DataBytes, dataFound = size, true
+			if _, err := file.Seek(int64(size), io.SeekCurrent); err != nil {
+				return info, err
+			}
+		default:
+			if _, err := file.Seek(int64(size), io.SeekCurrent); err != nil {
+				return info, err
+			}
+		}
+		if size%2 == 1 {
+			_, _ = file.Seek(1, io.SeekCurrent)
+		}
+		if formatFound && dataFound {
+			break
+		}
+	}
+	if !formatFound || !dataFound || info.SampleRate == 0 || info.Channels == 0 || info.Bits != 16 || info.DataBytes == 0 {
+		return info, fmt.Errorf("Scene音轨必须是非空PCM16 WAV")
+	}
+	bytesPerFrame := float64(info.Channels) * float64(info.Bits/8)
+	info.Duration = float64(info.DataBytes) / bytesPerFrame / float64(info.SampleRate)
+	return info, nil
+}
+
 func (s *ProjectService) sceneAudioCandidateFile(sc *models.Scene, candidate *models.SceneAudioCandidate) (string, error) {
 	if sc == nil || candidate == nil || s.cfg == nil || strings.TrimSpace(candidate.File) == "" {
 		return "", fmt.Errorf("Scene音轨文件路径无效")
@@ -114,6 +183,18 @@ func (s *ProjectService) sceneAudioCandidateFile(sc *models.Scene, candidate *mo
 	}
 	if size != candidate.FileSize || hash != candidate.FileSHA256 {
 		return "", fmt.Errorf("Scene音轨文件内容与审核记录不一致")
+	}
+	wav, wavErr := inspectPCM16WAV(path)
+	if wavErr != nil {
+		return "", wavErr
+	}
+	allowedDelta := 1.0/24.0 + 1.0/float64(wav.SampleRate)
+	if math.Abs(wav.Duration-candidate.Duration) > allowedDelta {
+		return "", fmt.Errorf("Scene音轨实际时长 %.3f 秒与候选记录 %.3f 秒不一致", wav.Duration, candidate.Duration)
+	}
+	expected := normalizeSceneDuration(sc.Duration)
+	if math.Abs(wav.Duration-expected) > allowedDelta {
+		return "", fmt.Errorf("Scene音轨实际时长 %.3f 秒与当前Scene时长 %.3f 秒不一致", wav.Duration, expected)
 	}
 	return path, nil
 }
