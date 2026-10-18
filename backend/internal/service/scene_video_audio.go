@@ -46,6 +46,8 @@ type sceneAudioSource struct {
 	CandidateID   uint    `json:"candidate_id"`
 	InputHash     string  `json:"input_hash"`
 	File          string  `json:"file"`
+	FileSHA256    string  `json:"file_sha256"`
+	FileSize      int64   `json:"file_size"`
 	Position      float64 `json:"position"`
 	Offset        float64 `json:"offset"`
 	Speed         float64 `json:"speed"`
@@ -228,7 +230,10 @@ func (s *ProjectService) currentSceneAudioSnapshot(sc *models.Scene, dialogues [
 		if rows[0].Duration <= 0 {
 			return snapshot, "", fmt.Errorf("Dialogue %d 的已审核候选缺少有效时长", dialogue.ID)
 		}
-		snapshot.Sources = append(snapshot.Sources, sceneAudioSource{DialogueID: dialogue.ID, CandidateID: rows[0].ID, InputHash: rows[0].InputHash, File: rows[0].File, Position: dialogue.Position, Offset: dialogue.Offset, Speed: dialogueSpeed(dialogue), Pitch: dialogue.Pitch, Volume: dialogueVolume(dialogue), Duration: rows[0].Duration})
+		if strings.TrimSpace(rows[0].FileSHA256) == "" || rows[0].FileSize <= 0 {
+			return snapshot, "", fmt.Errorf("Dialogue %d 的已审核候选缺少文件内容指纹，请重新生成并审核", dialogue.ID)
+		}
+		snapshot.Sources = append(snapshot.Sources, sceneAudioSource{DialogueID: dialogue.ID, CandidateID: rows[0].ID, InputHash: rows[0].InputHash, File: rows[0].File, FileSHA256: rows[0].FileSHA256, FileSize: rows[0].FileSize, Position: dialogue.Position, Offset: dialogue.Offset, Speed: dialogueSpeed(dialogue), Pitch: dialogue.Pitch, Volume: dialogueVolume(dialogue), Duration: rows[0].Duration})
 	}
 	cursor := 0.4
 	for i := range snapshot.Sources {
@@ -339,6 +344,28 @@ func inspectPCM16WAV(path string) (sceneMixWAVInfo, error) {
 	return info, nil
 }
 
+func (s *ProjectService) dialogueAudioCandidateFile(sc *models.Scene, candidate *models.DialogueAudioCandidate) error {
+	if candidate == nil || strings.TrimSpace(candidate.FileSHA256) == "" || candidate.FileSize <= 0 {
+		return fmt.Errorf("Dialogue音频候选缺少文件内容指纹，请重新生成并审核")
+	}
+	if s.cfg == nil {
+		return nil
+	}
+	root := filepath.Join(s.cfg.Comfy.ComfyDir, "input", fmt.Sprint(sc.ProjectID))
+	path := filepath.Join(root, filepath.Base(candidate.File))
+	if !pathInside(root, path) {
+		return fmt.Errorf("Dialogue音频文件路径越界")
+	}
+	hash, size, err := sceneAudioFileSHA256(path)
+	if err != nil || size <= 0 {
+		return fmt.Errorf("Dialogue音频文件不存在或不可读")
+	}
+	if hash != candidate.FileSHA256 || size != candidate.FileSize {
+		return fmt.Errorf("Dialogue音频文件内容与已审核候选不一致")
+	}
+	return nil
+}
+
 func (s *ProjectService) sceneAudioCandidateFile(sc *models.Scene, candidate *models.SceneAudioCandidate) (string, error) {
 	if sc == nil || candidate == nil || s.cfg == nil || strings.TrimSpace(candidate.File) == "" {
 		return "", fmt.Errorf("Scene音轨文件路径无效")
@@ -438,6 +465,10 @@ func (s *ProjectService) sceneReviewedAudioSelection(sc *models.Scene) sceneRevi
 	if err != nil {
 		return sceneReviewedAudio{Dialogue: &dialogue, Reason: "生产音频未对应已接受、当前且输入哈希一致的候选"}
 	}
+	if fileErr := s.dialogueAudioCandidateFile(sc, &candidate); fileErr != nil {
+		_ = markDialogueAudioCandidatesStale(s.db, sc.ProjectID, dialogue.ID, fileErr.Error())
+		return sceneReviewedAudio{Dialogue: &dialogue, Reason: fileErr.Error()}
+	}
 	return sceneReviewedAudio{Ready: true, Dialogue: &dialogue, Candidate: &candidate, SourceHash: sourceHash}
 }
 
@@ -507,8 +538,12 @@ func (s *ProjectService) CreateSceneAudioCandidate(sc *models.Scene) (*models.Sc
 		dialogue := byID[source.DialogueID]
 		start, end := source.TimelineStart, source.TimelineEnd
 		abs := filepath.Join(inputRoot, filepath.Base(source.File))
-		if info, statErr := os.Stat(abs); statErr != nil || !info.Mode().IsRegular() {
+		hash, size, hashErr := sceneAudioFileSHA256(abs)
+		if hashErr != nil || size <= 0 {
 			return nil, fmt.Errorf("Dialogue %d 音频文件缺失", dialogue.ID)
+		}
+		if hash != source.FileSHA256 || size != source.FileSize {
+			return nil, fmt.Errorf("Dialogue %d 音频文件内容与已审核候选不一致", dialogue.ID)
 		}
 		segments = append(segments, dubSegment{DialogueID: dialogue.ID, SceneID: sc.ID, Start: start, End: end, Character: dialogue.Character, Text: dialogue.Text, AudioAbs: abs, SourceDur: source.Duration, Speed: source.Speed, Pitch: source.Pitch, Volume: source.Volume})
 	}

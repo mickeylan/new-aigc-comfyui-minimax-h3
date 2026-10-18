@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"comfyui-console/internal/models"
@@ -14,7 +15,7 @@ func TestCaptureAndSelectDialogueAudioCandidates(t *testing.T) {
 	db.Create(&dialogue)
 	service := &ProjectService{db: db}
 	hash := service.effectiveDialogueAudioHash(dialogue)
-	first, err := service.captureDialogueAudio(dialogueAudioCapture{ProjectID: project.ID, DialogueID: dialogue.ID, Token: "first", InputHash: hash, Provider: "index_tts_rust", File: "first.wav", SampleRate: 22050, Channels: 1, Duration: 1})
+	first, err := service.captureDialogueAudio(dialogueAudioCapture{ProjectID: project.ID, DialogueID: dialogue.ID, Token: "first", InputHash: hash, Provider: "index_tts_rust", File: "first.wav", FileSHA256: strings.Repeat("a", 64), FileSize: 128, SampleRate: 22050, Channels: 1, Duration: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +28,7 @@ func TestCaptureAndSelectDialogueAudioCandidates(t *testing.T) {
 	}
 
 	db.Model(&dialogue).Updates(map[string]any{"status": "synthesizing", "audio_token": "second"})
-	second, err := service.captureDialogueAudio(dialogueAudioCapture{ProjectID: project.ID, DialogueID: dialogue.ID, Token: "second", InputHash: hash, Provider: "aliyun", File: "second.mp3"})
+	second, err := service.captureDialogueAudio(dialogueAudioCapture{ProjectID: project.ID, DialogueID: dialogue.ID, Token: "second", InputHash: hash, Provider: "aliyun", File: "second.mp3", FileSHA256: strings.Repeat("b", 64), FileSize: 256})
 	if err != nil {
 		t.Fatal(err)
 	}

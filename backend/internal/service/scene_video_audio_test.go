@@ -62,7 +62,7 @@ func TestSceneReviewedAudioSelectionRequiresAcceptedCurrentMatchingCandidate(t *
 	if got := svc.sceneReviewedAudioSelection(&scene); got.Ready {
 		t.Fatal("unreviewed audio became eligible")
 	}
-	candidate := models.DialogueAudioCandidate{ProjectID: project.ID, DialogueID: dialogue.ID, InputHash: dialogue.AudioHash, Provider: "test", File: "take.flac", Duration: 1, ReviewStatus: "accepted", IsCurrent: true}
+	candidate := models.DialogueAudioCandidate{ProjectID: project.ID, DialogueID: dialogue.ID, InputHash: dialogue.AudioHash, Provider: "test", File: "take.flac", Duration: 1, FileSHA256: strings.Repeat("a", 64), FileSize: 128, ReviewStatus: "accepted", IsCurrent: true}
 	if err := db.Create(&candidate).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestSceneReviewedAudioSelectionAcceptsOnlyCurrentMatchingSceneMix(t *testin
 		if err := db.Model(&d).Update("audio_hash", d.AudioHash).Error; err != nil {
 			t.Fatal(err)
 		}
-		c := models.DialogueAudioCandidate{ProjectID: project.ID, DialogueID: d.ID, InputHash: d.AudioHash, Provider: "test", File: d.AudioFile, Duration: 1, ReviewStatus: "accepted", IsCurrent: true}
+		c := models.DialogueAudioCandidate{ProjectID: project.ID, DialogueID: d.ID, InputHash: d.AudioHash, Provider: "test", File: d.AudioFile, Duration: 1, FileSHA256: strings.Repeat("a", 64), FileSize: 128, ReviewStatus: "accepted", IsCurrent: true}
 		if err := db.Create(&c).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -204,7 +204,7 @@ func TestSceneReviewedAudioSelectionMarksReplacedMixContentStale(t *testing.T) {
 		if err := db.Model(&d).Update("audio_hash", d.AudioHash).Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := db.Create(&models.DialogueAudioCandidate{ProjectID: project.ID, DialogueID: d.ID, InputHash: d.AudioHash, Provider: "test", File: d.AudioFile, Duration: 1, ReviewStatus: "accepted", IsCurrent: true}).Error; err != nil {
+		if err := db.Create(&models.DialogueAudioCandidate{ProjectID: project.ID, DialogueID: d.ID, InputHash: d.AudioHash, Provider: "test", File: d.AudioFile, Duration: 1, FileSHA256: strings.Repeat("a", 64), FileSize: 128, ReviewStatus: "accepted", IsCurrent: true}).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -266,7 +266,7 @@ func TestSceneReviewedAudioSelectionMarksDurationMismatchStale(t *testing.T) {
 		_ = db.Create(&d).Error
 		d.AudioHash = svc.effectiveDialogueAudioHash(d)
 		_ = db.Model(&d).Update("audio_hash", d.AudioHash).Error
-		_ = db.Create(&models.DialogueAudioCandidate{ProjectID: project.ID, DialogueID: d.ID, InputHash: d.AudioHash, Provider: "test", File: d.AudioFile, Duration: 1, ReviewStatus: "accepted", IsCurrent: true}).Error
+		_ = db.Create(&models.DialogueAudioCandidate{ProjectID: project.ID, DialogueID: d.ID, InputHash: d.AudioHash, Provider: "test", File: d.AudioFile, Duration: 1, FileSHA256: strings.Repeat("a", 64), FileSize: 128, ReviewStatus: "accepted", IsCurrent: true}).Error
 	}
 	var dialogues []models.Dialogue
 	_ = db.Where("scene_id = ?", scene.ID).Order("`order`, id").Find(&dialogues).Error
@@ -317,7 +317,7 @@ func TestSceneReviewedAudioSelectionMarksMissingMixFileStale(t *testing.T) {
 		if err := db.Model(&d).Update("audio_hash", d.AudioHash).Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := db.Create(&models.DialogueAudioCandidate{ProjectID: project.ID, DialogueID: d.ID, InputHash: d.AudioHash, Provider: "test", File: d.AudioFile, Duration: 1, ReviewStatus: "accepted", IsCurrent: true}).Error; err != nil {
+		if err := db.Create(&models.DialogueAudioCandidate{ProjectID: project.ID, DialogueID: d.ID, InputHash: d.AudioHash, Provider: "test", File: d.AudioFile, Duration: 1, FileSHA256: strings.Repeat("a", 64), FileSize: 128, ReviewStatus: "accepted", IsCurrent: true}).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -513,6 +513,29 @@ func TestDeleteSceneDependentsRemovesSceneAudioCandidates(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("remaining=%d", count)
+	}
+}
+
+func TestSceneAudioSnapshotRejectsLegacyDialogueCandidateWithoutFileFingerprint(t *testing.T) {
+	svc := newTestProjectService(t)
+	db := svc.db
+	if err := db.AutoMigrate(&models.Dialogue{}, &models.DialogueAudioCandidate{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "legacy-source"}
+	_ = db.Create(&project).Error
+	scene := models.Scene{ProjectID: project.ID, Order: 1, Duration: 4}
+	_ = db.Create(&scene).Error
+	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "甲", SpeechType: "dialogue", Text: "原文", AudioFile: "legacy.wav", Status: "ready"}
+	_ = db.Create(&dialogue).Error
+	dialogue.AudioHash = svc.effectiveDialogueAudioHash(dialogue)
+	_ = db.Model(&dialogue).Update("audio_hash", dialogue.AudioHash).Error
+	_ = db.Create(&models.DialogueAudioCandidate{ProjectID: project.ID, DialogueID: dialogue.ID, InputHash: dialogue.AudioHash, Provider: "legacy", File: dialogue.AudioFile, Duration: 1, ReviewStatus: "accepted", IsCurrent: true}).Error
+	if _, _, err := svc.currentSceneAudioSnapshot(&scene, []models.Dialogue{dialogue}); err == nil || !strings.Contains(err.Error(), "缺少文件内容指纹") {
+		t.Fatalf("err=%v", err)
+	}
+	if got := svc.sceneReviewedAudioSelection(&scene); got.Ready || !strings.Contains(got.Reason, "缺少文件内容指纹") {
+		t.Fatalf("selection=%+v", got)
 	}
 }
 

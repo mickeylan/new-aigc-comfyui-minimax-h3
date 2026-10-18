@@ -21,13 +21,15 @@ type dialogueAudioCapture struct {
 	VoiceIdentity  string
 	Params         any
 	File           string
+	FileSHA256     string
+	FileSize       int64
 	SampleRate     uint32
 	Channels       uint32
 	Duration       float64
 }
 
 func (s *ProjectService) captureDialogueAudio(in dialogueAudioCapture) (*models.DialogueAudioCandidate, error) {
-	if in.ProjectID == 0 || in.DialogueID == 0 || strings.TrimSpace(in.Token) == "" || strings.TrimSpace(in.InputHash) == "" || strings.TrimSpace(in.File) == "" {
+	if in.ProjectID == 0 || in.DialogueID == 0 || strings.TrimSpace(in.Token) == "" || strings.TrimSpace(in.InputHash) == "" || strings.TrimSpace(in.File) == "" || strings.TrimSpace(in.FileSHA256) == "" || in.FileSize <= 0 {
 		return nil, fmt.Errorf("配音候选输入不完整")
 	}
 	params, err := json.Marshal(in.Params)
@@ -49,7 +51,8 @@ func (s *ProjectService) captureDialogueAudio(in dialogueAudioCapture) (*models.
 		}
 		values := map[string]any{
 			"runtime_version": in.RuntimeVersion, "voice_identity": in.VoiceIdentity, "params_json": string(params),
-			"file": in.File, "sample_rate": in.SampleRate, "channels": in.Channels, "duration": in.Duration,
+			"file": in.File, "file_sha256": in.FileSHA256, "file_size": in.FileSize,
+			"sample_rate": in.SampleRate, "channels": in.Channels, "duration": in.Duration,
 			"review_status": "pending", "review_reason": "", "reviewed_at": nil, "is_current": false,
 			"stale": false, "stale_reason": "",
 		}

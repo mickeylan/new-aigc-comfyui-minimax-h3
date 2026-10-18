@@ -6833,12 +6833,21 @@ func (s *ProjectService) syncDialogueAudioTasks() {
 					}
 				}
 			}
+			fileHash, fileSize, hashErr := sceneAudioFileSHA256(localPath)
+			if hashErr != nil {
+				s.db.Model(dialogue).Where("audio_token = ? AND audio_task_id = ?", dialogue.AudioToken, task.TaskID).Updates(map[string]any{
+					"status": "failed", "error": "配音文件内容哈希失败: " + hashErr.Error(), "audio_token": "", "audio_task_id": "", "audio_task_hash": "",
+				})
+				changed = true
+				continue
+			}
 			_, err = s.captureDialogueAudio(dialogueAudioCapture{
 				ProjectID: dialogue.ProjectID, DialogueID: dialogue.ID, Token: dialogue.AudioToken,
 				InputHash: dialogue.AudioTaskHash, Provider: "index_tts_python_comfyui",
 				RuntimeVersion: task.TemplateName, VoiceIdentity: strings.TrimSpace(dialogue.Character),
 				Params: params,
-				File:   filepath.Base(localPath), SampleRate: rate, Channels: channels, Duration: duration,
+				File:   filepath.Base(localPath), FileSHA256: fileHash, FileSize: fileSize,
+				SampleRate: rate, Channels: channels, Duration: duration,
 			})
 			if err != nil && !strings.Contains(err.Error(), "已过期") {
 				log.Printf("[dialogue %d] capture ComfyUI audio task %s failed: %v", dialogue.ID, task.TaskID, err)
@@ -8893,6 +8902,10 @@ func (s *ProjectService) synthesizeDialogue(d *models.Dialogue, token, inputHash
 	if s.cfg != nil {
 		language = s.cfg.IndexTTS.Language
 	}
+	fileHash, fileSize, hashErr := sceneAudioFileSHA256(path)
+	if hashErr != nil {
+		return hashErr
+	}
 	_, err = s.captureDialogueAudio(dialogueAudioCapture{
 		ProjectID: d.ProjectID, DialogueID: d.ID, Token: token, InputHash: inputHash,
 		Provider: provider, RuntimeVersion: runtimeVersion, VoiceIdentity: voiceIdentity,
@@ -8900,7 +8913,8 @@ func (s *ProjectService) synthesizeDialogue(d *models.Dialogue, token, inputHash
 			"semantic_tokens": generationInfo.SemanticTokens, "generated_seconds": generationInfo.GeneratedSeconds,
 			"total_ms": generationInfo.Total.Milliseconds(), "gpt_ms": generationInfo.GPT.Milliseconds(), "s2mel_ms": generationInfo.S2Mel.Milliseconds(),
 			"bigvgan_ms": generationInfo.BigVGAN.Milliseconds(), "peak": generationInfo.Peak, "rms": generationInfo.RMS, "silence_ratio": generationInfo.SilenceRatio},
-		File: filepath.Base(path), SampleRate: sampleRate, Channels: channels, Duration: duration,
+		File: filepath.Base(path), FileSHA256: fileHash, FileSize: fileSize,
+		SampleRate: sampleRate, Channels: channels, Duration: duration,
 	})
 	if err != nil {
 		return err

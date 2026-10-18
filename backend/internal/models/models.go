@@ -559,6 +559,8 @@ type DialogueAudioCandidate struct {
 	VoiceIdentity  string     `gorm:"column:voice_identity;type:text" json:"voice_identity"`
 	ParamsJSON     string     `gorm:"column:params_json;type:text" json:"params_json"`
 	File           string     `gorm:"type:text" json:"file"`
+	FileSHA256     string     `gorm:"column:file_sha256;size:64" json:"file_sha256"`
+	FileSize       int64      `gorm:"column:file_size" json:"file_size"`
 	SampleRate     uint32     `gorm:"column:sample_rate" json:"sample_rate"`
 	Channels       uint32     `json:"channels"`
 	Duration       float64    `json:"duration"`
