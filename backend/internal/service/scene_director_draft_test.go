@@ -739,6 +739,26 @@ func TestRestoreDialogueRhythmDraftTextUsesAuthoritativeDialogue(t *testing.T) {
 	}
 }
 
+func TestAuthoritativeDialogueRestoreCannotBypassStructuredPresentation(t *testing.T) {
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Dialogue: "错句", Duration: 4, Description: "阿宁可见", PromptAction: "同步口型"}, {Dialogue: "", Duration: 3}}}
+	dialogues := []models.Dialogue{{Character: "阿宁", SpeechType: "dialogue", Text: "权威原文。"}}
+	if err := restoreDialogueRhythmDraftText(draft, dialogues); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
+		t.Fatalf("legacy validation failed: %v", err)
+	}
+	if err := requireStructuredSpeechPresentations(draft); err == nil || !strings.Contains(err.Error(), "缺少speech_presentation") {
+		t.Fatalf("restore bypassed structured presentation: %v", err)
+	}
+	draft.Shots[0].SpeechPresentation = models.ShotSpeechPresentationVisibleSpeaker
+	draft.Shots[0].Description = "人物凝视前方"
+	draft.Shots[1].SpeechPresentation = models.ShotSpeechPresentationSilent
+	if err := requireStructuredSpeechPresentations(draft); err != nil {
+		t.Fatalf("completed presentation rejected: %v", err)
+	}
+}
+
 func TestActionRhythmInstructionCoversCombatAndSpellClashes(t *testing.T) {
 	got := actionRhythmDirectorInstruction(nil)
 	for _, want := range []string{"武戏", "仙术对轰", "3–6秒", "实时速度", "碰撞点", "无慢动作停顿", "不使用Endless"} {

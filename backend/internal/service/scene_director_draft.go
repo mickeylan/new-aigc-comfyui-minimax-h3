@@ -1183,7 +1183,10 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 			if restoreErr := restoreDialogueRhythmDraftText(draft, dialogues); restoreErr != nil {
 				err = restoreErr
 			} else {
-				err = validateDialogueRhythmDraft(draft, dialogues)
+				err = requireStructuredSpeechPresentations(draft)
+				if err == nil {
+					err = validateDialogueRhythmDraft(draft, dialogues)
+				}
 				if err == nil {
 					err = normalizeDialogueRhythmReviewDurations(draft, dialogues)
 				}
