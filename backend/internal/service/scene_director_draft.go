@@ -614,9 +614,15 @@ func shotShowsSpeaker(shot sceneDirectorDraftShot, speaker string) bool {
 }
 
 func shotHasLipSync(shot sceneDirectorDraftShot) bool {
-	visual := shotVisualText(shot)
+	visual := strings.ToLower(shotVisualText(shot))
+	for _, negated := range []string{
+		"不做同步口型", "不进行同步口型", "不同步口型", "不得同步口型", "禁止同步口型", "无需同步口型", "无口型同步",
+		"不张口说", "不开口说", "禁止开口说", "不得开口说", "no lip-sync", "no lip sync", "without lip-sync", "without lip sync", "do not lip-sync", "must not lip-sync",
+	} {
+		visual = strings.ReplaceAll(visual, negated, "")
+	}
 	for _, marker := range []string{"同步口型", "口型同步", "开口说", "张口说", "嘴唇同步", "lip-sync", "lip sync"} {
-		if strings.Contains(strings.ToLower(visual), strings.ToLower(marker)) {
+		if strings.Contains(visual, marker) {
 			return true
 		}
 	}
@@ -625,7 +631,7 @@ func shotHasLipSync(shot sceneDirectorDraftShot) bool {
 
 func shotHasClosedLips(shot sceneDirectorDraftShot) bool {
 	visual := shotVisualText(shot)
-	for _, marker := range []string{"闭口", "双唇闭合", "嘴唇闭合", "不张口", "不做口型", "closed lips", "mouth closed"} {
+	for _, marker := range []string{"闭口", "双唇闭合", "嘴唇闭合", "不张口", "不做口型", "不做同步口型", "不得同步口型", "禁止同步口型", "禁止开口说", "不得开口说", "不开口说", "closed lips", "mouth closed", "no lip-sync", "no lip sync"} {
 		if strings.Contains(strings.ToLower(visual), strings.ToLower(marker)) {
 			return true
 		}
@@ -649,7 +655,9 @@ func ordinaryDialogueCarryoverAllowed(shot sceneDirectorDraftShot, speaker strin
 		return false
 	}
 	if shot.SpeechPresentation == models.ShotSpeechPresentationListenerCarry {
-		return shotHasClosedLips(shot) && !shotHasLipSync(shot)
+		// The persisted enum is the closed-mouth listener contract. Free text is only
+		// consulted to reject an explicit contradictory lip-sync instruction.
+		return !shotHasLipSync(shot)
 	}
 	// Compatibility fallback for historical shots without structured presentation.
 	visual := shotVisualText(shot)
@@ -938,15 +946,12 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 				}
 				continue
 			}
-			visual := shotVisualText(shot)
 			if speechType == "narration" {
 				if shot.SpeechPresentation != "" && shot.SpeechPresentation != models.ShotSpeechPresentationNarration {
 					return fmt.Errorf("对白拆镜%d的speech_presentation必须为narration_voiceover", i+1)
 				}
-				for _, marker := range []string{"同步口型", "开口说", "张口说", "嘴唇同步"} {
-					if strings.Contains(visual, marker) {
-						return fmt.Errorf("对白拆镜%d承载旁白时不得驱动画面人物口型", i+1)
-					}
+				if shotHasLipSync(shot) {
+					return fmt.Errorf("对白拆镜%d承载旁白时不得驱动画面人物口型", i+1)
 				}
 				continue
 			}
@@ -954,7 +959,7 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 				if shot.SpeechPresentation != "" && shot.SpeechPresentation != models.ShotSpeechPresentationMonologue {
 					return fmt.Errorf("对白拆镜%d的speech_presentation必须为internal_monologue", i+1)
 				}
-				if !shotHasClosedLips(shot) || shotHasLipSync(shot) {
+				if shotHasLipSync(shot) || (shot.SpeechPresentation == "" && !shotHasClosedLips(shot)) {
 					return fmt.Errorf("对白拆镜%d承载角色“%s”的内心独白时，必须明确人物闭口且不得同时要求同步口型", i+1, speaker)
 				}
 				continue

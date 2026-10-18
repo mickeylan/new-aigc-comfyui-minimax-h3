@@ -230,7 +230,7 @@ func TestValidateDialogueRhythmDraftAllowsAttributedCrossCutListenerReaction(t *
 func TestStructuredListenerPresentationDoesNotRequireMagicCarryoverPhrase(t *testing.T) {
 	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
 		{Duration: 4, Dialogue: "相信姐姐，", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, ShotType: "近景", Description: "上官若琳开口", PromptSubject: "上官若琳", PromptAction: "同步口型"},
-		{Duration: 6, Dialogue: "姐姐不会让你去。", SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ShotType: "反应近景", Description: "上官若彤倾听", PromptSubject: "上官若彤", PromptAction: "双唇闭合倾听"},
+		{Duration: 6, Dialogue: "姐姐不会让你去。", SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ShotType: "反应近景", Description: "上官若彤抬眼反应", PromptSubject: "上官若彤", PromptAction: "目光转向姐姐"},
 	}}
 	dialogues := []models.Dialogue{{ID: 1, Character: "上官若琳", SpeechType: "dialogue", Text: "相信姐姐，姐姐不会让你去。"}}
 	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
@@ -240,6 +240,11 @@ func TestStructuredListenerPresentationDoesNotRequireMagicCarryoverPhrase(t *tes
 	if len(review) != 2 || review[1].Presentation != string(models.ShotSpeechPresentationListenerCarry) || !review[1].ContinuesFromPrev {
 		t.Fatalf("review=%+v", review)
 	}
+	draft.Shots[1].PromptAction = "听者同步口型"
+	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil {
+		t.Fatal("listener presentation accepted contradictory lip-sync")
+	}
+	draft.Shots[1].PromptAction = "目光转向姐姐"
 	draft.Shots[0].Dialogue = ""
 	draft.Shots[0].SpeechPresentation = models.ShotSpeechPresentationSilent
 	draft.Shots[1].Dialogue = "相信姐姐，姐姐不会让你去。"
@@ -344,6 +349,34 @@ func TestValidateDialogueRhythmDraftEnforcesNarrationAndMonologueLipRules(t *tes
 	goodMonologue := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "我必须离开。", ShotType: "阿宁近景", PromptSubject: "阿宁闭口凝视前方", PromptAction: "不做口型"}}}
 	if err := validateDialogueRhythmDraft(goodMonologue, monologue); err != nil {
 		t.Fatalf("valid monologue rejected: %v", err)
+	}
+}
+
+func TestSpeechMarkerDetectionRespectsNegation(t *testing.T) {
+	for _, text := range []string{"不做同步口型", "不得同步口型", "禁止开口说", "no lip sync"} {
+		shot := sceneDirectorDraftShot{PromptAction: text}
+		if shotHasLipSync(shot) {
+			t.Fatalf("negated lip-sync %q treated as positive", text)
+		}
+		if !shotHasClosedLips(shot) {
+			t.Fatalf("negated lip-sync %q did not establish closed-mouth contract", text)
+		}
+	}
+	contradictory := sceneDirectorDraftShot{PromptAction: "不做同步口型；随后同步口型说话"}
+	if !shotHasLipSync(contradictory) {
+		t.Fatal("separate positive lip-sync instruction was hidden by negation")
+	}
+}
+
+func TestStructuredMonologuePresentationDoesNotRequireMagicClosedLipPhrase(t *testing.T) {
+	dialogues := []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "monologue", Text: "我必须离开。"}}
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "我必须离开。", SpeechPresentation: models.ShotSpeechPresentationMonologue, ShotType: "阿宁近景", PromptSubject: "阿宁凝视前方"}}}
+	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
+		t.Fatalf("structured monologue rejected: %v", err)
+	}
+	draft.Shots[0].PromptAction = "阿宁同步口型"
+	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil {
+		t.Fatal("structured monologue accepted contradictory lip-sync")
 	}
 }
 
