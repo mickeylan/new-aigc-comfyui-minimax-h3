@@ -362,8 +362,8 @@ func TestSceneAudioSnapshotBindsAuthoritativeShotDialogueRanges(t *testing.T) {
 	}
 	group := "dialogue-group:1"
 	shots := []models.Shot{
-		{SceneID: scene.ID, Order: 1, Duration: 4, DialogueRanges: []models.ShotDialogueRange{{DialogueID: dialogues[0].ID, GroupKey: group, StartRune: 0, EndRune: 2}}},
-		{SceneID: scene.ID, Order: 2, Duration: 4, DialogueRanges: []models.ShotDialogueRange{{DialogueID: dialogues[1].ID, GroupKey: group, StartRune: 2, EndRune: 4}}},
+		{SceneID: scene.ID, Order: 1, Duration: 4, Description: "甲可见并同步口型说话", PromptSubject: "甲可见", PromptAction: "同步口型", DialogueRanges: []models.ShotDialogueRange{{DialogueID: dialogues[0].ID, GroupKey: group, StartRune: 0, EndRune: 2}}},
+		{SceneID: scene.ID, Order: 2, Duration: 4, Description: "甲可见并同步口型说话", PromptSubject: "甲可见", PromptAction: "同步口型", DialogueRanges: []models.ShotDialogueRange{{DialogueID: dialogues[1].ID, GroupKey: group, StartRune: 2, EndRune: 4}}},
 	}
 	for i := range shots {
 		if err := db.Create(&shots[i]).Error; err != nil {
@@ -400,14 +400,14 @@ func TestSceneAudioShotContractRejectsSpeechAcrossSilentShot(t *testing.T) {
 	}
 	project := models.Project{Title: "silent-shot"}
 	_ = db.Create(&project).Error
-	scene := models.Scene{ProjectID: project.ID, Order: 1, Duration: 8}
+	scene := models.Scene{ProjectID: project.ID, Order: 1, Duration: 9}
 	_ = db.Create(&scene).Error
 	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "甲", SpeechType: "dialogue", Text: "完整对白"}
 	_ = db.Create(&dialogue).Error
 	shots := []models.Shot{
-		{SceneID: scene.ID, Order: 1, Duration: 3, DialogueRanges: []models.ShotDialogueRange{{DialogueID: dialogue.ID, GroupKey: "g", StartRune: 0, EndRune: 3}}},
-		{SceneID: scene.ID, Order: 2, Duration: 2},
-		{SceneID: scene.ID, Order: 3, Duration: 3, DialogueRanges: []models.ShotDialogueRange{{DialogueID: dialogue.ID, GroupKey: "g", StartRune: 3, EndRune: 4}}},
+		{SceneID: scene.ID, Order: 1, Duration: 3, Description: "甲可见并同步口型说话", PromptSubject: "甲可见", PromptAction: "同步口型", DialogueRanges: []models.ShotDialogueRange{{DialogueID: dialogue.ID, GroupKey: "g", StartRune: 0, EndRune: 3}}},
+		{SceneID: scene.ID, Order: 2, Duration: 3},
+		{SceneID: scene.ID, Order: 3, Duration: 3, Description: "甲可见并同步口型说话", PromptSubject: "甲可见", PromptAction: "同步口型", DialogueRanges: []models.ShotDialogueRange{{DialogueID: dialogue.ID, GroupKey: "g", StartRune: 3, EndRune: 4}}},
 	}
 	for i := range shots {
 		if err := db.Create(&shots[i]).Error; err != nil {

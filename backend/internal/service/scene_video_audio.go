@@ -63,11 +63,14 @@ type sceneAudioFragment struct {
 }
 
 type sceneAudioShot struct {
-	ID        uint                       `json:"id"`
-	Order     int                        `json:"order"`
-	Duration  float64                    `json:"duration"`
-	Ranges    []models.ShotDialogueRange `json:"dialogue_ranges"`
-	Fragments []sceneAudioFragment       `json:"fragments,omitempty"`
+	ID                    uint                       `json:"id"`
+	Order                 int                        `json:"order"`
+	Duration              float64                    `json:"duration"`
+	Ranges                []models.ShotDialogueRange `json:"dialogue_ranges"`
+	Fragments             []sceneAudioFragment       `json:"fragments,omitempty"`
+	Presentation          string                     `json:"presentation"`
+	ContinuesFromPrevious bool                       `json:"continues_from_previous"`
+	ContinuesToNext       bool                       `json:"continues_to_next"`
 }
 
 type sceneAudioSnapshot struct {
@@ -98,6 +101,25 @@ func (s *ProjectService) sceneAudioShotContract(sc *models.Scene, dialogues []mo
 	if err != nil {
 		return nil, err
 	}
+	validationShots := append([]models.Shot(nil), shots...)
+	for i := range validationShots {
+		var text strings.Builder
+		for _, fragment := range fragments[validationShots[i].ID] {
+			text.WriteString(fragment.Text)
+		}
+		validationShots[i].Dialogue = text.String()
+	}
+	if issues := dialogueRhythmBlockingIssuesForShots(validationShots, dialogues); len(issues) > 0 {
+		return nil, fmt.Errorf("Scene音轨的Native Shot对白呈现未通过审核: %s", strings.Join(issues, "；"))
+	}
+	if err := validateDialogueShotTiming(validationShots, dialogues); err != nil {
+		return nil, err
+	}
+	draft := &sceneDirectorDraft{Shots: make([]sceneDirectorDraftShot, len(validationShots))}
+	for i, shot := range validationShots {
+		draft.Shots[i] = sceneDirectorDraftShot{ShotType: shot.ShotType, Duration: shot.Duration, Description: shot.Description, Dialogue: shot.Dialogue, StartState: shot.StartState, EndState: shot.EndState, PromptSubject: shot.PromptSubject, PromptAction: shot.PromptAction}
+	}
+	reviews := buildDialogueRhythmReview(draft, dialogues)
 	sourceByDialogue := make(map[uint]sceneAudioSource, len(sources))
 	for _, source := range sources {
 		sourceByDialogue[source.DialogueID] = source
@@ -129,9 +151,14 @@ func (s *ProjectService) sceneAudioShotContract(sc *models.Scene, dialogues []mo
 	var actual strings.Builder
 	audit := make([]sceneAudioShot, 0, len(shots))
 	shotStart := 0.0
+	reviewByShot := make(map[int]dialogueRhythmShotReview, len(reviews))
+	for _, review := range reviews {
+		reviewByShot[review.Shot] = review
+	}
 	for _, shot := range shots {
 		shotEnd := shotStart + shot.Duration
-		shotAudit := sceneAudioShot{ID: shot.ID, Order: shot.Order, Duration: shot.Duration, Ranges: append([]models.ShotDialogueRange(nil), shot.DialogueRanges...)}
+		review := reviewByShot[shot.Order]
+		shotAudit := sceneAudioShot{ID: shot.ID, Order: shot.Order, Duration: shot.Duration, Ranges: append([]models.ShotDialogueRange(nil), shot.DialogueRanges...), Presentation: review.Presentation, ContinuesFromPrevious: review.ContinuesFromPrev, ContinuesToNext: review.ContinuesToNext}
 		shotFragments := fragments[shot.ID]
 		if len(shotFragments) == 0 {
 			for _, source := range sources {
