@@ -196,7 +196,7 @@ func TestDialogueRhythmQueryQuotesReservedOrderColumn(t *testing.T) {
 
 func TestDialogueRhythmInstructionAllowsAttributedCrossCutListenerReaction(t *testing.T) {
 	got := dialogueRhythmDirectorInstruction([]models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "继续说话"}})
-	for _, want := range []string{"声音跨切延续", "听者必须闭口", "不能在听者镜头中开始一条新对白", "不得把这种连续对白改写成旁白或独立画外音", "narration不得驱动画面人物口型", "monologue必须明确人物闭口", "禁止使用 Endless 或 Canvas", "speech_presentation"} {
+	for _, want := range []string{"声音跨切延续", "听者必须闭口", "不能在听者镜头中开始一条新对白", "不得把这种连续对白改写成旁白或独立画外音", "narration不得驱动画面人物口型", "monologue必须明确人物闭口", "禁止使用 Endless 或 Canvas", "speech_presentation", "每个镜头只能承载一个权威声音身份", "说话人变化", "speech_type"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q: %s", want, got)
 		}

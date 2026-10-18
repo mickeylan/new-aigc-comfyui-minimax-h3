@@ -354,10 +354,11 @@ func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue) string {
 3. 普通dialogue默认让真实说话人清晰可见并由其同步口型；也允许同一句对白跨切到纯听者反应镜头，但必须明确写出“原说话人姓名+声音跨切延续”，听者必须闭口，且不得把这种连续对白改写成旁白或独立画外音。只有明确speech_type为offscreen_dialogue时才设计独立画外对白且说话人不得入镜；narration不得驱动画面人物口型；monologue必须明确人物闭口且不做口型。
 4. 纯听者反应镜头承载普通对白时只能承接上一镜已经开始的同一句对白；不能在听者镜头中开始一条新对白，也不能改变说话人。
 5. 同一句对白没有逗号、句号、分号、冒号或省略号等停顿依据时，默认禁止在该处切镜；仅允许说话人在前后镜持续可见并同步表演，或按第3、4条明确切到闭口听者反应且原说话人声音跨切延续。
-6. 每镜3–15秒，一个主要情绪、一个主要动作、一种主要构图和明确结束状态。
-7. 对白自然时长决定总时长，不得压缩语速，也不得用重复动作填时长。
-8. 每个输出必须是独立可制作的Native H3镜头，禁止使用 Endless 或 Canvas，也禁止无限延长和单条连续长镜头。
-9. 每镜必须填写speech_presentation：可见说话人口型用visible_speaker_lipsync；闭口听者承接同句声音用listener_reaction_carryover并在listener_character填写唯一听者真实姓名；独立画外对白用offscreen_dialogue；旁白用narration_voiceover；内心独白用internal_monologue；无发声用silent_visual。
+6. 每个镜头只能承载一个权威声音身份（同一说话人且同一speech_type）；说话人变化或dialogue、offscreen_dialogue、narration、monologue之间切换时必须切成新的Native镜头，不能用一个speech_presentation覆盖多个声音。
+7. 每镜3–15秒，一个主要情绪、一个主要动作、一种主要构图和明确结束状态。
+8. 对白自然时长决定总时长，不得压缩语速，也不得用重复动作填时长。
+9. 每个输出必须是独立可制作的Native H3镜头，禁止使用 Endless 或 Canvas，也禁止无限延长和单条连续长镜头。
+10. 每镜必须填写speech_presentation：可见说话人口型用visible_speaker_lipsync；闭口听者承接同句声音用listener_reaction_carryover并在listener_character填写唯一听者真实姓名；独立画外对白用offscreen_dialogue；旁白用narration_voiceover；内心独白用internal_monologue；无发声用silent_visual。
 结构化对白：
 ` + strings.Join(lines, "\n")
 }
@@ -1205,7 +1206,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	if err != nil && (req.Mode == "dialogue_rhythm" || req.Mode == "action_rhythm" || req.Mode == "combat_design") {
 		initialValidationError := err.Error()
 		repairRequirements := fmt.Sprintf("%s\n上一次草稿校验失败：%s。只修复该错误及其他空必填字段；保持镜头顺序、剧情事实和结构化对白逐字不变。上一次JSON：\n%s", req.Requirements, err.Error(), output)
-		repairInstruction := "修复对白节奏导演草稿；不得改写、遗漏、重复或新增任何对白。"
+		repairInstruction := "修复对白节奏导演草稿；不得改写、遗漏、重复或新增任何对白。若一个镜头跨越多个权威说话人或speech_type，必须保持原文顺序并拆成多个Native镜头，每镜只保留一个声音身份。"
 		if req.Mode == "action_rhythm" || req.Mode == "combat_design" {
 			repairInstruction = "修复武戏/仙术动作节拍草稿；保持实时速度、单一动作结果、空间轴线和结构化对白，不得使用慢动作。"
 		}
