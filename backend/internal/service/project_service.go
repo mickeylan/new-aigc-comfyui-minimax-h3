@@ -4916,11 +4916,31 @@ func (s *ProjectService) CreateCharacter(ch models.Character) (*models.Character
 	return &ch, nil
 }
 
+func referencedListenerShotCount(db *gorm.DB, projectID uint, characterName string) (int64, error) {
+	characterName = strings.TrimSpace(characterName)
+	if characterName == "" {
+		return 0, nil
+	}
+	var count int64
+	err := db.Model(&models.Shot{}).
+		Joins("JOIN scenes ON scenes.id = shots.scene_id").
+		Where("scenes.project_id = ? AND shots.listener_character = ?", projectID, characterName).
+		Count(&count).Error
+	return count, err
+}
+
 // UpdateCharacter 编辑角色（改名需保证项目内唯一）；形象相关字段变化会使旧标准像失效。
 func (s *ProjectService) UpdateCharacter(ch *models.Character, req models.Character) error {
 	updates := map[string]any{}
 	newName := strings.TrimSpace(req.Name)
 	if newName != "" && newName != ch.Name {
+		listenerRefs, err := referencedListenerShotCount(s.db, ch.ProjectID, ch.Name)
+		if err != nil {
+			return err
+		}
+		if listenerRefs > 0 {
+			return fmt.Errorf("角色正被%d个导演Shot作为闭口听者引用；请先重新指定这些Shot的listener_character，再修改角色名", listenerRefs)
+		}
 		var cnt int64
 		s.db.Model(&models.Character{}).Where("project_id = ? AND name = ? AND id != ?", ch.ProjectID, newName, ch.ID).Count(&cnt)
 		if cnt > 0 {
@@ -4968,6 +4988,13 @@ func (s *ProjectService) DeleteCharacter(projectID, id uint) error {
 	var ch models.Character
 	if err := s.db.Where("id = ? AND project_id = ?", id, projectID).First(&ch).Error; err != nil {
 		return err
+	}
+	listenerRefs, err := referencedListenerShotCount(s.db, projectID, ch.Name)
+	if err != nil {
+		return err
+	}
+	if listenerRefs > 0 {
+		return fmt.Errorf("角色正被%d个导演Shot作为闭口听者引用；请先重新指定这些Shot的listener_character，再删除角色", listenerRefs)
 	}
 	if ch.Portrait != "" && s.cfg != nil && s.remote != nil && s.upload != nil {
 		path := filepath.Join(s.upload.InputDir(), fmt.Sprintf("%d", projectID), ch.Portrait)

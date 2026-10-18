@@ -310,7 +310,7 @@ func newTestProjectService(t *testing.T) *ProjectService {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.Character{}, &models.Asset{}, &models.MergeTask{}, &models.Task{}, &models.GenerationCandidate{}, &models.Episode{}, &models.PromptPolicyOverride{}); err != nil {
+	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.Shot{}, &models.Character{}, &models.Asset{}, &models.MergeTask{}, &models.Task{}, &models.GenerationCandidate{}, &models.Episode{}, &models.PromptPolicyOverride{}); err != nil {
 		t.Fatal(err)
 	}
 	ps := NewProjectService(nil, db, nil, nil, nil, nil, nil, nil, nil)
@@ -1501,6 +1501,33 @@ func TestUpdateCharacterInvalidatesPortrait(t *testing.T) {
 	ps.db.First(&got, ch.ID)
 	if got.Portrait != "" || got.ReferencePrompt != "" || got.ReviewNote != "" || got.ProfileStatus != models.ProfileStatusDraft {
 		t.Fatalf("角色形象编辑未使派生状态失效: %+v", got)
+	}
+}
+
+func TestCharacterRenameAndDeleteRejectReferencedListener(t *testing.T) {
+	ps := newTestProjectService(t)
+	project := models.Project{Title: "listener reference"}
+	ps.db.Create(&project)
+	character := models.Character{ProjectID: project.ID, Name: "阿月"}
+	ps.db.Create(&character)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
+	ps.db.Create(&scene)
+	shot := models.Shot{SceneID: scene.ID, Order: 1, ShotType: "反应近景", Duration: 3, SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ListenerCharacter: "阿月"}
+	ps.db.Create(&shot)
+
+	if err := ps.UpdateCharacter(&character, models.Character{Name: "月儿"}); err == nil || !strings.Contains(err.Error(), "作为闭口听者引用") {
+		t.Fatalf("referenced listener rename accepted: %v", err)
+	}
+	if err := ps.DeleteCharacter(project.ID, character.ID); err == nil || !strings.Contains(err.Error(), "作为闭口听者引用") {
+		t.Fatalf("referenced listener delete accepted: %v", err)
+	}
+	var savedCharacter models.Character
+	if err := ps.db.First(&savedCharacter, character.ID).Error; err != nil || savedCharacter.Name != "阿月" {
+		t.Fatalf("blocked mutation changed character: %+v err=%v", savedCharacter, err)
+	}
+	var savedShot models.Shot
+	if err := ps.db.First(&savedShot, shot.ID).Error; err != nil || savedShot.ListenerCharacter != "阿月" {
+		t.Fatalf("blocked mutation changed listener Shot: %+v err=%v", savedShot, err)
 	}
 }
 
