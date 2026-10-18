@@ -285,10 +285,26 @@ func TestStructuredVisibleSpeakerAllowsClosedListenerInTwoShot(t *testing.T) {
 	}
 }
 
+func TestStructuredListenerPresentationRequiresDistinctNamedListener(t *testing.T) {
+	base := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "相信我，", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}, {Duration: 3, Dialogue: "不要回头。", SpeechPresentation: models.ShotSpeechPresentationListenerCarry}}}
+	dialogues := []models.Dialogue{{Character: "阿宁", SpeechType: "dialogue", Text: "相信我，不要回头。"}}
+	if err := requireStructuredSpeechPresentations(base); err == nil || !strings.Contains(err.Error(), "listener_character") {
+		t.Fatalf("missing listener accepted: %v", err)
+	}
+	base.Shots[1].ListenerCharacter = "阿宁"
+	if err := validateDialogueRhythmDraft(base, dialogues); err == nil || !strings.Contains(err.Error(), "不能与权威说话人") {
+		t.Fatalf("speaker reused as listener: %v", err)
+	}
+	base.Shots[1].ListenerCharacter = "阿月"
+	if err := validateGeneratedDialogueRhythmDraft(base, dialogues); err != nil {
+		t.Fatalf("distinct listener rejected: %v", err)
+	}
+}
+
 func TestStructuredListenerPresentationDoesNotRequireMagicCarryoverPhrase(t *testing.T) {
 	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
 		{Duration: 4, Dialogue: "相信姐姐，", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, ShotType: "近景", Description: "上官若琳开口", PromptSubject: "上官若琳", PromptAction: "同步口型"},
-		{Duration: 6, Dialogue: "姐姐不会让你去。", SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ShotType: "反应近景", Description: "上官若彤抬眼反应", PromptSubject: "上官若彤", PromptAction: "目光转向姐姐"},
+		{Duration: 6, Dialogue: "姐姐不会让你去。", SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ListenerCharacter: "上官若彤", ShotType: "反应近景", Description: "上官若彤抬眼反应", PromptSubject: "上官若彤", PromptAction: "目光转向姐姐"},
 	}}
 	dialogues := []models.Dialogue{{ID: 1, Character: "上官若琳", SpeechType: "dialogue", Text: "相信姐姐，姐姐不会让你去。"}}
 	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {

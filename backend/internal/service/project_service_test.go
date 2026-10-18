@@ -3042,7 +3042,7 @@ func TestStructuredShotPresentationControlsH3DialogueVisibility(t *testing.T) {
 	split := len([]rune("相信姐姐，"))
 	shots := []models.Shot{
 		{Order: 1, SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, PromptSubject: "人物正面中近景", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: 0, EndRune: split}}},
-		{Order: 2, SpeechPresentation: models.ShotSpeechPresentationListenerCarry, PromptSubject: "上官若彤反应近景", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: split, EndRune: len(full)}}},
+		{Order: 2, SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ListenerCharacter: "上官若彤", PromptSubject: "上官若彤反应近景", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: split, EndRune: len(full)}}},
 	}
 	got := appendStructuredDialogueToShots(body, dubs, []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图"}, shots)
 	if !strings.Contains(got, "<Subject 1> (S1) says: <d>[Chinese] 相信姐姐-") {

@@ -30,6 +30,7 @@ type shotDirectorHashV1 struct {
 	Duration                                                                               float64 `json:"duration"`
 	Description, Dialogue, Emotion                                                         string
 	SpeechPresentation                                                                     models.ShotSpeechPresentation `json:"speech_presentation,omitempty"`
+	ListenerCharacter                                                                      string                        `json:"listener_character,omitempty"`
 	PromptSubject, PromptAction, PromptCamera, PromptLighting, PromptStyle, NegativePrompt string
 	ActionTimeline                                                                         []models.ShotActionTimelineEntry `json:"action_timeline"`
 }
@@ -39,7 +40,7 @@ func shotDirectorSHA256(shot models.Shot) string {
 	if timeline == nil {
 		timeline = []models.ShotActionTimelineEntry{}
 	}
-	payload, _ := json.Marshal(shotDirectorHashV1{Order: shot.Order, ActType: shot.ActType, ShotType: shot.ShotType, CameraAngle: shot.CameraAngle, CameraMovement: shot.CameraMovement, TransitionType: shot.TransitionType, TransitionNote: shot.TransitionNote, StartState: shot.StartState, EndState: shot.EndState, Duration: shot.Duration, Description: shot.Description, Dialogue: shot.Dialogue, Emotion: shot.Emotion, SpeechPresentation: shot.SpeechPresentation, PromptSubject: shot.PromptSubject, PromptAction: shot.PromptAction, PromptCamera: shot.PromptCamera, PromptLighting: shot.PromptLighting, PromptStyle: shot.PromptStyle, NegativePrompt: shot.NegativePrompt, ActionTimeline: timeline})
+	payload, _ := json.Marshal(shotDirectorHashV1{Order: shot.Order, ActType: shot.ActType, ShotType: shot.ShotType, CameraAngle: shot.CameraAngle, CameraMovement: shot.CameraMovement, TransitionType: shot.TransitionType, TransitionNote: shot.TransitionNote, StartState: shot.StartState, EndState: shot.EndState, Duration: shot.Duration, Description: shot.Description, Dialogue: shot.Dialogue, Emotion: shot.Emotion, SpeechPresentation: shot.SpeechPresentation, ListenerCharacter: shot.ListenerCharacter, PromptSubject: shot.PromptSubject, PromptAction: shot.PromptAction, PromptCamera: shot.PromptCamera, PromptLighting: shot.PromptLighting, PromptStyle: shot.PromptStyle, NegativePrompt: shot.NegativePrompt, ActionTimeline: timeline})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
 }
@@ -70,7 +71,7 @@ func validateDialogueShotTiming(shots []models.Shot, dialogues []models.Dialogue
 	draft := &sceneDirectorDraft{Shots: make([]sceneDirectorDraftShot, len(shots))}
 	for i, shot := range shots {
 		draft.Shots[i] = sceneDirectorDraftShot{
-			Duration: shot.Duration, Dialogue: shot.Dialogue, SpeechPresentation: shot.SpeechPresentation, ShotType: shot.ShotType,
+			Duration: shot.Duration, Dialogue: shot.Dialogue, SpeechPresentation: shot.SpeechPresentation, ListenerCharacter: shot.ListenerCharacter, ShotType: shot.ShotType,
 			Description: shot.Description, PromptSubject: shot.PromptSubject, PromptAction: shot.PromptAction,
 			StartState: shot.StartState, EndState: shot.EndState,
 		}
@@ -133,7 +134,7 @@ func rebalanceShotDurations(shots []models.Shot, target float64) ([]models.Shot,
 var shotUpdateFields = map[string]bool{
 	"order": true, "act_type": true, "shot_type": true, "camera_angle": true, "camera_movement": true,
 	"transition_type": true, "transition_note": true, "start_state": true, "end_state": true,
-	"duration": true, "description": true, "dialogue": true, "speech_presentation": true, "emotion": true,
+	"duration": true, "description": true, "dialogue": true, "speech_presentation": true, "listener_character": true, "emotion": true,
 	"prompt_subject": true, "prompt_action": true, "prompt_camera": true,
 	"prompt_lighting": true, "prompt_style": true, "negative_prompt": true, "action_timeline": true,
 }
@@ -149,8 +150,15 @@ func validateShot(shot *models.Shot) error {
 	}
 	shot.Description = strings.TrimSpace(shot.Description)
 	shot.SpeechPresentation = models.ShotSpeechPresentation(strings.TrimSpace(string(shot.SpeechPresentation)))
+	shot.ListenerCharacter = strings.TrimSpace(shot.ListenerCharacter)
 	if !validShotSpeechPresentation(shot.SpeechPresentation) {
 		return fmt.Errorf("speech_presentation 必须为空或使用受支持的权威发声呈现类型")
+	}
+	if shot.SpeechPresentation == models.ShotSpeechPresentationListenerCarry && shot.ListenerCharacter == "" {
+		return fmt.Errorf("listener_reaction_carryover 必须填写 listener_character")
+	}
+	if shot.SpeechPresentation != models.ShotSpeechPresentationListenerCarry && shot.ListenerCharacter != "" {
+		return fmt.Errorf("仅 listener_reaction_carryover 可填写 listener_character")
 	}
 	shot.TransitionType = models.ShotTransitionType(strings.TrimSpace(string(shot.TransitionType)))
 	shot.TransitionNote = strings.TrimSpace(shot.TransitionNote)
@@ -464,7 +472,7 @@ func (s *ShotService) ReplaceShotsWithDialogueSnapshot(sceneID uint, shots []mod
 				"camera_angle": shots[i].CameraAngle, "camera_movement": shots[i].CameraMovement,
 				"transition_type": shots[i].TransitionType, "transition_note": shots[i].TransitionNote, "start_state": shots[i].StartState, "end_state": shots[i].EndState,
 				"duration": shots[i].Duration, "description": shots[i].Description, "dialogue": shots[i].Dialogue,
-				"speech_presentation": shots[i].SpeechPresentation, "emotion": shots[i].Emotion, "prompt_subject": shots[i].PromptSubject,
+				"speech_presentation": shots[i].SpeechPresentation, "listener_character": shots[i].ListenerCharacter, "emotion": shots[i].Emotion, "prompt_subject": shots[i].PromptSubject,
 				"prompt_action": shots[i].PromptAction, "prompt_camera": shots[i].PromptCamera,
 				"prompt_lighting": shots[i].PromptLighting, "prompt_style": shots[i].PromptStyle,
 				"negative_prompt": shots[i].NegativePrompt, "action_timeline_json": shots[i].ActionTimeline,
@@ -633,6 +641,9 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 		}
 		if v, ok := updates["speech_presentation"].(string); ok {
 			candidate.SpeechPresentation = models.ShotSpeechPresentation(v)
+		}
+		if v, ok := updates["listener_character"].(string); ok {
+			candidate.ListenerCharacter = v
 		}
 		if v, ok := updates["camera_angle"].(string); ok {
 			candidate.CameraAngle = v

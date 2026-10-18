@@ -3489,6 +3489,13 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 					seenSubject[tag] = true
 				}
 			}
+			if shot.SpeechPresentation == models.ShotSpeechPresentationListenerCarry {
+				listenerTag := useSubjectTags(strings.TrimSpace(shot.ListenerCharacter), referenceLines)
+				if isCharacterSubjectTag(listenerTag, referenceLines) && !seenSubject[listenerTag] {
+					visibleSubjects = append(visibleSubjects, listenerTag)
+					seenSubject[listenerTag] = true
+				}
+			}
 			// Carryover is a cut-level relationship, not a property of an arbitrary
 			// fragment. Only contiguous ranges in distinct adjacent shots may emit it.
 			continuesFrom := false

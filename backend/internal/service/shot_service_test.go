@@ -186,13 +186,14 @@ func TestReplaceShotsWithSnapshotEnforcesAuthoritativeSpeakerPresentation(t *tes
 	svc := NewShotService(db)
 	valid := []models.Shot{
 		{ShotType: "姐姐近景", Duration: 4, Dialogue: "相信姐姐，", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, PromptSubject: "姐姐可见并同步口型"},
-		{ShotType: "妹妹反应近景", Duration: 5, Dialogue: "我不会让你去。", SpeechPresentation: models.ShotSpeechPresentationListenerCarry, Description: "妹妹闭口倾听", PromptSubject: "妹妹单人近景", PromptAction: "妹妹双唇闭合"},
+		{ShotType: "妹妹反应近景", Duration: 5, Dialogue: "我不会让你去。", SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ListenerCharacter: "妹妹", Description: "妹妹闭口倾听", PromptSubject: "妹妹单人近景", PromptAction: "妹妹双唇闭合"},
 	}
 	if _, err := svc.ReplaceShotsWithDialogueSnapshot(scene.ID, valid, snapshot); err != nil {
 		t.Fatalf("valid listener carryover rejected: %v", err)
 	}
 	invalid := append([]models.Shot(nil), valid...)
 	invalid[1].SpeechPresentation = models.ShotSpeechPresentationVisibleSpeaker
+	invalid[1].ListenerCharacter = ""
 	invalid[1].Description, invalid[1].PromptAction = "姐姐不入镜，妹妹倾听", "妹妹注视前方"
 	if _, err := svc.ReplaceShotsWithDialogueSnapshot(scene.ID, invalid, snapshot); !errors.Is(err, ErrDialogueTimingBlocked) || !strings.Contains(err.Error(), "不入镜或闭口") {
 		t.Fatalf("invalid carryover error=%v", err)
@@ -201,8 +202,8 @@ func TestReplaceShotsWithSnapshotEnforcesAuthoritativeSpeakerPresentation(t *tes
 	if err := db.Where("scene_id = ?", scene.ID).Order("order_num, id").Find(&saved).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(saved) != 2 || saved[1].Description != valid[1].Description || saved[1].SpeechPresentation != models.ShotSpeechPresentationListenerCarry {
-		t.Fatalf("invalid save mutated shots or lost presentation: %+v", saved)
+	if len(saved) != 2 || saved[1].Description != valid[1].Description || saved[1].SpeechPresentation != models.ShotSpeechPresentationListenerCarry || saved[1].ListenerCharacter != "妹妹" {
+		t.Fatalf("invalid save mutated shots or lost presentation/listener: %+v", saved)
 	}
 }
 

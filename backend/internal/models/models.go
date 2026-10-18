@@ -998,6 +998,7 @@ type Shot struct {
 	Description           string                    `gorm:"type:text" json:"description"`
 	Dialogue              string                    `gorm:"type:text" json:"dialogue"` // compatibility display cache; structured Dialogue remains authoritative
 	SpeechPresentation    ShotSpeechPresentation    `gorm:"column:speech_presentation;size:48;index" json:"speech_presentation"`
+	ListenerCharacter     string                    `gorm:"column:listener_character;size:255" json:"listener_character"`
 	DialogueRanges        []ShotDialogueRange       `gorm:"column:dialogue_ranges_json;type:text;serializer:json" json:"dialogue_ranges"`
 	ActionTimeline        []ShotActionTimelineEntry `gorm:"column:action_timeline_json;type:text;serializer:json" json:"action_timeline"`
 	ContinuesFromPrevious bool                      `gorm:"-" json:"continues_from_previous"`

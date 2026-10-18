@@ -367,7 +367,7 @@ func TestSceneAudioSnapshotBindsAuthoritativeShotDialogueRanges(t *testing.T) {
 	group := "dialogue-group:1"
 	shots := []models.Shot{
 		{SceneID: scene.ID, Order: 1, Duration: 4, SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, Description: "人物凝视前方", DialogueRanges: []models.ShotDialogueRange{{DialogueID: dialogues[0].ID, GroupKey: group, StartRune: 0, EndRune: 2}}},
-		{SceneID: scene.ID, Order: 2, Duration: 4, SpeechPresentation: models.ShotSpeechPresentationListenerCarry, Description: "乙抬眼反应", DialogueRanges: []models.ShotDialogueRange{{DialogueID: dialogues[0].ID, GroupKey: group, StartRune: 2, EndRune: 4}}},
+		{SceneID: scene.ID, Order: 2, Duration: 4, SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ListenerCharacter: "乙", Description: "乙抬眼反应", DialogueRanges: []models.ShotDialogueRange{{DialogueID: dialogues[0].ID, GroupKey: group, StartRune: 2, EndRune: 4}}},
 	}
 	for i := range shots {
 		if err := db.Create(&shots[i]).Error; err != nil {
@@ -382,12 +382,12 @@ func TestSceneAudioSnapshotBindsAuthoritativeShotDialogueRanges(t *testing.T) {
 	if len(audit[1].Fragments) != 1 || audit[1].Fragments[0].AudioStart != 4 || audit[1].Fragments[0].AudioEnd != 8 {
 		t.Fatalf("fragment audit=%+v", audit[1].Fragments)
 	}
-	if audit[0].Presentation != string(models.ShotSpeechPresentationVisibleSpeaker) || audit[1].Presentation != string(models.ShotSpeechPresentationListenerCarry) {
-		t.Fatalf("structured presentation lost from immutable audit: %+v", audit)
+	if audit[0].Presentation != string(models.ShotSpeechPresentationVisibleSpeaker) || audit[1].Presentation != string(models.ShotSpeechPresentationListenerCarry) || audit[1].ListenerCharacter != "乙" {
+		t.Fatalf("structured presentation/listener lost from immutable audit: %+v", audit)
 	}
 	encoded, err := json.Marshal(sceneAudioSnapshot{Shots: audit})
-	if err != nil || !bytes.Contains(encoded, []byte(`"presentation":"listener_reaction_carryover"`)) {
-		t.Fatalf("immutable source snapshot omitted presentation: %s err=%v", encoded, err)
+	if err != nil || !bytes.Contains(encoded, []byte(`"presentation":"listener_reaction_carryover"`)) || !bytes.Contains(encoded, []byte(`"listener_character":"乙"`)) {
+		t.Fatalf("immutable source snapshot omitted presentation/listener: %s err=%v", encoded, err)
 	}
 	misaligned := append([]sceneAudioSource(nil), sources...)
 	misaligned[0].TimelineStart = 0.4

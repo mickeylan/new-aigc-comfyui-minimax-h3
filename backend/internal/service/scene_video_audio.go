@@ -74,6 +74,7 @@ type sceneAudioShot struct {
 	Ranges                []models.ShotDialogueRange `json:"dialogue_ranges"`
 	Fragments             []sceneAudioFragment       `json:"fragments,omitempty"`
 	Presentation          string                     `json:"presentation"`
+	ListenerCharacter     string                     `json:"listener_character,omitempty"`
 	ContinuesFromPrevious bool                       `json:"continues_from_previous"`
 	ContinuesToNext       bool                       `json:"continues_to_next"`
 }
@@ -126,7 +127,7 @@ func (s *ProjectService) sceneAudioShotContract(sc *models.Scene, dialogues []mo
 	}
 	draft := &sceneDirectorDraft{Shots: make([]sceneDirectorDraftShot, len(validationShots))}
 	for i, shot := range validationShots {
-		draft.Shots[i] = sceneDirectorDraftShot{ShotType: shot.ShotType, Duration: shot.Duration, Description: shot.Description, Dialogue: shot.Dialogue, SpeechPresentation: shot.SpeechPresentation, StartState: shot.StartState, EndState: shot.EndState, PromptSubject: shot.PromptSubject, PromptAction: shot.PromptAction}
+		draft.Shots[i] = sceneDirectorDraftShot{ShotType: shot.ShotType, Duration: shot.Duration, Description: shot.Description, Dialogue: shot.Dialogue, SpeechPresentation: shot.SpeechPresentation, ListenerCharacter: shot.ListenerCharacter, StartState: shot.StartState, EndState: shot.EndState, PromptSubject: shot.PromptSubject, PromptAction: shot.PromptAction}
 	}
 	reviews := buildDialogueRhythmReview(draft, dialogues)
 	sourceByDialogue := make(map[uint]sceneAudioSource, len(sources))
@@ -167,7 +168,7 @@ func (s *ProjectService) sceneAudioShotContract(sc *models.Scene, dialogues []mo
 	for _, shot := range shots {
 		shotEnd := shotStart + shot.Duration
 		review := reviewByShot[shot.Order]
-		shotAudit := sceneAudioShot{ID: shot.ID, Order: shot.Order, Duration: shot.Duration, Ranges: append([]models.ShotDialogueRange(nil), shot.DialogueRanges...), Presentation: review.Presentation, ContinuesFromPrevious: review.ContinuesFromPrev, ContinuesToNext: review.ContinuesToNext}
+		shotAudit := sceneAudioShot{ID: shot.ID, Order: shot.Order, Duration: shot.Duration, Ranges: append([]models.ShotDialogueRange(nil), shot.DialogueRanges...), Presentation: review.Presentation, ListenerCharacter: shot.ListenerCharacter, ContinuesFromPrevious: review.ContinuesFromPrev, ContinuesToNext: review.ContinuesToNext}
 		shotFragments := fragments[shot.ID]
 		if len(shotFragments) == 0 {
 			for _, source := range sources {

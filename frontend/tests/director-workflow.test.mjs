@@ -22,6 +22,9 @@ test('对白节奏镜头持久化结构化发声呈现而非只猜提示词', ()
   assert.match(source, /speech_presentation: s\.speech_presentation \|\| ''/)
   assert.match(source, /savedShots\[i\]\?\.speech_presentation/)
   assert.match(source, /发声呈现.*与审核草稿.*不一致/)
+  assert.match(source, /v-model="shot\.listener_character"/)
+  assert.match(source, /review\[i\]\?\.listener_character/)
+  assert.match(source, /闭口听者.*与审核草稿.*不一致/)
 })
 
 test('武戏导演支持确定性资料检索、正文预览和审核后导入', () => {
@@ -80,7 +83,7 @@ test('AI导演支持可审核的长对白Native拆镜', () => {
   assert.match(source, /本镜台词片段/)
   assert.match(source, /本镜无台词/)
   assert.match(source, /按原结构化Dialogue顺序连续承载/)
-  assert.match(source, /听者反应 · 原说话人跨切延续 · 听者闭口/)
+  assert.match(source, /听者反应.*listener_character.*闭口.*原说话人跨切延续/)
   assert.match(source, /说话人可见 · 同步口型/)
   assert.match(source, /旁白 · 不驱动画面人物口型/)
   assert.match(source, /内心独白 · 人物闭口/)

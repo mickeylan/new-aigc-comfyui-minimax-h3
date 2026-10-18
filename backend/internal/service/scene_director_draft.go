@@ -44,6 +44,7 @@ type dialogueRhythmShotReview struct {
 	ExitBoundary      string                         `json:"exit_boundary"`
 	Speakers          []string                       `json:"speakers"`
 	Presentation      string                         `json:"presentation"`
+	ListenerCharacter string                         `json:"listener_character,omitempty"`
 	ContinuesFromPrev bool                           `json:"continues_from_previous"`
 	ContinuesToNext   bool                           `json:"continues_to_next"`
 	Fragments         []dialogueRhythmFragmentReview `json:"fragments"`
@@ -58,6 +59,7 @@ type sceneDirectorDraftShot struct {
 	Description        string                           `json:"description"`
 	Dialogue           string                           `json:"dialogue"`
 	SpeechPresentation models.ShotSpeechPresentation    `json:"speech_presentation"`
+	ListenerCharacter  string                           `json:"listener_character"`
 	Emotion            string                           `json:"emotion"`
 	TransitionType     models.ShotTransitionType        `json:"transition_type"`
 	TransitionNote     string                           `json:"transition_note"`
@@ -95,6 +97,11 @@ func mergeDirectorShotPair(first, second sceneDirectorDraftShot) sceneDirectorDr
 	first.Duration += second.Duration
 	first.Description = joinDirectorField(first.Description, second.Description)
 	first.Dialogue += second.Dialogue
+	if first.ListenerCharacter == "" {
+		first.ListenerCharacter = second.ListenerCharacter
+	} else if second.ListenerCharacter != "" && first.ListenerCharacter != second.ListenerCharacter {
+		first.ListenerCharacter = ""
+	}
 	if first.SpeechPresentation != second.SpeechPresentation {
 		switch {
 		case first.SpeechPresentation == "" || first.SpeechPresentation == models.ShotSpeechPresentationSilent:
@@ -322,7 +329,7 @@ func parseSceneDirectorDraftWithOptions(output string, preserveShortShots bool) 
 		if preserveShortShots && validationDuration < 3 {
 			validationDuration = 3
 		}
-		shot := models.Shot{ActType: d.ActType, ShotType: d.ShotType, CameraAngle: d.CameraAngle, CameraMovement: d.CameraMovement, TransitionType: d.TransitionType, TransitionNote: d.TransitionNote, StartState: d.StartState, EndState: d.EndState, Duration: validationDuration, Description: d.Description, Dialogue: d.Dialogue, SpeechPresentation: d.SpeechPresentation, Emotion: d.Emotion, PromptSubject: d.PromptSubject, PromptAction: d.PromptAction, PromptCamera: d.PromptCamera, PromptLighting: d.PromptLighting, PromptStyle: d.PromptStyle, NegativePrompt: d.NegativePrompt, ActionTimeline: d.ActionTimeline}
+		shot := models.Shot{ActType: d.ActType, ShotType: d.ShotType, CameraAngle: d.CameraAngle, CameraMovement: d.CameraMovement, TransitionType: d.TransitionType, TransitionNote: d.TransitionNote, StartState: d.StartState, EndState: d.EndState, Duration: validationDuration, Description: d.Description, Dialogue: d.Dialogue, SpeechPresentation: d.SpeechPresentation, ListenerCharacter: d.ListenerCharacter, Emotion: d.Emotion, PromptSubject: d.PromptSubject, PromptAction: d.PromptAction, PromptCamera: d.PromptCamera, PromptLighting: d.PromptLighting, PromptStyle: d.PromptStyle, NegativePrompt: d.NegativePrompt, ActionTimeline: d.ActionTimeline}
 		if preserveShortShots && d.Duration < 3 && len(shot.ActionTimeline) > 0 {
 			normalizeDirectorActionTimeline(shot.ActionTimeline, validationDuration)
 		}
@@ -350,7 +357,7 @@ func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue) string {
 6. 每镜3–15秒，一个主要情绪、一个主要动作、一种主要构图和明确结束状态。
 7. 对白自然时长决定总时长，不得压缩语速，也不得用重复动作填时长。
 8. 每个输出必须是独立可制作的Native H3镜头，禁止使用 Endless 或 Canvas，也禁止无限延长和单条连续长镜头。
-9. 每镜必须填写speech_presentation：可见说话人口型用visible_speaker_lipsync；闭口听者承接同句声音用listener_reaction_carryover；独立画外对白用offscreen_dialogue；旁白用narration_voiceover；内心独白用internal_monologue；无发声用silent_visual。
+9. 每镜必须填写speech_presentation：可见说话人口型用visible_speaker_lipsync；闭口听者承接同句声音用listener_reaction_carryover并在listener_character填写唯一听者真实姓名；独立画外对白用offscreen_dialogue；旁白用narration_voiceover；内心独白用internal_monologue；无发声用silent_visual。
 结构化对白：
 ` + strings.Join(lines, "\n")
 }
@@ -826,7 +833,7 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 		if len(issues) > 0 {
 			status = "blocked"
 		}
-		reviews = append(reviews, dialogueRhythmShotReview{Shot: i + 1, StartTime: timeCursor, EndTime: timeCursor + shot.Duration, DialogueStart: start, DialogueEnd: end, NaturalMinimum: minimum, Ready: len(issues) == 0, Status: status, BlockingIssues: issues, Advisories: []string{}, Speakers: speakers, Presentation: presentation, ContinuesFromPrev: continuesFrom, ContinuesToNext: continuesTo, Fragments: fragments})
+		reviews = append(reviews, dialogueRhythmShotReview{Shot: i + 1, StartTime: timeCursor, EndTime: timeCursor + shot.Duration, DialogueStart: start, DialogueEnd: end, NaturalMinimum: minimum, Ready: len(issues) == 0, Status: status, BlockingIssues: issues, Advisories: []string{}, Speakers: speakers, Presentation: presentation, ListenerCharacter: strings.TrimSpace(shot.ListenerCharacter), ContinuesFromPrev: continuesFrom, ContinuesToNext: continuesTo, Fragments: fragments})
 		timeCursor += shot.Duration
 		dialogueCursor = end
 	}
@@ -865,7 +872,7 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 func dialogueRhythmBlockingIssuesForShots(shots []models.Shot, dialogues []models.Dialogue) []string {
 	draft := &sceneDirectorDraft{Shots: make([]sceneDirectorDraftShot, len(shots))}
 	for i, shot := range shots {
-		draft.Shots[i] = sceneDirectorDraftShot{ShotType: shot.ShotType, Duration: shot.Duration, Description: shot.Description, Dialogue: shot.Dialogue, SpeechPresentation: shot.SpeechPresentation, StartState: shot.StartState, EndState: shot.EndState, PromptSubject: shot.PromptSubject, PromptAction: shot.PromptAction}
+		draft.Shots[i] = sceneDirectorDraftShot{ShotType: shot.ShotType, Duration: shot.Duration, Description: shot.Description, Dialogue: shot.Dialogue, SpeechPresentation: shot.SpeechPresentation, ListenerCharacter: shot.ListenerCharacter, StartState: shot.StartState, EndState: shot.EndState, PromptSubject: shot.PromptSubject, PromptAction: shot.PromptAction}
 	}
 	seen := map[string]bool{}
 	var issues []string
@@ -940,6 +947,13 @@ func requireStructuredSpeechPresentations(draft *sceneDirectorDraft) error {
 		}
 		if !validShotSpeechPresentation(shot.SpeechPresentation) {
 			return fmt.Errorf("对白拆镜%d的speech_presentation无效", i+1)
+		}
+		listener := strings.TrimSpace(shot.ListenerCharacter)
+		if shot.SpeechPresentation == models.ShotSpeechPresentationListenerCarry && listener == "" {
+			return fmt.Errorf("对白拆镜%d使用listener_reaction_carryover时必须填写listener_character", i+1)
+		}
+		if shot.SpeechPresentation != models.ShotSpeechPresentationListenerCarry && listener != "" {
+			return fmt.Errorf("对白拆镜%d仅listener_reaction_carryover可填写listener_character", i+1)
 		}
 	}
 	return nil
@@ -1036,6 +1050,15 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 			}
 			if shot.SpeechPresentation != "" && shot.SpeechPresentation != models.ShotSpeechPresentationVisibleSpeaker && shot.SpeechPresentation != models.ShotSpeechPresentationListenerCarry {
 				return fmt.Errorf("对白拆镜%d的普通对白speech_presentation必须为visible_speaker_lipsync或listener_reaction_carryover", i+1)
+			}
+			if shot.SpeechPresentation == models.ShotSpeechPresentationListenerCarry {
+				listener := strings.TrimSpace(shot.ListenerCharacter)
+				if listener == "" {
+					return fmt.Errorf("对白拆镜%d使用listener_reaction_carryover时必须填写listener_character", i+1)
+				}
+				if listener == speaker {
+					return fmt.Errorf("对白拆镜%d的listener_character不能与权威说话人“%s”相同", i+1, speaker)
+				}
 			}
 			if shot.SpeechPresentation == models.ShotSpeechPresentationVisibleSpeaker {
 				if shotExplicitlyExcludesSpeaker(shot, speaker) || shotExplicitlyClosesSpeaker(shot, speaker) {
