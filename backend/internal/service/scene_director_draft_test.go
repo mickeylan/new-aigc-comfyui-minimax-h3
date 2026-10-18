@@ -227,6 +227,21 @@ func TestValidateDialogueRhythmDraftAllowsAttributedCrossCutListenerReaction(t *
 	}
 }
 
+func TestNewDialogueRhythmDraftRequiresStructuredSpeechPresentation(t *testing.T) {
+	missing := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "相信我。", ShotType: "近景"}}}
+	if err := requireStructuredSpeechPresentations(missing); err == nil || !strings.Contains(err.Error(), "缺少speech_presentation") {
+		t.Fatalf("missing presentation accepted: %v", err)
+	}
+	silent := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, SpeechPresentation: models.ShotSpeechPresentationSilent, ShotType: "空镜"}}}
+	if err := requireStructuredSpeechPresentations(silent); err != nil {
+		t.Fatalf("structured silent shot rejected: %v", err)
+	}
+	invalid := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, SpeechPresentation: "guessed_voice", ShotType: "近景"}}}
+	if err := requireStructuredSpeechPresentations(invalid); err == nil || !strings.Contains(err.Error(), "无效") {
+		t.Fatalf("invalid presentation accepted: %v", err)
+	}
+}
+
 func TestStructuredVisibleSpeakerPresentationDoesNotRequireMagicText(t *testing.T) {
 	dialogues := []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信我。"}}
 	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "相信我。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, ShotType: "近景", Description: "人物凝视前方"}}}

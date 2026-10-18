@@ -920,6 +920,21 @@ func dialogueBoundaryReason(before, after []dialogueRhythmFragmentReview, sameDi
 	return "Dialogue边界"
 }
 
+func requireStructuredSpeechPresentations(draft *sceneDirectorDraft) error {
+	if draft == nil {
+		return fmt.Errorf("对白节奏导演草稿为空")
+	}
+	for i, shot := range draft.Shots {
+		if shot.SpeechPresentation == "" {
+			return fmt.Errorf("对白拆镜%d缺少speech_presentation；新草稿必须显式声明权威发声呈现", i+1)
+		}
+		if !validShotSpeechPresentation(shot.SpeechPresentation) {
+			return fmt.Errorf("对白拆镜%d的speech_presentation无效", i+1)
+		}
+	}
+	return nil
+}
+
 func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
 	var expected, actual strings.Builder
 	for _, d := range dialogues {
@@ -1122,7 +1137,10 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		draft, parseErr := parseSceneDirectorDraftWithOptions(raw, preserveShortShots)
 		if parseErr == nil && req.Mode == "dialogue_rhythm" {
 			normalizeDialogueRhythmDraftDurations(draft)
-			parseErr = validateDialogueRhythmDraft(draft, dialogues)
+			parseErr = requireStructuredSpeechPresentations(draft)
+			if parseErr == nil {
+				parseErr = validateDialogueRhythmDraft(draft, dialogues)
+			}
 			if parseErr == nil {
 				parseErr = normalizeDialogueRhythmReviewDurations(draft, dialogues)
 			}
