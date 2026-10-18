@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -356,8 +357,7 @@ func TestSceneAudioSnapshotBindsAuthoritativeShotDialogueRanges(t *testing.T) {
 	scene := models.Scene{ProjectID: project.ID, Order: 1, Duration: 8}
 	_ = db.Create(&scene).Error
 	dialogues := []models.Dialogue{
-		{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "甲", SpeechType: "dialogue", Text: "甲乙"},
-		{ProjectID: project.ID, SceneID: scene.ID, Order: 2, Character: "甲", SpeechType: "dialogue", Text: "丙丁"},
+		{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "甲", SpeechType: "dialogue", Text: "甲乙丙丁"},
 	}
 	for i := range dialogues {
 		if err := db.Create(&dialogues[i]).Error; err != nil {
@@ -366,15 +366,15 @@ func TestSceneAudioSnapshotBindsAuthoritativeShotDialogueRanges(t *testing.T) {
 	}
 	group := "dialogue-group:1"
 	shots := []models.Shot{
-		{SceneID: scene.ID, Order: 1, Duration: 4, Description: "甲可见并同步口型说话", PromptSubject: "甲可见", PromptAction: "同步口型", DialogueRanges: []models.ShotDialogueRange{{DialogueID: dialogues[0].ID, GroupKey: group, StartRune: 0, EndRune: 2}}},
-		{SceneID: scene.ID, Order: 2, Duration: 4, Description: "甲可见并同步口型说话", PromptSubject: "甲可见", PromptAction: "同步口型", DialogueRanges: []models.ShotDialogueRange{{DialogueID: dialogues[1].ID, GroupKey: group, StartRune: 2, EndRune: 4}}},
+		{SceneID: scene.ID, Order: 1, Duration: 4, SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, Description: "人物凝视前方", DialogueRanges: []models.ShotDialogueRange{{DialogueID: dialogues[0].ID, GroupKey: group, StartRune: 0, EndRune: 2}}},
+		{SceneID: scene.ID, Order: 2, Duration: 4, SpeechPresentation: models.ShotSpeechPresentationListenerCarry, Description: "乙抬眼反应", DialogueRanges: []models.ShotDialogueRange{{DialogueID: dialogues[0].ID, GroupKey: group, StartRune: 2, EndRune: 4}}},
 	}
 	for i := range shots {
 		if err := db.Create(&shots[i]).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
-	sources := []sceneAudioSource{{DialogueID: dialogues[0].ID, TimelineStart: 0.4, TimelineEnd: 4}, {DialogueID: dialogues[1].ID, TimelineStart: 4, TimelineEnd: 8}}
+	sources := []sceneAudioSource{{DialogueID: dialogues[0].ID, TimelineStart: 0, TimelineEnd: 8}}
 	audit, err := svc.sceneAudioShotContract(&scene, dialogues, sources)
 	if err != nil || len(audit) != 2 {
 		t.Fatalf("audit=%+v err=%v", audit, err)
@@ -382,12 +382,19 @@ func TestSceneAudioSnapshotBindsAuthoritativeShotDialogueRanges(t *testing.T) {
 	if len(audit[1].Fragments) != 1 || audit[1].Fragments[0].AudioStart != 4 || audit[1].Fragments[0].AudioEnd != 8 {
 		t.Fatalf("fragment audit=%+v", audit[1].Fragments)
 	}
+	if audit[0].Presentation != string(models.ShotSpeechPresentationVisibleSpeaker) || audit[1].Presentation != string(models.ShotSpeechPresentationListenerCarry) {
+		t.Fatalf("structured presentation lost from immutable audit: %+v", audit)
+	}
+	encoded, err := json.Marshal(sceneAudioSnapshot{Shots: audit})
+	if err != nil || !bytes.Contains(encoded, []byte(`"presentation":"listener_reaction_carryover"`)) {
+		t.Fatalf("immutable source snapshot omitted presentation: %s err=%v", encoded, err)
+	}
 	misaligned := append([]sceneAudioSource(nil), sources...)
-	misaligned[1].TimelineStart = 3.8
+	misaligned[0].TimelineStart = 0.4
 	if _, err := svc.sceneAudioShotContract(&scene, dialogues, misaligned); err == nil || !strings.Contains(err.Error(), "超出Shot区间") {
 		t.Fatalf("misaligned err=%v", err)
 	}
-	shots[1].DialogueRanges = []models.ShotDialogueRange{{DialogueID: dialogues[1].ID, GroupKey: group, StartRune: 3, EndRune: 4}}
+	shots[1].DialogueRanges = []models.ShotDialogueRange{{DialogueID: dialogues[0].ID, GroupKey: group, StartRune: 3, EndRune: 4}}
 	if err := db.Save(&shots[1]).Error; err != nil {
 		t.Fatal(err)
 	}

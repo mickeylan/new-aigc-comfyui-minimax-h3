@@ -126,7 +126,7 @@ func (s *ProjectService) sceneAudioShotContract(sc *models.Scene, dialogues []mo
 	}
 	draft := &sceneDirectorDraft{Shots: make([]sceneDirectorDraftShot, len(validationShots))}
 	for i, shot := range validationShots {
-		draft.Shots[i] = sceneDirectorDraftShot{ShotType: shot.ShotType, Duration: shot.Duration, Description: shot.Description, Dialogue: shot.Dialogue, StartState: shot.StartState, EndState: shot.EndState, PromptSubject: shot.PromptSubject, PromptAction: shot.PromptAction}
+		draft.Shots[i] = sceneDirectorDraftShot{ShotType: shot.ShotType, Duration: shot.Duration, Description: shot.Description, Dialogue: shot.Dialogue, SpeechPresentation: shot.SpeechPresentation, StartState: shot.StartState, EndState: shot.EndState, PromptSubject: shot.PromptSubject, PromptAction: shot.PromptAction}
 	}
 	reviews := buildDialogueRhythmReview(draft, dialogues)
 	sourceByDialogue := make(map[uint]sceneAudioSource, len(sources))
