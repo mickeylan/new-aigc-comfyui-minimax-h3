@@ -329,6 +329,48 @@ func TestSceneReviewedAudioSelectionMarksMissingMixFileStale(t *testing.T) {
 	}
 }
 
+func TestSceneAudioSnapshotBindsAuthoritativeShotDialogueRanges(t *testing.T) {
+	svc := newTestProjectService(t)
+	db := svc.db
+	if err := db.AutoMigrate(&models.Dialogue{}, &models.DialogueAudioCandidate{}, &models.Shot{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "shot-audio"}
+	_ = db.Create(&project).Error
+	scene := models.Scene{ProjectID: project.ID, Order: 1, Duration: 8}
+	_ = db.Create(&scene).Error
+	dialogues := []models.Dialogue{
+		{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "甲", SpeechType: "dialogue", Text: "甲乙"},
+		{ProjectID: project.ID, SceneID: scene.ID, Order: 2, Character: "甲", SpeechType: "dialogue", Text: "丙丁"},
+	}
+	for i := range dialogues {
+		if err := db.Create(&dialogues[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	group := "dialogue-group:1"
+	shots := []models.Shot{
+		{SceneID: scene.ID, Order: 1, Duration: 4, DialogueRanges: []models.ShotDialogueRange{{DialogueID: dialogues[0].ID, GroupKey: group, StartRune: 0, EndRune: 2}}},
+		{SceneID: scene.ID, Order: 2, Duration: 4, DialogueRanges: []models.ShotDialogueRange{{DialogueID: dialogues[1].ID, GroupKey: group, StartRune: 2, EndRune: 4}}},
+	}
+	for i := range shots {
+		if err := db.Create(&shots[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	audit, err := svc.sceneAudioShotContract(&scene, dialogues)
+	if err != nil || len(audit) != 2 {
+		t.Fatalf("audit=%+v err=%v", audit, err)
+	}
+	shots[1].DialogueRanges = []models.ShotDialogueRange{{DialogueID: dialogues[1].ID, GroupKey: group, StartRune: 3, EndRune: 4}}
+	if err := db.Save(&shots[1]).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.sceneAudioShotContract(&scene, dialogues); err == nil || !strings.Contains(err.Error(), "未逐字") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestSceneAudioCandidatesBecomeStaleWhenDialogueTimelineChanges(t *testing.T) {
 	svc := newTestProjectService(t)
 	db := svc.db

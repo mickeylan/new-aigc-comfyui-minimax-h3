@@ -48,16 +48,65 @@ type sceneAudioSource struct {
 	Duration    float64 `json:"duration"`
 }
 
+type sceneAudioShot struct {
+	ID       uint                       `json:"id"`
+	Order    int                        `json:"order"`
+	Duration float64                    `json:"duration"`
+	Ranges   []models.ShotDialogueRange `json:"dialogue_ranges"`
+}
+
 type sceneAudioSnapshot struct {
 	Version       int                `json:"version"`
 	ProjectID     uint               `json:"project_id"`
 	SceneID       uint               `json:"scene_id"`
 	SceneDuration float64            `json:"scene_duration"`
 	Sources       []sceneAudioSource `json:"sources"`
+	Shots         []sceneAudioShot   `json:"shots,omitempty"`
+}
+
+func (s *ProjectService) sceneAudioShotContract(sc *models.Scene, dialogues []models.Dialogue) ([]sceneAudioShot, error) {
+	if !s.db.Migrator().HasTable(&models.Shot{}) {
+		return nil, nil
+	}
+	var shots []models.Shot
+	if err := s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
+		return nil, err
+	}
+	if len(shots) == 0 {
+		return nil, nil
+	}
+	if math.Abs(shotDurationTotal(shots)-normalizeSceneDuration(sc.Duration)) > shotDurationTolerance {
+		return nil, fmt.Errorf("Shot总时长 %.1f 秒与Scene时长 %.1f 秒不一致", shotDurationTotal(shots), normalizeSceneDuration(sc.Duration))
+	}
+	fragments, err := NewShotService(s.db).ResolveDialogueFragments(sc.ID, shots)
+	if err != nil {
+		return nil, err
+	}
+	var actual strings.Builder
+	audit := make([]sceneAudioShot, 0, len(shots))
+	for _, shot := range shots {
+		audit = append(audit, sceneAudioShot{ID: shot.ID, Order: shot.Order, Duration: shot.Duration, Ranges: append([]models.ShotDialogueRange(nil), shot.DialogueRanges...)})
+		for _, fragment := range fragments[shot.ID] {
+			actual.WriteString(canonicalDialogueText(fragment.Text))
+		}
+	}
+	var expected strings.Builder
+	for _, dialogue := range dialogues {
+		expected.WriteString(canonicalDialogueText(dialogue.Text))
+	}
+	if actual.String() != expected.String() {
+		return nil, fmt.Errorf("Shot对白区间未逐字、按序且无重复覆盖完整权威Dialogue")
+	}
+	return audit, nil
 }
 
 func (s *ProjectService) currentSceneAudioSnapshot(sc *models.Scene, dialogues []models.Dialogue) (sceneAudioSnapshot, string, error) {
-	snapshot := sceneAudioSnapshot{Version: 1, ProjectID: sc.ProjectID, SceneID: sc.ID, SceneDuration: normalizeSceneDuration(sc.Duration)}
+	snapshot := sceneAudioSnapshot{Version: 2, ProjectID: sc.ProjectID, SceneID: sc.ID, SceneDuration: normalizeSceneDuration(sc.Duration)}
+	shots, err := s.sceneAudioShotContract(sc, dialogues)
+	if err != nil {
+		return snapshot, "", err
+	}
+	snapshot.Shots = shots
 	for _, dialogue := range dialogues {
 		if dialogue.AudioStale || dialogue.Status != "ready" || strings.TrimSpace(dialogue.AudioFile) == "" || dialogue.AudioHash == "" || dialogue.AudioHash != s.effectiveDialogueAudioHash(dialogue) {
 			return snapshot, "", fmt.Errorf("Dialogue %d 的生产音频未就绪、已过期或哈希不匹配", dialogue.ID)

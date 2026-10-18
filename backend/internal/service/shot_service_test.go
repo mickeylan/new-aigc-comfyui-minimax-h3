@@ -60,11 +60,31 @@ func newTestDBWithNewModels(t *testing.T) *gorm.DB {
 		&models.Project{}, &models.Episode{}, &models.Scene{}, &models.Shot{}, &models.PromptVersion{}, &models.StylePreset{},
 		&models.Character{}, &models.CharacterLook{}, &models.ShotCharacterLook{},
 		&models.CharacterOutfit{}, &models.ShotCharacterOutfit{},
-		&models.GenerationCandidate{}, &models.FrameCandidate{}, &models.SceneContinuity{}, &models.Dialogue{},
+		&models.GenerationCandidate{}, &models.FrameCandidate{}, &models.SceneContinuity{}, &models.Dialogue{}, &models.SceneAudioCandidate{},
 	); err != nil {
 		t.Fatal(err)
 	}
 	return db
+}
+
+func TestShotAggregationMarksSceneAudioCandidateStale(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "audio-shot-stale"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Duration: 3}
+	db.Create(&scene)
+	row := models.SceneAudioCandidate{ProjectID: project.ID, SceneID: scene.ID, SourceHash: "old", File: "mix.wav", ReviewStatus: "accepted", IsCurrent: true}
+	db.Create(&row)
+	shot := models.Shot{SceneID: scene.ID, Order: 1, ActType: models.ShotActSetup, ShotType: "medium", CameraMovement: "static", TransitionType: models.ShotTransitionCut, Duration: 3, Description: "人物站立", PromptSubject: "人物", PromptAction: "站立", PromptCamera: "static", PromptLighting: "daylight", PromptStyle: "live action"}
+	if _, err := NewShotService(db).CreateShot(scene.ID, shot); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&row, row.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !row.Stale || row.IsCurrent {
+		t.Fatalf("row=%+v", row)
+	}
 }
 
 func TestShotServiceStoresManualDirectorStructure(t *testing.T) {

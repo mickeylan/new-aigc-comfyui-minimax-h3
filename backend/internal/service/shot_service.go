@@ -855,6 +855,9 @@ func aggregateShotsIntoScene(db *gorm.DB, sceneID uint, shots []models.Shot) err
 	if err := invalidateContinuityDependentsTx(db, scene.ProjectID, []uint{sceneID}, "上游导演镜头已修改"); err != nil {
 		return err
 	}
+	if err := markSceneAudioCandidatesStale(db, scene.ProjectID, sceneID, "导演Shot或权威Dialogue区间已修改"); err != nil {
+		return err
+	}
 	return markEpisodeEditorialStale(db, scene.ProjectID, scene.EpisodeN)
 }
 
