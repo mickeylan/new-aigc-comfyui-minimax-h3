@@ -4381,10 +4381,32 @@ func ValidateFullH3PromptForReferences(prompt string, referenceLines []string) [
 	return uniqueStrings(issues)
 }
 
-func validateFinalH3Submission(prompt, template string, duration float64, referenceLines []string, dubs []models.Dialogue) []string {
+func validateH3ListenerSubjectBindings(shots []models.Shot, referenceLines []string) []string {
+	var issues []string
+	for _, shot := range shots {
+		if shot.SpeechPresentation != models.ShotSpeechPresentationListenerCarry {
+			continue
+		}
+		listener := strings.TrimSpace(shot.ListenerCharacter)
+		if listener == "" {
+			issues = append(issues, fmt.Sprintf("Shot %d的闭口听者未填写listener_character", shot.Order))
+			continue
+		}
+		tag := useSubjectTags(listener, referenceLines)
+		if tag == listener || !isCharacterSubjectTag(tag, referenceLines) {
+			issues = append(issues, fmt.Sprintf("Shot %d的闭口听者“%s”没有对应的角色参考图Subject绑定", shot.Order, listener))
+		}
+	}
+	return uniqueStrings(issues)
+}
+
+func validateFinalH3Submission(prompt, template string, duration float64, referenceLines []string, dubs []models.Dialogue, shots ...[]models.Shot) []string {
 	issues := validateGeneratedH3Prompt(prompt, template, duration)
 	if isH3Ref2VTemplate(template) {
 		issues = append(issues, ValidateFullH3PromptForReferences(prompt, referenceLines)...)
+		if len(shots) > 0 {
+			issues = append(issues, validateH3ListenerSubjectBindings(shots[0], referenceLines)...)
+		}
 		if !videoAudioContractMatches(prompt, dubs) {
 			issues = append(issues, "声音契约与结构化Dialogue或禁配乐规则不一致")
 		}
@@ -6126,7 +6148,7 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	if isH3Ref2VTemplate(tplCode) {
 		_, finalReferenceLines, _ = s.sceneVideoContinuityReferences(sc, pid)
 	}
-	if issues := validateFinalH3Submission(promptText, tplCode, duration, finalReferenceLines, dialogues); len(issues) > 0 {
+	if issues := validateFinalH3Submission(promptText, tplCode, duration, finalReferenceLines, dialogues, structuredShots); len(issues) > 0 {
 		return fmt.Errorf("视频提示词未通过 MiniMax H3 正式提交校验: %s", strings.Join(issues, "；"))
 	}
 	if sc.ImageFile != "" {

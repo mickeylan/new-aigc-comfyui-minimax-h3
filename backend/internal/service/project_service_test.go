@@ -2671,6 +2671,24 @@ func TestValidateFinalH3SubmissionRejectsUnknownReferencesAndAudioDrift(t *testi
 	}
 }
 
+func TestValidateFinalH3SubmissionRequiresListenerSubjectBinding(t *testing.T) {
+	prompt := "subject_definitions:\n<Subject 1> is from <Picture 1>.\n<Subject 2> is from <Picture 2>.\n\nsummary:\ntest\n\nretention_analysis:\nsubjects preserved.\n\ndetailed_description:\n[Shot 1] <Subject 1> speaks while <Subject 2> listens with closed lips.\n\noverall_soundscape:\n" + h3SoundscapeContract(false) + "\n\nnon_diegetic_music:\n" + h3NoMusicContract()
+	shot := models.Shot{Order: 2, SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ListenerCharacter: "阿月"}
+	refs := []string{"- <Picture 1>：角色「阿宁」标准像", "- <Picture 2>：角色「阿月」标准像"}
+	if issues := validateFinalH3Submission(prompt, "minimax_h3_ref2v", 5, refs, nil, []models.Shot{shot}); len(issues) != 0 {
+		t.Fatalf("bound listener rejected: %v", issues)
+	}
+	issues := strings.Join(validateFinalH3Submission(prompt, "minimax_h3_ref2v", 5, refs[:1], nil, []models.Shot{shot}), "|")
+	if !strings.Contains(issues, "闭口听者“阿月”没有对应的角色参考图Subject绑定") {
+		t.Fatalf("unbound listener accepted: %s", issues)
+	}
+	shot.ListenerCharacter = ""
+	issues = strings.Join(validateFinalH3Submission(prompt, "minimax_h3_ref2v", 5, refs, nil, []models.Shot{shot}), "|")
+	if !strings.Contains(issues, "未填写listener_character") {
+		t.Fatalf("empty listener accepted: %s", issues)
+	}
+}
+
 func TestValidateGeneratedH3PromptAcceptsReportedShotTwoTimestamp(t *testing.T) {
 	prompt := "subject_definitions:\n<Subject 2> is a referenced character.\n\nsummary:\ntest\n\nretention_analysis:\ntest\n\ndetailed_description:\n[Shot 1] A man stands among drifting peach blossoms.\n[Shot 2] At 00:04.000, <Subject 2> covers her mouth as tears spill down her cheeks. <Subject 2> (S1) says: <d>[Chinese] 舒寒……</d>.\n\noverall_soundscape:\nDialogue appears only in the shot timeline; no additional voices, narration, or singing are present.\n\nnon_diegetic_music:\nN/A"
 	for _, issue := range validateGeneratedH3Prompt(prompt, "minimax_h3_ref2v", 8) {
