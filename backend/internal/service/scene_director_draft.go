@@ -920,6 +920,16 @@ func dialogueBoundaryReason(before, after []dialogueRhythmFragmentReview, sameDi
 	return "Dialogue边界"
 }
 
+func validateGeneratedDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
+	if err := requireStructuredSpeechPresentations(draft); err != nil {
+		return err
+	}
+	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
+		return err
+	}
+	return normalizeDialogueRhythmReviewDurations(draft, dialogues)
+}
+
 func requireStructuredSpeechPresentations(draft *sceneDirectorDraft) error {
 	if draft == nil {
 		return fmt.Errorf("对白节奏导演草稿为空")
@@ -1137,13 +1147,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		draft, parseErr := parseSceneDirectorDraftWithOptions(raw, preserveShortShots)
 		if parseErr == nil && req.Mode == "dialogue_rhythm" {
 			normalizeDialogueRhythmDraftDurations(draft)
-			parseErr = requireStructuredSpeechPresentations(draft)
-			if parseErr == nil {
-				parseErr = validateDialogueRhythmDraft(draft, dialogues)
-			}
-			if parseErr == nil {
-				parseErr = normalizeDialogueRhythmReviewDurations(draft, dialogues)
-			}
+			parseErr = validateGeneratedDialogueRhythmDraft(draft, dialogues)
 		} else if parseErr == nil && req.Mode == "action_rhythm" {
 			parseErr = validateActionRhythmDraft(draft, dialogues)
 		} else if parseErr == nil && req.Mode == "combat_design" {
@@ -1183,13 +1187,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 			if restoreErr := restoreDialogueRhythmDraftText(draft, dialogues); restoreErr != nil {
 				err = restoreErr
 			} else {
-				err = requireStructuredSpeechPresentations(draft)
-				if err == nil {
-					err = validateDialogueRhythmDraft(draft, dialogues)
-				}
-				if err == nil {
-					err = normalizeDialogueRhythmReviewDurations(draft, dialogues)
-				}
+				err = validateGeneratedDialogueRhythmDraft(draft, dialogues)
 			}
 			if strings.TrimSpace(restoreReason) != "" {
 				restoreResult := "accepted"

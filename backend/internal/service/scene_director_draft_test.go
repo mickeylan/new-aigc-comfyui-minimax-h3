@@ -227,6 +227,25 @@ func TestValidateDialogueRhythmDraftAllowsAttributedCrossCutListenerReaction(t *
 	}
 }
 
+func TestGeneratedDialogueRhythmDraftValidationRepairsMissingPresentationOnlyAfterExplicitFix(t *testing.T) {
+	dialogues := []models.Dialogue{{Character: "阿宁", SpeechType: "dialogue", Text: "相信我。"}}
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "相信我。", ShotType: "近景", Description: "人物凝视前方"}}}
+	if err := validateGeneratedDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "缺少speech_presentation") {
+		t.Fatalf("initial missing presentation did not trigger repair: %v", err)
+	}
+	draft.Shots[0].SpeechPresentation = models.ShotSpeechPresentationVisibleSpeaker
+	if err := validateGeneratedDialogueRhythmDraft(draft, dialogues); err != nil {
+		t.Fatalf("explicitly repaired presentation rejected: %v", err)
+	}
+	draft.Shots[0].SpeechPresentation = ""
+	if err := restoreDialogueRhythmDraftText(draft, dialogues); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateGeneratedDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "缺少speech_presentation") {
+		t.Fatalf("authoritative text restore bypassed presentation repair: %v", err)
+	}
+}
+
 func TestNewDialogueRhythmDraftRequiresStructuredSpeechPresentation(t *testing.T) {
 	missing := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "相信我。", ShotType: "近景"}}}
 	if err := requireStructuredSpeechPresentations(missing); err == nil || !strings.Contains(err.Error(), "缺少speech_presentation") {
