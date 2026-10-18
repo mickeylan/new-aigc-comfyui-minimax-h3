@@ -14,6 +14,14 @@ test('项目 Skill 按阶段和 operation 精确隔离', () => {
   assert.equal(projectSkillConfig(configs, 'video_prompt', 'reference-shot-state-prompt').skill_id, 2)
 })
 
+test('对白节奏镜头持久化结构化发声呈现而非只猜提示词', () => {
+  const source = readFileSync(new URL('../src/components/ShotDirectorEditor.vue', import.meta.url), 'utf8')
+  assert.match(source, /权威发声呈现/)
+  assert.match(source, /v-model="shot\.speech_presentation"/)
+  assert.match(source, /listener_reaction_carryover/)
+  assert.match(source, /speech_presentation: s\.speech_presentation \|\| ''/)
+})
+
 test('武戏导演支持确定性资料检索、正文预览和审核后导入', () => {
   const source = readFileSync(new URL('../src/components/ShotDirectorEditor.vue', import.meta.url), 'utf8')
   const api = readFileSync(new URL('../src/api/index.js', import.meta.url), 'utf8')

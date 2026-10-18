@@ -50,26 +50,27 @@ type dialogueRhythmShotReview struct {
 }
 
 type sceneDirectorDraftShot struct {
-	ActType        models.ShotActType               `json:"act_type"`
-	ShotType       string                           `json:"shot_type"`
-	CameraAngle    string                           `json:"camera_angle"`
-	CameraMovement string                           `json:"camera_movement"`
-	Duration       float64                          `json:"duration"`
-	Description    string                           `json:"description"`
-	Dialogue       string                           `json:"dialogue"`
-	Emotion        string                           `json:"emotion"`
-	TransitionType models.ShotTransitionType        `json:"transition_type"`
-	TransitionNote string                           `json:"transition_note"`
-	StartState     string                           `json:"start_state"`
-	EndState       string                           `json:"end_state"`
-	PromptSubject  string                           `json:"prompt_subject"`
-	PromptAction   string                           `json:"prompt_action"`
-	PromptCamera   string                           `json:"prompt_camera"`
-	PromptLighting string                           `json:"prompt_lighting"`
-	PromptStyle    string                           `json:"prompt_style"`
-	NegativePrompt string                           `json:"negative_prompt"`
-	ActionTimeline []models.ShotActionTimelineEntry `json:"action_timeline"`
-	Checks         []string                         `json:"checks"`
+	ActType            models.ShotActType               `json:"act_type"`
+	ShotType           string                           `json:"shot_type"`
+	CameraAngle        string                           `json:"camera_angle"`
+	CameraMovement     string                           `json:"camera_movement"`
+	Duration           float64                          `json:"duration"`
+	Description        string                           `json:"description"`
+	Dialogue           string                           `json:"dialogue"`
+	SpeechPresentation models.ShotSpeechPresentation    `json:"speech_presentation"`
+	Emotion            string                           `json:"emotion"`
+	TransitionType     models.ShotTransitionType        `json:"transition_type"`
+	TransitionNote     string                           `json:"transition_note"`
+	StartState         string                           `json:"start_state"`
+	EndState           string                           `json:"end_state"`
+	PromptSubject      string                           `json:"prompt_subject"`
+	PromptAction       string                           `json:"prompt_action"`
+	PromptCamera       string                           `json:"prompt_camera"`
+	PromptLighting     string                           `json:"prompt_lighting"`
+	PromptStyle        string                           `json:"prompt_style"`
+	NegativePrompt     string                           `json:"negative_prompt"`
+	ActionTimeline     []models.ShotActionTimelineEntry `json:"action_timeline"`
+	Checks             []string                         `json:"checks"`
 }
 
 func trimJSONFence(value string) string {
@@ -94,6 +95,17 @@ func mergeDirectorShotPair(first, second sceneDirectorDraftShot) sceneDirectorDr
 	first.Duration += second.Duration
 	first.Description = joinDirectorField(first.Description, second.Description)
 	first.Dialogue += second.Dialogue
+	if first.SpeechPresentation != second.SpeechPresentation {
+		switch {
+		case first.SpeechPresentation == "" || first.SpeechPresentation == models.ShotSpeechPresentationSilent:
+			first.SpeechPresentation = second.SpeechPresentation
+		case second.SpeechPresentation == "" || second.SpeechPresentation == models.ShotSpeechPresentationSilent:
+			// Preserve the first voiced presentation.
+		default:
+			// A merged Shot with incompatible speech modes requires authoritative reclassification.
+			first.SpeechPresentation = ""
+		}
+	}
 	first.Emotion = joinDirectorField(first.Emotion, second.Emotion)
 	first.EndState = second.EndState
 	first.PromptSubject = joinDirectorField(first.PromptSubject, second.PromptSubject)
@@ -310,7 +322,7 @@ func parseSceneDirectorDraftWithOptions(output string, preserveShortShots bool) 
 		if preserveShortShots && validationDuration < 3 {
 			validationDuration = 3
 		}
-		shot := models.Shot{ActType: d.ActType, ShotType: d.ShotType, CameraAngle: d.CameraAngle, CameraMovement: d.CameraMovement, TransitionType: d.TransitionType, TransitionNote: d.TransitionNote, StartState: d.StartState, EndState: d.EndState, Duration: validationDuration, Description: d.Description, Dialogue: d.Dialogue, Emotion: d.Emotion, PromptSubject: d.PromptSubject, PromptAction: d.PromptAction, PromptCamera: d.PromptCamera, PromptLighting: d.PromptLighting, PromptStyle: d.PromptStyle, NegativePrompt: d.NegativePrompt, ActionTimeline: d.ActionTimeline}
+		shot := models.Shot{ActType: d.ActType, ShotType: d.ShotType, CameraAngle: d.CameraAngle, CameraMovement: d.CameraMovement, TransitionType: d.TransitionType, TransitionNote: d.TransitionNote, StartState: d.StartState, EndState: d.EndState, Duration: validationDuration, Description: d.Description, Dialogue: d.Dialogue, SpeechPresentation: d.SpeechPresentation, Emotion: d.Emotion, PromptSubject: d.PromptSubject, PromptAction: d.PromptAction, PromptCamera: d.PromptCamera, PromptLighting: d.PromptLighting, PromptStyle: d.PromptStyle, NegativePrompt: d.NegativePrompt, ActionTimeline: d.ActionTimeline}
 		if preserveShortShots && d.Duration < 3 && len(shot.ActionTimeline) > 0 {
 			normalizeDirectorActionTimeline(shot.ActionTimeline, validationDuration)
 		}
@@ -338,6 +350,7 @@ func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue) string {
 6. 每镜3–15秒，一个主要情绪、一个主要动作、一种主要构图和明确结束状态。
 7. 对白自然时长决定总时长，不得压缩语速，也不得用重复动作填时长。
 8. 每个输出必须是独立可制作的Native H3镜头，禁止使用 Endless 或 Canvas，也禁止无限延长和单条连续长镜头。
+9. 每镜必须填写speech_presentation：可见说话人口型用visible_speaker_lipsync；闭口听者承接同句声音用listener_reaction_carryover；独立画外对白用offscreen_dialogue；旁白用narration_voiceover；内心独白用internal_monologue；无发声用silent_visual。
 结构化对白：
 ` + strings.Join(lines, "\n")
 }
@@ -620,10 +633,25 @@ func shotHasClosedLips(shot sceneDirectorDraftShot) bool {
 	return false
 }
 
+func validShotSpeechPresentation(value models.ShotSpeechPresentation) bool {
+	switch value {
+	case "", models.ShotSpeechPresentationVisibleSpeaker, models.ShotSpeechPresentationListenerCarry,
+		models.ShotSpeechPresentationOffscreen, models.ShotSpeechPresentationNarration,
+		models.ShotSpeechPresentationMonologue, models.ShotSpeechPresentationSilent:
+		return true
+	default:
+		return false
+	}
+}
+
 func ordinaryDialogueCarryoverAllowed(shot sceneDirectorDraftShot, speaker string, startsAfterDialogueStart bool) bool {
 	if !startsAfterDialogueStart || strings.TrimSpace(speaker) == "" {
 		return false
 	}
+	if shot.SpeechPresentation == models.ShotSpeechPresentationListenerCarry {
+		return shotHasClosedLips(shot) && !shotHasLipSync(shot)
+	}
+	// Compatibility fallback for historical shots without structured presentation.
 	visual := shotVisualText(shot)
 	if !strings.Contains(visual, speaker) {
 		return false
@@ -713,27 +741,30 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 				}
 			}
 		}
-		presentation := "silent_visual"
-		if length > 0 {
-			types := map[string]bool{}
-			for _, fragment := range fragments {
-				types[fragment.SpeechType] = true
-			}
-			switch {
-			case len(types) > 1:
-				presentation = "mixed_authoritative_speech"
-			case types["narration"]:
-				presentation = "narration_voiceover"
-			case types["monologue"]:
-				presentation = "internal_monologue"
-			case types["offscreen_dialogue"]:
-				presentation = "offscreen_dialogue"
-			default:
-				presentation = "visible_speaker_lipsync"
-				for _, speaker := range speakers {
-					if ordinaryDialogueCarryoverAllowed(shot, speaker, continuesFrom) {
-						presentation = "listener_reaction_carryover"
-						break
+		presentation := string(shot.SpeechPresentation)
+		if presentation == "" {
+			presentation = string(models.ShotSpeechPresentationSilent)
+			if length > 0 {
+				types := map[string]bool{}
+				for _, fragment := range fragments {
+					types[fragment.SpeechType] = true
+				}
+				switch {
+				case len(types) > 1:
+					presentation = "mixed_authoritative_speech"
+				case types["narration"]:
+					presentation = string(models.ShotSpeechPresentationNarration)
+				case types["monologue"]:
+					presentation = string(models.ShotSpeechPresentationMonologue)
+				case types["offscreen_dialogue"]:
+					presentation = string(models.ShotSpeechPresentationOffscreen)
+				default:
+					presentation = string(models.ShotSpeechPresentationVisibleSpeaker)
+					for _, speaker := range speakers {
+						if ordinaryDialogueCarryoverAllowed(shot, speaker, continuesFrom) {
+							presentation = string(models.ShotSpeechPresentationListenerCarry)
+							break
+						}
 					}
 				}
 			}
@@ -789,7 +820,7 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 func dialogueRhythmBlockingIssuesForShots(shots []models.Shot, dialogues []models.Dialogue) []string {
 	draft := &sceneDirectorDraft{Shots: make([]sceneDirectorDraftShot, len(shots))}
 	for i, shot := range shots {
-		draft.Shots[i] = sceneDirectorDraftShot{ShotType: shot.ShotType, Duration: shot.Duration, Description: shot.Description, Dialogue: shot.Dialogue, StartState: shot.StartState, EndState: shot.EndState, PromptSubject: shot.PromptSubject, PromptAction: shot.PromptAction}
+		draft.Shots[i] = sceneDirectorDraftShot{ShotType: shot.ShotType, Duration: shot.Duration, Description: shot.Description, Dialogue: shot.Dialogue, SpeechPresentation: shot.SpeechPresentation, StartState: shot.StartState, EndState: shot.EndState, PromptSubject: shot.PromptSubject, PromptAction: shot.PromptAction}
 	}
 	seen := map[string]bool{}
 	var issues []string
@@ -853,7 +884,17 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 		if shot.Duration < 3 || shot.Duration > 15 {
 			return fmt.Errorf("对白拆镜%d时长必须为3至15秒", i+1)
 		}
-		actual.WriteString(canonicalDialogueText(shot.Dialogue))
+		if !validShotSpeechPresentation(shot.SpeechPresentation) {
+			return fmt.Errorf("对白拆镜%d的speech_presentation无效", i+1)
+		}
+		text := canonicalDialogueText(shot.Dialogue)
+		if text == "" && shot.SpeechPresentation != "" && shot.SpeechPresentation != models.ShotSpeechPresentationSilent {
+			return fmt.Errorf("对白拆镜%d没有权威发声片段，speech_presentation必须为silent_visual", i+1)
+		}
+		if text != "" && shot.SpeechPresentation == models.ShotSpeechPresentationSilent {
+			return fmt.Errorf("对白拆镜%d承载权威发声片段，speech_presentation不能为silent_visual", i+1)
+		}
+		actual.WriteString(text)
 	}
 	if actual.String() != expected.String() {
 		return fmt.Errorf("导演草稿对白未逐字覆盖结构化对白，禁止遗漏、改写、重复或新增")
@@ -888,6 +929,9 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 				continue
 			}
 			if speechType == "offscreen_dialogue" {
+				if shot.SpeechPresentation != "" && shot.SpeechPresentation != models.ShotSpeechPresentationOffscreen {
+					return fmt.Errorf("对白拆镜%d的speech_presentation必须为offscreen_dialogue", i+1)
+				}
 				speakerVisible := shotShowsSpeaker(shot, speaker)
 				if speakerVisible {
 					return fmt.Errorf("对白拆镜%d承载角色“%s”的独立画外对白时，说话人不得出现在画面主体中；如需可见口型请改用dialogue", i+1, speaker)
@@ -896,6 +940,9 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 			}
 			visual := shotVisualText(shot)
 			if speechType == "narration" {
+				if shot.SpeechPresentation != "" && shot.SpeechPresentation != models.ShotSpeechPresentationNarration {
+					return fmt.Errorf("对白拆镜%d的speech_presentation必须为narration_voiceover", i+1)
+				}
 				for _, marker := range []string{"同步口型", "开口说", "张口说", "嘴唇同步"} {
 					if strings.Contains(visual, marker) {
 						return fmt.Errorf("对白拆镜%d承载旁白时不得驱动画面人物口型", i+1)
@@ -904,6 +951,9 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 				continue
 			}
 			if speechType == "monologue" {
+				if shot.SpeechPresentation != "" && shot.SpeechPresentation != models.ShotSpeechPresentationMonologue {
+					return fmt.Errorf("对白拆镜%d的speech_presentation必须为internal_monologue", i+1)
+				}
 				if !shotHasClosedLips(shot) || shotHasLipSync(shot) {
 					return fmt.Errorf("对白拆镜%d承载角色“%s”的内心独白时，必须明确人物闭口且不得同时要求同步口型", i+1, speaker)
 				}
@@ -912,8 +962,11 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 			if speechType != "dialogue" {
 				continue
 			}
+			if shot.SpeechPresentation != "" && shot.SpeechPresentation != models.ShotSpeechPresentationVisibleSpeaker && shot.SpeechPresentation != models.ShotSpeechPresentationListenerCarry {
+				return fmt.Errorf("对白拆镜%d的普通对白speech_presentation必须为visible_speaker_lipsync或listener_reaction_carryover", i+1)
+			}
 			speakerVisible := shotShowsSpeaker(shot, speaker)
-			if speakerVisible && shotHasLipSync(shot) {
+			if shot.SpeechPresentation != models.ShotSpeechPresentationListenerCarry && speakerVisible && shotHasLipSync(shot) {
 				continue
 			}
 			if ordinaryDialogueCarryoverAllowed(shot, speaker, start > span.start) {

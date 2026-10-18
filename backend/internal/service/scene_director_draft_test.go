@@ -196,7 +196,7 @@ func TestDialogueRhythmQueryQuotesReservedOrderColumn(t *testing.T) {
 
 func TestDialogueRhythmInstructionAllowsAttributedCrossCutListenerReaction(t *testing.T) {
 	got := dialogueRhythmDirectorInstruction([]models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "继续说话"}})
-	for _, want := range []string{"声音跨切延续", "听者必须闭口", "不能在听者镜头中开始一条新对白", "不得把这种连续对白改写成旁白或独立画外音", "narration不得驱动画面人物口型", "monologue必须明确人物闭口", "禁止使用 Endless 或 Canvas"} {
+	for _, want := range []string{"声音跨切延续", "听者必须闭口", "不能在听者镜头中开始一条新对白", "不得把这种连续对白改写成旁白或独立画外音", "narration不得驱动画面人物口型", "monologue必须明确人物闭口", "禁止使用 Endless 或 Canvas", "speech_presentation"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q: %s", want, got)
 		}
@@ -224,6 +224,27 @@ func TestValidateDialogueRhythmDraftAllowsAttributedCrossCutListenerReaction(t *
 	draft.Shots[0].PromptAction = "双唇闭合倾听，上官若琳声音跨切延续"
 	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil {
 		t.Fatal("new dialogue incorrectly allowed to start off-screen in listener shot")
+	}
+}
+
+func TestStructuredListenerPresentationDoesNotRequireMagicCarryoverPhrase(t *testing.T) {
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
+		{Duration: 4, Dialogue: "相信姐姐，", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, ShotType: "近景", Description: "上官若琳开口", PromptSubject: "上官若琳", PromptAction: "同步口型"},
+		{Duration: 6, Dialogue: "姐姐不会让你去。", SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ShotType: "反应近景", Description: "上官若彤倾听", PromptSubject: "上官若彤", PromptAction: "双唇闭合倾听"},
+	}}
+	dialogues := []models.Dialogue{{ID: 1, Character: "上官若琳", SpeechType: "dialogue", Text: "相信姐姐，姐姐不会让你去。"}}
+	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
+		t.Fatalf("structured listener carryover rejected: %v", err)
+	}
+	review := buildDialogueRhythmReview(draft, dialogues)
+	if len(review) != 2 || review[1].Presentation != string(models.ShotSpeechPresentationListenerCarry) || !review[1].ContinuesFromPrev {
+		t.Fatalf("review=%+v", review)
+	}
+	draft.Shots[0].Dialogue = ""
+	draft.Shots[0].SpeechPresentation = models.ShotSpeechPresentationSilent
+	draft.Shots[1].Dialogue = "相信姐姐，姐姐不会让你去。"
+	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil {
+		t.Fatal("listener presentation incorrectly allowed without continuation")
 	}
 }
 

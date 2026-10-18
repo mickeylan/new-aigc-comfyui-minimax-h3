@@ -970,6 +970,17 @@ type ShotActionTimelineEntry struct {
 	Camera  string  `json:"camera"`
 }
 
+type ShotSpeechPresentation string
+
+const (
+	ShotSpeechPresentationVisibleSpeaker ShotSpeechPresentation = "visible_speaker_lipsync"
+	ShotSpeechPresentationListenerCarry  ShotSpeechPresentation = "listener_reaction_carryover"
+	ShotSpeechPresentationOffscreen      ShotSpeechPresentation = "offscreen_dialogue"
+	ShotSpeechPresentationNarration      ShotSpeechPresentation = "narration_voiceover"
+	ShotSpeechPresentationMonologue      ShotSpeechPresentation = "internal_monologue"
+	ShotSpeechPresentationSilent         ShotSpeechPresentation = "silent_visual"
+)
+
 // Shot 是 Scene 下的导演镜头层。ActType 表示五幕叙事位置，五段提示词描述单镜画面。
 type Shot struct {
 	ID                    uint                      `gorm:"primaryKey" json:"id"`
@@ -986,6 +997,7 @@ type Shot struct {
 	Duration              float64                   `gorm:"default:3" json:"duration"`
 	Description           string                    `gorm:"type:text" json:"description"`
 	Dialogue              string                    `gorm:"type:text" json:"dialogue"` // compatibility display cache; structured Dialogue remains authoritative
+	SpeechPresentation    ShotSpeechPresentation    `gorm:"column:speech_presentation;size:48;index" json:"speech_presentation"`
 	DialogueRanges        []ShotDialogueRange       `gorm:"column:dialogue_ranges_json;type:text;serializer:json" json:"dialogue_ranges"`
 	ActionTimeline        []ShotActionTimelineEntry `gorm:"column:action_timeline_json;type:text;serializer:json" json:"action_timeline"`
 	ContinuesFromPrevious bool                      `gorm:"-" json:"continues_from_previous"`

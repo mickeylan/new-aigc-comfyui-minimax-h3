@@ -185,23 +185,24 @@ func TestReplaceShotsWithSnapshotEnforcesAuthoritativeSpeakerPresentation(t *tes
 	}
 	svc := NewShotService(db)
 	valid := []models.Shot{
-		{ShotType: "姐姐近景", Duration: 4, Dialogue: "相信姐姐，", PromptSubject: "姐姐可见并同步口型"},
-		{ShotType: "妹妹反应近景", Duration: 5, Dialogue: "我不会让你去。", Description: "姐姐声音跨切延续，妹妹闭口倾听", PromptSubject: "妹妹单人近景", PromptAction: "妹妹双唇闭合"},
+		{ShotType: "姐姐近景", Duration: 4, Dialogue: "相信姐姐，", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, PromptSubject: "姐姐可见并同步口型"},
+		{ShotType: "妹妹反应近景", Duration: 5, Dialogue: "我不会让你去。", SpeechPresentation: models.ShotSpeechPresentationListenerCarry, Description: "妹妹闭口倾听", PromptSubject: "妹妹单人近景", PromptAction: "妹妹双唇闭合"},
 	}
 	if _, err := svc.ReplaceShotsWithDialogueSnapshot(scene.ID, valid, snapshot); err != nil {
 		t.Fatalf("valid listener carryover rejected: %v", err)
 	}
 	invalid := append([]models.Shot(nil), valid...)
+	invalid[1].SpeechPresentation = models.ShotSpeechPresentationVisibleSpeaker
 	invalid[1].Description, invalid[1].PromptAction = "妹妹倾听", "妹妹注视前方"
-	if _, err := svc.ReplaceShotsWithDialogueSnapshot(scene.ID, invalid, snapshot); !errors.Is(err, ErrDialogueTimingBlocked) || !strings.Contains(err.Error(), "同一句对白跨切延续且听者闭口") {
+	if _, err := svc.ReplaceShotsWithDialogueSnapshot(scene.ID, invalid, snapshot); !errors.Is(err, ErrDialogueTimingBlocked) || !strings.Contains(err.Error(), "说话人可见并同步口型") {
 		t.Fatalf("invalid carryover error=%v", err)
 	}
 	var saved []models.Shot
 	if err := db.Where("scene_id = ?", scene.ID).Order("order_num, id").Find(&saved).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(saved) != 2 || saved[1].Description != valid[1].Description {
-		t.Fatalf("invalid save mutated shots: %+v", saved)
+	if len(saved) != 2 || saved[1].Description != valid[1].Description || saved[1].SpeechPresentation != models.ShotSpeechPresentationListenerCarry {
+		t.Fatalf("invalid save mutated shots or lost presentation: %+v", saved)
 	}
 }
 
