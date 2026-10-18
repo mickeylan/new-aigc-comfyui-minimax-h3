@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -16,6 +17,8 @@ import (
 	"comfyui-console/internal/models"
 	"gorm.io/gorm"
 )
+
+var ErrSceneAudioReviewConflict = errors.New("Scene音轨审核内容已变化，请刷新后重新审核")
 
 func isReviewedAudioVideoTemplate(code string) bool {
 	switch strings.TrimSpace(code) {
@@ -514,30 +517,42 @@ func (s *ProjectService) CreateSceneAudioCandidate(sc *models.Scene) (*models.Sc
 	return &candidate, nil
 }
 
-func (s *ProjectService) ReviewSceneAudioCandidate(sc *models.Scene, candidateID uint, status, reason string) (*models.SceneAudioCandidate, error) {
+func (s *ProjectService) ReviewSceneAudioCandidate(sc *models.Scene, candidateID uint, status, reason, expectedSourceHash, expectedFileSHA256 string) (*models.SceneAudioCandidate, error) {
 	if status != "accepted" && status != "rejected" && status != "pending" {
 		return nil, fmt.Errorf("无效审核状态")
 	}
-	var dialogues []models.Dialogue
-	if err := s.db.Where("project_id = ? AND scene_id = ?", sc.ProjectID, sc.ID).Order("`order`, id").Find(&dialogues).Error; err != nil {
-		return nil, err
-	}
-	dialogues = validSceneDialogues(dialogues)
-	_, sourceHash, err := s.currentSceneAudioSnapshot(sc, dialogues)
-	if err != nil {
-		return nil, err
+	if status == "accepted" && (strings.TrimSpace(expectedSourceHash) == "" || strings.TrimSpace(expectedFileSHA256) == "") {
+		return nil, fmt.Errorf("%w：缺少用户已审核的来源或文件哈希", ErrSceneAudioReviewConflict)
 	}
 	var row models.SceneAudioCandidate
-	err = s.db.Transaction(func(tx *gorm.DB) error {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var currentScene models.Scene
+		if err := tx.Where("id = ? AND project_id = ?", sc.ID, sc.ProjectID).First(&currentScene).Error; err != nil {
+			return fmt.Errorf("Scene不存在")
+		}
+		var dialogues []models.Dialogue
+		if err := tx.Where("project_id = ? AND scene_id = ?", sc.ProjectID, sc.ID).Order("`order`, id").Find(&dialogues).Error; err != nil {
+			return err
+		}
+		dialogues = validSceneDialogues(dialogues)
+		txService := *s
+		txService.db = tx
+		_, currentSourceHash, err := txService.currentSceneAudioSnapshot(&currentScene, dialogues)
+		if err != nil {
+			return fmt.Errorf("%w：%v", ErrSceneAudioReviewConflict, err)
+		}
 		if err := tx.Where("id = ? AND project_id = ? AND scene_id = ?", candidateID, sc.ProjectID, sc.ID).First(&row).Error; err != nil {
 			return fmt.Errorf("Scene音轨候选不存在")
 		}
-		if row.Stale || row.SourceHash != sourceHash {
-			return fmt.Errorf("Scene音轨候选来源已过期")
+		if row.Stale || row.SourceHash != currentSourceHash {
+			return fmt.Errorf("%w：候选来源已过期", ErrSceneAudioReviewConflict)
 		}
 		if status == "accepted" {
-			if _, fileErr := s.sceneAudioCandidateFile(sc, &row); fileErr != nil {
-				return fileErr
+			if row.SourceHash != strings.TrimSpace(expectedSourceHash) || row.FileSHA256 != strings.TrimSpace(expectedFileSHA256) {
+				return fmt.Errorf("%w：候选不是用户刚才查看的版本", ErrSceneAudioReviewConflict)
+			}
+			if _, fileErr := txService.sceneAudioCandidateFile(&currentScene, &row); fileErr != nil {
+				return fmt.Errorf("%w：%v", ErrSceneAudioReviewConflict, fileErr)
 			}
 			if err := tx.Model(&models.SceneAudioCandidate{}).Where("project_id = ? AND scene_id = ?", sc.ProjectID, sc.ID).Update("is_current", false).Error; err != nil {
 				return err

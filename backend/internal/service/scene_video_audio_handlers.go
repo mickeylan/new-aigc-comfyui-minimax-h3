@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -69,16 +70,22 @@ func (s *Service) HandleReviewSceneAudioCandidate(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Status string `json:"status"`
-		Reason string `json:"reason"`
+		Status             string `json:"status"`
+		Reason             string `json:"reason"`
+		ExpectedSourceHash string `json:"expected_source_hash"`
+		ExpectedFileSHA256 string `json:"expected_file_sha256"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
-	row, err := s.Projects.ReviewSceneAudioCandidate(sc, uint(candidateID), strings.TrimSpace(req.Status), req.Reason)
+	row, err := s.Projects.ReviewSceneAudioCandidate(sc, uint(candidateID), strings.TrimSpace(req.Status), req.Reason, req.ExpectedSourceHash, req.ExpectedFileSHA256)
 	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		status := http.StatusUnprocessableEntity
+		if errors.Is(err, ErrSceneAudioReviewConflict) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, row)

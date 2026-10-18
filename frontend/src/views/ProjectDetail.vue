@@ -1463,7 +1463,11 @@ async function reviewSceneAudioMix(candidate, status) {
   if (!videoTaskScene.value) return
   sceneAudioBusy.value = true
   try {
-    await api.reviewSceneAudioCandidate(id(), videoTaskScene.value.id, candidate.id, { status, reason: '' })
+    await api.reviewSceneAudioCandidate(id(), videoTaskScene.value.id, candidate.id, {
+      status, reason: '',
+      expected_source_hash: candidate.source_hash,
+      expected_file_sha256: candidate.file_sha256
+    })
     const [{ data }, { data: preview }] = await Promise.all([api.sceneAudioCandidates(id(), videoTaskScene.value.id), api.sceneVideoPrompt(id(), videoTaskScene.value.id)])
     sceneAudioCandidates.value = data.candidates || []
     videoTaskDetail.value = { ...videoTaskDetail.value, reviewed_audio: preview.reviewed_audio }

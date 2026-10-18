@@ -23,4 +23,6 @@ test('H3音频模板只允许已审核且哈希一致的生产候选', () => {
   assert.match(detail, /不冒充ASR字级对齐/)
   assert.match(detail, /fragment\.audio_start/)
   assert.match(detail, /fragment\.audio_end/)
+  assert.match(detail, /expected_source_hash: candidate\.source_hash/)
+  assert.match(detail, /expected_file_sha256: candidate\.file_sha256/)
 })

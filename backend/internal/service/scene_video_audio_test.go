@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -160,6 +161,17 @@ func TestSceneReviewedAudioSelectionAcceptsOnlyCurrentMatchingSceneMix(t *testin
 	got := svc.sceneReviewedAudioSelection(&scene)
 	if !got.Ready || got.SceneCandidate == nil || got.SceneCandidate.ID != row.ID {
 		t.Fatalf("selection=%+v", got)
+	}
+	row.ReviewStatus, row.IsCurrent = "pending", false
+	if err := db.Save(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ReviewSceneAudioCandidate(&scene, row.ID, "accepted", "", "wrong", row.FileSHA256); !errors.Is(err, ErrSceneAudioReviewConflict) {
+		t.Fatalf("wrong review err=%v", err)
+	}
+	accepted, err := svc.ReviewSceneAudioCandidate(&scene, row.ID, "accepted", "", row.SourceHash, row.FileSHA256)
+	if err != nil || !accepted.IsCurrent || accepted.ReviewStatus != "accepted" {
+		t.Fatalf("accepted=%+v err=%v", accepted, err)
 	}
 }
 
