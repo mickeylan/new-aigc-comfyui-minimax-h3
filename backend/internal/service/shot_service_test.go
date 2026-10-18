@@ -408,6 +408,54 @@ func TestHandleCreateShotsRejectsUnknownListenerWith422WithoutMutation(t *testin
 	}
 }
 
+func TestHandleUpdateShotReturns422ForUnknownListenerWithoutMutation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "update handler listener"}
+	foreignProject := models.Project{Title: "foreign"}
+	db.Create(&project)
+	db.Create(&foreignProject)
+	db.Create(&models.Character{ProjectID: foreignProject.ID, Name: "阿月"})
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Status: "video_ready", VideoFile: "keep.mp4"}
+	db.Create(&scene)
+	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: "不要回头。"}
+	db.Create(&dialogue)
+	shots, err := NewShotService(db).ReplaceShots(scene.ID, []models.Shot{{ShotType: "保留镜头", Duration: 3, Dialogue: dialogue.Text, SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&scene).Updates(map[string]any{"status": "video_ready", "video_file": "keep.mp4", "image_task_id": "image-active", "video_task_id": "video-active"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]any{"speech_presentation": string(models.ShotSpeechPresentationListenerCarry), "listener_character": "阿月"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPut, "/api/projects/x/shots/y", bytes.NewReader(payload))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Params = gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(project.ID), 10)}, {Key: "shid", Value: strconv.FormatUint(uint64(shots[0].ID), 10)}}
+	(&Service{DB: db, Shots: NewShotService(db)}).HandleUpdateShot(ctx)
+	if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), "不是当前项目权威角色") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var saved models.Shot
+	if err := db.First(&saved, shots[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.SpeechPresentation != models.ShotSpeechPresentationVisibleSpeaker || saved.ListenerCharacter != "" {
+		t.Fatalf("listener rejection mutated shot: %+v", saved)
+	}
+	var currentScene models.Scene
+	if err := db.First(&currentScene, scene.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if currentScene.VideoFile != "keep.mp4" || currentScene.ImageTaskID != "image-active" || currentScene.VideoTaskID != "video-active" {
+		t.Fatalf("listener rejection invalidated scene: %+v", currentScene)
+	}
+}
+
 func TestHandleCreateShotsRejectsUnsupportedDialogueCutWithoutMutation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := newTestDBWithNewModels(t)
