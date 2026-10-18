@@ -113,7 +113,8 @@ func (s *ProjectService) ensureLegacyDialogueAudioCandidate(projectID, dialogueI
 		row := models.DialogueAudioCandidate{
 			ProjectID: projectID, DialogueID: dialogueID, InputHash: dialogue.AudioHash,
 			Provider: "legacy", RuntimeVersion: "pre-candidate-history", File: dialogue.AudioFile,
-			ParamsJSON: "{}", ReviewStatus: "accepted", IsCurrent: true,
+			ParamsJSON: "{}", ReviewStatus: "pending", IsCurrent: false, Stale: true,
+			StaleReason: "历史配音缺少文件内容指纹和审核证据，请重新生成并审核",
 		}
 		now := time.Now()
 		row.ReviewedAt = &now
@@ -121,8 +122,51 @@ func (s *ProjectService) ensureLegacyDialogueAudioCandidate(projectID, dialogueI
 	})
 }
 
+func (s *ProjectService) refreshDialogueAudioCandidates(projectID, dialogueID uint) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var dialogue models.Dialogue
+		if err := tx.Where("id = ? AND project_id = ?", dialogueID, projectID).First(&dialogue).Error; err != nil {
+			return fmt.Errorf("对白不存在")
+		}
+		var rows []models.DialogueAudioCandidate
+		if err := tx.Where("project_id = ? AND dialogue_id = ? AND stale = ?", projectID, dialogueID, false).Find(&rows).Error; err != nil {
+			return err
+		}
+		currentHash := s.effectiveDialogueAudioHash(dialogue)
+		for i := range rows {
+			row := &rows[i]
+			reason := ""
+			switch {
+			case row.InputHash != currentHash:
+				reason = "候选与当前Dialogue或音色配置不一致"
+			case strings.TrimSpace(row.FileSHA256) == "" || row.FileSize <= 0:
+				reason = "候选缺少文件内容指纹，请重新生成并审核"
+			case row.ReviewStatus == "accepted" && (row.ReviewConfirmation != dialogueAudioReviewConfirmationV1 || row.ReviewInputHash != row.InputHash || row.ReviewFileSHA256 != row.FileSHA256):
+				reason = "候选缺少匹配当前内容的审核证据"
+			default:
+				if err := s.ensureDialogueAudioCandidateFile(projectID, row); err != nil {
+					reason = err.Error()
+				}
+			}
+			if reason == "" {
+				continue
+			}
+			if err := tx.Model(&models.DialogueAudioCandidate{}).Where("id = ? AND stale = ?", row.ID, false).Updates(map[string]any{"stale": true, "stale_reason": reason, "is_current": false}).Error; err != nil {
+				return err
+			}
+			if err := markSceneAudioCandidatesStale(tx, projectID, dialogue.SceneID, "上游Dialogue音频候选已过期: "+reason); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (s *ProjectService) ListDialogueAudioCandidates(projectID, dialogueID uint) ([]models.DialogueAudioCandidate, error) {
 	if err := s.ensureLegacyDialogueAudioCandidate(projectID, dialogueID); err != nil {
+		return nil, err
+	}
+	if err := s.refreshDialogueAudioCandidates(projectID, dialogueID); err != nil {
 		return nil, err
 	}
 	var rows []models.DialogueAudioCandidate

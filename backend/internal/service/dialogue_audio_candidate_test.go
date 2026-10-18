@@ -71,8 +71,8 @@ func TestListDialogueAudioCandidatesBackfillsCurrentLegacyAudio(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].Provider != "legacy" || rows[0].File != "legacy.wav" || !rows[0].IsCurrent || rows[0].ReviewStatus != "accepted" {
-		t.Fatalf("legacy current audio not backfilled: %+v", rows)
+	if len(rows) != 1 || rows[0].Provider != "legacy" || rows[0].File != "legacy.wav" || rows[0].IsCurrent || rows[0].ReviewStatus != "pending" || !rows[0].Stale {
+		t.Fatalf("legacy audio was not safely quarantined: %+v", rows)
 	}
 	rows, err = service.ListDialogueAudioCandidates(project.ID, dialogue.ID)
 	if err != nil || len(rows) != 1 {

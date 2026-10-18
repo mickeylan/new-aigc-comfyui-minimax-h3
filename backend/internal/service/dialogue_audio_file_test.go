@@ -47,6 +47,32 @@ func TestReviewDialogueAudioCandidateRejectsChangedDialogueInput(t *testing.T) {
 	}
 }
 
+func TestListDialogueAudioCandidatesMarksMismatchedAcceptedCandidateStale(t *testing.T) {
+	db := safetyDB(t, &models.DialogueAudioCandidate{}, &models.SceneAudioCandidate{})
+	project := models.Project{Title: "refresh-candidate"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, Order: 1}
+	db.Create(&scene)
+	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Text: "当前", Character: "甲", SpeechType: "dialogue", Speed: 1, Volume: 1}
+	db.Create(&dialogue)
+	service := &ProjectService{db: db}
+	row := models.DialogueAudioCandidate{ProjectID: project.ID, DialogueID: dialogue.ID, InputHash: "old", Provider: "test", File: "old.wav", FileSHA256: strings.Repeat("a", 64), FileSize: 128, ReviewStatus: "accepted", ReviewInputHash: "old", ReviewFileSHA256: strings.Repeat("a", 64), ReviewConfirmation: dialogueAudioReviewConfirmationV1, IsCurrent: true}
+	db.Create(&row)
+	sceneMix := models.SceneAudioCandidate{ProjectID: project.ID, SceneID: scene.ID, SourceHash: "mix", File: "mix.wav", ReviewStatus: "accepted", IsCurrent: true}
+	db.Create(&sceneMix)
+	rows, err := service.ListDialogueAudioCandidates(project.ID, dialogue.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || !rows[0].Stale || rows[0].IsCurrent {
+		t.Fatalf("rows=%+v", rows)
+	}
+	db.First(&sceneMix, sceneMix.ID)
+	if !sceneMix.Stale || sceneMix.IsCurrent {
+		t.Fatalf("scene mix=%+v", sceneMix)
+	}
+}
+
 func TestCaptureDialogueAudioRequiresFileFingerprint(t *testing.T) {
 	db := safetyDB(t, &models.DialogueAudioCandidate{})
 	project := models.Project{Title: "capture-fingerprint"}
