@@ -193,8 +193,8 @@ func TestReplaceShotsWithSnapshotEnforcesAuthoritativeSpeakerPresentation(t *tes
 	}
 	invalid := append([]models.Shot(nil), valid...)
 	invalid[1].SpeechPresentation = models.ShotSpeechPresentationVisibleSpeaker
-	invalid[1].Description, invalid[1].PromptAction = "妹妹倾听", "妹妹注视前方"
-	if _, err := svc.ReplaceShotsWithDialogueSnapshot(scene.ID, invalid, snapshot); !errors.Is(err, ErrDialogueTimingBlocked) || !strings.Contains(err.Error(), "说话人可见并同步口型") {
+	invalid[1].Description, invalid[1].PromptAction = "姐姐不入镜，妹妹倾听", "妹妹注视前方"
+	if _, err := svc.ReplaceShotsWithDialogueSnapshot(scene.ID, invalid, snapshot); !errors.Is(err, ErrDialogueTimingBlocked) || !strings.Contains(err.Error(), "不入镜或闭口") {
 		t.Fatalf("invalid carryover error=%v", err)
 	}
 	var saved []models.Shot

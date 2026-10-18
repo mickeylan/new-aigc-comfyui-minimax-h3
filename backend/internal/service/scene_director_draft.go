@@ -596,21 +596,41 @@ func shotVisualText(shot sceneDirectorDraftShot) string {
 	return strings.Join([]string{shot.ShotType, shot.Description, shot.PromptSubject, shot.PromptAction, shot.StartState, shot.EndState}, " ")
 }
 
+func shotExplicitlyExcludesSpeaker(shot sceneDirectorDraftShot, speaker string) bool {
+	speaker = strings.TrimSpace(speaker)
+	if speaker == "" {
+		return false
+	}
+	visual := shotVisualText(shot)
+	for _, marker := range []string{"不含" + speaker, "没有" + speaker, "无" + speaker, speaker + "不入镜", speaker + "未入镜", speaker + "画外"} {
+		if strings.Contains(visual, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func shotExplicitlyClosesSpeaker(shot sceneDirectorDraftShot, speaker string) bool {
+	speaker = strings.TrimSpace(speaker)
+	if speaker == "" {
+		return false
+	}
+	visual := strings.ToLower(shotVisualText(shot))
+	for _, marker := range []string{speaker + "闭口", speaker + "双唇闭合", speaker + "嘴唇闭合", speaker + "不张口", speaker + "不做口型", speaker + "不做同步口型", speaker + "不得同步口型", speaker + "禁止同步口型"} {
+		if strings.Contains(visual, strings.ToLower(marker)) {
+			return true
+		}
+	}
+	return false
+}
+
 func shotShowsSpeaker(shot sceneDirectorDraftShot, speaker string) bool {
 	speaker = strings.TrimSpace(speaker)
 	if speaker == "" {
 		return false
 	}
 	visual := shotVisualText(shot)
-	if !strings.Contains(visual, speaker) {
-		return false
-	}
-	for _, marker := range []string{"不含" + speaker, "没有" + speaker, "无" + speaker, speaker + "不入镜", speaker + "未入镜", speaker + "画外"} {
-		if strings.Contains(visual, marker) {
-			return false
-		}
-	}
-	return true
+	return strings.Contains(visual, speaker) && !shotExplicitlyExcludesSpeaker(shot, speaker)
 }
 
 func shotHasLipSync(shot sceneDirectorDraftShot) bool {
@@ -970,8 +990,14 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 			if shot.SpeechPresentation != "" && shot.SpeechPresentation != models.ShotSpeechPresentationVisibleSpeaker && shot.SpeechPresentation != models.ShotSpeechPresentationListenerCarry {
 				return fmt.Errorf("对白拆镜%d的普通对白speech_presentation必须为visible_speaker_lipsync或listener_reaction_carryover", i+1)
 			}
+			if shot.SpeechPresentation == models.ShotSpeechPresentationVisibleSpeaker {
+				if shotExplicitlyExcludesSpeaker(shot, speaker) || shotExplicitlyClosesSpeaker(shot, speaker) {
+					return fmt.Errorf("对白拆镜%d声明visible_speaker_lipsync，但文本明确要求说话人“%s”不入镜或闭口", i+1, speaker)
+				}
+				continue
+			}
 			speakerVisible := shotShowsSpeaker(shot, speaker)
-			if shot.SpeechPresentation != models.ShotSpeechPresentationListenerCarry && speakerVisible && shotHasLipSync(shot) {
+			if speakerVisible && shotHasLipSync(shot) {
 				continue
 			}
 			if ordinaryDialogueCarryoverAllowed(shot, speaker, start > span.start) {

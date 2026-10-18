@@ -227,6 +227,30 @@ func TestValidateDialogueRhythmDraftAllowsAttributedCrossCutListenerReaction(t *
 	}
 }
 
+func TestStructuredVisibleSpeakerPresentationDoesNotRequireMagicText(t *testing.T) {
+	dialogues := []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信我。"}}
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "相信我。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, ShotType: "近景", Description: "人物凝视前方"}}}
+	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
+		t.Fatalf("structured visible speaker rejected: %v", err)
+	}
+	draft.Shots[0].Description = "阿宁不入镜"
+	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "不入镜或闭口") {
+		t.Fatalf("explicit absence accepted: %v", err)
+	}
+	draft.Shots[0].Description = "阿宁闭口，另一人说话"
+	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "不入镜或闭口") {
+		t.Fatalf("explicit closed speaker accepted: %v", err)
+	}
+}
+
+func TestStructuredVisibleSpeakerAllowsClosedListenerInTwoShot(t *testing.T) {
+	dialogues := []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信我。"}}
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "相信我。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, ShotType: "双人中景", Description: "阿宁面向阿月；阿月闭口倾听"}}}
+	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
+		t.Fatalf("closed listener was treated as closed speaker: %v", err)
+	}
+}
+
 func TestStructuredListenerPresentationDoesNotRequireMagicCarryoverPhrase(t *testing.T) {
 	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
 		{Duration: 4, Dialogue: "相信姐姐，", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, ShotType: "近景", Description: "上官若琳开口", PromptSubject: "上官若琳", PromptAction: "同步口型"},
