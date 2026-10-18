@@ -36,35 +36,48 @@ type sceneReviewedAudio struct {
 }
 
 type sceneAudioSource struct {
-	DialogueID  uint    `json:"dialogue_id"`
-	CandidateID uint    `json:"candidate_id"`
-	InputHash   string  `json:"input_hash"`
-	File        string  `json:"file"`
-	Position    float64 `json:"position"`
-	Offset      float64 `json:"offset"`
-	Speed       float64 `json:"speed"`
-	Pitch       float64 `json:"pitch"`
-	Volume      float64 `json:"volume"`
-	Duration    float64 `json:"duration"`
+	DialogueID    uint    `json:"dialogue_id"`
+	CandidateID   uint    `json:"candidate_id"`
+	InputHash     string  `json:"input_hash"`
+	File          string  `json:"file"`
+	Position      float64 `json:"position"`
+	Offset        float64 `json:"offset"`
+	Speed         float64 `json:"speed"`
+	Pitch         float64 `json:"pitch"`
+	Volume        float64 `json:"volume"`
+	Duration      float64 `json:"duration"`
+	TimelineStart float64 `json:"timeline_start"`
+	TimelineEnd   float64 `json:"timeline_end"`
+}
+
+type sceneAudioFragment struct {
+	DialogueID uint    `json:"dialogue_id"`
+	StartRune  int     `json:"start_rune"`
+	EndRune    int     `json:"end_rune"`
+	AudioStart float64 `json:"audio_start"`
+	AudioEnd   float64 `json:"audio_end"`
+	Text       string  `json:"text"`
 }
 
 type sceneAudioShot struct {
-	ID       uint                       `json:"id"`
-	Order    int                        `json:"order"`
-	Duration float64                    `json:"duration"`
-	Ranges   []models.ShotDialogueRange `json:"dialogue_ranges"`
+	ID        uint                       `json:"id"`
+	Order     int                        `json:"order"`
+	Duration  float64                    `json:"duration"`
+	Ranges    []models.ShotDialogueRange `json:"dialogue_ranges"`
+	Fragments []sceneAudioFragment       `json:"fragments,omitempty"`
 }
 
 type sceneAudioSnapshot struct {
-	Version       int                `json:"version"`
-	ProjectID     uint               `json:"project_id"`
-	SceneID       uint               `json:"scene_id"`
-	SceneDuration float64            `json:"scene_duration"`
-	Sources       []sceneAudioSource `json:"sources"`
-	Shots         []sceneAudioShot   `json:"shots,omitempty"`
+	Version              int                `json:"version"`
+	ProjectID            uint               `json:"project_id"`
+	SceneID              uint               `json:"scene_id"`
+	SceneDuration        float64            `json:"scene_duration"`
+	Sources              []sceneAudioSource `json:"sources"`
+	Shots                []sceneAudioShot   `json:"shots,omitempty"`
+	FragmentTimingMethod string             `json:"fragment_timing_method,omitempty"`
 }
 
-func (s *ProjectService) sceneAudioShotContract(sc *models.Scene, dialogues []models.Dialogue) ([]sceneAudioShot, error) {
+func (s *ProjectService) sceneAudioShotContract(sc *models.Scene, dialogues []models.Dialogue, sources []sceneAudioSource) ([]sceneAudioShot, error) {
 	if !s.db.Migrator().HasTable(&models.Shot{}) {
 		return nil, nil
 	}
@@ -82,13 +95,75 @@ func (s *ProjectService) sceneAudioShotContract(sc *models.Scene, dialogues []mo
 	if err != nil {
 		return nil, err
 	}
+	sourceByDialogue := make(map[uint]sceneAudioSource, len(sources))
+	for _, source := range sources {
+		sourceByDialogue[source.DialogueID] = source
+	}
+	dialogueByID := make(map[uint]models.Dialogue, len(dialogues))
+	groupStart := map[uint]int{}
+	groupOffsets := map[string]int{}
+	groupOf := map[uint]string{}
+	for _, shot := range shots {
+		for _, r := range shot.DialogueRanges {
+			if groupOf[r.DialogueID] == "" {
+				groupOf[r.DialogueID] = r.GroupKey
+			}
+		}
+	}
+	for _, dialogue := range dialogues {
+		key := groupOf[dialogue.ID]
+		groupStart[dialogue.ID] = groupOffsets[key]
+		groupOffsets[key] += len([]rune(canonicalDialogueText(dialogue.Text)))
+		dialogueByID[dialogue.ID] = dialogue
+	}
+	totalWeights := map[uint]float64{}
+	for _, shot := range shots {
+		for _, fragment := range fragments[shot.ID] {
+			totalWeights[fragment.DialogueID] += dialogueTextDuration(fragment.Text)
+		}
+	}
+	usedWeights := map[uint]float64{}
 	var actual strings.Builder
 	audit := make([]sceneAudioShot, 0, len(shots))
+	shotStart := 0.0
 	for _, shot := range shots {
-		audit = append(audit, sceneAudioShot{ID: shot.ID, Order: shot.Order, Duration: shot.Duration, Ranges: append([]models.ShotDialogueRange(nil), shot.DialogueRanges...)})
-		for _, fragment := range fragments[shot.ID] {
-			actual.WriteString(canonicalDialogueText(fragment.Text))
+		shotEnd := shotStart + shot.Duration
+		shotAudit := sceneAudioShot{ID: shot.ID, Order: shot.Order, Duration: shot.Duration, Ranges: append([]models.ShotDialogueRange(nil), shot.DialogueRanges...)}
+		shotFragments := fragments[shot.ID]
+		if len(shotFragments) == 0 {
+			for _, source := range sources {
+				if source.TimelineStart < shotEnd-0.001 && source.TimelineEnd > shotStart+0.001 {
+					return nil, fmt.Errorf("静音Shot %d 与Dialogue %d音频区间重叠", shot.Order, source.DialogueID)
+				}
+			}
 		}
+		for _, fragment := range shotFragments {
+			actual.WriteString(canonicalDialogueText(fragment.Text))
+			source, ok := sourceByDialogue[fragment.DialogueID]
+			dialogue := dialogueByID[fragment.DialogueID]
+			textLength := len([]rune(canonicalDialogueText(dialogue.Text)))
+			if !ok || textLength == 0 {
+				return nil, fmt.Errorf("Shot %d 的Dialogue %d缺少有效音频来源", shot.Order, fragment.DialogueID)
+			}
+			localStart, localEnd := fragment.StartRune-groupStart[fragment.DialogueID], fragment.EndRune-groupStart[fragment.DialogueID]
+			if localStart < 0 || localEnd > textLength || localEnd <= localStart {
+				return nil, fmt.Errorf("Shot %d 的Dialogue %d局部rune区间无效", shot.Order, fragment.DialogueID)
+			}
+			audioDuration := source.TimelineEnd - source.TimelineStart
+			totalWeight, weight := totalWeights[fragment.DialogueID], dialogueTextDuration(fragment.Text)
+			if totalWeight <= 0 || weight <= 0 {
+				return nil, fmt.Errorf("Shot %d 的Dialogue %d缺少有效自然语速权重", shot.Order, fragment.DialogueID)
+			}
+			fragmentStart := source.TimelineStart + audioDuration*usedWeights[fragment.DialogueID]/totalWeight
+			usedWeights[fragment.DialogueID] += weight
+			fragmentEnd := source.TimelineStart + audioDuration*usedWeights[fragment.DialogueID]/totalWeight
+			if fragmentStart < shotStart-0.001 || fragmentEnd > shotEnd+0.001 {
+				return nil, fmt.Errorf("Shot %d 的Dialogue %d音频片段 %.3f-%.3f 秒超出Shot区间 %.3f-%.3f 秒", shot.Order, fragment.DialogueID, fragmentStart, fragmentEnd, shotStart, shotEnd)
+			}
+			shotAudit.Fragments = append(shotAudit.Fragments, sceneAudioFragment{DialogueID: fragment.DialogueID, StartRune: fragment.StartRune, EndRune: fragment.EndRune, AudioStart: fragmentStart, AudioEnd: fragmentEnd, Text: fragment.Text})
+		}
+		audit = append(audit, shotAudit)
+		shotStart = shotEnd
 	}
 	var expected strings.Builder
 	for _, dialogue := range dialogues {
@@ -101,12 +176,7 @@ func (s *ProjectService) sceneAudioShotContract(sc *models.Scene, dialogues []mo
 }
 
 func (s *ProjectService) currentSceneAudioSnapshot(sc *models.Scene, dialogues []models.Dialogue) (sceneAudioSnapshot, string, error) {
-	snapshot := sceneAudioSnapshot{Version: 2, ProjectID: sc.ProjectID, SceneID: sc.ID, SceneDuration: normalizeSceneDuration(sc.Duration)}
-	shots, err := s.sceneAudioShotContract(sc, dialogues)
-	if err != nil {
-		return snapshot, "", err
-	}
-	snapshot.Shots = shots
+	snapshot := sceneAudioSnapshot{Version: 3, ProjectID: sc.ProjectID, SceneID: sc.ID, SceneDuration: normalizeSceneDuration(sc.Duration), FragmentTimingMethod: "dialogue_text_duration_weighted_v1"}
 	for _, dialogue := range dialogues {
 		if dialogue.AudioStale || dialogue.Status != "ready" || strings.TrimSpace(dialogue.AudioFile) == "" || dialogue.AudioHash == "" || dialogue.AudioHash != s.effectiveDialogueAudioHash(dialogue) {
 			return snapshot, "", fmt.Errorf("Dialogue %d 的生产音频未就绪、已过期或哈希不匹配", dialogue.ID)
@@ -123,6 +193,24 @@ func (s *ProjectService) currentSceneAudioSnapshot(sc *models.Scene, dialogues [
 		}
 		snapshot.Sources = append(snapshot.Sources, sceneAudioSource{DialogueID: dialogue.ID, CandidateID: rows[0].ID, InputHash: rows[0].InputHash, File: rows[0].File, Position: dialogue.Position, Offset: dialogue.Offset, Speed: dialogueSpeed(dialogue), Pitch: dialogue.Pitch, Volume: dialogueVolume(dialogue), Duration: rows[0].Duration})
 	}
+	cursor := 0.4
+	for i := range snapshot.Sources {
+		source := &snapshot.Sources[i]
+		if source.Position > 0 {
+			cursor = source.Position
+		}
+		start := math.Max(0, cursor+source.Offset)
+		source.TimelineStart, source.TimelineEnd = start, start+source.Duration/source.Speed
+		if source.TimelineEnd > snapshot.SceneDuration+0.001 {
+			return snapshot, "", fmt.Errorf("Dialogue %d 音频结束于 %.3f 秒，超过Scene时长 %.3f 秒", source.DialogueID, source.TimelineEnd, snapshot.SceneDuration)
+		}
+		cursor = source.TimelineEnd + 0.35
+	}
+	shots, err := s.sceneAudioShotContract(sc, dialogues, snapshot.Sources)
+	if err != nil {
+		return snapshot, "", err
+	}
+	snapshot.Shots = shots
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
 		return snapshot, "", err
@@ -369,29 +457,15 @@ func (s *ProjectService) CreateSceneAudioCandidate(sc *models.Scene) (*models.Sc
 	for _, dialogue := range dialogues {
 		byID[dialogue.ID] = dialogue
 	}
-	const gap = 0.35
-	cursor := 0.4
 	segments := make([]dubSegment, 0, len(snapshot.Sources))
 	for _, source := range snapshot.Sources {
 		dialogue := byID[source.DialogueID]
-		if source.Position > 0 {
-			cursor = source.Position
-		}
-		start := cursor + source.Offset
-		if start < 0 {
-			start = 0
-		}
-		duration := source.Duration / source.Speed
-		end := start + duration
-		if end > snapshot.SceneDuration+0.001 {
-			return nil, fmt.Errorf("Dialogue %d 结束于 %.3f 秒，超过Scene时长 %.3f 秒；请先调整权威时间线", dialogue.ID, end, snapshot.SceneDuration)
-		}
+		start, end := source.TimelineStart, source.TimelineEnd
 		abs := filepath.Join(inputRoot, filepath.Base(source.File))
 		if info, statErr := os.Stat(abs); statErr != nil || !info.Mode().IsRegular() {
 			return nil, fmt.Errorf("Dialogue %d 音频文件缺失", dialogue.ID)
 		}
 		segments = append(segments, dubSegment{DialogueID: dialogue.ID, SceneID: sc.ID, Start: start, End: end, Character: dialogue.Character, Text: dialogue.Text, AudioAbs: abs, SourceDur: source.Duration, Speed: source.Speed, Pitch: source.Pitch, Volume: source.Volume})
-		cursor = end + gap
 	}
 	graph := buildDialogueExportGraph(segments, snapshot.SceneDuration)
 	if graph.Label == "" {

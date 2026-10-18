@@ -358,15 +358,52 @@ func TestSceneAudioSnapshotBindsAuthoritativeShotDialogueRanges(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	audit, err := svc.sceneAudioShotContract(&scene, dialogues)
+	sources := []sceneAudioSource{{DialogueID: dialogues[0].ID, TimelineStart: 0.4, TimelineEnd: 4}, {DialogueID: dialogues[1].ID, TimelineStart: 4, TimelineEnd: 8}}
+	audit, err := svc.sceneAudioShotContract(&scene, dialogues, sources)
 	if err != nil || len(audit) != 2 {
 		t.Fatalf("audit=%+v err=%v", audit, err)
+	}
+	if len(audit[1].Fragments) != 1 || audit[1].Fragments[0].AudioStart != 4 || audit[1].Fragments[0].AudioEnd != 8 {
+		t.Fatalf("fragment audit=%+v", audit[1].Fragments)
+	}
+	misaligned := append([]sceneAudioSource(nil), sources...)
+	misaligned[1].TimelineStart = 3.8
+	if _, err := svc.sceneAudioShotContract(&scene, dialogues, misaligned); err == nil || !strings.Contains(err.Error(), "超出Shot区间") {
+		t.Fatalf("misaligned err=%v", err)
 	}
 	shots[1].DialogueRanges = []models.ShotDialogueRange{{DialogueID: dialogues[1].ID, GroupKey: group, StartRune: 3, EndRune: 4}}
 	if err := db.Save(&shots[1]).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.sceneAudioShotContract(&scene, dialogues); err == nil || !strings.Contains(err.Error(), "未逐字") {
+	if _, err := svc.sceneAudioShotContract(&scene, dialogues, sources); err == nil || !strings.Contains(err.Error(), "未逐字") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestSceneAudioShotContractRejectsSpeechAcrossSilentShot(t *testing.T) {
+	svc := newTestProjectService(t)
+	db := svc.db
+	if err := db.AutoMigrate(&models.Dialogue{}, &models.Shot{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "silent-shot"}
+	_ = db.Create(&project).Error
+	scene := models.Scene{ProjectID: project.ID, Order: 1, Duration: 8}
+	_ = db.Create(&scene).Error
+	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "甲", SpeechType: "dialogue", Text: "完整对白"}
+	_ = db.Create(&dialogue).Error
+	shots := []models.Shot{
+		{SceneID: scene.ID, Order: 1, Duration: 3, DialogueRanges: []models.ShotDialogueRange{{DialogueID: dialogue.ID, GroupKey: "g", StartRune: 0, EndRune: 3}}},
+		{SceneID: scene.ID, Order: 2, Duration: 2},
+		{SceneID: scene.ID, Order: 3, Duration: 3, DialogueRanges: []models.ShotDialogueRange{{DialogueID: dialogue.ID, GroupKey: "g", StartRune: 3, EndRune: 4}}},
+	}
+	for i := range shots {
+		if err := db.Create(&shots[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	sources := []sceneAudioSource{{DialogueID: dialogue.ID, TimelineStart: 0, TimelineEnd: 4}}
+	if _, err := svc.sceneAudioShotContract(&scene, []models.Dialogue{dialogue}, sources); err == nil || !strings.Contains(err.Error(), "静音Shot") {
 		t.Fatalf("err=%v", err)
 	}
 }
