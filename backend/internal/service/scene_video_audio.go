@@ -233,6 +233,9 @@ func (s *ProjectService) currentSceneAudioSnapshot(sc *models.Scene, dialogues [
 		if strings.TrimSpace(rows[0].FileSHA256) == "" || rows[0].FileSize <= 0 {
 			return snapshot, "", fmt.Errorf("Dialogue %d 的已审核候选缺少文件内容指纹，请重新生成并审核", dialogue.ID)
 		}
+		if rows[0].ReviewConfirmation != dialogueAudioReviewConfirmationV1 || rows[0].ReviewInputHash != rows[0].InputHash || rows[0].ReviewFileSHA256 != rows[0].FileSHA256 {
+			return snapshot, "", fmt.Errorf("Dialogue %d 的候选缺少匹配当前内容的人工审核证据", dialogue.ID)
+		}
 		snapshot.Sources = append(snapshot.Sources, sceneAudioSource{DialogueID: dialogue.ID, CandidateID: rows[0].ID, InputHash: rows[0].InputHash, File: rows[0].File, FileSHA256: rows[0].FileSHA256, FileSize: rows[0].FileSize, Position: dialogue.Position, Offset: dialogue.Offset, Speed: dialogueSpeed(dialogue), Pitch: dialogue.Pitch, Volume: dialogueVolume(dialogue), Duration: rows[0].Duration})
 	}
 	cursor := 0.4

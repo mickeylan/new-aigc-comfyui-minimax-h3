@@ -17,6 +17,8 @@ import (
 
 var ErrDialogueAudioReviewConflict = errors.New("配音候选内容已变化，请刷新后重新试听")
 
+const dialogueAudioReviewConfirmationV1 = "dialogue_audio_content_v1"
+
 type dialogueAudioCapture struct {
 	ProjectID      uint
 	DialogueID     uint
@@ -147,10 +149,20 @@ func (s *ProjectService) ReviewDialogueAudioCandidate(projectID, dialogueID, can
 		}
 	}
 	updates := map[string]any{"review_status": status, "review_reason": strings.TrimSpace(reason)}
-	if status == "pending" {
-		updates["reviewed_at"] = nil
-	} else {
+	if status == "accepted" {
+		updates["review_input_hash"] = row.InputHash
+		updates["review_file_sha256"] = row.FileSHA256
+		updates["review_confirmation"] = dialogueAudioReviewConfirmationV1
 		updates["reviewed_at"] = time.Now()
+	} else {
+		updates["review_input_hash"] = ""
+		updates["review_file_sha256"] = ""
+		updates["review_confirmation"] = ""
+		if status == "pending" {
+			updates["reviewed_at"] = nil
+		} else {
+			updates["reviewed_at"] = time.Now()
+		}
 	}
 	if err := s.db.Model(&row).Updates(updates).Error; err != nil {
 		return nil, err
@@ -196,6 +208,9 @@ func (s *ProjectService) SelectDialogueAudioCandidate(projectID, dialogueID, can
 		}
 		if row.Stale || row.ReviewStatus == "rejected" {
 			return fmt.Errorf("过期或已拒绝的配音候选不能采用")
+		}
+		if row.ReviewStatus != "accepted" || row.ReviewConfirmation != dialogueAudioReviewConfirmationV1 || row.ReviewInputHash != row.InputHash || row.ReviewFileSHA256 != row.FileSHA256 {
+			return fmt.Errorf("%w：候选尚未完成匹配当前内容的人工审核", ErrDialogueAudioReviewConflict)
 		}
 		if strings.TrimSpace(expectedInputHash) == "" || strings.TrimSpace(expectedFileSHA256) == "" || row.InputHash != strings.TrimSpace(expectedInputHash) || row.FileSHA256 != strings.TrimSpace(expectedFileSHA256) {
 			return fmt.Errorf("%w：候选不是用户刚才试听的版本", ErrDialogueAudioReviewConflict)

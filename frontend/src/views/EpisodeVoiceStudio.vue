@@ -108,9 +108,9 @@
             <div v-if="candidateDialogueId === d.id" class="candidate-list">
               <div v-if="candidateLoadingId === d.id" class="inline-status">正在加载配音候选…</div>
               <article v-for="candidate in audioCandidates" :key="candidate.id" class="candidate" :class="{ current: candidate.is_current, stale: candidate.stale }">
-                <div><strong>{{ candidate.provider === 'index_tts_rust' ? '本地 IndexTTS' : candidate.provider }}</strong><span>{{ candidate.duration ? candidate.duration.toFixed(2) + ' 秒' : '时长待探测' }}</span><span>{{ candidate.review_status === 'accepted' ? '已采用' : candidate.review_status === 'rejected' ? '已拒绝' : '待审核' }}</span></div>
+                <div><strong>{{ candidate.provider === 'index_tts_rust' ? '本地 IndexTTS' : candidate.provider }}</strong><span>{{ candidate.duration ? candidate.duration.toFixed(2) + ' 秒' : '时长待探测' }}</span><span>{{ candidate.is_current ? '已采用' : candidate.review_status === 'accepted' ? '已审核' : candidate.review_status === 'rejected' ? '已拒绝' : '待审核' }}</span></div>
                 <audio :src="candidate.file" controls preload="none"></audio>
-                <div class="candidate-actions"><button class="btn btn-sm" :disabled="candidate.is_current || candidate.stale || candidate.review_status === 'rejected'" @click="selectCandidate(d, candidate)">采用此版本</button><button class="btn btn-sm btn-ghost" :disabled="candidate.is_current" @click="reviewCandidate(d, candidate, 'rejected')">拒绝</button></div>
+                <div class="candidate-actions"><button v-if="candidate.review_status === 'pending'" class="btn btn-sm btn-secondary" :disabled="candidate.stale" @click="reviewCandidate(d, candidate, 'accepted')">审核通过</button><button class="btn btn-sm" :disabled="candidate.is_current || candidate.stale || candidate.review_status !== 'accepted'" @click="selectCandidate(d, candidate)">采用此版本</button><button class="btn btn-sm btn-ghost" :disabled="candidate.is_current" @click="reviewCandidate(d, candidate, 'rejected')">拒绝</button></div>
                 <small v-if="candidate.stale" class="stale-text">已过期：{{ candidate.stale_reason }}</small>
               </article>
               <p v-if="!candidateLoadingId && !audioCandidates.length" class="sub">暂无历史候选；下一次生成后会自动保留。</p>

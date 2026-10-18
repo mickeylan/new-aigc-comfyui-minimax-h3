@@ -37,6 +37,13 @@ func TestCaptureAndSelectDialogueAudioCandidates(t *testing.T) {
 		t.Fatalf("unreviewed second candidate was promoted: %+v", second)
 	}
 
+	if _, err := service.SelectDialogueAudioCandidate(project.ID, dialogue.ID, first.ID, first.InputHash, first.FileSHA256); !errors.Is(err, ErrDialogueAudioReviewConflict) {
+		t.Fatalf("unreviewed select err=%v", err)
+	}
+	reviewed, err := service.ReviewDialogueAudioCandidate(project.ID, dialogue.ID, first.ID, "accepted", "", first.InputHash, first.FileSHA256)
+	if err != nil || reviewed.ReviewConfirmation != dialogueAudioReviewConfirmationV1 {
+		t.Fatalf("reviewed=%+v err=%v", reviewed, err)
+	}
 	if _, err := service.SelectDialogueAudioCandidate(project.ID, dialogue.ID, first.ID, "wrong", first.FileSHA256); !errors.Is(err, ErrDialogueAudioReviewConflict) {
 		t.Fatalf("wrong CAS err=%v", err)
 	}
