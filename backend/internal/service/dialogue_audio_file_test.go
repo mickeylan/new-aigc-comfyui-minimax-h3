@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -16,10 +17,10 @@ func TestDialogueAudioCandidateWithoutFileFingerprintCannotBeReviewedOrSelected(
 	service := &ProjectService{db: db}
 	row := models.DialogueAudioCandidate{ProjectID: project.ID, DialogueID: dialogue.ID, InputHash: service.effectiveDialogueAudioHash(dialogue), Provider: "legacy", File: "legacy.wav", ReviewStatus: "pending"}
 	db.Create(&row)
-	if _, err := service.ReviewDialogueAudioCandidate(project.ID, dialogue.ID, row.ID, "accepted", ""); err == nil || !strings.Contains(err.Error(), "缺少文件内容指纹") {
+	if _, err := service.ReviewDialogueAudioCandidate(project.ID, dialogue.ID, row.ID, "accepted", "", row.InputHash, row.FileSHA256); !errors.Is(err, ErrDialogueAudioReviewConflict) {
 		t.Fatalf("review err=%v", err)
 	}
-	if _, err := service.SelectDialogueAudioCandidate(project.ID, dialogue.ID, row.ID); err == nil || !strings.Contains(err.Error(), "缺少文件内容指纹") {
+	if _, err := service.SelectDialogueAudioCandidate(project.ID, dialogue.ID, row.ID, row.InputHash, row.FileSHA256); !errors.Is(err, ErrDialogueAudioReviewConflict) {
 		t.Fatalf("select err=%v", err)
 	}
 }

@@ -322,11 +322,11 @@ async function toggleCandidates(dialogue) {
   audioCandidates.value = []; await loadCandidates(dialogue)
 }
 async function selectCandidate(dialogue, candidate) {
-  try { await api.selectDialogueAudioCandidate(projectId, dialogue.id, candidate.id); toast.success('已采用所选配音版本'); await load({ quiet: true }); await loadCandidates(dialogue) }
+  try { await api.selectDialogueAudioCandidate(projectId, dialogue.id, candidate.id, { expected_input_hash: candidate.input_hash, expected_file_sha256: candidate.file_sha256 }); toast.success('已采用所选配音版本'); await load({ quiet: true }); await loadCandidates(dialogue) }
   catch (e) { toast.error(e.response?.data?.error || '采用配音候选失败') }
 }
 async function reviewCandidate(dialogue, candidate, status) {
-  try { await api.reviewDialogueAudioCandidate(projectId, dialogue.id, candidate.id, { status, reason: status === 'rejected' ? '声音工作台人工拒绝' : '' }); await loadCandidates(dialogue) }
+  try { await api.reviewDialogueAudioCandidate(projectId, dialogue.id, candidate.id, { status, reason: status === 'rejected' ? '声音工作台人工拒绝' : '', expected_input_hash: candidate.input_hash, expected_file_sha256: candidate.file_sha256 }); await loadCandidates(dialogue) }
   catch (e) { toast.error(e.response?.data?.error || '审核配音候选失败') }
 }
 async function previewSRT(event) {

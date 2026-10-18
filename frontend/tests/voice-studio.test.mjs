@@ -62,6 +62,8 @@ test('声音工作台保留配音候选并支持试听审核和采用', () => {
   assert.match(view, /试听候选/)
   assert.match(view, /采用此版本/)
   assert.match(view, /人工拒绝/)
+  assert.match(view, /expected_input_hash: candidate\.input_hash/)
+  assert.match(view, /expected_file_sha256: candidate\.file_sha256/)
 })
 
 test('声音工作台提供混音提交、SRT 导出及剪辑台入口', () => {

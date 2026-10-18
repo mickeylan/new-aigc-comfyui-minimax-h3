@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 	"comfyui-console/internal/models"
 	"gorm.io/gorm"
 )
+
+var ErrDialogueAudioReviewConflict = errors.New("配音候选内容已变化，请刷新后重新试听")
 
 type dialogueAudioCapture struct {
 	ProjectID      uint
@@ -124,7 +127,7 @@ func (s *ProjectService) ListDialogueAudioCandidates(projectID, dialogueID uint)
 	return rows, s.db.Where("project_id = ? AND dialogue_id = ?", projectID, dialogueID).Order("created_at DESC, id DESC").Find(&rows).Error
 }
 
-func (s *ProjectService) ReviewDialogueAudioCandidate(projectID, dialogueID, candidateID uint, status, reason string) (*models.DialogueAudioCandidate, error) {
+func (s *ProjectService) ReviewDialogueAudioCandidate(projectID, dialogueID, candidateID uint, status, reason, expectedInputHash, expectedFileSHA256 string) (*models.DialogueAudioCandidate, error) {
 	if status != "pending" && status != "accepted" && status != "rejected" {
 		return nil, fmt.Errorf("无效审核状态")
 	}
@@ -136,8 +139,11 @@ func (s *ProjectService) ReviewDialogueAudioCandidate(projectID, dialogueID, can
 		return nil, fmt.Errorf("当前采用的配音不能拒绝，请先选择另一候选")
 	}
 	if status == "accepted" {
+		if strings.TrimSpace(expectedInputHash) == "" || strings.TrimSpace(expectedFileSHA256) == "" || row.InputHash != strings.TrimSpace(expectedInputHash) || row.FileSHA256 != strings.TrimSpace(expectedFileSHA256) {
+			return nil, fmt.Errorf("%w：候选不是用户刚才试听的版本", ErrDialogueAudioReviewConflict)
+		}
 		if err := s.ensureDialogueAudioCandidateFile(projectID, &row); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w：%v", ErrDialogueAudioReviewConflict, err)
 		}
 	}
 	updates := map[string]any{"review_status": status, "review_reason": strings.TrimSpace(reason)}
@@ -177,7 +183,7 @@ func (s *ProjectService) ensureDialogueAudioCandidateFile(projectID uint, candid
 	return nil
 }
 
-func (s *ProjectService) SelectDialogueAudioCandidate(projectID, dialogueID, candidateID uint) (*models.DialogueAudioCandidate, error) {
+func (s *ProjectService) SelectDialogueAudioCandidate(projectID, dialogueID, candidateID uint, expectedInputHash, expectedFileSHA256 string) (*models.DialogueAudioCandidate, error) {
 	var selected models.DialogueAudioCandidate
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var dialogue models.Dialogue
@@ -191,11 +197,14 @@ func (s *ProjectService) SelectDialogueAudioCandidate(projectID, dialogueID, can
 		if row.Stale || row.ReviewStatus == "rejected" {
 			return fmt.Errorf("过期或已拒绝的配音候选不能采用")
 		}
+		if strings.TrimSpace(expectedInputHash) == "" || strings.TrimSpace(expectedFileSHA256) == "" || row.InputHash != strings.TrimSpace(expectedInputHash) || row.FileSHA256 != strings.TrimSpace(expectedFileSHA256) {
+			return fmt.Errorf("%w：候选不是用户刚才试听的版本", ErrDialogueAudioReviewConflict)
+		}
 		if err := s.ensureDialogueAudioCandidateFile(projectID, &row); err != nil {
-			return err
+			return fmt.Errorf("%w：%v", ErrDialogueAudioReviewConflict, err)
 		}
 		if row.InputHash != s.effectiveDialogueAudioHash(dialogue) {
-			return fmt.Errorf("配音候选与当前对白或音色配置不一致")
+			return fmt.Errorf("%w：配音候选与当前对白或音色配置不一致", ErrDialogueAudioReviewConflict)
 		}
 		if err := tx.Model(&models.DialogueAudioCandidate{}).Where("project_id = ? AND dialogue_id = ?", projectID, dialogueID).Update("is_current", false).Error; err != nil {
 			return err

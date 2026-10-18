@@ -2248,16 +2248,22 @@ func (s *Service) HandleReviewDialogueAudioCandidate(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Status string `json:"status"`
-		Reason string `json:"reason"`
+		Status             string `json:"status"`
+		Reason             string `json:"reason"`
+		ExpectedInputHash  string `json:"expected_input_hash"`
+		ExpectedFileSHA256 string `json:"expected_file_sha256"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
-	row, err := s.Projects.ReviewDialogueAudioCandidate(p.ID, did, cid, req.Status, req.Reason)
+	row, err := s.Projects.ReviewDialogueAudioCandidate(p.ID, did, cid, req.Status, req.Reason, req.ExpectedInputHash, req.ExpectedFileSHA256)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		status := http.StatusBadRequest
+		if errors.Is(err, ErrDialogueAudioReviewConflict) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, row)
@@ -2276,9 +2282,21 @@ func (s *Service) HandleSelectDialogueAudioCandidate(c *gin.Context) {
 	if !ok {
 		return
 	}
-	row, err := s.Projects.SelectDialogueAudioCandidate(p.ID, did, cid)
+	var req struct {
+		ExpectedInputHash  string `json:"expected_input_hash"`
+		ExpectedFileSHA256 string `json:"expected_file_sha256"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	row, err := s.Projects.SelectDialogueAudioCandidate(p.ID, did, cid, req.ExpectedInputHash, req.ExpectedFileSHA256)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		status := http.StatusBadRequest
+		if errors.Is(err, ErrDialogueAudioReviewConflict) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 	s.Projects.pushProject(p)

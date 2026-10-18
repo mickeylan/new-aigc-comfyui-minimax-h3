@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -36,7 +37,10 @@ func TestCaptureAndSelectDialogueAudioCandidates(t *testing.T) {
 		t.Fatalf("unreviewed second candidate was promoted: %+v", second)
 	}
 
-	selected, err := service.SelectDialogueAudioCandidate(project.ID, dialogue.ID, first.ID)
+	if _, err := service.SelectDialogueAudioCandidate(project.ID, dialogue.ID, first.ID, "wrong", first.FileSHA256); !errors.Is(err, ErrDialogueAudioReviewConflict) {
+		t.Fatalf("wrong CAS err=%v", err)
+	}
+	selected, err := service.SelectDialogueAudioCandidate(project.ID, dialogue.ID, first.ID, first.InputHash, first.FileSHA256)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +86,7 @@ func TestStaleDialogueAudioCandidateCannotBeSelected(t *testing.T) {
 	if _, err := service.UpdateDialogueFields(&project, dialogue.ID, DialogueUpdateInput{Text: &updated}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.SelectDialogueAudioCandidate(project.ID, dialogue.ID, row.ID); err == nil {
+	if _, err := service.SelectDialogueAudioCandidate(project.ID, dialogue.ID, row.ID, row.InputHash, row.FileSHA256); err == nil {
 		t.Fatal("stale candidate was selected")
 	}
 	db.First(&row, row.ID)
