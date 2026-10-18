@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,18 +82,38 @@ func (s *ProjectService) currentSceneAudioSnapshot(sc *models.Scene, dialogues [
 
 // sceneReviewedAudioSelection accepts one directly reviewed take or one separately reviewed
 // Scene mix whose source hash still matches every authoritative Dialogue and accepted take.
-func (s *ProjectService) sceneAudioCandidateFile(sc *models.Scene, file string) (string, error) {
-	if sc == nil || s.cfg == nil || strings.TrimSpace(file) == "" {
+func sceneAudioFileSHA256(path string) (string, int64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", 0, err
+	}
+	defer file.Close()
+	digest := sha256.New()
+	size, err := io.Copy(digest, file)
+	if err != nil {
+		return "", 0, err
+	}
+	return hex.EncodeToString(digest.Sum(nil)), size, nil
+}
+
+func (s *ProjectService) sceneAudioCandidateFile(sc *models.Scene, candidate *models.SceneAudioCandidate) (string, error) {
+	if sc == nil || candidate == nil || s.cfg == nil || strings.TrimSpace(candidate.File) == "" {
 		return "", fmt.Errorf("Scene音轨文件路径无效")
 	}
+	if strings.TrimSpace(candidate.FileSHA256) == "" || candidate.FileSize <= 44 {
+		return "", fmt.Errorf("Scene音轨候选缺少可信内容哈希，请重新生成并审核")
+	}
 	root := filepath.Join(s.cfg.Comfy.ComfyDir, "input", fmt.Sprint(sc.ProjectID))
-	path := filepath.Join(root, filepath.Base(file))
+	path := filepath.Join(root, filepath.Base(candidate.File))
 	if !pathInside(root, path) {
 		return "", fmt.Errorf("Scene音轨文件路径越界")
 	}
-	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() <= 44 {
+	hash, size, err := sceneAudioFileSHA256(path)
+	if err != nil || size <= 44 {
 		return "", fmt.Errorf("Scene音轨文件不存在、不可读或为空")
+	}
+	if size != candidate.FileSize || hash != candidate.FileSHA256 {
+		return "", fmt.Errorf("Scene音轨文件内容与审核记录不一致")
 	}
 	return path, nil
 }
@@ -139,7 +160,7 @@ func (s *ProjectService) sceneReviewedAudioSelection(sc *models.Scene) sceneRevi
 			return sceneReviewedAudio{SourceHash: sourceHash, Reason: fmt.Sprintf("场景包含 %d 条 Dialogue；当前来源尚无已审核的Scene连续音轨", len(dialogues))}
 		}
 		_ = snapshot
-		if _, fileErr := s.sceneAudioCandidateFile(sc, candidate.File); fileErr != nil {
+		if _, fileErr := s.sceneAudioCandidateFile(sc, &candidate); fileErr != nil {
 			_ = markSceneAudioCandidatesStale(s.db, sc.ProjectID, sc.ID, fileErr.Error())
 			return sceneReviewedAudio{SourceHash: sourceHash, Reason: fileErr.Error()}
 		}
@@ -203,7 +224,7 @@ func (s *ProjectService) CreateSceneAudioCandidate(sc *models.Scene) (*models.Sc
 	}
 	var existing models.SceneAudioCandidate
 	if err := s.db.Where("project_id = ? AND scene_id = ? AND source_hash = ?", sc.ProjectID, sc.ID, sourceHash).First(&existing).Error; err == nil {
-		if _, fileErr := s.sceneAudioCandidateFile(sc, existing.File); fileErr == nil {
+		if _, fileErr := s.sceneAudioCandidateFile(sc, &existing); fileErr == nil {
 			return &existing, nil
 		}
 		if deleteErr := s.db.Delete(&existing).Error; deleteErr != nil {
@@ -271,7 +292,11 @@ func (s *ProjectService) CreateSceneAudioCandidate(sc *models.Scene) (*models.Sc
 			_ = os.Remove(output)
 		}
 	}()
-	candidate := models.SceneAudioCandidate{ProjectID: sc.ProjectID, SceneID: sc.ID, SourceHash: sourceHash, SourceJSON: string(encoded), File: name, Duration: snapshot.SceneDuration, ReviewStatus: "pending"}
+	fileHash, fileSize, err := sceneAudioFileSHA256(output)
+	if err != nil || fileSize <= 44 {
+		return nil, fmt.Errorf("Scene连续音轨哈希计算失败或输出为空")
+	}
+	candidate := models.SceneAudioCandidate{ProjectID: sc.ProjectID, SceneID: sc.ID, SourceHash: sourceHash, SourceJSON: string(encoded), File: name, FileSHA256: fileHash, FileSize: fileSize, Duration: snapshot.SceneDuration, ReviewStatus: "pending"}
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&models.SceneAudioCandidate{}).Where("project_id = ? AND scene_id = ? AND source_hash <> ?", sc.ProjectID, sc.ID, sourceHash).Updates(map[string]any{"stale": true, "stale_reason": "Dialogue或候选来源已变化", "is_current": false}).Error; err != nil {
 			return err
@@ -307,7 +332,7 @@ func (s *ProjectService) ReviewSceneAudioCandidate(sc *models.Scene, candidateID
 			return fmt.Errorf("Scene音轨候选来源已过期")
 		}
 		if status == "accepted" {
-			if _, fileErr := s.sceneAudioCandidateFile(sc, row.File); fileErr != nil {
+			if _, fileErr := s.sceneAudioCandidateFile(sc, &row); fileErr != nil {
 				return fileErr
 			}
 			if err := tx.Model(&models.SceneAudioCandidate{}).Where("project_id = ? AND scene_id = ?", sc.ProjectID, sc.ID).Update("is_current", false).Error; err != nil {

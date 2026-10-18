@@ -533,6 +533,8 @@ type SceneAudioCandidate struct {
 	SourceHash   string     `gorm:"column:source_hash;size:64;uniqueIndex:idx_scene_audio_take" json:"source_hash"`
 	SourceJSON   string     `gorm:"column:source_json;type:text" json:"source_json"`
 	File         string     `gorm:"type:text" json:"file"`
+	FileSHA256   string     `gorm:"column:file_sha256;size:64" json:"file_sha256"`
+	FileSize     int64      `gorm:"column:file_size" json:"file_size"`
 	Duration     float64    `json:"duration"`
 	ReviewStatus string     `gorm:"column:review_status;size:32;default:pending;index" json:"review_status"`
 	ReviewReason string     `gorm:"column:review_reason;type:text" json:"review_reason"`
