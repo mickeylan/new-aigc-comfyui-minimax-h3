@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -8,6 +9,27 @@ import (
 	"comfyui-console/internal/models"
 	"github.com/gin-gonic/gin"
 )
+
+type sceneAudioCandidateResponse struct {
+	models.SceneAudioCandidate
+	SourceSnapshot *sceneAudioSnapshot `json:"source_snapshot,omitempty"`
+	AuditError     string              `json:"audit_error,omitempty"`
+}
+
+func sceneAudioCandidateResponses(rows []models.SceneAudioCandidate) []sceneAudioCandidateResponse {
+	out := make([]sceneAudioCandidateResponse, 0, len(rows))
+	for _, row := range rows {
+		item := sceneAudioCandidateResponse{SceneAudioCandidate: row}
+		var snapshot sceneAudioSnapshot
+		if err := json.Unmarshal([]byte(row.SourceJSON), &snapshot); err != nil {
+			item.AuditError = "来源审计快照无法解析"
+		} else {
+			item.SourceSnapshot = &snapshot
+		}
+		out = append(out, item)
+	}
+	return out
+}
 
 func (s *Service) HandleListSceneAudioCandidates(c *gin.Context) {
 	sc, ok := s.loadScene(c)
@@ -20,7 +42,7 @@ func (s *Service) HandleListSceneAudioCandidates(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"candidates": rows, "selection": selection})
+	c.JSON(http.StatusOK, gin.H{"candidates": sceneAudioCandidateResponses(rows), "selection": selection})
 }
 
 func (s *Service) HandleCreateSceneAudioCandidate(c *gin.Context) {
