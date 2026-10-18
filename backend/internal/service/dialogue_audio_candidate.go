@@ -1,8 +1,11 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 	"time"
@@ -132,6 +135,11 @@ func (s *ProjectService) ReviewDialogueAudioCandidate(projectID, dialogueID, can
 	if row.IsCurrent && status == "rejected" {
 		return nil, fmt.Errorf("当前采用的配音不能拒绝，请先选择另一候选")
 	}
+	if status == "accepted" {
+		if err := s.ensureDialogueAudioCandidateFile(projectID, &row); err != nil {
+			return nil, err
+		}
+	}
 	updates := map[string]any{"review_status": status, "review_reason": strings.TrimSpace(reason)}
 	if status == "pending" {
 		updates["reviewed_at"] = nil
@@ -145,16 +153,28 @@ func (s *ProjectService) ReviewDialogueAudioCandidate(projectID, dialogueID, can
 	return &row, nil
 }
 
-func (s *ProjectService) ensureDialogueAudioCandidateFile(projectID uint, file string) error {
+func (s *ProjectService) ensureDialogueAudioCandidateFile(projectID uint, candidate *models.DialogueAudioCandidate) error {
+	if candidate == nil || strings.TrimSpace(candidate.FileSHA256) == "" || candidate.FileSize <= 0 {
+		return fmt.Errorf("配音候选缺少文件内容指纹，请重新生成并审核")
+	}
 	if s.upload == nil || s.remote == nil {
 		return nil
 	}
-	path := filepath.Join(s.upload.InputDir(), fmt.Sprint(projectID), filepath.FromSlash(file))
+	path := filepath.Join(s.upload.InputDir(), fmt.Sprint(projectID), filepath.FromSlash(candidate.File))
 	reader, err := s.remote.Open(path)
 	if err != nil {
 		return fmt.Errorf("配音候选文件不存在或不可读取")
 	}
-	return reader.Close()
+	defer reader.Close()
+	digest := sha256.New()
+	size, err := io.Copy(digest, reader)
+	if err != nil {
+		return fmt.Errorf("配音候选文件读取失败")
+	}
+	if size != candidate.FileSize || hex.EncodeToString(digest.Sum(nil)) != candidate.FileSHA256 {
+		return fmt.Errorf("配音候选文件内容与候选记录不一致")
+	}
+	return nil
 }
 
 func (s *ProjectService) SelectDialogueAudioCandidate(projectID, dialogueID, candidateID uint) (*models.DialogueAudioCandidate, error) {
@@ -171,7 +191,7 @@ func (s *ProjectService) SelectDialogueAudioCandidate(projectID, dialogueID, can
 		if row.Stale || row.ReviewStatus == "rejected" {
 			return fmt.Errorf("过期或已拒绝的配音候选不能采用")
 		}
-		if err := s.ensureDialogueAudioCandidateFile(projectID, row.File); err != nil {
+		if err := s.ensureDialogueAudioCandidateFile(projectID, &row); err != nil {
 			return err
 		}
 		if row.InputHash != s.effectiveDialogueAudioHash(dialogue) {
