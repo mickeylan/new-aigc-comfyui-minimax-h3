@@ -31,6 +31,18 @@ func TestSceneAudioCandidateResponsesExposeStructuredShotTimingAudit(t *testing.
 	}
 }
 
+func TestSceneAudioReviewRequiresExplicitAuditConfirmation(t *testing.T) {
+	if err := validateSceneAudioReviewConfirmation("accepted", false); err == nil {
+		t.Fatal("accepted review bypassed confirmation")
+	}
+	if err := validateSceneAudioReviewConfirmation("accepted", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSceneAudioReviewConfirmation("rejected", false); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSceneAudioCandidateResponsesReportMalformedAudit(t *testing.T) {
 	rows := sceneAudioCandidateResponses([]models.SceneAudioCandidate{{ID: 1, SourceJSON: "{"}})
 	if rows[0].SourceSnapshot != nil || rows[0].AuditError == "" {

@@ -32,4 +32,7 @@ test('H3音频模板只允许已审核且哈希一致的生产候选', () => {
   assert.match(detail, /命名角色画外对白/)
   assert.match(detail, /承接上一镜声音/)
   assert.match(detail, /延续到下一镜/)
+  assert.match(detail, /我已试听完整音轨，并核对所有Native Shot的文字范围、音频范围与声音归属/)
+  assert.match(detail, /audit_confirmed:/)
+  assert.match(detail, /sceneAudioAuditConfirmed\[candidate\.id\]/)
 })

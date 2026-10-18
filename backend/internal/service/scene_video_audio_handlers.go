@@ -59,6 +59,13 @@ func (s *Service) HandleCreateSceneAudioCandidate(c *gin.Context) {
 	c.JSON(http.StatusCreated, row)
 }
 
+func validateSceneAudioReviewConfirmation(status string, confirmed bool) error {
+	if strings.TrimSpace(status) == "accepted" && !confirmed {
+		return errors.New("接受前必须确认已核对完整音轨、Native Shot文字范围、音频范围和声音归属")
+	}
+	return nil
+}
+
 func (s *Service) HandleReviewSceneAudioCandidate(c *gin.Context) {
 	sc, ok := s.loadScene(c)
 	if !ok {
@@ -74,9 +81,14 @@ func (s *Service) HandleReviewSceneAudioCandidate(c *gin.Context) {
 		Reason             string `json:"reason"`
 		ExpectedSourceHash string `json:"expected_source_hash"`
 		ExpectedFileSHA256 string `json:"expected_file_sha256"`
+		AuditConfirmed     bool   `json:"audit_confirmed"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	if err := validateSceneAudioReviewConfirmation(req.Status, req.AuditConfirmed); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
 	}
 	row, err := s.Projects.ReviewSceneAudioCandidate(sc, uint(candidateID), strings.TrimSpace(req.Status), req.Reason, req.ExpectedSourceHash, req.ExpectedFileSHA256)
