@@ -346,6 +346,29 @@ func TestSceneReviewedAudioSelectionMarksMissingMixFileStale(t *testing.T) {
 	}
 }
 
+func TestSceneAudioSnapshotRejectsStaleListenerIdentity(t *testing.T) {
+	svc := newTestProjectService(t)
+	db := svc.db
+	if err := db.AutoMigrate(&models.Dialogue{}, &models.DialogueAudioCandidate{}, &models.SceneAudioCandidate{}, &models.Shot{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "stale-listener-audio"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, Order: 1, Duration: 3}
+	db.Create(&scene)
+	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "甲", SpeechType: "dialogue", Text: "继续。"}
+	db.Create(&dialogue)
+	shot := models.Shot{SceneID: scene.ID, Order: 1, Duration: 3, SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ListenerCharacter: "已删除角色", Dialogue: dialogue.Text}
+	db.Create(&shot)
+	if _, _, err := svc.currentSceneAudioSnapshot(&scene, []models.Dialogue{dialogue}); !errors.Is(err, ErrDialogueTimingBlocked) || !strings.Contains(err.Error(), "已删除角色") {
+		t.Fatalf("stale listener was not rejected before audio readiness checks: %v", err)
+	}
+	var count int64
+	if err := db.Model(&models.SceneAudioCandidate{}).Where("scene_id = ?", scene.ID).Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("stale listener created audio candidate: count=%d err=%v", count, err)
+	}
+}
+
 func TestSceneAudioSnapshotBindsAuthoritativeShotDialogueRanges(t *testing.T) {
 	svc := newTestProjectService(t)
 	db := svc.db
@@ -354,6 +377,9 @@ func TestSceneAudioSnapshotBindsAuthoritativeShotDialogueRanges(t *testing.T) {
 	}
 	project := models.Project{Title: "shot-audio"}
 	_ = db.Create(&project).Error
+	if err := db.Create(&models.Character{ProjectID: project.ID, Name: "乙"}).Error; err != nil {
+		t.Fatal(err)
+	}
 	scene := models.Scene{ProjectID: project.ID, Order: 1, Duration: 8}
 	_ = db.Create(&scene).Error
 	dialogues := []models.Dialogue{

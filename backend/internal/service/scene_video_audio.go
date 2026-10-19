@@ -104,6 +104,9 @@ func (s *ProjectService) sceneAudioShotContract(sc *models.Scene, dialogues []mo
 	if len(shots) == 0 {
 		return nil, nil
 	}
+	if err := validateShotListenerCharacters(s.db, sc.ProjectID, shots); err != nil {
+		return nil, err
+	}
 	if math.Abs(shotDurationTotal(shots)-normalizeSceneDuration(sc.Duration)) > shotDurationTolerance {
 		return nil, fmt.Errorf("Shot总时长 %.1f 秒与Scene时长 %.1f 秒不一致", shotDurationTotal(shots), normalizeSceneDuration(sc.Duration))
 	}
@@ -217,6 +220,15 @@ func (s *ProjectService) sceneAudioShotContract(sc *models.Scene, dialogues []mo
 
 func (s *ProjectService) currentSceneAudioSnapshot(sc *models.Scene, dialogues []models.Dialogue) (sceneAudioSnapshot, string, error) {
 	snapshot := sceneAudioSnapshot{Version: 3, ProjectID: sc.ProjectID, SceneID: sc.ID, SceneDuration: normalizeSceneDuration(sc.Duration), FragmentTimingMethod: "dialogue_text_duration_weighted_v1"}
+	if s.db.Migrator().HasTable(&models.Shot{}) {
+		var shots []models.Shot
+		if err := s.db.Where("scene_id = ?", sc.ID).Find(&shots).Error; err != nil {
+			return snapshot, "", err
+		}
+		if err := validateShotListenerCharacters(s.db, sc.ProjectID, shots); err != nil {
+			return snapshot, "", err
+		}
+	}
 	for _, dialogue := range dialogues {
 		if dialogue.AudioStale || dialogue.Status != "ready" || strings.TrimSpace(dialogue.AudioFile) == "" || dialogue.AudioHash == "" || dialogue.AudioHash != s.effectiveDialogueAudioHash(dialogue) {
 			return snapshot, "", fmt.Errorf("Dialogue %d 的生产音频未就绪、已过期或哈希不匹配", dialogue.ID)
