@@ -363,9 +363,21 @@ func TestSceneAudioSnapshotRejectsStaleListenerIdentity(t *testing.T) {
 	if _, _, err := svc.currentSceneAudioSnapshot(&scene, []models.Dialogue{dialogue}); !errors.Is(err, ErrDialogueTimingBlocked) || !strings.Contains(err.Error(), "已删除角色") {
 		t.Fatalf("stale listener was not rejected before audio readiness checks: %v", err)
 	}
-	var count int64
-	if err := db.Model(&models.SceneAudioCandidate{}).Where("scene_id = ?", scene.ID).Count(&count).Error; err != nil || count != 0 {
-		t.Fatalf("stale listener created audio candidate: count=%d err=%v", count, err)
+	legacy := models.SceneAudioCandidate{ProjectID: project.ID, SceneID: scene.ID, SourceHash: "historical", File: "old.wav", ReviewStatus: "accepted", IsCurrent: true}
+	if err := db.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.refreshSceneAudioCandidates(&scene, []models.Dialogue{dialogue}); !errors.Is(err, ErrDialogueTimingBlocked) {
+		t.Fatalf("stale listener refresh error=%v", err)
+	}
+	if err := db.First(&legacy, legacy.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !legacy.Stale || legacy.IsCurrent || !strings.Contains(legacy.StaleReason, "已删除角色") {
+		t.Fatalf("historical accepted mix remained eligible: %+v", legacy)
+	}
+	if got := svc.sceneReviewedAudioSelection(&scene); got.Ready || !strings.Contains(got.Reason, "已删除角色") {
+		t.Fatalf("historical stale listener remained selectable: %+v", got)
 	}
 }
 
