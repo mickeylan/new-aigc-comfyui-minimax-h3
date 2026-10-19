@@ -346,7 +346,8 @@ func parseSceneDirectorDraftWithOptions(output string, preserveShortShots bool) 
 func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue) string {
 	var lines []string
 	for i, d := range dialogues {
-		lines = append(lines, fmt.Sprintf("D%d｜%s｜%s", i+1, strings.TrimSpace(d.Character), strings.TrimSpace(d.Text)))
+		speechType, speaker := normalizeScriptSpeech(d.SpeechType, d.Character)
+		lines = append(lines, fmt.Sprintf("D%d｜speech_type=%s｜speaker=%s｜text=%s", i+1, speechType, strings.TrimSpace(speaker), strings.TrimSpace(d.Text)))
 	}
 	return `按对白自然语速和语义停顿拆成多个3–15秒Native H3镜头。可以交替使用说话人近景、包含说话人的双人/前后景镜头，以及对白结束后的纯听者反应镜头。硬规则：
 1. Dialogue字段只能填下列结构化对白的连续原文片段，不得改写、增删、重复或创造旁白；无发声镜头必须为空。

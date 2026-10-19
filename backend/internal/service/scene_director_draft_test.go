@@ -203,6 +203,25 @@ func TestDialogueRhythmInstructionAllowsAttributedCrossCutListenerReaction(t *te
 	}
 }
 
+func TestDialogueRhythmInstructionIncludesAuthoritativeSpeechTypes(t *testing.T) {
+	got := dialogueRhythmDirectorInstruction([]models.Dialogue{
+		{Character: "阿宁", SpeechType: "dialogue", Text: "快走！"},
+		{Character: "阿月", SpeechType: "offscreen_dialogue", Text: "等等我。"},
+		{Character: "旁白", SpeechType: "narration", Text: "夜幕降临。"},
+		{Character: "阿宁", SpeechType: "monologue", Text: "不能回头。"},
+	})
+	for _, want := range []string{
+		"D1｜speech_type=dialogue｜speaker=阿宁｜text=快走！",
+		"D2｜speech_type=offscreen_dialogue｜speaker=阿月｜text=等等我。",
+		"D3｜speech_type=narration｜speaker=旁白｜text=夜幕降临。",
+		"D4｜speech_type=monologue｜speaker=阿宁｜text=不能回头。",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing authoritative speech tuple %q: %s", want, got)
+		}
+	}
+}
+
 func TestValidateDialogueRhythmDraftAllowsAttributedCrossCutListenerReaction(t *testing.T) {
 	draft, err := parseSceneDirectorDraft(`{"shots":[{"act_type":"setup","shot_type":"说话人近景","camera_angle":"平视","camera_movement":"固定","duration":4,"description":"上官若琳开口","dialogue":"相信姐姐，","emotion":"坚定","transition_type":"cut","transition_note":"切到听者","start_state":"上官若琳看向妹妹","end_state":"上官若琳继续说","prompt_subject":"上官若琳近景","prompt_action":"同步口型说话","prompt_camera":"近景","prompt_lighting":"柔光","prompt_style":"真人写实","negative_prompt":"","checks":[]},{"act_type":"rising","shot_type":"听者反应","camera_angle":"平视","camera_movement":"固定","duration":6,"description":"上官若琳声音跨切延续，上官若彤闭口倾听","dialogue":"姐姐无论如何也不会让你去罗刹魔域！","emotion":"担忧","transition_type":"cut","transition_note":"","start_state":"上官若彤抬头","end_state":"上官若彤神情微变","prompt_subject":"上官若彤单人近景","prompt_action":"双唇闭合倾听，上官若琳声音跨切延续","prompt_camera":"反应近景","prompt_lighting":"柔光","prompt_style":"真人写实","negative_prompt":"","checks":[]}]}`)
 	if err != nil {
