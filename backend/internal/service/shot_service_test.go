@@ -506,6 +506,53 @@ func TestNativeRegroupHandlersReturn422ForStaleListenerWithoutMutation(t *testin
 	}
 }
 
+func TestNativeRegroupRejectsInvalidCombinedDialogueContract(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "regroup dialogue contract", Generation: 1}
+	db.Create(&project)
+	scenes := []models.Scene{
+		{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 1, Title: "原场景 · Native段1", Content: "保留一", Duration: 6, Status: "video_ready", VideoFile: "one.mp4"},
+		{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 2, Title: "原场景 · Native段2", Content: "保留二", Duration: 3, Status: "video_ready", VideoFile: "two.mp4"},
+	}
+	for i := range scenes {
+		if err := db.Create(&scenes[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	dialogues := []models.Dialogue{
+		{ProjectID: project.ID, SceneID: scenes[0].ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: "快走！"},
+		{ProjectID: project.ID, SceneID: scenes[0].ID, Order: 2, Character: "阿月", SpeechType: "dialogue", Text: "我不走。"},
+	}
+	for i := range dialogues {
+		if err := db.Create(&dialogues[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Create(&models.Shot{SceneID: scenes[0].ID, Order: 1, ShotType: "错误合并", Duration: 6, Description: "两人先后说话", Dialogue: "快走！我不走。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.Shot{SceneID: scenes[1].ID, Order: 1, ShotType: "空镜", Duration: 3, Description: "落花", SpeechPresentation: models.ShotSpeechPresentationSilent}).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{DB: db, Shots: NewShotService(db)}
+	previewRecorder := httptest.NewRecorder()
+	previewCtx, _ := gin.CreateTestContext(previewRecorder)
+	previewCtx.Request = httptest.NewRequest(http.MethodPost, "/api/projects/x/scenes/y/native-regroup/preview", nil)
+	previewCtx.Params = gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(project.ID), 10)}, {Key: "sid", Value: strconv.FormatUint(uint64(scenes[0].ID), 10)}}
+	service.HandlePreviewNativeSceneRegroup(previewCtx)
+	if previewRecorder.Code != http.StatusUnprocessableEntity || !strings.Contains(previewRecorder.Body.String(), "多个权威说话人或语音类型") {
+		t.Fatalf("status=%d body=%s", previewRecorder.Code, previewRecorder.Body.String())
+	}
+	var saved []models.Scene
+	if err := db.Where("project_id = ?", project.ID).Order("`order`").Find(&saved).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(saved) != 2 || saved[0].VideoFile != "one.mp4" || saved[1].VideoFile != "two.mp4" {
+		t.Fatalf("blocked contract mutated scenes: %+v", saved)
+	}
+}
+
 func TestHandleUpdateShotReturns422ForUnknownListenerWithoutMutation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := newTestDBWithNewModels(t)

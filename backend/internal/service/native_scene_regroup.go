@@ -83,6 +83,31 @@ func validateMaterializedRunListeners(db *gorm.DB, projectID uint, scenes []mode
 	return validateShotListenerCharacters(db, projectID, shots)
 }
 
+func validateExistingNativeGroups(db *gorm.DB, groups []existingNativeGroup) error {
+	for groupIndex, group := range groups {
+		shots := []models.Shot{}
+		dialogues := []models.Dialogue{}
+		for _, scene := range group.Scenes {
+			var sceneShots []models.Shot
+			if err := db.Where("scene_id = ?", scene.ID).Order("order_num, id").Find(&sceneShots).Error; err != nil {
+				return err
+			}
+			shots = append(shots, sceneShots...)
+			var sceneDialogues []models.Dialogue
+			if err := db.Where("scene_id = ?", scene.ID).Order("`order`, id").Find(&sceneDialogues).Error; err != nil {
+				return err
+			}
+			dialogues = append(dialogues, authoritativeSceneDialogues(sceneDialogues)...)
+		}
+		if len(dialogues) > 0 {
+			if err := validateDialogueShotTiming(shots, dialogues); err != nil {
+				return fmt.Errorf("重新合并后的Native段%d无效: %w", groupIndex+1, err)
+			}
+		}
+	}
+	return nil
+}
+
 func packExistingNativeScenes(scenes []models.Scene) []existingNativeGroup {
 	groups := []existingNativeGroup{}
 	for _, scene := range scenes {
@@ -105,6 +130,9 @@ func (s *ShotService) PreviewExistingNativeRegroup(projectID, selectedID uint) (
 		return nil, err
 	}
 	groups := packExistingNativeScenes(run)
+	if err := validateExistingNativeGroups(s.db, groups); err != nil {
+		return nil, err
+	}
 	items := make([]ShotMaterializationItem, 0, len(groups))
 	for i, group := range groups {
 		ids := make([]uint, 0, len(group.Scenes))
@@ -138,6 +166,9 @@ func (s *ShotService) RegroupExistingNativeScenes(projectID, selectedID uint) ([
 			return err
 		}
 		groups := packExistingNativeScenes(run)
+		if err := validateExistingNativeGroups(tx, groups); err != nil {
+			return err
+		}
 		runIDs := make([]uint, len(run))
 		for i := range run {
 			runIDs[i] = run[i].ID
