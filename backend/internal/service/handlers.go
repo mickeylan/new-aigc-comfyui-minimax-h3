@@ -1150,7 +1150,11 @@ func (s *Service) HandlePreviewShotMaterialization(c *gin.Context) {
 	}
 	preview, err := s.Shots.PreviewMaterialization(p.ID, uint(sceneID))
 	if err != nil {
-		c.JSON(400, gin.H{"error": err.Error()})
+		if errors.Is(err, ErrDialogueTimingBlocked) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(200, preview)
@@ -1175,7 +1179,11 @@ func (s *Service) HandleMaterializeShots(c *gin.Context) {
 	}
 	scenes, err := s.Shots.Materialize(p.ID, uint(sceneID))
 	if err != nil {
-		c.JSON(400, gin.H{"error": err.Error()})
+		if errors.Is(err, ErrDialogueTimingBlocked) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	firstID := uint(0)

@@ -408,6 +408,55 @@ func TestHandleCreateShotsRejectsUnknownListenerWith422WithoutMutation(t *testin
 	}
 }
 
+func TestMaterializationHandlersReturn422ForStaleListenerWithoutMutation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "materialization handler listener", Generation: 1}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 1, Title: "原场景", Content: "保留", Duration: 6, Status: "video_ready", VideoFile: "keep.mp4"}
+	db.Create(&scene)
+	shots := []models.Shot{
+		{SceneID: scene.ID, Order: 1, ShotType: "听者反应", Duration: 3, Description: "旧数据", SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ListenerCharacter: "已删除角色"},
+		{SceneID: scene.ID, Order: 2, ShotType: "空镜", Duration: 3, Description: "落花", SpeechPresentation: models.ShotSpeechPresentationSilent},
+	}
+	for i := range shots {
+		if err := db.Create(&shots[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	service := &Service{DB: db, Shots: NewShotService(db)}
+
+	previewRecorder := httptest.NewRecorder()
+	previewCtx, _ := gin.CreateTestContext(previewRecorder)
+	previewCtx.Request = httptest.NewRequest(http.MethodPost, "/api/projects/x/scenes/y/shots/materialize/preview", nil)
+	previewCtx.Params = gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(project.ID), 10)}, {Key: "sid", Value: strconv.FormatUint(uint64(scene.ID), 10)}}
+	service.HandlePreviewShotMaterialization(previewCtx)
+	if previewRecorder.Code != http.StatusUnprocessableEntity || !strings.Contains(previewRecorder.Body.String(), "已删除角色") {
+		t.Fatalf("preview status=%d body=%s", previewRecorder.Code, previewRecorder.Body.String())
+	}
+
+	applyRecorder := httptest.NewRecorder()
+	applyCtx, _ := gin.CreateTestContext(applyRecorder)
+	applyCtx.Request = httptest.NewRequest(http.MethodPost, "/api/projects/x/scenes/y/shots/materialize", strings.NewReader(`{"confirm":true}`))
+	applyCtx.Request.Header.Set("Content-Type", "application/json")
+	applyCtx.Params = gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(project.ID), 10)}, {Key: "sid", Value: strconv.FormatUint(uint64(scene.ID), 10)}}
+	service.HandleMaterializeShots(applyCtx)
+	if applyRecorder.Code != http.StatusUnprocessableEntity || !strings.Contains(applyRecorder.Body.String(), "已删除角色") {
+		t.Fatalf("apply status=%d body=%s", applyRecorder.Code, applyRecorder.Body.String())
+	}
+	var saved models.Scene
+	if err := db.First(&saved, scene.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.Content != "保留" || saved.VideoFile != "keep.mp4" || saved.Status != "video_ready" {
+		t.Fatalf("handlers mutated source: %+v", saved)
+	}
+	var count int64
+	if err := db.Model(&models.Scene{}).Where("project_id = ?", project.ID).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("handlers created scenes: count=%d err=%v", count, err)
+	}
+}
+
 func TestHandleUpdateShotReturns422ForUnknownListenerWithoutMutation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := newTestDBWithNewModels(t)
