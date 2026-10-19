@@ -2272,6 +2272,14 @@ func characterSubjectTagByName(name string, referenceLines []string) string {
 	return ""
 }
 
+func characterSubjectOrName(name string, referenceLines []string) string {
+	name = strings.TrimSpace(name)
+	if tag := characterSubjectTagByName(name, referenceLines); tag != "" {
+		return tag
+	}
+	return name
+}
+
 func useSubjectTags(text string, referenceLines []string) string {
 	for i, line := range referenceLines {
 		marker := "角色「"
@@ -3278,7 +3286,7 @@ func isNarrationSpeaker(name string) bool {
 }
 
 func renderStructuredDialogue(d models.Dialogue, speakerID int, referenceLines []string) string {
-	speaker := useSubjectTags(strings.TrimSpace(d.Character), referenceLines)
+	speaker := characterSubjectOrName(d.Character, referenceLines)
 	if strings.TrimSpace(d.H3VoiceDescription) != "" {
 		speaker = strings.TrimSpace(d.H3VoiceDescription)
 	}
@@ -3330,7 +3338,7 @@ func dialogueContinuesAcrossCut(previous, next models.Dialogue) bool {
 }
 
 func renderDialogueRange(d models.Dialogue, speakerID int, referenceLines []string, fragment string, continuesFrom, continuesTo, visible bool, visibleSubjects []string) string {
-	speakerTag := useSubjectTags(strings.TrimSpace(d.Character), referenceLines)
+	speakerTag := characterSubjectOrName(d.Character, referenceLines)
 	speaker := speakerTag
 	if strings.TrimSpace(d.H3VoiceDescription) != "" {
 		speaker = strings.TrimSpace(d.H3VoiceDescription)
@@ -3486,7 +3494,7 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 			}
 			fragment := string([]rune(groupText[key])[r.StartRune:r.EndRune])
 			framing := useSubjectTags(strings.Join([]string{shot.PromptSubject, shot.ShotType}, " "), referenceLines)
-			speakerTag := useSubjectTags(strings.TrimSpace(d.Character), referenceLines)
+			speakerTag := characterSubjectOrName(d.Character, referenceLines)
 			visible := speakerTag != "" && strings.Contains(framing, speakerTag)
 			switch shot.SpeechPresentation {
 			case models.ShotSpeechPresentationVisibleSpeaker:
@@ -3631,7 +3639,7 @@ func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, refere
 		for _, index := range assigned[shotNo] {
 			continuation := index > 0 && dialogueContinuesAcrossCut(valid[index-1], valid[index]) && dialogueIndexShot(assigned, index-1) == shotNo-1
 			framing := useSubjectTags(strings.Join([]string{shots[shotNo-1].PromptSubject, shots[shotNo-1].ShotType}, " "), referenceLines)
-			speakerTag := useSubjectTags(strings.TrimSpace(valid[index].Character), referenceLines)
+			speakerTag := characterSubjectOrName(valid[index].Character, referenceLines)
 			visible := speakerTag != "" && strings.Contains(framing, speakerTag)
 			if strings.TrimSpace(valid[index].SpeechType) == "" || valid[index].SpeechType == "dialogue" {
 				if !visible && speakerTag != "" {
@@ -3698,13 +3706,13 @@ func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLine
 	requiredVisible := []string{}
 	for _, d := range valid {
 		if strings.TrimSpace(d.SpeechType) == "" || d.SpeechType == "dialogue" {
-			requiredVisible = append(requiredVisible, useSubjectTags(strings.TrimSpace(d.Character), referenceLines))
+			requiredVisible = append(requiredVisible, characterSubjectOrName(d.Character, referenceLines))
 		}
 	}
 	body = ensureVisibleDialogueSpeakers(body, requiredVisible)
 	for i, d := range valid {
 		speakerName := strings.TrimSpace(d.Character)
-		speaker := useSubjectTags(speakerName, referenceLines)
+		speaker := characterSubjectOrName(speakerName, referenceLines)
 		if strings.TrimSpace(d.H3VoiceDescription) != "" {
 			speaker = strings.TrimSpace(d.H3VoiceDescription)
 		}

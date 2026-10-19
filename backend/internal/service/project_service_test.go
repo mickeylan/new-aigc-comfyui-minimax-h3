@@ -2709,6 +2709,13 @@ func TestCharacterSubjectTagByNameUsesExactIdentity(t *testing.T) {
 	if got := characterSubjectTagByName("阿", refs); got != "" {
 		t.Fatalf("partial character name unexpectedly bound: %q", got)
 	}
+	renderedSpeaker := renderStructuredDialogue(models.Dialogue{Character: "阿月儿", SpeechType: "dialogue", Text: "别怕。"}, 1, refs)
+	if !strings.HasPrefix(renderedSpeaker, "<Subject 2> (S1) says:") || strings.Contains(renderedSpeaker, "<Subject 1>儿") {
+		t.Fatalf("overlapping speaker identity bound incorrectly: %s", renderedSpeaker)
+	}
+	if fallback := renderStructuredDialogue(models.Dialogue{Character: "未建档角色", SpeechType: "dialogue", Text: "继续。"}, 1, refs); !strings.HasPrefix(fallback, "未建档角色 (S1) says:") {
+		t.Fatalf("unreferenced speaker fallback changed: %s", fallback)
+	}
 	shots := []models.Shot{{Order: 1, SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ListenerCharacter: "阿月儿", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: 0, EndRune: 2}}}}
 	got := appendStructuredDialogueToShots("[Shot 1] A listener reacts.", []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "继续"}}, refs, shots)
 	if !strings.Contains(got, "<Subject 2> keeps their lips completely closed") {
