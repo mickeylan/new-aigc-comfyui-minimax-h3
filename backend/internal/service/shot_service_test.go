@@ -457,6 +457,55 @@ func TestMaterializationHandlersReturn422ForStaleListenerWithoutMutation(t *test
 	}
 }
 
+func TestNativeRegroupHandlersReturn422ForStaleListenerWithoutMutation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "regroup handler listener", Generation: 1}
+	db.Create(&project)
+	scenes := []models.Scene{
+		{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 1, Title: "原场景 · Native段1", Content: "保留一", Duration: 3, Status: "video_ready", VideoFile: "one.mp4"},
+		{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 2, Title: "原场景 · Native段2", Content: "保留二", Duration: 3, Status: "video_ready", VideoFile: "two.mp4"},
+	}
+	for i := range scenes {
+		if err := db.Create(&scenes[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Create(&models.Shot{SceneID: scenes[0].ID, Order: 1, ShotType: "听者反应", Duration: 3, Description: "旧数据", SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ListenerCharacter: "已删除角色"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.Shot{SceneID: scenes[1].ID, Order: 1, ShotType: "空镜", Duration: 3, Description: "落花", SpeechPresentation: models.ShotSpeechPresentationSilent}).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{DB: db, Shots: NewShotService(db)}
+
+	previewRecorder := httptest.NewRecorder()
+	previewCtx, _ := gin.CreateTestContext(previewRecorder)
+	previewCtx.Request = httptest.NewRequest(http.MethodPost, "/api/projects/x/scenes/y/native-regroup/preview", nil)
+	previewCtx.Params = gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(project.ID), 10)}, {Key: "sid", Value: strconv.FormatUint(uint64(scenes[0].ID), 10)}}
+	service.HandlePreviewNativeSceneRegroup(previewCtx)
+	if previewRecorder.Code != http.StatusUnprocessableEntity || !strings.Contains(previewRecorder.Body.String(), "已删除角色") {
+		t.Fatalf("preview status=%d body=%s", previewRecorder.Code, previewRecorder.Body.String())
+	}
+
+	applyRecorder := httptest.NewRecorder()
+	applyCtx, _ := gin.CreateTestContext(applyRecorder)
+	applyCtx.Request = httptest.NewRequest(http.MethodPost, "/api/projects/x/scenes/y/native-regroup", strings.NewReader(`{"confirm":true}`))
+	applyCtx.Request.Header.Set("Content-Type", "application/json")
+	applyCtx.Params = gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(project.ID), 10)}, {Key: "sid", Value: strconv.FormatUint(uint64(scenes[0].ID), 10)}}
+	service.HandleNativeSceneRegroup(applyCtx)
+	if applyRecorder.Code != http.StatusUnprocessableEntity || !strings.Contains(applyRecorder.Body.String(), "已删除角色") {
+		t.Fatalf("apply status=%d body=%s", applyRecorder.Code, applyRecorder.Body.String())
+	}
+	var saved []models.Scene
+	if err := db.Where("project_id = ?", project.ID).Order("`order`").Find(&saved).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(saved) != 2 || saved[0].VideoFile != "one.mp4" || saved[1].VideoFile != "two.mp4" || saved[0].Content != "保留一" || saved[1].Content != "保留二" {
+		t.Fatalf("blocked regroup mutated scenes: %+v", saved)
+	}
+}
+
 func TestHandleUpdateShotReturns422ForUnknownListenerWithoutMutation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := newTestDBWithNewModels(t)

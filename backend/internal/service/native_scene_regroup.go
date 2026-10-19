@@ -68,6 +68,21 @@ func (s *ShotService) loadMaterializedSceneRun(db *gorm.DB, projectID, selectedI
 	return run, base, nil
 }
 
+func validateMaterializedRunListeners(db *gorm.DB, projectID uint, scenes []models.Scene) error {
+	if len(scenes) == 0 {
+		return nil
+	}
+	ids := make([]uint, len(scenes))
+	for i := range scenes {
+		ids[i] = scenes[i].ID
+	}
+	var shots []models.Shot
+	if err := db.Where("scene_id IN ?", ids).Find(&shots).Error; err != nil {
+		return err
+	}
+	return validateShotListenerCharacters(db, projectID, shots)
+}
+
 func packExistingNativeScenes(scenes []models.Scene) []existingNativeGroup {
 	groups := []existingNativeGroup{}
 	for _, scene := range scenes {
@@ -84,6 +99,9 @@ func packExistingNativeScenes(scenes []models.Scene) []existingNativeGroup {
 func (s *ShotService) PreviewExistingNativeRegroup(projectID, selectedID uint) (*ShotMaterializationPreview, error) {
 	run, base, err := s.loadMaterializedSceneRun(s.db, projectID, selectedID)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateMaterializedRunListeners(s.db, projectID, run); err != nil {
 		return nil, err
 	}
 	groups := packExistingNativeScenes(run)
@@ -114,6 +132,9 @@ func (s *ShotService) RegroupExistingNativeScenes(projectID, selectedID uint) ([
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		run, base, err := s.loadMaterializedSceneRun(tx, projectID, selectedID)
 		if err != nil {
+			return err
+		}
+		if err := validateMaterializedRunListeners(tx, projectID, run); err != nil {
 			return err
 		}
 		groups := packExistingNativeScenes(run)
