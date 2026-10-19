@@ -1256,7 +1256,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	if err != nil && (req.Mode == "dialogue_rhythm" || req.Mode == "action_rhythm" || req.Mode == "combat_design") {
 		initialValidationError := err.Error()
 		repairRequirements := fmt.Sprintf("%s\n上一次草稿校验失败：%s。只修复该错误及其他空必填字段；保持镜头顺序、剧情事实和结构化对白逐字不变。上一次JSON：\n%s", req.Requirements, err.Error(), output)
-		repairInstruction := "修复对白节奏导演草稿；不得改写、遗漏、重复或新增任何对白。若一个镜头跨越多个权威说话人或speech_type，必须保持原文顺序并拆成多个Native镜头，每镜只保留一个声音身份。"
+		repairInstruction := dialogueRhythmDirectorInstruction(dialogues, authoritativeCharacterList...) + "\n修复对白节奏导演草稿；不得改写、遗漏、重复或新增任何对白。若一个镜头跨越多个权威说话人或speech_type，必须保持原文顺序并拆成多个Native镜头，每镜只保留一个声音身份。必须保留或补齐每镜speech_presentation；仅listener_reaction_carryover可填写listener_character，且必须从上述权威角色白名单逐字选择。"
 		if req.Mode == "action_rhythm" || req.Mode == "combat_design" {
 			repairInstruction = "修复武戏/仙术动作节拍草稿；保持实时速度、单一动作结果、空间轴线和结构化对白，不得使用慢动作。"
 		}
