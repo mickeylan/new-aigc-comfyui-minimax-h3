@@ -152,6 +152,9 @@ func (s *ShotService) PreviewMaterialization(projectID, sceneID uint) (*ShotMate
 	if err := validateMaterializationShots(shots); err != nil {
 		return nil, err
 	}
+	if err := validateShotListenerCharacters(s.db, projectID, shots); err != nil {
+		return nil, err
+	}
 	var dialogues []models.Dialogue
 	if err := s.db.Where("scene_id = ? AND project_id = ?", sceneID, projectID).Order("`order` ASC, `id` ASC").Find(&dialogues).Error; err != nil {
 		return nil, err
@@ -210,6 +213,9 @@ func (s *ShotService) Materialize(projectID, sceneID uint) ([]models.Scene, erro
 			return err
 		}
 		if err := validateMaterializationShots(shots); err != nil {
+			return err
+		}
+		if err := validateShotListenerCharacters(tx, projectID, shots); err != nil {
 			return err
 		}
 		var dialogues []models.Dialogue

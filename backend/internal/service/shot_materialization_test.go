@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -28,6 +29,9 @@ func TestMaterializeShotsCreatesNativeScenesAndPreservesDialogue(t *testing.T) {
 	db := newShotMaterializationDB(t)
 	project := models.Project{Title: "p", Generation: 1}
 	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.Character{ProjectID: project.ID, Name: "若琳"}).Error; err != nil {
 		t.Fatal(err)
 	}
 	before := models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 1, Title: "before", Content: "before", Duration: 5}
@@ -110,6 +114,41 @@ func TestMaterializeShotsCreatesNativeScenesAndPreservesDialogue(t *testing.T) {
 	}
 	if joined != "姐姐，你还好吗？我很好。" {
 		t.Fatalf("joined=%q", joined)
+	}
+}
+
+func TestMaterializationRejectsStaleListenerBeforeReplacingSourceScene(t *testing.T) {
+	db := newShotMaterializationDB(t)
+	project := models.Project{Title: "stale listener", Generation: 1}
+	db.Create(&project)
+	source := models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 1, Title: "原场景", Content: "保留内容", Duration: 6, Status: "video_ready", VideoFile: "keep.mp4"}
+	db.Create(&source)
+	shots := []models.Shot{
+		{SceneID: source.ID, Order: 1, ShotType: "听者反应", Duration: 3, Description: "旧数据", SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ListenerCharacter: "已删除角色"},
+		{SceneID: source.ID, Order: 2, ShotType: "空镜", Duration: 3, Description: "落花", SpeechPresentation: models.ShotSpeechPresentationSilent},
+	}
+	for i := range shots {
+		if err := db.Create(&shots[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := NewShotService(db)
+	if _, err := svc.PreviewMaterialization(project.ID, source.ID); !errors.Is(err, ErrDialogueTimingBlocked) || !strings.Contains(err.Error(), "已删除角色") {
+		t.Fatalf("stale listener preview accepted: %v", err)
+	}
+	if _, err := svc.Materialize(project.ID, source.ID); !errors.Is(err, ErrDialogueTimingBlocked) {
+		t.Fatalf("stale listener materialization accepted: %v", err)
+	}
+	var saved models.Scene
+	if err := db.First(&saved, source.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.Content != "保留内容" || saved.VideoFile != "keep.mp4" || saved.Status != "video_ready" {
+		t.Fatalf("failed materialization mutated source: %+v", saved)
+	}
+	var count int64
+	if err := db.Model(&models.Scene{}).Where("project_id = ?", project.ID).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("failed materialization created scenes: count=%d err=%v", count, err)
 	}
 }
 
