@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 
 	"comfyui-console/internal/models"
@@ -343,11 +344,25 @@ func parseSceneDirectorDraftWithOptions(output string, preserveShortShots bool) 
 	return &draft, nil
 }
 
-func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue) string {
+func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue, characterNames ...string) string {
 	var lines []string
 	for i, d := range dialogues {
 		speechType, speaker := normalizeScriptSpeech(d.SpeechType, d.Character)
 		lines = append(lines, fmt.Sprintf("D%d｜speech_type=%s｜speaker=%s｜text=%s", i+1, speechType, strings.TrimSpace(speaker), strings.TrimSpace(d.Text)))
+	}
+	allowed := []string{}
+	seen := map[string]bool{}
+	for _, name := range characterNames {
+		name = strings.TrimSpace(name)
+		if name != "" && !seen[name] {
+			seen[name] = true
+			allowed = append(allowed, name)
+		}
+	}
+	sort.Strings(allowed)
+	listenerRule := "当前项目没有可选的权威角色；不得生成listener_reaction_carryover。"
+	if len(allowed) > 0 {
+		listenerRule = "listener_character只能从以下当前项目权威角色中逐字选择，不得使用别名、称谓或创造人物：" + strings.Join(allowed, "、") + "。"
 	}
 	return `按对白自然语速和语义停顿拆成多个3–15秒Native H3镜头。可以交替使用说话人近景、包含说话人的双人/前后景镜头，以及对白结束后的纯听者反应镜头。硬规则：
 1. Dialogue字段只能填下列结构化对白的连续原文片段，不得改写、增删、重复或创造旁白；无发声镜头必须为空。
@@ -360,6 +375,7 @@ func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue) string {
 8. 对白自然时长决定总时长，不得压缩语速，也不得用重复动作填时长。
 9. 每个输出必须是独立可制作的Native H3镜头，禁止使用 Endless 或 Canvas，也禁止无限延长和单条连续长镜头。
 10. 每镜必须填写speech_presentation：可见说话人口型用visible_speaker_lipsync；闭口听者承接同句声音用listener_reaction_carryover并在listener_character填写唯一听者真实姓名；独立画外对白用offscreen_dialogue；旁白用narration_voiceover；内心独白用internal_monologue；无发声用silent_visual。
+` + listenerRule + `
 结构化对白：
 ` + strings.Join(lines, "\n")
 }
@@ -1164,6 +1180,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	}
 	var dialogues []models.Dialogue
 	authoritativeCharacterNames := map[string]bool{}
+	authoritativeCharacterList := []string{}
 	dialogueDuration := 0.0
 	if req.Mode == "dialogue_rhythm" || req.Mode == "action_rhythm" || req.Mode == "combat_design" {
 		if err := s.DB.Where("scene_id = ? AND project_id = ?", scene.ID, scene.ProjectID).Order("`order` ASC, `id` ASC").Find(&dialogues).Error; err != nil {
@@ -1178,14 +1195,18 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 				return
 			}
 			for _, character := range characters {
-				authoritativeCharacterNames[strings.TrimSpace(character.Name)] = true
+				name := strings.TrimSpace(character.Name)
+				if name != "" {
+					authoritativeCharacterNames[name] = true
+					authoritativeCharacterList = append(authoritativeCharacterList, name)
+				}
 			}
 			if len(dialogues) == 0 {
 				c.JSON(400, gin.H{"error": "当前Scene没有可用于拆镜的结构化对白"})
 				return
 			}
 			dialogueDuration = modelDialoguesMinDuration(dialogues)
-			instruction = dialogueRhythmDirectorInstruction(dialogues)
+			instruction = dialogueRhythmDirectorInstruction(dialogues, authoritativeCharacterList...)
 		} else if req.Mode == "action_rhythm" {
 			instruction = actionRhythmDirectorInstruction(dialogues)
 		}

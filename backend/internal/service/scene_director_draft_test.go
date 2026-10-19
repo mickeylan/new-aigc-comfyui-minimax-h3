@@ -203,6 +203,18 @@ func TestDialogueRhythmInstructionAllowsAttributedCrossCutListenerReaction(t *te
 	}
 }
 
+func TestDialogueRhythmInstructionListsAuthoritativeListenerChoices(t *testing.T) {
+	dialogues := []models.Dialogue{{Character: "阿宁", SpeechType: "dialogue", Text: "继续。"}}
+	got := dialogueRhythmDirectorInstruction(dialogues, "阿月儿", "阿月", "阿月")
+	if !strings.Contains(got, "listener_character只能从以下当前项目权威角色中逐字选择") || !strings.Contains(got, "阿月、阿月儿") || strings.Contains(got, "阿月、阿月、") {
+		t.Fatalf("listener whitelist missing or unstable: %s", got)
+	}
+	withoutCharacters := dialogueRhythmDirectorInstruction(dialogues)
+	if !strings.Contains(withoutCharacters, "当前项目没有可选的权威角色；不得生成listener_reaction_carryover") {
+		t.Fatalf("empty listener whitelist was not explicit: %s", withoutCharacters)
+	}
+}
+
 func TestDialogueRhythmInstructionIncludesAuthoritativeSpeechTypes(t *testing.T) {
 	got := dialogueRhythmDirectorInstruction([]models.Dialogue{
 		{Character: "阿宁", SpeechType: "dialogue", Text: "快走！"},
