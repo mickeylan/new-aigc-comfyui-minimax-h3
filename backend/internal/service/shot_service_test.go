@@ -792,6 +792,49 @@ func TestDeleteShotRejectsAuthoritativeDialogueLossWithoutMutation(t *testing.T)
 	}
 }
 
+func TestHandleDeleteShotReturns422WithoutMutation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "delete handler guard"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
+	db.Create(&scene)
+	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: "前半句，后半句。"}
+	db.Create(&dialogue)
+	shots, err := NewShotService(db).ReplaceShots(scene.ID, []models.Shot{
+		{ShotType: "阿宁近景", Duration: 3, Dialogue: "前半句，", PromptSubject: "阿宁可见", PromptAction: "阿宁同步口型"},
+		{ShotType: "阿宁近景", Duration: 3, Dialogue: "后半句。", PromptSubject: "阿宁可见", PromptAction: "阿宁同步口型"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&scene).Updates(map[string]any{"status": "video_ready", "video_file": "keep.mp4", "image_task_id": "image-active", "video_task_id": "video-active"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodDelete, "/api/projects/x/shots/y", nil)
+	ctx.Params = gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(project.ID), 10)}, {Key: "shid", Value: strconv.FormatUint(uint64(shots[1].ID), 10)}}
+	(&Service{DB: db, Shots: NewShotService(db)}).HandleDeleteShot(ctx)
+	if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), ErrDialogueTimingBlocked.Error()) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var saved []models.Shot
+	if err := db.Where("scene_id = ?", scene.ID).Order("order_num").Find(&saved).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(saved) != 2 || saved[1].ID != shots[1].ID {
+		t.Fatalf("rejected deletion mutated shots: %+v", saved)
+	}
+	var currentScene models.Scene
+	if err := db.First(&currentScene, scene.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if currentScene.VideoFile != "keep.mp4" || currentScene.ImageTaskID != "image-active" || currentScene.VideoTaskID != "video-active" {
+		t.Fatalf("rejected deletion invalidated scene: %+v", currentScene)
+	}
+}
+
 func TestShotServicePreservesSceneNegativeConstraints(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	project := models.Project{Title: "negative constraints"}
