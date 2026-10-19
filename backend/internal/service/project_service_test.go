@@ -2698,6 +2698,24 @@ func TestValidateFinalH3SubmissionRejectsUnknownReferencesAndAudioDrift(t *testi
 	}
 }
 
+func TestCharacterSubjectTagByNameUsesExactIdentity(t *testing.T) {
+	refs := []string{"- <Picture 1>：角色「阿月」标准像", "- <Picture 2>：角色「阿月儿」标准像"}
+	if got := characterSubjectTagByName("阿月儿", refs); got != "<Subject 2>" {
+		t.Fatalf("overlapping character name bound incorrectly: %q", got)
+	}
+	if got := characterSubjectTagByName("阿月", refs); got != "<Subject 1>" {
+		t.Fatalf("exact short name bound incorrectly: %q", got)
+	}
+	if got := characterSubjectTagByName("阿", refs); got != "" {
+		t.Fatalf("partial character name unexpectedly bound: %q", got)
+	}
+	shots := []models.Shot{{Order: 1, SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ListenerCharacter: "阿月儿", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "dialogue-group:1", StartRune: 0, EndRune: 2}}}}
+	got := appendStructuredDialogueToShots("[Shot 1] A listener reacts.", []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "继续"}}, refs, shots)
+	if !strings.Contains(got, "<Subject 2> keeps their lips completely closed") {
+		t.Fatalf("exact listener Subject was not compiled: %s", got)
+	}
+}
+
 func TestValidateFinalH3SubmissionRequiresListenerSubjectBinding(t *testing.T) {
 	prompt := "subject_definitions:\n<Subject 1> is from <Picture 1>.\n<Subject 2> is from <Picture 2>.\n\nsummary:\ntest\n\nretention_analysis:\nsubjects preserved.\n\ndetailed_description:\n[Shot 1] <Subject 1> speaks while <Subject 2> listens with closed lips.\n\noverall_soundscape:\n" + h3SoundscapeContract(false) + "\n\nnon_diegetic_music:\n" + h3NoMusicContract()
 	shot := models.Shot{Order: 2, SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ListenerCharacter: "阿月"}

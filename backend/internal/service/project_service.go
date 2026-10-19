@@ -2252,6 +2252,26 @@ func characterNamesFromReferenceLines(lines ...string) []string {
 	return out
 }
 
+func characterSubjectTagByName(name string, referenceLines []string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	for i, line := range referenceLines {
+		marker := "角色「"
+		start := strings.Index(line, marker)
+		if start < 0 {
+			continue
+		}
+		start += len(marker)
+		end := strings.Index(line[start:], "」")
+		if end >= 0 && strings.TrimSpace(line[start:start+end]) == name {
+			return fmt.Sprintf("<Subject %d>", i+1)
+		}
+	}
+	return ""
+}
+
 func useSubjectTags(text string, referenceLines []string) string {
 	for i, line := range referenceLines {
 		marker := "角色「"
@@ -3490,7 +3510,7 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 				}
 			}
 			if shot.SpeechPresentation == models.ShotSpeechPresentationListenerCarry {
-				listenerTag := useSubjectTags(strings.TrimSpace(shot.ListenerCharacter), referenceLines)
+				listenerTag := characterSubjectTagByName(shot.ListenerCharacter, referenceLines)
 				if isCharacterSubjectTag(listenerTag, referenceLines) && !seenSubject[listenerTag] {
 					visibleSubjects = append(visibleSubjects, listenerTag)
 					seenSubject[listenerTag] = true
@@ -4392,8 +4412,8 @@ func validateH3ListenerSubjectBindings(shots []models.Shot, referenceLines []str
 			issues = append(issues, fmt.Sprintf("Shot %d的闭口听者未填写listener_character", shot.Order))
 			continue
 		}
-		tag := useSubjectTags(listener, referenceLines)
-		if tag == listener || !isCharacterSubjectTag(tag, referenceLines) {
+		tag := characterSubjectTagByName(listener, referenceLines)
+		if !isCharacterSubjectTag(tag, referenceLines) {
 			issues = append(issues, fmt.Sprintf("Shot %d的闭口听者“%s”没有对应的角色参考图Subject绑定", shot.Order, listener))
 		}
 	}
