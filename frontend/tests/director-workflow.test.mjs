@@ -29,6 +29,10 @@ test('对白节奏镜头持久化结构化发声呈现而非只猜提示词', ()
   assert.match(source, /shot\.listener_character = ''/)
   assert.match(source, /review\[i\]\?\.listener_character/)
   assert.match(source, /闭口听者.*与审核草稿.*不一致/)
+  assert.match(source, /结构化呈现：.*speech_presentation/)
+  assert.match(source, /闭口听者：.*listener_character/)
+  assert.match(source, /草稿speech_presentation与服务端审计不一致/)
+  assert.match(source, /草稿listener_character与服务端审计不一致/)
 })
 
 test('武戏导演支持确定性资料检索、正文预览和审核后导入', () => {
