@@ -359,6 +359,25 @@ func TestDialogueRhythmAllowsAdjacentRowsFromSameVoiceInOneShot(t *testing.T) {
 	}
 }
 
+func TestAuthoritativeSceneListenerCharactersExcludeFutureAndMentionedCharacters(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "listener scope"}
+	db.Create(&project)
+	for _, name := range []string{"阿宁", "阿月", "未来敌人", "只被提及者"} {
+		if err := db.Create(&models.Character{ProjectID: project.ID, Name: name}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	scene := models.Scene{ProjectID: project.ID, CharacterRolesSet: true, VisibleCharacters: "阿月,阿宁", VoiceCharacters: "未来敌人", MentionedCharacters: "只被提及者"}
+	list, set, err := authoritativeSceneListenerCharacters(db, &scene)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(list, ",") != "阿宁,阿月" || !set["阿宁"] || !set["阿月"] || set["未来敌人"] || set["只被提及者"] {
+		t.Fatalf("listener scope leaked non-visible characters: list=%v set=%v", list, set)
+	}
+}
+
 func TestDraftListenerMustBeAuthoritativeProjectCharacter(t *testing.T) {
 	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ListenerCharacter: "拼错姓名"}}}
 	if err := validateDraftListenerCharacters(draft, map[string]bool{"阿月": true}); err == nil || !strings.Contains(err.Error(), "不是当前项目权威角色") {

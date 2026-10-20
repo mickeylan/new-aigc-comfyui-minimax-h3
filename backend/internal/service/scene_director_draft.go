@@ -13,6 +13,7 @@ import (
 
 	"comfyui-console/internal/models"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type sceneDirectorDraft struct {
@@ -966,6 +967,31 @@ func dialogueBoundaryReason(before, after []dialogueRhythmFragmentReview, sameDi
 	return "Dialogue边界"
 }
 
+func authoritativeSceneListenerCharacters(db *gorm.DB, scene *models.Scene) ([]string, map[string]bool, error) {
+	list := []string{}
+	set := map[string]bool{}
+	if scene == nil {
+		return list, set, nil
+	}
+	visibleNames := visibleSceneCharacterNames(scene)
+	if len(visibleNames) == 0 {
+		return list, set, nil
+	}
+	var characters []models.Character
+	if err := db.Select("name").Where("project_id = ? AND name IN ?", scene.ProjectID, visibleNames).Find(&characters).Error; err != nil {
+		return nil, nil, err
+	}
+	for _, character := range characters {
+		name := strings.TrimSpace(character.Name)
+		if name != "" && !set[name] {
+			set[name] = true
+			list = append(list, name)
+		}
+	}
+	sort.Strings(list)
+	return list, set, nil
+}
+
 func validateDraftListenerCharacters(draft *sceneDirectorDraft, authoritativeNames map[string]bool) error {
 	if draft == nil {
 		return fmt.Errorf("对白节奏导演草稿为空")
@@ -1205,17 +1231,11 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		}
 		dialogues = authoritativeSceneDialogues(dialogues)
 		if req.Mode == "dialogue_rhythm" {
-			var characters []models.Character
-			if err := s.DB.Select("name").Where("project_id = ?", scene.ProjectID).Find(&characters).Error; err != nil {
-				c.JSON(500, gin.H{"error": err.Error()})
+			var listenerErr error
+			authoritativeCharacterList, authoritativeCharacterNames, listenerErr = authoritativeSceneListenerCharacters(s.DB, scene)
+			if listenerErr != nil {
+				c.JSON(500, gin.H{"error": listenerErr.Error()})
 				return
-			}
-			for _, character := range characters {
-				name := strings.TrimSpace(character.Name)
-				if name != "" {
-					authoritativeCharacterNames[name] = true
-					authoritativeCharacterList = append(authoritativeCharacterList, name)
-				}
 			}
 			if len(dialogues) == 0 {
 				c.JSON(400, gin.H{"error": "当前Scene没有可用于拆镜的结构化对白"})
