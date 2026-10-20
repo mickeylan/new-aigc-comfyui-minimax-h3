@@ -2887,6 +2887,19 @@ func TestNormalizeSavedH3AudioRebuildsCollapsedShotsWithoutDuplicateDialogue(t *
 	}
 }
 
+func TestCrossShotDialogueKeepsPureSpeakerIdentityAfterVoiceDeclaration(t *testing.T) {
+	refs := []string{"<Subject 1> 是 <Picture 1> 中的角色「阿月儿」四视图。"}
+	dialogue := models.Dialogue{Character: "阿月儿", SpeechType: "dialogue", Text: "继续。", H3VoiceDescription: "清脆稳定的女声"}
+	first := renderDialogueRange(dialogue, 1, refs, "别怕，", false, true, true, []string{"<Subject 1>"})
+	if !strings.HasPrefix(first, "<Subject 1> (S1) using the reviewed voice identity (清脆稳定的女声) says:") {
+		t.Fatalf("first fragment lost reviewed voice declaration: %s", first)
+	}
+	continued := renderDialogueRange(dialogue, 1, refs, "继续。", true, false, false, nil)
+	if !strings.HasPrefix(continued, "<Subject 1> (S1)'s words carry over from the previous shot") || strings.Contains(continued, "voice identity") {
+		t.Fatalf("cross-cut continuation polluted stable speaker identity: %s", continued)
+	}
+}
+
 func TestAppendStructuredDialogueUsesH3CrossShotContinuationForOneSentence(t *testing.T) {
 	body := "[Shot 1] <Subject 1> touches her sister's cheek.\n[Shot 2] At 00:04.500, the shot cuts to <Subject 2> listening.\n[Shot 3] At 00:10.500, the shot cuts back to <Subject 1>."
 	shots := []models.Shot{{PromptSubject: "上官若琳近景", Dialogue: "相信姐姐，"}, {PromptSubject: "上官若彤反应镜头", Dialogue: "姐姐无论如何也不会让你去"}, {PromptSubject: "上官若琳特写", Dialogue: "罗刹魔域！"}}

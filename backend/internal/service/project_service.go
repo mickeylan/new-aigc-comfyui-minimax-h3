@@ -3285,13 +3285,18 @@ func isNarrationSpeaker(name string) bool {
 	return name == "旁白" || name == "画外音" || name == "voiceover" || name == "narrator"
 }
 
-func h3DialogueSpeaker(d models.Dialogue, speakerID int, referenceLines []string) string {
+func h3DialogueSpeakerIdentity(d models.Dialogue, speakerID int, referenceLines []string) string {
 	identity := characterSubjectOrName(d.Character, referenceLines)
 	voice := strings.TrimSpace(d.H3VoiceDescription)
 	if characterSubjectTagByName(d.Character, referenceLines) == "" && voice != "" {
 		identity = voice
 	}
-	identity += fmt.Sprintf(" (S%d)", speakerID)
+	return identity + fmt.Sprintf(" (S%d)", speakerID)
+}
+
+func h3DialogueSpeaker(d models.Dialogue, speakerID int, referenceLines []string) string {
+	identity := h3DialogueSpeakerIdentity(d, speakerID, referenceLines)
+	voice := strings.TrimSpace(d.H3VoiceDescription)
 	if voice != "" && characterSubjectTagByName(d.Character, referenceLines) != "" {
 		identity += " using the reviewed voice identity (" + voice + ")"
 	}
@@ -3353,7 +3358,8 @@ func renderDialogueRange(d models.Dialogue, speakerID int, referenceLines []stri
 	// H3 cross-cut dialogue deliberately opens <d> only in the first shot. The
 	// following shot resumes the same Sx voice after <scenetrans> and closes </d>.
 	if continuesFrom {
-		clause := speaker + "'s words carry over from the previous shot <scenetrans>" + fragment
+		continuingSpeaker := h3DialogueSpeakerIdentity(d, speakerID, referenceLines)
+		clause := continuingSpeaker + "'s words carry over from the previous shot <scenetrans>" + fragment
 		if continuesTo {
 			clause = strings.TrimSuffix(strings.TrimSuffix(clause, "，"), ",") + "-</d> <scenetrans>"
 		} else {
