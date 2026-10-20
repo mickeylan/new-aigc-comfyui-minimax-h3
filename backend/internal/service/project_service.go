@@ -2281,6 +2281,11 @@ func characterSubjectOrName(name string, referenceLines []string) string {
 }
 
 func useSubjectTags(text string, referenceLines []string) string {
+	type subjectBinding struct {
+		name string
+		tag  string
+	}
+	bindings := []subjectBinding{}
 	for i, line := range referenceLines {
 		marker := "角色「"
 		start := strings.Index(line, marker)
@@ -2293,13 +2298,20 @@ func useSubjectTags(text string, referenceLines []string) string {
 			continue
 		}
 		name := strings.TrimSpace(line[start : start+end])
-		if name == "" {
-			continue
+		if name != "" {
+			bindings = append(bindings, subjectBinding{name: name, tag: fmt.Sprintf("<Subject %d>", i+1)})
 		}
-		tag := fmt.Sprintf("<Subject %d>", i+1)
-		text = strings.ReplaceAll(text, tag+name, tag)
-		text = strings.ReplaceAll(text, name, tag)
-		text = strings.ReplaceAll(text, tag+tag, tag)
+	}
+	// A project may legitimately contain names where one is a prefix of another.
+	// Replace the longest exact name first so 阿月 cannot corrupt 阿月儿 into
+	// <Subject 1>儿 before the latter receives its authoritative binding.
+	sort.SliceStable(bindings, func(i, j int) bool {
+		return len([]rune(bindings[i].name)) > len([]rune(bindings[j].name))
+	})
+	for _, binding := range bindings {
+		text = strings.ReplaceAll(text, binding.tag+binding.name, binding.tag)
+		text = strings.ReplaceAll(text, binding.name, binding.tag)
+		text = strings.ReplaceAll(text, binding.tag+binding.tag, binding.tag)
 	}
 	return text
 }

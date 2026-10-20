@@ -2709,6 +2709,10 @@ func TestCharacterSubjectTagByNameUsesExactIdentity(t *testing.T) {
 	if got := characterSubjectTagByName("阿", refs); got != "" {
 		t.Fatalf("partial character name unexpectedly bound: %q", got)
 	}
+	visual := useSubjectTags("阿月儿拉住阿月，阿月儿随后回头。", refs)
+	if visual != "<Subject 2>拉住<Subject 1>，<Subject 2>随后回头。" || strings.Contains(visual, "<Subject 1>儿") {
+		t.Fatalf("overlapping visual character names bound incorrectly: %s", visual)
+	}
 	renderedSpeaker := renderStructuredDialogue(models.Dialogue{Character: "阿月儿", SpeechType: "dialogue", Text: "别怕。"}, 1, refs)
 	if !strings.HasPrefix(renderedSpeaker, "<Subject 2> (S1) says:") || strings.Contains(renderedSpeaker, "<Subject 1>儿") {
 		t.Fatalf("overlapping speaker identity bound incorrectly: %s", renderedSpeaker)
