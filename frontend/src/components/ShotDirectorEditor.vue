@@ -79,6 +79,8 @@ const toast = useToastStore(); const shots = ref([]); const isPreviouslySplitSce
 const dialogueAuditBlockingIssues = computed(() => {
   const issues = directorDialogueReview.value.flatMap((review, index) => (review?.blocking_issues || []).map(issue => `镜头${index + 1}：${issue}`))
   if (directorDraftMode.value !== 'dialogue_rhythm') return issues
+  if (!directorDialogueSnapshot.value) issues.push('对白节奏草稿缺少Dialogue快照，必须重新生成')
+  else if (directorDialogueSnapshot.value !== savedDialogueSnapshot.value) issues.push('结构化Dialogue已在草稿生成后发生变化，必须重新生成对白节奏草稿')
   const draftShots = directorDraft.value?.shots || []
   if (draftShots.length !== directorDialogueReview.value.length) return [...issues, `草稿镜头数${draftShots.length}与服务端对白审计${directorDialogueReview.value.length}不一致`]
   draftShots.forEach((shot, index) => {

@@ -33,6 +33,9 @@ test('对白节奏镜头持久化结构化发声呈现而非只猜提示词', ()
   assert.match(source, /闭口听者：.*listener_character/)
   assert.match(source, /草稿speech_presentation与服务端审计不一致/)
   assert.match(source, /草稿listener_character与服务端审计不一致/)
+  assert.match(source, /对白节奏草稿缺少Dialogue快照，必须重新生成/)
+  assert.match(source, /directorDialogueSnapshot\.value !== savedDialogueSnapshot\.value/)
+  assert.match(source, /结构化Dialogue已在草稿生成后发生变化，必须重新生成对白节奏草稿/)
 })
 
 test('武戏导演支持确定性资料检索、正文预览和审核后导入', () => {
