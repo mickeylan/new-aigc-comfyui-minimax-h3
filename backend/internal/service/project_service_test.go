@@ -2713,6 +2713,10 @@ func TestCharacterSubjectTagByNameUsesExactIdentity(t *testing.T) {
 	if !strings.HasPrefix(renderedSpeaker, "<Subject 2> (S1) says:") || strings.Contains(renderedSpeaker, "<Subject 1>儿") {
 		t.Fatalf("overlapping speaker identity bound incorrectly: %s", renderedSpeaker)
 	}
+	withVoice := renderStructuredDialogue(models.Dialogue{Character: "阿月儿", SpeechType: "dialogue", Text: "继续。", H3VoiceDescription: "清脆稳定的女声"}, 1, refs)
+	if !strings.HasPrefix(withVoice, "<Subject 2> (S1) using the reviewed voice identity (清脆稳定的女声) says:") || strings.HasPrefix(withVoice, "清脆稳定的女声 (S1)") {
+		t.Fatalf("voice description replaced authoritative Subject identity: %s", withVoice)
+	}
 	if fallback := renderStructuredDialogue(models.Dialogue{Character: "未建档角色", SpeechType: "dialogue", Text: "继续。"}, 1, refs); !strings.HasPrefix(fallback, "未建档角色 (S1) says:") {
 		t.Fatalf("unreferenced speaker fallback changed: %s", fallback)
 	}

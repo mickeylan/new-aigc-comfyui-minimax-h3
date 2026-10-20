@@ -3285,12 +3285,21 @@ func isNarrationSpeaker(name string) bool {
 	return name == "旁白" || name == "画外音" || name == "voiceover" || name == "narrator"
 }
 
-func renderStructuredDialogue(d models.Dialogue, speakerID int, referenceLines []string) string {
-	speaker := characterSubjectOrName(d.Character, referenceLines)
-	if strings.TrimSpace(d.H3VoiceDescription) != "" {
-		speaker = strings.TrimSpace(d.H3VoiceDescription)
+func h3DialogueSpeaker(d models.Dialogue, speakerID int, referenceLines []string) string {
+	identity := characterSubjectOrName(d.Character, referenceLines)
+	voice := strings.TrimSpace(d.H3VoiceDescription)
+	if characterSubjectTagByName(d.Character, referenceLines) == "" && voice != "" {
+		identity = voice
 	}
-	speaker += fmt.Sprintf(" (S%d)", speakerID)
+	identity += fmt.Sprintf(" (S%d)", speakerID)
+	if voice != "" && characterSubjectTagByName(d.Character, referenceLines) != "" {
+		identity += " using the reviewed voice identity (" + voice + ")"
+	}
+	return identity
+}
+
+func renderStructuredDialogue(d models.Dialogue, speakerID int, referenceLines []string) string {
+	speaker := h3DialogueSpeaker(d, speakerID, referenceLines)
 	text := strings.TrimSpace(d.Text)
 	crossShot, cutoff := strings.Contains(text, "<scenetrans>"), strings.Contains(text, "<cutoff>")
 	text = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(text, "<scenetrans>", ""), "<cutoff>", ""))
@@ -3339,11 +3348,7 @@ func dialogueContinuesAcrossCut(previous, next models.Dialogue) bool {
 
 func renderDialogueRange(d models.Dialogue, speakerID int, referenceLines []string, fragment string, continuesFrom, continuesTo, visible bool, visibleSubjects []string) string {
 	speakerTag := characterSubjectOrName(d.Character, referenceLines)
-	speaker := speakerTag
-	if strings.TrimSpace(d.H3VoiceDescription) != "" {
-		speaker = strings.TrimSpace(d.H3VoiceDescription)
-	}
-	speaker += fmt.Sprintf(" (S%d)", speakerID)
+	speaker := h3DialogueSpeaker(d, speakerID, referenceLines)
 	fragment = strings.TrimSpace(fragment)
 	// H3 cross-cut dialogue deliberately opens <d> only in the first shot. The
 	// following shot resumes the same Sx voice after <scenetrans> and closes </d>.
@@ -3711,12 +3716,7 @@ func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLine
 	}
 	body = ensureVisibleDialogueSpeakers(body, requiredVisible)
 	for i, d := range valid {
-		speakerName := strings.TrimSpace(d.Character)
-		speaker := characterSubjectOrName(speakerName, referenceLines)
-		if strings.TrimSpace(d.H3VoiceDescription) != "" {
-			speaker = strings.TrimSpace(d.H3VoiceDescription)
-		}
-		speaker += fmt.Sprintf(" (S%d)", speakerIDs[i])
+		speaker := h3DialogueSpeaker(d, speakerIDs[i], referenceLines)
 		text := strings.TrimSpace(d.Text)
 		crossShot := strings.Contains(text, "<scenetrans>")
 		cutoff := strings.Contains(text, "<cutoff>")
