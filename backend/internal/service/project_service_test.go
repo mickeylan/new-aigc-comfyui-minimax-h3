@@ -2714,8 +2714,8 @@ func TestCharacterSubjectTagByNameUsesExactIdentity(t *testing.T) {
 		t.Fatalf("overlapping speaker identity bound incorrectly: %s", renderedSpeaker)
 	}
 	withVoice := renderStructuredDialogue(models.Dialogue{Character: "阿月儿", SpeechType: "dialogue", Text: "继续。", H3VoiceDescription: "清脆稳定的女声"}, 1, refs)
-	if !strings.HasPrefix(withVoice, "<Subject 2> (S1) using the reviewed voice identity (清脆稳定的女声) says:") || strings.HasPrefix(withVoice, "清脆稳定的女声 (S1)") {
-		t.Fatalf("voice description replaced authoritative Subject identity: %s", withVoice)
+	if !strings.HasPrefix(withVoice, "<Subject 2> (S1) says:") || strings.Contains(withVoice, "voice identity") || strings.HasPrefix(withVoice, "清脆稳定的女声 (S1)") {
+		t.Fatalf("voice metadata broke documented Subject grammar: %s", withVoice)
 	}
 	if fallback := renderStructuredDialogue(models.Dialogue{Character: "未建档角色", SpeechType: "dialogue", Text: "继续。"}, 1, refs); !strings.HasPrefix(fallback, "未建档角色 (S1) says:") {
 		t.Fatalf("unreferenced speaker fallback changed: %s", fallback)
@@ -2887,12 +2887,12 @@ func TestNormalizeSavedH3AudioRebuildsCollapsedShotsWithoutDuplicateDialogue(t *
 	}
 }
 
-func TestCrossShotDialogueKeepsPureSpeakerIdentityAfterVoiceDeclaration(t *testing.T) {
+func TestCrossShotDialogueKeepsDocumentedSpeakerIdentityWithReviewedAudio(t *testing.T) {
 	refs := []string{"<Subject 1> 是 <Picture 1> 中的角色「阿月儿」四视图。"}
 	dialogue := models.Dialogue{Character: "阿月儿", SpeechType: "dialogue", Text: "继续。", H3VoiceDescription: "清脆稳定的女声"}
 	first := renderDialogueRange(dialogue, 1, refs, "别怕，", false, true, true, []string{"<Subject 1>"})
-	if !strings.HasPrefix(first, "<Subject 1> (S1) using the reviewed voice identity (清脆稳定的女声) says:") {
-		t.Fatalf("first fragment lost reviewed voice declaration: %s", first)
+	if !strings.HasPrefix(first, "<Subject 1> (S1) says:") || strings.Contains(first, "voice identity") {
+		t.Fatalf("first fragment broke documented speaker grammar: %s", first)
 	}
 	continued := renderDialogueRange(dialogue, 1, refs, "继续。", true, false, false, nil)
 	if !strings.HasPrefix(continued, "<Subject 1> (S1)'s words carry over from the previous shot") || strings.Contains(continued, "voice identity") {

@@ -3295,12 +3295,9 @@ func h3DialogueSpeakerIdentity(d models.Dialogue, speakerID int, referenceLines 
 }
 
 func h3DialogueSpeaker(d models.Dialogue, speakerID int, referenceLines []string) string {
-	identity := h3DialogueSpeakerIdentity(d, speakerID, referenceLines)
-	voice := strings.TrimSpace(d.H3VoiceDescription)
-	if voice != "" && characterSubjectTagByName(d.Character, referenceLines) != "" {
-		identity += " using the reviewed voice identity (" + voice + ")"
-	}
-	return identity
+	// Keep the documented identity grammar exact. Reviewed production audio already
+	// carries the voice identity; descriptive metadata must not split (Sx) from says:.
+	return h3DialogueSpeakerIdentity(d, speakerID, referenceLines)
 }
 
 func renderStructuredDialogue(d models.Dialogue, speakerID int, referenceLines []string) string {
