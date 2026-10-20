@@ -920,7 +920,7 @@ func TestParseSceneDirectorDraftNamesMissingRequiredField(t *testing.T) {
 }
 
 func TestDirectorDraftParserAndDialogueRestorePreserveListenerCharacter(t *testing.T) {
-	raw := strings.Replace(validSceneDirectorDraft, `"dialogue":""`, `"dialogue":"继续。","speech_presentation":"listener_reaction_carryover","listener_character":"阿月儿"`, 1)
+	raw := strings.Replace(validSceneDirectorDraft, `"dialogue":""`, `"dialogue":"继续。","speech_presentation":"  listener_reaction_carryover  ","listener_character":"  阿月儿  "`, 1)
 	draft, err := parseSceneDirectorDraft(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -934,7 +934,7 @@ func TestDirectorDraftParserAndDialogueRestorePreserveListenerCharacter(t *testi
 	if draft.Shots[0].ListenerCharacter != "阿月儿" || draft.Shots[0].SpeechPresentation != models.ShotSpeechPresentationListenerCarry {
 		t.Fatalf("authoritative text restore mutated structured presentation: %+v", draft.Shots[0])
 	}
-	unknown := strings.Replace(raw, `"listener_character":"阿月儿"`, `"listener_character":"阿月儿","listener_alias":"月儿"`, 1)
+	unknown := strings.Replace(raw, `"listener_character":"  阿月儿  "`, `"listener_character":"阿月儿","listener_alias":"月儿"`, 1)
 	if _, err := parseSceneDirectorDraft(unknown); err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("unknown listener field accepted: %v", err)
 	}

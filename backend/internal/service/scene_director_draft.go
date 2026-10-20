@@ -323,6 +323,8 @@ func parseSceneDirectorDraftWithOptions(output string, preserveShortShots bool) 
 			}
 		}
 		d.Dialogue, d.Emotion, d.TransitionNote, d.NegativePrompt = strings.TrimSpace(d.Dialogue), strings.TrimSpace(d.Emotion), strings.TrimSpace(d.TransitionNote), strings.TrimSpace(d.NegativePrompt)
+		d.SpeechPresentation = models.ShotSpeechPresentation(strings.TrimSpace(string(d.SpeechPresentation)))
+		d.ListenerCharacter = strings.TrimSpace(d.ListenerCharacter)
 		if d.Duration <= 0 || d.Duration > 15 || (!preserveShortShots && d.Duration < 3) || math.IsNaN(d.Duration) || math.IsInf(d.Duration, 0) {
 			return nil, fmt.Errorf("镜头%d时长必须为3到15秒", i+1)
 		}
