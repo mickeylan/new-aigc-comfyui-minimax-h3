@@ -93,6 +93,20 @@ func joinDirectorField(first, second string) string {
 	return first + "；" + second
 }
 
+func directorShotsSpeechCompatible(first, second sceneDirectorDraftShot) bool {
+	firstPresentation := models.ShotSpeechPresentation(strings.TrimSpace(string(first.SpeechPresentation)))
+	secondPresentation := models.ShotSpeechPresentation(strings.TrimSpace(string(second.SpeechPresentation)))
+	firstVoiced := strings.TrimSpace(first.Dialogue) != "" && firstPresentation != "" && firstPresentation != models.ShotSpeechPresentationSilent
+	secondVoiced := strings.TrimSpace(second.Dialogue) != "" && secondPresentation != "" && secondPresentation != models.ShotSpeechPresentationSilent
+	if firstVoiced && secondVoiced && firstPresentation != secondPresentation {
+		return false
+	}
+	if firstPresentation == models.ShotSpeechPresentationListenerCarry && secondPresentation == models.ShotSpeechPresentationListenerCarry {
+		return strings.TrimSpace(first.ListenerCharacter) == strings.TrimSpace(second.ListenerCharacter)
+	}
+	return true
+}
+
 func mergeDirectorShotPair(first, second sceneDirectorDraftShot) sceneDirectorDraftShot {
 	firstDuration := first.Duration
 	first.Duration += second.Duration
@@ -151,12 +165,12 @@ func normalizeShortDirectorShots(draft *sceneDirectorDraft) error {
 			i++
 			continue
 		}
-		if i+1 < len(draft.Shots) && shot.Duration+draft.Shots[i+1].Duration <= 15 {
+		if i+1 < len(draft.Shots) && shot.Duration+draft.Shots[i+1].Duration <= 15 && directorShotsSpeechCompatible(shot, draft.Shots[i+1]) {
 			draft.Shots[i] = mergeDirectorShotPair(shot, draft.Shots[i+1])
 			draft.Shots = append(draft.Shots[:i+1], draft.Shots[i+2:]...)
 			continue
 		}
-		if i > 0 && draft.Shots[i-1].Duration+shot.Duration <= 15 {
+		if i > 0 && draft.Shots[i-1].Duration+shot.Duration <= 15 && directorShotsSpeechCompatible(draft.Shots[i-1], shot) {
 			draft.Shots[i-1] = mergeDirectorShotPair(draft.Shots[i-1], shot)
 			draft.Shots = append(draft.Shots[:i], draft.Shots[i+1:]...)
 			i--

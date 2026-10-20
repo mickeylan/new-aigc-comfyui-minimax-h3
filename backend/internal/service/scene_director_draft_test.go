@@ -114,6 +114,17 @@ func TestParseSceneDirectorDraftMergesShortShotIntoFollowingShot(t *testing.T) {
 	}
 }
 
+func TestParseSceneDirectorDraftDoesNotMergeIncompatibleSpeechPresentations(t *testing.T) {
+	first := strings.TrimSuffix(strings.TrimPrefix(shortSceneDirectorDraft, `{"shots":[`), `]}`)
+	first = strings.Replace(first, `"dialogue":""`, `"dialogue":"快走！","speech_presentation":"visible_speaker_lipsync"`, 1)
+	second := strings.TrimSuffix(strings.TrimPrefix(validSceneDirectorDraft, `{"shots":[`), `]}`)
+	second = strings.Replace(second, `"dialogue":""`, `"dialogue":"等等我。","speech_presentation":"offscreen_dialogue"`, 1)
+	raw := `{"shots":[` + first + `,` + second + `]}`
+	if _, err := parseSceneDirectorDraft(raw); err == nil || !strings.Contains(err.Error(), "无法与相邻镜头合并") {
+		t.Fatalf("incompatible speech identities were merged: %v", err)
+	}
+}
+
 func TestParseSceneDirectorDraftRejectsShortShotThatCannotMergeWithinLimit(t *testing.T) {
 	raw := strings.Replace(validSceneDirectorDraft, `"duration":3`, `"duration":2`, 1)
 	second := strings.TrimSuffix(strings.TrimPrefix(validSceneDirectorDraft, `{"shots":[`), `]}`)
