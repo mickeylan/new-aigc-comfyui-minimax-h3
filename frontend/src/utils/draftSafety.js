@@ -16,7 +16,7 @@ export function createDraftSafety({ key, getDraft, applyDraft, save, storage = g
   const keydown = event => {
     if (!(event.ctrlKey || event.metaKey) || String(event.key).toLowerCase() !== 's') return
     event.preventDefault()
-    if (isDirty()) Promise.resolve(save()).then(markSaved)
+    if (isDirty()) Promise.resolve(save()).then(result => { if (result === false) flush(); else markSaved() })
   }
   const start = () => {
     const raw = storage.getItem(key)

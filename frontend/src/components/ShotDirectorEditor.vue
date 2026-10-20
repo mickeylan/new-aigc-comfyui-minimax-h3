@@ -103,7 +103,14 @@ function applyLocalDraft(draft) {
   combatReferenceAudit.value = Array.isArray(draft.combatReferenceAudit) ? draft.combatReferenceAudit : []
   combatDraftSelection.value = Array.isArray(draft.combatDraftSelection) ? draft.combatDraftSelection : []
 }
-function startDraftSafety() { draftSafety?.dispose(); draftSafety = createDraftSafety({ key: `draft:shot-director:${props.projectId}:${props.sceneId}`, getDraft: draftValue, applyDraft: applyLocalDraft, save: saveAll }); draftSafety.start() }
+function saveDirectorWorkspaceShortcut() {
+  if (directorDraft.value) {
+    toast.info('AI导演草稿仍待审核，已保存到本地恢复记录；确认导入后才会替换生产Shot')
+    return false
+  }
+  return saveAll()
+}
+function startDraftSafety() { draftSafety?.dispose(); draftSafety = createDraftSafety({ key: `draft:shot-director:${props.projectId}:${props.sceneId}`, getDraft: draftValue, applyDraft: applyLocalDraft, save: saveDirectorWorkspaceShortcut }); draftSafety.start() }
 const acts = [{ value: 'setup', label: '建置' }, { value: 'rising', label: '发展' }, { value: 'midpoint', label: '转折' }, { value: 'falling', label: '回落' }, { value: 'resolution', label: '收束' }]
 const speechPresentations = [{ value:'visible_speaker_lipsync', label:'可见说话人同步口型' }, { value:'listener_reaction_carryover', label:'闭口听者反应 · 原声跨切' }, { value:'offscreen_dialogue', label:'独立画外对白' }, { value:'narration_voiceover', label:'旁白' }, { value:'internal_monologue', label:'内心独白 · 人物闭口' }, { value:'silent_visual', label:'无发声纯画面' }]
 const actLabel = value => acts.find(a => a.value === value)?.label || '建置'
