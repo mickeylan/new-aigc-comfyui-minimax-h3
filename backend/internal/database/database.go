@@ -116,6 +116,7 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.AudioLayer{},
 		&models.ScreenTextCue{},
 		&models.MusicCueSheet{},
+		&models.MusicCandidate{},
 		&models.PromptPolicyOverride{},
 		&models.CharacterMotionReference{},
 		&models.SharedAssetReference{},

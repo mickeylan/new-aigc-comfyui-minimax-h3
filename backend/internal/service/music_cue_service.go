@@ -243,7 +243,12 @@ func (s *MusicCueService) Update(projectID, id uint, in MusicCueSheetInput) (*mo
 	updates["reviewed_at"] = nil
 	updates["stale"] = false
 	updates["stale_reason"] = ""
-	if err := s.db.Model(&existing).Updates(updates).Error; err != nil {
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := markMusicCandidatesStale(tx, projectID, id, "配乐Cue内容已修改"); err != nil {
+			return err
+		}
+		return tx.Model(&existing).Updates(updates).Error
+	}); err != nil {
 		return nil, err
 	}
 	if err := s.db.First(&existing, id).Error; err != nil {
@@ -253,29 +258,46 @@ func (s *MusicCueService) Update(projectID, id uint, in MusicCueSheetInput) (*mo
 }
 
 func (s *MusicCueService) Delete(projectID, id uint) error {
-	result := s.db.Where("id = ? AND project_id = ?", id, projectID).Delete(&models.MusicCueSheet{})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return ErrMusicCueSheetNotFound
-	}
-	return nil
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if tx.Migrator().HasTable(&models.MusicCandidate{}) {
+			if err := tx.Where("project_id = ? AND music_cue_sheet_id = ?", projectID, id).Delete(&models.MusicCandidate{}).Error; err != nil {
+				return err
+			}
+		}
+		result := tx.Where("id = ? AND project_id = ?", id, projectID).Delete(&models.MusicCueSheet{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrMusicCueSheetNotFound
+		}
+		return nil
+	})
 }
 
-// MarkStale sets stale=true on all MusicCueSheets bound to a given scene.
+func (s *MusicCueService) markCuesAndCandidatesStale(query string, args []any, projectID uint, reason string) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var ids []uint
+		if err := tx.Model(&models.MusicCueSheet{}).Where(query, args...).Pluck("id", &ids).Error; err != nil {
+			return err
+		}
+		if len(ids) > 0 && tx.Migrator().HasTable(&models.MusicCandidate{}) {
+			if err := tx.Model(&models.MusicCandidate{}).Where("project_id = ? AND music_cue_sheet_id IN ? AND stale = ?", projectID, ids, false).Updates(map[string]any{"stale": true, "stale_reason": reason, "is_current": false}).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Model(&models.MusicCueSheet{}).Where(query, args...).Updates(map[string]any{"stale": true, "stale_reason": reason}).Error
+	})
+}
+
+// MarkSceneStale invalidates Cue plans and any audio candidates derived from them.
 func (s *MusicCueService) MarkSceneStale(projectID uint, sceneID uint, reason string) error {
-	return s.db.Model(&models.MusicCueSheet{}).
-		Where("project_id = ? AND scene_id = ? AND stale = ?", projectID, sceneID, false).
-		Updates(map[string]any{"stale": true, "stale_reason": reason}).Error
+	return s.markCuesAndCandidatesStale("project_id = ? AND scene_id = ? AND stale = ?", []any{projectID, sceneID, false}, projectID, reason)
 }
 
-// MarkStale marks stale=true on all MusicCueSheets for a given episode.
-// reason should describe what changed (e.g. "scene changed", "shot changed").
+// MarkEpisodeStale invalidates Cue plans and any audio candidates derived from them.
 func (s *MusicCueService) MarkEpisodeStale(projectID uint, episodeN int, reason string) error {
-	return s.db.Model(&models.MusicCueSheet{}).
-		Where("project_id = ? AND episode_n = ? AND stale = ?", projectID, episodeN, false).
-		Updates(map[string]any{"stale": true, "stale_reason": reason}).Error
+	return s.markCuesAndCandidatesStale("project_id = ? AND episode_n = ? AND stale = ?", []any{projectID, episodeN, false}, projectID, reason)
 }
 
 // MarkApproved validates every cue before atomically approving the Episode.
@@ -408,6 +430,15 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 	}
 	rows := make([]models.MusicCueSheet, 0, len(generated.Cues))
 	err = s.db.Transaction(func(tx *gorm.DB) error {
+		var replacedIDs []uint
+		if err := tx.Model(&models.MusicCueSheet{}).Where("project_id = ? AND episode_n = ? AND source = ? AND review_status <> ?", projectID, episodeN, "ai", "approved").Pluck("id", &replacedIDs).Error; err != nil {
+			return err
+		}
+		if len(replacedIDs) > 0 && tx.Migrator().HasTable(&models.MusicCandidate{}) {
+			if err := tx.Where("project_id = ? AND music_cue_sheet_id IN ?", projectID, replacedIDs).Delete(&models.MusicCandidate{}).Error; err != nil {
+				return err
+			}
+		}
 		if err := tx.Where("project_id = ? AND episode_n = ? AND source = ? AND review_status <> ?", projectID, episodeN, "ai", "approved").Delete(&models.MusicCueSheet{}).Error; err != nil {
 			return err
 		}

@@ -304,7 +304,7 @@
     <section class="section">
       <div class="section-head"><div><span class="overline">MUSIC CUE SHEET</span><h2>MiniMax Music 3 配乐提示词</h2><p class="sub">先填写你的配乐设想，由 music-caption-rewriter 生成 Structured Caption；审核通过也不会在本阶段直接生成音乐。</p></div><button class="btn btn-sm btn-secondary" :disabled="musicCueBusy" @click="draftMusicCues">{{musicCueBusy?'生成中…':'AI生成配乐方案'}}</button></div>
       <div class="card"><label class="wide">本集配乐要求、设想与排除项<textarea v-model="musicRequirements" class="textarea" rows="3" placeholder="例如：纯器乐；情感段使用尼龙弦古典吉他指弹；高潮加入低音弦乐；对白期间克制；不要人声、合唱和电子鼓"></textarea></label></div>
-      <div class="card" v-if="musicCues.length"><div v-for="cue in musicCues" :key="cue.id" class="music-cue-card"><div class="merge-info"><span class="badge" :class="cue.review_status==='approved'?'badge-green':cue.review_status==='rejected'?'badge-red':'badge-gray'">{{cue.review_status}}</span><strong>{{cue.kind}} · {{cue.start_time}}s → {{cue.end_time}}s</strong><span>{{cue.mood}} / {{cue.intensity}} · {{cue.instrument_note}}</span><span v-if="cue.stale" class="fail-msg">已过期：{{cue.stale_reason}}</span></div><label>本Cue补充要求<textarea v-model="cue.user_requirements" class="textarea" rows="2"></textarea></label><label>Structured Caption JSON<textarea v-model="cue.caption_json" class="textarea code-textarea" rows="10"></textarea></label><div class="section-actions"><button class="btn btn-sm btn-secondary" @click="saveMusicCue(cue)">保存草稿</button><button class="btn btn-sm" :disabled="cue.stale" @click="reviewMusicCue(cue,'approve')">审核通过</button><button class="btn btn-sm btn-ghost" @click="reviewMusicCue(cue,'reject')">驳回</button><button class="btn btn-sm btn-danger" @click="removeMusicCue(cue)">删除</button></div></div></div>
+      <div class="card" v-if="musicCues.length"><div v-for="cue in musicCues" :key="cue.id" class="music-cue-card"><div class="merge-info"><span class="badge" :class="cue.review_status==='approved'?'badge-green':cue.review_status==='rejected'?'badge-red':'badge-gray'">{{cue.review_status}}</span><strong>{{cue.kind}} · {{cue.start_time}}s → {{cue.end_time}}s</strong><span>{{cue.mood}} / {{cue.intensity}} · {{cue.instrument_note}}</span><span v-if="cue.stale" class="fail-msg">已过期：{{cue.stale_reason}}</span></div><label>本Cue补充要求<textarea v-model="cue.user_requirements" class="textarea" rows="2"></textarea></label><label>Structured Caption JSON<textarea v-model="cue.caption_json" class="textarea code-textarea" rows="10"></textarea></label><div class="section-actions"><button class="btn btn-sm btn-secondary" @click="saveMusicCue(cue)">保存草稿</button><button class="btn btn-sm" :disabled="cue.stale" @click="reviewMusicCue(cue,'approve')">审核通过</button><button class="btn btn-sm btn-ghost" @click="reviewMusicCue(cue,'reject')">驳回</button><button class="btn btn-sm btn-ghost" @click="toggleMusicCandidates(cue)">{{musicCandidateCueId===cue.id?'收起候选':'试听候选'}}</button><button class="btn btn-sm btn-danger" @click="removeMusicCue(cue)">删除</button></div><div v-if="musicCandidateCueId===cue.id" class="candidate-list"><p class="sub">尚未配置真实Music 3运行模板，因此这里不会提供生成按钮；接入后产生的候选将在此试听和审核。</p><div v-if="musicCandidateBusy" class="inline-status">正在加载配乐候选…</div><article v-for="item in musicCandidates" :key="item.candidate.id" class="candidate" :class="{current:item.candidate.is_current,stale:item.candidate.stale}"><div class="merge-info"><strong>{{item.candidate.model||item.candidate.provider||'Music 3候选'}}</strong><span>{{item.candidate.duration?item.candidate.duration.toFixed(2)+' 秒':'时长待探测'}} · {{item.candidate.is_current?'已采用':item.candidate.review_status==='accepted'?'已审核':item.candidate.review_status==='rejected'?'已拒绝':'待审核'}}</span></div><audio v-if="item.audio_url" :src="item.audio_url" controls preload="none"></audio><p v-if="item.candidate.error" class="fail-msg">{{item.candidate.error}}</p><p v-if="item.candidate.stale" class="fail-msg">已过期：{{item.candidate.stale_reason}}</p><label v-if="item.candidate.review_status==='pending'" class="checkbox"><input v-model="item._confirmed" type="checkbox">我已完整试听该候选</label><div class="section-actions"><button v-if="item.candidate.review_status==='pending'" class="btn btn-sm btn-secondary" :disabled="item.candidate.stale||!item._confirmed" @click="reviewMusicCandidate(cue,item,'accepted')">审核通过</button><button class="btn btn-sm" :disabled="item.candidate.is_current||item.candidate.stale||item.candidate.review_status!=='accepted'" @click="selectMusicCandidate(cue,item)">采用此版本</button><button class="btn btn-sm btn-ghost" :disabled="item.candidate.is_current" @click="reviewMusicCandidate(cue,item,'rejected')">拒绝</button><button class="btn btn-sm btn-danger" :disabled="item.candidate.is_current" @click="removeMusicCandidate(cue,item)">删除</button></div></article><p v-if="!musicCandidateBusy&&!musicCandidates.length" class="sub">暂无音乐候选。</p></div></div></div>
       <div class="card empty" v-else>暂无配乐Cue。填写要求后生成；系统通常只规划2–4个主Cue，避免全程铺满音乐。</div>
     </section>
 
@@ -406,6 +406,9 @@ const audioLayers = ref([])
 const musicCues = ref([])
 const musicRequirements = ref('')
 const musicCueBusy = ref(false)
+const musicCandidateCueId = ref(null)
+const musicCandidates = ref([])
+const musicCandidateBusy = ref(false)
 const audioLayerEditing = ref(false)
 const audioLayerForm = reactive({})
 const screenTextCues = ref([])
@@ -960,6 +963,33 @@ async function removeMusicCue(cue){
   if(!window.confirm('删除这个配乐Cue？'))return
   try { await api.deleteMusicCue(id(),cue.id); await loadMusicCues() }
   catch(e){ toast.error(e.response?.data?.error||'删除配乐Cue失败') }
+}
+
+async function toggleMusicCandidates(cue){
+  if(musicCandidateCueId.value===cue.id){ musicCandidateCueId.value=null; musicCandidates.value=[]; return }
+  musicCandidateCueId.value=cue.id
+  await loadMusicCandidates(cue)
+}
+async function loadMusicCandidates(cue){
+  musicCandidateBusy.value=true
+  try { const {data}=await api.musicCandidates(id(),cue.id); musicCandidates.value=(data||[]).map(item=>({...item,_confirmed:false})) }
+  catch(e){ musicCandidates.value=[]; toast.error(e.response?.data?.error||'加载配乐候选失败') }
+  finally { musicCandidateBusy.value=false }
+}
+async function reviewMusicCandidate(cue,item,status){
+  let reason=''
+  if(status==='rejected'){ reason=window.prompt('填写拒绝原因')||''; if(!reason.trim())return }
+  try { await api.reviewMusicCandidate(id(),cue.id,item.candidate.id,{status,reason,expected_source_hash:item.candidate.source_version_hash,expected_file_sha256:item.candidate.file_sha256,confirmed_full_playback:!!item._confirmed}); await loadMusicCandidates(cue); toast.success(status==='accepted'?'候选已审核通过':'候选已拒绝') }
+  catch(e){ toast.error(e.response?.data?.error||'审核配乐候选失败') }
+}
+async function selectMusicCandidate(cue,item){
+  try { await api.selectMusicCandidate(id(),cue.id,item.candidate.id,{expected_source_hash:item.candidate.source_version_hash,expected_file_sha256:item.candidate.file_sha256}); await loadMusicCandidates(cue); toast.success('已采用配乐候选；自动加入BGM轨将在第三阶段实现') }
+  catch(e){ toast.error(e.response?.data?.error||'采用配乐候选失败') }
+}
+async function removeMusicCandidate(cue,item){
+  if(!window.confirm('删除这个非当前配乐候选记录？音频文件暂不自动清理。'))return
+  try { await api.deleteMusicCandidate(id(),cue.id,item.candidate.id); await loadMusicCandidates(cue) }
+  catch(e){ toast.error(e.response?.data?.error||'删除配乐候选失败') }
 }
 
 async function loadAudioLayers() {
