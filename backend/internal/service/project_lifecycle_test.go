@@ -39,7 +39,7 @@ func TestDeleteProjectRemovesProductionGraph(t *testing.T) {
 		&models.CharacterAliasCandidate{}, &models.NovelJob{}, &models.PlanningBatch{}, &models.BatchEpisode{},
 		&models.BatchStateSnapshot{}, &models.StoryClue{}, &models.PromptVersion{}, &models.CharacterOutfit{},
 		&models.CharacterOutfitLook{}, &models.SceneCharacterOutfit{}, &models.ShotCharacterOutfit{}, &models.FrameCandidate{},
-		&models.GenerationCandidate{}, &models.AudioLayer{}, &models.PromptPolicyOverride{}, &models.CharacterMotionReference{},
+		&models.GenerationCandidate{}, &models.AudioLayer{}, &models.MusicCueSheet{}, &models.PromptPolicyOverride{}, &models.CharacterMotionReference{},
 		&models.SharedAssetReference{}, &models.SceneContinuity{}, &models.UploadFile{}, &models.Task{}, &models.Event{},
 	); err != nil {
 		t.Fatal(err)

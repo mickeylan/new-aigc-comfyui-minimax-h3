@@ -376,6 +376,9 @@ func (s *ProjectService) DeleteProject(id uint) error {
 		if err := tx.Where("project_id = ?", id).Delete(&models.AudioLayer{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("project_id = ?", id).Delete(&models.MusicCueSheet{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("project_id = ?", id).Delete(&models.MergeTask{}).Error; err != nil {
 			return err
 		}

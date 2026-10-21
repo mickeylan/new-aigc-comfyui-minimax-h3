@@ -24,6 +24,14 @@ test('剪辑台提供Scene生产看板和只读双层时间轴', () => {
   assert.match(source, /fragment\.start_rune/)
 })
 
+test('剪辑台先收集用户设想再生成并审核Music 3提示词', () => {
+  assert.match(source, /MiniMax Music 3 配乐提示词/)
+  assert.match(source, /本集配乐要求、设想与排除项/)
+  assert.match(source, /draftMusicCues/)
+  assert.match(source, /Structured Caption JSON/)
+  assert.match(source, /审核通过也不会在本阶段直接生成音乐/)
+})
+
 test('剪辑台场景时间轴保留独立可见横向滚动条', () => {
   assert.match(source, /class="timeline-scroll"/)
   assert.match(source, /aria-label="场景时间轴横向滚动区"/)

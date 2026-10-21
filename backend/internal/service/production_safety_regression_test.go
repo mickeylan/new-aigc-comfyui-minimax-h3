@@ -17,7 +17,7 @@ func safetyDB(t *testing.T, extra ...any) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := []any{&models.Project{}, &models.Episode{}, &models.Scene{}, &models.Shot{}, &models.Dialogue{}, &models.ScriptRevision{}, &models.GenerationCandidate{}, &models.FrameCandidate{}, &models.SceneContinuity{}, &models.SceneCharacterLook{}, &models.SceneCharacterOutfit{}, &models.ShotCharacterLook{}, &models.ShotCharacterOutfit{}, &models.AudioLayer{}, &models.PromptPolicyOverride{}, &models.SharedAssetReference{}}
+	base := []any{&models.Project{}, &models.Episode{}, &models.Scene{}, &models.Shot{}, &models.Dialogue{}, &models.ScriptRevision{}, &models.GenerationCandidate{}, &models.FrameCandidate{}, &models.SceneContinuity{}, &models.SceneCharacterLook{}, &models.SceneCharacterOutfit{}, &models.ShotCharacterLook{}, &models.ShotCharacterOutfit{}, &models.AudioLayer{}, &models.MusicCueSheet{}, &models.PromptPolicyOverride{}, &models.SharedAssetReference{}}
 	base = append(base, extra...)
 	if err := db.AutoMigrate(base...); err != nil {
 		t.Fatal(err)

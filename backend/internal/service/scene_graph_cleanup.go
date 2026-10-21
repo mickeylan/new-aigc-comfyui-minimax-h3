@@ -37,7 +37,7 @@ func deleteSceneDependents(tx *gorm.DB, projectID uint, sceneIDs []uint) error {
 			return err
 		}
 	}
-	for _, model := range []any{&models.SceneCharacterLook{}, &models.SceneCharacterOutfit{}, &models.FrameCandidate{}, &models.AudioLayer{}, &models.ScreenTextCue{}, &models.SceneContinuity{}, &models.SceneAudioCandidate{}} {
+	for _, model := range []any{&models.SceneCharacterLook{}, &models.SceneCharacterOutfit{}, &models.FrameCandidate{}, &models.AudioLayer{}, &models.ScreenTextCue{}, &models.MusicCueSheet{}, &models.SceneContinuity{}, &models.SceneAudioCandidate{}} {
 		if err := deleteIfTable(tx, model, "scene_id IN ?", sceneIDs); err != nil {
 			return err
 		}

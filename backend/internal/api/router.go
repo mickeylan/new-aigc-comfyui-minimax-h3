@@ -171,6 +171,14 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.PUT("/api/projects/:id/screen-text-cues/:cid", svc.HandleUpdateScreenTextCue)
 	r.GET("/api/projects/:id/screen-text-cues/:cid/render-preview", svc.HandleRenderScreenTextPreview)
 	r.DELETE("/api/projects/:id/screen-text-cues/:cid", svc.HandleDeleteScreenTextCue)
+	// 配乐 Cue Sheet：先经 music-caption-rewriter 生成并人工审核；本阶段不创建 ComfyUI 音乐任务。
+	r.GET("/api/projects/:id/music-cue-sheets", svc.HandleListMusicCueSheets)
+	r.POST("/api/projects/:id/music-cue-sheets/draft", svc.HandleDraftMusicCueSheets)
+	r.POST("/api/projects/:id/music-cue-sheets", svc.HandleCreateMusicCueSheet)
+	r.PUT("/api/projects/:id/music-cue-sheets/:cid", svc.HandleUpdateMusicCueSheet)
+	r.POST("/api/projects/:id/music-cue-sheets/:cid/review", svc.HandleReviewMusicCueSheet)
+	r.DELETE("/api/projects/:id/music-cue-sheets/:cid", svc.HandleDeleteMusicCueSheet)
+	r.POST("/api/projects/:id/music-cue-sheets/batch-approve", svc.HandleBatchApproveMusicCueSheets)
 	r.GET("/api/fonts", svc.HandleListApprovedFonts)
 	// 对白配音与字幕
 	r.GET("/api/projects/:id/scenes/:sid/dialogues", svc.HandleListSceneDialogues)

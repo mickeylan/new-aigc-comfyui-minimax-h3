@@ -19,7 +19,7 @@ func newShotMaterializationDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.Shot{}, &models.Dialogue{}, &models.SceneContinuity{}, &models.FrameCandidate{}, &models.GenerationCandidate{}, &models.SceneCharacterLook{}, &models.ShotCharacterLook{}, &models.CharacterOutfit{}, &models.SceneCharacterOutfit{}, &models.ShotCharacterOutfit{}, &models.PromptPolicyOverride{}, &models.SharedAssetReference{}, &models.Material{}, &models.AudioLayer{}, &models.PromptVersion{}, &models.Episode{}); err != nil {
+	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.Shot{}, &models.Dialogue{}, &models.SceneContinuity{}, &models.FrameCandidate{}, &models.GenerationCandidate{}, &models.SceneCharacterLook{}, &models.ShotCharacterLook{}, &models.CharacterOutfit{}, &models.SceneCharacterOutfit{}, &models.ShotCharacterOutfit{}, &models.PromptPolicyOverride{}, &models.SharedAssetReference{}, &models.Material{}, &models.AudioLayer{}, &models.MusicCueSheet{}, &models.PromptVersion{}, &models.Episode{}); err != nil {
 		t.Fatal(err)
 	}
 	return db

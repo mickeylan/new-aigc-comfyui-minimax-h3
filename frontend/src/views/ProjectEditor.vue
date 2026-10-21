@@ -302,6 +302,13 @@
     </section>
 
     <section class="section">
+      <div class="section-head"><div><span class="overline">MUSIC CUE SHEET</span><h2>MiniMax Music 3 配乐提示词</h2><p class="sub">先填写你的配乐设想，由 music-caption-rewriter 生成 Structured Caption；审核通过也不会在本阶段直接生成音乐。</p></div><button class="btn btn-sm btn-secondary" :disabled="musicCueBusy" @click="draftMusicCues">{{musicCueBusy?'生成中…':'AI生成配乐方案'}}</button></div>
+      <div class="card"><label class="wide">本集配乐要求、设想与排除项<textarea v-model="musicRequirements" class="textarea" rows="3" placeholder="例如：纯器乐；情感段使用尼龙弦古典吉他指弹；高潮加入低音弦乐；对白期间克制；不要人声、合唱和电子鼓"></textarea></label></div>
+      <div class="card" v-if="musicCues.length"><div v-for="cue in musicCues" :key="cue.id" class="music-cue-card"><div class="merge-info"><span class="badge" :class="cue.review_status==='approved'?'badge-green':cue.review_status==='rejected'?'badge-red':'badge-gray'">{{cue.review_status}}</span><strong>{{cue.kind}} · {{cue.start_time}}s → {{cue.end_time}}s</strong><span>{{cue.mood}} / {{cue.intensity}} · {{cue.instrument_note}}</span><span v-if="cue.stale" class="fail-msg">已过期：{{cue.stale_reason}}</span></div><label>本Cue补充要求<textarea v-model="cue.user_requirements" class="textarea" rows="2"></textarea></label><label>Structured Caption JSON<textarea v-model="cue.caption_json" class="textarea code-textarea" rows="10"></textarea></label><div class="section-actions"><button class="btn btn-sm btn-secondary" @click="saveMusicCue(cue)">保存草稿</button><button class="btn btn-sm" :disabled="cue.stale" @click="reviewMusicCue(cue,'approve')">审核通过</button><button class="btn btn-sm btn-ghost" @click="reviewMusicCue(cue,'reject')">驳回</button><button class="btn btn-sm btn-danger" @click="removeMusicCue(cue)">删除</button></div></div></div>
+      <div class="card empty" v-else>暂无配乐Cue。填写要求后生成；系统通常只规划2–4个主Cue，避免全程铺满音乐。</div>
+    </section>
+
+    <section class="section">
       <div class="section-head"><div><span class="overline">AUDIO LAYERS</span><h2>环境声 / 音效 / BGM</h2><p class="sub">完整编辑范围、淡入淡出、循环、静音与状态。</p></div><button class="btn btn-sm btn-secondary" @click="editAudioLayer()">新增音频层</button></div>
       <div class="card" v-if="audioLayers.length"><div v-for="layer in audioLayers" :key="layer.id" class="merge-item"><div class="merge-info"><span class="badge badge-gray">{{ layer.kind }}</span><strong>{{ layer.name || layer.file }}</strong><span>{{ layer.start_time }}s → {{ layer.end_time }}s · 音量{{ layer.volume }} · 淡入/出 {{ layer.fade_in }}/{{ layer.fade_out }}s<span v-if="layer.loop"> · 循环</span><span v-if="layer.muted"> · 已静音</span></span></div><div class="merge-links"><button class="btn btn-sm btn-ghost" @click="editAudioLayer(layer)">编辑</button><button class="btn btn-sm btn-danger" @click="removeAudioLayer(layer)">删除</button></div></div></div>
       <div class="card empty" v-else>暂无音频层。</div>
@@ -396,6 +403,9 @@ const merges = ref([])
 const candidates = ref([])
 const compareCandidateIds = ref([])
 const audioLayers = ref([])
+const musicCues = ref([])
+const musicRequirements = ref('')
+const musicCueBusy = ref(false)
 const audioLayerEditing = ref(false)
 const audioLayerForm = reactive({})
 const screenTextCues = ref([])
@@ -597,7 +607,7 @@ async function load() {
     if (selected.value) { durationInput.value = selected.value.duration || 5; sceneModeInput.value = selected.value.scene_mode || ''; await Promise.all([loadCandidates(), loadSelectedWorkbench()]) } else { candidates.value = []; selectedShots.value=[]; videoPromptDetail.value=null }
     const episodeNumbers = epNums()
     epIndex.value = Math.max(0, episodeNumbers.indexOf(activeEpN.value))
-    await Promise.all([loadMerges(), loadAudioLayers(), loadScreenTextCues(), loadSharedAssets(), loadEpisodeContinuity(), loadSkillPanel()])
+    await Promise.all([loadMerges(), loadAudioLayers(), loadMusicCues(), loadScreenTextCues(), loadSharedAssets(), loadEpisodeContinuity(), loadSkillPanel()])
   } catch (e) {
     toast.error(e.response?.data?.error || '加载剪辑台失败')
   }
@@ -923,6 +933,33 @@ async function saveSharedAsset() {
 async function removeSharedAsset(row) {
   if (!window.confirm(`删除共享资产引用“${row.material?.name || row.material_id}”？`)) return
   try { await api.deleteSharedAssetReference(id(), row.id); await loadSharedAssets() } catch (e) { toast.error(e.response?.data?.error || '删除引用失败') }
+}
+
+async function loadMusicCues(){
+  try { const {data}=await api.musicCues(id(),activeEpN.value); musicCues.value=data||[] }
+  catch(e){ toast.error(e.response?.data?.error||'加载配乐Cue失败') }
+}
+async function draftMusicCues(){
+  musicCueBusy.value=true
+  try { const {data}=await api.draftMusicCues(id(),activeEpN.value,musicRequirements.value); musicCues.value=data.cues||[]; toast.success('已生成可审核的MiniMax Music 3配乐提示词') }
+  catch(e){ toast.error(e.response?.data?.error||'生成配乐提示词失败') }
+  finally { musicCueBusy.value=false }
+}
+function musicCuePayload(cue){ return {episode_n:activeEpN.value,scene_id:cue.scene_id||null,shot_id:cue.shot_id||null,kind:cue.kind,start_time:Number(cue.start_time),end_time:Number(cue.end_time),intensity:cue.intensity,mood:cue.mood||'',instrument_note:cue.instrument_note||'',user_requirements:cue.user_requirements||'',duration:Number(cue.duration||0),tags:cue.tags||'',caption_json:cue.caption_json||'',source:cue.source||'manual',order:Number(cue.order||0),enabled:cue.enabled!==false} }
+async function saveMusicCue(cue){
+  try { const {data}=await api.updateMusicCue(id(),cue.id,musicCuePayload(cue)); Object.assign(cue,data); toast.success('配乐提示词已保存为草稿') }
+  catch(e){ toast.error(e.response?.data?.error||'保存配乐Cue失败') }
+}
+async function reviewMusicCue(cue,action){
+  let reason=''
+  if(action==='reject'){ reason=window.prompt('填写驳回原因')||''; if(!reason.trim())return }
+  try { const {data}=await api.reviewMusicCue(id(),cue.id,action,reason); Object.assign(cue,data); toast.success(action==='approve'?'配乐提示词已审核通过':'已驳回配乐提示词') }
+  catch(e){ toast.error(e.response?.data?.error||'审核配乐Cue失败') }
+}
+async function removeMusicCue(cue){
+  if(!window.confirm('删除这个配乐Cue？'))return
+  try { await api.deleteMusicCue(id(),cue.id); await loadMusicCues() }
+  catch(e){ toast.error(e.response?.data?.error||'删除配乐Cue失败') }
 }
 
 async function loadAudioLayers() {

@@ -423,8 +423,8 @@ func TestSkillService_GetAvailableStages(t *testing.T) {
 	svc := NewSkillService(db)
 
 	stages := svc.GetAvailableStages()
-	if len(stages) != 17 {
-		t.Errorf("应该有 17 个阶段，实际 %d", len(stages))
+	if len(stages) != 18 {
+		t.Errorf("应该有 18 个阶段，实际 %d", len(stages))
 	}
 
 	stageSet := make(map[string]bool)
