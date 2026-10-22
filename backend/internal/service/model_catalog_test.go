@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -100,6 +102,35 @@ func TestModelCatalogOnlyReturnsEnabledTemplatesAndRejectsBadMetadata(t *testing
 	}
 	if _, err := NewModelCatalogService(db).List(); err == nil {
 		t.Fatal("invalid template metadata was silently accepted")
+	}
+}
+
+func TestModelCatalogCapabilityManifestIsOptionalMetadataOnly(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.Template{}, &models.Setting{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.Template{Name: "video", Code: "video", Enabled: true, InputsJSON: `[{"key":"duration","type":"float","default":5,"min":3,"max":15}]`, WorkflowJSON: `{}`}).Error; err != nil {
+		t.Fatal(err)
+	}
+	plain, err := NewModelCatalogService(db).List()
+	if err != nil || len(plain) != 1 || plain[0].Capability != nil {
+		t.Fatalf("default catalog changed: %+v %v", plain, err)
+	}
+	dir := t.TempDir()
+	manifest := `{"template_code":"video","media_kind":"video","provider_family":"test","inputs":["text"],"outputs":["video"],"review_required":true,"adapter_code":"future-adapter"}`
+	if err := os.WriteFile(filepath.Join(dir, "video.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	overlay, err := NewModelCatalogService(db, dir).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(overlay) != 1 || overlay[0].Capability == nil || overlay[0].Capability.AdapterCode != "future-adapter" || overlay[0].Mode != "text-to-video" {
+		t.Fatalf("overlay=%+v", overlay)
 	}
 }
 

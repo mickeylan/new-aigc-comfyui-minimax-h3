@@ -11,6 +11,7 @@ extensibility:
   enable_skill_packages: false
   skill_packages_dir: ""
   enable_capability_manifests: false
+  capability_manifests_dir: ""
   enable_agent_tools: false
   enable_generation_adapters: false
   enable_dependency_graph: false

@@ -27,6 +27,7 @@ type ExtensibilityConfig struct {
 	EnableSkillPackages       bool   `yaml:"enable_skill_packages"`
 	SkillPackagesDir          string `yaml:"skill_packages_dir"`
 	EnableCapabilityManifests bool   `yaml:"enable_capability_manifests"`
+	CapabilityManifestsDir    string `yaml:"capability_manifests_dir"`
 	EnableAgentTools          bool   `yaml:"enable_agent_tools"`
 	EnableGenerationAdapters  bool   `yaml:"enable_generation_adapters"`
 	EnableDependencyGraph     bool   `yaml:"enable_dependency_graph"`

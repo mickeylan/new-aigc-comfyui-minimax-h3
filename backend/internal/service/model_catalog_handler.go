@@ -8,7 +8,11 @@ import (
 
 // HandleListModelCatalog exposes a compact read model without changing template APIs.
 func (s *Service) HandleListModelCatalog(c *gin.Context) {
-	entries, err := NewModelCatalogService(s.DB).List()
+	catalog := NewModelCatalogService(s.DB)
+	if s.Cfg != nil && s.Cfg.Extensibility.EnableCapabilityManifests {
+		catalog = NewModelCatalogService(s.DB, s.Cfg.Extensibility.CapabilityManifestsDir)
+	}
+	entries, err := catalog.List()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

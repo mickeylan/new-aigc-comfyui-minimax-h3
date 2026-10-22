@@ -3,6 +3,9 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"gorm.io/gorm"
@@ -24,6 +27,7 @@ type ModelCatalogEntry struct {
 	Resolutions        []ResolutionCapability `json:"resolutions"`
 	Duration           *NumericCapability     `json:"duration"`
 	DefaultParams      map[string]any         `json:"default_params"`
+	Capability         *CapabilityManifest    `json:"capability,omitempty"`
 }
 
 type ResolutionCapability struct {
@@ -48,12 +52,28 @@ type catalogInput struct {
 	MaxCount int      `json:"max_count"`
 }
 
-type ModelCatalogService struct {
-	db *gorm.DB
+type CapabilityManifest struct {
+	TemplateCode   string   `json:"template_code"`
+	MediaKind      string   `json:"media_kind"`
+	ProviderFamily string   `json:"provider_family"`
+	Inputs         []string `json:"inputs"`
+	Outputs        []string `json:"outputs"`
+	ReviewRequired bool     `json:"review_required"`
+	AdapterCode    string   `json:"adapter_code,omitempty"`
+	Notes          string   `json:"notes,omitempty"`
 }
 
-func NewModelCatalogService(db *gorm.DB) *ModelCatalogService {
-	return &ModelCatalogService{db: db}
+type ModelCatalogService struct {
+	db          *gorm.DB
+	manifestDir string
+}
+
+func NewModelCatalogService(db *gorm.DB, manifestDir ...string) *ModelCatalogService {
+	s := &ModelCatalogService{db: db}
+	if len(manifestDir) > 0 {
+		s.manifestDir = strings.TrimSpace(manifestDir[0])
+	}
+	return s
 }
 
 func (s *ModelCatalogService) List() ([]ModelCatalogEntry, error) {
@@ -61,11 +81,19 @@ func (s *ModelCatalogService) List() ([]ModelCatalogEntry, error) {
 	if err := s.db.Where("enabled = ?", true).Order("code, id").Find(&templates).Error; err != nil {
 		return nil, err
 	}
+	manifests, err := loadCapabilityManifests(s.manifestDir)
+	if err != nil {
+		return nil, err
+	}
 	entries := make([]ModelCatalogEntry, 0, len(templates))
 	for _, template := range templates {
 		entry, err := catalogEntryFromTemplate(s.db, template)
 		if err != nil {
 			return nil, fmt.Errorf("derive catalog entry %s: %w", template.Code, err)
+		}
+		if manifest, ok := manifests[template.Code]; ok {
+			copy := manifest
+			entry.Capability = &copy
 		}
 		entries = append(entries, entry)
 	}
@@ -152,4 +180,42 @@ func workflowSupportsAudio(workflowJSON string) bool {
 	// Current H3 workflows declare audio nodes/ports with "audio" in their class,
 	// input, or model names. Requiring a valid workflow avoids deriving from prose.
 	return strings.Contains(strings.ToLower(workflowJSON), "audio")
+}
+
+func loadCapabilityManifests(dir string) (map[string]CapabilityManifest, error) {
+	result := map[string]CapabilityManifest{}
+	if strings.TrimSpace(dir) == "" {
+		return result, nil
+	}
+	absolute, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(absolute)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".json") {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(absolute, entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+		var manifest CapabilityManifest
+		if err := json.Unmarshal(content, &manifest); err != nil {
+			return nil, fmt.Errorf("capability manifest %s: %w", entry.Name(), err)
+		}
+		manifest.TemplateCode = strings.TrimSpace(manifest.TemplateCode)
+		if manifest.TemplateCode == "" || strings.TrimSpace(manifest.MediaKind) == "" || len(manifest.Outputs) == 0 {
+			return nil, fmt.Errorf("capability manifest %s requires template_code, media_kind and outputs", entry.Name())
+		}
+		if _, exists := result[manifest.TemplateCode]; exists {
+			return nil, fmt.Errorf("duplicate capability manifest for %s", manifest.TemplateCode)
+		}
+		result[manifest.TemplateCode] = manifest
+	}
+	return result, nil
 }
