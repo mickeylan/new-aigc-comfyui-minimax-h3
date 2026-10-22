@@ -619,6 +619,21 @@ const (
 	SkillStageMusicCueSheet     = "music_cue_sheet"            // 配乐 Cue Sheet：基于 Episode/Scene/Shot/Dialogue 时间轴生成 Structured Caption
 )
 
+// SkillPackageInstall records a validated file package imported into an immutable Skill version.
+// Runtime selection, enablement and auditing continue to use Skill/ProjectSkillConfig/SkillAuditLog.
+type SkillPackageInstall struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	SkillID      uint      `gorm:"column:skill_id;uniqueIndex" json:"skill_id"`
+	Code         string    `gorm:"size:120;index" json:"code"`
+	Version      int       `gorm:"index" json:"version"`
+	SourcePath   string    `gorm:"column:source_path;type:text" json:"source_path"`
+	ContentHash  string    `gorm:"column:content_hash;size:64;index" json:"content_hash"`
+	ManifestJSON string    `gorm:"column:manifest_json;type:text" json:"manifest_json"`
+	ImportedAt   time.Time `gorm:"column:imported_at" json:"imported_at"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
 // ProjectSkillConfig 项目级技能配置：支持项目选择特定技能或覆盖系统默认
 type ProjectSkillConfig struct {
 	ID              uint      `gorm:"primaryKey" json:"id"`

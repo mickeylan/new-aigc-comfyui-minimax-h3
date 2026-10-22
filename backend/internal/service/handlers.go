@@ -118,6 +118,13 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	if err := skills.InitSystemSkills(); err != nil {
 		log.Printf("[skills] init system skills failed: %v", err)
 	}
+	if cfg.Extensibility.EnableSkillPackages {
+		if imported, err := skills.ImportSkillPackages(cfg.Extensibility.SkillPackagesDir); err != nil {
+			log.Printf("[skill-packages] import failed; existing DB skills remain active: %v", err)
+		} else {
+			log.Printf("[skill-packages] validated %d packages", len(imported))
+		}
+	}
 	if err := stylePresets.InitSystemPresets(); err != nil {
 		log.Printf("[style-presets] init system presets failed: %v", err)
 	}

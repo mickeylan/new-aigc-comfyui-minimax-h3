@@ -11,15 +11,25 @@ import (
 )
 
 type Config struct {
-	Server             ServerConfig   `yaml:"server"`
-	Comfy              ComfyConfig    `yaml:"comfy"`
-	Storage            StorageConfig  `yaml:"storage"`
-	GPU                GPUConfig      `yaml:"gpu"`
-	Remote             RemoteConfig   `yaml:"remote"`
-	IndexTTS           IndexTTSConfig `yaml:"indextts"`
-	CombatReferenceDir string         `yaml:"combat_reference_dir"` // 可选：fight-video-create-skill根目录，用于展示招式/技能GIF
-	TemplatesDir       string         `yaml:"templates_dir"`        // 运行时模板目录；修改 JSON 后可直接重新加载，无需重新编译
-	Simulate           bool           `yaml:"simulate"`             // 模拟模式：不连接 ComfyUI，任务按参考耗时模拟执行
+	Server             ServerConfig        `yaml:"server"`
+	Comfy              ComfyConfig         `yaml:"comfy"`
+	Storage            StorageConfig       `yaml:"storage"`
+	GPU                GPUConfig           `yaml:"gpu"`
+	Remote             RemoteConfig        `yaml:"remote"`
+	IndexTTS           IndexTTSConfig      `yaml:"indextts"`
+	CombatReferenceDir string              `yaml:"combat_reference_dir"` // 可选：fight-video-create-skill根目录，用于展示招式/技能GIF
+	TemplatesDir       string              `yaml:"templates_dir"`        // 运行时模板目录；修改 JSON 后可直接重新加载，无需重新编译
+	Extensibility      ExtensibilityConfig `yaml:"extensibility"`        // 可选扩展能力；全部默认关闭，保持现有行为
+	Simulate           bool                `yaml:"simulate"`             // 模拟模式：不连接 ComfyUI，任务按参考耗时模拟执行
+}
+
+type ExtensibilityConfig struct {
+	EnableSkillPackages       bool   `yaml:"enable_skill_packages"`
+	SkillPackagesDir          string `yaml:"skill_packages_dir"`
+	EnableCapabilityManifests bool   `yaml:"enable_capability_manifests"`
+	EnableAgentTools          bool   `yaml:"enable_agent_tools"`
+	EnableGenerationAdapters  bool   `yaml:"enable_generation_adapters"`
+	EnableDependencyGraph     bool   `yaml:"enable_dependency_graph"`
 }
 
 type ServerConfig struct {

@@ -5,6 +5,16 @@ server:
 # 留空时检索和正文仍可用，只是不提供展示样本。
 combat_reference_dir: ""
 
+# Toonflow启发的扩展能力全部默认关闭。逐项开启前先在独立分支和测试环境验证，
+# 不会替换现有Skill、模板、任务调度、审核或失效传播路径。
+extensibility:
+  enable_skill_packages: false
+  skill_packages_dir: ""
+  enable_capability_manifests: false
+  enable_agent_tools: false
+  enable_generation_adapters: false
+  enable_dependency_graph: false
+
 comfy:
   comfy_dir: /opt/comfyUI
   base_port: 8188
