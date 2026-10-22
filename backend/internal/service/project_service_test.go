@@ -1919,6 +1919,13 @@ func TestCombatRepairIncludesCurrentSceneSwordChoreographyDespiteLegacyShot(t *t
 	}
 }
 
+func TestNormalizeGeneratedH3ActionConvertsFullWidthSubjectTags(t *testing.T) {
+	got := normalizeGeneratedH3Action("[Shot 1] 【Subject 1】 steps forward at full real-time speed.", true, 1, h3SceneAction, []string{"- <Picture 1>：角色「上官若琳」四视图"}, "[Shot 1] 动作", "[Shot 1] <Subject 1> 动作")
+	if !strings.Contains(got, "<Subject 1> steps forward") || strings.Contains(got, "【Subject") {
+		t.Fatalf("full-width Subject tag not normalized: %s", got)
+	}
+}
+
 func TestNormalizeGeneratedH3ActionRepairsReportedEleventhDraft(t *testing.T) {
 	draft := `[Shot 1] The shot begins from the state, composition, and spatial relationships established by <Picture 1>. 真人写实风格。 At MM:00.000, camera glides through mist into the Vanshen Peach Grove. Rising from <Picture 3> pose, <Subject 1>swings the peach branch as a sword, movements sharp and dragon-like with qi flowing outward like a rainbow, instantly transitioning into butterfly-light forms as falling petals swirl around her spinning figure. Toward the end, the visible motion settles into the exact pose, spacing, object state, camera angle, lighting, and final composition established by Picture 2. 旁白 (S1) says in an off-screen voiceover: <d>[Chinese] 上官若琳，天阙宗宗主之女，玉霄宫历代宫主。六十年前八场连胜，击败太运玄金榜第九名，震惊云上天。</d> while their lips remain completely closed.`
 	got := normalizeGeneratedH3Action(draft, true, 1, h3SceneAction, []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：确认尾帧", "- <Picture 3>：角色造型"}, "[Shot 1] 原始动作", "[Shot 1] <Subject 1> 原始动作")
@@ -1938,9 +1945,9 @@ func TestNormalizeGeneratedH3ActionRepairsReportedEleventhDraft(t *testing.T) {
 }
 
 func TestBuildH3FL2VAPromptRemovesConflictingPictureThreeStart(t *testing.T) {
-	scene := &models.Scene{Duration: 10, VideoPrompt: "[Shot 1] 真人写实风格。 The view starts at the <Picture 3> reference as the camera pushes through mist. Rising from <Picture 3> pose, <Subject 1> steps forward."}
+	scene := &models.Scene{Duration: 10, VideoPrompt: "[Shot 1] 真人写实风格。 The image may begin from the <Picture 3> reference state as the camera pushes through mist. Rising from <Picture 3> pose, <Subject 1> steps forward."}
 	got := buildH3FL2VAPrompt(scene, nil, nil)
-	if strings.Contains(got, "starts at the <Picture 3>") || strings.Contains(got, "Rising from <Picture 3>") || strings.Contains(got, "真人写实风格") {
+	if strings.Contains(got, "<Picture 3>") || strings.Contains(got, "The image may the camera") || strings.Contains(got, "真人写实风格") {
 		t.Fatalf("conflicting FL2VA opening reference remained: %s", got)
 	}
 	if strings.Count(got, "The shot begins from the state, composition, and spatial relationships established by <Picture 1>.") != 1 || !strings.Contains(got, "Live-action realistic visual style.") {

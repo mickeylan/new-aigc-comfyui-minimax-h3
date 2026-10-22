@@ -1751,6 +1751,7 @@ func restoreAuthoritativeSubjectTags(candidate, authoritative string) string {
 }
 
 func normalizeGeneratedH3Action(value string, allowSubjects bool, expectedShotCount int, mode h3SceneMode, referenceLines []string, canonicalSceneContent, authoritativeAction string) string {
+	value = regexp.MustCompile(`【\s*Subject\s+([0-9]+)\s*】`).ReplaceAllString(value, "<Subject $1>")
 	value = resolveH3VisualConflicts(coalesceDuplicateH3Shots(stripPromptDialogueNarration(normalizeVideoActionPrompt(strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(value), "```"), "```"))))))
 	value = englishH3ShotField(value)
 	// Models sometimes copy the documentation placeholder literally (for example
@@ -3820,7 +3821,7 @@ func buildH3I2VAPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialog
 }
 
 var h3ConflictingOpeningReferencePatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(?:the\s+view\s+)?(?:starts?|begins?)\s+(?:at|from)\s+(?:the\s+)?<Picture\s+([3-9][0-9]*)>\s+(?:reference|state|composition|pose)?\s*(?:state)?\s*(?:as|and)?\s*`),
+	regexp.MustCompile(`(?i)(?:(?:the\s+)?(?:image|view)\s+may\s+)?(?:starts?|begins?)\s+(?:at|from)\s+(?:the\s+)?<Picture\s+([3-9][0-9]*)>\s+(?:reference|state|composition|pose)?\s*(?:state)?\s*(?:as|and)?\s*`),
 	regexp.MustCompile(`(?i)(?:beginning|begin|rising)\s+from\s+(?:the\s+)?<Picture\s+([3-9][0-9]*)>\s+(?:reference|state|composition|pose)?\s*(?:state)?\s*,?\s*`),
 }
 
