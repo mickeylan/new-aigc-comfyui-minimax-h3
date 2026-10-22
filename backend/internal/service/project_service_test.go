@@ -1906,6 +1906,17 @@ func TestNormalizeGeneratedH3ActionRepairsReportedEleventhDraft(t *testing.T) {
 	}
 }
 
+func TestBuildH3FL2VAPromptRemovesConflictingPictureThreeStart(t *testing.T) {
+	scene := &models.Scene{Duration: 10, VideoPrompt: "[Shot 1] 真人写实风格。 The view starts at the <Picture 3> reference as the camera pushes through mist. Rising from <Picture 3> pose, <Subject 1> steps forward."}
+	got := buildH3FL2VAPrompt(scene, nil, nil)
+	if strings.Contains(got, "starts at the <Picture 3>") || strings.Contains(got, "Rising from <Picture 3>") || strings.Contains(got, "真人写实风格") {
+		t.Fatalf("conflicting FL2VA opening reference remained: %s", got)
+	}
+	if strings.Count(got, "The shot begins from the state, composition, and spatial relationships established by <Picture 1>.") != 1 || !strings.Contains(got, "Live-action realistic visual style.") {
+		t.Fatalf("authoritative FL2VA opening missing: %s", got)
+	}
+}
+
 func TestNormalizeGeneratedH3ActionCollapsesModelBeatMarkersForOneAuthoritativeShot(t *testing.T) {
 	draft := "[Shot 1] <Subject 1> attacks at full real-time speed. [Shot 2] <Subject 2> blocks and shifts right. [Shot 3] Both redirect the energy upward."
 	got := normalizeGeneratedH3Action(draft, true, 1, h3SceneAction, nil, "[Shot 1] source", "[Shot 1] <Subject 1> attacks <Subject 2>.")
@@ -1935,6 +1946,18 @@ func TestEnforceH3ActionTempoRemovesAffirmativeSlowCameraDirections(t *testing.T
 	}
 	if !h3ActionTempoContractMatches(got) {
 		t.Fatalf("normalized combat prompt violates tempo contract: %s", got)
+	}
+}
+
+func TestSoloSwordPracticeRejectsAbstractMartialForms(t *testing.T) {
+	source := "上官若琳以桃枝为剑，在桃林中进行单人剑术演练。她右脚前踏，完成斜撩、直刺、横削，最后收步直立。"
+	vague := "[Shot 1] <Subject 1> moves immediately at full speed, brandishing a peach branch as a sword through martial forms."
+	if h3SoloSwordPracticeContractMatches(source, vague) {
+		t.Fatalf("abstract martial forms passed solo sword contract: %s", vague)
+	}
+	concrete := "[Shot 1] <Subject 1> moves at full real-time speed, steps forward with her right foot, performs one diagonal rising cut, shifts her weight onto the left foot for one straight thrust, then executes one horizontal cut and finishes upright with the peach branch angled down."
+	if !h3SoloSwordPracticeContractMatches(source, concrete) {
+		t.Fatalf("concrete sword sequence failed contract: %s", concrete)
 	}
 }
 
