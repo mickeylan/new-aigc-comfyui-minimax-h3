@@ -9,10 +9,10 @@ import (
 
 func (s *Service) HandleListAgentTools(c *gin.Context) {
 	if s.AgentTools == nil || s.Cfg == nil || !s.Cfg.Extensibility.EnableAgentTools {
-		c.JSON(http.StatusNotFound, gin.H{"error": "agent tools are disabled"})
+		c.JSON(http.StatusOK, gin.H{"enabled": false, "items": []AgentToolDescriptor{}, "message": "agent tools are disabled"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": s.AgentTools.List()})
+	c.JSON(http.StatusOK, gin.H{"enabled": true, "items": s.AgentTools.List()})
 }
 
 func (s *Service) HandleInvokeAgentTool(c *gin.Context) {
@@ -21,8 +21,10 @@ func (s *Service) HandleInvokeAgentTool(c *gin.Context) {
 		return
 	}
 	var body struct {
-		ProjectID *uint           `json:"project_id"`
-		Input     json.RawMessage `json:"input"`
+		ProjectID   *uint           `json:"project_id"`
+		Input       json.RawMessage `json:"input"`
+		Approved    bool            `json:"approved"`
+		ApprovalRef string          `json:"approval_ref"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
@@ -42,7 +44,7 @@ func (s *Service) HandleInvokeAgentTool(c *gin.Context) {
 	if len(body.Input) == 0 {
 		body.Input = json.RawMessage(`{}`)
 	}
-	result, err := s.AgentTools.Invoke(c.Request.Context(), c.Param("code"), AgentToolRequest{ProjectID: body.ProjectID, Input: body.Input})
+	result, err := s.AgentTools.Invoke(c.Request.Context(), c.Param("code"), AgentToolRequest{ProjectID: body.ProjectID, Input: body.Input, Approved: body.Approved, ApprovalRef: body.ApprovalRef})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

@@ -187,7 +187,19 @@ func readSkillPackageText(dir, relative string) (string, error) {
 	if relative == "." || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path must stay inside package")
 	}
-	content, err := os.ReadFile(filepath.Join(dir, relative))
+	root, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", err
+	}
+	candidate, err := filepath.EvalSymlinks(filepath.Join(dir, relative))
+	if err != nil {
+		return "", err
+	}
+	resolvedRelative, err := filepath.Rel(root, candidate)
+	if err != nil || resolvedRelative == ".." || strings.HasPrefix(resolvedRelative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("resolved path must stay inside package")
+	}
+	content, err := os.ReadFile(candidate)
 	if err != nil {
 		return "", err
 	}

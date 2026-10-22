@@ -43,6 +43,9 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/agent-tools/:code/invoke", svc.HandleInvokeAgentTool)
 	// 只读适配器就绪状态；没有真实模板和注册实现时不存在提交入口。
 	r.GET("/api/generation-adapters", svc.HandleListGenerationAdapters)
+	r.GET("/api/extensibility/status", svc.HandleExtensibilityStatus)
+	r.GET("/api/skill-packages", svc.HandleListSkillPackages)
+	r.GET("/api/agent-tools/audit", svc.HandleListAgentToolAudit)
 
 	// 项目无关的生产试验场
 	r.GET("/api/playground/runs", svc.HandleListPlaygroundRuns)
@@ -87,6 +90,9 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.GET("/api/projects", svc.HandleListProjects)
 	r.POST("/api/projects", svc.HandleCreateProject)
 	r.GET("/api/projects/:id", svc.HandleGetProject)
+	r.GET("/api/projects/:id/dependencies", svc.HandleListArtifactDependencies)
+	r.GET("/api/projects/:id/dependencies/affected", svc.HandleAffectedArtifacts)
+	r.GET("/api/projects/:id/dependency-invalidations", svc.HandleListArtifactInvalidations)
 	r.GET("/api/projects/:id/episodes", svc.HandleGetProjectEpisodes)
 	r.POST("/api/projects/:id/episodes", svc.HandleCreateProjectEpisode)
 	r.PATCH("/api/projects/:id/episodes/:number", svc.HandleUpdateProjectEpisode)
@@ -181,6 +187,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/music-cue-sheets/draft", svc.HandleDraftMusicCueSheets)
 	r.POST("/api/projects/:id/music-cue-sheets", svc.HandleCreateMusicCueSheet)
 	r.PUT("/api/projects/:id/music-cue-sheets/:cid", svc.HandleUpdateMusicCueSheet)
+	r.POST("/api/projects/:id/music-cue-sheets/:cid/regenerate", svc.HandleRegenerateMusicCueSheet)
 	r.POST("/api/projects/:id/music-cue-sheets/:cid/review", svc.HandleReviewMusicCueSheet)
 	// 候选接口只管理未来生成结果；没有真实工作流前不提供生成、重试或分支路由。
 	r.GET("/api/projects/:id/music-cue-sheets/:cid/candidates", svc.HandleListMusicCandidates)

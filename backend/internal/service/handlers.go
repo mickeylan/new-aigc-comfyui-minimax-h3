@@ -103,11 +103,12 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	projects.continuity = continuity
 	audioLayers := NewAudioLayerService(db)
 	screenTexts := NewScreenTextService(db)
-	musicCues := NewMusicCueService(db, textProviderFact, skills)
-	musicCandidates := NewMusicCandidateService(db)
+	artifactDependencies := NewArtifactDependencyService(db, cfg.Extensibility.EnableDependencyGraph)
+	musicCues := NewMusicCueService(db, textProviderFact, skills, artifactDependencies)
+	musicCandidates := NewMusicCandidateService(db, artifactDependencies)
+	projects.musicCues = musicCues
 	agentTools := NewControlledAgentToolRegistry(db, cfg.Extensibility.EnableAgentTools)
 	generationAdapters := NewGenerationAdapterRegistry(db, cfg.Extensibility.EnableGenerationAdapters)
-	artifactDependencies := NewArtifactDependencyService(db, cfg.Extensibility.EnableDependencyGraph)
 	capabilityDir := ""
 	if cfg.Extensibility.EnableCapabilityManifests {
 		capabilityDir = cfg.Extensibility.CapabilityManifestsDir

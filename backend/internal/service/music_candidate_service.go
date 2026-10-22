@@ -18,10 +18,17 @@ var (
 )
 
 // MusicCandidateService manages future generated audio outputs without knowing or invoking a runtime workflow.
-type MusicCandidateService struct{ db *gorm.DB }
+type MusicCandidateService struct {
+	db           *gorm.DB
+	dependencies *ArtifactDependencyService
+}
 
-func NewMusicCandidateService(db *gorm.DB) *MusicCandidateService {
-	return &MusicCandidateService{db: db}
+func NewMusicCandidateService(db *gorm.DB, dependencies ...*ArtifactDependencyService) *MusicCandidateService {
+	s := &MusicCandidateService{db: db}
+	if len(dependencies) > 0 {
+		s.dependencies = dependencies[0]
+	}
+	return s
 }
 
 func (s *MusicCandidateService) cue(projectID, cueID uint) (*models.MusicCueSheet, error) {
@@ -33,6 +40,38 @@ func (s *MusicCandidateService) cue(projectID, cueID uint) (*models.MusicCueShee
 		return nil, err
 	}
 	return &cue, nil
+}
+
+// RegisterGeneratedCandidate is the single ingestion point for future verified adapters.
+// It persists provenance but never submits generation work itself.
+func (s *MusicCandidateService) RegisterGeneratedCandidate(row models.MusicCandidate) (*models.MusicCandidate, error) {
+	cue, err := s.cue(row.ProjectID, row.MusicCueSheetID)
+	if err != nil {
+		return nil, err
+	}
+	if cue.ReviewStatus != "approved" || cue.Stale || row.SourceVersionHash != cue.SourceVersionHash {
+		return nil, fmt.Errorf("配乐候选来源不是当前已审核Cue")
+	}
+	if strings.TrimSpace(row.File) == "" || strings.TrimSpace(row.FileSHA256) == "" || row.FileSize <= 0 {
+		return nil, fmt.Errorf("配乐候选缺少有效文件指纹")
+	}
+	row.ID = 0
+	row.IsCurrent = false
+	row.Stale = false
+	row.StaleReason = ""
+	row.ReviewStatus = "pending"
+	row.ReviewReason = ""
+	row.ReviewedAt = nil
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&row).Error; err != nil {
+			return err
+		}
+		if s.dependencies != nil {
+			return s.dependencies.LinkMusicCandidateTx(tx, row.ProjectID, row.MusicCueSheetID, row.ID, row.SourceVersionHash)
+		}
+		return nil
+	})
+	return &row, err
 }
 
 func (s *MusicCandidateService) List(projectID, cueID uint) ([]models.MusicCandidate, error) {
@@ -143,6 +182,11 @@ func (s *MusicCandidateService) Delete(projectID, cueID, candidateID uint) error
 		}
 		if row.IsCurrent {
 			return fmt.Errorf("当前采用的配乐候选不能删除")
+		}
+		if s.dependencies != nil {
+			if err := s.dependencies.DeleteArtifactTx(tx, projectID, ArtifactRef{Kind: "music_candidate", ID: row.ID}); err != nil {
+				return err
+			}
 		}
 		return tx.Delete(&row).Error
 	})

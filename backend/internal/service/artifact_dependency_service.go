@@ -26,7 +26,28 @@ func NewArtifactDependencyService(db *gorm.DB, enabled bool) *ArtifactDependency
 func validArtifactRef(ref ArtifactRef) bool { return strings.TrimSpace(ref.Kind) != "" && ref.ID > 0 }
 
 func (s *ArtifactDependencyService) LinkMusicCandidate(projectID, cueID, candidateID uint, sourceVersion string) error {
-	return s.Link(projectID, ArtifactRef{Kind: "music_cue", ID: cueID}, sourceVersion, ArtifactRef{Kind: "music_candidate", ID: candidateID})
+	return s.LinkMusicCandidateTx(s.db, projectID, cueID, candidateID, sourceVersion)
+}
+
+func (s *ArtifactDependencyService) LinkMusicCandidateTx(tx *gorm.DB, projectID, cueID, candidateID uint, sourceVersion string) error {
+	if s == nil || !s.enabled {
+		return nil
+	}
+	if tx == nil {
+		tx = s.db
+	}
+	row := models.ArtifactDependency{ProjectID: projectID, UpstreamKind: "music_cue", UpstreamID: cueID, UpstreamVersion: strings.TrimSpace(sourceVersion), DownstreamKind: "music_candidate", DownstreamID: candidateID}
+	return tx.Where(models.ArtifactDependency{ProjectID: projectID, UpstreamKind: row.UpstreamKind, UpstreamID: cueID, DownstreamKind: row.DownstreamKind, DownstreamID: candidateID}).Assign(map[string]any{"upstream_version": row.UpstreamVersion}).FirstOrCreate(&row).Error
+}
+
+func (s *ArtifactDependencyService) DeleteArtifactTx(tx *gorm.DB, projectID uint, ref ArtifactRef) error {
+	if s == nil || !s.enabled {
+		return nil
+	}
+	if tx == nil {
+		tx = s.db
+	}
+	return tx.Where("project_id = ? AND ((upstream_kind = ? AND upstream_id = ?) OR (downstream_kind = ? AND downstream_id = ?))", projectID, ref.Kind, ref.ID, ref.Kind, ref.ID).Delete(&models.ArtifactDependency{}).Error
 }
 
 // Link records a dependency without changing domain state. Existing invalidation paths remain authoritative.

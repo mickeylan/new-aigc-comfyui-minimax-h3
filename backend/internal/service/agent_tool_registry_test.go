@@ -63,6 +63,23 @@ func TestControlledAgentToolInvokesReadOnlyDomainOperationAndAudits(t *testing.T
 	}
 }
 
+func TestControlledAgentToolValidatesSchemaAndApproval(t *testing.T) {
+	registry := NewControlledAgentToolRegistry(nil, true)
+	tool := readOnlyAgentTool{descriptor: AgentToolDescriptor{Code: "scene-update", Permission: AgentToolDomainWrite, ReviewRequired: true, InputSchema: json.RawMessage(`{"type":"object","required":["title"],"properties":{"title":{"type":"string"}},"additionalProperties":false}`)}, invoke: func(context.Context, AgentToolRequest) (any, error) { return "ok", nil }}
+	if err := registry.Register(tool); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Invoke(context.Background(), "scene-update", AgentToolRequest{Input: json.RawMessage(`{"title":"x"}`)}); err == nil {
+		t.Fatal("write tool ran without approval")
+	}
+	if _, err := registry.Invoke(context.Background(), "scene-update", AgentToolRequest{Input: json.RawMessage(`{"wrong":1}`), Approved: true, ApprovalRef: "review-1"}); err == nil {
+		t.Fatal("invalid input bypassed schema")
+	}
+	if _, err := registry.Invoke(context.Background(), "scene-update", AgentToolRequest{Input: json.RawMessage(`{"title":"x"}`), Approved: true, ApprovalRef: "review-1"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestControlledAgentToolRequiresReviewForWrites(t *testing.T) {
 	registry := NewControlledAgentToolRegistry(nil, true)
 	write := readOnlyAgentTool{descriptor: AgentToolDescriptor{Code: "scene-update", Permission: AgentToolDomainWrite, InputSchema: json.RawMessage(`{}`)}, invoke: func(context.Context, AgentToolRequest) (any, error) { return nil, nil }}

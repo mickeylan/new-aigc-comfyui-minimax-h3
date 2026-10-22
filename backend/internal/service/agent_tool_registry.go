@@ -31,8 +31,10 @@ type AgentToolDescriptor struct {
 }
 
 type AgentToolRequest struct {
-	ProjectID *uint           `json:"project_id,omitempty"`
-	Input     json.RawMessage `json:"input"`
+	ProjectID   *uint           `json:"project_id,omitempty"`
+	Input       json.RawMessage `json:"input"`
+	Approved    bool            `json:"approved"`
+	ApprovalRef string          `json:"approval_ref,omitempty"`
 }
 
 type AgentDomainTool interface {
@@ -106,6 +108,12 @@ func (r *ControlledAgentToolRegistry) Invoke(ctx context.Context, code string, r
 		return nil, fmt.Errorf("agent tool is not registered")
 	}
 	d := tool.Descriptor()
+	if d.ReviewRequired && (!request.Approved || strings.TrimSpace(request.ApprovalRef) == "") {
+		return nil, fmt.Errorf("agent tool requires explicit human approval reference")
+	}
+	if err := validateAgentToolInput(d.InputSchema, request.Input); err != nil {
+		return nil, fmt.Errorf("agent tool input invalid: %w", err)
+	}
 	started := time.Now()
 	output, invokeErr := tool.Invoke(ctx, request)
 	inputHash := sha256.Sum256(request.Input)
@@ -120,6 +128,57 @@ func (r *ControlledAgentToolRegistry) Invoke(ctx context.Context, code string, r
 	}
 	return output, invokeErr
 }
+
+func validateAgentToolInput(schemaJSON, inputJSON json.RawMessage) error {
+	if len(schemaJSON) == 0 {
+		return nil
+	}
+	var schema struct {
+		Type       string   `json:"type"`
+		Required   []string `json:"required"`
+		Properties map[string]struct {
+			Type string `json:"type"`
+		} `json:"properties"`
+		AdditionalProperties *bool `json:"additionalProperties"`
+	}
+	if err := json.Unmarshal(schemaJSON, &schema); err != nil {
+		return err
+	}
+	if schema.Type != "object" {
+		return fmt.Errorf("only object input schemas are supported")
+	}
+	var input map[string]any
+	if len(inputJSON) == 0 {
+		inputJSON = json.RawMessage(`{}`)
+	}
+	if err := json.Unmarshal(inputJSON, &input); err != nil {
+		return err
+	}
+	for _, key := range schema.Required {
+		if _, ok := input[key]; !ok {
+			return fmt.Errorf("missing required field %s", key)
+		}
+	}
+	for key, value := range input {
+		property, known := schema.Properties[key]
+		if !known {
+			if schema.AdditionalProperties != nil && !*schema.AdditionalProperties {
+				return fmt.Errorf("unknown field %s", key)
+			}
+			continue
+		}
+		valid := property.Type == "" || (property.Type == "string" && isString(value)) || (property.Type == "number" && isNumber(value)) || (property.Type == "boolean" && isBool(value)) || (property.Type == "object" && isObject(value)) || (property.Type == "array" && isArray(value))
+		if !valid {
+			return fmt.Errorf("field %s must be %s", key, property.Type)
+		}
+	}
+	return nil
+}
+func isString(v any) bool { _, ok := v.(string); return ok }
+func isNumber(v any) bool { _, ok := v.(float64); return ok }
+func isBool(v any) bool   { _, ok := v.(bool); return ok }
+func isObject(v any) bool { _, ok := v.(map[string]any); return ok }
+func isArray(v any) bool  { _, ok := v.([]any); return ok }
 
 func RegisterDefaultReadOnlyAgentTools(registry *ControlledAgentToolRegistry, db *gorm.DB, capabilityManifestDir string) error {
 	catalog := NewModelCatalogService(db)

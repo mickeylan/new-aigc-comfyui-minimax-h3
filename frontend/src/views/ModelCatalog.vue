@@ -40,6 +40,11 @@
           </div>
         </dl>
 
+        <details v-if="item.capability" class="defaults capability-overlay">
+          <summary>声明式能力附加信息</summary>
+          <div class="param-list"><span><b>供应商族</b>{{ item.capability.provider_family }}</span><span><b>媒体</b>{{ item.capability.media_kind }}</span><span><b>输入</b>{{ (item.capability.inputs || []).join('、') || '—' }}</span><span><b>输出</b>{{ (item.capability.outputs || []).join('、') || '—' }}</span><span><b>人工审核</b>{{ yesNo(item.capability.review_required) }}</span><span v-if="item.capability.adapter_code"><b>适配器</b>{{ item.capability.adapter_code }}</span></div>
+          <p v-if="item.capability.notes" class="description">{{ item.capability.notes }}</p>
+        </details>
         <details v-if="Object.keys(item.default_params || {}).length" class="defaults">
           <summary>默认参数</summary>
           <div class="param-list">

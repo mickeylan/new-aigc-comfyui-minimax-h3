@@ -13,7 +13,7 @@ import (
 
 func newSkillPackageTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,6 +64,27 @@ func TestImportSkillPackagesIsOptInImmutableAndDisabledByDefault(t *testing.T) {
 	}
 	if _, err := svc.ImportSkillPackages(root); err == nil {
 		t.Fatal("changed immutable version was accepted")
+	}
+}
+
+func TestPackagedSkillContentCannotBeEditedOrDeletedThroughCRUD(t *testing.T) {
+	db := newSkillPackageTestDB(t)
+	root := t.TempDir()
+	writeSkillPackage(t, root, "example", `{"name":"Example","code":"example-package","version":1,"stage":"review","operation":"example-review","prompt_file":"prompt.md","system_file":"system.md"}`, "Review", "System")
+	svc := NewSkillService(db)
+	results, err := svc.ImportSkillPackages(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := results[0].SkillID
+	if _, err := svc.UpdateSkill(id, map[string]any{"prompt_template": "changed"}); err == nil {
+		t.Fatal("packaged skill content was edited")
+	}
+	if _, err := svc.UpdateSkill(id, map[string]any{"enabled": true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeleteSkill(id); err == nil {
+		t.Fatal("packaged skill audit source was deleted")
 	}
 }
 

@@ -28,6 +28,8 @@ test('剪辑台先收集用户设想再生成并审核Music 3提示词', () => {
   assert.match(source, /MiniMax Music 3 配乐提示词/)
   assert.match(source, /本集配乐要求、设想与排除项/)
   assert.match(source, /draftMusicCues/)
+  assert.match(source, /regenerateMusicCue/)
+  assert.match(source, /AI重写此Cue/)
   assert.match(source, /Structured Caption JSON/)
   assert.match(source, /审核通过也不会在本阶段直接生成音乐/)
   assert.match(source, /尚未配置真实Music 3运行模板，因此这里不会提供生成按钮/)

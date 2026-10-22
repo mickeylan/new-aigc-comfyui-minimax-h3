@@ -11,11 +11,11 @@ import (
 
 func newMusicCandidateTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.Project{}, &models.MusicCueSheet{}, &models.MusicCandidate{}); err != nil {
+	if err := db.AutoMigrate(&models.Project{}, &models.MusicCueSheet{}, &models.MusicCandidate{}, &models.ArtifactDependency{}, &models.ArtifactInvalidationEvent{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -37,6 +37,26 @@ func seedMusicCandidate(t *testing.T, db *gorm.DB, projectID, cueID uint, hash, 
 		t.Fatal(err)
 	}
 	return row
+}
+
+func TestRegisterGeneratedMusicCandidateLinksOptionalDependency(t *testing.T) {
+	db := newMusicCandidateTestDB(t)
+	project := models.Project{Title: "p"}
+	db.Create(&project)
+	cue := seedApprovedMusicCue(t, db, project.ID, "source-a")
+	graph := NewArtifactDependencyService(db, true)
+	svc := NewMusicCandidateService(db, graph)
+	row, err := svc.RegisterGeneratedCandidate(models.MusicCandidate{ProjectID: project.ID, MusicCueSheetID: cue.ID, SourceVersionHash: "source-a", Provider: "verified-adapter", File: "music/a.wav", FileSHA256: "file-a", FileSize: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var edge models.ArtifactDependency
+	if err := db.Where("downstream_kind = ? AND downstream_id = ?", "music_candidate", row.ID).First(&edge).Error; err != nil {
+		t.Fatal(err)
+	}
+	if edge.UpstreamID != cue.ID || edge.UpstreamVersion != "source-a" {
+		t.Fatalf("unexpected edge: %+v", edge)
+	}
 }
 
 func TestMusicCandidateRequiresMatchingApprovedCueAndPlaybackEvidence(t *testing.T) {

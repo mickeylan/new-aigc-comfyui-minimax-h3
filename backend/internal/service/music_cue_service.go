@@ -21,9 +21,10 @@ import (
 var ErrMusicCueSheetNotFound = errors.New("配乐 cue 不存在")
 
 type MusicCueService struct {
-	db       *gorm.DB
-	provider TextProvider
-	skills   *SkillService
+	db           *gorm.DB
+	provider     TextProvider
+	skills       *SkillService
+	dependencies *ArtifactDependencyService
 }
 
 func NewMusicCueService(db *gorm.DB, deps ...any) *MusicCueService {
@@ -34,6 +35,8 @@ func NewMusicCueService(db *gorm.DB, deps ...any) *MusicCueService {
 			s.provider = value
 		case *SkillService:
 			s.skills = value
+		case *ArtifactDependencyService:
+			s.dependencies = value
 		}
 	}
 	return s
@@ -247,6 +250,11 @@ func (s *MusicCueService) Update(projectID, id uint, in MusicCueSheetInput) (*mo
 		if err := markMusicCandidatesStale(tx, projectID, id, "配乐Cue内容已修改"); err != nil {
 			return err
 		}
+		if s.dependencies != nil {
+			if _, err := s.dependencies.RecordInvalidation(tx, projectID, ArtifactRef{Kind: "music_cue", ID: id}, "配乐Cue内容已修改"); err != nil {
+				return err
+			}
+		}
 		return tx.Model(&existing).Updates(updates).Error
 	}); err != nil {
 		return nil, err
@@ -259,6 +267,11 @@ func (s *MusicCueService) Update(projectID, id uint, in MusicCueSheetInput) (*mo
 
 func (s *MusicCueService) Delete(projectID, id uint) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
+		if s.dependencies != nil {
+			if err := s.dependencies.DeleteArtifactTx(tx, projectID, ArtifactRef{Kind: "music_cue", ID: id}); err != nil {
+				return err
+			}
+		}
 		if tx.Migrator().HasTable(&models.MusicCandidate{}) {
 			if err := tx.Where("project_id = ? AND music_cue_sheet_id = ?", projectID, id).Delete(&models.MusicCandidate{}).Error; err != nil {
 				return err
@@ -284,6 +297,13 @@ func (s *MusicCueService) markCuesAndCandidatesStale(query string, args []any, p
 		if len(ids) > 0 && tx.Migrator().HasTable(&models.MusicCandidate{}) {
 			if err := tx.Model(&models.MusicCandidate{}).Where("project_id = ? AND music_cue_sheet_id IN ? AND stale = ?", projectID, ids, false).Updates(map[string]any{"stale": true, "stale_reason": reason, "is_current": false}).Error; err != nil {
 				return err
+			}
+		}
+		if s.dependencies != nil {
+			for _, id := range ids {
+				if _, err := s.dependencies.RecordInvalidation(tx, projectID, ArtifactRef{Kind: "music_cue", ID: id}, reason); err != nil {
+					return err
+				}
 			}
 		}
 		return tx.Model(&models.MusicCueSheet{}).Where(query, args...).Updates(map[string]any{"stale": true, "stale_reason": reason}).Error
@@ -465,6 +485,46 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 	return rows, err
 }
 
+func (s *MusicCueService) RegenerateCue(projectID, id uint) (*models.MusicCueSheet, error) {
+	if s.provider == nil || s.skills == nil {
+		return nil, fmt.Errorf("配乐提示词生成服务未配置")
+	}
+	var current models.MusicCueSheet
+	if err := s.db.Where("id = ? AND project_id = ?", id, projectID).First(&current).Error; err != nil {
+		return nil, ErrMusicCueSheetNotFound
+	}
+	context, err := s.episodeContext(projectID, current.EpisodeN)
+	if err != nil {
+		return nil, err
+	}
+	currentJSON, _ := json.Marshal(current)
+	baseSystem := `Rewrite exactly one short-drama instrumental Music 3 cue. Output strict JSON with root field cue. Keep start_time and end_time unchanged. cue has kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. caption has exactly global_metadata,vocal_details,arrangement,lyrics_input. Fully instrumental; no speech, singing, choir, chanting, humming, whispering or vocal-like textures. Preserve user requirements as highest priority.`
+	baseUser := "Episode timeline:\n" + context + "\n\nCurrent cue:\n" + string(currentJSON)
+	raw, err := s.skills.ChatWithConfiguredOrFallbackSkill(projectID, models.SkillStageMusicCueSheet, "music-cue-sheet-generate", s.provider, baseSystem, baseUser, map[string]string{"episode_context": context, "user_requirements": current.UserRequirements})
+	if err != nil {
+		return nil, err
+	}
+	var wrapper struct {
+		Cue generatedMusicCue `json:"cue"`
+	}
+	if err := json.Unmarshal([]byte(trimJSONEnvelope(raw)), &wrapper); err != nil {
+		return nil, fmt.Errorf("AI配乐Cue JSON解析失败: %w", err)
+	}
+	item := wrapper.Cue
+	if item.StartTime != current.StartTime || item.EndTime != current.EndTime {
+		return nil, fmt.Errorf("AI不得修改Cue时间范围")
+	}
+	caption, _ := json.Marshal(item.Caption)
+	if err := validateMusicCaptionJSON(string(caption)); err != nil {
+		return nil, err
+	}
+	updated, err := s.Update(projectID, id, MusicCueSheetInput{EpisodeN: current.EpisodeN, SceneID: current.SceneID, ShotID: current.ShotID, Kind: item.Kind, StartTime: current.StartTime, EndTime: current.EndTime, Intensity: item.Intensity, Mood: item.Mood, InstrumentNote: item.InstrumentNote, UserRequirements: current.UserRequirements, Duration: current.Duration, Tags: current.Tags, CaptionJSON: string(caption), Source: "ai", Order: current.Order, Enabled: &current.Enabled})
+	if err == nil {
+		_ = s.db.Model(updated).Update("raw_output", raw).Error
+	}
+	return updated, err
+}
+
 func (s *MusicCueService) Review(projectID, id uint, approve bool, reason string) (*models.MusicCueSheet, error) {
 	var cue models.MusicCueSheet
 	if err := s.db.Where("id = ? AND project_id = ?", id, projectID).First(&cue).Error; err != nil {
@@ -604,6 +664,28 @@ func (s *Service) HandleDraftMusicCueSheets(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"cues": cues})
+}
+
+func (s *Service) HandleRegenerateMusicCueSheet(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("cid"), 10, 32)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid music cue id"})
+		return
+	}
+	cue, err := s.MusicCues.RegenerateCue(p.ID, uint(id))
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, ErrMusicCueSheetNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, cue)
 }
 
 func (s *Service) HandleReviewMusicCueSheet(c *gin.Context) {

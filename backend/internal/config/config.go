@@ -196,6 +196,12 @@ func Load() *Config {
 	if cfg.CombatReferenceDir != "" {
 		cfg.CombatReferenceDir = resolveConfiguredPath(cfg.CombatReferenceDir, configDir)
 	}
+	if cfg.Extensibility.SkillPackagesDir != "" {
+		cfg.Extensibility.SkillPackagesDir = resolveConfiguredPath(cfg.Extensibility.SkillPackagesDir, configDir)
+	}
+	if cfg.Extensibility.CapabilityManifestsDir != "" {
+		cfg.Extensibility.CapabilityManifestsDir = resolveConfiguredPath(cfg.Extensibility.CapabilityManifestsDir, configDir)
+	}
 	log.Printf("[config] sqlite=%s data_dir=%s", cfg.Storage.DBPath, cfg.Storage.DataDir)
 	return cfg
 }

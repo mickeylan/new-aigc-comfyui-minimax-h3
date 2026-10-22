@@ -254,8 +254,14 @@ func (s *SkillService) UpdateSkill(id uint, updates map[string]any) (*models.Ski
 	if err := s.db.First(&skill, id).Error; err != nil {
 		return nil, err
 	}
+	var packagedCount int64
+	if s.db.Migrator().HasTable(&models.SkillPackageInstall{}) {
+		if err := s.db.Model(&models.SkillPackageInstall{}).Where("skill_id = ?", id).Count(&packagedCount).Error; err != nil {
+			return nil, err
+		}
+	}
 	allowed := map[string]bool{"description": true, "enabled": true, "sort_order": true}
-	if !skill.IsSystem {
+	if !skill.IsSystem && packagedCount == 0 {
 		allowed["name"] = true
 		allowed["stage"] = true
 		allowed["prompt_template"] = true
@@ -264,6 +270,9 @@ func (s *SkillService) UpdateSkill(id uint, updates map[string]any) (*models.Ski
 	}
 	for field, value := range updates {
 		if !allowed[field] {
+			if packagedCount > 0 {
+				return nil, fmt.Errorf("文件化Skill内容不可通过API修改；请发布新的包版本")
+			}
 			return nil, fmt.Errorf("不允许修改字段: %s", field)
 		}
 		switch field {
@@ -362,6 +371,15 @@ func (s *SkillService) DeleteSkill(id uint) error {
 	}
 	if skill.IsSystem {
 		return fmt.Errorf("系统内置技能不可删除")
+	}
+	if s.db.Migrator().HasTable(&models.SkillPackageInstall{}) {
+		var count int64
+		if err := s.db.Model(&models.SkillPackageInstall{}).Where("skill_id = ?", id).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return fmt.Errorf("文件化Skill版本不可删除；可以禁用但必须保留审计来源")
+		}
 	}
 	return s.db.Delete(&skill).Error
 }

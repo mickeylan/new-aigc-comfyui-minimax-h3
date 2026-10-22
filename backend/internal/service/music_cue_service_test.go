@@ -253,6 +253,32 @@ func TestDraftMusicCuesUsesUserRequirementsAndRewriterSchema(t *testing.T) {
 	}
 }
 
+func TestRegenerateMusicCuePreservesTimelineAndReturnsDraft(t *testing.T) {
+	db := newMusicCueTestDB(t)
+	if err := db.AutoMigrate(&models.Skill{}, &models.ProjectSkillConfig{}, &models.SkillAuditLog{}, &models.MusicCandidate{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "p"}
+	db.Create(&project)
+	db.Create(&models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 1, Duration: 12, Title: "scene"})
+	caption := `{"global_metadata":"old","vocal_details":"Fully instrumental","arrangement":"old"}`
+	cue := models.MusicCueSheet{ProjectID: project.ID, EpisodeN: 1, Kind: "emotion", StartTime: 2, EndTime: 8, Intensity: "soft", UserRequirements: "古典吉他", CaptionJSON: caption, SourceVersionHash: "old", ReviewStatus: "approved", Enabled: true}
+	db.Create(&cue)
+	provider := &stubTextProvider{response: `{"cue":{"kind":"emotion","start_time":2,"end_time":8,"intensity":"medium","mood":"romantic","instrument_note":"nylon guitar","caption":{"global_metadata":"intimate score","vocal_details":"Fully instrumental, no voices.","arrangement":"Intro: fingerpicked guitar. Outro: harmonics.","lyrics_input":"[Intro]\n[Instrumental]\n[Outro]"}}}`}
+	skills := NewSkillService(db)
+	if err := skills.InitSystemSkills(); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewMusicCueService(db, provider, skills)
+	updated, err := svc.RegenerateCue(project.ID, cue.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.StartTime != 2 || updated.EndTime != 8 || updated.ReviewStatus != "draft" || updated.InstrumentNote != "nylon guitar" {
+		t.Fatalf("unexpected regenerated cue: %+v", updated)
+	}
+}
+
 func TestMusicCueSheetEpisodeStale(t *testing.T) {
 	db := newMusicCueTestDB(t)
 	svc := NewMusicCueService(db)

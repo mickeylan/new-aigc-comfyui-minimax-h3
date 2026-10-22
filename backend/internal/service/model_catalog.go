@@ -81,10 +81,8 @@ func (s *ModelCatalogService) List() ([]ModelCatalogEntry, error) {
 	if err := s.db.Where("enabled = ?", true).Order("code, id").Find(&templates).Error; err != nil {
 		return nil, err
 	}
-	manifests, err := loadCapabilityManifests(s.manifestDir)
-	if err != nil {
-		return nil, err
-	}
+	// Optional overlays are diagnostic metadata only; malformed files must not break the executable catalog.
+	manifests, _ := loadCapabilityManifests(s.manifestDir)
 	entries := make([]ModelCatalogEntry, 0, len(templates))
 	for _, template := range templates {
 		entry, err := catalogEntryFromTemplate(s.db, template)

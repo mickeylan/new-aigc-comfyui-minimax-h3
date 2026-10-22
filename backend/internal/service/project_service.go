@@ -48,6 +48,7 @@ type ProjectService struct {
 	skills         *SkillService
 	characterLooks *CharacterLookService
 	continuity     *ContinuityService
+	musicCues      *MusicCueService
 	assetMu        sync.Mutex // 串行化资产参考图任务创建，避免并发重复排队
 	sceneAudioMu   sync.Mutex // 串行化Scene连续音轨渲染与发布，避免重复文件和候选
 }
@@ -240,6 +241,14 @@ func (s *ProjectService) cancelProjectTasks(projectID uint) {
 }
 
 func (s *ProjectService) CancelStaleSceneTasks(sceneID uint, taskIDs ...string) {
+	if s.musicCues != nil {
+		var scene models.Scene
+		if err := s.db.Select("project_id", "episode_n").First(&scene, sceneID).Error; err == nil {
+			if err := s.musicCues.MarkEpisodeStale(scene.ProjectID, scene.EpisodeN, "Scene或Shot结构已修改"); err != nil {
+				log.Printf("[scene %d] mark music cues stale failed: %v", sceneID, err)
+			}
+		}
+	}
 	if s.tasks == nil {
 		return
 	}
@@ -822,6 +831,11 @@ func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imageProm
 	}
 	if err := s.db.Model(sc).Updates(updates).Error; err != nil {
 		return err
+	}
+	if s.musicCues != nil && ((title != "" && sc.Title != title) || (content != "" && sc.Content != content) || durationChanged) {
+		if err := s.musicCues.MarkEpisodeStale(sc.ProjectID, sc.EpisodeN, "Scene正文、标题或时长已修改"); err != nil {
+			return err
+		}
 	}
 	if durationChanged {
 		if err := markSceneAudioCandidatesStale(s.db, sc.ProjectID, sc.ID, "Scene时长已修改"); err != nil {
@@ -8639,6 +8653,12 @@ func (s *ProjectService) UpdateDialogueFields(p *models.Project, did uint, input
 	}
 	if input.Text != nil && strings.TrimSpace(*input.Text) != strings.TrimSpace(d.Text) {
 		_ = s.db.Model(&models.Shot{}).Where("scene_id = ?", d.SceneID).Updates(map[string]any{"dialogue_ranges_json": "[]", "dialogue": ""}).Error
+	}
+	if s.musicCues != nil && (promptChanged || timelineChanged) {
+		var scene models.Scene
+		if err := s.db.Select("episode_n").First(&scene, d.SceneID).Error; err == nil {
+			_ = s.musicCues.MarkEpisodeStale(d.ProjectID, scene.EpisodeN, "Dialogue内容、说话人或时间线已修改")
+		}
 	}
 	s.pushProject(p)
 	s.db.First(&d, did)

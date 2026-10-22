@@ -22,6 +22,7 @@ const routes = [
   { path: '/skills', name: 'skills', component: () => import('../views/Skills.vue') },
   { path: '/materials', name: 'materials', component: () => import('../views/Materials.vue') },
   { path: '/model-catalog', name: 'model-catalog', component: () => import('../views/ModelCatalog.vue') },
+  { path: '/extensibility', name: 'extensibility', component: () => import('../views/Extensibility.vue') },
   { path: '/settings', name: 'settings', component: () => import('../views/Settings.vue') }
 ]
 
