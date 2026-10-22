@@ -41,6 +41,8 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	// 受控Agent工具默认关闭；仅注册领域API，禁止Shell、任意文件、原始数据库和不受限网络。
 	r.GET("/api/agent-tools", svc.HandleListAgentTools)
 	r.POST("/api/agent-tools/:code/invoke", svc.HandleInvokeAgentTool)
+	// 只读适配器就绪状态；没有真实模板和注册实现时不存在提交入口。
+	r.GET("/api/generation-adapters", svc.HandleListGenerationAdapters)
 
 	// 项目无关的生产试验场
 	r.GET("/api/playground/runs", svc.HandleListPlaygroundRuns)

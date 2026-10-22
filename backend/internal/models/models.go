@@ -619,6 +619,30 @@ const (
 	SkillStageMusicCueSheet     = "music_cue_sheet"            // 配乐 Cue Sheet：基于 Episode/Scene/Shot/Dialogue 时间轴生成 Structured Caption
 )
 
+// ArtifactDependency is an optional shadow graph; domain tables remain authoritative.
+type ArtifactDependency struct {
+	ID              uint      `gorm:"primaryKey" json:"id"`
+	ProjectID       uint      `gorm:"column:project_id;index;uniqueIndex:idx_artifact_dependency" json:"project_id"`
+	UpstreamKind    string    `gorm:"column:upstream_kind;size:64;uniqueIndex:idx_artifact_dependency" json:"upstream_kind"`
+	UpstreamID      uint      `gorm:"column:upstream_id;uniqueIndex:idx_artifact_dependency" json:"upstream_id"`
+	UpstreamVersion string    `gorm:"column:upstream_version;size:64" json:"upstream_version"`
+	DownstreamKind  string    `gorm:"column:downstream_kind;size:64;uniqueIndex:idx_artifact_dependency" json:"downstream_kind"`
+	DownstreamID    uint      `gorm:"column:downstream_id;uniqueIndex:idx_artifact_dependency" json:"downstream_id"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+type ArtifactInvalidationEvent struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	ProjectID    uint      `gorm:"column:project_id;index" json:"project_id"`
+	ArtifactKind string    `gorm:"column:artifact_kind;size:64;index" json:"artifact_kind"`
+	ArtifactID   uint      `gorm:"column:artifact_id;index" json:"artifact_id"`
+	Reason       string    `gorm:"type:text" json:"reason"`
+	SourceKind   string    `gorm:"column:source_kind;size:64" json:"source_kind"`
+	SourceID     uint      `gorm:"column:source_id" json:"source_id"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 // AgentToolAuditLog records invocations through the constrained domain-tool registry.
 type AgentToolAuditLog struct {
 	ID         uint      `gorm:"primaryKey" json:"id"`

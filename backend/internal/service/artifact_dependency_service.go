@@ -1,0 +1,111 @@
+package service
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"comfyui-console/internal/models"
+	"gorm.io/gorm"
+)
+
+type ArtifactRef struct {
+	Kind string `json:"kind"`
+	ID   uint   `json:"id"`
+}
+
+type ArtifactDependencyService struct {
+	db      *gorm.DB
+	enabled bool
+}
+
+func NewArtifactDependencyService(db *gorm.DB, enabled bool) *ArtifactDependencyService {
+	return &ArtifactDependencyService{db: db, enabled: enabled}
+}
+
+func validArtifactRef(ref ArtifactRef) bool { return strings.TrimSpace(ref.Kind) != "" && ref.ID > 0 }
+
+func (s *ArtifactDependencyService) LinkMusicCandidate(projectID, cueID, candidateID uint, sourceVersion string) error {
+	return s.Link(projectID, ArtifactRef{Kind: "music_cue", ID: cueID}, sourceVersion, ArtifactRef{Kind: "music_candidate", ID: candidateID})
+}
+
+// Link records a dependency without changing domain state. Existing invalidation paths remain authoritative.
+func (s *ArtifactDependencyService) Link(projectID uint, upstream ArtifactRef, upstreamVersion string, downstream ArtifactRef) error {
+	if s == nil || !s.enabled {
+		return nil
+	}
+	if projectID == 0 || !validArtifactRef(upstream) || !validArtifactRef(downstream) {
+		return fmt.Errorf("project and artifact references are required")
+	}
+	if upstream == downstream {
+		return fmt.Errorf("artifact cannot depend on itself")
+	}
+	affected, err := s.Affected(projectID, downstream)
+	if err != nil {
+		return err
+	}
+	for _, item := range affected {
+		if item == upstream {
+			return fmt.Errorf("artifact dependency cycle detected")
+		}
+	}
+	row := models.ArtifactDependency{ProjectID: projectID, UpstreamKind: upstream.Kind, UpstreamID: upstream.ID, UpstreamVersion: strings.TrimSpace(upstreamVersion), DownstreamKind: downstream.Kind, DownstreamID: downstream.ID}
+	return s.db.Where(models.ArtifactDependency{ProjectID: projectID, UpstreamKind: upstream.Kind, UpstreamID: upstream.ID, DownstreamKind: downstream.Kind, DownstreamID: downstream.ID}).Assign(map[string]any{"upstream_version": row.UpstreamVersion}).FirstOrCreate(&row).Error
+}
+
+func (s *ArtifactDependencyService) Affected(projectID uint, source ArtifactRef) ([]ArtifactRef, error) {
+	if s == nil || !s.enabled {
+		return []ArtifactRef{}, nil
+	}
+	if !validArtifactRef(source) {
+		return nil, fmt.Errorf("artifact reference is required")
+	}
+	queue := []ArtifactRef{source}
+	seen := map[ArtifactRef]bool{source: true}
+	result := []ArtifactRef{}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		var rows []models.ArtifactDependency
+		if err := s.db.Where("project_id = ? AND upstream_kind = ? AND upstream_id = ?", projectID, current.Kind, current.ID).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			next := ArtifactRef{Kind: row.DownstreamKind, ID: row.DownstreamID}
+			if seen[next] {
+				continue
+			}
+			seen[next] = true
+			result = append(result, next)
+			queue = append(queue, next)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Kind == result[j].Kind {
+			return result[i].ID < result[j].ID
+		}
+		return result[i].Kind < result[j].Kind
+	})
+	return result, nil
+}
+
+// RecordInvalidation writes audit events only; callers still perform domain-specific stale updates transactionally.
+func (s *ArtifactDependencyService) RecordInvalidation(tx *gorm.DB, projectID uint, source ArtifactRef, reason string) ([]ArtifactRef, error) {
+	if s == nil || !s.enabled {
+		return []ArtifactRef{}, nil
+	}
+	affected, err := s.Affected(projectID, source)
+	if err != nil {
+		return nil, err
+	}
+	if tx == nil {
+		tx = s.db
+	}
+	for _, item := range affected {
+		event := models.ArtifactInvalidationEvent{ProjectID: projectID, ArtifactKind: item.Kind, ArtifactID: item.ID, Reason: strings.TrimSpace(reason), SourceKind: source.Kind, SourceID: source.ID}
+		if err := tx.Create(&event).Error; err != nil {
+			return nil, err
+		}
+	}
+	return affected, nil
+}

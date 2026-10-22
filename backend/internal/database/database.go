@@ -87,6 +87,8 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.Skill{},
 		&models.SkillPackageInstall{},
 		&models.AgentToolAuditLog{},
+		&models.ArtifactDependency{},
+		&models.ArtifactInvalidationEvent{},
 		&models.ProjectSkillConfig{},
 		&models.SkillAuditLog{},
 		&models.Chapter{},
