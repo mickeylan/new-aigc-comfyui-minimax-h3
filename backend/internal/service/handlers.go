@@ -55,6 +55,7 @@ type Service struct {
 	ScreenTexts               *ScreenTextService               // 非对白功能文字层
 	MusicCues                 *MusicCueService                 // 配乐 Cue Sheet（Structured Caption 审核层）
 	MusicCandidates           *MusicCandidateService           // 配乐生成候选（仅审核/采用框架，不触发生成）
+	AgentTools                *ControlledAgentToolRegistry     // 默认关闭的受控领域工具注册表
 	Fonts                     *FontRegistry                    // 发行字体许可证与哈希白名单
 	SharedAssetReferences     *SharedAssetReferenceService     // 显式共享素材引用
 	AssetVariants             *AssetVariantService             // 视觉资产生成/上传变体
@@ -102,6 +103,14 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	screenTexts := NewScreenTextService(db)
 	musicCues := NewMusicCueService(db, textProviderFact, skills)
 	musicCandidates := NewMusicCandidateService(db)
+	agentTools := NewControlledAgentToolRegistry(db, cfg.Extensibility.EnableAgentTools)
+	capabilityDir := ""
+	if cfg.Extensibility.EnableCapabilityManifests {
+		capabilityDir = cfg.Extensibility.CapabilityManifestsDir
+	}
+	if err := RegisterDefaultReadOnlyAgentTools(agentTools, db, capabilityDir); err != nil {
+		log.Printf("[agent-tools] register failed: %v", err)
+	}
 	fonts := NewFontRegistry(cfg.Storage.DataDir)
 	sharedAssetReferences := NewSharedAssetReferenceService(db, upload)
 	characterMotionReferences := NewCharacterMotionReferenceService(db, upload)
@@ -141,7 +150,7 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 		Novel: novel, NovelAnalysis: novelAnalysis, Adaptations: adaptations, BatchPlanning: batchPlanning,
 		TextProviderFact: textProviderFact, CharacterProfiles: charProfiles, CharacterLooks: charLooks,
 		Skills: skills, Shots: shots, PromptWorkshop: promptWorkshop, QwenImagePromptPrograms: qwenImagePromptPrograms, StylePresets: stylePresets,
-		Continuity: continuity, AudioLayers: audioLayers, ScreenTexts: screenTexts, MusicCues: musicCues, MusicCandidates: musicCandidates, Fonts: fonts, SharedAssetReferences: sharedAssetReferences,
+		Continuity: continuity, AudioLayers: audioLayers, ScreenTexts: screenTexts, MusicCues: musicCues, MusicCandidates: musicCandidates, AgentTools: agentTools, Fonts: fonts, SharedAssetReferences: sharedAssetReferences,
 		CharacterMotionReferences: characterMotionReferences,
 		AssetVariants:             assetVariants, AssetReconciliation: assetReconciliation, ScriptRevisions: scriptRevisions, GeneratedMedia: generatedMedia,
 		CombatReferences: combatReferences,

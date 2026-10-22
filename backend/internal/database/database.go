@@ -86,6 +86,7 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.SceneAudioCandidate{},
 		&models.Skill{},
 		&models.SkillPackageInstall{},
+		&models.AgentToolAuditLog{},
 		&models.ProjectSkillConfig{},
 		&models.SkillAuditLog{},
 		&models.Chapter{},

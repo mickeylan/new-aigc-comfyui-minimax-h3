@@ -38,6 +38,9 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.GET("/api/templates", svc.HandleListTemplates)
 	r.POST("/api/templates/reload", svc.HandleReloadTemplates)
 	r.GET("/api/model-catalog", svc.HandleListModelCatalog)
+	// 受控Agent工具默认关闭；仅注册领域API，禁止Shell、任意文件、原始数据库和不受限网络。
+	r.GET("/api/agent-tools", svc.HandleListAgentTools)
+	r.POST("/api/agent-tools/:code/invoke", svc.HandleInvokeAgentTool)
 
 	// 项目无关的生产试验场
 	r.GET("/api/playground/runs", svc.HandleListPlaygroundRuns)

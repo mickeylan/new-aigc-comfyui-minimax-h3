@@ -619,6 +619,19 @@ const (
 	SkillStageMusicCueSheet     = "music_cue_sheet"            // 配乐 Cue Sheet：基于 Episode/Scene/Shot/Dialogue 时间轴生成 Structured Caption
 )
 
+// AgentToolAuditLog records invocations through the constrained domain-tool registry.
+type AgentToolAuditLog struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	ProjectID  *uint     `gorm:"column:project_id;index" json:"project_id,omitempty"`
+	ToolCode   string    `gorm:"column:tool_code;size:120;index" json:"tool_code"`
+	Permission string    `gorm:"size:40" json:"permission"`
+	InputHash  string    `gorm:"column:input_hash;size:64" json:"input_hash"`
+	Success    bool      `gorm:"index" json:"success"`
+	Error      string    `gorm:"type:text" json:"error,omitempty"`
+	DurationMS int64     `gorm:"column:duration_ms" json:"duration_ms"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 // SkillPackageInstall records a validated file package imported into an immutable Skill version.
 // Runtime selection, enablement and auditing continue to use Skill/ProjectSkillConfig/SkillAuditLog.
 type SkillPackageInstall struct {
