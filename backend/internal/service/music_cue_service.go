@@ -464,6 +464,56 @@ func renderMusicCaption(raw string) (string, error) {
 	return "### Global Metadata\n\n" + strings.TrimSpace(caption.GlobalMetadata) + "\n\n### Vocal Details\n\n" + strings.TrimSpace(caption.VocalDetails) + "\n\n### Arrangement\n\n" + strings.TrimSpace(caption.Arrangement), nil
 }
 
+type MusicCueSubmissionItem struct {
+	ID                uint    `json:"id"`
+	SceneID           *uint   `json:"scene_id,omitempty"`
+	ShotID            *uint   `json:"shot_id,omitempty"`
+	StartTime         float64 `json:"start_time"`
+	EndTime           float64 `json:"end_time"`
+	Caption           string  `json:"caption"`
+	SourceVersionHash string  `json:"source_version_hash"`
+}
+type MusicCueSubmissionManifest struct {
+	ProjectID uint                     `json:"project_id"`
+	EpisodeN  int                      `json:"episode_n"`
+	Ready     bool                     `json:"ready"`
+	Items     []MusicCueSubmissionItem `json:"items"`
+	Note      string                   `json:"note"`
+}
+
+func (s *MusicCueService) SubmissionManifest(projectID uint, episodeN int) (MusicCueSubmissionManifest, error) {
+	manifest := MusicCueSubmissionManifest{ProjectID: projectID, EpisodeN: episodeN, Items: []MusicCueSubmissionItem{}, Note: "审核清单；本阶段不创建Music 3生成任务或AudioLayer"}
+	preflight, err := s.Preflight(projectID, episodeN)
+	if err != nil {
+		return manifest, err
+	}
+	if !preflight.Ready {
+		return manifest, fmt.Errorf("配乐Cue Sheet尚未通过权威预检")
+	}
+	cues, err := s.List(projectID, episodeN)
+	if err != nil {
+		return manifest, err
+	}
+	for _, cue := range cues {
+		if !cue.Enabled {
+			continue
+		}
+		if cue.ReviewStatus != "approved" || cue.ReviewedAt == nil {
+			return manifest, fmt.Errorf("Cue #%d尚未完成人工审核", cue.ID)
+		}
+		caption, err := renderMusicCaption(cue.CaptionJSON)
+		if err != nil {
+			return manifest, fmt.Errorf("Cue #%d: %w", cue.ID, err)
+		}
+		manifest.Items = append(manifest.Items, MusicCueSubmissionItem{cue.ID, cue.SceneID, cue.ShotID, cue.StartTime, cue.EndTime, caption, cue.SourceVersionHash})
+	}
+	if len(manifest.Items) == 0 {
+		return manifest, fmt.Errorf("没有可提交的已审核配乐Cue")
+	}
+	manifest.Ready = true
+	return manifest, nil
+}
+
 func (s *MusicCueService) CaptionPreview(projectID, id uint) (map[string]any, error) {
 	var cue models.MusicCueSheet
 	if err := s.db.Where("id = ? AND project_id = ?", id, projectID).First(&cue).Error; err != nil {
@@ -870,6 +920,24 @@ func (s *Service) HandleDraftMusicCueSheets(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"cues": cues})
+}
+
+func (s *Service) HandleMusicCueSubmissionManifest(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	episodeN, err := strconv.Atoi(c.Query("episode_n"))
+	if err != nil || episodeN < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "episode_n 必须大于 0"})
+		return
+	}
+	manifest, err := s.MusicCues.SubmissionManifest(p.ID, episodeN)
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, manifest)
 }
 
 func (s *Service) HandleMusicCueCaptionPreview(c *gin.Context) {

@@ -228,6 +228,38 @@ func TestMusicCueSheetReviewGateRequiresStructuredCaption(t *testing.T) {
 	}
 }
 
+func TestMusicSubmissionManifestRequiresApprovedCurrentCues(t *testing.T) {
+	db := newMusicCueTestDB(t)
+	svc := NewMusicCueService(db)
+	p := models.Project{Title: "p"}
+	db.Create(&p)
+	db.Create(&models.Scene{ProjectID: p.ID, EpisodeN: 1, Duration: 5})
+	caption := `{"global_metadata":"score","vocal_details":"Fully instrumental","arrangement":"Intro: build. Outro: stop."}`
+	cue, err := svc.Create(p.ID, MusicCueSheetInput{EpisodeN: 1, Kind: "scene", StartTime: 0, EndTime: 5, CaptionJSON: caption})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SubmissionManifest(p.ID, 1); err == nil {
+		t.Fatal("draft cue produced submission manifest")
+	}
+	if _, err := svc.Review(p.ID, cue.ID, true, "reviewed"); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := svc.SubmissionManifest(p.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !manifest.Ready || len(manifest.Items) != 1 || !strings.Contains(manifest.Items[0].Caption, "### Arrangement") {
+		t.Fatalf("unexpected manifest: %+v", manifest)
+	}
+	if err := db.Model(cue).Update("caption_json", `{"global_metadata":"changed"}`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SubmissionManifest(p.ID, 1); err == nil {
+		t.Fatal("stale cue produced submission manifest")
+	}
+}
+
 func TestRenderMusicCaptionUsesExactlyThreeHeadings(t *testing.T) {
 	rendered, err := renderMusicCaption(`{"global_metadata":"score","vocal_details":"Fully instrumental","arrangement":"Intro: build. Outro: stop."}`)
 	if err != nil {
