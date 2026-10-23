@@ -14,11 +14,18 @@ import (
 )
 
 type ProductionCheckFinding struct {
-	Severity   string `json:"severity"`
-	Code       string `json:"code"`
-	EntityType string `json:"entity_type"`
-	EntityID   uint   `json:"entity_id"`
-	Message    string `json:"message"`
+	Severity       string        `json:"severity"`
+	Code           string        `json:"code"`
+	EntityType     string        `json:"entity_type"`
+	EntityID       uint          `json:"entity_id"`
+	Message        string        `json:"message"`
+	Action         string        `json:"action,omitempty"`
+	Recommendation string        `json:"recommendation,omitempty"`
+	Affected       []ArtifactRef `json:"affected,omitempty"`
+}
+
+func productionFinding(severity, code, entityType string, entityID uint, message, action, recommendation string) ProductionCheckFinding {
+	return ProductionCheckFinding{Severity: severity, Code: code, EntityType: entityType, EntityID: entityID, Message: message, Action: action, Recommendation: recommendation}
 }
 
 type ProductionCheckResult struct {
@@ -59,29 +66,29 @@ func (s *ProductionCheckService) Check(projectID uint, episodeN int) (Production
 		return result, err
 	}
 	if len(scenes) == 0 {
-		result.Findings = append(result.Findings, ProductionCheckFinding{"error", "episode_has_no_scenes", "episode", 0, "当前范围没有可生产的场景"})
+		result.Findings = append(result.Findings, productionFinding("error", "episode_has_no_scenes", "episode", 0, "当前范围没有可生产的场景", "episode", "先生成或导入本集剧本场景"))
 	}
 	for _, scene := range scenes {
 		if strings.TrimSpace(scene.VideoFile) == "" && strings.TrimSpace(scene.VideoInputFile) == "" {
-			result.Findings = append(result.Findings, ProductionCheckFinding{"error", "scene_video_missing", "scene", scene.ID, "场景尚无已完成视频"})
+			result.Findings = append(result.Findings, productionFinding("error", "scene_video_missing", "scene", scene.ID, "场景尚无已完成视频", "scene", "定位场景并完成视频生成与审核"))
 		}
 		if strings.TrimSpace(scene.ImageFile) == "" {
-			result.Findings = append(result.Findings, ProductionCheckFinding{"warning", "scene_storyboard_missing", "scene", scene.ID, "场景尚无分镜图；仅T2V流程可忽略"})
+			result.Findings = append(result.Findings, productionFinding("warning", "scene_storyboard_missing", "scene", scene.ID, "场景尚无分镜图；仅T2V流程可忽略", "scene", "确认使用T2V，或为场景生成并审核分镜图"))
 		}
 		if scene.PromptStale {
-			result.Findings = append(result.Findings, ProductionCheckFinding{"error", "scene_prompt_stale", "scene", scene.ID, "视频提示词已过期，正式生成前需重新生成或确认"})
+			result.Findings = append(result.Findings, productionFinding("error", "scene_prompt_stale", "scene", scene.ID, "视频提示词已过期，正式生成前需重新生成或确认", "scene", "重新准备并人工确认视频提示词"))
 		}
 		if strings.TrimSpace(scene.Error) != "" {
-			result.Findings = append(result.Findings, ProductionCheckFinding{"error", "scene_error", "scene", scene.ID, "场景存在未处理的生产错误"})
+			result.Findings = append(result.Findings, productionFinding("error", "scene_error", "scene", scene.ID, "场景存在未处理的生产错误", "scene", "定位场景查看错误并重试对应步骤"))
 		}
 		if scene.Duration < 3 || scene.Duration > 15 {
-			result.Findings = append(result.Findings, ProductionCheckFinding{"warning", "scene_duration_out_of_range", "scene", scene.ID, "场景时长不在 MiniMax H3 的 3–15 秒范围"})
+			result.Findings = append(result.Findings, productionFinding("warning", "scene_duration_out_of_range", "scene", scene.ID, "场景时长不在 MiniMax H3 的 3–15 秒范围", "scene", "调整Scene或拆分Shot，使单段保持3–15秒"))
 		}
 		var continuity models.SceneContinuity
 		if q := s.db.Where("scene_id = ?", scene.ID).Limit(1).Find(&continuity); q.Error != nil {
 			return result, q.Error
 		} else if q.RowsAffected > 0 && continuity.Mode != models.ContinuityModeIndependent && (continuity.SelectedFrameID == nil || continuity.Status != "ready") {
-			result.Findings = append(result.Findings, ProductionCheckFinding{"error", "continuity_not_ready", "scene", scene.ID, "连续性模式尚未绑定有效的人工确认帧"})
+			result.Findings = append(result.Findings, productionFinding("error", "continuity_not_ready", "scene", scene.ID, "连续性模式尚未绑定有效的人工确认帧", "scene", "打开连续性设置并确认来源尾帧"))
 		}
 	}
 	dialogueQuery := s.db.Model(&models.Dialogue{}).Joins("JOIN scenes ON scenes.id = dialogues.scene_id").Where("dialogues.project_id = ? AND scenes.project_id = ?", projectID, projectID)
@@ -94,7 +101,7 @@ func (s *ProductionCheckService) Check(projectID uint, episodeN int) (Production
 	}
 	for _, dialogue := range dialogues {
 		if dialogue.AudioStale {
-			result.Findings = append(result.Findings, ProductionCheckFinding{"warning", "dialogue_audio_stale", "dialogue", dialogue.ID, "对白音频已过期，需要重新生成并审核候选"})
+			result.Findings = append(result.Findings, productionFinding("warning", "dialogue_audio_stale", "dialogue", dialogue.ID, "对白音频已过期，需要重新生成并审核候选", "voice", "进入声音工作台重新生成并审核该句配音"))
 		}
 	}
 	cueQuery := s.db.Where("project_id = ?", projectID)
@@ -105,12 +112,29 @@ func (s *ProductionCheckService) Check(projectID uint, episodeN int) (Production
 	if err := cueQuery.Find(&cues).Error; err == nil {
 		for _, cue := range cues {
 			if cue.Stale || cue.ReviewStatus != "approved" {
-				result.Findings = append(result.Findings, ProductionCheckFinding{"warning", "music_cue_not_approved", "music_cue", cue.ID, "配乐 Cue 未处于当前已审核状态"})
+				result.Findings = append(result.Findings, productionFinding("warning", "music_cue_not_approved", "music_cue", cue.ID, "配乐 Cue 未处于当前已审核状态", "music", "定位配乐Cue，完成编辑和人工审核"))
 			}
 		}
 	} else if !s.db.Migrator().HasTable(&models.MusicCueSheet{}) { /* optional subsystem */
 	} else {
 		return result, err
+	}
+	graph := NewArtifactDependencyService(s.db, s.db.Migrator().HasTable(&models.ArtifactDependency{}))
+	for i := range result.Findings {
+		var ref ArtifactRef
+		switch result.Findings[i].EntityType {
+		case "dialogue":
+			ref = ArtifactRef{Kind: ArtifactKindDialogue, ID: result.Findings[i].EntityID}
+		case "music_cue":
+			ref = ArtifactRef{Kind: ArtifactKindMusicCue, ID: result.Findings[i].EntityID}
+		}
+		if ref.ID > 0 {
+			affected, err := graph.Affected(projectID, ref)
+			if err != nil {
+				return result, err
+			}
+			result.Findings[i].Affected = affected
+		}
 	}
 	sort.SliceStable(result.Findings, func(i, j int) bool {
 		if result.Findings[i].EntityType == result.Findings[j].EntityType {

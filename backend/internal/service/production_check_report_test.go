@@ -28,6 +28,9 @@ func TestProductionCheckReportsAreSanitizedVersionedAndReviewable(t *testing.T) 
 	if second.Ready || second.FindingCount < 2 {
 		t.Fatalf("unexpected second report: %+v", second)
 	}
+	if second.Findings[0].Action == "" || second.Findings[0].Recommendation == "" {
+		t.Fatalf("finding lacks remediation metadata: %+v", second.Findings[0])
+	}
 	rows, err := svc.ListReports(project.ID, 1)
 	if err != nil {
 		t.Fatal(err)

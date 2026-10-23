@@ -42,6 +42,8 @@ test('剪辑台提供可持久审核的AI制片检查报告',()=>{
   assert.match(source,/AI制片检查报告/)
   assert.match(source,/createProductionCheck/)
   assert.match(source,/reviewProductionCheck/)
+  assert.match(source,/locateProductionFinding/)
+  assert.match(source,/影响.*下游产物/)
   assert.match(source,/报告不包含正文、提示词或文件路径/)
 })
 
