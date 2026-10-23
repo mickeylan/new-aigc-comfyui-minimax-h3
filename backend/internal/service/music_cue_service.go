@@ -578,8 +578,18 @@ func validateMusicCaptionJSON(raw string) error {
 	if !strings.Contains(lower, "instrumental") || strings.Contains(lower, "not instrumental") {
 		return fmt.Errorf("短剧配乐必须在 vocal_details 中明确为纯器乐")
 	}
-	if regexp.MustCompile(`(?i)\b(lead vocal|spoken voice|narration|singing|chanting|humming|whispering)\b`).MatchString(lower) && !regexp.MustCompile(`(?i)\b(no|without|exclude|avoids?)\b`).MatchString(lower) {
-		return fmt.Errorf("短剧配乐不得要求人声、对白或吟唱")
+	forbidden := []string{"lead vocal", "spoken voice", "narration", "singing", "chanting", "choir", "humming", "whispering", "vocal-like texture"}
+	for _, term := range forbidden {
+		if index := strings.Index(lower, term); index >= 0 {
+			start := index - 80
+			if start < 0 {
+				start = 0
+			}
+			prefix := lower[start:index]
+			if !regexp.MustCompile(`(?i)(?:^|[,;])\s*(?:no|without|exclude|avoid(?:s|ing)?|forbid(?:den)?|never)\b`).MatchString(prefix) {
+				return fmt.Errorf("短剧配乐不得要求人声、对白、合唱或吟唱: %s", term)
+			}
+		}
 	}
 	if !regexp.MustCompile(`(?i)(intro|opening|section|development|climax|outro|ending|\b\d+(?:\.\d+)?\s*(?:s|sec|seconds))`).MatchString(arrangement) {
 		return fmt.Errorf("arrangement 必须包含可读的分段或时间线")

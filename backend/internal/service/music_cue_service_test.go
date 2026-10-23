@@ -330,6 +330,8 @@ func TestMusicCaptionStrictContractRejectsUnsafeShapes(t *testing.T) {
 		`{"global_metadata":"x","vocal_details":"Fully instrumental","arrangement":"Intro: x","lyrics_input":"[Intro]"}`,
 		`{"global_metadata":"x","vocal_details":"not instrumental","arrangement":"Intro: x"}`,
 		`{"global_metadata":"x","vocal_details":"lead vocal performance","arrangement":"Intro: x"}`,
+		`{"global_metadata":"x","vocal_details":"Fully instrumental, lead vocal, no humming","arrangement":"Intro: x"}`,
+		`{"global_metadata":"x","vocal_details":"Fully instrumental choir texture","arrangement":"Intro: x"}`,
 		`{"global_metadata":"x","vocal_details":"Fully instrumental","arrangement":"static texture"}`,
 	}
 	for _, raw := range invalid {

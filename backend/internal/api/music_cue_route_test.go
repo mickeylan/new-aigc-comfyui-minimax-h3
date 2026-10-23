@@ -108,6 +108,45 @@ func TestMusicCuePreflightRouteAndBatchConflict(t *testing.T) {
 	}
 }
 
+func TestMusicCueSubmissionManifestRouteIsReviewGatedAndProjectScoped(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.Shot{}, &models.Dialogue{}, &models.MusicCueSheet{}); err != nil {
+		t.Fatal(err)
+	}
+	p1, p2 := models.Project{Title: "one"}, models.Project{Title: "two"}
+	db.Create(&p1)
+	db.Create(&p2)
+	db.Create(&models.Scene{ProjectID: p1.ID, EpisodeN: 1, Duration: 5})
+	svc := &service.Service{DB: db, MusicCues: service.NewMusicCueService(db)}
+	router := NewRouter(&config.Config{}, svc)
+	caption := `{"global_metadata":"score","vocal_details":"Fully instrumental","arrangement":"Intro: build. Outro: stop."}`
+	cue, err := svc.MusicCues.Create(p1.ID, service.MusicCueSheetInput{EpisodeN: 1, Kind: "scene", StartTime: 0, EndTime: 5, CaptionJSON: caption})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(projectID uint) *httptest.ResponseRecorder {
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/projects/%d/music-cue-sheets/submission-manifest?episode_n=1", projectID), nil))
+		return resp
+	}
+	if resp := request(p1.ID); resp.Code != http.StatusConflict {
+		t.Fatalf("draft manifest status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if _, err := svc.MusicCues.Review(p1.ID, cue.ID, true, "reviewed"); err != nil {
+		t.Fatal(err)
+	}
+	resp := request(p1.ID)
+	if resp.Code != http.StatusOK || !bytes.Contains(resp.Body.Bytes(), []byte(`"ready":true`)) || !bytes.Contains(resp.Body.Bytes(), []byte("### Global Metadata")) {
+		t.Fatalf("manifest status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := request(p2.ID); resp.Code != http.StatusConflict {
+		t.Fatalf("cross-project manifest status=%d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestMusicCueSheetBatchApprove(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
