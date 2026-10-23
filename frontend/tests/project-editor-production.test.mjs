@@ -39,6 +39,7 @@ test('剪辑台先收集用户设想再生成并审核Music 3提示词', () => {
   assert.match(source, /createManualMusicCue/)
   assert.match(source, /batchApproveMusicCues/)
   assert.match(source, /musicCueIssues/)
+  assert.match(source, /musicCuePreflight/)
   assert.match(source, /审核通过也不会在本阶段直接生成音乐/)
   assert.match(source, /尚未配置真实Music 3运行模板，因此这里不会提供生成按钮/)
   assert.match(source, /我已完整试听该候选/)

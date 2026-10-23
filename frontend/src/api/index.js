@@ -162,6 +162,7 @@ export const api = {
   updateAudioLayer: (id, aid, data) => http.put(`/projects/${id}/audio-layers/${aid}`, data),
   deleteAudioLayer: (id, aid) => http.delete(`/projects/${id}/audio-layers/${aid}`),
   musicCues: (id, episodeN) => http.get(`/projects/${id}/music-cue-sheets`, { params: { episode_n: episodeN } }),
+  musicCuePreflight: (id, episodeN) => http.get(`/projects/${id}/music-cue-sheets/preflight`, { params: { episode_n: episodeN } }),
   draftMusicCues: (id, episodeN, requirements) => http.post(`/projects/${id}/music-cue-sheets/draft`, { episode_n: episodeN, requirements }, { timeout: 300000 }),
   createMusicCue: (id, data) => http.post(`/projects/${id}/music-cue-sheets`, data),
   updateMusicCue: (id, cid, data) => http.put(`/projects/${id}/music-cue-sheets/${cid}`, data),

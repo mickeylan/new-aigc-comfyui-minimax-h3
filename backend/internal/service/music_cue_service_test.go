@@ -245,6 +245,37 @@ func TestMusicCaptionStrictContractRejectsUnsafeShapes(t *testing.T) {
 	}
 }
 
+func TestMusicCuePreflightReportsOverlapAndInvalidCaption(t *testing.T) {
+	db := newMusicCueTestDB(t)
+	svc := NewMusicCueService(db)
+	p := models.Project{Title: "p"}
+	db.Create(&p)
+	db.Create(&models.Scene{ProjectID: p.ID, EpisodeN: 1, Generation: 1, Order: 1, Duration: 10})
+	valid := `{"global_metadata":"score","vocal_details":"Fully instrumental","arrangement":"Intro: build. Outro: stop."}`
+	inputs := []MusicCueSheetInput{{EpisodeN: 1, Kind: "scene", StartTime: 0, EndTime: 6, CaptionJSON: valid}, {EpisodeN: 1, Kind: "action", StartTime: 5, EndTime: 12, CaptionJSON: "{}"}}
+	for _, input := range inputs {
+		if _, err := svc.Create(p.ID, input); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := svc.Preflight(p.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Ready || result.TotalDuration != 10 {
+		t.Fatalf("unexpected preflight: %+v", result)
+	}
+	codes := map[string]bool{}
+	for _, issue := range result.Issues {
+		codes[issue.Code] = true
+	}
+	for _, code := range []string{"overlap", "timeline", "caption", "review"} {
+		if !codes[code] {
+			t.Fatalf("missing %s: %+v", code, result.Issues)
+		}
+	}
+}
+
 func TestMusicCueApprovalRejectsOutOfEpisodeRange(t *testing.T) {
 	db := newMusicCueTestDB(t)
 	svc := NewMusicCueService(db)

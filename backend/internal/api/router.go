@@ -188,6 +188,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.DELETE("/api/projects/:id/screen-text-cues/:cid", svc.HandleDeleteScreenTextCue)
 	// 配乐 Cue Sheet：先经 music-caption-rewriter 生成并人工审核；本阶段不创建 ComfyUI 音乐任务。
 	r.GET("/api/projects/:id/music-cue-sheets", svc.HandleListMusicCueSheets)
+	r.GET("/api/projects/:id/music-cue-sheets/preflight", svc.HandleMusicCuePreflight)
 	r.POST("/api/projects/:id/music-cue-sheets/draft", svc.HandleDraftMusicCueSheets)
 	r.POST("/api/projects/:id/music-cue-sheets", svc.HandleCreateMusicCueSheet)
 	r.PUT("/api/projects/:id/music-cue-sheets/:cid", svc.HandleUpdateMusicCueSheet)

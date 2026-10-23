@@ -324,6 +324,62 @@ func (s *MusicCueService) MarkEpisodeStale(projectID uint, episodeN int, reason 
 	return s.markCuesAndCandidatesStale("project_id = ? AND episode_n = ? AND stale = ?", []any{projectID, episodeN, false}, projectID, reason)
 }
 
+type MusicCuePreflightIssue struct {
+	Severity     string `json:"severity"`
+	Code         string `json:"code"`
+	CueID        uint   `json:"cue_id,omitempty"`
+	RelatedCueID uint   `json:"related_cue_id,omitempty"`
+	Message      string `json:"message"`
+}
+type MusicCuePreflightResult struct {
+	EpisodeN      int                      `json:"episode_n"`
+	TotalDuration float64                  `json:"total_duration"`
+	Ready         bool                     `json:"ready"`
+	Issues        []MusicCuePreflightIssue `json:"issues"`
+}
+
+func (s *MusicCueService) Preflight(projectID uint, episodeN int) (MusicCuePreflightResult, error) {
+	result := MusicCuePreflightResult{EpisodeN: episodeN, Ready: true, Issues: []MusicCuePreflightIssue{}}
+	if err := s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ?", projectID, episodeN).Select("COALESCE(SUM(duration),0)").Scan(&result.TotalDuration).Error; err != nil {
+		return result, err
+	}
+	cues, err := s.List(projectID, episodeN)
+	if err != nil {
+		return result, err
+	}
+	for i := range cues {
+		cue := &cues[i]
+		if !cue.Enabled {
+			continue
+		}
+		if cue.Stale {
+			result.Issues = append(result.Issues, MusicCuePreflightIssue{"error", "stale", cue.ID, 0, "Cue已过期"})
+		}
+		if err := s.validateCueTimeline(cue); err != nil {
+			result.Issues = append(result.Issues, MusicCuePreflightIssue{"error", "timeline", cue.ID, 0, err.Error()})
+		}
+		if err := validateMusicCaptionJSON(cue.CaptionJSON); err != nil {
+			result.Issues = append(result.Issues, MusicCuePreflightIssue{"error", "caption", cue.ID, 0, err.Error()})
+		}
+		if cue.ReviewStatus != "approved" {
+			result.Issues = append(result.Issues, MusicCuePreflightIssue{"warning", "review", cue.ID, 0, "Cue尚未审核通过"})
+		}
+		for j := i + 1; j < len(cues); j++ {
+			other := cues[j]
+			if other.Enabled && cue.StartTime < other.EndTime && cue.EndTime > other.StartTime {
+				result.Issues = append(result.Issues, MusicCuePreflightIssue{"warning", "overlap", cue.ID, other.ID, "Cue时间范围重叠，请人工确认"})
+			}
+		}
+	}
+	for _, issue := range result.Issues {
+		if issue.Severity == "error" {
+			result.Ready = false
+			break
+		}
+	}
+	return result, nil
+}
+
 // MarkApproved validates every cue before atomically approving the Episode.
 func (s *MusicCueService) MarkApproved(projectID uint, episodeN int, reviewReason string) error {
 	var cues []models.MusicCueSheet
@@ -774,6 +830,24 @@ func (s *Service) HandleReviewMusicCueSheet(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, cue)
+}
+
+func (s *Service) HandleMusicCuePreflight(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	episodeN, err := strconv.Atoi(c.Query("episode_n"))
+	if err != nil || episodeN < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "episode_n 必须大于 0"})
+		return
+	}
+	result, err := s.MusicCues.Preflight(p.ID, episodeN)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 func (s *Service) HandleBatchApproveMusicCueSheets(c *gin.Context) {
