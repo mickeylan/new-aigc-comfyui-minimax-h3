@@ -163,6 +163,11 @@ func (s *CharacterLookService) DesignOutfit(projectID, characterID uint, req Out
 			if err := tx.Create(&models.CharacterOutfitLook{OutfitID: outfit.ID, LookID: look.ID, Order: i}).Error; err != nil {
 				return err
 			}
+			if s.dependencies != nil {
+				if err := s.dependencies.LinkTx(tx, projectID, ArtifactRef{Kind: ArtifactKindCharacterLook, ID: look.ID}, fmt.Sprint(look.Version), ArtifactRef{Kind: ArtifactKindCharacterOutfit, ID: outfit.ID}); err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	})
@@ -227,6 +232,11 @@ func (s *CharacterLookService) SaveOutfit(projectID, characterID, outfitID uint,
 			if err := tx.Where("outfit_id = ?", outfit.ID).Delete(&models.CharacterOutfitLook{}).Error; err != nil {
 				return err
 			}
+			if s.dependencies != nil {
+				if err := s.dependencies.DeleteRelationsTx(tx, projectID, ArtifactKindCharacterLook, ArtifactKindCharacterOutfit, outfit.ID); err != nil {
+					return err
+				}
+			}
 		}
 		if req.IsDefault {
 			if err := tx.Model(&models.CharacterOutfit{}).Where("character_id = ? AND id <> ?", characterID, outfit.ID).Update("is_default", false).Error; err != nil {
@@ -236,6 +246,11 @@ func (s *CharacterLookService) SaveOutfit(projectID, characterID, outfitID uint,
 		for i, look := range looks {
 			if err := tx.Create(&models.CharacterOutfitLook{OutfitID: outfit.ID, LookID: look.ID, Order: i}).Error; err != nil {
 				return err
+			}
+			if s.dependencies != nil {
+				if err := s.dependencies.LinkTx(tx, projectID, ArtifactRef{Kind: ArtifactKindCharacterLook, ID: look.ID}, fmt.Sprint(look.Version), ArtifactRef{Kind: ArtifactKindCharacterOutfit, ID: outfit.ID}); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -303,6 +318,11 @@ func (s *CharacterLookService) DeleteOutfit(projectID, characterID, outfitID uin
 		}
 		if err := tx.Where("outfit_id = ?", outfitID).Delete(&models.CharacterOutfitLook{}).Error; err != nil {
 			return err
+		}
+		if s.dependencies != nil {
+			if err := s.dependencies.DeleteArtifactTx(tx, projectID, ArtifactRef{Kind: ArtifactKindCharacterOutfit, ID: outfitID}); err != nil {
+				return err
+			}
 		}
 		if err := tx.Where("outfit_id = ?", outfitID).Delete(&models.SceneCharacterOutfit{}).Error; err != nil {
 			return err

@@ -62,6 +62,19 @@ func (s *Service) HandleAffectedArtifacts(c *gin.Context) {
 	c.JSON(200, gin.H{"enabled": s.Cfg != nil && s.Cfg.Extensibility.EnableDependencyGraph, "items": items})
 }
 
+func (s *Service) HandleBackfillArtifactDependencies(c *gin.Context) {
+	projectID, ok := s.dependencyProjectID(c)
+	if !ok {
+		return
+	}
+	result, err := s.ArtifactDependencies.BackfillProject(projectID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
 func (s *Service) HandleListArtifactInvalidations(c *gin.Context) {
 	projectID, ok := s.dependencyProjectID(c)
 	if !ok {

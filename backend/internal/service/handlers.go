@@ -105,6 +105,7 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	screenTexts := NewScreenTextService(db)
 	artifactDependencies := NewArtifactDependencyService(db, cfg.Extensibility.EnableDependencyGraph)
 	continuity.dependencies = artifactDependencies
+	charLooks.dependencies = artifactDependencies
 	musicCues := NewMusicCueService(db, textProviderFact, skills, artifactDependencies)
 	musicCandidates := NewMusicCandidateService(db, artifactDependencies)
 	projects.musicCues = musicCues

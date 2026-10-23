@@ -41,6 +41,35 @@ func setupOutfitTestDB(t *testing.T) (*CharacterLookService, models.Project, mod
 	return NewCharacterLookService(db, nil), project, character
 }
 
+func TestSaveOutfitRegistersLookDependencies(t *testing.T) {
+	svc, project, character := setupOutfitTestDB(t)
+	if err := svc.db.AutoMigrate(&models.ArtifactDependency{}, &models.ArtifactInvalidationEvent{}); err != nil {
+		t.Fatal(err)
+	}
+	svc.dependencies = NewArtifactDependencyService(svc.db, true)
+	look := models.CharacterLook{ProjectID: project.ID, CharacterID: character.ID, Name: "衣服", Category: "clothing", Version: 2}
+	svc.db.Create(&look)
+	outfit, err := svc.SaveOutfit(project.ID, character.ID, 0, OutfitInput{Name: "套装", LookIDs: []uint{look.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var edge models.ArtifactDependency
+	if err := svc.db.Where("upstream_kind = ? AND upstream_id = ? AND downstream_kind = ? AND downstream_id = ?", ArtifactKindCharacterLook, look.ID, ArtifactKindCharacterOutfit, outfit.ID).First(&edge).Error; err != nil {
+		t.Fatal(err)
+	}
+	if edge.UpstreamVersion != "2" {
+		t.Fatalf("unexpected edge: %+v", edge)
+	}
+	if err := svc.DeleteOutfit(project.ID, character.ID, outfit.ID); err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	svc.db.Model(&models.ArtifactDependency{}).Where("downstream_kind = ? AND downstream_id = ?", ArtifactKindCharacterOutfit, outfit.ID).Count(&count)
+	if count != 0 {
+		t.Fatal("outfit delete left dependency edges")
+	}
+}
+
 func TestDesignOutfitRequiresCharacterPortraitBinding(t *testing.T) {
 	svc, project, character := setupOutfitTestDB(t)
 	svc.textProvider = &stubTextProvider{response: `{}`}

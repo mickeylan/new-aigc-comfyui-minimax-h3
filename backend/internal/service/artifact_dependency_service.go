@@ -18,12 +18,16 @@ const (
 	ArtifactKindContinuityFrame        = "continuity_frame"
 	ArtifactKindSceneImageCandidate    = "scene_image_candidate"
 	ArtifactKindSceneVideoCandidate    = "scene_video_candidate"
+	ArtifactKindCharacterLook          = "character_look"
+	ArtifactKindCharacterOutfit        = "character_outfit"
+	ArtifactKindSceneAudioCandidate    = "scene_audio_candidate"
 )
 
 var artifactKinds = map[string]bool{
 	ArtifactKindMusicCue: true, ArtifactKindMusicCandidate: true, ArtifactKindAudioLayer: true,
 	ArtifactKindDialogue: true, ArtifactKindDialogueAudioCandidate: true,
 	ArtifactKindContinuityFrame: true, ArtifactKindSceneImageCandidate: true, ArtifactKindSceneVideoCandidate: true,
+	ArtifactKindCharacterLook: true, ArtifactKindCharacterOutfit: true, ArtifactKindSceneAudioCandidate: true,
 }
 
 type ArtifactRef struct {
@@ -38,6 +42,16 @@ type ArtifactDependencyService struct {
 
 func NewArtifactDependencyService(db *gorm.DB, enabled bool) *ArtifactDependencyService {
 	return &ArtifactDependencyService{db: db, enabled: enabled}
+}
+
+func (s *ArtifactDependencyService) DeleteRelationsTx(tx *gorm.DB, projectID uint, upstreamKind, downstreamKind string, downstreamID uint) error {
+	if s == nil || !s.enabled {
+		return nil
+	}
+	if tx == nil {
+		tx = s.db
+	}
+	return tx.Where("project_id = ? AND upstream_kind = ? AND downstream_kind = ? AND downstream_id = ?", projectID, upstreamKind, downstreamKind, downstreamID).Delete(&models.ArtifactDependency{}).Error
 }
 
 func validArtifactRef(ref ArtifactRef) bool { return artifactKinds[ref.Kind] && ref.ID > 0 }

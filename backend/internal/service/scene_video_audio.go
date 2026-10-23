@@ -601,7 +601,20 @@ func (s *ProjectService) CreateSceneAudioCandidate(sc *models.Scene) (*models.Sc
 		if err := tx.Model(&models.SceneAudioCandidate{}).Where("project_id = ? AND scene_id = ? AND source_hash <> ?", sc.ProjectID, sc.ID, sourceHash).Updates(map[string]any{"stale": true, "stale_reason": "Dialogue或候选来源已变化", "is_current": false}).Error; err != nil {
 			return err
 		}
-		return tx.Create(&candidate).Error
+		if err := tx.Create(&candidate).Error; err != nil {
+			return err
+		}
+		if s.artifactDependencies != nil {
+			for _, source := range snapshot.Sources {
+				if source.CandidateID == 0 {
+					continue
+				}
+				if err := s.artifactDependencies.LinkTx(tx, sc.ProjectID, ArtifactRef{Kind: ArtifactKindDialogueAudioCandidate, ID: source.CandidateID}, source.InputHash, ArtifactRef{Kind: ArtifactKindSceneAudioCandidate, ID: candidate.ID}); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err

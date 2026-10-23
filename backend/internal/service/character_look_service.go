@@ -23,6 +23,7 @@ type CharacterLookService struct {
 	tasks        *TaskService
 	remote       *RemoteExec
 	upload       *UploadManager
+	dependencies *ArtifactDependencyService
 }
 
 // ComfyConfig holds ComfyUI settings
@@ -279,7 +280,16 @@ func (s *CharacterLookService) UpdateLook(id uint, req models.CharacterLook) (*m
 		}
 	}
 
-	if err := s.db.Model(&look).Updates(updates).Error; err != nil {
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&look).Updates(updates).Error; err != nil {
+			return err
+		}
+		if len(updates) > 0 && s.dependencies != nil {
+			_, err := s.dependencies.RecordInvalidation(tx, look.ProjectID, ArtifactRef{Kind: ArtifactKindCharacterLook, ID: look.ID}, "角色造型资产已修改")
+			return err
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 
@@ -297,13 +307,27 @@ func (s *CharacterLookService) DeleteLook(id uint) error {
 		if err := tx.Where("project_id = ? AND entity_type = ? AND entity_id = ?", look.ProjectID, VariantCharacterLook, look.ID).Delete(&models.AssetVariant{}).Error; err != nil {
 			return err
 		}
-		// 删除造型
+		if tx.Migrator().HasTable(&models.CharacterOutfitLook{}) {
+			if err := tx.Where("look_id = ?", id).Delete(&models.CharacterOutfitLook{}).Error; err != nil {
+				return err
+			}
+		}
+		if s.dependencies != nil {
+			if err := s.dependencies.DeleteArtifactTx(tx, look.ProjectID, ArtifactRef{Kind: ArtifactKindCharacterLook, ID: look.ID}); err != nil {
+				return err
+			}
+		}
 		if err := tx.Delete(&look).Error; err != nil {
 			return err
 		}
-		// 清理关联
-		tx.Where("look_id = ?", id).Delete(&models.SceneCharacterLook{})
-		tx.Where("look_id = ?", id).Delete(&models.ShotCharacterLook{})
+		if tx.Migrator().HasTable(&models.SceneCharacterLook{}) {
+			if err := tx.Where("look_id = ?", id).Delete(&models.SceneCharacterLook{}).Error; err != nil {
+				return err
+			}
+		}
+		if tx.Migrator().HasTable(&models.ShotCharacterLook{}) {
+			return tx.Where("look_id = ?", id).Delete(&models.ShotCharacterLook{}).Error
+		}
 		return nil
 	})
 }

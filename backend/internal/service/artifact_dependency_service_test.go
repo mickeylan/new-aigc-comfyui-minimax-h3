@@ -11,7 +11,7 @@ import (
 
 func newArtifactDependencyTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,6 +32,20 @@ func TestArtifactDependencyGraphIsNoOpWhenDisabled(t *testing.T) {
 	}
 	if len(items) != 0 {
 		t.Fatalf("disabled graph changed behavior: %+v", items)
+	}
+}
+
+func TestDisabledGraphDoesNotDeleteExistingRelations(t *testing.T) {
+	db := newArtifactDependencyTestDB(t)
+	row := models.ArtifactDependency{ProjectID: 1, UpstreamKind: ArtifactKindCharacterLook, UpstreamID: 1, DownstreamKind: ArtifactKindCharacterOutfit, DownstreamID: 2}
+	db.Create(&row)
+	if err := NewArtifactDependencyService(db, false).DeleteRelationsTx(nil, 1, ArtifactKindCharacterLook, ArtifactKindCharacterOutfit, 2); err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	db.Model(&models.ArtifactDependency{}).Count(&count)
+	if count != 1 {
+		t.Fatal("disabled graph deleted relation")
 	}
 }
 

@@ -92,6 +92,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.GET("/api/projects/:id", svc.HandleGetProject)
 	r.GET("/api/projects/:id/dependencies", svc.HandleListArtifactDependencies)
 	r.GET("/api/projects/:id/dependencies/affected", svc.HandleAffectedArtifacts)
+	r.POST("/api/projects/:id/dependencies/backfill", svc.HandleBackfillArtifactDependencies)
 	r.GET("/api/projects/:id/dependency-invalidations", svc.HandleListArtifactInvalidations)
 	r.GET("/api/projects/:id/episodes", svc.HandleGetProjectEpisodes)
 	r.POST("/api/projects/:id/episodes", svc.HandleCreateProjectEpisode)
