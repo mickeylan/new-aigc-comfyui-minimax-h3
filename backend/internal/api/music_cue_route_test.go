@@ -123,12 +123,11 @@ func TestMusicCueSheetBatchApprove(t *testing.T) {
 	router := NewRouter(&config.Config{}, svc)
 
 	caption := `{"global_metadata":"cinematic score","vocal_details":"Fully instrumental, no voices.","arrangement":"Intro: sparse. Outro: resolve."}`
-	created, err := svc.MusicCues.Create(p.ID, service.MusicCueSheetInput{EpisodeN: 1, Kind: "scene", StartTime: 0, EndTime: 3, Intensity: "medium", CaptionJSON: caption})
-	if err != nil {
-		t.Fatal(err)
+	for _, times := range [][2]float64{{0, 3}, {3, 6}} {
+		if _, err := svc.MusicCues.Create(p.ID, service.MusicCueSheetInput{EpisodeN: 1, Kind: "scene", StartTime: times[0], EndTime: times[1], Intensity: "medium", CaptionJSON: caption}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	cue := models.MusicCueSheet{ProjectID: p.ID, EpisodeN: 1, Kind: "scene", StartTime: 3, EndTime: 6, Intensity: "medium", CaptionJSON: caption, ReviewStatus: "pending", Enabled: true, SourceVersionHash: created.SourceVersionHash}
-	db.Create(&cue)
 
 	resp := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/projects/%d/music-cue-sheets/batch-approve", p.ID), bytes.NewBufferString(`{"episode_n":1,"review_reason":"reviewed"}`))

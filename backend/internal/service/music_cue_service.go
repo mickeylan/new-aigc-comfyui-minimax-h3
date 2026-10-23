@@ -213,7 +213,7 @@ func (s *MusicCueService) Create(projectID uint, in MusicCueSheetInput) (*models
 	cue.ReviewReason = ""
 	cue.ReviewedAt = nil
 	if context, contextErr := s.episodeContext(projectID, cue.EpisodeN); contextErr == nil {
-		cue.SourceVersionHash = musicCueSourceHash(context, cue.UserRequirements)
+		cue.SourceVersionHash = musicCueSourceHash(context, &cue)
 	}
 	if err := s.db.Create(&cue).Error; err != nil {
 		return nil, err
@@ -244,7 +244,7 @@ func (s *MusicCueService) Update(projectID, id uint, in MusicCueSheetInput) (*mo
 	cue.ReviewStatus = "draft"
 	cue.ReviewReason = ""
 	if context, contextErr := s.episodeContext(projectID, cue.EpisodeN); contextErr == nil {
-		cue.SourceVersionHash = musicCueSourceHash(context, cue.UserRequirements)
+		cue.SourceVersionHash = musicCueSourceHash(context, &cue)
 	}
 	updates := musicCueSheetUpdates(cue)
 	updates["reviewed_at"] = nil
@@ -373,7 +373,7 @@ func (s *MusicCueService) Preflight(projectID uint, episodeN int) (MusicCuePrefl
 		if err := validateMusicCaptionJSON(cue.CaptionJSON); err != nil {
 			result.Issues = append(result.Issues, MusicCuePreflightIssue{"error", "caption", cue.ID, 0, err.Error()})
 		}
-		expectedHash := musicCueSourceHash(context, cue.UserRequirements)
+		expectedHash := musicCueSourceHash(context, cue)
 		if cue.SourceVersionHash == "" || cue.SourceVersionHash != expectedHash {
 			result.Issues = append(result.Issues, MusicCuePreflightIssue{"error", "source", cue.ID, 0, "Cue来源哈希与当前Episode剧本或用户要求不一致"})
 		}
@@ -419,7 +419,7 @@ func (s *MusicCueService) MarkApproved(projectID uint, episodeN int, reviewReaso
 		if err := validateMusicCaptionJSON(cue.CaptionJSON); err != nil {
 			return fmt.Errorf("Cue #%d: %w", cue.ID, err)
 		}
-		if cue.SourceVersionHash == "" || cue.SourceVersionHash != musicCueSourceHash(context, cue.UserRequirements) {
+		if cue.SourceVersionHash == "" || cue.SourceVersionHash != musicCueSourceHash(context, &cue) {
 			return fmt.Errorf("Cue #%d 缺少当前剧本来源哈希，或剧本/用户要求已变化", cue.ID)
 		}
 	}
@@ -510,8 +510,24 @@ func mergeMusicRequirements(values ...string) string {
 	return strings.Join(lines, "\n")
 }
 
-func musicCueSourceHash(context, requirements string) string {
-	hash := sha256.Sum256([]byte(context + "\nUSER_REQUIREMENTS:\n" + strings.TrimSpace(requirements)))
+func musicCueSourceHash(context string, cue *models.MusicCueSheet) string {
+	fingerprint := struct {
+		Context          string  `json:"context"`
+		SceneID          *uint   `json:"scene_id,omitempty"`
+		ShotID           *uint   `json:"shot_id,omitempty"`
+		Kind             string  `json:"kind"`
+		StartTime        float64 `json:"start_time"`
+		EndTime          float64 `json:"end_time"`
+		Intensity        string  `json:"intensity"`
+		Mood             string  `json:"mood"`
+		InstrumentNote   string  `json:"instrument_note"`
+		UserRequirements string  `json:"user_requirements"`
+		CaptionJSON      string  `json:"caption_json"`
+		Enabled          bool    `json:"enabled"`
+		Order            int     `json:"order"`
+	}{context, cue.SceneID, cue.ShotID, cue.Kind, cue.StartTime, cue.EndTime, cue.Intensity, cue.Mood, cue.InstrumentNote, strings.TrimSpace(cue.UserRequirements), strings.TrimSpace(cue.CaptionJSON), cue.Enabled, cue.Order}
+	encoded, _ := json.Marshal(fingerprint)
+	hash := sha256.Sum256(encoded)
 	return hex.EncodeToString(hash[:])
 }
 
@@ -621,7 +637,7 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 			if err := NewMusicCueService(tx).validateBindings(&cue); err != nil {
 				return fmt.Errorf("第%d条Cue: %w", index+1, err)
 			}
-			cue.SourceVersionHash = musicCueSourceHash(context, cue.UserRequirements)
+			cue.SourceVersionHash = musicCueSourceHash(context, &cue)
 			if err := NewMusicCueService(tx).validateCueTimeline(&cue); err != nil {
 				return fmt.Errorf("第%d条Cue: %w", index+1, err)
 			}
@@ -702,7 +718,7 @@ func (s *MusicCueService) Review(projectID, id uint, approve bool, reason string
 		if err != nil {
 			return nil, err
 		}
-		if cue.SourceVersionHash == "" || cue.SourceVersionHash != musicCueSourceHash(context, cue.UserRequirements) {
+		if cue.SourceVersionHash == "" || cue.SourceVersionHash != musicCueSourceHash(context, &cue) {
 			return nil, fmt.Errorf("缺少当前剧本来源哈希，或剧本/用户要求已变化，请重新生成配乐提示词")
 		}
 		cue.ReviewStatus = "approved"

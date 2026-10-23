@@ -215,10 +215,11 @@ func TestMusicCueSheetReviewGateRequiresStructuredCaption(t *testing.T) {
 		t.Fatal("empty Structured Caption was approved")
 	}
 	caption := `{"global_metadata":"cinematic score","vocal_details":"Fully instrumental, no voices.","arrangement":"Intro: sparse strings. Outro: resolve."}`
-	if err := db.Model(cue).Update("caption_json", caption).Error; err != nil {
+	updated, err := svc.Update(p.ID, cue.ID, MusicCueSheetInput{EpisodeN: 1, Kind: "scene", StartTime: 0, EndTime: 3, Intensity: "medium", CaptionJSON: caption, Enabled: func() *bool { v := true; return &v }()})
+	if err != nil {
 		t.Fatal(err)
 	}
-	approved, err := svc.Review(p.ID, cue.ID, true, "reviewed")
+	approved, err := svc.Review(p.ID, updated.ID, true, "reviewed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,6 +312,20 @@ func TestMusicCuePreflightReportsOverlapAndInvalidCaption(t *testing.T) {
 	}
 	if !codes["source"] {
 		t.Fatalf("source drift not detected: %+v", result.Issues)
+	}
+}
+
+func TestMusicCueSourceHashIncludesEditableCueContent(t *testing.T) {
+	cue := models.MusicCueSheet{Kind: "scene", StartTime: 0, EndTime: 5, Intensity: "medium", CaptionJSON: `{"global_metadata":"a"}`, Enabled: true}
+	first := musicCueSourceHash("context", &cue)
+	cue.CaptionJSON = `{"global_metadata":"b"}`
+	if first == musicCueSourceHash("context", &cue) {
+		t.Fatal("caption edit did not change source hash")
+	}
+	cue.CaptionJSON = `{"global_metadata":"a"}`
+	cue.StartTime = 1
+	if first == musicCueSourceHash("context", &cue) {
+		t.Fatal("timeline edit did not change source hash")
 	}
 }
 
