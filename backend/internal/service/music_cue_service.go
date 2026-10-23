@@ -450,6 +450,32 @@ type generatedMusicCueSheet struct {
 	Cues []generatedMusicCue `json:"cues"`
 }
 
+func renderMusicCaption(raw string) (string, error) {
+	if err := validateMusicCaptionJSON(raw); err != nil {
+		return "", err
+	}
+	var caption musicStructuredCaption
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &caption); err != nil {
+		return "", err
+	}
+	return "### Global Metadata\n\n" + strings.TrimSpace(caption.GlobalMetadata) + "\n\n### Vocal Details\n\n" + strings.TrimSpace(caption.VocalDetails) + "\n\n### Arrangement\n\n" + strings.TrimSpace(caption.Arrangement), nil
+}
+
+func (s *MusicCueService) CaptionPreview(projectID, id uint) (map[string]any, error) {
+	var cue models.MusicCueSheet
+	if err := s.db.Where("id = ? AND project_id = ?", id, projectID).First(&cue).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrMusicCueSheetNotFound
+		}
+		return nil, err
+	}
+	caption, err := renderMusicCaption(cue.CaptionJSON)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"cue_id": cue.ID, "caption": caption, "source_version_hash": cue.SourceVersionHash, "review_status": cue.ReviewStatus, "reviewed_at": cue.ReviewedAt, "stale": cue.Stale}, nil
+}
+
 func validateMusicCaptionJSON(raw string) error {
 	decoder := json.NewDecoder(strings.NewReader(strings.TrimSpace(raw)))
 	decoder.DisallowUnknownFields()
@@ -838,6 +864,28 @@ func (s *Service) HandleDraftMusicCueSheets(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"cues": cues})
+}
+
+func (s *Service) HandleMusicCueCaptionPreview(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("cid"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid music cue id"})
+		return
+	}
+	preview, err := s.MusicCues.CaptionPreview(p.ID, uint(id))
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, ErrMusicCueSheetNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, preview)
 }
 
 func (s *Service) HandleRegenerateMusicCueSheet(c *gin.Context) {

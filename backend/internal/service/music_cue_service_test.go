@@ -228,6 +228,24 @@ func TestMusicCueSheetReviewGateRequiresStructuredCaption(t *testing.T) {
 	}
 }
 
+func TestRenderMusicCaptionUsesExactlyThreeHeadings(t *testing.T) {
+	rendered, err := renderMusicCaption(`{"global_metadata":"score","vocal_details":"Fully instrumental","arrangement":"Intro: build. Outro: stop."}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := -1
+	for _, heading := range []string{"### Global Metadata", "### Vocal Details", "### Arrangement"} {
+		index := strings.Index(rendered, heading)
+		if index <= last {
+			t.Fatalf("heading order invalid: %s", rendered)
+		}
+		last = index
+	}
+	if strings.Count(rendered, "### ") != 3 {
+		t.Fatalf("unexpected headings: %s", rendered)
+	}
+}
+
 func TestMusicCaptionStrictContractRejectsUnsafeShapes(t *testing.T) {
 	valid := `{"global_metadata":"cinematic score","vocal_details":"Fully instrumental, no voices.","arrangement":"Intro: sparse strings. Outro: resolve."}`
 	if err := validateMusicCaptionJSON(valid); err != nil {
