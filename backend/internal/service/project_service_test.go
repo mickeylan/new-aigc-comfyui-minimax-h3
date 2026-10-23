@@ -48,12 +48,14 @@ func (s *captureTextProvider) Chat(system, user string) (string, error) {
 
 type sequenceTextProvider struct {
 	responses []string
+	users     []string
 	calls     int
 }
 
 func (s *sequenceTextProvider) Name() string                      { return "sequence-stub" }
 func (s *sequenceTextProvider) HealthCheck(context.Context) error { return nil }
-func (s *sequenceTextProvider) Chat(_, _ string) (string, error) {
+func (s *sequenceTextProvider) Chat(_, user string) (string, error) {
+	s.users = append(s.users, user)
 	if s.calls >= len(s.responses) {
 		return "", fmt.Errorf("unexpected call %d", s.calls+1)
 	}
@@ -1888,6 +1890,42 @@ func TestEffectiveGenerationSystemKeepsCombatContractWhenPolicyOverrides(t *test
 	}
 }
 
+func TestCombatRepairIncludesCurrentSceneSwordChoreographyDespiteLegacyShot(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SharedAssetReference{}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &sequenceTextProvider{responses: []string{
+		"[Shot 1] The woman immediately brandishes a peach branch through martial forms at full speed.",
+		"[Shot 1] The woman immediately sweeps broad blade-like strokes at full speed.",
+		"[Shot 1] The woman moves at full real-time speed, steps forward with her right foot for one diagonal rising cut, shifts her weight onto the left foot for one straight thrust, then makes one horizontal cut and finishes upright with the peach branch angled down.",
+	}}
+	ps.textProvider = provider
+	project := models.Project{Title: "剑术测试"}
+	ps.db.Create(&project)
+	content := "上官若琳以桃枝为剑，在桃林中进行单人剑术演练。右脚前踏，完成斜撩、直刺、横削，最后收步直立。"
+	scene := models.Scene{ProjectID: project.ID, SceneMode: "武戏", Duration: 10, Content: content}
+	ps.db.Create(&scene)
+	ps.db.Create(&models.Shot{SceneID: scene.ID, Order: 1, Duration: 1.5, Description: "一个身影在花中舞动"})
+	got, err := ps.GenerateSceneVideoAction(&scene)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 3 || len(provider.users) < 3 || !strings.Contains(provider.users[2], "斜撩、直刺、横削") {
+		t.Fatalf("combat repair did not receive current Scene choreography: calls=%d users=%v", provider.calls, provider.users)
+	}
+	if !h3SoloSwordPracticeContractMatches(content, got) {
+		t.Fatalf("final sword choreography remained abstract: %s", got)
+	}
+}
+
+func TestNormalizeGeneratedH3ActionConvertsFullWidthSubjectTags(t *testing.T) {
+	got := normalizeGeneratedH3Action("[Shot 1] 【Subject 1】 steps forward at full real-time speed.", true, 1, h3SceneAction, []string{"- <Picture 1>：角色「上官若琳」四视图"}, "[Shot 1] 动作", "[Shot 1] <Subject 1> 动作")
+	if !strings.Contains(got, "<Subject 1> steps forward") || strings.Contains(got, "【Subject") {
+		t.Fatalf("full-width Subject tag not normalized: %s", got)
+	}
+}
+
 func TestNormalizeGeneratedH3ActionRepairsReportedEleventhDraft(t *testing.T) {
 	draft := `[Shot 1] The shot begins from the state, composition, and spatial relationships established by <Picture 1>. 真人写实风格。 At MM:00.000, camera glides through mist into the Vanshen Peach Grove. Rising from <Picture 3> pose, <Subject 1>swings the peach branch as a sword, movements sharp and dragon-like with qi flowing outward like a rainbow, instantly transitioning into butterfly-light forms as falling petals swirl around her spinning figure. Toward the end, the visible motion settles into the exact pose, spacing, object state, camera angle, lighting, and final composition established by Picture 2. 旁白 (S1) says in an off-screen voiceover: <d>[Chinese] 上官若琳，天阙宗宗主之女，玉霄宫历代宫主。六十年前八场连胜，击败太运玄金榜第九名，震惊云上天。</d> while their lips remain completely closed.`
 	got := normalizeGeneratedH3Action(draft, true, 1, h3SceneAction, []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：确认尾帧", "- <Picture 3>：角色造型"}, "[Shot 1] 原始动作", "[Shot 1] <Subject 1> 原始动作")
@@ -1903,6 +1941,17 @@ func TestNormalizeGeneratedH3ActionRepairsReportedEleventhDraft(t *testing.T) {
 	}
 	if regexp.MustCompile(`[\p{Han}]`).MatchString(got) {
 		t.Fatalf("Chinese visual prose remained: %s", got)
+	}
+}
+
+func TestBuildH3FL2VAPromptRemovesConflictingPictureThreeStart(t *testing.T) {
+	scene := &models.Scene{Duration: 10, VideoPrompt: "[Shot 1] 真人写实风格。 The image may begin from the <Picture 3> reference state as the camera pushes through mist. Rising from <Picture 3> pose, <Subject 1> steps forward."}
+	got := buildH3FL2VAPrompt(scene, nil, nil)
+	if strings.Contains(got, "<Picture 3>") || strings.Contains(got, "The image may the camera") || strings.Contains(got, "真人写实风格") {
+		t.Fatalf("conflicting FL2VA opening reference remained: %s", got)
+	}
+	if strings.Count(got, "The shot begins from the state, composition, and spatial relationships established by <Picture 1>.") != 1 || !strings.Contains(got, "Live-action realistic visual style.") {
+		t.Fatalf("authoritative FL2VA opening missing: %s", got)
 	}
 }
 
@@ -1935,6 +1984,18 @@ func TestEnforceH3ActionTempoRemovesAffirmativeSlowCameraDirections(t *testing.T
 	}
 	if !h3ActionTempoContractMatches(got) {
 		t.Fatalf("normalized combat prompt violates tempo contract: %s", got)
+	}
+}
+
+func TestSoloSwordPracticeRejectsAbstractMartialForms(t *testing.T) {
+	source := "上官若琳以桃枝为剑，在桃林中进行单人剑术演练。她右脚前踏，完成斜撩、直刺、横削，最后收步直立。"
+	vague := "[Shot 1] <Subject 1> moves immediately at full speed, brandishing a peach branch as a sword through martial forms."
+	if h3SoloSwordPracticeContractMatches(source, vague) {
+		t.Fatalf("abstract martial forms passed solo sword contract: %s", vague)
+	}
+	concrete := "[Shot 1] <Subject 1> moves at full real-time speed, steps forward with her right foot, performs one diagonal rising cut, shifts her weight onto the left foot for one straight thrust, then executes one horizontal cut and finishes upright with the peach branch angled down."
+	if !h3SoloSwordPracticeContractMatches(source, concrete) {
+		t.Fatalf("concrete sword sequence failed contract: %s", concrete)
 	}
 }
 

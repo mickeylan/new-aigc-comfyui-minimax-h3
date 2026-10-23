@@ -25,6 +25,9 @@ func TestCombatH3TemplateUsesDedicatedLoraChain(t *testing.T) {
 	if tpl.Code != h3CombatRef2VTemplate {
 		t.Fatalf("code=%q", tpl.Code)
 	}
+	if got := tpl.Workflow["127"].Inputs["unet_name"]; got != `minimax-h3\DasiwaMinimaxH3_dasiwaHybridV4_int8.safetensors` {
+		t.Fatalf("combat UNET=%q", got)
+	}
 	checks := []struct {
 		node, name string
 		strength   float64
