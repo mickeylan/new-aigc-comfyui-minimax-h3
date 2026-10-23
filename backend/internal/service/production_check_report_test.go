@@ -6,6 +6,25 @@ import (
 	"comfyui-console/internal/models"
 )
 
+func TestProductionCheckUsesAuthoritativeMusicCuePreflight(t *testing.T) {
+	db := safetyDB(t, &models.SceneContinuity{}, &models.MusicCueSheet{}, &models.ProductionCheckReport{})
+	project := models.Project{Title: "p"}
+	db.Create(&project)
+	db.Create(&models.Scene{ProjectID: project.ID, EpisodeN: 1, Duration: 5, ImageFile: "image.png", VideoFile: "video.mp4"})
+	db.Create(&models.MusicCueSheet{ProjectID: project.ID, EpisodeN: 1, Kind: "scene", StartTime: 0, EndTime: 8, Enabled: true, CaptionJSON: "{}", ReviewStatus: "draft"})
+	result, err := NewProductionCheckService(db).Check(project.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codes := map[string]bool{}
+	for _, finding := range result.Findings {
+		codes[finding.Code] = true
+	}
+	if !codes["music_cue_timeline"] || !codes["music_cue_caption"] || !codes["music_cue_review"] {
+		t.Fatalf("music preflight not reflected: %+v", result.Findings)
+	}
+}
+
 func TestProductionCheckReportsAreSanitizedVersionedAndReviewable(t *testing.T) {
 	db := safetyDB(t, &models.SceneContinuity{}, &models.MusicCueSheet{}, &models.ProductionCheckReport{})
 	project := models.Project{Title: "p"}

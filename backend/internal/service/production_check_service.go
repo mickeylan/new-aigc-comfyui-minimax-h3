@@ -104,20 +104,22 @@ func (s *ProductionCheckService) Check(projectID uint, episodeN int) (Production
 			result.Findings = append(result.Findings, productionFinding("warning", "dialogue_audio_stale", "dialogue", dialogue.ID, "对白音频已过期，需要重新生成并审核候选", "voice", "进入声音工作台重新生成并审核该句配音"))
 		}
 	}
-	cueQuery := s.db.Where("project_id = ?", projectID)
-	if episodeN > 0 {
-		cueQuery = cueQuery.Where("episode_n = ?", episodeN)
-	}
-	var cues []models.MusicCueSheet
-	if err := cueQuery.Find(&cues).Error; err == nil {
-		for _, cue := range cues {
-			if cue.Stale || cue.ReviewStatus != "approved" {
-				result.Findings = append(result.Findings, productionFinding("warning", "music_cue_not_approved", "music_cue", cue.ID, "配乐 Cue 未处于当前已审核状态", "music", "定位配乐Cue，完成编辑和人工审核"))
-			}
+	if s.db.Migrator().HasTable(&models.MusicCueSheet{}) && episodeN > 0 {
+		musicPreflight, err := NewMusicCueService(s.db).Preflight(projectID, episodeN)
+		if err != nil {
+			return result, err
 		}
-	} else if !s.db.Migrator().HasTable(&models.MusicCueSheet{}) { /* optional subsystem */
-	} else {
-		return result, err
+		for _, issue := range musicPreflight.Issues {
+			severity := issue.Severity
+			if issue.Code == "review" {
+				severity = "warning"
+			}
+			finding := productionFinding(severity, "music_cue_"+issue.Code, "music_cue", issue.CueID, issue.Message, "music", "定位配乐Cue并处理时间轴、Caption或审核状态")
+			if issue.RelatedCueID > 0 {
+				finding.Recommendation = fmt.Sprintf("检查Cue #%d与Cue #%d的时间重叠", issue.CueID, issue.RelatedCueID)
+			}
+			result.Findings = append(result.Findings, finding)
+		}
 	}
 	graph := NewArtifactDependencyService(s.db, s.db.Migrator().HasTable(&models.ArtifactDependency{}))
 	for i := range result.Findings {
