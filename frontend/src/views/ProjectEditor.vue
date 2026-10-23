@@ -956,6 +956,7 @@ async function removeSharedAsset(row) {
   try { await api.deleteSharedAssetReference(id(), row.id); await loadSharedAssets() } catch (e) { toast.error(e.response?.data?.error || '删除引用失败') }
 }
 
+async function refreshMusicCuePreflight(){try{musicCuePreflight.value=(await api.musicCuePreflight(id(),activeEpN.value)).data}catch{musicCuePreflight.value=null}}
 async function loadMusicCueShots(sceneId){if(!sceneId||musicCueShots.value[sceneId])return;try{const {data}=await api.sceneShots(id(),sceneId);musicCueShots.value={...musicCueShots.value,[sceneId]:data.shots||[]}}catch{musicCueShots.value={...musicCueShots.value,[sceneId]:[]}}}
 async function onMusicCueSceneChanged(cue){cue.shot_id=null;if(cue.scene_id)await loadMusicCueShots(cue.scene_id)}
 async function loadMusicCues(){
@@ -965,7 +966,7 @@ async function loadMusicCues(){
 async function createManualMusicCue(){
   const start=musicCues.value.reduce((max,cue)=>Math.max(max,Number(cue.end_time)||0),0);const total=accumulatedDuration.value;const end=Math.min(total,Math.max(start+3,Math.min(start+15,total)))
   if(total<=0||start>=total){toast.error('当前Episode没有可用的剩余时间轴');return}
-  try{const {data}=await api.createMusicCue(id(),{episode_n:activeEpN.value,kind:'scene',start_time:start,end_time:end,intensity:'medium',mood:'',instrument_note:'',user_requirements:musicRequirements.value,caption_json:JSON.stringify({global_metadata:'',vocal_details:'Fully instrumental, no voices.',arrangement:''}),source:'manual',order:musicCues.value.length+1,enabled:true});musicCues.value.push(data);toast.success('已新增手工Cue草稿')}
+  try{const {data}=await api.createMusicCue(id(),{episode_n:activeEpN.value,kind:'scene',start_time:start,end_time:end,intensity:'medium',mood:'',instrument_note:'',user_requirements:musicRequirements.value,caption_json:JSON.stringify({global_metadata:'',vocal_details:'Fully instrumental, no voices.',arrangement:''}),source:'manual',order:musicCues.value.length+1,enabled:true});musicCues.value.push(data);await refreshMusicCuePreflight();toast.success('已新增手工Cue草稿')}
   catch(e){toast.error(e.response?.data?.error||'新增配乐Cue失败')}
 }
 async function batchApproveMusicCues(){
@@ -974,7 +975,7 @@ async function batchApproveMusicCues(){
 }
 async function draftMusicCues(){
   musicCueBusy.value=true
-  try { const {data}=await api.draftMusicCues(id(),activeEpN.value,musicRequirements.value); musicCues.value=data.cues||[]; toast.success('已生成可审核的MiniMax Music 3配乐提示词') }
+  try { const {data}=await api.draftMusicCues(id(),activeEpN.value,musicRequirements.value); musicCues.value=data.cues||[]; await refreshMusicCuePreflight();toast.success('已生成可审核的MiniMax Music 3配乐提示词') }
   catch(e){ toast.error(e.response?.data?.error||'生成配乐提示词失败') }
   finally { musicCueBusy.value=false }
 }
@@ -983,19 +984,19 @@ function musicCaptionField(cue,key){return musicCaptionObject(cue)[key]||''}
 function setMusicCaptionField(cue,key,value){cue.caption_json=JSON.stringify({...musicCaptionObject(cue),[key]:value})}
 function musicCuePayload(cue){ return {episode_n:activeEpN.value,scene_id:cue.scene_id||null,shot_id:cue.shot_id||null,kind:cue.kind,start_time:Number(cue.start_time),end_time:Number(cue.end_time),intensity:cue.intensity,mood:cue.mood||'',instrument_note:cue.instrument_note||'',user_requirements:cue.user_requirements||'',duration:Number(cue.duration||0),tags:cue.tags||'',caption_json:cue.caption_json||'',source:cue.source||'manual',order:Number(cue.order||0),enabled:cue.enabled!==false} }
 async function saveMusicCue(cue){
-  try { const {data}=await api.updateMusicCue(id(),cue.id,musicCuePayload(cue)); Object.assign(cue,data); toast.success('配乐提示词已保存为草稿'); return true }
+  try { const {data}=await api.updateMusicCue(id(),cue.id,musicCuePayload(cue)); Object.assign(cue,data);await refreshMusicCuePreflight();toast.success('配乐提示词已保存为草稿'); return true }
   catch(e){ toast.error(e.response?.data?.error||'保存配乐Cue失败'); return false }
 }
 async function regenerateMusicCue(cue){
   musicCueBusy.value=true
-  try{if(!await saveMusicCue(cue))return;const {data}=await api.regenerateMusicCue(id(),cue.id);Object.assign(cue,data);toast.success('已按当前要求重写此Cue，需重新审核')}
+  try{if(!await saveMusicCue(cue))return;const {data}=await api.regenerateMusicCue(id(),cue.id);Object.assign(cue,data);await refreshMusicCuePreflight();toast.success('已按当前要求重写此Cue，需重新审核')}
   catch(e){toast.error(e.response?.data?.error||'重写配乐Cue失败')}
   finally{musicCueBusy.value=false}
 }
 async function reviewMusicCue(cue,action){
   let reason=''
   if(action==='reject'){ reason=window.prompt('填写驳回原因')||''; if(!reason.trim())return }
-  try { if(!await saveMusicCue(cue))return; const {data}=await api.reviewMusicCue(id(),cue.id,action,reason); Object.assign(cue,data); toast.success(action==='approve'?'配乐提示词已审核通过':'已驳回配乐提示词') }
+  try { if(!await saveMusicCue(cue))return; const {data}=await api.reviewMusicCue(id(),cue.id,action,reason); Object.assign(cue,data);await refreshMusicCuePreflight();toast.success(action==='approve'?'配乐提示词已审核通过':'已驳回配乐提示词') }
   catch(e){ toast.error(e.response?.data?.error||'审核配乐Cue失败') }
 }
 async function removeMusicCue(cue){

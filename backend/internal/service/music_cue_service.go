@@ -908,7 +908,7 @@ func (s *Service) HandleBatchApproveMusicCueSheets(c *gin.Context) {
 		return
 	}
 	if err := s.MusicCues.MarkApproved(p.ID, body.EpisodeN, body.ReviewReason); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})

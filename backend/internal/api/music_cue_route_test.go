@@ -81,6 +81,33 @@ func TestMusicCueSheetRoutes(t *testing.T) {
 	}
 }
 
+func TestMusicCuePreflightRouteAndBatchConflict(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.Shot{}, &models.Dialogue{}, &models.MusicCueSheet{}); err != nil {
+		t.Fatal(err)
+	}
+	p := models.Project{Title: "p"}
+	db.Create(&p)
+	db.Create(&models.Scene{ProjectID: p.ID, EpisodeN: 1, Duration: 5})
+	svc := &service.Service{DB: db, MusicCues: service.NewMusicCueService(db)}
+	router := NewRouter(&config.Config{}, svc)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/projects/%d/music-cue-sheets/preflight?episode_n=1", p.ID), nil))
+	if resp.Code != http.StatusOK || !bytes.Contains(resp.Body.Bytes(), []byte(`"code":"empty"`)) {
+		t.Fatalf("preflight status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	resp = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/projects/%d/music-cue-sheets/batch-approve", p.ID), bytes.NewBufferString(`{"episode_n":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(resp, req)
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("expected conflict, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestMusicCueSheetBatchApprove(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
