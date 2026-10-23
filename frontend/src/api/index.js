@@ -167,6 +167,7 @@ export const api = {
   updateMusicCue: (id, cid, data) => http.put(`/projects/${id}/music-cue-sheets/${cid}`, data),
   regenerateMusicCue: (id, cid) => http.post(`/projects/${id}/music-cue-sheets/${cid}/regenerate`, {}, { timeout: 300000 }),
   reviewMusicCue: (id, cid, action, reason = '') => http.post(`/projects/${id}/music-cue-sheets/${cid}/review`, { action, reason }),
+  batchApproveMusicCues: (id, episodeN, reviewReason = '') => http.post(`/projects/${id}/music-cue-sheets/batch-approve`, { episode_n: episodeN, review_reason: reviewReason }),
   deleteMusicCue: (id, cid) => http.delete(`/projects/${id}/music-cue-sheets/${cid}`),
   musicCandidates: (id, cid) => http.get(`/projects/${id}/music-cue-sheets/${cid}/candidates`),
   reviewMusicCandidate: (id, cid, mid, data) => http.post(`/projects/${id}/music-cue-sheets/${cid}/candidates/${mid}/review`, data),
