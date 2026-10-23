@@ -245,6 +245,32 @@ func TestMusicCaptionStrictContractRejectsUnsafeShapes(t *testing.T) {
 	}
 }
 
+func TestMusicCuePreflightRejectsBrokenBinding(t *testing.T) {
+	db := newMusicCueTestDB(t)
+	svc := NewMusicCueService(db)
+	p := models.Project{Title: "p"}
+	db.Create(&p)
+	scene := models.Scene{ProjectID: p.ID, EpisodeN: 1, Duration: 5}
+	db.Create(&scene)
+	caption := `{"global_metadata":"score","vocal_details":"Fully instrumental","arrangement":"Intro: build. Outro: stop."}`
+	cue, err := svc.Create(p.ID, MusicCueSheetInput{EpisodeN: 1, SceneID: &scene.ID, Kind: "scene", StartTime: 0, EndTime: 5, CaptionJSON: caption})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Model(cue).Update("scene_id", 999)
+	result, err := svc.Preflight(p.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, issue := range result.Issues {
+		found = found || issue.Code == "binding"
+	}
+	if !found {
+		t.Fatalf("broken binding not reported: %+v", result.Issues)
+	}
+}
+
 func TestMusicCuePreflightReportsOverlapAndInvalidCaption(t *testing.T) {
 	db := newMusicCueTestDB(t)
 	svc := NewMusicCueService(db)

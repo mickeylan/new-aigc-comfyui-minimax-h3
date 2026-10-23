@@ -364,6 +364,9 @@ func (s *MusicCueService) Preflight(projectID uint, episodeN int) (MusicCuePrefl
 		if cue.Stale {
 			result.Issues = append(result.Issues, MusicCuePreflightIssue{"error", "stale", cue.ID, 0, "Cue已过期"})
 		}
+		if err := s.validateBindings(cue); err != nil {
+			result.Issues = append(result.Issues, MusicCuePreflightIssue{"error", "binding", cue.ID, 0, err.Error()})
+		}
 		if err := s.validateCueTimeline(cue); err != nil {
 			result.Issues = append(result.Issues, MusicCuePreflightIssue{"error", "timeline", cue.ID, 0, err.Error()})
 		}
@@ -589,6 +592,13 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 		var replacedIDs []uint
 		if err := tx.Model(&models.MusicCueSheet{}).Where("project_id = ? AND episode_n = ? AND source = ? AND review_status <> ?", projectID, episodeN, "ai", "approved").Pluck("id", &replacedIDs).Error; err != nil {
 			return err
+		}
+		for _, id := range replacedIDs {
+			if s.dependencies != nil {
+				if err := s.dependencies.DeleteArtifactTx(tx, projectID, ArtifactRef{Kind: ArtifactKindMusicCue, ID: id}); err != nil {
+					return err
+				}
+			}
 		}
 		if len(replacedIDs) > 0 && tx.Migrator().HasTable(&models.MusicCandidate{}) {
 			if err := tx.Where("project_id = ? AND music_cue_sheet_id IN ?", projectID, replacedIDs).Delete(&models.MusicCandidate{}).Error; err != nil {
