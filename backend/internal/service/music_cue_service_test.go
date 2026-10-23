@@ -277,6 +277,9 @@ func TestMusicCuePreflightRejectsBrokenBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Model(cue).Update("scene_id", 999)
+	if _, err := svc.Review(p.ID, cue.ID, true, ""); err == nil {
+		t.Fatal("broken binding was approved")
+	}
 	result, err := svc.Preflight(p.ID, 1)
 	if err != nil {
 		t.Fatal(err)

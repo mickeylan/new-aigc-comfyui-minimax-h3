@@ -413,6 +413,9 @@ func (s *MusicCueService) MarkApproved(projectID uint, episodeN int, reviewReaso
 		if cue.Stale {
 			return fmt.Errorf("Cue #%d 已过期", cue.ID)
 		}
+		if err := s.validateBindings(&cue); err != nil {
+			return fmt.Errorf("Cue #%d: %w", cue.ID, err)
+		}
 		if err := s.validateCueTimeline(&cue); err != nil {
 			return fmt.Errorf("Cue #%d: %w", cue.ID, err)
 		}
@@ -733,6 +736,9 @@ func (s *MusicCueService) Review(projectID, id uint, approve bool, reason string
 		}
 		if !cue.Enabled {
 			return nil, fmt.Errorf("已禁用的配乐Cue不能审核通过")
+		}
+		if err := s.validateBindings(&cue); err != nil {
+			return nil, err
 		}
 		if err := s.validateCueTimeline(&cue); err != nil {
 			return nil, err
