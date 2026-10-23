@@ -274,6 +274,18 @@ func TestMusicCuePreflightReportsOverlapAndInvalidCaption(t *testing.T) {
 			t.Fatalf("missing %s: %+v", code, result.Issues)
 		}
 	}
+	db.Model(&models.Scene{}).Where("project_id = ?", p.ID).Update("title", "changed")
+	result, err = svc.Preflight(p.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codes = map[string]bool{}
+	for _, issue := range result.Issues {
+		codes[issue.Code] = true
+	}
+	if !codes["source"] {
+		t.Fatalf("source drift not detected: %+v", result.Issues)
+	}
 }
 
 func TestMusicCueApprovalRejectsOutOfEpisodeRange(t *testing.T) {

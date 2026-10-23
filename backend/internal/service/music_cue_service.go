@@ -347,6 +347,10 @@ func (s *MusicCueService) Preflight(projectID uint, episodeN int) (MusicCuePrefl
 	if err != nil {
 		return result, err
 	}
+	context, contextErr := s.episodeContext(projectID, episodeN)
+	if contextErr != nil {
+		return result, contextErr
+	}
 	for i := range cues {
 		cue := &cues[i]
 		if !cue.Enabled {
@@ -361,8 +365,12 @@ func (s *MusicCueService) Preflight(projectID uint, episodeN int) (MusicCuePrefl
 		if err := validateMusicCaptionJSON(cue.CaptionJSON); err != nil {
 			result.Issues = append(result.Issues, MusicCuePreflightIssue{"error", "caption", cue.ID, 0, err.Error()})
 		}
-		if cue.ReviewStatus != "approved" {
-			result.Issues = append(result.Issues, MusicCuePreflightIssue{"warning", "review", cue.ID, 0, "Cue尚未审核通过"})
+		expectedHash := musicCueSourceHash(context, cue.UserRequirements)
+		if cue.SourceVersionHash == "" || cue.SourceVersionHash != expectedHash {
+			result.Issues = append(result.Issues, MusicCuePreflightIssue{"error", "source", cue.ID, 0, "Cue来源哈希与当前Episode剧本或用户要求不一致"})
+		}
+		if cue.ReviewStatus != "approved" || cue.ReviewedAt == nil {
+			result.Issues = append(result.Issues, MusicCuePreflightIssue{"warning", "review", cue.ID, 0, "Cue尚未完成当前版本的人工审核"})
 		}
 		for j := i + 1; j < len(cues); j++ {
 			other := cues[j]
@@ -519,14 +527,20 @@ func (s *MusicCueService) episodeContext(projectID uint, episodeN int) (string, 
 	}
 	payload := make([]map[string]any, 0, len(scenes))
 	offset := 0.0
+	hasShots := s.db.Migrator().HasTable(&models.Shot{})
+	hasDialogues := s.db.Migrator().HasTable(&models.Dialogue{})
 	for _, scene := range scenes {
 		var shots []models.Shot
-		if err := s.db.Where("scene_id = ?", scene.ID).Order("order_num, id").Find(&shots).Error; err != nil {
-			return "", err
+		if hasShots {
+			if err := s.db.Where("scene_id = ?", scene.ID).Order("order_num, id").Find(&shots).Error; err != nil {
+				return "", err
+			}
 		}
 		var dialogues []models.Dialogue
-		if err := s.db.Where("scene_id = ?", scene.ID).Order("`order`, id").Find(&dialogues).Error; err != nil {
-			return "", err
+		if hasDialogues {
+			if err := s.db.Where("scene_id = ?", scene.ID).Order("`order`, id").Find(&dialogues).Error; err != nil {
+				return "", err
+			}
 		}
 		payload = append(payload, map[string]any{"scene_id": scene.ID, "scene_order": scene.Order, "episode_start": offset, "duration": scene.Duration, "title": scene.Title, "content": scene.Content, "shots": shots, "dialogues": dialogues})
 		offset += scene.Duration
@@ -581,6 +595,9 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 				return fmt.Errorf("第%d条Cue: %w", index+1, err)
 			}
 			cue.SourceVersionHash = musicCueSourceHash(context, cue.UserRequirements)
+			if err := NewMusicCueService(tx).validateCueTimeline(&cue); err != nil {
+				return fmt.Errorf("第%d条Cue: %w", index+1, err)
+			}
 			cue.RawOutput = raw
 			cue.ReviewStatus = "draft"
 			if err := tx.Create(&cue).Error; err != nil {
