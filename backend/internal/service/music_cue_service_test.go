@@ -341,7 +341,7 @@ func TestDraftMusicCuesUsesUserRequirementsAndRewriterSchema(t *testing.T) {
 	project := models.Project{Title: "仙侠短剧", Genre: "仙侠"}
 	db.Create(&project)
 	db.Create(&models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 1, Duration: 12, Title: "决战", Content: "女主迎战"})
-	provider := &stubTextProvider{response: `{"cues":[{"kind":"action","start_time":0,"end_time":12,"intensity":"climax","mood":"epic","instrument_note":"古琴与战鼓","user_requirements":"不要电子鼓","caption":{"global_metadata":"Cinematic xianxia score, escalating tension.","vocal_details":"Fully instrumental, no voices, choir, chanting or humming.","arrangement":"Intro: sparse guqin. Instrumental: strings and drums enter. Outro: sudden stop."}}]}`}
+	provider := &stubTextProvider{response: `{"cues":[{"scene_id":1,"shot_id":null,"kind":"action","start_time":0,"end_time":12,"intensity":"climax","mood":"epic","instrument_note":"古琴与战鼓","user_requirements":"不要电子鼓","caption":{"global_metadata":"Cinematic xianxia score, escalating tension.","vocal_details":"Fully instrumental, no voices, choir, chanting or humming.","arrangement":"Intro: sparse guqin. Instrumental: strings and drums enter. Outro: sudden stop."}}]}`}
 	skills := NewSkillService(db)
 	if err := skills.InitSystemSkills(); err != nil {
 		t.Fatal(err)
@@ -351,7 +351,7 @@ func TestDraftMusicCuesUsesUserRequirementsAndRewriterSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].ReviewStatus != "draft" || !strings.Contains(rows[0].UserRequirements, "不要电子鼓") {
+	if len(rows) != 1 || rows[0].ReviewStatus != "draft" || rows[0].SceneID == nil || *rows[0].SceneID != 1 || !strings.Contains(rows[0].UserRequirements, "不要电子鼓") {
 		t.Fatalf("unexpected cues: %+v", rows)
 	}
 	if err := validateMusicCaptionJSON(rows[0].CaptionJSON); err != nil {

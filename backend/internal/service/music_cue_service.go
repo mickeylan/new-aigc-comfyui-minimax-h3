@@ -431,6 +431,8 @@ type musicStructuredCaption struct {
 }
 
 type generatedMusicCue struct {
+	SceneID          *uint                  `json:"scene_id"`
+	ShotID           *uint                  `json:"shot_id"`
 	Kind             string                 `json:"kind"`
 	StartTime        float64                `json:"start_time"`
 	EndTime          float64                `json:"end_time"`
@@ -569,7 +571,7 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 	if approvedCount > 0 {
 		return nil, fmt.Errorf("当前Episode已有%d条已审核Cue；为保护审核结果，请逐条编辑使其回到草稿或删除后再重新生成整套方案", approvedCount)
 	}
-	baseSystem := `You plan short-drama instrumental score cues and rewrite every cue for MiniMax Music 3. Output strict JSON only. Root field: cues. Each cue has kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. caption must have exactly global_metadata,vocal_details,arrangement. Music is fully instrumental: no lead vocal, spoken voice, narration, chanting, choir, humming, whispering, or vocal-like texture. Arrangement must describe section-by-section musical evolution, not merely list instruments. Preserve explicit user requirements and exclusions as highest priority. Keep dialogue space and avoid wall-to-wall music. Do not create audio or claim generation happened.`
+	baseSystem := `You plan short-drama instrumental score cues and rewrite every cue for MiniMax Music 3. Output strict JSON only. Root field: cues. Each cue has scene_id,shot_id,kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. Bind scene_id and shot_id only when the cue clearly belongs to that authoritative timeline entity; otherwise use null. caption must have exactly global_metadata,vocal_details,arrangement. Music is fully instrumental: no lead vocal, spoken voice, narration, chanting, choir, humming, whispering, or vocal-like texture. Arrangement must describe section-by-section musical evolution, not merely list instruments. Preserve explicit user requirements and exclusions as highest priority. Keep dialogue space and avoid wall-to-wall music. Do not create audio or claim generation happened.`
 	baseUser := "Authoritative episode timeline JSON:\n" + context + "\n\nUser music ideas and requirements:\n" + strings.TrimSpace(requirements)
 	raw, err := s.skills.ChatWithConfiguredOrFallbackSkill(projectID, models.SkillStageMusicCueSheet, "music-cue-sheet-generate", s.provider, baseSystem, baseUser, map[string]string{"episode_context": context, "user_requirements": requirements})
 	if err != nil {
@@ -601,9 +603,12 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 			if err := validateMusicCaptionJSON(string(caption)); err != nil {
 				return fmt.Errorf("第%d条Cue: %w", index+1, err)
 			}
-			input := MusicCueSheetInput{EpisodeN: episodeN, Kind: item.Kind, StartTime: item.StartTime, EndTime: item.EndTime, Intensity: item.Intensity, Mood: item.Mood, InstrumentNote: item.InstrumentNote, UserRequirements: mergeMusicRequirements(item.UserRequirements, requirements), CaptionJSON: string(caption), Source: "ai", Order: index + 1}
+			input := MusicCueSheetInput{EpisodeN: episodeN, SceneID: item.SceneID, ShotID: item.ShotID, Kind: item.Kind, StartTime: item.StartTime, EndTime: item.EndTime, Intensity: item.Intensity, Mood: item.Mood, InstrumentNote: item.InstrumentNote, UserRequirements: mergeMusicRequirements(item.UserRequirements, requirements), CaptionJSON: string(caption), Source: "ai", Order: index + 1}
 			cue, err := normalizeMusicCueSheet(projectID, input)
 			if err != nil {
+				return fmt.Errorf("第%d条Cue: %w", index+1, err)
+			}
+			if err := NewMusicCueService(tx).validateBindings(&cue); err != nil {
 				return fmt.Errorf("第%d条Cue: %w", index+1, err)
 			}
 			cue.SourceVersionHash = musicCueSourceHash(context, cue.UserRequirements)
@@ -635,7 +640,7 @@ func (s *MusicCueService) RegenerateCue(projectID, id uint) (*models.MusicCueShe
 		return nil, err
 	}
 	currentJSON, _ := json.Marshal(current)
-	baseSystem := `Rewrite exactly one short-drama instrumental Music 3 cue. Output strict JSON with root field cue. Keep start_time and end_time unchanged. cue has kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. caption has exactly global_metadata,vocal_details,arrangement. Fully instrumental; no speech, singing, choir, chanting, humming, whispering or vocal-like textures. Preserve user requirements as highest priority.`
+	baseSystem := `Rewrite exactly one short-drama instrumental Music 3 cue. Output strict JSON with root field cue. Keep start_time and end_time unchanged. cue has scene_id,shot_id,kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. Preserve the current scene_id and shot_id. caption has exactly global_metadata,vocal_details,arrangement. Fully instrumental; no speech, singing, choir, chanting, humming, whispering or vocal-like textures. Preserve user requirements as highest priority.`
 	baseUser := "Episode timeline:\n" + context + "\n\nCurrent cue:\n" + string(currentJSON)
 	raw, err := s.skills.ChatWithConfiguredOrFallbackSkill(projectID, models.SkillStageMusicCueSheet, "music-cue-sheet-generate", s.provider, baseSystem, baseUser, map[string]string{"episode_context": context, "user_requirements": current.UserRequirements})
 	if err != nil {
