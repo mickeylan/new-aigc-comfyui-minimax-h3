@@ -16,6 +16,11 @@ type GenerationCandidateService struct {
 	dependencies *ArtifactDependencyService
 }
 
+type SceneCandidateReferenceSnapshot struct {
+	Selections []SceneReferenceSelection `json:"selections"`
+	TaskInputs json.RawMessage           `json:"task_inputs,omitempty"`
+}
+
 type SceneCandidateCapture struct {
 	ProjectID         uint
 	SceneID           uint
@@ -169,6 +174,44 @@ func (s *GenerationCandidateService) CaptureSceneSuccess(in SceneCandidateCaptur
 		}
 		if err := tx.Create(&captured).Error; err != nil {
 			return err
+		}
+		if in.MediaType == "image" && s.dependencies != nil {
+			var referenceSnapshot SceneCandidateReferenceSnapshot
+			referenceData, _ := json.Marshal(in.References)
+			if json.Unmarshal(referenceData, &referenceSnapshot) == nil {
+				for _, ref := range referenceSnapshot.Selections {
+					var upstream ArtifactRef
+					version := ""
+					switch ref.SourceType {
+					case "look":
+						var row models.CharacterLook
+						if err := tx.Where("id = ? AND project_id = ?", ref.SourceID, in.ProjectID).First(&row).Error; err != nil {
+							return err
+						}
+						upstream = ArtifactRef{Kind: ArtifactKindCharacterLook, ID: row.ID}
+						version = fmt.Sprint(row.Version)
+					case "outfit":
+						var row models.CharacterOutfit
+						if err := tx.Where("id = ? AND project_id = ?", ref.SourceID, in.ProjectID).First(&row).Error; err != nil {
+							return err
+						}
+						upstream = ArtifactRef{Kind: ArtifactKindCharacterOutfit, ID: row.ID}
+						version = fmt.Sprint(row.Version)
+					case "asset":
+						var row models.Asset
+						if err := tx.Where("id = ? AND project_id = ?", ref.SourceID, in.ProjectID).First(&row).Error; err != nil {
+							return err
+						}
+						upstream = ArtifactRef{Kind: ArtifactKindVisualAsset, ID: row.ID}
+						version = row.UpdatedAt.UTC().Format(time.RFC3339Nano)
+					default:
+						continue
+					}
+					if err := s.dependencies.LinkTx(tx, in.ProjectID, upstream, version, ArtifactRef{Kind: ArtifactKindSceneImageCandidate, ID: captured.ID}); err != nil {
+						return err
+					}
+				}
+			}
 		}
 		if in.MediaType == "video" && s.dependencies != nil {
 			var continuity models.SceneContinuity

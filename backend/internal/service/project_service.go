@@ -414,6 +414,16 @@ func (s *ProjectService) DeleteProject(id uint) error {
 				return err
 			}
 		}
+		if tx.Migrator().HasTable(&models.ArtifactDependency{}) {
+			if err := tx.Where("project_id = ?", id).Delete(&models.ArtifactDependency{}).Error; err != nil {
+				return err
+			}
+		}
+		if tx.Migrator().HasTable(&models.ArtifactInvalidationEvent{}) {
+			if err := tx.Where("project_id = ?", id).Delete(&models.ArtifactInvalidationEvent{}).Error; err != nil {
+				return err
+			}
+		}
 		return tx.Delete(&models.Project{}, id).Error
 	}); err != nil {
 		return err
@@ -6735,9 +6745,10 @@ func (s *ProjectService) syncSceneImages() {
 				s.failSceneImage(sc, sc.ImageToken, "保存 Krea2 分镜图片失败: "+err.Error())
 				continue
 			}
+			selections, _ := parseSceneReferences(sc)
 			candidate, captureErr := s.completeSceneCandidate(SceneCandidateCapture{
 				ProjectID: sc.ProjectID, SceneID: sc.ID, MediaType: "image", TaskID: task.TaskID,
-				File: filepath.Base(path), Prompt: task.Prompt, References: task.InputsJSON,
+				File: filepath.Base(path), Prompt: task.Prompt, References: SceneCandidateReferenceSnapshot{Selections: selections, TaskInputs: json.RawMessage(task.InputsJSON)},
 				Params: task.ParamsJSON, Provenance: map[string]any{"template_id": task.TemplateID, "template_name": task.TemplateName, "port": task.Port, "gpu": task.GPUIndex, "result_files": task.ResultFiles},
 				ParentCandidateID: task.ParentCandidateID, ExpectedTaskID: task.TaskID,
 			})
@@ -7542,7 +7553,10 @@ func (s *ProjectService) createMergeTaskRecord(p *models.Project, sceneIDs []uin
 			ids[i] = strconv.FormatUint(uint64(id), 10)
 		}
 		mt = models.MergeTask{ProjectID: current.ID, EpisodeN: episodeN, Title: fmt.Sprintf("第%d集 · %s", episodeN, current.Title), SceneOrder: strings.Join(ids, ","), SceneVideoFingerprints: string(encoded), InputSnapshot: string(snapshot), Status: "pending", Generation: episodeGeneration, RequestedDub: dub, RequestedSubtitles: subtitles, RequestedScreenText: audio.ScreenText, NativeVolume: audio.NativeVolume, DialogueVolume: audio.DialogueVolume, BGMVolume: audio.BGMVolume, DialogueMix: audio.DialogueMix}
-		return tx.Create(&mt).Error
+		if err := tx.Create(&mt).Error; err != nil {
+			return err
+		}
+		return s.linkMergeTaskDependenciesTx(tx, &mt, scenes, snapshot)
 	})
 	if err != nil {
 		return nil, nil, err

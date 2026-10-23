@@ -21,6 +21,9 @@ const (
 	ArtifactKindCharacterLook          = "character_look"
 	ArtifactKindCharacterOutfit        = "character_outfit"
 	ArtifactKindSceneAudioCandidate    = "scene_audio_candidate"
+	ArtifactKindScreenTextCue          = "screen_text_cue"
+	ArtifactKindMergeTask              = "merge_task"
+	ArtifactKindVisualAsset            = "visual_asset"
 )
 
 var artifactKinds = map[string]bool{
@@ -28,6 +31,7 @@ var artifactKinds = map[string]bool{
 	ArtifactKindDialogue: true, ArtifactKindDialogueAudioCandidate: true,
 	ArtifactKindContinuityFrame: true, ArtifactKindSceneImageCandidate: true, ArtifactKindSceneVideoCandidate: true,
 	ArtifactKindCharacterLook: true, ArtifactKindCharacterOutfit: true, ArtifactKindSceneAudioCandidate: true,
+	ArtifactKindScreenTextCue: true, ArtifactKindMergeTask: true, ArtifactKindVisualAsset: true,
 }
 
 type ArtifactRef struct {

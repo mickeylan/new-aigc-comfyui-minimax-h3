@@ -11,6 +11,35 @@ func readyMergeScene(projectID uint, episode, order int, generation uint, task, 
 	return models.Scene{ProjectID: projectID, EpisodeN: episode, Order: order, Generation: generation, Status: "video_ready", VideoTaskID: task, VideoFile: file, VideoGPU: &gpu}
 }
 
+func TestMergeTaskRegistersAuthoritativeInputDependencies(t *testing.T) {
+	db := safetyDB(t, &models.MergeTask{}, &models.GenerationCandidate{}, &models.SceneAudioCandidate{}, &models.AudioLayer{}, &models.ScreenTextCue{}, &models.ArtifactDependency{}, &models.ArtifactInvalidationEvent{})
+	project := models.Project{Title: "series", Generation: 1}
+	db.Create(&project)
+	a := readyMergeScene(project.ID, 1, 1, 1, "video-a", "a.mp4")
+	b := readyMergeScene(project.ID, 1, 2, 1, "video-b", "b.mp4")
+	db.Create(&a)
+	db.Create(&b)
+	for _, sc := range []models.Scene{a, b} {
+		db.Create(&models.GenerationCandidate{ProjectID: project.ID, EntityType: "scene", EntityID: sc.ID, MediaType: "video", TaskID: sc.VideoTaskID, File: sc.VideoFile, IsCurrent: true})
+		db.Create(&models.SceneAudioCandidate{ProjectID: project.ID, SceneID: sc.ID, SourceHash: "audio-" + sc.VideoTaskID, ReviewStatus: "accepted", IsCurrent: true})
+	}
+	layer := models.AudioLayer{ProjectID: project.ID, EpisodeN: 1, Kind: "bgm", File: "bgm.wav", Status: "ready", Volume: 1}
+	db.Create(&layer)
+	cue := models.ScreenTextCue{ProjectID: project.ID, EpisodeN: 1, Kind: "location", Text: "山门", StartTime: 0, EndTime: 1, Enabled: true, ReviewStatus: "approved"}
+	db.Create(&cue)
+	graph := NewArtifactDependencyService(db, true)
+	svc := &ProjectService{db: db, artifactDependencies: graph}
+	merge, _, err := svc.createMergeTaskRecord(&project, []uint{a.ID, b.ID}, false, false, MergeAudioOptions{NativeVolume: 1, DialogueVolume: 1, BGMVolume: 1, ScreenText: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	db.Model(&models.ArtifactDependency{}).Where("downstream_kind = ? AND downstream_id = ?", ArtifactKindMergeTask, merge.ID).Count(&count)
+	if count != 4 {
+		t.Fatalf("expected 2 videos + layer + cue, got %d", count)
+	}
+}
+
 func TestMergeUsesLatestGenerationPerEpisodeAndAllowsParallelEpisodes(t *testing.T) {
 	db := safetyDB(t, &models.MergeTask{})
 	project := models.Project{Title: "series", Generation: 9}

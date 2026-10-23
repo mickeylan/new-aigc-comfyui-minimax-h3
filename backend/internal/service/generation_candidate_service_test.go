@@ -1,12 +1,42 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
 	"comfyui-console/internal/models"
 	"gorm.io/gorm"
 )
+
+func TestSceneImageCandidateRegistersExplicitVerifiedReferences(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	if err := db.AutoMigrate(&models.GenerationCandidate{}, &models.CharacterOutfit{}, &models.Asset{}, &models.ArtifactDependency{}, &models.ArtifactInvalidationEvent{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "p"}
+	db.Create(&project)
+	character := models.Character{ProjectID: project.ID, Name: "c"}
+	db.Create(&character)
+	look := models.CharacterLook{ProjectID: project.ID, CharacterID: character.ID, Name: "l", Category: "clothing", Version: 2}
+	db.Create(&look)
+	outfit := models.CharacterOutfit{ProjectID: project.ID, CharacterID: character.ID, Name: "o", Version: 3}
+	db.Create(&outfit)
+	asset := models.Asset{ProjectID: project.ID, Kind: "prop", Name: "剑"}
+	db.Create(&asset)
+	refs, _ := json.Marshal([]SceneReferenceSelection{{SourceType: "character", SourceID: character.ID}})
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, ReferenceImagesJSON: string(refs)}
+	db.Create(&scene)
+	candidate, err := NewGenerationCandidateService(db, NewArtifactDependencyService(db, true)).CaptureSceneSuccess(SceneCandidateCapture{ProjectID: project.ID, SceneID: scene.ID, MediaType: "image", TaskID: "image-task", File: "image.png", References: SceneCandidateReferenceSnapshot{Selections: []SceneReferenceSelection{{SourceType: "look", SourceID: look.ID}, {SourceType: "outfit", SourceID: outfit.ID}, {SourceType: "asset", SourceID: asset.ID}, {SourceType: "character", SourceID: character.ID}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	db.Model(&models.ArtifactDependency{}).Where("downstream_kind = ? AND downstream_id = ?", ArtifactKindSceneImageCandidate, candidate.ID).Count(&count)
+	if count != 3 {
+		t.Fatalf("expected only verified look/outfit/asset edges, got %d", count)
+	}
+}
 
 func TestSceneVideoCandidateRegistersVerifiedImageAndContinuityDependencies(t *testing.T) {
 	db := newTestDBWithNewModels(t)
