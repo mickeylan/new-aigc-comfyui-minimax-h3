@@ -47,6 +47,8 @@ test('剪辑台先收集用户设想再生成并审核Music 3提示词', () => {
   assert.match(source, /musicCueIssues/)
   assert.match(source, /musicCuePreflight/)
   assert.match(source, /refreshMusicCuePreflight/)
+  assert.match(source, /确认当前编辑为新基线/)
+  assert.match(source, /rebaseMusicCue/)
   assert.match(source, /绑定Scene/)
   assert.match(source, /绑定Shot/)
   assert.match(source, /loadMusicCueShots/)

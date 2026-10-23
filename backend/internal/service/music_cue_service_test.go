@@ -232,6 +232,13 @@ func TestSavingStaleMusicCueDoesNotSilentlyRebase(t *testing.T) {
 	if _, err := svc.Review(p.ID, cue.ID, true, ""); err == nil {
 		t.Fatal("stale saved cue was approved")
 	}
+	rebased, err := svc.RebaseCue(p.ID, cue.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebased.Stale || rebased.ReviewStatus != "draft" || rebased.SourceVersionHash == "" {
+		t.Fatalf("explicit rebase failed: %+v", rebased)
+	}
 }
 
 func TestMusicCueSheetReviewGateRequiresStructuredCaption(t *testing.T) {
@@ -430,6 +437,25 @@ func TestMusicCueApprovalRejectsOutOfEpisodeRange(t *testing.T) {
 	}
 	if _, err := svc.Review(p.ID, cue.ID, true, ""); err == nil {
 		t.Fatal("out-of-range cue approved")
+	}
+}
+
+func TestMusicCuePreflightRejectsAllDisabledSheet(t *testing.T) {
+	db := newMusicCueTestDB(t)
+	svc := NewMusicCueService(db)
+	p := models.Project{Title: "p"}
+	db.Create(&p)
+	db.Create(&models.Scene{ProjectID: p.ID, EpisodeN: 1, Duration: 5})
+	disabled := false
+	if _, err := svc.Create(p.ID, MusicCueSheetInput{EpisodeN: 1, Kind: "scene", StartTime: 0, EndTime: 5, Enabled: &disabled}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.Preflight(p.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Ready || len(result.Issues) != 1 || result.Issues[0].Code != "disabled_all" {
+		t.Fatalf("unexpected disabled preflight: %+v", result)
 	}
 }
 

@@ -168,6 +168,7 @@ export const api = {
   createMusicCue: (id, data) => http.post(`/projects/${id}/music-cue-sheets`, data),
   updateMusicCue: (id, cid, data) => http.put(`/projects/${id}/music-cue-sheets/${cid}`, data),
   musicCueCaptionPreview: (id, cid) => http.get(`/projects/${id}/music-cue-sheets/${cid}/caption-preview`),
+  rebaseMusicCue: (id, cid) => http.post(`/projects/${id}/music-cue-sheets/${cid}/rebase`),
   regenerateMusicCue: (id, cid) => http.post(`/projects/${id}/music-cue-sheets/${cid}/regenerate`, {}, { timeout: 300000 }),
   reviewMusicCue: (id, cid, action, reason = '') => http.post(`/projects/${id}/music-cue-sheets/${cid}/review`, { action, reason }),
   batchApproveMusicCues: (id, episodeN, reviewReason = '') => http.post(`/projects/${id}/music-cue-sheets/batch-approve`, { episode_n: episodeN, review_reason: reviewReason }),

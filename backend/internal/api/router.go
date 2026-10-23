@@ -194,6 +194,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/music-cue-sheets", svc.HandleCreateMusicCueSheet)
 	r.PUT("/api/projects/:id/music-cue-sheets/:cid", svc.HandleUpdateMusicCueSheet)
 	r.GET("/api/projects/:id/music-cue-sheets/:cid/caption-preview", svc.HandleMusicCueCaptionPreview)
+	r.POST("/api/projects/:id/music-cue-sheets/:cid/rebase", svc.HandleRebaseMusicCueSheet)
 	r.POST("/api/projects/:id/music-cue-sheets/:cid/regenerate", svc.HandleRegenerateMusicCueSheet)
 	r.POST("/api/projects/:id/music-cue-sheets/:cid/review", svc.HandleReviewMusicCueSheet)
 	// 候选接口只管理未来生成结果；没有真实工作流前不提供生成、重试或分支路由。

@@ -215,8 +215,14 @@ func (s *MusicCueService) Create(projectID uint, in MusicCueSheetInput) (*models
 	if context, contextErr := s.episodeContext(projectID, cue.EpisodeN); contextErr == nil {
 		cue.SourceVersionHash = musicCueSourceHash(context, &cue)
 	}
-	if err := s.db.Create(&cue).Error; err != nil {
+	wantEnabled := cue.Enabled
+	if err := s.db.Select("*").Create(&cue).Error; err != nil {
 		return nil, err
+	}
+	if !wantEnabled {
+		if err := s.db.Model(&cue).Update("enabled", false).Error; err != nil {
+			return nil, err
+		}
 	}
 	// Reload so the returned pointer reflects the DB-persisted state (including auto-generated ID).
 	created := &models.MusicCueSheet{}
@@ -354,6 +360,17 @@ func (s *MusicCueService) Preflight(projectID uint, episodeN int) (MusicCuePrefl
 	if len(cues) == 0 {
 		result.Ready = false
 		result.Issues = append(result.Issues, MusicCuePreflightIssue{"error", "empty", 0, 0, "当前Episode尚未创建配乐Cue Sheet"})
+		return result, nil
+	}
+	enabledCount := 0
+	for _, cue := range cues {
+		if cue.Enabled {
+			enabledCount++
+		}
+	}
+	if enabledCount == 0 {
+		result.Ready = false
+		result.Issues = append(result.Issues, MusicCuePreflightIssue{"error", "disabled_all", 0, 0, "当前Episode没有启用的配乐Cue"})
 		return result, nil
 	}
 	context, contextErr := s.episodeContext(projectID, episodeN)
@@ -791,6 +808,44 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 	return rows, err
 }
 
+func (s *MusicCueService) RebaseCue(projectID, id uint) (*models.MusicCueSheet, error) {
+	var cue models.MusicCueSheet
+	if err := s.db.Where("id = ? AND project_id = ?", id, projectID).First(&cue).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrMusicCueSheetNotFound
+		}
+		return nil, err
+	}
+	if !cue.Stale {
+		return nil, fmt.Errorf("Cue当前未过期，无需重建来源基线")
+	}
+	if err := s.validateBindings(&cue); err != nil {
+		return nil, err
+	}
+	if err := s.validateBindingTimeline(&cue); err != nil {
+		return nil, err
+	}
+	if err := s.validateCueTimeline(&cue); err != nil {
+		return nil, err
+	}
+	if err := validateMusicCaptionJSON(cue.CaptionJSON); err != nil {
+		return nil, err
+	}
+	context, err := s.episodeContext(projectID, cue.EpisodeN)
+	if err != nil {
+		return nil, err
+	}
+	cue.SourceVersionHash = musicCueSourceHash(context, &cue)
+	cue.Stale = false
+	cue.StaleReason = ""
+	cue.ReviewStatus = "draft"
+	cue.ReviewedAt = nil
+	if err := s.db.Model(&cue).Updates(map[string]any{"source_version_hash": cue.SourceVersionHash, "stale": false, "stale_reason": "", "review_status": "draft", "reviewed_at": nil}).Error; err != nil {
+		return nil, err
+	}
+	return &cue, nil
+}
+
 func (s *MusicCueService) RegenerateCue(projectID, id uint) (*models.MusicCueSheet, error) {
 	if s.provider == nil || s.skills == nil {
 		return nil, fmt.Errorf("配乐提示词生成服务未配置")
@@ -1033,6 +1088,28 @@ func (s *Service) HandleMusicCueCaptionPreview(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, preview)
+}
+
+func (s *Service) HandleRebaseMusicCueSheet(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("cid"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid music cue id"})
+		return
+	}
+	cue, err := s.MusicCues.RebaseCue(p.ID, uint(id))
+	if err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, ErrMusicCueSheetNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, cue)
 }
 
 func (s *Service) HandleRegenerateMusicCueSheet(c *gin.Context) {
