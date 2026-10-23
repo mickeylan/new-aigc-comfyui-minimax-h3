@@ -347,6 +347,11 @@ func (s *MusicCueService) Preflight(projectID uint, episodeN int) (MusicCuePrefl
 	if err != nil {
 		return result, err
 	}
+	if len(cues) == 0 {
+		result.Ready = false
+		result.Issues = append(result.Issues, MusicCuePreflightIssue{"error", "empty", 0, 0, "当前Episode尚未创建配乐Cue Sheet"})
+		return result, nil
+	}
 	context, contextErr := s.episodeContext(projectID, episodeN)
 	if contextErr != nil {
 		return result, contextErr
@@ -556,6 +561,13 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 	context, err := s.episodeContext(projectID, episodeN)
 	if err != nil {
 		return nil, err
+	}
+	var approvedCount int64
+	if err := s.db.Model(&models.MusicCueSheet{}).Where("project_id = ? AND episode_n = ? AND review_status = ?", projectID, episodeN, "approved").Count(&approvedCount).Error; err != nil {
+		return nil, err
+	}
+	if approvedCount > 0 {
+		return nil, fmt.Errorf("当前Episode已有%d条已审核Cue；为保护审核结果，请逐条编辑使其回到草稿或删除后再重新生成整套方案", approvedCount)
 	}
 	baseSystem := `You plan short-drama instrumental score cues and rewrite every cue for MiniMax Music 3. Output strict JSON only. Root field: cues. Each cue has kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. caption must have exactly global_metadata,vocal_details,arrangement. Music is fully instrumental: no lead vocal, spoken voice, narration, chanting, choir, humming, whispering, or vocal-like texture. Arrangement must describe section-by-section musical evolution, not merely list instruments. Preserve explicit user requirements and exclusions as highest priority. Keep dialogue space and avoid wall-to-wall music. Do not create audio or claim generation happened.`
 	baseUser := "Authoritative episode timeline JSON:\n" + context + "\n\nUser music ideas and requirements:\n" + strings.TrimSpace(requirements)

@@ -303,6 +303,36 @@ func TestMusicCueApprovalRejectsOutOfEpisodeRange(t *testing.T) {
 	}
 }
 
+func TestMusicCuePreflightRejectsEmptySheet(t *testing.T) {
+	db := newMusicCueTestDB(t)
+	svc := NewMusicCueService(db)
+	p := models.Project{Title: "p"}
+	db.Create(&p)
+	db.Create(&models.Scene{ProjectID: p.ID, EpisodeN: 1, Duration: 5})
+	result, err := svc.Preflight(p.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Ready || len(result.Issues) != 1 || result.Issues[0].Code != "empty" {
+		t.Fatalf("unexpected empty preflight: %+v", result)
+	}
+}
+
+func TestDraftMusicCuesPreservesApprovedSheet(t *testing.T) {
+	db := newMusicCueTestDB(t)
+	if err := db.AutoMigrate(&models.Skill{}, &models.ProjectSkillConfig{}, &models.SkillAuditLog{}); err != nil {
+		t.Fatal(err)
+	}
+	p := models.Project{Title: "p"}
+	db.Create(&p)
+	db.Create(&models.Scene{ProjectID: p.ID, EpisodeN: 1, Duration: 5})
+	db.Create(&models.MusicCueSheet{ProjectID: p.ID, EpisodeN: 1, ReviewStatus: "approved", Enabled: true})
+	svc := NewMusicCueService(db, &stubTextProvider{response: `{"cues":[]}`}, NewSkillService(db))
+	if _, err := svc.DraftEpisode(p.ID, 1, ""); err == nil || !strings.Contains(err.Error(), "已审核Cue") {
+		t.Fatalf("approved sheet was not protected: %v", err)
+	}
+}
+
 func TestDraftMusicCuesUsesUserRequirementsAndRewriterSchema(t *testing.T) {
 	db := newMusicCueTestDB(t)
 	if err := db.AutoMigrate(&models.Skill{}, &models.ProjectSkillConfig{}, &models.SkillAuditLog{}); err != nil {

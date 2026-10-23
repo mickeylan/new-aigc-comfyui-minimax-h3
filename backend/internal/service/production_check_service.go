@@ -110,6 +110,9 @@ func (s *ProductionCheckService) Check(projectID uint, episodeN int) (Production
 			return result, err
 		}
 		for _, issue := range musicPreflight.Issues {
+			if issue.Code == "empty" {
+				continue
+			}
 			severity := issue.Severity
 			if issue.Code == "review" {
 				severity = "warning"
