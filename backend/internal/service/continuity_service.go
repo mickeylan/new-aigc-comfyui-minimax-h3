@@ -18,10 +18,11 @@ const DefaultCandidateFrameCount = 22
 var continuityTaskIDSanitizer = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
 
 type ContinuityService struct {
-	cfg    *config.Config
-	db     *gorm.DB
-	remote *RemoteExec
-	upload *UploadManager
+	cfg          *config.Config
+	db           *gorm.DB
+	remote       *RemoteExec
+	upload       *UploadManager
+	dependencies *ArtifactDependencyService
 }
 
 func NewContinuityService(cfg *config.Config, db *gorm.DB, remote *RemoteExec, uploads ...*UploadManager) *ContinuityService {
@@ -172,6 +173,10 @@ func (s *ContinuityService) SelectFrame(projectID, sceneID, frameID uint) (*mode
 	}
 	now := time.Now()
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var previousSelectedIDs []uint
+		if err := tx.Model(&models.FrameCandidate{}).Where("scene_id = ? AND type = ? AND id != ?", sceneID, models.FrameCandidateSelected, frame.ID).Pluck("id", &previousSelectedIDs).Error; err != nil {
+			return err
+		}
 		if err := tx.Model(&models.FrameCandidate{}).Where("scene_id=? AND type IN ?", sceneID, []models.FrameCandidateType{models.FrameCandidateCandidate, models.FrameCandidateSelected}).Updates(map[string]any{"type": models.FrameCandidateCandidate, "selected_at": nil}).Error; err != nil {
 			return err
 		}
@@ -191,6 +196,13 @@ func (s *ContinuityService) SelectFrame(projectID, sceneID, frameID uint) (*mode
 		for _, dependentID := range dependentIDs {
 			if err := invalidateSceneVideoTx(tx, projectID, dependentID, "连续性衔接帧已变化"); err != nil {
 				return err
+			}
+		}
+		if s.dependencies != nil {
+			for _, id := range previousSelectedIDs {
+				if _, err := s.dependencies.RecordInvalidation(tx, projectID, ArtifactRef{Kind: ArtifactKindContinuityFrame, ID: id}, "连续性衔接帧已变化"); err != nil {
+					return err
+				}
 			}
 		}
 		return invalidateContinuityDependentsTx(tx, projectID, dependentIDs, "连续性衔接帧已变化")
@@ -269,6 +281,11 @@ func (s *ContinuityService) Configure(projectID, sceneID uint, req ConfigureCont
 		}
 		if err := invalidateSceneVideoTx(tx, projectID, sceneID, "连续性输入已变化"); err != nil {
 			return err
+		}
+		if s.dependencies != nil && old.SelectedFrameID != nil && (cfg.SelectedFrameID == nil || *old.SelectedFrameID != *cfg.SelectedFrameID) {
+			if _, err := s.dependencies.RecordInvalidation(tx, projectID, ArtifactRef{Kind: ArtifactKindContinuityFrame, ID: *old.SelectedFrameID}, "连续性输入已变化"); err != nil {
+				return err
+			}
 		}
 		return invalidateContinuityDependentsTx(tx, projectID, []uint{sceneID}, "连续性输入已变化")
 	}); err != nil {

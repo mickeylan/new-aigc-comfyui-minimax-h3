@@ -8,6 +8,27 @@ import (
 	"comfyui-console/internal/models"
 )
 
+func TestDialogueAudioCandidateRegistersAuthoritativeDependency(t *testing.T) {
+	db := safetyDB(t, &models.DialogueAudioCandidate{}, &models.ArtifactDependency{}, &models.ArtifactInvalidationEvent{})
+	project := models.Project{Title: "p"}
+	db.Create(&project)
+	dialogue := models.Dialogue{ProjectID: project.ID, Text: "你好", Status: "synthesizing", AudioToken: "token"}
+	db.Create(&dialogue)
+	graph := NewArtifactDependencyService(db, true)
+	service := &ProjectService{db: db, artifactDependencies: graph}
+	candidate, err := service.captureDialogueAudio(dialogueAudioCapture{ProjectID: project.ID, DialogueID: dialogue.ID, Token: "token", InputHash: "hash-v1", Provider: "test", File: "take.wav", FileSHA256: strings.Repeat("a", 64), FileSize: 128})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var edge models.ArtifactDependency
+	if err := db.Where("upstream_kind = ? AND upstream_id = ? AND downstream_kind = ? AND downstream_id = ?", ArtifactKindDialogue, dialogue.ID, ArtifactKindDialogueAudioCandidate, candidate.ID).First(&edge).Error; err != nil {
+		t.Fatal(err)
+	}
+	if edge.UpstreamVersion != "hash-v1" {
+		t.Fatalf("unexpected edge: %+v", edge)
+	}
+}
+
 func TestCaptureAndSelectDialogueAudioCandidates(t *testing.T) {
 	db := safetyDB(t, &models.DialogueAudioCandidate{})
 	project := models.Project{Title: "p"}

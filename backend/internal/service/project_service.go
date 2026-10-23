@@ -33,24 +33,25 @@ import (
 
 // ProjectService 漫剧项目：剧本（文生文）→ 分镜画面（文生图）→ 视频（本地 L40）→ 合并成片
 type ProjectService struct {
-	cfg            *config.Config
-	db             *gorm.DB
-	textProvider   TextProvider // 文生文 provider（支持火山 / llama.cpp 等）
-	volc           *VolcClient  // 保留用于图片生成
-	ali            *AliyunTTS
-	indexTTS       *LocalIndexTTS
-	tasks          *TaskService
-	remote         *RemoteExec
-	upload         *UploadManager
-	hub            *Hub
-	stopped        chan struct{}
-	materials      *MaterialService
-	skills         *SkillService
-	characterLooks *CharacterLookService
-	continuity     *ContinuityService
-	musicCues      *MusicCueService
-	assetMu        sync.Mutex // 串行化资产参考图任务创建，避免并发重复排队
-	sceneAudioMu   sync.Mutex // 串行化Scene连续音轨渲染与发布，避免重复文件和候选
+	cfg                  *config.Config
+	db                   *gorm.DB
+	textProvider         TextProvider // 文生文 provider（支持火山 / llama.cpp 等）
+	volc                 *VolcClient  // 保留用于图片生成
+	ali                  *AliyunTTS
+	indexTTS             *LocalIndexTTS
+	tasks                *TaskService
+	remote               *RemoteExec
+	upload               *UploadManager
+	hub                  *Hub
+	stopped              chan struct{}
+	materials            *MaterialService
+	skills               *SkillService
+	characterLooks       *CharacterLookService
+	continuity           *ContinuityService
+	musicCues            *MusicCueService
+	artifactDependencies *ArtifactDependencyService
+	assetMu              sync.Mutex // 串行化资产参考图任务创建，避免并发重复排队
+	sceneAudioMu         sync.Mutex // 串行化Scene连续音轨渲染与发布，避免重复文件和候选
 }
 
 func NewProjectService(cfg *config.Config, db *gorm.DB, textProvider TextProvider, volc *VolcClient, tasks *TaskService, remote *RemoteExec, upload *UploadManager, hub *Hub, materials *MaterialService) *ProjectService {
@@ -6676,7 +6677,7 @@ func (s *ProjectService) failPipeline(projectID uint, err error, auto bool) {
 // deliberately started only after that transaction commits.
 func (s *ProjectService) completeSceneCandidate(in SceneCandidateCapture) (*models.GenerationCandidate, error) {
 	in.FinalizeDerived = true
-	candidate, err := NewGenerationCandidateService(s.db).CaptureSceneSuccess(in)
+	candidate, err := NewGenerationCandidateService(s.db, s.artifactDependencies).CaptureSceneSuccess(in)
 	if err != nil {
 		return nil, err
 	}
@@ -8690,6 +8691,11 @@ func (s *ProjectService) UpdateDialogueFields(p *models.Project, did uint, input
 	}
 	if input.Text != nil && strings.TrimSpace(*input.Text) != strings.TrimSpace(d.Text) {
 		_ = s.db.Model(&models.Shot{}).Where("scene_id = ?", d.SceneID).Updates(map[string]any{"dialogue_ranges_json": "[]", "dialogue": ""}).Error
+	}
+	if s.artifactDependencies != nil && (audioChanged || promptChanged || timelineChanged) {
+		if _, err := s.artifactDependencies.RecordInvalidation(nil, d.ProjectID, ArtifactRef{Kind: ArtifactKindDialogue, ID: d.ID}, "对白内容、音色或时间线已修改"); err != nil {
+			log.Printf("[dialogue %d] record dependency invalidation failed: %v", d.ID, err)
+		}
 	}
 	if s.musicCues != nil && (promptChanged || timelineChanged) {
 		var scene models.Scene

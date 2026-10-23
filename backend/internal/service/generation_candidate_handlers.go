@@ -16,7 +16,7 @@ func (s *Service) HandleListSceneCandidates(c *gin.Context) {
 	if !ok {
 		return
 	}
-	rows, err := NewGenerationCandidateService(s.DB).ListScene(scene.ProjectID, scene.ID, c.Query("media_type"))
+	rows, err := NewGenerationCandidateService(s.DB, s.ArtifactDependencies).ListScene(scene.ProjectID, scene.ID, c.Query("media_type"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -42,7 +42,7 @@ func (s *Service) HandleReviewGenerationCandidate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	row, err := NewGenerationCandidateService(s.DB).Review(p.ID, uint(id), req.Status, req.Reason)
+	row, err := NewGenerationCandidateService(s.DB, s.ArtifactDependencies).Review(p.ID, uint(id), req.Status, req.Reason)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -162,7 +162,7 @@ func (s *Service) HandleSelectGenerationCandidate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid candidate id"})
 		return
 	}
-	row, err := NewGenerationCandidateService(s.DB).SelectCurrent(p.ID, uint(id))
+	row, err := NewGenerationCandidateService(s.DB, s.ArtifactDependencies).SelectCurrent(p.ID, uint(id))
 	if err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
@@ -182,7 +182,7 @@ func (s *Service) HandleDeleteGenerationCandidate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid candidate id"})
 		return
 	}
-	err = NewGenerationCandidateService(s.DB).Delete(p.ID, uint(id))
+	err = NewGenerationCandidateService(s.DB, s.ArtifactDependencies).Delete(p.ID, uint(id))
 	if err != nil {
 		var delErr *CandidateDeleteError
 		if errors.As(err, &delErr) {

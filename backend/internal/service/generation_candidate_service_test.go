@@ -8,6 +8,32 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestSceneVideoCandidateRegistersVerifiedImageAndContinuityDependencies(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	if err := db.AutoMigrate(&models.GenerationCandidate{}, &models.FrameCandidate{}, &models.SceneContinuity{}, &models.ArtifactDependency{}, &models.ArtifactInvalidationEvent{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "p"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 2, ImageTaskID: "image-task"}
+	db.Create(&scene)
+	image := models.GenerationCandidate{ProjectID: project.ID, EntityType: "scene", EntityID: scene.ID, MediaType: "image", TaskID: "image-task", File: "storyboard.png", IsCurrent: true}
+	db.Create(&image)
+	frame := models.FrameCandidate{ProjectID: project.ID, SceneID: scene.ID, VideoTaskID: "source-video", FrameIndex: 21, ImageFile: "tail.png", Type: models.FrameCandidateSelected}
+	db.Create(&frame)
+	db.Create(&models.SceneContinuity{SceneID: scene.ID, Mode: models.ContinuityModeContinue, SelectedFrameID: &frame.ID, SourceVideoTaskID: "source-video", Status: "ready"})
+	graph := NewArtifactDependencyService(db, true)
+	candidate, err := NewGenerationCandidateService(db, graph).CaptureSceneSuccess(SceneCandidateCapture{ProjectID: project.ID, SceneID: scene.ID, MediaType: "video", TaskID: "video-task", File: "video.mp4"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	db.Model(&models.ArtifactDependency{}).Where("downstream_kind = ? AND downstream_id = ?", ArtifactKindSceneVideoCandidate, candidate.ID).Count(&count)
+	if count != 2 {
+		t.Fatalf("expected image and continuity dependencies, got %d", count)
+	}
+}
+
 func TestGenerationCandidateReviewAndSelectProjectsToScene(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	if err := db.AutoMigrate(&models.GenerationCandidate{}); err != nil {

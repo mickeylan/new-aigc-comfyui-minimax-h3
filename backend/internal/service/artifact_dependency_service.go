@@ -9,6 +9,23 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	ArtifactKindMusicCue               = "music_cue"
+	ArtifactKindMusicCandidate         = "music_candidate"
+	ArtifactKindAudioLayer             = "audio_layer"
+	ArtifactKindDialogue               = "dialogue"
+	ArtifactKindDialogueAudioCandidate = "dialogue_audio_candidate"
+	ArtifactKindContinuityFrame        = "continuity_frame"
+	ArtifactKindSceneImageCandidate    = "scene_image_candidate"
+	ArtifactKindSceneVideoCandidate    = "scene_video_candidate"
+)
+
+var artifactKinds = map[string]bool{
+	ArtifactKindMusicCue: true, ArtifactKindMusicCandidate: true, ArtifactKindAudioLayer: true,
+	ArtifactKindDialogue: true, ArtifactKindDialogueAudioCandidate: true,
+	ArtifactKindContinuityFrame: true, ArtifactKindSceneImageCandidate: true, ArtifactKindSceneVideoCandidate: true,
+}
+
 type ArtifactRef struct {
 	Kind string `json:"kind"`
 	ID   uint   `json:"id"`
@@ -23,7 +40,7 @@ func NewArtifactDependencyService(db *gorm.DB, enabled bool) *ArtifactDependency
 	return &ArtifactDependencyService{db: db, enabled: enabled}
 }
 
-func validArtifactRef(ref ArtifactRef) bool { return strings.TrimSpace(ref.Kind) != "" && ref.ID > 0 }
+func validArtifactRef(ref ArtifactRef) bool { return artifactKinds[ref.Kind] && ref.ID > 0 }
 
 func (s *ArtifactDependencyService) LinkMusicCandidate(projectID, cueID, candidateID uint, sourceVersion string) error {
 	return s.LinkMusicCandidateTx(s.db, projectID, cueID, candidateID, sourceVersion)
@@ -36,8 +53,7 @@ func (s *ArtifactDependencyService) LinkMusicCandidateTx(tx *gorm.DB, projectID,
 	if tx == nil {
 		tx = s.db
 	}
-	row := models.ArtifactDependency{ProjectID: projectID, UpstreamKind: "music_cue", UpstreamID: cueID, UpstreamVersion: strings.TrimSpace(sourceVersion), DownstreamKind: "music_candidate", DownstreamID: candidateID}
-	return tx.Where(models.ArtifactDependency{ProjectID: projectID, UpstreamKind: row.UpstreamKind, UpstreamID: cueID, DownstreamKind: row.DownstreamKind, DownstreamID: candidateID}).Assign(map[string]any{"upstream_version": row.UpstreamVersion}).FirstOrCreate(&row).Error
+	return s.LinkTx(tx, projectID, ArtifactRef{Kind: ArtifactKindMusicCue, ID: cueID}, sourceVersion, ArtifactRef{Kind: ArtifactKindMusicCandidate, ID: candidateID})
 }
 
 func (s *ArtifactDependencyService) DeleteArtifactTx(tx *gorm.DB, projectID uint, ref ArtifactRef) error {
@@ -47,21 +63,33 @@ func (s *ArtifactDependencyService) DeleteArtifactTx(tx *gorm.DB, projectID uint
 	if tx == nil {
 		tx = s.db
 	}
+	ref.Kind = strings.TrimSpace(ref.Kind)
+	if projectID == 0 || !validArtifactRef(ref) {
+		return fmt.Errorf("project and artifact reference are required")
+	}
 	return tx.Where("project_id = ? AND ((upstream_kind = ? AND upstream_id = ?) OR (downstream_kind = ? AND downstream_id = ?))", projectID, ref.Kind, ref.ID, ref.Kind, ref.ID).Delete(&models.ArtifactDependency{}).Error
 }
 
 // Link records a dependency without changing domain state. Existing invalidation paths remain authoritative.
 func (s *ArtifactDependencyService) Link(projectID uint, upstream ArtifactRef, upstreamVersion string, downstream ArtifactRef) error {
+	return s.LinkTx(s.db, projectID, upstream, upstreamVersion, downstream)
+}
+
+func (s *ArtifactDependencyService) LinkTx(tx *gorm.DB, projectID uint, upstream ArtifactRef, upstreamVersion string, downstream ArtifactRef) error {
 	if s == nil || !s.enabled {
 		return nil
 	}
+	if tx == nil {
+		tx = s.db
+	}
+	upstream.Kind, downstream.Kind = strings.TrimSpace(upstream.Kind), strings.TrimSpace(downstream.Kind)
 	if projectID == 0 || !validArtifactRef(upstream) || !validArtifactRef(downstream) {
 		return fmt.Errorf("project and artifact references are required")
 	}
 	if upstream == downstream {
 		return fmt.Errorf("artifact cannot depend on itself")
 	}
-	affected, err := s.Affected(projectID, downstream)
+	affected, err := s.affectedTx(tx, projectID, downstream)
 	if err != nil {
 		return err
 	}
@@ -71,14 +99,22 @@ func (s *ArtifactDependencyService) Link(projectID uint, upstream ArtifactRef, u
 		}
 	}
 	row := models.ArtifactDependency{ProjectID: projectID, UpstreamKind: upstream.Kind, UpstreamID: upstream.ID, UpstreamVersion: strings.TrimSpace(upstreamVersion), DownstreamKind: downstream.Kind, DownstreamID: downstream.ID}
-	return s.db.Where(models.ArtifactDependency{ProjectID: projectID, UpstreamKind: upstream.Kind, UpstreamID: upstream.ID, DownstreamKind: downstream.Kind, DownstreamID: downstream.ID}).Assign(map[string]any{"upstream_version": row.UpstreamVersion}).FirstOrCreate(&row).Error
+	return tx.Where(models.ArtifactDependency{ProjectID: projectID, UpstreamKind: upstream.Kind, UpstreamID: upstream.ID, DownstreamKind: downstream.Kind, DownstreamID: downstream.ID}).Assign(map[string]any{"upstream_version": row.UpstreamVersion}).FirstOrCreate(&row).Error
 }
 
 func (s *ArtifactDependencyService) Affected(projectID uint, source ArtifactRef) ([]ArtifactRef, error) {
+	return s.affectedTx(s.db, projectID, source)
+}
+
+func (s *ArtifactDependencyService) affectedTx(tx *gorm.DB, projectID uint, source ArtifactRef) ([]ArtifactRef, error) {
 	if s == nil || !s.enabled {
 		return []ArtifactRef{}, nil
 	}
-	if !validArtifactRef(source) {
+	if tx == nil {
+		tx = s.db
+	}
+	source.Kind = strings.TrimSpace(source.Kind)
+	if projectID == 0 || !validArtifactRef(source) {
 		return nil, fmt.Errorf("artifact reference is required")
 	}
 	queue := []ArtifactRef{source}
@@ -88,7 +124,7 @@ func (s *ArtifactDependencyService) Affected(projectID uint, source ArtifactRef)
 		current := queue[0]
 		queue = queue[1:]
 		var rows []models.ArtifactDependency
-		if err := s.db.Where("project_id = ? AND upstream_kind = ? AND upstream_id = ?", projectID, current.Kind, current.ID).Find(&rows).Error; err != nil {
+		if err := tx.Where("project_id = ? AND upstream_kind = ? AND upstream_id = ?", projectID, current.Kind, current.ID).Find(&rows).Error; err != nil {
 			return nil, err
 		}
 		for _, row := range rows {
@@ -115,12 +151,12 @@ func (s *ArtifactDependencyService) RecordInvalidation(tx *gorm.DB, projectID ui
 	if s == nil || !s.enabled {
 		return []ArtifactRef{}, nil
 	}
-	affected, err := s.Affected(projectID, source)
-	if err != nil {
-		return nil, err
-	}
 	if tx == nil {
 		tx = s.db
+	}
+	affected, err := s.affectedTx(tx, projectID, source)
+	if err != nil {
+		return nil, err
 	}
 	for _, item := range affected {
 		event := models.ArtifactInvalidationEvent{ProjectID: projectID, ArtifactKind: item.Kind, ArtifactID: item.ID, Reason: strings.TrimSpace(reason), SourceKind: source.Kind, SourceID: source.ID}

@@ -73,6 +73,11 @@ func (s *ProjectService) captureDialogueAudio(in dialogueAudioCapture) (*models.
 		if err := tx.Model(&candidate).Updates(values).Error; err != nil {
 			return err
 		}
+		if s.artifactDependencies != nil {
+			if err := s.artifactDependencies.LinkTx(tx, in.ProjectID, ArtifactRef{Kind: ArtifactKindDialogue, ID: in.DialogueID}, in.InputHash, ArtifactRef{Kind: ArtifactKindDialogueAudioCandidate, ID: candidate.ID}); err != nil {
+				return err
+			}
+		}
 		status := "pending"
 		if strings.TrimSpace(dialogue.AudioFile) != "" {
 			status = "ready"

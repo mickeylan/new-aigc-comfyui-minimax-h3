@@ -185,9 +185,29 @@ func RegisterDefaultReadOnlyAgentTools(registry *ControlledAgentToolRegistry, db
 	if strings.TrimSpace(capabilityManifestDir) != "" {
 		catalog = NewModelCatalogService(db, capabilityManifestDir)
 	}
-	return registry.Register(readOnlyAgentTool{
+	if err := registry.Register(readOnlyAgentTool{
 		descriptor: AgentToolDescriptor{Code: "model-catalog.list", Name: "读取模型能力目录", Description: "读取由可执行模板推导的模型能力，不修改模板或任务", Permission: AgentToolDomainRead, InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`)},
 		invoke:     func(_ context.Context, _ AgentToolRequest) (any, error) { return catalog.List() },
+	}); err != nil {
+		return err
+	}
+	productionChecks := NewProductionCheckService(db)
+	return registry.Register(readOnlyAgentTool{
+		descriptor: AgentToolDescriptor{Code: "production.preflight", Name: "读取漫剧生产检查", Description: "按项目和可选Episode读取过期、错误、审核及连续性问题；不返回正文、提示词或文件路径", Permission: AgentToolDomainRead, InputSchema: json.RawMessage(`{"type":"object","properties":{"episode_n":{"type":"number"}},"additionalProperties":false}`)},
+		invoke: func(_ context.Context, request AgentToolRequest) (any, error) {
+			if request.ProjectID == nil {
+				return nil, fmt.Errorf("project_id is required")
+			}
+			var input struct {
+				EpisodeN int `json:"episode_n"`
+			}
+			if len(request.Input) > 0 {
+				if err := json.Unmarshal(request.Input, &input); err != nil {
+					return nil, err
+				}
+			}
+			return productionChecks.Check(*request.ProjectID, input.EpisodeN)
+		},
 	})
 }
 

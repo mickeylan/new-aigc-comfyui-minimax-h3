@@ -35,6 +35,24 @@ func TestArtifactDependencyGraphIsNoOpWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestArtifactDependencyGraphCanonicalizesKindsAndRejectsUnknownKinds(t *testing.T) {
+	db := newArtifactDependencyTestDB(t)
+	svc := NewArtifactDependencyService(db, true)
+	if err := svc.Link(1, ArtifactRef{Kind: " music_cue ", ID: 1}, "v1", ArtifactRef{Kind: "music_candidate", ID: 2}); err != nil {
+		t.Fatal(err)
+	}
+	var row models.ArtifactDependency
+	if err := db.First(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if row.UpstreamKind != ArtifactKindMusicCue {
+		t.Fatalf("kind was not canonicalized: %q", row.UpstreamKind)
+	}
+	if err := svc.Link(1, ArtifactRef{Kind: "unknown", ID: 3}, "", ArtifactRef{Kind: ArtifactKindMusicCandidate, ID: 4}); err == nil {
+		t.Fatal("unknown artifact kind accepted")
+	}
+}
+
 func TestArtifactDependencyGraphTracksOnlyAffectedDescendants(t *testing.T) {
 	db := newArtifactDependencyTestDB(t)
 	svc := NewArtifactDependencyService(db, true)

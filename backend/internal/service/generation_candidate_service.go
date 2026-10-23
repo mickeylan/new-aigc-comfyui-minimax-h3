@@ -11,7 +11,10 @@ import (
 	"gorm.io/gorm"
 )
 
-type GenerationCandidateService struct{ db *gorm.DB }
+type GenerationCandidateService struct {
+	db           *gorm.DB
+	dependencies *ArtifactDependencyService
+}
 
 type SceneCandidateCapture struct {
 	ProjectID         uint
@@ -36,8 +39,12 @@ type SceneCandidateCapture struct {
 	FinalizeDerived bool
 }
 
-func NewGenerationCandidateService(db *gorm.DB) *GenerationCandidateService {
-	return &GenerationCandidateService{db: db}
+func NewGenerationCandidateService(db *gorm.DB, dependencies ...*ArtifactDependencyService) *GenerationCandidateService {
+	s := &GenerationCandidateService{db: db}
+	if len(dependencies) > 0 {
+		s.dependencies = dependencies[0]
+	}
+	return s
 }
 
 func snapshotJSON(v any) string {
@@ -162,6 +169,24 @@ func (s *GenerationCandidateService) CaptureSceneSuccess(in SceneCandidateCaptur
 		}
 		if err := tx.Create(&captured).Error; err != nil {
 			return err
+		}
+		if in.MediaType == "video" && s.dependencies != nil {
+			var continuity models.SceneContinuity
+			if err := tx.Where("scene_id = ? AND selected_frame_id IS NOT NULL", in.SceneID).First(&continuity).Error; err == nil && continuity.SelectedFrameID != nil {
+				if err := s.dependencies.LinkTx(tx, in.ProjectID, ArtifactRef{Kind: ArtifactKindContinuityFrame, ID: *continuity.SelectedFrameID}, continuity.SourceVideoTaskID, ArtifactRef{Kind: ArtifactKindSceneVideoCandidate, ID: captured.ID}); err != nil {
+					return err
+				}
+			} else if err != nil && err != gorm.ErrRecordNotFound {
+				return err
+			}
+			var image models.GenerationCandidate
+			if err := tx.Where("project_id = ? AND entity_type = ? AND entity_id = ? AND media_type = ? AND task_id = ?", in.ProjectID, "scene", in.SceneID, "image", scene.ImageTaskID).First(&image).Error; err == nil {
+				if err := s.dependencies.LinkTx(tx, in.ProjectID, ArtifactRef{Kind: ArtifactKindSceneImageCandidate, ID: image.ID}, image.TaskID, ArtifactRef{Kind: ArtifactKindSceneVideoCandidate, ID: captured.ID}); err != nil {
+					return err
+				}
+			} else if err != nil && err != gorm.ErrRecordNotFound {
+				return err
+			}
 		}
 		updates := map[string]any{"error": ""}
 		if in.MediaType == "image" {
@@ -325,6 +350,17 @@ func (s *GenerationCandidateService) Delete(projectID, id uint) error {
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
-	// Safe to delete
-	return s.db.Delete(&candidate).Error
+	// Safe to delete together with optional shadow graph edges.
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if s.dependencies != nil {
+			kind := ArtifactKindSceneImageCandidate
+			if candidate.MediaType == "video" {
+				kind = ArtifactKindSceneVideoCandidate
+			}
+			if err := s.dependencies.DeleteArtifactTx(tx, projectID, ArtifactRef{Kind: kind, ID: candidate.ID}); err != nil {
+				return err
+			}
+		}
+		return tx.Delete(&candidate).Error
+	})
 }
