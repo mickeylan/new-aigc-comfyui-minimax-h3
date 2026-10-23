@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"regexp"
@@ -211,6 +212,9 @@ func (s *MusicCueService) Create(projectID uint, in MusicCueSheetInput) (*models
 	cue.ReviewStatus = "draft"
 	cue.ReviewReason = ""
 	cue.ReviewedAt = nil
+	if context, contextErr := s.episodeContext(projectID, cue.EpisodeN); contextErr == nil {
+		cue.SourceVersionHash = musicCueSourceHash(context, cue.UserRequirements)
+	}
 	if err := s.db.Create(&cue).Error; err != nil {
 		return nil, err
 	}
@@ -323,7 +327,7 @@ func (s *MusicCueService) MarkEpisodeStale(projectID uint, episodeN int, reason 
 // MarkApproved validates every cue before atomically approving the Episode.
 func (s *MusicCueService) MarkApproved(projectID uint, episodeN int, reviewReason string) error {
 	var cues []models.MusicCueSheet
-	if err := s.db.Where("project_id = ? AND episode_n = ? AND review_status IN ?", projectID, episodeN, []string{"pending", "draft"}).Find(&cues).Error; err != nil {
+	if err := s.db.Where("project_id = ? AND episode_n = ? AND enabled = ? AND review_status IN ?", projectID, episodeN, true, []string{"pending", "draft"}).Find(&cues).Error; err != nil {
 		return err
 	}
 	if len(cues) == 0 {
@@ -337,22 +341,24 @@ func (s *MusicCueService) MarkApproved(projectID uint, episodeN int, reviewReaso
 		if cue.Stale {
 			return fmt.Errorf("Cue #%d 已过期", cue.ID)
 		}
+		if err := s.validateCueTimeline(&cue); err != nil {
+			return fmt.Errorf("Cue #%d: %w", cue.ID, err)
+		}
 		if err := validateMusicCaptionJSON(cue.CaptionJSON); err != nil {
 			return fmt.Errorf("Cue #%d: %w", cue.ID, err)
 		}
-		if cue.SourceVersionHash != "" && cue.SourceVersionHash != musicCueSourceHash(context, cue.UserRequirements) {
-			return fmt.Errorf("Cue #%d 的剧本或用户要求已变化", cue.ID)
+		if cue.SourceVersionHash == "" || cue.SourceVersionHash != musicCueSourceHash(context, cue.UserRequirements) {
+			return fmt.Errorf("Cue #%d 缺少当前剧本来源哈希，或剧本/用户要求已变化", cue.ID)
 		}
 	}
 	now := time.Now()
-	return s.db.Model(&models.MusicCueSheet{}).Where("project_id = ? AND episode_n = ? AND review_status IN ?", projectID, episodeN, []string{"pending", "draft"}).Updates(map[string]any{"review_status": "approved", "review_reason": strings.TrimSpace(reviewReason), "reviewed_at": now}).Error
+	return s.db.Model(&models.MusicCueSheet{}).Where("project_id = ? AND episode_n = ? AND enabled = ? AND review_status IN ?", projectID, episodeN, true, []string{"pending", "draft"}).Updates(map[string]any{"review_status": "approved", "review_reason": strings.TrimSpace(reviewReason), "reviewed_at": now}).Error
 }
 
 type musicStructuredCaption struct {
 	GlobalMetadata string `json:"global_metadata"`
 	VocalDetails   string `json:"vocal_details"`
 	Arrangement    string `json:"arrangement"`
-	LyricsInput    string `json:"lyrics_input"`
 }
 
 type generatedMusicCue struct {
@@ -371,17 +377,63 @@ type generatedMusicCueSheet struct {
 }
 
 func validateMusicCaptionJSON(raw string) error {
+	decoder := json.NewDecoder(strings.NewReader(strings.TrimSpace(raw)))
+	decoder.DisallowUnknownFields()
 	var caption musicStructuredCaption
-	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &caption); err != nil {
-		return fmt.Errorf("Structured Caption JSON 无效: %w", err)
+	if err := decoder.Decode(&caption); err != nil {
+		return fmt.Errorf("Structured Caption JSON 无效或包含非契约字段: %w", err)
 	}
-	if strings.TrimSpace(caption.GlobalMetadata) == "" || strings.TrimSpace(caption.VocalDetails) == "" || strings.TrimSpace(caption.Arrangement) == "" {
-		return fmt.Errorf("Structured Caption 必须包含 global_metadata、vocal_details 和 arrangement")
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return fmt.Errorf("Structured Caption 只能包含一个JSON对象")
 	}
-	if !strings.Contains(strings.ToLower(caption.VocalDetails), "instrumental") {
+	global, vocal, arrangement := strings.TrimSpace(caption.GlobalMetadata), strings.TrimSpace(caption.VocalDetails), strings.TrimSpace(caption.Arrangement)
+	if global == "" || vocal == "" || arrangement == "" {
+		return fmt.Errorf("Structured Caption 必须且只能包含 global_metadata、vocal_details 和 arrangement")
+	}
+	if len(global) > 3000 || len(vocal) > 2000 || len(arrangement) > 8000 {
+		return fmt.Errorf("Structured Caption 字段过长")
+	}
+	lower := strings.ToLower(vocal)
+	if !strings.Contains(lower, "instrumental") || strings.Contains(lower, "not instrumental") {
 		return fmt.Errorf("短剧配乐必须在 vocal_details 中明确为纯器乐")
 	}
+	if regexp.MustCompile(`(?i)\b(lead vocal|spoken voice|narration|singing|chanting|humming|whispering)\b`).MatchString(lower) && !regexp.MustCompile(`(?i)\b(no|without|exclude|avoids?)\b`).MatchString(lower) {
+		return fmt.Errorf("短剧配乐不得要求人声、对白或吟唱")
+	}
+	if !regexp.MustCompile(`(?i)(intro|opening|section|development|climax|outro|ending|\b\d+(?:\.\d+)?\s*(?:s|sec|seconds))`).MatchString(arrangement) {
+		return fmt.Errorf("arrangement 必须包含可读的分段或时间线")
+	}
 	return nil
+}
+
+func (s *MusicCueService) validateCueTimeline(cue *models.MusicCueSheet) error {
+	var total float64
+	if err := s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ?", cue.ProjectID, cue.EpisodeN).Select("COALESCE(SUM(duration),0)").Scan(&total).Error; err != nil {
+		return err
+	}
+	if total <= 0 {
+		return fmt.Errorf("当前Episode没有有效时间轴")
+	}
+	if cue.StartTime < 0 || cue.EndTime > total+0.001 || cue.EndTime <= cue.StartTime {
+		return fmt.Errorf("Cue时间范围 %.2f–%.2f 秒超出Episode总时长 %.2f 秒", cue.StartTime, cue.EndTime, total)
+	}
+	return nil
+}
+
+func mergeMusicRequirements(values ...string) string {
+	seen := map[string]bool{}
+	lines := []string{}
+	for _, value := range values {
+		for _, line := range strings.Split(strings.ReplaceAll(value, "；", "\n"), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" && !seen[line] {
+				seen[line] = true
+				lines = append(lines, line)
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func musicCueSourceHash(context, requirements string) string {
@@ -435,7 +487,7 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 	if err != nil {
 		return nil, err
 	}
-	baseSystem := `You plan short-drama instrumental score cues and rewrite every cue for MiniMax Music 3. Output strict JSON only. Root field: cues. Each cue has kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. caption must have global_metadata,vocal_details,arrangement,lyrics_input. Music is fully instrumental: no lead vocal, spoken voice, narration, chanting, choir, humming, whispering, or vocal-like texture. Arrangement must describe section-by-section musical evolution, not merely list instruments. Preserve explicit user requirements and exclusions as highest priority. Keep dialogue space and avoid wall-to-wall music. Do not create audio or claim generation happened.`
+	baseSystem := `You plan short-drama instrumental score cues and rewrite every cue for MiniMax Music 3. Output strict JSON only. Root field: cues. Each cue has kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. caption must have exactly global_metadata,vocal_details,arrangement. Music is fully instrumental: no lead vocal, spoken voice, narration, chanting, choir, humming, whispering, or vocal-like texture. Arrangement must describe section-by-section musical evolution, not merely list instruments. Preserve explicit user requirements and exclusions as highest priority. Keep dialogue space and avoid wall-to-wall music. Do not create audio or claim generation happened.`
 	baseUser := "Authoritative episode timeline JSON:\n" + context + "\n\nUser music ideas and requirements:\n" + strings.TrimSpace(requirements)
 	raw, err := s.skills.ChatWithConfiguredOrFallbackSkill(projectID, models.SkillStageMusicCueSheet, "music-cue-sheet-generate", s.provider, baseSystem, baseUser, map[string]string{"episode_context": context, "user_requirements": requirements})
 	if err != nil {
@@ -467,7 +519,7 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 			if err := validateMusicCaptionJSON(string(caption)); err != nil {
 				return fmt.Errorf("第%d条Cue: %w", index+1, err)
 			}
-			input := MusicCueSheetInput{EpisodeN: episodeN, Kind: item.Kind, StartTime: item.StartTime, EndTime: item.EndTime, Intensity: item.Intensity, Mood: item.Mood, InstrumentNote: item.InstrumentNote, UserRequirements: strings.TrimSpace(item.UserRequirements + "\n" + requirements), CaptionJSON: string(caption), Source: "ai", Order: index + 1}
+			input := MusicCueSheetInput{EpisodeN: episodeN, Kind: item.Kind, StartTime: item.StartTime, EndTime: item.EndTime, Intensity: item.Intensity, Mood: item.Mood, InstrumentNote: item.InstrumentNote, UserRequirements: mergeMusicRequirements(item.UserRequirements, requirements), CaptionJSON: string(caption), Source: "ai", Order: index + 1}
 			cue, err := normalizeMusicCueSheet(projectID, input)
 			if err != nil {
 				return fmt.Errorf("第%d条Cue: %w", index+1, err)
@@ -498,7 +550,7 @@ func (s *MusicCueService) RegenerateCue(projectID, id uint) (*models.MusicCueShe
 		return nil, err
 	}
 	currentJSON, _ := json.Marshal(current)
-	baseSystem := `Rewrite exactly one short-drama instrumental Music 3 cue. Output strict JSON with root field cue. Keep start_time and end_time unchanged. cue has kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. caption has exactly global_metadata,vocal_details,arrangement,lyrics_input. Fully instrumental; no speech, singing, choir, chanting, humming, whispering or vocal-like textures. Preserve user requirements as highest priority.`
+	baseSystem := `Rewrite exactly one short-drama instrumental Music 3 cue. Output strict JSON with root field cue. Keep start_time and end_time unchanged. cue has kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. caption has exactly global_metadata,vocal_details,arrangement. Fully instrumental; no speech, singing, choir, chanting, humming, whispering or vocal-like textures. Preserve user requirements as highest priority.`
 	baseUser := "Episode timeline:\n" + context + "\n\nCurrent cue:\n" + string(currentJSON)
 	raw, err := s.skills.ChatWithConfiguredOrFallbackSkill(projectID, models.SkillStageMusicCueSheet, "music-cue-sheet-generate", s.provider, baseSystem, baseUser, map[string]string{"episode_context": context, "user_requirements": current.UserRequirements})
 	if err != nil {
@@ -537,6 +589,12 @@ func (s *MusicCueService) Review(projectID, id uint, approve bool, reason string
 		if cue.Stale {
 			return nil, fmt.Errorf("配乐Cue已过期，请重新生成或编辑")
 		}
+		if !cue.Enabled {
+			return nil, fmt.Errorf("已禁用的配乐Cue不能审核通过")
+		}
+		if err := s.validateCueTimeline(&cue); err != nil {
+			return nil, err
+		}
 		if err := validateMusicCaptionJSON(cue.CaptionJSON); err != nil {
 			return nil, err
 		}
@@ -544,8 +602,8 @@ func (s *MusicCueService) Review(projectID, id uint, approve bool, reason string
 		if err != nil {
 			return nil, err
 		}
-		if cue.SourceVersionHash != "" && cue.SourceVersionHash != musicCueSourceHash(context, cue.UserRequirements) {
-			return nil, fmt.Errorf("剧本或用户要求已变化，请重新生成配乐提示词")
+		if cue.SourceVersionHash == "" || cue.SourceVersionHash != musicCueSourceHash(context, cue.UserRequirements) {
+			return nil, fmt.Errorf("缺少当前剧本来源哈希，或剧本/用户要求已变化，请重新生成配乐提示词")
 		}
 		cue.ReviewStatus = "approved"
 	} else {

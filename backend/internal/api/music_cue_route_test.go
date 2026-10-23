@@ -95,11 +95,13 @@ func TestMusicCueSheetBatchApprove(t *testing.T) {
 	svc := &service.Service{DB: db, MusicCues: service.NewMusicCueService(db)}
 	router := NewRouter(&config.Config{}, svc)
 
-	caption := `{"global_metadata":"cinematic score","vocal_details":"Fully instrumental, no voices.","arrangement":"Intro: sparse. Outro: resolve.","lyrics_input":"[Intro]\n[Instrumental]\n[Outro]"}`
-	for _, status := range []string{"pending", "draft"} {
-		cue := models.MusicCueSheet{ProjectID: p.ID, EpisodeN: 1, Kind: "scene", StartTime: 0, EndTime: 3, Intensity: "medium", CaptionJSON: caption, ReviewStatus: status}
-		db.Create(&cue)
+	caption := `{"global_metadata":"cinematic score","vocal_details":"Fully instrumental, no voices.","arrangement":"Intro: sparse. Outro: resolve."}`
+	created, err := svc.MusicCues.Create(p.ID, service.MusicCueSheetInput{EpisodeN: 1, Kind: "scene", StartTime: 0, EndTime: 3, Intensity: "medium", CaptionJSON: caption})
+	if err != nil {
+		t.Fatal(err)
 	}
+	cue := models.MusicCueSheet{ProjectID: p.ID, EpisodeN: 1, Kind: "scene", StartTime: 3, EndTime: 6, Intensity: "medium", CaptionJSON: caption, ReviewStatus: "pending", Enabled: true, SourceVersionHash: created.SourceVersionHash}
+	db.Create(&cue)
 
 	resp := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/projects/%d/music-cue-sheets/batch-approve", p.ID), bytes.NewBufferString(`{"episode_n":1,"review_reason":"reviewed"}`))

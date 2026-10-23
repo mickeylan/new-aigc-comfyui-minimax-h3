@@ -214,7 +214,7 @@ func TestMusicCueSheetReviewGateRequiresStructuredCaption(t *testing.T) {
 	if _, err := svc.Review(p.ID, cue.ID, true, "reviewed"); err == nil {
 		t.Fatal("empty Structured Caption was approved")
 	}
-	caption := `{"global_metadata":"cinematic score","vocal_details":"Fully instrumental, no voices.","arrangement":"Intro: sparse strings. Outro: resolve.","lyrics_input":"[Intro]\n[Instrumental]\n[Outro]"}`
+	caption := `{"global_metadata":"cinematic score","vocal_details":"Fully instrumental, no voices.","arrangement":"Intro: sparse strings. Outro: resolve."}`
 	if err := db.Model(cue).Update("caption_json", caption).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -227,6 +227,39 @@ func TestMusicCueSheetReviewGateRequiresStructuredCaption(t *testing.T) {
 	}
 }
 
+func TestMusicCaptionStrictContractRejectsUnsafeShapes(t *testing.T) {
+	valid := `{"global_metadata":"cinematic score","vocal_details":"Fully instrumental, no voices.","arrangement":"Intro: sparse strings. Outro: resolve."}`
+	if err := validateMusicCaptionJSON(valid); err != nil {
+		t.Fatal(err)
+	}
+	invalid := []string{
+		`{"global_metadata":"x","vocal_details":"Fully instrumental","arrangement":"Intro: x","lyrics_input":"[Intro]"}`,
+		`{"global_metadata":"x","vocal_details":"not instrumental","arrangement":"Intro: x"}`,
+		`{"global_metadata":"x","vocal_details":"lead vocal performance","arrangement":"Intro: x"}`,
+		`{"global_metadata":"x","vocal_details":"Fully instrumental","arrangement":"static texture"}`,
+	}
+	for _, raw := range invalid {
+		if err := validateMusicCaptionJSON(raw); err == nil {
+			t.Fatalf("unsafe caption accepted: %s", raw)
+		}
+	}
+}
+
+func TestMusicCueApprovalRejectsOutOfEpisodeRange(t *testing.T) {
+	db := newMusicCueTestDB(t)
+	svc := NewMusicCueService(db)
+	p := models.Project{Title: "p"}
+	db.Create(&p)
+	db.Create(&models.Scene{ProjectID: p.ID, EpisodeN: 1, Generation: 1, Order: 1, Duration: 5})
+	cue, err := svc.Create(p.ID, MusicCueSheetInput{EpisodeN: 1, Kind: "scene", StartTime: 0, EndTime: 8, CaptionJSON: `{"global_metadata":"score","vocal_details":"Fully instrumental","arrangement":"Intro: build. Outro: stop."}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Review(p.ID, cue.ID, true, ""); err == nil {
+		t.Fatal("out-of-range cue approved")
+	}
+}
+
 func TestDraftMusicCuesUsesUserRequirementsAndRewriterSchema(t *testing.T) {
 	db := newMusicCueTestDB(t)
 	if err := db.AutoMigrate(&models.Skill{}, &models.ProjectSkillConfig{}, &models.SkillAuditLog{}); err != nil {
@@ -235,7 +268,7 @@ func TestDraftMusicCuesUsesUserRequirementsAndRewriterSchema(t *testing.T) {
 	project := models.Project{Title: "仙侠短剧", Genre: "仙侠"}
 	db.Create(&project)
 	db.Create(&models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 1, Duration: 12, Title: "决战", Content: "女主迎战"})
-	provider := &stubTextProvider{response: `{"cues":[{"kind":"action","start_time":0,"end_time":12,"intensity":"climax","mood":"epic","instrument_note":"古琴与战鼓","user_requirements":"不要电子鼓","caption":{"global_metadata":"Cinematic xianxia score, escalating tension.","vocal_details":"Fully instrumental, no voices, choir, chanting or humming.","arrangement":"Intro: sparse guqin. Instrumental: strings and drums enter. Outro: sudden stop.","lyrics_input":"[Intro]\n[Instrumental]\n[Outro]"}}]}`}
+	provider := &stubTextProvider{response: `{"cues":[{"kind":"action","start_time":0,"end_time":12,"intensity":"climax","mood":"epic","instrument_note":"古琴与战鼓","user_requirements":"不要电子鼓","caption":{"global_metadata":"Cinematic xianxia score, escalating tension.","vocal_details":"Fully instrumental, no voices, choir, chanting or humming.","arrangement":"Intro: sparse guqin. Instrumental: strings and drums enter. Outro: sudden stop."}}]}`}
 	skills := NewSkillService(db)
 	if err := skills.InitSystemSkills(); err != nil {
 		t.Fatal(err)
@@ -264,7 +297,7 @@ func TestRegenerateMusicCuePreservesTimelineAndReturnsDraft(t *testing.T) {
 	caption := `{"global_metadata":"old","vocal_details":"Fully instrumental","arrangement":"old"}`
 	cue := models.MusicCueSheet{ProjectID: project.ID, EpisodeN: 1, Kind: "emotion", StartTime: 2, EndTime: 8, Intensity: "soft", UserRequirements: "古典吉他", CaptionJSON: caption, SourceVersionHash: "old", ReviewStatus: "approved", Enabled: true}
 	db.Create(&cue)
-	provider := &stubTextProvider{response: `{"cue":{"kind":"emotion","start_time":2,"end_time":8,"intensity":"medium","mood":"romantic","instrument_note":"nylon guitar","caption":{"global_metadata":"intimate score","vocal_details":"Fully instrumental, no voices.","arrangement":"Intro: fingerpicked guitar. Outro: harmonics.","lyrics_input":"[Intro]\n[Instrumental]\n[Outro]"}}}`}
+	provider := &stubTextProvider{response: `{"cue":{"kind":"emotion","start_time":2,"end_time":8,"intensity":"medium","mood":"romantic","instrument_note":"nylon guitar","caption":{"global_metadata":"intimate score","vocal_details":"Fully instrumental, no voices.","arrangement":"Intro: fingerpicked guitar. Outro: harmonics."}}}`}
 	skills := NewSkillService(db)
 	if err := skills.InitSystemSkills(); err != nil {
 		t.Fatal(err)
