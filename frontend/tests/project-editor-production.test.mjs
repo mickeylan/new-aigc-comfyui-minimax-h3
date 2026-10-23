@@ -40,6 +40,7 @@ test('剪辑台先收集用户设想再生成并审核Music 3提示词', () => {
   assert.match(source, /musicCueSubmissionManifest/)
   assert.match(source, /musicCueDirty/)
   assert.match(source, /请先保存并重新审核修改过的Cue/)
+  assert.match(source, /当前有未保存的配乐Cue修改/)
   assert.match(source, /if\(!await saveMusicCue\(cue\)\)return/)
   assert.match(source, /当前未导入其参考模板库/)
   assert.match(source, /createManualMusicCue/)

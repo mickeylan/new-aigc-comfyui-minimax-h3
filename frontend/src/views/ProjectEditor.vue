@@ -977,6 +977,7 @@ async function batchApproveMusicCues(){
   musicCueBusy.value=true;try{for(const cue of musicCues.value.filter(row=>row.enabled!==false&&['pending','draft'].includes(row.review_status))){if(!await saveMusicCue(cue))return}await api.batchApproveMusicCues(id(),activeEpN.value,'批量人工审核通过');await loadMusicCues();toast.success('当前集配乐Cue已批量审核通过')}catch(e){toast.error(e.response?.data?.error||'批量审核失败')}finally{musicCueBusy.value=false}
 }
 async function draftMusicCues(){
+  if(musicCueDirty.value&&!window.confirm('当前有未保存的配乐Cue修改。继续AI生成会替换未审核AI草稿，是否放弃这些修改？'))return
   musicCueBusy.value=true
   try { const {data}=await api.draftMusicCues(id(),activeEpN.value,musicRequirements.value); musicCues.value=data.cues||[]; await refreshMusicCuePreflight();toast.success('已生成可审核的MiniMax Music 3配乐提示词') }
   catch(e){ toast.error(e.response?.data?.error||'生成配乐提示词失败') }
@@ -1179,6 +1180,7 @@ async function editCurrentEpisode() {
 }
 
 function switchEp(dir) {
+  if(musicCueDirty.value&&!window.confirm('当前有未保存的配乐Cue修改，切换集数将丢失这些修改。是否继续？'))return
   const arr = epNums()
   epIndex.value = Math.max(0, Math.min(arr.length - 1, epIndex.value + dir))
   activeEpN.value = arr[epIndex.value] || 1
