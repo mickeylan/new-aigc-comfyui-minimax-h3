@@ -202,14 +202,19 @@ func DeleteProjectEpisode(db *gorm.DB, projectID uint, number int) error {
 	if count > 0 {
 		return fmt.Errorf("Episode仍包含场景，不能删除")
 	}
-	result := db.Where("project_id = ? AND episode_number = ?", projectID, number).Delete(&models.Episode{})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
+	return db.Transaction(func(tx *gorm.DB) error {
+		result := tx.Where("project_id = ? AND episode_number = ?", projectID, number).Delete(&models.Episode{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		if tx.Migrator().HasTable(&models.ProductionCheckReport{}) {
+			return tx.Where("project_id = ? AND episode_n = ?", projectID, number).Delete(&models.ProductionCheckReport{}).Error
+		}
+		return nil
+	})
 }
 
 func ProjectEpisodeHierarchy(db *gorm.DB, projectID uint) ([]EpisodeHierarchy, error) {

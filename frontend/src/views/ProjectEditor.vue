@@ -53,6 +53,7 @@
         </div>
       </div>
       <details class="card preflight"><summary><strong>本集正式生成前检查</strong></summary><div v-for="check in episodePreflight" :key="check.text" :class="check.ok?'check-ok':'check-fail'">{{check.ok?'✓':'✗'}} {{check.text}}</div><div v-if="preflightIssueScenes.length" class="preflight-issues"><button v-for="sc in preflightIssueScenes" :key="sc.id" class="preflight-issue" @click="selectScene(sc)"><strong>场景{{sc.order}} · {{sc.title}}</strong><span v-if="sc.shot_duration_mismatch">Scene {{Number(sc.duration).toFixed(1)}}秒 / Shot {{Number(sc.shot_duration_total).toFixed(1)}}秒</span><span v-else>存在正式生成前待处理项</span></button></div><div class="section-actions"><button v-if="preflightIssueScenes.length" class="btn btn-sm btn-secondary" @click="selectScene(preflightIssueScenes[0])">定位首个异常Scene</button><button v-if="shotDurationMismatch" class="btn btn-sm btn-secondary" @click="previewAndApplyRetime">修复当前Scene配时</button><button v-if="selected?.prompt_stale" class="btn btn-sm btn-secondary" @click="prepareVideoPrompt">重新准备当前视频提示词</button><button v-if="scenes.some(s=>s.continuity_status==='source_invalidated'||s.continuity_error)" class="btn btn-sm btn-secondary" @click="selectScene(scenes.find(s=>s.continuity_status==='source_invalidated'||s.continuity_error));showFrameSelector=true">修复首个连续性异常</button><button v-if="staleDialogueCount" class="btn btn-sm btn-secondary" @click="dubStaleEpisode">仅生成过期配音</button></div></details>
+      <details class="card preflight production-report"><summary><strong>AI制片检查报告</strong></summary><div class="section-actions"><button class="btn btn-sm btn-secondary" :disabled="productionCheckBusy" @click="createProductionCheck">{{productionCheckBusy?'检查中…':'生成当前集检查报告'}}</button></div><article v-for="report in productionCheckReports" :key="report.id" class="production-report-item"><div class="merge-info"><span class="badge" :class="report.ready?'badge-green':'badge-red'">{{report.ready?'可生产':'有阻塞项'}}</span><strong>第{{report.episode_n}}集 · {{report.finding_count}}项</strong><span>{{report.superseded?'历史版本':report.review_status==='reviewed'?'已阅':'待处理'}}</span></div><div v-for="finding in report.findings" :key="`${report.id}-${finding.code}-${finding.entity_type}-${finding.entity_id}`" :class="finding.severity==='error'?'check-fail':'screen-text-warning'">{{finding.severity==='error'?'✗':'⚠'}} {{finding.message}}</div><button v-if="!report.superseded&&report.review_status!=='reviewed'" class="btn btn-xs btn-secondary" @click="reviewProductionCheck(report)">标记已阅</button></article><p v-if="!productionCheckReports.length" class="sub">尚无持久检查报告。报告不包含正文、提示词或文件路径。</p></details>
     </section>
 
     <!-- 时间轴 -->
@@ -399,6 +400,8 @@ const scenes = ref([])
 const dialogues = ref([])
 const subtitles = ref([])
 const serverPreflight = ref(null)
+const productionCheckReports = ref([])
+const productionCheckBusy = ref(false)
 const merges = ref([])
 const candidates = ref([])
 const compareCandidateIds = ref([])
@@ -610,11 +613,15 @@ async function load() {
     if (selected.value) { durationInput.value = selected.value.duration || 5; sceneModeInput.value = selected.value.scene_mode || ''; await Promise.all([loadCandidates(), loadSelectedWorkbench()]) } else { candidates.value = []; selectedShots.value=[]; videoPromptDetail.value=null }
     const episodeNumbers = epNums()
     epIndex.value = Math.max(0, episodeNumbers.indexOf(activeEpN.value))
-    await Promise.all([loadMerges(), loadAudioLayers(), loadMusicCues(), loadScreenTextCues(), loadSharedAssets(), loadEpisodeContinuity(), loadSkillPanel()])
+    await Promise.all([loadMerges(), loadAudioLayers(), loadMusicCues(), loadScreenTextCues(), loadSharedAssets(), loadEpisodeContinuity(), loadSkillPanel(), loadProductionChecks()])
   } catch (e) {
     toast.error(e.response?.data?.error || '加载剪辑台失败')
   }
 }
+
+async function loadProductionChecks(){try{const {data}=await api.productionChecks(id(),activeEpN.value);productionCheckReports.value=data.items||[]}catch{productionCheckReports.value=[]}}
+async function createProductionCheck(){productionCheckBusy.value=true;try{const {data}=await api.createProductionCheck(id(),activeEpN.value);productionCheckReports.value=[data,...productionCheckReports.value.map(row=>({...row,superseded:true}))];toast.success(data.ready?'检查通过，可进入正式生产':'检查完成，请处理阻塞项')}catch(e){toast.error(e.response?.data?.error||'生成制片检查报告失败')}finally{productionCheckBusy.value=false}}
+async function reviewProductionCheck(report){try{const {data}=await api.reviewProductionCheck(id(),report.id,'reviewed','已人工查看');Object.assign(report,data);toast.success('检查报告已标记为已阅')}catch(e){toast.error(e.response?.data?.error||'更新检查报告失败')}}
 
 async function loadMerges() {
   try {

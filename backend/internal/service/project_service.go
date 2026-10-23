@@ -424,6 +424,11 @@ func (s *ProjectService) DeleteProject(id uint) error {
 				return err
 			}
 		}
+		if tx.Migrator().HasTable(&models.ProductionCheckReport{}) {
+			if err := tx.Where("project_id = ?", id).Delete(&models.ProductionCheckReport{}).Error; err != nil {
+				return err
+			}
+		}
 		return tx.Delete(&models.Project{}, id).Error
 	}); err != nil {
 		return err

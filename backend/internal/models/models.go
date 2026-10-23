@@ -643,6 +643,24 @@ type ArtifactInvalidationEvent struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+// ProductionCheckReport stores sanitized findings plus a bounded human review note.
+// Generated findings never contain story text, prompts, credentials or file paths.
+type ProductionCheckReport struct {
+	ID           uint       `gorm:"primaryKey" json:"id"`
+	ProjectID    uint       `gorm:"column:project_id;index" json:"project_id"`
+	EpisodeN     int        `gorm:"column:episode_n;index" json:"episode_n"`
+	SourceHash   string     `gorm:"column:source_hash;size:64;index" json:"source_hash"`
+	Ready        bool       `gorm:"index" json:"ready"`
+	FindingsJSON string     `gorm:"column:findings_json;type:text" json:"-"`
+	FindingCount int        `gorm:"column:finding_count" json:"finding_count"`
+	ReviewStatus string     `gorm:"column:review_status;size:24;default:open;index" json:"review_status"`
+	ReviewNote   string     `gorm:"column:review_note;type:text" json:"review_note"`
+	ReviewedAt   *time.Time `gorm:"column:reviewed_at" json:"reviewed_at,omitempty"`
+	Superseded   bool       `gorm:"default:false;index" json:"superseded"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
 // AgentToolAuditLog records invocations through the constrained domain-tool registry.
 type AgentToolAuditLog struct {
 	ID         uint      `gorm:"primaryKey" json:"id"`

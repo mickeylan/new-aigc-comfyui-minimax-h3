@@ -38,6 +38,13 @@ test('剪辑台先收集用户设想再生成并审核Music 3提示词', () => {
   assert.doesNotMatch(source, /generateMusicCandidate/)
 })
 
+test('剪辑台提供可持久审核的AI制片检查报告',()=>{
+  assert.match(source,/AI制片检查报告/)
+  assert.match(source,/createProductionCheck/)
+  assert.match(source,/reviewProductionCheck/)
+  assert.match(source,/报告不包含正文、提示词或文件路径/)
+})
+
 test('剪辑台场景时间轴保留独立可见横向滚动条', () => {
   assert.match(source, /class="timeline-scroll"/)
   assert.match(source, /aria-label="场景时间轴横向滚动区"/)
