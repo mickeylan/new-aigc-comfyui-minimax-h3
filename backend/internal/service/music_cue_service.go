@@ -243,13 +243,17 @@ func (s *MusicCueService) Update(projectID, id uint, in MusicCueSheetInput) (*mo
 	}
 	cue.ReviewStatus = "draft"
 	cue.ReviewReason = ""
-	if context, contextErr := s.episodeContext(projectID, cue.EpisodeN); contextErr == nil {
-		cue.SourceVersionHash = musicCueSourceHash(context, &cue)
+	if !existing.Stale {
+		if context, contextErr := s.episodeContext(projectID, cue.EpisodeN); contextErr == nil {
+			cue.SourceVersionHash = musicCueSourceHash(context, &cue)
+		}
+	} else {
+		cue.SourceVersionHash = existing.SourceVersionHash
 	}
 	updates := musicCueSheetUpdates(cue)
 	updates["reviewed_at"] = nil
-	updates["stale"] = false
-	updates["stale_reason"] = ""
+	updates["stale"] = existing.Stale
+	updates["stale_reason"] = existing.StaleReason
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := markMusicCandidatesStale(tx, projectID, id, "配乐Cue内容已修改"); err != nil {
 			return err
@@ -367,6 +371,9 @@ func (s *MusicCueService) Preflight(projectID uint, episodeN int) (MusicCuePrefl
 		if err := s.validateBindings(cue); err != nil {
 			result.Issues = append(result.Issues, MusicCuePreflightIssue{"error", "binding", cue.ID, 0, err.Error()})
 		}
+		if err := s.validateBindingTimeline(cue); err != nil {
+			result.Issues = append(result.Issues, MusicCuePreflightIssue{"error", "binding_timeline", cue.ID, 0, err.Error()})
+		}
 		if err := s.validateCueTimeline(cue); err != nil {
 			result.Issues = append(result.Issues, MusicCuePreflightIssue{"error", "timeline", cue.ID, 0, err.Error()})
 		}
@@ -378,7 +385,7 @@ func (s *MusicCueService) Preflight(projectID uint, episodeN int) (MusicCuePrefl
 			result.Issues = append(result.Issues, MusicCuePreflightIssue{"error", "source", cue.ID, 0, "Cue来源哈希与当前Episode剧本或用户要求不一致"})
 		}
 		if cue.ReviewStatus != "approved" || cue.ReviewedAt == nil {
-			result.Issues = append(result.Issues, MusicCuePreflightIssue{"warning", "review", cue.ID, 0, "Cue尚未完成当前版本的人工审核"})
+			result.Issues = append(result.Issues, MusicCuePreflightIssue{"error", "review", cue.ID, 0, "Cue尚未完成当前版本的人工审核"})
 		}
 		for j := i + 1; j < len(cues); j++ {
 			other := cues[j]
@@ -414,6 +421,9 @@ func (s *MusicCueService) MarkApproved(projectID uint, episodeN int, reviewReaso
 			return fmt.Errorf("Cue #%d 已过期", cue.ID)
 		}
 		if err := s.validateBindings(&cue); err != nil {
+			return fmt.Errorf("Cue #%d: %w", cue.ID, err)
+		}
+		if err := s.validateBindingTimeline(&cue); err != nil {
 			return fmt.Errorf("Cue #%d: %w", cue.ID, err)
 		}
 		if err := s.validateCueTimeline(&cue); err != nil {
@@ -556,6 +566,52 @@ func validateMusicCaptionJSON(raw string) error {
 	}
 	if !regexp.MustCompile(`(?i)(intro|opening|section|development|climax|outro|ending|\b\d+(?:\.\d+)?\s*(?:s|sec|seconds))`).MatchString(arrangement) {
 		return fmt.Errorf("arrangement 必须包含可读的分段或时间线")
+	}
+	return nil
+}
+
+func (s *MusicCueService) validateBindingTimeline(cue *models.MusicCueSheet) error {
+	if cue.SceneID == nil {
+		return nil
+	}
+	var scenes []models.Scene
+	if err := s.db.Where("project_id = ? AND episode_n = ?", cue.ProjectID, cue.EpisodeN).Order("`order`, id").Find(&scenes).Error; err != nil {
+		return err
+	}
+	offset := 0.0
+	sceneStart, sceneEnd := -1.0, -1.0
+	for _, scene := range scenes {
+		if scene.ID == *cue.SceneID {
+			sceneStart, sceneEnd = offset, offset+scene.Duration
+			break
+		}
+		offset += scene.Duration
+	}
+	if sceneStart < 0 {
+		return fmt.Errorf("绑定Scene不在当前Episode时间轴")
+	}
+	boundStart, boundEnd := sceneStart, sceneEnd
+	if cue.ShotID != nil {
+		var shots []models.Shot
+		if err := s.db.Where("scene_id = ?", *cue.SceneID).Order("order_num, id").Find(&shots).Error; err != nil {
+			return err
+		}
+		shotOffset := sceneStart
+		found := false
+		for _, shot := range shots {
+			if shot.ID == *cue.ShotID {
+				boundStart, boundEnd = shotOffset, shotOffset+shot.Duration
+				found = true
+				break
+			}
+			shotOffset += shot.Duration
+		}
+		if !found {
+			return fmt.Errorf("绑定Shot不在当前Scene时间轴")
+		}
+	}
+	if cue.EndTime <= boundStart || cue.StartTime >= boundEnd {
+		return fmt.Errorf("Cue时间范围 %.2f–%.2f 秒与绑定实体 %.2f–%.2f 秒不相交", cue.StartTime, cue.EndTime, boundStart, boundEnd)
 	}
 	return nil
 }
@@ -717,6 +773,9 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 				return fmt.Errorf("第%d条Cue: %w", index+1, err)
 			}
 			cue.SourceVersionHash = musicCueSourceHash(context, &cue)
+			if err := NewMusicCueService(tx).validateBindingTimeline(&cue); err != nil {
+				return fmt.Errorf("第%d条Cue: %w", index+1, err)
+			}
 			if err := NewMusicCueService(tx).validateCueTimeline(&cue); err != nil {
 				return fmt.Errorf("第%d条Cue: %w", index+1, err)
 			}
@@ -766,10 +825,21 @@ func (s *MusicCueService) RegenerateCue(projectID, id uint) (*models.MusicCueShe
 		return nil, err
 	}
 	updated, err := s.Update(projectID, id, MusicCueSheetInput{EpisodeN: current.EpisodeN, SceneID: current.SceneID, ShotID: current.ShotID, Kind: item.Kind, StartTime: current.StartTime, EndTime: current.EndTime, Intensity: item.Intensity, Mood: item.Mood, InstrumentNote: item.InstrumentNote, UserRequirements: current.UserRequirements, Duration: current.Duration, Tags: current.Tags, CaptionJSON: string(caption), Source: "ai", Order: current.Order, Enabled: &current.Enabled})
-	if err == nil {
-		_ = s.db.Model(updated).Update("raw_output", raw).Error
+	if err != nil {
+		return nil, err
 	}
-	return updated, err
+	context, err = s.episodeContext(projectID, current.EpisodeN)
+	if err != nil {
+		return nil, err
+	}
+	updated.Stale = false
+	updated.StaleReason = ""
+	updated.SourceVersionHash = musicCueSourceHash(context, updated)
+	updated.RawOutput = raw
+	if err := s.db.Model(updated).Updates(map[string]any{"stale": false, "stale_reason": "", "source_version_hash": updated.SourceVersionHash, "raw_output": raw}).Error; err != nil {
+		return nil, err
+	}
+	return updated, nil
 }
 
 func (s *MusicCueService) Review(projectID, id uint, approve bool, reason string) (*models.MusicCueSheet, error) {
@@ -788,6 +858,9 @@ func (s *MusicCueService) Review(projectID, id uint, approve bool, reason string
 			return nil, fmt.Errorf("已禁用的配乐Cue不能审核通过")
 		}
 		if err := s.validateBindings(&cue); err != nil {
+			return nil, err
+		}
+		if err := s.validateBindingTimeline(&cue); err != nil {
 			return nil, err
 		}
 		if err := s.validateCueTimeline(&cue); err != nil {

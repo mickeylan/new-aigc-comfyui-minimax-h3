@@ -125,12 +125,21 @@ func TestMusicCueSheetSceneBinding(t *testing.T) {
 		t.Fatal("scene from another project should be rejected")
 	}
 
-	// Cue times are episode-relative; Scene binding verifies ownership, not a scene-local clock.
-	if _, err = svc.Create(p1.ID, MusicCueSheetInput{
-		EpisodeN: 1, SceneID: &scene1.ID, Kind: "scene",
-		StartTime: 6, EndTime: 8, Intensity: "medium",
-	}); err != nil {
-		t.Fatalf("episode-relative cue was rejected: %v", err)
+	secondScene := models.Scene{ProjectID: p1.ID, EpisodeN: 1, Generation: 1, Order: 2, Duration: 5}
+	db.Create(&secondScene)
+	if _, err = svc.Create(p1.ID, MusicCueSheetInput{EpisodeN: 1, SceneID: &scene1.ID, Kind: "scene", StartTime: 6, EndTime: 8, Intensity: "medium"}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.Preflight(p1.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, issue := range result.Issues {
+		found = found || issue.Code == "binding_timeline"
+	}
+	if !found {
+		t.Fatalf("non-overlapping scene binding accepted: %+v", result.Issues)
 	}
 }
 
@@ -195,6 +204,33 @@ func TestMusicCueSheetMarkSceneStale(t *testing.T) {
 	}
 	if !updated.Stale || updated.StaleReason != "scene content changed" {
 		t.Fatalf("cue should be marked stale: %+v", updated)
+	}
+}
+
+func TestSavingStaleMusicCueDoesNotSilentlyRebase(t *testing.T) {
+	db := newMusicCueTestDB(t)
+	svc := NewMusicCueService(db)
+	p := models.Project{Title: "p"}
+	db.Create(&p)
+	scene := models.Scene{ProjectID: p.ID, EpisodeN: 1, Duration: 5}
+	db.Create(&scene)
+	caption := `{"global_metadata":"score","vocal_details":"Fully instrumental","arrangement":"Intro: build. Outro: stop."}`
+	cue, err := svc.Create(p.ID, MusicCueSheetInput{EpisodeN: 1, Kind: "scene", StartTime: 0, EndTime: 5, CaptionJSON: caption})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.MarkEpisodeStale(p.ID, 1, "script changed"); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := svc.Update(p.ID, cue.ID, MusicCueSheetInput{EpisodeN: 1, Kind: "scene", StartTime: 0, EndTime: 5, CaptionJSON: caption})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.Stale || updated.SourceVersionHash != cue.SourceVersionHash {
+		t.Fatalf("stale cue was silently rebased: %+v", updated)
+	}
+	if _, err := svc.Review(p.ID, cue.ID, true, ""); err == nil {
+		t.Fatal("stale saved cue was approved")
 	}
 }
 
