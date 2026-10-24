@@ -1919,6 +1919,38 @@ func TestCombatRepairIncludesCurrentSceneSwordChoreographyDespiteLegacyShot(t *t
 	}
 }
 
+func TestCombatRepairRetriesWithExactValidationFailures(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SharedAssetReference{}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &sequenceTextProvider{responses: []string{
+		"[Shot 1] The woman immediately brandishes a peach branch through martial forms at full speed.",
+		"[Shot 1] The woman sweeps broad strokes at full real-time speed.",
+		"[Shot 1] The woman makes one diagonal rising cut at full real-time speed and finishes upright.",
+		"[Shot 1] The woman moves at full real-time speed, steps forward with her right foot for one diagonal rising cut, shifts her weight onto the left foot for one straight thrust, then makes one horizontal cut and finishes upright with the peach branch angled down.",
+	}}
+	ps.textProvider = provider
+	project := models.Project{Title: "剑术重试测试"}
+	ps.db.Create(&project)
+	content := "上官若琳以桃枝为剑，在桃林中进行单人剑术演练。右脚前踏，完成斜撩、直刺、横削，最后收步直立。"
+	scene := models.Scene{ProjectID: project.ID, SceneMode: "武戏", Duration: 10, Content: content}
+	ps.db.Create(&scene)
+	got, err := ps.GenerateSceneVideoAction(&scene)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 4 || len(provider.users) != 4 {
+		t.Fatalf("calls=%d users=%d, want initial + general + two combat attempts", provider.calls, len(provider.users))
+	}
+	if !strings.Contains(provider.users[3], "EXACT VALIDATION FAILURES TO FIX") || !strings.Contains(provider.users[3], "至少两式明确剑路") {
+		t.Fatalf("second combat attempt lacks exact validation feedback: %s", provider.users[3])
+	}
+	if !h3SoloSwordPracticeContractMatches(content, got) {
+		t.Fatalf("retried sword choreography remained invalid: %s", got)
+	}
+}
+
 func TestNormalizeGeneratedH3ActionConvertsFullWidthSubjectTags(t *testing.T) {
 	got := normalizeGeneratedH3Action("[Shot 1] 【Subject 1】 steps forward at full real-time speed.", true, 1, h3SceneAction, []string{"- <Picture 1>：角色「上官若琳」四视图"}, "[Shot 1] 动作", "[Shot 1] <Subject 1> 动作")
 	if !strings.Contains(got, "<Subject 1> steps forward") || strings.Contains(got, "【Subject") {

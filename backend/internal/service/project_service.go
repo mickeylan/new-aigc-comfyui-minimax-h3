@@ -1804,6 +1804,14 @@ func effectiveGenerationSystem(system string, policy *EffectivePromptPolicy) str
 }
 
 func combatActionRepairRequest(authoritative, draft string, duration float64) string {
+	return combatActionRepairRequestWithIssues(authoritative, draft, duration, "")
+}
+
+func combatActionRepairRequestWithIssues(authoritative, draft string, duration float64, issues string) string {
+	issueBlock := ""
+	if strings.TrimSpace(issues) != "" {
+		issueBlock = "\nEXACT VALIDATION FAILURES TO FIX:\n" + strings.TrimSpace(issues) + "\nPreserve every already-valid concrete action from the failed draft and change only what is necessary to resolve these failures.\n"
+	}
 	return fmt.Sprintf(`Rewrite this combat or spell-clash draft into concise official English H3 shot prose. Return only the detailed_description body.
 Hard requirements:
 - Preserve every authoritative Shot number, order, subject, weapon, spell, location and stated outcome; add no new combatant, power, injury, victory or defeat.
@@ -1812,12 +1820,12 @@ Hard requirements:
 - State direction, target, weapon/spell ownership, response and end pose. No standing still and watching, no slow motion, bullet time, hovering display, prolonged charge or lingering pause.
 - For solo weapon practice, preserve every technique explicitly stated in the authoritative facts. Name at least two concrete paths such as a diagonal cut, thrust, or horizontal cut; state the supporting foot or weight transfer and the final stopping stance. Never summarize them as martial forms, brandishing, sweeping strokes, dancing, repeated circles, or continuous full-body spins.
 - Visual prose must be English except exact structured dialogue. Do not output dialogue, headings, Markdown or explanation.
-
+%s
 AUTHORITATIVE FACTS:
 %s
 
 FAILED DRAFT:
-%s`, normalizeSceneDuration(duration), authoritative, draft)
+%s`, normalizeSceneDuration(duration), issueBlock, authoritative, draft)
 }
 
 func h3SceneModeInstruction(mode h3SceneMode) string {
@@ -2194,17 +2202,31 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		combatValid := h3ActionTempoContractMatches(out) && h3SoloSwordPracticeContractMatches(canonicalSceneContent, out) && !regexp.MustCompile(`[\p{Han}]`).MatchString(out)
 		if !combatValid {
 			repairSource := useSubjectTags(strings.TrimSpace(canonicalSceneContent+"\n"+authoritativeFallback()), refLines)
-			repairRequest := combatActionRepairRequest(repairSource, out, sc.Duration)
-			repaired, repairErr := chatAction(repairRequest)
-			if repairErr != nil {
-				return "", fmt.Errorf("AI武戏动作补全失败: %w", repairErr)
+			failedDraft := out
+			failure := actionTrustIssues(failedDraft)
+			failures := make([]string, 0, 3)
+			repairedOK := false
+			for attempt := 1; attempt <= 3; attempt++ {
+				repairRequest := combatActionRepairRequestWithIssues(repairSource, failedDraft, sc.Duration, failure)
+				repaired, repairErr := chatAction(repairRequest)
+				if repairErr != nil {
+					failures = append(failures, fmt.Sprintf("第%d次调用失败：%v", attempt, repairErr))
+					continue
+				}
+				candidate := useSubjectTags(enforceH3ActionTempo(prepareGeneratedAction(repaired, true), sceneMode), refLines)
+				candidateValid := actionTrusted(candidate, true) && h3SoloSwordPracticeContractMatches(canonicalSceneContent, candidate) && !regexp.MustCompile(`[\p{Han}]`).MatchString(candidate)
+				if candidateValid {
+					out = candidate
+					generationSource = fmt.Sprintf("combat_skill_repair_%d", attempt)
+					repairedOK = true
+					break
+				}
+				failure = actionTrustIssues(candidate)
+				failures = append(failures, fmt.Sprintf("第%d次：%s", attempt, failure))
+				failedDraft = candidate
 			}
-			candidate := useSubjectTags(enforceH3ActionTempo(prepareGeneratedAction(repaired, true), sceneMode), refLines)
-			if actionTrusted(candidate, true) && h3SoloSwordPracticeContractMatches(canonicalSceneContent, candidate) && !regexp.MustCompile(`[\p{Han}]`).MatchString(candidate) {
-				out = candidate
-				generationSource = "combat_skill_repair"
-			} else {
-				return "", fmt.Errorf("AI武戏动作补全失败：%s", actionTrustIssues(candidate))
+			if !repairedOK {
+				return "", fmt.Errorf("AI武戏动作补全失败（已定向修复3次）：%s", strings.Join(failures, "；"))
 			}
 		}
 	}
