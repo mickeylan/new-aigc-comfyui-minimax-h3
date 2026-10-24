@@ -1664,12 +1664,27 @@ var h3VagueSwordPracticePattern = regexp.MustCompile(`(?i)\bmartial forms?\b|\bb
 var h3SwordTechniquePattern = regexp.MustCompile(`(?i)diagonal\s+(?:rising\s+)?cut|rising\s+cut|straight\s+thrust|horizontal\s+cut|downward\s+cut|upward\s+cut|cross-body\s+cut|forward\s+thrust|slash(?:es|ing)?|parr(?:y|ies)|lunge(?:s|ing)?`)
 var h3SwordFootworkPattern = regexp.MustCompile(`(?i)\b(?:left|right)\s+foot\b|\bsteps?\s+(?:forward|back|left|right|sideways)\b|\bshifts?\s+(?:her|his|their)\s+weight\b|\bweight\s+(?:onto|over)\b|\bstabiliz(?:e|es)\s+(?:her|his|their)\s+weight\b`)
 var h3SwordFinishPattern = regexp.MustCompile(`(?i)\bfinish(?:es)?\b|\bend(?:s)?\s+(?:upright|in|with)\b|\bfinal\s+stance\b|\bbranch\s+angled\s+down\b|\breturns?\s+to\s+(?:a\s+)?(?:ready|guard|resting)\s+stance\b`)
+var h3SwordProhibitionPattern = regexp.MustCompile(`(?i)\b(?:no|never|without|avoid(?:s|ing)?|forbid(?:s|ding)?|must\s+not|does\s+not|do\s+not|rather\s+than|instead\s+of)\b`)
+
+func hasAffirmativeVagueSwordPractice(value string) bool {
+	for _, match := range h3VagueSwordPracticePattern.FindAllStringIndex(value, -1) {
+		clauseStart := 0
+		if i := strings.LastIndexAny(value[:match[0]], ".;。；"); i >= 0 {
+			clauseStart = i + 1
+		}
+		prefix := value[clauseStart:match[0]]
+		if !h3SwordProhibitionPattern.MatchString(prefix) {
+			return true
+		}
+	}
+	return false
+}
 
 func h3SoloSwordPracticeContractMatches(source, value string) bool {
 	if !h3SoloSwordPracticeCuePattern.MatchString(source) {
 		return true
 	}
-	if h3VagueSwordPracticePattern.MatchString(value) || !h3SwordFootworkPattern.MatchString(value) || !h3SwordFinishPattern.MatchString(value) {
+	if hasAffirmativeVagueSwordPractice(value) || !h3SwordFootworkPattern.MatchString(value) || !h3SwordFinishPattern.MatchString(value) {
 		return false
 	}
 	return len(h3SwordTechniquePattern.FindAllString(value, -1)) >= 2
@@ -2184,7 +2199,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 			if repairErr != nil {
 				return "", fmt.Errorf("AI武戏动作补全失败: %w", repairErr)
 			}
-			candidate := enforceH3ActionTempo(prepareGeneratedAction(repaired, true), sceneMode)
+			candidate := useSubjectTags(enforceH3ActionTempo(prepareGeneratedAction(repaired, true), sceneMode), refLines)
 			if actionTrusted(candidate, true) && h3SoloSwordPracticeContractMatches(canonicalSceneContent, candidate) && !regexp.MustCompile(`[\p{Han}]`).MatchString(candidate) {
 				out = candidate
 				generationSource = "combat_skill_repair"

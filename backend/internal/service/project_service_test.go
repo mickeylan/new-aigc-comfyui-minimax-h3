@@ -1997,6 +1997,17 @@ func TestSoloSwordPracticeRejectsAbstractMartialForms(t *testing.T) {
 	if !h3SoloSwordPracticeContractMatches(source, concrete) {
 		t.Fatalf("concrete sword sequence failed contract: %s", concrete)
 	}
+	concreteWithProhibition := concrete + " She never performs continuous full-body spins, repeated circular swings, or dance-like movement."
+	if !h3SoloSwordPracticeContractMatches(source, concreteWithProhibition) {
+		t.Fatalf("negative anti-spin clause was misread as affirmative vague choreography: %s", concreteWithProhibition)
+	}
+}
+
+func TestCombatRepairRebindsChineseCharacterNameBeforeEnglishValidation(t *testing.T) {
+	got := useSubjectTags("[Shot 1] 上官若琳 steps forward with her right foot and performs one diagonal rising cut at full real-time speed.", []string{"- <Picture 1>：角色「上官若琳」四视图"})
+	if strings.Contains(got, "上官若琳") || !strings.Contains(got, "<Subject 1>") {
+		t.Fatalf("combat repair character was not rebound before language validation: %s", got)
+	}
 }
 
 func TestCombatActionRepairRequestUsesNeutralReactionWhenOutcomeUnknown(t *testing.T) {
