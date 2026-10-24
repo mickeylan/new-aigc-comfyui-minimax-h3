@@ -3525,9 +3525,27 @@ func dialogueSpeakerIDs(dubs []models.Dialogue) []int {
 
 func h3SoundscapeContract(hasDialogue bool) string {
 	if hasDialogue {
-		return "Only natural location ambience and physically motivated diegetic action sounds are present. Structured speech, including any dialogue, narration, or internal monologue, appears only in the shot timeline; no additional speech, voices, narration, singing, humming, musical tones, or rhythmic score are present."
+		return "Only natural location ambience and physically motivated diegetic action sounds are present. Structured speech appears only in the shot timeline; no additional speech, voices, narration, singing, humming, musical tones, or rhythmic score are present."
 	}
 	return "Only natural location ambience and physically motivated diegetic action sounds are present. No dialogue, human voice, narration, singing, humming, musical tones, or rhythmic score are present."
+}
+
+func h3SoundscapeContractForDialogues(dubs []models.Dialogue) string {
+	valid := validSceneDialogues(dubs)
+	if len(valid) == 0 {
+		return h3SoundscapeContract(false)
+	}
+	narrationOnly := true
+	for _, d := range valid {
+		if d.SpeechType != "narration" && !isNarrationSpeaker(d.Character) {
+			narrationOnly = false
+			break
+		}
+	}
+	if narrationOnly {
+		return "Only natural location ambience and physically motivated diegetic action sounds are present. Structured speech consists only of the separate unseen third-person narration and appears only in the shot timeline; no visible character dialogue, no internal monologue, no additional speech or voice, singing, humming, musical tones, or rhythmic score is present."
+	}
+	return h3SoundscapeContract(true)
 }
 
 func h3NoMusicContract() string {
@@ -4043,7 +4061,7 @@ func h3TimelineBody(sc *models.Scene, p *models.Project, dubs []models.Dialogue)
 func buildH3T2VAPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue) string {
 	body := h3TimelineBody(sc, p, dubs)
 	return "integrated_multimodal_description:\n" + body +
-		"\n\noverall_soundscape:\n" + h3SoundscapeContract(len(validSceneDialogues(dubs)) > 0) +
+		"\n\noverall_soundscape:\n" + h3SoundscapeContractForDialogues(dubs) +
 		"\n\nnon_diegetic_music:\n" + h3NoMusicContract()
 }
 
@@ -4053,7 +4071,7 @@ func buildH3I2VAPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialog
 	body = "[Shot 1] The shot begins from <Picture 1>, preserving its composition, subjects, clothing, spatial layout, props, lighting, and visual style before the action develops forward. " + body
 	return "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.\n\n" +
 		"integrated_multimodal_description:\n" + body +
-		"\n\noverall_soundscape:\n" + h3SoundscapeContract(len(validSceneDialogues(dubs)) > 0) +
+		"\n\noverall_soundscape:\n" + h3SoundscapeContractForDialogues(dubs) +
 		"\n\nnon_diegetic_music:\n" + h3NoMusicContract()
 }
 
@@ -4082,7 +4100,7 @@ func buildH3FL2VAPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialo
 	body += " Toward the end, the visible motion settles into the exact pose, spacing, object state, camera angle, lighting, and final composition established by Picture 2."
 	return fmt.Sprintf("How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot %d) aligns with the %.2f-second mark of the target video.\n\n", lastShot, duration) +
 		"integrated_multimodal_description:\n" + body +
-		"\n\noverall_soundscape:\n" + h3SoundscapeContract(len(validSceneDialogues(dubs)) > 0) +
+		"\n\noverall_soundscape:\n" + h3SoundscapeContractForDialogues(dubs) +
 		"\n\nnon_diegetic_music:\n" + h3NoMusicContract()
 }
 
@@ -4168,7 +4186,7 @@ func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines
 		if prefix != "" {
 			parts = append(parts, prefix)
 		}
-		parts = append(parts, "integrated_multimodal_description:\n"+detail, "overall_soundscape:\n"+h3SoundscapeContract(len(validSceneDialogues(dubs)) > 0), "non_diegetic_music:\n"+h3NoMusicContract())
+		parts = append(parts, "integrated_multimodal_description:\n"+detail, "overall_soundscape:\n"+h3SoundscapeContractForDialogues(dubs), "non_diegetic_music:\n"+h3NoMusicContract())
 		return strings.Join(parts, "\n\n")
 	}
 	sections := []struct{ heading, body string }{
@@ -4176,7 +4194,7 @@ func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines
 		{"summary:", h3PromptSection(prompt, "summary:")},
 		{"retention_analysis:", h3PromptSection(prompt, "retention_analysis:")},
 		{"detailed_description:", detail},
-		{"overall_soundscape:", h3SoundscapeContract(len(validSceneDialogues(dubs)) > 0)},
+		{"overall_soundscape:", h3SoundscapeContractForDialogues(dubs)},
 		{"non_diegetic_music:", h3NoMusicContract()},
 	}
 	parts := make([]string, 0, len(sections)+1)
@@ -4484,7 +4502,7 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 		}
 	}
 	validDialogues := validSceneDialogues(dubs)
-	soundscape := h3SoundscapeContract(len(validDialogues) > 0)
+	soundscape := h3SoundscapeContractForDialogues(validDialogues)
 	body = appendStructuredDialogue(body, validDialogues, referenceLines)
 	// Keep every submitted Picture binding in subject_definitions. A storyboard or
 	// identity anchor may constrain the opening even when its Subject tag is not
