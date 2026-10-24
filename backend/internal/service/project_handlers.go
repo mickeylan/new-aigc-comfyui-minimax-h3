@@ -461,7 +461,7 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 	fullPrompt := strings.TrimSpace(sc.VideoFullPrompt)
 	promptIssues := []string{}
 	width, height := aspectVideoSize(project.AspectRatio, s.Projects.videoResolution())
-	template := strings.TrimSpace(sc.VideoTemplate)
+	template := enforceSceneModeVideoTemplate(sc, sc.VideoTemplate)
 	if template == "" {
 		template = "minimax_h3_ref2v"
 	}
@@ -486,7 +486,7 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 		response["continuity_source_scene_id"] = continuity.SourceSceneID
 		if continuity.SelectedFrame != nil {
 			response["continuity_frame"] = s.frameResponses([]models.FrameCandidate{*continuity.SelectedFrame})[0]
-			if continuity.Mode == models.ContinuityModeBridge {
+			if continuity.Mode == models.ContinuityModeBridge && !sceneExplicitlyRequiresCombatTemplate(sc) {
 				response["template"] = "minimax_h3_first_last"
 				response["first_frame_img"] = continuity.SelectedFrame.ImageFile
 				response["last_frame_img"] = sc.ImageFile
@@ -524,9 +524,10 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 	if template == "" {
 		template = strings.TrimSpace(sc.VideoTemplate)
 	}
-	if continuity != nil && continuity.Status == "ready" && continuity.Mode == models.ContinuityModeBridge {
+	if continuity != nil && continuity.Status == "ready" && continuity.Mode == models.ContinuityModeBridge && !sceneExplicitlyRequiresCombatTemplate(sc) {
 		template = "minimax_h3_first_last"
 	}
+	template = enforceSceneModeVideoTemplate(sc, template)
 	if template == "" {
 		template = "minimax_h3_ref2v"
 	}

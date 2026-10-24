@@ -1606,6 +1606,21 @@ const (
 
 var h3ActionCuePattern = regexp.MustCompile(`攻击|格挡|闪避|挥剑|挥刀|拔剑|拔刀|刺向|劈向|斩|咬向|咬去|扑咬|蛇口大张|射出|飞射|拳|踢|撞击|追逐|冲锋|交锋|搏斗|战斗|爆炸|开火|射击|扑向|抓住|挣脱|摔倒|击退|击中|防守|反击|施法|法术|剑气|刀气|掌印|雷法|火球|冰锥|符箓|法宝|对轰|能量碰撞|冲击波|护盾|结界`)
 
+func sceneExplicitlyRequiresCombatTemplate(sc *models.Scene) bool {
+	if sc == nil {
+		return false
+	}
+	mode, err := normalizeH3SceneMode(sc.SceneMode)
+	return err == nil && (mode == h3SceneAction || mode == h3SceneMixed)
+}
+
+func enforceSceneModeVideoTemplate(sc *models.Scene, requested string) string {
+	if sceneExplicitlyRequiresCombatTemplate(sc) {
+		return h3CombatRef2VTemplate
+	}
+	return strings.TrimSpace(requested)
+}
+
 func normalizeH3SceneMode(value string) (h3SceneMode, error) {
 	switch mode := h3SceneMode(strings.TrimSpace(value)); mode {
 	case "":
@@ -1847,6 +1862,27 @@ func suggestedUnstructuredH3ShotCount(content string, duration float64) int {
 	if duration < 9 || strings.Contains(content, "[Shot ") {
 		return 0
 	}
+	combatBeats := 0
+	for _, terms := range [][]string{
+		{"斜撩", "撩剑", "diagonal rising cut", "rising diagonal cut"},
+		{"直刺", "突刺", "straight thrust", "forward thrust"},
+		{"横削", "横斩", "水平削击", "horizontal cut", "horizontal slash"},
+		{"劈剑", "下劈", "downward cut"},
+		{"点剑", "云剑"},
+	} {
+		for _, term := range terms {
+			if strings.Contains(content, term) {
+				combatBeats++
+				break
+			}
+		}
+	}
+	if combatBeats >= 3 {
+		return 3
+	}
+	if combatBeats == 2 {
+		return 2
+	}
 	groups := 0
 	for _, terms := range [][]string{
 		{"穿上", "披上", "换上", "穿入", "系紧", "扣紧", "整理衣襟", "披风"},
@@ -1868,6 +1904,20 @@ func suggestedUnstructuredH3ShotCount(content string, duration float64) int {
 		return 2
 	}
 	return 0
+}
+
+func structuredShotsCoverScene(shots []models.Shot, duration float64) bool {
+	if len(shots) == 0 || duration <= 0 {
+		return false
+	}
+	total := 0.0
+	for _, shot := range shots {
+		if shot.Duration < 3 || shot.Duration > maxSceneVideoDuration {
+			return false
+		}
+		total += shot.Duration
+	}
+	return math.Abs(total-duration) <= shotDurationTolerance
 }
 
 var h3InvisiblePsychologyPattern = regexp.MustCompile(`(?i)\b(?:feels?|felt|becomes?)\s+(?:reassured|relieved|confident|worried|hopeful)|\b(?:inner|internal)\s+(?:thought|feeling|emotion)|\brenewed confidence\b`)
@@ -1974,7 +2024,6 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	}
 	_, refLines := s.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
 	openingPicture := openingPictureTag(refLines)
-	shotContext := s.sceneShotContext(sc)
 	canonicalSceneContent := normalizeUserH3ShotMarkers(sc.Content)
 	dubs := s.sceneVideoDialogues(sc)
 	if err := requireStructuredSceneSpeech(sc.Content, dubs); err != nil {
@@ -1988,8 +2037,14 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 		return "", err
 	}
 	sceneMode := classifyH3SceneMode(sc, shots, dubs)
+	promptShots := shots
+	shotContext := s.sceneShotContext(sc)
+	if (sceneMode == h3SceneAction || sceneMode == h3SceneMixed) && !structuredShotsCoverScene(shots, normalizeSceneDuration(sc.Duration)) {
+		promptShots = nil
+		shotContext = "现有结构化Shot时长或范围与Scene不一致，本次不得作为动作权威；请仅按Scene权威事实生成内部Shot。"
+	}
 	suggestedShotCount := 0
-	if len(shots) == 0 {
+	if len(promptShots) == 0 {
 		suggestedShotCount = suggestedUnstructuredH3ShotCount(canonicalSceneContent, normalizeSceneDuration(sc.Duration))
 	}
 	dialogueContext := "无结构化对白；禁止生成说话、旁白或人声"
@@ -2020,7 +2075,11 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 场景类型规则：%s`, combatDetailRule, openingPicture, h3SceneModeInstruction(sceneMode))
 	actionTask := ""
 	if suggestedShotCount > 1 {
-		actionTask += fmt.Sprintf("\n\n【无结构化Shot的可见阶段拆分】当前Scene包含多个连续可见阶段，必须生成恰好%d个内部Shot并保持一个连续视频；Shot 1不得带时间戳，Shot 2必须使用合理的官方At MM:SS.mmm切入时间。第一镜完整表现前一阶段的实际动作步骤，后一镜表现后续动作与环境结果。不得把全部剧情压缩成一个Shot，不得只写dons/puts on而跳过穿袖、合襟、束带、披挂或扣合等原文所要求的可见过程。心理状态必须改写为可见表情或姿态变化。", suggestedShotCount)
+		if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
+			actionTask += fmt.Sprintf("\n\n【武戏内部Shot拆分】当前Scene包含多个明确动作阶段，必须生成恰好%d个内部Shot并保持一条连续实时动作时间线。Shot 1不得带时间戳，后续Shot必须按目标总时长使用递增的官方At MM:SS.mmm切入时间；切镜只换机位，不得重新起势。把已明确的剑路按顺序分配到各Shot，每式保持启动、轨迹、停止点和下一式接口；不得把三式塞入一个Shot后用慢动作、花瓣、转圈或尾帧补间填满时长。", suggestedShotCount)
+		} else {
+			actionTask += fmt.Sprintf("\n\n【无结构化Shot的可见阶段拆分】当前Scene包含多个连续可见阶段，必须生成恰好%d个内部Shot并保持一个连续视频；Shot 1不得带时间戳，Shot 2必须使用合理的官方At MM:SS.mmm切入时间。第一镜完整表现前一阶段的实际动作步骤，后一镜表现后续动作与环境结果。不得把全部剧情压缩成一个Shot，不得只写dons/puts on而跳过穿袖、合襟、束带、披挂或扣合等原文所要求的可见过程。心理状态必须改写为可见表情或姿态变化。", suggestedShotCount)
+		}
 	}
 	if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
 		actionTask += "\n\n【武戏硬任务】动作必须从开头立即以正常实时速度启动；来袭攻击必须在同一Shot中触发立即可见的响应。武器、法宝、灵兽、术法和能量形态只能读取下方Scene、Shot与实际参考绑定，不得用通用武器替换，不得创造未提供的装备或术法。原文未给出命中或胜负时，只能设计不改变结果的即时可见应对，不得生成站立观察，不得擅自决定命中、击杀、受伤或胜负。主要动作爆发应在开头1–2秒完成，余下时间只延续权威事实中已有的环境反馈与结束状态，禁止把接近过程拉满整段。"
@@ -2047,17 +2106,20 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	// 返回完全相同的旧提示词，看起来像模型从未执行。
 	authoritativeFallback := func() string {
 		if suggestedShotCount > 1 {
+			if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
+				return defaultSceneVideoAction(sc)
+			}
 			return deterministicDressingStageAction(sc, refLines)
 		}
-		if len(shots) > 0 {
-			return rebuildStructuredShotAction(shots)
+		if len(promptShots) > 0 {
+			return rebuildStructuredShotAction(promptShots)
 		}
 		if strings.Contains(canonicalSceneContent, "[Shot ") {
 			return resolveH3VisualConflicts(coalesceDuplicateH3Shots(stripPromptDialogueNarration(canonicalSceneContent)))
 		}
 		return defaultSceneVideoAction(sc)
 	}
-	expectedShotCount := len(shots)
+	expectedShotCount := len(promptShots)
 	if suggestedShotCount > expectedShotCount {
 		expectedShotCount = suggestedShotCount
 	}
@@ -2088,7 +2150,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		if h3VisualDraftResiduePattern.MatchString(value) || h3InvisiblePsychologyPattern.MatchString(value) || h3ShotCameraMoveConflict(value) {
 			return false
 		}
-		if suggestedShotCount > 1 && !h3DressingProcessContractMatches(value) {
+		if suggestedShotCount > 1 && sceneMode == h3SceneDrama && !h3DressingProcessContractMatches(value) {
 			return false
 		}
 		if !allowSubjects {
@@ -2145,7 +2207,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		if h3InvisiblePsychologyPattern.MatchString(value) {
 			issues = append(issues, "仍含不可见心理活动，必须改写为可见表情或动作")
 		}
-		if suggestedShotCount > 1 && !h3DressingProcessContractMatches(value) {
+		if suggestedShotCount > 1 && sceneMode == h3SceneDrama && !h3DressingProcessContractMatches(value) {
 			issues = append(issues, "换衣过程缺少穿袖、合襟/束带或披风扣合的可见中间动作")
 		}
 		if h3ShotCameraMoveConflict(value) {
@@ -6279,7 +6341,7 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		}
 		return code, prompt, files
 	}
-	requestedTemplate := sc.VideoTemplate
+	requestedTemplate := enforceSceneModeVideoTemplate(sc, sc.VideoTemplate)
 	if hasAuditedCombatShots(structuredShots) {
 		if err := validateCombatShotProvenance(structuredShots); err != nil {
 			return err

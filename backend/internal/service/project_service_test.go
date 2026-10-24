@@ -1816,6 +1816,34 @@ func TestClassifyH3SceneModeAndInstructions(t *testing.T) {
 	}
 }
 
+func TestExplicitCombatSceneModeForcesCombatTemplate(t *testing.T) {
+	for _, mode := range []string{string(h3SceneAction), string(h3SceneMixed)} {
+		scene := &models.Scene{SceneMode: mode, VideoTemplate: "minimax_h3_first_last"}
+		if got := enforceSceneModeVideoTemplate(scene, scene.VideoTemplate); got != h3CombatRef2VTemplate {
+			t.Fatalf("explicit mode %s routed to %s, want %s", mode, got, h3CombatRef2VTemplate)
+		}
+	}
+	drama := &models.Scene{SceneMode: string(h3SceneDrama), VideoTemplate: "minimax_h3_first_last"}
+	if got := enforceSceneModeVideoTemplate(drama, drama.VideoTemplate); got != "minimax_h3_first_last" {
+		t.Fatalf("drama template changed unexpectedly: %s", got)
+	}
+}
+
+func TestSwordPracticeSuggestsInternalShotsAndRejectsMismatchedLegacyPlan(t *testing.T) {
+	content := "上官若琳右脚前踏完成斜撩，收至右肩后直刺，随后横移完成水平削击并收势。"
+	if got := suggestedUnstructuredH3ShotCount(content, 14); got != 3 {
+		t.Fatalf("suggested shots=%d, want 3", got)
+	}
+	legacy := []models.Shot{{Duration: 1.5, Description: "花中舞动"}}
+	if structuredShotsCoverScene(legacy, 14) {
+		t.Fatal("1.5-second legacy Shot incorrectly covered a 14-second combat Scene")
+	}
+	valid := []models.Shot{{Duration: 4}, {Duration: 5}, {Duration: 5}}
+	if !structuredShotsCoverScene(valid, 14) {
+		t.Fatal("valid 14-second Shot plan was rejected")
+	}
+}
+
 func TestH3ActionTempoRejectsStaticDefenderAndEnforcesRealtime(t *testing.T) {
 	snakeScene := &models.Scene{Content: "齐人高杂草丛中，五六条青色长蛇射出，蛇口大张朝大汉狠狠咬去。"}
 	if got := classifyH3SceneMode(snakeScene, nil, nil); got != h3SceneAction {
@@ -1904,7 +1932,7 @@ func TestCombatRepairIncludesCurrentSceneSwordChoreographyDespiteLegacyShot(t *t
 	project := models.Project{Title: "剑术测试"}
 	ps.db.Create(&project)
 	content := "上官若琳以桃枝为剑，在桃林中进行单人剑术演练。右脚前踏，完成斜撩、直刺、横削，最后收步直立。"
-	scene := models.Scene{ProjectID: project.ID, SceneMode: "武戏", Duration: 10, Content: content}
+	scene := models.Scene{ProjectID: project.ID, SceneMode: "武戏", Duration: 8, Content: content}
 	ps.db.Create(&scene)
 	ps.db.Create(&models.Shot{SceneID: scene.ID, Order: 1, Duration: 1.5, Description: "一个身影在花中舞动"})
 	got, err := ps.GenerateSceneVideoAction(&scene)
@@ -1934,7 +1962,7 @@ func TestCombatRepairRetriesWithExactValidationFailures(t *testing.T) {
 	project := models.Project{Title: "剑术重试测试"}
 	ps.db.Create(&project)
 	content := "上官若琳以桃枝为剑，在桃林中进行单人剑术演练。右脚前踏，完成斜撩、直刺、横削，最后收步直立。"
-	scene := models.Scene{ProjectID: project.ID, SceneMode: "武戏", Duration: 10, Content: content}
+	scene := models.Scene{ProjectID: project.ID, SceneMode: "武戏", Duration: 8, Content: content}
 	ps.db.Create(&scene)
 	got, err := ps.GenerateSceneVideoAction(&scene)
 	if err != nil {
