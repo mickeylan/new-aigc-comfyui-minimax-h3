@@ -1820,28 +1820,33 @@ func effectiveGenerationSystem(system string, policy *EffectivePromptPolicy) str
 }
 
 func combatActionRepairRequest(authoritative, draft string, duration float64) string {
-	return combatActionRepairRequestWithIssues(authoritative, draft, duration, "")
+	return combatActionRepairRequestWithIssues(authoritative, draft, duration, "", 0)
 }
 
-func combatActionRepairRequestWithIssues(authoritative, draft string, duration float64, issues string) string {
+func combatActionRepairRequestWithIssues(authoritative, draft string, duration float64, issues string, expectedShotCount int) string {
 	issueBlock := ""
 	if strings.TrimSpace(issues) != "" {
 		issueBlock = "\nEXACT VALIDATION FAILURES TO FIX:\n" + strings.TrimSpace(issues) + "\nPreserve every already-valid concrete action from the failed draft and change only what is necessary to resolve these failures.\n"
 	}
+	structureBlock := ""
+	if expectedShotCount > 1 {
+		interval := normalizeSceneDuration(duration) / float64(expectedShotCount)
+		structureBlock = fmt.Sprintf("\nOUTPUT STRUCTURE: Output exactly %d Shot paragraphs. Shot 1 has no timestamp. Shot 2 and later use increasing official [Shot N] At MM:SS.mmm, markers, with cuts near %.3f-second intervals. Divide the existing authoritative techniques in their original order across these Shots; a cut changes only the camera and never restarts the movement.\n", expectedShotCount, interval)
+	}
 	return fmt.Sprintf(`Rewrite this combat or spell-clash draft into concise official English H3 shot prose. Return only the detailed_description body.
 Hard requirements:
-- Preserve every authoritative Shot number, order, subject, weapon, spell, location and stated outcome; add no new combatant, power, injury, victory or defeat.
+- Preserve every explicit authoritative Shot number, order, subject, weapon, spell, location and stated outcome; add no new combatant, power, injury, victory or defeat. When OUTPUT STRUCTURE requires more internal Shots than the source contains, divide the existing actions without inventing or repeating them.
 - Motion starts immediately at full real-time speed. Resolve the main burst of motion within the opening 1–2 seconds instead of stretching it across %.1f seconds; use the remaining time only for visible recoil, displaced dust/grass, recovery stance or a brief aftermath already supported by the facts.
 - Every incoming attack gets an immediate visible response in the same Shot. Derive that response from the authoritative character state, actual referenced asset, spatial relation and established capability. If the source does not state the outcome, choose a visible response that changes no hit/miss/block, injury, victory or defeat fact.
 - State direction, target, weapon/spell ownership, response and end pose. No standing still and watching, no slow motion, bullet time, hovering display, prolonged charge or lingering pause.
 - For solo weapon practice, preserve every technique explicitly stated in the authoritative facts. Name at least two concrete paths such as a diagonal cut, thrust, or horizontal cut; state the supporting foot or weight transfer and the final stopping stance. Never summarize them as martial forms, brandishing, sweeping strokes, dancing, repeated circles, or continuous full-body spins.
 - Visual prose must be English except exact structured dialogue. Do not output dialogue, headings, Markdown or explanation.
-%s
+%s%s
 AUTHORITATIVE FACTS:
 %s
 
 FAILED DRAFT:
-%s`, normalizeSceneDuration(duration), issueBlock, authoritative, draft)
+%s`, normalizeSceneDuration(duration), structureBlock, issueBlock, authoritative, draft)
 }
 
 func h3SceneModeInstruction(mode h3SceneMode) string {
@@ -2270,7 +2275,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 			failures := make([]string, 0, 3)
 			repairedOK := false
 			for attempt := 1; attempt <= 3; attempt++ {
-				repairRequest := combatActionRepairRequestWithIssues(repairSource, failedDraft, sc.Duration, failure)
+				repairRequest := combatActionRepairRequestWithIssues(repairSource, failedDraft, sc.Duration, failure, expectedShotCount)
 				repaired, repairErr := chatAction(repairRequest)
 				if repairErr != nil {
 					failures = append(failures, fmt.Sprintf("第%d次调用失败：%v", attempt, repairErr))

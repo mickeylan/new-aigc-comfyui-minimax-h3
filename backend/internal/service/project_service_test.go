@@ -2101,6 +2101,15 @@ func TestCombatRepairRebindsChineseCharacterNameBeforeEnglishValidation(t *testi
 	}
 }
 
+func TestCombatActionRepairRequestRequiresExactInternalShotCount(t *testing.T) {
+	got := combatActionRepairRequestWithIssues("斜撩、直刺、横削", "[Shot 1] abstract", 14, "Shot数量为1，期望3", 3)
+	for _, want := range []string{"Output exactly 3 Shot paragraphs", "Shot 1 has no timestamp", "4.667-second intervals", "cut changes only the camera", "Shot数量为1，期望3"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("structured combat repair missing %q: %s", want, got)
+		}
+	}
+}
+
 func TestCombatActionRepairRequestUsesNeutralReactionWhenOutcomeUnknown(t *testing.T) {
 	got := combatActionRepairRequest("蛇扑向持刀男子", "男子站立观察", 10)
 	for _, want := range []string{"opening 1–2 seconds", "actual referenced asset", "changes no hit/miss/block", "victory or defeat"} {
