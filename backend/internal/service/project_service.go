@@ -2635,7 +2635,7 @@ var (
 	h3CarryoverDialoguePattern     = regexp.MustCompile(`(?is)<Subject\s+[0-9]+>\s*\(S[0-9]+\)'s\s+words\s+carry\s+over\s+from\s+the\s+previous\s+shot\s*<scenetrans>.*?</d>[.]?`)
 	h3DialogueClausePattern        = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}]{1,20})(?:\s*\(S[0-9]+\))?(?:画外音|内心独白|说|说道|问道|答道)[：:]?\s*<d>.*?</d>[。.]?`)
 	h3EnglishDialogueClausePattern = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}][\p{Han}A-Za-z0-9，,· \t]{0,80})\s*\(S[0-9]+\)\s*(?:says(?:\s+in\s+an\s+off-screen\s+voiceover|\s+on\s+screen|\s+on\s+screen\s+with\s+lip\s+movement\s+synchronized\s+only\s+to\s+this\s+exact\s+text|\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice)?|delivers\s+an\s+internal\s+monologue|continues\s+speaking\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice\s+from\s+the\s+previous\s+shot|continues(?:\s+the\s+same\s+utterance)?\s+on\s+screen(?:\s+without\s+a\s+speaker\s+change)?)\s*:\s*<d>.*?</d>(?:\s+while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?(?:\s+The\s+voice\s+remains\s+exclusively\s+[^;\n]+;\s+no\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+No\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+(?:<Subject\s+[0-9]+>(?:,\s*)?)+\s+are\s+silent\s+listeners\s+and\s+keep\s+their\s+lips\s+completely\s+closed\s+throughout\s+this\s+shot[.]?)?`)
-	h3NarratorClausePattern        = regexp.MustCompile(`(?is)(?:\bThe\s+narrator(?:\s*\(S[0-9]+\))?\s+says|\b(?:A|The)\s+separate\s+unseen\s+third-person\s+narrator[^:]*\s+narrates)\s+in\s+an\s+off-screen\s+voiceover:\s*(?:<d>.*?</d>\s*)?(?:while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?(?:\s+(?:<Subject\s+[0-9]+>[^.]*|No\s+visible\s+character[^.]*))[.]?`)
+	h3NarratorClausePattern        = regexp.MustCompile(`(?is)(?:\bThe\s+narrator(?:\s*\(S[0-9]+\))?\s+says|\b(?:A|The)\s+separate\s+unseen\s+third-person\s+narrator[^:]*\s+narrates|\bAudio-only\s+narration\s+track\s*\(S[0-9]+\)\s+says)\s*(?:in\s+an\s+off-screen\s+voiceover)?\s*:\s*(?:<d>.*?</d>\s*)?(?:while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?(?:\s+(?:<Subject\s+[0-9]+>[^.]*|No\s+visible\s+character[^.]*|Visible\s+action[^.]*))[.]?`)
 	h3BareNarratorPattern          = regexp.MustCompile(`(?is)\bThe\s+narrator(?:\s*\(S[0-9]+\))?\s+says\s+in\s+an\s+off-screen\s+voiceover:\s*(?:while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?`)
 	dialogueNarrationPattern       = regexp.MustCompile(`(?:<Subject [0-9]+>(?:\s*\(S[0-9]+\))?(?:说道|说|问道|答道)[：:]?\s*|[\p{Han}]{1,12}(?:\s*\(S[0-9]+\))?(?:说道|问道|答道|说[：:])\s*)`)
 	orphanSpeakerPattern           = regexp.MustCompile(`(?:<Subject [0-9]+>|[\p{Han}]{1,20})\s*\(S[0-9]+\)[。.]?`)
@@ -3549,7 +3549,7 @@ func h3SoundscapeContractForDialogues(dubs []models.Dialogue) string {
 		}
 	}
 	if narrationOnly {
-		return "Only natural location ambience and physically motivated diegetic action sounds are present. Structured speech consists only of the separate unseen third-person narration and appears only in the shot timeline; no visible character dialogue, no internal monologue, no additional speech or voice, singing, humming, musical tones, or rhythmic score is present."
+		return "Only natural location ambience and physically motivated diegetic action sounds are present. Structured speech consists only of audio-only narration track (S1) and appears only in the shot timeline; visible characters remain silent, with no additional speech, singing, humming, musical tones, or rhythmic score."
 	}
 	return h3SoundscapeContract(true)
 }
@@ -3563,14 +3563,14 @@ func isNarrationSpeaker(name string) bool {
 	return name == "旁白" || name == "画外音" || name == "voiceover" || name == "narrator"
 }
 
-const h3NarratorLeadPrefix = "The separate unseen third-person narrator"
-const h3NarratorTimelineLead = "This narration begins at 0.00 seconds, continues uninterrupted across shot cuts, and is delivered at a calm, clear, unhurried pace with natural pauses at Chinese punctuation, evenly paced to finish near the end of the video without rushing. "
+const h3NarratorLeadPrefix = "Audio-only narration track"
+const h3NarratorTimelineLead = "Audio-only narration starts at 0.00 seconds, continues uninterrupted across shot cuts, and uses a calm, clear, unhurried pace with natural pauses at Chinese punctuation, evenly paced to finish near the end of the video without rushing. "
 
 func h3NarratorLead(speakerID int) string {
 	if speakerID <= 0 {
 		speakerID = 1
 	}
-	return fmt.Sprintf("%s (S%d), independent of every visible character and not corresponding to any <Subject N>, narrates in an off-screen voiceover:", h3NarratorLeadPrefix, speakerID)
+	return fmt.Sprintf("%s (S%d) says:", h3NarratorLeadPrefix, speakerID)
 }
 
 func h3NarrationClosedLips(referenceLines []string) string {
@@ -3581,12 +3581,12 @@ func h3NarrationClosedLips(referenceLines []string) string {
 		}
 	}
 	if len(tags) == 0 {
-		return "No visible character speaks or lip-syncs to this narration."
+		return "Visible action continues independently of the audio narration."
 	}
 	if len(tags) == 1 {
-		return tags[0] + " keeps their lips completely closed throughout this narration and is not the narrator."
+		return tags[0] + " keeps their lips completely closed while continuing the visible action."
 	}
-	return strings.Join(tags, " and ") + " keep their lips completely closed throughout this narration; none of them is the narrator."
+	return strings.Join(tags, " and ") + " keep their lips completely closed while continuing their visible actions."
 }
 
 func h3DialogueSpeakerIdentity(d models.Dialogue, speakerID int, referenceLines []string) string {
@@ -3594,7 +3594,7 @@ func h3DialogueSpeakerIdentity(d models.Dialogue, speakerID int, referenceLines 
 	if d.SpeechType == "narration" || isNarrationSpeaker(d.Character) {
 		identity := fmt.Sprintf("%s (S%d)", h3NarratorLeadPrefix, speakerID)
 		if voice != "" {
-			identity += " with this reviewed voice identity: " + voice
+			identity += " using this reviewed voice style: " + voice
 		}
 		return identity
 	}
@@ -4263,7 +4263,7 @@ func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 	for i, d := range valid {
 		expected.WriteString(canonicalDialogueText(d.Text))
 		if d.SpeechType == "narration" || isNarrationSpeaker(d.Character) {
-			narratorSeparation := strings.Contains(fullPrompt, "is not the narrator") || strings.Contains(fullPrompt, "none of them is the narrator") || strings.Contains(fullPrompt, "No visible character speaks or lip-syncs to this narration")
+			narratorSeparation := strings.Contains(fullPrompt, "keeps their lips completely closed while continuing the visible action") || strings.Contains(fullPrompt, "keep their lips completely closed while continuing their visible actions") || strings.Contains(fullPrompt, "Visible action continues independently of the audio narration")
 			if speakerIDs[i] <= 0 || !strings.Contains(fullPrompt, h3NarratorLead(speakerIDs[i])) || !strings.Contains(fullPrompt, h3NarratorTimelineLead) || !narratorSeparation {
 				return false
 			}
@@ -4373,15 +4373,15 @@ func h3VideoSubjects(referenceLines []string) (definitions, retention, subjectRe
 		}
 		switch {
 		case strings.Contains(line, "场景「") || strings.Contains(line, "环境「"):
-			definitions = append(definitions, fmt.Sprintf("<Picture %d> provides only the environment and spatial layout: %s. It is a full-frame environment constraint and must not be rendered as an object, screen, frame, or panel inside the video.", n, english))
+			definitions = append(definitions, fmt.Sprintf("<Picture %d> establishes the full-frame environment and spatial layout throughout the video: %s.", n, english))
 		case strings.Contains(line, "上一镜确认尾帧"):
-			definitions = append(definitions, fmt.Sprintf("<Picture %d> is %s. It defines the full video canvas at 0.00 seconds and must not be rendered as an object, screen, frame, or panel inside the video.", n, english))
+			definitions = append(definitions, fmt.Sprintf("<Picture %d> establishes the full-frame opening composition at 0.00 seconds: %s.", n, english))
 		case strings.Contains(line, "当前分镜画面"):
-			definitions = append(definitions, fmt.Sprintf("<Picture %d> provides only the full-frame storyboard composition and action state. It constrains the full video canvas and must not be rendered as an object, screen, frame, or panel inside the video.", n))
+			definitions = append(definitions, fmt.Sprintf("<Picture %d> establishes the full-frame storyboard composition and action state.", n))
 		case strings.Contains(line, "道具「"):
-			definitions = append(definitions, fmt.Sprintf("<Picture %d> provides the referenced prop appearance: %s. The prop is not a separate character or inset image.", n, english))
+			definitions = append(definitions, fmt.Sprintf("<Picture %d> establishes the referenced prop appearance: %s.", n, english))
 		default:
-			definitions = append(definitions, fmt.Sprintf("<Picture %d> provides reference information only: %s. It is not a separate Subject or inset image.", n, english))
+			definitions = append(definitions, fmt.Sprintf("<Picture %d> provides full-frame reference information: %s.", n, english))
 		}
 	}
 	return definitions, retention, subjectRefs
@@ -4495,7 +4495,7 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 	if suggestedUnstructuredH3ShotCount(sc.Content, normalizeSceneDuration(sc.Duration)) > 1 {
 		for i := range definitions {
 			definitions[i] = strings.ReplaceAll(definitions[i], "the storyboard composition and action-state reference", "a loose composition reference only; its completed clothing and action state do not define the opening state")
-			definitions[i] = strings.ReplaceAll(definitions[i], "provides only the full-frame storyboard composition and action state", "provides a loose composition reference only; its completed clothing and action state do not define the opening state")
+			definitions[i] = strings.ReplaceAll(definitions[i], "establishes the full-frame storyboard composition and action state", "provides a loose full-frame composition reference; its completed clothing and action state do not define the opening state")
 		}
 	}
 	body := canonicalVideoAction(sc.VideoPrompt, referenceLines)
@@ -4533,7 +4533,7 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 	// repeated in the action prose. Retention remains limited to visible subjects.
 	retention = h3VisibleRetention(body, retention)
 	return "subject_definitions:\n" + strings.Join(definitions, "\n") +
-		"\n\nsummary:\n[reference generation] Generate a " + fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)) + "-second video from the defined references and shot timeline." +
+		"\n\nsummary:\n[reference generation] Generate a " + fmt.Sprintf("%.0f", normalizeSceneDuration(sc.Duration)) + "-second video from the defined references and shot timeline as one continuous full-frame scene." +
 		"\n\nretention_analysis:\n" + strings.Join(retention, "\n") +
 		"\n\ndetailed_description:\n" + body +
 		"\n\noverall_soundscape:\n" + soundscape +

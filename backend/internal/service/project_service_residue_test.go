@@ -24,7 +24,7 @@ func TestCompactFinalH3VisualBodyRemovesReportedTemplateResidue(t *testing.T) {
 func TestH3SubjectDefinitionsPreserveExactReferenceIdentity(t *testing.T) {
 	definitions, _, _ := h3VideoSubjects([]string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图", "- <Picture 3>：场景「天阙宗玉霄宫梵心桃花林」参考图"})
 	joined := strings.Join(definitions, "\n")
-	for _, want := range []string{"<Subject 1> is the character named 「上官若琳」 shown in the four-view reference from <Picture 1>.", "<Subject 2> is the character named 「上官若彤」 shown in the four-view reference from <Picture 2>.", "<Picture 3> provides only the environment and spatial layout: the referenced environment named 「天阙宗玉霄宫梵心桃花林」. It is a full-frame environment constraint and must not be rendered as an object, screen, frame, or panel inside the video."} {
+	for _, want := range []string{"<Subject 1> is the character named 「上官若琳」 shown in the four-view reference from <Picture 1>.", "<Subject 2> is the character named 「上官若彤」 shown in the four-view reference from <Picture 2>.", "<Picture 3> establishes the full-frame environment and spatial layout throughout the video: the referenced environment named 「天阙宗玉霄宫梵心桃花林」."} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing exact identity binding %q: %s", want, joined)
 		}
