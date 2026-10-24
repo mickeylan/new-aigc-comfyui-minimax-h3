@@ -1711,6 +1711,29 @@ func concreteSwordTechniqueCount(value string) int {
 	return count
 }
 
+func h3SoloSwordTimingContractMatches(source, value string, duration float64, shotCount int) bool {
+	if shotCount < 2 || !h3SoloSwordPracticeCuePattern.MatchString(source) {
+		return true
+	}
+	lastStart := 0.0
+	seen := 1
+	for _, match := range officialH3LaterShotPattern.FindAllStringSubmatch(value, -1) {
+		if len(match) != 5 {
+			continue
+		}
+		minutes, _ := strconv.Atoi(match[2])
+		seconds, _ := strconv.Atoi(match[3])
+		millis, _ := strconv.Atoi(match[4])
+		lastStart = float64(minutes*60+seconds) + float64(millis)/1000
+		seen++
+	}
+	if seen != shotCount {
+		return false
+	}
+	actionEnd := math.Min(6, math.Max(4.5, duration*0.45))
+	return lastStart <= actionEnd*float64(shotCount-1)/float64(shotCount)+0.35
+}
+
 func h3SoloSwordPracticeContractMatches(source, value string) bool {
 	if !h3SoloSwordPracticeCuePattern.MatchString(source) {
 		return true
@@ -1846,8 +1869,12 @@ func combatActionRepairRequestWithIssues(authoritative, draft string, duration f
 	}
 	structureBlock := ""
 	if expectedShotCount > 1 {
-		interval := normalizeSceneDuration(duration) / float64(expectedShotCount)
-		structureBlock = fmt.Sprintf("\nOUTPUT STRUCTURE: Output exactly %d Shot paragraphs. Shot 1 has no timestamp. Shot 2 and later use increasing official [Shot N] At MM:SS.mmm, markers, with cuts near %.3f-second intervals. Divide the existing authoritative techniques in their original order across these Shots; a cut changes only the camera and never restarts the movement.\n", expectedShotCount, interval)
+		if timing := combatInternalShotTimingInstruction(authoritative, duration, expectedShotCount); timing != "" {
+			structureBlock = fmt.Sprintf("\nOUTPUT STRUCTURE: Output exactly %d Shot paragraphs. Shot 1 has no timestamp. Use increasing official [Shot N] At MM:SS.mmm, markers. %s Divide the existing authoritative techniques in their original order; a cut changes only the camera and never restarts or replays movement.\n", expectedShotCount, timing)
+		} else {
+			interval := normalizeSceneDuration(duration) / float64(expectedShotCount)
+			structureBlock = fmt.Sprintf("\nOUTPUT STRUCTURE: Output exactly %d Shot paragraphs. Shot 1 has no timestamp. Shot 2 and later use increasing official [Shot N] At MM:SS.mmm, markers, with cuts near %.3f-second intervals. Divide the existing authoritative techniques in their original order across these Shots; a cut changes only the camera and never restarts the movement.\n", expectedShotCount, interval)
+		}
 	}
 	return fmt.Sprintf(`Rewrite this combat or spell-clash draft into concise official English H3 shot prose. Return only the detailed_description body.
 Hard requirements:
@@ -1925,6 +1952,19 @@ func suggestedUnstructuredH3ShotCount(content string, duration float64) int {
 		return 2
 	}
 	return 0
+}
+
+func combatInternalShotTimingInstruction(content string, duration float64, shotCount int) string {
+	if shotCount < 2 || !h3SoloSwordPracticeCuePattern.MatchString(content) {
+		return ""
+	}
+	actionEnd := math.Min(6, math.Max(4.5, duration*0.45))
+	cut1 := actionEnd / float64(shotCount)
+	cuts := make([]string, 0, shotCount-1)
+	for i := 1; i < shotCount; i++ {
+		cuts = append(cuts, formatH3Timestamp(cut1*float64(i)))
+	}
+	return fmt.Sprintf("单人演武不得把每式平均拉满总时长：后续内部Shot依次在%s附近切入，全部既定剑路必须在约%.1f秒前以真实速度完成；余下时间只用于连续收势、稳定呼吸、衣袖与花瓣物理余波及保持最终构图，不得放慢单招、重复招式、转圈或新增剑路。", strings.Join(cuts, "、"), actionEnd)
 }
 
 func structuredShotsCoverScene(shots []models.Shot, duration float64) bool {
@@ -2097,7 +2137,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	actionTask := ""
 	if suggestedShotCount > 1 {
 		if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
-			actionTask += fmt.Sprintf("\n\n【武戏内部Shot拆分】当前Scene包含多个明确动作阶段，必须生成恰好%d个内部Shot并保持一条连续实时动作时间线。Shot 1不得带时间戳，后续Shot必须按目标总时长使用递增的官方At MM:SS.mmm切入时间；切镜只换机位，不得重新起势。把已明确的剑路按顺序分配到各Shot，每式保持启动、轨迹、停止点和下一式接口；不得把三式塞入一个Shot后用慢动作、花瓣、转圈或尾帧补间填满时长。", suggestedShotCount)
+			actionTask += fmt.Sprintf("\n\n【武戏内部Shot拆分】当前Scene包含多个明确动作阶段，必须生成恰好%d个内部Shot并保持一条连续实时动作时间线。Shot 1不得带时间戳，后续Shot必须使用递增的官方At MM:SS.mmm切入时间；切镜只换机位，不得重新起势。把已明确的剑路按顺序分配到各Shot，每式保持启动、轨迹、停止点和下一式接口；不得把三式塞入一个Shot后用慢动作、花瓣、转圈或尾帧补间填满时长。%s", suggestedShotCount, combatInternalShotTimingInstruction(canonicalSceneContent, normalizeSceneDuration(sc.Duration), suggestedShotCount))
 		} else {
 			actionTask += fmt.Sprintf("\n\n【无结构化Shot的可见阶段拆分】当前Scene包含多个连续可见阶段，必须生成恰好%d个内部Shot并保持一个连续视频；Shot 1不得带时间戳，Shot 2必须使用合理的官方At MM:SS.mmm切入时间。第一镜完整表现前一阶段的实际动作步骤，后一镜表现后续动作与环境结果。不得把全部剧情压缩成一个Shot，不得只写dons/puts on而跳过穿袖、合襟、束带、披挂或扣合等原文所要求的可见过程。心理状态必须改写为可见表情或姿态变化。", suggestedShotCount)
 		}
@@ -2192,7 +2232,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 				}
 			}
 		}
-		if (sceneMode == h3SceneAction || sceneMode == h3SceneMixed) && (!h3ActionTempoContractMatches(value) || !h3SoloSwordPracticeContractMatches(canonicalSceneContent, value)) {
+		if (sceneMode == h3SceneAction || sceneMode == h3SceneMixed) && (!h3ActionTempoContractMatches(value) || !h3SoloSwordPracticeContractMatches(canonicalSceneContent, value) || !h3SoloSwordTimingContractMatches(canonicalSceneContent, value, normalizeSceneDuration(sc.Duration), expectedShotCount)) {
 			return false
 		}
 		if expectedShotCount > 0 {
@@ -2243,6 +2283,9 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		if !h3SoloSwordPracticeContractMatches(canonicalSceneContent, value) {
 			issues = append(issues, "单人剑术被压缩成抽象套路；必须保留至少两式明确剑路、步法/重心与最终收势，禁止连续旋转和舞蹈化动作")
 		}
+		if !h3SoloSwordTimingContractMatches(canonicalSceneContent, value, normalizeSceneDuration(sc.Duration), expectedShotCount) {
+			issues = append(issues, "单人剑术时间分配过慢；既定剑路必须在前半段以真实速度完成，剩余时间只承载收势与物理余波")
+		}
 		seen := map[int]bool{}
 		for _, marker := range h3ShotMarkerPattern.FindAllStringSubmatch(value, -1) {
 			if len(marker) == 2 {
@@ -2283,7 +2326,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		return "", fmt.Errorf("AI视频动作未能按可见阶段拆成%d个内部Shot：%s", suggestedShotCount, actionTrustIssues(out))
 	}
 	if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
-		combatValid := actionTrusted(out, true) && h3ActionTempoContractMatches(out) && h3SoloSwordPracticeContractMatches(canonicalSceneContent, out) && !regexp.MustCompile(`[\p{Han}]`).MatchString(out)
+		combatValid := actionTrusted(out, true) && h3ActionTempoContractMatches(out) && h3SoloSwordPracticeContractMatches(canonicalSceneContent, out) && h3SoloSwordTimingContractMatches(canonicalSceneContent, out, normalizeSceneDuration(sc.Duration), expectedShotCount) && !regexp.MustCompile(`[\p{Han}]`).MatchString(out)
 		if !combatValid {
 			repairSource := useSubjectTags(strings.TrimSpace(canonicalSceneContent+"\n"+authoritativeFallback()), refLines)
 			failedDraft := out
@@ -2298,7 +2341,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 					continue
 				}
 				candidate := useSubjectTags(enforceH3ActionTempo(prepareGeneratedAction(repaired, true), sceneMode), refLines)
-				candidateValid := actionTrusted(candidate, true) && h3SoloSwordPracticeContractMatches(canonicalSceneContent, candidate) && !regexp.MustCompile(`[\p{Han}]`).MatchString(candidate)
+				candidateValid := actionTrusted(candidate, true) && h3SoloSwordPracticeContractMatches(canonicalSceneContent, candidate) && h3SoloSwordTimingContractMatches(canonicalSceneContent, candidate, normalizeSceneDuration(sc.Duration), expectedShotCount) && !regexp.MustCompile(`[\p{Han}]`).MatchString(candidate)
 				if candidateValid {
 					out = candidate
 					generationSource = fmt.Sprintf("combat_skill_repair_%d", attempt)
@@ -2575,7 +2618,7 @@ var (
 	h3CarryoverDialoguePattern     = regexp.MustCompile(`(?is)<Subject\s+[0-9]+>\s*\(S[0-9]+\)'s\s+words\s+carry\s+over\s+from\s+the\s+previous\s+shot\s*<scenetrans>.*?</d>[.]?`)
 	h3DialogueClausePattern        = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}]{1,20})(?:\s*\(S[0-9]+\))?(?:画外音|内心独白|说|说道|问道|答道)[：:]?\s*<d>.*?</d>[。.]?`)
 	h3EnglishDialogueClausePattern = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}][\p{Han}A-Za-z0-9，,· \t]{0,80})\s*\(S[0-9]+\)\s*(?:says(?:\s+in\s+an\s+off-screen\s+voiceover|\s+on\s+screen|\s+on\s+screen\s+with\s+lip\s+movement\s+synchronized\s+only\s+to\s+this\s+exact\s+text|\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice)?|delivers\s+an\s+internal\s+monologue|continues\s+speaking\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice\s+from\s+the\s+previous\s+shot|continues(?:\s+the\s+same\s+utterance)?\s+on\s+screen(?:\s+without\s+a\s+speaker\s+change)?)\s*:\s*<d>.*?</d>(?:\s+while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?(?:\s+The\s+voice\s+remains\s+exclusively\s+[^;\n]+;\s+no\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+No\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+(?:<Subject\s+[0-9]+>(?:,\s*)?)+\s+are\s+silent\s+listeners\s+and\s+keep\s+their\s+lips\s+completely\s+closed\s+throughout\s+this\s+shot[.]?)?`)
-	h3NarratorClausePattern        = regexp.MustCompile(`(?is)\bThe\s+narrator(?:\s*\(S[0-9]+\))?\s+says\s+in\s+an\s+off-screen\s+voiceover:\s*(?:<d>.*?</d>\s*)?(?:while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?`)
+	h3NarratorClausePattern        = regexp.MustCompile(`(?is)(?:\bThe\s+narrator(?:\s*\(S[0-9]+\))?\s+says|\bA\s+separate\s+unseen\s+third-person\s+narrator[^:]*\s+narrates)\s+in\s+an\s+off-screen\s+voiceover:\s*(?:<d>.*?</d>\s*)?(?:while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?(?:\s+(?:<Subject\s+[0-9]+>[^.]*|No\s+visible\s+character[^.]*))[.]?`)
 	dialogueNarrationPattern       = regexp.MustCompile(`(?:<Subject [0-9]+>(?:\s*\(S[0-9]+\))?(?:说道|说|问道|答道)[：:]?\s*|[\p{Han}]{1,12}(?:\s*\(S[0-9]+\))?(?:说道|问道|答道|说[：:])\s*)`)
 	orphanSpeakerPattern           = regexp.MustCompile(`(?:<Subject [0-9]+>|[\p{Han}]{1,20})\s*\(S[0-9]+\)[。.]?`)
 	quotedDialoguePattern          = regexp.MustCompile(`[“\"][^”\"]*[”\"]`)
@@ -3483,13 +3526,31 @@ func isNarrationSpeaker(name string) bool {
 	return name == "旁白" || name == "画外音" || name == "voiceover" || name == "narrator"
 }
 
+const h3NarratorLead = "A separate unseen third-person narrator, independent of every visible character, narrates in an off-screen voiceover:"
+
+func h3NarrationClosedLips(referenceLines []string) string {
+	tags := []string{}
+	for i, line := range referenceLines {
+		if strings.Contains(line, "角色「") || strings.Contains(line, "角色造型「") {
+			tags = append(tags, fmt.Sprintf("<Subject %d>", i+1))
+		}
+	}
+	if len(tags) == 0 {
+		return "No visible character speaks or lip-syncs to this narration."
+	}
+	if len(tags) == 1 {
+		return tags[0] + " keeps their lips completely closed throughout this narration and is not the narrator."
+	}
+	return strings.Join(tags, " and ") + " keep their lips completely closed throughout this narration; none of them is the narrator."
+}
+
 func h3DialogueSpeakerIdentity(d models.Dialogue, speakerID int, referenceLines []string) string {
 	voice := strings.TrimSpace(d.H3VoiceDescription)
 	if d.SpeechType == "narration" || isNarrationSpeaker(d.Character) {
 		if voice != "" {
-			return voice
+			return "A separate unseen third-person narrator with this voice identity: " + voice
 		}
-		return "The narrator"
+		return "A separate unseen third-person narrator"
 	}
 	identity := characterSubjectOrName(d.Character, referenceLines)
 	if characterSubjectTagByName(d.Character, referenceLines) == "" && voice != "" {
@@ -3515,7 +3576,7 @@ func renderStructuredDialogue(d models.Dialogue, speakerID int, referenceLines [
 	var rendered string
 	switch d.SpeechType {
 	case "narration":
-		rendered = speaker + " says in an off-screen voiceover: <d>[Chinese] " + text + "</d> while their lips remain completely closed."
+		rendered = h3NarratorLead + " <d>[Chinese] " + text + "</d>. " + h3NarrationClosedLips(referenceLines)
 	case "monologue":
 		rendered = speaker + " delivers an internal monologue: <d>[Chinese] " + text + "</d> while their lips remain completely closed."
 	case "offscreen_dialogue":
@@ -3600,7 +3661,7 @@ func renderDialogueRange(d models.Dialogue, speakerID int, referenceLines []stri
 	var clause string
 	switch d.SpeechType {
 	case "narration":
-		clause = speaker + " says in an off-screen voiceover: <d>[Chinese] " + fragment + "</d> while their lips remain completely closed."
+		clause = h3NarratorLead + " <d>[Chinese] " + fragment + "</d>. " + h3NarrationClosedLips(referenceLines)
 	case "monologue":
 		clause = speaker + " delivers an internal monologue: <d>[Chinese] " + fragment + "</d> while their lips remain completely closed."
 	case "offscreen_dialogue":
@@ -3933,7 +3994,7 @@ func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLine
 		text = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(text, "<scenetrans>", ""), "<cutoff>", ""))
 		switch d.SpeechType {
 		case "narration":
-			body += " " + speaker + " says in an off-screen voiceover: <d>[Chinese] " + text + "</d> while their lips remain completely closed."
+			body += " " + h3NarratorLead + " <d>[Chinese] " + text + "</d>. " + h3NarrationClosedLips(referenceLines)
 		case "monologue":
 			body += " " + speaker + " delivers an internal monologue: <d>[Chinese] " + text + "</d> while their lips remain completely closed."
 		case "offscreen_dialogue":
@@ -4147,7 +4208,8 @@ func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 	for i, d := range valid {
 		expected.WriteString(canonicalDialogueText(d.Text))
 		if d.SpeechType == "narration" || isNarrationSpeaker(d.Character) {
-			if !strings.Contains(fullPrompt, "The narrator says in an off-screen voiceover:") {
+			narratorSeparation := strings.Contains(fullPrompt, "is not the narrator") || strings.Contains(fullPrompt, "none of them is the narrator") || strings.Contains(fullPrompt, "No visible character speaks or lip-syncs to this narration")
+			if !strings.Contains(fullPrompt, h3NarratorLead) || !narratorSeparation {
 				return false
 			}
 			continue

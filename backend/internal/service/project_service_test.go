@@ -1832,6 +1832,24 @@ func TestExplicitCombatSceneModeForcesCombatTemplate(t *testing.T) {
 	}
 }
 
+func TestSoloSwordTimingFinishesTechniquesInFirstHalf(t *testing.T) {
+	source := "上官若琳以桃枝为剑进行单人剑术演练，依次斜撩、直刺、横削。"
+	fast := "[Shot 1] one diagonal cut. [Shot 2] At 00:02.000, one thrust. [Shot 3] At 00:04.000, one horizontal cut and final stance."
+	if !h3SoloSwordTimingContractMatches(source, fast, 14, 3) {
+		t.Fatalf("compact real-time sword sequence was rejected: %s", fast)
+	}
+	slow := "[Shot 1] one diagonal cut. [Shot 2] At 00:04.667, one thrust. [Shot 3] At 00:09.334, one horizontal cut and final stance."
+	if h3SoloSwordTimingContractMatches(source, slow, 14, 3) {
+		t.Fatalf("slow evenly stretched sword sequence passed: %s", slow)
+	}
+	instruction := combatInternalShotTimingInstruction(source, 14, 3)
+	for _, want := range []string{"00:02.000", "00:04.000", "6.0秒前", "不得放慢单招"} {
+		if !strings.Contains(instruction, want) {
+			t.Fatalf("timing instruction missing %q: %s", want, instruction)
+		}
+	}
+}
+
 func TestSwordPracticeSuggestsInternalShotsAndRejectsMismatchedLegacyPlan(t *testing.T) {
 	content := "上官若琳右脚前踏完成斜撩，收至右肩后直刺，随后横移完成水平削击并收势。"
 	if got := suggestedUnstructuredH3ShotCount(content, 14); got != 3 {
@@ -2381,7 +2399,7 @@ func TestExplicitNarrationAndMonologueRemainAllowed(t *testing.T) {
 		t.Fatalf("explicit narration/monologue was removed: %+v", got)
 	}
 	prompt := appendStructuredDialogue("[Shot 1] 雷晓飞站在门前。", got, []string{"- <Picture 1>：角色「雷晓飞」四视图"})
-	for _, want := range []string{"The narrator says in an off-screen voiceover: <d>[Chinese] 夜色笼罩山城。</d> while their lips remain completely closed", "<Subject 1> (S1) delivers an internal monologue: <d>[Chinese] 我必须找到他。</d> while their lips remain completely closed"} {
+	for _, want := range []string{"A separate unseen third-person narrator, independent of every visible character, narrates in an off-screen voiceover: <d>[Chinese] 夜色笼罩山城。</d>. <Subject 1> keeps their lips completely closed throughout this narration and is not the narrator.", "<Subject 1> (S1) delivers an internal monologue: <d>[Chinese] 我必须找到他。</d> while their lips remain completely closed"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("explicit speech missing %q: %s", want, prompt)
 		}
@@ -2704,7 +2722,7 @@ func TestNarrationAudioContractDoesNotRequireSpeakerID(t *testing.T) {
 	if !videoAudioContractMatches(prompt, dubs) {
 		t.Fatalf("valid narrator contract was rejected: %s", prompt)
 	}
-	broken := strings.Replace(prompt, "The narrator says in an off-screen voiceover:", "An unidentified person says:", 1)
+	broken := strings.Replace(prompt, h3NarratorLead, "An unidentified person says:", 1)
 	if videoAudioContractMatches(broken, dubs) {
 		t.Fatalf("unidentified narration incorrectly passed: %s", broken)
 	}
@@ -3033,7 +3051,7 @@ func TestH3NarrationAndCameraConflictValidation(t *testing.T) {
 	sc := &models.Scene{VideoPrompt: "[Shot 1] 人物保持闭口，镜头保持固定。", Duration: 5}
 	prompt := buildH3T2VAPrompt(sc, nil, []models.Dialogue{{Character: "旁白", Text: "夜色降临。"}})
 	detail := h3IntegratedDescription(prompt)
-	for _, want := range []string{"The narrator says in an off-screen voiceover: <d>[Chinese] 夜色降临。</d> while their lips remain completely closed"} {
+	for _, want := range []string{"A separate unseen third-person narrator, independent of every visible character, narrates in an off-screen voiceover: <d>[Chinese] 夜色降临。</d>. No visible character speaks or lip-syncs to this narration."} {
 		if !strings.Contains(detail, want) {
 			t.Fatalf("narration rule missing %q: %s", want, prompt)
 		}
@@ -3446,18 +3464,18 @@ func TestH3ReferencePromptKeepsEnvironmentAndOpeningFrameOutOfSubjects(t *testin
 		"<Subject 1> is the character named 「上官若琳」",
 		"<Picture 2> provides only the environment and spatial layout",
 		"<Picture 3> is the confirmed final frame of the previous scene",
-		"The narrator says in an off-screen voiceover: <d>[Chinese] 上官若琳，天阙宗宗主之女。</d>",
+		h3NarratorLead + " <d>[Chinese] 上官若琳，天阙宗宗主之女。</d>. <Subject 1> keeps their lips completely closed throughout this narration and is not the narrator.",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q: %s", want, prompt)
 		}
 	}
-	for _, bad := range []string{"<Subject 2>", "<Subject 3>", "remains visible in the background", "旁白 (S1)", "The narrator (S1)", "picture-in-picture"} {
+	for _, bad := range []string{"<Subject 2>", "<Subject 3>", "remains visible in the background", "旁白 (S1)", "third-person narrator (S1)", "picture-in-picture"} {
 		if strings.Contains(prompt, bad) {
 			t.Fatalf("prompt retained invalid non-character Subject or narrator binding %q: %s", bad, prompt)
 		}
 	}
-	if strings.Count(prompt, "The narrator says in an off-screen voiceover:") != 1 {
+	if strings.Count(prompt, h3NarratorLead) != 1 {
 		t.Fatalf("narration was duplicated or omitted: %s", prompt)
 	}
 }
@@ -3553,7 +3571,7 @@ func TestH3CrossShotDialogueMarkers(t *testing.T) {
 
 func TestH3VoiceoverUsesOfficialPhraseAndClosesLips(t *testing.T) {
 	body := appendStructuredDialogue("[Shot 1] The listener remains on screen.", []models.Dialogue{{Character: "林夏", SpeechType: "narration", Text: "我仍记得那条路。"}}, nil)
-	for _, want := range []string{"says in an off-screen voiceover", "<d>[Chinese] 我仍记得那条路。</d>", "while their lips remain completely closed"} {
+	for _, want := range []string{"A separate unseen third-person narrator", "narrates in an off-screen voiceover", "<d>[Chinese] 我仍记得那条路。</d>", "No visible character speaks or lip-syncs to this narration"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("voiceover contract missing %q: %s", want, body)
 		}
