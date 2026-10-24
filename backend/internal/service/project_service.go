@@ -2258,11 +2258,11 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	}
 	out = useSubjectTags(out, refLines)
 	out = enforceH3ActionTempo(out, sceneMode)
-	if suggestedShotCount > 1 && !actionTrusted(out, true) {
+	if suggestedShotCount > 1 && !actionTrusted(out, true) && sceneMode != h3SceneAction && sceneMode != h3SceneMixed {
 		return "", fmt.Errorf("AI视频动作未能按可见阶段拆成%d个内部Shot：%s", suggestedShotCount, actionTrustIssues(out))
 	}
 	if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
-		combatValid := h3ActionTempoContractMatches(out) && h3SoloSwordPracticeContractMatches(canonicalSceneContent, out) && !regexp.MustCompile(`[\p{Han}]`).MatchString(out)
+		combatValid := actionTrusted(out, true) && h3ActionTempoContractMatches(out) && h3SoloSwordPracticeContractMatches(canonicalSceneContent, out) && !regexp.MustCompile(`[\p{Han}]`).MatchString(out)
 		if !combatValid {
 			repairSource := useSubjectTags(strings.TrimSpace(canonicalSceneContent+"\n"+authoritativeFallback()), refLines)
 			failedDraft := out
