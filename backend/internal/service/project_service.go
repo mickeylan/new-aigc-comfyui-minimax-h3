@@ -1711,6 +1711,18 @@ func concreteSwordTechniqueCount(value string) int {
 	return count
 }
 
+func enforceSoloSwordTimingSummary(source, value string, duration float64, shotCount int) string {
+	if shotCount < 2 || !h3SoloSwordPracticeCuePattern.MatchString(source) {
+		return value
+	}
+	actionEnd := math.Min(6, math.Max(4.5, duration*0.45))
+	contract := fmt.Sprintf("All specified sword techniques finish by %s at normal real-time speed. From %s until the %.1f-second end, no technique repeats and no new technique begins; the practitioner maintains the final stance with natural breathing while clothing and airborne petals settle physically.", formatH3Timestamp(actionEnd), formatH3Timestamp(actionEnd), normalizeSceneDuration(duration))
+	if strings.Contains(value, "All specified sword techniques finish by ") {
+		return value
+	}
+	return strings.TrimSpace(value) + " " + contract
+}
+
 func h3SoloSwordTimingContractMatches(source, value string, duration float64, shotCount int) bool {
 	if shotCount < 2 || !h3SoloSwordPracticeCuePattern.MatchString(source) {
 		return true
@@ -2357,6 +2369,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 				return "", fmt.Errorf("AI武戏动作补全失败（已定向修复3次）：%s", strings.Join(failures, "；"))
 			}
 		}
+		out = enforceSoloSwordTimingSummary(canonicalSceneContent, out, normalizeSceneDuration(sc.Duration), expectedShotCount)
 	}
 	out = applyAuthoritativeSceneShotTimeline(out, canonicalSceneContent)
 	for _, name := range parseSceneCharacters(sc.Characters) {

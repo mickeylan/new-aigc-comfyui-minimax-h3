@@ -1848,6 +1848,12 @@ func TestSoloSwordTimingFinishesTechniquesInFirstHalf(t *testing.T) {
 			t.Fatalf("timing instruction missing %q: %s", want, instruction)
 		}
 	}
+	summary := enforceSoloSwordTimingSummary(source, fast, 14, 3)
+	for _, want := range []string{"finish by 00:06.000", "From 00:06.000 until the 14.0-second end", "no technique repeats", "natural breathing"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("deterministic timing summary missing %q: %s", want, summary)
+		}
+	}
 }
 
 func TestSwordPracticeSuggestsInternalShotsAndRejectsMismatchedLegacyPlan(t *testing.T) {
