@@ -2033,9 +2033,15 @@ func TestSoloSwordPracticeRejectsAbstractMartialForms(t *testing.T) {
 	if !h3SoloSwordPracticeContractMatches(source, concreteWithProhibition) {
 		t.Fatalf("negative anti-spin clause was misread as affirmative vague choreography: %s", concreteWithProhibition)
 	}
-	providerVariant := "[Shot 1] Subject 1 begins at full speed, steps the right foot forward half a pace while the branch travels from lower right to upper left in one rising diagonal cut. With the left foot planted for support, Subject 1 thrusts the branch straight forward once, then completes one horizontal cut and enters an upright final stance with the branch angled toward the ground."
-	if !h3SoloSwordPracticeContractMatches(source, providerVariant) {
-		t.Fatalf("concrete provider wording was rejected by an overly narrow detector: %s", providerVariant)
+	providerVariants := []string{
+		"[Shot 1] Subject 1 begins at full speed, steps the right foot forward half a pace while the branch travels from lower right to upper left in one rising diagonal cut. With the left foot planted for support, Subject 1 thrusts the branch straight forward once, then completes one horizontal cut and enters an upright final stance with the branch angled toward the ground.",
+		"[Shot 1] <Subject 1> moves at full real-time speed, steps her right foot forward and executes one diagonal rising cut. She braces on her left foot, thrusts straight forward once, completes one horizontal cut, closes her stance and stands upright while holding the branch angled toward the ground.",
+		"[Shot 1] <Subject 1> immediately steps her right foot forward for one rising diagonal cut, plants her left foot and thrusts the branch straight forward, then completes one horizontal slash before lowering the branch diagonally toward the ground.",
+	}
+	for _, providerVariant := range providerVariants {
+		if !h3SoloSwordPracticeContractMatches(source, providerVariant) {
+			t.Fatalf("concrete provider wording was rejected by an overly narrow detector: %s", providerVariant)
+		}
 	}
 }
 
