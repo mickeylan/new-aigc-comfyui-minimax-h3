@@ -2575,6 +2575,7 @@ var (
 	h3CarryoverDialoguePattern     = regexp.MustCompile(`(?is)<Subject\s+[0-9]+>\s*\(S[0-9]+\)'s\s+words\s+carry\s+over\s+from\s+the\s+previous\s+shot\s*<scenetrans>.*?</d>[.]?`)
 	h3DialogueClausePattern        = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}]{1,20})(?:\s*\(S[0-9]+\))?(?:画外音|内心独白|说|说道|问道|答道)[：:]?\s*<d>.*?</d>[。.]?`)
 	h3EnglishDialogueClausePattern = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}][\p{Han}A-Za-z0-9，,· \t]{0,80})\s*\(S[0-9]+\)\s*(?:says(?:\s+in\s+an\s+off-screen\s+voiceover|\s+on\s+screen|\s+on\s+screen\s+with\s+lip\s+movement\s+synchronized\s+only\s+to\s+this\s+exact\s+text|\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice)?|delivers\s+an\s+internal\s+monologue|continues\s+speaking\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice\s+from\s+the\s+previous\s+shot|continues(?:\s+the\s+same\s+utterance)?\s+on\s+screen(?:\s+without\s+a\s+speaker\s+change)?)\s*:\s*<d>.*?</d>(?:\s+while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?(?:\s+The\s+voice\s+remains\s+exclusively\s+[^;\n]+;\s+no\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+No\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+(?:<Subject\s+[0-9]+>(?:,\s*)?)+\s+are\s+silent\s+listeners\s+and\s+keep\s+their\s+lips\s+completely\s+closed\s+throughout\s+this\s+shot[.]?)?`)
+	h3NarratorClausePattern        = regexp.MustCompile(`(?is)\bThe\s+narrator(?:\s*\(S[0-9]+\))?\s+says\s+in\s+an\s+off-screen\s+voiceover:\s*(?:<d>.*?</d>\s*)?(?:while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?`)
 	dialogueNarrationPattern       = regexp.MustCompile(`(?:<Subject [0-9]+>(?:\s*\(S[0-9]+\))?(?:说道|说|问道|答道)[：:]?\s*|[\p{Han}]{1,12}(?:\s*\(S[0-9]+\))?(?:说道|问道|答道|说[：:])\s*)`)
 	orphanSpeakerPattern           = regexp.MustCompile(`(?:<Subject [0-9]+>|[\p{Han}]{1,20})\s*\(S[0-9]+\)[。.]?`)
 	quotedDialoguePattern          = regexp.MustCompile(`[“\"][^”\"]*[”\"]`)
@@ -2588,6 +2589,7 @@ func stripPromptDialogueNarration(prompt string) string {
 	text = crossShotContinuityPattern.ReplaceAllString(text, "")
 	text = h3DialogueClausePattern.ReplaceAllString(text, "")
 	text = h3EnglishDialogueClausePattern.ReplaceAllString(text, "")
+	text = h3NarratorClausePattern.ReplaceAllString(text, "")
 	text = h3DialogueTagPattern.ReplaceAllString(text, "")
 	text = quotedDialoguePattern.ReplaceAllString(text, "")
 	text = dialogueNarrationPattern.ReplaceAllString(text, "")
@@ -4248,11 +4250,11 @@ func h3VideoSubjects(referenceLines []string) (definitions, retention, subjectRe
 		}
 		switch {
 		case strings.Contains(line, "场景「") || strings.Contains(line, "环境「"):
-			definitions = append(definitions, fmt.Sprintf("<Picture %d> provides only the environment and spatial layout: %s. It is not a Subject, person, inset image, panel, screen, or picture-in-picture element.", n, english))
+			definitions = append(definitions, fmt.Sprintf("<Picture %d> provides only the environment and spatial layout: %s. It is a full-frame environment constraint and must not be rendered as an object, screen, frame, or panel inside the video.", n, english))
 		case strings.Contains(line, "上一镜确认尾帧"):
-			definitions = append(definitions, fmt.Sprintf("<Picture %d> is %s. It is the full-frame opening state, not a Subject, inset image, panel, screen, or picture-in-picture element.", n, english))
+			definitions = append(definitions, fmt.Sprintf("<Picture %d> is %s. It defines the full video canvas at 0.00 seconds and must not be rendered as an object, screen, frame, or panel inside the video.", n, english))
 		case strings.Contains(line, "当前分镜画面"):
-			definitions = append(definitions, fmt.Sprintf("<Picture %d> provides only the full-frame storyboard composition and action state. It is not a Subject, inset image, panel, screen, or picture-in-picture element.", n))
+			definitions = append(definitions, fmt.Sprintf("<Picture %d> provides only the full-frame storyboard composition and action state. It constrains the full video canvas and must not be rendered as an object, screen, frame, or panel inside the video.", n))
 		case strings.Contains(line, "道具「"):
 			definitions = append(definitions, fmt.Sprintf("<Picture %d> provides the referenced prop appearance: %s. The prop is not a separate character or inset image.", n, english))
 		default:

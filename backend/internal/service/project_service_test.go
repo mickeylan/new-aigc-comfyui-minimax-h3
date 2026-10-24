@@ -3424,7 +3424,7 @@ func TestH3ReferencePromptKeepsEnvironmentAndOpeningFrameOutOfSubjects(t *testin
 		"- <Picture 2>：场景「天阙宗玉霄宫梵心桃花林」参考图",
 		"- <Picture 3>：上一镜确认尾帧（本镜 0.00 秒唯一开始画面）",
 	}
-	scene := &models.Scene{Duration: 14, VideoPrompt: "[Shot 1] <Subject 1> performs one diagonal cut. <Subject 2> remains visible in the background.\n[Shot 2] At 00:04.667, <Subject 1> thrusts forward.\n[Shot 3] At 00:09.333, <Subject 1> finishes upright."}
+	scene := &models.Scene{Duration: 14, VideoPrompt: "[Shot 1] <Subject 1> performs one diagonal cut. <Subject 2> remains visible in the background.\n[Shot 2] At 00:04.667, <Subject 1> thrusts forward.\n[Shot 3] At 00:09.333, <Subject 1> finishes upright. The narrator says in an off-screen voiceover: while their lips remain completely closed."}
 	dubs := []models.Dialogue{{Character: "旁白", SpeechType: "dialogue", Text: "上官若琳，天阙宗宗主之女。"}}
 	prompt := buildMiniMaxH3RefPrompt(scene, nil, dubs, lines)
 	for _, want := range []string{
@@ -3437,10 +3437,13 @@ func TestH3ReferencePromptKeepsEnvironmentAndOpeningFrameOutOfSubjects(t *testin
 			t.Fatalf("prompt missing %q: %s", want, prompt)
 		}
 	}
-	for _, bad := range []string{"<Subject 2>", "<Subject 3>", "remains visible in the background", "旁白 (S1)", "The narrator (S1)", "picture-in-picture element.\n<Subject"} {
+	for _, bad := range []string{"<Subject 2>", "<Subject 3>", "remains visible in the background", "旁白 (S1)", "The narrator (S1)", "picture-in-picture"} {
 		if strings.Contains(prompt, bad) {
 			t.Fatalf("prompt retained invalid non-character Subject or narrator binding %q: %s", bad, prompt)
 		}
+	}
+	if strings.Count(prompt, "The narrator says in an off-screen voiceover:") != 1 {
+		t.Fatalf("narration was duplicated or omitted: %s", prompt)
 	}
 }
 
