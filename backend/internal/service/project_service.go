@@ -1677,6 +1677,9 @@ var h3RealTimeCuePattern = regexp.MustCompile(`(?i)real[- ]time|at full speed|im
 var h3SoloSwordPracticeCuePattern = regexp.MustCompile(`单人剑术演练|练习剑术|练剑|以[^，。；]{0,20}为剑`)
 var h3VagueSwordPracticePattern = regexp.MustCompile(`(?i)\bmartial forms?\b|\bbrandish(?:es|ing)?\b|\bdanc(?:e|es|ing)\b|\bsweep(?:s|ing)?\s+(?:broad\s+)?(?:blade-like\s+)?strokes?\b|\bcontinuous(?:ly)?\s+(?:full-body\s+)?spin(?:s|ning)?\b|\brepeated(?:ly)?\s+circular\s+(?:swing|motion)s?\b`)
 var h3SwordTechniquePattern = regexp.MustCompile(`(?i)(?:rising\s+diagonal|diagonal\s+rising|diagonal\s+upward|upward\s+diagonal)\s+(?:cut|slash)|diagonal\s+(?:cut|slash)|rising\s+(?:cut|slash)|(?:straight|forward)\s+thrust|thrust(?:s|ing)?(?:\s+(?:the|a)\s+[^,.;]{1,40})?\s+straight\s+forward|(?:horizontal|downward|upward|cross-body)\s+(?:cut|slash)|slash(?:es|ing)?|parr(?:y|ies)|lunge(?:s|ing)?`)
+var h3DiagonalSwordPathPattern = regexp.MustCompile(`(?i)\bdiagonal\b[^.;]{0,80}\b(?:cut|slash|lift|rise|path)\b|\b(?:lower\s+right|lower-right)\b[^.;]{0,100}\b(?:upper\s+left|upper-left)\b`)
+var h3ThrustSwordPathPattern = regexp.MustCompile(`(?i)\bthrust(?:s|ing)?\b|\b(?:drive|drives|extend|extends)\b[^.;]{0,80}\b(?:straight\s+(?:ahead|forward)|forward\s+line)\b`)
+var h3HorizontalSwordPathPattern = regexp.MustCompile(`(?i)\bhorizontal\b[^.;]{0,80}\b(?:cut|slash|path|motion)\b|\b(?:left\s+to\s+right|right\s+to\s+left)\b[^.;]{0,60}\b(?:cut|slash|path|endpoint)\b`)
 var h3SwordFootworkPattern = regexp.MustCompile(`(?i)\b(?:left|right)\s+foot\b|\bsteps?\s+(?:forward|back|left|right|sideways)\b|\bshifts?\s+(?:her|his|their)\s+weight\b|\bweight\s+(?:onto|over)\b|\bstabiliz(?:e|es)\s+(?:her|his|their)\s+weight\b`)
 var h3SwordFinishPattern = regexp.MustCompile(`(?i)\bfinish(?:es)?\b|\bend(?:s)?\s+(?:upright|in|with)\b|\bstands?\s+upright\b|\bcloses?\s+(?:her|his|their|the)?\s*stance\b|\bfinal\s+stance\b|\bbranch\s+angled\s+(?:down|toward(?:s)?\s+the\s+ground)\b|\blower(?:s|ing)?\s+(?:the\s+)?branch\s+(?:diagonally\s+)?toward(?:s)?\s+the\s+ground\b|\breturns?\s+to\s+(?:a\s+)?(?:ready|guard|resting)\s+stance\b`)
 var h3SwordProhibitionPattern = regexp.MustCompile(`(?i)\b(?:no|never|without|avoid(?:s|ing)?|forbid(?:s|ding)?|must\s+not|does\s+not|do\s+not|rather\s+than|instead\s+of)\b`)
@@ -1695,6 +1698,19 @@ func hasAffirmativeVagueSwordPractice(value string) bool {
 	return false
 }
 
+func concreteSwordTechniqueCount(value string) int {
+	count := 0
+	for _, pattern := range []*regexp.Regexp{h3DiagonalSwordPathPattern, h3ThrustSwordPathPattern, h3HorizontalSwordPathPattern} {
+		if pattern.MatchString(value) {
+			count++
+		}
+	}
+	if count == 0 {
+		count = len(h3SwordTechniquePattern.FindAllString(value, -1))
+	}
+	return count
+}
+
 func h3SoloSwordPracticeContractMatches(source, value string) bool {
 	if !h3SoloSwordPracticeCuePattern.MatchString(source) {
 		return true
@@ -1702,7 +1718,7 @@ func h3SoloSwordPracticeContractMatches(source, value string) bool {
 	if hasAffirmativeVagueSwordPractice(value) || !h3SwordFootworkPattern.MatchString(value) || !h3SwordFinishPattern.MatchString(value) {
 		return false
 	}
-	return len(h3SwordTechniquePattern.FindAllString(value, -1)) >= 2
+	return concreteSwordTechniqueCount(value) >= 2
 }
 
 func h3ActionTempoContractMatches(value string) bool {
