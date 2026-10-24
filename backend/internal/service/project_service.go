@@ -2357,20 +2357,27 @@ func useSubjectTags(text string, referenceLines []string) string {
 		tag  string
 	}
 	bindings := []subjectBinding{}
+	characterTags := map[string]bool{}
 	for i, line := range referenceLines {
-		marker := "角色「"
-		start := strings.Index(line, marker)
-		if start < 0 {
-			continue
-		}
-		start += len(marker)
-		end := strings.Index(line[start:], "」")
-		if end < 0 {
-			continue
-		}
-		name := strings.TrimSpace(line[start : start+end])
-		if name != "" {
-			bindings = append(bindings, subjectBinding{name: name, tag: fmt.Sprintf("<Subject %d>", i+1)})
+		for _, marker := range []string{"角色「", "场景「", "道具「", "角色造型「"} {
+			start := strings.Index(line, marker)
+			if start < 0 {
+				continue
+			}
+			start += len(marker)
+			end := strings.Index(line[start:], "」")
+			if end < 0 {
+				continue
+			}
+			name := strings.TrimSpace(line[start : start+end])
+			if name != "" {
+				tag := fmt.Sprintf("<Subject %d>", i+1)
+				bindings = append(bindings, subjectBinding{name: name, tag: tag})
+				if marker == "角色「" {
+					characterTags[tag] = true
+				}
+			}
+			break
 		}
 	}
 	// A project may legitimately contain names where one is a prefix of another.
@@ -2383,6 +2390,15 @@ func useSubjectTags(text string, referenceLines []string) string {
 		text = strings.ReplaceAll(text, binding.tag+binding.name, binding.tag)
 		text = strings.ReplaceAll(text, binding.name, binding.tag)
 		text = strings.ReplaceAll(text, binding.tag+binding.tag, binding.tag)
+	}
+	if len(characterTags) == 1 {
+		soleCharacter := ""
+		for tag := range characterTags {
+			soleCharacter = tag
+		}
+		for _, placeholder := range []string{"【场景剧情】", "【Shot导演设计】", "【角色】", "[场景剧情]", "[Shot导演设计]"} {
+			text = strings.ReplaceAll(text, placeholder, soleCharacter)
+		}
 	}
 	return text
 }

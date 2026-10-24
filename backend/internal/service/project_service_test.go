@@ -2054,6 +2054,23 @@ func TestCombatRepairRebindsChineseCharacterNameBeforeEnglishValidation(t *testi
 	if !strings.Contains(got, "<Subject 1>") || strings.Contains(got, "Subject 1 steps") {
 		t.Fatalf("loose Subject tag was not normalized: %s", got)
 	}
+	got = useSubjectTags("[Shot 1] 上官若琳 enters 梵心桃花林 carrying 桃枝.", []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：场景「梵心桃花林」参考图", "- <Picture 3>：道具「桃枝」参考图"})
+	for _, want := range []string{"<Subject 1>", "<Subject 2>", "<Subject 3>"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("known reference identity %s was not rebound: %s", want, got)
+		}
+	}
+	if regexp.MustCompile(`[\p{Han}]`).MatchString(got) {
+		t.Fatalf("known reference identity left Chinese visual residue: %s", got)
+	}
+	got = useSubjectTags("[Shot 1] 【场景剧情】 holds a peach branch and 【Shot导演设计】 steps forward.", []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：场景「梵心桃花林」参考图"})
+	if strings.Count(got, "<Subject 1>") != 2 || strings.Contains(got, "【") {
+		t.Fatalf("single-character context placeholders were not rebound deterministically: %s", got)
+	}
+	ambiguous := useSubjectTags("[Shot 1] 【场景剧情】 steps forward.", []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图"})
+	if !strings.Contains(ambiguous, "【场景剧情】") {
+		t.Fatalf("ambiguous multi-character placeholder was guessed: %s", ambiguous)
+	}
 }
 
 func TestCombatActionRepairRequestUsesNeutralReactionWhenOutcomeUnknown(t *testing.T) {
