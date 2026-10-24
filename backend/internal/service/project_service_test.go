@@ -1731,10 +1731,13 @@ func TestH3RetentionListsOnlyVisibleShots(t *testing.T) {
 	sc := &models.Scene{VideoPrompt: "[Shot 1] 姐姐 raises her hand. [Shot 2] 妹妹 listens silently.", Duration: 8}
 	prompt := buildMiniMaxH3RefPrompt(sc, nil, nil, lines)
 	retention := h3PromptSection(prompt, "retention_analysis:")
-	for _, want := range []string{"<Subject 1> (appears in [Shot 1])", "<Subject 2> (appears in [Shot 2])", "<Subject 3> (appears in [Shot 1], [Shot 2])"} {
+	for _, want := range []string{"<Subject 1> (appears in [Shot 1])", "<Subject 2> (appears in [Shot 2])"} {
 		if !strings.Contains(retention, want) {
 			t.Fatalf("missing %q: %s", want, retention)
 		}
+	}
+	if strings.Contains(retention, "<Subject 3>") {
+		t.Fatalf("environment reference became a retained Subject: %s", retention)
 	}
 }
 
@@ -1744,7 +1747,7 @@ func TestBuildMiniMaxH3RefPromptUsesStoryboardAsOptionalLastReference(t *testing
 	prompt := buildMiniMaxH3RefPrompt(sc, &models.Project{Style: "3D国漫"}, nil, lines)
 	for _, want := range []string{
 		"<Subject 1> is the character named 「雷晓飞」 shown in the four-view reference from <Picture 1>",
-		"<Subject 3> is the storyboard composition and action-state reference from <Picture 3>",
+		"<Picture 3> provides only the full-frame storyboard composition and action state",
 		"[reference generation] Generate a 9-second video from the defined references and shot timeline",
 		"<Subject 1>抬起手指",
 	} {
@@ -2084,10 +2087,13 @@ func TestCombatRepairRebindsChineseCharacterNameBeforeEnglishValidation(t *testi
 		t.Fatalf("loose Subject tag was not normalized: %s", got)
 	}
 	got = useSubjectTags("[Shot 1] 上官若琳 enters 梵心桃花林 carrying 桃枝.", []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：场景「梵心桃花林」参考图", "- <Picture 3>：道具「桃枝」参考图"})
-	for _, want := range []string{"<Subject 1>", "<Subject 2>", "<Subject 3>"} {
+	for _, want := range []string{"<Subject 1>", "the environment established by <Picture 2>", "the prop shown in <Picture 3>"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("known reference identity %s was not rebound: %s", want, got)
 		}
+	}
+	if strings.Contains(got, "<Subject 2>") || strings.Contains(got, "<Subject 3>") {
+		t.Fatalf("environment or prop was incorrectly promoted to Subject: %s", got)
 	}
 	if regexp.MustCompile(`[\p{Han}]`).MatchString(got) {
 		t.Fatalf("known reference identity left Chinese visual residue: %s", got)
@@ -2331,7 +2337,7 @@ func TestCharacterNamesMapToActualReferenceSubjects(t *testing.T) {
 	for _, want := range []string{
 		"<Subject 1> is the character named 「舒寒」 shown in the four-view reference from <Picture 1>",
 		"<Subject 2> is the character named 「上官若琳」 shown in the four-view reference from <Picture 2>",
-		"<Subject 4> is the storyboard composition and action-state reference from <Picture 4>",
+		"<Picture 4> provides only the full-frame storyboard composition and action state",
 		"<Subject 1> embraces <Subject 2>",
 		"<Subject 1> (S1) says: <d>[Chinese] 这不是太想你了吗。</d>",
 		"<Subject 2> (S2) says: <d>[Chinese] 今晚有得是时间。</d>",
@@ -2340,8 +2346,8 @@ func TestCharacterNamesMapToActualReferenceSubjects(t *testing.T) {
 			t.Fatalf("character mapping missing %q: %s", want, prompt)
 		}
 	}
-	if strings.Contains(prompt, "<Subject 4>环抱") {
-		t.Fatalf("storyboard reference was used as a character: %s", prompt)
+	if strings.Contains(prompt, "<Subject 3>") || strings.Contains(prompt, "<Subject 4>") {
+		t.Fatalf("environment or storyboard reference was used as a character: %s", prompt)
 	}
 	for _, dialogue := range []string{"这不是太想你了吗。", "今晚有得是时间。"} {
 		if strings.Count(prompt, dialogue) != 1 {
@@ -2375,7 +2381,7 @@ func TestExplicitNarrationAndMonologueRemainAllowed(t *testing.T) {
 		t.Fatalf("explicit narration/monologue was removed: %+v", got)
 	}
 	prompt := appendStructuredDialogue("[Shot 1] 雷晓飞站在门前。", got, []string{"- <Picture 1>：角色「雷晓飞」四视图"})
-	for _, want := range []string{"旁白 (S1) says in an off-screen voiceover: <d>[Chinese] 夜色笼罩山城。</d> while their lips remain completely closed", "<Subject 1> (S2) delivers an internal monologue: <d>[Chinese] 我必须找到他。</d> while their lips remain completely closed"} {
+	for _, want := range []string{"The narrator says in an off-screen voiceover: <d>[Chinese] 夜色笼罩山城。</d> while their lips remain completely closed", "<Subject 1> (S1) delivers an internal monologue: <d>[Chinese] 我必须找到他。</d> while their lips remain completely closed"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("explicit speech missing %q: %s", want, prompt)
 		}
@@ -3012,7 +3018,7 @@ func TestH3NarrationAndCameraConflictValidation(t *testing.T) {
 	sc := &models.Scene{VideoPrompt: "[Shot 1] 人物保持闭口，镜头保持固定。", Duration: 5}
 	prompt := buildH3T2VAPrompt(sc, nil, []models.Dialogue{{Character: "旁白", Text: "夜色降临。"}})
 	detail := h3IntegratedDescription(prompt)
-	for _, want := range []string{"旁白 (S1) says in an off-screen voiceover: <d>[Chinese] 夜色降临。</d> while their lips remain completely closed"} {
+	for _, want := range []string{"The narrator says in an off-screen voiceover: <d>[Chinese] 夜色降临。</d> while their lips remain completely closed"} {
 		if !strings.Contains(detail, want) {
 			t.Fatalf("narration rule missing %q: %s", want, prompt)
 		}
@@ -3412,17 +3418,43 @@ func TestCompactFinalH3PromptRemovesReportedFiller(t *testing.T) {
 	}
 }
 
+func TestH3ReferencePromptKeepsEnvironmentAndOpeningFrameOutOfSubjects(t *testing.T) {
+	lines := []string{
+		"- <Picture 1>：角色「上官若琳」四视图",
+		"- <Picture 2>：场景「天阙宗玉霄宫梵心桃花林」参考图",
+		"- <Picture 3>：上一镜确认尾帧（本镜 0.00 秒唯一开始画面）",
+	}
+	scene := &models.Scene{Duration: 14, VideoPrompt: "[Shot 1] <Subject 1> performs one diagonal cut. <Subject 2> remains visible in the background.\n[Shot 2] At 00:04.667, <Subject 1> thrusts forward.\n[Shot 3] At 00:09.333, <Subject 1> finishes upright."}
+	dubs := []models.Dialogue{{Character: "旁白", SpeechType: "dialogue", Text: "上官若琳，天阙宗宗主之女。"}}
+	prompt := buildMiniMaxH3RefPrompt(scene, nil, dubs, lines)
+	for _, want := range []string{
+		"<Subject 1> is the character named 「上官若琳」",
+		"<Picture 2> provides only the environment and spatial layout",
+		"<Picture 3> is the confirmed final frame of the previous scene",
+		"The narrator says in an off-screen voiceover: <d>[Chinese] 上官若琳，天阙宗宗主之女。</d>",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+	}
+	for _, bad := range []string{"<Subject 2>", "<Subject 3>", "remains visible in the background", "旁白 (S1)", "The narrator (S1)", "picture-in-picture element.\n<Subject"} {
+		if strings.Contains(prompt, bad) {
+			t.Fatalf("prompt retained invalid non-character Subject or narrator binding %q: %s", bad, prompt)
+		}
+	}
+}
+
 func TestBuildH3PromptResolvesReviewedVisualConflicts(t *testing.T) {
 	shots := []models.Shot{{Order: 1, PromptSubject: "上官若琳，红金宫装，中近景", PromptAction: "神情从坚决转为温柔耐心，眉心与目光的紧张感增强，手自然垂落", PromptCamera: "正面机位，缓慢后拉", PromptLighting: "柔和正面光", PromptStyle: "古风仙侠"}, {Order: 2, PromptSubject: "上官若彤，淡紫宫装侧面近景", PromptAction: "泪光渐消，静静倾听", PromptCamera: "侧面机位，轻微摇摄跟随，微微推进", PromptLighting: "柔和侧光", PromptStyle: "古风仙侠"}}
 	action := rebuildStructuredShotAction(shots)
 	lines := []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图", "- <Picture 3>：场景「桃花林」参考图"}
 	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: action, Duration: 11}, nil, []models.Dialogue{{ID: 1, Character: "上官若琳", SpeechType: "dialogue", Text: "第一段，"}, {ID: 2, Character: "上官若琳", SpeechType: "dialogue", Text: "第二段，"}}, lines)
-	for _, want := range []string{"眉心舒展，目光逐渐柔和", "微微推进", "<Subject 3> remains visible in the background", "<Subject 3> (appears in [Shot 1], [Shot 2])"} {
+	for _, want := range []string{"眉心舒展，目光逐渐柔和", "微微推进", "<Picture 3> provides only the environment and spatial layout"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("missing %q: %s", want, prompt)
 		}
 	}
-	for _, bad := range []string{"眉心与目光的紧张感增强", "轻微摇摄跟随", "<Subject 2> are silent listeners", "古风仙侠", "温柔细腻", "柔美内敛", "色调红金偏暖"} {
+	for _, bad := range []string{"眉心与目光的紧张感增强", "轻微摇摄跟随", "<Subject 2> are silent listeners", "<Subject 3>", "remains visible in the background", "古风仙侠", "温柔细腻", "柔美内敛", "色调红金偏暖"} {
 		if strings.Contains(prompt, bad) {
 			t.Fatalf("retained %q: %s", bad, prompt)
 		}

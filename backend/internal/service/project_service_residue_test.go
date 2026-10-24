@@ -24,13 +24,13 @@ func TestCompactFinalH3VisualBodyRemovesReportedTemplateResidue(t *testing.T) {
 func TestH3SubjectDefinitionsPreserveExactReferenceIdentity(t *testing.T) {
 	definitions, _, _ := h3VideoSubjects([]string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图", "- <Picture 3>：场景「天阙宗玉霄宫梵心桃花林」参考图"})
 	joined := strings.Join(definitions, "\n")
-	for _, want := range []string{"<Subject 1> is the character named 「上官若琳」 shown in the four-view reference from <Picture 1>.", "<Subject 2> is the character named 「上官若彤」 shown in the four-view reference from <Picture 2>.", "<Subject 3> is the referenced environment named 「天阙宗玉霄宫梵心桃花林」 from <Picture 3>."} {
+	for _, want := range []string{"<Subject 1> is the character named 「上官若琳」 shown in the four-view reference from <Picture 1>.", "<Subject 2> is the character named 「上官若彤」 shown in the four-view reference from <Picture 2>.", "<Picture 3> provides only the environment and spatial layout: the referenced environment named 「天阙宗玉霄宫梵心桃花林」. It is not a Subject, person, inset image, panel, screen, or picture-in-picture element."} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing exact identity binding %q: %s", want, joined)
 		}
 	}
-	if strings.Contains(joined, "<Subject 1> is the character shown") || strings.Contains(joined, "<Subject 2> is the character shown") {
-		t.Fatalf("anonymous character binding retained: %s", joined)
+	if strings.Contains(joined, "<Subject 1> is the character shown") || strings.Contains(joined, "<Subject 2> is the character shown") || strings.Contains(joined, "<Subject 3>") {
+		t.Fatalf("anonymous or non-character Subject binding retained: %s", joined)
 	}
 }
 

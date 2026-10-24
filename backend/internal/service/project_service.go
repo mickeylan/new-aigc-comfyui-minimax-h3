@@ -2436,8 +2436,9 @@ func characterSubjectOrName(name string, referenceLines []string) string {
 
 func useSubjectTags(text string, referenceLines []string) string {
 	type subjectBinding struct {
-		name string
-		tag  string
+		name        string
+		replacement string
+		character   bool
 	}
 	bindings := []subjectBinding{}
 	characterTags := map[string]bool{}
@@ -2454,11 +2455,18 @@ func useSubjectTags(text string, referenceLines []string) string {
 			}
 			name := strings.TrimSpace(line[start : start+end])
 			if name != "" {
-				tag := fmt.Sprintf("<Subject %d>", i+1)
-				bindings = append(bindings, subjectBinding{name: name, tag: tag})
-				if marker == "角色「" {
-					characterTags[tag] = true
+				picture := fmt.Sprintf("<Picture %d>", i+1)
+				replacement := "the reference from " + picture
+				character := marker == "角色「" || marker == "角色造型「"
+				if character {
+					replacement = fmt.Sprintf("<Subject %d>", i+1)
+					characterTags[replacement] = true
+				} else if marker == "场景「" {
+					replacement = "the environment established by " + picture
+				} else if marker == "道具「" {
+					replacement = "the prop shown in " + picture
 				}
+				bindings = append(bindings, subjectBinding{name: name, replacement: replacement, character: character})
 			}
 			break
 		}
@@ -2470,9 +2478,11 @@ func useSubjectTags(text string, referenceLines []string) string {
 		return len([]rune(bindings[i].name)) > len([]rune(bindings[j].name))
 	})
 	for _, binding := range bindings {
-		text = strings.ReplaceAll(text, binding.tag+binding.name, binding.tag)
-		text = strings.ReplaceAll(text, binding.name, binding.tag)
-		text = strings.ReplaceAll(text, binding.tag+binding.tag, binding.tag)
+		text = strings.ReplaceAll(text, binding.replacement+binding.name, binding.replacement)
+		text = strings.ReplaceAll(text, binding.name, binding.replacement)
+		if binding.character {
+			text = strings.ReplaceAll(text, binding.replacement+binding.replacement, binding.replacement)
+		}
 	}
 	if len(characterTags) == 1 {
 		soleCharacter := ""
@@ -3436,9 +3446,13 @@ func dialogueSpeakerIDs(dubs []models.Dialogue) []int {
 	bySpeaker := map[string]int{}
 	next := 1
 	for i, d := range dubs {
+		if d.SpeechType == "narration" || isNarrationSpeaker(d.Character) {
+			ids[i] = 0
+			continue
+		}
 		key := strings.TrimSpace(d.Character)
 		if key == "" {
-			key = "__narrator__"
+			continue
 		}
 		id, ok := bySpeaker[key]
 		if !ok {
@@ -3468,10 +3482,19 @@ func isNarrationSpeaker(name string) bool {
 }
 
 func h3DialogueSpeakerIdentity(d models.Dialogue, speakerID int, referenceLines []string) string {
-	identity := characterSubjectOrName(d.Character, referenceLines)
 	voice := strings.TrimSpace(d.H3VoiceDescription)
+	if d.SpeechType == "narration" || isNarrationSpeaker(d.Character) {
+		if voice != "" {
+			return voice
+		}
+		return "The narrator"
+	}
+	identity := characterSubjectOrName(d.Character, referenceLines)
 	if characterSubjectTagByName(d.Character, referenceLines) == "" && voice != "" {
 		identity = voice
+	}
+	if speakerID <= 0 {
+		return identity
 	}
 	return identity + fmt.Sprintf(" (S%d)", speakerID)
 }
@@ -4208,7 +4231,6 @@ func h3EnglishStyle(style string) string {
 }
 
 func h3VideoSubjects(referenceLines []string) (definitions, retention, subjectRefs []string) {
-	_, _, subjectRefs = h3StoryboardSubjects(referenceLines)
 	for i, line := range referenceLines {
 		n := i + 1
 		desc := strings.TrimSpace(strings.TrimPrefix(line, "-"))
@@ -4216,14 +4238,26 @@ func h3VideoSubjects(referenceLines []string) (definitions, retention, subjectRe
 			desc = strings.TrimSpace(desc[cut+len("："):])
 		}
 		english := englishH3ReferenceDescription(desc, n)
-		definitions = append(definitions, fmt.Sprintf("<Subject %d> is %s from <Picture %d>.", n, english, n))
-		trait := "identity and visible appearance"
-		if strings.Contains(line, "场景「") || strings.Contains(line, "环境「") {
-			trait = "environment and spatial layout"
-		} else if strings.Contains(line, "分镜画面") {
-			trait = "composition and action state"
+		isCharacter := strings.Contains(line, "角色「") || strings.Contains(line, "角色造型「")
+		if isCharacter {
+			tag := fmt.Sprintf("<Subject %d>", n)
+			definitions = append(definitions, fmt.Sprintf("%s is %s from <Picture %d>.", tag, english, n))
+			retention = append(retention, fmt.Sprintf("%s (where explicitly shown): fully_preserved - identity and visible appearance.", tag))
+			subjectRefs = append(subjectRefs, tag)
+			continue
 		}
-		retention = append(retention, fmt.Sprintf("<Subject %d> (where explicitly shown): fully_preserved - %s.", n, trait))
+		switch {
+		case strings.Contains(line, "场景「") || strings.Contains(line, "环境「"):
+			definitions = append(definitions, fmt.Sprintf("<Picture %d> provides only the environment and spatial layout: %s. It is not a Subject, person, inset image, panel, screen, or picture-in-picture element.", n, english))
+		case strings.Contains(line, "上一镜确认尾帧"):
+			definitions = append(definitions, fmt.Sprintf("<Picture %d> is %s. It is the full-frame opening state, not a Subject, inset image, panel, screen, or picture-in-picture element.", n, english))
+		case strings.Contains(line, "当前分镜画面"):
+			definitions = append(definitions, fmt.Sprintf("<Picture %d> provides only the full-frame storyboard composition and action state. It is not a Subject, inset image, panel, screen, or picture-in-picture element.", n))
+		case strings.Contains(line, "道具「"):
+			definitions = append(definitions, fmt.Sprintf("<Picture %d> provides the referenced prop appearance: %s. The prop is not a separate character or inset image.", n, english))
+		default:
+			definitions = append(definitions, fmt.Sprintf("<Picture %d> provides reference information only: %s. It is not a separate Subject or inset image.", n, english))
+		}
 	}
 	return definitions, retention, subjectRefs
 }
@@ -4258,8 +4292,12 @@ func h3VisibleRetention(body string, retention []string) []string {
 	visible := h3SubjectShotAppearances(body)
 
 	out := make([]string, 0, len(retention))
-	for i, line := range retention {
-		n := i + 1
+	for _, line := range retention {
+		match := h3SubjectTagPattern.FindStringSubmatch(line)
+		if len(match) != 2 {
+			continue
+		}
+		n, _ := strconv.Atoi(match[1])
 		details := line
 		if cut := strings.Index(line, " - "); cut >= 0 {
 			details = line[cut+3:]
@@ -4307,50 +4345,24 @@ func compactFinalH3VisualBody(body string) string {
 }
 
 func bindEnvironmentSubjectsToShots(body string, referenceLines []string) string {
-	environmentTags := []string{}
+	// Environment, prop and keyframe pictures constrain the full-frame scene. They are
+	// never H3 Subjects and must not be made "visible" as a second object or inset panel.
 	for i, line := range referenceLines {
-		if strings.Contains(line, "场景「") || strings.Contains(line, "环境「") {
-			environmentTags = append(environmentTags, fmt.Sprintf("<Subject %d>", i+1))
+		n := i + 1
+		tag := fmt.Sprintf("<Subject %d>", n)
+		switch {
+		case strings.Contains(line, "场景「") || strings.Contains(line, "环境「"):
+			body = strings.ReplaceAll(body, tag+" remains visible in the background.", "")
+			body = strings.ReplaceAll(body, tag, fmt.Sprintf("the environment established by <Picture %d>", n))
+		case strings.Contains(line, "上一镜确认尾帧") || strings.Contains(line, "当前分镜画面"):
+			body = strings.ReplaceAll(body, tag+" remains visible in the background.", "")
+			body = strings.ReplaceAll(body, tag, fmt.Sprintf("the full-frame state established by <Picture %d>", n))
+		case strings.Contains(line, "道具「"):
+			body = strings.ReplaceAll(body, tag, fmt.Sprintf("the prop shown in <Picture %d>", n))
 		}
 	}
-	if len(environmentTags) == 0 {
-		return body
-	}
-	matches := h3ShotMarkerPattern.FindAllStringSubmatchIndex(body, -1)
-	if len(matches) == 0 {
-		return body
-	}
-	var out strings.Builder
-	for i, marker := range matches {
-		if i == 0 {
-			out.WriteString(body[:marker[0]])
-		}
-		end := len(body)
-		if i+1 < len(matches) {
-			end = matches[i+1][0]
-		}
-		segment := strings.TrimRight(body[marker[0]:end], " \n\t")
-		missing := []string{}
-		for _, tag := range environmentTags {
-			phrase := tag + " remains visible in the background."
-			if count := strings.Count(segment, phrase); count > 1 {
-				first := strings.Index(segment, phrase)
-				tail := strings.ReplaceAll(segment[first+len(phrase):], phrase, "")
-				segment = segment[:first+len(phrase)] + tail
-			}
-			if !strings.Contains(segment, tag) {
-				missing = append(missing, tag)
-			}
-		}
-		out.WriteString(segment)
-		if len(missing) > 0 {
-			out.WriteString(" " + strings.Join(missing, ", ") + " remains visible in the background.")
-		}
-		if end < len(body) {
-			out.WriteString("\n")
-		}
-	}
-	return strings.TrimSpace(out.String())
+	body = regexp.MustCompile(`\s{2,}`).ReplaceAllString(body, " ")
+	return strings.TrimSpace(body)
 }
 
 func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue, referenceLines []string) string {
@@ -4358,6 +4370,7 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 	if suggestedUnstructuredH3ShotCount(sc.Content, normalizeSceneDuration(sc.Duration)) > 1 {
 		for i := range definitions {
 			definitions[i] = strings.ReplaceAll(definitions[i], "the storyboard composition and action-state reference", "a loose composition reference only; its completed clothing and action state do not define the opening state")
+			definitions[i] = strings.ReplaceAll(definitions[i], "provides only the full-frame storyboard composition and action state", "provides a loose composition reference only; its completed clothing and action state do not define the opening state")
 		}
 	}
 	body := canonicalVideoAction(sc.VideoPrompt, referenceLines)
