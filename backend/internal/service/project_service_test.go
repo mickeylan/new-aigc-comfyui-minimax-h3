@@ -2405,7 +2405,7 @@ func TestExplicitNarrationAndMonologueRemainAllowed(t *testing.T) {
 		t.Fatalf("explicit narration/monologue was removed: %+v", got)
 	}
 	prompt := appendStructuredDialogue("[Shot 1] 雷晓飞站在门前。", got, []string{"- <Picture 1>：角色「雷晓飞」四视图"})
-	for _, want := range []string{"A separate unseen third-person narrator, independent of every visible character, narrates in an off-screen voiceover: <d>[Chinese] 夜色笼罩山城。</d>. <Subject 1> keeps their lips completely closed throughout this narration and is not the narrator.", "<Subject 1> (S1) delivers an internal monologue: <d>[Chinese] 我必须找到他。</d> while their lips remain completely closed"} {
+	for _, want := range []string{h3NarratorLead(1) + " <d>[Chinese] 夜色笼罩山城。</d>. <Subject 1> keeps their lips completely closed throughout this narration and is not the narrator.", "<Subject 1> (S2) delivers an internal monologue: <d>[Chinese] 我必须找到他。</d> while their lips remain completely closed"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("explicit speech missing %q: %s", want, prompt)
 		}
@@ -2719,16 +2719,33 @@ func TestNormalizeSavedH3AudioReplacesAmbiguousMusicNA(t *testing.T) {
 	}
 }
 
-func TestNarrationAudioContractDoesNotRequireSpeakerID(t *testing.T) {
+func TestNarratorKeepsStableIndependentSpeakerID(t *testing.T) {
+	dubs := validSceneDialogues([]models.Dialogue{
+		{Character: "旁白", SpeechType: "dialogue", Text: "序言。"},
+		{Character: "上官若琳", SpeechType: "dialogue", Text: "开始。"},
+	})
+	ids := dialogueSpeakerIDs(dubs)
+	if len(ids) != 2 || ids[0] != 1 || ids[1] != 2 {
+		t.Fatalf("speaker IDs=%v, want independent narrator S1 and character S2", ids)
+	}
+	lead := h3NarratorLead(ids[0])
+	for _, want := range []string{"narrator (S1)", "not corresponding to any <Subject N>", "off-screen voiceover"} {
+		if !strings.Contains(lead, want) {
+			t.Fatalf("narrator lead missing %q: %s", want, lead)
+		}
+	}
+}
+
+func TestNarrationAudioContractUsesIndependentSpeakerID(t *testing.T) {
 	dubs := []models.Dialogue{{Character: "旁白", SpeechType: "dialogue", Text: "上官若琳，天阙宗宗主之女。"}}
 	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] <Subject 1> practices sword forms.", Duration: 8}, nil, dubs, []string{"- <Picture 1>：角色「上官若琳」四视图"})
-	if strings.Contains(prompt, "(S0)") || strings.Contains(prompt, "(S1)") {
-		t.Fatalf("narrator occupied a character speaker ID: %s", prompt)
+	if strings.Contains(prompt, "(S0)") || !strings.Contains(prompt, h3NarratorLead(1)) || !strings.Contains(prompt, "<Subject 1> keeps their lips completely closed throughout this narration and is not the narrator") {
+		t.Fatalf("narrator lacks a stable independent S1 identity: %s", prompt)
 	}
 	if !videoAudioContractMatches(prompt, dubs) {
 		t.Fatalf("valid narrator contract was rejected: %s", prompt)
 	}
-	broken := strings.Replace(prompt, h3NarratorLead, "An unidentified person says:", 1)
+	broken := strings.Replace(prompt, h3NarratorLead(1), "An unidentified person says:", 1)
 	if videoAudioContractMatches(broken, dubs) {
 		t.Fatalf("unidentified narration incorrectly passed: %s", broken)
 	}
@@ -3057,7 +3074,7 @@ func TestH3NarrationAndCameraConflictValidation(t *testing.T) {
 	sc := &models.Scene{VideoPrompt: "[Shot 1] 人物保持闭口，镜头保持固定。", Duration: 5}
 	prompt := buildH3T2VAPrompt(sc, nil, []models.Dialogue{{Character: "旁白", Text: "夜色降临。"}})
 	detail := h3IntegratedDescription(prompt)
-	for _, want := range []string{"A separate unseen third-person narrator, independent of every visible character, narrates in an off-screen voiceover: <d>[Chinese] 夜色降临。</d>. No visible character speaks or lip-syncs to this narration."} {
+	for _, want := range []string{h3NarratorLead(1) + " <d>[Chinese] 夜色降临。</d>. No visible character speaks or lip-syncs to this narration."} {
 		if !strings.Contains(detail, want) {
 			t.Fatalf("narration rule missing %q: %s", want, prompt)
 		}
@@ -3470,18 +3487,18 @@ func TestH3ReferencePromptKeepsEnvironmentAndOpeningFrameOutOfSubjects(t *testin
 		"<Subject 1> is the character named 「上官若琳」",
 		"<Picture 2> provides only the environment and spatial layout",
 		"<Picture 3> is the confirmed final frame of the previous scene",
-		h3NarratorLead + " <d>[Chinese] 上官若琳，天阙宗宗主之女。</d>. <Subject 1> keeps their lips completely closed throughout this narration and is not the narrator.",
+		h3NarratorLead(1) + " <d>[Chinese] 上官若琳，天阙宗宗主之女。</d>. <Subject 1> keeps their lips completely closed throughout this narration and is not the narrator.",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q: %s", want, prompt)
 		}
 	}
-	for _, bad := range []string{"<Subject 2>", "<Subject 3>", "remains visible in the background", "旁白 (S1)", "third-person narrator (S1)", "picture-in-picture"} {
+	for _, bad := range []string{"<Subject 2>", "<Subject 3>", "remains visible in the background", "旁白 (S1)", "picture-in-picture"} {
 		if strings.Contains(prompt, bad) {
 			t.Fatalf("prompt retained invalid non-character Subject or narrator binding %q: %s", bad, prompt)
 		}
 	}
-	if strings.Count(prompt, h3NarratorLead) != 1 || strings.Count(prompt, h3NarratorTimelineLead) != 1 {
+	if strings.Count(prompt, h3NarratorLead(1)) != 1 || strings.Count(prompt, h3NarratorTimelineLead) != 1 {
 		t.Fatalf("narration was duplicated or omitted: %s", prompt)
 	}
 	detail := h3PromptSection(prompt, "detailed_description:")
@@ -3584,7 +3601,7 @@ func TestH3CrossShotDialogueMarkers(t *testing.T) {
 
 func TestH3VoiceoverUsesOfficialPhraseAndClosesLips(t *testing.T) {
 	body := appendStructuredDialogue("[Shot 1] The listener remains on screen.", []models.Dialogue{{Character: "林夏", SpeechType: "narration", Text: "我仍记得那条路。"}}, nil)
-	for _, want := range []string{"A separate unseen third-person narrator", "narrates in an off-screen voiceover", "<d>[Chinese] 我仍记得那条路。</d>", "No visible character speaks or lip-syncs to this narration"} {
+	for _, want := range []string{"The separate unseen third-person narrator (S1)", "narrates in an off-screen voiceover", "<d>[Chinese] 我仍记得那条路。</d>", "No visible character speaks or lip-syncs to this narration"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("voiceover contract missing %q: %s", want, body)
 		}

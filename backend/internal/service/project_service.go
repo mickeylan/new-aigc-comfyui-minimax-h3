@@ -2635,7 +2635,7 @@ var (
 	h3CarryoverDialoguePattern     = regexp.MustCompile(`(?is)<Subject\s+[0-9]+>\s*\(S[0-9]+\)'s\s+words\s+carry\s+over\s+from\s+the\s+previous\s+shot\s*<scenetrans>.*?</d>[.]?`)
 	h3DialogueClausePattern        = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}]{1,20})(?:\s*\(S[0-9]+\))?(?:画外音|内心独白|说|说道|问道|答道)[：:]?\s*<d>.*?</d>[。.]?`)
 	h3EnglishDialogueClausePattern = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}][\p{Han}A-Za-z0-9，,· \t]{0,80})\s*\(S[0-9]+\)\s*(?:says(?:\s+in\s+an\s+off-screen\s+voiceover|\s+on\s+screen|\s+on\s+screen\s+with\s+lip\s+movement\s+synchronized\s+only\s+to\s+this\s+exact\s+text|\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice)?|delivers\s+an\s+internal\s+monologue|continues\s+speaking\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice\s+from\s+the\s+previous\s+shot|continues(?:\s+the\s+same\s+utterance)?\s+on\s+screen(?:\s+without\s+a\s+speaker\s+change)?)\s*:\s*<d>.*?</d>(?:\s+while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?(?:\s+The\s+voice\s+remains\s+exclusively\s+[^;\n]+;\s+no\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+No\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+(?:<Subject\s+[0-9]+>(?:,\s*)?)+\s+are\s+silent\s+listeners\s+and\s+keep\s+their\s+lips\s+completely\s+closed\s+throughout\s+this\s+shot[.]?)?`)
-	h3NarratorClausePattern        = regexp.MustCompile(`(?is)(?:\bThe\s+narrator(?:\s*\(S[0-9]+\))?\s+says|\bA\s+separate\s+unseen\s+third-person\s+narrator[^:]*\s+narrates)\s+in\s+an\s+off-screen\s+voiceover:\s*(?:<d>.*?</d>\s*)?(?:while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?(?:\s+(?:<Subject\s+[0-9]+>[^.]*|No\s+visible\s+character[^.]*))[.]?`)
+	h3NarratorClausePattern        = regexp.MustCompile(`(?is)(?:\bThe\s+narrator(?:\s*\(S[0-9]+\))?\s+says|\b(?:A|The)\s+separate\s+unseen\s+third-person\s+narrator[^:]*\s+narrates)\s+in\s+an\s+off-screen\s+voiceover:\s*(?:<d>.*?</d>\s*)?(?:while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?(?:\s+(?:<Subject\s+[0-9]+>[^.]*|No\s+visible\s+character[^.]*))[.]?`)
 	h3BareNarratorPattern          = regexp.MustCompile(`(?is)\bThe\s+narrator(?:\s*\(S[0-9]+\))?\s+says\s+in\s+an\s+off-screen\s+voiceover:\s*(?:while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?`)
 	dialogueNarrationPattern       = regexp.MustCompile(`(?:<Subject [0-9]+>(?:\s*\(S[0-9]+\))?(?:说道|说|问道|答道)[：:]?\s*|[\p{Han}]{1,12}(?:\s*\(S[0-9]+\))?(?:说道|问道|答道|说[：:])\s*)`)
 	orphanSpeakerPattern           = regexp.MustCompile(`(?:<Subject [0-9]+>|[\p{Han}]{1,20})\s*\(S[0-9]+\)[。.]?`)
@@ -3511,11 +3511,10 @@ func dialogueSpeakerIDs(dubs []models.Dialogue) []int {
 	bySpeaker := map[string]int{}
 	next := 1
 	for i, d := range dubs {
-		if d.SpeechType == "narration" || isNarrationSpeaker(d.Character) {
-			ids[i] = 0
-			continue
-		}
 		key := strings.TrimSpace(d.Character)
+		if d.SpeechType == "narration" || isNarrationSpeaker(d.Character) {
+			key = "__narrator__"
+		}
 		if key == "" {
 			continue
 		}
@@ -3564,8 +3563,15 @@ func isNarrationSpeaker(name string) bool {
 	return name == "旁白" || name == "画外音" || name == "voiceover" || name == "narrator"
 }
 
-const h3NarratorLead = "A separate unseen third-person narrator, independent of every visible character, narrates in an off-screen voiceover:"
-const h3NarratorTimelineLead = "The narration begins immediately at 0.00 seconds and continues uninterrupted across subsequent shot cuts. "
+const h3NarratorLeadPrefix = "The separate unseen third-person narrator"
+const h3NarratorTimelineLead = "This narration begins at 0.00 seconds, continues uninterrupted across shot cuts, and is delivered at a calm, clear, unhurried pace with natural pauses at Chinese punctuation, evenly paced to finish near the end of the video without rushing. "
+
+func h3NarratorLead(speakerID int) string {
+	if speakerID <= 0 {
+		speakerID = 1
+	}
+	return fmt.Sprintf("%s (S%d), independent of every visible character and not corresponding to any <Subject N>, narrates in an off-screen voiceover:", h3NarratorLeadPrefix, speakerID)
+}
 
 func h3NarrationClosedLips(referenceLines []string) string {
 	tags := []string{}
@@ -3586,10 +3592,11 @@ func h3NarrationClosedLips(referenceLines []string) string {
 func h3DialogueSpeakerIdentity(d models.Dialogue, speakerID int, referenceLines []string) string {
 	voice := strings.TrimSpace(d.H3VoiceDescription)
 	if d.SpeechType == "narration" || isNarrationSpeaker(d.Character) {
+		identity := fmt.Sprintf("%s (S%d)", h3NarratorLeadPrefix, speakerID)
 		if voice != "" {
-			return "A separate unseen third-person narrator with this voice identity: " + voice
+			identity += " with this reviewed voice identity: " + voice
 		}
-		return "A separate unseen third-person narrator"
+		return identity
 	}
 	identity := characterSubjectOrName(d.Character, referenceLines)
 	if characterSubjectTagByName(d.Character, referenceLines) == "" && voice != "" {
@@ -3615,7 +3622,7 @@ func renderStructuredDialogue(d models.Dialogue, speakerID int, referenceLines [
 	var rendered string
 	switch d.SpeechType {
 	case "narration":
-		rendered = h3NarratorLead + " <d>[Chinese] " + text + "</d>. " + h3NarrationClosedLips(referenceLines)
+		rendered = h3NarratorLead(speakerID) + " <d>[Chinese] " + text + "</d>. " + h3NarrationClosedLips(referenceLines)
 	case "monologue":
 		rendered = speaker + " delivers an internal monologue: <d>[Chinese] " + text + "</d> while their lips remain completely closed."
 	case "offscreen_dialogue":
@@ -3700,7 +3707,7 @@ func renderDialogueRange(d models.Dialogue, speakerID int, referenceLines []stri
 	var clause string
 	switch d.SpeechType {
 	case "narration":
-		clause = h3NarratorLead + " <d>[Chinese] " + fragment + "</d>. " + h3NarrationClosedLips(referenceLines)
+		clause = h3NarratorLead(speakerID) + " <d>[Chinese] " + fragment + "</d>. " + h3NarrationClosedLips(referenceLines)
 	case "monologue":
 		clause = speaker + " delivers an internal monologue: <d>[Chinese] " + fragment + "</d> while their lips remain completely closed."
 	case "offscreen_dialogue":
@@ -4012,13 +4019,12 @@ func (s *ProjectService) compileSceneStructuredDialogue(sc *models.Scene, body s
 	return appendStructuredDialogueToShots(body, dubs, referenceLines, shots)
 }
 
-func appendClauseToFirstH3Shot(body, clause string) string {
-	matches := h3ShotMarkerPattern.FindAllStringSubmatchIndex(body, -1)
-	if len(matches) < 2 {
-		return strings.TrimSpace(body) + " " + strings.TrimSpace(clause)
+func insertClauseAtFirstH3ShotStart(body, clause string) string {
+	match := h3ShotMarkerPattern.FindStringIndex(body)
+	if len(match) != 2 {
+		return strings.TrimSpace(clause) + " " + strings.TrimSpace(body)
 	}
-	cut := matches[1][0]
-	return strings.TrimSpace(body[:cut]) + " " + strings.TrimSpace(clause) + "\n" + strings.TrimSpace(body[cut:])
+	return strings.TrimSpace(body[:match[1]]) + " " + strings.TrimSpace(clause) + " " + strings.TrimSpace(body[match[1]:])
 }
 
 func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLines []string) string {
@@ -4042,8 +4048,8 @@ func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLine
 		text = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(text, "<scenetrans>", ""), "<cutoff>", ""))
 		switch d.SpeechType {
 		case "narration":
-			clause := h3NarratorTimelineLead + h3NarratorLead + " <d>[Chinese] " + text + "</d>. " + h3NarrationClosedLips(referenceLines)
-			body = appendClauseToFirstH3Shot(body, clause)
+			clause := h3NarratorTimelineLead + h3NarratorLead(speakerIDs[i]) + " <d>[Chinese] " + text + "</d>. " + h3NarrationClosedLips(referenceLines)
+			body = insertClauseAtFirstH3ShotStart(body, clause)
 		case "monologue":
 			body += " " + speaker + " delivers an internal monologue: <d>[Chinese] " + text + "</d> while their lips remain completely closed."
 		case "offscreen_dialogue":
@@ -4258,7 +4264,7 @@ func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 		expected.WriteString(canonicalDialogueText(d.Text))
 		if d.SpeechType == "narration" || isNarrationSpeaker(d.Character) {
 			narratorSeparation := strings.Contains(fullPrompt, "is not the narrator") || strings.Contains(fullPrompt, "none of them is the narrator") || strings.Contains(fullPrompt, "No visible character speaks or lip-syncs to this narration")
-			if !strings.Contains(fullPrompt, h3NarratorLead) || !narratorSeparation {
+			if speakerIDs[i] <= 0 || !strings.Contains(fullPrompt, h3NarratorLead(speakerIDs[i])) || !strings.Contains(fullPrompt, h3NarratorTimelineLead) || !narratorSeparation {
 				return false
 			}
 			continue
