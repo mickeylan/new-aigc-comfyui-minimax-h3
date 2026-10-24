@@ -1661,7 +1661,7 @@ var h3SlowMotionCuePattern = regexp.MustCompile(`(?i)slow[ -]?motion|bullet time
 var h3RealTimeCuePattern = regexp.MustCompile(`(?i)real[- ]time|at full speed|immediately|instantly|rapidly|swiftly|in one sharp motion|实时速度|立即|瞬间|迅速`)
 var h3SoloSwordPracticeCuePattern = regexp.MustCompile(`单人剑术演练|练习剑术|练剑|以[^，。；]{0,20}为剑`)
 var h3VagueSwordPracticePattern = regexp.MustCompile(`(?i)\bmartial forms?\b|\bbrandish(?:es|ing)?\b|\bdanc(?:e|es|ing)\b|\bsweep(?:s|ing)?\s+(?:broad\s+)?(?:blade-like\s+)?strokes?\b|\bcontinuous(?:ly)?\s+(?:full-body\s+)?spin(?:s|ning)?\b|\brepeated(?:ly)?\s+circular\s+(?:swing|motion)s?\b`)
-var h3SwordTechniquePattern = regexp.MustCompile(`(?i)diagonal\s+(?:rising\s+)?cut|rising\s+cut|straight\s+thrust|horizontal\s+cut|downward\s+cut|upward\s+cut|cross-body\s+cut|forward\s+thrust|slash(?:es|ing)?|parr(?:y|ies)|lunge(?:s|ing)?`)
+var h3SwordTechniquePattern = regexp.MustCompile(`(?i)(?:rising\s+diagonal|diagonal\s+rising|diagonal\s+upward|upward\s+diagonal)\s+(?:cut|slash)|diagonal\s+(?:cut|slash)|rising\s+(?:cut|slash)|(?:straight|forward)\s+thrust|thrust(?:s|ing)?(?:\s+(?:the|a)\s+[^,.;]{1,40})?\s+straight\s+forward|(?:horizontal|downward|upward|cross-body)\s+(?:cut|slash)|slash(?:es|ing)?|parr(?:y|ies)|lunge(?:s|ing)?`)
 var h3SwordFootworkPattern = regexp.MustCompile(`(?i)\b(?:left|right)\s+foot\b|\bsteps?\s+(?:forward|back|left|right|sideways)\b|\bshifts?\s+(?:her|his|their)\s+weight\b|\bweight\s+(?:onto|over)\b|\bstabiliz(?:e|es)\s+(?:her|his|their)\s+weight\b`)
 var h3SwordFinishPattern = regexp.MustCompile(`(?i)\bfinish(?:es)?\b|\bend(?:s)?\s+(?:upright|in|with)\b|\bfinal\s+stance\b|\bbranch\s+angled\s+down\b|\breturns?\s+to\s+(?:a\s+)?(?:ready|guard|resting)\s+stance\b`)
 var h3SwordProhibitionPattern = regexp.MustCompile(`(?i)\b(?:no|never|without|avoid(?:s|ing)?|forbid(?:s|ding)?|must\s+not|does\s+not|do\s+not|rather\s+than|instead\s+of)\b`)
@@ -1767,6 +1767,7 @@ func restoreAuthoritativeSubjectTags(candidate, authoritative string) string {
 
 func normalizeGeneratedH3Action(value string, allowSubjects bool, expectedShotCount int, mode h3SceneMode, referenceLines []string, canonicalSceneContent, authoritativeAction string) string {
 	value = regexp.MustCompile(`【\s*Subject\s+([0-9]+)\s*】`).ReplaceAllString(value, "<Subject $1>")
+	value = regexp.MustCompile(`(?i)<?Subject\s+([0-9]+)>?`).ReplaceAllString(value, "<Subject $1>")
 	value = resolveH3VisualConflicts(coalesceDuplicateH3Shots(stripPromptDialogueNarration(normalizeVideoActionPrompt(strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(value), "```"), "```"))))))
 	value = englishH3ShotField(value)
 	// Models sometimes copy the documentation placeholder literally (for example
@@ -2222,6 +2223,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 					break
 				}
 				failure = actionTrustIssues(candidate)
+				log.Printf("[h3-combat-repair] scene=%d attempt=%d issues=%q candidate=%q", sc.ID, attempt, failure, candidate)
 				failures = append(failures, fmt.Sprintf("第%d次：%s", attempt, failure))
 				failedDraft = candidate
 			}

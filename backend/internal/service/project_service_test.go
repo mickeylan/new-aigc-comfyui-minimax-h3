@@ -2033,12 +2033,20 @@ func TestSoloSwordPracticeRejectsAbstractMartialForms(t *testing.T) {
 	if !h3SoloSwordPracticeContractMatches(source, concreteWithProhibition) {
 		t.Fatalf("negative anti-spin clause was misread as affirmative vague choreography: %s", concreteWithProhibition)
 	}
+	providerVariant := "[Shot 1] Subject 1 begins at full speed, steps the right foot forward half a pace while the branch travels from lower right to upper left in one rising diagonal cut. With the left foot planted for support, Subject 1 thrusts the branch straight forward once, then completes one horizontal cut and enters an upright final stance with the branch angled toward the ground."
+	if !h3SoloSwordPracticeContractMatches(source, providerVariant) {
+		t.Fatalf("concrete provider wording was rejected by an overly narrow detector: %s", providerVariant)
+	}
 }
 
 func TestCombatRepairRebindsChineseCharacterNameBeforeEnglishValidation(t *testing.T) {
 	got := useSubjectTags("[Shot 1] 上官若琳 steps forward with her right foot and performs one diagonal rising cut at full real-time speed.", []string{"- <Picture 1>：角色「上官若琳」四视图"})
 	if strings.Contains(got, "上官若琳") || !strings.Contains(got, "<Subject 1>") {
 		t.Fatalf("combat repair character was not rebound before language validation: %s", got)
+	}
+	got = normalizeGeneratedH3Action("[Shot 1] Subject 1 steps forward at full real-time speed.", true, 1, h3SceneAction, nil, "[Shot 1] 动作", "[Shot 1] <Subject 1> 动作")
+	if !strings.Contains(got, "<Subject 1>") || strings.Contains(got, "Subject 1 steps") {
+		t.Fatalf("loose Subject tag was not normalized: %s", got)
 	}
 }
 
