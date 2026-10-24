@@ -1832,24 +1832,24 @@ func TestExplicitCombatSceneModeForcesCombatTemplate(t *testing.T) {
 	}
 }
 
-func TestSoloSwordTimingFinishesTechniquesInFirstHalf(t *testing.T) {
+func TestSoloSwordTimingKeepsMovementActiveUntilFinalStance(t *testing.T) {
 	source := "上官若琳以桃枝为剑进行单人剑术演练，依次斜撩、直刺、横削。"
-	fast := "[Shot 1] one diagonal cut. [Shot 2] At 00:02.000, one thrust. [Shot 3] At 00:04.000, one horizontal cut and final stance."
-	if !h3SoloSwordTimingContractMatches(source, fast, 14, 3) {
-		t.Fatalf("compact real-time sword sequence was rejected: %s", fast)
+	active := "[Shot 1] one diagonal cut. [Shot 2] At 00:03.125, one thrust. [Shot 3] At 00:06.250, one point-sword transition. [Shot 4] At 00:09.375, one horizontal cut and final stance."
+	if !h3SoloSwordTimingContractMatches(source, active, 14, 4) {
+		t.Fatalf("continuous real-time sword sequence was rejected: %s", active)
 	}
-	slow := "[Shot 1] one diagonal cut. [Shot 2] At 00:04.667, one thrust. [Shot 3] At 00:09.334, one horizontal cut and final stance."
-	if h3SoloSwordTimingContractMatches(source, slow, 14, 3) {
-		t.Fatalf("slow evenly stretched sword sequence passed: %s", slow)
+	premature := "[Shot 1] one diagonal cut. [Shot 2] At 00:02.000, one thrust. [Shot 3] At 00:04.000, one point-sword transition. [Shot 4] At 00:06.000, one horizontal cut and final stance."
+	if h3SoloSwordTimingContractMatches(source, premature, 14, 4) {
+		t.Fatalf("premature final stance passed: %s", premature)
 	}
-	instruction := combatInternalShotTimingInstruction(source, 14, 3)
-	for _, want := range []string{"00:02.000", "00:04.000", "6.0秒前", "不得放慢单招"} {
+	instruction := combatInternalShotTimingInstruction(source, 14, 4)
+	for _, want := range []string{"00:03.125", "00:06.250", "00:09.375", "12.5秒", "不得提前站桩", "V7基础过渡"} {
 		if !strings.Contains(instruction, want) {
 			t.Fatalf("timing instruction missing %q: %s", want, instruction)
 		}
 	}
-	summary := enforceSoloSwordTimingSummary(source, fast, 14, 3)
-	for _, want := range []string{"finish by 00:06.000", "From 00:06.000 until the 14.0-second end", "no technique repeats", "natural breathing"} {
+	summary := enforceSoloSwordTimingSummary(source, active, 14, 4)
+	for _, want := range []string{"active through 00:12.500", "narration never freezes or slows", "final 1.5 seconds"} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("deterministic timing summary missing %q: %s", want, summary)
 		}
@@ -1857,9 +1857,9 @@ func TestSoloSwordTimingFinishesTechniquesInFirstHalf(t *testing.T) {
 }
 
 func TestSwordPracticeSuggestsInternalShotsAndRejectsMismatchedLegacyPlan(t *testing.T) {
-	content := "上官若琳右脚前踏完成斜撩，收至右肩后直刺，随后横移完成水平削击并收势。"
-	if got := suggestedUnstructuredH3ShotCount(content, 14); got != 3 {
-		t.Fatalf("suggested shots=%d, want 3", got)
+	content := "上官若琳以桃枝为剑进行单人剑术演练，右脚前踏完成斜撩，收至右肩后直刺，随后横移完成水平削击并收势。"
+	if got := suggestedUnstructuredH3ShotCount(content, 14); got != 4 {
+		t.Fatalf("suggested shots=%d, want 4", got)
 	}
 	legacy := []models.Shot{{Duration: 1.5, Description: "花中舞动"}}
 	if structuredShotsCoverScene(legacy, 14) {
@@ -3463,7 +3463,7 @@ func TestH3ReferencePromptKeepsEnvironmentAndOpeningFrameOutOfSubjects(t *testin
 		"- <Picture 2>：场景「天阙宗玉霄宫梵心桃花林」参考图",
 		"- <Picture 3>：上一镜确认尾帧（本镜 0.00 秒唯一开始画面）",
 	}
-	scene := &models.Scene{Duration: 14, VideoPrompt: "[Shot 1] <Subject 1> performs one diagonal cut. <Subject 2> remains visible in the background.\n[Shot 2] At 00:04.667, <Subject 1> thrusts forward.\n[Shot 3] At 00:09.333, <Subject 1> finishes upright. The narrator says in an off-screen voiceover: while their lips remain completely closed."}
+	scene := &models.Scene{Duration: 14, VideoPrompt: "[Shot 1] <Subject 1> performs one diagonal cut.\n[Shot 2] At 00:04.667, <Subject 1> thrusts forward.\n[Shot 3] At 00:09.333, <Subject 1> finishes upright. The narrator says in an off-screen voiceover: while their lips remain completely closed."}
 	dubs := []models.Dialogue{{Character: "旁白", SpeechType: "dialogue", Text: "上官若琳，天阙宗宗主之女。"}}
 	prompt := buildMiniMaxH3RefPrompt(scene, nil, dubs, lines)
 	for _, want := range []string{
@@ -3483,6 +3483,13 @@ func TestH3ReferencePromptKeepsEnvironmentAndOpeningFrameOutOfSubjects(t *testin
 	}
 	if strings.Count(prompt, h3NarratorLead) != 1 {
 		t.Fatalf("narration was duplicated or omitted: %s", prompt)
+	}
+	detail := h3PromptSection(prompt, "detailed_description:")
+	if narratorAt, shot2At := strings.Index(detail, h3NarratorTimelineLead), strings.Index(detail, "[Shot 2]"); narratorAt < 0 || shot2At < 0 || narratorAt > shot2At {
+		t.Fatalf("narration did not begin in Shot 1 before the first cut: %s", prompt)
+	}
+	if strings.Contains(detail, "The narrator says in an off-screen voiceover:") {
+		t.Fatalf("stale ambiguous narrator wrapper survived normalization: %s", detail)
 	}
 }
 

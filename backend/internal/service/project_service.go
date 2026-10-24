@@ -1715,9 +1715,9 @@ func enforceSoloSwordTimingSummary(source, value string, duration float64, shotC
 	if shotCount < 2 || !h3SoloSwordPracticeCuePattern.MatchString(source) {
 		return value
 	}
-	actionEnd := math.Min(6, math.Max(4.5, duration*0.45))
-	contract := fmt.Sprintf("All specified sword techniques finish by %s at normal real-time speed. From %s until the %.1f-second end, no technique repeats and no new technique begins; the practitioner maintains the final stance with natural breathing while clothing and airborne petals settle physically.", formatH3Timestamp(actionEnd), formatH3Timestamp(actionEnd), normalizeSceneDuration(duration))
-	if strings.Contains(value, "All specified sword techniques finish by ") {
+	activeEnd := math.Max(4.5, duration-1.5)
+	contract := fmt.Sprintf("Grounded footwork, weight transfer, and controlled peach-branch sword motion remain visibly active through %s at normal real-time speed; narration never freezes or slows the practitioner. Only during the final %.1f seconds does she complete the final stance while clothing and airborne petals settle physically.", formatH3Timestamp(activeEnd), normalizeSceneDuration(duration)-activeEnd)
+	if strings.Contains(value, "narration never freezes or slows the practitioner") {
 		return value
 	}
 	return strings.TrimSpace(value) + " " + contract
@@ -1742,8 +1742,9 @@ func h3SoloSwordTimingContractMatches(source, value string, duration float64, sh
 	if seen != shotCount {
 		return false
 	}
-	actionEnd := math.Min(6, math.Max(4.5, duration*0.45))
-	return lastStart <= actionEnd*float64(shotCount-1)/float64(shotCount)+0.35
+	activeEnd := math.Max(4.5, duration-1.5)
+	expectedLastStart := activeEnd * float64(shotCount-1) / float64(shotCount)
+	return lastStart >= expectedLastStart-0.75 && lastStart <= expectedLastStart+0.75
 }
 
 func h3SoloSwordPracticeContractMatches(source, value string) bool {
@@ -1938,6 +1939,9 @@ func suggestedUnstructuredH3ShotCount(content string, duration float64) int {
 		}
 	}
 	if combatBeats >= 3 {
+		if duration >= 12 && h3SoloSwordPracticeCuePattern.MatchString(content) {
+			return 4
+		}
 		return 3
 	}
 	if combatBeats == 2 {
@@ -1970,13 +1974,13 @@ func combatInternalShotTimingInstruction(content string, duration float64, shotC
 	if shotCount < 2 || !h3SoloSwordPracticeCuePattern.MatchString(content) {
 		return ""
 	}
-	actionEnd := math.Min(6, math.Max(4.5, duration*0.45))
-	cut1 := actionEnd / float64(shotCount)
+	activeEnd := math.Max(4.5, duration-1.5)
+	interval := activeEnd / float64(shotCount)
 	cuts := make([]string, 0, shotCount-1)
 	for i := 1; i < shotCount; i++ {
-		cuts = append(cuts, formatH3Timestamp(cut1*float64(i)))
+		cuts = append(cuts, formatH3Timestamp(interval*float64(i)))
 	}
-	return fmt.Sprintf("单人演武不得把每式平均拉满总时长：后续内部Shot依次在%s附近切入，全部既定剑路必须在约%.1f秒前以真实速度完成；余下时间只用于连续收势、稳定呼吸、衣袖与花瓣物理余波及保持最终构图，不得放慢单招、重复招式、转圈或新增剑路。", strings.Join(cuts, "、"), actionEnd)
+	return fmt.Sprintf("单人演武不得把每式平均拉成慢动作，也不得提前站桩等待旁白结束：后续内部Shot依次在%s附近切入，持续可见的落地步法、重心交换和兵器控制必须延续到约%.1f秒；最后约1.5秒才进入最终收势。保留Scene明确的斜撩、直刺、横削及其顺序，并可在这些既定剑路之间补充与桃枝剑术相容、且不改变剧情结果的V7基础过渡（点剑、劈剑、上架格挡、弓步/虚步/进步转换中择其必要者），不得重复招式、连续转圈、舞蹈化摆动、法术、命中、伤害或胜负。", strings.Join(cuts, "、"), activeEnd)
 }
 
 func structuredShotsCoverScene(shots []models.Shot, duration float64) bool {
@@ -2296,7 +2300,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 			issues = append(issues, "单人剑术被压缩成抽象套路；必须保留至少两式明确剑路、步法/重心与最终收势，禁止连续旋转和舞蹈化动作")
 		}
 		if !h3SoloSwordTimingContractMatches(canonicalSceneContent, value, normalizeSceneDuration(sc.Duration), expectedShotCount) {
-			issues = append(issues, "单人剑术时间分配过慢；既定剑路必须在前半段以真实速度完成，剩余时间只承载收势与物理余波")
+			issues = append(issues, "单人剑术时间线不连续；旁白期间必须持续真实速度的步法、重心和剑路，最后约1.5秒才收势，禁止提前站桩或平均拉慢单招")
 		}
 		seen := map[int]bool{}
 		for _, marker := range h3ShotMarkerPattern.FindAllStringSubmatch(value, -1) {
@@ -2632,6 +2636,7 @@ var (
 	h3DialogueClausePattern        = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}]{1,20})(?:\s*\(S[0-9]+\))?(?:画外音|内心独白|说|说道|问道|答道)[：:]?\s*<d>.*?</d>[。.]?`)
 	h3EnglishDialogueClausePattern = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}][\p{Han}A-Za-z0-9，,· \t]{0,80})\s*\(S[0-9]+\)\s*(?:says(?:\s+in\s+an\s+off-screen\s+voiceover|\s+on\s+screen|\s+on\s+screen\s+with\s+lip\s+movement\s+synchronized\s+only\s+to\s+this\s+exact\s+text|\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice)?|delivers\s+an\s+internal\s+monologue|continues\s+speaking\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice\s+from\s+the\s+previous\s+shot|continues(?:\s+the\s+same\s+utterance)?\s+on\s+screen(?:\s+without\s+a\s+speaker\s+change)?)\s*:\s*<d>.*?</d>(?:\s+while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?(?:\s+The\s+voice\s+remains\s+exclusively\s+[^;\n]+;\s+no\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+No\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+(?:<Subject\s+[0-9]+>(?:,\s*)?)+\s+are\s+silent\s+listeners\s+and\s+keep\s+their\s+lips\s+completely\s+closed\s+throughout\s+this\s+shot[.]?)?`)
 	h3NarratorClausePattern        = regexp.MustCompile(`(?is)(?:\bThe\s+narrator(?:\s*\(S[0-9]+\))?\s+says|\bA\s+separate\s+unseen\s+third-person\s+narrator[^:]*\s+narrates)\s+in\s+an\s+off-screen\s+voiceover:\s*(?:<d>.*?</d>\s*)?(?:while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?(?:\s+(?:<Subject\s+[0-9]+>[^.]*|No\s+visible\s+character[^.]*))[.]?`)
+	h3BareNarratorPattern          = regexp.MustCompile(`(?is)\bThe\s+narrator(?:\s*\(S[0-9]+\))?\s+says\s+in\s+an\s+off-screen\s+voiceover:\s*(?:while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?`)
 	dialogueNarrationPattern       = regexp.MustCompile(`(?:<Subject [0-9]+>(?:\s*\(S[0-9]+\))?(?:说道|说|问道|答道)[：:]?\s*|[\p{Han}]{1,12}(?:\s*\(S[0-9]+\))?(?:说道|问道|答道|说[：:])\s*)`)
 	orphanSpeakerPattern           = regexp.MustCompile(`(?:<Subject [0-9]+>|[\p{Han}]{1,20})\s*\(S[0-9]+\)[。.]?`)
 	quotedDialoguePattern          = regexp.MustCompile(`[“\"][^”\"]*[”\"]`)
@@ -2646,6 +2651,7 @@ func stripPromptDialogueNarration(prompt string) string {
 	text = h3DialogueClausePattern.ReplaceAllString(text, "")
 	text = h3EnglishDialogueClausePattern.ReplaceAllString(text, "")
 	text = h3NarratorClausePattern.ReplaceAllString(text, "")
+	text = h3BareNarratorPattern.ReplaceAllString(text, "")
 	text = h3DialogueTagPattern.ReplaceAllString(text, "")
 	text = quotedDialoguePattern.ReplaceAllString(text, "")
 	text = dialogueNarrationPattern.ReplaceAllString(text, "")
@@ -3558,6 +3564,7 @@ func isNarrationSpeaker(name string) bool {
 }
 
 const h3NarratorLead = "A separate unseen third-person narrator, independent of every visible character, narrates in an off-screen voiceover:"
+const h3NarratorTimelineLead = "The narration begins immediately at 0.00 seconds and continues uninterrupted across subsequent shot cuts. "
 
 func h3NarrationClosedLips(referenceLines []string) string {
 	tags := []string{}
@@ -4004,6 +4011,15 @@ func (s *ProjectService) compileSceneStructuredDialogue(sc *models.Scene, body s
 	return appendStructuredDialogueToShots(body, dubs, referenceLines, shots)
 }
 
+func appendClauseToFirstH3Shot(body, clause string) string {
+	matches := h3ShotMarkerPattern.FindAllStringSubmatchIndex(body, -1)
+	if len(matches) < 2 {
+		return strings.TrimSpace(body) + " " + strings.TrimSpace(clause)
+	}
+	cut := matches[1][0]
+	return strings.TrimSpace(body[:cut]) + " " + strings.TrimSpace(clause) + "\n" + strings.TrimSpace(body[cut:])
+}
+
 func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLines []string) string {
 	valid := validSceneDialogues(dubs)
 	if len(valid) == 0 {
@@ -4025,7 +4041,8 @@ func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLine
 		text = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(text, "<scenetrans>", ""), "<cutoff>", ""))
 		switch d.SpeechType {
 		case "narration":
-			body += " " + h3NarratorLead + " <d>[Chinese] " + text + "</d>. " + h3NarrationClosedLips(referenceLines)
+			clause := h3NarratorTimelineLead + h3NarratorLead + " <d>[Chinese] " + text + "</d>. " + h3NarrationClosedLips(referenceLines)
+			body = appendClauseToFirstH3Shot(body, clause)
 		case "monologue":
 			body += " " + speaker + " delivers an internal monologue: <d>[Chinese] " + text + "</d> while their lips remain completely closed."
 		case "offscreen_dialogue":
