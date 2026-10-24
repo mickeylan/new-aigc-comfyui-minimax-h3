@@ -2695,6 +2695,21 @@ func TestNormalizeSavedH3AudioReplacesAmbiguousMusicNA(t *testing.T) {
 	}
 }
 
+func TestNarrationAudioContractDoesNotRequireSpeakerID(t *testing.T) {
+	dubs := []models.Dialogue{{Character: "旁白", SpeechType: "dialogue", Text: "上官若琳，天阙宗宗主之女。"}}
+	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] <Subject 1> practices sword forms.", Duration: 8}, nil, dubs, []string{"- <Picture 1>：角色「上官若琳」四视图"})
+	if strings.Contains(prompt, "(S0)") || strings.Contains(prompt, "(S1)") {
+		t.Fatalf("narrator occupied a character speaker ID: %s", prompt)
+	}
+	if !videoAudioContractMatches(prompt, dubs) {
+		t.Fatalf("valid narrator contract was rejected: %s", prompt)
+	}
+	broken := strings.Replace(prompt, "The narrator says in an off-screen voiceover:", "An unidentified person says:", 1)
+	if videoAudioContractMatches(broken, dubs) {
+		t.Fatalf("unidentified narration incorrectly passed: %s", broken)
+	}
+}
+
 func TestLegacyNAudioContractIsRejectedBeforeSubmission(t *testing.T) {
 	dubs := []models.Dialogue{{Character: "林夏", Text: "你来了"}}
 	legacy := "detailed_description:\n[Shot 1] 林夏说道：<d>[中文] 你来了</d>\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"

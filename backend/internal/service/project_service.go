@@ -4146,7 +4146,13 @@ func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 	var expected strings.Builder
 	for i, d := range valid {
 		expected.WriteString(canonicalDialogueText(d.Text))
-		if !strings.Contains(fullPrompt, fmt.Sprintf("(S%d)", speakerIDs[i])) {
+		if d.SpeechType == "narration" || isNarrationSpeaker(d.Character) {
+			if !strings.Contains(fullPrompt, "The narrator says in an off-screen voiceover:") {
+				return false
+			}
+			continue
+		}
+		if speakerIDs[i] <= 0 || !strings.Contains(fullPrompt, fmt.Sprintf("(S%d)", speakerIDs[i])) {
 			return false
 		}
 	}
