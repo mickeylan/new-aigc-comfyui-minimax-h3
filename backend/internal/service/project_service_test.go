@@ -3481,7 +3481,7 @@ func TestH3ReferencePromptKeepsEnvironmentAndOpeningFrameOutOfSubjects(t *testin
 			t.Fatalf("prompt retained invalid non-character Subject or narrator binding %q: %s", bad, prompt)
 		}
 	}
-	if strings.Count(prompt, h3NarratorLead) != 1 {
+	if strings.Count(prompt, h3NarratorLead) != 1 || strings.Count(prompt, h3NarratorTimelineLead) != 1 {
 		t.Fatalf("narration was duplicated or omitted: %s", prompt)
 	}
 	detail := h3PromptSection(prompt, "detailed_description:")

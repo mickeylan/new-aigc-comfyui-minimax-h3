@@ -2652,6 +2652,7 @@ func stripPromptDialogueNarration(prompt string) string {
 	text = h3EnglishDialogueClausePattern.ReplaceAllString(text, "")
 	text = h3NarratorClausePattern.ReplaceAllString(text, "")
 	text = h3BareNarratorPattern.ReplaceAllString(text, "")
+	text = strings.ReplaceAll(text, h3NarratorTimelineLead, "")
 	text = h3DialogueTagPattern.ReplaceAllString(text, "")
 	text = quotedDialoguePattern.ReplaceAllString(text, "")
 	text = dialogueNarrationPattern.ReplaceAllString(text, "")
