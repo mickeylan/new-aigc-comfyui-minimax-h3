@@ -105,6 +105,17 @@ func TestGeneratedMusicCueNormalizesStructuredCaptionFields(t *testing.T) {
 	}
 }
 
+func TestParseGeneratedMusicCueSheetExtractsEnvelopeAndEscapesControls(t *testing.T) {
+	raw := "draft follows\n```json\n{\"cues\":[{\"kind\":\"bgm\",\"start_time\":0,\"end_time\":10,\"caption\":{\"global_metadata\":\"cinematic\",\"vocal_details\":\"Fully instrumental\",\"arrangement\":\"Intro:\nstrings\"}}]}\n```\nend"
+	generated, err := parseGeneratedMusicCueSheet(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(generated.Cues) != 1 || !strings.Contains(generated.Cues[0].Caption.Arrangement, "strings") {
+		t.Fatalf("generated=%+v", generated)
+	}
+}
+
 func TestMusicCueSheetValidation(t *testing.T) {
 	db := newMusicCueTestDB(t)
 	svc := NewMusicCueService(db)

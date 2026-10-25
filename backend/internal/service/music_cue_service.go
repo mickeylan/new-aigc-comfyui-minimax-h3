@@ -423,7 +423,21 @@ func trimJSONEnvelope(raw string) string {
 	raw = strings.TrimPrefix(raw, "```json")
 	raw = strings.TrimPrefix(raw, "```")
 	raw = strings.TrimSuffix(raw, "```")
-	return strings.TrimSpace(raw)
+	raw = strings.TrimSpace(raw)
+	start, end := strings.Index(raw, "{"), strings.LastIndex(raw, "}")
+	if start >= 0 && end > start {
+		return strings.TrimSpace(raw[start : end+1])
+	}
+	return raw
+}
+
+func parseGeneratedMusicCueSheet(raw string) (*generatedMusicCueSheet, error) {
+	data := escapeJSONControlCharsInStrings([]byte(trimJSONEnvelope(raw)))
+	var generated generatedMusicCueSheet
+	if err := json.Unmarshal(data, &generated); err != nil {
+		return nil, err
+	}
+	return &generated, nil
 }
 
 func (s *MusicCueService) episodeContext(projectID uint, episodeN int) (string, error) {
@@ -497,9 +511,19 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 	if err != nil {
 		return nil, err
 	}
-	var generated generatedMusicCueSheet
-	if err := json.Unmarshal([]byte(trimJSONEnvelope(raw)), &generated); err != nil {
-		return nil, fmt.Errorf("AI配乐方案JSON解析失败: %w", err)
+	generated, parseErr := parseGeneratedMusicCueSheet(raw)
+	if parseErr != nil {
+		repairSystem := baseSystem + ` The previous response was malformed. Repair syntax and schema only. Preserve every cue's meaning, times, musical identity and exclusions. Return one strict JSON object and nothing else.`
+		repairUser := "Exact JSON parse error:\n" + parseErr.Error() + "\n\nMalformed response to repair:\n" + raw
+		repaired, repairErr := s.skills.ChatWithConfiguredOrFallbackSkill(projectID, models.SkillStageMusicCueSheet, "music-cue-sheet-generate", s.provider, repairSystem, repairUser, map[string]string{"episode_context": context, "user_requirements": requirements})
+		if repairErr != nil {
+			return nil, fmt.Errorf("AI配乐方案JSON解析失败: %v；自动修复失败: %w", parseErr, repairErr)
+		}
+		generated, parseErr = parseGeneratedMusicCueSheet(repaired)
+		if parseErr != nil {
+			return nil, fmt.Errorf("AI配乐方案自动修复后仍无法解析: %w", parseErr)
+		}
+		raw = repaired
 	}
 	if len(generated.Cues) == 0 {
 		return nil, fmt.Errorf("AI未返回任何配乐Cue")
