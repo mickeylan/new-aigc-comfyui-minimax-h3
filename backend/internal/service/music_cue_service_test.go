@@ -116,6 +116,30 @@ func TestParseGeneratedMusicCueSheetExtractsEnvelopeAndEscapesControls(t *testin
 	}
 }
 
+func TestMusicCaptionNegativeConstraintsDoNotTriggerForbiddenStyleOrVocalErrors(t *testing.T) {
+	caption := musicStructuredCaption{
+		GlobalMetadata: "East Asian fantasy story score with lyrical theme and deep scenic atmosphere. No Hollywood trailer music, EDM, jazz groove, or pop song structure.",
+		VocalDetails:   "Fully instrumental; no singing, choir, humming, spoken word, or English lyrics.",
+		Arrangement:    "Spacious phrasing follows the story environment; 禁止英雄铜管固定音型，不使用摇滚鼓组，不采用流行歌曲律动。",
+		LyricsInput:    "[Intro]\n[Instrumental]\n[Outro]",
+	}
+	encoded, err := json.Marshal(caption)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateMusicCaptionJSON(string(encoded)); err != nil {
+		t.Fatalf("negative constraints were treated as affirmative content: %v", err)
+	}
+	caption.Arrangement = "Heroic brass ostinato drives a Hollywood trailer climax."
+	if !musicCaptionHasForbiddenWesternStyle(caption) {
+		t.Fatal("affirmative forbidden style was not detected")
+	}
+	caption.Arrangement = "A singer performs an English vocal melody."
+	if !musicCaptionHasVocalContent(caption) {
+		t.Fatal("affirmative vocal content was not detected")
+	}
+}
+
 func TestMusicCaptionValidationRequiresOrientalIdentityAndRejectsLyrics(t *testing.T) {
 	valid := `{"global_metadata":"East Asian fantasy story score with a lyrical theme","vocal_details":"Fully instrumental; no vocals.","arrangement":"Spacious phrasing and poetic restraint follow the story environment without prescribing instruments.","lyrics_input":"[Intro]\n[Instrumental]\n[Outro]"}`
 	if err := validateMusicCaptionJSON(valid); err != nil {

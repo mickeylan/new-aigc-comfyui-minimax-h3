@@ -412,15 +412,37 @@ func musicCaptionHasOrientalIdentity(caption musicStructuredCaption) bool {
 	return false
 }
 
-func musicCaptionHasForbiddenWesternStyle(caption musicStructuredCaption) bool {
-	text := strings.ToLower(caption.GlobalMetadata + "\n" + caption.Arrangement)
-	markers := []string{"hollywood trailer", "trailer music", "heroic brass", "brass ostinato", "western fantasy fanfare", "edm", "electronic dance", "trap beat", "rock drums", "jazz groove", "jazz harmony", "pop song", "pop groove", "gospel", "four-on-the-floor"}
-	for _, marker := range markers {
-		if strings.Contains(text, marker) {
+var musicCaptionClauseSeparator = regexp.MustCompile(`[。；;.!?！？\n]+`)
+
+func musicCaptionClauseIsNegated(clause string) bool {
+	clause = strings.ToLower(strings.TrimSpace(clause))
+	negations := []string{"no ", "not ", "without ", "avoid ", "exclude ", "excluding ", "prohibit", "forbid", "never ", "禁止", "不要", "避免", "排除", "拒绝", "不使用", "不采用", "不得", "不能", "无任何"}
+	for _, negation := range negations {
+		if strings.Contains(clause, negation) {
 			return true
 		}
 	}
 	return false
+}
+
+func musicCaptionHasAffirmativeMarker(text string, markers []string) bool {
+	for _, clause := range musicCaptionClauseSeparator.Split(strings.ToLower(text), -1) {
+		if musicCaptionClauseIsNegated(clause) {
+			continue
+		}
+		for _, marker := range markers {
+			if strings.Contains(clause, marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func musicCaptionHasForbiddenWesternStyle(caption musicStructuredCaption) bool {
+	text := caption.GlobalMetadata + "\n" + caption.Arrangement
+	markers := []string{"hollywood trailer", "trailer music", "heroic brass", "brass ostinato", "western fantasy fanfare", "edm", "electronic dance", "trap beat", "rock drums", "jazz groove", "jazz harmony", "pop song", "pop groove", "gospel", "four-on-the-floor"}
+	return musicCaptionHasAffirmativeMarker(text, markers)
 }
 
 func musicCaptionHasVocalContent(caption musicStructuredCaption) bool {
@@ -431,14 +453,9 @@ func musicCaptionHasVocalContent(caption musicStructuredCaption) bool {
 			return true
 		}
 	}
-	text := strings.ToLower(caption.GlobalMetadata + "\n" + caption.Arrangement)
-	positiveVocal := []string{" lead vocal", " singer", " singing", " sung", " choir", " chanting", " humming", " whisper vocal", " spoken word", " english lyrics", " vocal melody"}
-	for _, marker := range positiveVocal {
-		if strings.Contains(text, marker) {
-			return true
-		}
-	}
-	return false
+	text := caption.GlobalMetadata + "\n" + caption.Arrangement
+	positiveVocal := []string{"lead vocal", "singer", "singing", "sung", "choir", "chanting", "humming", "whisper vocal", "spoken word", "english lyrics", "vocal melody"}
+	return musicCaptionHasAffirmativeMarker(text, positiveVocal)
 }
 
 func validateMusicCaptionJSON(raw string) error {
