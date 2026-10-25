@@ -242,6 +242,9 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	// 角色语音（预设音色 / 参考语音复刻）
 	r.GET("/api/projects/:id/voice-presets", svc.HandleListVoicePresets)
 	r.GET("/api/projects/:id/voice-presets/audio", svc.HandleGetVoicePresetAudio)
+	r.GET("/api/projects/:id/voice-library/custom", svc.HandleListCustomVoices)
+	r.POST("/api/projects/:id/characters/:cid/voice/custom", svc.HandleSelectCharacterCustomVoice)
+	r.POST("/api/projects/:id/narrator/voice/custom", svc.HandleSelectNarratorCustomVoice)
 	r.POST("/api/projects/:id/characters/:cid/voice/preset", svc.HandleSelectCharacterVoicePreset)
 	r.POST("/api/projects/:id/narrator/voice/preset", svc.HandleSelectNarratorVoicePreset)
 	r.POST("/api/projects/:id/narrator/voice/upload", svc.HandleUploadNarratorVoice)

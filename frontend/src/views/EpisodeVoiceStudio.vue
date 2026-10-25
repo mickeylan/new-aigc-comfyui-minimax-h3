@@ -64,6 +64,14 @@
               <label class="btn btn-sm btn-ghost">上传自定义<input type="file" accept="audio/*" hidden @change="uploadRoleVoice(role,$event)" /></label>
             </div>
             <div v-if="rolePresetSelection[role.name]" class="role-preset-preview"><audio :src="api.voicePresetAudioUrl(projectId, rolePresetSelection[role.name])" controls preload="none"></audio><small>官方Demo未分类；请试听后自行决定男声、女声或角色归属。</small></div>
+            <div class="role-voice-actions">
+              <select v-model="roleCustomSelection[role.name]" class="input input-sm" aria-label="浏览用户自定义音色">
+                <option value="">浏览用户自定义音色库</option>
+                <option v-for="voice in customVoices" :key="voice.file" :value="voice.file">{{ voice.label }}{{ voice.bound_to?.length ? ' · 已绑定 '+voice.bound_to.join('、') : '' }}</option>
+              </select>
+              <button class="btn btn-sm btn-secondary" :disabled="!roleCustomSelection[role.name] || voiceSavingRole===role.name" @click="applyRoleCustomVoice(role)">绑定该音色</button>
+            </div>
+            <div v-if="selectedCustomVoice(role.name)" class="role-preset-preview"><audio :src="selectedCustomVoice(role.name).url" controls preload="none"></audio><small>用户自定义参考音频，可重新绑定给任意角色或旁白。</small></div>
             <router-link v-if="role.missing && role.character_id" :to="`/projects/${projectId}`" class="role-config-link">也可前往角色资料上传固定参考音频</router-link>
           </article>
         </div>
@@ -205,7 +213,9 @@ const candidateDialogueId = ref(0)
 const candidateLoadingId = ref(0)
 const audioCandidates = ref([])
 const voicePresets = ref([])
+const customVoices = ref([])
 const rolePresetSelection = reactive({})
+const roleCustomSelection = reactive({})
 const voiceSavingRole = ref('')
 const mix = reactive({ subtitles: true, dub: true, nativeVolume: 1, dialogueVolume: 1, bgmVolume: 1 })
 let pollTimer = 0
@@ -232,6 +242,7 @@ const audioSource = d => {
   if (!value || /^https?:\/\//.test(value) || value.startsWith('/')) return value
   return api.dubAudioUrl(projectId, value)
 }
+const selectedCustomVoice = role => customVoices.value.find(voice => voice.file === roleCustomSelection[role])
 const rawRoles = computed(() => studio.value.roles || studio.value.role_summary || studio.value.cast || [])
 const roles = computed(() => {
   if (rawRoles.value.length) return rawRoles.value.map(r => ({ character_id: r.character_id || 0, name: r.name || r.character || r.role || '未指定说话人', count: r.dialogue_count ?? r.count ?? 0, voice: r.voice_name || r.voice || r.voice_id || '', missing: r.voice_configured === false || r.missing_voice === true }))
@@ -288,12 +299,15 @@ async function loadBatchStatus({ quiet = false } = {}) {
     if (!quiet && e.response?.status !== 404) toast.error(e.response?.data?.error || '加载批量任务失败')
   }
 }
-async function loadVoicePresets() {
-  try { const { data } = await api.voicePresets(projectId); voicePresets.value = Array.isArray(data) ? data : [] }
-  catch (e) { toast.error(e.response?.data?.error || '加载预置音色失败') }
+async function loadVoiceLibraries() {
+  try {
+    const [presets, custom] = await Promise.all([api.voicePresets(projectId), api.customVoiceLibrary(projectId)])
+    voicePresets.value = Array.isArray(presets.data) ? presets.data : []
+    customVoices.value = Array.isArray(custom.data) ? custom.data : []
+  } catch (e) { toast.error(e.response?.data?.error || '加载音色库失败') }
 }
 async function refresh({ quiet = false } = {}) {
-  await Promise.all([load({ quiet }), loadBatchStatus({ quiet }), voicePresets.value.length ? Promise.resolve() : loadVoicePresets()])
+  await Promise.all([load({ quiet }), loadBatchStatus({ quiet }), loadVoiceLibraries()])
 }
 async function applyRolePreset(role) {
   const file = rolePresetSelection[role.name]
@@ -306,6 +320,19 @@ async function applyRolePreset(role) {
     toast.success(`${role.name}固定参考音色已更新；旧候选已过期`)
     await refresh({ quiet: true })
   } catch (e) { toast.error(e.response?.data?.error || e.message || '设置预置音色失败') }
+  finally { voiceSavingRole.value = '' }
+}
+async function applyRoleCustomVoice(role) {
+  const file = roleCustomSelection[role.name]
+  if (!file) return
+  voiceSavingRole.value = role.name
+  try {
+    if (role.character_id) await api.selectCharacterCustomVoice(projectId, role.character_id, file)
+    else if (role.name === '旁白') await api.selectNarratorCustomVoice(projectId, file)
+    else throw new Error('该发声者没有可绑定的角色档案')
+    toast.success(`${role.name}已绑定用户自定义音色；旧候选已过期`)
+    await refresh({ quiet: true })
+  } catch (e) { toast.error(e.response?.data?.error || e.message || '绑定自定义音色失败') }
   finally { voiceSavingRole.value = '' }
 }
 async function uploadRoleVoice(role, event) {

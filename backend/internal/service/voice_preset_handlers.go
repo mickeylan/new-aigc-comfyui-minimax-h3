@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"comfyui-console/internal/models"
 	"github.com/gin-gonic/gin"
@@ -26,6 +27,15 @@ type voicePreset struct {
 	Language string   `json:"language"`
 	Tags     []string `json:"tags"`
 	URL      string   `json:"url,omitempty"`
+}
+
+type customVoiceReference struct {
+	File      string    `json:"file"`
+	Label     string    `json:"label"`
+	URL       string    `json:"url"`
+	Size      int64     `json:"size"`
+	BoundTo   []string  `json:"bound_to"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 func (s *Service) voicePresetRoot() string {
@@ -126,6 +136,108 @@ func (s *Service) saveVoicePresetForProject(projectID uint, presetFile string) (
 		return "", err
 	}
 	return filepath.Base(stored), nil
+}
+
+func (s *Service) projectCustomVoiceFile(projectID uint, name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || filepath.Base(name) != name || strings.HasPrefix(name, "voice_preset_") {
+		return "", fmt.Errorf("自定义音色文件无效")
+	}
+	var upload models.UploadFile
+	if err := s.DB.Where("task_id = ? AND type = ? AND name = ?", fmt.Sprint(projectID), "audio", name).First(&upload).Error; err != nil {
+		return "", fmt.Errorf("自定义音色不存在")
+	}
+	lower := strings.ToLower(name)
+	if !strings.HasPrefix(lower, "voice_") || strings.HasPrefix(lower, "dub_") {
+		return "", fmt.Errorf("该文件不是参考音色")
+	}
+	return name, nil
+}
+
+func (s *Service) HandleListCustomVoices(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	var uploads []models.UploadFile
+	if err := s.DB.Where("task_id = ? AND type = ? AND name LIKE ?", fmt.Sprint(p.ID), "audio", "voice_%").Order("created_at DESC").Find(&uploads).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	var characters []models.Character
+	s.DB.Where("project_id = ? AND voice_ref <> ''", p.ID).Find(&characters)
+	bindings := map[string][]string{}
+	for _, character := range characters {
+		bindings[character.VoiceRef] = append(bindings[character.VoiceRef], character.Name)
+	}
+	if p.NarratorVoiceRef != "" {
+		bindings[p.NarratorVoiceRef] = append(bindings[p.NarratorVoiceRef], "旁白")
+	}
+	seen := map[string]bool{}
+	out := []customVoiceReference{}
+	for _, upload := range uploads {
+		if seen[upload.Name] || strings.HasPrefix(upload.Name, "voice_preset_") {
+			continue
+		}
+		if _, err := s.projectCustomVoiceFile(p.ID, upload.Name); err != nil {
+			continue
+		}
+		seen[upload.Name] = true
+		out = append(out, customVoiceReference{File: upload.Name, Label: upload.Name, URL: fmt.Sprintf("/api/input/%d/%s", p.ID, upload.Name), Size: upload.Size, BoundTo: bindings[upload.Name], CreatedAt: upload.CreatedAt})
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (s *Service) HandleSelectCharacterCustomVoice(c *gin.Context) {
+	ch, ok := s.loadCharacter(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		File string `json:"file"`
+	}
+	if c.ShouldBindJSON(&req) != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	name, err := s.projectCustomVoiceFile(ch.ProjectID, req.File)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := s.DB.Model(&models.Character{}).Where("id = ? AND project_id = ?", ch.ID, ch.ProjectID).Updates(map[string]any{"voice_ref": name, "voice": "", "voice_id": "", "voice_model": ""}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	_ = invalidateCharacterDialogueAudio(s.DB, ch.ProjectID, ch.Name, "角色自定义参考音色已切换")
+	s.Projects.PushProject(nil)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "voice_ref": name})
+}
+
+func (s *Service) HandleSelectNarratorCustomVoice(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		File string `json:"file"`
+	}
+	if c.ShouldBindJSON(&req) != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	name, err := s.projectCustomVoiceFile(p.ID, req.File)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := s.DB.Model(&models.Project{}).Where("id = ?", p.ID).Update("narrator_voice_ref", name).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	_ = invalidateCharacterDialogueAudio(s.DB, p.ID, "旁白", "旁白自定义参考音色已切换")
+	s.Projects.PushProject(nil)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "voice_ref": name})
 }
 
 func (s *Service) HandleSelectCharacterVoicePreset(c *gin.Context) {

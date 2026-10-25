@@ -42,6 +42,10 @@ test('声音工作台提供角色摘要、筛选、进度及逐句表演参数�
   assert.match(view, /selectNarratorVoicePreset/)
   assert.match(view, /uploadNarratorVoice/)
   assert.match(view, /上传自定义/)
+  assert.match(view, /浏览用户自定义音色库/)
+  assert.match(view, /selectCharacterCustomVoice/)
+  assert.match(view, /selectNarratorCustomVoice/)
+  assert.match(view, /用户自定义参考音频，可重新绑定给任意角色或旁白/)
 })
 
 test('声音工作台支持单句、批量生成及音频播放', () => {
