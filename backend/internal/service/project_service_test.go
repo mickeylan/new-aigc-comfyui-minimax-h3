@@ -1990,6 +1990,13 @@ func TestSoloSwordMotionFlowRejectsEndpointPoseSequence(t *testing.T) {
 	if !h3SoloSwordMotionFlowContractMatches(source, continuous) {
 		t.Fatalf("continuous sword traversal was rejected: %s", continuous)
 	}
+	reportedCandidate := `[Shot 1] At full real-time speed, she drives the branch once from her lower right to her upper left in a clear diagonal lift. Without pausing, she retracts it along the rising line to her right shoulder and shifts her weight for the forward action.
+[Shot 2] At 00:03.125, she drives the peach branch straight forward in one thrust. She immediately draws the branch back from full extension, folds it inward across her body, and carries the recovered motion into the next cut.
+[Shot 3] At 00:06.250, she carries the branch through one level horizontal cut from left to right. She follows through once, then retracts the branch inward and continues directly into the closing footwork without resetting.
+[Shot 4] At 00:09.375, she lowers the branch and finishes upright in the final stance.`
+	if !h3SoloSwordMotionFlowContractMatches(source, reportedCandidate) {
+		t.Fatalf("reported valid repair candidate was rejected by wording-sensitive validation: %s", reportedCandidate)
+	}
 }
 
 func TestCombatRepairRetriesWithExactValidationFailures(t *testing.T) {

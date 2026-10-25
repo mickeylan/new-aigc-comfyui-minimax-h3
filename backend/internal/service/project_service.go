@@ -1676,7 +1676,7 @@ var h3SlowMotionCuePattern = regexp.MustCompile(`(?i)slow[ -]?motion|bullet time
 var h3RealTimeCuePattern = regexp.MustCompile(`(?i)real[- ]time|at full speed|immediately|instantly|rapidly|swiftly|in one sharp motion|实时速度|立即|瞬间|迅速`)
 var h3SoloSwordPracticeCuePattern = regexp.MustCompile(`单人剑术演练|练习剑术|练剑|以[^，。；]{0,20}为剑`)
 var h3VagueSwordPracticePattern = regexp.MustCompile(`(?i)\bmartial forms?\b|\bbrandish(?:es|ing)?\b|\bdanc(?:e|es|ing)\b|\bsweep(?:s|ing)?\s+(?:broad\s+)?(?:blade-like\s+)?strokes?\b|\bcontinuous(?:ly)?\s+(?:full-body\s+)?spin(?:s|ning)?\b|\brepeated(?:ly)?\s+circular\s+(?:swing|motion)s?\b`)
-var h3SwordTechniquePattern = regexp.MustCompile(`(?i)(?:rising\s+diagonal|diagonal\s+rising|diagonal\s+upward|upward\s+diagonal)\s+(?:cut|slash)|diagonal\s+(?:cut|slash)|rising\s+(?:cut|slash)|(?:straight|forward)\s+thrust|thrust(?:s|ing)?(?:\s+(?:the|a)\s+[^,.;]{1,40})?\s+straight\s+forward|(?:horizontal|downward|upward|cross-body)\s+(?:cut|slash)|slash(?:es|ing)?|parr(?:y|ies)|lunge(?:s|ing)?`)
+var h3SwordTechniquePattern = regexp.MustCompile(`(?i)(?:rising\s+diagonal|diagonal\s+rising|diagonal\s+upward|upward\s+diagonal)\s+(?:cut|slash)|diagonal\s+(?:cut|slash)|rising\s+(?:cut|slash)|cut(?:s|ting)?\s+(?:diagonally|horizontally)|(?:straight|forward)\s+thrust|thrust(?:s|ing)?(?:\s+(?:the|a)\s+[^,.;]{1,40})?\s+straight\s+forward|(?:drive|drives|driving)\s+(?:a\s+)?(?:straight\s+)?thrust\s+forward|(?:horizontal|downward|upward|cross-body)\s+(?:cut|slash)|slash(?:es|ing)?|parr(?:y|ies)|lunge(?:s|ing)?`)
 var h3DiagonalSwordPathPattern = regexp.MustCompile(`(?i)\bdiagonal\b[^.;]{0,80}\b(?:cut|slash|lift|rise|path)\b|\b(?:lower\s+right|lower-right)\b[^.;]{0,100}\b(?:upper\s+left|upper-left)\b`)
 var h3ThrustSwordPathPattern = regexp.MustCompile(`(?i)\bthrust(?:s|ing)?\b|\b(?:drive|drives|extend|extends)\b[^.;]{0,80}\b(?:straight\s+(?:ahead|forward)|forward\s+line)\b`)
 var h3HorizontalSwordPathPattern = regexp.MustCompile(`(?i)\bhorizontal\b[^.;]{0,80}\b(?:cut|slash|path|motion)\b|\b(?:left\s+to\s+right|right\s+to\s+left)\b[^.;]{0,60}\b(?:cut|slash|path|endpoint)\b`)
@@ -1684,7 +1684,7 @@ var h3SwordFootworkPattern = regexp.MustCompile(`(?i)\b(?:left|right)\s+foot\b|\
 var h3SwordFinishPattern = regexp.MustCompile(`(?i)\bfinish(?:es)?\b|\bend(?:s)?\s+(?:upright|in|with)\b|\bstands?\s+upright\b|\bcloses?\s+(?:her|his|their|the)?\s*stance\b|\bfinal\s+stance\b|\bbranch\s+angled\s+(?:down|toward(?:s)?\s+the\s+ground)\b|\blower(?:s|ing)?\s+(?:the\s+)?branch\s+(?:diagonally\s+)?toward(?:s)?\s+the\s+ground\b|\breturns?\s+to\s+(?:a\s+)?(?:ready|guard|resting)\s+stance\b`)
 var h3SwordProhibitionPattern = regexp.MustCompile(`(?i)\b(?:no|never|without|avoid(?:s|ing)?|forbid(?:s|ding)?|must\s+not|does\s+not|do\s+not|rather\s+than|instead\s+of)\b`)
 var h3SwordHeldEndpointPattern = regexp.MustCompile(`(?i)\b(?:stops?|holds?|held|remains?)\b[^.;]{0,70}\b(?:endpoint|end\s+point|extended|extension|line|position|pose|stance|tip)\b|\b(?:endpoint|end\s+point)\b[^.;]{0,40}\b(?:stops?|holds?|remains?)\b`)
-var h3SwordContinuousTraversalPattern = regexp.MustCompile(`(?i)\b(?:cuts?|slashes?|thrusts?|drives?|whips?|snaps?|slices?|sweeps?)\b[^.;]{0,100}\b(?:through|across|from|toward|forward|diagonal|horizontal)\b|\b(?:retracts?|recovers?|redirects?|reverses?|draws?)\b[^.;]{0,100}\b(?:immediately|without\s+pausing|into\s+the\s+next|carrying\s+momentum|continuous)`)
+var h3SwordTransitionPattern = regexp.MustCompile(`(?i)\b(?:immediately|without\s+(?:a\s+)?paus(?:e|ing)|continu(?:es|ing|ous(?:ly)?)|connected|directly\s+into|carr(?:y|ies|ying)|feed(?:s|ing)?\s+(?:directly\s+)?into|without\s+resetting|rather\s+than\s+resetting)\b|\b(?:retracts?|recovers?|redirects?|reverses?|draws?|brings?|folds?|shortens?)\b[^.;]{0,140}\b(?:next|motion|cut|thrust|attack\s+line|footwork|recovery|inward|shoulder|side|center|centre)`)
 
 func hasAffirmativeVagueSwordPractice(value string) bool {
 	for _, match := range h3VagueSwordPracticePattern.FindAllStringIndex(value, -1) {
@@ -1763,7 +1763,8 @@ func h3SoloSwordMotionFlowContractMatches(source, value string) bool {
 			end = matches[i+1][0]
 		}
 		segment := value[marker[1]:end]
-		if h3SwordHeldEndpointPattern.MatchString(segment) || !h3SwordContinuousTraversalPattern.MatchString(segment) {
+		hasTechnique := h3DiagonalSwordPathPattern.MatchString(segment) || h3ThrustSwordPathPattern.MatchString(segment) || h3HorizontalSwordPathPattern.MatchString(segment) || h3SwordTechniquePattern.MatchString(segment)
+		if h3SwordHeldEndpointPattern.MatchString(segment) || !hasTechnique || !h3SwordTransitionPattern.MatchString(segment) {
 			return false
 		}
 	}
