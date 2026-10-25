@@ -29,6 +29,7 @@
           {{ pipelineActive ? `第${project.pipeline_episode || activeEpN}集生成中…` : `⚡ 一键生成(第${activeEpN}集全流程)` }}
         </button>
         <button v-if="pipelineActive" class="btn btn-danger btn-sm" :disabled="busy" @click="resetGenerationState">解除卡住的生成状态</button><button class="btn btn-ghost btn-sm" :disabled="busy" @click="dubAll">🎤 全集配音</button>
+        <router-link :to="`/projects/${id()}/episodes/${activeEpN}/voice`" class="btn btn-secondary btn-sm">🎙️ 第{{ activeEpN }}集声音工作台</router-link>
         <button class="btn btn-secondary btn-sm" @click="showGeneratedHistory = true">🖼 生成图片历史</button>
         <router-link :to="`/projects/${id()}/editor`" class="btn btn-secondary btn-sm">🎬 剪辑台</router-link>
         <a class="btn btn-ghost btn-sm" :href="api.srtUrl(id(), activeEpN)" target="_blank">📜 第{{ activeEpN }}集字幕</a>
@@ -36,7 +37,7 @@
       </div>
 
     <nav class="episode-quick-nav" aria-label="快速切换分集">
-      <div class="episode-quick-current"><span>当前分集</span><strong>第{{activeEpN}}集</strong><small v-if="currentEpTitle">{{currentEpTitle}}</small></div>
+      <div class="episode-quick-current"><span>当前分集</span><strong>第{{activeEpN}}集</strong><small v-if="currentEpTitle">{{currentEpTitle}}</small><router-link :to="`/projects/${id()}/episodes/${activeEpN}/voice`" class="episode-voice-link">声音工作台</router-link></div>
       <button type="button" class="btn btn-sm btn-ghost" :disabled="activeEpN<=1" @click="selectEp(activeEpN-1)">← 上一集</button>
       <label class="episode-quick-select"><span>选择分集</span><select :value="activeEpN" class="input" @change="selectEp(Number($event.target.value))"><option v-for="episode in episodeQuickOptions" :key="episode.n" :value="episode.n">第{{episode.n}}集{{episode.title?' · '+episode.title:''}}</option></select></label>
       <button type="button" class="btn btn-sm btn-ghost" :disabled="activeEpN>=episodeUpperBound" @click="selectEp(activeEpN+1)">下一集 →</button>

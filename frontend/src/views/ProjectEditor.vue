@@ -11,6 +11,7 @@
       </div>
       <div class="head-actions">
         <router-link class="btn btn-secondary btn-sm" :to="`/projects/${id()}/episodes/${activeEpN}/screenplay`">编辑本集剧本</router-link>
+        <router-link class="btn btn-secondary btn-sm" :to="`/projects/${id()}/episodes/${activeEpN}/voice`">🎙️ 声音工作台</router-link>
         <button class="btn btn-ghost btn-sm" :disabled="epIndex <= 0" @click="switchEp(-1)">← 上一集</button>
         <button class="btn btn-ghost btn-sm" :disabled="epIndex >= epCount - 1" @click="switchEp(1)">下一集 →</button>
         <button class="btn btn-ghost btn-sm" @click="createEpisode">新建集</button>

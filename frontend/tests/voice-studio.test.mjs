@@ -6,12 +6,18 @@ const view = readFileSync(new URL('../src/views/EpisodeVoiceStudio.vue', import.
 const router = readFileSync(new URL('../src/router/index.js', import.meta.url), 'utf8')
 const api = readFileSync(new URL('../src/api/index.js', import.meta.url), 'utf8')
 const screenplay = readFileSync(new URL('../src/views/EpisodeScreenplay.vue', import.meta.url), 'utf8')
+const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
+const editor = readFileSync(new URL('../src/views/ProjectEditor.vue', import.meta.url), 'utf8')
 
-test('声音工作台路由、剧本入口与聚合接口已接通', () => {
+test('声音工作台路由、项目详情、剧本与剪辑台入口均已接通', () => {
   assert.match(router, /episodes\/:episode\/voice/)
   assert.match(router, /EpisodeVoiceStudio\.vue/)
   assert.match(screenplay, /进入声音工作台/)
   assert.match(screenplay, /episodes\/\$\{episodeN\}\/voice/)
+  assert.match(detail, /第\{\{ activeEpN \}\}集声音工作台/)
+  assert.match(detail, /episodes\/\$\{activeEpN\}\/voice/)
+  assert.match(editor, /🎙️ 声音工作台/)
+  assert.match(editor, /episodes\/\$\{activeEpN\}\/voice/)
   assert.match(api, /episodeVoiceStudio:/)
   assert.match(api, /episodes\/\$\{ep\}\/voice-studio/)
 })
