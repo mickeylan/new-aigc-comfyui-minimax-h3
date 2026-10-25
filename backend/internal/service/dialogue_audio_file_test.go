@@ -1,6 +1,8 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
@@ -70,6 +72,20 @@ func TestListDialogueAudioCandidatesMarksMismatchedAcceptedCandidateStale(t *tes
 	db.First(&sceneMix, sceneMix.ID)
 	if !sceneMix.Stale || sceneMix.IsCurrent {
 		t.Fatalf("scene mix=%+v", sceneMix)
+	}
+}
+
+func TestDialogueAudioFingerprintUsesPersistedBytesNotRelativeStoragePath(t *testing.T) {
+	data := []byte("generated FLAC bytes")
+	want := sha256.Sum256(data)
+	got, size := sceneAudioBytesSHA256(data)
+	if got != hex.EncodeToString(want[:]) || size != int64(len(data)) {
+		t.Fatalf("hash=%q size=%d", got, size)
+	}
+	// UploadManager.SaveFile returns paths such as 1/dub_52_x.flac. The hashing
+	// path must not attempt os.Open on that storage-relative value.
+	if _, _, err := sceneAudioFileSHA256("1/dub_52_x.flac"); err == nil {
+		t.Fatal("fixture unexpectedly exists; regression no longer proves relative paths are unsafe")
 	}
 }
 

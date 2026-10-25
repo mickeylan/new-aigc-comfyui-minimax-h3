@@ -7346,14 +7346,10 @@ func (s *ProjectService) syncDialogueAudioTasks() {
 					}
 				}
 			}
-			fileHash, fileSize, hashErr := sceneAudioFileSHA256(localPath)
-			if hashErr != nil {
-				s.db.Model(dialogue).Where("audio_token = ? AND audio_task_id = ?", dialogue.AudioToken, task.TaskID).Updates(map[string]any{
-					"status": "failed", "error": "配音文件内容哈希失败: " + hashErr.Error(), "audio_token": "", "audio_task_id": "", "audio_task_hash": "",
-				})
-				changed = true
-				continue
-			}
+			// SaveFile intentionally returns a ComfyUI-input-relative path (for example
+			// "1/dub_52_x.flac"), not an OS path. Hash the exact downloaded bytes that
+			// were persisted so local and SSH storage use the same immutable artifact.
+			fileHash, fileSize := sceneAudioBytesSHA256(data)
 			_, err = s.captureDialogueAudio(dialogueAudioCapture{
 				ProjectID: dialogue.ProjectID, DialogueID: dialogue.ID, Token: dialogue.AudioToken,
 				InputHash: dialogue.AudioTaskHash, Provider: "index_tts_python_comfyui",

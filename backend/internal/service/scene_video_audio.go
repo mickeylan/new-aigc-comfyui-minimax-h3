@@ -279,6 +279,11 @@ func (s *ProjectService) currentSceneAudioSnapshot(sc *models.Scene, dialogues [
 
 // sceneReviewedAudioSelection accepts one directly reviewed take or one separately reviewed
 // Scene mix whose source hash still matches every authoritative Dialogue and accepted take.
+func sceneAudioBytesSHA256(data []byte) (string, int64) {
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:]), int64(len(data))
+}
+
 func sceneAudioFileSHA256(path string) (string, int64, error) {
 	file, err := os.Open(path)
 	if err != nil {
