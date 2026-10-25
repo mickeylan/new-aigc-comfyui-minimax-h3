@@ -74,7 +74,7 @@ var musicCueIntensities = map[string]bool{
 	"soft": true, "medium": true, "intense": true, "climax": true,
 }
 
-const music3OrientalInstrumentalContract = `An East Asian fantasy sensibility is mandatory at the level of emotion and musical storytelling: a memorable lyrical theme, graceful melodic contour, spacious phrasing, poetic restraint, long-breath development, subtle mystery, and deep scenic atmosphere. Do not impose any fixed scale, fixed mode, or fixed instrument list. Choose instruments freely from the episode's dramatic function, register, pacing, and explicit user requirements; orchestra, piano, acoustic instruments, Chinese instruments, and subtle environmental or electronic textures are all optional when appropriate. No Hollywood trailer language, heroic brass ostinato, EDM, trap, rock, jazz, pop song groove, gospel, or generic Western fantasy fanfare. Fully instrumental only: absolutely no singing in any language, English vocal, spoken word, narration, chanting, choir, humming, whispering, breath vocal, vocal pad, or vocal-like texture.`
+const music3OrientalInstrumentalContract = `An East Asian classical-fantasy sensibility is mandatory at the level of emotion and musical storytelling: a memorable lyrical theme, graceful melodic contour, spacious phrasing, poetic restraint, long-breath through-composed development, subtle mystery, organic acoustic character, and deep scenic atmosphere. Do not impose any fixed scale, fixed mode, or fixed instrument list. Choose instruments freely from the episode's dramatic function, register, pacing, and explicit user requirements; orchestra, piano, acoustic instruments, Chinese instruments, and subtle environmental or electronic textures are all optional when appropriate. No Hollywood trailer language, heroic brass ostinato, EDM, trap, rock, jazz, pop song groove, gospel, or generic Western fantasy fanfare. Fully instrumental only: absolutely no singing in any language, English vocal, spoken word, narration, chanting, choir, humming, whispering, breath vocal, vocal pad, or vocal-like texture.`
 
 var musicCueMoods = map[string]bool{
 	"tension": true, "joyful": true, "mysterious": true,
@@ -178,11 +178,11 @@ func (s *MusicCueService) validateBindings(cue *models.MusicCueSheet) error {
 }
 
 func (s *MusicCueService) List(projectID uint, episodeN int) ([]models.MusicCueSheet, error) {
-	legacy := s.db.Model(&models.MusicCueSheet{}).Where("project_id = ? AND source = ? AND source_version_hash <> '' AND source_version_hash NOT LIKE ? AND stale = ?", projectID, "ai", "music3-instrumental-empty-lyrics-v5:%", false)
+	legacy := s.db.Model(&models.MusicCueSheet{}).Where("project_id = ? AND source = ? AND source_version_hash <> '' AND source_version_hash NOT LIKE ? AND stale = ?", projectID, "ai", "music3-instrumental-demucs-v6:%", false)
 	if episodeN > 0 {
 		legacy = legacy.Where("episode_n = ?", episodeN)
 	}
-	if err := legacy.Updates(map[string]any{"stale": true, "stale_reason": "旧Music 3方案未使用空lyrics纯器乐策略，请重新生成"}).Error; err != nil {
+	if err := legacy.Updates(map[string]any{"stale": true, "stale_reason": "旧Music 3方案未使用空lyrics加Vocals分离策略，请重新生成"}).Error; err != nil {
 		return nil, err
 	}
 	var cues []models.MusicCueSheet
@@ -485,8 +485,8 @@ func validateMusicCaptionJSON(raw string) error {
 }
 
 func musicCueSourceHash(context, requirements string) string {
-	hash := sha256.Sum256([]byte("music3-instrumental-empty-lyrics-v5\n" + context + "\nUSER_REQUIREMENTS:\n" + strings.TrimSpace(requirements)))
-	return "music3-instrumental-empty-lyrics-v5:" + hex.EncodeToString(hash[:])
+	hash := sha256.Sum256([]byte("music3-instrumental-demucs-v6\n" + context + "\nUSER_REQUIREMENTS:\n" + strings.TrimSpace(requirements)))
+	return "music3-instrumental-demucs-v6:" + hex.EncodeToString(hash[:])
 }
 
 func trimJSONEnvelope(raw string) string {

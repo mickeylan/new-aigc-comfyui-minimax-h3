@@ -41,7 +41,7 @@ func TestMusic3SegmentTemplateRendersOfficialNodes(t *testing.T) {
 	for _, node := range tpl.Workflow {
 		classes[node.ClassType] = true
 	}
-	for _, className := range []string{"MiniMaxMusic3TextEncode", "EmptyMiniMaxMusic3LatentAudio", "KSampler", "VAEDecodeAudioTiled", "SaveAudio"} {
+	for _, className := range []string{"MiniMaxMusic3TextEncode", "EmptyMiniMaxMusic3LatentAudio", "KSampler", "VAEDecodeAudioTiled", "AudioSeparation", "AudioCombine", "SaveAudio"} {
 		if !classes[className] {
 			t.Fatalf("missing official node %s", className)
 		}
@@ -78,7 +78,7 @@ func TestMusic3StoryContractDoesNotMandateScaleModeOrInstrument(t *testing.T) {
 			t.Fatalf("contract missing %q", required)
 		}
 	}
-	if !strings.HasPrefix(musicCueSourceHash("ctx", "req"), "music3-instrumental-empty-lyrics-v5:") {
+	if !strings.HasPrefix(musicCueSourceHash("ctx", "req"), "music3-instrumental-demucs-v6:") {
 		t.Fatal("music policy version is not bound into source hash")
 	}
 }

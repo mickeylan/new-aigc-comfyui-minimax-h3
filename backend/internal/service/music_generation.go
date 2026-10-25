@@ -16,7 +16,7 @@ import (
 
 const (
 	music3EpisodeSegmentTemplate = "minimax_music_3_episode_segment"
-	music3Provider               = "minimax_music_3_comfyui_instrumental_v3"
+	music3Provider               = "minimax_music_3_comfyui_demucs_v4"
 	maxMusic3SegmentSeconds      = 300.0
 )
 
@@ -82,8 +82,8 @@ func (s *ProjectService) StartMusic3Cue(projectID, cueID uint, seed int64) (*mod
 	if cue.ReviewStatus != "approved" || cue.Stale || !cue.Enabled {
 		return nil, fmt.Errorf("配乐Cue必须已审核通过、启用且未过期")
 	}
-	if !strings.HasPrefix(cue.SourceVersionHash, "music3-instrumental-empty-lyrics-v5:") {
-		return nil, fmt.Errorf("配乐Cue来自旧Music 3策略；请重新生成AI配乐方案，新策略使用空lyrics防止模型自行演唱")
+	if !strings.HasPrefix(cue.SourceVersionHash, "music3-instrumental-demucs-v6:") {
+		return nil, fmt.Errorf("配乐Cue来自旧Music 3策略；请重新生成AI配乐方案，新策略使用空lyrics并在生成后分离丢弃Vocals")
 	}
 	duration := musicCueDuration(&cue)
 	if duration < 5 || duration > maxMusic3SegmentSeconds {

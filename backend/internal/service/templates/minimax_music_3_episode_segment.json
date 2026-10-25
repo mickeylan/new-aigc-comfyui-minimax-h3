@@ -1,7 +1,7 @@
 {
   "name": "MiniMax Music 3 整集配乐分段",
   "code": "minimax_music_3_episode_segment",
-  "description": "使用官方MiniMax Music 3节点生成已审核的整集配乐分段；每段最长300秒，纯器乐，输出FLAC供试听审核和整集合并。",
+  "description": "使用官方MiniMax Music 3节点生成整集配乐分段，再以Hybrid Demucs丢弃Vocals并合并Bass/Drums/Other为纯器乐候选；每段最长300秒。",
   "inputs": [
     {"key":"caption","type":"string","label":"Structured Caption","required":true},
     {"key":"lyrics","type":"string","label":"结构标签","required":true,"default":"[Intro]\n[Instrumental]\n[Outro]"},
@@ -20,6 +20,9 @@
     "6": {"class_type":"EmptyMiniMaxMusic3LatentAudio","inputs":{"seconds":["4",1],"batch_size":1}},
     "7": {"class_type":"KSampler","inputs":{"model":["1",0],"positive":["4",0],"negative":["5",0],"latent_image":["6",0],"seed":"{{seed}}","steps":30,"cfg":1.7,"sampler_name":"euler","scheduler":"simple","denoise":1}},
     "8": {"class_type":"VAEDecodeAudioTiled","inputs":{"samples":["7",0],"vae":["3",0],"tile_size":1536,"overlap":64}},
-    "9": {"class_type":"SaveAudio","inputs":{"audio":["8",0],"filename_prefix":"music3/episode_segment_{{task_id}}"}}
+    "9": {"class_type":"SaveAudio","inputs":{"audio":["12",0],"filename_prefix":"music3/instrumental_episode_segment_{{task_id}}"}},
+    "10": {"class_type":"AudioSeparation","inputs":{"audio":["8",0],"chunk_fade_shape":"linear","chunk_length":10,"chunk_overlap":0.1}},
+    "11": {"class_type":"AudioCombine","inputs":{"audio_1":["10",0],"audio_2":["10",1],"method":"add"}},
+    "12": {"class_type":"AudioCombine","inputs":{"audio_1":["11",0],"audio_2":["10",2],"method":"add"}}
   }
 }

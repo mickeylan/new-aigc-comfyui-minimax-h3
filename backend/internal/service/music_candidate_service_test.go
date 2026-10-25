@@ -40,7 +40,7 @@ func seedMusicCandidate(t *testing.T, db *gorm.DB, projectID, cueID uint, hash, 
 	return row
 }
 
-func TestMusicCandidateListStalesPreEmptyLyricsCandidates(t *testing.T) {
+func TestMusicCandidateListStalesPreDemucsCandidates(t *testing.T) {
 	db := newMusicCandidateTestDB(t)
 	project := models.Project{Title: "music"}
 	db.Create(&project)
@@ -51,7 +51,7 @@ func TestMusicCandidateListStalesPreEmptyLyricsCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || !rows[0].Stale || rows[0].IsCurrent || !strings.Contains(rows[0].StaleReason, "空lyrics纯配乐v3") {
+	if len(rows) != 1 || !rows[0].Stale || rows[0].IsCurrent || !strings.Contains(rows[0].StaleReason, "空lyrics加Vocals分离v4") {
 		t.Fatalf("legacy candidate was not invalidated: %+v", rows)
 	}
 }
