@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -117,6 +118,32 @@ func TestDialogueComfyVoiceRefRequiresCharacterVoiceAndAllowsNarratorDefault(t *
 	voice, characterID, err = service.dialogueComfyVoiceRef(&models.Dialogue{ProjectID: project.ID, Character: "林夏", Text: "对白"})
 	if err != nil || voice != "linxia.wav" || characterID == 0 {
 		t.Fatalf("character VoiceRef resolution failed: voice=%q character=%d err=%v", voice, characterID, err)
+	}
+}
+
+func TestComfyDialogueAudioHashChangesWithProjectNarratorReference(t *testing.T) {
+	db := safetyDB(t, &models.Project{}, &models.Character{}, &models.UploadFile{})
+	project := models.Project{Title: "voice", NarratorVoiceRef: "voice_narrator_a.wav"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []models.UploadFile{
+		{TaskID: fmt.Sprint(project.ID), Type: "audio", Name: "voice_narrator_a.wav", Path: "1/voice_narrator_a.wav", Size: 100},
+		{TaskID: fmt.Sprint(project.ID), Type: "audio", Name: "voice_narrator_b.wav", Path: "1/voice_narrator_b.wav", Size: 200},
+	} {
+		if err := db.Create(&row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	service := &ProjectService{db: db, cfg: &config.Config{IndexTTS: config.IndexTTSConfig{Enabled: true, ExecutionMode: "comfyui", ComfyModelDir: "model"}}}
+	dialogue := models.Dialogue{ProjectID: project.ID, Character: "旁白", SpeechType: "dialogue", Text: "旁白", Speed: 1, Volume: 1}
+	first := service.effectiveDialogueAudioHash(dialogue)
+	if err := db.Model(&project).Update("narrator_voice_ref", "voice_narrator_b.wav").Error; err != nil {
+		t.Fatal(err)
+	}
+	second := service.effectiveDialogueAudioHash(dialogue)
+	if first == second {
+		t.Fatal("changing the project narrator reference did not change the ComfyUI input hash")
 	}
 }
 

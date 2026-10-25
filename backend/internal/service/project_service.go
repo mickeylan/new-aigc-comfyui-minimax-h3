@@ -8890,17 +8890,33 @@ func dialogueAudioHash(d models.Dialogue) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))
 }
 
+func (s *ProjectService) comfyDialogueReferenceFingerprint(d models.Dialogue) string {
+	voiceRef, _, err := s.dialogueComfyVoiceRef(&d)
+	if err != nil {
+		return "invalid-reference:" + err.Error()
+	}
+	identity := strings.TrimSpace(voiceRef)
+	if filepath.IsAbs(identity) {
+		if info, statErr := os.Stat(identity); statErr == nil {
+			identity += fmt.Sprintf("\x00%d\x00%d", info.Size(), info.ModTime().UnixNano())
+		} else {
+			identity += "\x00missing:" + statErr.Error()
+		}
+		return identity
+	}
+	var upload models.UploadFile
+	if err := s.db.Where("task_id = ? AND type = ? AND name = ?", fmt.Sprint(d.ProjectID), "audio", filepath.Base(identity)).Order("id DESC").First(&upload).Error; err == nil {
+		identity += fmt.Sprintf("\x00%s\x00%d\x00%d", upload.Path, upload.Size, upload.CreatedAt.UnixNano())
+	} else {
+		identity += "\x00unregistered"
+	}
+	return identity
+}
+
 func (s *ProjectService) effectiveDialogueAudioHash(d models.Dialogue) string {
 	if s.indexTTSExecutionMode() == "comfyui" {
-		reference := ""
-		if s.indexTTS != nil {
-			var err error
-			reference, err = s.indexTTS.ReferenceFingerprint(d)
-			if err != nil {
-				reference = "invalid-reference:" + err.Error()
-			}
-		}
-		raw := dialogueAudioHash(d) + "\x00index-tts-rust-comfyui\x00" + s.cfg.IndexTTS.ModelDir + "\x00" + s.cfg.IndexTTS.DLLPath + "\x00" + reference
+		reference := s.comfyDialogueReferenceFingerprint(d)
+		raw := dialogueAudioHash(d) + "\x00index-tts-python-comfyui\x00" + s.cfg.IndexTTS.ComfyModelDir + "\x00" + reference
 		return fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))
 	}
 	if s.indexTTSExecutionMode() == "native_local" && s.indexTTS != nil && s.indexTTS.Enabled() {

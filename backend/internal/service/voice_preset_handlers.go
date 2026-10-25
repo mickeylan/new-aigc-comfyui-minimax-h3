@@ -235,7 +235,7 @@ func (s *Service) HandleSelectNarratorCustomVoice(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	_ = invalidateCharacterDialogueAudio(s.DB, p.ID, "旁白", "旁白自定义参考音色已切换")
+	_ = invalidateNarratorDialogueAudio(s.DB, p.ID, "旁白自定义参考音色已切换")
 	s.Projects.PushProject(nil)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "voice_ref": name})
 }
@@ -289,7 +289,7 @@ func (s *Service) HandleSelectNarratorVoicePreset(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	_ = invalidateCharacterDialogueAudio(s.DB, p.ID, "旁白", "旁白预置参考音色已更新")
+	_ = invalidateNarratorDialogueAudio(s.DB, p.ID, "旁白预置参考音色已更新")
 	s.Projects.PushProject(nil)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "voice_ref": stored, "preset": req.File})
 }
@@ -331,7 +331,7 @@ func (s *Service) HandleUploadNarratorVoice(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	_ = invalidateCharacterDialogueAudio(s.DB, p.ID, "旁白", "旁白自定义参考音色已更新")
+	_ = invalidateNarratorDialogueAudio(s.DB, p.ID, "旁白自定义参考音色已更新")
 	s.Projects.PushProject(nil)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "voice_ref": stored})
 }

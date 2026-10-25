@@ -57,6 +57,9 @@ test('声音工作台提供角色摘要、筛选、进度及逐句表演参数�
   assert.match(view, /上传并设为旁白音色/)
   assert.match(view, /旁白浏览用户自定义音色库/)
   assert.match(view, /绑定为旁白音色/)
+  assert.match(view, /IndexTTS项目旁白参考音频/)
+  assert.match(view, /不会改变普通\/武戏MiniMax H3的原生旁白声音/)
+  assert.match(view, /重新生成旁白候选、试听并采用/)
 })
 
 test('声音工作台支持单句、批量生成及音频播放', () => {
