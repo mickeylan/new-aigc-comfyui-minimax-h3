@@ -34,12 +34,21 @@ func musicCandidateRouteIDs(c *gin.Context) (uint, uint, uint, bool) {
 	return uint(pid), uint(cueID), uint(candidateID), true
 }
 
-func musicCandidateResponse(projectID uint, row models.MusicCandidate) gin.H {
+func (s *Service) musicCandidateResponse(projectID uint, row models.MusicCandidate) gin.H {
 	url := ""
 	if file := strings.TrimLeft(strings.TrimSpace(row.File), "/\\"); file != "" {
 		url = fmt.Sprintf("/api/input/%d/%s", projectID, file)
 	}
-	return gin.H{"candidate": row, "audio_url": url}
+	response := gin.H{"candidate": row, "audio_url": url, "task_status": ""}
+	if row.TaskID != nil {
+		var task models.Task
+		if s.DB.First(&task, *row.TaskID).Error == nil {
+			response["task_status"] = task.Status
+			response["task_id"] = task.TaskID
+			response["task_error"] = task.Error
+		}
+	}
+	return response
 }
 
 func (s *Service) HandleGenerateMusicCandidate(c *gin.Context) {
@@ -62,7 +71,7 @@ func (s *Service) HandleGenerateMusicCandidate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusAccepted, musicCandidateResponse(projectID, *row))
+	c.JSON(http.StatusAccepted, s.musicCandidateResponse(projectID, *row))
 }
 
 func (s *Service) HandleListMusicCandidates(c *gin.Context) {
@@ -81,7 +90,7 @@ func (s *Service) HandleListMusicCandidates(c *gin.Context) {
 	}
 	items := make([]gin.H, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, musicCandidateResponse(projectID, row))
+		items = append(items, s.musicCandidateResponse(projectID, row))
 	}
 	c.JSON(http.StatusOK, items)
 }
@@ -118,7 +127,7 @@ func (s *Service) HandleReviewMusicCandidate(c *gin.Context) {
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, musicCandidateResponse(projectID, *row))
+	c.JSON(http.StatusOK, s.musicCandidateResponse(projectID, *row))
 }
 
 func (s *Service) HandleSelectMusicCandidate(c *gin.Context) {
@@ -146,7 +155,7 @@ func (s *Service) HandleSelectMusicCandidate(c *gin.Context) {
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, musicCandidateResponse(projectID, *row))
+	c.JSON(http.StatusOK, s.musicCandidateResponse(projectID, *row))
 }
 
 func (s *Service) HandleDeleteMusicCandidate(c *gin.Context) {

@@ -34,6 +34,9 @@ test('剪辑台先收集用户设想再生成并审核Music 3提示词', () => {
   assert.match(source, /每段最长300秒/)
   assert.match(source, /我已完整试听该候选/)
   assert.match(source, /generateMusicCandidate/)
+  assert.match(source, /ComfyUI生成中/)
+  assert.match(source, /等待GPU调度/)
+  assert.match(source, /loadMusicCandidates\(cue,\s*true\)/)
   assert.match(source, /selectMusicCandidate/)
 })
 

@@ -1667,6 +1667,7 @@ func (s *TaskService) StartRecovery() {
 		s.recoverStuckTasks()
 		for range ticker.C {
 			s.recoverStuckTasks()
+			s.dispatchPendingTasks()
 		}
 	}()
 }
@@ -1699,6 +1700,29 @@ func (s *TaskService) recoverStartupOrphans() {
 				log.Printf("[recover] restart task %s failed: %v", id, err)
 			}
 		}(task.TaskID)
+	}
+}
+
+// dispatchPendingTasks retries durable tasks that could not reserve a GPU when they were created.
+// Execute performs the authoritative pending->running claim, so overlapping timer ticks
+// cannot submit the same task twice. Stop on the first capacity error to preserve FIFO order.
+func (s *TaskService) dispatchPendingTasks() {
+	var tasks []models.Task
+	limit := 8
+	if s.cfg != nil && s.cfg.Comfy.GPUCount > 0 {
+		limit = s.cfg.Comfy.GPUCount
+	}
+	if err := s.db.Where("status = ?", "pending").Order("created_at, id").Limit(limit).Find(&tasks).Error; err != nil {
+		return
+	}
+	for i := range tasks {
+		taskID := tasks[i].TaskID
+		if err := s.Execute(taskID); err != nil {
+			if errors.Is(err, errNoFreeGPU) {
+				return
+			}
+			log.Printf("[queue] dispatch pending task %s failed: %v", taskID, err)
+		}
 	}
 }
 
