@@ -407,6 +407,33 @@ func (s *MusicCueService) episodeContext(projectID uint, episodeN int) (string, 
 	return string(encoded), err
 }
 
+func validateGeneratedMusicCueCoverage(cues []generatedMusicCue, total float64) error {
+	if total <= 0 {
+		return fmt.Errorf("Episode总时长无效")
+	}
+	if total > maxMusic3SegmentSeconds && len(cues) != 2 {
+		return fmt.Errorf("%.1f秒Episode必须拆成恰好两段Music 3 Cue", total)
+	}
+	if total <= maxMusic3SegmentSeconds && len(cues) != 1 {
+		return fmt.Errorf("%.1f秒Episode应生成一条整集Music 3 Cue", total)
+	}
+	cursor := 0.0
+	for i, cue := range cues {
+		if math.Abs(cue.StartTime-cursor) > 0.05 {
+			return fmt.Errorf("第%d段起点%.2f未连续承接%.2f", i+1, cue.StartTime, cursor)
+		}
+		duration := cue.EndTime - cue.StartTime
+		if duration < 5 || duration > maxMusic3SegmentSeconds {
+			return fmt.Errorf("第%d段时长%.2f秒超出5–300秒", i+1, duration)
+		}
+		cursor = cue.EndTime
+	}
+	if math.Abs(cursor-total) > 0.05 {
+		return fmt.Errorf("Music 3分段只覆盖到%.2f秒，Episode为%.2f秒", cursor, total)
+	}
+	return nil
+}
+
 func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirements string) ([]models.MusicCueSheet, error) {
 	if s.provider == nil || s.skills == nil {
 		return nil, fmt.Errorf("配乐提示词生成服务未配置")
@@ -415,7 +442,7 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 	if err != nil {
 		return nil, err
 	}
-	baseSystem := `You plan short-drama instrumental score cues and rewrite every cue for MiniMax Music 3. Output strict JSON only. Root field: cues. Each cue has kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. caption must have global_metadata,vocal_details,arrangement,lyrics_input. Music is fully instrumental: no lead vocal, spoken voice, narration, chanting, choir, humming, whispering, or vocal-like texture. Arrangement must describe section-by-section musical evolution, not merely list instruments. Preserve explicit user requirements and exclusions as highest priority. Keep dialogue space and avoid wall-to-wall music. Do not create audio or claim generation happened.`
+	baseSystem := `You plan one continuous whole-episode instrumental score and rewrite it for MiniMax Music 3. Output strict JSON only. Root field: cues. Each cue has kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. caption must have global_metadata,vocal_details,arrangement,lyrics_input. Cover the complete Episode timeline contiguously from 0 to total_duration. If total_duration is at most 300 seconds, return exactly one cue. If it exceeds 300 seconds, return exactly two contiguous cues split near a semantic turning point; each cue must be 5–300 seconds. Both segments must share the same musical theme, tonal palette, core instruments, BPM range and production identity, while the second segment develops rather than restarts the theme. Music is fully instrumental: no lead vocal, spoken voice, narration, chanting, choir, humming, whispering, or vocal-like texture. Arrangement must describe section-by-section musical evolution and leave restrained dynamic space under dialogue. Preserve explicit user requirements and exclusions as highest priority. Do not create audio or claim generation happened.`
 	baseUser := "Authoritative episode timeline JSON:\n" + context + "\n\nUser music ideas and requirements:\n" + strings.TrimSpace(requirements)
 	raw, err := s.skills.ChatWithConfiguredOrFallbackSkill(projectID, models.SkillStageMusicCueSheet, "music-cue-sheet-generate", s.provider, baseSystem, baseUser, map[string]string{"episode_context": context, "user_requirements": requirements})
 	if err != nil {
@@ -427,6 +454,15 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 	}
 	if len(generated.Cues) == 0 {
 		return nil, fmt.Errorf("AI未返回任何配乐Cue")
+	}
+	var contextMeta struct {
+		TotalDuration float64 `json:"total_duration"`
+	}
+	if err := json.Unmarshal([]byte(context), &contextMeta); err != nil {
+		return nil, fmt.Errorf("读取Episode总时长失败: %w", err)
+	}
+	if err := validateGeneratedMusicCueCoverage(generated.Cues, contextMeta.TotalDuration); err != nil {
+		return nil, err
 	}
 	rows := make([]models.MusicCueSheet, 0, len(generated.Cues))
 	err = s.db.Transaction(func(tx *gorm.DB) error {

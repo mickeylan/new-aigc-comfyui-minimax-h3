@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -39,6 +40,29 @@ func musicCandidateResponse(projectID uint, row models.MusicCandidate) gin.H {
 		url = fmt.Sprintf("/api/input/%d/%s", projectID, file)
 	}
 	return gin.H{"candidate": row, "audio_url": url}
+}
+
+func (s *Service) HandleGenerateMusicCandidate(c *gin.Context) {
+	projectID, cueID, _, ok := musicCandidateRouteIDs(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		Seed int64 `json:"seed"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil && !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	if body.Seed == 0 {
+		body.Seed = -1
+	}
+	row, err := s.Projects.StartMusic3Cue(projectID, cueID, body.Seed)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, musicCandidateResponse(projectID, *row))
 }
 
 func (s *Service) HandleListMusicCandidates(c *gin.Context) {

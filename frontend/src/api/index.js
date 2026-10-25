@@ -156,6 +156,7 @@ export const api = {
   updateMusicCue: (id, cid, data) => http.put(`/projects/${id}/music-cue-sheets/${cid}`, data),
   reviewMusicCue: (id, cid, action, reason = '') => http.post(`/projects/${id}/music-cue-sheets/${cid}/review`, { action, reason }),
   deleteMusicCue: (id, cid) => http.delete(`/projects/${id}/music-cue-sheets/${cid}`),
+  generateMusicCandidate: (id, cid, seed = -1) => http.post(`/projects/${id}/music-cue-sheets/${cid}/generate`, { seed }),
   musicCandidates: (id, cid) => http.get(`/projects/${id}/music-cue-sheets/${cid}/candidates`),
   reviewMusicCandidate: (id, cid, mid, data) => http.post(`/projects/${id}/music-cue-sheets/${cid}/candidates/${mid}/review`, data),
   selectMusicCandidate: (id, cid, mid, data) => http.post(`/projects/${id}/music-cue-sheets/${cid}/candidates/${mid}/select`, data),

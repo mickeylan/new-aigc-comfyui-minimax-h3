@@ -177,7 +177,8 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/music-cue-sheets", svc.HandleCreateMusicCueSheet)
 	r.PUT("/api/projects/:id/music-cue-sheets/:cid", svc.HandleUpdateMusicCueSheet)
 	r.POST("/api/projects/:id/music-cue-sheets/:cid/review", svc.HandleReviewMusicCueSheet)
-	// 候选接口只管理未来生成结果；没有真实工作流前不提供生成、重试或分支路由。
+	// Music 3候选由已审核Cue显式生成，完成后保留为待试听候选，不自动采用。
+	r.POST("/api/projects/:id/music-cue-sheets/:cid/generate", svc.HandleGenerateMusicCandidate)
 	r.GET("/api/projects/:id/music-cue-sheets/:cid/candidates", svc.HandleListMusicCandidates)
 	r.POST("/api/projects/:id/music-cue-sheets/:cid/candidates/:mid/review", svc.HandleReviewMusicCandidate)
 	r.POST("/api/projects/:id/music-cue-sheets/:cid/candidates/:mid/select", svc.HandleSelectMusicCandidate)

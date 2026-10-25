@@ -6744,6 +6744,7 @@ func (s *ProjectService) CancelSceneVideo(p *models.Project, sc *models.Scene) e
 
 func (s *ProjectService) syncGenerationOutputs() {
 	s.syncDialogueAudioTasks()
+	s.syncMusic3Candidates()
 	s.syncCharacterPortraits()
 	s.syncAssetImages()
 	if s.characterLooks != nil {
