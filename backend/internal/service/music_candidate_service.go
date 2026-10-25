@@ -39,6 +39,13 @@ func (s *MusicCandidateService) List(projectID, cueID uint) ([]models.MusicCandi
 	if _, err := s.cue(projectID, cueID); err != nil {
 		return nil, err
 	}
+	// Candidates generated before the strict oriental/instrumental policy may contain
+	// Westernized scoring or vocals and must be regenerated rather than reviewed.
+	if err := s.db.Model(&models.MusicCandidate{}).
+		Where("project_id = ? AND music_cue_sheet_id = ? AND provider = ? AND stale = ?", projectID, cueID, "minimax_music_3_comfyui", false).
+		Updates(map[string]any{"stale": true, "stale_reason": "旧Music 3候选不符合东方纯器乐v2契约，请重新生成", "is_current": false}).Error; err != nil {
+		return nil, err
+	}
 	var rows []models.MusicCandidate
 	err := s.db.Where("project_id = ? AND music_cue_sheet_id = ?", projectID, cueID).
 		Order("is_current DESC, created_at DESC, id DESC").Find(&rows).Error

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"comfyui-console/internal/models"
@@ -37,6 +38,22 @@ func seedMusicCandidate(t *testing.T, db *gorm.DB, projectID, cueID uint, hash, 
 		t.Fatal(err)
 	}
 	return row
+}
+
+func TestMusicCandidateListStalesPreOrientalPolicyCandidates(t *testing.T) {
+	db := newMusicCandidateTestDB(t)
+	project := models.Project{Title: "music"}
+	db.Create(&project)
+	cue := seedApprovedMusicCue(t, db, project.ID, "source")
+	row := models.MusicCandidate{ProjectID: project.ID, MusicCueSheetID: cue.ID, SourceVersionHash: cue.SourceVersionHash, Provider: "minimax_music_3_comfyui", FileSHA256: strings.Repeat("a", 64), FileSize: 10, File: "old.flac"}
+	db.Create(&row)
+	rows, err := NewMusicCandidateService(db).List(project.ID, cue.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || !rows[0].Stale || rows[0].IsCurrent || !strings.Contains(rows[0].StaleReason, "东方纯器乐v2") {
+		t.Fatalf("legacy candidate was not invalidated: %+v", rows)
+	}
 }
 
 func TestMusicCandidateRequiresMatchingApprovedCueAndPlaybackEvidence(t *testing.T) {

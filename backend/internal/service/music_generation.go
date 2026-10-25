@@ -16,7 +16,7 @@ import (
 
 const (
 	music3EpisodeSegmentTemplate = "minimax_music_3_episode_segment"
-	music3Provider               = "minimax_music_3_comfyui"
+	music3Provider               = "minimax_music_3_comfyui_oriental_v2"
 	maxMusic3SegmentSeconds      = 300.0
 )
 
