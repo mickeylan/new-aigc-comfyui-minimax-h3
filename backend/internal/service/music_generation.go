@@ -46,6 +46,9 @@ func compileMusic3Caption(raw string) (string, string, error) {
 	if !musicCaptionHasOrientalIdentity(musicStructuredCaption(caption)) {
 		return "", "", fmt.Errorf("仙侠整集配乐缺少东方旋律和中国民族器乐身份，请重新生成Cue")
 	}
+	if musicCaptionHasForbiddenWesternStyle(musicStructuredCaption(caption)) {
+		return "", "", fmt.Errorf("仙侠整集配乐含西洋预告片、EDM、摇滚、爵士或流行歌曲化指令，请重新生成Cue")
+	}
 	if musicCaptionHasVocalContent(musicStructuredCaption(caption)) {
 		return "", "", fmt.Errorf("整集配乐包含歌词或人声意图，请重新生成Cue")
 	}

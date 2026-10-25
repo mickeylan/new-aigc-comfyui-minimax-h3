@@ -121,7 +121,7 @@ func TestMusicCaptionValidationRequiresOrientalIdentityAndRejectsLyrics(t *testi
 	if err := validateMusicCaptionJSON(valid); err != nil {
 		t.Fatal(err)
 	}
-	western := `{"global_metadata":"Hollywood fantasy trailer","vocal_details":"Fully instrumental","arrangement":"heroic brass and strings","lyrics_input":"[Intro]\n[Outro]"}`
+	western := `{"global_metadata":"Chinese xianxia with Hollywood trailer scale","vocal_details":"Fully instrumental","arrangement":"guqin over heroic brass ostinato","lyrics_input":"[Intro]\n[Outro]"}`
 	if err := validateMusicCaptionJSON(western); err == nil {
 		t.Fatal("Western trailer caption was accepted without oriental identity")
 	}

@@ -412,6 +412,17 @@ func musicCaptionHasOrientalIdentity(caption musicStructuredCaption) bool {
 	return false
 }
 
+func musicCaptionHasForbiddenWesternStyle(caption musicStructuredCaption) bool {
+	text := strings.ToLower(caption.GlobalMetadata + "\n" + caption.Arrangement)
+	markers := []string{"hollywood trailer", "trailer music", "heroic brass", "brass ostinato", "western fantasy fanfare", "edm", "electronic dance", "trap beat", "rock drums", "jazz groove", "jazz harmony", "pop song", "pop groove", "gospel", "four-on-the-floor"}
+	for _, marker := range markers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func musicCaptionHasVocalContent(caption musicStructuredCaption) bool {
 	lyrics := strings.ToLower(strings.TrimSpace(caption.LyricsInput))
 	for _, line := range strings.Split(lyrics, "\n") {
@@ -443,6 +454,9 @@ func validateMusicCaptionJSON(raw string) error {
 	}
 	if !musicCaptionHasOrientalIdentity(caption) {
 		return fmt.Errorf("仙侠整集配乐必须明确东方旋律语言、五声音阶或中国民族器乐身份")
+	}
+	if musicCaptionHasForbiddenWesternStyle(caption) {
+		return fmt.Errorf("仙侠整集配乐禁止好莱坞预告片、英雄铜管固定音型、EDM、Trap、摇滚、爵士或流行歌曲化表达")
 	}
 	if musicCaptionHasVocalContent(caption) {
 		return fmt.Errorf("整集配乐禁止歌词、人声演唱、合唱、吟唱、哼唱或说话内容")
