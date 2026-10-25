@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"comfyui-console/internal/models"
+	"gorm.io/gorm"
 )
 
 const (
@@ -46,6 +47,11 @@ func compileMusic3Caption(raw string) (string, string, error) {
 	}
 	compiled := "Global Metadata: " + caption.GlobalMetadata + "\n\nVocal Details: " + caption.VocalDetails + "\n\nArrangement: " + caption.Arrangement
 	return compiled, lyrics, nil
+}
+
+func pendingMusicCandidateFingerprint(taskID string) string {
+	digest := sha256.Sum256([]byte("pending-music3:" + strings.TrimSpace(taskID)))
+	return hex.EncodeToString(digest[:])
 }
 
 func musicCueDuration(cue *models.MusicCueSheet) float64 {
@@ -87,7 +93,7 @@ func (s *ProjectService) StartMusic3Cue(projectID, cueID uint, seed int64) (*mod
 		return nil, err
 	}
 	paramsJSON, _ := json.Marshal(params)
-	candidate := models.MusicCandidate{ProjectID: projectID, MusicCueSheetID: cue.ID, TaskID: &task.ID, SourceVersionHash: cue.SourceVersionHash, Provider: music3Provider, Model: "MiniMax Music 3", Seed: seed, ParamsJSON: string(paramsJSON), ReviewStatus: "pending"}
+	candidate := models.MusicCandidate{ProjectID: projectID, MusicCueSheetID: cue.ID, TaskID: &task.ID, SourceVersionHash: cue.SourceVersionHash, Provider: music3Provider, Model: "MiniMax Music 3", Seed: seed, ParamsJSON: string(paramsJSON), FileSHA256: pendingMusicCandidateFingerprint(task.TaskID), ReviewStatus: "pending"}
 	if err := s.db.Create(&candidate).Error; err != nil {
 		_ = s.tasks.CancelTask(task.TaskID)
 		return nil, err
@@ -146,6 +152,22 @@ func (s *ProjectService) syncMusic3Candidates() {
 			s.db.Model(candidate).Updates(map[string]any{"stale": true, "stale_reason": "Music 3生成期间Cue已变化"})
 			continue
 		}
-		s.db.Model(candidate).Updates(map[string]any{"file": filepath.Base(stored), "file_sha256": hex.EncodeToString(digest[:]), "file_size": int64(len(data)), "duration": musicCueDuration(&cue), "error": ""})
+		realHash := hex.EncodeToString(digest[:])
+		_ = s.db.Transaction(func(tx *gorm.DB) error {
+			var duplicate models.MusicCandidate
+			err := tx.Where("id <> ? AND project_id = ? AND music_cue_sheet_id = ? AND source_version_hash = ? AND provider = ? AND file_sha256 = ?", candidate.ID, candidate.ProjectID, candidate.MusicCueSheetID, candidate.SourceVersionHash, candidate.Provider, realHash).First(&duplicate).Error
+			if err == nil {
+				if duplicate.File == "" {
+					if updateErr := tx.Model(&duplicate).Updates(map[string]any{"file": filepath.Base(stored), "file_size": int64(len(data)), "duration": musicCueDuration(&cue), "error": ""}).Error; updateErr != nil {
+						return updateErr
+					}
+				}
+				return tx.Delete(candidate).Error
+			}
+			if err != gorm.ErrRecordNotFound {
+				return err
+			}
+			return tx.Model(candidate).Updates(map[string]any{"file": filepath.Base(stored), "file_sha256": realHash, "file_size": int64(len(data)), "duration": musicCueDuration(&cue), "error": ""}).Error
+		})
 	}
 }

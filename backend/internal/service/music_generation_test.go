@@ -60,6 +60,16 @@ func TestValidateGeneratedMusicCueCoverageSplitsLongEpisodeIntoTwoContinuousSegm
 	}
 }
 
+func TestPendingMusicCandidateFingerprintIsTaskUniqueAndStable(t *testing.T) {
+	first := pendingMusicCandidateFingerprint("task-a")
+	if first == pendingMusicCandidateFingerprint("task-b") {
+		t.Fatal("different pending Music 3 tasks share a unique-index fingerprint")
+	}
+	if first != pendingMusicCandidateFingerprint("task-a") || len(first) != 64 {
+		t.Fatalf("pending fingerprint is unstable or not SHA-256: %q", first)
+	}
+}
+
 func TestMusicCueDurationUsesExplicitOrTimelineDuration(t *testing.T) {
 	if got := musicCueDuration(&models.MusicCueSheet{Duration: 195, StartTime: 0, EndTime: 200}); got != 195 {
 		t.Fatalf("explicit duration=%v", got)
