@@ -314,18 +314,33 @@ func TestDraftMusicCuesUsesUserRequirementsAndRewriterSchema(t *testing.T) {
 	project := models.Project{Title: "仙侠短剧", Genre: "仙侠"}
 	db.Create(&project)
 	db.Create(&models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 1, Duration: 12, Title: "决战", Content: "女主迎战"})
-	provider := &stubTextProvider{response: `{"cues":[{"kind":"action","start_time":0,"end_time":12,"intensity":"climax","mood":"epic","instrument_note":"古琴与战鼓","user_requirements":"不要电子鼓","caption":{"global_metadata":"Cinematic xianxia score, escalating tension.","vocal_details":"Fully instrumental, no voices, choir, chanting or humming.","arrangement":"Intro: sparse guqin. Instrumental: strings and drums enter. Outro: sudden stop.","lyrics_input":"[Intro]\n[Instrumental]\n[Outro]"}}]}`}
+	old := models.MusicCueSheet{ProjectID: project.ID, EpisodeN: 1, Kind: "bgm", StartTime: 0, EndTime: 12, Source: "ai", Enabled: true, ReviewStatus: "approved", SourceVersionHash: "old-policy", UserRequirements: "固定古琴核心配器"}
+	if err := db.Create(&old).Error; err != nil {
+		t.Fatal(err)
+	}
+	provider := &stubTextProvider{response: `{"cues":[{"kind":"action","start_time":0,"end_time":12,"intensity":"climax","mood":"epic","instrument_note":"核心配器为古琴与战鼓","user_requirements":"AI自行增加的固定配器要求","caption":{"global_metadata":"Cinematic xianxia score, escalating tension.","vocal_details":"Fully instrumental, no voices, choir, chanting or humming.","arrangement":"Intro: sparse guqin. Instrumental: strings and drums enter. Outro: sudden stop.","lyrics_input":"[Intro]\n[Instrumental]\n[Outro]"}}]}`}
 	skills := NewSkillService(db)
 	if err := skills.InitSystemSkills(); err != nil {
 		t.Fatal(err)
 	}
 	svc := NewMusicCueService(db, provider, skills)
-	rows, err := svc.DraftEpisode(project.ID, 1, "古琴；对白时克制；不要电子鼓")
+	rows, err := svc.DraftEpisode(project.ID, 1, "符合故事环境；对白时克制；不要规定乐器")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].ReviewStatus != "draft" || !strings.Contains(rows[0].UserRequirements, "不要电子鼓") {
-		t.Fatalf("unexpected cues: %+v", rows)
+	if len(rows) != 1 || rows[0].ReviewStatus != "draft" || rows[0].UserRequirements != "符合故事环境；对白时克制；不要规定乐器" || rows[0].InstrumentNote != "" {
+		t.Fatalf("AI output became authoritative requirements/instrument mandate: %+v", rows)
+	}
+	var archived models.MusicCueSheet
+	if err := db.First(&archived, old.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if archived.Enabled || !archived.Stale {
+		t.Fatalf("old approved AI plan remains current after explicit regeneration: %+v", archived)
+	}
+	listed, err := svc.List(project.ID, 1)
+	if err != nil || len(listed) != 1 || listed[0].ID != rows[0].ID {
+		t.Fatalf("current list still includes archived AI plan: %+v err=%v", listed, err)
 	}
 	if err := validateMusicCaptionJSON(rows[0].CaptionJSON); err != nil {
 		t.Fatal(err)

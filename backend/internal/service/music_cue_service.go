@@ -178,8 +178,15 @@ func (s *MusicCueService) validateBindings(cue *models.MusicCueSheet) error {
 }
 
 func (s *MusicCueService) List(projectID uint, episodeN int) ([]models.MusicCueSheet, error) {
+	legacy := s.db.Model(&models.MusicCueSheet{}).Where("project_id = ? AND source = ? AND source_version_hash <> '' AND source_version_hash NOT LIKE ? AND stale = ?", projectID, "ai", "music3-story-environment-v4:%", false)
+	if episodeN > 0 {
+		legacy = legacy.Where("episode_n = ?", episodeN)
+	}
+	if err := legacy.Updates(map[string]any{"stale": true, "stale_reason": "旧Music 3方案仍含固定音阶或固定配器策略，请按当前故事环境重新生成"}).Error; err != nil {
+		return nil, err
+	}
 	var cues []models.MusicCueSheet
-	q := s.db.Where("project_id = ?", projectID)
+	q := s.db.Where("project_id = ? AND enabled = ?", projectID, true)
 	if episodeN > 0 {
 		q = q.Where("episode_n = ?", episodeN)
 	}
@@ -573,7 +580,7 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 	if err != nil {
 		return nil, err
 	}
-	baseSystem := `You plan one continuous whole-episode instrumental score and rewrite it for MiniMax Music 3. Output strict JSON only. Root field: cues. Each cue has kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. caption must have global_metadata,vocal_details,arrangement,lyrics_input. Cover the complete Episode timeline contiguously from 0 to total_duration. If total_duration is at most 300 seconds, return exactly one cue. If it exceeds 300 seconds, return exactly two contiguous cues split near a semantic turning point; each cue must be 5–300 seconds. Both segments must share the same musical theme, tonal palette, core instruments, BPM range and production identity, while the second segment develops rather than restarts the theme. ` + music3OrientalInstrumentalContract + ` lyrics_input may contain structural bracket tags only, never lyric words. Arrangement must describe section-by-section musical evolution and leave restrained dynamic space under dialogue. Preserve explicit user requirements and exclusions as highest priority. Do not imitate or name a copyrighted soundtrack or composer; express only high-level musical qualities. Do not create audio or claim generation happened.`
+	baseSystem := `You plan one continuous whole-episode instrumental score and rewrite it for MiniMax Music 3. Output strict JSON only. Root field: cues. Each cue has kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. caption must have global_metadata,vocal_details,arrangement,lyrics_input. Cover the complete Episode timeline contiguously from 0 to total_duration. If total_duration is at most 300 seconds, return exactly one cue. If it exceeds 300 seconds, return exactly two contiguous cues split near a semantic turning point; each cue must be 5–300 seconds. Both segments must share the same musical theme, overall timbral identity, BPM range and production identity, while the second segment develops rather than restarts the theme. instrument_note must remain empty unless the current user requirements explicitly name an instrument; never invent a core instrumentation mandate. ` + music3OrientalInstrumentalContract + ` lyrics_input may contain structural bracket tags only, never lyric words. Arrangement must describe section-by-section musical evolution and leave restrained dynamic space under dialogue. Preserve explicit user requirements and exclusions as highest priority. Do not imitate or name a copyrighted soundtrack or composer; express only high-level musical qualities. Do not create audio or claim generation happened.`
 	baseUser := "Authoritative episode timeline JSON:\n" + context + "\n\nUser music ideas and requirements:\n" + strings.TrimSpace(requirements)
 	raw, err := s.skills.ChatWithConfiguredOrFallbackSkill(projectID, models.SkillStageMusicCueSheet, "music-cue-sheet-generate", s.provider, baseSystem, baseUser, map[string]string{"episode_context": context, "user_requirements": requirements})
 	if err != nil {
@@ -608,23 +615,27 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 	rows := make([]models.MusicCueSheet, 0, len(generated.Cues))
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		var replacedIDs []uint
-		if err := tx.Model(&models.MusicCueSheet{}).Where("project_id = ? AND episode_n = ? AND source = ? AND review_status <> ?", projectID, episodeN, "ai", "approved").Pluck("id", &replacedIDs).Error; err != nil {
+		if err := tx.Model(&models.MusicCueSheet{}).Where("project_id = ? AND episode_n = ? AND source = ? AND enabled = ?", projectID, episodeN, "ai", true).Pluck("id", &replacedIDs).Error; err != nil {
 			return err
 		}
 		if len(replacedIDs) > 0 && tx.Migrator().HasTable(&models.MusicCandidate{}) {
-			if err := tx.Where("project_id = ? AND music_cue_sheet_id IN ?", projectID, replacedIDs).Delete(&models.MusicCandidate{}).Error; err != nil {
+			if err := tx.Model(&models.MusicCandidate{}).Where("project_id = ? AND music_cue_sheet_id IN ? AND stale = ?", projectID, replacedIDs, false).
+				Updates(map[string]any{"stale": true, "stale_reason": "用户重新生成了AI配乐方案", "is_current": false}).Error; err != nil {
 				return err
 			}
 		}
-		if err := tx.Where("project_id = ? AND episode_n = ? AND source = ? AND review_status <> ?", projectID, episodeN, "ai", "approved").Delete(&models.MusicCueSheet{}).Error; err != nil {
-			return err
+		if len(replacedIDs) > 0 {
+			if err := tx.Model(&models.MusicCueSheet{}).Where("project_id = ? AND id IN ?", projectID, replacedIDs).
+				Updates(map[string]any{"enabled": false, "stale": true, "stale_reason": "已被用户重新生成的AI配乐方案替换"}).Error; err != nil {
+				return err
+			}
 		}
 		for index, item := range generated.Cues {
 			caption, _ := json.Marshal(item.Caption)
 			if err := validateMusicCaptionJSON(string(caption)); err != nil {
 				return fmt.Errorf("第%d条Cue: %w", index+1, err)
 			}
-			input := MusicCueSheetInput{EpisodeN: episodeN, Kind: item.Kind, StartTime: item.StartTime, EndTime: item.EndTime, Intensity: item.Intensity, Mood: item.Mood, InstrumentNote: item.InstrumentNote, UserRequirements: strings.TrimSpace(item.UserRequirements + "\n" + requirements), CaptionJSON: string(caption), Source: "ai", Order: index + 1}
+			input := MusicCueSheetInput{EpisodeN: episodeN, Kind: item.Kind, StartTime: item.StartTime, EndTime: item.EndTime, Intensity: item.Intensity, Mood: item.Mood, InstrumentNote: "", UserRequirements: strings.TrimSpace(requirements), CaptionJSON: string(caption), Source: "ai", Order: index + 1}
 			cue, err := normalizeMusicCueSheet(projectID, input)
 			if err != nil {
 				return fmt.Errorf("第%d条Cue: %w", index+1, err)
