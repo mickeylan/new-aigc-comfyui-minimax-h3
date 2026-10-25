@@ -55,7 +55,16 @@
             <strong>{{ role.name }}</strong><span>{{ role.count }} 句</span>
             <small>{{ role.voice || '默认角色映射' }}</small>
             <span class="badge" :class="role.missing ? 'warn' : 'badge-gray'">{{ role.missing ? '音色待配置' : '音色已映射' }}</span>
-            <router-link v-if="role.missing" :to="`/projects/${projectId}`" class="role-config-link">前往角色资料上传固定参考音频</router-link>
+            <div class="role-voice-actions">
+              <select v-model="rolePresetSelection[role.name]" class="input input-sm" aria-label="选择预置参考音色">
+                <option value="">选择官方Demo（请先试听，不自动猜性别）</option>
+                <option v-for="preset in voicePresets" :key="preset.file" :value="preset.file">{{ preset.label }}</option>
+              </select>
+              <button class="btn btn-sm btn-secondary" :disabled="!rolePresetSelection[role.name] || voiceSavingRole===role.name" @click="applyRolePreset(role)">设为固定音色</button>
+              <label class="btn btn-sm btn-ghost">上传自定义<input type="file" accept="audio/*" hidden @change="uploadRoleVoice(role,$event)" /></label>
+            </div>
+            <div v-if="rolePresetSelection[role.name]" class="role-preset-preview"><audio :src="api.voicePresetAudioUrl(projectId, rolePresetSelection[role.name])" controls preload="none"></audio><small>官方Demo未分类；请试听后自行决定男声、女声或角色归属。</small></div>
+            <router-link v-if="role.missing && role.character_id" :to="`/projects/${projectId}`" class="role-config-link">也可前往角色资料上传固定参考音频</router-link>
           </article>
         </div>
         <div v-else class="card empty">本集暂无可发声角色。</div>
@@ -195,6 +204,9 @@ const srtPreview = ref(null)
 const candidateDialogueId = ref(0)
 const candidateLoadingId = ref(0)
 const audioCandidates = ref([])
+const voicePresets = ref([])
+const rolePresetSelection = reactive({})
+const voiceSavingRole = ref('')
 const mix = reactive({ subtitles: true, dub: true, nativeVolume: 1, dialogueVolume: 1, bgmVolume: 1 })
 let pollTimer = 0
 
@@ -222,7 +234,7 @@ const audioSource = d => {
 }
 const rawRoles = computed(() => studio.value.roles || studio.value.role_summary || studio.value.cast || [])
 const roles = computed(() => {
-  if (rawRoles.value.length) return rawRoles.value.map(r => ({ name: r.name || r.character || r.role || '未指定说话人', count: r.dialogue_count ?? r.count ?? 0, voice: r.voice_name || r.voice || r.voice_id || '', missing: r.voice_configured === false || r.missing_voice === true }))
+  if (rawRoles.value.length) return rawRoles.value.map(r => ({ character_id: r.character_id || 0, name: r.name || r.character || r.role || '未指定说话人', count: r.dialogue_count ?? r.count ?? 0, voice: r.voice_name || r.voice || r.voice_id || '', missing: r.voice_configured === false || r.missing_voice === true }))
   const grouped = new Map()
   for (const d of dialogues.value) { const name = speakerLabel(d); const row = grouped.get(name) || { name, count: 0, voice: d.voice || '', missing: !d.voice }; row.count++; grouped.set(name, row) }
   return [...grouped.values()]
@@ -276,8 +288,39 @@ async function loadBatchStatus({ quiet = false } = {}) {
     if (!quiet && e.response?.status !== 404) toast.error(e.response?.data?.error || '加载批量任务失败')
   }
 }
+async function loadVoicePresets() {
+  try { const { data } = await api.voicePresets(projectId); voicePresets.value = Array.isArray(data) ? data : [] }
+  catch (e) { toast.error(e.response?.data?.error || '加载预置音色失败') }
+}
 async function refresh({ quiet = false } = {}) {
-  await Promise.all([load({ quiet }), loadBatchStatus({ quiet })])
+  await Promise.all([load({ quiet }), loadBatchStatus({ quiet }), voicePresets.value.length ? Promise.resolve() : loadVoicePresets()])
+}
+async function applyRolePreset(role) {
+  const file = rolePresetSelection[role.name]
+  if (!file) return
+  voiceSavingRole.value = role.name
+  try {
+    if (role.character_id) await api.selectCharacterVoicePreset(projectId, role.character_id, file)
+    else if (role.name === '旁白') await api.selectNarratorVoicePreset(projectId, file)
+    else throw new Error('该发声者没有可绑定的角色档案')
+    toast.success(`${role.name}固定参考音色已更新；旧候选已过期`)
+    await refresh({ quiet: true })
+  } catch (e) { toast.error(e.response?.data?.error || e.message || '设置预置音色失败') }
+  finally { voiceSavingRole.value = '' }
+}
+async function uploadRoleVoice(role, event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+  voiceSavingRole.value = role.name
+  try {
+    if (role.character_id) await api.uploadCharacterVoice(projectId, role.character_id, file)
+    else if (role.name === '旁白') await api.uploadNarratorVoice(projectId, file)
+    else throw new Error('该发声者没有可绑定的角色档案')
+    toast.success(`${role.name}自定义参考音频已保存；旧候选已过期`)
+    await refresh({ quiet: true })
+  } catch (e) { toast.error(e.response?.data?.error || e.message || '上传自定义音色失败') }
+  finally { voiceSavingRole.value = '' }
 }
 async function saveDialogue(d, notify = true) {
   savingId.value = d.id
@@ -375,5 +418,5 @@ onUnmounted(() => window.clearInterval(pollTimer))
 </script>
 
 <style scoped>
-.voice-page{max-width:1240px;margin:0 auto;padding-bottom:70px}.role-config-link{font-size:12px;color:var(--primary);text-decoration:underline}.runtime-warning{max-width:760px;padding:9px 12px;border-radius:8px;color:var(--orange);background:var(--chip-bg)}.voice-head,.section-head,.dialogue-meta,.dialogue-actions,.head-actions,.filters,.mix-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.voice-head{align-items:flex-end;margin-bottom:20px}.batch-section{margin-bottom:28px}.batch-list{display:grid;gap:10px}.batch-card{display:grid;grid-template-columns:minmax(220px,1fr) auto auto;align-items:center;gap:12px}.batch-card>div{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.batch-card small{color:var(--text-secondary)}.batch-progress{justify-content:flex-end}.empty.compact{padding:20px}.voice-head h1,.section-head h2{margin:6px 0}.back{display:block;margin-bottom:8px}.summary-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}.metric{display:flex;justify-content:space-between;align-items:center}.metric span{color:var(--text-secondary)}.metric strong{font-size:26px}.metric.ready{border-left:4px solid var(--green)}.metric.pending{border-left:4px solid var(--orange)}.metric.failed{border-left:4px solid var(--red)}.metric.overflow{border-left:4px solid var(--orange)}.progress-track{height:9px;margin:12px 0 30px;border-radius:99px;overflow:hidden;background:var(--chip-bg)}.progress-track span{display:block;height:100%;background:linear-gradient(90deg,var(--indigo),var(--green));transition:width .3s}.section{margin-top:28px}.role-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}.role-card{display:grid;grid-template-columns:1fr auto;gap:7px}.role-card small,.role-card .badge{grid-column:1/-1}.dialogue-head{align-items:flex-end}.filters .input{width:auto;min-width:145px}.dialogue-list{display:grid;gap:12px}.dialogue-card{border-left:4px solid var(--border)}.dialogue-card.status-ready{border-left-color:var(--green)}.dialogue-card.status-failed{border-left-color:var(--red)}.dialogue-card.status-synthesizing{border-left-color:var(--indigo)}.dialogue-meta>div{display:flex;gap:10px;align-items:center}.dialogue-meta span,.no-audio{color:var(--text-secondary)}.state{padding:4px 9px;border-radius:99px;background:var(--chip-bg)}.state.ready{color:var(--green)}.state.failed,.error-text{color:var(--red)}.state.synthesizing{color:var(--indigo)}.dialogue-text{font-size:16px;line-height:1.7}.edit-grid{display:grid;grid-template-columns:140px minmax(180px,1fr) 2fr;gap:12px}.edit-grid label,.mix-panel>label{display:grid;gap:5px;color:var(--text-secondary);font-size:13px}.stale-text{color:var(--orange)}.qa-summary{margin:-18px 0 28px;color:var(--text-secondary)}.slot-qa{margin:8px 0;color:var(--text-secondary)}.slot-qa.qa-overflow,.slot-qa.qa-stale,.slot-qa.qa-missing,.slot-qa.qa-duration_missing{color:var(--orange)}.slot-qa.qa-ok{color:var(--green)}.dialogue-actions{justify-content:flex-start}.dialogue-actions audio{height:36px;max-width:360px}.candidate-list{display:grid;gap:10px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)}.candidate{display:grid;grid-template-columns:1fr minmax(220px,360px) auto;align-items:center;gap:12px;padding:10px;border:1px solid var(--border);border-radius:9px}.candidate.current{border-color:var(--green)}.candidate.stale{opacity:.65}.candidate>div{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.candidate audio{width:100%;height:34px}.candidate-actions{justify-content:flex-end}.studio-bottom{display:grid;grid-template-columns:1.4fr 1fr;gap:18px;margin-top:30px}.file-picker{display:inline-flex;cursor:pointer;padding:9px 12px;border:1px dashed var(--border);border-radius:9px}.file-picker input{margin-left:10px}.inline-status,.diagnostics{margin:14px 0;padding:12px;border-radius:9px;background:var(--accent-soft)}.diagnostics.clean{color:var(--green)}.mapping-list,.cue-list{display:grid;gap:7px}.mapping-list>div{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;padding:7px;background:var(--chip-bg);border-radius:7px}.cue-list{max-height:300px;overflow:auto}.cue-list>div{display:grid;grid-template-columns:180px 1fr;gap:10px;border-bottom:1px solid var(--border);padding:8px 0}.cue-list time{color:var(--text-secondary)}.mix-panel{display:flex;flex-direction:column;gap:12px}.export-files{display:flex;gap:10px;flex-wrap:wrap;padding:10px;border-radius:8px;background:var(--chip-bg)}.empty{text-align:center;padding:36px}@media(max-width:800px){.summary-grid{grid-template-columns:repeat(2,1fr)}.studio-bottom{grid-template-columns:1fr}.edit-grid{grid-template-columns:1fr}.dialogue-actions audio{width:100%;max-width:none}.cue-list>div{grid-template-columns:1fr}.voice-head{align-items:stretch;flex-direction:column}}
+.voice-page{max-width:1240px;margin:0 auto;padding-bottom:70px}.role-config-link{font-size:12px;color:var(--primary);text-decoration:underline}.runtime-warning{max-width:760px;padding:9px 12px;border-radius:8px;color:var(--orange);background:var(--chip-bg)}.voice-head,.section-head,.dialogue-meta,.dialogue-actions,.head-actions,.filters,.mix-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.voice-head{align-items:flex-end;margin-bottom:20px}.batch-section{margin-bottom:28px}.batch-list{display:grid;gap:10px}.batch-card{display:grid;grid-template-columns:minmax(220px,1fr) auto auto;align-items:center;gap:12px}.batch-card>div{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.batch-card small{color:var(--text-secondary)}.batch-progress{justify-content:flex-end}.empty.compact{padding:20px}.voice-head h1,.section-head h2{margin:6px 0}.back{display:block;margin-bottom:8px}.summary-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}.metric{display:flex;justify-content:space-between;align-items:center}.metric span{color:var(--text-secondary)}.metric strong{font-size:26px}.metric.ready{border-left:4px solid var(--green)}.metric.pending{border-left:4px solid var(--orange)}.metric.failed{border-left:4px solid var(--red)}.metric.overflow{border-left:4px solid var(--orange)}.progress-track{height:9px;margin:12px 0 30px;border-radius:99px;overflow:hidden;background:var(--chip-bg)}.progress-track span{display:block;height:100%;background:linear-gradient(90deg,var(--indigo),var(--green));transition:width .3s}.section{margin-top:28px}.role-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}.role-card{display:grid;grid-template-columns:1fr auto;gap:7px}.role-card small,.role-card .badge,.role-voice-actions,.role-preset-preview{grid-column:1/-1}.role-voice-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.role-voice-actions .input{flex:1;min-width:220px}.role-preset-preview{display:grid;gap:5px}.role-preset-preview audio{width:100%}.dialogue-head{align-items:flex-end}.filters .input{width:auto;min-width:145px}.dialogue-list{display:grid;gap:12px}.dialogue-card{border-left:4px solid var(--border)}.dialogue-card.status-ready{border-left-color:var(--green)}.dialogue-card.status-failed{border-left-color:var(--red)}.dialogue-card.status-synthesizing{border-left-color:var(--indigo)}.dialogue-meta>div{display:flex;gap:10px;align-items:center}.dialogue-meta span,.no-audio{color:var(--text-secondary)}.state{padding:4px 9px;border-radius:99px;background:var(--chip-bg)}.state.ready{color:var(--green)}.state.failed,.error-text{color:var(--red)}.state.synthesizing{color:var(--indigo)}.dialogue-text{font-size:16px;line-height:1.7}.edit-grid{display:grid;grid-template-columns:140px minmax(180px,1fr) 2fr;gap:12px}.edit-grid label,.mix-panel>label{display:grid;gap:5px;color:var(--text-secondary);font-size:13px}.stale-text{color:var(--orange)}.qa-summary{margin:-18px 0 28px;color:var(--text-secondary)}.slot-qa{margin:8px 0;color:var(--text-secondary)}.slot-qa.qa-overflow,.slot-qa.qa-stale,.slot-qa.qa-missing,.slot-qa.qa-duration_missing{color:var(--orange)}.slot-qa.qa-ok{color:var(--green)}.dialogue-actions{justify-content:flex-start}.dialogue-actions audio{height:36px;max-width:360px}.candidate-list{display:grid;gap:10px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)}.candidate{display:grid;grid-template-columns:1fr minmax(220px,360px) auto;align-items:center;gap:12px;padding:10px;border:1px solid var(--border);border-radius:9px}.candidate.current{border-color:var(--green)}.candidate.stale{opacity:.65}.candidate>div{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.candidate audio{width:100%;height:34px}.candidate-actions{justify-content:flex-end}.studio-bottom{display:grid;grid-template-columns:1.4fr 1fr;gap:18px;margin-top:30px}.file-picker{display:inline-flex;cursor:pointer;padding:9px 12px;border:1px dashed var(--border);border-radius:9px}.file-picker input{margin-left:10px}.inline-status,.diagnostics{margin:14px 0;padding:12px;border-radius:9px;background:var(--accent-soft)}.diagnostics.clean{color:var(--green)}.mapping-list,.cue-list{display:grid;gap:7px}.mapping-list>div{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;padding:7px;background:var(--chip-bg);border-radius:7px}.cue-list{max-height:300px;overflow:auto}.cue-list>div{display:grid;grid-template-columns:180px 1fr;gap:10px;border-bottom:1px solid var(--border);padding:8px 0}.cue-list time{color:var(--text-secondary)}.mix-panel{display:flex;flex-direction:column;gap:12px}.export-files{display:flex;gap:10px;flex-wrap:wrap;padding:10px;border-radius:8px;background:var(--chip-bg)}.empty{text-align:center;padding:36px}@media(max-width:800px){.summary-grid{grid-template-columns:repeat(2,1fr)}.studio-bottom{grid-template-columns:1fr}.edit-grid{grid-template-columns:1fr}.dialogue-actions audio{width:100%;max-width:none}.cue-list>div{grid-template-columns:1fr}.voice-head{align-items:stretch;flex-direction:column}}
 </style>

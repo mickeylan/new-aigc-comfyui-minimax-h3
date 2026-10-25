@@ -106,6 +106,13 @@ func TestDialogueComfyVoiceRefRequiresCharacterVoiceAndAllowsNarratorDefault(t *
 	if err != nil || voice != `K:\voices\narrator.wav` || characterID != 0 {
 		t.Fatalf("narrator default voice resolution failed: voice=%q character=%d err=%v", voice, characterID, err)
 	}
+	if err := db.Model(&project).Update("narrator_voice_ref", "project-narrator.wav").Error; err != nil {
+		t.Fatal(err)
+	}
+	voice, characterID, err = service.dialogueComfyVoiceRef(&models.Dialogue{ProjectID: project.ID, Character: "旁白", SpeechType: "narration", Text: "旁白"})
+	if err != nil || voice != "project-narrator.wav" || characterID != 0 {
+		t.Fatalf("project narrator voice should override configured default: voice=%q character=%d err=%v", voice, characterID, err)
+	}
 	db.Model(&models.Character{}).Where("project_id = ? AND name = ?", project.ID, "林夏").Update("voice_ref", "linxia.wav")
 	voice, characterID, err = service.dialogueComfyVoiceRef(&models.Dialogue{ProjectID: project.ID, Character: "林夏", Text: "对白"})
 	if err != nil || voice != "linxia.wav" || characterID == 0 {

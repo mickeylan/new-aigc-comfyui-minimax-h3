@@ -9307,6 +9307,12 @@ func (s *ProjectService) dialogueComfyVoiceRef(d *models.Dialogue) (string, uint
 		voiceRef = strings.TrimSpace(d.Voice)
 	}
 	isNarration := d.SpeechType == "narration" || isNarrationSpeaker(d.Character)
+	if voiceRef == "" && isNarration {
+		var project models.Project
+		if s.db.Select("narrator_voice_ref").First(&project, d.ProjectID).Error == nil {
+			voiceRef = strings.TrimSpace(project.NarratorVoiceRef)
+		}
+	}
 	if voiceRef == "" && isNarration && s.cfg != nil {
 		voiceRef = strings.TrimSpace(s.cfg.IndexTTS.DefaultVoice)
 	}

@@ -145,6 +145,7 @@ type Project struct {
 	AspectRatio              string            `json:"aspect_ratio"`                                                      // 画幅：16:9 横屏 / 9:16 竖屏 / 1:1 方形（默认 16:9）
 	NarratorVoiceGender      string            `gorm:"column:narrator_voice_gender;size:16" json:"narrator_voice_gender"` // 空/male/female/custom
 	NarratorVoiceDescription string            `gorm:"column:narrator_voice_description;type:text" json:"narrator_voice_description"`
+	NarratorVoiceRef         string            `gorm:"column:narrator_voice_ref" json:"narrator_voice_ref"`
 	Plan                     string            `gorm:"type:text" json:"plan"`         // 创作方案 JSON（short-drama 方法论产物）
 	Script                   string            `gorm:"type:text" json:"script"`       // 最近一集剧本（兼容旧数据）
 	Scripts                  string            `gorm:"type:text" json:"scripts"`      // 按集剧本 JSON map[int]string（episode_n -> 剧本正文）

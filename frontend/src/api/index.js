@@ -195,6 +195,11 @@ export const api = {
   resetCharacterProfile: (id, cid) => http.post(`/projects/${id}/characters/${cid}/profile/reset`),
 
   // 角色语音（预设音色 / 参考语音复刻）
+  voicePresets: id => http.get(`/projects/${id}/voice-presets`),
+  voicePresetAudioUrl: (id, file) => `/api/projects/${id}/voice-presets/audio?file=${encodeURIComponent(file)}`,
+  selectCharacterVoicePreset: (id, cid, file) => http.post(`/projects/${id}/characters/${cid}/voice/preset`, { file }),
+  selectNarratorVoicePreset: (id, file) => http.post(`/projects/${id}/narrator/voice/preset`, { file }),
+  uploadNarratorVoice: (id, file) => { const fd = new FormData(); fd.append('file', file); return http.post(`/projects/${id}/narrator/voice/upload`, fd, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 }) },
   uploadCharacterVoice: (id, cid, file) => {
     const fd = new FormData()
     fd.append('file', file)

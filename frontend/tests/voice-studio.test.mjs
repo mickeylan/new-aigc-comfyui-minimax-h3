@@ -37,6 +37,11 @@ test('声音工作台提供角色摘要、筛选、进度及逐句表演参数�
   assert.match(view, /v-model="d\.delivery"/)
   assert.match(view, /updateDialogue\(projectId, d\.id/)
   assert.match(view, /前往角色资料上传固定参考音频/)
+  assert.match(view, /选择官方Demo（请先试听，不自动猜性别）/)
+  assert.match(view, /selectCharacterVoicePreset/)
+  assert.match(view, /selectNarratorVoicePreset/)
+  assert.match(view, /uploadNarratorVoice/)
+  assert.match(view, /上传自定义/)
 })
 
 test('声音工作台支持单句、批量生成及音频播放', () => {

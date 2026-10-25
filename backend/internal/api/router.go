@@ -240,6 +240,11 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/characters/:cid/profile/reject", svc.HandleRejectCharacterProfile)           // 审核驳回
 	r.POST("/api/projects/:id/characters/:cid/profile/reset", svc.HandleResetCharacterProfile)             // 重置为草稿
 	// 角色语音（预设音色 / 参考语音复刻）
+	r.GET("/api/projects/:id/voice-presets", svc.HandleListVoicePresets)
+	r.GET("/api/projects/:id/voice-presets/audio", svc.HandleGetVoicePresetAudio)
+	r.POST("/api/projects/:id/characters/:cid/voice/preset", svc.HandleSelectCharacterVoicePreset)
+	r.POST("/api/projects/:id/narrator/voice/preset", svc.HandleSelectNarratorVoicePreset)
+	r.POST("/api/projects/:id/narrator/voice/upload", svc.HandleUploadNarratorVoice)
 	r.POST("/api/projects/:id/characters/:cid/voice/upload", svc.HandleUploadCharacterVoice)
 	r.POST("/api/projects/:id/characters/:cid/voice/clone", svc.HandleCloneCharacterVoice)
 	r.POST("/api/projects/:id/characters/:cid/voice/clear", svc.HandleClearCharacterVoice)

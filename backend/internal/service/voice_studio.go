@@ -267,6 +267,7 @@ type VoiceStudioRoleMapping struct {
 }
 
 type VoiceStudioRoleSummary struct {
+	CharacterID     uint   `json:"character_id,omitempty"`
 	Name            string `json:"name"`
 	DialogueCount   int    `json:"dialogue_count"`
 	Voice           string `json:"voice"`
@@ -685,10 +686,13 @@ func (s *ProjectService) VoiceStudioData(project *models.Project, episodeN int) 
 		if voice == "" {
 			voice = strings.TrimSpace(character.Voice)
 		}
+		if name == "旁白" && voice == "" {
+			voice = strings.TrimSpace(project.NarratorVoiceRef)
+		}
 		if name == "旁白" && voice == "" && s.indexTTS != nil {
 			voice = strings.TrimSpace(s.indexTTS.cfg.DefaultVoice)
 		}
-		roles = append(roles, VoiceStudioRoleSummary{Name: name, DialogueCount: counts[name], Voice: voice, VoiceConfigured: voice != ""})
+		roles = append(roles, VoiceStudioRoleSummary{CharacterID: character.ID, Name: name, DialogueCount: counts[name], Voice: voice, VoiceConfigured: voice != ""})
 	}
 	data["roles"] = roles
 	slotQA, slotQASummary, err := s.voiceStudioSlotQA(project.ID, episodeN)
