@@ -461,10 +461,32 @@ func (s *ProjectService) UpdateProject(p *models.Project, req models.Project) er
 	if req.AspectRatio != "" {
 		updates["aspect_ratio"] = req.AspectRatio
 	}
+	narratorGender := strings.ToLower(strings.TrimSpace(req.NarratorVoiceGender))
+	if narratorGender != "" && narratorGender != "male" && narratorGender != "female" && narratorGender != "custom" {
+		return fmt.Errorf("旁白音色只能选择男声、女声或自定义")
+	}
+	narratorDescription := strings.TrimSpace(req.NarratorVoiceDescription)
+	if narratorGender == "custom" && narratorDescription == "" {
+		return fmt.Errorf("自定义旁白音色必须填写声音描述")
+	}
+	updates["narrator_voice_gender"] = narratorGender
+	updates["narrator_voice_description"] = narratorDescription
 	if len(updates) == 0 {
 		return nil
 	}
-	return s.db.Model(p).Updates(updates).Error
+	narratorChanged := strings.TrimSpace(p.NarratorVoiceGender) != narratorGender || strings.TrimSpace(p.NarratorVoiceDescription) != narratorDescription
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(p).Updates(updates).Error; err != nil {
+			return err
+		}
+		if narratorChanged {
+			return tx.Model(&models.Scene{}).Where("project_id = ?", p.ID).Updates(map[string]any{
+				"video_full_prompt": "",
+				"prompt_stale":      true,
+			}).Error
+		}
+		return nil
+	})
 }
 
 var (
@@ -2659,7 +2681,7 @@ var (
 	h3CarryoverDialoguePattern     = regexp.MustCompile(`(?is)<Subject\s+[0-9]+>\s*\(S[0-9]+\)'s\s+words\s+carry\s+over\s+from\s+the\s+previous\s+shot\s*<scenetrans>.*?</d>[.]?`)
 	h3DialogueClausePattern        = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}]{1,20})(?:\s*\(S[0-9]+\))?(?:画外音|内心独白|说|说道|问道|答道)[：:]?\s*<d>.*?</d>[。.]?`)
 	h3EnglishDialogueClausePattern = regexp.MustCompile(`(?is)(?:<Subject [0-9]+>|[\p{Han}][\p{Han}A-Za-z0-9，,· \t]{0,80})\s*\(S[0-9]+\)\s*(?:says(?:\s+in\s+an\s+off-screen\s+voiceover|\s+on\s+screen|\s+on\s+screen\s+with\s+lip\s+movement\s+synchronized\s+only\s+to\s+this\s+exact\s+text|\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice)?|delivers\s+an\s+internal\s+monologue|continues\s+speaking\s+in\s+a\s+clearly\s+identified\s+off-screen\s+voice\s+from\s+the\s+previous\s+shot|continues(?:\s+the\s+same\s+utterance)?\s+on\s+screen(?:\s+without\s+a\s+speaker\s+change)?)\s*:\s*<d>.*?</d>(?:\s+while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?(?:\s+The\s+voice\s+remains\s+exclusively\s+[^;\n]+;\s+no\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+No\s+visible\s+listener\s+speaks\s+or\s+lip-syncs[.]?)?(?:\s+(?:<Subject\s+[0-9]+>(?:,\s*)?)+\s+are\s+silent\s+listeners\s+and\s+keep\s+their\s+lips\s+completely\s+closed\s+throughout\s+this\s+shot[.]?)?`)
-	h3NarratorClausePattern        = regexp.MustCompile(`(?is)(?:\bThe\s+narrator(?:\s*\(S[0-9]+\))?\s+says|\b(?:A|The)\s+separate\s+unseen\s+third-person\s+narrator[^:]*\s+narrates|\bAudio-only\s+narration\s+track\s*\(S[0-9]+\)\s+says)\s*(?:in\s+an\s+off-screen\s+voiceover)?\s*:\s*(?:<d>.*?</d>\s*)?(?:while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?(?:\s+(?:<Subject\s+[0-9]+>[^.]*|No\s+visible\s+character[^.]*|Visible\s+action[^.]*))[.]?`)
+	h3NarratorClausePattern        = regexp.MustCompile(`(?is)(?:\bThe\s+narrator(?:\s*\(S[0-9]+\))?\s+says|\b(?:A|The)\s+separate\s+unseen\s+third-person\s+narrator[^:]*\s+narrates|\bAudio-only\s+narration\s+track\s*\(S[0-9]+\)\s+(?:uses\s+[^:]*\s+and\s+)?says)\s*(?:in\s+an\s+off-screen\s+voiceover)?\s*:\s*(?:<d>.*?</d>\s*)?(?:while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?(?:\s+(?:<Subject\s+[0-9]+>[^.]*|No\s+visible\s+character[^.]*|Visible\s+action[^.]*))[.]?`)
 	h3BareNarratorPattern          = regexp.MustCompile(`(?is)\bThe\s+narrator(?:\s*\(S[0-9]+\))?\s+says\s+in\s+an\s+off-screen\s+voiceover:\s*(?:while\s+their\s+lips\s+remain\s+completely\s+closed)?[.]?`)
 	dialogueNarrationPattern       = regexp.MustCompile(`(?:<Subject [0-9]+>(?:\s*\(S[0-9]+\))?(?:说道|说|问道|答道)[：:]?\s*|[\p{Han}]{1,12}(?:\s*\(S[0-9]+\))?(?:说道|问道|答道|说[：:])\s*)`)
 	orphanSpeakerPattern           = regexp.MustCompile(`(?:<Subject [0-9]+>|[\p{Han}]{1,20})\s*\(S[0-9]+\)[。.]?`)
@@ -3054,10 +3076,39 @@ func sameCharacterNameVariant(a, b string) bool {
 	return normalize(a) != "" && normalize(a) == normalize(b)
 }
 
+func projectNarratorVoiceDescription(p models.Project) string {
+	custom := strings.TrimSpace(p.NarratorVoiceDescription)
+	switch strings.ToLower(strings.TrimSpace(p.NarratorVoiceGender)) {
+	case "male":
+		if custom != "" {
+			return "the same consistent male narrator voice across the entire project, with " + custom
+		}
+		return "the same consistent mature male narrator voice across the entire project, calm, clear, steady, and unhurried"
+	case "female":
+		if custom != "" {
+			return "the same consistent female narrator voice across the entire project, with " + custom
+		}
+		return "the same consistent mature female narrator voice across the entire project, calm, clear, steady, and unhurried"
+	case "custom":
+		if custom != "" {
+			return "the same consistent narrator voice across the entire project, with " + custom
+		}
+	}
+	return ""
+}
+
 func (s *ProjectService) sceneVideoDialogues(sc *models.Scene) []models.Dialogue {
 	var dubs []models.Dialogue
 	s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
 	dubs = mergeExplicitSceneSpeech(sc, dubs)
+	var project models.Project
+	s.db.First(&project, sc.ProjectID)
+	projectNarratorVoice := projectNarratorVoiceDescription(project)
+	for i := range dubs {
+		if (dubs[i].SpeechType == "narration" || isNarrationSpeaker(dubs[i].Character)) && projectNarratorVoice != "" {
+			dubs[i].H3VoiceDescription = projectNarratorVoice
+		}
+	}
 	var characters []models.Character
 	s.db.Where("project_id = ?", sc.ProjectID).Find(&characters)
 	for i := range dubs {
@@ -3597,6 +3648,17 @@ func h3NarratorLead(speakerID int) string {
 	return fmt.Sprintf("%s (S%d) says:", h3NarratorLeadPrefix, speakerID)
 }
 
+func h3NarratorLeadForDialogue(d models.Dialogue, speakerID int) string {
+	if speakerID <= 0 {
+		speakerID = 1
+	}
+	voice := strings.TrimSpace(d.H3VoiceDescription)
+	if voice == "" {
+		return h3NarratorLead(speakerID)
+	}
+	return fmt.Sprintf("%s (S%d) uses %s and says:", h3NarratorLeadPrefix, speakerID, voice)
+}
+
 func h3NarrationClosedLips(referenceLines []string) string {
 	tags := []string{}
 	for i, line := range referenceLines {
@@ -3646,7 +3708,7 @@ func renderStructuredDialogue(d models.Dialogue, speakerID int, referenceLines [
 	var rendered string
 	switch d.SpeechType {
 	case "narration":
-		rendered = h3NarratorLead(speakerID) + " <d>[Chinese] " + text + "</d>. " + h3NarrationClosedLips(referenceLines)
+		rendered = h3NarratorLeadForDialogue(d, speakerID) + " <d>[Chinese] " + text + "</d>. " + h3NarrationClosedLips(referenceLines)
 	case "monologue":
 		rendered = speaker + " delivers an internal monologue: <d>[Chinese] " + text + "</d> while their lips remain completely closed."
 	case "offscreen_dialogue":
@@ -3731,7 +3793,7 @@ func renderDialogueRange(d models.Dialogue, speakerID int, referenceLines []stri
 	var clause string
 	switch d.SpeechType {
 	case "narration":
-		clause = h3NarratorLead(speakerID) + " <d>[Chinese] " + fragment + "</d>. " + h3NarrationClosedLips(referenceLines)
+		clause = h3NarratorLeadForDialogue(d, speakerID) + " <d>[Chinese] " + fragment + "</d>. " + h3NarrationClosedLips(referenceLines)
 	case "monologue":
 		clause = speaker + " delivers an internal monologue: <d>[Chinese] " + fragment + "</d> while their lips remain completely closed."
 	case "offscreen_dialogue":
@@ -4072,7 +4134,7 @@ func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLine
 		text = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(text, "<scenetrans>", ""), "<cutoff>", ""))
 		switch d.SpeechType {
 		case "narration":
-			clause := h3NarratorTimelineLead + h3NarratorLead(speakerIDs[i]) + " <d>[Chinese] " + text + "</d>. " + h3NarrationClosedLips(referenceLines)
+			clause := h3NarratorTimelineLead + h3NarratorLeadForDialogue(d, speakerIDs[i]) + " <d>[Chinese] " + text + "</d>. " + h3NarrationClosedLips(referenceLines)
 			body = insertClauseAtFirstH3ShotStart(body, clause)
 		case "monologue":
 			body += " " + speaker + " delivers an internal monologue: <d>[Chinese] " + text + "</d> while their lips remain completely closed."
@@ -4288,7 +4350,7 @@ func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 		expected.WriteString(canonicalDialogueText(d.Text))
 		if d.SpeechType == "narration" || isNarrationSpeaker(d.Character) {
 			narratorSeparation := strings.Contains(fullPrompt, "keeps their lips completely closed while continuing the visible action") || strings.Contains(fullPrompt, "keep their lips completely closed while continuing their visible actions") || strings.Contains(fullPrompt, "Visible action continues independently of the audio narration")
-			if speakerIDs[i] <= 0 || !strings.Contains(fullPrompt, h3NarratorLead(speakerIDs[i])) || !strings.Contains(fullPrompt, h3NarratorTimelineLead) || !narratorSeparation {
+			if speakerIDs[i] <= 0 || !strings.Contains(fullPrompt, h3NarratorLeadForDialogue(d, speakerIDs[i])) || !strings.Contains(fullPrompt, h3NarratorTimelineLead) || !narratorSeparation {
 				return false
 			}
 			continue

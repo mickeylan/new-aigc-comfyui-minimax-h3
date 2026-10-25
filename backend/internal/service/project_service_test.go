@@ -704,6 +704,71 @@ func TestMaterialAutoSaveAndList(t *testing.T) {
 	}
 }
 
+func TestProjectNarratorVoiceAppliesAcrossScenesAndInvalidatesSavedPrompts(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Dialogue{}); err != nil {
+		t.Fatal(err)
+	}
+	p := models.Project{Title: "t", Synopsis: "s", Episodes: 1, NarratorVoiceGender: "male", NarratorVoiceDescription: "低沉克制的纪录片音色"}
+	if err := ps.db.Create(&p).Error; err != nil {
+		t.Fatal(err)
+	}
+	scenes := []models.Scene{
+		{ProjectID: p.ID, EpisodeN: 1, Order: 1, VideoFullPrompt: "old-a", VideoFile: "a.mp4"},
+		{ProjectID: p.ID, EpisodeN: 1, Order: 2, VideoFullPrompt: "old-b", VideoFile: "b.mp4"},
+	}
+	for i := range scenes {
+		if err := ps.db.Create(&scenes[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := ps.db.Create(&models.Dialogue{ProjectID: p.ID, SceneID: scenes[i].ID, Order: 1, Character: "旁白", SpeechType: "narration", Text: "旁白原文"}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range scenes {
+		dubs := ps.sceneVideoDialogues(&scenes[i])
+		if len(dubs) != 1 || !strings.Contains(dubs[0].H3VoiceDescription, "same consistent male narrator voice across the entire project") || !strings.Contains(dubs[0].H3VoiceDescription, "低沉克制的纪录片音色") {
+			t.Fatalf("scene %d did not receive project narrator voice: %+v", scenes[i].ID, dubs)
+		}
+		prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] <Subject 1> walks.", Duration: 5}, &p, dubs, []string{"- <Picture 1>：角色「测试人物」四视图"})
+		if !strings.Contains(prompt, "Audio-only narration track (S1) uses the same consistent male narrator voice across the entire project, with 低沉克制的纪录片音色 and says:") {
+			t.Fatalf("scene %d prompt omitted project narrator identity: %s", scenes[i].ID, prompt)
+		}
+	}
+	req := p
+	req.NarratorVoiceGender = "female"
+	req.NarratorVoiceDescription = "温和清晰的成熟女声"
+	if err := ps.UpdateProject(&p, req); err != nil {
+		t.Fatal(err)
+	}
+	for i := range scenes {
+		var got models.Scene
+		ps.db.First(&got, scenes[i].ID)
+		if got.VideoFullPrompt != "" || !got.PromptStale || got.VideoFile != scenes[i].VideoFile {
+			t.Fatalf("scene prompt invalidation changed wrong state: %+v", got)
+		}
+		dubs := ps.sceneVideoDialogues(&got)
+		if len(dubs) != 1 || !strings.Contains(dubs[0].H3VoiceDescription, "same consistent female narrator voice across the entire project") {
+			t.Fatalf("scene %d did not switch to project female narrator: %+v", got.ID, dubs)
+		}
+	}
+}
+
+func TestProjectNarratorVoiceValidation(t *testing.T) {
+	ps := newTestProjectService(t)
+	p := models.Project{Title: "t", Synopsis: "s", Episodes: 1}
+	ps.db.Create(&p)
+	req := p
+	req.NarratorVoiceGender = "custom"
+	if err := ps.UpdateProject(&p, req); err == nil || !strings.Contains(err.Error(), "必须填写声音描述") {
+		t.Fatalf("missing custom narrator description should fail, got %v", err)
+	}
+	req.NarratorVoiceGender = "random"
+	if err := ps.UpdateProject(&p, req); err == nil || !strings.Contains(err.Error(), "只能选择男声、女声或自定义") {
+		t.Fatalf("invalid narrator gender should fail, got %v", err)
+	}
+}
+
 func TestUpdateProjectStatus(t *testing.T) {
 	ps := newTestProjectService(t)
 	p := models.Project{Title: "t", Synopsis: "s", Status: "producing"}

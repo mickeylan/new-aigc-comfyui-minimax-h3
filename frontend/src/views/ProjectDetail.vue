@@ -705,6 +705,22 @@
           </select>
           <div class="field-hint">切换画幅后需重新生成画面与视频</div>
         </div>
+        <div class="field-row">
+          <div class="field">
+            <label>H3 全项目旁白音色</label>
+            <select v-model="projectForm.narrator_voice_gender" class="input">
+              <option value="">未指定（各分镜可能随机）</option>
+              <option value="male">统一男声</option>
+              <option value="female">统一女声</option>
+              <option value="custom">自定义固定音色</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>旁白声音描述 <span class="optional">可选；自定义时必填</span></label>
+            <input v-model="projectForm.narrator_voice_description" class="input" placeholder="如：成熟沉稳、低沉清晰、纪录片式克制语气" />
+          </div>
+        </div>
+        <div class="field-hint">该设定应用于整个项目所有 Scene 的 H3 原生旁白，避免不同分镜在男声和女声之间随机切换；不会修改 Dialogue 原文。</div>
         <div class="field">
           <label>故事创意</label>
           <textarea v-model="projectForm.synopsis" class="textarea" rows="3" />
@@ -1166,7 +1182,7 @@ const sceneReferenceCandidates = ref([])
 const selectedSceneReferences = ref([])
 const sceneOutfitOptions = ref({})
 const selectedSceneOutfits = ref({})
-const projectForm = reactive({ title: '', genre: '', style: '', synopsis: '', audience: '', tone: '', ending: '', episodes: 10, aspect_ratio: '16:9' })
+const projectForm = reactive({ title: '', genre: '', style: '', synopsis: '', audience: '', tone: '', ending: '', episodes: 10, aspect_ratio: '16:9', narrator_voice_gender: '', narrator_voice_description: '' })
 let timer = null
 let wsTimer = null
 let pollTimer = null
@@ -2682,7 +2698,9 @@ function openEditProject() {
     tone: project.value.tone || '',
     ending: project.value.ending || '',
     episodes: project.value.episodes || 0,
-    aspect_ratio: project.value.aspect_ratio || '16:9'
+    aspect_ratio: project.value.aspect_ratio || '16:9',
+    narrator_voice_gender: project.value.narrator_voice_gender || '',
+    narrator_voice_description: project.value.narrator_voice_description || ''
   })
 }
 

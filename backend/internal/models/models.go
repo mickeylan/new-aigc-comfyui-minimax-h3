@@ -131,29 +131,31 @@ const (
 
 // Project 漫剧项目：选题 → 创作方案 → 剧本 → 分镜画面 → 视频 → 合并成片
 type Project struct {
-	ID              uint              `gorm:"primaryKey" json:"id"`
-	CreateToken     *string           `gorm:"column:create_token;size:64;uniqueIndex" json:"-"`
-	Title           string            `json:"title"`
-	SourceType      ProjectSourceType `gorm:"column:source_type;default:outline" json:"source_type"` // 项目来源类型：outline(梗概)/novel(小说改编)
-	Genre           string            `json:"genre"`                                                 // 题材（可选，支持组合如"科幻+悬疑"）
-	Style           string            `json:"style"`                                                 // 画风（可选）
-	Synopsis        string            `json:"synopsis"`                                              // 故事创意/一句话梗概
-	Audience        string            `json:"audience"`                                              // 受众：女频/男频/全龄
-	Tone            string            `json:"tone"`                                                  // 基调：爽/甜/虐/燃/搞笑/悬疑
-	Ending          string            `json:"ending"`                                                // 结局：HE/BE/OE
-	Episodes        int               `json:"episodes"`                                              // 目标集数（用于节奏规划）
-	AspectRatio     string            `json:"aspect_ratio"`                                          // 画幅：16:9 横屏 / 9:16 竖屏 / 1:1 方形（默认 16:9）
-	Plan            string            `gorm:"type:text" json:"plan"`                                 // 创作方案 JSON（short-drama 方法论产物）
-	Script          string            `gorm:"type:text" json:"script"`                               // 最近一集剧本（兼容旧数据）
-	Scripts         string            `gorm:"type:text" json:"scripts"`                              // 按集剧本 JSON map[int]string（episode_n -> 剧本正文）
-	VisualBible     string            `gorm:"type:text" json:"visual_bible"`                         // 角色外观与统一画风基准
-	Status          string            `json:"status"`                                                // draft/plan_done/script_done/producing/ready/finished/failed
-	Error           string            `json:"error"`
-	Generation      uint              `gorm:"default:0" json:"generation"`                               // 当前生成版本，防止旧任务回写新分镜
-	PipelineStage   string            `gorm:"column:pipeline_stage;index" json:"pipeline_stage"`         // plan/script/images/videos/merge/finished/failed
-	PipelineEpisode int               `gorm:"column:pipeline_episode;default:1" json:"pipeline_episode"` // 当前一键生成流水线的目标集数
-	AutoGenerate    bool              `gorm:"column:auto_generate" json:"auto_generate"`
-	StopAfterScript bool              `gorm:"column:stop_after_script" json:"-"` // 自动流水线生成完第一集剧本后停止（后续由人工处理）
+	ID                       uint              `gorm:"primaryKey" json:"id"`
+	CreateToken              *string           `gorm:"column:create_token;size:64;uniqueIndex" json:"-"`
+	Title                    string            `json:"title"`
+	SourceType               ProjectSourceType `gorm:"column:source_type;default:outline" json:"source_type"`             // 项目来源类型：outline(梗概)/novel(小说改编)
+	Genre                    string            `json:"genre"`                                                             // 题材（可选，支持组合如"科幻+悬疑"）
+	Style                    string            `json:"style"`                                                             // 画风（可选）
+	Synopsis                 string            `json:"synopsis"`                                                          // 故事创意/一句话梗概
+	Audience                 string            `json:"audience"`                                                          // 受众：女频/男频/全龄
+	Tone                     string            `json:"tone"`                                                              // 基调：爽/甜/虐/燃/搞笑/悬疑
+	Ending                   string            `json:"ending"`                                                            // 结局：HE/BE/OE
+	Episodes                 int               `json:"episodes"`                                                          // 目标集数（用于节奏规划）
+	AspectRatio              string            `json:"aspect_ratio"`                                                      // 画幅：16:9 横屏 / 9:16 竖屏 / 1:1 方形（默认 16:9）
+	NarratorVoiceGender      string            `gorm:"column:narrator_voice_gender;size:16" json:"narrator_voice_gender"` // 空/male/female/custom
+	NarratorVoiceDescription string            `gorm:"column:narrator_voice_description;type:text" json:"narrator_voice_description"`
+	Plan                     string            `gorm:"type:text" json:"plan"`         // 创作方案 JSON（short-drama 方法论产物）
+	Script                   string            `gorm:"type:text" json:"script"`       // 最近一集剧本（兼容旧数据）
+	Scripts                  string            `gorm:"type:text" json:"scripts"`      // 按集剧本 JSON map[int]string（episode_n -> 剧本正文）
+	VisualBible              string            `gorm:"type:text" json:"visual_bible"` // 角色外观与统一画风基准
+	Status                   string            `json:"status"`                        // draft/plan_done/script_done/producing/ready/finished/failed
+	Error                    string            `json:"error"`
+	Generation               uint              `gorm:"default:0" json:"generation"`                               // 当前生成版本，防止旧任务回写新分镜
+	PipelineStage            string            `gorm:"column:pipeline_stage;index" json:"pipeline_stage"`         // plan/script/images/videos/merge/finished/failed
+	PipelineEpisode          int               `gorm:"column:pipeline_episode;default:1" json:"pipeline_episode"` // 当前一键生成流水线的目标集数
+	AutoGenerate             bool              `gorm:"column:auto_generate" json:"auto_generate"`
+	StopAfterScript          bool              `gorm:"column:stop_after_script" json:"-"` // 自动流水线生成完第一集剧本后停止（后续由人工处理）
 
 	// 小说导入相关字段（仅 source_type=novel 时有效）
 	NovelFilePath  string            `gorm:"column:novel_file_path" json:"novel_file_path,omitempty"`             // 原始小说文件路径

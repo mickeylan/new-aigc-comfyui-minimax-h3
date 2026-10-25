@@ -322,7 +322,7 @@ func (s *Service) HandleUpdateProject(c *gin.Context) {
 		return
 	}
 	if err := s.Projects.UpdateProject(p, req); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
 	np, _, _ := s.Projects.GetProject(p.ID)
