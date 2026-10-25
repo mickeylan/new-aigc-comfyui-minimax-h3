@@ -13,16 +13,22 @@ func TestCompileMusic3CaptionRequiresInstrumentalStructuredFields(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Global Metadata:", "Vocal Details:", "Arrangement:", "Fully instrumental"} {
+	for _, want := range []string{"Global Metadata:", "Vocal Details:", "Arrangement:", "Fully instrumental", "Chinese pentatonic", "guqin", "No Hollywood trailer"} {
 		if !strings.Contains(caption, want) {
 			t.Fatalf("compiled caption missing %q: %s", want, caption)
 		}
 	}
-	if lyrics != "[Intro]\n[Instrumental]\n[Outro]" {
+	if lyrics != "[Intro]\n[Instrumental]\n[Bridge]\n[Instrumental]\n[Outro]" {
 		t.Fatalf("lyrics=%q", lyrics)
 	}
 	if _, _, err := compileMusic3Caption(`{"global_metadata":"score","vocal_details":"soft singer","arrangement":"intro"}`); err == nil {
 		t.Fatal("vocal caption was accepted for episode instrumental score")
+	}
+	if _, _, err := compileMusic3Caption(`{"global_metadata":"Hollywood trailer score","vocal_details":"Fully instrumental","arrangement":"heroic brass"}`); err == nil {
+		t.Fatal("generic Western score without oriental identity was accepted")
+	}
+	if _, _, err := compileMusic3Caption(`{"global_metadata":"Chinese xianxia score","vocal_details":"Fully instrumental","arrangement":"guqin and xiao","lyrics_input":"[Verse]\nSing in English"}`); err == nil {
+		t.Fatal("lyrics text was accepted for instrumental score")
 	}
 }
 

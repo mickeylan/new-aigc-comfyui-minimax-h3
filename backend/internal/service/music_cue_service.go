@@ -74,6 +74,8 @@ var musicCueIntensities = map[string]bool{
 	"soft": true, "medium": true, "intense": true, "climax": true,
 }
 
+const music3OrientalInstrumentalContract = `Oriental melodic identity is mandatory: lyrical Chinese pentatonic or closely related East Asian modal writing, a memorable flowing theme, spacious phrasing, poetic restraint, and deep scenic atmosphere. Feature guqin, xiao or dizi, erhu, pipa or ruan as the melodic identity; restrained strings may support but must not replace the Chinese instrumental lead. No Hollywood trailer language, heroic brass ostinato, EDM, trap, rock, jazz, pop song groove, gospel, or generic Western fantasy fanfare. Fully instrumental only: absolutely no singing in any language, English vocal, spoken word, narration, chanting, choir, humming, whispering, breath vocal, vocal pad, or vocal-like texture.`
+
 var musicCueMoods = map[string]bool{
 	"tension": true, "joyful": true, "mysterious": true,
 	"romantic": true, "epic": true, "sad": true, "calm": true,
@@ -399,6 +401,35 @@ type generatedMusicCueSheet struct {
 	Cues []generatedMusicCue `json:"cues"`
 }
 
+func musicCaptionHasOrientalIdentity(caption musicStructuredCaption) bool {
+	text := strings.ToLower(caption.GlobalMetadata + "\n" + caption.Arrangement)
+	markers := []string{"oriental", "east asian", "chinese", "xianxia", "wuxia", "pentatonic", "五声", "中国", "东方", "仙侠", "古琴", "guqin", "洞箫", "xiao", "dizi", "二胡", "erhu", "琵琶", "pipa", "ruan"}
+	for _, marker := range markers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func musicCaptionHasVocalContent(caption musicStructuredCaption) bool {
+	lyrics := strings.ToLower(strings.TrimSpace(caption.LyricsInput))
+	for _, line := range strings.Split(lyrics, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !(strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]")) {
+			return true
+		}
+	}
+	text := strings.ToLower(caption.GlobalMetadata + "\n" + caption.Arrangement)
+	positiveVocal := []string{" lead vocal", " singer", " singing", " sung", " choir", " chanting", " humming", " whisper vocal", " spoken word", " english lyrics", " vocal melody"}
+	for _, marker := range positiveVocal {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func validateMusicCaptionJSON(raw string) error {
 	var caption musicStructuredCaption
 	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &caption); err != nil {
@@ -409,6 +440,12 @@ func validateMusicCaptionJSON(raw string) error {
 	}
 	if !strings.Contains(strings.ToLower(caption.VocalDetails), "instrumental") {
 		return fmt.Errorf("短剧配乐必须在 vocal_details 中明确为纯器乐")
+	}
+	if !musicCaptionHasOrientalIdentity(caption) {
+		return fmt.Errorf("仙侠整集配乐必须明确东方旋律语言、五声音阶或中国民族器乐身份")
+	}
+	if musicCaptionHasVocalContent(caption) {
+		return fmt.Errorf("整集配乐禁止歌词、人声演唱、合唱、吟唱、哼唱或说话内容")
 	}
 	return nil
 }
@@ -505,7 +542,7 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 	if err != nil {
 		return nil, err
 	}
-	baseSystem := `You plan one continuous whole-episode instrumental score and rewrite it for MiniMax Music 3. Output strict JSON only. Root field: cues. Each cue has kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. caption must have global_metadata,vocal_details,arrangement,lyrics_input. Cover the complete Episode timeline contiguously from 0 to total_duration. If total_duration is at most 300 seconds, return exactly one cue. If it exceeds 300 seconds, return exactly two contiguous cues split near a semantic turning point; each cue must be 5–300 seconds. Both segments must share the same musical theme, tonal palette, core instruments, BPM range and production identity, while the second segment develops rather than restarts the theme. Music is fully instrumental: no lead vocal, spoken voice, narration, chanting, choir, humming, whispering, or vocal-like texture. Arrangement must describe section-by-section musical evolution and leave restrained dynamic space under dialogue. Preserve explicit user requirements and exclusions as highest priority. Do not create audio or claim generation happened.`
+	baseSystem := `You plan one continuous whole-episode instrumental score and rewrite it for MiniMax Music 3. Output strict JSON only. Root field: cues. Each cue has kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. caption must have global_metadata,vocal_details,arrangement,lyrics_input. Cover the complete Episode timeline contiguously from 0 to total_duration. If total_duration is at most 300 seconds, return exactly one cue. If it exceeds 300 seconds, return exactly two contiguous cues split near a semantic turning point; each cue must be 5–300 seconds. Both segments must share the same musical theme, tonal palette, core instruments, BPM range and production identity, while the second segment develops rather than restarts the theme. ` + music3OrientalInstrumentalContract + ` lyrics_input may contain structural bracket tags only, never lyric words. Arrangement must describe section-by-section musical evolution and leave restrained dynamic space under dialogue. Preserve explicit user requirements and exclusions as highest priority. Do not imitate or name a copyrighted soundtrack or composer; express only high-level musical qualities. Do not create audio or claim generation happened.`
 	baseUser := "Authoritative episode timeline JSON:\n" + context + "\n\nUser music ideas and requirements:\n" + strings.TrimSpace(requirements)
 	raw, err := s.skills.ChatWithConfiguredOrFallbackSkill(projectID, models.SkillStageMusicCueSheet, "music-cue-sheet-generate", s.provider, baseSystem, baseUser, map[string]string{"episode_context": context, "user_requirements": requirements})
 	if err != nil {

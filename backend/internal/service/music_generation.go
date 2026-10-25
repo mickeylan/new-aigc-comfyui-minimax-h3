@@ -43,11 +43,16 @@ func compileMusic3Caption(raw string) (string, string, error) {
 	if !strings.Contains(lower, "instrumental") {
 		return "", "", fmt.Errorf("整集配乐必须明确为fully instrumental")
 	}
-	lyrics := caption.LyricsInput
-	if lyrics == "" {
-		lyrics = "[Intro]\n[Instrumental]\n[Outro]"
+	if !musicCaptionHasOrientalIdentity(musicStructuredCaption(caption)) {
+		return "", "", fmt.Errorf("仙侠整集配乐缺少东方旋律和中国民族器乐身份，请重新生成Cue")
 	}
-	compiled := "Global Metadata: " + caption.GlobalMetadata + "\n\nVocal Details: " + caption.VocalDetails + "\n\nArrangement: " + caption.Arrangement
+	if musicCaptionHasVocalContent(musicStructuredCaption(caption)) {
+		return "", "", fmt.Errorf("整集配乐包含歌词或人声意图，请重新生成Cue")
+	}
+	// Music 3 may interpret ordinary lyrics text as executable singing content.
+	// Always submit structural tags only for an instrumental score, regardless of model prose.
+	lyrics := "[Intro]\n[Instrumental]\n[Bridge]\n[Instrumental]\n[Outro]"
+	compiled := "Global Metadata: " + caption.GlobalMetadata + "\n" + music3OrientalInstrumentalContract + "\n\nVocal Details: " + caption.VocalDetails + "\n" + music3OrientalInstrumentalContract + "\n\nArrangement: " + caption.Arrangement
 	return compiled, lyrics, nil
 }
 
