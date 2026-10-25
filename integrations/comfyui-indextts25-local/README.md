@@ -31,7 +31,20 @@ Copy this directory to:
 ComfyUI/custom_nodes/ComfyUI-IndexTTS25-Local
 ```
 
-Install `requirements.txt` into the same Python environment used by ComfyUI.
+Install into the exact Python environment used by the running ComfyUI process. On Windows, use the guarded installer so AudioTools cannot downgrade the shared `protobuf` package:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-requirements.ps1 `
+  -Python "K:\ComfyUI\venv\Scripts\python.exe"
+```
+
+The installer performs three explicit steps:
+
+1. installs the pinned, verified shared stack from `requirements.txt`;
+2. installs `descript-audiotools==0.7.2` from `requirements-audiotools.txt` with `--no-deps`;
+3. verifies imports and exact versions, including `protobuf==5.29.6`.
+
+Do not run a normal `pip install descript-audiotools`: its obsolete `protobuf<3.20` metadata breaks current Google, Gemini, ONNX Runtime and other ComfyUI nodes. Do not install into a different Conda/Python environment than the process listening on the ComfyUI port. Restart ComfyUI after the installer succeeds.
 
 Set these environment variables before starting ComfyUI, or fill the loader inputs directly:
 

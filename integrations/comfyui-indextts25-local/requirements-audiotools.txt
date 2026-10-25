@@ -1,0 +1,5 @@
+# Install ONLY with --no-deps after requirements.txt:
+#   python -m pip install --no-deps -r requirements-audiotools.txt
+# Never install this file without --no-deps: AudioTools 0.7.2 declares the
+# obsolete protobuf<3.20 constraint and will break current ComfyUI nodes.
+descript-audiotools==0.7.2

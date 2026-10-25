@@ -1,17 +1,45 @@
-# Additive dependencies only. Never downgrade ComfyUI's shared runtime.
-# Tested against the host's Transformers 5.10.1 / NumPy 1.26.4 / Librosa 0.11.0.
-accelerate>=1.8.1
-fugashi>=1.2.0
-librosa>=0.11.0
-munch>=4.0.0
-omegaconf>=2.3.0
-openai-whisper>=20231117
-tiktoken>=0.7.0
-transformers>=5.10.1,<6
-unidic-lite>=1.0
-wetext>=0.0.9; sys_platform != "linux"
+# ComfyUI-IndexTTS25-Local reproducible shared-environment requirements.
+#
+# Install with the exact Python interpreter that starts ComfyUI.
+# Do NOT add descript-audiotools here. Its obsolete protobuf<3.20 metadata
+# conflicts with ComfyUI, Google/Gemini nodes and current ONNX Runtime.
+# Install requirements-audiotools.txt separately with --no-deps, or run
+# install-requirements.ps1. PyTorch/torchaudio remain owned by ComfyUI.
+
+# Shared stack verified by real IndexTTS 2.5 CUDA inference.
+numpy==1.26.4
+protobuf==5.29.6
+transformers==5.10.1
+tokenizers==0.22.2
+huggingface-hub==1.33.0
+librosa==0.11.0
+accelerate==1.8.1
+
+# IndexTTS modules reached by the local ComfyUI inference path.
+fugashi==1.5.2
+unidic-lite==1.0.8
+munch==4.0.0
+omegaconf==2.3.0
+openai-whisper==20250625
+tiktoken==0.14.0
+wetext==0.1.8; sys_platform == "win32" or sys_platform == "darwin"
 WeTextProcessing>=1.2.0; sys_platform == "linux"
 
-# Install descript-audiotools==0.7.2 with --no-deps in a shared ComfyUI
-# environment: its obsolete protobuf<3.20 declaration conflicts with current
-# ComfyUI. Runtime-only dependencies are documented in README.md.
+# Explicit runtime dependencies of descript-audiotools==0.7.2. They are
+# installed here so pip never follows AudioTools' incompatible protobuf pin.
+argbind==0.3.9
+flatten-dict==0.5.0
+ffmpy==0.3.0
+importlib-resources==7.1.0
+julius==0.2.8
+markdown2==2.5.5
+pyloudnorm==0.2.0
+pystoi==0.4.1
+randomname==0.2.1
+rich==13.9.4
+tensorboard==2.17.1
+torch-stoi==0.2.3
+matplotlib==3.10.1
+pandas==2.2.3
+scipy==1.14.1
+soundfile==0.13.1
