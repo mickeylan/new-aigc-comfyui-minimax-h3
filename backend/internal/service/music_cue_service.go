@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -333,6 +334,54 @@ type musicStructuredCaption struct {
 	VocalDetails   string `json:"vocal_details"`
 	Arrangement    string `json:"arrangement"`
 	LyricsInput    string `json:"lyrics_input"`
+}
+
+func musicCaptionValueText(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(typed)
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := musicCaptionValueText(item); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "; ")
+	case map[string]any:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			if text := musicCaptionValueText(typed[key]); text != "" {
+				parts = append(parts, strings.TrimSpace(key)+": "+text)
+			}
+		}
+		return strings.Join(parts, "; ")
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(typed)
+	default:
+		return strings.TrimSpace(fmt.Sprint(typed))
+	}
+}
+
+func (caption *musicStructuredCaption) UnmarshalJSON(data []byte) error {
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	caption.GlobalMetadata = musicCaptionValueText(raw["global_metadata"])
+	caption.VocalDetails = musicCaptionValueText(raw["vocal_details"])
+	caption.Arrangement = musicCaptionValueText(raw["arrangement"])
+	caption.LyricsInput = musicCaptionValueText(raw["lyrics_input"])
+	return nil
 }
 
 type generatedMusicCue struct {

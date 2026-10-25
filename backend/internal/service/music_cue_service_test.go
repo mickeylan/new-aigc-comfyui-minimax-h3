@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -73,6 +74,34 @@ func TestMusicCueSheetCRUDIsScopedToProject(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatal("owned cue was not deleted")
+	}
+}
+
+func TestGeneratedMusicCueNormalizesStructuredCaptionFields(t *testing.T) {
+	raw := `{"cues":[{"kind":"bgm","start_time":0,"end_time":120,"intensity":"soft","mood":"calm","instrument_note":"guqin","user_requirements":"instrumental","caption":{"global_metadata":{"genre":"cinematic xianxia","tempo":["72 BPM","steady"]},"vocal_details":{"mode":"Fully instrumental","exclude":["narration","humming"]},"arrangement":[{"intro":"solo guqin"},{"development":"low strings"}],"lyrics_input":["[Intro]","[Instrumental]","[Outro]"]}}]}`
+	var generated generatedMusicCueSheet
+	if err := json.Unmarshal([]byte(raw), &generated); err != nil {
+		t.Fatalf("structured caption should normalize instead of failing: %v", err)
+	}
+	if len(generated.Cues) != 1 {
+		t.Fatalf("cues=%d", len(generated.Cues))
+	}
+	caption := generated.Cues[0].Caption
+	combined := caption.GlobalMetadata + "\n" + caption.VocalDetails + "\n" + caption.Arrangement
+	for _, expected := range []string{"genre: cinematic xianxia", "tempo: 72 BPM; steady", "mode: Fully instrumental", "exclude: narration; humming", "intro: solo guqin", "development: low strings"} {
+		if !strings.Contains(combined, expected) {
+			t.Fatalf("normalized caption missing %q: %+v", expected, caption)
+		}
+	}
+	if caption.LyricsInput != "[Intro]; [Instrumental]; [Outro]" {
+		t.Fatalf("lyrics_input=%q", caption.LyricsInput)
+	}
+	encoded, err := json.Marshal(caption)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateMusicCaptionJSON(string(encoded)); err != nil {
+		t.Fatalf("normalized caption did not pass validation: %v", err)
 	}
 }
 
