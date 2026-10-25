@@ -109,6 +109,7 @@ func TestGeneratedMusicCueNormalizesStructuredCaptionFields(t *testing.T) {
 	if caption.LyricsInput != "[Intro]; [Instrumental]; [Outro]" {
 		t.Fatalf("lyrics_input=%q", caption.LyricsInput)
 	}
+	caption.LyricsInput = ""
 	encoded, err := json.Marshal(caption)
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +135,7 @@ func TestMusicCaptionNegativeConstraintsDoNotTriggerForbiddenStyleOrVocalErrors(
 		GlobalMetadata: "East Asian fantasy story score with lyrical theme and deep scenic atmosphere. No Hollywood trailer music, EDM, jazz groove, or pop song structure.",
 		VocalDetails:   "Fully instrumental; no singing, choir, humming, spoken word, or English lyrics.",
 		Arrangement:    "Spacious phrasing follows the story environment; 禁止英雄铜管固定音型，不使用摇滚鼓组，不采用流行歌曲律动。",
-		LyricsInput:    "[Intro]\n[Instrumental]\n[Outro]",
+		LyricsInput:    "",
 	}
 	encoded, err := json.Marshal(caption)
 	if err != nil {
@@ -154,11 +155,11 @@ func TestMusicCaptionNegativeConstraintsDoNotTriggerForbiddenStyleOrVocalErrors(
 }
 
 func TestMusicCaptionValidationRequiresOrientalIdentityAndRejectsLyrics(t *testing.T) {
-	valid := `{"global_metadata":"East Asian fantasy story score with a lyrical theme","vocal_details":"Fully instrumental; no vocals.","arrangement":"Spacious phrasing and poetic restraint follow the story environment without prescribing instruments.","lyrics_input":"[Intro]\n[Instrumental]\n[Outro]"}`
+	valid := `{"global_metadata":"East Asian fantasy story score with a lyrical theme","vocal_details":"Fully instrumental; no vocals.","arrangement":"Spacious phrasing and poetic restraint follow the story environment without prescribing instruments.","lyrics_input":""}`
 	if err := validateMusicCaptionJSON(valid); err != nil {
 		t.Fatal(err)
 	}
-	western := `{"global_metadata":"East Asian fantasy with Hollywood trailer scale","vocal_details":"Fully instrumental","arrangement":"A lyrical theme over heroic brass ostinato","lyrics_input":"[Intro]\n[Outro]"}`
+	western := `{"global_metadata":"East Asian fantasy with Hollywood trailer scale","vocal_details":"Fully instrumental","arrangement":"A lyrical theme over heroic brass ostinato","lyrics_input":""}`
 	if err := validateMusicCaptionJSON(western); err == nil {
 		t.Fatal("Western trailer caption was accepted without oriental identity")
 	}
@@ -306,7 +307,7 @@ func TestMusicCueSheetReviewGateRequiresStructuredCaption(t *testing.T) {
 	if _, err := svc.Review(p.ID, cue.ID, true, "reviewed"); err == nil {
 		t.Fatal("empty Structured Caption was approved")
 	}
-	caption := `{"global_metadata":"East Asian fantasy story score with a lyrical, memorable theme","vocal_details":"Fully instrumental, no voices.","arrangement":"Intro: spacious phrasing follows the story environment. Outro: resolve with poetic restraint.","lyrics_input":"[Intro]\n[Instrumental]\n[Outro]"}`
+	caption := `{"global_metadata":"East Asian fantasy story score with a lyrical, memorable theme","vocal_details":"Fully instrumental, no voices.","arrangement":"Intro: spacious phrasing follows the story environment. Outro: resolve with poetic restraint.","lyrics_input":""}`
 	if err := db.Model(cue).Update("caption_json", caption).Error; err != nil {
 		t.Fatal(err)
 	}

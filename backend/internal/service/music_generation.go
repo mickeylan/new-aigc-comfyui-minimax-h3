@@ -16,7 +16,7 @@ import (
 
 const (
 	music3EpisodeSegmentTemplate = "minimax_music_3_episode_segment"
-	music3Provider               = "minimax_music_3_comfyui_oriental_v2"
+	music3Provider               = "minimax_music_3_comfyui_instrumental_v3"
 	maxMusic3SegmentSeconds      = 300.0
 )
 
@@ -52,10 +52,10 @@ func compileMusic3Caption(raw string) (string, string, error) {
 	if musicCaptionHasVocalContent(musicStructuredCaption(caption)) {
 		return "", "", fmt.Errorf("整集配乐包含歌词或人声意图，请重新生成Cue")
 	}
-	// Music 3 may interpret ordinary lyrics text as executable singing content.
-	// Always submit structural tags only for an instrumental score, regardless of model prose.
-	lyrics := "[Intro]\n[Instrumental]\n[Bridge]\n[Instrumental]\n[Outro]"
-	compiled := "Global Metadata: " + caption.GlobalMetadata + "\n" + music3OrientalInstrumentalContract + "\n\nVocal Details: " + caption.VocalDetails + "\n" + music3OrientalInstrumentalContract + "\n\nArrangement: " + caption.Arrangement
+	// Even bracket-only section tags can put Music 3 into song-generation mode and
+	// cause it to invent English singing. Instrumental production submits no lyrics at all.
+	lyrics := ""
+	compiled := "Global Metadata: " + caption.GlobalMetadata + "\n" + music3OrientalInstrumentalContract + "\n\nVocal Details: Instrumental cinematic underscore only. Every melodic and textural layer is performed by instruments.\n\nArrangement: " + caption.Arrangement
 	return compiled, lyrics, nil
 }
 
@@ -82,8 +82,8 @@ func (s *ProjectService) StartMusic3Cue(projectID, cueID uint, seed int64) (*mod
 	if cue.ReviewStatus != "approved" || cue.Stale || !cue.Enabled {
 		return nil, fmt.Errorf("配乐Cue必须已审核通过、启用且未过期")
 	}
-	if !strings.HasPrefix(cue.SourceVersionHash, "music3-story-environment-v4:") {
-		return nil, fmt.Errorf("配乐Cue来自旧提示词策略；请重新生成AI配乐方案，使其只约束东方审美与故事环境，不强制音阶、调式或乐器")
+	if !strings.HasPrefix(cue.SourceVersionHash, "music3-instrumental-empty-lyrics-v5:") {
+		return nil, fmt.Errorf("配乐Cue来自旧Music 3策略；请重新生成AI配乐方案，新策略使用空lyrics防止模型自行演唱")
 	}
 	duration := musicCueDuration(&cue)
 	if duration < 5 || duration > maxMusic3SegmentSeconds {

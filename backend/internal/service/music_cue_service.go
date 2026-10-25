@@ -178,11 +178,11 @@ func (s *MusicCueService) validateBindings(cue *models.MusicCueSheet) error {
 }
 
 func (s *MusicCueService) List(projectID uint, episodeN int) ([]models.MusicCueSheet, error) {
-	legacy := s.db.Model(&models.MusicCueSheet{}).Where("project_id = ? AND source = ? AND source_version_hash <> '' AND source_version_hash NOT LIKE ? AND stale = ?", projectID, "ai", "music3-story-environment-v4:%", false)
+	legacy := s.db.Model(&models.MusicCueSheet{}).Where("project_id = ? AND source = ? AND source_version_hash <> '' AND source_version_hash NOT LIKE ? AND stale = ?", projectID, "ai", "music3-instrumental-empty-lyrics-v5:%", false)
 	if episodeN > 0 {
 		legacy = legacy.Where("episode_n = ?", episodeN)
 	}
-	if err := legacy.Updates(map[string]any{"stale": true, "stale_reason": "旧Music 3方案仍含固定音阶或固定配器策略，请按当前故事环境重新生成"}).Error; err != nil {
+	if err := legacy.Updates(map[string]any{"stale": true, "stale_reason": "旧Music 3方案未使用空lyrics纯器乐策略，请重新生成"}).Error; err != nil {
 		return nil, err
 	}
 	var cues []models.MusicCueSheet
@@ -453,12 +453,8 @@ func musicCaptionHasForbiddenWesternStyle(caption musicStructuredCaption) bool {
 }
 
 func musicCaptionHasVocalContent(caption musicStructuredCaption) bool {
-	lyrics := strings.ToLower(strings.TrimSpace(caption.LyricsInput))
-	for _, line := range strings.Split(lyrics, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && !(strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]")) {
-			return true
-		}
+	if strings.TrimSpace(caption.LyricsInput) != "" {
+		return true
 	}
 	text := caption.GlobalMetadata + "\n" + caption.Arrangement
 	positiveVocal := []string{"lead vocal", "singer", "singing", "sung", "choir", "chanting", "humming", "whisper vocal", "spoken word", "english lyrics", "vocal melody"}
@@ -483,14 +479,14 @@ func validateMusicCaptionJSON(raw string) error {
 		return fmt.Errorf("仙侠整集配乐禁止好莱坞预告片、英雄铜管固定音型、EDM、Trap、摇滚、爵士或流行歌曲化表达")
 	}
 	if musicCaptionHasVocalContent(caption) {
-		return fmt.Errorf("整集配乐禁止歌词、人声演唱、合唱、吟唱、哼唱或说话内容")
+		return fmt.Errorf("整集配乐的lyrics_input必须为空，Caption不得肯定要求人声、演唱、合唱、吟唱、哼唱或说话内容")
 	}
 	return nil
 }
 
 func musicCueSourceHash(context, requirements string) string {
-	hash := sha256.Sum256([]byte("music3-story-environment-v4\n" + context + "\nUSER_REQUIREMENTS:\n" + strings.TrimSpace(requirements)))
-	return "music3-story-environment-v4:" + hex.EncodeToString(hash[:])
+	hash := sha256.Sum256([]byte("music3-instrumental-empty-lyrics-v5\n" + context + "\nUSER_REQUIREMENTS:\n" + strings.TrimSpace(requirements)))
+	return "music3-instrumental-empty-lyrics-v5:" + hex.EncodeToString(hash[:])
 }
 
 func trimJSONEnvelope(raw string) string {
@@ -580,7 +576,7 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 	if err != nil {
 		return nil, err
 	}
-	baseSystem := `You plan one continuous whole-episode instrumental score and rewrite it for MiniMax Music 3. Output strict JSON only. Root field: cues. Each cue has kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. caption must have global_metadata,vocal_details,arrangement,lyrics_input. Cover the complete Episode timeline contiguously from 0 to total_duration. If total_duration is at most 300 seconds, return exactly one cue. If it exceeds 300 seconds, return exactly two contiguous cues split near a semantic turning point; each cue must be 5–300 seconds. Both segments must share the same musical theme, overall timbral identity, BPM range and production identity, while the second segment develops rather than restarts the theme. instrument_note must remain empty unless the current user requirements explicitly name an instrument; never invent a core instrumentation mandate. ` + music3OrientalInstrumentalContract + ` lyrics_input may contain structural bracket tags only, never lyric words. Arrangement must describe section-by-section musical evolution and leave restrained dynamic space under dialogue. Preserve explicit user requirements and exclusions as highest priority. Do not imitate or name a copyrighted soundtrack or composer; express only high-level musical qualities. Do not create audio or claim generation happened.`
+	baseSystem := `You plan one continuous whole-episode instrumental score and rewrite it for MiniMax Music 3. Output strict JSON only. Root field: cues. Each cue has kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. caption must have global_metadata,vocal_details,arrangement,lyrics_input. Cover the complete Episode timeline contiguously from 0 to total_duration. If total_duration is at most 300 seconds, return exactly one cue. If it exceeds 300 seconds, return exactly two contiguous cues split near a semantic turning point; each cue must be 5–300 seconds. Both segments must share the same musical theme, overall timbral identity, BPM range and production identity, while the second segment develops rather than restarts the theme. instrument_note must remain empty unless the current user requirements explicitly name an instrument; never invent a core instrumentation mandate. ` + music3OrientalInstrumentalContract + ` lyrics_input must be the empty string. Do not output section tags or lyric words. Arrangement must describe section-by-section musical evolution and leave restrained dynamic space under dialogue. Preserve explicit user requirements and exclusions as highest priority. Do not imitate or name a copyrighted soundtrack or composer; express only high-level musical qualities. Do not create audio or claim generation happened.`
 	baseUser := "Authoritative episode timeline JSON:\n" + context + "\n\nUser music ideas and requirements:\n" + strings.TrimSpace(requirements)
 	raw, err := s.skills.ChatWithConfiguredOrFallbackSkill(projectID, models.SkillStageMusicCueSheet, "music-cue-sheet-generate", s.provider, baseSystem, baseUser, map[string]string{"episode_context": context, "user_requirements": requirements})
 	if err != nil {
@@ -631,6 +627,10 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 			}
 		}
 		for index, item := range generated.Cues {
+			// The model may return song section tags despite the instrumental contract.
+			// Empty lyrics deterministically before validation and persistence so the exact
+			// reviewed Cue matches the no-lyrics execution request.
+			item.Caption.LyricsInput = ""
 			caption, _ := json.Marshal(item.Caption)
 			if err := validateMusicCaptionJSON(string(caption)); err != nil {
 				return fmt.Errorf("第%d条Cue: %w", index+1, err)

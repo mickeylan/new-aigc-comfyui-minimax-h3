@@ -8,7 +8,7 @@ import (
 )
 
 func TestCompileMusic3CaptionRequiresInstrumentalStructuredFields(t *testing.T) {
-	raw := `{"global_metadata":"East Asian fantasy story score, 76 BPM, lyrical and spacious","vocal_details":"Fully instrumental; no voice, narration, choir or humming.","arrangement":"Intro: a memorable flowing theme enters with poetic restraint. Middle: tension develops under dialogue. Outro: resolve into a deep scenic atmosphere.","lyrics_input":"[Intro]\n[Instrumental]\n[Outro]"}`
+	raw := `{"global_metadata":"East Asian fantasy story score, 76 BPM, lyrical and spacious","vocal_details":"Fully instrumental; no voice, narration, choir or humming.","arrangement":"Intro: a memorable flowing theme enters with poetic restraint. Middle: tension develops under dialogue. Outro: resolve into a deep scenic atmosphere.","lyrics_input":""}`
 	caption, lyrics, err := compileMusic3Caption(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -18,8 +18,8 @@ func TestCompileMusic3CaptionRequiresInstrumentalStructuredFields(t *testing.T) 
 			t.Fatalf("compiled caption missing %q: %s", want, caption)
 		}
 	}
-	if lyrics != "[Intro]\n[Instrumental]\n[Bridge]\n[Instrumental]\n[Outro]" {
-		t.Fatalf("lyrics=%q", lyrics)
+	if lyrics != "" {
+		t.Fatalf("instrumental execution must submit empty lyrics, got %q", lyrics)
 	}
 	if _, _, err := compileMusic3Caption(`{"global_metadata":"score","vocal_details":"soft singer","arrangement":"intro"}`); err == nil {
 		t.Fatal("vocal caption was accepted for episode instrumental score")
@@ -78,7 +78,7 @@ func TestMusic3StoryContractDoesNotMandateScaleModeOrInstrument(t *testing.T) {
 			t.Fatalf("contract missing %q", required)
 		}
 	}
-	if !strings.HasPrefix(musicCueSourceHash("ctx", "req"), "music3-story-environment-v4:") {
+	if !strings.HasPrefix(musicCueSourceHash("ctx", "req"), "music3-instrumental-empty-lyrics-v5:") {
 		t.Fatal("music policy version is not bound into source hash")
 	}
 }
