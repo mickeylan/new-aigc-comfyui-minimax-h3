@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 
@@ -98,6 +100,12 @@ func (s *ProjectService) StartMusic3Cue(projectID, cueID uint, seed int64) (*mod
 		_ = s.tasks.CancelTask(task.TaskID)
 		return nil, err
 	}
+	go func(taskID string, candidateID uint) {
+		if executeErr := s.tasks.Execute(taskID); executeErr != nil && !errors.Is(executeErr, errNoFreeGPU) {
+			log.Printf("[music3 candidate %d] execute task %s failed: %v", candidateID, taskID, executeErr)
+			s.db.Model(&models.MusicCandidate{}).Where("id = ? AND file = ''", candidateID).Update("error", executeErr.Error())
+		}
+	}(task.TaskID, candidate.ID)
 	return &candidate, nil
 }
 
