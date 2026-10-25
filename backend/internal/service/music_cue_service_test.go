@@ -154,6 +154,31 @@ func TestMusicCaptionNegativeConstraintsDoNotTriggerForbiddenStyleOrVocalErrors(
 	}
 }
 
+func TestMusicCaptionAllowsOneChinesePopDirectionWithoutGenreMixPenalty(t *testing.T) {
+	caption := musicStructuredCaption{
+		GlobalMetadata: "Lyrical Mandopop-style instrumental screen score for a contemporary Chinese emotional drama.",
+		VocalDetails:   "Fully instrumental.",
+		Arrangement:    "A memorable Chinese pop melodic contour develops with piano, restrained rock drums, and a brief jazz-inflected turnaround that supports the story environment.",
+	}
+	if !musicCaptionHasChineseScreenIdentity(caption) {
+		t.Fatal("Mandopop instrumental direction was not recognized")
+	}
+	if musicCaptionDirectionCount(caption) != 1 {
+		t.Fatalf("direction count=%d", musicCaptionDirectionCount(caption))
+	}
+	if musicCaptionHasForbiddenWesternStyle(caption) {
+		t.Fatal("allowed Chinese pop/rock/jazz inflection was rejected")
+	}
+	encoded, _ := json.Marshal(caption)
+	if err := validateMusicCaptionJSON(string(encoded)); err != nil {
+		t.Fatal(err)
+	}
+	caption.GlobalMetadata += " Also use East Asian fantasy and wuxia action as equal primary directions."
+	if musicCaptionDirectionCount(caption) <= 1 {
+		t.Fatal("ambiguous multi-direction blend was not detected")
+	}
+}
+
 func TestMusicCaptionValidationRequiresOrientalIdentityAndRejectsLyrics(t *testing.T) {
 	valid := `{"global_metadata":"East Asian fantasy story score with a lyrical theme","vocal_details":"Fully instrumental; no vocals.","arrangement":"Spacious phrasing and poetic restraint follow the story environment without prescribing instruments.","lyrics_input":""}`
 	if err := validateMusicCaptionJSON(valid); err != nil {

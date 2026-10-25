@@ -74,7 +74,7 @@ var musicCueIntensities = map[string]bool{
 	"soft": true, "medium": true, "intense": true, "climax": true,
 }
 
-const music3OrientalInstrumentalContract = `An East Asian classical-fantasy sensibility is mandatory at the level of emotion and musical storytelling: a memorable lyrical theme, graceful melodic contour, spacious phrasing, poetic restraint, long-breath through-composed development, subtle mystery, organic acoustic character, and deep scenic atmosphere. Do not impose any fixed scale, fixed mode, or fixed instrument list. Choose instruments freely from the episode's dramatic function, register, pacing, and explicit user requirements; orchestra, piano, acoustic instruments, Chinese instruments, and subtle environmental or electronic textures are all optional when appropriate. No Hollywood trailer language, heroic brass ostinato, EDM, trap, rock, jazz, pop song groove, gospel, or generic Western fantasy fanfare. Fully instrumental only: absolutely no singing in any language, English vocal, spoken word, narration, chanting, choir, humming, whispering, breath vocal, vocal pad, or vocal-like texture.`
+const music3OrientalInstrumentalContract = `A Chinese-language screen-music sensibility is mandatory at the level of emotion and musical storytelling. Chinese pop, lyrical Mandopop-style instrumental writing, guofeng pop, East Asian fantasy scoring, classical crossover, rock or jazz inflection, orchestra, piano, acoustic instruments, Chinese instruments, and subtle electronic textures are all allowed when they fit the episode's story environment. Prioritize a memorable lyrical theme, graceful emotional contour, clear dramatic pacing, restrained space under dialogue, and natural development across the episode. Do not impose any fixed scale, fixed mode, or fixed instrument list. Reject only mismatched generic Hollywood-trailer bombast or anonymous Western-fantasy fanfare that ignores the story; do not reject pop, rock, jazz, or electronic elements merely by genre name. The delivered candidate must be instrumental: no audible singing, English vocal, spoken word, narration, chanting, choir, humming, whispering, breath vocal, vocal pad, or vocal-like texture; a deterministic vocal-separation stage removes the Vocals stem after generation.`
 
 var musicCueMoods = map[string]bool{
 	"tension": true, "joyful": true, "mysterious": true,
@@ -178,11 +178,11 @@ func (s *MusicCueService) validateBindings(cue *models.MusicCueSheet) error {
 }
 
 func (s *MusicCueService) List(projectID uint, episodeN int) ([]models.MusicCueSheet, error) {
-	legacy := s.db.Model(&models.MusicCueSheet{}).Where("project_id = ? AND source = ? AND source_version_hash <> '' AND source_version_hash NOT LIKE ? AND stale = ?", projectID, "ai", "music3-instrumental-demucs-v6:%", false)
+	legacy := s.db.Model(&models.MusicCueSheet{}).Where("project_id = ? AND source = ? AND source_version_hash <> '' AND source_version_hash NOT LIKE ? AND stale = ?", projectID, "ai", "music3-chinese-direction-demucs-v7:%", false)
 	if episodeN > 0 {
 		legacy = legacy.Where("episode_n = ?", episodeN)
 	}
-	if err := legacy.Updates(map[string]any{"stale": true, "stale_reason": "旧Music 3方案未使用空lyrics加Vocals分离策略，请重新生成"}).Error; err != nil {
+	if err := legacy.Updates(map[string]any{"stale": true, "stale_reason": "旧Music 3方案未使用单一华语主方向加Vocals分离策略，请重新生成"}).Error; err != nil {
 		return nil, err
 	}
 	var cues []models.MusicCueSheet
@@ -408,15 +408,37 @@ type generatedMusicCueSheet struct {
 	Cues []generatedMusicCue `json:"cues"`
 }
 
-func musicCaptionHasOrientalIdentity(caption musicStructuredCaption) bool {
+func musicCaptionHasChineseScreenIdentity(caption musicStructuredCaption) bool {
 	text := strings.ToLower(caption.GlobalMetadata + "\n" + caption.Arrangement)
-	markers := []string{"oriental", "east asian", "chinese", "xianxia", "wuxia", "中国", "东方", "仙侠", "悠扬", "意境", "poetic restraint", "spacious phrasing", "lyrical theme", "graceful melodic", "deep scenic atmosphere"}
+	markers := []string{"chinese screen", "chinese-language", "mandopop", "guofeng", "east asian fantasy", "wuxia", "xianxia", "华语", "国风", "中国影视", "东方幻想", "武侠", "仙侠", "古风", "都市华语"}
 	for _, marker := range markers {
 		if strings.Contains(text, marker) {
 			return true
 		}
 	}
 	return false
+}
+
+func musicCaptionDirectionCount(caption musicStructuredCaption) int {
+	text := strings.ToLower(caption.GlobalMetadata + "\n" + caption.Arrangement)
+	groups := [][]string{
+		{"mandopop", "华语流行", "华语影视抒情"},
+		{"guofeng pop", "古风流行", "国风流行"},
+		{"east asian fantasy", "东方幻想", "仙侠影视"},
+		{"modern chinese urban", "现代都市华语", "都市华语"},
+		{"wuxia action", "武侠动作"},
+		{"chinese classical crossover", "中国古典跨界", "古典跨界"},
+	}
+	count := 0
+	for _, group := range groups {
+		for _, marker := range group {
+			if strings.Contains(text, marker) {
+				count++
+				break
+			}
+		}
+	}
+	return count
 }
 
 var musicCaptionClauseSeparator = regexp.MustCompile(`[。；;.!?！？\n]+`)
@@ -448,7 +470,7 @@ func musicCaptionHasAffirmativeMarker(text string, markers []string) bool {
 
 func musicCaptionHasForbiddenWesternStyle(caption musicStructuredCaption) bool {
 	text := caption.GlobalMetadata + "\n" + caption.Arrangement
-	markers := []string{"hollywood trailer", "trailer music", "heroic brass", "brass ostinato", "western fantasy fanfare", "edm", "electronic dance", "trap beat", "rock drums", "jazz groove", "jazz harmony", "pop song", "pop groove", "gospel", "four-on-the-floor"}
+	markers := []string{"hollywood trailer", "trailer music", "heroic brass ostinato", "western fantasy fanfare", "generic western fantasy"}
 	return musicCaptionHasAffirmativeMarker(text, markers)
 }
 
@@ -472,11 +494,14 @@ func validateMusicCaptionJSON(raw string) error {
 	if !strings.Contains(strings.ToLower(caption.VocalDetails), "instrumental") {
 		return fmt.Errorf("短剧配乐必须在 vocal_details 中明确为纯器乐")
 	}
-	if !musicCaptionHasOrientalIdentity(caption) {
-		return fmt.Errorf("仙侠整集配乐必须明确东方审美、悠扬主题、诗意留白或深远意境，但不得强制特定音阶、调式或乐器")
+	if !musicCaptionHasChineseScreenIdentity(caption) {
+		return fmt.Errorf("整集配乐必须明确一个符合故事环境的华语屏幕音乐方向")
+	}
+	if musicCaptionDirectionCount(caption) > 1 {
+		return fmt.Errorf("整集配乐只能选择一个主音乐方向，禁止把华语流行、古风流行、东方幻想、都市或武侠等方向混成折中风格")
 	}
 	if musicCaptionHasForbiddenWesternStyle(caption) {
-		return fmt.Errorf("仙侠整集配乐禁止好莱坞预告片、英雄铜管固定音型、EDM、Trap、摇滚、爵士或流行歌曲化表达")
+		return fmt.Errorf("整集配乐包含与故事环境不符的好莱坞预告片或泛西方奇幻套路")
 	}
 	if musicCaptionHasVocalContent(caption) {
 		return fmt.Errorf("整集配乐的lyrics_input必须为空，Caption不得肯定要求人声、演唱、合唱、吟唱、哼唱或说话内容")
@@ -485,8 +510,8 @@ func validateMusicCaptionJSON(raw string) error {
 }
 
 func musicCueSourceHash(context, requirements string) string {
-	hash := sha256.Sum256([]byte("music3-instrumental-demucs-v6\n" + context + "\nUSER_REQUIREMENTS:\n" + strings.TrimSpace(requirements)))
-	return "music3-instrumental-demucs-v6:" + hex.EncodeToString(hash[:])
+	hash := sha256.Sum256([]byte("music3-chinese-direction-demucs-v7\n" + context + "\nUSER_REQUIREMENTS:\n" + strings.TrimSpace(requirements)))
+	return "music3-chinese-direction-demucs-v7:" + hex.EncodeToString(hash[:])
 }
 
 func trimJSONEnvelope(raw string) string {
@@ -576,7 +601,7 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 	if err != nil {
 		return nil, err
 	}
-	baseSystem := `You plan one continuous whole-episode instrumental score and rewrite it for MiniMax Music 3. Output strict JSON only. Root field: cues. Each cue has kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. caption must have global_metadata,vocal_details,arrangement,lyrics_input. Cover the complete Episode timeline contiguously from 0 to total_duration. If total_duration is at most 300 seconds, return exactly one cue. If it exceeds 300 seconds, return exactly two contiguous cues split near a semantic turning point; each cue must be 5–300 seconds. Both segments must share the same musical theme, overall timbral identity, BPM range and production identity, while the second segment develops rather than restarts the theme. instrument_note must remain empty unless the current user requirements explicitly name an instrument; never invent a core instrumentation mandate. ` + music3OrientalInstrumentalContract + ` lyrics_input must be the empty string. Do not output section tags or lyric words. Arrangement must describe section-by-section musical evolution and leave restrained dynamic space under dialogue. Preserve explicit user requirements and exclusions as highest priority. Do not imitate or name a copyrighted soundtrack or composer; express only high-level musical qualities. Do not create audio or claim generation happened.`
+	baseSystem := `You plan one continuous whole-episode instrumental score and rewrite it for MiniMax Music 3. Output strict JSON only. Root field: cues. Each cue has kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption. caption must have global_metadata,vocal_details,arrangement,lyrics_input. Cover the complete Episode timeline contiguously from 0 to total_duration. If total_duration is at most 300 seconds, return exactly one cue. If it exceeds 300 seconds, return exactly two contiguous cues split near a semantic turning point; each cue must be 5–300 seconds. First choose exactly one primary Chinese screen-music direction that best fits the Episode: lyrical Mandopop-style instrumental, guofeng pop instrumental, East Asian fantasy screen score, modern Chinese urban score, wuxia action score, or Chinese classical crossover. Do not blend multiple directions into an ambiguous hybrid. Both segments must share that one direction, the same musical theme, overall timbral identity, BPM range and production identity, while the second segment develops rather than restarts the theme. instrument_note must remain empty unless the current user requirements explicitly name an instrument; never invent a core instrumentation mandate. ` + music3OrientalInstrumentalContract + ` lyrics_input must be the empty string. Do not output section tags or lyric words. Arrangement must describe section-by-section musical evolution and leave restrained dynamic space under dialogue. Preserve explicit user requirements and exclusions as highest priority. Do not imitate or name a copyrighted soundtrack or composer; express only high-level musical qualities. Do not create audio or claim generation happened.`
 	baseUser := "Authoritative episode timeline JSON:\n" + context + "\n\nUser music ideas and requirements:\n" + strings.TrimSpace(requirements)
 	raw, err := s.skills.ChatWithConfiguredOrFallbackSkill(projectID, models.SkillStageMusicCueSheet, "music-cue-sheet-generate", s.provider, baseSystem, baseUser, map[string]string{"episode_context": context, "user_requirements": requirements})
 	if err != nil {

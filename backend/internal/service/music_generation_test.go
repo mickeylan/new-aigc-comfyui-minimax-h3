@@ -13,7 +13,7 @@ func TestCompileMusic3CaptionRequiresInstrumentalStructuredFields(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Global Metadata:", "Vocal Details:", "Arrangement:", "Fully instrumental", "Do not impose any fixed scale", "fixed instrument list", "No Hollywood trailer"} {
+	for _, want := range []string{"Global Metadata:", "Vocal Details:", "Arrangement:", "Instrumental cinematic underscore only", "Do not impose any fixed scale", "fixed instrument list", "Reject only mismatched generic Hollywood-trailer"} {
 		if !strings.Contains(caption, want) {
 			t.Fatalf("compiled caption missing %q: %s", want, caption)
 		}
@@ -78,7 +78,7 @@ func TestMusic3StoryContractDoesNotMandateScaleModeOrInstrument(t *testing.T) {
 			t.Fatalf("contract missing %q", required)
 		}
 	}
-	if !strings.HasPrefix(musicCueSourceHash("ctx", "req"), "music3-instrumental-demucs-v6:") {
+	if !strings.HasPrefix(musicCueSourceHash("ctx", "req"), "music3-chinese-direction-demucs-v7:") {
 		t.Fatal("music policy version is not bound into source hash")
 	}
 }

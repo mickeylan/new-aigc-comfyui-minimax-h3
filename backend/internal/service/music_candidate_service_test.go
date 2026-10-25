@@ -40,12 +40,12 @@ func seedMusicCandidate(t *testing.T, db *gorm.DB, projectID, cueID uint, hash, 
 	return row
 }
 
-func TestMusicCandidateListStalesPreDemucsCandidates(t *testing.T) {
+func TestMusicCandidateListStalesPreChineseDirectionCandidates(t *testing.T) {
 	db := newMusicCandidateTestDB(t)
 	project := models.Project{Title: "music"}
 	db.Create(&project)
 	cue := seedApprovedMusicCue(t, db, project.ID, "source")
-	row := models.MusicCandidate{ProjectID: project.ID, MusicCueSheetID: cue.ID, SourceVersionHash: cue.SourceVersionHash, Provider: "minimax_music_3_comfyui_oriental_v2", FileSHA256: strings.Repeat("a", 64), FileSize: 10, File: "old.flac"}
+	row := models.MusicCandidate{ProjectID: project.ID, MusicCueSheetID: cue.ID, SourceVersionHash: cue.SourceVersionHash, Provider: "minimax_music_3_comfyui_demucs_v4", FileSHA256: strings.Repeat("a", 64), FileSize: 10, File: "old.flac"}
 	db.Create(&row)
 	rows, err := NewMusicCandidateService(db).List(project.ID, cue.ID)
 	if err != nil {
