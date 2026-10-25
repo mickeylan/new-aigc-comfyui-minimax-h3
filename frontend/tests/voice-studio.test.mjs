@@ -30,6 +30,7 @@ test('声音工作台提供角色摘要、筛选、进度及逐句表演参数�
   assert.match(view, /v-model="d\.emotion"/)
   assert.match(view, /v-model="d\.delivery"/)
   assert.match(view, /updateDialogue\(projectId, d\.id/)
+  assert.match(view, /前往角色资料上传固定参考音频/)
 })
 
 test('声音工作台支持单句、批量生成及音频播放', () => {

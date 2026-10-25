@@ -9195,6 +9195,24 @@ func (s *ProjectService) startDialogueTTS(d *models.Dialogue) (string, string, e
 	if err := validateDialogueSpeaker(*d); err != nil {
 		return "", "", err
 	}
+	mode := s.indexTTSExecutionMode()
+	if mode == "disabled" {
+		return "", "", fmt.Errorf("IndexTTS 已禁用")
+	}
+	if mode == "comfyui" && s.tasks == nil {
+		return "", "", fmt.Errorf("ComfyUI 任务服务未配置")
+	}
+	if mode == "comfyui" {
+		if _, _, err := s.dialogueComfyVoiceRef(d); err != nil {
+			return "", "", err
+		}
+	}
+	if mode == "native_local" && s.indexTTS == nil {
+		return "", "", fmt.Errorf("本地 IndexTTS 运行时未配置")
+	}
+	if s.upload == nil {
+		return "", "", fmt.Errorf("存储未配置")
+	}
 	token := fmt.Sprintf("tts-%d-%d", d.ID, time.Now().UnixNano())
 	claim := s.db.Model(&models.Dialogue{}).Where("id = ? AND status <> ?", d.ID, "synthesizing").
 		Updates(map[string]any{"status": "synthesizing", "audio_token": token, "error": ""})
@@ -9279,6 +9297,32 @@ func (s *ProjectService) comfyVoiceFile(projectID uint, voiceRef string) (FileMe
 	return FileMeta{TaskID: taskID, Name: name}, nil
 }
 
+func (s *ProjectService) dialogueComfyVoiceRef(d *models.Dialogue) (string, uint, error) {
+	var character models.Character
+	characterID := uint(0)
+	voiceRef := ""
+	if err := s.db.Where("project_id = ? AND name = ?", d.ProjectID, strings.TrimSpace(d.Character)).First(&character).Error; err == nil {
+		characterID = character.ID
+		voiceRef = strings.TrimSpace(character.VoiceRef)
+	} else if d.SpeechType != "narration" && !isNarrationSpeaker(d.Character) {
+		return "", 0, fmt.Errorf("角色“%s”不存在，无法读取参考音频", d.Character)
+	}
+	if voiceRef == "" {
+		voiceRef = strings.TrimSpace(d.Voice)
+	}
+	isNarration := d.SpeechType == "narration" || isNarrationSpeaker(d.Character)
+	if voiceRef == "" && isNarration && s.cfg != nil {
+		voiceRef = strings.TrimSpace(s.cfg.IndexTTS.DefaultVoice)
+	}
+	if voiceRef == "" {
+		if isNarration {
+			return "", 0, fmt.Errorf("旁白缺少固定参考音频；请设置显式音色或 IndexTTS default_voice")
+		}
+		return "", 0, fmt.Errorf("角色“%s”缺少 VoiceRef；生产配音不允许静默共用默认音色", d.Character)
+	}
+	return voiceRef, characterID, nil
+}
+
 func (s *ProjectService) submitDialogueToComfy(d *models.Dialogue, token, inputHash string) error {
 	if s.tasks == nil {
 		return fmt.Errorf("ComfyUI 任务服务未配置")
@@ -9290,16 +9334,9 @@ func (s *ProjectService) submitDialogueToComfy(d *models.Dialogue, token, inputH
 	if err := s.db.Where("code = ? AND enabled = ?", indexTTSComfyTemplateCode, true).First(&tpl).Error; err != nil {
 		return fmt.Errorf("未启用模板 %s", indexTTSComfyTemplateCode)
 	}
-	var character models.Character
-	if err := s.db.Where("project_id = ? AND name = ?", d.ProjectID, strings.TrimSpace(d.Character)).First(&character).Error; err != nil {
-		return fmt.Errorf("角色“%s”不存在，无法读取参考音频", d.Character)
-	}
-	voiceRef := strings.TrimSpace(character.VoiceRef)
-	if voiceRef == "" {
-		voiceRef = strings.TrimSpace(s.cfg.IndexTTS.DefaultVoice)
-	}
-	if voiceRef == "" {
-		return fmt.Errorf("角色“%s”缺少 VoiceRef", d.Character)
+	voiceRef, characterID, err := s.dialogueComfyVoiceRef(d)
+	if err != nil {
+		return err
 	}
 	file, err := s.comfyVoiceFile(d.ProjectID, voiceRef)
 	if err != nil {
@@ -9308,7 +9345,10 @@ func (s *ProjectService) submitDialogueToComfy(d *models.Dialogue, token, inputH
 	seed, _ := strconv.ParseUint(inputHash[:16], 16, 64)
 	seed &= uint64(^uint64(0) >> 1)
 	emotionText := strings.TrimSpace(strings.Join([]string{strings.TrimSpace(d.Emotion), strings.TrimSpace(d.Delivery)}, "，"))
-	voiceKey := fmt.Sprintf("project-%d-character-%d", d.ProjectID, character.ID)
+	voiceKey := fmt.Sprintf("project-%d-character-%d", d.ProjectID, characterID)
+	if characterID == 0 {
+		voiceKey = fmt.Sprintf("project-%d-narrator-%x", d.ProjectID, sha256.Sum256([]byte(voiceRef)))
+	}
 	task, err := s.tasks.CreateTask(CreateTaskReq{
 		TemplateID: tpl.ID,
 		Prompt:     d.Text,
@@ -9439,21 +9479,37 @@ func (s *ProjectService) synthesizeDialogue(d *models.Dialogue, token, inputHash
 // GenerateSceneDubs 合成场景全部待合成对白
 func (s *ProjectService) GenerateSceneDubs(sc *models.Scene) (int, error) {
 	var dubs []models.Dialogue
-	s.db.Where("scene_id = ? AND status IN ?", sc.ID, []string{"pending", "failed"}).Find(&dubs)
-	for i := range dubs {
-		_ = s.StartDialogueTTS(&dubs[i])
+	if err := s.db.Where("scene_id = ? AND status IN ?", sc.ID, []string{"pending", "failed"}).Find(&dubs).Error; err != nil {
+		return 0, err
 	}
-	return len(dubs), nil
+	count := 0
+	failures := []error{}
+	for i := range dubs {
+		if err := s.StartDialogueTTS(&dubs[i]); err != nil {
+			failures = append(failures, fmt.Errorf("Dialogue %d: %w", dubs[i].ID, err))
+			continue
+		}
+		count++
+	}
+	return count, errors.Join(failures...)
 }
 
 // GenerateProjectDubs 一键合成项目全部待合成对白
 func (s *ProjectService) GenerateProjectDubs(p *models.Project) (int, error) {
 	var dubs []models.Dialogue
-	s.db.Where("project_id = ? AND status IN ?", p.ID, []string{"pending", "failed"}).Find(&dubs)
-	for i := range dubs {
-		_ = s.StartDialogueTTS(&dubs[i])
+	if err := s.db.Where("project_id = ? AND status IN ?", p.ID, []string{"pending", "failed"}).Find(&dubs).Error; err != nil {
+		return 0, err
 	}
-	return len(dubs), nil
+	count := 0
+	failures := []error{}
+	for i := range dubs {
+		if err := s.StartDialogueTTS(&dubs[i]); err != nil {
+			failures = append(failures, fmt.Errorf("Dialogue %d: %w", dubs[i].ID, err))
+			continue
+		}
+		count++
+	}
+	return count, errors.Join(failures...)
 }
 
 // GenerateEpisodeDubs submits only stale/mismatched dialogue by default, scoped through
@@ -9464,17 +9520,23 @@ func (s *ProjectService) GenerateEpisodeDubs(p *models.Project, episodeN int, st
 		return 0, err
 	}
 	count := 0
+	failures := []error{}
 	for i := range dubs {
 		d := &dubs[i]
 		stale := d.AudioStale || d.AudioFile == "" || d.AudioHash == "" || d.AudioHash != s.effectiveDialogueAudioHash(*d)
 		if stale {
-			_ = s.db.Model(d).Updates(map[string]any{"status": "pending", "audio_stale": true, "audio_stale_reason": "配音输入摘要已变化"}).Error
+			if err := s.db.Model(d).Updates(map[string]any{"status": "pending", "audio_stale": true, "audio_stale_reason": "配音输入摘要已变化"}).Error; err != nil {
+				failures = append(failures, fmt.Errorf("Dialogue %d: %w", d.ID, err))
+				continue
+			}
 		}
-		if err := s.StartDialogueTTS(d); err == nil {
-			count++
+		if err := s.StartDialogueTTS(d); err != nil {
+			failures = append(failures, fmt.Errorf("Dialogue %d: %w", d.ID, err))
+			continue
 		}
+		count++
 	}
-	return count, nil
+	return count, errors.Join(failures...)
 }
 
 // EpisodeDubPreview returns the effective QA timeline and project-owned dialogue state.

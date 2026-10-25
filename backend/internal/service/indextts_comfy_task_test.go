@@ -93,6 +93,48 @@ func TestInstanceSupportsRequiredPythonTTSNodes(t *testing.T) {
 	}
 }
 
+func TestDialogueComfyVoiceRefRequiresCharacterVoiceAndAllowsNarratorDefault(t *testing.T) {
+	db := safetyDB(t, &models.Project{}, &models.Character{})
+	project := models.Project{Title: "voice"}
+	db.Create(&project)
+	db.Create(&models.Character{ProjectID: project.ID, Name: "林夏"})
+	service := &ProjectService{db: db, cfg: &config.Config{IndexTTS: config.IndexTTSConfig{DefaultVoice: `K:\voices\narrator.wav`}}}
+	if _, _, err := service.dialogueComfyVoiceRef(&models.Dialogue{ProjectID: project.ID, Character: "林夏", Text: "对白"}); err == nil || !strings.Contains(err.Error(), "缺少 VoiceRef") {
+		t.Fatalf("character without VoiceRef should fail explicitly: %v", err)
+	}
+	voice, characterID, err := service.dialogueComfyVoiceRef(&models.Dialogue{ProjectID: project.ID, Character: "旁白", SpeechType: "narration", Text: "旁白"})
+	if err != nil || voice != `K:\voices\narrator.wav` || characterID != 0 {
+		t.Fatalf("narrator default voice resolution failed: voice=%q character=%d err=%v", voice, characterID, err)
+	}
+	db.Model(&models.Character{}).Where("project_id = ? AND name = ?", project.ID, "林夏").Update("voice_ref", "linxia.wav")
+	voice, characterID, err = service.dialogueComfyVoiceRef(&models.Dialogue{ProjectID: project.ID, Character: "林夏", Text: "对白"})
+	if err != nil || voice != "linxia.wav" || characterID == 0 {
+		t.Fatalf("character VoiceRef resolution failed: voice=%q character=%d err=%v", voice, characterID, err)
+	}
+}
+
+func TestGenerateSceneDubsReportsEveryFailedDialogue(t *testing.T) {
+	db := safetyDB(t, &models.Project{}, &models.Scene{}, &models.Dialogue{}, &models.DialogueAudioCandidate{}, &models.Character{})
+	project := models.Project{Title: "batch"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 1}
+	if err := db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	for i, name := range []string{"角色甲", "角色乙"} {
+		if err := db.Create(&models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: i + 1, Character: name, Text: "测试", Status: "pending"}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	service := &ProjectService{db: db}
+	count, err := service.GenerateSceneDubs(&scene)
+	if count != 0 || err == nil || !strings.Contains(err.Error(), "Dialogue") || !strings.Contains(err.Error(), "IndexTTS") {
+		t.Fatalf("count=%d err=%v, want explicit per-dialogue batch failures", count, err)
+	}
+}
+
 func TestResultReportFindsAuditableJSONSidecar(t *testing.T) {
 	raw, _ := json.Marshal([]map[string]string{
 		{"type": "audio", "filename": "dub.wav", "subfolder": "indextts"},
