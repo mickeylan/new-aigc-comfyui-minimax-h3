@@ -117,15 +117,15 @@ func TestParseGeneratedMusicCueSheetExtractsEnvelopeAndEscapesControls(t *testin
 }
 
 func TestMusicCaptionValidationRequiresOrientalIdentityAndRejectsLyrics(t *testing.T) {
-	valid := `{"global_metadata":"Chinese xianxia pentatonic score","vocal_details":"Fully instrumental; no vocals.","arrangement":"Guqin and xiao lead a spacious melody.","lyrics_input":"[Intro]\n[Instrumental]\n[Outro]"}`
+	valid := `{"global_metadata":"East Asian fantasy story score with a lyrical theme","vocal_details":"Fully instrumental; no vocals.","arrangement":"Spacious phrasing and poetic restraint follow the story environment without prescribing instruments.","lyrics_input":"[Intro]\n[Instrumental]\n[Outro]"}`
 	if err := validateMusicCaptionJSON(valid); err != nil {
 		t.Fatal(err)
 	}
-	western := `{"global_metadata":"Chinese xianxia with Hollywood trailer scale","vocal_details":"Fully instrumental","arrangement":"guqin over heroic brass ostinato","lyrics_input":"[Intro]\n[Outro]"}`
+	western := `{"global_metadata":"East Asian fantasy with Hollywood trailer scale","vocal_details":"Fully instrumental","arrangement":"A lyrical theme over heroic brass ostinato","lyrics_input":"[Intro]\n[Outro]"}`
 	if err := validateMusicCaptionJSON(western); err == nil {
 		t.Fatal("Western trailer caption was accepted without oriental identity")
 	}
-	vocal := `{"global_metadata":"Chinese xianxia score","vocal_details":"Fully instrumental","arrangement":"guqin melody","lyrics_input":"[Verse]\nFly into the night"}`
+	vocal := `{"global_metadata":"East Asian fantasy story score","vocal_details":"Fully instrumental","arrangement":"A lyrical theme follows the story environment","lyrics_input":"[Verse]\nFly into the night"}`
 	if err := validateMusicCaptionJSON(vocal); err == nil {
 		t.Fatal("lyric text was accepted for instrumental score")
 	}
@@ -269,7 +269,7 @@ func TestMusicCueSheetReviewGateRequiresStructuredCaption(t *testing.T) {
 	if _, err := svc.Review(p.ID, cue.ID, true, "reviewed"); err == nil {
 		t.Fatal("empty Structured Caption was approved")
 	}
-	caption := `{"global_metadata":"Chinese xianxia pentatonic cinematic score","vocal_details":"Fully instrumental, no voices.","arrangement":"Intro: sparse guqin and xiao. Outro: resolve.","lyrics_input":"[Intro]\n[Instrumental]\n[Outro]"}`
+	caption := `{"global_metadata":"East Asian fantasy story score with a lyrical, memorable theme","vocal_details":"Fully instrumental, no voices.","arrangement":"Intro: spacious phrasing follows the story environment. Outro: resolve with poetic restraint.","lyrics_input":"[Intro]\n[Instrumental]\n[Outro]"}`
 	if err := db.Model(cue).Update("caption_json", caption).Error; err != nil {
 		t.Fatal(err)
 	}

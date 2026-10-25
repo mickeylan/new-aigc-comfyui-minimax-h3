@@ -74,7 +74,7 @@ var musicCueIntensities = map[string]bool{
 	"soft": true, "medium": true, "intense": true, "climax": true,
 }
 
-const music3OrientalInstrumentalContract = `Oriental melodic identity is mandatory: lyrical Chinese pentatonic or closely related East Asian modal writing, a memorable flowing theme, spacious phrasing, poetic restraint, and deep scenic atmosphere. Feature guqin, xiao or dizi, erhu, pipa or ruan as the melodic identity; restrained strings may support but must not replace the Chinese instrumental lead. No Hollywood trailer language, heroic brass ostinato, EDM, trap, rock, jazz, pop song groove, gospel, or generic Western fantasy fanfare. Fully instrumental only: absolutely no singing in any language, English vocal, spoken word, narration, chanting, choir, humming, whispering, breath vocal, vocal pad, or vocal-like texture.`
+const music3OrientalInstrumentalContract = `An East Asian fantasy sensibility is mandatory at the level of emotion and musical storytelling: a memorable lyrical theme, graceful melodic contour, spacious phrasing, poetic restraint, long-breath development, subtle mystery, and deep scenic atmosphere. Do not impose any fixed scale, fixed mode, or fixed instrument list. Choose instruments freely from the episode's dramatic function, register, pacing, and explicit user requirements; orchestra, piano, acoustic instruments, Chinese instruments, and subtle environmental or electronic textures are all optional when appropriate. No Hollywood trailer language, heroic brass ostinato, EDM, trap, rock, jazz, pop song groove, gospel, or generic Western fantasy fanfare. Fully instrumental only: absolutely no singing in any language, English vocal, spoken word, narration, chanting, choir, humming, whispering, breath vocal, vocal pad, or vocal-like texture.`
 
 var musicCueMoods = map[string]bool{
 	"tension": true, "joyful": true, "mysterious": true,
@@ -403,7 +403,7 @@ type generatedMusicCueSheet struct {
 
 func musicCaptionHasOrientalIdentity(caption musicStructuredCaption) bool {
 	text := strings.ToLower(caption.GlobalMetadata + "\n" + caption.Arrangement)
-	markers := []string{"oriental", "east asian", "chinese", "xianxia", "wuxia", "pentatonic", "五声", "中国", "东方", "仙侠", "古琴", "guqin", "洞箫", "xiao", "dizi", "二胡", "erhu", "琵琶", "pipa", "ruan"}
+	markers := []string{"oriental", "east asian", "chinese", "xianxia", "wuxia", "中国", "东方", "仙侠", "悠扬", "意境", "poetic restraint", "spacious phrasing", "lyrical theme", "graceful melodic", "deep scenic atmosphere"}
 	for _, marker := range markers {
 		if strings.Contains(text, marker) {
 			return true
@@ -453,7 +453,7 @@ func validateMusicCaptionJSON(raw string) error {
 		return fmt.Errorf("短剧配乐必须在 vocal_details 中明确为纯器乐")
 	}
 	if !musicCaptionHasOrientalIdentity(caption) {
-		return fmt.Errorf("仙侠整集配乐必须明确东方旋律语言、五声音阶或中国民族器乐身份")
+		return fmt.Errorf("仙侠整集配乐必须明确东方审美、悠扬主题、诗意留白或深远意境，但不得强制特定音阶、调式或乐器")
 	}
 	if musicCaptionHasForbiddenWesternStyle(caption) {
 		return fmt.Errorf("仙侠整集配乐禁止好莱坞预告片、英雄铜管固定音型、EDM、Trap、摇滚、爵士或流行歌曲化表达")
@@ -465,8 +465,8 @@ func validateMusicCaptionJSON(raw string) error {
 }
 
 func musicCueSourceHash(context, requirements string) string {
-	hash := sha256.Sum256([]byte(context + "\nUSER_REQUIREMENTS:\n" + strings.TrimSpace(requirements)))
-	return hex.EncodeToString(hash[:])
+	hash := sha256.Sum256([]byte("music3-story-environment-v4\n" + context + "\nUSER_REQUIREMENTS:\n" + strings.TrimSpace(requirements)))
+	return "music3-story-environment-v4:" + hex.EncodeToString(hash[:])
 }
 
 func trimJSONEnvelope(raw string) string {

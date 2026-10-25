@@ -95,7 +95,7 @@ func TestMusicCueSheetBatchApprove(t *testing.T) {
 	svc := &service.Service{DB: db, MusicCues: service.NewMusicCueService(db)}
 	router := NewRouter(&config.Config{}, svc)
 
-	caption := `{"global_metadata":"Chinese xianxia pentatonic cinematic score","vocal_details":"Fully instrumental, no voices.","arrangement":"Intro: sparse guqin and xiao. Outro: resolve.","lyrics_input":"[Intro]\n[Instrumental]\n[Outro]"}`
+	caption := `{"global_metadata":"East Asian fantasy story score with a lyrical theme","vocal_details":"Fully instrumental, no voices.","arrangement":"Intro: spacious phrasing follows the story environment. Outro: resolve with poetic restraint.","lyrics_input":"[Intro]\n[Instrumental]\n[Outro]"}`
 	for _, status := range []string{"pending", "draft"} {
 		cue := models.MusicCueSheet{ProjectID: p.ID, EpisodeN: 1, Kind: "scene", StartTime: 0, EndTime: 3, Intensity: "medium", CaptionJSON: caption, ReviewStatus: status}
 		db.Create(&cue)

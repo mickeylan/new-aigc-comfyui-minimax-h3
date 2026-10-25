@@ -8,12 +8,12 @@ import (
 )
 
 func TestCompileMusic3CaptionRequiresInstrumentalStructuredFields(t *testing.T) {
-	raw := `{"global_metadata":"cinematic xianxia score, 76 BPM","vocal_details":"Fully instrumental; no voice, narration, choir or humming.","arrangement":"Intro: guqin and xiao. Middle: low strings. Outro: resolve.","lyrics_input":"[Intro]\n[Instrumental]\n[Outro]"}`
+	raw := `{"global_metadata":"East Asian fantasy story score, 76 BPM, lyrical and spacious","vocal_details":"Fully instrumental; no voice, narration, choir or humming.","arrangement":"Intro: a memorable flowing theme enters with poetic restraint. Middle: tension develops under dialogue. Outro: resolve into a deep scenic atmosphere.","lyrics_input":"[Intro]\n[Instrumental]\n[Outro]"}`
 	caption, lyrics, err := compileMusic3Caption(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Global Metadata:", "Vocal Details:", "Arrangement:", "Fully instrumental", "Chinese pentatonic", "guqin", "No Hollywood trailer"} {
+	for _, want := range []string{"Global Metadata:", "Vocal Details:", "Arrangement:", "Fully instrumental", "Do not impose any fixed scale", "fixed instrument list", "No Hollywood trailer"} {
 		if !strings.Contains(caption, want) {
 			t.Fatalf("compiled caption missing %q: %s", want, caption)
 		}
@@ -27,7 +27,7 @@ func TestCompileMusic3CaptionRequiresInstrumentalStructuredFields(t *testing.T) 
 	if _, _, err := compileMusic3Caption(`{"global_metadata":"Hollywood trailer score","vocal_details":"Fully instrumental","arrangement":"heroic brass"}`); err == nil {
 		t.Fatal("generic Western score without oriental identity was accepted")
 	}
-	if _, _, err := compileMusic3Caption(`{"global_metadata":"Chinese xianxia score","vocal_details":"Fully instrumental","arrangement":"guqin and xiao","lyrics_input":"[Verse]\nSing in English"}`); err == nil {
+	if _, _, err := compileMusic3Caption(`{"global_metadata":"East Asian fantasy story score","vocal_details":"Fully instrumental","arrangement":"A lyrical theme follows the story environment","lyrics_input":"[Verse]\nSing in English"}`); err == nil {
 		t.Fatal("lyrics text was accepted for instrumental score")
 	}
 }
@@ -63,6 +63,23 @@ func TestValidateGeneratedMusicCueCoverageSplitsLongEpisodeIntoTwoContinuousSegm
 				t.Fatal("invalid episode music segmentation was accepted")
 			}
 		})
+	}
+}
+
+func TestMusic3StoryContractDoesNotMandateScaleModeOrInstrument(t *testing.T) {
+	lower := strings.ToLower(music3OrientalInstrumentalContract)
+	for _, forbidden := range []string{"pentatonic", "feature guqin", "must use guqin", "must use xiao"} {
+		if strings.Contains(lower, forbidden) {
+			t.Fatalf("contract still mandates %q: %s", forbidden, music3OrientalInstrumentalContract)
+		}
+	}
+	for _, required := range []string{"storytelling", "story", "fixed scale", "fixed mode", "fixed instrument list"} {
+		if !strings.Contains(lower, required) {
+			t.Fatalf("contract missing %q", required)
+		}
+	}
+	if !strings.HasPrefix(musicCueSourceHash("ctx", "req"), "music3-story-environment-v4:") {
+		t.Fatal("music policy version is not bound into source hash")
 	}
 }
 

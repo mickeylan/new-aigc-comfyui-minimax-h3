@@ -44,7 +44,7 @@ func compileMusic3Caption(raw string) (string, string, error) {
 		return "", "", fmt.Errorf("整集配乐必须明确为fully instrumental")
 	}
 	if !musicCaptionHasOrientalIdentity(musicStructuredCaption(caption)) {
-		return "", "", fmt.Errorf("仙侠整集配乐缺少东方旋律和中国民族器乐身份，请重新生成Cue")
+		return "", "", fmt.Errorf("仙侠整集配乐缺少东方审美、故事环境适配、悠扬主题或深远意境，请重新生成Cue")
 	}
 	if musicCaptionHasForbiddenWesternStyle(musicStructuredCaption(caption)) {
 		return "", "", fmt.Errorf("仙侠整集配乐含西洋预告片、EDM、摇滚、爵士或流行歌曲化指令，请重新生成Cue")
@@ -81,6 +81,9 @@ func (s *ProjectService) StartMusic3Cue(projectID, cueID uint, seed int64) (*mod
 	}
 	if cue.ReviewStatus != "approved" || cue.Stale || !cue.Enabled {
 		return nil, fmt.Errorf("配乐Cue必须已审核通过、启用且未过期")
+	}
+	if !strings.HasPrefix(cue.SourceVersionHash, "music3-story-environment-v4:") {
+		return nil, fmt.Errorf("配乐Cue来自旧提示词策略；请重新生成AI配乐方案，使其只约束东方审美与故事环境，不强制音阶、调式或乐器")
 	}
 	duration := musicCueDuration(&cue)
 	if duration < 5 || duration > maxMusic3SegmentSeconds {
