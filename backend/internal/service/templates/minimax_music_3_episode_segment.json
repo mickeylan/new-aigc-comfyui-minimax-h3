@@ -7,8 +7,8 @@
     {"key":"lyrics","type":"string","label":"结构标签","required":true,"default":"[Intro]\n[Instrumental]\n[Outro]"},
     {"key":"duration","type":"float","label":"分段时长","required":true,"default":120,"min":5,"max":300,"step":0.04},
     {"key":"seed","type":"int","label":"种子","required":true,"default":-1},
-    {"key":"unet_name","type":"string","label":"扩散模型","required":true,"default":"minimax-music3\\minimax_music3_dit_fp32.safetensors"},
-    {"key":"clip_name","type":"string","label":"文本编码器","required":true,"default":"minimax-music3\\minimax_music3_text_encoder_bf16.safetensors"},
+    {"key":"unet_name","type":"string","label":"扩散模型","required":true,"default":"minimax-music3\\minimax_music3_dit_int8_convrot.safetensors"},
+    {"key":"clip_name","type":"string","label":"文本编码器","required":true,"default":"minimax-music3\\minimax_music3_text_encoder_pruned_int8_convrot.safetensors"},
     {"key":"vae_name","type":"string","label":"音频VAE","required":true,"default":"MiniMax-Music-3\\minimax_music3_dav.safetensors"}
   ],
   "workflow": {
