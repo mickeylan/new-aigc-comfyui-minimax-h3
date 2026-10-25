@@ -51,6 +51,19 @@ func TestMusicCueSheetCRUDIsScopedToProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	stale := models.MusicCueSheet{ProjectID: p1.ID, EpisodeN: 1, Kind: "bgm", StartTime: 0, EndTime: 3, Enabled: true, Source: "manual"}
+	disabled := models.MusicCueSheet{ProjectID: p1.ID, EpisodeN: 1, Kind: "bgm", StartTime: 0, EndTime: 3, Enabled: true, Source: "manual"}
+	for _, hidden := range []*models.MusicCueSheet{&stale, &disabled} {
+		if err := db.Create(hidden).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Model(&stale).Update("stale", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&disabled).Update("enabled", false).Error; err != nil {
+		t.Fatal(err)
+	}
 	cues, err := svc.List(p1.ID, 1)
 	if err != nil {
 		t.Fatal(err)

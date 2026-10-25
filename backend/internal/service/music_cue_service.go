@@ -186,7 +186,7 @@ func (s *MusicCueService) List(projectID uint, episodeN int) ([]models.MusicCueS
 		return nil, err
 	}
 	var cues []models.MusicCueSheet
-	q := s.db.Where("project_id = ? AND enabled = ?", projectID, true)
+	q := s.db.Where("project_id = ? AND enabled = ? AND stale = ?", projectID, true, false)
 	if episodeN > 0 {
 		q = q.Where("episode_n = ?", episodeN)
 	}
