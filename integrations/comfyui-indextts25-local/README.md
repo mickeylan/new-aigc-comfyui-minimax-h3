@@ -40,9 +40,9 @@ powershell -ExecutionPolicy Bypass -File .\install-requirements.ps1 `
 
 The installer performs three explicit steps:
 
-1. installs the pinned, verified shared stack from `requirements.txt`;
+1. installs only additive IndexTTS dependencies from `requirements.txt` without pinning or downgrading ComfyUI-owned NumPy, Torch, Transformers, Librosa, SciPy, Pandas or Matplotlib;
 2. installs `descript-audiotools==0.7.2` from `requirements-audiotools.txt` with `--no-deps`;
-3. verifies imports and exact versions, including `protobuf==5.29.6`.
+3. runs `verify_requirements.py` to verify imports and a modern compatible protobuf (`>=5.29.6,<6`).
 
 Do not run a normal `pip install descript-audiotools`: its obsolete `protobuf<3.20` metadata breaks current Google, Gemini, ONNX Runtime and other ComfyUI nodes. Do not install into a different Conda/Python environment than the process listening on the ComfyUI port. Restart ComfyUI after the installer succeeds.
 
