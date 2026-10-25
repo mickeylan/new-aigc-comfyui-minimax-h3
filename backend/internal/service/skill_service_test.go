@@ -98,10 +98,10 @@ func TestH3CombatSkillUsesAssetsInsteadOfWeaponEnumeration(t *testing.T) {
 		t.Fatal(err)
 	}
 	contract := skill.SystemPrompt + skill.PromptTemplate
-	if skill.Version != 4 {
-		t.Fatalf("combat skill version=%d, want 4", skill.Version)
+	if skill.Version != 5 {
+		t.Fatalf("combat skill version=%d, want 5", skill.Version)
 	}
-	for _, want := range []string{"实际资产", "不得用通用资产替换", "仙术", "正常实时速度", "结构化Dialogue", "身体结构", "攻击线", "未完成动量", "不强制多阶段", "主要摄影机任务", "单人兵器演练", "martial forms", "支撑脚或重心转移", "禁止连续全身旋转", "格挡卸力", "撩剑", "前招收势必须成为后招起势", "跨Shot只换机位", "不得因为动作词库而新增命中"} {
+	for _, want := range []string{"实际资产", "不得用通用资产替换", "仙术", "正常实时速度", "结构化Dialogue", "身体结构", "攻击线", "未完成动量", "不强制多阶段", "主要摄影机任务", "单人兵器演练", "martial forms", "支撑脚或重心转移", "禁止连续全身旋转", "格挡卸力", "撩剑", "前招收势必须成为后招起势", "跨Shot只换机位", "不得因为动作词库而新增命中", "非最终Shot禁止用stops", "动作应占据该Shot主要时长"} {
 		if !strings.Contains(contract, want) {
 			t.Fatalf("combat skill missing %q: %s", want, contract)
 		}
@@ -123,15 +123,15 @@ func TestFightDirectorSkillAddsConcreteV7MechanicsWithoutReplacingAuthority(t *t
 	if err := db.Where("code = ?", "fight-video-action-design").Order("version DESC").First(&skill).Error; err != nil {
 		t.Fatal(err)
 	}
-	if skill.Version != 4 {
-		t.Fatalf("fight director version=%d, want 4", skill.Version)
+	if skill.Version != 5 {
+		t.Fatalf("fight director version=%d, want 5", skill.Version)
 	}
 	contract := skill.SystemPrompt + skill.PromptTemplate
 	for _, want := range []string{
 		"Scene、结构化Dialogue、角色、关系、武器、能力、动作顺序、胜负、时长、画幅和结尾是不可改变事实",
 		"不得新增输入未提供的武器、法宝、能力、伤势、命中、击杀、胜负",
-		"格挡卸力", "攻防转换", "撩剑", "弓步", "启动（支撑脚、蹬地或腰胯发力）", "前招收势成为后招起势",
-		"单人演武不套用双人压制", "未明确命中、伤害、胜负时",
+		"格挡卸力", "攻防转换", "撩剑", "弓步", "启动（支撑脚、蹬地或腰胯发力）",
+		"单人演武不套用双人压制", "未明确命中、伤害、胜负时", "禁止重新起势、无过程换位或用静态Pose填时长", "立即回收、变线或借余势衔接下一动作",
 	} {
 		if !strings.Contains(contract, want) {
 			t.Fatalf("fight director missing preserved or incremental rule %q", want)

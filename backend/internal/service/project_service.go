@@ -1683,6 +1683,8 @@ var h3HorizontalSwordPathPattern = regexp.MustCompile(`(?i)\bhorizontal\b[^.;]{0
 var h3SwordFootworkPattern = regexp.MustCompile(`(?i)\b(?:left|right)\s+foot\b|\bsteps?\s+(?:forward|back|left|right|sideways)\b|\bshifts?\s+(?:her|his|their)\s+weight\b|\bweight\s+(?:onto|over)\b|\bstabiliz(?:e|es)\s+(?:her|his|their)\s+weight\b`)
 var h3SwordFinishPattern = regexp.MustCompile(`(?i)\bfinish(?:es)?\b|\bend(?:s)?\s+(?:upright|in|with)\b|\bstands?\s+upright\b|\bcloses?\s+(?:her|his|their|the)?\s*stance\b|\bfinal\s+stance\b|\bbranch\s+angled\s+(?:down|toward(?:s)?\s+the\s+ground)\b|\blower(?:s|ing)?\s+(?:the\s+)?branch\s+(?:diagonally\s+)?toward(?:s)?\s+the\s+ground\b|\breturns?\s+to\s+(?:a\s+)?(?:ready|guard|resting)\s+stance\b`)
 var h3SwordProhibitionPattern = regexp.MustCompile(`(?i)\b(?:no|never|without|avoid(?:s|ing)?|forbid(?:s|ding)?|must\s+not|does\s+not|do\s+not|rather\s+than|instead\s+of)\b`)
+var h3SwordHeldEndpointPattern = regexp.MustCompile(`(?i)\b(?:stops?|holds?|held|remains?)\b[^.;]{0,70}\b(?:endpoint|end\s+point|extended|extension|line|position|pose|stance|tip)\b|\b(?:endpoint|end\s+point)\b[^.;]{0,40}\b(?:stops?|holds?|remains?)\b`)
+var h3SwordContinuousTraversalPattern = regexp.MustCompile(`(?i)\b(?:cuts?|slashes?|thrusts?|drives?|whips?|snaps?|slices?|sweeps?)\b[^.;]{0,100}\b(?:through|across|from|toward|forward|diagonal|horizontal)\b|\b(?:retracts?|recovers?|redirects?|reverses?|draws?)\b[^.;]{0,100}\b(?:immediately|without\s+pausing|into\s+the\s+next|carrying\s+momentum|continuous)`)
 
 func hasAffirmativeVagueSwordPractice(value string) bool {
 	for _, match := range h3VagueSwordPracticePattern.FindAllStringIndex(value, -1) {
@@ -1747,6 +1749,27 @@ func h3SoloSwordTimingContractMatches(source, value string, duration float64, sh
 	return lastStart >= expectedLastStart-0.75 && lastStart <= expectedLastStart+0.75
 }
 
+func h3SoloSwordMotionFlowContractMatches(source, value string) bool {
+	if !h3SoloSwordPracticeCuePattern.MatchString(source) {
+		return true
+	}
+	matches := h3ShotMarkerPattern.FindAllStringSubmatchIndex(value, -1)
+	if len(matches) < 2 {
+		return true
+	}
+	for i, marker := range matches[:len(matches)-1] {
+		end := len(value)
+		if i+1 < len(matches) {
+			end = matches[i+1][0]
+		}
+		segment := value[marker[1]:end]
+		if h3SwordHeldEndpointPattern.MatchString(segment) || !h3SwordContinuousTraversalPattern.MatchString(segment) {
+			return false
+		}
+	}
+	return true
+}
+
 func h3SoloSwordPracticeContractMatches(source, value string) bool {
 	if !h3SoloSwordPracticeCuePattern.MatchString(source) {
 		return true
@@ -1754,7 +1777,7 @@ func h3SoloSwordPracticeContractMatches(source, value string) bool {
 	if hasAffirmativeVagueSwordPractice(value) || !h3SwordFootworkPattern.MatchString(value) || !h3SwordFinishPattern.MatchString(value) {
 		return false
 	}
-	return concreteSwordTechniqueCount(value) >= 2
+	return concreteSwordTechniqueCount(value) >= 2 && h3SoloSwordMotionFlowContractMatches(source, value)
 }
 
 func h3ActionTempoContractMatches(value string) bool {
@@ -2297,7 +2320,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 			issues = append(issues, "缺少正常实时速度或仍含慢动作措辞")
 		}
 		if !h3SoloSwordPracticeContractMatches(canonicalSceneContent, value) {
-			issues = append(issues, "单人剑术被压缩成抽象套路；必须保留至少两式明确剑路、步法/重心与最终收势，禁止连续旋转和舞蹈化动作")
+			issues = append(issues, "单人剑术缺少可见运动过程：必须保留至少两式明确剑路、步法/重心与最终收势；每个非最终Shot必须让兵器连续穿过完整轨迹并立即衔接下一动作，禁止只写端点、停住、持姿势、连续旋转或舞蹈化动作")
 		}
 		if !h3SoloSwordTimingContractMatches(canonicalSceneContent, value, normalizeSceneDuration(sc.Duration), expectedShotCount) {
 			issues = append(issues, "单人剑术时间线不连续；旁白期间必须持续真实速度的步法、重心和剑路，最后约1.5秒才收势，禁止提前站桩或平均拉慢单招")

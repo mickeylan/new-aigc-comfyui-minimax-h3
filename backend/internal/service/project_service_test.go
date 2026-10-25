@@ -1974,6 +1974,24 @@ func TestCombatRepairIncludesCurrentSceneSwordChoreographyDespiteLegacyShot(t *t
 	}
 }
 
+func TestSoloSwordMotionFlowRejectsEndpointPoseSequence(t *testing.T) {
+	source := "上官若琳以桃枝为剑，在桃林中进行单人剑术演练。右脚前踏，完成斜撩、直刺、横削，最后收步直立。"
+	poseSequence := `[Shot 1] At full real-time speed, she guides the branch in a diagonal rise and stops with the tip extended above her left shoulder.
+[Shot 2] At 00:03.125, she thrusts straight forward and holds the endpoint at shoulder height.
+[Shot 3] At 00:06.250, she swings one horizontal cut and remains extended on her right side.
+[Shot 4] At 00:09.375, she lowers the branch and finishes upright in the final stance.`
+	if h3SoloSwordMotionFlowContractMatches(source, poseSequence) {
+		t.Fatalf("endpoint-pose sequence incorrectly passed motion-flow validation: %s", poseSequence)
+	}
+	continuous := `[Shot 1] At full real-time speed, she cuts diagonally from lower right through the upper-left line, then immediately retracts the branch into the next motion without pausing.
+[Shot 2] At 00:03.125, she drives a straight thrust forward, reverses the branch immediately, and redirects it across her center into the next cut.
+[Shot 3] At 00:06.250, she cuts horizontally from left to right, recovers continuously through a wrist turn, and carries the remaining momentum into her closing step.
+[Shot 4] At 00:09.375, she lowers the branch and finishes upright in the final stance.`
+	if !h3SoloSwordMotionFlowContractMatches(source, continuous) {
+		t.Fatalf("continuous sword traversal was rejected: %s", continuous)
+	}
+}
+
 func TestCombatRepairRetriesWithExactValidationFailures(t *testing.T) {
 	ps := newTestProjectService(t)
 	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SharedAssetReference{}); err != nil {
@@ -2089,7 +2107,7 @@ func TestSoloSwordPracticeRejectsAbstractMartialForms(t *testing.T) {
 		t.Fatalf("negative anti-spin clause was misread as affirmative vague choreography: %s", concreteWithProhibition)
 	}
 	providerVariants := []string{
-		"[Shot 1] <Subject 1> steps her right foot forward and guides the branch in one clear diagonal lift from lower right toward upper left. [Shot 2] At 00:04.667, she plants her left foot and drives the branch straight ahead in a single thrust. [Shot 3] At 00:09.334, she shifts laterally and sends the branch horizontally from left to right in one straight cutting path, then closes her stance and stands upright with the branch angled toward the ground.",
+		"[Shot 1] <Subject 1> steps her right foot forward and cuts diagonally from lower right through the upper-left line, then immediately retracts into the next motion without pausing. [Shot 2] At 00:04.667, she plants her left foot, drives the branch straight forward in a thrust, then redirects it immediately across her center into the next cut. [Shot 3] At 00:09.334, she shifts laterally, cuts horizontally from left to right, recovers continuously through a wrist turn, then closes her stance and stands upright with the branch angled toward the ground.",
 		"[Shot 1] Subject 1 begins at full speed, steps the right foot forward half a pace while the branch travels from lower right to upper left in one rising diagonal cut. With the left foot planted for support, Subject 1 thrusts the branch straight forward once, then completes one horizontal cut and enters an upright final stance with the branch angled toward the ground.",
 		"[Shot 1] <Subject 1> moves at full real-time speed, steps her right foot forward and executes one diagonal rising cut. She braces on her left foot, thrusts straight forward once, completes one horizontal cut, closes her stance and stands upright while holding the branch angled toward the ground.",
 		"[Shot 1] <Subject 1> immediately steps her right foot forward for one rising diagonal cut, plants her left foot and thrusts the branch straight forward, then completes one horizontal slash before lowering the branch diagonally toward the ground.",
