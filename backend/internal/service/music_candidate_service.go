@@ -39,13 +39,6 @@ func (s *MusicCandidateService) List(projectID, cueID uint) ([]models.MusicCandi
 	if _, err := s.cue(projectID, cueID); err != nil {
 		return nil, err
 	}
-	// Candidates generated before empty-lyrics plus Demucs v4 may contain invented
-	// singing even when their captions said instrumental. They cannot be reviewed.
-	if err := s.db.Model(&models.MusicCandidate{}).
-		Where("project_id = ? AND music_cue_sheet_id = ? AND provider LIKE ? AND provider <> ? AND stale = ?", projectID, cueID, "minimax_music_3_comfyui%", music3Provider, false).
-		Updates(map[string]any{"stale": true, "stale_reason": "旧Music 3候选未使用空lyrics加Vocals分离v4策略，请重新生成", "is_current": false}).Error; err != nil {
-		return nil, err
-	}
 	var rows []models.MusicCandidate
 	err := s.db.Where("project_id = ? AND music_cue_sheet_id = ?", projectID, cueID).
 		Order("is_current DESC, created_at DESC, id DESC").Find(&rows).Error

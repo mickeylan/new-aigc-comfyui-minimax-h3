@@ -58,12 +58,11 @@ func compileMusic3Caption(raw string) (string, string, error) {
 }
 
 func music3InstrumentalStructure(duration float64) string {
-	// Music 3 treats max_duration as an upper bound. Its autoregressive planner
-	// commonly emits EOS after it consumes the supplied section skeleton. Give it
-	// Calibrated from real local runs: 18 total tags yielded 126.84 seconds for
-	// a 157-second request, while 7 tags yielded 57.76 seconds. Use roughly one
-	// executable section per six target seconds so the structural plan reaches
-	// the requested upper bound instead of ending early.
+	// max_duration is the requested target song length. The model can still emit
+	// EOS before reaching that target, so provide enough executable sections to
+	// sustain long-form planning. Local calibration: 18 total tags yielded 126.84
+	// seconds for a 157-second target, while 7 tags yielded 57.76 seconds. Use
+	// roughly one executable section per six target seconds.
 	sectionCount := int(math.Ceil(duration / 6.0))
 	if sectionCount < 3 {
 		sectionCount = 3
@@ -121,13 +120,6 @@ func inspectMusicFLAC(data []byte) (musicAudioInfo, error) {
 	return musicAudioInfo{}, fmt.Errorf("Music 3 FLAC缺少STREAMINFO")
 }
 
-func musicCandidateCoverageIssue(actual, expected float64) string {
-	if expected <= 0 || actual >= expected*0.9 {
-		return ""
-	}
-	return fmt.Sprintf("Music 3实际生成%.2f秒，未覆盖计划%.2f秒；音频已归档，可试听或下载，但不能作为完整Cue采用", actual, expected)
-}
-
 func pendingMusicCandidateFingerprint(taskID string) string {
 	digest := sha256.Sum256([]byte("pending-music3:" + strings.TrimSpace(taskID)))
 	return hex.EncodeToString(digest[:])
@@ -169,9 +161,9 @@ func (s *ProjectService) StartMusic3Cue(projectID, cueID uint, seed int64) (*mod
 	if err := s.db.Where("code = ? AND enabled = ?", music3EpisodeSegmentTemplate, true).First(&tpl).Error; err != nil {
 		return nil, fmt.Errorf("Music 3工作流模板未启用")
 	}
-	// MiniMax Music 3 treats max_duration as an upper bound and may emit EOS much
-	// earlier. Official section tags provide the model with a long-form instrumental
-	// structure. Any invented vocals are removed by the downstream Demucs stage.
+	// max_duration is the target song length. Official section tags provide the
+	// autoregressive planner with enough long-form instrumental structure to reduce
+	// premature EOS. Any invented vocals are removed by downstream Demucs.
 	lyrics = music3InstrumentalStructure(duration)
 	params := map[string]any{"caption": caption, "lyrics": lyrics, "duration": duration, "seed": seed}
 	task, err := s.tasks.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: caption, Params: params, Seed: &seed, AffinityKey: fmt.Sprintf("music3:p%d:e%d", projectID, cue.EpisodeN)})
@@ -262,14 +254,9 @@ func (s *ProjectService) syncMusic3Candidates() {
 			s.db.Model(candidate).Updates(archived)
 			continue
 		}
-		expectedDuration := musicCueDuration(&cue)
-		if reason := musicCandidateCoverageIssue(info.Duration, expectedDuration); reason != "" {
-			archived["error"] = reason
-			archived["stale"] = true
-			archived["stale_reason"] = reason
-			s.db.Model(candidate).Updates(archived)
-			continue
-		}
+		// Preserve the measured duration even when the model ends before the requested
+		// target. Duration differences remain visible but do not block review/adoption;
+		// episode music arrangement handles the uncovered timeline later.
 		_ = s.db.Transaction(func(tx *gorm.DB) error {
 			var duplicate models.MusicCandidate
 			err := tx.Where("id <> ? AND project_id = ? AND music_cue_sheet_id = ? AND source_version_hash = ? AND provider = ? AND file_sha256 = ?", candidate.ID, candidate.ProjectID, candidate.MusicCueSheetID, candidate.SourceVersionHash, candidate.Provider, realHash).First(&duplicate).Error

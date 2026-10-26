@@ -40,7 +40,7 @@ func seedMusicCandidate(t *testing.T, db *gorm.DB, projectID, cueID uint, hash, 
 	return row
 }
 
-func TestMusicCandidateListStalesPreChineseDirectionCandidates(t *testing.T) {
+func TestMusicCandidateListPreservesOlderProviderTakesForReview(t *testing.T) {
 	db := newMusicCandidateTestDB(t)
 	project := models.Project{Title: "music"}
 	db.Create(&project)
@@ -51,8 +51,8 @@ func TestMusicCandidateListStalesPreChineseDirectionCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || !rows[0].Stale || rows[0].IsCurrent || !strings.Contains(rows[0].StaleReason, "空lyrics加Vocals分离v4") {
-		t.Fatalf("legacy candidate was not invalidated: %+v", rows)
+	if len(rows) != 1 || rows[0].Stale || rows[0].File != "old.flac" {
+		t.Fatalf("older provider take was unexpectedly invalidated: %+v", rows)
 	}
 }
 
