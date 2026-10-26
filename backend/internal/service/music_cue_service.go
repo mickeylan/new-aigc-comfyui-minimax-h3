@@ -178,13 +178,10 @@ func (s *MusicCueService) validateBindings(cue *models.MusicCueSheet) error {
 }
 
 func (s *MusicCueService) List(projectID uint, episodeN int) ([]models.MusicCueSheet, error) {
-	legacy := s.db.Model(&models.MusicCueSheet{}).Where("project_id = ? AND source = ? AND source_version_hash <> '' AND source_version_hash NOT LIKE ? AND stale = ?", projectID, "ai", "music3-calibrated-sections-duration-v10:%", false)
-	if episodeN > 0 {
-		legacy = legacy.Where("episode_n = ?", episodeN)
-	}
-	if err := legacy.Updates(map[string]any{"stale": true, "stale_reason": "旧Music 3方案未按目标时长提供足量器乐段落，请重新生成"}).Error; err != nil {
-		return nil, err
-	}
+	// Listing is read-only. A policy/compiler version change must never hide or
+	// mutate an already saved plan during refresh or process restart. Plans become
+	// stale only when their authoritative source changes or the user explicitly
+	// regenerates/replaces them.
 	var cues []models.MusicCueSheet
 	q := s.db.Where("project_id = ? AND enabled = ? AND stale = ?", projectID, true, false)
 	if episodeN > 0 {

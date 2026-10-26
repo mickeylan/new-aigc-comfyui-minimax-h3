@@ -90,6 +90,39 @@ func TestMusicCueSheetCRUDIsScopedToProject(t *testing.T) {
 	}
 }
 
+func TestMusicCueListDoesNotInvalidateSavedPlanAfterPolicyOrServiceRestart(t *testing.T) {
+	db := newMusicCueTestDB(t)
+	project := models.Project{Title: "persisted music plan"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	cue := models.MusicCueSheet{
+		ProjectID: project.ID, EpisodeN: 1, Kind: "bgm", StartTime: 0, EndTime: 157,
+		Enabled: true, Source: "ai", SourceVersionHash: "music3-older-policy:stored",
+		ReviewStatus: "draft", CaptionJSON: `{"global_metadata":"saved","vocal_details":"Instrumental","arrangement":"Intro to Outro","lyrics_input":""}`,
+	}
+	if err := db.Create(&cue).Error; err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		// Reconstruct the service to model a backend restart.
+		rows, err := NewMusicCueService(db).List(project.ID, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 1 || rows[0].ID != cue.ID || rows[0].Stale || !rows[0].Enabled {
+			t.Fatalf("saved plan disappeared after list/restart attempt %d: %+v", attempt+1, rows)
+		}
+	}
+	var persisted models.MusicCueSheet
+	if err := db.First(&persisted, cue.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Stale || !persisted.Enabled || persisted.SourceVersionHash != cue.SourceVersionHash {
+		t.Fatalf("listing mutated saved plan: %+v", persisted)
+	}
+}
+
 func TestGeneratedMusicCueNormalizesStructuredCaptionFields(t *testing.T) {
 	raw := `{"cues":[{"kind":"bgm","start_time":0,"end_time":120,"intensity":"soft","mood":"calm","instrument_note":"guqin","user_requirements":"instrumental","caption":{"global_metadata":{"genre":"cinematic xianxia","tempo":["72 BPM","steady"]},"vocal_details":{"mode":"Fully instrumental","exclude":["narration","humming"]},"arrangement":[{"intro":"solo guqin"},{"development":"low strings"}],"lyrics_input":["[Intro]","[Instrumental]","[Outro]"]}}]}`
 	var generated generatedMusicCueSheet
