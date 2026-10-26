@@ -119,6 +119,13 @@ func inspectMusicFLAC(data []byte) (musicAudioInfo, error) {
 	return musicAudioInfo{}, fmt.Errorf("Music 3 FLAC缺少STREAMINFO")
 }
 
+func musicCandidateCoverageIssue(actual, expected float64) string {
+	if expected <= 0 || actual >= expected*0.9 {
+		return ""
+	}
+	return fmt.Sprintf("Music 3实际生成%.2f秒，未覆盖计划%.2f秒；音频已归档，可试听或下载，但不能作为完整Cue采用", actual, expected)
+}
+
 func pendingMusicCandidateFingerprint(taskID string) string {
 	digest := sha256.Sum256([]byte("pending-music3:" + strings.TrimSpace(taskID)))
 	return hex.EncodeToString(digest[:])
@@ -224,17 +231,10 @@ func (s *ProjectService) syncMusic3Candidates() {
 			s.db.Model(candidate).Updates(map[string]any{"error": inspectErr.Error(), "stale": true, "stale_reason": "Music 3输出媒体无效"})
 			continue
 		}
-		var cue models.MusicCueSheet
-		if s.db.First(&cue, candidate.MusicCueSheetID).Error != nil || cue.SourceVersionHash != candidate.SourceVersionHash || cue.Stale {
-			s.db.Model(candidate).Updates(map[string]any{"stale": true, "stale_reason": "Music 3生成期间Cue已变化", "duration": info.Duration, "sample_rate": info.SampleRate, "channels": info.Channels})
-			continue
-		}
-		expectedDuration := musicCueDuration(&cue)
-		if info.Duration < expectedDuration*0.9 {
-			reason := fmt.Sprintf("Music 3实际只生成%.2f秒，低于计划%.2f秒的90%%；max_duration只是上限，当前结果不可审核", info.Duration, expectedDuration)
-			s.db.Model(candidate).Updates(map[string]any{"error": reason, "stale": true, "stale_reason": reason, "duration": info.Duration, "sample_rate": info.SampleRate, "channels": info.Channels})
-			continue
-		}
+		// Archive every structurally valid generated file before checking whether it
+		// fully covers the planned Cue. A short take may still be musically useful and
+		// must remain playable/downloadable even though it cannot be adopted as the
+		// complete episode segment.
 		digest := sha256.Sum256(data)
 		ext := strings.ToLower(filepath.Ext(filename))
 		if ext == "" {
@@ -247,6 +247,27 @@ func (s *ProjectService) syncMusic3Candidates() {
 			continue
 		}
 		realHash := hex.EncodeToString(digest[:])
+		archived := map[string]any{
+			"file": filepath.Base(stored), "file_sha256": realHash,
+			"file_size": int64(len(data)), "duration": info.Duration,
+			"sample_rate": info.SampleRate, "channels": info.Channels,
+		}
+		var cue models.MusicCueSheet
+		if s.db.First(&cue, candidate.MusicCueSheetID).Error != nil || cue.SourceVersionHash != candidate.SourceVersionHash || cue.Stale {
+			archived["stale"] = true
+			archived["stale_reason"] = "Music 3生成期间Cue已变化；音频已归档，可试听或下载，但不能作为当前Cue采用"
+			archived["error"] = ""
+			s.db.Model(candidate).Updates(archived)
+			continue
+		}
+		expectedDuration := musicCueDuration(&cue)
+		if reason := musicCandidateCoverageIssue(info.Duration, expectedDuration); reason != "" {
+			archived["error"] = reason
+			archived["stale"] = true
+			archived["stale_reason"] = reason
+			s.db.Model(candidate).Updates(archived)
+			continue
+		}
 		_ = s.db.Transaction(func(tx *gorm.DB) error {
 			var duplicate models.MusicCandidate
 			err := tx.Where("id <> ? AND project_id = ? AND music_cue_sheet_id = ? AND source_version_hash = ? AND provider = ? AND file_sha256 = ?", candidate.ID, candidate.ProjectID, candidate.MusicCueSheetID, candidate.SourceVersionHash, candidate.Provider, realHash).First(&duplicate).Error

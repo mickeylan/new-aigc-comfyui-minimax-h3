@@ -116,6 +116,18 @@ func TestInspectMusicFLACReadsActualDuration(t *testing.T) {
 	}
 }
 
+func TestMusicCandidateCoverageIssuePreservesShortTakeAsArchivedMaterial(t *testing.T) {
+	issue := musicCandidateCoverageIssue(126.84, 157)
+	for _, required := range []string{"126.84", "157.00", "已归档", "试听或下载", "不能作为完整Cue采用"} {
+		if !strings.Contains(issue, required) {
+			t.Fatalf("coverage issue missing %q: %s", required, issue)
+		}
+	}
+	if issue := musicCandidateCoverageIssue(142, 157); issue != "" {
+		t.Fatalf("90%%-covered candidate was rejected: %s", issue)
+	}
+}
+
 func TestPendingMusicCandidateFingerprintIsTaskUniqueAndStable(t *testing.T) {
 	first := pendingMusicCandidateFingerprint("task-a")
 	if first == pendingMusicCandidateFingerprint("task-b") {
