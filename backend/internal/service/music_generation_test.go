@@ -13,7 +13,7 @@ func TestCompileMusic3CaptionRequiresInstrumentalStructuredFields(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Global Metadata:", "Vocal Details:", "Arrangement:", "Instrumental cinematic underscore only", "Do not impose any fixed scale", "fixed instrument list", "Reject only mismatched generic Hollywood-trailer"} {
+	for _, want := range []string{"### Global Metadata", "### Vocal Details", "### Arrangement", "Fully instrumental", "Intro:", "Outro:"} {
 		if !strings.Contains(caption, want) {
 			t.Fatalf("compiled caption missing %q: %s", want, caption)
 		}
@@ -78,8 +78,41 @@ func TestMusic3StoryContractDoesNotMandateScaleModeOrInstrument(t *testing.T) {
 			t.Fatalf("contract missing %q", required)
 		}
 	}
-	if !strings.HasPrefix(musicCueSourceHash("ctx", "req"), "music3-chinese-direction-demucs-v7:") {
+	if !strings.HasPrefix(musicCueSourceHash("ctx", "req"), "music3-official-caption-duration-v8:") {
 		t.Fatal("music policy version is not bound into source hash")
+	}
+}
+
+func TestMusic3InstrumentalStructureExtendsLongFormControl(t *testing.T) {
+	short := music3InstrumentalStructure(30)
+	long := music3InstrumentalStructure(157)
+	if !strings.Contains(short, "[Intro]") || !strings.Contains(short, "[Outro]") {
+		t.Fatalf("short structure=%q", short)
+	}
+	if strings.Count(long, "[Instrumental]") < 4 || !strings.Contains(long, "[Solo]") {
+		t.Fatalf("long structure lacks official instrumental sections: %q", long)
+	}
+	if strings.Contains(long, "Sing") || strings.Contains(long, "Verse") || strings.Contains(long, "Chorus") {
+		t.Fatalf("instrumental control contains vocal-song section: %q", long)
+	}
+}
+
+func TestInspectMusicFLACReadsActualDuration(t *testing.T) {
+	sampleRate, channels, totalSamples := uint64(44100), uint64(2), uint64(1023120)
+	packed := sampleRate<<44 | (channels-1)<<41 | (16-1)<<36 | totalSamples
+	data := make([]byte, 4+4+34)
+	copy(data[:4], "fLaC")
+	data[4] = 0x80
+	data[7] = 34
+	for i := 0; i < 8; i++ {
+		data[4+4+10+i] = byte(packed >> (56 - 8*i))
+	}
+	info, err := inspectMusicFLAC(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.SampleRate != 44100 || info.Channels != 2 || info.Duration < 23.19 || info.Duration > 23.21 {
+		t.Fatalf("info=%+v", info)
 	}
 }
 

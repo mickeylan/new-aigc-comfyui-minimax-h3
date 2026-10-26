@@ -16,7 +16,7 @@ import (
 
 const (
 	music3EpisodeSegmentTemplate = "minimax_music_3_episode_segment"
-	music3Provider               = "minimax_music_3_comfyui_demucs_v5"
+	music3Provider               = "minimax_music_3_comfyui_official_skill_v6"
 	maxMusic3SegmentSeconds      = 300.0
 )
 
@@ -52,11 +52,60 @@ func compileMusic3Caption(raw string) (string, string, error) {
 	if musicCaptionHasVocalContent(musicStructuredCaption(caption)) {
 		return "", "", fmt.Errorf("整集配乐包含歌词或人声意图，请重新生成Cue")
 	}
-	// Even bracket-only section tags can put Music 3 into song-generation mode and
-	// cause it to invent English singing. Instrumental production submits no lyrics at all.
-	lyrics := ""
-	compiled := "Global Metadata: " + caption.GlobalMetadata + "\n" + music3OrientalInstrumentalContract + "\n\nVocal Details: Instrumental cinematic underscore only. Every melodic and textural layer is performed by instruments.\n\nArrangement: " + caption.Arrangement
-	return compiled, lyrics, nil
+	compiled := "### Global Metadata\n" + caption.GlobalMetadata + "\n\n### Vocal Details\n" + caption.VocalDetails + "\n\n### Arrangement\n" + caption.Arrangement
+	return compiled, "", nil
+}
+
+func music3InstrumentalStructure(duration float64) string {
+	sections := []string{"[Intro]", "[Instrumental]"}
+	for covered := 60.0; covered < duration-30; covered += 45 {
+		sections = append(sections, "[Instrumental]")
+	}
+	if duration >= 90 {
+		sections = append(sections, "[Solo]")
+	}
+	sections = append(sections, "[Instrumental]", "[Outro]")
+	return strings.Join(sections, "\n")
+}
+
+type musicAudioInfo struct {
+	Duration   float64
+	SampleRate int
+	Channels   int
+}
+
+func inspectMusicFLAC(data []byte) (musicAudioInfo, error) {
+	if len(data) < 8 || string(data[:4]) != "fLaC" {
+		return musicAudioInfo{}, fmt.Errorf("Music 3输出不是有效FLAC")
+	}
+	for pos := 4; pos+4 <= len(data); {
+		header := data[pos]
+		blockType := header & 0x7f
+		length := int(data[pos+1])<<16 | int(data[pos+2])<<8 | int(data[pos+3])
+		pos += 4
+		if length < 0 || pos+length > len(data) {
+			return musicAudioInfo{}, fmt.Errorf("Music 3 FLAC元数据损坏")
+		}
+		if blockType == 0 {
+			if length < 18 {
+				return musicAudioInfo{}, fmt.Errorf("Music 3 FLAC缺少完整STREAMINFO")
+			}
+			b := data[pos+10 : pos+18]
+			packed := uint64(b[0])<<56 | uint64(b[1])<<48 | uint64(b[2])<<40 | uint64(b[3])<<32 | uint64(b[4])<<24 | uint64(b[5])<<16 | uint64(b[6])<<8 | uint64(b[7])
+			sampleRate := int((packed >> 44) & 0xfffff)
+			channels := int((packed>>41)&0x7) + 1
+			totalSamples := packed & 0xfffffffff
+			if sampleRate <= 0 || channels <= 0 || totalSamples == 0 {
+				return musicAudioInfo{}, fmt.Errorf("Music 3 FLAC时长信息无效")
+			}
+			return musicAudioInfo{Duration: float64(totalSamples) / float64(sampleRate), SampleRate: sampleRate, Channels: channels}, nil
+		}
+		pos += length
+		if header&0x80 != 0 {
+			break
+		}
+	}
+	return musicAudioInfo{}, fmt.Errorf("Music 3 FLAC缺少STREAMINFO")
 }
 
 func pendingMusicCandidateFingerprint(taskID string) string {
@@ -82,8 +131,8 @@ func (s *ProjectService) StartMusic3Cue(projectID, cueID uint, seed int64) (*mod
 	if cue.ReviewStatus != "approved" || cue.Stale || !cue.Enabled {
 		return nil, fmt.Errorf("配乐Cue必须已审核通过、启用且未过期")
 	}
-	if !strings.HasPrefix(cue.SourceVersionHash, "music3-chinese-direction-demucs-v7:") {
-		return nil, fmt.Errorf("配乐Cue来自旧Music 3策略；请重新生成AI配乐方案，新策略先选择单一华语主方向，再使用空lyrics并分离丢弃Vocals")
+	if !strings.HasPrefix(cue.SourceVersionHash, "music3-official-caption-duration-v8:") {
+		return nil, fmt.Errorf("配乐Cue来自旧Music 3策略；请重新生成AI配乐方案，新策略遵循官方Caption结构、使用器乐段落标签、分离Vocals并校验真实音频时长")
 	}
 	duration := musicCueDuration(&cue)
 	if duration < 5 || duration > maxMusic3SegmentSeconds {
@@ -100,6 +149,10 @@ func (s *ProjectService) StartMusic3Cue(projectID, cueID uint, seed int64) (*mod
 	if err := s.db.Where("code = ? AND enabled = ?", music3EpisodeSegmentTemplate, true).First(&tpl).Error; err != nil {
 		return nil, fmt.Errorf("Music 3工作流模板未启用")
 	}
+	// MiniMax Music 3 treats max_duration as an upper bound and may emit EOS much
+	// earlier. Official section tags provide the model with a long-form instrumental
+	// structure. Any invented vocals are removed by the downstream Demucs stage.
+	lyrics = music3InstrumentalStructure(duration)
 	params := map[string]any{"caption": caption, "lyrics": lyrics, "duration": duration, "seed": seed}
 	task, err := s.tasks.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: caption, Params: params, Seed: &seed, AffinityKey: fmt.Sprintf("music3:p%d:e%d", projectID, cue.EpisodeN)})
 	if err != nil {
@@ -155,6 +208,22 @@ func (s *ProjectService) syncMusic3Candidates() {
 			s.db.Model(candidate).Update("error", err.Error())
 			continue
 		}
+		info, inspectErr := inspectMusicFLAC(data)
+		if inspectErr != nil {
+			s.db.Model(candidate).Updates(map[string]any{"error": inspectErr.Error(), "stale": true, "stale_reason": "Music 3输出媒体无效"})
+			continue
+		}
+		var cue models.MusicCueSheet
+		if s.db.First(&cue, candidate.MusicCueSheetID).Error != nil || cue.SourceVersionHash != candidate.SourceVersionHash || cue.Stale {
+			s.db.Model(candidate).Updates(map[string]any{"stale": true, "stale_reason": "Music 3生成期间Cue已变化", "duration": info.Duration, "sample_rate": info.SampleRate, "channels": info.Channels})
+			continue
+		}
+		expectedDuration := musicCueDuration(&cue)
+		if info.Duration < expectedDuration*0.9 {
+			reason := fmt.Sprintf("Music 3实际只生成%.2f秒，低于计划%.2f秒的90%%；max_duration只是上限，当前结果不可审核", info.Duration, expectedDuration)
+			s.db.Model(candidate).Updates(map[string]any{"error": reason, "stale": true, "stale_reason": reason, "duration": info.Duration, "sample_rate": info.SampleRate, "channels": info.Channels})
+			continue
+		}
 		digest := sha256.Sum256(data)
 		ext := strings.ToLower(filepath.Ext(filename))
 		if ext == "" {
@@ -166,18 +235,13 @@ func (s *ProjectService) syncMusic3Candidates() {
 			s.db.Model(candidate).Update("error", err.Error())
 			continue
 		}
-		var cue models.MusicCueSheet
-		if s.db.First(&cue, candidate.MusicCueSheetID).Error != nil || cue.SourceVersionHash != candidate.SourceVersionHash || cue.Stale {
-			s.db.Model(candidate).Updates(map[string]any{"stale": true, "stale_reason": "Music 3生成期间Cue已变化"})
-			continue
-		}
 		realHash := hex.EncodeToString(digest[:])
 		_ = s.db.Transaction(func(tx *gorm.DB) error {
 			var duplicate models.MusicCandidate
 			err := tx.Where("id <> ? AND project_id = ? AND music_cue_sheet_id = ? AND source_version_hash = ? AND provider = ? AND file_sha256 = ?", candidate.ID, candidate.ProjectID, candidate.MusicCueSheetID, candidate.SourceVersionHash, candidate.Provider, realHash).First(&duplicate).Error
 			if err == nil {
 				if duplicate.File == "" {
-					if updateErr := tx.Model(&duplicate).Updates(map[string]any{"file": filepath.Base(stored), "file_size": int64(len(data)), "duration": musicCueDuration(&cue), "error": ""}).Error; updateErr != nil {
+					if updateErr := tx.Model(&duplicate).Updates(map[string]any{"file": filepath.Base(stored), "file_size": int64(len(data)), "duration": info.Duration, "sample_rate": info.SampleRate, "channels": info.Channels, "error": ""}).Error; updateErr != nil {
 						return updateErr
 					}
 				}
@@ -186,7 +250,7 @@ func (s *ProjectService) syncMusic3Candidates() {
 			if err != gorm.ErrRecordNotFound {
 				return err
 			}
-			return tx.Model(candidate).Updates(map[string]any{"file": filepath.Base(stored), "file_sha256": realHash, "file_size": int64(len(data)), "duration": musicCueDuration(&cue), "error": ""}).Error
+			return tx.Model(candidate).Updates(map[string]any{"file": filepath.Base(stored), "file_sha256": realHash, "file_size": int64(len(data)), "duration": info.Duration, "sample_rate": info.SampleRate, "channels": info.Channels, "error": ""}).Error
 		})
 	}
 }
