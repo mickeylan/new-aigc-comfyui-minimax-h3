@@ -178,11 +178,11 @@ func (s *MusicCueService) validateBindings(cue *models.MusicCueSheet) error {
 }
 
 func (s *MusicCueService) List(projectID uint, episodeN int) ([]models.MusicCueSheet, error) {
-	legacy := s.db.Model(&models.MusicCueSheet{}).Where("project_id = ? AND source = ? AND source_version_hash <> '' AND source_version_hash NOT LIKE ? AND stale = ?", projectID, "ai", "music3-official-caption-duration-v8:%", false)
+	legacy := s.db.Model(&models.MusicCueSheet{}).Where("project_id = ? AND source = ? AND source_version_hash <> '' AND source_version_hash NOT LIKE ? AND stale = ?", projectID, "ai", "music3-dense-sections-duration-v9:%", false)
 	if episodeN > 0 {
 		legacy = legacy.Where("episode_n = ?", episodeN)
 	}
-	if err := legacy.Updates(map[string]any{"stale": true, "stale_reason": "旧Music 3方案未使用官方Caption结构和真实时长校验，请重新生成"}).Error; err != nil {
+	if err := legacy.Updates(map[string]any{"stale": true, "stale_reason": "旧Music 3方案未按目标时长提供足量器乐段落，请重新生成"}).Error; err != nil {
 		return nil, err
 	}
 	var cues []models.MusicCueSheet
@@ -510,8 +510,8 @@ func validateMusicCaptionJSON(raw string) error {
 }
 
 func musicCueSourceHash(context, requirements string) string {
-	hash := sha256.Sum256([]byte("music3-official-caption-duration-v8\n" + context + "\nUSER_REQUIREMENTS:\n" + strings.TrimSpace(requirements)))
-	return "music3-official-caption-duration-v8:" + hex.EncodeToString(hash[:])
+	hash := sha256.Sum256([]byte("music3-dense-sections-duration-v9\n" + context + "\nUSER_REQUIREMENTS:\n" + strings.TrimSpace(requirements)))
+	return "music3-dense-sections-duration-v9:" + hex.EncodeToString(hash[:])
 }
 
 func trimJSONEnvelope(raw string) string {

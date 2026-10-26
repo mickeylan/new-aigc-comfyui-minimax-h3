@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"path/filepath"
 	"strings"
 
@@ -16,7 +17,7 @@ import (
 
 const (
 	music3EpisodeSegmentTemplate = "minimax_music_3_episode_segment"
-	music3Provider               = "minimax_music_3_comfyui_official_skill_v6"
+	music3Provider               = "minimax_music_3_comfyui_dense_sections_v7"
 	maxMusic3SegmentSeconds      = 300.0
 )
 
@@ -57,14 +58,24 @@ func compileMusic3Caption(raw string) (string, string, error) {
 }
 
 func music3InstrumentalStructure(duration float64) string {
-	sections := []string{"[Intro]", "[Instrumental]"}
-	for covered := 60.0; covered < duration-30; covered += 45 {
-		sections = append(sections, "[Instrumental]")
+	// Music 3 treats max_duration as an upper bound. Its autoregressive planner
+	// commonly emits EOS after it consumes the supplied section skeleton. Give it
+	// roughly one executable instrumental section per ten target seconds so a
+	// long Cue is not declared complete after only a handful of sections.
+	sectionCount := int(math.Ceil(duration / 10.0))
+	if sectionCount < 3 {
+		sectionCount = 3
 	}
-	if duration >= 90 {
-		sections = append(sections, "[Solo]")
+	sections := make([]string, 0, sectionCount+2)
+	sections = append(sections, "[Intro]")
+	for i := 0; i < sectionCount; i++ {
+		if duration >= 90 && i == sectionCount*2/3 {
+			sections = append(sections, "[Solo]")
+		} else {
+			sections = append(sections, "[Instrumental]")
+		}
 	}
-	sections = append(sections, "[Instrumental]", "[Outro]")
+	sections = append(sections, "[Outro]")
 	return strings.Join(sections, "\n")
 }
 
@@ -131,8 +142,8 @@ func (s *ProjectService) StartMusic3Cue(projectID, cueID uint, seed int64) (*mod
 	if cue.ReviewStatus != "approved" || cue.Stale || !cue.Enabled {
 		return nil, fmt.Errorf("配乐Cue必须已审核通过、启用且未过期")
 	}
-	if !strings.HasPrefix(cue.SourceVersionHash, "music3-official-caption-duration-v8:") {
-		return nil, fmt.Errorf("配乐Cue来自旧Music 3策略；请重新生成AI配乐方案，新策略遵循官方Caption结构、使用器乐段落标签、分离Vocals并校验真实音频时长")
+	if !strings.HasPrefix(cue.SourceVersionHash, "music3-dense-sections-duration-v9:") {
+		return nil, fmt.Errorf("配乐Cue来自旧Music 3策略；请重新生成AI配乐方案，新策略遵循官方Caption结构，并按目标时长提供足量器乐段落标签，再分离Vocals和校验真实音频时长")
 	}
 	duration := musicCueDuration(&cue)
 	if duration < 5 || duration > maxMusic3SegmentSeconds {
