@@ -78,7 +78,7 @@ func TestMusic3StoryContractDoesNotMandateScaleModeOrInstrument(t *testing.T) {
 			t.Fatalf("contract missing %q", required)
 		}
 	}
-	if !strings.HasPrefix(musicCueSourceHash("ctx", "req"), "music3-dense-sections-duration-v9:") {
+	if !strings.HasPrefix(musicCueSourceHash("ctx", "req"), "music3-calibrated-sections-duration-v10:") {
 		t.Fatal("music policy version is not bound into source hash")
 	}
 }
@@ -89,8 +89,8 @@ func TestMusic3InstrumentalStructureExtendsLongFormControl(t *testing.T) {
 	if !strings.Contains(short, "[Intro]") || !strings.Contains(short, "[Outro]") {
 		t.Fatalf("short structure=%q", short)
 	}
-	if strings.Count(long, "[Instrumental]") < 15 || !strings.Contains(long, "[Solo]") {
-		t.Fatalf("long structure does not provide roughly one section per ten seconds: %q", long)
+	if strings.Count(long, "[Instrumental]") < 25 || !strings.Contains(long, "[Solo]") {
+		t.Fatalf("long structure does not provide roughly one section per six seconds: %q", long)
 	}
 	if strings.Contains(long, "Sing") || strings.Contains(long, "Verse") || strings.Contains(long, "Chorus") {
 		t.Fatalf("instrumental control contains vocal-song section: %q", long)

@@ -178,7 +178,7 @@ func (s *MusicCueService) validateBindings(cue *models.MusicCueSheet) error {
 }
 
 func (s *MusicCueService) List(projectID uint, episodeN int) ([]models.MusicCueSheet, error) {
-	legacy := s.db.Model(&models.MusicCueSheet{}).Where("project_id = ? AND source = ? AND source_version_hash <> '' AND source_version_hash NOT LIKE ? AND stale = ?", projectID, "ai", "music3-dense-sections-duration-v9:%", false)
+	legacy := s.db.Model(&models.MusicCueSheet{}).Where("project_id = ? AND source = ? AND source_version_hash <> '' AND source_version_hash NOT LIKE ? AND stale = ?", projectID, "ai", "music3-calibrated-sections-duration-v10:%", false)
 	if episodeN > 0 {
 		legacy = legacy.Where("episode_n = ?", episodeN)
 	}
@@ -510,8 +510,8 @@ func validateMusicCaptionJSON(raw string) error {
 }
 
 func musicCueSourceHash(context, requirements string) string {
-	hash := sha256.Sum256([]byte("music3-dense-sections-duration-v9\n" + context + "\nUSER_REQUIREMENTS:\n" + strings.TrimSpace(requirements)))
-	return "music3-dense-sections-duration-v9:" + hex.EncodeToString(hash[:])
+	hash := sha256.Sum256([]byte("music3-calibrated-sections-duration-v10\n" + context + "\nUSER_REQUIREMENTS:\n" + strings.TrimSpace(requirements)))
+	return "music3-calibrated-sections-duration-v10:" + hex.EncodeToString(hash[:])
 }
 
 func trimJSONEnvelope(raw string) string {
