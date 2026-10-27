@@ -28,6 +28,16 @@ test('项目详情成片历史按当前集分页且每页只挂载少量播放�
   assert.doesNotMatch(detailSource, /showAllMerges/)
 })
 
+test('剪辑台合并记录也按当前集分页', () => {
+  assert.match(source, /const editorMergePageSize = 4/)
+  assert.match(source, /editorEpisodeMerges/)
+  assert.match(source, /editorVisibleMerges/)
+  assert.match(source, /剪辑台合并记录分页/)
+  assert.match(source, /goToEditorMergePage/)
+  assert.match(source, /每页最多显示/)
+  assert.doesNotMatch(source, /v-for="m in merges"/)
+})
+
 test('剪辑台按生产阶段拆分为可持久切换的工作区', () => {
   for (const label of ['分镜制作', '连续性与审核', '声音与配乐', '最终成片', '高级设置']) assert.match(source, new RegExp(label))
   assert.match(source, /workspaceTab==='production'/)
