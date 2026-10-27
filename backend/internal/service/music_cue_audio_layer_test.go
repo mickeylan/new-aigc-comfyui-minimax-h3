@@ -41,6 +41,31 @@ func seedAcceptedMusicCandidate(t *testing.T, db *gorm.DB, projectID, cueID uint
 	return row
 }
 
+func TestProjectLibraryCandidateStaysReusableUntilExplicitEpisodePlacement(t *testing.T) {
+	db := newMusicAudioLayerTestDB(t)
+	project := models.Project{Title: "p"}
+	db.Create(&project)
+	cue := models.MusicCueSheet{ProjectID: project.ID, Scope: "library", ThemeCode: "danger", Name: "危机主题", EpisodeN: 0, Kind: "action", StartTime: 0, EndTime: 90, Duration: 90, Enabled: true, ReviewStatus: "approved", SourceVersionHash: "library-source"}
+	if err := db.Create(&cue).Error; err != nil {
+		t.Fatal(err)
+	}
+	candidate := seedAcceptedMusicCandidate(t, db, project.ID, cue.ID, "library-source", "danger.flac", "danger-file")
+	selection, err := NewMusicCandidateService(db).Select(project.ID, cue.ID, candidate.ID, "library-source", "danger-file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.Layer != nil {
+		t.Fatalf("library adoption created timeline layer: %+v", selection.Layer)
+	}
+	layer, err := placeMusicLibraryTrack(db, project.ID, cue.ID, 3, 12, 48, 0.3, 1, 2, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layer.EpisodeN != 3 || layer.Source != audioLayerSourceMusicLibrary || !layer.Loop || layer.StartTime != 12 || layer.EndTime != 48 {
+		t.Fatalf("placement=%+v", layer)
+	}
+}
+
 func TestAdoptingMusicCandidateCreatesBGMAudioLayer(t *testing.T) {
 	db := newMusicAudioLayerTestDB(t)
 	project := models.Project{Title: "p"}

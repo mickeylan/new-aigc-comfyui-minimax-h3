@@ -15,12 +15,19 @@ const (
 	// audioLayerSourceMusicCue marks a layer derived from an adopted Music 3
 	// candidate. Its file and timeline stay bound to the source Cue.
 	audioLayerSourceMusicCue = "music_cue"
+	// audioLayerSourceMusicLibrary marks an explicit episode placement of a reusable project track.
+	audioLayerSourceMusicLibrary = "music_library"
 )
 
 // upsertMusicCueAudioLayer materializes an adopted Music 3 candidate as a BGM
 // audio layer. The layer is derived state: the file and the timeline always
 // follow the Cue, so adopting another candidate replaces the same layer.
 func upsertMusicCueAudioLayer(tx *gorm.DB, cue *models.MusicCueSheet, candidate *models.MusicCandidate) (*models.AudioLayer, error) {
+	// Project-library tracks are reusable sources, not timeline placements. Adopting
+	// one marks its candidate current but must not create an Episode 0 BGM layer.
+	if cue.Scope == "library" || cue.EpisodeN == 0 {
+		return nil, nil
+	}
 	if !tx.Migrator().HasTable(&models.AudioLayer{}) {
 		return nil, nil
 	}
@@ -72,6 +79,33 @@ func upsertMusicCueAudioLayer(tx *gorm.DB, cue *models.MusicCueSheet, candidate 
 		return nil, err
 	}
 	if err := tx.First(&layer, layer.ID).Error; err != nil {
+		return nil, err
+	}
+	return &layer, nil
+}
+
+func placeMusicLibraryTrack(tx *gorm.DB, projectID, cueID uint, episodeN int, start, end, volume, fadeIn, fadeOut float64, loop bool) (*models.AudioLayer, error) {
+	if episodeN <= 0 || start < 0 || end <= start {
+		return nil, fmt.Errorf("集数和铺轨时间区间无效")
+	}
+	var cue models.MusicCueSheet
+	if err := tx.Where("id = ? AND project_id = ? AND scope = ? AND enabled = ? AND stale = ?", cueID, projectID, "library", true, false).First(&cue).Error; err != nil {
+		return nil, fmt.Errorf("项目配乐库曲目不存在或已过期")
+	}
+	var candidate models.MusicCandidate
+	if err := tx.Where("project_id = ? AND music_cue_sheet_id = ? AND is_current = ? AND review_status = ? AND stale = ?", projectID, cueID, true, "accepted", false).First(&candidate).Error; err != nil {
+		return nil, fmt.Errorf("该项目曲目还没有已审核采用的音频")
+	}
+	if volume <= 0 {
+		volume = 0.35
+	}
+	layer := models.AudioLayer{
+		ProjectID: projectID, EpisodeN: episodeN, Kind: "bgm", Name: cue.Name,
+		File: candidate.File, Description: fmt.Sprintf("项目配乐库 · %s (%s)", cue.Name, cue.ThemeCode),
+		StartTime: start, EndTime: end, Volume: volume, FadeIn: fadeIn, FadeOut: fadeOut, Loop: loop,
+		Status: "ready", Source: audioLayerSourceMusicLibrary, MusicCueSheetID: &cue.ID, MusicCandidateID: &candidate.ID,
+	}
+	if err := tx.Create(&layer).Error; err != nil {
 		return nil, err
 	}
 	return &layer, nil

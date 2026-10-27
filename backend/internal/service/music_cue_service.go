@@ -42,6 +42,9 @@ func NewMusicCueService(db *gorm.DB, deps ...any) *MusicCueService {
 
 // MusicCueSheetInput mirrors the editable fields of MusicCueSheet for API consumption.
 type MusicCueSheetInput struct {
+	Scope             string  `json:"scope"`
+	ThemeCode         string  `json:"theme_code"`
+	Name              string  `json:"name"`
 	EpisodeN          int     `json:"episode_n"`
 	SceneID           *uint   `json:"scene_id"`
 	ShotID            *uint   `json:"shot_id"`
@@ -93,8 +96,27 @@ func normalizeMusicCueSheet(projectID uint, in MusicCueSheetInput) (models.Music
 	if !musicCueKinds[kind] {
 		return models.MusicCueSheet{}, fmt.Errorf("kind 必须是 opening、scene、action、emotion、transition、ending 或 bgm")
 	}
-	if in.EpisodeN <= 0 {
+	scope := strings.ToLower(strings.TrimSpace(in.Scope))
+	if scope == "" {
+		if in.EpisodeN == 0 {
+			scope = "library"
+		} else {
+			scope = "episode"
+		}
+	}
+	if scope != "library" && scope != "episode" {
+		return models.MusicCueSheet{}, fmt.Errorf("scope 必须是 library 或 episode")
+	}
+	if scope == "episode" && in.EpisodeN <= 0 {
 		return models.MusicCueSheet{}, fmt.Errorf("episode_n 必须大于 0")
+	}
+	if scope == "library" {
+		in.EpisodeN = 0
+		in.SceneID = nil
+		in.ShotID = nil
+		if strings.TrimSpace(in.Name) == "" || strings.TrimSpace(in.ThemeCode) == "" {
+			return models.MusicCueSheet{}, fmt.Errorf("项目配乐库曲目必须填写 name 和 theme_code")
+		}
 	}
 	if !musicCueIsFinite(in.StartTime) || !musicCueIsFinite(in.EndTime) || in.StartTime < 0 || in.EndTime <= in.StartTime {
 		return models.MusicCueSheet{}, fmt.Errorf("start_time 必须非负且 end_time 必须大于 start_time")
@@ -140,7 +162,8 @@ func normalizeMusicCueSheet(projectID uint, in MusicCueSheetInput) (models.Music
 		enabled = *in.Enabled
 	}
 	return models.MusicCueSheet{
-		ProjectID: projectID, EpisodeN: in.EpisodeN, SceneID: in.SceneID, ShotID: in.ShotID,
+		ProjectID: projectID, Scope: scope, ThemeCode: strings.TrimSpace(in.ThemeCode), Name: strings.TrimSpace(in.Name),
+		EpisodeN: in.EpisodeN, SceneID: in.SceneID, ShotID: in.ShotID,
 		Kind: kind, StartTime: in.StartTime, EndTime: in.EndTime,
 		Intensity: intensity, Mood: mood,
 		InstrumentNote: strings.TrimSpace(in.InstrumentNote), UserRequirements: strings.TrimSpace(in.UserRequirements),
@@ -193,6 +216,7 @@ func (s *MusicCueService) List(projectID uint, episodeN int) ([]models.MusicCueS
 
 func musicCueSheetUpdates(cue models.MusicCueSheet) map[string]any {
 	return map[string]any{
+		"scope": cue.Scope, "theme_code": cue.ThemeCode, "name": cue.Name,
 		"episode_n": cue.EpisodeN, "scene_id": cue.SceneID, "shot_id": cue.ShotID,
 		"kind": cue.Kind, "start_time": cue.StartTime, "end_time": cue.EndTime,
 		"intensity": cue.Intensity, "mood": cue.Mood, "instrument_note": cue.InstrumentNote, "user_requirements": cue.UserRequirements,
@@ -243,7 +267,7 @@ func (s *MusicCueService) Update(projectID, id uint, in MusicCueSheetInput) (*mo
 	}
 	cue.ReviewStatus = "draft"
 	cue.ReviewReason = ""
-	if context, contextErr := s.episodeContext(projectID, cue.EpisodeN); contextErr == nil {
+	if context, contextErr := s.contextForCue(&cue); contextErr == nil {
 		cue.SourceVersionHash = musicCueSourceHash(context, cue.UserRequirements)
 	}
 	updates := musicCueSheetUpdates(cue)
@@ -402,6 +426,10 @@ func (caption *musicStructuredCaption) UnmarshalJSON(data []byte) error {
 }
 
 type generatedMusicCue struct {
+	Name             string                 `json:"name"`
+	ThemeCode        string                 `json:"theme_code"`
+	Duration         float64                `json:"duration"`
+	Tags             string                 `json:"tags"`
 	Kind             string                 `json:"kind"`
 	StartTime        float64                `json:"start_time"`
 	EndTime          float64                `json:"end_time"`
@@ -574,6 +602,42 @@ func (s *MusicCueService) episodeContext(projectID uint, episodeN int) (string, 
 	return string(encoded), err
 }
 
+func (s *MusicCueService) projectMusicContext(projectID uint) (string, error) {
+	var project models.Project
+	if err := s.db.First(&project, projectID).Error; err != nil {
+		return "", err
+	}
+	var scenes []models.Scene
+	if err := s.db.Where("project_id = ?", projectID).Order("episode_n, `order`, id").Limit(120).Find(&scenes).Error; err != nil {
+		return "", err
+	}
+	type sceneBrief struct {
+		EpisodeN int    `json:"episode_n"`
+		Title    string `json:"title"`
+		Content  string `json:"content"`
+	}
+	briefs := make([]sceneBrief, 0, len(scenes))
+	for _, scene := range scenes {
+		content := []rune(strings.TrimSpace(scene.Content))
+		if len(content) > 300 {
+			content = content[:300]
+		}
+		briefs = append(briefs, sceneBrief{EpisodeN: scene.EpisodeN, Title: scene.Title, Content: string(content)})
+	}
+	encoded, err := json.Marshal(map[string]any{
+		"project_title": project.Title, "genre": project.Genre, "style": project.Style,
+		"synopsis": project.Synopsis, "planned_episodes": project.Episodes, "representative_scenes": briefs,
+	})
+	return string(encoded), err
+}
+
+func (s *MusicCueService) contextForCue(cue *models.MusicCueSheet) (string, error) {
+	if cue.Scope == "library" || cue.EpisodeN == 0 {
+		return s.projectMusicContext(cue.ProjectID)
+	}
+	return s.episodeContext(cue.ProjectID, cue.EpisodeN)
+}
+
 func validateGeneratedMusicCueCoverage(cues []generatedMusicCue, total float64) error {
 	if total <= 0 {
 		return fmt.Errorf("Episode总时长无效")
@@ -686,6 +750,75 @@ func (s *MusicCueService) DraftEpisode(projectID uint, episodeN int, requirement
 	return rows, err
 }
 
+func (s *MusicCueService) ListLibrary(projectID uint) ([]models.MusicCueSheet, error) {
+	var rows []models.MusicCueSheet
+	err := s.db.Where("project_id = ? AND scope = ? AND enabled = ? AND stale = ?", projectID, "library", true, false).
+		Order("`order`, id").Find(&rows).Error
+	return rows, err
+}
+
+func (s *MusicCueService) DraftProjectLibrary(projectID uint, requirements string) ([]models.MusicCueSheet, error) {
+	if s.provider == nil || s.skills == nil {
+		return nil, fmt.Errorf("配乐提示词生成服务未配置")
+	}
+	context, err := s.projectMusicContext(projectID)
+	if err != nil {
+		return nil, err
+	}
+	system := `Plan a reusable project-level score library for one complete drama. Output strict JSON with root field cues. Return 5 to 8 distinct reusable themes, not an episode timeline. Each cue must contain name,theme_code,duration,tags,kind,intensity,mood,instrument_note,user_requirements,caption. theme_code must be a stable lowercase snake_case identifier. duration must be 45 to 180 seconds. kind must be bgm, action, emotion, opening, ending or transition. Cover the project's recurring dramatic functions such as protagonist identity, relationships, mystery, environment, danger, action, warmth or comedy only when supported by the project context. Avoid redundant themes. Each caption has global_metadata,vocal_details,arrangement,lyrics_input and follows the bundled MiniMax Music 3 music-caption-rewriter contract: natural English, one coherent primary music family, concrete musical sections and instrument lifecycles, no plot retelling, scene timestamps, character names or database-style key:value dumps. Each track is instrumental; lyrics_input is empty. Tracks must share a coherent overall sonic identity while remaining clearly distinguishable by dramatic function. Do not imitate copyrighted works or named composers.`
+	user := "Authoritative project context JSON:\n" + context + "\n\nUser requirements:\n" + strings.TrimSpace(requirements)
+	raw, err := s.skills.ChatWithConfiguredOrFallbackSkill(projectID, models.SkillStageMusicCueSheet, "music-cue-sheet-generate", s.provider, system, user, map[string]string{"episode_context": context, "user_requirements": requirements})
+	if err != nil {
+		return nil, err
+	}
+	generated, err := parseGeneratedMusicCueSheet(raw)
+	if err != nil {
+		return nil, fmt.Errorf("AI项目配乐库JSON解析失败: %w", err)
+	}
+	if len(generated.Cues) < 5 || len(generated.Cues) > 8 {
+		return nil, fmt.Errorf("项目配乐库必须包含5–8个可复用主题，AI返回%d个", len(generated.Cues))
+	}
+	seen := map[string]bool{}
+	rows := make([]models.MusicCueSheet, 0, len(generated.Cues))
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.MusicCueSheet{}).Where("project_id = ? AND scope = ? AND source = ? AND enabled = ?", projectID, "library", "ai", true).
+			Updates(map[string]any{"enabled": false, "stale": true, "stale_reason": "已被用户重新生成的项目配乐库替换"}).Error; err != nil {
+			return err
+		}
+		for index, item := range generated.Cues {
+			code := strings.ToLower(strings.TrimSpace(item.ThemeCode))
+			if !regexp.MustCompile(`^[a-z][a-z0-9_]{2,63}$`).MatchString(code) || seen[code] {
+				return fmt.Errorf("第%d条曲目theme_code无效或重复", index+1)
+			}
+			seen[code] = true
+			if item.Duration < 45 || item.Duration > 180 {
+				return fmt.Errorf("第%d条曲目duration必须为45–180秒", index+1)
+			}
+			item.Caption.LyricsInput = ""
+			caption, _ := json.Marshal(item.Caption)
+			if err := validateMusicCaptionJSON(string(caption)); err != nil {
+				return fmt.Errorf("第%d条曲目: %w", index+1, err)
+			}
+			input := MusicCueSheetInput{Scope: "library", ThemeCode: code, Name: strings.TrimSpace(item.Name), EpisodeN: 0,
+				Kind: item.Kind, StartTime: 0, EndTime: item.Duration, Duration: item.Duration,
+				Intensity: item.Intensity, Mood: item.Mood, InstrumentNote: item.InstrumentNote,
+				UserRequirements: strings.TrimSpace(requirements), Tags: item.Tags, CaptionJSON: string(caption), Source: "ai", Order: index + 1}
+			cue, err := normalizeMusicCueSheet(projectID, input)
+			if err != nil {
+				return fmt.Errorf("第%d条曲目: %w", index+1, err)
+			}
+			cue.SourceVersionHash = musicCueSourceHash(context, requirements)
+			cue.RawOutput, cue.ReviewStatus = raw, "draft"
+			if err := tx.Create(&cue).Error; err != nil {
+				return err
+			}
+			rows = append(rows, cue)
+		}
+		return nil
+	})
+	return rows, err
+}
+
 func (s *MusicCueService) Review(projectID, id uint, approve bool, reason string) (*models.MusicCueSheet, error) {
 	var cue models.MusicCueSheet
 	if err := s.db.Where("id = ? AND project_id = ?", id, projectID).First(&cue).Error; err != nil {
@@ -701,7 +834,7 @@ func (s *MusicCueService) Review(projectID, id uint, approve bool, reason string
 		if err := validateMusicCaptionJSON(cue.CaptionJSON); err != nil {
 			return nil, err
 		}
-		context, err := s.episodeContext(projectID, cue.EpisodeN)
+		context, err := s.contextForCue(&cue)
 		if err != nil {
 			return nil, err
 		}
@@ -804,6 +937,75 @@ func (s *Service) HandleDeleteMusicCueSheet(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (s *Service) HandleListMusicLibrary(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	rows, err := s.MusicCues.ListLibrary(p.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, rows)
+}
+
+func (s *Service) HandleDraftMusicLibrary(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		Requirements string `json:"requirements"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	rows, err := s.MusicCues.DraftProjectLibrary(p.ID, body.Requirements)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"tracks": rows})
+}
+
+func (s *Service) HandlePlaceMusicLibraryTrack(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	cueID, err := strconv.ParseUint(c.Param("cid"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid library track id"})
+		return
+	}
+	var body struct {
+		EpisodeN  int     `json:"episode_n"`
+		StartTime float64 `json:"start_time"`
+		EndTime   float64 `json:"end_time"`
+		Volume    float64 `json:"volume"`
+		FadeIn    float64 `json:"fade_in"`
+		FadeOut   float64 `json:"fade_out"`
+		Loop      bool    `json:"loop"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	var layer *models.AudioLayer
+	err = s.DB.Transaction(func(tx *gorm.DB) error {
+		var placeErr error
+		layer, placeErr = placeMusicLibraryTrack(tx, p.ID, uint(cueID), body.EpisodeN, body.StartTime, body.EndTime, body.Volume, body.FadeIn, body.FadeOut, body.Loop)
+		return placeErr
+	})
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, layer)
 }
 
 func (s *Service) HandleDraftMusicCueSheets(c *gin.Context) {

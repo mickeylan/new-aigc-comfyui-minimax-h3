@@ -90,6 +90,36 @@ func TestMusicCueSheetCRUDIsScopedToProject(t *testing.T) {
 	}
 }
 
+func TestProjectMusicLibraryPersistsReusableThemesOutsideEpisodeTimeline(t *testing.T) {
+	db := newMusicCueTestDB(t)
+	project := models.Project{Title: "reusable score"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := NewMusicCueService(db)
+	created, err := svc.Create(project.ID, MusicCueSheetInput{
+		Scope: "library", ThemeCode: "sister_bond", Name: "姐妹主题",
+		EpisodeN: 0, Kind: "emotion", StartTime: 0, EndTime: 90, Duration: 90,
+		Intensity: "soft", Mood: "romantic", Tags: "姐妹,温情,重逢", Source: "manual",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Scope != "library" || created.EpisodeN != 0 || created.ThemeCode != "sister_bond" {
+		t.Fatalf("created=%+v", created)
+	}
+	rows, err := svc.ListLibrary(project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ID != created.ID || rows[0].Name != "姐妹主题" {
+		t.Fatalf("library rows=%+v", rows)
+	}
+	if _, err := svc.Create(project.ID, MusicCueSheetInput{Scope: "library", Kind: "bgm", StartTime: 0, EndTime: 60}); err == nil {
+		t.Fatal("library track without stable identity was accepted")
+	}
+}
+
 func TestMusicCueListDoesNotInvalidateSavedPlanAfterPolicyOrServiceRestart(t *testing.T) {
 	db := newMusicCueTestDB(t)
 	project := models.Project{Title: "persisted music plan"}

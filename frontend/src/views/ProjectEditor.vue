@@ -303,7 +303,13 @@
     </section>
 
     <section class="section">
-      <div class="section-head"><div><span class="overline">MUSIC CUE SHEET</span><h2>MiniMax Music 3 配乐提示词</h2><p class="sub">先填写你的配乐设想，由 music-caption-rewriter 生成 Structured Caption；审核通过后可提交真实Music 3候选；生成结果必须完整试听、审核并采用。</p></div><button class="btn btn-sm btn-secondary" :disabled="musicCueBusy" @click="draftMusicCues">{{musicCueBusy?'生成中…':'AI生成配乐方案'}}</button><button class="btn btn-sm btn-ghost" :disabled="musicCueBusy||!musicCues.length" @click="batchApproveMusicCues">批量审核本集</button></div>
+      <div class="section-head"><div><span class="overline">PROJECT SCORE LIBRARY</span><h2>全剧可复用配乐库</h2><p class="sub">为整部剧生成5–8首人物、情感、悬疑、环境、危机或动作主题。审核采用后，每集只需引用、裁剪、循环和淡化，不再重复生成同类音乐。</p></div><button class="btn btn-sm btn-secondary" :disabled="musicCueBusy" @click="draftMusicLibrary">{{musicCueBusy?'生成中…':'AI生成全剧配乐库'}}</button></div>
+      <div class="card"><label class="wide">全剧配乐身份、主题与排除项<textarea v-model="musicRequirements" class="textarea" rows="3" placeholder="例如：华语仙侠影视配乐；主题统一；纯器乐；对白下克制；需要主角、姐妹、悬疑、宗门、战斗和温馨主题"></textarea></label></div>
+      <div class="card" v-if="musicLibrary.length"><div v-for="track in musicLibrary" :key="`library-${track.id}`" class="music-cue-card"><div class="merge-info"><span class="badge" :class="track.review_status==='approved'?'badge-green':'badge-gray'">{{track.review_status}}</span><strong>{{track.name}} · {{track.theme_code}}</strong><span>{{track.kind}} / {{track.mood}} · 建议 {{track.duration||track.end_time}} 秒</span><span>{{track.tags}}</span></div><label>Structured Caption JSON<textarea v-model="track.caption_json" class="textarea code-textarea" rows="8"></textarea></label><div class="section-actions"><button class="btn btn-sm btn-secondary" @click="saveMusicCue(track)">保存草稿</button><button class="btn btn-sm" :disabled="track.stale" @click="reviewMusicCue(track,'approve')">审核通过</button><button class="btn btn-sm btn-secondary" :disabled="track.review_status!=='approved'||track.stale||musicCandidateBusy" @click="generateMusicCandidate(track)">生成主题音乐候选</button><button class="btn btn-sm" :disabled="track.stale" @click="placeMusicLibraryTrack(track)">铺到本集</button><button class="btn btn-sm btn-ghost" @click="toggleMusicCandidates(track)">{{musicCandidateCueId===track.id?'收起候选':'试听候选'}}</button></div><div v-if="musicCandidateCueId===track.id" class="candidate-list"><article v-for="item in musicCandidates" :key="item.candidate.id" class="candidate" :class="{current:item.candidate.is_current,stale:item.candidate.stale}"><div class="merge-info"><strong>{{item.candidate.model||'Music 3候选'}}</strong><span>{{item.candidate.duration?item.candidate.duration.toFixed(2)+' 秒':'时长待探测'}} · {{item.candidate.is_current?'已采用':item.candidate.review_status}}</span></div><audio v-if="item.audio_url" :src="item.audio_url" controls preload="none"></audio><label v-if="item.candidate.review_status==='pending'" class="checkbox"><input v-model="item._confirmed" type="checkbox">我已完整试听该候选</label><div class="section-actions"><button v-if="item.candidate.review_status==='pending'" class="btn btn-sm btn-secondary" :disabled="item.candidate.stale||!item._confirmed" @click="reviewMusicCandidate(track,item,'accepted')">审核通过</button><button class="btn btn-sm" :disabled="item.candidate.is_current||item.candidate.stale||item.candidate.review_status!=='accepted'" @click="selectMusicCandidate(track,item)">采用为项目曲目</button></div></article></div></div></div><div class="card empty" v-else>尚未生成全剧配乐库。</div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><div><span class="overline">LEGACY EPISODE MUSIC CUE SHEET</span><h2>MiniMax Music 3 配乐提示词</h2><p class="sub">先填写你的配乐设想，由 music-caption-rewriter 生成 Structured Caption；审核通过后可提交真实Music 3候选；生成结果必须完整试听、审核并采用。</p></div><button class="btn btn-sm btn-secondary" :disabled="musicCueBusy" @click="draftMusicCues">{{musicCueBusy?'生成中…':'AI生成配乐方案'}}</button><button class="btn btn-sm btn-ghost" :disabled="musicCueBusy||!musicCues.length" @click="batchApproveMusicCues">批量审核本集</button></div>
       <div class="card"><label class="wide">本集配乐要求、设想与排除项<textarea v-model="musicRequirements" class="textarea" rows="3" placeholder="例如：纯器乐；情感段使用尼龙弦古典吉他指弹；高潮加入低音弦乐；对白期间克制；不要人声、合唱和电子鼓"></textarea></label></div>
       <div class="card" v-if="musicCues.length"><div v-for="cue in musicCues" :key="cue.id" class="music-cue-card"><div class="merge-info"><span class="badge" :class="cue.review_status==='approved'?'badge-green':cue.review_status==='rejected'?'badge-red':'badge-gray'">{{cue.review_status}}</span><strong>{{cue.kind}} · {{cue.start_time}}s → {{cue.end_time}}s</strong><span>{{cue.mood}} / {{cue.intensity}} · {{cue.instrument_note}}</span><span v-if="cue.stale" class="fail-msg">已过期：{{cue.stale_reason}}</span></div><label>本Cue补充要求<textarea v-model="cue.user_requirements" class="textarea" rows="2"></textarea></label><label>Structured Caption JSON<textarea v-model="cue.caption_json" class="textarea code-textarea" rows="10"></textarea></label><div class="section-actions"><button class="btn btn-sm btn-secondary" @click="saveMusicCue(cue)">保存草稿</button><button class="btn btn-sm" :disabled="cue.stale" @click="reviewMusicCue(cue,'approve')">审核通过</button><button class="btn btn-sm btn-ghost" @click="reviewMusicCue(cue,'reject')">驳回</button><button class="btn btn-sm btn-secondary" :disabled="cue.review_status!=='approved'||cue.stale||musicCandidateBusy" @click="generateMusicCandidate(cue)">生成Music 3候选</button><button class="btn btn-sm btn-ghost" @click="toggleMusicCandidates(cue)">{{musicCandidateCueId===cue.id?'收起候选':'试听候选'}}</button><button class="btn btn-sm btn-danger" @click="removeMusicCue(cue)">删除</button></div><div v-if="musicCandidateCueId===cue.id" class="candidate-list"><p class="sub">每段最长300秒。长Episode应拆成两段并保持相同主题与配器；候选必须完整试听、审核并采用。</p><div v-if="musicCandidateBusy" class="inline-status">正在加载配乐候选…</div><article v-for="item in musicCandidates" :key="item.candidate.id" class="candidate" :class="{current:item.candidate.is_current,stale:item.candidate.stale}"><div class="merge-info"><strong>{{item.candidate.model||item.candidate.provider||'Music 3候选'}}</strong><span>{{item.candidate.duration?item.candidate.duration.toFixed(2)+' 秒':'时长待探测'}} · {{item.candidate.is_current?'已采用':item.candidate.review_status==='accepted'?'已审核':item.candidate.review_status==='rejected'?'已拒绝':item.task_status==='running'?'ComfyUI生成中':item.task_status==='pending'?'等待GPU调度':item.task_status==='failed'?'任务失败':'待审核'}}</span><span v-if="item.task_id">任务 {{item.task_id}}</span></div><audio v-if="item.audio_url" :src="item.audio_url" controls preload="none"></audio><p v-if="item.candidate.error" class="fail-msg">{{item.candidate.error}}</p><p v-if="item.candidate.stale" class="fail-msg">已过期：{{item.candidate.stale_reason}}</p><label v-if="item.candidate.review_status==='pending'" class="checkbox"><input v-model="item._confirmed" type="checkbox">我已完整试听该候选</label><div class="section-actions"><button v-if="item.candidate.review_status==='pending'" class="btn btn-sm btn-secondary" :disabled="item.candidate.stale||!item._confirmed" @click="reviewMusicCandidate(cue,item,'accepted')">审核通过</button><button class="btn btn-sm" :disabled="item.candidate.is_current||item.candidate.stale||item.candidate.review_status!=='accepted'" @click="selectMusicCandidate(cue,item)">采用此版本</button><button v-if="item.candidate.is_current" class="btn btn-sm btn-ghost" @click="unselectMusicCandidate(cue,item)">取消采用</button><button class="btn btn-sm btn-ghost" :disabled="item.candidate.is_current" @click="reviewMusicCandidate(cue,item,'rejected')">拒绝</button><button class="btn btn-sm btn-danger" :disabled="item.candidate.is_current" @click="removeMusicCandidate(cue,item)">删除</button></div></article><p v-if="!musicCandidateBusy&&!musicCandidates.length" class="sub">暂无音乐候选。</p></div></div></div>
       <div class="card empty" v-else>暂无配乐Cue。填写要求后生成；系统通常只规划2–4个主Cue，避免全程铺满音乐。</div>
@@ -408,6 +414,7 @@ const audioLayers = ref([])
 const audioPreflight = ref(null)
 const audioPreflightLoading = ref(false)
 const musicCues = ref([])
+const musicLibrary = ref([])
 const musicRequirements = ref('')
 const musicCueBusy = ref(false)
 const musicCandidateCueId = ref(null)
@@ -943,8 +950,23 @@ async function removeSharedAsset(row) {
 }
 
 async function loadMusicCues(){
-  try { const {data}=await api.musicCues(id(),activeEpN.value); musicCues.value=data||[] }
-  catch(e){ toast.error(e.response?.data?.error||'加载配乐Cue失败') }
+  try { const [{data:cues},{data:library}]=await Promise.all([api.musicCues(id(),activeEpN.value),api.musicLibrary(id())]); musicCues.value=cues||[]; musicLibrary.value=library||[] }
+  catch(e){ toast.error(e.response?.data?.error||'加载配乐方案失败') }
+}
+async function draftMusicLibrary(){
+  musicCueBusy.value=true
+  try { const {data}=await api.draftMusicLibrary(id(),musicRequirements.value); musicLibrary.value=data.tracks||[]; toast.success('已生成可审核的全剧配乐库') }
+  catch(e){ toast.error(e.response?.data?.error||'生成全剧配乐库失败') }
+  finally { musicCueBusy.value=false }
+}
+async function placeMusicLibraryTrack(track){
+  const episodeDuration = scenes.value.filter(s=>Number(s.episode_n)===Number(activeEpN.value)).reduce((sum,s)=>sum+Number(s.duration||0),0)
+  if(episodeDuration<=0){ toast.error('当前集没有可用时长'); return }
+  try {
+    await api.placeMusicLibraryTrack(id(),track.id,{episode_n:activeEpN.value,start_time:0,end_time:episodeDuration,volume:0.35,fade_in:1.5,fade_out:2,loop:true})
+    await loadAudioLayers()
+    toast.success(`已将“${track.name}”作为可循环BGM铺到本集`)
+  } catch(e){ toast.error(e.response?.data?.error||'项目曲目铺轨失败') }
 }
 async function draftMusicCues(){
   musicCueBusy.value=true
@@ -952,7 +974,7 @@ async function draftMusicCues(){
   catch(e){ toast.error(e.response?.data?.error||'生成配乐提示词失败') }
   finally { musicCueBusy.value=false }
 }
-function musicCuePayload(cue){ return {episode_n:activeEpN.value,scene_id:cue.scene_id||null,shot_id:cue.shot_id||null,kind:cue.kind,start_time:Number(cue.start_time),end_time:Number(cue.end_time),intensity:cue.intensity,mood:cue.mood||'',instrument_note:cue.instrument_note||'',user_requirements:cue.user_requirements||'',duration:Number(cue.duration||0),tags:cue.tags||'',caption_json:cue.caption_json||'',source:cue.source||'manual',order:Number(cue.order||0),enabled:cue.enabled!==false} }
+function musicCuePayload(cue){ return {scope:cue.scope||'episode',theme_code:cue.theme_code||'',name:cue.name||'',episode_n:cue.scope==='library'?0:activeEpN.value,scene_id:cue.scene_id||null,shot_id:cue.shot_id||null,kind:cue.kind,start_time:Number(cue.start_time),end_time:Number(cue.end_time),intensity:cue.intensity,mood:cue.mood||'',instrument_note:cue.instrument_note||'',user_requirements:cue.user_requirements||'',duration:Number(cue.duration||0),tags:cue.tags||'',caption_json:cue.caption_json||'',source:cue.source||'manual',order:Number(cue.order||0),enabled:cue.enabled!==false} }
 async function saveMusicCue(cue){
   try { const {data}=await api.updateMusicCue(id(),cue.id,musicCuePayload(cue)); Object.assign(cue,data); toast.success('配乐提示词已保存为草稿') }
   catch(e){ toast.error(e.response?.data?.error||'保存配乐Cue失败') }

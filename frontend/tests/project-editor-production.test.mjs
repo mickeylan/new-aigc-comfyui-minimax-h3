@@ -24,6 +24,15 @@ test('剪辑台提供Scene生产看板和只读双层时间轴', () => {
   assert.match(source, /fragment\.start_rune/)
 })
 
+test('剪辑台提供跨集复用的项目配乐库', () => {
+  assert.match(source, /PROJECT SCORE LIBRARY/)
+  assert.match(source, /全剧可复用配乐库/)
+  assert.match(source, /draftMusicLibrary/)
+  assert.match(source, /api\.musicLibrary/)
+  assert.match(source, /track\.theme_code/)
+  assert.match(source, /每集只需引用、裁剪、循环和淡化/)
+})
+
 test('剪辑台先收集用户设想再生成并审核Music 3提示词', () => {
   assert.match(source, /MiniMax Music 3 配乐提示词/)
   assert.match(source, /本集配乐要求、设想与排除项/)

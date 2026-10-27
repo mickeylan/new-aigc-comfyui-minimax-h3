@@ -1297,8 +1297,12 @@ type MusicCandidate struct {
 // MusicCueSheet stores an editable Structured Caption aligned to the Episode timeline.
 // It remains independent from generated candidates and AudioLayer mixing.
 type MusicCueSheet struct {
-	ID               uint    `gorm:"primaryKey" json:"id"`
-	ProjectID        uint    `gorm:"column:project_id;index;index:idx_music_cue_timeline" json:"project_id"`
+	ID        uint `gorm:"primaryKey" json:"id"`
+	ProjectID uint `gorm:"column:project_id;index;index:idx_music_cue_timeline" json:"project_id"`
+	// Scope is library for reusable project score themes and episode for timeline plans.
+	Scope            string  `gorm:"column:scope;size:24;default:episode;index" json:"scope"`
+	ThemeCode        string  `gorm:"column:theme_code;size:64;index" json:"theme_code"`
+	Name             string  `gorm:"column:name;size:160" json:"name"`
 	EpisodeN         int     `gorm:"column:episode_n;index;index:idx_music_cue_timeline" json:"episode_n"`
 	SceneID          *uint   `gorm:"column:scene_id;index" json:"scene_id,omitempty"`
 	ShotID           *uint   `gorm:"column:shot_id;index" json:"shot_id,omitempty"`
