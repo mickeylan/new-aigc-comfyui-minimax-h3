@@ -8535,6 +8535,43 @@ func (s *ProjectService) ListMerges(projectID uint) ([]models.MergeTask, error) 
 	return list, nil
 }
 
+var ErrMergeDeleteConflict = errors.New("进行中的合并记录不能删除")
+
+func (s *ProjectService) DeleteMerge(projectID, mergeID uint) error {
+	var merge models.MergeTask
+	if err := s.db.Where("id = ? AND project_id = ?", mergeID, projectID).First(&merge).Error; err != nil {
+		return err
+	}
+	if merge.Status == "pending" || merge.Status == "running" {
+		return ErrMergeDeleteConflict
+	}
+	output := strings.TrimSpace(merge.OutputFile)
+	if output != "" {
+		clean := filepath.ToSlash(filepath.Clean(output))
+		if clean == "." || filepath.IsAbs(clean) || strings.HasPrefix(clean, "../") || strings.Contains(clean, "/../") {
+			return fmt.Errorf("合并输出路径无效")
+		}
+		base := s.mediaPath("output_workers", "gpu0", filepath.FromSlash(clean))
+		for _, candidate := range []string{base, strings.TrimSuffix(base, filepath.Ext(base)) + ".srt", strings.TrimSuffix(base, filepath.Ext(base)) + ".screen.ass"} {
+			if s.remote != nil {
+				if err := s.remote.Remove(candidate); err != nil {
+					return fmt.Errorf("删除合并文件失败: %w", err)
+				}
+			} else if err := os.Remove(candidate); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("删除合并文件失败: %w", err)
+			}
+		}
+	}
+	result := s.db.Where("id = ? AND project_id = ? AND status NOT IN ?", mergeID, projectID, []string{"pending", "running"}).Delete(&models.MergeTask{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrMergeDeleteConflict
+	}
+	return nil
+}
+
 // CreateAllMerges 整剧一键合并：对所有含就绪视频的集各创建一个合并任务
 func (s *ProjectService) CreateAllMerges(p *models.Project, dub, subtitles, screenText bool) (int, error) {
 	var episodes []int

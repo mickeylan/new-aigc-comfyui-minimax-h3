@@ -401,6 +401,7 @@
             <div class="merge-links">
               <a class="btn btn-sm btn-ghost" :href="outputUrl(m.output_file) + '?download=1'">下载成片</a>
               <a v-if="m.subtitle" class="btn btn-sm btn-ghost" :href="outputUrl(m.output_file.replace(/\.mp4$/, '.srt')) + '?download=1'">下载字幕</a>
+              <button class="btn btn-sm btn-danger" :disabled="m._deleting" @click="deleteMergeRecord(m)">{{m._deleting?'删除中…':'删除'}}</button>
             </div>
           </div>
         </article>
@@ -692,6 +693,14 @@ async function loadMerges() {
     const { data } = await api.merges(id())
     merges.value = data
   } catch { /* ignore */ }
+}
+async function deleteMergeRecord(row){
+  if(row.status==='pending'||row.status==='running'){toast.error('进行中的合并记录不能删除');return}
+  if(!window.confirm('删除这条合并记录及其成片文件？此操作不可恢复。'))return
+  row._deleting=true
+  try{await api.deleteMerge(id(),row.id);toast.success('合并记录和成片文件已删除');await loadMerges()}
+  catch(e){toast.error(e.response?.data?.error||'删除合并记录失败')}
+  finally{row._deleting=false}
 }
 
 function clearSceneDrafts() { videoDraftSafety?.dispose(); videoDraftSafety = null; visualBeatDraft.value = ''; polishDraft.value = ''; assetReviewDraft.value = ''; coverageReviewDraft.value = ''; videoPromptDraft.value = '' }

@@ -161,6 +161,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/audio-merge", svc.HandleCreateAudioMerge)
 	r.POST("/api/projects/:id/merge-all", svc.HandleCreateAllMerges)
 	r.GET("/api/projects/:id/merges", svc.HandleListMerges)
+	r.DELETE("/api/projects/:id/merges/:mid", svc.HandleDeleteMerge)
 	// 声景、音效与背景音乐层（仅管理已有音频，不调用生成供应商）
 	r.GET("/api/projects/:id/audio-layers", svc.HandleListAudioLayers)
 	r.GET("/api/projects/:id/audio-layers/preflight", svc.HandleAudioLayerPreflight)

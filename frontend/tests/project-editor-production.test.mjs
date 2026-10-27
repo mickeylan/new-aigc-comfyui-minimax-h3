@@ -40,6 +40,9 @@ test('剪辑台合并记录也按三列两行分页', () => {
   assert.match(source, /class="merge-history-video"/)
   assert.match(detailSource, /grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/)
   assert.match(detailSource, /class="merge-history-video"/)
+  assert.match(source, /api\.deleteMerge/)
+  assert.match(detailSource, /api\.deleteMerge/)
+  assert.match(source, /删除这条合并记录及其成片文件/)
 })
 
 test('剪辑台按生产阶段拆分为可持久切换的工作区', () => {

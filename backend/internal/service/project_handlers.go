@@ -1226,6 +1226,31 @@ func (s *Service) HandleCreateAllMerges(c *gin.Context) {
 }
 
 // HandleListMerges 合并任务列表
+func (s *Service) HandleDeleteMerge(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	mergeID, err := strconv.ParseUint(c.Param("mid"), 10, 32)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid merge id"})
+		return
+	}
+	if err := s.Projects.DeleteMerge(p.ID, uint(mergeID)); err != nil {
+		if errors.Is(err, ErrMergeDeleteConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "合并记录不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 func (s *Service) HandleListMerges(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
