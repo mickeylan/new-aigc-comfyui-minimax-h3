@@ -41,7 +41,7 @@
           <div class="final-cut-preview"><video v-if="clip.video_url" :src="clip.video_url" controls muted preload="metadata" @loadedmetadata="clip.duration=$event.target.duration"></video><div v-else class="preview-empty">该片段暂无可预览视频</div><span class="final-cut-index">{{index+1}}</span></div>
           <div class="merge-info"><strong>{{clip.label}}</strong><span>{{clip.scene_id?'Scene片段':'插入视频素材'}}<template v-if="clip.duration"> · {{Number(clip.duration).toFixed(1)}}秒</template></span></div>
           <div class="final-cut-actions"><button class="btn btn-xs btn-ghost" :disabled="index===0" @click="moveMergeClip(index,-1)">上移</button><button class="btn btn-xs btn-ghost" :disabled="index===mergeSequence.length-1" @click="moveMergeClip(index,1)">下移</button><button class="btn btn-xs btn-danger" @click="mergeSequence.splice(index,1)">排除</button></div>
-          <div class="final-cut-insert"><select class="input" v-model.number="insertMaterialByIndex[index]"><option :value="0">选择已有项目视频</option><option v-for="m in videoMaterials" :key="m.id" :value="m.id">{{m.name||m.path}}</option></select><button class="btn btn-xs btn-secondary" :disabled="!insertMaterialByIndex[index]" @click="insertMergeMaterial(index,0)">前插已有</button><button class="btn btn-xs btn-secondary" :disabled="!insertMaterialByIndex[index]" @click="insertMergeMaterial(index,1)">后插已有</button><button class="btn btn-xs btn-secondary" @click="requestMergeVideoUpload(index,0)">前插上传</button><button class="btn btn-xs btn-secondary" @click="requestMergeVideoUpload(index,1)">后插上传</button></div>
+          <div class="final-cut-insert"><select class="input" v-model.number="insertMaterialByIndex[index]"><option :value="0">选择已有项目视频</option><option v-for="m in videoMaterials" :key="m.id" :value="m.id">{{m.name||m.path}}</option></select><button class="btn btn-xs btn-primary" :disabled="!insertMaterialByIndex[index]" @click="replaceMergeMaterial(index)">替换为已有</button><button class="btn btn-xs btn-primary" @click="requestMergeVideoUpload(index,0,'replace')">上传并替换</button><button class="btn btn-xs btn-secondary" :disabled="!insertMaterialByIndex[index]" @click="insertMergeMaterial(index,0)">前插已有</button><button class="btn btn-xs btn-secondary" :disabled="!insertMaterialByIndex[index]" @click="insertMergeMaterial(index,1)">后插已有</button><button class="btn btn-xs btn-secondary" @click="requestMergeVideoUpload(index,0)">前插上传</button><button class="btn btn-xs btn-secondary" @click="requestMergeVideoUpload(index,1)">后插上传</button></div>
         </article>
         <div v-if="!mergeSequence.length" class="card empty">当前没有参与最终成片的片段。可按Scene重置或上传视频。</div>
       </div>
@@ -465,7 +465,7 @@ const musicCandidateBusy = ref(false)
 const mergeSequence = ref([])
 const mergeVideoUploadInput = ref(null)
 const mergeVideoUploading = ref(false)
-const mergeVideoUploadTarget = reactive({index:0,after:0})
+const mergeVideoUploadTarget = reactive({index:0,after:0,mode:'insert'})
 const sceneVideoUploadInput = ref(null)
 const sceneVideoReplacing = ref(false)
 const sceneVideoMaterialID = ref(0)
@@ -894,8 +894,14 @@ function insertMergeMaterial(index,after){
   mergeSequence.value.splice(index+after,0,mergeMaterialClip(material))
   insertMaterialByIndex[index]=0
 }
-function requestMergeVideoUpload(index,after){
-  mergeVideoUploadTarget.index=index;mergeVideoUploadTarget.after=after;mergeVideoUploadInput.value?.click()
+function replaceMergeMaterial(index){
+  const material=videoMaterials.value.find(m=>m.id===insertMaterialByIndex[index]);if(!material)return
+  mergeSequence.value.splice(index,1,mergeMaterialClip(material))
+  insertMaterialByIndex[index]=0
+  toast.success('当前编排片段已原位替换；原Scene和原视频未修改')
+}
+function requestMergeVideoUpload(index,after,mode='insert'){
+  mergeVideoUploadTarget.index=index;mergeVideoUploadTarget.after=after;mergeVideoUploadTarget.mode=mode;mergeVideoUploadInput.value?.click()
 }
 async function uploadMergeVideo(event){
   const file=event.target.files?.[0];event.target.value='';if(!file)return
@@ -903,9 +909,14 @@ async function uploadMergeVideo(event){
   try{
     const {data}=await api.uploadMaterial(file,'video',Number(id()))
     if(!materials.value.some(item=>item.id===data.id))materials.value.push(data)
-    const position=Math.min(mergeSequence.value.length,mergeVideoUploadTarget.index+mergeVideoUploadTarget.after)
-    mergeSequence.value.splice(position,0,mergeMaterialClip(data))
-    toast.success('视频已上传并插入最终成片编排')
+    if(mergeVideoUploadTarget.mode==='replace'&&mergeVideoUploadTarget.index<mergeSequence.value.length){
+      mergeSequence.value.splice(mergeVideoUploadTarget.index,1,mergeMaterialClip(data))
+      toast.success('上传视频已原位替换当前编排片段；原Scene和原视频未修改')
+    }else{
+      const position=Math.min(mergeSequence.value.length,mergeVideoUploadTarget.index+mergeVideoUploadTarget.after)
+      mergeSequence.value.splice(position,0,mergeMaterialClip(data))
+      toast.success('视频已上传并插入最终成片编排')
+    }
   }catch(e){toast.error(e.response?.data?.error||'上传插入视频失败')}
   finally{mergeVideoUploading.value=false}
 }
