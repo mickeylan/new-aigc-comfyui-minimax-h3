@@ -38,7 +38,7 @@ test('功能文字轨支持中文横排和古装竖排且不使用Canvas', () =>
   assert.match(editor, /v-model="mergeScreenText" \/>烧录功能字幕\/屏幕文字/)
   assert.match(editor, /screen_text: mergeScreenText\.value/)
   assert.match(detail, /workspace=delivery/)
-  assert.match(detail, /字幕与混音设置已统一到“最终成片编排”/)
+  assert.match(detail, /不提供第二套合并或编排操作/)
   assert.doesNotMatch(detail, /api\.mergeScenes\(/)
   assert.doesNotMatch(detail, /api\.mergeAllScenes\(/)
   assert.match(detail, /activeSceneScreenText\(sc\)/)

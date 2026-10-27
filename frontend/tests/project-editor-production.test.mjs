@@ -10,6 +10,11 @@ test('项目详情不再绕过最终成片编排直接提交合并', () => {
   assert.match(detailSource, /workspace=delivery/)
   assert.doesNotMatch(detailSource, /@click="autoMergeEpisode"/)
   assert.doesNotMatch(detailSource, /@click="mergeAll"/)
+  assert.doesNotMatch(detailSource, /MERGE & EDIT/)
+  assert.doesNotMatch(detailSource, /class="merge-select"/)
+  assert.equal((detailSource.match(/workspace=delivery/g) || []).length, 1)
+  assert.match(detailSource, /EXPORTED CUTS/)
+  assert.match(detailSource, /不提供第二套合并或编排操作/)
   assert.match(source, /route\.query\.workspace/)
 })
 

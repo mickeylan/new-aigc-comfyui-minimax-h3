@@ -527,31 +527,18 @@
       </nav>
     </section>
 
-    <!-- 合并成片（当前集） -->
-    <section class="section" v-if="curVideoReadyCount > 0">
+    <!-- 只读成片历史；正式编排与合并仅在剪辑台“最终成片”工作区 -->
+    <section class="section" v-if="visibleMerges.length">
       <div class="section-head">
         <div>
-          <span class="overline">MERGE & EDIT</span>
-          <h2>第{{ activeEpN }}集 · 合并成片</h2>
-          <p class="sub">正式合并统一在剪辑台完成：可替换、排除、排序，并在指定片段前后插入项目视频。</p>
-        </div>
-        <div class="section-actions">
-          <router-link class="btn btn-lg" :to="`/projects/${id()}/editor?episode=${activeEpN}&workspace=delivery`">打开最终成片编排</router-link>
+          <span class="overline">EXPORTED CUTS</span>
+          <h2>第{{ activeEpN }}集 · 成片历史</h2>
+          <p class="sub">这里只播放和下载已经提交的成片，不提供第二套合并或编排操作。</p>
         </div>
       </div>
 
       <div class="card merge-card">
-        <div class="merge-select">
-          <span class="merge-hint">这里仅展示当前就绪Scene和历史成片；选择、替换、排除、排序、字幕与混音设置已统一到“最终成片编排”。</span>
-          <button v-for="sc in curReadyScenes" :key="sc.id" class="merge-chip active" disabled>
-            <span class="chip-n">{{ sc.order }}</span>
-            <span class="chip-title">{{ sc.title || '场景' }}</span>
-            <span class="chip-check">✓</span>
-          </button>
-          <span class="merge-hint" v-if="curReadyScenes.length >= 2">默认Scene顺序：{{ curReadyScenes.map(s => s.order).join(' → ') }}；正式顺序以剪辑台编排为准。</span>
-        </div>
-
-        <div v-if="merges.length" class="merge-list">
+        <div class="merge-list">
           <div v-for="m in visibleMerges" :key="m.id" class="merge-item">
             <div class="merge-info">
               <span class="badge" :class="mergeBadgeClass(m.status)">{{ mergeStatusText(m) }}</span>
