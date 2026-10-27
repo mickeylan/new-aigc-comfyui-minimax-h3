@@ -7901,6 +7901,11 @@ func (s *ProjectService) createMergeTaskRecord(p *models.Project, sceneIDs []uin
 		if active > 0 {
 			return fmt.Errorf("第%d集已有进行中的合并任务，请等待完成", episodeN)
 		}
+		if audio.DialogueMix && audio.DialogueVolume > 0 {
+			if _, err := s.loadReadyDialogues(tx, sceneIDs); err != nil {
+				return err
+			}
+		}
 		snapshot, err := s.captureMergeInputSnapshot(tx, current.ID, episodeN, episodeGeneration, fingerprints, sceneIDs, dub, subtitles, audio)
 		if err != nil {
 			return err
@@ -8339,29 +8344,34 @@ type dubSegment struct {
 	Volume     float64
 }
 
-// buildDubTimeline 构建该集对白时间轴：
-// 场景按顺序排布（起点 = 前序视频时长累加），场景内对白按序排列（句间 0.35s 间隔）。
-// 全部对白均 ready 时返回 dubReady=true；存在未合成对白时返回 false（回退原音轨合并）。
-func (s *ProjectService) buildDubTimeline(p *models.Project, episodeN int, sceneIDs []uint, videoDurs []sceneVideo) ([]dubSegment, float64, bool, error) {
+func (s *ProjectService) loadReadyDialogues(tx *gorm.DB, sceneIDs []uint) ([]models.Dialogue, error) {
 	var dubs []models.Dialogue
-	if err := s.db.Where("scene_id IN ?", sceneIDs).Order("scene_id, `order`").Find(&dubs).Error; err != nil {
-		return nil, 0, false, err
+	if err := tx.Where("scene_id IN ?", sceneIDs).Order("scene_id, `order`").Find(&dubs).Error; err != nil {
+		return nil, err
 	}
 	audible := dubs[:0]
 	for _, d := range dubs {
-		if strings.TrimSpace(d.Text) != "" {
-			audible = append(audible, d)
+		if strings.TrimSpace(d.Text) == "" {
+			continue
 		}
+		if d.Status != "ready" || d.AudioStale || strings.TrimSpace(d.AudioFile) == "" || d.AudioHash == "" || d.AudioHash != s.effectiveDialogueAudioHash(d) {
+			return nil, fmt.Errorf("对白 %d 的音频未就绪或已过期，请先重新合成", d.ID)
+		}
+		audible = append(audible, d)
 	}
-	dubs = audible
+	return audible, nil
+}
+
+// buildDubTimeline 构建该集对白时间轴：
+// 场景按顺序排布（起点 = 前序视频时长累加），场景内对白按序排列（句间 0.35s 间隔）。
+// 全部对白均 ready 时返回 dubReady=true；存在未合成对白时返回错误。
+func (s *ProjectService) buildDubTimeline(p *models.Project, episodeN int, sceneIDs []uint, videoDurs []sceneVideo) ([]dubSegment, float64, bool, error) {
+	dubs, err := s.loadReadyDialogues(s.db, sceneIDs)
+	if err != nil {
+		return nil, 0, false, err
+	}
 	if len(dubs) == 0 {
 		return nil, 0, false, nil
-	}
-	// Dialogue mixing is explicit: never silently publish stale or mismatched speech.
-	for _, d := range dubs {
-		if d.Status != "ready" || d.AudioStale || strings.TrimSpace(d.AudioFile) == "" || d.AudioHash == "" || d.AudioHash != s.effectiveDialogueAudioHash(d) {
-			return nil, 0, false, fmt.Errorf("对白 %d 的音频未就绪或已过期，请先重新合成", d.ID)
-		}
 	}
 	byScene := map[uint][]models.Dialogue{}
 	sceneOrder := map[uint]int{}
@@ -8522,16 +8532,22 @@ func projectFileTag(p *models.Project) string {
 }
 
 func (s *ProjectService) failMerge(mt *models.MergeTask, p *models.Project, errMsg string) {
-	s.db.Model(&models.MergeTask{}).
-		Where("id = ? AND project_id = ? AND generation = ? AND status IN ?", mt.ID, mt.ProjectID, mt.Generation, []string{"pending", "running"}).
-		Updates(map[string]any{"status": "failed", "output_file": "", "error": errMsg})
+	result := s.db.Where("id = ? AND project_id = ? AND generation = ? AND status IN ?", mt.ID, mt.ProjectID, mt.Generation, []string{"pending", "running"}).Delete(&models.MergeTask{})
+	if result.Error != nil {
+		log.Printf("[merge %d] 删除失败记录失败: %v", mt.ID, result.Error)
+	}
 	s.pushProject(p)
-	log.Printf("[merge %d] 失败: %s", mt.ID, errMsg)
+	log.Printf("[merge %d] 失败，已删除无输出记录: %s", mt.ID, errMsg)
 }
 
 func (s *ProjectService) ListMerges(projectID uint) ([]models.MergeTask, error) {
+	if err := s.db.Where("project_id = ? AND status = ? AND (output_file = '' OR output_file IS NULL)", projectID, "failed").Delete(&models.MergeTask{}).Error; err != nil {
+		return nil, err
+	}
 	var list []models.MergeTask
-	s.db.Where("project_id = ?", projectID).Order("id desc").Find(&list)
+	if err := s.db.Where("project_id = ?", projectID).Order("id desc").Find(&list).Error; err != nil {
+		return nil, err
+	}
 	return list, nil
 }
 

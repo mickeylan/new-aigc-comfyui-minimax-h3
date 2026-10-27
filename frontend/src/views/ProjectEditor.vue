@@ -20,9 +20,9 @@
         <label v-show="workspaceTab==='delivery'" class="merge-opt" title="默认关闭；仅在需要逐句显示Dialogue时开启"><input type="checkbox" v-model="mergeSub" />烧录Dialogue对白字幕（默认关闭）</label>
         <label v-show="workspaceTab==='delivery'" class="merge-opt" title="只烧录已审核的功能文字，不会自动开启对白字幕"><input type="checkbox" v-model="mergeScreenText" />烧录功能字幕/屏幕文字</label>
         <label v-show="workspaceTab==='delivery'" class="merge-opt"><input type="checkbox" v-model="mergeDub" />保留原声</label>
-        <label v-show="workspaceTab==='delivery'" class="merge-opt">原声 <input class="sub-t" type="number" min="0" max="4" step="0.1" v-model.number="nativeVolume" /></label>
-        <label v-show="workspaceTab==='delivery'" class="merge-opt">对白 <input class="sub-t" type="number" min="0" max="4" step="0.1" v-model.number="dialogueVolume" /></label>
-        <label v-show="workspaceTab==='delivery'" class="merge-opt">BGM <input class="sub-t" type="number" min="0" max="4" step="0.1" v-model.number="bgmVolume" /></label>
+        <label v-show="workspaceTab==='delivery'" class="merge-opt merge-volume">原声 <input type="number" min="0" max="4" step="0.1" v-model.number="nativeVolume" aria-label="原声音量" /></label>
+        <label v-show="workspaceTab==='delivery'" class="merge-opt merge-volume">对白 <input type="number" min="0" max="4" step="0.1" v-model.number="dialogueVolume" aria-label="对白音量" /></label>
+        <label v-show="workspaceTab==='delivery'" class="merge-opt merge-volume">BGM <input type="number" min="0" max="4" step="0.1" v-model.number="bgmVolume" aria-label="BGM音量" /></label>
         <button v-show="workspaceTab==='delivery'" class="btn btn-lg" :disabled="busy || curMerging || readyVideoCount < 2" @click="mergeEpisode">
           {{ curMerging ? '合并中…' : '⚡ 合并第' + activeEpN + '集成片' }}
         </button>
@@ -1478,7 +1478,23 @@ watch(videoPromptDraft, () => videoDraftSafety?.schedule())
 .sub-hint { font-size: 12px; color: var(--text-tertiary); margin-top: 8px; }
 .panel-empty { padding: 30px; text-align: center; color: var(--text-tertiary); }
 .merge-opt { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--text-secondary); cursor: pointer; white-space: nowrap; }
-.merge-opt input { width: 14px; height: 14px; cursor: pointer; margin: 0; }
+.merge-opt input[type="checkbox"] { width: 14px; height: 14px; cursor: pointer; margin: 0; }
+.merge-volume { gap: 6px; cursor: default; }
+.merge-volume input[type="number"] {
+  width: 76px;
+  min-width: 76px;
+  height: 34px;
+  box-sizing: border-box;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text-primary);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: text;
+}
+.merge-volume input[type="number"]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* 弹窗样式 */
 .modal-overlay {
