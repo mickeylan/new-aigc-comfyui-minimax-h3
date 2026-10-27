@@ -389,21 +389,21 @@
           <p class="sub">每页最多显示 {{editorMergePageSize}} 条，避免同时加载过多成片播放器。</p>
         </div>
       </div>
-      <div class="card merge-list">
-        <div v-for="m in editorVisibleMerges" :key="m.id" class="merge-item">
+      <div class="merge-history-grid">
+        <article v-for="m in editorVisibleMerges" :key="m.id" class="card merge-history-card">
           <div class="merge-info">
             <span class="badge" :class="mergeBadgeClass(m.status)">{{ mergeStatusText(m.status) }}</span>
             <span class="merge-time">第{{ m.episode_n || 1 }}集 · {{ (m.created_at || '').slice(0, 16).replace('T', ' ') }}</span>
             <span v-if="m.error" class="fail-msg">{{ m.error }}</span>
           </div>
           <div v-if="m.status === 'success' && m.output_file" class="merge-result">
-            <video :src="outputUrl(m.output_file)" controls preload="metadata" class="merge-video"></video>
+            <video :src="outputUrl(m.output_file)" controls preload="metadata" class="merge-history-video"></video>
             <div class="merge-links">
               <a class="btn btn-sm btn-ghost" :href="outputUrl(m.output_file) + '?download=1'">下载成片</a>
               <a v-if="m.subtitle" class="btn btn-sm btn-ghost" :href="outputUrl(m.output_file.replace(/\.mp4$/, '.srt')) + '?download=1'">下载字幕</a>
             </div>
           </div>
-        </div>
+        </article>
         <nav v-if="editorMergePageCount>1" class="editor-merge-pagination" aria-label="剪辑台合并记录分页">
           <button type="button" class="btn btn-sm btn-ghost" :disabled="editorMergePage===1" @click="goToEditorMergePage(editorMergePage-1)">← 上一页</button>
           <button v-for="page in editorMergePageItems" :key="`editor-merge-${page}`" type="button" class="btn btn-sm" :class="page===editorMergePage?'btn-primary':'btn-ghost'" @click="goToEditorMergePage(page)">{{page}}</button>
@@ -1406,7 +1406,8 @@ watch(videoPromptDraft, () => videoDraftSafety?.schedule())
 .workspace-tabs{position:sticky;top:0;z-index:30;display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:8px;margin:12px 0;padding:10px;border:1px solid var(--border);border-radius:14px;background:color-mix(in srgb,var(--card) 94%,transparent);backdrop-filter:blur(12px)}
 .workspace-tab{display:grid;gap:3px;padding:10px 12px;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--text-secondary);text-align:left;cursor:pointer}.workspace-tab strong{font-size:14px}.workspace-tab small{font-size:10px;color:var(--text-tertiary)}.workspace-tab:hover{background:var(--surface-secondary)}.workspace-tab.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
 .workspace-context{display:flex;gap:12px;align-items:center;margin:-4px 0 14px;padding:0 4px;color:var(--text-tertiary);font-size:12px}.workspace-context span+span:before{content:'•';margin-right:12px}
-.editor-merge-pagination{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:7px;padding-top:12px;border-top:1px solid var(--border)}.editor-merge-pagination span{margin-left:6px;color:var(--text-tertiary);font-size:12px}
+.merge-history-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.merge-history-card{display:grid;align-content:start;gap:8px;padding:12px;min-width:0}.merge-history-card .merge-info{display:grid;gap:4px;margin:0}.merge-history-card .merge-result{display:grid;gap:8px}.merge-history-video{display:block;width:100%;aspect-ratio:16/9;max-height:230px;object-fit:contain;border-radius:9px;background:#000}.editor-merge-pagination{grid-column:1/-1;display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:7px;padding-top:12px;border-top:1px solid var(--border)}.editor-merge-pagination span{margin-left:6px;color:var(--text-tertiary);font-size:12px}
+@media(max-width:1100px){.merge-history-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:700px){.merge-history-grid{grid-template-columns:1fr}}
 .final-cut-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}.final-cut-clip{display:grid;gap:10px;padding:12px}.final-cut-preview{position:relative;aspect-ratio:16/9;overflow:hidden;border-radius:9px;background:#08090b}.final-cut-preview video{width:100%;height:100%;object-fit:contain;background:#000}.final-cut-preview .preview-empty{height:100%}.final-cut-index{position:absolute;left:8px;top:8px;min-width:28px;padding:4px 7px;border-radius:999px;background:rgba(0,0,0,.75);color:#fff;text-align:center;font-weight:700}.final-cut-actions,.final-cut-insert{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.final-cut-insert .input{min-width:150px;flex:1}.final-cut-clip .merge-info{display:grid;gap:3px}.final-cut-clip .merge-info span{font-size:12px;color:var(--text-tertiary)}
 @media(max-width:900px){.workspace-tabs{position:static;display:flex;overflow-x:auto}.workspace-tab{min-width:150px;flex:0 0 auto}.workspace-tab small{display:none}}
 

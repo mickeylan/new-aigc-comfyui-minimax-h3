@@ -537,16 +537,15 @@
         </div>
       </div>
 
-      <div class="card merge-card">
-        <div class="merge-list">
-          <div v-for="m in visibleMerges" :key="m.id" class="merge-item">
+      <div class="merge-history-grid">
+          <article v-for="m in visibleMerges" :key="m.id" class="card merge-history-card">
             <div class="merge-info">
               <span class="badge" :class="mergeBadgeClass(m.status)">{{ mergeStatusText(m) }}</span>
               <span class="merge-time">第{{ m.episode_n || 1 }}集 · {{ m.created_at?.slice(0, 16).replace('T', ' ') }}</span>
               <span v-if="m.error" class="fail-msg">{{ m.error }}</span>
             </div>
             <div v-if="m.status === 'success' && m.output_file" class="merge-result">
-              <video :src="outputUrl(0, m.output_file)" controls preload="metadata" class="merge-video"></video>
+              <video :src="outputUrl(0, m.output_file)" controls preload="metadata" class="merge-history-video"></video>
               <div class="merge-links">
                 <a class="btn btn-sm btn-ghost" :href="outputUrl(0, m.output_file) + '?download=1'">下载成片</a>
                 <a class="btn btn-sm btn-ghost" :href="outputUrl(0, m.output_file.replace(/\.mp4$/, '.srt')) + '?download=1'" v-if="m.subtitle">下载字幕</a>
@@ -555,7 +554,7 @@
             <div v-else-if="m.status === 'running' || m.status === 'pending'" class="merge-working">
               <span class="dot blue pulse"></span>正在拼接视频，请稍候…
             </div>
-          </div>
+          </article>
           <nav v-if="mergePageCount > 1" class="merge-pagination" aria-label="成片历史分页">
             <button type="button" class="btn btn-sm btn-ghost" :disabled="mergePage===1" @click="goToMergePage(mergePage-1)">← 上一页</button>
             <button v-for="item in mergePageItems" :key="`merge-page-${item}`" type="button" class="btn btn-sm" :class="item===mergePage?'btn-primary':'btn-ghost'" @click="goToMergePage(item)">{{item}}</button>
@@ -563,7 +562,6 @@
             <span class="merge-page-info">第 {{mergePage}} / {{mergePageCount}} 页 · 共 {{episodeMerges.length}} 条</span>
           </nav>
         </div>
-      </div>
     </section>
 
     <!-- 场景编辑弹窗 -->
@@ -2915,6 +2913,7 @@ onBeforeUnmount(() => {
 .merge-time { font-size: 12px; color: var(--text-tertiary); }
 .merge-result { display: flex; gap: 12px; align-items: flex-start; }
 .merge-video { width: min(480px, 100%); border-radius: 12px; }
+.merge-history-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.merge-history-card{display:grid;align-content:start;gap:8px;padding:12px;min-width:0}.merge-history-card .merge-info{display:grid;gap:4px;margin:0}.merge-history-card .merge-result{display:grid;gap:8px}.merge-history-video{display:block;width:100%;aspect-ratio:16/9;max-height:230px;object-fit:contain;border-radius:9px;background:#000}.merge-history-grid .merge-pagination{grid-column:1/-1}@media(max-width:1100px){.merge-history-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:700px){.merge-history-grid{grid-template-columns:1fr}}
 .merge-working { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); }
 .merge-opt { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--text-secondary); cursor: pointer; white-space: nowrap; }
 .merge-opt input { width: 14px; height: 14px; cursor: pointer; margin: 0; }

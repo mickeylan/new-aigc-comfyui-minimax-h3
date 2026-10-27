@@ -36,6 +36,10 @@ test('剪辑台合并记录也按当前集分页', () => {
   assert.match(source, /goToEditorMergePage/)
   assert.match(source, /每页最多显示/)
   assert.doesNotMatch(source, /v-for="m in merges"/)
+  assert.match(source, /grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/)
+  assert.match(source, /class="merge-history-video"/)
+  assert.match(detailSource, /grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/)
+  assert.match(detailSource, /class="merge-history-video"/)
 })
 
 test('剪辑台按生产阶段拆分为可持久切换的工作区', () => {
