@@ -3,6 +3,15 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 
 const source = fs.readFileSync(new URL('../src/views/ProjectEditor.vue', import.meta.url), 'utf8')
+const detailSource = fs.readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
+
+test('项目详情不再绕过最终成片编排直接提交合并', () => {
+  assert.match(detailSource, /进入最终成片编排/)
+  assert.match(detailSource, /workspace=delivery/)
+  assert.doesNotMatch(detailSource, /@click="autoMergeEpisode"/)
+  assert.doesNotMatch(detailSource, /@click="mergeAll"/)
+  assert.match(source, /route\.query\.workspace/)
+})
 
 test('剪辑台按生产阶段拆分为可持久切换的工作区', () => {
   for (const label of ['分镜制作', '连续性与审核', '声音与配乐', '最终成片', '高级设置']) assert.match(source, new RegExp(label))

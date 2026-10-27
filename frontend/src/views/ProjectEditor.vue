@@ -422,7 +422,9 @@ const workspaceTabs = [
   {key:'advanced',label:'高级设置',description:'Skill、共享资产与审计'}
 ]
 const savedWorkspace = localStorage.getItem('project-editor-workspace')
-const workspaceTab = ref(workspaceTabs.some(item=>item.key===savedWorkspace)?savedWorkspace:'production')
+const requestedWorkspace = String(route.query.workspace || '')
+const initialWorkspace = workspaceTabs.some(item=>item.key===requestedWorkspace) ? requestedWorkspace : savedWorkspace
+const workspaceTab = ref(workspaceTabs.some(item=>item.key===initialWorkspace)?initialWorkspace:'production')
 watch(workspaceTab, value => localStorage.setItem('project-editor-workspace', value))
 
 const project = ref(null)

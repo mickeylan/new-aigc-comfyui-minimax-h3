@@ -406,9 +406,9 @@
           <button class="btn" :disabled="busy || curImageReadyScenes === 0" @click="allVideos">
             🎬 生成该集全部视频 ({{ curImageReadyScenes }})
           </button>
-          <button class="btn btn-primary" :disabled="busy || curVideoReadyScenes === 0" @click="autoMergeEpisode">
-            ⚡ 自动合并该集成片
-          </button>
+          <router-link class="btn btn-primary" :class="{disabled:curVideoReadyScenes===0}" :to="`/projects/${id()}/editor?episode=${activeEpN}&workspace=delivery`">
+            ⚡ 进入最终成片编排
+          </router-link>
         </div>
       </div>
 
@@ -533,28 +533,22 @@
         <div>
           <span class="overline">MERGE & EDIT</span>
           <h2>第{{ activeEpN }}集 · 合并成片</h2>
-          <p class="sub">按该集场景序号顺序拼接，输出完整成片，可下载</p>
+          <p class="sub">正式合并统一在剪辑台完成：可替换、排除、排序，并在指定片段前后插入项目视频。</p>
         </div>
         <div class="section-actions">
-          <button class="btn btn-ghost btn-sm" :disabled="busy" @click="mergeAll">🎬 整剧一键合并</button>
-          <label class="merge-opt" title="默认关闭；仅在需要逐句显示Dialogue时开启"><input type="checkbox" v-model="mergeSub" />烧录Dialogue对白字幕（默认关闭）</label>
-          <label class="merge-opt" title="只烧录已审核的功能文字，不会自动开启对白字幕"><input type="checkbox" v-model="mergeScreenText" />烧录功能字幕/屏幕文字</label>
-          <label class="merge-opt"><input type="checkbox" v-model="mergeDub" />保留原声</label>
-          <button class="btn btn-lg" :disabled="busy || curVideoReadyCount < 2 || curMerging" @click="autoMergeEpisode">
-            ⚡ 合并第{{ activeEpN }}集 {{ curVideoReadyCount }} 个场景
-          </button>
+          <router-link class="btn btn-lg" :to="`/projects/${id()}/editor?episode=${activeEpN}&workspace=delivery`">打开最终成片编排</router-link>
         </div>
       </div>
 
       <div class="card merge-card">
         <div class="merge-select">
-          <span class="merge-hint">默认不烧录字幕；可按需勾选“烧录字幕”。各场景 H3 原音轨可独立选择是否保留。</span>
+          <span class="merge-hint">这里仅展示当前就绪Scene和历史成片；选择、替换、排除、排序、字幕与混音设置已统一到“最终成片编排”。</span>
           <button v-for="sc in curReadyScenes" :key="sc.id" class="merge-chip active" disabled>
             <span class="chip-n">{{ sc.order }}</span>
             <span class="chip-title">{{ sc.title || '场景' }}</span>
             <span class="chip-check">✓</span>
           </button>
-          <span class="merge-hint" v-if="curReadyScenes.length >= 2">合并顺序：场景 {{ curReadyScenes.map(s => s.order).join(' → ') }}</span>
+          <span class="merge-hint" v-if="curReadyScenes.length >= 2">默认Scene顺序：{{ curReadyScenes.map(s => s.order).join(' → ') }}；正式顺序以剪辑台编排为准。</span>
         </div>
 
         <div v-if="merges.length" class="merge-list">
@@ -1055,10 +1049,6 @@ const historyLoading = ref(null)
 const dialogues = ref([])
 const screenTextCues = ref([])
 const sceneVideoTimes = reactive({})
-const dubMergeOn = ref(true)
-const mergeSub = ref(false)
-const mergeScreenText = ref(true)
-const mergeDub = ref(true)
 const curEpDubReady = computed(() => {
   const ids = currentScenes.value.map(s => s.id)
   const dubs = dialogues.value.filter(d => ids.includes(d.scene_id))
@@ -1284,7 +1274,6 @@ function jumpToEpisode() {
   const target = Math.max(1, Math.min(episodeUpperBound.value, Math.trunc(Number(episodeJump.value) || 1)))
   selectEp(target)
 }
-const curMerging = ref(false)
 async function selectEp(n) {
   const episodeN = Number(n)
   if (!Number.isInteger(episodeN) || episodeN <= 0) return
@@ -1352,24 +1341,6 @@ const curImageReadyScenes = computed(() => currentScenes.value.filter(s => s.sta
 const curVideoReadyCount = computed(() => currentScenes.value.filter(s => s.status === 'video_ready').length)
 const curReadyText = computed(() => `${curVideoReadyCount.value}/${currentScenes.value.length} 视频就绪`)
 const curReadyScenes = computed(() => currentScenes.value.filter(s => s.status === 'video_ready'))
-async function autoMergeEpisode() {
-  const ids = curReadyScenes.value.map(s => s.id)
-  if (ids.length < 2) {
-    toast.show('该集至少需要 2 个视频就绪的场景才能合并')
-    return
-  }
-  curMerging.value = true
-  try {
-    await api.mergeScenes(id(), { scene_ids: ids, dub: mergeDub.value, subtitles: mergeSub.value, screen_text: mergeScreenText.value })
-    await load()
-    toast.show(`第${activeEpN.value}集合并任务已启动（对白字幕：${mergeSub.value?'开':'关'}；功能文字：${mergeScreenText.value?'开':'关'}），完成后可下载成片`)
-  } catch (e) {
-    toast.show('合并失败：' + (e.response?.data?.error || e.message))
-  } finally {
-    curMerging.value = false
-  }
-}
-
 function isWorking(sc) {
   return sc.status === 'video_creating' || sc.status === 'video_pending' || sc.status === 'video_running' || sc.status === 'image_pending'
 }
@@ -2479,19 +2450,6 @@ async function dubAll() {
     refreshSoon()
   } catch (e) {
     toast.error(e.response?.data?.error || '配音失败')
-  } finally {
-    busy.value = false
-  }
-}
-
-async function mergeAll() {
-  busy.value = true
-  try {
-    const { data } = await api.mergeAllScenes(id(), { dub: mergeDub.value, subtitles: mergeSub.value, screen_text: mergeScreenText.value })
-    toast.show(data.message || '整剧合并已启动')
-    refreshSoon()
-  } catch (e) {
-    toast.error(e.response?.data?.error || '整剧合并失败')
   } finally {
     busy.value = false
   }
