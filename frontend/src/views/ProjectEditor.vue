@@ -30,6 +30,11 @@
     </div>
 
     <section class="section">
+      <div class="section-head"><div><span class="overline">FINAL CUT ASSEMBLY</span><h2>最终成片编排</h2><p class="sub">只影响本次合并，不修改Scene、候选或原视频。勾选参与片段、调整顺序，并可在任意位置插入项目视频素材。</p></div><button class="btn btn-sm btn-ghost" @click="resetMergeSequence">按Scene重置</button></div>
+      <div class="card"><div v-for="(clip,index) in mergeSequence" :key="clip.id" class="merge-item"><div class="merge-info"><strong>{{index+1}}. {{clip.label}}</strong><span>{{clip.scene_id?'Scene片段':'插入视频素材'}}</span></div><div class="merge-links"><button class="btn btn-xs btn-ghost" :disabled="index===0" @click="moveMergeClip(index,-1)">上移</button><button class="btn btn-xs btn-ghost" :disabled="index===mergeSequence.length-1" @click="moveMergeClip(index,1)">下移</button><button class="btn btn-xs btn-danger" @click="mergeSequence.splice(index,1)">移除</button><select class="input" v-model.number="insertMaterialByIndex[index]"><option :value="0">选择插入视频</option><option v-for="m in videoMaterials" :key="m.id" :value="m.id">{{m.name||m.path}}</option></select><button class="btn btn-xs btn-secondary" :disabled="!insertMaterialByIndex[index]" @click="insertMergeMaterial(index,0)">前插</button><button class="btn btn-xs btn-secondary" :disabled="!insertMaterialByIndex[index]" @click="insertMergeMaterial(index,1)">后插</button></div></div></div>
+    </section>
+
+    <section class="section">
       <div class="section-head"><div><span class="overline">CONTINUITY</span><h2>跨集连续性</h2><p class="sub">上一集摘要、末帧、角色出场与下一集钩子。</p></div><div class="section-actions"><button class="btn btn-sm btn-ghost" @click="loadEpisodeContinuity">刷新</button><button class="btn btn-sm btn-secondary" @click="regenerateContinuity">AI重生成</button><button class="btn btn-sm btn-secondary" @click="runCreativeIntent">创作意图澄清</button></div></div>
       <div class="card" v-if="continuity"><p><strong>上一集摘要：</strong><span v-if="continuity.previous_episode?.summary_stale" class="badge warn">已过期</span> {{ continuity.previous_summary || '暂无' }}</p><p><strong>结尾钩子：</strong><span v-if="continuity.previous_episode?.next_hook_stale" class="badge warn">已过期</span> {{ continuity.previous_hook || '暂无' }}</p><p><strong>本集角色：</strong>{{ (continuity.character_appearances || []).map(v => v.name).join('、') || '暂无' }}</p><div class="merge-links" v-if="continuity.last_scene_images?.length"><span v-for="f in continuity.last_scene_images" :key="f">{{ f }}</span></div><pre v-if="intentDraft" class="prompt-preview">{{ intentDraft }}</pre></div>
     </section>
@@ -420,6 +425,9 @@ const musicCueBusy = ref(false)
 const musicCandidateCueId = ref(null)
 const musicCandidates = ref([])
 const musicCandidateBusy = ref(false)
+const mergeSequence = ref([])
+const mergeSequenceEpisode = ref(0)
+const insertMaterialByIndex = reactive({})
 const audioLayerEditing = ref(false)
 const audioLayerForm = reactive({})
 const screenTextCues = ref([])
@@ -433,6 +441,7 @@ const characters = ref([])
 const approvedFonts = ref([])
 const sharedAssetReferences = ref([])
 const materials = ref([])
+const videoMaterials = computed(() => materials.value.filter(m => m.type === 'video'))
 const sharedAssetEditing = ref(false)
 const sharedAssetForm = reactive({})
 const showCharacterHistory = ref(false)
@@ -612,6 +621,7 @@ async function load() {
     project.value = data.project
     episodes.value = episodeRes.data || []
     scenes.value = data.scenes || []
+    if(mergeSequenceEpisode.value!==activeEpN.value) resetMergeSequence()
     dialogues.value = (data.dialogues || []).map(d => ({ ...d }))
     subtitles.value = data.subtitles || []
     serverPreflight.value = data.preflight || { ready: false, checks: [], issue_scene_ids: [] }
@@ -814,15 +824,27 @@ async function shiftSub(i, delta) {
 
 const readyVideoCount = computed(() => scenes.value.filter(s => s.status === 'video_ready').length)
 
+function resetMergeSequence(){
+  mergeSequence.value=scenes.value.filter(s=>s.status==='video_ready').map(s=>({id:`scene-${s.id}`,scene_id:s.id,label:`Scene ${s.order} · ${s.title}`}))
+  mergeSequenceEpisode.value=activeEpN.value
+}
+function moveMergeClip(index,delta){ const target=index+delta;if(target<0||target>=mergeSequence.value.length)return;const [clip]=mergeSequence.value.splice(index,1);mergeSequence.value.splice(target,0,clip) }
+function insertMergeMaterial(index,after){
+  const material=videoMaterials.value.find(m=>m.id===insertMaterialByIndex[index]);if(!material)return
+  mergeSequence.value.splice(index+after,0,{id:`material-${material.id}-${Date.now()}`,material_id:material.id,label:material.name||material.path})
+  insertMaterialByIndex[index]=0
+}
+
 async function mergeEpisode() {
-  const ids = scenes.value.filter(s => s.status === 'video_ready').map(s => s.id)
-  if (ids.length < 2) {
+  if(mergeSequenceEpisode.value!==activeEpN.value||!mergeSequence.value.length)resetMergeSequence()
+  const ids = [...new Set(mergeSequence.value.filter(c=>c.scene_id).map(c=>c.scene_id))]
+  if (mergeSequence.value.length < 2) {
     toast.show('该集至少需要 2 个视频就绪的场景')
     return
   }
   curMerging.value = true
   try {
-    await api.mergeAudioScenes(id(), { scene_ids: ids, dub: mergeDub.value, subtitles: mergeSub.value, screen_text: mergeScreenText.value, native_volume: nativeVolume.value, dialogue_volume: dialogueVolume.value, bgm_volume: bgmVolume.value })
+    await api.mergeAudioScenes(id(), { scene_ids: ids, edit_sequence: mergeSequence.value, dub: mergeDub.value, subtitles: mergeSub.value, screen_text: mergeScreenText.value, native_volume: nativeVolume.value, dialogue_volume: dialogueVolume.value, bgm_volume: bgmVolume.value })
     toast.show(`第${activeEpN.value}集合并已启动（对白字幕：${mergeSub.value?'开':'关'}；功能文字：${mergeScreenText.value?'开':'关'}）`)
     setTimeout(loadMerges, 3000)
   } catch (e) {

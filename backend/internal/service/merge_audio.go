@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"math"
@@ -165,6 +166,30 @@ func buildMergeAudioGraph(videoCount int, nativeReady bool, totalDuration, nativ
 	return mergeAudioGraph{Filters: strings.Join(filters, ";"), Label: "[amix]"}
 }
 
+type mergeEditClip struct {
+	ID         string `json:"id"`
+	SceneID    *uint  `json:"scene_id,omitempty"`
+	MaterialID *uint  `json:"material_id,omitempty"`
+	Label      string `json:"label"`
+}
+
+func validateMergeEditSequence(clips []mergeEditClip) ([]uint, error) {
+	if len(clips) < 2 {
+		return nil, fmt.Errorf("最终成片至少需要2个视频片段")
+	}
+	sceneIDs, seenScenes := make([]uint, 0), map[uint]bool{}
+	for index, clip := range clips {
+		if (clip.SceneID == nil) == (clip.MaterialID == nil) {
+			return nil, fmt.Errorf("第%d个片段必须且只能选择Scene或额外视频", index+1)
+		}
+		if clip.SceneID != nil && !seenScenes[*clip.SceneID] {
+			seenScenes[*clip.SceneID] = true
+			sceneIDs = append(sceneIDs, *clip.SceneID)
+		}
+	}
+	return sceneIDs, nil
+}
+
 // HandleCreateAudioMerge is the opt-in mix-aware endpoint. The original /merge endpoint and its
 // byte-compatible default path are intentionally left unchanged for legacy callers.
 func (s *Service) HandleCreateAudioMerge(c *gin.Context) {
@@ -173,13 +198,14 @@ func (s *Service) HandleCreateAudioMerge(c *gin.Context) {
 		return
 	}
 	var req struct {
-		SceneIDs       []uint   `json:"scene_ids"`
-		Dub            bool     `json:"dub"`
-		Subtitles      bool     `json:"subtitles"`
-		ScreenText     bool     `json:"screen_text"`
-		NativeVolume   *float64 `json:"native_volume"`
-		DialogueVolume *float64 `json:"dialogue_volume"`
-		BGMVolume      *float64 `json:"bgm_volume"`
+		SceneIDs       []uint          `json:"scene_ids"`
+		Dub            bool            `json:"dub"`
+		Subtitles      bool            `json:"subtitles"`
+		ScreenText     bool            `json:"screen_text"`
+		NativeVolume   *float64        `json:"native_volume"`
+		DialogueVolume *float64        `json:"dialogue_volume"`
+		BGMVolume      *float64        `json:"bgm_volume"`
+		EditSequence   []mergeEditClip `json:"edit_sequence"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -191,7 +217,16 @@ func (s *Service) HandleCreateAudioMerge(c *gin.Context) {
 		return
 	}
 	options.ScreenText = req.ScreenText
-	mt, err := s.Projects.createAudioMergeTask(p, req.SceneIDs, req.Dub, req.Subtitles, options)
+	if len(req.EditSequence) > 0 {
+		var sequenceSceneIDs []uint
+		sequenceSceneIDs, err = validateMergeEditSequence(req.EditSequence)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		req.SceneIDs = sequenceSceneIDs
+	}
+	mt, err := s.Projects.createAudioMergeTask(p, req.SceneIDs, req.EditSequence, req.Dub, req.Subtitles, options)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -199,10 +234,17 @@ func (s *Service) HandleCreateAudioMerge(c *gin.Context) {
 	c.JSON(http.StatusOK, mt)
 }
 
-func (s *ProjectService) createAudioMergeTask(p *models.Project, sceneIDs []uint, dub, subtitles bool, audio MergeAudioOptions) (*models.MergeTask, error) {
+func (s *ProjectService) createAudioMergeTask(p *models.Project, sceneIDs []uint, editSequence []mergeEditClip, dub, subtitles bool, audio MergeAudioOptions) (*models.MergeTask, error) {
 	mt, scenes, err := s.createMergeTaskRecord(p, sceneIDs, dub, subtitles, audio)
 	if err != nil {
 		return nil, err
+	}
+	if len(editSequence) > 0 {
+		encoded, _ := json.Marshal(editSequence)
+		if err := s.db.Model(mt).Update("edit_sequence", string(encoded)).Error; err != nil {
+			return nil, err
+		}
+		mt.EditSequence = string(encoded)
 	}
 	go s.runAudioMerge(p, mt, scenes, dub, subtitles)
 	s.pushProject(p)
@@ -221,6 +263,57 @@ func (s *ProjectService) audioMixMediaPath(projectID uint, file string) (string,
 	return s.mediaPath("input", strconv.FormatUint(uint64(projectID), 10), filepath.FromSlash(clean)), nil
 }
 
+type mergeResolvedVideo struct {
+	SceneID uint
+	Order   int
+	Path    string
+	Label   string
+}
+
+func (s *ProjectService) resolveMergeVideos(p *models.Project, mt *models.MergeTask, scenes []models.Scene) ([]mergeResolvedVideo, error) {
+	byID := make(map[uint]models.Scene, len(scenes))
+	for _, scene := range scenes {
+		byID[scene.ID] = scene
+	}
+	clips := []mergeEditClip{}
+	if strings.TrimSpace(mt.EditSequence) != "" {
+		if err := json.Unmarshal([]byte(mt.EditSequence), &clips); err != nil {
+			return nil, fmt.Errorf("成片编排快照损坏: %w", err)
+		}
+	}
+	if len(clips) == 0 {
+		for _, scene := range scenes {
+			id := scene.ID
+			clips = append(clips, mergeEditClip{SceneID: &id, Label: scene.Title})
+		}
+	}
+	out := make([]mergeResolvedVideo, 0, len(clips))
+	for index, clip := range clips {
+		if clip.SceneID != nil {
+			scene, ok := byID[*clip.SceneID]
+			if !ok {
+				return nil, fmt.Errorf("编排中的Scene %d已不存在", *clip.SceneID)
+			}
+			abs := s.mediaPath("output_workers", fmt.Sprintf("gpu%d", *scene.VideoGPU), filepath.FromSlash(scene.VideoFile))
+			if (s.remote == nil || !s.remote.Enabled()) && scene.VideoInputFile != "" {
+				abs = filepath.Join(s.upload.InputDir(), fmt.Sprint(scene.ProjectID), filepath.FromSlash(scene.VideoInputFile))
+			}
+			out = append(out, mergeResolvedVideo{SceneID: scene.ID, Order: scene.Order, Path: abs, Label: clip.Label})
+			continue
+		}
+		var material models.Material
+		if clip.MaterialID == nil || s.db.Where("id = ? AND project_id = ? AND type = ?", *clip.MaterialID, p.ID, "video").First(&material).Error != nil {
+			return nil, fmt.Errorf("第%d个插入视频不存在或不属于项目", index+1)
+		}
+		clean := filepath.Clean(filepath.FromSlash(material.Path))
+		if filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+			return nil, fmt.Errorf("插入视频路径无效")
+		}
+		out = append(out, mergeResolvedVideo{Path: filepath.Join(s.upload.InputDir(), clean), Label: clip.Label})
+	}
+	return out, nil
+}
+
 func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, scenes []models.Scene, dub, subtitles bool) {
 	// Rendering is driven by the persisted request, not mutable goroutine arguments.
 	dub, subtitles = mt.RequestedDub, mt.RequestedSubtitles
@@ -236,55 +329,58 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 		return
 	}
 	scenes = currentScenes
-	inputPaths := make([]string, 0, len(scenes)+8)
-	remoteInputs := make([]string, 0, len(scenes)+8)
-	videoDurs := make([]sceneVideo, 0, len(scenes))
-	nativeCount := 0
-	totalDuration := 0.0
+	videos, err := s.resolveMergeVideos(p, mt, scenes)
+	if err != nil {
+		fail(err)
+		return
+	}
+	inputPaths := make([]string, 0, len(videos)+8)
+	remoteInputs := make([]string, 0, len(videos)+8)
+	videoDurs := make([]sceneVideo, 0, len(videos))
+	timelineSceneIDs := make([]uint, 0, len(videos))
+	nativeCount, totalDuration := 0, 0.0
 	firstWidth, firstHeight := 0, 0
-	for _, scene := range scenes {
-		abs := s.mediaPath("output_workers", fmt.Sprintf("gpu%d", *scene.VideoGPU), filepath.FromSlash(scene.VideoFile))
-		if (s.remote == nil || !s.remote.Enabled()) && scene.VideoInputFile != "" {
-			abs = filepath.Join(s.upload.InputDir(), fmt.Sprint(scene.ProjectID), filepath.FromSlash(scene.VideoInputFile))
-		}
+	for index, video := range videos {
+		abs := video.Path
 		inputPaths = append(inputPaths, abs)
 		remoteInputs = append(remoteInputs, "-i", shellQuote(abs))
-		hasAudio, err := s.remoteFileHasAudio(abs)
-		if err != nil {
-			fail(err)
+		hasAudio, probeErr := s.remoteFileHasAudio(abs)
+		if probeErr != nil {
+			fail(probeErr)
 			return
 		}
 		if hasAudio {
 			nativeCount++
 		}
-		dur := normalizeSceneDuration(scene.Duration)
 		if s.remote == nil {
 			fail(fmt.Errorf("媒体探测服务不可用"))
 			return
 		}
-		info, err := s.remote.ProbeMedia(abs)
-		if err != nil {
-			fail(fmt.Errorf("探测场景 %d 视频失败（文件=%s）: %w", scene.Order, abs, err))
+		info, probeErr := s.remote.ProbeMedia(abs)
+		if probeErr != nil {
+			fail(fmt.Errorf("探测编排片段%d失败（文件=%s）: %w", index+1, abs, probeErr))
 			return
 		}
-		if info.Duration > 0 {
-			dur = info.Duration
+		if info.Duration <= 0 {
+			fail(fmt.Errorf("编排片段%d时长无效", index+1))
+			return
 		}
 		if firstWidth == 0 {
 			firstWidth, firstHeight = info.Width, info.Height
 			if firstWidth <= 0 || firstHeight <= 0 {
-				fail(fmt.Errorf("无法读取首个场景视频尺寸"))
+				fail(fmt.Errorf("无法读取首个片段视频尺寸"))
 				return
 			}
 		}
-		videoDurs = append(videoDurs, sceneVideo{abs: abs, dur: dur})
-		totalDuration += dur
+		videoDurs = append(videoDurs, sceneVideo{abs: abs, dur: info.Duration})
+		timelineSceneIDs = append(timelineSceneIDs, video.SceneID)
+		totalDuration += info.Duration
 	}
 
 	extras := make([]mergeAudioInput, 0)
 	var dialogueSegments []dubSegment
 	if mt.DialogueMix && mt.DialogueVolume > 0 {
-		segments, _, ready, err := s.buildDubTimeline(p, mt.EpisodeN, sceneIDsFromStrings(strings.Split(mt.SceneOrder, ",")), videoDurs)
+		segments, _, ready, err := s.buildDubTimeline(p, mt.EpisodeN, timelineSceneIDs, videoDurs)
 		if err != nil {
 			fail(err)
 			return
@@ -338,7 +434,7 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 		extras = append(extras, mergeAudioInput{Index: idx, Start: segment.Start, Duration: segment.End - segment.Start, SourceDuration: segment.SourceDur, Volume: mt.DialogueVolume * segment.Volume, Speed: segment.Speed, Pitch: segment.Pitch, Kind: "dialogue"})
 	}
 
-	filters := buildNormalizedVideoGraph(len(scenes), firstWidth, firstHeight)
+	filters := buildNormalizedVideoGraph(len(videos), firstWidth, firstHeight)
 	outName := fmt.Sprintf("merged/%s_merged_%d.mp4", projectFileTag(p), mt.ID)
 	outAbs := s.mediaPath("output_workers", "gpu0", filepath.FromSlash(outName))
 	textFilters := make([]string, 0, 2)
@@ -397,7 +493,7 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 		}
 	}
 	filters = applyMergeTextFilters(filters, textFilters)
-	audioGraph := buildMergeAudioGraph(len(scenes), dub && nativeCount == len(scenes), totalDuration, mt.NativeVolume, extras)
+	audioGraph := buildMergeAudioGraph(len(videos), dub && nativeCount == len(videos), totalDuration, mt.NativeVolume, extras)
 	if audioGraph.Filters != "" {
 		filters = append(filters, audioGraph.Filters)
 	}

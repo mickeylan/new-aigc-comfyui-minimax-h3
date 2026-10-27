@@ -392,10 +392,11 @@ type MergeTask struct {
 	ProjectID              uint      `gorm:"column:project_id;index" json:"project_id"`
 	EpisodeN               int       `gorm:"column:episode_n;default:1" json:"episode_n"` // 所属集数
 	Title                  string    `json:"title"`
-	SceneOrder             string    `json:"scene_order"`                                        // 按序合并的场景 ID（逗号分隔）
-	SceneVideoFingerprints string    `gorm:"column:scene_video_fingerprints;type:text" json:"-"` // 提交时的视频输入快照，防止过期合并结果发布
-	InputSnapshot          string    `gorm:"column:input_snapshot;type:text" json:"-"`           // 所有合并输入与选项的不可变快照
-	Generation             uint      `gorm:"index" json:"generation"`                            // 本集权威场景版本（不等同于项目全局版本）
+	SceneOrder             string    `json:"scene_order"`
+	EditSequence           string    `gorm:"column:edit_sequence;type:text" json:"edit_sequence"` // 按序合并的场景 ID（逗号分隔）
+	SceneVideoFingerprints string    `gorm:"column:scene_video_fingerprints;type:text" json:"-"`  // 提交时的视频输入快照，防止过期合并结果发布
+	InputSnapshot          string    `gorm:"column:input_snapshot;type:text" json:"-"`            // 所有合并输入与选项的不可变快照
+	Generation             uint      `gorm:"index" json:"generation"`                             // 本集权威场景版本（不等同于项目全局版本）
 	RequestedDub           bool      `gorm:"column:requested_dub;default:false" json:"requested_dub"`
 	RequestedSubtitles     bool      `gorm:"column:requested_subtitles;default:false" json:"requested_subtitles"`
 	RequestedScreenText    bool      `gorm:"column:requested_screen_text;default:false" json:"requested_screen_text"`

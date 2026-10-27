@@ -7966,7 +7966,7 @@ func (s *ProjectService) CreateMergeTask(p *models.Project, sceneIDs []uint, dub
 func (s *ProjectService) CreateMergeTaskWithAudio(p *models.Project, sceneIDs []uint, dub, subtitles bool, audio MergeAudioOptions) (*models.MergeTask, error) {
 	// All production entry points share the mix-aware implementation so ready audio layers,
 	// dialogue and native audio cannot be silently ignored by one endpoint.
-	return s.createAudioMergeTask(p, sceneIDs, dub, subtitles, audio)
+	return s.createAudioMergeTask(p, sceneIDs, nil, dub, subtitles, audio)
 }
 
 func (s *ProjectService) mediaPath(parts ...string) string {

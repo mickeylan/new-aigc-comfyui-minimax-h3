@@ -5,6 +5,21 @@ import (
 	"testing"
 )
 
+func TestValidateMergeEditSequenceSupportsSelectionOrderAndInsertedVideos(t *testing.T) {
+	s1, s2, material := uint(11), uint(12), uint(90)
+	clips := []mergeEditClip{{ID: "scene-11", SceneID: &s1}, {ID: "insert-90", MaterialID: &material}, {ID: "scene-12", SceneID: &s2}}
+	ids, err := validateMergeEditSequence(clips)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 || ids[0] != 11 || ids[1] != 12 {
+		t.Fatalf("scene ids=%v", ids)
+	}
+	if _, err := validateMergeEditSequence([]mergeEditClip{{SceneID: &s1}, {SceneID: &s2, MaterialID: &material}}); err == nil {
+		t.Fatal("ambiguous edit clip accepted")
+	}
+}
+
 func TestApplyMergeTextFiltersSupportsIndependentLayers(t *testing.T) {
 	cases := []struct {
 		name    string

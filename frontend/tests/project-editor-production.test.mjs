@@ -4,6 +4,15 @@ import fs from 'node:fs'
 
 const source = fs.readFileSync(new URL('../src/views/ProjectEditor.vue', import.meta.url), 'utf8')
 
+test('最终合并前提供非破坏性成片编排界面', () => {
+  assert.match(source, /FINAL CUT ASSEMBLY/)
+  assert.match(source, /最终成片编排/)
+  assert.match(source, /edit_sequence: mergeSequence\.value/)
+  assert.match(source, /insertMergeMaterial/)
+  assert.match(source, /moveMergeClip/)
+  assert.match(source, /只影响本次合并，不修改Scene、候选或原视频/)
+})
+
 test('剪辑台提供Scene生产看板和只读双层时间轴', () => {
   assert.match(source, /PRODUCTION BOARD/)
   assert.match(source, /Scene是唯一生产单元/)
