@@ -490,6 +490,7 @@
               </button>
               <button class="btn btn-sm btn-ghost" @click="viewImage(sc)">查看画面</button>
               <button class="btn btn-sm btn-ghost" @click="viewVideoPrompt(sc)">编辑视频提示词</button>
+              <details class="scene-video-replace"><summary class="btn btn-sm btn-secondary">替换当前视频</summary><div class="scene-video-replace-menu"><label class="btn btn-sm btn-primary" :class="{disabled:busy||sc._videoReplacing||isVideoWorking(sc)}">{{sc._videoReplacing?'替换中…':'上传视频替换'}}<input type="file" accept="video/mp4,video/webm,video/quicktime,video/x-matroska" hidden :disabled="busy||sc._videoReplacing||isVideoWorking(sc)" @change="e=>replaceSceneVideoUpload(sc,e)"></label><select v-model.number="sceneVideoMaterialSelection[sc.id]" class="input input-sm"><option :value="0">选择项目视频素材</option><option v-for="material in projectVideoMaterials" :key="material.id" :value="material.id">{{material.name||material.path}}</option></select><button class="btn btn-sm btn-primary" :disabled="busy||sc._videoReplacing||!sceneVideoMaterialSelection[sc.id]" @click="replaceSceneVideoMaterial(sc)">使用所选素材替换</button><small>仅替换当前Scene正式视频；原视频和历史候选保留。</small></div></details>
               <button class="btn btn-sm btn-secondary" @click="openContinuity(sc)">连续性设置</button>
             </template>
             <span v-if="sc.status === 'failed' && sc.error" class="fail-msg">{{ sc.error }}</span>
@@ -1030,6 +1031,8 @@ const toast = useToastStore()
 const project = ref(null)
 const scenes = ref([])
 const merges = ref([])
+const projectVideoMaterials = ref([])
+const sceneVideoMaterialSelection = reactive({})
 const characters = ref([])
 const characterCounts = ref({})
 const characterHistory = reactive({})
@@ -1549,8 +1552,9 @@ async function deleteMergeRecord(row){
 
 async function load() {
   try {
-    const [{ data }, catalogRes] = await Promise.all([api.project(id()), api.modelCatalog()])
+    const [{ data }, catalogRes, materialsRes] = await Promise.all([api.project(id()), api.modelCatalog(), api.materials({ project_id: id(), type: 'video' })])
     modelCatalog.value = catalogRes.data?.items || []
+    projectVideoMaterials.value = (materialsRes.data || []).filter(item => item.type === 'video')
     loadError.value = ''
     project.value = data.project
     if (epDirtyCount.value === 0) trackEpisodes()
@@ -2461,6 +2465,23 @@ async function dubAll() {
   }
 }
 
+async function replaceSceneVideoUpload(sc,event){
+  const file=event.target.files?.[0];event.target.value='';if(!file)return
+  if(!window.confirm(`用“${file.name}”替换场景${sc.order}的当前正式视频？原视频和历史候选会保留。`))return
+  sc._videoReplacing=true
+  try{const {data}=await api.uploadSceneVideo(id(),sc.id,file);toast.success(data.message||'当前Scene视频已替换');await load()}
+  catch(e){toast.error(e.response?.data?.error||'上传替换视频失败')}
+  finally{sc._videoReplacing=false}
+}
+async function replaceSceneVideoMaterial(sc){
+  const materialID=Number(sceneVideoMaterialSelection[sc.id]||0);if(!materialID)return
+  if(!window.confirm(`使用所选项目素材替换场景${sc.order}的当前正式视频？原视频和历史候选会保留。`))return
+  sc._videoReplacing=true
+  try{const {data}=await api.replaceSceneVideoFromMaterial(id(),sc.id,materialID);toast.success(data.message||'当前Scene视频已替换');sceneVideoMaterialSelection[sc.id]=0;await load()}
+  catch(e){toast.error(e.response?.data?.error||'使用素材替换视频失败')}
+  finally{sc._videoReplacing=false}
+}
+
 async function stopVideo(sc) {
   if (!confirm(`确定停止场景 ${sc.order} 的视频生成？已生成画面会保留，可稍后重新生成视频。`)) return
   sc._stopping = true
@@ -2881,6 +2902,7 @@ onBeforeUnmount(() => {
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 .scene-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: auto; }
+.scene-video-replace{position:relative}.scene-video-replace>summary{list-style:none;cursor:pointer}.scene-video-replace>summary::-webkit-details-marker{display:none}.scene-video-replace-menu{position:absolute;right:0;top:calc(100% + 6px);z-index:35;display:grid;gap:8px;min-width:260px;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--card);box-shadow:0 10px 30px rgba(0,0,0,.22)}.scene-video-replace-menu small{color:var(--text-tertiary);line-height:1.5}.scene-video-replace-menu .btn{justify-content:center}
 .scene-dialogues { margin: 0 0 10px; display: flex; flex-direction: column; gap: 5px; }
 .dialogue-budget { font-size: 12px; color: var(--text-secondary); }
 .dialogue-budget.danger { color: var(--red); font-weight: 700; }

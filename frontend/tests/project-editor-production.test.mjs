@@ -54,6 +54,18 @@ test('剪辑台按生产阶段拆分为可持久切换的工作区', () => {
   assert.match(source, /v-show="workspaceTab==='production'"/)
 })
 
+test('每集分镜卡直接提供当前Scene视频替换入口', () => {
+  assert.match(detailSource, /替换当前视频/)
+  assert.match(detailSource, /上传视频替换/)
+  assert.match(detailSource, /使用所选素材替换/)
+  assert.match(detailSource, /projectVideoMaterials/)
+  assert.match(detailSource, /replaceSceneVideoUpload/)
+  assert.match(detailSource, /replaceSceneVideoMaterial/)
+  assert.match(detailSource, /api\.uploadSceneVideo/)
+  assert.match(detailSource, /api\.replaceSceneVideoFromMaterial/)
+  assert.match(detailSource, /原视频和历史候选会保留/)
+})
+
 test('生成分镜界面支持上传或选择素材替换当前Scene视频', () => {
   assert.match(source, /上传视频作为当前分镜/)
   assert.match(source, /从项目视频素材选择/)
@@ -72,6 +84,11 @@ test('最终合并前提供非破坏性成片编排界面', () => {
   assert.match(source, /clip\.video_url/)
   assert.match(source, /前插上传/)
   assert.match(source, /后插上传/)
+  assert.match(source, /替换为已有/)
+  assert.match(source, /上传并替换/)
+  assert.match(source, /replaceMergeMaterial/)
+  assert.match(source, /mergeVideoUploadTarget\.mode==='replace'/)
+  assert.match(source, /原位替换当前编排片段；原Scene和原视频未修改/)
   assert.match(source, /uploadMergeVideo/)
   assert.match(source, /api\.uploadMaterial\(file,'video'/)
   assert.match(source, /只影响本次合并，不修改Scene、候选或原视频/)
