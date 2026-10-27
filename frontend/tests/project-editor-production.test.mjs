@@ -41,6 +41,12 @@ test('最终合并前提供非破坏性成片编排界面', () => {
   assert.match(source, /edit_sequence: mergeSequence\.value/)
   assert.match(source, /insertMergeMaterial/)
   assert.match(source, /moveMergeClip/)
+  assert.match(source, /final-cut-preview/)
+  assert.match(source, /clip\.video_url/)
+  assert.match(source, /前插上传/)
+  assert.match(source, /后插上传/)
+  assert.match(source, /uploadMergeVideo/)
+  assert.match(source, /api\.uploadMaterial\(file,'video'/)
   assert.match(source, /只影响本次合并，不修改Scene、候选或原视频/)
 })
 

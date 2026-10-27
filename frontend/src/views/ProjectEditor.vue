@@ -35,8 +35,16 @@
     <div class="workspace-context"><span>第{{activeEpN}}集</span><span v-if="selected">当前 Scene {{selected.order}} · {{selected.title||'未命名'}}</span><span v-else>尚未选择 Scene</span></div>
 
     <section v-show="workspaceTab==='delivery'" class="section">
-      <div class="section-head"><div><span class="overline">FINAL CUT ASSEMBLY</span><h2>最终成片编排</h2><p class="sub">只影响本次合并，不修改Scene、候选或原视频。勾选参与片段、调整顺序，并可在任意位置插入项目视频素材。</p></div><button class="btn btn-sm btn-ghost" @click="resetMergeSequence">按Scene重置</button></div>
-      <div class="card"><div v-for="(clip,index) in mergeSequence" :key="clip.id" class="merge-item"><div class="merge-info"><strong>{{index+1}}. {{clip.label}}</strong><span>{{clip.scene_id?'Scene片段':'插入视频素材'}}</span></div><div class="merge-links"><button class="btn btn-xs btn-ghost" :disabled="index===0" @click="moveMergeClip(index,-1)">上移</button><button class="btn btn-xs btn-ghost" :disabled="index===mergeSequence.length-1" @click="moveMergeClip(index,1)">下移</button><button class="btn btn-xs btn-danger" @click="mergeSequence.splice(index,1)">移除</button><select class="input" v-model.number="insertMaterialByIndex[index]"><option :value="0">选择插入视频</option><option v-for="m in videoMaterials" :key="m.id" :value="m.id">{{m.name||m.path}}</option></select><button class="btn btn-xs btn-secondary" :disabled="!insertMaterialByIndex[index]" @click="insertMergeMaterial(index,0)">前插</button><button class="btn btn-xs btn-secondary" :disabled="!insertMaterialByIndex[index]" @click="insertMergeMaterial(index,1)">后插</button></div></div></div>
+      <div class="section-head"><div><span class="overline">FINAL CUT ASSEMBLY</span><h2>最终成片编排</h2><p class="sub">直接观看每个片段后决定保留、排除、排序或插入；只影响本次合并，不修改Scene、候选或原视频。</p></div><div class="section-actions"><input ref="mergeVideoUploadInput" type="file" accept="video/mp4,video/webm,video/quicktime,video/x-matroska" hidden @change="uploadMergeVideo"><button class="btn btn-sm btn-secondary" :disabled="mergeVideoUploading" @click="requestMergeVideoUpload(mergeSequence.length,0)">{{mergeVideoUploading?'上传中…':'上传视频并添加到末尾'}}</button><button class="btn btn-sm btn-ghost" @click="resetMergeSequence">按Scene重置</button></div></div>
+      <div class="final-cut-grid">
+        <article v-for="(clip,index) in mergeSequence" :key="clip.id" class="card final-cut-clip">
+          <div class="final-cut-preview"><video v-if="clip.video_url" :src="clip.video_url" controls muted preload="metadata" @loadedmetadata="clip.duration=$event.target.duration"></video><div v-else class="preview-empty">该片段暂无可预览视频</div><span class="final-cut-index">{{index+1}}</span></div>
+          <div class="merge-info"><strong>{{clip.label}}</strong><span>{{clip.scene_id?'Scene片段':'插入视频素材'}}<template v-if="clip.duration"> · {{Number(clip.duration).toFixed(1)}}秒</template></span></div>
+          <div class="final-cut-actions"><button class="btn btn-xs btn-ghost" :disabled="index===0" @click="moveMergeClip(index,-1)">上移</button><button class="btn btn-xs btn-ghost" :disabled="index===mergeSequence.length-1" @click="moveMergeClip(index,1)">下移</button><button class="btn btn-xs btn-danger" @click="mergeSequence.splice(index,1)">排除</button></div>
+          <div class="final-cut-insert"><select class="input" v-model.number="insertMaterialByIndex[index]"><option :value="0">选择已有项目视频</option><option v-for="m in videoMaterials" :key="m.id" :value="m.id">{{m.name||m.path}}</option></select><button class="btn btn-xs btn-secondary" :disabled="!insertMaterialByIndex[index]" @click="insertMergeMaterial(index,0)">前插已有</button><button class="btn btn-xs btn-secondary" :disabled="!insertMaterialByIndex[index]" @click="insertMergeMaterial(index,1)">后插已有</button><button class="btn btn-xs btn-secondary" @click="requestMergeVideoUpload(index,0)">前插上传</button><button class="btn btn-xs btn-secondary" @click="requestMergeVideoUpload(index,1)">后插上传</button></div>
+        </article>
+        <div v-if="!mergeSequence.length" class="card empty">当前没有参与最终成片的片段。可按Scene重置或上传视频。</div>
+      </div>
     </section>
 
     <section v-show="workspaceTab==='continuity'" class="section">
@@ -447,6 +455,9 @@ const musicCandidateCueId = ref(null)
 const musicCandidates = ref([])
 const musicCandidateBusy = ref(false)
 const mergeSequence = ref([])
+const mergeVideoUploadInput = ref(null)
+const mergeVideoUploading = ref(false)
+const mergeVideoUploadTarget = reactive({index:0,after:0})
 const sceneVideoUploadInput = ref(null)
 const sceneVideoReplacing = ref(false)
 const sceneVideoMaterialID = ref(0)
@@ -849,14 +860,30 @@ async function shiftSub(i, delta) {
 const readyVideoCount = computed(() => scenes.value.filter(s => s.status === 'video_ready').length)
 
 function resetMergeSequence(){
-  mergeSequence.value=scenes.value.filter(s=>s.status==='video_ready').map(s=>({id:`scene-${s.id}`,scene_id:s.id,label:`Scene ${s.order} · ${s.title}`}))
+  mergeSequence.value=scenes.value.filter(s=>s.status==='video_ready').map(s=>({id:`scene-${s.id}`,scene_id:s.id,label:`Scene ${s.order} · ${s.title}`,video_url:s.video_url,duration:s.video_dur||s.duration||0}))
   mergeSequenceEpisode.value=activeEpN.value
 }
 function moveMergeClip(index,delta){ const target=index+delta;if(target<0||target>=mergeSequence.value.length)return;const [clip]=mergeSequence.value.splice(index,1);mergeSequence.value.splice(target,0,clip) }
+function mergeMaterialClip(material){return {id:`material-${material.id}-${Date.now()}-${Math.random()}`,material_id:material.id,label:material.name||material.path,video_url:api.materialUrl(material.path),duration:0}}
 function insertMergeMaterial(index,after){
   const material=videoMaterials.value.find(m=>m.id===insertMaterialByIndex[index]);if(!material)return
-  mergeSequence.value.splice(index+after,0,{id:`material-${material.id}-${Date.now()}`,material_id:material.id,label:material.name||material.path})
+  mergeSequence.value.splice(index+after,0,mergeMaterialClip(material))
   insertMaterialByIndex[index]=0
+}
+function requestMergeVideoUpload(index,after){
+  mergeVideoUploadTarget.index=index;mergeVideoUploadTarget.after=after;mergeVideoUploadInput.value?.click()
+}
+async function uploadMergeVideo(event){
+  const file=event.target.files?.[0];event.target.value='';if(!file)return
+  mergeVideoUploading.value=true
+  try{
+    const {data}=await api.uploadMaterial(file,'video',Number(id()))
+    if(!materials.value.some(item=>item.id===data.id))materials.value.push(data)
+    const position=Math.min(mergeSequence.value.length,mergeVideoUploadTarget.index+mergeVideoUploadTarget.after)
+    mergeSequence.value.splice(position,0,mergeMaterialClip(data))
+    toast.success('视频已上传并插入最终成片编排')
+  }catch(e){toast.error(e.response?.data?.error||'上传插入视频失败')}
+  finally{mergeVideoUploading.value=false}
 }
 
 async function mergeEpisode() {
@@ -1364,6 +1391,7 @@ watch(videoPromptDraft, () => videoDraftSafety?.schedule())
 .workspace-tabs{position:sticky;top:0;z-index:30;display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:8px;margin:12px 0;padding:10px;border:1px solid var(--border);border-radius:14px;background:color-mix(in srgb,var(--card) 94%,transparent);backdrop-filter:blur(12px)}
 .workspace-tab{display:grid;gap:3px;padding:10px 12px;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--text-secondary);text-align:left;cursor:pointer}.workspace-tab strong{font-size:14px}.workspace-tab small{font-size:10px;color:var(--text-tertiary)}.workspace-tab:hover{background:var(--surface-secondary)}.workspace-tab.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
 .workspace-context{display:flex;gap:12px;align-items:center;margin:-4px 0 14px;padding:0 4px;color:var(--text-tertiary);font-size:12px}.workspace-context span+span:before{content:'•';margin-right:12px}
+.final-cut-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}.final-cut-clip{display:grid;gap:10px;padding:12px}.final-cut-preview{position:relative;aspect-ratio:16/9;overflow:hidden;border-radius:9px;background:#08090b}.final-cut-preview video{width:100%;height:100%;object-fit:contain;background:#000}.final-cut-preview .preview-empty{height:100%}.final-cut-index{position:absolute;left:8px;top:8px;min-width:28px;padding:4px 7px;border-radius:999px;background:rgba(0,0,0,.75);color:#fff;text-align:center;font-weight:700}.final-cut-actions,.final-cut-insert{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.final-cut-insert .input{min-width:150px;flex:1}.final-cut-clip .merge-info{display:grid;gap:3px}.final-cut-clip .merge-info span{font-size:12px;color:var(--text-tertiary)}
 @media(max-width:900px){.workspace-tabs{position:static;display:flex;overflow-x:auto}.workspace-tab{min-width:150px;flex:0 0 auto}.workspace-tab small{display:none}}
 
 .font-compliance{margin:6px 0 0;font-size:12px}.font-compliance.ok{color:#22c55e}.font-compliance.warn{color:#f59e0b}.screen-text-preflight{margin-bottom:14px;padding:14px}.screen-text-preflight-head{display:flex;align-items:center;gap:12px}.screen-text-preflight-head button{margin-left:auto}.screen-text-preflight p{margin:7px 0;color:var(--text-secondary);font-size:12px}.screen-text-warning{color:#f59e0b;font-size:12px}
