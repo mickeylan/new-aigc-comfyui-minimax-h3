@@ -182,6 +182,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.GET("/api/projects/:id/music-cue-sheets/:cid/candidates", svc.HandleListMusicCandidates)
 	r.POST("/api/projects/:id/music-cue-sheets/:cid/candidates/:mid/review", svc.HandleReviewMusicCandidate)
 	r.POST("/api/projects/:id/music-cue-sheets/:cid/candidates/:mid/select", svc.HandleSelectMusicCandidate)
+	r.POST("/api/projects/:id/music-cue-sheets/:cid/candidates/:mid/unselect", svc.HandleUnselectMusicCandidate)
 	r.DELETE("/api/projects/:id/music-cue-sheets/:cid/candidates/:mid", svc.HandleDeleteMusicCandidate)
 	r.DELETE("/api/projects/:id/music-cue-sheets/:cid", svc.HandleDeleteMusicCueSheet)
 	r.POST("/api/projects/:id/music-cue-sheets/batch-approve", svc.HandleBatchApproveMusicCueSheets)

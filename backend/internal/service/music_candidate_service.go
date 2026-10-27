@@ -102,8 +102,17 @@ func (s *MusicCandidateService) Review(projectID, cueID, candidateID uint, statu
 	return &reviewed, err
 }
 
-func (s *MusicCandidateService) Select(projectID, cueID, candidateID uint, expectedSourceHash, expectedFileSHA256 string) (*models.MusicCandidate, error) {
-	var selected models.MusicCandidate
+// MusicCandidateSelection describes the result of adopting one Music 3 take:
+// the candidate itself, the BGM audio layer it produced and the hand authored
+// BGM layers that cover the same window.
+type MusicCandidateSelection struct {
+	Candidate            *models.MusicCandidate
+	Layer                *models.AudioLayer
+	OverlappingBGMLayers []models.AudioLayer
+}
+
+func (s *MusicCandidateService) Select(projectID, cueID, candidateID uint, expectedSourceHash, expectedFileSHA256 string) (*MusicCandidateSelection, error) {
+	selection := &MusicCandidateSelection{}
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var cue models.MusicCueSheet
 		if err := tx.Where("id = ? AND project_id = ?", cueID, projectID).First(&cue).Error; err != nil {
@@ -129,10 +138,38 @@ func (s *MusicCandidateService) Select(projectID, cueID, candidateID uint, expec
 			return err
 		}
 		row.IsCurrent = true
-		selected = row
+		layer, err := upsertMusicCueAudioLayer(tx, &cue, &row)
+		if err != nil {
+			return err
+		}
+		overlaps, err := overlappingManualBGMLayers(tx, projectID, cue.EpisodeN, cue.StartTime, cue.EndTime)
+		if err != nil {
+			return err
+		}
+		selection = &MusicCandidateSelection{Candidate: &row, Layer: layer, OverlappingBGMLayers: overlaps}
 		return nil
 	})
-	return &selected, err
+	if err != nil {
+		return nil, err
+	}
+	return selection, nil
+}
+
+// Unselect drops the adoption of a candidate and removes the derived BGM layer.
+func (s *MusicCandidateService) Unselect(projectID, cueID, candidateID uint) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var row models.MusicCandidate
+		if err := tx.Where("id = ? AND project_id = ? AND music_cue_sheet_id = ?", candidateID, projectID, cueID).First(&row).Error; err != nil {
+			return ErrMusicCandidateNotFound
+		}
+		if !row.IsCurrent {
+			return nil
+		}
+		if err := tx.Model(&row).Update("is_current", false).Error; err != nil {
+			return err
+		}
+		return deleteMusicCueAudioLayer(tx, projectID, cueID)
+	})
 }
 
 func (s *MusicCandidateService) Delete(projectID, cueID, candidateID uint) error {

@@ -1196,26 +1196,32 @@ type GenerationCandidate struct {
 
 // AudioLayer stores non-dialogue soundscape/SFX/BGM independently from H3 native audio.
 type AudioLayer struct {
-	ID          uint      `gorm:"primaryKey" json:"id"`
-	ProjectID   uint      `gorm:"index" json:"project_id"`
-	EpisodeN    int       `gorm:"index" json:"episode_n"`
-	SceneID     *uint     `gorm:"index" json:"scene_id,omitempty"`
-	Kind        string    `gorm:"index" json:"kind"`
-	Name        string    `json:"name"`
-	File        string    `json:"file"`
-	Description string    `gorm:"type:text" json:"description"`
-	StartTime   float64   `json:"start_time"`
-	EndTime     float64   `json:"end_time"`
-	Volume      float64   `gorm:"default:1" json:"volume"`
-	FadeIn      float64   `json:"fade_in"`
-	FadeOut     float64   `json:"fade_out"`
-	Loop        bool      `json:"loop"`
-	Muted       bool      `json:"muted"`
-	Status      string    `gorm:"default:draft;index" json:"status"`
-	Stale       bool      `gorm:"default:false" json:"stale"`
-	StaleReason string    `json:"stale_reason"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          uint    `gorm:"primaryKey" json:"id"`
+	ProjectID   uint    `gorm:"index" json:"project_id"`
+	EpisodeN    int     `gorm:"index" json:"episode_n"`
+	SceneID     *uint   `gorm:"index" json:"scene_id,omitempty"`
+	Kind        string  `gorm:"index" json:"kind"`
+	Name        string  `json:"name"`
+	File        string  `json:"file"`
+	Description string  `gorm:"type:text" json:"description"`
+	StartTime   float64 `json:"start_time"`
+	EndTime     float64 `json:"end_time"`
+	Volume      float64 `gorm:"default:1" json:"volume"`
+	FadeIn      float64 `json:"fade_in"`
+	FadeOut     float64 `json:"fade_out"`
+	Loop        bool    `json:"loop"`
+	Muted       bool    `json:"muted"`
+	Status      string  `gorm:"default:draft;index" json:"status"`
+	Stale       bool    `gorm:"default:false" json:"stale"`
+	StaleReason string  `json:"stale_reason"`
+	// Source records how the layer was produced: manual (user authored) or
+	// music_cue (derived from an adopted Music 3 candidate). Derived layers keep
+	// their file and timeline bound to the source Cue.
+	Source           string    `gorm:"column:source;size:32;index" json:"source"`
+	MusicCueSheetID  *uint     `gorm:"column:music_cue_sheet_id;index" json:"music_cue_sheet_id,omitempty"`
+	MusicCandidateID *uint     `gorm:"column:music_candidate_id;index" json:"music_candidate_id,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // ScreenTextCue stores reviewed, non-dialogue on-screen text such as character

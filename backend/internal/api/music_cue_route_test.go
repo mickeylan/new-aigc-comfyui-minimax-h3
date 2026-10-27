@@ -81,6 +81,74 @@ func TestMusicCueSheetRoutes(t *testing.T) {
 	}
 }
 
+func TestMusicCandidateSelectCreatesAndUnselectRemovesBGMLayer(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.Project{}, &models.MusicCueSheet{}, &models.MusicCandidate{}, &models.AudioLayer{}); err != nil {
+		t.Fatal(err)
+	}
+	p := models.Project{Title: "proj"}
+	db.Create(&p)
+	cue := models.MusicCueSheet{ProjectID: p.ID, EpisodeN: 1, Kind: "scene", StartTime: 0, EndTime: 12, ReviewStatus: "approved", SourceVersionHash: "source-a", Enabled: true}
+	db.Create(&cue)
+	candidate := models.MusicCandidate{
+		ProjectID: p.ID, MusicCueSheetID: cue.ID, SourceVersionHash: "source-a",
+		Provider: "minimax_music_3_comfyui", Model: "MiniMax Music 3", File: "music3_cue.flac",
+		FileSHA256: "file-a", FileSize: 2048, Duration: 12, ReviewStatus: "accepted",
+		ReviewConfirmation: "music-candidate-listened-v1", ReviewSourceHash: "source-a", ReviewFileSHA256: "file-a",
+	}
+	db.Create(&candidate)
+
+	svc := &service.Service{DB: db, MusicCues: service.NewMusicCueService(db), MusicCandidates: service.NewMusicCandidateService(db)}
+	router := NewRouter(&config.Config{}, svc)
+
+	selectPath := fmt.Sprintf("/api/projects/%d/music-cue-sheets/%d/candidates/%d/select", p.ID, cue.ID, candidate.ID)
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, selectPath, bytes.NewBufferString(`{"expected_source_hash":"source-a","expected_file_sha256":"file-a"}`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("select status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var selected struct {
+		BgmLayer *models.AudioLayer `json:"bgm_layer"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &selected); err != nil {
+		t.Fatal(err)
+	}
+	if selected.BgmLayer == nil || selected.BgmLayer.Kind != "bgm" || selected.BgmLayer.File != "music3_cue.flac" {
+		t.Fatalf("select did not return the derived BGM layer: %+v", selected.BgmLayer)
+	}
+	var layers []models.AudioLayer
+	db.Find(&layers)
+	if len(layers) != 1 {
+		t.Fatalf("expected one derived layer, got %d", len(layers))
+	}
+
+	unselectPath := fmt.Sprintf("/api/projects/%d/music-cue-sheets/%d/candidates/%d/unselect", p.ID, cue.ID, candidate.ID)
+	resp = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, unselectPath, nil)
+	router.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unselect status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	layers = nil
+	db.Find(&layers)
+	if len(layers) != 0 {
+		t.Fatalf("derived layer survived the unselect: %+v", layers)
+	}
+
+	missing := fmt.Sprintf("/api/projects/%d/music-cue-sheets/%d/candidates/%d/unselect", p.ID, cue.ID, 9999)
+	resp = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, missing, nil)
+	router.ServeHTTP(resp, req)
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("unselect of an unknown candidate status=%d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestMusicCueSheetBatchApprove(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {

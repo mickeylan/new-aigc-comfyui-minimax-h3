@@ -143,7 +143,7 @@ func (s *Service) HandleSelectMusicCandidate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	row, err := s.MusicCandidates.Select(projectID, cueID, candidateID, body.ExpectedSourceHash, body.ExpectedFileSHA256)
+	selection, err := s.MusicCandidates.Select(projectID, cueID, candidateID, body.ExpectedSourceHash, body.ExpectedFileSHA256)
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, ErrMusicCandidateNotFound) || errors.Is(err, ErrMusicCueSheetNotFound) {
@@ -155,7 +155,28 @@ func (s *Service) HandleSelectMusicCandidate(c *gin.Context) {
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, s.musicCandidateResponse(projectID, *row))
+	response := s.musicCandidateResponse(projectID, *selection.Candidate)
+	response["bgm_layer"] = selection.Layer
+	response["overlapping_bgm_layers"] = selection.OverlappingBGMLayers
+	c.JSON(http.StatusOK, response)
+}
+
+// HandleUnselectMusicCandidate drops the adoption of a Music 3 take and removes
+// the BGM audio layer derived from it.
+func (s *Service) HandleUnselectMusicCandidate(c *gin.Context) {
+	projectID, cueID, candidateID, ok := musicCandidateRouteIDs(c)
+	if !ok {
+		return
+	}
+	if err := s.MusicCandidates.Unselect(projectID, cueID, candidateID); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, ErrMusicCandidateNotFound) || errors.Is(err, ErrMusicCueSheetNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 func (s *Service) HandleDeleteMusicCandidate(c *gin.Context) {

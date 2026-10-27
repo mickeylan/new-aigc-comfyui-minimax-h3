@@ -40,6 +40,17 @@ test('剪辑台先收集用户设想再生成并审核Music 3提示词', () => {
   assert.match(source, /selectMusicCandidate/)
 })
 
+test('采用的Music 3候选落到BGM轨并可取消采用', () => {
+  assert.match(source, /data\?\.bgm_layer/)
+  assert.match(source, /overlapping_bgm_layers/)
+  assert.match(source, /手工BGM层/)
+  assert.match(source, /unselectMusicCandidate/)
+  assert.match(source, /取消采用/)
+  assert.match(source, /batchApproveMusicCues/)
+  assert.match(source, /批量审核本集/)
+  assert.match(source, /loadAudioLayers\(\)/)
+})
+
 test('剪辑台场景时间轴保留独立可见横向滚动条', () => {
   assert.match(source, /class="timeline-scroll"/)
   assert.match(source, /aria-label="场景时间轴横向滚动区"/)

@@ -71,7 +71,7 @@ func normalizeAudioLayer(projectID uint, in AudioLayerInput) (models.AudioLayer,
 		ProjectID: projectID, EpisodeN: in.EpisodeN, SceneID: in.SceneID, Kind: kind,
 		Name: strings.TrimSpace(in.Name), File: strings.TrimSpace(in.File), Description: strings.TrimSpace(in.Description),
 		StartTime: in.StartTime, EndTime: in.EndTime, Volume: volume, FadeIn: in.FadeIn, FadeOut: in.FadeOut,
-		Loop: in.Loop, Muted: in.Muted, Status: status,
+		Loop: in.Loop, Muted: in.Muted, Status: status, Source: audioLayerSourceManual,
 	}, nil
 }
 
@@ -133,6 +133,12 @@ func (s *AudioLayerService) Update(projectID, id uint, in AudioLayerInput) (*mod
 		"file": layer.File, "description": layer.Description, "start_time": layer.StartTime, "end_time": layer.EndTime,
 		"volume": layer.Volume, "fade_in": layer.FadeIn, "fade_out": layer.FadeOut, "loop": layer.Loop,
 		"muted": layer.Muted, "status": layer.Status,
+	}
+	if existing.Source == audioLayerSourceMusicCue {
+		// 配乐派生层的文件与时间轴由配乐Cue决定，用户只能调整听感参数。
+		for _, key := range []string{"episode_n", "scene_id", "kind", "file", "start_time", "end_time", "loop", "status"} {
+			delete(updates, key)
+		}
 	}
 	if err := s.db.Model(&existing).Updates(updates).Error; err != nil {
 		return nil, err

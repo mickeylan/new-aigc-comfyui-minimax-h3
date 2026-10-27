@@ -254,6 +254,9 @@ func (s *MusicCueService) Update(projectID, id uint, in MusicCueSheetInput) (*mo
 		if err := markMusicCandidatesStale(tx, projectID, id, "配乐Cue内容已修改"); err != nil {
 			return err
 		}
+		if err := markMusicCueAudioLayerStale(tx, projectID, id, "配乐Cue内容已修改，需要重新采用候选"); err != nil {
+			return err
+		}
 		return tx.Model(&existing).Updates(updates).Error
 	}); err != nil {
 		return nil, err
@@ -270,6 +273,9 @@ func (s *MusicCueService) Delete(projectID, id uint) error {
 			if err := tx.Where("project_id = ? AND music_cue_sheet_id = ?", projectID, id).Delete(&models.MusicCandidate{}).Error; err != nil {
 				return err
 			}
+		}
+		if err := deleteMusicCueAudioLayer(tx, projectID, id); err != nil {
+			return err
 		}
 		result := tx.Where("id = ? AND project_id = ?", id, projectID).Delete(&models.MusicCueSheet{})
 		if result.Error != nil {
@@ -290,6 +296,11 @@ func (s *MusicCueService) markCuesAndCandidatesStale(query string, args []any, p
 		}
 		if len(ids) > 0 && tx.Migrator().HasTable(&models.MusicCandidate{}) {
 			if err := tx.Model(&models.MusicCandidate{}).Where("project_id = ? AND music_cue_sheet_id IN ? AND stale = ?", projectID, ids, false).Updates(map[string]any{"stale": true, "stale_reason": reason, "is_current": false}).Error; err != nil {
+				return err
+			}
+		}
+		for _, cueID := range ids {
+			if err := markMusicCueAudioLayerStale(tx, projectID, cueID, reason); err != nil {
 				return err
 			}
 		}

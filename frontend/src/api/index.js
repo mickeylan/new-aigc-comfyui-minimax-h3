@@ -160,6 +160,8 @@ export const api = {
   musicCandidates: (id, cid) => http.get(`/projects/${id}/music-cue-sheets/${cid}/candidates`),
   reviewMusicCandidate: (id, cid, mid, data) => http.post(`/projects/${id}/music-cue-sheets/${cid}/candidates/${mid}/review`, data),
   selectMusicCandidate: (id, cid, mid, data) => http.post(`/projects/${id}/music-cue-sheets/${cid}/candidates/${mid}/select`, data),
+  unselectMusicCandidate: (id, cid, mid) => http.post(`/projects/${id}/music-cue-sheets/${cid}/candidates/${mid}/unselect`),
+  batchApproveMusicCues: (id, episodeN, reviewReason = '') => http.post(`/projects/${id}/music-cue-sheets/batch-approve`, { episode_n: episodeN, review_reason: reviewReason }),
   deleteMusicCandidate: (id, cid, mid) => http.delete(`/projects/${id}/music-cue-sheets/${cid}/candidates/${mid}`),
   screenTextCues: (id, episodeN) => http.get(`/projects/${id}/screen-text-cues`, { params: episodeN ? { episode_n: episodeN } : {} }),
   screenTextPreflight: (id, episodeN, width = 1920, height = 1080) => http.get(`/projects/${id}/screen-text-cues/preflight`, { params: { episode_n: episodeN, width, height } }),
