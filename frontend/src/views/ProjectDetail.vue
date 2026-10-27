@@ -556,9 +556,12 @@
               <span class="dot blue pulse"></span>正在拼接视频，请稍候…
             </div>
           </div>
-          <button v-if="merges.length > mergeShowLimit" class="btn btn-sm btn-ghost merge-more" @click="showAllMerges = !showAllMerges">
-            {{ showAllMerges ? '收起合并历史' : `展开全部合并历史（${merges.length} 条）` }}
-          </button>
+          <nav v-if="mergePageCount > 1" class="merge-pagination" aria-label="成片历史分页">
+            <button type="button" class="btn btn-sm btn-ghost" :disabled="mergePage===1" @click="goToMergePage(mergePage-1)">← 上一页</button>
+            <button v-for="item in mergePageItems" :key="`merge-page-${item}`" type="button" class="btn btn-sm" :class="item===mergePage?'btn-primary':'btn-ghost'" @click="goToMergePage(item)">{{item}}</button>
+            <button type="button" class="btn btn-sm btn-ghost" :disabled="mergePage===mergePageCount" @click="goToMergePage(mergePage+1)">下一页 →</button>
+            <span class="merge-page-info">第 {{mergePage}} / {{mergePageCount}} 页 · 共 {{episodeMerges.length}} 条</span>
+          </nav>
         </div>
       </div>
     </section>
@@ -1315,10 +1318,18 @@ function goToScenePage(page) {
 }
 function jumpToScenePage() { goToScenePage(scenePageJump.value) }
 watch(scenePageCount, count => { if (scenePage.value > count) goToScenePage(count) })
-// 合并历史折叠
-const mergeShowLimit = 3
-const showAllMerges = ref(false)
-const visibleMerges = computed(() => showAllMerges.value ? merges.value : merges.value.slice(0, mergeShowLimit))
+// 当前集成片历史分页，避免大量视频播放器同时挂载。
+const mergePageSize = 4
+const mergePage = ref(1)
+const episodeMerges = computed(() => merges.value.filter(row => Number(row.episode_n || 1) === activeEpN.value))
+const mergePageCount = computed(() => Math.max(1, Math.ceil(episodeMerges.value.length / mergePageSize)))
+const visibleMerges = computed(() => {
+  const start = (mergePage.value - 1) * mergePageSize
+  return episodeMerges.value.slice(start, start + mergePageSize)
+})
+const mergePageItems = computed(() => Array.from({length: mergePageCount.value}, (_, index) => index + 1))
+function goToMergePage(page) { mergePage.value = Math.min(mergePageCount.value, Math.max(1, Number(page) || 1)) }
+watch([activeEpN, mergePageCount], () => { if (mergePage.value !== 1) mergePage.value = 1 })
 const currentEpTitle = computed(() => {
   const e = epEdits.value.find(x => x.n === activeEpN.value)
   return e ? (e.title || `第${e.n}集`) : `第${activeEpN.value}集`
@@ -2896,7 +2907,7 @@ onBeforeUnmount(() => {
 }
 .merge-chip.active .chip-n { background: var(--accent); color: #fff; }
 .merge-list { border-top: 1px solid var(--border); padding-top: 14px; display: flex; flex-direction: column; gap: 16px; }
-.merge-more { align-self: flex-start; margin-top: 4px; }
+.merge-pagination{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:7px;padding-top:12px;border-top:1px solid var(--border)}.merge-page-info{margin-left:6px;color:var(--text-tertiary);font-size:12px}
 .pager { display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px;margin-top:16px; }
 .pager-pages{display:flex;align-items:center;gap:5px}.pager-page{min-width:34px;height:32px;padding:0 8px;border:1px solid var(--border);border-radius:7px;background:var(--surface-secondary);color:var(--text-secondary);cursor:pointer}.pager-page:hover{border-color:var(--accent);color:var(--accent)}.pager-page.active{border-color:var(--accent);background:var(--accent);color:#fff;font-weight:700}.pager-ellipsis{min-width:22px;text-align:center;color:var(--text-tertiary)}
 .pager-jump{display:flex;align-items:center;gap:6px;margin-left:6px;color:var(--text-secondary);font-size:12px}.pager-jump .input{width:68px;height:32px;padding:4px 7px}.pager-info{width:100%;text-align:center;font-size:13px;color:var(--text-secondary)}
