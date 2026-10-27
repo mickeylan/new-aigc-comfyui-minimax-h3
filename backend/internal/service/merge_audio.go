@@ -271,11 +271,15 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 
 	extras := make([]mergeAudioInput, 0)
 	var layers []models.AudioLayer
-	if err := s.db.Where("project_id = ? AND episode_n = ? AND status = ? AND muted = ? AND file != ''", p.ID, mt.EpisodeN, "ready", false).Order("start_time, id").Find(&layers).Error; err != nil {
+	if err := s.db.Where("project_id = ? AND episode_n = ?", p.ID, mt.EpisodeN).Order("start_time, id").Find(&layers).Error; err != nil {
 		fail(err)
 		return
 	}
-	for _, layer := range layers {
+	for _, decision := range resolveAudioLayerMix(layers) {
+		if decision.Status != audioLayerMixIncluded && decision.Status != audioLayerMixPartialOverlap {
+			continue
+		}
+		layer := decision.Layer
 		abs, err := s.audioMixMediaPath(p.ID, layer.File)
 		if err != nil {
 			fail(err)

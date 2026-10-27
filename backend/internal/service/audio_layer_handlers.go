@@ -22,6 +22,24 @@ func (s *Service) HandleListAudioLayers(c *gin.Context) {
 	c.JSON(http.StatusOK, layers)
 }
 
+func (s *Service) HandleAudioLayerPreflight(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	episodeN, err := strconv.Atoi(c.Query("episode_n"))
+	if err != nil || episodeN <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "episode_n 必须是大于 0 的整数"})
+		return
+	}
+	result, err := s.Projects.AudioLayerPreflight(p.ID, episodeN)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
 func (s *Service) HandleCreateAudioLayer(c *gin.Context) {
 	p, ok := s.loadProject(c)
 	if !ok {

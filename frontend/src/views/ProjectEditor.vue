@@ -310,7 +310,8 @@
     </section>
 
     <section class="section">
-      <div class="section-head"><div><span class="overline">AUDIO LAYERS</span><h2>环境声 / 音效 / BGM</h2><p class="sub">完整编辑范围、淡入淡出、循环、静音与状态。</p></div><button class="btn btn-sm btn-secondary" @click="editAudioLayer()">新增音频层</button></div>
+      <div class="section-head"><div><span class="overline">AUDIO LAYERS</span><h2>环境声 / 音效 / BGM</h2><p class="sub">完整编辑范围、淡入淡出、循环、静音与状态。Music 3 完整覆盖手工 BGM 时，手工层仅在合成时让路，不会被修改。</p></div><button class="btn btn-sm btn-ghost" :disabled="audioPreflightLoading" @click="loadAudioPreflight">{{ audioPreflightLoading ? '检查中…' : '刷新音频预检' }}</button><button class="btn btn-sm btn-secondary" @click="editAudioLayer()">新增音频层</button></div>
+      <div v-if="audioPreflight" class="card"><div class="merge-info"><span class="badge" :class="audioPreflight.ready ? 'badge-green' : 'badge-red'">{{ audioPreflight.ready ? '音频层就绪' : '音频层需处理' }}</span><span>响度/削波：{{ audioPreflight.loudness_assessed ? '已评估' : '未评估' }}</span><span v-for="(message, index) in audioPreflight.messages" :key="`${message.code}-${message.layer_id}-${index}`" :class="message.level === 'error' ? 'fail-msg' : 'sub'">{{ message.message }}</span><span v-if="!audioPreflight.messages.length" class="sub">未发现音频层问题。</span></div></div>
       <div class="card" v-if="audioLayers.length"><div v-for="layer in audioLayers" :key="layer.id" class="merge-item"><div class="merge-info"><span class="badge badge-gray">{{ layer.kind }}</span><strong>{{ layer.name || layer.file }}</strong><span>{{ layer.start_time }}s → {{ layer.end_time }}s · 音量{{ layer.volume }} · 淡入/出 {{ layer.fade_in }}/{{ layer.fade_out }}s<span v-if="layer.loop"> · 循环</span><span v-if="layer.muted"> · 已静音</span></span></div><div class="merge-links"><button class="btn btn-sm btn-ghost" @click="editAudioLayer(layer)">编辑</button><button class="btn btn-sm btn-danger" @click="removeAudioLayer(layer)">删除</button></div></div></div>
       <div class="card empty" v-else>暂无音频层。</div>
       <form v-if="audioLayerEditing" class="card inline-form audio-form" @submit.prevent="saveAudioLayer"><label>类型<select v-model="audioLayerForm.kind" class="input"><option value="soundscape">环境声</option><option value="sfx">音效</option><option value="bgm">BGM</option></select></label><label>名称<input v-model="audioLayerForm.name" class="input"></label><label>文件<input v-model="audioLayerForm.file" class="input" required></label><label>场景<select v-model="audioLayerForm.scene_id" class="input"><option :value="null">整集</option><option v-for="sc in scenes" :key="sc.id" :value="sc.id">场景 {{ sc.order }} · {{ sc.title }}</option></select></label><label>开始秒<input v-model.number="audioLayerForm.start_time" type="number" min="0" step="0.1" class="input" required></label><label>结束秒<input v-model.number="audioLayerForm.end_time" type="number" min="0.1" step="0.1" class="input" required></label><label>音量<input v-model.number="audioLayerForm.volume" type="number" min="0" max="2" step="0.1" class="input"></label><label>淡入<input v-model.number="audioLayerForm.fade_in" type="number" min="0" step="0.1" class="input"></label><label>淡出<input v-model.number="audioLayerForm.fade_out" type="number" min="0" step="0.1" class="input"></label><label>状态<select v-model="audioLayerForm.status" class="input"><option value="draft">草稿</option><option value="ready">就绪</option><option value="failed">失败</option></select></label><label class="check"><input v-model="audioLayerForm.loop" type="checkbox"> 循环</label><label class="check"><input v-model="audioLayerForm.muted" type="checkbox"> 静音</label><label class="wide">说明<textarea v-model="audioLayerForm.description" class="textarea" rows="2"></textarea></label><div class="section-actions wide"><button class="btn btn-sm">保存</button><button type="button" class="btn btn-sm btn-ghost" @click="audioLayerEditing=false">取消</button></div></form>
@@ -404,6 +405,8 @@ const merges = ref([])
 const candidates = ref([])
 const compareCandidateIds = ref([])
 const audioLayers = ref([])
+const audioPreflight = ref(null)
+const audioPreflightLoading = ref(false)
 const musicCues = ref([])
 const musicRequirements = ref('')
 const musicCueBusy = ref(false)
@@ -611,7 +614,7 @@ async function load() {
     if (selected.value) { durationInput.value = selected.value.duration || 5; sceneModeInput.value = selected.value.scene_mode || ''; await Promise.all([loadCandidates(), loadSelectedWorkbench()]) } else { candidates.value = []; selectedShots.value=[]; videoPromptDetail.value=null }
     const episodeNumbers = epNums()
     epIndex.value = Math.max(0, episodeNumbers.indexOf(activeEpN.value))
-    await Promise.all([loadMerges(), loadAudioLayers(), loadMusicCues(), loadScreenTextCues(), loadSharedAssets(), loadEpisodeContinuity(), loadSkillPanel()])
+    await Promise.all([loadMerges(), loadAudioLayers(), loadAudioPreflight(), loadMusicCues(), loadScreenTextCues(), loadSharedAssets(), loadEpisodeContinuity(), loadSkillPanel()])
   } catch (e) {
     toast.error(e.response?.data?.error || '加载剪辑台失败')
   }
@@ -998,16 +1001,16 @@ async function selectMusicCandidate(cue,item){
   try {
     const { data } = await api.selectMusicCandidate(id(),cue.id,item.candidate.id,{expected_source_hash:item.candidate.source_version_hash,expected_file_sha256:item.candidate.file_sha256})
     await loadMusicCandidates(cue)
-    await loadAudioLayers()
+    await Promise.all([loadAudioLayers(), loadAudioPreflight()])
     toast.success(data?.bgm_layer ? '已采用配乐候选并放入BGM轨' : '已采用配乐候选')
     const overlaps = data?.overlapping_bgm_layers || []
-    if (overlaps.length) toast.info(`该时间段已有 ${overlaps.length} 条手工BGM层，会与这条配乐叠加播放，请自行调整音量或时间`)
+    if (overlaps.length) toast.info(`该时间段有 ${overlaps.length} 条手工BGM层：完整覆盖时合成会让位，部分重叠仍会叠加，请查看音频预检`)
   }
   catch(e){ toast.error(e.response?.data?.error||'采用配乐候选失败') }
 }
 async function unselectMusicCandidate(cue,item){
   if(!window.confirm('取消采用这条配乐候选？对应的BGM轨会一并移除。'))return
-  try { await api.unselectMusicCandidate(id(),cue.id,item.candidate.id); await loadMusicCandidates(cue); await loadAudioLayers(); toast.success('已取消采用，BGM轨已移除') }
+  try { await api.unselectMusicCandidate(id(),cue.id,item.candidate.id); await loadMusicCandidates(cue); await Promise.all([loadAudioLayers(), loadAudioPreflight()]); toast.success('已取消采用，BGM轨已移除') }
   catch(e){ toast.error(e.response?.data?.error||'取消采用失败') }
 }
 async function batchApproveMusicCues(){
@@ -1024,6 +1027,12 @@ async function removeMusicCandidate(cue,item){
 async function loadAudioLayers() {
   try { const { data } = await api.audioLayers(id(), activeEpN.value); audioLayers.value = data || [] }
   catch (e) { toast.error(e.response?.data?.error || '加载音频层失败') }
+}
+async function loadAudioPreflight() {
+  audioPreflightLoading.value = true
+  try { audioPreflight.value = (await api.audioLayersPreflight(id(), activeEpN.value)).data }
+  catch (e) { audioPreflight.value = { ready: false, loudness_assessed: false, messages: [{ level: 'error', code: 'request_failed', message: e.response?.data?.error || '音频层预检失败' }] } }
+  finally { audioPreflightLoading.value = false }
 }
 async function loadScreenTextPreflight() {
   screenTextPreflightLoading.value = true
@@ -1105,12 +1114,12 @@ function editAudioLayer(layer = null) {
 }
 async function saveAudioLayer() {
   const { id: layerId, ...payload } = audioLayerForm
-  try { layerId ? await api.updateAudioLayer(id(), layerId, payload) : await api.createAudioLayer(id(), payload); audioLayerEditing.value = false; toast.success('音频层已保存'); await loadAudioLayers() }
+  try { layerId ? await api.updateAudioLayer(id(), layerId, payload) : await api.createAudioLayer(id(), payload); audioLayerEditing.value = false; toast.success('音频层已保存'); await Promise.all([loadAudioLayers(), loadAudioPreflight()]) }
   catch (e) { toast.error(e.response?.data?.error || '保存音频层失败') }
 }
 async function removeAudioLayer(layer) {
   if (!window.confirm(`删除音频层“${layer.name || layer.file}”？`)) return
-  try { await api.deleteAudioLayer(id(), layer.id); await loadAudioLayers() } catch (e) { toast.error(e.response?.data?.error || '删除失败') }
+  try { await api.deleteAudioLayer(id(), layer.id); await Promise.all([loadAudioLayers(), loadAudioPreflight()]) } catch (e) { toast.error(e.response?.data?.error || '删除失败') }
 }
 
 async function loadCandidates() {

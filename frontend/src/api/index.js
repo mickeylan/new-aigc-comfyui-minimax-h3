@@ -147,6 +147,7 @@ export const api = {
   mergeAllScenes: (id, payload = {}) => http.post(`/projects/${id}/merge-all`, payload),
   merges: (id) => http.get(`/projects/${id}/merges`),
   audioLayers: (id, episodeN) => http.get(`/projects/${id}/audio-layers`, { params: episodeN ? { episode_n: episodeN } : {} }),
+  audioLayersPreflight: (id, episodeN) => http.get(`/projects/${id}/audio-layers/preflight`, { params: { episode_n: episodeN } }),
   createAudioLayer: (id, data) => http.post(`/projects/${id}/audio-layers`, data),
   updateAudioLayer: (id, aid, data) => http.put(`/projects/${id}/audio-layers/${aid}`, data),
   deleteAudioLayer: (id, aid) => http.delete(`/projects/${id}/audio-layers/${aid}`),

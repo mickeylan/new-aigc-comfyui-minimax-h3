@@ -51,6 +51,17 @@ test('采用的Music 3候选落到BGM轨并可取消采用', () => {
   assert.match(source, /loadAudioLayers\(\)/)
 })
 
+test('音频层显示可刷新预检和Music 3优先级结果', () => {
+  const apiSource = fs.readFileSync(new URL('../src/api/index.js', import.meta.url), 'utf8')
+  assert.match(apiSource, /audioLayersPreflight/)
+  assert.match(apiSource, /audio-layers\/preflight/)
+  assert.match(source, /刷新音频预检/)
+  assert.match(source, /audioPreflight\.ready/)
+  assert.match(source, /loudness_assessed/)
+  assert.match(source, /Music 3 完整覆盖手工 BGM/)
+  assert.match(source, /loadAudioPreflight/)
+})
+
 test('剪辑台场景时间轴保留独立可见横向滚动条', () => {
   assert.match(source, /class="timeline-scroll"/)
   assert.match(source, /aria-label="场景时间轴横向滚动区"/)

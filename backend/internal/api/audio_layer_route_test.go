@@ -32,8 +32,10 @@ func TestAudioLayerRoutes(t *testing.T) {
 	scene := models.Scene{ProjectID: p1.ID, EpisodeN: 1, Generation: 1, Order: 1}
 	db.Create(&scene)
 
+	cfg := &config.Config{}
 	svc := &service.Service{DB: db, AudioLayers: service.NewAudioLayerService(db)}
-	router := NewRouter(&config.Config{}, svc)
+	svc.Projects = service.NewProjectService(cfg, db, nil, nil, nil, nil, nil, nil, nil)
+	router := NewRouter(cfg, svc)
 	request := func(method, path, body string) *httptest.ResponseRecorder {
 		t.Helper()
 		response := httptest.NewRecorder()
@@ -46,8 +48,17 @@ func TestAudioLayerRoutes(t *testing.T) {
 	}
 
 	base := fmt.Sprintf("/api/projects/%d/audio-layers", p1.ID)
+	response := request(http.MethodGet, base+"/preflight?episode_n=0", "")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid preflight status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = request(http.MethodGet, base+"/preflight?episode_n=1", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("preflight status=%d body=%s", response.Code, response.Body.String())
+	}
+
 	body := fmt.Sprintf(`{"episode_n":1,"scene_id":%d,"kind":"sfx","name":"door","start_time":0,"end_time":1,"volume":2}`, scene.ID)
-	response := request(http.MethodPost, base, body)
+	response = request(http.MethodPost, base, body)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
 	}
