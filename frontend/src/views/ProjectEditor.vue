@@ -517,7 +517,7 @@ const sceneModeSaving = ref(false)
 const sceneModeInput = ref('')
 const dragFrom = ref(null)
 const activeEpN = ref(1)
-const editorMergePageSize = 4
+const editorMergePageSize = 6
 const editorMergePage = ref(1)
 const editorEpisodeMerges = computed(() => merges.value.filter(row => Number(row.episode_n || 1) === activeEpN.value))
 const editorMergePageCount = computed(() => Math.max(1, Math.ceil(editorEpisodeMerges.value.length / editorMergePageSize)))

@@ -1316,8 +1316,8 @@ function goToScenePage(page) {
 }
 function jumpToScenePage() { goToScenePage(scenePageJump.value) }
 watch(scenePageCount, count => { if (scenePage.value > count) goToScenePage(count) })
-// 当前集成片历史分页，避免大量视频播放器同时挂载。
-const mergePageSize = 4
+// 三列布局每页显示两整行，避免最后一行留下空位。
+const mergePageSize = 6
 const mergePage = ref(1)
 const episodeMerges = computed(() => merges.value.filter(row => Number(row.episode_n || 1) === activeEpN.value))
 const mergePageCount = computed(() => Math.max(1, Math.ceil(episodeMerges.value.length / mergePageSize)))

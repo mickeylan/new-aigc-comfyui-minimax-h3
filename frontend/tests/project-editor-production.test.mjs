@@ -18,8 +18,8 @@ test('项目详情不再绕过最终成片编排直接提交合并', () => {
   assert.match(source, /route\.query\.workspace/)
 })
 
-test('项目详情成片历史按当前集分页且每页只挂载少量播放器', () => {
-  assert.match(detailSource, /const mergePageSize = 4/)
+test('项目详情成片历史按三列两行分页', () => {
+  assert.match(detailSource, /const mergePageSize = 6/)
   assert.match(detailSource, /episodeMerges/)
   assert.match(detailSource, /mergePageCount/)
   assert.match(detailSource, /成片历史分页/)
@@ -28,8 +28,8 @@ test('项目详情成片历史按当前集分页且每页只挂载少量播放�
   assert.doesNotMatch(detailSource, /showAllMerges/)
 })
 
-test('剪辑台合并记录也按当前集分页', () => {
-  assert.match(source, /const editorMergePageSize = 4/)
+test('剪辑台合并记录也按三列两行分页', () => {
+  assert.match(source, /const editorMergePageSize = 6/)
   assert.match(source, /editorEpisodeMerges/)
   assert.match(source, /editorVisibleMerges/)
   assert.match(source, /剪辑台合并记录分页/)
