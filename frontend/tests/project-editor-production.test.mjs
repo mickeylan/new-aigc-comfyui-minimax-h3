@@ -4,6 +4,15 @@ import fs from 'node:fs'
 
 const source = fs.readFileSync(new URL('../src/views/ProjectEditor.vue', import.meta.url), 'utf8')
 
+test('剪辑台按生产阶段拆分为可持久切换的工作区', () => {
+  for (const label of ['分镜制作', '连续性与审核', '声音与配乐', '最终成片', '高级设置']) assert.match(source, new RegExp(label))
+  assert.match(source, /workspaceTab==='production'/)
+  assert.match(source, /workspaceTab==='sound'/)
+  assert.match(source, /workspaceTab==='delivery'/)
+  assert.match(source, /project-editor-workspace/)
+  assert.match(source, /v-show="workspaceTab==='production'"/)
+})
+
 test('生成分镜界面支持上传或选择素材替换当前Scene视频', () => {
   assert.match(source, /上传视频作为当前分镜/)
   assert.match(source, /从项目视频素材选择/)

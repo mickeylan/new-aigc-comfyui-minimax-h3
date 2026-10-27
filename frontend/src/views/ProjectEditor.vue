@@ -17,29 +17,34 @@
         <button class="btn btn-ghost btn-sm" @click="createEpisode">新建集</button>
         <button class="btn btn-ghost btn-sm" @click="showCharacterHistory = true">角色历史</button><button class="btn btn-ghost btn-sm" @click="showGeneratedHistory = true">生成历史管理</button>
         <button class="btn btn-ghost btn-sm" @click="deleteEpisode">删除空集</button>
-        <label class="merge-opt" title="默认关闭；仅在需要逐句显示Dialogue时开启"><input type="checkbox" v-model="mergeSub" />烧录Dialogue对白字幕（默认关闭）</label>
-        <label class="merge-opt" title="只烧录已审核的功能文字，不会自动开启对白字幕"><input type="checkbox" v-model="mergeScreenText" />烧录功能字幕/屏幕文字</label>
-        <label class="merge-opt"><input type="checkbox" v-model="mergeDub" />保留原声</label>
-        <label class="merge-opt">原声 <input class="sub-t" type="number" min="0" max="4" step="0.1" v-model.number="nativeVolume" /></label>
-        <label class="merge-opt">对白 <input class="sub-t" type="number" min="0" max="4" step="0.1" v-model.number="dialogueVolume" /></label>
-        <label class="merge-opt">BGM <input class="sub-t" type="number" min="0" max="4" step="0.1" v-model.number="bgmVolume" /></label>
-        <button class="btn btn-lg" :disabled="busy || curMerging || readyVideoCount < 2" @click="mergeEpisode">
+        <label v-show="workspaceTab==='delivery'" class="merge-opt" title="默认关闭；仅在需要逐句显示Dialogue时开启"><input type="checkbox" v-model="mergeSub" />烧录Dialogue对白字幕（默认关闭）</label>
+        <label v-show="workspaceTab==='delivery'" class="merge-opt" title="只烧录已审核的功能文字，不会自动开启对白字幕"><input type="checkbox" v-model="mergeScreenText" />烧录功能字幕/屏幕文字</label>
+        <label v-show="workspaceTab==='delivery'" class="merge-opt"><input type="checkbox" v-model="mergeDub" />保留原声</label>
+        <label v-show="workspaceTab==='delivery'" class="merge-opt">原声 <input class="sub-t" type="number" min="0" max="4" step="0.1" v-model.number="nativeVolume" /></label>
+        <label v-show="workspaceTab==='delivery'" class="merge-opt">对白 <input class="sub-t" type="number" min="0" max="4" step="0.1" v-model.number="dialogueVolume" /></label>
+        <label v-show="workspaceTab==='delivery'" class="merge-opt">BGM <input class="sub-t" type="number" min="0" max="4" step="0.1" v-model.number="bgmVolume" /></label>
+        <button v-show="workspaceTab==='delivery'" class="btn btn-lg" :disabled="busy || curMerging || readyVideoCount < 2" @click="mergeEpisode">
           {{ curMerging ? '合并中…' : '⚡ 合并第' + activeEpN + '集成片' }}
         </button>
       </div>
     </div>
 
-    <section class="section">
+    <nav class="workspace-tabs" aria-label="剪辑台工作区">
+      <button v-for="item in workspaceTabs" :key="item.key" type="button" class="workspace-tab" :class="{active:workspaceTab===item.key}" @click="workspaceTab=item.key"><strong>{{item.label}}</strong><small>{{item.description}}</small></button>
+    </nav>
+    <div class="workspace-context"><span>第{{activeEpN}}集</span><span v-if="selected">当前 Scene {{selected.order}} · {{selected.title||'未命名'}}</span><span v-else>尚未选择 Scene</span></div>
+
+    <section v-show="workspaceTab==='delivery'" class="section">
       <div class="section-head"><div><span class="overline">FINAL CUT ASSEMBLY</span><h2>最终成片编排</h2><p class="sub">只影响本次合并，不修改Scene、候选或原视频。勾选参与片段、调整顺序，并可在任意位置插入项目视频素材。</p></div><button class="btn btn-sm btn-ghost" @click="resetMergeSequence">按Scene重置</button></div>
       <div class="card"><div v-for="(clip,index) in mergeSequence" :key="clip.id" class="merge-item"><div class="merge-info"><strong>{{index+1}}. {{clip.label}}</strong><span>{{clip.scene_id?'Scene片段':'插入视频素材'}}</span></div><div class="merge-links"><button class="btn btn-xs btn-ghost" :disabled="index===0" @click="moveMergeClip(index,-1)">上移</button><button class="btn btn-xs btn-ghost" :disabled="index===mergeSequence.length-1" @click="moveMergeClip(index,1)">下移</button><button class="btn btn-xs btn-danger" @click="mergeSequence.splice(index,1)">移除</button><select class="input" v-model.number="insertMaterialByIndex[index]"><option :value="0">选择插入视频</option><option v-for="m in videoMaterials" :key="m.id" :value="m.id">{{m.name||m.path}}</option></select><button class="btn btn-xs btn-secondary" :disabled="!insertMaterialByIndex[index]" @click="insertMergeMaterial(index,0)">前插</button><button class="btn btn-xs btn-secondary" :disabled="!insertMaterialByIndex[index]" @click="insertMergeMaterial(index,1)">后插</button></div></div></div>
     </section>
 
-    <section class="section">
+    <section v-show="workspaceTab==='continuity'" class="section">
       <div class="section-head"><div><span class="overline">CONTINUITY</span><h2>跨集连续性</h2><p class="sub">上一集摘要、末帧、角色出场与下一集钩子。</p></div><div class="section-actions"><button class="btn btn-sm btn-ghost" @click="loadEpisodeContinuity">刷新</button><button class="btn btn-sm btn-secondary" @click="regenerateContinuity">AI重生成</button><button class="btn btn-sm btn-secondary" @click="runCreativeIntent">创作意图澄清</button></div></div>
       <div class="card" v-if="continuity"><p><strong>上一集摘要：</strong><span v-if="continuity.previous_episode?.summary_stale" class="badge warn">已过期</span> {{ continuity.previous_summary || '暂无' }}</p><p><strong>结尾钩子：</strong><span v-if="continuity.previous_episode?.next_hook_stale" class="badge warn">已过期</span> {{ continuity.previous_hook || '暂无' }}</p><p><strong>本集角色：</strong>{{ (continuity.character_appearances || []).map(v => v.name).join('、') || '暂无' }}</p><div class="merge-links" v-if="continuity.last_scene_images?.length"><span v-for="f in continuity.last_scene_images" :key="f">{{ f }}</span></div><pre v-if="intentDraft" class="prompt-preview">{{ intentDraft }}</pre></div>
     </section>
 
-    <section class="section">
+    <section v-show="workspaceTab==='advanced'" class="section">
       <details class="card"><summary><strong>项目 Skill 配置与审计</strong></summary>
         <p class="sub">项目配置仅在 Skill 的 operation 与具体操作契约一致时生效；否则安全回退到系统专用 Skill。</p>
         <div class="shot-grid"><label>阶段<select v-model="skillStage" class="input" @change="onSkillStageChange"><option v-for="s in skillStages" :key="s.value" :value="s.value">{{ s.label }}</option></select></label><label>操作契约<select v-model="skillOperation" class="input" @change="loadSkillPanel"><option v-for="op in stageOperations" :key="op" :value="op">{{ op }}</option></select></label><label>Skill<select v-model="selectedSkillId" class="input"><option value="">使用系统默认</option><option v-for="s in operationSkills" :key="s.id" :value="String(s.id)">{{ s.name }} · v{{ s.version }}</option></select></label></div>
@@ -49,7 +54,7 @@
       </details>
     </section>
 
-    <section class="section production-board-section">
+    <section v-show="workspaceTab==='production'" class="section production-board-section">
       <div class="section-head"><div><span class="overline">PRODUCTION BOARD</span><h2>本集生产看板</h2><p class="sub">Scene是唯一生产单元；点击卡片定位，不创建第二套状态。</p></div></div>
       <div class="production-board">
         <div v-for="column in productionColumns" :key="column.key" class="board-column">
@@ -62,7 +67,7 @@
     </section>
 
     <!-- 时间轴 -->
-    <section class="section">
+    <section v-show="workspaceTab==='production'" class="section">
       <div class="section-head">
         <div>
           <span class="overline">TIMELINE</span>
@@ -115,7 +120,7 @@
       </div>
     </section>
 
-    <section v-if="selected" class="section relation-workbench">
+    <section v-if="selected" v-show="workspaceTab==='continuity'" class="section relation-workbench">
       <div class="continuity-compare card">
         <div class="section-head"><div><span class="overline">CONTINUITY COMPARE</span><h2>连续性对比</h2></div><button class="btn btn-sm btn-secondary" @click="showFrameSelector=true">设置连续性</button></div>
         <div class="compare-grid">
@@ -132,7 +137,7 @@
       </div>
     </section>
 
-    <div class="editor-split" v-if="selected">
+    <div class="editor-split" v-if="selected" v-show="workspaceTab==='production'">
       <!-- 左：视频预览 -->
       <section class="section preview-section">
         <div class="section-head">
@@ -272,9 +277,9 @@
       </section>
     </div>
 
-    <ShotDirectorEditor v-if="selected" :key="`shot-director-${selected.id}`" :project-id="id()" :scene-id="selected.id" :genre="project?.genre || ''" :tone="project?.tone || ''" :scene-title="selected.title || ''" :scene-content="selected.content || ''" :scene-mode="selected.scene_mode || ''" @scene-changed="reloadSelectedScene" @scene-materialized="handleShotMaterialized" />
+    <ShotDirectorEditor v-if="selected" v-show="workspaceTab==='production'" :key="`shot-director-${selected.id}`" :project-id="id()" :scene-id="selected.id" :genre="project?.genre || ''" :tone="project?.tone || ''" :scene-title="selected.title || ''" :scene-content="selected.content || ''" :scene-mode="selected.scene_mode || ''" @scene-changed="reloadSelectedScene" @scene-materialized="handleShotMaterialized" />
 
-    <section v-if="selected" ref="screenTextSection" class="section screen-text-section">
+    <section v-if="selected" v-show="workspaceTab==='production'" ref="screenTextSection" class="section screen-text-section">
       <div class="section-head"><div><span class="overline">SCREEN TEXT</span><h2>功能字幕 / 屏幕文字（非对白字幕）</h2><p class="sub">用于人物出场、地点、时间、过场和“本集完”；不会进入Dialogue、配音或H3提示词。</p><p class="font-compliance" :class="approvedFonts.some(font=>font.verified)?'ok':'warn'">{{approvedFonts.some(font=>font.verified)?`已验证 ${approvedFonts.filter(font=>font.verified).length} 套开源中文字体`:'尚未安装通过许可证与SHA-256校验的中文字体；可编辑预览，但正式发行导出将被阻止'}}</p></div><button class="btn btn-sm btn-secondary" @click="editScreenTextCue()">新增功能文字</button></div>
       <div class="card screen-text-preflight">
         <div class="screen-text-preflight-head"><strong>最终渲染检查</strong><span v-if="screenTextPreflightLoading">检查中…</span><span v-else-if="screenTextPreflight?.ok" class="check-ok">✓ 可正式导出</span><span v-else class="check-fail">✗ 正式导出将被阻止</span><button class="btn btn-xs btn-secondary" @click="loadScreenTextPreflight">重新检查</button></div>
@@ -305,26 +310,26 @@
       </div>
     </section>
 
-    <section class="section">
+    <section v-show="workspaceTab==='advanced'" class="section">
       <div class="section-head"><div><span class="overline">SHARED ASSETS</span><h2>共享资产引用</h2><p class="sub">创建、修改或删除项目、场景和镜头级素材引用。</p></div><button class="btn btn-sm btn-secondary" @click="editSharedAsset()">引用素材</button></div>
       <div class="card" v-if="sharedAssetReferences.length"><div v-for="refRow in sharedAssetReferences" :key="refRow.id" class="merge-item"><div class="merge-info"><strong>{{ refRow.material?.name || `素材 #${refRow.material_id}` }}</strong><span>{{ refRow.mode }} · {{ refRow.shot_id ? `镜头 #${refRow.shot_id}` : refRow.scene_id ? `场景 #${refRow.scene_id}` : '项目级' }}</span></div><div class="merge-links"><button class="btn btn-sm btn-ghost" @click="editSharedAsset(refRow)">编辑</button><button class="btn btn-sm btn-danger" @click="removeSharedAsset(refRow)">删除</button></div></div></div><div class="card empty" v-else>暂无共享资产引用。</div>
       <form v-if="sharedAssetEditing" class="card inline-form" @submit.prevent="saveSharedAsset"><label>素材<select v-model.number="sharedAssetForm.material_id" class="input" required><option value="">请选择</option><option v-for="m in materials" :key="m.id" :value="m.id">{{ m.name }} · {{ m.type }}</option></select></label><label>模式<select v-model="sharedAssetForm.mode" class="input"><option value="live">实时引用</option><option value="copy">项目副本</option></select></label><label>范围<select v-model="sharedAssetForm.scope" class="input"><option value="project">项目</option><option value="scene" :disabled="!selected">当前场景</option></select></label><div class="section-actions"><button class="btn btn-sm">保存</button><button type="button" class="btn btn-sm btn-ghost" @click="sharedAssetEditing=false">取消</button></div></form>
     </section>
 
-    <section class="section">
+    <section v-show="workspaceTab==='sound'" class="section">
       <div class="section-head"><div><span class="overline">PROJECT SCORE LIBRARY</span><h2>全剧可复用配乐库</h2><p class="sub">为整部剧生成5–8首人物、情感、悬疑、环境、危机或动作主题。审核采用后，每集只需引用、裁剪、循环和淡化，不再重复生成同类音乐。</p></div><button class="btn btn-sm btn-secondary" :disabled="musicCueBusy" @click="draftMusicLibrary">{{musicCueBusy?'生成中…':'AI生成全剧配乐库'}}</button></div>
       <div class="card"><label class="wide">全剧配乐身份、主题与排除项<textarea v-model="musicRequirements" class="textarea" rows="3" placeholder="例如：华语仙侠影视配乐；主题统一；纯器乐；对白下克制；需要主角、姐妹、悬疑、宗门、战斗和温馨主题"></textarea></label></div>
       <div class="card" v-if="musicLibrary.length"><div v-for="track in musicLibrary" :key="`library-${track.id}`" class="music-cue-card"><div class="merge-info"><span class="badge" :class="track.review_status==='approved'?'badge-green':'badge-gray'">{{track.review_status}}</span><strong>{{track.name}} · {{track.theme_code}}</strong><span>{{track.kind}} / {{track.mood}} · 建议 {{track.duration||track.end_time}} 秒</span><span>{{track.tags}}</span></div><label>Structured Caption JSON<textarea v-model="track.caption_json" class="textarea code-textarea" rows="8"></textarea></label><div class="section-actions"><button class="btn btn-sm btn-secondary" @click="saveMusicCue(track)">保存草稿</button><button class="btn btn-sm" :disabled="track.stale" @click="reviewMusicCue(track,'approve')">审核通过</button><button class="btn btn-sm btn-secondary" :disabled="track.review_status!=='approved'||track.stale||musicCandidateBusy" @click="generateMusicCandidate(track)">生成主题音乐候选</button><button class="btn btn-sm" :disabled="track.stale" @click="placeMusicLibraryTrack(track)">铺到本集</button><button class="btn btn-sm btn-ghost" @click="toggleMusicCandidates(track)">{{musicCandidateCueId===track.id?'收起候选':'试听候选'}}</button></div><div v-if="musicCandidateCueId===track.id" class="candidate-list"><article v-for="item in musicCandidates" :key="item.candidate.id" class="candidate" :class="{current:item.candidate.is_current,stale:item.candidate.stale}"><div class="merge-info"><strong>{{item.candidate.model||'Music 3候选'}}</strong><span>{{item.candidate.duration?item.candidate.duration.toFixed(2)+' 秒':'时长待探测'}} · {{item.candidate.is_current?'已采用':item.candidate.review_status}}</span></div><audio v-if="item.audio_url" :src="item.audio_url" controls preload="none"></audio><label v-if="item.candidate.review_status==='pending'" class="checkbox"><input v-model="item._confirmed" type="checkbox">我已完整试听该候选</label><div class="section-actions"><button v-if="item.candidate.review_status==='pending'" class="btn btn-sm btn-secondary" :disabled="item.candidate.stale||!item._confirmed" @click="reviewMusicCandidate(track,item,'accepted')">审核通过</button><button class="btn btn-sm" :disabled="item.candidate.is_current||item.candidate.stale||item.candidate.review_status!=='accepted'" @click="selectMusicCandidate(track,item)">采用为项目曲目</button></div></article></div></div></div><div class="card empty" v-else>尚未生成全剧配乐库。</div>
     </section>
 
-    <section class="section">
+    <section v-show="workspaceTab==='sound'" class="section">
       <div class="section-head"><div><span class="overline">LEGACY EPISODE MUSIC CUE SHEET</span><h2>MiniMax Music 3 配乐提示词</h2><p class="sub">先填写你的配乐设想，由 music-caption-rewriter 生成 Structured Caption；审核通过后可提交真实Music 3候选；生成结果必须完整试听、审核并采用。</p></div><button class="btn btn-sm btn-secondary" :disabled="musicCueBusy" @click="draftMusicCues">{{musicCueBusy?'生成中…':'AI生成配乐方案'}}</button><button class="btn btn-sm btn-ghost" :disabled="musicCueBusy||!musicCues.length" @click="batchApproveMusicCues">批量审核本集</button></div>
       <div class="card"><label class="wide">本集配乐要求、设想与排除项<textarea v-model="musicRequirements" class="textarea" rows="3" placeholder="例如：纯器乐；情感段使用尼龙弦古典吉他指弹；高潮加入低音弦乐；对白期间克制；不要人声、合唱和电子鼓"></textarea></label></div>
       <div class="card" v-if="musicCues.length"><div v-for="cue in musicCues" :key="cue.id" class="music-cue-card"><div class="merge-info"><span class="badge" :class="cue.review_status==='approved'?'badge-green':cue.review_status==='rejected'?'badge-red':'badge-gray'">{{cue.review_status}}</span><strong>{{cue.kind}} · {{cue.start_time}}s → {{cue.end_time}}s</strong><span>{{cue.mood}} / {{cue.intensity}} · {{cue.instrument_note}}</span><span v-if="cue.stale" class="fail-msg">已过期：{{cue.stale_reason}}</span></div><label>本Cue补充要求<textarea v-model="cue.user_requirements" class="textarea" rows="2"></textarea></label><label>Structured Caption JSON<textarea v-model="cue.caption_json" class="textarea code-textarea" rows="10"></textarea></label><div class="section-actions"><button class="btn btn-sm btn-secondary" @click="saveMusicCue(cue)">保存草稿</button><button class="btn btn-sm" :disabled="cue.stale" @click="reviewMusicCue(cue,'approve')">审核通过</button><button class="btn btn-sm btn-ghost" @click="reviewMusicCue(cue,'reject')">驳回</button><button class="btn btn-sm btn-secondary" :disabled="cue.review_status!=='approved'||cue.stale||musicCandidateBusy" @click="generateMusicCandidate(cue)">生成Music 3候选</button><button class="btn btn-sm btn-ghost" @click="toggleMusicCandidates(cue)">{{musicCandidateCueId===cue.id?'收起候选':'试听候选'}}</button><button class="btn btn-sm btn-danger" @click="removeMusicCue(cue)">删除</button></div><div v-if="musicCandidateCueId===cue.id" class="candidate-list"><p class="sub">每段最长300秒。长Episode应拆成两段并保持相同主题与配器；候选必须完整试听、审核并采用。</p><div v-if="musicCandidateBusy" class="inline-status">正在加载配乐候选…</div><article v-for="item in musicCandidates" :key="item.candidate.id" class="candidate" :class="{current:item.candidate.is_current,stale:item.candidate.stale}"><div class="merge-info"><strong>{{item.candidate.model||item.candidate.provider||'Music 3候选'}}</strong><span>{{item.candidate.duration?item.candidate.duration.toFixed(2)+' 秒':'时长待探测'}} · {{item.candidate.is_current?'已采用':item.candidate.review_status==='accepted'?'已审核':item.candidate.review_status==='rejected'?'已拒绝':item.task_status==='running'?'ComfyUI生成中':item.task_status==='pending'?'等待GPU调度':item.task_status==='failed'?'任务失败':'待审核'}}</span><span v-if="item.task_id">任务 {{item.task_id}}</span></div><audio v-if="item.audio_url" :src="item.audio_url" controls preload="none"></audio><p v-if="item.candidate.error" class="fail-msg">{{item.candidate.error}}</p><p v-if="item.candidate.stale" class="fail-msg">已过期：{{item.candidate.stale_reason}}</p><label v-if="item.candidate.review_status==='pending'" class="checkbox"><input v-model="item._confirmed" type="checkbox">我已完整试听该候选</label><div class="section-actions"><button v-if="item.candidate.review_status==='pending'" class="btn btn-sm btn-secondary" :disabled="item.candidate.stale||!item._confirmed" @click="reviewMusicCandidate(cue,item,'accepted')">审核通过</button><button class="btn btn-sm" :disabled="item.candidate.is_current||item.candidate.stale||item.candidate.review_status!=='accepted'" @click="selectMusicCandidate(cue,item)">采用此版本</button><button v-if="item.candidate.is_current" class="btn btn-sm btn-ghost" @click="unselectMusicCandidate(cue,item)">取消采用</button><button class="btn btn-sm btn-ghost" :disabled="item.candidate.is_current" @click="reviewMusicCandidate(cue,item,'rejected')">拒绝</button><button class="btn btn-sm btn-danger" :disabled="item.candidate.is_current" @click="removeMusicCandidate(cue,item)">删除</button></div></article><p v-if="!musicCandidateBusy&&!musicCandidates.length" class="sub">暂无音乐候选。</p></div></div></div>
       <div class="card empty" v-else>暂无配乐Cue。填写要求后生成；系统通常只规划2–4个主Cue，避免全程铺满音乐。</div>
     </section>
 
-    <section class="section">
+    <section v-show="workspaceTab==='sound'" class="section">
       <div class="section-head"><div><span class="overline">AUDIO LAYERS</span><h2>环境声 / 音效 / BGM</h2><p class="sub">完整编辑范围、淡入淡出、循环、静音与状态。Music 3 完整覆盖手工 BGM 时，手工层仅在合成时让路，不会被修改。</p></div><button class="btn btn-sm btn-ghost" :disabled="audioPreflightLoading" @click="loadAudioPreflight">{{ audioPreflightLoading ? '检查中…' : '刷新音频预检' }}</button><button class="btn btn-sm btn-secondary" @click="editAudioLayer()">新增音频层</button></div>
       <div v-if="audioPreflight" class="card"><div class="merge-info"><span class="badge" :class="audioPreflight.ready ? 'badge-green' : 'badge-red'">{{ audioPreflight.ready ? '音频层就绪' : '音频层需处理' }}</span><span>响度/削波：{{ audioPreflight.loudness_assessed ? '已评估' : '未评估' }}</span><span v-for="(message, index) in audioPreflight.messages" :key="`${message.code}-${message.layer_id}-${index}`" :class="message.level === 'error' ? 'fail-msg' : 'sub'">{{ message.message }}</span><span v-if="!audioPreflight.messages.length" class="sub">未发现音频层问题。</span></div></div>
       <div class="card" v-if="audioLayers.length"><div v-for="layer in audioLayers" :key="layer.id" class="merge-item"><div class="merge-info"><span class="badge badge-gray">{{ layer.kind }}</span><strong>{{ layer.name || layer.file }}</strong><span>{{ layer.start_time }}s → {{ layer.end_time }}s · 源{{ layer.source_start||0 }}s起 · 音量{{ layer.volume }} · 淡入/出 {{ layer.fade_in }}/{{ layer.fade_out }}s<span v-if="layer.loop"> · 循环</span><span v-if="layer.ducking"> · 对白压低</span><span v-if="layer.muted"> · 已静音</span></span></div><div class="merge-links"><button class="btn btn-sm btn-ghost" @click="editAudioLayer(layer)">编辑</button><button class="btn btn-sm btn-danger" @click="removeAudioLayer(layer)">删除</button></div></div></div>
@@ -332,7 +337,7 @@
       <form v-if="audioLayerEditing" class="card inline-form audio-form" @submit.prevent="saveAudioLayer"><label>类型<select v-model="audioLayerForm.kind" class="input"><option value="soundscape">环境声</option><option value="sfx">音效</option><option value="bgm">BGM</option></select></label><label>名称<input v-model="audioLayerForm.name" class="input"></label><label>文件<input v-model="audioLayerForm.file" class="input" required></label><label>场景<select v-model="audioLayerForm.scene_id" class="input"><option :value="null">整集</option><option v-for="sc in scenes" :key="sc.id" :value="sc.id">场景 {{ sc.order }} · {{ sc.title }}</option></select></label><label>开始秒<input v-model.number="audioLayerForm.start_time" type="number" min="0" step="0.1" class="input" required></label><label>结束秒<input v-model.number="audioLayerForm.end_time" type="number" min="0.1" step="0.1" class="input" required></label><label>源音乐起点<input v-model.number="audioLayerForm.source_start" type="number" min="0" step="0.1" class="input"></label><label>音量<input v-model.number="audioLayerForm.volume" type="number" min="0" max="2" step="0.1" class="input"></label><label>淡入<input v-model.number="audioLayerForm.fade_in" type="number" min="0" step="0.1" class="input"></label><label>淡出<input v-model.number="audioLayerForm.fade_out" type="number" min="0" step="0.1" class="input"></label><label>状态<select v-model="audioLayerForm.status" class="input"><option value="draft">草稿</option><option value="ready">就绪</option><option value="failed">失败</option></select></label><label class="check"><input v-model="audioLayerForm.loop" type="checkbox"> 循环</label><label class="check"><input v-model="audioLayerForm.ducking" type="checkbox"> 对白期间压低</label><label class="check"><input v-model="audioLayerForm.muted" type="checkbox"> 静音</label><label class="wide">说明<textarea v-model="audioLayerForm.description" class="textarea" rows="2"></textarea></label><div class="section-actions wide"><button class="btn btn-sm">保存</button><button type="button" class="btn btn-sm btn-ghost" @click="audioLayerEditing=false">取消</button></div></form>
     </section>
 
-    <section class="section" v-if="selected">
+    <section class="section" v-if="selected" v-show="workspaceTab==='continuity'">
       <div class="section-head"><div><span class="overline">TAKES</span><h2>生成候选与审核</h2><p class="sub">保留场景图片和视频历史；设为当前不会删除其他候选。</p></div><button class="btn btn-sm btn-ghost" @click="loadCandidates">刷新</button></div>
       <div class="card" v-if="candidates.length">
         <div v-for="candidate in candidates" :key="candidate.id" class="merge-item">
@@ -368,7 +373,7 @@
     </div>
 
     <!-- 合并记录 -->
-    <section class="section" v-if="merges.length">
+    <section v-show="workspaceTab==='delivery'" class="section" v-if="merges.length">
       <div class="section-head">
         <div>
           <span class="overline">MERGES</span>
@@ -409,6 +414,16 @@ import { createDraftSafety } from '../utils/draftSafety.js'
 
 const route = useRoute()
 const toast = useToastStore()
+const workspaceTabs = [
+  {key:'production',label:'分镜制作',description:'Scene、Shot、图片与视频'},
+  {key:'continuity',label:'连续性与审核',description:'参考关系、首尾帧与候选'},
+  {key:'sound',label:'声音与配乐',description:'Music 3、项目曲库与音频层'},
+  {key:'delivery',label:'最终成片',description:'编排、字幕、混音与合并'},
+  {key:'advanced',label:'高级设置',description:'Skill、共享资产与审计'}
+]
+const savedWorkspace = localStorage.getItem('project-editor-workspace')
+const workspaceTab = ref(workspaceTabs.some(item=>item.key===savedWorkspace)?savedWorkspace:'production')
+watch(workspaceTab, value => localStorage.setItem('project-editor-workspace', value))
 
 const project = ref(null)
 const episodes = ref([])
@@ -1267,6 +1282,7 @@ async function openRequestedScreenTextCue() {
     if (requested) selectScene(requested)
   }
   if (route.query.screen_text !== '1' || !selected.value) return
+  workspaceTab.value = 'production'
   await loadSelectedWorkbench()
   await loadScreenTextCues()
   const requestedCueID = Number(route.query.screen_text_cue || 0)
@@ -1342,6 +1358,11 @@ watch(videoPromptDraft, () => videoDraftSafety?.schedule())
 .tl-btn:disabled { opacity: 0.35; cursor: default; }
 .tl-empty-hint { padding: 40px; color: var(--text-tertiary); }
 .shot-timeline-wrap{min-width:100%;margin-top:16px;padding-top:14px;border-top:1px solid var(--border)}.shot-timeline-head{display:flex;justify-content:space-between;margin-bottom:8px;color:var(--text-secondary)}.shot-timeline{display:flex;gap:6px;min-width:700px}.shot-clip{display:grid;min-width:120px;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--surface-secondary);font-size:11px}.shot-clip span,.shot-clip small{color:var(--text-tertiary)}.shot-dialogue{display:grid;gap:3px;margin-top:5px;padding-top:5px;border-top:1px solid var(--border)}.shot-dialogue span{color:var(--text-secondary)}.shot-flags{display:flex;gap:4px;margin-top:5px}.shot-flags i{padding:2px 5px;border-radius:5px;background:var(--accent-soft);color:var(--accent);font-style:normal}.relation-workbench{display:grid;grid-template-columns:1.2fr 1fr;gap:16px}.continuity-compare,.reference-map{padding:16px}.compare-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.compare-grid figure{margin:0}.compare-grid figcaption{margin-bottom:6px;font-size:12px;color:var(--text-secondary)}.compare-grid img,.compare-empty{width:100%;aspect-ratio:16/9;object-fit:contain;border-radius:8px;background:#111}.compare-empty{display:flex;align-items:center;justify-content:center;color:#aaa}.reference-row{display:grid;grid-template-columns:88px 1fr;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--border)}.reference-row img{width:88px;aspect-ratio:16/9;object-fit:cover;border-radius:6px}.reference-row p{margin:4px 0;color:var(--text-secondary);font-size:12px}
+
+.workspace-tabs{position:sticky;top:0;z-index:30;display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:8px;margin:12px 0;padding:10px;border:1px solid var(--border);border-radius:14px;background:color-mix(in srgb,var(--card) 94%,transparent);backdrop-filter:blur(12px)}
+.workspace-tab{display:grid;gap:3px;padding:10px 12px;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--text-secondary);text-align:left;cursor:pointer}.workspace-tab strong{font-size:14px}.workspace-tab small{font-size:10px;color:var(--text-tertiary)}.workspace-tab:hover{background:var(--surface-secondary)}.workspace-tab.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.workspace-context{display:flex;gap:12px;align-items:center;margin:-4px 0 14px;padding:0 4px;color:var(--text-tertiary);font-size:12px}.workspace-context span+span:before{content:'•';margin-right:12px}
+@media(max-width:900px){.workspace-tabs{position:static;display:flex;overflow-x:auto}.workspace-tab{min-width:150px;flex:0 0 auto}.workspace-tab small{display:none}}
 
 .font-compliance{margin:6px 0 0;font-size:12px}.font-compliance.ok{color:#22c55e}.font-compliance.warn{color:#f59e0b}.screen-text-preflight{margin-bottom:14px;padding:14px}.screen-text-preflight-head{display:flex;align-items:center;gap:12px}.screen-text-preflight-head button{margin-left:auto}.screen-text-preflight p{margin:7px 0;color:var(--text-secondary);font-size:12px}.screen-text-warning{color:#f59e0b;font-size:12px}
 .screen-text-track-head{display:flex;align-items:center;justify-content:space-between;margin-top:12px;color:var(--text-secondary)}
