@@ -84,8 +84,8 @@ func upsertMusicCueAudioLayer(tx *gorm.DB, cue *models.MusicCueSheet, candidate 
 	return &layer, nil
 }
 
-func placeMusicLibraryTrack(tx *gorm.DB, projectID, cueID uint, episodeN int, start, end, volume, fadeIn, fadeOut float64, loop bool) (*models.AudioLayer, error) {
-	if episodeN <= 0 || start < 0 || end <= start {
+func placeMusicLibraryTrack(tx *gorm.DB, projectID, cueID uint, episodeN int, start, end, sourceStart, volume, fadeIn, fadeOut float64, loop bool) (*models.AudioLayer, error) {
+	if episodeN <= 0 || start < 0 || sourceStart < 0 || end <= start {
 		return nil, fmt.Errorf("集数和铺轨时间区间无效")
 	}
 	var cue models.MusicCueSheet
@@ -102,7 +102,7 @@ func placeMusicLibraryTrack(tx *gorm.DB, projectID, cueID uint, episodeN int, st
 	layer := models.AudioLayer{
 		ProjectID: projectID, EpisodeN: episodeN, Kind: "bgm", Name: cue.Name,
 		File: candidate.File, Description: fmt.Sprintf("项目配乐库 · %s (%s)", cue.Name, cue.ThemeCode),
-		StartTime: start, EndTime: end, Volume: volume, FadeIn: fadeIn, FadeOut: fadeOut, Loop: loop,
+		StartTime: start, EndTime: end, SourceStart: sourceStart, Volume: volume, FadeIn: fadeIn, FadeOut: fadeOut, Loop: loop, Ducking: true,
 		Status: "ready", Source: audioLayerSourceMusicLibrary, MusicCueSheetID: &cue.ID, MusicCandidateID: &candidate.ID,
 	}
 	if err := tx.Create(&layer).Error; err != nil {

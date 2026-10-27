@@ -1206,10 +1206,12 @@ type AudioLayer struct {
 	Description string  `gorm:"type:text" json:"description"`
 	StartTime   float64 `json:"start_time"`
 	EndTime     float64 `json:"end_time"`
+	SourceStart float64 `gorm:"column:source_start;default:0" json:"source_start"`
 	Volume      float64 `gorm:"default:1" json:"volume"`
 	FadeIn      float64 `json:"fade_in"`
 	FadeOut     float64 `json:"fade_out"`
 	Loop        bool    `json:"loop"`
+	Ducking     bool    `gorm:"column:ducking;default:true" json:"ducking"`
 	Muted       bool    `json:"muted"`
 	Status      string  `gorm:"default:draft;index" json:"status"`
 	Stale       bool    `gorm:"default:false" json:"stale"`

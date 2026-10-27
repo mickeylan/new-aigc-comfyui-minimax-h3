@@ -57,11 +57,11 @@ func TestProjectLibraryCandidateStaysReusableUntilExplicitEpisodePlacement(t *te
 	if selection.Layer != nil {
 		t.Fatalf("library adoption created timeline layer: %+v", selection.Layer)
 	}
-	layer, err := placeMusicLibraryTrack(db, project.ID, cue.ID, 3, 12, 48, 0.3, 1, 2, true)
+	layer, err := placeMusicLibraryTrack(db, project.ID, cue.ID, 3, 12, 48, 5, 0.3, 1, 2, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if layer.EpisodeN != 3 || layer.Source != audioLayerSourceMusicLibrary || !layer.Loop || layer.StartTime != 12 || layer.EndTime != 48 {
+	if layer.EpisodeN != 3 || layer.Source != audioLayerSourceMusicLibrary || !layer.Loop || !layer.Ducking || layer.SourceStart != 5 || layer.StartTime != 12 || layer.EndTime != 48 {
 		t.Fatalf("placement=%+v", layer)
 	}
 }

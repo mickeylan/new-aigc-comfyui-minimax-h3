@@ -20,6 +20,7 @@ import (
 type mergeAudioInput struct {
 	Index          int
 	Start          float64
+	SourceStart    float64
 	Duration       float64
 	Volume         float64
 	FadeIn         float64
@@ -29,6 +30,7 @@ type mergeAudioInput struct {
 	SourceDuration float64
 	Speed          float64
 	Pitch          float64
+	DuckWindows    [][2]float64
 }
 
 type mergeAudioGraph struct {
@@ -115,7 +117,11 @@ func buildMergeAudioGraph(videoCount int, nativeReady bool, totalDuration, nativ
 		if input.SourceDuration > 0 {
 			sourceDuration = input.SourceDuration
 		}
-		chain := fmt.Sprintf("[%d:a]atrim=start=0:end=%s,asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo", input.Index, ffnum(sourceDuration))
+		sourceStart := ffnum(input.SourceStart)
+		if input.SourceStart == 0 {
+			sourceStart = "0"
+		}
+		chain := fmt.Sprintf("[%d:a]atrim=start=%s:end=%s,asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo", input.Index, sourceStart, ffnum(input.SourceStart+sourceDuration))
 		if input.Pitch != 0 {
 			factor := math.Pow(2, input.Pitch/12)
 			chain += fmt.Sprintf(",asetrate=%s,aresample=48000", ffnum(48000*factor))
@@ -139,7 +145,13 @@ func buildMergeAudioGraph(videoCount int, nativeReady bool, totalDuration, nativ
 			}
 			chain += fmt.Sprintf(",afade=t=out:st=%s:d=%s", ffnum(duration-fade), ffnum(fade))
 		}
-		chain += fmt.Sprintf(",adelay=%d:all=1,apad,atrim=duration=%s[am_extra_%d]", int64(input.Start*1000+0.5), ffnum(totalDuration), i)
+		chain += fmt.Sprintf(",adelay=%d:all=1", int64(input.Start*1000+0.5))
+		for _, window := range input.DuckWindows {
+			if window[1] > window[0] {
+				chain += fmt.Sprintf(",volume=0.35:enable='between(t,%s,%s)'", ffnum(window[0]), ffnum(window[1]))
+			}
+		}
+		chain += fmt.Sprintf(",apad,atrim=duration=%s[am_extra_%d]", ffnum(totalDuration), i)
 		filters = append(filters, chain)
 		labels = append(labels, fmt.Sprintf("[am_extra_%d]", i))
 	}
@@ -270,6 +282,21 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 	}
 
 	extras := make([]mergeAudioInput, 0)
+	var dialogueSegments []dubSegment
+	if mt.DialogueMix && mt.DialogueVolume > 0 {
+		segments, _, ready, err := s.buildDubTimeline(p, mt.EpisodeN, sceneIDsFromStrings(strings.Split(mt.SceneOrder, ",")), videoDurs)
+		if err != nil {
+			fail(err)
+			return
+		}
+		if ready {
+			dialogueSegments = segments
+		}
+	}
+	duckWindows := make([][2]float64, 0, len(dialogueSegments))
+	for _, segment := range dialogueSegments {
+		duckWindows = append(duckWindows, [2]float64{segment.Start, segment.End})
+	}
 	var layers []models.AudioLayer
 	if err := s.db.Where("project_id = ? AND episode_n = ?", p.ID, mt.EpisodeN).Order("start_time, id").Find(&layers).Error; err != nil {
 		fail(err)
@@ -295,25 +322,20 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 		if layer.Kind == "bgm" {
 			gain *= mt.BGMVolume
 		}
-		extras = append(extras, mergeAudioInput{Index: idx, Start: layer.StartTime, Duration: layer.EndTime - layer.StartTime, Volume: gain, FadeIn: layer.FadeIn, FadeOut: layer.FadeOut, Loop: layer.Loop, Kind: layer.Kind})
+		windows := [][2]float64(nil)
+		if layer.Kind == "bgm" && layer.Ducking {
+			windows = duckWindows
+		}
+		extras = append(extras, mergeAudioInput{Index: idx, Start: layer.StartTime, SourceStart: layer.SourceStart, Duration: layer.EndTime - layer.StartTime, Volume: gain, FadeIn: layer.FadeIn, FadeOut: layer.FadeOut, Loop: layer.Loop, Kind: layer.Kind, DuckWindows: windows})
 	}
-	if mt.DialogueMix && mt.DialogueVolume > 0 {
-		segments, _, ready, err := s.buildDubTimeline(p, mt.EpisodeN, sceneIDsFromStrings(strings.Split(mt.SceneOrder, ",")), videoDurs)
-		if err != nil {
-			fail(err)
-			return
+	for _, segment := range dialogueSegments {
+		if segment.AudioAbs == "" {
+			continue
 		}
-		if ready {
-			for _, segment := range segments {
-				if segment.AudioAbs == "" {
-					continue
-				}
-				idx := len(inputPaths)
-				inputPaths = append(inputPaths, segment.AudioAbs)
-				remoteInputs = append(remoteInputs, "-i", shellQuote(segment.AudioAbs))
-				extras = append(extras, mergeAudioInput{Index: idx, Start: segment.Start, Duration: segment.End - segment.Start, SourceDuration: segment.SourceDur, Volume: mt.DialogueVolume * segment.Volume, Speed: segment.Speed, Pitch: segment.Pitch, Kind: "dialogue"})
-			}
-		}
+		idx := len(inputPaths)
+		inputPaths = append(inputPaths, segment.AudioAbs)
+		remoteInputs = append(remoteInputs, "-i", shellQuote(segment.AudioAbs))
+		extras = append(extras, mergeAudioInput{Index: idx, Start: segment.Start, Duration: segment.End - segment.Start, SourceDuration: segment.SourceDur, Volume: mt.DialogueVolume * segment.Volume, Speed: segment.Speed, Pitch: segment.Pitch, Kind: "dialogue"})
 	}
 
 	filters := buildNormalizedVideoGraph(len(scenes), firstWidth, firstHeight)

@@ -983,13 +983,14 @@ func (s *Service) HandlePlaceMusicLibraryTrack(c *gin.Context) {
 		return
 	}
 	var body struct {
-		EpisodeN  int     `json:"episode_n"`
-		StartTime float64 `json:"start_time"`
-		EndTime   float64 `json:"end_time"`
-		Volume    float64 `json:"volume"`
-		FadeIn    float64 `json:"fade_in"`
-		FadeOut   float64 `json:"fade_out"`
-		Loop      bool    `json:"loop"`
+		EpisodeN    int     `json:"episode_n"`
+		StartTime   float64 `json:"start_time"`
+		EndTime     float64 `json:"end_time"`
+		Volume      float64 `json:"volume"`
+		SourceStart float64 `json:"source_start"`
+		FadeIn      float64 `json:"fade_in"`
+		FadeOut     float64 `json:"fade_out"`
+		Loop        bool    `json:"loop"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -998,7 +999,7 @@ func (s *Service) HandlePlaceMusicLibraryTrack(c *gin.Context) {
 	var layer *models.AudioLayer
 	err = s.DB.Transaction(func(tx *gorm.DB) error {
 		var placeErr error
-		layer, placeErr = placeMusicLibraryTrack(tx, p.ID, uint(cueID), body.EpisodeN, body.StartTime, body.EndTime, body.Volume, body.FadeIn, body.FadeOut, body.Loop)
+		layer, placeErr = placeMusicLibraryTrack(tx, p.ID, uint(cueID), body.EpisodeN, body.StartTime, body.EndTime, body.SourceStart, body.Volume, body.FadeIn, body.FadeOut, body.Loop)
 		return placeErr
 	})
 	if err != nil {

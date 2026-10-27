@@ -27,10 +27,12 @@ type AudioLayerInput struct {
 	Description string   `json:"description"`
 	StartTime   float64  `json:"start_time"`
 	EndTime     float64  `json:"end_time"`
+	SourceStart float64  `json:"source_start"`
 	Volume      *float64 `json:"volume"`
 	FadeIn      float64  `json:"fade_in"`
 	FadeOut     float64  `json:"fade_out"`
 	Loop        bool     `json:"loop"`
+	Ducking     *bool    `json:"ducking"`
 	Muted       bool     `json:"muted"`
 	Status      string   `json:"status"`
 }
@@ -47,7 +49,7 @@ func normalizeAudioLayer(projectID uint, in AudioLayerInput) (models.AudioLayer,
 	if in.EpisodeN <= 0 {
 		return models.AudioLayer{}, fmt.Errorf("episode_n 必须大于 0")
 	}
-	if !isFinite(in.StartTime) || !isFinite(in.EndTime) || in.StartTime < 0 || in.EndTime <= in.StartTime {
+	if !isFinite(in.StartTime) || !isFinite(in.EndTime) || !isFinite(in.SourceStart) || in.StartTime < 0 || in.SourceStart < 0 || in.EndTime <= in.StartTime {
 		return models.AudioLayer{}, fmt.Errorf("start_time 必须非负且 end_time 必须大于 start_time")
 	}
 	volume := 1.0
@@ -67,11 +69,15 @@ func normalizeAudioLayer(projectID uint, in AudioLayerInput) (models.AudioLayer,
 	if status != "draft" && status != "ready" && status != "failed" {
 		return models.AudioLayer{}, fmt.Errorf("status 必须是 draft、ready 或 failed")
 	}
+	ducking := kind == "bgm"
+	if in.Ducking != nil {
+		ducking = *in.Ducking
+	}
 	return models.AudioLayer{
 		ProjectID: projectID, EpisodeN: in.EpisodeN, SceneID: in.SceneID, Kind: kind,
 		Name: strings.TrimSpace(in.Name), File: strings.TrimSpace(in.File), Description: strings.TrimSpace(in.Description),
-		StartTime: in.StartTime, EndTime: in.EndTime, Volume: volume, FadeIn: in.FadeIn, FadeOut: in.FadeOut,
-		Loop: in.Loop, Muted: in.Muted, Status: status, Source: audioLayerSourceManual,
+		StartTime: in.StartTime, EndTime: in.EndTime, SourceStart: in.SourceStart, Volume: volume, FadeIn: in.FadeIn, FadeOut: in.FadeOut,
+		Loop: in.Loop, Ducking: ducking, Muted: in.Muted, Status: status, Source: audioLayerSourceManual,
 	}, nil
 }
 
@@ -130,8 +136,8 @@ func (s *AudioLayerService) Update(projectID, id uint, in AudioLayerInput) (*mod
 	}
 	updates := map[string]any{
 		"episode_n": layer.EpisodeN, "scene_id": layer.SceneID, "kind": layer.Kind, "name": layer.Name,
-		"file": layer.File, "description": layer.Description, "start_time": layer.StartTime, "end_time": layer.EndTime,
-		"volume": layer.Volume, "fade_in": layer.FadeIn, "fade_out": layer.FadeOut, "loop": layer.Loop,
+		"file": layer.File, "description": layer.Description, "start_time": layer.StartTime, "end_time": layer.EndTime, "source_start": layer.SourceStart,
+		"volume": layer.Volume, "fade_in": layer.FadeIn, "fade_out": layer.FadeOut, "loop": layer.Loop, "ducking": layer.Ducking,
 		"muted": layer.Muted, "status": layer.Status,
 	}
 	if existing.Source == audioLayerSourceMusicCue {

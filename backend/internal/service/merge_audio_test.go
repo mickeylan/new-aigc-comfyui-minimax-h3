@@ -60,6 +60,18 @@ func TestBuildMergeAudioGraphMixesNativeDialogueAndLayers(t *testing.T) {
 	}
 }
 
+func TestBuildMergeAudioGraphSupportsSourceOffsetAndDialogueDucking(t *testing.T) {
+	graph := buildMergeAudioGraph(0, false, 30, 0, []mergeAudioInput{{
+		Index: 0, Start: 2, SourceStart: 12.5, Duration: 20, Volume: 0.4, Kind: "bgm",
+		DuckWindows: [][2]float64{{5, 8}, {14.25, 16}},
+	}})
+	for _, want := range []string{"atrim=start=12.500:end=32.500", "adelay=2000:all=1", "volume=0.35:enable='between(t,5.000,8.000)'", "volume=0.35:enable='between(t,14.250,16.000)'"} {
+		if !strings.Contains(graph.Filters, want) {
+			t.Fatalf("source offset/ducking graph missing %q: %s", want, graph.Filters)
+		}
+	}
+}
+
 func TestBuildMergeAudioGraphPreservesLegacyAudioSelection(t *testing.T) {
 	withoutAudio := buildMergeAudioGraph(2, false, 10, 1, nil)
 	if withoutAudio.Filters != "" || withoutAudio.Label != "" {
