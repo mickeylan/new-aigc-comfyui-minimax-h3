@@ -150,6 +150,10 @@
             <button class="btn btn-sm" :disabled="busy || !selected.image_file || selected.video_locked" @click="prepareVideoPrompt">{{ selected.video_locked ? '视频已锁定' : '准备并审核视频提示词' }}</button>
             <button class="btn btn-sm btn-ghost" @click="setSceneLock('video', !selected.video_locked)">{{ selected.video_locked ? '解锁视频' : '锁定视频' }}</button>
             <a v-if="selected.video_url" class="btn btn-sm btn-ghost" :href="selected.video_url + '?download=1'">下载视频</a>
+            <input ref="sceneVideoUploadInput" type="file" accept="video/mp4,video/webm,video/quicktime,video/x-matroska" hidden @change="uploadCurrentSceneVideo">
+            <button class="btn btn-sm btn-secondary" :disabled="sceneVideoReplacing" @click="sceneVideoUploadInput?.click()">{{sceneVideoReplacing?'替换中…':'上传视频作为当前分镜'}}</button>
+            <select v-model.number="sceneVideoMaterialID" class="input input-sm"><option :value="0">从项目视频素材选择</option><option v-for="m in videoMaterials" :key="m.id" :value="m.id">{{m.name||m.path}}</option></select>
+            <button class="btn btn-sm btn-secondary" :disabled="sceneVideoReplacing||!sceneVideoMaterialID" @click="replaceCurrentSceneVideoFromMaterial">替换当前分镜视频</button>
             <button class="btn btn-sm btn-secondary" @click="showFrameSelector = true">连续性设置</button>
           </div>
         </div>
@@ -426,6 +430,9 @@ const musicCandidateCueId = ref(null)
 const musicCandidates = ref([])
 const musicCandidateBusy = ref(false)
 const mergeSequence = ref([])
+const sceneVideoUploadInput = ref(null)
+const sceneVideoReplacing = ref(false)
+const sceneVideoMaterialID = ref(0)
 const mergeSequenceEpisode = ref(0)
 const insertMaterialByIndex = reactive({})
 const audioLayerEditing = ref(false)
@@ -919,6 +926,22 @@ async function applyVisualBeats() {
 }
 async function applyPolishDraft() { try { await api.updateScene(id(), selected.value.id, { image_prompt: polishDraft.value }); polishDraft.value = ''; await reloadSelectedScene(); toast.success('润色草稿已应用到Scene起始帧提示词') } catch (e) { toast.error(e.response?.data?.error || '应用失败') } }
 async function generateSelectedImage() { busy.value = true; try { await api.generateSceneImage(id(), selected.value.id); toast.success('分镜图任务已提交，已组合Scene事实、Shot导演设计、参考图与负向约束'); await reloadSelectedScene() } catch (e) { toast.error(e.response?.data?.error || '提交分镜图失败') } finally { busy.value = false } }
+async function uploadCurrentSceneVideo(event) {
+  const file=event.target.files?.[0];event.target.value='';if(!file||!selected.value)return
+  if(!window.confirm('将上传视频设为当前分镜正式视频？原视频和历史候选会保留，但进行中的合并及已提取首尾帧会失效。'))return
+  sceneVideoReplacing.value=true
+  try{const {data}=await api.uploadSceneVideo(id(),selected.value.id,file);toast.success(data.message||'当前分镜视频已替换');await Promise.all([reloadSelectedScene(),loadMerges()])}
+  catch(e){toast.error(e.response?.data?.error||'上传并替换视频失败')}
+  finally{sceneVideoReplacing.value=false}
+}
+async function replaceCurrentSceneVideoFromMaterial(){
+  if(!selected.value||!sceneVideoMaterialID.value)return
+  if(!window.confirm('将所选项目视频素材设为当前分镜正式视频？原视频和历史候选会保留。'))return
+  sceneVideoReplacing.value=true
+  try{const {data}=await api.replaceSceneVideoFromMaterial(id(),selected.value.id,sceneVideoMaterialID.value);toast.success(data.message||'当前分镜视频已替换');sceneVideoMaterialID.value=0;await Promise.all([reloadSelectedScene(),loadMerges()])}
+  catch(e){toast.error(e.response?.data?.error||'替换视频失败')}
+  finally{sceneVideoReplacing.value=false}
+}
 async function prepareVideoPrompt() { busy.value = true; try { const { data } = await api.regenerateSceneVideoPrompt(id(), selected.value.id, {}); videoPromptDraft.value = data.full_prompt || data.prompt || ''; videoPromptTemplate.value = data.template || 'minimax_h3_ref2v'; startVideoDraftSafety(); toast.success('完整H3提示词已生成，请审核后保存') } catch (e) { toast.error(e.response?.data?.error || '生成视频提示词失败') } finally { busy.value = false } }
 async function saveReviewedVideoPrompt(generate) { busy.value = true; try { await api.updateSceneVideoPrompt(id(), selected.value.id, { prompt: videoPromptDraft.value, template: videoPromptTemplate.value }); if (generate) await api.generateSceneVideo(id(), selected.value.id); videoDraftSafety?.markSaved(); videoPromptDraft.value = ''; await reloadSelectedScene(); toast.success(generate ? '已保存审核提示词并提交视频' : '视频提示词审核结果已保存') } catch (e) { toast.error(e.response?.data?.error || '保存视频提示词失败'); throw e } finally { busy.value = false } }
 async function setSceneLock(kind, locked) { try { const { data } = await api.updateSceneLocks(id(), selected.value.id, { [`${kind}_locked`]: locked }); Object.assign(selected.value, data); toast.success(locked ? '生成结果已锁定' : '生成结果已解锁') } catch (e) { toast.error(e.response?.data?.error || '更新锁定状态失败') } }

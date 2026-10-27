@@ -132,10 +132,17 @@ export const api = {
     const fd = new FormData()
     fd.append('file', file)
     return http.post(`/projects/${id}/scenes/${sid}/image/upload`, fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 60000
+      headers: { 'Content-Type': 'multipart/form-data' }, timeout: 60000
     })
   },
+  uploadSceneVideo: (id, sid, file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return http.post(`/projects/${id}/scenes/${sid}/video/upload`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' }, timeout: 300000
+    })
+  },
+  replaceSceneVideoFromMaterial: (id, sid, materialId) => http.post(`/projects/${id}/scenes/${sid}/video/material`, { material_id: materialId }),
   generateSceneVideo: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/video`),
   sceneVideoPrompt: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/video/prompt`),
   regenerateSceneVideoPrompt: (id, sid, payload = {}) => http.post(`/projects/${id}/scenes/${sid}/video/prompt/regenerate`, payload, { timeout: 300000 }),

@@ -782,6 +782,34 @@ func (s *ProjectService) ReplaceSceneImage(sc *models.Scene, imageFile string) e
 	return nil
 }
 
+// ReplaceSceneVideo replaces only the Scene's current production-video projection.
+// Historical candidates/files remain intact; in-flight merges and extracted boundary frames are invalidated.
+func (s *ProjectService) ReplaceSceneVideo(sc *models.Scene, videoFile, source string) error {
+	if sc == nil || sc.ID == 0 || strings.TrimSpace(videoFile) == "" {
+		return fmt.Errorf("场景和视频不能为空")
+	}
+	manualTaskID := fmt.Sprintf("manual-scene-video-%d-%d", sc.ID, time.Now().UnixNano())
+	gpu := 0
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		updates := map[string]any{
+			"video_file": filepath.Base(videoFile), "video_input_file": filepath.Base(videoFile), "video_gpu": gpu,
+			"video_task_id": manualTaskID, "video_retries": 0, "status": "video_ready", "error": "",
+			"video_first_frame_img": "", "video_last_frame_img": "",
+		}
+		if err := tx.Model(&models.Scene{}).Where("id = ? AND project_id = ?", sc.ID, sc.ProjectID).Updates(updates).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("scene_id = ? AND type IN ?", sc.ID, []models.FrameCandidateType{models.FrameCandidateVideoFirst, models.FrameCandidateVideoLast}).Delete(&models.FrameCandidate{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&models.MergeTask{}).Where("project_id = ? AND episode_n = ? AND status IN ?", sc.ProjectID, normalizeRevisionEpisode(sc.EpisodeN), []string{"pending", "running"}).Updates(map[string]any{"status": "failed", "error": "Scene视频已人工替换，请重新确认最终编排并合并"}).Error; err != nil {
+			return err
+		}
+		log.Printf("[scene %d] current video replaced from %s: %s", sc.ID, source, filepath.Base(videoFile))
+		return nil
+	})
+}
+
 // UpdateScene 编辑场景文案。修改 image_prompt 会清空已生成画面与视频（需重新生成）；
 // 仅修改 content/title 时保留画面、清空已生成视频（需重新生成视频）。
 func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imagePrompt string, duration float64, visual ...string) error {

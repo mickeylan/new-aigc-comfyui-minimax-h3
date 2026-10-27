@@ -4,6 +4,14 @@ import fs from 'node:fs'
 
 const source = fs.readFileSync(new URL('../src/views/ProjectEditor.vue', import.meta.url), 'utf8')
 
+test('生成分镜界面支持上传或选择素材替换当前Scene视频', () => {
+  assert.match(source, /上传视频作为当前分镜/)
+  assert.match(source, /从项目视频素材选择/)
+  assert.match(source, /api\.uploadSceneVideo/)
+  assert.match(source, /api\.replaceSceneVideoFromMaterial/)
+  assert.match(source, /原视频和历史候选会保留/)
+})
+
 test('最终合并前提供非破坏性成片编排界面', () => {
   assert.match(source, /FINAL CUT ASSEMBLY/)
   assert.match(source, /最终成片编排/)

@@ -999,6 +999,95 @@ func (s *Service) HandleUploadSceneImage(c *gin.Context) {
 	c.JSON(200, gin.H{"ok": true, "message": "分镜图已上传，旧视频已失效", "image_file": filepath.Base(path)})
 }
 
+// HandleUploadSceneVideo uploads a reviewed local video and makes it the Scene's current production video.
+func (s *Service) HandleUploadSceneVideo(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	sc, ok := s.loadScene(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, uploadLimits["video"]+uploadMultipartOverhead)
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(400, gin.H{"error": "file required: " + err.Error()})
+		return
+	}
+	defer file.Close()
+	name, err := safeFileSegment(header.Filename, "文件名")
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	data, err := readBoundedUpload(file, uploadLimits["video"])
+	if err != nil {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": err.Error()})
+		return
+	}
+	if err := validateUploadContent("video", name, data); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	stored := fmt.Sprintf("scene_video_manual_%d_%d%s", sc.ID, time.Now().UnixNano(), strings.ToLower(filepath.Ext(name)))
+	path, _, err := s.Upload.SaveFile(fmt.Sprintf("%d", p.ID), "video", stored, data)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if err := s.Projects.ReplaceSceneVideo(sc, filepath.Base(path), "upload"); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"ok": true, "video_input_file": filepath.Base(path), "message": "上传视频已设为当前分镜视频；原视频和历史候选均已保留"})
+}
+
+// HandleReplaceSceneVideoFromMaterial selects a project-owned video material as the current Scene video.
+func (s *Service) HandleReplaceSceneVideoFromMaterial(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	sc, ok := s.loadScene(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		MaterialID uint `json:"material_id"`
+	}
+	if c.ShouldBindJSON(&body) != nil || body.MaterialID == 0 {
+		c.JSON(400, gin.H{"error": "material_id required"})
+		return
+	}
+	var material models.Material
+	if err := s.DB.Where("id = ? AND project_id = ? AND type = ?", body.MaterialID, p.ID, "video").First(&material).Error; err != nil {
+		c.JSON(404, gin.H{"error": "项目视频素材不存在"})
+		return
+	}
+	clean := filepath.Clean(filepath.FromSlash(material.Path))
+	if filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+		c.JSON(400, gin.H{"error": "素材路径无效"})
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(s.Upload.InputDir(), clean))
+	if err != nil {
+		c.JSON(422, gin.H{"error": "读取视频素材失败: " + err.Error()})
+		return
+	}
+	stored := fmt.Sprintf("scene_video_material_%d_%d%s", sc.ID, time.Now().UnixNano(), strings.ToLower(filepath.Ext(clean)))
+	path, _, err := s.Upload.SaveFile(fmt.Sprintf("%d", p.ID), "video", stored, data)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if err := s.Projects.ReplaceSceneVideo(sc, filepath.Base(path), fmt.Sprintf("material:%d", material.ID)); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true, "video_input_file": filepath.Base(path), "message": "视频素材已设为当前分镜视频；原视频和历史候选均已保留"})
+}
+
 func uploadedSceneImageExt(data []byte) string {
 	switch {
 	case len(data) >= 8 && string(data[:8]) == "\x89PNG\r\n\x1a\n":
