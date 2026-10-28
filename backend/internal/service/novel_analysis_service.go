@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -40,9 +41,66 @@ type chapterAnalysisResult struct {
 }
 
 func parseChapterAnalysis(raw string) (chapterAnalysisResult, error) {
+	start, end := strings.Index(raw, "{"), strings.LastIndex(raw, "}")
+	if start < 0 || end < start {
+		return chapterAnalysisResult{}, fmt.Errorf("model output does not contain a JSON object")
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw[start:end+1]), &object); err != nil {
+		return chapterAnalysisResult{}, fmt.Errorf("invalid model JSON: %w", err)
+	}
+	if summary, ok := object["summary"]; ok {
+		var value any
+		if err := json.Unmarshal(summary, &value); err != nil {
+			return chapterAnalysisResult{}, fmt.Errorf("invalid model JSON: summary: %w", err)
+		}
+		normalized, err := json.Marshal(chapterAnalysisText(value))
+		if err != nil {
+			return chapterAnalysisResult{}, fmt.Errorf("invalid model JSON: summary: %w", err)
+		}
+		object["summary"] = normalized
+	}
+	normalized, err := json.Marshal(object)
+	if err != nil {
+		return chapterAnalysisResult{}, fmt.Errorf("invalid model JSON: %w", err)
+	}
 	var result chapterAnalysisResult
-	err := parseJSONObject(raw, &result)
-	return result, err
+	if err := json.Unmarshal(normalized, &result); err != nil {
+		return chapterAnalysisResult{}, fmt.Errorf("invalid model JSON: %w", err)
+	}
+	return result, nil
+}
+
+func chapterAnalysisText(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(typed)
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := chapterAnalysisText(item); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "；")
+	case map[string]any:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			if text := chapterAnalysisText(typed[key]); text != "" {
+				parts = append(parts, key+"："+text)
+			}
+		}
+		return strings.Join(parts, "；")
+	default:
+		return strings.TrimSpace(fmt.Sprint(typed))
+	}
 }
 
 func isAliasCandidateSchemaError(err error) bool {
