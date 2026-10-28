@@ -6,10 +6,18 @@ const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.met
 const looks = readFileSync(new URL('../src/views/CharacterLooks.vue', import.meta.url), 'utf8')
 const projectDetail = detail
 
-test('空白道具说明也能按名称调用AI重新设计', () => {
-  assert.match(projectDetail, /:disabled="redesigningAsset \|\| !assetForm\.name\.trim\(\)"/)
-  assert.doesNotMatch(projectDetail, /redesigningAsset \|\| !assetForm\.name\.trim\(\) \|\| !assetForm\.description\.trim\(\)/)
-  assert.match(projectDetail, /if \(!assetForm\.name\.trim\(\)\) return/)
+test('项目资产区可直接AI补全当前集角色场景道具', () => {
+  assert.match(projectDetail, /AI补全第\$\{activeEpN\}集角色\/场景\/道具/)
+  assert.match(projectDetail, /completeCurrentEpisodeAssets/)
+  assert.match(projectDetail, /api\.generateAdaptationAssets\(id\(\),activeEpN\.value\)/)
+  assert.match(projectDetail, /仅补建缺失卡片/)
+})
+
+test('AI重新设计按钮不因名称或空白说明静默禁用', () => {
+  assert.match(projectDetail, /:disabled="redesigningAsset" @click="redesignAssetDescription"/)
+  assert.doesNotMatch(projectDetail, /:disabled="redesigningAsset \|\| !assetForm\.name\.trim\(\)/)
+  assert.doesNotMatch(projectDetail, /!assetForm\.description\.trim\(\)/)
+  assert.match(projectDetail, /AI需要名称来识别设计对象/)
 })
 
 test('角色编辑弹窗按当前标签保存对应档案字段', () => {

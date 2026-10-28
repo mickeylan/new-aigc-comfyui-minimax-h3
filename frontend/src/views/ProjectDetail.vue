@@ -137,7 +137,8 @@
           <p class="sub">统一角色外貌、道具与场景环境，并可锁定角色音色；分镜画面生成时自动注入设定与参考图，保证跨集一致</p>
         </div>
         <div class="section-actions">
-          <button class="btn btn-secondary btn-sm" :disabled="busy" @click="syncProductionEntities">从现有方案/剧本补建资产</button>
+          <button class="btn btn-primary btn-sm" :disabled="busy || assetCompletionBusy" @click="completeCurrentEpisodeAssets">{{assetCompletionBusy?'AI补全中…':`AI补全第${activeEpN}集角色/场景/道具`}}</button>
+          <button class="btn btn-secondary btn-sm" :disabled="busy" @click="syncProductionEntities">仅补建缺失卡片</button>
           <button v-if="assetTab === 'char'" class="btn btn-ghost btn-sm" :disabled="busy || approvedCharsWithoutPortrait === 0" @click="allPortraits">
             一键生成已审核标准像 ({{ approvedCharsWithoutPortrait }})
           </button>
@@ -934,7 +935,7 @@
         <div class="field"><label>参考图生成模板</label><select v-model="assetForm.image_engine" class="input"><option value="krea2">Krea2（默认）</option><option value="qwen_image_2_1" :disabled="!qwenAssetTemplateReady">Qwen-Image-2.1{{ qwenAssetTemplateReady ? '' : '（工作流模板未安装）' }}</option></select><div class="field-hint">默认使用 Krea2；需要清晰中文时推荐 Qwen-Image-2.1。模板未安装时不可选择。</div></div>
         <div class="field"><label>画面内可读文字 <span class="optional">可选，需逐字呈现</span></label><textarea v-model="assetForm.visible_text" class="textarea" rows="2" placeholder="例如：天阙宗；留空表示画面不需要文字"/><div v-if="assetForm.visible_text.trim() && !qwenAssetTemplateReady" class="field-hint warn">检测到可读文字，建议安装 Qwen-Image-2.1 文生图模板后生成。</div></div>
         <div class="field">
-          <div class="field-label-actions"><label>简单说明 / AI 设计结果 <span class="optional">用于保证{{ assetKindLabel }}一致</span></label><button class="btn btn-sm btn-secondary" :disabled="redesigningAsset || !assetForm.name.trim()" @click="redesignAssetDescription">{{ redesigningAsset ? 'AI 设计中…' : 'AI 重新设计' }}</button></div>
+          <div class="field-label-actions"><label>简单说明 / AI 设计结果 <span class="optional">用于保证{{ assetKindLabel }}一致</span></label><button class="btn btn-sm btn-secondary" :disabled="redesigningAsset" @click="redesignAssetDescription">{{ redesigningAsset ? 'AI 设计中…' : 'AI 重新设计' }}</button></div>
           <textarea v-model="assetForm.description" class="textarea" rows="6"
             :placeholder="assetTab === 'prop' ? '简单写：青玉玉佩，金色云纹；AI 会补全形状、材质、比例和辨识细节。' : '简单写：云隐宗大殿，宏伟、晨雾；AI 会补全空间布局、建筑、陈设、材质和光线。'" />
         </div>
@@ -1029,6 +1030,7 @@ const store = useAppStore()
 const toast = useToastStore()
 
 const project = ref(null)
+const assetCompletionBusy = ref(false)
 const scenes = ref([])
 const merges = ref([])
 const projectVideoMaterials = ref([])
@@ -1811,6 +1813,17 @@ async function resetGenerationState(){
   catch(e){toast.show('解除生成状态失败：'+(e.response?.data?.error||e.message))}
   finally{busy.value=false}
 }
+async function completeCurrentEpisodeAssets(){
+  assetCompletionBusy.value=true
+  try{
+    const {data}=await api.generateAdaptationAssets(id(),activeEpN.value)
+    await load()
+    const warnings=data.warnings||[]
+    toast.success(`第${activeEpN.value}集已AI补全 ${data.characters||0} 个角色档案、${data.assets||0} 个场景/道具设定`)
+    if(warnings.length)toast.error(`部分项目未完成，但其余资产已继续生成：\n${warnings.join('\n')}`)
+  }catch(e){toast.error(e.response?.data?.error||'AI补全角色/场景/道具失败')}
+  finally{assetCompletionBusy.value=false}
+}
 async function syncProductionEntities(){
   busy.value=true
   try{await api.syncProjectProductionEntities(id());await load();toast.show('已从现有方案和剧本补建角色、场景与道具卡')}
@@ -2355,7 +2368,10 @@ function openEditAsset(a) {
   editingAsset.value = a
 }
 async function redesignAssetDescription() {
-  if (!assetForm.name.trim()) return
+  if (!assetForm.name.trim()) {
+    assetError.value = `请先填写${assetKindLabel.value}名称，AI需要名称来识别设计对象`
+    return
+  }
   redesigningAsset.value = true
   assetError.value = ''
   try {
