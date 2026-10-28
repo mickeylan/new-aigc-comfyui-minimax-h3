@@ -436,6 +436,24 @@ func TestValidateCharacterProfileAllowsOptionalRole(t *testing.T) {
 	}
 }
 
+func TestGenerateProfileUsesStrongGenderInCharacterNameBeforeUnrelatedSynopsis(t *testing.T) {
+	ps := newTestProjectService(t)
+	provider := &stubTextProvider{response: `{"name":"虬髯大汉","role":"江湖武者","gender":"男性","appearance":"四十岁男性，满脸虬髯","personality":"豪爽","background":"独自行走江湖","relationships":"暂无","emotions":"沉稳","habits":"抚须","wardrobe_detail":"粗布劲装","lighting_mood":"硬朗侧光","color_palette":"棕灰"}`}
+	service := NewCharacterProfileService(ps.db, provider)
+	project := models.Project{Title: "测试", Synopsis: "狐女与少女结伴远行，女主寻找失散的姐姐。"}
+	ps.db.Create(&project)
+	character := models.Character{ProjectID: project.ID, Name: "虬髯大汉"}
+	ps.db.Create(&character)
+	if err := service.GenerateProfile(&character, &project, `本章狐女遇见虬髯大汉，他拦在山道中央。`); err != nil {
+		t.Fatalf("strong male character name was overridden by unrelated female context: %v", err)
+	}
+	var got models.Character
+	ps.db.First(&got, character.ID)
+	if got.Gender != "男性" {
+		t.Fatalf("unexpected gender %q", got.Gender)
+	}
+}
+
 func TestGenerateProfileRejectsGenderConflict(t *testing.T) {
 	ps := newTestProjectService(t)
 	provider := &stubTextProvider{response: `{"name":"林夏","role":"女主","gender":"男性","appearance":"30岁男性","personality":"坚韧","background":"背景","relationships":"关系","emotions":"克制","habits":"握项链","wardrobe_detail":"白风衣","lighting_mood":"柔光","color_palette":"白灰"}`}

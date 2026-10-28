@@ -134,7 +134,7 @@ func (s *CharacterProfileService) GenerateProfile(char *models.Character, projec
 		}
 	}
 	// 性别是后续标准像、造型、配音和视频身份的硬事实，不能只隐含在发型或服装里。
-	sourceGender := portraitGenderFromText(strings.Join([]string{char.Gender, char.Role, char.Appearance, char.Trait, char.Background, planJSON, project.Synopsis}, " "))
+	sourceGender := authoritativeCharacterGender(char, planJSON, project.Synopsis)
 	resultGender, genderErr := normalizeCharacterGender(result.Gender)
 	if genderErr != nil {
 		return fmt.Errorf("角色档案性别无效: %w", genderErr)
@@ -337,7 +337,7 @@ func normalizeCharacterGender(value string) (string, error) {
 
 func portraitGenderFromText(text string) string {
 	female := []string{"女性", "女子", "女人", "女孩", "女童", "少女", "老妇", "狐女", "女主", "女反派", "女长老"}
-	male := []string{"男性", "男子", "男人", "男孩", "男童", "少年郎", "老者", "老翁", "男主", "男反派", "男长老"}
+	male := []string{"男性", "男子", "男人", "男孩", "男童", "少年郎", "大汉", "壮汉", "汉子", "虬髯", "老者", "老翁", "男主", "男反派", "男长老"}
 	for _, marker := range female {
 		if strings.Contains(text, marker) {
 			return "女性"
@@ -346,6 +346,43 @@ func portraitGenderFromText(text string) string {
 	for _, marker := range male {
 		if strings.Contains(text, marker) {
 			return "男性"
+		}
+	}
+	return ""
+}
+
+func authoritativeCharacterGender(char *models.Character, planJSON, synopsis string) string {
+	if gender, err := normalizeCharacterGender(char.Gender); err == nil && gender != "" && gender != "原文未明确" {
+		return gender
+	}
+	// Character-owned facts are evaluated independently and in authority order.
+	// Joining the whole project synopsis previously let an unrelated woman override names such as “虬髯大汉”.
+	for _, own := range []string{char.Name, char.Role, char.Appearance, char.Trait, char.Background} {
+		if gender := portraitGenderFromText(own); gender != "" {
+			return gender
+		}
+	}
+	name := strings.TrimSpace(char.Name)
+	if name == "" {
+		return ""
+	}
+	for _, source := range []string{planJSON, synopsis} {
+		runes := []rune(source)
+		nameRunes := []rune(name)
+		for i := 0; i+len(nameRunes) <= len(runes); i++ {
+			if string(runes[i:i+len(nameRunes)]) != name {
+				continue
+			}
+			start, end := i-40, i+len(nameRunes)+40
+			if start < 0 {
+				start = 0
+			}
+			if end > len(runes) {
+				end = len(runes)
+			}
+			if gender := portraitGenderFromText(string(runes[start:end])); gender != "" {
+				return gender
+			}
 		}
 	}
 	return ""
