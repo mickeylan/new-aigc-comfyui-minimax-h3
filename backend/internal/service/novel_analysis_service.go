@@ -103,6 +103,49 @@ func chapterAnalysisText(value any) string {
 	}
 }
 
+type generatedStoryBible struct {
+	Premise       string `json:"premise"`
+	WorldRules    any    `json:"world_rules"`
+	MainPlot      any    `json:"main_plot"`
+	Subplots      any    `json:"subplots"`
+	Timeline      any    `json:"timeline"`
+	Relationships any    `json:"relationships"`
+	ClueLedger    any    `json:"clue_ledger"`
+	Locations     any    `json:"locations"`
+	Props         any    `json:"props"`
+}
+
+func parseGeneratedStoryBible(raw string) (generatedStoryBible, error) {
+	start, end := strings.Index(raw, "{"), strings.LastIndex(raw, "}")
+	if start < 0 || end < start {
+		return generatedStoryBible{}, fmt.Errorf("model output does not contain a JSON object")
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw[start:end+1]), &object); err != nil {
+		return generatedStoryBible{}, fmt.Errorf("invalid model JSON: %w", err)
+	}
+	if premise, ok := object["premise"]; ok {
+		var value any
+		if err := json.Unmarshal(premise, &value); err != nil {
+			return generatedStoryBible{}, fmt.Errorf("invalid model JSON: premise: %w", err)
+		}
+		normalized, err := json.Marshal(chapterAnalysisText(value))
+		if err != nil {
+			return generatedStoryBible{}, fmt.Errorf("invalid model JSON: premise: %w", err)
+		}
+		object["premise"] = normalized
+	}
+	normalized, err := json.Marshal(object)
+	if err != nil {
+		return generatedStoryBible{}, fmt.Errorf("invalid model JSON: %w", err)
+	}
+	var result generatedStoryBible
+	if err := json.Unmarshal(normalized, &result); err != nil {
+		return generatedStoryBible{}, fmt.Errorf("invalid model JSON: %w", err)
+	}
+	return result, nil
+}
+
 func isAliasCandidateSchemaError(err error) bool {
 	var typeErr *json.UnmarshalTypeError
 	return errors.As(err, &typeErr) && strings.HasPrefix(typeErr.Field, "alias_candidates")
@@ -440,19 +483,9 @@ func (s *NovelAnalysisService) GenerateBible(projectID uint) (*models.StoryBible
 	}
 	input, _ := json.Marshal(arcs)
 	output, err := s.skills.ChatWithSkill(projectID, models.SkillStageStoryBible, s.provider, "Synthesize the supplied arcs. Output JSON only.", "", map[string]string{"story_arcs": string(input)})
-	var parsed struct {
-		Premise       string `json:"premise"`
-		WorldRules    any    `json:"world_rules"`
-		MainPlot      any    `json:"main_plot"`
-		Subplots      any    `json:"subplots"`
-		Timeline      any    `json:"timeline"`
-		Relationships any    `json:"relationships"`
-		ClueLedger    any    `json:"clue_ledger"`
-		Locations     any    `json:"locations"`
-		Props         any    `json:"props"`
-	}
+	var parsed generatedStoryBible
 	if err == nil {
-		err = parseJSONObject(output, &parsed)
+		parsed, err = parseGeneratedStoryBible(output)
 	}
 	if err != nil {
 		job.Error = err.Error()

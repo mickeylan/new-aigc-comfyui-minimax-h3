@@ -130,10 +130,10 @@ func (s *SkillService) InitSystemSkills() error {
 			IsSystem:       true, Enabled: true, SortOrder: 1,
 		},
 		{
-			Name: "小说故事圣经", Code: "novel-story-bible", Version: 1,
+			Name: "小说故事圣经", Code: "novel-story-bible", Version: 2,
 			Description: "从剧情单元综合世界规则、主支线、时间线、关系、伏笔、地点和道具", Stage: models.SkillStageStoryBible,
 			PromptTemplate: "基于以下剧情单元生成故事圣经：\n{{story_arcs}}",
-			SystemPrompt:   "只输出严格 JSON，字段含 premise、world_rules、main_plot、subplots、timeline、relationships、clue_ledger、locations、props。关键结论必须包含 source_chapter_ids。此输出仅为待人工审核草稿。",
+			SystemPrompt:   "只输出严格 JSON，字段含 premise、world_rules、main_plot、subplots、timeline、relationships、clue_ledger、locations、props。premise 必须是单个字符串，不得返回对象或数组；其余结构化字段可使用对象或数组。关键结论必须包含 source_chapter_ids。此输出仅为待人工审核草稿。",
 			IsSystem:       true, Enabled: true, SortOrder: 1,
 		},
 		{Name: "小说分集映射", Code: "novel-episode-mapping", Version: 1, Description: "将已分析章节按策略映射到180秒、25镜头分集", Stage: models.SkillStageAdaptationPlan, PromptTemplate: "改编策略：{{strategy}}\n故事圣经：{{story_bible}}\n章节分析：{{chapter_analyses}}", SystemPrompt: "只输出严格 JSON 对象 episodes。每集字段含 episode_n,title,chapter_start,chapter_end,source_chapter_ids,target_duration,target_scenes,adaptation_goal,must_keep_events,optional_events,omitted_events,opening_state,ending_state,hook。保持因果顺序；必保事件不得省略。", IsSystem: true, Enabled: true, SortOrder: 1},
