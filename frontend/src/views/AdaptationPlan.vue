@@ -99,7 +99,7 @@ async function generateSnapshot(batch){await run(async()=>{snapshot.value=(await
 const saveSnapshot=batch=>run(async()=>{snapshot.value=(await api.saveBatchSnapshot(id,batch.id,{character_states_json:snapshot.value.character_states_json,relationships_json:snapshot.value.relationships_json,world_state_json:snapshot.value.world_state_json,clue_state_json:snapshot.value.clue_state_json})).data})
 async function approveSnapshot(batch){const override=window.prompt('连续性不一致时的人工覆盖理由（无则留空）','');if(override===null)return;await run(async()=>{snapshot.value=(await api.reviewBatchSnapshot(id,batch.id,true,override)).data})}
 async function copyError(){try{await navigator.clipboard.writeText(error.value)}catch{window.prompt('复制错误信息',error.value)}}
-async function generateAssets(ep){await run(async()=>{const {data}=await api.generateAdaptationAssets(id,ep.episode_n);window.alert(`已补全 ${data.characters||0} 个角色档案、${data.assets||0} 个场景/道具设定`)})}
+async function generateAssets(ep){await run(async()=>{const {data}=await api.generateAdaptationAssets(id,ep.episode_n);const warnings=data.warnings||[];window.alert(`已补全 ${data.characters||0} 个角色档案、${data.assets||0} 个场景/道具设定${warnings.length?`\n\n以下项目未完成，但没有阻断其他资产：\n${warnings.join('\n')}`:''}`)})}
 async function syncAssets(ep){await run(()=>api.syncAdaptationAssets(id,ep.episode_n))}
 async function reviewEpisode(ep){
   const override=window.prompt('连续性冲突时的人工覆盖理由（无则留空）','')

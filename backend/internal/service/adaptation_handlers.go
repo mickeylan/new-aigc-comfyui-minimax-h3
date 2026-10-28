@@ -232,10 +232,11 @@ func (s *Service) HandleGenerateAdaptationAssets(c *gin.Context) {
 		}
 	}
 	generatedCharacters := 0
+	warnings := make([]string, 0)
 	for i := range characters {
 		if err := s.CharacterProfiles.GenerateProfile(&characters[i], p, string(contextJSON)); err != nil {
-			c.JSON(502, gin.H{"error": fmt.Sprintf("角色「%s」AI档案生成失败: %v", characters[i].Name, err)})
-			return
+			warnings = append(warnings, fmt.Sprintf("角色「%s」AI档案生成失败: %v", characters[i].Name, err))
+			continue
 		}
 		generatedCharacters++
 	}
@@ -254,16 +255,16 @@ func (s *Service) HandleGenerateAdaptationAssets(c *gin.Context) {
 	for i := range assets {
 		description, err := s.Projects.RedesignAssetDescription(p, assets[i].Kind, assets[i].Name, fmt.Sprintf("依据第%d集已生成场景补充资产设定。场景上下文：%s", n, string(contextJSON)))
 		if err != nil {
-			c.JSON(502, gin.H{"error": fmt.Sprintf("%s「%s」AI描述生成失败: %v", assets[i].Kind, assets[i].Name, err)})
-			return
+			warnings = append(warnings, fmt.Sprintf("%s「%s」AI描述生成失败: %v", AssetKindLabel(assets[i].Kind), assets[i].Name, err))
+			continue
 		}
 		if err := s.DB.Model(&assets[i]).Update("description", description).Error; err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
-			return
+			warnings = append(warnings, fmt.Sprintf("%s「%s」保存失败: %v", AssetKindLabel(assets[i].Kind), assets[i].Name, err))
+			continue
 		}
 		generatedAssets++
 	}
-	c.JSON(200, gin.H{"ok": true, "characters": generatedCharacters, "assets": generatedAssets})
+	c.JSON(200, gin.H{"ok": true, "characters": generatedCharacters, "assets": generatedAssets, "warnings": warnings})
 }
 
 func (s *Service) HandleSyncAdaptationAssets(c *gin.Context) {
