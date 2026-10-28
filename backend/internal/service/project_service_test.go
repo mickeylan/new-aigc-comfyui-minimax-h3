@@ -1284,6 +1284,23 @@ func TestRedesignLocationDescriptionUsesProjectContext(t *testing.T) {
 	}
 }
 
+func TestRedesignPropDescriptionAllowsMissingBrief(t *testing.T) {
+	ps := newTestProjectService(t)
+	provider := &captureTextProvider{response: "一枚无生命青玉佩，扁平椭圆轮廓，温润半透明青色玉石，边缘刻浅金云纹，以成年手掌作为尺寸参照，表面有轻微长期佩戴磨痕"}
+	ps.textProvider = provider
+	project := &models.Project{Title: "问仙", Genre: "古典修仙", Style: "国风写实", Synopsis: "宗门试炼"}
+	description, err := ps.RedesignAssetDescription(project, AssetKindProp, "青玉佩", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(description, "青玉佩") || !strings.Contains(provider.user, "未提供；请仅依据名称和项目上下文") {
+		t.Fatalf("description=%q user=%q", description, provider.user)
+	}
+	if !strings.Contains(provider.system, "不得虚构剧情用途、法术能力") {
+		t.Fatalf("missing conservative design contract: %s", provider.system)
+	}
+}
+
 func TestBuildLocationAssetPromptSupportsMegastructure(t *testing.T) {
 	p := &models.Project{Style: "真人写实", AspectRatio: "16:9"}
 	location := &models.Asset{Kind: AssetKindLocation, Name: "天空巨城", Description: "云海中的庞大城市", VisualType: "megastructure", MegaType: "architecture"}

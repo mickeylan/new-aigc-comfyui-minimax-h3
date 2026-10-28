@@ -6,6 +6,12 @@ const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.met
 const looks = readFileSync(new URL('../src/views/CharacterLooks.vue', import.meta.url), 'utf8')
 const projectDetail = detail
 
+test('空白道具说明也能按名称调用AI重新设计', () => {
+  assert.match(projectDetail, /:disabled="redesigningAsset \|\| !assetForm\.name\.trim\(\)"/)
+  assert.doesNotMatch(projectDetail, /redesigningAsset \|\| !assetForm\.name\.trim\(\) \|\| !assetForm\.description\.trim\(\)/)
+  assert.match(projectDetail, /if \(!assetForm\.name\.trim\(\)\) return/)
+})
+
 test('角色编辑弹窗按当前标签保存对应档案字段', () => {
   assert.match(projectDetail, /@click="saveCurrentCharacterTab"/)
   assert.match(projectDetail, /charProfileTab\.value === 'basic'/)

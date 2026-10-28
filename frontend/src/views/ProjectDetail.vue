@@ -934,7 +934,7 @@
         <div class="field"><label>参考图生成模板</label><select v-model="assetForm.image_engine" class="input"><option value="krea2">Krea2（默认）</option><option value="qwen_image_2_1" :disabled="!qwenAssetTemplateReady">Qwen-Image-2.1{{ qwenAssetTemplateReady ? '' : '（工作流模板未安装）' }}</option></select><div class="field-hint">默认使用 Krea2；需要清晰中文时推荐 Qwen-Image-2.1。模板未安装时不可选择。</div></div>
         <div class="field"><label>画面内可读文字 <span class="optional">可选，需逐字呈现</span></label><textarea v-model="assetForm.visible_text" class="textarea" rows="2" placeholder="例如：天阙宗；留空表示画面不需要文字"/><div v-if="assetForm.visible_text.trim() && !qwenAssetTemplateReady" class="field-hint warn">检测到可读文字，建议安装 Qwen-Image-2.1 文生图模板后生成。</div></div>
         <div class="field">
-          <div class="field-label-actions"><label>简单说明 / AI 设计结果 <span class="optional">用于保证{{ assetKindLabel }}一致</span></label><button class="btn btn-sm btn-secondary" :disabled="redesigningAsset || !assetForm.name.trim() || !assetForm.description.trim()" @click="redesignAssetDescription">{{ redesigningAsset ? 'AI 设计中…' : 'AI 重新设计' }}</button></div>
+          <div class="field-label-actions"><label>简单说明 / AI 设计结果 <span class="optional">用于保证{{ assetKindLabel }}一致</span></label><button class="btn btn-sm btn-secondary" :disabled="redesigningAsset || !assetForm.name.trim()" @click="redesignAssetDescription">{{ redesigningAsset ? 'AI 设计中…' : 'AI 重新设计' }}</button></div>
           <textarea v-model="assetForm.description" class="textarea" rows="6"
             :placeholder="assetTab === 'prop' ? '简单写：青玉玉佩，金色云纹；AI 会补全形状、材质、比例和辨识细节。' : '简单写：云隐宗大殿，宏伟、晨雾；AI 会补全空间布局、建筑、陈设、材质和光线。'" />
         </div>
@@ -2355,7 +2355,7 @@ function openEditAsset(a) {
   editingAsset.value = a
 }
 async function redesignAssetDescription() {
-  if (!assetForm.name.trim() || !assetForm.description.trim()) return
+  if (!assetForm.name.trim()) return
   redesigningAsset.value = true
   assetError.value = ''
   try {

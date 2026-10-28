@@ -96,18 +96,22 @@ func (s *ProjectService) RedesignAssetDescription(p *models.Project, kind, name,
 		return "", err
 	}
 	name, brief = strings.TrimSpace(name), strings.TrimSpace(brief)
-	if name == "" || brief == "" {
-		return "", fmt.Errorf("名称和简单说明不能为空")
+	if name == "" {
+		return "", fmt.Errorf("名称不能为空")
 	}
 	if s.textProvider == nil {
 		return "", fmt.Errorf("文本生成服务未配置")
 	}
 	system := `你是影视美术设定师。把用户的简单说明扩写为可长期复用的资产权威设定。
-严格遵守项目题材、时代、地域文化和画风，不添加人物或剧情。
+严格遵守项目题材、时代、地域文化和画风，不添加人物或剧情。用户简单说明可以为空；为空时只能依据资产名称与项目上下文做保守、通用的视觉设计，不得虚构剧情用途、法术能力、特殊机关、所有者或人物属性。
 如果是场景：写清空间类型、建筑结构、固定布局、入口出口、前中后景、主要陈设、材质、主辅色、光源方向、时段与氛围；必须是无人物环境设定。
 如果是道具：写清类别、形状比例、材质、颜色、纹样、磨损、可识别特征和尺寸参照；必须是无生命单一物件，不得因名称含人物或生物词而拟人化。
 只输出一段具体中文描述，不要标题、解释、Markdown、JSON或空泛质量标签。`
-	user := fmt.Sprintf("项目：%s\n题材：%s\n画风：%s\n故事：%s\n资产类型：%s\n名称：%s\n用户简单说明：%s", p.Title, p.Genre, p.Style, p.Synopsis, AssetKindLabel(kind), name, brief)
+	briefText := brief
+	if briefText == "" {
+		briefText = "未提供；请仅依据名称和项目上下文生成保守的外观设定"
+	}
+	user := fmt.Sprintf("项目：%s\n题材：%s\n画风：%s\n故事：%s\n资产类型：%s\n名称：%s\n用户简单说明：%s", p.Title, p.Genre, p.Style, p.Synopsis, AssetKindLabel(kind), name, briefText)
 	output, err := s.textProvider.Chat(system, user)
 	if err != nil {
 		return "", fmt.Errorf("AI 重新设计%s失败: %w", AssetKindLabel(kind), err)
