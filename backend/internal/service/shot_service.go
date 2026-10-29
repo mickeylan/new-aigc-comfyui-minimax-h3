@@ -180,9 +180,6 @@ func validateShot(shot *models.Shot) error {
 	if err := validateShotActionTimeline(shot.ActionTimeline, shot.Duration); err != nil {
 		return err
 	}
-	if err := validateShotCameraContract(*shot); err != nil {
-		return err
-	}
 	if err := validateNativeShotMode(*shot); err != nil {
 		return err
 	}
@@ -204,40 +201,6 @@ func validateNativeShotMode(shot models.Shot) error {
 		if strings.Contains(text, marker) {
 			return fmt.Errorf("导演镜头只能使用3至15秒Native H3流程，禁止使用Endless或Canvas")
 		}
-	}
-	return nil
-}
-
-func validateShotCameraContract(shot models.Shot) error {
-	parts := []string{shot.CameraMovement, shot.PromptCamera}
-	for _, entry := range shot.ActionTimeline {
-		parts = append(parts, entry.Camera)
-	}
-	text := strings.ToLower(strings.Join(parts, " "))
-	static := strings.Contains(text, "固定") || strings.Contains(text, "静止") || strings.Contains(text, "static") || strings.Contains(text, "locked-off") || strings.Contains(text, "locked off")
-	moves := map[string][]string{
-		"推进": {"推进", "推镜", "push in", "dolly in"},
-		"拉远": {"拉远", "拉镜", "pull back", "dolly out"},
-		"跟拍": {"跟拍", "跟随", "tracking", "follow shot"},
-		"摇镜": {"摇镜", "pan ", "panning"},
-		"平移": {"平移", "truck ", "trucking"},
-		"环绕": {"环绕", "orbit", "arc shot"},
-		"变焦": {"变焦", "zoom"},
-	}
-	found := []string{}
-	for name, markers := range moves {
-		for _, marker := range markers {
-			if strings.Contains(text, marker) {
-				found = append(found, name)
-				break
-			}
-		}
-	}
-	if static && len(found) > 0 {
-		return fmt.Errorf("运镜冲突：固定镜头不能同时使用%s", strings.Join(found, "、"))
-	}
-	if len(found) > 1 {
-		return fmt.Errorf("每镜只能有一种主要运镜（检测到%s）", strings.Join(found, "、"))
 	}
 	return nil
 }

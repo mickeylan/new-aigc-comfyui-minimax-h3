@@ -2526,27 +2526,24 @@ func TestNamedShoutBeforeQuoteCreatesDialogueWithoutVoiceCharacters(t *testing.T
 		Content:           "后方远处蓦然传来虬髯大汉厉喝：“妖孽，哪里跑！”，声震荒野。女童闻言身子一颤，脸色唰白，脚步踉跄。镜头切至后方追来的虬髯大汉身影，单手提刀，尘土飞扬。",
 	}
 	dubs := explicitSceneSpeech(sc)
-	if len(dubs) != 1 || dubs[0].Character != "虬髯大汉" || dubs[0].SpeechType != "dialogue" || dubs[0].Text != "妖孽，哪里跑！" {
+	if len(dubs) != 1 || dubs[0].Character != "虬髯大汉" || dubs[0].SpeechType != "offscreen_dialogue" || dubs[0].Text != "妖孽，哪里跑！" {
 		t.Fatalf("named shout = %+v", dubs)
-	}
-	if err := requireStructuredSceneSpeech(sc.Content, dubs); err != nil {
-		t.Fatalf("explicitly resolved dialogue was incorrectly blocked: %v", err)
 	}
 }
 
-func TestLeadingQuotedShoutUsesOnlyVoiceCharacter(t *testing.T) {
+func TestLeadingQuotedShoutDoesNotGuessLaterVisibleCharacter(t *testing.T) {
 	sc := &models.Scene{
 		Characters:        "柳乐儿,虬髯大汉",
 		VisibleCharacters: "柳乐儿,虬髯大汉",
 		Content:           "“妖孽，哪里跑！”后方远处蓦然传来男子厉喝，声震荒野。女童闻言身子一颤，脸色唰白，脚步踉跄。镜头切至后方追来的虬髯大汉身影，单手提刀，尘土飞扬。",
 	}
 	dubs := explicitSceneSpeech(sc)
-	if len(dubs) != 1 || dubs[0].Character != "虬髯大汉" || dubs[0].SpeechType != "dialogue" || dubs[0].Text != "妖孽，哪里跑！" {
+	if len(dubs) != 1 || dubs[0].Character != "画外男声" || dubs[0].SpeechType != "offscreen_dialogue" || dubs[0].Text != "妖孽，哪里跑！" {
 		t.Fatalf("leading quoted shout = %+v", dubs)
 	}
 	lines := []string{"- <Picture 1>：角色「柳乐儿」四视图", "- <Picture 2>：角色「虬髯大汉」四视图", "- <Picture 3>：场景「辽阔荒地」参考图", "- <Picture 4>：当前分镜画面"}
 	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] <Subject 1> falters.\n[Shot 2] At 00:04.000, <Subject 2> charges through dust.", Duration: 8}, nil, dubs, lines)
-	for _, want := range []string{"<Subject 2> (S1) says:", "<d>[Chinese] 妖孽，哪里跑！</d>", "no additional speech"} {
+	for _, want := range []string{"后方远处的未具名男子声音 (S1) says in a clearly identified off-screen voice:", "<d>[Chinese] 妖孽，哪里跑！</d>", "no additional speech"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("compiled prompt missing %q: %s", want, prompt)
 		}
@@ -2709,19 +2706,28 @@ func TestDialogueKeepsSpeechAndDropsInlineStageDirection(t *testing.T) {
 	}
 }
 
-func TestExplicitQuotedSpeechRequiresStructuredDialogue(t *testing.T) {
-	content := "“妖孽，哪里跑！”后方远处蓦然传来男子厉喝，声震荒野。女童闻言身子一颤。"
-	if got := explicitUnstructuredSceneSpeech(content, nil); got != "妖孽，哪里跑！" {
-		t.Fatalf("explicit speech detection=%q", got)
+func TestExplicitQuotedSpeechRecoversAnonymousOffscreenSpeaker(t *testing.T) {
+	sc := &models.Scene{
+		Characters:        "柳乐儿",
+		VisibleCharacters: "柳乐儿",
+		Content:           "“妖孽，哪里走！！！”后方远处传来男子厉喝。柳乐儿闻言继续奔跑。",
 	}
-	if err := requireStructuredSceneSpeech(content, nil); err == nil || !strings.Contains(err.Error(), "结构化Dialogue为空") || !strings.Contains(err.Error(), "妖孽，哪里跑") {
-		t.Fatalf("missing actionable structured-dialogue error: %v", err)
+	got := mergeExplicitSceneSpeech(sc, nil)
+	if len(got) != 1 || got[0].Character != "画外男声" || got[0].SpeechType != "offscreen_dialogue" || got[0].Text != "妖孽，哪里走！！！" {
+		t.Fatalf("anonymous offscreen speech=%+v", got)
 	}
-	if err := requireStructuredSceneSpeech(content, []models.Dialogue{{Character: "虬髯大汉", SpeechType: "dialogue", Text: "妖孽，哪里跑！"}}); err != nil {
-		t.Fatalf("valid structured dialogue rejected: %v", err)
+	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] 柳乐儿奔跑。", Duration: 8}, nil, got, []string{"- <Picture 1>：角色「柳乐儿」四视图"})
+	if !strings.Contains(prompt, "后方远处的未具名男子声音 (S1) says in a clearly identified off-screen voice: <d>[Chinese] 妖孽，哪里走！！！</d>") || strings.Contains(prompt, "<Subject 1> (S1) says") {
+		t.Fatalf("anonymous male shout compiled incorrectly: %s", prompt)
 	}
-	if got := explicitUnstructuredSceneSpeech("石碑刻着“太虚门”三个字。", nil); got != "" {
-		t.Fatalf("visible quoted text was mistaken for speech: %q", got)
+}
+
+func TestMultipleExplicitQuotesRecoveredWithoutDuplicatingStoredDialogue(t *testing.T) {
+	sc := &models.Scene{Characters: "阿宁,阿远", Content: "阿宁喊道：“快走！”阿远答道：“马上！”石碑刻着“太虚门”三个字。她心绪起伏。"}
+	stored := []models.Dialogue{{Character: "阿宁", SpeechType: "dialogue", Text: "快走！", Order: 1}}
+	got := mergeExplicitSceneSpeech(sc, stored)
+	if len(got) != 2 || got[0].Character != "阿宁" || got[0].Text != "快走！" || got[1].Character != "阿远" || got[1].Text != "马上！" {
+		t.Fatalf("multiple quote merge=%+v", got)
 	}
 }
 
@@ -3181,7 +3187,7 @@ func TestNormalizeSavedH3KeyframePromptPreservesThreeFieldContract(t *testing.T)
 	}
 }
 
-func TestH3NarrationAndCameraConflictValidation(t *testing.T) {
+func TestH3NarrationAndCameraDescriptionsDoNotBlockSubmission(t *testing.T) {
 	sc := &models.Scene{VideoPrompt: "[Shot 1] 人物保持闭口，镜头保持固定。", Duration: 5}
 	prompt := buildH3T2VAPrompt(sc, nil, []models.Dialogue{{Character: "旁白", Text: "夜色降临。"}})
 	detail := h3IntegratedDescription(prompt)
@@ -3191,8 +3197,8 @@ func TestH3NarrationAndCameraConflictValidation(t *testing.T) {
 		}
 	}
 	issues := strings.Join(ValidateVideoPrompt("镜头保持固定，同时缓慢推进并跟随人物。", "", "", ""), "|")
-	if !strings.Contains(issues, "运镜冲突") {
-		t.Fatalf("camera conflict was not rejected: %s", issues)
+	if issues != "" {
+		t.Fatalf("camera keyword overlap must not block prompt submission: %s", issues)
 	}
 }
 

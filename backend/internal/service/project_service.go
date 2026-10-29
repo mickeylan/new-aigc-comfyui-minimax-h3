@@ -2177,9 +2177,6 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	openingPicture := openingPictureTag(refLines)
 	canonicalSceneContent := normalizeUserH3ShotMarkers(sc.Content)
 	dubs := s.sceneVideoDialogues(sc)
-	if err := requireStructuredSceneSpeech(sc.Content, dubs); err != nil {
-		return "", err
-	}
 	var shots []models.Shot
 	if err := s.db.Where("scene_id=?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
 		return "", err
@@ -2217,7 +2214,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	system := fmt.Sprintf(`你是 MiniMax H3 Ref2VA 视频动作编辑。只输出简洁的 detailed_description 正文，不输出字段名、解释、规则或 Markdown。
 除结构化Dialogue原文外，输出必须全部使用简洁自然的英文。使用官方 [Shot 1] 和 [Shot N] At MM:SS.mmm, 控制格式；不得翻译、复述或自行补写对白。
 正文是给视频模型执行的镜头指令，不是剧本复述。%s不得用分号堆砌同义短语。
-运镜必须自然融入动作句：明确运动类型；仅在确有意义时写小/大幅度和慢/快速，正常速度与中等幅度省略。固定镜头不得同时出现推进、跟随、摇移、升降、环绕或变焦。
+运镜必须自然融入动作句：明确运动类型；仅在确有意义时写小/大幅度和慢/快速，正常速度与中等幅度省略。运镜可以随时间从固定转为移动，按镜头时间顺序表达清楚，避免把人物运动误写成摄影机运动。
 忠实采用Scene与结构化Shot，但不得复述剧情背景、人物关系、前因后果、心理活动、内心想法、氛围解释或观众感受；禁止“仿佛想说什么”“未说出口的问题”“沉默中充满”等文学化语言暗示。
 第一句以 [Shot 1] 开头，说明画面可从%s参考状态开始；随后直接写动作与镜头。不得新增角色、对白、道具、地点、胜负、伤亡或剧情结果。武戏中若原文只写来袭动作而未写应对，必须依据实际人物状态、资产、空间关系和既有能力设计不改变剧情结果的即时可见应对，不得让被攻击者站立观察。
 Dialogue只决定人物是否开口及必要口型时机；对白文本将由系统确定性加入，你不得在正文输出台词、<d>标签或改写台词。无结构化对白时，人物保持闭口，不得描写嘴唇微张、欲言又止或任何说话暗示。
@@ -2807,11 +2804,9 @@ func trailingQuotedSpeechSpeaker(content string, match []int, names []string) st
 	if len(match) < 4 || !leadingQuoteSpeechPattern.MatchString(content[match[0]:]) {
 		return ""
 	}
-	after := []rune(content[match[1]:])
-	if len(after) > 100 {
-		after = after[:100]
-	}
-	window := string(after)
+	// Only the attribution attached to this quote can identify its speaker.
+	// Later action sentences may name the listener or the fleeing character.
+	window := content[match[3]:match[1]]
 	matched := ""
 	for _, name := range names {
 		if !strings.Contains(window, name) {
@@ -2849,7 +2844,16 @@ func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Di
 			}
 			text := strings.TrimSpace(content[match[2]:match[3]])
 			if text != "" {
-				found = append(found, foundSpeech{pos: match[0], dialogue: models.Dialogue{Character: name, SpeechType: "dialogue", Text: text}})
+				speechType := "dialogue"
+				contextRunes := []rune(content[:match[0]])
+				if len(contextRunes) > 20 {
+					contextRunes = contextRunes[len(contextRunes)-20:]
+				}
+				attribution := string(contextRunes) + lead
+				if strings.Contains(attribution, "传来") || strings.Contains(attribution, "响起") || strings.Contains(attribution, "门外") || strings.Contains(attribution, "屋外") || strings.Contains(attribution, "画外") || strings.Contains(attribution, "身后") || strings.Contains(attribution, "后方") || strings.Contains(attribution, "远处") {
+					speechType = "offscreen_dialogue"
+				}
+				found = append(found, foundSpeech{pos: match[0], dialogue: models.Dialogue{Character: name, SpeechType: speechType, Text: text}})
 			}
 		}
 	}
@@ -2932,8 +2936,23 @@ func explicitSceneSpeech(sc *models.Scene) []models.Dialogue {
 			// 仍按原文事实绑定；多个候选时保持拒绝，不做猜测。
 			speaker = trailingQuotedSpeechSpeaker(content, match, names)
 		}
+		matchedAttribution := content[match[0]:match[1]]
+		offscreen := strings.Contains(matchedAttribution, "传来") || strings.Contains(matchedAttribution, "响起") || strings.Contains(matchedAttribution, "门外") || strings.Contains(matchedAttribution, "屋外") || strings.Contains(matchedAttribution, "画外") || strings.Contains(matchedAttribution, "身后") || strings.Contains(matchedAttribution, "后方") || strings.Contains(matchedAttribution, "远处")
+		voiceDescription := ""
+		if offscreen && speaker == "" {
+			switch {
+			case strings.Contains(matchedAttribution, "男子"), strings.Contains(matchedAttribution, "男人"), strings.Contains(matchedAttribution, "大汉"):
+				speaker, voiceDescription = "画外男声", "后方远处的未具名男子声音"
+			case strings.Contains(matchedAttribution, "女子"), strings.Contains(matchedAttribution, "女人"), strings.Contains(matchedAttribution, "少女"):
+				speaker, voiceDescription = "画外女声", "画外的未具名女子声音"
+			}
+		}
 		if speaker == "" {
 			continue
+		}
+		speechType := "dialogue"
+		if offscreen {
+			speechType = "offscreen_dialogue"
 		}
 		duplicate := false
 		for _, existing := range out {
@@ -2943,7 +2962,7 @@ func explicitSceneSpeech(sc *models.Scene) []models.Dialogue {
 			}
 		}
 		if !duplicate {
-			out = append(out, models.Dialogue{Character: speaker, SpeechType: "dialogue", Text: text, Order: len(out) + 1})
+			out = append(out, models.Dialogue{Character: speaker, SpeechType: speechType, H3VoiceDescription: voiceDescription, Text: text, Order: len(out) + 1})
 		}
 	}
 
@@ -3160,46 +3179,6 @@ func (s *ProjectService) sceneVideoDialogues(sc *models.Scene) []models.Dialogue
 		}
 	}
 	return dubs
-}
-
-var quotedSceneSpeechPattern = regexp.MustCompile(`[“「]([^”」]{1,200})[”」]`)
-var sceneSpeechAttributionPattern = regexp.MustCompile(`说|说道|开口|喊|叫|喝|厉喝|怒喝|低语|问道|答道|传来.{0,12}(?:声音|嗓音|男声|女声)`)
-
-func explicitUnstructuredSceneSpeech(content string, dubs []models.Dialogue) string {
-	if len(validSceneDialogues(dubs)) > 0 {
-		return ""
-	}
-	runes := []rune(content)
-	indices := quotedSceneSpeechPattern.FindAllStringSubmatchIndex(content, -1)
-	for _, match := range indices {
-		if len(match) < 4 {
-			continue
-		}
-		quoted := strings.TrimSpace(content[match[2]:match[3]])
-		if quoted == "" {
-			continue
-		}
-		startRunes := len([]rune(content[:match[0]]))
-		endRunes := len([]rune(content[:match[1]]))
-		from, to := startRunes-24, endRunes+60
-		if from < 0 {
-			from = 0
-		}
-		if to > len(runes) {
-			to = len(runes)
-		}
-		if sceneSpeechAttributionPattern.MatchString(string(runes[from:to])) {
-			return quoted
-		}
-	}
-	return ""
-}
-
-func requireStructuredSceneSpeech(content string, dubs []models.Dialogue) error {
-	if quoted := explicitUnstructuredSceneSpeech(content, dubs); quoted != "" {
-		return fmt.Errorf("Scene正文含明确对白“%s”，但结构化Dialogue为空；请在结构化剧本中添加真实说话人和逐字对白并保存后重试，系统不会猜测说话人或把该句静默删除", quoted)
-	}
-	return nil
 }
 
 func authoritativeSceneDialogues(dubs []models.Dialogue) []models.Dialogue {
@@ -4912,12 +4891,6 @@ func ValidateVideoPrompt(detailText, charStr, locStr, propStr string) []string {
 			issues = append(issues, "这里只填写动作正文，请移除固定字段："+heading)
 		}
 	}
-	lower := strings.ToLower(text)
-	staticCamera := strings.Contains(text, "固定机位") || strings.Contains(text, "镜头保持固定") || strings.Contains(text, "摄影机保持静止") || strings.Contains(lower, "static shot") || strings.Contains(lower, "camera remains static")
-	movingCamera := strings.Contains(text, "推进") || strings.Contains(text, "跟随") || strings.Contains(text, "摇镜") || strings.Contains(text, "平移") || strings.Contains(text, "环绕") || strings.Contains(text, "变焦") || strings.Contains(lower, "pushes in") || strings.Contains(lower, "tracking shot") || strings.Contains(lower, "pans ") || strings.Contains(lower, "trucks ") || strings.Contains(lower, "arcs ") || strings.Contains(lower, "zooms ")
-	if staticCamera && movingCamera {
-		issues = append(issues, "运镜冲突：固定镜头不能同时推进、跟随、摇移、环绕或变焦")
-	}
 	if len([]rune(text)) > 4000 {
 		issues = append(issues, "视频动作提示词不能超过 4000 字")
 	}
@@ -6567,9 +6540,6 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		return err
 	}
 	dialogues := s.sceneVideoDialogues(sc)
-	if err := requireStructuredSceneSpeech(sc.Content, dialogues); err != nil {
-		return err
-	}
 	for _, dialogue := range dialogues {
 		if err := validateDialogueSpeaker(dialogue); err != nil {
 			return err
