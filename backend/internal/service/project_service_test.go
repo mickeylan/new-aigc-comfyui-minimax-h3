@@ -2531,6 +2531,46 @@ func TestNamedShoutBeforeQuoteCreatesDialogueWithoutVoiceCharacters(t *testing.T
 	}
 }
 
+func TestPronounAttributedQuotedShoutIsRecoveredVerbatim(t *testing.T) {
+	content := "虬髯大汉提刀追近，视线扫过女童留下的凌乱足迹。刀刃在烈日下闪过寒光，他隔着灌木高声喊道：“妖孽，哪里走！！！”"
+	sc := &models.Scene{
+		Characters:        "虬髯大汉,女童",
+		VisibleCharacters: "虬髯大汉,女童",
+		Content:           content,
+		VideoPrompt:       "[Shot 1] <Subject 1>提刀追近，隔着灌木高声喊道。<Subject 2>逃离。",
+		Duration:          8,
+	}
+	dubs := explicitSceneSpeech(sc)
+	if len(dubs) != 1 || dubs[0].Character != "虬髯大汉" || dubs[0].SpeechType != "dialogue" || dubs[0].Text != "妖孽，哪里走！！！" {
+		t.Fatalf("pronoun shout = %+v", dubs)
+	}
+	prompt := buildMiniMaxH3RefPrompt(sc, nil, dubs, []string{"- <Picture 1>：角色「虬髯大汉」四视图", "- <Picture 2>：角色「女童」四视图"})
+	if !strings.Contains(prompt, "<Subject 1> (S1)") || !strings.Contains(prompt, "<d>[Chinese] 妖孽，哪里走！！！</d>") || strings.Contains(prompt, "No dialogue") {
+		t.Fatalf("pronoun shout missing from H3 prompt: %s", prompt)
+	}
+}
+
+func TestPronounSpeechAttributionSwitchesOnlyOnClearPriorSubject(t *testing.T) {
+	sc := &models.Scene{Characters: "甲,乙", Content: "甲推门进来。他说道：“先走。”乙抬头看他。她说道：“等等。”"}
+	got := explicitSceneSpeech(sc)
+	if len(got) != 2 || got[0].Character != "甲" || got[0].Text != "先走。" || got[1].Character != "乙" || got[1].Text != "等等。" {
+		t.Fatalf("switched pronoun speech = %+v", got)
+	}
+}
+
+func TestPronounSpeechRejectsAmbiguousPriorActorsAndNonSpeechQuotes(t *testing.T) {
+	ambiguous := explicitSceneSpeech(&models.Scene{Characters: "甲,乙", Content: "甲和乙并肩走来。他喊道：“等等！”"})
+	if len(ambiguous) != 0 {
+		t.Fatalf("ambiguous pronoun was attributed: %+v", ambiguous)
+	}
+	for _, content := range []string{"甲走近告示牌。他看见上面写着：“禁止入内”。", "甲停下脚步。他心想：“不能回头。”"} {
+		got := explicitlyQuotedCharacterSpeech(content, []string{"甲"})
+		if len(got) != 0 {
+			t.Fatalf("non-speech quote was promoted for %q: %+v", content, got)
+		}
+	}
+}
+
 func TestLeadingQuotedShoutDoesNotGuessLaterVisibleCharacter(t *testing.T) {
 	sc := &models.Scene{
 		Characters:        "柳乐儿,虬髯大汉",

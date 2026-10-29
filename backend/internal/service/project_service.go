@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 
@@ -2779,6 +2780,7 @@ var (
 	quotedThoughtPattern        = regexp.MustCompile(`(?:心想|暗自想道|心中说道|心中想道|默念)\s*[:：]?\s*["“]([^"”]+)["”]`)
 	offscreenVoiceSpeechPattern = regexp.MustCompile(`(?:门外|屋外|画外|身后)?[^。！？!?\r\n]{0,12}?(?:传来|响起)([\p{Han}]{2,4})(?:清脆悦耳|清脆|悦耳|温柔|低沉|沙哑|熟悉|陌生|焦急|急促|平静)*的声音(?:说道|说|喊道|叫道)\s*[:：]?\s*["“]([^"”]+)["”]`)
 	leadingQuoteSpeechPattern   = regexp.MustCompile(`["“]([^"”]{1,200})["”][^。！？!?\r\n]{0,50}?(?:传来|响起)?[^。！？!?\r\n]{0,20}?(?:男子|男人|大汉|女子|女人|少女|女童|男童|老人|老者)?(?:厉喝|怒喝|大喝|喝道|喊道|叫道|说道|说)`)
+	pronounQuotedSpeechPattern  = regexp.MustCompile(`([他她])[^。！？!?\r\n]{0,30}?(?:厉喝|怒喝|大喝|喝道|喝喊|喊道|叫道|高喊|说道|说|问道|答道|开口道)\s*[:：]?\s*["“]([^"”]+)["”]`)
 )
 
 func sceneCharacterNameList(characters string) []string {
@@ -2820,6 +2822,54 @@ func trailingQuotedSpeechSpeaker(content string, match []int, names []string) st
 	return matched
 }
 
+func precedingPronounSpeaker(content string, pronounPos int, names []string) string {
+	prefix := content[:pronounPos]
+	boundary := strings.LastIndexAny(prefix, "。！？!?\r\n")
+	start := 0
+	if boundary >= 0 {
+		_, size := utf8.DecodeRuneInString(prefix[boundary:])
+		start = boundary + size
+	}
+	segments := []string{strings.TrimSpace(prefix[start:])}
+	if boundary >= 0 {
+		prior := strings.TrimRight(prefix[:boundary], "。！？!?\r\n ")
+		priorStart := 0
+		if priorBoundary := strings.LastIndexAny(prior, "。！？!?\r\n"); priorBoundary >= 0 {
+			_, size := utf8.DecodeRuneInString(prior[priorBoundary:])
+			priorStart = priorBoundary + size
+		}
+		segments = append(segments, strings.TrimSpace(prior[priorStart:]))
+	}
+	for _, segment := range segments {
+		segment = strings.TrimLeft(segment, `"”'’ `)
+		// Require the antecedent to be the grammatical subject at the start of the prose.
+		// Names appearing later can be an object/listener and must not steal attribution.
+		speaker := ""
+		for _, name := range names {
+			if strings.HasPrefix(segment, name) {
+				if speaker != "" && speaker != name {
+					return ""
+				}
+				speaker = name
+			}
+		}
+		if speaker == "" {
+			continue
+		}
+		firstClause := segment
+		if end := strings.IndexAny(firstClause, "，,；;"); end >= 0 {
+			firstClause = firstClause[:end]
+		}
+		for _, name := range names {
+			if name != speaker && strings.Contains(firstClause, name) {
+				return "" // coordinated/ambiguous subjects
+			}
+		}
+		return speaker
+	}
+	return ""
+}
+
 func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Dialogue {
 	type foundSpeech struct {
 		pos      int
@@ -2855,6 +2905,14 @@ func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Di
 				}
 				found = append(found, foundSpeech{pos: match[0], dialogue: models.Dialogue{Character: name, SpeechType: speechType, Text: text}})
 			}
+		}
+	}
+	for _, match := range pronounQuotedSpeechPattern.FindAllStringSubmatchIndex(content, -1) {
+		speaker := precedingPronounSpeaker(content, match[0], names)
+		text := strings.TrimSpace(content[match[4]:match[5]])
+		if speaker != "" && text != "" {
+			// Spatial phrasing such as “隔着灌木” does not make a visible actor off-screen.
+			found = append(found, foundSpeech{pos: match[0], dialogue: models.Dialogue{Character: speaker, SpeechType: "dialogue", Text: text}})
 		}
 	}
 	sort.SliceStable(found, func(i, j int) bool { return found[i].pos < found[j].pos })
