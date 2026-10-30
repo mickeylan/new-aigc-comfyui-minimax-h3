@@ -279,8 +279,104 @@ func normalizeDirectorActionTimeline(entries []models.ShotActionTimelineEntry, d
 	}
 }
 
-// Normalize common model speech representations without changing spoken text.
-// Keep all other fields raw so the strict decoder still rejects unknown fields.
+var directorShotTextFields = []string{
+	"act_type", "shot_type", "camera_angle", "camera_movement", "description",
+	"speech_presentation", "listener_character", "emotion", "transition_type", "transition_note",
+	"start_state", "end_state", "prompt_subject", "prompt_action", "prompt_camera",
+	"prompt_lighting", "prompt_style", "negative_prompt",
+}
+
+var directorTimelineTextFields = []string{"subject", "action", "state", "camera"}
+
+// directorTextValue provides a bounded compatibility layer for common model
+// representations of textual fields. Bare numbers and booleans remain type errors.
+func directorTextValue(raw json.RawMessage, depth int) (string, error) {
+	if depth > 16 {
+		return "", fmt.Errorf("文本结构嵌套超过16层")
+	}
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return "", nil
+	}
+	switch raw[0] {
+	case '"':
+		var value string
+		err := json.Unmarshal(raw, &value)
+		return value, err
+	case '[':
+		var items []json.RawMessage
+		if err := json.Unmarshal(raw, &items); err != nil {
+			return "", err
+		}
+		parts := make([]string, 0, len(items))
+		for _, item := range items {
+			value, err := directorTextValue(item, depth+1)
+			if err != nil {
+				return "", err
+			}
+			if value != "" {
+				parts = append(parts, value)
+			}
+		}
+		return strings.Join(parts, "；"), nil
+	case '{':
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			return "", err
+		}
+		priority := []string{"text", "content", "description", "value", "state", "action"}
+		keys := make([]string, 0, len(fields))
+		seen := make(map[string]bool, len(fields))
+		for _, key := range priority {
+			if _, ok := fields[key]; ok {
+				keys, seen[key] = append(keys, key), true
+			}
+		}
+		rest := make([]string, 0, len(fields))
+		for key := range fields {
+			if !seen[key] {
+				rest = append(rest, key)
+			}
+		}
+		sort.Strings(rest)
+		keys = append(keys, rest...)
+		if len(keys) == 1 && seen[keys[0]] {
+			return directorTextValue(fields[keys[0]], depth+1)
+		}
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			value, err := directorTextValue(fields[key], depth+1)
+			if err != nil {
+				return "", err
+			}
+			parts = append(parts, key+":"+value)
+		}
+		return strings.Join(parts, "；"), nil
+	default:
+		// Preserve scalar leaves inside structured text (for example coordinates),
+		// while a bare number/bool is still a type error for a string field.
+		if depth > 0 && json.Valid(raw) {
+			return string(raw), nil
+		}
+		return "", fmt.Errorf("文本字段必须为string、null、array或object")
+	}
+}
+
+func normalizeDirectorTextField(container map[string]json.RawMessage, key string) (bool, error) {
+	raw, ok := container[key]
+	if !ok || (len(bytes.TrimSpace(raw)) > 0 && bytes.TrimSpace(raw)[0] == '"') {
+		return false, nil
+	}
+	value, err := directorTextValue(raw, 0)
+	if err != nil {
+		return false, err
+	}
+	container[key], _ = json.Marshal(value)
+	return true, nil
+}
+
+// Normalize common model textual representations without changing string content.
+// Unknown fields remain raw so the strict decoder still rejects them.
 func normalizeDirectorDialogueArrays(output string) (string, error) {
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(output), &root); err != nil {
@@ -299,17 +395,31 @@ func normalizeDirectorDialogueArrays(output string) (string, error) {
 			delete(shot, "subject_action")
 			changed = true
 		}
+		for _, key := range directorShotTextFields {
+			fieldChanged, err := normalizeDirectorTextField(shot, key)
+			if err != nil {
+				return "", fmt.Errorf("镜头%d的%s无法读取: %w", i+1, key, err)
+			}
+			changed = changed || fieldChanged
+		}
 		if rawTimeline, ok := shot["action_timeline"]; ok {
 			var entries []map[string]json.RawMessage
 			if err := json.Unmarshal(rawTimeline, &entries); err == nil {
 				timelineChanged := false
-				for _, entry := range entries {
+				for entryIndex, entry := range entries {
 					if value, ok := entry["subject_action"]; ok {
 						if _, exists := entry["action"]; !exists {
 							entry["action"] = value
 						}
 						delete(entry, "subject_action")
 						timelineChanged = true
+					}
+					for _, key := range directorTimelineTextFields {
+						fieldChanged, err := normalizeDirectorTextField(entry, key)
+						if err != nil {
+							return "", fmt.Errorf("镜头%d时间轴%d的%s无法读取: %w", i+1, entryIndex+1, key, err)
+						}
+						timelineChanged = timelineChanged || fieldChanged
 					}
 				}
 				if timelineChanged {

@@ -76,6 +76,56 @@ func TestDirectorDialogueStringArrayNormalization(t *testing.T) {
 	}
 }
 
+func TestDirectorTextFieldCompatibility(t *testing.T) {
+	raw := strings.Replace(validSceneDirectorDraft, `"start_state":"女主站在门边"`, `"start_state":{"position":"门边","posture":"站立"}`, 1)
+	raw = strings.Replace(raw, `"end_state":"女主停在桌边"`, `"end_state":{"position":"桌边","posture":"站立","expression":"警惕"}`, 1)
+	raw = strings.Replace(raw, `"prompt_action":"缓步走到桌边"`, `"prompt_action":{"action":"缓步走到桌边","state":"停下"}`, 1)
+	raw = strings.Replace(raw, `"camera_angle":"平视"`, `"camera_angle":["平视",null,{"description":"略低机位"}]`, 1)
+	raw = strings.Replace(raw, `"checks":`, `"action_timeline":[{"start":0,"end":3,"subject":{"text":"女主"},"action":["走到桌边",{"state":"停下"}],"state":{"position":"桌边","posture":"站立"},"camera":{"value":"固定"}}],"checks":`, 1)
+	draft, err := parseSceneDirectorDraft(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shot := draft.Shots[0]
+	for _, want := range []string{"position:门边", "posture:站立"} {
+		if !strings.Contains(shot.StartState, want) {
+			t.Fatalf("start_state=%q missing %q", shot.StartState, want)
+		}
+	}
+	for _, want := range []string{"position:桌边", "posture:站立", "expression:警惕"} {
+		if !strings.Contains(shot.EndState, want) {
+			t.Fatalf("end_state=%q missing %q", shot.EndState, want)
+		}
+	}
+	if shot.PromptAction != "state:停下；action:缓步走到桌边" || shot.CameraAngle != "平视；略低机位" {
+		t.Fatalf("text normalization mismatch: %+v", shot)
+	}
+	entry := shot.ActionTimeline[0]
+	if entry.Subject != "女主" || entry.Action != "走到桌边；停下" || entry.State != "position:桌边；posture:站立" || entry.Camera != "固定" {
+		t.Fatalf("timeline normalization mismatch: %+v", entry)
+	}
+}
+
+func TestDirectorTextCompatibilityPreservesStringDialogueAndRejectsNumbers(t *testing.T) {
+	const dialogue = "原样对白，标点！！！"
+	raw := strings.Replace(validSceneDirectorDraft, `"dialogue":""`, `"dialogue":"原样对白，标点！！！"`, 1)
+	draft, err := parseSceneDirectorDraft(raw)
+	if err != nil || draft.Shots[0].Dialogue != dialogue {
+		t.Fatalf("dialogue=%q err=%v", draft.Shots[0].Dialogue, err)
+	}
+	for _, replacement := range []string{`"duration":"三"`, `"duration":{"value":3}`, `"action_timeline":[{"start":"零","end":3,"subject":"女主","action":"走","state":"停","camera":"固定"}]`} {
+		bad := raw
+		if strings.HasPrefix(replacement, `"duration"`) {
+			bad = strings.Replace(bad, `"duration":3`, replacement, 1)
+		} else {
+			bad = strings.Replace(bad, `"checks":`, replacement+`,"checks":`, 1)
+		}
+		if _, err := parseSceneDirectorDraft(bad); err == nil {
+			t.Fatalf("accepted illegal numeric value: %s", replacement)
+		}
+	}
+}
+
 func combatDraftShot(duration float64, start, end string) sceneDirectorDraftShot {
 	return sceneDirectorDraftShot{ActType: "rising", ShotType: "中景", CameraAngle: "平视", CameraMovement: "固定", Duration: duration, Description: "甲挥刀抢线，乙横移格挡并后撤落稳", StartState: start, EndState: end, PromptSubject: "甲乙位置与持刀关系清晰", PromptAction: "实时速度，甲迅速挥刀抢线，乙立即横移格挡并后撤落稳，无慢动作停顿", PromptCamera: "固定中景保持空间轴线", PromptLighting: "日间侧光", PromptStyle: "写实武侠", NegativePrompt: "慢动作，子弹时间，悬停，动作拖沓，重复动作", Checks: []string{"攻防结果可见"}}
 }
