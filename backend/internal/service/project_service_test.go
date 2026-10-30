@@ -2016,6 +2016,35 @@ func TestGenerateSceneVideoActionRepairsStaticCombatInsteadOfOnlyReturningValida
 	}
 }
 
+func TestGenerateSceneVideoActionReturnsBestEffortAfterThreeCombatRepairs(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SharedAssetReference{}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &sequenceTextProvider{responses: []string{
+		"The woman performs martial forms.",
+		"The woman sweeps the branch in broad arcs.",
+		"The woman performs martial forms at full real-time speed.",
+		"The woman sweeps the branch in broad arcs at full real-time speed.",
+		"The woman brandishes the branch at full real-time speed.",
+	}}
+	ps.textProvider = provider
+	project := models.Project{Title: "best effort"}
+	ps.db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, SceneMode: "武戏", Duration: 8, Content: "一名成年女子以桃枝为剑，依次完成斜撩、直刺、横削，最后收步直立。"}
+	ps.db.Create(&scene)
+	got, err := ps.GenerateSceneVideoAction(&scene)
+	if err != nil {
+		t.Fatalf("three imperfect repairs must not be discarded behind an error: %v", err)
+	}
+	if provider.calls != 5 {
+		t.Fatalf("calls=%d, want initial + general repair + 3 combat repairs", provider.calls)
+	}
+	if strings.TrimSpace(got) == "" || !strings.Contains(got, "brandishes") {
+		t.Fatalf("latest model result was not returned for review: %q", got)
+	}
+}
+
 func TestEffectiveGenerationSystemKeepsCombatContractWhenPolicyOverrides(t *testing.T) {
 	base := "H3核心契约：正常实时速度，禁止慢动作"
 	policy := &EffectivePromptPolicy{Content: "项目偏好：低机位", Source: "project"}

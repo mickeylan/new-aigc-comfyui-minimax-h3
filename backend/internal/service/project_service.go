@@ -2342,7 +2342,10 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		return true
 	}
 	actionTrustIssues := func(value string) string {
-		issues := make([]string, 0, 5)
+		issues := make([]string, 0, 8)
+		if strings.TrimSpace(value) == "" {
+			issues = append(issues, "模型返回了空动作正文")
+		}
 		hanCheck := value
 		for _, name := range parseSceneCharacters(sc.Characters) {
 			hanCheck = strings.ReplaceAll(hanCheck, name, "")
@@ -2374,18 +2377,34 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		if !h3SoloSwordTimingContractMatches(canonicalSceneContent, value, normalizeSceneDuration(sc.Duration), expectedShotCount) {
 			issues = append(issues, "单人剑术时间线不连续；旁白期间必须持续真实速度的步法、重心和剑路，最后约1.5秒才收势，禁止提前站桩或平均拉慢单招")
 		}
-		seen := map[int]bool{}
-		for _, marker := range h3ShotMarkerPattern.FindAllStringSubmatch(value, -1) {
-			if len(marker) == 2 {
-				n, _ := strconv.Atoi(marker[1])
-				seen[n] = true
+		for _, match := range h3SubjectTagPattern.FindAllStringSubmatch(value, -1) {
+			n, _ := strconv.Atoi(match[1])
+			if n < 1 || n > len(refLines) {
+				issues = append(issues, fmt.Sprintf("Subject编号%d超出已选参考图范围1-%d", n, len(refLines)))
 			}
+		}
+		seen := map[int]bool{}
+		invalidMarkers := make([]string, 0)
+		for _, marker := range h3ShotMarkerPattern.FindAllStringSubmatch(value, -1) {
+			if len(marker) != 2 {
+				invalidMarkers = append(invalidMarkers, "无法读取的Shot标记")
+				continue
+			}
+			n, _ := strconv.Atoi(marker[1])
+			if n < 1 || n > expectedShotCount {
+				invalidMarkers = append(invalidMarkers, fmt.Sprintf("Shot %d超出范围1-%d", n, expectedShotCount))
+			}
+			if seen[n] {
+				invalidMarkers = append(invalidMarkers, fmt.Sprintf("Shot %d重复", n))
+			}
+			seen[n] = true
 		}
 		if len(seen) != expectedShotCount {
 			issues = append(issues, fmt.Sprintf("Shot数量为%d，期望%d", len(seen), expectedShotCount))
 		}
+		issues = append(issues, invalidMarkers...)
 		if len(issues) == 0 {
-			return "未知结构问题"
+			return "动作正文未通过内部路由检查；已保留模型原文供继续使用"
 		}
 		return strings.Join(issues, "；")
 	}
@@ -2414,7 +2433,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		return "", fmt.Errorf("AI视频动作未能按可见阶段拆成%d个内部Shot：%s", suggestedShotCount, actionTrustIssues(out))
 	}
 	if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
-		combatValid := actionTrusted(out, true) && h3ActionTempoContractMatches(out) && h3SoloSwordPracticeContractMatches(canonicalSceneContent, out) && h3SoloSwordTimingContractMatches(canonicalSceneContent, out, normalizeSceneDuration(sc.Duration), expectedShotCount) && !regexp.MustCompile(`[\p{Han}]`).MatchString(out)
+		combatValid := actionTrusted(out, true)
 		if !combatValid {
 			repairSource := useSubjectTags(strings.TrimSpace(canonicalSceneContent+"\n"+authoritativeFallback()), refLines)
 			failedDraft := out
@@ -2429,7 +2448,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 					continue
 				}
 				candidate := useSubjectTags(enforceH3ActionTempo(prepareGeneratedAction(repaired, true), sceneMode), refLines)
-				candidateValid := actionTrusted(candidate, true) && h3SoloSwordPracticeContractMatches(canonicalSceneContent, candidate) && h3SoloSwordTimingContractMatches(canonicalSceneContent, candidate, normalizeSceneDuration(sc.Duration), expectedShotCount) && !regexp.MustCompile(`[\p{Han}]`).MatchString(candidate)
+				candidateValid := actionTrusted(candidate, true)
 				if candidateValid {
 					out = candidate
 					generationSource = fmt.Sprintf("combat_skill_repair_%d", attempt)
@@ -2442,7 +2461,16 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 				failedDraft = candidate
 			}
 			if !repairedOK {
-				return "", fmt.Errorf("AI武戏动作补全失败（已定向修复3次）：%s", strings.Join(failures, "；"))
+				// Do not discard three paid model responses behind a validation error.
+				// Keep the latest non-empty best-effort action and surface diagnostics in
+				// logs; MiniMax H3 itself is tolerant of imperfect prose and structure.
+				if strings.TrimSpace(failedDraft) != "" {
+					out = failedDraft
+				} else {
+					out = useSubjectTags(enforceH3ActionTempo(authoritativeFallback(), sceneMode), refLines)
+				}
+				generationSource = "combat_skill_repair_best_effort"
+				log.Printf("[h3-combat-repair-warning] scene=%d attempts=3 issues=%q returning_best_effort=%q", sc.ID, strings.Join(failures, "；"), out)
 			}
 		}
 		out = enforceSoloSwordTimingSummary(canonicalSceneContent, out, normalizeSceneDuration(sc.Duration), expectedShotCount)
