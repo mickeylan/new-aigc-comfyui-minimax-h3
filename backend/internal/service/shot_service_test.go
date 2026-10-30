@@ -1081,6 +1081,50 @@ func TestHandleDeleteShotReturns422WithoutMutation(t *testing.T) {
 	}
 }
 
+func TestReplaceShotsDetachesSelectedContinuityFrameBeforeDeletingCandidates(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	if err := db.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "continuity fk"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	source := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Duration: 5}
+	consumer := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 2, Duration: 5, VideoFile: "dependent.mp4", VideoTaskID: "dependent-task"}
+	if err := db.Create(&source).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&consumer).Error; err != nil {
+		t.Fatal(err)
+	}
+	frame := models.FrameCandidate{ProjectID: project.ID, SceneID: source.ID, VideoTaskID: "source-task", Type: models.FrameCandidateSelected, FrameIndex: 1, ImageFile: "selected.png"}
+	if err := db.Create(&frame).Error; err != nil {
+		t.Fatal(err)
+	}
+	continuity := models.SceneContinuity{SceneID: consumer.ID, Mode: models.ContinuityModeContinue, SourceSceneID: &source.ID, SelectedFrameID: &frame.ID, SourceVideoTaskID: "source-task", Status: "ready"}
+	if err := db.Create(&continuity).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := NewShotService(db).ReplaceShots(source.ID, []models.Shot{{ShotType: "新分镜", Duration: 5}}); err != nil {
+		t.Fatalf("new shot failed because selected frame was still referenced: %v", err)
+	}
+	var frameCount int64
+	if err := db.Model(&models.FrameCandidate{}).Where("scene_id = ?", source.ID).Count(&frameCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if frameCount != 0 {
+		t.Fatalf("derived frames were not removed: %d", frameCount)
+	}
+	if err := db.First(&continuity, continuity.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if continuity.SelectedFrameID != nil || continuity.Status != "source_invalidated" {
+		t.Fatalf("continuity was not detached before frame deletion: %+v", continuity)
+	}
+}
+
 func TestShotServicePreservesSceneNegativeConstraints(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	project := models.Project{Title: "negative constraints"}

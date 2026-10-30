@@ -937,10 +937,14 @@ func aggregateShotsIntoScene(db *gorm.DB, sceneID uint, shots []models.Shot) err
 	if err := MarkSceneCandidatesStale(db, scene.ProjectID, sceneID, "", "导演镜头已修改"); err != nil {
 		return err
 	}
-	if err := db.Where("scene_id = ?", sceneID).Delete(&models.FrameCandidate{}).Error; err != nil {
+	// SceneContinuity.SelectedFrameID is a real NO ACTION foreign key. Detach
+	// every downstream continuity consumer before deleting this Scene's derived
+	// frame candidates; otherwise a perfectly valid new Shot can fail with SQLite
+	// FOREIGN KEY constraint failed (787) on databases that already selected a frame.
+	if err := invalidateContinuityDependentsTx(db, scene.ProjectID, []uint{sceneID}, "上游导演镜头已修改"); err != nil {
 		return err
 	}
-	if err := invalidateContinuityDependentsTx(db, scene.ProjectID, []uint{sceneID}, "上游导演镜头已修改"); err != nil {
+	if err := db.Where("scene_id = ?", sceneID).Delete(&models.FrameCandidate{}).Error; err != nil {
 		return err
 	}
 	if err := markSceneAudioCandidatesStale(db, scene.ProjectID, sceneID, "导演Shot或权威Dialogue区间已修改"); err != nil {
