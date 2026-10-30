@@ -279,12 +279,60 @@ func normalizeDirectorActionTimeline(entries []models.ShotActionTimelineEntry, d
 	}
 }
 
+// Normalize only the unambiguous string-array variant emitted by some models.
+// Keep all other fields raw so the strict decoder still rejects unknown fields.
+func normalizeDirectorDialogueArrays(output string) (string, error) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(output), &root); err != nil {
+		return "", err
+	}
+	var shots []map[string]json.RawMessage
+	if err := json.Unmarshal(root["shots"], &shots); err != nil {
+		return "", err
+	}
+	changed := false
+	for i, shot := range shots {
+		raw := bytes.TrimSpace(shot["dialogue"])
+		if len(raw) == 0 || raw[0] != '[' {
+			continue
+		}
+		var items []json.RawMessage
+		if err := json.Unmarshal(raw, &items); err != nil {
+			return "", fmt.Errorf("镜头%d的dialogue数组无效: %w", i+1, err)
+		}
+		parts := make([]string, len(items))
+		for j, item := range items {
+			item = bytes.TrimSpace(item)
+			if len(item) == 0 || item[0] != '"' {
+				return "", fmt.Errorf("镜头%d的dialogue数组第%d项必须为原始台词字符串，不能自动丢弃对象或其他类型", i+1, j+1)
+			}
+			if err := json.Unmarshal(item, &parts[j]); err != nil {
+				return "", err
+			}
+		}
+		// No added separators: authoritative dialogue range matching uses the exact
+		// concatenated rune sequence, including the original punctuation and spaces.
+		shot["dialogue"], _ = json.Marshal(strings.Join(parts, ""))
+		changed = true
+	}
+	if !changed {
+		return output, nil
+	}
+	root["shots"], _ = json.Marshal(shots)
+	encoded, err := json.Marshal(root)
+	return string(encoded), err
+}
+
 func parseSceneDirectorDraft(output string) (*sceneDirectorDraft, error) {
 	return parseSceneDirectorDraftWithOptions(output, false)
 }
 
 func parseSceneDirectorDraftWithOptions(output string, preserveShortShots bool) (*sceneDirectorDraft, error) {
-	dec := json.NewDecoder(bytes.NewBufferString(unwrapSceneDirectorDraftEnvelope(output)))
+	normalized, err := normalizeDirectorDialogueArrays(unwrapSceneDirectorDraftEnvelope(output))
+	if err != nil {
+		return nil, err
+	}
+	dec := json.NewDecoder(bytes.NewBufferString(normalized))
 	dec.DisallowUnknownFields()
 	var draft sceneDirectorDraft
 	if err := dec.Decode(&draft); err != nil {
@@ -1062,7 +1110,7 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 		actual.WriteString(text)
 	}
 	if actual.String() != expected.String() {
-		return fmt.Errorf("导演草稿对白未逐字覆盖结构化对白，禁止遗漏、改写、重复或新增")
+		return fmt.Errorf("导演方案未逐字覆盖场景正文中的原始台词，禁止遗漏、改写、重复或新增")
 	}
 	type dialogueSpan struct {
 		start, end int
@@ -1198,6 +1246,12 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "请填写有效的场景概况（最多4000字）和补充要求（最多2000字）"})
 		return
 	}
+	// Director generation is an explicit write operation: materialize only unambiguous
+	// speech from Scene.Content before taking the snapshot used by generation and save.
+	if err := s.DB.Transaction(func(tx *gorm.DB) error { return syncExplicitSceneSpeech(tx, scene) }); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "同步场景正文台词失败，请稍后重试"})
+		return
+	}
 	assets, err := s.sceneAssetBible(scene)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -1224,12 +1278,12 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	authoritativeCharacterNames := map[string]bool{}
 	authoritativeCharacterList := []string{}
 	dialogueDuration := 0.0
+	if err := s.DB.Where("scene_id = ? AND project_id = ?", scene.ID, scene.ProjectID).Order("`order` ASC, `id` ASC").Find(&dialogues).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	dialogues = authoritativeSceneDialogues(dialogues)
 	if req.Mode == "dialogue_rhythm" || req.Mode == "action_rhythm" || req.Mode == "combat_design" {
-		if err := s.DB.Where("scene_id = ? AND project_id = ?", scene.ID, scene.ProjectID).Order("`order` ASC, `id` ASC").Find(&dialogues).Error; err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
-			return
-		}
-		dialogues = authoritativeSceneDialogues(dialogues)
 		if req.Mode == "dialogue_rhythm" {
 			var listenerErr error
 			authoritativeCharacterList, authoritativeCharacterNames, listenerErr = authoritativeSceneListenerCharacters(s.DB, scene)
@@ -1249,9 +1303,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		req.Requirements = strings.TrimSpace(req.Requirements + "\n" + instruction)
 	}
 	if req.Mode == "standard" {
-		var modeDialogues []models.Dialogue
-		_ = s.DB.Where("scene_id = ? AND project_id = ?", scene.ID, scene.ProjectID).Order("`order` ASC, `id` ASC").Find(&modeDialogues).Error
-		resolvedMode := classifyH3SceneMode(scene, nil, modeDialogues)
+		resolvedMode := classifyH3SceneMode(scene, nil, dialogues)
 		modeInstruction := h3SceneModeInstruction(resolvedMode)
 		instruction = strings.TrimSpace(instruction + "\n" + modeInstruction)
 		req.Requirements = strings.TrimSpace(req.Requirements + "\n用户选择的导演类型：" + string(resolvedMode) + "。\n" + modeInstruction)
@@ -1308,7 +1360,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 			repairResult = "still_invalid: " + err.Error()
 		}
 		serverRepairs = append(serverRepairs, serverRepair{Stage: "model_repair", Reason: initialValidationError, Result: repairResult})
-		if err != nil && strings.Contains(err.Error(), "导演草稿对白未逐字覆盖结构化对白") && draft != nil {
+		if err != nil && strings.Contains(err.Error(), "导演方案未逐字覆盖场景正文中的原始台词") && draft != nil {
 			restoreReason := err.Error()
 			if restoreErr := restoreDialogueRhythmDraftText(draft, dialogues); restoreErr != nil {
 				err = restoreErr
@@ -1338,7 +1390,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	}
 	if req.Mode == "dialogue_rhythm" {
 		response["dialogue_review"] = buildDialogueRhythmReview(draft, dialogues)
-		response["dialogue_snapshot"] = dialogueSnapshotToken(dialogues)
 	}
+	response["dialogue_snapshot"] = dialogueSnapshotToken(dialogues)
 	c.JSON(200, response)
 }

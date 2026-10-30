@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"math"
 	"strings"
 	"testing"
@@ -11,6 +12,44 @@ import (
 const validSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中景","camera_angle":"平视","camera_movement":"固定","duration":3,"description":"女主走到桌边","dialogue":"","emotion":"警惕","transition_type":"cut","transition_note":"接视线","start_state":"女主站在门边","end_state":"女主停在桌边","prompt_subject":"女主面部清晰","prompt_action":"缓步走到桌边","prompt_camera":"中景平视构图","prompt_lighting":"室内暖侧光","prompt_style":"真人写实电影质感","negative_prompt":"水印，多余人物","checks":["动作可在3秒完成","无新增对白"]}]}`
 
 const shortSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中景","camera_angle":"平视","camera_movement":"固定","duration":2,"description":"女主走到桌边","dialogue":"","emotion":"警惕","transition_type":"cut","transition_note":"接视线","start_state":"女主站在门边","end_state":"女主停在桌边","prompt_subject":"女主面部清晰","prompt_action":"缓步走到桌边","prompt_camera":"中景平视构图","prompt_lighting":"室内暖侧光","prompt_style":"真人写实电影质感","negative_prompt":"水印，多余人物","checks":["动作可在2秒完成","无新增对白"]}]}`
+
+func TestDirectorDialogueStringArrayNormalization(t *testing.T) {
+	for _, tc := range []struct{ value, want string }{
+		{`[]`, ""}, {`["你好，","别走！！！"]`, "你好，别走！！！"},
+		{`[" 原文 ","\n第二句"]`, " 原文 \n第二句"}, {`"原有字符串"`, "原有字符串"}, {`null`, ""},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			raw := strings.Replace(validSceneDirectorDraft, `"dialogue":""`, `"dialogue":`+tc.value, 1)
+			normalized, err := normalizeDirectorDialogueArrays(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result sceneDirectorDraft
+			if err := json.Unmarshal([]byte(normalized), &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.Shots[0].Dialogue != tc.want {
+				t.Fatalf("dialogue=%q want=%q", result.Shots[0].Dialogue, tc.want)
+			}
+		})
+	}
+	for _, value := range []string{`[null]`, `[3]`, `[{"text":"不能静默丢失说话者"}]`, `[["嵌套"]]`} {
+		raw := strings.Replace(validSceneDirectorDraft, `"dialogue":""`, `"dialogue":`+value, 1)
+		if _, err := normalizeDirectorDialogueArrays(raw); err == nil {
+			t.Fatalf("accepted ambiguous array %s", value)
+		}
+	}
+	for _, preserve := range []bool{false, true} {
+		raw := strings.Replace(validSceneDirectorDraft, `"dialogue":""`, `"dialogue":[]`, 1)
+		if _, err := parseSceneDirectorDraftWithOptions(raw, preserve); err != nil {
+			t.Fatal(err)
+		}
+		raw = strings.Replace(raw, `"checks":`, `"unknown_field":true,"checks":`, 1)
+		if _, err := parseSceneDirectorDraftWithOptions(raw, preserve); err == nil {
+			t.Fatal("normalization bypassed strict field validation")
+		}
+	}
+}
 
 func combatDraftShot(duration float64, start, end string) sceneDirectorDraftShot {
 	return sceneDirectorDraftShot{ActType: "rising", ShotType: "中景", CameraAngle: "平视", CameraMovement: "固定", Duration: duration, Description: "甲挥刀抢线，乙横移格挡并后撤落稳", StartState: start, EndState: end, PromptSubject: "甲乙位置与持刀关系清晰", PromptAction: "实时速度，甲迅速挥刀抢线，乙立即横移格挡并后撤落稳，无慢动作停顿", PromptCamera: "固定中景保持空间轴线", PromptLighting: "日间侧光", PromptStyle: "写实武侠", NegativePrompt: "慢动作，子弹时间，悬停，动作拖沓，重复动作", Checks: []string{"攻防结果可见"}}

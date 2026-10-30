@@ -115,6 +115,86 @@ func TestShotServiceStoresManualDirectorStructure(t *testing.T) {
 	}
 }
 
+func TestSyncExplicitSceneSpeechSupportsDirectorSaveIdempotently(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "explicit speech"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Content: "【对白｜甲】你好。\n【对白｜乙】别走！"}
+	db.Create(&scene)
+
+	if err := db.Transaction(func(tx *gorm.DB) error { return syncExplicitSceneSpeech(tx, &scene) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error { return syncExplicitSceneSpeech(tx, &scene) }); err != nil {
+		t.Fatal(err)
+	}
+	dialogues, snapshot, err := loadSceneDialogueSnapshot(db, scene.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dialogues) != 2 || dialogues[0].ID == 0 || dialogues[1].ID == 0 || dialogues[0].Text != "你好。" || dialogues[1].Text != "别走！" {
+		t.Fatalf("materialized dialogues=%+v", dialogues)
+	}
+	shots, err := NewShotService(db).ReplaceShotsWithDialogueSnapshot(scene.ID, []models.Shot{
+		{ShotType: "甲近景", Duration: 3, Dialogue: "你好。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, PromptSubject: "甲可见", PromptAction: "甲同步口型"},
+		{ShotType: "乙近景", Duration: 3, Dialogue: "别走！", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, PromptSubject: "乙可见", PromptAction: "乙同步口型"},
+	}, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shots) != 2 || len(shots[0].DialogueRanges) != 1 || shots[0].DialogueRanges[0].DialogueID != dialogues[0].ID || shots[1].DialogueRanges[0].DialogueID != dialogues[1].ID {
+		t.Fatalf("real dialogue IDs not assigned: %+v", shots)
+	}
+}
+
+func TestSyncExplicitSceneSpeechPreservesExistingDataAndFiltersNonAuthoritativeRows(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "preserve speech"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Content: "【对白｜甲】保留我。\n【对白｜乙】新增我。"}
+	db.Create(&scene)
+	existing := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "甲", SpeechType: "dialogue", Text: "保留我。", Voice: "old-voice", AudioFile: "old.wav", Status: "ready"}
+	nonAuthoritative := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 2, Text: "动作描写，不应进入快照", AudioFile: "keep-too.wav"}
+	db.Create(&existing)
+	db.Create(&nonAuthoritative)
+	if err := db.Transaction(func(tx *gorm.DB) error { return syncExplicitSceneSpeech(tx, &scene) }); err != nil {
+		t.Fatal(err)
+	}
+	var rows []models.Dialogue
+	db.Where("scene_id = ?", scene.ID).Order("`order`, id").Find(&rows)
+	if len(rows) != 3 || rows[0].ID != existing.ID || rows[0].Voice != "old-voice" || rows[0].AudioFile != "old.wav" || rows[0].Status != "ready" {
+		t.Fatalf("existing dialogue changed or missing row duplicated: %+v", rows)
+	}
+	authoritative, _, err := loadSceneDialogueSnapshot(db, scene.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(authoritative) != 2 || authoritative[0].Text != "保留我。" || authoritative[1].Text != "新增我。" {
+		t.Fatalf("non-authoritative row leaked into snapshot: %+v", authoritative)
+	}
+}
+
+func TestReplaceShotsRejectsAIRewrittenSceneSpeechWithoutMutation(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "reject rewrite"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Content: "【对白｜甲】原文。"}
+	db.Create(&scene)
+	if err := db.Transaction(func(tx *gorm.DB) error { return syncExplicitSceneSpeech(tx, &scene) }); err != nil {
+		t.Fatal(err)
+	}
+	_, snapshot, _ := loadSceneDialogueSnapshot(db, scene.ID)
+	_, err := NewShotService(db).ReplaceShotsWithDialogueSnapshot(scene.ID, []models.Shot{{ShotType: "近景", Duration: 3, Dialogue: "AI改写。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}}, snapshot)
+	if err == nil || !strings.Contains(err.Error(), "场景正文中的原始台词") || strings.Contains(err.Error(), "Dialogue") {
+		t.Fatalf("unexpected rewrite error: %v", err)
+	}
+	var count int64
+	db.Model(&models.Shot{}).Where("scene_id = ?", scene.ID).Count(&count)
+	if count != 0 {
+		t.Fatalf("failed validation wrote %d shots", count)
+	}
+}
+
 func TestShotServicePersistsExplicitDialogueRangesAcrossCuts(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	project := models.Project{Title: "ranges"}

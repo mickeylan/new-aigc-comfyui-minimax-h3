@@ -67,6 +67,39 @@ func loadSceneDialogueSnapshot(tx *gorm.DB, sceneID uint) ([]models.Dialogue, st
 	return dialogues, dialogueSnapshotToken(dialogues), nil
 }
 
+// syncExplicitSceneSpeech persists only speech that is explicitly present in Scene.Content.
+// Existing rows remain authoritative and untouched, including their IDs, audio and review state.
+func syncExplicitSceneSpeech(tx *gorm.DB, scene *models.Scene) error {
+	if scene == nil || scene.ID == 0 || scene.ProjectID == 0 {
+		return fmt.Errorf("场景信息无效，无法同步正文台词")
+	}
+	var stored []models.Dialogue
+	if err := tx.Where("scene_id = ? AND project_id = ?", scene.ID, scene.ProjectID).Order("`order`, id").Find(&stored).Error; err != nil {
+		return err
+	}
+	merged := mergeExplicitSceneSpeech(scene, stored)
+	if len(merged) == len(stored) {
+		return nil
+	}
+	maxOrder := 0
+	for _, dialogue := range stored {
+		if dialogue.Order > maxOrder {
+			maxOrder = dialogue.Order
+		}
+	}
+	for _, dialogue := range merged[len(stored):] {
+		maxOrder++
+		dialogue.ID = 0
+		dialogue.SceneID = scene.ID
+		dialogue.ProjectID = scene.ProjectID
+		dialogue.Order = maxOrder
+		if err := tx.Create(&dialogue).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validateDialogueShotTiming(shots []models.Shot, dialogues []models.Dialogue) error {
 	draft := &sceneDirectorDraft{Shots: make([]sceneDirectorDraftShot, len(shots))}
 	for i, shot := range shots {
@@ -243,6 +276,7 @@ func assignShotDialogueRanges(tx *gorm.DB, sceneID uint, shots []models.Shot) er
 	if err := tx.Where("scene_id = ?", sceneID).Order("`order`, id").Find(&dialogues).Error; err != nil {
 		return err
 	}
+	dialogues = authoritativeSceneDialogues(dialogues)
 	// Build authoritative rune sequence from structured dialogues.
 	canonical := make([][]rune, len(dialogues))
 	groupKeys := make([]string, len(dialogues))
@@ -258,7 +292,7 @@ func assignShotDialogueRanges(tx *gorm.DB, sceneID uint, shots []models.Shot) er
 		authRunes = append(authRunes, canonical[i]...)
 	}
 	if string(shotRunes) != string(authRunes) {
-		return fmt.Errorf("镜头台词与结构化Dialogue不一致，请重新生成对白节奏拆镜")
+		return fmt.Errorf("镜头台词与场景正文中的原始台词不一致，请重新生成导演方案；AI 不得删改、遗漏或新增台词")
 	}
 	groupNo, groupOffset := 0, 0
 	for i := range dialogues {
@@ -311,7 +345,7 @@ func assignShotDialogueRanges(tx *gorm.DB, sceneID uint, shots []models.Shot) er
 		offset = 0
 	}
 	if dialogueIndex != len(dialogues) || offset != 0 {
-		return fmt.Errorf("导演镜头对白未完整覆盖结构化Dialogue")
+		return fmt.Errorf("导演镜头未完整覆盖场景正文中的原始台词，请重新生成导演方案")
 	}
 	return nil
 }

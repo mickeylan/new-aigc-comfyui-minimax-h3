@@ -1088,7 +1088,7 @@ func (s *Service) HandleCreateShots(c *gin.Context) {
 		return
 	}
 	if len(authoritativeSceneDialogues(authoritativeDialogues)) > 0 && strings.TrimSpace(req.DialogueSnapshot) == "" {
-		c.JSON(http.StatusConflict, gin.H{"error": "当前Scene含结构化Dialogue，保存导演镜头必须携带dialogue_snapshot；请重新加载场景后再保存"})
+		c.JSON(http.StatusConflict, gin.H{"error": "场景原始台词校验信息已过期，请重新生成导演方案后再保存", "code": "dialogue_snapshot_required"})
 		return
 	}
 	directorSource := strings.TrimSpace(req.DirectorSource)
