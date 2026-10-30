@@ -2550,6 +2550,44 @@ func TestPronounAttributedQuotedShoutIsRecoveredVerbatim(t *testing.T) {
 	}
 }
 
+func TestTimelinePronounShoutKeepsContinuousNamedSubject(t *testing.T) {
+	content := `【6秒·苍黄荒地·外景】
+0—1.8秒｜中远景连续跟拍。烈日压在龟裂的黄土上，矮灌木被热风压得接连摇晃。虬髯大汉从画面侧后方逼近，右手提刀，肩背随沉重步伐上下起伏。鞋底接连踏过碎砾，细小砂砾被碾向两侧；朴刀随着步子斜掠日光，刀刃骤然闪过一道冷光。
+1.8—3.4秒｜镜头随他靠近。虬髯大汉忽然收住迈出的半步，鞋底停在凌乱足迹旁。重心前倾片刻，随即压稳。他垂下眼，视线先落在被踩倒的枯草上，再沿着交错的脚印移向前方；眉骨缓缓压低，狭长的深褐色目光追到脚印没入灌木深处。鼻翼随着粗重呼吸微微张开。
+3.4—4.6秒｜近景保留他的面部与上身。确认女童逃向灌木深处后，他抬起脸，目光越过低矮枝叶锁住灌木间的空隙。肩背随之绷紧，右手握刀向前一送，刀尖随动作指向灌木深处。
+4.6—6秒｜他隔着摇晃的灌木高声喊道：“妖孽，哪里走！！！”。喊声落下，虬髯大汉仍盯住灌木间的空隙，刀身斜压于身侧；前脚没有收回，身体重心已经压向追赶方向，停在随时继续深入的姿态。`
+	sc := &models.Scene{Characters: "虬髯大汉,女童", VisibleCharacters: "虬髯大汉,女童", Content: content, VideoPrompt: "[Shot 1] <Subject 1>追赶并高声喊道。<Subject 2>逃向灌木。", Duration: 6}
+
+	explicit := explicitSceneSpeech(sc)
+	if len(explicit) != 1 || explicit[0].Character != "虬髯大汉" || explicit[0].SpeechType != "dialogue" || explicit[0].Text != "妖孽，哪里走！！！" {
+		t.Fatalf("timeline explicit speech = %+v", explicit)
+	}
+
+	ps := newTestProjectService(t)
+	if err := ps.db.Create(sc).Error; err != nil {
+		t.Fatal(err)
+	}
+	dubs := ps.sceneVideoDialogues(sc)
+	if len(dubs) != 1 || dubs[0].Character != "虬髯大汉" || dubs[0].Text != "妖孽，哪里走！！！" {
+		t.Fatalf("timeline scene dialogues = %+v", dubs)
+	}
+	prompt := buildMiniMaxH3RefPrompt(sc, nil, dubs, []string{"- <Picture 1>：角色「虬髯大汉」四视图", "- <Picture 2>：角色「女童」四视图"})
+	if !strings.Contains(prompt, "<d>[Chinese] 妖孽，哪里走！！！</d>") || strings.Contains(prompt, "No dialogue") {
+		t.Fatalf("timeline shout missing from compiled H3 prompt: %s", prompt)
+	}
+}
+
+func TestTimelinePronounSpeechRejectsDifferentOrMultipleSubjects(t *testing.T) {
+	for _, content := range []string{
+		"0—1秒｜甲向前走；1—2秒｜乙转身离开；2—3秒｜甲和乙同时停下。他喊道：“等等！”",
+		"0—1秒｜甲和乙并肩走近；1—2秒｜镜头掠过两人；2—3秒｜他喊道：“等等！”",
+	} {
+		if got := explicitSceneSpeech(&models.Scene{Characters: "甲,乙", Content: content}); len(got) != 0 {
+			t.Fatalf("ambiguous timeline pronoun attributed for %q: %+v", content, got)
+		}
+	}
+}
+
 func TestPronounSpeechAttributionSwitchesOnlyOnClearPriorSubject(t *testing.T) {
 	sc := &models.Scene{Characters: "甲,乙", Content: "甲推门进来。他说道：“先走。”乙抬头看他。她说道：“等等。”"}
 	got := explicitSceneSpeech(sc)

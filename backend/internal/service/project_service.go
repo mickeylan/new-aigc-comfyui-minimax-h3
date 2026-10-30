@@ -2822,28 +2822,25 @@ func trailingQuotedSpeechSpeaker(content string, match []int, names []string) st
 	return matched
 }
 
+var sceneTimelinePrefixPattern = regexp.MustCompile(`^\s*\d+(?:\.\d+)?\s*[—–-]\s*\d+(?:\.\d+)?\s*秒\s*[｜|]\s*`)
+
 func precedingPronounSpeaker(content string, pronounPos int, names []string) string {
-	prefix := content[:pronounPos]
-	boundary := strings.LastIndexAny(prefix, "。！？!?\r\n")
-	start := 0
-	if boundary >= 0 {
-		_, size := utf8.DecodeRuneInString(prefix[boundary:])
-		start = boundary + size
-	}
-	segments := []string{strings.TrimSpace(prefix[start:])}
-	if boundary >= 0 {
-		prior := strings.TrimRight(prefix[:boundary], "。！？!?\r\n ")
-		priorStart := 0
-		if priorBoundary := strings.LastIndexAny(prior, "。！？!?\r\n"); priorBoundary >= 0 {
-			_, size := utf8.DecodeRuneInString(prior[priorBoundary:])
-			priorStart = priorBoundary + size
-		}
-		segments = append(segments, strings.TrimSpace(prior[priorStart:]))
-	}
-	for _, segment := range segments {
+	// Walk back through a short run of prose. Storyboard timelines often put camera-only
+	// sentences and pronoun-led actions between the named subject and their quoted line.
+	segments := strings.FieldsFunc(content[:pronounPos], func(r rune) bool {
+		return strings.ContainsRune("。！？!?；;\r\n", r)
+	})
+	for checked := 0; len(segments) > 0 && checked < 16; checked++ {
+		segment := strings.TrimSpace(segments[len(segments)-1])
+		segments = segments[:len(segments)-1]
+		segment = sceneTimelinePrefixPattern.ReplaceAllString(segment, "")
 		segment = strings.TrimLeft(segment, `"”'’ `)
-		// Require the antecedent to be the grammatical subject at the start of the prose.
-		// Names appearing later can be an object/listener and must not steal attribution.
+		if segment == "" {
+			continue
+		}
+
+		// Require a named antecedent to be the grammatical subject. A later mention (for
+		// example “确认女童逃走后”) is an object and must not steal attribution.
 		speaker := ""
 		for _, name := range names {
 			if strings.HasPrefix(segment, name) {
@@ -2857,7 +2854,7 @@ func precedingPronounSpeaker(content string, pronounPos int, names []string) str
 			continue
 		}
 		firstClause := segment
-		if end := strings.IndexAny(firstClause, "，,；;"); end >= 0 {
+		if end := strings.IndexAny(firstClause, "，,"); end >= 0 {
 			firstClause = firstClause[:end]
 		}
 		for _, name := range names {
@@ -2881,6 +2878,16 @@ func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Di
 		// 必须同时具备已知角色名、明确说话动词和引号原文，避免把剧情说明猜成对白。
 		pattern := regexp.MustCompile(regexp.QuoteMeta(name) + `[^。！？!?\r\n]{0,30}?(?:厉喝|怒喝|大喝|喝道|喝喊|喊道|叫道|高喊|说道|说|问道|答道|开口道)\s*[:：]?\s*["“]([^"”]+)["”]`)
 		for _, match := range pattern.FindAllStringSubmatchIndex(content, -1) {
+			clauseStart := 0
+			if boundary := strings.LastIndexAny(content[:match[0]], "。！？!?；;\r\n"); boundary >= 0 {
+				_, size := utf8.DecodeRuneInString(content[boundary:])
+				clauseStart = boundary + size
+			}
+			beforeName := strings.Trim(strings.TrimSpace(content[clauseStart:match[0]]), `"“”'‘’`)
+			beforeName = sceneTimelinePrefixPattern.ReplaceAllString(beforeName, "")
+			if beforeName != "" && !strings.Contains(beforeName, "传来") && !strings.Contains(beforeName, "响起") {
+				continue // the name is an object or other non-subject mention
+			}
 			lead := content[match[0]+len(name) : match[2]]
 			shadowed := false
 			for _, other := range names {

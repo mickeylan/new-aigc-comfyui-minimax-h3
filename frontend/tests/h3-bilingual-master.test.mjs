@@ -20,11 +20,35 @@ test('Chinese master workflow cannot overwrite legacy English through old PUT', 
   assert.match(detail, /确认保存英文执行稿/)
 })
 
-test('preview is invalidated and direct generation opens unconfirmed Chinese prompt', () => {
+test('preview invalidation keeps English text but revokes confirmation', () => {
   assert.match(detail, /watch\(\[videoTaskMasterZH, videoTaskTemplate, videoTaskFirstFrame, videoTaskLastFrame\]/)
-  assert.match(detail, /videoTaskExecPreview\.value = ''[\s\S]*videoTaskSourceHash\.value = ''/)
+  const invalidate = detail.slice(detail.indexOf('function invalidateVideoPromptPreview'), detail.indexOf('watch([videoTaskMasterZH'))
+  assert.match(invalidate, /videoTaskSourceHash\.value = ''/)
+  assert.match(invalidate, /persistVideoPromptDraft\(\)/)
+  assert.doesNotMatch(invalidate, /videoTaskExecPreview\.value = ''/)
   assert.match(detail, /promptState\.master_prompt_zh && promptState\.exec_status !== 'confirmed'/)
   assert.match(detail, /epoch !== videoPromptRequestEpoch \|\| videoTaskScene\.value\?\.id !== sceneId/)
+})
+
+test('ordinary Chinese master save does not discard the local English draft', () => {
+  const saveMaster = detail.slice(detail.indexOf('async function saveChineseMaster'), detail.indexOf('async function translateChineseToEnglish'))
+  assert.match(saveMaster, /invalidateVideoPromptPreview\(\)/)
+  assert.doesNotMatch(saveMaster, /clearVideoPromptDraft|removeItem|videoTaskExecPreview\.value\s*=/)
+})
+
+test('reopening restores a local draft as unconfirmed instead of replacing confirmed server execution text', () => {
+  const open = detail.slice(detail.indexOf('async function viewVideoPrompt'), detail.indexOf('async function regenerateVideoPrompt'))
+  assert.match(open, /const localDraft = readVideoPromptDraft\(sc\.id\)/)
+  assert.match(open, /localDraft\?\.execPrompt \? \{ exec_status: 'unconfirmed' \}/)
+  assert.match(open, /videoTaskExecPreview\.value = localDraft\?\.execPrompt \|\| preview\.exec_prompt/)
+  assert.match(open, /localDraft\?\.execPrompt \? \(localDraft\.sourceHash \|\| ''\) : \(preview\.exec_status === 'confirmed'/)
+})
+
+test('local English drafts are isolated by project and scene and cleared only after confirm', () => {
+  assert.match(detail, /`h3-video-prompt-draft:\$\{id\(\)\}:\$\{sceneId\}`/)
+  assert.match(detail, /localStorage\.setItem\(videoPromptDraftKey\(sceneId\)/)
+  const confirm = detail.slice(detail.indexOf('async function confirmEnglishAndGenerate'), detail.indexOf('async function saveVideoPrompt'))
+  assert.match(confirm, /confirmSceneVideoPrompt[\s\S]*clearVideoPromptDraft\(sceneId\)/)
 })
 
 test('regeneration always proposes Chinese without replacing the current draft', () => {

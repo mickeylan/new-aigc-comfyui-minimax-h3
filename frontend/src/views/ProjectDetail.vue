@@ -1143,9 +1143,25 @@ const videoTaskProposedZH = ref('')
 let videoPromptRequestEpoch = 0
 let videoPromptHydrating = false
 const isBilingualVideoPrompt = computed(() => Boolean(videoTaskDetail.value?.master_prompt_zh))
+const videoPromptDraftKey = sceneId => `h3-video-prompt-draft:${id()}:${sceneId}`
+function readVideoPromptDraft(sceneId) {
+  try { return JSON.parse(localStorage.getItem(videoPromptDraftKey(sceneId)) || 'null') }
+  catch { return null }
+}
+function persistVideoPromptDraft() {
+  const sceneId = videoTaskScene.value?.id
+  if (!sceneId || videoPromptHydrating || !isBilingualVideoPrompt.value) return
+  const execPrompt = videoTaskExecPreview.value
+  if (!execPrompt) return localStorage.removeItem(videoPromptDraftKey(sceneId))
+  localStorage.setItem(videoPromptDraftKey(sceneId), JSON.stringify({ execPrompt, sourceHash: videoTaskSourceHash.value || '' }))
+}
+function clearVideoPromptDraft(sceneId) {
+  if (sceneId) localStorage.removeItem(videoPromptDraftKey(sceneId))
+}
 function invalidateVideoPromptPreview() {
-  videoTaskExecPreview.value = ''
+  // Keep the user's English text visible; only its confirmation eligibility is stale.
   videoTaskSourceHash.value = ''
+  persistVideoPromptDraft()
   videoPromptRequestEpoch++
   translatingVideoPrompt.value = false
   regeneratingVideoPrompt.value = false
@@ -1155,6 +1171,7 @@ watch([videoTaskMasterZH, videoTaskTemplate, videoTaskFirstFrame, videoTaskLastF
   if (videoPromptHydrating) return
   if (videoTaskDetail.value && isBilingualVideoPrompt.value) invalidateVideoPromptPreview()
 })
+watch([videoTaskExecPreview, videoTaskSourceHash], persistVideoPromptDraft)
 const sceneAudioCandidates = ref([])
 const sceneAudioBusy = ref(false)
 const sceneAudioAuditConfirmed = ref({})
@@ -1448,13 +1465,14 @@ async function viewVideoPrompt(sc) {
       try { history = (await api.task(sc.video_task_id)).data } catch { /* 历史任务不可用不影响生成前编辑 */ }
     }
     if (epoch !== videoPromptRequestEpoch) return
-    videoTaskDetail.value = { ...preview, history_prompt: history?.prompt || '', params_json: history?.params_json || '' }
     videoTaskScene.value = sc
+    const localDraft = readVideoPromptDraft(sc.id)
+    videoTaskDetail.value = { ...preview, history_prompt: history?.prompt || '', params_json: history?.params_json || '', ...(localDraft?.execPrompt ? { exec_status: 'unconfirmed' } : {}) }
     videoPromptHydrating = true
     videoTaskPromptDraft.value = preview.exec_prompt || preview.prompt || ''
     videoTaskMasterZH.value = preview.master_prompt_zh || ''
-    videoTaskExecPreview.value = preview.exec_prompt || ''
-    videoTaskSourceHash.value = preview.exec_status === 'confirmed' ? (preview.source_hash || '') : ''
+    videoTaskExecPreview.value = localDraft?.execPrompt || preview.exec_prompt || ''
+    videoTaskSourceHash.value = localDraft?.execPrompt ? (localDraft.sourceHash || '') : (preview.exec_status === 'confirmed' ? (preview.source_hash || '') : '')
     videoTaskProposedZH.value = ''
     videoTaskTemplate.value = preview.template || sc.video_template || 'minimax_h3_ref2v'
     videoTaskFirstFrame.value = preview.first_frame_img || sc.video_first_frame_img || sc.image_file || ''
@@ -1580,6 +1598,7 @@ async function confirmEnglishAndGenerate(generateAfterConfirm = false) {
     await api.confirmSceneVideoPrompt(id(), sceneId, { exec_prompt: execPrompt, source_hash: sourceHash })
     if (epoch !== videoPromptRequestEpoch || videoTaskScene.value?.id !== sceneId) return
     videoTaskDetail.value = { ...videoTaskDetail.value, exec_status: 'confirmed' }
+    clearVideoPromptDraft(sceneId)
     if (generateAfterConfirm) {
       await api.generateSceneVideo(id(), sceneId)
       if (epoch !== videoPromptRequestEpoch || videoTaskScene.value?.id !== sceneId) return
