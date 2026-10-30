@@ -174,24 +174,45 @@ func TestSyncExplicitSceneSpeechPreservesExistingDataAndFiltersNonAuthoritativeR
 	}
 }
 
-func TestReplaceShotsRejectsAIRewrittenSceneSpeechWithoutMutation(t *testing.T) {
+func TestReplaceShotsAllowsDifferentDialogueAndClearsStaleRanges(t *testing.T) {
 	db := newTestDBWithNewModels(t)
-	project := models.Project{Title: "reject rewrite"}
+	project := models.Project{Title: "director dialogue edit"}
 	db.Create(&project)
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Content: "【对白｜甲】原文。"}
 	db.Create(&scene)
 	if err := db.Transaction(func(tx *gorm.DB) error { return syncExplicitSceneSpeech(tx, &scene) }); err != nil {
 		t.Fatal(err)
 	}
-	_, snapshot, _ := loadSceneDialogueSnapshot(db, scene.ID)
-	_, err := NewShotService(db).ReplaceShotsWithDialogueSnapshot(scene.ID, []models.Shot{{ShotType: "近景", Duration: 3, Dialogue: "AI改写。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}}, snapshot)
-	if err == nil || !strings.Contains(err.Error(), "场景正文中的原始台词") || strings.Contains(err.Error(), "Dialogue") {
-		t.Fatalf("unexpected rewrite error: %v", err)
+	dialogues, snapshot, err := loadSceneDialogueSnapshot(db, scene.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	var count int64
-	db.Model(&models.Shot{}).Where("scene_id = ?", scene.ID).Count(&count)
-	if count != 0 {
-		t.Fatalf("failed validation wrote %d shots", count)
+	svc := NewShotService(db)
+	matched, err := svc.ReplaceShotsWithDialogueSnapshot(scene.ID, []models.Shot{{ShotType: "近景", Duration: 3, Dialogue: "原文。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}}, snapshot)
+	if err != nil || len(matched[0].DialogueRanges) != 1 {
+		t.Fatalf("matching dialogue was not mapped: shots=%+v err=%v", matched, err)
+	}
+	saved, err := svc.ReplaceShotsWithDialogueSnapshot(scene.ID, []models.Shot{{ID: matched[0].ID, ShotType: "近景", Duration: 3, Dialogue: "导演改写。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}}, snapshot)
+	if err != nil {
+		t.Fatalf("different shot dialogue rejected: %v", err)
+	}
+	if len(saved) != 1 || saved[0].Dialogue != "导演改写。" || len(saved[0].DialogueRanges) != 0 {
+		t.Fatalf("saved shot or cleared ranges mismatch: %+v", saved)
+	}
+	var rawRangeJSON string
+	if err := db.Model(&models.Shot{}).Select("dialogue_ranges_json").Where("id = ?", saved[0].ID).Scan(&rawRangeJSON).Error; err != nil || rawRangeJSON != "[]" {
+		t.Fatalf("persisted range JSON=%q err=%v", rawRangeJSON, err)
+	}
+	updated, err := svc.UpdateShot(saved[0].ID, map[string]any{"dialogue": "手工台词。"})
+	if err != nil || updated.Dialogue != "手工台词。" || len(updated.DialogueRanges) != 0 {
+		t.Fatalf("ordinary shot update rejected or remapped: shot=%+v err=%v", updated, err)
+	}
+	var persisted []models.Dialogue
+	if err := db.Where("scene_id = ?", scene.ID).Find(&persisted).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted) != 1 || persisted[0].ID != dialogues[0].ID || persisted[0].Text != "原文。" {
+		t.Fatalf("structured dialogue was overwritten: %+v", persisted)
 	}
 }
 
@@ -1287,18 +1308,20 @@ func TestValidateShotEnforces3To15Seconds(t *testing.T) {
 	}
 }
 
-func TestAssignShotDialogueRangesRejectsMismatchedText(t *testing.T) {
+func TestAssignShotDialogueRangesClearsMismatchedText(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	project := models.Project{Title: "mismatch"}
 	db.Create(&project)
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
 	db.Create(&scene)
 	db.Create(&models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "甲", Text: "你好世界"})
-	// Shot dialogue concatenates to "你好" but structured dialogue is "你好世界" — mismatch.
-	shots := []models.Shot{{ShotType: "wide", Duration: 3, Dialogue: "你好"}, {ShotType: "close", Duration: 3, Dialogue: ""}}
-	err := newDBTx(db, scene.ID, shots)
-	if err == nil || !strings.Contains(err.Error(), "不一致") {
-		t.Fatalf("expected mismatch error, got: %v", err)
+	// Shot dialogue concatenates to "你好" but structured dialogue is "你好世界" — no ranges may be fabricated.
+	shots := []models.Shot{{ShotType: "wide", Duration: 3, Dialogue: "你好", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 999}}}, {ShotType: "close", Duration: 3, Dialogue: "", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 999}}}}
+	if err := newDBTx(db, scene.ID, shots); err != nil {
+		t.Fatalf("mismatch should clear ranges, got: %v", err)
+	}
+	if len(shots[0].DialogueRanges) != 0 || len(shots[1].DialogueRanges) != 0 {
+		t.Fatalf("stale ranges retained: %+v", shots)
 	}
 }
 

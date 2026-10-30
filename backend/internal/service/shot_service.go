@@ -271,6 +271,24 @@ func validateShotActionTimeline(entries []models.ShotActionTimelineEntry, durati
 	return nil
 }
 
+func shotDialogueTextMatches(shots []models.Shot, dialogues []models.Dialogue) bool {
+	var shotText, dialogueText strings.Builder
+	for _, shot := range shots {
+		shotText.WriteString(canonicalDialogueText(shot.Dialogue))
+	}
+	for _, dialogue := range dialogues {
+		dialogueText.WriteString(canonicalDialogueText(dialogue.Text))
+	}
+	return shotText.String() == dialogueText.String()
+}
+
+func clearShotDialogueRanges(tx *gorm.DB, sceneID uint, shots []models.Shot) error {
+	for i := range shots {
+		shots[i].DialogueRanges = []models.ShotDialogueRange{}
+	}
+	return tx.Model(&models.Shot{}).Where("scene_id = ?", sceneID).Update("dialogue_ranges_json", "[]").Error
+}
+
 func assignShotDialogueRanges(tx *gorm.DB, sceneID uint, shots []models.Shot) error {
 	var dialogues []models.Dialogue
 	if err := tx.Where("scene_id = ?", sceneID).Order("`order`, id").Find(&dialogues).Error; err != nil {
@@ -281,18 +299,14 @@ func assignShotDialogueRanges(tx *gorm.DB, sceneID uint, shots []models.Shot) er
 	canonical := make([][]rune, len(dialogues))
 	groupKeys := make([]string, len(dialogues))
 	groupStarts := make([]int, len(dialogues))
-	// Validate: concatenation of all shot dialogue texts must equal canonical text byte-for-byte.
-	shotRunes := []rune{}
-	for _, shot := range shots {
-		shotRunes = append(shotRunes, []rune(canonicalDialogueText(shot.Dialogue))...)
+	// Dialogue ranges are metadata only. Ordinary director edits may intentionally
+	// diverge from the structured Dialogue rows; in that case discard stale mappings
+	// rather than rejecting the save or inventing ranges.
+	if !shotDialogueTextMatches(shots, dialogues) {
+		return clearShotDialogueRanges(tx, sceneID, shots)
 	}
-	authRunes := []rune{}
 	for i := range dialogues {
 		canonical[i] = []rune(canonicalDialogueText(dialogues[i].Text))
-		authRunes = append(authRunes, canonical[i]...)
-	}
-	if string(shotRunes) != string(authRunes) {
-		return fmt.Errorf("镜头台词与场景正文中的原始台词不一致，请重新生成导演方案；AI 不得删改、遗漏或新增台词")
 	}
 	groupNo, groupOffset := 0, 0
 	for i := range dialogues {
@@ -468,11 +482,13 @@ func (s *ShotService) ReplaceShotsWithDialogueSnapshot(sceneID uint, shots []mod
 			if currentSnapshot != strings.TrimSpace(expectedSnapshot) {
 				return ErrDialogueSnapshotConflict
 			}
-			if issues := dialogueRhythmBlockingIssuesForShots(shots, dialogues); len(issues) > 0 {
-				return fmt.Errorf("%w: 对白拆镜语义边界未通过审核: %s", ErrDialogueTimingBlocked, strings.Join(issues, "；"))
-			}
-			if timingErr := validateDialogueShotTiming(shots, dialogues); timingErr != nil {
-				return timingErr
+			if shotDialogueTextMatches(shots, dialogues) {
+				if issues := dialogueRhythmBlockingIssuesForShots(shots, dialogues); len(issues) > 0 {
+					return fmt.Errorf("%w: 对白拆镜语义边界未通过审核: %s", ErrDialogueTimingBlocked, strings.Join(issues, "；"))
+				}
+				if timingErr := validateDialogueShotTiming(shots, dialogues); timingErr != nil {
+					return timingErr
+				}
 			}
 		}
 		var existing []models.Shot
@@ -773,7 +789,7 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 		if err := tx.Where("scene_id = ?", shot.SceneID).Order("`order`, id").Find(&dialogues).Error; err != nil {
 			return err
 		}
-		if dialogues = authoritativeSceneDialogues(dialogues); len(dialogues) > 0 {
+		if dialogues = authoritativeSceneDialogues(dialogues); len(dialogues) > 0 && shotDialogueTextMatches(sceneShots, dialogues) {
 			if err := validateDialogueShotTiming(sceneShots, dialogues); err != nil {
 				return err
 			}
