@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"testing"
 
 	"comfyui-console/internal/models"
@@ -110,6 +111,64 @@ func TestMergeSnapshotIgnoresScreenTextWhenOptionDisabled(t *testing.T) {
 	db.Model(&cue).Update("text", "太运宗")
 	if _, err := svc.validateMergeInputs(db, merge); err != nil {
 		t.Fatalf("disabled screen text invalidated merge: %v", err)
+	}
+}
+
+func TestMergeSequenceSupportsSceneAndMaterialAndDetectsMaterialMutation(t *testing.T) {
+	db := safetyDB(t, &models.MergeTask{}, &models.Material{})
+	project := models.Project{Title: "series", Generation: 1}
+	db.Create(&project)
+	scene := readyMergeScene(project.ID, 1, 1, 1, "a", "a.mp4")
+	db.Create(&scene)
+	material := models.Material{Name: "upload", Type: "video", Source: "upload", ProjectID: &project.ID, Path: "material_p1/upload.mp4", Size: 10}
+	db.Create(&material)
+	clips := []mergeEditClip{{SceneID: &scene.ID}, {MaterialID: &material.ID}}
+	svc := &ProjectService{db: db}
+	merge, scenes, err := svc.createMergeTaskRecord(&project, []uint{scene.ID}, false, false, MergeAudioOptions{NativeVolume: 1, DialogueVolume: 1, BGMVolume: 1}, mergeTaskSequence{Clips: clips, EpisodeN: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scenes) != 1 || merge.EditSequence == "" {
+		t.Fatalf("sequence not persisted: %+v", merge)
+	}
+	if _, err := svc.validateMergeInputs(db, merge); err != nil {
+		t.Fatalf("fresh snapshot rejected: %v", err)
+	}
+	db.Model(&material).Update("size", 11)
+	if _, err := svc.validateMergeInputs(db, merge); err == nil {
+		t.Fatal("material mutation did not invalidate merge snapshot")
+	}
+}
+
+func TestMergeSequenceSupportsMaterialsOnlyWithoutBorrowingSceneDialogue(t *testing.T) {
+	db := safetyDB(t, &models.MergeTask{}, &models.Material{}, &models.ScreenTextCue{})
+	project := models.Project{Title: "series", Generation: 1}
+	db.Create(&project)
+	// An unrelated Scene establishes the episode generation but is not part of the cut.
+	unrelated := readyMergeScene(project.ID, 1, 1, 1, "other", "other.mp4")
+	db.Create(&unrelated)
+	db.Create(&models.Dialogue{ProjectID: project.ID, SceneID: unrelated.ID, Order: 1, Text: "must not leak"})
+	db.Create(&models.ScreenTextCue{ProjectID: project.ID, EpisodeN: 1, SceneID: &unrelated.ID, Text: "must not leak", Enabled: true, ReviewStatus: "approved"})
+	db.Create(&models.ScreenTextCue{ProjectID: project.ID, EpisodeN: 1, Text: "global", Enabled: true, ReviewStatus: "approved"})
+	first := models.Material{Name: "one", Type: "video", ProjectID: &project.ID, Path: "material_p1/one.mp4", Size: 10}
+	second := models.Material{Name: "two", Type: "video", ProjectID: &project.ID, Path: "material_p1/two.mp4", Size: 20}
+	db.Create(&first)
+	db.Create(&second)
+	clips := []mergeEditClip{{MaterialID: &first.ID}, {MaterialID: &second.ID}}
+	svc := &ProjectService{db: db}
+	merge, scenes, err := svc.createMergeTaskRecord(&project, nil, false, true, MergeAudioOptions{NativeVolume: 1, DialogueVolume: 1, BGMVolume: 1, ScreenText: true}, mergeTaskSequence{Clips: clips, EpisodeN: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scenes) != 0 {
+		t.Fatalf("pure material cut invented scenes: %+v", scenes)
+	}
+	var snapshot mergeInputSnapshot
+	if err := json.Unmarshal([]byte(merge.InputSnapshot), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Materials) != 2 || len(snapshot.Dialogues) != 0 || len(snapshot.ScreenTextCues) != 1 || snapshot.ScreenTextCues[0].Text != "global" {
+		t.Fatalf("unexpected pure-material snapshot: %+v", snapshot)
 	}
 }
 

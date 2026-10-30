@@ -7845,10 +7845,19 @@ type mergeScreenTextCueFingerprint struct {
 	Enabled                        bool
 }
 
+type mergeMaterialFingerprint struct {
+	ID        uint   `json:"id"`
+	ProjectID uint   `json:"project_id"`
+	Type      string `json:"type"`
+	Path      string `json:"path"`
+	Size      int64  `json:"size"`
+}
+
 type mergeInputSnapshot struct {
 	Version           int                             `json:"version"`
 	EpisodeGeneration uint                            `json:"episode_generation"`
 	Videos            []sceneVideoFingerprint         `json:"videos"`
+	Materials         []mergeMaterialFingerprint      `json:"materials"`
 	Dialogues         []mergeDialogueFingerprint      `json:"dialogues"`
 	AudioLayers       []mergeAudioLayerFingerprint    `json:"audio_layers"`
 	ScreenTextCues    []mergeScreenTextCueFingerprint `json:"screen_text_cues"`
@@ -7868,9 +7877,21 @@ func fingerprintSceneVideo(scene models.Scene) (sceneVideoFingerprint, error) {
 	return sceneVideoFingerprint{SceneID: scene.ID, TaskID: scene.VideoTaskID, File: scene.VideoFile, GPU: *scene.VideoGPU, VideoInputFile: scene.VideoInputFile}, nil
 }
 
-func (s *ProjectService) createMergeTaskRecord(p *models.Project, sceneIDs []uint, dub, subtitles bool, audio MergeAudioOptions) (*models.MergeTask, []models.Scene, error) {
-	if len(sceneIDs) < 2 {
+type mergeTaskSequence struct {
+	Clips    []mergeEditClip
+	EpisodeN int
+}
+
+func (s *ProjectService) createMergeTaskRecord(p *models.Project, sceneIDs []uint, dub, subtitles bool, audio MergeAudioOptions, sequenceOptions ...mergeTaskSequence) (*models.MergeTask, []models.Scene, error) {
+	var sequence mergeTaskSequence
+	if len(sequenceOptions) > 0 {
+		sequence = sequenceOptions[0]
+	}
+	if len(sequence.Clips) == 0 && len(sceneIDs) < 2 {
 		return nil, nil, fmt.Errorf("请至少选择 2 个场景进行合并")
+	}
+	if len(sequence.Clips) > 0 && len(sequence.Clips) < 2 {
+		return nil, nil, fmt.Errorf("最终成片至少需要2个视频片段")
 	}
 	seen := make(map[uint]struct{}, len(sceneIDs))
 	for _, id := range sceneIDs {
@@ -7890,7 +7911,7 @@ func (s *ProjectService) createMergeTaskRecord(p *models.Project, sceneIDs []uin
 		if err := tx.First(&current, p.ID).Error; err != nil {
 			return err
 		}
-		episodeN := 0
+		episodeN := sequence.EpisodeN
 		fingerprints := make([]sceneVideoFingerprint, 0, len(sceneIDs))
 		for _, id := range sceneIDs {
 			var scene models.Scene
@@ -7913,6 +7934,24 @@ func (s *ProjectService) createMergeTaskRecord(p *models.Project, sceneIDs []uin
 			fingerprints = append(fingerprints, fingerprint)
 			scenes = append(scenes, scene)
 		}
+		if episodeN <= 0 {
+			return fmt.Errorf("纯素材编排必须指定集数")
+		}
+		materials := make([]mergeMaterialFingerprint, 0)
+		for index, clip := range sequence.Clips {
+			if clip.MaterialID == nil {
+				continue
+			}
+			var material models.Material
+			if err := tx.Where("id = ? AND project_id = ? AND type = ?", *clip.MaterialID, current.ID, "video").First(&material).Error; err != nil {
+				return fmt.Errorf("第%d个插入视频不存在或不属于项目", index+1)
+			}
+			clean := filepath.Clean(filepath.FromSlash(material.Path))
+			if material.Path == "" || filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+				return fmt.Errorf("第%d个插入视频路径无效", index+1)
+			}
+			materials = append(materials, mergeMaterialFingerprint{ID: material.ID, ProjectID: current.ID, Type: material.Type, Path: material.Path, Size: material.Size})
+		}
 		episodeGeneration, err := latestEpisodeGeneration(tx, current.ID, episodeN)
 		if err != nil {
 			return err
@@ -7934,7 +7973,7 @@ func (s *ProjectService) createMergeTaskRecord(p *models.Project, sceneIDs []uin
 				return err
 			}
 		}
-		snapshot, err := s.captureMergeInputSnapshot(tx, current.ID, episodeN, episodeGeneration, fingerprints, sceneIDs, dub, subtitles, audio)
+		snapshot, err := s.captureMergeInputSnapshot(tx, current.ID, episodeN, episodeGeneration, fingerprints, materials, sceneIDs, dub, subtitles, audio)
 		if err != nil {
 			return err
 		}
@@ -7946,7 +7985,15 @@ func (s *ProjectService) createMergeTaskRecord(p *models.Project, sceneIDs []uin
 		for i, id := range sceneIDs {
 			ids[i] = strconv.FormatUint(uint64(id), 10)
 		}
-		mt = models.MergeTask{ProjectID: current.ID, EpisodeN: episodeN, Title: fmt.Sprintf("第%d集 · %s", episodeN, current.Title), SceneOrder: strings.Join(ids, ","), SceneVideoFingerprints: string(encoded), InputSnapshot: string(snapshot), Status: "pending", Generation: episodeGeneration, RequestedDub: dub, RequestedSubtitles: subtitles, RequestedScreenText: audio.ScreenText, NativeVolume: audio.NativeVolume, DialogueVolume: audio.DialogueVolume, BGMVolume: audio.BGMVolume, DialogueMix: audio.DialogueMix}
+		editSequence := ""
+		if len(sequence.Clips) > 0 {
+			value, marshalErr := json.Marshal(sequence.Clips)
+			if marshalErr != nil {
+				return marshalErr
+			}
+			editSequence = string(value)
+		}
+		mt = models.MergeTask{ProjectID: current.ID, EpisodeN: episodeN, Title: fmt.Sprintf("第%d集 · %s", episodeN, current.Title), SceneOrder: strings.Join(ids, ","), EditSequence: editSequence, SceneVideoFingerprints: string(encoded), InputSnapshot: string(snapshot), Status: "pending", Generation: episodeGeneration, RequestedDub: dub, RequestedSubtitles: subtitles, RequestedScreenText: audio.ScreenText, NativeVolume: audio.NativeVolume, DialogueVolume: audio.DialogueVolume, BGMVolume: audio.BGMVolume, DialogueMix: audio.DialogueMix}
 		return tx.Create(&mt).Error
 	})
 	if err != nil {
@@ -7969,7 +8016,7 @@ func (s *ProjectService) validateMergeInputs(tx *gorm.DB, mt *models.MergeTask) 
 		return nil, fmt.Errorf("合并任务已过期：第%d集版本已变化", mt.EpisodeN)
 	}
 	var fingerprints []sceneVideoFingerprint
-	if err := json.Unmarshal([]byte(mt.SceneVideoFingerprints), &fingerprints); err != nil || len(fingerprints) == 0 {
+	if err := json.Unmarshal([]byte(mt.SceneVideoFingerprints), &fingerprints); err != nil || (len(fingerprints) == 0 && strings.TrimSpace(mt.EditSequence) == "") {
 		return nil, fmt.Errorf("合并任务缺少有效的视频输入快照")
 	}
 	orderedIDs := sceneIDsFromStrings(strings.Split(mt.SceneOrder, ","))
@@ -7991,7 +8038,22 @@ func (s *ProjectService) validateMergeInputs(tx *gorm.DB, mt *models.MergeTask) 
 		}
 		scenes = append(scenes, scene)
 	}
-	actualSnapshot, err := s.captureMergeInputSnapshot(tx, mt.ProjectID, mt.EpisodeN, mt.Generation, fingerprints, orderedIDs, mt.RequestedDub, mt.RequestedSubtitles, MergeAudioOptions{NativeVolume: mt.NativeVolume, DialogueVolume: mt.DialogueVolume, BGMVolume: mt.BGMVolume, DialogueMix: mt.DialogueMix, ScreenText: mt.RequestedScreenText})
+	var clips []mergeEditClip
+	if mt.EditSequence != "" && json.Unmarshal([]byte(mt.EditSequence), &clips) != nil {
+		return nil, fmt.Errorf("合并任务的成片编排快照损坏")
+	}
+	materials := make([]mergeMaterialFingerprint, 0)
+	for index, clip := range clips {
+		if clip.MaterialID == nil {
+			continue
+		}
+		var material models.Material
+		if err := tx.Where("id = ? AND project_id = ? AND type = ?", *clip.MaterialID, mt.ProjectID, "video").First(&material).Error; err != nil {
+			return nil, fmt.Errorf("合并任务已过期：第%d个插入视频已变化", index+1)
+		}
+		materials = append(materials, mergeMaterialFingerprint{ID: material.ID, ProjectID: mt.ProjectID, Type: material.Type, Path: material.Path, Size: material.Size})
+	}
+	actualSnapshot, err := s.captureMergeInputSnapshot(tx, mt.ProjectID, mt.EpisodeN, mt.Generation, fingerprints, materials, orderedIDs, mt.RequestedDub, mt.RequestedSubtitles, MergeAudioOptions{NativeVolume: mt.NativeVolume, DialogueVolume: mt.DialogueVolume, BGMVolume: mt.BGMVolume, DialogueMix: mt.DialogueMix, ScreenText: mt.RequestedScreenText})
 	if err != nil {
 		return nil, err
 	}
@@ -8027,7 +8089,7 @@ func (s *ProjectService) CreateMergeTask(p *models.Project, sceneIDs []uint, dub
 func (s *ProjectService) CreateMergeTaskWithAudio(p *models.Project, sceneIDs []uint, dub, subtitles bool, audio MergeAudioOptions) (*models.MergeTask, error) {
 	// All production entry points share the mix-aware implementation so ready audio layers,
 	// dialogue and native audio cannot be silently ignored by one endpoint.
-	return s.createAudioMergeTask(p, sceneIDs, nil, dub, subtitles, audio)
+	return s.createAudioMergeTask(p, sceneIDs, nil, 0, dub, subtitles, audio)
 }
 
 func (s *ProjectService) mediaPath(parts ...string) string {
@@ -8289,6 +8351,61 @@ func (s *ProjectService) runMerge(p *models.Project, mt *models.MergeTask, dub, 
 	}
 	s.finishMergeProject(p)
 	log.Printf("[merge %d] 完成: %s", mt.ID, outName)
+}
+
+// writeMergeTimelineSRT uses the already resolved/probed clip timeline. Material clips
+// advance the clock without subtitles, and repeated scenes produce repeated cues.
+func (s *ProjectService) writeMergeTimelineSRT(mt *models.MergeTask, srtAbs string, videos []mergeResolvedVideo, videoDurs []sceneVideo) (bool, error) {
+	text, count, err := s.buildMergeTimelineSRT(videos, videoDurs)
+	if err != nil || count == 0 {
+		return false, err
+	}
+	data := append([]byte{0xEF, 0xBB, 0xBF}, []byte(text)...)
+	if err := s.remote.WriteFile(srtAbs, data, 0o644); err != nil {
+		return false, err
+	}
+	log.Printf("[merge %d] 字幕已生成: %s (%d 条)", mt.ID, srtAbs, count)
+	return true, nil
+}
+
+func (s *ProjectService) buildMergeTimelineSRT(videos []mergeResolvedVideo, videoDurs []sceneVideo) (string, int, error) {
+	if len(videos) != len(videoDurs) {
+		return "", 0, fmt.Errorf("字幕时间线与视频片段不一致")
+	}
+	var sb strings.Builder
+	idx, global := 0, 0.0
+	for i, video := range videos {
+		dur := videoDurs[i].dur
+		if video.SceneID == 0 {
+			global += dur
+			continue
+		}
+		var dubs []models.Dialogue
+		if err := s.db.Where("scene_id = ?", video.SceneID).Order("`order`").Find(&dubs).Error; err != nil {
+			return "", 0, err
+		}
+		valid := dubs[:0]
+		for _, d := range dubs {
+			if strings.TrimSpace(d.Text) != "" {
+				valid = append(valid, d)
+			}
+		}
+		if len(valid) > 0 {
+			seg := dur / float64(len(valid))
+			for lineIndex, d := range valid {
+				idx++
+				start := global + float64(lineIndex)*seg
+				sb.WriteString(fmt.Sprintf("%d\n%s --> %s\n", idx, formatSRTTime(start), formatSRTTime(start+seg)))
+				line := strings.TrimSpace(d.Text)
+				if strings.TrimSpace(d.Character) != "" {
+					line = d.Character + "：" + line
+				}
+				sb.WriteString(line + "\n\n")
+			}
+		}
+		global += dur
+	}
+	return sb.String(), idx, nil
 }
 
 // writeMergeSRT 按场景顺序/时长均分对白生成 SRT 字幕（无 TTS 依赖，字幕对齐场景时间轴）
@@ -8560,18 +8677,15 @@ func projectFileTag(p *models.Project) string {
 }
 
 func (s *ProjectService) failMerge(mt *models.MergeTask, p *models.Project, errMsg string) {
-	result := s.db.Where("id = ? AND project_id = ? AND generation = ? AND status IN ?", mt.ID, mt.ProjectID, mt.Generation, []string{"pending", "running"}).Delete(&models.MergeTask{})
+	result := s.db.Model(&models.MergeTask{}).Where("id = ? AND project_id = ? AND generation = ? AND status IN ?", mt.ID, mt.ProjectID, mt.Generation, []string{"pending", "running"}).Updates(map[string]any{"status": "failed", "error": errMsg})
 	if result.Error != nil {
-		log.Printf("[merge %d] 删除失败记录失败: %v", mt.ID, result.Error)
+		log.Printf("[merge %d] 保存失败状态失败: %v", mt.ID, result.Error)
 	}
 	s.pushProject(p)
-	log.Printf("[merge %d] 失败，已删除无输出记录: %s", mt.ID, errMsg)
+	log.Printf("[merge %d] 失败: %s", mt.ID, errMsg)
 }
 
 func (s *ProjectService) ListMerges(projectID uint) ([]models.MergeTask, error) {
-	if err := s.db.Where("project_id = ? AND status = ? AND (output_file = '' OR output_file IS NULL)", projectID, "failed").Delete(&models.MergeTask{}).Error; err != nil {
-		return nil, err
-	}
 	var list []models.MergeTask
 	if err := s.db.Where("project_id = ?", projectID).Order("id desc").Find(&list).Error; err != nil {
 		return nil, err

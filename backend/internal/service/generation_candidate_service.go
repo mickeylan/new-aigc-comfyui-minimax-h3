@@ -187,14 +187,8 @@ func (s *GenerationCandidateService) CaptureSceneSuccess(in SceneCandidateCaptur
 		reason := "来源视频已更新，请重新选择衔接帧"
 		if in.MediaType == "image" {
 			reason = "来源分镜图已更新，请重新生成视频并选择衔接帧"
-			if err := MarkSceneCandidatesStale(tx, in.ProjectID, in.SceneID, "video", reason); err != nil {
-				return err
-			}
 		}
-		if err := invalidateContinuityDependentsTx(tx, in.ProjectID, []uint{in.SceneID}, reason); err != nil {
-			return err
-		}
-		return tx.Where("project_id = ? AND scene_id = ?", in.ProjectID, in.SceneID).Delete(&models.FrameCandidate{}).Error
+		return invalidateSceneMediaReplacementTx(tx, &scene, in.MediaType, reason)
 	})
 	return &captured, err
 }
@@ -242,6 +236,21 @@ func (s *GenerationCandidateService) SelectCurrent(projectID, id uint) (*models.
 		if row.ReviewStatus == "rejected" {
 			return fmt.Errorf("已拒绝候选不能设为当前")
 		}
+		// Re-adopting the effective candidate is a no-op: in particular, do not
+		// invalidate frames or downstream results created after the first adoption.
+		if row.IsCurrent {
+			// Auto-current results may still be pending review. Explicit adoption
+			// accepts them without invalidating the unchanged media projection.
+			if row.ReviewStatus != "accepted" {
+				now := time.Now()
+				if err := tx.Model(&row).Updates(map[string]any{"review_status": "accepted", "reviewed_at": now}).Error; err != nil {
+					return err
+				}
+				row.ReviewStatus, row.ReviewedAt = "accepted", &now
+			}
+			selected = row
+			return nil
+		}
 		if err := tx.Model(&models.GenerationCandidate{}).Where("project_id = ? AND entity_type = ? AND entity_id = ? AND media_type = ?", projectID, row.EntityType, row.EntityID, row.MediaType).Update("is_current", false).Error; err != nil {
 			return err
 		}
@@ -249,17 +258,27 @@ func (s *GenerationCandidateService) SelectCurrent(projectID, id uint) (*models.
 			return err
 		}
 		if row.EntityType == "scene" {
+			var scene models.Scene
+			if err := tx.Where("id = ? AND project_id = ?", row.EntityID, projectID).First(&scene).Error; err != nil {
+				return err
+			}
 			updates := map[string]any{"error": ""}
+			reason := "来源视频候选已切换，请重新选择衔接帧"
 			if row.MediaType == "image" {
-				updates["image_file"], updates["image_task_id"], updates["status"] = row.File, row.TaskID, "image_ready"
+				updates["image_file"], updates["image_task_id"], updates["image_token"], updates["image_candidate_parent_id"], updates["status"] = row.File, row.TaskID, "", nil, "image_ready"
 				updates["video_file"], updates["video_input_file"], updates["video_task_id"], updates["video_gpu"] = "", "", "", nil
-				if err := tx.Model(&models.GenerationCandidate{}).Where("project_id = ? AND entity_type = ? AND entity_id = ? AND media_type = ?", projectID, "scene", row.EntityID, "video").Updates(map[string]any{"stale": true, "stale_reason": "分镜画面候选已切换", "is_current": false}).Error; err != nil {
-					return err
-				}
+				updates["video_full_prompt"], updates["video_template"] = "", ""
+				updates["video_first_frame_img"], updates["video_last_frame_img"] = "", ""
+				updates["video_candidate_parent_id"], updates["video_retries"] = nil, 0
+				reason = "来源分镜图候选已切换，请重新生成视频并选择衔接帧"
 			} else {
 				updates["video_file"], updates["video_task_id"], updates["video_input_file"], updates["video_gpu"], updates["status"] = row.File, row.TaskID, row.VideoInputFile, row.VideoGPU, "video_ready"
+				updates["video_first_frame_img"], updates["video_last_frame_img"] = "", ""
 			}
 			if err := tx.Model(&models.Scene{}).Where("id = ? AND project_id = ?", row.EntityID, projectID).Updates(updates).Error; err != nil {
+				return err
+			}
+			if err := invalidateSceneMediaReplacementTx(tx, &scene, row.MediaType, reason); err != nil {
 				return err
 			}
 		}
@@ -268,6 +287,25 @@ func (s *GenerationCandidateService) SelectCurrent(projectID, id uint) (*models.
 		return nil
 	})
 	return &selected, err
+}
+
+// invalidateSceneMediaReplacementTx is the shared transactional invalidation boundary
+// for a Scene media projection change. Callers must project the replacement first.
+func invalidateSceneMediaReplacementTx(tx *gorm.DB, scene *models.Scene, mediaType, reason string) error {
+	if mediaType == "image" {
+		if err := MarkSceneCandidatesStale(tx, scene.ProjectID, scene.ID, "video", reason); err != nil {
+			return err
+		}
+	}
+	if err := invalidateContinuityDependentsTx(tx, scene.ProjectID, []uint{scene.ID}, reason); err != nil {
+		return err
+	}
+	if err := tx.Where("project_id = ? AND scene_id = ?", scene.ProjectID, scene.ID).Delete(&models.FrameCandidate{}).Error; err != nil {
+		return err
+	}
+	return tx.Model(&models.MergeTask{}).
+		Where("project_id = ? AND episode_n = ? AND status IN ?", scene.ProjectID, normalizeRevisionEpisode(scene.EpisodeN), []string{"pending", "running"}).
+		Updates(map[string]any{"status": "failed", "error": "Scene媒体已切换，请重新确认最终编排并合并"}).Error
 }
 
 func MarkSceneCandidatesStale(db *gorm.DB, projectID, sceneID uint, mediaType, reason string) error {

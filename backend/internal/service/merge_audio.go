@@ -206,6 +206,7 @@ func (s *Service) HandleCreateAudioMerge(c *gin.Context) {
 		DialogueVolume *float64        `json:"dialogue_volume"`
 		BGMVolume      *float64        `json:"bgm_volume"`
 		EditSequence   []mergeEditClip `json:"edit_sequence"`
+		EpisodeN       int             `json:"episode_n"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -226,7 +227,7 @@ func (s *Service) HandleCreateAudioMerge(c *gin.Context) {
 		}
 		req.SceneIDs = sequenceSceneIDs
 	}
-	mt, err := s.Projects.createAudioMergeTask(p, req.SceneIDs, req.EditSequence, req.Dub, req.Subtitles, options)
+	mt, err := s.Projects.createAudioMergeTask(p, req.SceneIDs, req.EditSequence, req.EpisodeN, req.Dub, req.Subtitles, options)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -234,17 +235,22 @@ func (s *Service) HandleCreateAudioMerge(c *gin.Context) {
 	c.JSON(http.StatusOK, mt)
 }
 
-func (s *ProjectService) createAudioMergeTask(p *models.Project, sceneIDs []uint, editSequence []mergeEditClip, dub, subtitles bool, audio MergeAudioOptions) (*models.MergeTask, error) {
-	mt, scenes, err := s.createMergeTaskRecord(p, sceneIDs, dub, subtitles, audio)
+func (s *ProjectService) createAudioMergeTask(p *models.Project, sceneIDs []uint, editSequence []mergeEditClip, episodeN int, dub, subtitles bool, audio MergeAudioOptions) (*models.MergeTask, error) {
+	mt, scenes, err := s.createMergeTaskRecord(p, sceneIDs, dub, subtitles, audio, mergeTaskSequence{Clips: editSequence, EpisodeN: episodeN})
 	if err != nil {
 		return nil, err
 	}
-	if len(editSequence) > 0 {
-		encoded, _ := json.Marshal(editSequence)
-		if err := s.db.Model(mt).Update("edit_sequence", string(encoded)).Error; err != nil {
-			return nil, err
+	if err := s.validateMergeExecution(p, mt, scenes); err != nil {
+		result := s.db.Where("id = ? AND project_id = ? AND status = ?", mt.ID, mt.ProjectID, "pending").Delete(&models.MergeTask{})
+		if result.Error != nil || result.RowsAffected != 1 {
+			return nil, fmt.Errorf("合并预检失败且任务清理失败")
 		}
-		mt.EditSequence = string(encoded)
+		return nil, err
+	}
+	if err := s.db.Model(&models.MergeTask{}).Where("id = ? AND project_id = ? AND status = ?", mt.ID, mt.ProjectID, "pending").Update("preflight_warnings", mt.PreflightWarnings).Error; err != nil {
+		// Never leave an unstartable pending task when persisting preflight output fails.
+		s.db.Where("id = ? AND project_id = ? AND status = ?", mt.ID, mt.ProjectID, "pending").Delete(&models.MergeTask{})
+		return nil, err
 	}
 	go s.runAudioMerge(p, mt, scenes, dub, subtitles)
 	s.pushProject(p)
@@ -358,7 +364,7 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 		}
 		info, probeErr := s.remote.ProbeMedia(abs)
 		if probeErr != nil {
-			fail(fmt.Errorf("探测编排片段%d失败（文件=%s）: %w", index+1, abs, probeErr))
+			fail(fmt.Errorf("探测编排片段%d失败", index+1))
 			return
 		}
 		if info.Duration <= 0 {
@@ -440,11 +446,14 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 	textFilters := make([]string, 0, 2)
 	if subtitles {
 		srtAbs := s.mediaPath("output_workers", "gpu0", filepath.FromSlash(strings.TrimSuffix(outName, ".mp4")+".srt"))
-		if err := s.writeMergeSRT(p, mt, srtAbs, scenes); err != nil {
+		written, err := s.writeMergeTimelineSRT(mt, srtAbs, videos, videoDurs)
+		if err != nil {
 			fail(err)
 			return
 		}
-		textFilters = append(textFilters, fmt.Sprintf("subtitles=filename=%s:force_style=FontName\\=Noto Sans SC\\,FontSize\\=28\\,MarginV\\=56", escapeFilterPath(srtAbs)))
+		if written {
+			textFilters = append(textFilters, fmt.Sprintf("subtitles=filename=%s:force_style=FontName\\=Noto Sans SC\\,FontSize\\=28\\,MarginV\\=56", escapeFilterPath(srtAbs)))
+		}
 	}
 	if screenText {
 		var cues []models.ScreenTextCue

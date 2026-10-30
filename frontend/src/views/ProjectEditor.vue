@@ -23,7 +23,7 @@
         <label v-show="workspaceTab==='delivery'" class="merge-opt merge-volume">原声 <input type="number" min="0" max="4" step="0.1" v-model.number="nativeVolume" aria-label="原声音量" /></label>
         <label v-show="workspaceTab==='delivery'" class="merge-opt merge-volume">对白 <input type="number" min="0" max="4" step="0.1" v-model.number="dialogueVolume" aria-label="对白音量" /></label>
         <label v-show="workspaceTab==='delivery'" class="merge-opt merge-volume">BGM <input type="number" min="0" max="4" step="0.1" v-model.number="bgmVolume" aria-label="BGM音量" /></label>
-        <button v-show="workspaceTab==='delivery'" class="btn btn-lg" :disabled="busy || curMerging || readyVideoCount < 2" @click="mergeEpisode">
+        <button v-show="workspaceTab==='delivery'" class="btn btn-lg" :disabled="busy || curMerging || mergeSequence.length < 2" @click="mergeEpisode">
           {{ curMerging ? '合并中…' : '⚡ 合并第' + activeEpN + '集成片' }}
         </button>
       </div>
@@ -395,6 +395,7 @@
             <span class="badge" :class="mergeBadgeClass(m.status)">{{ mergeStatusText(m.status) }}</span>
             <span class="merge-time">第{{ m.episode_n || 1 }}集 · {{ (m.created_at || '').slice(0, 16).replace('T', ' ') }}</span>
             <span v-if="m.error" class="fail-msg">{{ m.error }}</span>
+            <button v-if="m.status==='failed'" class="btn btn-sm btn-secondary" :disabled="m._retrying" @click="retryMergeRecord(m)">{{m._retrying?'重试中…':'按原编排重试'}}</button>
           </div>
           <div v-if="m.status === 'success' && m.output_file" class="merge-result">
             <video :src="outputUrl(m.output_file)" controls preload="metadata" class="merge-history-video"></video>
@@ -694,6 +695,12 @@ async function loadMerges() {
     merges.value = data
   } catch { /* ignore */ }
 }
+async function retryMergeRecord(row){
+  row._retrying=true
+  try{await api.retryMerge(id(),row.id);toast.success('已按原编排启动重试');await loadMerges()}
+  catch(e){toast.error(e.response?.data?.error||'重试合并失败')}
+  finally{row._retrying=false}
+}
 async function deleteMergeRecord(row){
   if(row.status==='pending'||row.status==='running'){toast.error('进行中的合并记录不能删除');return}
   if(!window.confirm('删除这条合并记录及其成片文件？此操作不可恢复。'))return
@@ -881,8 +888,6 @@ async function shiftSub(i, delta) {
   }
 }
 
-const readyVideoCount = computed(() => scenes.value.filter(s => s.status === 'video_ready').length)
-
 function resetMergeSequence(){
   mergeSequence.value=scenes.value.filter(s=>s.status==='video_ready').map(s=>({id:`scene-${s.id}`,scene_id:s.id,label:`Scene ${s.order} · ${s.title}`,video_url:s.video_url,duration:s.video_dur||s.duration||0}))
   mergeSequenceEpisode.value=activeEpN.value
@@ -925,12 +930,12 @@ async function mergeEpisode() {
   if(mergeSequenceEpisode.value!==activeEpN.value||!mergeSequence.value.length)resetMergeSequence()
   const ids = [...new Set(mergeSequence.value.filter(c=>c.scene_id).map(c=>c.scene_id))]
   if (mergeSequence.value.length < 2) {
-    toast.show('该集至少需要 2 个视频就绪的场景')
+    toast.show('最终成片至少需要 2 个有效视频片段')
     return
   }
   curMerging.value = true
   try {
-    await api.mergeAudioScenes(id(), { scene_ids: ids, edit_sequence: mergeSequence.value, dub: mergeDub.value, subtitles: mergeSub.value, screen_text: mergeScreenText.value, native_volume: nativeVolume.value, dialogue_volume: dialogueVolume.value, bgm_volume: bgmVolume.value })
+    await api.mergeAudioScenes(id(), { scene_ids: ids, edit_sequence: mergeSequence.value, episode_n: activeEpN.value, dub: mergeDub.value, subtitles: mergeSub.value, screen_text: mergeScreenText.value, native_volume: nativeVolume.value, dialogue_volume: dialogueVolume.value, bgm_volume: bgmVolume.value })
     toast.show(`第${activeEpN.value}集合并已启动（对白字幕：${mergeSub.value?'开':'关'}；功能文字：${mergeScreenText.value?'开':'关'}）`)
     setTimeout(loadMerges, 3000)
   } catch (e) {

@@ -109,6 +109,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/images", svc.HandleGenerateAllImages)
 	r.POST("/api/projects/:id/videos", svc.HandleGenerateAllVideos)
 	r.PATCH("/api/projects/:id/scenes/:sid", svc.HandleUpdateScene)
+	r.POST("/api/projects/:id/scenes/:sid/content/expand", svc.HandleExpandSceneContent)
 	r.POST("/api/projects/:id/scenes/:sid/reassign-episode", svc.HandleReassignSceneEpisode)
 	r.POST("/api/projects/:id/scenes/:sid/prompt/redesign", svc.HandleRedesignScenePrompt)
 	r.POST("/api/projects/:id/scenes/:sid/shots/director-draft", svc.HandleGenerateSceneDirectorDraft)
@@ -161,6 +162,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/audio-merge", svc.HandleCreateAudioMerge)
 	r.POST("/api/projects/:id/merge-all", svc.HandleCreateAllMerges)
 	r.GET("/api/projects/:id/merges", svc.HandleListMerges)
+	r.POST("/api/projects/:id/merges/:mid/retry", svc.HandleRetryMerge)
 	r.DELETE("/api/projects/:id/merges/:mid", svc.HandleDeleteMerge)
 	// 声景、音效与背景音乐层（仅管理已有音频，不调用生成供应商）
 	r.GET("/api/projects/:id/audio-layers", svc.HandleListAudioLayers)

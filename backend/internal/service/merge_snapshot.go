@@ -8,9 +8,9 @@ import (
 )
 
 // captureMergeInputSnapshot records every database input that can affect the rendered merge.
-func (s *ProjectService) captureMergeInputSnapshot(tx *gorm.DB, projectID uint, episodeN int, generation uint, videos []sceneVideoFingerprint, sceneIDs []uint, dub, subtitles bool, audio MergeAudioOptions) ([]byte, error) {
+func (s *ProjectService) captureMergeInputSnapshot(tx *gorm.DB, projectID uint, episodeN int, generation uint, videos []sceneVideoFingerprint, materials []mergeMaterialFingerprint, sceneIDs []uint, dub, subtitles bool, audio MergeAudioOptions) ([]byte, error) {
 	snapshot := mergeInputSnapshot{
-		Version: 5, EpisodeGeneration: generation, Videos: videos,
+		Version: 6, EpisodeGeneration: generation, Videos: videos, Materials: materials,
 		Dub: dub, Subtitles: subtitles, NativeVolume: audio.NativeVolume,
 		DialogueVolume: audio.DialogueVolume, BGMVolume: audio.BGMVolume, DialogueMix: audio.DialogueMix, ScreenText: audio.ScreenText,
 		Dialogues: []mergeDialogueFingerprint{}, AudioLayers: []mergeAudioLayerFingerprint{}, ScreenTextCues: []mergeScreenTextCueFingerprint{},
@@ -46,6 +46,8 @@ func (s *ProjectService) captureMergeInputSnapshot(tx *gorm.DB, projectID uint, 
 		query := tx.Where("project_id = ? AND episode_n = ? AND enabled = ? AND review_status = ?", projectID, episodeN, true, "approved")
 		if len(sceneIDs) > 0 {
 			query = query.Where("scene_id IS NULL OR scene_id IN ?", sceneIDs)
+		} else {
+			query = query.Where("scene_id IS NULL")
 		}
 		if err := query.Order("start_time, `order`, id").Find(&cues).Error; err != nil {
 			return nil, err

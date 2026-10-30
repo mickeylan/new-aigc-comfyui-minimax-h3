@@ -46,7 +46,7 @@ func TestStaleDialogueRejectsMergeBeforeRecordCreation(t *testing.T) {
 	}
 }
 
-func TestFailedMergeWithoutOutputIsRemoved(t *testing.T) {
+func TestFailedMergeWithoutOutputRetainsFailureSnapshotAndError(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	if err := db.AutoMigrate(&models.Project{}, &models.MergeTask{}); err != nil {
 		t.Fatal(err)
@@ -56,17 +56,17 @@ func TestFailedMergeWithoutOutputIsRemoved(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := &ProjectService{db: db}
-	failed := models.MergeTask{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Status: "running"}
+	failed := models.MergeTask{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Status: "running", InputSnapshot: `{"version":1}`, EditSequence: `[{"scene_id":1}]`}
 	if err := db.Create(&failed).Error; err != nil {
 		t.Fatal(err)
 	}
 	svc.failMerge(&failed, &project, "对白音频未就绪")
-	var count int64
-	if err := db.Model(&models.MergeTask{}).Where("id = ?", failed.ID).Count(&count).Error; err != nil {
+	var retained models.MergeTask
+	if err := db.First(&retained, failed.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if count != 0 {
-		t.Fatalf("failed merge row retained")
+	if retained.Status != "failed" || retained.Error != "对白音频未就绪" || retained.InputSnapshot != failed.InputSnapshot || retained.EditSequence != failed.EditSequence {
+		t.Fatalf("failed merge contract not retained: %+v", retained)
 	}
 
 	legacy := models.MergeTask{ProjectID: project.ID, EpisodeN: 1, Status: "failed", Error: "旧失败记录"}
@@ -81,7 +81,7 @@ func TestFailedMergeWithoutOutputIsRemoved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(merges) != 1 || merges[0].ID != success.ID {
+	if len(merges) != 3 || merges[0].ID != success.ID || merges[1].ID != legacy.ID || merges[2].ID != failed.ID {
 		t.Fatalf("unexpected merge list: %+v", merges)
 	}
 }

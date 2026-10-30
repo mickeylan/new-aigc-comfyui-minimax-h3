@@ -74,6 +74,13 @@ test('生成分镜界面支持上传或选择素材替换当前Scene视频', () 
   assert.match(source, /原视频和历史候选会保留/)
 })
 
+test('最终成片按实际编排序列启用并提交集数', () => {
+  assert.match(source, /:disabled="busy \|\| curMerging \|\| mergeSequence\.length < 2"/)
+  assert.match(source, /episode_n: activeEpN\.value/)
+  assert.match(source, /最终成片至少需要 2 个有效视频片段/)
+  assert.doesNotMatch(source, /readyVideoCount < 2/)
+})
+
 test('最终合并前提供非破坏性成片编排界面', () => {
   assert.match(source, /FINAL CUT ASSEMBLY/)
   assert.match(source, /最终成片编排/)

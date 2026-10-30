@@ -407,6 +407,7 @@ type MergeTask struct {
 	DialogueVolume         float64   `gorm:"column:dialogue_volume;default:1" json:"dialogue_volume"`
 	BGMVolume              float64   `gorm:"column:bgm_volume;default:1" json:"bgm_volume"`
 	DialogueMix            bool      `gorm:"column:dialogue_mix;default:false" json:"dialogue_mix"`
+	PreflightWarnings      string    `gorm:"column:preflight_warnings;type:text" json:"preflight_warnings"`
 	Error                  string    `json:"error"`
 	CreatedAt              time.Time `json:"created_at"`
 	UpdatedAt              time.Time `json:"updated_at"`

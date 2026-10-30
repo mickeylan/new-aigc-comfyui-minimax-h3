@@ -1225,6 +1225,33 @@ func (s *Service) HandleCreateAllMerges(c *gin.Context) {
 	c.JSON(200, gin.H{"ok": true, "message": fmt.Sprintf("已为 %d 集启动合并", n)})
 }
 
+// HandleRetryMerge retries the exact immutable inputs of a failed task.
+func (s *Service) HandleRetryMerge(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	mergeID, err := strconv.ParseUint(c.Param("mid"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid merge id"})
+		return
+	}
+	mt, err := s.Projects.RetryMergeTask(p, uint(mergeID))
+	if err != nil {
+		if errors.Is(err, ErrMergeSnapshotChanged) || errors.Is(err, ErrMergeRetryConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "失败的合并记录不存在"})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, mt)
+}
+
 // HandleListMerges 合并任务列表
 func (s *Service) HandleDeleteMerge(c *gin.Context) {
 	p, ok := s.loadProject(c)

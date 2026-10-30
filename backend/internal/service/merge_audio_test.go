@@ -1,9 +1,32 @@
 package service
 
 import (
+	"bytes"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+
+	"comfyui-console/internal/models"
+	"github.com/gin-gonic/gin"
 )
+
+func TestAudioMergeRouteValidatesActualSequenceLength(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := safetyDB(t, &models.MergeTask{})
+	project := models.Project{Title: "route"}
+	db.Create(&project)
+	svc := &Service{DB: db, Projects: &ProjectService{db: db}}
+	router := gin.New()
+	router.POST("/api/projects/:id/audio-merge", svc.HandleCreateAudioMerge)
+	body := []byte(`{"episode_n":1,"edit_sequence":[{"material_id":1}]}`)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/projects/"+strconv.FormatUint(uint64(project.ID), 10)+"/audio-merge", bytes.NewReader(body)))
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "至少需要2个视频片段") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
 
 func TestValidateMergeEditSequenceSupportsSelectionOrderAndInsertedVideos(t *testing.T) {
 	s1, s2, material := uint(11), uint(12), uint(90)
@@ -104,5 +127,30 @@ func TestBuildMergeAudioGraphClampsFadesAndTimeline(t *testing.T) {
 		if !strings.Contains(graph.Filters, want) {
 			t.Fatalf("clamped graph missing %q: %s", want, graph.Filters)
 		}
+	}
+}
+
+func TestBuildMergeTimelineSRTUsesMixedAndDuplicateClipPositions(t *testing.T) {
+	db := safetyDB(t)
+	scene := models.Scene{ProjectID: 1}
+	db.Create(&scene)
+	db.Create(&models.Dialogue{ProjectID: 1, SceneID: scene.ID, Order: 1, Text: "line"})
+	svc := &ProjectService{db: db}
+	videos := []mergeResolvedVideo{{SceneID: scene.ID}, {}, {SceneID: scene.ID}}
+	durs := []sceneVideo{{dur: 2}, {dur: 3}, {dur: 4}}
+	text, count, err := svc.buildMergeTimelineSRT(videos, durs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 || !strings.Contains(text, "00:00:00,000 --> 00:00:02,000") || !strings.Contains(text, "00:00:05,000 --> 00:00:09,000") {
+		t.Fatalf("subtitle timeline misplaced: count=%d\n%s", count, text)
+	}
+}
+
+func TestBuildMergeTimelineSRTPureMaterialIsEmpty(t *testing.T) {
+	svc := &ProjectService{db: safetyDB(t)}
+	text, count, err := svc.buildMergeTimelineSRT([]mergeResolvedVideo{{}, {}}, []sceneVideo{{dur: 2}, {dur: 3}})
+	if err != nil || count != 0 || text != "" {
+		t.Fatalf("pure material subtitle = %q, %d, %v", text, count, err)
 	}
 }

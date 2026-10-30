@@ -45,7 +45,7 @@ func TestGenerationCandidateReviewAndSelectProjectsToScene(t *testing.T) {
 
 func TestDetachedImageRetrySuccessInvalidatesVideoFramesAndContinuity(t *testing.T) {
 	db := newTestDBWithNewModels(t)
-	if err := db.AutoMigrate(&models.GenerationCandidate{}, &models.FrameCandidate{}, &models.SceneContinuity{}); err != nil {
+	if err := db.AutoMigrate(&models.GenerationCandidate{}, &models.FrameCandidate{}, &models.SceneContinuity{}, &models.MergeTask{}); err != nil {
 		t.Fatal(err)
 	}
 	project := models.Project{Title: "p"}
@@ -106,7 +106,7 @@ func TestDetachedImageRetrySuccessInvalidatesVideoFramesAndContinuity(t *testing
 
 func TestDetachedVideoRetrySuccessClearsOldFramesAndInvalidatesContinuity(t *testing.T) {
 	db := newTestDBWithNewModels(t)
-	if err := db.AutoMigrate(&models.GenerationCandidate{}, &models.FrameCandidate{}, &models.SceneContinuity{}); err != nil {
+	if err := db.AutoMigrate(&models.GenerationCandidate{}, &models.FrameCandidate{}, &models.SceneContinuity{}, &models.MergeTask{}); err != nil {
 		t.Fatal(err)
 	}
 	project := models.Project{Title: "p"}
@@ -284,6 +284,110 @@ func TestCandidateDeleteSuccess(t *testing.T) {
 	db.Model(&models.GenerationCandidate{}).Where("id = ?", candidate.ID).Count(&count)
 	if count != 0 {
 		t.Fatalf("candidate still exists after deletion")
+	}
+}
+
+func TestSelectHistoricalVideoInvalidatesDependentsAndRepeatedSelectionIsIdempotent(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	if err := db.AutoMigrate(&models.GenerationCandidate{}, &models.FrameCandidate{}, &models.SceneContinuity{}, &models.MergeTask{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "select video"}
+	db.Create(&project)
+	source := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Status: "video_ready", ImageFile: "source.png", VideoFile: "new.mp4", VideoTaskID: "new-video"}
+	dependent := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 2, Status: "video_ready", ImageFile: "next.png", VideoFile: "next.mp4", VideoTaskID: "next-video"}
+	db.Create(&source)
+	db.Create(&dependent)
+	historical := models.GenerationCandidate{ProjectID: project.ID, EntityType: "scene", EntityID: source.ID, MediaType: "video", TaskID: "old-video", File: "old.mp4"}
+	current := models.GenerationCandidate{ProjectID: project.ID, EntityType: "scene", EntityID: source.ID, MediaType: "video", TaskID: "new-video", File: "new.mp4", IsCurrent: true}
+	dependentCandidate := models.GenerationCandidate{ProjectID: project.ID, EntityType: "scene", EntityID: dependent.ID, MediaType: "video", TaskID: "next-video", File: "next.mp4", IsCurrent: true}
+	db.Create(&historical)
+	db.Create(&current)
+	db.Create(&dependentCandidate)
+	oldFrame := models.FrameCandidate{ProjectID: project.ID, SceneID: source.ID, VideoTaskID: "new-video", Type: models.FrameCandidateSelected, ImageFile: "old-tail.png"}
+	db.Create(&oldFrame)
+	db.Create(&models.SceneContinuity{SceneID: dependent.ID, Mode: models.ContinuityModeContinue, SourceSceneID: &source.ID, SelectedFrameID: &oldFrame.ID, SourceVideoTaskID: "new-video", Status: "ready"})
+	db.Create(&models.MergeTask{ProjectID: project.ID, EpisodeN: 1, Status: "pending"})
+
+	svc := NewGenerationCandidateService(db)
+	if _, err := svc.SelectCurrent(project.ID, historical.ID); err != nil {
+		t.Fatal(err)
+	}
+	db.First(&dependent, dependent.ID)
+	db.First(&dependentCandidate, dependentCandidate.ID)
+	if dependent.VideoFile != "" || dependent.VideoTaskID != "" || !dependentCandidate.Stale {
+		t.Fatalf("dependent output survived video switch: scene=%+v candidate=%+v", dependent, dependentCandidate)
+	}
+	newFrame := models.FrameCandidate{ProjectID: project.ID, SceneID: source.ID, VideoTaskID: "old-video", Type: models.FrameCandidateSelected, ImageFile: "new-tail.png"}
+	db.Create(&newFrame)
+	if _, err := svc.SelectCurrent(project.ID, historical.ID); err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	db.Model(&models.FrameCandidate{}).Where("id = ?", newFrame.ID).Count(&count)
+	if count != 1 {
+		t.Fatal("repeated adoption deleted a newly produced frame")
+	}
+}
+
+func TestSelectHistoricalImageClearsFramesAndVideoDerivedState(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	if err := db.AutoMigrate(&models.GenerationCandidate{}, &models.FrameCandidate{}, &models.SceneContinuity{}, &models.MergeTask{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "select image"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Status: "video_ready", ImageFile: "new.png", ImageTaskID: "new-image", VideoFile: "derived.mp4", VideoInputFile: "derived-local.mp4", VideoTaskID: "derived-video", VideoFullPrompt: "derived prompt", VideoFirstFrameImg: "first.png", VideoLastFrameImg: "last.png"}
+	db.Create(&scene)
+	historical := models.GenerationCandidate{ProjectID: project.ID, EntityType: "scene", EntityID: scene.ID, MediaType: "image", TaskID: "old-image", File: "old.png"}
+	current := models.GenerationCandidate{ProjectID: project.ID, EntityType: "scene", EntityID: scene.ID, MediaType: "image", TaskID: "new-image", File: "new.png", IsCurrent: true}
+	video := models.GenerationCandidate{ProjectID: project.ID, EntityType: "scene", EntityID: scene.ID, MediaType: "video", TaskID: "derived-video", File: "derived.mp4", IsCurrent: true}
+	db.Create(&historical)
+	db.Create(&current)
+	db.Create(&video)
+	db.Create(&models.FrameCandidate{ProjectID: project.ID, SceneID: scene.ID, VideoTaskID: "derived-video", Type: models.FrameCandidateVideoLast, ImageFile: "last.png"})
+
+	if _, err := NewGenerationCandidateService(db).SelectCurrent(project.ID, historical.ID); err != nil {
+		t.Fatal(err)
+	}
+	db.First(&scene, scene.ID)
+	db.First(&video, video.ID)
+	var frameCount int64
+	db.Model(&models.FrameCandidate{}).Where("scene_id = ?", scene.ID).Count(&frameCount)
+	if scene.ImageFile != "old.png" || scene.VideoFile != "" || scene.VideoTaskID != "" || scene.VideoFullPrompt != "" || frameCount != 0 || !video.Stale || video.IsCurrent {
+		t.Fatalf("old image derived state survived: scene=%+v video=%+v frames=%d", scene, video, frameCount)
+	}
+}
+
+func TestSelectCurrentRollsBackWhenDerivedInvalidationFails(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	if err := db.AutoMigrate(&models.GenerationCandidate{}, &models.FrameCandidate{}, &models.SceneContinuity{}, &models.MergeTask{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "rollback"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Status: "video_ready", VideoFile: "current.mp4", VideoTaskID: "current-video"}
+	db.Create(&scene)
+	historical := models.GenerationCandidate{ProjectID: project.ID, EntityType: "scene", EntityID: scene.ID, MediaType: "video", TaskID: "old-video", File: "old.mp4"}
+	current := models.GenerationCandidate{ProjectID: project.ID, EntityType: "scene", EntityID: scene.ID, MediaType: "video", TaskID: "current-video", File: "current.mp4", IsCurrent: true}
+	db.Create(&historical)
+	db.Create(&current)
+	if err := db.Callback().Delete().Before("gorm:delete").Register("test:fail_frame_delete", func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Name == "FrameCandidate" {
+			tx.AddError(errors.New("injected frame delete failure"))
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := NewGenerationCandidateService(db).SelectCurrent(project.ID, historical.ID); err == nil {
+		t.Fatal("expected transactional invalidation failure")
+	}
+	db.First(&scene, scene.ID)
+	db.First(&historical, historical.ID)
+	db.First(&current, current.ID)
+	if scene.VideoTaskID != "current-video" || historical.IsCurrent || !current.IsCurrent {
+		t.Fatalf("partial candidate adoption escaped rollback: scene=%+v historical=%+v current=%+v", scene, historical, current)
 	}
 }
 
