@@ -586,9 +586,17 @@
           <div class="field-hint">选择后，AI导演拆镜与MiniMax H3视频提示词将使用对应规则；武戏强调3–6秒实时动作、碰撞结果和禁止慢动作。</div>
         </div>
         <div class="field">
-          <label>场景正文（视频提示词）</label>
-          <textarea v-model="sceneForm.content" class="textarea" rows="3"
-            placeholder="描述画面动作、镜头运动、对白…" />
+          <div class="field-label-actions"><label>场景正文（视频提示词）</label><button type="button" class="btn btn-sm btn-secondary" :disabled="expandingSceneContent || !sceneForm.content.trim()" @click="expandSceneContent">{{ expandingSceneContent ? '导演扩写中…' : 'AI导演扩写' }}</button></div>
+          <textarea v-model="sceneForm.content" class="textarea" rows="3" placeholder="描述画面动作、镜头运动、对白…" />
+          <input v-model="sceneExpandRequirements" class="input" placeholder="可选：输入创作要求，如加强逃亡节奏与空间阻碍" />
+          <div v-if="sceneExpandPreview" class="scene-expand-preview">
+            <label>扩写预览（可编辑，尚未保存）</label>
+            <textarea v-model="sceneExpandPreview.content" class="textarea" rows="10" />
+            <div v-if="sceneExpandPreview.director_note" class="field-hint"><strong>导演说明：</strong>{{ sceneExpandPreview.director_note }}</div>
+            <div class="field-hint">已有结构化 Shots 不会被自动覆盖；可用下方入口保存正文并继续 AI 镜头设计，预览确认后再替换旧镜头。</div>
+            <button type="button" class="btn btn-sm" @click="applyExpandedSceneContent">应用到正文</button>
+            <button type="button" class="btn btn-sm btn-secondary" :disabled="savingScene" @click="applyAndOpenSceneDirector">应用、保存并继续镜头设计</button>
+          </div>
         </div>
         <div class="field"><label>人物用途</label><div v-if="characters.length" class="role-grid"><div v-for="ch in characters" :key="ch.id" class="role-row"><strong>{{ ch.name }}</strong><label><input type="checkbox" :checked="sceneRoleHas('visible', ch.name)" @change="toggleSceneRole('visible', ch.name, $event.target.checked)" /> 画面可见</label><label><input type="checkbox" :checked="sceneRoleHas('voice', ch.name)" @change="toggleSceneRole('voice', ch.name, $event.target.checked)" /> 发声</label><label><input type="checkbox" :checked="sceneRoleHas('mentioned', ch.name)" @change="toggleSceneRole('mentioned', ch.name, $event.target.checked)" /> 仅提及</label></div></div><div v-else class="field-hint">请先建立角色资产。</div><div class="field-hint">可见与发声可同时勾选；“仅提及”与二者互斥。只有画面可见人物需要四视图。</div></div>
         <div class="field"><label>场景图生成模板</label><select v-model="sceneForm.image_engine" class="input"><option value="minimax_h3">MiniMax H3 SelfLift（当前默认）</option><option value="qwen_image_2_1" :disabled="!qwenSceneTemplateReady">Qwen-Image-2.1{{ qwenSceneTemplateReady ? '' : '（工作流模板未安装）' }}</option></select><div class="field-hint">仅决定剧情场景图工作流；视频仍使用现有 H3 流程。Qwen 模板安装并启用后才可选择。</div></div>
@@ -1148,6 +1156,9 @@ const editingScene = ref(null)
 const editingProject = ref(false)
 const savingScene = ref(false)
 const redesigningScenePrompt = ref(false)
+const expandingSceneContent = ref(false)
+const sceneExpandRequirements = ref('')
+const sceneExpandPreview = ref(null)
 const savingProject = ref(false)
 const sceneError = ref('')
 const projectError = ref('')
@@ -2604,6 +2615,8 @@ async function removeProject() {
 
 async function openEditScene(sc) {
   sceneError.value = ''
+  sceneExpandRequirements.value = ''
+  sceneExpandPreview.value = null
   editingScene.value = sc
   Object.assign(sceneForm, {
     title: sc.title, content: sc.content, duration: Number(sc.duration) || 5, scene_mode: sc.scene_mode || '', image_prompt: sc.image_prompt, video_prompt: sc.video_prompt || '',
@@ -2636,6 +2649,37 @@ function referenceKey(ref) { return `${ref.source_type}:${ref.source_id}:${ref.v
 function referenceIndex(ref) { const key = referenceKey(ref); return selectedSceneReferences.value.findIndex(x => referenceKey(x) === key) }
 function toggleSceneReference(ref) { const i = referenceIndex(ref); if (i >= 0) selectedSceneReferences.value.splice(i, 1); else selectedSceneReferences.value.push({ source_type: ref.source_type, source_id: ref.source_id, variant: ref.variant, use_krea2: true, use_h3: true }) }
 function moveReference(index, delta) { const target = index + delta; if (target < 0 || target >= selectedSceneReferences.value.length) return; const [item] = selectedSceneReferences.value.splice(index, 1); selectedSceneReferences.value.splice(target, 0, item) }
+
+async function expandSceneContent() {
+  if (!editingScene.value || !sceneForm.content.trim()) return
+  const sceneId = editingScene.value.id
+  const sourceContent = sceneForm.content
+  expandingSceneContent.value = true
+  sceneError.value = ''
+  sceneExpandPreview.value = null
+  try {
+    const { data } = await api.expandSceneContent(id(), sceneId, { content: sceneForm.content, requirements: sceneExpandRequirements.value })
+    if (editingScene.value?.id !== sceneId) return
+    sceneExpandPreview.value = { content: data.content || '', director_note: data.director_note || '', sceneId, sourceContent }
+  } catch (e) {
+    if (editingScene.value?.id === sceneId) sceneError.value = e.response?.data?.error || 'AI 导演扩写失败'
+  } finally {
+    expandingSceneContent.value = false
+  }
+}
+function applyExpandedSceneContent() {
+  if (!sceneExpandPreview.value?.content || editingScene.value?.id !== sceneExpandPreview.value.sceneId) return false
+  if (sceneForm.content !== sceneExpandPreview.value.sourceContent && !window.confirm('正文在扩写期间已有修改，是否用当前预览替换？')) return false
+  sceneForm.content = sceneExpandPreview.value.content
+  sceneExpandPreview.value = null
+  toast.success('已应用到未保存正文，请确认并点击保存')
+  return true
+}
+async function applyAndOpenSceneDirector() {
+  const sc = editingScene.value
+  if (!sc || !applyExpandedSceneContent()) return
+  if (await saveScene()) await router.push({ path: `/projects/${id()}/editor`, query: { episode: sc.episode_n || 1, scene: sc.id, workspace: 'production' } })
+}
 
 async function redesignScenePrompt() {
   if (!editingScene.value || !sceneForm.content.trim()) return
@@ -2678,8 +2722,10 @@ async function saveScene() {
     editingScene.value = null
     await load()
     if (promptChanged) toast.show('画面提示词已修改，场景已重置，请重新生成画面')
+    return true
   } catch (e) {
     sceneError.value = e.response?.data?.error || '保存失败'
+    return false
   } finally {
     savingScene.value = false
   }
