@@ -54,6 +54,14 @@ test('local English drafts are isolated by project and scene and cleared only af
   assert.doesNotMatch(confirm, /!videoTaskSourceHash\.value/)
   assert.doesNotMatch(confirm, /invalidateVideoPromptPreview\(\)/)
   assert.match(detail, /当前英文草稿仍可直接审核、保存或生成/)
+  assert.match(confirm, /videoTaskScene\.value\.video_full_prompt = execPrompt/)
+  assert.match(confirm, /videoTaskScene\.value\.prompt_stale = false/)
+})
+
+test('saved English prompt never greys video generation controls', () => {
+  assert.match(detail, /<button v-else class="btn btn-sm" :class="\{ 'btn-ghost': sc\.status === 'video_ready' \}" @click="genVideo\(sc\)">/)
+  assert.match(detail, /<button class="btn btn-secondary" @click="confirmEnglishAndGenerate\(false\)">确认保存英文执行稿<\/button>/)
+  assert.match(detail, /<button class="btn" @click="confirmEnglishAndGenerate\(true\)">/)
 })
 
 test('regeneration always proposes Chinese without replacing the current draft', () => {
