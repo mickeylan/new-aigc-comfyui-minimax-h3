@@ -466,9 +466,20 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 		template = "minimax_h3_ref2v"
 	}
 	audioSelection := s.Projects.sceneReviewedAudioSelection(sc)
+	currentSourceHash, hashErr := s.sceneVideoPromptSourceHash(sc)
+	execConfirmed := hashErr == nil && !sc.PromptStale && sc.VideoExecSourceHash == currentSourceHash && sc.VideoExecConfirmedHash != "" && sc.VideoExecConfirmedHash == hashString(sc.VideoFullPrompt)
+	execStatus := "unconfirmed"
+	if sc.VideoPromptMasterZH == "" {
+		execStatus = "legacy"
+	} else if execConfirmed {
+		execStatus = "confirmed"
+	}
 	response := gin.H{
 		"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt,
 		"has_saved_prompt": hasSavedPrompt, "prompt_stale": sc.PromptStale, "prompt_issues": promptIssues,
+		"master_prompt_zh": sc.VideoPromptMasterZH, "exec_prompt": sc.VideoFullPrompt,
+		"exec_status": execStatus, "translation_required": sc.VideoPromptMasterZH != "" && !execConfirmed,
+		"source_hash": sc.VideoExecSourceHash, "current_source_hash": currentSourceHash, "exec_hash": sc.VideoExecConfirmedHash, "confirmed_at": sc.VideoExecConfirmedAt,
 		"reference_limit_warning": s.Projects.sceneVideoReferenceWarning(sc, len(refs)),
 		"template":                template, "width": width, "height": height, "reference_count": len(refs),
 		"duration": normalizeSceneDuration(sc.Duration), "fps": 24, "steps": 20,
@@ -628,6 +639,10 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 		actionPrompt = h3IntegratedDescription(prompt)
 	}
 	updates := map[string]any{"video_full_prompt": prompt, "video_prompt": actionPrompt, "prompt_stale": false}
+	if strings.TrimSpace(sc.VideoPromptMasterZH) != "" {
+		// Legacy editor may remain available, but cannot confirm or bypass Chinese-master review.
+		updates["video_exec_source_hash"], updates["video_exec_confirmed_hash"], updates["video_exec_confirmed_at"] = "", "", nil
+	}
 	if strings.TrimSpace(req.Template) != "" {
 		updates["video_template"] = strings.TrimSpace(req.Template)
 	}

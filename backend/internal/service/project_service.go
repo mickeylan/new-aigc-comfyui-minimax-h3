@@ -6606,13 +6606,22 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	if sc.VideoLocked {
 		return fmt.Errorf("场景 %d 的视频已锁定，请先解锁", sc.Order)
 	}
-	if sc.PromptStale && strings.TrimSpace(sc.VideoFullPrompt) != "" {
-		return fmt.Errorf("场景 %d 的剧情、人物或参考图已变化，请重新生成或确认视频提示词后再生成", sc.Order)
-	}
 	if s.continuity != nil {
 		if err := s.continuity.PrepareScene(sc); err != nil {
 			return err
 		}
+	}
+	if strings.TrimSpace(sc.VideoPromptMasterZH) != "" {
+		hashService := &Service{DB: s.db, Projects: s}
+		currentSource, err := hashService.sceneVideoPromptSourceHash(sc)
+		if err != nil {
+			return err
+		}
+		if sc.VideoExecSourceHash != currentSource || sc.VideoExecConfirmedHash == "" || sc.VideoExecConfirmedHash != hashString(sc.VideoFullPrompt) {
+			return fmt.Errorf("场景 %d 的中文主稿尚未翻译并确认，或确认来源已变化", sc.Order)
+		}
+	} else if sc.PromptStale && strings.TrimSpace(sc.VideoFullPrompt) != "" {
+		return fmt.Errorf("场景 %d 的剧情、人物或参考图已变化，请重新生成或确认视频提示词后再生成", sc.Order)
 	}
 	durationLimit := configuredH3GenerationDuration(s.db)
 	if sc.Duration > durationLimit {
@@ -6650,6 +6659,10 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		requestedTemplate = h3CombatRef2VTemplate
 	}
 	tplCode, promptText, videoFiles := assemble(requestedTemplate)
+	if strings.TrimSpace(sc.VideoPromptMasterZH) != "" {
+		// Submit the confirmed execution draft byte-for-byte; validation below remains mandatory.
+		promptText = sc.VideoFullPrompt
+	}
 	if isReviewedAudioVideoTemplate(tplCode) {
 		var err error
 		videoFiles, err = s.attachReviewedSceneAudio(sc, videoFiles)

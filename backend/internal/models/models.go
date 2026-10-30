@@ -192,52 +192,56 @@ type Episode struct {
 
 // Scene 分镜场景（项目内顺序片段）
 type Scene struct {
-	ID                     uint      `gorm:"primaryKey" json:"id"`
-	ProjectID              uint      `gorm:"column:project_id;index;uniqueIndex:idx_scene_project_generation_episode_order" json:"project_id"`
-	EpisodeN               int       `gorm:"column:episode_n;default:1;uniqueIndex:idx_scene_project_generation_episode_order" json:"episode_n"` // 所属集数（从 1 开始）
-	Order                  int       `gorm:"uniqueIndex:idx_scene_project_generation_episode_order" json:"order"`                                // 场景序号（从 1 开始）
-	Generation             uint      `gorm:"uniqueIndex:idx_scene_project_generation_episode_order" json:"generation"`
-	Title                  string    `json:"title"`                                                               // 场景标题
-	Content                string    `json:"content"`                                                             // 场景正文（作为视频提示词）
-	ImagePrompt            string    `json:"image_prompt"`                                                        // 文生图提示词
-	ImageEngine            string    `gorm:"column:image_engine;default:minimax_h3" json:"image_engine"`          // minimax_h3/qwen_image_2_1
-	SceneMode              string    `gorm:"column:scene_mode" json:"scene_mode"`                                 // 文戏/武戏/文武混合；空值兼容旧数据并自动判断
-	NegativePrompt         string    `gorm:"column:negative_prompt;type:text" json:"negative_prompt"`             // 镜头层聚合的负面提示词
-	ReferenceImagesJSON    string    `gorm:"column:reference_images_json;type:text" json:"-"`                     // 用户指定的有序参考图及 Krea2/H3 用途
-	Duration               float64   `gorm:"default:5" json:"duration"`                                           // 场景目标时长（秒）
-	Characters             string    `json:"characters"`                                                          // 兼容字段：旧数据中的出场角色名
-	VisibleCharacters      string    `gorm:"column:visible_characters" json:"visible_characters"`                 // 画面中实际可见角色，逗号分隔；仅此类要求视觉参考
-	VoiceCharacters        string    `gorm:"column:voice_characters" json:"voice_characters"`                     // 仅发声但不在画面中的角色，逗号分隔
-	MentionedCharacters    string    `gorm:"column:mentioned_characters" json:"mentioned_characters"`             // 仅在剧情、对白或独白中被提及的角色
-	CharacterRolesSet      bool      `gorm:"column:character_roles_set;default:false" json:"character_roles_set"` // 是否已明确完成可见/发声/提及分类
-	LocationName           string    `gorm:"column:location_name" json:"location"`                                // 场景地点名（对应 location 资产，用于环境一致性注入）
-	Props                  string    `json:"props"`                                                               // 出场关键道具名（逗号分隔），用于道具一致性注入
-	VisualType             string    `gorm:"column:visual_type;default:normal" json:"visual_type"`                // normal/megastructure
-	MegaType               string    `gorm:"column:mega_type" json:"mega_type"`                                   // architecture/creature/geological/mechanical/surreal
-	ImageFile              string    `json:"image_file"`                                                          // 首帧图文件名（input/<project_id>/ 下）
-	ImageLocked            bool      `gorm:"column:image_locked;default:false" json:"image_locked"`               // 禁止生成端点覆盖当前图片
-	VideoLocked            bool      `gorm:"column:video_locked;default:false" json:"video_locked"`               // 禁止生成端点覆盖当前视频
-	ImageToken             string    `gorm:"column:image_token" json:"-"`                                         // 单次生成令牌，防止并发或过期结果回写
-	ImageTaskID            string    `gorm:"column:image_task_id;index" json:"image_task_id"`                     // 关联 Krea2 分镜画面任务
-	VideoTaskID            string    `gorm:"column:video_task_id;index" json:"video_task_id"`                     // 关联视频生成任务
-	VideoGPU               *int      `gorm:"column:video_gpu" json:"video_gpu"`
-	VideoFile              string    `gorm:"column:video_file" json:"video_file"`                         // ComfyUI 输出相对路径（合并使用）
-	VideoInputFile         string    `gorm:"column:video_input_file" json:"video_input_file"`             // 下载到项目 input 目录的浏览器可播放副本
-	VideoPrompt            string    `gorm:"column:video_prompt;type:text" json:"video_prompt"`           // 用户可编辑的动作正文
-	VideoFullPrompt        string    `gorm:"column:video_full_prompt;type:text" json:"video_full_prompt"` // 用户审核后最终提交的完整 H3 提示词
-	VideoTemplate          string    `gorm:"column:video_template" json:"video_template"`                 // 视频模板（minimax_h3_i2v/ref2v/t2v/first_last 等；空则自动选择）
-	VideoFirstFrameImg     string    `gorm:"column:video_first_frame_img" json:"video_first_frame_img"`   // 首尾帧模板的首帧图文件名
-	VideoLastFrameImg      string    `gorm:"column:video_last_frame_img" json:"video_last_frame_img"`     // 首尾帧模板的尾帧图文件名
-	Status                 string    `gorm:"index" json:"status"`                                         // pending/image_pending/image_ready/video_pending/video_running/video_ready/failed
-	Error                  string    `json:"error"`
-	PromptStale            bool      `gorm:"column:prompt_stale;default:false" json:"prompt_stale"` // 来源变化后需重新确认完整视频提示词
-	ImageRetries           int       `gorm:"column:image_retries" json:"image_retries"`             // 画面生成已重试次数
-	VideoRetries           int       `gorm:"column:video_retries" json:"video_retries"`             // 视频生成已重试次数
-	ImageCandidateParentID *uint     `gorm:"column:image_candidate_parent_id" json:"-"`             // 当前图片任务的候选分支来源
-	VideoCandidateParentID *uint     `gorm:"column:video_candidate_parent_id" json:"-"`             // 当前视频任务的候选分支来源
-	ShotCount              int       `gorm:"column:shot_count;default:0" json:"shot_count"`         // 镜头数量
-	CreatedAt              time.Time `json:"created_at"`
-	UpdatedAt              time.Time `json:"updated_at"`
+	ID                     uint       `gorm:"primaryKey" json:"id"`
+	ProjectID              uint       `gorm:"column:project_id;index;uniqueIndex:idx_scene_project_generation_episode_order" json:"project_id"`
+	EpisodeN               int        `gorm:"column:episode_n;default:1;uniqueIndex:idx_scene_project_generation_episode_order" json:"episode_n"` // 所属集数（从 1 开始）
+	Order                  int        `gorm:"uniqueIndex:idx_scene_project_generation_episode_order" json:"order"`                                // 场景序号（从 1 开始）
+	Generation             uint       `gorm:"uniqueIndex:idx_scene_project_generation_episode_order" json:"generation"`
+	Title                  string     `json:"title"`                                                               // 场景标题
+	Content                string     `json:"content"`                                                             // 场景正文（作为视频提示词）
+	ImagePrompt            string     `json:"image_prompt"`                                                        // 文生图提示词
+	ImageEngine            string     `gorm:"column:image_engine;default:minimax_h3" json:"image_engine"`          // minimax_h3/qwen_image_2_1
+	SceneMode              string     `gorm:"column:scene_mode" json:"scene_mode"`                                 // 文戏/武戏/文武混合；空值兼容旧数据并自动判断
+	NegativePrompt         string     `gorm:"column:negative_prompt;type:text" json:"negative_prompt"`             // 镜头层聚合的负面提示词
+	ReferenceImagesJSON    string     `gorm:"column:reference_images_json;type:text" json:"-"`                     // 用户指定的有序参考图及 Krea2/H3 用途
+	Duration               float64    `gorm:"default:5" json:"duration"`                                           // 场景目标时长（秒）
+	Characters             string     `json:"characters"`                                                          // 兼容字段：旧数据中的出场角色名
+	VisibleCharacters      string     `gorm:"column:visible_characters" json:"visible_characters"`                 // 画面中实际可见角色，逗号分隔；仅此类要求视觉参考
+	VoiceCharacters        string     `gorm:"column:voice_characters" json:"voice_characters"`                     // 仅发声但不在画面中的角色，逗号分隔
+	MentionedCharacters    string     `gorm:"column:mentioned_characters" json:"mentioned_characters"`             // 仅在剧情、对白或独白中被提及的角色
+	CharacterRolesSet      bool       `gorm:"column:character_roles_set;default:false" json:"character_roles_set"` // 是否已明确完成可见/发声/提及分类
+	LocationName           string     `gorm:"column:location_name" json:"location"`                                // 场景地点名（对应 location 资产，用于环境一致性注入）
+	Props                  string     `json:"props"`                                                               // 出场关键道具名（逗号分隔），用于道具一致性注入
+	VisualType             string     `gorm:"column:visual_type;default:normal" json:"visual_type"`                // normal/megastructure
+	MegaType               string     `gorm:"column:mega_type" json:"mega_type"`                                   // architecture/creature/geological/mechanical/surreal
+	ImageFile              string     `json:"image_file"`                                                          // 首帧图文件名（input/<project_id>/ 下）
+	ImageLocked            bool       `gorm:"column:image_locked;default:false" json:"image_locked"`               // 禁止生成端点覆盖当前图片
+	VideoLocked            bool       `gorm:"column:video_locked;default:false" json:"video_locked"`               // 禁止生成端点覆盖当前视频
+	ImageToken             string     `gorm:"column:image_token" json:"-"`                                         // 单次生成令牌，防止并发或过期结果回写
+	ImageTaskID            string     `gorm:"column:image_task_id;index" json:"image_task_id"`                     // 关联 Krea2 分镜画面任务
+	VideoTaskID            string     `gorm:"column:video_task_id;index" json:"video_task_id"`                     // 关联视频生成任务
+	VideoGPU               *int       `gorm:"column:video_gpu" json:"video_gpu"`
+	VideoFile              string     `gorm:"column:video_file" json:"video_file"`                         // ComfyUI 输出相对路径（合并使用）
+	VideoInputFile         string     `gorm:"column:video_input_file" json:"video_input_file"`             // 下载到项目 input 目录的浏览器可播放副本
+	VideoPrompt            string     `gorm:"column:video_prompt;type:text" json:"video_prompt"`           // 用户可编辑的动作正文
+	VideoFullPrompt        string     `gorm:"column:video_full_prompt;type:text" json:"video_full_prompt"` // 用户审核后最终提交的完整 H3 提示词
+	VideoPromptMasterZH    string     `gorm:"column:video_prompt_master_zh;type:text" json:"video_prompt_master_zh"`
+	VideoExecSourceHash    string     `gorm:"column:video_exec_source_hash" json:"video_exec_source_hash"`
+	VideoExecConfirmedHash string     `gorm:"column:video_exec_confirmed_hash" json:"video_exec_confirmed_hash"`
+	VideoExecConfirmedAt   *time.Time `gorm:"column:video_exec_confirmed_at" json:"video_exec_confirmed_at"`
+	VideoTemplate          string     `gorm:"column:video_template" json:"video_template"`               // 视频模板（minimax_h3_i2v/ref2v/t2v/first_last 等；空则自动选择）
+	VideoFirstFrameImg     string     `gorm:"column:video_first_frame_img" json:"video_first_frame_img"` // 首尾帧模板的首帧图文件名
+	VideoLastFrameImg      string     `gorm:"column:video_last_frame_img" json:"video_last_frame_img"`   // 首尾帧模板的尾帧图文件名
+	Status                 string     `gorm:"index" json:"status"`                                       // pending/image_pending/image_ready/video_pending/video_running/video_ready/failed
+	Error                  string     `json:"error"`
+	PromptStale            bool       `gorm:"column:prompt_stale;default:false" json:"prompt_stale"` // 来源变化后需重新确认完整视频提示词
+	ImageRetries           int        `gorm:"column:image_retries" json:"image_retries"`             // 画面生成已重试次数
+	VideoRetries           int        `gorm:"column:video_retries" json:"video_retries"`             // 视频生成已重试次数
+	ImageCandidateParentID *uint      `gorm:"column:image_candidate_parent_id" json:"-"`             // 当前图片任务的候选分支来源
+	VideoCandidateParentID *uint      `gorm:"column:video_candidate_parent_id" json:"-"`             // 当前视频任务的候选分支来源
+	ShotCount              int        `gorm:"column:shot_count;default:0" json:"shot_count"`         // 镜头数量
+	CreatedAt              time.Time  `json:"created_at"`
+	UpdatedAt              time.Time  `json:"updated_at"`
 }
 
 // Chapter 小说章节（仅 source_type=novel 的项目使用）

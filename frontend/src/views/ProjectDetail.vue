@@ -630,7 +630,7 @@
     </div>
 
     <div v-if="videoTaskDetail" class="modal-mask" @click.self="videoTaskDetail = null">
-      <div class="modal card video-task-modal"><h2>编辑视频提示词</h2><div v-if="videoTaskDetail.continuity_frame" class="continuity-prompt-source"><img :src="videoTaskDetail.continuity_frame.image_url" /><div><b>已使用上一镜末尾帧</b><p>连续性模式：{{ continuityModeLabel(videoTaskDetail.continuity_mode) }}</p><p>{{ formatFrameTime(videoTaskDetail.continuity_frame.timestamp_ms) }}</p></div></div><div v-else-if="videoTaskDetail.continuity_mode && videoTaskDetail.continuity_mode !== 'independent'" class="warning">连续性已配置，但上一镜末尾帧尚未就绪。</div><div class="field-row"><div class="field"><label>视频模板</label><select v-model="videoTaskTemplate" class="input"><option v-for="model in videoCatalog" :key="model.template_code" :value="model.template_code">{{ model.name }} · 最多{{ model.max_references }}张参考图{{ model.supports_audio ? ' · 音频' : '' }}</option></select></div><div class="field"><label>尺寸 / 时长 / 帧率</label><p class="info-text">{{ videoTaskDetail.width }}×{{ videoTaskDetail.height }} / {{ videoTaskDetail.duration }}秒 / {{ videoTaskDetail.fps }} FPS</p></div></div><div v-if="selectedTemplateNeedsReviewedAudio" :class="reviewedSceneAudioReady ? 'info-text' : 'warning'"><template v-if="reviewedSceneAudioReady">将使用已接受且与当前 Dialogue 哈希一致的生产音频候选 #{{ videoTaskDetail.reviewed_audio.candidate?.id || videoTaskDetail.reviewed_audio.scene_candidate?.id }}。{{ videoTaskTemplate === 'minimax_h3_video_then_audio_mux' ? '此模式仅后期封装音频，不保证口型同步。' : '此模式让审核音频参与视频生成。' }}</template><template v-else>该模板当前不可用：{{ reviewedSceneAudioReason }}<div v-if="videoTaskDetail.reviewed_audio?.requires_scene_mix"><button class="btn btn-sm btn-secondary" :disabled="sceneAudioBusy" @click="createSceneAudioMix">{{ sceneAudioBusy ? '处理中…' : '生成Scene连续音轨候选' }}</button></div><div v-else class="field-hint">请先在声音工作台生成并接受当前Dialogue的配音候选。</div></template></div><div v-if="sceneAudioCandidates.length" class="compact-list"><div v-for="candidate in sceneAudioCandidates" :key="candidate.id" class="info-text"><audio controls preload="none" :src="api.inputUrl(id(), candidate.file)" /> <span>#{{ candidate.id }} · {{ candidate.duration.toFixed(2) }}秒 · {{ candidate.review_status }}<template v-if="candidate.stale"> · 已过期</template></span><label v-if="!candidate.stale && candidate.review_status !== 'accepted'" class="scene-audio-confirm"><input v-model="sceneAudioAuditConfirmed[candidate.id]" type="checkbox" />我已试听完整音轨，并核对所有Native Shot的文字范围、音频范围与声音归属</label><button v-if="!candidate.stale && candidate.review_status !== 'accepted'" class="btn btn-sm btn-secondary" :disabled="sceneAudioBusy || !sceneAudioAuditConfirmed[candidate.id]" @click="reviewSceneAudioMix(candidate, 'accepted')">接受</button><button v-if="!candidate.is_current" class="btn btn-sm btn-ghost" :disabled="sceneAudioBusy" @click="reviewSceneAudioMix(candidate, 'rejected')">拒绝</button><details v-if="candidate.source_snapshot" class="scene-audio-audit"><summary>审核 Native Shot 对白与音频时间</summary><p class="field-hint">时间映射：{{ sceneAudioTimingMethodLabel(candidate.source_snapshot.fragment_timing_method) }}；这是确定性自然语速/标点权重，不冒充ASR字级对齐。</p><div v-for="shot in candidate.source_snapshot.shots || []" :key="shot.id" class="scene-audio-shot-audit"><b>Shot {{ shot.order }} · {{ formatAuditSeconds(sceneAudioShotStart(candidate.source_snapshot.shots, shot.order)) }}–{{ formatAuditSeconds(sceneAudioShotStart(candidate.source_snapshot.shots, shot.order) + Number(shot.duration || 0)) }}</b><span class="badge badge-gray">{{ sceneAudioPresentationLabel(shot.presentation) }}</span><span v-if="shot.continues_from_previous" class="badge badge-orange">承接上一镜声音</span><span v-if="shot.continues_to_next" class="badge badge-orange">延续到下一镜</span><span v-if="!shot.fragments?.length">静音镜头</span><div v-for="fragment in shot.fragments || []" :key="`${fragment.dialogue_id}-${fragment.start_rune}-${fragment.end_rune}`"><code>Dialogue {{ fragment.dialogue_id }} [{{ fragment.start_rune }},{{ fragment.end_rune }})</code>「{{ fragment.text }}」 · 音频 {{ formatAuditSeconds(fragment.audio_start) }}–{{ formatAuditSeconds(fragment.audio_end) }}</div></div></details><div v-else-if="candidate.audit_error" class="warning">{{ candidate.audit_error }}</div></div></div><div v-if="videoTaskTemplate === 'minimax_h3_first_last'" class="field-row"><div class="field"><label>首帧图片</label><select v-model="videoTaskFirstFrame" class="input"><option value="">请选择…</option><option v-if="videoTaskDetail.continuity_frame?.image_file" :value="videoTaskDetail.continuity_frame.image_file">连续性设置：上一镜确认尾帧</option><option v-if="videoTaskScene.image_file" :value="videoTaskScene.image_file">当前场景分镜图</option><option v-if="videoTaskFirstFrame && videoTaskFirstFrame!==videoTaskScene.image_file && videoTaskFirstFrame!==videoTaskDetail.continuity_frame?.image_file" :value="videoTaskFirstFrame">自定义图片：{{videoTaskFirstFrame}}</option></select><label class="btn btn-sm btn-ghost frame-upload">上传其他首帧<input hidden type="file" accept="image/png,image/jpeg,image/webp" @change="e=>uploadVideoFrame('first',e)"></label></div><div class="field"><label>尾帧图片</label><select v-model="videoTaskLastFrame" class="input"><option value="">请选择…</option><option v-if="videoTaskScene.image_file" :value="videoTaskScene.image_file">当前场景分镜图</option><option v-if="videoTaskDetail.continuity_frame?.image_file" :value="videoTaskDetail.continuity_frame.image_file">连续性设置：上一镜确认尾帧</option><option v-if="videoTaskLastFrame && videoTaskLastFrame!==videoTaskScene.image_file && videoTaskLastFrame!==videoTaskDetail.continuity_frame?.image_file" :value="videoTaskLastFrame">自定义图片：{{videoTaskLastFrame}}</option></select><label class="btn btn-sm btn-ghost frame-upload">上传其他尾帧<input hidden type="file" accept="image/png,image/jpeg,image/webp" @change="e=>uploadVideoFrame('last',e)"></label></div></div><div class="field-label-actions"><label>最终提交给 H3 的完整提示词（可直接修改）</label><button class="btn btn-sm btn-secondary" :disabled="regeneratingVideoPrompt" @click="regenerateVideoPrompt">{{ regeneratingVideoPrompt ? 'AI 生成中…' : 'AI 重新生成完整提示词' }}</button></div><textarea v-model="videoTaskPromptDraft" class="textarea" rows="20" /><div v-if="videoTaskTemplate !== videoTaskDetail.template" class="warning">模板已切换，现有提示词协议不会直接复用。请点击“AI 重新生成完整提示词”生成新模板对应协议后再保存。</div><div v-if="videoTaskDetail.reference_limit_warning" class="warning">{{ videoTaskDetail.reference_limit_warning }}</div><div v-if="videoTaskDetail.prompt_stale" class="warning">分镜剧情、人物分类或参考图已变化。请重新生成或人工确认并保存当前完整提示词后再生成视频。</div><div v-if="!videoTaskDetail.has_saved_prompt" class="warning">当前没有已保存的视频提示词。编辑窗口不会自动生成；请手工填写，或明确点击“AI 重新生成完整提示词”。</div><div v-if="videoTaskDetail.prompt_issues?.length" class="warning">参考图已变化：{{ videoTaskDetail.prompt_issues.join('；') }}。系统不会自动覆盖，请手工调整或明确点击 AI 重新生成。</div><div class="field-hint">这里原样显示已保存的最终六段 Ref2VA 提示词；打开编辑窗口不会自动生成或重建。<b v-if="videoTaskTemplate === 'minimax_h3_first_last'">　⚠ 首尾帧模板已选择，请确认首帧和尾帧图片已正确指定。</b></div><details open><summary>当前将提交的完整提示词</summary><pre class="task-prompt">{{ previewVideoFullPrompt }}</pre></details><details v-if="videoTaskDetail.history_prompt"><summary>上次实际提交的提示词</summary><pre class="task-prompt">{{ videoTaskDetail.history_prompt }}</pre></details><details v-if="videoTaskDetail.params_json"><summary>上次实际参数与输入图片</summary><pre class="task-prompt">{{ formatTaskParams(videoTaskDetail.params_json) }}</pre></details><div class="modal-actions"><button class="btn btn-ghost" @click="videoTaskDetail = null">取消</button><button class="btn btn-secondary" :disabled="savingVideoPrompt || (selectedTemplateNeedsReviewedAudio && !reviewedSceneAudioReady)" @click="saveVideoPrompt(false)">保存提示词</button><button class="btn" :disabled="savingVideoPrompt || (selectedTemplateNeedsReviewedAudio && !reviewedSceneAudioReady)" @click="saveVideoPrompt(true)">{{ savingVideoPrompt ? '处理中…' : '保存最新提示词并生成视频' }}</button></div></div>
+      <div class="modal card video-task-modal"><h2>编辑视频提示词</h2><div v-if="videoTaskDetail.continuity_frame" class="continuity-prompt-source"><img :src="videoTaskDetail.continuity_frame.image_url" /><div><b>已使用上一镜末尾帧</b><p>连续性模式：{{ continuityModeLabel(videoTaskDetail.continuity_mode) }}</p><p>{{ formatFrameTime(videoTaskDetail.continuity_frame.timestamp_ms) }}</p></div></div><div v-else-if="videoTaskDetail.continuity_mode && videoTaskDetail.continuity_mode !== 'independent'" class="warning">连续性已配置，但上一镜末尾帧尚未就绪。</div><div class="field-row"><div class="field"><label>视频模板</label><select v-model="videoTaskTemplate" class="input"><option v-for="model in videoCatalog" :key="model.template_code" :value="model.template_code">{{ model.name }} · 最多{{ model.max_references }}张参考图{{ model.supports_audio ? ' · 音频' : '' }}</option></select></div><div class="field"><label>尺寸 / 时长 / 帧率</label><p class="info-text">{{ videoTaskDetail.width }}×{{ videoTaskDetail.height }} / {{ videoTaskDetail.duration }}秒 / {{ videoTaskDetail.fps }} FPS</p></div></div><div v-if="selectedTemplateNeedsReviewedAudio" :class="reviewedSceneAudioReady ? 'info-text' : 'warning'"><template v-if="reviewedSceneAudioReady">将使用已接受且与当前 Dialogue 哈希一致的生产音频候选 #{{ videoTaskDetail.reviewed_audio.candidate?.id || videoTaskDetail.reviewed_audio.scene_candidate?.id }}。{{ videoTaskTemplate === 'minimax_h3_video_then_audio_mux' ? '此模式仅后期封装音频，不保证口型同步。' : '此模式让审核音频参与视频生成。' }}</template><template v-else>该模板当前不可用：{{ reviewedSceneAudioReason }}<div v-if="videoTaskDetail.reviewed_audio?.requires_scene_mix"><button class="btn btn-sm btn-secondary" :disabled="sceneAudioBusy" @click="createSceneAudioMix">{{ sceneAudioBusy ? '处理中…' : '生成Scene连续音轨候选' }}</button></div><div v-else class="field-hint">请先在声音工作台生成并接受当前Dialogue的配音候选。</div></template></div><div v-if="sceneAudioCandidates.length" class="compact-list"><div v-for="candidate in sceneAudioCandidates" :key="candidate.id" class="info-text"><audio controls preload="none" :src="api.inputUrl(id(), candidate.file)" /> <span>#{{ candidate.id }} · {{ candidate.duration.toFixed(2) }}秒 · {{ candidate.review_status }}<template v-if="candidate.stale"> · 已过期</template></span><label v-if="!candidate.stale && candidate.review_status !== 'accepted'" class="scene-audio-confirm"><input v-model="sceneAudioAuditConfirmed[candidate.id]" type="checkbox" />我已试听完整音轨，并核对所有Native Shot的文字范围、音频范围与声音归属</label><button v-if="!candidate.stale && candidate.review_status !== 'accepted'" class="btn btn-sm btn-secondary" :disabled="sceneAudioBusy || !sceneAudioAuditConfirmed[candidate.id]" @click="reviewSceneAudioMix(candidate, 'accepted')">接受</button><button v-if="!candidate.is_current" class="btn btn-sm btn-ghost" :disabled="sceneAudioBusy" @click="reviewSceneAudioMix(candidate, 'rejected')">拒绝</button><details v-if="candidate.source_snapshot" class="scene-audio-audit"><summary>审核 Native Shot 对白与音频时间</summary><p class="field-hint">时间映射：{{ sceneAudioTimingMethodLabel(candidate.source_snapshot.fragment_timing_method) }}；这是确定性自然语速/标点权重，不冒充ASR字级对齐。</p><div v-for="shot in candidate.source_snapshot.shots || []" :key="shot.id" class="scene-audio-shot-audit"><b>Shot {{ shot.order }} · {{ formatAuditSeconds(sceneAudioShotStart(candidate.source_snapshot.shots, shot.order)) }}–{{ formatAuditSeconds(sceneAudioShotStart(candidate.source_snapshot.shots, shot.order) + Number(shot.duration || 0)) }}</b><span class="badge badge-gray">{{ sceneAudioPresentationLabel(shot.presentation) }}</span><span v-if="shot.continues_from_previous" class="badge badge-orange">承接上一镜声音</span><span v-if="shot.continues_to_next" class="badge badge-orange">延续到下一镜</span><span v-if="!shot.fragments?.length">静音镜头</span><div v-for="fragment in shot.fragments || []" :key="`${fragment.dialogue_id}-${fragment.start_rune}-${fragment.end_rune}`"><code>Dialogue {{ fragment.dialogue_id }} [{{ fragment.start_rune }},{{ fragment.end_rune }})</code>「{{ fragment.text }}」 · 音频 {{ formatAuditSeconds(fragment.audio_start) }}–{{ formatAuditSeconds(fragment.audio_end) }}</div></div></details><div v-else-if="candidate.audit_error" class="warning">{{ candidate.audit_error }}</div></div></div><div v-if="videoTaskTemplate === 'minimax_h3_first_last'" class="field-row"><div class="field"><label>首帧图片</label><select v-model="videoTaskFirstFrame" class="input"><option value="">请选择…</option><option v-if="videoTaskDetail.continuity_frame?.image_file" :value="videoTaskDetail.continuity_frame.image_file">连续性设置：上一镜确认尾帧</option><option v-if="videoTaskScene.image_file" :value="videoTaskScene.image_file">当前场景分镜图</option><option v-if="videoTaskFirstFrame && videoTaskFirstFrame!==videoTaskScene.image_file && videoTaskFirstFrame!==videoTaskDetail.continuity_frame?.image_file" :value="videoTaskFirstFrame">自定义图片：{{videoTaskFirstFrame}}</option></select><label class="btn btn-sm btn-ghost frame-upload">上传其他首帧<input hidden type="file" accept="image/png,image/jpeg,image/webp" @change="e=>uploadVideoFrame('first',e)"></label></div><div class="field"><label>尾帧图片</label><select v-model="videoTaskLastFrame" class="input"><option value="">请选择…</option><option v-if="videoTaskScene.image_file" :value="videoTaskScene.image_file">当前场景分镜图</option><option v-if="videoTaskDetail.continuity_frame?.image_file" :value="videoTaskDetail.continuity_frame.image_file">连续性设置：上一镜确认尾帧</option><option v-if="videoTaskLastFrame && videoTaskLastFrame!==videoTaskScene.image_file && videoTaskLastFrame!==videoTaskDetail.continuity_frame?.image_file" :value="videoTaskLastFrame">自定义图片：{{videoTaskLastFrame}}</option></select><label class="btn btn-sm btn-ghost frame-upload">上传其他尾帧<input hidden type="file" accept="image/png,image/jpeg,image/webp" @change="e=>uploadVideoFrame('last',e)"></label></div></div><template v-if="isBilingualVideoPrompt"><div class="field-label-actions"><label>中文主稿（默认编辑）</label><button class="btn btn-sm btn-secondary" :disabled="regeneratingVideoPrompt" @click="regenerateVideoPrompt">{{ regeneratingVideoPrompt ? 'AI 生成并转换中…' : 'AI 重新生成中文预览' }}</button></div><textarea v-model="videoTaskMasterZH" class="textarea" rows="14" /><div v-if="videoTaskProposedZH" class="field"><label>AI 中文候选（不会自动覆盖）</label><textarea v-model="videoTaskProposedZH" class="textarea" rows="10" /><button class="btn btn-sm btn-secondary" @click="applyProposedChinesePrompt">应用此中文候选</button></div><div class="modal-actions"><button class="btn btn-secondary" :disabled="savingVideoPrompt" @click="saveChineseMaster">仅保存中文主稿</button><button class="btn" :disabled="translatingVideoPrompt || savingVideoPrompt" @click="translateChineseToEnglish">{{ translatingVideoPrompt ? '翻译中…' : '保存中文并翻译英文预览' }}</button></div><details open><summary>高级：英文执行稿（译后可编辑）</summary><textarea v-model="videoTaskExecPreview" class="textarea" rows="20" /><p v-if="!videoTaskSourceHash" class="field-hint">中文、模板或首尾帧变化后必须重新翻译，避免误确认。</p></details></template><template v-else><div class="field-label-actions"><label>最终提交给 H3 的完整提示词（可直接修改）</label><div><button class="btn btn-sm btn-ghost" :disabled="translatingVideoPrompt || !videoTaskPromptDraft.trim()" @click="convertLegacyPromptToChinese">{{ translatingVideoPrompt ? '转换中…' : '转换为中文对照' }}</button><button class="btn btn-sm btn-secondary" :disabled="regeneratingVideoPrompt" @click="regenerateVideoPrompt">{{ regeneratingVideoPrompt ? 'AI 生成中…' : 'AI 重新生成完整提示词' }}</button></div></div><textarea v-model="videoTaskPromptDraft" class="textarea" rows="20" /><div v-if="videoTaskProposedZH" class="field"><label>中文对照预览（显式应用后进入中文主稿模式）</label><textarea v-model="videoTaskProposedZH" class="textarea" rows="10" /><button class="btn btn-sm btn-secondary" @click="applyProposedChinesePrompt">应用为中文主稿</button></div></template><div v-if="videoTaskTemplate !== videoTaskDetail.template" class="warning">模板已切换，现有提示词协议不会直接复用。请点击“AI 重新生成完整提示词”生成新模板对应协议后再保存。</div><div v-if="videoTaskDetail.reference_limit_warning" class="warning">{{ videoTaskDetail.reference_limit_warning }}</div><div v-if="videoTaskDetail.prompt_stale" class="warning">分镜剧情、人物分类或参考图已变化。请重新生成或人工确认并保存当前完整提示词后再生成视频。</div><div v-if="!videoTaskDetail.has_saved_prompt" class="warning">当前没有已保存的视频提示词。编辑窗口不会自动生成；请手工填写，或明确点击“AI 重新生成完整提示词”。</div><div v-if="videoTaskDetail.prompt_issues?.length" class="warning">参考图已变化：{{ videoTaskDetail.prompt_issues.join('；') }}。系统不会自动覆盖，请手工调整或明确点击 AI 重新生成。</div><div class="field-hint">这里原样显示已保存的最终六段 Ref2VA 提示词；打开编辑窗口不会自动生成或重建。<b v-if="videoTaskTemplate === 'minimax_h3_first_last'">　⚠ 首尾帧模板已选择，请确认首帧和尾帧图片已正确指定。</b></div><details open><summary>当前将提交的完整提示词</summary><pre class="task-prompt">{{ previewVideoFullPrompt }}</pre></details><details v-if="videoTaskDetail.history_prompt"><summary>上次实际提交的提示词</summary><pre class="task-prompt">{{ videoTaskDetail.history_prompt }}</pre></details><details v-if="videoTaskDetail.params_json"><summary>上次实际参数与输入图片</summary><pre class="task-prompt">{{ formatTaskParams(videoTaskDetail.params_json) }}</pre></details><div class="modal-actions"><button class="btn btn-ghost" @click="videoTaskDetail = null; videoPromptRequestEpoch++">取消</button><template v-if="isBilingualVideoPrompt"><button class="btn btn-secondary" :disabled="savingVideoPrompt || !videoTaskSourceHash" @click="confirmEnglishAndGenerate(false)">确认保存英文执行稿</button><button class="btn" :disabled="savingVideoPrompt || !videoTaskSourceHash || (selectedTemplateNeedsReviewedAudio && !reviewedSceneAudioReady)" @click="confirmEnglishAndGenerate(true)">{{ savingVideoPrompt ? '处理中…' : '确认英文并生成视频' }}</button></template><template v-else><button class="btn btn-secondary" :disabled="savingVideoPrompt || (selectedTemplateNeedsReviewedAudio && !reviewedSceneAudioReady)" @click="saveVideoPrompt(false)">保存提示词</button><button class="btn" :disabled="savingVideoPrompt || (selectedTemplateNeedsReviewedAudio && !reviewedSceneAudioReady)" @click="saveVideoPrompt(true)">{{ savingVideoPrompt ? '处理中…' : '保存最新提示词并生成视频' }}</button></template></div></div>
     </div>
 
     <!-- 项目信息编辑弹窗 -->
@@ -1135,6 +1135,26 @@ const videoTaskFirstFrame = ref('')
 const videoTaskLastFrame = ref('')
 const savingVideoPrompt = ref(false)
 const regeneratingVideoPrompt = ref(false)
+const translatingVideoPrompt = ref(false)
+const videoTaskMasterZH = ref('')
+const videoTaskExecPreview = ref('')
+const videoTaskSourceHash = ref('')
+const videoTaskProposedZH = ref('')
+let videoPromptRequestEpoch = 0
+let videoPromptHydrating = false
+const isBilingualVideoPrompt = computed(() => Boolean(videoTaskDetail.value?.master_prompt_zh))
+function invalidateVideoPromptPreview() {
+  videoTaskExecPreview.value = ''
+  videoTaskSourceHash.value = ''
+  videoPromptRequestEpoch++
+  translatingVideoPrompt.value = false
+  regeneratingVideoPrompt.value = false
+  savingVideoPrompt.value = false
+}
+watch([videoTaskMasterZH, videoTaskTemplate, videoTaskFirstFrame, videoTaskLastFrame], () => {
+  if (videoPromptHydrating) return
+  if (videoTaskDetail.value && isBilingualVideoPrompt.value) invalidateVideoPromptPreview()
+})
 const sceneAudioCandidates = ref([])
 const sceneAudioBusy = ref(false)
 const sceneAudioAuditConfirmed = ref({})
@@ -1419,32 +1439,47 @@ async function onContinuityApplied(_continuity, openPrompt = false) {
 }
 
 async function viewVideoPrompt(sc) {
+  const epoch = ++videoPromptRequestEpoch
   try {
     const { data: preview } = await api.sceneVideoPrompt(id(), sc.id)
+    if (epoch !== videoPromptRequestEpoch) return
     let history = null
     if (sc.video_task_id) {
       try { history = (await api.task(sc.video_task_id)).data } catch { /* 历史任务不可用不影响生成前编辑 */ }
     }
+    if (epoch !== videoPromptRequestEpoch) return
     videoTaskDetail.value = { ...preview, history_prompt: history?.prompt || '', params_json: history?.params_json || '' }
     videoTaskScene.value = sc
-    videoTaskPromptDraft.value = preview.prompt || ''
+    videoPromptHydrating = true
+    videoTaskPromptDraft.value = preview.exec_prompt || preview.prompt || ''
+    videoTaskMasterZH.value = preview.master_prompt_zh || ''
+    videoTaskExecPreview.value = preview.exec_prompt || ''
+    videoTaskSourceHash.value = preview.exec_status === 'confirmed' ? (preview.source_hash || '') : ''
+    videoTaskProposedZH.value = ''
     videoTaskTemplate.value = preview.template || sc.video_template || 'minimax_h3_ref2v'
     videoTaskFirstFrame.value = preview.first_frame_img || sc.video_first_frame_img || sc.image_file || ''
     videoTaskLastFrame.value = preview.last_frame_img || sc.video_last_frame_img || ''
+    await nextTick()
+    videoPromptHydrating = false
     try { sceneAudioCandidates.value = (await api.sceneAudioCandidates(id(), sc.id)).data?.candidates || [] } catch { sceneAudioCandidates.value = [] }
     sceneAudioAuditConfirmed.value = {}
   } catch (e) { toast.error(e.response?.data?.error || '生成视频提示词失败') }
 }
 async function regenerateVideoPrompt() {
   if (!videoTaskScene.value) return
+  const sceneId = videoTaskScene.value.id
+  const epoch = ++videoPromptRequestEpoch
   regeneratingVideoPrompt.value = true
   try {
-    const { data } = await api.regenerateSceneVideoPrompt(id(), videoTaskScene.value.id, { template: videoTaskTemplate.value })
-    videoTaskPromptDraft.value = data.full_prompt || data.prompt || ''
-    videoTaskDetail.value = { ...videoTaskDetail.value, full_prompt: videoTaskPromptDraft.value, template: data.template || videoTaskTemplate.value, prompt_stale: false }
-    toast.success('AI 已重新生成完整 H3 提示词，可继续修改后保存')
-  } catch (e) { toast.error(e.response?.data?.error || 'AI 重新生成失败') }
-  finally { regeneratingVideoPrompt.value = false }
+    const { data } = await api.regenerateSceneVideoPrompt(id(), sceneId, { template: videoTaskTemplate.value })
+    if (epoch !== videoPromptRequestEpoch || videoTaskScene.value?.id !== sceneId) return
+    const generated = data.full_prompt || data.prompt || ''
+    const translated = await api.translateSceneVideoPrompt(id(), sceneId, { prompt: generated, language: 'zh', direction: 'to_zh', template: videoTaskTemplate.value, first_frame_img: videoTaskFirstFrame.value, last_frame_img: videoTaskLastFrame.value })
+    if (epoch !== videoPromptRequestEpoch || videoTaskScene.value?.id !== sceneId) return
+    videoTaskProposedZH.value = translated.data.preview || translated.data.prompt || ''
+    toast.success('AI 结果已转为中文预览；应用后才会写入中文主稿，旧英文保持不变')
+  } catch (e) { if (epoch === videoPromptRequestEpoch) toast.error(e.response?.data?.error || 'AI 重新生成失败') }
+  finally { if (epoch === videoPromptRequestEpoch) regeneratingVideoPrompt.value = false }
 }
 async function uploadVideoFrame(kind,event) {
   const file=event.target.files?.[0];event.target.value='';if(!file||!videoTaskScene.value)return
@@ -1483,6 +1518,78 @@ async function reviewSceneAudioMix(candidate, status) {
   } catch (e) { toast.error(e.response?.data?.error || 'Scene音轨审核失败') }
   finally { sceneAudioBusy.value = false }
 }
+function applyProposedChinesePrompt() {
+  if (!videoTaskProposedZH.value) return
+  videoTaskMasterZH.value = videoTaskProposedZH.value
+  videoTaskProposedZH.value = ''
+  if (!isBilingualVideoPrompt.value) videoTaskDetail.value = { ...videoTaskDetail.value, master_prompt_zh: videoTaskMasterZH.value, exec_status: 'unconfirmed' }
+  invalidateVideoPromptPreview()
+}
+async function convertLegacyPromptToChinese() {
+  if (!videoTaskPromptDraft.value.trim() || !videoTaskScene.value) return
+  const sceneId = videoTaskScene.value.id
+  const epoch = ++videoPromptRequestEpoch
+  translatingVideoPrompt.value = true
+  try {
+    const { data } = await api.translateSceneVideoPrompt(id(), sceneId, { prompt: videoTaskPromptDraft.value, language: 'zh', template: videoTaskTemplate.value, first_frame_img: videoTaskFirstFrame.value, last_frame_img: videoTaskLastFrame.value })
+    if (epoch !== videoPromptRequestEpoch || videoTaskScene.value?.id !== sceneId) return
+    videoTaskProposedZH.value = data.preview || data.prompt || ''
+  } catch (e) { if (epoch === videoPromptRequestEpoch) toast.error(e.response?.data?.error || '转换中文失败') }
+  finally { if (epoch === videoPromptRequestEpoch) translatingVideoPrompt.value = false }
+}
+async function saveChineseMaster() {
+  if (!videoTaskMasterZH.value.trim()) return toast.error('中文主稿不能为空')
+  savingVideoPrompt.value = true
+  try {
+    await api.updateSceneVideoPromptMaster(id(), videoTaskScene.value.id, { master_prompt_zh: videoTaskMasterZH.value, template: videoTaskTemplate.value, first_frame_img: videoTaskFirstFrame.value, last_frame_img: videoTaskLastFrame.value })
+    videoTaskDetail.value = { ...videoTaskDetail.value, master_prompt_zh: videoTaskMasterZH.value.trim(), exec_status: 'unconfirmed' }
+    invalidateVideoPromptPreview()
+    toast.success('中文主稿已保存；未覆盖旧英文执行稿')
+  } catch (e) { toast.error(e.response?.data?.error || '保存中文主稿失败') }
+  finally { savingVideoPrompt.value = false }
+}
+async function translateChineseToEnglish() {
+  if (!videoTaskMasterZH.value.trim()) return toast.error('中文主稿不能为空')
+  const sceneId = videoTaskScene.value.id
+  const epoch = ++videoPromptRequestEpoch
+  const masterPromptZH = videoTaskMasterZH.value
+  const template = videoTaskTemplate.value
+  const firstFrameImg = videoTaskFirstFrame.value
+  const lastFrameImg = videoTaskLastFrame.value
+  translatingVideoPrompt.value = true
+  try {
+    await api.updateSceneVideoPromptMaster(id(), sceneId, { master_prompt_zh: masterPromptZH, template, first_frame_img: firstFrameImg, last_frame_img: lastFrameImg })
+    if (epoch !== videoPromptRequestEpoch || videoTaskScene.value?.id !== sceneId) return
+    const { data } = await api.translateSceneVideoPrompt(id(), sceneId, { master_prompt_zh: masterPromptZH, language: 'en', template, first_frame_img: firstFrameImg, last_frame_img: lastFrameImg })
+    if (epoch !== videoPromptRequestEpoch || videoTaskScene.value?.id !== sceneId) return
+    videoTaskExecPreview.value = data.preview || data.prompt || ''
+    videoTaskSourceHash.value = data.source_hash || ''
+    videoTaskDetail.value = { ...videoTaskDetail.value, master_prompt_zh: masterPromptZH.trim(), exec_status: 'unconfirmed' }
+    toast.success('英文执行稿预览已生成，请检查编辑后确认')
+  } catch (e) { if (epoch === videoPromptRequestEpoch) toast.error(e.response?.data?.error || '翻译英文失败') }
+  finally { if (epoch === videoPromptRequestEpoch) translatingVideoPrompt.value = false }
+}
+async function confirmEnglishAndGenerate(generateAfterConfirm = false) {
+  if (!videoTaskExecPreview.value.trim() || !videoTaskSourceHash.value) return toast.error('请先翻译生成最新英文预览')
+  const sceneId = videoTaskScene.value.id
+  const epoch = ++videoPromptRequestEpoch
+  const execPrompt = videoTaskExecPreview.value
+  const sourceHash = videoTaskSourceHash.value
+  savingVideoPrompt.value = true
+  try {
+    await api.confirmSceneVideoPrompt(id(), sceneId, { exec_prompt: execPrompt, source_hash: sourceHash })
+    if (epoch !== videoPromptRequestEpoch || videoTaskScene.value?.id !== sceneId) return
+    videoTaskDetail.value = { ...videoTaskDetail.value, exec_status: 'confirmed' }
+    if (generateAfterConfirm) {
+      await api.generateSceneVideo(id(), sceneId)
+      if (epoch !== videoPromptRequestEpoch || videoTaskScene.value?.id !== sceneId) return
+      refreshSoon()
+      videoTaskDetail.value = null
+      toast.success('英文执行稿已确认并创建视频任务')
+    } else toast.success('英文执行稿已确认')
+  } catch (e) { if (epoch === videoPromptRequestEpoch) { toast.error(e.response?.data?.error || '确认英文执行稿失败'); invalidateVideoPromptPreview() } }
+  finally { if (epoch === videoPromptRequestEpoch) savingVideoPrompt.value = false }
+}
 async function saveVideoPrompt(generateAfterSave = false) {
   if (selectedTemplateNeedsReviewedAudio.value && !reviewedSceneAudioReady.value) {
     toast.error(`所选模板需要已审核生产音频：${reviewedSceneAudioReason.value || '当前场景音频不可用'}`)
@@ -1519,7 +1626,7 @@ const reviewedAudioTemplateCodes = new Set(['minimax_h3_audio_driven_ref2v', 'mi
 const selectedTemplateNeedsReviewedAudio = computed(() => reviewedAudioTemplateCodes.has(videoTaskTemplate.value))
 const reviewedSceneAudioReady = computed(() => Boolean(videoTaskDetail.value?.reviewed_audio?.ready))
 const reviewedSceneAudioReason = computed(() => videoTaskDetail.value?.reviewed_audio?.reason || '')
-const previewVideoFullPrompt = computed(() => String(videoTaskPromptDraft.value || '').trim())
+const previewVideoFullPrompt = computed(() => String(isBilingualVideoPrompt.value ? videoTaskExecPreview.value : videoTaskPromptDraft.value || '').trim())
 function continuityModeLabel(mode) { return mode === 'bridge_to_storyboard' ? '上一镜末尾帧 → 当前分镜图' : '从上一镜末尾帧继续' }
 function formatFrameTime(ms) { const value = Number(ms || 0); return value < 0 ? `${(value / 1000).toFixed(3)} 秒（距上一镜结尾）` : `${(value / 1000).toFixed(3)} 秒` }
 function formatTaskParams(raw) { try { return JSON.stringify(JSON.parse(raw || '{}'), null, 2) } catch { return raw || '' } }
@@ -2564,6 +2671,13 @@ async function uploadSceneImage(sc, event) {
 async function genVideo(sc) {
   sc._working = true
   try {
+    const { data: promptState } = await api.sceneVideoPrompt(id(), sc.id)
+    if (promptState.master_prompt_zh && promptState.exec_status !== 'confirmed') {
+      sc._working = false
+      toast.show('中文主稿尚未确认英文执行稿，请先完成翻译与确认')
+      await viewVideoPrompt(sc)
+      return
+    }
     await api.generateSceneVideo(id(), sc.id)
     refreshSoon()
   } catch (e) {
