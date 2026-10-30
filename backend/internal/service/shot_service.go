@@ -470,6 +470,10 @@ func (s *ShotService) ReplaceShotsWithDialogueSnapshot(sceneID uint, shots []mod
 				return fmt.Errorf("镜头 %d 不属于当前场景", shots[i].ID)
 			}
 			keep[shots[i].ID] = true
+			timelineJSON, err := json.Marshal(shots[i].ActionTimeline)
+			if err != nil {
+				return fmt.Errorf("序列化动作时间轴失败: %w", err)
+			}
 			updates := map[string]any{
 				"order_num": shots[i].Order, "act_type": shots[i].ActType, "shot_type": shots[i].ShotType,
 				"camera_angle": shots[i].CameraAngle, "camera_movement": shots[i].CameraMovement,
@@ -478,7 +482,7 @@ func (s *ShotService) ReplaceShotsWithDialogueSnapshot(sceneID uint, shots []mod
 				"speech_presentation": shots[i].SpeechPresentation, "listener_character": shots[i].ListenerCharacter, "emotion": shots[i].Emotion, "prompt_subject": shots[i].PromptSubject,
 				"prompt_action": shots[i].PromptAction, "prompt_camera": shots[i].PromptCamera,
 				"prompt_lighting": shots[i].PromptLighting, "prompt_style": shots[i].PromptStyle,
-				"negative_prompt": shots[i].NegativePrompt, "action_timeline_json": shots[i].ActionTimeline,
+				"negative_prompt": shots[i].NegativePrompt, "action_timeline_json": string(timelineJSON),
 			}
 			// Empty provenance means an ordinary edit of an existing Shot. Preserve its
 			// server-authenticated source instead of trusting or clearing client fields.
@@ -698,7 +702,7 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 			if err != nil || json.Unmarshal(data, &candidate.ActionTimeline) != nil {
 				return fmt.Errorf("action_timeline 格式无效")
 			}
-			filtered["action_timeline_json"] = candidate.ActionTimeline
+			filtered["action_timeline_json"] = string(data)
 			delete(filtered, "action_timeline")
 		}
 		if err := validateShot(&candidate); err != nil {

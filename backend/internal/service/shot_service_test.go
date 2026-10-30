@@ -1255,6 +1255,68 @@ func TestShotActionTimelineValidationAndPersistence(t *testing.T) {
 	}
 }
 
+func TestShotActionTimelineExistingShotUpdatesRoundTrip(t *testing.T) {
+	db := newTestDBWithNewModels(t)
+	project := models.Project{Title: "timeline updates"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
+	if err := db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := NewShotService(db)
+	shots, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "中景", Duration: 8}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shotID := shots[0].ID
+	cases := []struct {
+		name     string
+		timeline []models.ShotActionTimelineEntry
+	}{
+		{"single", []models.ShotActionTimelineEntry{{Start: 0, End: 8, Subject: "女主", Action: "走近", State: "停下", Camera: "固定"}}},
+		{"multiple", []models.ShotActionTimelineEntry{{Start: 0, End: 4, Subject: "女主", Action: "走近", State: "移动", Camera: "固定"}, {Start: 4, End: 8, Subject: "女主", Action: "停下", State: "静止", Camera: "推进"}}},
+		{"empty", []models.ShotActionTimelineEntry{}},
+		{"nil", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			shots[0].ActionTimeline = tc.timeline
+			saved, err := svc.ReplaceShots(scene.ID, shots)
+			if err != nil {
+				t.Fatalf("save existing director design: %v", err)
+			}
+			if saved[0].ID != shotID {
+				t.Fatal("existing shot was replaced")
+			}
+			want, _ := json.Marshal(tc.timeline)
+			assertStored := func() {
+				t.Helper()
+				var row models.Shot
+				if err := db.First(&row, shotID).Error; err != nil {
+					t.Fatal(err)
+				}
+				got, _ := json.Marshal(row.ActionTimeline)
+				if string(got) != string(want) {
+					t.Fatalf("timeline persisted=%s want=%s", got, want)
+				}
+			}
+			assertStored()
+			// Match the JSON-decoded shape sent by the single-shot HTTP editor.
+			var input any
+			if err := json.Unmarshal(want, &input); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := svc.UpdateShot(shotID, map[string]any{"action_timeline": input}); err != nil {
+				t.Fatalf("single-shot update: %v", err)
+			}
+			assertStored()
+			shots = saved
+		})
+	}
+}
+
 func TestRebalanceShotDurationsScalesActionTimeline(t *testing.T) {
 	shots := []models.Shot{{Duration: 6, ActionTimeline: []models.ShotActionTimelineEntry{
 		{Start: 0, End: 3, Subject: "甲", Action: "起身", State: "站立", Camera: "固定"},
