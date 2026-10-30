@@ -153,14 +153,18 @@ func TestSceneVideoTranslationHTTPMasterTranslateConfirmStableAndInvalidate(t *t
 	}
 }
 
-func TestSceneVideoTranslationHTTPBrokenMarkersCallOnceAndDoNotPersist(t *testing.T) {
+func TestSceneVideoTranslationHTTPBrokenMarkersReturnNonBlockingPreview(t *testing.T) {
 	f := newTranslationHTTPFixture(t)
 	masked, _ := maskH3Structure(translationEnglish)
 	f.response = strings.Replace(masked, "[[[T1]]]", "[[[T99]]]", 1)
 
 	w := translationRequest(f.svc, http.MethodPost, f.p.ID, f.sc.ID, "/translate", `{"language":"en"}`)
-	if w.Code != http.StatusUnprocessableEntity || f.calls.Load() != 1 {
+	if w.Code != http.StatusOK || f.calls.Load() != 1 {
 		t.Fatalf("status=%d calls=%d body=%s", w.Code, f.calls.Load(), w.Body.String())
+	}
+	out := decodeTranslationBody(t, w)
+	if out["prompt"] != translationEnglish || out["warnings"] == nil {
+		t.Fatalf("broken markers were not repaired non-blockingly: %v", out)
 	}
 	var saved models.Scene
 	if err := f.db.First(&saved, f.sc.ID).Error; err != nil {
@@ -215,8 +219,8 @@ func TestSceneVideoTranslationHTTPValidationIsolationAndNilProvider(t *testing.T
 	h := decodeTranslationBody(t, w)["source_hash"].(string)
 	for _, prompt := range []string{strings.Replace(translationEnglish, "[Shot 1]", "[Shot 2]", 1), strings.Replace(translationEnglish, "no dialogue", "<d>changed</d>", 1)} {
 		b, _ := json.Marshal(map[string]any{"exec_prompt": prompt, "source_hash": h})
-		if x := translationRequest(f.svc, http.MethodPost, f.p.ID, f.sc.ID, "/confirm", string(b)); x.Code != 422 {
-			t.Fatalf("bad prompt accepted status=%d %s", x.Code, x.Body.String())
+		if x := translationRequest(f.svc, http.MethodPost, f.p.ID, f.sc.ID, "/confirm", string(b)); x.Code != http.StatusOK {
+			t.Fatalf("user-edited execution prompt was blocked status=%d %s", x.Code, x.Body.String())
 		}
 	}
 	other := models.Project{Title: "other"}
@@ -229,7 +233,8 @@ func TestSceneVideoTranslationHTTPValidationIsolationAndNilProvider(t *testing.T
 	}
 	var original models.Scene
 	f.db.First(&original, f.sc.ID)
-	if original.VideoTemplate != "minimax_h3_t2v" || original.VideoFullPrompt != "old reviewed prompt" {
+	lastConfirmed := strings.Replace(translationEnglish, "no dialogue", "<d>changed</d>", 1)
+	if original.VideoTemplate != "minimax_h3_t2v" || original.VideoFullPrompt != lastConfirmed {
 		t.Fatalf("other project draft affected original: %+v", original)
 	}
 }

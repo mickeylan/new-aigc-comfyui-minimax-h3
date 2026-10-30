@@ -50,7 +50,17 @@ func TestMaskRestoreH3StructureRoundTrip(t *testing.T) {
 	}
 }
 
-func TestRestoreH3StructureRejectsMissingDuplicateOutOfOrderAndUnknown(t *testing.T) {
+func TestRestoreH3StructureAcceptsMarkerKindDrift(t *testing.T) {
+	source := "summary:\n[Shot 1] <d>原文</d>"
+	masked, tokens := maskH3Structure(source)
+	translated := strings.Replace(masked, "[[[D2]]]", "[[[T2]]]", 1)
+	restored, issues := restoreH3Structure(translated, tokens)
+	if len(issues) != 0 || restored != source {
+		t.Fatalf("kind drift blocked restoration: restored=%q issues=%v", restored, issues)
+	}
+}
+
+func TestRestoreH3StructureReportsMissingDuplicateOutOfOrderAndUnknown(t *testing.T) {
 	_, tokens := maskH3Structure("summary:\n[Shot 1] <d>原文</d>")
 	for name, translated := range map[string]string{
 		"missing":      "[[[T0]]] [[[T1]]]",
@@ -73,6 +83,16 @@ func TestValidateH3TranslationAllowsProseDurationButRejectsStructureNumbering(t 
 	}
 	if err := validateH3Translation(source, "summary:\nlasts 3 seconds\ndetailed_description:\n[Shot 2] [3s]"); err == nil {
 		t.Fatal("changed structure numbering accepted")
+	}
+}
+
+func TestRestoreH3StructureLenientRepairsMarkerIndicesByPosition(t *testing.T) {
+	source := "summary:\n[Shot 1] <d>原文</d>"
+	masked, tokens := maskH3Structure(source)
+	translated := strings.Replace(masked, "[[[T1]]]", "[[[T99]]]", 1)
+	restored, warnings := restoreH3StructureLenient(translated, source, tokens)
+	if len(warnings) == 0 || restored != source {
+		t.Fatalf("lenient restore=%q warnings=%v", restored, warnings)
 	}
 }
 

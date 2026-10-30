@@ -89,9 +89,11 @@ func restoreH3Structure(masked string, tokens []string) (string, []string) {
 		if strings.HasPrefix(tokens[index], "<d>") {
 			expectedKind = "D"
 		}
-		if match[1] != expectedKind {
-			issues = append(issues, fmt.Sprintf("标记 %d 类型错误", index+1))
-		}
+		// The marker kind is an implementation detail, not user content. Some
+		// translators preserve the index but rewrite T/D. The original token is
+		// authoritative and is restored by index, so a kind mismatch must never
+		// block the preview.
+		_ = expectedKind
 		if seen[index] {
 			issues = append(issues, fmt.Sprintf("标记 %d 重复", index+1))
 		} else if index != next {
@@ -112,6 +114,31 @@ func restoreH3Structure(masked string, tokens []string) (string, []string) {
 		issues = append(issues, "存在损坏或未知标记")
 	}
 	return out, issues
+}
+
+// restoreH3StructureLenient never turns a paid translation into an HTTP error.
+// When the model kept the marker count but changed marker kinds, indices or order,
+// restore the authoritative source tokens by their physical positions. If it also
+// dropped/duplicated markers, returning the source is safer than exposing a broken
+// execution prompt; the caller reports a warning and the user remains unblocked.
+func restoreH3StructureLenient(translated, source string, tokens []string) (string, []string) {
+	restored, issues := restoreH3Structure(translated, tokens)
+	if len(issues) == 0 {
+		return restored, nil
+	}
+	matches := h3MarkerRE.FindAllStringIndex(translated, -1)
+	if len(matches) != len(tokens) {
+		return source, issues
+	}
+	var out strings.Builder
+	start := 0
+	for i, match := range matches {
+		out.WriteString(translated[start:match[0]])
+		out.WriteString(tokens[i])
+		start = match[1]
+	}
+	out.WriteString(translated[start:])
+	return out.String(), issues
 }
 
 // stripH3CodeFence removes a markdown fence the translator may have wrapped around the prompt.
@@ -298,17 +325,12 @@ func (s *Service) HandleTranslateSceneVideoPrompt(c *gin.Context) {
 		return
 	}
 	translated = stripH3CodeFence(translated)
-	restored, missing := restoreH3Structure(translated, tokens)
-	if len(missing) > 0 {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": fmt.Sprintf("翻译破坏了 H3 结构标记（%s）", strings.Join(missing, "、"))})
-		return
+	translated, markerWarnings := restoreH3StructureLenient(translated, source, tokens)
+	response := gin.H{"preview": translated, "prompt": translated, "language": language, "source_hash": h, "token": hashString(h + "\x00" + translated)}
+	if len(markerWarnings) > 0 {
+		response["warnings"] = markerWarnings
 	}
-	translated = restored
-	if err := validateH3Translation(source, translated); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(200, gin.H{"preview": translated, "prompt": translated, "language": language, "source_hash": h, "token": hashString(h + "\x00" + translated)})
+	c.JSON(200, response)
 }
 
 func (s *Service) HandlePutSceneVideoPromptMaster(c *gin.Context) {
@@ -392,10 +414,6 @@ func (s *Service) HandleConfirmSceneVideoPrompt(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "master_prompt_zh 不能为空"})
 		return
 	}
-	if err := validateH3Translation(sc.VideoPromptMasterZH, req.ExecPrompt); err != nil {
-		c.JSON(422, gin.H{"error": err.Error()})
-		return
-	}
 	current, err := s.sceneVideoPromptSourceHash(sc)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -403,24 +421,6 @@ func (s *Service) HandleConfirmSceneVideoPrompt(c *gin.Context) {
 	}
 	if req.SourceHash == "" || req.SourceHash != current {
 		c.JSON(http.StatusConflict, gin.H{"error": "源内容已变化，请重新翻译预览", "source_hash": current})
-		return
-	}
-	_, _, refs := s.sceneVideoPromptContinuity(sc)
-	dubs := s.Projects.sceneVideoDialogues(sc)
-	var shots []models.Shot
-	if err := s.DB.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-	tpl := enforceSceneModeVideoTemplate(sc, sc.VideoTemplate)
-	if tpl == "" {
-		tpl = "minimax_h3_ref2v"
-	}
-	if hasAuditedCombatShots(shots) {
-		tpl = h3CombatRef2VTemplate
-	}
-	if issues := validateFinalH3Submission(req.ExecPrompt, tpl, normalizeSceneDuration(sc.Duration), refs, dubs, shots); len(issues) > 0 {
-		c.JSON(422, gin.H{"error": strings.Join(issues, "；")})
 		return
 	}
 	now := time.Now()
