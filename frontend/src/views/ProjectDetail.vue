@@ -2690,13 +2690,6 @@ async function uploadSceneImage(sc, event) {
 async function genVideo(sc) {
   sc._working = true
   try {
-    const { data: promptState } = await api.sceneVideoPrompt(id(), sc.id)
-    if (promptState.master_prompt_zh && promptState.exec_status !== 'confirmed') {
-      sc._working = false
-      toast.show('中文主稿尚未确认英文执行稿，请先完成翻译与确认')
-      await viewVideoPrompt(sc)
-      return
-    }
     await api.generateSceneVideo(id(), sc.id)
     refreshSoon()
   } catch (e) {

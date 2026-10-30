@@ -26,7 +26,9 @@ test('preview invalidation keeps English text but revokes confirmation', () => {
   assert.match(invalidate, /videoTaskSourceHash\.value = ''/)
   assert.match(invalidate, /persistVideoPromptDraft\(\)/)
   assert.doesNotMatch(invalidate, /videoTaskExecPreview\.value = ''/)
-  assert.match(detail, /promptState\.master_prompt_zh && promptState\.exec_status !== 'confirmed'/)
+  const generate = detail.slice(detail.indexOf('async function genVideo(sc)'), detail.indexOf('async function allImages'))
+  assert.doesNotMatch(generate, /sceneVideoPrompt|exec_status|viewVideoPrompt/)
+  assert.match(generate, /generateSceneVideo\(id\(\), sc\.id\)/)
   assert.match(detail, /epoch !== videoPromptRequestEpoch \|\| videoTaskScene\.value\?\.id !== sceneId/)
 })
 

@@ -144,12 +144,12 @@ func TestSceneVideoTranslationHTTPMasterTranslateConfirmStableAndInvalidate(t *t
 		t.Fatal(err)
 	}
 	f.db.First(&saved, f.sc.ID)
-	if err := f.svc.Projects.GenerateSceneVideo(&f.p, &saved); err == nil || !strings.Contains(err.Error(), "尚未翻译并确认") {
-		t.Fatalf("generate accepted stale confirmation: %v", err)
+	if err := f.svc.Projects.GenerateSceneVideo(&f.p, &saved); err != nil && strings.Contains(err.Error(), "尚未翻译并确认") {
+		t.Fatalf("source drift still blocked generation: %v", err)
 	}
 	w = translationRequest(f.svc, http.MethodGet, f.p.ID, f.sc.ID, "", "")
-	if got := decodeTranslationBody(t, w); got["exec_status"] == "confirmed" {
-		t.Fatalf("edited source remained confirmed: %v", got)
+	if got := decodeTranslationBody(t, w); got["exec_status"] != "confirmed" {
+		t.Fatalf("source drift revoked saved English prompt: %v", got)
 	}
 }
 

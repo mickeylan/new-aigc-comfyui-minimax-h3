@@ -466,8 +466,8 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 		template = "minimax_h3_ref2v"
 	}
 	audioSelection := s.Projects.sceneReviewedAudioSelection(sc)
-	currentSourceHash, hashErr := s.sceneVideoPromptSourceHash(sc)
-	execConfirmed := hashErr == nil && !sc.PromptStale && sc.VideoExecSourceHash == currentSourceHash && sc.VideoExecConfirmedHash != "" && sc.VideoExecConfirmedHash == hashString(sc.VideoFullPrompt)
+	currentSourceHash, _ := s.sceneVideoPromptSourceHash(sc)
+	execConfirmed := strings.TrimSpace(sc.VideoFullPrompt) != "" && sc.VideoExecConfirmedHash != "" && sc.VideoExecConfirmedHash == hashString(sc.VideoFullPrompt)
 	execStatus := "unconfirmed"
 	if sc.VideoPromptMasterZH == "" {
 		execStatus = "legacy"
@@ -478,7 +478,7 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 		"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt,
 		"has_saved_prompt": hasSavedPrompt, "prompt_stale": sc.PromptStale, "prompt_issues": promptIssues,
 		"master_prompt_zh": sc.VideoPromptMasterZH, "exec_prompt": sc.VideoFullPrompt,
-		"exec_status": execStatus, "translation_required": sc.VideoPromptMasterZH != "" && !execConfirmed,
+		"exec_status": execStatus, "translation_required": sc.VideoPromptMasterZH != "" && strings.TrimSpace(sc.VideoFullPrompt) == "",
 		"source_hash": sc.VideoExecSourceHash, "current_source_hash": currentSourceHash, "exec_hash": sc.VideoExecConfirmedHash, "confirmed_at": sc.VideoExecConfirmedAt,
 		"reference_limit_warning": s.Projects.sceneVideoReferenceWarning(sc, len(refs)),
 		"template":                template, "width": width, "height": height, "reference_count": len(refs),

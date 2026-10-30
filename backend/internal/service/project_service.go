@@ -6618,18 +6618,9 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 			return err
 		}
 	}
-	if strings.TrimSpace(sc.VideoPromptMasterZH) != "" {
-		hashService := &Service{DB: s.db, Projects: s}
-		currentSource, err := hashService.sceneVideoPromptSourceHash(sc)
-		if err != nil {
-			return err
-		}
-		if sc.VideoExecSourceHash != currentSource || sc.VideoExecConfirmedHash == "" || sc.VideoExecConfirmedHash != hashString(sc.VideoFullPrompt) {
-			return fmt.Errorf("场景 %d 的中文主稿尚未翻译并确认，或确认来源已变化", sc.Order)
-		}
-	} else if sc.PromptStale && strings.TrimSpace(sc.VideoFullPrompt) != "" {
-		return fmt.Errorf("场景 %d 的剧情、人物或参考图已变化，请重新生成或确认视频提示词后再生成", sc.Order)
-	}
+	// A saved execution prompt is user-reviewed production input. Source drift and
+	// prompt diagnostics are advisory only; MiniMax H3 is intentionally tolerant
+	// and must receive the exact text the user chose to submit.
 	durationLimit := configuredH3GenerationDuration(s.db)
 	if sc.Duration > durationLimit {
 		return fmt.Errorf("场景 %d 为 %.1f 秒，超过当前 MiniMax H3 生成上限 %.1f 秒；长视频显著增加显存占用，只有在目标实例实测通过后才应在设置中提高上限", sc.Order, sc.Duration, durationLimit)

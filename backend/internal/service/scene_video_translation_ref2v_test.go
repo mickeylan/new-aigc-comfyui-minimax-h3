@@ -135,11 +135,11 @@ func TestDefaultRef2VSourceChangesDoNotBlockReviewedEnglishSave(t *testing.T) {
 	}
 }
 
-func TestUnconfirmedMasterFailsBeforeTaskServiceAndLegacyEnglishStillPassesGate(t *testing.T) {
+func TestSavedEnglishPromptBypassesTranslationFreshnessGate(t *testing.T) {
 	f := newTranslationHTTPFixture(t)
 	configureDefaultRef2VFixture(t, f)
-	if err := f.svc.Projects.GenerateSceneVideo(&f.p, &f.sc); err == nil || !strings.Contains(err.Error(), "尚未翻译并确认") {
-		t.Fatalf("unconfirmed generation reached later services: %v", err)
+	if err := f.svc.Projects.GenerateSceneVideo(&f.p, &f.sc); err != nil && strings.Contains(err.Error(), "尚未翻译并确认") {
+		t.Fatalf("saved English prompt was blocked by translation freshness: %v", err)
 	}
 	if err := f.db.Model(&models.Scene{}).Where("id = ?", f.sc.ID).Updates(map[string]any{"video_prompt_master_zh": "", "video_full_prompt": "legacy English prompt", "prompt_stale": false}).Error; err != nil {
 		t.Fatal(err)
