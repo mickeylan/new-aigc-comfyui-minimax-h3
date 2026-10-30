@@ -265,8 +265,20 @@ func (s *Service) HandleTranslateSceneVideoPrompt(c *gin.Context) {
 		c.JSON(503, gin.H{"error": "文本翻译服务未配置"})
 		return
 	}
-	beforeScene := *sc
-	beforeHash, err := s.sceneVideoPromptSourceHash(&beforeScene)
+	// Translation is a read-only preview of the request snapshot. Capture its
+	// provenance before the model call; later edits must not discard paid output.
+	previewScene := *sc
+	previewScene.VideoPromptMasterZH = strings.TrimSpace(source)
+	if req.Template != "" {
+		previewScene.VideoTemplate = strings.TrimSpace(req.Template)
+	}
+	if req.FirstFrameImg != nil {
+		previewScene.VideoFirstFrameImg = strings.TrimSpace(*req.FirstFrameImg)
+	}
+	if req.LastFrameImg != nil {
+		previewScene.VideoLastFrameImg = strings.TrimSpace(*req.LastFrameImg)
+	}
+	h, err := s.sceneVideoPromptSourceHash(&previewScene)
 	if err != nil {
 		c.JSON(422, gin.H{"error": err.Error()})
 		return
@@ -294,34 +306,6 @@ func (s *Service) HandleTranslateSceneVideoPrompt(c *gin.Context) {
 	translated = restored
 	if err := validateH3Translation(source, translated); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
-		return
-	}
-	var fresh models.Scene
-	if err := s.DB.Where("id = ? AND project_id = ?", sc.ID, sc.ProjectID).First(&fresh).Error; err != nil {
-		c.JSON(409, gin.H{"error": "场景已变化，请重新打开预览"})
-		return
-	}
-	afterHash, err := s.sceneVideoPromptSourceHash(&fresh)
-	if err != nil || afterHash != beforeHash {
-		c.JSON(409, gin.H{"error": "翻译期间源内容已变化，请重新翻译"})
-		return
-	}
-	previewScene := fresh
-	if req.MasterPromptZH != "" {
-		previewScene.VideoPromptMasterZH = strings.TrimSpace(req.MasterPromptZH)
-	}
-	if req.Template != "" {
-		previewScene.VideoTemplate = strings.TrimSpace(req.Template)
-	}
-	if req.FirstFrameImg != nil {
-		previewScene.VideoFirstFrameImg = strings.TrimSpace(*req.FirstFrameImg)
-	}
-	if req.LastFrameImg != nil {
-		previewScene.VideoLastFrameImg = strings.TrimSpace(*req.LastFrameImg)
-	}
-	h, err := s.sceneVideoPromptSourceHash(&previewScene)
-	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(200, gin.H{"preview": translated, "prompt": translated, "language": language, "source_hash": h, "token": hashString(h + "\x00" + translated)})

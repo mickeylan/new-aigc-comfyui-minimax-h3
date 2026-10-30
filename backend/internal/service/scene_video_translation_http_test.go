@@ -171,8 +171,13 @@ func TestSceneVideoTranslationHTTPBrokenMarkersCallOnceAndDoNotPersist(t *testin
 	}
 }
 
-func TestSceneVideoTranslationHTTPRejectsSourceChangeDuringTranslation(t *testing.T) {
+func TestSceneVideoTranslationHTTPReturnsPreviewDespiteSourceChange(t *testing.T) {
 	f := newTranslationHTTPFixture(t)
+	before := f.sc
+	originalHash, err := f.svc.sceneVideoPromptSourceHash(&before)
+	if err != nil {
+		t.Fatal(err)
+	}
 	f.beforeReply = func() {
 		f.beforeReply = nil
 		if err := f.db.Model(&models.Scene{}).Where("id = ?", f.sc.ID).Update("content", "changed concurrently").Error; err != nil {
@@ -180,8 +185,19 @@ func TestSceneVideoTranslationHTTPRejectsSourceChangeDuringTranslation(t *testin
 		}
 	}
 	w := translationRequest(f.svc, http.MethodPost, f.p.ID, f.sc.ID, "/translate", `{"language":"en"}`)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("concurrent source change status=%d %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("concurrent source change discarded preview status=%d %s", w.Code, w.Body.String())
+	}
+	out := decodeTranslationBody(t, w)
+	if out["prompt"] != translationEnglish || out["source_hash"] != originalHash || f.calls.Load() != 1 {
+		t.Fatalf("preview must retain request snapshot without retries: %v calls=%d", out, f.calls.Load())
+	}
+	var saved models.Scene
+	if err := f.db.First(&saved, f.sc.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.Content != "changed concurrently" || saved.VideoFullPrompt != "old reviewed prompt" {
+		t.Fatal("translation overwrote concurrent edits or the execution prompt")
 	}
 }
 
