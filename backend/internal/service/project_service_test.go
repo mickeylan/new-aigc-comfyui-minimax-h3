@@ -2617,6 +2617,32 @@ func TestTimelinePronounSpeechRejectsDifferentOrMultipleSubjects(t *testing.T) {
 	}
 }
 
+func TestPronounSpeechKeepsNamedSubjectWhenAnotherCharacterIsObject(t *testing.T) {
+	content := `0—2秒｜草丛外围，马脸男子站在侧面，右手捏着尚未激发的火云符。齐姓道士握紧白马尾拂尘，视线越过马脸男子盯住草丛。
+2—4秒｜马脸男子向前压低半步。虬髯大汉从侧后方走近，右手握着朴刀。
+4—5.5秒｜虬髯大汉停到马脸男子身旁，目光扫过草丛，再落向他手中的火云符。他微眯着眼说道：“抓活的，别伤了狐妖。”说话间，他用左手食指朝草丛内部点了一下。
+5.5—7秒｜马脸男子听见指令后捏符的手指略紧。三人最终停在合围后的待命位置。`
+	sc := &models.Scene{
+		Characters:        "马脸男子,齐姓道士,虬髯大汉",
+		VisibleCharacters: "马脸男子,齐姓道士,虬髯大汉",
+		Content:           content,
+		VideoPrompt:       "[Shot 1] <Subject 1> holds the inactive talisman.\n[Shot 2] At 00:04.000, <Subject 3> gives the order while pointing into the grass.",
+		Duration:          7,
+	}
+	dubs := explicitSceneSpeech(sc)
+	if len(dubs) != 1 || dubs[0].Character != "虬髯大汉" || dubs[0].SpeechType != "dialogue" || dubs[0].Text != "抓活的，别伤了狐妖。" {
+		t.Fatalf("object mention stole or suppressed pronoun speech: %+v", dubs)
+	}
+	prompt := buildMiniMaxH3RefPrompt(sc, nil, dubs, []string{
+		"- <Picture 1>：角色「马脸男子」四视图",
+		"- <Picture 2>：角色「齐姓道士」四视图",
+		"- <Picture 3>：角色「虬髯大汉」四视图",
+	})
+	if !strings.Contains(prompt, "<Subject 3>") || !strings.Contains(prompt, "<d>[Chinese] 抓活的，别伤了狐妖。</d>") || strings.Contains(prompt, "No dialogue") {
+		t.Fatalf("authoritative quoted dialogue missing from H3 prompt: %s", prompt)
+	}
+}
+
 func TestPronounSpeechAttributionSwitchesOnlyOnClearPriorSubject(t *testing.T) {
 	sc := &models.Scene{Characters: "甲,乙", Content: "甲推门进来。他说道：“先走。”乙抬头看他。她说道：“等等。”"}
 	got := explicitSceneSpeech(sc)

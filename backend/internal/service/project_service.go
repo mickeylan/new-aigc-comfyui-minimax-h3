@@ -2867,27 +2867,28 @@ func precedingPronounSpeaker(content string, pronounPos int, names []string) str
 			continue
 		}
 
-		// Require a named antecedent to be the grammatical subject. A later mention (for
-		// example “确认女童逃走后”) is an object and must not steal attribution.
+		// Require a named antecedent to be the grammatical subject. Choose the
+		// longest name at the beginning so overlapping names remain deterministic.
+		// Other character names later in the clause are commonly objects (for
+		// example “虬髯大汉停到马脸男子身旁”) and must not invalidate “他”.
 		speaker := ""
 		for _, name := range names {
-			if strings.HasPrefix(segment, name) {
-				if speaker != "" && speaker != name {
-					return ""
-				}
+			if strings.HasPrefix(segment, name) && len([]rune(name)) > len([]rune(speaker)) {
 				speaker = name
 			}
 		}
 		if speaker == "" {
 			continue
 		}
-		firstClause := segment
-		if end := strings.IndexAny(firstClause, "，,"); end >= 0 {
-			firstClause = firstClause[:end]
-		}
+		remainder := strings.TrimSpace(strings.TrimPrefix(segment, speaker))
 		for _, name := range names {
-			if name != speaker && strings.Contains(firstClause, name) {
-				return "" // coordinated/ambiguous subjects
+			if name == speaker {
+				continue
+			}
+			for _, conjunction := range []string{"和", "与", "及", "跟", "、"} {
+				if strings.HasPrefix(remainder, conjunction+name) {
+					return "" // genuine coordinated/ambiguous subject
+				}
 			}
 		}
 		return speaker
