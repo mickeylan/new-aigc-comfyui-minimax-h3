@@ -80,7 +80,7 @@ func TestQwenImage21CharacterCardPromptProgram(t *testing.T) {
 	if got.TargetMode != "character-card" || got.WHRatio != "16:9" {
 		t.Fatalf("unexpected card result: %+v", got)
 	}
-	for _, want := range []string{"separate Qwen text-to-image design-card workflow", "never modifies any Krea2 four-view prompt", "executable anatomy", "tie point", "motif placement", "exposed shoulders", "no exposed nipples or genitals", "historical boots", "modern high heels", "multi-colour", "spirit beasts", "English labels"} {
+	for _, want := range []string{"separate Qwen text-to-image design-card workflow", "never modifies any Krea2 four-view prompt", "executable anatomy", "tie point", "motif placement", "exposed shoulders", "no exposed nipples or genitals", "historical boots", "modern high heels", "multi-colour", "visible motif", "support leg", "shoe soles", "contact shadows", "five supplied female prompt groups", "never clone their heart-shaped faces", "spirit beasts", "English labels"} {
 		if !strings.Contains(p.system, want) {
 			t.Fatalf("character-card contract missing %q: %s", want, p.system)
 		}

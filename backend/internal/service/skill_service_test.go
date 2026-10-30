@@ -77,10 +77,10 @@ func TestCharacterSkillRequiresConcreteHistoricalHairstyle(t *testing.T) {
 	if err := db.Where("code = ?", "character-standard").Order("version DESC").First(&skill).Error; err != nil {
 		t.Fatal(err)
 	}
-	if skill.Version != 3 {
-		t.Fatalf("character skill version=%d, want 3", skill.Version)
+	if skill.Version != 4 {
+		t.Fatalf("character skill version=%d, want 4", skill.Version)
 	}
-	for _, want := range []string{"具体发色", "梳理方向", "发髻/辫发/马尾结构", "乌黑长发全部向后梳理", "紧实高发髻", "深褐木簪横向固定", "眼型/眼皮/眼尾/瞳色", "纹样分布", "露肩、露腰、露背", "合法、不露点", "古代靴履", "现代高跟鞋", "多彩配色", "2至4个核心色相", "随机彩虹色", "材质互相冲突"} {
+	for _, want := range []string{"具体发色", "梳理方向", "发髻/辫发/马尾结构", "乌黑长发全部向后梳理", "紧实高发髻", "深褐木簪横向固定", "眼型/眼皮/眼尾/瞳色", "纹样分布", "露肩、露腰、露背", "合法、不露点", "古代靴履", "现代高跟鞋", "多彩配色", "2至4个核心色相", "随机彩虹色", "材质互相冲突", "视觉母题", "支撑腿", "迈步脚", "接触阴影", "不得让所有人物同版型", "不得把五组参考范式机械复制"} {
 		if !strings.Contains(skill.PromptTemplate+skill.SystemPrompt, want) {
 			t.Fatalf("character skill missing concrete hairstyle rule %q", want)
 		}
