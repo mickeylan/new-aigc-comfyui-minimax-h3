@@ -106,6 +106,20 @@ func TestDirectorTextFieldCompatibility(t *testing.T) {
 	}
 }
 
+func TestDirectorNumericStringCompatibility(t *testing.T) {
+	for _, duration := range []string{`"3"`, `"3.0"`, `"3秒"`, `"3s"`} {
+		raw := strings.Replace(validSceneDirectorDraft, `"duration":3`, `"duration":`+duration, 1)
+		raw = strings.Replace(raw, `"checks":`, `"action_timeline":[{"start":"0s","end":"3秒","subject":"女主","action":"走到桌边","state":"停下","camera":"固定"}],"checks":`, 1)
+		draft, err := parseSceneDirectorDraft(raw)
+		if err != nil {
+			t.Fatalf("duration %s rejected: %v", duration, err)
+		}
+		if draft.Shots[0].Duration != 3 || len(draft.Shots[0].ActionTimeline) != 1 || draft.Shots[0].ActionTimeline[0].Start != 0 || draft.Shots[0].ActionTimeline[0].End != 3 {
+			t.Fatalf("numeric strings not normalized: %+v", draft.Shots[0])
+		}
+	}
+}
+
 func TestDirectorTextCompatibilityPreservesStringDialogueAndRejectsNumbers(t *testing.T) {
 	const dialogue = "原样对白，标点！！！"
 	raw := strings.Replace(validSceneDirectorDraft, `"dialogue":""`, `"dialogue":"原样对白，标点！！！"`, 1)

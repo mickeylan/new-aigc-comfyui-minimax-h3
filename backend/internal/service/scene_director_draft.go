@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"comfyui-console/internal/models"
@@ -375,6 +376,32 @@ func normalizeDirectorTextField(container map[string]json.RawMessage, key string
 	return true, nil
 }
 
+// normalizeDirectorNumberField accepts the common model drift where a JSON number is
+// returned as a string ("5", "5.0", "5秒" or "5s"). Only known numeric fields use
+// this conversion; objects, booleans and non-numeric strings remain explicit errors.
+func normalizeDirectorNumberField(container map[string]json.RawMessage, key string) (bool, error) {
+	raw, ok := container[key]
+	if !ok {
+		return false, nil
+	}
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || raw[0] != '"' {
+		return false, nil
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return false, err
+	}
+	text = strings.TrimSpace(text)
+	text = strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(text, "秒"), "s"))
+	value, err := strconv.ParseFloat(text, 64)
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+		return false, fmt.Errorf("%s必须为数字或数字字符串", key)
+	}
+	container[key], _ = json.Marshal(value)
+	return true, nil
+}
+
 // Normalize common model textual representations without changing string content.
 // Unknown fields remain raw so the strict decoder still rejects them.
 func normalizeDirectorDialogueArrays(output string) (string, error) {
@@ -388,6 +415,11 @@ func normalizeDirectorDialogueArrays(output string) (string, error) {
 	}
 	changed := false
 	for i, shot := range shots {
+		if fieldChanged, err := normalizeDirectorNumberField(shot, "duration"); err != nil {
+			return "", fmt.Errorf("镜头%d的duration无法读取: %w", i+1, err)
+		} else {
+			changed = changed || fieldChanged
+		}
 		if value, ok := shot["subject_action"]; ok {
 			if _, exists := shot["prompt_action"]; !exists {
 				shot["prompt_action"] = value
@@ -407,6 +439,13 @@ func normalizeDirectorDialogueArrays(output string) (string, error) {
 			if err := json.Unmarshal(rawTimeline, &entries); err == nil {
 				timelineChanged := false
 				for entryIndex, entry := range entries {
+					for _, key := range []string{"start", "end"} {
+						fieldChanged, err := normalizeDirectorNumberField(entry, key)
+						if err != nil {
+							return "", fmt.Errorf("镜头%d时间轴%d的%s无法读取: %w", i+1, entryIndex+1, key, err)
+						}
+						timelineChanged = timelineChanged || fieldChanged
+					}
 					if value, ok := entry["subject_action"]; ok {
 						if _, exists := entry["action"]; !exists {
 							entry["action"] = value
