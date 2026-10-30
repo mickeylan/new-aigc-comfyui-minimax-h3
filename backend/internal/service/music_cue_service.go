@@ -638,6 +638,47 @@ func (s *MusicCueService) contextForCue(cue *models.MusicCueSheet) (string, erro
 	return s.episodeContext(cue.ProjectID, cue.EpisodeN)
 }
 
+// RewriteCaption previews a single Cue caption. It intentionally performs no persistence.
+func (s *MusicCueService) RewriteCaption(projectID, cueID uint, requirements, currentCaption string) (string, error) {
+	if s.provider == nil || s.skills == nil {
+		return "", fmt.Errorf("配乐提示词生成服务未配置")
+	}
+	var cue models.MusicCueSheet
+	if err := s.db.Where("id = ? AND project_id = ?", cueID, projectID).First(&cue).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", ErrMusicCueSheetNotFound
+		}
+		return "", err
+	}
+	context, err := s.contextForCue(&cue)
+	if err != nil {
+		return "", err
+	}
+	system := `Rewrite exactly one existing MiniMax Music 3 structured caption. Return one strict JSON object with only global_metadata, vocal_details, arrangement, lyrics_input. Preserve the Cue's scope, timing, ownership and dramatic function; do not plan or alter other cues. The saved original requirements remain authoritative, and the current request refines them. The current unsaved caption is the editing source. Write natural English and preserve explicit exclusions. ` + music3OrientalInstrumentalContract + ` Follow the music-caption-rewriter three-section contract. lyrics_input must be an empty string. Do not create audio or claim persistence.`
+	if strings.TrimSpace(currentCaption) == "" {
+		currentCaption = cue.CaptionJSON
+	}
+	cueContext := fmt.Sprintf("Cue %d; scope=%s; episode=%d; kind=%s; episode-relative range=%.2f–%.2f seconds; mood=%s; intensity=%s", cue.ID, cue.Scope, cue.EpisodeN, cue.Kind, cue.StartTime, cue.EndTime, cue.Mood, cue.Intensity)
+	user := "Authoritative project context JSON:\n" + context + "\n\nTarget cue (do not change):\n" + cueContext + "\n\nSaved original user requirements:\n" + cue.UserRequirements + "\n\nCurrent rewrite requirements:\n" + strings.TrimSpace(requirements) + "\n\nCurrent unsaved caption JSON:\n" + strings.TrimSpace(currentCaption)
+	raw, err := s.skills.ChatWithConfiguredOrFallbackSkill(projectID, models.SkillStageMusicCueSheet, "music-cue-sheet-generate", s.provider, system, user, map[string]string{"episode_context": context, "user_requirements": cue.UserRequirements + "\n" + requirements})
+	if err != nil {
+		return "", err
+	}
+	var caption musicStructuredCaption
+	if err := json.Unmarshal(escapeJSONControlCharsInStrings([]byte(trimJSONEnvelope(raw))), &caption); err != nil {
+		return "", fmt.Errorf("AI改写Caption JSON解析失败: %w", err)
+	}
+	caption.LyricsInput = ""
+	encoded, err := json.Marshal(caption)
+	if err != nil {
+		return "", err
+	}
+	if err := validateMusicCaptionJSON(string(encoded)); err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
 func validateGeneratedMusicCueCoverage(cues []generatedMusicCue, total float64) error {
 	if total <= 0 {
 		return fmt.Errorf("Episode总时长无效")
@@ -916,6 +957,36 @@ func (s *Service) HandleUpdateMusicCueSheet(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, cue)
+}
+
+func (s *Service) HandleRewriteMusicCueSheet(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("cid"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid music cue sheet id"})
+		return
+	}
+	var body struct {
+		Requirements string `json:"requirements"`
+		CaptionJSON  string `json:"caption_json"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	caption, err := s.MusicCues.RewriteCaption(p.ID, uint(id), body.Requirements, body.CaptionJSON)
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, ErrMusicCueSheetNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"caption_json": caption})
 }
 
 func (s *Service) HandleDeleteMusicCueSheet(c *gin.Context) {

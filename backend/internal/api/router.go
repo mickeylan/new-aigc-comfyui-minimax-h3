@@ -185,6 +185,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/music-cue-sheets/draft", svc.HandleDraftMusicCueSheets)
 	r.POST("/api/projects/:id/music-cue-sheets", svc.HandleCreateMusicCueSheet)
 	r.PUT("/api/projects/:id/music-cue-sheets/:cid", svc.HandleUpdateMusicCueSheet)
+	r.POST("/api/projects/:id/music-cue-sheets/:cid/rewrite", svc.HandleRewriteMusicCueSheet)
 	r.POST("/api/projects/:id/music-cue-sheets/:cid/review", svc.HandleReviewMusicCueSheet)
 	// Music 3候选由已审核Cue显式生成，完成后保留为待试听候选，不自动采用。
 	r.POST("/api/projects/:id/music-cue-sheets/:cid/generate", svc.HandleGenerateMusicCandidate)

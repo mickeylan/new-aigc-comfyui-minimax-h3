@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -446,6 +447,52 @@ func TestDraftMusicCuesUsesUserRequirementsAndRewriterSchema(t *testing.T) {
 	}
 	if err := validateMusicCaptionJSON(rows[0].CaptionJSON); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRewriteMusicCueCaptionIsReadOnlyScopedAndValidated(t *testing.T) {
+	db := newMusicCueTestDB(t)
+	if err := db.AutoMigrate(&models.Skill{}, &models.ProjectSkillConfig{}, &models.SkillAuditLog{}, &models.MusicCandidate{}, &models.AudioLayer{}); err != nil {
+		t.Fatal(err)
+	}
+	p1, p2 := models.Project{Title: "one"}, models.Project{Title: "two"}
+	db.Create(&p1)
+	db.Create(&p2)
+	db.Create(&models.Scene{ProjectID: p1.ID, EpisodeN: 1, Generation: 1, Order: 1, Duration: 10, Content: "story"})
+	original := `{"global_metadata":"East Asian fantasy story score","vocal_details":"Fully instrumental","arrangement":"Intro to Outro","lyrics_input":""}`
+	cue := models.MusicCueSheet{ProjectID: p1.ID, Scope: "episode", EpisodeN: 1, Kind: "bgm", StartTime: 2, EndTime: 8, Enabled: true, Source: "ai", ReviewStatus: "approved", UserRequirements: "original restraint", CaptionJSON: original}
+	if err := db.Create(&cue).Error; err != nil {
+		t.Fatal(err)
+	}
+	skills := NewSkillService(db)
+	if err := skills.InitSystemSkills(); err != nil {
+		t.Fatal(err)
+	}
+	valid := `{"global_metadata":"East Asian fantasy story score with lyrical restraint","vocal_details":"Fully instrumental, no voices","arrangement":"Intro: sparse. Development: restrained. Outro: resolve.","lyrics_input":"model noise"}`
+	provider := &captureTextProvider{response: valid}
+	svc := NewMusicCueService(db, provider, skills)
+	preview, err := svc.RewriteCaption(p1.ID, cue.ID, "current request", `{"unsaved":"caption"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(preview, `"lyrics_input":""`) || !strings.Contains(provider.user, "original restraint") || !strings.Contains(provider.user, "current request") || !strings.Contains(provider.user, `unsaved`) {
+		t.Fatalf("preview/prompt invalid: %s %s", preview, provider.user)
+	}
+	var after models.MusicCueSheet
+	db.First(&after, cue.ID)
+	if after.CaptionJSON != original || after.ReviewStatus != "approved" || after.StartTime != 2 || after.EndTime != 8 {
+		t.Fatalf("preview mutated cue: %+v", after)
+	}
+	if _, err := svc.RewriteCaption(p2.ID, cue.ID, "x", original); !errors.Is(err, ErrMusicCueSheetNotFound) {
+		t.Fatalf("cross-project err=%v", err)
+	}
+	provider.response = `{"global_metadata":"generic western","vocal_details":"vocals","arrangement":"static"}`
+	if _, err := svc.RewriteCaption(p1.ID, cue.ID, "x", original); err == nil {
+		t.Fatal("invalid caption accepted")
+	}
+	failing := NewMusicCueService(db, &sequenceTextProvider{}, skills)
+	if _, err := failing.RewriteCaption(p1.ID, cue.ID, "x", original); err == nil {
+		t.Fatal("provider failure hidden")
 	}
 }
 

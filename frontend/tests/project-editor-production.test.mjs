@@ -146,6 +146,17 @@ test('剪辑台先收集用户设想再生成并审核Music 3提示词', () => {
   assert.match(source, /selectMusicCandidate/)
 })
 
+test('单条配乐Cue支持只读AI改写预览并显式应用', () => {
+  const apiSource = fs.readFileSync(new URL('../src/api/index.js', import.meta.url), 'utf8')
+  assert.match(apiSource, /music-cue-sheets\/\$\{cid\}\/rewrite/)
+  assert.match(source, /本条AI改写要求/)
+  assert.match(source, /AI改写预览/)
+  assert.match(source, /applyMusicCueRewrite/)
+  assert.match(source, /cue\._rewriteToken!==token/)
+  assert.match(source, /cue\.caption_json!==cue\._rewriteSourceCaption/)
+  assert.match(source, /点击“保存草稿”后才会写入/)
+})
+
 test('采用的Music 3候选落到BGM轨并可取消采用', () => {
   assert.match(source, /data\?\.bgm_layer/)
   assert.match(source, /overlapping_bgm_layers/)
