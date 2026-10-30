@@ -292,6 +292,32 @@ func normalizeDirectorDialogueArrays(output string) (string, error) {
 	}
 	changed := false
 	for i, shot := range shots {
+		if value, ok := shot["subject_action"]; ok {
+			if _, exists := shot["prompt_action"]; !exists {
+				shot["prompt_action"] = value
+			}
+			delete(shot, "subject_action")
+			changed = true
+		}
+		if rawTimeline, ok := shot["action_timeline"]; ok {
+			var entries []map[string]json.RawMessage
+			if err := json.Unmarshal(rawTimeline, &entries); err == nil {
+				timelineChanged := false
+				for _, entry := range entries {
+					if value, ok := entry["subject_action"]; ok {
+						if _, exists := entry["action"]; !exists {
+							entry["action"] = value
+						}
+						delete(entry, "subject_action")
+						timelineChanged = true
+					}
+				}
+				if timelineChanged {
+					shot["action_timeline"], _ = json.Marshal(entries)
+					changed = true
+				}
+			}
+		}
 		raw := bytes.TrimSpace(shot["dialogue"])
 		if len(raw) == 0 || raw[0] == '"' {
 			continue

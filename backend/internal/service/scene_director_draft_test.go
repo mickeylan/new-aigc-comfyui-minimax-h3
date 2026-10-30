@@ -13,6 +13,27 @@ const validSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中�
 
 const shortSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中景","camera_angle":"平视","camera_movement":"固定","duration":2,"description":"女主走到桌边","dialogue":"","emotion":"警惕","transition_type":"cut","transition_note":"接视线","start_state":"女主站在门边","end_state":"女主停在桌边","prompt_subject":"女主面部清晰","prompt_action":"缓步走到桌边","prompt_camera":"中景平视构图","prompt_lighting":"室内暖侧光","prompt_style":"真人写实电影质感","negative_prompt":"水印，多余人物","checks":["动作可在2秒完成","无新增对白"]}]}`
 
+func TestSceneDirectorDraftSubjectActionAlias(t *testing.T) {
+	for _, preserve := range []bool{false, true} {
+		for _, duplicate := range []bool{false, true} {
+			raw := validSceneDirectorDraft
+			if duplicate {
+				raw = strings.Replace(raw, `"prompt_action":`, `"subject_action":"不应覆盖标准动作","prompt_action":`, 1)
+			} else {
+				raw = strings.Replace(raw, `"prompt_action":`, `"subject_action":`, 1)
+			}
+			raw = strings.Replace(raw, `"checks":`, `"action_timeline":[{"start":0,"end":3,"subject":"女主","subject_action":"走到桌边","state":"停下","camera":"固定"}],"checks":`, 1)
+			draft, err := parseSceneDirectorDraftWithOptions(raw, preserve)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if draft.Shots[0].PromptAction != "缓步走到桌边" || len(draft.Shots[0].ActionTimeline) != 1 || draft.Shots[0].ActionTimeline[0].Action != "走到桌边" {
+				t.Fatalf("action alias not preserved: %+v", draft.Shots[0])
+			}
+		}
+	}
+}
+
 func TestDirectorDialogueStringArrayNormalization(t *testing.T) {
 	for _, tc := range []struct{ value, want string }{
 		{`[]`, ""}, {`["你好，","别走！！！"]`, "你好，别走！！！"},
