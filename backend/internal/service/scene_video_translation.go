@@ -116,19 +116,19 @@ func restoreH3Structure(masked string, tokens []string) (string, []string) {
 	return out, issues
 }
 
-// restoreH3StructureLenient never turns a paid translation into an HTTP error.
-// When the model kept the marker count but changed marker kinds, indices or order,
-// restore the authoritative source tokens by their physical positions. If it also
-// dropped/duplicated markers, returning the source is safer than exposing a broken
-// execution prompt; the caller reports a warning and the user remains unblocked.
-func restoreH3StructureLenient(translated, source string, tokens []string) (string, []string) {
+// restoreH3StructureLenient never turns a paid translation into an HTTP error and
+// never hides the model output behind the source prompt. When the model kept the
+// marker count but changed marker kinds, indices or order, restore authoritative
+// tokens by physical position. If markers are missing or duplicated, preserve the
+// best-effort restored model output verbatim and return warnings for review.
+func restoreH3StructureLenient(translated string, tokens []string) (string, []string) {
 	restored, issues := restoreH3Structure(translated, tokens)
 	if len(issues) == 0 {
 		return restored, nil
 	}
 	matches := h3MarkerRE.FindAllStringIndex(translated, -1)
 	if len(matches) != len(tokens) {
-		return source, issues
+		return restored, issues
 	}
 	var out strings.Builder
 	start := 0
@@ -325,7 +325,7 @@ func (s *Service) HandleTranslateSceneVideoPrompt(c *gin.Context) {
 		return
 	}
 	translated = stripH3CodeFence(translated)
-	translated, markerWarnings := restoreH3StructureLenient(translated, source, tokens)
+	translated, markerWarnings := restoreH3StructureLenient(translated, tokens)
 	response := gin.H{"preview": translated, "prompt": translated, "language": language, "source_hash": h, "token": hashString(h + "\x00" + translated)}
 	if len(markerWarnings) > 0 {
 		response["warnings"] = markerWarnings

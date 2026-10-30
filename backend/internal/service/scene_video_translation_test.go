@@ -90,9 +90,20 @@ func TestRestoreH3StructureLenientRepairsMarkerIndicesByPosition(t *testing.T) {
 	source := "summary:\n[Shot 1] <d>原文</d>"
 	masked, tokens := maskH3Structure(source)
 	translated := strings.Replace(masked, "[[[T1]]]", "[[[T99]]]", 1)
-	restored, warnings := restoreH3StructureLenient(translated, source, tokens)
+	restored, warnings := restoreH3StructureLenient(translated, tokens)
 	if len(warnings) == 0 || restored != source {
 		t.Fatalf("lenient restore=%q warnings=%v", restored, warnings)
+	}
+}
+
+func TestRestoreH3StructureLenientPreservesModelOutputWhenMarkerMissing(t *testing.T) {
+	source := "summary:\n中文\n[Shot 1] 动作 <d>原文</d>"
+	masked, tokens := maskH3Structure(source)
+	translated := strings.Replace(masked, "中文", "translated prose", 1)
+	translated = strings.Replace(translated, "[[[T1]]]", "", 1)
+	restored, warnings := restoreH3StructureLenient(translated, tokens)
+	if len(warnings) == 0 || !strings.Contains(restored, "translated prose") || restored == source {
+		t.Fatalf("model output was hidden: restored=%q warnings=%v", restored, warnings)
 	}
 }
 
