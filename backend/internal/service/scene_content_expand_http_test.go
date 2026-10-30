@@ -86,6 +86,48 @@ func TestExpandSceneContentHTTPDraftContextAndReadOnly(t *testing.T) {
 	}
 }
 
+// Exercise production startup seeding rather than relying on the manually-created fixture Skill.
+func TestExpandSceneContentHTTPAfterSystemSkillInitialization(t *testing.T) {
+	ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"content\":\"expanded\",\"director_note\":\"note\"}"}}]}`)
+	}))
+	defer ai.Close()
+	s, db, sc := expandHTTPService(t, ai.URL)
+	if err := db.Where("code = ?", sceneContentExpandSkillCode).Delete(&models.Skill{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := s.Skills.InitSystemSkills(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var skills []models.Skill
+	if err := db.Where("code = ?", sceneContentExpandSkillCode).Find(&skills).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) != 1 || !skills[0].IsSystem || !skills[0].Enabled || skills[0].Operation != sceneContentExpandSkillCode || skills[0].Stage != models.SkillStageStoryboard {
+		t.Fatalf("missing or duplicate production expansion skill: %+v", skills)
+	}
+	w := expandRequest(s, sc.ProjectID, sc.ID, `{"content":"current draft"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d %s", w.Code, w.Body.String())
+	}
+	var after models.Scene
+	if err := db.First(&after, sc.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if after.Content != sc.Content {
+		t.Fatal("preview persisted scene content")
+	}
+	var count int64
+	if err := db.Model(&models.SkillAuditLog{}).Where("project_id = ? AND skill_id = ? AND success = ?", sc.ProjectID, skills[0].ID, true).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one successful expansion audit, got %d", count)
+	}
+}
+
 func TestExpandSceneContentHTTPValidationAndFailures(t *testing.T) {
 	var calls atomic.Int32
 	var upstream atomic.Bool
