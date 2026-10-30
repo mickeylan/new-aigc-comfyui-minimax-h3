@@ -2617,6 +2617,84 @@ func TestTimelinePronounSpeechRejectsDifferentOrMultipleSubjects(t *testing.T) {
 	}
 }
 
+func TestNormalizeSceneTimedBeatsPreservesAuthoredCuts(t *testing.T) {
+	content := "0—2秒｜第一段。\n2—4秒｜第二段。\n4—5.5秒｜第三段。\n5.5—7秒｜第四段。"
+	got, count := normalizeSceneTimedBeats(content, 7)
+	if count != 4 {
+		t.Fatalf("count=%d prompt=%s", count, got)
+	}
+	for _, want := range []string{"[Shot 1] 第一段。", "[Shot 2] At 00:02.000, 第二段。", "[Shot 3] At 00:04.000, 第三段。", "[Shot 4] At 00:05.500, 第四段。"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("normalized timeline missing %q: %s", want, got)
+		}
+	}
+	prompt := "[Shot 1] A.\n[Shot 2] At 00:01.000, B.\n[Shot 3] At 00:03.000, C.\n[Shot 4] At 00:06.000, D."
+	restored := applyAuthoritativeSceneShotTimeline(prompt, content)
+	for _, want := range []string{"[Shot 2] At 00:02.000,", "[Shot 3] At 00:04.000,", "[Shot 4] At 00:05.500,"} {
+		if !strings.Contains(restored, want) {
+			t.Fatalf("authoritative cut missing %q: %s", want, restored)
+		}
+	}
+}
+
+func TestGenerateSceneVideoActionTreatsExpandedTimedStoryAsVisualAuthority(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SharedAssetReference{}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &captureTextProvider{response: `[Shot 1] The first man listens toward the grass while holding an inactive talisman.
+[Shot 2] At 00:02.000, His thumb rubs the vermilion edge while the paper remains unlit and a bearded man approaches.
+[Shot 3] At 00:04.000, The bearded man stops beside him, speaks, points into the grass, and keeps the blade down.
+[Shot 4] At 00:05.500, The first man tightens his grip, the Taoist advances half a step, and all three hold their enclosing positions.`}
+	ps.textProvider = provider
+	project := models.Project{Title: "timed authority"}
+	ps.db.Create(&project)
+	content := `0—2秒｜草丛外围，马脸男子侧身捏着尚未激发的火云符，侧耳观察晃动草茎。齐姓道士握紧白马尾拂尘。
+2—4秒｜马脸男子摩挲朱砂云纹，压低半步；火云符始终没有燃起。虬髯大汉持朴刀走近。
+4—5.5秒｜虬髯大汉停到马脸男子身旁。他说道：“抓活的，别伤了狐妖。”并指向草丛，朴刀刀锋朝下。
+5.5—7秒｜马脸男子收紧手指；齐姓道士靠近半步。三人形成合围待命，视线锁住摇晃草叶。`
+	scene := models.Scene{ProjectID: project.ID, SceneMode: "文戏", Duration: 7, Characters: "马脸男子,齐姓道士,虬髯大汉", Content: content}
+	ps.db.Create(&scene)
+	ps.db.Create(&models.Shot{SceneID: scene.ID, Order: 1, Duration: 4, Description: "旧泛化动作"})
+	ps.db.Create(&models.Shot{SceneID: scene.ID, Order: 2, Duration: 3, Description: "旧泛化结尾"})
+	canonical, _ := normalizeSceneTimedBeats(content, 7)
+	normalizedDraft := normalizeGeneratedH3Action(provider.response, false, 4, h3SceneDrama, nil, canonical, "")
+	if strings.Count(normalizedDraft, "[Shot ") != 4 {
+		t.Fatalf("normalization collapsed explicit model Shots: %s", normalizedDraft)
+	}
+
+	got, err := ps.GenerateSceneVideoAction(&scene)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.firstUser == "" {
+		t.Fatal("model request was not captured")
+	}
+	for _, want := range []string{"[Shot 2] At 00:02.000,", "[Shot 3] At 00:04.000,", "[Shot 4] At 00:05.500,", "火云符始终没有燃起", "抓活的，别伤了狐妖", "Scene正文已包含明确的逐段时间轴", "禁止合并、删除、重排"} {
+		if !strings.Contains(provider.firstUser, want) {
+			t.Fatalf("timed Scene authority missing %q from request: %s", want, provider.firstUser)
+		}
+	}
+	if strings.Contains(provider.firstUser, "旧泛化动作") || strings.Contains(provider.firstUser, "旧泛化结尾") {
+		t.Fatalf("legacy Shots overrode explicit Scene timeline: %s", provider.firstUser)
+	}
+	if strings.Count(got, "[Shot ") != 4 {
+		t.Fatalf("expanded timeline was collapsed: %s", got)
+	}
+	dubs := ps.sceneVideoDialogues(&scene)
+	if len(dubs) != 1 || dubs[0].Character != "虬髯大汉" || dubs[0].Text != "抓活的，别伤了狐妖。" {
+		t.Fatalf("explicit quote was not recovered as authoritative Dialogue: %+v", dubs)
+	}
+	fullPrompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: got, Duration: 7}, nil, dubs, []string{
+		"- <Picture 1>：角色「马脸男子」四视图",
+		"- <Picture 2>：角色「虬髯大汉」四视图",
+		"- <Picture 3>：角色「齐姓道士」四视图",
+	})
+	if !strings.Contains(fullPrompt, "<Subject 2>") || !strings.Contains(fullPrompt, "<d>[Chinese] 抓活的，别伤了狐妖。</d>") || strings.Contains(fullPrompt, "No dialogue") || strings.Contains(fullPrompt, "不存在对白") {
+		t.Fatalf("final H3 prompt discarded authoritative Dialogue: %s", fullPrompt)
+	}
+}
+
 func TestPronounSpeechKeepsNamedSubjectWhenAnotherCharacterIsObject(t *testing.T) {
 	content := `0—2秒｜草丛外围，马脸男子站在侧面，右手捏着尚未激发的火云符。齐姓道士握紧白马尾拂尘，视线越过马脸男子盯住草丛。
 2—4秒｜马脸男子向前压低半步。虬髯大汉从侧后方走近，右手握着朴刀。

@@ -1991,6 +1991,38 @@ func h3SceneModeInstruction(mode h3SceneMode) string {
 	}
 }
 
+var sceneTimedBeatPattern = regexp.MustCompile(`(?m)^\s*([0-9]+(?:\.[0-9]+)?)\s*[—–-]\s*([0-9]+(?:\.[0-9]+)?)\s*秒\s*[｜|]\s*`)
+
+// normalizeSceneTimedBeats converts an explicitly authored Scene-relative timeline into
+// official H3 Shot markers. These authored intervals are production authority: unlike an
+// inferred cut count, they must not be merged, reordered, retimed, or summarized away.
+func normalizeSceneTimedBeats(content string, duration float64) (string, int) {
+	matches := sceneTimedBeatPattern.FindAllStringSubmatchIndex(content, -1)
+	if len(matches) < 2 {
+		return content, 0
+	}
+	previousEnd := 0.0
+	for i, match := range matches {
+		start, err1 := strconv.ParseFloat(content[match[2]:match[3]], 64)
+		end, err2 := strconv.ParseFloat(content[match[4]:match[5]], 64)
+		if err1 != nil || err2 != nil || end <= start || (i == 0 && math.Abs(start) > 0.001) || (i > 0 && math.Abs(start-previousEnd) > 0.001) || (duration > 0 && end > duration+0.051) {
+			return content, 0
+		}
+		previousEnd = end
+	}
+	shot := 0
+	normalized := sceneTimedBeatPattern.ReplaceAllStringFunc(content, func(marker string) string {
+		shot++
+		match := sceneTimedBeatPattern.FindStringSubmatch(marker)
+		start, _ := strconv.ParseFloat(match[1], 64)
+		if shot == 1 {
+			return "[Shot 1] "
+		}
+		return fmt.Sprintf("[Shot %d] At %s, ", shot, formatH3Timestamp(start))
+	})
+	return normalized, shot
+}
+
 // suggestedUnstructuredH3ShotCount only proposes internal cuts when an unstructured Scene
 // clearly contains several visible production stages. It never changes Scene authority or
 // persists Shots; it prevents a long multi-stage action from being flattened into one summary.
@@ -2177,6 +2209,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	_, refLines := s.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
 	openingPicture := openingPictureTag(refLines)
 	canonicalSceneContent := normalizeUserH3ShotMarkers(sc.Content)
+	canonicalSceneContent, explicitTimedShotCount := normalizeSceneTimedBeats(canonicalSceneContent, normalizeSceneDuration(sc.Duration))
 	dubs := s.sceneVideoDialogues(sc)
 	var shots []models.Shot
 	if err := s.db.Where("scene_id=?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
@@ -2188,12 +2221,15 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	sceneMode := classifyH3SceneMode(sc, shots, dubs)
 	promptShots := shots
 	shotContext := s.sceneShotContext(sc)
-	if (sceneMode == h3SceneAction || sceneMode == h3SceneMixed) && !structuredShotsCoverScene(shots, normalizeSceneDuration(sc.Duration)) {
+	if explicitTimedShotCount > 0 {
+		promptShots = nil
+		shotContext = "Scene正文已包含明确的逐段时间轴，是本次动作、状态、构图与切点的最高视觉权威；旧结构化Shot不得覆盖、合并或概括这些段落。"
+	} else if (sceneMode == h3SceneAction || sceneMode == h3SceneMixed) && !structuredShotsCoverScene(shots, normalizeSceneDuration(sc.Duration)) {
 		promptShots = nil
 		shotContext = "现有结构化Shot时长或范围与Scene不一致，本次不得作为动作权威；请仅按Scene权威事实生成内部Shot。"
 	}
-	suggestedShotCount := 0
-	if len(promptShots) == 0 {
+	suggestedShotCount := explicitTimedShotCount
+	if suggestedShotCount == 0 && len(promptShots) == 0 {
 		suggestedShotCount = suggestedUnstructuredH3ShotCount(canonicalSceneContent, normalizeSceneDuration(sc.Duration))
 	}
 	dialogueContext := "无结构化对白；禁止生成说话、旁白或人声"
@@ -2223,7 +2259,9 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 四视图只负责人物身份与服装，场景图只负责环境；不得从参考图反推剧情，不得复述或猜测外貌、服装、陈设。
 场景类型规则：%s`, combatDetailRule, openingPicture, h3SceneModeInstruction(sceneMode))
 	actionTask := ""
-	if suggestedShotCount > 1 {
+	if explicitTimedShotCount > 1 {
+		actionTask += fmt.Sprintf("\n\n【Scene显式时间轴硬约束】Scene正文已经定义恰好%d个连续时间段，它们是权威镜头计划。必须逐段保留原始起止时间、人物、道具状态、观察目标、手部动作、步法、视线、说话动作和最终状态；只允许翻译并整理为可执行视觉英文，禁止合并、删除、重排、平均重分时长或用概括动作替代具体细节。输出必须恰好%d个Shot，切入时间逐字采用Scene中的官方标记。结构化对白文本由系统另行插入，但其开口动作和所在Shot必须保留。", explicitTimedShotCount, explicitTimedShotCount)
+	} else if suggestedShotCount > 1 {
 		if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
 			actionTask += fmt.Sprintf("\n\n【武戏内部Shot拆分】当前Scene包含多个明确动作阶段，必须生成恰好%d个内部Shot并保持一条连续实时动作时间线。Shot 1不得带时间戳，后续Shot必须使用递增的官方At MM:SS.mmm切入时间；切镜只换机位，不得重新起势。把已明确的剑路按顺序分配到各Shot，每式保持启动、轨迹、停止点和下一式接口；不得把三式塞入一个Shot后用慢动作、花瓣、转圈或尾帧补间填满时长。%s", suggestedShotCount, combatInternalShotTimingInstruction(canonicalSceneContent, normalizeSceneDuration(sc.Duration), suggestedShotCount))
 		} else {
@@ -2233,7 +2271,11 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
 		actionTask += "\n\n【武戏硬任务】动作必须从开头立即以正常实时速度启动；来袭攻击必须在同一Shot中触发立即可见的响应。武器、法宝、灵兽、术法和能量形态只能读取下方Scene、Shot与实际参考绑定，不得用通用武器替换，不得创造未提供的装备或术法。原文未给出命中或胜负时，只能设计不改变结果的即时可见应对，不得生成站立观察，不得擅自决定命中、击杀、受伤或胜负。主要动作爆发应在开头1–2秒完成，余下时间只延续权威事实中已有的环境反馈与结束状态，禁止把接近过程拉满整段。"
 	}
-	user := fmt.Sprintf("目标时长：%.1f秒。只提取执行本镜所必需的信息，不要把以下资料逐段复述进输出。场景剧情中已明确存在的每个[Shot N]都必须原序保留，禁止合并或删除。%s\n\n【场景剧情（仅作事实边界）】\n%s\n\n【Shot导演设计（动作与镜头权威）】\n%s\n\n【结构化对白（仅判断口型时机）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s", normalizeSceneDuration(sc.Duration), actionTask, canonicalSceneContent, shotContext, dialogueContext, strings.Join(refLines, "\n"))
+	contentInstruction := "只提取执行本镜所必需的信息，不要把资料中的背景解释逐段复述进输出。"
+	if explicitTimedShotCount > 0 {
+		contentInstruction = "逐段忠实编译Scene显式时间轴中的全部可见事实；不得把具体观察、手部动作、道具状态、步法、视线、说话动作或结束状态概括掉。"
+	}
+	user := fmt.Sprintf("目标时长：%.1f秒。%s场景剧情中已明确存在的每个[Shot N]都必须原序保留，禁止合并或删除。%s\n\n【场景剧情（视觉与时间线权威）】\n%s\n\n【Shot导演设计（仅在Scene没有显式时间轴时作为动作权威）】\n%s\n\n【结构化对白（仅判断口型时机）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s", normalizeSceneDuration(sc.Duration), contentInstruction, actionTask, canonicalSceneContent, shotContext, dialogueContext, strings.Join(refLines, "\n"))
 	policy, err := NewPromptPolicyService(s.db).Resolve(PromptPolicyContext{ProjectID: sc.ProjectID, SceneID: &sc.ID}, PromptPolicyVideoPolish, system)
 	if err != nil {
 		return "", fmt.Errorf("解析视频提示词策略失败: %w", err)
@@ -2280,6 +2322,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		}
 	}
 	authoritativeBoundAction := useSubjectTags(authoritativeFallback(), refLines)
+	requiresDressingProcess := regexp.MustCompile(`穿上|披上|换上|穿入|系紧|扣紧|整理衣襟|披风|(?i:\b(?:dress(?:es|ing)?|dons?|puts?\s+on|fastens?\s+(?:a\s+)?cloak)\b)`).MatchString(canonicalSceneContent)
 	prepareGeneratedAction := func(value string, allowSubjects bool) string {
 		return normalizeGeneratedH3Action(value, allowSubjects, expectedShotCount, sceneMode, refLines, canonicalSceneContent, authoritativeBoundAction)
 	}
@@ -2299,7 +2342,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		if h3VisualDraftResiduePattern.MatchString(value) || h3InvisiblePsychologyPattern.MatchString(value) || h3ShotCameraMoveConflict(value) {
 			return false
 		}
-		if suggestedShotCount > 1 && sceneMode == h3SceneDrama && !h3DressingProcessContractMatches(value) {
+		if requiresDressingProcess && suggestedShotCount > 1 && sceneMode == h3SceneDrama && !h3DressingProcessContractMatches(value) {
 			return false
 		}
 		if !allowSubjects {
@@ -2359,7 +2402,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		if h3InvisiblePsychologyPattern.MatchString(value) {
 			issues = append(issues, "仍含不可见心理活动，必须改写为可见表情或动作")
 		}
-		if suggestedShotCount > 1 && sceneMode == h3SceneDrama && !h3DressingProcessContractMatches(value) {
+		if requiresDressingProcess && suggestedShotCount > 1 && sceneMode == h3SceneDrama && !h3DressingProcessContractMatches(value) {
 			issues = append(issues, "换衣过程缺少穿袖、合襟/束带或披风扣合的可见中间动作")
 		}
 		if h3ShotCameraMoveConflict(value) {
@@ -2689,6 +2732,7 @@ func applyAuthoritativeSceneShotTimeline(prompt, sceneContent string) string {
 		return strings.Replace(prompt, integrated, updated, 1)
 	}
 	source := normalizeUserH3ShotMarkers(sceneContent)
+	source, _ = normalizeSceneTimedBeats(source, 0)
 	markers := map[int]string{}
 	for _, match := range h3ShotMarkerPattern.FindAllStringSubmatch(source, -1) {
 		if len(match) == 2 {
