@@ -279,7 +279,7 @@ func normalizeDirectorActionTimeline(entries []models.ShotActionTimelineEntry, d
 	}
 }
 
-// Normalize only the unambiguous string-array variant emitted by some models.
+// Normalize common model speech representations without changing spoken text.
 // Keep all other fields raw so the strict decoder still rejects unknown fields.
 func normalizeDirectorDialogueArrays(output string) (string, error) {
 	var root map[string]json.RawMessage
@@ -293,26 +293,16 @@ func normalizeDirectorDialogueArrays(output string) (string, error) {
 	changed := false
 	for i, shot := range shots {
 		raw := bytes.TrimSpace(shot["dialogue"])
-		if len(raw) == 0 || raw[0] != '[' {
+		if len(raw) == 0 || raw[0] == '"' {
 			continue
 		}
-		var items []json.RawMessage
-		if err := json.Unmarshal(raw, &items); err != nil {
-			return "", fmt.Errorf("镜头%d的dialogue数组无效: %w", i+1, err)
-		}
-		parts := make([]string, len(items))
-		for j, item := range items {
-			item = bytes.TrimSpace(item)
-			if len(item) == 0 || item[0] != '"' {
-				return "", fmt.Errorf("镜头%d的dialogue数组第%d项必须为原始台词字符串，不能自动丢弃对象或其他类型", i+1, j+1)
-			}
-			if err := json.Unmarshal(item, &parts[j]); err != nil {
-				return "", err
-			}
+		text, err := directorDialogueText(raw)
+		if err != nil {
+			return "", fmt.Errorf("镜头%d的dialogue无法读取: %w", i+1, err)
 		}
 		// No added separators: authoritative dialogue range matching uses the exact
 		// concatenated rune sequence, including the original punctuation and spaces.
-		shot["dialogue"], _ = json.Marshal(strings.Join(parts, ""))
+		shot["dialogue"], _ = json.Marshal(text)
 		changed = true
 	}
 	if !changed {
@@ -321,6 +311,51 @@ func normalizeDirectorDialogueArrays(output string) (string, error) {
 	root["shots"], _ = json.Marshal(shots)
 	encoded, err := json.Marshal(root)
 	return string(encoded), err
+}
+
+// Speaker/type metadata is not spoken text. Extract known text fields only;
+// never stringify an object into the actual dialogue or add speaker names to it.
+func directorDialogueText(raw json.RawMessage) (string, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return "", nil
+	}
+	switch raw[0] {
+	case '"':
+		var text string
+		err := json.Unmarshal(raw, &text)
+		return text, err
+	case '[':
+		var items []json.RawMessage
+		if err := json.Unmarshal(raw, &items); err != nil {
+			return "", err
+		}
+		var result strings.Builder
+		for _, item := range items {
+			text, err := directorDialogueText(item)
+			if err != nil {
+				return "", err
+			}
+			result.WriteString(text)
+		}
+		return result.String(), nil
+	case '{':
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			return "", err
+		}
+		for _, key := range []string{"text", "content", "dialogue", "line", "utterance", "台词", "对白"} {
+			if value, ok := fields[key]; ok {
+				return directorDialogueText(value)
+			}
+		}
+		if len(fields) == 0 {
+			return "", nil
+		}
+		return "", fmt.Errorf("对白对象缺少台词字段 text/content/dialogue，不能把人物或动作当作台词")
+	default:
+		return "", fmt.Errorf("台词必须为文本、对白对象或数组")
+	}
 }
 
 func parseSceneDirectorDraft(output string) (*sceneDirectorDraft, error) {

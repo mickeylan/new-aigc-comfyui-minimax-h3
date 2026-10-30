@@ -16,6 +16,10 @@ const shortSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中�
 func TestDirectorDialogueStringArrayNormalization(t *testing.T) {
 	for _, tc := range []struct{ value, want string }{
 		{`[]`, ""}, {`["你好，","别走！！！"]`, "你好，别走！！！"},
+		{`[{"speaker":"甲","text":"别走！"},{"character":"乙","content":" 为什么？"}]`, "别走！ 为什么？"},
+		{`[null,{},"原文",{"dialogue":"，保持标点！"}]`, "原文，保持标点！"},
+		{`{"speaker":"甲","text":"原始台词"}`, "原始台词"},
+		{`[["嵌套"]]`, "嵌套"},
 		{`[" 原文 ","\n第二句"]`, " 原文 \n第二句"}, {`"原有字符串"`, "原有字符串"}, {`null`, ""},
 	} {
 		t.Run(tc.value, func(t *testing.T) {
@@ -33,14 +37,14 @@ func TestDirectorDialogueStringArrayNormalization(t *testing.T) {
 			}
 		})
 	}
-	for _, value := range []string{`[null]`, `[3]`, `[{"text":"不能静默丢失说话者"}]`, `[["嵌套"]]`} {
+	for _, value := range []string{`[3]`, `[{"speaker":"甲","action":"挥刀"}]`, `[true]`} {
 		raw := strings.Replace(validSceneDirectorDraft, `"dialogue":""`, `"dialogue":`+value, 1)
 		if _, err := normalizeDirectorDialogueArrays(raw); err == nil {
 			t.Fatalf("accepted ambiguous array %s", value)
 		}
 	}
 	for _, preserve := range []bool{false, true} {
-		raw := strings.Replace(validSceneDirectorDraft, `"dialogue":""`, `"dialogue":[]`, 1)
+		raw := strings.Replace(validSceneDirectorDraft, `"dialogue":""`, `"dialogue":[{"speaker":"甲","text":"原始台词"}]`, 1)
 		if _, err := parseSceneDirectorDraftWithOptions(raw, preserve); err != nil {
 			t.Fatal(err)
 		}
