@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,16 +18,121 @@ import (
 
 const sceneVideoPromptCompilerVersion = "h3-prompt-v1"
 
-var protectedH3TokenRE = regexp.MustCompile(`(?m)<d>(?s:.*?)</d>|<Picture\s+\d+>|<Subject\s+\d+>|\[Shot\s+\d+\]|\[\d+(?:\.\d+)?s\]|\d{2}:\d{2}(?:\.\d+)?|\b\d+(?:\.\d+)?\s*s\b|\(S\d+\)|</?(?:scenetrans|cutoff)>|^\s*(?:subject_definitions|summary|retention_analysis|detailed_description|overall_soundscape|non_diegetic_music|task|duration|resolution|aspect_ratio|fps|prompt)\s*:`)
 var dialogueBlockRE = regexp.MustCompile(`(?s)<d>.*?</d>`)
 
-func protectedH3Tokens(s string) []string { return protectedH3TokenRE.FindAllString(s, -1) }
+// h3ProtocolTokenRE is the structure vocabulary that must survive translation untouched:
+// field names, picture/subject bindings, shot markers, timestamps, speaker ids and
+// transition tags. Bare prose durations are excluded because "3秒" and "3 seconds" are
+// the same meaning written in two languages.
+var h3ProtocolTokenRE = regexp.MustCompile(`(?m)(?s:<d>.*?</d>)|<Picture\s+\d+>|<Subject\s+\d+>|\[Shot\s+\d+\]|\[\d+(?:\.\d+)?s\]|\d{2}:\d{2}(?:\.\d+)?|\(S\d+\)|</?(?:scenetrans|cutoff)>|^[ \t]*(?:subject_definitions|summary|retention_analysis|detailed_description|overall_soundscape|non_diegetic_music|task|duration|resolution|aspect_ratio|fps|prompt)[ \t]*:`)
+
+// h3BracketDurationRE matches the Chinese spelling of a bracketed shot-time marker.
+var h3BracketDurationRE = regexp.MustCompile(`\[(\d+(?:\.\d+)?)\s*秒\]`)
+
+// h3MarkerRE matches the opaque markers used to hide H3 structure from the translator.
+var h3MarkerRE = regexp.MustCompile(`\[\[\[([TD])(\d+)\]\]\]`)
+
+// canonicalizeH3Structure renders Chinese spellings of protocol markers in the English
+// form, so a Chinese master and its English execution draft expose the same vocabulary.
+// Dialogue blocks are left untouched because they must stay byte-identical.
+func canonicalizeH3Structure(text string) string {
+	var out strings.Builder
+	rest := text
+	for {
+		loc := dialogueBlockRE.FindStringIndex(rest)
+		if loc == nil {
+			out.WriteString(h3BracketDurationRE.ReplaceAllString(rest, "[$1s]"))
+			return out.String()
+		}
+		out.WriteString(h3BracketDurationRE.ReplaceAllString(rest[:loc[0]], "[$1s]"))
+		out.WriteString(rest[loc[0]:loc[1]])
+		rest = rest[loc[1]:]
+	}
+}
+
+// h3ProtocolTokens lists the structure tokens of a prompt in order.
+func h3ProtocolTokens(s string) []string {
+	return h3ProtocolTokenRE.FindAllString(canonicalizeH3Structure(s), -1)
+}
+
+// maskH3Structure hides every structure token and every dialogue block behind opaque
+// markers, so the translator only sees natural-language prose and cannot alter the
+// protocol. restoreH3Structure puts the original bytes back in place.
+func maskH3Structure(source string) (string, []string) {
+	canonical := canonicalizeH3Structure(source)
+	var tokens []string
+	masked := h3ProtocolTokenRE.ReplaceAllStringFunc(canonical, func(token string) string {
+		tokens = append(tokens, token)
+		kind := "T"
+		if strings.HasPrefix(token, "<d>") {
+			kind = "D"
+		}
+		return fmt.Sprintf("[[[%s%d]]]", kind, len(tokens)-1)
+	})
+	return masked, tokens
+}
+
+// restoreH3Structure rewrites markers back to their original content and reports the
+// markers the translator dropped or corrupted.
+func restoreH3Structure(masked string, tokens []string) (string, []string) {
+	var issues []string
+	seen := make([]bool, len(tokens))
+	next := 0
+	out := h3MarkerRE.ReplaceAllStringFunc(masked, func(marker string) string {
+		match := h3MarkerRE.FindStringSubmatch(marker)
+		index, err := strconv.Atoi(match[2])
+		if err != nil || index < 0 || index >= len(tokens) {
+			issues = append(issues, "未知标记")
+			return marker
+		}
+		expectedKind := "T"
+		if strings.HasPrefix(tokens[index], "<d>") {
+			expectedKind = "D"
+		}
+		if match[1] != expectedKind {
+			issues = append(issues, fmt.Sprintf("标记 %d 类型错误", index+1))
+		}
+		if seen[index] {
+			issues = append(issues, fmt.Sprintf("标记 %d 重复", index+1))
+		} else if index != next {
+			issues = append(issues, fmt.Sprintf("标记 %d 乱序", index+1))
+		}
+		seen[index] = true
+		for next < len(tokens) && seen[next] {
+			next++
+		}
+		return tokens[index]
+	})
+	for i := range tokens {
+		if !seen[i] {
+			issues = append(issues, fmt.Sprintf("标记 %d 缺失", i+1))
+		}
+	}
+	if strings.Contains(out, "[[[") {
+		issues = append(issues, "存在损坏或未知标记")
+	}
+	return out, issues
+}
+
+// stripH3CodeFence removes a markdown fence the translator may have wrapped around the prompt.
+func stripH3CodeFence(raw string) string {
+	text := strings.TrimSpace(raw)
+	if !strings.HasPrefix(text, "```") {
+		return text
+	}
+	text = strings.TrimPrefix(text, "```")
+	text = strings.TrimPrefix(text, "json")
+	text = strings.TrimPrefix(text, "markdown")
+	text = strings.TrimPrefix(text, "text")
+	text = strings.TrimSuffix(strings.TrimSpace(text), "```")
+	return strings.TrimSpace(text)
+}
 
 func validateH3Translation(source, translated string) error {
 	if strings.TrimSpace(translated) == "" {
 		return fmt.Errorf("翻译结果为空")
 	}
-	a, b := protectedH3Tokens(source), protectedH3Tokens(translated)
+	a, b := h3ProtocolTokens(source), h3ProtocolTokens(translated)
 	if len(a) != len(b) {
 		return fmt.Errorf("翻译改变了 H3 结构 token")
 	}
@@ -169,13 +275,23 @@ func (s *Service) HandleTranslateSceneVideoPrompt(c *gin.Context) {
 	if language == "zh" {
 		target = "Simplified Chinese"
 	}
-	system := "Translate only natural-language prose in this complete MiniMax H3 protocol prompt into " + target + ". Preserve field names, <Picture N>, <Subject N>, timestamps, tags and their order exactly. Preserve every <d>…</d> block byte-for-byte. Return only the translated prompt."
-	translated, err := s.TextProviderFact.Chat(system, source)
+	// The protocol structure is masked out before the call, so the translator can never
+	// rewrite <Picture N>, <Subject N>, timestamps or dialogue blocks. The server restores
+	// the exact original bytes afterwards.
+	masked, tokens := maskH3Structure(source)
+	system := "Translate only the natural-language prose in this complete MiniMax H3 protocol prompt into " + target + ". The tokens [[[Tn]]] and [[[Dn]]] are opaque protocol placeholders: copy every one of them exactly once, in the same order, and never translate, renumber, merge or delete them. Keep all other content byte-identical unless it is natural-language prose. Return only the translated prompt."
+	translated, err := s.TextProviderFact.Chat(system, masked)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	translated = strings.TrimSpace(translated)
+	translated = stripH3CodeFence(translated)
+	restored, missing := restoreH3Structure(translated, tokens)
+	if len(missing) > 0 {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": fmt.Sprintf("翻译破坏了 H3 结构标记（%s）", strings.Join(missing, "、"))})
+		return
+	}
+	translated = restored
 	if err := validateH3Translation(source, translated); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return

@@ -44,6 +44,8 @@ func newTranslationHTTPFixture(t *testing.T) *translationHTTPFixture {
 		if response == "" {
 			response = translationEnglish
 		}
+		// The real provider receives and returns the masked protocol, not the raw H3 prompt.
+		response, _ = maskH3Structure(response)
 		fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`, response)
 	}))
 	t.Cleanup(f.ai.Close)
@@ -148,6 +150,24 @@ func TestSceneVideoTranslationHTTPMasterTranslateConfirmStableAndInvalidate(t *t
 	w = translationRequest(f.svc, http.MethodGet, f.p.ID, f.sc.ID, "", "")
 	if got := decodeTranslationBody(t, w); got["exec_status"] == "confirmed" {
 		t.Fatalf("edited source remained confirmed: %v", got)
+	}
+}
+
+func TestSceneVideoTranslationHTTPBrokenMarkersCallOnceAndDoNotPersist(t *testing.T) {
+	f := newTranslationHTTPFixture(t)
+	masked, _ := maskH3Structure(translationEnglish)
+	f.response = strings.Replace(masked, "[[[T1]]]", "[[[T99]]]", 1)
+
+	w := translationRequest(f.svc, http.MethodPost, f.p.ID, f.sc.ID, "/translate", `{"language":"en"}`)
+	if w.Code != http.StatusUnprocessableEntity || f.calls.Load() != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", w.Code, f.calls.Load(), w.Body.String())
+	}
+	var saved models.Scene
+	if err := f.db.First(&saved, f.sc.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.VideoFullPrompt != "old reviewed prompt" || saved.VideoPromptMasterZH != translationMaster {
+		t.Fatalf("failed translation persisted data: %+v", saved)
 	}
 }
 
