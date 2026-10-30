@@ -205,6 +205,33 @@ func TestSceneVideoTranslationHTTPReturnsPreviewDespiteSourceChange(t *testing.T
 	}
 }
 
+func TestSceneVideoTranslationHTTPConfirmDoesNotBlockChangedSource(t *testing.T) {
+	f := newTranslationHTTPFixture(t)
+	w := translationRequest(f.svc, http.MethodPost, f.p.ID, f.sc.ID, "/translate", `{"language":"en"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("translate status=%d %s", w.Code, w.Body.String())
+	}
+	oldHash := decodeTranslationBody(t, w)["source_hash"].(string)
+	if err := f.db.Model(&models.Scene{}).Where("id = ?", f.sc.ID).Updates(map[string]any{
+		"content":                "changed while user reviews English",
+		"video_prompt_master_zh": translationMaster + "\n用户随后补充",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]any{"exec_prompt": translationEnglish, "source_hash": oldHash})
+	w = translationRequest(f.svc, http.MethodPost, f.p.ID, f.sc.ID, "/confirm", string(body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("changed source blocked English save status=%d %s", w.Code, w.Body.String())
+	}
+	var saved models.Scene
+	if err := f.db.First(&saved, f.sc.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.VideoFullPrompt != translationEnglish || saved.PromptStale {
+		t.Fatalf("English prompt was not saved against current source: %+v", saved)
+	}
+}
+
 func TestSceneVideoTranslationHTTPValidationIsolationAndNilProvider(t *testing.T) {
 	f := newTranslationHTTPFixture(t)
 	if w := translationRequest(f.svc, http.MethodPost, f.p.ID+99, f.sc.ID, "/translate", `{"language":"en"}`); w.Code != 404 {

@@ -49,6 +49,9 @@ test('local English drafts are isolated by project and scene and cleared only af
   assert.match(detail, /localStorage\.setItem\(videoPromptDraftKey\(sceneId\)/)
   const confirm = detail.slice(detail.indexOf('async function confirmEnglishAndGenerate'), detail.indexOf('async function saveVideoPrompt'))
   assert.match(confirm, /confirmSceneVideoPrompt[\s\S]*clearVideoPromptDraft\(sceneId\)/)
+  assert.doesNotMatch(confirm, /!videoTaskSourceHash\.value/)
+  assert.doesNotMatch(confirm, /invalidateVideoPromptPreview\(\)/)
+  assert.match(detail, /当前英文草稿仍可直接审核、保存或生成/)
 })
 
 test('regeneration always proposes Chinese without replacing the current draft', () => {

@@ -419,15 +419,11 @@ func (s *Service) HandleConfirmSceneVideoPrompt(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	if req.SourceHash == "" || req.SourceHash != current {
-		c.JSON(http.StatusConflict, gin.H{"error": "源内容已变化，请重新翻译预览", "source_hash": current})
-		return
-	}
 	now := time.Now()
 	execHash := hashString(req.ExecPrompt)
 	var result *gorm.DB
 	txErr := s.DB.Transaction(func(tx *gorm.DB) error {
-		result = tx.Model(&models.Scene{}).Where("id = ? AND project_id = ? AND video_prompt_master_zh = ? AND updated_at = ?", sc.ID, sc.ProjectID, sc.VideoPromptMasterZH, sc.UpdatedAt).Updates(map[string]any{"video_full_prompt": req.ExecPrompt, "video_exec_source_hash": current, "video_exec_confirmed_hash": execHash, "video_exec_confirmed_at": now, "prompt_stale": false})
+		result = tx.Model(&models.Scene{}).Where("id = ? AND project_id = ?", sc.ID, sc.ProjectID).Updates(map[string]any{"video_full_prompt": req.ExecPrompt, "video_exec_source_hash": current, "video_exec_confirmed_hash": execHash, "video_exec_confirmed_at": now, "prompt_stale": false})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -448,7 +444,7 @@ func (s *Service) HandleConfirmSceneVideoPrompt(c *gin.Context) {
 		return
 	}
 	if result.RowsAffected != 1 {
-		c.JSON(409, gin.H{"error": "源内容已变化，请重试"})
+		c.JSON(404, gin.H{"error": "场景不存在"})
 		return
 	}
 	c.JSON(200, gin.H{"ok": true, "source_hash": current, "exec_hash": execHash, "confirmed_at": now})

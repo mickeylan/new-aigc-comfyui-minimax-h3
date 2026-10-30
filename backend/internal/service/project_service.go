@@ -6702,7 +6702,11 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		_, finalReferenceLines, _ = s.sceneVideoContinuityReferences(sc, pid)
 	}
 	if issues := validateFinalH3Submission(promptText, tplCode, duration, finalReferenceLines, dialogues, structuredShots); len(issues) > 0 {
-		return fmt.Errorf("视频提示词未通过 MiniMax H3 正式提交校验: %s", strings.Join(issues, "；"))
+		// MiniMax H3 tolerates imperfect prompt prose and protocol spelling. These
+		// diagnostics must never block a user-reviewed prompt from reaching the
+		// model; only executable constraints above (template, inputs and duration)
+		// remain hard failures.
+		log.Printf("[h3-prompt-warning] scene=%d template=%s issues=%q", sc.ID, tplCode, strings.Join(issues, "；"))
 	}
 	if sc.ImageFile != "" {
 		if err := s.restoreLegacyProjectInput(sc.ProjectID, sc.ImageFile); err != nil {
