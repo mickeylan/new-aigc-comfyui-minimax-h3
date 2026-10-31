@@ -2642,13 +2642,18 @@ func TestGenerateSceneVideoActionTreatsExpandedTimedStoryAsVisualAuthority(t *te
 	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SharedAssetReference{}); err != nil {
 		t.Fatal(err)
 	}
+	// Reproduce the provider regression: both initial generation and its generic repair
+	// collapse four authoritative intervals into two Shots.
 	provider := &captureTextProvider{response: `[Shot 1] The first man listens toward the grass while holding an inactive talisman.
-[Shot 2] At 00:02.000, His thumb rubs the vermilion edge while the paper remains unlit and a bearded man approaches.
-[Shot 3] At 00:04.000, The bearded man stops beside him, speaks, points into the grass, and keeps the blade down.
-[Shot 4] At 00:05.500, The first man tightens his grip, the Taoist advances half a step, and all three hold their enclosing positions.`}
+[Shot 2] At 00:04.000, The bearded man approaches, gives an order, and all three hold position.`}
 	ps.textProvider = provider
 	project := models.Project{Title: "timed authority"}
 	ps.db.Create(&project)
+	for i, name := range []string{"马脸男子", "虬髯大汉", "齐姓道士"} {
+		if err := ps.db.Create(&models.Character{ProjectID: project.ID, Name: name, Sheet: fmt.Sprintf("char-%d.png", i+1)}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 	content := `0—2秒｜草丛外围，马脸男子侧身捏着尚未激发的火云符，侧耳观察晃动草茎。齐姓道士握紧白马尾拂尘。
 2—4秒｜马脸男子摩挲朱砂云纹，压低半步；火云符始终没有燃起。虬髯大汉持朴刀走近。
 4—5.5秒｜虬髯大汉停到马脸男子身旁。他说道：“抓活的，别伤了狐妖。”并指向草丛，朴刀刀锋朝下。
@@ -2657,12 +2662,6 @@ func TestGenerateSceneVideoActionTreatsExpandedTimedStoryAsVisualAuthority(t *te
 	ps.db.Create(&scene)
 	ps.db.Create(&models.Shot{SceneID: scene.ID, Order: 1, Duration: 4, Description: "旧泛化动作"})
 	ps.db.Create(&models.Shot{SceneID: scene.ID, Order: 2, Duration: 3, Description: "旧泛化结尾"})
-	canonical, _ := normalizeSceneTimedBeats(content, 7)
-	normalizedDraft := normalizeGeneratedH3Action(provider.response, false, 4, h3SceneDrama, nil, canonical, "")
-	if strings.Count(normalizedDraft, "[Shot ") != 4 {
-		t.Fatalf("normalization collapsed explicit model Shots: %s", normalizedDraft)
-	}
-
 	got, err := ps.GenerateSceneVideoAction(&scene)
 	if err != nil {
 		t.Fatal(err)
@@ -2681,6 +2680,14 @@ func TestGenerateSceneVideoActionTreatsExpandedTimedStoryAsVisualAuthority(t *te
 	if strings.Count(got, "[Shot ") != 4 {
 		t.Fatalf("expanded timeline was collapsed: %s", got)
 	}
+	for _, want := range []string{"侧耳观察晃动草茎", "摩挲朱砂云纹", "火云符始终没有燃起", "朴刀刀锋朝下", "<Subject 2>靠近半步", "三人形成合围待命"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("authoritative expanded detail missing %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "抓活的，别伤了狐妖") {
+		t.Fatalf("spoken text must be removed from visual fallback and reinserted from Dialogue: %s", got)
+	}
 	dubs := ps.sceneVideoDialogues(&scene)
 	if len(dubs) != 1 || dubs[0].Character != "虬髯大汉" || dubs[0].Text != "抓活的，别伤了狐妖。" {
 		t.Fatalf("explicit quote was not recovered as authoritative Dialogue: %+v", dubs)
@@ -2690,6 +2697,12 @@ func TestGenerateSceneVideoActionTreatsExpandedTimedStoryAsVisualAuthority(t *te
 		"- <Picture 2>：角色「虬髯大汉」四视图",
 		"- <Picture 3>：角色「齐姓道士」四视图",
 	})
+	fullPrompt = ps.applySceneShotTimeline(&scene, fullPrompt)
+	for _, want := range []string{"[Shot 2] At 00:02.000,", "[Shot 3] At 00:04.000,", "[Shot 4] At 00:05.500,"} {
+		if !strings.Contains(fullPrompt, want) {
+			t.Fatalf("persisted legacy Shots overwrote Scene timing %q: %s", want, fullPrompt)
+		}
+	}
 	if !strings.Contains(fullPrompt, "<Subject 2>") || !strings.Contains(fullPrompt, "<d>[Chinese] 抓活的，别伤了狐妖。</d>") || strings.Contains(fullPrompt, "No dialogue") || strings.Contains(fullPrompt, "不存在对白") {
 		t.Fatalf("final H3 prompt discarded authoritative Dialogue: %s", fullPrompt)
 	}

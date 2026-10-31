@@ -1571,7 +1571,7 @@ func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string, templ
 		_ = s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error
 		shots = s.ensureShotDialogueRanges(sc.ID, shots)
 		prompt = normalizeSavedH3Audio(prompt, dubs, refLines, shots)
-		prompt = applyShotTimeline(prompt, shots, normalizeSceneDuration(sc.Duration))
+		prompt = s.applySceneShotTimeline(sc, prompt)
 	}
 	compile := func(code string) string {
 		if prompt != "" {
@@ -2321,6 +2321,17 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 			}
 		}
 	}
+	authoritativeTimedFallback := func() string {
+		if explicitTimedShotCount == 0 {
+			return ""
+		}
+		// Preserve every authored timed beat when the model collapses or omits one.
+		// Spoken text is removed here and reinserted deterministically from Dialogue,
+		// while the visible speaking action remains in its original interval.
+		visual := quotedDialoguePattern.ReplaceAllString(canonicalSceneContent, "")
+		visual = h3DialogueTagPattern.ReplaceAllString(visual, "")
+		return useSubjectTags(strings.TrimSpace(visual), refLines)
+	}
 	authoritativeBoundAction := useSubjectTags(authoritativeFallback(), refLines)
 	requiresDressingProcess := regexp.MustCompile(`穿上|披上|换上|穿入|系紧|扣紧|整理衣襟|披风|(?i:\b(?:dress(?:es|ing)?|dons?|puts?\s+on|fastens?\s+(?:a\s+)?cloak)\b)`).MatchString(canonicalSceneContent)
 	prepareGeneratedAction := func(value string, allowSubjects bool) string {
@@ -2461,10 +2472,16 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 			if actionTrusted(candidate, true) {
 				out = candidate
 				generationSource = "general_repair"
+			} else if timed := authoritativeTimedFallback(); timed != "" {
+				out = timed
+				generationSource = "explicit_scene_timeline_fallback"
 			} else {
 				out = authoritativeFallback()
 				generationSource = "current_scene_fallback"
 			}
+		} else if timed := authoritativeTimedFallback(); timed != "" {
+			out = timed
+			generationSource = "explicit_scene_timeline_fallback"
 		} else {
 			out = authoritativeFallback()
 			generationSource = "current_scene_fallback"
@@ -2473,7 +2490,13 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	out = useSubjectTags(out, refLines)
 	out = enforceH3ActionTempo(out, sceneMode)
 	if suggestedShotCount > 1 && !actionTrusted(out, true) && sceneMode != h3SceneAction && sceneMode != h3SceneMixed {
-		return "", fmt.Errorf("AI视频动作未能按可见阶段拆成%d个内部Shot：%s", suggestedShotCount, actionTrustIssues(out))
+		if timed := authoritativeTimedFallback(); timed != "" {
+			log.Printf("[h3-timed-scene-warning] scene=%d model_output_rejected=%q using_authoritative_timeline", sc.ID, actionTrustIssues(out))
+			out = timed
+			generationSource = "explicit_scene_timeline_fallback"
+		} else {
+			return "", fmt.Errorf("AI视频动作未能按可见阶段拆成%d个内部Shot：%s", suggestedShotCount, actionTrustIssues(out))
+		}
 	}
 	if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
 		combatValid := actionTrusted(out, true)
@@ -2527,7 +2550,9 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	if !strings.HasPrefix(out, "[Shot 1]") {
 		out = "[Shot 1] " + out
 	}
-	out = applyShotTimeline(out, shots, normalizeSceneDuration(sc.Duration))
+	if explicitTimedShotCount == 0 {
+		out = applyShotTimeline(out, shots, normalizeSceneDuration(sc.Duration))
+	}
 	log.Printf("[h3-prompt] regenerated scene=%d mode=%s source=%s shots=%d chars=%d", sc.ID, sceneMode, generationSource, expectedShotCount, len([]rune(out)))
 	return out, nil
 }
@@ -3705,6 +3730,12 @@ func (s *ProjectService) ensureShotDialogueRanges(sceneID uint, shots []models.S
 }
 
 func (s *ProjectService) applySceneShotTimeline(sc *models.Scene, prompt string) string {
+	if sc == nil {
+		return prompt
+	}
+	if _, count := normalizeSceneTimedBeats(normalizeUserH3ShotMarkers(sc.Content), normalizeSceneDuration(sc.Duration)); count > 0 {
+		return applyAuthoritativeSceneShotTimeline(prompt, sc.Content)
+	}
 	var shots []models.Shot
 	if err := s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
 		return prompt
@@ -6713,7 +6744,7 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 				_ = s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error
 				shots = s.ensureShotDialogueRanges(sc.ID, shots)
 				prompt = normalizeSavedH3Audio(prompt, dubs, refLines, shots)
-				prompt = applyShotTimeline(prompt, shots, normalizeSceneDuration(sc.Duration))
+				prompt = s.applySceneShotTimeline(sc, prompt)
 				if files == nil {
 					files = map[string][]FileMeta{}
 				}

@@ -548,7 +548,7 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 	shots = s.Projects.ensureShotDialogueRanges(sc.ID, shots)
 	fullPrompt = normalizeSavedH3Audio(fullPrompt, dubs, lines, shots)
 	fullPrompt = applyAuthoritativeSceneShotTimeline(fullPrompt, sc.Content)
-	fullPrompt = applyShotTimeline(fullPrompt, shots, normalizeSceneDuration(sc.Duration))
+	fullPrompt = s.Projects.applySceneShotTimeline(sc, fullPrompt)
 	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "reference_bindings": sceneVideoReferenceBindings(refs, lines, fullPrompt), "template": template}
 	if continuity != nil && continuity.SelectedFrame != nil {
 		response["continuity_mode"] = continuity.Mode
@@ -620,7 +620,7 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 		_ = s.DB.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error
 		shots = s.Projects.ensureShotDialogueRanges(sc.ID, shots)
 		prompt = normalizeSavedH3Audio(prompt, dubs, refLines, shots)
-		prompt = applyShotTimeline(prompt, shots, normalizeSceneDuration(sc.Duration))
+		prompt = s.Projects.applySceneShotTimeline(sc, prompt)
 	}
 	template := strings.TrimSpace(req.Template)
 	if template == "" {
