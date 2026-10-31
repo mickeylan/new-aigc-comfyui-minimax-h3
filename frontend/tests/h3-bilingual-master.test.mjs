@@ -38,6 +38,16 @@ test('ordinary Chinese master save does not discard the local English draft', ()
   assert.doesNotMatch(saveMaster, /clearVideoPromptDraft|removeItem|videoTaskExecPreview\.value\s*=/)
 })
 
+test('opening the prompt editor is read-only and clears stale AI busy state', () => {
+  const open = detail.slice(detail.indexOf('async function viewVideoPrompt'), detail.indexOf('async function regenerateVideoPrompt'))
+  assert.match(open, /regeneratingVideoPrompt\.value = false/)
+  assert.match(open, /translatingVideoPrompt\.value = false/)
+  assert.match(open, /savingVideoPrompt\.value = false/)
+  assert.match(open, /api\.sceneVideoPrompt\(id\(\), sc\.id\)/)
+  assert.doesNotMatch(open, /regenerateSceneVideoPrompt|translateSceneVideoPrompt/)
+  assert.match(open, /读取视频提示词失败/)
+})
+
 test('reopening restores a local draft as unconfirmed instead of replacing confirmed server execution text', () => {
   const open = detail.slice(detail.indexOf('async function viewVideoPrompt'), detail.indexOf('async function regenerateVideoPrompt'))
   assert.match(open, /const localDraft = readVideoPromptDraft\(sc\.id\)/)

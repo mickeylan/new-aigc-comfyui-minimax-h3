@@ -1455,7 +1455,14 @@ async function onContinuityApplied(_continuity, openPrompt = false) {
 }
 
 async function viewVideoPrompt(sc) {
+  // Opening the editor is a read-only operation. Cancel any superseded generate/
+  // translate/save UI state before fetching the saved prompt; an older request's
+  // epoch-guarded finally block may intentionally no longer own these flags.
   const epoch = ++videoPromptRequestEpoch
+  regeneratingVideoPrompt.value = false
+  translatingVideoPrompt.value = false
+  savingVideoPrompt.value = false
+  videoPromptHydrating = false
   try {
     const { data: preview } = await api.sceneVideoPrompt(id(), sc.id)
     if (epoch !== videoPromptRequestEpoch) return
@@ -1480,7 +1487,7 @@ async function viewVideoPrompt(sc) {
     videoPromptHydrating = false
     try { sceneAudioCandidates.value = (await api.sceneAudioCandidates(id(), sc.id)).data?.candidates || [] } catch { sceneAudioCandidates.value = [] }
     sceneAudioAuditConfirmed.value = {}
-  } catch (e) { toast.error(e.response?.data?.error || '生成视频提示词失败') }
+  } catch (e) { toast.error(e.response?.data?.error || '读取视频提示词失败') }
 }
 async function regenerateVideoPrompt() {
   if (!videoTaskScene.value) return
