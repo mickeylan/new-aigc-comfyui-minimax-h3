@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
+const director = readFileSync(new URL('../src/components/ShotDirectorEditor.vue', import.meta.url), 'utf8')
 
 test('Scene导演流程在项目详情内连续完成而不跳转剪辑台', () => {
   assert.match(detail, /SCENE DIRECTOR WORKSPACE/)
@@ -23,6 +24,14 @@ test('Scene工作台将分页、选中Scene和步骤写入URL并可刷新恢复'
   assert.match(detail, /requestedSceneID/)
   assert.match(detail, /openEditScene\(scene, String\(route\.query\.step \|\| 'scene'\)\)/)
   assert.match(detail, /const initialScenePage =/)
+})
+
+test('保存AI扩写后同一Scene的导演概况同步新正文且不覆盖人工草稿', () => {
+  assert.match(director, /watch\(\(\) => props\.sceneContent/)
+  assert.match(director, /current === previous/)
+  assert.match(director, /!directorDraft\.value/)
+  assert.match(director, /directorBrief\.value = String\(nextContent \|\| ''\)/)
+  assert.doesNotMatch(detail.slice(detail.indexOf('async function saveSceneAndContinueDirector'), detail.indexOf('async function workspaceGenerateImage')), /router\.push/)
 })
 
 test('Scene卡片显示生产进度并支持同工作台处理下一Scene', () => {

@@ -263,6 +263,18 @@ async function runPromptAction(shot, action) { if (!shot.id) { toast.error('请�
 async function loadHistory(shot) { try { const { data } = await api.promptHistory({ project_id: props.projectId, entity_type: 'shot', entity_id: shot.id, limit: 10 }); shot._history = data || [] } catch (e) { toast.error(e.response?.data?.error || '加载历史失败') } }
 async function rollbackVersion(shot, version) { shot._busy = true; try { const { data } = await api.rollbackPrompt({ project_id: Number(props.projectId), entity_type: 'shot', entity_id: shot.id, version_id: version.id }); setPrompt(shot, data.prompt); await loadHistory(shot); toast.success('已回滚到该历史版本，保存镜头后应用到场景') } catch (e) { toast.error(e.response?.data?.error || '回滚失败') } finally { shot._busy = false } }
 watch(() => props.sceneId, load, { immediate: true })
+watch(() => props.sceneContent, (nextContent, previousContent) => {
+  const current = String(directorBrief.value || '').trim()
+  const previous = String(previousContent || '').trim()
+  // A saved AI expansion keeps the same Scene ID, so the sceneId watcher does not
+  // reload this component. Follow the authoritative Scene content only while the
+  // brief is still the old automatic value. Never overwrite a manually edited brief
+  // or a generated draft that is waiting for explicit review.
+  if (!directorDraft.value && (!current || current === previous)) {
+    directorBrief.value = String(nextContent || '')
+    draftSafety?.schedule()
+  }
+})
 watch(draftValue, () => draftSafety?.schedule(), { deep: true })
 onBeforeUnmount(() => { clearInterval(directorTimer); draftSafety?.dispose() })
 </script>
