@@ -421,7 +421,7 @@
               <div>{{ sc.title || '场景 ' + sc.order }}</div>
               <span class="badge" :class="sceneBadgeClass(sc)">{{ sceneStatusText(sc) }}</span>
             </div>
-            <button class="icon-btn" title="编辑场景" @click="openEditScene(sc)">✎</button>
+            <button class="btn btn-sm btn-secondary scene-director-entry" title="在当前页完成扩写、导演拆镜、参考图和生成准备" @click="openEditScene(sc, 'scene')">导演工作台</button>
           </div>
 
           <div class="scene-preview">
@@ -439,6 +439,7 @@
           </div>
 
           <p class="scene-content">{{ sc.content }}</p>
+          <div class="scene-flow-status" aria-label="Scene生产进度"><span v-for="item in sceneWorkflowStages(sc)" :key="item.key" class="badge" :class="item.done?'badge-green':item.current?'badge-orange':'badge-gray'">{{item.label}}</span></div>
           <p v-if="sc.image_prompt" class="scene-prompt">🎨 {{ sc.image_prompt }}</p>
           <div v-if="sceneDialogues(sc).length" class="scene-dialogues">
             <div class="dialogue-budget" :class="{ danger: dialogueBudget(sc).overflow }">
@@ -567,9 +568,18 @@
     </section>
 
     <!-- 场景编辑弹窗 -->
-    <div v-if="editingScene" class="modal-mask" @click.self="editingScene = null">
-      <div class="modal card scene-edit-modal">
-        <h2>编辑场景 {{ editingScene.order }}</h2>
+    <div v-if="editingScene" class="modal-mask scene-director-mask" @click.self="closeSceneWorkspace">
+      <div class="modal card scene-edit-modal scene-director-workspace">
+        <div class="scene-workspace-head">
+          <div><span class="overline">SCENE DIRECTOR WORKSPACE</span><h2>场景 {{ editingScene.order }} · {{ editingScene.title || '未命名' }}</h2><p class="sub">在当前页连续完成场景扩写、导演拆镜、参考图和生成准备；关闭后仍保留原分页与步骤。</p></div>
+          <button class="btn btn-sm btn-ghost" @click="closeSceneWorkspace">关闭</button>
+        </div>
+        <nav class="scene-workspace-steps" aria-label="Scene导演流程">
+          <button class="btn btn-sm" :class="sceneWorkspaceStep==='scene'?'btn-primary':'btn-ghost'" @click="setSceneWorkspaceStep('scene')">1. 场景扩写</button>
+          <button class="btn btn-sm" :class="sceneWorkspaceStep==='director'?'btn-primary':'btn-ghost'" @click="setSceneWorkspaceStep('director')">2. AI导演拆镜</button>
+          <button class="btn btn-sm" :class="sceneWorkspaceStep==='media'?'btn-primary':'btn-ghost'" @click="setSceneWorkspaceStep('media')">3. 参考图与生成</button>
+        </nav>
+        <div v-show="sceneWorkspaceStep === 'scene'" class="scene-workspace-pane">
         <div class="field">
           <label>场景标题</label>
           <input v-model="sceneForm.title" class="input" />
@@ -620,10 +630,26 @@
         </div>
         <div v-if="sceneError" class="notice error-notice">{{ sceneError }}</div>
         <div class="modal-actions">
-          <button class="btn btn-ghost" @click="editingScene = null">取消</button>
-          <button class="btn" :disabled="savingScene" @click="saveScene">
-            {{ savingScene ? '保存中…' : '保存' }}
-          </button>
+          <button class="btn btn-ghost" @click="closeSceneWorkspace">返回当前分页</button>
+          <button class="btn btn-secondary" :disabled="savingScene" @click="saveScene(true)">{{ savingScene ? '保存中…' : '保存并关闭' }}</button>
+          <button class="btn" :disabled="savingScene" @click="saveSceneAndContinueDirector">{{ savingScene ? '保存中…' : '保存并继续AI导演拆镜' }}</button>
+        </div>
+        </div>
+        <div v-show="sceneWorkspaceStep === 'director'" class="scene-workspace-pane scene-director-pane">
+          <ShotDirectorEditor :key="`detail-shot-director-${editingScene.id}`" :project-id="id()" :scene-id="editingScene.id" :genre="project?.genre || ''" :tone="project?.tone || ''" :scene-title="editingScene.title || ''" :scene-content="editingScene.content || ''" :scene-mode="editingScene.scene_mode || ''" @scene-changed="refreshSceneWorkspace" @scene-materialized="handleWorkspaceMaterialized" />
+          <div class="scene-workspace-footer"><button class="btn btn-ghost" @click="setSceneWorkspaceStep('scene')">← 返回场景扩写</button><button class="btn" @click="setSceneWorkspaceStep('media')">继续参考图与生成 →</button></div>
+        </div>
+        <div v-show="sceneWorkspaceStep === 'media'" class="scene-workspace-pane">
+          <div class="scene-production-summary"><span class="badge" :class="sceneBadgeClass(editingScene)">{{ sceneStatusText(editingScene) }}</span><strong>{{ editingScene.shot_count || 0 }} 个导演 Shot</strong><span>{{ Number(editingScene.duration || 0).toFixed(1) }} 秒</span></div>
+          <p class="sub">参考图仍在“场景扩写”步骤中统一选择；这里直接完成画面、连续性和视频提示词审核。</p>
+          <div class="scene-workspace-media-actions">
+            <button class="btn btn-secondary" :disabled="busy || editingScene._working || !sceneEngineReady(editingScene)" @click="workspaceGenerateImage">{{ editingScene.image_file ? '重新生成分镜图' : '生成分镜图' }}</button>
+            <button class="btn btn-secondary" @click="openWorkspaceContinuity">连续性设置</button>
+            <button class="btn" @click="openWorkspaceVideoPrompt">准备并审核视频提示词</button>
+            <button v-if="editingScene.image_file" class="btn btn-ghost" @click="viewImage(editingScene)">查看分镜图</button>
+          </div>
+          <div v-if="editingScene.image_file" class="scene-workspace-preview"><img :src="imageUrl(editingScene)" alt="当前分镜图" /></div>
+          <div class="scene-workspace-footer"><button class="btn btn-ghost" @click="setSceneWorkspaceStep('director')">← 返回导演拆镜</button><button class="btn btn-secondary" @click="openNextSceneWorkspace">保存进度并处理下一 Scene →</button><button class="btn btn-ghost" @click="closeSceneWorkspace">返回第 {{ scenePage }} 页</button></div>
         </div>
       </div>
     </div>
@@ -1030,6 +1056,7 @@ import { useAppStore } from '../stores/app'
 import { useToastStore } from '../stores/toast'
 import FrameSelector from '../components/FrameSelector.vue'
 import GeneratedMediaHistoryDrawer from '../components/GeneratedMediaHistoryDrawer.vue'
+import ShotDirectorEditor from '../components/ShotDirectorEditor.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -1189,6 +1216,7 @@ const scriptDraft = ref('')
 const scriptDirty = ref(false)
 const videoProgressMap = ref({})
 const editingScene = ref(null)
+const sceneWorkspaceStep = ref(['scene', 'director', 'media'].includes(String(route.query.step || '')) ? String(route.query.step) : 'scene')
 const editingProject = ref(false)
 const savingScene = ref(false)
 const redesigningScenePrompt = ref(false)
@@ -1326,6 +1354,8 @@ async function selectEp(n) {
   showRevisions.value = false
   scriptRevisions.value = []
   scenePage.value = 1
+  scenePageJump.value = 1
+  router.replace({ query: { ...route.query, episode: String(episodeN), scene_page: '1' } })
   await load()
   await nextTick()
   // 即使该集尚无分镜，也滚动到剧本工作区，让“进入”操作有明确反馈。
@@ -1341,8 +1371,9 @@ const currentScenes = computed(() => scenes.value
   .sort((a, b) => a.order - b.order))
 // 场景分页
 const scenePageSize = 6
-const scenePage = ref(1)
-const scenePageJump = ref(1)
+const initialScenePage = Math.max(1, Math.trunc(Number(route.query.scene_page) || 1))
+const scenePage = ref(initialScenePage)
+const scenePageJump = ref(initialScenePage)
 const scenePageCount = computed(() => Math.max(1, Math.ceil(currentScenes.value.length / scenePageSize)))
 const scenePageItems = computed(() => {
   const total = scenePageCount.value
@@ -1366,6 +1397,7 @@ function goToScenePage(page) {
   if (!Number.isFinite(parsed)) return
   scenePage.value = Math.max(1, Math.min(scenePageCount.value, Math.trunc(parsed)))
   scenePageJump.value = scenePage.value
+  if (String(route.query.scene_page || '') !== String(scenePage.value)) router.replace({ query: { ...route.query, scene_page: String(scenePage.value) } })
 }
 function jumpToScenePage() { goToScenePage(scenePageJump.value) }
 watch(scenePageCount, count => { if (scenePage.value > count) goToScenePage(count) })
@@ -1407,6 +1439,20 @@ function sceneBadgeClass(sc) {
     pending: 'badge-gray', image_pending: 'badge-blue', image_ready: 'badge-blue', video_pending: 'badge-orange',
     video_creating: 'badge-orange', video_running: 'badge-orange', video_ready: 'badge-green', failed: 'badge-red'
   }[sc.status] || 'badge-gray'
+}
+function sceneWorkflowStages(sc) {
+  const expanded = Boolean(String(sc.content || '').trim())
+  const directed = Number(sc.shot_count || 0) > 0
+  const referenced = Boolean(String(sc.reference_images_json || '').trim())
+  const imaged = Boolean(sc.image_file)
+  const prompted = Boolean(sc.video_full_prompt || sc.video_prompt)
+  const videoReady = sc.status === 'video_ready'
+  const rows = [
+    ['scene', '场景正文', expanded], ['director', '导演Shots', directed], ['refs', '参考图', referenced],
+    ['image', '分镜图', imaged], ['prompt', '视频提示词', prompted], ['video', '视频', videoReady]
+  ]
+  const firstPending = rows.findIndex(row => !row[2])
+  return rows.map((row, index) => ({ key: row[0], label: row[1], done: row[2], current: index === firstPending }))
 }
 function mergeStatusText(m) {
   return { pending: '等待中', running: '合并中', success: '成片完成', failed: '失败' }[m.status] || m.status
@@ -2745,9 +2791,65 @@ async function removeProject() {
   }
 }
 
-// ---------- 编辑 ----------
+// ---------- Scene 导演工作台 ----------
 
-async function openEditScene(sc) {
+function setSceneWorkspaceStep(step) {
+  if (!['scene', 'director', 'media'].includes(step)) return
+  sceneWorkspaceStep.value = step
+  if (editingScene.value) router.replace({ query: { ...route.query, episode: String(editingScene.value.episode_n || activeEpN.value), scene_page: String(scenePage.value), scene: String(editingScene.value.id), panel: 'director', step } })
+}
+function closeSceneWorkspace() {
+  editingScene.value = null
+  const query = { ...route.query, episode: String(activeEpN.value), scene_page: String(scenePage.value) }
+  delete query.scene
+  delete query.panel
+  delete query.step
+  router.replace({ query })
+}
+async function refreshSceneWorkspace() {
+  const sceneId = editingScene.value?.id
+  await load()
+  if (sceneId) editingScene.value = scenes.value.find(scene => scene.id === sceneId) || null
+}
+async function handleWorkspaceMaterialized(firstSceneId) {
+  await load()
+  const target = scenes.value.find(scene => scene.id === firstSceneId)
+  if (!target) return closeSceneWorkspace()
+  activeEpN.value = target.episode_n || activeEpN.value
+  const index = currentScenes.value.findIndex(scene => scene.id === target.id)
+  if (index >= 0) goToScenePage(Math.floor(index / scenePageSize) + 1)
+  await openEditScene(target, 'media')
+}
+async function saveSceneAndContinueDirector() {
+  if (await saveScene(false)) setSceneWorkspaceStep('director')
+}
+async function workspaceGenerateImage() {
+  if (!editingScene.value) return
+  const sceneId = editingScene.value.id
+  await genImage(editingScene.value)
+  await load()
+  editingScene.value = scenes.value.find(scene => scene.id === sceneId) || editingScene.value
+}
+function openWorkspaceContinuity() {
+  if (!editingScene.value) return
+  openContinuity(editingScene.value)
+}
+async function openWorkspaceVideoPrompt() {
+  if (!editingScene.value) return
+  await viewVideoPrompt(editingScene.value)
+}
+async function openNextSceneWorkspace() {
+  if (!editingScene.value) return
+  const index = currentScenes.value.findIndex(scene => scene.id === editingScene.value.id)
+  const next = index >= 0 ? currentScenes.value[index + 1] : null
+  if (!next) return toast.info('当前已经是本集最后一个 Scene')
+  goToScenePage(Math.floor((index + 1) / scenePageSize) + 1)
+  await openEditScene(next, 'scene')
+}
+
+async function openEditScene(sc, step = 'scene') {
+  sceneWorkspaceStep.value = ['scene', 'director', 'media'].includes(step) ? step : 'scene'
+  router.replace({ query: { ...route.query, episode: String(sc.episode_n || activeEpN.value), scene_page: String(scenePage.value), scene: String(sc.id), panel: 'director', step: sceneWorkspaceStep.value } })
   sceneError.value = ''
   sceneExpandRequirements.value = ''
   sceneExpandPreview.value = null
@@ -2810,9 +2912,8 @@ function applyExpandedSceneContent() {
   return true
 }
 async function applyAndOpenSceneDirector() {
-  const sc = editingScene.value
-  if (!sc || !applyExpandedSceneContent()) return
-  if (await saveScene()) await router.push({ path: `/projects/${id()}/editor`, query: { episode: sc.episode_n || 1, scene: sc.id, workspace: 'production' } })
+  if (!editingScene.value || !applyExpandedSceneContent()) return
+  if (await saveScene(false)) setSceneWorkspaceStep('director')
 }
 
 async function redesignScenePrompt() {
@@ -2832,7 +2933,9 @@ async function redesignScenePrompt() {
   }
 }
 
-async function saveScene() {
+async function saveScene(close = true) {
+  if (!editingScene.value) return false
+  const sceneId = editingScene.value.id
   savingScene.value = true
   sceneError.value = ''
   try {
@@ -2853,9 +2956,11 @@ async function saveScene() {
     await api.updateSceneReferences(id(), editingScene.value.id, selectedSceneReferences.value)
     await api.updateSceneOutfits(id(), editingScene.value.id, Object.entries(selectedSceneOutfits.value).filter(([,oid])=>Number(oid)>0).map(([cid,oid])=>({character_id:Number(cid),outfit_id:Number(oid)})))
     const promptChanged = sceneForm.image_prompt !== editingScene.value.image_prompt
-    editingScene.value = null
+    if (close) editingScene.value = null
     await load()
+    if (!close) editingScene.value = scenes.value.find(scene => scene.id === sceneId) || editingScene.value
     if (promptChanged) toast.show('画面提示词已修改，场景已重置，请重新生成画面')
+    if (close) closeSceneWorkspace()
     return true
   } catch (e) {
     sceneError.value = e.response?.data?.error || '保存失败'
@@ -2917,8 +3022,17 @@ watch(
   () => refreshSoon()
 )
 
-onMounted(() => {
-  load()
+onMounted(async () => {
+  await load()
+  const requestedSceneID = Number(route.query.scene || 0)
+  if (route.query.panel === 'director' && requestedSceneID > 0) {
+    const scene = scenes.value.find(item => item.id === requestedSceneID)
+    if (scene) {
+      const index = currentScenes.value.findIndex(item => item.id === requestedSceneID)
+      if (index >= 0) goToScenePage(Math.floor(index / scenePageSize) + 1)
+      await openEditScene(scene, String(route.query.step || 'scene'))
+    }
+  }
   loadPromptPolicies()
   wsTimer = setInterval(() => {
     if (store.lastEvent || store.lastProjectUpdate) refreshSoon()
@@ -3270,6 +3384,19 @@ onBeforeUnmount(() => {
   border-radius: 6px;
 }
 .scene-edit-modal { width: min(920px, 94vw); max-height: calc(100vh - 48px); overflow-y: auto; }
+.scene-director-workspace { width: min(1240px, 96vw); }
+.scene-workspace-head, .scene-workspace-footer, .scene-production-summary, .scene-workspace-media-actions { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.scene-workspace-head { position:sticky; top:-20px; z-index:4; padding:16px 0 12px; background:var(--surface); border-bottom:1px solid var(--border); }
+.scene-workspace-head h2 { margin:2px 0; }
+.scene-workspace-steps { position:sticky; top:77px; z-index:3; display:flex; gap:8px; padding:10px 0; background:var(--surface); border-bottom:1px solid var(--border); }
+.scene-workspace-pane { padding-top:14px; }
+.scene-director-pane { min-height:420px; }
+.scene-workspace-footer { margin-top:18px; padding-top:14px; border-top:1px solid var(--border); }
+.scene-workspace-media-actions { justify-content:flex-start; margin:18px 0; }
+.scene-workspace-preview img { width:min(720px,100%); aspect-ratio:16/9; object-fit:contain; border-radius:8px; background:#111; }
+.scene-flow-status { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; }
+.scene-director-entry { white-space:nowrap; }
+@media (max-width: 720px) { .scene-workspace-steps { top:104px; overflow-x:auto; } .scene-workspace-steps .btn { white-space:nowrap; } .scene-workspace-head { top:-20px; } }
 .continuity-modal { width: min(1000px, 94vw); padding: 0; max-height: calc(100vh - 48px); overflow-y: auto; }
 .video-task-modal { width: min(900px, 94vw); max-height: calc(100vh - 48px); overflow-y: auto; }
 .continuity-prompt-source { display: flex; align-items: center; gap: 14px; margin: 12px 0 18px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-secondary); }
