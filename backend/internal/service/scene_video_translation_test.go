@@ -60,6 +60,17 @@ func TestRestoreH3StructureAcceptsMarkerKindDrift(t *testing.T) {
 	}
 }
 
+func TestRestoreH3StructureRepairsReportedBracketSpacingDrift(t *testing.T) {
+	source := "retention_analysis:\n<Subject 1> appears in [Shot 1], [Shot 2], [Shot 3]."
+	masked, tokens := maskH3Structure(source)
+	translated := strings.Replace(masked, "[[[T1]]]", "[ [[T1]]]", 1)
+	translated = strings.Replace(translated, "[[[T3]]]", "[[T3]]", 1)
+	restored, issues := restoreH3Structure(translated, tokens)
+	if len(issues) != 0 || restored != source || strings.Contains(restored, "[[T") {
+		t.Fatalf("bracket drift leaked: masked=%q restored=%q issues=%v", masked, restored, issues)
+	}
+}
+
 func TestRestoreH3StructureReportsMissingDuplicateOutOfOrderAndUnknown(t *testing.T) {
 	_, tokens := maskH3Structure("summary:\n[Shot 1] <d>原文</d>")
 	for name, translated := range map[string]string{

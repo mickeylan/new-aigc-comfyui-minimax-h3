@@ -153,6 +153,24 @@ func TestSceneVideoTranslationHTTPMasterTranslateConfirmStableAndInvalidate(t *t
 	}
 }
 
+func TestSceneVideoTranslationHTTPConfirmRepairsSpacedInternalMarkers(t *testing.T) {
+	f := newTranslationHTTPFixture(t)
+	masked, _ := maskH3Structure(translationMaster)
+	malformed := strings.Replace(masked, "[[[T1]]]", "[ [[T1]]]", 1)
+	confirm, _ := json.Marshal(map[string]any{"exec_prompt": malformed})
+	w := translationRequest(f.svc, http.MethodPost, f.p.ID, f.sc.ID, "/confirm", string(confirm))
+	if w.Code != http.StatusOK {
+		t.Fatalf("confirm status=%d body=%s", w.Code, w.Body.String())
+	}
+	var saved models.Scene
+	if err := f.db.First(&saved, f.sc.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.VideoFullPrompt != translationMaster || h3MarkerRE.MatchString(saved.VideoFullPrompt) {
+		t.Fatalf("internal marker leaked into saved prompt: %q", saved.VideoFullPrompt)
+	}
+}
+
 func TestSceneVideoTranslationHTTPBrokenMarkersReturnNonBlockingPreview(t *testing.T) {
 	f := newTranslationHTTPFixture(t)
 	masked, _ := maskH3Structure(translationEnglish)

@@ -29,8 +29,10 @@ var h3ProtocolTokenRE = regexp.MustCompile(`(?m)(?s:<d>.*?</d>)|<Picture\s+\d+>|
 // h3BracketDurationRE matches the Chinese spelling of a bracketed shot-time marker.
 var h3BracketDurationRE = regexp.MustCompile(`\[(\d+(?:\.\d+)?)\s*秒\]`)
 
-// h3MarkerRE matches the opaque markers used to hide H3 structure from the translator.
-var h3MarkerRE = regexp.MustCompile(`\[\[\[([TD])(\d+)\]\]\]`)
+// h3MarkerRE matches opaque translation markers, including harmless bracket/space
+// drift produced by some models, for example "[ [[T11]]]" or "[[T11]]".
+// These markers are internal implementation details and must never reach a saved H3 prompt.
+var h3MarkerRE = regexp.MustCompile(`(?:\[\s*){2,3}([TD])\s*(\d+)(?:\s*\]){2,3}`)
 
 // canonicalizeH3Structure renders Chinese spellings of protocol markers in the English
 // form, so a Chinese master and its English execution draft expose the same vocabulary.
@@ -413,6 +415,15 @@ func (s *Service) HandleConfirmSceneVideoPrompt(c *gin.Context) {
 	if strings.TrimSpace(sc.VideoPromptMasterZH) == "" {
 		c.JSON(400, gin.H{"error": "master_prompt_zh 不能为空"})
 		return
+	}
+	if h3MarkerRE.MatchString(req.ExecPrompt) {
+		_, tokens := maskH3Structure(sc.VideoPromptMasterZH)
+		restored, _ := restoreH3StructureLenient(req.ExecPrompt, tokens)
+		req.ExecPrompt = restored
+		if h3MarkerRE.MatchString(req.ExecPrompt) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "英文执行稿仍含未还原的内部翻译标记，请重新翻译后再确认"})
+			return
+		}
 	}
 	current, err := s.sceneVideoPromptSourceHash(sc)
 	if err != nil {
