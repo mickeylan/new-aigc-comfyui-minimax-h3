@@ -24,7 +24,7 @@ func TestSceneContentExpandContextIsScopedAndReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.Scene{}, &models.Character{}, &models.Asset{}, &models.Dialogue{}); err != nil {
+	if err := db.AutoMigrate(&models.Scene{}, &models.Character{}, &models.Asset{}, &models.Dialogue{}, &models.Shot{}, &models.FrameCandidate{}, &models.SceneContinuity{}); err != nil {
 		t.Fatal(err)
 	}
 	current := models.Scene{ProjectID: 1, EpisodeN: 2, Generation: 3, Order: 5, Title: "逃离", Content: "原正文", Duration: 3.5, SceneMode: "文武混合", VisibleCharacters: "柳乐儿", VoiceCharacters: "旁白", LocationName: "荒地", Props: "火把"}

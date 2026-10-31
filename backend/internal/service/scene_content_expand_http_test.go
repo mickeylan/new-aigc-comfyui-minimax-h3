@@ -16,16 +16,23 @@ import (
 
 func expandHTTPService(t *testing.T, url string) (*Service, *gorm.DB, models.Scene) {
 	db := newTestDB(t)
-	if err := db.AutoMigrate(&models.Scene{}, &models.Character{}, &models.Asset{}, &models.Dialogue{}); err != nil {
+	if err := db.AutoMigrate(&models.Scene{}, &models.Character{}, &models.Asset{}, &models.Dialogue{}, &models.Shot{}, &models.FrameCandidate{}, &models.SceneContinuity{}); err != nil {
 		t.Fatal(err)
 	}
 	p := models.Project{Title: "project"}
 	db.Create(&p)
 	sc := models.Scene{ProjectID: p.ID, EpisodeN: 2, Generation: 3, Order: 5, Content: "saved", Duration: 4, SceneMode: "dialogue"}
 	db.Create(&sc)
-	for _, x := range []models.Scene{{ProjectID: p.ID, EpisodeN: 2, Generation: 3, Order: 4, Content: "previous"}, {ProjectID: p.ID, EpisodeN: 2, Generation: 3, Order: 6, Content: "next"}, {ProjectID: p.ID, EpisodeN: 2, Generation: 4, Order: 6, Content: "wrong-generation"}, {ProjectID: p.ID + 9, EpisodeN: 2, Generation: 3, Order: 6, Content: "wrong-project"}} {
-		db.Create(&x)
+	previous := models.Scene{ProjectID: p.ID, EpisodeN: 2, Generation: 3, Order: 4, Title: "previous-title", Content: "previous"}
+	next := models.Scene{ProjectID: p.ID, EpisodeN: 2, Generation: 3, Order: 6, Title: "next-title", Content: "next"}
+	for _, x := range []*models.Scene{&previous, &next, {ProjectID: p.ID, EpisodeN: 2, Generation: 4, Order: 6, Content: "wrong-generation"}, {ProjectID: p.ID + 9, EpisodeN: 2, Generation: 3, Order: 6, Content: "wrong-project"}} {
+		db.Create(x)
 	}
+	db.Create(&models.Shot{SceneID: previous.ID, Order: 1, Duration: 4, ShotType: "近景", StartState: "人物站在门内", PromptSubject: "甲", PromptAction: "向门外迈步", CameraAngle: "eye_level", CameraMovement: "static", EndState: "人物停在门槛，右手仍握玉佩"})
+	db.Create(&models.Dialogue{ProjectID: p.ID, SceneID: previous.ID, Order: 1, Character: "甲", SpeechType: "dialogue", Text: "前镜原文对白"})
+	frame := models.FrameCandidate{ProjectID: p.ID, SceneID: previous.ID, VideoTaskID: "previous-video", Type: models.FrameCandidateSelected, FrameIndex: 9, ImageFile: "previous-last.png"}
+	db.Create(&frame)
+	db.Create(&models.SceneContinuity{SceneID: sc.ID, Mode: models.ContinuityModeContinue, SourceSceneID: &previous.ID, SelectedFrameID: &frame.ID, SourceVideoTaskID: "previous-video", Status: "ready"})
 	db.Create(&models.Skill{Name: "expand", Code: sceneContentExpandSkillCode, Operation: sceneContentExpandSkillCode, Version: 1, Stage: models.SkillStageStoryboard, Enabled: true})
 	g := &mockGetter{settings: map[string]string{SettingTextProvider: "llama", SettingLlamaBaseURL: url, SettingLlamaModel: "mock"}}
 	return &Service{DB: db, Skills: NewSkillService(db), TextProviderFact: NewTextProviderFactory(g)}, db, sc
@@ -68,8 +75,14 @@ func TestExpandSceneContentHTTPDraftContextAndReadOnly(t *testing.T) {
 		t.Fatalf("out=%+v calls=%d", out, calls.Load())
 	}
 	msgs := request["messages"].([]any)
+	system := msgs[0].(map[string]any)["content"].(string)
+	for _, v := range []string{"前一Scene最后Shot的end_state", "只约束0.00秒可见状态", "后一Scene只能防止提前演出后续事件", "绝不能倒灌成当前动作"} {
+		if !strings.Contains(system, v) {
+			t.Errorf("system missing %q", v)
+		}
+	}
 	user := msgs[1].(map[string]any)["content"].(string)
-	for _, v := range []string{draft, "previous", "next", "KEEP THIS EXACT"} {
+	for _, v := range []string{draft, "previous", "next", "KEEP THIS EXACT", "前镜生产状态", "前镜Shot 1", "人物停在门槛，右手仍握玉佩", "前镜原文对白", "已确认采用上一镜尾帧", "previous-last.png", "后一Scene剧情边界", "不得倒灌为本镜动作"} {
 		if !strings.Contains(user, v) {
 			t.Errorf("missing %q", v)
 		}
