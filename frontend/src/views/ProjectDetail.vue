@@ -636,7 +636,7 @@
         </div>
         </div>
         <div v-show="sceneWorkspaceStep === 'director'" class="scene-workspace-pane scene-director-pane">
-          <ShotDirectorEditor :key="`detail-shot-director-${editingScene.id}`" :project-id="id()" :scene-id="editingScene.id" :genre="project?.genre || ''" :tone="project?.tone || ''" :scene-title="editingScene.title || ''" :scene-content="editingScene.content || ''" :scene-mode="editingScene.scene_mode || ''" @scene-changed="refreshSceneWorkspace" @scene-materialized="handleWorkspaceMaterialized" />
+          <ShotDirectorEditor ref="sceneShotDirector" :key="`detail-shot-director-${editingScene.id}`" :project-id="id()" :scene-id="editingScene.id" :genre="project?.genre || ''" :tone="project?.tone || ''" :scene-title="editingScene.title || ''" :scene-content="editingScene.content || ''" :scene-mode="editingScene.scene_mode || ''" @scene-changed="refreshSceneWorkspace" @scene-materialized="handleWorkspaceMaterialized" />
           <div class="scene-workspace-footer"><button class="btn btn-ghost" @click="setSceneWorkspaceStep('scene')">← 返回场景扩写</button><button class="btn" @click="setSceneWorkspaceStep('media')">继续参考图与生成 →</button></div>
         </div>
         <div v-show="sceneWorkspaceStep === 'media'" class="scene-workspace-pane">
@@ -1216,6 +1216,7 @@ const scriptDraft = ref('')
 const scriptDirty = ref(false)
 const videoProgressMap = ref({})
 const editingScene = ref(null)
+const sceneShotDirector = ref(null)
 const sceneWorkspaceStep = ref(['scene', 'director', 'media'].includes(String(route.query.step || '')) ? String(route.query.step) : 'scene')
 const editingProject = ref(false)
 const savingScene = ref(false)
@@ -2821,7 +2822,10 @@ async function handleWorkspaceMaterialized(firstSceneId) {
   await openEditScene(target, 'media')
 }
 async function saveSceneAndContinueDirector() {
-  if (await saveScene(false)) setSceneWorkspaceStep('director')
+  if (!(await saveScene(false))) return
+  await nextTick()
+  sceneShotDirector.value?.syncAuthoritativeSceneContent(editingScene.value?.content || sceneForm.content)
+  setSceneWorkspaceStep('director')
 }
 async function workspaceGenerateImage() {
   if (!editingScene.value) return

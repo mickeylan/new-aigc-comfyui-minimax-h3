@@ -26,11 +26,13 @@ test('Scene工作台将分页、选中Scene和步骤写入URL并可刷新恢复'
   assert.match(detail, /const initialScenePage =/)
 })
 
-test('保存AI扩写后同一Scene的导演概况同步新正文且不覆盖人工草稿', () => {
-  assert.match(director, /watch\(\(\) => props\.sceneContent/)
-  assert.match(director, /current === previous/)
-  assert.match(director, /!directorDraft\.value/)
-  assert.match(director, /directorBrief\.value = String\(nextContent \|\| ''\)/)
+test('保存AI扩写后显式同步权威正文且旧本地草稿不能覆盖', () => {
+  assert.match(detail, /ref="sceneShotDirector"/)
+  assert.match(detail, /sceneShotDirector\.value\?\.syncAuthoritativeSceneContent\(editingScene\.value\?\.content \|\| sceneForm\.content\)/)
+  assert.match(director, /defineExpose\(\{ syncAuthoritativeSceneContent \}\)/)
+  assert.match(director, /sceneContent: props\.sceneContent \|\| ''/)
+  assert.match(director, /const sameSceneContent = String\(draft\.sceneContent \|\| ''\) === String\(props\.sceneContent \|\| ''\)/)
+  assert.match(director, /directorDraft\.value = sameSceneContent/)
   assert.doesNotMatch(detail.slice(detail.indexOf('async function saveSceneAndContinueDirector'), detail.indexOf('async function workspaceGenerateImage')), /router\.push/)
 })
 

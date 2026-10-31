@@ -91,17 +91,22 @@ const dialogueAuditBlockingIssues = computed(() => {
   return issues
 })
 const dialogueAuditAdvisories = computed(() => directorDialogueReview.value.flatMap((review, index) => (review?.advisories || []).map(issue => `镜头${index + 1}：${issue}`)))
-const draftValue = () => ({ directorBrief: directorBrief.value, directorRequirements: directorRequirements.value, combatQuery: combatQuery.value, combatSelected: combatSelected.value, shots: shots.value, directorDraft: directorDraft.value, directorDraftMode: directorDraftMode.value, directorDialogueDuration: directorDialogueDuration.value, directorDialogueReview: directorDialogueReview.value, directorDialogueSnapshot: directorDialogueSnapshot.value, directorServerRepairs: directorServerRepairs.value, combatReferenceAudit: combatReferenceAudit.value, combatDraftSelection: combatDraftSelection.value })
+const draftValue = () => ({ sceneContent: props.sceneContent || '', directorBrief: directorBrief.value, directorRequirements: directorRequirements.value, combatQuery: combatQuery.value, combatSelected: combatSelected.value, shots: shots.value, directorDraft: directorDraft.value, directorDraftMode: directorDraftMode.value, directorDialogueDuration: directorDialogueDuration.value, directorDialogueReview: directorDialogueReview.value, directorDialogueSnapshot: directorDialogueSnapshot.value, directorServerRepairs: directorServerRepairs.value, combatReferenceAudit: combatReferenceAudit.value, combatDraftSelection: combatDraftSelection.value })
 function applyLocalDraft(draft) {
-  directorBrief.value = draft.directorBrief || ''; directorRequirements.value = draft.directorRequirements || ''; combatQuery.value = draft.combatQuery || ''; combatSelected.value = Array.isArray(draft.combatSelected) ? draft.combatSelected : []; if (Array.isArray(draft.shots)) shots.value = draft.shots
-  directorDraft.value = draft.directorDraft?.shots?.length ? draft.directorDraft : null
-  directorDraftMode.value = draft.directorDraftMode || 'standard'
-  directorDialogueDuration.value = Number(draft.directorDialogueDuration) || 0
-  directorDialogueReview.value = Array.isArray(draft.directorDialogueReview) ? draft.directorDialogueReview : []
-  directorDialogueSnapshot.value = draft.directorDialogueSnapshot || ''
-  directorServerRepairs.value = Array.isArray(draft.directorServerRepairs) ? draft.directorServerRepairs : []
-  combatReferenceAudit.value = Array.isArray(draft.combatReferenceAudit) ? draft.combatReferenceAudit : []
-  combatDraftSelection.value = Array.isArray(draft.combatDraftSelection) ? draft.combatDraftSelection : []
+  const sameSceneContent = String(draft.sceneContent || '') === String(props.sceneContent || '')
+  directorBrief.value = sameSceneContent ? (draft.directorBrief || props.sceneContent || '') : (props.sceneContent || '')
+  directorRequirements.value = sameSceneContent ? (draft.directorRequirements || '') : ''
+  combatQuery.value = sameSceneContent ? (draft.combatQuery || '') : ''
+  combatSelected.value = sameSceneContent && Array.isArray(draft.combatSelected) ? draft.combatSelected : []
+  if (sameSceneContent && Array.isArray(draft.shots)) shots.value = draft.shots
+  directorDraft.value = sameSceneContent && draft.directorDraft?.shots?.length ? draft.directorDraft : null
+  directorDraftMode.value = sameSceneContent ? (draft.directorDraftMode || 'standard') : 'standard'
+  directorDialogueDuration.value = sameSceneContent ? (Number(draft.directorDialogueDuration) || 0) : 0
+  directorDialogueReview.value = sameSceneContent && Array.isArray(draft.directorDialogueReview) ? draft.directorDialogueReview : []
+  directorDialogueSnapshot.value = sameSceneContent ? (draft.directorDialogueSnapshot || '') : ''
+  directorServerRepairs.value = sameSceneContent && Array.isArray(draft.directorServerRepairs) ? draft.directorServerRepairs : []
+  combatReferenceAudit.value = sameSceneContent && Array.isArray(draft.combatReferenceAudit) ? draft.combatReferenceAudit : []
+  combatDraftSelection.value = sameSceneContent && Array.isArray(draft.combatDraftSelection) ? draft.combatDraftSelection : []
 }
 function saveDirectorWorkspaceShortcut() {
   if (directorDraft.value) {
@@ -262,6 +267,14 @@ async function runPairedPromptAction(shot) { shot._busy = true; try { const { da
 async function runPromptAction(shot, action) { if (!shot.id) { toast.error('请先保存镜头'); return } shot._busy = true; try { const payload = { project_id: Number(props.projectId), entity_type: 'shot', entity_id: shot.id, prompt: assembledPrompt(shot), context: `${shot.description}；情绪：${shot.emotion}` }; const { data } = action === 'optimize' ? await api.optimizePrompt(payload) : await api.translatePrompt({ ...payload, target_lang: 'en' }); setPrompt(shot, data.prompt); await loadHistory(shot); toast.success(action === 'optimize' ? '提示词已优化' : '提示词已翻译') } catch (e) { toast.error(e.response?.data?.error || '提示词处理失败') } finally { shot._busy = false } }
 async function loadHistory(shot) { try { const { data } = await api.promptHistory({ project_id: props.projectId, entity_type: 'shot', entity_id: shot.id, limit: 10 }); shot._history = data || [] } catch (e) { toast.error(e.response?.data?.error || '加载历史失败') } }
 async function rollbackVersion(shot, version) { shot._busy = true; try { const { data } = await api.rollbackPrompt({ project_id: Number(props.projectId), entity_type: 'shot', entity_id: shot.id, version_id: version.id }); setPrompt(shot, data.prompt); await loadHistory(shot); toast.success('已回滚到该历史版本，保存镜头后应用到场景') } catch (e) { toast.error(e.response?.data?.error || '回滚失败') } finally { shot._busy = false } }
+function syncAuthoritativeSceneContent(content) {
+  directorBrief.value = String(content || '')
+  abandonDirectorDraft()
+  draftSafety?.discard()
+  draftSafety?.schedule()
+}
+defineExpose({ syncAuthoritativeSceneContent })
+
 watch(() => props.sceneId, load, { immediate: true })
 watch(() => props.sceneContent, (nextContent, previousContent) => {
   const current = String(directorBrief.value || '').trim()
