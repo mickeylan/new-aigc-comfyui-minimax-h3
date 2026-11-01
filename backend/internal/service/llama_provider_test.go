@@ -127,6 +127,23 @@ func TestMiniMaxCodingProviderChatUsesBearerAuth(t *testing.T) {
 	}
 }
 
+func TestMiniMaxCodingProviderErrorsUseConfiguredProviderName(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"context window exceeds limit"}}`))
+	}))
+	defer server.Close()
+	g := &mockGetter{settings: map[string]string{
+		SettingMiniMaxBaseURL: server.URL + "/v1",
+		SettingMiniMaxModel:   "MiniMax-M2.5",
+		SettingMiniMaxAPIKey:  "test-key",
+	}}
+	_, err := NewMiniMaxCodingProvider(g).Chat("system", "user")
+	if err == nil || !strings.Contains(err.Error(), "MiniMax Coding Plan接口返回 400") || strings.Contains(err.Error(), "llama.cpp") {
+		t.Fatalf("unexpected provider error: %v", err)
+	}
+}
+
 func TestTextProviderCapabilitiesDoNotPretendTextOnlyIsMultimodal(t *testing.T) {
 	provider := &stubTextProvider{response: "ok"}
 	capability := TextProviderCapabilities(provider)

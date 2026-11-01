@@ -229,24 +229,24 @@ func (l *LlamaProvider) chatOnce(system, user string) (string, error) {
 
 	resp, err := l.httpc.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("调用 llama.cpp 接口失败: %w", err)
+		return "", fmt.Errorf("调用%s接口失败: %w", l.name, err)
 	}
 	defer resp.Body.Close()
 
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("llama.cpp 接口返回 %d: %s", resp.StatusCode, truncateStr(string(data), 300))
+		return "", fmt.Errorf("%s接口返回 %d: %s", l.name, resp.StatusCode, truncateStr(string(data), 300))
 	}
 
 	var out openAIChatResp
 	if err := json.Unmarshal(data, &out); err != nil {
-		return "", fmt.Errorf("解析 llama.cpp 响应失败: %w", err)
+		return "", fmt.Errorf("解析%s响应失败: %w", l.name, err)
 	}
 	if out.Error != nil {
-		return "", fmt.Errorf("llama.cpp 接口错误: %s", out.Error.Message)
+		return "", fmt.Errorf("%s接口错误: %s", l.name, out.Error.Message)
 	}
 	if len(out.Choices) == 0 {
-		return "", fmt.Errorf("llama.cpp 未返回内容（原始响应: %s）", truncateStr(string(data), 200))
+		return "", fmt.Errorf("%s未返回内容（原始响应: %s）", l.name, truncateStr(string(data), 200))
 	}
 	content := stripThinkBlocks(out.Choices[0].Message.Content)
 	if content == "" {

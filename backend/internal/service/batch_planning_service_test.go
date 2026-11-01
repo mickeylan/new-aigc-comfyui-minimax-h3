@@ -41,6 +41,29 @@ func TestRecoverInterruptedPlanningBatch(t *testing.T) {
 	}
 }
 
+func TestCompactBatchPlanningContextAvoidsRawChapterAndFullScenePayloads(t *testing.T) {
+	chapters := []models.Chapter{{ID: 7, Order: 1, Title: "狐女", Content: strings.Repeat("原文章节正文", 5000), Summary: strings.Repeat("摘要", 600), AnalysisJSON: strings.Repeat("事件", 4000)}}
+	compact := compactBatchPlanningChapters(chapters)
+	if len(compact) != 1 || strings.Contains(compact[0].AnalysisJSON, "原文章节正文") {
+		t.Fatalf("raw chapter content leaked into planning context: %#v", compact)
+	}
+	if len(compact[0].Summary) > 1000 || len(compact[0].AnalysisJSON) > 6000 {
+		t.Fatalf("planning chapter context exceeded bounds: summary=%d analysis=%d", len(compact[0].Summary), len(compact[0].AnalysisJSON))
+	}
+
+	s := newTestBatchService(t)
+	if err := s.db.Create(&models.Scene{ProjectID: 1, EpisodeN: 1, Order: 1, Title: "已生产场景", Content: strings.Repeat("完整生产正文", 2000)}).Error; err != nil {
+		t.Fatal(err)
+	}
+	facts, err := s.compactEpisodeProductionFacts(1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts) > 5000 || !strings.Contains(facts, "已生产场景") {
+		t.Fatalf("unexpected compact production facts: bytes=%d text=%q", len(facts), facts)
+	}
+}
+
 func TestLockedBatchEpisodesPreserveProducedAdaptations(t *testing.T) {
 	s := newTestBatchService(t)
 	produced := models.EpisodeAdaptation{ProjectID: 1, EpisodeN: 1, Title: "已生产第一集", Status: "scripted", Script: "权威剧本"}

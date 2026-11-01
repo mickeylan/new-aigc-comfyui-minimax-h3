@@ -354,6 +354,68 @@ func (s *BatchPlanningService) batchPlanningDuplicateIssues(projectID uint, epis
 	return uniqueStrings(issues), nil
 }
 
+type batchPlanningChapterContext struct {
+	ID           uint   `json:"id"`
+	Order        int    `json:"order"`
+	Title        string `json:"title"`
+	Summary      string `json:"summary"`
+	AnalysisJSON string `json:"analysis_json"`
+}
+
+func compactBatchPlanningChapters(chapters []models.Chapter) []batchPlanningChapterContext {
+	result := make([]batchPlanningChapterContext, 0, len(chapters))
+	for _, chapter := range chapters {
+		result = append(result, batchPlanningChapterContext{
+			ID:           chapter.ID,
+			Order:        chapter.Order,
+			Title:        strings.TrimSpace(chapter.Title),
+			Summary:      boundedUTF8Text(chapter.Summary, 1000),
+			AnalysisJSON: boundedUTF8Text(chapter.AnalysisJSON, 6000),
+		})
+	}
+	return result
+}
+
+type lockedEpisodePlanningContext struct {
+	EpisodeN       int    `json:"episode_n"`
+	Title          string `json:"title"`
+	AdaptationGoal string `json:"adaptation_goal"`
+	OpeningState   string `json:"opening_state"`
+	EndingState    string `json:"ending_state"`
+	Hook           string `json:"hook"`
+}
+
+func compactLockedEpisodeContext(locked map[int]models.EpisodeAdaptation) map[int]lockedEpisodePlanningContext {
+	result := make(map[int]lockedEpisodePlanningContext, len(locked))
+	for episodeN, episode := range locked {
+		result[episodeN] = lockedEpisodePlanningContext{
+			EpisodeN:       episodeN,
+			Title:          boundedUTF8Text(episode.Title, 160),
+			AdaptationGoal: boundedUTF8Text(episode.AdaptationGoal, 600),
+			OpeningState:   boundedUTF8Text(episode.OpeningState, 400),
+			EndingState:    boundedUTF8Text(episode.EndingState, 500),
+			Hook:           boundedUTF8Text(episode.Hook, 300),
+		}
+	}
+	return result
+}
+
+func (s *BatchPlanningService) compactEpisodeProductionFacts(projectID uint, episodeN int) (string, error) {
+	var scenes []models.Scene
+	if err := s.db.Where("project_id = ? AND episode_n = ?", projectID, episodeN).Order("`order`, id").Find(&scenes).Error; err != nil {
+		return "", err
+	}
+	var out strings.Builder
+	for _, scene := range scenes {
+		line := fmt.Sprintf("S%d %s：%s\n", scene.Order, strings.TrimSpace(scene.Title), boundedUTF8Text(scene.Content, 180))
+		if out.Len()+len(line) > 5000 {
+			break
+		}
+		out.WriteString(line)
+	}
+	return strings.TrimSpace(out.String()), nil
+}
+
 func (s *BatchPlanningService) lockedBatchEpisodes(projectID uint, start, end int) (map[int]models.EpisodeAdaptation, error) {
 	var adaptations []models.EpisodeAdaptation
 	if err := s.db.Where("project_id = ? AND episode_n BETWEEN ? AND ?", projectID, start, end).Find(&adaptations).Error; err != nil {
@@ -456,12 +518,13 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 	}
 	lockedProductionFacts := map[int]string{}
 	for episodeN := range lockedEpisodes {
-		facts, factsErr := (&ProjectService{db: s.db}).previousEpisodeProductionFacts(projectID, episodeN+1)
+		facts, factsErr := s.compactEpisodeProductionFacts(projectID, episodeN)
 		if factsErr != nil {
 			return nil, fmt.Errorf("读取第%d集生产事实失败: %w", episodeN, factsErr)
 		}
 		lockedProductionFacts[episodeN] = facts
 	}
+	lockedEpisodeContext := compactLockedEpisodeContext(lockedEpisodes)
 	var previousSnapshot models.BatchStateSnapshot
 	if batch.PreviousBatchID != nil {
 		_ = s.db.Where("project_id = ? AND batch_id = ? AND status = ?", projectID, *batch.PreviousBatchID, "approved").First(&previousSnapshot).Error
@@ -472,14 +535,16 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 	for _, chapter := range chapters {
 		chapterIDByOrder[chapter.Order] = chapter.ID
 	}
-	input := map[string]any{"batch": batch, "story_bible": bible, "story_arcs": arcs, "chapter_analyses": chapters, "chapter_id_by_order": chapterIDByOrder, "previous_ending_state": previous.EndingState, "previous_production_facts": previousProductionFacts, "locked_episodes": lockedEpisodes, "locked_episode_production_facts": lockedProductionFacts, "authoritative_character_names": characterAuthority, "previous_state_snapshot": previousSnapshot, "open_clues": openClues, "required_episode_start": batch.EpisodeStart, "required_episode_end": batch.EpisodeEnd, "required_episode_count": batch.EpisodeCount}
+	chapterContexts := compactBatchPlanningChapters(chapters)
+	input := map[string]any{"batch": batch, "story_arcs": arcs, "chapter_id_by_order": chapterIDByOrder, "previous_ending_state": previous.EndingState, "previous_production_facts": previousProductionFacts, "locked_episodes": lockedEpisodeContext, "locked_episode_production_facts": lockedProductionFacts, "authoritative_character_names": characterAuthority, "previous_state_snapshot": previousSnapshot, "open_clues": openClues, "required_episode_start": batch.EpisodeStart, "required_episode_end": batch.EpisodeEnd, "required_episode_count": batch.EpisodeCount}
 	payload, _ := json.Marshal(input)
+	chapterPayload, _ := json.Marshal(chapterContexts)
 	_ = s.db.Model(batch).Updates(map[string]any{"status": BatchStatusGenerating, "error": "", "generation": gorm.Expr("generation + 1")}).Error
 	system := fmt.Sprintf("你是长篇故事滚动规划师。只输出JSON对象 {\"summary\":\"批次摘要\",\"episodes\":[EpisodeAdaptation字段]}。必须精确生成%d集，集号从%d连续到%d；每集必须含title、chapter_start、chapter_end、source_chapter_ids(必须使用chapter_id_by_order中的数据库ID组成非空JSON数组；不得填写章节序号)、adaptation_goal、opening_state、ending_state、hook、target_duration(默认180)、target_scenes(默认25)。每集chapter_start和chapter_end必须位于本批次原文章节%d至%d内；集数可以多于章节数，此时允许相邻多集引用同一章，绝不可把集号当成章节号。不得重写已完成批次，必须承接previous_ending_state。previous_production_facts是上一集实际完成的Scene、Dialogue和剧本，是最高排重权威：后续集禁止重演、换措辞重讲、再次揭示或回顾其中已发生的事件、动作、信息、对白目的和情绪节点；必须从其结尾之后产生新推进。同一批次各集也必须事件互斥，后一集不得重复前一集已分配的核心事件。locked_episodes及locked_episode_production_facts是本批次中已经生产的不可变分集，必须原样返回其规划字段，绝对不得重写、重新分配其事件或改变人物名；后续集只能使用尚未被锁定集消费的事件。authoritative_character_names列出跨集权威角色名及别名：同一人物必须始终使用权威名称，不得把“马面青年”等既有角色改成另一个新名字、同义称呼或临时别名；只有原文和故事圣经明确的新登场人物才允许新增名字。", batch.EpisodeCount, batch.EpisodeStart, batch.EpisodeEnd, batch.ChapterStart, batch.ChapterEnd)
 	if outlineMode {
 		system += " 当前项目来自故事梗概而非小说章节；source_chapter_ids固定输出空数组[]，chapter_start和chapter_end可使用0。"
 	}
-	raw, err := s.skills.ChatWithSkill(projectID, models.SkillStageAdaptationPlan, s.provider, system, "", map[string]string{"strategy": string(payload), "story_bible": bibleJSON(bible), "chapter_analyses": string(payload)})
+	raw, err := s.skills.ChatWithSkill(projectID, models.SkillStageAdaptationPlan, s.provider, system, "", map[string]string{"strategy": string(payload), "story_bible": bibleJSON(bible), "chapter_analyses": string(chapterPayload)})
 	if err != nil {
 		s.db.Model(batch).Updates(map[string]any{"status": BatchStatusDraft, "error": err.Error()})
 		return nil, err
