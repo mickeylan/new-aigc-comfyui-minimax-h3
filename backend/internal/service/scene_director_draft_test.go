@@ -517,6 +517,26 @@ func TestDraftListenerMustBeAuthoritativeProjectCharacter(t *testing.T) {
 	}
 }
 
+func TestNormalizeGeneratedListenerCharactersClearsInapplicableConditionalField(t *testing.T) {
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
+		{SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, ListenerCharacter: " 阿月 "},
+		{SpeechPresentation: models.ShotSpeechPresentationSilent, ListenerCharacter: "阿月"},
+		{SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ListenerCharacter: " 阿月 "},
+	}}
+	if cleared := normalizeGeneratedListenerCharacters(draft); cleared != 2 {
+		t.Fatalf("cleared=%d, want 2", cleared)
+	}
+	if draft.Shots[0].ListenerCharacter != "" || draft.Shots[1].ListenerCharacter != "" {
+		t.Fatalf("inapplicable listeners survived: %+v", draft.Shots)
+	}
+	if draft.Shots[2].ListenerCharacter != "阿月" {
+		t.Fatalf("valid listener was removed: %+v", draft.Shots[2])
+	}
+	if err := requireStructuredSpeechPresentations(draft); err != nil {
+		t.Fatalf("normalized conditional fields still invalid: %v", err)
+	}
+}
+
 func TestStructuredListenerPresentationRequiresDistinctNamedListener(t *testing.T) {
 	base := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "相信我，", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}, {Duration: 3, Dialogue: "不要回头。", SpeechPresentation: models.ShotSpeechPresentationListenerCarry}}}
 	dialogues := []models.Dialogue{{Character: "阿宁", SpeechType: "dialogue", Text: "相信我，不要回头。"}}
@@ -1074,6 +1094,20 @@ func TestParseSceneDirectorDraftNamesMissingRequiredField(t *testing.T) {
 	_, err := parseSceneDirectorDraft(broken)
 	if err == nil || !strings.Contains(err.Error(), "镜头1的必填字段camera_movement为空") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestDirectorDraftParserClearsListenerCharacterOutsideCarryover(t *testing.T) {
+	raw := strings.Replace(validSceneDirectorDraft, `"dialogue":""`, `"dialogue":"继续。","speech_presentation":"visible_speaker_lipsync","listener_character":"阿月"`, 1)
+	draft, err := parseSceneDirectorDraftWithOptions(raw, true)
+	if err != nil {
+		t.Fatalf("conditional listener residue must be normalized before strict validation: %v", err)
+	}
+	if draft.Shots[0].ListenerCharacter != "" {
+		t.Fatalf("inapplicable listener survived parser: %+v", draft.Shots[0])
+	}
+	if !strings.Contains(strings.Join(draft.Shots[0].Checks, "；"), "已清除") {
+		t.Fatalf("deterministic cleanup was not audited: %+v", draft.Shots[0].Checks)
 	}
 }
 

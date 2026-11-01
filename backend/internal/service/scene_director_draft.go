@@ -598,6 +598,12 @@ func parseSceneDirectorDraftWithOptions(output string, preserveShortShots bool) 
 		d.Dialogue, d.Emotion, d.TransitionNote, d.NegativePrompt = strings.TrimSpace(d.Dialogue), strings.TrimSpace(d.Emotion), strings.TrimSpace(d.TransitionNote), strings.TrimSpace(d.NegativePrompt)
 		d.SpeechPresentation = models.ShotSpeechPresentation(strings.TrimSpace(string(d.SpeechPresentation)))
 		d.ListenerCharacter = strings.TrimSpace(d.ListenerCharacter)
+		if d.SpeechPresentation != models.ShotSpeechPresentationListenerCarry && d.ListenerCharacter != "" {
+			// listener_character is conditional schema residue when the model changes a
+			// presentation during repair. Clear it before strict Shot validation.
+			d.ListenerCharacter = ""
+			d.Checks = append(d.Checks, "系统已清除不适用于当前speech_presentation的listener_character")
+		}
 		if d.Duration <= 0 || d.Duration > 15 || (!preserveShortShots && d.Duration < 3) || math.IsNaN(d.Duration) || math.IsInf(d.Duration, 0) {
 			return nil, fmt.Errorf("镜头%d时长必须为3到15秒", i+1)
 		}
@@ -1276,6 +1282,26 @@ func validateGeneratedDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues [
 	return normalizeDialogueRhythmReviewDurations(draft, dialogues)
 }
 
+func normalizeGeneratedListenerCharacters(draft *sceneDirectorDraft) int {
+	if draft == nil {
+		return 0
+	}
+	cleared := 0
+	for i := range draft.Shots {
+		shot := &draft.Shots[i]
+		shot.ListenerCharacter = strings.TrimSpace(shot.ListenerCharacter)
+		if shot.SpeechPresentation != models.ShotSpeechPresentationListenerCarry && shot.ListenerCharacter != "" {
+			// listener_character is a conditional field, not an independent story fact.
+			// Models frequently retain it after repairing speech_presentation. Clearing an
+			// inapplicable value is deterministic schema normalization and invents nothing.
+			shot.ListenerCharacter = ""
+			shot.Checks = append(shot.Checks, "系统已清除不适用于当前speech_presentation的listener_character")
+			cleared++
+		}
+	}
+	return cleared
+}
+
 func requireStructuredSpeechPresentations(draft *sceneDirectorDraft) error {
 	if draft == nil {
 		return fmt.Errorf("对白节奏导演草稿为空")
@@ -1532,6 +1558,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		draft, parseErr := parseSceneDirectorDraftWithOptions(raw, preserveShortShots)
 		if parseErr == nil && req.Mode == "dialogue_rhythm" {
 			normalizeDialogueRhythmDraftDurations(draft)
+			normalizeGeneratedListenerCharacters(draft)
 			parseErr = validateGeneratedDialogueRhythmDraft(draft, dialogues)
 			if parseErr == nil {
 				parseErr = validateDraftListenerCharacters(draft, authoritativeCharacterNames)
