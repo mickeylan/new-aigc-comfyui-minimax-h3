@@ -51,7 +51,7 @@
             <div><input v-model="ep.title" class="input"><span>第{{ep.episode_n}}集 · 章节{{ep.chapter_start}}–{{ep.chapter_end}} · {{episodeStatusLabel(ep.status)}}</span></div>
             <textarea v-model="ep.adaptation_goal" class="textarea" rows="2" placeholder="本集改编目标"></textarea>
             <div class="state-grid"><label>开始状态<textarea v-model="ep.opening_state" class="textarea" rows="2"></textarea></label><label>结束状态<textarea v-model="ep.ending_state" class="textarea" rows="2"></textarea></label><label>结尾钩子<textarea v-model="ep.hook" class="textarea" rows="2"></textarea></label></div>
-            <div class="actions"><button class="btn btn-xs btn-secondary" :disabled="batch.status==='approved'||busy" @click="saveEpisode(ep)">保存映射</button><button type="button" class="btn btn-xs" :class="{'btn-secondary':ep.status!=='approved'}" :disabled="busy || ep.status!=='approved'" :title="episodeScriptHint(ep)" @click="script(ep)">生成本集剧本</button><button v-if="ep.status==='scripted'" type="button" class="btn btn-xs btn-secondary" :disabled="busy" @click="reviewEpisode(ep)">连续性复审</button><button v-if="ep.status==='scripted'||ep.status==='reviewed'" type="button" class="btn btn-xs btn-secondary" :disabled="busy" @click="generateAssets(ep)">AI补全角色/场景/道具</button><button v-if="ep.status==='scripted'||ep.status==='reviewed'" type="button" class="btn btn-xs btn-ghost" :disabled="busy" @click="syncAssets(ep)">仅同步缺失卡片</button><router-link class="btn btn-xs btn-ghost" :to="`/projects/${id}/episodes/${ep.episode_n}/screenplay`">结构化编辑</router-link></div>
+            <div class="actions"><button class="btn btn-xs btn-secondary" :disabled="batch.status==='approved'||busy" @click="saveEpisode(ep)">保存映射</button><button type="button" class="btn btn-xs" :class="{'btn-secondary':ep.status!=='approved'}" :disabled="busy" :title="episodeScriptHint(ep)" @click="script(ep)">{{ep.status==='approved'?'生成本集剧本':(ep.status==='scripted'||ep.status==='reviewed'?'本集剧本已生成':'先审核映射再生成')}}</button><button v-if="ep.status==='scripted'" type="button" class="btn btn-xs btn-secondary" :disabled="busy" @click="reviewEpisode(ep)">连续性复审</button><button v-if="ep.status==='scripted'||ep.status==='reviewed'" type="button" class="btn btn-xs btn-secondary" :disabled="busy" @click="generateAssets(ep)">AI补全角色/场景/道具</button><button v-if="ep.status==='scripted'||ep.status==='reviewed'" type="button" class="btn btn-xs btn-ghost" :disabled="busy" @click="syncAssets(ep)">仅同步缺失卡片</button><router-link class="btn btn-xs btn-ghost" :to="`/projects/${id}/episodes/${ep.episode_n}/screenplay`">结构化编辑</router-link></div>
           </article>
           <section v-if="snapshot?.batch_id===batch.id" class="snapshot-editor">
             <h4>批次结束状态快照 <span class="badge">{{snapshot.status}}</span></h4>
@@ -106,7 +106,14 @@ async function reviewEpisode(ep){
   await run(async()=>{await api.reviewAdaptation(id,ep.episode_n,override);detail.value=(await api.planningBatch(id,ep.batch_id)).data})
 }
 function script(ep){
-  if(ep.status!=='approved')return
+  if(ep.status==='scripted'||ep.status==='reviewed'){
+    error.value=`第${ep.episode_n}集剧本已经生成；请进入“结构化编辑”查看或修改。`
+    return
+  }
+  if(ep.status!=='approved'){
+    error.value=`第${ep.episode_n}集映射尚未审核。请先检查本批各集的开始状态、结束状态、钩子和人物名称，再点击批次上的“审核方案并应用Episode”。`
+    return
+  }
   return run(async()=>{await api.generateAdaptationScript(id,ep.episode_n);detail.value=(await api.planningBatch(id,ep.batch_id)).data})
 }
 onMounted(load);onBeforeUnmount(()=>clearInterval(timer))
