@@ -817,8 +817,8 @@ func (s *ProjectService) ReplaceSceneVideo(sc *models.Scene, videoFile, source s
 	})
 }
 
-// UpdateScene 编辑场景文案。修改 image_prompt 会清空已生成画面与视频（需重新生成）；
-// 仅修改 content/title 时保留画面、清空已生成视频（需重新生成视频）。
+// UpdateScene 编辑场景文案。任何文案、画面提示词或引擎变化都保留用户已生成/采用的分镜图；
+// 旧图仅标记为可能过期，只有用户明确发起重新生成且新候选成功后才替换。依赖正文的旧视频仍会失效。
 func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imagePrompt string, duration float64, visual ...string) error {
 	updates := map[string]any{}
 	durationChanged := duration > 0 && sc.Duration != duration
@@ -851,15 +851,14 @@ func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imageProm
 	}
 	if imageChanged {
 		updates["prompt_stale"] = strings.TrimSpace(sc.VideoFullPrompt) != ""
-		updates["image_file"] = ""
+		// Never discard a user-reviewed storyboard merely because its source prompt changed.
+		// The existing image remains visible and usable until explicit regeneration succeeds.
 		updates["video_task_id"] = ""
 		updates["video_file"] = ""
 		updates["video_input_file"] = ""
 		updates["video_gpu"] = nil
-		updates["image_retries"] = 0
 		updates["video_retries"] = 0
-		updates["image_token"] = ""
-		updates["status"] = "pending"
+		updates["status"] = gorm.Expr("CASE WHEN image_file <> '' THEN 'image_ready' ELSE 'pending' END")
 		updates["error"] = ""
 	} else if (content != "" && sc.Content != content) || durationChanged {
 		// 修改正文或时长：保留画面，视频需重新生成；已审核完整提示词需要重新确认。

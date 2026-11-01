@@ -3094,7 +3094,7 @@ async function saveScene(close = true) {
     if (close) editingScene.value = null
     await load()
     if (!close) editingScene.value = scenes.value.find(scene => scene.id === sceneId) || editingScene.value
-    if (promptChanged) toast.show('画面提示词已修改，场景已重置，请重新生成画面')
+    if (promptChanged) toast.show('画面提示词已修改；现有分镜图已保留，请自行决定是否重新生成')
     if (close) closeSceneWorkspace()
     return true
   } catch (e) {

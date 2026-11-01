@@ -36,6 +36,11 @@ test('保存AI扩写后显式同步权威正文且旧本地草稿不能覆盖', 
   assert.doesNotMatch(detail.slice(detail.indexOf('async function saveSceneAndContinueDirector'), detail.indexOf('async function workspaceGenerateImage')), /router\.push/)
 })
 
+test('修改故事或画面提示词保留现有分镜图并由用户决定是否重生成', () => {
+  assert.match(detail, /现有分镜图已保留，请自行决定是否重新生成/)
+  assert.doesNotMatch(detail, /画面提示词已修改，场景已重置，请重新生成画面/)
+})
+
 test('Scene卡片显示生产进度并支持同工作台处理下一Scene', () => {
   assert.match(detail, /sceneWorkflowStages\(sc\)/)
   assert.match(detail, /导演Shots/)

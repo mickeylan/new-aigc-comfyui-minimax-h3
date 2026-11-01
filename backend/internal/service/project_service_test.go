@@ -729,16 +729,16 @@ func TestUpdateSceneLogic(t *testing.T) {
 		t.Fatalf("修改时长后的失效状态错误: %+v", timed)
 	}
 
-	// 修改画面提示词：画面+视频全部清空，状态回 pending
+	// 修改画面提示词：保留用户已满意的分镜图，只使依赖它的旧视频失效。
 	if err := ps.UpdateScene(&after, "", "", "p2", after.Duration); err != nil {
 		t.Fatal(err)
 	}
 	var after2 models.Scene
 	ps.db.First(&after2, sc.ID)
-	if after2.ImageFile != "" || after2.VideoTaskID != "" || after2.VideoFile != "" {
-		t.Fatalf("image_prompt 编辑应清空全部产物: %+v", after2)
+	if after2.ImageFile != "scene_1.png" || after2.VideoTaskID != "" || after2.VideoFile != "" {
+		t.Fatalf("image_prompt 编辑不得擅自删除现有分镜图: %+v", after2)
 	}
-	if after2.Status != "pending" {
+	if after2.Status != "image_ready" {
 		t.Fatalf("status = %s", after2.Status)
 	}
 }
