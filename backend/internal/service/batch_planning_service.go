@@ -255,6 +255,104 @@ func normalizeAdaptationJSONWithRepair(provider TextProvider, raw string) (strin
 	return normalized, repaired, nil
 }
 
+func (s *BatchPlanningService) batchCharacterAuthority(projectID uint, previousEpisode int) (map[string][]string, error) {
+	result := map[string][]string{}
+	var characters []models.Character
+	if err := s.db.Where("project_id = ?", projectID).Order("id").Find(&characters).Error; err != nil {
+		return nil, err
+	}
+	for _, character := range characters {
+		name := strings.TrimSpace(character.Name)
+		if name != "" {
+			result[name] = []string{}
+		}
+	}
+	if s.db.Migrator().HasTable(&models.CharacterAliasCandidate{}) {
+		var aliases []models.CharacterAliasCandidate
+		if err := s.db.Where("project_id = ? AND status = ?", projectID, "confirmed").Find(&aliases).Error; err != nil {
+			return nil, err
+		}
+		for _, alias := range aliases {
+			canonical := strings.TrimSpace(alias.CanonicalName)
+			value := strings.TrimSpace(alias.Alias)
+			if canonical != "" && value != "" {
+				result[canonical] = append(result[canonical], value)
+			}
+		}
+	}
+	if previousEpisode > 0 {
+		var scenes []models.Scene
+		if err := s.db.Where("project_id = ? AND episode_n = ?", projectID, previousEpisode).Find(&scenes).Error; err != nil {
+			return nil, err
+		}
+		for _, scene := range scenes {
+			for _, raw := range []string{scene.Characters, scene.VisibleCharacters, scene.VoiceCharacters, scene.MentionedCharacters} {
+				for _, name := range strings.FieldsFunc(raw, func(r rune) bool { return strings.ContainsRune(",，、;；\n", r) }) {
+					name = strings.TrimSpace(name)
+					if name == "" {
+						continue
+					}
+					if _, ok := result[name]; !ok {
+						result[name] = []string{}
+					}
+				}
+			}
+			var dialogues []models.Dialogue
+			if err := s.db.Where("project_id = ? AND scene_id = ?", projectID, scene.ID).Find(&dialogues).Error; err != nil {
+				return nil, err
+			}
+			for _, dialogue := range dialogues {
+				name := strings.TrimSpace(dialogue.Character)
+				if name != "" && !isNarrationSpeaker(name) {
+					if _, ok := result[name]; !ok {
+						result[name] = []string{}
+					}
+				}
+			}
+		}
+	}
+	return result, nil
+}
+
+func adaptationPlanningText(ep models.EpisodeAdaptation) string {
+	return strings.Join([]string{ep.Title, ep.AdaptationGoal, ep.MustKeepEvents, ep.OpeningState, ep.EndingState, ep.Hook}, "\n")
+}
+
+func (s *BatchPlanningService) batchPlanningDuplicateIssues(projectID uint, episodeStart int, episodes []models.EpisodeAdaptation) ([]string, error) {
+	var issues []string
+	episodeNumber := func(index int) int {
+		if episodes[index].EpisodeN > 0 {
+			return episodes[index].EpisodeN
+		}
+		return episodeStart + index
+	}
+	for i := range episodes {
+		current := adaptationPlanningText(episodes[i])
+		for j := 0; j < i; j++ {
+			if score := scriptSceneSimilarity(current, adaptationPlanningText(episodes[j])); score >= 0.30 {
+				issues = append(issues, fmt.Sprintf("第%d集与本批第%d集事件重复（相似度%.0f%%）", episodeNumber(i), episodeNumber(j), score*100))
+			}
+		}
+	}
+	if episodeStart <= 1 {
+		return uniqueStrings(issues), nil
+	}
+	var previousScenes []models.Scene
+	if err := s.db.Where("project_id = ? AND episode_n = ?", projectID, episodeStart-1).Order("`order`, id").Find(&previousScenes).Error; err != nil {
+		return nil, err
+	}
+	for i, episode := range episodes {
+		current := adaptationPlanningText(episode)
+		for _, scene := range previousScenes {
+			prior := strings.Join([]string{scene.Title, scene.Content}, "\n")
+			if score := scriptSceneSimilarity(current, prior); score >= 0.38 {
+				issues = append(issues, fmt.Sprintf("第%d集规划与上一集Scene %d「%s」事件重复（相似度%.0f%%）", episodeNumber(i), scene.Order, scene.Title, score*100))
+			}
+		}
+	}
+	return uniqueStrings(issues), nil
+}
+
 func (s *BatchPlanningService) GenerateBatchDraft(projectID, batchID uint) (*PlanningBatchDetail, error) {
 	detail, err := s.generateBatchDraft(projectID, batchID)
 	if err != nil {
@@ -322,6 +420,17 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 	}
 	var previous models.EpisodeAdaptation
 	_ = s.db.Where("project_id = ? AND episode_n < ?", projectID, batch.EpisodeStart).Order("episode_n DESC").First(&previous).Error
+	previousProductionFacts := ""
+	if batch.EpisodeStart > 1 {
+		previousProductionFacts, err = (&ProjectService{db: s.db}).previousEpisodeProductionFacts(projectID, batch.EpisodeStart)
+		if err != nil {
+			return nil, fmt.Errorf("读取上一集生产事实失败: %w", err)
+		}
+	}
+	characterAuthority, err := s.batchCharacterAuthority(projectID, batch.EpisodeStart-1)
+	if err != nil {
+		return nil, fmt.Errorf("读取跨集角色权威失败: %w", err)
+	}
 	var previousSnapshot models.BatchStateSnapshot
 	if batch.PreviousBatchID != nil {
 		_ = s.db.Where("project_id = ? AND batch_id = ? AND status = ?", projectID, *batch.PreviousBatchID, "approved").First(&previousSnapshot).Error
@@ -332,10 +441,10 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 	for _, chapter := range chapters {
 		chapterIDByOrder[chapter.Order] = chapter.ID
 	}
-	input := map[string]any{"batch": batch, "story_bible": bible, "story_arcs": arcs, "chapter_analyses": chapters, "chapter_id_by_order": chapterIDByOrder, "previous_ending_state": previous.EndingState, "previous_state_snapshot": previousSnapshot, "open_clues": openClues, "required_episode_start": batch.EpisodeStart, "required_episode_end": batch.EpisodeEnd, "required_episode_count": batch.EpisodeCount}
+	input := map[string]any{"batch": batch, "story_bible": bible, "story_arcs": arcs, "chapter_analyses": chapters, "chapter_id_by_order": chapterIDByOrder, "previous_ending_state": previous.EndingState, "previous_production_facts": previousProductionFacts, "authoritative_character_names": characterAuthority, "previous_state_snapshot": previousSnapshot, "open_clues": openClues, "required_episode_start": batch.EpisodeStart, "required_episode_end": batch.EpisodeEnd, "required_episode_count": batch.EpisodeCount}
 	payload, _ := json.Marshal(input)
 	_ = s.db.Model(batch).Updates(map[string]any{"status": BatchStatusGenerating, "error": "", "generation": gorm.Expr("generation + 1")}).Error
-	system := fmt.Sprintf("你是长篇故事滚动规划师。只输出JSON对象 {\"summary\":\"批次摘要\",\"episodes\":[EpisodeAdaptation字段]}。必须精确生成%d集，集号从%d连续到%d；每集必须含title、chapter_start、chapter_end、source_chapter_ids(必须使用chapter_id_by_order中的数据库ID组成非空JSON数组；不得填写章节序号)、adaptation_goal、opening_state、ending_state、hook、target_duration(默认180)、target_scenes(默认25)。每集chapter_start和chapter_end必须位于本批次原文章节%d至%d内；集数可以多于章节数，此时允许相邻多集引用同一章，绝不可把集号当成章节号。不得重写已完成批次，必须承接previous_ending_state。", batch.EpisodeCount, batch.EpisodeStart, batch.EpisodeEnd, batch.ChapterStart, batch.ChapterEnd)
+	system := fmt.Sprintf("你是长篇故事滚动规划师。只输出JSON对象 {\"summary\":\"批次摘要\",\"episodes\":[EpisodeAdaptation字段]}。必须精确生成%d集，集号从%d连续到%d；每集必须含title、chapter_start、chapter_end、source_chapter_ids(必须使用chapter_id_by_order中的数据库ID组成非空JSON数组；不得填写章节序号)、adaptation_goal、opening_state、ending_state、hook、target_duration(默认180)、target_scenes(默认25)。每集chapter_start和chapter_end必须位于本批次原文章节%d至%d内；集数可以多于章节数，此时允许相邻多集引用同一章，绝不可把集号当成章节号。不得重写已完成批次，必须承接previous_ending_state。previous_production_facts是上一集实际完成的Scene、Dialogue和剧本，是最高排重权威：后续集禁止重演、换措辞重讲、再次揭示或回顾其中已发生的事件、动作、信息、对白目的和情绪节点；必须从其结尾之后产生新推进。同一批次各集也必须事件互斥，后一集不得重复前一集已分配的核心事件。authoritative_character_names列出跨集权威角色名及已确认别名：同一人物必须始终使用权威名称，不得把“马面青年”等既有角色改成另一个新名字、同义称呼或临时别名；只有原文和故事圣经明确的新登场人物才允许新增名字。", batch.EpisodeCount, batch.EpisodeStart, batch.EpisodeEnd, batch.ChapterStart, batch.ChapterEnd)
 	if outlineMode {
 		system += " 当前项目来自故事梗概而非小说章节；source_chapter_ids固定输出空数组[]，chapter_start和chapter_end可使用0。"
 	}
@@ -358,6 +467,34 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 	}
 	if len(parsed.Episodes) != batch.EpisodeCount {
 		return nil, fmt.Errorf("模型返回%d集，批次要求%d集；未保存", len(parsed.Episodes), batch.EpisodeCount)
+	}
+	if duplicateIssues, duplicateErr := s.batchPlanningDuplicateIssues(projectID, batch.EpisodeStart, parsed.Episodes); duplicateErr != nil {
+		return nil, duplicateErr
+	} else if len(duplicateIssues) > 0 {
+		repairSystem := "你是分集规划排重修复器。只输出完整合法JSON，保持集号、字段结构、来源章节、未重复事实和集数不变。必须重写列出的重复事件，使每集从上一集实际结尾之后产生新的剧情推进；禁止用换措辞、回忆、复述或再次揭示伪装新剧情。"
+		repairUser := "重复问题：\n- " + strings.Join(duplicateIssues, "\n- ") + "\n\n上一集生产权威：\n" + previousProductionFacts + "\n\n待修复规划：\n" + raw
+		repaired, repairErr := s.provider.Chat(repairSystem, repairUser)
+		if repairErr != nil {
+			return nil, fmt.Errorf("批次跨集重复自动修复失败: %w", repairErr)
+		}
+		normalizedRepair, _, normalizeRepairErr := normalizeAdaptationJSONWithRepair(s.provider, repaired)
+		if normalizeRepairErr != nil {
+			return nil, normalizeRepairErr
+		}
+		if err := parseJSONObject(normalizedRepair, &parsed); err != nil {
+			return nil, fmt.Errorf("批次跨集重复修复返回非法JSON: %w", err)
+		}
+		if len(parsed.Episodes) != batch.EpisodeCount {
+			return nil, fmt.Errorf("批次跨集重复修复改变集数：得到%d集，要求%d集；未保存", len(parsed.Episodes), batch.EpisodeCount)
+		}
+		remaining, remainingErr := s.batchPlanningDuplicateIssues(projectID, batch.EpisodeStart, parsed.Episodes)
+		if remainingErr != nil {
+			return nil, remainingErr
+		}
+		if len(remaining) > 0 {
+			return nil, fmt.Errorf("批次方案排重修复后仍重复，未保存: %s", strings.Join(remaining, "；"))
+		}
+		raw = repaired
 	}
 	for i := range parsed.Episodes {
 		ep := &parsed.Episodes[i]

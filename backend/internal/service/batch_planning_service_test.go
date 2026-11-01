@@ -41,6 +41,59 @@ func TestRecoverInterruptedPlanningBatch(t *testing.T) {
 	}
 }
 
+func TestBatchCharacterAuthorityIncludesProducedNamesAndConfirmedAliases(t *testing.T) {
+	s := newTestBatchService(t)
+	if err := s.db.AutoMigrate(&models.Character{}, &models.CharacterAliasCandidate{}, &models.Scene{}, &models.Dialogue{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Create(&models.Character{ProjectID: 1, Name: "马面青年"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Create(&models.CharacterAliasCandidate{ProjectID: 1, CanonicalName: "马面青年", Alias: "马脸青年", Status: "confirmed"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: 1, EpisodeN: 1, Order: 1, VisibleCharacters: "马面青年", VoiceCharacters: "柳乐儿"}
+	if err := s.db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Create(&models.Dialogue{ProjectID: 1, SceneID: scene.ID, Character: "柳乐儿", Text: "快走"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	authority, err := s.batchCharacterAuthority(1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := authority["马面青年"]; !ok || !strings.Contains(strings.Join(authority["马面青年"], ","), "马脸青年") {
+		t.Fatalf("missing canonical alias authority: %#v", authority)
+	}
+	if _, ok := authority["柳乐儿"]; !ok {
+		t.Fatalf("missing produced dialogue character: %#v", authority)
+	}
+}
+
+func TestBatchPlanningDuplicateIssuesUsePreviousProducedScenesAndCurrentBatch(t *testing.T) {
+	s := newTestBatchService(t)
+	if err := s.db.AutoMigrate(&models.Scene{}); err != nil {
+		t.Fatal(err)
+	}
+	prior := models.Scene{ProjectID: 1, EpisodeN: 1, Order: 1, Title: "桃花林重逢", Content: "舒寒以元婴之躯归来，与上官若琳在桃花林重逢并揭示身份。"}
+	if err := s.db.Create(&prior).Error; err != nil {
+		t.Fatal(err)
+	}
+	episodes := []models.EpisodeAdaptation{
+		{EpisodeN: 2, Title: "元婴归来", AdaptationGoal: "舒寒以元婴之躯归来，在桃花林与上官若琳重逢并揭示身份。"},
+		{EpisodeN: 3, Title: "再次重逢", AdaptationGoal: "舒寒元婴归来，在桃花林和上官若琳重逢，公开自己的身份。"},
+	}
+	issues, err := s.batchPlanningDuplicateIssues(1, 2, episodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(issues, "\n")
+	if !strings.Contains(joined, "上一集Scene 1") || !strings.Contains(joined, "第3集与本批第2集") {
+		t.Fatalf("missing production/intra-batch duplicate issues: %v", issues)
+	}
+}
+
 func TestPlanningBatchSupportsOutlineProjects(t *testing.T) {
 	s := newTestBatchService(t)
 	if err := s.db.Model(&models.Project{}).Where("id = ?", 1).Update("source_type", models.ProjectSourceOutline).Error; err != nil {
