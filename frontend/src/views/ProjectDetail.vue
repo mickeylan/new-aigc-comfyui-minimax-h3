@@ -148,7 +148,7 @@
           <button v-else class="btn btn-ghost btn-sm" :disabled="busy || assetsWithoutImage === 0" @click="allAssetImages">
             一键 Krea2 生成{{ assetKindLabel }}参考图 ({{ assetsWithoutImage }})
           </button>
-          <button class="btn btn-ghost btn-sm" :disabled="reconciliationBusy" @click="reviewAssetReconciliation">{{ reconciliationBusy ? '对账中…' : '资产名称对账' }}</button>
+          <button class="btn btn-ghost btn-sm" :disabled="reconciliationBusy" @click="assetTab='char';$nextTick(()=>document.getElementById('character-alias-panel')?.scrollIntoView({behavior:'smooth',block:'center'}))">角色别名与身份合并</button>
           <button v-if="assetTab === 'char'" class="btn btn-secondary btn-sm" @click="openCreateCharacter">＋ 新建角色</button>
           <button v-else class="btn btn-secondary btn-sm" @click="openCreateAsset">＋ 新建{{ assetKindLabel }}</button>
         </div>
@@ -161,6 +161,11 @@
 
       <!-- 角色卡片 -->
       <div v-show="assetTab === 'char'">
+        <section id="character-alias-panel" class="card character-alias-panel" aria-label="角色别名与身份合并">
+          <div><span class="overline">CHARACTER IDENTITY</span><h3>角色别名与身份合并</h3><p class="sub">同一人物前期可能叫“青衣高大男子 / 石头哥哥”，后期揭示为“柳石”。在这里确认一次后，所有现有及未来Scene自动继承目标角色的标准像、四视图、套装和H3 Subject。</p></div>
+          <div class="character-alias-form"><label>剧本中出现的别名<input v-model.trim="characterAliasForm.alias" class="input" placeholder="例如：柳石"></label><label>合并到现有角色<select v-model.number="characterAliasForm.target_id" class="input"><option :value="0">请选择权威角色</option><option v-for="ch in characters" :key="ch.id" :value="ch.id">{{ch.name}}{{ch.portrait||ch.sheet?' · 已有参考图':' · 暂无参考图'}}</option></select></label><button type="button" class="btn btn-primary" :disabled="reconciliationBusy||!characterAliasForm.alias||!characterAliasForm.target_id" @click="confirmCharacterAlias">确认全项目继承</button></div>
+          <p class="field-hint">示例：别名填“柳石”，目标选择“青衣高大男子”。这不会复制人物，也不需要逐个分镜重复绑定。</p>
+        </section>
         <div v-if="characters.length" class="character-grid">
           <div v-for="ch in characters" :key="ch.id" class="card character-card">
             <div class="character-card-main"><div class="char-portrait" @click="viewCharPortrait(ch)">
@@ -1148,6 +1153,7 @@ const screenplayBusy = ref(false)
 const policyBusy = ref(false)
 const promptPolicies = ref([])
 const reconciliationBusy = ref(false)
+const characterAliasForm = reactive({ alias: '', target_id: 0 })
 const variantBusy = ref(false)
 const variantTarget = ref(null)
 const assetVariantRows = ref([])
@@ -1948,6 +1954,23 @@ async function removePromptPolicy(policy) {
 }
 
 function splitNames(value) { return String(value || '').split(/[，,\n]/).map(v => v.trim()).filter(Boolean) }
+async function confirmCharacterAlias() {
+  const alias = characterAliasForm.alias.trim()
+  const target = characters.value.find(ch => ch.id === Number(characterAliasForm.target_id))
+  if (!alias || !target) { toast.error('请填写别名并选择权威角色'); return }
+  if (alias === target.name) { toast.info('别名与权威角色名相同，无需合并'); return }
+  if (!window.confirm(`确认将“${alias}”作为“${target.name}”的全项目别名？\n所有现有及未来Scene会自动复用“${target.name}”的参考图。`)) return
+  reconciliationBusy.value = true
+  try {
+    await api.applyAssetReconciliation(id(), [{ entity_type: 'character', proposed_name: alias, action: 'merge', target_id: target.id }])
+    characterAliasForm.alias = ''
+    characterAliasForm.target_id = 0
+    await load()
+    toast.success(`已确认：${alias} = ${target.name}；全项目Scene将自动继承人物参考图`)
+  } catch (e) {
+    toast.error('角色身份合并失败：' + (e.response?.data?.error || e.message))
+  } finally { reconciliationBusy.value = false }
+}
 async function reviewAssetReconciliation() {
   const charactersInput = window.prompt('待对账角色名（逗号或换行分隔）', '')
   if (charactersInput === null) return
@@ -3241,6 +3264,10 @@ onBeforeUnmount(() => {
 .plan-episodes h4 { display: flex; align-items: center; }
 .plan-episodes h4 .btn { margin-left: 10px; }
 .stop-video { margin-left: 8px; padding: 2px 10px; font-size: 12px; }
+.character-alias-panel { margin-bottom: 16px; padding: 18px; border-color: color-mix(in srgb, var(--accent) 38%, var(--border)); background: color-mix(in srgb, var(--surface) 92%, var(--accent)); }
+.character-alias-panel h3 { margin: 4px 0 6px; }
+.character-alias-form { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(240px, 1.4fr) auto; gap: 12px; align-items: end; margin-top: 14px; }
+.character-alias-form label { display: grid; gap: 6px; font-size: 12px; color: var(--text-secondary); }
 .character-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); gap: 18px; align-items: start; }
 .asset-tabs { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
 .asset-tab {
@@ -3274,7 +3301,7 @@ onBeforeUnmount(() => {
 .character-look-entry strong { font-size: 13px; color: var(--accent); }
 .character-look-entry span { font-size: 11px; color: var(--text-secondary); line-height: 1.4; }
 .character-look-entry-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; flex: 0 0 auto; }
-@media (max-width: 720px) { .character-grid { grid-template-columns: 1fr; } .character-card-main { grid-template-columns: 92px minmax(0, 1fr); gap: 12px; padding: 14px; } .char-portrait { width: 92px; } .character-look-entry { grid-template-columns: 1fr; } .character-look-entry-actions { justify-content: flex-start; } }
+@media (max-width: 720px) { .character-alias-form { grid-template-columns: 1fr; } .character-grid { grid-template-columns: 1fr; } .character-card-main { grid-template-columns: 92px minmax(0, 1fr); gap: 12px; padding: 14px; } .char-portrait { width: 92px; } .character-look-entry { grid-template-columns: 1fr; } .character-look-entry-actions { justify-content: flex-start; } }
 .empty-inline { padding: 18px; color: var(--text-tertiary); font-size: 13px; text-align: center; }
 .field .req { color: var(--red); margin-left: 4px; font-weight: 400; }
 .field .optional { color: var(--text-tertiary); font-weight: 400; margin-left: 4px; }

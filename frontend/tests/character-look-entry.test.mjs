@@ -6,11 +6,14 @@ const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.met
 const looks = readFileSync(new URL('../src/views/CharacterLooks.vue', import.meta.url), 'utf8')
 const projectDetail = detail
 
-test('角色名称对账一次确认后全项目继承同一参考图', () => {
-  assert.match(detail, /把“\$\{suggestion\.proposed_name\}”作为哪个现有角色的全项目别名/)
-  assert.match(detail, /请输入角色ID或精确名称/)
-  assert.match(detail, /targetID = matched\.id/)
-  assert.match(detail, /所有现有及未来Scene自动继承同一套标准像，无需逐镜绑定/)
+test('角色区提供可见的项目级别名与身份合并面板', () => {
+  assert.match(detail, /id="character-alias-panel"/)
+  assert.match(detail, /角色别名与身份合并/)
+  assert.match(detail, /v-model\.trim="characterAliasForm\.alias"/)
+  assert.match(detail, /v-model\.number="characterAliasForm\.target_id"/)
+  assert.match(detail, /确认全项目继承/)
+  assert.match(detail, /confirmCharacterAlias/)
+  assert.match(detail, /所有现有及未来Scene自动继承目标角色的标准像、四视图、套装和H3 Subject/)
   assert.doesNotMatch(detail, />本Scene绑定角色</)
 })
 
