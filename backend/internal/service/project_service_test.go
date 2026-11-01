@@ -1107,6 +1107,50 @@ func TestExplicitSceneReferencesControlKrea2AndH3Order(t *testing.T) {
 	}
 }
 
+func TestSceneReferenceCanExplicitlyBindLaterCanonicalCharacterName(t *testing.T) {
+	ps := newTestProjectService(t)
+	project := models.Project{Title: "refs"}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 2, Characters: "柳石", VisibleCharacters: "柳石"}
+	if err := ps.db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	placeholder := models.Character{ProjectID: project.ID, Name: "青衣高大男子", Portrait: "stone-man.png"}
+	if err := ps.db.Create(&placeholder).Error; err != nil {
+		t.Fatal(err)
+	}
+	selection := []SceneReferenceSelection{{SourceType: "character", SourceID: placeholder.ID, Variant: "portrait", UseKrea2: true, UseH3: true, BindCharacter: "柳石"}}
+	if err := ps.SaveSceneReferences(&scene, selection); err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.db.First(&scene, scene.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, lines, explicit := ps.selectedSceneReferenceFiles(&scene, "h3")
+	if !explicit || len(lines) != 1 || !strings.Contains(lines[0], "角色「柳石」") || !strings.Contains(lines[0], "青衣高大男子") {
+		t.Fatalf("explicit character binding missing: %v", lines)
+	}
+	if got := useSubjectTags("柳石挡在柳乐儿身前。", lines); strings.Contains(got, "柳石") || !strings.Contains(got, "<Subject 1>") {
+		t.Fatalf("later canonical name was not bound to selected reference: %q", got)
+	}
+}
+
+func TestSceneReferenceRejectsInvalidExplicitCharacterBinding(t *testing.T) {
+	ps := newTestProjectService(t)
+	project := models.Project{Title: "refs"}
+	ps.db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, Characters: "柳石"}
+	ps.db.Create(&scene)
+	character := models.Character{ProjectID: project.ID, Name: "青衣高大男子", Portrait: "stone-man.png"}
+	ps.db.Create(&character)
+	invalid := []SceneReferenceSelection{{SourceType: "character", SourceID: character.ID, Variant: "portrait", UseH3: true, BindCharacter: "不存在的人"}}
+	if err := ps.SaveSceneReferences(&scene, invalid); err == nil || !strings.Contains(err.Error(), "不属于当前Scene") {
+		t.Fatalf("invalid binding accepted: %v", err)
+	}
+}
+
 func TestSceneVideoContinuityReferencesReplaceStoryboardWithTailFrame(t *testing.T) {
 	ps := newTestProjectService(t)
 	if err := ps.db.AutoMigrate(&models.FrameCandidate{}, &models.SceneContinuity{}); err != nil {

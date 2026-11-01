@@ -6,6 +6,13 @@ const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.met
 const looks = readFileSync(new URL('../src/views/CharacterLooks.vue', import.meta.url), 'utf8')
 const projectDetail = detail
 
+test('Scene参考图可显式绑定后续揭示的角色规范名', () => {
+  assert.match(detail, /本Scene绑定角色/)
+  assert.match(detail, /bind_character/)
+  assert.match(detail, /如果原文前期只写“青衣高大男子\/石头哥哥”，后续才揭示“柳石”/)
+  assert.match(detail, /sceneReferenceBindingNames/)
+})
+
 test('项目资产区可直接AI补全当前集角色场景道具', () => {
   assert.match(projectDetail, /AI补全第\$\{activeEpN\}集角色\/场景\/道具/)
   assert.match(projectDetail, /completeCurrentEpisodeAssets/)

@@ -11,11 +11,12 @@ import (
 )
 
 type SceneReferenceSelection struct {
-	SourceType string `json:"source_type"`
-	SourceID   uint   `json:"source_id"`
-	Variant    string `json:"variant"`
-	UseKrea2   bool   `json:"use_krea2"`
-	UseH3      bool   `json:"use_h3"`
+	SourceType    string `json:"source_type"`
+	SourceID      uint   `json:"source_id"`
+	Variant       string `json:"variant"`
+	UseKrea2      bool   `json:"use_krea2"`
+	UseH3         bool   `json:"use_h3"`
+	BindCharacter string `json:"bind_character,omitempty"`
 }
 
 type SceneReferenceCandidate struct {
@@ -151,8 +152,16 @@ func (s *ProjectService) SaveSceneReferences(sc *models.Scene, refs []SceneRefer
 	for _, c := range candidates {
 		allowed[c.Key] = true
 	}
-	seen, krea, h3 := map[string]bool{}, 0, 0
-	for _, ref := range refs {
+	allowedBindings := map[string]bool{}
+	for _, raw := range []string{sc.Characters, sc.VisibleCharacters, sc.VoiceCharacters, sc.MentionedCharacters} {
+		for _, name := range parseSceneCharacters(raw) {
+			allowedBindings[name] = true
+		}
+	}
+	seen, bound, krea, h3 := map[string]bool{}, map[string]bool{}, 0, 0
+	for i := range refs {
+		refs[i].BindCharacter = strings.TrimSpace(refs[i].BindCharacter)
+		ref := refs[i]
 		key := referenceKey(ref)
 		if !allowed[key] {
 			return fmt.Errorf("参考图不存在、未审核或不属于当前项目: %s", key)
@@ -161,6 +170,18 @@ func (s *ProjectService) SaveSceneReferences(sc *models.Scene, refs []SceneRefer
 			return fmt.Errorf("参考图重复: %s", key)
 		}
 		seen[key] = true
+		if ref.BindCharacter != "" {
+			if ref.SourceType != "character" && ref.SourceType != "look" && ref.SourceType != "outfit" {
+				return fmt.Errorf("只有人物、造型或套装参考图可以绑定角色: %s", key)
+			}
+			if !allowedBindings[ref.BindCharacter] {
+				return fmt.Errorf("参考图绑定角色不属于当前Scene: %s", ref.BindCharacter)
+			}
+			if bound[ref.BindCharacter] {
+				return fmt.Errorf("角色%s重复绑定了多张身份参考图", ref.BindCharacter)
+			}
+			bound[ref.BindCharacter] = true
+		}
 		if ref.UseKrea2 {
 			krea++
 		}
@@ -273,7 +294,11 @@ func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target st
 		} else {
 			refs = append(refs, FileMeta{TaskID: fmt.Sprint(sc.ProjectID), Name: c.Image})
 		}
-		lines = append(lines, fmt.Sprintf("- <Picture %d>：%s", len(refs), c.Label))
+		label := c.Label
+		if r.BindCharacter != "" && (r.SourceType == "character" || r.SourceType == "look" || r.SourceType == "outfit") {
+			label = fmt.Sprintf("角色「%s」（由%s显式绑定，仅用于该Scene的身份外观）", r.BindCharacter, c.Label)
+		}
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：%s", len(refs), label))
 	}
 	return refs, lines, true
 }
