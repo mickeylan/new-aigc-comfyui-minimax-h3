@@ -322,6 +322,28 @@
       </span>
     </div>
 
+    <section class="section episode-production-center" aria-label="分集制作中心">
+      <div class="section-head">
+        <div>
+          <span class="overline">EPISODE PRODUCTION</span>
+          <h2>分集制作中心</h2>
+          <p class="sub">选择任意分集进入制作，或直接生成该集剧本。现有顶部导航、创作方案、滚动规划和剧本入口保持不变。</p>
+        </div>
+        <div class="episode-production-current"><span>当前制作</span><strong>第{{ activeEpN }}集</strong><small>{{ currentEpTitle || '未命名' }}</small></div>
+      </div>
+      <div class="card episode-production-card">
+        <label class="episode-production-select"><span>目标分集</span><select v-model.number="episodeProductionTarget" class="input"><option v-for="episode in episodeQuickOptions" :key="episode.n" :value="episode.n">第{{episode.n}}集{{episode.title?' · '+episode.title:''}}{{episodeSceneCount(episode.n)?` · 已有${episodeSceneCount(episode.n)}个Scene`:' · 尚未生成剧本'}}</option></select></label>
+        <div class="episode-production-state"><strong>第{{ episodeProductionTarget }}集</strong><span v-if="episodeSceneCount(episodeProductionTarget)" class="badge badge-green">已有 {{ episodeSceneCount(episodeProductionTarget) }} 个 Scene</span><span v-else class="badge badge-orange">等待生成剧本</span></div>
+        <div class="episode-production-actions">
+          <button type="button" class="btn btn-secondary" @click="selectEp(episodeProductionTarget)">进入第{{ episodeProductionTarget }}集</button>
+          <button type="button" class="btn" :disabled="busy || generatingScript || !project.synopsis" @click="generateSelectedEpisodeScript">
+            {{ generatingScript && generatingEpisodeN===episodeProductionTarget ? `正在生成第${episodeProductionTarget}集…` : `${episodeSceneCount(episodeProductionTarget)?'重新生成':'生成'}第${episodeProductionTarget}集剧本` }}
+          </button>
+          <button v-if="nextEpisodeScriptN" type="button" class="btn btn-primary" :disabled="busy || generatingScript || !project.synopsis" @click="generateNextEpisodeScript">继续制作：生成第{{nextEpisodeScriptN}}集 →</button>
+        </div>
+      </div>
+    </section>
+
     <!-- 剧本（当前集，可编辑后 AI 重新生成分镜） -->
     <section id="episode-workspace" class="section" v-if="project.script || project.scripts">
       <div class="section-head">
@@ -1329,6 +1351,9 @@ const episodeJump = ref(activeEpN.value)
 const episodeUpperBound = computed(() => Math.max(1, Number(project.value?.episodes || 0), ...epEdits.value.map(item => Number(item.n || 0)), ...scenes.value.map(scene => Number(scene.episode_n || 1))))
 const nextEpisodeScriptN = computed(() => activeEpN.value < episodeUpperBound.value ? activeEpN.value + 1 : 0)
 const nextEpisodeHasScenes = computed(() => nextEpisodeScriptN.value > 0 && scenes.value.some(scene => Number(scene.episode_n || 1) === nextEpisodeScriptN.value))
+const episodeProductionTarget = ref(Math.min(activeEpN.value + 1, episodeUpperBound.value))
+function episodeSceneCount(episodeN) { return scenes.value.filter(scene => Number(scene.episode_n || 1) === Number(episodeN)).length }
+watch([activeEpN, episodeUpperBound], ([active, upper]) => { episodeProductionTarget.value = Math.min(active + 1, upper) })
 const episodeQuickOptions = computed(() => {
   const upper = episodeUpperBound.value
   const titles = new Map(epEdits.value.map(item => [Number(item.n), String(item.title || '')]))
@@ -2046,14 +2071,14 @@ async function regenerateScript() {
   }
 }
 
-async function generateNextEpisodeScript() {
-  const target = nextEpisodeScriptN.value
-  if (!target) return
+async function generateEpisodeScriptAt(target) {
+  target = Number(target)
+  if (!Number.isInteger(target) || target < 1 || target > episodeUpperBound.value) return
   if (scriptDirty.value && !window.confirm(`第${activeEpN.value}集剧本有未保存修改；生成完成后将进入第${target}集。是否放弃这些修改并继续？`)) return
-  const replacing = nextEpisodeHasScenes.value
+  const replacing = episodeSceneCount(target) > 0
   const message = replacing
     ? `第${target}集已有 Scene、Shot 或 Dialogue。重新生成会替换这些内容并使旧媒体失效，系统会先保存安全版本。确定继续吗？`
-    : `将根据已审核规划和第${activeEpN.value}集生产内容生成第${target}集剧本，完成后自动进入第${target}集。确定继续吗？`
+    : `将根据已审核规划和前序集生产内容生成第${target}集剧本，完成后自动进入第${target}集。确定继续吗？`
   if (!window.confirm(message)) return
   busy.value = true
   generatingScript.value = true
@@ -2071,6 +2096,8 @@ async function generateNextEpisodeScript() {
     generatingEpisodeN.value = 0
   }
 }
+async function generateNextEpisodeScript() { if (nextEpisodeScriptN.value) await generateEpisodeScriptAt(nextEpisodeScriptN.value) }
+async function generateSelectedEpisodeScript() { await generateEpisodeScriptAt(episodeProductionTarget.value) }
 
 // 保存编辑后的剧本，并调用 AI 重新渲染该集分镜场景
 async function saveAndRender() {
@@ -3114,7 +3141,7 @@ onBeforeUnmount(() => {
 }
 .tag-orange { background: rgba(255, 159, 10, 0.14); color: #c47f00; }
 .head-actions { display: flex; align-items: center; justify-content: flex-start; gap: 8px; flex-wrap: wrap; width: 100%; max-width: none; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
-.episode-quick-nav{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;padding:9px 10px;border:1px solid var(--border);border-radius:10px;background:var(--surface-secondary);box-shadow:0 4px 16px rgba(0,0,0,.08)}.episode-next-script{font-weight:750;box-shadow:0 3px 12px rgba(255,122,0,.22)}.episode-quick-current{display:flex;align-items:baseline;gap:7px;min-width:160px}.episode-quick-current span,.episode-quick-select span{font-size:11px;color:var(--text-tertiary)}.episode-quick-current strong{color:var(--accent)}.episode-quick-current small{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)}.episode-quick-select{display:flex;align-items:center;gap:6px}.episode-quick-select .input{width:min(310px,32vw);height:32px;padding:4px 8px}.episode-quick-jump{display:flex;align-items:center;gap:5px;color:var(--text-secondary);font-size:12px}.episode-quick-jump .input{width:74px;height:32px;padding:4px 7px}.episode-neighbours{display:flex;gap:4px}.episode-chip{min-width:30px;height:30px;padding:0 7px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--text-secondary);cursor:pointer}.episode-chip:hover,.episode-chip.active{border-color:var(--accent);color:var(--accent)}.episode-chip.active{background:var(--accent-soft);font-weight:700}
+.episode-quick-nav{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;padding:9px 10px;border:1px solid var(--border);border-radius:10px;background:var(--surface-secondary);box-shadow:0 4px 16px rgba(0,0,0,.08)}.episode-next-script{font-weight:750;box-shadow:0 3px 12px rgba(255,122,0,.22)}.episode-production-center{scroll-margin-top:88px}.episode-production-card{display:grid;grid-template-columns:minmax(260px,1.4fr) minmax(190px,.8fr) auto;align-items:end;gap:16px;border-color:color-mix(in srgb,var(--accent) 42%,var(--border));background:linear-gradient(135deg,var(--surface),var(--accent-soft))}.episode-production-select{display:grid;gap:7px}.episode-production-select>span,.episode-production-current>span{font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--text-tertiary)}.episode-production-state,.episode-production-current{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.episode-production-current{justify-content:flex-end}.episode-production-current strong{color:var(--accent);font-size:18px}.episode-production-current small{color:var(--text-secondary)}.episode-production-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}@media(max-width:900px){.episode-production-card{grid-template-columns:1fr}.episode-production-actions,.episode-production-current{justify-content:flex-start}}.episode-quick-current{display:flex;align-items:baseline;gap:7px;min-width:160px}.episode-quick-current span,.episode-quick-select span{font-size:11px;color:var(--text-tertiary)}.episode-quick-current strong{color:var(--accent)}.episode-quick-current small{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)}.episode-quick-select{display:flex;align-items:center;gap:6px}.episode-quick-select .input{width:min(310px,32vw);height:32px;padding:4px 8px}.episode-quick-jump{display:flex;align-items:center;gap:5px;color:var(--text-secondary);font-size:12px}.episode-quick-jump .input{width:74px;height:32px;padding:4px 7px}.episode-neighbours{display:flex;gap:4px}.episode-chip{min-width:30px;height:30px;padding:0 7px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--text-secondary);cursor:pointer}.episode-chip:hover,.episode-chip.active{border-color:var(--accent);color:var(--accent)}.episode-chip.active{background:var(--accent-soft);font-weight:700}
 .steps-bar { display: flex; align-items: center; gap: 12px; padding: 14px 20px; margin: 18px 0 26px; flex-wrap: wrap; }
 .step { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--text-secondary); }
 .step-n {
