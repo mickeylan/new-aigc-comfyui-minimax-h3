@@ -4587,8 +4587,50 @@ func validateH3KeyframePrompt(prompt, template string) []string {
 	return nil
 }
 
-// normalizeSavedH3Audio only rebuilds dialogue and soundscape sections. All user-edited
-// reference definitions, summary, retention rules, visual action and camera text remain intact.
+var silentH3VisualReplacements = []struct {
+	pattern     *regexp.Regexp
+	replacement string
+}{
+	{regexp.MustCompile(`(?i)\b(?:opens?|parts?)\s+(?:her|his|their)\s+(?:mouth|lips)(?:\s+to\s+(?:shout|call|speak|say)[^.;。！？!?]*)?`), "keeps their lips completely closed"},
+	{regexp.MustCompile(`(?i)\b(?:prepares?|starts?|begins?)\s+to\s+(?:speak|shout|call|say)[^.;。！？!?]*`), "keeps their lips completely closed"},
+	{regexp.MustCompile(`(?i)\b(?:shouts?|calls? out|speaks?|says?)\b[^.;。！？!?]*`), "keeps their lips completely closed"},
+	{regexp.MustCompile(`嘴唇(?:轻颤|颤动|微张|张开)(?:并)?(?:准备)?(?:开口|说话|呼喊)?`), "嘴唇保持完全闭合"},
+	{regexp.MustCompile(`(?:准备开口|张嘴呼喊|张开嘴呼喊|清楚地?喊出|完成呼喊|开口说出)[^。！？!?；;.]*`), "保持闭口并继续当前可见动作"},
+}
+
+func sanitizeSilentH3VisualSpeech(detail string) string {
+	for _, replacement := range silentH3VisualReplacements {
+		detail = replacement.pattern.ReplaceAllString(detail, replacement.replacement)
+	}
+	detail = regexp.MustCompile(`(?i)(?:keeps their lips completely closed)(?:\s*(?:and|,|；|，)\s*keeps their lips completely closed)+`).ReplaceAllString(detail, "keeps their lips completely closed")
+	return strings.TrimSpace(detail)
+}
+
+func trimIncompleteH3ActionEnding(detail string) string {
+	detail = strings.TrimSpace(detail)
+	if detail == "" || strings.ContainsAny(detail[len(detail)-1:], ".!?。！？") {
+		return detail
+	}
+	// Chinese H3 bodies normally use explicit sentence punctuation. If the model or
+	// translation stops mid-clause, discard only that incomplete tail rather than
+	// submitting a broken command such as “停留在清晰”.
+	if regexp.MustCompile(`\p{Han}`).MatchString(detail) {
+		lastEnd := -1
+		for _, punctuation := range []string{"。", "！", "？", ".", "!", "?"} {
+			if index := strings.LastIndex(detail, punctuation); index >= 0 && index+len(punctuation) > lastEnd {
+				lastEnd = index + len(punctuation)
+			}
+		}
+		if lastEnd >= 0 {
+			return strings.TrimSpace(detail[:lastEnd])
+		}
+	}
+	return detail + "."
+}
+
+// normalizeSavedH3Audio rebuilds authoritative dialogue and soundscape sections. When
+// no structured Dialogue exists it also deterministically removes visible speech cues,
+// because mouth-opening/shouting prose can make H3 invent voices even beside a no-audio clause.
 func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines []string, shotSets ...[]models.Shot) string {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
@@ -4611,6 +4653,10 @@ func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines
 		detail = "[Shot 1] " + detail
 	}
 	detail = compactFinalH3VisualBody(detail)
+	if len(validSceneDialogues(dubs)) == 0 {
+		detail = sanitizeSilentH3VisualSpeech(detail)
+	}
+	detail = trimIncompleteH3ActionEnding(detail)
 	if len(shotSets) > 0 {
 		detail = appendStructuredDialogueToShots(detail, dubs, referenceLines, shotSets[0])
 	} else {

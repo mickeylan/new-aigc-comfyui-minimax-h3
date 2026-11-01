@@ -3187,6 +3187,45 @@ func TestNormalizeSavedH3AudioPreservesUserEditedVisualPrompt(t *testing.T) {
 	}
 }
 
+func TestNormalizeSavedH3AudioRemovesSilentSceneSpeechCuesAndTruncatedTail(t *testing.T) {
+	prompt := `subject_definitions:
+subject
+
+summary:
+summary
+
+retention_analysis:
+retention
+
+detailed_description:
+[Shot 1] 从00:05.700到00:06.200，<Subject 1>嘴唇轻颤并准备开口。可见状态：她仍未发出声音。镜头稳定推近。从00:06.200到00:07.000，<Subject 1>清楚喊出。可见状态：完成呼喊。镜头缓慢推近至稳定特写，停留在清晰
+
+overall_soundscape:
+旧声音
+
+non_diegetic_music:
+N/A`
+	got := normalizeSavedH3Audio(prompt, nil, nil)
+	detail := h3PromptSection(got, "detailed_description:")
+	for _, forbidden := range []string{"准备开口", "喊出", "完成呼喊", "停留在清晰"} {
+		if strings.Contains(detail, forbidden) {
+			t.Fatalf("silent speech/truncated cue %q survived: %s", forbidden, got)
+		}
+	}
+	if !strings.Contains(detail, "嘴唇保持完全闭合") || !videoAudioContractMatches(got, nil) {
+		t.Fatalf("silent prompt was not deterministically hardened: %s", got)
+	}
+}
+
+func TestNormalizeSavedH3AudioKeepsVisibleSpeechWhenDialogueIsAuthoritative(t *testing.T) {
+	prompt := "subject_definitions:\nsubject\n\nsummary:\nsummary\n\nretention_analysis:\nretention\n\ndetailed_description:\n[Shot 1] <Subject 1> opens her mouth to speak.\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"
+	dialogues := []models.Dialogue{{Character: "柳乐儿", Text: "石头哥哥！"}}
+	got := normalizeSavedH3Audio(prompt, dialogues, []string{"- <Picture 1>：角色「柳乐儿」四视图"})
+	if !strings.Contains(got, "opens her mouth to speak") || !strings.Contains(got, "<d>[Chinese] 石头哥哥！</d>") {
+		t.Fatalf("authoritative visible speech was removed: %s", got)
+	}
+}
+
 func TestNormalizeSavedH3AudioNeverCompactsDialogueText(t *testing.T) {
 	line := "她身着红金宫装，神情从悲伤转向信任与期待。"
 	prompt := "subject_definitions:\nsubject\n\nsummary:\nsummary\n\nretention_analysis:\nretention\n\ndetailed_description:\n[Shot 1] 人物停下。\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A"
