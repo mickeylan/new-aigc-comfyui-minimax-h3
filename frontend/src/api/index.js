@@ -100,7 +100,7 @@ export const api = {
   bulkDeleteGeneratedMedia: (id, items) => http.post(`/projects/${id}/generated-media/bulk-delete`, { items }),
   updateProject: (id, data) => http.put(`/projects/${id}`, data),
   deleteProject: (id) => http.delete(`/projects/${id}`),
-  generateScript: (id, episodeN) => http.post(`/projects/${id}/script?episode_n=${episodeN || 1}`, null, { timeout: 300000 }),
+  generateScript: (id, episodeN) => http.post(`/projects/${id}/script?episode_n=${encodeURIComponent(episodeN)}`, { episode_n: Number(episodeN) }, { timeout: 300000 }),
   renderScriptFromText: (id, episodeN, script) => http.post(`/projects/${id}/script/render`, { episode_n: episodeN, script }, { timeout: 300000 }),
   expandScript: (id, episodeN, script) => http.post(`/projects/${id}/script/expand`, { episode_n: episodeN, script }, { timeout: 300000 }),
   createScriptRevision: (id, episodeN, reason = 'manual') => http.post(`/projects/${id}/script-revisions`, { episode_n: episodeN, reason }),

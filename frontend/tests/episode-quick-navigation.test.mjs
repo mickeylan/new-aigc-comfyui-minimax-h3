@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
+const api = readFileSync(new URL('../src/api/index.js', import.meta.url), 'utf8')
 
 test('项目详情提供常驻分集快速切换而不依赖展开创作方案', () => {
   assert.match(detail, /class="episode-quick-nav" aria-label="快速切换分集"/)
@@ -49,6 +50,8 @@ test('项目详情正文自带完整分集导航并按持久化剧本判断生�
   assert.match(detail, /const replacing = episodeHasScript\(target\)/)
   assert.match(detail, /target > 100000/)
   assert.doesNotMatch(detail, /target > episodeUpperBound\.value/)
+  assert.match(api, /script\?episode_n=\$\{encodeURIComponent\(episodeN\)\}`.*, \{ episode_n: Number\(episodeN\) \}/)
+  assert.doesNotMatch(api, /generateScript:[^\n]*episodeN \|\| 1/)
   assert.doesNotMatch(detail, /所有规划分集均已生成/)
   assert.doesNotMatch(detail, /可使用页面顶部的分集导航/)
   assert.match(detail, /class="episode-quick-nav"/)

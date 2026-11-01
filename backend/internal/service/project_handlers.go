@@ -827,16 +827,16 @@ func (s *Service) HandleRenderScriptFromText(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := s.Projects.ClaimManualScript(p); err != nil {
-		c.JSON(409, gin.H{"error": err.Error()})
-		return
-	}
 	var req struct {
 		EpisodeN int    `json:"episode_n"`
 		Script   string `json:"script"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"error": "参数错误"})
+	if err := c.ShouldBindJSON(&req); err != nil || req.EpisodeN <= 0 {
+		c.JSON(400, gin.H{"error": "必须明确提供大于0的 episode_n 和剧本正文"})
+		return
+	}
+	if err := s.Projects.ClaimManualScript(p, req.EpisodeN); err != nil {
+		c.JSON(409, gin.H{"error": err.Error(), "episode_n": req.EpisodeN})
 		return
 	}
 	p, scenes, err := s.Projects.GenerateScriptFromText(p, req.EpisodeN, req.Script)
@@ -879,24 +879,62 @@ func (s *Service) HandleExpandScript(c *gin.Context) {
 }
 
 // HandleGenerateScript 生成剧本（有创作方案时按方案渲染分镜）。
-// query 参数 episode_n 指定当前制作集（默认 1），只生成并替换该集分镜场景。
+// episode_n 必须由调用方明确提供。缺失、无效或 query/body 不一致时拒绝请求，
+// 永远不能静默回退到第1集。
 func (s *Service) HandleGenerateScript(c *gin.Context) {
 	p, ok := s.loadProject(c)
 	if !ok {
 		return
 	}
-	if err := s.Projects.ClaimManualScript(p); err != nil {
-		c.JSON(409, gin.H{"error": err.Error()})
+	queryValue, hasQuery := c.GetQuery("episode_n")
+	queryEpisode := 0
+	if hasQuery {
+		var err error
+		queryEpisode, err = strconv.Atoi(strings.TrimSpace(queryValue))
+		if err != nil || queryEpisode <= 0 || queryEpisode > 100000 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "episode_n 必须是1–100000之间的整数"})
+			return
+		}
+	}
+	var req struct {
+		EpisodeN int `json:"episode_n"`
+	}
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "请求体中的 episode_n 无效"})
+			return
+		}
+		if req.EpisodeN <= 0 || req.EpisodeN > 100000 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "请求体必须明确提供1–100000之间的 episode_n"})
+			return
+		}
+	}
+	if !hasQuery && req.EpisodeN <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "必须明确指定要生成的 episode_n；系统不会默认覆盖第1集"})
 		return
 	}
-	episodeN, _ := strconv.Atoi(c.DefaultQuery("episode_n", "1"))
+	episodeN := queryEpisode
+	if episodeN == 0 {
+		episodeN = req.EpisodeN
+	}
+	if hasQuery && req.EpisodeN > 0 && queryEpisode != req.EpisodeN {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("目标集数冲突：URL为第%d集，请求体为第%d集", queryEpisode, req.EpisodeN)})
+		return
+	}
+	if err := s.Projects.ClaimManualScript(p, episodeN); err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "episode_n": episodeN})
+		return
+	}
+	log.Printf("[script-generate] project=%d episode=%d claimed", p.ID, episodeN)
 	p, scenes, err := s.Projects.GenerateScript(p, episodeN)
 	if err != nil {
 		s.Projects.failPipeline(p.ID, err, false)
-		c.JSON(500, gin.H{"error": err.Error()})
+		log.Printf("[script-generate] project=%d episode=%d failed: %v", p.ID, episodeN, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "episode_n": episodeN})
 		return
 	}
-	c.JSON(200, gin.H{"project": p, "scenes": scenes})
+	log.Printf("[script-generate] project=%d episode=%d success scenes=%d", p.ID, episodeN, len(scenes))
+	c.JSON(http.StatusOK, gin.H{"project": p, "scenes": scenes, "episode_n": episodeN})
 }
 
 // HandleGenerateProject 启动剧本→画面→视频→合并的持久化一键生成流程。

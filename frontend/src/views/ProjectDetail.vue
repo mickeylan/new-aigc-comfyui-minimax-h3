@@ -2079,6 +2079,12 @@ async function regenerateScript() {
   }
 }
 
+function scriptGenerationError(e) {
+  const data = e?.response?.data
+  if (typeof data === 'string' && data.trim()) return data.trim()
+  if (data?.error) return `${data.error}${data.episode_n ? `（目标：第${data.episode_n}集）` : ''}`
+  return e?.message || '未知错误'
+}
 async function generateEpisodeScriptAt(target) {
   target = Number(target)
   if (!Number.isInteger(target) || target < 1 || target > 100000) {
@@ -2100,7 +2106,7 @@ async function generateEpisodeScriptAt(target) {
     await selectEp(target)
     toast.success(`第${target}集剧本已生成并打开`)
   } catch (e) {
-    toast.error(`生成第${target}集剧本失败：${e.response?.data?.error || e.message}`)
+    toast.error(`生成第${target}集剧本失败：${scriptGenerationError(e)}`)
   } finally {
     busy.value = false
     generatingScript.value = false

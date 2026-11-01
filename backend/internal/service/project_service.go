@@ -210,10 +210,16 @@ func (s *ProjectService) ResetGenerationState(projectID uint) error {
 }
 
 // ClaimManualScript 防止手工剧本生成被重复提交。
-func (s *ProjectService) ClaimManualScript(p *models.Project) error {
+func (s *ProjectService) ClaimManualScript(p *models.Project, episode ...int) error {
 	active := []string{"plan", "plan_running", "script", "script_running", "script_manual", "images", "videos", "merge"}
-	res := s.db.Model(&models.Project{}).Where("id = ? AND COALESCE(pipeline_stage, '') NOT IN ?", p.ID, active).
-		Updates(map[string]any{"pipeline_stage": "script_manual", "auto_generate": false, "status": "producing", "error": ""})
+	updates := map[string]any{"pipeline_stage": "script_manual", "auto_generate": false, "status": "producing", "error": ""}
+	if len(episode) > 0 {
+		if episode[0] <= 0 {
+			return fmt.Errorf("目标集数必须大于0")
+		}
+		updates["pipeline_episode"] = episode[0]
+	}
+	res := s.db.Model(&models.Project{}).Where("id = ? AND COALESCE(pipeline_stage, '') NOT IN ?", p.ID, active).Updates(updates)
 	if res.Error != nil {
 		return res.Error
 	}
