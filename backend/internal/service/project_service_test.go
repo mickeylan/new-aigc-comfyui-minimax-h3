@@ -115,6 +115,45 @@ func TestParseScriptJSON(t *testing.T) {
 	}
 }
 
+func TestParseScriptJSONNormalizesStructuredVisualBible(t *testing.T) {
+	raw := `{
+		"script":"正文",
+		"visual_bible":{"style":"古典仙侠","palette":["青","金"],"lighting":{"key":"暖光"}},
+		"scenes":[{"title":"场景1","content":"动作","image_prompt":"画面"}]
+	}`
+	result, err := parseScriptJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"古典仙侠", "青", "金", "暖光"} {
+		if !strings.Contains(result.VisualBible, expected) {
+			t.Fatalf("visual_bible normalization lost %q: %q", expected, result.VisualBible)
+		}
+	}
+}
+
+func TestParseScriptJSONNormalizesOnlyKnownScalarFields(t *testing.T) {
+	raw := `{
+		"script":["第一幕","第二幕"],
+		"visual_bible":{"style":"写实"},
+		"scenes":[{
+			"title":{"name":"场景1"},"content":["动作A","动作B"],"image_prompt":{"subject":"女童"},
+			"characters":["柳乐儿"],
+			"dialogues":[{"character":{"name":"柳乐儿"},"speech_type":"dialogue","text":["快走","！"]}]
+		}]
+	}`
+	result, err := parseScriptJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Scenes) != 1 || len(result.Scenes[0].Characters) != 1 || result.Scenes[0].Characters[0] != "柳乐儿" {
+		t.Fatalf("structured collection fields were weakened: %+v", result)
+	}
+	if result.Script == "" || result.VisualBible == "" || result.Scenes[0].Title == "" || result.Scenes[0].Dialogues[0].Text == "" {
+		t.Fatalf("known scalar fields were not normalized: %+v", result)
+	}
+}
+
 func TestParseScriptJSONInvalid(t *testing.T) {
 	if _, err := parseScriptJSON("这不是 JSON"); err == nil {
 		t.Fatal("期望解析失败")

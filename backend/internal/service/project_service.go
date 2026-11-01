@@ -5436,6 +5436,59 @@ func removeStrayTextAfterJSONValue(data []byte, parseErr error) ([]byte, bool) {
 	return cleaned, true
 }
 
+var scriptScalarStringFields = map[string]bool{
+	"script": true, "visual_bible": true,
+}
+
+var scriptSceneScalarStringFields = map[string]bool{
+	"title": true, "content": true, "image_prompt": true, "location": true,
+	"visual_type": true, "mega_type": true,
+}
+
+var scriptDialogueScalarStringFields = map[string]bool{
+	"character": true, "speech_type": true, "text": true,
+}
+
+func normalizeScriptScalarStrings(data []byte) ([]byte, bool) {
+	var root map[string]any
+	if json.Unmarshal(data, &root) != nil {
+		return data, false
+	}
+	normalizeFields := func(object map[string]any, fields map[string]bool) {
+		for field := range fields {
+			value, exists := object[field]
+			if !exists || value == nil {
+				continue
+			}
+			if _, ok := value.(string); !ok {
+				object[field] = profileValueText(value)
+			}
+		}
+	}
+	normalizeFields(root, scriptScalarStringFields)
+	if scenes, ok := root["scenes"].([]any); ok {
+		for _, rawScene := range scenes {
+			scene, ok := rawScene.(map[string]any)
+			if !ok {
+				continue
+			}
+			normalizeFields(scene, scriptSceneScalarStringFields)
+			if dialogues, ok := scene["dialogues"].([]any); ok {
+				for _, rawDialogue := range dialogues {
+					if dialogue, ok := rawDialogue.(map[string]any); ok {
+						normalizeFields(dialogue, scriptDialogueScalarStringFields)
+					}
+				}
+			}
+		}
+	}
+	normalized, err := json.Marshal(root)
+	if err != nil {
+		return data, false
+	}
+	return normalized, true
+}
+
 // parseScriptJSON 从模型输出中提取 JSON（剥离 markdown 代码块与前后杂文）
 func parseScriptJSON(raw string) (*scriptResult, error) {
 	text := strings.TrimSpace(raw)
@@ -5460,6 +5513,9 @@ func parseScriptJSON(raw string) (*scriptResult, error) {
 	var parseErr, originalParseErr error
 	usedCleanup := false
 	for attempt := 0; attempt < 8; attempt++ {
+		if normalized, ok := normalizeScriptScalarStrings(data); ok {
+			data = normalized
+		}
 		parseErr = json.Unmarshal(data, &res)
 		if attempt == 0 {
 			originalParseErr = parseErr
