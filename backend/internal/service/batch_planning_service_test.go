@@ -41,6 +41,29 @@ func TestRecoverInterruptedPlanningBatch(t *testing.T) {
 	}
 }
 
+func TestAdaptationTimelineIssuesRejectsHookThatPredatesEnding(t *testing.T) {
+	episode := models.EpisodeAdaptation{
+		EpisodeN:     1,
+		OpeningState: "苍黄荒地空旷无人，烈日炙烤着杂草、灌木和灰白石块；六七岁的妖狐女童柳乐儿正握着旧拨浪鼓亡命奔逃。",
+		EndingState:  "丈许高的灰白巨石被蛛网般裂缝贯穿，随后寸寸爆碎，尘土散尽后显出一名青衣高大男子。",
+		Hook:         "火海合围下，女童藏在草丛里的身影即将无处可逃。",
+		MustKeepEvents: `[
+			"女童握着拨浪鼓在荒地奔逃",
+			"三名修士以火云符和引风术焚烧草丛，火海合围迫使女童现身",
+			"女童施展木遁后撞上灰白巨石",
+			"灰白巨石出现蛛网裂缝并整体爆碎，青衣高大男子现身"
+		]`,
+	}
+	issues := adaptationTimelineIssues(episode)
+	if len(issues) == 0 || !strings.Contains(strings.Join(issues, "；"), "钩子时序倒退") {
+		t.Fatalf("reported timeline contradiction was not rejected: %v", issues)
+	}
+	episode.Hook = "尘土尚未落定，三名修士重新握紧法器，青衣男子挡在柳乐儿身前，新一轮对峙一触即发。"
+	if issues := adaptationTimelineIssues(episode); len(issues) != 0 {
+		t.Fatalf("valid post-ending hook was rejected: %v", issues)
+	}
+}
+
 func TestCompactBatchPlanningContextAvoidsRawChapterAndFullScenePayloads(t *testing.T) {
 	chapters := []models.Chapter{{ID: 7, Order: 1, Title: "狐女", Content: strings.Repeat("原文章节正文", 5000), Summary: strings.Repeat("摘要", 600), AnalysisJSON: strings.Repeat("事件", 4000)}}
 	compact := compactBatchPlanningChapters(chapters)

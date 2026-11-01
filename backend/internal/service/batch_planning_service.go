@@ -318,6 +318,58 @@ func adaptationPlanningText(ep models.EpisodeAdaptation) string {
 	return strings.Join([]string{ep.Title, ep.AdaptationGoal, ep.MustKeepEvents, ep.OpeningState, ep.EndingState, ep.Hook}, "\n")
 }
 
+func adaptationEventTexts(raw string) []string {
+	var values []any
+	if json.Unmarshal([]byte(strings.TrimSpace(raw)), &values) != nil {
+		return nil
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		text := strings.TrimSpace(profileValueText(value))
+		if text != "" {
+			result = append(result, text)
+		}
+	}
+	return result
+}
+
+func adaptationTimelineIssues(ep models.EpisodeAdaptation) []string {
+	events := adaptationEventTexts(ep.MustKeepEvents)
+	if len(events) < 2 || strings.TrimSpace(ep.Hook) == "" || strings.TrimSpace(ep.EndingState) == "" {
+		return nil
+	}
+	bestIndex := func(text string) (int, float64) {
+		index, score := -1, float64(0)
+		for i, event := range events {
+			candidate := scriptSceneSimilarity(text, event)
+			if candidate > score {
+				index, score = i, candidate
+			}
+		}
+		return index, score
+	}
+	hookIndex, hookScore := bestIndex(ep.Hook)
+	endingIndex, endingScore := bestIndex(ep.EndingState)
+	if hookIndex >= 0 && endingIndex >= 0 && hookIndex < endingIndex && hookScore >= 0.10 && endingScore >= 0.10 {
+		return []string{fmt.Sprintf("第%d集钩子时序倒退：钩子对应第%d个事件，但结束状态已推进到第%d个事件", ep.EpisodeN, hookIndex+1, endingIndex+1)}
+	}
+	if scriptSceneSimilarity(ep.Hook, ep.OpeningState) >= 0.30 && scriptSceneSimilarity(ep.Hook, ep.EndingState) < 0.12 {
+		return []string{fmt.Sprintf("第%d集钩子退回开场状态，未承接本集结束状态", ep.EpisodeN)}
+	}
+	return nil
+}
+
+func batchAdaptationTimelineIssues(episodes []models.EpisodeAdaptation, locked map[int]models.EpisodeAdaptation) []string {
+	var issues []string
+	for _, episode := range episodes {
+		if _, immutable := locked[episode.EpisodeN]; immutable {
+			continue
+		}
+		issues = append(issues, adaptationTimelineIssues(episode)...)
+	}
+	return uniqueStrings(issues)
+}
+
 func (s *BatchPlanningService) batchPlanningDuplicateIssues(projectID uint, episodeStart int, episodes []models.EpisodeAdaptation) ([]string, error) {
 	var issues []string
 	episodeNumber := func(index int) int {
@@ -572,24 +624,24 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 	}
 	if duplicateIssues, duplicateErr := s.batchPlanningDuplicateIssues(projectID, batch.EpisodeStart, parsed.Episodes); duplicateErr != nil {
 		return nil, duplicateErr
-	} else if len(duplicateIssues) > 0 {
-		repairSystem := "你是分集规划排重修复器。只输出完整合法JSON，保持集号、字段结构、来源章节、未重复事实和集数不变。必须重写列出的重复事件，使每集从上一集实际结尾之后产生新的剧情推进；禁止用换措辞、回忆、复述或再次揭示伪装新剧情。"
+	} else if planningIssues := uniqueStrings(append(duplicateIssues, batchAdaptationTimelineIssues(parsed.Episodes, lockedEpisodes)...)); len(planningIssues) > 0 {
+		repairSystem := "你是分集规划连续性修复器。只输出完整合法JSON，保持集号、字段结构、来源章节、未重复事实和集数不变。必须重写列出的重复或时序倒退字段，使每集从上一集实际结尾之后产生新的剧情推进。hook必须发生在ending_state之后或与其同一时刻，不得退回本集中段已解决的危机。禁止用换措辞、回忆、复述或再次揭示伪装新剧情。"
 		lockedFactsJSON, _ := json.Marshal(lockedProductionFacts)
 		characterAuthorityJSON, _ := json.Marshal(characterAuthority)
-		repairUser := "重复问题：\n- " + strings.Join(duplicateIssues, "\n- ") + "\n\n批次外上一集生产权威：\n" + previousProductionFacts + "\n\n本批次已锁定生产事实：\n" + string(lockedFactsJSON) + "\n\n跨集角色权威：\n" + string(characterAuthorityJSON) + "\n\n待修复规划：\n" + raw
+		repairUser := "规划问题：\n- " + strings.Join(planningIssues, "\n- ") + "\n\n批次外上一集生产权威：\n" + previousProductionFacts + "\n\n本批次已锁定生产事实：\n" + string(lockedFactsJSON) + "\n\n跨集角色权威：\n" + string(characterAuthorityJSON) + "\n\n待修复规划：\n" + raw
 		repaired, repairErr := s.provider.Chat(repairSystem, repairUser)
 		if repairErr != nil {
-			return nil, fmt.Errorf("批次跨集重复自动修复失败: %w", repairErr)
+			return nil, fmt.Errorf("批次连续性自动修复失败: %w", repairErr)
 		}
 		normalizedRepair, _, normalizeRepairErr := normalizeAdaptationJSONWithRepair(s.provider, repaired)
 		if normalizeRepairErr != nil {
 			return nil, normalizeRepairErr
 		}
 		if err := parseJSONObject(normalizedRepair, &parsed); err != nil {
-			return nil, fmt.Errorf("批次跨集重复修复返回非法JSON: %w", err)
+			return nil, fmt.Errorf("批次连续性修复返回非法JSON: %w", err)
 		}
 		if len(parsed.Episodes) != batch.EpisodeCount {
-			return nil, fmt.Errorf("批次跨集重复修复改变集数：得到%d集，要求%d集；未保存", len(parsed.Episodes), batch.EpisodeCount)
+			return nil, fmt.Errorf("批次连续性修复改变集数：得到%d集，要求%d集；未保存", len(parsed.Episodes), batch.EpisodeCount)
 		}
 		for i := range parsed.Episodes {
 			want := batch.EpisodeStart + i
@@ -601,8 +653,9 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 		if remainingErr != nil {
 			return nil, remainingErr
 		}
+		remaining = uniqueStrings(append(remaining, batchAdaptationTimelineIssues(parsed.Episodes, lockedEpisodes)...))
 		if len(remaining) > 0 {
-			return nil, fmt.Errorf("批次方案排重修复后仍重复，未保存: %s", strings.Join(remaining, "；"))
+			return nil, fmt.Errorf("批次方案连续性修复后仍无效，未保存: %s", strings.Join(remaining, "；"))
 		}
 		raw = repaired
 	}
@@ -776,6 +829,13 @@ func (s *BatchPlanningService) ApproveBatch(projectID, batchID uint, reviewerID 
 	}
 	if len(eps) != batch.EpisodeCount {
 		return nil, fmt.Errorf("批次分集不完整")
+	}
+	locked, err := s.lockedBatchEpisodes(projectID, batch.EpisodeStart, batch.EpisodeEnd)
+	if err != nil {
+		return nil, err
+	}
+	if issues := batchAdaptationTimelineIssues(eps, locked); len(issues) > 0 {
+		return nil, fmt.Errorf("批次规划存在时序矛盾，不能审核通过: %s", strings.Join(issues, "；"))
 	}
 	now := time.Now()
 	err = s.db.Transaction(func(tx *gorm.DB) error {
