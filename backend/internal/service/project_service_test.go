@@ -73,6 +73,59 @@ func TestScriptFromPlanPromptMatchesStoryboardSchema(t *testing.T) {
 	}
 }
 
+func TestH3BalancedActionIssuesRejectsOverDetailedAndOverSimpleSingleShot(t *testing.T) {
+	overDetailed := `[Shot 1] From 00:00.000 to 00:00.800, <Subject 1> rises. From 00:00.800 to 00:01.500, she looks up. From 00:01.500 to 00:02.000, she pauses. From 00:02.000 to 00:02.700, she steps. From 00:02.700 to 00:03.300, she stumbles. From 00:03.300 to 00:04.000, she steadies. From 00:04.000 to 00:07.000, the camera pushes closer.`
+	if issues := h3BalancedActionIssues(overDetailed, 7, 1, true, false); len(issues) == 0 || !strings.Contains(strings.Join(issues, "；"), "过度细碎") {
+		t.Fatalf("over-detailed timeline accepted: %v", issues)
+	}
+	overSimple := `[Shot 1] <Subject 1> stands, recognizes <Subject 2>, and opens her mouth to shout.`
+	issues := strings.Join(h3BalancedActionIssues(overSimple, 7, 1, true, false), "；")
+	for _, expected := range []string{"过度概括", "缺少3个", "没有结构化Dialogue"} {
+		if !strings.Contains(issues, expected) {
+			t.Fatalf("simple contradictory draft missing %q: %s", expected, issues)
+		}
+	}
+}
+
+func TestH3BalancedActionIssuesAcceptsThreePhaseNativeShot(t *testing.T) {
+	balanced := `[Shot 1] <Subject 1> braces both hands against the pale rubble and raises her torso while keeping the drum secured against her chest; she takes one cautious step toward <Subject 2>, briefly loses balance, and plants her left foot to recover without changing their eyeline. The camera makes one restrained push-in as her guarded stare settles into recognition, then holds on her closed lips and steady final posture while <Subject 2> remains motionless.`
+	if issues := h3BalancedActionIssues(balanced, 7, 1, true, false); len(issues) != 0 {
+		t.Fatalf("balanced Native shot rejected: %v", issues)
+	}
+}
+
+func TestGenerateSceneVideoActionRepairsSingleShotToBalancedDensityAndSilence(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &sequenceTextProvider{responses: []string{
+		`[Shot 1] She stands, recognizes the man, and opens her mouth to shout.`,
+		`[Shot 1] The girl braces both hands against the pale rubble and raises her torso while keeping the drum secured against her chest; she takes one cautious step toward the motionless man, briefly loses balance, and plants her left foot to recover without changing their eyeline. The camera makes one restrained push-in as her guarded stare settles into recognition, then holds on her closed lips and steady final posture while the man remains still.`,
+	}}
+	ps.textProvider = provider
+	project := models.Project{Title: "p"}
+	ps.db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, Duration: 7, Content: "女童从碎石中撑起身体，护住拨浪鼓，试探迈步后踉跄并重新站稳，认出对面的男子。"}
+	ps.db.Create(&scene)
+	timeline := []models.ShotActionTimelineEntry{
+		{Start: 0, End: 1, Subject: "女童", Action: "撑起身体", State: "护住拨浪鼓", Camera: "平视中景"},
+		{Start: 1, End: 2, Subject: "女童", Action: "抬眼辨认", State: "保持戒备", Camera: "平视中景"},
+		{Start: 2, End: 3, Subject: "女童", Action: "试探迈步", State: "靠近一步", Camera: "稳定推进"},
+		{Start: 3, End: 4, Subject: "女童", Action: "短暂踉跄", State: "重心不稳", Camera: "稳定推进"},
+		{Start: 4, End: 5, Subject: "女童", Action: "左脚撑稳", State: "恢复平衡", Camera: "稳定推进"},
+		{Start: 5, End: 7, Subject: "女童", Action: "确认对方身份", State: "闭口凝视", Camera: "推近后停稳"},
+	}
+	ps.db.Create(&models.Shot{SceneID: scene.ID, Order: 1, Duration: 7, ActionTimeline: timeline, SpeechPresentation: models.ShotSpeechPresentationSilent})
+	got, err := ps.GenerateSceneVideoAction(&scene)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 2 || strings.Contains(strings.ToLower(got), "mouth to shout") || len(h3BalancedActionIssues(got, 7, 1, true, false)) != 0 {
+		t.Fatalf("balanced silent repair failed: calls=%d prompt=%q issues=%v", provider.calls, got, h3BalancedActionIssues(got, 7, 1, true, false))
+	}
+}
+
 func TestNormalizeVisualTypeDetectsMegastructure(t *testing.T) {
 	if got := normalizeVisualType("", "云层环绕的巨塔延伸出画框"); got != "megastructure" {
 		t.Fatalf("expected megastructure, got %q", got)

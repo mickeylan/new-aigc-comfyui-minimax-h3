@@ -2001,6 +2001,38 @@ func normalizeGeneratedH3Action(value string, allowSubjects bool, expectedShotCo
 	return value
 }
 
+var h3VisualSpeechCuePattern = regexp.MustCompile(`(?i)\b(?:opens? (?:her|his|their) mouth|parts? (?:her|his|their) lips|prepares? to speak|shouts?|calls? out|speaks?|says?)\b|张开嘴|准备开口|喊出|开口说`)
+var h3TimedMicroBeatPattern = regexp.MustCompile(`(?i)\bFrom\s+00:[0-9]{2}\.[0-9]{3}\s+to\s+00:[0-9]{2}\.[0-9]{3}`)
+
+func h3BalancedActionIssues(value string, duration float64, expectedShotCount int, requireBalancedTimeline, hasDialogue bool) []string {
+	if !requireBalancedTimeline || expectedShotCount != 1 {
+		return nil
+	}
+	var issues []string
+	body := strings.TrimSpace(h3ShotMarkerPattern.ReplaceAllString(value, ""))
+	wordCount := len(strings.Fields(body))
+	minimumWords := int(math.Max(40, math.Min(60, duration*7)))
+	maximumWords := int(math.Max(100, math.Min(150, duration*14)))
+	if wordCount < minimumWords {
+		issues = append(issues, fmt.Sprintf("单镜动作正文过度概括（%d词，至少需要%d词）；应以3个连续动作阶段保留起势、关键变化和结束状态", wordCount, minimumWords))
+	}
+	if wordCount > maximumWords || len(h3TimedMicroBeatPattern.FindAllString(value, -1)) > 4 {
+		issues = append(issues, "单镜动作正文过度细碎；不得逐0.5秒枚举微动作，应合并为3个连续动作阶段")
+	}
+	phaseTransitions := regexp.MustCompile(`(?i)[.;]|\b(?:then|before|after|as|while|finally)\b`).FindAllString(body, -1)
+	if len(phaseTransitions) < 2 {
+		issues = append(issues, "单镜正文缺少3个可辨认的连续动作阶段")
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed != "" && !strings.ContainsAny(trimmed[len(trimmed)-1:], ".!?") {
+		issues = append(issues, "动作正文疑似在句中截断")
+	}
+	if !hasDialogue && h3VisualSpeechCuePattern.MatchString(value) {
+		issues = append(issues, "本Scene没有结构化Dialogue，视觉正文不得出现张嘴、准备开口、喊出或说话动作")
+	}
+	return issues
+}
+
 func effectiveGenerationSystem(system string, policy *EffectivePromptPolicy) string {
 	if policy == nil || policy.Source == "system_default" || strings.TrimSpace(policy.Content) == "" || strings.TrimSpace(policy.Content) == strings.TrimSpace(system) {
 		return system
@@ -2294,8 +2326,11 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	if suggestedShotCount == 0 && len(promptShots) == 0 {
 		suggestedShotCount = suggestedUnstructuredH3ShotCount(canonicalSceneContent, normalizeSceneDuration(sc.Duration))
 	}
+	requireBalancedTimeline := len(promptShots) == 1 && len(promptShots[0].ActionTimeline) > 4
+	validDialogues := validSceneDialogues(dubs)
 	dialogueContext := "无结构化对白；禁止生成说话、旁白或人声"
-	if valid := validSceneDialogues(dubs); len(valid) > 0 {
+	if len(validDialogues) > 0 {
+		valid := validDialogues
 		lines := make([]string, 0, len(valid))
 		for _, d := range valid {
 			speaker := strings.TrimSpace(d.Character)
@@ -2321,6 +2356,9 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 四视图只负责人物身份与服装，场景图只负责环境；不得从参考图反推剧情，不得复述或猜测外貌、服装、陈设。
 场景类型规则：%s`, combatDetailRule, openingPicture, h3SceneModeInstruction(sceneMode))
 	actionTask := ""
+	if requireBalancedTimeline {
+		actionTask += "\n\n【单个Native Shot动作密度】结构化action_timeline中的微时间段只是动作事实，不得逐段照抄。把它们确定性合并为恰好3个按时间顺序衔接的可见阶段：起始动作、核心变化、结束状态。整段约50至100个英文单词，只保留关键身体动作、道具状态、视线/表情变化和一种主运镜；不得压缩为一句概述，也不得逐0.5秒枚举。"
+	}
 	if explicitTimedShotCount > 1 {
 		actionTask += fmt.Sprintf("\n\n【Scene显式时间轴硬约束】Scene正文已经定义恰好%d个连续时间段，它们是权威镜头计划。必须逐段保留原始起止时间、人物、道具状态、观察目标、手部动作、步法、视线、说话动作和最终状态；只允许翻译并整理为可执行视觉英文，禁止合并、删除、重排、平均重分时长或用概括动作替代具体细节。输出必须恰好%d个Shot，切入时间逐字采用Scene中的官方标记。结构化对白文本由系统另行插入，但其开口动作和所在Shot必须保留。", explicitTimedShotCount, explicitTimedShotCount)
 	} else if suggestedShotCount > 1 {
@@ -2439,6 +2477,9 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		if (sceneMode == h3SceneAction || sceneMode == h3SceneMixed) && (!h3ActionTempoContractMatches(value) || !h3SoloSwordPracticeContractMatches(canonicalSceneContent, value) || !h3SoloSwordTimingContractMatches(canonicalSceneContent, value, normalizeSceneDuration(sc.Duration), expectedShotCount)) {
 			return false
 		}
+		if len(h3BalancedActionIssues(value, normalizeSceneDuration(sc.Duration), expectedShotCount, requireBalancedTimeline, len(validDialogues) > 0)) > 0 {
+			return false
+		}
 		if expectedShotCount > 0 {
 			seen := map[int]bool{}
 			for _, marker := range h3ShotMarkerPattern.FindAllStringSubmatch(value, -1) {
@@ -2493,6 +2534,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		if !h3SoloSwordTimingContractMatches(canonicalSceneContent, value, normalizeSceneDuration(sc.Duration), expectedShotCount) {
 			issues = append(issues, "单人剑术时间线不连续；旁白期间必须持续真实速度的步法、重心和剑路，最后约1.5秒才收势，禁止提前站桩或平均拉慢单招")
 		}
+		issues = append(issues, h3BalancedActionIssues(value, normalizeSceneDuration(sc.Duration), expectedShotCount, requireBalancedTimeline, len(validDialogues) > 0)...)
 		for _, match := range h3SubjectTagPattern.FindAllStringSubmatch(value, -1) {
 			n, _ := strconv.Atoi(match[1])
 			if n < 1 || n > len(refLines) {
@@ -2528,25 +2570,39 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	out = prepareGeneratedAction(out, false)
 	if !actionTrusted(out, false) {
 		boundDraft := useSubjectTags(out, refLines)
-		repairUser := fmt.Sprintf("Rewrite the draft into concise official English H3 shot prose using the authoritative Scene facts below. Produce exactly %d Shot paragraphs in original event order; omit, merge, reorder, retime, or invent nothing. Convert psychology into visible facial or posture changes. For dressing, show physical garment handling and intermediate states instead of jumping to the completed outfit. For combat or spell clashes, motion begins immediately at full real-time speed; each attack must reach a visible block, dodge, counter, impact, displacement, or landing within that Shot. Never leave a threatened defender merely standing, gripping a weapon, or watching. No slow motion, bullet time, hovering display, prolonged charging, or lingering pause. Output no dialogue, <d>, headings, Markdown, or explanation.\n\nAUTHORITATIVE SCENE FACTS:\n%s\n\nINCOMPLETE DRAFT TO REPAIR:\n%s", expectedShotCount, useSubjectTags(canonicalSceneContent, refLines), boundDraft)
-		if repaired, repairErr := chatAction(repairUser); repairErr == nil {
+		balanceRule := ""
+		if requireBalancedTimeline {
+			balanceRule = " For this one Native Shot, merge micro timeline entries into exactly three chronological phases and 50-100 English words. Do not enumerate every sub-second interval and do not reduce the action to one summary sentence."
+		}
+		if len(validDialogues) == 0 {
+			balanceRule += " There is no structured Dialogue: all visible characters keep their lips closed; remove every mouth-opening, preparing-to-speak, shouting, calling, or speaking cue."
+		}
+		authoritativeFacts := useSubjectTags(canonicalSceneContent, refLines)
+		failedDraft := boundDraft
+		repairedOK := false
+		for attempt := 1; attempt <= 2; attempt++ {
+			repairUser := fmt.Sprintf("Rewrite the draft into concise official English H3 shot prose using the authoritative Scene facts below. Produce exactly %d Shot paragraphs in original event order; omit, merge, reorder, retime, or invent nothing.%s Convert psychology into visible facial or posture changes. For dressing, show physical garment handling and intermediate states instead of jumping to the completed outfit. For combat or spell clashes, motion begins immediately at full real-time speed; each attack must reach a visible block, dodge, counter, impact, displacement, or landing within that Shot. Never leave a threatened defender merely standing, gripping a weapon, or watching. No slow motion, bullet time, hovering display, prolonged charging, or lingering pause. Output no dialogue, <d>, headings, Markdown or explanation. End with a complete sentence.\n\nEXACT FAILURES TO FIX:\n%s\n\nAUTHORITATIVE SCENE FACTS:\n%s\n\nINCOMPLETE DRAFT TO REPAIR:\n%s", expectedShotCount, balanceRule, actionTrustIssues(failedDraft), authoritativeFacts, failedDraft)
+			repaired, repairErr := chatAction(repairUser)
+			if repairErr != nil {
+				continue
+			}
 			candidate := prepareGeneratedAction(repaired, true)
+			failedDraft = candidate
 			if actionTrusted(candidate, true) {
 				out = candidate
-				generationSource = "general_repair"
-			} else if timed := authoritativeTimedFallback(); timed != "" {
+				generationSource = fmt.Sprintf("general_repair_%d", attempt)
+				repairedOK = true
+				break
+			}
+		}
+		if !repairedOK {
+			if timed := authoritativeTimedFallback(); timed != "" {
 				out = timed
 				generationSource = "explicit_scene_timeline_fallback"
 			} else {
 				out = authoritativeFallback()
 				generationSource = "current_scene_fallback"
 			}
-		} else if timed := authoritativeTimedFallback(); timed != "" {
-			out = timed
-			generationSource = "explicit_scene_timeline_fallback"
-		} else {
-			out = authoritativeFallback()
-			generationSource = "current_scene_fallback"
 		}
 	}
 	out = useSubjectTags(out, refLines)
