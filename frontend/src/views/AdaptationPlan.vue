@@ -40,7 +40,7 @@
         <p v-if="batch.summary" class="summary">{{batch.summary}}</p><p v-if="batch.error" class="batch-error">{{batch.error}}</p>
         <div v-if="generating === batch.id" class="progress"><div><strong>AI正在生成本批分集映射</strong><span>{{elapsed}}秒</span></div><div class="track"><span :style="{width:progress+'%'}"></span></div><small>正在加载故事圣经、故事弧、章节分析和上一批结束状态，并校验集数连续性。</small></div>
         <div class="actions">
-          <button type="button" class="btn btn-sm" :disabled="generating===batch.id || batch.status==='approved' || batch.status==='produced'" @click.stop="generate(batch)">{{generating===batch.id?'正在生成…':(batch.status==='review'?'重新生成草稿':'生成本批方案')}}</button>
+          <button type="button" class="btn btn-sm" :disabled="generating===batch.id" :title="batch.status==='approved'||batch.status==='produced'?'已生产分集会锁定，只重新规划尚未生产的分集':''" @click.stop="generate(batch)">{{generating===batch.id?'正在生成…':((batch.status==='review'||batch.status==='approved'||batch.status==='produced')?'重新生成未生产分集':'生成本批方案')}}</button>
           <button class="btn btn-sm btn-secondary" :disabled="busy || (batch.status!=='approved' && batch.status!=='produced')" :title="batch.status==='review'?'先审核并应用Episode映射，生成剧本后再制作批次结束快照':''" @click="generateSnapshot(batch)">生成批次结束快照</button>
           <button class="btn btn-sm" type="button" @click.stop="review(batch,'approve')">审核方案并应用Episode</button>
           <button class="btn btn-sm btn-ghost" type="button" @click.stop="review(batch,'reject')">退回修改</button>

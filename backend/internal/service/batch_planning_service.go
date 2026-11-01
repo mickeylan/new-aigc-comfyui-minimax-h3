@@ -388,7 +388,7 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 	if err != nil {
 		return nil, err
 	}
-	if batch.Status != BatchStatusDraft && batch.Status != BatchStatusReview {
+	if batch.Status != BatchStatusDraft && batch.Status != BatchStatusReview && batch.Status != BatchStatusApproved && batch.Status != BatchStatusProduced {
 		return nil, fmt.Errorf("当前批次状态不允许生成")
 	}
 	var project models.Project
