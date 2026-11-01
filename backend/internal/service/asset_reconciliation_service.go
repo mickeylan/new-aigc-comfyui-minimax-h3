@@ -113,6 +113,12 @@ func (s *AssetReconciliationService) Apply(projectID uint, decisions []AssetReco
 				if err != nil {
 					return err
 				}
+				if d.EntityType == "character" && normalizeCanonName(d.ProposedName) != normalizeCanonName(targetName) {
+					alias := models.CharacterAliasCandidate{ProjectID: projectID, CanonicalName: targetName, Alias: d.ProposedName, Status: "confirmed"}
+					if err := tx.Where("project_id = ? AND alias = ?", projectID, d.ProposedName).Assign(map[string]any{"canonical_name": targetName, "status": "confirmed"}).FirstOrCreate(&alias).Error; err != nil {
+						return err
+					}
+				}
 				if err := rewriteSceneNameReferences(tx, projectID, d.EntityType, d.ProposedName, targetName); err != nil {
 					return err
 				}

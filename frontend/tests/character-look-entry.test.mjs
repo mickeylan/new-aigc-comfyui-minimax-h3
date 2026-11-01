@@ -6,11 +6,12 @@ const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.met
 const looks = readFileSync(new URL('../src/views/CharacterLooks.vue', import.meta.url), 'utf8')
 const projectDetail = detail
 
-test('Scene参考图可显式绑定后续揭示的角色规范名', () => {
-  assert.match(detail, /本Scene绑定角色/)
-  assert.match(detail, /bind_character/)
-  assert.match(detail, /如果原文前期只写“青衣高大男子\/石头哥哥”，后续才揭示“柳石”/)
-  assert.match(detail, /sceneReferenceBindingNames/)
+test('角色名称对账一次确认后全项目继承同一参考图', () => {
+  assert.match(detail, /把“\$\{suggestion\.proposed_name\}”作为哪个现有角色的全项目别名/)
+  assert.match(detail, /请输入角色ID或精确名称/)
+  assert.match(detail, /targetID = matched\.id/)
+  assert.match(detail, /所有现有及未来Scene自动继承同一套标准像，无需逐镜绑定/)
+  assert.doesNotMatch(detail, />本Scene绑定角色</)
 })
 
 test('项目资产区可直接AI补全当前集角色场景道具', () => {

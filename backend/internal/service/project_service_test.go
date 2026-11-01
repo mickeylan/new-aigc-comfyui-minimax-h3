@@ -1107,6 +1107,50 @@ func TestExplicitSceneReferencesControlKrea2AndH3Order(t *testing.T) {
 	}
 }
 
+func TestProjectCharacterReconciliationPersistsAliasAndBindsAllScenes(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.CharacterAliasCandidate{}, &models.SceneContinuity{}, &models.GenerationCandidate{}, &models.Dialogue{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "alias"}
+	ps.db.Create(&project)
+	character := models.Character{ProjectID: project.ID, Name: "青衣高大男子", Portrait: "stone-man.png"}
+	ps.db.Create(&character)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 2, Characters: "柳石", VisibleCharacters: "柳石"}
+	ps.db.Create(&scene)
+	reconciliation := NewAssetReconciliationService(ps.db)
+	if err := reconciliation.Apply(project.ID, []AssetReconciliationDecision{{EntityType: "character", ProposedName: "柳石", Action: "merge", TargetID: character.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	var alias models.CharacterAliasCandidate
+	if err := ps.db.Where("project_id = ? AND alias = ?", project.ID, "柳石").First(&alias).Error; err != nil {
+		t.Fatal(err)
+	}
+	if alias.CanonicalName != "青衣高大男子" || alias.Status != "confirmed" {
+		t.Fatalf("alias not confirmed: %+v", alias)
+	}
+	aliasScene := models.Scene{ProjectID: project.ID, EpisodeN: 3, Characters: "柳石", VisibleCharacters: "柳石", ImageFile: "storyboard.png"}
+	if err := ps.db.Create(&aliasScene).Error; err != nil {
+		t.Fatal(err)
+	}
+	candidates := ps.sceneReferenceCandidates(&aliasScene)
+	if len(candidates) != 1 || !strings.Contains(candidates[0].Label, "别名「柳石」") {
+		t.Fatalf("confirmed alias missing from reference candidate: %+v", candidates)
+	}
+	lines := []string{"- <Picture 1>：" + candidates[0].Label}
+	if got := useSubjectTags("柳石挡在柳乐儿身前。", lines); strings.Contains(got, "柳石") || !strings.Contains(got, "<Subject 1>") {
+		t.Fatalf("project alias was not bound globally: %q", got)
+	}
+	portraits := ps.sceneCharacterPortraits(&aliasScene)
+	if len(portraits) != 1 || portraits[0].ID != character.ID {
+		t.Fatalf("future alias scene did not inherit canonical portrait: %+v", portraits)
+	}
+	videoRefs, videoLines := ps.sceneVideoReferenceFiles(&aliasScene, fmt.Sprint(project.ID))
+	if len(videoRefs) < 2 || !strings.Contains(strings.Join(videoLines, "\n"), "别名「柳石」") {
+		t.Fatalf("future alias scene did not receive automatic H3 reference: refs=%+v lines=%v", videoRefs, videoLines)
+	}
+}
+
 func TestSceneReferenceCanExplicitlyBindLaterCanonicalCharacterName(t *testing.T) {
 	ps := newTestProjectService(t)
 	project := models.Project{Title: "refs"}

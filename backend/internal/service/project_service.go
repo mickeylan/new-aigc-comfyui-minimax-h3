@@ -1540,14 +1540,69 @@ func visibleSceneCharacterNames(sc *models.Scene) []string {
 	return parseSceneCharacters(sc.Characters)
 }
 
-// sceneCharacterPortraits 收集场景实际可见角色的参考像（四视图优先，标准像兜底，按出场顺序）
+func (s *ProjectService) confirmedCharacterAliases(projectID uint, canonical string) []string {
+	if strings.TrimSpace(canonical) == "" || !s.db.Migrator().HasTable(&models.CharacterAliasCandidate{}) {
+		return nil
+	}
+	var rows []models.CharacterAliasCandidate
+	if err := s.db.Where("project_id = ? AND canonical_name = ? AND status = ?", projectID, canonical, "confirmed").Order("id").Find(&rows).Error; err != nil {
+		return nil
+	}
+	aliases := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if alias := strings.TrimSpace(row.Alias); alias != "" && alias != canonical {
+			aliases = append(aliases, alias)
+		}
+	}
+	return aliases
+}
+
+func characterReferenceLine(picture int, canonical, suffix string, aliases []string) string {
+	line := fmt.Sprintf("- <Picture %d>：角色「%s」%s", picture, canonical, suffix)
+	for _, alias := range aliases {
+		line += "；别名「" + alias + "」"
+	}
+	return line
+}
+
+func (s *ProjectService) canonicalCharacterNames(projectID uint, names []string) map[string]string {
+	resolved := map[string]string{}
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			resolved[name] = name
+		}
+	}
+	if len(resolved) == 0 || !s.db.Migrator().HasTable(&models.CharacterAliasCandidate{}) {
+		return resolved
+	}
+	var aliases []models.CharacterAliasCandidate
+	if err := s.db.Where("project_id = ? AND status = ?", projectID, "confirmed").Find(&aliases).Error; err != nil {
+		return resolved
+	}
+	for _, alias := range aliases {
+		value, canonical := strings.TrimSpace(alias.Alias), strings.TrimSpace(alias.CanonicalName)
+		if _, requested := resolved[value]; requested && canonical != "" {
+			resolved[value] = canonical
+		}
+	}
+	return resolved
+}
+
+// sceneCharacterPortraits 收集场景实际可见角色的参考像（四视图优先，标准像兜底，按出场顺序）。
+// 已确认的项目级别名自动解析到同一个角色资产，无需逐Scene重复绑定。
 func (s *ProjectService) sceneCharacterPortraits(sc *models.Scene) []models.Character {
 	names := visibleSceneCharacterNames(sc)
 	if len(names) == 0 {
 		return nil
 	}
+	resolved := s.canonicalCharacterNames(sc.ProjectID, names)
+	canonicalNames := make([]string, 0, len(names))
+	for _, name := range names {
+		canonicalNames = append(canonicalNames, resolved[name])
+	}
 	var chars []models.Character
-	s.db.Where("project_id = ? AND name IN ? AND (portrait != '' OR sheet != '')", sc.ProjectID, names).Find(&chars)
+	s.db.Where("project_id = ? AND name IN ? AND (portrait != '' OR sheet != '')", sc.ProjectID, canonicalNames).Find(&chars)
 	if len(chars) == 0 {
 		return nil
 	}
@@ -1555,10 +1610,11 @@ func (s *ProjectService) sceneCharacterPortraits(sc *models.Scene) []models.Char
 	for _, c := range chars {
 		byName[c.Name] = c
 	}
-	ordered := make([]models.Character, 0, len(chars))
-	for _, n := range names {
-		if c, ok := byName[n]; ok && s.sceneHasCharacter(sc, c.Name) {
+	ordered, seen := make([]models.Character, 0, len(chars)), map[uint]bool{}
+	for _, requested := range names {
+		if c, ok := byName[resolved[requested]]; ok && !seen[c.ID] && s.sceneHasCharacter(sc, requested) {
 			ordered = append(ordered, c)
+			seen[c.ID] = true
 		}
 	}
 	return ordered
@@ -2656,6 +2712,22 @@ func characterSubjectTagByName(name string, referenceLines []string) string {
 		if end >= 0 && strings.TrimSpace(line[start:start+end]) == name {
 			return fmt.Sprintf("<Subject %d>", i+1)
 		}
+		aliasText := line
+		for {
+			aliasStart := strings.Index(aliasText, "别名「")
+			if aliasStart < 0 {
+				break
+			}
+			aliasText = aliasText[aliasStart+len("别名「"):]
+			aliasEnd := strings.Index(aliasText, "」")
+			if aliasEnd < 0 {
+				break
+			}
+			if strings.TrimSpace(aliasText[:aliasEnd]) == name {
+				return fmt.Sprintf("<Subject %d>", i+1)
+			}
+			aliasText = aliasText[aliasEnd+len("」"):]
+		}
 	}
 	return ""
 }
@@ -2701,6 +2773,25 @@ func useSubjectTags(text string, referenceLines []string) string {
 					replacement = "the prop shown in " + picture
 				}
 				bindings = append(bindings, subjectBinding{name: name, replacement: replacement, character: character})
+				if character {
+					aliasText := line[start+end+len("」"):]
+					for {
+						aliasStart := strings.Index(aliasText, "别名「")
+						if aliasStart < 0 {
+							break
+						}
+						aliasText = aliasText[aliasStart+len("别名「"):]
+						aliasEnd := strings.Index(aliasText, "」")
+						if aliasEnd < 0 {
+							break
+						}
+						alias := strings.TrimSpace(aliasText[:aliasEnd])
+						if alias != "" {
+							bindings = append(bindings, subjectBinding{name: alias, replacement: replacement, character: true})
+						}
+						aliasText = aliasText[aliasEnd+len("」"):]
+					}
+				}
 			}
 			break
 		}
@@ -5191,11 +5282,21 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 			continue
 		}
 		refs = append(refs, FileMeta{TaskID: pid, Name: name})
-		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」%s", len(refs), ch.Name, kind))
+		lines = append(lines, characterReferenceLine(len(refs), ch.Name, kind, s.confirmedCharacterAliases(sc.ProjectID, ch.Name)))
 	}
+	visibleCanonical := s.canonicalCharacterNames(sc.ProjectID, visibleSceneCharacterNames(sc))
 	for _, outfit := range s.sceneCharacterOutfits(sc) {
-		if outfit.Character != nil && !s.sceneHasCharacter(sc, outfit.Character.Name) {
-			continue
+		if outfit.Character != nil {
+			matched := false
+			for _, canonical := range visibleCanonical {
+				if canonical == outfit.Character.Name {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
 		}
 		if len(refs) >= maxSceneReferenceImages-1 {
 			break
@@ -5212,7 +5313,7 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 			charName = outfit.Character.Name
 		}
 		refs = append(refs, FileMeta{TaskID: pid, Name: name})
-		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」造型套装「%s」%s", len(refs), charName, outfit.Name, kind))
+		lines = append(lines, characterReferenceLine(len(refs), charName, "造型套装「"+outfit.Name+"」"+kind, s.confirmedCharacterAliases(sc.ProjectID, charName)))
 	}
 	for _, a := range s.sceneMatchedAssets(sc) {
 		if len(refs) >= maxSceneReferenceImages-1 {
@@ -6567,11 +6668,21 @@ func (s *ProjectService) sceneImageReferenceFiles(sc *models.Scene) ([]FileMeta,
 			continue
 		}
 		refs = append(refs, FileMeta{TaskID: pid, Name: name})
-		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」%s，人物身份与造型以参考图为准", len(refs), ch.Name, kind))
+		lines = append(lines, characterReferenceLine(len(refs), ch.Name, kind+"，人物身份与造型以参考图为准", s.confirmedCharacterAliases(sc.ProjectID, ch.Name)))
 	}
+	visibleCanonical := s.canonicalCharacterNames(sc.ProjectID, visibleSceneCharacterNames(sc))
 	for _, outfit := range s.sceneCharacterOutfits(sc) {
-		if outfit.Character != nil && !s.sceneHasCharacter(sc, outfit.Character.Name) {
-			continue
+		if outfit.Character != nil {
+			matched := false
+			for _, canonical := range visibleCanonical {
+				if canonical == outfit.Character.Name {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
 		}
 		if len(refs) >= maxSceneReferenceImages {
 			break
@@ -6588,7 +6699,7 @@ func (s *ProjectService) sceneImageReferenceFiles(sc *models.Scene) ([]FileMeta,
 			charName = outfit.Character.Name
 		}
 		refs = append(refs, FileMeta{TaskID: pid, Name: name})
-		lines = append(lines, fmt.Sprintf("- <Picture %d>：角色「%s」造型套装「%s」%s", len(refs), charName, outfit.Name, kind))
+		lines = append(lines, characterReferenceLine(len(refs), charName, "造型套装「"+outfit.Name+"」"+kind, s.confirmedCharacterAliases(sc.ProjectID, charName)))
 	}
 	for _, a := range assets {
 		if a.Kind != AssetKindLocation || a.Image == "" || len(refs) >= maxSceneReferenceImages {

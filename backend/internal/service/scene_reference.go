@@ -36,12 +36,30 @@ func (s *ProjectService) sceneReferenceCandidates(sc *models.Scene) []SceneRefer
 	out := make([]SceneReferenceCandidate, 0)
 	var chars []models.Character
 	s.db.Where("project_id = ?", pid).Order("id").Find(&chars)
+	aliasesByCanonical := map[string][]string{}
+	if s.db.Migrator().HasTable(&models.CharacterAliasCandidate{}) {
+		var aliases []models.CharacterAliasCandidate
+		s.db.Where("project_id = ? AND status = ?", pid, "confirmed").Order("id").Find(&aliases)
+		for _, alias := range aliases {
+			canonical, value := strings.TrimSpace(alias.CanonicalName), strings.TrimSpace(alias.Alias)
+			if canonical != "" && value != "" && canonical != value {
+				aliasesByCanonical[canonical] = append(aliasesByCanonical[canonical], value)
+			}
+		}
+	}
+	characterLabel := func(name, suffix string) string {
+		label := "角色「" + name + "」" + suffix
+		for _, alias := range aliasesByCanonical[name] {
+			label += "；别名「" + alias + "」"
+		}
+		return label
+	}
 	for _, ch := range chars {
 		if ch.Portrait != "" {
-			out = append(out, candidate("character", ch.ID, "portrait", "角色「"+ch.Name+"」标准像", "character", ch.Portrait))
+			out = append(out, candidate("character", ch.ID, "portrait", characterLabel(ch.Name, "标准像"), "character", ch.Portrait))
 		}
 		if ch.Sheet != "" {
-			out = append(out, candidate("character", ch.ID, "sheet", "角色「"+ch.Name+"」四视图", "character", ch.Sheet))
+			out = append(out, candidate("character", ch.ID, "sheet", characterLabel(ch.Name, "四视图"), "character", ch.Sheet))
 		}
 	}
 	var looks []models.CharacterLook
