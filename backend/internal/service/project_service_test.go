@@ -2904,6 +2904,36 @@ func TestCompletedShoutAtSceneStartRemainsAuthoritativeDialogue(t *testing.T) {
 	}
 }
 
+func TestExpandedTimedSceneRecoversMalformedAndAttributedDialogue(t *testing.T) {
+	content := `【0—2秒】
+承接上一镜，柳乐儿高喊：石头哥哥！”，然后扑向青衣青年。她右脚踩进松散碎石，膝盖猛地一软，身体向前栽下；第一步尚未站稳，左脚又踉跄着抢到身前，才没有彻底跌倒。右手始终攥紧旧拨浪鼓的鼓柄，鼓身被她压在胸前，随着脚步磕碰臂弯。她终于冲到他身前，双臂牢牢环住他的腰。
+
+【2—4.5秒】
+摄影机切至贴近腿侧的低机位。柳乐儿抱住青年后没有松手，反而将大半身体藏到他的身后。她因脱力向一侧歪了一下，又立刻收拢手臂，把自己稳定在青年身后。
+
+她从青年腰侧仰起脸，黑亮的大眼睛紧盯着他木然的面孔。确认他仍站在自己身前，她急促喘息着开口，语速快而发颤：“石头哥哥，乐儿总算找到你了！……这些坏人要抓乐儿，石头哥哥帮我打他们！”说到最后一句时，她的手指又收紧一分。
+
+【4.5—7秒】
+青衣青年没有立刻回应。`
+	scene := models.Scene{Characters: "柳乐儿,青衣青年", VisibleCharacters: "柳乐儿,青衣青年", Content: content, Duration: 7}
+	dubs := explicitSceneSpeech(&scene)
+	if len(dubs) != 2 {
+		t.Fatalf("expected both authoritative lines, got %+v", dubs)
+	}
+	if dubs[0].Character != "柳乐儿" || dubs[0].Text != "石头哥哥！" || dubs[1].Character != "柳乐儿" || dubs[1].Text != "石头哥哥，乐儿总算找到你了！……这些坏人要抓乐儿，石头哥哥帮我打他们！" {
+		t.Fatalf("expanded timed speech mismatch: %+v", dubs)
+	}
+	prompt := buildMiniMaxH3RefPrompt(&scene, nil, dubs, []string{"- <Picture 1>：角色「柳乐儿」四视图", "- <Picture 2>：角色「青衣青年」四视图"})
+	for _, line := range dubs {
+		if !strings.Contains(prompt, "<d>[Chinese] "+line.Text+"</d>") {
+			t.Fatalf("final prompt omitted %q: %s", line.Text, prompt)
+		}
+	}
+	if strings.Contains(prompt, "No dialogue") {
+		t.Fatalf("dialogue prompt used silent contract: %s", prompt)
+	}
+}
+
 func TestSceneVideoDialoguesUsesProjectCharacterWhenSceneRoleFieldsAreIncomplete(t *testing.T) {
 	ps := newTestProjectService(t)
 	if err := ps.db.AutoMigrate(&models.Dialogue{}, &models.Character{}, &models.CharacterAliasCandidate{}); err != nil {

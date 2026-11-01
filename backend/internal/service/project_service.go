@@ -3025,12 +3025,13 @@ func normalizeScriptSpeech(speechType, character string) (string, string) {
 }
 
 var (
-	explicitSceneSpeechPattern  = regexp.MustCompile(`(内心独白|旁白|画外音)\s*[:：]\s*["“‘']?`)
-	standardSceneSpeechPattern  = regexp.MustCompile(`【(对白|画外对白|旁白|内心独白)(?:[｜|]([^】]+))?】\s*`)
-	quotedThoughtPattern        = regexp.MustCompile(`(?:心想|暗自想道|心中说道|心中想道|默念)\s*[:：]?\s*["“]([^"”]+)["”]`)
-	offscreenVoiceSpeechPattern = regexp.MustCompile(`(?:门外|屋外|画外|身后)?[^。！？!?\r\n]{0,12}?(?:传来|响起)([\p{Han}]{2,4})(?:清脆悦耳|清脆|悦耳|温柔|低沉|沙哑|熟悉|陌生|焦急|急促|平静)*的声音(?:说道|说|喊道|叫道)\s*[:：]?\s*["“]([^"”]+)["”]`)
-	leadingQuoteSpeechPattern   = regexp.MustCompile(`["“]([^"”]{1,200})["”][^。！？!?\r\n]{0,50}?(?:传来|响起)?[^。！？!?\r\n]{0,20}?(?:男子|男人|大汉|女子|女人|少女|女童|男童|老人|老者)?(?:厉喝|怒喝|大喝|喝道|喊道|叫道|说道|说)`)
-	pronounQuotedSpeechPattern  = regexp.MustCompile(`([他她])[^。！？!?\r\n]{0,30}?(?:厉喝|怒喝|大喝|喝道|喝喊|喊道|叫道|高喊|说道|说|问道|答道|开口道)\s*[:：]?\s*["“]([^"”]+)["”]`)
+	explicitSceneSpeechPattern        = regexp.MustCompile(`(内心独白|旁白|画外音)\s*[:：]\s*["“‘']?`)
+	standardSceneSpeechPattern        = regexp.MustCompile(`【(对白|画外对白|旁白|内心独白)(?:[｜|]([^】]+))?】\s*`)
+	quotedThoughtPattern              = regexp.MustCompile(`(?:心想|暗自想道|心中说道|心中想道|默念)\s*[:：]?\s*["“]([^"”]+)["”]`)
+	offscreenVoiceSpeechPattern       = regexp.MustCompile(`(?:门外|屋外|画外|身后)?[^。！？!?\r\n]{0,12}?(?:传来|响起)([\p{Han}]{2,4})(?:清脆悦耳|清脆|悦耳|温柔|低沉|沙哑|熟悉|陌生|焦急|急促|平静)*的声音(?:说道|说|喊道|叫道)\s*[:：]?\s*["“]([^"”]+)["”]`)
+	leadingQuoteSpeechPattern         = regexp.MustCompile(`["“]([^"”]{1,200})["”][^。！？!?\r\n]{0,50}?(?:传来|响起)?[^。！？!?\r\n]{0,20}?(?:男子|男人|大汉|女子|女人|少女|女童|男童|老人|老者)?(?:厉喝|怒喝|大喝|喝道|喊道|叫道|说道|说)`)
+	pronounQuotedSpeechPattern        = regexp.MustCompile(`([他她])[^。！？!?\r\n]{0,50}?(?:厉喝|怒喝|大喝|喝道|喝喊|喊道|叫道|高喊|说道|说|问道|答道|开口(?:道)?)\s*(?:，[^。！？!?\r\n]{0,30})?\s*[:：]\s*["“]([^"”]+)["”]`)
+	sceneBracketTimelinePrefixPattern = regexp.MustCompile(`^\s*【\s*\d+(?:\.\d+)?\s*[—–-]\s*\d+(?:\.\d+)?\s*秒\s*】\s*`)
 )
 
 func sceneCharacterNameList(characters string) []string {
@@ -3127,7 +3128,7 @@ func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Di
 	for _, name := range names {
 		// 接受“林采薇说道：\"...\"”“传来林采薇的声音说道：\"...\"”等明确发声写法。
 		// 必须同时具备已知角色名、明确说话动词和引号原文，避免把剧情说明猜成对白。
-		pattern := regexp.MustCompile(regexp.QuoteMeta(name) + `[^。！？!?\r\n]{0,30}?(?:厉喝|怒喝|大喝|喝道|喝喊|喊道|叫道|高喊|刚喊完|喊完|刚说完|说完|说道|说|问道|答道|开口道)\s*[:：]?\s*["“]([^"”]+)["”]`)
+		pattern := regexp.MustCompile(regexp.QuoteMeta(name) + `[^。！？!?\r\n]{0,30}?(?:厉喝|怒喝|大喝|喝道|喝喊|喊道|叫道|高喊|刚喊完|喊完|刚说完|说完|说道|说|问道|答道|开口(?:道)?)(?:\s*[:：]\s*["“]?|\s*["“])([^"”]+)["”]`)
 		for _, match := range pattern.FindAllStringSubmatchIndex(content, -1) {
 			clauseStart := 0
 			if boundary := strings.LastIndexAny(content[:match[0]], "。！？!?；;\r\n"); boundary >= 0 {
@@ -3135,6 +3136,7 @@ func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Di
 				clauseStart = boundary + size
 			}
 			beforeName := strings.Trim(strings.TrimSpace(content[clauseStart:match[0]]), `"“”'‘’`)
+			beforeName = sceneBracketTimelinePrefixPattern.ReplaceAllString(beforeName, "")
 			beforeName = sceneTimelinePrefixPattern.ReplaceAllString(beforeName, "")
 			continuityLead := strings.Trim(strings.TrimSpace(beforeName), "，,：:")
 			if beforeName != "" && continuityLead != "承接上一镜" && !strings.Contains(beforeName, "传来") && !strings.Contains(beforeName, "响起") {
