@@ -20,7 +20,8 @@ test('项目详情提供常驻分集快速切换而不依赖展开创作方案',
 
 test('当前集完成后常驻显示下一集剧本生成入口且保留原有入口', () => {
   assert.match(detail, /class="btn btn-sm episode-next-script"/)
-  assert.match(detail, /@click="generateNextEpisodeScript"/)
+  assert.match(detail, /:disabled="generatingScript" @click="generateNextEpisodeScript"/)
+  assert.doesNotMatch(detail, /:disabled="busy \|\| generatingScript \|\| !project\.synopsis" @click="generateNextEpisodeScript"/)
   assert.match(detail, /生成.*第\$\{nextEpisodeScriptN\}集剧本/)
   assert.match(detail, /await api\.generateScript\(id\(\), target\)/)
   assert.match(detail, /await selectEp\(target\)/)
@@ -40,7 +41,8 @@ test('项目详情正文自带完整分集导航并按持久化剧本判断生�
   assert.match(detail, /@click="episodeProductionTarget--"/)
   assert.match(detail, /@click="episodeProductionTarget\+\+"/)
   assert.match(detail, /@click="selectEp\(episodeProductionTarget\)"/)
-  assert.match(detail, /@click="generateEpisodeScriptAt\(episodeProductionTarget\)"/)
+  assert.match(detail, /:disabled="generatingScript" @click="generateEpisodeScriptAt\(episodeProductionTarget\)"/)
+  assert.doesNotMatch(detail, /:disabled="busy \|\| generatingScript \|\| !project\.synopsis" @click="generateEpisodeScriptAt\(episodeProductionTarget\)"/)
   assert.match(detail, /episodeHasScript\(episode\.n\)\?' · 已生成剧本':' · 未生成剧本'/)
   assert.match(detail, /project\.value\?\.scripts \? JSON\.parse\(project\.value\.scripts\)/)
   assert.match(detail, /if \(!episodeHasScript\(episodeN\)\) return episodeN/)

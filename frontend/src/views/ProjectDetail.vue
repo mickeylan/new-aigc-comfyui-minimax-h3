@@ -41,7 +41,7 @@
       <button type="button" class="btn btn-sm btn-ghost" :disabled="activeEpN<=1" @click="selectEp(activeEpN-1)">← 上一集</button>
       <label class="episode-quick-select"><span>选择分集</span><select :value="activeEpN" class="input" @change="selectEp(Number($event.target.value))"><option v-for="episode in episodeQuickOptions" :key="episode.n" :value="episode.n">第{{episode.n}}集{{episode.title?' · '+episode.title:''}}</option></select></label>
       <button type="button" class="btn btn-sm btn-ghost" :disabled="activeEpN>=episodeUpperBound" @click="selectEp(activeEpN+1)">下一集 →</button>
-      <button v-if="nextEpisodeScriptN" type="button" class="btn btn-sm episode-next-script" :disabled="busy || generatingScript || !project.synopsis" @click="generateNextEpisodeScript">
+      <button v-if="nextEpisodeScriptN" type="button" class="btn btn-sm episode-next-script" :disabled="generatingScript" @click="generateNextEpisodeScript">
         {{ generatingScript && generatingEpisodeN === nextEpisodeScriptN ? `正在生成第${nextEpisodeScriptN}集剧本…` : `生成第${nextEpisodeScriptN}集剧本 →` }}
       </button>
       <form class="episode-quick-jump" @submit.prevent="jumpToEpisode"><label for="episode-quick-number">跳至第</label><input id="episode-quick-number" v-model.number="episodeJump" type="number" min="1" :max="episodeUpperBound" step="1" class="input" aria-label="输入集数"><span>集</span><button type="submit" class="btn btn-sm btn-secondary">进入</button></form>
@@ -334,7 +334,7 @@
         <button type="button" class="btn btn-ghost" @click="episodeProductionTarget++">下一集 →</button>
         <div class="episode-production-target"><strong>第{{episodeProductionTarget}}集</strong><span class="badge" :class="episodeHasScript(episodeProductionTarget)?'badge-green':'badge-orange'">{{episodeHasScript(episodeProductionTarget)?'剧本已生成':'剧本未生成'}}</span></div>
         <button type="button" class="btn btn-secondary" @click="selectEp(episodeProductionTarget)">进入第{{episodeProductionTarget}}集</button>
-        <button type="button" class="btn btn-primary episode-next-primary" :disabled="busy || generatingScript || !project.synopsis" @click="generateEpisodeScriptAt(episodeProductionTarget)">{{generatingScript&&generatingEpisodeN===episodeProductionTarget?`正在生成第${episodeProductionTarget}集…`:`${episodeHasScript(episodeProductionTarget)?'重新生成':'生成'}第${episodeProductionTarget}集剧本`}}</button>
+        <button type="button" class="btn btn-primary episode-next-primary" :disabled="generatingScript" @click="generateEpisodeScriptAt(episodeProductionTarget)">{{generatingScript&&generatingEpisodeN===episodeProductionTarget?`正在生成第${episodeProductionTarget}集…`:`${episodeHasScript(episodeProductionTarget)?'重新生成':'生成'}第${episodeProductionTarget}集剧本`}}</button>
       </div>
     </section>
 
