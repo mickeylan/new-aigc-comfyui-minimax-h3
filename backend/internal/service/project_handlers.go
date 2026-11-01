@@ -2,7 +2,6 @@ package service
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -921,28 +920,6 @@ func (s *Service) HandleGenerateScript(c *gin.Context) {
 	if hasQuery && req.EpisodeN > 0 && queryEpisode != req.EpisodeN {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("目标集数冲突：URL为第%d集，请求体为第%d集", queryEpisode, req.EpisodeN)})
 		return
-	}
-	rollingProject := p.Episodes > DefaultBatchSizeMax
-	if !rollingProject && s.DB.Migrator().HasTable(&models.PlanningBatch{}) {
-		var batchCount int64
-		if err := s.DB.Model(&models.PlanningBatch{}).Where("project_id = ?", p.ID).Count(&batchCount).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "检查滚动规划状态失败: " + err.Error(), "episode_n": episodeN})
-			return
-		}
-		rollingProject = batchCount > 0
-	}
-	if rollingProject {
-		scripts := map[int]string{}
-		_ = json.Unmarshal([]byte(p.Scripts), &scripts)
-		hasScript := strings.TrimSpace(scripts[episodeN]) != "" || (episodeN == 1 && strings.TrimSpace(p.Script) != "")
-		if !hasScript {
-			c.JSON(http.StatusConflict, gin.H{
-				"error":     fmt.Sprintf("第%d集尚未完成滚动改编规划，不能直接生成剧本；请先生成并审核包含该集的规划批次", episodeN),
-				"episode_n": episodeN,
-				"redirect":  fmt.Sprintf("/projects/%d/adaptation?episode=%d", p.ID, episodeN),
-			})
-			return
-		}
 	}
 	if err := s.Projects.ClaimManualScript(p, episodeN); err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "episode_n": episodeN})
