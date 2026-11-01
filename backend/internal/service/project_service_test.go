@@ -2888,6 +2888,22 @@ func TestGenerateSceneVideoActionTreatsExpandedTimedStoryAsVisualAuthority(t *te
 	}
 }
 
+func TestCompletedShoutAtSceneStartRemainsAuthoritativeDialogue(t *testing.T) {
+	content := `承接上一镜，柳乐儿刚喊完“石头哥哥！”，便循声继续扑向青衣青年。她右脚踩进松散碎石，膝盖猛地一软，身体向前栽下；第一步尚未站稳，左脚又踉跄着抢到身前，才没有彻底跌倒。右手始终攥紧旧拨浪鼓的鼓柄，鼓身被她压在胸前，随着脚步磕碰臂弯。她终于冲到他身前，肩膀撞上他的腰腹，左手先绕到他身后，右臂连同鼓身一并收紧，双臂牢牢环住他的腰。青年仍站在原处，脚下没有移动。`
+	scene := models.Scene{Characters: "柳乐儿,青衣青年", VisibleCharacters: "柳乐儿,青衣青年", Content: content, Duration: 7}
+	dubs := explicitSceneSpeech(&scene)
+	if len(dubs) != 1 || dubs[0].Character != "柳乐儿" || dubs[0].Text != "石头哥哥！" || dubs[0].SpeechType != "dialogue" {
+		t.Fatalf("completed shout was omitted: %+v", dubs)
+	}
+	prompt := buildMiniMaxH3RefPrompt(&scene, nil, dubs, []string{
+		"- <Picture 1>：角色「柳乐儿」四视图",
+		"- <Picture 2>：角色「青衣青年」四视图",
+	})
+	if !strings.Contains(prompt, "<Subject 1> (S1)") || !strings.Contains(prompt, "<d>[Chinese] 石头哥哥！</d>") || strings.Contains(prompt, "No dialogue") {
+		t.Fatalf("completed shout missing from final H3 prompt: %s", prompt)
+	}
+}
+
 func TestPronounSpeechKeepsNamedSubjectWhenAnotherCharacterIsObject(t *testing.T) {
 	content := `0—2秒｜草丛外围，马脸男子站在侧面，右手捏着尚未激发的火云符。齐姓道士握紧白马尾拂尘，视线越过马脸男子盯住草丛。
 2—4秒｜马脸男子向前压低半步。虬髯大汉从侧后方走近，右手握着朴刀。
