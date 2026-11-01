@@ -922,7 +922,16 @@ func (s *Service) HandleGenerateScript(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("目标集数冲突：URL为第%d集，请求体为第%d集", queryEpisode, req.EpisodeN)})
 		return
 	}
-	if p.Episodes > DefaultBatchSizeMax {
+	rollingProject := p.Episodes > DefaultBatchSizeMax
+	if !rollingProject && s.DB.Migrator().HasTable(&models.PlanningBatch{}) {
+		var batchCount int64
+		if err := s.DB.Model(&models.PlanningBatch{}).Where("project_id = ?", p.ID).Count(&batchCount).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "检查滚动规划状态失败: " + err.Error(), "episode_n": episodeN})
+			return
+		}
+		rollingProject = batchCount > 0
+	}
+	if rollingProject {
 		scripts := map[int]string{}
 		_ = json.Unmarshal([]byte(p.Scripts), &scripts)
 		hasScript := strings.TrimSpace(scripts[episodeN]) != "" || (episodeN == 1 && strings.TrimSpace(p.Script) != "")

@@ -18,14 +18,14 @@
         <span class="badge" :class="projectBadgeClass">{{ projectStatusText }}</span>
         <button class="btn btn-ghost btn-sm" :disabled="busy" @click="openEditProject">✎ 编辑信息</button>
         <router-link v-if="project.source_type === 'novel'" :to="`/projects/${id()}/novel`" class="btn btn-secondary btn-sm">📚 小说章节</router-link>
-        <router-link v-if="project.episodes > 20" :to="`/projects/${id()}/adaptation`" class="btn btn-secondary btn-sm">🧭 滚动规划</router-link>
-        <button v-if="project.episodes <= 20" class="btn btn-secondary btn-sm" :disabled="busy || generatingPlan || !project.synopsis" @click="generatePlan">
+        <router-link v-if="isRollingPlanningProject" :to="`/projects/${id()}/adaptation`" class="btn btn-secondary btn-sm">🧭 滚动规划</router-link>
+        <button v-if="!isRollingPlanningProject" class="btn btn-secondary btn-sm" :disabled="busy || generatingPlan || !project.synopsis" @click="generatePlan">
           {{ generatingPlan ? '方案生成中…' : (project.plan ? '📋 重新生成创作方案' : '📋 生成创作方案') }}
         </button>
         <button class="btn btn-ghost btn-sm" :disabled="busy || generatingScript || !project.synopsis" @click="regenerateScript">
           {{ generatingScript ? '剧本生成中…' : ('🔄 重新生成第' + activeEpN + '集剧本') }}
         </button>
-        <button v-if="project.episodes <= 20" class="btn btn-sm" :disabled="busy || pipelineActive || !project.synopsis" @click="startPipeline">
+        <button v-if="!isRollingPlanningProject" class="btn btn-sm" :disabled="busy || pipelineActive || !project.synopsis" @click="startPipeline">
           {{ pipelineActive ? `第${project.pipeline_episode || activeEpN}集生成中…` : `⚡ 一键生成(第${activeEpN}集全流程)` }}
         </button>
         <button v-if="pipelineActive" class="btn btn-danger btn-sm" :disabled="busy" @click="resetGenerationState">解除卡住的生成状态</button><button class="btn btn-ghost btn-sm" :disabled="busy" @click="dubAll">🎤 全集配音</button>
@@ -41,7 +41,7 @@
       <button type="button" class="btn btn-sm btn-ghost" :disabled="activeEpN<=1" @click="selectEp(activeEpN-1)">← 上一集</button>
       <label class="episode-quick-select"><span>选择分集</span><select :value="activeEpN" class="input" @change="selectEp(Number($event.target.value))"><option v-for="episode in episodeQuickOptions" :key="episode.n" :value="episode.n">第{{episode.n}}集{{episode.title?' · '+episode.title:''}}</option></select></label>
       <button type="button" class="btn btn-sm btn-ghost" :disabled="activeEpN>=episodeUpperBound" @click="selectEp(activeEpN+1)">下一集 →</button>
-      <router-link v-if="nextEpisodeScriptN && project.episodes > 20" class="btn btn-sm episode-next-script" :to="`/projects/${id()}/adaptation?episode=${nextEpisodeScriptN}`">规划并生成第{{nextEpisodeScriptN}}集 →</router-link>
+      <router-link v-if="nextEpisodeScriptN && isRollingPlanningProject" class="btn btn-sm episode-next-script" :to="`/projects/${id()}/adaptation?episode=${nextEpisodeScriptN}`">规划并生成第{{nextEpisodeScriptN}}集 →</router-link>
       <button v-else-if="nextEpisodeScriptN" type="button" class="btn btn-sm episode-next-script" :disabled="generatingScript" @click="generateNextEpisodeScript">
         {{ generatingScript && generatingEpisodeN === nextEpisodeScriptN ? `正在生成第${nextEpisodeScriptN}集剧本…` : `生成第${nextEpisodeScriptN}集剧本 →` }}
       </button>
@@ -50,8 +50,8 @@
     </nav>
     </div>
 
-    <div v-if="project.episodes > 20" class="card plan-generation-progress">
-      <div class="plan-progress-head"><strong>长篇项目：{{ project.episodes }} 集</strong><router-link :to="`/projects/${id()}/adaptation`" class="btn btn-sm">进入5–20集滚动规划</router-link></div>
+    <div v-if="isRollingPlanningProject" class="card plan-generation-progress">
+      <div class="plan-progress-head"><strong>长篇项目：{{ rollingPlanningEpisodeTarget }} 集</strong><router-link :to="`/projects/${id()}/adaptation`" class="btn btn-sm">进入5–20集滚动规划</router-link></div>
       <p>不会一次生成整部方案。请按故事弧、原文章节和生产批次逐步审核并接入Episode流水线。</p>
     </div>
 
@@ -335,7 +335,7 @@
         <button type="button" class="btn btn-ghost" @click="episodeProductionTarget++">下一集 →</button>
         <div class="episode-production-target"><strong>第{{episodeProductionTarget}}集</strong><span class="badge" :class="episodeHasScript(episodeProductionTarget)?'badge-green':'badge-orange'">{{episodeHasScript(episodeProductionTarget)?'剧本已生成':'剧本未生成'}}</span></div>
         <button type="button" class="btn btn-secondary" @click="selectEp(episodeProductionTarget)">进入第{{episodeProductionTarget}}集</button>
-        <router-link v-if="project.episodes > 20 && !episodeHasScript(episodeProductionTarget)" class="btn btn-primary episode-next-primary" :to="`/projects/${id()}/adaptation?episode=${episodeProductionTarget}`">规划并生成第{{episodeProductionTarget}}集</router-link>
+        <router-link v-if="isRollingPlanningProject && !episodeHasScript(episodeProductionTarget)" class="btn btn-primary episode-next-primary" :to="`/projects/${id()}/adaptation?episode=${episodeProductionTarget}`">规划并生成第{{episodeProductionTarget}}集</router-link>
         <button v-else type="button" class="btn btn-primary episode-next-primary" :disabled="generatingScript" @click="generateEpisodeScriptAt(episodeProductionTarget)">{{generatingScript&&generatingEpisodeN===episodeProductionTarget?`正在生成第${episodeProductionTarget}集…`:`${episodeHasScript(episodeProductionTarget)?'重新生成':'生成'}第${episodeProductionTarget}集剧本`}}</button>
       </div>
     </section>
@@ -1227,6 +1227,11 @@ const showGeneratedHistory = ref(false)
 const busy = ref(false)
 const generatingScript = ref(false)
 const generatingEpisodeN = ref(0)
+const rollingPlanningTarget = ref(0)
+const rollingPlanningHasBatches = ref(false)
+const rollingPlanningLoaded = ref(false)
+const rollingPlanningEpisodeTarget = computed(() => Math.max(Number(project.value?.episodes || 0), Number(rollingPlanningTarget.value || 0)))
+const isRollingPlanningProject = computed(() => rollingPlanningHasBatches.value || rollingPlanningEpisodeTarget.value > 20)
 const generatingPlan = ref(false)
 const planElapsed = ref(0)
 const planProgress = ref(0)
@@ -1344,7 +1349,7 @@ async function saveEpisodes() {
 const queryEpisode = Number.parseInt(String(route.query.episode || ''), 10)
 const activeEpN = ref(Number.isInteger(queryEpisode) && queryEpisode > 0 ? queryEpisode : 1)
 const episodeJump = ref(activeEpN.value)
-const episodeUpperBound = computed(() => Math.max(1, Number(project.value?.episodes || 0), ...epEdits.value.map(item => Number(item.n || 0)), ...scenes.value.map(scene => Number(scene.episode_n || 1))))
+const episodeUpperBound = computed(() => Math.max(1, rollingPlanningEpisodeTarget.value, ...epEdits.value.map(item => Number(item.n || 0)), ...scenes.value.map(scene => Number(scene.episode_n || 1))))
 const persistedEpisodeScripts = computed(() => {
   try { return project.value?.scripts ? JSON.parse(project.value.scripts) : {} } catch { return {} }
 })
@@ -1792,6 +1797,17 @@ async function load() {
     projectVideoMaterials.value = (materialsRes.data || []).filter(item => item.type === 'video')
     loadError.value = ''
     project.value = data.project
+    if (!rollingPlanningLoaded.value) {
+      rollingPlanningLoaded.value = true
+      try {
+        const planning = await api.planningBatches(id())
+        rollingPlanningTarget.value = Number(planning.data?.total_episode_target || 0)
+        rollingPlanningHasBatches.value = Array.isArray(planning.data?.batches) && planning.data.batches.length > 0
+      } catch {
+        rollingPlanningTarget.value = Number(data.project?.episodes || 0)
+        rollingPlanningHasBatches.value = false
+      }
+    }
     if (epDirtyCount.value === 0) trackEpisodes()
     const cur = (data.project.scripts ? JSON.parse(data.project.scripts) : {})[activeEpN.value] || ''
     if (!scriptDirty.value) {

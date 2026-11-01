@@ -61,11 +61,16 @@ func TestGenerateScriptRequiresExplicitConsistentEpisodeBeforeClaim(t *testing.T
 
 func TestGenerateScriptRedirectsUnplannedRollingEpisodeWithoutClaim(t *testing.T) {
 	db := newTestDB(t)
-	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}); err != nil {
+	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.PlanningBatch{}); err != nil {
 		t.Fatal(err)
 	}
-	project := models.Project{Title: "rolling", Episodes: 60, Scripts: `{"1":"episode one"}`, Status: "script_done", PipelineEpisode: 9}
+	// Some rolling projects only materialize the produced Episode count into Project.Episodes.
+	// The persisted PlanningBatch must still force the adaptation route.
+	project := models.Project{Title: "rolling", Episodes: 1, Scripts: `{"1":"episode one"}`, Status: "script_done", PipelineEpisode: 9}
 	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.PlanningBatch{ProjectID: project.ID, BatchNo: 1, EpisodeStart: 1, EpisodeEnd: 10, Status: BatchStatusApproved}).Error; err != nil {
 		t.Fatal(err)
 	}
 	svc := &Service{DB: db, Projects: &ProjectService{db: db}}

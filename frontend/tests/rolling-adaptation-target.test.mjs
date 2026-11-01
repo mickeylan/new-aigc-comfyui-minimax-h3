@@ -6,7 +6,8 @@ const view = readFileSync(new URL('../src/views/AdaptationPlan.vue', import.meta
 const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
 
 test('长篇未规划分集从项目详情跳转到目标滚动规划', () => {
-  assert.match(detail, /project\.episodes > 20 && !episodeHasScript\(episodeProductionTarget\)/)
+  assert.match(detail, /isRollingPlanningProject && !episodeHasScript\(episodeProductionTarget\)/)
+  assert.match(detail, /rollingPlanningHasBatches\.value = Array\.isArray\(planning\.data\?\.batches\)/)
   assert.match(detail, /\/adaptation\?episode=\$\{episodeProductionTarget\}/)
   assert.match(detail, /规划并生成第\{\{episodeProductionTarget\}\}集/)
 })
