@@ -269,7 +269,7 @@ func (s *BatchPlanningService) batchCharacterAuthority(projectID uint, previousE
 	}
 	if s.db.Migrator().HasTable(&models.CharacterAliasCandidate{}) {
 		var aliases []models.CharacterAliasCandidate
-		if err := s.db.Where("project_id = ? AND status = ?", projectID, "confirmed").Find(&aliases).Error; err != nil {
+		if err := s.db.Where("project_id = ?", projectID).Find(&aliases).Error; err != nil {
 			return nil, err
 		}
 		for _, alias := range aliases {
@@ -282,7 +282,7 @@ func (s *BatchPlanningService) batchCharacterAuthority(projectID uint, previousE
 	}
 	if previousEpisode > 0 {
 		var scenes []models.Scene
-		if err := s.db.Where("project_id = ? AND episode_n = ?", projectID, previousEpisode).Find(&scenes).Error; err != nil {
+		if err := s.db.Where("project_id = ? AND episode_n <= ?", projectID, previousEpisode).Find(&scenes).Error; err != nil {
 			return nil, err
 		}
 		for _, scene := range scenes {
@@ -334,23 +334,42 @@ func (s *BatchPlanningService) batchPlanningDuplicateIssues(projectID uint, epis
 			}
 		}
 	}
-	if episodeStart <= 1 {
-		return uniqueStrings(issues), nil
-	}
-	var previousScenes []models.Scene
-	if err := s.db.Where("project_id = ? AND episode_n = ?", projectID, episodeStart-1).Order("`order`, id").Find(&previousScenes).Error; err != nil {
-		return nil, err
-	}
 	for i, episode := range episodes {
+		currentEpisode := episodeNumber(i)
+		if currentEpisode <= 1 {
+			continue
+		}
+		var previousScenes []models.Scene
+		if err := s.db.Where("project_id = ? AND episode_n < ?", projectID, currentEpisode).Order("episode_n, `order`, id").Find(&previousScenes).Error; err != nil {
+			return nil, err
+		}
 		current := adaptationPlanningText(episode)
 		for _, scene := range previousScenes {
 			prior := strings.Join([]string{scene.Title, scene.Content}, "\n")
 			if score := scriptSceneSimilarity(current, prior); score >= 0.38 {
-				issues = append(issues, fmt.Sprintf("第%d集规划与上一集Scene %d「%s」事件重复（相似度%.0f%%）", episodeNumber(i), scene.Order, scene.Title, score*100))
+				issues = append(issues, fmt.Sprintf("第%d集规划与已生产第%d集Scene %d「%s」事件重复（相似度%.0f%%）", currentEpisode, scene.EpisodeN, scene.Order, scene.Title, score*100))
 			}
 		}
 	}
 	return uniqueStrings(issues), nil
+}
+
+func (s *BatchPlanningService) lockedBatchEpisodes(projectID uint, start, end int) (map[int]models.EpisodeAdaptation, error) {
+	var adaptations []models.EpisodeAdaptation
+	if err := s.db.Where("project_id = ? AND episode_n BETWEEN ? AND ?", projectID, start, end).Find(&adaptations).Error; err != nil {
+		return nil, err
+	}
+	locked := map[int]models.EpisodeAdaptation{}
+	for _, adaptation := range adaptations {
+		var sceneCount int64
+		if err := s.db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ?", projectID, adaptation.EpisodeN).Count(&sceneCount).Error; err != nil {
+			return nil, err
+		}
+		if sceneCount > 0 || adaptation.Status == "scripted" || adaptation.Status == "reviewed" {
+			locked[adaptation.EpisodeN] = adaptation
+		}
+	}
+	return locked, nil
 }
 
 func (s *BatchPlanningService) GenerateBatchDraft(projectID, batchID uint) (*PlanningBatchDetail, error) {
@@ -377,6 +396,10 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 		return nil, err
 	}
 	outlineMode := project.SourceType != models.ProjectSourceNovel
+	lockedEpisodes, err := s.lockedBatchEpisodes(projectID, batch.EpisodeStart, batch.EpisodeEnd)
+	if err != nil {
+		return nil, fmt.Errorf("读取已生产分集锁定状态失败: %w", err)
+	}
 	var bible models.StoryBible
 	if err := s.db.Where("project_id = ? AND status = ?", projectID, "approved").First(&bible).Error; err != nil {
 		if !outlineMode {
@@ -427,9 +450,17 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 			return nil, fmt.Errorf("读取上一集生产事实失败: %w", err)
 		}
 	}
-	characterAuthority, err := s.batchCharacterAuthority(projectID, batch.EpisodeStart-1)
+	characterAuthority, err := s.batchCharacterAuthority(projectID, batch.EpisodeEnd)
 	if err != nil {
 		return nil, fmt.Errorf("读取跨集角色权威失败: %w", err)
+	}
+	lockedProductionFacts := map[int]string{}
+	for episodeN := range lockedEpisodes {
+		facts, factsErr := (&ProjectService{db: s.db}).previousEpisodeProductionFacts(projectID, episodeN+1)
+		if factsErr != nil {
+			return nil, fmt.Errorf("读取第%d集生产事实失败: %w", episodeN, factsErr)
+		}
+		lockedProductionFacts[episodeN] = facts
 	}
 	var previousSnapshot models.BatchStateSnapshot
 	if batch.PreviousBatchID != nil {
@@ -441,10 +472,10 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 	for _, chapter := range chapters {
 		chapterIDByOrder[chapter.Order] = chapter.ID
 	}
-	input := map[string]any{"batch": batch, "story_bible": bible, "story_arcs": arcs, "chapter_analyses": chapters, "chapter_id_by_order": chapterIDByOrder, "previous_ending_state": previous.EndingState, "previous_production_facts": previousProductionFacts, "authoritative_character_names": characterAuthority, "previous_state_snapshot": previousSnapshot, "open_clues": openClues, "required_episode_start": batch.EpisodeStart, "required_episode_end": batch.EpisodeEnd, "required_episode_count": batch.EpisodeCount}
+	input := map[string]any{"batch": batch, "story_bible": bible, "story_arcs": arcs, "chapter_analyses": chapters, "chapter_id_by_order": chapterIDByOrder, "previous_ending_state": previous.EndingState, "previous_production_facts": previousProductionFacts, "locked_episodes": lockedEpisodes, "locked_episode_production_facts": lockedProductionFacts, "authoritative_character_names": characterAuthority, "previous_state_snapshot": previousSnapshot, "open_clues": openClues, "required_episode_start": batch.EpisodeStart, "required_episode_end": batch.EpisodeEnd, "required_episode_count": batch.EpisodeCount}
 	payload, _ := json.Marshal(input)
 	_ = s.db.Model(batch).Updates(map[string]any{"status": BatchStatusGenerating, "error": "", "generation": gorm.Expr("generation + 1")}).Error
-	system := fmt.Sprintf("你是长篇故事滚动规划师。只输出JSON对象 {\"summary\":\"批次摘要\",\"episodes\":[EpisodeAdaptation字段]}。必须精确生成%d集，集号从%d连续到%d；每集必须含title、chapter_start、chapter_end、source_chapter_ids(必须使用chapter_id_by_order中的数据库ID组成非空JSON数组；不得填写章节序号)、adaptation_goal、opening_state、ending_state、hook、target_duration(默认180)、target_scenes(默认25)。每集chapter_start和chapter_end必须位于本批次原文章节%d至%d内；集数可以多于章节数，此时允许相邻多集引用同一章，绝不可把集号当成章节号。不得重写已完成批次，必须承接previous_ending_state。previous_production_facts是上一集实际完成的Scene、Dialogue和剧本，是最高排重权威：后续集禁止重演、换措辞重讲、再次揭示或回顾其中已发生的事件、动作、信息、对白目的和情绪节点；必须从其结尾之后产生新推进。同一批次各集也必须事件互斥，后一集不得重复前一集已分配的核心事件。authoritative_character_names列出跨集权威角色名及已确认别名：同一人物必须始终使用权威名称，不得把“马面青年”等既有角色改成另一个新名字、同义称呼或临时别名；只有原文和故事圣经明确的新登场人物才允许新增名字。", batch.EpisodeCount, batch.EpisodeStart, batch.EpisodeEnd, batch.ChapterStart, batch.ChapterEnd)
+	system := fmt.Sprintf("你是长篇故事滚动规划师。只输出JSON对象 {\"summary\":\"批次摘要\",\"episodes\":[EpisodeAdaptation字段]}。必须精确生成%d集，集号从%d连续到%d；每集必须含title、chapter_start、chapter_end、source_chapter_ids(必须使用chapter_id_by_order中的数据库ID组成非空JSON数组；不得填写章节序号)、adaptation_goal、opening_state、ending_state、hook、target_duration(默认180)、target_scenes(默认25)。每集chapter_start和chapter_end必须位于本批次原文章节%d至%d内；集数可以多于章节数，此时允许相邻多集引用同一章，绝不可把集号当成章节号。不得重写已完成批次，必须承接previous_ending_state。previous_production_facts是上一集实际完成的Scene、Dialogue和剧本，是最高排重权威：后续集禁止重演、换措辞重讲、再次揭示或回顾其中已发生的事件、动作、信息、对白目的和情绪节点；必须从其结尾之后产生新推进。同一批次各集也必须事件互斥，后一集不得重复前一集已分配的核心事件。locked_episodes及locked_episode_production_facts是本批次中已经生产的不可变分集，必须原样返回其规划字段，绝对不得重写、重新分配其事件或改变人物名；后续集只能使用尚未被锁定集消费的事件。authoritative_character_names列出跨集权威角色名及别名：同一人物必须始终使用权威名称，不得把“马面青年”等既有角色改成另一个新名字、同义称呼或临时别名；只有原文和故事圣经明确的新登场人物才允许新增名字。", batch.EpisodeCount, batch.EpisodeStart, batch.EpisodeEnd, batch.ChapterStart, batch.ChapterEnd)
 	if outlineMode {
 		system += " 当前项目来自故事梗概而非小说章节；source_chapter_ids固定输出空数组[]，chapter_start和chapter_end可使用0。"
 	}
@@ -468,11 +499,19 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 	if len(parsed.Episodes) != batch.EpisodeCount {
 		return nil, fmt.Errorf("模型返回%d集，批次要求%d集；未保存", len(parsed.Episodes), batch.EpisodeCount)
 	}
+	for i := range parsed.Episodes {
+		want := batch.EpisodeStart + i
+		if locked, ok := lockedEpisodes[want]; ok {
+			parsed.Episodes[i] = locked
+		}
+	}
 	if duplicateIssues, duplicateErr := s.batchPlanningDuplicateIssues(projectID, batch.EpisodeStart, parsed.Episodes); duplicateErr != nil {
 		return nil, duplicateErr
 	} else if len(duplicateIssues) > 0 {
 		repairSystem := "你是分集规划排重修复器。只输出完整合法JSON，保持集号、字段结构、来源章节、未重复事实和集数不变。必须重写列出的重复事件，使每集从上一集实际结尾之后产生新的剧情推进；禁止用换措辞、回忆、复述或再次揭示伪装新剧情。"
-		repairUser := "重复问题：\n- " + strings.Join(duplicateIssues, "\n- ") + "\n\n上一集生产权威：\n" + previousProductionFacts + "\n\n待修复规划：\n" + raw
+		lockedFactsJSON, _ := json.Marshal(lockedProductionFacts)
+		characterAuthorityJSON, _ := json.Marshal(characterAuthority)
+		repairUser := "重复问题：\n- " + strings.Join(duplicateIssues, "\n- ") + "\n\n批次外上一集生产权威：\n" + previousProductionFacts + "\n\n本批次已锁定生产事实：\n" + string(lockedFactsJSON) + "\n\n跨集角色权威：\n" + string(characterAuthorityJSON) + "\n\n待修复规划：\n" + raw
 		repaired, repairErr := s.provider.Chat(repairSystem, repairUser)
 		if repairErr != nil {
 			return nil, fmt.Errorf("批次跨集重复自动修复失败: %w", repairErr)
@@ -486,6 +525,12 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 		}
 		if len(parsed.Episodes) != batch.EpisodeCount {
 			return nil, fmt.Errorf("批次跨集重复修复改变集数：得到%d集，要求%d集；未保存", len(parsed.Episodes), batch.EpisodeCount)
+		}
+		for i := range parsed.Episodes {
+			want := batch.EpisodeStart + i
+			if locked, ok := lockedEpisodes[want]; ok {
+				parsed.Episodes[i] = locked
+			}
 		}
 		remaining, remainingErr := s.batchPlanningDuplicateIssues(projectID, batch.EpisodeStart, parsed.Episodes)
 		if remainingErr != nil {
@@ -504,6 +549,10 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 		}
 		if ep.EpisodeN != want {
 			return nil, fmt.Errorf("批次集号不连续：得到%d，应为%d", ep.EpisodeN, want)
+		}
+		if locked, ok := lockedEpisodes[want]; ok {
+			parsed.Episodes[i] = locked
+			continue
 		}
 		ep.ProjectID = projectID
 		ep.BatchID = &batch.ID
@@ -544,14 +593,26 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 		if err := tx.Where("batch_id = ?", batch.ID).Delete(&models.BatchEpisode{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("project_id = ? AND episode_n BETWEEN ? AND ?", projectID, batch.EpisodeStart, batch.EpisodeEnd).Delete(&models.EpisodeAdaptation{}).Error; err != nil {
-			return err
-		}
-		for i := range parsed.Episodes {
-			if err := tx.Create(&parsed.Episodes[i]).Error; err != nil {
+		for episodeN := batch.EpisodeStart; episodeN <= batch.EpisodeEnd; episodeN++ {
+			if _, locked := lockedEpisodes[episodeN]; locked {
+				continue
+			}
+			if err := tx.Where("project_id = ? AND episode_n = ?", projectID, episodeN).Delete(&models.EpisodeAdaptation{}).Error; err != nil {
 				return err
 			}
-			be := models.BatchEpisode{BatchID: batch.ID, EpisodeAdaptID: parsed.Episodes[i].ID, EpisodeN: parsed.Episodes[i].EpisodeN, BatchOrder: i + 1, Status: BatchEpisodeStatusDraft}
+		}
+		for i := range parsed.Episodes {
+			_, locked := lockedEpisodes[parsed.Episodes[i].EpisodeN]
+			if !locked {
+				if err := tx.Create(&parsed.Episodes[i]).Error; err != nil {
+					return err
+				}
+			}
+			batchEpisodeStatus := BatchEpisodeStatusDraft
+			if locked {
+				batchEpisodeStatus = BatchEpisodeStatusProduced
+			}
+			be := models.BatchEpisode{BatchID: batch.ID, EpisodeAdaptID: parsed.Episodes[i].ID, EpisodeN: parsed.Episodes[i].EpisodeN, BatchOrder: i + 1, Status: batchEpisodeStatus}
 			if err := tx.Create(&be).Error; err != nil {
 				return err
 			}

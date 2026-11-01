@@ -15,7 +15,7 @@ func newTestBatchService(t *testing.T) *BatchPlanningService {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = db.AutoMigrate(&models.Project{}, &models.PlanningBatch{}, &models.BatchEpisode{}, &models.EpisodeAdaptation{}, &models.StoryArc{}, &models.Episode{}, &models.BatchStateSnapshot{}, &models.StoryClue{}, &models.AnalysisWindow{}); err != nil {
+	if err = db.AutoMigrate(&models.Project{}, &models.PlanningBatch{}, &models.BatchEpisode{}, &models.EpisodeAdaptation{}, &models.StoryArc{}, &models.Episode{}, &models.Scene{}, &models.Dialogue{}, &models.Character{}, &models.CharacterAliasCandidate{}, &models.BatchStateSnapshot{}, &models.StoryClue{}, &models.AnalysisWindow{}); err != nil {
 		t.Fatal(err)
 	}
 	if err = db.Create(&models.Project{ID: 1, Title: "Novel", SourceType: models.ProjectSourceNovel, Episodes: 1800}).Error; err != nil {
@@ -38,6 +38,31 @@ func TestRecoverInterruptedPlanningBatch(t *testing.T) {
 	}
 	if batch.Status != BatchStatusDraft || batch.Error == "" {
 		t.Fatalf("interrupted batch was not recovered: %+v", batch)
+	}
+}
+
+func TestLockedBatchEpisodesPreserveProducedAdaptations(t *testing.T) {
+	s := newTestBatchService(t)
+	produced := models.EpisodeAdaptation{ProjectID: 1, EpisodeN: 1, Title: "已生产第一集", Status: "scripted", Script: "权威剧本"}
+	draft := models.EpisodeAdaptation{ProjectID: 1, EpisodeN: 2, Title: "待重规划第二集", Status: "approved"}
+	if err := s.db.Create(&produced).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Create(&draft).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Create(&models.Scene{ProjectID: 1, EpisodeN: 1, Order: 1, Title: "权威Scene", Content: "已经发生"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	locked, err := s.lockedBatchEpisodes(1, 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locked[1].ID != produced.ID || locked[1].Script != "权威剧本" {
+		t.Fatalf("produced episode not locked: %#v", locked)
+	}
+	if _, ok := locked[2]; ok {
+		t.Fatalf("unproduced approved episode must remain replannable: %#v", locked[2])
 	}
 }
 
@@ -89,7 +114,7 @@ func TestBatchPlanningDuplicateIssuesUsePreviousProducedScenesAndCurrentBatch(t 
 		t.Fatal(err)
 	}
 	joined := strings.Join(issues, "\n")
-	if !strings.Contains(joined, "上一集Scene 1") || !strings.Contains(joined, "第3集与本批第2集") {
+	if !strings.Contains(joined, "已生产第1集Scene 1") || !strings.Contains(joined, "第3集与本批第2集") {
 		t.Fatalf("missing production/intra-batch duplicate issues: %v", issues)
 	}
 }
