@@ -42,7 +42,7 @@
       <label class="episode-quick-select"><span>选择分集</span><select :value="activeEpN" class="input" @change="selectEp(Number($event.target.value))"><option v-for="episode in episodeQuickOptions" :key="episode.n" :value="episode.n">第{{episode.n}}集{{episode.title?' · '+episode.title:''}}</option></select></label>
       <button type="button" class="btn btn-sm btn-ghost" :disabled="activeEpN>=episodeUpperBound" @click="selectEp(activeEpN+1)">下一集 →</button>
       <button v-if="nextEpisodeScriptN" type="button" class="btn btn-sm episode-next-script" :disabled="busy || generatingScript || !project.synopsis" @click="generateNextEpisodeScript">
-        {{ generatingScript && generatingEpisodeN === nextEpisodeScriptN ? `正在生成第${nextEpisodeScriptN}集剧本…` : `${nextEpisodeHasScenes ? '重新生成' : '生成'}第${nextEpisodeScriptN}集剧本 →` }}
+        {{ generatingScript && generatingEpisodeN === nextEpisodeScriptN ? `正在生成第${nextEpisodeScriptN}集剧本…` : `生成第${nextEpisodeScriptN}集剧本 →` }}
       </button>
       <form class="episode-quick-jump" @submit.prevent="jumpToEpisode"><label for="episode-quick-number">跳至第</label><input id="episode-quick-number" v-model.number="episodeJump" type="number" min="1" :max="episodeUpperBound" step="1" class="input" aria-label="输入集数"><span>集</span><button type="submit" class="btn btn-sm btn-secondary">进入</button></form>
       <div class="episode-neighbours" aria-label="相邻分集快捷入口"><button v-for="episode in episodeNeighbourOptions" :key="episode.n" type="button" class="episode-chip" :class="{active:episode.n===activeEpN}" @click="selectEp(episode.n)">{{episode.n}}</button></div>
@@ -322,25 +322,22 @@
       </span>
     </div>
 
-    <section class="section episode-production-center" aria-label="分集制作中心">
-      <div class="section-head">
+    <section class="section episode-production-center" aria-label="继续制作下一集">
+      <div class="card episode-next-action">
         <div>
-          <span class="overline">EPISODE PRODUCTION</span>
-          <h2>分集制作中心</h2>
-          <p class="sub">选择任意分集进入制作，或直接生成该集剧本。现有顶部导航、创作方案、滚动规划和剧本入口保持不变。</p>
+          <span class="overline">CONTINUE PRODUCTION</span>
+          <template v-if="nextEpisodeScriptN">
+            <h2>下一步：生成第{{ nextEpisodeScriptN }}集剧本</h2>
+            <p class="sub">第1集等已完成内容不会被修改。系统会读取前序集生产事实和分集规划，生成后自动进入第{{ nextEpisodeScriptN }}集。</p>
+          </template>
+          <template v-else>
+            <h2>所有规划分集均已生成</h2>
+            <p class="sub">可使用页面顶部的分集导航进入任意已生成分集继续制作。</p>
+          </template>
         </div>
-        <div class="episode-production-current"><span>当前制作</span><strong>第{{ activeEpN }}集</strong><small>{{ currentEpTitle || '未命名' }}</small></div>
-      </div>
-      <div class="card episode-production-card">
-        <label class="episode-production-select"><span>目标分集</span><select v-model.number="episodeProductionTarget" class="input"><option v-for="episode in episodeQuickOptions" :key="episode.n" :value="episode.n">第{{episode.n}}集{{episode.title?' · '+episode.title:''}}{{episodeSceneCount(episode.n)?` · 已有${episodeSceneCount(episode.n)}个Scene`:' · 尚未生成剧本'}}</option></select></label>
-        <div class="episode-production-state"><strong>第{{ episodeProductionTarget }}集</strong><span v-if="episodeSceneCount(episodeProductionTarget)" class="badge badge-green">已有 {{ episodeSceneCount(episodeProductionTarget) }} 个 Scene</span><span v-else class="badge badge-orange">等待生成剧本</span></div>
-        <div class="episode-production-actions">
-          <button type="button" class="btn btn-secondary" @click="selectEp(episodeProductionTarget)">进入第{{ episodeProductionTarget }}集</button>
-          <button type="button" class="btn" :disabled="busy || generatingScript || !project.synopsis" @click="generateSelectedEpisodeScript">
-            {{ generatingScript && generatingEpisodeN===episodeProductionTarget ? `正在生成第${episodeProductionTarget}集…` : `${episodeSceneCount(episodeProductionTarget)?'重新生成':'生成'}第${episodeProductionTarget}集剧本` }}
-          </button>
-          <button v-if="nextEpisodeScriptN" type="button" class="btn btn-primary" :disabled="busy || generatingScript || !project.synopsis" @click="generateNextEpisodeScript">继续制作：生成第{{nextEpisodeScriptN}}集 →</button>
-        </div>
+        <button v-if="nextEpisodeScriptN" type="button" class="btn btn-primary episode-next-primary" :disabled="busy || generatingScript || !project.synopsis" @click="generateNextEpisodeScript">
+          {{ generatingScript && generatingEpisodeN===nextEpisodeScriptN ? `正在生成第${nextEpisodeScriptN}集剧本…` : `生成第${nextEpisodeScriptN}集剧本 →` }}
+        </button>
       </div>
     </section>
 
@@ -1349,11 +1346,13 @@ const queryEpisode = Number.parseInt(String(route.query.episode || ''), 10)
 const activeEpN = ref(Number.isInteger(queryEpisode) && queryEpisode > 0 ? queryEpisode : 1)
 const episodeJump = ref(activeEpN.value)
 const episodeUpperBound = computed(() => Math.max(1, Number(project.value?.episodes || 0), ...epEdits.value.map(item => Number(item.n || 0)), ...scenes.value.map(scene => Number(scene.episode_n || 1))))
-const nextEpisodeScriptN = computed(() => activeEpN.value < episodeUpperBound.value ? activeEpN.value + 1 : 0)
-const nextEpisodeHasScenes = computed(() => nextEpisodeScriptN.value > 0 && scenes.value.some(scene => Number(scene.episode_n || 1) === nextEpisodeScriptN.value))
-const episodeProductionTarget = ref(Math.min(activeEpN.value + 1, episodeUpperBound.value))
 function episodeSceneCount(episodeN) { return scenes.value.filter(scene => Number(scene.episode_n || 1) === Number(episodeN)).length }
-watch([activeEpN, episodeUpperBound], ([active, upper]) => { episodeProductionTarget.value = Math.min(active + 1, upper) })
+const nextEpisodeScriptN = computed(() => {
+  for (let episodeN = 1; episodeN <= episodeUpperBound.value; episodeN++) {
+    if (episodeSceneCount(episodeN) === 0) return episodeN
+  }
+  return 0
+})
 const episodeQuickOptions = computed(() => {
   const upper = episodeUpperBound.value
   const titles = new Map(epEdits.value.map(item => [Number(item.n), String(item.title || '')]))
@@ -2097,7 +2096,6 @@ async function generateEpisodeScriptAt(target) {
   }
 }
 async function generateNextEpisodeScript() { if (nextEpisodeScriptN.value) await generateEpisodeScriptAt(nextEpisodeScriptN.value) }
-async function generateSelectedEpisodeScript() { await generateEpisodeScriptAt(episodeProductionTarget.value) }
 
 // 保存编辑后的剧本，并调用 AI 重新渲染该集分镜场景
 async function saveAndRender() {
@@ -3141,7 +3139,7 @@ onBeforeUnmount(() => {
 }
 .tag-orange { background: rgba(255, 159, 10, 0.14); color: #c47f00; }
 .head-actions { display: flex; align-items: center; justify-content: flex-start; gap: 8px; flex-wrap: wrap; width: 100%; max-width: none; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
-.episode-quick-nav{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;padding:9px 10px;border:1px solid var(--border);border-radius:10px;background:var(--surface-secondary);box-shadow:0 4px 16px rgba(0,0,0,.08)}.episode-next-script{font-weight:750;box-shadow:0 3px 12px rgba(255,122,0,.22)}.episode-production-center{scroll-margin-top:88px}.episode-production-card{display:grid;grid-template-columns:minmax(260px,1.4fr) minmax(190px,.8fr) auto;align-items:end;gap:16px;border-color:color-mix(in srgb,var(--accent) 42%,var(--border));background:linear-gradient(135deg,var(--surface),var(--accent-soft))}.episode-production-select{display:grid;gap:7px}.episode-production-select>span,.episode-production-current>span{font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--text-tertiary)}.episode-production-state,.episode-production-current{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.episode-production-current{justify-content:flex-end}.episode-production-current strong{color:var(--accent);font-size:18px}.episode-production-current small{color:var(--text-secondary)}.episode-production-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}@media(max-width:900px){.episode-production-card{grid-template-columns:1fr}.episode-production-actions,.episode-production-current{justify-content:flex-start}}.episode-quick-current{display:flex;align-items:baseline;gap:7px;min-width:160px}.episode-quick-current span,.episode-quick-select span{font-size:11px;color:var(--text-tertiary)}.episode-quick-current strong{color:var(--accent)}.episode-quick-current small{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)}.episode-quick-select{display:flex;align-items:center;gap:6px}.episode-quick-select .input{width:min(310px,32vw);height:32px;padding:4px 8px}.episode-quick-jump{display:flex;align-items:center;gap:5px;color:var(--text-secondary);font-size:12px}.episode-quick-jump .input{width:74px;height:32px;padding:4px 7px}.episode-neighbours{display:flex;gap:4px}.episode-chip{min-width:30px;height:30px;padding:0 7px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--text-secondary);cursor:pointer}.episode-chip:hover,.episode-chip.active{border-color:var(--accent);color:var(--accent)}.episode-chip.active{background:var(--accent-soft);font-weight:700}
+.episode-quick-nav{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;padding:9px 10px;border:1px solid var(--border);border-radius:10px;background:var(--surface-secondary);box-shadow:0 4px 16px rgba(0,0,0,.08)}.episode-next-script{font-weight:750;box-shadow:0 3px 12px rgba(255,122,0,.22)}.episode-production-center{scroll-margin-top:88px}.episode-next-action{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:22px 24px;border:2px solid color-mix(in srgb,var(--accent) 55%,var(--border));background:linear-gradient(135deg,var(--surface),var(--accent-soft));box-shadow:0 10px 28px rgba(255,122,0,.12)}.episode-next-action h2{margin:3px 0 7px}.episode-next-primary{min-width:220px;min-height:46px;font-size:15px;font-weight:800;box-shadow:0 6px 18px rgba(255,122,0,.28)}@media(max-width:720px){.episode-next-action{align-items:stretch;flex-direction:column}.episode-next-primary{width:100%}}.episode-quick-current{display:flex;align-items:baseline;gap:7px;min-width:160px}.episode-quick-current span,.episode-quick-select span{font-size:11px;color:var(--text-tertiary)}.episode-quick-current strong{color:var(--accent)}.episode-quick-current small{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)}.episode-quick-select{display:flex;align-items:center;gap:6px}.episode-quick-select .input{width:min(310px,32vw);height:32px;padding:4px 8px}.episode-quick-jump{display:flex;align-items:center;gap:5px;color:var(--text-secondary);font-size:12px}.episode-quick-jump .input{width:74px;height:32px;padding:4px 7px}.episode-neighbours{display:flex;gap:4px}.episode-chip{min-width:30px;height:30px;padding:0 7px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--text-secondary);cursor:pointer}.episode-chip:hover,.episode-chip.active{border-color:var(--accent);color:var(--accent)}.episode-chip.active{background:var(--accent-soft);font-weight:700}
 .steps-bar { display: flex; align-items: center; gap: 12px; padding: 14px 20px; margin: 18px 0 26px; flex-wrap: wrap; }
 .step { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--text-secondary); }
 .step-n {
