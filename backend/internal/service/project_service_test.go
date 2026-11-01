@@ -2904,6 +2904,43 @@ func TestCompletedShoutAtSceneStartRemainsAuthoritativeDialogue(t *testing.T) {
 	}
 }
 
+func TestSceneVideoDialoguesUsesProjectCharacterWhenSceneRoleFieldsAreIncomplete(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Dialogue{}, &models.Character{}, &models.CharacterAliasCandidate{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "p"}
+	ps.db.Create(&project)
+	ps.db.Create(&models.Character{ProjectID: project.ID, Name: "柳乐儿"})
+	scene := models.Scene{ProjectID: project.ID, Content: `承接上一镜，柳乐儿刚喊完“石头哥哥！”，便继续扑向青衣青年。`, Duration: 7}
+	ps.db.Create(&scene)
+	dubs := ps.sceneVideoDialogues(&scene)
+	if len(dubs) != 1 || dubs[0].Character != "柳乐儿" || dubs[0].Text != "石头哥哥！" {
+		t.Fatalf("project character did not recover Scene speech: %+v", dubs)
+	}
+	prompt := buildMiniMaxH3RefPrompt(&scene, nil, dubs, []string{"- <Picture 1>：角色「柳乐儿」四视图"})
+	if !strings.Contains(prompt, "<d>[Chinese] 石头哥哥！</d>") || strings.Contains(prompt, "No dialogue") {
+		t.Fatalf("recovered project speech missing from prompt: %s", prompt)
+	}
+}
+
+func TestSceneVideoDialoguesMapsConfirmedAliasToCanonicalCharacter(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Dialogue{}, &models.Character{}, &models.CharacterAliasCandidate{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "p"}
+	ps.db.Create(&project)
+	ps.db.Create(&models.Character{ProjectID: project.ID, Name: "青衣高大男子"})
+	ps.db.Create(&models.CharacterAliasCandidate{ProjectID: project.ID, Alias: "柳石", CanonicalName: "青衣高大男子", Status: "confirmed"})
+	scene := models.Scene{ProjectID: project.ID, Content: `柳石刚说完“别怕。”，便低头看向她。`, Duration: 5}
+	ps.db.Create(&scene)
+	dubs := ps.sceneVideoDialogues(&scene)
+	if len(dubs) != 1 || dubs[0].Character != "青衣高大男子" || dubs[0].Text != "别怕。" {
+		t.Fatalf("confirmed alias speech was not canonicalized: %+v", dubs)
+	}
+}
+
 func TestPronounSpeechKeepsNamedSubjectWhenAnotherCharacterIsObject(t *testing.T) {
 	content := `0—2秒｜草丛外围，马脸男子站在侧面，右手捏着尚未激发的火云符。齐姓道士握紧白马尾拂尘，视线越过马脸男子盯住草丛。
 2—4秒｜马脸男子向前压低半步。虬髯大汉从侧后方走近，右手握着朴刀。

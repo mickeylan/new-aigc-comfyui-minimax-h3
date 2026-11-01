@@ -3461,6 +3461,31 @@ func projectNarratorVoiceDescription(p models.Project) string {
 	return ""
 }
 
+func mergeExtractedCharacterSpeech(dubs []models.Dialogue, extracted []models.Dialogue) []models.Dialogue {
+	out := append([]models.Dialogue(nil), dubs...)
+	for _, speech := range extracted {
+		matched := false
+		for i := range out {
+			if canonicalDialogueText(out[i].Text) != canonicalDialogueText(speech.Text) {
+				continue
+			}
+			existingType, _ := normalizeScriptSpeech(out[i].SpeechType, out[i].Character)
+			if existingType == "narration" || existingType == "monologue" {
+				continue
+			}
+			out[i].Character = speech.Character
+			out[i].SpeechType = speech.SpeechType
+			matched = true
+			break
+		}
+		if !matched {
+			speech.Order = len(out) + 1
+			out = append(out, speech)
+		}
+	}
+	return out
+}
+
 func (s *ProjectService) sceneVideoDialogues(sc *models.Scene) []models.Dialogue {
 	var dubs []models.Dialogue
 	s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
@@ -3468,13 +3493,34 @@ func (s *ProjectService) sceneVideoDialogues(sc *models.Scene) []models.Dialogue
 	var project models.Project
 	s.db.First(&project, sc.ProjectID)
 	projectNarratorVoice := projectNarratorVoiceDescription(project)
+	var characters []models.Character
+	s.db.Where("project_id = ?", sc.ProjectID).Find(&characters)
+	projectNames := make([]string, 0, len(characters)*2)
+	canonicalByName := make(map[string]string, len(characters)*2)
+	for _, character := range characters {
+		canonical := strings.TrimSpace(character.Name)
+		if canonical == "" {
+			continue
+		}
+		projectNames = append(projectNames, canonical)
+		canonicalByName[canonical] = canonical
+		for _, alias := range s.confirmedCharacterAliases(sc.ProjectID, canonical) {
+			projectNames = append(projectNames, alias)
+			canonicalByName[alias] = canonical
+		}
+	}
+	projectSpeech := explicitlyQuotedCharacterSpeech(sc.Content, projectNames)
+	for i := range projectSpeech {
+		if canonical := canonicalByName[projectSpeech[i].Character]; canonical != "" {
+			projectSpeech[i].Character = canonical
+		}
+	}
+	dubs = mergeExtractedCharacterSpeech(dubs, projectSpeech)
 	for i := range dubs {
 		if (dubs[i].SpeechType == "narration" || isNarrationSpeaker(dubs[i].Character)) && projectNarratorVoice != "" {
 			dubs[i].H3VoiceDescription = projectNarratorVoice
 		}
 	}
-	var characters []models.Character
-	s.db.Where("project_id = ?", sc.ProjectID).Find(&characters)
 	for i := range dubs {
 		if dubs[i].H3VoiceDescription == "" {
 			continue
