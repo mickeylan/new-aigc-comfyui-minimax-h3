@@ -59,6 +59,29 @@ func TestGenerateScriptRequiresExplicitConsistentEpisodeBeforeClaim(t *testing.T
 	}
 }
 
+func TestGenerateScriptRedirectsUnplannedRollingEpisodeWithoutClaim(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "rolling", Episodes: 60, Scripts: `{"1":"episode one"}`, Status: "script_done", PipelineEpisode: 9}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{DB: db, Projects: &ProjectService{db: db}}
+	w := generateScriptRequest(svc, project.ID, "?episode_n=2", `{"episode_n":2}`)
+	if w.Code != http.StatusConflict || !bytes.Contains(w.Body.Bytes(), []byte(`/adaptation?episode=2`)) {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var after models.Project
+	if err := db.First(&after, project.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if after.PipelineStage != "" || after.PipelineEpisode != 9 || after.Status != "script_done" {
+		t.Fatalf("unplanned episode claimed project: %+v", after)
+	}
+}
+
 func TestClaimManualScriptPersistsRequestedEpisode(t *testing.T) {
 	db := newTestDB(t)
 	if err := db.AutoMigrate(&models.Project{}); err != nil {
