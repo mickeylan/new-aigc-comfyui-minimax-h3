@@ -119,6 +119,11 @@ func (s *AssetReconciliationService) Apply(projectID uint, decisions []AssetReco
 						return err
 					}
 				}
+				if d.EntityType == "character" && normalizeCanonName(d.ProposedName) != normalizeCanonName(targetName) {
+					if err := mergeDuplicateCharacterRecord(tx, projectID, d.ProposedName, d.TargetID); err != nil {
+						return err
+					}
+				}
 				if err := rewriteSceneNameReferences(tx, projectID, d.EntityType, d.ProposedName, targetName); err != nil {
 					return err
 				}
@@ -128,6 +133,120 @@ func (s *AssetReconciliationService) Apply(projectID uint, decisions []AssetReco
 		}
 		return nil
 	})
+}
+
+func mergeDuplicateCharacterRecord(tx *gorm.DB, projectID uint, sourceName string, targetID uint) error {
+	var target models.Character
+	if err := tx.Where("id = ? AND project_id = ?", targetID, projectID).First(&target).Error; err != nil {
+		return err
+	}
+	var characters []models.Character
+	if err := tx.Where("project_id = ?", projectID).Find(&characters).Error; err != nil {
+		return err
+	}
+	var source *models.Character
+	for i := range characters {
+		if characters[i].ID != target.ID && normalizeCanonName(characters[i].Name) == normalizeCanonName(sourceName) {
+			source = &characters[i]
+			break
+		}
+	}
+	if source == nil {
+		return nil // the proposed name was only prose/alias, not a duplicate Character row
+	}
+
+	// The selected target is authoritative. Source values only fill missing target fields;
+	// reviewed target assets and profile facts are never overwritten.
+	updates := map[string]any{}
+	fill := func(column, current, fallback string) {
+		if strings.TrimSpace(current) == "" && strings.TrimSpace(fallback) != "" {
+			updates[column] = fallback
+		}
+	}
+	fill("role", target.Role, source.Role)
+	fill("gender", target.Gender, source.Gender)
+	fill("trait", target.Trait, source.Trait)
+	fill("style", target.Style, source.Style)
+	fill("portrait", target.Portrait, source.Portrait)
+	fill("portrait_engine", target.PortraitEngine, source.PortraitEngine)
+	fill("sheet", target.Sheet, source.Sheet)
+	fill("voice", target.Voice, source.Voice)
+	fill("voice_ref", target.VoiceRef, source.VoiceRef)
+	fill("voice_id", target.VoiceID, source.VoiceID)
+	fill("voice_model", target.VoiceModel, source.VoiceModel)
+	fill("appearance", target.Appearance, source.Appearance)
+	fill("personality", target.Personality, source.Personality)
+	fill("background", target.Background, source.Background)
+	fill("relationships", target.Relationships, source.Relationships)
+	fill("emotions", target.Emotions, source.Emotions)
+	fill("habits", target.Habits, source.Habits)
+	fill("wardrobe_detail", target.WardrobeDetail, source.WardrobeDetail)
+	fill("lighting_mood", target.LightingMood, source.LightingMood)
+	fill("color_palette", target.ColorPalette, source.ColorPalette)
+	fill("reference_prompt", target.ReferencePrompt, source.ReferencePrompt)
+	fill("review_note", target.ReviewNote, source.ReviewNote)
+	if target.ProfileStatus != models.ProfileStatusApproved && source.ProfileStatus == models.ProfileStatusApproved {
+		updates["profile_status"] = source.ProfileStatus
+	}
+	if source.ProfileVersion > target.ProfileVersion {
+		updates["profile_version"] = source.ProfileVersion
+	}
+	if len(updates) > 0 {
+		if err := tx.Model(&target).Updates(updates).Error; err != nil {
+			return err
+		}
+	}
+
+	// Preserve all dependent production data while collapsing the duplicate identity.
+	if tx.Migrator().HasTable("scene_character_outfits") {
+		if err := tx.Exec("DELETE FROM scene_character_outfits WHERE character_id = ? AND EXISTS (SELECT 1 FROM scene_character_outfits t2 WHERE t2.character_id = ? AND scene_character_outfits.scene_id = t2.scene_id)", source.ID, target.ID).Error; err != nil {
+			return err
+		}
+		if err := tx.Table("scene_character_outfits").Where("character_id = ?", source.ID).Update("character_id", target.ID).Error; err != nil {
+			return err
+		}
+	}
+	if tx.Migrator().HasTable("shot_character_outfits") {
+		if err := tx.Exec("DELETE FROM shot_character_outfits WHERE character_id = ? AND EXISTS (SELECT 1 FROM shot_character_outfits t2 WHERE t2.character_id = ? AND shot_character_outfits.shot_id = t2.shot_id)", source.ID, target.ID).Error; err != nil {
+			return err
+		}
+		if err := tx.Table("shot_character_outfits").Where("character_id = ?", source.ID).Update("character_id", target.ID).Error; err != nil {
+			return err
+		}
+	}
+	for _, table := range []string{"character_looks", "character_outfits", "character_motion_references"} {
+		if tx.Migrator().HasTable(table) {
+			if err := tx.Table(table).Where("character_id = ?", source.ID).Update("character_id", target.ID).Error; err != nil {
+				return fmt.Errorf("迁移%s失败（可能存在同名资产，请先重命名冲突项）: %w", table, err)
+			}
+		}
+	}
+	if tx.Migrator().HasTable("screen_text_cues") {
+		if err := tx.Table("screen_text_cues").Where("character_id = ?", source.ID).Update("character_id", target.ID).Error; err != nil {
+			return err
+		}
+	}
+	if tx.Migrator().HasTable("asset_variants") {
+		if err := tx.Table("asset_variants").Where("project_id = ? AND entity_id = ? AND entity_type IN ?", projectID, source.ID, []string{"character_portrait", "character_sheet"}).Update("entity_id", target.ID).Error; err != nil {
+			return err
+		}
+	}
+	if tx.Migrator().HasTable("dialogues") {
+		if err := tx.Model(&models.Dialogue{}).Where("project_id = ? AND character = ?", projectID, source.Name).Update("character", target.Name).Error; err != nil {
+			return err
+		}
+	}
+	if tx.Migrator().HasTable("shots") && tx.Migrator().HasTable("scenes") {
+		if err := tx.Model(&models.Shot{}).Where("listener_character = ? AND scene_id IN (SELECT id FROM scenes WHERE project_id = ?)", source.Name, projectID).Update("listener_character", target.Name).Error; err != nil {
+			return err
+		}
+	}
+	if tx.Migrator().HasTable("character_alias_candidates") {
+		if err := tx.Model(&models.CharacterAliasCandidate{}).Where("project_id = ? AND canonical_name = ?", projectID, source.Name).Update("canonical_name", target.Name).Error; err != nil {
+			return err
+		}
+	}
+	return tx.Delete(&models.Character{}, source.ID).Error
 }
 
 func createLocalCanon(tx *gorm.DB, projectID uint, entityType, name string) error {
@@ -203,25 +322,31 @@ func rewriteSceneNameReferences(tx *gorm.DB, projectID uint, entityType, from, t
 		}
 		if len(updates) > 0 {
 			updates["prompt_stale"] = true
-			updates["image_task_id"], updates["image_file"] = "", ""
-			updates["video_task_id"], updates["video_file"], updates["video_input_file"] = "", "", ""
-			updates["video_gpu"], updates["status"] = nil, "pending"
+			if entityType != "character" {
+				// Location/prop replacement can change visible pixels. Preserve the reviewed
+				// storyboard, but invalidate dependent video until the user reviews it.
+				updates["video_task_id"], updates["video_file"], updates["video_input_file"] = "", "", ""
+				updates["video_gpu"] = nil
+				updates["status"] = gorm.Expr("CASE WHEN image_file <> '' THEN 'image_ready' ELSE 'pending' END")
+			}
 			if err := tx.Model(sc).Updates(updates).Error; err != nil {
 				return err
 			}
-			if err := MarkSceneCandidatesStale(tx, projectID, sc.ID, "", "资产对账已改变权威引用"); err != nil {
-				return err
-			}
-			var dependents []models.SceneContinuity
-			if err := tx.Where("source_scene_id = ? AND mode != ?", sc.ID, models.ContinuityModeIndependent).Find(&dependents).Error; err != nil {
-				return err
-			}
-			for _, dependency := range dependents {
-				if err := tx.Model(&dependency).Updates(map[string]any{"status": "source_invalidated", "error": "上游资产对账已变化"}).Error; err != nil {
+			if entityType != "character" {
+				if err := MarkSceneCandidatesStale(tx, projectID, sc.ID, "video", "资产对账已改变权威引用"); err != nil {
 					return err
 				}
-				if err := invalidateSceneVideoTx(tx, projectID, dependency.SceneID, "上游资产对账已变化"); err != nil {
+				var dependents []models.SceneContinuity
+				if err := tx.Where("source_scene_id = ? AND mode != ?", sc.ID, models.ContinuityModeIndependent).Find(&dependents).Error; err != nil {
 					return err
+				}
+				for _, dependency := range dependents {
+					if err := tx.Model(&dependency).Updates(map[string]any{"status": "source_invalidated", "error": "上游资产对账已变化"}).Error; err != nil {
+						return err
+					}
+					if err := invalidateSceneVideoTx(tx, projectID, dependency.SceneID, "上游资产对账已变化"); err != nil {
+						return err
+					}
 				}
 			}
 		}

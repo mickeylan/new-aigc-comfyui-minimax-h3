@@ -1169,8 +1169,11 @@ func TestProjectCharacterReconciliationPersistsAliasAndBindsAllScenes(t *testing
 	ps.db.Create(&project)
 	character := models.Character{ProjectID: project.ID, Name: "青衣高大男子", Portrait: "stone-man.png"}
 	ps.db.Create(&character)
-	scene := models.Scene{ProjectID: project.ID, EpisodeN: 2, Characters: "柳石", VisibleCharacters: "柳石"}
+	duplicate := models.Character{ProjectID: project.ID, Name: "柳石", Sheet: "liu-shi-sheet.png", VoiceRef: "liu-shi.wav"}
+	ps.db.Create(&duplicate)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 2, Characters: "柳石", VisibleCharacters: "柳石", ImageFile: "approved-storyboard.png", VideoFile: "approved-video.mp4", Status: "video_ready"}
 	ps.db.Create(&scene)
+	ps.db.Create(&models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Character: "柳石", Text: "别怕。", Order: 1})
 	reconciliation := NewAssetReconciliationService(ps.db)
 	if err := reconciliation.Apply(project.ID, []AssetReconciliationDecision{{EntityType: "character", ProposedName: "柳石", Action: "merge", TargetID: character.ID}}); err != nil {
 		t.Fatal(err)
@@ -1182,13 +1185,28 @@ func TestProjectCharacterReconciliationPersistsAliasAndBindsAllScenes(t *testing
 	if alias.CanonicalName != "青衣高大男子" || alias.Status != "confirmed" {
 		t.Fatalf("alias not confirmed: %+v", alias)
 	}
+	var mergedCharacters []models.Character
+	if err := ps.db.Where("project_id = ?", project.ID).Find(&mergedCharacters).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(mergedCharacters) != 1 || mergedCharacters[0].ID != character.ID || mergedCharacters[0].Portrait != "stone-man.png" || mergedCharacters[0].Sheet != "liu-shi-sheet.png" || mergedCharacters[0].VoiceRef != "liu-shi.wav" {
+		t.Fatalf("duplicate Character rows/assets were not merged: %+v", mergedCharacters)
+	}
+	var mergedDialogue models.Dialogue
+	if err := ps.db.First(&mergedDialogue).Error; err != nil || mergedDialogue.Character != "青衣高大男子" {
+		t.Fatalf("Dialogue identity was not merged: dialogue=%+v err=%v", mergedDialogue, err)
+	}
+	var preservedScene models.Scene
+	if err := ps.db.First(&preservedScene, scene.ID).Error; err != nil || preservedScene.ImageFile != "approved-storyboard.png" || preservedScene.VideoFile != "approved-video.mp4" || preservedScene.Status != "video_ready" {
+		t.Fatalf("identity merge must preserve reviewed Scene media: scene=%+v err=%v", preservedScene, err)
+	}
 	aliasScene := models.Scene{ProjectID: project.ID, EpisodeN: 3, Characters: "柳石", VisibleCharacters: "柳石", ImageFile: "storyboard.png"}
 	if err := ps.db.Create(&aliasScene).Error; err != nil {
 		t.Fatal(err)
 	}
 	candidates := ps.sceneReferenceCandidates(&aliasScene)
-	if len(candidates) != 1 || !strings.Contains(candidates[0].Label, "别名「柳石」") {
-		t.Fatalf("confirmed alias missing from reference candidate: %+v", candidates)
+	if len(candidates) != 2 || !strings.Contains(candidates[0].Label, "别名「柳石」") || !strings.Contains(candidates[1].Label, "别名「柳石」") {
+		t.Fatalf("confirmed alias or merged assets missing from reference candidates: %+v", candidates)
 	}
 	lines := []string{"- <Picture 1>：" + candidates[0].Label}
 	if got := useSubjectTags("柳石挡在柳乐儿身前。", lines); strings.Contains(got, "柳石") || !strings.Contains(got, "<Subject 1>") {
