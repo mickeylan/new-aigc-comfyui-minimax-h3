@@ -472,7 +472,7 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 	if err := s.db.Where("project_id = ? AND episode_n = ?", projectID, episode).First(&ep).Error; err != nil {
 		return nil, err
 	}
-	if ep.Status != "approved" {
+	if ep.Status != "approved" && ep.Status != "scripted" && ep.Status != "reviewed" {
 		return nil, fmt.Errorf("episode mapping must be approved")
 	}
 	if episode > 1 {

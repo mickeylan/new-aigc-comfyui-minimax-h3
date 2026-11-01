@@ -48,10 +48,10 @@
         </div>
         <div v-if="detail?.batch?.id===batch.id" class="episode-list">
           <article v-for="ep in detail.episodes" :key="ep.id">
-            <div><input v-model="ep.title" class="input"><span>第{{ep.episode_n}}集 · 章节{{ep.chapter_start}}–{{ep.chapter_end}} · {{episodeStatusLabel(ep.status)}}</span></div>
+            <div><input v-model="ep.title" class="input"><span>第{{ep.episode_n}}集 · 章节{{ep.chapter_start}}–{{ep.chapter_end}} · {{episodeHasScript(ep)?'剧本已生成':episodeStatusLabel(ep.status)}}</span></div>
             <textarea v-model="ep.adaptation_goal" class="textarea" rows="2" placeholder="本集改编目标"></textarea>
             <div class="state-grid"><label>开始状态<textarea v-model="ep.opening_state" class="textarea" rows="2"></textarea></label><label>结束状态<textarea v-model="ep.ending_state" class="textarea" rows="2"></textarea></label><label>结尾钩子<textarea v-model="ep.hook" class="textarea" rows="2"></textarea></label></div>
-            <div class="actions"><button class="btn btn-xs btn-secondary" :disabled="batch.status==='approved'||busy" @click="saveEpisode(ep)">保存映射</button><button v-if="ep.status==='draft'" type="button" class="btn btn-xs" :disabled="busy" title="审核并应用整个批次的Episode映射；已生产分集保持锁定" @click="review(batch,'approve')">审核并应用本批映射</button><button v-else-if="ep.status==='approved'" type="button" class="btn btn-xs" :disabled="busy" @click="script(ep)">生成本集剧本</button><button v-else type="button" class="btn btn-xs btn-secondary" :disabled="busy" @click="script(ep)">本集剧本已生成</button><button v-if="ep.status==='scripted'" type="button" class="btn btn-xs btn-secondary" :disabled="busy" @click="reviewEpisode(ep)">连续性复审</button><button v-if="ep.status==='scripted'||ep.status==='reviewed'" type="button" class="btn btn-xs btn-secondary" :disabled="busy" @click="generateAssets(ep)">AI补全角色/场景/道具</button><button v-if="ep.status==='scripted'||ep.status==='reviewed'" type="button" class="btn btn-xs btn-ghost" :disabled="busy" @click="syncAssets(ep)">仅同步缺失卡片</button><router-link class="btn btn-xs btn-ghost" :to="`/projects/${id}/episodes/${ep.episode_n}/screenplay`">结构化编辑</router-link></div>
+            <div class="actions"><button class="btn btn-xs btn-secondary" :disabled="batch.status==='approved'||busy" @click="saveEpisode(ep)">保存映射</button><button v-if="ep.status==='draft'" type="button" class="btn btn-xs" :disabled="busy" title="审核并应用整个批次的Episode映射；已生产分集保持锁定" @click="review(batch,'approve')">审核并应用本批映射</button><button v-else type="button" class="btn btn-xs" :class="{'btn-secondary':episodeHasScript(ep)}" :disabled="busy" @click="script(ep)">{{episodeHasScript(ep)?'重新生成本集剧本':'生成本集剧本'}}</button><button v-if="ep.status==='scripted'" type="button" class="btn btn-xs btn-secondary" :disabled="busy" @click="reviewEpisode(ep)">连续性复审</button><button v-if="ep.status==='scripted'||ep.status==='reviewed'" type="button" class="btn btn-xs btn-secondary" :disabled="busy" @click="generateAssets(ep)">AI补全角色/场景/道具</button><button v-if="ep.status==='scripted'||ep.status==='reviewed'" type="button" class="btn btn-xs btn-ghost" :disabled="busy" @click="syncAssets(ep)">仅同步缺失卡片</button><router-link class="btn btn-xs btn-ghost" :to="`/projects/${id}/episodes/${ep.episode_n}/screenplay`">结构化编辑</router-link></div>
           </article>
           <section v-if="snapshot?.batch_id===batch.id" class="snapshot-editor">
             <h4>批次结束状态快照 <span class="badge">{{snapshot.status}}</span></h4>
@@ -79,6 +79,7 @@ const batchCount=computed(()=>Number(form.episode_end)-Number(form.episode_start
 const approvedEnd=computed(()=>Math.max(0,...batches.value.filter(v=>v.status==='approved'||v.status==='produced').map(v=>v.episode_end)))
 const statusLabel=s=>({draft:'待生成',generating:'生成中',review:'待审核',approved:'已审核',produced:'已生产',cancelled:'已取消'}[s]||s)
 const episodeStatusLabel=s=>({draft:'映射待审核',approved:'映射已审核',scripted:'剧本已生成',reviewed:'连续性已通过'}[s]||s)
+const episodeHasScript=ep=>Boolean(String(ep?.script||'').trim())
 async function load(){try{const [p,a,b]=await Promise.all([api.project(id),api.novelArcs(id),api.planningBatches(id)]);project.value=p.data.project||p.data;arcs.value=a.data.arcs||a.data||[];batches.value=b.data.batches||[];totalTarget.value=b.data.total_episode_target||0;if(!form.title){form.episode_start=nextStart.value;form.episode_end=nextStart.value+9;form.title=`第${batches.value.length+1}批`}}catch(e){error.value=e.response?.data?.error||e.message}}
 async function run(fn){busy.value=true;error.value='';try{await fn();await load()}catch(e){error.value=e.response?.data?.error||e.message}finally{busy.value=false}}
 const createBatch=()=>run(async()=>{await api.createPlanningBatch(id,{...form});form.title='';detail.value=null})
@@ -105,11 +106,7 @@ async function reviewEpisode(ep){
   await run(async()=>{await api.reviewAdaptation(id,ep.episode_n,override);detail.value=(await api.planningBatch(id,ep.batch_id)).data})
 }
 function script(ep){
-  if(ep.status==='scripted'||ep.status==='reviewed'){
-    error.value=`第${ep.episode_n}集剧本已经生成；请进入“结构化编辑”查看或修改。`
-    return
-  }
-  if(ep.status!=='approved'){
+  if(ep.status!=='approved'&&ep.status!=='scripted'&&ep.status!=='reviewed'){
     error.value=`第${ep.episode_n}集映射尚未审核。请先检查本批各集的开始状态、结束状态、钩子和人物名称，再点击批次上的“审核方案并应用Episode”。`
     return
   }

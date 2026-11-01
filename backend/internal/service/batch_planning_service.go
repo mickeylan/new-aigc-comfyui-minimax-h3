@@ -840,8 +840,17 @@ func (s *BatchPlanningService) ApproveBatch(projectID, batchID uint, reviewerID 
 	now := time.Now()
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		for _, ep := range eps {
-			if err := tx.Model(&models.EpisodeAdaptation{}).Where("id = ?", ep.ID).Update("status", "approved").Error; err != nil {
-				return err
+			_, produced := locked[ep.EpisodeN]
+			if !produced {
+				if err := tx.Model(&models.EpisodeAdaptation{}).Where("id = ?", ep.ID).Update("status", "approved").Error; err != nil {
+					return err
+				}
+			}
+			if produced {
+				if err := tx.Model(&models.BatchEpisode{}).Where("batch_id = ? AND episode_n = ?", batchID, ep.EpisodeN).Update("status", BatchEpisodeStatusProduced).Error; err != nil {
+					return err
+				}
+				continue
 			}
 			var durable models.Episode
 			e := tx.Where("project_id = ? AND episode_number = ?", projectID, ep.EpisodeN).First(&durable).Error
@@ -856,7 +865,7 @@ func (s *BatchPlanningService) ApproveBatch(projectID, batchID uint, reviewerID 
 				return err
 			}
 		}
-		if err := tx.Model(&models.BatchEpisode{}).Where("batch_id = ?", batchID).Update("status", BatchEpisodeStatusApproved).Error; err != nil {
+		if err := tx.Model(&models.BatchEpisode{}).Where("batch_id = ? AND status <> ?", batchID, BatchEpisodeStatusProduced).Update("status", BatchEpisodeStatusApproved).Error; err != nil {
 			return err
 		}
 		updates := map[string]any{"status": BatchStatusApproved, "review_status": ReviewStatusApproved, "reviewer_notes": notes, "reviewed_at": &now, "can_roll_next": true, "approved_count": len(eps)}

@@ -244,6 +244,45 @@ func TestPlanningBatchRejectsOverlapAndBlocksNextUntilReview(t *testing.T) {
 		t.Fatal("previous batch lineage missing")
 	}
 }
+
+func TestApprovePlanningBatchPreservesProducedEpisodeStatusAndScript(t *testing.T) {
+	s := newTestBatchService(t)
+	batch, err := s.CreateBatch(1, BatchCreateInput{Title: "第一批", EpisodeStart: 1, EpisodeEnd: 5, ChapterStart: 1, ChapterEnd: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.GenerateBatchPlan(batch.ID, BatchGenerationParams{Generation: 1}); err != nil {
+		t.Fatal(err)
+	}
+	var first models.EpisodeAdaptation
+	if err := s.db.Where("project_id = ? AND episode_n = 1", 1).First(&first).Error; err != nil {
+		t.Fatal(err)
+	}
+	first.Status, first.Script, first.ContinuityStatus = "scripted", "已有剧本", "passed"
+	if err := s.db.Save(&first).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Create(&models.Scene{ProjectID: 1, EpisodeN: 1, Order: 1, Title: "已生产"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ApproveBatch(1, batch.ID, 0, "approved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.First(&first, first.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if first.Status != "scripted" || first.Script != "已有剧本" {
+		t.Fatalf("approval downgraded produced episode: %+v", first)
+	}
+	var link models.BatchEpisode
+	if err := s.db.Where("batch_id = ? AND episode_n = 1", batch.ID).First(&link).Error; err != nil {
+		t.Fatal(err)
+	}
+	if link.Status != BatchEpisodeStatusProduced {
+		t.Fatalf("produced batch episode status lost: %+v", link)
+	}
+}
+
 func TestApprovePlanningBatchCreatesDurableEpisodes(t *testing.T) {
 	s := newTestBatchService(t)
 	b, e := s.CreateBatch(1, BatchCreateInput{Title: "第一批", EpisodeStart: 1, EpisodeEnd: 5, ChapterStart: 1, ChapterEnd: 5})
