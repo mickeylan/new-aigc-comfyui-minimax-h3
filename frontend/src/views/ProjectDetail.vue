@@ -463,6 +463,7 @@
           </div>
 
           <p class="scene-content">{{ sc.content }}</p>
+          <div class="scene-blocking-summary"><button class="btn btn-xs btn-secondary" @click="openDialogueAnalysis(sc)">对白分析</button><button class="btn btn-xs btn-secondary scene-blocking-entry" @click="openBlocking(sc)">人物站位</button><span>{{ blockingSummary(sc) }}</span></div>
           <div class="scene-flow-status" aria-label="Scene生产进度"><span v-for="item in sceneWorkflowStages(sc)" :key="item.key" class="badge" :class="item.done?'badge-green':item.current?'badge-orange':'badge-gray'">{{item.label}}</span></div>
           <p v-if="sc.image_prompt" class="scene-prompt">🎨 {{ sc.image_prompt }}</p>
           <div v-if="sceneDialogues(sc).length" class="scene-dialogues">
@@ -675,6 +676,24 @@
           <div v-if="editingScene.image_file" class="scene-workspace-preview"><img :src="imageUrl(editingScene)" alt="当前分镜图" /></div>
           <div class="scene-workspace-footer"><button class="btn btn-ghost" @click="setSceneWorkspaceStep('director')">← 返回导演拆镜</button><button class="btn btn-secondary" @click="openNextSceneWorkspace">保存进度并处理下一 Scene →</button><button class="btn btn-ghost" @click="closeSceneWorkspace">返回第 {{ scenePage }} 页</button></div>
         </div>
+      </div>
+    </div>
+
+    <div v-if="dialogueAnalysisScene" class="modal-mask" @click.self="dialogueAnalysisScene = null">
+      <div class="modal card blocking-modal"><h2>场景 {{dialogueAnalysisScene.order}} · 对白分析</h2><p class="field-hint">台词来自 Scene 原文引号，保持原字节与标点；AI 只分析归属。请审阅后显式应用，待确认项不会写入 Dialogue。</p>
+        <div class="modal-actions"><button class="btn btn-secondary" :disabled="dialogueAnalysisBusy" @click="analyzeDialogue">{{dialogueAnalysisBusy?'分析中…':'AI分析归属'}}</button></div>
+        <div v-for="item in dialogueAnalysis.items" :key="item.index" class="card"><label>原文台词 {{item.index+1}}（只读）</label><textarea :value="item.text" readonly class="textarea" rows="2"/><div class="field-row"><div class="field"><label>说话人</label><input v-model="item.speaker" class="input" placeholder="待确认"></div><div class="field"><label>受话人</label><input v-model="item.addressee" class="input"></div><div class="field"><label>类型</label><select v-model="item.speech_type" class="input"><option value="dialogue">对白</option><option value="offscreen_dialogue">画外对白</option><option value="monologue">内心独白</option><option value="narration">旁白</option></select></div><div class="field"><label>时间段</label><input v-model="item.time_segment" class="input" placeholder="如 2—5秒"></div></div><span v-if="item.needs_review" class="badge badge-orange">待确认</span></div>
+        <p v-if="!dialogueAnalysis.items.length" class="field-hint">尚未提取；点击 AI 分析。即使 AI 失败，已抽取的原文台词仍会显示。</p><div v-if="dialogueAnalysisWarning" class="warning">{{dialogueAnalysisWarning}}</div><div class="modal-actions"><button class="btn btn-ghost" @click="dialogueAnalysisScene=null">取消</button><button class="btn" :disabled="dialogueAnalysisBusy||!dialogueAnalysis.items.length" @click="applyDialogueAnalysis">显式应用到对白表</button></div>
+      </div>
+    </div>
+
+    <div v-if="blockingScene" class="modal-mask" @click.self="blockingScene = null">
+      <div class="modal card blocking-modal"><h2>场景 {{blockingScene.order}} · 人物站位</h2><p class="field-hint">原文事实与 AI 建议分开保存；仅作为后续分镜图/视频提示词上下文，不自动生成、不阻断生成。</p>
+        <div class="modal-actions"><button class="btn btn-secondary" :disabled="blockingBusy" @click="analyzeBlocking">{{blockingBusy?'分析中…':'AI站位分析'}}</button><button class="btn btn-ghost" :disabled="blockingBusy" @click="inheritBlocking">继承上一镜</button></div>
+        <div class="field-row"><div class="field"><label>原文事实（每行一条）</label><textarea v-model="blockingDraft.factsText" class="textarea" rows="4" /></div><div class="field"><label>站位建议（每行一条）</label><textarea v-model="blockingDraft.suggestionsText" class="textarea" rows="4" /></div></div>
+        <div class="blocking-characters"><div class="field-label-actions"><label>人物表</label><button type="button" class="btn btn-sm btn-secondary" @click="addBlockingCharacter">＋ 添加人物</button></div><div v-for="(character,index) in blockingDraft.characters" :key="index" class="blocking-character-row"><input v-model="character.name" class="input" placeholder="姓名"><input v-model="character.position" class="input" placeholder="位置"><input v-model="character.facing" class="input" placeholder="朝向"><input v-model="character.gaze" class="input" placeholder="视线"><input v-model="character.visibility" class="input" placeholder="可见性"><button type="button" class="btn btn-sm btn-danger" @click="removeBlockingCharacter(index)">删除</button></div></div>
+        <div class="field-row"><div class="field"><label>机位 / 镜头</label><input v-model="blockingDraft.camera" class="input"></div><div class="field"><label>起始状态</label><input v-model="blockingDraft.start" class="input"></div><div class="field"><label>结束状态</label><input v-model="blockingDraft.end" class="input"></div></div><div class="field"><label>站位摘要</label><textarea v-model="blockingDraft.summary" class="textarea" rows="2" /></div>
+        <div v-if="blockingError" class="notice error-notice">{{blockingError}}</div><div class="modal-actions"><button class="btn btn-ghost" @click="blockingScene=null">取消</button><button class="btn" :disabled="blockingBusy" @click="saveBlocking">显式保存</button></div>
       </div>
     </div>
 
@@ -1255,6 +1274,14 @@ const redesigningScenePrompt = ref(false)
 const expandingSceneContent = ref(false)
 const sceneExpandRequirements = ref('')
 const sceneExpandPreview = ref(null)
+const dialogueAnalysisScene = ref(null)
+const dialogueAnalysis = reactive({ items: [], source: '' })
+const dialogueAnalysisBusy = ref(false)
+const dialogueAnalysisWarning = ref('')
+const blockingScene = ref(null)
+const blockingDraft = reactive({ factsText: '', suggestionsText: '', characters: [], camera: '', start: '', end: '', summary: '' })
+const blockingBusy = ref(false)
+const blockingError = ref('')
 const savingProject = ref(false)
 const sceneError = ref('')
 const projectError = ref('')
@@ -2926,6 +2953,23 @@ async function removeProject() {
 }
 
 // ---------- Scene 导演工作台 ----------
+
+function parseDialogueAnalysis(sc) { try { return JSON.parse(sc?.dialogue_analysis_json || '') } catch { return null } }
+function setDialogueAnalysis(value = {}) { dialogueAnalysis.items = Array.isArray(value.items) ? value.items.map(item => ({ ...item })) : []; dialogueAnalysis.source = value.source || '' }
+function openDialogueAnalysis(sc) { dialogueAnalysisScene.value = sc; dialogueAnalysisWarning.value = ''; setDialogueAnalysis(parseDialogueAnalysis(sc) || {}) }
+async function analyzeDialogue() { if (!dialogueAnalysisScene.value) return; const sid = dialogueAnalysisScene.value.id; dialogueAnalysisBusy.value = true; dialogueAnalysisWarning.value = ''; try { const { data } = await api.analyzeSceneDialogue(id(), sid); if (dialogueAnalysisScene.value?.id !== sid) return; setDialogueAnalysis(data.analysis); dialogueAnalysisWarning.value = data.warning || '' } catch (e) { if (dialogueAnalysisScene.value?.id === sid) dialogueAnalysisWarning.value = e.response?.data?.error || '对白分析失败' } finally { if (dialogueAnalysisScene.value?.id === sid) dialogueAnalysisBusy.value = false } }
+async function applyDialogueAnalysis() { if (!dialogueAnalysisScene.value) return; const sid = dialogueAnalysisScene.value.id; dialogueAnalysisBusy.value = true; try { const { data } = await api.applySceneDialogue(id(), sid, { items: dialogueAnalysis.items, source: 'ai_reviewed' }); if (dialogueAnalysisScene.value?.id !== sid) return; const warnings = data.warnings || []; toast.success(`已应用 ${data.applied} 条对白${warnings.length ? `；${warnings.join('；')}` : ''}`); dialogueAnalysisScene.value = null; await load() } catch (e) { if (dialogueAnalysisScene.value?.id === sid) dialogueAnalysisWarning.value = e.response?.data?.error || '应用对白失败' } finally { if (dialogueAnalysisScene.value?.id === sid) dialogueAnalysisBusy.value = false } }
+
+function parseBlocking(sc) { try { return JSON.parse(sc?.blocking_json || '') } catch { return null } }
+function blockingSummary(sc) { const value = parseBlocking(sc); return value?.summary || (sc?.blocking_json ? '已保存站位' : '未设置') }
+function setBlockingDraft(value = {}) { blockingDraft.factsText = Array.isArray(value.facts) ? value.facts.join('\n') : ''; blockingDraft.suggestionsText = Array.isArray(value.suggestions) ? value.suggestions.join('\n') : ''; blockingDraft.characters = Array.isArray(value.characters) ? value.characters.map(character => ({ name: '', position: '', facing: '', gaze: '', visibility: '', ...character })) : []; blockingDraft.camera = value.camera || ''; blockingDraft.start = value.start || ''; blockingDraft.end = value.end || ''; blockingDraft.summary = value.summary || '' }
+function blockingPayload() { const lines = text => text.split(/\r?\n/).map(line => line.trim()).filter(Boolean); return { facts: lines(blockingDraft.factsText), suggestions: lines(blockingDraft.suggestionsText), characters: blockingDraft.characters.map(character => ({ ...character })), camera: blockingDraft.camera, start: blockingDraft.start, end: blockingDraft.end, summary: blockingDraft.summary } }
+function openBlocking(sc) { blockingScene.value = sc; blockingBusy.value = false; blockingError.value = ''; setBlockingDraft(parseBlocking(sc) || {}) }
+function addBlockingCharacter() { blockingDraft.characters.push({ name: '', position: '', facing: '', gaze: '', visibility: '' }) }
+function removeBlockingCharacter(index) { blockingDraft.characters.splice(index, 1) }
+async function analyzeBlocking() { if (!blockingScene.value) return; const sceneId = blockingScene.value.id; blockingBusy.value=true; blockingError.value=''; try { const {data}=await api.analyzeSceneBlocking(id(), sceneId); if (blockingScene.value?.id !== sceneId) return; setBlockingDraft(data.blocking) } catch(e) { if (blockingScene.value?.id === sceneId) blockingError.value=e.response?.data?.error||'AI站位分析失败' } finally { if (blockingScene.value?.id === sceneId) blockingBusy.value=false } }
+async function inheritBlocking() { if (!blockingScene.value) return; const sceneId = blockingScene.value.id; blockingBusy.value=true; blockingError.value=''; try { const {data}=await api.inheritSceneBlocking(id(), sceneId); if (blockingScene.value?.id !== sceneId) return; setBlockingDraft(data.blocking) } catch(e) { if (blockingScene.value?.id === sceneId) blockingError.value=e.response?.data?.error||'继承上一镜失败' } finally { if (blockingScene.value?.id === sceneId) blockingBusy.value=false } }
+async function saveBlocking() { if (!blockingScene.value) return; const sceneId=blockingScene.value.id; const value=blockingPayload(); blockingBusy.value=true; blockingError.value=''; try { const {data}=await api.saveSceneBlocking(id(),sceneId,value); if (blockingScene.value?.id !== sceneId) return; const local=scenes.value.find(x=>x.id===sceneId); if(local){local.blocking_json=JSON.stringify(data.blocking);local.prompt_stale=true} blockingScene.value=null; toast.success('人物站位已保存；现有图片、视频和执行稿均已保留') } catch(e) { if (blockingScene.value?.id === sceneId) blockingError.value=e.response?.data?.error||'保存站位失败' } finally { if (blockingScene.value?.id === sceneId) blockingBusy.value=false } }
 
 function setSceneWorkspaceStep(step) {
   if (!['scene', 'director', 'media'].includes(step)) return

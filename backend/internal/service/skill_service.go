@@ -95,6 +95,22 @@ func (s *SkillService) InitSystemSkills() error {
 			SystemPrompt:   "只输出合法JSON对象，字段为content和director_note。忠于当前场景事实和时长，只扩展可见表演过程，不新增剧情事件、能力、人物或台词；明确对白逐字保留。只生成预览，不执行保存或覆盖Shots。",
 			IsSystem:       true, Enabled: true, SortOrder: 1,
 		},
+		{
+			Name: "对白归属分析", Code: sceneDialogueAnalysisSkillCode, Operation: sceneDialogueAnalysisSkillCode, Version: 1,
+			Description:    "对程序抽取的原文引号台词按索引分析说话人、受话人、类型和时间段",
+			Stage:          models.SkillStageStoryboard,
+			PromptTemplate: "Scene原文：{{scene_content}}\n只读台词：{{dialogue_items}}",
+			SystemPrompt:   "只分析台词元数据并按输入index返回；不得改写、补写或丢弃原文台词，未知speaker标待确认。",
+			IsSystem:       true, Enabled: true, SortOrder: 1,
+		},
+		{
+			Name: "人物站位分析", Code: sceneBlockingSkillCode, Operation: sceneBlockingSkillCode, Version: 1,
+			Description:    "从Scene原文明示事实生成可编辑的站位、机位、视线、遮挡和动作前后空间关系预览",
+			Stage:          models.SkillStageStoryboard,
+			PromptTemplate: "Scene原文：{{scene_content}}\n上一镜已保存站位：{{previous_blocking}}",
+			SystemPrompt:   "只输出合法JSON，并严格区分facts原文事实与suggestions AI建议。不得从引用图片或文件名臆测视觉细节，不自动保存。",
+			IsSystem:       true, Enabled: true, SortOrder: 1,
+		},
 		// video_prompt 阶段技能
 		{
 			Name:           "视频提示词增强",

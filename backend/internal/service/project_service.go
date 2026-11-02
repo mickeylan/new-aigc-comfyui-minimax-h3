@@ -520,7 +520,7 @@ func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, err
 	if err := s.db.First(&project, sc.ProjectID).Error; err != nil {
 		return "", err
 	}
-	assetContext := s.assetContextForScene(sc)
+	assetContext := s.assetContextForScene(sc) + sceneBlockingPromptContext(sc)
 	shotContext := s.sceneShotContext(sc)
 	_, referenceLines, explicitReferences := s.selectedSceneReferenceFiles(sc, "krea2")
 	if !explicitReferences {
@@ -2369,7 +2369,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	if explicitTimedShotCount > 0 {
 		contentInstruction = "逐段忠实编译Scene显式时间轴中的全部可见事实；不得把具体观察、手部动作、道具状态、步法、视线、说话动作或结束状态概括掉。"
 	}
-	user := fmt.Sprintf("目标时长：%.1f秒。%s场景剧情中已明确存在的每个[Shot N]都必须原序保留，禁止合并或删除。%s\n\n【场景剧情（视觉与时间线权威）】\n%s\n\n【Shot导演设计（仅在Scene没有显式时间轴时作为动作权威）】\n%s\n\n【结构化对白（仅判断口型时机）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s", normalizeSceneDuration(sc.Duration), contentInstruction, actionTask, canonicalSceneContent, shotContext, dialogueContext, strings.Join(refLines, "\n"))
+	user := fmt.Sprintf("目标时长：%.1f秒。%s场景剧情中已明确存在的每个[Shot N]都必须原序保留，禁止合并或删除。%s\n\n【场景剧情（视觉与时间线权威）】\n%s\n\n【Shot导演设计（仅在Scene没有显式时间轴时作为动作权威）】\n%s\n\n【结构化对白（仅判断口型时机）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s%s", normalizeSceneDuration(sc.Duration), contentInstruction, actionTask, canonicalSceneContent, shotContext, dialogueContext, strings.Join(refLines, "\n"), sceneBlockingPromptContext(sc))
 	policy, err := NewPromptPolicyService(s.db).Resolve(PromptPolicyContext{ProjectID: sc.ProjectID, SceneID: &sc.ID}, PromptPolicyVideoPolish, system)
 	if err != nil {
 		return "", fmt.Errorf("解析视频提示词策略失败: %w", err)
@@ -3122,7 +3122,7 @@ func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Di
 	for _, name := range names {
 		// 接受“林采薇说道：\"...\"”“传来林采薇的声音说道：\"...\"”等明确发声写法。
 		// 必须同时具备已知角色名、明确说话动词和引号原文，避免把剧情说明猜成对白。
-		pattern := regexp.MustCompile(regexp.QuoteMeta(name) + `[^。！？!?\r\n]{0,30}?(?:厉喝|怒喝|大喝|喝道|喝喊|喊道|叫道|高喊|刚喊完|喊完|刚说完|说完|说道|说|问道|答道|开口(?:道)?)(?:\s*[:：]\s*["“]?|\s*["“])([^"”]+)["”]`)
+		pattern := regexp.MustCompile(regexp.QuoteMeta(name) + `[^。！？!?\r\n]{0,80}?(?:厉喝|怒喝|大喝|喝道|喝喊|喊道|叫道|高喊|刚喊完|喊完|刚说完|说完|说道|说|问道|答道|开口(?:道)?)(?:\s*[:：]\s*["“]?|\s*["“])([^"”]+)["”]`)
 		for _, match := range pattern.FindAllStringSubmatchIndex(content, -1) {
 			clauseStart := 0
 			if boundary := strings.LastIndexAny(content[:match[0]], "。！？!?；;\r\n"); boundary >= 0 {
@@ -3133,16 +3133,26 @@ func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Di
 			beforeName = sceneBracketTimelinePrefixPattern.ReplaceAllString(beforeName, "")
 			beforeName = sceneTimelinePrefixPattern.ReplaceAllString(beforeName, "")
 			continuityLead := strings.Trim(strings.TrimSpace(beforeName), "，,：:")
-			if beforeName != "" && continuityLead != "承接上一镜" && !strings.Contains(beforeName, "传来") && !strings.Contains(beforeName, "响起") {
+			lead := content[match[0]+len(name) : match[2]]
+			// A repeated name in the lead makes it an explicit new subject, as in
+			// “甲看向乙，乙说道”. Otherwise require the candidate at clause start.
+			if beforeName != "" && continuityLead != "承接上一镜" && !strings.Contains(beforeName, "传来") && !strings.Contains(beforeName, "响起") && !strings.Contains(lead, name) {
 				continue // the name is an object or other non-subject mention
 			}
-			lead := content[match[0]+len(name) : match[2]]
 			shadowed := false
+			nearestOtherAt := -1
 			for _, other := range names {
-				if other != name && strings.Contains(lead, other) {
-					shadowed = true
-					break
+				if other != name {
+					if at := strings.LastIndex(lead, other); at > nearestOtherAt {
+						nearestOtherAt = at
+					}
 				}
+			}
+			if nearestOtherAt >= 0 {
+				// Only the nearest character before the verb can replace the subject.
+				// 朝/向/对 introduce a recipient or gaze target, not a speaker.
+				prefix := strings.TrimSpace(lead[:nearestOtherAt])
+				shadowed = !strings.HasSuffix(prefix, "朝") && !strings.HasSuffix(prefix, "向") && !strings.HasSuffix(prefix, "对")
 			}
 			if shadowed {
 				continue // a nearer known character owns the speaking verb
@@ -3412,14 +3422,17 @@ func mergeExplicitSceneSpeech(sc *models.Scene, dubs []models.Dialogue) []models
 				continue
 			}
 			matched = true
-			// 场景原文同时具备角色名、明确说话动词和引号原文时，说话人是
-			// 确定事实；用它纠正早期模型生成的同文本错误说话人。
-			if existingCharacter != extracted.Character || existingType != extracted.SpeechType {
+			// Explicitly reviewed attribution is authoritative. Legacy rows retain the
+			// historical behavior: source extraction may repair speaker/type mistakes.
+			if out[i].Source != "ai_reviewed" {
 				out[i].Character = extracted.Character
 				out[i].SpeechType = extracted.SpeechType
-			}
-			if extracted.H3VoiceDescription != "" {
-				out[i].H3VoiceDescription = extracted.H3VoiceDescription
+				if extracted.H3VoiceDescription != "" {
+					out[i].H3VoiceDescription = extracted.H3VoiceDescription
+				}
+			} else {
+				_ = existingCharacter
+				_ = existingType
 			}
 			break
 		}

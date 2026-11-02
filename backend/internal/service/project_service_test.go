@@ -3118,6 +3118,42 @@ func TestPronounSpeechAttributionSwitchesOnlyOnClearPriorSubject(t *testing.T) {
 	}
 }
 
+func TestNamedSpeechAllowsInsertedActionsAndTargetCharacters(t *testing.T) {
+	content := `0—2秒｜燕承收回落在女童身上的视线，转而盯住抱住青年的柳乐儿。他用拇指捋过上唇虬髯，右手朴刀仍压在腿侧。2—5秒｜平视中近景。燕承向前迈出半步，先朝齐姓道士与马脸男子各使一个眼色，随后对青年抱拳，用试探的语气说道：“不知阁下如何称呼？在下血刀会燕承，正与两位道友联手捉拿这妖狐，阁下若是与此事无关，还请自行离去。”5—8秒｜他的目光在青年与女童之间来回移动，等待回答，握刀手始终没有放松。`
+	scene := &models.Scene{Characters: "燕承,女童,青年,柳乐儿,齐姓道士,马脸男子", VisibleCharacters: "燕承,女童,青年,柳乐儿,齐姓道士,马脸男子", Content: content, Duration: 8}
+	explicit := explicitSceneSpeech(scene)
+	if len(explicit) != 1 || explicit[0].Character != "燕承" || explicit[0].Text != "不知阁下如何称呼？在下血刀会燕承，正与两位道友联手捉拿这妖狐，阁下若是与此事无关，还请自行离去。" {
+		t.Fatalf("target character stole explicit speech: %+v", explicit)
+	}
+	ps := newTestProjectService(t)
+	project := models.Project{Title: "named-speech-targets"}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene.ProjectID = project.ID
+	if err := ps.db.Create(scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	dubs := ps.sceneVideoDialogues(scene)
+	if len(dubs) != 1 || dubs[0].Character != "燕承" || dubs[0].Text != explicit[0].Text {
+		t.Fatalf("scene dialogues lost named speech: %+v", dubs)
+	}
+	prompt := buildMiniMaxH3RefPrompt(scene, &project, dubs, []string{"- <Picture 1>：角色「燕承」四视图"})
+	if !strings.Contains(prompt, "<d>[Chinese] "+explicit[0].Text+"</d>") || !strings.Contains(prompt, "燕承") {
+		t.Fatalf("H3 prompt lost full named speech: %s", prompt)
+	}
+}
+
+func TestNamedSpeechSwitchesToExplicitNewSubjectButStaysConservative(t *testing.T) {
+	got := explicitlyQuotedCharacterSpeech("甲看向乙，乙说道：“由我来。”", []string{"甲", "乙"})
+	if len(got) != 1 || got[0].Character != "乙" || got[0].Text != "由我来。" {
+		t.Fatalf("explicit new subject attribution = %+v", got)
+	}
+	if got := explicitlyQuotedCharacterSpeech("甲乙一起说道：“出发。”", []string{"甲", "乙"}); len(got) != 0 {
+		t.Fatalf("ambiguous joint subject was attributed: %+v", got)
+	}
+}
+
 func TestPronounSpeechRejectsAmbiguousPriorActorsAndNonSpeechQuotes(t *testing.T) {
 	ambiguous := explicitSceneSpeech(&models.Scene{Characters: "甲,乙", Content: "甲和乙并肩走来。他喊道：“等等！”"})
 	if len(ambiguous) != 0 {
@@ -3215,21 +3251,17 @@ func TestStandardSceneSpeechParsesNamedOffscreenDialogue(t *testing.T) {
 	}
 }
 
-func TestExplicitSceneSpeakerCorrectsWrongStoredSpeaker(t *testing.T) {
+func TestExplicitSceneSpeechDoesNotOverwriteReviewedStoredSpeaker(t *testing.T) {
 	sc := &models.Scene{
 		Characters:        "雷晓飞",
 		VisibleCharacters: "雷晓飞",
 		VoiceCharacters:   "林采薇",
 		Content:           `门外传来林采薇的声音说道："雷叔、雷婶，早上好，我过来了。"`,
 	}
-	stored := []models.Dialogue{{Character: "雷晓飞", SpeechType: "dialogue", Text: "雷叔、雷婶，早上好，我过来了。", Order: 1}}
+	stored := []models.Dialogue{{Character: "雷晓飞", SpeechType: "dialogue", Text: "雷叔、雷婶，早上好，我过来了。", Order: 1, Source: "ai_reviewed"}}
 	got := mergeExplicitSceneSpeech(sc, stored)
-	if len(got) != 1 || got[0].Character != "林采薇" || got[0].SpeechType != "offscreen_dialogue" {
-		t.Fatalf("explicit source speaker did not correct stored speaker: %+v", got)
-	}
-	prompt := buildMiniMaxH3RefPrompt(sc, nil, got, []string{"- <Picture 1>：角色「雷晓飞」四视图"})
-	if !strings.Contains(prompt, "门外的林采薇 (S1) says in a clearly identified off-screen voice: <d>[Chinese] 雷叔、雷婶，早上好，我过来了。</d>") || strings.Contains(prompt, "雷晓飞 (S1) says") {
-		t.Fatalf("prompt used wrong speaker: %s", prompt)
+	if len(got) != 1 || got[0].Character != "雷晓飞" || got[0].SpeechType != "dialogue" {
+		t.Fatalf("rule extraction overwrote reviewed structured dialogue: %+v", got)
 	}
 }
 

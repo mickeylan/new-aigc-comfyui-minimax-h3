@@ -234,12 +234,14 @@ type Scene struct {
 	VideoLastFrameImg      string     `gorm:"column:video_last_frame_img" json:"video_last_frame_img"`   // 首尾帧模板的尾帧图文件名
 	Status                 string     `gorm:"index" json:"status"`                                       // pending/image_pending/image_ready/video_pending/video_running/video_ready/failed
 	Error                  string     `json:"error"`
-	PromptStale            bool       `gorm:"column:prompt_stale;default:false" json:"prompt_stale"` // 来源变化后需重新确认完整视频提示词
-	ImageRetries           int        `gorm:"column:image_retries" json:"image_retries"`             // 画面生成已重试次数
-	VideoRetries           int        `gorm:"column:video_retries" json:"video_retries"`             // 视频生成已重试次数
-	ImageCandidateParentID *uint      `gorm:"column:image_candidate_parent_id" json:"-"`             // 当前图片任务的候选分支来源
-	VideoCandidateParentID *uint      `gorm:"column:video_candidate_parent_id" json:"-"`             // 当前视频任务的候选分支来源
-	ShotCount              int        `gorm:"column:shot_count;default:0" json:"shot_count"`         // 镜头数量
+	PromptStale            bool       `gorm:"column:prompt_stale;default:false" json:"prompt_stale"`                 // 来源变化后需重新确认完整视频提示词
+	BlockingJSON           string     `gorm:"column:blocking_json;type:text" json:"blocking_json"`                   // 人物站位/机位/视线/遮挡与动作前后空间关系；用户显式保存
+	DialogueAnalysisJSON   string     `gorm:"column:dialogue_analysis_json;type:text" json:"dialogue_analysis_json"` // 原文台词及 AI 归属审阅数据
+	ImageRetries           int        `gorm:"column:image_retries" json:"image_retries"`                             // 画面生成已重试次数
+	VideoRetries           int        `gorm:"column:video_retries" json:"video_retries"`                             // 视频生成已重试次数
+	ImageCandidateParentID *uint      `gorm:"column:image_candidate_parent_id" json:"-"`                             // 当前图片任务的候选分支来源
+	VideoCandidateParentID *uint      `gorm:"column:video_candidate_parent_id" json:"-"`                             // 当前视频任务的候选分支来源
+	ShotCount              int        `gorm:"column:shot_count;default:0" json:"shot_count"`                         // 镜头数量
 	CreatedAt              time.Time  `json:"created_at"`
 	UpdatedAt              time.Time  `json:"updated_at"`
 }
@@ -450,6 +452,9 @@ type Dialogue struct {
 	Order              int       `json:"order"`                                                             // 场景内句序（从 1 开始）
 	Character          string    `json:"character"`                                                         // 对白/内心独白为角色名；旁白可为“旁白”
 	SpeechType         string    `gorm:"column:speech_type;default:dialogue" json:"speech_type"`            // dialogue/offscreen_dialogue/narration/monologue
+	Addressee          string    `gorm:"column:addressee" json:"addressee"`                                 // 审阅确认的受话人
+	TimeSegment        string    `gorm:"column:time_segment" json:"time_segment"`                           // 审阅确认的原文时间段
+	Source             string    `gorm:"column:source;index" json:"source"`                                 // user/ai_reviewed/imported/legacy
 	H3VoiceDescription string    `gorm:"column:h3_voice_description;type:text" json:"h3_voice_description"` // H3 说话者声音身份
 	Text               string    `gorm:"type:text" json:"text"`                                             // 仅可发声原文；空说话人且无明确类型时不发声
 	Voice              string    `json:"voice"`                                                             // TTS 音色（voice_type）
