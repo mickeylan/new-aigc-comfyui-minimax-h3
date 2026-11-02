@@ -1893,6 +1893,28 @@ func h3ActionTempoContractMatches(value string) bool {
 	return !h3SlowMotionCuePattern.MatchString(check) && h3RealTimeCuePattern.MatchString(value)
 }
 
+var h3SpellCombatSourcePattern = regexp.MustCompile(`仙术|法术|法宝|结印|手印|灵力|法力|护体|护盾|结界|阵法|符箓|剑气|刀气|掌印|雷法|火球|冰锥|黑网|大网|网绳|银环|对轰|能量碰撞|冲击波`)
+var h3SpellTrajectoryPattern = regexp.MustCompile(`(?i)\b(?:launch(?:es|ed|ing)?|release(?:s|d|ing)?|project(?:s|ed|ing)?|surge(?:s|d|ing)?|stream(?:s|ed|ing)?|spread(?:s|ing)?|unfold(?:s|ed|ing)?|descend(?:s|ed|ing)?|travel(?:s|ed|ing)?|race(?:s|d|ing)?|flow(?:s|ed|ing)?)\b[^.;]{0,120}\b(?:energy|force|power|net|threads?|ropes?|rings?|barrier|shield|arc|wave|current|trajectory|line|toward|downward|upward|forward)\b`)
+var h3SpellResponsePattern = regexp.MustCompile(`(?i)\b(?:immediately|instantly|at once)\b[^.;]{0,180}\b(?:raise(?:s|d)?|catch(?:es|ing)?|brace(?:s|d)?|resist(?:s|ed|ing)?|block(?:s|ed|ing)?|deflect(?:s|ed|ing)?|push(?:es|ed|ing)?|hold(?:s|ing)?|anchor(?:s|ed|ing)?|shield(?:s|ed|ing)?|barrier|protect(?:s|ed|ing)?)\b|\b(?:raise(?:s|d)?|catch(?:es|ing)?|brace(?:s|d)?|resist(?:s|ed|ing)?|block(?:s|ed|ing)?|deflect(?:s|ed|ing)?|push(?:es|ed|ing)?|shield|barrier)\b[^.;]{0,100}\b(?:incoming|falling|descending|attack|force|energy|net|spell|pressure)\b`)
+var h3SpellInteractionPattern = regexp.MustCompile(`(?i)\b(?:collid(?:e|es|ed|ing)|meet(?:s|ing)?|contact(?:s|ed|ing)?|impact(?:s|ed|ing)?|press(?:es|ed|ing)?\s+against|push(?:es|ed|ing)?\s+back|compress(?:es|ed|ing)?|strain(?:s|ed|ing)?|resist(?:s|ed|ing)?|lock(?:s|ed|ing)?\s+against|collision\s+boundary|contact\s+boundary)\b`)
+var h3SpellFeedbackPattern = regexp.MustCompile(`(?i)\b(?:shockwave|pressure\s+(?:ring|wave)|impact\s+(?:ring|wave)|dust|sand|grass|debris|fabric|sleeves?|robes?|hair|petals?|ground)\b[^.;]{0,100}\b(?:burst(?:s|ing)?|radiat(?:e|es|ed|ing)|spread(?:s|ing)?|push(?:es|ed|ing)?|blast(?:s|ed|ing)?|scatter(?:s|ed|ing)?|billow(?:s|ed|ing)?|whip(?:s|ped|ping)?|lift(?:s|ed|ing)?|vibrat(?:e|es|ed|ing)?|shudder(?:s|ed|ing)?|crack(?:s|ed|ing)?|ripple(?:s|d|ing)?)\b`)
+var h3PictureActsAsEntityPattern = regexp.MustCompile(`(?i)<Picture\s+\d+>\s+(?:itself\s+)?(?:descend(?:s|ed|ing)?|fall(?:s|ing)?|fl(?:y|ies|ying)|attack(?:s|ed|ing)?|wrap(?:s|ped|ping)?|strike(?:s|struck|striking)|move(?:s|d|ing)?)\b`)
+var h3BareTimestampPattern = regexp.MustCompile(`(?i)(?:^|[.!?]\s+)At\s+[0-9]{2}:[0-9]{2}\.[0-9]{2,3},`)
+
+func h3SpellCombatContractMatches(source, value string) bool {
+	if !h3SpellCombatSourcePattern.MatchString(source) {
+		return true
+	}
+	if h3PictureActsAsEntityPattern.MatchString(value) {
+		return false
+	}
+	return h3SpellTrajectoryPattern.MatchString(value) && h3SpellResponsePattern.MatchString(value) && h3SpellInteractionPattern.MatchString(value) && h3SpellFeedbackPattern.MatchString(value)
+}
+
+func h3CombatShotMarkersMatchTimestamps(value string) bool {
+	return len(h3BareTimestampPattern.FindAllString(value, -1)) == 0
+}
+
 func enforceH3ActionTempo(value string, mode h3SceneMode) string {
 	if mode != h3SceneAction && mode != h3SceneMixed {
 		return value
@@ -2056,7 +2078,9 @@ func combatActionRepairRequestWithIssues(authoritative, draft string, duration f
 Hard requirements:
 - Preserve every explicit authoritative Shot number, order, subject, weapon, spell, location and stated outcome; add no new combatant, power, injury, victory or defeat. When OUTPUT STRUCTURE requires more internal Shots than the source contains, divide the existing actions without inventing or repeating them.
 - Motion starts immediately at full real-time speed. Resolve the main burst of motion within the opening 1–2 seconds instead of stretching it across %.1f seconds; use the remaining time only for visible recoil, displaced dust/grass, recovery stance or a brief aftermath already supported by the facts.
-- Every incoming attack gets an immediate visible response in the same Shot. Derive that response from the authoritative character state, actual referenced asset, spatial relation and established capability. If the source does not state the outcome, choose a visible response that changes no hit/miss/block, injury, victory or defeat fact.
+- Every incoming attack gets an immediate visible response in the same Shot. Derive that response from the authoritative character state, actual referenced asset, spatial relation and established capability. If the source does not state the outcome, choose a visible resistance that changes no hit/miss/block, injury, victory or defeat fact.
+- For spells, formations, talismans, or magic treasures, make the effect executable rather than decorative: state the caster/artifact emission source, moving trajectory, defender's immediate physical or established-energy resistance, the exact contact/pressure boundary, and a radiating shockwave with physically motivated dust, grass, cloth, hair, or debris response. A named reference <Picture N> controls appearance only; never make <Picture N> itself descend, fly, attack, or wrap a character.
+- Every explicit time cut must use an official [Shot N] At MM:SS.mmm, marker. Never put bare "At 00:02.000" or "At 00:04.500" prose inside [Shot 1].
 - State direction, target, weapon/spell ownership, response and end pose. No standing still and watching, no slow motion, bullet time, hovering display, prolonged charge or lingering pause.
 - For solo weapon practice, preserve every technique explicitly stated in the authoritative facts. Name at least two concrete paths such as a diagonal cut, thrust, or horizontal cut; state the supporting foot or weight transfer and the final stopping stance. Never summarize them as martial forms, brandishing, sweeping strokes, dancing, repeated circles, or continuous full-body spins.
 - Visual prose must be English except exact structured dialogue. Do not output dialogue, headings, Markdown or explanation.
@@ -2468,7 +2492,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 				}
 			}
 		}
-		if (sceneMode == h3SceneAction || sceneMode == h3SceneMixed) && (!h3ActionTempoContractMatches(value) || !h3SoloSwordPracticeContractMatches(canonicalSceneContent, value) || !h3SoloSwordTimingContractMatches(canonicalSceneContent, value, normalizeSceneDuration(sc.Duration), expectedShotCount)) {
+		if (sceneMode == h3SceneAction || sceneMode == h3SceneMixed) && (!h3ActionTempoContractMatches(value) || !h3SoloSwordPracticeContractMatches(canonicalSceneContent, value) || !h3SoloSwordTimingContractMatches(canonicalSceneContent, value, normalizeSceneDuration(sc.Duration), expectedShotCount) || !h3SpellCombatContractMatches(canonicalSceneContent, value) || !h3CombatShotMarkersMatchTimestamps(value)) {
 			return false
 		}
 		if len(h3BalancedActionIssues(value, normalizeSceneDuration(sc.Duration), expectedShotCount, requireBalancedTimeline, len(validDialogues) > 0)) > 0 {
@@ -2527,6 +2551,12 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		}
 		if !h3SoloSwordTimingContractMatches(canonicalSceneContent, value, normalizeSceneDuration(sc.Duration), expectedShotCount) {
 			issues = append(issues, "单人剑术时间线不连续；旁白期间必须持续真实速度的步法、重心和剑路，最后约1.5秒才收势，禁止提前站桩或平均拉慢单招")
+		}
+		if !h3SpellCombatContractMatches(canonicalSceneContent, value) {
+			issues = append(issues, "仙术/法宝攻防缺少完整可见因果：必须写清施术来源与运动轨迹、对方即时抵抗、双方接触或压力边界，以及冲击波对沙尘/草木/衣摆等环境的物理反馈；参考Picture只能约束外观，不能作为自行移动或攻击的实体")
+		}
+		if !h3CombatShotMarkersMatchTimestamps(value) {
+			issues = append(issues, "时间切点必须使用官方[Shot N] At MM:SS.mmm,标记，不能只在同一个Shot正文中写裸At时间")
 		}
 		issues = append(issues, h3BalancedActionIssues(value, normalizeSceneDuration(sc.Duration), expectedShotCount, requireBalancedTimeline, len(validDialogues) > 0)...)
 		for _, match := range h3SubjectTagPattern.FindAllStringSubmatch(value, -1) {

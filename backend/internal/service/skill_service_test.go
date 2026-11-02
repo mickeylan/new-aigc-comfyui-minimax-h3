@@ -98,10 +98,10 @@ func TestH3CombatSkillUsesAssetsInsteadOfWeaponEnumeration(t *testing.T) {
 		t.Fatal(err)
 	}
 	contract := skill.SystemPrompt + skill.PromptTemplate
-	if skill.Version != 5 {
-		t.Fatalf("combat skill version=%d, want 5", skill.Version)
+	if skill.Version != 6 {
+		t.Fatalf("combat skill version=%d, want 6", skill.Version)
 	}
-	for _, want := range []string{"实际资产", "不得用通用资产替换", "仙术", "正常实时速度", "结构化Dialogue", "身体结构", "攻击线", "未完成动量", "不强制多阶段", "主要摄影机任务", "单人兵器演练", "martial forms", "支撑脚或重心转移", "禁止连续全身旋转", "格挡卸力", "撩剑", "前招收势必须成为后招起势", "跨Shot只换机位", "不得因为动作词库而新增命中", "非最终Shot禁止用stops", "动作应占据该Shot主要时长"} {
+	for _, want := range []string{"实际资产", "不得用通用资产替换", "仙术", "正常实时速度", "结构化Dialogue", "身体结构", "攻击线", "未完成动量", "不强制多阶段", "主要摄影机任务", "单人兵器演练", "martial forms", "支撑脚或重心转移", "禁止连续全身旋转", "格挡卸力", "撩剑", "前招收势必须成为后招起势", "跨Shot只换机位", "不得因为动作词库而新增命中", "非最终Shot禁止用stops", "动作应占据该Shot主要时长", "能量发射源", "接触/压力边界", "Picture N", "不能只堆发光粒子"} {
 		if !strings.Contains(contract, want) {
 			t.Fatalf("combat skill missing %q: %s", want, contract)
 		}

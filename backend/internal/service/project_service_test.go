@@ -679,6 +679,26 @@ func TestRecoverInterruptedProjectWork(t *testing.T) {
 	}
 }
 
+func TestSpellCombatRequiresExecutableClashAndOfficialShotCuts(t *testing.T) {
+	source := "虬髯大汉结印放出漆黑大网法宝，青衣高大男子举手抵抗，黑网压下并缠住二人。"
+	reported := `[Shot 1] <Subject 1> throws a black net and forms a hand seal. <Picture 5> descends overhead. At 00:02.000, <Subject 2> raises both hands to catch the falling net. At 00:04.500, the net wraps tightly around them. The action happens immediately at full real-time speed.`
+	if h3SpellCombatContractMatches(source, reported) {
+		t.Fatal("reported decorative one-way spell prompt passed executable clash contract")
+	}
+	if h3CombatShotMarkersMatchTimestamps(reported) {
+		t.Fatal("bare timestamps inside Shot 1 passed official shot-marker contract")
+	}
+	good := `[Shot 1] <Subject 1> instantly releases the black net; dark force streams through its ropes as it unfolds downward toward <Subject 2> at full real-time speed.
+[Shot 2] At 00:02.000, <Subject 2> immediately raises both hands and braces against the descending net. His upward resistance meets the downward pressure at a visible contact boundary above his shoulders; silver rings strain against the blue-white force along his forearms.
+[Shot 3] At 00:04.500, the net presses against and compresses that resistance before wrapping around both figures. A pressure ring radiates across the ground, pushing dust and dry grass outward while their robes whip once and settle.`
+	if !h3SpellCombatContractMatches(source, good) {
+		t.Fatal("executable spell pressure exchange was rejected")
+	}
+	if !h3CombatShotMarkersMatchTimestamps(good) {
+		t.Fatal("official shot timestamps were rejected")
+	}
+}
+
 func TestPipelineFailureStatusIsNotOverwritten(t *testing.T) {
 	ps := newTestProjectService(t)
 	p := models.Project{Title: "t", Synopsis: "s", Status: "failed", PipelineStage: "failed"}
