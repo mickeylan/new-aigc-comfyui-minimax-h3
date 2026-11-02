@@ -549,7 +549,7 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 	fullPrompt = normalizeSavedH3Audio(fullPrompt, dubs, lines, shots)
 	fullPrompt = applyAuthoritativeSceneShotTimeline(fullPrompt, sc.Content)
 	fullPrompt = s.Projects.applySceneShotTimeline(sc, fullPrompt)
-	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "reference_bindings": sceneVideoReferenceBindings(refs, lines, fullPrompt), "template": template}
+	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "reference_bindings": sceneVideoReferenceBindings(refs, lines, fullPrompt), "template": template, "dialogue_count": len(validSceneDialogues(dubs)), "prompt_dialogue_count": len(h3SpokenTextPattern.FindAllStringSubmatch(fullPrompt, -1))}
 	if continuity != nil && continuity.SelectedFrame != nil {
 		response["continuity_mode"] = continuity.Mode
 		response["continuity_frame"] = s.frameResponses([]models.FrameCandidate{*continuity.SelectedFrame})[0]

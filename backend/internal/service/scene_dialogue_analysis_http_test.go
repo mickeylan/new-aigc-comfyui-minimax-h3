@@ -160,6 +160,9 @@ func TestDialogueAnalysisApplyRegenerateTranslateAndGetPersistsCompleteFL2VADial
 		t.Fatal(err)
 	}
 	prompt, _ := generated["full_prompt"].(string)
+	if generated["dialogue_count"] != float64(2) || generated["prompt_dialogue_count"] != float64(2) {
+		t.Fatalf("regenerate dialogue counts=%v/%v body=%v", generated["dialogue_count"], generated["prompt_dialogue_count"], generated)
+	}
 	for _, want := range []string{"integrated_multimodal_description:", "[Shot 1]", "[Shot 2]", "00:05", "<d>[Chinese] " + known + "</d>", "<d>[Chinese] " + unknown + "</d>", "燕承", "待确认"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("regenerated prompt missing %q: %s", want, prompt)
@@ -268,6 +271,61 @@ func TestApplyDialogueAnalysisKeepsRepeatedLinesAndMedia(t *testing.T) {
 	}
 	if len(savedShot.DialogueRanges) != 0 || savedShot.PromptAction != "keep-shot-action" || savedShot.Dialogue != "等等！" {
 		t.Fatalf("stale ranges not invalidated without preserving shot/audio: %+v", savedShot)
+	}
+}
+
+func TestMergeExtractedCharacterSpeechKeepsReviewedAttribution(t *testing.T) {
+	reviewed := models.Dialogue{Text: "别动。", Character: "燕承", SpeechType: "offscreen_dialogue", Source: "ai_reviewed"}
+	got := mergeExtractedCharacterSpeech([]models.Dialogue{reviewed}, []models.Dialogue{{Text: "别动。", Character: "错误角色", SpeechType: "dialogue"}})
+	if len(got) != 1 || got[0].Character != "燕承" || got[0].SpeechType != "offscreen_dialogue" {
+		t.Fatalf("reviewed attribution overwritten: %+v", got)
+	}
+}
+
+func TestMergeSavedReviewedSceneDialogueRecoversOnlyCurrentReviewedSource(t *testing.T) {
+	content := `燕承说道：“完整原文。”又说道：“重复。”随后再说：“重复。”画外传来：“未知。”`
+	analysis := SceneDialogueAnalysis{Source: "ai_reviewed", Items: []SceneDialogueAnalysisItem{
+		{Index: 0, Text: "完整原文。", Speaker: "燕承", SpeechType: ""},
+		{Index: 1, Text: "重复。", Speaker: "错误归属", SpeechType: "wrong"},
+		{Index: 2, Text: "重复。", Speaker: "燕承", SpeechType: "dialogue"},
+		{Index: 3, Text: "未知。", Speaker: "未知", SpeechType: "dialogue"},
+	}}
+	raw, _ := json.Marshal(analysis)
+	sc := &models.Scene{ID: 7, ProjectID: 9, Content: content, DialogueAnalysisJSON: string(raw)}
+	existing := []models.Dialogue{{ID: 3, SceneID: 7, Text: "重复。", Character: "权威角色", SpeechType: "dialogue", AudioFile: "keep.wav", Source: "ai_reviewed"}}
+	got := mergeSavedReviewedSceneDialogue(sc, existing)
+	if len(got) != 4 {
+		t.Fatalf("duplicate source lines collapsed or missing: %+v", got)
+	}
+	if got[0].Character != "权威角色" || got[0].AudioFile != "keep.wav" {
+		t.Fatalf("persisted dialogue was overwritten: %+v", got[0])
+	}
+	for _, index := range []int{1, 2} {
+		if got[index].Source != "ai_reviewed" || got[index].SpeechType != "dialogue" {
+			t.Fatalf("invalid speech type was not safely normalized: %+v", got[index])
+		}
+	}
+	if got[3].Character != "待确认" || got[3].SpeechType != "offscreen_dialogue" {
+		t.Fatalf("unknown speaker was not made reviewable offscreen speech: %+v", got[3])
+	}
+
+	stale := *sc
+	stale.Content = `燕承说道：“新正文。”`
+	if recovered := mergeSavedReviewedSceneDialogue(&stale, nil); len(recovered) != 0 {
+		t.Fatalf("stale reviewed text was restored: %+v", recovered)
+	}
+	preview := *sc
+	preview.DialogueAnalysisJSON = strings.Replace(string(raw), `"ai_reviewed"`, `"ai_preview"`, 1)
+	if recovered := mergeSavedReviewedSceneDialogue(&preview, nil); len(recovered) != 0 {
+		t.Fatalf("preview analysis was treated as saved review: %+v", recovered)
+	}
+}
+
+func TestNormalizeSavedH3AudioRecoveredDialogueRemovesSilentConflict(t *testing.T) {
+	prompt := "integrated_multimodal_description:\n[Shot 1] 燕承抬头。 There is no structured Dialogue: all visible characters keep their lips closed; remove every mouth-opening, preparing-to-speak, shouting, calling, or speaking cue.\n\noverall_soundscape:\nNo dialogue, human voice.\n\nnon_diegetic_music:\nN/A"
+	got := normalizeSavedH3Audio(prompt, []models.Dialogue{{Character: "燕承", SpeechType: "dialogue", Text: "完整原文。", Source: "ai_reviewed"}}, nil)
+	if !strings.Contains(got, "<d>[Chinese] 完整原文。</d>") || strings.Contains(got, "No dialogue") || strings.Contains(got, "all visible characters keep their lips closed") {
+		t.Fatalf("recovered FL2VA audio contract conflicts with dialogue: %s", got)
 	}
 }
 

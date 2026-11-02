@@ -5,6 +5,13 @@ import { readFileSync } from 'node:fs'
 const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
 const api = readFileSync(new URL('../src/api/index.js', import.meta.url), 'utf8')
 
+test('视频重新生成展示来源、完整稿与中文预览的对白数量', () => {
+  assert.match(detail, /data\.dialogue_count/)
+  assert.match(detail, /data\.prompt_dialogue_count/)
+  assert.match(detail, /videoTaskProposedZH\.value\.match/)
+  assert.match(detail, /\{\{ videoTaskDetail\.dialogue_generation_note \}\}/)
+})
+
 test('对白分析预览保持为本地草稿，只有应用才持久化', () => {
   assert.match(api, /analyzeSceneDialogue/)
   assert.match(api, /applySceneDialogue/)

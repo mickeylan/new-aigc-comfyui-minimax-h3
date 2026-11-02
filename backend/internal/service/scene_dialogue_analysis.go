@@ -104,6 +104,56 @@ func parseDialogueAI(raw string, original []SceneDialogueAnalysisItem) ([]SceneD
 	return out, nil
 }
 
+func mergeSavedReviewedSceneDialogue(sc *models.Scene, dubs []models.Dialogue) []models.Dialogue {
+	if sc == nil || strings.TrimSpace(sc.DialogueAnalysisJSON) == "" {
+		return dubs
+	}
+	var saved SceneDialogueAnalysis
+	if json.Unmarshal([]byte(sc.DialogueAnalysisJSON), &saved) != nil || saved.Source != "ai_reviewed" {
+		return dubs
+	}
+	original := extractQuotedDialogue(sc.Content)
+	byIndex := make(map[int]SceneDialogueAnalysisItem, len(saved.Items))
+	for _, item := range saved.Items {
+		if item.Index >= 0 && item.Index < len(original) && item.Text == original[item.Index].Text {
+			byIndex[item.Index] = item
+		}
+	}
+	out := append([]models.Dialogue(nil), dubs...)
+	used := make([]bool, len(out))
+	for index, source := range original {
+		item, ok := byIndex[index]
+		if !ok {
+			continue
+		}
+		found := -1
+		for i := range out {
+			typeName, _ := normalizeScriptSpeech(out[i].SpeechType, out[i].Character)
+			if !used[i] && out[i].Text == source.Text && typeName != "" {
+				found = i
+				break
+			}
+		}
+		if found >= 0 {
+			used[found] = true
+			continue
+		}
+		speaker := strings.TrimSpace(item.Speaker)
+		speechType := strings.TrimSpace(item.SpeechType)
+		unknown := speaker == "" || speaker == "待确认" || speaker == "未知"
+		if unknown {
+			speaker, speechType = "待确认", "offscreen_dialogue"
+		} else if normalized, normalizedSpeaker := normalizeScriptSpeech(speechType, speaker); normalized != "" {
+			speechType, speaker = normalized, normalizedSpeaker
+		} else {
+			speechType = "dialogue"
+		}
+		out = append(out, models.Dialogue{SceneID: sc.ID, ProjectID: sc.ProjectID, Order: len(out) + 1, Character: speaker, Addressee: strings.TrimSpace(item.Addressee), SpeechType: speechType, TimeSegment: strings.TrimSpace(item.TimeSegment), Text: source.Text, Source: "ai_reviewed", Status: "pending", Speed: 1, Volume: 1})
+		used = append(used, true)
+	}
+	return out
+}
+
 func (s *Service) HandleAnalyzeSceneDialogue(c *gin.Context) {
 	scene, ok := s.loadScene(c)
 	if !ok {

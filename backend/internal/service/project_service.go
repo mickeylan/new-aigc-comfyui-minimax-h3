@@ -3482,8 +3482,10 @@ func mergeExtractedCharacterSpeech(dubs []models.Dialogue, extracted []models.Di
 			if existingType == "narration" || existingType == "monologue" {
 				continue
 			}
-			out[i].Character = speech.Character
-			out[i].SpeechType = speech.SpeechType
+			if out[i].Source != "ai_reviewed" {
+				out[i].Character = speech.Character
+				out[i].SpeechType = speech.SpeechType
+			}
 			matched = true
 			break
 		}
@@ -3498,6 +3500,7 @@ func mergeExtractedCharacterSpeech(dubs []models.Dialogue, extracted []models.Di
 func (s *ProjectService) sceneVideoDialogues(sc *models.Scene) []models.Dialogue {
 	var dubs []models.Dialogue
 	s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
+	dubs = mergeSavedReviewedSceneDialogue(sc, dubs)
 	dubs = mergeExplicitSceneSpeech(sc, dubs)
 	var project models.Project
 	s.db.First(&project, sc.ProjectID)
@@ -4752,8 +4755,11 @@ func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines
 		detail = "[Shot 1] " + detail
 	}
 	detail = compactFinalH3VisualBody(detail)
-	if len(validSceneDialogues(dubs)) == 0 {
+	validDialogues := validSceneDialogues(dubs)
+	if len(validDialogues) == 0 {
 		detail = sanitizeSilentH3VisualSpeech(detail)
+	} else {
+		detail = regexp.MustCompile(`(?i)\s*There is no structured Dialogue:\s*all visible characters keep their lips closed;\s*remove every mouth-opening, preparing-to-speak, shouting, calling, or speaking cue\.?`).ReplaceAllString(detail, "")
 	}
 	detail = trimIncompleteH3ActionEnding(detail)
 	if len(shotSets) > 0 {
