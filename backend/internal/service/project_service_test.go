@@ -4442,6 +4442,41 @@ func TestExplicitDialogueRangesOnlyCarryAcrossDistinctAdjacentShots(t *testing.T
 	}
 }
 
+func TestNormalizeSavedH3AudioFallsBackWhenOldRangesOmitNewReviewedDialogue(t *testing.T) {
+	dialogues := []models.Dialogue{
+		{ID: 1, Order: 1, Character: "甲", Text: "旧对白"},
+		{ID: 2, Order: 2, Character: "乙", Text: "新增对白", Source: "ai_reviewed"},
+	}
+	shots := []models.Shot{
+		{Order: 1, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "g", StartRune: 0, EndRune: 1}}},
+		{Order: 2, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "g", StartRune: 1, EndRune: 3}}},
+	}
+	got := normalizeSavedH3Audio("[Shot 1] wide.\n[Shot 2] close.", dialogues, nil, shots)
+	for _, d := range dialogues {
+		want := "<d>[Chinese] " + d.Text + "</d>"
+		if !strings.Contains(got, want) {
+			t.Fatalf("fallback omitted %q: %s", want, got)
+		}
+	}
+}
+
+func TestExplicitDialogueRangesValidateMergedGroupCoordinates(t *testing.T) {
+	dialogues := []models.Dialogue{{ID: 1, Character: "甲", Text: "甲乙"}, {ID: 2, Character: "乙", Text: "丙丁"}}
+	shots := []models.Shot{
+		{Order: 1, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "g", StartRune: 0, EndRune: 2}}},
+		{Order: 2, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 2, GroupKey: "g", StartRune: 2, EndRune: 4}}},
+	}
+	got, ok := appendExplicitDialogueRangesToShots("[Shot 1] wide.\n[Shot 2] close.", dialogues, nil, shots)
+	if !ok {
+		t.Fatalf("valid merged group coordinates rejected: %s", got)
+	}
+	for _, text := range []string{"甲乙", "丙丁"} {
+		if !strings.Contains(got, text) {
+			t.Fatalf("merged group coordinates lost %q: %s", text, got)
+		}
+	}
+}
+
 func TestH3NormalizationRemovesStaticCameraConflictAndUnusedRetention(t *testing.T) {
 	got := resolveH3VisualConflicts("The camera remains static, then pulls out while tracking the subject.")
 	if strings.Contains(strings.ToLower(got), "static") || !strings.Contains(got, "pulls out") {

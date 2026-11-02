@@ -130,6 +130,36 @@ func restoreH3StructureLenient(translated string, tokens []string) (string, []st
 	}
 	matches := h3MarkerRE.FindAllStringIndex(translated, -1)
 	if len(matches) != len(tokens) {
+		// A provider occasionally drops only a dialogue placeholder while returning a
+		// useful translation. Dialogue is source-of-truth content and may never vanish
+		// from a successful preview. Recover any absent dialogue blocks explicitly;
+		// leave missing non-dialogue protocol tokens as warnings rather than replacing
+		// the translated action prose with the source prompt.
+		presentDialogue := make(map[string]int)
+		for _, block := range dialogueBlockRE.FindAllString(restored, -1) {
+			presentDialogue[block]++
+		}
+		var recovered []string
+		for _, token := range tokens {
+			if !strings.HasPrefix(token, "<d>") {
+				continue
+			}
+			if presentDialogue[token] > 0 {
+				presentDialogue[token]--
+				continue
+			}
+			recovered = append(recovered, token)
+		}
+		if len(recovered) > 0 {
+			insertion := "\n" + strings.Join(recovered, "\n") + "\n"
+			lower := strings.ToLower(restored)
+			if at := strings.Index(lower, "overall_soundscape:"); at >= 0 {
+				restored = restored[:at] + insertion + restored[at:]
+			} else {
+				restored = strings.TrimRight(restored, "\n") + insertion
+			}
+			issues = append(issues, fmt.Sprintf("已从原文恢复 %d 个遗失对白块，请复核位置", len(recovered)))
+		}
 		return restored, issues
 	}
 	var out strings.Builder

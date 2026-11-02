@@ -1629,6 +1629,7 @@ async function regenerateVideoPrompt() {
     const translated = await api.translateSceneVideoPrompt(id(), sceneId, { prompt: generated, language: 'zh', direction: 'to_zh', template: videoTaskTemplate.value, first_frame_img: videoTaskFirstFrame.value, last_frame_img: videoTaskLastFrame.value })
     if (epoch !== videoPromptRequestEpoch || videoTaskScene.value?.id !== sceneId) return
     videoTaskProposedZH.value = translated.data.preview || translated.data.prompt || ''
+    if (translated.data.warnings?.length) toast.error(`翻译预览已保留，请复核：${translated.data.warnings.join('；')}`)
     toast.success('AI 结果已转为中文预览；应用后才会写入中文主稿，旧英文保持不变')
   } catch (e) { if (epoch === videoPromptRequestEpoch) toast.error(e.response?.data?.error || 'AI 重新生成失败') }
   finally { if (epoch === videoPromptRequestEpoch) regeneratingVideoPrompt.value = false }

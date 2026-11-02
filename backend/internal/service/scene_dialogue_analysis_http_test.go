@@ -74,15 +74,20 @@ func TestDialogueAnalysisMockHTTPPreservesLongSourceTextAndAppliesSafely(t *test
 	}
 }
 
-func TestDialogueAnalysisApplyRegenerateAndGetPersistsCompleteDialoguePrompt(t *testing.T) {
+func TestDialogueAnalysisApplyRegenerateTranslateAndGetPersistsCompleteFL2VADialoguePrompt(t *testing.T) {
 	var calls int
+	var translationReply string
 	ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		if calls == 1 {
-			fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"items\":[{\"index\":0,\"speaker\":\"燕承\",\"addressee\":\"青年\",\"speech_type\":\"dialogue\",\"time_segment\":\"0—3秒\"},{\"index\":1,\"speaker\":\"待确认\",\"addressee\":\"燕承\",\"speech_type\":\"offscreen_dialogue\",\"time_segment\":\"3—6秒\"}]}"}}]}`)
+			fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"items\":[{\"index\":0,\"speaker\":\"燕承\",\"addressee\":\"青年\",\"speech_type\":\"dialogue\",\"time_segment\":\"0—5秒\"},{\"index\":1,\"speaker\":\"待确认\",\"addressee\":\"燕承\",\"speech_type\":\"offscreen_dialogue\",\"time_segment\":\"5—10秒\"}]}"}}]}`)
 			return
 		}
-		fmt.Fprint(w, `{"choices":[{"message":{"content":"[Shot 1] The young man faces 燕承 as the camera slowly pushes in. At 00:03.000, both visible people turn toward an unidentified voice from outside the frame."}}]}`)
+		if calls == 2 {
+			fmt.Fprint(w, `{"choices":[{"message":{"content":"[Shot 1] The young man faces 燕承 as the camera slowly pushes in. At 00:05.000, cut to [Shot 2], where both visible people turn toward an unidentified voice from outside the frame."}}]}`)
+			return
+		}
+		fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`, translationReply)
 	}))
 	defer ai.Close()
 
@@ -96,13 +101,22 @@ func TestDialogueAnalysisApplyRegenerateAndGetPersistsCompleteDialoguePrompt(t *
 		t.Fatal(err)
 	}
 	known, unknown := "不知阁下如何称呼？", "妖孽，哪里走！！！"
-	scene.Content = `0—3秒｜燕承对青年说道：“` + known + `”3—6秒｜画外有人厉喝：“` + unknown + `”`
-	scene.Duration, scene.VideoTemplate = 6, "minimax_h3_t2v"
+	scene.Content = `0—5秒｜燕承对青年说道：“` + known + `”5—10秒｜画外有人厉喝：“` + unknown + `”`
+	scene.Duration, scene.VideoTemplate = 10, "minimax_h3_first_last"
+	scene.VideoFirstFrameImg, scene.VideoLastFrameImg = "first.png", "last.png"
 	scene.VideoFullPrompt, scene.ImageFile, scene.VideoFile, scene.VideoInputFile = "old full without dialogue", "keep.png", "keep.mp4", "keep-input.mp4"
 	if err := db.Save(&scene).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&models.Shot{SceneID: scene.ID, Order: 1, Duration: 6, Description: "conversation"}).Error; err != nil {
+	for _, shot := range []models.Shot{
+		{SceneID: scene.ID, Order: 1, Duration: 5, Description: "conversation", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 901, GroupKey: "old", StartRune: 0, EndRune: 2}}},
+		{SceneID: scene.ID, Order: 2, Duration: 5, Description: "reaction", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 902, GroupKey: "old", StartRune: 0, EndRune: 2}}},
+	} {
+		if err := db.Create(&shot).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Create(&models.Template{Name: "FL2VA", Code: "minimax_h3_first_last", WorkflowJSON: "{}", InputsJSON: "{}", Enabled: true}).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -112,6 +126,7 @@ func TestDialogueAnalysisApplyRegenerateAndGetPersistsCompleteDialoguePrompt(t *
 	r.POST(base+"/dialogue/analyze", s.HandleAnalyzeSceneDialogue)
 	r.POST(base+"/dialogue/apply", s.HandleApplySceneDialogue)
 	r.POST(base+"/video/prompt/regenerate", s.HandleRegenerateSceneVideoPrompt)
+	r.POST(base+"/video-prompt/translate", s.HandleTranslateSceneVideoPrompt)
 	r.GET(base+"/video-prompt", s.HandleGetSceneVideoPrompt)
 	r.PUT(base+"/video-prompt", s.HandleUpdateSceneVideoPrompt)
 	path := fmt.Sprintf("/api/projects/%d/scenes/%d", scene.ProjectID, scene.ID)
@@ -136,7 +151,7 @@ func TestDialogueAnalysisApplyRegenerateAndGetPersistsCompleteDialoguePrompt(t *
 	if w := do(http.MethodPost, "/dialogue/apply", body); w.Code != 200 {
 		t.Fatalf("apply status=%d body=%s", w.Code, w.Body.String())
 	}
-	regen := do(http.MethodPost, "/video/prompt/regenerate", []byte(`{"template":"minimax_h3_t2v"}`))
+	regen := do(http.MethodPost, "/video/prompt/regenerate", []byte(`{"template":"minimax_h3_first_last"}`))
 	if regen.Code != 200 {
 		t.Fatalf("regenerate status=%d body=%s", regen.Code, regen.Body.String())
 	}
@@ -145,12 +160,12 @@ func TestDialogueAnalysisApplyRegenerateAndGetPersistsCompleteDialoguePrompt(t *
 		t.Fatal(err)
 	}
 	prompt, _ := generated["full_prompt"].(string)
-	for _, want := range []string{"<d>[Chinese] " + known + "</d>", "<d>[Chinese] " + unknown + "</d>", "燕承", "待确认"} {
+	for _, want := range []string{"integrated_multimodal_description:", "[Shot 1]", "[Shot 2]", "00:05", "<d>[Chinese] " + known + "</d>", "<d>[Chinese] " + unknown + "</d>", "燕承", "待确认"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("regenerated prompt missing %q: %s", want, prompt)
 		}
 	}
-	if !strings.Contains(prompt, "待确认 (S2) says in a clearly identified off-screen voice") || strings.Contains(prompt, "<Subject 1> (S2)") || strings.Contains(prompt, "<Subject 2> (S2)") {
+	if !strings.Contains(prompt, "待确认 (S2) says in a clearly identified off-screen voice") || strings.Contains(prompt, "<Subject 1> (S2)") || strings.Contains(prompt, "<Subject 2> (S2)") || strings.Contains(strings.ToLower(prompt), "no dialogue") {
 		t.Fatalf("unknown speaker was not preserved as unbound off-screen speech: %s", prompt)
 	}
 	// Regeneration must expose a reviewable preview, not overwrite the saved execution.
@@ -161,7 +176,24 @@ func TestDialogueAnalysisApplyRegenerateAndGetPersistsCompleteDialoguePrompt(t *
 	if beforeSave.VideoFullPrompt != "old full without dialogue" {
 		t.Fatal("preview overwrote saved execution")
 	}
-	saveBody, _ := json.Marshal(map[string]any{"prompt": prompt, "template": "minimax_h3_t2v"})
+	masked, _ := maskH3Structure(prompt)
+	translationReply = masked
+	translateBody, _ := json.Marshal(map[string]any{"prompt": prompt, "direction": "to_zh", "template": "minimax_h3_first_last"})
+	translatedResponse := do(http.MethodPost, "/video-prompt/translate", translateBody)
+	if translatedResponse.Code != 200 {
+		t.Fatalf("translate status=%d body=%s", translatedResponse.Code, translatedResponse.Body.String())
+	}
+	var translated map[string]any
+	if err := json.Unmarshal(translatedResponse.Body.Bytes(), &translated); err != nil {
+		t.Fatal(err)
+	}
+	translatedPrompt, _ := translated["preview"].(string)
+	for _, want := range []string{"<d>[Chinese] " + known + "</d>", "<d>[Chinese] " + unknown + "</d>"} {
+		if !strings.Contains(translatedPrompt, want) {
+			t.Fatalf("to_zh preview lost dialogue %q: %s", want, translatedPrompt)
+		}
+	}
+	saveBody, _ := json.Marshal(map[string]any{"prompt": translatedPrompt, "template": "minimax_h3_first_last"})
 	if savedResponse := do(http.MethodPut, "/video-prompt", saveBody); savedResponse.Code != 200 {
 		t.Fatalf("save status=%d body=%s", savedResponse.Code, savedResponse.Body.String())
 	}
@@ -171,8 +203,8 @@ func TestDialogueAnalysisApplyRegenerateAndGetPersistsCompleteDialoguePrompt(t *
 	}
 	var persisted map[string]any
 	_ = json.Unmarshal(got.Body.Bytes(), &persisted)
-	if persisted["full_prompt"] != prompt {
-		t.Fatalf("GET full prompt not persisted: got=%q want=%q", persisted["full_prompt"], prompt)
+	if persisted["full_prompt"] != translatedPrompt {
+		t.Fatalf("GET full prompt not persisted: got=%q want=%q", persisted["full_prompt"], translatedPrompt)
 	}
 	var saved models.Scene
 	if err := db.First(&saved, scene.ID).Error; err != nil {
@@ -191,6 +223,10 @@ func TestApplyDialogueAnalysisKeepsRepeatedLinesAndMedia(t *testing.T) {
 	scene.Content = `甲说道：“等等！”乙答道：“等等！”`
 	scene.ImageFile, scene.VideoFile, scene.VideoFullPrompt = "keep.png", "keep.mp4", "saved execution"
 	if err := db.Save(scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	shot := models.Shot{SceneID: scene.ID, Order: 1, Dialogue: "等等！", PromptAction: "keep-shot-action", DialogueRanges: []models.ShotDialogueRange{{DialogueID: 999, GroupKey: "stale", StartRune: 0, EndRune: 3}}}
+	if err := db.Create(&shot).Error; err != nil {
 		t.Fatal(err)
 	}
 	r := gin.New()
@@ -225,6 +261,13 @@ func TestApplyDialogueAnalysisKeepsRepeatedLinesAndMedia(t *testing.T) {
 	}
 	if saved.ImageFile != "keep.png" || saved.VideoFile != "keep.mp4" || saved.VideoFullPrompt != "saved execution" {
 		t.Fatal("analysis application altered media or saved prompt")
+	}
+	var savedShot models.Shot
+	if err := db.First(&savedShot, shot.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(savedShot.DialogueRanges) != 0 || savedShot.PromptAction != "keep-shot-action" || savedShot.Dialogue != "等等！" {
+		t.Fatalf("stale ranges not invalidated without preserving shot/audio: %+v", savedShot)
 	}
 }
 

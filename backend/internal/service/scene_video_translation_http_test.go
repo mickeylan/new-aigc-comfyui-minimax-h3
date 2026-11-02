@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -27,6 +28,7 @@ type translationHTTPFixture struct {
 	calls       atomic.Int32
 	beforeReply func()
 	response    string
+	rawResponse bool
 }
 
 func newTranslationHTTPFixture(t *testing.T) *translationHTTPFixture {
@@ -45,7 +47,9 @@ func newTranslationHTTPFixture(t *testing.T) *translationHTTPFixture {
 			response = translationEnglish
 		}
 		// The real provider receives and returns the masked protocol, not the raw H3 prompt.
-		response, _ = maskH3Structure(response)
+		if !f.rawResponse {
+			response, _ = maskH3Structure(response)
+		}
 		fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`, response)
 	}))
 	t.Cleanup(f.ai.Close)
@@ -190,6 +194,35 @@ func TestSceneVideoTranslationHTTPBrokenMarkersReturnNonBlockingPreview(t *testi
 	}
 	if saved.VideoFullPrompt != "old reviewed prompt" || saved.VideoPromptMasterZH != translationMaster {
 		t.Fatalf("failed translation persisted data: %+v", saved)
+	}
+}
+
+func TestSceneVideoTranslationHTTPRecoversDialogueWhenProviderDropsDMarker(t *testing.T) {
+	f := newTranslationHTTPFixture(t)
+	source := "detailed_description:\n[Shot 1] 燕承 (S1) says <d>[Chinese] 原话甲</d>.\n[Shot 2] 画外人 (S2) says <d>[Chinese] 原话乙</d>.\noverall_soundscape:\n对白清晰。"
+	if err := f.db.Model(&models.Scene{}).Where("id = ?", f.sc.ID).Update("video_prompt_master_zh", source).Error; err != nil {
+		t.Fatal(err)
+	}
+	masked, _ := maskH3Structure(source)
+	dMarker := regexp.MustCompile(`\[\[\[D\d+\]\]\]`).FindString(masked)
+	if dMarker == "" {
+		t.Fatal("fixture did not mask dialogue")
+	}
+	f.response = strings.Replace(masked, dMarker, "", 1)
+	f.rawResponse = true
+	w := translationRequest(f.svc, http.MethodPost, f.p.ID, f.sc.ID, "/translate", `{"direction":"to_zh"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("translate status=%d body=%s", w.Code, w.Body.String())
+	}
+	out := decodeTranslationBody(t, w)
+	preview, _ := out["preview"].(string)
+	for _, want := range []string{"燕承 (S1) says", "画外人 (S2) says", "<d>[Chinese] 原话甲</d>", "<d>[Chinese] 原话乙</d>"} {
+		if !strings.Contains(preview, want) {
+			t.Fatalf("missing-D recovery lost %q: %s", want, preview)
+		}
+	}
+	if out["warnings"] == nil || strings.Contains(strings.ToLower(preview), "no dialogue") {
+		t.Fatalf("missing-D recovery must warn without muting dialogue: %v", out)
 	}
 }
 

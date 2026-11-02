@@ -4251,6 +4251,8 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 	body = enforceSilentListenerLips(body)
 	groupText := map[string]string{}
 	seenDialogue := map[string]map[uint]bool{}
+	dialogueGroup := map[uint]string{}
+	dialogueStart := map[uint]int{}
 	for _, shot := range shots {
 		for _, r := range shot.DialogueRanges {
 			d, ok := byID[r.DialogueID]
@@ -4265,8 +4267,49 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 				seenDialogue[key] = map[uint]bool{}
 			}
 			if !seenDialogue[key][d.ID] {
+				dialogueGroup[d.ID] = key
+				dialogueStart[d.ID] = len([]rune(groupText[key]))
 				groupText[key] += canonicalDialogueText(d.Text)
 				seenDialogue[key][d.ID] = true
+			}
+		}
+	}
+	// Ranges are an optimization, not permission to omit authoritative dialogue.
+	// Coordinates are group-relative, so validate each dialogue against its slice of
+	// the merged group rather than treating every range as dialogue-relative.
+	covered := map[uint][]bool{}
+	for _, d := range dubs {
+		covered[d.ID] = make([]bool, len([]rune(canonicalDialogueText(d.Text))))
+	}
+	for _, shot := range shots {
+		for _, r := range shot.DialogueRanges {
+			key, ok := dialogueGroup[r.DialogueID]
+			if !ok || key != func() string {
+				if r.GroupKey != "" {
+					return r.GroupKey
+				}
+				return fmt.Sprintf("dialogue:%d", r.DialogueID)
+			}() {
+				return body, false
+			}
+			if r.StartRune < 0 || r.EndRune <= r.StartRune || r.EndRune > len([]rune(groupText[key])) {
+				return body, false
+			}
+			start := dialogueStart[r.DialogueID]
+			for pos := r.StartRune; pos < r.EndRune; pos++ {
+				if local := pos - start; local >= 0 && local < len(covered[r.DialogueID]) {
+					covered[r.DialogueID][local] = true
+				}
+			}
+		}
+	}
+	for _, d := range dubs {
+		if len(covered[d.ID]) == 0 {
+			return body, false
+		}
+		for _, ok := range covered[d.ID] {
+			if !ok {
+				return body, false
 			}
 		}
 	}

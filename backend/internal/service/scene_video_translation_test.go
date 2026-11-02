@@ -118,6 +118,25 @@ func TestRestoreH3StructureLenientPreservesModelOutputWhenMarkerMissing(t *testi
 	}
 }
 
+func TestRestoreH3StructureLenientRecoversDroppedDialogueWithoutDiscardingTranslation(t *testing.T) {
+	source := "detailed_description:\n[Shot 1] 燕承 (S1) says <d>[Chinese] 原话甲</d> then turns.\n[Shot 2] 画外人 (S2) says <d>[Chinese] 原话乙</d>.\noverall_soundscape:\n对白清晰。"
+	masked, tokens := maskH3Structure(source)
+	translated := strings.Replace(masked, "then turns", "then visibly turns toward the door", 1)
+	translated = strings.Replace(translated, "[[[D3]]]", "", 1)
+	restored, warnings := restoreH3StructureLenient(translated, tokens)
+	if len(warnings) == 0 {
+		t.Fatal("dropped dialogue marker did not produce a warning")
+	}
+	for _, want := range []string{"燕承 (S1) says", "画外人 (S2) says", "<d>[Chinese] 原话甲</d>", "<d>[Chinese] 原话乙</d>", "then visibly turns toward the door"} {
+		if !strings.Contains(restored, want) {
+			t.Fatalf("lenient recovery lost %q: %s", want, restored)
+		}
+	}
+	if strings.Contains(strings.ToLower(restored), "no dialogue") {
+		t.Fatalf("dialogue recovery silently muted the prompt: %s", restored)
+	}
+}
+
 func TestHashStringBindsExactExecutionBytes(t *testing.T) {
 	if hashString("prompt") == hashString("prompt\n") {
 		t.Fatal("execution hash normalized exact bytes")

@@ -211,6 +211,14 @@ func (s *Service) HandleApplySceneDialogue(c *gin.Context) {
 				applied++
 			}
 		}
+		if applied > 0 {
+			// Dialogue review can add rows or change the authoritative dialogue grouping.
+			// Keep shot/media work, but invalidate coordinate metadata derived from the
+			// previous dialogue version so prompt generation cannot silently omit lines.
+			if err := tx.Model(&models.Shot{}).Where("scene_id = ?", scene.ID).Update("dialogue_ranges_json", "[]").Error; err != nil {
+				return err
+			}
+		}
 		for i := range req.Items {
 			if strings.TrimSpace(req.Items[i].Speaker) == "" || req.Items[i].Speaker == "待确认" || req.Items[i].Speaker == "未知" {
 				req.Items[i].NeedsReview = true
