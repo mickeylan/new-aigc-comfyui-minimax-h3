@@ -1272,8 +1272,10 @@ function toggleSceneRole(role, name, checked) {
 }
 const sceneReferenceCandidates = ref([])
 const selectedSceneReferences = ref([])
+const sceneReferencesBaseline = ref(null)
 const sceneOutfitOptions = ref({})
 const selectedSceneOutfits = ref({})
+const sceneOutfitsBaseline = ref(null)
 const projectForm = reactive({ title: '', genre: '', style: '', synopsis: '', audience: '', tone: '', ending: '', episodes: 10, aspect_ratio: '16:9', narrator_voice_gender: '', narrator_voice_description: '' })
 let timer = null
 let wsTimer = null
@@ -2995,6 +2997,12 @@ async function openEditScene(sc, step = 'scene') {
     voice_characters: sc.voice_characters || '', mentioned_characters: sc.mentioned_characters || '',
     image_engine: sc.image_engine || 'minimax_h3', visual_type: sc.visual_type || 'normal', mega_type: sc.mega_type || 'architecture'
   })
+  sceneReferenceCandidates.value = []
+  selectedSceneReferences.value = []
+  sceneReferencesBaseline.value = null
+  sceneOutfitOptions.value = {}
+  selectedSceneOutfits.value = {}
+  sceneOutfitsBaseline.value = null
   try {
     const sceneChars = sceneCharactersForOutfits(sc)
     const [{ data }, { data: videoPrompt }, { data: assigned }, outfitLists] = await Promise.all([
@@ -3005,17 +3013,29 @@ async function openEditScene(sc, step = 'scene') {
     ])
     sceneReferenceCandidates.value = data.candidates || []
     selectedSceneReferences.value = (data.references || []).map(x => ({ ...x }))
+    sceneReferencesBaseline.value = canonicalSceneReferences(selectedSceneReferences.value)
     sceneOutfitOptions.value = Object.fromEntries(outfitLists.map(x=>[x.cid,x.rows]))
     selectedSceneOutfits.value = Object.fromEntries((assigned||[]).map(x=>[x.character_id,x.outfit_id]))
+    sceneOutfitsBaseline.value = canonicalSceneOutfits(selectedSceneOutfits.value)
     sceneForm.video_prompt = videoPrompt.prompt || ''
   } catch (e) {
-    sceneReferenceCandidates.value = []
-    selectedSceneReferences.value = []
     sceneError.value = e.response?.data?.error || '加载参考图库失败'
   }
 }
 
 function sceneCharactersForOutfits(sc=editingScene.value) { const source=sc?.character_roles_set?(sc?.visible_characters||''):(sc?.characters||sc?.visible_characters||'');const names=String(source).split(/[，,、;；\n]/).map(x=>x.trim()).filter(Boolean);return characters.value.filter(ch=>names.includes(ch.name)) }
+function canonicalSceneReferences(references) {
+  return JSON.stringify((references || []).map(ref => ({
+    source_type: String(ref.source_type || ''), source_id: Number(ref.source_id), variant: String(ref.variant || ''),
+    use_krea2: Boolean(ref.use_krea2), use_h3: Boolean(ref.use_h3), bind_character: String(ref.bind_character || '')
+  })))
+}
+function sceneOutfitAssignments(outfits) {
+  return Object.entries(outfits || {}).filter(([, oid]) => Number(oid) > 0)
+    .map(([cid, oid]) => ({ character_id: Number(cid), outfit_id: Number(oid) }))
+    .sort((a, b) => a.character_id - b.character_id || a.outfit_id - b.outfit_id)
+}
+function canonicalSceneOutfits(outfits) { return JSON.stringify(sceneOutfitAssignments(outfits)) }
 function referenceKey(ref) { return `${ref.source_type}:${ref.source_id}:${ref.variant}` }
 function referenceIndex(ref) { const key = referenceKey(ref); return selectedSceneReferences.value.findIndex(x => referenceKey(x) === key) }
 function toggleSceneReference(ref) { const i = referenceIndex(ref); if (i >= 0) selectedSceneReferences.value.splice(i, 1); else selectedSceneReferences.value.push({ source_type: ref.source_type, source_id: ref.source_id, variant: ref.variant, use_krea2: true, use_h3: true, bind_character: '' }) }
@@ -3056,8 +3076,11 @@ async function redesignScenePrompt() {
   redesigningScenePrompt.value = true
   sceneError.value = ''
   try {
-    // AI 生成提示词前先保存当前套装选择，否则后端仍会按数据库中的旧标准造型组装上下文。
-    const outfitAssignments = Object.entries(selectedSceneOutfits.value).filter(([, oid]) => Number(oid) > 0).map(([cid, oid]) => ({ character_id: Number(cid), outfit_id: Number(oid) }))
+    // 仅把当前选择作为 AI 预览上下文，不改动保存时用于判断用户修改的基线。
+    const outfitAssignments = Object.entries(selectedSceneOutfits.value)
+      .filter(([, oid]) => Number(oid) > 0)
+      .map(([cid, oid]) => ({ character_id: Number(cid), outfit_id: Number(oid) }))
+      .sort((a, b) => a.character_id - b.character_id || a.outfit_id - b.outfit_id)
     const { data } = await api.redesignScenePrompt(id(), editingScene.value.id, { brief: sceneForm.content.trim(), image_engine: sceneForm.image_engine, outfits: outfitAssignments, references: selectedSceneReferences.value })
     sceneForm.image_prompt = data.prompt
     toast.success('场景画面提示词已由 AI 重新设计，请确认后保存')
@@ -3088,8 +3111,16 @@ async function saveScene(close = true) {
       visual_type: sceneForm.visual_type,
       mega_type: sceneForm.mega_type
     })
-    await api.updateSceneReferences(id(), editingScene.value.id, selectedSceneReferences.value)
-    await api.updateSceneOutfits(id(), editingScene.value.id, Object.entries(selectedSceneOutfits.value).filter(([,oid])=>Number(oid)>0).map(([cid,oid])=>({character_id:Number(cid),outfit_id:Number(oid)})))
+    const referencesSnapshot = canonicalSceneReferences(selectedSceneReferences.value)
+    const outfitsSnapshot = canonicalSceneOutfits(selectedSceneOutfits.value)
+    if (sceneReferencesBaseline.value !== null && referencesSnapshot !== sceneReferencesBaseline.value) {
+      await api.updateSceneReferences(id(), editingScene.value.id, selectedSceneReferences.value)
+    }
+    if (sceneOutfitsBaseline.value !== null && outfitsSnapshot !== sceneOutfitsBaseline.value) {
+      await api.updateSceneOutfits(id(), editingScene.value.id, sceneOutfitAssignments(selectedSceneOutfits.value))
+    }
+    if (!close && sceneReferencesBaseline.value !== null) sceneReferencesBaseline.value = referencesSnapshot
+    if (!close && sceneOutfitsBaseline.value !== null) sceneOutfitsBaseline.value = outfitsSnapshot
     const promptChanged = sceneForm.image_prompt !== editingScene.value.image_prompt
     if (close) editingScene.value = null
     await load()

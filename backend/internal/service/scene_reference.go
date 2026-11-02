@@ -2,12 +2,14 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
 	"strings"
 
 	"comfyui-console/internal/models"
+	"gorm.io/gorm"
 )
 
 type SceneReferenceSelection struct {
@@ -219,14 +221,71 @@ func (s *ProjectService) SaveSceneReferences(sc *models.Scene, refs []SceneRefer
 		return nil
 	}
 	data, _ := json.Marshal(refs)
-	if err := s.db.Model(sc).Updates(map[string]any{
-		"reference_images_json": string(data), "prompt_stale": strings.TrimSpace(sc.VideoFullPrompt) != "", "image_file": "", "image_task_id": "",
-		"video_file": "", "video_input_file": "", "video_task_id": "", "video_gpu": nil,
-		"status": "pending", "error": "",
-	}).Error; err != nil {
+	updates := map[string]any{
+		"reference_images_json": string(data),
+		"prompt_stale":          strings.TrimSpace(sc.VideoFullPrompt) != "",
+	}
+	cancelTasks := staleSceneTaskUpdates(s.db, sc, updates)
+	if err := s.db.Model(sc).Updates(updates).Error; err != nil {
 		return err
 	}
-	return MarkSceneCandidatesStale(s.db, sc.ProjectID, sc.ID, "", "场景参考图已修改")
+	cancelSceneTasks(s.tasks, cancelTasks)
+	return markSceneMediaSourceChanged(s.db, sc.ProjectID, sc.ID, "", "场景参考图已修改")
+}
+
+// Source edits are advisory, not a media adoption action. Preserve is_current so
+// an existing user-selected candidate cannot become deletable or disappear from selection.
+func markSceneMediaSourceChanged(db *gorm.DB, projectID, sceneID uint, mediaType, reason string) error {
+	q := db.Model(&models.GenerationCandidate{}).Where("project_id = ? AND entity_type = ? AND entity_id = ?", projectID, "scene", sceneID)
+	if mediaType != "" {
+		q = q.Where("media_type = ?", mediaType)
+	}
+	return q.Updates(map[string]any{"stale": true, "stale_reason": reason}).Error
+}
+
+// staleSceneTaskUpdates disconnects only in-flight work so an old task cannot write
+// results generated from superseded references. Completed media and its provenance stay intact.
+func staleSceneTaskUpdates(db interface {
+	Where(query interface{}, args ...interface{}) *gorm.DB
+}, sc *models.Scene, updates map[string]any) []string {
+	var cancel []string
+	for _, state := range []struct {
+		taskID, taskField, output string
+	}{{sc.ImageTaskID, "image_task_id", sc.ImageFile}, {sc.VideoTaskID, "video_task_id", sc.VideoFile}} {
+		if state.taskID == "" {
+			continue
+		}
+		var task models.Task
+		err := db.Where("task_id = ?", state.taskID).First(&task).Error
+		active := err == nil && task.Status != "success" && task.Status != "failed" && task.Status != "cancelled"
+		if errors.Is(err, gorm.ErrRecordNotFound) && strings.TrimSpace(state.output) == "" {
+			active = true
+		}
+		if active {
+			updates[state.taskField] = ""
+			cancel = append(cancel, state.taskID)
+		}
+	}
+	if len(cancel) > 0 {
+		switch {
+		case strings.TrimSpace(sc.VideoFile) != "":
+			updates["status"] = "video_ready"
+		case strings.TrimSpace(sc.ImageFile) != "":
+			updates["status"] = "image_ready"
+		default:
+			updates["status"] = "pending"
+		}
+	}
+	return cancel
+}
+
+func cancelSceneTasks(tasks *TaskService, taskIDs []string) {
+	if tasks == nil {
+		return
+	}
+	for _, taskID := range taskIDs {
+		_ = tasks.CancelTask(taskID)
+	}
 }
 
 func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target string) ([]FileMeta, []string, bool) {

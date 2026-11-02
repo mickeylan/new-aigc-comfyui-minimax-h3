@@ -691,55 +691,82 @@ func TestPipelineFailureStatusIsNotOverwritten(t *testing.T) {
 	}
 }
 
-func TestUpdateSceneLogic(t *testing.T) {
+func TestUpdateScenePreservesCompletedMediaForSourceChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, imagePrompt string
+		duration                   float64
+		visual                     []string
+	}{
+		{name: "正文", content: "c2", duration: 8},
+		{name: "时长", content: "c1", duration: 15},
+		{name: "图提示词", content: "c1", imagePrompt: "p2", duration: 8},
+		{name: "视觉参数", content: "c1", duration: 8, visual: []string{"megastructure", "architecture"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ps := newTestProjectService(t)
+			ps.tasks = &TaskService{db: ps.db, hub: NewHub()}
+			p := models.Project{Title: "测试"}
+			ps.db.Create(&p)
+			gpu := 2
+			doneTask := models.Task{TaskID: "video-done", Status: "success"}
+			ps.db.Create(&doneTask)
+			sc := models.Scene{ProjectID: p.ID, Order: 1, Content: "c1", ImagePrompt: "p1", Duration: 8,
+				ImageFile: "scene.png", ImageTaskID: "image-done", ImageLocked: true,
+				VideoTaskID: "video-done", VideoFile: "output.mp4", VideoInputFile: "play.mp4", VideoGPU: &gpu,
+				VideoRetries: 3, VideoFullPrompt: "approved", VideoLocked: true, Status: "video_ready"}
+			ps.db.Create(&sc)
+			candidate := models.GenerationCandidate{ProjectID: p.ID, EntityType: "scene", EntityID: sc.ID, MediaType: "video", IsCurrent: true}
+			if err := ps.db.Create(&candidate).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := ps.UpdateScene(&sc, "", tc.content, tc.imagePrompt, tc.duration, tc.visual...); err != nil {
+				t.Fatal(err)
+			}
+			var got models.Scene
+			ps.db.First(&got, sc.ID)
+			if got.ImageFile != "scene.png" || got.ImageTaskID != "image-done" || got.VideoTaskID != "video-done" ||
+				got.VideoFile != "output.mp4" || got.VideoInputFile != "play.mp4" || got.VideoGPU == nil || *got.VideoGPU != gpu ||
+				got.VideoRetries != 3 || got.Status != "video_ready" || !got.ImageLocked || !got.VideoLocked {
+				t.Fatalf("来源编辑不得改变已完成媒体关联: %+v", got)
+			}
+			if !got.PromptStale {
+				t.Fatal("来源编辑应标记已审核提示词过期")
+			}
+			if err := ps.db.First(&candidate, candidate.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if !candidate.IsCurrent || !candidate.Stale {
+				t.Fatal("来源编辑只能提示过期，不能撤销当前媒体采用")
+			}
+			ps.db.First(&doneTask, doneTask.ID)
+			if doneTask.Status != "success" {
+				t.Fatalf("终态任务不得误取消: %+v", doneTask)
+			}
+		})
+	}
+}
+
+func TestUpdateSceneDetachesAndCancelsActiveVideoTask(t *testing.T) {
 	ps := newTestProjectService(t)
-	p := models.Project{Title: "测试", Synopsis: "创意", Status: "script_done"}
-	if err := ps.db.Create(&p).Error; err != nil {
+	ps.tasks = &TaskService{db: ps.db, hub: NewHub()}
+	p := models.Project{Title: "测试"}
+	ps.db.Create(&p)
+	task := models.Task{TaskID: "video-running", Status: "running"}
+	ps.db.Create(&task)
+	sc := models.Scene{ProjectID: p.ID, Order: 1, Content: "old", Duration: 8, ImageFile: "scene.png",
+		VideoTaskID: task.TaskID, VideoFile: "existing.mp4", VideoInputFile: "play.mp4", Status: "video_running"}
+	ps.db.Create(&sc)
+	if err := ps.UpdateScene(&sc, "", "new", "", 8); err != nil {
 		t.Fatal(err)
 	}
-	sc := models.Scene{
-		ProjectID: p.ID, Order: 1, Title: "t1", Content: "c1", ImagePrompt: "p1",
-		ImageFile: "scene_1.png", VideoTaskID: "task-x", VideoFile: "minimax/1.mp4",
-		Status: "video_ready",
+	var got models.Scene
+	ps.db.First(&got, sc.ID)
+	ps.db.First(&task, task.ID)
+	if got.VideoTaskID != "" || task.Status != "cancelled" {
+		t.Fatalf("活动任务未解除并取消: scene=%+v task=%+v", got, task)
 	}
-	if err := ps.db.Create(&sc).Error; err != nil {
-		t.Fatal(err)
-	}
-
-	// 仅修改正文：保留画面，清空视频，状态回 image_ready
-	if err := ps.UpdateScene(&sc, "", "c2", "", sc.Duration); err != nil {
-		t.Fatal(err)
-	}
-	var after models.Scene
-	ps.db.First(&after, sc.ID)
-	if after.ImageFile == "" || after.VideoTaskID != "" || after.VideoFile != "" {
-		t.Fatalf("content-only 编辑应保留画面清空视频: %+v", after)
-	}
-	if after.Status != "image_ready" {
-		t.Fatalf("status = %s", after.Status)
-	}
-
-	// 修改时长：保留画面、清空视频，并使用新时长。
-	if err := ps.UpdateScene(&after, "", "", "", 15); err != nil {
-		t.Fatal(err)
-	}
-	var timed models.Scene
-	ps.db.First(&timed, sc.ID)
-	if timed.Duration != 15 || timed.ImageFile == "" || timed.VideoFile != "" || timed.VideoTaskID != "" || timed.Status != "image_ready" {
-		t.Fatalf("修改时长后的失效状态错误: %+v", timed)
-	}
-
-	// 修改画面提示词：保留用户已满意的分镜图，只使依赖它的旧视频失效。
-	if err := ps.UpdateScene(&after, "", "", "p2", after.Duration); err != nil {
-		t.Fatal(err)
-	}
-	var after2 models.Scene
-	ps.db.First(&after2, sc.ID)
-	if after2.ImageFile != "scene_1.png" || after2.VideoTaskID != "" || after2.VideoFile != "" {
-		t.Fatalf("image_prompt 编辑不得擅自删除现有分镜图: %+v", after2)
-	}
-	if after2.Status != "image_ready" {
-		t.Fatalf("status = %s", after2.Status)
+	if got.VideoFile != "existing.mp4" || got.VideoInputFile != "play.mp4" || got.Status != "video_running" {
+		t.Fatalf("取消活动任务不得删除已有媒体或改变状态: %+v", got)
 	}
 }
 
@@ -1157,6 +1184,74 @@ func TestExplicitSceneReferencesControlKrea2AndH3Order(t *testing.T) {
 	videoRefs, videoLines := ps.sceneVideoReferenceFiles(&sc, fmt.Sprint(p.ID))
 	if len(videoRefs) != 2 || videoRefs[0].Name != "sword.png" || videoRefs[1].Name != "start.png" || !strings.Contains(videoLines[0], "<Picture 1>") || !strings.Contains(videoLines[1], "<Picture 2>") || !strings.Contains(videoLines[1], "当前分镜画面") {
 		t.Fatalf("H3 must keep selected references first and storyboard last: refs=%+v lines=%v", videoRefs, videoLines)
+	}
+}
+
+func TestSaveSceneReferencesChangesPreserveCompletedMediaAndExplicitEmpty(t *testing.T) {
+	ps := newTestProjectService(t)
+	p := models.Project{Title: "refs retain media"}
+	if err := ps.db.Create(&p).Error; err != nil {
+		t.Fatal(err)
+	}
+	sc := models.Scene{ProjectID: p.ID, ImageFile: "storyboard.png", ImageTaskID: "completed-image", VideoFile: "video.mp4", VideoInputFile: "input.png", VideoTaskID: "completed-video", Status: "video_ready", VideoFullPrompt: "old prompt"}
+	if err := ps.db.Create(&sc).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.SaveSceneReferences(&sc, []SceneReferenceSelection{}); err != nil {
+		t.Fatal(err)
+	}
+	var got models.Scene
+	if err := ps.db.First(&got, sc.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.ReferenceImagesJSON != "[]" || got.ImageFile != sc.ImageFile || got.ImageTaskID != sc.ImageTaskID || got.VideoFile != sc.VideoFile || got.VideoInputFile != sc.VideoInputFile || got.VideoTaskID != sc.VideoTaskID || got.Status != sc.Status || !got.PromptStale {
+		t.Fatalf("explicit empty refs changed completed media or selection semantics: %+v", got)
+	}
+	ch := models.Character{ProjectID: p.ID, Name: "林舒", Portrait: "face.png"}
+	if err := ps.db.Create(&ch).Error; err != nil {
+		t.Fatal(err)
+	}
+	refs := []SceneReferenceSelection{{SourceType: "character", SourceID: ch.ID, Variant: "portrait", UseKrea2: true, UseH3: true}}
+	if err := ps.SaveSceneReferences(&got, refs); err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.db.First(&got, sc.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.ImageFile != sc.ImageFile || got.ImageTaskID != sc.ImageTaskID || got.VideoFile != sc.VideoFile || got.VideoTaskID != sc.VideoTaskID || got.Status != sc.Status {
+		t.Fatalf("changed refs deleted completed media: %+v", got)
+	}
+	if err := ps.SaveSceneReferences(&got, refs); err != nil {
+		t.Fatal(err)
+	}
+	var noop models.Scene
+	if err := ps.db.First(&noop, sc.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if noop.ImageFile != got.ImageFile || noop.VideoFile != got.VideoFile || noop.Status != got.Status {
+		t.Fatalf("reference no-op changed media: %+v", noop)
+	}
+
+	active := models.Task{TaskID: "refs-running-video", Status: "running"}
+	if err := ps.db.Create(&active).Error; err != nil {
+		t.Fatal(err)
+	}
+	running := models.Scene{ProjectID: p.ID, Order: 2, ReferenceImagesJSON: "[]", ImageFile: "kept.png", VideoFile: "kept.mp4", VideoTaskID: active.TaskID, Status: "video_running"}
+	if err := ps.db.Create(&running).Error; err != nil {
+		t.Fatal(err)
+	}
+	ps.tasks = &TaskService{db: ps.db, hub: NewHub()}
+	if err := ps.SaveSceneReferences(&running, refs); err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.db.First(&running, running.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.db.First(&active, active.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if running.VideoTaskID != "" || running.ImageFile != "kept.png" || running.VideoFile != "kept.mp4" || running.Status != "video_ready" || active.Status != "cancelled" {
+		t.Fatalf("changed refs did not cancel/detach active task while retaining completed media: scene=%+v task=%+v", running, active)
 	}
 }
 

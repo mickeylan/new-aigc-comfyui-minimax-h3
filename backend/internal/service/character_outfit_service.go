@@ -703,6 +703,8 @@ func (s *CharacterLookService) AssignSceneOutfits(projectID, sceneID uint, assig
 			return nil
 		}
 	}
+	updates := map[string]any{"prompt_stale": true}
+	cancelTasks := staleSceneTaskUpdates(s.db, &scene, updates)
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("scene_id = ?", sceneID).Delete(&models.SceneCharacterOutfit{}).Error; err != nil {
 			return err
@@ -712,14 +714,12 @@ func (s *CharacterLookService) AssignSceneOutfits(projectID, sceneID uint, assig
 				return err
 			}
 		}
-		return tx.Model(&models.Scene{}).Where("id = ?", sceneID).Updates(map[string]any{
-			"image_file": "", "image_task_id": "", "video_file": "", "video_input_file": "", "video_task_id": "", "video_gpu": nil,
-			"prompt_stale": true, "status": "pending", "error": "",
-		}).Error
+		return tx.Model(&models.Scene{}).Where("id = ?", sceneID).Updates(updates).Error
 	}); err != nil {
 		return err
 	}
-	return MarkSceneCandidatesStale(s.db, projectID, sceneID, "", "场景角色新形象已修改")
+	cancelSceneTasks(s.tasks, cancelTasks)
+	return markSceneMediaSourceChanged(s.db, projectID, sceneID, "", "场景角色新形象已修改")
 }
 
 func (s *CharacterLookService) validateOutfitAssignments(projectID uint, assignments []OutfitAssignment) error {

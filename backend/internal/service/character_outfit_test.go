@@ -346,6 +346,15 @@ func TestAssignSceneOutfitsNoOpPreservesGeneratedMedia(t *testing.T) {
 	if got.ImageFile != "storyboard.png" || got.VideoFile != "video.mp4" || got.Status != "video_ready" {
 		t.Fatalf("no-op assignment invalidated media: %+v", got)
 	}
+	if err := svc.AssignSceneOutfits(project.ID, scene.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.db.First(&got, scene.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.ImageFile != "storyboard.png" || got.VideoFile != "video.mp4" || got.Status != "video_ready" || !got.PromptStale {
+		t.Fatalf("changed assignment must stale prompts without deleting completed media: %+v", got)
+	}
 }
 
 func TestOutfitCombinesIndependentAssetsAndAssignsPerScene(t *testing.T) {

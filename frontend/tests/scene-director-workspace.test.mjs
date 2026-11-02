@@ -49,3 +49,21 @@ test('Scene卡片显示生产进度并支持同工作台处理下一Scene', () =
   assert.match(detail, /goToScenePage\(Math\.floor\(\(index \+ 1\) \/ scenePageSize\) \+ 1\)/)
   assert.match(detail, /返回第 \{\{ scenePage \}\} 页/)
 })
+
+test('仅正文保存不会更新参考图或套装，媒体选择实际变化才条件PUT', () => {
+  const saveScene = detail.slice(detail.indexOf('async function saveScene('), detail.indexOf('function aspectLabel'))
+  assert.match(saveScene, /sceneReferencesBaseline\.value !== null && referencesSnapshot !== sceneReferencesBaseline\.value[\s\S]*api\.updateSceneReferences/)
+  assert.match(saveScene, /sceneOutfitsBaseline\.value !== null && outfitsSnapshot !== sceneOutfitsBaseline\.value[\s\S]*api\.updateSceneOutfits/)
+  assert.doesNotMatch(saveScene, /await api\.updateScene[^\n]*\n\s*await api\.updateSceneReferences/)
+  assert.match(detail, /sceneReferencesBaseline\.value = canonicalSceneReferences\(selectedSceneReferences\.value\)/)
+  assert.match(detail, /sceneOutfitsBaseline\.value = canonicalSceneOutfits\(selectedSceneOutfits\.value\)/)
+})
+
+test('媒体dirty比较规范化对象并保留加载失败和AI预览语义', () => {
+  assert.match(detail, /function canonicalSceneReferences\(references\)/)
+  assert.match(detail, /\.sort\(\(a, b\) => a\.character_id - b\.character_id \|\| a\.outfit_id - b\.outfit_id\)/)
+  assert.match(detail, /sceneReferencesBaseline\.value = null[\s\S]*sceneOutfitsBaseline\.value = null[\s\S]*try \{/)
+  assert.match(detail, /仅把当前选择作为 AI 预览上下文，不改动保存时用于判断用户修改的基线/)
+  assert.match(detail, /if \(!close && sceneReferencesBaseline\.value !== null\) sceneReferencesBaseline\.value = referencesSnapshot/)
+  assert.match(detail, /if \(!close && sceneOutfitsBaseline\.value !== null\) sceneOutfitsBaseline\.value = outfitsSnapshot/)
+})

@@ -817,11 +817,13 @@ func (s *ProjectService) ReplaceSceneVideo(sc *models.Scene, videoFile, source s
 	})
 }
 
-// UpdateScene 编辑场景文案。任何文案、画面提示词或引擎变化都保留用户已生成/采用的分镜图；
-// 旧图仅标记为可能过期，只有用户明确发起重新生成且新候选成功后才替换。依赖正文的旧视频仍会失效。
+// UpdateScene 编辑场景文案。来源发生变化时只标记提示词和候选过期；
+// 已完成媒体及其任务、状态和播放入口均保留。活动视频任务会被解除关联并取消，防止旧结果回写。
 func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imagePrompt string, duration float64, visual ...string) error {
 	updates := map[string]any{}
+	contentChanged := content != "" && sc.Content != content
 	durationChanged := duration > 0 && sc.Duration != duration
+	oldVideoTaskID := sc.VideoTaskID
 	if duration > 0 {
 		updates["duration"] = duration
 	}
@@ -849,29 +851,22 @@ func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imageProm
 		updates["image_prompt"] = imagePrompt
 		imageChanged = imageChanged || sc.ImagePrompt != imagePrompt
 	}
-	if imageChanged {
-		updates["prompt_stale"] = strings.TrimSpace(sc.VideoFullPrompt) != ""
-		// Never discard a user-reviewed storyboard merely because its source prompt changed.
-		// The existing image remains visible and usable until explicit regeneration succeeds.
-		updates["video_task_id"] = ""
-		updates["video_file"] = ""
-		updates["video_input_file"] = ""
-		updates["video_gpu"] = nil
-		updates["video_retries"] = 0
-		updates["status"] = gorm.Expr("CASE WHEN image_file <> '' THEN 'image_ready' ELSE 'pending' END")
-		updates["error"] = ""
-	} else if (content != "" && sc.Content != content) || durationChanged {
-		// 修改正文或时长：保留画面，视频需重新生成；已审核完整提示词需要重新确认。
-		updates["prompt_stale"] = strings.TrimSpace(sc.VideoFullPrompt) != ""
-		updates["video_task_id"] = ""
-		updates["video_file"] = ""
-		updates["video_input_file"] = ""
-		updates["video_gpu"] = nil
-		updates["video_retries"] = 0
-		if sc.VideoFile != "" || sc.VideoTaskID != "" {
-			updates["status"] = "image_ready"
+	sourceChanged := imageChanged || contentChanged || durationChanged
+	activeVideoTask := false
+	if sourceChanged && oldVideoTaskID != "" {
+		var active int64
+		if err := s.db.Model(&models.Task{}).Where("task_id = ? AND status IN ?", oldVideoTaskID, []string{"pending", "queued", "running"}).Count(&active).Error; err != nil {
+			return err
 		}
-		updates["error"] = ""
+		activeVideoTask = active > 0
+	}
+	if sourceChanged {
+		updates["prompt_stale"] = strings.TrimSpace(sc.VideoFullPrompt) != ""
+		// Detach only an active task so its eventual callback cannot overwrite the retained media.
+		// Terminal task IDs are part of the completed media association and must remain intact.
+		if activeVideoTask {
+			updates["video_task_id"] = ""
+		}
 	}
 	if len(updates) == 0 {
 		return nil
@@ -885,17 +880,17 @@ func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imageProm
 		}
 	}
 	if imageChanged {
-		if err := MarkSceneCandidatesStale(s.db, sc.ProjectID, sc.ID, "", "场景画面来源或提示词已修改"); err != nil {
+		if err := markSceneMediaSourceChanged(s.db, sc.ProjectID, sc.ID, "", "场景画面来源或提示词已修改"); err != nil {
 			return err
 		}
-	} else if (content != "" && sc.Content != content) || durationChanged {
-		if err := MarkSceneCandidatesStale(s.db, sc.ProjectID, sc.ID, "video", "场景正文或时长已修改"); err != nil {
+	} else if contentChanged || durationChanged {
+		if err := markSceneMediaSourceChanged(s.db, sc.ProjectID, sc.ID, "video", "场景正文或时长已修改"); err != nil {
 			return err
 		}
 	}
-	if (imageChanged || (content != "" && sc.Content != content) || durationChanged) && sc.VideoTaskID != "" && s.tasks != nil {
-		if err := s.tasks.CancelTask(sc.VideoTaskID); err != nil && !strings.Contains(err.Error(), "已结束") {
-			log.Printf("[scene %d] cancel stale video task %s failed: %v", sc.ID, sc.VideoTaskID, err)
+	if activeVideoTask && s.tasks != nil {
+		if err := s.tasks.CancelTask(oldVideoTaskID); err != nil && !strings.Contains(err.Error(), "已结束") {
+			log.Printf("[scene %d] cancel stale video task %s failed: %v", sc.ID, oldVideoTaskID, err)
 		}
 	}
 	return nil

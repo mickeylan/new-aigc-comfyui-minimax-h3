@@ -731,13 +731,6 @@ func (s *Service) HandleUpdateScene(c *gin.Context) {
 		"characters":           strings.TrimSpace(req.VisibleCharacters),
 		"prompt_stale":         sc.PromptStale || (strings.TrimSpace(sc.VideoFullPrompt) != "" && sourceChanged),
 	}
-	if engineChanged {
-		// Engine selection changes future regeneration only. Preserve the currently reviewed
-		// storyboard until the user explicitly generates and accepts a replacement.
-		roleUpdates["video_file"], roleUpdates["video_input_file"], roleUpdates["video_task_id"] = "", "", ""
-		roleUpdates["status"] = gorm.Expr("CASE WHEN image_file <> '' THEN 'image_ready' ELSE 'pending' END")
-		roleUpdates["error"] = ""
-	}
 	if err := s.DB.Model(sc).Updates(roleUpdates).Error; err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
