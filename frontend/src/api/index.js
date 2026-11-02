@@ -125,6 +125,8 @@ export const api = {
   analyzeSceneBlocking: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/blocking/analyze`, null, { timeout: 300000 }),
   inheritSceneBlocking: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/blocking/inherit`),
   saveSceneBlocking: (id, sid, blocking) => http.put(`/projects/${id}/scenes/${sid}/blocking`, blocking),
+  previewSceneBlockingPrompt: (id, sid, kind) => http.post(`/projects/${id}/scenes/${sid}/blocking/prompts/${kind}/preview`, null, { timeout: 300000 }),
+  applySceneBlockingPrompt: (id, sid, kind, data) => http.post(`/projects/${id}/scenes/${sid}/blocking/prompts/${kind}/apply`, data),
   updateSceneLocks: (id, sid, data) => http.patch(`/projects/${id}/scenes/${sid}/locks`, data),
   redesignScenePrompt: (id, sid, data) => http.post(`/projects/${id}/scenes/${sid}/prompt/redesign`, typeof data === 'string' ? { brief: data } : data, { timeout: 300000 }),
   generateSceneImage: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/image`),

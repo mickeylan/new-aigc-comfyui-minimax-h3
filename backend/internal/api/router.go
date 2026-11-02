@@ -115,6 +115,8 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/scenes/:sid/blocking/analyze", svc.HandleAnalyzeSceneBlocking)
 	r.POST("/api/projects/:id/scenes/:sid/blocking/inherit", svc.HandleInheritSceneBlocking)
 	r.PUT("/api/projects/:id/scenes/:sid/blocking", svc.HandleSaveSceneBlocking)
+	r.POST("/api/projects/:id/scenes/:sid/blocking/prompts/:kind/preview", svc.HandlePreviewSceneBlockingPrompt)
+	r.POST("/api/projects/:id/scenes/:sid/blocking/prompts/:kind/apply", svc.HandleApplySceneBlockingPrompt)
 	r.POST("/api/projects/:id/scenes/:sid/reassign-episode", svc.HandleReassignSceneEpisode)
 	r.POST("/api/projects/:id/scenes/:sid/prompt/redesign", svc.HandleRedesignScenePrompt)
 	r.POST("/api/projects/:id/scenes/:sid/shots/director-draft", svc.HandleGenerateSceneDirectorDraft)

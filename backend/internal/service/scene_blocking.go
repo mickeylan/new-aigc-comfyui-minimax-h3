@@ -1,10 +1,13 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"comfyui-console/internal/models"
 	"github.com/gin-gonic/gin"
@@ -57,6 +60,15 @@ func parseSceneBlocking(raw string) (SceneBlocking, error) {
 
 func blockingJSON(out SceneBlocking) string { b, _ := json.Marshal(out); return string(b) }
 
+func blockingDigest(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func blockingAppliedHash(blocking, prompt string) string {
+	return blockingDigest(blocking) + ":" + blockingDigest(prompt)
+}
+
 // HandleAnalyzeSceneBlocking returns an editable preview and never writes Scene.
 func (s *Service) HandleAnalyzeSceneBlocking(c *gin.Context) {
 	scene, ok := s.loadScene(c)
@@ -108,7 +120,7 @@ func (s *Service) HandleSaveSceneBlocking(c *gin.Context) {
 		return
 	}
 	encoded := blockingJSON(result)
-	if err := s.DB.Model(&models.Scene{}).Where("id=? AND project_id=?", scene.ID, scene.ProjectID).Updates(map[string]any{"blocking_json": encoded, "prompt_stale": true}).Error; err != nil {
+	if err := s.DB.Model(&models.Scene{}).Where("id=? AND project_id=?", scene.ID, scene.ProjectID).Updates(map[string]any{"blocking_json": encoded, "blocking_image_applied_hash": "", "blocking_video_applied_hash": "", "prompt_stale": true}).Error; err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -150,6 +162,127 @@ func (s *Service) HandleInheritSceneBlocking(c *gin.Context) {
 	result.End = ""
 	result.Suggestions = append(result.Suggestions, "继承自上一镜，仅作为当前镜开场连续性建议，请编辑确认")
 	c.JSON(200, gin.H{"blocking": result, "persisted": false, "source_scene_id": previous.ID})
+}
+
+// HandlePreviewSceneBlockingPrompt generates a reviewable prompt without writing Scene or media state.
+func (s *Service) HandlePreviewSceneBlockingPrompt(c *gin.Context) {
+	scene, ok := s.loadScene(c)
+	if !ok {
+		return
+	}
+	if strings.TrimSpace(scene.BlockingJSON) == "" {
+		c.JSON(400, gin.H{"error": "请先保存人物站位"})
+		return
+	}
+	kind := c.Param("kind")
+	var prompt, actionPrompt string
+	var err error
+	switch kind {
+	case "image":
+		prompt, err = s.Projects.RedesignSceneImagePrompt(scene)
+	case "video":
+		actionPrompt, err = s.Projects.GenerateSceneVideoAction(scene)
+		if err == nil {
+			var project models.Project
+			if err = s.DB.First(&project, scene.ProjectID).Error; err == nil {
+				dialogues := s.Projects.sceneVideoDialogues(scene)
+				preview := *scene
+				actionPrompt = s.Projects.applySceneShotTimeline(scene, actionPrompt)
+				preview.VideoPrompt = actionPrompt
+				continuity, _, refLines := s.sceneVideoPromptContinuity(scene)
+				template := strings.TrimSpace(scene.VideoTemplate)
+				if continuity != nil && continuity.Status == "ready" && continuity.Mode == models.ContinuityModeBridge && !sceneExplicitlyRequiresCombatTemplate(scene) {
+					template = "minimax_h3_first_last"
+				}
+				template = enforceSceneModeVideoTemplate(scene, template)
+				if template == "" {
+					template = "minimax_h3_ref2v"
+				}
+				prompt = compileH3PromptForTemplate(template, &preview, &project, dialogues, refLines)
+				var shots []models.Shot
+				_ = s.DB.Where("scene_id = ?", scene.ID).Order("order_num, id").Find(&shots).Error
+				shots = s.Projects.ensureShotDialogueRanges(scene.ID, shots)
+				prompt = normalizeSavedH3Audio(prompt, dialogues, refLines, shots)
+				prompt = applyAuthoritativeSceneShotTimeline(prompt, scene.Content)
+				prompt = s.Projects.applySceneShotTimeline(scene, prompt)
+			}
+		}
+	default:
+		c.JSON(404, gin.H{"error": "未知提示词类型"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"prompt": prompt, "action_prompt": actionPrompt, "kind": kind, "blocking_hash": blockingDigest(scene.BlockingJSON), "persisted": false})
+}
+
+// HandleApplySceneBlockingPrompt only persists the reviewed prompt and its exact blocking/prompt association.
+func (s *Service) HandleApplySceneBlockingPrompt(c *gin.Context) {
+	scene, ok := s.loadScene(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Prompt       string `json:"prompt"`
+		BlockingHash string `json:"blocking_hash"`
+	}
+	if c.ShouldBindJSON(&req) != nil || strings.TrimSpace(req.Prompt) == "" {
+		c.JSON(400, gin.H{"error": "提示词不能为空"})
+		return
+	}
+	blockingMatches := strings.TrimSpace(scene.BlockingJSON) != "" && req.BlockingHash == blockingDigest(scene.BlockingJSON)
+	kind := c.Param("kind")
+	updates := map[string]any{}
+	response := gin.H{"prompt": req.Prompt, "kind": kind, "applied": blockingMatches}
+	switch kind {
+	case "image":
+		updates["image_prompt"] = req.Prompt
+		if blockingMatches {
+			updates["blocking_image_applied_hash"] = blockingAppliedHash(scene.BlockingJSON, req.Prompt)
+		} else {
+			updates["blocking_image_applied_hash"] = ""
+			response["warning"] = "人物站位已变化；提示词仍已保存，但未标记为已应用当前站位"
+		}
+	case "video":
+		actionPrompt := normalizeVideoActionPrompt(req.Prompt)
+		if isH3KeyframePrompt(req.Prompt) {
+			actionPrompt = h3IntegratedDescription(req.Prompt)
+		}
+		updates["video_full_prompt"] = req.Prompt
+		updates["video_prompt"] = actionPrompt
+		updates["prompt_stale"] = false
+		if blockingMatches {
+			updates["blocking_video_applied_hash"] = blockingAppliedHash(scene.BlockingJSON, req.Prompt)
+		} else {
+			updates["blocking_video_applied_hash"] = ""
+			response["warning"] = "人物站位已变化；完整执行稿仍已保存，但未标记为已应用当前站位"
+		}
+		if strings.TrimSpace(scene.VideoPromptMasterZH) != "" {
+			current, err := s.sceneVideoPromptSourceHash(scene)
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+			now := time.Now()
+			updates["video_exec_source_hash"] = current
+			updates["video_exec_confirmed_hash"] = hashString(req.Prompt)
+			updates["video_exec_confirmed_at"] = now
+			response["source_hash"] = current
+			response["exec_hash"] = hashString(req.Prompt)
+			response["confirmed_at"] = now
+		}
+		response["action_prompt"] = actionPrompt
+	default:
+		c.JSON(404, gin.H{"error": "未知提示词类型"})
+		return
+	}
+	if err := s.DB.Model(&models.Scene{}).Where("id=? AND project_id=?", scene.ID, scene.ProjectID).Updates(updates).Error; err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, response)
 }
 
 func sceneBlockingPromptContext(sc *models.Scene) string {
