@@ -8467,11 +8467,6 @@ func (s *ProjectService) createMergeTaskRecord(p *models.Project, sceneIDs []uin
 		if active > 0 {
 			return fmt.Errorf("第%d集已有进行中的合并任务，请等待完成", episodeN)
 		}
-		if audio.DialogueMix && audio.DialogueVolume > 0 {
-			if _, err := s.loadReadyDialogues(tx, sceneIDs); err != nil {
-				return err
-			}
-		}
 		snapshot, err := s.captureMergeInputSnapshot(tx, current.ID, episodeN, episodeGeneration, fingerprints, materials, sceneIDs, dub, subtitles, audio)
 		if err != nil {
 			return err
@@ -8988,35 +8983,72 @@ type dubSegment struct {
 	Volume     float64
 }
 
-func (s *ProjectService) loadReadyDialogues(tx *gorm.DB, sceneIDs []uint) ([]models.Dialogue, error) {
+type skippedDialogue struct {
+	Dialogue models.Dialogue
+	Reason   string
+}
+
+func (s *ProjectService) loadReadyDialogues(tx *gorm.DB, sceneIDs []uint) ([]models.Dialogue, []skippedDialogue, error) {
 	var dubs []models.Dialogue
 	if err := tx.Where("scene_id IN ?", sceneIDs).Order("scene_id, `order`").Find(&dubs).Error; err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	audible := dubs[:0]
+	ready := make([]models.Dialogue, 0, len(dubs))
+	skipped := make([]skippedDialogue, 0)
 	for _, d := range dubs {
 		if strings.TrimSpace(d.Text) == "" {
 			continue
 		}
-		if d.Status != "ready" || d.AudioStale || strings.TrimSpace(d.AudioFile) == "" || d.AudioHash == "" || d.AudioHash != s.effectiveDialogueAudioHash(d) {
-			return nil, fmt.Errorf("对白 %d 的音频未就绪或已过期，请先重新合成", d.ID)
+		reason := ""
+		switch {
+		case d.Status != "ready":
+			reason = "状态为" + d.Status
+		case d.AudioStale:
+			reason = "音频已过期"
+		case strings.TrimSpace(d.AudioFile) == "":
+			reason = "音频文件未生成"
+		case d.AudioHash == "":
+			reason = "音频哈希缺失"
+		case d.AudioHash != s.effectiveDialogueAudioHash(d):
+			reason = "音频哈希已过期"
 		}
-		audible = append(audible, d)
+		if reason != "" {
+			skipped = append(skipped, skippedDialogue{Dialogue: d, Reason: reason})
+			continue
+		}
+		ready = append(ready, d)
 	}
-	return audible, nil
+	return ready, skipped, nil
 }
 
 // buildDubTimeline 构建该集对白时间轴：
 // 场景按顺序排布（起点 = 前序视频时长累加），场景内对白按序排列（句间 0.35s 间隔）。
-// 全部对白均 ready 时返回 dubReady=true；存在未合成对白时返回错误。
+// 未就绪对白不混音，但仍以兜底时长占据原时间位置，避免后续对白前移。
 func (s *ProjectService) buildDubTimeline(p *models.Project, episodeN int, sceneIDs []uint, videoDurs []sceneVideo) ([]dubSegment, float64, bool, error) {
-	dubs, err := s.loadReadyDialogues(s.db, sceneIDs)
+	ready, skipped, err := s.loadReadyDialogues(s.db, sceneIDs)
 	if err != nil {
 		return nil, 0, false, err
 	}
-	if len(dubs) == 0 {
+	if len(ready) == 0 && len(skipped) == 0 {
 		return nil, 0, false, nil
 	}
+	dubs := append([]models.Dialogue(nil), ready...)
+	readyIDs := make(map[uint]bool, len(ready))
+	for _, d := range ready {
+		readyIDs[d.ID] = true
+	}
+	for _, skip := range skipped {
+		dubs = append(dubs, skip.Dialogue)
+	}
+	sort.SliceStable(dubs, func(i, j int) bool {
+		if dubs[i].SceneID != dubs[j].SceneID {
+			return dubs[i].SceneID < dubs[j].SceneID
+		}
+		if dubs[i].Order != dubs[j].Order {
+			return dubs[i].Order < dubs[j].Order
+		}
+		return dubs[i].ID < dubs[j].ID
+	})
 	byScene := map[uint][]models.Dialogue{}
 	sceneOrder := map[uint]int{}
 	for i, sid := range sceneIDs {
@@ -9051,7 +9083,7 @@ func (s *ProjectService) buildDubTimeline(p *models.Project, episodeN int, scene
 			audioAbs := ""
 			sourceDur := 2.0 // 无音频时的兜底时长
 			if d.AudioFile != "" {
-				audioAbs = filepath.Join(s.cfg.Comfy.ComfyDir, "input", fmt.Sprintf("%d", p.ID), d.AudioFile)
+				audioAbs = s.mediaPath("input", fmt.Sprintf("%d", p.ID), filepath.FromSlash(d.AudioFile))
 				if s.remote != nil {
 					if info, err := s.remote.ProbeMedia(audioAbs); err == nil && info.Duration > 0 {
 						sourceDur = info.Duration
@@ -9060,12 +9092,14 @@ func (s *ProjectService) buildDubTimeline(p *models.Project, episodeN int, scene
 			}
 			speed := dialogueSpeed(d)
 			dur := sourceDur / speed
-			segs = append(segs, dubSegment{
-				DialogueID: d.ID, SceneID: d.SceneID,
-				Start: start, End: start + dur,
-				Character: d.Character, Text: d.Text, AudioAbs: audioAbs,
-				SourceDur: sourceDur, Speed: speed, Pitch: d.Pitch, Volume: dialogueVolume(d),
-			})
+			if readyIDs[d.ID] {
+				segs = append(segs, dubSegment{
+					DialogueID: d.ID, SceneID: d.SceneID,
+					Start: start, End: start + dur,
+					Character: d.Character, Text: d.Text, AudioAbs: audioAbs,
+					SourceDur: sourceDur, Speed: speed, Pitch: d.Pitch, Volume: dialogueVolume(d),
+				})
+			}
 			cursor = start + dur + gap
 		}
 		if cursor > sceneStart+sceneDur[i] {
@@ -9074,7 +9108,7 @@ func (s *ProjectService) buildDubTimeline(p *models.Project, episodeN int, scene
 			global = sceneStart + sceneDur[i]
 		}
 	}
-	return segs, global, true, nil
+	return segs, global, len(segs) > 0, nil
 }
 
 // remoteMediaDuration 远程探测音频/视频时长（秒），用 ffmpeg -i 解析

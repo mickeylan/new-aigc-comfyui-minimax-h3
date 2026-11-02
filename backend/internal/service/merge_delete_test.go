@@ -3,15 +3,15 @@ package service
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"comfyui-console/internal/config"
 	"comfyui-console/internal/models"
 )
 
-func TestStaleDialogueRejectsMergeBeforeRecordCreation(t *testing.T) {
+func TestStaleDialogueIsSkippedWithReason(t *testing.T) {
 	svc := newTestProjectService(t)
+	svc.cfg = &config.Config{}
 	if err := svc.db.AutoMigrate(&models.Dialogue{}); err != nil {
 		t.Fatal(err)
 	}
@@ -33,16 +33,50 @@ func TestStaleDialogueRejectsMergeBeforeRecordCreation(t *testing.T) {
 	if err := svc.db.Create(&dialogue).Error; err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := svc.createMergeTaskRecord(&project, []uint{scenes[0].ID, scenes[1].ID}, true, false, MergeAudioOptions{DialogueMix: true, DialogueVolume: 1})
-	if err == nil || !strings.Contains(err.Error(), "音频未就绪或已过期") {
-		t.Fatalf("expected stale dialogue rejection, got %v", err)
-	}
-	var count int64
-	if err := svc.db.Model(&models.MergeTask{}).Count(&count).Error; err != nil {
+	ready, skipped, err := svc.loadReadyDialogues(svc.db, []uint{scenes[0].ID, scenes[1].ID})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 0 {
-		t.Fatalf("stale dialogue created %d merge records", count)
+	if len(ready) != 0 || len(skipped) != 1 || skipped[0].Dialogue.ID != dialogue.ID || skipped[0].Reason != "音频已过期" {
+		t.Fatalf("unexpected selection: ready=%+v skipped=%+v", ready, skipped)
+	}
+}
+
+func TestReadyAndPendingDialoguesSelectSubsetAndKeepTimelineSlot(t *testing.T) {
+	svc := newTestProjectService(t)
+	svc.cfg = &config.Config{}
+	if err := svc.db.AutoMigrate(&models.Dialogue{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "mix"}
+	svc.db.Create(&project)
+	gpu := 0
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Status: "video_ready", VideoFile: "one.mp4", VideoGPU: &gpu}
+	svc.db.Create(&scene)
+	dialogues := []models.Dialogue{
+		{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Text: "ready one", Status: "ready", AudioFile: "one.wav"},
+		{ProjectID: project.ID, SceneID: scene.ID, Order: 2, Text: "pending", Status: "pending"},
+		{ProjectID: project.ID, SceneID: scene.ID, Order: 3, Text: "ready two", Status: "ready", AudioFile: "two.wav"},
+	}
+	for i := range dialogues {
+		if err := svc.db.Create(&dialogues[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+		dialogues[i].AudioHash = svc.effectiveDialogueAudioHash(dialogues[i])
+		if err := svc.db.Model(&dialogues[i]).Update("audio_hash", dialogues[i].AudioHash).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	ready, skipped, err := svc.loadReadyDialogues(svc.db, []uint{scene.ID})
+	if err != nil || len(ready) != 2 || len(skipped) != 1 || skipped[0].Dialogue.ID != dialogues[1].ID {
+		t.Fatalf("selection ready=%v skipped=%v err=%v", ready, skipped, err)
+	}
+	segments, _, audible, err := svc.buildDubTimeline(&project, 1, []uint{scene.ID}, []sceneVideo{{dur: 10}})
+	if err != nil || !audible || len(segments) != 2 {
+		t.Fatalf("timeline segments=%+v audible=%v err=%v", segments, audible, err)
+	}
+	if segments[1].Start < segments[0].End+2.35 {
+		t.Fatalf("pending dialogue slot collapsed: %+v", segments)
 	}
 }
 

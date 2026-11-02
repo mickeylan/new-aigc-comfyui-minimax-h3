@@ -41,6 +41,27 @@ func (s *ProjectService) validateMergeExecution(p *models.Project, mt *models.Me
 		return err
 	}
 	warnings := make([]string, 0)
+	if mt.DialogueMix && mt.DialogueVolume > 0 {
+		sceneIDs := make([]uint, 0, len(videos))
+		for _, video := range videos {
+			if video.SceneID != 0 {
+				sceneIDs = append(sceneIDs, video.SceneID)
+			}
+		}
+		ready, skipped, loadErr := s.loadReadyDialogues(s.db, sceneIDs)
+		if loadErr != nil {
+			return loadErr
+		}
+		for _, skip := range skipped {
+			warnings = append(warnings, fmt.Sprintf("对白%d未混入：%s", skip.Dialogue.ID, skip.Reason))
+		}
+		for _, dialogue := range ready {
+			abs := s.mediaPath("input", fmt.Sprint(p.ID), dialogue.AudioFile)
+			if _, probeErr := s.remote.ProbeMedia(abs); probeErr != nil {
+				return fmt.Errorf("对白%d的已就绪音频文件不可用", dialogue.ID)
+			}
+		}
+	}
 	for _, decision := range resolveAudioLayerMix(layers) {
 		if decision.Status == audioLayerMixYielded {
 			warnings = append(warnings, fmt.Sprintf("音频层%d因优先级重叠未混入", decision.Layer.ID))
