@@ -163,8 +163,8 @@ func (s *Service) HandleApplySceneDialogue(c *gin.Context) {
 				warnings = append(warnings, fmt.Sprintf("索引%d原文不匹配，未应用", item.Index))
 				continue
 			}
-			if strings.TrimSpace(item.Speaker) == "" || item.Speaker == "待确认" || item.Speaker == "未知" {
-				warnings = append(warnings, fmt.Sprintf("台词%d说话人待确认，未写入Dialogue", item.Index+1))
+			if strings.TrimSpace(item.Speaker) == "" {
+				warnings = append(warnings, fmt.Sprintf("台词%d说话人为空，未写入Dialogue", item.Index+1))
 				continue
 			}
 			if !validType[item.SpeechType] {
@@ -189,10 +189,8 @@ func (s *Service) HandleApplySceneDialogue(c *gin.Context) {
 			if found >= 0 {
 				d := existing[found]
 				usedExisting[d.ID] = true
-				if d.Source != "ai_reviewed" && d.Source != "" {
-					warnings = append(warnings, fmt.Sprintf("台词%d已有用户数据，仅保留未覆盖", item.Index+1))
-					continue
-				}
+				// Applying reviewed analysis explicitly confirms this source line's metadata.
+				// Only produced audio remains protected from a silent voice mismatch.
 				if d.Character != item.Speaker && (d.AudioFile != "" || d.Status == "ready" || d.AudioHash != "" || d.AudioTaskID != "") {
 					warnings = append(warnings, fmt.Sprintf("台词%d已有音频或审核结果，为避免声音错配未覆盖说话人", item.Index+1))
 					continue

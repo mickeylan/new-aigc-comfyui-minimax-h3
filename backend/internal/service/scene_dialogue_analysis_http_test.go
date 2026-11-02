@@ -61,13 +61,125 @@ func TestDialogueAnalysisMockHTTPPreservesLongSourceTextAndAppliesSafely(t *test
 	q := httptest.NewRequest(http.MethodPost, path+"/apply", bytes.NewReader(body))
 	q.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, q)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), `"applied":1`) {
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"applied":2`) {
 		t.Fatalf("apply status=%d body=%s", w.Code, w.Body.String())
 	}
 	var dialogues []models.Dialogue
-	db.Where("project_id=? AND scene_id=?", scene.ProjectID, scene.ID).Find(&dialogues)
-	if len(dialogues) != 1 || dialogues[0].Text != long || dialogues[0].Character != "燕承" || dialogues[0].Source != "ai_reviewed" || dialogues[0].TimeSegment != "2—5秒" {
+	db.Where("project_id=? AND scene_id=?", scene.ProjectID, scene.ID).Order("`order`,id").Find(&dialogues)
+	if len(dialogues) != 2 || dialogues[0].Text != long || dialogues[0].Character != "燕承" || dialogues[0].Source != "ai_reviewed" || dialogues[0].TimeSegment != "2—5秒" {
 		t.Fatalf("dialogues=%+v", dialogues)
+	}
+	if dialogues[1].Text != "妖孽，哪里走！！！" || dialogues[1].Character != "待确认" {
+		t.Fatalf("unknown speaker caused source dialogue loss: %+v", dialogues[1])
+	}
+}
+
+func TestDialogueAnalysisApplyRegenerateAndGetPersistsCompleteDialoguePrompt(t *testing.T) {
+	var calls int
+	ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"items\":[{\"index\":0,\"speaker\":\"燕承\",\"addressee\":\"青年\",\"speech_type\":\"dialogue\",\"time_segment\":\"0—3秒\"},{\"index\":1,\"speaker\":\"待确认\",\"addressee\":\"燕承\",\"speech_type\":\"offscreen_dialogue\",\"time_segment\":\"3—6秒\"}]}"}}]}`)
+			return
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"[Shot 1] The young man faces 燕承 as the camera slowly pushes in. At 00:03.000, both visible people turn toward an unidentified voice from outside the frame."}}]}`)
+	}))
+	defer ai.Close()
+
+	s, db, scene := expandHTTPService(t, ai.URL)
+	if err := db.AutoMigrate(&models.Template{}, &models.Episode{}, &models.PromptPolicyOverride{}, &models.GenerationCandidate{}); err != nil {
+		t.Fatal(err)
+	}
+	factory := s.TextProviderFact
+	s.Projects = &ProjectService{db: db, textProvider: factory}
+	if err := s.Skills.InitSystemSkills(); err != nil {
+		t.Fatal(err)
+	}
+	known, unknown := "不知阁下如何称呼？", "妖孽，哪里走！！！"
+	scene.Content = `0—3秒｜燕承对青年说道：“` + known + `”3—6秒｜画外有人厉喝：“` + unknown + `”`
+	scene.Duration, scene.VideoTemplate = 6, "minimax_h3_t2v"
+	scene.VideoFullPrompt, scene.ImageFile, scene.VideoFile, scene.VideoInputFile = "old full without dialogue", "keep.png", "keep.mp4", "keep-input.mp4"
+	if err := db.Save(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.Shot{SceneID: scene.ID, Order: 1, Duration: 6, Description: "conversation"}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	base := "/api/projects/:id/scenes/:sid"
+	r.POST(base+"/dialogue/analyze", s.HandleAnalyzeSceneDialogue)
+	r.POST(base+"/dialogue/apply", s.HandleApplySceneDialogue)
+	r.POST(base+"/video/prompt/regenerate", s.HandleRegenerateSceneVideoPrompt)
+	r.GET(base+"/video-prompt", s.HandleGetSceneVideoPrompt)
+	r.PUT(base+"/video-prompt", s.HandleUpdateSceneVideoPrompt)
+	path := fmt.Sprintf("/api/projects/%d/scenes/%d", scene.ProjectID, scene.ID)
+	do := func(method, suffix string, body []byte) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		q := httptest.NewRequest(method, path+suffix, bytes.NewReader(body))
+		q.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(w, q)
+		return w
+	}
+	analyzed := do(http.MethodPost, "/dialogue/analyze", nil)
+	if analyzed.Code != 200 {
+		t.Fatalf("analyze status=%d body=%s", analyzed.Code, analyzed.Body.String())
+	}
+	var preview struct {
+		Analysis SceneDialogueAnalysis `json:"analysis"`
+	}
+	if err := json.Unmarshal(analyzed.Body.Bytes(), &preview); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(preview.Analysis)
+	if w := do(http.MethodPost, "/dialogue/apply", body); w.Code != 200 {
+		t.Fatalf("apply status=%d body=%s", w.Code, w.Body.String())
+	}
+	regen := do(http.MethodPost, "/video/prompt/regenerate", []byte(`{"template":"minimax_h3_t2v"}`))
+	if regen.Code != 200 {
+		t.Fatalf("regenerate status=%d body=%s", regen.Code, regen.Body.String())
+	}
+	var generated map[string]any
+	if err := json.Unmarshal(regen.Body.Bytes(), &generated); err != nil {
+		t.Fatal(err)
+	}
+	prompt, _ := generated["full_prompt"].(string)
+	for _, want := range []string{"<d>[Chinese] " + known + "</d>", "<d>[Chinese] " + unknown + "</d>", "燕承", "待确认"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("regenerated prompt missing %q: %s", want, prompt)
+		}
+	}
+	if !strings.Contains(prompt, "待确认 (S2) says in a clearly identified off-screen voice") || strings.Contains(prompt, "<Subject 1> (S2)") || strings.Contains(prompt, "<Subject 2> (S2)") {
+		t.Fatalf("unknown speaker was not preserved as unbound off-screen speech: %s", prompt)
+	}
+	// Regeneration must expose a reviewable preview, not overwrite the saved execution.
+	var beforeSave models.Scene
+	if err := db.First(&beforeSave, scene.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if beforeSave.VideoFullPrompt != "old full without dialogue" {
+		t.Fatal("preview overwrote saved execution")
+	}
+	saveBody, _ := json.Marshal(map[string]any{"prompt": prompt, "template": "minimax_h3_t2v"})
+	if savedResponse := do(http.MethodPut, "/video-prompt", saveBody); savedResponse.Code != 200 {
+		t.Fatalf("save status=%d body=%s", savedResponse.Code, savedResponse.Body.String())
+	}
+	got := do(http.MethodGet, "/video-prompt", nil)
+	if got.Code != 200 {
+		t.Fatalf("get status=%d body=%s", got.Code, got.Body.String())
+	}
+	var persisted map[string]any
+	_ = json.Unmarshal(got.Body.Bytes(), &persisted)
+	if persisted["full_prompt"] != prompt {
+		t.Fatalf("GET full prompt not persisted: got=%q want=%q", persisted["full_prompt"], prompt)
+	}
+	var saved models.Scene
+	if err := db.First(&saved, scene.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.ImageFile != "keep.png" || saved.VideoFile != "keep.mp4" || saved.VideoInputFile != "keep-input.mp4" {
+		t.Fatalf("media changed: %+v", saved)
 	}
 }
 
