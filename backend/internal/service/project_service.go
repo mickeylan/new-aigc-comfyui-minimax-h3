@@ -2377,7 +2377,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	effectiveSystem := effectiveGenerationSystem(system, policy)
 	chatAction := func(request string) (string, error) {
 		if (sceneMode == h3SceneAction || sceneMode == h3SceneMixed) && s.skills != nil {
-			return s.skills.ChatWithConfiguredOrFallbackSkill(sc.ProjectID, models.SkillStageVideoPrompt, h3CombatActionSkillCode, s.textProvider, effectiveSystem, "", map[string]string{"request": request})
+			return s.skills.ChatWithConfiguredOrFallbackSkill(sc.ProjectID, models.SkillStageVideoPrompt, h3CombatActionSkillCode, s.textProvider, effectiveSystem, request, map[string]string{"request": request})
 		}
 		return s.textProvider.Chat(effectiveSystem, request)
 	}

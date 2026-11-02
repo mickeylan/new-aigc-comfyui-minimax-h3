@@ -195,7 +195,7 @@ func (s *PromptPolicyService) List(projectID uint, policyKey string) ([]models.P
 	if _, err := s.normalizeContext(PromptPolicyContext{ProjectID: projectID}); err != nil {
 		return nil, err
 	}
-	var rows []models.PromptPolicyOverride
+	rows := make([]models.PromptPolicyOverride, 0)
 	q := s.db.Where("project_id = ?", projectID)
 	if strings.TrimSpace(policyKey) != "" {
 		key, err := validatePromptPolicyKey(policyKey)
@@ -204,7 +204,10 @@ func (s *PromptPolicyService) List(projectID uint, policyKey string) ([]models.P
 		}
 		q = q.Where("policy_key = ?", key)
 	}
-	return rows, q.Order("policy_key, id").Find(&rows).Error
+	if err := q.Order("policy_key, id").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 func (s *PromptPolicyService) Update(projectID, id uint, content string) (*models.PromptPolicyOverride, error) {

@@ -119,58 +119,43 @@ func restoreH3Structure(masked string, tokens []string) (string, []string) {
 }
 
 // restoreH3StructureLenient never turns a paid translation into an HTTP error and
-// never hides the model output behind the source prompt. When the model kept the
-// marker count but changed marker kinds, indices or order, restore authoritative
-// tokens by physical position. If markers are missing or duplicated, preserve the
-// best-effort restored model output verbatim and return warnings for review.
+// never hides the model output behind the source prompt. Every valid marker is restored
+// by its authoritative ID, even when markers are reordered or their T/D kind drifts.
+// Missing dialogue is recovered from the source; missing non-dialogue structure remains
+// a warning and must not cause some other token or the source prose to be substituted.
 func restoreH3StructureLenient(translated string, tokens []string) (string, []string) {
 	restored, issues := restoreH3Structure(translated, tokens)
-	if len(issues) == 0 {
-		return restored, nil
-	}
-	matches := h3MarkerRE.FindAllStringIndex(translated, -1)
-	if len(matches) != len(tokens) {
-		// A provider occasionally drops only a dialogue placeholder while returning a
-		// useful translation. Dialogue is source-of-truth content and may never vanish
-		// from a successful preview. Recover any absent dialogue blocks explicitly;
-		// leave missing non-dialogue protocol tokens as warnings rather than replacing
-		// the translated action prose with the source prompt.
-		presentDialogue := make(map[string]int)
-		for _, block := range dialogueBlockRE.FindAllString(restored, -1) {
-			presentDialogue[block]++
+
+	// Determine coverage by marker ID, rather than by physical position or dialogue
+	// text. ID coverage matters when the marker count happens to match because one ID
+	// was duplicated, and when distinct speakers have byte-identical dialogue blocks.
+	seen := make([]bool, len(tokens))
+	for _, marker := range h3MarkerRE.FindAllString(translated, -1) {
+		match := h3MarkerRE.FindStringSubmatch(marker)
+		index, err := strconv.Atoi(match[2])
+		if err == nil && index >= 0 && index < len(tokens) {
+			seen[index] = true
 		}
-		var recovered []string
-		for _, token := range tokens {
-			if !strings.HasPrefix(token, "<d>") {
-				continue
-			}
-			if presentDialogue[token] > 0 {
-				presentDialogue[token]--
-				continue
-			}
+	}
+	var recovered []string
+	for i, token := range tokens {
+		if !seen[i] && strings.HasPrefix(token, "<d>") {
 			recovered = append(recovered, token)
 		}
-		if len(recovered) > 0 {
-			insertion := "\n" + strings.Join(recovered, "\n") + "\n"
-			lower := strings.ToLower(restored)
-			if at := strings.Index(lower, "overall_soundscape:"); at >= 0 {
-				restored = restored[:at] + insertion + restored[at:]
-			} else {
-				restored = strings.TrimRight(restored, "\n") + insertion
-			}
-			issues = append(issues, fmt.Sprintf("已从原文恢复 %d 个遗失对白块，请复核位置", len(recovered)))
-		}
+	}
+	if len(recovered) == 0 {
 		return restored, issues
 	}
-	var out strings.Builder
-	start := 0
-	for i, match := range matches {
-		out.WriteString(translated[start:match[0]])
-		out.WriteString(tokens[i])
-		start = match[1]
+
+	insertion := "\n" + strings.Join(recovered, "\n") + "\n"
+	lower := strings.ToLower(restored)
+	if at := strings.Index(lower, "overall_soundscape:"); at >= 0 {
+		restored = restored[:at] + insertion + restored[at:]
+	} else {
+		restored = strings.TrimRight(restored, "\n") + insertion
 	}
-	out.WriteString(translated[start:])
-	return out.String(), issues
+	issues = append(issues, fmt.Sprintf("已从原文恢复 %d 个遗失对白块，请复核位置", len(recovered)))
+	return restored, issues
 }
 
 // stripH3CodeFence removes a markdown fence the translator may have wrapped around the prompt.

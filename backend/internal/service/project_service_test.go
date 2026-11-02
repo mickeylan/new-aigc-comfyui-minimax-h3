@@ -2273,6 +2273,56 @@ func TestH3ActionTempoRejectsStaticDefenderAndEnforcesRealtime(t *testing.T) {
 	}
 }
 
+func TestGenerateSceneVideoActionCombatAlwaysPassesRequestAsBaseUser(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		disabled bool
+	}{
+		{name: "disabled skill"},
+		{name: "configured template without request"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ps := newTestProjectService(t)
+			if err := ps.db.AutoMigrate(&models.Dialogue{}, &models.SharedAssetReference{}, &models.Skill{}, &models.ProjectSkillConfig{}, &models.SkillAuditLog{}); err != nil {
+				t.Fatal(err)
+			}
+			provider := &captureTextProvider{response: "[Shot 1] Six green snakes burst from the grass at full real-time speed; the bearded man instantly pivots and snaps his blade into guard, taking one sharp step back as grass and dust recoil around him."}
+			ps.textProvider = provider
+			ps.skills = NewSkillService(ps.db)
+			project := models.Project{Title: "combat request"}
+			if err := ps.db.Create(&project).Error; err != nil {
+				t.Fatal(err)
+			}
+			config := models.ProjectSkillConfig{ProjectID: project.ID, Stage: models.SkillStageVideoPrompt, Operation: h3CombatActionSkillCode, Enabled: !tc.disabled}
+			if !tc.disabled {
+				skill := models.Skill{Name: "requestless combat", Code: "requestless-combat-test", Version: 1, Stage: models.SkillStageVideoPrompt, Operation: h3CombatActionSkillCode, PromptTemplate: "固定模板：只遵守系统规则。", Enabled: true}
+				if err := ps.db.Create(&skill).Error; err != nil {
+					t.Fatal(err)
+				}
+				config.SkillID = &skill.ID
+			}
+			if err := ps.db.Create(&config).Error; err != nil {
+				t.Fatal(err)
+			}
+			scene := models.Scene{ProjectID: project.ID, SceneMode: "武戏", Duration: 10, Content: "齐人高杂草丛中，五六条青色长蛇射出，蛇口大张朝虬髯大汉狠狠咬去。虬髯大汉立即后撤并横刀格挡。"}
+			if err := ps.db.Create(&scene).Error; err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ps.GenerateSceneVideoAction(&scene); err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{"【场景剧情", scene.Content, "【结构化对白"} {
+				if !strings.Contains(provider.firstUser, want) {
+					t.Fatalf("provider user missing request fragment %q: %s", want, provider.firstUser)
+				}
+			}
+			if !tc.disabled && !strings.Contains(provider.firstUser, "固定模板") {
+				t.Fatalf("configured template was not appended after base request: %s", provider.firstUser)
+			}
+		})
+	}
+}
+
 func TestGenerateSceneVideoActionRepairsStaticCombatInsteadOfOnlyReturningValidationError(t *testing.T) {
 	ps := newTestProjectService(t)
 	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SharedAssetReference{}); err != nil {

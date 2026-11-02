@@ -12,6 +12,14 @@ test('视频重新生成展示来源、完整稿与中文预览的对白数量',
   assert.match(detail, /\{\{ videoTaskDetail\.dialogue_generation_note \}\}/)
 })
 
+test('翻译前完整稿在翻译请求前保存供核验，翻译警告和策略详情可见', () => {
+  const regenerate = detail.slice(detail.indexOf('async function regenerateVideoPrompt()'), detail.indexOf('async function uploadVideoFrame'))
+  assert.ok(regenerate.indexOf('generated_before_translation: generated') < regenerate.indexOf('await api.translateSceneVideoPrompt'))
+  assert.match(detail, /\{\{videoTaskDetail\.generated_before_translation\}\}/)
+  assert.match(detail, /generation_translation_warnings\.join/)
+  assert.match(detail, /e\.response\.data\.detail/)
+})
+
 test('对白分析预览保持为本地草稿，只有应用才持久化', () => {
   assert.match(api, /analyzeSceneDialogue/)
   assert.match(api, /applySceneDialogue/)

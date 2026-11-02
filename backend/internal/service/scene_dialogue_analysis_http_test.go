@@ -77,7 +77,23 @@ func TestDialogueAnalysisMockHTTPPreservesLongSourceTextAndAppliesSafely(t *test
 func TestDialogueAnalysisApplyRegenerateTranslateAndGetPersistsCompleteFL2VADialoguePrompt(t *testing.T) {
 	var calls int
 	var translationReply string
+	var requests []struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
 	ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode AI request: %v", err)
+		}
+		requests = append(requests, request)
 		calls++
 		if calls == 1 {
 			fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"items\":[{\"index\":0,\"speaker\":\"燕承\",\"addressee\":\"青年\",\"speech_type\":\"dialogue\",\"time_segment\":\"0—5秒\"},{\"index\":1,\"speaker\":\"待确认\",\"addressee\":\"燕承\",\"speech_type\":\"offscreen_dialogue\",\"time_segment\":\"5—10秒\"}]}"}}]}`)
@@ -155,6 +171,15 @@ func TestDialogueAnalysisApplyRegenerateTranslateAndGetPersistsCompleteFL2VADial
 	if regen.Code != 200 {
 		t.Fatalf("regenerate status=%d body=%s", regen.Code, regen.Body.String())
 	}
+	if len(requests) < 2 || len(requests[1].Messages) < 2 {
+		t.Fatalf("missing captured generation request: %+v", requests)
+	}
+	generationUser := requests[1].Messages[len(requests[1].Messages)-1].Content
+	for _, want := range []string{"【结构化对白", "燕承：" + known, known, "待确认：" + unknown} {
+		if !strings.Contains(generationUser, want) {
+			t.Fatalf("generation request body missing %q; user message=%s", want, generationUser)
+		}
+	}
 	var generated map[string]any
 	if err := json.Unmarshal(regen.Body.Bytes(), &generated); err != nil {
 		t.Fatal(err)
@@ -215,6 +240,76 @@ func TestDialogueAnalysisApplyRegenerateTranslateAndGetPersistsCompleteFL2VADial
 	}
 	if saved.ImageFile != "keep.png" || saved.VideoFile != "keep.mp4" || saved.VideoInputFile != "keep-input.mp4" {
 		t.Fatalf("media changed: %+v", saved)
+	}
+}
+
+func TestDialogueAnalysisReviewedJSONFallbackReachesGenerationRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		badDialogue bool
+	}{
+		{name: "dialogue row missing"},
+		{name: "dialogue row has invalid type", badDialogue: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var generationUser string
+			ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					Messages []struct {
+						Role    string `json:"role"`
+						Content string `json:"content"`
+					} `json:"messages"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Errorf("decode AI request: %v", err)
+				}
+				if len(request.Messages) > 0 && generationUser == "" {
+					generationUser = request.Messages[len(request.Messages)-1].Content
+				}
+				fmt.Fprint(w, `{"choices":[{"message":{"content":"[Shot 1] 燕承 faces the young man and speaks while the camera slowly pushes in."}}]}`)
+			}))
+			defer ai.Close()
+
+			s, db, scene := expandHTTPService(t, ai.URL)
+			if err := db.AutoMigrate(&models.Dialogue{}, &models.Template{}, &models.Episode{}, &models.PromptPolicyOverride{}, &models.GenerationCandidate{}); err != nil {
+				t.Fatal(err)
+			}
+			s.Projects = &ProjectService{db: db, textProvider: s.TextProviderFact}
+			original := "不知阁下如何称呼？在下血刀会燕承，正与两位道友联手捉拿这妖狐，阁下若是与此事无关，还请自行离去。"
+			scene.Content = `燕承对青年说道：“` + original + `”`
+			scene.Duration, scene.VideoTemplate = 5, "minimax_h3_first_last"
+			analysis := SceneDialogueAnalysis{Source: "ai_reviewed", Items: []SceneDialogueAnalysisItem{{Index: 0, Text: original, Speaker: "燕承", Addressee: "青年", SpeechType: "dialogue"}}}
+			raw, _ := json.Marshal(analysis)
+			scene.DialogueAnalysisJSON = string(raw)
+			if err := db.Save(scene).Error; err != nil {
+				t.Fatal(err)
+			}
+			if tc.badDialogue {
+				if err := db.Create(&models.Dialogue{ProjectID: scene.ProjectID, SceneID: scene.ID, Order: 1, Character: "错误角色", Text: original, SpeechType: "wrong", Source: "ai_reviewed"}).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			gin.SetMode(gin.TestMode)
+			r := gin.New()
+			r.POST("/api/projects/:id/scenes/:sid/video/prompt/regenerate", s.HandleRegenerateSceneVideoPrompt)
+			path := fmt.Sprintf("/api/projects/%d/scenes/%d/video/prompt/regenerate", scene.ProjectID, scene.ID)
+			w := httptest.NewRecorder()
+			q := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"template":"minimax_h3_first_last"}`))
+			q.Header.Set("Content-Type", "application/json")
+			r.ServeHTTP(w, q)
+			if w.Code != http.StatusOK {
+				t.Fatalf("regenerate status=%d body=%s", w.Code, w.Body.String())
+			}
+			for _, want := range []string{"【结构化对白", "燕承：" + original} {
+				if !strings.Contains(generationUser, want) {
+					t.Fatalf("captured provider user missing %q: %s", want, generationUser)
+				}
+			}
+			if strings.Contains(generationUser, "错误角色："+original) {
+				t.Fatalf("invalid Dialogue row overrode reviewed analysis: %s", generationUser)
+			}
+		})
 	}
 }
 

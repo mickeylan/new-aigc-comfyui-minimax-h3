@@ -185,8 +185,12 @@ func TestSceneVideoTranslationHTTPBrokenMarkersReturnNonBlockingPreview(t *testi
 		t.Fatalf("status=%d calls=%d body=%s", w.Code, f.calls.Load(), w.Body.String())
 	}
 	out := decodeTranslationBody(t, w)
-	if out["prompt"] != translationEnglish || out["warnings"] == nil {
-		t.Fatalf("broken markers were not repaired non-blockingly: %v", out)
+	prompt, _ := out["prompt"].(string)
+	// An unknown ID cannot be safely repaired by physical position: doing so can
+	// substitute the wrong speaker/dialogue. Preserve the paid translation and marker
+	// for review, and report the missing protocol token instead of returning source prose.
+	if out["warnings"] == nil || !strings.Contains(prompt, "A person crosses an empty room.") || !strings.Contains(prompt, "[[[T99]]]") || prompt == translationEnglish {
+		t.Fatalf("broken markers did not return warned best-effort translation: %v", out)
 	}
 	var saved models.Scene
 	if err := f.db.First(&saved, f.sc.ID).Error; err != nil {

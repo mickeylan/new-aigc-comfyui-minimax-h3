@@ -28,9 +28,16 @@ func (s *Service) HandleListPromptPolicyOverrides(c *gin.Context) {
 	if !ok {
 		return
 	}
-	rows, err := NewPromptPolicyService(s.DB).List(project.ID, c.Query("policy_key"))
+	policyKey := c.Query("policy_key")
+	if strings.TrimSpace(policyKey) != "" {
+		if _, err := validatePromptPolicyKey(policyKey); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	rows, err := NewPromptPolicyService(s.DB).List(project.ID, policyKey)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list prompt policy overrides", "code": "prompt_policy_list_failed", "detail": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, rows)

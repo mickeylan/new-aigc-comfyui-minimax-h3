@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -97,13 +98,55 @@ func TestValidateH3TranslationAllowsProseDurationButRejectsStructureNumbering(t 
 	}
 }
 
-func TestRestoreH3StructureLenientRepairsMarkerIndicesByPosition(t *testing.T) {
-	source := "summary:\n[Shot 1] <d>原文</d>"
+func TestRestoreH3StructureLenientDoesNotRepairUnknownIndexByPosition(t *testing.T) {
+	source := "summary:\ntranslated prose [Shot 1] <d>原文</d>"
 	masked, tokens := maskH3Structure(source)
 	translated := strings.Replace(masked, "[[[T1]]]", "[[[T99]]]", 1)
 	restored, warnings := restoreH3StructureLenient(translated, tokens)
-	if len(warnings) == 0 || restored != source {
-		t.Fatalf("lenient restore=%q warnings=%v", restored, warnings)
+	if len(warnings) == 0 || !strings.Contains(restored, "translated prose") || !strings.Contains(restored, "[[[T99]]]") {
+		t.Fatalf("unknown marker was silently replaced by position: restored=%q warnings=%v", restored, warnings)
+	}
+	if strings.Contains(restored, "[Shot 1]") {
+		t.Fatalf("missing non-dialogue token was replaced despite absent ID: %q", restored)
+	}
+}
+
+func TestRestoreH3StructureLenientRestoresValidIDsAcrossEqualCountCorruption(t *testing.T) {
+	tokens := make([]string, 23)
+	for i := range tokens {
+		tokens[i] = "TOKEN-" + string(rune('A'+i))
+	}
+	tokens[20] = "<d>相同台词</d>"
+	tokens[21] = "(S2)"
+	tokens[22] = "<d>相同台词</d>"
+
+	// There are still 23 markers: ID 20 is missing, ID 22 is duplicated, IDs 21/22
+	// are physically reversed, and their kinds drift. This is the reported equal-count
+	// failure mode; position-based repair would assign the wrong speaker/dialogue.
+	var parts []string
+	for i := 0; i < 20; i++ {
+		parts = append(parts, "[[[T"+strconv.Itoa(i)+"]]]")
+	}
+	parts = append(parts, "translated-before", "[[[T22]]]", "translated-middle", "[[[D21]]]", "[[[T22]]]")
+	restored, warnings := restoreH3StructureLenient(strings.Join(parts, " "), tokens)
+	if len(warnings) == 0 {
+		t.Fatal("missing/duplicate/reordered IDs produced no warning")
+	}
+	wantOrder := "translated-before <d>相同台词</d> translated-middle (S2) <d>相同台词</d>"
+	if !strings.Contains(restored, wantOrder) {
+		t.Fatalf("valid IDs or translated order were rewritten: %q", restored)
+	}
+	if strings.Count(restored, "<d>相同台词</d>") != 3 {
+		t.Fatalf("missing dialogue ID 20 was not recovered independently of identical ID 22: %q", restored)
+	}
+}
+
+func TestRestoreH3StructureLenientRecoversDialogueWithDifferentMarkerCounts(t *testing.T) {
+	tokens := []string{"summary:", "<d>原话</d>", "[Shot 1]"}
+	translated := "translated [[[T2]]] action [[[T0]]]"
+	restored, warnings := restoreH3StructureLenient(translated, tokens)
+	if len(warnings) == 0 || !strings.Contains(restored, "translated [Shot 1] action summary:") || !strings.Contains(restored, "<d>原话</d>") {
+		t.Fatalf("different-count recovery lost translation/dialogue: restored=%q warnings=%v", restored, warnings)
 	}
 }
 
