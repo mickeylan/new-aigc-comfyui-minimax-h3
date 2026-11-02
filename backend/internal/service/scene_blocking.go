@@ -14,6 +14,9 @@ import (
 const sceneBlockingSkillCode = "scene_blocking_analysis"
 const maxSceneBlockingBytes = 64 * 1024
 
+// Shared by analysis and downstream image/video prompt writing; advisory only.
+const sceneBlockingFacingGuidance = `朝向必须同时说明两套关系：每个人的身体/脸朝向哪个人物或场景方位，以及相对当前镜头为正面、侧面、三分之二侧面或背面；facing填写这两者，gaze单独描述视线，不能用目光方向代替身体朝向。camera说明机位位于互动双方的哪一侧，不能只写平视或中景。抱拳、行礼、交谈、对峙等动作必须明确施动者、互动对象和面向关系；例如甲向乙抱拳，应面向乙而非镜头，侧拍可让双方侧身相向，过肩拍可让乙以背影进入前景、甲朝向乙。不得为了全员露脸让双方同时面向镜头；只有原文明确对镜头表演或当前机位确实如此时才写面对镜头。机位与原文未规定的朝向属于AI建议，不冒充事实。动作起止需描述身体转向与视线变化，切换机位后重新计算画面左右及相对镜头朝向，不机械继承上一镜的正背面。`
+
 type SceneBlockingCharacter struct {
 	Name       string `json:"name"`
 	Position   string `json:"position"`
@@ -76,7 +79,7 @@ func (s *Service) HandleAnalyzeSceneBlocking(c *gin.Context) {
 	}
 	system := `你是影视场面调度助手。只输出合法JSON：{"facts":[],"suggestions":[],"characters":[{"name":"","position":"","facing":"","gaze":"","visibility":""}],"camera":"","start":"","end":"","summary":""}。facts只能摘录场景原文明示事实；suggestions必须明确是AI建议。描述人物站位、机位、朝向、视线、遮挡，以及动作开始/结束空间关系。上一镜站位仅用于连续性建议，不得变成当前镜事实。不得从图片、文件名或参考素材臆测视觉细节，不得新增剧情、人物、道具或语义硬门禁。`
 	user := fmt.Sprintf("场景标题：%s\n场景原文：%s\n可见人物：%s\n地点：%s\n上一镜已保存站位（可能为空）：%s", scene.Title, scene.Content, visibleSceneCharacterNames(scene), scene.LocationName, previousText)
-	output, err := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, sceneBlockingSkillCode, s.TextProviderFact, system, user, map[string]string{"scene_id": fmt.Sprint(scene.ID), "scene_content": scene.Content, "previous_blocking": previousText})
+	output, err := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, sceneBlockingSkillCode, s.TextProviderFact, system+"\n"+sceneBlockingFacingGuidance, user, map[string]string{"scene_id": fmt.Sprint(scene.ID), "scene_content": scene.Content, "previous_blocking": previousText})
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "AI站位分析失败: " + err.Error()})
 		return
@@ -156,5 +159,5 @@ func sceneBlockingPromptContext(sc *models.Scene) string {
 	if _, err := parseSceneBlocking(sc.BlockingJSON); err != nil {
 		return ""
 	}
-	return "\n\n【用户已保存的人物站位（事实/AI建议已分栏；作为空间连续性上下文，不得覆盖Scene剧情，不得从引用图片补细节）】\n" + sc.BlockingJSON
+	return "\n\n【用户已保存的人物站位（事实/AI建议已分栏；作为空间连续性上下文，不得覆盖Scene剧情，不得从引用图片补细节）】\n" + sc.BlockingJSON + "\n" + sceneBlockingFacingGuidance
 }

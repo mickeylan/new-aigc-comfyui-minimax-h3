@@ -3,13 +3,28 @@ package service
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"comfyui-console/internal/models"
 	"github.com/gin-gonic/gin"
 )
+
+func TestSceneBlockingPromptCarriesInteractionFacing(t *testing.T) {
+	sc := &models.Scene{BlockingJSON: blockingJSON(SceneBlocking{Characters: []SceneBlockingCharacter{{Name: "燕承", Facing: "面向青年，相对镜头侧面", Gaze: "青年"}}, Camera: "双方侧面"})}
+	context := sceneBlockingPromptContext(sc)
+	for _, expected := range []string{"面向青年，相对镜头侧面", "面向乙而非镜头", "机位位于互动双方的哪一侧", "AI建议"} {
+		if !strings.Contains(context, expected) {
+			t.Fatalf("downstream image/video context missing %q", expected)
+		}
+	}
+	if sceneBlockingPromptContext(&models.Scene{}) != "" {
+		t.Fatal("unset blocking should remain optional")
+	}
+}
 
 func TestSceneBlockingSaveOwnershipAndPreservesMedia(t *testing.T) {
 	db := newTestDB(t)
@@ -50,6 +65,15 @@ func TestSceneBlockingSaveOwnershipAndPreservesMedia(t *testing.T) {
 
 func TestSceneBlockingAnalyzePreviewDoesNotWrite(t *testing.T) {
 	ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		for _, expected := range []string{"三分之二侧面", "施动者", "面向乙而非镜头", "不能用目光方向代替身体朝向"} {
+			if !strings.Contains(string(body), expected) {
+				t.Errorf("AI request missing facing guidance %q", expected)
+			}
+		}
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"facts\":[\"甲站左侧\"],\"suggestions\":[\"建议侧拍\"],\"characters\":[],\"camera\":\"\",\"start\":\"\",\"end\":\"\",\"summary\":\"站位预览\"}"}}]}`)
 	}))
 	defer ai.Close()
