@@ -717,8 +717,8 @@ func TestStableSceneVideoSeedReusesReviewedExecutionInputs(t *testing.T) {
 	}
 	first := stableSceneVideoSeed("minimax_h3_ref2v", "reviewed English prompt", files, 7, 832, 480)
 	second := stableSceneVideoSeed("minimax_h3_ref2v", "reviewed English prompt", files, 7, 832, 480)
-	if first <= 0 || first != second {
-		t.Fatalf("same reviewed inputs produced unstable seeds: %d != %d", first, second)
+	if first <= 0 || first > maxComfyGenerationSeed || first != second {
+		t.Fatalf("same reviewed inputs produced invalid or unstable seeds: %d != %d (max %d)", first, second, maxComfyGenerationSeed)
 	}
 	if changed := stableSceneVideoSeed("minimax_h3_ref2v", "changed prompt", files, 7, 832, 480); changed == first {
 		t.Fatalf("prompt change did not change seed: %d", changed)

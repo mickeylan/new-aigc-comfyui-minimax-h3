@@ -7121,11 +7121,9 @@ func stableSceneVideoSeed(templateCode, prompt string, files map[string][]FileMe
 		}
 	}
 	sum := sha256.Sum256([]byte(identity.String()))
-	seed := int64(binary.BigEndian.Uint64(sum[:8]) & uint64(math.MaxInt64))
-	if seed == 0 {
-		return 1
-	}
-	return seed
+	// ComfyUI seed widgets cap integer inputs at 2^50. Keep the stable hash inside
+	// that inclusive range so validation succeeds while identical inputs stay reproducible.
+	return int64(binary.BigEndian.Uint64(sum[:8])%uint64(maxComfyGenerationSeed)) + 1
 }
 
 // GenerateSceneVideo 创建场景视频任务；T2V可无分镜图，其余模板要求相应画面输入。

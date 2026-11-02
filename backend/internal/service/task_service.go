@@ -111,9 +111,11 @@ func (s *TaskService) NewTaskID() string {
 	return time.Now().Format("20060102-150405-") + hex.EncodeToString(b)
 }
 
+const maxComfyGenerationSeed int64 = 1 << 50
+
 func randomGenerationSeed() int64 {
 	// ParamsJSON is decoded into map[string]any before workflow rendering, so JSON numbers
-	// become float64. Keep seeds below 1e9 to preserve the integer exactly and ensure
+	// become float64. Keep random seeds below 1e9 to preserve the integer exactly and ensure
 	// fmt.Sprint never emits scientific notation that ComfyUI's INT validator rejects.
 	const seedRange = uint64(1_000_000_000)
 	var b [8]byte
@@ -148,6 +150,38 @@ func seedRequestsRandom(value any) bool {
 	default:
 		return false
 	}
+}
+
+func normalizeComfyGenerationSeed(value any) any {
+	var seed int64
+	switch typed := value.(type) {
+	case int:
+		seed = int64(typed)
+	case int64:
+		seed = typed
+	case uint64:
+		seed = int64(typed % uint64(maxComfyGenerationSeed+1))
+	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) {
+			return value
+		}
+		seed = int64(typed)
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err != nil {
+			return value
+		}
+		seed = parsed
+	default:
+		return value
+	}
+	if seed < 0 {
+		return seed
+	}
+	if seed > maxComfyGenerationSeed {
+		seed %= maxComfyGenerationSeed + 1
+	}
+	return seed
 }
 
 // ---------- 模板 ----------
@@ -315,6 +349,7 @@ func (s *TaskService) RenderWorkflow(tpl *models.Template, params map[string]any
 	if seedRequestsRandom(params["seed"]) {
 		params["seed"] = randomGenerationSeed()
 	}
+	params["seed"] = normalizeComfyGenerationSeed(params["seed"])
 
 	// 第一轮: 替换标量占位符。缺参数时收集首个错误，统一向外抛出，
 	// 避免被后续 "模板为空" 判断掩盖真实原因。
@@ -865,6 +900,7 @@ func (s *TaskService) CreateTask(req CreateTaskReq) (*models.Task, error) {
 	if seedRequestsRandom(params["seed"]) {
 		params["seed"] = randomGenerationSeed()
 	}
+	params["seed"] = normalizeComfyGenerationSeed(params["seed"])
 
 	paramsJSON, _ := json.Marshal(params)
 	inputsJSON, _ := json.Marshal(req.Files)

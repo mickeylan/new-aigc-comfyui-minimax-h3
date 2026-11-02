@@ -38,6 +38,18 @@ func loadTemplateForTest(t *testing.T, filename string) models.Template {
 	return models.Template{Name: tf.Name, Code: tf.Code, InputsJSON: string(inputs), WorkflowJSON: string(workflow), Enabled: true}
 }
 
+func TestNormalizeComfyGenerationSeedHonorsNodeMaximum(t *testing.T) {
+	for _, input := range []any{int64(7_122_813_245_441_485_000), float64(7_122_813_245_441_485_000), uint64(7_122_813_245_441_485_000)} {
+		got, ok := normalizeComfyGenerationSeed(input).(int64)
+		if !ok || got < 0 || got > maxComfyGenerationSeed {
+			t.Fatalf("normalize seed %#v = %#v, want int64 in [0,%d]", input, normalizeComfyGenerationSeed(input), maxComfyGenerationSeed)
+		}
+	}
+	if got := normalizeComfyGenerationSeed(int64(maxComfyGenerationSeed)); got != maxComfyGenerationSeed {
+		t.Fatalf("maximum legal seed changed: %#v", got)
+	}
+}
+
 func baseParams() map[string]any {
 	return map[string]any{
 		"prompt": "测试镜头", "width": float64(1280), "height": float64(704),
