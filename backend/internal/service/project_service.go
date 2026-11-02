@@ -7077,7 +7077,29 @@ func sceneVideoTemplateRequiresImage(templateCode string) bool {
 	return templateCode != "minimax_h3_t2v"
 }
 
+func stableSceneVideoSeed(templateCode, prompt string, files map[string][]FileMeta, duration float64, width, height int) int64 {
+	var identity strings.Builder
+	fmt.Fprintf(&identity, "template=%s\nduration=%.3f\nsize=%dx%d\nprompt=%s\n", strings.TrimSpace(templateCode), duration, width, height, strings.TrimSpace(prompt))
+	keys := make([]string, 0, len(files))
+	for key := range files {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		for index, file := range files[key] {
+			fmt.Fprintf(&identity, "%s[%d]=%s/%s\n", key, index, file.TaskID, file.Name)
+		}
+	}
+	sum := sha256.Sum256([]byte(identity.String()))
+	seed := int64(binary.BigEndian.Uint64(sum[:8]) & uint64(math.MaxInt64))
+	if seed == 0 {
+		return 1
+	}
+	return seed
+}
+
 // GenerateSceneVideo 创建场景视频任务；T2V可无分镜图，其余模板要求相应画面输入。
+// 同一已审核英文稿、模板、参考图和时长使用稳定 seed；普通重试不得悄悄变成随机新创作。
 func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene) error {
 	var latest models.Scene
 	if err := s.db.First(&latest, sc.ID).Error; err != nil {
@@ -7206,12 +7228,13 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		}
 	}
 	log.Printf("[video-submit] project=%d scene=%d template=%s files=[%s]\nprompt:\n%s", sc.ProjectID, sc.ID, tplCode, strings.Join(videoFileNames, ", "), promptText)
+	stableSeed := stableSceneVideoSeed(tplCode, promptText, videoFiles, normalizeSceneDuration(sc.Duration), videoW, videoH)
 	task, err := s.tasks.CreateTask(CreateTaskReq{
 		TemplateID: tpl.ID,
 		Prompt:     promptText,
 		Params: map[string]any{
 			"width": videoW, "height": videoH, "duration": normalizeSceneDuration(sc.Duration),
-			"steps": 8, "cfg": 1.0, "fps": 24, "seed": -1, "ref_image_size": "match",
+			"steps": 8, "cfg": 1.0, "fps": 24, "seed": stableSeed, "ref_image_size": "match",
 			"audio_scene_start": 0.0, "audio_scene_duration": 0.0, "audio_warmup": 0.0, "audio_cooldown": 0.0,
 			"audio_policy": "source_only", "source_gain_db": 0.0, "generated_gain_db": -12.0,
 			"duck_generated": 0.75, "peak_limit_dbfs": -1.0, "output_sample_rate": "source",

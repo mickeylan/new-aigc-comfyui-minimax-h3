@@ -691,6 +691,23 @@ func TestPipelineFailureStatusIsNotOverwritten(t *testing.T) {
 	}
 }
 
+func TestStableSceneVideoSeedReusesReviewedExecutionInputs(t *testing.T) {
+	files := map[string][]FileMeta{
+		"ref_images": {{TaskID: "1", Name: "character.png"}, {TaskID: "1", Name: "storyboard.png"}},
+	}
+	first := stableSceneVideoSeed("minimax_h3_ref2v", "reviewed English prompt", files, 7, 832, 480)
+	second := stableSceneVideoSeed("minimax_h3_ref2v", "reviewed English prompt", files, 7, 832, 480)
+	if first <= 0 || first != second {
+		t.Fatalf("same reviewed inputs produced unstable seeds: %d != %d", first, second)
+	}
+	if changed := stableSceneVideoSeed("minimax_h3_ref2v", "changed prompt", files, 7, 832, 480); changed == first {
+		t.Fatalf("prompt change did not change seed: %d", changed)
+	}
+	if changed := stableSceneVideoSeed("minimax_h3_ref2v", "reviewed English prompt", map[string][]FileMeta{"ref_images": {{TaskID: "1", Name: "other.png"}}}, 7, 832, 480); changed == first {
+		t.Fatalf("reference change did not change seed: %d", changed)
+	}
+}
+
 func TestUpdateScenePreservesCompletedMediaForSourceChanges(t *testing.T) {
 	for _, tc := range []struct {
 		name, content, imagePrompt string
