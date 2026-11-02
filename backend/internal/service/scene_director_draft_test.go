@@ -860,23 +860,26 @@ func TestDialogueRhythmReviewKeepsSilentShotFreeOfZeroLengthFragments(t *testing
 	}
 }
 
-func TestNormalizeDialogueRhythmReviewDurationsUsesAuthoritativeFragments(t *testing.T) {
-	dialogues := []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "想知道可以啊，刚才迷糊时好像某人叫我哥哥来着，"}}
-	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: dialogues[0].Text, ShotType: "阿宁近景", PromptSubject: "阿宁"}}}
+func TestDialogueRhythmReviewDurationShortfallIsVisibleWithoutRewritingTiming(t *testing.T) {
+	dialogues := []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "自化元婴的设想来自于诸天宇。当年火云刹那之变，余天成的真实身份。"}}
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 5, Dialogue: dialogues[0].Text, ShotType: "阿宁近景", PromptSubject: "阿宁"}}}
 	if err := normalizeDialogueRhythmReviewDurations(draft, dialogues); err != nil {
 		t.Fatal(err)
 	}
 	review := buildDialogueRhythmReview(draft, dialogues)
-	if len(review) != 1 || !review[0].Ready || draft.Shots[0].Duration != review[0].NaturalMinimum || len(draft.Shots[0].Checks) != 1 {
+	if len(review) != 1 || !review[0].Ready || review[0].Status != "attention" || review[0].NaturalMinimum != 9.5 || len(review[0].Advisories) == 0 || len(review[0].BlockingIssues) != 0 {
 		t.Fatalf("draft=%+v review=%+v", draft, review)
+	}
+	if draft.Shots[0].Duration != 5 || len(draft.Shots[0].Checks) != 0 {
+		t.Fatalf("creative timing was rewritten: %+v", draft.Shots[0])
 	}
 }
 
-func TestDialogueRhythmReviewBlocksImpossibleNaturalTiming(t *testing.T) {
+func TestDialogueRhythmReviewWarnsImpossibleNaturalTiming(t *testing.T) {
 	longText := strings.Repeat("修", 60)
 	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 15, Dialogue: longText, ShotType: "近景"}}}
 	review := buildDialogueRhythmReview(draft, []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: longText}})
-	if len(review) != 1 || review[0].Ready || review[0].NaturalMinimum <= 15 || len(review[0].BlockingIssues) < 2 {
+	if len(review) != 1 || !review[0].Ready || review[0].Status != "attention" || review[0].NaturalMinimum <= 15 || len(review[0].Advisories) < 2 || len(review[0].BlockingIssues) != 0 {
 		t.Fatalf("review=%+v", review)
 	}
 	fragments := []dialogueRhythmFragmentReview{{Character: "阿宁", SpeechType: "dialogue", Text: "这是第一段对白"}, {Character: "阿兰", SpeechType: "dialogue", Text: "这是第二段对白"}}
@@ -985,15 +988,11 @@ func TestNormalizeDialogueRhythmDraftRaisesShortShotToNativeMinimum(t *testing.T
 	}
 }
 
-func TestNormalizeDialogueRhythmDraftUsesNaturalSpeechFloor(t *testing.T) {
-	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 5, Dialogue: "自化元婴的设想来自于诸天宇。当年火云刹那之变，足以证明余天成的真实身份。"}}}
+func TestNormalizeDialogueRhythmDraftPreservesCreativeTiming(t *testing.T) {
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 5, Dialogue: "自化元婴的设想来自于诸天宇。当年火云刹那之变，余天成的真实身份。"}}}
 	normalizeDialogueRhythmDraftDurations(draft)
-	minimum := math.Ceil((dialogueTextDuration(draft.Shots[0].Dialogue)+0.6)*2) / 2
-	if draft.Shots[0].Duration != minimum || minimum <= 5 {
-		t.Fatalf("duration=%v minimum=%v", draft.Shots[0].Duration, minimum)
-	}
-	if !strings.Contains(strings.Join(draft.Shots[0].Checks, "\n"), "对白自然语速") {
-		t.Fatalf("missing audit check: %+v", draft.Shots[0].Checks)
+	if draft.Shots[0].Duration != 5 || len(draft.Shots[0].Checks) != 0 {
+		t.Fatalf("creative timing changed: %+v", draft.Shots[0])
 	}
 }
 

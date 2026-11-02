@@ -796,33 +796,19 @@ func normalizeDialogueRhythmDraftDurations(draft *sceneDirectorDraft) {
 	}
 	for i := range draft.Shots {
 		shot := &draft.Shots[i]
-		minimum := 3.0
-		if text := strings.TrimSpace(shot.Dialogue); text != "" {
-			// Reserve visible performance time around the estimated natural speech. This
-			// prevents a long line from being squeezed into an arbitrary 3–5 second Shot.
-			minimum = math.Ceil((dialogueTextDuration(text)+0.6)*2) / 2
-			if minimum < 3 {
-				minimum = 3
-			}
-		}
-		if shot.Duration > 0 && shot.Duration < minimum {
-			shot.Duration = minimum
-			shot.Checks = append(shot.Checks, fmt.Sprintf("系统已按对白自然语速将镜头时长调整为%.1f秒", minimum))
+		// Keep the executable Native H3 floor, but do not rewrite creative timing to
+		// an estimated speech duration. Natural-speed shortfalls remain visible audit
+		// warnings for the director to resolve without deleting dialogue or forcing speed.
+		if shot.Duration > 0 && shot.Duration < 3 {
+			shot.Duration = 3
+			shot.Checks = append(shot.Checks, "系统已将镜头时长调整为Native H3最低3.0秒")
 		}
 	}
 }
 
 func normalizeDialogueRhythmReviewDurations(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
-	for _, review := range buildDialogueRhythmReview(draft, dialogues) {
-		if review.NaturalMinimum > maxSceneVideoDuration {
-			return fmt.Errorf("对白拆镜%d权威语音自然时长下限%.1f秒超过Native H3的15秒上限，必须继续拆镜", review.Shot, review.NaturalMinimum)
-		}
-		shot := &draft.Shots[review.Shot-1]
-		if shot.Duration+0.001 < review.NaturalMinimum {
-			shot.Duration = review.NaturalMinimum
-			shot.Checks = append(shot.Checks, fmt.Sprintf("系统已按权威Dialogue审计将镜头时长调整为%.1f秒", review.NaturalMinimum))
-		}
-	}
+	// Natural speech duration is advisory. Keep the model's executable 3–15 second
+	// timing unchanged and expose any shortfall through buildDialogueRhythmReview.
 	return nil
 }
 
@@ -1123,21 +1109,23 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 			}
 		}
 		minimum := dialogueReviewNaturalMinimum(fragments)
-		issues := []string{}
+		issues, advisories := []string{}, []string{}
 		if len(voiceIdentities) > 1 {
 			issues = append(issues, "本镜跨越多个权威说话人或语音类型，单一speech_presentation无法无歧义表达；必须按说话人或语音类型拆成多个Native镜头")
 		}
 		if minimum > maxSceneVideoDuration {
-			issues = append(issues, fmt.Sprintf("本镜权威语音自然时长下限%.1f秒超过Native H3的15秒上限，必须继续拆镜", minimum))
+			advisories = append(advisories, fmt.Sprintf("本镜权威语音自然时长下限%.1f秒超过Native H3的15秒上限，建议继续拆镜；当前创作节奏仍可预览、保存和制作", minimum))
 		}
 		if shot.Duration+0.001 < minimum {
-			issues = append(issues, fmt.Sprintf("本镜时长%.1f秒低于权威语音自然时长下限%.1f秒", shot.Duration, minimum))
+			advisories = append(advisories, fmt.Sprintf("本镜时长%.1f秒低于权威语音自然时长下限%.1f秒；不会删减台词或强制加速", shot.Duration, minimum))
 		}
 		status := "ready"
 		if len(issues) > 0 {
 			status = "blocked"
+		} else if len(advisories) > 0 {
+			status = "attention"
 		}
-		reviews = append(reviews, dialogueRhythmShotReview{Shot: i + 1, StartTime: timeCursor, EndTime: timeCursor + shot.Duration, DialogueStart: start, DialogueEnd: end, NaturalMinimum: minimum, Ready: len(issues) == 0, Status: status, BlockingIssues: issues, Advisories: []string{}, Speakers: speakers, Presentation: presentation, ListenerCharacter: strings.TrimSpace(shot.ListenerCharacter), ContinuesFromPrev: continuesFrom, ContinuesToNext: continuesTo, Fragments: fragments})
+		reviews = append(reviews, dialogueRhythmShotReview{Shot: i + 1, StartTime: timeCursor, EndTime: timeCursor + shot.Duration, DialogueStart: start, DialogueEnd: end, NaturalMinimum: minimum, Ready: len(issues) == 0, Status: status, BlockingIssues: issues, Advisories: advisories, Speakers: speakers, Presentation: presentation, ListenerCharacter: strings.TrimSpace(shot.ListenerCharacter), ContinuesFromPrev: continuesFrom, ContinuesToNext: continuesTo, Fragments: fragments})
 		timeCursor += shot.Duration
 		dialogueCursor = end
 	}

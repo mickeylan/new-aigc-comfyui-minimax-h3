@@ -405,54 +405,38 @@ func TestDialogueSnapshotDetectsInternalWhitespaceChanges(t *testing.T) {
 	}
 }
 
-func TestHandleCreateShotsRejectsImpossibleDialogueTimingWithoutMutation(t *testing.T) {
-	gin.SetMode(gin.TestMode)
+func TestReplaceShotsAllowsNaturalTimingWarningWithoutChangingDialogue(t *testing.T) {
 	db := newTestDBWithNewModels(t)
-	project := models.Project{Title: "handler timing"}
+	project := models.Project{Title: "timing warning"}
 	db.Create(&project)
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
 	db.Create(&scene)
-	text := strings.Repeat("修", 60)
-	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "姐姐", SpeechType: "dialogue", Text: text}
+	text := "自化元婴的设想来自于诸天宇。当年火云刹那之变，余天成的真实身份。"
+	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "姐姐", SpeechType: "dialogue", Text: text, AudioFile: "voice.wav"}
 	db.Create(&dialogue)
-	shots, err := NewShotService(db).ReplaceShots(scene.ID, []models.Shot{{ShotType: "close", Duration: 15, Dialogue: text, Description: "保留镜头"}})
-	if err != nil {
-		t.Fatal(err)
-	}
 	_, snapshot, err := loadSceneDialogueSnapshot(db, scene.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Model(&models.Scene{}).Where("id = ?", scene.ID).Updates(map[string]any{"image_task_id": "image-active", "video_task_id": "video-active"}).Error; err != nil {
-		t.Fatal(err)
+	shots := []models.Shot{{ShotType: "姐姐近景", Duration: 5, Dialogue: text, Description: "姐姐说话", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, PromptSubject: "姐姐可见", PromptAction: "姐姐同步口型"}}
+	reviewDraft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{ShotType: shots[0].ShotType, Duration: 5, Dialogue: text, SpeechPresentation: shots[0].SpeechPresentation}}}
+	review := buildDialogueRhythmReview(reviewDraft, []models.Dialogue{dialogue})
+	if len(review) != 1 || review[0].NaturalMinimum != 9.5 || review[0].Status != "attention" || len(review[0].Advisories) == 0 {
+		t.Fatalf("warning review=%+v", review)
 	}
-	payload, err := json.Marshal(map[string]any{"dialogue_snapshot": snapshot, "shots": []models.Shot{{ShotType: "姐姐近景", Duration: 15, Dialogue: text, Description: "不应写入", PromptSubject: "姐姐可见并同步口型"}}})
+	saved, err := NewShotService(db).ReplaceShotsWithDialogueSnapshot(scene.ID, shots, snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/projects/x/scenes/y/shots", bytes.NewReader(payload))
-	ctx.Request.Header.Set("Content-Type", "application/json")
-	ctx.Params = gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(project.ID), 10)}, {Key: "sid", Value: strconv.FormatUint(uint64(scene.ID), 10)}}
-	service := &Service{DB: db, Shots: NewShotService(db)}
-	service.HandleCreateShots(ctx)
-	if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), ErrDialogueTimingBlocked.Error()) || !strings.Contains(recorder.Body.String(), "必须继续拆镜") {
-		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	if len(saved) != 1 || saved[0].Duration != 5 || saved[0].Dialogue != text {
+		t.Fatalf("saved shots=%+v", saved)
 	}
-	var saved models.Shot
-	if err := db.First(&saved, shots[0].ID).Error; err != nil {
+	var currentDialogue models.Dialogue
+	if err := db.First(&currentDialogue, dialogue.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if saved.Description != "保留镜头" || saved.ShotType != "close" {
-		t.Fatalf("timing rejection mutated shot: %+v", saved)
-	}
-	var currentScene models.Scene
-	if err := db.First(&currentScene, scene.ID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if currentScene.ImageTaskID != "image-active" || currentScene.VideoTaskID != "video-active" {
-		t.Fatalf("timing rejection cleared tasks: %+v", currentScene)
+	if currentDialogue.Text != text || currentDialogue.AudioFile != "voice.wav" {
+		t.Fatalf("dialogue or its existing audio changed: %+v", currentDialogue)
 	}
 }
 
