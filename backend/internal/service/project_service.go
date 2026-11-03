@@ -652,7 +652,7 @@ func ensureQwenSceneReferenceBindings(prompt string, referenceLines []string) st
 	if len(referenceLines) == 1 {
 		prompt = strings.ReplaceAll(prompt, "<image1>", "该参考素材")
 		prompt = strings.ReplaceAll(prompt, "输入图", "该参考素材")
-		return qwenSceneReferenceBinding("输入图", referenceLines[0]) + "；" + prompt
+		return "重构一张独立新画布上的静止剧情首帧：" + qwenSceneReferenceBinding("输入图", referenceLines[0]) + "；" + prompt
 	}
 	bindings := make([]string, 0, len(referenceLines))
 	for i, line := range referenceLines {
@@ -666,8 +666,10 @@ func ensureQwenSceneReferenceBindings(prompt string, referenceLines []string) st
 		}
 		prompt = strings.ReplaceAll(prompt, tag, desc)
 	}
-	return strings.Join(bindings, "；") + "。" + prompt
+	return "重构一张独立新画布上的静止剧情首帧：" + strings.Join(bindings, "；") + "。" + prompt
 }
+
+var qwenImageTagPattern = regexp.MustCompile(`<image([1-9][0-9]*)>`)
 
 func validateQwenScenePrompt(prompt string, referenceCount int) error {
 	trimmed := strings.TrimSpace(prompt)
@@ -684,19 +686,30 @@ func validateQwenScenePrompt(prompt string, referenceCount int) error {
 			return fmt.Errorf("提示词包含非静止画面导演元数据“%s”", forbidden)
 		}
 	}
+	tags := qwenImageTagPattern.FindAllStringSubmatch(trimmed, -1)
+	if referenceCount == 0 && len(tags) > 0 {
+		return fmt.Errorf("文生图提示词不得包含输入图标签%s", tags[0][0])
+	}
 	if referenceCount == 1 {
-		if strings.Contains(trimmed, "<image1>") {
-			return fmt.Errorf("单张参考图必须自然称为输入图，不使用<image1>")
+		if len(tags) > 0 {
+			return fmt.Errorf("单张参考图必须自然称为输入图，不使用%s", tags[0][0])
 		}
 		if !strings.Contains(trimmed, "输入图") && !strings.Contains(strings.ToLower(trimmed), "input image") {
 			return fmt.Errorf("提示词遗漏单张输入图职责")
 		}
 	}
 	if referenceCount > 1 {
+		counts := map[int]int{}
+		for _, match := range tags {
+			index, _ := strconv.Atoi(match[1])
+			if index < 1 || index > referenceCount {
+				return fmt.Errorf("提示词引用了不存在的有序参考图%s", match[0])
+			}
+			counts[index]++
+		}
 		for i := 1; i <= referenceCount; i++ {
-			tag := fmt.Sprintf("<image%d>", i)
-			if !strings.Contains(trimmed, tag) {
-				return fmt.Errorf("提示词遗漏有序参考图绑定%s", tag)
+			if counts[i] != 1 {
+				return fmt.Errorf("有序参考图绑定<image%d>必须且只能出现一次，当前%d次", i, counts[i])
 			}
 		}
 	}
@@ -709,7 +722,7 @@ func (s *ProjectService) redesignQwenSceneImagePrompt(sc *models.Scene, project 
 	if hasRefs {
 		system = qwenImage21EditSystem
 	}
-	qwenSceneSystem := system + `\nThis is a Qwen-Image-2.1 single static opening-keyframe prompt, not a director plan. Follow the selected Qwen T2I or image-edit contract exactly. Use only supplied opening-keyframe visual facts. For a referenced new composition, begin with a concrete operation verb and bind each input to one explicit source responsibility; no input is the canvas. Then state the finished frame's medium/style, subject count and identity source, exact frozen pose, prop ownership, foreground/midground/background spatial anchors, camera framing and fixed viewpoint, environment materials, palette, light source/direction/quality, cast shadows and highlights, and end with one composition summary. Do not mention project/scene/shot numbers, dialogue, timing, transitions, cuts, camera movement, start/end state, future action, or abstract emotion. Never write tracking, pan, tilt, dolly, push-in or pull-out language. Convert motion into one frozen body pose with visible dust, fabric and hair state. Output one continuous paragraph in the request language inside rewritten_prompt.`
+	qwenSceneSystem := system + `\nThis is a Qwen-Image-2.1 single static opening-keyframe prompt, not a director plan. Follow the selected Qwen T2I or image-edit contract exactly. Use only supplied opening-keyframe visual facts. For a referenced new composition, begin with a concrete operation verb and bind each input to one explicit source responsibility; no input is the canvas. Then state the finished frame's medium/style, subject count and identity source, exact frozen pose, prop ownership, foreground/midground/background spatial anchors, camera framing and fixed viewpoint, environment materials, palette, light source/direction/quality, cast shadows and highlights, and end with one composition summary. A canonical character name and any supplied alias identify one person in one position, never duplicate people. Character references supply identity; outfit references supply styling for that same character; environment references supply the full-frame space; prop references supply only the integrated object's appearance and never create a person. For a net, rope, chain or flexible restraint enclosing a person, describe the positive final topology as a closed three-dimensional flexible volume wrapping around the front, sides and back of the body, not as an independent display object. Do not mention project/scene/shot numbers, dialogue, timing, transitions, cuts, camera movement, start/end state, future action, or abstract emotion. Never write tracking, pan, tilt, dolly, push-in or pull-out language. Convert motion into one frozen body pose with visible dust, fabric and hair state. Output one continuous paragraph in the request language inside rewritten_prompt.`
 	user := fmt.Sprintf("User request:\n输出一个静止首帧的最终画面描述，不要复述导演参数。题材：%s；画风：%s；地点：%s；道具：%s。%s\n\nOpening-keyframe visual facts (the only Shot facts allowed):\n%s\n\nVerified appearance and environment facts:\n%s", project.Genre, project.Style, sc.LocationName, sc.Props, framingRule, shotContext, assetContext)
 	if hasRefs {
 		user += "\n\nOrdered input image roles (order is binding):"
@@ -6450,20 +6463,17 @@ func (s *ProjectService) buildSceneImagePrompt(sc *models.Scene) string {
 }
 
 func (s *ProjectService) buildQwenSceneExecutionPrompt(sc *models.Scene, referenceLines []string) string {
+	_ = referenceLines // numbering was validated against these lines before execution
 	prompt := strings.TrimSpace(sc.ImagePrompt)
 	if prompt == "" {
 		prompt = strings.TrimSpace(sc.Content)
 	}
-	parts := make([]string, 0, len(referenceLines)+3)
-	if len(referenceLines) == 1 {
-		prompt = strings.ReplaceAll(prompt, "<image1>", "输入图")
-		parts = append(parts, "使用输入图仅提取"+qwenSceneReferenceRole(referenceLines[0])+"，在独立新画布中重构一个静止剧情首帧，未指定迁移的内容不进入新画面。")
-	} else {
-		for i, line := range referenceLines {
-			parts = append(parts, fmt.Sprintf("<image%d>作为%s；各参考职责保持分离，不混用身份、服装、道具或环境信息。", i+1, qwenSceneReferenceRole(line)))
-		}
+	// The reviewed Qwen prompt already contains the model-specific, ordered input
+	// responsibilities exactly once. Do not prepend them again at execution time.
+	parts := []string{prompt}
+	if h3ClosedNetCuePattern.MatchString(sc.Content+" "+prompt) && !strings.Contains(prompt, "闭合三维柔性网袋") {
+		parts = append(parts, "最终画面中的网形成贴近人物躯干和四肢、从正面和两侧延续到背后的闭合三维柔性网袋，人物与网构成一个完整包覆体。")
 	}
-	parts = append(parts, prompt)
 	if !s.qwenScenePromptRequestsPeople(sc, prompt) {
 		parts = append(parts, "【主体硬约束】纯场景空镜，画面中零人物、零人形主体、零人群、零角色剪影；不得因项目角色资料、参考图中的路人或模型习惯自行添加人物。 No people, no person, no human figure, no crowd, no character silhouette.")
 	}
@@ -6658,7 +6668,21 @@ func h3PromptSection(prompt, heading string) string {
 	return strings.TrimSpace(rest[:end])
 }
 
+func storyboardCharacterReferenceName(line string) string {
+	trimmed := strings.TrimSpace(strings.TrimPrefix(line, "-"))
+	for _, marker := range []string{"角色「", "角色造型「"} {
+		if start := strings.Index(trimmed, marker); start >= 0 {
+			start += len(marker)
+			if end := strings.Index(trimmed[start:], "」"); end >= 0 {
+				return strings.TrimSpace(trimmed[start : start+end])
+			}
+		}
+	}
+	return ""
+}
+
 func h3StoryboardSubjects(referenceLines []string) (definitions, retention, subjectRefs []string) {
+	primaryCharacterPicture := map[string]int{}
 	for i, line := range referenceLines {
 		n := i + 1
 		desc := strings.TrimSpace(strings.TrimPrefix(line, "-"))
@@ -6674,6 +6698,12 @@ func h3StoryboardSubjects(referenceLines []string) (definitions, retention, subj
 		picture := fmt.Sprintf("<Picture %d>", n)
 		switch {
 		case strings.Contains(desc, "角色「") || strings.Contains(desc, "角色造型「") || strings.HasPrefix(desc, "角色"):
+			name := storyboardCharacterReferenceName(line)
+			if primary := primaryCharacterPicture[name]; name != "" && primary != 0 {
+				definitions = append(definitions, fmt.Sprintf("%s supplements <Subject %d> with %s；这是同一角色的外观补充，不是新的Subject。", picture, primary, desc))
+				continue
+			}
+			primaryCharacterPicture[name] = n
 			subject := fmt.Sprintf("<Subject %d>", n)
 			definitions = append(definitions, fmt.Sprintf("%s 是 %s 中的%s。", subject, picture, desc))
 			retention = append(retention, fmt.Sprintf("%s (出现在 [Shot 1]): fully_preserved - %s。", subject, desc))
@@ -6693,10 +6723,17 @@ var h3StoryboardSubjectPrefixPattern = regexp.MustCompile(`^(?:\[Shot 1\]\s*)?(?
 var h3ClosedNetCuePattern = regexp.MustCompile(`(?:网|绳索|锁链)[^。；]{0,80}(?:包裹|包住|缠住|缠绕|罩住|束缚|收紧)|(?:包裹|包住|缠住|缠绕|罩住|束缚|收紧)[^。；]{0,80}(?:网|绳索|锁链)`)
 
 func replaceNonCharacterStoryboardSubjects(detail string, referenceLines []string) string {
+	primaryCharacterPicture := map[string]int{}
 	for i, line := range referenceLines {
 		n := i + 1
 		trimmed := strings.TrimSpace(strings.TrimPrefix(line, "-"))
 		if strings.Contains(trimmed, "角色「") || strings.Contains(trimmed, "角色造型「") || strings.HasPrefix(trimmed, "角色") {
+			name := storyboardCharacterReferenceName(line)
+			if primary := primaryCharacterPicture[name]; name != "" && primary != 0 {
+				detail = strings.ReplaceAll(detail, fmt.Sprintf("<Subject %d>", n), fmt.Sprintf("<Subject %d>", primary))
+			} else {
+				primaryCharacterPicture[name] = n
+			}
 			continue
 		}
 		replacement := fmt.Sprintf("the reference from <Picture %d>", n)
@@ -6708,6 +6745,56 @@ func replaceNonCharacterStoryboardSubjects(detail string, referenceLines []strin
 		detail = strings.ReplaceAll(detail, fmt.Sprintf("<Subject %d>", n), replacement)
 	}
 	return detail
+}
+
+var h3StoryboardPictureTagPattern = regexp.MustCompile(`<Picture\s+([1-9][0-9]*)>`)
+var h3StoryboardSubjectTagPattern = regexp.MustCompile(`<Subject\s+([1-9][0-9]*)>`)
+var h3StoryboardShotPattern = regexp.MustCompile(`\[Shot\s+([1-9][0-9]*)\]`)
+
+func validateH3StoryboardPrompt(prompt string, referenceLines []string) error {
+	issues := []string{}
+	detail := h3PromptSection(prompt, "detailed_description:")
+	if detail == "" {
+		detail = prompt
+	}
+	shots := h3StoryboardShotPattern.FindAllStringSubmatch(detail, -1)
+	if len(shots) != 1 || shots[0][1] != "1" {
+		issues = append(issues, "静态分镜必须且只能包含一个[Shot 1]")
+	}
+	characterPictures := map[int]bool{}
+	primaryCharacterPicture := map[string]int{}
+	for i, line := range referenceLines {
+		trimmed := strings.TrimSpace(strings.TrimPrefix(line, "-"))
+		if strings.Contains(trimmed, "角色「") || strings.Contains(trimmed, "角色造型「") || strings.HasPrefix(trimmed, "角色") {
+			name := storyboardCharacterReferenceName(line)
+			if name == "" || primaryCharacterPicture[name] == 0 {
+				characterPictures[i+1] = true
+				primaryCharacterPicture[name] = i + 1
+			}
+		}
+	}
+	for _, match := range h3StoryboardSubjectTagPattern.FindAllStringSubmatch(prompt, -1) {
+		index, _ := strconv.Atoi(match[1])
+		if index > len(referenceLines) || !characterPictures[index] {
+			issues = append(issues, fmt.Sprintf("%s没有对应当前人物参考图；场景和道具只能作为Picture约束", match[0]))
+		}
+	}
+	for _, match := range h3StoryboardPictureTagPattern.FindAllStringSubmatch(prompt, -1) {
+		index, _ := strconv.Atoi(match[1])
+		if index > len(referenceLines) {
+			issues = append(issues, fmt.Sprintf("%s超出当前%d张参考图", match[0], len(referenceLines)))
+		}
+	}
+	if strings.Contains(detail, "<d>") || strings.Contains(detail, "</d>") {
+		issues = append(issues, "静态分镜不得包含Dialogue标签")
+	}
+	if issue := storyboardSubjectTopologyIssue(detail); issue != "" {
+		issues = append(issues, issue)
+	}
+	if len(issues) > 0 {
+		return fmt.Errorf("%s", strings.Join(uniqueStrings(issues), "；"))
+	}
+	return nil
 }
 
 func buildH3StoryboardPrompt(sc *models.Scene, p *models.Project, referenceLines []string) string {
@@ -6722,6 +6809,9 @@ func buildH3StoryboardPrompt(sc *models.Scene, p *models.Project, referenceLines
 	detail = strings.TrimSpace(strings.TrimPrefix(detail, "[Shot 1]"))
 	detail = strings.TrimSpace(h3StoryboardSubjectPrefixPattern.ReplaceAllString(detail, ""))
 	detail = replaceNonCharacterStoryboardSubjects(detail, referenceLines)
+	if !strings.Contains(detail, "五帧候选批次") {
+		detail += "\n静态候选帧硬约束：五帧候选批次保持同一瞬间、同一人物数量与身份、同一姿势、同一空间关系、同一固定机位和同一构图，不发生动作推进、镜头运动或主体位移；仅提取中间帧作为分镜图。"
+	}
 	if h3ClosedNetCuePattern.MatchString(sc.Content+" "+detail) && !strings.Contains(detail, "闭合三维柔性网袋") {
 		detail += "\n空间拓扑硬约束：包裹人物的网必须形成贴近躯干和四肢、前后左右收拢的闭合三维柔性网袋；网绳从身体正面、两侧延续并绕到背后，人物双脚仍接触地面。禁止竖直平面网、网球网、排球网、横杆、晾晒架、把人物悬挂在网上、身体只位于网的一侧。"
 	}
@@ -6882,6 +6972,9 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 			return fmt.Errorf("Qwen场景提示词需要重新生成: %w", err)
 		}
 		prompt = s.buildQwenSceneExecutionPrompt(&compiledScene, lines)
+	} else if err := validateH3StoryboardPrompt(prompt, lines); err != nil {
+		s.failSceneImage(sc, token, "MiniMax H3分镜提示词需要重新生成: "+err.Error())
+		return fmt.Errorf("MiniMax H3分镜提示词需要重新生成: %w", err)
 	}
 	refNames := make([]string, 0, len(refs))
 	for i, ref := range refs {

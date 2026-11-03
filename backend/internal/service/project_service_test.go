@@ -1744,11 +1744,36 @@ func TestBuildH3StoryboardPromptKeepsEnvironmentAndNetAsPicturesAndClosesNetVolu
 		"<Subject 1> 是 <Picture 1>", "<Subject 2> 是 <Picture 2>",
 		"<Picture 3> establishes the full-frame environment", "<Picture 4> only establishes the appearance",
 		"the prop matching <Picture 4>", "the full-frame environment established by <Picture 3>",
-		"闭合三维柔性网袋", "禁止竖直平面网", "人物双脚仍接触地面",
+		"五帧候选批次保持同一瞬间", "闭合三维柔性网袋", "禁止竖直平面网", "人物双脚仍接触地面",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("storyboard enclosure contract missing %q: %s", want, prompt)
 		}
+	}
+	if err := validateH3StoryboardPrompt(prompt, lines); err != nil {
+		t.Fatalf("valid H3 storyboard rejected: %v", err)
+	}
+}
+
+func TestValidateH3StoryboardPromptRejectsModelSpecificReferenceErrors(t *testing.T) {
+	lines := []string{"- <Picture 1>：角色「柳石」四视图", "- <Picture 2>：场景「苍黄荒地」参考图"}
+	for name, prompt := range map[string]string{
+		"environment subject":  "[Shot 1] <Subject 2>站在荒地。",
+		"out of range picture": "[Shot 1] <Subject 1>站在<Picture 3>中。",
+		"multiple shots":       "[Shot 1] <Subject 1>站立。[Shot 2] 他转身。",
+		"dialogue":             "[Shot 1] <Subject 1>说：<d>回来</d>。",
+	} {
+		if err := validateH3StoryboardPrompt(prompt, lines); err == nil {
+			t.Fatalf("%s was accepted: %s", name, prompt)
+		}
+	}
+	duplicateCharacterLines := []string{"- <Picture 1>：角色「柳石」标准像", "- <Picture 2>：角色「柳石」四视图"}
+	compiled := buildH3StoryboardPrompt(&models.Scene{ImagePrompt: "[Shot 1] <Subject 2>站立。"}, &models.Project{}, duplicateCharacterLines)
+	if strings.Contains(compiled, "<Subject 2>") || !strings.Contains(compiled, "<Picture 2> supplements <Subject 1>") {
+		t.Fatalf("same-character references were not compiled into one Subject plus appearance supplement: %s", compiled)
+	}
+	if err := validateH3StoryboardPrompt(compiled, duplicateCharacterLines); err != nil {
+		t.Fatalf("compiled same-character supplementary reference rejected: %v", err)
 	}
 }
 
@@ -1865,6 +1890,15 @@ func TestValidateQwenScenePromptRejectsGenericInstructionAndMissingReferences(t 
 	if err := validateQwenScenePrompt("使用输入图提取人物身份，在荒地中近景略微俯拍跟拍幼女奔跑。", 1); err == nil || !strings.Contains(err.Error(), "跟拍") {
 		t.Fatalf("moving-camera wording was not rejected: %v", err)
 	}
+	if err := validateQwenScenePrompt("重构静止画面：<image1>提供人物，<image1>重复提供人物，<image2>提供环境。", 2); err == nil || !strings.Contains(err.Error(), "只能出现一次") {
+		t.Fatalf("duplicate ordered image binding accepted: %v", err)
+	}
+	if err := validateQwenScenePrompt("重构静止画面：<image1>提供人物，<image2>提供环境，<image3>提供道具。", 2); err == nil || !strings.Contains(err.Error(), "不存在") {
+		t.Fatalf("out-of-range ordered image binding accepted: %v", err)
+	}
+	if err := validateQwenScenePrompt("A finished still frame using <image1> as identity.", 0); err == nil || !strings.Contains(err.Error(), "文生图") {
+		t.Fatalf("T2I prompt accepted edit tag: %v", err)
+	}
 }
 
 func TestEnsureQwenSceneReferenceBindingsDeterministicallyAddsMissingImages(t *testing.T) {
@@ -1915,12 +1949,15 @@ func TestBuildQwenSceneExecutionPromptKeepsLocationOnlyAndForbidsPeople(t *testi
 	if err := ps.db.Create(&models.Character{ProjectID: p.ID, Name: "舒寒", Appearance: "黑色长发"}).Error; err != nil {
 		t.Fatal(err)
 	}
-	sc := models.Scene{ProjectID: p.ID, ImageEngine: ImageEngineQwen21, ImagePrompt: "以<image1>中的空间为环境来源，天阙宗玉霄峰巍峨耸立于云海之上", ReferenceImagesJSON: `[{"source_type":"asset","source_id":22,"variant":"image","use_krea2":true,"use_h3":false}]`}
+	sc := models.Scene{ProjectID: p.ID, ImageEngine: ImageEngineQwen21, ImagePrompt: "重构一张独立新画布上的静止剧情首帧：严格遵循输入图的场景「玉霄宫」参考图的环境结构、空间布局、材质与固定陈设参考；天阙宗玉霄峰巍峨耸立于云海之上", ReferenceImagesJSON: `[{"source_type":"asset","source_id":22,"variant":"image","use_krea2":true,"use_h3":false}]`}
 	got := ps.buildQwenSceneExecutionPrompt(&sc, []string{"- <Picture 1>：场景「玉霄宫」参考图"})
-	for _, want := range []string{"使用输入图仅提取场景「玉霄宫」参考图", "环境结构、空间布局、材质与固定陈设", "独立新画布中重构一个静止剧情首帧", "天阙宗玉霄峰", "零人物", "No people"} {
+	for _, want := range []string{"严格遵循输入图", "场景「玉霄宫」参考图", "环境结构、空间布局、材质与固定陈设", "独立新画布上的静止剧情首帧", "天阙宗玉霄峰", "零人物", "No people"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("prompt missing %q: %s", want, got)
 		}
+	}
+	if strings.Count(got, "严格遵循输入图") != 1 {
+		t.Fatalf("reviewed input responsibility duplicated at execution: %s", got)
 	}
 	for _, forbidden := range []string{"<image1>", "舒寒：", "主要角色外貌特征", "当前项目 Skill", "masterpiece", "居中构图、中景、半身像"} {
 		if strings.Contains(got, forbidden) {
