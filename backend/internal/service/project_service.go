@@ -500,7 +500,7 @@ func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, err
 	if err := s.db.First(&project, sc.ProjectID).Error; err != nil {
 		return "", err
 	}
-	assetContext := s.assetContextForScene(sc) + sceneBlockingPromptContext(sc)
+	assetContext := s.assetContextForScene(sc) + sceneBlockingPromptContext(sc) + s.sceneImageAliasIdentityContext(sc)
 	shotContext := s.sceneShotContext(sc)
 	_, referenceLines, explicitReferences := s.selectedSceneReferenceFiles(sc, "krea2")
 	if !explicitReferences {
@@ -572,6 +572,21 @@ Subject与Picture的真实身份绑定由系统根据实际上传文件生成，
 		}
 	}
 	return result, nil
+}
+
+func (s *ProjectService) sceneImageAliasIdentityContext(sc *models.Scene) string {
+	if sc == nil || !s.db.Migrator().HasTable(&models.CharacterAliasCandidate{}) {
+		return ""
+	}
+	var aliases []models.CharacterAliasCandidate
+	if err := s.db.Where("project_id = ? AND status = ?", sc.ProjectID, "confirmed").Order("id").Find(&aliases).Error; err != nil || len(aliases) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		lines = append(lines, fmt.Sprintf("- %s 与 %s 是同一角色（%s为权威名），绝不能作为两个人、两个主体或在两个位置各生成一人。", alias.Alias, alias.CanonicalName, alias.CanonicalName))
+	}
+	return "\n已确认角色别名（仅约束本次生图）：\n" + strings.Join(lines, "\n") + "\n若场景原文仍含别名与权威名的双站位描述，不改写原文；只生成一个静态瞬间中的同一人，以当前已保存站位事实为准，不得克隆。站位冲突仅提醒用户，不作为生成门禁。"
 }
 
 var qwenReferenceLinePrefixPattern = regexp.MustCompile(`^\s*-?\s*<Picture\s+[0-9]+>\s*[：:]?\s*`)

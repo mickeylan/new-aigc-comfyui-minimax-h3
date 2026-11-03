@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"unicode"
@@ -311,6 +312,9 @@ func rewriteSceneNameReferences(tx *gorm.DB, projectID uint, entityType, from, t
 					updates[field] = replaced
 				}
 			}
+			if blocking, changed := rewriteBlockingCharacterNames(sc.BlockingJSON, from, to); changed {
+				updates["blocking_json"] = blocking
+			}
 		case "location":
 			if normalizeCanonName(sc.LocationName) == normalizeCanonName(from) {
 				updates["location_name"] = to
@@ -321,37 +325,36 @@ func rewriteSceneNameReferences(tx *gorm.DB, projectID uint, entityType, from, t
 			}
 		}
 		if len(updates) > 0 {
+			// Reconciliation changes prompt inputs, not reviewed production artifacts.
 			updates["prompt_stale"] = true
-			if entityType != "character" {
-				// Location/prop replacement can change visible pixels. Preserve the reviewed
-				// storyboard, but invalidate dependent video until the user reviews it.
-				updates["video_task_id"], updates["video_file"], updates["video_input_file"] = "", "", ""
-				updates["video_gpu"] = nil
-				updates["status"] = gorm.Expr("CASE WHEN image_file <> '' THEN 'image_ready' ELSE 'pending' END")
-			}
 			if err := tx.Model(sc).Updates(updates).Error; err != nil {
 				return err
 			}
-			if entityType != "character" {
-				if err := MarkSceneCandidatesStale(tx, projectID, sc.ID, "video", "资产对账已改变权威引用"); err != nil {
-					return err
-				}
-				var dependents []models.SceneContinuity
-				if err := tx.Where("source_scene_id = ? AND mode != ?", sc.ID, models.ContinuityModeIndependent).Find(&dependents).Error; err != nil {
-					return err
-				}
-				for _, dependency := range dependents {
-					if err := tx.Model(&dependency).Updates(map[string]any{"status": "source_invalidated", "error": "上游资产对账已变化"}).Error; err != nil {
-						return err
+		}
+	}
+	if entityType == "character" {
+		if tx.Migrator().HasTable("shots") && tx.Migrator().HasTable("scenes") {
+			var shots []models.Shot
+			if err := tx.Where("scene_id IN (SELECT id FROM scenes WHERE project_id = ?)", projectID).Find(&shots).Error; err != nil {
+				return err
+			}
+			for i := range shots {
+				updates := map[string]any{}
+				for column, value := range map[string]string{"prompt_subject": shots[i].PromptSubject, "prompt_action": shots[i].PromptAction, "start_state": shots[i].StartState, "end_state": shots[i].EndState, "description": shots[i].Description, "emotion": shots[i].Emotion} {
+					if replaced := strings.ReplaceAll(value, from, to); replaced != value {
+						updates[column] = replaced
 					}
-					if err := invalidateSceneVideoTx(tx, projectID, dependency.SceneID, "上游资产对账已变化"); err != nil {
+				}
+				if normalizeCanonName(shots[i].ListenerCharacter) == normalizeCanonName(from) {
+					updates["listener_character"] = to
+				}
+				if len(updates) > 0 {
+					if err := tx.Model(&shots[i]).Updates(updates).Error; err != nil {
 						return err
 					}
 				}
 			}
 		}
-	}
-	if entityType == "character" {
 		var dialogues []models.Dialogue
 		if err := tx.Where("project_id = ?", projectID).Find(&dialogues).Error; err != nil {
 			return err
@@ -374,7 +377,7 @@ func replaceNameToken(value, from, to string) (string, bool) {
 		return value, false
 	}
 	parts := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == '，' || r == ';' || r == '；' || r == '\n' })
-	changed := false
+	changed, seen := false, map[string]bool{}
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {
 		name := strings.TrimSpace(part)
@@ -384,10 +387,42 @@ func replaceNameToken(value, from, to string) (string, bool) {
 		if normalizeCanonName(name) == normalizeCanonName(from) {
 			name, changed = to, true
 		}
+		norm := normalizeCanonName(name)
+		if seen[norm] {
+			changed = true
+			continue
+		}
+		seen[norm] = true
 		out = append(out, name)
 	}
 	if !changed {
 		return value, false
 	}
 	return strings.Join(out, ","), true
+}
+
+func rewriteBlockingCharacterNames(raw, from, to string) (string, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return raw, false
+	}
+	var blocking SceneBlocking
+	if err := json.Unmarshal([]byte(raw), &blocking); err != nil {
+		return raw, false
+	}
+	changed, count := false, 0
+	for i := range blocking.Characters {
+		if normalizeCanonName(blocking.Characters[i].Name) == normalizeCanonName(from) {
+			blocking.Characters[i].Name, changed = to, true
+		}
+		if normalizeCanonName(blocking.Characters[i].Name) == normalizeCanonName(to) {
+			count++
+		}
+	}
+	if !changed {
+		return raw, false
+	}
+	if count > 1 {
+		blocking.Suggestions = append(blocking.Suggestions, "身份合并后同一角色存在多条站位记录；位置冲突已保留，请确认当前静止瞬间采用哪一条")
+	}
+	return blockingJSON(blocking), true
 }

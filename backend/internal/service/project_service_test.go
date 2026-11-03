@@ -1392,9 +1392,12 @@ func TestProjectCharacterReconciliationPersistsAliasAndBindsAllScenes(t *testing
 	ps.db.Create(&character)
 	duplicate := models.Character{ProjectID: project.ID, Name: "柳石", Sheet: "liu-shi-sheet.png", VoiceRef: "liu-shi.wav"}
 	ps.db.Create(&duplicate)
-	scene := models.Scene{ProjectID: project.ID, EpisodeN: 2, Characters: "柳石", VisibleCharacters: "柳石", ImageFile: "approved-storyboard.png", VideoFile: "approved-video.mp4", Status: "video_ready"}
+	blocking := `{"facts":[],"suggestions":[],"characters":[{"name":"柳石","position":"网内"},{"name":"青衣高大男子","position":"网外"}],"camera":"平视"}`
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 2, Characters: "柳石,青衣高大男子", VisibleCharacters: "柳石,青衣高大男子", BlockingJSON: blocking, ImageFile: "approved-storyboard.png", VideoFile: "approved-video.mp4", VideoInputFile: "approved-input.mp4", VideoTaskID: "done-task", VideoExecSourceHash: "source-hash", VideoExecConfirmedHash: "confirmed-hash", Status: "video_ready"}
 	ps.db.Create(&scene)
-	ps.db.Create(&models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Character: "柳石", Text: "别怕。", Order: 1})
+	ps.db.Create(&models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Character: "柳石", Text: "柳石，别怕。", Order: 1})
+	shot := models.Shot{SceneID: scene.ID, Order: 1, PromptSubject: "柳石在网内", PromptAction: "柳石抬手", Dialogue: "柳石：别怕"}
+	ps.db.Create(&shot)
 	reconciliation := NewAssetReconciliationService(ps.db)
 	if err := reconciliation.Apply(project.ID, []AssetReconciliationDecision{{EntityType: "character", ProposedName: "柳石", Action: "merge", TargetID: character.ID}}); err != nil {
 		t.Fatal(err)
@@ -1414,12 +1417,26 @@ func TestProjectCharacterReconciliationPersistsAliasAndBindsAllScenes(t *testing
 		t.Fatalf("duplicate Character rows/assets were not merged: %+v", mergedCharacters)
 	}
 	var mergedDialogue models.Dialogue
-	if err := ps.db.First(&mergedDialogue).Error; err != nil || mergedDialogue.Character != "青衣高大男子" {
-		t.Fatalf("Dialogue identity was not merged: dialogue=%+v err=%v", mergedDialogue, err)
+	if err := ps.db.First(&mergedDialogue).Error; err != nil || mergedDialogue.Character != "青衣高大男子" || mergedDialogue.Text != "柳石，别怕。" {
+		t.Fatalf("Dialogue identity must merge without rewriting dialogue text: dialogue=%+v err=%v", mergedDialogue, err)
 	}
 	var preservedScene models.Scene
-	if err := ps.db.First(&preservedScene, scene.ID).Error; err != nil || preservedScene.ImageFile != "approved-storyboard.png" || preservedScene.VideoFile != "approved-video.mp4" || preservedScene.Status != "video_ready" {
-		t.Fatalf("identity merge must preserve reviewed Scene media: scene=%+v err=%v", preservedScene, err)
+	if err := ps.db.First(&preservedScene, scene.ID).Error; err != nil || preservedScene.ImageFile != "approved-storyboard.png" || preservedScene.VideoFile != "approved-video.mp4" || preservedScene.VideoInputFile != "approved-input.mp4" || preservedScene.VideoTaskID != "done-task" || preservedScene.VideoExecSourceHash != "source-hash" || preservedScene.VideoExecConfirmedHash != "confirmed-hash" || preservedScene.Status != "video_ready" {
+		t.Fatalf("identity merge must preserve reviewed Scene media and execution state: scene=%+v err=%v", preservedScene, err)
+	}
+	if preservedScene.Characters != "青衣高大男子" || preservedScene.VisibleCharacters != "青衣高大男子" || !preservedScene.PromptStale {
+		t.Fatalf("character CSV was not normalized/deduplicated: %+v", preservedScene)
+	}
+	parsedBlocking, err := parseSceneBlocking(preservedScene.BlockingJSON)
+	if err != nil || len(parsedBlocking.Characters) != 2 || parsedBlocking.Characters[0].Name != "青衣高大男子" || parsedBlocking.Characters[0].Position != "网内" || parsedBlocking.Characters[1].Position != "网外" || len(parsedBlocking.Suggestions) == 0 {
+		t.Fatalf("blocking identities/position conflict were not safely retained: blocking=%+v err=%v", parsedBlocking, err)
+	}
+	if err := ps.db.First(&shot, shot.ID).Error; err != nil || shot.PromptSubject != "青衣高大男子在网内" || shot.PromptAction != "青衣高大男子抬手" || shot.Dialogue != "柳石：别怕" {
+		t.Fatalf("shot identity fields were not normalized safely: shot=%+v err=%v", shot, err)
+	}
+	aliasContext := ps.sceneImageAliasIdentityContext(&preservedScene)
+	if !strings.Contains(aliasContext, "柳石 与 青衣高大男子 是同一角色") || !strings.Contains(aliasContext, "不得克隆") || !strings.Contains(aliasContext, "当前已保存站位事实为准") {
+		t.Fatalf("image generation alias constraint missing: %q", aliasContext)
 	}
 	aliasScene := models.Scene{ProjectID: project.ID, EpisodeN: 3, Characters: "柳石", VisibleCharacters: "柳石", ImageFile: "storyboard.png"}
 	if err := ps.db.Create(&aliasScene).Error; err != nil {
@@ -1440,6 +1457,31 @@ func TestProjectCharacterReconciliationPersistsAliasAndBindsAllScenes(t *testing
 	videoRefs, videoLines := ps.sceneVideoReferenceFiles(&aliasScene, fmt.Sprint(project.ID))
 	if len(videoRefs) < 2 || !strings.Contains(strings.Join(videoLines, "\n"), "别名「柳石」") {
 		t.Fatalf("future alias scene did not receive automatic H3 reference: refs=%+v lines=%v", videoRefs, videoLines)
+	}
+}
+
+func TestAssetReconciliationLocationMergePreservesProductionArtifacts(t *testing.T) {
+	ps := newTestProjectService(t)
+	project := models.Project{Title: "location merge"}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	location := models.Asset{ProjectID: project.ID, Kind: AssetKindLocation, Name: "宗门大殿"}
+	if err := ps.db.Create(&location).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID, LocationName: "旧大殿", ImageFile: "approved.png", VideoFile: "approved.mp4", VideoInputFile: "input.mp4", VideoTaskID: "task", VideoExecSourceHash: "source", VideoExecConfirmedHash: "confirmed", ReferenceImagesJSON: `[{"source_type":"scene"}]`, Status: "video_ready"}
+	if err := ps.db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := NewAssetReconciliationService(ps.db).Apply(project.ID, []AssetReconciliationDecision{{EntityType: "location", ProposedName: "旧大殿", Action: "merge", TargetID: location.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.db.First(&scene, scene.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if scene.LocationName != "宗门大殿" || !scene.PromptStale || scene.ImageFile != "approved.png" || scene.VideoFile != "approved.mp4" || scene.VideoInputFile != "input.mp4" || scene.VideoTaskID != "task" || scene.VideoExecSourceHash != "source" || scene.VideoExecConfirmedHash != "confirmed" || scene.ReferenceImagesJSON != `[{"source_type":"scene"}]` || scene.Status != "video_ready" {
+		t.Fatalf("location reconciliation changed production artifacts: %+v", scene)
 	}
 }
 
