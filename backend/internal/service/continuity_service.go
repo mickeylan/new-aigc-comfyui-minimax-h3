@@ -98,7 +98,9 @@ func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, coun
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("ffmpeg未产生候选帧")
 	}
-	tailCandidates := append([]models.FrameCandidate(nil), candidates...)
+	// Keep a view of the slice: GORM fills IDs on candidates only after insertion.
+	// Copying these structs before Create returned zero IDs to the selection UI.
+	tailCount := len(candidates)
 	for _, boundary := range []struct {
 		name  string
 		kind  models.FrameCandidateType
@@ -140,7 +142,10 @@ func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, coun
 		}
 		return tx.Create(&uploads).Error
 	})
-	return tailCandidates, err
+	if err != nil {
+		return nil, err
+	}
+	return candidates[:tailCount], nil
 }
 
 func markReextractedFrameReferences(tx *gorm.DB, sceneID uint) error {
