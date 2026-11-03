@@ -216,10 +216,18 @@ func (s *Service) HandleGetProject(c *gin.Context) {
 	counts, _ := s.Projects.CharacterSceneCounts(uint(id))
 	assets, _ := s.Projects.ListAssets(uint(id), "")
 	assetCounts, _ := s.Projects.AssetSceneCounts(uint(id))
+	activeSceneIDs := make([]uint, 0, len(scenes))
+	for _, scene := range scenes {
+		activeSceneIDs = append(activeSceneIDs, scene.ID)
+	}
 	var dialogues []models.Dialogue
-	s.DB.Where("project_id = ?", uint(id)).Order("scene_id, `order`").Find(&dialogues)
+	if len(activeSceneIDs) > 0 {
+		s.DB.Where("project_id = ? AND scene_id IN ?", uint(id), activeSceneIDs).Order("scene_id, `order`").Find(&dialogues)
+	}
+	var archivedScenes []models.Scene
+	s.DB.Where("project_id = ? AND archived = ?", uint(id), true).Order("episode_n, generation, `order`, id").Find(&archivedScenes)
 	episodes, _ := ProjectEpisodeHierarchy(s.DB, uint(id))
-	c.JSON(200, gin.H{"project": p, "episodes": episodes, "scenes": scenes, "merges": merges, "characters": chars, "character_counts": counts, "assets": assets, "asset_counts": assetCounts, "dialogues": dialogues})
+	c.JSON(200, gin.H{"project": p, "episodes": episodes, "scenes": scenes, "archived_scenes": archivedScenes, "merges": merges, "characters": chars, "character_counts": counts, "assets": assets, "asset_counts": assetCounts, "dialogues": dialogues})
 }
 
 func (s *Service) HandleCreateProjectEpisode(c *gin.Context) {

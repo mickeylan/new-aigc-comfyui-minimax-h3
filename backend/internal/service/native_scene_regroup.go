@@ -39,7 +39,7 @@ func materializedSceneBase(title string) (string, int, bool) {
 
 func (s *ShotService) loadMaterializedSceneRun(db *gorm.DB, projectID, selectedID uint) ([]models.Scene, string, error) {
 	var selected models.Scene
-	if err := db.Where("id = ? AND project_id = ?", selectedID, projectID).First(&selected).Error; err != nil {
+	if err := db.Where("id = ? AND project_id = ? AND (archived = ? OR archived IS NULL)", selectedID, projectID, false).First(&selected).Error; err != nil {
 		return nil, "", err
 	}
 	base, _, ok := materializedSceneBase(selected.Title)
@@ -47,7 +47,7 @@ func (s *ShotService) loadMaterializedSceneRun(db *gorm.DB, projectID, selectedI
 		return nil, "", fmt.Errorf("当前场景不是由导演Shot拆分出的场景")
 	}
 	var episodeScenes []models.Scene
-	if err := db.Where("project_id = ? AND generation = ? AND episode_n = ?", projectID, selected.Generation, selected.EpisodeN).Order("`order`, id").Find(&episodeScenes).Error; err != nil {
+	if err := db.Where("project_id = ? AND generation = ? AND episode_n = ? AND (archived = ? OR archived IS NULL)", projectID, selected.Generation, selected.EpisodeN, false).Order("`order`, id").Find(&episodeScenes).Error; err != nil {
 		return nil, "", err
 	}
 	run := []models.Scene{}
@@ -174,13 +174,13 @@ func (s *ShotService) RegroupExistingNativeScenes(projectID, selectedID uint) ([
 			runIDs[i] = run[i].ID
 		}
 		var allScenes []models.Scene
-		if err := tx.Where("project_id=? AND generation=? AND episode_n=?", projectID, run[0].Generation, run[0].EpisodeN).Order("`order`,id").Find(&allScenes).Error; err != nil {
+		if err := tx.Where("project_id=? AND generation=? AND episode_n=? AND (archived = ? OR archived IS NULL)", projectID, run[0].Generation, run[0].EpisodeN, false).Order("`order`,id").Find(&allScenes).Error; err != nil {
 			return err
 		}
 		if err := invalidateContinuityDependentsTx(tx, projectID, runIDs, "相邻短Scene已重新合并为Native场景"); err != nil {
 			return err
 		}
-		if err := tx.Model(&models.Scene{}).Where("project_id=? AND generation=? AND episode_n=?", projectID, run[0].Generation, run[0].EpisodeN).Update("order", gorm.Expr("-id")).Error; err != nil {
+		if err := tx.Model(&models.Scene{}).Where("project_id=? AND generation=? AND episode_n=? AND (archived = ? OR archived IS NULL)", projectID, run[0].Generation, run[0].EpisodeN, false).Update("order", gorm.Expr("-id")).Error; err != nil {
 			return err
 		}
 		firstOrder := run[0].Order
@@ -224,7 +224,7 @@ func (s *ShotService) RegroupExistingNativeScenes(projectID, selectedID uint) ([
 			keeper.NegativePrompt, keeper.ShotCount = strings.Join(nonEmptyStrings(negatives), ", "), shotOrder
 			resetMaterializedScene(&keeper, keeper)
 			updates := sceneDerivedResetUpdates()
-			for key, value := range map[string]any{"order": keeper.Order, "title": keeper.Title, "duration": keeper.Duration, "content": keeper.Content, "image_prompt": keeper.ImagePrompt, "video_prompt": keeper.VideoPrompt, "negative_prompt": keeper.NegativePrompt, "shot_count": keeper.ShotCount} {
+			for key, value := range map[string]any{"order": keeper.Order, "title": keeper.Title, "duration": keeper.Duration, "content": keeper.Content, "image_prompt": keeper.ImagePrompt, "video_prompt": keeper.VideoPrompt, "negative_prompt": keeper.NegativePrompt, "shot_count": keeper.ShotCount, "archived": false} {
 				updates[key] = value
 			}
 			if err := tx.Model(&models.Scene{}).Where("id=?", keeper.ID).Updates(updates).Error; err != nil {
@@ -232,10 +232,7 @@ func (s *ShotService) RegroupExistingNativeScenes(projectID, selectedID uint) ([
 			}
 			created = append(created, keeper)
 			for _, scene := range group.Scenes[1:] {
-				if err := deleteSceneDependents(tx, projectID, []uint{scene.ID}); err != nil {
-					return err
-				}
-				if err := tx.Delete(&scene).Error; err != nil {
+				if err := tx.Model(&models.Scene{}).Where("id = ?", scene.ID).Updates(map[string]any{"archived": true, "order": scene.Order}).Error; err != nil {
 					return err
 				}
 			}

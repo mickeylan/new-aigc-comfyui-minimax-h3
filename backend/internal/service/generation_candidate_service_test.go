@@ -43,7 +43,7 @@ func TestGenerationCandidateReviewAndSelectProjectsToScene(t *testing.T) {
 	}
 }
 
-func TestDetachedImageRetrySuccessInvalidatesVideoFramesAndContinuity(t *testing.T) {
+func TestDetachedImageRetrySuccessPreservesVideoFramesAndContinuityReferences(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	if err := db.AutoMigrate(&models.GenerationCandidate{}, &models.FrameCandidate{}, &models.SceneContinuity{}, &models.MergeTask{}); err != nil {
 		t.Fatal(err)
@@ -77,34 +77,32 @@ func TestDetachedImageRetrySuccessInvalidatesVideoFramesAndContinuity(t *testing
 		t.Fatal(err)
 	}
 	db.First(&source, source.ID)
-	if source.ImageFile != "retry.png" || source.VideoFile != "" || source.VideoTaskID != "" || source.VideoInputFile != "" || source.Status != "image_ready" {
-		t.Fatalf("source projection retained stale video: %+v", source)
+	if source.ImageFile != "retry.png" || source.VideoFile != "old.mp4" || source.VideoTaskID != "video-old" || source.VideoInputFile != "old-local.mp4" || source.VideoFullPrompt != "old prompt" || source.Status != "video_ready" {
+		t.Fatalf("image replacement did not preserve video projection: %+v", source)
 	}
 	var frameCount int64
 	db.Model(&models.FrameCandidate{}).Where("scene_id = ?", source.ID).Count(&frameCount)
-	if frameCount != 0 {
-		t.Fatalf("old frame candidates retained: %d", frameCount)
+	if frameCount != 1 {
+		t.Fatalf("frame candidates were not preserved: %d", frameCount)
 	}
-	for _, candidate := range []*models.GenerationCandidate{&oldVideo, &directVideo, &transitiveVideo} {
-		db.First(candidate, candidate.ID)
-		if !candidate.Stale || candidate.IsCurrent {
-			t.Fatalf("video candidate not invalidated: %+v", candidate)
-		}
+	db.First(&oldVideo, oldVideo.ID)
+	if oldVideo.Stale || !oldVideo.IsCurrent {
+		t.Fatalf("current source video candidate changed: %+v", oldVideo)
 	}
 	for _, scene := range []*models.Scene{&direct, &transitive} {
 		db.First(scene, scene.ID)
-		if scene.VideoFile != "" || scene.VideoTaskID != "" || scene.Status != "image_ready" {
-			t.Fatalf("continuity-dependent video retained: %+v", scene)
+		if scene.VideoFile == "" || scene.VideoTaskID == "" || scene.Status != "video_ready" {
+			t.Fatalf("continuity-dependent video reference was cleared: %+v", scene)
 		}
-		var cfg models.SceneContinuity
-		db.Where("scene_id = ?", scene.ID).First(&cfg)
-		if cfg.Status != "source_invalidated" || cfg.SelectedFrameID != nil {
-			t.Fatalf("continuity dependency not invalidated: %+v", cfg)
-		}
+	}
+	var directCfg models.SceneContinuity
+	db.Where("scene_id = ?", direct.ID).First(&directCfg)
+	if directCfg.SelectedFrameID == nil || *directCfg.SelectedFrameID != frame.ID {
+		t.Fatalf("continuity frame selection was cleared: %+v", directCfg)
 	}
 }
 
-func TestDetachedVideoRetrySuccessClearsOldFramesAndInvalidatesContinuity(t *testing.T) {
+func TestDetachedVideoRetrySuccessPreservesFramesAndContinuityReferences(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	if err := db.AutoMigrate(&models.GenerationCandidate{}, &models.FrameCandidate{}, &models.SceneContinuity{}, &models.MergeTask{}); err != nil {
 		t.Fatal(err)
@@ -137,15 +135,15 @@ func TestDetachedVideoRetrySuccessClearsOldFramesAndInvalidatesContinuity(t *tes
 	}
 	var frameCount int64
 	db.Model(&models.FrameCandidate{}).Where("scene_id = ?", source.ID).Count(&frameCount)
-	if frameCount != 0 {
-		t.Fatalf("old frames must be removed before retry frame extraction: %d", frameCount)
+	if frameCount != 1 {
+		t.Fatalf("old frames and user selection must be preserved: %d", frameCount)
 	}
 	db.First(&dependent, dependent.ID)
 	db.First(&dependentVideo, dependentVideo.ID)
 	var cfg models.SceneContinuity
 	db.Where("scene_id = ?", dependent.ID).First(&cfg)
-	if dependent.VideoTaskID != "" || !dependentVideo.Stale || cfg.Status != "source_invalidated" || cfg.SelectedFrameID != nil {
-		t.Fatalf("downstream continuity retained stale output: scene=%+v candidate=%+v continuity=%+v", dependent, dependentVideo, cfg)
+	if dependent.VideoTaskID != "video-next" || !dependentVideo.Stale || cfg.SelectedFrameID == nil || *cfg.SelectedFrameID != frame.ID {
+		t.Fatalf("downstream stale output references were not preserved: scene=%+v candidate=%+v continuity=%+v", dependent, dependentVideo, cfg)
 	}
 }
 
@@ -315,8 +313,8 @@ func TestSelectHistoricalVideoInvalidatesDependentsAndRepeatedSelectionIsIdempot
 	}
 	db.First(&dependent, dependent.ID)
 	db.First(&dependentCandidate, dependentCandidate.ID)
-	if dependent.VideoFile != "" || dependent.VideoTaskID != "" || !dependentCandidate.Stale {
-		t.Fatalf("dependent output survived video switch: scene=%+v candidate=%+v", dependent, dependentCandidate)
+	if dependent.VideoFile != "next.mp4" || dependent.VideoTaskID != "next-video" || !dependentCandidate.Stale || !dependentCandidate.IsCurrent {
+		t.Fatalf("dependent stale output references were not preserved: scene=%+v candidate=%+v", dependent, dependentCandidate)
 	}
 	newFrame := models.FrameCandidate{ProjectID: project.ID, SceneID: source.ID, VideoTaskID: "old-video", Type: models.FrameCandidateSelected, ImageFile: "new-tail.png"}
 	db.Create(&newFrame)
@@ -330,7 +328,7 @@ func TestSelectHistoricalVideoInvalidatesDependentsAndRepeatedSelectionIsIdempot
 	}
 }
 
-func TestSelectHistoricalImageClearsFramesAndVideoDerivedState(t *testing.T) {
+func TestSelectHistoricalImagePreservesFramesAndVideoDerivedState(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	if err := db.AutoMigrate(&models.GenerationCandidate{}, &models.FrameCandidate{}, &models.SceneContinuity{}, &models.MergeTask{}); err != nil {
 		t.Fatal(err)
@@ -354,12 +352,12 @@ func TestSelectHistoricalImageClearsFramesAndVideoDerivedState(t *testing.T) {
 	db.First(&video, video.ID)
 	var frameCount int64
 	db.Model(&models.FrameCandidate{}).Where("scene_id = ?", scene.ID).Count(&frameCount)
-	if scene.ImageFile != "old.png" || scene.VideoFile != "" || scene.VideoTaskID != "" || scene.VideoFullPrompt != "" || frameCount != 0 || !video.Stale || video.IsCurrent {
-		t.Fatalf("old image derived state survived: scene=%+v video=%+v frames=%d", scene, video, frameCount)
+	if scene.ImageFile != "old.png" || scene.VideoFile != "derived.mp4" || scene.VideoTaskID != "derived-video" || scene.VideoFullPrompt != "derived prompt" || scene.VideoFirstFrameImg != "first.png" || scene.VideoLastFrameImg != "last.png" || frameCount != 1 || video.Stale || !video.IsCurrent {
+		t.Fatalf("image adoption did not preserve video state: scene=%+v video=%+v frames=%d", scene, video, frameCount)
 	}
 }
 
-func TestSelectCurrentRollsBackWhenDerivedInvalidationFails(t *testing.T) {
+func TestSelectCurrentDoesNotDeleteFrameHistory(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	if err := db.AutoMigrate(&models.GenerationCandidate{}, &models.FrameCandidate{}, &models.SceneContinuity{}, &models.MergeTask{}); err != nil {
 		t.Fatal(err)
@@ -380,14 +378,14 @@ func TestSelectCurrentRollsBackWhenDerivedInvalidationFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := NewGenerationCandidateService(db).SelectCurrent(project.ID, historical.ID); err == nil {
-		t.Fatal("expected transactional invalidation failure")
+	if _, err := NewGenerationCandidateService(db).SelectCurrent(project.ID, historical.ID); err != nil {
+		t.Fatalf("video adoption attempted to delete frame history: %v", err)
 	}
 	db.First(&scene, scene.ID)
 	db.First(&historical, historical.ID)
 	db.First(&current, current.ID)
-	if scene.VideoTaskID != "current-video" || historical.IsCurrent || !current.IsCurrent {
-		t.Fatalf("partial candidate adoption escaped rollback: scene=%+v historical=%+v current=%+v", scene, historical, current)
+	if scene.VideoTaskID != "old-video" || !historical.IsCurrent || current.IsCurrent {
+		t.Fatalf("candidate adoption failed: scene=%+v historical=%+v current=%+v", scene, historical, current)
 	}
 }
 

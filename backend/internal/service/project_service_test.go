@@ -235,6 +235,65 @@ func TestGenerateScriptCoreRepairsMalformedJSONOnce(t *testing.T) {
 	}
 }
 
+func TestGenerateScriptCoreArchivesOldSceneAndPreservesProductionHistory(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Dialogue{}, &models.Material{}, &models.AudioLayer{}, &models.Event{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "archive", Generation: 2}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	other := models.Project{Title: "newer", Generation: 8}
+	if err := ps.db.Create(&other).Error; err != nil {
+		t.Fatal(err)
+	}
+	gpu := 1
+	old := models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 2, Order: 1, Title: "old", ImageFile: "old.png", VideoFile: "old.mp4", VideoTaskID: "old-task", VideoGPU: &gpu, Status: "video_ready"}
+	if err := ps.db.Create(&old).Error; err != nil {
+		t.Fatal(err)
+	}
+	projectID, sceneID := project.ID, old.ID
+	rows := []any{
+		&models.Dialogue{ProjectID: project.ID, SceneID: old.ID, Order: 1, Text: "keep", AudioFile: "keep.wav"},
+		&models.Material{ProjectID: &projectID, SceneID: &sceneID, Source: "scene", Path: "old.png"},
+		&models.AudioLayer{ProjectID: project.ID, EpisodeN: 1, SceneID: &sceneID, Kind: "sfx", File: "keep-sfx.wav"},
+		&models.Task{TaskID: "old-task", Status: "success"},
+		&models.Event{TaskID: "old-task", Type: "completed"},
+		&models.GenerationCandidate{ProjectID: project.ID, EntityType: "scene", EntityID: old.ID, MediaType: "video", TaskID: "old-task", File: "old.mp4", IsCurrent: true},
+	}
+	for _, row := range rows {
+		if err := ps.db.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	scenes := make([]map[string]any, 20)
+	for i := range scenes {
+		scenes[i] = map[string]any{"title": fmt.Sprintf("new-%d", i+1), "content": "动作", "image_prompt": "image", "duration": 9, "characters": []string{}, "dialogues": []any{}}
+	}
+	raw, _ := json.Marshal(map[string]any{"script": "new script", "visual_bible": "style", "scenes": scenes})
+	_, active, err := ps.generateScriptCore(&project, 1, string(raw), resScriptHandler(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var archived models.Scene
+	if err := ps.db.First(&archived, old.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !archived.Archived || archived.ImageFile != "old.png" || archived.VideoFile != "old.mp4" || archived.VideoTaskID != "old-task" {
+		t.Fatalf("old scene history changed: %+v", archived)
+	}
+	if len(active) != 20 || active[0].Archived || active[0].Generation != 9 {
+		t.Fatalf("GetProject did not return only active global generation: %+v", active)
+	}
+	for _, model := range []any{&models.Dialogue{}, &models.Material{}, &models.AudioLayer{}, &models.Task{}, &models.Event{}, &models.GenerationCandidate{}} {
+		var count int64
+		if err := ps.db.Model(model).Count(&count).Error; err != nil || count != 1 {
+			t.Fatalf("historical %T count=%d err=%v", model, count, err)
+		}
+	}
+}
+
 func TestGenerateScriptCoreRetriesTargetedRepairOnce(t *testing.T) {
 	ps := newTestProjectService(t)
 	scenes := make([]map[string]any, 20)
@@ -369,7 +428,7 @@ func TestUploadedSceneImageExtRejectsNonImage(t *testing.T) {
 	}
 }
 
-func TestReplaceSceneImageInvalidatesVideoAndGenerationToken(t *testing.T) {
+func TestReplaceSceneImagePreservesExistingVideoAndClearsImageGenerationToken(t *testing.T) {
 	ps := newTestProjectService(t)
 	project := models.Project{Title: "p", Status: "ready"}
 	if err := ps.db.Create(&project).Error; err != nil {
@@ -387,11 +446,34 @@ func TestReplaceSceneImageInvalidatesVideoAndGenerationToken(t *testing.T) {
 	if err := ps.db.First(&got, scene.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if got.ImageFile != "replacement.png" || got.ImageToken != "" || got.ImageTaskID != "" || got.Status != "image_ready" || got.Error != "" {
+	if got.ImageFile != "replacement.png" || got.ImageToken != "" || got.ImageTaskID != "" || got.Status != "video_ready" || got.Error == "" {
 		t.Fatalf("unexpected image state: %+v", got)
 	}
-	if got.VideoTaskID != "" || got.VideoFile != "" || got.VideoInputFile != "" || got.VideoGPU != nil || got.VideoFullPrompt != "" {
-		t.Fatalf("stale video state retained: %+v", got)
+	if got.VideoTaskID != "video-task" || got.VideoFile != "old.mp4" || got.VideoInputFile != "old-input.mp4" || got.VideoGPU == nil || *got.VideoGPU != gpu || got.VideoFullPrompt != "stale" {
+		t.Fatalf("existing playable video was changed: %+v", got)
+	}
+}
+
+func TestClaimSceneImagePreservesExistingVideoProjection(t *testing.T) {
+	ps := newTestProjectService(t)
+	project := models.Project{Title: "p"}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	gpu := 2
+	scene := models.Scene{ProjectID: project.ID, Generation: 1, Order: 1, Status: "video_ready", ImageFile: "old.png", VideoTaskID: "video-task", VideoFile: "old.mp4", VideoInputFile: "old-input.mp4", VideoGPU: &gpu, VideoFullPrompt: "reviewed prompt", VideoFirstFrameImg: "first.png", VideoLastFrameImg: "last.png"}
+	if err := ps.db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ps.claimSceneImage(&scene); err != nil {
+		t.Fatal(err)
+	}
+	var got models.Scene
+	if err := ps.db.First(&got, scene.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.VideoTaskID != scene.VideoTaskID || got.VideoFile != scene.VideoFile || got.VideoInputFile != scene.VideoInputFile || got.VideoGPU == nil || *got.VideoGPU != gpu || got.VideoFullPrompt != scene.VideoFullPrompt || got.VideoFirstFrameImg != scene.VideoFirstFrameImg || got.VideoLastFrameImg != scene.VideoLastFrameImg {
+		t.Fatalf("image generation claim changed existing video projection: %+v", got)
 	}
 }
 
@@ -656,13 +738,17 @@ func TestRecoverInterruptedProjectWork(t *testing.T) {
 	ps.db.Create(&p)
 	image := models.Scene{ProjectID: p.ID, Order: 1, Status: "image_pending", ImageToken: "token"}
 	video := models.Scene{ProjectID: p.ID, Order: 2, Status: "video_creating", ImageFile: "scene.png"}
+	gpu := 1
+	missingTaskVideo := models.Scene{ProjectID: p.ID, Order: 3, Status: "video_pending", ImageFile: "scene-3.png", VideoTaskID: "missing-task", VideoFile: "existing.mp4", VideoInputFile: "existing-input.mp4", VideoGPU: &gpu, VideoFullPrompt: "reviewed"}
 	ps.db.Create(&image)
 	ps.db.Create(&video)
+	ps.db.Create(&missingTaskVideo)
 	merge := models.MergeTask{ProjectID: p.ID, Status: "running"}
 	ps.db.Create(&merge)
 	ps.recoverInterruptedProjects()
 	ps.db.First(&image, image.ID)
 	ps.db.First(&video, video.ID)
+	ps.db.First(&missingTaskVideo, missingTaskVideo.ID)
 	ps.db.First(&merge, merge.ID)
 	ps.db.First(&p, p.ID)
 	if image.Status != "pending" || image.ImageToken != "" {
@@ -670,6 +756,9 @@ func TestRecoverInterruptedProjectWork(t *testing.T) {
 	}
 	if video.Status != "image_ready" {
 		t.Fatalf("视频创建任务未恢复: %+v", video)
+	}
+	if missingTaskVideo.Status != "image_ready" || missingTaskVideo.VideoTaskID != "" || missingTaskVideo.VideoFile != "existing.mp4" || missingTaskVideo.VideoInputFile != "existing-input.mp4" || missingTaskVideo.VideoGPU == nil || *missingTaskVideo.VideoGPU != gpu || missingTaskVideo.VideoFullPrompt != "reviewed" {
+		t.Fatalf("缺失任务恢复清除了现有视频: %+v", missingTaskVideo)
 	}
 	if merge.Status != "failed" || merge.Error == "" {
 		t.Fatalf("中断的合并任务应明确失败并允许用户重试: %+v", merge)

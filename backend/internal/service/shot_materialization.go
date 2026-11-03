@@ -142,7 +142,7 @@ func validateMaterializationShots(shots []models.Shot) error {
 
 func (s *ShotService) PreviewMaterialization(projectID, sceneID uint) (*ShotMaterializationPreview, error) {
 	var scene models.Scene
-	if err := s.db.Where("id = ? AND project_id = ?", sceneID, projectID).First(&scene).Error; err != nil {
+	if err := s.db.Where("id = ? AND project_id = ? AND (archived = ? OR archived IS NULL)", sceneID, projectID, false).First(&scene).Error; err != nil {
 		return nil, err
 	}
 	shots, err := s.GetSceneShots(sceneID)
@@ -182,6 +182,9 @@ func resetDialogueForMaterialization(d *models.Dialogue, sceneID uint, order int
 }
 
 func resetMaterializedScene(child *models.Scene, source models.Scene) {
+	if child.ID != 0 {
+		return
+	}
 	child.ImageFile, child.ImageToken, child.ImageTaskID, child.VideoTaskID, child.VideoFile, child.VideoInputFile = "", "", "", "", "", ""
 	child.VideoGPU, child.ImageCandidateParentID, child.VideoCandidateParentID = nil, nil, nil
 	child.VideoFullPrompt, child.VideoTemplate, child.VideoFirstFrameImg, child.VideoLastFrameImg = "", "", "", ""
@@ -191,11 +194,7 @@ func resetMaterializedScene(child *models.Scene, source models.Scene) {
 }
 
 func sceneDerivedResetUpdates() map[string]any {
-	return map[string]any{
-		"image_file": "", "image_token": "", "image_task_id": "", "video_task_id": "", "video_file": "", "video_input_file": "", "video_gpu": nil,
-		"image_candidate_parent_id": nil, "video_candidate_parent_id": nil, "video_full_prompt": "", "video_template": "", "video_first_frame_img": "", "video_last_frame_img": "",
-		"image_locked": false, "video_locked": false, "prompt_stale": true, "status": "pending", "error": "", "image_retries": 0, "video_retries": 0,
-	}
+	return map[string]any{"prompt_stale": true}
 }
 
 func (s *ShotService) Materialize(projectID, sceneID uint) ([]models.Scene, error) {
@@ -205,7 +204,7 @@ func (s *ShotService) Materialize(projectID, sceneID uint) ([]models.Scene, erro
 	var created []models.Scene
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var source models.Scene
-		if err := tx.Where("id = ? AND project_id = ?", sceneID, projectID).First(&source).Error; err != nil {
+		if err := tx.Where("id = ? AND project_id = ? AND (archived = ? OR archived IS NULL)", sceneID, projectID, false).First(&source).Error; err != nil {
 			return err
 		}
 		var shots []models.Shot
@@ -259,22 +258,19 @@ func (s *ShotService) Materialize(projectID, sceneID uint) ([]models.Scene, erro
 			return err
 		}
 		var episodeScenes []models.Scene
-		if err := tx.Where("project_id = ? AND generation = ? AND episode_n = ?", projectID, source.Generation, source.EpisodeN).Order("`order` ASC, id ASC").Find(&episodeScenes).Error; err != nil {
+		if err := tx.Where("project_id = ? AND generation = ? AND episode_n = ? AND (archived = ? OR archived IS NULL)", projectID, source.Generation, source.EpisodeN, false).Order("`order` ASC, id ASC").Find(&episodeScenes).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&models.Scene{}).Where("project_id = ? AND generation = ? AND episode_n = ?", projectID, source.Generation, source.EpisodeN).Update("order", gorm.Expr("-id")).Error; err != nil {
+		if err := tx.Model(&models.Scene{}).Where("project_id = ? AND generation = ? AND episode_n = ? AND (archived = ? OR archived IS NULL)", projectID, source.Generation, source.EpisodeN, false).Update("order", gorm.Expr("-id")).Error; err != nil {
 			return err
 		}
-		if err := deleteSceneDependents(tx, projectID, []uint{sceneID}); err != nil {
-			return err
-		}
-		if err := tx.Delete(&source).Error; err != nil {
+		if err := tx.Model(&models.Scene{}).Where("id = ?", source.ID).Update("archived", true).Error; err != nil {
 			return err
 		}
 
 		for i, group := range groups {
 			child := source
-			child.ID, child.Order = 0, source.Order+i
+			child.ID, child.Order, child.Archived = 0, source.Order+i, false
 			child.Title = fmt.Sprintf("%s · Native段%d", nativeSceneBaseTitle(source.Title), i+1)
 			child.Content, child.Duration, child.ShotCount = groupedDescriptions(group.Shots), group.Duration, len(group.Shots)
 			promptParts, videoParts, negativeParts := []string{}, []string{}, []string{source.NegativePrompt}
@@ -369,6 +365,9 @@ func (s *ShotService) Materialize(projectID, sceneID uint) ([]models.Scene, erro
 			if err := tx.Model(&models.Scene{}).Where("id = ?", sibling.ID).Update("order", order).Error; err != nil {
 				return err
 			}
+		}
+		if err := tx.Model(&models.Scene{}).Where("id = ?", source.ID).Update("order", source.Order).Error; err != nil {
+			return err
 		}
 		if err := renumberSceneTitles(tx, projectID, source.Generation, source.EpisodeN); err != nil {
 			return err

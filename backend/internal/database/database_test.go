@@ -64,6 +64,46 @@ func TestInitCreatesOperationalPollingIndexes(t *testing.T) {
 	}
 }
 
+func TestInitMigratesLegacySceneOrderIndexToActiveOnlyUnique(t *testing.T) {
+	cfg := config.Default()
+	cfg.Storage.DBPath = filepath.Join(t.TempDir(), "console.db")
+	legacy, err := gorm.Open(sqlite.Open(cfg.Storage.DBPath), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.AutoMigrate(&models.Scene{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Migrator().DropIndex(&models.Scene{}, "idx_scene_project_generation_episode_order"); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Exec("CREATE UNIQUE INDEX idx_scene_project_generation_episode_order ON scenes(project_id, generation, episode_n, `order`)").Error; err != nil {
+		t.Fatal(err)
+	}
+	legacySQL, _ := legacy.DB()
+	if err := legacySQL.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := Init(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sqlDB, _ := db.DB(); _ = sqlDB.Close() })
+	active := models.Scene{ProjectID: 1, Generation: 1, EpisodeN: 1, Order: 1}
+	if err := db.Create(&active).Error; err != nil {
+		t.Fatal(err)
+	}
+	archived := models.Scene{ProjectID: 1, Generation: 1, EpisodeN: 1, Order: 1, Archived: true}
+	if err := db.Create(&archived).Error; err != nil {
+		t.Fatalf("archived scene could not retain active order: %v", err)
+	}
+	duplicateActive := models.Scene{ProjectID: 1, Generation: 1, EpisodeN: 1, Order: 1}
+	if err := db.Create(&duplicateActive).Error; err == nil {
+		t.Fatal("two active scenes were allowed to share an order")
+	}
+}
+
 func TestMigrateLegacyDialogueAudioStateMarksOnlyUnverifiableReadyRows(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {

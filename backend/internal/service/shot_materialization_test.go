@@ -36,7 +36,7 @@ func TestMaterializeShotsCreatesNativeScenesAndPreservesDialogue(t *testing.T) {
 	}
 	before := models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 1, Title: "before", Content: "before", Duration: 5}
 	_ = db.Create(&before).Error
-	source := models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 2, Title: "桃花林", Content: "姐妹对话", ImagePrompt: "桃花林", Duration: 15, LocationName: "梵心桃花林", Characters: "若彤,若琳", ReferenceImagesJSON: `[]`}
+	source := models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 2, Title: "桃花林", Content: "姐妹对话", ImagePrompt: "桃花林", ImageFile: "source.png", VideoFile: "source.mp4", Duration: 15, LocationName: "梵心桃花林", Characters: "若彤,若琳", ReferenceImagesJSON: `[]`}
 	if err := db.Create(&source).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -46,6 +46,10 @@ func TestMaterializeShotsCreatesNativeScenesAndPreservesDialogue(t *testing.T) {
 	d2 := models.Dialogue{ProjectID: project.ID, SceneID: source.ID, Order: 2, Character: "若琳", SpeechType: "dialogue", Text: "我很好。"}
 	_ = db.Create(&d1).Error
 	_ = db.Create(&d2).Error
+	candidate := models.GenerationCandidate{ProjectID: project.ID, EntityType: "scene", EntityID: source.ID, MediaType: "image", TaskID: "source-image", File: "source.png"}
+	frame := models.FrameCandidate{ProjectID: project.ID, SceneID: source.ID, VideoTaskID: "source-video", FrameIndex: 1, ImageFile: "source-frame.png"}
+	_ = db.Create(&candidate).Error
+	_ = db.Create(&frame).Error
 	shots := []models.Shot{
 		{SceneID: source.ID, Order: 1, ActType: models.ShotActSetup, ShotType: "若彤近景", Duration: 4, SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, Description: "若彤询问并同步口型", Dialogue: "姐姐，", PromptSubject: "若彤可见", PromptAction: "若彤同步口型询问", PromptCamera: "近景", PromptLighting: "夕阳", PromptStyle: "写实"},
 		{SceneID: source.ID, Order: 2, ActType: models.ShotActRising, ShotType: "若琳听者反应", Duration: 5, SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ListenerCharacter: "若琳", Description: "若琳闭口聆听，若彤声音跨切延续", Dialogue: "你还好吗？", PromptSubject: "若琳可见，若彤不入镜", PromptAction: "若琳保持闭口聆听，若彤声音跨切延续", PromptCamera: "特写", PromptLighting: "夕阳", PromptStyle: "写实"},
@@ -64,11 +68,22 @@ func TestMaterializeShotsCreatesNativeScenesAndPreservesDialogue(t *testing.T) {
 		t.Fatalf("created=%+v", created)
 	}
 	var scenes []models.Scene
-	if err := db.Where("project_id=?", project.ID).Order("`order`").Find(&scenes).Error; err != nil {
+	if err := db.Where("project_id=? AND (archived = ? OR archived IS NULL)", project.ID, false).Order("`order`").Find(&scenes).Error; err != nil {
 		t.Fatal(err)
 	}
 	if len(scenes) != 3 || scenes[0].ID != before.ID || scenes[2].ID != after.ID || scenes[2].ImageFile != "keep.png" {
-		t.Fatalf("scenes=%+v", scenes)
+		t.Fatalf("active scenes=%+v", scenes)
+	}
+	var archived models.Scene
+	if err := db.First(&archived, source.ID).Error; err != nil || !archived.Archived || archived.Order != source.Order || archived.ImageFile != "source.png" || archived.VideoFile != "source.mp4" {
+		t.Fatalf("archived source=%+v err=%v", archived, err)
+	}
+	var candidateCount, frameCount, sourceShotCount int64
+	db.Model(&models.GenerationCandidate{}).Where("entity_type = ? AND entity_id = ?", "scene", source.ID).Count(&candidateCount)
+	db.Model(&models.FrameCandidate{}).Where("scene_id = ?", source.ID).Count(&frameCount)
+	db.Model(&models.Shot{}).Where("scene_id = ?", source.ID).Count(&sourceShotCount)
+	if candidateCount != 1 || frameCount != 1 || sourceShotCount != 3 {
+		t.Fatalf("archived dependents candidate=%d frame=%d shots=%d", candidateCount, frameCount, sourceShotCount)
 	}
 	var childShots []models.Shot
 	if err := db.Where("scene_id = ?", created[0].ID).Order("order_num").Find(&childShots).Error; err != nil || len(childShots) != 3 {
@@ -282,5 +297,97 @@ func TestPreviewMaterializationRejectsDialogueDrift(t *testing.T) {
 	}
 	if _, err := NewShotService(db).PreviewMaterialization(p.ID, sc.ID); err == nil {
 		t.Fatal("dialogue drift accepted")
+	}
+}
+
+func TestResetMaterializedSceneOnlyClearsUnsavedChildren(t *testing.T) {
+	gpu := 2
+	parent := uint(91)
+	original := models.Scene{
+		ID:                     7,
+		ImageFile:              "selected.png",
+		ImageToken:             "image-token",
+		ImageTaskID:            "image-task",
+		VideoTaskID:            "video-task",
+		VideoFile:              "selected.mp4",
+		VideoInputFile:         "selected-browser.mp4",
+		VideoGPU:               &gpu,
+		ImageCandidateParentID: &parent,
+		VideoCandidateParentID: &parent,
+		VideoFullPrompt:        "approved full prompt",
+		VideoTemplate:          "minimax_h3_first_last",
+		VideoFirstFrameImg:     "first.png",
+		VideoLastFrameImg:      "last.png",
+		ImageLocked:            true,
+		VideoLocked:            true,
+		Status:                 "video_ready",
+	}
+
+	existing := original
+	resetMaterializedScene(&existing, original)
+	if !reflect.DeepEqual(existing, original) {
+		t.Fatalf("existing scene media was reset:\n got=%+v\nwant=%+v", existing, original)
+	}
+
+	child := original
+	child.ID = 0
+	resetMaterializedScene(&child, original)
+	if child.ImageFile != "" || child.VideoFile != "" || child.VideoFirstFrameImg != "" || child.VideoLastFrameImg != "" || child.ImageLocked || child.VideoLocked {
+		t.Fatalf("new child inherited source media: %+v", child)
+	}
+}
+
+func TestRegroupPreservesKeeperMediaCandidatesFramesAndLocks(t *testing.T) {
+	db := newShotMaterializationDB(t)
+	project := models.Project{Title: "regroup", Generation: 1}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	gpu := 1
+	parent := uint(31)
+	scenes := []models.Scene{
+		{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 1, Title: "场景1：会面 · Native段1", Content: "甲", Duration: 6, ImageFile: "keeper.png", ImageTaskID: "image-task", VideoTaskID: "video-task", VideoFile: "keeper.mp4", VideoInputFile: "keeper-browser.mp4", VideoGPU: &gpu, ImageCandidateParentID: &parent, VideoCandidateParentID: &parent, VideoFirstFrameImg: "first.png", VideoLastFrameImg: "last.png", ImageLocked: true, VideoLocked: true, Status: "video_ready"},
+		{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 2, Title: "场景1：会面 · Native段2", Content: "乙", Duration: 6},
+	}
+	for i := range scenes {
+		if err := db.Create(&scenes[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Create(&models.Shot{SceneID: scenes[i].ID, Order: 1, Duration: 6, Description: scenes[i].Content}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	frame := models.FrameCandidate{ProjectID: project.ID, SceneID: scenes[0].ID, VideoTaskID: "video-task", Type: models.FrameCandidateSelected, FrameIndex: 1, ImageFile: "selected-frame.png"}
+	candidate := models.GenerationCandidate{ProjectID: project.ID, EntityType: "scene", EntityID: scenes[0].ID, MediaType: "video", TaskID: "video-task", File: "keeper.mp4", IsCurrent: true}
+	if err := db.Create(&frame).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&candidate).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	regrouped, err := NewShotService(db).RegroupExistingNativeScenes(project.ID, scenes[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(regrouped) != 1 || regrouped[0].ID != scenes[0].ID {
+		t.Fatalf("regrouped=%+v", regrouped)
+	}
+	var keeper models.Scene
+	if err := db.First(&keeper, scenes[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if keeper.ImageFile != "keeper.png" || keeper.VideoFile != "keeper.mp4" || keeper.VideoInputFile != "keeper-browser.mp4" || keeper.VideoFirstFrameImg != "first.png" || keeper.VideoLastFrameImg != "last.png" || !keeper.ImageLocked || !keeper.VideoLocked {
+		t.Fatalf("keeper media or locks changed: %+v", keeper)
+	}
+	var frameCount, candidateCount int64
+	if err := db.Model(&models.FrameCandidate{}).Where("id = ? AND scene_id = ?", frame.ID, keeper.ID).Count(&frameCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.GenerationCandidate{}).Where("id = ? AND entity_id = ? AND is_current = ?", candidate.ID, keeper.ID, true).Count(&candidateCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if frameCount != 1 || candidateCount != 1 {
+		t.Fatalf("keeper associations lost: frames=%d candidates=%d", frameCount, candidateCount)
 	}
 }

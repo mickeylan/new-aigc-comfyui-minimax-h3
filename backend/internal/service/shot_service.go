@@ -931,23 +931,19 @@ func aggregateShotsIntoScene(db *gorm.DB, sceneID uint, shots []models.Shot) err
 			negativePrompts = append(negativePrompts, negative)
 		}
 	}
-	updates := sceneDerivedResetUpdates()
-	updates["shot_count"] = len(shots)
-	updates["negative_prompt"] = strings.Join(negativePrompts, ", ")
+	// Shot edits change generation inputs, but are not an explicit media replacement.
+	// Preserve adopted/completed media, selected candidates, continuity frames, upload
+	// selections and locks. Only detach in-flight tasks so stale callbacks cannot win.
+	updates := map[string]any{
+		"shot_count":      len(shots),
+		"negative_prompt": strings.Join(negativePrompts, ", "),
+		"prompt_stale":    true,
+	}
+	staleSceneTaskUpdates(db, &scene, updates)
 	if err := db.Model(&scene).Updates(updates).Error; err != nil {
 		return err
 	}
-	if err := MarkSceneCandidatesStale(db, scene.ProjectID, sceneID, "", "导演镜头已修改"); err != nil {
-		return err
-	}
-	// SceneContinuity.SelectedFrameID is a real NO ACTION foreign key. Detach
-	// every downstream continuity consumer before deleting this Scene's derived
-	// frame candidates; otherwise a perfectly valid new Shot can fail with SQLite
-	// FOREIGN KEY constraint failed (787) on databases that already selected a frame.
-	if err := invalidateContinuityDependentsTx(db, scene.ProjectID, []uint{sceneID}, "上游导演镜头已修改"); err != nil {
-		return err
-	}
-	if err := db.Where("scene_id = ?", sceneID).Delete(&models.FrameCandidate{}).Error; err != nil {
+	if err := markSceneMediaSourceChanged(db, scene.ProjectID, sceneID, "", "导演镜头已修改"); err != nil {
 		return err
 	}
 	if err := markSceneAudioCandidatesStale(db, scene.ProjectID, sceneID, "导演Shot或权威Dialogue区间已修改"); err != nil {

@@ -91,7 +91,7 @@ func TestShotServiceStoresManualDirectorStructure(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	project := models.Project{Title: "test"}
 	db.Create(&project)
-	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Content: "权威剧情事实", ImagePrompt: "权威起始帧", Duration: 5}
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Content: "权威剧情事实", ImagePrompt: "权威起始帧", Duration: 5, Status: "pending"}
 	db.Create(&scene)
 	db.Create(&models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "侦探", Text: "原来如此"})
 	svc := NewShotService(db)
@@ -110,8 +110,8 @@ func TestShotServiceStoresManualDirectorStructure(t *testing.T) {
 	if scene.ShotCount != 2 || scene.Duration != 5 {
 		t.Fatalf("scene count/duration changed: %d/%v", scene.ShotCount, scene.Duration)
 	}
-	if scene.Content != "权威剧情事实" || scene.ImagePrompt != "权威起始帧" || scene.Status != "pending" {
-		t.Fatalf("Shot save overwrote Scene authority: %+v", scene)
+	if scene.Content != "权威剧情事实" || scene.ImagePrompt != "权威起始帧" || scene.Status != "pending" || !scene.PromptStale {
+		t.Fatalf("Shot save overwrote Scene authority or did not mark prompt stale: %+v", scene)
 	}
 }
 
@@ -872,8 +872,8 @@ func TestUpdateShotSpeechPresentationInvalidatesDerivedMedia(t *testing.T) {
 		t.Fatalf("presentation=%q", saved.SpeechPresentation)
 	}
 	db.First(&scene, scene.ID)
-	if scene.VideoFile != "" || scene.VideoInputFile != "" || scene.VideoTaskID != "" || scene.VideoFullPrompt != "" || scene.Status != "pending" {
-		t.Fatalf("derived scene state survived: %+v", scene)
+	if scene.VideoFile != "old.mp4" || scene.VideoInputFile != "old-input.mp4" || scene.VideoTaskID != "video-task" || scene.VideoFullPrompt != "old prompt" || scene.Status != "video_ready" || !scene.PromptStale {
+		t.Fatalf("scene media was not preserved and marked stale: %+v", scene)
 	}
 	db.First(&audio, audio.ID)
 	if !audio.Stale || audio.IsCurrent {
@@ -1065,7 +1065,7 @@ func TestHandleDeleteShotReturns422WithoutMutation(t *testing.T) {
 	}
 }
 
-func TestReplaceShotsDetachesSelectedContinuityFrameBeforeDeletingCandidates(t *testing.T) {
+func TestReplaceShotsPreservesSelectedContinuityFrameAndCompletedMedia(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	if err := db.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
 		t.Fatal(err)
@@ -1074,7 +1074,8 @@ func TestReplaceShotsDetachesSelectedContinuityFrameBeforeDeletingCandidates(t *
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
-	source := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Duration: 5}
+	gpu := 2
+	source := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Duration: 5, ReferenceImagesJSON: `[{"source_type":"asset","source_id":9}]`, ImageFile: "keep.png", ImageToken: "image-token", ImageTaskID: "image-done", VideoTaskID: "video-done", VideoFile: "keep.mp4", VideoInputFile: "keep-input.mp4", VideoGPU: &gpu, VideoFullPrompt: "reviewed prompt", VideoTemplate: "first_last", VideoFirstFrameImg: "first.png", VideoLastFrameImg: "last.png", ImageLocked: true, VideoLocked: true, Status: "video_ready"}
 	consumer := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 2, Duration: 5, VideoFile: "dependent.mp4", VideoTaskID: "dependent-task"}
 	if err := db.Create(&source).Error; err != nil {
 		t.Fatal(err)
@@ -1090,6 +1091,10 @@ func TestReplaceShotsDetachesSelectedContinuityFrameBeforeDeletingCandidates(t *
 	if err := db.Create(&continuity).Error; err != nil {
 		t.Fatal(err)
 	}
+	candidate := models.GenerationCandidate{ProjectID: project.ID, EntityType: "scene", EntityID: source.ID, MediaType: "image", TaskID: "image-done", File: "keep.png", IsCurrent: true}
+	if err := db.Create(&candidate).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := NewShotService(db).ReplaceShots(source.ID, []models.Shot{{ShotType: "新分镜", Duration: 5}}); err != nil {
 		t.Fatalf("new shot failed because selected frame was still referenced: %v", err)
@@ -1098,14 +1103,27 @@ func TestReplaceShotsDetachesSelectedContinuityFrameBeforeDeletingCandidates(t *
 	if err := db.Model(&models.FrameCandidate{}).Where("scene_id = ?", source.ID).Count(&frameCount).Error; err != nil {
 		t.Fatal(err)
 	}
-	if frameCount != 0 {
-		t.Fatalf("derived frames were not removed: %d", frameCount)
+	if frameCount != 1 {
+		t.Fatalf("selected frame was cleared: %d", frameCount)
 	}
 	if err := db.First(&continuity, continuity.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if continuity.SelectedFrameID != nil || continuity.Status != "source_invalidated" {
-		t.Fatalf("continuity was not detached before frame deletion: %+v", continuity)
+	if continuity.SelectedFrameID == nil || *continuity.SelectedFrameID != frame.ID || continuity.Status != "ready" {
+		t.Fatalf("continuity selection was changed: %+v", continuity)
+	}
+	if err := db.First(&candidate, candidate.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !candidate.IsCurrent || !candidate.Stale {
+		t.Fatalf("current candidate selection was cleared instead of marked stale: %+v", candidate)
+	}
+	var saved models.Scene
+	if err := db.First(&saved, source.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.ImageFile != source.ImageFile || saved.ImageToken != source.ImageToken || saved.ImageTaskID != source.ImageTaskID || saved.VideoTaskID != source.VideoTaskID || saved.VideoFile != source.VideoFile || saved.VideoInputFile != source.VideoInputFile || saved.VideoGPU == nil || *saved.VideoGPU != gpu || saved.VideoFirstFrameImg != source.VideoFirstFrameImg || saved.VideoLastFrameImg != source.VideoLastFrameImg || saved.ReferenceImagesJSON != source.ReferenceImagesJSON || !saved.ImageLocked || !saved.VideoLocked || saved.Status != source.Status || !saved.PromptStale {
+		t.Fatalf("shot save cleared completed media or selections: %+v", saved)
 	}
 }
 

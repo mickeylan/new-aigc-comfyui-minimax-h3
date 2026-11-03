@@ -55,13 +55,18 @@ func TestAssetVariantSelectValidatesOwnedUploadAndInvalidatesConsumersTransitive
 	for _, id := range []uint{direct.ID, dependent.ID, transitive.ID} {
 		var scene models.Scene
 		db.First(&scene, id)
-		if scene.VideoFile != "" || !scene.PromptStale {
-			t.Fatalf("scene %d not invalidated: %+v", id, scene)
+		if scene.VideoFile == "" || scene.ImageFile == "" || !scene.PromptStale {
+			t.Fatalf("scene %d did not preserve media while marking prompt stale: %+v", id, scene)
 		}
 		var current int64
 		db.Model(&models.GenerationCandidate{}).Where("entity_id = ? AND is_current = ?", id, true).Count(&current)
-		if current != 0 {
-			t.Fatalf("scene %d retained a current candidate", id)
+		if current != 1 {
+			t.Fatalf("scene %d lost its current candidate", id)
+		}
+		var stale int64
+		db.Model(&models.GenerationCandidate{}).Where("entity_id = ? AND stale = ?", id, true).Count(&stale)
+		if stale != 1 {
+			t.Fatalf("scene %d candidate was not marked stale", id)
 		}
 	}
 	db.First(&unrelated, unrelated.ID)

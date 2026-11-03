@@ -259,16 +259,16 @@ func invalidateVariantConsumers(tx *gorm.DB, projectID uint, entityType string, 
 	}
 	reason := "视觉资产候选已切换"
 	for _, sceneID := range direct {
-		if err := tx.Model(&models.Scene{}).Where("id = ? AND project_id = ?", sceneID, projectID).Updates(map[string]any{
-			"image_file": "", "image_token": "", "image_task_id": "", "image_candidate_parent_id": nil,
-			"video_task_id": "", "video_file": "", "video_input_file": "", "video_gpu": nil,
-			"video_full_prompt": "", "video_template": "", "video_first_frame_img": "", "video_last_frame_img": "",
-			"video_candidate_parent_id": nil, "image_retries": 0, "video_retries": 0,
-			"status": "pending", "error": "", "prompt_stale": true,
-		}).Error; err != nil {
+		var scene models.Scene
+		if err := tx.Where("id = ? AND project_id = ?", sceneID, projectID).First(&scene).Error; err != nil {
 			return err
 		}
-		if err := MarkSceneCandidatesStale(tx, projectID, sceneID, "", reason); err != nil {
+		updates := map[string]any{"prompt_stale": true}
+		staleSceneTaskUpdates(tx, &scene, updates)
+		if err := tx.Model(&scene).Updates(updates).Error; err != nil {
+			return err
+		}
+		if err := markSceneMediaSourceChanged(tx, projectID, sceneID, "", reason); err != nil {
 			return err
 		}
 	}

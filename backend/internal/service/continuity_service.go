@@ -57,7 +57,8 @@ func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, coun
 	}
 	inputDir := filepath.Join(s.cfg.Comfy.ComfyDir, "input", fmt.Sprint(projectID))
 	videoPath := filepath.Join(inputDir, filepath.Base(scene.VideoInputFile))
-	prefix := fmt.Sprintf("continuity_s%d_%s_", scene.ID, continuityTaskIDSanitizer.ReplaceAllString(scene.VideoTaskID, "_"))
+	extractionID := time.Now().UnixNano()
+	prefix := fmt.Sprintf("continuity_s%d_%s_%d_", scene.ID, continuityTaskIDSanitizer.ReplaceAllString(scene.VideoTaskID, "_"), extractionID)
 	pattern := filepath.Join(inputDir, prefix+"%03d.png")
 	firstPath := filepath.Join(inputDir, prefix+"first.png")
 	lastPath := filepath.Join(inputDir, prefix+"last.png")
@@ -115,11 +116,24 @@ func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, coun
 		if err := tx.Where("id=? AND project_id=? AND video_task_id=? AND status=?", sceneID, projectID, scene.VideoTaskID, "video_ready").First(&current).Error; err != nil {
 			return fmt.Errorf("视频任务已变化，丢弃过期帧提取结果")
 		}
-		if err := detachAndDeleteFrameCandidates(tx, sceneID); err != nil {
+		if err := markReextractedFrameReferences(tx, sceneID); err != nil {
 			return err
 		}
-		if err := tx.Where("task_id = ? AND name LIKE ?", fmt.Sprint(projectID), prefix+"%").Delete(&models.UploadFile{}).Error; err != nil {
+		// FrameIndex participates in the historical uniqueness key. Allocate a fresh
+		// range so repeated extraction for the same video task remains append-only.
+		var maxFrameIndex int
+		var existingCount int64
+		if err := tx.Model(&models.FrameCandidate{}).Where("scene_id = ? AND video_task_id = ?", sceneID, scene.VideoTaskID).Count(&existingCount).Error; err != nil {
 			return err
+		}
+		if existingCount > 0 {
+			if err := tx.Model(&models.FrameCandidate{}).Where("scene_id = ? AND video_task_id = ?", sceneID, scene.VideoTaskID).Select("COALESCE(MAX(frame_index), 0)").Scan(&maxFrameIndex).Error; err != nil {
+				return err
+			}
+			maxFrameIndex++
+		}
+		for i := range candidates {
+			candidates[i].FrameIndex = maxFrameIndex + i
 		}
 		if err := tx.Create(&candidates).Error; err != nil {
 			return err
@@ -129,24 +143,21 @@ func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, coun
 	return tailCandidates, err
 }
 
-func detachAndDeleteFrameCandidates(tx *gorm.DB, sceneID uint) error {
+func markReextractedFrameReferences(tx *gorm.DB, sceneID uint) error {
 	var oldFrameIDs []uint
 	if err := tx.Model(&models.FrameCandidate{}).Where("scene_id = ?", sceneID).Pluck("id", &oldFrameIDs).Error; err != nil {
 		return err
 	}
-	if len(oldFrameIDs) > 0 {
-		// SelectedFrameID is a real foreign key. Detach downstream continuity rows before
-		// replacing extracted frames, otherwise SQLite correctly rejects the delete.
-		if err := tx.Model(&models.SceneContinuity{}).Where("selected_frame_id IN ?", oldFrameIDs).Updates(map[string]any{
-			"selected_frame_id": nil,
-			"status":            "waiting",
-			"error":             "来源视频末尾帧已重新提取，请重新选择衔接帧",
-			"version":           gorm.Expr("version + 1"),
-		}).Error; err != nil {
-			return err
-		}
+	if len(oldFrameIDs) == 0 {
+		return nil
 	}
-	return tx.Where("scene_id = ?", sceneID).Delete(&models.FrameCandidate{}).Error
+	// Re-extraction is append-only. Keep both the selected frame reference and all
+	// historical candidates; consumers can explicitly confirm or choose a new frame.
+	return tx.Model(&models.SceneContinuity{}).Where("selected_frame_id IN ?", oldFrameIDs).Updates(map[string]any{
+		"status":  "source_invalidated",
+		"error":   "来源视频末尾帧已重新提取，请重新确认连续性配置",
+		"version": gorm.Expr("version + 1"),
+	}).Error
 }
 
 func (s *ContinuityService) ListFrames(projectID, sceneID uint) ([]models.FrameCandidate, error) {
@@ -155,8 +166,26 @@ func (s *ContinuityService) ListFrames(projectID, sceneID uint) ([]models.FrameC
 	if err := s.db.Where("id=? AND project_id=?", sceneID, projectID).First(&scene).Error; err != nil {
 		return nil, err
 	}
-	err := s.db.Where("project_id=? AND scene_id=? AND video_task_id=? AND type IN ?", projectID, sceneID, scene.VideoTaskID, []models.FrameCandidateType{models.FrameCandidateCandidate, models.FrameCandidateSelected}).Order("frame_index").Find(&frames).Error
-	return frames, err
+	if err := s.db.Where("project_id=? AND scene_id=? AND video_task_id=? AND type IN ?", projectID, sceneID, scene.VideoTaskID, []models.FrameCandidateType{models.FrameCandidateCandidate, models.FrameCandidateSelected}).Order("id DESC").Find(&frames).Error; err != nil {
+		return nil, err
+	}
+	// Show the newest extraction batch while retaining an older user-selected frame.
+	latestPrefix := ""
+	for _, frame := range frames {
+		if frame.Source == "extracted" && frame.Type == models.FrameCandidateCandidate {
+			if n := strings.LastIndex(frame.ImageFile, "_"); n >= 0 {
+				latestPrefix = frame.ImageFile[:n+1]
+			}
+			break
+		}
+	}
+	listed := make([]models.FrameCandidate, 0, len(frames))
+	for _, frame := range frames {
+		if frame.Type == models.FrameCandidateSelected || latestPrefix == "" || strings.HasPrefix(frame.ImageFile, latestPrefix) {
+			listed = append(listed, frame)
+		}
+	}
+	return listed, nil
 }
 func (s *ContinuityService) SelectFrame(projectID, sceneID, frameID uint) (*models.FrameCandidate, error) {
 	var frame models.FrameCandidate
@@ -371,7 +400,7 @@ func invalidateContinuityDependentsTx(tx *gorm.DB, projectID uint, sourceSceneID
 			}
 			seen[cfg.SceneID] = struct{}{}
 			if err := tx.Model(&models.SceneContinuity{}).Where("id = ?", cfg.ID).Updates(map[string]any{
-				"status": "source_invalidated", "error": reason, "selected_frame_id": nil, "version": gorm.Expr("version + 1"),
+				"status": "source_invalidated", "error": reason, "version": gorm.Expr("version + 1"),
 			}).Error; err != nil {
 				return err
 			}
@@ -394,15 +423,16 @@ func (s *ContinuityService) invalidateSceneVideo(sceneID uint) {
 }
 
 func invalidateSceneVideoTx(db *gorm.DB, projectID, sceneID uint, reason string) error {
-	if err := db.Model(&models.Scene{}).Where("id = ? AND project_id = ?", sceneID, projectID).Updates(map[string]any{
-		"video_task_id": "", "video_file": "", "video_input_file": "", "video_gpu": nil,
-		"video_full_prompt": "", "video_template": "", "video_first_frame_img": "", "video_last_frame_img": "",
-		"video_candidate_parent_id": nil, "video_retries": 0,
-		"status": gorm.Expr("CASE WHEN image_file != '' THEN 'image_ready' ELSE status END"),
-	}).Error; err != nil {
+	var scene models.Scene
+	if err := db.Where("id = ? AND project_id = ?", sceneID, projectID).First(&scene).Error; err != nil {
 		return err
 	}
-	return MarkSceneCandidatesStale(db, projectID, sceneID, "video", reason)
+	updates := map[string]any{"prompt_stale": true}
+	staleSceneTaskUpdates(db, &scene, updates)
+	if err := db.Model(&scene).Updates(updates).Error; err != nil {
+		return err
+	}
+	return markSceneMediaSourceChanged(db, projectID, sceneID, "video", reason)
 }
 func (s *ContinuityService) ReplaceSelectedFrame(projectID, sceneID uint, filename string, data []byte) (*models.FrameCandidate, error) {
 	if s.upload == nil {

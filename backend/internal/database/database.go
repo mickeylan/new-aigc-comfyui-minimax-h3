@@ -61,6 +61,13 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 			}
 		}
 	}
+	// Archived scenes retain their original order, so the former unique order index
+	// must become a normal lookup index before the archived column is introduced.
+	if db.Migrator().HasTable(&models.Scene{}) && db.Migrator().HasIndex(&models.Scene{}, "idx_scene_project_generation_episode_order") {
+		if err := db.Migrator().DropIndex(&models.Scene{}, "idx_scene_project_generation_episode_order"); err != nil {
+			return nil, fmt.Errorf("replace obsolete unique scene order index: %w", err)
+		}
+	}
 	if err := db.AutoMigrate(
 		&models.Instance{},
 		&models.Template{},
@@ -123,6 +130,11 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.SceneContinuity{},
 	); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	// SQLite partial uniqueness keeps active timeline positions collision-free while
+	// allowing archived history to retain the position it originally occupied.
+	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_scene_active_order ON scenes(project_id, generation, episode_n, `order`) WHERE archived = 0").Error; err != nil {
+		return nil, fmt.Errorf("create active scene order index: %w", err)
 	}
 	if err := db.Exec("UPDATE project_skill_configs SET operation = COALESCE((SELECT CASE WHEN TRIM(operation) <> '' THEN operation ELSE code END FROM skills WHERE skills.id = project_skill_configs.skill_id), stage) WHERE TRIM(COALESCE(operation, '')) = ''").Error; err != nil {
 		return nil, fmt.Errorf("backfill project skill operation: %w", err)

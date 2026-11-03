@@ -26,7 +26,7 @@ type SceneWithShots struct {
 func latestEpisodeGeneration(db *gorm.DB, projectID uint, episodeN int) (uint, error) {
 	var generation uint
 	err := db.Model(&models.Scene{}).
-		Where("project_id = ? AND episode_n = ?", projectID, episodeN).
+		Where("project_id = ? AND episode_n = ? AND (archived = ? OR archived IS NULL)", projectID, episodeN, false).
 		Select("COALESCE(MAX(generation), 0)").Scan(&generation).Error
 	return generation, err
 }
@@ -63,7 +63,7 @@ func EnsureProjectEpisodes(db *gorm.DB, projectID uint) error {
 		}
 	}
 	var numbers []int
-	if err := db.Model(&models.Scene{}).Where("project_id = ?", projectID).Distinct("episode_n").Pluck("episode_n", &numbers).Error; err != nil {
+	if err := db.Model(&models.Scene{}).Where("project_id = ? AND (archived = ? OR archived IS NULL)", projectID, false).Distinct("episode_n").Pluck("episode_n", &numbers).Error; err != nil {
 		return err
 	}
 	if !rolling && len(numbers) == 0 && project.Episodes > 0 {
@@ -196,7 +196,7 @@ func UpdateProjectEpisode(db *gorm.DB, projectID uint, number int, updates map[s
 
 func DeleteProjectEpisode(db *gorm.DB, projectID uint, number int) error {
 	var count int64
-	if err := db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ?", projectID, number).Count(&count).Error; err != nil {
+	if err := db.Model(&models.Scene{}).Where("project_id = ? AND episode_n = ? AND (archived = ? OR archived IS NULL)", projectID, number, false).Count(&count).Error; err != nil {
 		return err
 	}
 	if count > 0 {
@@ -231,7 +231,7 @@ func ProjectEpisodeHierarchy(db *gorm.DB, projectID uint) ([]EpisodeHierarchy, e
 			return nil, err
 		}
 		var scenes []models.Scene
-		if err := db.Where("project_id = ? AND episode_n = ? AND generation = ?", projectID, episode.Number, generation).Order("`order`, id").Find(&scenes).Error; err != nil {
+		if err := db.Where("project_id = ? AND episode_n = ? AND generation = ? AND (archived = ? OR archived IS NULL)", projectID, episode.Number, generation, false).Order("`order`, id").Find(&scenes).Error; err != nil {
 			return nil, err
 		}
 		row := EpisodeHierarchy{Episode: episode, Scenes: make([]SceneWithShots, 0, len(scenes))}

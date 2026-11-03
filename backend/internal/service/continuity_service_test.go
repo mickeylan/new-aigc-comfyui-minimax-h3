@@ -17,7 +17,7 @@ func newContinuityTestService(t *testing.T) (*ContinuityService, *gorm.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.FrameCandidate{}, &models.GenerationCandidate{}, &models.SceneContinuity{}, &models.UploadFile{}); err != nil {
+	if err := db.AutoMigrate(&models.Project{}, &models.Scene{}, &models.FrameCandidate{}, &models.GenerationCandidate{}, &models.SceneContinuity{}, &models.UploadFile{}, &models.Task{}); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
@@ -47,7 +47,7 @@ func TestBoundaryFramesAreNotSelectableTailCandidates(t *testing.T) {
 	}
 }
 
-func TestDetachAndDeleteFrameCandidatesClearsContinuityForeignKey(t *testing.T) {
+func TestMarkReextractedFrameReferencesPreservesFramesAndContinuityForeignKey(t *testing.T) {
 	_, db := newContinuityTestService(t)
 	project := models.Project{Title: "p"}
 	if err := db.Create(&project).Error; err != nil {
@@ -69,18 +69,45 @@ func TestDetachAndDeleteFrameCandidatesClearsContinuityForeignKey(t *testing.T) 
 	if err := db.Create(&cfg).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Transaction(func(tx *gorm.DB) error { return detachAndDeleteFrameCandidates(tx, source.ID) }); err != nil {
+	if err := db.Transaction(func(tx *gorm.DB) error { return markReextractedFrameReferences(tx, source.ID) }); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.First(&cfg, cfg.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SelectedFrameID != nil || cfg.Status != "waiting" || cfg.Version != 3 || cfg.Error == "" {
-		t.Fatalf("continuity not detached: %+v", cfg)
+	if cfg.SelectedFrameID == nil || *cfg.SelectedFrameID != frame.ID || cfg.Status != "source_invalidated" || cfg.Version != 3 || cfg.Error == "" {
+		t.Fatalf("continuity reference was not preserved: %+v", cfg)
 	}
 	var count int64
-	if err := db.Model(&models.FrameCandidate{}).Where("scene_id = ?", source.ID).Count(&count).Error; err != nil || count != 0 {
+	if err := db.Model(&models.FrameCandidate{}).Where("scene_id = ?", source.ID).Count(&count).Error; err != nil || count != 1 {
 		t.Fatalf("frames count=%d err=%v", count, err)
+	}
+}
+
+func TestListFramesShowsLatestExtractionAndPreservesOlderSelection(t *testing.T) {
+	svc, db := newContinuityTestService(t)
+	project := models.Project{Title: "p"}
+	db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, VideoTaskID: "task", Status: "video_ready"}
+	db.Create(&scene)
+	frames := []models.FrameCandidate{
+		{ProjectID: project.ID, SceneID: scene.ID, VideoTaskID: "task", Type: models.FrameCandidateSelected, FrameIndex: 0, ImageFile: "continuity_s1_task_100_001.png", Source: "extracted"},
+		{ProjectID: project.ID, SceneID: scene.ID, VideoTaskID: "task", Type: models.FrameCandidateCandidate, FrameIndex: 1, ImageFile: "continuity_s1_task_100_002.png", Source: "extracted"},
+		{ProjectID: project.ID, SceneID: scene.ID, VideoTaskID: "task", Type: models.FrameCandidateCandidate, FrameIndex: 2, ImageFile: "continuity_s1_task_200_001.png", Source: "extracted"},
+		{ProjectID: project.ID, SceneID: scene.ID, VideoTaskID: "task", Type: models.FrameCandidateCandidate, FrameIndex: 3, ImageFile: "continuity_s1_task_200_002.png", Source: "extracted"},
+	}
+	db.Create(&frames)
+	got, err := svc.ListFrames(project.ID, scene.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[2].ID != frames[0].ID {
+		t.Fatalf("latest extraction and selected history not preserved: %+v", got)
+	}
+	for _, frame := range got[:2] {
+		if frame.ID != frames[2].ID && frame.ID != frames[3].ID {
+			t.Fatalf("old unselected extraction was listed: %+v", got)
+		}
 	}
 }
 
@@ -214,8 +241,8 @@ func TestContinuityReplaceSelectedFramePreservesOriginalAndInvalidatesDependent(
 	}
 	var dependent models.SceneContinuity
 	db.Where("scene_id = ?", s2.ID).First(&dependent)
-	if dependent.Status != "source_invalidated" {
-		t.Fatalf("dependent status=%s", dependent.Status)
+	if dependent.Status != "source_invalidated" || dependent.SelectedFrameID == nil || *dependent.SelectedFrameID != frame.ID {
+		t.Fatalf("dependent continuity reference was not preserved: %+v", dependent)
 	}
 }
 
@@ -237,6 +264,36 @@ func TestContinuityBridgeUsesPreviousFrameAndCurrentStoryboard(t *testing.T) {
 	}
 	if s2.VideoTemplate != "minimax_h3_first_last" || s2.VideoFirstFrameImg != "previous-end.png" || s2.VideoLastFrameImg != "target.png" {
 		t.Fatalf("bridge not prepared: %+v", s2)
+	}
+}
+
+func TestInvalidateSceneVideoPreservesCompletedMediaAndProvenance(t *testing.T) {
+	_, db := newContinuityTestService(t)
+	project := models.Project{Title: "p"}
+	db.Create(&project)
+	gpu, parent := 2, uint(91)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Generation: 1, Order: 1,
+		ImageFile: "story.png", VideoTaskID: "done-task", VideoFile: "done.mp4", VideoInputFile: "input.mp4", VideoGPU: &gpu,
+		VideoFullPrompt: "full prompt", VideoTemplate: "first_last", VideoFirstFrameImg: "first.png", VideoLastFrameImg: "last.png",
+		VideoCandidateParentID: &parent, VideoRetries: 3, Status: "video_ready"}
+	db.Create(&scene)
+	db.Create(&models.Task{TaskID: "done-task", Status: "success"})
+	candidate := models.GenerationCandidate{ProjectID: project.ID, EntityType: "scene", EntityID: scene.ID, MediaType: "video", TaskID: "done-task", File: "done.mp4", IsCurrent: true}
+	db.Create(&candidate)
+
+	if err := invalidateSceneVideoTx(db, project.ID, scene.ID, "changed"); err != nil {
+		t.Fatal(err)
+	}
+	var got models.Scene
+	db.First(&got, scene.ID)
+	if !got.PromptStale || got.VideoTaskID != "done-task" || got.VideoFile != "done.mp4" || got.VideoInputFile != "input.mp4" || got.VideoGPU == nil || *got.VideoGPU != gpu ||
+		got.VideoFullPrompt != "full prompt" || got.VideoTemplate != "first_last" || got.VideoFirstFrameImg != "first.png" || got.VideoLastFrameImg != "last.png" ||
+		got.VideoCandidateParentID == nil || *got.VideoCandidateParentID != parent || got.VideoRetries != 3 || got.Status != "video_ready" {
+		t.Fatalf("completed video provenance was changed: %+v", got)
+	}
+	db.First(&candidate, candidate.ID)
+	if !candidate.IsCurrent || !candidate.Stale || candidate.StaleReason != "changed" {
+		t.Fatalf("candidate selection/provenance not preserved: %+v", candidate)
 	}
 }
 

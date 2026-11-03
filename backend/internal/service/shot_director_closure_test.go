@@ -28,11 +28,18 @@ func TestReplaceShotsAllowsEmptyAndInvalidatesSceneGraph(t *testing.T) {
 	db.First(&scene, scene.ID)
 	db.First(&dependent, dependent.ID)
 	db.First(&episode, episode.ID)
-	if scene.ShotCount != 0 || scene.Content != "old" || scene.ImagePrompt != "old" || scene.ImageFile != "" || scene.VideoInputFile != "" || scene.Status != "pending" {
-		t.Fatalf("scene not reset: %+v", scene)
+	if scene.ShotCount != 0 || scene.Content != "old" || scene.ImagePrompt != "old" || scene.ImageFile != "old.png" || scene.VideoFile != "old.mp4" || scene.VideoInputFile != "old-local.mp4" || scene.Status != "video_ready" || !scene.PromptStale {
+		t.Fatalf("scene media was not preserved and marked stale: %+v", scene)
 	}
-	if dependent.VideoFile != "" {
-		t.Fatalf("continuity dependent not invalidated: %+v", dependent)
+	if dependent.VideoFile != "dependent.mp4" {
+		t.Fatalf("continuity dependent media was cleared: %+v", dependent)
+	}
+	var candidate models.GenerationCandidate
+	if err := db.Where("entity_id = ?", scene.ID).First(&candidate).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !candidate.IsCurrent || !candidate.Stale {
+		t.Fatalf("current candidate selection was not preserved and marked stale: %+v", candidate)
 	}
 	if !episode.SummaryStale || !episode.NextHookStale {
 		t.Fatalf("episode freshness not invalidated: %+v", episode)

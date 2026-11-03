@@ -197,10 +197,11 @@ type Episode struct {
 // Scene 分镜场景（项目内顺序片段）
 type Scene struct {
 	ID                       uint       `gorm:"primaryKey" json:"id"`
-	ProjectID                uint       `gorm:"column:project_id;index;uniqueIndex:idx_scene_project_generation_episode_order" json:"project_id"`
-	EpisodeN                 int        `gorm:"column:episode_n;default:1;uniqueIndex:idx_scene_project_generation_episode_order" json:"episode_n"` // 所属集数（从 1 开始）
-	Order                    int        `gorm:"uniqueIndex:idx_scene_project_generation_episode_order" json:"order"`                                // 场景序号（从 1 开始）
-	Generation               uint       `gorm:"uniqueIndex:idx_scene_project_generation_episode_order" json:"generation"`
+	ProjectID                uint       `gorm:"column:project_id;index;index:idx_scene_project_generation_episode_order" json:"project_id"`
+	EpisodeN                 int        `gorm:"column:episode_n;default:1;index:idx_scene_project_generation_episode_order" json:"episode_n"` // 所属集数（从 1 开始）
+	Order                    int        `gorm:"index:idx_scene_project_generation_episode_order" json:"order"`                                // 场景序号（从 1 开始）
+	Generation               uint       `gorm:"index:idx_scene_project_generation_episode_order" json:"generation"`
+	Archived                 bool       `gorm:"column:archived;default:false;index" json:"archived"`
 	Title                    string     `json:"title"`                                                               // 场景标题
 	Content                  string     `json:"content"`                                                             // 场景正文（作为视频提示词）
 	ImagePrompt              string     `json:"image_prompt"`                                                        // 文生图提示词

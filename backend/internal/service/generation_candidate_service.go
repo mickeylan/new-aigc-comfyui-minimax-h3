@@ -166,12 +166,9 @@ func (s *GenerationCandidateService) CaptureSceneSuccess(in SceneCandidateCaptur
 		updates := map[string]any{"error": ""}
 		if in.MediaType == "image" {
 			updates["image_file"], updates["image_task_id"], updates["image_token"], updates["image_candidate_parent_id"] = in.File, in.TaskID, "", nil
-			updates["status"] = "image_ready"
-			if in.FinalizeDerived {
-				updates["video_file"], updates["video_input_file"], updates["video_task_id"], updates["video_gpu"] = "", "", "", nil
-				updates["video_full_prompt"], updates["video_template"] = "", ""
-				updates["video_first_frame_img"], updates["video_last_frame_img"] = "", ""
-				updates["video_candidate_parent_id"], updates["video_retries"] = nil, 0
+			// An image replacement does not invalidate or erase an already selected video.
+			if scene.VideoFile == "" {
+				updates["status"] = "image_ready"
 			}
 		} else {
 			updates["video_file"], updates["video_task_id"] = in.File, in.TaskID
@@ -265,15 +262,13 @@ func (s *GenerationCandidateService) SelectCurrent(projectID, id uint) (*models.
 			updates := map[string]any{"error": ""}
 			reason := "来源视频候选已切换，请重新选择衔接帧"
 			if row.MediaType == "image" {
-				updates["image_file"], updates["image_task_id"], updates["image_token"], updates["image_candidate_parent_id"], updates["status"] = row.File, row.TaskID, "", nil, "image_ready"
-				updates["video_file"], updates["video_input_file"], updates["video_task_id"], updates["video_gpu"] = "", "", "", nil
-				updates["video_full_prompt"], updates["video_template"] = "", ""
-				updates["video_first_frame_img"], updates["video_last_frame_img"] = "", ""
-				updates["video_candidate_parent_id"], updates["video_retries"] = nil, 0
-				reason = "来源分镜图候选已切换，请重新生成视频并选择衔接帧"
+				updates["image_file"], updates["image_task_id"], updates["image_token"], updates["image_candidate_parent_id"] = row.File, row.TaskID, "", nil
+				if scene.VideoFile == "" {
+					updates["status"] = "image_ready"
+				}
+				reason = "来源分镜图候选已切换，下游引用已保留"
 			} else {
 				updates["video_file"], updates["video_task_id"], updates["video_input_file"], updates["video_gpu"], updates["status"] = row.File, row.TaskID, row.VideoInputFile, row.VideoGPU, "video_ready"
-				updates["video_first_frame_img"], updates["video_last_frame_img"] = "", ""
 			}
 			if err := tx.Model(&models.Scene{}).Where("id = ? AND project_id = ?", row.EntityID, projectID).Updates(updates).Error; err != nil {
 				return err
@@ -292,15 +287,10 @@ func (s *GenerationCandidateService) SelectCurrent(projectID, id uint) (*models.
 // invalidateSceneMediaReplacementTx is the shared transactional invalidation boundary
 // for a Scene media projection change. Callers must project the replacement first.
 func invalidateSceneMediaReplacementTx(tx *gorm.DB, scene *models.Scene, mediaType, reason string) error {
-	if mediaType == "image" {
-		if err := MarkSceneCandidatesStale(tx, scene.ProjectID, scene.ID, "video", reason); err != nil {
-			return err
-		}
-	}
+	_ = mediaType // retained to document which projection changed
+	// Downstream projections may become stale, but retained videos, selected frames,
+	// and frame history remain user choices until explicitly replaced.
 	if err := invalidateContinuityDependentsTx(tx, scene.ProjectID, []uint{scene.ID}, reason); err != nil {
-		return err
-	}
-	if err := tx.Where("project_id = ? AND scene_id = ?", scene.ProjectID, scene.ID).Delete(&models.FrameCandidate{}).Error; err != nil {
 		return err
 	}
 	return tx.Model(&models.MergeTask{}).
@@ -313,7 +303,8 @@ func MarkSceneCandidatesStale(db *gorm.DB, projectID, sceneID uint, mediaType, r
 	if mediaType != "" {
 		q = q.Where("media_type = ?", mediaType)
 	}
-	return q.Updates(map[string]any{"stale": true, "stale_reason": reason, "is_current": false}).Error
+	// Source changes never revoke the user's adopted media. Staleness is advisory.
+	return q.Updates(map[string]any{"stale": true, "stale_reason": reason}).Error
 }
 
 // CandidateDeleteError describes why a candidate cannot be deleted.
