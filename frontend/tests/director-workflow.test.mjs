@@ -205,11 +205,12 @@ test('场景可显式选择文戏武戏或文武混合并用于提示词生成',
   assert.match(editor, /:scene-mode="selected\.scene_mode \|\| ''"/)
 })
 
-test('长分镜支持可审核动作时间轴并限制3至15秒', () => {
+test('动作时间轴支持短内部切镜且独立片段仍遵循模板上限', () => {
   const source = readFileSync(new URL('../src/components/ShotDirectorEditor.vue', import.meta.url), 'utf8')
   assert.match(source, /动作时间轴（长分镜精确控制）/)
   for (const field of ['subject', 'action', 'state', 'camera']) assert.match(source, new RegExp(`step\\.${field}`))
-  assert.match(source, /min="3" max="15"/)
+  assert.match(source, /min="0.1" max="15"/)
+  assert.match(source, /内部切镜可短于3秒/)
   assert.match(source, /action_timeline/)
   const editor = readFileSync(new URL('../src/views/ProjectEditor.vue', import.meta.url), 'utf8')
   assert.match(editor, /h3DurationMax/)

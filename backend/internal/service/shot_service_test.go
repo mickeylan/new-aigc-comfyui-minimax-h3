@@ -1314,12 +1314,13 @@ func TestShotServiceDeleteUpdatesCount(t *testing.T) {
 	}
 }
 
-func TestValidateShotEnforces3To15Seconds(t *testing.T) {
+func TestValidateShotAllowsShortInternalCutAndEnforcesIntegrity(t *testing.T) {
 	tests := []struct {
 		duration float64
 		wantErr  bool
 	}{
-		{2.9, true},
+		{2.0, false},
+		{2.9, false},
 		{3.0, false},
 		{8.0, false},
 		{15.0, false},

@@ -207,8 +207,11 @@ func validateShot(shot *models.Shot) error {
 	if shot.ShotType == "" {
 		return fmt.Errorf("shot_type 不能为空")
 	}
-	if shot.Duration < 3 || shot.Duration > 15 || math.IsNaN(shot.Duration) || math.IsInf(shot.Duration, 0) {
-		return fmt.Errorf("每镜时长必须为 3 到 15 秒")
+	// A persisted Shot is an internal cut point of its parent Scene, not an
+	// independently submitted video template. Keep short cuts intact; standalone
+	// Scene execution remains responsible for its 3–15 second template contract.
+	if shot.Duration <= 0 || shot.Duration > 15 || math.IsNaN(shot.Duration) || math.IsInf(shot.Duration, 0) {
+		return fmt.Errorf("每镜时长必须大于 0 且不超过 15 秒")
 	}
 	if err := validateShotActionTimeline(shot.ActionTimeline, shot.Duration); err != nil {
 		return err

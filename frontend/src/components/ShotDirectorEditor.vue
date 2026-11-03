@@ -31,7 +31,7 @@
         <label>景别<input v-model="shot.shot_type" class="input" placeholder="全景 / 中景 / 近景 / 特写" /></label>
         <label>机位角度<input v-model="shot.camera_angle" class="input" placeholder="平视 / 俯拍 / 仰拍" /></label>
         <label>运镜<input v-model="shot.camera_movement" class="input" placeholder="固定 / 推 / 拉 / 摇 / 跟" /></label>
-        <label>时长（秒）<input v-model.number="shot.duration" class="input" type="number" min="3" max="15" step="0.1" /></label>
+        <label>内部镜头时长（秒）<input v-model.number="shot.duration" class="input" type="number" min="0.1" max="15" step="0.1" title="内部切镜可短于3秒；独立视频片段仍按所选模板的时长要求执行" /></label>
       </div>
       <div class="shot-grid two"><label>转场<select v-model="shot.transition_type" class="input"><option value="">无</option><option value="cut">硬切</option><option value="dissolve">叠化</option><option value="fade">淡入淡出</option><option value="wipe">划像</option><option value="match_cut">匹配剪辑</option></select></label><label>转场说明<input v-model="shot.transition_note" class="input" placeholder="可选，只描述与下一镜的衔接意图" /></label></div>
       <div class="shot-grid two"><label>起始状态<input v-model="shot.start_state" class="input" placeholder="可选，用于起止状态Skill草稿" /></label><label>结束状态<input v-model="shot.end_state" class="input" placeholder="可选，用于下一镜连续性" /></label></div>

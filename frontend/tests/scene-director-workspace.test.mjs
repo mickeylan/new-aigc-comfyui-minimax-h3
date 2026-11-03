@@ -28,7 +28,8 @@ test('Scene工作台将分页、选中Scene和步骤写入URL并可刷新恢复'
 
 test('保存AI扩写后显式同步权威正文且旧本地草稿不能覆盖', () => {
   assert.match(detail, /ref="sceneShotDirector"/)
-  assert.match(detail, /sceneShotDirector\.value\?\.syncAuthoritativeSceneContent\(editingScene\.value\?\.content \|\| sceneForm\.content\)/)
+  assert.match(detail, /sceneShotDirector\.value\?\.syncAuthoritativeSceneContent\(payload\.content\)/)
+  assert.match(detail, /applyAndOpenSceneDirector\(\)[\s\S]{0,200}saveSceneAndContinueDirector\(\)/)
   assert.match(director, /defineExpose\(\{ syncAuthoritativeSceneContent \}\)/)
   assert.match(director, /sceneContent: props\.sceneContent \|\| ''/)
   assert.match(director, /const sameSceneContent = String\(draft\.sceneContent \|\| ''\) === String\(props\.sceneContent \|\| ''\)/)
@@ -52,8 +53,8 @@ test('Scene卡片显示生产进度并支持同工作台处理下一Scene', () =
 
 test('仅正文保存不会更新参考图或套装，媒体选择实际变化才条件PUT', () => {
   const saveScene = detail.slice(detail.indexOf('async function saveScene('), detail.indexOf('function aspectLabel'))
-  assert.match(saveScene, /sceneReferencesBaseline\.value !== null && referencesSnapshot !== sceneReferencesBaseline\.value[\s\S]*api\.updateSceneReferences/)
-  assert.match(saveScene, /sceneOutfitsBaseline\.value !== null && outfitsSnapshot !== sceneOutfitsBaseline\.value[\s\S]*api\.updateSceneOutfits/)
+  assert.match(saveScene, /referencesBaseline !== null && referencesSnapshot !== referencesBaseline[\s\S]*api\.updateSceneReferences/)
+  assert.match(saveScene, /outfitsBaseline !== null && outfitsSnapshot !== outfitsBaseline[\s\S]*api\.updateSceneOutfits/)
   assert.doesNotMatch(saveScene, /await api\.updateScene[^\n]*\n\s*await api\.updateSceneReferences/)
   assert.match(detail, /sceneReferencesBaseline\.value = canonicalSceneReferences\(selectedSceneReferences\.value\)/)
   assert.match(detail, /sceneOutfitsBaseline\.value = canonicalSceneOutfits\(selectedSceneOutfits\.value\)/)
@@ -64,6 +65,6 @@ test('媒体dirty比较规范化对象并保留加载失败和AI预览语义', (
   assert.match(detail, /\.sort\(\(a, b\) => a\.character_id - b\.character_id \|\| a\.outfit_id - b\.outfit_id\)/)
   assert.match(detail, /sceneReferencesBaseline\.value = null[\s\S]*sceneOutfitsBaseline\.value = null[\s\S]*try \{/)
   assert.match(detail, /仅把当前选择作为 AI 预览上下文，不改动保存时用于判断用户修改的基线/)
-  assert.match(detail, /if \(!close && sceneReferencesBaseline\.value !== null\) sceneReferencesBaseline\.value = referencesSnapshot/)
-  assert.match(detail, /if \(!close && sceneOutfitsBaseline\.value !== null\) sceneOutfitsBaseline\.value = outfitsSnapshot/)
+  assert.match(detail, /if \(referencesBaseline !== null\) sceneReferencesBaseline\.value = referencesSnapshot/)
+  assert.match(detail, /if \(outfitsBaseline !== null\) sceneOutfitsBaseline\.value = outfitsSnapshot/)
 })

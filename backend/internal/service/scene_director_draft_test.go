@@ -209,7 +209,7 @@ func TestParseSceneDirectorDraftAcceptsSingleProjectEnvelope(t *testing.T) {
 	}
 }
 
-func TestDialogueModePreservesShortPerformanceCutBeforeRaisingDuration(t *testing.T) {
+func TestDialogueModePreservesShortPerformanceCut(t *testing.T) {
 	raw := `{"shots":[{"act_type":"setup","shot_type":"甲近景","camera_angle":"平视","camera_movement":"固定","duration":2,"description":"甲开口","dialogue":"前半句，","emotion":"平静","transition_type":"cut","transition_note":"","start_state":"甲看向乙","end_state":"甲继续说","prompt_subject":"甲可见","prompt_action":"同步口型","prompt_camera":"近景","prompt_lighting":"柔光","prompt_style":"写实","negative_prompt":"","action_timeline":[],"checks":[]},{"act_type":"rising","shot_type":"乙反应近景","camera_angle":"平视","camera_movement":"固定","duration":5,"description":"乙闭口倾听，甲声音跨切延续","dialogue":"后半句。","emotion":"克制","transition_type":"cut","transition_note":"","start_state":"乙看向甲","end_state":"乙继续倾听","prompt_subject":"乙闭口，甲声音跨切延续","prompt_action":"乙双唇闭合不做口型","prompt_camera":"近景","prompt_lighting":"柔光","prompt_style":"写实","negative_prompt":"","action_timeline":[],"checks":[]}]}`
 	draft, err := parseSceneDirectorDraftWithOptions(raw, true)
 	if err != nil {
@@ -219,26 +219,22 @@ func TestDialogueModePreservesShortPerformanceCutBeforeRaisingDuration(t *testin
 		t.Fatalf("dialogue performance cut was merged: %+v", draft.Shots)
 	}
 	normalizeDialogueRhythmDraftDurations(draft)
-	if len(draft.Shots) != 2 || draft.Shots[0].Duration < 3 {
-		t.Fatalf("dialogue shot was not raised to Native minimum: %+v", draft.Shots)
+	if len(draft.Shots) != 2 || draft.Shots[0].Duration != 2 {
+		t.Fatalf("dialogue internal cut changed: %+v", draft.Shots)
 	}
 }
 
-func TestParseSceneDirectorDraftMergesShortShotIntoFollowingShot(t *testing.T) {
+func TestParseSceneDirectorDraftPreservesShortShotAndFollowingShot(t *testing.T) {
 	raw := `{"shots":[{"act_type":"setup","shot_type":"特写","camera_angle":"平视","camera_movement":"固定","duration":2,"description":"若琳抬眼","dialogue":"相信姐姐，","emotion":"坚定","transition_type":"cut","transition_note":"切双人景","start_state":"若琳垂眼","end_state":"若琳抬眼","prompt_subject":"若琳特写","prompt_action":"抬眼","prompt_camera":"固定特写","prompt_lighting":"夕阳","prompt_style":"古风仙侠","negative_prompt":"文字","checks":[]},{"act_type":"rising","shot_type":"双人中景","camera_angle":"平视","camera_movement":"固定","duration":5,"description":"若琳握住若彤的手","dialogue":"姐姐会保护你。","emotion":"温柔坚定","transition_type":"cut","transition_note":"接下一镜","start_state":"若琳抬眼","end_state":"姐妹相握","prompt_subject":"姐妹双人中景","prompt_action":"若琳握住若彤的手","prompt_camera":"固定中景","prompt_lighting":"夕阳余晖","prompt_style":"古风仙侠","negative_prompt":"文字","checks":[]}]}`
 	draft, err := parseSceneDirectorDraft(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(draft.Shots) != 1 || draft.Shots[0].Duration != 7 {
-		t.Fatalf("merged shots = %+v", draft.Shots)
+	if len(draft.Shots) != 2 || draft.Shots[0].Duration != 2 || draft.Shots[1].Duration != 5 {
+		t.Fatalf("internal cuts changed = %+v", draft.Shots)
 	}
-	shot := draft.Shots[0]
-	if shot.Dialogue != "相信姐姐，姐姐会保护你。" || shot.StartState != "若琳垂眼" || shot.EndState != "姐妹相握" {
-		t.Fatalf("authority/order lost: %+v", shot)
-	}
-	if shot.TransitionNote != "接下一镜" || !strings.Contains(shot.PromptAction, "抬眼；若琳握住若彤的手") {
-		t.Fatalf("merged direction invalid: %+v", shot)
+	if draft.Shots[0].Dialogue != "相信姐姐，" || draft.Shots[1].Dialogue != "姐姐会保护你。" {
+		t.Fatalf("dialogue or shot authority changed: %+v", draft.Shots)
 	}
 }
 
@@ -248,18 +244,20 @@ func TestParseSceneDirectorDraftDoesNotMergeIncompatibleSpeechPresentations(t *t
 	second := strings.TrimSuffix(strings.TrimPrefix(validSceneDirectorDraft, `{"shots":[`), `]}`)
 	second = strings.Replace(second, `"dialogue":""`, `"dialogue":"等等我。","speech_presentation":"offscreen_dialogue"`, 1)
 	raw := `{"shots":[` + first + `,` + second + `]}`
-	if _, err := parseSceneDirectorDraft(raw); err == nil || !strings.Contains(err.Error(), "无法与相邻镜头合并") {
-		t.Fatalf("incompatible speech identities were merged: %v", err)
+	draft, err := parseSceneDirectorDraft(raw)
+	if err != nil || len(draft.Shots) != 2 || draft.Shots[0].Duration != 2 {
+		t.Fatalf("speech cut was not preserved: draft=%+v err=%v", draft, err)
 	}
 }
 
-func TestParseSceneDirectorDraftRejectsShortShotThatCannotMergeWithinLimit(t *testing.T) {
+func TestParseSceneDirectorDraftPreservesTwoSecondShotBesideFourteenSecondShot(t *testing.T) {
 	raw := strings.Replace(validSceneDirectorDraft, `"duration":3`, `"duration":2`, 1)
 	second := strings.TrimSuffix(strings.TrimPrefix(validSceneDirectorDraft, `{"shots":[`), `]}`)
 	second = strings.Replace(second, `"duration":3`, `"duration":14`, 1)
 	raw = strings.TrimSuffix(raw, `]}`) + `,` + second + `]}`
-	if _, err := parseSceneDirectorDraft(raw); err == nil || !strings.Contains(err.Error(), "无法与相邻镜头合并") {
-		t.Fatalf("unmergeable short shot accepted: %v", err)
+	draft, err := parseSceneDirectorDraft(raw)
+	if err != nil || len(draft.Shots) != 2 || draft.Shots[0].Duration != 2 || draft.Shots[1].Duration != 14 {
+		t.Fatalf("internal 2s+14s cuts changed: draft=%+v err=%v", draft, err)
 	}
 }
 
@@ -951,7 +949,7 @@ func TestValidateDialogueRhythmDraftPreservesDialogueExactly(t *testing.T) {
 	}
 }
 
-func TestNormalizeDialogueRhythmDraftRaisesShortShotToNativeMinimum(t *testing.T) {
+func TestNormalizeDialogueRhythmDraftPreservesShortInternalShot(t *testing.T) {
 	// Build draft directly so we can test normalization without hitting parse-time validation.
 	draft := &sceneDirectorDraft{
 		Shots: []sceneDirectorDraftShot{{
@@ -977,8 +975,8 @@ func TestNormalizeDialogueRhythmDraftRaisesShortShotToNativeMinimum(t *testing.T
 		}},
 	}
 	normalizeDialogueRhythmDraftDurations(draft)
-	if draft.Shots[0].Duration != 3 {
-		t.Fatalf("duration=%v, want 3", draft.Shots[0].Duration)
+	if draft.Shots[0].Duration != 2 {
+		t.Fatalf("duration=%v, want preserved 2", draft.Shots[0].Duration)
 	}
 	if err := validateDialogueRhythmDraft(draft, nil); err != nil {
 		t.Fatal(err)
@@ -1065,7 +1063,7 @@ func TestValidateActionRhythmDraftRejectsSlowMotionAndLongBeats(t *testing.T) {
 		t.Fatalf("valid action beat rejected: %v", err)
 	}
 	draft.Shots[0].Duration = 8
-	if err := validateActionRhythmDraft(draft, nil); err == nil || !strings.Contains(err.Error(), "3至6秒") {
+	if err := validateActionRhythmDraft(draft, nil); err == nil || !strings.Contains(err.Error(), "不超过6秒") {
 		t.Fatalf("long action beat accepted: %v", err)
 	}
 	draft.Shots[0].Duration = 4
@@ -1142,7 +1140,7 @@ func TestParseSceneDirectorDraftStrictAndComplete(t *testing.T) {
 	for _, bad := range []string{
 		`{"shots":[{"act_type":"setup","unknown":"x"}]}`,
 		validSceneDirectorDraft + " trailing",
-		`{"shots":[{"act_type":"setup","shot_type":"中景","camera_angle":"平视","camera_movement":"固定","duration":2,"description":"x","dialogue":"","emotion":"","transition_type":"cut","transition_note":"","start_state":"","end_state":"x","prompt_subject":"x","prompt_action":"x","prompt_camera":"x","prompt_lighting":"x","prompt_style":"x","negative_prompt":"","checks":[]}]}`,
+		`{"shots":[{"act_type":"setup","shot_type":"中景","camera_angle":"平视","camera_movement":"固定","duration":0,"description":"x","dialogue":"","emotion":"","transition_type":"cut","transition_note":"","start_state":"","end_state":"x","prompt_subject":"x","prompt_action":"x","prompt_camera":"x","prompt_lighting":"x","prompt_style":"x","negative_prompt":"","checks":[]}]}`,
 	} {
 		if _, err := parseSceneDirectorDraft(bad); err == nil {
 			t.Fatalf("invalid draft accepted: %s", bad)

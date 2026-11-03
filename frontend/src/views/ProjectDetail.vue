@@ -1309,6 +1309,7 @@ const projectForm = reactive({ title: '', genre: '', style: '', synopsis: '', au
 let timer = null
 let wsTimer = null
 let pollTimer = null
+let loadRequestEpoch = 0
 
 const id = () => route.params.id
 
@@ -1831,8 +1832,11 @@ async function deleteMergeRecord(row){
 }
 
 async function load() {
+  if (savingScene.value) return
+  const requestEpoch = ++loadRequestEpoch
   try {
     const [{ data }, catalogRes, materialsRes] = await Promise.all([api.project(id()), api.modelCatalog(), api.materials({ project_id: id(), type: 'video' })])
+    if (requestEpoch !== loadRequestEpoch || savingScene.value) return
     modelCatalog.value = catalogRes.data?.items || []
     projectVideoMaterials.value = (materialsRes.data || []).filter(item => item.type === 'video')
     loadError.value = ''
@@ -1847,6 +1851,7 @@ async function load() {
         rollingPlanningTarget.value = Number(data.project?.episodes || 0)
         rollingPlanningHasBatches.value = false
       }
+      if (requestEpoch !== loadRequestEpoch || savingScene.value) return
     }
     if (epDirtyCount.value === 0) trackEpisodes()
     const cur = (data.project.scripts ? JSON.parse(data.project.scripts) : {})[activeEpN.value] || ''
@@ -1891,6 +1896,7 @@ async function load() {
     assetCounts.value = data.asset_counts || {}
     dialogues.value = data.dialogues || []
     try { screenTextCues.value = (await api.screenTextCues(id(), activeEpN.value)).data || [] } catch { screenTextCues.value = [] }
+    if (requestEpoch !== loadRequestEpoch || savingScene.value) return
     scenes.value = (data.scenes || []).map(s => {
       s._working = isWorking(s)
       return s
@@ -3008,9 +3014,8 @@ async function handleWorkspaceMaterialized(firstSceneId) {
   await openEditScene(target, 'media')
 }
 async function saveSceneAndContinueDirector() {
-  if (!(await saveScene(false))) return
-  await nextTick()
-  sceneShotDirector.value?.syncAuthoritativeSceneContent(editingScene.value?.content || sceneForm.content)
+  const sceneId = editingScene.value?.id
+  if (!(await saveScene(false)) || editingScene.value?.id !== sceneId) return
   setSceneWorkspaceStep('director')
 }
 async function workspaceGenerateImage() {
@@ -3121,7 +3126,7 @@ function applyExpandedSceneContent() {
 }
 async function applyAndOpenSceneDirector() {
   if (!editingScene.value || !applyExpandedSceneContent()) return
-  if (await saveScene(false)) setSceneWorkspaceStep('director')
+  await saveSceneAndContinueDirector()
 }
 
 async function redesignScenePrompt() {
@@ -3147,39 +3152,42 @@ async function redesignScenePrompt() {
 async function saveScene(close = true) {
   if (!editingScene.value) return false
   const sceneId = editingScene.value.id
+  const originalScene = { ...editingScene.value }
+  const payload = {
+    title: sceneForm.title, content: sceneForm.content, duration: Number(sceneForm.duration),
+    image_prompt: sceneForm.image_prompt, image_engine: sceneForm.image_engine, scene_mode: sceneForm.scene_mode,
+    video_prompt: sceneForm.video_prompt, visible_characters: sceneForm.visible_characters,
+    voice_characters: sceneForm.voice_characters, mentioned_characters: sceneForm.mentioned_characters,
+    visual_type: sceneForm.visual_type, mega_type: sceneForm.mega_type
+  }
+  const references = selectedSceneReferences.value.map(reference => ({ ...reference }))
+  const outfits = sceneOutfitAssignments({ ...selectedSceneOutfits.value })
+  const referencesSnapshot = canonicalSceneReferences(references)
+  const outfitsSnapshot = JSON.stringify(outfits)
+  const referencesBaseline = sceneReferencesBaseline.value
+  const outfitsBaseline = sceneOutfitsBaseline.value
   savingScene.value = true
+  ++loadRequestEpoch // Any project response started before this save is stale.
   sceneError.value = ''
   try {
-    await api.updateScene(id(), editingScene.value.id, {
-      title: sceneForm.title,
-      content: sceneForm.content,
-      duration: Number(sceneForm.duration),
-      image_prompt: sceneForm.image_prompt,
-      image_engine: sceneForm.image_engine,
-      scene_mode: sceneForm.scene_mode,
-      video_prompt: sceneForm.video_prompt,
-      visible_characters: sceneForm.visible_characters,
-      voice_characters: sceneForm.voice_characters,
-      mentioned_characters: sceneForm.mentioned_characters,
-      visual_type: sceneForm.visual_type,
-      mega_type: sceneForm.mega_type
-    })
-    const referencesSnapshot = canonicalSceneReferences(selectedSceneReferences.value)
-    const outfitsSnapshot = canonicalSceneOutfits(selectedSceneOutfits.value)
-    if (sceneReferencesBaseline.value !== null && referencesSnapshot !== sceneReferencesBaseline.value) {
-      await api.updateSceneReferences(id(), editingScene.value.id, selectedSceneReferences.value)
+    const { data } = await api.updateScene(id(), sceneId, payload)
+    if (referencesBaseline !== null && referencesSnapshot !== referencesBaseline) await api.updateSceneReferences(id(), sceneId, references)
+    if (outfitsBaseline !== null && outfitsSnapshot !== outfitsBaseline) await api.updateSceneOutfits(id(), sceneId, outfits)
+    const responseScene = data?.scene || (data?.id === sceneId ? data : null)
+    const savedScene = { ...originalScene, ...payload, ...(responseScene || {}) }
+    const sceneIndex = scenes.value.findIndex(scene => scene.id === sceneId)
+    if (sceneIndex >= 0) scenes.value.splice(sceneIndex, 1, { ...scenes.value[sceneIndex], ...savedScene })
+    if (editingScene.value?.id === sceneId) {
+      editingScene.value = sceneIndex >= 0 ? scenes.value[sceneIndex] : savedScene
+      if (!close) {
+        if (referencesBaseline !== null) sceneReferencesBaseline.value = referencesSnapshot
+        if (outfitsBaseline !== null) sceneOutfitsBaseline.value = outfitsSnapshot
+      }
+      await nextTick()
+      sceneShotDirector.value?.syncAuthoritativeSceneContent(payload.content)
+      if (close) closeSceneWorkspace()
     }
-    if (sceneOutfitsBaseline.value !== null && outfitsSnapshot !== sceneOutfitsBaseline.value) {
-      await api.updateSceneOutfits(id(), editingScene.value.id, sceneOutfitAssignments(selectedSceneOutfits.value))
-    }
-    if (!close && sceneReferencesBaseline.value !== null) sceneReferencesBaseline.value = referencesSnapshot
-    if (!close && sceneOutfitsBaseline.value !== null) sceneOutfitsBaseline.value = outfitsSnapshot
-    const promptChanged = sceneForm.image_prompt !== editingScene.value.image_prompt
-    if (close) editingScene.value = null
-    await load()
-    if (!close) editingScene.value = scenes.value.find(scene => scene.id === sceneId) || editingScene.value
-    if (promptChanged) toast.show('画面提示词已修改；现有分镜图已保留，请自行决定是否重新生成')
-    if (close) closeSceneWorkspace()
+    if (payload.image_prompt !== originalScene.image_prompt) toast.show('画面提示词已修改；现有分镜图已保留，请自行决定是否重新生成')
     return true
   } catch (e) {
     sceneError.value = e.response?.data?.error || '保存失败'

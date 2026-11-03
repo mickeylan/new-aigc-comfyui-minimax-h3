@@ -534,7 +534,9 @@ func directorDialogueText(raw json.RawMessage) (string, error) {
 }
 
 func parseSceneDirectorDraft(output string) (*sceneDirectorDraft, error) {
-	return parseSceneDirectorDraftWithOptions(output, false)
+	// Director Shots are internal cut points inside a Scene production unit. They may
+	// be shorter than the 3-second standalone Scene template minimum.
+	return parseSceneDirectorDraftWithOptions(output, true)
 }
 
 func parseSceneDirectorDraftWithOptions(output string, preserveShortShots bool) (*sceneDirectorDraft, error) {
@@ -570,11 +572,6 @@ func parseSceneDirectorDraftWithOptions(output string, preserveShortShots bool) 
 			}
 		}
 	}
-	if !preserveShortShots {
-		if err := normalizeShortDirectorShots(&draft); err != nil {
-			return nil, err
-		}
-	}
 	for i := range draft.Shots {
 		d := &draft.Shots[i]
 		d.ActType = normalizeDirectorAct(d.ActType)
@@ -604,17 +601,10 @@ func parseSceneDirectorDraftWithOptions(output string, preserveShortShots bool) 
 			d.ListenerCharacter = ""
 			d.Checks = append(d.Checks, "系统已清除不适用于当前speech_presentation的listener_character")
 		}
-		if d.Duration <= 0 || d.Duration > 15 || (!preserveShortShots && d.Duration < 3) || math.IsNaN(d.Duration) || math.IsInf(d.Duration, 0) {
-			return nil, fmt.Errorf("镜头%d时长必须为3到15秒", i+1)
+		if d.Duration <= 0 || d.Duration > 15 || math.IsNaN(d.Duration) || math.IsInf(d.Duration, 0) {
+			return nil, fmt.Errorf("镜头%d时长必须大于0且不超过15秒", i+1)
 		}
-		validationDuration := d.Duration
-		if preserveShortShots && validationDuration < 3 {
-			validationDuration = 3
-		}
-		shot := models.Shot{ActType: d.ActType, ShotType: d.ShotType, CameraAngle: d.CameraAngle, CameraMovement: d.CameraMovement, TransitionType: d.TransitionType, TransitionNote: d.TransitionNote, StartState: d.StartState, EndState: d.EndState, Duration: validationDuration, Description: d.Description, Dialogue: d.Dialogue, SpeechPresentation: d.SpeechPresentation, ListenerCharacter: d.ListenerCharacter, Emotion: d.Emotion, PromptSubject: d.PromptSubject, PromptAction: d.PromptAction, PromptCamera: d.PromptCamera, PromptLighting: d.PromptLighting, PromptStyle: d.PromptStyle, NegativePrompt: d.NegativePrompt, ActionTimeline: d.ActionTimeline}
-		if preserveShortShots && d.Duration < 3 && len(shot.ActionTimeline) > 0 {
-			normalizeDirectorActionTimeline(shot.ActionTimeline, validationDuration)
-		}
+		shot := models.Shot{ActType: d.ActType, ShotType: d.ShotType, CameraAngle: d.CameraAngle, CameraMovement: d.CameraMovement, TransitionType: d.TransitionType, TransitionNote: d.TransitionNote, StartState: d.StartState, EndState: d.EndState, Duration: d.Duration, Description: d.Description, Dialogue: d.Dialogue, SpeechPresentation: d.SpeechPresentation, ListenerCharacter: d.ListenerCharacter, Emotion: d.Emotion, PromptSubject: d.PromptSubject, PromptAction: d.PromptAction, PromptCamera: d.PromptCamera, PromptLighting: d.PromptLighting, PromptStyle: d.PromptStyle, NegativePrompt: d.NegativePrompt, ActionTimeline: d.ActionTimeline}
 		if err := validateShot(&shot); err != nil {
 			return nil, fmt.Errorf("镜头%d: %w", i+1, err)
 		}
@@ -721,8 +711,8 @@ func validateCombatReferenceDraft(draft *sceneDirectorDraft, dialogues []models.
 		return fmt.Errorf("战斗资料导演草稿为空")
 	}
 	for i, shot := range draft.Shots {
-		if shot.Duration < 3 || shot.Duration > 15 {
-			return fmt.Errorf("战斗资料镜头%d时长必须为3至15秒", i+1)
+		if shot.Duration <= 0 || shot.Duration > 15 {
+			return fmt.Errorf("战斗资料镜头%d时长必须大于0且不超过15秒", i+1)
 		}
 		if shot.Duration > 6 && len(shot.ActionTimeline) == 0 {
 			return fmt.Errorf("战斗资料镜头%d超过6秒，必须用动作时间轴证明动作因果和连续覆盖", i+1)
@@ -759,8 +749,8 @@ func validateActionRhythmDraft(draft *sceneDirectorDraft, dialogues []models.Dia
 		return fmt.Errorf("武戏拆镜草稿为空")
 	}
 	for i, shot := range draft.Shots {
-		if shot.Duration < 3 || shot.Duration > 6 {
-			return fmt.Errorf("武戏拆镜%d时长必须为3至6秒，避免动作被摊成慢镜头", i+1)
+		if shot.Duration <= 0 || shot.Duration > 6 {
+			return fmt.Errorf("武戏拆镜%d时长必须大于0且不超过6秒，避免动作被摊成慢镜头", i+1)
 		}
 		combined := strings.Join([]string{shot.Description, shot.PromptAction, shot.PromptCamera, shot.TransitionNote}, " ")
 		combined = strings.NewReplacer("无慢动作停顿", "", "无慢动作", "", "no slow motion", "").Replace(strings.ToLower(combined))
@@ -791,19 +781,8 @@ func canonicalDialogueText(value string) string {
 }
 
 func normalizeDialogueRhythmDraftDurations(draft *sceneDirectorDraft) {
-	if draft == nil {
-		return
-	}
-	for i := range draft.Shots {
-		shot := &draft.Shots[i]
-		// Keep the executable Native H3 floor, but do not rewrite creative timing to
-		// an estimated speech duration. Natural-speed shortfalls remain visible audit
-		// warnings for the director to resolve without deleting dialogue or forcing speed.
-		if shot.Duration > 0 && shot.Duration < 3 {
-			shot.Duration = 3
-			shot.Checks = append(shot.Checks, "系统已将镜头时长调整为Native H3最低3.0秒")
-		}
-	}
+	// Internal director cut points are authoritative. Natural-speed shortfalls are
+	// advisory and must not rewrite timing, dialogue, or shot boundaries.
 }
 
 func normalizeDialogueRhythmReviewDurations(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
@@ -1318,8 +1297,8 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 		expected.WriteString(canonicalDialogueText(d.Text))
 	}
 	for i, shot := range draft.Shots {
-		if shot.Duration < 3 || shot.Duration > 15 {
-			return fmt.Errorf("对白拆镜%d时长必须为3至15秒", i+1)
+		if shot.Duration <= 0 || shot.Duration > 15 {
+			return fmt.Errorf("对白拆镜%d时长必须大于0且不超过15秒", i+1)
 		}
 		if !validShotSpeechPresentation(shot.SpeechPresentation) {
 			return fmt.Errorf("对白拆镜%d的speech_presentation无效", i+1)
@@ -1542,10 +1521,10 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		return
 	}
 	validateDraft := func(raw string) (*sceneDirectorDraft, error) {
-		preserveShortShots := req.Mode == "dialogue_rhythm"
-		draft, parseErr := parseSceneDirectorDraftWithOptions(raw, preserveShortShots)
+		// Every director mode describes internal Scene cut points; standalone 3–15s
+		// template limits are applied only when a Scene is submitted for execution.
+		draft, parseErr := parseSceneDirectorDraftWithOptions(raw, true)
 		if parseErr == nil && req.Mode == "dialogue_rhythm" {
-			normalizeDialogueRhythmDraftDurations(draft)
 			normalizeGeneratedListenerCharacters(draft)
 			parseErr = validateGeneratedDialogueRhythmDraft(draft, dialogues)
 			if parseErr == nil {
