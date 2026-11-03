@@ -222,6 +222,23 @@ func (s *ProjectService) normalizeSceneReferences(projectID uint, refs []SceneRe
 	return filtered
 }
 
+func partitionSceneReferences(refs []SceneReferenceSelection, candidates []SceneReferenceCandidate) (valid, invalid []SceneReferenceSelection) {
+	allowed := make(map[string]bool, len(candidates))
+	for _, candidate := range candidates {
+		allowed[candidate.Key] = true
+	}
+	valid = make([]SceneReferenceSelection, 0, len(refs))
+	invalid = make([]SceneReferenceSelection, 0)
+	for _, reference := range refs {
+		if allowed[referenceKey(reference)] {
+			valid = append(valid, reference)
+		} else {
+			invalid = append(invalid, reference)
+		}
+	}
+	return valid, invalid
+}
+
 func (s *ProjectService) SaveSceneReferences(sc *models.Scene, refs []SceneReferenceSelection) error {
 	refs = s.normalizeSceneReferences(sc.ProjectID, refs)
 	candidates := s.sceneReferenceCandidates(sc)

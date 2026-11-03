@@ -175,4 +175,8 @@ func TestMergeDuplicateCharacterRewritesSceneReferencesAndPreservesSourceVariant
 	if err := ps.SaveSceneReferences(&scene, unknown); err == nil || !strings.Contains(err.Error(), "参考图不存在、未审核或不属于当前项目") {
 		t.Fatalf("unknown deleted source should require manual resolution: %v", err)
 	}
+	valid, invalid := partitionSceneReferences(append(stale, unknown...), ps.sceneReferenceCandidates(&scene))
+	if len(valid) != 1 || referenceKey(valid[0]) != referenceKey(stale[0]) || len(invalid) != 1 || referenceKey(invalid[0]) != referenceKey(unknown[0]) {
+		t.Fatalf("historical invalid references were not isolated: valid=%+v invalid=%+v", valid, invalid)
+	}
 }

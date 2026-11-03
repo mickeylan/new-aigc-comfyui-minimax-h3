@@ -56,7 +56,7 @@ test('仅正文保存不会更新参考图或套装，媒体选择实际变化�
   assert.match(saveScene, /referencesBaseline !== null && referencesSnapshot !== referencesBaseline[\s\S]*api\.updateSceneReferences/)
   assert.match(saveScene, /outfitsBaseline !== null && outfitsSnapshot !== outfitsBaseline[\s\S]*api\.updateSceneOutfits/)
   assert.doesNotMatch(saveScene, /await api\.updateScene[^\n]*\n\s*await api\.updateSceneReferences/)
-  assert.match(detail, /sceneReferencesBaseline\.value = canonicalSceneReferences\(selectedSceneReferences\.value\)/)
+  assert.match(detail, /sceneReferencesBaseline\.value = canonicalSceneReferences\(\[\.\.\.selectedSceneReferences\.value, \.\.\.invalidSceneReferences\.value\]\)/)
   assert.match(detail, /sceneOutfitsBaseline\.value = canonicalSceneOutfits\(selectedSceneOutfits\.value\)/)
 })
 

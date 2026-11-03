@@ -5,6 +5,13 @@ import { readFileSync } from 'node:fs'
 const source = readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
 const saveFunction = source.slice(source.indexOf('async function saveScene(close = true)'), source.indexOf('function aspectLabel'))
 
+test('失效历史参考图被隔离并在下次显式保存时清理', () => {
+  assert.match(source, /invalidSceneReferences = ref\(\[\]\)/)
+  assert.match(source, /data\.invalid_references \|\| \[\]/)
+  assert.match(source, /canonicalSceneReferences\(\[\.\.\.selectedSceneReferences\.value, \.\.\.invalidSceneReferences\.value\]\)/)
+  assert.match(source, /已隔离.*条失效旧参考图/)
+})
+
 function fixture() {
   const original = { id: 7, content: '旧故事', image_prompt: '', image_file: 'keep.png', video_file: 'keep.mp4' }
   const editingScene = { value: original }

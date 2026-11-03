@@ -1301,6 +1301,7 @@ function toggleSceneRole(role, name, checked) {
 }
 const sceneReferenceCandidates = ref([])
 const selectedSceneReferences = ref([])
+const invalidSceneReferences = ref([])
 const sceneReferencesBaseline = ref(null)
 const sceneOutfitOptions = ref({})
 const selectedSceneOutfits = ref({})
@@ -3057,6 +3058,7 @@ async function openEditScene(sc, step = 'scene') {
   })
   sceneReferenceCandidates.value = []
   selectedSceneReferences.value = []
+  invalidSceneReferences.value = []
   sceneReferencesBaseline.value = null
   sceneOutfitOptions.value = {}
   selectedSceneOutfits.value = {}
@@ -3071,7 +3073,14 @@ async function openEditScene(sc, step = 'scene') {
     ])
     sceneReferenceCandidates.value = data.candidates || []
     selectedSceneReferences.value = (data.references || []).map(x => ({ ...x }))
-    sceneReferencesBaseline.value = canonicalSceneReferences(selectedSceneReferences.value)
+    invalidSceneReferences.value = (data.invalid_references || []).map(x => ({ ...x }))
+    // Keep invalid historical rows in the baseline only. The next explicit save compares
+    // against the valid editable list and removes those unusable rows transactionally.
+    sceneReferencesBaseline.value = canonicalSceneReferences([...selectedSceneReferences.value, ...invalidSceneReferences.value])
+    if (invalidSceneReferences.value.length) {
+      const keys = invalidSceneReferences.value.map(reference => `${reference.source_type}:${reference.source_id}:${reference.variant}`).join('、')
+      toast.info(`已隔离${invalidSceneReferences.value.length}条失效旧参考图（${keys}），不会再阻止修改；请从当前参考图库重新选择后保存`)
+    }
     sceneOutfitOptions.value = Object.fromEntries(outfitLists.map(x=>[x.cid,x.rows]))
     selectedSceneOutfits.value = Object.fromEntries((assigned||[]).map(x=>[x.character_id,x.outfit_id]))
     sceneOutfitsBaseline.value = canonicalSceneOutfits(selectedSceneOutfits.value)
