@@ -78,16 +78,28 @@ func (s *ProjectService) sceneReferenceCandidates(sc *models.Scene) []SceneRefer
 		}
 		var variants []models.AssetVariant
 		s.db.Where("project_id = ? AND entity_type IN ?", pid, []string{VariantCharacterPortrait, VariantCharacterSheet}).Order("id").Find(&variants)
+		seenVariantFiles := map[string]bool{}
 		for _, v := range variants {
 			ch, exists := charactersByID[v.EntityID]
 			if !exists {
 				continue
 			}
-			variant, suffix := "portrait", "标准照"
+			variant, suffix, currentFile := "portrait", "标准照", ch.Portrait
 			if v.EntityType == VariantCharacterSheet {
-				variant, suffix = "sheet", "四视图"
+				variant, suffix, currentFile = "sheet", "四视图", ch.Sheet
 			}
-			ref := candidate("character", v.EntityID, variant, characterLabel(ch.Name, suffix), "character", v.File)
+			// The Character row is the current projection and is already listed above.
+			// Merge preservation can materialize that same file as an AssetVariant; showing
+			// both creates two visually identical portrait/sheet choices.
+			if strings.TrimSpace(v.File) == "" || strings.TrimSpace(v.File) == strings.TrimSpace(currentFile) {
+				continue
+			}
+			fileKey := fmt.Sprintf("%d:%s:%s", v.EntityID, variant, strings.TrimSpace(v.File))
+			if seenVariantFiles[fileKey] {
+				continue
+			}
+			seenVariantFiles[fileKey] = true
+			ref := candidate("character", v.EntityID, variant, characterLabel(ch.Name, suffix)+"（历史版本）", "character", v.File)
 			ref.AssetVariantID = v.ID
 			ref.Key = referenceKey(ref.SceneReferenceSelection)
 			out = append(out, ref)
@@ -195,6 +207,51 @@ func (s *ProjectService) normalizeSceneReferences(projectID uint, refs []SceneRe
 				}
 				refs[i].SourceID = redirect.TargetCharacterID
 			}
+		}
+	}
+	// Collapse AssetVariant rows that duplicate the current Character projection, and
+	// canonicalize duplicate historical rows created by older merge implementations.
+	if s.db.Migrator().HasTable(&models.AssetVariant{}) {
+		var characters []models.Character
+		s.db.Where("project_id = ?", projectID).Find(&characters)
+		charactersByID := map[uint]models.Character{}
+		for _, character := range characters {
+			charactersByID[character.ID] = character
+		}
+		var variants []models.AssetVariant
+		s.db.Where("project_id = ? AND entity_type IN ?", projectID, []string{VariantCharacterPortrait, VariantCharacterSheet}).Order("id").Find(&variants)
+		variantsByID := map[uint]models.AssetVariant{}
+		canonicalByFile := map[string]uint{}
+		for _, variant := range variants {
+			variantsByID[variant.ID] = variant
+			kind := "portrait"
+			if variant.EntityType == VariantCharacterSheet {
+				kind = "sheet"
+			}
+			key := fmt.Sprintf("%d:%s:%s", variant.EntityID, kind, strings.TrimSpace(variant.File))
+			if canonicalByFile[key] == 0 {
+				canonicalByFile[key] = variant.ID
+			}
+		}
+		for i := range refs {
+			if refs[i].SourceType != "character" || refs[i].AssetVariantID == 0 {
+				continue
+			}
+			variant, exists := variantsByID[refs[i].AssetVariantID]
+			character, characterExists := charactersByID[refs[i].SourceID]
+			if !exists || !characterExists || variant.EntityID != refs[i].SourceID {
+				continue
+			}
+			currentFile, kind := character.Portrait, "portrait"
+			if refs[i].Variant == "sheet" {
+				currentFile, kind = character.Sheet, "sheet"
+			}
+			if strings.TrimSpace(variant.File) == strings.TrimSpace(currentFile) {
+				refs[i].AssetVariantID = 0
+				continue
+			}
+			key := fmt.Sprintf("%d:%s:%s", variant.EntityID, kind, strings.TrimSpace(variant.File))
+			refs[i].AssetVariantID = canonicalByFile[key]
 		}
 	}
 	outfitIDs := make([]uint, 0)

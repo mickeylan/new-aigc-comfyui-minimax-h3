@@ -52,7 +52,18 @@ func (s *GeneratedMediaHistoryService) List(projectID uint, entityType, mediaTyp
 	if err := qv.Find(&variants).Error; err != nil {
 		return nil, err
 	}
+	variantItems := map[string]int{}
 	for _, row := range variants {
+		key := fmt.Sprintf("%s:%d:%s", row.EntityType, row.EntityID, strings.TrimSpace(row.File))
+		if at, exists := variantItems[key]; exists {
+			// Historical merge code could create two rows for the same physical image.
+			// Present one asset while preserving the strongest review flags.
+			items[at].Selected = items[at].Selected || row.Selected
+			items[at].Favorite = items[at].Favorite || row.Favorite
+			items[at].DeleteBlockedReason = selectedReason(items[at].Selected)
+			continue
+		}
+		variantItems[key] = len(items)
 		items = append(items, GeneratedMediaHistoryItem{Family: "asset_variant", ID: row.ID, ProjectID: projectID, EntityType: row.EntityType, EntityID: row.EntityID, MediaType: "image", File: row.File, PreviewURL: fmt.Sprintf("/api/input/%d/%s", projectID, row.File), Prompt: row.Prompt, Provenance: row.Provenance, Selected: row.Selected, Favorite: row.Favorite, DeleteBlockedReason: selectedReason(row.Selected), CreatedAt: row.CreatedAt})
 	}
 	if entityType == "" || entityType == "scene" {

@@ -267,6 +267,36 @@ func mergeDuplicateCharacterRecord(tx *gorm.DB, projectID uint, sourceName strin
 				}
 			}
 		}
+		// If both identities already point at the same physical file, merging ownership
+		// would create duplicate history rows. Fold source flags into the existing target
+		// row and delete only that redundant database row; the media file remains intact.
+		var sourceVariants []models.AssetVariant
+		if err := tx.Where("project_id = ? AND entity_id = ? AND entity_type IN ?", projectID, source.ID, []string{VariantCharacterPortrait, VariantCharacterSheet}).Find(&sourceVariants).Error; err != nil {
+			return err
+		}
+		for _, sourceVariant := range sourceVariants {
+			var targetVariant models.AssetVariant
+			err := tx.Where("project_id = ? AND entity_type = ? AND entity_id = ? AND file = ?", projectID, sourceVariant.EntityType, target.ID, sourceVariant.File).Order("id").First(&targetVariant).Error
+			if err == gorm.ErrRecordNotFound {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			updates := map[string]any{"selected": targetVariant.Selected || sourceVariant.Selected, "favorite": targetVariant.Favorite || sourceVariant.Favorite}
+			if strings.TrimSpace(targetVariant.Prompt) == "" && strings.TrimSpace(sourceVariant.Prompt) != "" {
+				updates["prompt"] = sourceVariant.Prompt
+			}
+			if strings.TrimSpace(targetVariant.Provenance) == "" && strings.TrimSpace(sourceVariant.Provenance) != "" {
+				updates["provenance"] = sourceVariant.Provenance
+			}
+			if err := tx.Model(&targetVariant).Updates(updates).Error; err != nil {
+				return err
+			}
+			if err := tx.Delete(&sourceVariant).Error; err != nil {
+				return err
+			}
+		}
 		if err := tx.Table("asset_variants").Where("project_id = ? AND entity_id = ? AND entity_type IN ?", projectID, source.ID, []string{VariantCharacterPortrait, VariantCharacterSheet}).Update("entity_id", target.ID).Error; err != nil {
 			return err
 		}

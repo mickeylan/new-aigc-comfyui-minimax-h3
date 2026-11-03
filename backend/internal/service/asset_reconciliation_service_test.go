@@ -58,12 +58,17 @@ func TestMergeDuplicateCharacterRetainsBothCurrentPortraitAndSheetInHistory(t *t
 		t.Fatal(err)
 	}
 	files := map[string]GeneratedMediaHistoryItem{}
+	fileCounts := map[string]int{}
 	for _, row := range rows {
 		files[row.File] = row
+		fileCounts[row.File]++
 	}
 	for _, file := range []string{target.Portrait, source.Portrait, target.Sheet, source.Sheet} {
 		if _, ok := files[file]; !ok {
 			t.Fatalf("merged current asset %q absent from actual history query: %+v", file, rows)
+		}
+		if fileCounts[file] != 1 {
+			t.Fatalf("merged asset %q displayed %d times: %+v", file, fileCounts[file], rows)
 		}
 	}
 	if !files[target.Portrait].Selected || files[source.Portrait].Selected || !files[target.Sheet].Selected || files[source.Sheet].Selected {
@@ -107,6 +112,58 @@ func TestMergeDuplicateCharacterEmptyTargetAdoptsConsistentAssetAndProfileState(
 	ps.db.Model(&models.AssetVariant{}).Where("project_id = ? AND entity_id = ? AND selected = ?", project.ID, target.ID, true).Count(&selected)
 	if selected != 2 {
 		t.Fatalf("adopted portrait and sheet should be selected history, got %d", selected)
+	}
+}
+
+func TestMergedCharacterReferenceCandidatesDoNotDuplicateCurrentProjection(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.CharacterAliasCandidate{}, &models.AssetVariant{}, &models.CharacterMergeRedirect{}, &models.Dialogue{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "dedupe merged references"}
+	ps.db.Create(&project)
+	target := models.Character{ProjectID: project.ID, Name: "canonical", Portrait: "same-portrait.png", Sheet: "same-sheet.png"}
+	source := models.Character{ProjectID: project.ID, Name: "alias", Portrait: "same-portrait.png", Sheet: "same-sheet.png"}
+	ps.db.Create(&target)
+	ps.db.Create(&source)
+	for _, variant := range []models.AssetVariant{
+		{ProjectID: project.ID, EntityType: VariantCharacterPortrait, EntityID: target.ID, File: target.Portrait, Selected: true},
+		{ProjectID: project.ID, EntityType: VariantCharacterSheet, EntityID: target.ID, File: target.Sheet, Selected: true},
+		{ProjectID: project.ID, EntityType: VariantCharacterPortrait, EntityID: source.ID, File: source.Portrait, Selected: true},
+		{ProjectID: project.ID, EntityType: VariantCharacterSheet, EntityID: source.ID, File: source.Sheet, Selected: true},
+	} {
+		if err := ps.db.Create(&variant).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := NewAssetReconciliationService(ps.db).Apply(project.ID, []AssetReconciliationDecision{{EntityType: "character", ProposedName: source.Name, Action: "merge", TargetID: target.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID}
+	candidates := ps.sceneReferenceCandidates(&scene)
+	files := map[string]int{}
+	for _, candidate := range candidates {
+		if candidate.SourceType == "character" && candidate.SourceID == target.ID {
+			files[candidate.Image]++
+		}
+	}
+	if files[source.Portrait] != 1 || files[source.Sheet] != 1 || len(files) != 2 {
+		t.Fatalf("current portrait/sheet duplicated by history variants: candidates=%+v files=%+v", candidates, files)
+	}
+	var variants []models.AssetVariant
+	ps.db.Where("project_id = ? AND entity_id = ?", project.ID, target.ID).Find(&variants)
+	if len(variants) != 2 {
+		t.Fatalf("duplicate physical assets survived merge: %+v", variants)
+	}
+	for _, variant := range variants {
+		ref := SceneReferenceSelection{SourceType: "character", SourceID: target.ID, Variant: "portrait", AssetVariantID: variant.ID}
+		if variant.EntityType == VariantCharacterSheet {
+			ref.Variant = "sheet"
+		}
+		normalized := ps.normalizeSceneReferences(project.ID, []SceneReferenceSelection{ref})
+		if len(normalized) != 1 || normalized[0].AssetVariantID != 0 {
+			t.Fatalf("current projection variant did not collapse to base reference: variant=%+v normalized=%+v", variant, normalized)
+		}
 	}
 }
 
