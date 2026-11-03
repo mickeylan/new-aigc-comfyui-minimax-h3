@@ -286,6 +286,21 @@ func mergeDuplicateCharacterRecord(tx *gorm.DB, projectID uint, sourceName strin
 			}
 		}
 	}
+	if err := rewriteMergedCharacterSceneReferences(tx, projectID, source, &target); err != nil {
+		return err
+	}
+	if reconciliationHasTable(tx, "character_merge_redirects") {
+		redirect := models.CharacterMergeRedirect{
+			TargetCharacterID:       target.ID,
+			SourcePortraitVariantID: mergedCharacterVariantID(tx, projectID, target.ID, VariantCharacterPortrait, source.Portrait, firstNonBlank(target.Portrait, source.Portrait)),
+			SourceSheetVariantID:    mergedCharacterVariantID(tx, projectID, target.ID, VariantCharacterSheet, source.Sheet, firstNonBlank(target.Sheet, source.Sheet)),
+		}
+		if err := tx.Where("project_id = ? AND source_character_id = ?", projectID, source.ID).
+			Assign(redirect).
+			FirstOrCreate(&models.CharacterMergeRedirect{ProjectID: projectID, SourceCharacterID: source.ID}).Error; err != nil {
+			return err
+		}
+	}
 	if reconciliationHasTable(tx, "dialogues") {
 		if err := tx.Model(&models.Dialogue{}).Where("project_id = ? AND character = ?", projectID, source.Name).Update("character", target.Name).Error; err != nil {
 			return err
@@ -304,6 +319,66 @@ func mergeDuplicateCharacterRecord(tx *gorm.DB, projectID uint, sourceName strin
 	return tx.Delete(&models.Character{}, source.ID).Error
 }
 
+func rewriteMergedCharacterSceneReferences(tx *gorm.DB, projectID uint, source, target *models.Character) error {
+	var scenes []models.Scene
+	if err := tx.Where("project_id = ? AND reference_images_json != ''", projectID).Find(&scenes).Error; err != nil {
+		return err
+	}
+	variantID := func(variant string) uint {
+		file, entityType := source.Portrait, VariantCharacterPortrait
+		targetFile := firstNonBlank(target.Portrait, source.Portrait)
+		if variant == "sheet" {
+			file, entityType, targetFile = source.Sheet, VariantCharacterSheet, firstNonBlank(target.Sheet, source.Sheet)
+		}
+		if strings.TrimSpace(file) == "" || file == targetFile {
+			return 0
+		}
+		var row models.AssetVariant
+		if err := tx.Where("project_id = ? AND entity_type = ? AND entity_id = ? AND file = ?", projectID, entityType, target.ID, file).First(&row).Error; err == nil {
+			return row.ID
+		}
+		return 0
+	}
+	for i := range scenes {
+		refs, ok := parseSceneReferences(&scenes[i])
+		if !ok {
+			continue
+		}
+		changed := false
+		merged := make([]SceneReferenceSelection, 0, len(refs))
+		indexes := map[string]int{}
+		for _, ref := range refs {
+			if ref.SourceType == "character" && ref.SourceID == source.ID {
+				ref.SourceID, changed = target.ID, true
+				ref.AssetVariantID = variantID(ref.Variant)
+			}
+			key := referenceKey(ref)
+			if at, exists := indexes[key]; exists {
+				merged[at].UseKrea2 = merged[at].UseKrea2 || ref.UseKrea2
+				merged[at].UseH3 = merged[at].UseH3 || ref.UseH3
+				if merged[at].BindCharacter == "" {
+					merged[at].BindCharacter = ref.BindCharacter
+				}
+				changed = true
+				continue
+			}
+			indexes[key] = len(merged)
+			merged = append(merged, ref)
+		}
+		if !changed {
+			continue
+		}
+		encoded, err := json.Marshal(merged)
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&models.Scene{}).Where("id = ? AND project_id = ?", scenes[i].ID, projectID).Update("reference_images_json", string(encoded)).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func reconciliationHasTable(tx *gorm.DB, table string) bool {
 	// GORM's SQLite migrator opens a separate connection; for an in-memory DB that
 	// connection cannot see the transaction's schema. Querying sqlite_master keeps
@@ -313,6 +388,17 @@ func reconciliationHasTable(tx *gorm.DB, table string) bool {
 		return tx.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&count).Error == nil && count > 0
 	}
 	return tx.Migrator().HasTable(table)
+}
+
+func mergedCharacterVariantID(tx *gorm.DB, projectID, entityID uint, entityType, sourceFile, currentFile string) uint {
+	if strings.TrimSpace(sourceFile) == "" || sourceFile == currentFile {
+		return 0
+	}
+	var variant models.AssetVariant
+	if err := tx.Where("project_id = ? AND entity_type = ? AND entity_id = ? AND file = ?", projectID, entityType, entityID, sourceFile).First(&variant).Error; err != nil {
+		return 0
+	}
+	return variant.ID
 }
 
 func preserveMergedCharacterVariant(tx *gorm.DB, projectID, entityID uint, entityType, file string, selected bool) error {

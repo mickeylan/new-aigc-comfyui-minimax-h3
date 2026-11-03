@@ -307,7 +307,7 @@ func (s *ProjectService) DeleteProject(id uint) error {
 			&models.PromptVersion{}, &models.ScriptRevision{}, &models.BatchStateSnapshot{},
 			&models.StoryClue{}, &models.StoryBibleChange{}, &models.AnalysisWindow{}, &models.EpisodeAdaptation{},
 			&models.AdaptationStrategy{}, &models.PlanningBatch{}, &models.CharacterOutfit{},
-			&models.CharacterLook{}, &models.AssetVariant{}, &models.Episode{},
+			&models.CharacterLook{}, &models.AssetVariant{}, &models.CharacterMergeRedirect{}, &models.Episode{},
 		} {
 			if err := tx.Where("project_id = ?", id).Delete(model).Error; err != nil {
 				return err

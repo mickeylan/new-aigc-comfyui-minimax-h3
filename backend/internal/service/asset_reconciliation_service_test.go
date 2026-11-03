@@ -1,6 +1,9 @@
 package service
 
 import (
+	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"comfyui-console/internal/models"
@@ -9,7 +12,7 @@ import (
 
 func TestMergeDuplicateCharacterRetainsBothCurrentPortraitAndSheetInHistory(t *testing.T) {
 	ps := newTestProjectService(t)
-	if err := ps.db.AutoMigrate(&models.CharacterAliasCandidate{}, &models.AssetVariant{}, &models.Dialogue{}); err != nil {
+	if err := ps.db.AutoMigrate(&models.CharacterAliasCandidate{}, &models.AssetVariant{}, &models.CharacterMergeRedirect{}, &models.Dialogue{}); err != nil {
 		t.Fatal(err)
 	}
 	if !reconciliationHasTable(ps.db, "asset_variants") {
@@ -70,7 +73,7 @@ func TestMergeDuplicateCharacterRetainsBothCurrentPortraitAndSheetInHistory(t *t
 
 func TestMergeDuplicateCharacterEmptyTargetAdoptsConsistentAssetAndProfileState(t *testing.T) {
 	ps := newTestProjectService(t)
-	if err := ps.db.AutoMigrate(&models.CharacterAliasCandidate{}, &models.AssetVariant{}, &models.Dialogue{}, &models.CharacterLook{}, &models.CharacterOutfit{}); err != nil {
+	if err := ps.db.AutoMigrate(&models.CharacterAliasCandidate{}, &models.AssetVariant{}, &models.CharacterMergeRedirect{}, &models.Dialogue{}, &models.CharacterLook{}, &models.CharacterOutfit{}); err != nil {
 		t.Fatal(err)
 	}
 	project := models.Project{Title: "merge inheritance"}
@@ -104,5 +107,72 @@ func TestMergeDuplicateCharacterEmptyTargetAdoptsConsistentAssetAndProfileState(
 	ps.db.Model(&models.AssetVariant{}).Where("project_id = ? AND entity_id = ? AND selected = ?", project.ID, target.ID, true).Count(&selected)
 	if selected != 2 {
 		t.Fatalf("adopted portrait and sheet should be selected history, got %d", selected)
+	}
+}
+
+func TestMergeDuplicateCharacterRewritesSceneReferencesAndPreservesSourceVariant(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.CharacterAliasCandidate{}, &models.AssetVariant{}, &models.CharacterMergeRedirect{}, &models.Dialogue{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "reference merge"}
+	ps.db.Create(&project)
+	target := models.Character{ProjectID: project.ID, Name: "canonical", Sheet: "target-sheet.png"}
+	source := models.Character{ProjectID: project.ID, Name: "alias", Sheet: "source-sheet.png"}
+	ps.db.Create(&target)
+	ps.db.Create(&source)
+	scene := models.Scene{ProjectID: project.ID, ReferenceImagesJSON: fmt.Sprintf(`[{"source_type":"character","source_id":%d,"variant":"sheet","use_krea2":true,"use_h3":false,"bind_character":"hero"},{"source_type":"character","source_id":%d,"variant":"sheet","use_krea2":false,"use_h3":true,"bind_character":"hero"}]`, source.ID, target.ID)}
+	ps.db.Create(&scene)
+	if err := NewAssetReconciliationService(ps.db).Apply(project.ID, []AssetReconciliationDecision{{EntityType: "character", ProposedName: source.Name, Action: "merge", TargetID: target.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	ps.db.First(&scene, scene.ID)
+	var refs []SceneReferenceSelection
+	if err := json.Unmarshal([]byte(scene.ReferenceImagesJSON), &refs); err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 2 {
+		t.Fatalf("different files must remain distinct selections: %+v", refs)
+	}
+	var historical, current *SceneReferenceSelection
+	for i := range refs {
+		if refs[i].AssetVariantID != 0 {
+			historical = &refs[i]
+		} else {
+			current = &refs[i]
+		}
+	}
+	if historical == nil || current == nil || historical.SourceID != target.ID || current.SourceID != target.ID {
+		t.Fatalf("references not canonically rewritten: %+v", refs)
+	}
+	if !historical.UseKrea2 || historical.UseH3 || current.UseKrea2 || !current.UseH3 {
+		t.Fatalf("usage flags changed: %+v", refs)
+	}
+	var redirect models.CharacterMergeRedirect
+	if err := ps.db.Where("project_id = ? AND source_character_id = ?", project.ID, source.ID).First(&redirect).Error; err != nil || redirect.TargetCharacterID != target.ID {
+		t.Fatalf("redirect missing: %+v %v", redirect, err)
+	}
+	stale := ps.normalizeSceneReferences(project.ID, []SceneReferenceSelection{{SourceType: "character", SourceID: source.ID, Variant: "sheet", UseKrea2: true}})
+	if len(stale) != 1 || stale[0].SourceID != target.ID || stale[0].AssetVariantID != historical.AssetVariantID {
+		t.Fatalf("stale request not redirected to its original file: %+v", stale)
+	}
+	if err := ps.SaveSceneReferences(&scene, stale); err != nil {
+		t.Fatalf("normalized stale request was rejected: %v", err)
+	}
+	matchedFile := ""
+	for _, candidate := range ps.sceneReferenceCandidates(&scene) {
+		if candidate.Key == referenceKey(stale[0]) {
+			matchedFile = candidate.Image
+			if !strings.HasPrefix(candidate.Label, "角色「canonical」四视图") {
+				t.Fatalf("historical candidate has no target identity: %+v", candidate)
+			}
+		}
+	}
+	if matchedFile != source.Sheet {
+		t.Fatalf("stale request silently changed files: got %q want %q", matchedFile, source.Sheet)
+	}
+	unknown := []SceneReferenceSelection{{SourceType: "character", SourceID: source.ID + 1000, Variant: "sheet", UseKrea2: true}}
+	if err := ps.SaveSceneReferences(&scene, unknown); err == nil || !strings.Contains(err.Error(), "参考图不存在、未审核或不属于当前项目") {
+		t.Fatalf("unknown deleted source should require manual resolution: %v", err)
 	}
 }

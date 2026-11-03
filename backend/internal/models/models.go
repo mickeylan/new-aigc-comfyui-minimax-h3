@@ -396,6 +396,18 @@ type Asset struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+// CharacterMergeRedirect durably records a verified, project-scoped identity merge.
+// It is intentionally not inferred for already-deleted rows: only a merge transaction may create it.
+type CharacterMergeRedirect struct {
+	ID                      uint      `gorm:"primaryKey" json:"id"`
+	ProjectID               uint      `gorm:"column:project_id;uniqueIndex:idx_character_merge_redirect" json:"project_id"`
+	SourceCharacterID       uint      `gorm:"column:source_character_id;uniqueIndex:idx_character_merge_redirect" json:"source_character_id"`
+	TargetCharacterID       uint      `gorm:"column:target_character_id;index" json:"target_character_id"`
+	SourcePortraitVariantID uint      `json:"source_portrait_variant_id,omitempty"`
+	SourceSheetVariantID    uint      `json:"source_sheet_variant_id,omitempty"`
+	CreatedAt               time.Time `json:"created_at"`
+}
+
 // AssetVariant preserves alternate generated/uploaded images for a project-owned visual entity.
 // EntityType identifies the target field (character_portrait, character_sheet,
 // character_look, asset_image, or asset_sheet); EntityID is the owning row ID.

@@ -3085,7 +3085,7 @@ function sceneCharactersForOutfits(sc=editingScene.value) { const source=sc?.cha
 function canonicalSceneReferences(references) {
   return JSON.stringify((references || []).map(ref => ({
     source_type: String(ref.source_type || ''), source_id: Number(ref.source_id), variant: String(ref.variant || ''),
-    use_krea2: Boolean(ref.use_krea2), use_h3: Boolean(ref.use_h3), bind_character: String(ref.bind_character || '')
+    asset_variant_id: Number(ref.asset_variant_id || 0), use_krea2: Boolean(ref.use_krea2), use_h3: Boolean(ref.use_h3), bind_character: String(ref.bind_character || '')
   })))
 }
 function sceneOutfitAssignments(outfits) {
@@ -3094,9 +3094,9 @@ function sceneOutfitAssignments(outfits) {
     .sort((a, b) => a.character_id - b.character_id || a.outfit_id - b.outfit_id)
 }
 function canonicalSceneOutfits(outfits) { return JSON.stringify(sceneOutfitAssignments(outfits)) }
-function referenceKey(ref) { return `${ref.source_type}:${ref.source_id}:${ref.variant}` }
+function referenceKey(ref) { const base = `${ref.source_type}:${ref.source_id}:${ref.variant}`; return Number(ref.asset_variant_id || 0) ? `${base}:${Number(ref.asset_variant_id)}` : base }
 function referenceIndex(ref) { const key = referenceKey(ref); return selectedSceneReferences.value.findIndex(x => referenceKey(x) === key) }
-function toggleSceneReference(ref) { const i = referenceIndex(ref); if (i >= 0) selectedSceneReferences.value.splice(i, 1); else selectedSceneReferences.value.push({ source_type: ref.source_type, source_id: ref.source_id, variant: ref.variant, use_krea2: true, use_h3: true, bind_character: '' }) }
+function toggleSceneReference(ref) { const i = referenceIndex(ref); if (i >= 0) selectedSceneReferences.value.splice(i, 1); else selectedSceneReferences.value.push({ source_type: ref.source_type, source_id: ref.source_id, variant: ref.variant, asset_variant_id: Number(ref.asset_variant_id || 0), use_krea2: true, use_h3: true, bind_character: '' }) }
 function moveReference(index, delta) { const target = index + delta; if (target < 0 || target >= selectedSceneReferences.value.length) return; const [item] = selectedSceneReferences.value.splice(index, 1); selectedSceneReferences.value.splice(target, 0, item) }
 
 async function expandSceneContent() {

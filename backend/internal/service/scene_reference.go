@@ -13,12 +13,13 @@ import (
 )
 
 type SceneReferenceSelection struct {
-	SourceType    string `json:"source_type"`
-	SourceID      uint   `json:"source_id"`
-	Variant       string `json:"variant"`
-	UseKrea2      bool   `json:"use_krea2"`
-	UseH3         bool   `json:"use_h3"`
-	BindCharacter string `json:"bind_character,omitempty"`
+	SourceType     string `json:"source_type"`
+	SourceID       uint   `json:"source_id"`
+	Variant        string `json:"variant"`
+	AssetVariantID uint   `json:"asset_variant_id,omitempty"`
+	UseKrea2       bool   `json:"use_krea2"`
+	UseH3          bool   `json:"use_h3"`
+	BindCharacter  string `json:"bind_character,omitempty"`
 }
 
 type SceneReferenceCandidate struct {
@@ -30,7 +31,11 @@ type SceneReferenceCandidate struct {
 }
 
 func referenceKey(r SceneReferenceSelection) string {
-	return fmt.Sprintf("%s:%d:%s", r.SourceType, r.SourceID, r.Variant)
+	base := fmt.Sprintf("%s:%d:%s", r.SourceType, r.SourceID, r.Variant)
+	if r.AssetVariantID == 0 {
+		return base
+	}
+	return fmt.Sprintf("%s:%d", base, r.AssetVariantID)
 }
 
 func (s *ProjectService) sceneReferenceCandidates(sc *models.Scene) []SceneReferenceCandidate {
@@ -62,6 +67,30 @@ func (s *ProjectService) sceneReferenceCandidates(sc *models.Scene) []SceneRefer
 		}
 		if ch.Sheet != "" {
 			out = append(out, candidate("character", ch.ID, "sheet", characterLabel(ch.Name, "四视图"), "character", ch.Sheet))
+		}
+	}
+	// Merges can retain a source character's selected file as a historical variant.
+	// Address it explicitly so rewriting the owner ID never silently changes the image.
+	if s.db.Migrator().HasTable(&models.AssetVariant{}) {
+		charactersByID := make(map[uint]models.Character, len(chars))
+		for _, ch := range chars {
+			charactersByID[ch.ID] = ch
+		}
+		var variants []models.AssetVariant
+		s.db.Where("project_id = ? AND entity_type IN ?", pid, []string{VariantCharacterPortrait, VariantCharacterSheet}).Order("id").Find(&variants)
+		for _, v := range variants {
+			ch, exists := charactersByID[v.EntityID]
+			if !exists {
+				continue
+			}
+			variant, suffix := "portrait", "标准照"
+			if v.EntityType == VariantCharacterSheet {
+				variant, suffix = "sheet", "四视图"
+			}
+			ref := candidate("character", v.EntityID, variant, characterLabel(ch.Name, suffix), "character", v.File)
+			ref.AssetVariantID = v.ID
+			ref.Key = referenceKey(ref.SceneReferenceSelection)
+			out = append(out, ref)
 		}
 	}
 	var looks []models.CharacterLook
@@ -140,6 +169,34 @@ func parseSceneReferences(sc *models.Scene) ([]SceneReferenceSelection, bool) {
 // A complete outfit image/sheet already contains identity and styling, so keeping the old
 // character portrait/sheet creates two competing Subjects for the same person.
 func (s *ProjectService) normalizeSceneReferences(projectID uint, refs []SceneReferenceSelection) []SceneReferenceSelection {
+	if s.db.Migrator().HasTable(&models.CharacterMergeRedirect{}) {
+		var redirects []models.CharacterMergeRedirect
+		s.db.Where("project_id = ?", projectID).Find(&redirects)
+		next := map[uint]uint{}
+		bySource := map[uint]models.CharacterMergeRedirect{}
+		for _, redirect := range redirects {
+			next[redirect.SourceCharacterID] = redirect.TargetCharacterID
+			bySource[redirect.SourceCharacterID] = redirect
+		}
+		for i := range refs {
+			if refs[i].SourceType != "character" {
+				continue
+			}
+			seen := map[uint]bool{}
+			for next[refs[i].SourceID] != 0 && !seen[refs[i].SourceID] {
+				seen[refs[i].SourceID] = true
+				redirect := bySource[refs[i].SourceID]
+				if refs[i].AssetVariantID == 0 {
+					if refs[i].Variant == "portrait" {
+						refs[i].AssetVariantID = redirect.SourcePortraitVariantID
+					} else if refs[i].Variant == "sheet" {
+						refs[i].AssetVariantID = redirect.SourceSheetVariantID
+					}
+				}
+				refs[i].SourceID = redirect.TargetCharacterID
+			}
+		}
+	}
 	outfitIDs := make([]uint, 0)
 	for _, ref := range refs {
 		if ref.SourceType == "outfit" {

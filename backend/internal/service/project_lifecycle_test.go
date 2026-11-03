@@ -33,7 +33,7 @@ func TestCreateProjectIsIdempotentWithCreateToken(t *testing.T) {
 func TestDeleteProjectRemovesProductionGraph(t *testing.T) {
 	db := setupTestDB(t)
 	if err := db.AutoMigrate(
-		&models.Episode{}, &models.ScriptRevision{}, &models.MergeTask{}, &models.Material{}, &models.Asset{}, &models.AssetVariant{},
+		&models.Episode{}, &models.ScriptRevision{}, &models.MergeTask{}, &models.Material{}, &models.Asset{}, &models.AssetVariant{}, &models.CharacterMergeRedirect{},
 		&models.Dialogue{}, &models.ProjectSkillConfig{}, &models.SkillAuditLog{}, &models.Chapter{}, &models.ChapterTask{},
 		&models.StoryArc{}, &models.StoryBible{}, &models.StoryBibleChange{}, &models.AnalysisWindow{}, &models.AdaptationStrategy{}, &models.EpisodeAdaptation{},
 		&models.CharacterAliasCandidate{}, &models.NovelJob{}, &models.PlanningBatch{}, &models.BatchEpisode{},
@@ -61,6 +61,7 @@ func TestDeleteProjectRemovesProductionGraph(t *testing.T) {
 	db.Create(&models.ShotCharacterOutfit{ShotID: shot.ID, CharacterID: character.ID, OutfitID: outfit.ID})
 	db.Create(&models.GenerationCandidate{ProjectID: project.ID, EntityType: "scene", EntityID: scene.ID, MediaType: "image", TaskID: "candidate", File: "x.png"})
 	db.Create(&models.PromptPolicyOverride{ProjectID: project.ID, SceneID: &scene.ID, ShotID: &shot.ID, PolicyKey: "test"})
+	db.Create(&models.CharacterMergeRedirect{ProjectID: project.ID, SourceCharacterID: character.ID + 100, TargetCharacterID: character.ID})
 
 	svc := &ProjectService{db: db}
 	if err := svc.DeleteProject(project.ID); err != nil {
@@ -72,5 +73,11 @@ func TestDeleteProjectRemovesProductionGraph(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatal("project still exists")
+	}
+	if err := db.Model(&models.CharacterMergeRedirect{}).Where("project_id = ?", project.ID).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("character merge redirect still exists")
 	}
 }

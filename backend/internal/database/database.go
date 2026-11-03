@@ -85,6 +85,7 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.Character{},
 		&models.Asset{},
 		&models.AssetVariant{},
+		&models.CharacterMergeRedirect{},
 		&models.Dialogue{},
 		&models.VoiceStudioSRTImport{},
 		&models.DialogueSynthesisBatch{},
