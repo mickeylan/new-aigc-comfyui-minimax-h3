@@ -481,6 +481,18 @@ var (
 	storyboardQuotedTextPattern  = regexp.MustCompile(`[“\"][^”\"]*[”\"]`)
 )
 
+func storyboardSubjectTopologyIssue(detail string) string {
+	for _, tag := range h3SubjectTagPattern.FindAllString(detail, -1) {
+		quoted := regexp.QuoteMeta(tag)
+		inside := regexp.MustCompile(`(?:网内[^。；]{0,60}` + quoted + `|` + quoted + `[^。；]{0,60}网内)`).MatchString(detail)
+		outside := regexp.MustCompile(`(?:网外[^。；]{0,60}` + quoted + `|` + quoted + `[^。；]{0,60}网外)`).MatchString(detail)
+		if inside && outside {
+			return fmt.Sprintf("同一角色%s同时被放在网内和网外；权威名与别名只能对应画面中的一个人和一个位置", tag)
+		}
+	}
+	return ""
+}
+
 func sanitizeStoryboardAIDetail(detail string) string {
 	text := storyboardDialogueTagPattern.ReplaceAllString(detail, "")
 	text = storyboardQuotedTextPattern.ReplaceAllString(text, "")
@@ -525,7 +537,9 @@ Subject与Picture的真实身份绑定由系统根据实际上传文件生成，
 3. 这是静态分镜图：禁止写对白原文、引号台词、<d>标签、“正在说出某句”等语言内容；如剧情含对白，只能描述可见的嘴部状态和表情。
 4. 不得描述连续动作、时间推进、推拉摇移跟升降或切镜。
 5. 人物身份与造型、场景和道具由Picture及权威资料控制，不得新增或猜测资料中没有的内容。
-6. 不得写“素材名”“主体信息”等占位词。只输出正文，不要标题、解释、Markdown或JSON。` + framingRule
+6. 同一角色的权威名与别名代表同一个人，同一静止画面中只能占据一个位置；禁止把权威名和别名各画成一人，禁止让同一个角色同时出现在网内和网外。
+7. 如果剧情要求网、绳、锁链或柔性法宝包裹人物，必须描述为围绕躯干和四肢前后左右闭合收拢的三维柔性包覆体；所有边缘绕到身体后侧，不得画成竖直平面、网球网、排球网、晾晒架、横杆或把人物悬挂在网上。
+8. 不得写“素材名”“主体信息”等占位词。只输出正文，不要标题、解释、Markdown或JSON。` + framingRule
 	user := fmt.Sprintf("项目：%s\n题材：%s\n画风：%s\n场景标题：%s\n场景剧情：%s\n地点：%s\n道具：%s\n\n本次实际提交的参考图（编号与上传顺序一致）：\n%s\n\n当前镜头设计：\n%s\n\n场景与道具资料：\n%s",
 		project.Title, project.Genre, project.Style, sc.Title, sc.Content,
 		sc.LocationName, sc.Props, referenceContext, shotContext, assetContext)
@@ -555,6 +569,9 @@ Subject与Picture的真实身份绑定由系统根据实际上传文件生成，
 	}
 	output = sanitizeStoryboardAIDetail(output)
 	output = useSubjectTags(output, referenceLines)
+	if issue := storyboardSubjectTopologyIssue(output); issue != "" {
+		return "", fmt.Errorf("AI 返回的静止分镜空间关系冲突：%s，请重试", issue)
+	}
 	for _, placeholder := range []string{"素材名", "已提供的主体信息", "主体信息"} {
 		if strings.Contains(output, placeholder) {
 			return "", fmt.Errorf("AI 返回内容仍含无意义占位词“%s”，请重试", placeholder)
@@ -6654,11 +6671,43 @@ func h3StoryboardSubjects(referenceLines []string) (definitions, retention, subj
 		if desc == "" {
 			desc = fmt.Sprintf("参考素材%d", n)
 		}
-		definitions = append(definitions, fmt.Sprintf("<Subject %d> 是 <Picture %d> 中的%s。", n, n, desc))
-		retention = append(retention, fmt.Sprintf("<Subject %d> (出现在 [Shot 1]): fully_preserved - %s。", n, desc))
-		subjectRefs = append(subjectRefs, fmt.Sprintf("<Subject %d>", n))
+		picture := fmt.Sprintf("<Picture %d>", n)
+		switch {
+		case strings.Contains(desc, "角色「") || strings.Contains(desc, "角色造型「") || strings.HasPrefix(desc, "角色"):
+			subject := fmt.Sprintf("<Subject %d>", n)
+			definitions = append(definitions, fmt.Sprintf("%s 是 %s 中的%s。", subject, picture, desc))
+			retention = append(retention, fmt.Sprintf("%s (出现在 [Shot 1]): fully_preserved - %s。", subject, desc))
+			subjectRefs = append(subjectRefs, subject)
+		case strings.Contains(desc, "场景「") || strings.HasPrefix(desc, "场景"):
+			definitions = append(definitions, fmt.Sprintf("%s establishes the full-frame environment and spatial layout: %s。场景不是独立Subject。", picture, desc))
+		case strings.Contains(desc, "道具「") || strings.HasPrefix(desc, "道具"):
+			definitions = append(definitions, fmt.Sprintf("%s only establishes the appearance of %s。道具必须整合进人物动作与空间关系，不是独立Subject。", picture, desc))
+		default:
+			definitions = append(definitions, fmt.Sprintf("%s establishes the appearance or composition of %s，不是独立Subject。", picture, desc))
+		}
 	}
 	return definitions, retention, subjectRefs
+}
+
+var h3StoryboardSubjectPrefixPattern = regexp.MustCompile(`^(?:\[Shot 1\]\s*)?(?:画面中的参考主体为[^。]*。\s*)+`)
+var h3ClosedNetCuePattern = regexp.MustCompile(`(?:网|绳索|锁链)[^。；]{0,80}(?:包裹|包住|缠住|缠绕|罩住|束缚|收紧)|(?:包裹|包住|缠住|缠绕|罩住|束缚|收紧)[^。；]{0,80}(?:网|绳索|锁链)`)
+
+func replaceNonCharacterStoryboardSubjects(detail string, referenceLines []string) string {
+	for i, line := range referenceLines {
+		n := i + 1
+		trimmed := strings.TrimSpace(strings.TrimPrefix(line, "-"))
+		if strings.Contains(trimmed, "角色「") || strings.Contains(trimmed, "角色造型「") || strings.HasPrefix(trimmed, "角色") {
+			continue
+		}
+		replacement := fmt.Sprintf("the reference from <Picture %d>", n)
+		if strings.Contains(trimmed, "场景「") || strings.Contains(trimmed, "：场景") || strings.HasPrefix(trimmed, "场景") {
+			replacement = fmt.Sprintf("the full-frame environment established by <Picture %d>", n)
+		} else if strings.Contains(trimmed, "道具「") || strings.Contains(trimmed, "：道具") || strings.HasPrefix(trimmed, "道具") {
+			replacement = fmt.Sprintf("the prop matching <Picture %d>", n)
+		}
+		detail = strings.ReplaceAll(detail, fmt.Sprintf("<Subject %d>", n), replacement)
+	}
+	return detail
 }
 
 func buildH3StoryboardPrompt(sc *models.Scene, p *models.Project, referenceLines []string) string {
@@ -6671,6 +6720,11 @@ func buildH3StoryboardPrompt(sc *models.Scene, p *models.Project, referenceLines
 		detail = strings.TrimSpace(sc.Content)
 	}
 	detail = strings.TrimSpace(strings.TrimPrefix(detail, "[Shot 1]"))
+	detail = strings.TrimSpace(h3StoryboardSubjectPrefixPattern.ReplaceAllString(detail, ""))
+	detail = replaceNonCharacterStoryboardSubjects(detail, referenceLines)
+	if h3ClosedNetCuePattern.MatchString(sc.Content+" "+detail) && !strings.Contains(detail, "闭合三维柔性网袋") {
+		detail += "\n空间拓扑硬约束：包裹人物的网必须形成贴近躯干和四肢、前后左右收拢的闭合三维柔性网袋；网绳从身体正面、两侧延续并绕到背后，人物双脚仍接触地面。禁止竖直平面网、网球网、排球网、横杆、晾晒架、把人物悬挂在网上、身体只位于网的一侧。"
+	}
 	if negative := strings.TrimSpace(sc.NegativePrompt); negative != "" {
 		detail += "\n负向硬约束：画面中禁止出现" + negative + "。"
 	}
@@ -6678,11 +6732,17 @@ func buildH3StoryboardPrompt(sc *models.Scene, p *models.Project, referenceLines
 	if p != nil {
 		style = strings.TrimSpace(p.Style)
 	}
-	summary := "[reference generation] " + strings.Join(subjects, "、") + "共同构成一张目标静止分镜画面。"
-	subjectSentence := "画面中的参考主体为" + strings.Join(subjects, "、") + "。"
+	summary := "[reference generation] 使用已定义的Picture约束生成一张目标静止分镜画面。"
+	subjectSentence := ""
+	if len(subjects) > 0 {
+		summary = "[reference generation] " + strings.Join(subjects, "、") + "作为画面人物，场景与道具Picture仅约束环境和物件外观，共同构成一张目标静止分镜画面。"
+		subjectSentence = "画面中的人物主体为" + strings.Join(subjects, "、") + "。"
+	}
 	// 已保存的提示词可能已经由本函数编译过；再次提交必须保持幂等，避免重复前缀和画风。
-	for strings.HasPrefix(detail, subjectSentence) {
-		detail = strings.TrimSpace(strings.TrimPrefix(detail, subjectSentence))
+	if subjectSentence != "" {
+		for strings.HasPrefix(detail, subjectSentence) {
+			detail = strings.TrimSpace(strings.TrimPrefix(detail, subjectSentence))
+		}
 	}
 	detailPrefix := "[Shot 1] " + subjectSentence
 	if style != "" {

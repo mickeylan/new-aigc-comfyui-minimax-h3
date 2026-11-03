@@ -1191,10 +1191,13 @@ func TestRedesignSceneImagePromptUsesProjectAndAssetContext(t *testing.T) {
 			t.Fatalf("prompt retained placeholder %q: %s", forbidden, prompt)
 		}
 	}
-	for _, want := range []string{"<Subject 1> 是 <Picture 1>", "场景「宗门大殿」", "<Subject 2> 是 <Picture 2>", "道具「元婴玉佩」"} {
+	for _, want := range []string{"<Picture 1> establishes the full-frame environment", "场景「宗门大殿」", "<Picture 2> only establishes the appearance", "道具「元婴玉佩」"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing deterministic binding %q: %s", want, prompt)
 		}
+	}
+	if strings.Contains(prompt, "<Subject 1>") || strings.Contains(prompt, "<Subject 2>") {
+		t.Fatalf("environment or prop was incorrectly promoted to Subject: %s", prompt)
 	}
 }
 
@@ -1662,12 +1665,12 @@ func TestExplicitSceneReferencesDoNotRestoreCancelledCharacterSheet(t *testing.T
 		t.Fatalf("explicit references must not restore cancelled character sheet: files=%+v lines=%v", files, lines)
 	}
 	prompt := buildH3StoryboardPrompt(&sc, &p, lines)
-	for _, want := range []string{"<Subject 1> 是 <Picture 1>", "雷记面馆", "[reference generation] <Subject 1>"} {
+	for _, want := range []string{"<Picture 1> establishes the full-frame environment", "雷记面馆", "使用已定义的Picture约束"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q: %s", want, prompt)
 		}
 	}
-	if strings.Contains(prompt, "<Subject 2>") || strings.Contains(prompt, "lead-sheet") {
+	if strings.Contains(prompt, "<Subject 1>") || strings.Contains(prompt, "<Subject 2>") || strings.Contains(prompt, "lead-sheet") {
 		t.Fatalf("cancelled character reference was restored: %s", prompt)
 	}
 }
@@ -1677,8 +1680,8 @@ func TestBuildH3StoryboardPromptIsIdempotent(t *testing.T) {
 	sc := &models.Scene{Content: "雷晓飞站在面馆", ImagePrompt: "[Shot 1] 画面中的参考主体为<Subject 1>、<Subject 2>。画面中的参考主体为<Subject 1>、<Subject 2>。<Subject 1>站在桌旁。\n视觉风格：3D国漫\n视觉风格：3D国漫"}
 	prompt := buildH3StoryboardPrompt(sc, &models.Project{Style: "3D国漫"}, lines)
 	detail := h3PromptSection(prompt, "detailed_description:")
-	if strings.Count(detail, "画面中的参考主体为") != 1 {
-		t.Fatalf("subject prefix duplicated: %s", detail)
+	if strings.Contains(detail, "画面中的参考主体为") || strings.Count(detail, "画面中的人物主体为<Subject 1>。") != 1 {
+		t.Fatalf("subject prefix was not normalized: %s", detail)
 	}
 	if strings.Count(detail, "视觉风格：3D国漫") != 1 {
 		t.Fatalf("style must appear exactly once: %s", detail)
@@ -1698,15 +1701,53 @@ func TestBuildH3StoryboardPromptRemovesRedundantWardrobeText(t *testing.T) {
 		t.Fatalf("static storyboard summary must not repeat multi-step scene narrative: %s", prompt)
 	}
 	for _, want := range []string{
-		"<Subject 1> 是 <Picture 1> 中的场景雷记面馆。",
+		"<Picture 1> establishes the full-frame environment and spatial layout: 场景雷记面馆。场景不是独立Subject。",
 		"<Subject 2> 是 <Picture 2> 中的角色雷晓飞四视图。",
-		"[reference generation] <Subject 1>、<Subject 2>",
-		"<Subject 1> (出现在 [Shot 1]): fully_preserved",
+		"[reference generation] <Subject 2>作为画面人物",
 		"<Subject 2> (出现在 [Shot 1]): fully_preserved",
-		"detailed_description:\n[Shot 1] 画面中的参考主体为<Subject 1>、<Subject 2>。",
+		"detailed_description:\n[Shot 1] 画面中的人物主体为<Subject 2>。",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("H3 storyboard prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestStoryboardRejectsSameCharacterInsideAndOutsideNet(t *testing.T) {
+	detail := "[Shot 1] 网内的<Subject 1>双手扣住绳结。<Subject 1>位于黑网外右侧背景，双脚稳立。"
+	if issue := storyboardSubjectTopologyIssue(detail); !strings.Contains(issue, "同时被放在网内和网外") {
+		t.Fatalf("duplicate alias identity topology was not rejected: %q", issue)
+	}
+	if issue := storyboardSubjectTopologyIssue("[Shot 1] 网内的<Subject 1>双手扣住绳结。网外的<Subject 2>结印。"); issue != "" {
+		t.Fatalf("different characters were incorrectly rejected: %q", issue)
+	}
+}
+
+func TestBuildH3StoryboardPromptKeepsEnvironmentAndNetAsPicturesAndClosesNetVolume(t *testing.T) {
+	lines := []string{
+		"- <Picture 1>：角色「青衣高大男子」四视图；别名「柳石」",
+		"- <Picture 2>：角色「齐姓道士」四视图",
+		"- <Picture 3>：场景「苍黄荒地」参考图",
+		"- <Picture 4>：道具「漆黑大网」四视图",
+	}
+	sc := &models.Scene{
+		Content:     "漆黑大网完全包裹住青衣高大男子，齐姓道士在网外施法。",
+		ImagePrompt: `[Shot 1] 画面中的参考主体为<Subject 1>、<Subject 2>、<Subject 3>、<Subject 4>。<Subject 1>被<Subject 4>包裹，<Subject 3>保持荒地背景。`,
+	}
+	prompt := buildH3StoryboardPrompt(sc, &models.Project{}, lines)
+	for _, forbidden := range []string{"<Subject 3>", "<Subject 4>", "画面中的参考主体为"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("non-character reference leaked as Subject %q: %s", forbidden, prompt)
+		}
+	}
+	for _, want := range []string{
+		"<Subject 1> 是 <Picture 1>", "<Subject 2> 是 <Picture 2>",
+		"<Picture 3> establishes the full-frame environment", "<Picture 4> only establishes the appearance",
+		"the prop matching <Picture 4>", "the full-frame environment established by <Picture 3>",
+		"闭合三维柔性网袋", "禁止竖直平面网", "人物双脚仍接触地面",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("storyboard enclosure contract missing %q: %s", want, prompt)
 		}
 	}
 }
