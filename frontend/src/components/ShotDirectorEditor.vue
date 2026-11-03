@@ -91,14 +91,18 @@ const dialogueAuditBlockingIssues = computed(() => {
   return issues
 })
 const dialogueAuditAdvisories = computed(() => directorDialogueReview.value.flatMap((review, index) => (review?.advisories || []).map(issue => `镜头${index + 1}：${issue}`)))
-const draftValue = () => ({ sceneContent: props.sceneContent || '', directorBrief: directorBrief.value, directorRequirements: directorRequirements.value, combatQuery: combatQuery.value, combatSelected: combatSelected.value, shots: shots.value, directorDraft: directorDraft.value, directorDraftMode: directorDraftMode.value, directorDialogueDuration: directorDialogueDuration.value, directorDialogueReview: directorDialogueReview.value, directorDialogueSnapshot: directorDialogueSnapshot.value, directorServerRepairs: directorServerRepairs.value, combatReferenceAudit: combatReferenceAudit.value, combatDraftSelection: combatDraftSelection.value })
+const draftShotValue = shot => {
+  const { _key, _preset, _presets, _history, _busy, _stateDraft, _looks, _outfits, _assetBusy, _pairedEnglish, scene_id, created_at, updated_at, order, ...editable } = shot || {}
+  return editable
+}
+const draftValue = () => ({ sceneContent: props.sceneContent || '', directorBrief: directorBrief.value, directorRequirements: directorRequirements.value, combatQuery: combatQuery.value, combatSelected: combatSelected.value, shots: shots.value.map(draftShotValue), directorDraft: directorDraft.value, directorDraftMode: directorDraftMode.value, directorDialogueDuration: directorDialogueDuration.value, directorDialogueReview: directorDialogueReview.value, directorDialogueSnapshot: directorDialogueSnapshot.value, directorServerRepairs: directorServerRepairs.value, combatReferenceAudit: combatReferenceAudit.value, combatDraftSelection: combatDraftSelection.value })
 function applyLocalDraft(draft) {
   const sameSceneContent = String(draft.sceneContent || '') === String(props.sceneContent || '')
   directorBrief.value = sameSceneContent ? (draft.directorBrief || props.sceneContent || '') : (props.sceneContent || '')
   directorRequirements.value = sameSceneContent ? (draft.directorRequirements || '') : ''
   combatQuery.value = sameSceneContent ? (draft.combatQuery || '') : ''
   combatSelected.value = sameSceneContent && Array.isArray(draft.combatSelected) ? draft.combatSelected : []
-  if (sameSceneContent && Array.isArray(draft.shots)) shots.value = draft.shots
+  if (sameSceneContent && Array.isArray(draft.shots)) shots.value = draft.shots.map(shot => shot.id ? hydrate(shot) : ({ ...blank(shot.act_type || 'setup'), ...shot }))
   directorDraft.value = sameSceneContent && draft.directorDraft?.shots?.length ? draft.directorDraft : null
   directorDraftMode.value = sameSceneContent ? (draft.directorDraftMode || 'standard') : 'standard'
   directorDialogueDuration.value = sameSceneContent ? (Number(draft.directorDialogueDuration) || 0) : 0
