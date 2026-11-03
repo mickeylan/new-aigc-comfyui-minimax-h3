@@ -168,13 +168,28 @@ func mergeDuplicateCharacterRecord(tx *gorm.DB, projectID uint, sourceName strin
 	fill("gender", target.Gender, source.Gender)
 	fill("trait", target.Trait, source.Trait)
 	fill("style", target.Style, source.Style)
-	fill("portrait", target.Portrait, source.Portrait)
-	fill("portrait_engine", target.PortraitEngine, source.PortraitEngine)
-	fill("sheet", target.Sheet, source.Sheet)
-	fill("voice", target.Voice, source.Voice)
-	fill("voice_ref", target.VoiceRef, source.VoiceRef)
-	fill("voice_id", target.VoiceID, source.VoiceID)
-	fill("voice_model", target.VoiceModel, source.VoiceModel)
+	// Asset projections have associated engine/task/error state. Adopt that state as a
+	// unit only when the target has no selected asset; mixing it with target state can
+	// make a completed source task appear to own the target's file (or vice versa).
+	if strings.TrimSpace(target.Portrait) == "" && strings.TrimSpace(source.Portrait) != "" {
+		updates["portrait"] = source.Portrait
+		updates["portrait_engine"] = source.PortraitEngine
+		updates["portrait_task_id"] = source.PortraitTaskID
+		updates["portrait_error"] = source.PortraitError
+	}
+	if strings.TrimSpace(target.Sheet) == "" && strings.TrimSpace(source.Sheet) != "" {
+		updates["sheet"] = source.Sheet
+		updates["sheet_task_id"] = source.SheetTaskID
+		updates["sheet_error"] = source.SheetError
+	}
+	// Voice enrollment fields describe one profile and must not be combined from
+	// different characters. Only an entirely empty target voice profile is adopted.
+	if strings.TrimSpace(target.Voice) == "" && strings.TrimSpace(target.VoiceRef) == "" && strings.TrimSpace(target.VoiceID) == "" && strings.TrimSpace(target.VoiceModel) == "" {
+		fill("voice", target.Voice, source.Voice)
+		fill("voice_ref", target.VoiceRef, source.VoiceRef)
+		fill("voice_id", target.VoiceID, source.VoiceID)
+		fill("voice_model", target.VoiceModel, source.VoiceModel)
+	}
 	fill("appearance", target.Appearance, source.Appearance)
 	fill("personality", target.Personality, source.Personality)
 	fill("background", target.Background, source.Background)
@@ -199,7 +214,7 @@ func mergeDuplicateCharacterRecord(tx *gorm.DB, projectID uint, sourceName strin
 	}
 
 	// Preserve all dependent production data while collapsing the duplicate identity.
-	if tx.Migrator().HasTable("scene_character_outfits") {
+	if reconciliationHasTable(tx, "scene_character_outfits") {
 		if err := tx.Exec("DELETE FROM scene_character_outfits WHERE character_id = ? AND EXISTS (SELECT 1 FROM scene_character_outfits t2 WHERE t2.character_id = ? AND scene_character_outfits.scene_id = t2.scene_id)", source.ID, target.ID).Error; err != nil {
 			return err
 		}
@@ -207,7 +222,7 @@ func mergeDuplicateCharacterRecord(tx *gorm.DB, projectID uint, sourceName strin
 			return err
 		}
 	}
-	if tx.Migrator().HasTable("shot_character_outfits") {
+	if reconciliationHasTable(tx, "shot_character_outfits") {
 		if err := tx.Exec("DELETE FROM shot_character_outfits WHERE character_id = ? AND EXISTS (SELECT 1 FROM shot_character_outfits t2 WHERE t2.character_id = ? AND shot_character_outfits.shot_id = t2.shot_id)", source.ID, target.ID).Error; err != nil {
 			return err
 		}
@@ -216,38 +231,105 @@ func mergeDuplicateCharacterRecord(tx *gorm.DB, projectID uint, sourceName strin
 		}
 	}
 	for _, table := range []string{"character_looks", "character_outfits", "character_motion_references"} {
-		if tx.Migrator().HasTable(table) {
+		if reconciliationHasTable(tx, table) {
 			if err := tx.Table(table).Where("character_id = ?", source.ID).Update("character_id", target.ID).Error; err != nil {
 				return fmt.Errorf("迁移%s失败（可能存在同名资产，请先重命名冲突项）: %w", table, err)
 			}
 		}
 	}
-	if tx.Migrator().HasTable("screen_text_cues") {
+	if reconciliationHasTable(tx, "screen_text_cues") {
 		if err := tx.Table("screen_text_cues").Where("character_id = ?", source.ID).Update("character_id", target.ID).Error; err != nil {
 			return err
 		}
 	}
-	if tx.Migrator().HasTable("asset_variants") {
-		if err := tx.Table("asset_variants").Where("project_id = ? AND entity_id = ? AND entity_type IN ?", projectID, source.ID, []string{"character_portrait", "character_sheet"}).Update("entity_id", target.ID).Error; err != nil {
+	if reconciliationHasTable(tx, "asset_variants") {
+		// Materialize both current projections before deleting the source row. Older
+		// databases may have no variant for files selected before history was added.
+		for _, asset := range []struct {
+			entityType string
+			targetFile string
+			sourceFile string
+		}{
+			{VariantCharacterPortrait, target.Portrait, source.Portrait},
+			{VariantCharacterSheet, target.Sheet, source.Sheet},
+		} {
+			if err := preserveMergedCharacterVariant(tx, projectID, target.ID, asset.entityType, asset.targetFile, true); err != nil {
+				return err
+			}
+			adopted := strings.TrimSpace(asset.targetFile) == "" && strings.TrimSpace(asset.sourceFile) != ""
+			var retained int64
+			if err := tx.Model(&models.AssetVariant{}).Where("project_id = ? AND entity_type = ? AND entity_id IN ? AND file = ?", projectID, asset.entityType, []uint{source.ID, target.ID}, asset.sourceFile).Count(&retained).Error; err != nil {
+				return err
+			}
+			if retained == 0 {
+				if err := preserveMergedCharacterVariant(tx, projectID, target.ID, asset.entityType, asset.sourceFile, adopted); err != nil {
+					return err
+				}
+			}
+		}
+		if err := tx.Table("asset_variants").Where("project_id = ? AND entity_id = ? AND entity_type IN ?", projectID, source.ID, []string{VariantCharacterPortrait, VariantCharacterSheet}).Update("entity_id", target.ID).Error; err != nil {
 			return err
 		}
+		// The target projection remains authoritative. Retained source files are
+		// history, not a second selected version.
+		for _, selected := range []struct{ entityType, file string }{
+			{VariantCharacterPortrait, firstNonBlank(target.Portrait, source.Portrait)},
+			{VariantCharacterSheet, firstNonBlank(target.Sheet, source.Sheet)},
+		} {
+			if err := tx.Model(&models.AssetVariant{}).Where("project_id = ? AND entity_type = ? AND entity_id = ?", projectID, selected.entityType, target.ID).Update("selected", false).Error; err != nil {
+				return err
+			}
+			if strings.TrimSpace(selected.file) != "" {
+				if err := tx.Model(&models.AssetVariant{}).Where("project_id = ? AND entity_type = ? AND entity_id = ? AND file = ?", projectID, selected.entityType, target.ID, selected.file).Update("selected", true).Error; err != nil {
+					return err
+				}
+			}
+		}
 	}
-	if tx.Migrator().HasTable("dialogues") {
+	if reconciliationHasTable(tx, "dialogues") {
 		if err := tx.Model(&models.Dialogue{}).Where("project_id = ? AND character = ?", projectID, source.Name).Update("character", target.Name).Error; err != nil {
 			return err
 		}
 	}
-	if tx.Migrator().HasTable("shots") && tx.Migrator().HasTable("scenes") {
+	if reconciliationHasTable(tx, "shots") && reconciliationHasTable(tx, "scenes") {
 		if err := tx.Model(&models.Shot{}).Where("listener_character = ? AND scene_id IN (SELECT id FROM scenes WHERE project_id = ?)", source.Name, projectID).Update("listener_character", target.Name).Error; err != nil {
 			return err
 		}
 	}
-	if tx.Migrator().HasTable("character_alias_candidates") {
+	if reconciliationHasTable(tx, "character_alias_candidates") {
 		if err := tx.Model(&models.CharacterAliasCandidate{}).Where("project_id = ? AND canonical_name = ?", projectID, source.Name).Update("canonical_name", target.Name).Error; err != nil {
 			return err
 		}
 	}
 	return tx.Delete(&models.Character{}, source.ID).Error
+}
+
+func reconciliationHasTable(tx *gorm.DB, table string) bool {
+	// GORM's SQLite migrator opens a separate connection; for an in-memory DB that
+	// connection cannot see the transaction's schema. Querying sqlite_master keeps
+	// optional-table checks transaction-local. Other dialects use their migrator.
+	if tx.Dialector.Name() == "sqlite" {
+		var count int64
+		return tx.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&count).Error == nil && count > 0
+	}
+	return tx.Migrator().HasTable(table)
+}
+
+func preserveMergedCharacterVariant(tx *gorm.DB, projectID, entityID uint, entityType, file string, selected bool) error {
+	file = strings.TrimSpace(file)
+	if file == "" {
+		return nil
+	}
+	var row models.AssetVariant
+	return tx.Where("project_id = ? AND entity_type = ? AND entity_id = ? AND file = ?", projectID, entityType, entityID, file).
+		Attrs(models.AssetVariant{ProjectID: projectID, EntityType: entityType, EntityID: entityID, File: file, Selected: selected}).FirstOrCreate(&row).Error
+}
+
+func firstNonBlank(primary, fallback string) string {
+	if strings.TrimSpace(primary) != "" {
+		return primary
+	}
+	return fallback
 }
 
 func createLocalCanon(tx *gorm.DB, projectID uint, entityType, name string) error {
@@ -333,7 +415,7 @@ func rewriteSceneNameReferences(tx *gorm.DB, projectID uint, entityType, from, t
 		}
 	}
 	if entityType == "character" {
-		if tx.Migrator().HasTable("shots") && tx.Migrator().HasTable("scenes") {
+		if reconciliationHasTable(tx, "shots") && reconciliationHasTable(tx, "scenes") {
 			var shots []models.Shot
 			if err := tx.Where("scene_id IN (SELECT id FROM scenes WHERE project_id = ?)", projectID).Find(&shots).Error; err != nil {
 				return err
