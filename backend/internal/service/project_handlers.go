@@ -557,6 +557,9 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 	fullPrompt = normalizeSavedH3Audio(fullPrompt, dubs, lines, shots)
 	fullPrompt = applyAuthoritativeSceneShotTimeline(fullPrompt, sc.Content)
 	fullPrompt = s.Projects.applySceneShotTimeline(sc, fullPrompt)
+	if template == "minimax_h3_first_last" {
+		fullPrompt = finalizeH3FL2VAPrompt(fullPrompt, sc.Duration)
+	}
 	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "reference_bindings": sceneVideoReferenceBindings(refs, lines, fullPrompt), "template": template, "dialogue_count": len(validSceneDialogues(dubs)), "prompt_dialogue_count": len(h3SpokenTextPattern.FindAllStringSubmatch(fullPrompt, -1))}
 	if continuity != nil && continuity.SelectedFrame != nil {
 		response["continuity_mode"] = continuity.Mode
@@ -619,9 +622,13 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 		return
 	}
 	prompt := strings.TrimSpace(req.Prompt)
+	template := strings.TrimSpace(req.Template)
+	if template == "" {
+		template = strings.TrimSpace(sc.VideoTemplate)
+	}
 	_, _, refLines := s.sceneVideoPromptContinuity(sc)
 	dubs := s.Projects.sceneVideoDialogues(sc)
-	if isH3KeyframePrompt(prompt) {
+	if isH3KeyframePrompt(prompt) && template != "minimax_h3_first_last" {
 		// User visual edits remain authoritative, but spoken content is always rebuilt from
 		// structured Dialogue and placed in its persisted Shot interval.
 		var shots []models.Shot
@@ -629,10 +636,6 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 		shots = s.Projects.ensureShotDialogueRanges(sc.ID, shots)
 		prompt = normalizeSavedH3Audio(prompt, dubs, refLines, shots)
 		prompt = s.Projects.applySceneShotTimeline(sc, prompt)
-	}
-	template := strings.TrimSpace(req.Template)
-	if template == "" {
-		template = strings.TrimSpace(sc.VideoTemplate)
 	}
 	if isReviewedAudioVideoTemplate(template) {
 		selection := s.Projects.sceneReviewedAudioSelection(sc)

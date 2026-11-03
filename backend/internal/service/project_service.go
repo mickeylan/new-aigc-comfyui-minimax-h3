@@ -4612,14 +4612,34 @@ func buildH3FL2VAPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialo
 	timeline := h3TimelineBody(sc, p, dubs)
 	lastShot := lastH3ShotNumber(timeline)
 	body := sanitizeH3FL2VABody(strings.TrimSpace(strings.TrimPrefix(timeline, "[Shot 1]")))
-	body = "[Shot 1] The shot begins from the state, composition, and spatial relationships established by <Picture 1>. " + body
-	// Append the landing requirement inside the existing final Shot body. Never emit
-	// a second [Shot N] marker: the final reference is a terminal state, not a new cut.
-	body += " Toward the end, the visible motion settles into the exact pose, spacing, object state, camera angle, lighting, and final composition established by Picture 2."
+	body = "[Shot 1] " + h3FL2VAOpening + " " + body
+	body += " " + h3FL2VALanding
 	return fmt.Sprintf("How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot %d) aligns with the %.2f-second mark of the target video.\n\n", lastShot, duration) +
 		"integrated_multimodal_description:\n" + body +
 		"\n\noverall_soundscape:\n" + h3SoundscapeContractForDialogues(dubs) +
 		"\n\nnon_diegetic_music:\n" + h3NoMusicContract()
+}
+
+const (
+	h3FL2VAOpening = "The shot begins from the state, composition, and spatial relationships established by <Picture 1>."
+	h3FL2VALanding = "Toward the end, the visible motion settles into the exact pose, spacing, object state, camera angle, lighting, and final composition established by Picture 2."
+)
+
+// finalizeH3FL2VAPrompt runs only after all authoritative timeline processing. It
+// derives the landing Shot from the final body and adds the two frame anchors once.
+func finalizeH3FL2VAPrompt(prompt string, duration float64) string {
+	body := h3IntegratedDescription(prompt)
+	if body == "" {
+		body = strings.TrimSpace(prompt)
+	}
+	body = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(body, h3FL2VAOpening, ""), h3FL2VALanding, ""))
+	body = strings.TrimSpace(strings.TrimPrefix(body, "[Shot 1]"))
+	body = "[Shot 1] " + h3FL2VAOpening + " " + body
+	body = strings.TrimSpace(body) + " " + h3FL2VALanding
+	lastShot := lastH3ShotNumber(body)
+	return fmt.Sprintf("How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot %d) aligns with the %.2f-second mark of the target video.\n\n", lastShot, normalizeSceneDuration(duration)) +
+		"integrated_multimodal_description:\n" + body +
+		"\n\noverall_soundscape:\nOnly non-speech sounds explicitly described in the integrated timeline are present; do not invent additional sound events or speech.\n\nnon_diegetic_music:\nN/A"
 }
 
 func lastH3ShotNumber(prompt string) int {
