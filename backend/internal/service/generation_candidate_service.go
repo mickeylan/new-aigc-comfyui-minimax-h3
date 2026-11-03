@@ -144,6 +144,15 @@ func (s *GenerationCandidateService) CaptureSceneSuccess(in SceneCandidateCaptur
 		err := tx.Where("project_id = ? AND task_id = ? AND media_type = ?", in.ProjectID, in.TaskID, in.MediaType).First(&existing).Error
 		if err == nil {
 			captured = existing
+			// Repair the former image-completion bug on reconciliation, but only
+			// for the already adopted result of this exact scene and bound task.
+			if in.MediaType == "image" && existing.EntityType == "scene" && existing.EntityID == scene.ID && existing.IsCurrent && scene.Status == "image_pending" && scene.ImageTaskID == in.TaskID && scene.ImageFile == existing.File {
+				status := "image_ready"
+				if scene.VideoFile != "" {
+					status = "video_ready"
+				}
+				return tx.Model(&models.Scene{}).Where("id = ? AND image_task_id = ? AND status = ?", scene.ID, in.TaskID, "image_pending").Updates(map[string]any{"status": status, "image_token": "", "error": ""}).Error
+			}
 			return nil
 		}
 		if err != gorm.ErrRecordNotFound {
@@ -166,9 +175,11 @@ func (s *GenerationCandidateService) CaptureSceneSuccess(in SceneCandidateCaptur
 		updates := map[string]any{"error": ""}
 		if in.MediaType == "image" {
 			updates["image_file"], updates["image_task_id"], updates["image_token"], updates["image_candidate_parent_id"] = in.File, in.TaskID, "", nil
-			// An image replacement does not invalidate or erase an already selected video.
-			if scene.VideoFile == "" {
-				updates["status"] = "image_ready"
+			// Complete the image job even when retaining an existing video. Leaving
+			// image_pending here makes a successful regeneration look permanently busy.
+			updates["status"] = "image_ready"
+			if scene.VideoFile != "" {
+				updates["status"] = "video_ready"
 			}
 		} else {
 			updates["video_file"], updates["video_task_id"] = in.File, in.TaskID
