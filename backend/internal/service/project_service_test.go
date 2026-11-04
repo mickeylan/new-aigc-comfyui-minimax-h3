@@ -1713,6 +1713,23 @@ func TestBuildH3StoryboardPromptRemovesRedundantWardrobeText(t *testing.T) {
 	}
 }
 
+func TestStoryboardDirectionalTopologyOverridesContradictorySnakeAttackSemantics(t *testing.T) {
+	input := "六条青蛇自草丛破草而出，蛇头面对镜头，蛇尾对着<Subject 1>，蛇身绷紧成扑击前的弓形弧线。"
+	got := enforceStoryboardDirectionalTopology(input)
+	for _, want := range []string{"朝摄影机方向窜出时形成的弓形弧线", "摄影机→蛇头→蛇身→蛇尾→蛇尾所指的后景目标", "运动方向背离该后景目标"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("directional topology missing %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "扑击前") {
+		t.Fatalf("contradictory attack-target semantics survived: %s", got)
+	}
+	qwen := enforceStoryboardDirectionalTopology("蛇头正对摄影机，蛇尾朝向柳乐儿，蛇身呈扑击前的弓形。")
+	if !strings.Contains(qwen, "摄影机→蛇头→蛇身→蛇尾") || strings.Contains(qwen, "扑击前") {
+		t.Fatalf("Qwen named-character direction was not normalized: %s", qwen)
+	}
+}
+
 func TestStoryboardRejectsSameCharacterInsideAndOutsideNet(t *testing.T) {
 	detail := "[Shot 1] 网内的<Subject 1>双手扣住绳结。<Subject 1>位于黑网外右侧背景，双脚稳立。"
 	if issue := storyboardSubjectTopologyIssue(detail); !strings.Contains(issue, "同时被放在网内和网外") {

@@ -539,7 +539,8 @@ Subject与Picture的真实身份绑定由系统根据实际上传文件生成，
 5. 人物身份与造型、场景和道具由Picture及权威资料控制，不得新增或猜测资料中没有的内容。
 6. 同一角色的权威名与别名代表同一个人，同一静止画面中只能占据一个位置；禁止把权威名和别名各画成一人，禁止让同一个角色同时出现在网内和网外。
 7. 如果剧情要求网、绳、锁链或柔性法宝包裹人物，必须描述为围绕躯干和四肢前后左右闭合收拢的三维柔性包覆体；所有边缘绕到身体后侧，不得画成竖直平面、网球网、排球网、晾晒架、横杆或把人物悬挂在网上。
-8. 不得写“素材名”“主体信息”等占位词。只输出正文，不要标题、解释、Markdown或JSON。` + framingRule
+8. 头尾、前后景或运动方向有明确要求时，使用“摄影机→前景物体头部→身体→尾部→后景人物”的完整空间轴线；禁止同时使用会暗示相反攻击目标的“扑击某人”“扑击前”等叙事词。
+9. 不得写“素材名”“主体信息”等占位词。只输出正文，不要标题、解释、Markdown或JSON。` + framingRule
 	user := fmt.Sprintf("项目：%s\n题材：%s\n画风：%s\n场景标题：%s\n场景剧情：%s\n地点：%s\n道具：%s\n\n本次实际提交的参考图（编号与上传顺序一致）：\n%s\n\n当前镜头设计：\n%s\n\n场景与道具资料：\n%s",
 		project.Title, project.Genre, project.Style, sc.Title, sc.Content,
 		sc.LocationName, sc.Props, referenceContext, shotContext, assetContext)
@@ -722,7 +723,7 @@ func (s *ProjectService) redesignQwenSceneImagePrompt(sc *models.Scene, project 
 	if hasRefs {
 		system = qwenImage21EditSystem
 	}
-	qwenSceneSystem := system + `\nThis is a Qwen-Image-2.1 single static opening-keyframe prompt, not a director plan. Follow the selected Qwen T2I or image-edit contract exactly. Use only supplied opening-keyframe visual facts. For a referenced new composition, begin with a concrete operation verb and bind each input to one explicit source responsibility; no input is the canvas. Then state the finished frame's medium/style, subject count and identity source, exact frozen pose, prop ownership, foreground/midground/background spatial anchors, camera framing and fixed viewpoint, environment materials, palette, light source/direction/quality, cast shadows and highlights, and end with one composition summary. A canonical character name and any supplied alias identify one person in one position, never duplicate people. Character references supply identity; outfit references supply styling for that same character; environment references supply the full-frame space; prop references supply only the integrated object's appearance and never create a person. For a net, rope, chain or flexible restraint enclosing a person, describe the positive final topology as a closed three-dimensional flexible volume wrapping around the front, sides and back of the body, not as an independent display object. Do not mention project/scene/shot numbers, dialogue, timing, transitions, cuts, camera movement, start/end state, future action, or abstract emotion. Never write tracking, pan, tilt, dolly, push-in or pull-out language. Convert motion into one frozen body pose with visible dust, fabric and hair state. Output one continuous paragraph in the request language inside rewritten_prompt.`
+	qwenSceneSystem := system + `\nThis is a Qwen-Image-2.1 single static opening-keyframe prompt, not a director plan. Follow the selected Qwen T2I or image-edit contract exactly. Use only supplied opening-keyframe visual facts. For a referenced new composition, begin with a concrete operation verb and bind each input to one explicit source responsibility; no input is the canvas. Then state the finished frame's medium/style, subject count and identity source, exact frozen pose, prop ownership, foreground/midground/background spatial anchors, camera framing and fixed viewpoint, environment materials, palette, light source/direction/quality, cast shadows and highlights, and end with one composition summary. A canonical character name and any supplied alias identify one person in one position, never duplicate people. Character references supply identity; outfit references supply styling for that same character; environment references supply the full-frame space; prop references supply only the integrated object's appearance and never create a person. For a net, rope, chain or flexible restraint enclosing a person, describe the positive final topology as a closed three-dimensional flexible volume wrapping around the front, sides and back of the body, not as an independent display object. When head-tail orientation or foreground-background direction is authoritative, state the complete camera-to-subject depth axis and remove narrative attack wording that implies an opposite target. Do not mention project/scene/shot numbers, dialogue, timing, transitions, cuts, camera movement, start/end state, future action, or abstract emotion. Never write tracking, pan, tilt, dolly, push-in or pull-out language. Convert motion into one frozen body pose with visible dust, fabric and hair state. Output one continuous paragraph in the request language inside rewritten_prompt.`
 	user := fmt.Sprintf("User request:\n输出一个静止首帧的最终画面描述，不要复述导演参数。题材：%s；画风：%s；地点：%s；道具：%s。%s\n\nOpening-keyframe visual facts (the only Shot facts allowed):\n%s\n\nVerified appearance and environment facts:\n%s", project.Genre, project.Style, sc.LocationName, sc.Props, framingRule, shotContext, assetContext)
 	if hasRefs {
 		user += "\n\nOrdered input image roles (order is binding):"
@@ -6470,6 +6471,7 @@ func (s *ProjectService) buildQwenSceneExecutionPrompt(sc *models.Scene, referen
 	}
 	// The reviewed Qwen prompt already contains the model-specific, ordered input
 	// responsibilities exactly once. Do not prepend them again at execution time.
+	prompt = enforceStoryboardDirectionalTopology(prompt)
 	parts := []string{prompt}
 	if h3ClosedNetCuePattern.MatchString(sc.Content+" "+prompt) && !strings.Contains(prompt, "闭合三维柔性网袋") {
 		parts = append(parts, "最终画面中的网形成贴近人物躯干和四肢、从正面和两侧延续到背后的闭合三维柔性网袋，人物与网构成一个完整包覆体。")
@@ -6736,6 +6738,25 @@ func h3StoryboardSubjects(referenceLines []string) (definitions, retention, subj
 
 var h3StoryboardSubjectPrefixPattern = regexp.MustCompile(`^(?:\[Shot 1\]\s*)?(?:画面中的参考主体为[^。]*。\s*)+`)
 var h3ClosedNetCuePattern = regexp.MustCompile(`(?:网|绳索|锁链)[^。；]{0,80}(?:包裹|包住|缠住|缠绕|罩住|束缚|收紧)|(?:包裹|包住|缠住|缠绕|罩住|束缚|收紧)[^。；]{0,80}(?:网|绳索|锁链)`)
+var storyboardSnakeHeadCameraPattern = regexp.MustCompile(`(?:蛇头|蛇首)[^。；]{0,40}(?:面对|正对|朝向|指向)(?:镜头|摄影机|画面前方)`)
+var storyboardSnakeTailBackPattern = regexp.MustCompile(`(?:蛇尾|尾部)[^。；]{0,40}(?:对着|朝向|指向)[^，。；]{1,40}`)
+
+func enforceStoryboardDirectionalTopology(detail string) string {
+	if !storyboardSnakeHeadCameraPattern.MatchString(detail) || !storyboardSnakeTailBackPattern.MatchString(detail) {
+		return detail
+	}
+	// “扑击” implies an attack target and often overrides the explicit head/tail geometry
+	// in image models. Preserve the visible coiled body, but express only the intended axis.
+	detail = strings.NewReplacer(
+		"扑击前的弓形弧线", "朝摄影机方向窜出时形成的弓形弧线",
+		"扑击前的弓形", "朝摄影机方向窜出时形成的弓形",
+		"扑击前", "朝摄影机方向窜出时",
+	).Replace(detail)
+	if !strings.Contains(detail, "摄影机→蛇头→蛇身→蛇尾→蛇尾所指的后景目标") {
+		detail += "\n方向轴线硬约束：从画面前景到后景的固定顺序为摄影机→蛇头→蛇身→蛇尾→蛇尾所指的后景目标；每条蛇的头部和张开的蛇口都正对摄影机与画面下缘，蛇尾位于该后景目标一侧，蛇群整体从后景目标一侧朝摄影机方向窜出，运动方向背离该后景目标。"
+	}
+	return detail
+}
 
 func replaceNonCharacterStoryboardSubjects(detail string, referenceLines []string) string {
 	primaryCharacterPicture := map[string]int{}
@@ -6824,6 +6845,7 @@ func buildH3StoryboardPrompt(sc *models.Scene, p *models.Project, referenceLines
 	detail = strings.TrimSpace(strings.TrimPrefix(detail, "[Shot 1]"))
 	detail = strings.TrimSpace(h3StoryboardSubjectPrefixPattern.ReplaceAllString(detail, ""))
 	detail = replaceNonCharacterStoryboardSubjects(detail, referenceLines)
+	detail = enforceStoryboardDirectionalTopology(detail)
 	if !strings.Contains(detail, "五帧候选批次") {
 		detail += "\n静态候选帧硬约束：五帧候选批次保持同一瞬间、同一人物数量与身份、同一姿势、同一空间关系、同一固定机位和同一构图，不发生动作推进、镜头运动或主体位移；仅提取中间帧作为分镜图。"
 	}
