@@ -21,9 +21,14 @@ export function createDraftSafety({ key, getDraft, applyDraft, save, storage = g
   const start = () => {
     const raw = storage.getItem(key)
     if (raw) {
-      if (confirm('检测到未保存的本地草稿，是否恢复？')) {
-        try { applyDraft(JSON.parse(raw)) } catch { discard() }
-      } else discard()
+      let draft
+      try { draft = JSON.parse(raw) } catch { discard() }
+      if (draft !== undefined) {
+        if (JSON.stringify(draft) === serialized()) discard()
+        else if (confirm('检测到未保存的本地草稿，是否恢复？')) {
+          try { applyDraft(draft) } catch { discard() }
+        } else discard()
+      }
     }
     eventTarget?.addEventListener('beforeunload', beforeUnload)
     eventTarget?.addEventListener('keydown', keydown)

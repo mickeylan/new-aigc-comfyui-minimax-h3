@@ -25,6 +25,32 @@ test('draft safety restores an accepted local draft and discards a rejected one'
   assert.equal(rejected.storage.getItem('draft'), null)
 })
 
+test('identical saved content and corrupt records never prompt on repeated opening', () => {
+  const state = { text: 'already saved' }
+  for (const raw of [JSON.stringify(state), '{broken json']) {
+    const h = harness()
+    h.values.set('draft', raw)
+    let prompts = 0
+    const create = () => createDraftSafety({ key: 'draft', getDraft: () => state, applyDraft: () => assert.fail('must not restore redundant or corrupt draft'), save() {}, storage: h.storage, eventTarget: h.target, confirm: () => { prompts++; return true } })
+    const first = create(); first.start(); first.dispose()
+    const reopened = create(); reopened.start(); reopened.dispose()
+    assert.equal(prompts, 0)
+    assert.equal(h.storage.getItem('draft'), null)
+  }
+})
+
+test('successful save clears recovery record across reopening', () => {
+  let state = { text: 'server' }
+  const h = harness()
+  const options = { key: 'draft', getDraft: () => state, applyDraft() {}, save() {}, storage: h.storage, eventTarget: h.target, confirm: () => assert.fail('saved draft must not prompt') }
+  const safety = createDraftSafety(options); safety.start()
+  state = { text: 'edited' }; safety.flush()
+  assert.notEqual(h.storage.getItem('draft'), null)
+  safety.markSaved(); safety.dispose()
+  const reopened = createDraftSafety(options); reopened.start(); reopened.dispose()
+  assert.equal(h.storage.getItem('draft'), null)
+})
+
 test('draft safety keeps local recovery when shortcut save is intentionally deferred', async () => {
   let state = { reviewDraft: 'pending' }
   const h = harness()
