@@ -7261,7 +7261,7 @@ func stableSceneVideoSeed(templateCode, prompt string, files map[string][]FileMe
 }
 
 // GenerateSceneVideo 创建场景视频任务；T2V可无分镜图，其余模板要求相应画面输入。
-// 同一已审核英文稿、模板、参考图和时长使用稳定 seed；普通重试不得悄悄变成随机新创作。
+// 用户主动生成/重新生成时使用新的随机 seed；失败任务的快照重试由 TaskService 保留原参数。
 func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene) error {
 	var latest models.Scene
 	if err := s.db.First(&latest, sc.ID).Error; err != nil {
@@ -7390,13 +7390,13 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		}
 	}
 	log.Printf("[video-submit] project=%d scene=%d template=%s files=[%s]\nprompt:\n%s", sc.ProjectID, sc.ID, tplCode, strings.Join(videoFileNames, ", "), promptText)
-	stableSeed := stableSceneVideoSeed(tplCode, promptText, videoFiles, normalizeSceneDuration(sc.Duration), videoW, videoH)
+	seed := randomGenerationSeed()
 	task, err := s.tasks.CreateTask(CreateTaskReq{
 		TemplateID: tpl.ID,
 		Prompt:     promptText,
 		Params: map[string]any{
 			"width": videoW, "height": videoH, "duration": normalizeSceneDuration(sc.Duration),
-			"steps": 8, "cfg": 1.0, "fps": 24, "seed": stableSeed, "ref_image_size": "match",
+			"steps": 8, "cfg": 1.0, "fps": 24, "seed": seed, "ref_image_size": "match",
 			"audio_scene_start": 0.0, "audio_scene_duration": 0.0, "audio_warmup": 0.0, "audio_cooldown": 0.0,
 			"audio_policy": "source_only", "source_gain_db": 0.0, "generated_gain_db": -12.0,
 			"duck_generated": 0.75, "peak_limit_dbfs": -1.0, "output_sample_rate": "source",
