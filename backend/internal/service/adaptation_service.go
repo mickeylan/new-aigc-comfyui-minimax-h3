@@ -61,6 +61,9 @@ func extractSourceDialogues(ch models.Chapter, knownNames ...string) []SourceDia
 	matches := sourceQuotePattern.FindAllStringSubmatchIndex(ch.Content, -1)
 	out := make([]SourceDialogue, 0, len(matches))
 	for _, quote := range matches {
+		if !sourceQuoteIsSpeech(ch.Content, quote) {
+			continue
+		}
 		speaker := ""
 		beforeStart := quote[0] - 64
 		if beforeStart < 0 {
@@ -571,6 +574,7 @@ type DialogueCoverage struct {
 	Total       int              `json:"total"`
 	Covered     int              `json:"covered"`
 	Missing     []SourceDialogue `json:"missing"`
+	Unbound     int              `json:"unbound,omitempty"`
 	OutOfOrder  int              `json:"out_of_order,omitempty"`
 	OrderPassed bool             `json:"order_passed"`
 }
@@ -581,7 +585,7 @@ func dialogueKey(speaker, text string) string { return speaker + "\x00" + text }
 // treating a count map as proof that order passed.
 func dialogueCoverage(raw string, ledger []SourceDialogue) DialogueCoverage {
 	coverage := DialogueCoverage{Total: len(ledger), Missing: []SourceDialogue{}, OrderPassed: true}
-	res, err := parseScriptJSON(raw)
+	res, err := parseAdaptationScript(raw)
 	if err != nil {
 		coverage.Missing = append(coverage.Missing, ledger...)
 		coverage.OrderPassed = len(ledger) == 0
@@ -619,11 +623,123 @@ func dialogueCoverage(raw string, ledger []SourceDialogue) DialogueCoverage {
 	return coverage
 }
 
+// normalizeAdaptationDialogue is deliberately local to adaptation persistence: model
+// aliases are accepted, but an unknown type is retained for review rather than being
+// silently dropped or guessed to be dialogue.
+func parseAdaptationScript(raw string) (*scriptResult, error) {
+	result, err := parseScriptJSON(raw)
+	if err != nil {
+		return nil, err
+	}
+	applyAdaptationDialogueAliases(raw, result)
+	for i := range result.Scenes {
+		for j := range result.Scenes[i].Dialogues {
+			d := &result.Scenes[i].Dialogues[j]
+			d.SpeechType, d.Character = normalizeAdaptationDialogue(*d)
+		}
+	}
+	return result, nil
+}
+
+func applyAdaptationDialogueAliases(raw string, result *scriptResult) {
+	var wire struct {
+		Scenes []struct {
+			Dialogues []map[string]any `json:"dialogues"`
+		} `json:"scenes"`
+	}
+	if parseJSONObject(raw, &wire) != nil {
+		return
+	}
+	for i := range result.Scenes {
+		if i >= len(wire.Scenes) {
+			break
+		}
+		for j := range result.Scenes[i].Dialogues {
+			if j >= len(wire.Scenes[i].Dialogues) {
+				break
+			}
+			d := &result.Scenes[i].Dialogues[j]
+			field := wire.Scenes[i].Dialogues[j]
+			if strings.TrimSpace(d.Character) == "" {
+				for _, key := range []string{"character_name", "speaker"} {
+					if value, ok := field[key]; ok {
+						d.Character = strings.TrimSpace(profileValueText(value))
+						if d.Character != "" {
+							break
+						}
+					}
+				}
+			}
+			if strings.TrimSpace(d.SpeechType) == "" {
+				if value, ok := field["speechType"]; ok {
+					d.SpeechType = strings.TrimSpace(profileValueText(value))
+				}
+			}
+		}
+	}
+}
+
+func normalizeAdaptationDialogue(dialogue scriptDialogue) (string, string) {
+	t := strings.ToLower(strings.TrimSpace(dialogue.SpeechType))
+	character := strings.TrimSpace(dialogue.Character)
+	aliases := map[string]string{
+		"对白": "dialogue", "台词": "dialogue", "对话": "dialogue",
+		"旁白": "narration", "画外音": "narration",
+		"独白": "monologue", "内心独白": "monologue",
+		"画外对白": "offscreen_dialogue",
+	}
+	if alias, ok := aliases[t]; ok {
+		t = alias
+	}
+	if isNarrationSpeaker(character) {
+		t, character = "narration", "旁白"
+	} else if t == "" && character != "" {
+		t = "dialogue"
+	}
+	if t == "" {
+		t = "unknown"
+	}
+	return t, character
+}
+
+func persistedDialogueCoverage(rows []models.Dialogue, ledger []SourceDialogue) DialogueCoverage {
+	coverage := DialogueCoverage{Total: len(ledger), Missing: []SourceDialogue{}, OrderPassed: true}
+	used := make([]bool, len(rows))
+	last := -1
+	for _, row := range rows {
+		if strings.TrimSpace(row.Character) == "" {
+			coverage.Unbound++
+		}
+	}
+	for _, source := range ledger {
+		found := -1
+		for i, row := range rows {
+			if !used[i] && strings.TrimSpace(row.Text) == source.Text && (source.Speaker == "" || strings.TrimSpace(row.Character) == source.Speaker) {
+				found = i
+				break
+			}
+		}
+		if found < 0 {
+			coverage.Missing = append(coverage.Missing, source)
+			continue
+		}
+		used[found] = true
+		coverage.Covered++
+		if found < last {
+			coverage.OutOfOrder++
+			coverage.OrderPassed = false
+		} else {
+			last = found
+		}
+	}
+	return coverage
+}
+
 // restoreDialoguesAlreadyLocatedByContent only repairs a structured-dialogue omission
 // when the model itself put the exact source text in a scene. It never invents a scene
 // or guesses a narrative position.
 func restoreDialoguesAlreadyLocatedByContent(raw string, ledger []SourceDialogue) (string, error) {
-	res, err := parseScriptJSON(raw)
+	res, err := parseAdaptationScript(raw)
 	if err != nil {
 		return raw, nil
 	}
@@ -686,16 +802,28 @@ func restoreDialoguesAlreadyLocatedByContent(raw string, ledger []SourceDialogue
 		}
 		res.Scenes[i].Dialogues = ordered[i]
 	}
-	encoded, err := json.Marshal(res)
+	// The generic script DTO does not contain adaptation-only fields such as
+	// opening_state/ending_state. Patch scenes into the original object instead
+	// of dropping those fields through a lossy DTO round-trip.
+	var original map[string]json.RawMessage
+	if err := parseJSONObject(raw, &original); err != nil {
+		return raw, err
+	}
+	scenesJSON, err := json.Marshal(res.Scenes)
+	if err != nil {
+		return raw, err
+	}
+	original["scenes"] = scenesJSON
+	encoded, err := json.Marshal(original)
 	return string(encoded), err
 }
 
 func structuredDialoguesPreserved(original, candidate string) bool {
-	before, err := parseScriptJSON(original)
+	before, err := parseAdaptationScript(original)
 	if err != nil {
 		return false
 	}
-	after, err := parseScriptJSON(candidate)
+	after, err := parseAdaptationScript(candidate)
 	if err != nil {
 		return false
 	}
@@ -735,8 +863,16 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 	}
 	if episode > 1 {
 		var prev models.EpisodeAdaptation
-		if err := s.db.Where("project_id = ? AND episode_n = ?", projectID, episode-1).First(&prev).Error; err != nil || (prev.ContinuityStatus != "passed" && prev.ContinuityStatus != "overridden") {
-			return nil, fmt.Errorf("previous episode continuity gate is not cleared")
+		if err := s.db.Where("project_id = ? AND episode_n = ?", projectID, episode-1).First(&prev).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return nil, fmt.Errorf("请先生成第%d集剧本，再生成第%d集", episode-1, episode)
+			}
+			return nil, err
+		}
+		// Regeneration resets continuity review to pending. Review is advisory:
+		// the latest completed script, not a stale review flag, is the prerequisite.
+		if strings.TrimSpace(prev.Script) == "" {
+			return nil, fmt.Errorf("请先生成第%d集剧本，再生成第%d集", episode-1, episode)
 		}
 	}
 	ctx, err := s.BuildContext(projectID, episode, 0)
@@ -783,10 +919,11 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 	// Source-ledger diagnostics and storage, however, require each source occurrence
 	// to remain an exact, auditable record. Render scene structure without dialogue,
 	// then persist the authoritative structured dialogue unchanged below.
-	structured, parseErr := parseScriptJSON(raw)
+	structured, parseErr := parseAdaptationScript(raw)
 	if parseErr != nil {
 		return nil, parseErr
 	}
+	applyAdaptationDialogueAliases(raw, structured)
 	rendered := *structured
 	rendered.Scenes = append([]scriptScene(nil), structured.Scenes...)
 	for i := range rendered.Scenes {
@@ -819,8 +956,8 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 				break
 			}
 			for j, dialogue := range scene.Dialogues {
-				speechType, character := normalizeScriptSpeech(dialogue.SpeechType, dialogue.Character)
-				if speechType == "" || strings.TrimSpace(dialogue.Text) == "" {
+				speechType, character := normalizeAdaptationDialogue(dialogue)
+				if strings.TrimSpace(dialogue.Text) == "" {
 					continue
 				}
 				if err := tx.Create(&models.Dialogue{SceneID: storedScenes[i].ID, ProjectID: projectID, Order: j + 1, Character: character, SpeechType: speechType, Text: strings.TrimSpace(dialogue.Text), Status: "pending"}).Error; err != nil {
@@ -838,10 +975,31 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 		EndingState  any    `json:"ending_state"`
 	}
 	_ = parseJSONObject(raw, &parsed)
-	state := func(v any) string { b, _ := json.Marshal(v); return string(b) }
+	state := func(v any, previous string) string {
+		if v == nil {
+			return previous
+		}
+		if text, ok := v.(string); ok && (strings.TrimSpace(text) == "" || strings.TrimSpace(text) == "null") {
+			return previous
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			return previous
+		}
+		return string(b)
+	}
+	// Report what actually survived persistence in the current, non-archived scenes.
+	// Unknown/unbound rows remain reviewable but cannot satisfy a named source quote.
+	var persistedDialogues []models.Dialogue
+	if len(storedSceneIDs) > 0 {
+		if err := s.db.Where("project_id = ? AND scene_id IN ?", projectID, storedSceneIDs).Order("scene_id, `order`").Find(&persistedDialogues).Error; err != nil {
+			return nil, err
+		}
+	}
+	coverage = persistedDialogueCoverage(persistedDialogues, ctx.DialogueLedger)
 	traces, _ := json.Marshal(ctx.Traces)
 	coverageJSON, _ := json.Marshal(coverage)
-	ep.Script, ep.OpeningState, ep.EndingState, ep.SourceTracesJSON, ep.DialogueCoverageJSON, ep.Status, ep.ContinuityStatus = parsed.Script, state(parsed.OpeningState), state(parsed.EndingState), string(traces), string(coverageJSON), "scripted", "pending"
+	ep.Script, ep.OpeningState, ep.EndingState, ep.SourceTracesJSON, ep.DialogueCoverageJSON, ep.Status, ep.ContinuityStatus = parsed.Script, state(parsed.OpeningState, ep.OpeningState), state(parsed.EndingState, ep.EndingState), string(traces), string(coverageJSON), "scripted", "pending"
 	if err := s.db.Save(&ep).Error; err != nil {
 		return nil, err
 	}

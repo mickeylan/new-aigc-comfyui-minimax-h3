@@ -190,3 +190,63 @@ func TestGenerateScriptBadDialogueRevisionKeepsFirstPaidScriptAndDiagnostics(t *
 		}
 	}
 }
+
+func TestGenerateScriptPreservesSpeakerAliasesThroughAllDialogueStages(t *testing.T) {
+	provider := &adaptationMockTextProvider{}
+	svc, project, chapter := newAdaptationDialogueTestService(t, provider)
+	ledger := extractSourceDialogues(chapter, "虬髯大汉", "马脸男子", "齐姓道士")
+	raw := adaptationScriptFixture(t, "alias-script", ledger, true)
+	raw = strings.ReplaceAll(raw, `"character":`, `"speaker":`)
+	raw = strings.ReplaceAll(raw, `"speech_type":"dialogue"`, `"speechType":"对白"`)
+	provider.responses = []string{raw}
+	ep, err := svc.GenerateScript(project.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []models.Dialogue
+	if err := svc.db.Joins("JOIN scenes ON scenes.id = dialogues.scene_id").Where("dialogues.project_id = ? AND scenes.archived = ?", project.ID, false).Order("scenes.`order`, dialogues.`order`").Find(&got).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 13 {
+		t.Fatalf("aliases lost before persistence: got %d want 13", len(got))
+	}
+	for i := range ledger {
+		if got[i].Text != ledger[i].Text || got[i].Character != ledger[i].Speaker || got[i].SpeechType != "dialogue" {
+			t.Fatalf("dialogue %d = %+v", i, got[i])
+		}
+	}
+	var coverage DialogueCoverage
+	if err := json.Unmarshal([]byte(ep.DialogueCoverageJSON), &coverage); err != nil {
+		t.Fatal(err)
+	}
+	if coverage.Covered != len(got) || len(coverage.Missing) != 0 {
+		t.Fatalf("report disagrees with persisted rows: %+v", coverage)
+	}
+	if len(provider.users) != 1 {
+		t.Fatalf("normalized aliases unnecessarily caused revision: %d calls", len(provider.users))
+	}
+}
+
+func TestAdaptationDialogueNormalizationKeepsUnboundAndUnknownForReview(t *testing.T) {
+	raw := `{"scenes":[{"dialogues":[{"speaker":"甲","speechType":"对白","text":"一"},{"character_name":"乙","speech_type":"","text":"二"},{"character":"","speech_type":"unexpected","text":"三"},{"character":"","speech_type":"","text":"四"}]}]}`
+	parsed, err := parseScriptJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyAdaptationDialogueAliases(raw, parsed)
+	wantTypes := []string{"dialogue", "dialogue", "unexpected", "unknown"}
+	wantCharacters := []string{"甲", "乙", "", ""}
+	rows := make([]models.Dialogue, 0, 13)
+	for round := 0; round < 13; round++ {
+		d := parsed.Scenes[0].Dialogues[round%len(parsed.Scenes[0].Dialogues)]
+		typ, character := normalizeAdaptationDialogue(d)
+		if round < 4 && (typ != wantTypes[round] || character != wantCharacters[round]) {
+			t.Fatalf("normalized %d=%q/%q want %q/%q", round, typ, character, wantTypes[round], wantCharacters[round])
+		}
+		rows = append(rows, models.Dialogue{Order: round + 1, Character: character, SpeechType: typ, Text: d.Text})
+	}
+	coverage := persistedDialogueCoverage(rows, []SourceDialogue{{Speaker: "甲", Text: "一"}, {Speaker: "乙", Text: "二"}, {Speaker: "丙", Text: "三"}})
+	if len(rows) != 13 || coverage.Covered != 2 || len(coverage.Missing) != 1 || coverage.Unbound != 6 {
+		t.Fatalf("rows=%d coverage=%+v", len(rows), coverage)
+	}
+}
