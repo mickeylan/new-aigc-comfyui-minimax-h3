@@ -927,7 +927,18 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 	rendered := *structured
 	rendered.Scenes = append([]scriptScene(nil), structured.Scenes...)
 	for i := range rendered.Scenes {
+		// Scene.Content is the readable story and the director's source, not
+		// merely a visual synopsis. Keep the exact speech here as well as in
+		// the authoritative dialogue rows written below.
+		rendered.Scenes[i].Content = sceneStoryContentWithDialogues(structured.Scenes[i].Content, structured.Scenes[i].Dialogues)
 		rendered.Scenes[i].Dialogues = nil
+	}
+	if strings.TrimSpace(rendered.Script) == "" {
+		var story strings.Builder
+		for i, scene := range rendered.Scenes {
+			fmt.Fprintf(&story, "【场景%d｜%s】\n%s\n\n", i+1, scene.Title, scene.Content)
+		}
+		rendered.Script = story.String()
 	}
 	renderRaw, marshalErr := json.Marshal(&rendered)
 	if marshalErr != nil {
@@ -975,6 +986,9 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 		EndingState  any    `json:"ending_state"`
 	}
 	_ = parseJSONObject(raw, &parsed)
+	if strings.TrimSpace(parsed.Script) == "" {
+		parsed.Script = rendered.Script
+	}
 	state := func(v any, previous string) string {
 		if v == nil {
 			return previous

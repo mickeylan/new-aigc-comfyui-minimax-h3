@@ -1312,7 +1312,7 @@ func (s *ProjectService) generateScriptCore(p *models.Project, episodeN int, raw
 			visibleNames := sceneVisibleNames(sc)
 			scene := models.Scene{
 				ProjectID: p.ID, EpisodeN: episodeN, Order: i + 1, Generation: newGeneration,
-				Title: sc.Title, Content: sc.Content,
+				Title: sc.Title, Content: sceneStoryContentWithDialogues(sc.Content, sc.Dialogues),
 				ImagePrompt: sc.ImagePrompt, Duration: normalizeSceneDuration(sc.Duration), Status: "pending",
 				Characters:          joinSceneCharacters(visibleNames),
 				VisibleCharacters:   joinSceneCharacters(visibleNames),

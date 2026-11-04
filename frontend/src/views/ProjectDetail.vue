@@ -363,6 +363,7 @@
             {{ showRevisions ? '收起版本' : '版本历史' }}
           </button>
           <button class="btn btn-ghost btn-sm" :disabled="screenplayBusy" @click="importScreenplay">{{ screenplayBusy ? '导入中…' : '导入剧本' }}</button>
+          <button class="btn btn-ghost btn-sm" :disabled="busy || storyDialogueSyncBusy" @click="syncStoryDialogues">{{ storyDialogueSyncBusy ? '补回中…' : '补回本集对白到故事内容' }}</button>
           <a v-for="format in ['fountain', 'fdx', 'txt']" :key="format" class="btn btn-ghost btn-sm" :href="api.screenplayExportUrl(id(), activeEpN, format)">导出 {{ format.toUpperCase() }}</a>
           <button class="btn btn-secondary btn-sm" :disabled="busy || expandingScript || !scriptDraft.trim()" @click="aiExpand">
             {{ expandingScript ? 'AI 扩写中…' : '✨ AI 扩写' }}
@@ -1227,6 +1228,8 @@ const showRevisions = ref(false)
 const scriptRevisions = ref([])
 const revisionBusy = ref(false)
 const screenplayBusy = ref(false)
+const storyDialogueSyncBusy = ref(false)
+let storyDialogueSyncEpoch = 0
 const policyBusy = ref(false)
 const promptPolicies = ref([])
 const reconciliationBusy = ref(false)
@@ -2097,6 +2100,25 @@ async function fetchProgress() {
 function refreshSoon() {
   clearTimeout(timer)
   timer = setTimeout(load, 400)
+}
+
+async function syncStoryDialogues() {
+  const projectID = id()
+  const episodeN = activeEpN.value
+  if (!window.confirm(`只会把第${episodeN}集已保存台词补回对应 Scene 正文；不会删除原文、不会修改说话人或媒体，也不会发起 AI/GPU。是否继续？`)) return
+  const requestEpoch = ++storyDialogueSyncEpoch
+  storyDialogueSyncBusy.value = true
+  try {
+    const { data } = await api.syncEpisodeStoryDialogues(projectID, episodeN)
+    if (requestEpoch !== storyDialogueSyncEpoch || id() !== projectID || activeEpN.value !== episodeN) return
+    await load()
+    if (requestEpoch !== storyDialogueSyncEpoch || id() !== projectID || activeEpN.value !== episodeN) return
+    toast.success(`已补回本集对白到 Scene 正文，共更新 ${data.count_changed || 0} 场`)
+  } catch (e) {
+    if (requestEpoch === storyDialogueSyncEpoch && id() === projectID && activeEpN.value === episodeN) toast.error(e.response?.data?.error || '补回对白失败')
+  } finally {
+    if (requestEpoch === storyDialogueSyncEpoch) storyDialogueSyncBusy.value = false
+  }
 }
 
 async function importScreenplay() {
