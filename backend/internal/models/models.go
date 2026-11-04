@@ -65,6 +65,7 @@ type Task struct {
 	ParamsJSON        string     `gorm:"type:text" json:"params_json"`
 	InputsJSON        string     `gorm:"type:text" json:"inputs_json"`
 	ProvenanceJSON    string     `gorm:"column:provenance_json;type:text" json:"provenance_json"`
+	WorkflowJSON      string     `gorm:"column:workflow_json;type:text" json:"-"` // immutable rendered execution snapshot
 	ParentCandidateID *uint      `gorm:"column:parent_candidate_id;index" json:"parent_candidate_id,omitempty"`
 	AffinityKey       string     `gorm:"column:affinity_key;size:191;index" json:"affinity_key,omitempty"`
 	InstanceID        *uint      `gorm:"column:instance_id;index" json:"instance_id"`
@@ -155,6 +156,7 @@ type Project struct {
 	Scripts                  string            `gorm:"type:text" json:"scripts"`      // 按集剧本 JSON map[int]string（episode_n -> 剧本正文）
 	VisualBible              string            `gorm:"type:text" json:"visual_bible"` // 角色外观与统一画风基准
 	Status                   string            `json:"status"`                        // draft/plan_done/script_done/producing/ready/finished/failed
+	CombatLorasJSON          string            `gorm:"column:combat_loras_json;type:text" json:"combat_loras_json,omitempty"`
 	Error                    string            `json:"error"`
 	Generation               uint              `gorm:"default:0" json:"generation"`                               // 当前生成版本，防止旧任务回写新分镜
 	PipelineStage            string            `gorm:"column:pipeline_stage;index" json:"pipeline_stage"`         // plan/script/images/videos/merge/finished/failed
@@ -202,11 +204,12 @@ type Scene struct {
 	Order                    int        `gorm:"index:idx_scene_project_generation_episode_order" json:"order"`                                // 场景序号（从 1 开始）
 	Generation               uint       `gorm:"index:idx_scene_project_generation_episode_order" json:"generation"`
 	Archived                 bool       `gorm:"column:archived;default:false;index" json:"archived"`
-	Title                    string     `json:"title"`                                                               // 场景标题
-	Content                  string     `json:"content"`                                                             // 场景正文（作为视频提示词）
-	ImagePrompt              string     `json:"image_prompt"`                                                        // 文生图提示词
-	ImageEngine              string     `gorm:"column:image_engine;default:minimax_h3" json:"image_engine"`          // minimax_h3/qwen_image_2_1
-	SceneMode                string     `gorm:"column:scene_mode" json:"scene_mode"`                                 // 文戏/武戏/文武混合；空值兼容旧数据并自动判断
+	Title                    string     `json:"title"`                                                      // 场景标题
+	Content                  string     `json:"content"`                                                    // 场景正文（作为视频提示词）
+	ImagePrompt              string     `json:"image_prompt"`                                               // 文生图提示词
+	ImageEngine              string     `gorm:"column:image_engine;default:minimax_h3" json:"image_engine"` // minimax_h3/qwen_image_2_1
+	SceneMode                string     `gorm:"column:scene_mode" json:"scene_mode"`                        // 文戏/武戏/文武混合；空值兼容旧数据并自动判断
+	CombatLorasJSON          string     `gorm:"column:combat_loras_json;type:text" json:"combat_loras_json,omitempty"`
 	NegativePrompt           string     `gorm:"column:negative_prompt;type:text" json:"negative_prompt"`             // 镜头层聚合的负面提示词
 	ReferenceImagesJSON      string     `gorm:"column:reference_images_json;type:text" json:"-"`                     // 用户指定的有序参考图及 Krea2/H3 用途
 	Duration                 float64    `gorm:"default:5" json:"duration"`                                           // 场景目标时长（秒）
@@ -867,33 +870,34 @@ type AdaptationStrategy struct {
 
 // EpisodeAdaptation maps source chapters and events to one production episode.
 type EpisodeAdaptation struct {
-	ID               uint      `gorm:"primaryKey" json:"id"`
-	ProjectID        uint      `gorm:"column:project_id;uniqueIndex:idx_adaptation_project_episode" json:"project_id"`
-	EpisodeN         int       `gorm:"column:episode_n;uniqueIndex:idx_adaptation_project_episode" json:"episode_n"`
-	BatchID          *uint     `gorm:"column:batch_id;index" json:"batch_id,omitempty"` // 所属批次（滚动批次模式）
-	Title            string    `json:"title"`
-	ChapterStart     int       `gorm:"column:chapter_start" json:"chapter_start"`
-	ChapterEnd       int       `gorm:"column:chapter_end" json:"chapter_end"`
-	SourceChapterIDs string    `gorm:"column:source_chapter_ids;type:text" json:"source_chapter_ids"`
-	TargetDuration   float64   `gorm:"column:target_duration;default:180" json:"target_duration"`
-	TargetScenes     int       `gorm:"column:target_scenes;default:25" json:"target_scenes"`
-	AdaptationGoal   string    `gorm:"column:adaptation_goal;type:text" json:"adaptation_goal"`
-	MustKeepEvents   string    `gorm:"column:must_keep_events;type:text" json:"must_keep_events"`
-	OptionalEvents   string    `gorm:"column:optional_events;type:text" json:"optional_events"`
-	OmittedEvents    string    `gorm:"column:omitted_events;type:text" json:"omitted_events"`
-	OpeningState     string    `gorm:"column:opening_state;type:text" json:"opening_state"`
-	EndingState      string    `gorm:"column:ending_state;type:text" json:"ending_state"`
-	Hook             string    `gorm:"type:text" json:"hook"`
-	SourceDigest     string    `gorm:"column:source_digest;size:64;index" json:"source_digest"`
-	SourceTracesJSON string    `gorm:"column:source_traces_json;type:text" json:"source_traces_json"`
-	Script           string    `gorm:"type:text" json:"script"`
-	ReviewJSON       string    `gorm:"column:review_json;type:text" json:"review_json"`
-	ContinuityStatus string    `gorm:"column:continuity_status;default:pending;index" json:"continuity_status"`
-	OverrideReason   string    `gorm:"column:override_reason;type:text" json:"override_reason"`
-	Status           string    `gorm:"default:draft;index" json:"status"`
-	Version          int       `gorm:"default:1" json:"version"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID                   uint      `gorm:"primaryKey" json:"id"`
+	ProjectID            uint      `gorm:"column:project_id;uniqueIndex:idx_adaptation_project_episode" json:"project_id"`
+	EpisodeN             int       `gorm:"column:episode_n;uniqueIndex:idx_adaptation_project_episode" json:"episode_n"`
+	BatchID              *uint     `gorm:"column:batch_id;index" json:"batch_id,omitempty"` // 所属批次（滚动批次模式）
+	Title                string    `json:"title"`
+	ChapterStart         int       `gorm:"column:chapter_start" json:"chapter_start"`
+	ChapterEnd           int       `gorm:"column:chapter_end" json:"chapter_end"`
+	SourceChapterIDs     string    `gorm:"column:source_chapter_ids;type:text" json:"source_chapter_ids"`
+	TargetDuration       float64   `gorm:"column:target_duration;default:180" json:"target_duration"`
+	TargetScenes         int       `gorm:"column:target_scenes;default:25" json:"target_scenes"`
+	AdaptationGoal       string    `gorm:"column:adaptation_goal;type:text" json:"adaptation_goal"`
+	MustKeepEvents       string    `gorm:"column:must_keep_events;type:text" json:"must_keep_events"`
+	OptionalEvents       string    `gorm:"column:optional_events;type:text" json:"optional_events"`
+	OmittedEvents        string    `gorm:"column:omitted_events;type:text" json:"omitted_events"`
+	OpeningState         string    `gorm:"column:opening_state;type:text" json:"opening_state"`
+	EndingState          string    `gorm:"column:ending_state;type:text" json:"ending_state"`
+	Hook                 string    `gorm:"type:text" json:"hook"`
+	SourceDigest         string    `gorm:"column:source_digest;size:64;index" json:"source_digest"`
+	SourceTracesJSON     string    `gorm:"column:source_traces_json;type:text" json:"source_traces_json"`
+	DialogueCoverageJSON string    `gorm:"column:dialogue_coverage_json;type:text" json:"dialogue_coverage_json"`
+	Script               string    `gorm:"type:text" json:"script"`
+	ReviewJSON           string    `gorm:"column:review_json;type:text" json:"review_json"`
+	ContinuityStatus     string    `gorm:"column:continuity_status;default:pending;index" json:"continuity_status"`
+	OverrideReason       string    `gorm:"column:override_reason;type:text" json:"override_reason"`
+	Status               string    `gorm:"default:draft;index" json:"status"`
+	Version              int       `gorm:"default:1" json:"version"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 // CharacterAliasCandidate never mutates Character records until explicitly confirmed.

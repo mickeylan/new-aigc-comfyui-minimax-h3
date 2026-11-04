@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,7 +32,65 @@ type EpisodeContext struct {
 	PreviousContent string            `json:"previous_episode_completed_content,omitempty"`
 	NextGoal        string            `json:"next_goal"`
 	ChapterAnalyses []json.RawMessage `json:"chapter_analyses"`
+	SourceChapters  []SourceChapter   `json:"source_chapters"`
+	DialogueLedger  []SourceDialogue  `json:"source_dialogue_ledger"`
 	Traces          []SourceTrace     `json:"source_traces"`
+}
+
+type SourceChapter struct {
+	ChapterID uint   `json:"chapter_id"`
+	ChapterNo int    `json:"chapter_no"`
+	Content   string `json:"content"`
+}
+
+type SourceDialogue struct {
+	ChapterID uint   `json:"chapter_id"`
+	ChapterNo int    `json:"chapter_no"`
+	Offset    int    `json:"offset"`
+	Speaker   string `json:"speaker"`
+	Text      string `json:"text"`
+}
+
+var (
+	sourceQuotePattern       = regexp.MustCompile(`[“\"]([^”\"\n]+)[”\"]`)
+	prefixAttributionPattern = regexp.MustCompile(`([\p{Han}A-Za-z0-9·]{1,12})(?:说道|说|道|问道|问|答道|答|喝道|怒道|冷声道|沉声道|笑道|开口道|开口说道)[，,:：\s]*$`)
+	postAttributionPattern   = regexp.MustCompile(`^\s*([\p{Han}A-Za-z0-9·]{1,12}?)(?:见此|眼睛[^，。]{0,12}|正气[^，。]{0,12}|略一迟疑|沉吟(?:道)?|面色一沉|说道|说|道|问道|问|答道|答|喝道|怒道)(?:[，,。！？!?]|$)`)
+)
+
+func extractSourceDialogues(ch models.Chapter, knownNames ...string) []SourceDialogue {
+	matches := sourceQuotePattern.FindAllStringSubmatchIndex(ch.Content, -1)
+	out := make([]SourceDialogue, 0, len(matches))
+	for _, quote := range matches {
+		speaker := ""
+		beforeStart := quote[0] - 64
+		if beforeStart < 0 {
+			beforeStart = 0
+		}
+		if m := prefixAttributionPattern.FindStringSubmatch(ch.Content[beforeStart:quote[0]]); len(m) > 1 {
+			speaker = m[1]
+		} else {
+			afterEnd := quote[1] + 64
+			if afterEnd > len(ch.Content) {
+				afterEnd = len(ch.Content)
+			}
+			after := ch.Content[quote[1]:afterEnd]
+			// Project character names and confirmed aliases are authoritative. Longest
+			// first prevents a short alias from stealing a canonical-name prefix.
+			for _, name := range knownNames {
+				if strings.HasPrefix(strings.TrimSpace(after), name) {
+					speaker = name
+					break
+				}
+			}
+			if speaker == "" {
+				if m := postAttributionPattern.FindStringSubmatch(after); len(m) > 1 {
+					speaker = m[1]
+				}
+			}
+		}
+		out = append(out, SourceDialogue{ChapterID: ch.ID, ChapterNo: ch.Order, Offset: quote[2], Speaker: speaker, Text: ch.Content[quote[2]:quote[3]]})
+	}
+	return out
 }
 
 type AdaptationService struct {
@@ -377,6 +436,16 @@ func (s *AdaptationService) BuildContext(projectID uint, episode, maxChars int) 
 		return nil, err
 	}
 	ctx := &EpisodeContext{AdaptationRules: bible.AdaptationRules, WorldRules: bible.WorldRules, MainPlot: bible.MainPlot, OpeningState: ep.OpeningState, NextGoal: ep.Hook}
+	knownNames, err := s.dialogueSpeakerNames(projectID)
+	if err != nil {
+		return nil, err
+	}
+	// The approved episode mapping is the authority: summaries and keyword snippets
+	// must never replace its source prose or its explicitly attributed dialogue.
+	for _, ch := range chapters {
+		ctx.SourceChapters = append(ctx.SourceChapters, SourceChapter{ChapterID: ch.ID, ChapterNo: ch.Order, Content: ch.Content})
+		ctx.DialogueLedger = append(ctx.DialogueLedger, extractSourceDialogues(ch, knownNames...)...)
+	}
 	var prev models.EpisodeAdaptation
 	if s.db.Where("project_id = ? AND episode_n = ?", projectID, episode-1).First(&prev).Error == nil {
 		ctx.PreviousEnding = prev.EndingState
@@ -413,6 +482,37 @@ func (s *AdaptationService) BuildContext(projectID uint, episode, maxChars int) 
 		}
 	}
 	return ctx, nil
+}
+
+func (s *AdaptationService) dialogueSpeakerNames(projectID uint) ([]string, error) {
+	var names []string
+	if s.db.Migrator().HasTable(&models.Character{}) {
+		var characters []models.Character
+		if err := s.db.Where("project_id = ?", projectID).Find(&characters).Error; err != nil {
+			return nil, err
+		}
+		for _, character := range characters {
+			if name := strings.TrimSpace(character.Name); name != "" {
+				names = append(names, name)
+			}
+		}
+	}
+	if s.db.Migrator().HasTable(&models.CharacterAliasCandidate{}) {
+		var aliases []models.CharacterAliasCandidate
+		if err := s.db.Where("project_id = ? AND status = ?", projectID, "confirmed").Find(&aliases).Error; err != nil {
+			return nil, err
+		}
+		for _, alias := range aliases {
+			if name := strings.TrimSpace(alias.Alias); name != "" {
+				names = append(names, name)
+			}
+			if name := strings.TrimSpace(alias.CanonicalName); name != "" {
+				names = append(names, name)
+			}
+		}
+	}
+	sort.SliceStable(names, func(i, j int) bool { return len(names[i]) > len(names[j]) })
+	return names, nil
 }
 
 func findSnippets(ch models.Chapter, keys []string, budget int) []SourceTrace {
@@ -467,6 +567,164 @@ func paragraphEnd(s string, n int) int {
 	return len(s)
 }
 
+type DialogueCoverage struct {
+	Total       int              `json:"total"`
+	Covered     int              `json:"covered"`
+	Missing     []SourceDialogue `json:"missing"`
+	OutOfOrder  int              `json:"out_of_order,omitempty"`
+	OrderPassed bool             `json:"order_passed"`
+}
+
+func dialogueKey(speaker, text string) string { return speaker + "\x00" + text }
+
+// dialogueCoverage is occurrence-aware and checks the source sequence, rather than
+// treating a count map as proof that order passed.
+func dialogueCoverage(raw string, ledger []SourceDialogue) DialogueCoverage {
+	coverage := DialogueCoverage{Total: len(ledger), Missing: []SourceDialogue{}, OrderPassed: true}
+	res, err := parseScriptJSON(raw)
+	if err != nil {
+		coverage.Missing = append(coverage.Missing, ledger...)
+		coverage.OrderPassed = len(ledger) == 0
+		return coverage
+	}
+	var actual []scriptDialogue
+	for _, scene := range res.Scenes {
+		actual = append(actual, scene.Dialogues...)
+	}
+	used := make([]bool, len(actual))
+	last := -1
+	for _, source := range ledger {
+		found := -1
+		for i := range actual {
+			// An unattributed source quote remains diagnostic data, but any actual
+			// speaker carrying the exact source text proves that occurrence survived.
+			if !used[i] && actual[i].Text == source.Text && (source.Speaker == "" || actual[i].Character == source.Speaker) {
+				found = i
+				break
+			}
+		}
+		if found < 0 {
+			coverage.Missing = append(coverage.Missing, source)
+			continue
+		}
+		used[found] = true
+		coverage.Covered++
+		if found < last {
+			coverage.OutOfOrder++
+			coverage.OrderPassed = false
+		} else {
+			last = found
+		}
+	}
+	return coverage
+}
+
+// restoreDialoguesAlreadyLocatedByContent only repairs a structured-dialogue omission
+// when the model itself put the exact source text in a scene. It never invents a scene
+// or guesses a narrative position.
+func restoreDialoguesAlreadyLocatedByContent(raw string, ledger []SourceDialogue) (string, error) {
+	res, err := parseScriptJSON(raw)
+	if err != nil {
+		return raw, nil
+	}
+	// Assign at most one ledger occurrence to each literal occurrence in scene
+	// content. This prevents one repeated content line from manufacturing several
+	// structured dialogues.
+	contentRemaining := make([]map[string]int, len(res.Scenes))
+	for i := range res.Scenes {
+		contentRemaining[i] = make(map[string]int)
+	}
+	type locatedDialogue struct {
+		source SourceDialogue
+		scene  int
+	}
+	located := make([]locatedDialogue, 0, len(ledger))
+	for _, source := range ledger {
+		for i := range res.Scenes {
+			remaining, seen := contentRemaining[i][source.Text]
+			if !seen {
+				remaining = strings.Count(res.Scenes[i].Content, source.Text)
+			}
+			if remaining > 0 {
+				contentRemaining[i][source.Text] = remaining - 1
+				located = append(located, locatedDialogue{source: source, scene: i})
+				break
+			}
+		}
+	}
+
+	usedExisting := make([][]bool, len(res.Scenes))
+	ordered := make([][]scriptDialogue, len(res.Scenes))
+	for i := range res.Scenes {
+		usedExisting[i] = make([]bool, len(res.Scenes[i].Dialogues))
+	}
+	for _, item := range located {
+		scene := &res.Scenes[item.scene]
+		found := -1
+		for i := range scene.Dialogues {
+			if !usedExisting[item.scene][i] && scene.Dialogues[i].Text == item.source.Text {
+				found = i
+				break
+			}
+		}
+		if found >= 0 {
+			dialogue := scene.Dialogues[found]
+			usedExisting[item.scene][found] = true
+			if item.source.Speaker != "" {
+				dialogue.Character = item.source.Speaker
+			}
+			ordered[item.scene] = append(ordered[item.scene], dialogue)
+		} else {
+			ordered[item.scene] = append(ordered[item.scene], scriptDialogue{Character: item.source.Speaker, SpeechType: "dialogue", Text: item.source.Text})
+		}
+	}
+	for i := range res.Scenes {
+		for j, dialogue := range res.Scenes[i].Dialogues {
+			if !usedExisting[i][j] {
+				ordered[i] = append(ordered[i], dialogue)
+			}
+		}
+		res.Scenes[i].Dialogues = ordered[i]
+	}
+	encoded, err := json.Marshal(res)
+	return string(encoded), err
+}
+
+func structuredDialoguesPreserved(original, candidate string) bool {
+	before, err := parseScriptJSON(original)
+	if err != nil {
+		return false
+	}
+	after, err := parseScriptJSON(candidate)
+	if err != nil {
+		return false
+	}
+	remaining := make(map[string]int)
+	for _, scene := range after.Scenes {
+		for _, dialogue := range scene.Dialogues {
+			remaining[dialogueKey(dialogue.Character, dialogue.Text)]++
+		}
+	}
+	for _, scene := range before.Scenes {
+		for _, dialogue := range scene.Dialogues {
+			key := dialogueKey(dialogue.Character, dialogue.Text)
+			if remaining[key] == 0 {
+				return false
+			}
+			remaining[key]--
+		}
+	}
+	return true
+}
+
+func improvedRevision(original, candidate string, ledger []SourceDialogue) bool {
+	if _, err := parseScriptJSON(candidate); err != nil || !structuredDialoguesPreserved(original, candidate) {
+		return false
+	}
+	before, after := dialogueCoverage(original, ledger), dialogueCoverage(candidate, ledger)
+	return after.Covered > before.Covered && after.Covered >= before.Covered
+}
+
 func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models.EpisodeAdaptation, error) {
 	var ep models.EpisodeAdaptation
 	if err := s.db.Where("project_id = ? AND episode_n = ?", projectID, episode).First(&ep).Error; err != nil {
@@ -486,7 +744,7 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 		return nil, err
 	}
 	input, _ := json.Marshal(ctx)
-	system := "只改编提供的上下文并输出JSON。previous_episode_completed_content是上一集已完成内容的排重权威；本集必须从其结尾后继续，严禁重演、改写后重复、重新介绍或回顾其中已经完成的事件、动作、信息揭示、对白与情感节点。"
+	system := "只改编提供的上下文并输出JSON。source_chapters是本集审核映射的原文权威，source_dialogue_ledger是按原文顺序提取、仅含明确说话人的对白清单：必须逐字、逐条、按序保留全部清单对白到scenes[].dialogues，不得因180秒或25镜头目标删减；时长和镜头数可为对白保真让步。不得发明原文未提供的咒语；原文仅写念念有词或没有说话时不得创作台词。previous_episode_completed_content是上一集已完成内容的排重权威；本集必须从其结尾后继续，严禁重演、改写后重复、重新介绍或回顾其中已经完成的事件、动作、信息揭示、对白与情感节点。"
 	raw, err := s.skills.ChatWithSkill(projectID, models.SkillStageEpisodeAdaptation, s.provider, system, "", map[string]string{"episode_n": strconv.Itoa(episode), "target_duration": fmt.Sprint(ep.TargetDuration), "target_scenes": strconv.Itoa(ep.TargetScenes), "episode_context": string(input)})
 	if err != nil {
 		return nil, err
@@ -495,12 +753,83 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 	if err != nil {
 		return nil, err
 	}
+	raw, err = restoreDialoguesAlreadyLocatedByContent(raw, ctx.DialogueLedger)
+	if err != nil {
+		return nil, err
+	}
+	coverage := dialogueCoverage(raw, ctx.DialogueLedger)
+	if len(coverage.Missing) > 0 {
+		revisionContext, _ := json.Marshal(struct {
+			SourceChapters          []SourceChapter  `json:"source_chapters"`
+			CurrentStructuredScript json.RawMessage  `json:"current_structured_script"`
+			MissingDialogues        []SourceDialogue `json:"missing_dialogues"`
+		}{ctx.SourceChapters, json.RawMessage(raw), coverage.Missing})
+		revisionSystem := "这是一次且仅一次的原文对白保真修订。输出完整JSON剧本；保持现有视觉字段和已完成剧情不变，把missing_dialogues逐条逐字放回current_structured_script中符合source_chapters剧情顺序的正确既有或必要场景。不得把对白机械追加到末尾，不得猜测空speaker，不得新增原文没有的对白。"
+		revised, revisionErr := s.skills.ChatWithSkill(projectID, models.SkillStageEpisodeAdaptation, s.provider, revisionSystem, "", map[string]string{
+			"episode_n": strconv.Itoa(episode), "target_duration": fmt.Sprint(ep.TargetDuration), "target_scenes": strconv.Itoa(ep.TargetScenes), "episode_context": string(revisionContext),
+		})
+		// Invalid, destructive, or non-improving revisions never replace paid output.
+		if revisionErr == nil && improvedRevision(raw, revised, ctx.DialogueLedger) {
+			raw = revised
+			raw, _ = restoreDialoguesAlreadyLocatedByContent(raw, ctx.DialogueLedger)
+		}
+		coverage = dialogueCoverage(raw, ctx.DialogueLedger)
+	}
 	var p models.Project
 	if err := s.db.First(&p, projectID).Error; err != nil {
 		return nil, err
 	}
-	_, _, err = s.projects.generateScriptCore(&p, episode, raw, resScriptHandler(true))
+	// The generic renderer may split long dialogue text into video-sized chunks.
+	// Source-ledger diagnostics and storage, however, require each source occurrence
+	// to remain an exact, auditable record. Render scene structure without dialogue,
+	// then persist the authoritative structured dialogue unchanged below.
+	structured, parseErr := parseScriptJSON(raw)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	rendered := *structured
+	rendered.Scenes = append([]scriptScene(nil), structured.Scenes...)
+	for i := range rendered.Scenes {
+		rendered.Scenes[i].Dialogues = nil
+	}
+	renderRaw, marshalErr := json.Marshal(&rendered)
+	if marshalErr != nil {
+		return nil, marshalErr
+	}
+	_, _, err = s.projects.generateScriptCore(&p, episode, string(renderRaw), resScriptHandler(true))
 	if err != nil {
+		return nil, err
+	}
+	var storedScenes []models.Scene
+	if err := s.db.Where("project_id = ? AND episode_n = ? AND archived = ?", projectID, episode, false).Order("`order`").Find(&storedScenes).Error; err != nil {
+		return nil, err
+	}
+	storedSceneIDs := make([]uint, len(storedScenes))
+	for i := range storedScenes {
+		storedSceneIDs[i] = storedScenes[i].ID
+	}
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if len(storedSceneIDs) > 0 {
+			if err := tx.Where("project_id = ? AND scene_id IN ?", projectID, storedSceneIDs).Delete(&models.Dialogue{}).Error; err != nil {
+				return err
+			}
+		}
+		for i, scene := range structured.Scenes {
+			if i >= len(storedScenes) {
+				break
+			}
+			for j, dialogue := range scene.Dialogues {
+				speechType, character := normalizeScriptSpeech(dialogue.SpeechType, dialogue.Character)
+				if speechType == "" || strings.TrimSpace(dialogue.Text) == "" {
+					continue
+				}
+				if err := tx.Create(&models.Dialogue{SceneID: storedScenes[i].ID, ProjectID: projectID, Order: j + 1, Character: character, SpeechType: speechType, Text: strings.TrimSpace(dialogue.Text), Status: "pending"}).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	var parsed struct {
@@ -511,7 +840,8 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 	_ = parseJSONObject(raw, &parsed)
 	state := func(v any) string { b, _ := json.Marshal(v); return string(b) }
 	traces, _ := json.Marshal(ctx.Traces)
-	ep.Script, ep.OpeningState, ep.EndingState, ep.SourceTracesJSON, ep.Status, ep.ContinuityStatus = parsed.Script, state(parsed.OpeningState), state(parsed.EndingState), string(traces), "scripted", "pending"
+	coverageJSON, _ := json.Marshal(coverage)
+	ep.Script, ep.OpeningState, ep.EndingState, ep.SourceTracesJSON, ep.DialogueCoverageJSON, ep.Status, ep.ContinuityStatus = parsed.Script, state(parsed.OpeningState), state(parsed.EndingState), string(traces), string(coverageJSON), "scripted", "pending"
 	if err := s.db.Save(&ep).Error; err != nil {
 		return nil, err
 	}

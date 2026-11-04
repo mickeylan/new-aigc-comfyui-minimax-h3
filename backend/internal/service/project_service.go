@@ -7391,6 +7391,16 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	}
 	log.Printf("[video-submit] project=%d scene=%d template=%s files=[%s]\nprompt:\n%s", sc.ProjectID, sc.ID, tplCode, strings.Join(videoFileNames, ", "), promptText)
 	seed := randomGenerationSeed()
+	var combatLoras []CombatLora
+	if tplCode == combatTemplateCode {
+		resolved, resolveErr := resolveCombatLorasDB(s.db, p.ID, sc.ID)
+		if resolveErr != nil {
+			s.failScene(sc, "读取武戏 LoRA 配置失败: "+resolveErr.Error())
+			return resolveErr
+		}
+		// A non-nil empty slice is intentional: custom empty means all LoRAs off.
+		combatLoras = cloneCombatLoras(resolved.Config.Loras)
+	}
 	task, err := s.tasks.CreateTask(CreateTaskReq{
 		TemplateID: tpl.ID,
 		Prompt:     promptText,
@@ -7404,6 +7414,7 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		},
 		Files:             videoFiles,
 		ParentCandidateID: sc.VideoCandidateParentID,
+		CombatLoras:       combatLoras,
 	})
 	if err != nil {
 		s.failScene(sc, "创建视频任务失败: "+err.Error())

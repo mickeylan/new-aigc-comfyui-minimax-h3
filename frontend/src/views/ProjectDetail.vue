@@ -17,6 +17,7 @@
       <div class="head-actions">
         <span class="badge" :class="projectBadgeClass">{{ projectStatusText }}</span>
         <button class="btn btn-ghost btn-sm" :disabled="busy" @click="openEditProject">✎ 编辑信息</button>
+        <button class="btn btn-secondary btn-sm" :disabled="combatLoraBusy" @click="openCombatLoras('project')">武戏 LoRA 默认</button>
         <router-link v-if="project.source_type === 'novel'" :to="`/projects/${id()}/novel`" class="btn btn-secondary btn-sm">📚 小说章节</router-link>
         <router-link v-if="isRollingPlanningProject" :to="`/projects/${id()}/adaptation`" class="btn btn-secondary btn-sm">🧭 滚动规划</router-link>
         <button v-if="!isRollingPlanningProject" class="btn btn-secondary btn-sm" :disabled="busy || generatingPlan || !project.synopsis" @click="generatePlan">
@@ -448,6 +449,7 @@
               <span class="badge" :class="sceneBadgeClass(sc)">{{ sceneStatusText(sc) }}</span>
             </div>
             <button class="btn btn-sm btn-secondary scene-director-entry" title="在当前页完成扩写、导演拆镜、参考图和生成准备" @click="openEditScene(sc, 'scene')">导演工作台</button>
+            <button v-if="sceneSupportsCombatLoras(sc)" class="btn btn-sm btn-ghost" :disabled="combatLoraBusy" @click="openCombatLoras('scene', sc)">武戏 LoRA</button>
           </div>
 
           <div class="scene-preview">
@@ -1045,6 +1047,28 @@
       </div>
     </div>
 
+    <div v-if="combatLoraTarget" class="modal-mask" @click.self="closeCombatLoras">
+      <div class="modal card combat-lora-modal">
+        <h2>{{ combatLoraTarget.kind === 'project' ? '武戏 LoRA 默认' : `场景 ${combatLoraTarget.scene.order} · 武戏 LoRA` }}</h2>
+        <p class="field-hint">只影响下一次视频生成，已生成媒体保留。旧项目未配置时沿用工作流模板默认值。</p>
+        <div v-if="combatLoraBusy && !combatLoraLoaded" class="field-hint">LoRA 配置加载中…</div>
+        <template v-else>
+          <div class="combat-lora-modes"><label><input v-model="combatLoraMode" type="radio" value="inherit"> {{ combatLoraTarget.kind === 'project' ? '工作流默认' : '继承项目默认' }}</label><label><input v-model="combatLoraMode" type="radio" value="custom"> 自定义</label></div>
+          <div v-if="combatLoraMode === 'custom'" class="combat-lora-slots">
+            <div v-for="(entry, index) in combatLoraEntries" :key="entry.key" class="combat-lora-slot">
+              <input v-model="entry.on" type="checkbox" aria-label="启用 LoRA"><input v-model.trim="entry.lora" class="input" type="text" list="combat-lora-files" placeholder="相对路径/模型.safetensors" aria-label="LoRA 文件名"><input v-model.number="entry.strength" class="input" type="number" min="-100" max="100" step="0.1" aria-label="LoRA 权重">
+              <button class="btn btn-ghost btn-sm" :disabled="index === 0" aria-label="上移" @click="moveCombatLora(index, -1)">↑</button><button class="btn btn-ghost btn-sm" :disabled="index === combatLoraEntries.length - 1" aria-label="下移" @click="moveCombatLora(index, 1)">↓</button><button class="btn btn-ghost btn-sm" aria-label="删除 LoRA" @click="removeCombatLora(index)">删除</button>
+            </div>
+            <datalist id="combat-lora-files"><option v-for="name in combatLoraFiles" :key="name" :value="name"></option></datalist>
+            <button class="btn btn-secondary btn-sm" @click="addCombatLora">+ 添加新 LoRA</button>
+            <p class="field-hint">rgthree 必须由 worker 安装，且所填模型文件必须已存在于 worker。</p>
+          </div>
+        </template>
+        <div v-if="combatLoraError" class="notice error-notice">{{ combatLoraError }}</div>
+        <div class="modal-actions"><button class="btn btn-ghost" :disabled="combatLoraBusy" @click="closeCombatLoras">取消</button><button class="btn" :disabled="combatLoraBusy || !combatLoraLoaded" @click="saveCombatLoras">{{ combatLoraBusy ? (combatLoraLoaded ? '保存中…' : '加载中…') : '保存' }}</button></div>
+      </div>
+    </div>
+
     <!-- 视频分镜连续性弹窗 -->
     <div v-if="continuityScene" class="modal-mask" @click.self="closeContinuity">
       <div class="modal card continuity-modal">
@@ -1318,6 +1342,14 @@ const blockingBusy = ref(false)
 const blockingError = ref('')
 const blockingPromptPreview = reactive({ kind: '', prompt: '', blockingHash: '' })
 const savingProject = ref(false)
+const combatLoraTarget = ref(null)
+const combatLoraBusy = ref(false)
+const combatLoraLoaded = ref(false)
+const combatLoraError = ref('')
+const combatLoraMode = ref('inherit')
+const combatLoraEntries = ref([])
+const combatLoraFiles = ref([])
+let combatLoraEntryKey = 0
 const sceneError = ref('')
 const projectError = ref('')
 const loadError = ref('')
@@ -1346,6 +1378,65 @@ let pollTimer = null
 let loadRequestEpoch = 0
 
 const id = () => route.params.id
+
+function parseCombatLoraConfig(raw) {
+  if (!raw) return null
+  try { const value = typeof raw === 'string' ? JSON.parse(raw) : raw; return value && typeof value === 'object' ? value : null } catch { return null }
+}
+function cloneCombatLoraEntries(config, files = []) {
+  combatLoraEntries.value = (config?.loras || []).map(entry => ({ key: ++combatLoraEntryKey, on: !!entry.on, lora: String(entry.lora || ''), strength: Number(entry.strength) }))
+  combatLoraFiles.value = Array.isArray(files) ? [...files] : []
+}
+function addCombatLora() { combatLoraEntries.value.push({ key: ++combatLoraEntryKey, on: true, lora: '', strength: 1 }) }
+function removeCombatLora(index) { combatLoraEntries.value.splice(index, 1) }
+function moveCombatLora(index, offset) {
+  const next = index + offset
+  if (next < 0 || next >= combatLoraEntries.value.length) return
+  const [entry] = combatLoraEntries.value.splice(index, 1)
+  combatLoraEntries.value.splice(next, 0, entry)
+}
+function sceneSupportsCombatLoras(sc) { return ['武戏', '文武混合'].includes(sc?.scene_mode) || sc?.video_template === 'minimax_h3_ref2v_combat' }
+async function openCombatLoras(kind, scene = null) {
+  if (combatLoraBusy.value) return
+  const projectId = Number(id()), sceneId = Number(scene?.id || 0)
+  const rawConfig = parseCombatLoraConfig(kind === 'project' ? project.value?.combat_loras_json : scene?.combat_loras_json)
+  const target = { kind, scene, projectId, sceneId }
+  combatLoraTarget.value = target
+  combatLoraMode.value = rawConfig?.mode === 'custom' ? 'custom' : 'inherit'
+  combatLoraError.value = ''
+  combatLoraLoaded.value = false
+  combatLoraBusy.value = true
+  try {
+    const response = kind === 'project' ? await api.getProjectCombatLoras(projectId) : await api.getSceneCombatLoras(projectId, sceneId)
+    if (combatLoraTarget.value !== target || Number(id()) !== projectId) return
+    cloneCombatLoraEntries(response.data.config, response.data.files)
+    combatLoraLoaded.value = true
+  } catch (error) {
+    if (combatLoraTarget.value === target && Number(id()) === projectId) combatLoraError.value = error.response?.data?.error || error.message || 'LoRA 配置加载失败'
+  } finally {
+    if (combatLoraTarget.value === target) combatLoraBusy.value = false
+  }
+}
+function closeCombatLoras() { if (!combatLoraBusy.value) combatLoraTarget.value = null }
+async function saveCombatLoras() {
+  const target = combatLoraTarget.value
+  if (!target || combatLoraBusy.value || !combatLoraLoaded.value) return
+  const projectId = target.projectId, sceneId = target.sceneId
+  const loras = combatLoraEntries.value.map(entry => ({ on: !!entry.on, lora: entry.lora.trim(), strength: Number(entry.strength) }))
+  const payload = combatLoraMode.value === 'custom' ? { mode: 'custom', loras } : (target.kind === 'project' ? {} : { mode: 'inherit', loras: [] })
+  if (payload.loras?.some(entry => !entry.lora || !Number.isFinite(entry.strength) || entry.strength < -100 || entry.strength > 100)) { combatLoraError.value = '请填写 LoRA 相对文件名，权重必须在 -100 到 100 之间'; return }
+  combatLoraBusy.value = true
+  try {
+    const response = target.kind === 'project' ? await api.updateProjectCombatLoras(projectId, payload) : await api.updateSceneCombatLoras(projectId, sceneId, payload)
+    const stored = target.kind === 'project' && combatLoraMode.value === 'inherit' ? '' : JSON.stringify(payload)
+    ++loadRequestEpoch
+    if (target.kind === 'project' && Number(id()) === projectId && project.value) project.value.combat_loras_json = stored
+    if (target.kind === 'scene' && Number(id()) === projectId) { const row = scenes.value.find(item => Number(item.id) === sceneId); if (row) row.combat_loras_json = stored }
+    if (combatLoraTarget.value === target) combatLoraTarget.value = null
+    return response.data
+  } catch (error) { combatLoraError.value = error.response?.data?.error || error.message || '保存失败' }
+  finally { combatLoraBusy.value = false }
+}
 
 const pendingScenes = computed(() => scenes.value.filter(s => s.status === 'pending').length)
 const imageReadyScenes = computed(() => scenes.value.filter(s => s.status === 'image_ready').length)
@@ -3629,6 +3720,7 @@ onBeforeUnmount(() => {
 .viewer-foot .btn-close { min-width: 68px; }
 .modal { width: min(520px, calc(100vw - 32px)); padding: 28px; animation: pop 0.25s ease; max-height: 90vh; overflow-y: auto; }
 .modal h2 { margin: 0 0 18px; font-size: 19px; }
+.combat-lora-modal{width:min(820px,calc(100vw - 32px))}.combat-lora-modes{display:flex;gap:20px;margin:16px 0}.combat-lora-modes label{display:flex;align-items:center;gap:7px}.combat-lora-slots{display:grid;gap:10px}.combat-lora-slot{display:grid;grid-template-columns:auto minmax(180px,1fr) 110px auto auto auto;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--border)}
 .field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
 .field + .field { margin-top: 14px; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }

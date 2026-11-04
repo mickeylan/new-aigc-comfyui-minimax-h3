@@ -12,6 +12,14 @@ import (
 
 func TestGenerateSceneVideoRegenerationPersistsFreshSeedWithoutChangingReviewedInputsOrMedia(t *testing.T) {
 	f := newTranslationHTTPFixture(t)
+	// This fixture uses SQLite :memory:, which is private to each connection.
+	// GenerateSceneVideo starts an executor goroutine; keep it on the same
+	// connection as setup rather than opening an unrelated empty database.
+	pool, err := f.db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.SetMaxOpenConns(1)
 	configureDefaultRef2VFixture(t, f)
 	if err := f.db.AutoMigrate(&models.Task{}, &models.Setting{}, &models.Instance{}); err != nil {
 		t.Fatal(err)

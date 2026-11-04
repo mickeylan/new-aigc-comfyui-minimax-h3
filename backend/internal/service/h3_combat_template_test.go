@@ -16,7 +16,8 @@ func TestCombatH3TemplateUsesDedicatedLoraChain(t *testing.T) {
 	var tpl struct {
 		Code     string `json:"code"`
 		Workflow map[string]struct {
-			Inputs map[string]any `json:"inputs"`
+			Inputs    map[string]any `json:"inputs"`
+			ClassType string         `json:"class_type"`
 		} `json:"workflow"`
 	}
 	if err := json.Unmarshal(data, &tpl); err != nil {
@@ -28,32 +29,41 @@ func TestCombatH3TemplateUsesDedicatedLoraChain(t *testing.T) {
 	if got := tpl.Workflow["127"].Inputs["unet_name"]; got != `minimax-h3\DasiwaMinimaxH3_dasiwaHybridV4_int8.safetensors` {
 		t.Fatalf("combat UNET=%q", got)
 	}
+	loader := tpl.Workflow["156"]
+	if loader.ClassType != combatPowerClass {
+		t.Fatalf("loader=%s", loader.ClassType)
+	}
+	parent, ok := loader.Inputs["model"].([]any)
+	if !ok || len(parent) != 2 || parent[0] != "127" {
+		t.Fatal("Power loader lost model input")
+	}
 	checks := []struct {
-		node, name string
-		strength   float64
-		parent     string
+		key, name string
+		weight    float64
 	}{
-		{"157", `minimax-h3\H3_Combat_V2.safetensors`, 0.7, "156"},
-		{"158", `minimax-h3\Motion_Repair_V2.safetensors`, 0.5, "157"},
-		{"159", `minimax-h3\H3_speed_slider_1.1.safetensors`, 3, "158"},
+		{"lora_1", `minimax-h3\minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors`, .7},
+		{"lora_2", `minimax-h3\H3_Combat_V2.safetensors`, .7},
+		{"lora_3", `minimax-h3\Motion_Repair_V2.safetensors`, .5},
+		{"lora_4", `minimax-h3\H3_speed_slider_1.1.safetensors`, 3},
 	}
 	for _, check := range checks {
-		inputs := tpl.Workflow[check.node].Inputs
-		if inputs["lora_name"] != check.name || inputs["strength_model"] != check.strength {
-			t.Fatalf("node %s inputs=%+v", check.node, inputs)
+		entry, ok := loader.Inputs[check.key].(map[string]any)
+		if !ok || entry["lora"] != check.name || entry["strength"] != check.weight || entry["on"] != true {
+			t.Fatalf("Power default %s=%v", check.key, entry)
 		}
-		parent, ok := inputs["model"].([]any)
-		if !ok || len(parent) != 2 || parent[0] != check.parent {
-			t.Fatalf("node %s parent=%+v", check.node, inputs["model"])
+	}
+	for _, id := range []string{"157", "158", "159"} {
+		if _, exists := tpl.Workflow[id]; exists {
+			t.Fatalf("legacy loader %s retained", id)
 		}
 	}
 	connected := false
 	for nodeID, node := range tpl.Workflow {
-		if nodeID == "159" {
+		if nodeID == "156" {
 			continue
 		}
 		parent, ok := node.Inputs["model"].([]any)
-		if ok && len(parent) == 2 && parent[0] == "159" {
+		if ok && len(parent) == 2 && parent[0] == "156" {
 			connected = true
 			break
 		}

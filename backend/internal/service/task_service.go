@@ -828,6 +828,7 @@ type CreateTaskReq struct {
 	Seed              *int64                `json:"seed,omitempty"`
 	ParentCandidateID *uint                 `json:"-"`
 	AffinityKey       string                `json:"affinity_key,omitempty"`
+	CombatLoras       []CombatLora          `json:"-"`
 }
 
 type FileMeta struct {
@@ -902,6 +903,32 @@ func (s *TaskService) CreateTask(req CreateTaskReq) (*models.Task, error) {
 	}
 	params["seed"] = normalizeComfyGenerationSeed(params["seed"])
 
+	var workflowJSON []byte
+	// Only combat tasks need an immutable derived graph. Every other template keeps the
+	// legacy create/execute rendering path unchanged.
+	if tpl.Code == combatTemplateCode {
+		workflow, err := s.RenderWorkflow(&tpl, params)
+		if err != nil {
+			return nil, fmt.Errorf("工作流渲染失败: %w", err)
+		}
+		actualLoras := req.CombatLoras
+		if actualLoras == nil {
+			actualLoras, err = powerLorasFromWorkflow(workflow)
+			if err != nil {
+				return nil, err
+			}
+		} else if err := validateCombatConfig(CombatLoraConfig{Mode: "custom", Loras: actualLoras}, false); err != nil {
+			return nil, err
+		}
+		params["combat_loras"] = snapshotCombatLoras(actualLoras)
+		// Always normalize the owned runtime graph. This also converts known legacy
+		// four-node runtime templates without persisting changes outside the task.
+		convertLegacyCombatWorkflow(workflow)
+		if err := deriveCombatWorkflow(workflow, actualLoras); err != nil {
+			return nil, err
+		}
+		workflowJSON, _ = json.Marshal(workflow)
+	}
 	paramsJSON, _ := json.Marshal(params)
 	inputsJSON, _ := json.Marshal(req.Files)
 	task := models.Task{
@@ -911,6 +938,7 @@ func (s *TaskService) CreateTask(req CreateTaskReq) (*models.Task, error) {
 		Prompt:            req.Prompt,
 		ParamsJSON:        string(paramsJSON),
 		InputsJSON:        string(inputsJSON),
+		WorkflowJSON:      string(workflowJSON),
 		ParentCandidateID: req.ParentCandidateID,
 		AffinityKey:       strings.TrimSpace(req.AffinityKey),
 		Status:            "pending",
@@ -947,6 +975,7 @@ func (s *TaskService) CloneTaskSnapshot(sourceTaskID string, parentCandidateID *
 	clone := models.Task{
 		TaskID: newID, TemplateID: source.TemplateID, TemplateName: source.TemplateName,
 		Prompt: source.Prompt, ParamsJSON: string(paramsJSON), InputsJSON: source.InputsJSON,
+		WorkflowJSON:      cloneCombatWorkflowSnapshot(source.WorkflowJSON, source.TaskID, newID),
 		ParentCandidateID: parentCandidateID, AffinityKey: source.AffinityKey, Status: "pending",
 	}
 	if err := s.db.Create(&clone).Error; err != nil {
@@ -1059,8 +1088,15 @@ func (s *TaskService) Execute(taskID string) error {
 		return errVideoConcurrencyLimit
 	}
 
-	// 渲染工作流
-	workflow, err := s.RenderWorkflow(&tpl, params)
+	// Only combat tasks execute their immutable derived graph. All other templates retain
+	// the legacy render-at-execute behavior.
+	var workflow map[string]any
+	var err error
+	if tpl.Code == combatTemplateCode && strings.TrimSpace(task.WorkflowJSON) != "" {
+		err = json.Unmarshal([]byte(task.WorkflowJSON), &workflow)
+	} else {
+		workflow, err = s.RenderWorkflow(&tpl, params)
+	}
 	if err != nil {
 		s.failTask(&task, "工作流渲染失败: "+err.Error())
 		return err

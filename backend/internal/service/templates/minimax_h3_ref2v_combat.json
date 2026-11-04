@@ -214,16 +214,18 @@
     },
     "156": {
       "inputs": {
-        "lora_name": "minimax-h3\\minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
-        "strength_model": 0.7,
         "model": [
           "127",
           0
-        ]
+        ],
+        "lora_1": {"on": true, "lora": "minimax-h3\\minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors", "strength": 0.7},
+        "lora_2": {"on": true, "lora": "minimax-h3\\H3_Combat_V2.safetensors", "strength": 0.7},
+        "lora_3": {"on": true, "lora": "minimax-h3\\Motion_Repair_V2.safetensors", "strength": 0.5},
+        "lora_4": {"on": true, "lora": "minimax-h3\\H3_speed_slider_1.1.safetensors", "strength": 3.0}
       },
-      "class_type": "LoraLoaderModelOnly",
+      "class_type": "Power Lora Loader (rgthree)",
       "_meta": {
-        "title": "加速LoRA"
+        "title": "Power Lora Loader (rgthree)"
       }
     },
     "207": {
@@ -269,7 +271,7 @@
       "inputs": {
         "attention": "comfy kitchen attention",
         "model": [
-          "159",
+          "156",
           0
         ]
       },
@@ -543,48 +545,6 @@
       "class_type": "VHS_VideoCombine",
       "_meta": {
         "title": "Video Combine 🎥🅥🅗🅢"
-      }
-    },
-    "157": {
-      "inputs": {
-        "lora_name": "minimax-h3\\H3_Combat_V2.safetensors",
-        "strength_model": 0.7,
-        "model": [
-          "156",
-          0
-        ]
-      },
-      "class_type": "LoraLoaderModelOnly",
-      "_meta": {
-        "title": "????LoRA"
-      }
-    },
-    "158": {
-      "inputs": {
-        "lora_name": "minimax-h3\\Motion_Repair_V2.safetensors",
-        "strength_model": 0.5,
-        "model": [
-          "157",
-          0
-        ]
-      },
-      "class_type": "LoraLoaderModelOnly",
-      "_meta": {
-        "title": "????LoRA"
-      }
-    },
-    "159": {
-      "inputs": {
-        "lora_name": "minimax-h3\\H3_speed_slider_1.1.safetensors",
-        "strength_model": 3.0,
-        "model": [
-          "158",
-          0
-        ]
-      },
-      "class_type": "LoraLoaderModelOnly",
-      "_meta": {
-        "title": "????LoRA"
       }
     }
   }
