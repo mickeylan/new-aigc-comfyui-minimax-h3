@@ -125,7 +125,7 @@ func (s *AssetReconciliationService) Apply(projectID uint, decisions []AssetReco
 						return err
 					}
 				}
-				if err := rewriteSceneNameReferences(tx, projectID, d.EntityType, d.ProposedName, targetName); err != nil {
+				if err := rewriteSceneNameReferences(tx, projectID, d.EntityType, d.ProposedName, targetName, false); err != nil {
 					return err
 				}
 			default:
@@ -495,7 +495,7 @@ func reconciliationTargetName(tx *gorm.DB, projectID uint, entityType string, ta
 	}
 }
 
-func rewriteSceneNameReferences(tx *gorm.DB, projectID uint, entityType, from, to string) error {
+func rewriteSceneNameReferences(tx *gorm.DB, projectID uint, entityType, from, to string, renameOnly bool) error {
 	var scenes []models.Scene
 	if err := tx.Where("project_id = ?", projectID).Find(&scenes).Error; err != nil {
 		return err
@@ -522,8 +522,25 @@ func rewriteSceneNameReferences(tx *gorm.DB, projectID uint, entityType, from, t
 				updates["props"] = replaced
 			}
 		}
+		if entityType == "character" && strings.TrimSpace(sc.ReferenceImagesJSON) != "" {
+			if refs, ok := parseSceneReferences(sc); ok {
+				changed := false
+				for i := range refs {
+					if normalizeCanonName(refs[i].BindCharacter) == normalizeCanonName(from) {
+						refs[i].BindCharacter, changed = to, true
+					}
+				}
+				if changed {
+					encoded, err := json.Marshal(refs)
+					if err != nil {
+						return err
+					}
+					updates["reference_images_json"] = string(encoded)
+				}
+			}
+		}
 		if len(updates) > 0 {
-			// Reconciliation changes prompt inputs, not reviewed production artifacts.
+			// Name changes preserve approved English prompts verbatim; stale is advisory only.
 			updates["prompt_stale"] = true
 			if err := tx.Model(sc).Updates(updates).Error; err != nil {
 				return err
@@ -559,9 +576,11 @@ func rewriteSceneNameReferences(tx *gorm.DB, projectID uint, entityType, from, t
 		}
 		for _, dialogue := range dialogues {
 			if normalizeCanonName(dialogue.Character) == normalizeCanonName(from) {
-				if err := tx.Model(&dialogue).Updates(map[string]any{
-					"character": to, "audio_stale": true, "audio_stale_reason": "角色资产对账已更新说话者身份", "status": "pending",
-				}).Error; err != nil {
+				updates := map[string]any{"character": to}
+				if !renameOnly {
+					updates["audio_stale"], updates["audio_stale_reason"], updates["status"] = true, "角色资产对账已更新说话者身份", "pending"
+				}
+				if err := tx.Model(&dialogue).Updates(updates).Error; err != nil {
 					return err
 				}
 			}

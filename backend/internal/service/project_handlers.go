@@ -1407,6 +1407,30 @@ func (s *Service) HandleUpdateCharacter(c *gin.Context) {
 	c.JSON(200, updated)
 }
 
+func (s *Service) HandleRenameCharacter(c *gin.Context) {
+	ch, ok := s.loadCharacter(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	updated, err := s.Projects.RenameCharacter(ch.ProjectID, ch.ID, req.Name)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, ErrRenameConflict) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, updated)
+}
+
 func (s *Service) HandleDeleteCharacter(c *gin.Context) {
 	ch, ok := s.loadCharacter(c)
 	if !ok {
@@ -1717,6 +1741,30 @@ func (s *Service) HandleUpdateAsset(c *gin.Context) {
 	var updated models.Asset
 	s.DB.First(&updated, a.ID)
 	c.JSON(200, updated)
+}
+
+func (s *Service) HandleRenameAsset(c *gin.Context) {
+	a, ok := s.loadAsset(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	updated, err := s.Projects.RenameAsset(a.ProjectID, a.ID, a.Kind, req.Name)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, ErrRenameConflict) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, updated)
 }
 
 func (s *Service) HandleDeleteAsset(c *gin.Context) {

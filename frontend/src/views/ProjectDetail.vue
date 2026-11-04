@@ -175,6 +175,8 @@
             <div class="char-body">
               <div class="char-name-row">
                 <span class="char-name">{{ ch.name }}</span>
+                <button type="button" class="btn btn-sm btn-ghost" @click="openAssetRename('character', ch)">改名</button>
+                <button type="button" class="btn btn-sm btn-danger" :disabled="isAssetDeleting('character', ch.id)" @click="removeCharacter(ch)">{{ isAssetDeleting('character', ch.id) ? '删除中…' : '删除' }}</button>
                 <span v-if="ch.role" class="char-role">{{ ch.role }}</span>
                 <span v-if="ch.source === 'auto'" class="tag tag-gray">方案抽取</span>
               </div>
@@ -234,7 +236,6 @@
                 <button class="btn btn-sm btn-ghost" @click="openVariants('character_portrait', ch.id, ch.name + ' · 标准像')">标准像版本</button>
                 <button class="btn btn-sm btn-ghost" @click="openVariants('character_sheet', ch.id, ch.name + ' · 四视图')">四视图版本</button>
                 <button class="btn btn-sm btn-ghost" @click="openEditCharacter(ch)">编辑角色档案</button>
-                <button class="btn btn-sm btn-danger" @click="removeCharacter(ch)">删除</button>
               </div>
               <div class="char-actions">
                 <button class="btn btn-sm btn-ghost" :disabled="busy || ch._voiceUploading" @click="uploadVoice(ch)"
@@ -267,6 +268,8 @@
             <div class="char-body">
               <div class="char-name-row">
                 <span class="char-name">{{ a.name }}</span>
+                <button type="button" class="btn btn-sm btn-ghost" @click="openAssetRename('asset', a)">改名</button>
+                <button type="button" class="btn btn-sm btn-danger" :disabled="isAssetDeleting(a.kind, a.id)" @click="removeAsset(a)">{{ isAssetDeleting(a.kind, a.id) ? '删除中…' : '删除' }}</button>
                 <span v-if="a.source === 'auto'" class="tag tag-gray">方案抽取</span><span v-if="a.kind === 'location' && a.visual_type === 'megastructure'" class="tag badge-mega">巨构 · {{ assetMegaLabel(a.mega_type) }}</span>
               </div>
               <p v-if="a.description" class="char-trait">📝 {{ a.description }}</p>
@@ -290,7 +293,6 @@
                 <button class="btn btn-sm btn-ghost" @click="openVariants('asset_image', a.id, a.name + ' · 参考图')">参考图版本</button>
                 <button v-if="a.kind === 'prop'" class="btn btn-sm btn-ghost" @click="openVariants('asset_sheet', a.id, a.name + ' · 四视图')">四视图版本</button>
                 <button class="btn btn-sm btn-ghost" @click="openEditAsset(a)">编辑</button>
-                <button class="btn btn-sm btn-danger" @click="removeAsset(a)">删除</button>
               </div>
             </div>
           </div>
@@ -591,6 +593,23 @@
           </nav>
         </div>
     </section>
+
+    <!-- 独立改名弹窗：只调用 rename PATCH，不复用会更新媒体字段的旧编辑表单 -->
+    <div v-if="assetRenameTarget" class="modal-mask" @click.self="closeAssetRename">
+      <form class="modal card" @submit.prevent="saveAssetRename">
+        <h2>{{ assetRenameTarget.kind === 'character' ? '角色' : (assetRenameTarget.assetKind === 'location' ? '场景' : '道具') }}改名</h2>
+        <div class="field">
+          <label for="asset-rename-name">新名称</label>
+          <input id="asset-rename-name" v-model="assetRenameName" class="input" maxlength="100" autofocus />
+          <span class="field-hint">去除首尾空格后最多 100 个字符</span>
+        </div>
+        <div v-if="assetRenameError" class="notice error-notice" role="alert">{{ assetRenameError }}</div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" :disabled="assetRenameBusy" @click="closeAssetRename">取消</button>
+          <button type="submit" class="btn" :disabled="assetRenameBusy || !assetRenameName.trim()">{{ assetRenameBusy ? '保存中…' : '保存' }}</button>
+        </div>
+      </form>
+    </div>
 
     <!-- 场景编辑弹窗 -->
     <div v-if="editingScene" class="modal-mask scene-director-mask" @click.self="closeSceneWorkspace">
@@ -1161,6 +1180,20 @@ const assets = ref([])
 const assetCounts = ref({})
 const editingAsset = ref(null)
 const assetError = ref('')
+const assetRenameTarget = ref(null)
+const assetRenameName = ref('')
+const assetRenameError = ref('')
+const assetRenameBusy = ref(false)
+const deletingAssets = ref(new Set())
+const assetDeleteKey = (kind, id) => `${kind}:${id}`
+const isAssetDeleting = (kind, id) => deletingAssets.value.has(assetDeleteKey(kind, id))
+function setAssetDeleting(kind, id, deleting) {
+  const next = new Set(deletingAssets.value)
+  if (deleting) next.add(assetDeleteKey(kind, id))
+  else next.delete(assetDeleteKey(kind, id))
+  deletingAssets.value = next
+}
+let assetRenameEpoch = 0
 const assetForm = reactive({ name: '', description: '', visual_type: 'normal', mega_type: 'architecture', image_engine: 'krea2', visible_text: '' })
 watch(() => assetForm.visible_text, value => { if (String(value || '').trim() && qwenAssetTemplateReady.value) assetForm.image_engine = 'qwen_image_2_1' })
 const redesigningAsset = ref(false)
@@ -1832,6 +1865,56 @@ async function deleteMergeRecord(row){
   finally{row._deleting=false}
 }
 
+function openAssetRename(kind, item) {
+  assetRenameEpoch++
+  assetRenameTarget.value = {
+    kind,
+    id: item.id,
+    projectID: id(),
+    assetKind: kind === 'asset' ? item.kind : ''
+  }
+  assetRenameName.value = item.name || ''
+  assetRenameError.value = ''
+}
+function closeAssetRename() {
+  if (assetRenameBusy.value) return
+  assetRenameEpoch++
+  assetRenameTarget.value = null
+  assetRenameName.value = ''
+  assetRenameError.value = ''
+}
+async function saveAssetRename() {
+  const target = assetRenameTarget.value
+  const name = assetRenameName.value.trim()
+  if (!target || assetRenameBusy.value || !name) return
+  if (name.length > 100) {
+    assetRenameError.value = '名称不能超过 100 个字符'
+    return
+  }
+  const requestEpoch = ++assetRenameEpoch
+  const captureID = target.id
+  const projectID = target.projectID
+  assetRenameBusy.value = true
+  assetRenameError.value = ''
+  try {
+    if (target.kind === 'character') await api.renameCharacter(projectID, captureID, name)
+    else await api.renameAsset(projectID, target.assetKind, captureID, name)
+    if (requestEpoch !== assetRenameEpoch || assetRenameTarget.value?.id !== captureID) return
+    await load()
+    if (requestEpoch !== assetRenameEpoch || assetRenameTarget.value?.id !== captureID) return
+    assetRenameBusy.value = false
+    assetRenameTarget.value = null
+    assetRenameName.value = ''
+    toast.success('改名成功')
+  } catch (e) {
+    if (requestEpoch === assetRenameEpoch && assetRenameTarget.value?.id === captureID) {
+      assetRenameError.value = e.response?.data?.error || '改名失败'
+    }
+  } finally {
+    if (requestEpoch === assetRenameEpoch && assetRenameTarget.value?.id === captureID) assetRenameBusy.value = false
+  }
+}
+
 async function load() {
   if (savingScene.value) return
   const requestEpoch = ++loadRequestEpoch
@@ -2438,12 +2521,17 @@ async function saveCharacter() {
   }
 }
 async function removeCharacter(ch) {
-  if (!confirm(`确定删除角色「${ch.name}」？已生成标准像将被移除（不影响已有分镜）。`)) return
+  if (isAssetDeleting('character', ch.id)) return
+  if (!confirm(`确定删除角色「${ch.name}」？角色记录及其标准像、四视图等角色资产将被删除；已有分镜和视频保留。`)) return
+  setAssetDeleting('character', ch.id, true)
   try {
     await api.deleteCharacter(id(), ch.id)
     await load()
+    toast.success(`角色「${ch.name}」已删除`)
   } catch (e) {
-    toast.show(e.response?.data?.error || '删除失败')
+    toast.error(e.response?.data?.error || '删除角色失败')
+  } finally {
+    setAssetDeleting('character', ch.id, false)
   }
 }
 
@@ -2772,12 +2860,18 @@ async function saveAsset() {
   }
 }
 async function removeAsset(a) {
-  if (!confirm(`确定删除${a.kind === 'location' ? '场景' : '道具'}「${a.name}」？已生成参考图将被移除（不影响已有分镜）。`)) return
+  if (isAssetDeleting(a.kind, a.id)) return
+  const label = a.kind === 'location' ? '场景' : '道具'
+  if (!confirm(`确定删除${label}「${a.name}」？资产记录及其参考图、四视图等资产将被删除；已有分镜和视频保留。`)) return
+  setAssetDeleting(a.kind, a.id, true)
   try {
     await api.deleteAsset(id(), a.kind, a.id)
     await load()
+    toast.success(`${label}「${a.name}」已删除`)
   } catch (e) {
-    toast.show(e.response?.data?.error || '删除失败')
+    toast.error(e.response?.data?.error || `删除${label}失败`)
+  } finally {
+    setAssetDeleting(a.kind, a.id, false)
   }
 }
 
