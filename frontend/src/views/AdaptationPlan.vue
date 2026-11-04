@@ -50,9 +50,10 @@
           <article v-for="ep in detail.episodes" :key="ep.id">
             <div><input v-model="ep.title" class="input"><span>第{{ep.episode_n}}集 · 章节{{ep.chapter_start}}–{{ep.chapter_end}} · {{episodeHasScript(ep)?'剧本已生成':episodeStatusLabel(ep.status)}}</span></div>
             <textarea v-model="ep.adaptation_goal" class="textarea" rows="2" placeholder="本集改编目标"></textarea>
-            <section v-if="episodeHasScript(ep)" class="dialogue-coverage" :class="{'has-missing': dialogueCoverage(ep)?.missing.length}">
+            <section v-if="episodeHasScript(ep)" class="dialogue-coverage" :class="{'has-missing': dialogueCoverage(ep)?.missing.length || dialogueCoverage(ep)?.story_pending_scene_orders.length}">
               <template v-if="dialogueCoverage(ep)">
                 <strong>原文对白 {{dialogueCoverage(ep).total}} · 已安排 {{dialogueCoverage(ep).covered}} · 遗漏 {{dialogueCoverage(ep).missing.length}}</strong>
+                <p v-for="order in dialogueCoverage(ep).story_pending_scene_orders" :key="`pending-${order}`" class="coverage-warning">第{{order}}场对白尚未自然融入故事内容，请到编辑场景→按原文整合对白预览审核</p>
                 <p v-if="dialogueCoverage(ep).missing.length" class="coverage-warning">以下是生成结果警告，不会禁用后续操作，也不会自动覆写已有媒体或结构化编辑草稿。</p>
                 <ul v-if="dialogueCoverage(ep).missing.length" class="missing-dialogues">
                   <li v-for="(item,index) in dialogueCoverage(ep).missing" :key="`${item.chapter_id}-${item.offset}-${index}`">

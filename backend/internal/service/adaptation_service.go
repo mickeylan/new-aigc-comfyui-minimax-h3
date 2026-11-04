@@ -571,12 +571,13 @@ func paragraphEnd(s string, n int) int {
 }
 
 type DialogueCoverage struct {
-	Total       int              `json:"total"`
-	Covered     int              `json:"covered"`
-	Missing     []SourceDialogue `json:"missing"`
-	Unbound     int              `json:"unbound,omitempty"`
-	OutOfOrder  int              `json:"out_of_order,omitempty"`
-	OrderPassed bool             `json:"order_passed"`
+	Total                   int              `json:"total"`
+	Covered                 int              `json:"covered"`
+	Missing                 []SourceDialogue `json:"missing"`
+	Unbound                 int              `json:"unbound,omitempty"`
+	OutOfOrder              int              `json:"out_of_order,omitempty"`
+	OrderPassed             bool             `json:"order_passed"`
+	StoryPendingSceneOrders []int            `json:"story_pending_scene_orders,omitempty"`
 }
 
 func dialogueKey(speaker, text string) string { return speaker + "\x00" + text }
@@ -845,12 +846,58 @@ func structuredDialoguesPreserved(original, candidate string) bool {
 	return true
 }
 
+func storyPendingSceneOrders(raw string) []int {
+	res, err := parseAdaptationScript(raw)
+	if err != nil {
+		return nil
+	}
+	var pending []int
+	for i, scene := range res.Scenes {
+		content := scene.Content
+		missing := strings.Contains(content, "【对白待确认】") || strings.Contains(content, "【对白｜") || strings.Contains(content, "【画外对白｜")
+		for _, dialogue := range scene.Dialogues {
+			if strings.TrimSpace(dialogue.Text) != "" && !strings.Contains(content, dialogue.Text) {
+				missing = true
+			}
+		}
+		if missing {
+			pending = append(pending, i+1)
+		}
+	}
+	return pending
+}
+
+func revisionRootFieldsPreserved(original, candidate string) (string, bool) {
+	var before, after map[string]json.RawMessage
+	if parseJSONObject(original, &before) != nil || parseJSONObject(candidate, &after) != nil {
+		return candidate, false
+	}
+	for key, value := range before {
+		if strings.HasPrefix(key, "source_") {
+			got, exists := after[key]
+			if !exists || string(got) != string(value) {
+				return candidate, false
+			}
+		}
+	}
+	for _, key := range []string{"opening_state", "ending_state"} {
+		if value, exists := before[key]; exists {
+			if got, present := after[key]; !present || string(got) == "null" || strings.Trim(string(got), "\"") == "" {
+				after[key] = value
+			}
+		}
+	}
+	encoded, err := json.Marshal(after)
+	return string(encoded), err == nil
+}
+
 func improvedRevision(original, candidate string, ledger []SourceDialogue) bool {
 	if _, err := parseScriptJSON(candidate); err != nil || !structuredDialoguesPreserved(original, candidate) {
 		return false
 	}
 	before, after := dialogueCoverage(original, ledger), dialogueCoverage(candidate, ledger)
-	return after.Covered > before.Covered && after.Covered >= before.Covered
+	bodyImproved := len(storyPendingSceneOrders(candidate)) < len(storyPendingSceneOrders(original))
+	return after.Covered >= before.Covered && (after.Covered > before.Covered || bodyImproved)
 }
 
 func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models.EpisodeAdaptation, error) {
@@ -880,7 +927,7 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 		return nil, err
 	}
 	input, _ := json.Marshal(ctx)
-	system := "只改编提供的上下文并输出JSON。source_chapters是本集审核映射的原文权威，source_dialogue_ledger是按原文顺序提取、仅含明确说话人的对白清单：必须逐字、逐条、按序保留全部清单对白到scenes[].dialogues，不得因180秒或25镜头目标删减；时长和镜头数可为对白保真让步。不得发明原文未提供的咒语；原文仅写念念有词或没有说话时不得创作台词。previous_episode_completed_content是上一集已完成内容的排重权威；本集必须从其结尾后继续，严禁重演、改写后重复、重新介绍或回顾其中已经完成的事件、动作、信息揭示、对白与情感节点。"
+	system := "只改编提供的上下文并输出JSON。source_chapters是本集审核映射的原文权威，source_dialogue_ledger是按原文顺序提取的对白清单：必须逐字、逐条、按序保留到scenes[].dialogues，并依据原文把是谁说、画外空间位置和发生时间自然融入同场content；content必须自然包含引号原句且归属时序与dialogues完全一致，禁止台词清单、末尾追加标签和【对白待确认】。不得因180秒或25镜头目标删减或硬凑镜头。未知说话者只保留原文明示的描述性身份与offscreen类型，不按别名猜人；人名后置归属必须保留，多角色歧义保持未明多人物语音。不得发明原文未提供的咒语；原文仅写念念有词或没有说话时不得创作台词。previous_episode_completed_content是上一集已完成内容的排重权威；本集必须从其结尾后继续，严禁重演、改写后重复、重新介绍或回顾其中已经完成的事件、动作、信息揭示、对白与情感节点。"
 	raw, err := s.skills.ChatWithSkill(projectID, models.SkillStageEpisodeAdaptation, s.provider, system, "", map[string]string{"episode_n": strconv.Itoa(episode), "target_duration": fmt.Sprint(ep.TargetDuration), "target_scenes": strconv.Itoa(ep.TargetScenes), "episode_context": string(input)})
 	if err != nil {
 		return nil, err
@@ -894,22 +941,42 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 		return nil, err
 	}
 	coverage := dialogueCoverage(raw, ctx.DialogueLedger)
-	if len(coverage.Missing) > 0 {
+	pendingOrders := storyPendingSceneOrders(raw)
+	coverage.StoryPendingSceneOrders = pendingOrders
+	if len(coverage.Missing) > 0 || len(pendingOrders) > 0 {
+		current, _ := parseAdaptationScript(raw)
+		type integrationScene struct {
+			SceneOrder int              `json:"scene_order"`
+			Content    string           `json:"content"`
+			Dialogues  []scriptDialogue `json:"dialogues"`
+		}
+		var requiring []integrationScene
+		if current != nil {
+			for _, order := range pendingOrders {
+				if order > 0 && order <= len(current.Scenes) {
+					scene := current.Scenes[order-1]
+					requiring = append(requiring, integrationScene{order, scene.Content, scene.Dialogues})
+				}
+			}
+		}
 		revisionContext, _ := json.Marshal(struct {
-			SourceChapters          []SourceChapter  `json:"source_chapters"`
-			CurrentStructuredScript json.RawMessage  `json:"current_structured_script"`
-			MissingDialogues        []SourceDialogue `json:"missing_dialogues"`
-		}{ctx.SourceChapters, json.RawMessage(raw), coverage.Missing})
-		revisionSystem := "这是一次且仅一次的原文对白保真修订。输出完整JSON剧本；保持现有视觉字段和已完成剧情不变，把missing_dialogues逐条逐字放回current_structured_script中符合source_chapters剧情顺序的正确既有或必要场景。不得把对白机械追加到末尾，不得猜测空speaker，不得新增原文没有的对白。"
+			SourceChapters                  []SourceChapter    `json:"source_chapters"`
+			CurrentStructuredScript         json.RawMessage    `json:"current_structured_script"`
+			MissingDialogues                []SourceDialogue   `json:"missing_dialogues"`
+			ScenesRequiringStoryIntegration []integrationScene `json:"scenes_requiring_story_integration"`
+		}{ctx.SourceChapters, json.RawMessage(raw), coverage.Missing, requiring})
+		revisionSystem := "这是一次且仅一次的原文对白覆盖与正文整合修订。输出完整JSON剧本；保持现有视觉字段、源字段、结构化对白和已完成剧情不变。把missing_dialogues逐字放回正确场景，同时依据source_chapters把scenes_requiring_story_integration中的对白原句、明确归属、画外位置和时序自然融入content。正文不得成为台词清单，不得末尾追加标签或【对白待确认】，不得猜测未明说话者。"
 		revised, revisionErr := s.skills.ChatWithSkill(projectID, models.SkillStageEpisodeAdaptation, s.provider, revisionSystem, "", map[string]string{
 			"episode_n": strconv.Itoa(episode), "target_duration": fmt.Sprint(ep.TargetDuration), "target_scenes": strconv.Itoa(ep.TargetScenes), "episode_context": string(revisionContext),
 		})
-		// Invalid, destructive, or non-improving revisions never replace paid output.
-		if revisionErr == nil && improvedRevision(raw, revised, ctx.DialogueLedger) {
-			raw = revised
-			raw, _ = restoreDialoguesAlreadyLocatedByContent(raw, ctx.DialogueLedger)
+		if revisionErr == nil {
+			if preserved, ok := revisionRootFieldsPreserved(raw, revised); ok && improvedRevision(raw, preserved, ctx.DialogueLedger) {
+				raw = preserved
+				raw, _ = restoreDialoguesAlreadyLocatedByContent(raw, ctx.DialogueLedger)
+			}
 		}
 		coverage = dialogueCoverage(raw, ctx.DialogueLedger)
+		coverage.StoryPendingSceneOrders = storyPendingSceneOrders(raw)
 	}
 	var p models.Project
 	if err := s.db.First(&p, projectID).Error; err != nil {
@@ -1011,6 +1078,7 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 		}
 	}
 	coverage = persistedDialogueCoverage(persistedDialogues, ctx.DialogueLedger)
+	coverage.StoryPendingSceneOrders = storyPendingSceneOrders(raw)
 	traces, _ := json.Marshal(ctx.Traces)
 	coverageJSON, _ := json.Marshal(coverage)
 	ep.Script, ep.OpeningState, ep.EndingState, ep.SourceTracesJSON, ep.DialogueCoverageJSON, ep.Status, ep.ContinuityStatus = parsed.Script, state(parsed.OpeningState, ep.OpeningState), state(parsed.EndingState, ep.EndingState), string(traces), string(coverageJSON), "scripted", "pending"

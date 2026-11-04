@@ -25,7 +25,7 @@ function fixture() {
     selectedSceneReferences: { value: [] }, selectedSceneOutfits: { value: {} },
     sceneReferencesBaseline: { value: '[]' }, sceneOutfitsBaseline: { value: '[]' },
     canonicalSceneReferences: JSON.stringify, sceneOutfitAssignments: () => [],
-    savingScene: { value: false }, sceneError: { value: '' },
+    savingScene: { value: false }, storyApplyBusy: { value: false }, sceneError: { value: '' },
     api: { updateScene: async (...args) => { calls.push(args); return request }, updateSceneReferences: () => assert.fail('unchanged references written'), updateSceneOutfits: () => assert.fail('unchanged outfits written') },
     id: () => 1, nextTick: async () => {},
     sceneShotDirector: { value: { syncAuthoritativeSceneContent: content => synced.push(content) } },
@@ -34,6 +34,16 @@ function fixture() {
   const execute = new Function(...Object.keys(context), `let loadRequestEpoch=0; ${saveFunction}; return saveScene(false)`)
   return { ...context, calls, synced, complete, run: () => execute(...Object.values(context)) }
 }
+
+test('故事应用或已有保存进行中时不发送普通场景 PATCH', async () => {
+  const f = fixture()
+  f.storyApplyBusy.value = true
+  assert.equal(await f.run(), false)
+  f.storyApplyBusy.value = false
+  f.savingScene.value = true
+  assert.equal(await f.run(), false)
+  assert.equal(f.calls.length, 0)
+})
 
 test('执行真实保存函数：新正文写入请求、场景列表与同场景导演，保留媒体', async () => {
   const f = fixture()

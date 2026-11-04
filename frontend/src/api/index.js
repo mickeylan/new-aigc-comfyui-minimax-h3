@@ -125,6 +125,8 @@ export const api = {
   generateAllVideos: (id, episodeN) => http.post(`/projects/${id}/videos${episodeN ? `?episode_n=${episodeN}` : ''}`),
   updateScene: (id, sid, data) => http.patch(`/projects/${id}/scenes/${sid}`, data),
   expandSceneContent: (id, sid, data) => http.post(`/projects/${id}/scenes/${sid}/content/expand`, data, { timeout: 300000 }),
+  previewSceneStory: (id, sid, data) => http.post(`/projects/${id}/scenes/${sid}/story/preview`, data, { timeout: 300000 }),
+  applySceneStory: (id, sid, data) => http.post(`/projects/${id}/scenes/${sid}/story/apply`, data),
   analyzeSceneDialogue: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/dialogue/analyze`, null, { timeout: 300000 }),
   applySceneDialogue: (id, sid, analysis) => http.post(`/projects/${id}/scenes/${sid}/dialogue/apply`, analysis),
   analyzeSceneBlocking: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/blocking/analyze`, null, { timeout: 300000 }),

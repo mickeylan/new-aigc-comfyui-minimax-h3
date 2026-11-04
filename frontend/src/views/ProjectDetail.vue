@@ -642,7 +642,7 @@
           <div class="field-hint">选择后，AI导演拆镜与MiniMax H3视频提示词将使用对应规则；武戏强调3–6秒实时动作、碰撞结果和禁止慢动作。</div>
         </div>
         <div class="field">
-          <div class="field-label-actions"><label>场景正文（视频提示词）</label><button type="button" class="btn btn-sm btn-secondary" :disabled="expandingSceneContent || !sceneForm.content.trim()" @click="expandSceneContent">{{ expandingSceneContent ? '导演扩写中…' : 'AI导演扩写' }}</button></div>
+          <div class="field-label-actions"><label>场景正文（视频提示词）</label><div><button type="button" class="btn btn-sm btn-secondary" :disabled="storyPreviewBusy || savingScene || storyApplyBusy || !sceneForm.content.trim()" @click="previewIntegratedStory">{{ storyPreviewBusy ? '整合分析中…' : '按原文整合对白' }}</button><button type="button" class="btn btn-sm btn-secondary" :disabled="expandingSceneContent || !sceneForm.content.trim()" @click="expandSceneContent">{{ expandingSceneContent ? '导演扩写中…' : 'AI导演扩写' }}</button></div></div>
           <textarea v-model="sceneForm.content" class="textarea" rows="3" placeholder="描述画面动作、镜头运动、对白…" />
           <input v-model="sceneExpandRequirements" class="input" placeholder="可选：输入创作要求，如加强逃亡节奏与空间阻碍" />
           <div v-if="sceneExpandPreview" class="scene-expand-preview">
@@ -678,8 +678,8 @@
         <div v-if="sceneError" class="notice error-notice">{{ sceneError }}</div>
         <div class="modal-actions">
           <button class="btn btn-ghost" @click="closeSceneWorkspace">返回当前分页</button>
-          <button class="btn btn-secondary" :disabled="savingScene" @click="saveScene(true)">{{ savingScene ? '保存中…' : '保存并关闭' }}</button>
-          <button class="btn" :disabled="savingScene" @click="saveSceneAndContinueDirector">{{ savingScene ? '保存中…' : '保存并继续AI导演拆镜' }}</button>
+          <button class="btn btn-secondary" :disabled="savingScene || storyApplyBusy" @click="saveScene(true)">{{ savingScene ? '保存中…' : '保存并关闭' }}</button>
+          <button class="btn" :disabled="savingScene || storyApplyBusy" @click="saveSceneAndContinueDirector">{{ savingScene ? '保存中…' : '保存并继续AI导演拆镜' }}</button>
         </div>
         </div>
         <div v-show="sceneWorkspaceStep === 'director'" class="scene-workspace-pane scene-director-pane">
@@ -698,6 +698,15 @@
           <div v-if="editingScene.image_file" class="scene-workspace-preview"><img :src="imageUrl(editingScene)" alt="当前分镜图" /></div>
           <div class="scene-workspace-footer"><button class="btn btn-ghost" @click="setSceneWorkspaceStep('director')">← 返回导演拆镜</button><button class="btn btn-secondary" @click="openNextSceneWorkspace">保存进度并处理下一 Scene →</button><button class="btn btn-ghost" @click="closeSceneWorkspace">返回第 {{ scenePage }} 页</button></div>
         </div>
+      </div>
+    </div>
+
+    <div v-if="storyPreview" class="modal-mask" @click.self="closeStoryPreview">
+      <div class="modal card blocking-modal"><h2>按原文整合故事与对白</h2><p class="field-hint">AI 结合当前故事动作、原文章节和逐字对白，分析说话人、画外发声与自然时序。下列对白文字只读；未知归属不会猜成普通对白，必须人工审阅。</p>
+        <div class="field"><label>故事预览（可编辑，尚未保存）</label><textarea v-model="storyPreview.content" class="textarea" rows="12" /></div>
+        <div v-for="dialogue in storyPreview.dialogues" :key="dialogue.id" class="card"><label>原句（只读）</label><textarea :value="dialogue.text" readonly class="textarea" rows="2"/><div class="field-row"><div class="field"><label>说话人</label><input v-model="dialogue.speaker" class="input" placeholder="待确认"></div><div class="field"><label>类型</label><select v-model="dialogue.speech_type" class="input"><option value="dialogue">对白</option><option value="offscreen_dialogue">画外对白</option><option value="monologue">内心独白</option><option value="narration">旁白</option><option value="sound_effect">音效</option><option value="unknown">未知（必须审阅）</option></select></div></div></div>
+        <div v-if="storyPreview.warnings.length" class="warning"><div v-for="warning in storyPreview.warnings" :key="warning">{{warning}}</div></div><div v-if="storyPreviewError" class="notice error-notice">{{storyPreviewError}}</div>
+        <div class="modal-actions"><button class="btn btn-ghost" :disabled="storyApplyBusy" @click="closeStoryPreview">关闭</button><button class="btn" :disabled="storyApplyBusy || !storyPreview.content.trim()" @click="applyIntegratedStory">{{storyApplyBusy?'应用中…':'确认应用故事与对白'}}</button></div>
       </div>
     </div>
 
@@ -1335,6 +1344,11 @@ const redesigningScenePrompt = ref(false)
 const expandingSceneContent = ref(false)
 const sceneExpandRequirements = ref('')
 const sceneExpandPreview = ref(null)
+const storyPreview = ref(null)
+const storyPreviewBusy = ref(false)
+const storyApplyBusy = ref(false)
+const storyPreviewError = ref('')
+let storyRequestEpoch = 0
 const dialogueAnalysisScene = ref(null)
 const dialogueAnalysis = reactive({ items: [], source: '' })
 const dialogueAnalysisBusy = ref(false)
@@ -2010,11 +2024,11 @@ async function saveAssetRename() {
 }
 
 async function load() {
-  if (savingScene.value) return
+  if (savingScene.value || storyApplyBusy.value) return
   const requestEpoch = ++loadRequestEpoch
   try {
     const [{ data }, catalogRes, materialsRes] = await Promise.all([api.project(id()), api.modelCatalog(), api.materials({ project_id: id(), type: 'video' })])
-    if (requestEpoch !== loadRequestEpoch || savingScene.value) return
+    if (requestEpoch !== loadRequestEpoch || savingScene.value || storyApplyBusy.value) return
     modelCatalog.value = catalogRes.data?.items || []
     projectVideoMaterials.value = (materialsRes.data || []).filter(item => item.type === 'video')
     loadError.value = ''
@@ -2029,7 +2043,7 @@ async function load() {
         rollingPlanningTarget.value = Number(data.project?.episodes || 0)
         rollingPlanningHasBatches.value = false
       }
-      if (requestEpoch !== loadRequestEpoch || savingScene.value) return
+      if (requestEpoch !== loadRequestEpoch || savingScene.value || storyApplyBusy.value) return
     }
     if (epDirtyCount.value === 0) trackEpisodes()
     const cur = (data.project.scripts ? JSON.parse(data.project.scripts) : {})[activeEpN.value] || ''
@@ -2074,7 +2088,7 @@ async function load() {
     assetCounts.value = data.asset_counts || {}
     dialogues.value = data.dialogues || []
     try { screenTextCues.value = (await api.screenTextCues(id(), activeEpN.value)).data || [] } catch { screenTextCues.value = [] }
-    if (requestEpoch !== loadRequestEpoch || savingScene.value) return
+    if (requestEpoch !== loadRequestEpoch || savingScene.value || storyApplyBusy.value) return
     scenes.value = (data.scenes || []).map(s => {
       s._working = isWorking(s)
       return s
@@ -3200,6 +3214,7 @@ function setSceneWorkspaceStep(step) {
   if (editingScene.value) router.replace({ query: { ...route.query, episode: String(editingScene.value.episode_n || activeEpN.value), scene_page: String(scenePage.value), scene: String(editingScene.value.id), panel: 'director', step } })
 }
 function closeSceneWorkspace() {
+  closeStoryPreview()
   editingScene.value = null
   const query = { ...route.query, episode: String(activeEpN.value), scene_page: String(scenePage.value) }
   delete query.scene
@@ -3256,6 +3271,7 @@ async function openEditScene(sc, step = 'scene') {
   sceneError.value = ''
   sceneExpandRequirements.value = ''
   sceneExpandPreview.value = null
+  closeStoryPreview()
   editingScene.value = sc
   Object.assign(sceneForm, {
     title: sc.title, content: sc.content, duration: Number(sc.duration) || 5, scene_mode: sc.scene_mode || '', image_prompt: sc.image_prompt, video_prompt: sc.video_prompt || '',
@@ -3315,6 +3331,64 @@ function referenceIndex(ref) { const key = referenceKey(ref); return selectedSce
 function toggleSceneReference(ref) { const i = referenceIndex(ref); if (i >= 0) selectedSceneReferences.value.splice(i, 1); else selectedSceneReferences.value.push({ source_type: ref.source_type, source_id: ref.source_id, variant: ref.variant, asset_variant_id: Number(ref.asset_variant_id || 0), use_krea2: true, use_h3: true, bind_character: '' }) }
 function moveReference(index, delta) { const target = index + delta; if (target < 0 || target >= selectedSceneReferences.value.length) return; const [item] = selectedSceneReferences.value.splice(index, 1); selectedSceneReferences.value.splice(target, 0, item) }
 
+function closeStoryPreview() {
+  if (storyApplyBusy.value) return
+  ++storyRequestEpoch
+  storyPreview.value = null
+  storyPreviewBusy.value = false
+  storyApplyBusy.value = false
+  storyPreviewError.value = ''
+}
+async function previewIntegratedStory() {
+  if (savingScene.value || storyApplyBusy.value || !editingScene.value || !sceneForm.content.trim()) return
+  const projectId = String(id()), sceneId = editingScene.value.id, epoch = ++storyRequestEpoch
+  const sourceContent = sceneForm.content
+  storyPreviewBusy.value = true
+  storyPreviewError.value = ''
+  try {
+    const { data } = await api.previewSceneStory(projectId, sceneId, { content: sourceContent })
+    if (epoch !== storyRequestEpoch || String(id()) !== projectId || editingScene.value?.id !== sceneId) return
+    storyPreview.value = { content: data.content || '', dialogues: (data.dialogues || []).map(item => ({ ...item })), source_hash: data.source_hash || '', warnings: data.warnings || [], persisted: false, projectId, sceneId, sourceContent }
+  } catch (e) {
+    if (epoch === storyRequestEpoch && String(id()) === projectId && editingScene.value?.id === sceneId) storyPreviewError.value = e.response?.data?.error || '故事与对白预览失败'
+  } finally {
+    if (epoch === storyRequestEpoch) storyPreviewBusy.value = false
+  }
+}
+async function applyIntegratedStory() {
+  if (savingScene.value || storyApplyBusy.value) return
+  const preview = storyPreview.value
+  if (!preview || !editingScene.value || preview.sceneId !== editingScene.value.id || preview.projectId !== String(id())) return
+  if (sceneForm.content !== preview.sourceContent && !window.confirm('场景正文在预览期间已有修改。确认仍用此预览覆盖当前正文并保存吗？')) return
+  if (!window.confirm('确认将当前预览故事与对白直接保存到服务器？现有图片、视频、参考图等媒体不会被覆盖。')) return
+  const epoch = ++storyRequestEpoch, sceneId = preview.sceneId, projectId = preview.projectId
+  storyApplyBusy.value = true
+  storyPreviewError.value = ''
+  try {
+    const { data } = await api.applySceneStory(projectId, sceneId, { content: preview.content, dialogues: preview.dialogues.map(({ id, speaker, speech_type, text }) => ({ id, speaker, speech_type, text })), source_hash: preview.source_hash })
+    if (epoch !== storyRequestEpoch || String(id()) !== projectId || editingScene.value?.id !== sceneId) return
+    const content = data?.content ?? preview.content
+    const sceneIndex = scenes.value.findIndex(scene => scene.id === sceneId)
+    if (sceneIndex >= 0) scenes.value.splice(sceneIndex, 1, { ...scenes.value[sceneIndex], content, prompt_stale: true })
+    editingScene.value = sceneIndex >= 0 ? scenes.value[sceneIndex] : { ...editingScene.value, content, prompt_stale: true }
+    const savedDialogueById = new Map((data?.dialogues || []).map(item => [item.id, item]))
+    dialogues.value = dialogues.value.map(item => {
+      const saved = savedDialogueById.get(item.id)
+      return saved && item.scene_id === sceneId ? { ...item, character: saved.speaker, speech_type: saved.speech_type, source: 'ai_reviewed' } : item
+    })
+    sceneForm.content = content
+    await nextTick()
+    if (epoch === storyRequestEpoch && editingScene.value?.id === sceneId) sceneShotDirector.value?.syncAuthoritativeSceneContent(content)
+    storyPreview.value = null
+    if (data?.warnings?.length) data.warnings.forEach(warning => toast.warning(warning))
+    toast.success('故事与对白已保存，现有媒体与其他场景编辑未改动')
+  } catch (e) {
+    if (epoch === storyRequestEpoch && String(id()) === projectId && editingScene.value?.id === sceneId) storyPreviewError.value = e.response?.data?.error || '应用故事与对白失败'
+  } finally {
+    if (epoch === storyRequestEpoch) storyApplyBusy.value = false
+  }
+}
+
 async function expandSceneContent() {
   if (!editingScene.value || !sceneForm.content.trim()) return
   const sceneId = editingScene.value.id
@@ -3366,7 +3440,7 @@ async function redesignScenePrompt() {
 }
 
 async function saveScene(close = true) {
-  if (!editingScene.value) return false
+  if (savingScene.value || storyApplyBusy.value || !editingScene.value) return false
   const sceneId = editingScene.value.id
   const originalScene = { ...editingScene.value }
   const payload = {
