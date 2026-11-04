@@ -6503,6 +6503,21 @@ func (s *ProjectService) qwenScenePromptRequestsPeople(sc *models.Scene, prompt 
 	return false
 }
 
+func sceneImageTaskParams(engine string, project *models.Project, negativePrompt string) map[string]any {
+	// Every explicit storyboard regeneration starts from fresh noise. CreateTask resolves
+	// -1 once into a concrete random seed and persists it in the task snapshot, so the
+	// take varies while remaining exactly reproducible after creation.
+	if engine == ImageEngineQwen21 {
+		aspectRatio := ""
+		if project != nil {
+			aspectRatio = project.AspectRatio
+		}
+		return map[string]any{"aspect_ratio": qwenAspectRatio(aspectRatio), "megapixels": 2, "multiple": 32, "reference_resolution": 1024, "steps": 25, "cfg": 1, "negative_prompt": strings.TrimSpace(negativePrompt), "seed": -1}
+	}
+	width, height := sceneImageSize(project)
+	return map[string]any{"width": width, "height": height, "length": 5, "duration": 0.21, "fps": 24, "seed": -1}
+}
+
 // sceneImageSize returns full-HD-or-larger storyboard dimensions for the project aspect ratio.
 func sceneImageSize(p *models.Project) (int, int) {
 	if p != nil {
@@ -6981,11 +6996,7 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 		refNames = append(refNames, fmt.Sprintf("Picture %d=%s/%s", i+1, ref.TaskID, ref.Name))
 	}
 	log.Printf("[storyboard-submit] project=%d scene=%d template=%s refs=[%s]\nprompt:\n%s", sc.ProjectID, sc.ID, templateCode, strings.Join(refNames, ", "), prompt)
-	width, height := sceneImageSize(&p)
-	params := map[string]any{"width": width, "height": height, "length": 5, "duration": 0.21, "fps": 24}
-	if engine == ImageEngineQwen21 {
-		params = map[string]any{"aspect_ratio": qwenAspectRatio(p.AspectRatio), "megapixels": 2, "multiple": 32, "reference_resolution": 1024, "steps": 25, "cfg": 1, "negative_prompt": strings.TrimSpace(sc.NegativePrompt)}
-	}
+	params := sceneImageTaskParams(engine, &p, sc.NegativePrompt)
 	task, err := s.tasks.CreateTask(CreateTaskReq{
 		TemplateID:        tpl.ID,
 		Prompt:            prompt,

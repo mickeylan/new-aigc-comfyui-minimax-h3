@@ -1876,6 +1876,17 @@ func TestBuildAssetPromptAndSizeUseKrea2ReferenceConventions(t *testing.T) {
 	}
 }
 
+func TestSceneImageTaskParamsAlwaysRequestFreshPersistedSeed(t *testing.T) {
+	project := &models.Project{AspectRatio: "16:9"}
+	for _, engine := range []string{ImageEngineMiniMaxH3, ImageEngineQwen21} {
+		params := sceneImageTaskParams(engine, project, "文字")
+		seed, ok := params["seed"].(int)
+		if !ok || seed != -1 {
+			t.Fatalf("engine %s storyboard seed = %#v, want -1 for CreateTask randomization", engine, params["seed"])
+		}
+	}
+}
+
 func TestValidateQwenScenePromptRejectsGenericInstructionAndMissingReferences(t *testing.T) {
 	if err := validateQwenScenePrompt("设计一个古风仙侠风格的静止分镜画面", 0); err == nil {
 		t.Fatal("generic image-generation instruction accepted as Qwen prompt")
