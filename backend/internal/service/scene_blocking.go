@@ -120,7 +120,7 @@ func (s *Service) HandleSaveSceneBlocking(c *gin.Context) {
 		return
 	}
 	encoded := blockingJSON(result)
-	if err := s.DB.Model(&models.Scene{}).Where("id=? AND project_id=?", scene.ID, scene.ProjectID).Updates(map[string]any{"blocking_json": encoded, "blocking_image_applied_hash": "", "blocking_video_applied_hash": "", "prompt_stale": true}).Error; err != nil {
+	if err := s.DB.Model(&models.Scene{}).Where("id=? AND project_id=?", scene.ID, scene.ProjectID).Updates(map[string]any{"blocking_json": encoded, "blocking_content_hash": sceneDialogueContentHash(scene.Content), "blocking_image_applied_hash": "", "blocking_video_applied_hash": "", "prompt_stale": true}).Error; err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -287,6 +287,16 @@ func (s *Service) HandleApplySceneBlockingPrompt(c *gin.Context) {
 
 func sceneBlockingPromptContext(sc *models.Scene) string {
 	if sc == nil || strings.TrimSpace(sc.BlockingJSON) == "" {
+		return ""
+	}
+	// A saved blocking plan is authoritative only for the story it was saved
+	// against. Legacy rows have no hash; once story editing is known to have
+	// occurred they must not leak old movement into prompts.
+	if sc.BlockingContentHash != "" {
+		if sc.BlockingContentHash != sceneDialogueContentHash(sc.Content) {
+			return ""
+		}
+	} else if sc.StoryContentEdited {
 		return ""
 	}
 	if _, err := parseSceneBlocking(sc.BlockingJSON); err != nil {

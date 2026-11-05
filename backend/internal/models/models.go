@@ -244,8 +244,11 @@ type Scene struct {
 	VideoLastFrameImg        string     `gorm:"column:video_last_frame_img" json:"video_last_frame_img"`   // 首尾帧模板的尾帧图文件名
 	Status                   string     `gorm:"index" json:"status"`                                       // pending/image_pending/image_ready/video_pending/video_running/video_ready/failed
 	Error                    string     `json:"error"`
-	PromptStale              bool       `gorm:"column:prompt_stale;default:false" json:"prompt_stale"` // 来源变化后需重新确认完整视频提示词
-	BlockingJSON             string     `gorm:"column:blocking_json;type:text" json:"blocking_json"`   // 人物站位/机位/视线/遮挡与动作前后空间关系；用户显式保存
+	PromptStale              bool       `gorm:"column:prompt_stale;default:false" json:"prompt_stale"`                   // 来源变化后需重新确认完整视频提示词
+	DirectorSourceStale      bool       `gorm:"column:director_source_stale;default:false" json:"director_source_stale"` // 正文修改后旧导演镜头仅作历史保留
+	StoryContentEdited       bool       `gorm:"column:story_content_edited;default:false" json:"story_content_edited"`   // 正文首次被用户或审核流程修改后永久置位
+	BlockingJSON             string     `gorm:"column:blocking_json;type:text" json:"blocking_json"`                     // 人物站位/机位/视线/遮挡与动作前后空间关系；用户显式保存
+	BlockingContentHash      string     `gorm:"column:blocking_content_hash;size:64" json:"-"`                           // 保存站位时对应的 Scene.Content
 	BlockingImageAppliedHash string     `gorm:"column:blocking_image_applied_hash;size:129" json:"blocking_image_applied_hash"`
 	BlockingVideoAppliedHash string     `gorm:"column:blocking_video_applied_hash;size:129" json:"blocking_video_applied_hash"`
 	BlockingImageApplied     bool       `gorm:"-" json:"blocking_image_applied"`

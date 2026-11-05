@@ -83,21 +83,46 @@ func validateMaterializedRunListeners(db *gorm.DB, projectID uint, scenes []mode
 	return validateShotListenerCharacters(db, projectID, shots)
 }
 
+// regroupEffectiveDialogues uses the same read-only source as video prompt compilation.
+// Synthetic identities are unique across the whole group because dialogue fragments use
+// IDs as grouping keys.
+func regroupEffectiveDialogues(db *gorm.DB, scenes []models.Scene) map[uint][]models.Dialogue {
+	byScene := make(map[uint][]models.Dialogue, len(scenes))
+	var maxID uint
+	for i := range scenes {
+		effective := (&ProjectService{db: db}).sceneVideoDialogues(&scenes[i])
+		for _, d := range effective {
+			if d.ID > maxID {
+				maxID = d.ID
+			}
+		}
+		byScene[scenes[i].ID] = effective
+	}
+	for _, scene := range scenes {
+		effective := byScene[scene.ID]
+		for i := range effective {
+			if effective[i].ID == 0 {
+				maxID++
+				effective[i].ID = maxID
+			}
+		}
+		byScene[scene.ID] = authoritativeSceneDialogues(effective)
+	}
+	return byScene
+}
+
 func validateExistingNativeGroups(db *gorm.DB, groups []existingNativeGroup) error {
 	for groupIndex, group := range groups {
 		shots := []models.Shot{}
 		dialogues := []models.Dialogue{}
+		effective := regroupEffectiveDialogues(db, group.Scenes)
 		for _, scene := range group.Scenes {
 			var sceneShots []models.Shot
 			if err := db.Where("scene_id = ?", scene.ID).Order("order_num, id").Find(&sceneShots).Error; err != nil {
 				return err
 			}
 			shots = append(shots, sceneShots...)
-			var sceneDialogues []models.Dialogue
-			if err := db.Where("scene_id = ?", scene.ID).Order("`order`, id").Find(&sceneDialogues).Error; err != nil {
-				return err
-			}
-			dialogues = append(dialogues, authoritativeSceneDialogues(sceneDialogues)...)
+			dialogues = append(dialogues, effective[scene.ID]...)
 		}
 		if len(dialogues) > 0 {
 			if err := validateDialogueShotTiming(shots, dialogues); err != nil {
@@ -111,17 +136,14 @@ func validateExistingNativeGroups(db *gorm.DB, groups []existingNativeGroup) err
 func existingGroupNarrative(db *gorm.DB, group existingNativeGroup) (string, error) {
 	shots := []models.Shot{}
 	dialogues := []models.Dialogue{}
+	effective := regroupEffectiveDialogues(db, group.Scenes)
 	for _, scene := range group.Scenes {
 		var sceneShots []models.Shot
 		if err := db.Where("scene_id=?", scene.ID).Order("order_num,id").Find(&sceneShots).Error; err != nil {
 			return "", err
 		}
 		shots = append(shots, sceneShots...)
-		var sceneDialogues []models.Dialogue
-		if err := db.Where("scene_id=?", scene.ID).Order("`order`,id").Find(&sceneDialogues).Error; err != nil {
-			return "", err
-		}
-		dialogues = append(dialogues, authoritativeSceneDialogues(sceneDialogues)...)
+		dialogues = append(dialogues, effective[scene.ID]...)
 	}
 	fragments, err := planDialogueFragments(shots, dialogues)
 	if err != nil {
@@ -163,11 +185,10 @@ func (s *ShotService) PreviewExistingNativeRegroup(projectID, selectedID uint) (
 			return nil, err
 		}
 		dialogue := []string{}
+		effective := regroupEffectiveDialogues(s.db, group.Scenes)
 		for _, scene := range group.Scenes {
 			ids = append(ids, scene.ID)
-			var ds []models.Dialogue
-			_ = s.db.Where("scene_id=?", scene.ID).Order("`order`,id").Find(&ds).Error
-			for _, d := range ds {
+			for _, d := range effective[scene.ID] {
 				dialogue = append(dialogue, d.Text)
 			}
 		}
@@ -192,6 +213,23 @@ func (s *ShotService) RegroupExistingNativeScenes(projectID, selectedID uint) ([
 		groups := packExistingNativeScenes(run)
 		if err := validateExistingNativeGroups(tx, groups); err != nil {
 			return err
+		}
+		effective := regroupEffectiveDialogues(tx, run)
+		for _, scene := range run {
+			for _, d := range effective[scene.ID] {
+				var existing models.Dialogue
+				err := tx.Where("id=? AND scene_id=?", d.ID, scene.ID).First(&existing).Error
+				if err == gorm.ErrRecordNotFound {
+					d.ID, d.SceneID, d.ProjectID, d.Source = 0, scene.ID, projectID, "ai_reviewed"
+					if err := tx.Create(&d).Error; err != nil {
+						return err
+					}
+				} else if err != nil {
+					return err
+				} else if err := tx.Model(&existing).Updates(map[string]any{"character": d.Character, "speech_type": d.SpeechType, "addressee": d.Addressee, "time_segment": d.TimeSegment, "source": d.Source, "text": d.Text}).Error; err != nil {
+					return err
+				}
+			}
 		}
 		runIDs := make([]uint, len(run))
 		for i := range run {

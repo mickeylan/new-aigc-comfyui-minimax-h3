@@ -166,6 +166,27 @@ func buildShotMaterializationPreview(scene models.Scene, groups []nativeShotGrou
 	return ShotMaterializationPreview{SourceSceneID: scene.ID, ShotCount: shotCount, Items: items, Warning: "确认后将按15秒上限把相邻导演Shot合并为Native场景并替换原场景；每个场景内部仍保留不同Shot。原场景图片、视频、配音及连续性结果会失效。"}
 }
 
+// materializationDialogues resolves the same effective, read-only dialogue source used
+// by video generation. Synthetic rows need temporary identities because fragment
+// offsets and group keys are keyed by source ID; these identities are never persisted
+// back to the source scene.
+func materializationDialogues(db *gorm.DB, scene *models.Scene) []models.Dialogue {
+	effective := (&ProjectService{db: db}).sceneVideoDialogues(scene)
+	var maxID uint
+	for _, d := range effective {
+		if d.ID > maxID {
+			maxID = d.ID
+		}
+	}
+	for i := range effective {
+		if effective[i].ID == 0 {
+			maxID++
+			effective[i].ID = maxID
+		}
+	}
+	return authoritativeSceneDialogues(effective)
+}
+
 func validateMaterializationShots(shots []models.Shot) error {
 	if len(shots) < 2 {
 		return fmt.Errorf("至少需要两个已保存导演镜头才能拆成可制作场景")
@@ -200,7 +221,7 @@ func (s *ShotService) PreviewMaterialization(projectID, sceneID uint) (*ShotMate
 	if err := s.db.Where("scene_id = ? AND project_id = ?", sceneID, projectID).Order("`order` ASC, `id` ASC").Find(&dialogues).Error; err != nil {
 		return nil, err
 	}
-	authoritativeDialogues := authoritativeSceneDialogues(dialogues)
+	authoritativeDialogues := materializationDialogues(s.db, &scene)
 	if len(authoritativeDialogues) > 0 {
 		if err := validateDialogueShotTiming(shots, authoritativeDialogues); err != nil {
 			return nil, err
@@ -228,7 +249,10 @@ func resetMaterializedScene(child *models.Scene, source models.Scene) {
 	}
 	child.ImageFile, child.ImageToken, child.ImageTaskID, child.VideoTaskID, child.VideoFile, child.VideoInputFile = "", "", "", "", "", ""
 	child.VideoGPU, child.ImageCandidateParentID, child.VideoCandidateParentID = nil, nil, nil
-	child.VideoFullPrompt, child.VideoTemplate, child.VideoFirstFrameImg, child.VideoLastFrameImg = "", "", "", ""
+	child.VideoFullPrompt, child.VideoPromptMasterZH, child.VideoTemplate, child.VideoFirstFrameImg, child.VideoLastFrameImg = "", "", "", "", ""
+	child.VideoExecSourceHash, child.VideoExecConfirmedHash, child.DialogueAnalysisJSON = "", "", ""
+	child.VideoExecConfirmedAt, child.StoryboardVideoTime = nil, nil
+	child.BlockingImageAppliedHash, child.BlockingVideoAppliedHash = "", ""
 	child.ImageLocked, child.VideoLocked, child.PromptStale, child.Status, child.Error = false, false, true, "pending", ""
 	child.ImageRetries, child.VideoRetries = 0, 0
 	_ = source
@@ -262,7 +286,7 @@ func (s *ShotService) Materialize(projectID, sceneID uint) ([]models.Scene, erro
 		if err := tx.Where("scene_id = ? AND project_id = ?", sceneID, projectID).Order("`order` ASC, `id` ASC").Find(&dialogues).Error; err != nil {
 			return err
 		}
-		authoritativeDialogues := authoritativeSceneDialogues(dialogues)
+		authoritativeDialogues := materializationDialogues(tx, &source)
 		if len(authoritativeDialogues) > 0 {
 			if err := validateDialogueShotTiming(shots, authoritativeDialogues); err != nil {
 				return err

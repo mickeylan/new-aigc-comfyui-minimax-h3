@@ -552,8 +552,11 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 		template = "minimax_h3_ref2v"
 	}
 	fullPrompt := compileH3PromptForTemplate(template, &preview, &project, dubs, lines)
-	var shots []models.Shot
-	_ = s.DB.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error
+	shots, shotsErr := s.Projects.currentSceneDirectorShots(sc)
+	if shotsErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": shotsErr.Error()})
+		return
+	}
 	shots = s.Projects.ensureShotDialogueRanges(sc.ID, shots)
 	fullPrompt = normalizeSavedH3Audio(fullPrompt, dubs, lines, shots)
 	fullPrompt = applyAuthoritativeSceneShotTimeline(fullPrompt, sc.Content)

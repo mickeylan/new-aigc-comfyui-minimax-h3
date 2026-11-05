@@ -16,8 +16,7 @@ func (s *ProjectService) sceneHasCharacter(sc *models.Scene, name string) bool {
 		}
 		return false
 	}
-	var shots []models.Shot
-	_ = s.db.Where("scene_id = ?", sc.ID).Order("order_num").Find(&shots).Error
+	shots, _ := s.currentSceneDirectorShots(sc)
 	structured := ""
 	for _, shot := range shots {
 		structured += "\n" + shot.PromptSubject

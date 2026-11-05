@@ -129,7 +129,7 @@ func (s *Service) HandleApplySceneStory(c *gin.Context) {
 				return err
 			}
 		}
-		return tx.Model(&models.Scene{}).Where("id = ? AND project_id = ?", locked.ID, locked.ProjectID).Updates(map[string]any{"content": result.Content, "prompt_stale": true}).Error
+		return tx.Model(&models.Scene{}).Where("id = ? AND project_id = ?", locked.ID, locked.ProjectID).Updates(map[string]any{"content": result.Content, "prompt_stale": true, "story_content_edited": true, "director_source_stale": true}).Error
 	})
 	if err != nil {
 		status := http.StatusInternalServerError

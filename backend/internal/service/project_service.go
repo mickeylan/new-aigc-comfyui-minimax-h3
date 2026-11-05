@@ -875,6 +875,12 @@ func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imageProm
 	}
 	if sourceChanged {
 		updates["prompt_stale"] = strings.TrimSpace(sc.VideoFullPrompt) != ""
+		if contentChanged {
+			// Keep historical director shots and media, but atomically revoke their authority
+			// in the same scene update as the new story text.
+			updates["director_source_stale"] = true
+			updates["story_content_edited"] = true
+		}
 		// Detach only an active task so its eventual callback cannot overwrite the retained media.
 		// Terminal task IDs are part of the completed media association and must remain intact.
 		if activeVideoTask {
@@ -886,6 +892,10 @@ func (s *ProjectService) UpdateScene(sc *models.Scene, title, content, imageProm
 	}
 	if err := s.db.Model(sc).Updates(updates).Error; err != nil {
 		return err
+	}
+	if contentChanged {
+		sc.DirectorSourceStale = true
+		sc.StoryContentEdited = true
 	}
 	if durationChanged {
 		if err := markSceneAudioCandidatesStale(s.db, sc.ProjectID, sc.ID, "Scene时长已修改"); err != nil {
@@ -1616,8 +1626,7 @@ func (s *ProjectService) buildSceneVideoSpec(sc *models.Scene, pid string, templ
 	prompt := strings.TrimSpace(sc.VideoFullPrompt)
 	if prompt != "" && isH3KeyframePrompt(prompt) {
 		_, refLines := s.sceneVideoReferenceFiles(sc, pid)
-		var shots []models.Shot
-		_ = s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error
+		shots, _ := s.currentSceneDirectorShots(sc)
 		shots = s.ensureShotDialogueRanges(sc.ID, shots)
 		prompt = normalizeSavedH3Audio(prompt, dubs, refLines, shots)
 		prompt = s.applySceneShotTimeline(sc, prompt)
@@ -2332,8 +2341,8 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	canonicalSceneContent := normalizeUserH3ShotMarkers(generationContent)
 	canonicalSceneContent, explicitTimedShotCount := normalizeSceneTimedBeats(canonicalSceneContent, normalizeSceneDuration(sc.Duration))
 	dubs := s.sceneVideoDialogues(sc)
-	var shots []models.Shot
-	if err := s.db.Where("scene_id=?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
+	shots, err := s.currentSceneDirectorShots(sc)
+	if err != nil {
 		return "", err
 	}
 	if err := validateCombatShotProvenance(shots); err != nil {
@@ -3166,7 +3175,7 @@ func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Di
 	for _, name := range names {
 		// 接受“林采薇说道：\"...\"”“传来林采薇的声音说道：\"...\"”等明确发声写法。
 		// 必须同时具备已知角色名、明确说话动词和引号原文，避免把剧情说明猜成对白。
-		pattern := regexp.MustCompile(regexp.QuoteMeta(name) + `[^。！？!?\r\n]{0,80}?(?:厉喝|怒喝|大喝|喝道|喝喊|喊道|叫道|高喊|刚喊完|喊完|刚说完|说完|说道|说|问道|答道|开口(?:道)?)(?:\s*[:：]\s*["“]?|\s*["“])([^"”]+)["”]`)
+		pattern := regexp.MustCompile(regexp.QuoteMeta(name) + `[^。！？!?\r\n]{0,80}?(?:厉喝|怒喝|大喝|喝道|喝喊|喊道|叫道|高喊|刚喊完|喊完|刚说完|说完|说道|回答道?|回应道?|说|问道|答道|开口(?:道)?)(?:\s*[:：]\s*["“]?|\s*["“])([^"”]+)["”]`)
 		for _, match := range pattern.FindAllStringSubmatchIndex(content, -1) {
 			clauseStart := 0
 			if boundary := strings.LastIndexAny(content[:match[0]], "。！？!?；;\r\n"); boundary >= 0 {
@@ -3541,11 +3550,106 @@ func mergeExtractedCharacterSpeech(dubs []models.Dialogue, extracted []models.Di
 	return out
 }
 
+// editedSceneDialogues rebuilds speech authority from the current story text. DB rows
+// contribute metadata only while an exact current occurrence still exists; media on an
+// old row is deliberately not authority for removed story text.
+func editedSceneDialogues(sc *models.Scene, rows []models.Dialogue) []models.Dialogue {
+	quoted, spans := extractQuotedDialogueSpans(sc.Content)
+	excluded := map[int]bool{}
+	if saved, current := currentSavedDialogueAnalysis(sc); current {
+		for _, item := range saved.Items {
+			if item.Excluded && item.Index >= 0 && item.Index < len(quoted) && quoted[item.Index].Text == item.Text {
+				excluded[item.Index] = true
+			}
+		}
+	}
+	explicit := explicitSceneSpeech(sc)
+	explicitByText := map[string][]models.Dialogue{}
+	for _, d := range explicit {
+		key := canonicalDialogueText(d.Text)
+		explicitByText[key] = append(explicitByText[key], d)
+	}
+	usedExplicit := map[string]int{}
+	quotedCount := map[string]int{}
+	for _, item := range quoted {
+		quotedCount[canonicalDialogueText(item.Text)]++
+	}
+	candidates := make([]models.Dialogue, 0, len(quoted)+len(explicit))
+	for i, item := range quoted {
+		if excluded[i] || !sourceQuoteIsSpeech(sc.Content, []int{spans[i].start, spans[i].end, spans[i].start, spans[i].end}) {
+			continue
+		}
+		key := canonicalDialogueText(item.Text)
+		at := usedExplicit[key]
+		if list := explicitByText[key]; at < len(list) {
+			// Some legacy natural-language recognizers report the same quoted span
+			// more than once. Prefer the final, most specific attribution while the
+			// source occurrence itself remains singular.
+			pick := len(list) - quotedCount[key] + at
+			if pick < 0 {
+				pick = at
+			}
+			d := list[pick]
+			d.Text = item.Text
+			candidates = append(candidates, d)
+			usedExplicit[key]++
+		} else {
+			candidates = append(candidates, models.Dialogue{Text: item.Text, Character: "待确认", SpeechType: "offscreen_dialogue", Source: "source_extract", Status: "pending", Speed: 1, Volume: 1})
+		}
+	}
+	// Explicit standard labels need not use quotation marks.
+	for key, list := range explicitByText {
+		if quotedCount[key] != 0 {
+			continue
+		}
+		candidates = append(candidates, list...)
+	}
+	usedRows := make([]bool, len(rows))
+	out := make([]models.Dialogue, 0, len(candidates))
+	_, analysisCurrent := currentSavedDialogueAnalysis(sc)
+	for _, candidate := range candidates {
+		found := -1
+		for i := range rows {
+			if !usedRows[i] && canonicalDialogueText(rows[i].Text) == canonicalDialogueText(candidate.Text) {
+				found = i
+				break
+			}
+		}
+		if found >= 0 {
+			d := rows[found]
+			usedRows[found] = true
+			// A stale review cannot lock an old speaker over newly explicit current text.
+			if d.Source == "ai_reviewed" && !analysisCurrent {
+				d.Source = "source_extract"
+			}
+			if d.Source != "ai_reviewed" && candidate.Character != "待确认" {
+				// Explicitly changed attribution wins; an unchanged manual speaker
+				// retains the reviewed voice presentation rather than becoming on-screen.
+				if d.Character != candidate.Character || d.Source != "user" {
+					d.Character, d.SpeechType = candidate.Character, candidate.SpeechType
+				}
+			}
+			out = append(out, d)
+		} else {
+			candidate.SceneID, candidate.ProjectID = sc.ID, sc.ProjectID
+			out = append(out, candidate)
+		}
+	}
+	for i := range out {
+		out[i].Order = i + 1
+	}
+	return out
+}
+
 func (s *ProjectService) sceneVideoDialogues(sc *models.Scene) []models.Dialogue {
 	var dubs []models.Dialogue
 	s.db.Where("scene_id = ?", sc.ID).Order("`order`").Find(&dubs)
-	dubs = mergeSavedReviewedSceneDialogue(sc, dubs)
-	dubs = mergeExplicitSceneSpeech(sc, dubs)
+	if sc.StoryContentEdited {
+		dubs = editedSceneDialogues(sc, dubs)
+	} else {
+		dubs = mergeSavedReviewedSceneDialogue(sc, dubs)
+		dubs = mergeExplicitSceneSpeech(sc, dubs)
+	}
 	var project models.Project
 	s.db.First(&project, sc.ProjectID)
 	projectNarratorVoice := projectNarratorVoiceDescription(project)
@@ -3571,7 +3675,9 @@ func (s *ProjectService) sceneVideoDialogues(sc *models.Scene) []models.Dialogue
 			projectSpeech[i].Character = canonical
 		}
 	}
-	dubs = mergeExtractedCharacterSpeech(dubs, projectSpeech)
+	if !sc.StoryContentEdited {
+		dubs = mergeExtractedCharacterSpeech(dubs, projectSpeech)
+	}
 	for i := range dubs {
 		if (dubs[i].SpeechType == "narration" || isNarrationSpeaker(dubs[i].Character)) && projectNarratorVoice != "" {
 			dubs[i].H3VoiceDescription = projectNarratorVoice
@@ -4004,8 +4110,8 @@ func (s *ProjectService) applySceneShotTimeline(sc *models.Scene, prompt string)
 	if _, count := normalizeSceneTimedBeats(normalizeUserH3ShotMarkers(sc.Content), normalizeSceneDuration(sc.Duration)); count > 0 {
 		return applyAuthoritativeSceneShotTimeline(prompt, sc.Content)
 	}
-	var shots []models.Shot
-	if err := s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
+	shots, err := s.currentSceneDirectorShots(sc)
+	if err != nil {
 		return prompt
 	}
 	return applyShotTimeline(prompt, shots, normalizeSceneDuration(sc.Duration))
@@ -4590,8 +4696,8 @@ func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, refere
 }
 
 func (s *ProjectService) compileSceneStructuredDialogue(sc *models.Scene, body string, dubs []models.Dialogue, referenceLines []string) string {
-	var shots []models.Shot
-	if err := s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
+	shots, err := s.currentSceneDirectorShots(sc)
+	if err != nil {
 		return appendStructuredDialogue(body, dubs, referenceLines)
 	}
 	shots = s.ensureShotDialogueRanges(sc.ID, shots)
@@ -6478,9 +6584,21 @@ func (s *ProjectService) qwenStaticKeyframeContext(sc *models.Scene) string {
 	return strings.Join(parts, "；")
 }
 
-func (s *ProjectService) sceneShotContext(sc *models.Scene) string {
+func (s *ProjectService) currentSceneDirectorShots(sc *models.Scene) ([]models.Shot, error) {
+	if sc == nil || sc.DirectorSourceStale {
+		return nil, nil
+	}
 	var shots []models.Shot
-	if err := s.db.Where("scene_id = ?", sc.ID).Order("order_num").Find(&shots).Error; err != nil || len(shots) == 0 {
+	err := s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error
+	return shots, err
+}
+
+func (s *ProjectService) sceneShotContext(sc *models.Scene) string {
+	if sc != nil && sc.DirectorSourceStale {
+		return "以最新保存场景正文为唯一剧情依据；旧导演镜头来自修改前正文，仅保留历史，不参与本次生成。"
+	}
+	shots, err := s.currentSceneDirectorShots(sc)
+	if err != nil || len(shots) == 0 {
 		return "未设置结构化镜头；根据场景剧情选择一个最有叙事信息量的起始画面"
 	}
 	lines := make([]string, 0, len(shots))
@@ -7396,8 +7514,8 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		return err
 	}
 	sc = &latest
-	var structuredShots []models.Shot
-	if err := s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&structuredShots).Error; err != nil {
+	structuredShots, err := s.currentSceneDirectorShots(sc)
+	if err != nil {
 		return err
 	}
 	dialogues := s.sceneVideoDialogues(sc)
@@ -7431,8 +7549,7 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 			if len(refFiles) > 0 {
 				dubs := s.sceneVideoDialogues(sc)
 				prompt = resolveRef2VSubmissionPrompt(sc, p, dubs, refLines)
-				var shots []models.Shot
-				_ = s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error
+				shots, _ := s.currentSceneDirectorShots(sc)
 				shots = s.ensureShotDialogueRanges(sc.ID, shots)
 				prompt = normalizeSavedH3Audio(prompt, dubs, refLines, shots)
 				prompt = s.applySceneShotTimeline(sc, prompt)

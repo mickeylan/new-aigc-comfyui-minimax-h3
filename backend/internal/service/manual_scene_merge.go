@@ -103,9 +103,26 @@ func loadManualMergeSource(db *gorm.DB, projectID uint, ids []uint) (*manualMerg
 	if err := db.Where("scene_id IN ?", orderedIDs).Order("scene_id, order_num, id").Find(&shots).Error; err != nil {
 		return nil, err
 	}
+	// Resolve each scene through the same read-only path used by video generation.
+	// The dialogue table alone is not complete: reviewed analysis may not have been
+	// materialized yet, and explicit source speech can also be effective dialogue.
+	// Conversely, user_excluded rows are tombstones and must not be resurrected.
 	var dialogues []models.Dialogue
-	if err := db.Where("scene_id IN ? AND project_id = ?", orderedIDs, projectID).Find(&dialogues).Error; err != nil {
-		return nil, err
+	projectService := &ProjectService{db: db}
+	for i := range scenes {
+		// Validate the authoritative query before read-only recovery (which may
+		// synthesize rows with no persisted ID or SceneID).
+		var excluded []models.Dialogue
+		if err := db.Where("scene_id = ? AND project_id = ? AND source = ?", scenes[i].ID, projectID, "user_excluded").Order("`order`, id").Find(&excluded).Error; err != nil {
+			return nil, err
+		}
+		effective := projectService.sceneVideoDialogues(&scenes[i])
+		for j := range effective {
+			effective[j].SceneID = scenes[i].ID
+			effective[j].ProjectID = projectID
+		}
+		dialogues = append(dialogues, effective...)
+		dialogues = append(dialogues, excluded...)
 	}
 	sceneOrder := make(map[uint]int, len(scenes))
 	for i, sc := range scenes {
@@ -169,12 +186,64 @@ func manualMergeHash(src *manualMergeSource) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
+
+// manualMergeSceneContent keeps the authored body byte-for-byte and only appends
+// effective spoken lines which are absent from it. Counts are occurrence-based so
+// repeated lines are neither collapsed nor multiplied. Unknown speakers remain
+// unattributed rather than acquiring a guessed owner.
+func manualMergeSceneContent(sc models.Scene, dialogues []models.Dialogue) string {
+	content := sc.Content
+	present := map[string]int{}
+	for _, item := range extractQuotedDialogue(content) {
+		present[canonicalDialogueText(item.Text)]++
+	}
+	needed := map[string]int{}
+	var additions []string
+	for _, d := range dialogues {
+		if d.SceneID != sc.ID || d.Source == "user_excluded" {
+			continue
+		}
+		text := d.Text
+		key := canonicalDialogueText(text)
+		if key == "" {
+			continue
+		}
+		needed[key]++
+		if needed[key] <= present[key] {
+			continue
+		}
+		speaker := strings.TrimSpace(d.Character)
+		if speaker == "" || speaker == "待确认" || speaker == "未知" {
+			additions = append(additions, "“"+text+"”")
+		} else {
+			switch d.SpeechType {
+			case "offscreen_dialogue":
+				additions = append(additions, speaker+"从画外说道：“"+text+"”")
+			case "narration":
+				additions = append(additions, "旁白：“"+text+"”")
+			case "monologue":
+				additions = append(additions, speaker+"的内心独白：“"+text+"”")
+			default:
+				additions = append(additions, speaker+"说：“"+text+"”")
+			}
+		}
+	}
+	if len(additions) == 0 {
+		return content
+	}
+	separator := "\n"
+	if strings.TrimSpace(content) != "" {
+		separator = "\n\n"
+	}
+	return content + separator + strings.Join(additions, "\n")
+}
+
 func manualMergePreview(src *manualMergeSource) *ManualSceneMergePreview {
 	p := &ManualSceneMergePreview{SourceHash: manualMergeHash(src), Title: src.Scenes[0].Title + "（合镜）", Warnings: []string{"原场景及其媒体历史会保留并归档；新场景需要重新审核生成。", "仅保留首个场景的参考图选择；请在合并后复核参考图、屏幕文字和音频层。"}}
 	parts := make([]string, len(src.Scenes))
 	for i, sc := range src.Scenes {
 		p.SceneIDs = append(p.SceneIDs, sc.ID)
-		parts[i] = sc.Content
+		parts[i] = manualMergeSceneContent(sc, src.Dialogues)
 		p.Duration += sc.Duration
 	}
 	p.Content = strings.Join(parts, "\n\n")
@@ -339,7 +408,11 @@ func (s *Service) ApplyManualSceneMerge(projectID uint, ids []uint, expected str
 			if err := tx.Create(&n).Error; err != nil {
 				return err
 			}
-			dialogueMap[oldID] = n.ID
+			// Inferred effective dialogues have no persistent source ID. Copy them,
+			// but do not let their shared zero ID collide in shot bookkeeping.
+			if oldID > 0 {
+				dialogueMap[oldID] = n.ID
+			}
 		}
 		shotOrder := 0
 		shotMap := map[uint]uint{}

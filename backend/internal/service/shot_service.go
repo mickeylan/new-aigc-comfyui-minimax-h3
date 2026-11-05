@@ -577,7 +577,11 @@ func (s *ShotService) ReplaceShotsWithDialogueSnapshot(sceneID uint, shots []mod
 		if err := aggregateShotsIntoScene(tx, sceneID, shots); err != nil {
 			return err
 		}
-		return nil
+		// A successful full replacement is explicit acceptance of this complete
+		// director design. Clear source invalidation in the same transaction, after
+		// aggregation, without deriving or rewriting user-authored Scene.Content.
+		return tx.Model(&models.Scene{}).Where("id = ?", sceneID).
+			Update("director_source_stale", false).Error
 	})
 	if err == nil {
 		decorateShotDialogueContinuity(shots)
