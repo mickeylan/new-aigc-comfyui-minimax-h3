@@ -1207,14 +1207,40 @@ async function loadScreenTextPreflight() {
   catch (e) { screenTextPreflight.value = { ok:false, issues:[{severity:'error',message:e.response?.data?.error || '功能文字导出检查失败'}], previews:[] } }
   finally { screenTextPreflightLoading.value = false }
 }
-async function loadScreenTextCues() {
-  try {
-    const [cueRes, characterRes, fontRes] = await Promise.all([api.screenTextCues(id(), activeEpN.value), api.characters(id()), api.approvedFonts()])
-    screenTextCues.value = cueRes.data || []
-    characters.value = Array.isArray(characterRes.data) ? characterRes.data : (characterRes.data?.characters || [])
-    approvedFonts.value = fontRes.data?.fonts || []
-    await loadScreenTextPreflight()
-  } catch (e) { toast.error(e.response?.data?.error || '加载功能文字失败') }
+let editorScreenTextLoadedKey = ''
+let editorScreenTextRequestedKey = ''
+let editorScreenTextRetryAt = 0
+let editorScreenTextDisposed = false
+const editorScreenTextRequests = new Map()
+async function loadScreenTextCues(force = false) {
+  const projectID = id(), episodeN = activeEpN.value
+  const key = `${projectID}:${episodeN}`
+  if (editorScreenTextRequestedKey !== key) {
+    editorScreenTextRequestedKey = key
+    editorScreenTextLoadedKey = ''
+    editorScreenTextRetryAt = 0
+    screenTextCues.value = []
+  }
+  if (editorScreenTextDisposed || (!force && (editorScreenTextLoadedKey === key || Date.now() < editorScreenTextRetryAt))) return
+  if (editorScreenTextRequests.has(key)) return editorScreenTextRequests.get(key)
+  const request = (async () => {
+    try {
+      const [cueRes, characterRes, fontRes] = await Promise.all([api.screenTextCues(projectID, episodeN), api.characters(projectID), api.approvedFonts()])
+      if (editorScreenTextDisposed || `${id()}:${activeEpN.value}` !== key) return
+      screenTextCues.value = cueRes.data || []
+      characters.value = Array.isArray(characterRes.data) ? characterRes.data : (characterRes.data?.characters || [])
+      approvedFonts.value = fontRes.data?.fonts || []
+      editorScreenTextLoadedKey = key
+      await loadScreenTextPreflight()
+    } catch (e) {
+      if (!editorScreenTextDisposed && `${id()}:${activeEpN.value}` === key) {
+        editorScreenTextRetryAt = Date.now() + 30000
+        toast.error(e.response?.data?.error || '加载功能文字失败')
+      }
+    } finally { editorScreenTextRequests.delete(key) }
+  })()
+  editorScreenTextRequests.set(key, request)
+  return request
 }
 function screenTextKindLabel(kind) { return { character_intro:'人物出场', location:'地点', time_card:'时间', transition:'过场', chapter_title:'章回标题', story_note:'剧情提示', end_card:'本集完', custom:'自定义' }[kind] || kind }
 function cueTimelineStyle(cue) {
@@ -1266,13 +1292,13 @@ async function saveScreenTextCue() {
     cueId ? await api.updateScreenTextCue(id(), cueId, payload) : await api.createScreenTextCue(id(), payload)
     screenTextEditing.value = false
     toast.success('功能文字已加入当前分镜；原始Scene视频保持不变，重新合并并开启“烧录功能文字”后写入成片')
-    await loadScreenTextCues()
+    await loadScreenTextCues(true)
   } catch (e) { toast.error(e.response?.data?.error || '保存功能文字失败') }
   finally { screenTextSaving.value = false }
 }
 async function removeScreenTextCue(cue) {
   if (!window.confirm(`删除功能文字“${cue.text}”？`)) return
-  try { await api.deleteScreenTextCue(id(), cue.id); await loadScreenTextCues() }
+  try { await api.deleteScreenTextCue(id(), cue.id); await loadScreenTextCues(true) }
   catch (e) { toast.error(e.response?.data?.error || '删除功能文字失败') }
 }
 function editAudioLayer(layer = null) {
@@ -1398,7 +1424,7 @@ onMounted(async () => {
     }
   }, 8000)
 })
-onUnmounted(() => { clearInterval(timer); videoDraftSafety?.dispose() })
+onUnmounted(() => { editorScreenTextDisposed = true; clearInterval(timer); videoDraftSafety?.dispose() })
 watch(videoPromptDraft, () => videoDraftSafety?.schedule())
 </script>
 

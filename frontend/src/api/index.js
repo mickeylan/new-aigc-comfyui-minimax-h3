@@ -1,9 +1,19 @@
 import axios from 'axios'
+import { createScreenTextRequests } from '../utils/screenTextRequests.js'
 
 const http = axios.create({
   baseURL: '/api',
   timeout: 120000
 })
+
+const screenTextRequests = createScreenTextRequests({
+  fetch: (id, episodeN) => http.get(`/projects/${id}/screen-text-cues`, { params: episodeN ? { episode_n: episodeN } : {} })
+})
+async function mutateScreenText(id, request) {
+  const response = await request()
+  screenTextRequests.invalidate(id)
+  return response
+}
 
 export const api = {
   instances: () => http.get('/instances'),
@@ -196,11 +206,11 @@ export const api = {
   unselectMusicCandidate: (id, cid, mid) => http.post(`/projects/${id}/music-cue-sheets/${cid}/candidates/${mid}/unselect`),
   batchApproveMusicCues: (id, episodeN, reviewReason = '') => http.post(`/projects/${id}/music-cue-sheets/batch-approve`, { episode_n: episodeN, review_reason: reviewReason }),
   deleteMusicCandidate: (id, cid, mid) => http.delete(`/projects/${id}/music-cue-sheets/${cid}/candidates/${mid}`),
-  screenTextCues: (id, episodeN) => http.get(`/projects/${id}/screen-text-cues`, { params: episodeN ? { episode_n: episodeN } : {} }),
+  screenTextCues: (id, episodeN) => screenTextRequests.list(id, episodeN),
   screenTextPreflight: (id, episodeN, width = 1920, height = 1080) => http.get(`/projects/${id}/screen-text-cues/preflight`, { params: { episode_n: episodeN, width, height } }),
-  createScreenTextCue: (id, data) => http.post(`/projects/${id}/screen-text-cues`, data),
-  updateScreenTextCue: (id, cid, data) => http.put(`/projects/${id}/screen-text-cues/${cid}`, data),
-  deleteScreenTextCue: (id, cid) => http.delete(`/projects/${id}/screen-text-cues/${cid}`),
+  createScreenTextCue: (id, data) => mutateScreenText(id, () => http.post(`/projects/${id}/screen-text-cues`, data)),
+  updateScreenTextCue: (id, cid, data) => mutateScreenText(id, () => http.put(`/projects/${id}/screen-text-cues/${cid}`, data)),
+  deleteScreenTextCue: (id, cid) => mutateScreenText(id, () => http.delete(`/projects/${id}/screen-text-cues/${cid}`)),
   approvedFonts: () => http.get('/fonts'),
   // 角色资产
   characters: (id) => http.get(`/projects/${id}/characters`),
