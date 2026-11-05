@@ -424,6 +424,132 @@ func TestNormalizeSavedH3AudioRecoveredDialogueRemovesSilentConflict(t *testing.
 	}
 }
 
+func TestDialogueExclusionRepeatedOccurrenceRestoreAndMediaSafety(t *testing.T) {
+	s, db, scene := expandHTTPService(t, "http://unused.invalid")
+	if err := db.AutoMigrate(&models.Dialogue{}); err != nil {
+		t.Fatal(err)
+	}
+	s.Projects = &ProjectService{db: db}
+	scene.Content = `甲说：“重复。”乙说：“重复。”`
+	scene.ImageFile, scene.VideoFile, scene.VideoFullPrompt = "keep.png", "keep.mp4", "keep prompt"
+	if err := db.Save(scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows := []models.Dialogue{
+		{ProjectID: scene.ProjectID, SceneID: scene.ID, Order: 1, Character: "甲", Text: "重复。", SpeechType: "dialogue", Source: "ai_reviewed", AudioFile: "one.wav", Status: "ready"},
+		{ProjectID: scene.ProjectID, SceneID: scene.ID, Order: 2, Character: "乙", Text: "重复。", SpeechType: "dialogue", Source: "ai_reviewed", AudioFile: "two.wav", Status: "ready"},
+	}
+	for i := range rows {
+		if err := db.Create(&rows[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := gin.New()
+	r.POST("/api/projects/:id/scenes/:sid/dialogue/apply", s.HandleApplySceneDialogue)
+	r.POST("/api/projects/:id/scenes/:sid/dialogue/analyze", s.HandleAnalyzeSceneDialogue)
+	apply := func(items []SceneDialogueAnalysisItem) {
+		body, _ := json.Marshal(SceneDialogueAnalysis{Items: items, ContentHash: sceneDialogueContentHash(scene.Content)})
+		w := httptest.NewRecorder()
+		q := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/projects/%d/scenes/%d/dialogue/apply", scene.ProjectID, scene.ID), bytes.NewReader(body))
+		q.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(w, q)
+		if w.Code != 200 {
+			t.Fatalf("apply: %s", w.Body.String())
+		}
+	}
+	items := []SceneDialogueAnalysisItem{{Index: 0, Text: "重复。", Speaker: "甲", SpeechType: "dialogue", Excluded: true}, {Index: 1, Text: "重复。", Speaker: "乙", SpeechType: "dialogue"}}
+	apply(items)
+	var got []models.Dialogue
+	db.Where("scene_id=?", scene.ID).Order("`order`").Find(&got)
+	if len(got) != 2 || got[0].Source != "user_excluded" || got[0].AudioFile != "one.wav" || got[1].Source == "user_excluded" {
+		t.Fatalf("occurrence/media mismatch: %+v", got)
+	}
+	var current models.Scene
+	db.First(&current, scene.ID)
+	video := s.Projects.sceneVideoDialogues(&current)
+	if len(video) != 1 || video[0].Character != "乙" {
+		t.Fatalf("excluded dialogue reached video: %+v", video)
+	}
+	items[0].Excluded = false
+	apply(items)
+	db.First(&current, scene.ID)
+	video = s.Projects.sceneVideoDialogues(&current)
+	if len(video) != 2 {
+		t.Fatalf("restore failed: %+v", video)
+	}
+	db.Order("`order`").Where("scene_id=?", scene.ID).Find(&got)
+	if got[0].AudioFile != "one.wav" || got[1].AudioFile != "two.wav" || current.ImageFile != "keep.png" || current.VideoFile != "keep.mp4" || current.VideoFullPrompt != "keep prompt" {
+		t.Fatal("restore altered media")
+	}
+	current.Content = `甲说：“变化。”`
+	db.Save(&current)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/projects/%d/scenes/%d/dialogue/analyze", scene.ProjectID, scene.ID), nil))
+	if strings.Contains(w.Body.String(), `"excluded":true`) {
+		t.Fatalf("stale exclusion survived body change: %s", w.Body.String())
+	}
+}
+
+func TestDialogueExclusionCreatesTombstoneAndRejectsStaleHash(t *testing.T) {
+	s, db, scene := expandHTTPService(t, "http://unused.invalid")
+	if err := db.AutoMigrate(&models.Dialogue{}); err != nil {
+		t.Fatal(err)
+	}
+	s.Projects = &ProjectService{db: db}
+	scene.Content = `甲说：“重复。”乙说：“重复。”`
+	if err := db.Save(scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	r := gin.New()
+	r.POST("/api/projects/:id/scenes/:sid/dialogue/apply", s.HandleApplySceneDialogue)
+	post := func(analysis SceneDialogueAnalysis) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(analysis)
+		w := httptest.NewRecorder()
+		q := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/projects/%d/scenes/%d/dialogue/apply", scene.ProjectID, scene.ID), bytes.NewReader(body))
+		q.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(w, q)
+		return w
+	}
+	items := []SceneDialogueAnalysisItem{
+		{Index: 0, Text: "重复。", Speaker: "甲", SpeechType: "dialogue", Excluded: true},
+		{Index: 1, Text: "重复。", Speaker: "乙", SpeechType: "dialogue"},
+	}
+	analysis := SceneDialogueAnalysis{Items: items, ContentHash: sceneDialogueContentHash(scene.Content)}
+	if w := post(analysis); w.Code != http.StatusOK {
+		t.Fatalf("apply status=%d body=%s", w.Code, w.Body.String())
+	}
+	var rows []models.Dialogue
+	db.Where("scene_id=?", scene.ID).Order("`order`,id").Find(&rows)
+	if len(rows) != 2 || rows[0].Source != "user_excluded" || rows[0].SpeechType != "unknown" || rows[1].Source != "ai_reviewed" {
+		t.Fatalf("expected one tombstone per occurrence: %+v", rows)
+	}
+	var current models.Scene
+	db.First(&current, scene.ID)
+	if got := s.Projects.sceneVideoDialogues(&current); len(got) != 1 || got[0].Character != "乙" {
+		t.Fatalf("excluded occurrence resurrected: %+v", got)
+	}
+	var ready []models.Dialogue
+	ready, skipped, err := s.Projects.loadReadyDialogues(db, []uint{scene.ID})
+	if err != nil || len(ready) != 0 || len(skipped) != 1 || skipped[0].Dialogue.Source == "user_excluded" {
+		t.Fatalf("mix load included tombstone: ready=%+v skipped=%+v err=%v", ready, skipped, err)
+	}
+	beforeJSON := current.DialogueAnalysisJSON
+	current.Content = `甲说：“已变化。”`
+	if err := db.Save(&current).Error; err != nil {
+		t.Fatal(err)
+	}
+	if w := post(analysis); w.Code != http.StatusConflict {
+		t.Fatalf("stale apply status=%d body=%s", w.Code, w.Body.String())
+	}
+	var after models.Scene
+	db.First(&after, scene.ID)
+	var count int64
+	db.Model(&models.Dialogue{}).Where("scene_id=?", scene.ID).Count(&count)
+	if count != 2 || after.DialogueAnalysisJSON != beforeJSON {
+		t.Fatalf("stale request wrote data: count=%d json=%q", count, after.DialogueAnalysisJSON)
+	}
+}
+
 func TestExtractQuotedDialogueKeepsPunctuationAndUnknownOnBadAI(t *testing.T) {
 	items := extractQuotedDialogue(`石碑刻着“太虚门”，虬髯大汉说：“住手？！ ”`)
 	if len(items) != 2 || items[0].Text != "太虚门" || items[1].Text != "住手？！ " || !items[1].NeedsReview {

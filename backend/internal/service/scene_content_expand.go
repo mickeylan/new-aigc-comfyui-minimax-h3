@@ -40,6 +40,7 @@ func (s *Service) HandleExpandSceneContent(c *gin.Context) {
 
 	draftScene := *scene
 	draftScene.Content = strings.TrimSpace(req.Content)
+	generationContent := sceneDialogueGenerationContent(&draftScene)
 	context, err := s.sceneContentExpandContext(&draftScene)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -48,9 +49,13 @@ func (s *Service) HandleExpandSceneContent(c *gin.Context) {
 	const system = `你是影视导演和场面调度师。把用户当前未保存的场景正文扩写成中文、可拍摄的场景剧本过程，而不是视频提示词翻译。只输出合法JSON：{"content":"...","director_note":"..."}。
 必须忠于已有事实与前后场。连续性优先级固定为：前一Scene最后Shot的end_state及其主体位置、朝向、手持道具、视线、动作余势 > 前一Scene正文与Dialogue > 当前未保存正文与当前Dialogue > 后一Scene边界。当前正文仍是本镜剧情权威；前镜生产状态只约束本镜如何开始，不能改写当前剧情。已确认上一镜尾帧只约束0.00秒可见状态，不得从图片文件名或参考图猜剧情。后一Scene只能防止提前演出后续事件，绝不能倒灌成当前动作。
 把概括词落实为可见的表演因果和连贯动作，例如“虚弱”落实为重心、步幅、短暂停顿与继续行动的选择，而不是增加形容词。围绕角色当前目的、已有阻力、即时反应和结束姿态组织节奏，避免把所有句子写成同速流水账；仅在有助于叙事时提出景别和视线落点。扩展表现过程，不扩展剧情事件；不得凭空增加追兵、障碍、受伤、能力或胜负，不得臆造服装/参考图细节。必须尊重当前单镜时长，不在短镜头塞入一长串动作。dialogues中有明确对白时逐字保留并自然嵌入；当前正文中明确说出的台词也必须保留，不能因为结构化列表缺失就删除。没有明确对白时禁止新增台词。不要输出H3字段、英文视频提示词或Shot JSON。时长容不下时在director_note建议后续拆镜，不改变已有剧情结果。director_note保持简短。`
-	user := fmt.Sprintf("【当前未保存正文】\n%s\n\n【创作要求】\n%s\n\n【同集同版本、角色资产与明确对白上下文】\n%s", strings.TrimSpace(req.Content), strings.TrimSpace(req.Requirements), context)
+	exclusionNote := ""
+	if excludedCount := currentSceneDialogueExclusionCount(&draftScene); excludedCount > 0 {
+		exclusionNote = fmt.Sprintf("\n用户已排除%d条引号误识别，不得当作发声。", excludedCount)
+	}
+	user := fmt.Sprintf("【当前未保存正文】\n%s%s\n\n【创作要求】\n%s\n\n【同集同版本、角色资产与明确对白上下文】\n%s", generationContent, exclusionNote, strings.TrimSpace(req.Requirements), context)
 	output, err := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, sceneContentExpandSkillCode, s.TextProviderFact, system, user, map[string]string{
-		"scene_id": fmt.Sprint(scene.ID), "scene_content": strings.TrimSpace(req.Content), "requirements": strings.TrimSpace(req.Requirements), "context": context,
+		"scene_id": fmt.Sprint(scene.ID), "scene_content": generationContent, "requirements": strings.TrimSpace(req.Requirements), "context": context,
 	})
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "AI 导演扩写失败: " + err.Error()})
@@ -85,7 +90,7 @@ func (s *Service) sceneContentExpandContext(scene *models.Scene) (string, error)
 		if err := s.DB.Where("project_id = ? AND scene_id = ?", scene.ProjectID, previous.ID).Order("`order`, id").Find(&previousDialogues).Error; err != nil {
 			return "", err
 		}
-		previousDialogues = mergeExplicitSceneSpeech(&previous, previousDialogues)
+		previousDialogues = validSceneDialogues(mergeExplicitSceneSpeech(&previous, previousDialogues))
 	}
 	var continuity models.SceneContinuity
 	continuityErr := s.DB.Where("scene_id = ?", scene.ID).First(&continuity).Error
@@ -114,7 +119,7 @@ func (s *Service) sceneContentExpandContext(scene *models.Scene) (string, error)
 	if err := s.DB.Where("project_id = ? AND scene_id = ?", scene.ProjectID, scene.ID).Order("`order`").Find(&dialogues).Error; err != nil {
 		return "", err
 	}
-	dialogues = mergeExplicitSceneSpeech(scene, dialogues)
+	dialogues = validSceneDialogues(mergeExplicitSceneSpeech(scene, dialogues))
 	var b strings.Builder
 	fmt.Fprintf(&b, "当前场景：%s；时长：%.1f秒；文武类型：%s；可见人物：%s；发声人物：%s；地点：%s；道具：%s\n", scene.Title, scene.Duration, scene.SceneMode, visibleSceneCharacterNames(scene), scene.VoiceCharacters, scene.LocationName, scene.Props)
 	fmt.Fprintln(&b, "前镜生产状态（最高连续性约束；本镜开场必须承接，不得重置人物、道具或未完成动作）：")

@@ -1,7 +1,10 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -21,17 +24,43 @@ type SceneDialogueAnalysisItem struct {
 	SpeechType  string `json:"speech_type"`
 	TimeSegment string `json:"time_segment"`
 	NeedsReview bool   `json:"needs_review"`
+	Excluded    bool   `json:"excluded"`
 }
 
 type SceneDialogueAnalysis struct {
-	Items  []SceneDialogueAnalysisItem `json:"items"`
-	Source string                      `json:"source"`
+	Items       []SceneDialogueAnalysisItem `json:"items"`
+	Source      string                      `json:"source"`
+	ContentHash string                      `json:"content_hash"`
+}
+
+func sceneDialogueContentHash(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
+}
+
+func currentSavedDialogueAnalysis(sc *models.Scene) (SceneDialogueAnalysis, bool) {
+	var saved SceneDialogueAnalysis
+	if sc == nil || json.Unmarshal([]byte(sc.DialogueAnalysisJSON), &saved) != nil || saved.Source != "ai_reviewed" {
+		return saved, false
+	}
+	return saved, saved.ContentHash != "" && saved.ContentHash == sceneDialogueContentHash(sc.Content)
 }
 
 // extractQuotedDialogue only locates explicitly quoted source spans. It deliberately
 // does not guess attribution; slicing by byte offsets preserves source bytes exactly.
 func extractQuotedDialogue(content string) []SceneDialogueAnalysisItem {
+	items, _ := extractQuotedDialogueSpans(content)
+	return items
+}
+
+type sceneDialogueQuoteSpan struct {
+	start int
+	end   int
+}
+
+func extractQuotedDialogueSpans(content string) ([]SceneDialogueAnalysisItem, []sceneDialogueQuoteSpan) {
 	var out []SceneDialogueAnalysisItem
+	var spans []sceneDialogueQuoteSpan
 	for pos := 0; pos < len(content); {
 		start, width, curly := -1, 1, false
 		if content[pos] == '"' {
@@ -59,10 +88,60 @@ func extractQuotedDialogue(content string) []SceneDialogueAnalysisItem {
 		text := content[bodyStart:closeAt]
 		if text != "" {
 			out = append(out, SceneDialogueAnalysisItem{Index: len(out), Text: text, Speaker: "待确认", SpeechType: "dialogue", NeedsReview: true})
+			spans = append(spans, sceneDialogueQuoteSpan{start: start, end: closeAt + width})
 		}
 		pos = closeAt + width
 	}
-	return out
+	return out, spans
+}
+
+// sceneDialogueGenerationContent returns a generation-only copy of Scene.Content.
+// A reviewed exclusion applies only to the exact quoted occurrence and content hash
+// that the user reviewed; the persisted Scene.Content is never changed.
+func sceneDialogueGenerationContent(sc *models.Scene) string {
+	if sc == nil {
+		return ""
+	}
+	saved, current := currentSavedDialogueAnalysis(sc)
+	if !current {
+		return sc.Content
+	}
+	items, spans := extractQuotedDialogueSpans(sc.Content)
+	excluded := make(map[int]bool)
+	for _, item := range saved.Items {
+		if item.Excluded && item.Index >= 0 && item.Index < len(items) && item.Text == items[item.Index].Text {
+			excluded[item.Index] = true
+		}
+	}
+	if len(excluded) == 0 {
+		return sc.Content
+	}
+	var b strings.Builder
+	last := 0
+	for i, span := range spans {
+		if !excluded[i] {
+			continue
+		}
+		b.WriteString(sc.Content[last:span.start])
+		last = span.end
+	}
+	b.WriteString(sc.Content[last:])
+	return b.String()
+}
+
+func currentSceneDialogueExclusionCount(sc *models.Scene) int {
+	saved, current := currentSavedDialogueAnalysis(sc)
+	if !current {
+		return 0
+	}
+	items := extractQuotedDialogue(sc.Content)
+	count := 0
+	for _, item := range saved.Items {
+		if item.Excluded && item.Index >= 0 && item.Index < len(items) && item.Text == items[item.Index].Text {
+			count++
+		}
+	}
+	return count
 }
 
 func parseDialogueAI(raw string, original []SceneDialogueAnalysisItem) ([]SceneDialogueAnalysisItem, error) {
@@ -89,7 +168,8 @@ func parseDialogueAI(raw string, original []SceneDialogueAnalysisItem) ([]SceneD
 		if !ok {
 			continue
 		}
-		// AI text is never authoritative. Only metadata is accepted by index.
+		// AI text and exclusion are never authoritative. Only metadata is accepted by index.
+		out[i].Excluded = false
 		out[i].Speaker = strings.TrimSpace(ai.Speaker)
 		if out[i].Speaker == "" {
 			out[i].Speaker = "待确认"
@@ -108,14 +188,14 @@ func mergeSavedReviewedSceneDialogue(sc *models.Scene, dubs []models.Dialogue) [
 	if sc == nil || strings.TrimSpace(sc.DialogueAnalysisJSON) == "" {
 		return dubs
 	}
-	var saved SceneDialogueAnalysis
-	if json.Unmarshal([]byte(sc.DialogueAnalysisJSON), &saved) != nil || saved.Source != "ai_reviewed" {
+	saved, current := currentSavedDialogueAnalysis(sc)
+	if saved.Source != "ai_reviewed" || (saved.ContentHash != "" && !current) {
 		return dubs
 	}
 	original := extractQuotedDialogue(sc.Content)
 	byIndex := make(map[int]SceneDialogueAnalysisItem, len(saved.Items))
 	for _, item := range saved.Items {
-		if item.Index >= 0 && item.Index < len(original) && item.Text == original[item.Index].Text {
+		if !item.Excluded && item.Index >= 0 && item.Index < len(original) && item.Text == original[item.Index].Text {
 			byIndex[item.Index] = item
 		}
 	}
@@ -160,7 +240,14 @@ func (s *Service) HandleAnalyzeSceneDialogue(c *gin.Context) {
 		return
 	}
 	original := extractQuotedDialogue(scene.Content)
-	analysis := SceneDialogueAnalysis{Items: original, Source: "source_extract"}
+	analysis := SceneDialogueAnalysis{Items: original, Source: "source_extract", ContentHash: sceneDialogueContentHash(scene.Content)}
+	if saved, current := currentSavedDialogueAnalysis(scene); current {
+		for _, reviewed := range saved.Items {
+			if reviewed.Excluded && reviewed.Index >= 0 && reviewed.Index < len(analysis.Items) && reviewed.Text == analysis.Items[reviewed.Index].Text {
+				analysis.Items[reviewed.Index].Excluded = true
+			}
+		}
+	}
 	warning := ""
 	if len(original) > 0 && s.Skills != nil && s.TextProviderFact != nil {
 		indexed, _ := json.Marshal(original)
@@ -172,6 +259,9 @@ func (s *Service) HandleAnalyzeSceneDialogue(c *gin.Context) {
 		} else if items, parseErr := parseDialogueAI(raw, original); parseErr != nil {
 			warning = "AI返回格式无效，已保留全部原文台词：" + parseErr.Error()
 		} else {
+			for i := range items {
+				items[i].Excluded = analysis.Items[i].Excluded
+			}
 			analysis.Items = items
 			analysis.Source = "ai_preview"
 		}
@@ -181,6 +271,8 @@ func (s *Service) HandleAnalyzeSceneDialogue(c *gin.Context) {
 	// Analysis is a preview. Persist only after the user explicitly applies it.
 	c.JSON(http.StatusOK, gin.H{"analysis": analysis, "persisted": false, "warning": warning})
 }
+
+var errSceneDialogueConflict = errors.New("场景正文已变化，请重新分析对白")
 
 func (s *Service) HandleApplySceneDialogue(c *gin.Context) {
 	scene, ok := s.loadScene(c)
@@ -192,16 +284,31 @@ func (s *Service) HandleApplySceneDialogue(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "对白审阅数据无效"})
 		return
 	}
-	original := extractQuotedDialogue(scene.Content)
-	var existing []models.Dialogue
-	if err := s.DB.Where("project_id=? AND scene_id=?", scene.ProjectID, scene.ID).Order("`order`,id").Find(&existing).Error; err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+	hasExclusion := false
+	for _, item := range req.Items {
+		hasExclusion = hasExclusion || item.Excluded
+	}
+	if hasExclusion && req.ContentHash == "" {
+		c.JSON(http.StatusConflict, gin.H{"error": "排除对白需要重新分析场景"})
 		return
 	}
 	warnings, applied := []string{}, 0
 	validType := map[string]bool{"dialogue": true, "offscreen_dialogue": true, "narration": true, "monologue": true}
-	usedExisting := make(map[uint]bool)
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		var current models.Scene
+		if err := tx.Where("id=? AND project_id=?", scene.ID, scene.ProjectID).First(&current).Error; err != nil {
+			return err
+		}
+		contentHash := sceneDialogueContentHash(current.Content)
+		if req.ContentHash != "" && req.ContentHash != contentHash {
+			return errSceneDialogueConflict
+		}
+		original := extractQuotedDialogue(current.Content)
+		var existing []models.Dialogue
+		if err := tx.Where("project_id=? AND scene_id=?", current.ProjectID, current.ID).Order("`order`,id").Find(&existing).Error; err != nil {
+			return err
+		}
+		usedExisting := make(map[uint]bool)
 		maxOrder := 0
 		for _, d := range existing {
 			if d.Order > maxOrder {
@@ -213,6 +320,43 @@ func (s *Service) HandleApplySceneDialogue(c *gin.Context) {
 				warnings = append(warnings, fmt.Sprintf("索引%d原文不匹配，未应用", item.Index))
 				continue
 			}
+			ordinal := 0
+			for i := 0; i < item.Index; i++ {
+				if original[i].Text == item.Text {
+					ordinal++
+				}
+			}
+			found, seen := -1, 0
+			for i := range existing {
+				if existing[i].Text == item.Text {
+					if seen == ordinal {
+						found = i
+						break
+					}
+					seen++
+				}
+			}
+			if item.Excluded {
+				if found >= 0 {
+					usedExisting[existing[found].ID] = true
+					if err := tx.Model(&models.Dialogue{}).Where("id=?", existing[found].ID).Update("source", "user_excluded").Error; err != nil {
+						return err
+					}
+				} else {
+					maxOrder++
+					tombstone := models.Dialogue{ProjectID: current.ProjectID, SceneID: current.ID, Order: maxOrder, Character: strings.TrimSpace(item.Speaker), SpeechType: "unknown", Text: item.Text, Source: "user_excluded", Status: "pending", Speed: 1, Volume: 1}
+					if tombstone.Character == "待确认" || tombstone.Character == "未知" {
+						tombstone.Character = ""
+					}
+					if err := tx.Create(&tombstone).Error; err != nil {
+						return err
+					}
+					existing = append(existing, tombstone)
+					usedExisting[tombstone.ID] = true
+				}
+				applied++
+				continue
+			}
 			if strings.TrimSpace(item.Speaker) == "" {
 				warnings = append(warnings, fmt.Sprintf("台词%d说话人为空，未写入Dialogue", item.Index+1))
 				continue
@@ -220,21 +364,6 @@ func (s *Service) HandleApplySceneDialogue(c *gin.Context) {
 			if !validType[item.SpeechType] {
 				warnings = append(warnings, fmt.Sprintf("台词%d的speech_type无效，未写入Dialogue", item.Index+1))
 				continue
-			}
-			found := -1
-			for i := range existing {
-				if !usedExisting[existing[i].ID] && existing[i].Text == item.Text && existing[i].Character == item.Speaker {
-					found = i
-					break
-				}
-			}
-			if found < 0 {
-				for i := range existing {
-					if !usedExisting[existing[i].ID] && existing[i].Text == item.Text {
-						found = i
-						break
-					}
-				}
 			}
 			if found >= 0 {
 				d := existing[found]
@@ -270,18 +399,34 @@ func (s *Service) HandleApplySceneDialogue(c *gin.Context) {
 			}
 		}
 		for i := range req.Items {
-			if strings.TrimSpace(req.Items[i].Speaker) == "" || req.Items[i].Speaker == "待确认" || req.Items[i].Speaker == "未知" {
+			if !req.Items[i].Excluded && (strings.TrimSpace(req.Items[i].Speaker) == "" || req.Items[i].Speaker == "待确认" || req.Items[i].Speaker == "未知") {
 				req.Items[i].NeedsReview = true
 			}
 		}
 		req.Source = "ai_reviewed"
+		req.ContentHash = contentHash
 		encoded, _ := json.Marshal(struct {
 			SceneDialogueAnalysis
 			Warnings []string `json:"warnings,omitempty"`
 		}{req, warnings})
-		return tx.Model(&models.Scene{}).Where("id=?", scene.ID).Update("dialogue_analysis_json", string(encoded)).Error
+		updates := map[string]any{"dialogue_analysis_json": string(encoded)}
+		if applied > 0 {
+			updates["prompt_stale"] = true
+		}
+		result := tx.Model(&models.Scene{}).Where("id=? AND content=? AND updated_at=?", current.ID, current.Content, current.UpdatedAt).Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errSceneDialogueConflict
+		}
+		return nil
 	})
 	if err != nil {
+		if errors.Is(err, errSceneDialogueConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}

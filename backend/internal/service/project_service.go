@@ -2313,7 +2313,8 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	}
 	_, refLines := s.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
 	openingPicture := openingPictureTag(refLines)
-	canonicalSceneContent := normalizeUserH3ShotMarkers(sc.Content)
+	generationContent := sceneDialogueGenerationContent(sc)
+	canonicalSceneContent := normalizeUserH3ShotMarkers(generationContent)
 	canonicalSceneContent, explicitTimedShotCount := normalizeSceneTimedBeats(canonicalSceneContent, normalizeSceneDuration(sc.Duration))
 	dubs := s.sceneVideoDialogues(sc)
 	var shots []models.Shot
@@ -2367,6 +2368,9 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 四视图只负责人物身份与服装，场景图只负责环境；不得从参考图反推剧情，不得复述或猜测外貌、服装、陈设。
 场景类型规则：%s`, combatDetailRule, openingPicture, h3SceneModeInstruction(sceneMode))
 	actionTask := ""
+	if excludedCount := currentSceneDialogueExclusionCount(sc); excludedCount > 0 {
+		actionTask += fmt.Sprintf("\n\n【用户对白排除】用户已排除%d条引号误识别，不得当作发声。", excludedCount)
+	}
 	if requireBalancedTimeline {
 		actionTask += "\n\n【单个Native Shot动作密度】结构化action_timeline中的微时间段只是动作事实，不得逐段照抄。把它们确定性合并为恰好3个按时间顺序衔接的可见阶段：起始动作、核心变化、结束状态。整段约50至100个英文单词，只保留关键身体动作、道具状态、视线/表情变化和一种主运镜；不得压缩为一句概述，也不得逐0.5秒枚举。"
 	}
@@ -3447,7 +3451,7 @@ func mergeExplicitSceneSpeech(sc *models.Scene, dubs []models.Dialogue) []models
 			matched = true
 			// Explicitly reviewed attribution is authoritative. Legacy rows retain the
 			// historical behavior: source extraction may repair speaker/type mistakes.
-			if out[i].Source != "ai_reviewed" {
+			if out[i].Source != "ai_reviewed" && out[i].Source != "user_excluded" {
 				out[i].Character = extracted.Character
 				out[i].SpeechType = extracted.SpeechType
 				if extracted.H3VoiceDescription != "" {
@@ -3505,7 +3509,7 @@ func mergeExtractedCharacterSpeech(dubs []models.Dialogue, extracted []models.Di
 			if existingType == "narration" || existingType == "monologue" {
 				continue
 			}
-			if out[i].Source != "ai_reviewed" {
+			if out[i].Source != "ai_reviewed" && out[i].Source != "user_excluded" {
 				out[i].Character = speech.Character
 				out[i].SpeechType = speech.SpeechType
 			}
@@ -3576,12 +3580,21 @@ func (s *ProjectService) sceneVideoDialogues(sc *models.Scene) []models.Dialogue
 			break
 		}
 	}
-	return dubs
+	active := dubs[:0]
+	for _, d := range dubs {
+		if d.Source != "user_excluded" {
+			active = append(active, d)
+		}
+	}
+	return active
 }
 
 func authoritativeSceneDialogues(dubs []models.Dialogue) []models.Dialogue {
 	valid := make([]models.Dialogue, 0, len(dubs))
 	for _, d := range dubs {
+		if d.Source == "user_excluded" {
+			continue
+		}
 		d.SpeechType, d.Character = normalizeScriptSpeech(d.SpeechType, d.Character)
 		if d.SpeechType == "" || spokenDialogueText(d.Text) == "" {
 			continue
@@ -3595,6 +3608,9 @@ func authoritativeSceneDialogues(dubs []models.Dialogue) []models.Dialogue {
 func validSceneDialogues(dubs []models.Dialogue) []models.Dialogue {
 	valid := make([]models.Dialogue, 0, len(dubs))
 	for _, d := range dubs {
+		if d.Source == "user_excluded" {
+			continue
+		}
 		d.SpeechType, d.Character = normalizeScriptSpeech(d.SpeechType, d.Character)
 		if d.SpeechType == "" {
 			continue
@@ -9218,7 +9234,7 @@ type skippedDialogue struct {
 
 func (s *ProjectService) loadReadyDialogues(tx *gorm.DB, sceneIDs []uint) ([]models.Dialogue, []skippedDialogue, error) {
 	var dubs []models.Dialogue
-	if err := tx.Where("scene_id IN ?", sceneIDs).Order("scene_id, `order`").Find(&dubs).Error; err != nil {
+	if err := tx.Where("scene_id IN ? AND (source <> ? OR source IS NULL)", sceneIDs, "user_excluded").Order("scene_id, `order`").Find(&dubs).Error; err != nil {
 		return nil, nil, err
 	}
 	ready := make([]models.Dialogue, 0, len(dubs))

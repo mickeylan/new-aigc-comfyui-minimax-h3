@@ -1442,8 +1442,12 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		return
 	}
 	req.Brief, req.Requirements = strings.TrimSpace(req.Brief), strings.TrimSpace(req.Requirements)
+	generationContent := sceneDialogueGenerationContent(scene)
 	if req.Brief == "" {
-		req.Brief = strings.TrimSpace(scene.Content)
+		req.Brief = strings.TrimSpace(generationContent)
+	}
+	if excludedCount := currentSceneDialogueExclusionCount(scene); excludedCount > 0 {
+		req.Requirements = strings.TrimSpace(req.Requirements + fmt.Sprintf("\n用户已排除%d条引号误识别，不得当作发声。", excludedCount))
 	}
 	if req.Brief == "" || len([]rune(req.Brief)) > 4000 || len([]rune(req.Requirements)) > 2000 {
 		c.JSON(400, gin.H{"error": "请填写有效的场景概况（最多4000字）和补充要求（最多2000字）"})
@@ -1515,7 +1519,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	for _, dialogue := range dialogues {
 		dialogueContext += fmt.Sprintf("[%s|%s] %s\n", dialogue.SpeechType, dialogue.Character, dialogue.Text)
 	}
-	output, err := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出完整合法JSON，不要Markdown或解释。", instruction, map[string]string{"scene_facts": scene.Content, "asset_context": assets, "dialogues": dialogueContext, "brief": req.Brief, "requirements": req.Requirements, "combat_references": combatReferenceText, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration))})
+	output, err := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出完整合法JSON，不要Markdown或解释。", instruction, map[string]string{"scene_facts": generationContent, "asset_context": assets, "dialogues": dialogueContext, "brief": req.Brief, "requirements": req.Requirements, "combat_references": combatReferenceText, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration))})
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
