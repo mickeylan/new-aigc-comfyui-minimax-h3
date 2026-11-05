@@ -331,6 +331,38 @@ func TestDialogueRhythmQueryQuotesReservedOrderColumn(t *testing.T) {
 	}
 }
 
+func TestManualDialogueRhythmShotCountHonorsDurationAndVoiceBoundaries(t *testing.T) {
+	dialogues := []models.Dialogue{
+		{Character: "阿宁", SpeechType: "dialogue", Text: "第一句。"},
+		{Character: "阿月", SpeechType: "dialogue", Text: "第二句。"},
+		{Character: "阿月", SpeechType: "dialogue", Text: "第三句。"},
+	}
+	minimum, maximum := dialogueRhythmShotCountRange(30, 12, dialogues)
+	if minimum != 2 || maximum != 10 {
+		t.Fatalf("manual count range = %d-%d, want 2-10", minimum, maximum)
+	}
+	instruction := manualDialogueRhythmInstruction(4)
+	for _, want := range []string{"恰好输出4个", "每镜仍必须满足3–15秒", "不得为了凑镜数删改对白"} {
+		if !strings.Contains(instruction, want) {
+			t.Fatalf("manual count instruction missing %q: %s", want, instruction)
+		}
+	}
+	if err := validateRequestedDialogueShotCount(&sceneDirectorDraft{Shots: make([]sceneDirectorDraftShot, 3)}, 4); err == nil || !strings.Contains(err.Error(), "返回3镜") {
+		t.Fatalf("wrong model shot count accepted: %v", err)
+	}
+	validShots := make([]sceneDirectorDraftShot, 4)
+	for i := range validShots {
+		validShots[i].Duration = 3
+	}
+	if err := validateRequestedDialogueShotCount(&sceneDirectorDraft{Shots: validShots}, 4); err != nil {
+		t.Fatalf("exact manual shot count rejected: %v", err)
+	}
+	validShots[2].Duration = 2.5
+	if err := validateRequestedDialogueShotCount(&sceneDirectorDraft{Shots: validShots}, 4); err == nil || !strings.Contains(err.Error(), "必须在3–15秒内") {
+		t.Fatalf("manual sub-3-second shot accepted: %v", err)
+	}
+}
+
 func TestDialogueRhythmInstructionAllowsAttributedCrossCutListenerReaction(t *testing.T) {
 	got := dialogueRhythmDirectorInstruction([]models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "继续说话"}})
 	for _, want := range []string{"声音跨切延续", "听者必须闭口", "不能在听者镜头中开始一条新对白", "不得把这种连续对白改写成旁白或独立画外音", "narration不得驱动画面人物口型", "monologue必须明确人物闭口", "禁止使用 Endless 或 Canvas", "speech_presentation", "每个镜头只能承载一个权威声音身份", "说话人变化", "speech_type"} {

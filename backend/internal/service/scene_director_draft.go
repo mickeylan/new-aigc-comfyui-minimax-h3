@@ -651,6 +651,60 @@ func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue, characterNam
 ` + strings.Join(lines, "\n")
 }
 
+func dialogueRhythmShotCountRange(sceneDuration, dialogueDuration float64, dialogues []models.Dialogue) (int, int) {
+	targetDuration := math.Max(sceneDuration, dialogueDuration)
+	if targetDuration <= 0 {
+		targetDuration = 3
+	}
+	minimum := int(math.Ceil(targetDuration / 15))
+	maximum := int(math.Floor(targetDuration / 3))
+	if minimum < 1 {
+		minimum = 1
+	}
+	if maximum < 1 {
+		maximum = 1
+	}
+	voiceBlocks := 0
+	lastIdentity := ""
+	for _, dialogue := range dialogues {
+		speechType, speaker := normalizeScriptSpeech(dialogue.SpeechType, dialogue.Character)
+		identity := speechType + "\x00" + strings.TrimSpace(speaker)
+		if identity != lastIdentity {
+			voiceBlocks++
+			lastIdentity = identity
+		}
+	}
+	if voiceBlocks > minimum {
+		minimum = voiceBlocks
+	}
+	if maximum < minimum {
+		maximum = minimum
+	}
+	if maximum > 30 {
+		maximum = 30
+	}
+	return minimum, maximum
+}
+
+func manualDialogueRhythmInstruction(count int) string {
+	return fmt.Sprintf(`人工指定镜头数：必须恰好输出%d个Native H3镜头，不能多一镜或少一镜。镜头数由用户决定，但每镜仍必须满足3–15秒、权威声音身份不可混合、完整Dialogue逐字连续覆盖及有效语义/表演切点。不得为了凑镜数删改对白、重复对白、创造发声、使用Endless/Canvas或加入无意义空镜。`, count)
+}
+
+func validateRequestedDialogueShotCount(draft *sceneDirectorDraft, count int) error {
+	if count <= 0 {
+		return nil
+	}
+	if len(draft.Shots) != count {
+		return fmt.Errorf("用户指定拆成%d镜，但导演草稿返回%d镜", count, len(draft.Shots))
+	}
+	for i, shot := range draft.Shots {
+		if shot.Duration < 3 || shot.Duration > 15 {
+			return fmt.Errorf("用户指定拆镜的第%d镜时长%.1f秒，必须在3–15秒内", i+1, shot.Duration)
+		}
+	}
+	return nil
+}
+
 func actionRhythmDirectorInstruction(dialogues []models.Dialogue) string {
 	dialogueRule := "本场没有结构化对白；所有Shot的dialogue必须为空，禁止新增喊声、旁白或咒语。"
 	if len(dialogues) > 0 {
@@ -1435,6 +1489,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		Brief            string                     `json:"brief"`
 		Requirements     string                     `json:"requirements"`
 		Mode             string                     `json:"mode"`
+		TargetShotCount  int                        `json:"target_shot_count"`
 		CombatReferences []CombatReferenceSelection `json:"combat_references"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1442,6 +1497,14 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		return
 	}
 	req.Brief, req.Requirements = strings.TrimSpace(req.Brief), strings.TrimSpace(req.Requirements)
+	if req.TargetShotCount < 0 || req.TargetShotCount > 30 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "人工指定镜头数必须为1–30；不指定时请传0"})
+		return
+	}
+	if req.TargetShotCount > 0 && req.Mode != "dialogue_rhythm" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "人工指定镜头数仅适用于按对白节奏拆镜"})
+		return
+	}
 	generationContent := sceneDialogueGenerationContent(scene)
 	if req.Brief == "" {
 		req.Brief = strings.TrimSpace(generationContent)
@@ -1504,6 +1567,14 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 			}
 			dialogueDuration = modelDialoguesMinDuration(dialogues)
 			instruction = dialogueRhythmDirectorInstruction(dialogues, authoritativeCharacterList...)
+			if req.TargetShotCount > 0 {
+				minimum, maximum := dialogueRhythmShotCountRange(scene.Duration, dialogueDuration, dialogues)
+				if req.TargetShotCount < minimum || req.TargetShotCount > maximum {
+					c.JSON(http.StatusUnprocessableEntity, gin.H{"error": fmt.Sprintf("按当前Scene时长、对白自然语速和声音身份边界，人工镜头数可选%d–%d镜；当前填写%d镜", minimum, maximum, req.TargetShotCount), "minimum_shot_count": minimum, "maximum_shot_count": maximum})
+					return
+				}
+				instruction += "\n" + manualDialogueRhythmInstruction(req.TargetShotCount)
+			}
 		} else if req.Mode == "action_rhythm" {
 			instruction = actionRhythmDirectorInstruction(dialogues)
 		}
@@ -1519,7 +1590,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	for _, dialogue := range dialogues {
 		dialogueContext += fmt.Sprintf("[%s|%s] %s\n", dialogue.SpeechType, dialogue.Character, dialogue.Text)
 	}
-	output, err := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出完整合法JSON，不要Markdown或解释。", instruction, map[string]string{"scene_facts": generationContent, "asset_context": assets, "dialogues": dialogueContext, "brief": req.Brief, "requirements": req.Requirements, "combat_references": combatReferenceText, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration))})
+	output, err := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出完整合法JSON，不要Markdown或解释。", instruction, map[string]string{"scene_facts": generationContent, "asset_context": assets, "dialogues": dialogueContext, "brief": req.Brief, "requirements": req.Requirements, "combat_references": combatReferenceText, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration)), "target_shot_count": strconv.Itoa(req.TargetShotCount)})
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
@@ -1533,6 +1604,9 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 			parseErr = validateGeneratedDialogueRhythmDraft(draft, dialogues)
 			if parseErr == nil {
 				parseErr = validateDraftListenerCharacters(draft, authoritativeCharacterNames)
+			}
+			if parseErr == nil {
+				parseErr = validateRequestedDialogueShotCount(draft, req.TargetShotCount)
 			}
 		} else if parseErr == nil && req.Mode == "action_rhythm" {
 			parseErr = validateActionRhythmDraft(draft, dialogues)
@@ -1553,10 +1627,13 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		initialValidationError := err.Error()
 		repairRequirements := fmt.Sprintf("%s\n上一次草稿校验失败：%s。只修复该错误及其他空必填字段；保持镜头顺序、剧情事实和结构化对白逐字不变。上一次JSON：\n%s", req.Requirements, err.Error(), output)
 		repairInstruction := dialogueRhythmDirectorInstruction(dialogues, authoritativeCharacterList...) + "\n修复对白节奏导演草稿；不得改写、遗漏、重复或新增任何对白。若一个镜头跨越多个权威说话人或speech_type，必须保持原文顺序并拆成多个Native镜头，每镜只保留一个声音身份。必须保留或补齐每镜speech_presentation；仅listener_reaction_carryover可填写listener_character，且必须从上述权威角色白名单逐字选择。"
+		if req.Mode == "dialogue_rhythm" && req.TargetShotCount > 0 {
+			repairInstruction += "\n" + manualDialogueRhythmInstruction(req.TargetShotCount)
+		}
 		if req.Mode == "action_rhythm" || req.Mode == "combat_design" {
 			repairInstruction = "修复武戏/仙术动作节拍草稿；保持实时速度、单一动作结果、空间轴线和结构化对白，不得使用慢动作。"
 		}
-		repaired, repairErr := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出修复后的完整合法JSON，不要Markdown或解释。", repairInstruction, map[string]string{"scene_facts": scene.Content, "asset_context": assets, "dialogues": dialogueContext, "brief": req.Brief, "requirements": repairRequirements, "combat_references": combatReferenceText, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration))})
+		repaired, repairErr := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出修复后的完整合法JSON，不要Markdown或解释。", repairInstruction, map[string]string{"scene_facts": scene.Content, "asset_context": assets, "dialogues": dialogueContext, "brief": req.Brief, "requirements": repairRequirements, "combat_references": combatReferenceText, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration)), "target_shot_count": strconv.Itoa(req.TargetShotCount)})
 		if repairErr != nil {
 			serverRepairs = append(serverRepairs, serverRepair{Stage: "model_repair", Reason: initialValidationError, Result: "provider_error: " + repairErr.Error()})
 			c.JSON(http.StatusBadGateway, gin.H{"error": "AI导演方案自动修复失败: " + repairErr.Error(), "server_repairs": serverRepairs})
@@ -1591,7 +1668,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "AI导演方案自动修复后仍无效: " + err.Error(), "server_repairs": serverRepairs})
 		return
 	}
-	response := gin.H{"draft": draft, "skill_code": operation, "provider_id": s.TextProviderFact.Name(), "audited": true, "mode": req.Mode, "dialogue_duration": dialogueDuration, "server_repairs": serverRepairs}
+	response := gin.H{"draft": draft, "skill_code": operation, "provider_id": s.TextProviderFact.Name(), "audited": true, "mode": req.Mode, "dialogue_duration": dialogueDuration, "requested_shot_count": req.TargetShotCount, "server_repairs": serverRepairs}
 	if req.Mode == "combat_design" {
 		response["combat_reference_audit"] = combatReferenceAudit
 		response["combat_reference_selection"] = req.CombatReferences
