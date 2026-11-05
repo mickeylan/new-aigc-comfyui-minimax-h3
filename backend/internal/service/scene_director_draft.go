@@ -1834,7 +1834,13 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		}
 		if parseErr == nil && req.Mode == "dialogue_rhythm" {
 			normalizeGeneratedListenerCharacters(draft)
-			parseErr = validateGeneratedDialogueRhythmDraft(draft, dialogues)
+			// Dialogue is authoritative data, not model-authored prose. Always replace the
+			// model's copied/omitted text deterministically before validation so a useful
+			// visual draft is never sent through repeated AI repair merely for transcription.
+			parseErr = restoreDialogueRhythmDraftText(draft, dialogues)
+			if parseErr == nil {
+				parseErr = validateGeneratedDialogueRhythmDraft(draft, dialogues)
+			}
 			if parseErr == nil {
 				parseErr = validateRequestedDialogueShotCount(draft, req.TargetShotCount)
 			}

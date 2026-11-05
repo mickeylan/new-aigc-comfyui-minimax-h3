@@ -174,7 +174,7 @@ func TestSyncExplicitSceneSpeechPreservesExistingDataAndFiltersNonAuthoritativeR
 	}
 }
 
-func TestReplaceShotsAllowsDifferentDialogueAndClearsStaleRanges(t *testing.T) {
+func TestReplaceShotsRestoresAuthoritativeDialogueInsteadOfRejectingDraft(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	project := models.Project{Title: "director dialogue edit"}
 	db.Create(&project)
@@ -196,12 +196,12 @@ func TestReplaceShotsAllowsDifferentDialogueAndClearsStaleRanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("different shot dialogue rejected: %v", err)
 	}
-	if len(saved) != 1 || saved[0].Dialogue != "导演改写。" || len(saved[0].DialogueRanges) != 0 {
-		t.Fatalf("saved shot or cleared ranges mismatch: %+v", saved)
+	if len(saved) != 1 || saved[0].Dialogue != dialogues[0].Text || len(saved[0].DialogueRanges) != 1 {
+		t.Fatalf("authoritative dialogue was not restored and ranged: %+v", saved)
 	}
 	var rawRangeJSON string
-	if err := db.Model(&models.Shot{}).Select("dialogue_ranges_json").Where("id = ?", saved[0].ID).Scan(&rawRangeJSON).Error; err != nil || rawRangeJSON != "[]" {
-		t.Fatalf("persisted range JSON=%q err=%v", rawRangeJSON, err)
+	if err := db.Model(&models.Shot{}).Select("dialogue_ranges_json").Where("id = ?", saved[0].ID).Scan(&rawRangeJSON).Error; err != nil || rawRangeJSON == "[]" {
+		t.Fatalf("persisted authoritative range JSON=%q err=%v", rawRangeJSON, err)
 	}
 	updated, err := svc.UpdateShot(saved[0].ID, map[string]any{"dialogue": "手工台词。"})
 	if err != nil || updated.Dialogue != "手工台词。" || len(updated.DialogueRanges) != 0 {
@@ -309,7 +309,7 @@ func TestReplaceShotsWithSnapshotAllowsReviewedPresentationOverride(t *testing.T
 	}
 }
 
-func TestReplaceShotsRejectsMixedSpeechTypesWithoutMutation(t *testing.T) {
+func TestReplaceShotsAllowsReviewedMixedSpeechPresentation(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	project := models.Project{Title: "mixed speech rollback"}
 	db.Create(&project)
@@ -322,7 +322,7 @@ func TestReplaceShotsRejectsMixedSpeechTypesWithoutMutation(t *testing.T) {
 		}
 	}
 	svc := NewShotService(db)
-	existing, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "旧镜头", Duration: 3, Dialogue: "快走！", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}, {ShotType: "旧镜头2", Duration: 3, Dialogue: "我不能走。", SpeechPresentation: models.ShotSpeechPresentationMonologue}})
+	_, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "旧镜头", Duration: 3, Dialogue: "快走！", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}, {ShotType: "旧镜头2", Duration: 3, Dialogue: "我不能走。", SpeechPresentation: models.ShotSpeechPresentationMonologue}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,22 +333,22 @@ func TestReplaceShotsRejectsMixedSpeechTypesWithoutMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = svc.ReplaceShotsWithDialogueSnapshot(scene.ID, []models.Shot{{ShotType: "错误合并镜头", Duration: 6, Dialogue: "快走！我不能走。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}}, snapshot)
-	if !errors.Is(err, ErrDialogueTimingBlocked) || !strings.Contains(err.Error(), "多个权威speech_type") {
-		t.Fatalf("mixed speech replacement accepted: %v", err)
+	_, err = svc.ReplaceShotsWithDialogueSnapshot(scene.ID, []models.Shot{{ShotType: "人工审核合并镜头", Duration: 6, Dialogue: "模型抄错了", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}}, snapshot)
+	if err != nil {
+		t.Fatalf("reviewed mixed presentation was blocked: %v", err)
 	}
 	var saved []models.Shot
 	if err := db.Where("scene_id = ?", scene.ID).Order("order_num").Find(&saved).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(saved) != 2 || saved[0].ID != existing[0].ID || saved[1].ID != existing[1].ID {
-		t.Fatalf("rejected replacement mutated shots: %+v", saved)
+	if len(saved) != 1 || saved[0].Dialogue != "快走！我不能走。" {
+		t.Fatalf("authoritative dialogue was not projected onto reviewed shot: %+v", saved)
 	}
 	if err := db.First(&scene, scene.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if scene.VideoFile != "keep.mp4" || scene.Status != "video_ready" {
-		t.Fatalf("rejected replacement invalidated media: %+v", scene)
+	if !scene.PromptStale {
+		t.Fatalf("successful reviewed replacement did not mark prompt stale: %+v", scene)
 	}
 }
 
@@ -679,7 +679,7 @@ func TestHandleUpdateShotReturns422ForUnknownListenerWithoutMutation(t *testing.
 	}
 }
 
-func TestHandleCreateShotsRejectsUnsupportedDialogueCutWithoutMutation(t *testing.T) {
+func TestHandleCreateShotsProjectsAuthorityWithoutSemanticKeywordBlock(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := newTestDBWithNewModels(t)
 	project := models.Project{Title: "handler semantic boundary"}
@@ -713,23 +713,23 @@ func TestHandleCreateShotsRejectsUnsupportedDialogueCutWithoutMutation(t *testin
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/projects/x/scenes/y/shots", bytes.NewReader(payload))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	ctx.Params = gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(project.ID), 10)}, {Key: "sid", Value: strconv.FormatUint(uint64(scene.ID), 10)}}
-	(&Service{DB: db, Shots: NewShotService(db)}).HandleCreateShots(ctx)
-	if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), "明确标注同一句对白跨切延续") {
+	(&Service{DB: db, Shots: NewShotService(db), Projects: &ProjectService{}}).HandleCreateShots(ctx)
+	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 	var saved []models.Shot
-	if err := db.Where("scene_id = ?", scene.ID).Find(&saved).Error; err != nil {
+	if err := db.Where("scene_id = ?", scene.ID).Order("order_num").Find(&saved).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(saved) != 1 || saved[0].ID != existing[0].ID || saved[0].Description != "保留镜头" {
-		t.Fatalf("semantic rejection mutated shots: %+v", saved)
+	if len(saved) != 2 || saved[0].Dialogue+saved[1].Dialogue != text || saved[0].ID == existing[0].ID {
+		t.Fatalf("authoritative dialogue was not projected onto reviewed split: %+v", saved)
 	}
 	var currentScene models.Scene
 	if err := db.First(&currentScene, scene.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if currentScene.ImageTaskID != "image-active" || currentScene.VideoTaskID != "video-active" {
-		t.Fatalf("semantic rejection cleared tasks: %+v", currentScene)
+	if !currentScene.PromptStale {
+		t.Fatalf("successful reviewed save did not mark prompt stale: %+v", currentScene)
 	}
 }
 

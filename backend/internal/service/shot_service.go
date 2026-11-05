@@ -102,6 +102,23 @@ func syncExplicitSceneSpeech(tx *gorm.DB, scene *models.Scene) error {
 	return nil
 }
 
+func restoreAuthoritativeShotDialogues(shots []models.Shot, dialogues []models.Dialogue) error {
+	if len(dialogues) == 0 || shotDialogueTextMatches(shots, dialogues) {
+		return nil
+	}
+	draft := &sceneDirectorDraft{Shots: make([]sceneDirectorDraftShot, len(shots))}
+	for i, shot := range shots {
+		draft.Shots[i] = sceneDirectorDraftShot{Dialogue: shot.Dialogue, Duration: shot.Duration}
+	}
+	if err := restoreDialogueRhythmDraftText(draft, dialogues); err != nil {
+		return err
+	}
+	for i := range shots {
+		shots[i].Dialogue = draft.Shots[i].Dialogue
+	}
+	return nil
+}
+
 func validateDialogueShotTiming(shots []models.Shot, dialogues []models.Dialogue) error {
 	draft := &sceneDirectorDraft{Shots: make([]sceneDirectorDraftShot, len(shots))}
 	for i, shot := range shots {
@@ -500,14 +517,13 @@ func (s *ShotService) ReplaceShotsWithDialogueSnapshot(sceneID uint, shots []mod
 			if currentSnapshot != strings.TrimSpace(expectedSnapshot) {
 				return ErrDialogueSnapshotConflict
 			}
-			if shotDialogueTextMatches(shots, dialogues) {
-				if issues := dialogueRhythmBlockingIssuesForShots(shots, dialogues); len(issues) > 0 {
-					return fmt.Errorf("%w: 对白拆镜语义边界未通过审核: %s", ErrDialogueTimingBlocked, strings.Join(issues, "；"))
-				}
-				if timingErr := validateDialogueShotTiming(shots, dialogues); timingErr != nil {
-					return timingErr
-				}
+			// Dialogue is database authority. The model/user does not need to transcribe
+			// it perfectly: project the exact source text onto the reviewed Shot boundaries.
+			if err := restoreAuthoritativeShotDialogues(shots, dialogues); err != nil {
+				return fmt.Errorf("%w: %s", ErrDialogueTimingBlocked, err.Error())
 			}
+			// Presentation and semantic-cut diagnostics are advisory at this review/save
+			// boundary. validateShot already enforces executable duration/schema limits.
 		}
 		var existing []models.Shot
 		if err := tx.Where("scene_id = ?", sceneID).Order("order_num, id").Find(&existing).Error; err != nil {
