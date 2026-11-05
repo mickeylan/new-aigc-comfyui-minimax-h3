@@ -479,22 +479,29 @@ func TestValidateDialogueRhythmDraftAllowsAttributedCrossCutListenerReaction(t *
 	}
 }
 
-func TestGeneratedDialogueRhythmDraftValidationRepairsMissingPresentationOnlyAfterExplicitFix(t *testing.T) {
-	dialogues := []models.Dialogue{{Character: "阿宁", SpeechType: "dialogue", Text: "相信我。"}}
-	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "相信我。", ShotType: "近景", Description: "人物凝视前方"}}}
-	if err := validateGeneratedDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "缺少speech_presentation") {
-		t.Fatalf("initial missing presentation did not trigger repair: %v", err)
-	}
-	draft.Shots[0].SpeechPresentation = models.ShotSpeechPresentationVisibleSpeaker
+func TestGeneratedDialogueRhythmDraftReturnsEditablePresentationProblems(t *testing.T) {
+	dialogues := []models.Dialogue{{Character: "燕承", SpeechType: "dialogue", Text: "相信我。"}}
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 3, Dialogue: "相信我。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, ShotType: "听者近景", Description: "燕承不入镜，听者闭口反应"}}}
 	if err := validateGeneratedDialogueRhythmDraft(draft, dialogues); err != nil {
-		t.Fatalf("explicitly repaired presentation rejected: %v", err)
+		t.Fatalf("editable presentation problem discarded the generated draft: %v", err)
 	}
+	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "燕承") {
+		t.Fatalf("presentation problem was not available to strict/manual audit: %v", err)
+	}
+	review := buildDialogueRhythmReview(draft, dialogues)
+	if len(review) != 1 || review[0].Status != "attention" || !strings.Contains(strings.Join(review[0].Advisories, "|"), "可在导入前人工修改") {
+		t.Fatalf("editable presentation issue was not returned as an advisory: %+v", review)
+	}
+
 	draft.Shots[0].SpeechPresentation = ""
+	if err := validateGeneratedDialogueRhythmDraft(draft, dialogues); err != nil {
+		t.Fatalf("missing editable presentation discarded the draft: %v", err)
+	}
 	if err := restoreDialogueRhythmDraftText(draft, dialogues); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateGeneratedDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "缺少speech_presentation") {
-		t.Fatalf("authoritative text restore bypassed presentation repair: %v", err)
+	if err := validateGeneratedDialogueRhythmDraft(draft, dialogues); err != nil {
+		t.Fatalf("authoritative text restore should retain a reviewable draft: %v", err)
 	}
 }
 
@@ -873,8 +880,8 @@ func TestDialogueBoundaryReasonUsesAuthoritativeSemantics(t *testing.T) {
 func TestDialogueRhythmReviewAllowsVisibleSpeakerPerformanceAcrossUnpunctuatedCut(t *testing.T) {
 	dialogue := models.Dialogue{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信姐姐永远不会离开你"}
 	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
-		{Duration: 4, Dialogue: "相信姐姐永远", ShotType: "阿宁近景", PromptSubject: "阿宁可见"},
-		{Duration: 4, Dialogue: "不会离开你", ShotType: "阿宁近景", PromptSubject: "阿宁可见"},
+		{Duration: 4, Dialogue: "相信姐姐永远", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, ShotType: "阿宁近景", PromptSubject: "阿宁可见"},
+		{Duration: 4, Dialogue: "不会离开你", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, ShotType: "阿宁近景", PromptSubject: "阿宁可见"},
 	}}
 	review := buildDialogueRhythmReview(draft, []models.Dialogue{dialogue})
 	if len(review) != 2 || review[0].Status != "ready" || review[1].Status != "ready" || !review[0].Ready || !review[1].Ready {
@@ -885,18 +892,18 @@ func TestDialogueRhythmReviewAllowsVisibleSpeakerPerformanceAcrossUnpunctuatedCu
 	}
 }
 
-func TestDialogueRhythmReviewBlocksUnqualifiedUnpunctuatedCut(t *testing.T) {
+func TestDialogueRhythmReviewAdvisesUnqualifiedUnpunctuatedCut(t *testing.T) {
 	dialogue := models.Dialogue{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信姐姐永远不会离开你"}
 	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
 		{Duration: 4, Dialogue: "相信姐姐永远", ShotType: "阿宁近景", PromptSubject: "阿宁可见"},
 		{Duration: 4, Dialogue: "不会离开你", ShotType: "庭院空镜", PromptSubject: "落花"},
 	}}
 	review := buildDialogueRhythmReview(draft, []models.Dialogue{dialogue})
-	if len(review) != 2 || review[0].Ready || review[1].Ready || review[0].Status != "blocked" || review[1].Status != "blocked" {
+	if len(review) != 2 || !review[0].Ready || !review[1].Ready || review[0].Status != "attention" || review[1].Status != "attention" {
 		t.Fatalf("review=%+v", review)
 	}
-	if !strings.Contains(strings.Join(review[1].BlockingIssues, "|"), "无标点的同一句对白不得跨镜切分") {
-		t.Fatalf("blocking issue=%+v", review[1])
+	if !strings.Contains(strings.Join(review[1].Advisories, "|"), "请人工确认") {
+		t.Fatalf("review advisory=%+v", review[1])
 	}
 }
 
@@ -912,20 +919,22 @@ func TestDialogueRhythmReviewAllowsClosedLipListenerCarryoverAcrossUnpunctuatedC
 	}
 }
 
-func TestDialogueRhythmBlockingIssuesForSavedShotsMatchesDraftAudit(t *testing.T) {
+func TestDialogueRhythmPresentationProblemsRemainReviewAdvisories(t *testing.T) {
 	dialogues := []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "相信姐姐永远不会离开你"}}
 	shots := []models.Shot{
 		{Duration: 4, Dialogue: "相信姐姐永远", ShotType: "阿宁近景", PromptSubject: "阿宁可见"},
 		{Duration: 4, Dialogue: "不会离开你", ShotType: "庭院空镜", PromptSubject: "落花"},
 	}
-	issues := dialogueRhythmBlockingIssuesForShots(shots, dialogues)
-	if len(issues) != 1 || !strings.Contains(issues[0], "无标点的同一句对白不得跨镜切分") {
-		t.Fatalf("issues=%v", issues)
-	}
-	shots[1].ShotType = "阿宁近景"
-	shots[1].PromptSubject = "阿宁可见"
 	if issues := dialogueRhythmBlockingIssuesForShots(shots, dialogues); len(issues) != 0 {
-		t.Fatalf("valid performance blocked: %v", issues)
+		t.Fatalf("editable presentation advisory blocked save: %v", issues)
+	}
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
+		{Duration: 4, Dialogue: "相信姐姐永远", ShotType: "阿宁近景", PromptSubject: "阿宁可见"},
+		{Duration: 4, Dialogue: "不会离开你", ShotType: "庭院空镜", PromptSubject: "落花"},
+	}}
+	review := buildDialogueRhythmReview(draft, dialogues)
+	if len(review) != 2 || len(review[1].Advisories) == 0 || review[1].Status != "attention" {
+		t.Fatalf("presentation problem was not exposed for manual review: %+v", review)
 	}
 }
 

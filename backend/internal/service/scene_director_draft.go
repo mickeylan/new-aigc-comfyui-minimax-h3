@@ -1305,13 +1305,24 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 		minimum := dialogueReviewNaturalMinimum(fragments)
 		issues, advisories := []string{}, []string{}
 		if len(speechTypes) > 1 {
-			issues = append(issues, "本镜混合多个权威speech_type，单一speech_presentation无法无歧义表达；普通dialogue可包含多名依次说话的角色，但旁白、内心独白或独立画外对白必须分镜")
+			advisories = append(advisories, "本镜混合多个权威speech_type；建议人工检查旁白、内心独白、画外对白与普通对白的画面呈现")
 		}
 		if minimum > maxSceneVideoDuration {
 			advisories = append(advisories, fmt.Sprintf("本镜权威语音自然时长下限%.1f秒超过Native H3的15秒上限，建议继续拆镜；当前创作节奏仍可预览、保存和制作", minimum))
 		}
 		if shot.Duration+0.001 < minimum {
 			advisories = append(advisories, fmt.Sprintf("本镜时长%.1f秒低于权威语音自然时长下限%.1f秒；不会删减台词或强制加速", shot.Duration, minimum))
+		}
+		if shot.SpeechPresentation == models.ShotSpeechPresentationVisibleSpeaker {
+			for _, fragment := range fragments {
+				speaker := strings.TrimSpace(fragment.Character)
+				if speaker != "" && (shotExplicitlyExcludesSpeaker(shot, speaker) || shotExplicitlyClosesSpeaker(shot, speaker)) {
+					advisories = append(advisories, fmt.Sprintf("声明visible_speaker_lipsync，但文本要求说话人“%s”不入镜或闭口；可在导入前人工修改画面或发声呈现", speaker))
+				}
+			}
+		}
+		if strings.TrimSpace(string(shot.SpeechPresentation)) == "" && len(fragments) > 0 {
+			advisories = append(advisories, "本镜尚未明确speech_presentation；可在导入前人工选择说话人口型、听者反应、画外音、旁白或内心独白")
 		}
 		status := "ready"
 		if len(issues) > 0 {
@@ -1345,11 +1356,12 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 		if left.ExitBoundary != "同句跨镜续接" || right.EntryBoundary != "同句跨镜续接" || dialogueCutHasValidPerformance(draft.Shots[i], draft.Shots[i+1], *left, *right) {
 			continue
 		}
-		issue := "无标点的同一句对白不得跨镜切分；仅允许说话人持续可见并同步表演，或明确的闭口听者反应声音跨切"
+		advisory := "无标点的同一句对白跨镜切分；请人工确认说话人表演连续，或改为明确的闭口听者反应声音跨切"
 		for _, review := range []*dialogueRhythmShotReview{left, right} {
-			review.BlockingIssues = append(review.BlockingIssues, issue)
-			review.Ready = false
-			review.Status = "blocked"
+			review.Advisories = append(review.Advisories, advisory)
+			if review.Status == "ready" {
+				review.Status = "attention"
+			}
 		}
 	}
 	return reviews
@@ -1455,11 +1467,25 @@ func validateDraftListenerCharacters(draft *sceneDirectorDraft, authoritativeNam
 }
 
 func validateGeneratedDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
-	if err := requireStructuredSpeechPresentations(draft); err != nil {
-		return err
+	// AI draft generation is a review workflow, not final production submission.
+	// Block only objective output corruption here. Presentation choices (who is in
+	// frame, lip sync, listener identity, voice-over staging) remain visible in the
+	// review audit so the user can correct them manually instead of losing the draft.
+	if draft == nil || len(draft.Shots) == 0 {
+		return fmt.Errorf("导演方案没有镜头")
 	}
-	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
-		return err
+	var expected, actual strings.Builder
+	for _, dialogue := range dialogues {
+		expected.WriteString(canonicalDialogueText(dialogue.Text))
+	}
+	for i, shot := range draft.Shots {
+		if shot.Duration <= 0 || shot.Duration > maxSceneVideoDuration {
+			return fmt.Errorf("对白拆镜%d时长必须大于0且不超过15秒", i+1)
+		}
+		actual.WriteString(canonicalDialogueText(shot.Dialogue))
+	}
+	if actual.String() != expected.String() {
+		return fmt.Errorf("导演方案未逐字覆盖场景正文中的原始台词，禁止遗漏、改写、重复或新增")
 	}
 	return normalizeDialogueRhythmReviewDurations(draft, dialogues)
 }
@@ -1730,7 +1756,6 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		instruction = "依据用户已确认的战斗资料生成可审核的武戏导演方案；资料只提供机制与结构，不得改写权威事实。"
 	}
 	var dialogues []models.Dialogue
-	authoritativeCharacterNames := map[string]bool{}
 	authoritativeCharacterList := []string{}
 	dialogueDuration := 0.0
 	if err := s.DB.Where("scene_id = ? AND project_id = ?", scene.ID, scene.ProjectID).Order("`order` ASC, `id` ASC").Find(&dialogues).Error; err != nil {
@@ -1752,7 +1777,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	if req.Mode == "dialogue_rhythm" || req.Mode == "action_rhythm" || req.Mode == "combat_design" {
 		if req.Mode == "dialogue_rhythm" {
 			var listenerErr error
-			authoritativeCharacterList, authoritativeCharacterNames, listenerErr = authoritativeSceneListenerCharacters(s.DB, scene)
+			authoritativeCharacterList, _, listenerErr = authoritativeSceneListenerCharacters(s.DB, scene)
 			if listenerErr != nil {
 				c.JSON(500, gin.H{"error": listenerErr.Error()})
 				return
@@ -1795,10 +1820,10 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		// Every director mode describes internal Scene cut points; standalone 3–15s
 		// template limits are applied only when a Scene is submitted for execution.
 		draft, parseErr := parseSceneDirectorDraftWithOptions(raw, true)
-		if parseErr == nil {
+		if parseErr == nil && req.Mode != "dialogue_rhythm" {
 			parseErr = requireDirectorThinking(draft)
 		}
-		if parseErr == nil {
+		if parseErr == nil && req.Mode != "dialogue_rhythm" {
 			for _, review := range buildDirectorLogicReview(draft) {
 				if len(review.BlockingIssues) > 0 {
 					parseErr = fmt.Errorf("镜头%d导演逻辑审计失败：%s", review.Shot, strings.Join(review.BlockingIssues, "；"))
@@ -1809,9 +1834,6 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		if parseErr == nil && req.Mode == "dialogue_rhythm" {
 			normalizeGeneratedListenerCharacters(draft)
 			parseErr = validateGeneratedDialogueRhythmDraft(draft, dialogues)
-			if parseErr == nil {
-				parseErr = validateDraftListenerCharacters(draft, authoritativeCharacterNames)
-			}
 			if parseErr == nil {
 				parseErr = validateRequestedDialogueShotCount(draft, req.TargetShotCount)
 			}
@@ -1861,9 +1883,6 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 				err = restoreErr
 			} else {
 				err = validateGeneratedDialogueRhythmDraft(draft, dialogues)
-				if err == nil {
-					err = validateDraftListenerCharacters(draft, authoritativeCharacterNames)
-				}
 			}
 			if strings.TrimSpace(restoreReason) != "" {
 				restoreResult := "accepted"

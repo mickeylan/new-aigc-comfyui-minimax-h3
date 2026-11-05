@@ -721,7 +721,7 @@ func TestHandleCreateShotsRejectsUnsupportedDialogueCutWithoutMutation(t *testin
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	ctx.Params = gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(project.ID), 10)}, {Key: "sid", Value: strconv.FormatUint(uint64(scene.ID), 10)}}
 	(&Service{DB: db, Shots: NewShotService(db)}).HandleCreateShots(ctx)
-	if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), "无标点的同一句对白不得跨镜切分") {
+	if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), "明确标注同一句对白跨切延续") {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 	var saved []models.Shot
