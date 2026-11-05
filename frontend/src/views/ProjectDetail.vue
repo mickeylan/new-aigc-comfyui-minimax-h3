@@ -435,6 +435,9 @@
           <button class="btn" :disabled="busy || curImageReadyScenes === 0" @click="allVideos">
             🎬 生成该集全部视频 ({{ curImageReadyScenes }})
           </button>
+          <button class="btn btn-secondary" :disabled="selectedMergeSceneIDs.length < 2 || mergeBusy || !mergeSelectionConsecutive" @click="previewSelectedSceneMerge">
+            {{ mergeBusy ? '处理中…' : `预览合镜 (${selectedMergeSceneIDs.length})` }}
+          </button>
           <router-link class="btn btn-primary" :class="{disabled:curVideoReadyScenes===0}" :to="`/projects/${id()}/editor?episode=${activeEpN}&workspace=delivery`">
             ⚡ 进入最终成片编排
           </router-link>
@@ -444,6 +447,7 @@
       <div class="scene-grid">
         <div v-for="sc in pagedScenes" :key="sc.id" class="card scene-card" :class="{ 'scene-active': isWorking(sc) }">
           <div class="scene-head">
+            <label class="scene-merge-select" title="选择相邻分镜进行合镜"><input type="checkbox" :checked="selectedMergeSceneIDs.includes(sc.id)" :disabled="!availableScenes.some(item => item.id === sc.id) || mergeBusy" @change="toggleMergeScene(sc)"> 合镜</label>
             <span class="scene-order" :class="orderColor(sc.order)">{{ sc.order }}</span>
             <div class="scene-title">
               <div>{{ sc.title || '场景 ' + sc.order }}</div>
@@ -597,6 +601,19 @@
           </nav>
         </div>
     </section>
+
+    <div v-if="sceneMergePreview" class="modal-mask" @click.self="closeSceneMergePreview">
+      <div class="modal card modal-lg scene-merge-modal">
+        <h2>确认合并 {{ sceneMergePreview.scene_ids.length }} 个相邻分镜</h2>
+        <div class="field"><label>新分镜标题（预览，只读）</label><input :value="sceneMergePreview.title" class="input" readonly /></div>
+        <div class="field"><label>合并内容（预览，只读，不进行 AI 重写）</label><textarea :value="sceneMergePreview.content" class="textarea" rows="10" readonly /></div>
+        <p>总时长：{{ Number(sceneMergePreview.duration || 0).toFixed(1) }} 秒。默认镜头建议约 15 秒；超过 15 秒仍可手工合并，约 10 秒一段通常更便于后续生成。</p>
+        <ul class="scene-merge-warnings"><li v-for="warning in sceneMergePreview.warnings" :key="warning">{{ warning }}</li><li>原分镜将归档且媒体保留；新分镜不带图片或视频，不会自动生成图片或视频。</li></ul>
+        <div v-if="mergeError" class="notice error-notice">{{ mergeError }}</div>
+        <label class="merge-confirm"><input v-model="sceneMergeConfirmed" type="checkbox" /> 我确认归档原分镜，并创建无图片、无视频的新分镜</label>
+        <div class="modal-actions"><button class="btn btn-ghost" :disabled="mergeBusy" @click="closeSceneMergePreview">取消</button><button class="btn btn-danger" :disabled="mergeBusy || !sceneMergeConfirmed" @click="applySelectedSceneMerge">{{ mergeBusy ? '合并中…' : '确认合镜' }}</button></div>
+      </div>
+    </div>
 
     <!-- 独立改名弹窗：只调用 rename PATCH，不复用会更新媒体字段的旧编辑表单 -->
     <div v-if="framePurposeScene" class="modal-mask frame-purpose-mask" @click.self="closeFramePurpose">
@@ -1167,6 +1184,7 @@ import FrameSelector from '../components/FrameSelector.vue'
 import GeneratedMediaHistoryDrawer from '../components/GeneratedMediaHistoryDrawer.vue'
 import ShotDirectorEditor from '../components/ShotDirectorEditor.vue'
 import { overlayDialogueExclusions, setDialogueItemExcluded, snapshotDialogueExclusions } from '../utils/dialogueAnalysis'
+import { estimateDialogueListDuration } from '../utils/dialogueDuration.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -1656,6 +1674,74 @@ function syncEpisodeQuery(n) {
 const currentScenes = computed(() => scenes.value
   .filter(s => (s.episode_n || 1) === activeEpN.value)
   .sort((a, b) => a.order - b.order))
+const selectedMergeSceneIDs = ref([])
+const sceneMergePreview = ref(null)
+const sceneMergeConfirmed = ref(false)
+const mergeBusy = ref(false)
+const mergeError = ref('')
+let sceneMergeEpoch = 0
+// A scene needs only a usable duration; shots and generated media are deliberately not prerequisites.
+const availableScenes = computed(() => currentScenes.value.filter(sc => Number(sc.duration || 0) >= 5 && !isWorking(sc)))
+const selectedMergeScenes = computed(() => currentScenes.value.filter(sc => selectedMergeSceneIDs.value.includes(sc.id)))
+const mergeSelectionConsecutive = computed(() => selectedMergeScenes.value.length >= 2 && selectedMergeScenes.value.every((sc, index, rows) => index === 0 || sc.order === rows[index - 1].order + 1))
+function toggleMergeScene(sc) {
+  const ids = selectedMergeSceneIDs.value
+  selectedMergeSceneIDs.value = ids.includes(sc.id) ? ids.filter(value => value !== sc.id) : [...ids, sc.id]
+}
+function closeSceneMergePreview() {
+  sceneMergePreview.value = null
+  sceneMergeConfirmed.value = false
+}
+async function previewSelectedSceneMerge() {
+  if (!mergeSelectionConsecutive.value || mergeBusy.value) return
+  const projectID = id()
+  const episodeN = activeEpN.value
+  const sceneIDs = selectedMergeScenes.value.map(sc => sc.id)
+  const requestEpoch = ++sceneMergeEpoch
+  mergeBusy.value = true
+  mergeError.value = ''
+  try {
+    const { data } = await api.previewSceneMerge(projectID, sceneIDs)
+    if (requestEpoch !== sceneMergeEpoch || projectID !== id() || episodeN !== activeEpN.value) return
+    sceneMergePreview.value = data
+    sceneMergeConfirmed.value = false
+  } catch (error) {
+    if (requestEpoch === sceneMergeEpoch) mergeError.value = error.response?.data?.error || '合镜预览失败，请重试'
+  } finally {
+    if (requestEpoch === sceneMergeEpoch) mergeBusy.value = false
+  }
+}
+async function applySelectedSceneMerge() {
+  if (!sceneMergePreview.value || !sceneMergeConfirmed.value || mergeBusy.value) return
+  const projectID = id()
+  const episodeN = activeEpN.value
+  const sceneIDs = [...sceneMergePreview.value.scene_ids]
+  const sourceHash = sceneMergePreview.value.source_hash
+  const requestEpoch = ++sceneMergeEpoch
+  mergeBusy.value = true
+  mergeError.value = ''
+  try {
+    await api.applySceneMerge(projectID, sceneIDs, sourceHash)
+    if (requestEpoch !== sceneMergeEpoch || projectID !== id() || episodeN !== activeEpN.value) return
+    await load()
+    if (requestEpoch !== sceneMergeEpoch || projectID !== id() || episodeN !== activeEpN.value) return
+    selectedMergeSceneIDs.value = []
+    closeSceneMergePreview()
+    toast.success('分镜已合并；新分镜未自动生成图片或视频')
+  } catch (error) {
+    if (requestEpoch === sceneMergeEpoch) mergeError.value = error.response?.data?.error || '合镜失败，请刷新后重试'
+  } finally {
+    if (requestEpoch === sceneMergeEpoch) mergeBusy.value = false
+  }
+}
+watch(activeEpN, () => {
+  sceneMergeEpoch++
+  selectedMergeSceneIDs.value = []
+  sceneMergePreview.value = null
+  sceneMergeConfirmed.value = false
+  mergeBusy.value = false
+  mergeError.value = ''
+})
 // 场景分页
 const scenePageSize = 6
 const initialScenePage = Math.max(1, Math.trunc(Number(route.query.scene_page) || 1))
@@ -3125,22 +3211,7 @@ function sceneDialogues(sc) {
   return dialogues.value.filter(d => d.scene_id === sc.id)
 }
 function dialogueBudget(sc) {
-  const list = sceneDialogues(sc).filter(d => String(d.text || '').trim())
-  if (!list.length) return { minimum: 0, overflow: false }
-  let seconds = 1.2
-  let previous = ''
-  for (const d of list) {
-    const text = String(d.text || '').trim()
-    const chars = [...text].filter(ch => !/\s|[，,、；;:：。.!！?？…]/u.test(ch)).length
-    const commas = (text.match(/[，,、；;:：]/gu) || []).length
-    const stops = (text.match(/[。.!！?？]/gu) || []).length
-    const ellipses = (text.match(/…/gu) || []).length
-    const speaker = `${d.character || ''}\u0000${d.speech_type || ''}`
-    if (previous && previous !== speaker) seconds += 0.35
-    seconds += chars / 3.8 + commas * 0.2 + stops * 0.45 + ellipses * 0.3
-    previous = speaker
-  }
-  const minimum = Math.ceil(seconds * 2) / 2
+  const minimum = estimateDialogueListDuration(sceneDialogues(sc))
   return { minimum, overflow: minimum > Number(sc.duration || 0) + 0.05 }
 }
 async function applyDialogueDuration(sc) {

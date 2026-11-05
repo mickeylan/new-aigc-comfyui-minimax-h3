@@ -113,6 +113,8 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/generate", svc.HandleGenerateProject)
 	r.POST("/api/projects/:id/images", svc.HandleGenerateAllImages)
 	r.POST("/api/projects/:id/videos", svc.HandleGenerateAllVideos)
+	r.POST("/api/projects/:id/scenes/merge/preview", svc.HandlePreviewManualSceneMerge)
+	r.POST("/api/projects/:id/scenes/merge/apply", svc.HandleApplyManualSceneMerge)
 	r.PATCH("/api/projects/:id/scenes/:sid", svc.HandleUpdateScene)
 	r.PATCH("/api/projects/:id/scenes/:sid/storyboard-video-role", svc.HandleUpdateSceneStoryboardVideoRole)
 	r.POST("/api/projects/:id/scenes/:sid/content/expand", svc.HandleExpandSceneContent)

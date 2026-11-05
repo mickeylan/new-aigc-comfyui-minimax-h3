@@ -108,6 +108,28 @@ func validateExistingNativeGroups(db *gorm.DB, groups []existingNativeGroup) err
 	return nil
 }
 
+func existingGroupNarrative(db *gorm.DB, group existingNativeGroup) (string, error) {
+	shots := []models.Shot{}
+	dialogues := []models.Dialogue{}
+	for _, scene := range group.Scenes {
+		var sceneShots []models.Shot
+		if err := db.Where("scene_id=?", scene.ID).Order("order_num,id").Find(&sceneShots).Error; err != nil {
+			return "", err
+		}
+		shots = append(shots, sceneShots...)
+		var sceneDialogues []models.Dialogue
+		if err := db.Where("scene_id=?", scene.ID).Order("`order`,id").Find(&sceneDialogues).Error; err != nil {
+			return "", err
+		}
+		dialogues = append(dialogues, authoritativeSceneDialogues(sceneDialogues)...)
+	}
+	fragments, err := planDialogueFragments(shots, dialogues)
+	if err != nil {
+		return "", err
+	}
+	return groupedNarrativeContent(nativeShotGroup{Shots: shots, FragmentSets: fragments, Duration: group.Duration}), nil
+}
+
 func packExistingNativeScenes(scenes []models.Scene) []existingNativeGroup {
 	groups := []existingNativeGroup{}
 	for _, scene := range scenes {
@@ -136,18 +158,20 @@ func (s *ShotService) PreviewExistingNativeRegroup(projectID, selectedID uint) (
 	items := make([]ShotMaterializationItem, 0, len(groups))
 	for i, group := range groups {
 		ids := make([]uint, 0, len(group.Scenes))
-		content := []string{}
+		content, err := existingGroupNarrative(s.db, group)
+		if err != nil {
+			return nil, err
+		}
 		dialogue := []string{}
 		for _, scene := range group.Scenes {
 			ids = append(ids, scene.ID)
-			content = append(content, scene.Content)
 			var ds []models.Dialogue
 			_ = s.db.Where("scene_id=?", scene.ID).Order("`order`,id").Find(&ds).Error
 			for _, d := range ds {
 				dialogue = append(dialogue, d.Text)
 			}
 		}
-		items = append(items, ShotMaterializationItem{ShotID: ids[0], ShotIDs: ids, Order: i + 1, Title: fmt.Sprintf("%s · Native段%d", base, i+1), Duration: group.Duration, Content: strings.Join(content, "\n"), Dialogue: strings.Join(dialogue, "")})
+		items = append(items, ShotMaterializationItem{ShotID: ids[0], ShotIDs: ids, Order: i + 1, Title: fmt.Sprintf("%s · Native段%d", base, i+1), Duration: group.Duration, Content: content, Dialogue: strings.Join(dialogue, "")})
 	}
 	return &ShotMaterializationPreview{SourceSceneID: selectedID, ShotCount: len(run), Items: items, Warning: "确认后会把已经拆开的短Scene重新合并；每个原导演镜头仍作为内部Shot保留，尚未生成或已有的拆分场景媒体将失效。"}, nil
 }
@@ -189,10 +213,13 @@ func (s *ShotService) RegroupExistingNativeScenes(projectID, selectedID uint) ([
 			keeper.Order = firstOrder + gi
 			keeper.Title = fmt.Sprintf("%s · Native段%d", base, gi+1)
 			keeper.Duration = group.Duration
-			contents, images, videos, negatives := []string{}, []string{}, []string{}, []string{}
+			content, err := existingGroupNarrative(tx, group)
+			if err != nil {
+				return err
+			}
+			images, videos, negatives := []string{}, []string{}, []string{}
 			shotOrder, dialogueOrder := 0, 0
 			for _, scene := range group.Scenes {
-				contents = append(contents, scene.Content)
 				images = append(images, scene.ImagePrompt)
 				videos = append(videos, scene.VideoPrompt)
 				negatives = append(negatives, scene.NegativePrompt)
@@ -217,7 +244,7 @@ func (s *ShotService) RegroupExistingNativeScenes(projectID, selectedID uint) ([
 					}
 				}
 			}
-			keeper.Content, keeper.ImagePrompt, keeper.VideoPrompt = strings.Join(contents, "\n"), strings.Join(images, "\n"), strings.Join(videos, "\n")
+			keeper.Content, keeper.ImagePrompt, keeper.VideoPrompt = content, strings.Join(images, "\n"), strings.Join(videos, "\n")
 			if engine, _ := normalizeSceneImageEngine(keeper.ImageEngine); engine == ImageEngineQwen21 {
 				keeper.ImagePrompt = ""
 			}

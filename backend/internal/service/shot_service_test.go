@@ -411,7 +411,7 @@ func TestReplaceShotsAllowsNaturalTimingWarningWithoutChangingDialogue(t *testin
 	db.Create(&project)
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1}
 	db.Create(&scene)
-	text := "自化元婴的设想来自于诸天宇。当年火云刹那之变，余天成的真实身份。"
+	text := strings.Repeat("自化元婴的设想来自于诸天宇。当年火云刹那之变，余天成的真实身份。", 2)
 	dialogue := models.Dialogue{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "姐姐", SpeechType: "dialogue", Text: text, AudioFile: "voice.wav"}
 	db.Create(&dialogue)
 	_, snapshot, err := loadSceneDialogueSnapshot(db, scene.ID)
@@ -421,7 +421,7 @@ func TestReplaceShotsAllowsNaturalTimingWarningWithoutChangingDialogue(t *testin
 	shots := []models.Shot{{ShotType: "姐姐近景", Duration: 5, Dialogue: text, Description: "姐姐说话", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, PromptSubject: "姐姐可见", PromptAction: "姐姐同步口型"}}
 	reviewDraft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{ShotType: shots[0].ShotType, Duration: 5, Dialogue: text, SpeechPresentation: shots[0].SpeechPresentation}}}
 	review := buildDialogueRhythmReview(reviewDraft, []models.Dialogue{dialogue})
-	if len(review) != 1 || review[0].NaturalMinimum != 9.5 || review[0].Status != "attention" || len(review[0].Advisories) == 0 {
+	if len(review) != 1 || review[0].NaturalMinimum != dialogueReviewNaturalMinimum([]dialogueRhythmFragmentReview{{Character: "姐姐", SpeechType: "dialogue", Text: text}}) || review[0].Status != "attention" || len(review[0].Advisories) == 0 {
 		t.Fatalf("warning review=%+v", review)
 	}
 	saved, err := NewShotService(db).ReplaceShotsWithDialogueSnapshot(scene.ID, shots, snapshot)

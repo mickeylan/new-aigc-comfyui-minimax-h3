@@ -25,6 +25,31 @@ func newShotMaterializationDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func TestGroupedNarrativeContentPreservesAttributionAndRepeatedOccurrences(t *testing.T) {
+	repeated := models.Dialogue{Character: "甲", SpeechType: "dialogue"}
+	group := nativeShotGroup{
+		Shots: []models.Shot{{Description: "甲说：“别动。”，乙回头。", PromptSubject: "错误身份"}},
+		FragmentSets: [][]dialogueFragment{{
+			{Source: repeated, Text: "别动。"},
+			{Source: repeated, Text: "别动。"},
+			{Source: models.Dialogue{Character: "旁白", SpeechType: "narration"}, Text: " 夜深了。"},
+			{Source: models.Dialogue{Character: "乙", SpeechType: "offscreen_dialogue"}, Text: "谁？"},
+			{Source: models.Dialogue{Character: "乙", SpeechType: "monologue"}, Text: "是他……"},
+			{Source: models.Dialogue{SpeechType: "offscreen_dialogue"}, Text: "不许走！"},
+			{Source: models.Dialogue{SpeechType: "dialogue"}, Text: "等等。"},
+		}},
+	}
+	got := groupedNarrativeContent(group)
+	for _, want := range []string{"甲说：“别动。”，乙回头。", "甲说：“别动。”", "画外旁白：“ 夜深了。”", "乙从画外说道：“谁？”", "乙的内心独白：“是他……”", "画外声音说道：“不许走！”", "说话人待确认：“等等。”"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("content missing %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "错误身份说") || strings.Count(got, "别动。") != 2 {
+		t.Fatalf("content invented identity or lost repeated occurrence: %s", got)
+	}
+}
+
 func TestMaterializeShotsCreatesNativeScenesAndPreservesDialogue(t *testing.T) {
 	db := newShotMaterializationDB(t)
 	project := models.Project{Title: "p", Generation: 1}
@@ -60,12 +85,24 @@ func TestMaterializeShotsCreatesNativeScenesAndPreservesDialogue(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	preview, err := NewShotService(db).PreviewMaterialization(project.ID, source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	created, err := NewShotService(db).Materialize(project.ID, source.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(created) != 1 || created[0].Duration != 13 || created[0].ShotCount != 3 {
 		t.Fatalf("created=%+v", created)
+	}
+	if len(preview.Items) != len(created) || preview.Items[0].Content != created[0].Content {
+		t.Fatal("preview and persisted narrative differ")
+	}
+	for _, want := range []string{"若彤说：“姐姐，”", "若彤说：“你还好吗？”", "若琳说：“我很好。”"} {
+		if !strings.Contains(created[0].Content, want) {
+			t.Fatalf("materialization lost narrative dialogue %q: %s", want, created[0].Content)
+		}
 	}
 	var scenes []models.Scene
 	if err := db.Where("project_id=? AND (archived = ? OR archived IS NULL)", project.ID, false).Order("`order`").Find(&scenes).Error; err != nil {

@@ -9,29 +9,36 @@ import (
 )
 
 const (
-	defaultChineseCharsPerSecond = 3.8
-	dialogueOpeningClosingMargin = 1.2
-	speakerChangePause           = 0.35
+	// Planning estimate requested for short-drama dialogue (8–10 chars/s).
+	// This does not change TTS playback speed or measured audio duration.
+	defaultChineseCharsPerSecond = 9.0
+	dialogueOpeningClosingMargin = 0.4
+	speakerChangePause           = 0.15
 	maxSceneVideoDuration        = 15.0
 )
 
 func dialogueTextDuration(text string) float64 {
-	chars, pause := 0, 0.0
+	chars, pause, clusterPause := 0, 0.0, 0.0
+	text = strings.NewReplacer("<scenetrans>", "", "<cutoff>", "", "[Chinese]", "", "<d>", "", "</d>", "").Replace(text)
 	for _, r := range strings.TrimSpace(text) {
+		weight := 0.0
 		switch r {
 		case '，', ',', '、', '；', ';', ':', '：':
-			pause += 0.2
-		case '。', '.', '！', '!', '？', '?':
-			pause += 0.45
-		case '…':
-			pause += 0.3
+			weight = 0.08
+		case '。', '.', '！', '!', '？', '?', '…', '—', '–':
+			weight = 0.15
 		default:
-			if !unicode.IsSpace(r) {
-				chars++
+			if unicode.IsSpace(r) || unicode.IsPunct(r) {
+				continue
 			}
+			pause += clusterPause
+			clusterPause = 0
+			chars++
 		}
+		// “！！！” and “……” describe one pause, not three/six pauses.
+		clusterPause = math.Max(clusterPause, weight)
 	}
-	return float64(chars)/defaultChineseCharsPerSecond + pause
+	return float64(chars)/defaultChineseCharsPerSecond + pause + clusterPause
 }
 
 func scriptDialoguesMinDuration(dialogues []scriptDialogue) float64 {

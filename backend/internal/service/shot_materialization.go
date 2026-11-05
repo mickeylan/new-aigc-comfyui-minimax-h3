@@ -95,10 +95,51 @@ func groupNativeShots(shots []models.Shot, fragments [][]dialogueFragment) []nat
 	return groups
 }
 
-func groupedDescriptions(shots []models.Shot) string {
-	parts := make([]string, 0, len(shots))
-	for i, shot := range shots {
-		parts = append(parts, fmt.Sprintf("[Shot %d] %s", i+1, strings.TrimSpace(shot.Description)))
+// groupedNarrativeContent keeps the reviewed visual description and places each
+// spoken fragment beside the shot in which it occurs. Fragment text is never
+// rewritten: it is also the authority used to create the child Dialogue rows.
+func groupedNarrativeContent(group nativeShotGroup) string {
+	parts := make([]string, 0, len(group.Shots))
+	for i, shot := range group.Shots {
+		description := strings.TrimSpace(shot.Description)
+		remaining := description
+		additions := []string{}
+		if i < len(group.FragmentSets) {
+			for _, fragment := range group.FragmentSets[i] {
+				// Consume at most one existing occurrence. This matters when two
+				// distinct source rows intentionally contain identical words.
+				quoted := "“" + fragment.Text + "”"
+				if at := strings.Index(remaining, quoted); at >= 0 {
+					remaining = remaining[:at] + strings.Repeat("\x00", len(quoted)) + remaining[at+len(quoted):]
+					continue
+				}
+				speaker := strings.TrimSpace(fragment.Source.Character)
+				switch fragment.Source.SpeechType {
+				case "narration":
+					additions = append(additions, "画外旁白：“"+fragment.Text+"”")
+				case "offscreen_dialogue":
+					if speaker != "" {
+						additions = append(additions, speaker+"从画外说道：“"+fragment.Text+"”")
+					} else {
+						additions = append(additions, "画外声音说道：“"+fragment.Text+"”")
+					}
+				case "monologue":
+					if speaker != "" {
+						additions = append(additions, speaker+"的内心独白：“"+fragment.Text+"”")
+					} else {
+						additions = append(additions, "内心独白：“"+fragment.Text+"”")
+					}
+				default:
+					if speaker != "" {
+						additions = append(additions, speaker+"说：“"+fragment.Text+"”")
+					} else {
+						additions = append(additions, "说话人待确认：“"+fragment.Text+"”")
+					}
+				}
+			}
+		}
+		body := strings.Join(nonEmptyStrings(append([]string{description}, additions...)), " ")
+		parts = append(parts, fmt.Sprintf("[Shot %d] %s", i+1, body))
 	}
 	return strings.Join(parts, "\n")
 }
@@ -120,7 +161,7 @@ func buildShotMaterializationPreview(scene models.Scene, groups []nativeShotGrou
 		for _, shot := range group.Shots {
 			ids = append(ids, shot.ID)
 		}
-		items = append(items, ShotMaterializationItem{ShotID: ids[0], ShotIDs: ids, Order: i + 1, Title: fmt.Sprintf("%s · Native段%d", nativeSceneBaseTitle(scene.Title), i+1), Duration: group.Duration, Content: groupedDescriptions(group.Shots), Dialogue: groupedDialogue(group.Shots)})
+		items = append(items, ShotMaterializationItem{ShotID: ids[0], ShotIDs: ids, Order: i + 1, Title: fmt.Sprintf("%s · Native段%d", nativeSceneBaseTitle(scene.Title), i+1), Duration: group.Duration, Content: groupedNarrativeContent(group), Dialogue: groupedDialogue(group.Shots)})
 	}
 	return ShotMaterializationPreview{SourceSceneID: scene.ID, ShotCount: shotCount, Items: items, Warning: "确认后将按15秒上限把相邻导演Shot合并为Native场景并替换原场景；每个场景内部仍保留不同Shot。原场景图片、视频、配音及连续性结果会失效。"}
 }
@@ -272,7 +313,7 @@ func (s *ShotService) Materialize(projectID, sceneID uint) ([]models.Scene, erro
 			child := source
 			child.ID, child.Order, child.Archived = 0, source.Order+i, false
 			child.Title = fmt.Sprintf("%s · Native段%d", nativeSceneBaseTitle(source.Title), i+1)
-			child.Content, child.Duration, child.ShotCount = groupedDescriptions(group.Shots), group.Duration, len(group.Shots)
+			child.Content, child.Duration, child.ShotCount = groupedNarrativeContent(group), group.Duration, len(group.Shots)
 			promptParts, videoParts, negativeParts := []string{}, []string{}, []string{source.NegativePrompt}
 			for j, shot := range group.Shots {
 				promptParts = append(promptParts, fmt.Sprintf("[Shot %d]\n%s", j+1, canonicalShotPrompt(shot)))

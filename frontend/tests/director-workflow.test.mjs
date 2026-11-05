@@ -77,7 +77,7 @@ test('场景卡展示对白自然时长预算和拆镜警告', () => {
   assert.match(source, /对白预计/)
   assert.match(source, /建议拆分镜头/)
   assert.match(source, /不阻止生成/)
-  assert.match(source, /chars \/ 3\.8/)
+  assert.match(source, /estimateDialogueListDuration\(sceneDialogues\(sc\)\)/)
   assert.match(source, /dialogue-budget/)
   assert.match(source, /应用建议时长/)
   assert.match(source, /applyDialogueDuration/)

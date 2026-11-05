@@ -859,13 +859,13 @@ func TestDialogueRhythmReviewKeepsSilentShotFreeOfZeroLengthFragments(t *testing
 }
 
 func TestDialogueRhythmReviewDurationShortfallIsVisibleWithoutRewritingTiming(t *testing.T) {
-	dialogues := []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "自化元婴的设想来自于诸天宇。当年火云刹那之变，余天成的真实身份。"}}
+	dialogues := []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: strings.Repeat("自化元婴的设想来自于诸天宇。当年火云刹那之变，余天成的真实身份。", 2)}}
 	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 5, Dialogue: dialogues[0].Text, ShotType: "阿宁近景", PromptSubject: "阿宁"}}}
 	if err := normalizeDialogueRhythmReviewDurations(draft, dialogues); err != nil {
 		t.Fatal(err)
 	}
 	review := buildDialogueRhythmReview(draft, dialogues)
-	if len(review) != 1 || !review[0].Ready || review[0].Status != "attention" || review[0].NaturalMinimum != 9.5 || len(review[0].Advisories) == 0 || len(review[0].BlockingIssues) != 0 {
+	if len(review) != 1 || !review[0].Ready || review[0].Status != "attention" || review[0].NaturalMinimum != dialogueReviewNaturalMinimum([]dialogueRhythmFragmentReview{{Character: "阿宁", SpeechType: "dialogue", Text: dialogues[0].Text}}) || len(review[0].Advisories) == 0 || len(review[0].BlockingIssues) != 0 {
 		t.Fatalf("draft=%+v review=%+v", draft, review)
 	}
 	if draft.Shots[0].Duration != 5 || len(draft.Shots[0].Checks) != 0 {
@@ -874,14 +874,14 @@ func TestDialogueRhythmReviewDurationShortfallIsVisibleWithoutRewritingTiming(t 
 }
 
 func TestDialogueRhythmReviewWarnsImpossibleNaturalTiming(t *testing.T) {
-	longText := strings.Repeat("修", 60)
+	longText := strings.Repeat("修", 180)
 	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 15, Dialogue: longText, ShotType: "近景"}}}
 	review := buildDialogueRhythmReview(draft, []models.Dialogue{{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: longText}})
 	if len(review) != 1 || !review[0].Ready || review[0].Status != "attention" || review[0].NaturalMinimum <= 15 || len(review[0].Advisories) < 2 || len(review[0].BlockingIssues) != 0 {
 		t.Fatalf("review=%+v", review)
 	}
-	fragments := []dialogueRhythmFragmentReview{{Character: "阿宁", SpeechType: "dialogue", Text: "这是第一段对白"}, {Character: "阿兰", SpeechType: "dialogue", Text: "这是第二段对白"}}
-	withoutChangePause := math.Max(3, math.Ceil((dialogueTextDuration("这是第一段对白")+dialogueTextDuration("这是第二段对白")+0.6)*2)/2)
+	fragments := []dialogueRhythmFragmentReview{{Character: "阿宁", SpeechType: "dialogue", Text: strings.Repeat("字", 13)}, {Character: "阿兰", SpeechType: "dialogue", Text: strings.Repeat("字", 13)}}
+	withoutChangePause := math.Max(3, math.Ceil((dialogueTextDuration(strings.Repeat("字", 13))+dialogueTextDuration(strings.Repeat("字", 13))+0.6)*2)/2)
 	if got := dialogueReviewNaturalMinimum(fragments); got <= withoutChangePause {
 		t.Fatalf("speaker change pause missing: got %.1f base %.1f", got, withoutChangePause)
 	}
