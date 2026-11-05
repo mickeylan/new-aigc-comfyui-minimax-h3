@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"comfyui-console/internal/models"
@@ -21,7 +22,12 @@ func (s *ModelCatalogService) ValidateVideoSelection(code string, files map[stri
 	if entry.Duration == nil {
 		return nil, fmt.Errorf("模板 %s 不是视频模板", code)
 	}
-	if entry.Duration.Min != nil && duration < *entry.Duration.Min || entry.Duration.Max != nil && duration > *entry.Duration.Max {
+	if math.IsNaN(duration) || math.IsInf(duration, 0) || duration <= 0 {
+		return nil, fmt.Errorf("视频时长必须是有效正数")
+	}
+	// H3 catalog ranges are descriptive defaults, not an execution gate.
+	// Pass the requested duration to ComfyUI rather than imposing a local cap.
+	if !isH3VideoPromptTemplate(template.Code) && (entry.Duration.Min != nil && duration < *entry.Duration.Min || entry.Duration.Max != nil && duration > *entry.Duration.Max) {
 		return nil, fmt.Errorf("模板 %s 不支持 %.3g 秒时长", code, duration)
 	}
 	refs, first, last := len(files["ref_images"]), len(files["first_frame"]), len(files["last_frame"])

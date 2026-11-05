@@ -7417,9 +7417,8 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	// A saved execution prompt is user-reviewed production input. Source drift and
 	// prompt diagnostics are advisory only; MiniMax H3 is intentionally tolerant
 	// and must receive the exact text the user chose to submit.
-	durationLimit := configuredH3GenerationDuration(s.db)
-	if sc.Duration > durationLimit {
-		return fmt.Errorf("场景 %d 为 %.1f 秒，超过当前 MiniMax H3 生成上限 %.1f 秒；长视频显著增加显存占用，只有在目标实例实测通过后才应在设置中提高上限", sc.Order, sc.Duration, durationLimit)
+	if math.IsNaN(sc.Duration) || math.IsInf(sc.Duration, 0) || sc.Duration <= 0 {
+		return fmt.Errorf("场景 %d 的视频时长必须是有效正数", sc.Order)
 	}
 	videoW, videoH := aspectVideoSize(p.AspectRatio, s.videoResolution())
 	pid := fmt.Sprintf("%d", p.ID)

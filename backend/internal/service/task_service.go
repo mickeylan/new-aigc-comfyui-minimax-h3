@@ -860,9 +860,8 @@ func (s *TaskService) validateH3TaskDuration(templateCode string, params map[str
 	case string:
 		duration, _ = strconv.ParseFloat(strings.TrimSpace(value), 64)
 	}
-	limit := configuredH3GenerationDuration(s.db)
-	if duration < 3 || duration > limit {
-		return fmt.Errorf("MiniMax H3任务时长%.1f秒超出当前执行范围3–%.1f秒", duration, limit)
+	if math.IsNaN(duration) || math.IsInf(duration, 0) || duration <= 0 {
+		return fmt.Errorf("MiniMax H3任务时长必须是有效正数")
 	}
 	return nil
 }

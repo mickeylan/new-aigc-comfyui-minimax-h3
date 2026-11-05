@@ -158,7 +158,7 @@ func TestMiniMaxH3TemplatesRenderWithoutPlaceholders(t *testing.T) {
 	}
 }
 
-func TestH3TaskDurationPolicyGuardsCreateAndSnapshotRetry(t *testing.T) {
+func TestH3TaskDurationPreservesCreateAndSnapshotRetryWithoutLocalCap(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		t.Fatal(err)
@@ -178,8 +178,8 @@ func TestH3TaskDurationPolicyGuardsCreateAndSnapshotRetry(t *testing.T) {
 	if _, err := svc.CreateTask(CreateTaskReq{TemplateID: storyboard.ID, Params: map[string]any{"duration": 0.21}}); err != nil {
 		t.Fatalf("storyboard frame-batch duration was incorrectly treated as final video duration: %v", err)
 	}
-	if _, err := svc.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Params: map[string]any{"duration": 20.0}}); err == nil || !strings.Contains(err.Error(), "3–15.0") {
-		t.Fatalf("unsafe long task accepted: %v", err)
+	if _, err := svc.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Params: map[string]any{"duration": 20.0}}); err != nil {
+		t.Fatalf("long task blocked by local default: %v", err)
 	}
 	if err := db.Create(&models.Setting{Key: settingH3MaxDurationSeconds, Value: "24"}).Error; err != nil {
 		t.Fatal(err)
@@ -191,8 +191,21 @@ func TestH3TaskDurationPolicyGuardsCreateAndSnapshotRetry(t *testing.T) {
 	if err := db.Model(&models.Setting{}).Where("key = ?", settingH3MaxDurationSeconds).Update("value", "15").Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.CloneTaskSnapshot(task.TaskID, nil); err == nil || !strings.Contains(err.Error(), "任务快照不再满足当前执行策略") {
-		t.Fatalf("stale long snapshot retry accepted: %v", err)
+	retry, err := svc.CloneTaskSnapshot(task.TaskID, nil)
+	if err != nil {
+		t.Fatalf("local cap blocked immutable snapshot retry: %v", err)
+	}
+	var retryParams map[string]any
+	if err := json.Unmarshal([]byte(retry.ParamsJSON), &retryParams); err != nil {
+		t.Fatal(err)
+	}
+	if retryParams["duration"] != float64(20) {
+		t.Fatalf("retry changed original duration: %s", retry.ParamsJSON)
+	}
+	for _, invalid := range []float64{0, -1} {
+		if _, err := svc.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Params: map[string]any{"duration": invalid}}); err == nil {
+			t.Fatalf("invalid duration %v accepted", invalid)
+		}
 	}
 }
 
