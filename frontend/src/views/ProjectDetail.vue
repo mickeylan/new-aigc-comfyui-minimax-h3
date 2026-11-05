@@ -1397,9 +1397,15 @@ const selectedSceneOutfits = ref({})
 const sceneOutfitsBaseline = ref(null)
 const projectForm = reactive({ title: '', genre: '', style: '', synopsis: '', audience: '', tone: '', ending: '', episodes: 10, aspect_ratio: '16:9', narrator_voice_gender: '', narrator_voice_description: '' })
 let timer = null
-let wsTimer = null
 let pollTimer = null
 let loadRequestEpoch = 0
+let projectLoadInFlight = false
+let projectLoadQueued = false
+let detailDisposed = false
+let screenTextLoadedKey = ''
+let screenTextRequestedKey = ''
+let screenTextRetryAt = 0
+const screenTextRequests = new Map()
 
 const id = () => route.params.id
 
@@ -2039,8 +2045,43 @@ async function saveAssetRename() {
   }
 }
 
+async function loadScreenTextCues(force = false) {
+  const projectID = id()
+  const episodeN = activeEpN.value
+  const key = `${projectID}:${episodeN}`
+  if (screenTextRequestedKey !== key) {
+    screenTextRequestedKey = key
+    screenTextLoadedKey = ''
+    screenTextCues.value = []
+    screenTextRetryAt = 0
+  }
+  if (!force && (screenTextLoadedKey === key || Date.now() < screenTextRetryAt)) return
+  if (screenTextRequests.has(key)) return screenTextRequests.get(key)
+  const request = (async () => {
+    try {
+      const { data } = await api.screenTextCues(projectID, episodeN)
+      if (detailDisposed || `${id()}:${activeEpN.value}` !== key) return
+      screenTextCues.value = data || []
+      screenTextLoadedKey = key
+      screenTextRetryAt = 0
+    } catch {
+      if (!detailDisposed && `${id()}:${activeEpN.value}` === key) screenTextRetryAt = Date.now() + 30000
+    } finally {
+      screenTextRequests.delete(key)
+    }
+  })()
+  screenTextRequests.set(key, request)
+  return request
+}
+
+function refreshScreenTextOnFocus() {
+  if (document.visibilityState !== 'hidden') loadScreenTextCues(true)
+}
+
 async function load() {
-  if (savingScene.value || storyApplyBusy.value) return
+  if (detailDisposed || savingScene.value || storyApplyBusy.value) return
+  if (projectLoadInFlight) { projectLoadQueued = true; return }
+  projectLoadInFlight = true
   const requestEpoch = ++loadRequestEpoch
   try {
     const [{ data }, catalogRes, materialsRes] = await Promise.all([api.project(id()), api.modelCatalog(), api.materials({ project_id: id(), type: 'video' })])
@@ -2103,7 +2144,7 @@ async function load() {
     assets.value = nextAssets
     assetCounts.value = data.asset_counts || {}
     dialogues.value = data.dialogues || []
-    try { screenTextCues.value = (await api.screenTextCues(id(), activeEpN.value)).data || [] } catch { screenTextCues.value = [] }
+    await loadScreenTextCues()
     if (requestEpoch !== loadRequestEpoch || savingScene.value || storyApplyBusy.value) return
     scenes.value = (data.scenes || []).map(s => {
       s._working = isWorking(s)
@@ -2114,6 +2155,12 @@ async function load() {
     }
   } catch (e) {
     loadError.value = e.response?.data?.error || '项目加载失败，请检查服务连接'
+  } finally {
+    projectLoadInFlight = false
+    if (projectLoadQueued && !detailDisposed) {
+      projectLoadQueued = false
+      refreshSoon()
+    }
   }
 }
 
@@ -3544,16 +3591,22 @@ async function saveProject() {
 watch(
   () => store.lastEvent,
   (t) => {
-    if (t && scenes.value.some(s => s.video_task_id === t.task_id)) {
-      videoProgressMap.value[t.task_id] = t.progress
-    }
+    if (!t || detailDisposed) return
+    const belongsToProject = Number(t.project_id) === Number(id()) || scenes.value.some(s => s.video_task_id === t.task_id || s.image_task_id === t.task_id) || characters.value.some(ch => ch.portrait_task_id === t.task_id || ch.sheet_task_id === t.task_id) || assets.value.some(asset => asset.image_task_id === t.task_id || asset.sheet_task_id === t.task_id)
+    if (!belongsToProject) return
+    if (scenes.value.some(s => s.video_task_id === t.task_id)) videoProgressMap.value[t.task_id] = t.progress
     refreshSoon()
   }
 )
 
 watch(
   () => store.lastProjectUpdate,
-  () => refreshSoon()
+  (event) => {
+    if (!event || detailDisposed) return
+    // Older servers send a global notification without a project ID.
+    if (event.project_id != null && Number(event.project_id) !== Number(id())) return
+    refreshSoon()
+  }
 )
 
 onMounted(async () => {
@@ -3568,15 +3621,17 @@ onMounted(async () => {
     }
   }
   loadPromptPolicies()
-  wsTimer = setInterval(() => {
-    if (store.lastEvent || store.lastProjectUpdate) refreshSoon()
-  }, 1000)
-  pollTimer = setInterval(load, 5000)
+  document.addEventListener('visibilitychange', refreshScreenTextOnFocus)
+  window.addEventListener('focus', refreshScreenTextOnFocus)
+  pollTimer = setInterval(() => { if (document.visibilityState !== 'hidden') load() }, 5000)
 })
 
 onBeforeUnmount(() => {
   clearInterval(planProgressTimer)
-  clearInterval(wsTimer)
+  detailDisposed = true
+  ++loadRequestEpoch
+  document.removeEventListener('visibilitychange', refreshScreenTextOnFocus)
+  window.removeEventListener('focus', refreshScreenTextOnFocus)
   clearInterval(pollTimer)
   clearTimeout(timer)
 })
