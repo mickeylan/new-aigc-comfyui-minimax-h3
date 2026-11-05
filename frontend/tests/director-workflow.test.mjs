@@ -46,6 +46,10 @@ test('AI导演持久化导演意图、演员调度和切镜动机', () => {
   assert.match(source, /导演意图与演员调度/)
   assert.match(source, /观众新增信息/)
   assert.match(source, /切镜理由/)
+  assert.match(source, /Scene导演分析/)
+  assert.match(source, /表演Beat/)
+  assert.match(source, /data\.director_review/)
+  assert.match(source, /data\.director_specialty/)
 })
 
 test('武戏导演支持确定性资料检索、正文预览和审核后导入', () => {

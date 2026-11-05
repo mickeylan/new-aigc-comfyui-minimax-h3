@@ -1242,7 +1242,7 @@ func TestRedesignScenePromptUsesShotsLooksAndH3StartFrameFormat(t *testing.T) {
 	if err := ps.db.Create(&sc).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := ps.db.Create(&models.Shot{SceneID: sc.ID, Order: 1, ShotType: "中近景", CameraAngle: "低机位", CameraMovement: "缓慢推进", Description: "林舒拔剑护住陆川", Emotion: "警觉"}).Error; err != nil {
+	if err := ps.db.Create(&models.Shot{SceneID: sc.ID, Order: 1, ShotType: "中近景", CameraAngle: "低机位", CameraMovement: "缓慢推进", Description: "林舒拔剑护住陆川", FocusSubject: "林舒护住陆川的起势", Blocking: "林舒在前景侧身挡住陆川", EyeLine: "林舒看向画外威胁", Performance: "林舒压低重心并握紧剑柄", Emotion: "警觉"}).Error; err != nil {
 		t.Fatal(err)
 	}
 	look := models.CharacterLook{ProjectID: p.ID, CharacterID: 1, Name: "战斗绣鞋", Category: "shoes", Description: "黑色云纹软底靴", AuditStatus: models.LookStatusApproved}
@@ -1261,10 +1261,13 @@ func TestRedesignScenePromptUsesShotsLooksAndH3StartFrameFormat(t *testing.T) {
 			t.Fatalf("result missing %q: %s", want, result)
 		}
 	}
-	for _, want := range []string{"林舒拔剑护住陆川", "中近景", "低机位", "缓慢推进"} {
+	for _, want := range []string{"林舒拔剑护住陆川", "中近景", "低机位", "林舒在前景侧身挡住陆川", "林舒看向画外威胁"} {
 		if !strings.Contains(provider.user, want) {
 			t.Fatalf("AI context missing %q: %s", want, provider.user)
 		}
+	}
+	if strings.Contains(provider.user, "缓慢推进") {
+		t.Fatalf("static keyframe context leaked camera movement: %s", provider.user)
 	}
 	if !strings.Contains(provider.system, "MiniMax H3 SelfLift") || !strings.Contains(provider.system, "真实身份绑定由系统") || !strings.Contains(provider.system, "不得写“素材名”") || !strings.Contains(provider.system, "避免远景、大远景") {
 		t.Fatalf("wrong system prompt: %s", provider.system)
@@ -4317,6 +4320,16 @@ func TestRebuildStructuredShotActionOmitsDescriptionAndAbstractNarration(t *test
 	for _, want := range []string{"medium two-shot", "the camera holds a static two-shot", "warm sunset light", "warm golden tones"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing visible fact %q: %s", want, got)
+		}
+	}
+}
+
+func TestRebuildStructuredShotActionCompilesReviewedPerformanceDirection(t *testing.T) {
+	shots := []models.Shot{{Duration: 4, PromptSubject: "the woman in foreground", Blocking: "she stands between the child and the doorway", PerformanceTrigger: "footsteps sound beyond the doorway", Performance: "her shoulders tighten and her right hand closes around the sword hilt", Reaction: "she shifts her weight onto the rear foot", EyeLine: "her gaze snaps toward the doorway", PromptCamera: "static medium shot", PromptLighting: "cold side light"}}
+	got := rebuildStructuredShotAction(shots)
+	for _, want := range []string{"stands between the child", "footsteps sound", "shoulders tighten", "rear foot", "gaze snaps"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("H3 prompt missing reviewed performance direction %q: %s", want, got)
 		}
 	}
 }

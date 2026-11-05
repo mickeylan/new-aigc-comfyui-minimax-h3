@@ -513,7 +513,7 @@ func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, err
 		return "", err
 	}
 	assetContext := s.assetContextForScene(sc) + sceneBlockingPromptContext(sc) + s.sceneImageAliasIdentityContext(sc)
-	shotContext := s.sceneShotContext(sc)
+	shotContext := s.sceneOpeningDirectorContext(sc)
 	_, referenceLines, explicitReferences := s.selectedSceneReferenceFiles(sc, "krea2")
 	if !explicitReferences {
 		_, referenceLines = s.sceneImageReferenceFiles(sc)
@@ -3893,7 +3893,7 @@ func rebuildStructuredShotAction(shots []models.Shot) string {
 	for i, shot := range shots {
 		// Identity, wardrobe and style are already fixed by Subject definitions and the one
 		// global style preamble. Repeating them in every Shot dilutes action and dialogue.
-		structured := []string{shot.PromptSubject, shot.PromptAction, shot.PromptCamera, shot.PromptLighting}
+		structured := []string{shot.PromptSubject, shot.Blocking, shot.PerformanceTrigger, shot.Performance, shot.Reaction, shot.EyeLine, shot.PromptAction, shot.PromptCamera, shot.PromptLighting}
 		fields := make([]string, 0, len(structured))
 		for _, field := range structured {
 			if clean := conciseVisibleShotField(field); clean != "" {
@@ -6604,7 +6604,7 @@ func (s *ProjectService) sceneShotContext(sc *models.Scene) string {
 	lines := make([]string, 0, len(shots))
 	for _, shot := range shots {
 		parts := []string{fmt.Sprintf("镜头%d", shot.Order)}
-		for _, value := range []string{shot.Description, "景别：" + shot.ShotType, "机位：" + shot.CameraAngle, "运镜意图：" + shot.CameraMovement, "起始状态：" + shot.StartState, "结束状态：" + shot.EndState, "转场：" + string(shot.TransitionType) + " " + shot.TransitionNote, "情绪：" + shot.Emotion, "主体：" + shot.PromptSubject, "动作：" + shot.PromptAction, "构图：" + shot.PromptCamera, "光线：" + shot.PromptLighting, "风格：" + shot.PromptStyle} {
+		for _, value := range []string{shot.Description, "本镜目的：" + shot.DirectorIntent, "观众新增信息：" + shot.AudienceInformation, "行动触发：" + shot.PerformanceTrigger, "演员表演：" + shot.Performance, "视线：" + shot.EyeLine, "人物调度：" + shot.Blocking, "可见反应：" + shot.Reaction, "主要视觉焦点：" + shot.FocusSubject, "切镜理由：" + shot.CutReason, "景别：" + shot.ShotType, "机位：" + shot.CameraAngle, "运镜意图：" + shot.CameraMovement, "起始状态：" + shot.StartState, "结束状态：" + shot.EndState, "转场：" + string(shot.TransitionType) + " " + shot.TransitionNote, "情绪：" + shot.Emotion, "主体：" + shot.PromptSubject, "动作：" + shot.PromptAction, "构图：" + shot.PromptCamera, "光线：" + shot.PromptLighting, "风格：" + shot.PromptStyle} {
 			value = strings.TrimSpace(value)
 			if value != "" && !strings.HasSuffix(value, "：") {
 				parts = append(parts, value)
@@ -6613,6 +6613,27 @@ func (s *ProjectService) sceneShotContext(sc *models.Scene) string {
 		lines = append(lines, "- "+strings.Join(parts, "；"))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (s *ProjectService) sceneOpeningDirectorContext(sc *models.Scene) string {
+	if sc == nil || sc.DirectorSourceStale {
+		return ""
+	}
+	shots, err := s.currentSceneDirectorShots(sc)
+	if err != nil || len(shots) == 0 {
+		return ""
+	}
+	shot := shots[0]
+	parts := []string{"静态开场关键帧只定格镜头1的起始表演瞬间，不表现后续动作、切镜或镜头运动"}
+	for _, field := range []struct{ label, value string }{
+		{"画面瞬间", shot.Description}, {"景别", shot.ShotType}, {"机位", shot.CameraAngle}, {"主要视觉焦点", shot.FocusSubject}, {"人物调度", shot.Blocking}, {"可见触发前状态", shot.StartState},
+		{"视线", shot.EyeLine}, {"演员姿态与表情", shot.Performance}, {"构图", shot.PromptCamera}, {"光线", shot.PromptLighting},
+	} {
+		if value := strings.TrimSpace(field.value); value != "" {
+			parts = append(parts, field.label+"："+value)
+		}
+	}
+	return strings.Join(parts, "；")
 }
 
 func (s *ProjectService) characterLookContextForScene(sc *models.Scene) string {
@@ -6663,6 +6684,9 @@ func (s *ProjectService) buildSceneImagePrompt(sc *models.Scene) string {
 	}
 	if prompt := strings.TrimSpace(sc.ImagePrompt); prompt != "" {
 		parts = append(parts, "当前分镜："+prompt)
+	}
+	if directorContext := s.sceneOpeningDirectorContext(sc); directorContext != "" {
+		parts = append(parts, "【已审核导演开场关键帧】"+directorContext)
 	}
 	if negative := strings.TrimSpace(sc.NegativePrompt); negative != "" {
 		parts = append(parts, "【负向硬约束】画面中禁止出现："+negative)
@@ -7211,8 +7235,8 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 	// already consumed by the explicit Qwen redesign action and must not be appended raw.
 	compiledScene := *sc
 	if engine != ImageEngineQwen21 {
-		if shotContext := strings.TrimSpace(s.sceneShotContext(sc)); shotContext != "" {
-			compiledScene.ImagePrompt = strings.TrimSpace(compiledScene.ImagePrompt) + "\n【Shot导演设计】\n" + shotContext
+		if shotContext := strings.TrimSpace(s.sceneOpeningDirectorContext(sc)); shotContext != "" {
+			compiledScene.ImagePrompt = strings.TrimSpace(compiledScene.ImagePrompt) + "\n【已审核导演开场关键帧】\n" + shotContext
 		}
 	}
 	prompt := buildH3StoryboardPrompt(&compiledScene, &p, lines)

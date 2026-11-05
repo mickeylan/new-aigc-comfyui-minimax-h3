@@ -9,9 +9,9 @@ import (
 	"comfyui-console/internal/models"
 )
 
-const validSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中景","camera_angle":"平视","camera_movement":"固定","duration":3,"description":"女主走到桌边","director_intent":"让观众注意她对桌面异响的警觉","audience_information":"桌边存在尚未确认的异响","trigger":"桌上传来轻微碰撞声","performance":"肩膀收紧，步幅放慢，右手停在桌沿前","eye_line":"视线从门外转向桌面","blocking":"从门边向桌边移动，身体斜对桌面，重心落在后脚","reaction":"听见异响后停步屏息","focus_subject":"女主停在桌边的反应","cut_reason":"她的视线锁定桌面后切入细节镜头","dialogue":"","emotion":"警惕","transition_type":"cut","transition_note":"接视线","start_state":"女主站在门边","end_state":"女主停在桌边","prompt_subject":"女主面部清晰","prompt_action":"缓步走到桌边","prompt_camera":"中景平视构图","prompt_lighting":"室内暖侧光","prompt_style":"真人写实电影质感","negative_prompt":"水印，多余人物","checks":["动作可在3秒完成","无新增对白"]}]}`
+const validSceneDirectorDraft = `{"scene_analysis":{"dramatic_purpose":"建立威胁并迫使角色选择","emotional_arc":"警觉到确认危险","power_relationship":"未知威胁占主动，女主被动确认","information_order":["先听见异响","再确认来源"],"visual_question":"桌边究竟发生了什么","withheld_information":"异响来源暂不揭示","performance_focus":"女主从行走到警觉停步的身体变化","spatial_axis":"门边至桌边的行动轴","specialty":"suspense"},"performance_beats":[{"trigger":"桌上传来异响","behavior":"女主放慢脚步转眼","visible_change":"肩膀收紧并屏息","spatial_change":"从门边移至桌边停下","end_state":"视线锁定桌面"}],"shots":[{"act_type":"setup","shot_type":"中景","camera_angle":"平视","camera_movement":"固定","duration":3,"description":"女主走到桌边","director_intent":"让观众注意她对桌面异响的警觉","audience_information":"桌边存在尚未确认的异响","trigger":"桌上传来轻微碰撞声","performance":"肩膀收紧，步幅放慢，右手停在桌沿前","eye_line":"视线从门外转向桌面","blocking":"从门边向桌边移动，身体斜对桌面，重心落在后脚","reaction":"听见异响后停步屏息","focus_subject":"女主停在桌边的反应","cut_reason":"她的视线锁定桌面后切入细节镜头","dialogue":"","emotion":"警惕","transition_type":"cut","transition_note":"接视线","start_state":"女主站在门边","end_state":"女主停在桌边","prompt_subject":"女主面部清晰","prompt_action":"缓步走到桌边","prompt_camera":"中景平视构图","prompt_lighting":"室内暖侧光","prompt_style":"真人写实电影质感","negative_prompt":"水印，多余人物","checks":["动作可在3秒完成","无新增对白"]}]}`
 
-const shortSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中景","camera_angle":"平视","camera_movement":"固定","duration":2,"description":"女主走到桌边","director_intent":"让观众注意她对桌面异响的警觉","audience_information":"桌边存在尚未确认的异响","trigger":"桌上传来轻微碰撞声","performance":"肩膀收紧，步幅放慢，右手停在桌沿前","eye_line":"视线从门外转向桌面","blocking":"从门边向桌边移动，身体斜对桌面，重心落在后脚","reaction":"听见异响后停步屏息","focus_subject":"女主停在桌边的反应","cut_reason":"她的视线锁定桌面后切入细节镜头","dialogue":"","emotion":"警惕","transition_type":"cut","transition_note":"接视线","start_state":"女主站在门边","end_state":"女主停在桌边","prompt_subject":"女主面部清晰","prompt_action":"缓步走到桌边","prompt_camera":"中景平视构图","prompt_lighting":"室内暖侧光","prompt_style":"真人写实电影质感","negative_prompt":"水印，多余人物","checks":["动作可在2秒完成","无新增对白"]}]}`
+const shortSceneDirectorDraft = `{"scene_analysis":{"dramatic_purpose":"建立威胁并迫使角色选择","emotional_arc":"警觉到确认危险","power_relationship":"未知威胁占主动，女主被动确认","information_order":["先听见异响","再确认来源"],"visual_question":"桌边究竟发生了什么","withheld_information":"异响来源暂不揭示","performance_focus":"女主从行走到警觉停步的身体变化","spatial_axis":"门边至桌边的行动轴","specialty":"suspense"},"performance_beats":[{"trigger":"桌上传来异响","behavior":"女主放慢脚步转眼","visible_change":"肩膀收紧并屏息","spatial_change":"从门边移至桌边停下","end_state":"视线锁定桌面"}],"shots":[{"act_type":"setup","shot_type":"中景","camera_angle":"平视","camera_movement":"固定","duration":2,"description":"女主走到桌边","director_intent":"让观众注意她对桌面异响的警觉","audience_information":"桌边存在尚未确认的异响","trigger":"桌上传来轻微碰撞声","performance":"肩膀收紧，步幅放慢，右手停在桌沿前","eye_line":"视线从门外转向桌面","blocking":"从门边向桌边移动，身体斜对桌面，重心落在后脚","reaction":"听见异响后停步屏息","focus_subject":"女主停在桌边的反应","cut_reason":"她的视线锁定桌面后切入细节镜头","dialogue":"","emotion":"警惕","transition_type":"cut","transition_note":"接视线","start_state":"女主站在门边","end_state":"女主停在桌边","prompt_subject":"女主面部清晰","prompt_action":"缓步走到桌边","prompt_camera":"中景平视构图","prompt_lighting":"室内暖侧光","prompt_style":"真人写实电影质感","negative_prompt":"水印，多余人物","checks":["动作可在2秒完成","无新增对白"]}]}`
 
 func TestSceneDirectorDraftRequiresDirectorThinkingFields(t *testing.T) {
 	draft, err := parseSceneDirectorDraft(validSceneDirectorDraft)
@@ -29,6 +29,37 @@ func TestSceneDirectorDraftRequiresDirectorThinkingFields(t *testing.T) {
 	}
 	if err := requireDirectorThinking(missingDraft); err == nil || !strings.Contains(err.Error(), "cut_reason") {
 		t.Fatalf("missing cut_reason should be rejected by generation gate, got %v", err)
+	}
+}
+
+func TestDirectorSceneSpecialtyRoutesDistinctDramaticWork(t *testing.T) {
+	cases := []struct {
+		scene     models.Scene
+		dialogues []models.Dialogue
+		want      string
+	}{
+		{scene: models.Scene{Content: "门外传来异响，她怀疑有人跟踪"}, want: "director-scene-suspense"},
+		{scene: models.Scene{Content: "姐妹重逢后沉默相拥"}, want: "director-scene-emotion"},
+		{scene: models.Scene{Content: "二人在厅中交谈"}, dialogues: []models.Dialogue{{Character: "甲", Text: "你来了。"}}, want: "director-scene-drama"},
+		{scene: models.Scene{Content: "众人初到山谷，远处宫殿显现"}, want: "director-scene-establishing"},
+		{scene: models.Scene{SceneMode: "武戏", Content: "二人交锋"}, want: "fight-video-action-design"},
+	}
+	for _, tc := range cases {
+		got, _ := directorSceneSpecialty(&tc.scene, tc.dialogues)
+		if got != tc.want {
+			t.Fatalf("specialty route=%s want %s for %q", got, tc.want, tc.scene.Content)
+		}
+	}
+}
+
+func TestDirectorLogicReviewBlocksRepeatedInformationAndAdvisesAbstractDirection(t *testing.T) {
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
+		{AudienceInformation: "门外有人", DirectorIntent: "展示警觉", Performance: "表现出紧张情绪", CutReason: "切镜", EndState: "她看向门口"},
+		{AudienceInformation: "门外有人", DirectorIntent: "确认威胁", Performance: "她握紧剑柄", CutReason: "脚步声停止后切入门口", StartState: "她看向门口"},
+	}}
+	review := buildDirectorLogicReview(draft)
+	if len(review) != 2 || len(review[1].BlockingIssues) == 0 || len(review[0].Advisories) < 2 {
+		t.Fatalf("unexpected director review: %+v", review)
 	}
 }
 
@@ -210,8 +241,18 @@ func TestValidateCombatReferenceDraftRequiresTimelineAndExactStateRelay(t *testi
 	}
 }
 
+func directorFixtureShotsJSON(t *testing.T, raw string) string {
+	t.Helper()
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &root); err != nil {
+		t.Fatal(err)
+	}
+	return string(root["shots"])
+}
+
 func TestParseSceneDirectorDraftAcceptsSingleProjectEnvelope(t *testing.T) {
-	wrapped := `{"project":{"duration":12,"shots":` + strings.TrimSuffix(strings.TrimPrefix(validSceneDirectorDraft, `{"shots":`), `}`) + `}}`
+	shotsJSON := directorFixtureShotsJSON(t, validSceneDirectorDraft)
+	wrapped := `{"project":{"duration":12,"shots":` + shotsJSON + `}}`
 	draft, err := parseSceneDirectorDraft(wrapped)
 	if err != nil {
 		t.Fatal(err)
@@ -219,7 +260,7 @@ func TestParseSceneDirectorDraftAcceptsSingleProjectEnvelope(t *testing.T) {
 	if len(draft.Shots) != 1 || draft.Shots[0].Description != "女主走到桌边" {
 		t.Fatalf("draft=%+v", draft)
 	}
-	rootMetadata := `{"title":"雨夜屋顶","duration":12,"shots":` + strings.TrimSuffix(strings.TrimPrefix(validSceneDirectorDraft, `{"shots":`), `}`) + `}`
+	rootMetadata := `{"title":"雨夜屋顶","duration":12,"shots":` + shotsJSON + `}`
 	if _, err := parseSceneDirectorDraft(rootMetadata); err != nil {
 		t.Fatalf("root metadata wrapper rejected: %v", err)
 	}
@@ -258,9 +299,9 @@ func TestParseSceneDirectorDraftPreservesShortShotAndFollowingShot(t *testing.T)
 }
 
 func TestParseSceneDirectorDraftDoesNotMergeIncompatibleSpeechPresentations(t *testing.T) {
-	first := strings.TrimSuffix(strings.TrimPrefix(shortSceneDirectorDraft, `{"shots":[`), `]}`)
+	first := strings.TrimSuffix(strings.TrimPrefix(directorFixtureShotsJSON(t, shortSceneDirectorDraft), `[`), `]`)
 	first = strings.Replace(first, `"dialogue":""`, `"dialogue":"快走！","speech_presentation":"visible_speaker_lipsync"`, 1)
-	second := strings.TrimSuffix(strings.TrimPrefix(validSceneDirectorDraft, `{"shots":[`), `]}`)
+	second := strings.TrimSuffix(strings.TrimPrefix(directorFixtureShotsJSON(t, validSceneDirectorDraft), `[`), `]`)
 	second = strings.Replace(second, `"dialogue":""`, `"dialogue":"等等我。","speech_presentation":"offscreen_dialogue"`, 1)
 	raw := `{"shots":[` + first + `,` + second + `]}`
 	draft, err := parseSceneDirectorDraft(raw)
@@ -270,10 +311,11 @@ func TestParseSceneDirectorDraftDoesNotMergeIncompatibleSpeechPresentations(t *t
 }
 
 func TestParseSceneDirectorDraftPreservesTwoSecondShotBesideFourteenSecondShot(t *testing.T) {
-	raw := strings.Replace(validSceneDirectorDraft, `"duration":3`, `"duration":2`, 1)
-	second := strings.TrimSuffix(strings.TrimPrefix(validSceneDirectorDraft, `{"shots":[`), `]}`)
+	first := strings.TrimSuffix(strings.TrimPrefix(directorFixtureShotsJSON(t, validSceneDirectorDraft), `[`), `]`)
+	first = strings.Replace(first, `"duration":3`, `"duration":2`, 1)
+	second := strings.TrimSuffix(strings.TrimPrefix(directorFixtureShotsJSON(t, validSceneDirectorDraft), `[`), `]`)
 	second = strings.Replace(second, `"duration":3`, `"duration":14`, 1)
-	raw = strings.TrimSuffix(raw, `]}`) + `,` + second + `]}`
+	raw := `{"shots":[` + first + `,` + second + `]}`
 	draft, err := parseSceneDirectorDraft(raw)
 	if err != nil || len(draft.Shots) != 2 || draft.Shots[0].Duration != 2 || draft.Shots[1].Duration != 14 {
 		t.Fatalf("internal 2s+14s cuts changed: draft=%+v err=%v", draft, err)
