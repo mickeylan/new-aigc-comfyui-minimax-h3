@@ -144,8 +144,14 @@ func TestSceneStoryRewriteHTTPPreviewIsReadOnlyAndUsesScopedSource(t *testing.T)
 	if !ok || len(messages) < 2 {
 		t.Fatalf("provider request missing messages: %#v", request)
 	}
+	system := messages[0].(map[string]any)["content"].(string)
 	user := messages[len(messages)-1].(map[string]any)["content"].(string)
-	for _, want := range []string{"女童正在逃跑的分镜草稿", "一名男子厉喝", "女童闻声钻入更深的草丛", f.dialogue.Text} {
+	for _, conflict := range []string{"director_note", "只扩展可见表演过程", "创作要求："} {
+		if strings.Contains(system, conflict) {
+			t.Errorf("story rewrite system contains expand contract %q: %s", conflict, system)
+		}
+	}
+	for _, want := range []string{"女童正在逃跑的分镜草稿", "一名男子厉喝", "女童闻声钻入更深的草丛", f.dialogue.Text, "全部结构化对白", "小说原文证据"} {
 		if !strings.Contains(user, want) {
 			t.Errorf("provider input missing %q: %s", want, user)
 		}
@@ -154,6 +160,13 @@ func TestSceneStoryRewriteHTTPPreviewIsReadOnlyAndUsesScopedSource(t *testing.T)
 		if strings.Contains(user, leak) {
 			t.Errorf("provider input leaked %q: %s", leak, user)
 		}
+	}
+	var audit models.SkillAuditLog
+	if err := f.db.Order("id DESC").First(&audit).Error; err != nil {
+		t.Fatal(err)
+	}
+	if audit.SkillCode != sceneStoryRewriteSkillCode || !audit.Success {
+		t.Fatalf("wrong skill audit: %+v", audit)
 	}
 }
 
@@ -240,6 +253,25 @@ func TestSceneStoryRewriteHTTPRejectsStaleAndForgedApplyAtomically(t *testing.T)
 				t.Fatalf("invalid apply partially persisted: scene=%+v dialogue=%+v", scene, d)
 			}
 		})
+	}
+}
+
+func TestSceneStoryRewriteHTTPRejectsMixedSummaryAndTagWithoutMutation(t *testing.T) {
+	f := newStoryHTTPFixture(t)
+	f.reply = mustJSON(sceneStoryRewriteResult{
+		Content:   "女童奔向草丛。Summary warns the user.\n【对白汇总】\n身后男子厉喝：\"妖孽，哪里跑！\"",
+		Dialogues: []sceneStoryDialogue{{ID: f.dialogue.ID, Speaker: "远处追兵男子", SpeechType: "offscreen_dialogue", Text: f.dialogue.Text}},
+	})
+	w := f.post(t, "/preview", map[string]string{"content": "用户手工正文 KEEP-ProperName"})
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("bad mixed summary accepted: %d %s", w.Code, w.Body.String())
+	}
+	var scene models.Scene
+	if err := f.db.First(&scene, f.scene.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if scene.Content != "旧场景正文" {
+		t.Fatalf("failed preview changed manual content: %q", scene.Content)
 	}
 }
 

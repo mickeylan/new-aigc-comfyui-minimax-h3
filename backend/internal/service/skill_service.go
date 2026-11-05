@@ -88,6 +88,14 @@ func (s *SkillService) InitSystemSkills() error {
 			SortOrder:      1,
 		},
 		{
+			Name: "Scene故事对白自然整合", Code: sceneStoryRewriteSkillCode, Operation: sceneStoryRewriteSkillCode, Version: 1,
+			Description:    "一次处理当前Scene全部对白，将原句、说话人和动作时序自然融入中文叙事",
+			Stage:          models.SkillStageStoryboard,
+			PromptTemplate: "当前Scene正文：{{scene_content}}\n全部结构化对白（顺序权威）：{{dialogues}}\n小说原文证据：{{source_evidence}}",
+			SystemPrompt:   "你是影视故事编辑。一次处理本Scene的全部对白，逐条把说话人、原句和自然动作时序融入连贯中文叙事；第二句、第三句及之后同样必须完整处理，不能用概述、警告或对白清单代替。只输出一个严格JSON对象，且字段必须恰好为content和dialogues；dialogues每项字段必须恰好为id、speaker、speech_type、text。content只写中文叙事，用户原句和专名可原样保留，除此之外不得混入英文警告、总结或通用keyword block。不得新增【对白】【待确认】【原文语境】等机械标签或在末尾追加标签。逐字、逐条、按原顺序及出现次数保留全部对白，不新增引号内台词；只依据输入证据确定身份，不推断未知说话人的姓名、年龄或身份。",
+			IsSystem:       true, Enabled: true, SortOrder: 1,
+		},
+		{
 			Name: "AI导演场景正文扩写", Code: sceneContentExpandSkillCode, Operation: sceneContentExpandSkillCode, Version: 1,
 			Description:    "结合前后场景、角色资产和明确对白，生成待人工确认的中文正文扩写预览，不自动修改镜头或媒体",
 			Stage:          models.SkillStageStoryboard,

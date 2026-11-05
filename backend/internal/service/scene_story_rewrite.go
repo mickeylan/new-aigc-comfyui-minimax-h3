@@ -3,13 +3,17 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"comfyui-console/internal/models"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+const sceneStoryRewriteSkillCode = "scene_story_rewrite"
 
 type sceneStoryDialogue struct {
 	ID         uint   `json:"id"`
@@ -66,7 +70,14 @@ func (s *Service) HandlePreviewSceneStory(c *gin.Context) {
 音效只写成非人声声响，可将历史上误标为对白的音效提议为sound_effect，不得要求任何角色念出音效。已保存的speech_type、speaker可能是待修复错误，不得把它们当作原文事实。只取本场已分配台词，证据中的其他台词属于前后边界不得引入本场。
 正文应自然交代原文语境中的说话人、画外位置和动作时序，不得输出【原文语境】、【对白】、【待确认】等机械标签，不得在正文末尾附对白清单或元数据。每句已保存对白必须逐字、按原顺序及原出现次数写入正文，不得新增任何引号内台词。dialogues必须逐项保留输入id和text。身份只能来自输入证据；原文仅说明后方远处男子时，写“远处追兵男子”且speech_type为offscreen_dialogue，不得猜成某个已知角色、儿童或虬髯人物。普通运镜措辞不构成语义硬限制。`
 	user := fmt.Sprintf("当前正文：\n%s\n\n已保存对白（顺序权威）：\n%s\n\n本集原文匹配段落（只作事实依据）：\n%s", strings.TrimSpace(req.Content), mustJSON(dialoguesForStory(dialogues)), evidence)
-	output, err := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, sceneContentExpandSkillCode, s.TextProviderFact, system, user, map[string]string{"scene_id": fmt.Sprint(scene.ID), "source_hash": sourceHash, "scene_content": strings.TrimSpace(req.Content), "context": evidence, "requirements": "自然整合原文对白、明确归属及动作时序，只预览，不写库"})
+	dialogueJSON := mustJSON(dialoguesForStory(dialogues))
+	output, err := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, sceneStoryRewriteSkillCode, s.TextProviderFact, system, user, map[string]string{
+		"scene_id":        fmt.Sprint(scene.ID),
+		"source_hash":     sourceHash,
+		"scene_content":   strings.TrimSpace(req.Content),
+		"dialogues":       dialogueJSON,
+		"source_evidence": evidence,
+	})
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "AI 场景叙事改写失败: " + err.Error()})
 		return
@@ -79,8 +90,12 @@ func (s *Service) HandlePreviewSceneStory(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "AI 场景叙事结果无效: " + err.Error()})
 		return
 	}
+	if err := validateSceneStoryNarrative(result.Content, req.Content, dialogues, chapters); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "AI 场景叙事结果无效: " + err.Error()})
+		return
+	}
 	warnings := sceneStoryRewriteWarnings(result, dialogues)
-	c.JSON(200, gin.H{"content": result.Content, "dialogues": result.Dialogues, "source_hash": sourceHash, "warnings": warnings, "persisted": false})
+	c.JSON(200, gin.H{"content": result.Content, "dialogues": result.Dialogues, "source_hash": sourceHash, "base_content": strings.TrimSpace(req.Content), "warnings": warnings, "persisted": false})
 }
 
 func (s *Service) sceneStorySourceChapters(scene *models.Scene) ([]models.Chapter, error) {
@@ -253,8 +268,13 @@ func dialoguesForStory(ds []models.Dialogue) []sceneStoryDialogue {
 func mustJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
 func parseSceneStoryRewrite(raw string) (sceneStoryRewriteResult, error) {
 	var r sceneStoryRewriteResult
-	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &r); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(strings.TrimSpace(raw)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&r); err != nil {
 		return r, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return r, fmt.Errorf("JSON后含多余或无效内容")
 	}
 	r.Content = strings.TrimSpace(r.Content)
 	if r.Content == "" {
@@ -262,6 +282,33 @@ func parseSceneStoryRewrite(raw string) (sceneStoryRewriteResult, error) {
 	}
 	return r, nil
 }
+
+var (
+	sceneStoryEnglishWord = regexp.MustCompile(`[A-Za-z][A-Za-z0-9_-]+`)
+	sceneStoryTag         = regexp.MustCompile(`【[^】\r\n]{1,30}】`)
+)
+
+func validateSceneStoryNarrative(content, userContent string, ds []models.Dialogue, chapters []models.Chapter) error {
+	allowed := userContent
+	for _, d := range ds {
+		allowed += "\n" + d.Text + "\n" + d.Character
+	}
+	for _, chapter := range chapters {
+		allowed += "\n" + chapter.Content
+	}
+	for _, word := range sceneStoryEnglishWord.FindAllString(content, -1) {
+		if !strings.Contains(allowed, word) {
+			return fmt.Errorf("正文混入非原文英文内容: %s", word)
+		}
+	}
+	for _, tag := range sceneStoryTag.FindAllString(content, -1) {
+		if !strings.Contains(allowed, tag) {
+			return fmt.Errorf("正文新增机械标签: %s", tag)
+		}
+	}
+	return nil
+}
+
 func validateSceneStoryRewrite(r sceneStoryRewriteResult, ds []models.Dialogue, sources ...[]models.Chapter) error {
 	if strings.Contains(r.Content, "【待确认】") || strings.Contains(r.Content, "【对白") || strings.Contains(r.Content, "【原文语境】") {
 		return fmt.Errorf("正文含机械标签")

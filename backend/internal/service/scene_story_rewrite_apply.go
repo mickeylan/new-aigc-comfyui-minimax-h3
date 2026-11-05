@@ -116,6 +116,10 @@ func (s *Service) HandleApplySceneStory(c *gin.Context) {
 			return fmt.Errorf("结果无效: %w", err)
 		}
 		warnings = sceneStoryRewriteWarnings(result, ds)
+		if err := validateSceneStoryNarrative(result.Content, req.BaseContent, ds, chapters); err != nil {
+			// A human-reviewed stylistic edit is advisory, never a creative gate.
+			warnings = append(warnings, err.Error())
+		}
 		for i, d := range ds {
 			proposal := result.Dialogues[i]
 			if (proposal.Speaker != d.Character || proposal.SpeechType != d.SpeechType) && sceneStoryDialogueHasAudio(d) {
