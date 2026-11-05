@@ -599,7 +599,7 @@
     </section>
 
     <!-- 独立改名弹窗：只调用 rename PATCH，不复用会更新媒体字段的旧编辑表单 -->
-    <div v-if="framePurposeScene" class="modal-mask" @click.self="closeFramePurpose">
+    <div v-if="framePurposeScene" class="modal-mask frame-purpose-mask" @click.self="closeFramePurpose">
       <div class="modal card frame-purpose-modal">
         <h2>分镜图用于视频</h2>
         <div class="field"><label>用途</label><select v-model="framePurposeForm.role" class="input"><option value="start">起始帧</option><option value="keyframe">关键帧</option><option value="end">结束帧</option><option value="none">不用于视频</option></select></div>
@@ -3905,6 +3905,8 @@ onBeforeUnmount(() => {
   position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(10px);
   display: flex; align-items: center; justify-content: center; z-index: 200; padding: 24px;
 }
+/* 用途选择可以从视频提示词弹窗打开，必须位于其遮罩上方。 */
+.frame-purpose-mask { z-index: 220; }
 /* 图片查看：整图可见、无需滚动 */
 .viewer-mask { overflow: hidden; padding: 32px; }
 .viewer-panel {

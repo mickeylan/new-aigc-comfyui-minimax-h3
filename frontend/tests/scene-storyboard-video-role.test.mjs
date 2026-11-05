@@ -13,6 +13,15 @@ test('分镜图视频用途仅由独立弹窗显式保存', () => {
   assert.match(detail, /storyboard_video_time:.*: null/)
 })
 
+test('用途弹窗遮罩位于视频提示词弹窗之上且保留底层编辑窗口', () => {
+  assert.match(detail, /v-if="framePurposeScene" class="modal-mask frame-purpose-mask"/)
+  const base = detail.match(/\.modal-mask\s*\{([^}]+)\}/)[1]
+  const overlay = detail.match(/\.frame-purpose-mask\s*\{([^}]+)\}/)[1]
+  const zIndex = css => Number(css.match(/z-index:\s*(\d+)/)[1])
+  assert.ok(zIndex(overlay) > zIndex(base), 'nested role dialog must cover the video prompt mask')
+  assert.match(detail, /v-if="videoTaskDetail" class="modal-mask"/)
+})
+
 test('取消、非法时间和零秒处理明确', () => {
   assert.match(detail, /@click="closeFramePurpose">取消/)
   assert.match(detail, /Number\.isFinite\(n\) && n >= 0/)
