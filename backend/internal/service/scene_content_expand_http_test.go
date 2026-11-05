@@ -76,7 +76,7 @@ func TestExpandSceneContentHTTPDraftContextAndReadOnly(t *testing.T) {
 	}
 	msgs := request["messages"].([]any)
 	system := msgs[0].(map[string]any)["content"].(string)
-	for _, v := range []string{"前一Scene最后Shot的end_state", "只约束0.00秒可见状态", "后一Scene只能防止提前演出后续事件", "绝不能倒灌成当前动作"} {
+	for _, v := range []string{"简洁、自然、有动作因果", "创作要求】优先级最高", "不默认逐秒拆解", "不在结尾循环概述", "逐字保持这些时点", "湿土、斜阳、荒地", "明确对白必须原句、原顺序、原次数", "只约束0.00秒可见状态"} {
 		if !strings.Contains(system, v) {
 			t.Errorf("system missing %q", v)
 		}
@@ -99,6 +99,39 @@ func TestExpandSceneContentHTTPDraftContextAndReadOnly(t *testing.T) {
 	}
 }
 
+func TestExpandSceneContentProviderRequestPreservesTimelineDialogueAndExplicitDetail(t *testing.T) {
+	var request map[string]any
+	ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode provider request: %v", err)
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"content\":\"preview\",\"director_note\":\"\"}"}}]}`)
+	}))
+	defer ai.Close()
+	s, db, sc := expandHTTPService(t, ai.URL)
+	db.Create(&models.Dialogue{ProjectID: sc.ProjectID, SceneID: sc.ID, Order: 1, Character: "甲", SpeechType: "dialogue", Text: "原句别改"})
+	draft := "0.00秒，甲抬头。2.50秒，甲说：“原句别改”。"
+	requirements := "请细写甲的必要反应，但保持两个时点"
+	body, _ := json.Marshal(map[string]string{"content": draft, "requirements": requirements})
+	w := expandRequest(s, sc.ProjectID, sc.ID, string(body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d %s", w.Code, w.Body.String())
+	}
+	messages := request["messages"].([]any)
+	system := messages[0].(map[string]any)["content"].(string)
+	user := messages[1].(map[string]any)["content"].(string)
+	for _, want := range []string{"用户本轮【创作要求】优先级最高", "用户明确要求细写", "不增加、细分、平移或补齐切点", "没有时间轴时不要创建时间码"} {
+		if !strings.Contains(system, want) {
+			t.Errorf("system missing %q", want)
+		}
+	}
+	for _, want := range []string{draft, requirements, "0.00秒", "2.50秒", "原句别改", "[dialogue|甲]"} {
+		if !strings.Contains(user, want) {
+			t.Errorf("provider user request missing %q", want)
+		}
+	}
+}
+
 // Exercise production startup seeding rather than relying on the manually-created fixture Skill.
 func TestExpandSceneContentHTTPAfterSystemSkillInitialization(t *testing.T) {
 	ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +139,8 @@ func TestExpandSceneContentHTTPAfterSystemSkillInitialization(t *testing.T) {
 	}))
 	defer ai.Close()
 	s, db, sc := expandHTTPService(t, ai.URL)
-	if err := db.Where("code = ?", sceneContentExpandSkillCode).Delete(&models.Skill{}).Error; err != nil {
+	var v1 models.Skill
+	if err := db.Where("code = ? AND version = ?", sceneContentExpandSkillCode, 1).First(&v1).Error; err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
@@ -118,8 +152,15 @@ func TestExpandSceneContentHTTPAfterSystemSkillInitialization(t *testing.T) {
 	if err := db.Where("code = ?", sceneContentExpandSkillCode).Find(&skills).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(skills) != 1 || !skills[0].IsSystem || !skills[0].Enabled || skills[0].Operation != sceneContentExpandSkillCode || skills[0].Stage != models.SkillStageStoryboard {
-		t.Fatalf("missing or duplicate production expansion skill: %+v", skills)
+	if len(skills) != 2 {
+		t.Fatalf("expected v1 plus one idempotent v2 upgrade: %+v", skills)
+	}
+	var latest models.Skill
+	if err := db.Where("code = ?", sceneContentExpandSkillCode).Order("version DESC").First(&latest).Error; err != nil {
+		t.Fatal(err)
+	}
+	if latest.Version != 2 || latest.ParentID == nil || *latest.ParentID != v1.ID || !latest.IsSystem || !latest.Enabled || latest.Operation != sceneContentExpandSkillCode || latest.Stage != models.SkillStageStoryboard {
+		t.Fatalf("invalid production expansion skill upgrade: %+v", latest)
 	}
 	w := expandRequest(s, sc.ProjectID, sc.ID, `{"content":"current draft"}`)
 	if w.Code != http.StatusOK {
@@ -133,7 +174,7 @@ func TestExpandSceneContentHTTPAfterSystemSkillInitialization(t *testing.T) {
 		t.Fatal("preview persisted scene content")
 	}
 	var count int64
-	if err := db.Model(&models.SkillAuditLog{}).Where("project_id = ? AND skill_id = ? AND success = ?", sc.ProjectID, skills[0].ID, true).Count(&count).Error; err != nil {
+	if err := db.Model(&models.SkillAuditLog{}).Where("project_id = ? AND skill_id = ? AND success = ?", sc.ProjectID, latest.ID, true).Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {

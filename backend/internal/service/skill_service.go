@@ -96,11 +96,11 @@ func (s *SkillService) InitSystemSkills() error {
 			IsSystem:       true, Enabled: true, SortOrder: 1,
 		},
 		{
-			Name: "AI导演场景正文扩写", Code: sceneContentExpandSkillCode, Operation: sceneContentExpandSkillCode, Version: 1,
-			Description:    "结合前后场景、角色资产和明确对白，生成待人工确认的中文正文扩写预览，不自动修改镜头或媒体",
+			Name: "AI导演场景正文扩写", Code: sceneContentExpandSkillCode, Operation: sceneContentExpandSkillCode, Version: 2,
+			Description:    "结合相邻场景和相关人物资产，简洁扩写可拍摄动作因果与人物反应，保留明确对白和已有时间点",
 			Stage:          models.SkillStageStoryboard,
-			PromptTemplate: "当前未保存正文：{{scene_content}}\n创作要求：{{requirements}}\n权威上下文：{{context}}",
-			SystemPrompt:   "只输出合法JSON对象，字段为content和director_note。忠于当前场景事实和时长，只扩展可见表演过程，不新增剧情事件、能力、人物或台词；明确对白逐字保留。只生成预览，不执行保存或覆盖Shots。",
+			PromptTemplate: "当前未保存正文：{{scene_content}}\n创作要求（最高优先级）：{{requirements}}\n有界权威上下文：{{context}}",
+			SystemPrompt:   "只输出合法JSON对象，字段为content和director_note。默认简洁，只补必要动作因果与人物反应；不默认逐秒拆镜，不自创微动作、景别运镜、环境或外观。用户明确要求细写时优先照做。已有时间点及对应事件原样保留且不新增切点；明确对白逐字、原序、原次数保留。不得新增剧情事实、人物、物件、能力或台词；只生成预览，不保存或覆盖Shots。",
 			IsSystem:       true, Enabled: true, SortOrder: 1,
 		},
 		{

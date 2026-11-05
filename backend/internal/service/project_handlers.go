@@ -493,6 +493,7 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 		"duration": normalizeSceneDuration(sc.Duration), "fps": 24, "steps": 20,
 		"reference_bindings": sceneVideoReferenceBindings(refs, refLines, fullPrompt),
 		"reviewed_audio":     audioSelection,
+		"dialogue_placement": DiagnoseH3DialoguePlacement(fullPrompt, s.Projects.sceneVideoDialogues(sc), refLines),
 		"audio_video_templates": []gin.H{
 			{"code": h3AudioDrivenRef2VTemplate, "label": "音频驱动口型/时长（官方）"},
 			{"code": h3AudioDrivenT8EnhancedTemplate, "label": "音频驱动口型/时长（T8 Latent锁定增强）"},
@@ -560,7 +561,7 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 	if template == "minimax_h3_first_last" {
 		fullPrompt = finalizeH3FL2VAPrompt(fullPrompt, sc.Duration)
 	}
-	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "reference_bindings": sceneVideoReferenceBindings(refs, lines, fullPrompt), "template": template, "dialogue_count": len(validSceneDialogues(dubs)), "prompt_dialogue_count": len(h3SpokenTextPattern.FindAllStringSubmatch(fullPrompt, -1))}
+	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "reference_bindings": sceneVideoReferenceBindings(refs, lines, fullPrompt), "template": template, "dialogue_count": len(validSceneDialogues(dubs)), "prompt_dialogue_count": len(h3SpokenTextPattern.FindAllStringSubmatch(fullPrompt, -1)), "dialogue_placement": DiagnoseH3DialoguePlacement(fullPrompt, dubs, lines)}
 	if continuity != nil && continuity.SelectedFrame != nil {
 		response["continuity_mode"] = continuity.Mode
 		response["continuity_frame"] = s.frameResponses([]models.FrameCandidate{*continuity.SelectedFrame})[0]

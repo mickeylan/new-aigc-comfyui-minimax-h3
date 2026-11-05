@@ -2096,15 +2096,23 @@ func h3SceneModeInstruction(mode h3SceneMode) string {
 	}
 }
 
-var sceneTimedBeatPattern = regexp.MustCompile(`(?m)^\s*([0-9]+(?:\.[0-9]+)?)\s*[—–-]\s*([0-9]+(?:\.[0-9]+)?)\s*秒\s*[｜|]\s*`)
+var sceneTimedBeatPattern = regexp.MustCompile(`(?m)^\s*(?:【\s*)?([0-9]+(?:\.[0-9]+)?)\s*[—–-]\s*([0-9]+(?:\.[0-9]+)?)\s*秒\s*(?:】\s*|[｜|]\s*)`)
 
 // normalizeSceneTimedBeats converts an explicitly authored Scene-relative timeline into
 // official H3 Shot markers. These authored intervals are production authority: unlike an
 // inferred cut count, they must not be merged, reordered, retimed, or summarized away.
 func normalizeSceneTimedBeats(content string, duration float64) (string, int) {
 	matches := sceneTimedBeatPattern.FindAllStringSubmatchIndex(content, -1)
-	if len(matches) < 2 {
+	if len(matches) == 0 {
 		return content, 0
+	}
+	if len(matches) == 1 {
+		end, _ := strconv.ParseFloat(content[matches[0][4]:matches[0][5]], 64)
+		// A lone partial interval must not hide later inline beats or replace
+		// the full Scene with a shortened one-Shot interpretation.
+		if (duration > 0 && math.Abs(end-duration) > 0.051) || regexp.MustCompile(`[0-9]+(?:\.[0-9]+)?\s*[—–-]\s*[0-9]+(?:\.[0-9]+)?\s*秒`).MatchString(content[matches[0][1]:]) {
+			return content, 0
+		}
 	}
 	previousEnd := 0.0
 	for i, match := range matches {
@@ -2901,6 +2909,8 @@ func useSubjectTags(text string, referenceLines []string) string {
 var userH3ShotMarkerPattern = regexp.MustCompile(`(?i)\[Shot\s+([1-9][0-9]*)\](?:\s*AT\s+([0-9]{2}):([0-9]{2})\.([0-9]{2,3})\s*,?)?`)
 
 func normalizeUserH3ShotMarkers(text string) string {
+	// Canonicalize only Shot tags, leaving bracketed dialogue text untouched.
+	text = regexp.MustCompile(`(?i)\[+\s*Shot\s+([1-9][0-9]*)\s*\]+`).ReplaceAllString(text, "[Shot $1]")
 	return userH3ShotMarkerPattern.ReplaceAllStringFunc(text, func(marker string) string {
 		match := userH3ShotMarkerPattern.FindStringSubmatch(marker)
 		if len(match) != 5 {
@@ -3586,7 +3596,7 @@ func (s *ProjectService) sceneVideoDialogues(sc *models.Scene) []models.Dialogue
 			active = append(active, d)
 		}
 	}
-	return active
+	return withSceneDialogueTiming(sc, active)
 }
 
 func authoritativeSceneDialogues(dubs []models.Dialogue) []models.Dialogue {
@@ -4290,7 +4300,6 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 		byID[d.ID] = d
 		speakerByID[d.ID] = ids[i]
 	}
-	body = enforceSilentListenerLips(body)
 	groupText := map[string]string{}
 	seenDialogue := map[string]map[uint]bool{}
 	dialogueGroup := map[uint]string{}
@@ -4299,7 +4308,7 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 		for _, r := range shot.DialogueRanges {
 			d, ok := byID[r.DialogueID]
 			if !ok {
-				return body, false
+				continue
 			}
 			key := r.GroupKey
 			if key == "" {
@@ -4320,22 +4329,23 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 	// Coordinates are group-relative, so validate each dialogue against its slice of
 	// the merged group rather than treating every range as dialogue-relative.
 	covered := map[uint][]bool{}
+	invalid := map[uint]bool{}
 	for _, d := range dubs {
 		covered[d.ID] = make([]bool, len([]rune(canonicalDialogueText(d.Text))))
 	}
 	for _, shot := range shots {
 		for _, r := range shot.DialogueRanges {
 			key, ok := dialogueGroup[r.DialogueID]
-			if !ok || key != func() string {
-				if r.GroupKey != "" {
-					return r.GroupKey
-				}
-				return fmt.Sprintf("dialogue:%d", r.DialogueID)
-			}() {
-				return body, false
+			if !ok {
+				continue
 			}
-			if r.StartRune < 0 || r.EndRune <= r.StartRune || r.EndRune > len([]rune(groupText[key])) {
-				return body, false
+			rangeKey := r.GroupKey
+			if rangeKey == "" {
+				rangeKey = fmt.Sprintf("dialogue:%d", r.DialogueID)
+			}
+			if key != rangeKey || r.StartRune < 0 || r.EndRune <= r.StartRune || r.EndRune > len([]rune(groupText[key])) {
+				invalid[r.DialogueID] = true
+				continue
 			}
 			start := dialogueStart[r.DialogueID]
 			for pos := r.StartRune; pos < r.EndRune; pos++ {
@@ -4345,30 +4355,30 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 			}
 		}
 	}
+	validRangeDialogue := map[uint]bool{}
 	for _, d := range dubs {
-		if len(covered[d.ID]) == 0 {
-			return body, false
-		}
+		complete := !invalid[d.ID] && len(covered[d.ID]) > 0
 		for _, ok := range covered[d.ID] {
-			if !ok {
-				return body, false
-			}
+			complete = complete && ok
+		}
+		if complete {
+			validRangeDialogue[d.ID] = true
 		}
 	}
+	if len(validRangeDialogue) == 0 {
+		return body, false
+	}
+	body = enforceSilentListenerLips(body)
 	byShot := map[int][]string{}
-	requiredVisibleSpeakers := map[int][]string{}
 	for i, shot := range shots {
 		for _, r := range shot.DialogueRanges {
 			d, ok := byID[r.DialogueID]
-			if !ok {
-				return body, false
+			if !ok || !validRangeDialogue[r.DialogueID] {
+				continue
 			}
 			key := r.GroupKey
 			if key == "" {
 				key = fmt.Sprintf("dialogue:%d", r.DialogueID)
-			}
-			if r.StartRune < 0 || r.EndRune <= r.StartRune || r.EndRune > len([]rune(groupText[key])) {
-				return body, false
 			}
 			fragment := string([]rune(groupText[key])[r.StartRune:r.EndRune])
 			framing := useSubjectTags(strings.Join([]string{shot.PromptSubject, shot.ShotType}, " "), referenceLines)
@@ -4381,12 +4391,6 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 				models.ShotSpeechPresentationNarration, models.ShotSpeechPresentationMonologue:
 				visible = false
 			}
-			if (strings.TrimSpace(d.SpeechType) == "" || d.SpeechType == "dialogue") && shot.SpeechPresentation == "" {
-				if !visible && speakerTag != "" {
-					requiredVisibleSpeakers[i+1] = append(requiredVisibleSpeakers[i+1], speakerTag)
-				}
-			}
-
 			visibleSubjects := []string{}
 			seenSubject := map[string]bool{}
 			for _, tag := range h3SubjectTagPattern.FindAllString(framing, -1) {
@@ -4448,7 +4452,7 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 			next = matches[i+1][0]
 		}
 		n, _ := strconv.Atoi(body[match[2]:match[3]])
-		segment := ensureVisibleDialogueSpeakers(strings.TrimRight(body[start:next], " \n\t"), requiredVisibleSpeakers[n])
+		segment := strings.TrimRight(body[start:next], " \n\t")
 		lines := byShot[n]
 		continuesFrom, continuesTo := false, false
 		for _, line := range lines {
@@ -4473,8 +4477,14 @@ func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, refere
 	if explicit, ok := appendExplicitDialogueRangesToShots(body, valid, referenceLines, shots); ok {
 		return explicit
 	}
-	if len(valid) == 0 || len(shots) == 0 {
+	if len(valid) == 0 {
+		return body
+	}
+	if len(shots) <= 1 && len(h3ShotMarkerPattern.FindAllStringIndex(body, -1)) <= 1 {
 		return appendStructuredDialogue(body, valid, referenceLines)
+	}
+	if len(shots) == 0 {
+		return body
 	}
 	var expected, planned strings.Builder
 	for _, d := range valid {
@@ -4484,6 +4494,9 @@ func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, refere
 		planned.WriteString(canonicalDialogueText(shot.Dialogue))
 	}
 	if expected.String() != planned.String() {
+		if timed, report := ResolveH3DialoguePlacement(body, valid, referenceLines, shots); len(report.Unplaced) < len(valid) {
+			return timed
+		}
 		return appendStructuredDialogue(body, valid, referenceLines)
 	}
 
@@ -4495,36 +4508,39 @@ func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, refere
 		for consumed < target && dubIndex < len(valid) {
 			length := len([]rune(canonicalDialogueText(valid[dubIndex].Text)))
 			if consumed+length > target {
-				return appendStructuredDialogue(body, valid, referenceLines)
+				return body
 			}
 			assigned[shotIndex+1] = append(assigned[shotIndex+1], dubIndex)
 			consumed += length
 			dubIndex++
 		}
 		if consumed != target {
-			return appendStructuredDialogue(body, valid, referenceLines)
+			return body
 		}
 		consumed = 0
 	}
 	if dubIndex != len(valid) {
-		return appendStructuredDialogue(body, valid, referenceLines)
+		return body
+	}
+	markers := h3ShotMarkerPattern.FindAllStringSubmatch(body, -1)
+	if len(markers) != len(shots) {
+		return body
+	}
+	for i, marker := range markers {
+		n, err := strconv.Atoi(marker[1])
+		if err != nil || n != i+1 {
+			return body
+		}
 	}
 
 	body = enforceSilentListenerLips(body)
 	byShot := make(map[int][]string, len(shots))
-	requiredVisibleSpeakers := map[int][]string{}
 	for shotNo := 1; shotNo <= len(shots); shotNo++ {
 		for _, index := range assigned[shotNo] {
 			continuation := index > 0 && dialogueContinuesAcrossCut(valid[index-1], valid[index]) && dialogueIndexShot(assigned, index-1) == shotNo-1
 			framing := useSubjectTags(strings.Join([]string{shots[shotNo-1].PromptSubject, shots[shotNo-1].ShotType}, " "), referenceLines)
 			speakerTag := characterSubjectOrName(valid[index].Character, referenceLines)
 			visible := speakerTag != "" && strings.Contains(framing, speakerTag)
-			if strings.TrimSpace(valid[index].SpeechType) == "" || valid[index].SpeechType == "dialogue" {
-				if !visible && speakerTag != "" {
-					requiredVisibleSpeakers[shotNo] = append(requiredVisibleSpeakers[shotNo], speakerTag)
-				}
-			}
-
 			subjects := []string{}
 			seen := map[string]bool{}
 			for _, tag := range h3SubjectTagPattern.FindAllString(framing, -1) {
@@ -4539,7 +4555,7 @@ func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, refere
 
 	matches := h3ShotMarkerPattern.FindAllStringSubmatchIndex(body, -1)
 	if len(matches) == 0 {
-		return appendStructuredDialogue(body, valid, referenceLines)
+		return body
 	}
 	var out strings.Builder
 	for i, match := range matches {
@@ -4552,7 +4568,7 @@ func appendStructuredDialogueToShots(body string, dubs []models.Dialogue, refere
 		if i+1 < len(matches) {
 			next = matches[i+1][0]
 		}
-		segment := ensureVisibleDialogueSpeakers(strings.TrimRight(body[start:next], " \n\t"), requiredVisibleSpeakers[n])
+		segment := strings.TrimRight(body[start:next], " \n\t")
 		out.WriteString(segment)
 		if lines := byShot[n]; len(lines) > 0 {
 			out.WriteString(" ")
@@ -4588,15 +4604,20 @@ func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLine
 	if len(valid) == 0 {
 		return strings.TrimSpace(body)
 	}
-	speakerIDs := dialogueSpeakerIDs(valid)
-	requiredVisible := []string{}
-	for _, d := range valid {
-		if strings.TrimSpace(d.SpeechType) == "" || d.SpeechType == "dialogue" {
-			requiredVisible = append(requiredVisible, characterSubjectOrName(d.Character, referenceLines))
-		}
+	if len(h3ShotMarkerPattern.FindAllStringIndex(body, -1)) > 1 {
+		resolved, _ := ResolveH3DialoguePlacement(body, valid, referenceLines, nil)
+		return resolved
 	}
-	body = ensureVisibleDialogueSpeakers(body, requiredVisible)
+	speakerIDs := dialogueSpeakerIDs(valid)
+	placed := DiagnoseH3DialoguePlacement(body, valid, referenceLines)
+	placedIndexes := map[int]bool{}
+	for _, item := range placed.Placed {
+		placedIndexes[item.DialogueIndex] = true
+	}
 	for i, d := range valid {
+		if placedIndexes[i] {
+			continue
+		}
 		speaker := h3DialogueSpeaker(d, speakerIDs[i], referenceLines)
 		text := strings.TrimSpace(d.Text)
 		crossShot := strings.Contains(text, "<scenetrans>")
@@ -4624,7 +4645,10 @@ func appendStructuredDialogue(body string, dubs []models.Dialogue, referenceLine
 }
 
 func h3TimelineBody(sc *models.Scene, p *models.Project, dubs []models.Dialogue) string {
-	body := stripStructuredDialogueFromAction(normalizeVideoActionPrompt(sc.VideoPrompt), dubs)
+	dubs = withSceneDialogueTiming(sc, dubs)
+	original := normalizeVideoActionPrompt(sc.VideoPrompt)
+	body := stripStructuredDialogueFromAction(original, dubs)
+	body, _ = reconcileExistingH3Dialogue(original, body, dubs, nil)
 	if body == "" {
 		body = defaultSceneVideoAction(sc)
 	}
@@ -4803,6 +4827,7 @@ func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines
 		detail = h3IntegratedDescription(prompt)
 	}
 	detail = coalesceDuplicateH3Shots(detail)
+	originalDetail := detail
 	detail = stripStructuredDialogueFromAction(detail, dubs)
 	detail = strings.ReplaceAll(detail, "<scenetrans>", "")
 	detail = regexp.MustCompile(`(?i)The same voice continues uninterrupted across the cut\.`).ReplaceAllString(detail, "")
@@ -4822,9 +4847,18 @@ func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines
 	}
 	detail = trimIncompleteH3ActionEnding(detail)
 	if len(shotSets) > 0 {
-		detail = appendStructuredDialogueToShots(detail, dubs, referenceLines, shotSets[0])
+		compiled := appendStructuredDialogueToShots(detail, validDialogues, referenceLines, shotSets[0])
+		if compiled != detail {
+			// A validated range/Shot mapping already supplied speech. Do not restore
+			// the old clauses as a second copy on top of the authoritative mapping.
+			detail = compiled
+		} else {
+			detail, _ = reconcileExistingH3Dialogue(originalDetail, detail, validDialogues, referenceLines)
+			detail = appendStructuredDialogue(detail, validDialogues, referenceLines)
+		}
 	} else {
-		detail = appendStructuredDialogue(detail, dubs, referenceLines)
+		detail, _ = reconcileExistingH3Dialogue(originalDetail, detail, validDialogues, referenceLines)
+		detail = appendStructuredDialogue(detail, validDialogues, referenceLines)
 	}
 	if keyframeMode {
 		prefix := ""
@@ -5116,6 +5150,7 @@ func bindEnvironmentSubjectsToShots(body string, referenceLines []string) string
 }
 
 func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.Dialogue, referenceLines []string) string {
+	dubs = withSceneDialogueTiming(sc, dubs)
 	definitions, retention, _ := h3VideoSubjects(referenceLines)
 	if suggestedUnstructuredH3ShotCount(sc.Content, normalizeSceneDuration(sc.Duration)) > 1 {
 		for i := range definitions {
@@ -5137,6 +5172,7 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 	if style = h3EnglishStyle(style); style != "" {
 		body = strings.Replace(body, "[Shot 1]", "The target video uses a "+style+" style.\n[Shot 1]", 1)
 	}
+	originalBody := body
 	body = stripStructuredDialogueFromAction(body, dubs)
 	// Speech cleanup can introduce a visible-performance phrase after the AI/Shot cleanup.
 	// Resolve visual contradictions again at the final assembly boundary.
@@ -5152,6 +5188,7 @@ func buildMiniMaxH3RefPrompt(sc *models.Scene, p *models.Project, dubs []models.
 	}
 	validDialogues := validSceneDialogues(dubs)
 	soundscape := h3SoundscapeContractForDialogues(validDialogues)
+	body, _ = reconcileExistingH3Dialogue(originalBody, body, validDialogues, referenceLines)
 	body = appendStructuredDialogue(body, validDialogues, referenceLines)
 	// Keep every submitted Picture binding in subject_definitions. A storyboard or
 	// identity anchor may constrain the opening even when its Subject tag is not

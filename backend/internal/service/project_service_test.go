@@ -3501,6 +3501,7 @@ func TestLeadingQuotedShoutDoesNotGuessLaterVisibleCharacter(t *testing.T) {
 	if len(dubs) != 1 || dubs[0].Character != "画外男声" || dubs[0].SpeechType != "offscreen_dialogue" || dubs[0].Text != "妖孽，哪里跑！" {
 		t.Fatalf("leading quoted shout = %+v", dubs)
 	}
+	dubs[0].TimeSegment = "0—4秒"
 	lines := []string{"- <Picture 1>：角色「柳乐儿」四视图", "- <Picture 2>：角色「虬髯大汉」四视图", "- <Picture 3>：场景「辽阔荒地」参考图", "- <Picture 4>：当前分镜画面"}
 	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: "[Shot 1] <Subject 1> falters.\n[Shot 2] At 00:04.000, <Subject 2> charges through dust.", Duration: 8}, nil, dubs, lines)
 	for _, want := range []string{"后方远处的未具名男子声音 (S1) says in a clearly identified off-screen voice:", "<d>[Chinese] 妖孽，哪里跑！</d>", "no additional speech"} {
@@ -4431,8 +4432,8 @@ func TestH3ActionDoesNotLeaveTruncatedDescriptionPrefix(t *testing.T) {
 }
 
 func TestH3ActionConvertsSpeechStageDirectionsToSilentVisualCues(t *testing.T) {
-	action := `[Shot 1] 镜头切到上官若彤正面近景，语气加重地陈述姐姐十年没有好好闭关修炼，说完后停顿，眉心紧锁。[Shot 2] 切换到侧面，语速稍快，眼中闪过焦急，强调不到四十年这一紧迫时间期限。[Shot 3] 近景固定，继续陈述威胁。`
-	dubs := []models.Dialogue{{Character: "上官若彤", SpeechType: "dialogue", Text: "这十年你都没有怎么好好闭关修炼过。"}}
+	action := `[Shot 1] 镜头切到上官若彤正面近景，语气加重地陈述姐姐十年没有好好闭关修炼，说完后停顿，眉心紧锁。[Shot 2] At 00:03.000, 切换到侧面，语速稍快，眼中闪过焦急，强调不到四十年这一紧迫时间期限。[Shot 3] At 00:06.000, 近景固定，继续陈述威胁。`
+	dubs := []models.Dialogue{{Character: "上官若彤", SpeechType: "dialogue", Text: "这十年你都没有怎么好好闭关修炼过。", TimeSegment: "0—3秒"}}
 	got := stripStructuredDialogueFromAction(action, dubs)
 	for _, forbidden := range []string{"语气加重地陈述", "说完后停顿", "语速稍快", "继续陈述威胁"} {
 		if strings.Contains(got, forbidden) {
@@ -4593,7 +4594,7 @@ func TestH3ReferencePromptKeepsEnvironmentAndOpeningFrameOutOfSubjects(t *testin
 		"- <Picture 3>：上一镜确认尾帧（本镜 0.00 秒唯一开始画面）",
 	}
 	scene := &models.Scene{Duration: 14, VideoPrompt: "[Shot 1] <Subject 1> performs one diagonal cut.\n[Shot 2] At 00:04.667, <Subject 1> thrusts forward.\n[Shot 3] At 00:09.333, <Subject 1> finishes upright. The narrator says in an off-screen voiceover: while their lips remain completely closed."}
-	dubs := []models.Dialogue{{Character: "旁白", SpeechType: "dialogue", Text: "上官若琳，天阙宗宗主之女。"}}
+	dubs := []models.Dialogue{{Character: "旁白", SpeechType: "dialogue", Text: "上官若琳，天阙宗宗主之女。", TimeSegment: "0—3秒"}}
 	prompt := buildMiniMaxH3RefPrompt(scene, nil, dubs, lines)
 	for _, want := range []string{
 		"<Subject 1> is the character named 「上官若琳」",
@@ -4610,11 +4611,11 @@ func TestH3ReferencePromptKeepsEnvironmentAndOpeningFrameOutOfSubjects(t *testin
 			t.Fatalf("prompt retained invalid non-character Subject or narrator binding %q: %s", bad, prompt)
 		}
 	}
-	if strings.Count(prompt, h3NarratorLead(1)) != 1 || strings.Count(prompt, h3NarratorTimelineLead) != 1 {
+	if strings.Count(prompt, h3NarratorLead(1)) != 1 {
 		t.Fatalf("narration was duplicated or omitted: %s", prompt)
 	}
 	detail := h3PromptSection(prompt, "detailed_description:")
-	if narratorAt, shot2At := strings.Index(detail, h3NarratorTimelineLead), strings.Index(detail, "[Shot 2]"); narratorAt < 0 || shot2At < 0 || narratorAt > shot2At {
+	if narratorAt, shot2At := strings.Index(detail, h3NarratorLead(1)), strings.Index(detail, "[Shot 2]"); narratorAt < 0 || shot2At < 0 || narratorAt > shot2At {
 		t.Fatalf("narration did not begin in Shot 1 before the first cut: %s", prompt)
 	}
 	if strings.Contains(detail, "The narrator says in an off-screen voiceover:") {
@@ -4669,15 +4670,15 @@ retention_analysis:
 
 detailed_description:
 [Shot 1] <Subject 1>从参考状态开始陈述，语气加重，眉心微蹙，镜头固定不动，说完暂停，眉心紧锁。
-[Shot 2] 语速稍快，强调时间紧迫。
-[Shot 3] 出威胁内容，语气沉重。 <Subject 1> (S1) says: <d>[Chinese] 旧错误对白</d>。
+[Shot 2] At 00:04.667, 语速稍快，强调时间紧迫。
+[Shot 3] At 00:09.333, 出威胁内容，语气沉重。 <Subject 1> (S1) says: <d>[Chinese] 旧错误对白</d>。
 
 overall_soundscape:
 旧声音
 
 non_diegetic_music:
 N/A`
-	dubs := []models.Dialogue{{Character: "上官若彤", SpeechType: "dialogue", Text: "这十年你都没有怎么好好闭关修炼过。还有不到四十年，太运宗就会派更强的弟子，"}}
+	dubs := []models.Dialogue{{Character: "上官若彤", SpeechType: "dialogue", Text: "这十年你都没有怎么好好闭关修炼过。还有不到四十年，太运宗就会派更强的弟子，", TimeSegment: "0—14秒"}}
 	got := normalizeSavedH3Audio(prompt, dubs, []string{"<Subject 1> 是 <Picture 1> 中的角色「上官若彤」四视图。"})
 	if !strings.HasPrefix(got, "目标视频的参考图时间对齐") {
 		t.Fatalf("alignment prefix lost: %s", got)
@@ -4694,11 +4695,11 @@ N/A`
 
 func TestH3CrossShotDialogueMarkers(t *testing.T) {
 	dubs := []models.Dialogue{
-		{Character: "林夏", Text: "我还没有说完。<scenetrans>"},
-		{Character: "林夏", Text: "这句话会被截断——<cutoff>"},
+		{Character: "林夏", Text: "我还没有说完。<scenetrans>", TimeSegment: "0—3秒"},
+		{Character: "林夏", Text: "这句话会被截断——<cutoff>", TimeSegment: "3—6秒"},
 	}
 	body := appendStructuredDialogue("[Shot 1] 林夏向前走。[Shot 2] At 00:03.000, the shot cuts to her face.", dubs, nil)
-	for _, want := range []string{"林夏 (S1)", "</d>.<scenetrans>", "<cutoff>"} {
+	for _, want := range []string{"林夏 (S1)", "<scenetrans>", "<cutoff>"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("cross-shot dialogue missing %q: %s", want, body)
 		}
@@ -4766,7 +4767,7 @@ func TestExplicitDialogueRangesOnlyCarryAcrossDistinctAdjacentShots(t *testing.T
 	}
 }
 
-func TestNormalizeSavedH3AudioFallsBackWhenOldRangesOmitNewReviewedDialogue(t *testing.T) {
+func TestNormalizeSavedH3AudioPreservesMappedRangesAndReportsUnplaced(t *testing.T) {
 	dialogues := []models.Dialogue{
 		{ID: 1, Order: 1, Character: "甲", Text: "旧对白"},
 		{ID: 2, Order: 2, Character: "乙", Text: "新增对白", Source: "ai_reviewed"},
@@ -4775,12 +4776,20 @@ func TestNormalizeSavedH3AudioFallsBackWhenOldRangesOmitNewReviewedDialogue(t *t
 		{Order: 1, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "g", StartRune: 0, EndRune: 1}}},
 		{Order: 2, DialogueRanges: []models.ShotDialogueRange{{DialogueID: 1, GroupKey: "g", StartRune: 1, EndRune: 3}}},
 	}
-	got := normalizeSavedH3Audio("[Shot 1] wide.\n[Shot 2] close.", dialogues, nil, shots)
-	for _, d := range dialogues {
-		want := "<d>[Chinese] " + d.Text + "</d>"
-		if !strings.Contains(got, want) {
-			t.Fatalf("fallback omitted %q: %s", want, got)
-		}
+	got := normalizeSavedH3Audio("[Shot 1] wide.\n[Shot 2] At 00:03.000, close.", dialogues, nil, shots)
+	shot2At := strings.Index(got, "[Shot 2]")
+	if shot2At < 0 || !strings.Contains(got[:shot2At], "<d>[Chinese] 旧-</d>") || !strings.Contains(got[shot2At:], "<scenetrans>对白</d>") {
+		t.Fatalf("mapped dialogue fragments were not preserved in their shots: %s", got)
+	}
+	if strings.Contains(got, "新增对白") || strings.Contains(got, "(S2)") {
+		t.Fatalf("unmapped reviewed dialogue was guessed into the prompt: %s", got)
+	}
+	resolved, report := ResolveH3DialoguePlacement(got, dialogues, nil, shots)
+	if resolved != got {
+		t.Fatalf("diagnosis changed normalized prompt: %s", resolved)
+	}
+	if len(report.Placed) != 1 || report.Placed[0].DialogueID != 1 || len(report.Unplaced) != 1 || report.Unplaced[0].DialogueID != 2 {
+		t.Fatalf("placement report = %+v", report)
 	}
 }
 

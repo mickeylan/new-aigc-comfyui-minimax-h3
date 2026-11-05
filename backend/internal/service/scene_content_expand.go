@@ -46,9 +46,7 @@ func (s *Service) HandleExpandSceneContent(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	const system = `你是影视导演和场面调度师。把用户当前未保存的场景正文扩写成中文、可拍摄的场景剧本过程，而不是视频提示词翻译。只输出合法JSON：{"content":"...","director_note":"..."}。
-必须忠于已有事实与前后场。连续性优先级固定为：前一Scene最后Shot的end_state及其主体位置、朝向、手持道具、视线、动作余势 > 前一Scene正文与Dialogue > 当前未保存正文与当前Dialogue > 后一Scene边界。当前正文仍是本镜剧情权威；前镜生产状态只约束本镜如何开始，不能改写当前剧情。已确认上一镜尾帧只约束0.00秒可见状态，不得从图片文件名或参考图猜剧情。后一Scene只能防止提前演出后续事件，绝不能倒灌成当前动作。
-把概括词落实为可见的表演因果和连贯动作，例如“虚弱”落实为重心、步幅、短暂停顿与继续行动的选择，而不是增加形容词。围绕角色当前目的、已有阻力、即时反应和结束姿态组织节奏，避免把所有句子写成同速流水账；仅在有助于叙事时提出景别和视线落点。扩展表现过程，不扩展剧情事件；不得凭空增加追兵、障碍、受伤、能力或胜负，不得臆造服装/参考图细节。必须尊重当前单镜时长，不在短镜头塞入一长串动作。dialogues中有明确对白时逐字保留并自然嵌入；当前正文中明确说出的台词也必须保留，不能因为结构化列表缺失就删除。没有明确对白时禁止新增台词。不要输出H3字段、英文视频提示词或Shot JSON。时长容不下时在director_note建议后续拆镜，不改变已有剧情结果。director_note保持简短。`
+	system := sceneContentExpandSystemPrompt()
 	exclusionNote := ""
 	if excludedCount := currentSceneDialogueExclusionCount(&draftScene); excludedCount > 0 {
 		exclusionNote = fmt.Sprintf("\n用户已排除%d条引号误识别，不得当作发声。", excludedCount)
@@ -67,6 +65,13 @@ func (s *Service) HandleExpandSceneContent(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"content": result.Content, "director_note": result.DirectorNote, "skill_code": sceneContentExpandSkillCode, "provider_id": s.TextProviderFact.Name(), "persisted": false})
+}
+
+func sceneContentExpandSystemPrompt() string {
+	return `你是影视故事编辑。把当前未保存正文扩写为简洁、自然、有动作因果且可拍摄的中文剧情，不是逐秒分镜或视频提示词。只输出合法JSON：{"content":"...","director_note":"..."}。
+用户本轮【创作要求】优先级最高；用户明确要求细写、增加表现细节或指定风格时照做，但仍不得篡改既有事实与对白。默认只补足理解剧情所必需的动作衔接和人物即时反应，不为显得丰富而发明微动作、反复停顿、视线游移、重心步幅、结束姿态、景别、机位、运镜、光线、天气、地貌、服装或外观。不要把短句拉成长时间轴，不默认逐秒拆解，不在结尾循环概述或重复动作。
+当前正文是本镜剧情权威。前一Scene最后Shot的end_state及其位置、朝向、手持物和未完动作只约束本镜开场；已确认尾帧只约束0.00秒可见状态，不得从文件名或参考图猜剧情。后一Scene只用于避免提前演出，不得倒灌动作。扩写表现过程但不新增剧情事件、人物、物件、环境事实、能力、障碍、伤势、胜负或因果结论；尤其不得把未提供的湿土、斜阳、荒地等环境外观写成事实。
+若正文已有时间点、时间段或时间轴，逐字保持这些时点及其对应事件，不增加、细分、平移或补齐切点；没有时间轴时不要创建时间码。dialogues及正文中的明确对白必须原句、原顺序、原次数自然嵌入，并写出已有证据支持的说话人或人物反应；没有明确对白不得新增台词。不要输出H3字段、英文视频提示词或Shot JSON。时长明显容不下时只在简短director_note中提示，不改变正文结果。`
 }
 
 func (s *Service) sceneContentExpandContext(scene *models.Scene) (string, error) {
@@ -107,19 +112,45 @@ func (s *Service) sceneContentExpandContext(scene *models.Scene) (string, error)
 		}
 		selectedFrameFound = frameErr == nil
 	}
-	var characters []models.Character
-	if err := s.DB.Where("project_id = ?", scene.ProjectID).Order("id").Find(&characters).Error; err != nil {
+	// Keep context bounded to records named by this scene or its immediate boundaries;
+	// this preserves relevant identity facts without sending the full project bible.
+	relevanceText := strings.Join([]string{scene.Content, scene.Title, scene.VisibleCharacters, scene.VoiceCharacters, scene.LocationName, scene.Props, previous.Content, next.Content}, "\n")
+	var projectCharacters []models.Character
+	if err := s.DB.Where("project_id = ?", scene.ProjectID).Order("id").Find(&projectCharacters).Error; err != nil {
 		return "", err
 	}
-	var assets []models.Asset
-	if err := s.DB.Where("project_id = ?", scene.ProjectID).Order("kind, id").Find(&assets).Error; err != nil {
+	characters := make([]models.Character, 0)
+	for _, ch := range projectCharacters {
+		if ch.Name != "" && strings.Contains(relevanceText, ch.Name) {
+			characters = append(characters, ch)
+		}
+	}
+	var projectAssets []models.Asset
+	if err := s.DB.Where("project_id = ?", scene.ProjectID).Order("kind, id").Find(&projectAssets).Error; err != nil {
 		return "", err
+	}
+	assets := make([]models.Asset, 0)
+	for _, asset := range projectAssets {
+		if asset.Name != "" && strings.Contains(relevanceText, asset.Name) {
+			assets = append(assets, asset)
+		}
 	}
 	var dialogues []models.Dialogue
 	if err := s.DB.Where("project_id = ? AND scene_id = ?", scene.ProjectID, scene.ID).Order("`order`").Find(&dialogues).Error; err != nil {
 		return "", err
 	}
 	dialogues = validSceneDialogues(mergeExplicitSceneSpeech(scene, dialogues))
+	for _, ch := range projectCharacters {
+		if ch.Name == "" || containsSceneExpandCharacter(characters, ch.Name) {
+			continue
+		}
+		for _, dialogue := range dialogues {
+			if dialogue.Character == ch.Name {
+				characters = append(characters, ch)
+				break
+			}
+		}
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "当前场景：%s；时长：%.1f秒；文武类型：%s；可见人物：%s；发声人物：%s；地点：%s；道具：%s\n", scene.Title, scene.Duration, scene.SceneMode, visibleSceneCharacterNames(scene), scene.VoiceCharacters, scene.LocationName, scene.Props)
 	fmt.Fprintln(&b, "前镜生产状态（最高连续性约束；本镜开场必须承接，不得重置人物、道具或未完成动作）：")
@@ -165,6 +196,15 @@ func (s *Service) sceneContentExpandContext(scene *models.Scene) (string, error)
 		fmt.Fprintf(&b, "- [%s|%s] %s\n", d.SpeechType, d.Character, d.Text)
 	}
 	return b.String(), nil
+}
+
+func containsSceneExpandCharacter(characters []models.Character, name string) bool {
+	for _, character := range characters {
+		if character.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func parseSceneContentExpandResult(raw string) (sceneContentExpandResult, error) {
