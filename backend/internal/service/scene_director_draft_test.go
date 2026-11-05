@@ -392,16 +392,7 @@ func TestDialogueRhythmQueryQuotesReservedOrderColumn(t *testing.T) {
 	}
 }
 
-func TestManualDialogueRhythmShotCountHonorsDurationAndVoiceBoundaries(t *testing.T) {
-	dialogues := []models.Dialogue{
-		{Character: "阿宁", SpeechType: "dialogue", Text: "第一句。"},
-		{Character: "阿月", SpeechType: "dialogue", Text: "第二句。"},
-		{Character: "阿月", SpeechType: "dialogue", Text: "第三句。"},
-	}
-	minimum, maximum := dialogueRhythmShotCountRange(30, 12, dialogues)
-	if minimum != 2 || maximum != 10 {
-		t.Fatalf("manual count range = %d-%d, want 2-10", minimum, maximum)
-	}
+func TestManualDialogueRhythmShotCountIsUserOwnedAndDraftValidated(t *testing.T) {
 	instruction := manualDialogueRhythmInstruction(4)
 	for _, want := range []string{"恰好输出4个", "每镜仍必须满足3–15秒", "不得为了凑镜数删改对白"} {
 		if !strings.Contains(instruction, want) {

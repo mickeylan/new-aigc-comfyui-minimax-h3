@@ -791,41 +791,6 @@ func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue, characterNam
 ` + strings.Join(lines, "\n")
 }
 
-func dialogueRhythmShotCountRange(sceneDuration, dialogueDuration float64, dialogues []models.Dialogue) (int, int) {
-	targetDuration := math.Max(sceneDuration, dialogueDuration)
-	if targetDuration <= 0 {
-		targetDuration = 3
-	}
-	minimum := int(math.Ceil(targetDuration / 15))
-	maximum := int(math.Floor(targetDuration / 3))
-	if minimum < 1 {
-		minimum = 1
-	}
-	if maximum < 1 {
-		maximum = 1
-	}
-	voiceBlocks := 0
-	lastIdentity := ""
-	for _, dialogue := range dialogues {
-		speechType, speaker := normalizeScriptSpeech(dialogue.SpeechType, dialogue.Character)
-		identity := speechType + "\x00" + strings.TrimSpace(speaker)
-		if identity != lastIdentity {
-			voiceBlocks++
-			lastIdentity = identity
-		}
-	}
-	if voiceBlocks > minimum {
-		minimum = voiceBlocks
-	}
-	if maximum < minimum {
-		maximum = minimum
-	}
-	if maximum > 30 {
-		maximum = 30
-	}
-	return minimum, maximum
-}
-
 func manualDialogueRhythmInstruction(count int) string {
 	return fmt.Sprintf(`人工指定镜头数：必须恰好输出%d个Native H3镜头，不能多一镜或少一镜。镜头数由用户决定，但每镜仍必须满足3–15秒、权威声音身份不可混合、完整Dialogue逐字连续覆盖及有效语义/表演切点。不得为了凑镜数删改对白、重复对白、创造发声、使用Endless/Canvas或加入无意义空镜。`, count)
 }
@@ -1743,11 +1708,11 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 			dialogueDuration = modelDialoguesMinDuration(dialogues)
 			instruction = dialogueRhythmDirectorInstruction(dialogues, authoritativeCharacterList...)
 			if req.TargetShotCount > 0 {
-				minimum, maximum := dialogueRhythmShotCountRange(scene.Duration, dialogueDuration, dialogues)
-				if req.TargetShotCount < minimum || req.TargetShotCount > maximum {
-					c.JSON(http.StatusUnprocessableEntity, gin.H{"error": fmt.Sprintf("按当前Scene时长、对白自然语速和声音身份边界，人工镜头数可选%d–%d镜；当前填写%d镜", minimum, maximum, req.TargetShotCount), "minimum_shot_count": minimum, "maximum_shot_count": maximum})
-					return
-				}
+				// The user owns the cut count. Do not derive a pre-flight range from the
+				// parent Scene duration: it may include silent acting, action, or historical
+				// timing that does not belong to Dialogue segmentation. The returned draft
+				// is still checked for exact count, verbatim Dialogue coverage, one voice
+				// identity per Shot, and the concrete 3–15 second duration of every Shot.
 				instruction += "\n" + manualDialogueRhythmInstruction(req.TargetShotCount)
 			}
 		} else if req.Mode == "action_rhythm" {
