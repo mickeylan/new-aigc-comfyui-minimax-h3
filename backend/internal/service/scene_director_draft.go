@@ -507,6 +507,32 @@ func normalizeDirectorDialogueArrays(output string) (string, error) {
 		return "", err
 	}
 	changed := false
+	if rawAnalysis, ok := root["scene_analysis"]; ok {
+		var analysis map[string]json.RawMessage
+		if err := json.Unmarshal(rawAnalysis, &analysis); err == nil {
+			if rawOrder, exists := analysis["information_order"]; exists {
+				rawOrder = bytes.TrimSpace(rawOrder)
+				if len(rawOrder) > 0 && rawOrder[0] == '"' {
+					var text string
+					if err := json.Unmarshal(rawOrder, &text); err != nil {
+						return "", fmt.Errorf("scene_analysis.information_order无法读取: %w", err)
+					}
+					text = strings.TrimSpace(text)
+					items := []string{}
+					if text != "" {
+						for _, item := range regexp.MustCompile(`[；;。\n]+`).Split(text, -1) {
+							if item = strings.TrimSpace(item); item != "" {
+								items = append(items, item)
+							}
+						}
+					}
+					analysis["information_order"], _ = json.Marshal(items)
+					root["scene_analysis"], _ = json.Marshal(analysis)
+					changed = true
+				}
+			}
+		}
+	}
 	for i, shot := range shots {
 		if fieldChanged, err := normalizeDirectorNumberField(shot, "duration"); err != nil {
 			return "", fmt.Errorf("镜头%d的duration无法读取: %w", i+1, err)
@@ -956,7 +982,15 @@ func restoreDialogueRhythmDraftText(draft *sceneDirectorDraft, dialogues []model
 	}
 	var source []rune
 	breaks := map[int]bool{}
+	identityBreaks := map[int]bool{}
+	previousIdentity := ""
 	for _, d := range dialogues {
+		speechType, speaker := normalizeScriptSpeech(d.SpeechType, d.Character)
+		identity := speechType + "\x00" + strings.TrimSpace(speaker)
+		if previousIdentity != "" && identity != previousIdentity && len(source) > 0 {
+			identityBreaks[len(source)] = true
+		}
+		previousIdentity = identity
 		text := []rune(strings.TrimSpace(d.Text))
 		for _, r := range text {
 			source = append(source, r)
@@ -1001,6 +1035,28 @@ func restoreDialogueRhythmDraftText(draft *sceneDirectorDraft, dialogues []model
 			}
 			if target > maxEnd {
 				target = maxEnd
+			}
+			// A dialogue may continue across as many H3 Shots as the user requests, but
+			// deterministic text restoration must not accidentally cross into a different
+			// speaker or speech_type when enough remaining Shots can preserve that boundary.
+			remainingCuts := len(indices) - pos - 1
+			remainingIdentityBreaks := 0
+			nextIdentityBreak := 0
+			for boundary := range identityBreaks {
+				if boundary > start && boundary < len(source) {
+					remainingIdentityBreaks++
+					if nextIdentityBreak == 0 || boundary < nextIdentityBreak {
+						nextIdentityBreak = boundary
+					}
+				}
+			}
+			if nextIdentityBreak > 0 && remainingCuts >= remainingIdentityBreaks && target > nextIdentityBreak {
+				target = nextIdentityBreak
+				maxEnd = nextIdentityBreak
+			}
+			if remainingCuts == remainingIdentityBreaks && nextIdentityBreak > 0 {
+				target = nextIdentityBreak
+				maxEnd = nextIdentityBreak
 			}
 			end = target
 			for distance := 0; distance <= len(source); distance++ {
@@ -1249,7 +1305,7 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 		minimum := dialogueReviewNaturalMinimum(fragments)
 		issues, advisories := []string{}, []string{}
 		if len(voiceIdentities) > 1 {
-			issues = append(issues, "本镜跨越多个权威说话人或语音类型，单一speech_presentation无法无歧义表达；必须按说话人或语音类型拆成多个Native镜头")
+			issues = append(issues, "本镜同时混入多个权威说话人或语音类型，单一speech_presentation无法无歧义表达；同一说话人的Dialogue允许跨镜延续，但不同声音身份应落在各自镜头")
 		}
 		if minimum > maxSceneVideoDuration {
 			advisories = append(advisories, fmt.Sprintf("本镜权威语音自然时长下限%.1f秒超过Native H3的15秒上限，建议继续拆镜；当前创作节奏仍可预览、保存和制作", minimum))
@@ -1503,7 +1559,7 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 			voiceIdentities[speechType+"\x00"+strings.TrimSpace(normalizedSpeaker)] = true
 		}
 		if len(voiceIdentities) > 1 {
-			return fmt.Errorf("对白拆镜%d跨越多个权威说话人或语音类型，必须拆成多个Native镜头", i+1)
+			return fmt.Errorf("对白拆镜%d在同一镜内混入多个权威说话人或语音类型；同一说话人的Dialogue可以跨镜延续，但不同声音身份不能被自动恢复到同一镜", i+1)
 		}
 		for _, span := range spans {
 			if end <= span.start || start >= span.end {

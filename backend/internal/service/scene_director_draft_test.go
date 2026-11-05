@@ -1090,6 +1090,46 @@ func TestValidateDialogueRhythmDraftRejectsShotOverNativeMaximum(t *testing.T) {
 	}
 }
 
+func TestDirectorAnalysisAcceptsStringInformationOrder(t *testing.T) {
+	raw := strings.Replace(validSceneDirectorDraft, `"information_order":["先听见异响","再确认来源"]`, `"information_order":"先听见异响；再确认来源"`, 1)
+	draft, err := parseSceneDirectorDraft(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(draft.SceneAnalysis.InformationOrder) != 2 || draft.SceneAnalysis.InformationOrder[1] != "再确认来源" {
+		t.Fatalf("information_order not normalized: %#v", draft.SceneAnalysis.InformationOrder)
+	}
+}
+
+func TestRestoreDialogueRhythmDraftTextPreservesSpeakerBoundaryAndCrossShotContinuation(t *testing.T) {
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
+		{Dialogue: "模型错写前半", Duration: 6, SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, Description: "甲可见并说话", PromptAction: "甲同步口型"},
+		{Dialogue: "模型错写后半", Duration: 6, SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, Description: "乙可见并说话", PromptAction: "乙同步口型"},
+	}}
+	dialogues := []models.Dialogue{
+		{Character: "甲", SpeechType: "dialogue", Text: "甲先说出一段较长的话，并继续补充同一句。"},
+		{Character: "乙", SpeechType: "dialogue", Text: "乙随后回答。"},
+	}
+	if err := restoreDialogueRhythmDraftText(draft, dialogues); err != nil {
+		t.Fatal(err)
+	}
+	if draft.Shots[0].Dialogue != dialogues[0].Text || draft.Shots[1].Dialogue != dialogues[1].Text {
+		t.Fatalf("restore crossed speaker boundary: %#v", draft.Shots)
+	}
+	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
+		t.Fatalf("restored speaker-safe draft rejected: %v", err)
+	}
+
+	continuation := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Dialogue: "错", Duration: 5}, {Dialogue: "错", Duration: 5}}}
+	oneSpeaker := []models.Dialogue{{Character: "甲", SpeechType: "dialogue", Text: "同一说话人的一句长对白，可以在两个镜头之间自然延续。"}}
+	if err := restoreDialogueRhythmDraftText(continuation, oneSpeaker); err != nil {
+		t.Fatal(err)
+	}
+	if continuation.Shots[0].Dialogue+continuation.Shots[1].Dialogue != oneSpeaker[0].Text || continuation.Shots[0].Dialogue == "" || continuation.Shots[1].Dialogue == "" {
+		t.Fatalf("same-speaker cross-shot dialogue was not preserved: %#v", continuation.Shots)
+	}
+}
+
 func TestRestoreDialogueRhythmDraftTextUsesAuthoritativeDialogue(t *testing.T) {
 	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Dialogue: "姐姐，你十年没修炼。", Duration: 8}, {Dialogue: "来得及吗？", Duration: 7}, {Dialogue: "", Duration: 3}}}
 	dialogues := []models.Dialogue{{Text: "姐姐，自从你跟太运宗使者比试之后，这十年你都没有怎么好好闭关修炼过。"}, {Text: "还有不到四十年，这样真的来得及吗？"}}
