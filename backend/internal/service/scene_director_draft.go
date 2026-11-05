@@ -652,6 +652,37 @@ func directorDialogueText(raw json.RawMessage) (string, error) {
 	}
 }
 
+func parseSceneDirectorDraftForReview(output string) (*sceneDirectorDraft, error) {
+	normalized, err := normalizeDirectorDialogueArrays(unwrapSceneDirectorDraftEnvelope(output))
+	if err != nil {
+		return nil, err
+	}
+	var draft sceneDirectorDraft
+	if err := json.Unmarshal([]byte(normalized), &draft); err != nil {
+		return nil, err
+	}
+	if len(draft.Shots) == 0 {
+		return nil, fmt.Errorf("导演草稿没有可展示的镜头")
+	}
+	for i := range draft.Shots {
+		shot := &draft.Shots[i]
+		shot.ActType = normalizeDirectorAct(shot.ActType)
+		shot.TransitionType = normalizeDirectorTransition(shot.TransitionType)
+		shot.SpeechPresentation = models.ShotSpeechPresentation(strings.TrimSpace(string(shot.SpeechPresentation)))
+		shot.ListenerCharacter = strings.TrimSpace(shot.ListenerCharacter)
+		if shot.SpeechPresentation != models.ShotSpeechPresentationListenerCarry {
+			shot.ListenerCharacter = ""
+		}
+		if len(shot.ActionTimeline) == 1 {
+			entry := shot.ActionTimeline[0]
+			if strings.TrimSpace(entry.Subject) == "" || strings.TrimSpace(entry.Action) == "" || strings.TrimSpace(entry.State) == "" || strings.TrimSpace(entry.Camera) == "" {
+				shot.ActionTimeline = []models.ShotActionTimelineEntry{}
+			}
+		}
+	}
+	return &draft, nil
+}
+
 func parseSceneDirectorDraft(output string) (*sceneDirectorDraft, error) {
 	// Director Shots are internal cut points inside a Scene production unit. They may
 	// be shorter than the 3-second standalone Scene template minimum.
@@ -672,8 +703,8 @@ func parseSceneDirectorDraftWithOptions(output string, preserveShortShots bool) 
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return nil, fmt.Errorf("导演草稿含额外内容")
 	}
-	if len(draft.Shots) == 0 || len(draft.Shots) > 30 {
-		return nil, fmt.Errorf("导演草稿镜头数必须为1至30")
+	if len(draft.Shots) == 0 {
+		return nil, fmt.Errorf("导演草稿没有可展示的镜头")
 	}
 	for i := range draft.Shots {
 		d := &draft.Shots[i]
@@ -821,19 +852,20 @@ func manualDialogueRhythmInstruction(count int) string {
 	return fmt.Sprintf(`人工指定镜头数：必须恰好输出%d个Native H3镜头，不能多一镜或少一镜。镜头数由用户决定，但每镜仍必须满足3–15秒、权威声音身份不可混合、完整Dialogue逐字连续覆盖及有效语义/表演切点。不得为了凑镜数删改对白、重复对白、创造发声、使用Endless/Canvas或加入无意义空镜。`, count)
 }
 
-func validateRequestedDialogueShotCount(draft *sceneDirectorDraft, count int) error {
-	if count <= 0 {
-		return nil
+func dialogueDraftWarnings(draft *sceneDirectorDraft, count int) []string {
+	warnings := []string{}
+	if draft == nil {
+		return warnings
 	}
-	if len(draft.Shots) != count {
-		return fmt.Errorf("用户指定拆成%d镜，但导演草稿返回%d镜", count, len(draft.Shots))
+	if count > 0 && len(draft.Shots) != count {
+		warnings = append(warnings, fmt.Sprintf("用户希望拆成%d镜，模型返回%d镜；可人工增删镜头", count, len(draft.Shots)))
 	}
 	for i, shot := range draft.Shots {
 		if shot.Duration < 3 || shot.Duration > 15 {
-			return fmt.Errorf("用户指定拆镜的第%d镜时长%.1f秒，必须在3–15秒内", i+1, shot.Duration)
+			warnings = append(warnings, fmt.Sprintf("第%d镜时长%.1f秒不在建议的3–15秒范围；可人工调整", i+1, shot.Duration))
 		}
 	}
-	return nil
+	return warnings
 }
 
 func actionRhythmDirectorInstruction(dialogues []models.Dialogue) string {
@@ -1005,19 +1037,38 @@ func restoreDialogueRhythmDraftText(draft *sceneDirectorDraft, dialogues []model
 	}
 	indices := make([]int, 0, len(draft.Shots))
 	weights := make([]int, 0, len(draft.Shots))
+	hasModelDialogueContainers := false
 	for i := range draft.Shots {
-		if strings.TrimSpace(draft.Shots[i].Dialogue) == "" {
+		if strings.TrimSpace(draft.Shots[i].Dialogue) != "" {
+			hasModelDialogueContainers = true
+			break
+		}
+	}
+	for i := range draft.Shots {
+		// Preserve the model's visual/silent container choice when it supplied one or
+		// more Dialogue-bearing Shots. If it omitted Dialogue everywhere, use every Shot
+		// so the paid result is still recoverable rather than rejected.
+		if draft.Shots[i].SpeechPresentation == models.ShotSpeechPresentationSilent || (hasModelDialogueContainers && strings.TrimSpace(draft.Shots[i].Dialogue) == "") {
+			draft.Shots[i].Dialogue = ""
 			continue
 		}
 		indices = append(indices, i)
-		weight := len([]rune(canonicalDialogueText(draft.Shots[i].Dialogue)))
+		weight := int(math.Round(math.Max(draft.Shots[i].Duration, 0.1) * 1000))
 		if weight < 1 {
 			weight = 1
 		}
 		weights = append(weights, weight)
 	}
 	if len(indices) == 0 {
-		return fmt.Errorf("导演草稿没有承载结构化对白的镜头")
+		// Do not reject the workflow because the model marked every Shot silent. Use all
+		// Shots and let the user review the resulting presentation warnings.
+		for i := range draft.Shots {
+			indices = append(indices, i)
+			weights = append(weights, 1)
+		}
+	}
+	if len(indices) == 0 {
+		return nil
 	}
 	totalWeight := 0
 	for _, weight := range weights {
@@ -1467,27 +1518,10 @@ func validateDraftListenerCharacters(draft *sceneDirectorDraft, authoritativeNam
 }
 
 func validateGeneratedDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
-	// AI draft generation is a review workflow, not final production submission.
-	// Block only objective output corruption here. Presentation choices (who is in
-	// frame, lip sync, listener identity, voice-over staging) remain visible in the
-	// review audit so the user can correct them manually instead of losing the draft.
-	if draft == nil || len(draft.Shots) == 0 {
-		return fmt.Errorf("导演方案没有镜头")
-	}
-	var expected, actual strings.Builder
-	for _, dialogue := range dialogues {
-		expected.WriteString(canonicalDialogueText(dialogue.Text))
-	}
-	for i, shot := range draft.Shots {
-		if shot.Duration <= 0 || shot.Duration > maxSceneVideoDuration {
-			return fmt.Errorf("对白拆镜%d时长必须大于0且不超过15秒", i+1)
-		}
-		actual.WriteString(canonicalDialogueText(shot.Dialogue))
-	}
-	if actual.String() != expected.String() {
-		return fmt.Errorf("导演方案未逐字覆盖场景正文中的原始台词，禁止遗漏、改写、重复或新增")
-	}
-	return normalizeDialogueRhythmReviewDurations(draft, dialogues)
+	// Dialogue-rhythm output is always returned for human review. All semantic,
+	// presentation, timing and transcription findings belong in review advisories;
+	// none of them may discard a paid model result or block the user's workflow.
+	return nil
 }
 
 func normalizeGeneratedListenerCharacters(draft *sceneDirectorDraft) int {
@@ -1709,14 +1743,6 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		return
 	}
 	req.Brief, req.Requirements = strings.TrimSpace(req.Brief), strings.TrimSpace(req.Requirements)
-	if req.TargetShotCount < 0 || req.TargetShotCount > 30 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "人工指定镜头数必须为1–30；不指定时请传0"})
-		return
-	}
-	if req.TargetShotCount > 0 && req.Mode != "dialogue_rhythm" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "人工指定镜头数仅适用于按对白节奏拆镜"})
-		return
-	}
 	generationContent := sceneDialogueGenerationContent(scene)
 	if req.Brief == "" {
 		req.Brief = strings.TrimSpace(generationContent)
@@ -1820,7 +1846,13 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	validateDraft := func(raw string) (*sceneDirectorDraft, error) {
 		// Every director mode describes internal Scene cut points; standalone 3–15s
 		// template limits are applied only when a Scene is submitted for execution.
-		draft, parseErr := parseSceneDirectorDraftWithOptions(raw, true)
+		var draft *sceneDirectorDraft
+		var parseErr error
+		if req.Mode == "dialogue_rhythm" {
+			draft, parseErr = parseSceneDirectorDraftForReview(raw)
+		} else {
+			draft, parseErr = parseSceneDirectorDraftWithOptions(raw, true)
+		}
 		if parseErr == nil && req.Mode != "dialogue_rhythm" {
 			parseErr = requireDirectorThinking(draft)
 		}
@@ -1840,9 +1872,6 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 			parseErr = restoreDialogueRhythmDraftText(draft, dialogues)
 			if parseErr == nil {
 				parseErr = validateGeneratedDialogueRhythmDraft(draft, dialogues)
-			}
-			if parseErr == nil {
-				parseErr = validateRequestedDialogueShotCount(draft, req.TargetShotCount)
 			}
 		} else if parseErr == nil && req.Mode == "action_rhythm" {
 			parseErr = validateActionRhythmDraft(draft, dialogues)
@@ -1875,7 +1904,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		repaired, repairErr := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出修复后的完整合法JSON，不要Markdown或解释。", repairInstruction, map[string]string{"scene_facts": scene.Content, "asset_context": assets, "dialogues": dialogueContext, "brief": req.Brief, "requirements": repairRequirements, "combat_references": combatReferenceText, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration)), "target_shot_count": strconv.Itoa(req.TargetShotCount)})
 		if repairErr != nil {
 			serverRepairs = append(serverRepairs, serverRepair{Stage: "model_repair", Reason: initialValidationError, Result: "provider_error: " + repairErr.Error()})
-			c.JSON(http.StatusBadGateway, gin.H{"error": "AI导演方案自动修复失败: " + repairErr.Error(), "server_repairs": serverRepairs})
+			c.JSON(http.StatusBadGateway, gin.H{"error": "AI导演方案自动修复失败: " + repairErr.Error(), "raw_output": output, "server_repairs": serverRepairs})
 			return
 		}
 		draft, err = validateDraft(repaired)
@@ -1901,10 +1930,10 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		}
 	}
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "AI导演方案自动修复后仍无效: " + err.Error(), "server_repairs": serverRepairs})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "AI导演方案无法解析为可编辑镜头: " + err.Error(), "raw_output": output, "server_repairs": serverRepairs})
 		return
 	}
-	response := gin.H{"draft": draft, "director_review": buildDirectorLogicReview(draft), "skill_code": operation, "director_specialty": specialty, "provider_id": s.TextProviderFact.Name(), "audited": true, "mode": req.Mode, "dialogue_duration": dialogueDuration, "requested_shot_count": req.TargetShotCount, "server_repairs": serverRepairs}
+	response := gin.H{"draft": draft, "director_review": buildDirectorLogicReview(draft), "skill_code": operation, "director_specialty": specialty, "provider_id": s.TextProviderFact.Name(), "audited": true, "mode": req.Mode, "dialogue_duration": dialogueDuration, "requested_shot_count": req.TargetShotCount, "draft_warnings": dialogueDraftWarnings(draft, req.TargetShotCount), "server_repairs": serverRepairs}
 	if req.Mode == "combat_design" {
 		response["combat_reference_audit"] = combatReferenceAudit
 		response["combat_reference_selection"] = req.CombatReferences

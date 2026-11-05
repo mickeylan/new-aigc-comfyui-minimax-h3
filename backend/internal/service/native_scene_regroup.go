@@ -68,21 +68,6 @@ func (s *ShotService) loadMaterializedSceneRun(db *gorm.DB, projectID, selectedI
 	return run, base, nil
 }
 
-func validateMaterializedRunListeners(db *gorm.DB, projectID uint, scenes []models.Scene) error {
-	if len(scenes) == 0 {
-		return nil
-	}
-	ids := make([]uint, len(scenes))
-	for i := range scenes {
-		ids[i] = scenes[i].ID
-	}
-	var shots []models.Shot
-	if err := db.Where("scene_id IN ?", ids).Find(&shots).Error; err != nil {
-		return err
-	}
-	return validateShotListenerCharacters(db, projectID, shots)
-}
-
 // regroupEffectiveDialogues uses the same read-only source as video prompt compilation.
 // Synthetic identities are unique across the whole group because dialogue fragments use
 // IDs as grouping keys.
@@ -125,8 +110,8 @@ func validateExistingNativeGroups(db *gorm.DB, groups []existingNativeGroup) err
 			dialogues = append(dialogues, effective[scene.ID]...)
 		}
 		if len(dialogues) > 0 {
-			if err := validateDialogueShotTiming(shots, dialogues); err != nil {
-				return fmt.Errorf("重新合并后的Native段%d无效: %w", groupIndex+1, err)
+			if err := restoreAuthoritativeShotDialogues(shots, dialogues); err != nil {
+				return fmt.Errorf("重新合并后的Native段%d无法读取权威Dialogue: %w", groupIndex+1, err)
 			}
 		}
 	}
@@ -170,9 +155,6 @@ func (s *ShotService) PreviewExistingNativeRegroup(projectID, selectedID uint) (
 	if err != nil {
 		return nil, err
 	}
-	if err := validateMaterializedRunListeners(s.db, projectID, run); err != nil {
-		return nil, err
-	}
 	groups := packExistingNativeScenes(run)
 	if err := validateExistingNativeGroups(s.db, groups); err != nil {
 		return nil, err
@@ -205,9 +187,6 @@ func (s *ShotService) RegroupExistingNativeScenes(projectID, selectedID uint) ([
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		run, base, err := s.loadMaterializedSceneRun(tx, projectID, selectedID)
 		if err != nil {
-			return err
-		}
-		if err := validateMaterializedRunListeners(tx, projectID, run); err != nil {
 			return err
 		}
 		groups := packExistingNativeScenes(run)

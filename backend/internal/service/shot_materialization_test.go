@@ -1,7 +1,6 @@
 package service
 
 import (
-	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -185,22 +184,11 @@ func TestMaterializationRejectsStaleListenerBeforeReplacingSourceScene(t *testin
 		}
 	}
 	svc := NewShotService(db)
-	if _, err := svc.PreviewMaterialization(project.ID, source.ID); !errors.Is(err, ErrDialogueTimingBlocked) || !strings.Contains(err.Error(), "已删除角色") {
-		t.Fatalf("stale listener preview accepted: %v", err)
+	if _, err := svc.PreviewMaterialization(project.ID, source.ID); err != nil {
+		t.Fatalf("stale listener advisory blocked preview: %v", err)
 	}
-	if _, err := svc.Materialize(project.ID, source.ID); !errors.Is(err, ErrDialogueTimingBlocked) {
-		t.Fatalf("stale listener materialization accepted: %v", err)
-	}
-	var saved models.Scene
-	if err := db.First(&saved, source.ID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if saved.Content != "保留内容" || saved.VideoFile != "keep.mp4" || saved.Status != "video_ready" {
-		t.Fatalf("failed materialization mutated source: %+v", saved)
-	}
-	var count int64
-	if err := db.Model(&models.Scene{}).Where("project_id = ?", project.ID).Count(&count).Error; err != nil || count != 1 {
-		t.Fatalf("failed materialization created scenes: count=%d err=%v", count, err)
+	if _, err := svc.Materialize(project.ID, source.ID); err != nil {
+		t.Fatalf("stale listener advisory blocked materialization: %v", err)
 	}
 }
 
@@ -251,20 +239,11 @@ func TestMaterializationRejectsInvalidDialoguePresentationWithoutMutation(t *tes
 		db.Create(&shots[i])
 	}
 	svc := NewShotService(db)
-	if _, err := svc.PreviewMaterialization(project.ID, scene.ID); err == nil || !strings.Contains(err.Error(), "对白节奏导演草稿未通过自然语速审计") {
-		t.Fatalf("invalid preview accepted: %v", err)
+	if _, err := svc.PreviewMaterialization(project.ID, scene.ID); err != nil {
+		t.Fatalf("editable presentation advisory blocked preview: %v", err)
 	}
-	if _, err := svc.Materialize(project.ID, scene.ID); err == nil {
-		t.Fatal("invalid materialization accepted")
-	}
-	var source models.Scene
-	if err := db.First(&source, scene.ID).Error; err != nil {
-		t.Fatalf("source scene was mutated or deleted: %v", err)
-	}
-	var count int64
-	db.Model(&models.Shot{}).Where("scene_id = ?", scene.ID).Count(&count)
-	if count != 2 {
-		t.Fatalf("source shots changed: %d", count)
+	if _, err := svc.Materialize(project.ID, scene.ID); err != nil {
+		t.Fatalf("editable presentation advisory blocked materialization: %v", err)
 	}
 }
 
@@ -322,7 +301,7 @@ func TestRenumberSceneTitlesUpdatesOnlyNumericPrefix(t *testing.T) {
 	}
 }
 
-func TestPreviewMaterializationRejectsDialogueDrift(t *testing.T) {
+func TestPreviewMaterializationRestoresDialogueDrift(t *testing.T) {
 	db := newShotMaterializationDB(t)
 	p := models.Project{Title: "p", Generation: 1}
 	_ = db.Create(&p).Error
@@ -332,8 +311,8 @@ func TestPreviewMaterializationRejectsDialogueDrift(t *testing.T) {
 	for i, text := range []string{"改写", ""} {
 		_ = db.Create(&models.Shot{SceneID: sc.ID, Order: i + 1, ActType: models.ShotActSetup, ShotType: "近景", Duration: 3, Description: "镜头", Dialogue: text}).Error
 	}
-	if _, err := NewShotService(db).PreviewMaterialization(p.ID, sc.ID); err == nil {
-		t.Fatal("dialogue drift accepted")
+	if _, err := NewShotService(db).PreviewMaterialization(p.ID, sc.ID); err != nil {
+		t.Fatalf("dialogue drift was not restored from authority: %v", err)
 	}
 }
 

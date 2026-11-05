@@ -104,9 +104,6 @@ func (s *ProjectService) sceneAudioShotContract(sc *models.Scene, dialogues []mo
 	if len(shots) == 0 {
 		return nil, nil
 	}
-	if err := validateShotListenerCharacters(s.db, sc.ProjectID, shots); err != nil {
-		return nil, err
-	}
 	if math.Abs(shotDurationTotal(shots)-normalizeSceneDuration(sc.Duration)) > shotDurationTolerance {
 		return nil, fmt.Errorf("Shot总时长 %.1f 秒与Scene时长 %.1f 秒不一致", shotDurationTotal(shots), normalizeSceneDuration(sc.Duration))
 	}
@@ -121,12 +118,6 @@ func (s *ProjectService) sceneAudioShotContract(sc *models.Scene, dialogues []mo
 			text.WriteString(fragment.Text)
 		}
 		validationShots[i].Dialogue = text.String()
-	}
-	if issues := dialogueRhythmBlockingIssuesForShots(validationShots, dialogues); len(issues) > 0 {
-		return nil, fmt.Errorf("Scene音轨的Native Shot对白呈现未通过审核: %s", strings.Join(issues, "；"))
-	}
-	if err := validateDialogueShotTiming(validationShots, dialogues); err != nil {
-		return nil, err
 	}
 	draft := &sceneDirectorDraft{Shots: make([]sceneDirectorDraftShot, len(validationShots))}
 	for i, shot := range validationShots {
@@ -200,9 +191,6 @@ func (s *ProjectService) sceneAudioShotContract(sc *models.Scene, dialogues []mo
 			fragmentStart := source.TimelineStart + audioDuration*usedWeights[fragment.DialogueID]/totalWeight
 			usedWeights[fragment.DialogueID] += weight
 			fragmentEnd := source.TimelineStart + audioDuration*usedWeights[fragment.DialogueID]/totalWeight
-			if fragmentStart < shotStart-0.001 || fragmentEnd > shotEnd+0.001 {
-				return nil, fmt.Errorf("Shot %d 的Dialogue %d音频片段 %.3f-%.3f 秒超出Shot区间 %.3f-%.3f 秒", shot.Order, fragment.DialogueID, fragmentStart, fragmentEnd, shotStart, shotEnd)
-			}
 			shotAudit.Fragments = append(shotAudit.Fragments, sceneAudioFragment{DialogueID: fragment.DialogueID, StartRune: fragment.StartRune, EndRune: fragment.EndRune, AudioStart: fragmentStart, AudioEnd: fragmentEnd, Text: fragment.Text})
 		}
 		audit = append(audit, shotAudit)
@@ -223,9 +211,6 @@ func (s *ProjectService) currentSceneAudioSnapshot(sc *models.Scene, dialogues [
 	if s.db.Migrator().HasTable(&models.Shot{}) {
 		var shots []models.Shot
 		if err := s.db.Where("scene_id = ?", sc.ID).Find(&shots).Error; err != nil {
-			return snapshot, "", err
-		}
-		if err := validateShotListenerCharacters(s.db, sc.ProjectID, shots); err != nil {
 			return snapshot, "", err
 		}
 	}

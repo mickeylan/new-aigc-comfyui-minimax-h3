@@ -119,32 +119,6 @@ func restoreAuthoritativeShotDialogues(shots []models.Shot, dialogues []models.D
 	return nil
 }
 
-func validateDialogueShotTiming(shots []models.Shot, dialogues []models.Dialogue) error {
-	draft := &sceneDirectorDraft{Shots: make([]sceneDirectorDraftShot, len(shots))}
-	for i, shot := range shots {
-		draft.Shots[i] = sceneDirectorDraftShot{
-			Duration: shot.Duration, Dialogue: shot.Dialogue, SpeechPresentation: shot.SpeechPresentation, ListenerCharacter: shot.ListenerCharacter, ShotType: shot.ShotType,
-			Description: shot.Description, DirectorIntent: shot.DirectorIntent, AudienceInformation: shot.AudienceInformation,
-			Trigger: shot.PerformanceTrigger, Performance: shot.Performance, EyeLine: shot.EyeLine, Blocking: shot.Blocking,
-			Reaction: shot.Reaction, FocusSubject: shot.FocusSubject, CutReason: shot.CutReason,
-			PromptSubject: shot.PromptSubject, PromptAction: shot.PromptAction, StartState: shot.StartState, EndState: shot.EndState,
-		}
-	}
-	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
-		return fmt.Errorf("%w：%s", ErrDialogueTimingBlocked, err.Error())
-	}
-	issues := []string{}
-	for _, review := range buildDialogueRhythmReview(draft, dialogues) {
-		for _, issue := range review.BlockingIssues {
-			issues = append(issues, fmt.Sprintf("镜头%d：%s", review.Shot, issue))
-		}
-	}
-	if len(issues) > 0 {
-		return fmt.Errorf("%w：%s", ErrDialogueTimingBlocked, strings.Join(issues, "；"))
-	}
-	return nil
-}
-
 func shotDurationTotal(shots []models.Shot) float64 {
 	total := 0.0
 	for _, shot := range shots {
@@ -218,12 +192,6 @@ func validateShot(shot *models.Shot) error {
 	shot.ListenerCharacter = strings.TrimSpace(shot.ListenerCharacter)
 	if !validShotSpeechPresentation(shot.SpeechPresentation) {
 		return fmt.Errorf("speech_presentation 必须为空或使用受支持的权威发声呈现类型")
-	}
-	if shot.SpeechPresentation == models.ShotSpeechPresentationListenerCarry && shot.ListenerCharacter == "" {
-		return fmt.Errorf("listener_reaction_carryover 必须填写 listener_character")
-	}
-	if shot.SpeechPresentation != models.ShotSpeechPresentationListenerCarry && shot.ListenerCharacter != "" {
-		return fmt.Errorf("仅 listener_reaction_carryover 可填写 listener_character")
 	}
 	shot.TransitionType = models.ShotTransitionType(strings.TrimSpace(string(shot.TransitionType)))
 	shot.TransitionNote = strings.TrimSpace(shot.TransitionNote)
@@ -450,9 +418,6 @@ func (s *ShotService) CreateShot(sceneID uint, shot models.Shot) (*models.Shot, 
 		if err := validateShot(&shot); err != nil {
 			return err
 		}
-		if err := validateShotListenerCharacters(tx, projectID, []models.Shot{shot}); err != nil {
-			return err
-		}
 		var proposed []models.Shot
 		if err := tx.Where("scene_id = ?", sceneID).Order("order_num, id").Find(&proposed).Error; err != nil {
 			return err
@@ -463,11 +428,9 @@ func (s *ShotService) CreateShot(sceneID uint, shot models.Shot) (*models.Shot, 
 		if err := tx.Where("scene_id = ?", sceneID).Order("`order`, id").Find(&dialogues).Error; err != nil {
 			return err
 		}
-		if dialogues = authoritativeSceneDialogues(dialogues); len(dialogues) > 0 {
-			if err := validateDialogueShotTiming(proposed, dialogues); err != nil {
-				return err
-			}
-		}
+		// Incremental/manual Shot creation must not require a partial Shot list to
+		// transcribe the complete Scene Dialogue. Authoritative text is projected when
+		// the reviewed batch is saved or materialized.
 		if err := tx.Create(&shot).Error; err != nil {
 			return err
 		}
@@ -504,9 +467,6 @@ func (s *ShotService) ReplaceShotsWithDialogueSnapshot(sceneID uint, shots []mod
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		projectID, err := projectIDForScene(tx, sceneID)
 		if err != nil {
-			return err
-		}
-		if err := validateShotListenerCharacters(tx, projectID, shots); err != nil {
 			return err
 		}
 		if strings.TrimSpace(expectedSnapshot) != "" {
@@ -855,9 +815,6 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 		if err != nil {
 			return err
 		}
-		if err := validateShotListenerCharacters(tx, projectID, []models.Shot{candidate}); err != nil {
-			return err
-		}
 		var sceneShots []models.Shot
 		if err := tx.Where("scene_id = ?", shot.SceneID).Order("order_num, id").Find(&sceneShots).Error; err != nil {
 			return err
@@ -867,15 +824,6 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 				candidate.Order = sceneShots[i].Order
 				sceneShots[i] = candidate
 				break
-			}
-		}
-		var dialogues []models.Dialogue
-		if err := tx.Where("scene_id = ?", shot.SceneID).Order("`order`, id").Find(&dialogues).Error; err != nil {
-			return err
-		}
-		if dialogues = authoritativeSceneDialogues(dialogues); len(dialogues) > 0 && shotDialogueTextMatches(sceneShots, dialogues) {
-			if err := validateDialogueShotTiming(sceneShots, dialogues); err != nil {
-				return err
 			}
 		}
 		if err := tx.Model(&shot).Updates(filtered).Error; err != nil {
@@ -917,15 +865,6 @@ func (s *ShotService) DeleteShot(shotID uint) error {
 		var remaining []models.Shot
 		if err := tx.Where("scene_id = ? AND id <> ?", shot.SceneID, shot.ID).Order("order_num, id").Find(&remaining).Error; err != nil {
 			return err
-		}
-		var dialogues []models.Dialogue
-		if err := tx.Where("scene_id = ?", shot.SceneID).Order("`order`, id").Find(&dialogues).Error; err != nil {
-			return err
-		}
-		if dialogues = authoritativeSceneDialogues(dialogues); len(dialogues) > 0 {
-			if err := validateDialogueShotTiming(remaining, dialogues); err != nil {
-				return err
-			}
 		}
 		if err := deleteShotAssociations(tx, shot.ID); err != nil {
 			return err

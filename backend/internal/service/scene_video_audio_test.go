@@ -346,7 +346,7 @@ func TestSceneReviewedAudioSelectionMarksMissingMixFileStale(t *testing.T) {
 	}
 }
 
-func TestSceneAudioSnapshotRejectsStaleListenerIdentity(t *testing.T) {
+func TestSceneAudioSnapshotDoesNotBlockOnListenerAdvisory(t *testing.T) {
 	svc := newTestProjectService(t)
 	db := svc.db
 	if err := db.AutoMigrate(&models.Dialogue{}, &models.DialogueAudioCandidate{}, &models.SceneAudioCandidate{}, &models.Shot{}); err != nil {
@@ -360,24 +360,9 @@ func TestSceneAudioSnapshotRejectsStaleListenerIdentity(t *testing.T) {
 	db.Create(&dialogue)
 	shot := models.Shot{SceneID: scene.ID, Order: 1, Duration: 3, SpeechPresentation: models.ShotSpeechPresentationListenerCarry, ListenerCharacter: "已删除角色", Dialogue: dialogue.Text}
 	db.Create(&shot)
-	if _, _, err := svc.currentSceneAudioSnapshot(&scene, []models.Dialogue{dialogue}); !errors.Is(err, ErrDialogueTimingBlocked) || !strings.Contains(err.Error(), "已删除角色") {
-		t.Fatalf("stale listener was not rejected before audio readiness checks: %v", err)
-	}
-	legacy := models.SceneAudioCandidate{ProjectID: project.ID, SceneID: scene.ID, SourceHash: "historical", File: "old.wav", ReviewStatus: "accepted", IsCurrent: true}
-	if err := db.Create(&legacy).Error; err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.refreshSceneAudioCandidates(&scene, []models.Dialogue{dialogue}); !errors.Is(err, ErrDialogueTimingBlocked) {
-		t.Fatalf("stale listener refresh error=%v", err)
-	}
-	if err := db.First(&legacy, legacy.ID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if !legacy.Stale || legacy.IsCurrent || !strings.Contains(legacy.StaleReason, "已删除角色") {
-		t.Fatalf("historical accepted mix remained eligible: %+v", legacy)
-	}
-	if got := svc.sceneReviewedAudioSelection(&scene); got.Ready || !strings.Contains(got.Reason, "已删除角色") {
-		t.Fatalf("historical stale listener remained selectable: %+v", got)
+	_, _, err := svc.currentSceneAudioSnapshot(&scene, []models.Dialogue{dialogue})
+	if err != nil && strings.Contains(err.Error(), "已删除角色") {
+		t.Fatalf("listener advisory blocked Scene audio: %v", err)
 	}
 }
 
@@ -429,8 +414,8 @@ func TestSceneAudioSnapshotBindsAuthoritativeShotDialogueRanges(t *testing.T) {
 	}
 	misaligned := append([]sceneAudioSource(nil), sources...)
 	misaligned[0].TimelineStart = 0.4
-	if _, err := svc.sceneAudioShotContract(&scene, dialogues, misaligned); err == nil || !strings.Contains(err.Error(), "超出Shot区间") {
-		t.Fatalf("misaligned err=%v", err)
+	if _, err := svc.sceneAudioShotContract(&scene, dialogues, misaligned); err != nil {
+		t.Fatalf("timing advisory blocked Scene audio contract: %v", err)
 	}
 	shots[1].DialogueRanges = []models.ShotDialogueRange{{DialogueID: dialogues[0].ID, GroupKey: group, StartRune: 3, EndRune: 4}}
 	if err := db.Save(&shots[1]).Error; err != nil {

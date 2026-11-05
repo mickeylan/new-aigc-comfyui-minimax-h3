@@ -399,19 +399,9 @@ func TestManualDialogueRhythmShotCountIsUserOwnedAndDraftValidated(t *testing.T)
 			t.Fatalf("manual count instruction missing %q: %s", want, instruction)
 		}
 	}
-	if err := validateRequestedDialogueShotCount(&sceneDirectorDraft{Shots: make([]sceneDirectorDraftShot, 3)}, 4); err == nil || !strings.Contains(err.Error(), "返回3镜") {
-		t.Fatalf("wrong model shot count accepted: %v", err)
-	}
-	validShots := make([]sceneDirectorDraftShot, 4)
-	for i := range validShots {
-		validShots[i].Duration = 3
-	}
-	if err := validateRequestedDialogueShotCount(&sceneDirectorDraft{Shots: validShots}, 4); err != nil {
-		t.Fatalf("exact manual shot count rejected: %v", err)
-	}
-	validShots[2].Duration = 2.5
-	if err := validateRequestedDialogueShotCount(&sceneDirectorDraft{Shots: validShots}, 4); err == nil || !strings.Contains(err.Error(), "必须在3–15秒内") {
-		t.Fatalf("manual sub-3-second shot accepted: %v", err)
+	warnings := dialogueDraftWarnings(&sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 2.5}, {Duration: 16}, {Duration: 4}}}, 4)
+	if len(warnings) != 3 || !strings.Contains(strings.Join(warnings, "|"), "可人工") {
+		t.Fatalf("non-blocking draft warnings=%v", warnings)
 	}
 }
 
