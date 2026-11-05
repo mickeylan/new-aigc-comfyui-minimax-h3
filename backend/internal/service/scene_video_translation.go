@@ -208,12 +208,14 @@ type sceneVideoSourceHash struct {
 		Mode, References                                                         string
 		Identity, Visible, Voice, Mentioned, Location, Props, First, Last, Image string
 	} `json:"scene"`
-	Template   struct{ Code, Workflow, Inputs string } `json:"template"`
-	Files      map[string][]FileMeta                   `json:"files"`
-	Shots      []models.Shot                           `json:"shots"`
-	Dialogues  []models.Dialogue                       `json:"dialogues"`
-	Project    struct{ Style, Genre, Ratio string }    `json:"project"`
-	Continuity *models.SceneContinuity                 `json:"continuity,omitempty"`
+	Template       struct{ Code, Workflow, Inputs string } `json:"template"`
+	Files          map[string][]FileMeta                   `json:"files"`
+	Shots          []models.Shot                           `json:"shots"`
+	Dialogues      []models.Dialogue                       `json:"dialogues"`
+	Project        struct{ Style, Genre, Ratio string }    `json:"project"`
+	Continuity     *models.SceneContinuity                 `json:"continuity,omitempty"`
+	StoryboardRole string                                  `json:"storyboard_role"`
+	StoryboardTime *float64                                `json:"storyboard_time,omitempty"`
 }
 
 // sceneVideoPromptSourceHash binds the review to the effective compiler inputs, never to VideoFullPrompt.
@@ -252,7 +254,7 @@ func (s *Service) sceneVideoPromptSourceHash(sc *models.Scene) (string, error) {
 		return "", fmt.Errorf("视频模板不可用: %w", err)
 	}
 	continuity, _, _ := s.sceneVideoPromptContinuity(sc)
-	v := sceneVideoSourceHash{Compiler: sceneVideoPromptCompilerVersion, Master: sc.VideoPromptMasterZH, Files: files, Shots: shots, Dialogues: s.Projects.sceneVideoDialogues(sc), Continuity: continuity}
+	v := sceneVideoSourceHash{Compiler: sceneVideoPromptCompilerVersion, Master: sc.VideoPromptMasterZH, Files: files, Shots: shots, Dialogues: s.Projects.sceneVideoDialogues(sc), Continuity: continuity, StoryboardRole: storyboardVideoRole(sc), StoryboardTime: sc.StoryboardVideoTime}
 	v.Scene.Content, v.Scene.Duration, v.Scene.Mode, v.Scene.References = sc.Content, normalizeSceneDuration(sc.Duration), sc.SceneMode, sc.ReferenceImagesJSON
 	v.Scene.Identity, v.Scene.Visible, v.Scene.Voice, v.Scene.Mentioned = sc.Characters, sc.VisibleCharacters, sc.VoiceCharacters, sc.MentionedCharacters
 	v.Scene.Location, v.Scene.Props, v.Scene.First, v.Scene.Last, v.Scene.Image = sc.LocationName, sc.Props, sc.VideoFirstFrameImg, sc.VideoLastFrameImg, sc.ImageFile

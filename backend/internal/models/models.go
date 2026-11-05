@@ -210,24 +210,26 @@ type Scene struct {
 	ImageEngine              string     `gorm:"column:image_engine;default:minimax_h3" json:"image_engine"` // minimax_h3/qwen_image_2_1
 	SceneMode                string     `gorm:"column:scene_mode" json:"scene_mode"`                        // 文戏/武戏/文武混合；空值兼容旧数据并自动判断
 	CombatLorasJSON          string     `gorm:"column:combat_loras_json;type:text" json:"combat_loras_json,omitempty"`
-	NegativePrompt           string     `gorm:"column:negative_prompt;type:text" json:"negative_prompt"`             // 镜头层聚合的负面提示词
-	ReferenceImagesJSON      string     `gorm:"column:reference_images_json;type:text" json:"-"`                     // 用户指定的有序参考图及 Krea2/H3 用途
-	Duration                 float64    `gorm:"default:5" json:"duration"`                                           // 场景目标时长（秒）
-	Characters               string     `json:"characters"`                                                          // 兼容字段：旧数据中的出场角色名
-	VisibleCharacters        string     `gorm:"column:visible_characters" json:"visible_characters"`                 // 画面中实际可见角色，逗号分隔；仅此类要求视觉参考
-	VoiceCharacters          string     `gorm:"column:voice_characters" json:"voice_characters"`                     // 仅发声但不在画面中的角色，逗号分隔
-	MentionedCharacters      string     `gorm:"column:mentioned_characters" json:"mentioned_characters"`             // 仅在剧情、对白或独白中被提及的角色
-	CharacterRolesSet        bool       `gorm:"column:character_roles_set;default:false" json:"character_roles_set"` // 是否已明确完成可见/发声/提及分类
-	LocationName             string     `gorm:"column:location_name" json:"location"`                                // 场景地点名（对应 location 资产，用于环境一致性注入）
-	Props                    string     `json:"props"`                                                               // 出场关键道具名（逗号分隔），用于道具一致性注入
-	VisualType               string     `gorm:"column:visual_type;default:normal" json:"visual_type"`                // normal/megastructure
-	MegaType                 string     `gorm:"column:mega_type" json:"mega_type"`                                   // architecture/creature/geological/mechanical/surreal
-	ImageFile                string     `json:"image_file"`                                                          // 首帧图文件名（input/<project_id>/ 下）
-	ImageLocked              bool       `gorm:"column:image_locked;default:false" json:"image_locked"`               // 禁止生成端点覆盖当前图片
-	VideoLocked              bool       `gorm:"column:video_locked;default:false" json:"video_locked"`               // 禁止生成端点覆盖当前视频
-	ImageToken               string     `gorm:"column:image_token" json:"-"`                                         // 单次生成令牌，防止并发或过期结果回写
-	ImageTaskID              string     `gorm:"column:image_task_id;index" json:"image_task_id"`                     // 关联 Krea2 分镜画面任务
-	VideoTaskID              string     `gorm:"column:video_task_id;index" json:"video_task_id"`                     // 关联视频生成任务
+	NegativePrompt           string     `gorm:"column:negative_prompt;type:text" json:"negative_prompt"`                    // 镜头层聚合的负面提示词
+	ReferenceImagesJSON      string     `gorm:"column:reference_images_json;type:text" json:"-"`                            // 用户指定的有序参考图及 Krea2/H3 用途
+	Duration                 float64    `gorm:"default:5" json:"duration"`                                                  // 场景目标时长（秒）
+	Characters               string     `json:"characters"`                                                                 // 兼容字段：旧数据中的出场角色名
+	VisibleCharacters        string     `gorm:"column:visible_characters" json:"visible_characters"`                        // 画面中实际可见角色，逗号分隔；仅此类要求视觉参考
+	VoiceCharacters          string     `gorm:"column:voice_characters" json:"voice_characters"`                            // 仅发声但不在画面中的角色，逗号分隔
+	MentionedCharacters      string     `gorm:"column:mentioned_characters" json:"mentioned_characters"`                    // 仅在剧情、对白或独白中被提及的角色
+	CharacterRolesSet        bool       `gorm:"column:character_roles_set;default:false" json:"character_roles_set"`        // 是否已明确完成可见/发声/提及分类
+	LocationName             string     `gorm:"column:location_name" json:"location"`                                       // 场景地点名（对应 location 资产，用于环境一致性注入）
+	Props                    string     `json:"props"`                                                                      // 出场关键道具名（逗号分隔），用于道具一致性注入
+	VisualType               string     `gorm:"column:visual_type;default:normal" json:"visual_type"`                       // normal/megastructure
+	MegaType                 string     `gorm:"column:mega_type" json:"mega_type"`                                          // architecture/creature/geological/mechanical/surreal
+	ImageFile                string     `json:"image_file"`                                                                 // 分镜图文件名（input/<project_id>/ 下）
+	StoryboardVideoRole      string     `gorm:"column:storyboard_video_role;default:keyframe" json:"storyboard_video_role"` // start/keyframe/end/none；空值按 keyframe 兼容旧数据
+	StoryboardVideoTime      *float64   `gorm:"column:storyboard_video_time" json:"storyboard_video_time"`                  // keyframe 在视频时间轴中的可选建议秒数
+	ImageLocked              bool       `gorm:"column:image_locked;default:false" json:"image_locked"`                      // 禁止生成端点覆盖当前图片
+	VideoLocked              bool       `gorm:"column:video_locked;default:false" json:"video_locked"`                      // 禁止生成端点覆盖当前视频
+	ImageToken               string     `gorm:"column:image_token" json:"-"`                                                // 单次生成令牌，防止并发或过期结果回写
+	ImageTaskID              string     `gorm:"column:image_task_id;index" json:"image_task_id"`                            // 关联 Krea2 分镜画面任务
+	VideoTaskID              string     `gorm:"column:video_task_id;index" json:"video_task_id"`                            // 关联视频生成任务
 	VideoGPU                 *int       `gorm:"column:video_gpu" json:"video_gpu"`
 	VideoFile                string     `gorm:"column:video_file" json:"video_file"`                         // ComfyUI 输出相对路径（合并使用）
 	VideoInputFile           string     `gorm:"column:video_input_file" json:"video_input_file"`             // 下载到项目 input 目录的浏览器可播放副本
@@ -265,6 +267,9 @@ func sceneBlockingAppliedHash(blocking, prompt string) string {
 }
 
 func (s *Scene) AfterFind(_ *gorm.DB) error {
+	if s.StoryboardVideoRole == "" {
+		s.StoryboardVideoRole = "keyframe"
+	}
 	s.BlockingImageApplied = s.BlockingJSON != "" && s.BlockingImageAppliedHash == sceneBlockingAppliedHash(s.BlockingJSON, s.ImagePrompt)
 	s.BlockingVideoApplied = s.BlockingJSON != "" && s.BlockingVideoAppliedHash == sceneBlockingAppliedHash(s.BlockingJSON, s.VideoFullPrompt)
 	return nil

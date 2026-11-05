@@ -1657,7 +1657,7 @@ func (s *ProjectService) buildVideoFilesForTemplate(sc *models.Scene, pid, tplCo
 	switch tplCode {
 	case "minimax_h3_i2v", "minimax_h3_storyboard_candidates_selflift":
 		firstImg := strings.TrimSpace(sc.VideoFirstFrameImg)
-		if firstImg == "" {
+		if firstImg == "" && storyboardVideoRole(sc) == "start" {
 			firstImg = sc.ImageFile
 		}
 		if firstImg == "" {
@@ -1666,9 +1666,9 @@ func (s *ProjectService) buildVideoFilesForTemplate(sc *models.Scene, pid, tplCo
 		return map[string][]FileMeta{"first_frame": {{TaskID: pid, Name: firstImg}}}
 	case "minimax_h3_first_last":
 		files := map[string][]FileMeta{}
-		// 首帧：用户明确指定的，否则用分镜图
+		// 人工首尾帧始终权威；仅显式 start 角色可补首帧。
 		firstImg := strings.TrimSpace(sc.VideoFirstFrameImg)
-		if firstImg == "" {
+		if firstImg == "" && storyboardVideoRole(sc) == "start" {
 			firstImg = sc.ImageFile
 		}
 		if firstImg != "" {
@@ -1676,6 +1676,9 @@ func (s *ProjectService) buildVideoFilesForTemplate(sc *models.Scene, pid, tplCo
 		}
 		// 尾帧：用户明确指定的
 		lastImg := strings.TrimSpace(sc.VideoLastFrameImg)
+		if lastImg == "" && strings.TrimSpace(sc.ImageFile) != "" && storyboardVideoRole(sc) == "end" {
+			lastImg = sc.ImageFile
+		}
 		if lastImg != "" {
 			files["last_frame"] = []FileMeta{{TaskID: pid, Name: lastImg}}
 		}
@@ -2321,6 +2324,10 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	}
 	_, refLines := s.sceneVideoReferenceFiles(sc, fmt.Sprint(sc.ProjectID))
 	openingPicture := openingPictureTag(refLines)
+	openingInstruction := "可用参考图仅作为身份、外观、环境或重要时刻参考，不得假定任何图片是 0.00 秒开始画面"
+	if openingPicture != "" {
+		openingInstruction = openingPicture + " 的参考状态"
+	}
 	generationContent := sceneDialogueGenerationContent(sc)
 	canonicalSceneContent := normalizeUserH3ShotMarkers(generationContent)
 	canonicalSceneContent, explicitTimedShotCount := normalizeSceneTimedBeats(canonicalSceneContent, normalizeSceneDuration(sc.Duration))
@@ -2374,7 +2381,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 Dialogue只决定人物是否开口及必要口型时机；对白文本将由系统确定性加入，你不得在正文输出台词、<d>标签或改写台词。无结构化对白时，人物保持闭口，不得描写嘴唇微张、欲言又止或任何说话暗示。
 正文中的人物身份占位必须逐字使用【场景剧情】和【Shot导演设计】里的中文真实角色名，以便系统确定性替换为正确 <Subject N>；其余视觉叙述使用英文。严禁拼音、英文音译、别名，也禁止自行猜测Subject编号。
 四视图只负责人物身份与服装，场景图只负责环境；不得从参考图反推剧情，不得复述或猜测外貌、服装、陈设。
-场景类型规则：%s`, combatDetailRule, openingPicture, h3SceneModeInstruction(sceneMode))
+场景类型规则：%s`, combatDetailRule, openingInstruction, h3SceneModeInstruction(sceneMode))
 	actionTask := ""
 	if excludedCount := currentSceneDialogueExclusionCount(sc); excludedCount > 0 {
 		actionTask += fmt.Sprintf("\n\n【用户对白排除】用户已排除%d条引号误识别，不得当作发声。", excludedCount)
@@ -2709,7 +2716,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 // 由系统确定性生成；detailed_description 来自用户编辑或系统生成。
 func openingPictureTag(referenceLines []string) string {
 	for _, line := range referenceLines {
-		if !strings.Contains(line, "当前分镜画面") && !strings.Contains(line, "衔接帧") && !strings.Contains(line, "确认尾帧") {
+		if !strings.Contains(line, "开始帧") && !strings.Contains(line, "衔接帧") && !strings.Contains(line, "确认尾帧") {
 			continue
 		}
 		start := strings.Index(line, "<Picture ")
@@ -2720,7 +2727,7 @@ func openingPictureTag(referenceLines []string) string {
 			return line[start : start+end+1]
 		}
 	}
-	return fmt.Sprintf("<Picture %d>", len(referenceLines))
+	return ""
 }
 
 func subjectTagsToNames(text string, referenceLines []string) string {
@@ -4974,6 +4981,12 @@ func englishH3ReferenceDescription(desc string, n int) string {
 	switch {
 	case strings.Contains(desc, "上一镜确认尾帧"):
 		return "the confirmed final frame of the previous scene, used as this video's exact 0.00-second opening frame"
+	case strings.Contains(desc, "开始帧"):
+		return "the storyboard image assigned as the exact 0.00-second opening state"
+	case strings.Contains(desc, "关键帧"):
+		return "the storyboard image assigned as a generic important-moment composition and action-state reference"
+	case strings.Contains(desc, "结束状态参考"):
+		return "the storyboard image assigned as an ending-state reference, not a mandatory exact final frame"
 	case strings.Contains(desc, "当前分镜画面"):
 		return "the storyboard composition and action-state reference"
 	case strings.Contains(desc, "角色") && name != "":
@@ -5035,8 +5048,18 @@ func h3VideoSubjects(referenceLines []string) (definitions, retention, subjectRe
 			definitions = append(definitions, fmt.Sprintf("<Picture %d> establishes the full-frame environment and spatial layout throughout the video: %s.", n, english))
 		case strings.Contains(line, "上一镜确认尾帧"):
 			definitions = append(definitions, fmt.Sprintf("<Picture %d> establishes the full-frame opening composition at 0.00 seconds: %s.", n, english))
+		case strings.Contains(line, "当前分镜画面开始帧"):
+			definitions = append(definitions, fmt.Sprintf("<Picture %d> establishes the exact full-frame opening composition and state at 0.00 seconds.", n))
+		case strings.Contains(line, "当前分镜画面关键帧"):
+			if timing := regexp.MustCompile(`约 ([0-9]+(?:\.[0-9]+)?) 秒`).FindStringSubmatch(line); len(timing) == 2 {
+				definitions = append(definitions, fmt.Sprintf("<Picture %d> guides the composition and action state around %s seconds; this is reference guidance, not a hard temporal frame lock.", n, timing[1]))
+			} else {
+				definitions = append(definitions, fmt.Sprintf("<Picture %d> provides a generic important-moment full-frame composition and action-state reference; its time is unspecified and it does not define the opening state.", n))
+			}
+		case strings.Contains(line, "当前分镜画面结束状态参考"):
+			definitions = append(definitions, fmt.Sprintf("<Picture %d> provides an ending-state reference; use it as guidance rather than a mandatory exact final frame.", n))
 		case strings.Contains(line, "当前分镜画面"):
-			definitions = append(definitions, fmt.Sprintf("<Picture %d> establishes the full-frame storyboard composition and action state.", n))
+			definitions = append(definitions, fmt.Sprintf("<Picture %d> provides a generic important-moment full-frame reference and does not define the opening state.", n))
 		case strings.Contains(line, "道具「"):
 			definitions = append(definitions, fmt.Sprintf("<Picture %d> establishes the referenced prop appearance: %s.", n, english))
 		default:
@@ -5479,7 +5502,7 @@ func (s *ProjectService) sceneVideoContinuityReferences(sc *models.Scene, pid st
 	// 但用上一镜选定尾帧替换当前分镜图，避免两张完整构图竞争起始画面。
 	replacedStoryboard := false
 	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.Contains(lines[i], "当前分镜画面") {
+		if strings.Contains(lines[i], "当前分镜") {
 			refs[i] = FileMeta{TaskID: pid, Name: cfg.SelectedFrame.ImageFile}
 			lines[i] = fmt.Sprintf("- <Picture %d>：上一镜确认尾帧（本镜 0.00 秒唯一开始画面）", i+1)
 			replacedStoryboard = true
@@ -5518,17 +5541,36 @@ func (s *ProjectService) sceneVideoReferenceWarning(sc *models.Scene, actual int
 	return ""
 }
 
+func storyboardVideoRole(sc *models.Scene) string {
+	if sc == nil || strings.TrimSpace(sc.StoryboardVideoRole) == "" {
+		return "keyframe"
+	}
+	return strings.TrimSpace(sc.StoryboardVideoRole)
+}
+
 func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) ([]FileMeta, []string) {
 	// 用户验证的业务顺序：人物/造型在前，场景/道具随后，当前分镜图最后。
 	// H3不依赖图片权重顺序；这里保持稳定顺序以确保 Picture/Subject 编号可读且不漂移。
 	refs := []FileMeta{}
 	lines := []string{}
 	appendStoryboard := func() {
-		if sc.ImageFile == "" || len(refs) >= maxSceneReferenceImages {
+		role := storyboardVideoRole(sc)
+		if role == "none" || sc.ImageFile == "" || len(refs) >= maxSceneReferenceImages {
 			return
 		}
 		refs = append(refs, FileMeta{TaskID: pid, Name: sc.ImageFile})
-		lines = append(lines, fmt.Sprintf("- <Picture %d>：当前分镜画面（可选构图与动作状态参考）", len(refs)))
+		description := "当前分镜画面关键帧（通用重要时刻的构图与动作状态参考，不是开始画面）"
+		switch role {
+		case "start":
+			description = "当前分镜画面开始帧（本镜 0.00 秒开始画面）"
+		case "end":
+			description = "当前分镜画面结束状态参考（不是硬性最后一帧）"
+		case "keyframe":
+			if sc.StoryboardVideoTime != nil {
+				description = fmt.Sprintf("当前分镜画面关键帧（约 %.2f 秒的重要时刻状态建议，不是开始画面）", *sc.StoryboardVideoTime)
+			}
+		}
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：%s", len(refs), description))
 	}
 	if selected, selectedLines, explicit := s.selectedSceneReferenceFiles(sc, "h3"); explicit {
 		// 显式选择按Scene人物出场顺序 → 其余人物造型 → 场景 → 道具及其他。
@@ -7439,8 +7481,20 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 			return fmt.Errorf("所选视频模板不可用且回退模板也不可用: %w", selectionErr)
 		}
 	}
-	if sc.ImageFile == "" && sceneVideoTemplateRequiresImage(tplCode) {
-		return fmt.Errorf("场景 %d 尚未生成画面；只有MiniMax H3文生视频模板允许无分镜图生成", sc.Order)
+	// Validate the actual role-aware frame bindings, not the mere existence of a
+	// storyboard image: keyframe/end/none must never be silently promoted to first frame.
+	if tplCode == "minimax_h3_i2v" || tplCode == "minimax_h3_storyboard_candidates_selflift" {
+		if len(videoFiles["first_frame"]) == 0 {
+			return fmt.Errorf("场景 %d 所选图生视频模板缺少首帧；请手动指定首帧，或将分镜图的视频角色设为 start", sc.Order)
+		}
+	}
+	if tplCode == "minimax_h3_first_last" {
+		if len(videoFiles["first_frame"]) == 0 {
+			return fmt.Errorf("场景 %d 首尾帧模板缺少首帧；请手动指定首帧，或将分镜图的视频角色设为 start", sc.Order)
+		}
+		if len(videoFiles["last_frame"]) == 0 {
+			return fmt.Errorf("场景 %d 首尾帧模板缺少尾帧；请手动指定尾帧，或将分镜图的视频角色设为 end", sc.Order)
+		}
 	}
 	var finalReferenceLines []string
 	if isH3Ref2VTemplate(tplCode) {
@@ -7459,9 +7513,6 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		}
 	}
 	claimQuery := s.db.Model(&models.Scene{}).Where("id = ? AND project_id = ? AND generation = ? AND (archived = ? OR archived IS NULL) AND status IN ?", sc.ID, p.ID, sc.Generation, false, []string{"pending", "image_ready", "video_ready", "failed"})
-	if sceneVideoTemplateRequiresImage(tplCode) {
-		claimQuery = claimQuery.Where("image_file != ''")
-	}
 	claim := claimQuery.Updates(map[string]any{"status": "video_creating", "error": ""})
 	if claim.Error != nil {
 		return claim.Error

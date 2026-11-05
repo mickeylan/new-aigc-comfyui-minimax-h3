@@ -2396,7 +2396,7 @@ func TestBuildMiniMaxH3RefPromptUsesStoryboardAsOptionalLastReference(t *testing
 	prompt := buildMiniMaxH3RefPrompt(sc, &models.Project{Style: "3D国漫"}, nil, lines)
 	for _, want := range []string{
 		"<Subject 1> is the character named 「雷晓飞」 shown in the four-view reference from <Picture 1>",
-		"<Picture 3> establishes the full-frame storyboard composition and action state",
+		"<Picture 3> provides a generic important-moment full-frame reference and does not define the opening state",
 		"[reference generation] Generate a 9-second video from the defined references and shot timeline",
 		"<Subject 1>抬起手指",
 	} {
@@ -2941,7 +2941,7 @@ func TestGenerateSceneVideoActionSplitsVisibleDressingStagesWithoutPersistedShot
 	if !strings.Contains(full, "[Shot 2] At 00:08.000,") {
 		t.Fatalf("full prompt lost generated cut timestamp: %s", full)
 	}
-	if !strings.Contains(full, "loose full-frame composition reference; its completed clothing and action state do not define the opening state") {
+	if !strings.Contains(full, "generic important-moment full-frame reference and does not define the opening state") {
 		t.Fatalf("completed storyboard state still overrides dressing opening: %s", full)
 	}
 }
@@ -3114,7 +3114,7 @@ func TestCharacterNamesMapToActualReferenceSubjects(t *testing.T) {
 	for _, want := range []string{
 		"<Subject 1> is the character named 「舒寒」 shown in the four-view reference from <Picture 1>",
 		"<Subject 2> is the character named 「上官若琳」 shown in the four-view reference from <Picture 2>",
-		"<Picture 4> establishes the full-frame storyboard composition and action state",
+		"<Picture 4> provides a generic important-moment full-frame reference and does not define the opening state",
 		"<Subject 1> embraces <Subject 2>",
 		"<Subject 1> (S1) says: <d>[Chinese] 这不是太想你了吗。</d>",
 		"<Subject 2> (S2) says: <d>[Chinese] 今晚有得是时间。</d>",

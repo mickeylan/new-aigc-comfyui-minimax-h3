@@ -13,14 +13,16 @@ function extractExpression(name, nextMarker) {
 }
 
 test('H3 对白定位结果在视频提示词弹窗中清楚展示且不设门禁', () => {
-  assert.match(detail, /以下对白尚未定位到镜头，未自动追加到最后一镜，请确认时间或手动放置/)
+  assert.match(detail, /当前保存稿尚未完整编排以下对白；点击“AI 重新生成”，系统会结合剧情自动安排/)
+  assert.doesNotMatch(detail, /请确认时间或手动放置/)
   assert.match(detail, /item\.character \|\| '未知说话人'/)
   assert.match(detail, /「\{\{ item\.text \}\}」/)
   assert.match(detail, /item\.reason/)
   assert.match(detail, /已定位对白（/)
   assert.match(detail, /→ Shot \{\{ item\.shot_number \}\}/)
   assert.match(detail, /item\.time_segment/)
-  assert.match(detail, /不会强制修改内部 Dialogue，也不会禁用保存或生成/)
+  assert.match(detail, /无需维护内部对白映射或手工填写时间/)
+  assert.match(detail, /重新生成会先补齐并核对对白，再返回完整预览/)
   assert.doesNotMatch(detail, /:disabled="[^"]*videoTaskDialoguePlacement/)
 })
 

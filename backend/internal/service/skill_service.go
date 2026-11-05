@@ -121,6 +121,14 @@ func (s *SkillService) InitSystemSkills() error {
 		},
 		// video_prompt 阶段技能
 		{
+			Name: "视频对白自然编排", Code: h3DialogueTimelineSkillCode, Operation: h3DialogueTimelineSkillCode, Version: 1,
+			Description:    "根据场景叙事和实际镜头自动安排全部原文对白，保留说话人，不要求用户维护内部映射",
+			Stage:          models.SkillStageVideoPrompt,
+			PromptTemplate: "{{request}}",
+			SystemPrompt:   "依据当前请求中的场景正文、实际镜头和对白顺序安排发声位置。只输出要求的JSON编排计划，不改写台词，不更改说话人，不把缺少时间标签的台词集中到最后一镜；已有可靠时间和镜头关联优先。",
+			IsSystem:       true, Enabled: true, SortOrder: 1,
+		},
+		{
 			Name:           "视频提示词增强",
 			Code:           "video-prompt-enhance",
 			Version:        1,

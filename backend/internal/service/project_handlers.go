@@ -561,6 +561,28 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 	if template == "minimax_h3_first_last" {
 		fullPrompt = finalizeH3FL2VAPrompt(fullPrompt, sc.Duration)
 	}
+	// Dialogue must be part of the preview, not an internal mapping task left
+	// for the user. Run after all visual/timeline normalization so a later
+	// compiler pass cannot strip the newly composed speech again.
+	heading := "detailed_description:"
+	detail := h3PromptSection(fullPrompt, heading)
+	if strings.Contains(fullPrompt, "integrated_multimodal_description:") {
+		heading = "integrated_multimodal_description:"
+		detail = h3IntegratedDescription(fullPrompt)
+	}
+	if len(validSceneDialogues(dubs)) > 0 {
+		composed, composeErr := s.Projects.composeH3DialogueTimeline(sc, detail, dubs, lines)
+		if composeErr != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": composeErr.Error(), "code": "dialogue_composition_failed"})
+			return
+		}
+		if detail == "" {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "视频提示词缺少镜头正文，请重新生成"})
+			return
+		}
+		fullPrompt = strings.Replace(fullPrompt, detail, composed, 1)
+		actionPrompt = composed
+	}
 	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "reference_bindings": sceneVideoReferenceBindings(refs, lines, fullPrompt), "template": template, "dialogue_count": len(validSceneDialogues(dubs)), "prompt_dialogue_count": len(h3SpokenTextPattern.FindAllStringSubmatch(fullPrompt, -1)), "dialogue_placement": DiagnoseH3DialoguePlacement(fullPrompt, dubs, lines)}
 	if continuity != nil && continuity.SelectedFrame != nil {
 		response["continuity_mode"] = continuity.Mode

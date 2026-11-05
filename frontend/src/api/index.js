@@ -124,6 +124,7 @@ export const api = {
   generateAllImages: (id, episodeN) => http.post(`/projects/${id}/images${episodeN ? `?episode_n=${episodeN}` : ''}`),
   generateAllVideos: (id, episodeN) => http.post(`/projects/${id}/videos${episodeN ? `?episode_n=${episodeN}` : ''}`),
   updateScene: (id, sid, data) => http.patch(`/projects/${id}/scenes/${sid}`, data),
+  updateSceneStoryboardVideoRole: (id, sid, data) => http.patch(`/projects/${id}/scenes/${sid}/storyboard-video-role`, data),
   expandSceneContent: (id, sid, data) => http.post(`/projects/${id}/scenes/${sid}/content/expand`, data, { timeout: 300000 }),
   previewSceneStory: (id, sid, data) => http.post(`/projects/${id}/scenes/${sid}/story/preview`, data, { timeout: 300000 }),
   applySceneStory: (id, sid, data) => http.post(`/projects/${id}/scenes/${sid}/story/apply`, data),
