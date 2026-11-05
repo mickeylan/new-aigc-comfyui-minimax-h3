@@ -1168,7 +1168,7 @@ func TestShotServiceReplacePreservesIDsAndRejectsForeignShot(t *testing.T) {
 	}
 	firstID, secondID := initial[0].ID, initial[1].ID
 	updated, err := svc.ReplaceShots(scene.ID, []models.Shot{
-		{ID: secondID, ShotType: "close", Duration: 3, Description: "second updated", DirectorSource: "fight-video-action-design", CombatReferenceAudit: `[{"scope":"moves","id":"27"}]`},
+		{ID: secondID, ShotType: "close", Duration: 3, Description: "second updated", DirectorIntent: "揭示威胁", AudienceInformation: "门外有人", PerformanceTrigger: "门外脚步声", Performance: "抬眼并收紧下颌", EyeLine: "看向门外", Blocking: "停在桌边，重心后移", Reaction: "屏住呼吸", FocusSubject: "人物眼神", CutReason: "视线锁定门口", DirectorSource: "fight-video-action-design", CombatReferenceAudit: `[{"scope":"moves","id":"27"}]`},
 		{ID: firstID, ShotType: "wide", Duration: 3, Description: "first updated"},
 		{ShotType: "medium", Duration: 3, Description: "new"},
 	})
@@ -1180,6 +1180,9 @@ func TestShotServiceReplacePreservesIDsAndRejectsForeignShot(t *testing.T) {
 	}
 	if updated[0].DirectorSource != "fight-video-action-design" || !strings.Contains(updated[0].CombatReferenceAudit, `"id":"27"`) {
 		t.Fatalf("director provenance was not persisted: %+v", updated[0])
+	}
+	if updated[0].DirectorIntent != "揭示威胁" || updated[0].PerformanceTrigger != "门外脚步声" || updated[0].CutReason != "视线锁定门口" {
+		t.Fatalf("director thinking fields were not persisted: %+v", updated[0])
 	}
 	foreign, err := svc.ReplaceShots(otherScene.ID, []models.Shot{{ShotType: "wide", Duration: 3}})
 	if err != nil {

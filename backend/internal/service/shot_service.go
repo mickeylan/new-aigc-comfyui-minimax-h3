@@ -29,6 +29,8 @@ type shotDirectorHashV1 struct {
 	TransitionNote, StartState, EndState                                                   string
 	Duration                                                                               float64 `json:"duration"`
 	Description, Dialogue, Emotion                                                         string
+	DirectorIntent, AudienceInformation, PerformanceTrigger, Performance                   string                        `json:",omitempty"`
+	EyeLine, Blocking, Reaction, FocusSubject, CutReason                                   string                        `json:",omitempty"`
 	SpeechPresentation                                                                     models.ShotSpeechPresentation `json:"speech_presentation,omitempty"`
 	ListenerCharacter                                                                      string                        `json:"listener_character,omitempty"`
 	PromptSubject, PromptAction, PromptCamera, PromptLighting, PromptStyle, NegativePrompt string
@@ -40,7 +42,7 @@ func shotDirectorSHA256(shot models.Shot) string {
 	if timeline == nil {
 		timeline = []models.ShotActionTimelineEntry{}
 	}
-	payload, _ := json.Marshal(shotDirectorHashV1{Order: shot.Order, ActType: shot.ActType, ShotType: shot.ShotType, CameraAngle: shot.CameraAngle, CameraMovement: shot.CameraMovement, TransitionType: shot.TransitionType, TransitionNote: shot.TransitionNote, StartState: shot.StartState, EndState: shot.EndState, Duration: shot.Duration, Description: shot.Description, Dialogue: shot.Dialogue, Emotion: shot.Emotion, SpeechPresentation: shot.SpeechPresentation, ListenerCharacter: shot.ListenerCharacter, PromptSubject: shot.PromptSubject, PromptAction: shot.PromptAction, PromptCamera: shot.PromptCamera, PromptLighting: shot.PromptLighting, PromptStyle: shot.PromptStyle, NegativePrompt: shot.NegativePrompt, ActionTimeline: timeline})
+	payload, _ := json.Marshal(shotDirectorHashV1{Order: shot.Order, ActType: shot.ActType, ShotType: shot.ShotType, CameraAngle: shot.CameraAngle, CameraMovement: shot.CameraMovement, TransitionType: shot.TransitionType, TransitionNote: shot.TransitionNote, StartState: shot.StartState, EndState: shot.EndState, Duration: shot.Duration, Description: shot.Description, DirectorIntent: shot.DirectorIntent, AudienceInformation: shot.AudienceInformation, PerformanceTrigger: shot.PerformanceTrigger, Performance: shot.Performance, EyeLine: shot.EyeLine, Blocking: shot.Blocking, Reaction: shot.Reaction, FocusSubject: shot.FocusSubject, CutReason: shot.CutReason, Dialogue: shot.Dialogue, Emotion: shot.Emotion, SpeechPresentation: shot.SpeechPresentation, ListenerCharacter: shot.ListenerCharacter, PromptSubject: shot.PromptSubject, PromptAction: shot.PromptAction, PromptCamera: shot.PromptCamera, PromptLighting: shot.PromptLighting, PromptStyle: shot.PromptStyle, NegativePrompt: shot.NegativePrompt, ActionTimeline: timeline})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
 }
@@ -105,8 +107,10 @@ func validateDialogueShotTiming(shots []models.Shot, dialogues []models.Dialogue
 	for i, shot := range shots {
 		draft.Shots[i] = sceneDirectorDraftShot{
 			Duration: shot.Duration, Dialogue: shot.Dialogue, SpeechPresentation: shot.SpeechPresentation, ListenerCharacter: shot.ListenerCharacter, ShotType: shot.ShotType,
-			Description: shot.Description, PromptSubject: shot.PromptSubject, PromptAction: shot.PromptAction,
-			StartState: shot.StartState, EndState: shot.EndState,
+			Description: shot.Description, DirectorIntent: shot.DirectorIntent, AudienceInformation: shot.AudienceInformation,
+			Trigger: shot.PerformanceTrigger, Performance: shot.Performance, EyeLine: shot.EyeLine, Blocking: shot.Blocking,
+			Reaction: shot.Reaction, FocusSubject: shot.FocusSubject, CutReason: shot.CutReason,
+			PromptSubject: shot.PromptSubject, PromptAction: shot.PromptAction, StartState: shot.StartState, EndState: shot.EndState,
 		}
 	}
 	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
@@ -167,7 +171,9 @@ func rebalanceShotDurations(shots []models.Shot, target float64) ([]models.Shot,
 var shotUpdateFields = map[string]bool{
 	"order": true, "act_type": true, "shot_type": true, "camera_angle": true, "camera_movement": true,
 	"transition_type": true, "transition_note": true, "start_state": true, "end_state": true,
-	"duration": true, "description": true, "dialogue": true, "speech_presentation": true, "listener_character": true, "emotion": true,
+	"duration": true, "description": true, "director_intent": true, "audience_information": true,
+	"trigger": true, "performance": true, "eye_line": true, "blocking": true, "reaction": true,
+	"focus_subject": true, "cut_reason": true, "dialogue": true, "speech_presentation": true, "listener_character": true, "emotion": true,
 	"prompt_subject": true, "prompt_action": true, "prompt_camera": true,
 	"prompt_lighting": true, "prompt_style": true, "negative_prompt": true, "action_timeline": true,
 }
@@ -182,6 +188,15 @@ func validateShot(shot *models.Shot) error {
 		return fmt.Errorf("act_type 必须是 setup/rising/midpoint/falling/resolution")
 	}
 	shot.Description = strings.TrimSpace(shot.Description)
+	shot.DirectorIntent = strings.TrimSpace(shot.DirectorIntent)
+	shot.AudienceInformation = strings.TrimSpace(shot.AudienceInformation)
+	shot.PerformanceTrigger = strings.TrimSpace(shot.PerformanceTrigger)
+	shot.Performance = strings.TrimSpace(shot.Performance)
+	shot.EyeLine = strings.TrimSpace(shot.EyeLine)
+	shot.Blocking = strings.TrimSpace(shot.Blocking)
+	shot.Reaction = strings.TrimSpace(shot.Reaction)
+	shot.FocusSubject = strings.TrimSpace(shot.FocusSubject)
+	shot.CutReason = strings.TrimSpace(shot.CutReason)
 	shot.SpeechPresentation = models.ShotSpeechPresentation(strings.TrimSpace(string(shot.SpeechPresentation)))
 	shot.ListenerCharacter = strings.TrimSpace(shot.ListenerCharacter)
 	if !validShotSpeechPresentation(shot.SpeechPresentation) {
@@ -531,7 +546,11 @@ func (s *ShotService) ReplaceShotsWithDialogueSnapshot(sceneID uint, shots []mod
 				"order_num": shots[i].Order, "act_type": shots[i].ActType, "shot_type": shots[i].ShotType,
 				"camera_angle": shots[i].CameraAngle, "camera_movement": shots[i].CameraMovement,
 				"transition_type": shots[i].TransitionType, "transition_note": shots[i].TransitionNote, "start_state": shots[i].StartState, "end_state": shots[i].EndState,
-				"duration": shots[i].Duration, "description": shots[i].Description, "dialogue": shots[i].Dialogue,
+				"duration": shots[i].Duration, "description": shots[i].Description,
+				"director_intent": shots[i].DirectorIntent, "audience_information": shots[i].AudienceInformation,
+				"performance_trigger": shots[i].PerformanceTrigger, "performance": shots[i].Performance,
+				"eye_line": shots[i].EyeLine, "blocking": shots[i].Blocking, "reaction": shots[i].Reaction,
+				"focus_subject": shots[i].FocusSubject, "cut_reason": shots[i].CutReason, "dialogue": shots[i].Dialogue,
 				"speech_presentation": shots[i].SpeechPresentation, "listener_character": shots[i].ListenerCharacter, "emotion": shots[i].Emotion, "prompt_subject": shots[i].PromptSubject,
 				"prompt_action": shots[i].PromptAction, "prompt_camera": shots[i].PromptCamera,
 				"prompt_lighting": shots[i].PromptLighting, "prompt_style": shots[i].PromptStyle,
@@ -680,6 +699,8 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 		column := key
 		if key == "order" {
 			column = "order_num"
+		} else if key == "trigger" {
+			column = "performance_trigger"
 		}
 		filtered[column] = value
 	}
@@ -699,6 +720,33 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 		}
 		if v, ok := updates["description"].(string); ok {
 			candidate.Description = v
+		}
+		if v, ok := updates["director_intent"].(string); ok {
+			candidate.DirectorIntent = v
+		}
+		if v, ok := updates["audience_information"].(string); ok {
+			candidate.AudienceInformation = v
+		}
+		if v, ok := updates["trigger"].(string); ok {
+			candidate.PerformanceTrigger = v
+		}
+		if v, ok := updates["performance"].(string); ok {
+			candidate.Performance = v
+		}
+		if v, ok := updates["eye_line"].(string); ok {
+			candidate.EyeLine = v
+		}
+		if v, ok := updates["blocking"].(string); ok {
+			candidate.Blocking = v
+		}
+		if v, ok := updates["reaction"].(string); ok {
+			candidate.Reaction = v
+		}
+		if v, ok := updates["focus_subject"].(string); ok {
+			candidate.FocusSubject = v
+		}
+		if v, ok := updates["cut_reason"].(string); ok {
+			candidate.CutReason = v
 		}
 		if v, ok := updates["dialogue"].(string); ok {
 			candidate.Dialogue = v
@@ -773,6 +821,19 @@ func (s *ShotService) UpdateShot(shotID uint, updates map[string]any) (*models.S
 		}
 		if _, ok := updates["listener_character"]; ok {
 			filtered["listener_character"] = candidate.ListenerCharacter
+		}
+		for key, value := range map[string]string{
+			"director_intent": candidate.DirectorIntent, "audience_information": candidate.AudienceInformation,
+			"trigger": candidate.PerformanceTrigger, "performance": candidate.Performance, "eye_line": candidate.EyeLine,
+			"blocking": candidate.Blocking, "reaction": candidate.Reaction, "focus_subject": candidate.FocusSubject, "cut_reason": candidate.CutReason,
+		} {
+			if _, ok := updates[key]; ok {
+				column := key
+				if key == "trigger" {
+					column = "performance_trigger"
+				}
+				filtered[column] = value
+			}
 		}
 		projectID, err := projectIDForScene(tx, shot.SceneID)
 		if err != nil {

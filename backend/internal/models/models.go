@@ -1056,6 +1056,15 @@ type Shot struct {
 	EndState              string                    `gorm:"column:end_state;type:text" json:"end_state"`
 	Duration              float64                   `gorm:"default:3" json:"duration"`
 	Description           string                    `gorm:"type:text" json:"description"`
+	DirectorIntent        string                    `gorm:"column:director_intent;type:text" json:"director_intent"`
+	AudienceInformation   string                    `gorm:"column:audience_information;type:text" json:"audience_information"`
+	PerformanceTrigger    string                    `gorm:"column:performance_trigger;type:text" json:"trigger"`
+	Performance           string                    `gorm:"column:performance;type:text" json:"performance"`
+	EyeLine               string                    `gorm:"column:eye_line;type:text" json:"eye_line"`
+	Blocking              string                    `gorm:"column:blocking;type:text" json:"blocking"`
+	Reaction              string                    `gorm:"column:reaction;type:text" json:"reaction"`
+	FocusSubject          string                    `gorm:"column:focus_subject;type:text" json:"focus_subject"`
+	CutReason             string                    `gorm:"column:cut_reason;type:text" json:"cut_reason"`
 	Dialogue              string                    `gorm:"type:text" json:"dialogue"` // compatibility display cache; structured Dialogue remains authoritative
 	SpeechPresentation    ShotSpeechPresentation    `gorm:"column:speech_presentation;size:48;index" json:"speech_presentation"`
 	ListenerCharacter     string                    `gorm:"column:listener_character;size:255" json:"listener_character"`

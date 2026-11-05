@@ -17,6 +17,16 @@ MIT License notice:
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+## MiniMax H3 Director Skill References
+
+The Scene director prompt contract independently combines general directing concepts reviewed in these MIT-licensed repositories:
+
+- https://github.com/zdwl001/h3-prompt-director — shot-first planning, performance beats, state continuity, dialogue timing, and H3 segment packing.
+- https://github.com/xuguohua318/ai-video-chief-director-v3-lite — one audience-information goal, one visible state change, and one photographic decision per shot.
+- https://github.com/Kiwi-shijie/ComfyUI_MiniMaxH3_Smart_Director — staged storyboard planning and review-oriented prompt refinement.
+
+No repository code or complete prompt text is copied. The concepts are independently expressed through this project's Go/Vue `Scene → Shot → MiniMax H3` authority and review workflow. `ComfyUI-MiniMaxH3-Director` was reviewed only at a conceptual level because it is GPL-3.0; no GPL implementation or text is incorporated.
+
 ## T8 Directional Combat Skills
 
 Portions of the MiniMax H3 combat-direction prompt design were adapted from the local T8 directional skills `high_density_combat`, `continuous_combat`, and `ning_wenwu`:

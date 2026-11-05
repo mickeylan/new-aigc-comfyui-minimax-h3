@@ -54,28 +54,37 @@ type dialogueRhythmShotReview struct {
 }
 
 type sceneDirectorDraftShot struct {
-	ActType            models.ShotActType               `json:"act_type"`
-	ShotType           string                           `json:"shot_type"`
-	CameraAngle        string                           `json:"camera_angle"`
-	CameraMovement     string                           `json:"camera_movement"`
-	Duration           float64                          `json:"duration"`
-	Description        string                           `json:"description"`
-	Dialogue           string                           `json:"dialogue"`
-	SpeechPresentation models.ShotSpeechPresentation    `json:"speech_presentation"`
-	ListenerCharacter  string                           `json:"listener_character"`
-	Emotion            string                           `json:"emotion"`
-	TransitionType     models.ShotTransitionType        `json:"transition_type"`
-	TransitionNote     string                           `json:"transition_note"`
-	StartState         string                           `json:"start_state"`
-	EndState           string                           `json:"end_state"`
-	PromptSubject      string                           `json:"prompt_subject"`
-	PromptAction       string                           `json:"prompt_action"`
-	PromptCamera       string                           `json:"prompt_camera"`
-	PromptLighting     string                           `json:"prompt_lighting"`
-	PromptStyle        string                           `json:"prompt_style"`
-	NegativePrompt     string                           `json:"negative_prompt"`
-	ActionTimeline     []models.ShotActionTimelineEntry `json:"action_timeline"`
-	Checks             []string                         `json:"checks"`
+	ActType             models.ShotActType               `json:"act_type"`
+	ShotType            string                           `json:"shot_type"`
+	CameraAngle         string                           `json:"camera_angle"`
+	CameraMovement      string                           `json:"camera_movement"`
+	Duration            float64                          `json:"duration"`
+	Description         string                           `json:"description"`
+	DirectorIntent      string                           `json:"director_intent"`
+	AudienceInformation string                           `json:"audience_information"`
+	Trigger             string                           `json:"trigger"`
+	Performance         string                           `json:"performance"`
+	EyeLine             string                           `json:"eye_line"`
+	Blocking            string                           `json:"blocking"`
+	Reaction            string                           `json:"reaction"`
+	FocusSubject        string                           `json:"focus_subject"`
+	CutReason           string                           `json:"cut_reason"`
+	Dialogue            string                           `json:"dialogue"`
+	SpeechPresentation  models.ShotSpeechPresentation    `json:"speech_presentation"`
+	ListenerCharacter   string                           `json:"listener_character"`
+	Emotion             string                           `json:"emotion"`
+	TransitionType      models.ShotTransitionType        `json:"transition_type"`
+	TransitionNote      string                           `json:"transition_note"`
+	StartState          string                           `json:"start_state"`
+	EndState            string                           `json:"end_state"`
+	PromptSubject       string                           `json:"prompt_subject"`
+	PromptAction        string                           `json:"prompt_action"`
+	PromptCamera        string                           `json:"prompt_camera"`
+	PromptLighting      string                           `json:"prompt_lighting"`
+	PromptStyle         string                           `json:"prompt_style"`
+	NegativePrompt      string                           `json:"negative_prompt"`
+	ActionTimeline      []models.ShotActionTimelineEntry `json:"action_timeline"`
+	Checks              []string                         `json:"checks"`
 }
 
 func trimJSONFence(value string) string {
@@ -113,6 +122,19 @@ func mergeDirectorShotPair(first, second sceneDirectorDraftShot) sceneDirectorDr
 	firstDuration := first.Duration
 	first.Duration += second.Duration
 	first.Description = joinDirectorField(first.Description, second.Description)
+	first.DirectorIntent = joinDirectorField(first.DirectorIntent, second.DirectorIntent)
+	first.AudienceInformation = joinDirectorField(first.AudienceInformation, second.AudienceInformation)
+	if first.Trigger == "" {
+		first.Trigger = second.Trigger
+	}
+	first.Performance = joinDirectorField(first.Performance, second.Performance)
+	first.EyeLine = joinDirectorField(first.EyeLine, second.EyeLine)
+	first.Blocking = joinDirectorField(first.Blocking, second.Blocking)
+	first.Reaction = joinDirectorField(first.Reaction, second.Reaction)
+	first.FocusSubject = joinDirectorField(first.FocusSubject, second.FocusSubject)
+	if second.CutReason != "" {
+		first.CutReason = second.CutReason
+	}
 	first.Dialogue += second.Dialogue
 	if first.ListenerCharacter == "" {
 		first.ListenerCharacter = second.ListenerCharacter
@@ -592,6 +614,9 @@ func parseSceneDirectorDraftWithOptions(output string, preserveShortShots bool) 
 				return nil, fmt.Errorf("镜头%d的必填字段%s为空", i+1, field.name)
 			}
 		}
+		d.DirectorIntent, d.AudienceInformation = strings.TrimSpace(d.DirectorIntent), strings.TrimSpace(d.AudienceInformation)
+		d.Trigger, d.Performance, d.EyeLine, d.Blocking = strings.TrimSpace(d.Trigger), strings.TrimSpace(d.Performance), strings.TrimSpace(d.EyeLine), strings.TrimSpace(d.Blocking)
+		d.Reaction, d.FocusSubject, d.CutReason = strings.TrimSpace(d.Reaction), strings.TrimSpace(d.FocusSubject), strings.TrimSpace(d.CutReason)
 		d.Dialogue, d.Emotion, d.TransitionNote, d.NegativePrompt = strings.TrimSpace(d.Dialogue), strings.TrimSpace(d.Emotion), strings.TrimSpace(d.TransitionNote), strings.TrimSpace(d.NegativePrompt)
 		d.SpeechPresentation = models.ShotSpeechPresentation(strings.TrimSpace(string(d.SpeechPresentation)))
 		d.ListenerCharacter = strings.TrimSpace(d.ListenerCharacter)
@@ -604,7 +629,7 @@ func parseSceneDirectorDraftWithOptions(output string, preserveShortShots bool) 
 		if d.Duration <= 0 || d.Duration > 15 || math.IsNaN(d.Duration) || math.IsInf(d.Duration, 0) {
 			return nil, fmt.Errorf("镜头%d时长必须大于0且不超过15秒", i+1)
 		}
-		shot := models.Shot{ActType: d.ActType, ShotType: d.ShotType, CameraAngle: d.CameraAngle, CameraMovement: d.CameraMovement, TransitionType: d.TransitionType, TransitionNote: d.TransitionNote, StartState: d.StartState, EndState: d.EndState, Duration: d.Duration, Description: d.Description, Dialogue: d.Dialogue, SpeechPresentation: d.SpeechPresentation, ListenerCharacter: d.ListenerCharacter, Emotion: d.Emotion, PromptSubject: d.PromptSubject, PromptAction: d.PromptAction, PromptCamera: d.PromptCamera, PromptLighting: d.PromptLighting, PromptStyle: d.PromptStyle, NegativePrompt: d.NegativePrompt, ActionTimeline: d.ActionTimeline}
+		shot := models.Shot{ActType: d.ActType, ShotType: d.ShotType, CameraAngle: d.CameraAngle, CameraMovement: d.CameraMovement, TransitionType: d.TransitionType, TransitionNote: d.TransitionNote, StartState: d.StartState, EndState: d.EndState, Duration: d.Duration, Description: d.Description, DirectorIntent: d.DirectorIntent, AudienceInformation: d.AudienceInformation, PerformanceTrigger: d.Trigger, Performance: d.Performance, EyeLine: d.EyeLine, Blocking: d.Blocking, Reaction: d.Reaction, FocusSubject: d.FocusSubject, CutReason: d.CutReason, Dialogue: d.Dialogue, SpeechPresentation: d.SpeechPresentation, ListenerCharacter: d.ListenerCharacter, Emotion: d.Emotion, PromptSubject: d.PromptSubject, PromptAction: d.PromptAction, PromptCamera: d.PromptCamera, PromptLighting: d.PromptLighting, PromptStyle: d.PromptStyle, NegativePrompt: d.NegativePrompt, ActionTimeline: d.ActionTimeline}
 		if err := validateShot(&shot); err != nil {
 			return nil, fmt.Errorf("镜头%d: %w", i+1, err)
 		}
@@ -613,6 +638,26 @@ func parseSceneDirectorDraftWithOptions(output string, preserveShortShots bool) 
 		}
 	}
 	return &draft, nil
+}
+
+func requireDirectorThinking(draft *sceneDirectorDraft) error {
+	if draft == nil {
+		return fmt.Errorf("导演草稿为空")
+	}
+	for i := range draft.Shots {
+		shot := &draft.Shots[i]
+		fields := []struct{ name, value string }{
+			{"director_intent", shot.DirectorIntent}, {"audience_information", shot.AudienceInformation},
+			{"trigger", shot.Trigger}, {"performance", shot.Performance}, {"eye_line", shot.EyeLine},
+			{"blocking", shot.Blocking}, {"reaction", shot.Reaction}, {"focus_subject", shot.FocusSubject}, {"cut_reason", shot.CutReason},
+		}
+		for _, field := range fields {
+			if strings.TrimSpace(field.value) == "" {
+				return fmt.Errorf("镜头%d的导演字段%s为空；不能只拆故事，必须说明演员表演与切镜动机", i+1, field.name)
+			}
+		}
+	}
+	return nil
 }
 
 func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue, characterNames ...string) string {
@@ -642,10 +687,11 @@ func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue, characterNam
 4. 纯听者反应镜头承载普通对白时只能承接上一镜已经开始的同一句对白；不能在听者镜头中开始一条新对白，也不能改变说话人。
 5. 同一句对白没有逗号、句号、分号、冒号或省略号等停顿依据时，默认禁止在该处切镜；仅允许说话人在前后镜持续可见并同步表演，或按第3、4条明确切到闭口听者反应且原说话人声音跨切延续。
 6. 每个镜头只能承载一个权威声音身份（同一说话人且同一speech_type）；说话人变化或dialogue、offscreen_dialogue、narration、monologue之间切换时必须切成新的Native镜头，不能用一个speech_presentation覆盖多个声音。
-7. 每镜3–15秒，一个主要情绪、一个主要动作、一种主要构图和明确结束状态。
-8. 对白自然时长决定总时长，不得压缩语速，也不得用重复动作填时长。
-9. 每个输出必须是独立可制作的Native H3镜头，禁止使用 Endless 或 Canvas，也禁止无限延长和单条连续长镜头。
-10. 每镜必须填写speech_presentation：可见说话人口型用visible_speaker_lipsync；闭口听者承接同句声音用listener_reaction_carryover并在listener_character填写唯一听者真实姓名；独立画外对白用offscreen_dialogue；旁白用narration_voiceover；内心独白用internal_monologue；无发声用silent_visual。
+7. 每镜3–15秒，一个主要情绪、一个主要动作、一种主要构图和明确结束状态。每镜必须填写导演字段：director_intent说明本镜为何存在；audience_information只写本镜让观众新获得的信息；trigger写触发角色行动的可见刺激；performance写演员可执行的身体、表情和手部表演；eye_line写视线对象与方向；blocking写人物站位、朝向、重心和移动；reaction写刺激后的可见反应；focus_subject写唯一主要视觉焦点；cut_reason写在此切入或切出的具体动机。
+8. 切镜必须由新信息、视线转移、动作触发、权力变化、听者反应、空间重建、情绪转折或动作结果驱动，禁止按字符数或均分时长机械切镜。角色不得提前知道尚未发生或未被感知的事件。
+9. 对白自然时长决定总时长，不得压缩语速，也不得用重复动作填时长。
+10. 每个输出必须是独立可制作的Native H3镜头，禁止使用 Endless 或 Canvas，也禁止无限延长和单条连续长镜头。
+11. 每镜必须填写speech_presentation：可见说话人口型用visible_speaker_lipsync；闭口听者承接同句声音用listener_reaction_carryover并在listener_character填写唯一听者真实姓名；独立画外对白用offscreen_dialogue；旁白用narration_voiceover；内心独白用internal_monologue；无发声用silent_visual。
 ` + listenerRule + `
 结构化对白：
 ` + strings.Join(lines, "\n")
@@ -1599,6 +1645,9 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		// Every director mode describes internal Scene cut points; standalone 3–15s
 		// template limits are applied only when a Scene is submitted for execution.
 		draft, parseErr := parseSceneDirectorDraftWithOptions(raw, true)
+		if parseErr == nil {
+			parseErr = requireDirectorThinking(draft)
+		}
 		if parseErr == nil && req.Mode == "dialogue_rhythm" {
 			normalizeGeneratedListenerCharacters(draft)
 			parseErr = validateGeneratedDialogueRhythmDraft(draft, dialogues)
@@ -1623,15 +1672,18 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	}
 	serverRepairs := []serverRepair{}
 	draft, err := validateDraft(output)
-	if err != nil && (req.Mode == "dialogue_rhythm" || req.Mode == "action_rhythm" || req.Mode == "combat_design") {
+	if err != nil {
 		initialValidationError := err.Error()
-		repairRequirements := fmt.Sprintf("%s\n上一次草稿校验失败：%s。只修复该错误及其他空必填字段；保持镜头顺序、剧情事实和结构化对白逐字不变。上一次JSON：\n%s", req.Requirements, err.Error(), output)
-		repairInstruction := dialogueRhythmDirectorInstruction(dialogues, authoritativeCharacterList...) + "\n修复对白节奏导演草稿；不得改写、遗漏、重复或新增任何对白。若一个镜头跨越多个权威说话人或speech_type，必须保持原文顺序并拆成多个Native镜头，每镜只保留一个声音身份。必须保留或补齐每镜speech_presentation；仅listener_reaction_carryover可填写listener_character，且必须从上述权威角色白名单逐字选择。"
+		repairRequirements := fmt.Sprintf("%s\n上一次草稿校验失败：%s。只修复该错误及其他空必填字段；保持镜头顺序、剧情事实和结构化对白逐字不变。导演字段必须描述本镜目的、观众新增信息、可感知触发、演员可执行表演、视线、调度、反应、唯一视觉焦点和具体切镜动机，禁止把Scene剧情换句话复述。上一次JSON：\n%s", req.Requirements, err.Error(), output)
+		repairInstruction := "修复完整Scene导演草稿。逐镜补齐本镜目的、观众新增信息、可感知触发、演员可执行表演、视线、人物调度、可见反应、唯一视觉焦点和具体切镜动机；禁止只复述剧情、机械均分时长或让角色预知尚未感知的事件。保持剧情事实、镜头顺序和结构化Dialogue不变。"
+		if req.Mode == "dialogue_rhythm" {
+			repairInstruction = dialogueRhythmDirectorInstruction(dialogues, authoritativeCharacterList...) + "\n修复对白节奏导演草稿；不得改写、遗漏、重复或新增任何对白。若一个镜头跨越多个权威说话人或speech_type，必须保持原文顺序并拆成多个Native镜头，每镜只保留一个声音身份。必须保留或补齐每镜speech_presentation；仅listener_reaction_carryover可填写listener_character，且必须从上述权威角色白名单逐字选择。"
+		}
 		if req.Mode == "dialogue_rhythm" && req.TargetShotCount > 0 {
 			repairInstruction += "\n" + manualDialogueRhythmInstruction(req.TargetShotCount)
 		}
 		if req.Mode == "action_rhythm" || req.Mode == "combat_design" {
-			repairInstruction = "修复武戏/仙术动作节拍草稿；保持实时速度、单一动作结果、空间轴线和结构化对白，不得使用慢动作。"
+			repairInstruction = "修复武戏/仙术动作节拍草稿；保持实时速度、单一动作结果、空间轴线和结构化对白，不得使用慢动作。逐镜补齐本镜目的、观众新增信息、动作触发、演员身体表演、视线、调度、反应、主要视觉焦点和切镜动机。"
 		}
 		repaired, repairErr := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出修复后的完整合法JSON，不要Markdown或解释。", repairInstruction, map[string]string{"scene_facts": scene.Content, "asset_context": assets, "dialogues": dialogueContext, "brief": req.Brief, "requirements": repairRequirements, "combat_references": combatReferenceText, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration)), "target_shot_count": strconv.Itoa(req.TargetShotCount)})
 		if repairErr != nil {

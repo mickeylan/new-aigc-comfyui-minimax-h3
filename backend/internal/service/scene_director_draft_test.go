@@ -9,9 +9,28 @@ import (
 	"comfyui-console/internal/models"
 )
 
-const validSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中景","camera_angle":"平视","camera_movement":"固定","duration":3,"description":"女主走到桌边","dialogue":"","emotion":"警惕","transition_type":"cut","transition_note":"接视线","start_state":"女主站在门边","end_state":"女主停在桌边","prompt_subject":"女主面部清晰","prompt_action":"缓步走到桌边","prompt_camera":"中景平视构图","prompt_lighting":"室内暖侧光","prompt_style":"真人写实电影质感","negative_prompt":"水印，多余人物","checks":["动作可在3秒完成","无新增对白"]}]}`
+const validSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中景","camera_angle":"平视","camera_movement":"固定","duration":3,"description":"女主走到桌边","director_intent":"让观众注意她对桌面异响的警觉","audience_information":"桌边存在尚未确认的异响","trigger":"桌上传来轻微碰撞声","performance":"肩膀收紧，步幅放慢，右手停在桌沿前","eye_line":"视线从门外转向桌面","blocking":"从门边向桌边移动，身体斜对桌面，重心落在后脚","reaction":"听见异响后停步屏息","focus_subject":"女主停在桌边的反应","cut_reason":"她的视线锁定桌面后切入细节镜头","dialogue":"","emotion":"警惕","transition_type":"cut","transition_note":"接视线","start_state":"女主站在门边","end_state":"女主停在桌边","prompt_subject":"女主面部清晰","prompt_action":"缓步走到桌边","prompt_camera":"中景平视构图","prompt_lighting":"室内暖侧光","prompt_style":"真人写实电影质感","negative_prompt":"水印，多余人物","checks":["动作可在3秒完成","无新增对白"]}]}`
 
-const shortSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中景","camera_angle":"平视","camera_movement":"固定","duration":2,"description":"女主走到桌边","dialogue":"","emotion":"警惕","transition_type":"cut","transition_note":"接视线","start_state":"女主站在门边","end_state":"女主停在桌边","prompt_subject":"女主面部清晰","prompt_action":"缓步走到桌边","prompt_camera":"中景平视构图","prompt_lighting":"室内暖侧光","prompt_style":"真人写实电影质感","negative_prompt":"水印，多余人物","checks":["动作可在2秒完成","无新增对白"]}]}`
+const shortSceneDirectorDraft = `{"shots":[{"act_type":"setup","shot_type":"中景","camera_angle":"平视","camera_movement":"固定","duration":2,"description":"女主走到桌边","director_intent":"让观众注意她对桌面异响的警觉","audience_information":"桌边存在尚未确认的异响","trigger":"桌上传来轻微碰撞声","performance":"肩膀收紧，步幅放慢，右手停在桌沿前","eye_line":"视线从门外转向桌面","blocking":"从门边向桌边移动，身体斜对桌面，重心落在后脚","reaction":"听见异响后停步屏息","focus_subject":"女主停在桌边的反应","cut_reason":"她的视线锁定桌面后切入细节镜头","dialogue":"","emotion":"警惕","transition_type":"cut","transition_note":"接视线","start_state":"女主站在门边","end_state":"女主停在桌边","prompt_subject":"女主面部清晰","prompt_action":"缓步走到桌边","prompt_camera":"中景平视构图","prompt_lighting":"室内暖侧光","prompt_style":"真人写实电影质感","negative_prompt":"水印，多余人物","checks":["动作可在2秒完成","无新增对白"]}]}`
+
+func TestSceneDirectorDraftRequiresDirectorThinkingFields(t *testing.T) {
+	draft, err := parseSceneDirectorDraft(validSceneDirectorDraft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shot := draft.Shots[0]
+	if shot.DirectorIntent == "" || shot.AudienceInformation == "" || shot.Trigger == "" || shot.Performance == "" || shot.EyeLine == "" || shot.Blocking == "" || shot.Reaction == "" || shot.FocusSubject == "" || shot.CutReason == "" {
+		t.Fatalf("director thinking fields were not preserved: %+v", shot)
+	}
+	missing := strings.Replace(validSceneDirectorDraft, `"cut_reason":"她的视线锁定桌面后切入细节镜头",`, "", 1)
+	missingDraft, err := parseSceneDirectorDraft(missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := requireDirectorThinking(missingDraft); err == nil || !strings.Contains(err.Error(), "cut_reason") {
+		t.Fatalf("missing cut_reason should be rejected by generation gate, got %v", err)
+	}
+}
 
 func TestSceneDirectorDraftSubjectActionAlias(t *testing.T) {
 	for _, preserve := range []bool{false, true} {

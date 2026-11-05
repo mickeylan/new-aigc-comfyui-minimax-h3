@@ -38,6 +38,16 @@ test('对白节奏镜头持久化结构化发声呈现而非只猜提示词', ()
   assert.match(source, /结构化Dialogue已在草稿生成后发生变化，必须重新生成对白节奏草稿/)
 })
 
+test('AI导演持久化导演意图、演员调度和切镜动机', () => {
+  const source = readFileSync(new URL('../src/components/ShotDirectorEditor.vue', import.meta.url), 'utf8')
+  for (const field of ['director_intent', 'audience_information', 'trigger', 'performance', 'eye_line', 'blocking', 'reaction', 'focus_subject', 'cut_reason']) {
+    assert.match(source, new RegExp(`shot\\.${field}`))
+  }
+  assert.match(source, /导演意图与演员调度/)
+  assert.match(source, /观众新增信息/)
+  assert.match(source, /切镜理由/)
+})
+
 test('武戏导演支持确定性资料检索、正文预览和审核后导入', () => {
   const source = readFileSync(new URL('../src/components/ShotDirectorEditor.vue', import.meta.url), 'utf8')
   const api = readFileSync(new URL('../src/api/index.js', import.meta.url), 'utf8')
