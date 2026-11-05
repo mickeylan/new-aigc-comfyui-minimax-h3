@@ -1645,9 +1645,10 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 				}
 			}
 			if shot.SpeechPresentation == models.ShotSpeechPresentationVisibleSpeaker {
-				if shotExplicitlyExcludesSpeaker(shot, speaker) || shotExplicitlyClosesSpeaker(shot, speaker) {
-					return fmt.Errorf("对白拆镜%d声明visible_speaker_lipsync，但文本明确要求说话人“%s”不入镜或闭口", i+1, speaker)
-				}
+				// Structured presentation is the reviewed/user-editable choice. Free-form
+				// visual prose is too ambiguous to veto it (for example a listener may be
+				// closed-mouth while another speaker talks). Contradictions are surfaced by
+				// buildDialogueRhythmReview as advisories, never as save blockers.
 				continue
 			}
 			speakerVisible := shotShowsSpeaker(shot, speaker)

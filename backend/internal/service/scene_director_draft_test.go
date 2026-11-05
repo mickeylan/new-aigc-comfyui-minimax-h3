@@ -485,8 +485,8 @@ func TestGeneratedDialogueRhythmDraftReturnsEditablePresentationProblems(t *test
 	if err := validateGeneratedDialogueRhythmDraft(draft, dialogues); err != nil {
 		t.Fatalf("editable presentation problem discarded the generated draft: %v", err)
 	}
-	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "燕承") {
-		t.Fatalf("presentation problem was not available to strict/manual audit: %v", err)
+	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
+		t.Fatalf("editable presentation wording blocked strict save validation: %v", err)
 	}
 	review := buildDialogueRhythmReview(draft, dialogues)
 	if len(review) != 1 || review[0].Status != "attention" || !strings.Contains(strings.Join(review[0].Advisories, "|"), "可在导入前人工修改") {
@@ -527,12 +527,16 @@ func TestStructuredVisibleSpeakerPresentationDoesNotRequireMagicText(t *testing.
 		t.Fatalf("structured visible speaker rejected: %v", err)
 	}
 	draft.Shots[0].Description = "阿宁不入镜"
-	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "不入镜或闭口") {
-		t.Fatalf("explicit absence accepted: %v", err)
+	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
+		t.Fatalf("free-form absence wording overrode structured presentation: %v", err)
+	}
+	review := buildDialogueRhythmReview(draft, dialogues)
+	if len(review) != 1 || review[0].Status != "attention" || !strings.Contains(strings.Join(review[0].Advisories, "|"), "可在导入前人工修改") {
+		t.Fatalf("absence wording was not retained as a review advisory: %+v", review)
 	}
 	draft.Shots[0].Description = "阿宁闭口，另一人说话"
-	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "不入镜或闭口") {
-		t.Fatalf("explicit closed speaker accepted: %v", err)
+	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
+		t.Fatalf("free-form closed-mouth wording overrode structured presentation: %v", err)
 	}
 }
 

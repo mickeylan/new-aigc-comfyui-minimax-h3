@@ -272,7 +272,7 @@ func TestReplaceShotsRejectsStaleDialogueSnapshotWithoutMutation(t *testing.T) {
 	}
 }
 
-func TestReplaceShotsWithSnapshotEnforcesAuthoritativeSpeakerPresentation(t *testing.T) {
+func TestReplaceShotsWithSnapshotAllowsReviewedPresentationOverride(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	project := models.Project{Title: "speaker presentation"}
 	db.Create(&project)
@@ -297,22 +297,15 @@ func TestReplaceShotsWithSnapshotEnforcesAuthoritativeSpeakerPresentation(t *tes
 	invalid[1].SpeechPresentation = models.ShotSpeechPresentationVisibleSpeaker
 	invalid[1].ListenerCharacter = ""
 	invalid[1].Description, invalid[1].PromptAction = "姐姐不入镜，妹妹倾听", "妹妹注视前方"
-	if _, err := svc.ReplaceShotsWithDialogueSnapshot(scene.ID, invalid, snapshot); !errors.Is(err, ErrDialogueTimingBlocked) || !strings.Contains(err.Error(), "不入镜或闭口") {
-		t.Fatalf("invalid carryover error=%v", err)
+	if _, err := svc.ReplaceShotsWithDialogueSnapshot(scene.ID, invalid, snapshot); err != nil {
+		t.Fatalf("reviewed presentation override was blocked by free-form wording: %v", err)
 	}
 	var saved []models.Shot
 	if err := db.Where("scene_id = ?", scene.ID).Order("order_num, id").Find(&saved).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(saved) != 2 || saved[1].Description != valid[1].Description || saved[1].SpeechPresentation != models.ShotSpeechPresentationListenerCarry || saved[1].ListenerCharacter != "妹妹" {
-		t.Fatalf("invalid save mutated shots or lost presentation/listener: %+v", saved)
-	}
-	updated, err := svc.UpdateShot(saved[1].ID, map[string]any{"listener_character": "  妹妹  "})
-	if err != nil {
-		t.Fatalf("normalized listener update failed: %v", err)
-	}
-	if updated.ListenerCharacter != "妹妹" {
-		t.Fatalf("validated listener was persisted without normalization: %q", updated.ListenerCharacter)
+	if len(saved) != 2 || saved[1].Description != invalid[1].Description || saved[1].SpeechPresentation != models.ShotSpeechPresentationVisibleSpeaker || saved[1].ListenerCharacter != "" {
+		t.Fatalf("reviewed presentation override was not persisted: %+v", saved)
 	}
 }
 
