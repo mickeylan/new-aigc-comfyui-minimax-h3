@@ -417,7 +417,7 @@ func TestManualDialogueRhythmShotCountIsUserOwnedAndDraftValidated(t *testing.T)
 
 func TestDialogueRhythmInstructionAllowsAttributedCrossCutListenerReaction(t *testing.T) {
 	got := dialogueRhythmDirectorInstruction([]models.Dialogue{{Character: "上官若琳", SpeechType: "dialogue", Text: "继续说话"}})
-	for _, want := range []string{"声音跨切延续", "听者必须闭口", "不能在听者镜头中开始一条新对白", "不得把这种连续对白改写成旁白或独立画外音", "narration不得驱动画面人物口型", "monologue必须明确人物闭口", "禁止使用 Endless 或 Canvas", "speech_presentation", "每个镜头只能承载一个权威声音身份", "说话人变化", "speech_type"} {
+	for _, want := range []string{"声音跨切延续", "听者必须闭口", "不能在听者镜头中开始一条新对白", "不得把这种连续对白改写成旁白或独立画外音", "narration不得驱动画面人物口型", "monologue必须明确人物闭口", "禁止使用 Endless 或 Canvas", "speech_presentation", "多名角色的短促普通dialogue", "同一说话人的长Dialogue", "speech_type"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q: %s", want, got)
 		}
@@ -537,23 +537,23 @@ func TestStructuredVisibleSpeakerAllowsClosedListenerInTwoShot(t *testing.T) {
 	}
 }
 
-func TestDialogueRhythmRejectsMixedAuthoritativeVoicesInOneShot(t *testing.T) {
+func TestDialogueRhythmAllowsSequentialSpeakersButRejectsMixedSpeechTypes(t *testing.T) {
 	dialogues := []models.Dialogue{
 		{ID: 1, Character: "阿宁", SpeechType: "dialogue", Text: "快走！"},
 		{ID: 2, Character: "阿月", SpeechType: "dialogue", Text: "我不走。"},
 	}
-	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 6, Dialogue: "快走！我不走。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}}}
-	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "多个权威说话人或语音类型") {
-		t.Fatalf("mixed speakers accepted: %v", err)
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 6, Dialogue: "快走！我不走。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, ShotType: "双人中景", Description: "阿宁说完后阿月立即回答，二人均在画面中", PromptAction: "阿宁与阿月按顺序同步各自台词口型"}}}
+	if err := validateDialogueRhythmDraft(draft, dialogues); err != nil {
+		t.Fatalf("sequential speakers in one story beat were rejected: %v", err)
 	}
 	review := buildDialogueRhythmReview(draft, dialogues)
-	if len(review) != 1 || review[0].Ready || !strings.Contains(strings.Join(review[0].BlockingIssues, "|"), "多个权威说话人或语音类型") {
-		t.Fatalf("mixed speaker audit not blocked: %+v", review)
+	if len(review) != 1 || !review[0].Ready || len(review[0].BlockingIssues) != 0 {
+		t.Fatalf("sequential speaker audit was blocked: %+v", review)
 	}
 
 	dialogues[1].Character = "阿宁"
 	dialogues[1].SpeechType = "monologue"
-	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "多个权威说话人或语音类型") {
+	if err := validateDialogueRhythmDraft(draft, dialogues); err == nil || !strings.Contains(err.Error(), "多个权威speech_type") {
 		t.Fatalf("mixed speech types accepted: %v", err)
 	}
 }
@@ -1127,6 +1127,25 @@ func TestRestoreDialogueRhythmDraftTextPreservesSpeakerBoundaryAndCrossShotConti
 	}
 	if continuation.Shots[0].Dialogue+continuation.Shots[1].Dialogue != oneSpeaker[0].Text || continuation.Shots[0].Dialogue == "" || continuation.Shots[1].Dialogue == "" {
 		t.Fatalf("same-speaker cross-shot dialogue was not preserved: %#v", continuation.Shots)
+	}
+
+	// A user-requested two-shot scene may contain more than two short speaker turns.
+	// The visual beat owns the cut; authoritative speaker identity remains attached
+	// to each Dialogue row when the H3 prompt is compiled.
+	multiSpeaker := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
+		{Dialogue: "模型遗漏甲乙", Duration: 7, SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, ShotType: "双人中景", Description: "甲乙先后说话"},
+		{Dialogue: "模型遗漏丙", Duration: 6, SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker, ShotType: "三人中景", Description: "丙回应，三人均可见"},
+	}}
+	threeTurns := []models.Dialogue{
+		{Character: "甲", SpeechType: "dialogue", Text: "你终于来了。"},
+		{Character: "乙", SpeechType: "dialogue", Text: "路上耽搁了一会儿。"},
+		{Character: "丙", SpeechType: "dialogue", Text: "先进去再说。"},
+	}
+	if err := restoreDialogueRhythmDraftText(multiSpeaker, threeTurns); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateDialogueRhythmDraft(multiSpeaker, threeTurns); err != nil {
+		t.Fatalf("two story shots with three sequential speakers were rejected: %v; shots=%#v", err, multiSpeaker.Shots)
 	}
 }
 

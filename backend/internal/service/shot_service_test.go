@@ -316,20 +316,20 @@ func TestReplaceShotsWithSnapshotEnforcesAuthoritativeSpeakerPresentation(t *tes
 	}
 }
 
-func TestReplaceShotsRejectsMixedAuthoritativeVoicesWithoutMutation(t *testing.T) {
+func TestReplaceShotsRejectsMixedSpeechTypesWithoutMutation(t *testing.T) {
 	db := newTestDBWithNewModels(t)
 	project := models.Project{Title: "mixed speech rollback"}
 	db.Create(&project)
 	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Status: "video_ready", VideoFile: "keep.mp4"}
 	db.Create(&scene)
-	dialogues := []models.Dialogue{{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: "快走！"}, {ProjectID: project.ID, SceneID: scene.ID, Order: 2, Character: "阿月", SpeechType: "dialogue", Text: "我不走。"}}
+	dialogues := []models.Dialogue{{ProjectID: project.ID, SceneID: scene.ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: "快走！"}, {ProjectID: project.ID, SceneID: scene.ID, Order: 2, Character: "阿月", SpeechType: "monologue", Text: "我不能走。"}}
 	for i := range dialogues {
 		if err := db.Create(&dialogues[i]).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
 	svc := NewShotService(db)
-	existing, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "旧镜头", Duration: 3, Dialogue: "快走！", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}, {ShotType: "旧镜头2", Duration: 3, Dialogue: "我不走。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}})
+	existing, err := svc.ReplaceShots(scene.ID, []models.Shot{{ShotType: "旧镜头", Duration: 3, Dialogue: "快走！", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}, {ShotType: "旧镜头2", Duration: 3, Dialogue: "我不能走。", SpeechPresentation: models.ShotSpeechPresentationMonologue}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,8 +340,8 @@ func TestReplaceShotsRejectsMixedAuthoritativeVoicesWithoutMutation(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = svc.ReplaceShotsWithDialogueSnapshot(scene.ID, []models.Shot{{ShotType: "错误合并镜头", Duration: 6, Dialogue: "快走！我不走。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}}, snapshot)
-	if !errors.Is(err, ErrDialogueTimingBlocked) || !strings.Contains(err.Error(), "多个权威说话人或语音类型") {
+	_, err = svc.ReplaceShotsWithDialogueSnapshot(scene.ID, []models.Shot{{ShotType: "错误合并镜头", Duration: 6, Dialogue: "快走！我不能走。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}}, snapshot)
+	if !errors.Is(err, ErrDialogueTimingBlocked) || !strings.Contains(err.Error(), "多个权威speech_type") {
 		t.Fatalf("mixed speech replacement accepted: %v", err)
 	}
 	var saved []models.Shot
@@ -607,14 +607,14 @@ func TestNativeRegroupRejectsInvalidCombinedDialogueContract(t *testing.T) {
 	}
 	dialogues := []models.Dialogue{
 		{ProjectID: project.ID, SceneID: scenes[0].ID, Order: 1, Character: "阿宁", SpeechType: "dialogue", Text: "快走！"},
-		{ProjectID: project.ID, SceneID: scenes[0].ID, Order: 2, Character: "阿月", SpeechType: "dialogue", Text: "我不走。"},
+		{ProjectID: project.ID, SceneID: scenes[0].ID, Order: 2, Character: "阿月", SpeechType: "monologue", Text: "我不能走。"},
 	}
 	for i := range dialogues {
 		if err := db.Create(&dialogues[i]).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := db.Create(&models.Shot{SceneID: scenes[0].ID, Order: 1, ShotType: "错误合并", Duration: 6, Description: "两人先后说话", Dialogue: "快走！我不走。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}).Error; err != nil {
+	if err := db.Create(&models.Shot{SceneID: scenes[0].ID, Order: 1, ShotType: "错误合并", Duration: 6, Description: "两人先后说话", Dialogue: "快走！我不能走。", SpeechPresentation: models.ShotSpeechPresentationVisibleSpeaker}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&models.Shot{SceneID: scenes[1].ID, Order: 1, ShotType: "空镜", Duration: 3, Description: "落花", SpeechPresentation: models.ShotSpeechPresentationSilent}).Error; err != nil {
@@ -626,7 +626,7 @@ func TestNativeRegroupRejectsInvalidCombinedDialogueContract(t *testing.T) {
 	previewCtx.Request = httptest.NewRequest(http.MethodPost, "/api/projects/x/scenes/y/native-regroup/preview", nil)
 	previewCtx.Params = gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(project.ID), 10)}, {Key: "sid", Value: strconv.FormatUint(uint64(scenes[0].ID), 10)}}
 	service.HandlePreviewNativeSceneRegroup(previewCtx)
-	if previewRecorder.Code != http.StatusUnprocessableEntity || !strings.Contains(previewRecorder.Body.String(), "多个权威说话人或语音类型") {
+	if previewRecorder.Code != http.StatusUnprocessableEntity || !strings.Contains(previewRecorder.Body.String(), "多个权威speech_type") {
 		t.Fatalf("status=%d body=%s", previewRecorder.Code, previewRecorder.Body.String())
 	}
 	var saved []models.Scene

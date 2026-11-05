@@ -806,7 +806,7 @@ func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue, characterNam
 3. 普通dialogue默认让真实说话人清晰可见并由其同步口型；也允许同一句对白跨切到纯听者反应镜头，但必须明确写出“原说话人姓名+声音跨切延续”，听者必须闭口，且不得把这种连续对白改写成旁白或独立画外音。只有明确speech_type为offscreen_dialogue时才设计独立画外对白且说话人不得入镜；narration不得驱动画面人物口型；monologue必须明确人物闭口且不做口型。
 4. 纯听者反应镜头承载普通对白时只能承接上一镜已经开始的同一句对白；不能在听者镜头中开始一条新对白，也不能改变说话人。
 5. 同一句对白没有逗号、句号、分号、冒号或省略号等停顿依据时，默认禁止在该处切镜；仅允许说话人在前后镜持续可见并同步表演，或按第3、4条明确切到闭口听者反应且原说话人声音跨切延续。
-6. 每个镜头只能承载一个权威声音身份（同一说话人且同一speech_type）；说话人变化或dialogue、offscreen_dialogue、narration、monologue之间切换时必须切成新的Native镜头，不能用一个speech_presentation覆盖多个声音。
+6. 同一镜头可按故事顺序承载多名角色的短促普通dialogue，每一段仍绑定各自权威说话人；同一说话人的长Dialogue也可跨镜延续。dialogue、offscreen_dialogue、narration、monologue等不同speech_type不可用一个speech_presentation混合，必须分镜。
 7. 每镜3–15秒，一个主要情绪、一个主要动作、一种主要构图和明确结束状态。每镜必须填写导演字段：director_intent说明本镜为何存在；audience_information只写本镜让观众新获得的信息；trigger写触发角色行动的可见刺激；performance写演员可执行的身体、表情和手部表演；eye_line写视线对象与方向；blocking写人物站位、朝向、重心和移动；reaction写刺激后的可见反应；focus_subject写唯一主要视觉焦点；cut_reason写在此切入或切出的具体动机。
 8. 切镜必须由新信息、视线转移、动作触发、权力变化、听者反应、空间重建、情绪转折或动作结果驱动，禁止按字符数或均分时长机械切镜。角色不得提前知道尚未发生或未被感知的事件。
 9. 对白自然时长决定总时长，不得压缩语速，也不得用重复动作填时长。
@@ -1246,7 +1246,7 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 		speakers, seen := []string{}, map[string]bool{}
 		fragments := []dialogueRhythmFragmentReview{}
 		continuesFrom, continuesTo := false, false
-		voiceIdentities := map[string]bool{}
+		speechTypes := map[string]bool{}
 		if length > 0 {
 			for _, item := range spans {
 				if end <= item.start || start >= item.end {
@@ -1259,8 +1259,8 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 					speakers = append(speakers, name)
 					seen[name] = true
 				}
-				speechType, normalizedSpeaker := normalizeScriptSpeech(item.dialogue.SpeechType, item.dialogue.Character)
-				voiceIdentities[speechType+"\x00"+strings.TrimSpace(normalizedSpeaker)] = true
+				speechType, _ := normalizeScriptSpeech(item.dialogue.SpeechType, item.dialogue.Character)
+				speechTypes[speechType] = true
 				fragments = append(fragments, dialogueRhythmFragmentReview{
 					DialogueID: item.dialogue.ID, GroupKey: item.groupKey, Character: name,
 					SpeechType: speechType, StartRune: item.groupStart + from,
@@ -1304,8 +1304,8 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 		}
 		minimum := dialogueReviewNaturalMinimum(fragments)
 		issues, advisories := []string{}, []string{}
-		if len(voiceIdentities) > 1 {
-			issues = append(issues, "本镜同时混入多个权威说话人或语音类型，单一speech_presentation无法无歧义表达；同一说话人的Dialogue允许跨镜延续，但不同声音身份应落在各自镜头")
+		if len(speechTypes) > 1 {
+			issues = append(issues, "本镜混合多个权威speech_type，单一speech_presentation无法无歧义表达；普通dialogue可包含多名依次说话的角色，但旁白、内心独白或独立画外对白必须分镜")
 		}
 		if minimum > maxSceneVideoDuration {
 			advisories = append(advisories, fmt.Sprintf("本镜权威语音自然时长下限%.1f秒超过Native H3的15秒上限，建议继续拆镜；当前创作节奏仍可预览、保存和制作", minimum))
@@ -1550,16 +1550,16 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 		if text == "" {
 			continue
 		}
-		voiceIdentities := map[string]bool{}
+		speechTypes := map[string]bool{}
 		for _, span := range spans {
 			if end <= span.start || start >= span.end {
 				continue
 			}
-			speechType, normalizedSpeaker := normalizeScriptSpeech(span.dialogue.SpeechType, span.dialogue.Character)
-			voiceIdentities[speechType+"\x00"+strings.TrimSpace(normalizedSpeaker)] = true
+			speechType, _ := normalizeScriptSpeech(span.dialogue.SpeechType, span.dialogue.Character)
+			speechTypes[speechType] = true
 		}
-		if len(voiceIdentities) > 1 {
-			return fmt.Errorf("对白拆镜%d在同一镜内混入多个权威说话人或语音类型；同一说话人的Dialogue可以跨镜延续，但不同声音身份不能被自动恢复到同一镜", i+1)
+		if len(speechTypes) > 1 {
+			return fmt.Errorf("对白拆镜%d在同一镜内混合多个权威speech_type；普通dialogue可由多名角色按故事顺序依次说出，但旁白、内心独白或独立画外对白必须分镜", i+1)
 		}
 		for _, span := range spans {
 			if end <= span.start || start >= span.end {
@@ -1835,7 +1835,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		repairRequirements := fmt.Sprintf("%s\n上一次草稿校验失败：%s。只修复该错误及其他空必填字段；保持镜头顺序、剧情事实和结构化对白逐字不变。导演字段必须描述本镜目的、观众新增信息、可感知触发、演员可执行表演、视线、调度、反应、唯一视觉焦点和具体切镜动机，禁止把Scene剧情换句话复述。上一次JSON：\n%s", req.Requirements, err.Error(), output)
 		repairInstruction := "修复完整Scene导演草稿。逐镜补齐本镜目的、观众新增信息、可感知触发、演员可执行表演、视线、人物调度、可见反应、唯一视觉焦点和具体切镜动机；禁止只复述剧情、机械均分时长或让角色预知尚未感知的事件。保持剧情事实、镜头顺序和结构化Dialogue不变。"
 		if req.Mode == "dialogue_rhythm" {
-			repairInstruction = dialogueRhythmDirectorInstruction(dialogues, authoritativeCharacterList...) + "\n修复对白节奏导演草稿；不得改写、遗漏、重复或新增任何对白。若一个镜头跨越多个权威说话人或speech_type，必须保持原文顺序并拆成多个Native镜头，每镜只保留一个声音身份。必须保留或补齐每镜speech_presentation；仅listener_reaction_carryover可填写listener_character，且必须从上述权威角色白名单逐字选择。"
+			repairInstruction = dialogueRhythmDirectorInstruction(dialogues, authoritativeCharacterList...) + "\n修复对白节奏导演草稿；不得改写、遗漏、重复或新增任何对白。同一说话人的长Dialogue可跨镜，多名角色的短促普通dialogue也可在同镜按故事顺序依次出现；仅不同speech_type必须分镜。必须保留或补齐每镜speech_presentation；仅listener_reaction_carryover可填写listener_character，且必须从上述权威角色白名单逐字选择。"
 		}
 		if req.Mode == "dialogue_rhythm" && req.TargetShotCount > 0 {
 			repairInstruction += "\n" + manualDialogueRhythmInstruction(req.TargetShotCount)
