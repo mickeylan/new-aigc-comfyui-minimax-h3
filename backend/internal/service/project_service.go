@@ -7070,11 +7070,33 @@ func validateH3StoryboardPrompt(prompt string, referenceLines []string) error {
 	return nil
 }
 
+func stripH3StoryboardConstraintNoise(value string) string {
+	lines := strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			kept = append(kept, line)
+			continue
+		}
+		if strings.Contains(trimmed, "五帧候选批次保持同一瞬间") || strings.HasPrefix(trimmed, "静态候选帧硬约束") || strings.HasPrefix(trimmed, "负向硬约束") {
+			continue
+		}
+		// Historical prompts may retain the expanded negative list without its heading.
+		// It is execution metadata, not positive storyboard composition content.
+		if (strings.HasPrefix(trimmed, "禁止") || strings.HasPrefix(trimmed, "不要")) && strings.Count(trimmed, "，")+strings.Count(trimmed, ",") >= 2 {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
 func buildH3StoryboardPrompt(sc *models.Scene, p *models.Project, referenceLines []string) string {
 	definitions, retention, subjects := h3StoryboardSubjects(referenceLines)
-	detail := sanitizeH3ReferencePrompt(h3PromptSection(sc.ImagePrompt, "detailed_description:"))
+	detail := stripH3StoryboardConstraintNoise(sanitizeH3ReferencePrompt(h3PromptSection(sc.ImagePrompt, "detailed_description:")))
 	if detail == "" {
-		detail = sanitizeH3ReferencePrompt(strings.TrimSpace(sc.ImagePrompt))
+		detail = stripH3StoryboardConstraintNoise(sanitizeH3ReferencePrompt(strings.TrimSpace(sc.ImagePrompt)))
 	}
 	if detail == "" {
 		detail = strings.TrimSpace(sc.Content)
@@ -7083,14 +7105,8 @@ func buildH3StoryboardPrompt(sc *models.Scene, p *models.Project, referenceLines
 	detail = strings.TrimSpace(h3StoryboardSubjectPrefixPattern.ReplaceAllString(detail, ""))
 	detail = replaceNonCharacterStoryboardSubjects(detail, referenceLines)
 	detail = enforceStoryboardDirectionalTopology(detail)
-	if !strings.Contains(detail, "五帧候选批次") {
-		detail += "\n静态候选帧硬约束：五帧候选批次保持同一瞬间、同一人物数量与身份、同一姿势、同一空间关系、同一固定机位和同一构图，不发生动作推进、镜头运动或主体位移；仅提取中间帧作为分镜图。"
-	}
 	if h3ClosedNetCuePattern.MatchString(sc.Content+" "+detail) && !strings.Contains(detail, "闭合三维柔性网袋") {
 		detail += "\n空间拓扑硬约束：包裹人物的网必须形成贴近躯干和四肢、前后左右收拢的闭合三维柔性网袋；网绳从身体正面、两侧延续并绕到背后，人物双脚仍接触地面。禁止竖直平面网、网球网、排球网、横杆、晾晒架、把人物悬挂在网上、身体只位于网的一侧。"
-	}
-	if negative := strings.TrimSpace(sc.NegativePrompt); negative != "" {
-		detail += "\n负向硬约束：画面中禁止出现" + negative + "。"
 	}
 	style := ""
 	if p != nil {

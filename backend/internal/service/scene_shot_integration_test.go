@@ -7,12 +7,15 @@ import (
 	"comfyui-console/internal/models"
 )
 
-func TestStoryboardSubmissionIncludesSceneNegativePrompt(t *testing.T) {
-	scene := &models.Scene{Content: "角色站在殿内", ImagePrompt: "角色抬头看向门口", NegativePrompt: "现代汽车, 水印"}
+func TestStoryboardSubmissionExcludesStaticAndNegativeConstraintNoise(t *testing.T) {
+	scene := &models.Scene{Content: "角色站在殿内", ImagePrompt: "角色抬头看向门口\n静态候选帧硬约束：五帧候选批次保持同一瞬间、同一姿势。\n负向硬约束：画面中禁止出现现代汽车、水印、额外人物。\n禁止额外人物，禁止字幕水印，禁止口型错位。", NegativePrompt: "现代汽车, 水印"}
 	prompt := buildH3StoryboardPrompt(scene, &models.Project{Style: "真人写实"}, []string{"<Picture 1>：角色参考图"})
-	for _, want := range []string{"角色抬头看向门口", "负向硬约束", "现代汽车", "水印"} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("submission prompt missing %q: %s", want, prompt)
+	if !strings.Contains(prompt, "角色抬头看向门口") {
+		t.Fatalf("positive storyboard content missing: %s", prompt)
+	}
+	for _, forbidden := range []string{"静态候选帧硬约束", "五帧候选批次", "负向硬约束", "现代汽车", "字幕水印", "口型错位"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("storyboard constraint noise retained %q: %s", forbidden, prompt)
 		}
 	}
 }

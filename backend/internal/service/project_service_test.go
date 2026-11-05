@@ -1764,10 +1764,15 @@ func TestBuildH3StoryboardPromptKeepsEnvironmentAndNetAsPicturesAndClosesNetVolu
 		"<Subject 1> 是 <Picture 1>", "<Subject 2> 是 <Picture 2>",
 		"<Picture 3> establishes the full-frame environment", "<Picture 4> only establishes the appearance",
 		"the prop matching <Picture 4>", "the full-frame environment established by <Picture 3>",
-		"五帧候选批次保持同一瞬间", "闭合三维柔性网袋", "禁止竖直平面网", "人物双脚仍接触地面",
+		"闭合三维柔性网袋", "禁止竖直平面网", "人物双脚仍接触地面",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("storyboard enclosure contract missing %q: %s", want, prompt)
+		}
+	}
+	for _, forbidden := range []string{"静态候选帧硬约束", "五帧候选批次", "负向硬约束"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("storyboard prompt retained removed constraint %q: %s", forbidden, prompt)
 		}
 	}
 	if err := validateH3StoryboardPrompt(prompt, lines); err != nil {
