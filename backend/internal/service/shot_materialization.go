@@ -244,7 +244,6 @@ func resetMaterializedScene(child *models.Scene, source models.Scene) {
 	if child.ID != 0 {
 		return
 	}
-	child.AdvisoryReportsJSON = "" // history stays on the archived source scene
 	child.ImageFile, child.ImageToken, child.ImageTaskID, child.VideoTaskID, child.VideoFile, child.VideoInputFile = "", "", "", "", "", ""
 	child.VideoGPU, child.ImageCandidateParentID, child.VideoCandidateParentID = nil, nil, nil
 	child.VideoFullPrompt, child.VideoPromptMasterZH, child.VideoTemplate, child.VideoFirstFrameImg, child.VideoLastFrameImg = "", "", "", "", ""

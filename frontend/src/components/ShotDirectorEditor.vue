@@ -244,7 +244,6 @@ async function regroupExistingScenes() {
     const lines=(preview.items||[]).map(v=>`${v.order}. ${v.duration}秒 · 合并${(v.shot_ids||[]).length}个原Scene`).join('\n')
     if(!window.confirm(`将当前同组${preview.shot_count}个短Scene重新合并为${preview.items.length}个Native场景：\n\n${lines}\n\n${preview.warning}\n\n是否继续？`)) return
     const {data}=await api.regroupNativeScenes(props.projectId,preview.source_scene_id)
-    for (const warning of data.dialogue_transfer_audit?.warnings || []) toast.warning(warning)
     toast.success(`已重新合并为${data.count}个Native场景，内部Shot保持不变`)
     emit('scene-materialized',data.first_scene_id)
   } catch(e) {
@@ -262,7 +261,6 @@ async function materializeNativeScenes() {
     const lines=(preview.items||[]).map(v=>`${v.order}. ${v.duration}秒 · 包含${(v.shot_ids||[]).length}个Shot · ${v.title}${v.dialogue?'\n   台词：'+v.dialogue:'\n   无台词'}`).join('\n')
     if(!window.confirm(`将${preview.shot_count||shots.value.length}个导演Shot按15秒上限合并为${preview.items.length}个可独立生成图片和视频的Native场景：\n\n${lines}\n\n${preview.warning}\n\n是否继续？`)) return
     const {data}=await api.materializeShots(props.projectId,preview.source_scene_id)
-    for (const warning of data.dialogue_transfer_audit?.warnings || []) toast.warning(warning)
     toast.success(`已拆成${data.count}个可制作场景，可在时间轴逐段生成图片和视频`)
     emit('scene-materialized',data.first_scene_id)
   } catch(e) {

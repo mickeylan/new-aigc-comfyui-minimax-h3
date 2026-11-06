@@ -254,7 +254,6 @@ type Scene struct {
 	BlockingImageApplied     bool       `gorm:"-" json:"blocking_image_applied"`
 	BlockingVideoApplied     bool       `gorm:"-" json:"blocking_video_applied"`
 	DialogueAnalysisJSON     string     `gorm:"column:dialogue_analysis_json;type:text" json:"dialogue_analysis_json"` // 原文台词及 AI 归属审阅数据
-	AdvisoryReportsJSON      string     `gorm:"column:advisory_reports_json;type:text" json:"-"`                       // 用户显式保存的分镜检查记录（有界历史）
 	ImageRetries             int        `gorm:"column:image_retries" json:"image_retries"`                             // 画面生成已重试次数
 	VideoRetries             int        `gorm:"column:video_retries" json:"video_retries"`                             // 视频生成已重试次数
 	ImageCandidateParentID   *uint      `gorm:"column:image_candidate_parent_id" json:"-"`                             // 当前图片任务的候选分支来源

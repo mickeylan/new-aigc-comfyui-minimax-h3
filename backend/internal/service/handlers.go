@@ -1181,7 +1181,6 @@ func (s *Service) HandleMaterializeShots(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "必须明确确认拆成可制作场景"})
 		return
 	}
-	beforeDialogues, beforeAuditErr := resolveSceneDialogueTransfer(s.DB, p.ID, []uint{uint(sceneID)})
 	scenes, err := s.Shots.Materialize(p.ID, uint(sceneID))
 	if err != nil {
 		if errors.Is(err, ErrDialogueTimingBlocked) {
@@ -1195,12 +1194,7 @@ func (s *Service) HandleMaterializeShots(c *gin.Context) {
 	if len(scenes) > 0 {
 		firstID = scenes[0].ID
 	}
-	createdIDs := make([]uint, 0, len(scenes))
-	for _, scene := range scenes {
-		createdIDs = append(createdIDs, scene.ID)
-	}
-	audit := auditDialogueTransfer(s.DB, p.ID, beforeDialogues, beforeAuditErr, createdIDs)
-	c.JSON(200, gin.H{"scenes": scenes, "count": len(scenes), "first_scene_id": firstID, "dialogue_transfer_audit": audit})
+	c.JSON(200, gin.H{"scenes": scenes, "count": len(scenes), "first_scene_id": firstID})
 }
 
 func (s *Service) HandlePreviewNativeSceneRegroup(c *gin.Context) {
@@ -1242,23 +1236,6 @@ func (s *Service) HandleNativeSceneRegroup(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "必须明确确认重新合并场景"})
 		return
 	}
-	var beforeDialogues []models.Dialogue
-	var beforeAuditErr error
-	if preview, previewErr := s.Shots.PreviewExistingNativeRegroup(p.ID, uint(sceneID)); previewErr != nil {
-		beforeAuditErr = previewErr
-	} else {
-		sourceIDs := make([]uint, 0)
-		seen := map[uint]bool{}
-		for _, item := range preview.Items {
-			for _, id := range item.ShotIDs {
-				if !seen[id] {
-					seen[id] = true
-					sourceIDs = append(sourceIDs, id)
-				}
-			}
-		}
-		beforeDialogues, beforeAuditErr = resolveSceneDialogueTransfer(s.DB, p.ID, sourceIDs)
-	}
 	scenes, err := s.Shots.RegroupExistingNativeScenes(p.ID, uint(sceneID))
 	if err != nil {
 		if errors.Is(err, ErrDialogueTimingBlocked) {
@@ -1272,12 +1249,7 @@ func (s *Service) HandleNativeSceneRegroup(c *gin.Context) {
 	if len(scenes) > 0 {
 		firstID = scenes[0].ID
 	}
-	createdIDs := make([]uint, 0, len(scenes))
-	for _, scene := range scenes {
-		createdIDs = append(createdIDs, scene.ID)
-	}
-	audit := auditDialogueTransfer(s.DB, p.ID, beforeDialogues, beforeAuditErr, createdIDs)
-	c.JSON(200, gin.H{"scenes": scenes, "count": len(scenes), "first_scene_id": firstID, "dialogue_transfer_audit": audit})
+	c.JSON(200, gin.H{"scenes": scenes, "count": len(scenes), "first_scene_id": firstID})
 }
 
 func (s *Service) HandleGetSceneShots(c *gin.Context) {
