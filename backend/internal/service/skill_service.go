@@ -116,11 +116,11 @@ func (s *SkillService) InitSystemSkills() error {
 			IsSystem:       true, Enabled: true, SortOrder: 1,
 		},
 		{
-			Name: "人物站位分析", Code: sceneBlockingSkillCode, Operation: sceneBlockingSkillCode, Version: 1,
-			Description:    "从Scene原文明示事实生成可编辑的站位、机位、视线、遮挡和动作前后空间关系预览",
+			Name: "人物站位分析", Code: sceneBlockingSkillCode, Operation: sceneBlockingSkillCode, Version: 2,
+			Description:    "从Scene原文明示事实生成可编辑的站位、机位、视线、遮挡和带证据空间关系预览",
 			Stage:          models.SkillStageStoryboard,
 			PromptTemplate: "Scene原文：{{scene_content}}\n上一镜已保存站位：{{previous_blocking}}",
-			SystemPrompt:   "只输出合法JSON，并严格区分facts原文事实与suggestions AI建议。不得从引用图片或文件名臆测视觉细节，不自动保存。",
+			SystemPrompt:   "只输出合法JSON，包含schema_version=2及最多40项relations；关系kind仅限interpersonal、camera、object_function、motion。严格区分原文事实与AI建议：source=fact必须附非空逐字evidence，推导使用source=suggestion。关系必须写清subject、reference、relation；群臣面向皇帝时，群臣后方机位不代表群臣背对皇帝。剑尖仅在原文明示攻击目标时可作为事实指向目标，否则只能建议，禁止默认总指向他人。不得从引用图片或文件名臆测视觉细节，不自动保存。",
 			IsSystem:       true, Enabled: true, SortOrder: 1,
 		},
 		// video_prompt 阶段技能

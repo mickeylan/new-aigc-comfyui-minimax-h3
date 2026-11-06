@@ -89,6 +89,10 @@
             <input id="llama_model" v-model="form.llama_model" type="text" class="input" placeholder="qwen3.5-9b" />
             <div class="field-hint">与服务器启动时加载的模型名一致</div>
           </div>
+          <div class="field span-2">
+            <label><input v-model="form.llama_vision_enabled" type="checkbox" true-value="true" false-value="false" /> 启用图片理解（默认关闭）</label>
+            <div class="field-hint">仅在已部署支持图片输入的视觉语言模型与对应多模态组件后启用。用于分镜图建议性检查；勾选不是能力检测，不支持的模型会返回错误，不会假装已检查图片。</div>
+          </div>
         </div>
       </div>
 
@@ -342,6 +346,8 @@ onMounted(async () => {
     if (!form.value.text_provider) {
       form.value.text_provider = 'volcano'
     }
+    // 图片理解必须由用户明确启用；不根据模型名猜测能力。
+    form.value.llama_vision_enabled = data.llama_vision_enabled === 'true' ? 'true' : 'false'
     // 设置 llama 默认值
     if (!form.value.llama_base_url) {
       form.value.llama_base_url = 'http://localhost:8080/v1'

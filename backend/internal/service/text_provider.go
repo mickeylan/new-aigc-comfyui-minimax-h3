@@ -3,10 +3,12 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -22,6 +24,17 @@ type TextProviderCapability struct {
 type MultimodalTextProvider interface {
 	TextProvider
 	ChatWithImage(system, user, imagePath string) (string, error)
+}
+
+// MultimodalImageBytesProvider accepts an already-validated image snapshot.
+type MultimodalImageBytesProvider interface {
+	TextProvider
+	ChatWithImageBytes(system, user string, data []byte) (string, error)
+}
+
+// MultimodalSupport optionally gates a provider's multimodal implementation at runtime.
+type MultimodalSupport interface {
+	SupportsMultimodal() bool
 }
 
 var ErrMultimodalUnsupported = fmt.Errorf("selected text provider does not support multimodal messages")
@@ -82,9 +95,10 @@ func newOpenAICompatibleProvider(db IGetter, name, baseURLKey, modelKey, apiKeyK
 
 // Setting keys for llama provider
 const (
-	SettingLlamaBaseURL = "llama_base_url"
-	SettingLlamaModel   = "llama_model"
-	SettingTextProvider = "text_provider" // "volcano" | "llama"
+	SettingLlamaBaseURL       = "llama_base_url"
+	SettingLlamaModel         = "llama_model"
+	SettingLlamaVisionEnabled = "llama_vision_enabled"
+	SettingTextProvider       = "text_provider" // "volcano" | "llama"
 )
 
 const (
@@ -123,6 +137,10 @@ func (l *LlamaProvider) Name() string {
 	return l.name
 }
 
+func (l *LlamaProvider) SupportsMultimodal() bool {
+	return l.name == "llama.cpp" && l.db != nil && strings.EqualFold(strings.TrimSpace(l.db.GetSetting(SettingLlamaVisionEnabled, "false")), "true")
+}
+
 // OpenAI-compatible request/response types
 type openAIChatReq struct {
 	Model          string                `json:"model"`
@@ -150,8 +168,13 @@ type openAIChoice struct {
 }
 
 type openAIMessageContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type     string          `json:"type"`
+	Text     string          `json:"text,omitempty"`
+	ImageURL *openAIImageURL `json:"image_url,omitempty"`
+}
+
+type openAIImageURL struct {
+	URL string `json:"url"`
 }
 
 type openAIError struct {
@@ -188,6 +211,93 @@ func (l *LlamaProvider) Chat(system, user string) (string, error) {
 		lastErr = err
 	}
 	return "", lastErr
+}
+
+func (l *LlamaProvider) ChatWithImage(system, user, imagePath string) (string, error) {
+	if !l.SupportsMultimodal() {
+		return "", ErrMultimodalUnsupported
+	}
+	f, err := os.Open(imagePath)
+	if err != nil {
+		return "", fmt.Errorf("invalid image")
+	}
+	defer f.Close()
+	const maxImageBytes = 20 << 20
+	data, err := io.ReadAll(io.LimitReader(f, maxImageBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("invalid image size")
+	}
+	return l.ChatWithImageBytes(system, user, data)
+}
+
+func (l *LlamaProvider) ChatWithImageBytes(system, user string, data []byte) (string, error) {
+	if !l.SupportsMultimodal() {
+		return "", ErrMultimodalUnsupported
+	}
+	const maxImageBytes = 20 << 20
+	if len(data) == 0 || len(data) > maxImageBytes {
+		return "", fmt.Errorf("invalid image size")
+	}
+	contentType := http.DetectContentType(data)
+	if contentType != "image/png" && contentType != "image/jpeg" && contentType != "image/webp" {
+		return "", fmt.Errorf("unsupported image format")
+	}
+
+	cfg := l.Config()
+	if !cfg.Configured() {
+		return "", fmt.Errorf("llama.cpp vision is not configured")
+	}
+	content := []openAIMessageContent{{Type: "text", Text: user}, {Type: "image_url", ImageURL: &openAIImageURL{URL: "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data)}}}
+	messages := make([]map[string]any, 0, 2)
+	if system != "" {
+		messages = append(messages, map[string]any{"role": "system", "content": system})
+	}
+	messages = append(messages, map[string]any{"role": "user", "content": content})
+	requestBody := struct {
+		Model    string           `json:"model"`
+		Messages []map[string]any `json:"messages"`
+		Stream   bool             `json:"stream"`
+	}{cfg.Model, messages, false}
+	body, err := json.Marshal(requestBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode vision request")
+	}
+	endpoint := strings.TrimRight(cfg.BaseURL, "/") + "/chat/completions"
+	req, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("invalid vision endpoint")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if cfg.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	}
+	resp, err := l.httpc.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("llama.cpp vision request failed")
+	}
+	defer resp.Body.Close()
+	responseData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read llama.cpp vision response")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("llama.cpp vision endpoint returned status %d", resp.StatusCode)
+	}
+	var out openAIChatResp
+	if err := json.Unmarshal(responseData, &out); err != nil {
+		return "", fmt.Errorf("invalid llama.cpp vision response")
+	}
+	if out.Error != nil {
+		return "", fmt.Errorf("llama.cpp vision endpoint returned an error")
+	}
+	if len(out.Choices) == 0 {
+		return "", fmt.Errorf("llama.cpp vision response contained no choices")
+	}
+	contentText := stripThinkBlocks(out.Choices[0].Message.Content)
+	if contentText == "" {
+		return "", fmt.Errorf("llama.cpp vision response contained no answer")
+	}
+	return contentText, nil
 }
 
 func (l *LlamaProvider) chatOnce(system, user string) (string, error) {
@@ -342,7 +452,10 @@ func TextProviderCapabilities(provider TextProvider) TextProviderCapability {
 		return capability
 	}
 	capability.Provider = provider.Name()
-	_, capability.MultimodalMessages = provider.(MultimodalTextProvider)
+	_, capability.MultimodalMessages = provider.(MultimodalImageBytesProvider)
+	if support, ok := provider.(MultimodalSupport); ok {
+		capability.MultimodalMessages = capability.MultimodalMessages && support.SupportsMultimodal()
+	}
 	capability.FirstFrameGroundedPolish = capability.MultimodalMessages
 	return capability
 }
@@ -355,6 +468,9 @@ func (f *TextProviderFactory) PolishWithFirstFrame(system, user, imagePath strin
 	provider := f.Create()
 	multimodal, ok := provider.(MultimodalTextProvider)
 	if !ok {
+		return "", ErrMultimodalUnsupported
+	}
+	if support, ok := provider.(MultimodalSupport); ok && !support.SupportsMultimodal() {
 		return "", ErrMultimodalUnsupported
 	}
 	return multimodal.ChatWithImage(system, user, imagePath)

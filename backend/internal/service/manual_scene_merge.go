@@ -307,6 +307,7 @@ func (s *Service) ApplyManualSceneMerge(projectID uint, ids []uint, expected str
 		first.VisibleCharacters = union(func(sc models.Scene) string { return sc.VisibleCharacters })
 		first.VoiceCharacters = union(func(sc models.Scene) string { return sc.VoiceCharacters })
 		first.MentionedCharacters = union(func(sc models.Scene) string { return sc.MentionedCharacters })
+		first.AdvisoryReportsJSON = "" // preserve history on archived sources only
 		first.ImageFile = ""
 		first.VideoFile = ""
 		first.VideoInputFile = ""
@@ -540,10 +541,15 @@ func (s *Service) HandleApplyManualSceneMerge(c *gin.Context) {
 		c.JSON(422, gin.H{"error": "invalid request"})
 		return
 	}
+	beforeDialogues, beforeAuditErr := resolveSceneDialogueTransfer(s.DB, uint(id), req.SceneIDs)
 	p, e := s.ApplyManualSceneMerge(uint(id), req.SceneIDs, req.SourceHash)
 	if e != nil {
 		mergeHTTPError(c, e)
 		return
 	}
-	c.JSON(200, p)
+	audit := auditDialogueTransfer(s.DB, uint(id), beforeDialogues, beforeAuditErr, []uint{p.ID})
+	c.JSON(200, struct {
+		*models.Scene
+		DialogueTransferAudit DialogueTransferAudit `json:"dialogue_transfer_audit"`
+	}{Scene: p, DialogueTransferAudit: audit})
 }
