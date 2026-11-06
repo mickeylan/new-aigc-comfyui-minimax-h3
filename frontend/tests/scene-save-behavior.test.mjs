@@ -27,7 +27,7 @@ function fixture() {
     canonicalSceneReferences: JSON.stringify, sceneOutfitAssignments: () => [],
     savingScene: { value: false }, storyApplyBusy: { value: false }, sceneError: { value: '' },
     api: { updateScene: async (...args) => { calls.push(args); return request }, updateSceneReferences: () => assert.fail('unchanged references written'), updateSceneOutfits: () => assert.fail('unchanged outfits written') },
-    id: () => 1, nextTick: async () => {},
+    id: () => 1, nextTick: async () => {}, sceneWorkspaceBaseline: { value: '' }, sceneWorkspaceState: () => '{}',
     sceneShotDirector: { value: { syncAuthoritativeSceneContent: content => synced.push(content) } },
     closeSceneWorkspace: () => assert.fail('new or retained workspace closed'), toast: { show() {} }
   }

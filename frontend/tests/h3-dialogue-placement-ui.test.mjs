@@ -30,7 +30,7 @@ test('GET 和异步重新生成均按 epoch 后写入定位状态，并在场景
   assert.match(detail, /videoTaskDialoguePlacement\.value = normalizeDialoguePlacement\(preview\.dialogue_placement\)/)
   assert.match(detail, /videoTaskDialoguePlacement\.value = normalizeDialoguePlacement\(data\.dialogue_placement\)/)
   assert.match(detail, /if \(epoch !== videoPromptRequestEpoch \|\| videoTaskScene\.value\?\.id !== sceneId\) return[\s\S]*videoTaskDialoguePlacement\.value = normalizeDialoguePlacement\(data\.dialogue_placement\)/)
-  assert.match(detail, /function closeVideoPrompt\(\)[\s\S]*videoTaskDialoguePlacement\.value = emptyDialoguePlacement\(\)/)
+  assert.match(detail, /function closeVideoPrompt\(force = false\)[\s\S]*videoTaskDialoguePlacement\.value = emptyDialoguePlacement\(\)/)
   assert.match(detail, /async function viewVideoPrompt\(sc\)[\s\S]*videoTaskDialoguePlacement\.value = emptyDialoguePlacement\(\)/)
 })
 
