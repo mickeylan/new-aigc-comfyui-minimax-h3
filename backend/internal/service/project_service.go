@@ -642,18 +642,86 @@ func qwenSceneReferenceIsLocation(line string) bool {
 }
 
 func qwenSceneReferenceBinding(tag, line string) string {
-	return "严格遵循" + tag + "的" + qwenSceneReferenceRole(line)
+	desc := qwenSceneReferenceDescription(line)
+	switch {
+	case strings.Contains(desc, "角色"):
+		return tag + "仅锁定" + desc + "的身份与外形"
+	case strings.Contains(desc, "场景") || strings.Contains(desc, "环境"):
+		return tag + "锁定全幅环境与空间布局"
+	case strings.Contains(desc, "道具"):
+		return tag + "仅锁定" + desc + "的物件外观"
+	case strings.Contains(desc, "造型") || strings.Contains(desc, "套装"):
+		return tag + "仅锁定同一角色的服装造型"
+	default:
+		return tag + "作为外观参考"
+	}
+}
+
+func compactStaticVisualPrompt(value string, maxRunes int) string {
+	value = strings.TrimSpace(value)
+	if maxRunes <= 0 || len([]rune(value)) <= maxRunes {
+		return value
+	}
+	parts := regexp.MustCompile(`[；;。\n]+`).Split(value, -1)
+	seen := map[string]bool{}
+	kept := make([]string, 0, len(parts))
+	total := 0
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		key := strings.ToLower(strings.Join(strings.Fields(part), ""))
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		length := len([]rune(part))
+		if total > 0 && total+length+1 > maxRunes {
+			continue
+		}
+		if length > maxRunes {
+			part = string([]rune(part)[:maxRunes])
+			length = maxRunes
+		}
+		kept = append(kept, part)
+		total += length + 1
+		if total >= maxRunes {
+			break
+		}
+	}
+	return strings.Join(kept, "；")
+}
+
+func stripQwenReferenceDutyRepetition(value string) string {
+	parts := regexp.MustCompile(`[；;。\n]+`).Split(value, -1)
+	kept := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		if qwenImageTagPattern.MatchString(trimmed) && (strings.Contains(trimmed, "严格遵循") || strings.Contains(trimmed, "仅提供") || strings.Contains(trimmed, "参考图")) {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "重构一张独立新画布上的静止剧情首帧") {
+			continue
+		}
+		kept = append(kept, trimmed)
+	}
+	return strings.Join(kept, "；")
 }
 
 func ensureQwenSceneReferenceBindings(prompt string, referenceLines []string) string {
-	prompt = strings.TrimSpace(prompt)
+	prompt = stripQwenReferenceDutyRepetition(strings.TrimSpace(prompt))
+	prompt = compactStaticVisualPrompt(prompt, 1100)
 	if len(referenceLines) == 0 {
 		return prompt
 	}
 	if len(referenceLines) == 1 {
 		prompt = strings.ReplaceAll(prompt, "<image1>", "该参考素材")
 		prompt = strings.ReplaceAll(prompt, "输入图", "该参考素材")
-		return "重构一张独立新画布上的静止剧情首帧：" + qwenSceneReferenceBinding("输入图", referenceLines[0]) + "；" + prompt
+		return "静止剧情首帧。参考绑定：" + qwenSceneReferenceBinding("输入图", referenceLines[0]) + "。画面：" + prompt
 	}
 	bindings := make([]string, 0, len(referenceLines))
 	for i, line := range referenceLines {
@@ -667,7 +735,7 @@ func ensureQwenSceneReferenceBindings(prompt string, referenceLines []string) st
 		}
 		prompt = strings.ReplaceAll(prompt, tag, desc)
 	}
-	return "重构一张独立新画布上的静止剧情首帧：" + strings.Join(bindings, "；") + "。" + prompt
+	return "静止剧情首帧。参考绑定：" + strings.Join(bindings, "；") + "。画面：" + prompt
 }
 
 var qwenImageTagPattern = regexp.MustCompile(`<image([1-9][0-9]*)>`)
@@ -723,7 +791,7 @@ func (s *ProjectService) redesignQwenSceneImagePrompt(sc *models.Scene, project 
 	if hasRefs {
 		system = qwenImage21EditSystem
 	}
-	qwenSceneSystem := system + `\nThis is a Qwen-Image-2.1 single static opening-keyframe prompt, not a director plan. Follow the selected Qwen T2I or image-edit contract exactly. Use only supplied opening-keyframe visual facts. For a referenced new composition, begin with a concrete operation verb and bind each input to one explicit source responsibility; no input is the canvas. Then state the finished frame's medium/style, subject count and identity source, exact frozen pose, prop ownership, foreground/midground/background spatial anchors, camera framing and fixed viewpoint, environment materials, palette, light source/direction/quality, cast shadows and highlights, and end with one composition summary. A canonical character name and any supplied alias identify one person in one position, never duplicate people. Character references supply identity; outfit references supply styling for that same character; environment references supply the full-frame space; prop references supply only the integrated object's appearance and never create a person. For a net, rope, chain or flexible restraint enclosing a person, describe the positive final topology as a closed three-dimensional flexible volume wrapping around the front, sides and back of the body, not as an independent display object. When head-tail orientation or foreground-background direction is authoritative, state the complete camera-to-subject depth axis and remove narrative attack wording that implies an opposite target. Do not mention project/scene/shot numbers, dialogue, timing, transitions, cuts, camera movement, start/end state, future action, or abstract emotion. Never write tracking, pan, tilt, dolly, push-in or pull-out language. Convert motion into one frozen body pose with visible dust, fabric and hair state. Output one continuous paragraph in the request language inside rewritten_prompt.`
+	qwenSceneSystem := system + `\nThis is a Qwen-Image-2.1 single static opening-keyframe prompt, not a director plan. Keep rewritten_prompt concise: one paragraph, at most 700 Chinese characters or 450 English words. State each reference responsibility once; never repeat identity, age, body proportion, material or environment specifications in the visual body after binding them. Follow the selected Qwen T2I or image-edit contract exactly. Use only supplied opening-keyframe visual facts. For a referenced new composition, begin with a concrete operation verb and bind each input to one explicit source responsibility; no input is the canvas. Prioritize only subject count and placement, frozen pose, prop ownership, foreground/midground/background, fixed framing, environment, and light. A canonical character name and any supplied alias identify one person in one position, never duplicate people. Character references supply identity; outfit references supply styling for that same character; environment references supply the full-frame space; prop references supply only the integrated object's appearance and never create a person. For a net, rope, chain or flexible restraint enclosing a person, describe the positive final topology as a closed three-dimensional flexible volume wrapping around the front, sides and back of the body, not as an independent display object. When head-tail orientation or foreground-background direction is authoritative, state the complete camera-to-subject depth axis and remove narrative attack wording that implies an opposite target. Do not mention project/scene/shot numbers, dialogue, timing, transitions, cuts, camera movement, start/end state, future action, or abstract emotion. Never write tracking, pan, tilt, dolly, push-in or pull-out language. Convert motion into one frozen body pose with visible dust, fabric and hair state. Output one continuous paragraph in the request language inside rewritten_prompt.`
 	user := fmt.Sprintf("User request:\n输出一个静止首帧的最终画面描述，不要复述导演参数。题材：%s；画风：%s；地点：%s；道具：%s。%s\n\nOpening-keyframe visual facts (the only Shot facts allowed):\n%s\n\nVerified appearance and environment facts:\n%s", project.Genre, project.Style, sc.LocationName, sc.Props, framingRule, shotContext, assetContext)
 	if hasRefs {
 		user += "\n\nOrdered input image roles (order is binding):"
@@ -734,7 +802,7 @@ func (s *ProjectService) redesignQwenSceneImagePrompt(sc *models.Scene, project 
 				user += fmt.Sprintf("\n<image%d>: role=%s", i+1, qwenSceneReferenceRole(line))
 			}
 		}
-		user += "\nThis is a new composition built from assigned references, not a restrained canvas edit. No input is the canvas; ratio_follow must be empty and wh_ratio must use the project aspect ratio. Preserve identity by reference binding rather than redescribing faces."
+		user += "\nBuild a new composition. Bind each reference once; do not redescribe faces, body proportions, prop specifications, or environment construction in the final paragraph."
 	} else {
 		user += "\n\n无输入参考图。"
 	}
@@ -6701,13 +6769,17 @@ func (s *ProjectService) buildSceneImagePrompt(sc *models.Scene) string {
 }
 
 func (s *ProjectService) buildQwenSceneExecutionPrompt(sc *models.Scene, referenceLines []string) string {
-	_ = referenceLines // numbering was validated against these lines before execution
 	prompt := strings.TrimSpace(sc.ImagePrompt)
 	if prompt == "" {
 		prompt = strings.TrimSpace(sc.Content)
 	}
-	// The reviewed Qwen prompt already contains the model-specific, ordered input
-	// responsibilities exactly once. Do not prepend them again at execution time.
+	// Recompile historical verbose prompts at execution time as well. Binding is
+	// deterministic and idempotent, so old repeated reference prose is removed.
+	if len(referenceLines) > 0 {
+		prompt = ensureQwenSceneReferenceBindings(prompt, referenceLines)
+	} else {
+		prompt = compactStaticVisualPrompt(prompt, 1100)
+	}
 	prompt = enforceStoryboardDirectionalTopology(prompt)
 	parts := []string{prompt}
 	if h3ClosedNetCuePattern.MatchString(sc.Content+" "+prompt) && !strings.Contains(prompt, "闭合三维柔性网袋") {
@@ -7105,6 +7177,7 @@ func buildH3StoryboardPrompt(sc *models.Scene, p *models.Project, referenceLines
 	detail = strings.TrimSpace(h3StoryboardSubjectPrefixPattern.ReplaceAllString(detail, ""))
 	detail = replaceNonCharacterStoryboardSubjects(detail, referenceLines)
 	detail = enforceStoryboardDirectionalTopology(detail)
+	detail = compactStaticVisualPrompt(detail, 1100)
 	if h3ClosedNetCuePattern.MatchString(sc.Content+" "+detail) && !strings.Contains(detail, "闭合三维柔性网袋") {
 		detail += "\n空间拓扑硬约束：包裹人物的网必须形成贴近躯干和四肢、前后左右收拢的闭合三维柔性网袋；网绳从身体正面、两侧延续并绕到背后，人物双脚仍接触地面。禁止竖直平面网、网球网、排球网、横杆、晾晒架、把人物悬挂在网上、身体只位于网的一侧。"
 	}

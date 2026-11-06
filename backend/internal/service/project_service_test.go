@@ -1953,7 +1953,7 @@ func TestEnsureQwenSceneReferenceBindingsDeterministicallyAddsMissingImages(t *t
 	if strings.Contains(got, "<Picture") {
 		t.Fatalf("H3 picture tag leaked: %s", got)
 	}
-	for _, want := range []string{"严格遵循<image1>", "严格遵循<image2>", "严格遵循<image3>", "人物身份、面部、年龄感与身体比例参考"} {
+	for _, want := range []string{"<image1>仅锁定角色「上官若琳」四视图的身份与外形", "<image2>锁定全幅环境与空间布局", "<image3>仅锁定角色「上官若彤」四视图的身份与外形"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("reference-role constraint missing %q: %s", want, got)
 		}
@@ -1963,16 +1963,33 @@ func TestEnsureQwenSceneReferenceBindingsDeterministicallyAddsMissingImages(t *t
 		t.Fatalf("location role incomplete: %s", role)
 	}
 	locationBinding := qwenSceneReferenceBinding("<image3>", "- <Picture 3>：场景「玉霄宫寝殿」参考图")
-	if !strings.Contains(locationBinding, "严格遵循<image3>") || !strings.Contains(locationBinding, "环境结构、空间布局、材质与固定陈设参考") {
+	if locationBinding != "<image3>锁定全幅环境与空间布局" {
 		t.Fatalf("location reference was not authoritative: %s", locationBinding)
 	}
-	for _, forbidden := range []string{"不要求", "仅当Scene或Shot要求", "只提供", "不作为必须复刻"} {
+	for _, forbidden := range []string{"不要求", "仅当Scene或Shot要求", "只提供", "不作为必须复刻", "人物身份、面部、年龄感与身体比例参考"} {
 		if strings.Contains(got, forbidden) || strings.Contains(locationBinding, forbidden) {
 			t.Fatalf("reference binding contains weakening policy %q: %s", forbidden, got)
 		}
 	}
 	if err := validateQwenScenePrompt(got, 3); err != nil {
 		t.Fatalf("completed prompt invalid: %v", err)
+	}
+}
+
+func TestQwenAndH3StoryboardPromptsCompactRepeatedReferenceResponsibilities(t *testing.T) {
+	lines := []string{
+		"- <Picture 1>：角色「柳乐儿」四视图", "- <Picture 2>：角色「齐姓道士」四视图",
+		"- <Picture 3>：角色「马脸男子」四视图", "- <Picture 4>：角色「燕承」四视图；别名「虬髯大汉」",
+		"- <Picture 5>：场景「齐人高的杂草丛」参考图", "- <Picture 6>：道具「旧拨浪鼓」四视图",
+	}
+	verbose := "重构一张独立新画布上的静止剧情首帧：严格遵循<image1>的角色柳乐儿四视图的人物身份、面部、年龄感与身体比例参考；严格遵循<image2>的角色齐姓道士四视图的人物身份、面部、年龄感与身体比例参考；严格遵循<image3>的角色马脸男子四视图的人物身份、面部、年龄感与身体比例参考；严格遵循<image4>的角色燕承四视图的人物身份、面部、年龄感与身体比例参考；严格遵循<image5>的场景参考图环境结构、空间布局、材质与固定陈设参考；严格遵循<image6>的旧拨浪鼓造型材质颜色结构参考。柳乐儿位于前景偏右，四名追兵分布在后景不同距离，旧拨浪鼓握在柳乐儿右手；固定中近景，火光从左后方照亮人物侧脸。"
+	qwen := ensureQwenSceneReferenceBindings(verbose, lines)
+	if len([]rune(qwen)) > 1400 || strings.Contains(qwen, "人物身份、面部、年龄感与身体比例参考") || strings.Count(qwen, "<image1>") != 1 {
+		t.Fatalf("Qwen prompt was not compacted: %s", qwen)
+	}
+	h3 := buildH3StoryboardPrompt(&models.Scene{ImagePrompt: "[Shot 1] " + strings.Repeat("柳乐儿位于前景偏右；", 100) + "四名追兵分布在后景不同距离。"}, &models.Project{}, lines)
+	if len([]rune(h3PromptSection(h3, "detailed_description:"))) > 1400 {
+		t.Fatalf("H3 detail exceeded compact budget: %d", len([]rune(h3PromptSection(h3, "detailed_description:"))))
 	}
 }
 
@@ -1987,12 +2004,12 @@ func TestBuildQwenSceneExecutionPromptKeepsLocationOnlyAndForbidsPeople(t *testi
 	}
 	sc := models.Scene{ProjectID: p.ID, ImageEngine: ImageEngineQwen21, ImagePrompt: "重构一张独立新画布上的静止剧情首帧：严格遵循输入图的场景「玉霄宫」参考图的环境结构、空间布局、材质与固定陈设参考；天阙宗玉霄峰巍峨耸立于云海之上", ReferenceImagesJSON: `[{"source_type":"asset","source_id":22,"variant":"image","use_krea2":true,"use_h3":false}]`}
 	got := ps.buildQwenSceneExecutionPrompt(&sc, []string{"- <Picture 1>：场景「玉霄宫」参考图"})
-	for _, want := range []string{"严格遵循输入图", "场景「玉霄宫」参考图", "环境结构、空间布局、材质与固定陈设", "独立新画布上的静止剧情首帧", "天阙宗玉霄峰", "零人物", "No people"} {
+	for _, want := range []string{"输入图锁定全幅环境与空间布局", "静止剧情首帧", "天阙宗玉霄峰", "零人物", "No people"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("prompt missing %q: %s", want, got)
 		}
 	}
-	if strings.Count(got, "严格遵循输入图") != 1 {
+	if strings.Count(got, "输入图锁定全幅环境与空间布局") != 1 {
 		t.Fatalf("reviewed input responsibility duplicated at execution: %s", got)
 	}
 	for _, forbidden := range []string{"<image1>", "舒寒：", "主要角色外貌特征", "当前项目 Skill", "masterpiece", "居中构图、中景、半身像"} {
