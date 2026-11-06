@@ -17,8 +17,9 @@ type h3DialoguePlan struct {
 	Placements []h3DialoguePlanPlacement `json:"placements"`
 }
 type h3DialoguePlanPlacement struct {
-	Index int `json:"index"`
-	Shot  int `json:"shot"`
+	Index int    `json:"index"`
+	Shot  int    `json:"shot"`
+	After string `json:"after,omitempty"`
 }
 
 var h3PlanFence = regexp.MustCompile("(?s)^\\s*```(?:json)?\\s*(.*?)\\s*```\\s*$")
@@ -43,7 +44,7 @@ func (s *ProjectService) composeH3DialogueTimeline(sc *models.Scene, visual stri
 		return visual, nil
 	}
 	diagnosis := DiagnoseH3DialoguePlacement(visual, valid, referenceLines)
-	if len(diagnosis.Unplaced) == 0 && len(placedOccurrences(visual)) == len(valid) {
+	if len(diagnosis.Unplaced) == 0 && len(placedOccurrences(visual)) == len(valid) && !h3DialogueOnlyAtShotEnds(visual) {
 		return visual, nil
 	}
 	if s == nil || s.textProvider == nil {
@@ -82,7 +83,7 @@ func (s *ProjectService) composeH3DialogueTimeline(sc *models.Scene, visual stri
 		"scene_content": content, "accepted_visual_timeline": visual,
 		"actual_shot_numbers": shots, "quotes": quotes, "known_placements_must_preserve": known,
 	})
-	system := `Select the most natural existing shot for each reviewed quote, using scene_content and accepted_visual_timeline as planning context. Do not rewrite any prose. Return only JSON: {"placements":[{"index":0,"shot":1}]}. Include every quote index exactly once in source order. Use only actual_shot_numbers. Preserve every known placement exactly.`
+	system := `Place each reviewed quote at its actual spoken beat, using scene_content and accepted_visual_timeline as planning context. Do not rewrite prose. Return only JSON: {"placements":[{"index":0,"shot":1,"after":"exact complete visual clause"}]}. "after" must be an exact, unique, complete substring from that shot's visual prose: the visual beat after which speech occurs and before subsequent action. Include every quote index exactly once in source order. Use only actual_shot_numbers. Preserve every known shot placement exactly.`
 
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
@@ -140,6 +141,13 @@ func validateH3DialoguePlan(plan h3DialoguePlan, dubs []models.Dialogue, visual 
 		if shot, ok := known[p.Index]; ok && shot != p.Shot {
 			return fmt.Errorf("known placement changed")
 		}
+		if p.After != "" {
+			body := stripStructuredDialogueFromAction(visual, dubs)
+			shotBody, ok := h3ShotBody(body, p.Shot)
+			if !ok || strings.Count(shotBody, p.After) != 1 {
+				return fmt.Errorf("quote %d after anchor must occur exactly once in shot %d", p.Index, p.Shot)
+			}
+		}
 		if start, _, ok := parseDialogueTimeSegment(dubs[p.Index].TimeSegment); ok && len(starts) == len(markers) {
 			i := sort.Search(len(starts), func(i int) bool { return starts[i] > start }) - 1
 			if i < 0 || p.Shot != mustShotNumber(markers[i][1]) {
@@ -176,31 +184,92 @@ func renderH3PlannedDialogue(d models.Dialogue, id int, refs []string) string {
 
 func applyH3DialoguePlan(visual string, dubs []models.Dialogue, refs []string, plan h3DialoguePlan) string {
 	body := stripStructuredDialogueFromAction(visual, dubs)
-	byShot := map[int][]string{}
 	ids := dialogueSpeakerIDs(dubs)
-	for _, p := range plan.Placements {
-		byShot[p.Shot] = append(byShot[p.Shot], renderH3PlannedDialogue(dubs[p.Index], ids[p.Index], refs))
+	type insertion struct {
+		at, order int
+		text      string
 	}
-	matches := h3BareShotPattern.FindAllStringSubmatchIndex(body, -1)
+	var inserts []insertion
+	for order, p := range plan.Placements {
+		clause := renderH3PlannedDialogue(dubs[p.Index], ids[p.Index], refs)
+		start, end, ok := h3ShotBounds(body, p.Shot)
+		if !ok {
+			continue
+		} // validated plans cannot reach this path
+		at := end
+		if p.After != "" {
+			at = start + strings.Index(body[start:end], p.After) + len(p.After)
+		} else {
+			for at > start && strings.ContainsRune(" \t\r\n", rune(body[at-1])) {
+				at--
+			}
+		}
+		inserts = append(inserts, insertion{at, order, " " + clause})
+	}
+	sort.SliceStable(inserts, func(i, j int) bool {
+		if inserts[i].at == inserts[j].at {
+			return inserts[i].order < inserts[j].order
+		}
+		return inserts[i].at < inserts[j].at
+	})
 	var out strings.Builder
+	last := 0
+	for i := 0; i < len(inserts); {
+		at := inserts[i].at
+		out.WriteString(body[last:at])
+		for i < len(inserts) && inserts[i].at == at {
+			out.WriteString(inserts[i].text)
+			i++
+		}
+		last = at
+	}
+	out.WriteString(body[last:])
+	return out.String()
+}
+
+func h3ShotBounds(body string, shot int) (int, int, bool) {
+	matches := h3BareShotPattern.FindAllStringSubmatchIndex(body, -1)
 	for i, m := range matches {
-		if i == 0 {
-			out.WriteString(body[:m[0]])
-		}
-		next := len(body)
-		if i+1 < len(matches) {
-			next = matches[i+1][0]
-		}
-		segment := strings.TrimRight(body[m[0]:next], " \t\r\n")
-		out.WriteString(segment)
-		shot, _ := strconv.Atoi(body[m[2]:m[3]])
-		if clauses := byShot[shot]; len(clauses) > 0 {
-			out.WriteString(" ")
-			out.WriteString(strings.Join(clauses, " "))
-		}
-		if next < len(body) {
-			out.WriteString("\n")
+		n, _ := strconv.Atoi(body[m[2]:m[3]])
+		if n == shot {
+			end := len(body)
+			if i+1 < len(matches) {
+				end = matches[i+1][0]
+			}
+			return m[0], end, true
 		}
 	}
-	return out.String()
+	return 0, 0, false
+}
+
+func h3ShotBody(body string, shot int) (string, bool) {
+	start, end, ok := h3ShotBounds(body, shot)
+	if !ok {
+		return "", false
+	}
+	return body[start:end], true
+}
+
+// A fully reconciled timeline is normally left untouched. The exception is the
+// old renderer's tell-tale form: every dialogue tag is the final content in its shot.
+func h3DialogueOnlyAtShotEnds(body string) bool {
+	occ := placedOccurrences(body)
+	if len(occ) == 0 {
+		return false
+	}
+	for _, o := range occ {
+		_, end, ok := h3ShotBounds(body, o.shot)
+		if !ok {
+			return false
+		}
+		tagEnd := strings.Index(body[o.position:end], "</d>")
+		if tagEnd < 0 {
+			return false
+		}
+		tail := strings.Trim(body[o.position+tagEnd+len("</d>"):end], " \t\r\n.!?。；;<scenetrans><cutoff>")
+		if tail != "" {
+			return false
+		}
+	}
+	return true
 }
