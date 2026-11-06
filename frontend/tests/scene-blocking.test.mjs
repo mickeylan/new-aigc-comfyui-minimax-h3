@@ -19,10 +19,12 @@ test('Scene卡提供可读中文站位表单与保存入口', () => {
 })
 
 test('站位异步请求捕获sceneId并忽略已关闭或切换场景的响应', () => {
-  assert.match(detail, /const sceneId = blockingScene\.value\.id;[\s\S]*?analyzeSceneBlocking\(id\(\), sceneId\)/)
-  assert.match(detail, /const sceneId = blockingScene\.value\.id;[\s\S]*?inheritSceneBlocking\(id\(\), sceneId\)/)
-  assert.match(detail, /saveSceneBlocking\(id\(\),sceneId,value\); if \(blockingScene\.value\?\.id !== sceneId\) return/)
+  assert.match(detail, /const sceneId = blockingScene\.value\.id;[\s\S]*?analyzeSceneBlocking\(projectId, sceneId\)/)
+  assert.match(detail, /const sceneId = blockingScene\.value\.id;[\s\S]*?inheritSceneBlocking\(projectId, sceneId\)/)
+  assert.match(detail, /saveSceneBlocking\(projectId,sceneId,value\); if \(blockingScene\.value\?\.id !== sceneId\) return/)
   assert.ok((detail.match(/blockingScene\.value\?\.id !== sceneId/g) || []).length >= 3)
+  assert.ok((detail.match(/epoch !== blockingEpoch \|\| id\(\) !== projectId/g) || []).length >= 3)
+  assert.match(detail, /function closeBlocking\(\)\{ blockingEpoch\+\+/)
   assert.match(detail, /local\.blocking_json=JSON\.stringify\(data\.blocking\);local\.prompt_stale=true/)
   assert.doesNotMatch(detail, /local\.(image_file|video_file)\s*=/)
 })

@@ -2408,6 +2408,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	generationContent := sceneDialogueGenerationContent(sc)
 	canonicalSceneContent := normalizeUserH3ShotMarkers(generationContent)
 	canonicalSceneContent, explicitTimedShotCount := normalizeSceneTimedBeats(canonicalSceneContent, normalizeSceneDuration(sc.Duration))
+	sourceEventLedger := formatH3SourceEventLedger(canonicalSceneContent)
 	dubs := s.sceneVideoDialogues(sc)
 	shots, err := s.currentSceneDirectorShots(sc)
 	if err != nil {
@@ -2445,16 +2446,16 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 		}
 		dialogueContext = strings.Join(lines, "\n")
 	}
-	combatDetailRule := "每个Shot只写一个紧凑英文段落，约25至45个英文单词：当前构图与主体位置、一个主要动作或状态变化、一种运镜，以及必要光线。"
+	combatDetailRule := "每个Shot围绕一个主要动作或同一连续因果过程写一个紧凑英文段落；主要动作可以包含多个必要中间步骤，绝不能只保留起点和终点。25至45个英文单词只是简单事件的说明性参考，不是上限。若完整编译当前正文的可见过程需要更长，必须写足，不得为字数删除、合并或概括源事件。"
 	if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
 		combatDetailRule = "每个武戏Shot使用足够但不冗余的英文动作描述，通常约60至120词；不得为满足短文本而把输入中明确的动作步骤压缩成martial forms、brandishing、sweeping strokes等概括词。输入已明确的每个步法、武器轨迹、停止点和收势必须逐项保留。"
 	}
 	system := fmt.Sprintf(`你是 MiniMax H3 Ref2VA 视频动作编辑。只输出简洁的 detailed_description 正文，不输出字段名、解释、规则或 Markdown。
 除结构化Dialogue原文外，输出必须全部使用简洁自然的英文。使用官方 [Shot 1] 和 [Shot N] At MM:SS.mmm, 控制格式；不得翻译、复述或自行补写对白。
-正文是给视频模型执行的镜头指令，不是剧本复述。%s不得用分号堆砌同义短语。
+正文是给视频模型执行的镜头指令，不是剧本复述；必须完整编译用户当前正文的可见过程，不是写摘要。%s不得用分号堆砌同义短语。
 运镜必须自然融入动作句：明确运动类型；仅在确有意义时写小/大幅度和慢/快速，正常速度与中等幅度省略。运镜可以随时间从固定转为移动，按镜头时间顺序表达清楚，避免把人物运动误写成摄影机运动。
-忠实采用Scene与结构化Shot，但不得复述剧情背景、人物关系、前因后果、心理活动、内心想法、氛围解释或观众感受；禁止“仿佛想说什么”“未说出口的问题”“沉默中充满”等文学化语言暗示。
-第一句以 [Shot 1] 开头，说明画面可从%s参考状态开始；随后直接写动作与镜头。不得新增角色、对白、道具、地点、胜负、伤亡或剧情结果。武戏中若原文只写来袭动作而未写应对，必须依据实际人物状态、资产、空间关系和既有能力设计不改变剧情结果的即时可见应对，不得让被攻击者站立观察。
+按源文原序保留可见的起因/触发、物质或对象的出现与状态转变、主动运动的方向和作用力、对象间接触/作用、传播过程，以及环境最终状态。这些是动作链，不属于应删除的文学“前因后果”。不得复述剧情背景（指不可见的背景解释）、人物关系、心理活动、内心想法、氛围解释或观众感受；禁止“仿佛想说什么”“未说出口的问题”“沉默中充满”等文学化语言暗示。
+第一句以 [Shot 1] 开头，说明画面可从%s参考状态开始；随后直接写动作与镜头。不得新增角色、对白、道具、地点、胜负、伤亡或剧情结果。不得创造用户未写的威胁、攻击、应对或剧情推进。只有源文明确写出的角色反应才能加入；禁止为制造戏剧性而补出防御、反击或新结果。
 Dialogue只决定人物是否开口及必要口型时机；对白文本将由系统确定性加入，你不得在正文输出台词、<d>标签或改写台词。无结构化对白时，人物保持闭口，不得描写嘴唇微张、欲言又止或任何说话暗示。
 正文中的人物身份占位必须逐字使用【场景剧情】和【Shot导演设计】里的中文真实角色名，以便系统确定性替换为正确 <Subject N>；其余视觉叙述使用英文。严禁拼音、英文音译、别名，也禁止自行猜测Subject编号。
 四视图只负责人物身份与服装，场景图只负责环境；不得从参考图反推剧情，不得复述或猜测外貌、服装、陈设。
@@ -2476,13 +2477,13 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		}
 	}
 	if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
-		actionTask += "\n\n【武戏硬任务】动作必须从开头立即以正常实时速度启动；来袭攻击必须在同一Shot中触发立即可见的响应。武器、法宝、灵兽、术法和能量形态只能读取下方Scene、Shot与实际参考绑定，不得用通用武器替换，不得创造未提供的装备或术法。原文未给出命中或胜负时，只能设计不改变结果的即时可见应对，不得生成站立观察，不得擅自决定命中、击杀、受伤或胜负。主要动作爆发应在开头1–2秒完成，余下时间只延续权威事实中已有的环境反馈与结束状态，禁止把接近过程拉满整段。"
+		actionTask += "\n\n【武戏硬任务】动作必须从开头立即以正常实时速度启动。武器、法宝、灵兽、术法和能量形态只能读取下方Scene与实际参考绑定，不得用通用武器替换，不得创造未提供的装备或术法。严格编译原文实际写出的攻击、应对、命中、胜负与环境反馈；原文没有写出的威胁或响应一律不得补造。主要动作爆发应在开头1–2秒完成，余下时间只延续权威事实中已有的环境反馈与结束状态，禁止把接近过程拉满整段。"
 	}
-	contentInstruction := "只提取执行本镜所必需的信息，不要把资料中的背景解释逐段复述进输出。"
+	contentInstruction := "完整编译用户当前正文中全部可见事件，不要写摘要；背景解释可省略，但不得省略任何可见因果链、触发、物质出现、对象状态转变、运动方向、作用力、交互、传播或环境结局。SOURCE EVENT LEDGER只是完整性清单，不要求一个EVENT对应一个Shot，也不得据其数量强制定时或切镜。"
 	if explicitTimedShotCount > 0 {
 		contentInstruction = "逐段忠实编译Scene显式时间轴中的全部可见事实；不得把具体观察、手部动作、道具状态、步法、视线、说话动作或结束状态概括掉。"
 	}
-	user := fmt.Sprintf("目标时长：%.1f秒。%s场景剧情中已明确存在的每个[Shot N]都必须原序保留，禁止合并或删除。%s\n\n【场景剧情（视觉与时间线权威）】\n%s\n\n【Shot导演设计（仅在Scene没有显式时间轴时作为动作权威）】\n%s\n\n【结构化对白（仅判断口型时机）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s%s", normalizeSceneDuration(sc.Duration), contentInstruction, actionTask, canonicalSceneContent, shotContext, dialogueContext, strings.Join(refLines, "\n"), sceneBlockingPromptContext(sc))
+	user := fmt.Sprintf("目标时长：%.1f秒。%s场景剧情中已明确存在的每个[Shot N]都必须原序保留，禁止合并或删除。%s\n\n【场景剧情（视觉与时间线最高权威）】\n%s\n\n【SOURCE EVENT LEDGER（逐项覆盖，不是Shot计划）】\n%s\n\n【Shot导演设计（仅供机位、构图、光线等电影化语境；不得覆盖、删减或替换当前Scene事实，即使Scene没有显式时间轴）】\n%s\n\n【结构化对白（仅判断口型时机）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s%s", normalizeSceneDuration(sc.Duration), contentInstruction, actionTask, canonicalSceneContent, sourceEventLedger, shotContext, dialogueContext, strings.Join(refLines, "\n"), sceneBlockingPromptContext(sc))
 	policy, err := NewPromptPolicyService(s.db).Resolve(PromptPolicyContext{ProjectID: sc.ProjectID, SceneID: &sc.ID}, PromptPolicyVideoPolish, system)
 	if err != nil {
 		return "", fmt.Errorf("解析视频提示词策略失败: %w", err)
@@ -2503,6 +2504,9 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 	// 只能由查看/正式提交路径读取，绝不能在AI失败时偷偷回填，否则每次点击都会
 	// 返回完全相同的旧提示词，看起来像模型从未执行。
 	authoritativeFallback := func() string {
+		if (sc.StoryContentEdited || sc.DirectorSourceStale) && strings.TrimSpace(canonicalSceneContent) != "" {
+			return resolveH3VisualConflicts(coalesceDuplicateH3Shots(stripPromptDialogueNarration(canonicalSceneContent)))
+		}
 		if suggestedShotCount > 1 {
 			if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
 				return defaultSceneVideoAction(sc)
@@ -2512,7 +2516,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		if len(promptShots) > 0 {
 			return rebuildStructuredShotAction(promptShots)
 		}
-		if strings.Contains(canonicalSceneContent, "[Shot ") {
+		if strings.TrimSpace(canonicalSceneContent) != "" {
 			return resolveH3VisualConflicts(coalesceDuplicateH3Shots(stripPromptDialogueNarration(canonicalSceneContent)))
 		}
 		return defaultSceneVideoAction(sc)
@@ -2694,7 +2698,7 @@ Dialogue只决定人物是否开口及必要口型时机；对白文本将由系
 		failedDraft := boundDraft
 		repairedOK := false
 		for attempt := 1; attempt <= 2; attempt++ {
-			repairUser := fmt.Sprintf("Rewrite the draft into concise official English H3 shot prose using the authoritative Scene facts below. Produce exactly %d Shot paragraphs in original event order; omit, merge, reorder, retime, or invent nothing.%s Convert psychology into visible facial or posture changes. For dressing, show physical garment handling and intermediate states instead of jumping to the completed outfit. For combat or spell clashes, motion begins immediately at full real-time speed; each attack must reach a visible block, dodge, counter, impact, displacement, or landing within that Shot. Never leave a threatened defender merely standing, gripping a weapon, or watching. No slow motion, bullet time, hovering display, prolonged charging, or lingering pause. Output no dialogue, <d>, headings, Markdown or explanation. End with a complete sentence.\n\nEXACT FAILURES TO FIX:\n%s\n\nAUTHORITATIVE SCENE FACTS:\n%s\n\nINCOMPLETE DRAFT TO REPAIR:\n%s", expectedShotCount, balanceRule, actionTrustIssues(failedDraft), authoritativeFacts, failedDraft)
+			repairUser := fmt.Sprintf("Rewrite the draft into concise official English H3 shot prose using the authoritative Scene facts below. Produce exactly %d Shot paragraphs in original event order; omit, merge, reorder, retime, or invent nothing.%s Convert psychology into visible facial or posture changes. For dressing, show physical garment handling and intermediate states instead of jumping to the completed outfit. Visible cause-and-effect mechanics are executable facts, not optional background: retain every stated trigger, object appearance, state transition, force interaction, propagation and environmental result in source order. For combat or spell clashes, motion proceeds at full real-time speed; include only the responses and outcomes actually stated in the authoritative source, never invent a defender, counterattack or impact. No slow motion, bullet time, hovering display, prolonged charging, or lingering pause. Output no dialogue, <d>, headings, Markdown or explanation. End with a complete sentence.\n\nEXACT FAILURES TO FIX:\n%s\n\nAUTHORITATIVE SCENE FACTS:\n%s\n\nINCOMPLETE DRAFT TO REPAIR:\n%s", expectedShotCount, balanceRule, actionTrustIssues(failedDraft), authoritativeFacts, failedDraft)
 			repaired, repairErr := chatAction(repairUser)
 			if repairErr != nil {
 				continue
@@ -3243,7 +3247,7 @@ func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Di
 	for _, name := range names {
 		// 接受“林采薇说道：\"...\"”“传来林采薇的声音说道：\"...\"”等明确发声写法。
 		// 必须同时具备已知角色名、明确说话动词和引号原文，避免把剧情说明猜成对白。
-		pattern := regexp.MustCompile(regexp.QuoteMeta(name) + `[^。！？!?\r\n]{0,80}?(?:厉喝|怒喝|大喝|喝道|喝喊|喊道|叫道|高喊|刚喊完|喊完|刚说完|说完|说道|回答道?|回应道?|说|问道|答道|开口(?:道)?)(?:\s*[:：]\s*["“]?|\s*["“])([^"”]+)["”]`)
+		pattern := regexp.MustCompile(regexp.QuoteMeta(name) + `[^。！？!?\r\n]{0,160}?(?:厉喝|怒喝|大喝|喝道|喝喊|喊道|叫道|高喊|刚喊完|喊完|刚说完|说完|说道|回答道?|回应道?|念过一声|念道|念诵|说|问道|答道|开口(?:道)?)(?:\s*[:：]\s*["“]?|\s*["“])([^"”]+)["”]`)
 		for _, match := range pattern.FindAllStringSubmatchIndex(content, -1) {
 			clauseStart := 0
 			if boundary := strings.LastIndexAny(content[:match[0]], "。！？!?；;\r\n"); boundary >= 0 {
