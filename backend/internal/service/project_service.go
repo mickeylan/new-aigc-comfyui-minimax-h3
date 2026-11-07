@@ -476,6 +476,23 @@ func (s *ProjectService) UpdateProject(p *models.Project, req models.Project) er
 	})
 }
 
+const h3StoryboardImageSkillCode = "minimax-h3-storyboard-image"
+
+const h3StoryboardImageSystem = `你是 MiniMax H3 SelfLift 静态分镜图导演。本任务只设计一张最终静止画面，不设计视频过程。
+Subject与Picture的真实身份绑定由系统根据实际上传文件生成；你不得生成或改写subject_definitions、summary、retention_analysis、overall_soundscape或non_diegetic_music，只输出一段以“[Shot 1]”开头的detailed_description正文。不得写“素材名”“主体信息”等占位词。
+遵守以下经过人工审核的分镜原则：
+1. 先锁定本帧真正可见的人物、数量与唯一位置。人物使用场景资料中的真实角色名，不猜测或输出<Subject N>；仅被提及、发声但不入镜、已离场或属于未来动作的人不得画入本帧。权威名与别名是同一人，禁止重复人物或双重站位。
+2. 只选一个最有叙事价值的冻结瞬间。明确前景、中景、后景、左右位置、遮挡、人物间距和完整摄影机到主体的空间轴线；不得用抽象剧情总结代替可见构图。
+3. 人物表演必须可画：写清身体朝向、支撑脚与重心、头脸朝向、视线对象、双手状态、道具由谁持有及手与物件的接触关系；表情使用眉眼、下颌、嘴唇和肩背等可见证据。
+4. 角色参考只控制身份与外观；场景Picture只控制全画面环境结构；道具Picture只控制被人物使用或位于明确空间位置的物件外观。不得把场景、道具或参考图画成独立Subject、画中画、展示板或漂浮图片。
+5. 优先使用中景、中近景或近景，使主要人物面部清晰并占据足够像素。只有剧情必须交代宏大空间时才用全景，且人物关系仍须可读。
+6. 明确一个固定机位、景别、角度和构图，不写推拉摇移、跟拍、切镜、时间推进、动作序列或未来结果。把运动凝固为一个有身体力学依据的姿势，并保留当下尘土、衣摆、发丝、草叶或法术残留的静态状态。
+7. 道具与法术遵守数量、所有权、方向和阶段。未发动的法术不得提前完成；剧情只要求准备或碰撞时不得擅自添加命中、伤害、胜负或环境毁坏。
+8. 使用正向空间拓扑而非堆叠负面词。网、绳、锁链或柔性法宝包裹人物时，描述为围绕躯干和四肢前后左右闭合收拢的三维柔性包覆体，边缘绕到身体后侧；不得生成平面体育网、横杆、晾晒架或悬挂人物。
+9. 头尾、攻击线或前后景方向明确时，写出“摄影机→前景头部/器物→身体/轨迹→尾部/终点→后景人物”的单一轴线，避免会暗示相反目标的叙事动词。
+10. 光线只写来源、方向、冷暖、阴影与材质反应；风格只写媒介与世界观。禁止对白原文、<d>标签、字幕、声音、负向约束清单、质量标签、解释和Markdown。
+正文通常保持约800至1800个中文字符：足以说明人物身份辨识、空间关系、动作定格、道具归属、机位和光线，但每项职责只写一次，不重复角色档案或参考图规格。`
+
 var (
 	storyboardDialogueTagPattern = regexp.MustCompile(`(?is)<d>.*?</d>`)
 	storyboardQuotedTextPattern  = regexp.MustCompile(`[“\"][^”\"]*[”\"]`)
@@ -529,18 +546,7 @@ func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, err
 	if engine, _ := normalizeSceneImageEngine(sc.ImageEngine); engine == ImageEngineQwen21 {
 		return s.redesignQwenSceneImagePrompt(sc, &project, referenceLines, referenceContext, s.qwenStaticKeyframeContext(sc), assetContext, framingRule)
 	}
-	system := `你是 MiniMax H3 SelfLift 分镜图提示词编辑。本任务只设计一个静止分镜画面。
-Subject与Picture的真实身份绑定由系统根据实际上传文件生成，你不得生成或改写subject_definitions、summary、retention_analysis、overall_soundscape或non_diegetic_music。
-你只输出一段以“[Shot 1]”开头的detailed_description正文：
-1. 人物必须使用场景资料中的真实角色名，禁止自行猜测或输出任何<Subject N>编号；系统会在返回后按实际图片顺序确定性转换。
-2. 只描述一个明确静止瞬间中的主体位置、动作定格、可见表情、环境、景别、静态机位、构图与光线。
-3. 这是静态分镜图：禁止写对白原文、引号台词、<d>标签、“正在说出某句”等语言内容；如剧情含对白，只能描述可见的嘴部状态和表情。
-4. 不得描述连续动作、时间推进、推拉摇移跟升降或切镜。
-5. 人物身份与造型、场景和道具由Picture及权威资料控制，不得新增或猜测资料中没有的内容。
-6. 同一角色的权威名与别名代表同一个人，同一静止画面中只能占据一个位置；禁止把权威名和别名各画成一人，禁止让同一个角色同时出现在网内和网外。
-7. 如果剧情要求网、绳、锁链或柔性法宝包裹人物，必须描述为围绕躯干和四肢前后左右闭合收拢的三维柔性包覆体；所有边缘绕到身体后侧，不得画成竖直平面、网球网、排球网、晾晒架、横杆或把人物悬挂在网上。
-8. 头尾、前后景或运动方向有明确要求时，使用“摄影机→前景物体头部→身体→尾部→后景人物”的完整空间轴线；禁止同时使用会暗示相反攻击目标的“扑击某人”“扑击前”等叙事词。
-9. 不得写“素材名”“主体信息”等占位词。只输出正文，不要标题、解释、Markdown或JSON。` + framingRule
+	system := h3StoryboardImageSystem + framingRule
 	user := fmt.Sprintf("项目：%s\n题材：%s\n画风：%s\n场景标题：%s\n场景剧情：%s\n地点：%s\n道具：%s\n\n本次实际提交的参考图（编号与上传顺序一致）：\n%s\n\n当前镜头设计：\n%s\n\n场景与道具资料：\n%s",
 		project.Title, project.Genre, project.Style, sc.Title, sc.Content,
 		sc.LocationName, sc.Props, referenceContext, shotContext, assetContext)
@@ -548,7 +554,16 @@ Subject与Picture的真实身份绑定由系统根据实际上传文件生成，
 	if err != nil {
 		return "", fmt.Errorf("解析画面提示词策略失败: %w", err)
 	}
-	output, err := s.textProvider.Chat(policy.Content, user)
+	var output string
+	if s.skills != nil {
+		policySupplement := ""
+		if policy.Source != "system_default" && strings.TrimSpace(policy.Content) != "" {
+			policySupplement = "项目补充画面规则：\n" + strings.TrimSpace(policy.Content) + "\n补充规则只能收紧表现，不得覆盖可见人物、参考图职责、静止瞬间、空间拓扑及输出格式契约。"
+		}
+		output, err = s.skills.ChatWithConfiguredOrFallbackSkill(sc.ProjectID, models.SkillStageImagePrompt, h3StoryboardImageSkillCode, s.textProvider, policySupplement, "", map[string]string{"request": user})
+	} else {
+		output, err = s.textProvider.Chat(effectiveGenerationSystem(system, policy), user)
+	}
 	if err != nil {
 		return "", fmt.Errorf("AI 重新设计场景提示词失败: %w", err)
 	}
@@ -713,8 +728,8 @@ func stripQwenReferenceDutyRepetition(value string) string {
 }
 
 func ensureQwenSceneReferenceBindings(prompt string, referenceLines []string) string {
-	prompt = stripQwenReferenceDutyRepetition(strings.TrimSpace(prompt))
-	prompt = compactStaticVisualPrompt(prompt, 1100)
+	prompt = stripH3StoryboardConstraintNoise(stripQwenReferenceDutyRepetition(strings.TrimSpace(prompt)))
+	prompt = compactStaticVisualPrompt(prompt, 1400)
 	if len(referenceLines) == 0 {
 		return prompt
 	}
@@ -791,7 +806,7 @@ func (s *ProjectService) redesignQwenSceneImagePrompt(sc *models.Scene, project 
 	if hasRefs {
 		system = qwenImage21EditSystem
 	}
-	qwenSceneSystem := system + `\nThis is a Qwen-Image-2.1 single static opening-keyframe prompt, not a director plan. Keep rewritten_prompt concise: one paragraph, at most 700 Chinese characters or 450 English words. State each reference responsibility once; never repeat identity, age, body proportion, material or environment specifications in the visual body after binding them. Follow the selected Qwen T2I or image-edit contract exactly. Use only supplied opening-keyframe visual facts. For a referenced new composition, begin with a concrete operation verb and bind each input to one explicit source responsibility; no input is the canvas. Prioritize only subject count and placement, frozen pose, prop ownership, foreground/midground/background, fixed framing, environment, and light. A canonical character name and any supplied alias identify one person in one position, never duplicate people. Character references supply identity; outfit references supply styling for that same character; environment references supply the full-frame space; prop references supply only the integrated object's appearance and never create a person. For a net, rope, chain or flexible restraint enclosing a person, describe the positive final topology as a closed three-dimensional flexible volume wrapping around the front, sides and back of the body, not as an independent display object. When head-tail orientation or foreground-background direction is authoritative, state the complete camera-to-subject depth axis and remove narrative attack wording that implies an opposite target. Do not mention project/scene/shot numbers, dialogue, timing, transitions, cuts, camera movement, start/end state, future action, or abstract emotion. Never write tracking, pan, tilt, dolly, push-in or pull-out language. Convert motion into one frozen body pose with visible dust, fabric and hair state. Output one continuous paragraph in the request language inside rewritten_prompt.`
+	qwenSceneSystem := system + `\nThis is a Qwen-Image-2.1 single static opening-keyframe prompt, not a director plan. Keep rewritten_prompt focused but sufficiently concrete: one paragraph, normally 800-1400 Chinese characters or 300-450 English words. State each reference responsibility once; never repeat identity, age, body proportion, material or environment specifications in the visual body after binding them. Follow the selected Qwen T2I or image-edit contract exactly. Use only supplied opening-keyframe visual facts. For a referenced new composition, begin with a concrete operation verb and bind each input to one explicit source responsibility; no input is the canvas. Prioritize only subject count and placement, frozen pose, prop ownership, foreground/midground/background, fixed framing, environment, and light. A canonical character name and any supplied alias identify one person in one position, never duplicate people. Character references supply identity; outfit references supply styling for that same character; environment references supply the full-frame space; prop references supply only the integrated object's appearance and never create a person. For a net, rope, chain or flexible restraint enclosing a person, describe the positive final topology as a closed three-dimensional flexible volume wrapping around the front, sides and back of the body, not as an independent display object. When head-tail orientation or foreground-background direction is authoritative, state the complete camera-to-subject depth axis and remove narrative attack wording that implies an opposite target. Do not mention project/scene/shot numbers, dialogue, timing, transitions, cuts, camera movement, start/end state, future action, or abstract emotion. Never write tracking, pan, tilt, dolly, push-in or pull-out language. Convert motion into one frozen body pose with visible dust, fabric and hair state. Output one continuous paragraph in the request language inside rewritten_prompt.`
 	user := fmt.Sprintf("User request:\n输出一个静止首帧的最终画面描述，不要复述导演参数。题材：%s；画风：%s；地点：%s；道具：%s。%s\n\nOpening-keyframe visual facts (the only Shot facts allowed):\n%s\n\nVerified appearance and environment facts:\n%s", project.Genre, project.Style, sc.LocationName, sc.Props, framingRule, shotContext, assetContext)
 	if hasRefs {
 		user += "\n\nOrdered input image roles (order is binding):"
@@ -6782,7 +6797,7 @@ func (s *ProjectService) buildQwenSceneExecutionPrompt(sc *models.Scene, referen
 	if len(referenceLines) > 0 {
 		prompt = ensureQwenSceneReferenceBindings(prompt, referenceLines)
 	} else {
-		prompt = compactStaticVisualPrompt(prompt, 1100)
+		prompt = compactStaticVisualPrompt(prompt, 1400)
 	}
 	prompt = enforceStoryboardDirectionalTopology(prompt)
 	parts := []string{prompt}
@@ -7181,7 +7196,7 @@ func buildH3StoryboardPrompt(sc *models.Scene, p *models.Project, referenceLines
 	detail = strings.TrimSpace(h3StoryboardSubjectPrefixPattern.ReplaceAllString(detail, ""))
 	detail = replaceNonCharacterStoryboardSubjects(detail, referenceLines)
 	detail = enforceStoryboardDirectionalTopology(detail)
-	detail = compactStaticVisualPrompt(detail, 1100)
+	detail = compactStaticVisualPrompt(detail, 1800)
 	if h3ClosedNetCuePattern.MatchString(sc.Content+" "+detail) && !strings.Contains(detail, "闭合三维柔性网袋") {
 		detail += "\n空间拓扑硬约束：包裹人物的网必须形成贴近躯干和四肢、前后左右收拢的闭合三维柔性网袋；网绳从身体正面、两侧延续并绕到背后，人物双脚仍接触地面。禁止竖直平面网、网球网、排球网、横杆、晾晒架、把人物悬挂在网上、身体只位于网的一侧。"
 	}
