@@ -4001,7 +4001,7 @@ onBeforeUnmount(() => {
 .ready { font-size: 12px; font-weight: 700; color: var(--green); }
 .fail-msg { font-size: 12px; color: var(--red); }
 .video-box { position: relative; margin-top: 12px; border-radius: 12px; overflow: hidden; background: #000; }
-.frame-browser-mask{z-index:120}.frame-browser-modal{width:min(1180px,96vw);max-width:none;padding:0;overflow:hidden}
+.modal-mask.frame-browser-mask{z-index:220;padding:8px}.modal.frame-browser-modal{width:calc(100vw - 16px);height:calc(100vh - 16px);max-width:none;max-height:none;padding:0;overflow:hidden}
 .scene-video-stage{position:relative}.scene-video { width: 100%; display: block; max-height: 260px; }
 .scene-screen-text{position:absolute;z-index:3;display:flex;align-items:center;gap:8px;transform:translate(-50%,-50%);max-width:86%;max-height:86%;white-space:nowrap;color:#f4e4c0;font-family:"Noto Sans SC",sans-serif;font-size:34px;letter-spacing:.12em;text-shadow:0 2px 4px #000,0 0 3px #000;pointer-events:none}.scene-screen-text small{font-size:18px;color:#d1b98b}.screen-text-preview-note{margin:6px 10px 42px;color:#ddd;font-size:11px}
 .download { position: absolute; right: 8px; bottom: 8px; background: rgba(0, 0, 0, 0.55); color: #fff; border-color: transparent; }
