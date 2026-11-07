@@ -44,6 +44,19 @@ type characterProfileResult struct {
 	ColorPalette   string `json:"color_palette"`
 }
 
+const femaleCharacterBeautySkillCode = "female-character-beauty-design"
+
+const femaleCharacterBeautyDesignContract = `女性角色美术增强契约（仅在权威资料确认角色为成年女性时适用）：
+1. 美感必须来自可执行且相互协调的设计，不使用“美女、绝美、凹凸有致、高级感、电影级”等空泛质量词替代结构。按脸型与下颌、眉形与眉峰、眼型/眼皮/眼尾/瞳色和目光气质、鼻梁鼻尖、唇峰唇形唇色、肤色与气色逐项设计；妆容写清底妆冷暖、眼妆色域与晕染范围、眼线方向、唇妆质地及花钿/面靥/泪痣等少量识别点。
+2. 发型必须是一套可制作结构：写清发色及冷暖反光、长度、前后分区、梳理方向、束点高度、发髻/环髻/编发/马尾几何、额发与鬓发、发尾状态、发簪发冠发绳和流苏的固定位置。发型服务身份和气质，不把所有女性统一为披肩长发、龙须碎发或同一种高髻。
+3. 服装先确定角色专属轮廓，再写制式和层次：领型、肩袖、内衬、衣身、腰封、下装、披帛/斗篷、衣摆长度与开衩必须形成清楚层级。主色、辅色、点缀色通常控制在2至4个核心色相；颜色与身份、性格和视觉母题一致，不机械复制青白、紫银、绯白或玄金方案。
+4. 材质必须具有可见证据：分别描述哑光提花丝绸、重磅绉缎、轻透云纱/薄罗、金银线刺绣、冷锻金属、玉石、珍珠或琉璃的厚薄、透光、反射、垂坠和边缘处理。发饰、耳饰、额饰、腰饰、玉佩和鞋履围绕同一母题，数量克制，禁止无层级堆砌。
+5. 气质通过目光、下颌、肩颈、脊背、双手、支撑腿与重心表现。清冷、英气、温婉、华贵、凌厉、沉静等气质必须匹配角色事实，不把所有女性都写成冷白皮、鹅蛋脸、犀利凤眼、剑眉、浓妆或攻击性姿态。
+6. 成年女性可使用符合身份和世界观的修身剪裁、露肩/露腰/露背、开衩和半透明纱，但必须合法、非色情、具有服装结构依据；未成年人禁止性感化。体态写健康、挺拔及角色特有比例，不以胸腰臀夸张作为主要辨识度。
+7. 光线写主光方向、柔硬、色温、轮廓光及其在皮肤、发丝、纱、缎、金属和玉石上的具体反应。背景与画幅由实际生成任务决定。
+8. 用户提供样例中的“三视图、由左到右排列、设定集版式、纯白棚拍背景、画幅比例、高分辨率、电影级质感”等排版或质量词不属于角色DNA，不得写入appearance、wardrobe_detail或身份事实；只学习五官、发型、妆容、服装层次、材质、配色、饰品和气质的描述精度。
+9. 小说原文、审核档案与项目世界观优先。样例只用于学习描述维度和差异化，禁止复制样例的姓名、年龄、配色、发型、服装、妆容、饰品或身材。`
+
 // characterProfileSystemPrompt 生成角色档案的系统提示词
 const characterProfileSystemPrompt = `你是一位专业的漫剧角色设计师。根据用户提供的角色信息和故事背景，生成一份详细的结构化角色档案。
 要求：
@@ -115,10 +128,17 @@ func (s *CharacterProfileService) GenerateProfile(char *models.Character, projec
 	// 调用 LLM
 	var raw string
 	var err error
-	if s.skills != nil {
+	isAdultFemale := authoritativeAdultFemale(char)
+	if s.skills != nil && isAdultFemale {
+		raw, err = s.skills.ChatWithConfiguredOrFallbackSkill(project.ID, models.SkillStageCharacter, femaleCharacterBeautySkillCode, s.textProvider, characterProfileSystemPrompt, user.String(), map[string]string{"character_info": user.String()})
+	} else if s.skills != nil {
 		raw, err = s.skills.ChatWithSkill(project.ID, models.SkillStageCharacter, s.textProvider, characterProfileSystemPrompt, user.String(), map[string]string{"character_info": user.String()})
 	} else {
-		raw, err = s.textProvider.Chat(characterProfileSystemPrompt, user.String())
+		system := characterProfileSystemPrompt
+		if isAdultFemale {
+			system += "\n\n" + femaleCharacterBeautyDesignContract
+		}
+		raw, err = s.textProvider.Chat(system, user.String())
 	}
 	if err != nil {
 		return fmt.Errorf("生成角色档案失败: %w", err)
@@ -400,6 +420,22 @@ func portraitGenderIdentity(char *models.Character) string {
 		return gender
 	}
 	return portraitGenderFromText(strings.Join([]string{char.Role, char.Appearance, char.Trait, char.Background, char.WardrobeDetail}, " "))
+}
+
+func authoritativeAdultFemale(char *models.Character) bool {
+	if char == nil || portraitGenderIdentity(char) != "女性" {
+		return false
+	}
+	text := strings.Join([]string{char.Role, char.Appearance, char.Trait, char.Background, char.WardrobeDetail}, " ")
+	if strings.Contains(text, "成年女性") || strings.Contains(text, "成年女子") || strings.Contains(text, "成年女人") {
+		return true
+	}
+	match := characterAgePattern.FindStringSubmatch(text)
+	if len(match) != 2 {
+		return false
+	}
+	age, err := strconv.Atoi(match[1])
+	return err == nil && age >= 18
 }
 
 func portraitFaceIdentity(appearance, trait string) string {
