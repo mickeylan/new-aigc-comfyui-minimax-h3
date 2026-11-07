@@ -525,6 +525,7 @@
               </button>
               <button class="btn btn-sm btn-ghost" @click="viewImage(sc)">查看画面</button>
               <button class="btn btn-sm btn-ghost" @click="viewVideoPrompt(sc)">编辑视频提示词</button>
+              <button v-if="sc.video_input_file && sc.status === 'video_ready'" class="btn btn-sm btn-secondary" @click="openFrameBrowser(sc)">查看全部帧</button>
               <button class="btn btn-sm btn-secondary frame-purpose-entry" @click="openFramePurpose(sc)">分镜图用于视频：{{ framePurposeLabel(sc) }}</button>
               <details class="scene-video-replace"><summary class="btn btn-sm btn-secondary">替换当前视频</summary><div class="scene-video-replace-menu"><label class="btn btn-sm btn-primary" :class="{disabled:busy||sc._videoReplacing||isVideoWorking(sc)}">{{sc._videoReplacing?'替换中…':'上传视频替换'}}<input type="file" accept="video/mp4,video/webm,video/quicktime,video/x-matroska" hidden :disabled="busy||sc._videoReplacing||isVideoWorking(sc)" @change="e=>replaceSceneVideoUpload(sc,e)"></label><select v-model.number="sceneVideoMaterialSelection[sc.id]" class="input input-sm"><option :value="0">选择项目视频素材</option><option v-for="material in projectVideoMaterials" :key="material.id" :value="material.id">{{material.name||material.path}}</option></select><button class="btn btn-sm btn-primary" :disabled="busy||sc._videoReplacing||!sceneVideoMaterialSelection[sc.id]" @click="replaceSceneVideoMaterial(sc)">使用所选素材替换</button><small>仅替换当前Scene正式视频；原视频和历史候选保留。</small></div></details>
               <button class="btn btn-sm btn-secondary" @click="openContinuity(sc)">连续性设置</button>
@@ -1109,6 +1110,19 @@
       </div>
     </div>
 
+    <!-- 当前分镜视频逐帧审核：遮罩不关闭，避免长时间提取后误触丢失选择。 -->
+    <div v-if="frameBrowserScene" class="modal-mask frame-browser-mask">
+      <div class="modal card frame-browser-modal">
+        <SceneFrameBrowser
+          :project-id="Number(id())"
+          :scene-id="frameBrowserScene.id"
+          :scene-order="frameBrowserScene.order"
+          @close="closeFrameBrowser"
+          @saved="onSceneFrameSaved"
+        />
+      </div>
+    </div>
+
     <!-- 视频分镜连续性弹窗 -->
     <div v-if="continuityScene" class="modal-mask" @click.self="closeContinuity">
       <div class="modal card continuity-modal">
@@ -1182,6 +1196,7 @@ import { api } from '../api'
 import { useAppStore } from '../stores/app'
 import { useToastStore } from '../stores/toast'
 import FrameSelector from '../components/FrameSelector.vue'
+import SceneFrameBrowser from '../components/SceneFrameBrowser.vue'
 import GeneratedMediaHistoryDrawer from '../components/GeneratedMediaHistoryDrawer.vue'
 import ShotDirectorEditor from '../components/ShotDirectorEditor.vue'
 import { overlayDialogueExclusions, setDialogueItemExcluded, snapshotDialogueExclusions } from '../utils/dialogueAnalysis'
@@ -1319,6 +1334,7 @@ const showPlan = ref(false)
 const viewer = ref(null)
 const continuityScene = ref(null)
 const continuitySourceScene = ref(null)
+const frameBrowserScene = ref(null)
 const videoTaskDetail = ref(null)
 const videoTaskScene = ref(null)
 const videoTaskPromptDraft = ref('')
@@ -1860,6 +1876,11 @@ function videoProgress(sc) {
 }
 function imageUrl(sc) {
   return api.inputUrl(project.value.id, sc.image_file)
+}
+function openFrameBrowser(sc) { frameBrowserScene.value = sc }
+function closeFrameBrowser() { frameBrowserScene.value = null }
+function onSceneFrameSaved(frame) {
+  if (frame?.file) toast.success(`已保存视频帧：${frame.file}`)
 }
 function openContinuity(sc) {
   continuityScene.value = sc
@@ -3969,6 +3990,7 @@ onBeforeUnmount(() => {
 .ready { font-size: 12px; font-weight: 700; color: var(--green); }
 .fail-msg { font-size: 12px; color: var(--red); }
 .video-box { position: relative; margin-top: 12px; border-radius: 12px; overflow: hidden; background: #000; }
+.frame-browser-mask{z-index:120}.frame-browser-modal{width:min(1180px,96vw);max-width:none;padding:0;overflow:hidden}
 .scene-video-stage{position:relative}.scene-video { width: 100%; display: block; max-height: 260px; }
 .scene-screen-text{position:absolute;z-index:3;display:flex;align-items:center;gap:8px;transform:translate(-50%,-50%);max-width:86%;max-height:86%;white-space:nowrap;color:#f4e4c0;font-family:"Noto Sans SC",sans-serif;font-size:34px;letter-spacing:.12em;text-shadow:0 2px 4px #000,0 0 3px #000;pointer-events:none}.scene-screen-text small{font-size:18px;color:#d1b98b}.screen-text-preview-note{margin:6px 10px 42px;color:#ddd;font-size:11px}
 .download { position: absolute; right: 8px; bottom: 8px; background: rgba(0, 0, 0, 0.55); color: #fff; border-color: transparent; }

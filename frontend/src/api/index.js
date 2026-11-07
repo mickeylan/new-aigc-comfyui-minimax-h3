@@ -467,6 +467,10 @@ export const api = {
   adaptationContext: (id, episode) => http.get(`/projects/${id}/adaptations/${episode}/context`),
   novelUsage: (id) => http.get(`/projects/${id}/novel/usage`),
 
+  // 当前分镜视频逐帧审核
+  extractAllSceneFrames: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/frames/extract-all`, {}, { timeout: 360000 }),
+  saveExtractedSceneFrame: (id, sid, extractionId, frameIndex) => http.post(`/projects/${id}/scenes/${sid}/frames/save`, { extraction_id: extractionId, frame_index: frameIndex }),
+
   // 视频分镜连续性
   extractFrameCandidates: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/continuity/frames/extract`, {}, { timeout: 180000 }),
   getFrameCandidates: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/continuity/frames`),

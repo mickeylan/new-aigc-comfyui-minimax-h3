@@ -454,6 +454,10 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/shots/:shid/style-preset", svc.HandleApplyShotStylePreset)
 	r.DELETE("/api/projects/:id/shots/:shid", svc.HandleDeleteShot)
 
+	// 当前分镜视频逐帧审核：提取全部帧并将人工选中的帧持久保存到项目磁盘。
+	r.POST("/api/projects/:id/scenes/:sid/frames/extract-all", svc.HandleExtractAllSceneFrames)
+	r.POST("/api/projects/:id/scenes/:sid/frames/save", svc.HandleSaveExtractedSceneFrame)
+
 	// 视频分镜连续性：来源视频末尾22帧、人工选帧、续接/首尾桥接配置
 	r.POST("/api/projects/:id/scenes/:sid/continuity/frames/extract", svc.HandleExtractFrameCandidates)
 	r.GET("/api/projects/:id/scenes/:sid/continuity/frames", svc.HandleGetFrameCandidates)
