@@ -44,23 +44,28 @@ func (s *ContinuityService) ExtractAllSceneFrames(projectID, sceneID uint) (*Sce
 	if err := s.db.Where("id=? AND project_id=?", sceneID, projectID).First(&scene).Error; err != nil {
 		return nil, fmt.Errorf("分镜不存在")
 	}
-	if strings.TrimSpace(scene.VideoInputFile) == "" || scene.Status != "video_ready" {
-		return nil, fmt.Errorf("当前分镜视频尚未完成或没有本地视频副本")
-	}
 	if s.remote == nil {
 		return nil, fmt.Errorf("文件服务未配置")
 	}
 	inputDir := filepath.Join(s.cfg.Comfy.ComfyDir, "input", fmt.Sprint(projectID))
-	videoPath := filepath.Join(inputDir, filepath.Base(scene.VideoInputFile))
+	videoPath := ""
+	if strings.TrimSpace(scene.VideoInputFile) != "" {
+		videoPath = filepath.Join(inputDir, filepath.Base(scene.VideoInputFile))
+	} else if strings.TrimSpace(scene.VideoFile) != "" && scene.VideoGPU != nil {
+		videoPath = filepath.Join(s.cfg.Comfy.ComfyDir, "output_workers", fmt.Sprintf("gpu%d", *scene.VideoGPU), filepath.FromSlash(scene.VideoFile))
+	}
+	if videoPath == "" {
+		return nil, fmt.Errorf("当前分镜没有可读取的视频文件")
+	}
 	taskPart := continuityTaskIDSanitizer.ReplaceAllString(scene.VideoTaskID, "_")
 	if taskPart == "" {
 		taskPart = "current"
 	}
 	extractionID := fmt.Sprintf("scene_frames_s%d_%s_%d", scene.ID, taskPart, time.Now().UnixNano())
-	pattern := filepath.Join(inputDir, extractionID+"_%06d.jpg")
+	pattern := filepath.Join(inputDir, extractionID+"_%06d.png")
 
 	if s.remote.Enabled() {
-		cmd := fmt.Sprintf("%s; $FF -y -i %s -map 0:v:0 -fps_mode passthrough -q:v 3 -frames:v %d %s", ffmpegResolveCmd, shellQuote(videoPath), maxSceneFrameBrowserFrames, shellQuote(pattern))
+		cmd := fmt.Sprintf("%s; $FF -y -i %s -map 0:v:0 -fps_mode passthrough -frames:v %d %s", ffmpegResolveCmd, shellQuote(videoPath), maxSceneFrameBrowserFrames, shellQuote(pattern))
 		if _, err := s.remote.RunTimeout(cmd, 5*time.Minute); err != nil {
 			return nil, fmt.Errorf("提取分镜全部帧失败: %w", err)
 		}
@@ -69,7 +74,7 @@ func (s *ContinuityService) ExtractAllSceneFrames(projectID, sceneID uint) (*Sce
 		if err != nil {
 			return nil, err
 		}
-		args := []string{"-y", "-i", videoPath, "-map", "0:v:0", "-fps_mode", "passthrough", "-q:v", "3", "-frames:v", strconv.Itoa(maxSceneFrameBrowserFrames), pattern}
+		args := []string{"-y", "-i", videoPath, "-map", "0:v:0", "-fps_mode", "passthrough", "-frames:v", strconv.Itoa(maxSceneFrameBrowserFrames), pattern}
 		if output, err := runLocalProgram(ffmpeg, args, 5*time.Minute); err != nil {
 			return nil, fmt.Errorf("提取分镜全部帧失败: %w: %s", err, output)
 		}
@@ -83,7 +88,7 @@ func (s *ContinuityService) ExtractAllSceneFrames(projectID, sceneID uint) (*Sce
 	names := make([]string, 0)
 	for _, entry := range entries {
 		name := entry.Name()
-		if !entry.IsDir() && strings.HasPrefix(name, prefix) && strings.EqualFold(filepath.Ext(name), ".jpg") {
+		if !entry.IsDir() && strings.HasPrefix(name, prefix) && strings.EqualFold(filepath.Ext(name), ".png") {
 			names = append(names, name)
 		}
 	}
@@ -119,7 +124,7 @@ func (s *ContinuityService) SaveExtractedSceneFrame(projectID, sceneID uint, ext
 	if s.remote == nil || s.upload == nil {
 		return nil, fmt.Errorf("文件服务未配置")
 	}
-	name := fmt.Sprintf("%s_%06d.jpg", extractionID, frameIndex+1)
+	name := fmt.Sprintf("%s_%06d.png", extractionID, frameIndex+1)
 	source := filepath.Join(s.cfg.Comfy.ComfyDir, "input", fmt.Sprint(projectID), name)
 	reader, err := s.remote.Open(source)
 	if err != nil {
@@ -133,7 +138,7 @@ func (s *ContinuityService) SaveExtractedSceneFrame(projectID, sceneID uint, ext
 	if len(data) == 0 {
 		return nil, fmt.Errorf("所选帧为空")
 	}
-	savedName := fmt.Sprintf("scene_%d_selected_frame_%06d_%d.jpg", sceneID, frameIndex+1, time.Now().UnixNano())
+	savedName := fmt.Sprintf("scene_%d_selected_frame_%06d_%d.png", sceneID, frameIndex+1, time.Now().UnixNano())
 	path, _, err := s.upload.SaveFile(fmt.Sprint(projectID), "image", savedName, data)
 	if err != nil {
 		return nil, err

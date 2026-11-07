@@ -525,7 +525,7 @@
               </button>
               <button class="btn btn-sm btn-ghost" @click="viewImage(sc)">查看画面</button>
               <button class="btn btn-sm btn-ghost" @click="viewVideoPrompt(sc)">编辑视频提示词</button>
-              <button v-if="sc.video_input_file && sc.status === 'video_ready'" class="btn btn-sm btn-secondary" @click="openFrameBrowser(sc)">查看全部帧</button>
+              <button v-if="sc.video_input_file || (sc.video_file && sc.video_gpu !== null && sc.video_gpu !== undefined)" class="btn btn-sm btn-secondary" @click="openFrameBrowser(sc)">查看全部帧</button>
               <button class="btn btn-sm btn-secondary frame-purpose-entry" @click="openFramePurpose(sc)">分镜图用于视频：{{ framePurposeLabel(sc) }}</button>
               <details class="scene-video-replace"><summary class="btn btn-sm btn-secondary">替换当前视频</summary><div class="scene-video-replace-menu"><label class="btn btn-sm btn-primary" :class="{disabled:busy||sc._videoReplacing||isVideoWorking(sc)}">{{sc._videoReplacing?'替换中…':'上传视频替换'}}<input type="file" accept="video/mp4,video/webm,video/quicktime,video/x-matroska" hidden :disabled="busy||sc._videoReplacing||isVideoWorking(sc)" @change="e=>replaceSceneVideoUpload(sc,e)"></label><select v-model.number="sceneVideoMaterialSelection[sc.id]" class="input input-sm"><option :value="0">选择项目视频素材</option><option v-for="material in projectVideoMaterials" :key="material.id" :value="material.id">{{material.name||material.path}}</option></select><button class="btn btn-sm btn-primary" :disabled="busy||sc._videoReplacing||!sceneVideoMaterialSelection[sc.id]" @click="replaceSceneVideoMaterial(sc)">使用所选素材替换</button><small>仅替换当前Scene正式视频；原视频和历史候选保留。</small></div></details>
               <button class="btn btn-sm btn-secondary" @click="openContinuity(sc)">连续性设置</button>
@@ -1879,8 +1879,19 @@ function imageUrl(sc) {
 }
 function openFrameBrowser(sc) { frameBrowserScene.value = sc }
 function closeFrameBrowser() { frameBrowserScene.value = null }
-function onSceneFrameSaved(frame) {
-  if (frame?.file) toast.success(`已保存视频帧：${frame.file}`)
+function onSceneFrameSaved(frame, setAsSceneImage = false) {
+  if (!frame?.file) return
+  if (setAsSceneImage) {
+    const scene = scenes.value.find(item => item.id === frameBrowserScene.value?.id)
+    if (scene) {
+      scene.image_file = frame.file
+      scene.status = scene.video_file || scene.video_input_file ? 'video_ready' : 'image_ready'
+      scene.prompt_stale = true
+    }
+    toast.success(`已保存 PNG 并设为当前分镜图：${frame.file}`)
+    return
+  }
+  toast.success(`已保存 PNG 视频帧：${frame.file}`)
 }
 function openContinuity(sc) {
   continuityScene.value = sc

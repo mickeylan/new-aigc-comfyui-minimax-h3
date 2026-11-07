@@ -44,9 +44,14 @@
         <strong>已保存：{{ savedFrame.file }}</strong>
         <a class="btn btn-sm btn-secondary" :href="`${savedFrame.url}?download=1`" download>下载已保存帧</a>
       </div>
-      <button type="button" class="btn btn-primary" :disabled="saving || extracting || !selectedFrame" @click="saveSelected">
-        {{ saving ? '保存中…' : '保存所选帧到磁盘' }}
-      </button>
+      <div class="frame-save-actions">
+        <button type="button" class="btn btn-secondary" :disabled="saving || extracting || !selectedFrame" @click="saveSelected(false)">
+          {{ saving ? '保存中…' : '保存所选帧到磁盘' }}
+        </button>
+        <button type="button" class="btn btn-primary" :disabled="saving || extracting || !selectedFrame" @click="saveSelected(true)">
+          {{ saving ? '设置中…' : '设为当前分镜图' }}
+        </button>
+      </div>
     </footer>
   </div>
 </template>
@@ -90,14 +95,14 @@ async function extract() {
   }
 }
 
-async function saveSelected() {
+async function saveSelected(setAsSceneImage) {
   if (!selectedFrame.value || !extractionId.value) return
   saving.value = true
   error.value = ''
   try {
-    const { data } = await api.saveExtractedSceneFrame(props.projectId, props.sceneId, extractionId.value, selectedFrame.value.index)
+    const { data } = await api.saveExtractedSceneFrame(props.projectId, props.sceneId, extractionId.value, selectedFrame.value.index, setAsSceneImage)
     savedFrame.value = data.frame || null
-    emit('saved', savedFrame.value)
+    emit('saved', savedFrame.value, Boolean(data.set_as_scene_image))
   } catch (cause) {
     error.value = cause.response?.data?.error || cause.message || '保存所选帧失败'
   } finally {
@@ -111,5 +116,5 @@ function timeLabel(ms) {
 </script>
 
 <style scoped>
-.frame-browser{display:flex;flex-direction:column;max-height:min(88vh,900px);padding:20px;background:var(--card);color:var(--text-primary);border-radius:14px}.frame-browser-head{display:flex;justify-content:space-between;gap:20px;align-items:flex-start}.frame-browser-head h3{margin:4px 0 6px}.frame-browser-head p{margin:0;color:var(--text-secondary);font-size:13px;line-height:1.6}.frame-browser-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:16px 0}.frame-count,.frame-selection{font-size:12px;color:var(--text-secondary)}.frame-progress,.frame-error,.frame-empty{padding:12px;border-radius:9px}.frame-progress{background:rgba(33,150,243,.1);color:var(--accent)}.frame-error{background:rgba(244,67,54,.12);color:var(--red)}.frame-empty{border:1px dashed var(--border);color:var(--text-tertiary);text-align:center}.pulse-dot{display:inline-block;width:8px;height:8px;margin-right:6px;border-radius:50%;background:var(--accent);animation:pulse 1s infinite}.frame-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;min-height:180px;padding:4px;overflow:auto}.frame-item{display:grid;grid-template-columns:1fr auto;padding:0;overflow:hidden;border:2px solid transparent;border-radius:9px;background:var(--bg-secondary);color:var(--text-secondary);cursor:pointer;text-align:left}.frame-item:hover{border-color:var(--border-strong)}.frame-item.selected{border-color:var(--accent);box-shadow:0 0 0 2px rgba(33,150,243,.15)}.frame-item img{grid-column:1/-1;display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#000}.frame-item span,.frame-item small{padding:7px;font-size:11px}.frame-item small{text-align:right;color:var(--text-tertiary)}.frame-browser-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)}.saved-frame-result{display:flex;align-items:center;gap:10px;min-width:0}.saved-frame-result strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}@keyframes pulse{50%{opacity:.35}}@media(max-width:720px){.frame-browser{max-height:94vh;padding:14px}.frame-browser-head{gap:10px}.frame-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.frame-browser-footer,.saved-frame-result{align-items:stretch;flex-direction:column}}
+.frame-browser{display:flex;flex-direction:column;max-height:min(88vh,900px);padding:20px;background:var(--card);color:var(--text-primary);border-radius:14px}.frame-browser-head{display:flex;justify-content:space-between;gap:20px;align-items:flex-start}.frame-browser-head h3{margin:4px 0 6px}.frame-browser-head p{margin:0;color:var(--text-secondary);font-size:13px;line-height:1.6}.frame-browser-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:16px 0}.frame-count,.frame-selection{font-size:12px;color:var(--text-secondary)}.frame-progress,.frame-error,.frame-empty{padding:12px;border-radius:9px}.frame-progress{background:rgba(33,150,243,.1);color:var(--accent)}.frame-error{background:rgba(244,67,54,.12);color:var(--red)}.frame-empty{border:1px dashed var(--border);color:var(--text-tertiary);text-align:center}.pulse-dot{display:inline-block;width:8px;height:8px;margin-right:6px;border-radius:50%;background:var(--accent);animation:pulse 1s infinite}.frame-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;min-height:180px;padding:4px;overflow:auto}.frame-item{display:grid;grid-template-columns:1fr auto;padding:0;overflow:hidden;border:2px solid transparent;border-radius:9px;background:var(--bg-secondary);color:var(--text-secondary);cursor:pointer;text-align:left}.frame-item:hover{border-color:var(--border-strong)}.frame-item.selected{border-color:var(--accent);box-shadow:0 0 0 2px rgba(33,150,243,.15)}.frame-item img{grid-column:1/-1;display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#000}.frame-item span,.frame-item small{padding:7px;font-size:11px}.frame-item small{text-align:right;color:var(--text-tertiary)}.frame-browser-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)}.frame-save-actions{display:flex;gap:8px;flex-wrap:wrap}.saved-frame-result{display:flex;align-items:center;gap:10px;min-width:0}.saved-frame-result strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}@keyframes pulse{50%{opacity:.35}}@media(max-width:720px){.frame-browser{max-height:94vh;padding:14px}.frame-browser-head{gap:10px}.frame-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.frame-browser-footer,.saved-frame-result{align-items:stretch;flex-direction:column}}
 </style>

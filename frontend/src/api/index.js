@@ -469,7 +469,7 @@ export const api = {
 
   // 当前分镜视频逐帧审核
   extractAllSceneFrames: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/frames/extract-all`, {}, { timeout: 360000 }),
-  saveExtractedSceneFrame: (id, sid, extractionId, frameIndex) => http.post(`/projects/${id}/scenes/${sid}/frames/save`, { extraction_id: extractionId, frame_index: frameIndex }),
+  saveExtractedSceneFrame: (id, sid, extractionId, frameIndex, setAsSceneImage = false) => http.post(`/projects/${id}/scenes/${sid}/frames/save`, { extraction_id: extractionId, frame_index: frameIndex, set_as_scene_image: setAsSceneImage }),
 
   // 视频分镜连续性
   extractFrameCandidates: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/continuity/frames/extract`, {}, { timeout: 180000 }),
