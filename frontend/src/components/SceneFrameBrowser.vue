@@ -23,16 +23,27 @@
     </div>
     <p v-if="error" class="frame-error">{{ error }}</p>
 
+    <div v-if="selectedFrame" class="selected-frame-preview">
+      <img :src="selectedFrame.url" :alt="`当前选中第${selectedFrame.index + 1}帧`" />
+      <div><strong>当前选中：第 {{ selectedFrame.index + 1 }} 帧</strong><span>{{ timeLabel(selectedFrame.timestamp_ms) }}</span><a :href="selectedFrame.url" target="_blank" rel="noopener">单独打开原图</a></div>
+    </div>
+
+    <nav v-if="pageCount > 1" class="frame-pager" aria-label="视频帧分页">
+      <button type="button" class="btn btn-xs btn-ghost" :disabled="page <= 1" @click="page--">上一页</button>
+      <span>第 {{ page }} / {{ pageCount }} 页</span>
+      <button type="button" class="btn btn-xs btn-ghost" :disabled="page >= pageCount" @click="page++">下一页</button>
+    </nav>
+
     <div v-if="frames.length" class="frame-grid" aria-label="当前分镜全部视频帧">
       <button
-        v-for="frame in frames"
+        v-for="frame in visibleFrames"
         :key="frame.file"
         type="button"
         class="frame-item"
         :class="{ selected: frame.index === selectedFrameIndex }"
         @click="selectedFrameIndex = frame.index"
       >
-        <img :src="frame.url" :alt="`分镜${sceneOrder}第${frame.index + 1}帧`" loading="lazy" />
+        <img :src="frame.url" :alt="`分镜${sceneOrder}第${frame.index + 1}帧`" @error="onFrameImageError(frame)" />
         <span>第 {{ frame.index + 1 }} 帧</span>
         <small>{{ timeLabel(frame.timestamp_ms) }}</small>
       </button>
@@ -74,8 +85,12 @@ const extracting = ref(false)
 const saving = ref(false)
 const savedFrame = ref(null)
 const error = ref('')
+const page = ref(1)
+const pageSize = 48
 
 const selectedFrame = computed(() => frames.value.find(frame => frame.index === selectedFrameIndex.value) || null)
+const pageCount = computed(() => Math.max(1, Math.ceil(frames.value.length / pageSize)))
+const visibleFrames = computed(() => frames.value.slice((page.value - 1) * pageSize, page.value * pageSize))
 
 async function extract() {
   extracting.value = true
@@ -86,6 +101,7 @@ async function extract() {
     extractionId.value = String(data.extraction_id || '')
     frameRate.value = Number(data.frame_rate || 24)
     frames.value = Array.isArray(data.frames) ? data.frames : []
+    page.value = 1
     selectedFrameIndex.value = frames.value.length ? frames.value[0].index : -1
     if (!frames.value.length) error.value = '当前视频没有提取到可显示的视频帧。'
   } catch (cause) {
@@ -110,11 +126,15 @@ async function saveSelected(setAsSceneImage) {
   }
 }
 
+function onFrameImageError(frame) {
+  error.value = `第 ${frame.index + 1} 帧图片加载失败：${frame.url}`
+}
+
 function timeLabel(ms) {
   return `${(Number(ms || 0) / 1000).toFixed(3)} 秒`
 }
 </script>
 
 <style scoped>
-.frame-browser{display:flex;flex-direction:column;max-height:min(88vh,900px);padding:20px;background:var(--card);color:var(--text-primary);border-radius:14px}.frame-browser-head{display:flex;justify-content:space-between;gap:20px;align-items:flex-start}.frame-browser-head h3{margin:4px 0 6px}.frame-browser-head p{margin:0;color:var(--text-secondary);font-size:13px;line-height:1.6}.frame-browser-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:16px 0}.frame-count,.frame-selection{font-size:12px;color:var(--text-secondary)}.frame-progress,.frame-error,.frame-empty{padding:12px;border-radius:9px}.frame-progress{background:rgba(33,150,243,.1);color:var(--accent)}.frame-error{background:rgba(244,67,54,.12);color:var(--red)}.frame-empty{border:1px dashed var(--border);color:var(--text-tertiary);text-align:center}.pulse-dot{display:inline-block;width:8px;height:8px;margin-right:6px;border-radius:50%;background:var(--accent);animation:pulse 1s infinite}.frame-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;min-height:180px;padding:4px;overflow:auto}.frame-item{display:grid;grid-template-columns:1fr auto;padding:0;overflow:hidden;border:2px solid transparent;border-radius:9px;background:var(--bg-secondary);color:var(--text-secondary);cursor:pointer;text-align:left}.frame-item:hover{border-color:var(--border-strong)}.frame-item.selected{border-color:var(--accent);box-shadow:0 0 0 2px rgba(33,150,243,.15)}.frame-item img{grid-column:1/-1;display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#000}.frame-item span,.frame-item small{padding:7px;font-size:11px}.frame-item small{text-align:right;color:var(--text-tertiary)}.frame-browser-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)}.frame-save-actions{display:flex;gap:8px;flex-wrap:wrap}.saved-frame-result{display:flex;align-items:center;gap:10px;min-width:0}.saved-frame-result strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}@keyframes pulse{50%{opacity:.35}}@media(max-width:720px){.frame-browser{max-height:94vh;padding:14px}.frame-browser-head{gap:10px}.frame-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.frame-browser-footer,.saved-frame-result{align-items:stretch;flex-direction:column}}
+.frame-browser{display:flex;flex-direction:column;height:min(88vh,900px);min-height:0;overflow:hidden;padding:20px;background:var(--card);color:var(--text-primary);border-radius:14px}.frame-browser-head{display:flex;justify-content:space-between;gap:20px;align-items:flex-start}.frame-browser-head h3{margin:4px 0 6px}.frame-browser-head p{margin:0;color:var(--text-secondary);font-size:13px;line-height:1.6}.frame-browser-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:16px 0}.frame-count,.frame-selection{font-size:12px;color:var(--text-secondary)}.frame-progress,.frame-error,.frame-empty{padding:12px;border-radius:9px}.frame-progress{background:rgba(33,150,243,.1);color:var(--accent)}.frame-error{background:rgba(244,67,54,.12);color:var(--red)}.frame-empty{border:1px dashed var(--border);color:var(--text-tertiary);text-align:center}.selected-frame-preview{display:grid;grid-template-columns:minmax(220px,420px) 1fr;gap:14px;align-items:center;flex:0 0 auto;margin-bottom:10px;padding:10px;border:1px solid var(--border);border-radius:10px;background:#050505}.selected-frame-preview img{display:block;width:100%;max-height:220px;object-fit:contain;background:#000}.selected-frame-preview div{display:flex;flex-direction:column;gap:8px;color:#fff}.selected-frame-preview span,.selected-frame-preview a{font-size:12px;color:#ddd}.frame-pager{display:flex;justify-content:center;align-items:center;gap:10px;flex:0 0 auto;margin:2px 0 8px;font-size:12px}.pulse-dot{display:inline-block;width:8px;height:8px;margin-right:6px;border-radius:50%;background:var(--accent);animation:pulse 1s infinite}.frame-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));align-content:start;gap:10px;flex:1 1 auto;min-height:0;padding:4px;overflow-y:auto;overscroll-behavior:contain}.frame-item{display:grid;grid-template-columns:1fr auto;padding:0;overflow:hidden;border:2px solid transparent;border-radius:9px;background:var(--bg-secondary);color:var(--text-secondary);cursor:pointer;text-align:left}.frame-item:hover{border-color:var(--border-strong)}.frame-item.selected{border-color:var(--accent);box-shadow:0 0 0 2px rgba(33,150,243,.15)}.frame-item img{grid-column:1/-1;display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#000}.frame-item span,.frame-item small{padding:7px;font-size:11px}.frame-item small{text-align:right;color:var(--text-tertiary)}.frame-browser-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)}.frame-save-actions{display:flex;gap:8px;flex-wrap:wrap}.saved-frame-result{display:flex;align-items:center;gap:10px;min-width:0}.saved-frame-result strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}@keyframes pulse{50%{opacity:.35}}@media(max-width:720px){.frame-browser{height:94vh;padding:14px}.frame-browser-head{gap:10px}.frame-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.frame-browser-footer,.saved-frame-result{align-items:stretch;flex-direction:column}}
 </style>
