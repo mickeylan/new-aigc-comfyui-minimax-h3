@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { generateWithEpisodeRecovery } from '../utils/episodeGenerationRecovery.js'
 import { createScreenTextRequests } from '../utils/screenTextRequests.js'
 
 const http = axios.create({
@@ -115,7 +116,11 @@ export const api = {
   updateProjectCombatLoras: (id, data) => http.patch(`/projects/${id}/combat-loras`, data),
   updateSceneCombatLoras: (id, sid, data) => http.patch(`/projects/${id}/scenes/${sid}/combat-loras`, data),
   deleteProject: (id) => http.delete(`/projects/${id}`),
-  generateScript: (id, episodeN) => http.post(`/projects/${id}/script?episode_n=${encodeURIComponent(episodeN)}`, { episode_n: Number(episodeN) }, { timeout: 300000 }),
+  generateScript: (id, episodeN) => generateWithEpisodeRecovery({
+    episode: episodeN, confirm: message => window.confirm(message),
+    reflow: data => http.post(`/projects/${id}/adaptations/reflow`, data),
+    generate: () => http.post(`/projects/${id}/script?episode_n=${encodeURIComponent(episodeN)}`, { episode_n: Number(episodeN) }, { timeout: 300000 })
+  }),
   renderScriptFromText: (id, episodeN, script) => http.post(`/projects/${id}/script/render`, { episode_n: episodeN, script }, { timeout: 300000 }),
   expandScript: (id, episodeN, script) => http.post(`/projects/${id}/script/expand`, { episode_n: episodeN, script }, { timeout: 300000 }),
   createScriptRevision: (id, episodeN, reason = 'manual') => http.post(`/projects/${id}/script-revisions`, { episode_n: episodeN, reason }),
@@ -460,7 +465,11 @@ export const api = {
   transitionStoryClue: (id, cid, data) => http.post(`/projects/${id}/story-clues/${cid}/transition`, data),
   updateAdaptation: (id, episode, data) => http.put(`/projects/${id}/adaptations/${episode}`, data),
   approveAdaptation: (id, episode) => http.post(`/projects/${id}/adaptations/${episode}/approve`),
-  generateAdaptationScript: (id, episode) => http.post(`/projects/${id}/adaptations/${episode}/script`, {}, { timeout: 300000 }),
+  generateAdaptationScript: (id, episode) => generateWithEpisodeRecovery({
+    episode, confirm: message => window.confirm(message),
+    reflow: data => http.post(`/projects/${id}/adaptations/reflow`, data),
+    generate: () => http.post(`/projects/${id}/adaptations/${episode}/script`, {}, { timeout: 300000 })
+  }),
   syncAdaptationAssets: (id, episode) => http.post(`/projects/${id}/adaptations/${episode}/assets/sync`),
   // 后端逐项补全当前集引用的角色与资产，允许较慢的本地模型完成。
   generateAdaptationAssets: (id, episode) => http.post(`/projects/${id}/adaptations/${episode}/assets/generate`, {}, { timeout: 1200000 }),
