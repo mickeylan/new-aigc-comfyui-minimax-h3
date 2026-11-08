@@ -28,7 +28,8 @@ func newInputRecoveryFixture(t *testing.T) *inputRecoveryFixture {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	inputDir := filepath.Join(root, "input", "1")
+	assetRoot := filepath.Join(root, "data", "assets")
+	inputDir := filepath.Join(assetRoot, "1")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +61,7 @@ func newInputRecoveryFixture(t *testing.T) *inputRecoveryFixture {
 	if err := db.Create(&scene).Error; err != nil {
 		t.Fatal(err)
 	}
-	svc := NewTaskService(&config.Config{Comfy: config.ComfyConfig{ComfyDir: root}}, db, nil, nil, NewHub(), NewRemoteExec(config.RemoteConfig{}))
+	svc := NewTaskService(&config.Config{Comfy: config.ComfyConfig{ComfyDir: filepath.Join(root, "ComfyUI")}, Storage: config.StorageConfig{DataDir: filepath.Join(root, "data")}}, db, nil, nil, NewHub(), NewRemoteExec(config.RemoteConfig{}))
 	return &inputRecoveryFixture{svc, &character, &scene, current, missing, &task}
 }
 
@@ -78,7 +79,7 @@ func TestEnsureProjectInputRedownloadsRecordedComfyOutput(t *testing.T) {
 	if len(requested) != 1 || requested[0] != "krea2/character_sheet_20261005-210050_00001_.png" {
 		t.Fatalf("recorded output path not used: %v", requested)
 	}
-	restored, err := os.ReadFile(filepath.Join(f.svc.cfg.Comfy.ComfyDir, "input", "1", f.missing))
+	restored, err := os.ReadFile(filepath.Join(f.svc.cfg.AssetsRoot(), "1", f.missing))
 	if err != nil || string(restored) != "krea2-original-sheet" {
 		t.Fatalf("missing file was not restored from recorded output: %v %q", err, restored)
 	}
@@ -94,7 +95,7 @@ func TestEnsureProjectInputRedownloadsRecordedComfyOutput(t *testing.T) {
 	if len(refs) != 1 || refs[0].AssetVariantID != 1 || refs[0].SourceID != f.character.ID {
 		t.Fatalf("exact-output restore should keep the variant selection: %+v", refs)
 	}
-	if _, err := os.Stat(filepath.Join(f.svc.cfg.Comfy.ComfyDir, "input", "1", f.current)); err != nil {
+	if _, err := os.Stat(filepath.Join(f.svc.cfg.AssetsRoot(), "1", f.current)); err != nil {
 		t.Fatal("existing authoritative file was disturbed")
 	}
 }
@@ -110,7 +111,7 @@ func TestEnsureProjectInputFallsBackToCurrentAuthoritativeArtWithoutTask(t *test
 	if _, err := f.svc.ensureProjectInputFile(1, f.missing); err != nil {
 		t.Fatal(err)
 	}
-	restored, err := os.ReadFile(filepath.Join(f.svc.cfg.Comfy.ComfyDir, "input", "1", f.missing))
+	restored, err := os.ReadFile(filepath.Join(f.svc.cfg.AssetsRoot(), "1", f.missing))
 	if err != nil || string(restored) != "authoritative-sheet-bytes" {
 		t.Fatalf("authoritative copy not used: %v %q", err, restored)
 	}
@@ -118,7 +119,7 @@ func TestEnsureProjectInputFallsBackToCurrentAuthoritativeArtWithoutTask(t *test
 
 func TestEnsureProjectInputNeverSubstitutesHistoricalVariantSilently(t *testing.T) {
 	f := newInputRecoveryFixture(t)
-	inputDir := filepath.Join(f.svc.cfg.Comfy.ComfyDir, "input", "1")
+	inputDir := filepath.Join(f.svc.cfg.AssetsRoot(), "1")
 	if err := os.Remove(filepath.Join(inputDir, f.current)); err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +141,7 @@ func TestEnsureProjectInputReportsUnavailableRecordedOutput(t *testing.T) {
 	if err := f.svc.db.Where("task_id = ?", f.task.TaskID).Delete(&models.Task{}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(filepath.Join(f.svc.cfg.Comfy.ComfyDir, "input", "1", f.current)); err != nil {
+	if err := os.Remove(filepath.Join(f.svc.cfg.AssetsRoot(), "1", f.current)); err != nil {
 		t.Fatal(err)
 	}
 	_, err := f.svc.ensureProjectInputFile(1, f.missing)
@@ -151,11 +152,11 @@ func TestEnsureProjectInputReportsUnavailableRecordedOutput(t *testing.T) {
 
 func TestEnsureProjectInputExplainsMissingOrDisconnectedInputRoot(t *testing.T) {
 	f := newInputRecoveryFixture(t)
-	if err := os.RemoveAll(filepath.Join(f.svc.cfg.Comfy.ComfyDir, "input")); err != nil {
+	if err := os.RemoveAll(f.svc.cfg.AssetsRoot()); err != nil {
 		t.Fatal(err)
 	}
 	_, err := f.svc.ensureProjectInputFile(1, f.missing)
-	if err == nil || !strings.Contains(err.Error(), "目录不可访问") || !strings.Contains(err.Error(), "comfy_dir") {
+	if err == nil || !strings.Contains(err.Error(), "目录不可访问") || !strings.Contains(err.Error(), "asset_dir") {
 		t.Fatalf("unclear root diagnostic: %v", err)
 	}
 }

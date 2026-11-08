@@ -44,11 +44,19 @@ type ComfyConfig struct {
 	ContainerPrefix string                `yaml:"container_prefix"` // docker 模式容器名前缀, 如 comfyui-gpu
 	Network         string                `yaml:"network"`          // docker 模式容器网络名, 用于内网解析容器名
 	Instances       []ComfyInstanceConfig `yaml:"instances"`        // 可选：跨电脑 ComfyUI 端点；身份为 host+port
+	// OutputSubfolders are fallback ComfyUI output subfolders tried when restoring a
+	// cleared asset. The subfolder recorded on the task is always tried first. Users
+	// may also set this at runtime via the comfy_output_subfolders setting.
+	OutputSubfolders []string `yaml:"output_subfolders"`
 }
 
 type StorageConfig struct {
 	DBPath  string `yaml:"db_path"`
 	DataDir string `yaml:"data_dir"`
+	// AssetDir holds durable project media (portraits, four-view sheets, scene
+	// images, voices). Defaults to <data_dir>/assets. It must NOT be the ComfyUI
+	// input directory, which is transient and usually not backed up.
+	AssetDir string `yaml:"asset_dir"`
 }
 
 type GPUConfig struct {
@@ -119,6 +127,16 @@ func Default() *Config {
 	}
 }
 
+func (c *Config) AssetsRoot() string {
+	if dir := strings.TrimSpace(c.Storage.AssetDir); dir != "" {
+		return dir
+	}
+	if strings.TrimSpace(c.Storage.DataDir) != "" {
+		return filepath.Join(c.Storage.DataDir, "assets")
+	}
+	return "assets"
+}
+
 func executableDir() string {
 	executable, err := os.Executable()
 	if err != nil {
@@ -179,12 +197,25 @@ func Load() *Config {
 	}
 	cfg.Storage.DBPath = resolveConfiguredPath(cfg.Storage.DBPath, configDir)
 	cfg.Storage.DataDir = resolveConfiguredPath(cfg.Storage.DataDir, configDir)
+	cfg.Storage.AssetDir = resolveConfiguredPath(cfg.Storage.AssetDir, configDir)
+	if cfg.Storage.AssetDir == "" {
+		cfg.Storage.AssetDir = filepath.Join(cfg.Storage.DataDir, "assets")
+	}
+	if absolute, err := filepath.Abs(cfg.Storage.AssetDir); err == nil {
+		cfg.Storage.AssetDir = absolute
+	}
+	if absolute, err := filepath.Abs(cfg.Comfy.ComfyDir); err == nil {
+		cfg.Comfy.ComfyDir = absolute
+	}
+	if legacy := filepath.Join(cfg.Comfy.ComfyDir, "input"); filepath.Clean(legacy) == filepath.Clean(cfg.Storage.AssetDir) {
+		log.Printf("[config] WARNING: asset_dir resolves to the ComfyUI input directory; generated assets would live in a transient folder")
+	}
 	if cfg.TemplatesDir != "" {
 		cfg.TemplatesDir = resolveConfiguredPath(cfg.TemplatesDir, configDir)
 	}
 	if cfg.CombatReferenceDir != "" {
 		cfg.CombatReferenceDir = resolveConfiguredPath(cfg.CombatReferenceDir, configDir)
 	}
-	log.Printf("[config] sqlite=%s data_dir=%s", cfg.Storage.DBPath, cfg.Storage.DataDir)
+	log.Printf("[config] sqlite=%s data_dir=%s asset_dir=%s", cfg.Storage.DBPath, cfg.Storage.DataDir, cfg.Storage.AssetDir)
 	return cfg
 }

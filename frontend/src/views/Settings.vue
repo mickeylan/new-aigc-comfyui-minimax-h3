@@ -191,6 +191,11 @@
           <input id="h3_max_duration_seconds" v-model.number="form.h3_max_duration_seconds" type="number" min="3" max="60" step="1" class="input" />
           <div class="field-hint">默认15秒。超过15秒只用于已实测的高显存实例；本机约12GB显存不建议提高，30秒以上通常风险很高。该设置是执行门禁，不改变内部Shot的3–15秒规则。</div>
         </div>
+        <div class="field">
+          <label for="comfy_output_subfolders">ComfyUI 输出子目录（恢复素材用）</label>
+          <input id="comfy_output_subfolders" v-model.trim="form.comfy_output_subfolders" type="text" class="input" placeholder="例如 krea2, storyboard_candidates" />
+          <div class="field-hint">逗号分隔的相对子目录，位于 ComfyUI 的 output 目录下。清空 input 后恢复素材时，先按任务记录的实际子目录查找，再依次尝试这里配置的目录；留空则只使用任务记录。不要填写绝对路径或盘符。</div>
+        </div>
       </div>
 
       <div class="actions-row">

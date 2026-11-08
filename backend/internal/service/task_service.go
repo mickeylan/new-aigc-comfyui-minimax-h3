@@ -996,10 +996,10 @@ func (s *TaskService) syncInputFilesToInstance(client *ComfyClient, params map[s
 			name, _ := v["name"].(string)
 			if taskID != "" && name != "" {
 				var err error
-				if taskID, err = safeFileSegment(taskID, "素材 task_id"); err != nil {
+				if taskID, err = safeFileSegment(taskID, "?? task_id"); err != nil {
 					return err
 				}
-				if name, err = safeFileSegment(name, "素材文件名"); err != nil {
+				if name, err = safeFileSegment(name, "?????"); err != nil {
 					return err
 				}
 				rel := filepath.ToSlash(filepath.Join(taskID, name))
@@ -1007,39 +1007,28 @@ func (s *TaskService) syncInputFilesToInstance(client *ComfyClient, params map[s
 					return nil
 				}
 				seen[rel] = true
+				// Durable media lives outside ComfyUI input. It is copied to the selected
+				// instance for this submission only, so clearing input cannot lose assets.
+				sourcePath := filepath.Join(s.cfg.AssetsRoot(), filepath.FromSlash(rel))
 				if projectID, convErr := strconv.ParseUint(taskID, 10, 64); convErr == nil && projectID > 0 {
-					// A cleared ComfyUI input directory must not block generation when the
-					// authoritative asset card still holds the same artwork under a
-					// different generated filename.
-					sourcePath, err := s.ensureProjectInputFile(uint(projectID), name)
+					sourcePath, err = s.ensureProjectInputFile(uint(projectID), name)
 					if err != nil {
 						return fmt.Errorf("%s: %w", rel, err)
 					}
-					file, openErr := s.remote.Open(sourcePath)
-					if openErr != nil {
-						return fmt.Errorf("?? %s ??: %w", rel, openErr)
-					}
-					data, readErr := io.ReadAll(file)
-					file.Close()
-					if readErr != nil {
-						return fmt.Errorf("?? %s ??: %w", rel, readErr)
-					}
-					if err := client.UploadInput(name, taskID, data); err != nil {
-						return fmt.Errorf("?? %s ??: %w", rel, err)
-					}
-					return nil
+				} else if legacy := filepath.Join(s.cfg.Comfy.ComfyDir, "input", filepath.FromSlash(rel)); !s.remote.Exists(sourcePath) && s.remote.Exists(legacy) {
+					sourcePath = legacy
 				}
-				file, err := s.remote.Open(filepath.Join(s.cfg.Comfy.ComfyDir, "input", filepath.FromSlash(rel)))
-				if err != nil {
-					return fmt.Errorf("读取 %s 失败: %w", rel, err)
+				file, openErr := s.remote.Open(sourcePath)
+				if openErr != nil {
+					return fmt.Errorf("?? %s ??: %w", rel, openErr)
 				}
 				data, readErr := io.ReadAll(file)
 				file.Close()
 				if readErr != nil {
-					return fmt.Errorf("读取 %s 失败: %w", rel, readErr)
+					return fmt.Errorf("?? %s ??: %w", rel, readErr)
 				}
 				if err := client.UploadInput(name, taskID, data); err != nil {
-					return fmt.Errorf("上传 %s 失败: %w", rel, err)
+					return fmt.Errorf("?? %s ??: %w", rel, err)
 				}
 			}
 			for _, child := range v {

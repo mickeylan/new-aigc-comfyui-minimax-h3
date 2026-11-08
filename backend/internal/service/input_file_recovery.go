@@ -34,8 +34,26 @@ type missingInputOwner struct {
 	entityID   uint
 }
 
+// Generated media is stored in the durable asset root, never in ComfyUI input.
 func (s *TaskService) inputFilePath(projectID uint, name string) string {
+	return filepath.Join(s.cfg.AssetsRoot(), strconv.FormatUint(uint64(projectID), 10), name)
+}
+
+// legacyInputFilePath is the pre-migration ComfyUI input location, read-only fallback.
+func (s *TaskService) legacyInputFilePath(projectID uint, name string) string {
 	return filepath.Join(s.cfg.Comfy.ComfyDir, "input", strconv.FormatUint(uint64(projectID), 10), name)
+}
+
+func (s *TaskService) existingInputPath(projectID uint, name string) (string, bool) {
+	primary := s.inputFilePath(projectID, name)
+	if s.remote.Exists(primary) {
+		return primary, true
+	}
+	legacy := s.legacyInputFilePath(projectID, name)
+	if s.remote.Exists(legacy) {
+		return legacy, true
+	}
+	return "", false
 }
 
 func (s *TaskService) resolveMissingInputOwner(projectID uint, name string) (*missingInputOwner, error) {
@@ -101,7 +119,61 @@ func (s *TaskService) downloadTaskOutput(task *models.Task) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return client.DownloadOutput(filename, subfolder, "output")
+	// The recorded subfolder is authoritative. Configured folders are only fallbacks
+	// for installations whose output layout was changed by the user.
+	var lastErr error
+	for _, candidate := range s.outputSubfolders(subfolder) {
+		data, downloadErr := client.DownloadOutput(filename, candidate, "output")
+		if downloadErr == nil && len(data) > 0 {
+			return data, nil
+		}
+		lastErr = downloadErr
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("输出文件 %s 不存在", file)
+	}
+	return nil, lastErr
+}
+
+// outputSubfolders returns the recorded folder first, then any user-configured
+// ComfyUI output subfolders, then the output root. No folder name is hardcoded.
+func (s *TaskService) outputSubfolders(recorded string) []string {
+	candidates := []string{}
+	seen := map[string]bool{}
+	add := func(value string) {
+		value = strings.Trim(strings.TrimSpace(value), "/")
+		// Subfolders are relative to the ComfyUI output root; reject traversal,
+		// absolute paths, drive letters and backslashes instead of silently using them.
+		unsafe := strings.Contains(value, "..") || strings.ContainsAny(value, `:\`) || strings.HasPrefix(value, "/")
+		if unsafe {
+			return
+		}
+		if !seen[value] {
+			seen[value] = true
+			candidates = append(candidates, value)
+		}
+	}
+	add(recorded)
+	for _, value := range s.configuredOutputSubfolders() {
+		add(value)
+	}
+	add("")
+	return candidates
+}
+
+const settingComfyOutputSubfolders = "comfy_output_subfolders"
+
+func (s *TaskService) configuredOutputSubfolders() []string {
+	out := append([]string(nil), s.cfg.Comfy.OutputSubfolders...)
+	if s.db != nil {
+		var setting models.Setting
+		if s.db.Where("key = ?", settingComfyOutputSubfolders).First(&setting).Error == nil {
+			out = append(out, strings.FieldsFunc(setting.Value, func(r rune) bool {
+				return r == ',' || r == ';' || r == '，' || r == '；' || r == '\n' || r == ' '
+			})...)
+		}
+	}
+	return out
 }
 
 // restoreFromRecordedOutput re-downloads the exact artwork recorded for this
@@ -160,7 +232,10 @@ func (s *TaskService) restoreFromAuthoritativeCurrent(projectID uint, name strin
 	if authoritative == "" {
 		return "", fmt.Errorf("%s缺少当前有效图片，请在资产卡重新生成", owner.label)
 	}
-	sourcePath := s.inputFilePath(projectID, authoritative)
+	sourcePath, found := s.existingInputPath(projectID, authoritative)
+	if !found {
+		sourcePath = ""
+	}
 	reader, openErr := s.remote.Open(sourcePath)
 	if openErr != nil {
 		return "", fmt.Errorf("%s的当前图片已丢失，且没有可重新取回的生成任务；请在资产卡重新生成或选择一个仍存在的历史版本", owner.label)
@@ -229,8 +304,22 @@ func (s *TaskService) repairStaleSceneReferenceVariants(projectID uint, missingN
 // generation output or the entity's current authoritative artwork is used.
 func (s *TaskService) ensureProjectInputFile(projectID uint, name string) (string, error) {
 	configured := s.inputFilePath(projectID, name)
-	if s.remote.Exists(configured) {
-		return configured, nil
+	if existing, ok := s.existingInputPath(projectID, name); ok {
+		// Lazy migration: keep serving from the durable root once possible.
+		if existing == configured {
+			return configured, nil
+		}
+		if data, readErr := s.remote.Open(existing); readErr == nil {
+			content, copyErr := io.ReadAll(io.LimitReader(data, 64<<20))
+			data.Close()
+			if copyErr == nil && len(content) > 0 {
+				if writeErr := s.remote.WriteFile(configured, content, 0o644); writeErr == nil {
+					log.Printf("[assets] migrated %s from legacy ComfyUI input (project=%d)", name, projectID)
+					return configured, nil
+				}
+			}
+		}
+		return existing, nil
 	}
 	// The recorded output is this exact file's own artwork, so Scene selections that
 	// reference it stay valid. Only falling back to the current authoritative image
@@ -242,7 +331,7 @@ func (s *TaskService) ensureProjectInputFile(projectID uint, name string) (strin
 		if _, currentErr := s.restoreFromAuthoritativeCurrent(projectID, name); currentErr != nil {
 			projectInput := filepath.Dir(configured)
 			if fi, statErr := os.Stat(projectInput); !s.remote.Enabled() && (statErr != nil || !fi.IsDir()) {
-				return "", fmt.Errorf("ComfyUI input 目录不可访问：%s；请检查配置 comfy_dir 是否正确、网络盘是否已连接（素材文件本身未被删除）", s.cfg.Comfy.ComfyDir)
+				return "", fmt.Errorf("素材目录不可访问：%s；请检查配置 asset_dir 或网络盘（素材文件本身未被删除）", s.cfg.AssetsRoot())
 			}
 			return "", fmt.Errorf("%v；%v", outputErr, currentErr)
 		}

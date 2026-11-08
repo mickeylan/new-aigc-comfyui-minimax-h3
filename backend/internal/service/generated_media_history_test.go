@@ -41,13 +41,13 @@ func TestGeneratedMediaDeleteRemovesOnlyUnreferencedProjectFile(t *testing.T) {
 	cfg := config.Default()
 	cfg.Comfy.ComfyDir = filepath.Join(root, "comfy")
 	remote := NewRemoteExec(config.RemoteConfig{})
-	if err := os.MkdirAll(filepath.Join(cfg.Comfy.ComfyDir, "input", "1"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(cfg.AssetsRoot(), "1"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	remote.SetLocalRoots([]string{cfg.Comfy.ComfyDir})
+	remote.SetLocalRoots([]string{cfg.Comfy.ComfyDir, cfg.Storage.DataDir})
 	upload := NewUploadManager(cfg, db, remote)
 	file := "old.png"
-	path := filepath.Join(cfg.Comfy.ComfyDir, "input", "1", file)
+	path := filepath.Join(cfg.AssetsRoot(), "1", file)
 	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}

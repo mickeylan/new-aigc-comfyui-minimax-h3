@@ -68,7 +68,7 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	hub := NewHub()
 	remote := NewRemoteExec(cfg.Remote)
 	// 容器挂载了算力节点共享目录（ComfyDir/DataDir 本机可见）时，文件操作直读本地，跳过 SSH
-	remote.SetLocalRoots([]string{cfg.Comfy.ComfyDir, cfg.Storage.DataDir})
+	remote.SetLocalRoots([]string{cfg.Comfy.ComfyDir, cfg.Storage.DataDir, cfg.AssetsRoot()})
 	mgr := NewInstanceManager(cfg, db, remote)
 	mon := NewGPUMonitor(cfg, db, remote)
 	tasks := NewTaskService(cfg, db, mgr, mon, hub, remote)
@@ -171,6 +171,10 @@ func (s *Service) Start() error {
 			log.Printf("[remote] 已连接算力节点 %s (SSH)", s.Cfg.Remote.Host)
 		}
 	}
+	// One-time idempotent migration: previously generated project media may still sit
+	// in the ComfyUI input directory. Move copies into the durable asset root so a
+	// backup of data/ is sufficient.
+	go s.Upload.MigrateLegacyAssets()
 	s.Mon.Start()
 	s.Tasks.StartRecovery()
 	s.Projects.WatchSceneVideos()

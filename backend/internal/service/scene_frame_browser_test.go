@@ -61,7 +61,8 @@ func TestSceneFrameBrowserExtractsEveryFrameAndSavesSelection(t *testing.T) {
 	if saved.File == "" || saved.URL == "" || filepath.Ext(saved.File) != ".png" {
 		t.Fatalf("saved=%+v", saved)
 	}
-	if _, err := os.Stat(filepath.Join(inputDir, saved.File)); err != nil {
+	// Selected frames are durable assets, while extracted frames stay transient.
+	if _, err := os.Stat(filepath.Join(continuity.cfg.AssetsRoot(), fmt.Sprint(project.ID), saved.File)); err != nil {
 		t.Fatalf("saved frame missing: %v", err)
 	}
 	var upload models.UploadFile

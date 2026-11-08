@@ -4,6 +4,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
@@ -178,9 +179,109 @@ func NewUploadManager(cfg *config.Config, db *gorm.DB, remote *RemoteExec) *Uplo
 	return &UploadManager{cfg: cfg, db: db, remote: remote}
 }
 
-// InputDir 返回 ComfyUI 共享 input 目录
+// InputDir 返回持久化的项目素材目录（data/assets），不再是 ComfyUI 的 input。
+// ComfyUI 实例只接收每次任务提交前的临时上传，清空实例 input 不会丢素材。
 func (m *UploadManager) InputDir() string {
-	return m.cfg.Comfy.ComfyDir + "/input"
+	return m.cfg.AssetsRoot()
+}
+
+// LegacyInputDir 是旧版本存放素材的 ComfyUI input 目录，仅用于一次性/按需迁移读取。
+func (m *UploadManager) LegacyInputDir() string {
+	return filepath.Join(m.cfg.Comfy.ComfyDir, "input")
+}
+
+// ResolveReadPath 返回素材的持久路径：优先 data/assets；仅当旧文件仍留在 ComfyUI
+// input 时按需复制到持久目录，避免用户只备份 data（含数据库）却丢素材。
+func (m *UploadManager) ResolveReadPath(taskID, name string) string {
+	rel := filepath.Join(taskID, filepath.FromSlash(name))
+	primary := filepath.Join(m.InputDir(), rel)
+	if m.remote != nil && !m.remote.Enabled() {
+		if _, err := os.Stat(primary); err == nil {
+			return primary
+		}
+	} else if m.remote != nil && m.remote.Exists(primary) {
+		return primary
+	}
+	if m.remote == nil {
+		return primary
+	}
+	legacy := filepath.Join(m.LegacyInputDir(), rel)
+	if !m.remote.Exists(legacy) {
+		return primary
+	}
+	// Only migrate files this application recorded as assets. Transient files such
+	// as extracted video frames legitimately live in the ComfyUI input directory.
+	var recorded int64
+	if m.db != nil {
+		_ = m.db.Model(&models.UploadFile{}).Where("task_id = ? AND name = ?", taskID, filepath.Base(name)).Count(&recorded).Error
+	}
+	if recorded == 0 {
+		return legacy
+	}
+	if data, err := m.remote.Open(legacy); err == nil {
+		content, readErr := io.ReadAll(io.LimitReader(data, 512<<20))
+		data.Close()
+		if readErr == nil && len(content) > 0 {
+			if err := m.remote.WriteFile(primary, content, 0o644); err == nil {
+				log.Printf("[assets] migrated %s from legacy ComfyUI input", rel)
+				return primary
+			}
+		}
+	}
+	return legacy
+}
+
+// MigrateLegacyAssets copies previously recorded project media from the ComfyUI
+// input directory into the durable asset root. Idempotent; missing files are
+// reported but never removed from the legacy location.
+func (m *UploadManager) MigrateLegacyAssets() {
+	if m == nil || m.db == nil || m.remote == nil {
+		return
+	}
+	legacyRoot := filepath.Clean(m.LegacyInputDir())
+	if samePath(legacyRoot, filepath.Clean(m.InputDir())) {
+		return
+	}
+	var files []models.UploadFile
+	if err := m.db.Order("id").Find(&files).Error; err != nil {
+		log.Printf("[assets] legacy migration skipped: %v", err)
+		return
+	}
+	migrated, missing := 0, 0
+	for _, file := range files {
+		if strings.TrimSpace(file.TaskID) == "" || strings.TrimSpace(file.Name) == "" {
+			continue
+		}
+		primary := filepath.Join(m.InputDir(), file.TaskID, filepath.FromSlash(file.Name))
+		if m.remote.Exists(primary) {
+			continue
+		}
+		legacy := filepath.Join(legacyRoot, file.TaskID, filepath.FromSlash(file.Name))
+		reader, err := m.remote.Open(legacy)
+		if err != nil {
+			missing++
+			continue
+		}
+		data, readErr := io.ReadAll(io.LimitReader(reader, 512<<20))
+		reader.Close()
+		if readErr != nil || len(data) == 0 {
+			missing++
+			continue
+		}
+		if err := m.remote.WriteFile(primary, data, 0o644); err != nil {
+			log.Printf("[assets] migrate %s failed: %v", legacy, err)
+			missing++
+			continue
+		}
+		migrated++
+	}
+	log.Printf("[assets] legacy migration finished: migrated=%d missing=%d asset_dir=%s", migrated, missing, m.InputDir())
+}
+
+func samePath(a, b string) bool {
+	absA, errA := filepath.Abs(a)
+	absB, errB := filepath.Abs(b)
+	return errA == nil && errB == nil && strings.EqualFold(filepath.Clean(absA), filepath.Clean(absB))
 }
 
 func safeFileSegment(value, label string) (string, error) {
@@ -215,17 +316,13 @@ func (m *UploadManager) SaveFile(taskID, ftype, filename string, data []byte) (s
 		return "", 0, fmt.Errorf("文件类型无效")
 	}
 	relPath := path.Join(taskID, filename)
-	var target string
-	if m.remote != nil && m.remote.Enabled() {
-		// SFTP and remote shells always use POSIX paths, even when the API server runs on Windows.
-		target = path.Join(filepath.ToSlash(m.InputDir()), relPath)
-	} else {
-		root := filepath.Clean(m.InputDir())
-		target = filepath.Join(root, filepath.FromSlash(relPath))
-		rel, err := filepath.Rel(root, target)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return "", 0, fmt.Errorf("上传路径越界")
-		}
+	// Durable assets always live on the API host under <data_dir>/assets, even when
+	// ComfyUI runs remotely; instances receive a temporary copy per submitted task.
+	root := filepath.Clean(m.InputDir())
+	target := filepath.Join(root, filepath.FromSlash(relPath))
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", 0, fmt.Errorf("上传路径越界")
 	}
 	if m.remote == nil {
 		return "", 0, fmt.Errorf("上传服务未配置")

@@ -16,6 +16,9 @@ comfy:
   mode: ssh
   container_prefix: comfyui-gpu
   network: comfyui-console_default
+  # 可选：恢复已清空素材时依次尝试的 ComfyUI output 子目录（相对路径）。
+  # 任务记录的实际子目录始终优先；这里仅作用户自定义布局的备用。
+  # output_subfolders: [krea2, storyboard_candidates]
   # 可选：跨电脑实例。实例身份是 host+port，所以不同电脑可以都使用 8188。
   # managed=false 表示平台只调度，不负责远程启停该 ComfyUI。
   # instances:
@@ -25,6 +28,9 @@ comfy:
 storage:
   db_path: /opt/comfyui-console/data/console.db
   data_dir: /opt/comfyui-console/data
+  # 生成素材（标准像、四视图、场景图、配音等）的持久目录，默认 data_dir/assets。
+  # 不要指向 ComfyUI 的 input 目录：那是易失的临时目录，用户通常不会备份。
+  # asset_dir: /opt/comfyui-console/data/assets
 
 gpu:
   nvidia_smi: /usr/bin/nvidia-smi

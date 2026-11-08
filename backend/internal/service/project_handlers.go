@@ -31,6 +31,8 @@ func (s *Service) HandleGetSettings(c *gin.Context) {
 	settings["llama_model"] = s.Volc.GetSetting(SettingLlamaModel, DefaultLlamaModel)
 	settings[SettingMiniMaxBaseURL] = s.Volc.GetSetting(SettingMiniMaxBaseURL, "")
 	settings[SettingMiniMaxModel] = s.Volc.GetSetting(SettingMiniMaxModel, DefaultMiniMaxModel)
+	settings[settingComfyOutputSubfolders] = s.Volc.GetSetting(settingComfyOutputSubfolders, strings.Join(s.Cfg.Comfy.OutputSubfolders, ", "))
+	settings["asset_dir"] = s.Cfg.AssetsRoot()
 	settings["tts_provider"] = "aliyun"
 	settings["index_tts_enabled"] = "false"
 	settings["index_tts_available"] = "false"
@@ -102,6 +104,16 @@ func (s *Service) HandleUpdateSettings(c *gin.Context) {
 			return
 		}
 		req[SettingIndexTTSExecutionMode] = mode
+	}
+	if value, ok := req[settingComfyOutputSubfolders]; ok {
+		for _, folder := range strings.FieldsFunc(value, func(r rune) bool {
+			return r == ',' || r == ';' || r == '，' || r == '；' || r == '\n' || r == ' '
+		}) {
+			if strings.Contains(folder, "..") || strings.ContainsAny(folder, `:\`) || strings.HasPrefix(folder, "/") {
+				c.JSON(400, gin.H{"error": "输出子目录必须是 ComfyUI output 下的相对目录，不能包含盘符、绝对路径或 .."})
+				return
+			}
+		}
 	}
 	s.Volc.UpdateSettings(req)
 	if req[SettingIndexTTSExecutionMode] == "native_local" && s.Projects != nil {
@@ -2748,7 +2760,9 @@ func (s *Service) HandleInputFile(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "invalid path"})
 		return
 	}
-	full := s.Upload.InputDir() + "/" + taskID + "/" + path
+	// Durable assets live under data/assets; legacy files still in ComfyUI input are
+	// migrated on read so previews keep working after the storage move.
+	full := s.Upload.ResolveReadPath(taskID, path)
 	handleRemoteFile(c, s.Remote, full)
 }
 
