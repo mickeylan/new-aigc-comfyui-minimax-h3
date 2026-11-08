@@ -207,6 +207,48 @@ func TestParseScriptJSONNormalizesOnlyKnownScalarFields(t *testing.T) {
 	}
 }
 
+func TestParseScriptJSONNormalizesKnownStringListObjects(t *testing.T) {
+	raw := `{
+		"script":"第三集正文","visual_bible":"古典仙侠",
+		"scenes":[{
+			"title":"围攻","content":"三人同时出手","image_prompt":"荒野围攻",
+			"characters":[{"name":"青衣高大男子","role":"主角"},{"character":"柳乐儿"},"燕承",{"name":"燕承"}],
+			"visible_characters":[{"canonical_name":"青衣高大男子"},{"name":"燕承"}],
+			"voice_characters":[{"role_name":"柳乐儿"}],
+			"mentioned_characters":[{"name":"齐姓道士"}],
+			"props":[{"prop_name":"黑色大网"},{"asset_name":"青芒飞针"},"朴刀"],
+			"dialogues":[]
+		}]
+	}`
+	result, err := parseScriptJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scene := result.Scenes[0]
+	if got := strings.Join(scene.Characters, ","); got != "青衣高大男子,柳乐儿,燕承" {
+		t.Fatalf("characters=%q", got)
+	}
+	if got := strings.Join(scene.VisibleCharacters, ","); got != "青衣高大男子,燕承" {
+		t.Fatalf("visible_characters=%q", got)
+	}
+	if got := strings.Join(scene.VoiceCharacters, ","); got != "柳乐儿" {
+		t.Fatalf("voice_characters=%q", got)
+	}
+	if got := strings.Join(scene.MentionedCharacters, ","); got != "齐姓道士" {
+		t.Fatalf("mentioned_characters=%q", got)
+	}
+	if got := strings.Join(scene.Props, ","); got != "黑色大网,青芒飞针,朴刀" {
+		t.Fatalf("props=%q", got)
+	}
+}
+
+func TestParseScriptJSONRejectsUnknownStringListObject(t *testing.T) {
+	raw := `{"script":"正文","scenes":[{"title":"s1","content":"c1","image_prompt":"p1","characters":[{"id":7,"description":"角色对象"}]}]}`
+	if _, err := parseScriptJSON(raw); err == nil || !strings.Contains(err.Error(), "characters") {
+		t.Fatalf("unknown character object should remain invalid, got %v", err)
+	}
+}
+
 func TestParseScriptJSONInvalid(t *testing.T) {
 	if _, err := parseScriptJSON("这不是 JSON"); err == nil {
 		t.Fatal("期望解析失败")

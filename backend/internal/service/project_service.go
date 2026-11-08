@@ -6214,6 +6214,60 @@ var scriptDialogueScalarStringFields = map[string]bool{
 	"character": true, "speech_type": true, "text": true,
 }
 
+// normalizeKnownStringList accepts the narrow schema drift repeatedly produced by
+// text models for []string fields: an element may be {"name":"柳乐儿"} instead of
+// "柳乐儿". Only explicitly named identity keys are accepted. Unknown objects,
+// booleans and numbers remain untouched so strict json.Unmarshal still rejects them.
+func normalizeKnownStringList(value any, keys ...string) (any, bool) {
+	items, ok := value.([]any)
+	if !ok {
+		return value, false
+	}
+	out := make([]string, 0, len(items))
+	seen := map[string]bool{}
+	changed := false
+	for _, item := range items {
+		text := ""
+		switch typed := item.(type) {
+		case string:
+			text = strings.TrimSpace(typed)
+		case map[string]any:
+			for _, key := range keys {
+				candidate, exists := typed[key]
+				if !exists {
+					continue
+				}
+				stringValue, valid := candidate.(string)
+				if !valid || strings.TrimSpace(stringValue) == "" {
+					return value, false
+				}
+				text = strings.TrimSpace(stringValue)
+				changed = true
+				break
+			}
+			if text == "" {
+				return value, false
+			}
+		default:
+			return value, false
+		}
+		if text == "" || seen[text] {
+			if text == "" {
+				changed = true
+			} else {
+				changed = true
+			}
+			continue
+		}
+		seen[text] = true
+		out = append(out, text)
+	}
+	if !changed {
+		return value, false
+	}
+	return out, true
+}
+
 func normalizeScriptScalarStrings(data []byte) ([]byte, bool) {
 	var root map[string]any
 	if json.Unmarshal(data, &root) != nil {
@@ -6238,6 +6292,21 @@ func normalizeScriptScalarStrings(data []byte) ([]byte, bool) {
 				continue
 			}
 			normalizeFields(scene, scriptSceneScalarStringFields)
+			// Known []string fields may drift to arrays of small identity objects.
+			// Normalize only the authoritative name key for each field; arbitrary
+			// structures remain invalid and are rejected by strict decoding below.
+			for _, field := range []string{"characters", "visible_characters", "voice_characters", "mentioned_characters"} {
+				if value, exists := scene[field]; exists {
+					if normalized, changed := normalizeKnownStringList(value, "name", "character", "canonical_name", "role_name"); changed {
+						scene[field] = normalized
+					}
+				}
+			}
+			if value, exists := scene["props"]; exists {
+				if normalized, changed := normalizeKnownStringList(value, "name", "prop_name", "asset_name"); changed {
+					scene["props"] = normalized
+				}
+			}
 			if dialogues, ok := scene["dialogues"].([]any); ok {
 				for _, rawDialogue := range dialogues {
 					if dialogue, ok := rawDialogue.(map[string]any); ok {

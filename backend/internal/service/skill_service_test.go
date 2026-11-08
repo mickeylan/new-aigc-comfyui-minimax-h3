@@ -67,6 +67,26 @@ func TestSkillService_InitSystemSkills(t *testing.T) {
 	}
 }
 
+func TestNovelEpisodeSkillRequiresPureStringCollections(t *testing.T) {
+	db := newTestDB(t)
+	svc := NewSkillService(db)
+	if err := svc.InitSystemSkills(); err != nil {
+		t.Fatal(err)
+	}
+	var skill models.Skill
+	if err := db.Where("code = ?", "novel-episode-script").Order("version DESC,id DESC").First(&skill).Error; err != nil {
+		t.Fatal(err)
+	}
+	if skill.Version != 4 {
+		t.Fatalf("novel episode skill version=%d, want 4", skill.Version)
+	}
+	for _, want := range []string{"必须是纯字符串数组", "数组元素禁止输出对象", "must_keep_events逐项落地", "不得发明原著没有的战斗"} {
+		if !strings.Contains(skill.SystemPrompt, want) {
+			t.Fatalf("novel episode skill missing %q: %s", want, skill.SystemPrompt)
+		}
+	}
+}
+
 func TestCharacterSkillRequiresConcreteHistoricalHairstyle(t *testing.T) {
 	db := newTestDB(t)
 	svc := NewSkillService(db)
