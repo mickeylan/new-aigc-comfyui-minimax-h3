@@ -24,7 +24,7 @@
         <button v-else class="btn btn-secondary" :disabled="busy || generatingPlan || !project?.synopsis" @click="generateCreativePlan">
           {{ generatingPlan ? '方案生成中…' : (project?.plan ? '1. 重新生成创作方案' : '1. 生成创作方案') }}
         </button>
-        <button class="btn" :disabled="busy || generatingScript || !project?.synopsis" @click="regenerateEpisodeScript">
+        <button class="btn" :disabled="generatingScript" @click="regenerateEpisodeScript">
           {{ generatingScript ? '剧本生成中…' : `${rollingRequired ? 'AI' : '2.'} 重新生成第${episodeN}集剧本` }}
         </button>
       </div>
@@ -179,16 +179,49 @@ async function generateCreativePlan() {
   } catch (e) { toast.error(e.response?.data?.error || '生成创作方案失败') }
   finally { clearInterval(planTimer); planTimer = null; planProgress.value = 100; generatingPlan.value = false; busy.value = false }
 }
+const SCRIPT_WATCHDOG_MS = 330000
+let scriptWatchdog = null
+function beginScriptGeneration() {
+  generatingScript.value = true
+  clearTimeout(scriptWatchdog)
+  scriptWatchdog = setTimeout(() => {
+    if (!generatingScript.value) return
+    generatingScript.value = false
+    scriptWatchdog = null
+    toast.error('剧本生成请求超时未返回。服务端可能仍在生成，请稍后刷新确认；按钮已解锁，可重试。')
+  }, SCRIPT_WATCHDOG_MS)
+}
+function endScriptGeneration() { clearTimeout(scriptWatchdog); scriptWatchdog = null; generatingScript.value = false }
+function staleScriptClaim(e) {
+  const message = String(e?.response?.data?.error || e?.message || '')
+  return e?.response?.status === 409 && message.includes('已有生成任务正在进行')
+}
+async function releaseStaleScriptClaim(e) {
+  if (!staleScriptClaim(e)) return false
+  if (!window.confirm(`重新生成剧本失败：${e?.response?.data?.error || e.message}\n\n上一次生成异常中断后仍占用项目生成锁。解除该锁不会删除已有剧本或媒体。是否解除并立即重试？`)) return false
+  try { await api.resetProjectGeneration(projectId) }
+  catch (resetError) { toast.error('解除生成锁失败：' + (resetError.response?.data?.error || resetError.message)); return false }
+  return true
+}
 async function regenerateEpisodeScript() {
+  if (generatingScript.value) return
   if (dirty.value) { toast.error('请先保存或放弃当前剧本修改，再重新生成剧本'); return }
   if (!window.confirm(`AI重新生成第${episodeN}集剧本会读取上一集完整生产内容、自动排重并替换本集 Scene、Shot、Dialogue；旧媒体会失效，系统会先保存安全版本。确定继续吗？`)) return
-  busy.value = true; generatingScript.value = true
+  beginScriptGeneration()
   try {
-    await api.generateScript(projectId, episodeN)
-    await load()
-    toast.success(`第${episodeN}集剧本已按最新创作方案重新生成`)
+    try {
+      await api.generateScript(projectId, episodeN)
+      await load()
+      toast.success(`第${episodeN}集剧本已按最新创作方案重新生成`)
+    } catch (e) {
+      if (!await releaseStaleScriptClaim(e)) throw e
+      beginScriptGeneration()
+      await api.generateScript(projectId, episodeN)
+      await load()
+      toast.success(`第${episodeN}集剧本已按最新创作方案重新生成`)
+    }
   } catch (e) { toast.error(e.response?.data?.error || '重新生成剧本失败') }
-  finally { generatingScript.value = false; busy.value = false }
+  finally { endScriptGeneration() }
 }
 function beforeUnload(event) { if (!dirty.value) return; event.preventDefault(); event.returnValue = '' }
 onMounted(() => { window.addEventListener('beforeunload', beforeUnload); load() })

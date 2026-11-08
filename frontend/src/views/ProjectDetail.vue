@@ -23,7 +23,7 @@
         <button v-if="!isRollingPlanningProject" class="btn btn-secondary btn-sm" :disabled="busy || generatingPlan || !project.synopsis" @click="generatePlan">
           {{ generatingPlan ? '方案生成中…' : (project.plan ? '📋 重新生成创作方案' : '📋 生成创作方案') }}
         </button>
-        <button class="btn btn-ghost btn-sm" :disabled="busy || generatingScript || !project.synopsis" @click="regenerateScript">
+        <button class="btn btn-ghost btn-sm" :disabled="generatingScript" @click="regenerateScript">
           {{ generatingScript ? '剧本生成中…' : ('🔄 重新生成第' + activeEpN + '集剧本') }}
         </button>
         <button v-if="!isRollingPlanningProject" class="btn btn-sm" :disabled="busy || pipelineActive || !project.synopsis" @click="startPipeline">
@@ -371,7 +371,7 @@
           <button class="btn btn-secondary btn-sm" :disabled="busy || scriptRendering || !scriptDraft.trim()" @click="saveAndRender">
             {{ scriptRendering ? '重建中…' : '💾 按当前剧本重建分镜（不重写剧本）' }}
           </button>
-          <button class="btn btn-sm" :disabled="busy || generatingScript || !project.synopsis" @click="regenerateScript">
+          <button class="btn btn-sm" :disabled="generatingScript" @click="regenerateScript">
             {{ generatingScript ? 'AI排重重写中…' : ('✨ AI重新生成第' + activeEpN + '集剧本（自动排重）') }}
           </button>
           <button class="btn btn-ghost btn-sm" @click="showScript = !showScript">
@@ -400,7 +400,7 @@
           <button class="btn btn-sm btn-secondary" :disabled="busy || scriptRendering || !scriptDraft.trim()" title="只按当前文本重新拆分Scene，不会重写重复剧情" @click="saveAndRender">
             {{ scriptRendering ? '重建中…' : '💾 按当前剧本重建分镜（不重写剧本）' }}
           </button>
-          <button class="btn btn-sm" :disabled="busy || generatingScript || !project.synopsis" @click="regenerateScript">
+          <button class="btn btn-sm" :disabled="generatingScript" @click="regenerateScript">
             {{ generatingScript ? 'AI排重重写中…' : ('✨ AI重新生成第' + activeEpN + '集剧本（自动排重）') }}
           </button>
         </div>
@@ -2612,30 +2612,81 @@ async function syncProductionEntities(){
   finally{busy.value=false}
 }
 
-async function regenerateScript() {
-  if (!window.confirm(`重新生成第${activeEpN.value}集剧本会替换本集现有 Scene、Shot、Dialogue，并使旧媒体失效；系统会先保存安全版本。确定继续吗？`)) return
+// 剧本生成按钮只受本次剧本请求约束：其他后台操作或缺少 synopsis 都不应把它永久置灰。
+const SCRIPT_GENERATION_WATCHDOG_MS = 330000
+let scriptGenerationWatchdog = null
+function beginScriptGeneration(target) {
   busy.value = true
   generatingScript.value = true
-  generatingEpisodeN.value = activeEpN.value
-  try {
-    await api.generateScript(id(), activeEpN.value)
-    await load()
-  } catch (e) {
-    toast.show('生成剧本失败：' + (e.response?.data?.error || e.message))
-  } finally {
-    busy.value = false
+  generatingEpisodeN.value = target
+  clearTimeout(scriptGenerationWatchdog)
+  scriptGenerationWatchdog = setTimeout(() => {
+    if (!generatingScript.value) return
+    // HTTP 客户端在 300 秒终止请求；若 Promise 未按预期结束，也必须解锁按钮。
     generatingScript.value = false
     generatingEpisodeN.value = 0
-  }
+    busy.value = false
+    scriptGenerationWatchdog = null
+    toast.error('剧本生成请求超时未返回。服务端可能仍在生成，请稍后刷新确认；按钮已解锁，可重试。')
+  }, SCRIPT_GENERATION_WATCHDOG_MS)
 }
-
+function endScriptGeneration() {
+  clearTimeout(scriptGenerationWatchdog)
+  scriptGenerationWatchdog = null
+  busy.value = false
+  generatingScript.value = false
+  generatingEpisodeN.value = 0
+}
 function scriptGenerationError(e) {
   const data = e?.response?.data
   if (typeof data === 'string' && data.trim()) return data.trim()
   if (data?.error) return `${data.error}${data.episode_n ? `（目标：第${data.episode_n}集）` : ''}`
   return e?.message || '未知错误'
 }
+function staleScriptClaim(e) {
+  const status = e?.response?.status
+  const message = String(e?.response?.data?.error || e?.message || '')
+  return status === 409 && message.includes('已有生成任务正在进行')
+}
+// 上一次生成异常中断时，项目可能仍被 script_manual 锁占用；显式确认后解除并重试一次。
+async function releaseStaleScriptClaim(e) {
+  if (!staleScriptClaim(e)) return false
+  const message = `剧本生成失败：${scriptGenerationError(e)}\n\n上一次生成异常中断后仍占用项目生成锁。解除该锁不会删除方案、剧本、场景或媒体。是否解除并立即重试？`
+  if (!window.confirm(message)) return false
+  try {
+    await api.resetProjectGeneration(id())
+  } catch (resetError) {
+    toast.error('解除生成锁失败：' + (resetError.response?.data?.error || resetError.message))
+    return false
+  }
+  return true
+}
+
+async function regenerateScript() {
+  if (generatingScript.value) return
+  if (!window.confirm(`重新生成第${activeEpN.value}集剧本会替换本集现有 Scene、Shot、Dialogue，并使旧媒体失效；系统会先保存安全版本。确定继续吗？`)) return
+  const target = activeEpN.value
+  beginScriptGeneration(target)
+  try {
+    try {
+      await api.generateScript(id(), target)
+      await load()
+    } catch (e) {
+      if (!await releaseStaleScriptClaim(e)) throw e
+      beginScriptGeneration(target)
+      await api.generateScript(id(), target)
+      await load()
+      toast.success(`第${target}集剧本已重新生成`)
+    }
+  } catch (e) {
+    toast.error('生成剧本失败：' + scriptGenerationError(e))
+  } finally {
+    endScriptGeneration()
+  }
+}
+
 async function generateEpisodeScriptAt(target) {
+  if (generatingScript.value) return
   target = Number(target)
   if (!Number.isInteger(target) || target < 1 || target > 100000) {
     toast.error('请输入1–100000之间的目标集数')
@@ -2647,26 +2698,32 @@ async function generateEpisodeScriptAt(target) {
     ? `第${target}集已有剧本。重新生成会替换该集 Scene、Shot 和 Dialogue，并使旧媒体失效；系统会先保存安全版本。确定继续吗？`
     : `将根据已审核规划和前序集生产内容生成第${target}集剧本，完成后自动进入第${target}集。确定继续吗？`
   if (!window.confirm(message)) return
-  busy.value = true
-  generatingScript.value = true
-  generatingEpisodeN.value = target
+  beginScriptGeneration(target)
   try {
-    await api.generateScript(id(), target)
-    scriptDirty.value = false
-    await selectEp(target)
-    toast.success(`第${target}集剧本已生成并打开`)
-  } catch (e) {
-    const redirect = e?.response?.data?.redirect
-    if (redirect) {
-      toast.info(e.response?.data?.error || `请先规划第${target}集`)
-      await router.push(redirect)
-    } else {
-      toast.error(`生成第${target}集剧本失败：${scriptGenerationError(e)}`)
+    try {
+      await api.generateScript(id(), target)
+      scriptDirty.value = false
+      await selectEp(target)
+      toast.success(`第${target}集剧本已生成并打开`)
+    } catch (e) {
+      const redirect = e?.response?.data?.redirect
+      if (redirect) {
+        toast.info(e.response?.data?.error || `请先规划第${target}集`)
+        await router.push(redirect)
+      } else if (await releaseStaleScriptClaim(e)) {
+        beginScriptGeneration(target)
+        await api.generateScript(id(), target)
+        scriptDirty.value = false
+        await selectEp(target)
+        toast.success(`第${target}集剧本已生成并打开`)
+      } else {
+        throw e
+      }
     }
+  } catch (e) {
+    toast.error(`生成第${target}集剧本失败：${scriptGenerationError(e)}`)
   } finally {
-    busy.value = false
-    generatingScript.value = false
-    generatingEpisodeN.value = 0
+    endScriptGeneration()
   }
 }
 async function generateNextEpisodeScript() { if (nextEpisodeScriptN.value) await generateEpisodeScriptAt(nextEpisodeScriptN.value) }

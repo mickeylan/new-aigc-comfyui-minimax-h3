@@ -122,12 +122,25 @@ async function reviewEpisode(ep){
   if(override===null)return
   await run(async()=>{await api.reviewAdaptation(id,ep.episode_n,override);detail.value=(await api.planningBatch(id,ep.batch_id)).data})
 }
-function script(ep){
+async function script(ep){
   if(ep.status!=='approved'&&ep.status!=='scripted'&&ep.status!=='reviewed'){
     error.value=`第${ep.episode_n}集映射尚未审核。请先检查本批各集的开始状态、结束状态、钩子和人物名称，再点击批次上的“审核方案并应用Episode”。`
     return
   }
-  return run(async()=>{await api.generateAdaptationScript(id,ep.episode_n);detail.value=(await api.planningBatch(id,ep.batch_id)).data})
+  if(busy.value)return
+  busy.value=true;error.value=''
+  const staleClaim=e=>e?.response?.status===409&&String(e?.response?.data?.error||'').includes('已有生成任务正在进行')
+  try{
+    try{
+      await api.generateAdaptationScript(id,ep.episode_n)
+    }catch(e){
+      if(!staleClaim(e)||!window.confirm(`第${ep.episode_n}集剧本生成失败：${e.response?.data?.error||e.message}\n\n上一次生成异常中断后仍占用项目生成锁。解除该锁不会删除方案或剧本。是否解除并重试？`))throw e
+      try{await api.resetProjectGeneration(id)}catch(resetError){error.value='解除生成锁失败：'+(resetError.response?.data?.error||resetError.message);return}
+      await api.generateAdaptationScript(id,ep.episode_n)
+    }
+    detail.value=(await api.planningBatch(id,ep.batch_id)).data
+  }catch(e){error.value=e.response?.data?.error||e.message}
+  finally{busy.value=false}
 }
 onMounted(load);onBeforeUnmount(()=>clearInterval(timer))
 </script>

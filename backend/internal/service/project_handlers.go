@@ -959,6 +959,17 @@ func (s *Service) HandleGenerateScript(c *gin.Context) {
 		return
 	}
 	log.Printf("[script-generate] project=%d episode=%d claimed", p.ID, episodeN)
+	// 生成过程中任何 panic 都必须释放 script_manual 锁并返回错误，
+	// 否则项目会永久停留在“已有生成任务正在进行”，前端表现为无法再次生成。
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[script-generate] project=%d episode=%d panic: %v", p.ID, episodeN, r)
+			s.Projects.failPipeline(p.ID, fmt.Errorf("剧本生成异常中断，请重试"), false)
+			if !c.Writer.Written() {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "剧本生成异常中断，请重试", "episode_n": episodeN})
+			}
+		}
+	}()
 	p, scenes, err := s.Projects.GenerateScript(p, episodeN)
 	if err != nil {
 		s.Projects.failPipeline(p.ID, err, false)

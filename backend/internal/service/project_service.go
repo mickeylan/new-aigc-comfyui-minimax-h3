@@ -209,6 +209,10 @@ func (s *ProjectService) ResetGenerationState(projectID uint) error {
 	}).Error
 }
 
+// manualScriptClaimTTL 允许在进程异常中断后自愈手工剧本生成锁。
+// 正常请求最长 300 秒；15 分钟远大于该上限，不会误抢正在生成的请求。
+const manualScriptClaimTTL = 15 * time.Minute
+
 // ClaimManualScript 防止手工剧本生成被重复提交。
 func (s *ProjectService) ClaimManualScript(p *models.Project, episode ...int) error {
 	active := []string{"plan", "plan_running", "script", "script_running", "script_manual", "images", "videos", "merge"}
@@ -219,7 +223,12 @@ func (s *ProjectService) ClaimManualScript(p *models.Project, episode ...int) er
 		}
 		updates["pipeline_episode"] = episode[0]
 	}
-	res := s.db.Model(&models.Project{}).Where("id = ? AND COALESCE(pipeline_stage, '') NOT IN ?", p.ID, active).Updates(updates)
+	// 手工剧本阶段也可能因崩溃、进程被杀或客户端超时后未回收而残留。
+	// 只有超过 TTL 的 script_manual 才视为陈旧锁；其他阶段一律不允许抢占。
+	staleBefore := time.Now().Add(-manualScriptClaimTTL)
+	res := s.db.Model(&models.Project{}).Where("id = ?", p.ID).
+		Where("COALESCE(pipeline_stage, '') NOT IN ? OR (pipeline_stage = ? AND updated_at < ?)", active, "script_manual", staleBefore).
+		Updates(updates)
 	if res.Error != nil {
 		return res.Error
 	}
