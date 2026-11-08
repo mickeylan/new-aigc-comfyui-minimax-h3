@@ -26,25 +26,28 @@ type SourceTrace struct {
 }
 
 type EpisodeContext struct {
-	EpisodeTitle    string            `json:"episode_title,omitempty"`
-	TargetDuration  float64           `json:"target_duration"`
-	TargetScenes    int               `json:"target_scenes"`
-	AdaptationGoal  string            `json:"adaptation_goal,omitempty"`
-	MustKeepEvents  []string          `json:"must_keep_events,omitempty"`
-	OptionalEvents  []string          `json:"optional_events,omitempty"`
-	OmittedEvents   []string          `json:"omitted_events,omitempty"`
-	EndingState     string            `json:"approved_ending_state,omitempty"`
-	AdaptationRules string            `json:"adaptation_rules"`
-	WorldRules      string            `json:"world_rules"`
-	MainPlot        string            `json:"main_plot"`
-	OpeningState    string            `json:"opening_state"`
-	PreviousEnding  string            `json:"previous_ending_state"`
-	PreviousContent string            `json:"previous_episode_completed_content,omitempty"`
-	NextGoal        string            `json:"next_goal"`
-	ChapterAnalyses []json.RawMessage `json:"chapter_analyses"`
-	SourceChapters  []SourceChapter   `json:"source_chapters"`
-	DialogueLedger  []SourceDialogue  `json:"source_dialogue_ledger"`
-	Traces          []SourceTrace     `json:"source_traces"`
+	EpisodeTitle         string            `json:"episode_title,omitempty"`
+	TargetDuration       float64           `json:"target_duration"`
+	TargetScenes         int               `json:"target_scenes"`
+	AdaptationGoal       string            `json:"adaptation_goal,omitempty"`
+	MustKeepEvents       []string          `json:"must_keep_events,omitempty"`
+	OptionalEvents       []string          `json:"optional_events,omitempty"`
+	OmittedEvents        []string          `json:"omitted_events,omitempty"`
+	EndingState          string            `json:"approved_ending_state,omitempty"`
+	AdaptationRules      string            `json:"adaptation_rules"`
+	WorldRules           string            `json:"world_rules"`
+	MainPlot             string            `json:"main_plot"`
+	OpeningState         string            `json:"opening_state"`
+	PreviousEnding       string            `json:"previous_ending_state"`
+	PreviousContent      string            `json:"previous_episode_completed_content,omitempty"`
+	NextGoal             string            `json:"next_goal"`
+	ChapterAnalyses      []json.RawMessage `json:"chapter_analyses"`
+	SourceChapters       []SourceChapter   `json:"source_chapters"`
+	DialogueLedger       []SourceDialogue  `json:"source_dialogue_ledger"`
+	CompletedDialogues   []SourceDialogue  `json:"previously_completed_source_dialogues,omitempty"`
+	AvailableDialogues   []SourceDialogue  `json:"available_source_dialogues,omitempty"`
+	ReservedFutureEvents []string          `json:"reserved_future_events,omitempty"`
+	Traces               []SourceTrace     `json:"source_traces"`
 }
 
 // adaptationEventList accepts every shape the planning model has produced for
@@ -227,12 +230,13 @@ func (s *AdaptationService) repairMissingMustKeepEvents(projectID uint, episode 
 		MissingEvents     []string         `json:"missing_events"`
 		ApprovedEnding    string           `json:"approved_ending_state"`
 		CurrentScriptJSON json.RawMessage  `json:"current_structured_script"`
-	}{ctx.SourceChapters, ctx.DialogueLedger, ctx.MustKeepEvents, ctx.OmittedEvents, missing, ctx.EndingState, json.RawMessage(raw)})
+		EpisodeBoundary   *EpisodeContext  `json:"episode_boundary"`
+	}{ctx.SourceChapters, ctx.DialogueLedger, ctx.MustKeepEvents, ctx.OmittedEvents, missing, ctx.EndingState, json.RawMessage(raw), ctx})
 	if err != nil {
 		return "", err
 	}
 	system := "这是一次且仅一次的忠实度修复。输出完整合法JSON剧本。必须把missing_events逐项改写为可拍摄场景，并按source_chapters还原其人物、动作、法器、术法与结果。禁止新增原著没有的战斗、技能、法器、人物或台词；原著中沉默的角色必须保持沉默；禁止用其他冲突替换缺失事件；禁止出现omitted_events。保留现有视觉字段和已逐字覆盖的结构化对白。"
-	repaired, err := s.skills.ChatWithSkill(projectID, models.SkillStageEpisodeAdaptation, s.provider, system, "", map[string]string{
+	repaired, err := s.skills.ChatWithSkill(projectID, models.SkillStageEpisodeAdaptation, s.provider, system+"\n"+episodeBoundaryInstruction, "", map[string]string{
 		"episode_n": strconv.Itoa(episode), "target_duration": fmt.Sprint(ctx.TargetDuration), "target_scenes": strconv.Itoa(ctx.TargetScenes), "episode_context": string(contextJSON),
 	})
 	if err != nil {
@@ -678,6 +682,20 @@ func (s *AdaptationService) BuildContext(projectID uint, episode, maxChars int) 
 	for _, ch := range chapters {
 		ctx.SourceChapters = append(ctx.SourceChapters, SourceChapter{ChapterID: ch.ID, ChapterNo: ch.Order, Content: ch.Content})
 		ctx.DialogueLedger = append(ctx.DialogueLedger, extractSourceDialogues(ch, knownNames...)...)
+	}
+	counts, err := s.completedSourceDialogueCounts(projectID, episode, ctx.SourceChapters)
+	if err != nil {
+		return nil, err
+	}
+	ctx.DialogueLedger, ctx.CompletedDialogues = excludeCompletedSourceDialogues(ctx.DialogueLedger, counts)
+	ctx.AvailableDialogues = append([]SourceDialogue(nil), ctx.DialogueLedger...)
+	shared, reserved, err := s.sharedChapterReservations(projectID, episode, ctx.SourceChapters)
+	if err != nil {
+		return nil, err
+	}
+	ctx.ReservedFutureEvents = reserved
+	if shared {
+		ctx.DialogueLedger = requiredSharedChapterDialogues(ctx.AvailableDialogues, ctx.MustKeepEvents)
 	}
 	var prev models.EpisodeAdaptation
 	if s.db.Where("project_id = ? AND episode_n = ?", projectID, episode-1).First(&prev).Error == nil {
@@ -1160,9 +1178,16 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 	if err != nil {
 		return nil, err
 	}
+	consumed, err := s.episodeSourceScopeConsumed(projectID, episode, ctx)
+	if err != nil {
+		return nil, err
+	}
+	if consumed {
+		return nil, fmt.Errorf("第%d集映射与前集实际剧情冲突：来源对白已在前集全部使用，当前必保事件又要求重复使用其中的原文台词；不会再次生成相同章节。须先审核调整剩余分集事件范围，现有剧本和媒体未修改", episode)
+	}
 	input, _ := json.Marshal(ctx)
 	system := "只改编提供的上下文并输出JSON。source_chapters是本集审核映射的原文权威，source_dialogue_ledger是按原文顺序提取的对白清单：必须逐字、逐条、按序保留到scenes[].dialogues，并依据原文把是谁说、画外空间位置和发生时间自然融入同场content；content必须自然包含引号原句且归属时序与dialogues完全一致，禁止台词清单、末尾追加标签和【对白待确认】。不得因180秒或25镜头目标删减或硬凑镜头。未知说话者只保留原文明示的描述性身份与offscreen类型，不按别名猜人；人名后置归属必须保留，多角色歧义保持未明多人物语音。不得发明原文未提供的咒语或台词：原文中沉默的角色必须保持沉默，原文没有的旁白、内心独白和对白一律不得新增。must_keep_events是已审核的必保留事件，必须逐项落地为可见场景；omitted_events禁止出现；approved_ending_state必须在本集结尾达到。previous_episode_completed_content是上一集已完成内容的排重权威；本集必须从其结尾后的第一个原文瞬间开始，严禁重演、改写后重复、重新介绍或回顾其中已经完成的事件、动作、信息揭示、对白与情感节点，尤其禁止重新描述上一集已经拍过的巨石爆裂、人物现身或对峙。"
-	raw, err := s.skills.ChatWithSkill(projectID, models.SkillStageEpisodeAdaptation, s.provider, system, "", map[string]string{"episode_n": strconv.Itoa(episode), "target_duration": fmt.Sprint(ep.TargetDuration), "target_scenes": strconv.Itoa(ep.TargetScenes), "episode_context": string(input)})
+	raw, err := s.skills.ChatWithSkill(projectID, models.SkillStageEpisodeAdaptation, s.provider, system+"\n"+episodeBoundaryInstruction, "", map[string]string{"episode_n": strconv.Itoa(episode), "target_duration": fmt.Sprint(ep.TargetDuration), "target_scenes": strconv.Itoa(ep.TargetScenes), "episode_context": string(input)})
 	if err != nil {
 		return nil, err
 	}
@@ -1198,9 +1223,10 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 			CurrentStructuredScript         json.RawMessage    `json:"current_structured_script"`
 			MissingDialogues                []SourceDialogue   `json:"missing_dialogues"`
 			ScenesRequiringStoryIntegration []integrationScene `json:"scenes_requiring_story_integration"`
-		}{ctx.SourceChapters, json.RawMessage(raw), coverage.Missing, requiring})
+			EpisodeBoundary                 *EpisodeContext    `json:"episode_boundary"`
+		}{ctx.SourceChapters, json.RawMessage(raw), coverage.Missing, requiring, ctx})
 		revisionSystem := "这是一次且仅一次的原文对白覆盖与正文整合修订。输出完整JSON剧本；保持现有视觉字段、源字段、结构化对白和已完成剧情不变。把missing_dialogues逐字放回正确场景，同时依据source_chapters把scenes_requiring_story_integration中的对白原句、明确归属、画外位置和时序自然融入content。正文不得成为台词清单，不得末尾追加标签或【对白待确认】，不得猜测未明说话者。"
-		revised, revisionErr := s.skills.ChatWithSkill(projectID, models.SkillStageEpisodeAdaptation, s.provider, revisionSystem, "", map[string]string{
+		revised, revisionErr := s.skills.ChatWithSkill(projectID, models.SkillStageEpisodeAdaptation, s.provider, revisionSystem+"\n"+episodeBoundaryInstruction, "", map[string]string{
 			"episode_n": strconv.Itoa(episode), "target_duration": fmt.Sprint(ep.TargetDuration), "target_scenes": strconv.Itoa(ep.TargetScenes), "episode_context": string(revisionContext),
 		})
 		if revisionErr == nil {
@@ -1237,6 +1263,24 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 			}
 			log.Printf("[adaptation] project=%d episode=%d must_keep warnings=%d/%d", projectID, episode, len(missing), len(ctx.MustKeepEvents))
 		}
+	}
+	// Last gate, after ALL model revisions. A dialogue-integration pass must not
+	// undo an earlier dedup pass and persist a replay of the previous episode.
+	finalScript, err := parseAdaptationScript(raw)
+	if err != nil {
+		return nil, err
+	}
+	issues, err := s.projects.crossEpisodeDuplicateIssues(projectID, episode, finalScript)
+	if err != nil {
+		return nil, err
+	}
+	replay, err := replayedCompletedSourceDialogues(raw, ctx.CompletedDialogues)
+	if err != nil {
+		return nil, err
+	}
+	issues = append(issues, replay...)
+	if len(issues) > 0 {
+		return nil, fmt.Errorf("第%d集最终稿重演已完成剧情，未保存：%s", episode, strings.Join(issues, "；"))
 	}
 	var p models.Project
 	if err := s.db.First(&p, projectID).Error; err != nil {
@@ -1316,19 +1360,6 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 	if strings.TrimSpace(parsed.Script) == "" {
 		parsed.Script = rendered.Script
 	}
-	state := func(v any, previous string) string {
-		if v == nil {
-			return previous
-		}
-		if text, ok := v.(string); ok && (strings.TrimSpace(text) == "" || strings.TrimSpace(text) == "null") {
-			return previous
-		}
-		b, err := json.Marshal(v)
-		if err != nil {
-			return previous
-		}
-		return string(b)
-	}
 	// Report what actually survived persistence in the current, non-archived scenes.
 	// Unknown/unbound rows remain reviewable but cannot satisfy a named source quote.
 	var persistedDialogues []models.Dialogue
@@ -1341,7 +1372,31 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 	coverage.StoryPendingSceneOrders = storyPendingSceneOrders(raw)
 	traces, _ := json.Marshal(ctx.Traces)
 	coverageJSON, _ := json.Marshal(coverage)
-	ep.Script, ep.OpeningState, ep.EndingState, ep.SourceTracesJSON, ep.DialogueCoverageJSON, ep.Status, ep.ContinuityStatus = parsed.Script, state(parsed.OpeningState, ep.OpeningState), state(parsed.EndingState, ep.EndingState), string(traces), string(coverageJSON), "scripted", "pending"
+	// Generated states are evidence in the review report, never replacements for
+	// approved planning boundaries used by subsequent episodes.
+	generatedStates, err := json.Marshal(map[string]any{"generated_opening_state": parsed.OpeningState, "generated_ending_state": parsed.EndingState})
+	if err != nil {
+		return nil, err
+	}
+	ep.ReviewJSON = string(generatedStates)
+	// Legacy mappings with no boundary may acquire their first generated state;
+	// an existing reviewed boundary is never overwritten on regeneration.
+	fillMissingState := func(current string, generated any) string {
+		if strings.TrimSpace(current) != "" && strings.TrimSpace(current) != "null" {
+			return current
+		}
+		if generated == nil {
+			return current
+		}
+		encoded, err := json.Marshal(generated)
+		if err != nil {
+			return current
+		}
+		return string(encoded)
+	}
+	ep.OpeningState = fillMissingState(ep.OpeningState, parsed.OpeningState)
+	ep.EndingState = fillMissingState(ep.EndingState, parsed.EndingState)
+	ep.Script, ep.SourceTracesJSON, ep.DialogueCoverageJSON, ep.Status, ep.ContinuityStatus = parsed.Script, string(traces), string(coverageJSON), "scripted", "pending"
 	if err := s.db.Save(&ep).Error; err != nil {
 		return nil, err
 	}
