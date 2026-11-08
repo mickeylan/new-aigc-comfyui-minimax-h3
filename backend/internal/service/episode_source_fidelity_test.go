@@ -123,27 +123,78 @@ func TestEpisodeContextCarriesApprovedScopeToTheModel(t *testing.T) {
 	}
 }
 
-func TestMissingMustKeepEventsRejectsInventedPlot(t *testing.T) {
-	events := []string{"女童抱住高大青年并呼喊石头哥哥", "三人用神识探查青年却察觉不到法力", "青年徒手撕裂黑色大网"}
-	doc, err := parseAdaptationScript(faithfulEpisodeScript())
-	if err != nil {
-		t.Fatal(err)
-	}
-	scenes := make([]string, 0, len(doc.Scenes))
-	for _, scene := range doc.Scenes {
-		scenes = append(scenes, scene.Content)
-	}
-	for _, event := range events {
-		if coverage := mustKeepEventCoverage(event, scenes); coverage < 0.45 {
-			t.Fatalf("faithful script coverage too low (%.2f) for %q", coverage, event)
+// These are the approved events the user's episode 2 was blocked on. A faithful
+// adaptation paraphrases them; the old whole-string metric rejected paraphrases.
+var approvedChapterTwoEvents = []string{
+	"柳乐儿从伏坐状态翻身爬起，一把抱住高大青年的大腿，惊喜地呼喊“石头哥哥”",
+	"柳乐儿带哭腔说自己总算找到哥哥，请求石头哥哥帮她打走这些坏人",
+	"高大青年听到呼唤后头颅缓缓垂下，双目空洞地看向柳乐儿，柳乐儿因此短暂害怕后退",
+	"柳乐儿松手后紧握旧拨浪鼓，三人则用神识扫查青年，发现其身上丝毫法力迹象没有",
+	"马脸男子暗握暗器后退半步，齐姓道士目光在青年与女童之间来回逡巡",
+	"燕承自报“在下血刀会燕承”，表示正与两位道友联手捉拿妖狐，要求与此事无关者自行离去",
+	"燕承提高声音重复一遍，青年仍无任何反应，柳乐儿抓着他裤脚的手心冒汗",
+	"马脸男子与齐姓道士传音进言，建议把可疑青年视为妖族同党、先下手为强",
+	"燕承厉喝“动手”，祭出黑色大网将柳乐儿与高大青年一同罩住，网结上浮现锋利银色弯钩",
+	"柳乐儿把血雾喷在拨浪鼓上，化作一截枯木并在十余丈外重现，却被倒刺划出十余处伤口，摔倒在地无法起身",
+	"柳乐儿忍痛高喊“小心”，提醒石头哥哥躲避接下来的攻击",
+	"银色弯钩挂在青年身上无法刺入体表分毫，青年缓缓低头，像是觉得挂在身上的东西碍事",
+}
+
+// paraphrasedEpisodeScript rewrites the same beats the way a competent screenwriter
+// would, so it must pass the fidelity gate.
+func paraphrasedEpisodeScript() string {
+	scene := func(title, content string, dialogues ...map[string]any) map[string]any {
+		if dialogues == nil {
+			dialogues = []map[string]any{}
+		}
+		return map[string]any{
+			"title": title, "content": content, "image_prompt": "碎石荒野，固定机位", "duration": 6.0,
+			"characters": []string{}, "visible_characters": []string{}, "voice_characters": []string{},
+			"mentioned_characters": []string{}, "location": "碎石荒野", "props": []string{},
+			"visual_type": "normal", "mega_type": "", "dialogues": dialogues,
 		}
 	}
-	if missing := missingMustKeepEvents(faithfulEpisodeScript(), events); len(missing) != 0 {
-		t.Fatalf("faithful script reported missing events: %v", missing)
+	line := func(character, text string) map[string]any {
+		return map[string]any{"character": character, "text": text, "speech_type": "dialogue"}
 	}
-	missing := missingMustKeepEvents(inventedEpisodeScript(), events)
-	if len(missing) != len(events) {
-		t.Fatalf("invented plot should miss every approved event, got %v", missing)
+	scenes := []any{
+		scene("石头哥哥", "女童翻身爬起，一把抱住高大青年的腿，惊喜喊他石头哥哥。青年毫无表情，仍直勾勾发呆。",
+			line("柳乐儿", "石头哥哥，乐儿总算找到你了！这些坏人要抓乐儿，石头哥哥帮我打他们！")),
+		scene("空洞的目光", "青年听到呼唤，头颅缓缓垂下几分。女童抬头迎上目光，见那双眼空洞无神，心里咯噔一下。"),
+		scene("神识扫查", "女童松手攥紧拨浪鼓。三人放出神识扫过青年，察觉不到丝毫法力迹象，顿时生出狐疑。"),
+		scene("暗器与逡巡", "马脸男子收回右手后退半步，左手藏在袖中捏住暗器。齐姓道士把拂尘搭在胳膊上，目光在两人之间来回逡巡。"),
+		scene("自报家门", "燕承拱手试探，自称血刀会燕承，正在追拿妖狐，请无关之人自行离去。",
+			line("燕承", "在下血刀会燕承，正与两位道友联手捉拿这妖狐，阁下若是与此事无关，还请自行离去。")),
+		scene("重复与冷汗", "燕承提高声音把话重复一遍，青年依旧没有反应。女童张了张嘴，抓着他裤脚的手心全是冷汗。"),
+		scene("传音进言", "马脸男子与齐姓道士嘴唇微动，传音进言，认定此人可疑，建议视作妖族同党先下手为强。"),
+		scene("动手", "燕承厉喝动手，朴刀泛白，另一手扬出黑光。黑色大网当空罩下，把女童与青年一同扣住，绳结上浮现锋利银色弯钩。"),
+		scene("血雾木遁", "女童尖叫，喷出血雾在鼓面，手腕一转，身影溃散成一截枯木。十余丈外她重新现形，却被倒刺划出十余处伤口，摔倒在地。"),
+		scene("小心", "倒地的女童见青芒飞针射向青年，忍痛高喊提醒他躲开。", line("柳乐儿", "小心！")),
+		scene("弯钩无效", "银色弯钩挂在青年身上却刺不进分毫。他缓缓低头，像是觉得挂着的东西碍事。"),
+	}
+	payload := map[string]any{"script": "乐儿认出石头哥哥，三人试探后动手，黑网与飞针都伤不到青年。", "visual_bible": "写实仙侠", "scenes": scenes}
+	raw, _ := json.Marshal(payload)
+	return string(raw)
+}
+
+func TestMissingMustKeepEventsAcceptsFaithfulParaphrase(t *testing.T) {
+	for _, item := range missingMustKeepEvents(paraphrasedEpisodeScript(), approvedChapterTwoEvents) {
+		t.Logf("rejected event: %s clauses=%.2f", item.description(), item.Clauses)
+	}
+	if missing := missingMustKeepEvents(paraphrasedEpisodeScript(), approvedChapterTwoEvents); len(missing) != 0 {
+		t.Fatalf("faithful paraphrase rejected: %d/%d events", len(missing), len(approvedChapterTwoEvents))
+	}
+	// The compact three-scene fixture covers only its own three events.
+	compact := []string{"女童抱住高大青年并呼喊石头哥哥", "三人用神识探查青年却察觉不到法力", "青年徒手撕裂黑色大网"}
+	if missing := missingMustKeepEvents(faithfulEpisodeScript(), compact); len(missing) != 0 {
+		t.Fatalf("faithful draft rejected: %v", missing)
+	}
+}
+
+func TestMissingMustKeepEventsRejectsInventedPlot(t *testing.T) {
+	missing := missingMustKeepEvents(inventedEpisodeScript(), approvedChapterTwoEvents)
+	if ratio := float64(len(missing)) / float64(len(approvedChapterTwoEvents)); ratio <= mustKeepBlockRatio {
+		t.Fatalf("invented plot was not blocked: %d/%d missing", len(missing), len(approvedChapterTwoEvents))
 	}
 }
 

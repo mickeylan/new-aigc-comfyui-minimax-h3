@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"regexp"
 	"sort"
 	"strconv"
@@ -70,11 +71,16 @@ func adaptationEventList(raw string) []string {
 	return []string{raw}
 }
 
-// mustKeepCoverageThreshold is deliberately conservative: a faithful scene
-// dramatizing an approved event shares a substantial run of three-character
-// phrases with it, while a rewritten event (for example an invented vine fight)
-// shares almost none.
-const mustKeepCoverageThreshold = 0.35
+// Fidelity is judged per clause, not by comparing the whole event string. A faithful
+// scene paraphrases an approved event (different verbs, reordered details) while an
+// invented scene shares almost nothing. Measuring whole-string trigram overlap made
+// correct drafts fail whenever the wording differed.
+const (
+	mustKeepClausePresent = 0.18 // a clause sharing less than this is truly absent
+	mustKeepClauseRatio   = 0.30 // at least a third of the event's clauses must be present
+	mustKeepEventFloor    = 0.18 // the event as a whole must still share real wording
+	mustKeepBlockRatio    = 0.4  // refuse only when most approved events are absent
+)
 
 func eventTrigrams(value string) map[string]struct{} {
 	runes := make([]rune, 0, len([]rune(value)))
@@ -90,29 +96,110 @@ func eventTrigrams(value string) map[string]struct{} {
 	return out
 }
 
-func mustKeepEventCoverage(event string, scenes []string) float64 {
-	eventGrams := eventTrigrams(event)
-	if len(eventGrams) < 6 {
-		return 1
-	}
-	scriptGrams := map[string]struct{}{}
+func eventCorpus(scenes []string) map[string]struct{} {
+	corpus := map[string]struct{}{}
 	for _, scene := range scenes {
 		for gram := range eventTrigrams(scene) {
-			scriptGrams[gram] = struct{}{}
+			corpus[gram] = struct{}{}
 		}
 	}
+	return corpus
+}
+
+func trigramCoverage(value string, corpus map[string]struct{}) float64 {
+	grams := eventTrigrams(value)
+	if len(grams) < 4 {
+		return 1
+	}
 	covered := 0
-	for gram := range eventGrams {
-		if _, ok := scriptGrams[gram]; ok {
+	for gram := range grams {
+		if _, ok := corpus[gram]; ok {
 			covered++
 		}
 	}
-	return float64(covered) / float64(len(eventGrams))
+	return float64(covered) / float64(len(grams))
 }
 
-// missingMustKeepEvents returns approved events that the candidate script does not
-// actually dramatize. Parse failures are left to the normal structure validation.
-func missingMustKeepEvents(raw string, events []string) []string {
+// eventClauses splits an approved event into independently dramatizable beats.
+func eventClauses(event string) []string {
+	parts := strings.FieldsFunc(event, func(r rune) bool {
+		return r == '，' || r == '。' || r == '；' || r == ';' || r == '！' || r == '？' || r == '!' || r == '?' || r == '\n'
+	})
+	clauses := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); len([]rune(part)) >= 5 {
+			clauses = append(clauses, part)
+		}
+	}
+	if len(clauses) == 0 {
+		clauses = append(clauses, strings.TrimSpace(event))
+	}
+	return clauses
+}
+
+type mustKeepAssessment struct {
+	Event    string
+	Coverage float64 // share of event wording realized across the scene corpus
+	Clauses  float64 // share of clauses that are not absent
+}
+
+// realized means the script actually tells this beat: at least a third of its clauses
+// are present and the event as a whole keeps real source wording. Compound events
+// routinely lose one clause to paraphrase without losing the beat.
+func (a mustKeepAssessment) realized() bool {
+	return a.Coverage >= mustKeepEventFloor && a.Clauses >= mustKeepClauseRatio
+}
+
+func (a mustKeepAssessment) description() string {
+	return fmt.Sprintf("%s（原文措辞覆盖率%0.f%%）", a.Event, a.Coverage*100)
+}
+
+func joinMustKeepDescriptions(items []mustKeepAssessment) string {
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		parts = append(parts, item.description())
+	}
+	return strings.Join(parts, "；")
+}
+
+// sceneCoverageTexts collects every textual surface a scene can dramatize an event
+// in: title, story content and structured dialogue. Checking content alone marked
+// scenes as missing when the beat was carried by its quoted line.
+func sceneCoverageTexts(doc *scriptResult) []string {
+	texts := make([]string, 0, len(doc.Scenes)*3)
+	for _, scene := range doc.Scenes {
+		texts = append(texts, scene.Title, scene.Content)
+		for _, dialogue := range scene.Dialogues {
+			texts = append(texts, dialogue.Text)
+		}
+	}
+	return texts
+}
+
+func assessMustKeepEvents(scenes []string, events []string) []mustKeepAssessment {
+	if len(events) == 0 {
+		return nil
+	}
+	corpus := eventCorpus(scenes)
+	out := make([]mustKeepAssessment, 0, len(events))
+	for _, event := range events {
+		assessment := mustKeepAssessment{Event: event, Coverage: trigramCoverage(event, corpus)}
+		clauses := eventClauses(event)
+		present := 0
+		for _, clause := range clauses {
+			if trigramCoverage(clause, corpus) >= mustKeepClausePresent {
+				present++
+			}
+		}
+		assessment.Clauses = float64(present) / float64(len(clauses))
+		out = append(out, assessment)
+	}
+	return out
+}
+
+// missingMustKeepEvents returns approved events the candidate script does not
+// dramatize. Parse failures are left to the normal structure validation.
+func missingMustKeepEvents(raw string, events []string) []mustKeepAssessment {
 	if len(events) == 0 {
 		return nil
 	}
@@ -120,14 +207,10 @@ func missingMustKeepEvents(raw string, events []string) []string {
 	if err != nil || doc == nil {
 		return nil
 	}
-	scenes := make([]string, 0, len(doc.Scenes))
-	for _, scene := range doc.Scenes {
-		scenes = append(scenes, scene.Content)
-	}
-	missing := []string{}
-	for _, event := range events {
-		if mustKeepEventCoverage(event, scenes) < mustKeepCoverageThreshold {
-			missing = append(missing, event)
+	missing := []mustKeepAssessment{}
+	for _, assessment := range assessMustKeepEvents(sceneCoverageTexts(doc), events) {
+		if !assessment.realized() {
+			missing = append(missing, assessment)
 		}
 	}
 	return missing
@@ -726,6 +809,9 @@ type DialogueCoverage struct {
 	OutOfOrder              int              `json:"out_of_order,omitempty"`
 	OrderPassed             bool             `json:"order_passed"`
 	StoryPendingSceneOrders []int            `json:"story_pending_scene_orders,omitempty"`
+	// MustKeepWarnings lists approved events that the draft only partially realized.
+	// They are advisory: the episode is still faithful to the approved source scope.
+	MustKeepWarnings []string `json:"must_keep_warnings,omitempty"`
 }
 
 func dialogueKey(speaker, text string) string { return speaker + "\x00" + text }
@@ -1126,18 +1212,30 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 		coverage = dialogueCoverage(raw, ctx.DialogueLedger)
 		coverage.StoryPendingSceneOrders = storyPendingSceneOrders(raw)
 	}
-	// Fidelity gate: every approved must-keep event must leave a verifiable trace in
-	// the scenes. Previously the model could return a completely different plot (for
-	// example an invented vine/drum fight) and still overwrite the episode.
+	// Fidelity gate. A draft that misses most approved events means the model told a
+	// different story and must never overwrite the episode. A draft that realizes the
+	// story but words one or two beats differently is accepted and recorded as a
+	// warning, so ordinary paraphrase cannot deadlock production.
 	if missing := missingMustKeepEvents(raw, ctx.MustKeepEvents); len(missing) > 0 {
-		if repaired, repairErr := s.repairMissingMustKeepEvents(projectID, episode, raw, ctx, missing); repairErr == nil {
-			if remaining := missingMustKeepEvents(repaired, ctx.MustKeepEvents); len(remaining) == 0 {
-				raw = repaired
-			} else {
-				return nil, fmt.Errorf("本集剧本未覆盖已审核的必须保留事件，且自动修复后仍缺失：%s；未覆盖现有剧本", strings.Join(remaining, "；"))
+		events := make([]string, 0, len(missing))
+		for _, item := range missing {
+			events = append(events, item.Event)
+		}
+		repaired, repairErr := s.repairMissingMustKeepEvents(projectID, episode, raw, ctx, events)
+		if repairErr == nil {
+			if remaining := missingMustKeepEvents(repaired, ctx.MustKeepEvents); len(remaining) <= len(missing) {
+				raw, missing = repaired, remaining
 			}
-		} else {
-			return nil, fmt.Errorf("本集剧本未覆盖已审核的必须保留事件：%s；自动修复失败：%v；未覆盖现有剧本", strings.Join(missing, "；"), repairErr)
+		}
+		if len(missing) > 0 {
+			if ratio := float64(len(missing)) / float64(len(ctx.MustKeepEvents)); ratio > mustKeepBlockRatio {
+				return nil, fmt.Errorf("本集剧本偏离已审核原著：%d/%d 项必须保留事件未落地（%s）；未覆盖现有剧本",
+					len(missing), len(ctx.MustKeepEvents), joinMustKeepDescriptions(missing))
+			}
+			for _, item := range missing {
+				coverage.MustKeepWarnings = append(coverage.MustKeepWarnings, item.description())
+			}
+			log.Printf("[adaptation] project=%d episode=%d must_keep warnings=%d/%d", projectID, episode, len(missing), len(ctx.MustKeepEvents))
 		}
 	}
 	var p models.Project
