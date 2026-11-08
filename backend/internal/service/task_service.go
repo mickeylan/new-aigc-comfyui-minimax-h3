@@ -1005,6 +1005,28 @@ func (s *TaskService) syncInputFilesToInstance(client *ComfyClient, params map[s
 					return nil
 				}
 				seen[rel] = true
+				if projectID, convErr := strconv.ParseUint(taskID, 10, 64); convErr == nil && projectID > 0 {
+					// A cleared ComfyUI input directory must not block generation when the
+					// authoritative asset card still holds the same artwork under a
+					// different generated filename.
+					sourcePath, err := s.ensureProjectInputFile(uint(projectID), name)
+					if err != nil {
+						return fmt.Errorf("%s: %w", rel, err)
+					}
+					file, openErr := s.remote.Open(sourcePath)
+					if openErr != nil {
+						return fmt.Errorf("?? %s ??: %w", rel, openErr)
+					}
+					data, readErr := io.ReadAll(file)
+					file.Close()
+					if readErr != nil {
+						return fmt.Errorf("?? %s ??: %w", rel, readErr)
+					}
+					if err := client.UploadInput(name, taskID, data); err != nil {
+						return fmt.Errorf("?? %s ??: %w", rel, err)
+					}
+					return nil
+				}
 				file, err := s.remote.Open(filepath.Join(s.cfg.Comfy.ComfyDir, "input", filepath.FromSlash(rel)))
 				if err != nil {
 					return fmt.Errorf("读取 %s 失败: %w", rel, err)
