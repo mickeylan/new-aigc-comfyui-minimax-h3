@@ -6,6 +6,26 @@
       <router-link :to="`/projects/${id}`" class="btn btn-ghost">返回项目</router-link>
     </header>
     <div v-if="error" class="generation-error-toast" role="alert" aria-live="assertive"><div><strong>操作失败</strong><span>{{ error }}</span></div><button type="button" class="btn btn-xs btn-ghost" @click="copyError">复制错误</button><button type="button" class="toast-close" aria-label="关闭错误提示" @click="error=''">×</button></div>
+    <section class="card create-batch">
+      <h2>保留前集，修复重复分集规划</h2>
+      <p class="sub">仅适用于来源剧情已被前集消费的重复集。自动复用后续已审核且未生成的规划，不修改前集、旧剧本或媒体；最后一个空位标记待规划，不虚构补集。</p>
+      <label>从第几集开始修复 <input v-model.number="reflowStart" type="number" min="2" class="input target-input"></label>
+      <button class="btn btn-secondary" :disabled="busy" @click="previewReflow">预览自动修复方案</button>
+      <div v-if="reflowPreview">
+        <p>保留第1–{{reflowPreview.start_episode-1}}集。确认后仅更新以下规划：</p>
+        <details v-for="item in reflowPreview.items" :key="item.episode_n">
+          <summary>第{{item.episode_n}}集：{{item.previous_title}} → {{item.title}}（原第{{item.source_episode}}集）</summary>
+          <p>{{item.adaptation_goal}}</p>
+          <p>来源章节：{{item.mapping.chapter_start}}–{{item.mapping.chapter_end}}</p>
+          <p>必保事件：{{item.mapping.must_keep_events}}</p>
+          <p>开场：{{item.mapping.opening_state}}</p><p>结束：{{item.mapping.ending_state}}</p><p>钩子：{{item.mapping.hook}}</p>
+        </details>
+        <p class="coverage-warning">第{{reflowPreview.unplanned_episode}}集成为待规划空位。旧重复剧本会保留至重新生成成功，确认本方案不会自动生成剧本。</p>
+        <button class="btn" :disabled="busy" @click="applyReflow">确认应用此修复方案</button>
+        <button class="btn btn-ghost" @click="reflowPreview=null">取消</button>
+      </div>
+      <p v-if="reflowResult" role="status">{{reflowResult}}</p>
+    </section>
     <section class="stats card">
       <div><input v-model.number="totalTarget" type="number" min="1" max="100000" class="input target-input"><span>全剧预计总集数</span><button class="btn btn-xs btn-ghost" @click="saveTarget">保存</button></div>
       <div><b>{{ batches.length }}</b><span>已建立批次</span></div>
@@ -88,6 +108,9 @@ import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { parseDialogueCoverage } from '../utils/dialogueCoverage'
 const id=useRoute().params.id,project=ref(null),arcs=ref([]),selectedArcIds=ref([]),batches=ref([]),detail=ref(null),snapshot=ref(null),busy=ref(false),error=ref(''),totalTarget=ref(0),generating=ref(0),elapsed=ref(0),progress=ref(0)
+const reflowStart=ref(Math.max(2,Number(useRoute().query.episode)||3)),reflowPreview=ref(null),reflowResult=ref('')
+async function previewReflow(){busy.value=true;error.value='';reflowPreview.value=null;reflowResult.value='';try{reflowPreview.value=(await api.reflowAdaptations(id,{start_episode:reflowStart.value})).data}catch(e){error.value=e.response?.data?.error||e.message}finally{busy.value=false}}
+async function applyReflow(){if(!reflowPreview.value)return;busy.value=true;error.value='';try{const {data}=await api.reflowAdaptations(id,{start_episode:reflowPreview.value.start_episode,token:reflowPreview.value.token,apply:true});reflowResult.value=data.message;reflowPreview.value=null;detail.value=null;await load()}catch(e){error.value=e.response?.data?.error||e.message;reflowPreview.value=null}finally{busy.value=false}}
 let timer=null
 const nextStart=computed(()=>batches.value.length?Math.max(...batches.value.map(v=>v.episode_end))+1:1)
 const form=reactive({title:'',episode_start:1,episode_end:10,chapter_start:1,chapter_end:8,arc_range:''})

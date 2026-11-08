@@ -412,6 +412,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.GET("/api/projects/:id/adaptation-strategy", svc.HandleGetAdaptationStrategy)
 	r.PUT("/api/projects/:id/adaptation-strategy", svc.HandleSaveAdaptationStrategy)
 	r.GET("/api/projects/:id/adaptations", svc.HandleListAdaptations)
+	r.POST("/api/projects/:id/adaptations/reflow", svc.HandlePreviewAdaptationReflow)
 	r.POST("/api/projects/:id/adaptations/generate", svc.HandleGenerateAdaptations)
 	r.GET("/api/projects/:id/planning-batches", svc.HandleListPlanningBatches)
 	r.PATCH("/api/projects/:id/planning-target", svc.HandleUpdatePlanningTarget)

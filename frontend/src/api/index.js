@@ -444,6 +444,7 @@ export const api = {
   adaptationStrategy: (id) => http.get(`/projects/${id}/adaptation-strategy`),
   saveAdaptationStrategy: (id, data) => http.put(`/projects/${id}/adaptation-strategy`, data),
   adaptations: (id) => http.get(`/projects/${id}/adaptations`),
+  reflowAdaptations: (id, data) => http.post(`/projects/${id}/adaptations/reflow`, data),
   generateAdaptations: (id) => http.post(`/projects/${id}/adaptations/generate`, {}, { timeout: 300000 }),
   planningBatches: (id) => http.get(`/projects/${id}/planning-batches`),
   updatePlanningTarget: (id, totalEpisodes) => http.patch(`/projects/${id}/planning-target`, { total_episodes: totalEpisodes }),

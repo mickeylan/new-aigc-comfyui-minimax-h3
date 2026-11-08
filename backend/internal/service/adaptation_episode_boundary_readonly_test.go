@@ -58,4 +58,12 @@ func TestEpisodeBoundaryDiagnosticCopyReadOnly(t *testing.T) {
 		t.Fatalf("replayed mapped events not detected: consumed=%v err=%v", consumed, err)
 	}
 	t.Logf("read-only diagnostic: episode=3 completed_source_dialogues=%d available=%d required=%d scope_consumed=%v integrity=%s", len(ctx.CompletedDialogues), len(ctx.AvailableDialogues), len(ctx.DialogueLedger), consumed, integrity)
+	preview, _, err := adapt.previewReflow(1, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.Items) != 7 || preview.Items[0].Title != "血仇与远行" || preview.UnplannedEpisode != 10 {
+		t.Fatalf("unexpected repair preview: %+v", preview)
+	}
+	t.Logf("read-only repair preview: keep episodes 1-2; episode 3=%s; shifted mappings=%d; unplanned tail=%d", preview.Items[0].Title, len(preview.Items), preview.UnplannedEpisode)
 }
