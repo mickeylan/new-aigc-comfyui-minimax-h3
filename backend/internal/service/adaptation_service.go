@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"gorm.io/gorm"
 
@@ -24,6 +25,14 @@ type SourceTrace struct {
 }
 
 type EpisodeContext struct {
+	EpisodeTitle    string            `json:"episode_title,omitempty"`
+	TargetDuration  float64           `json:"target_duration"`
+	TargetScenes    int               `json:"target_scenes"`
+	AdaptationGoal  string            `json:"adaptation_goal,omitempty"`
+	MustKeepEvents  []string          `json:"must_keep_events,omitempty"`
+	OptionalEvents  []string          `json:"optional_events,omitempty"`
+	OmittedEvents   []string          `json:"omitted_events,omitempty"`
+	EndingState     string            `json:"approved_ending_state,omitempty"`
 	AdaptationRules string            `json:"adaptation_rules"`
 	WorldRules      string            `json:"world_rules"`
 	MainPlot        string            `json:"main_plot"`
@@ -35,6 +44,125 @@ type EpisodeContext struct {
 	SourceChapters  []SourceChapter   `json:"source_chapters"`
 	DialogueLedger  []SourceDialogue  `json:"source_dialogue_ledger"`
 	Traces          []SourceTrace     `json:"source_traces"`
+}
+
+// adaptationEventList accepts every shape the planning model has produced for
+// must/optional/omitted events: a JSON array, a JSON-encoded string, or plain text.
+func adaptationEventList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "null" || raw == "[]" {
+		return nil
+	}
+	var list []string
+	if err := json.Unmarshal([]byte(raw), &list); err == nil {
+		out := make([]string, 0, len(list))
+		for _, item := range list {
+			if item = strings.TrimSpace(item); item != "" {
+				out = append(out, item)
+			}
+		}
+		return out
+	}
+	var wrapped string
+	if err := json.Unmarshal([]byte(raw), &wrapped); err == nil {
+		return adaptationEventList(wrapped)
+	}
+	return []string{raw}
+}
+
+// mustKeepCoverageThreshold is deliberately conservative: a faithful scene
+// dramatizing an approved event shares a substantial run of three-character
+// phrases with it, while a rewritten event (for example an invented vine fight)
+// shares almost none.
+const mustKeepCoverageThreshold = 0.35
+
+func eventTrigrams(value string) map[string]struct{} {
+	runes := make([]rune, 0, len([]rune(value)))
+	for _, r := range strings.ToLower(value) {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			runes = append(runes, r)
+		}
+	}
+	out := map[string]struct{}{}
+	for i := 0; i+2 < len(runes); i++ {
+		out[string(runes[i:i+3])] = struct{}{}
+	}
+	return out
+}
+
+func mustKeepEventCoverage(event string, scenes []string) float64 {
+	eventGrams := eventTrigrams(event)
+	if len(eventGrams) < 6 {
+		return 1
+	}
+	scriptGrams := map[string]struct{}{}
+	for _, scene := range scenes {
+		for gram := range eventTrigrams(scene) {
+			scriptGrams[gram] = struct{}{}
+		}
+	}
+	covered := 0
+	for gram := range eventGrams {
+		if _, ok := scriptGrams[gram]; ok {
+			covered++
+		}
+	}
+	return float64(covered) / float64(len(eventGrams))
+}
+
+// missingMustKeepEvents returns approved events that the candidate script does not
+// actually dramatize. Parse failures are left to the normal structure validation.
+func missingMustKeepEvents(raw string, events []string) []string {
+	if len(events) == 0 {
+		return nil
+	}
+	doc, err := parseAdaptationScript(raw)
+	if err != nil || doc == nil {
+		return nil
+	}
+	scenes := make([]string, 0, len(doc.Scenes))
+	for _, scene := range doc.Scenes {
+		scenes = append(scenes, scene.Content)
+	}
+	missing := []string{}
+	for _, event := range events {
+		if mustKeepEventCoverage(event, scenes) < mustKeepCoverageThreshold {
+			missing = append(missing, event)
+		}
+	}
+	return missing
+}
+
+// repairMissingMustKeepEvents performs exactly one source-grounded repair. It never
+// invents replacement plot: the model must use the approved chapters and events.
+func (s *AdaptationService) repairMissingMustKeepEvents(projectID uint, episode int, raw string, ctx *EpisodeContext, missing []string) (string, error) {
+	contextJSON, err := json.Marshal(struct {
+		SourceChapters    []SourceChapter  `json:"source_chapters"`
+		DialogueLedger    []SourceDialogue `json:"source_dialogue_ledger"`
+		MustKeepEvents    []string         `json:"must_keep_events"`
+		OmittedEvents     []string         `json:"omitted_events"`
+		MissingEvents     []string         `json:"missing_events"`
+		ApprovedEnding    string           `json:"approved_ending_state"`
+		CurrentScriptJSON json.RawMessage  `json:"current_structured_script"`
+	}{ctx.SourceChapters, ctx.DialogueLedger, ctx.MustKeepEvents, ctx.OmittedEvents, missing, ctx.EndingState, json.RawMessage(raw)})
+	if err != nil {
+		return "", err
+	}
+	system := "这是一次且仅一次的忠实度修复。输出完整合法JSON剧本。必须把missing_events逐项改写为可拍摄场景，并按source_chapters还原其人物、动作、法器、术法与结果。禁止新增原著没有的战斗、技能、法器、人物或台词；原著中沉默的角色必须保持沉默；禁止用其他冲突替换缺失事件；禁止出现omitted_events。保留现有视觉字段和已逐字覆盖的结构化对白。"
+	repaired, err := s.skills.ChatWithSkill(projectID, models.SkillStageEpisodeAdaptation, s.provider, system, "", map[string]string{
+		"episode_n": strconv.Itoa(episode), "target_duration": fmt.Sprint(ctx.TargetDuration), "target_scenes": strconv.Itoa(ctx.TargetScenes), "episode_context": string(contextJSON),
+	})
+	if err != nil {
+		return "", err
+	}
+	preserved, ok := revisionRootFieldsPreserved(raw, repaired)
+	if !ok {
+		return "", fmt.Errorf("忠实度修复返回的结构不完整")
+	}
+	if _, err := parseAdaptationScript(preserved); err != nil {
+		return "", fmt.Errorf("忠实度修复返回非法JSON: %w", err)
+	}
+	return preserved, nil
 }
 
 type SourceChapter struct {
@@ -438,7 +566,26 @@ func (s *AdaptationService) BuildContext(projectID uint, episode, maxChars int) 
 	if err := s.db.Where("project_id = ? AND id IN ?", projectID, ids).Order("chapter_order").Find(&chapters).Error; err != nil {
 		return nil, err
 	}
-	ctx := &EpisodeContext{AdaptationRules: bible.AdaptationRules, WorldRules: bible.WorldRules, MainPlot: bible.MainPlot, OpeningState: ep.OpeningState, NextGoal: ep.Hook}
+	ctx := &EpisodeContext{
+		EpisodeTitle:    ep.Title,
+		TargetDuration:  ep.TargetDuration,
+		TargetScenes:    ep.TargetScenes,
+		AdaptationGoal:  ep.AdaptationGoal,
+		MustKeepEvents:  adaptationEventList(ep.MustKeepEvents),
+		OptionalEvents:  adaptationEventList(ep.OptionalEvents),
+		OmittedEvents:   adaptationEventList(ep.OmittedEvents),
+		EndingState:     ep.EndingState,
+		AdaptationRules: bible.AdaptationRules,
+		WorldRules:      bible.WorldRules,
+		MainPlot:        bible.MainPlot,
+		OpeningState:    ep.OpeningState,
+		NextGoal:        ep.Hook,
+	}
+	// An approved mapping may encode its constraints as opaque JSON wrappers.
+	// Always normalize them into readable lists so the prompt cannot silently drop
+	// the events the user reviewed and approved.
+	ctx.OpeningState = strings.TrimSpace(strings.Trim(ctx.OpeningState, `"`))
+	ctx.EndingState = strings.TrimSpace(strings.Trim(ctx.EndingState, `"`))
 	knownNames, err := s.dialogueSpeakerNames(projectID)
 	if err != nil {
 		return nil, err
@@ -456,7 +603,8 @@ func (s *AdaptationService) BuildContext(projectID uint, episode, maxChars int) 
 	if s.projects != nil {
 		ctx.PreviousContent, _ = s.projects.previousEpisodeProductionFacts(projectID, episode)
 	}
-	budget := maxChars - len(ctx.AdaptationRules) - len(ctx.WorldRules) - len(ctx.MainPlot) - len(ctx.OpeningState) - len(ctx.PreviousEnding) - len(ctx.PreviousContent) - len(ctx.NextGoal)
+	budget := maxChars - len(ctx.AdaptationRules) - len(ctx.WorldRules) - len(ctx.MainPlot) - len(ctx.OpeningState) - len(ctx.PreviousEnding) - len(ctx.PreviousContent) - len(ctx.NextGoal) -
+		len(ctx.AdaptationGoal) - len(ctx.EndingState) - len(strings.Join(ctx.MustKeepEvents, "")) - len(strings.Join(ctx.OptionalEvents, "")) - len(strings.Join(ctx.OmittedEvents, ""))
 	if budget < 0 {
 		budget = 0
 	}
@@ -927,7 +1075,7 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 		return nil, err
 	}
 	input, _ := json.Marshal(ctx)
-	system := "只改编提供的上下文并输出JSON。source_chapters是本集审核映射的原文权威，source_dialogue_ledger是按原文顺序提取的对白清单：必须逐字、逐条、按序保留到scenes[].dialogues，并依据原文把是谁说、画外空间位置和发生时间自然融入同场content；content必须自然包含引号原句且归属时序与dialogues完全一致，禁止台词清单、末尾追加标签和【对白待确认】。不得因180秒或25镜头目标删减或硬凑镜头。未知说话者只保留原文明示的描述性身份与offscreen类型，不按别名猜人；人名后置归属必须保留，多角色歧义保持未明多人物语音。不得发明原文未提供的咒语；原文仅写念念有词或没有说话时不得创作台词。previous_episode_completed_content是上一集已完成内容的排重权威；本集必须从其结尾后继续，严禁重演、改写后重复、重新介绍或回顾其中已经完成的事件、动作、信息揭示、对白与情感节点。"
+	system := "只改编提供的上下文并输出JSON。source_chapters是本集审核映射的原文权威，source_dialogue_ledger是按原文顺序提取的对白清单：必须逐字、逐条、按序保留到scenes[].dialogues，并依据原文把是谁说、画外空间位置和发生时间自然融入同场content；content必须自然包含引号原句且归属时序与dialogues完全一致，禁止台词清单、末尾追加标签和【对白待确认】。不得因180秒或25镜头目标删减或硬凑镜头。未知说话者只保留原文明示的描述性身份与offscreen类型，不按别名猜人；人名后置归属必须保留，多角色歧义保持未明多人物语音。不得发明原文未提供的咒语或台词：原文中沉默的角色必须保持沉默，原文没有的旁白、内心独白和对白一律不得新增。must_keep_events是已审核的必保留事件，必须逐项落地为可见场景；omitted_events禁止出现；approved_ending_state必须在本集结尾达到。previous_episode_completed_content是上一集已完成内容的排重权威；本集必须从其结尾后的第一个原文瞬间开始，严禁重演、改写后重复、重新介绍或回顾其中已经完成的事件、动作、信息揭示、对白与情感节点，尤其禁止重新描述上一集已经拍过的巨石爆裂、人物现身或对峙。"
 	raw, err := s.skills.ChatWithSkill(projectID, models.SkillStageEpisodeAdaptation, s.provider, system, "", map[string]string{"episode_n": strconv.Itoa(episode), "target_duration": fmt.Sprint(ep.TargetDuration), "target_scenes": strconv.Itoa(ep.TargetScenes), "episode_context": string(input)})
 	if err != nil {
 		return nil, err
@@ -977,6 +1125,20 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 		}
 		coverage = dialogueCoverage(raw, ctx.DialogueLedger)
 		coverage.StoryPendingSceneOrders = storyPendingSceneOrders(raw)
+	}
+	// Fidelity gate: every approved must-keep event must leave a verifiable trace in
+	// the scenes. Previously the model could return a completely different plot (for
+	// example an invented vine/drum fight) and still overwrite the episode.
+	if missing := missingMustKeepEvents(raw, ctx.MustKeepEvents); len(missing) > 0 {
+		if repaired, repairErr := s.repairMissingMustKeepEvents(projectID, episode, raw, ctx, missing); repairErr == nil {
+			if remaining := missingMustKeepEvents(repaired, ctx.MustKeepEvents); len(remaining) == 0 {
+				raw = repaired
+			} else {
+				return nil, fmt.Errorf("本集剧本未覆盖已审核的必须保留事件，且自动修复后仍缺失：%s；未覆盖现有剧本", strings.Join(remaining, "；"))
+			}
+		} else {
+			return nil, fmt.Errorf("本集剧本未覆盖已审核的必须保留事件：%s；自动修复失败：%v；未覆盖现有剧本", strings.Join(missing, "；"), repairErr)
+		}
 	}
 	var p models.Project
 	if err := s.db.First(&p, projectID).Error; err != nil {

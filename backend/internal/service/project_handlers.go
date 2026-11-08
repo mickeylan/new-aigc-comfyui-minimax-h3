@@ -970,6 +970,49 @@ func (s *Service) HandleGenerateScript(c *gin.Context) {
 			}
 		}
 	}()
+	// Novel projects carry an approved EpisodeAdaptation that binds the episode to
+	// specific source chapters, must-keep events and a dialogue ledger. The legacy
+	// plan-based generator never reads any of that, so regenerating from the project
+	// page used to produce a generic standoff that ignored the novel entirely.
+	var adaptation models.EpisodeAdaptation
+	adaptationErr := s.DB.Where("project_id = ? AND episode_n = ?", p.ID, episodeN).First(&adaptation).Error
+	if adaptationErr == nil && strings.TrimSpace(adaptation.SourceChapterIDs) != "" && strings.TrimSpace(adaptation.SourceChapterIDs) != "[]" {
+		if adaptation.Status != "approved" && adaptation.Status != "scripted" && adaptation.Status != "reviewed" {
+			s.Projects.failPipeline(p.ID, fmt.Errorf("第%d集分集映射尚未审核，不能生成剧本", episodeN), false)
+			c.JSON(http.StatusConflict, gin.H{
+				"error":     fmt.Sprintf("第%d集分集映射尚未审核，请先在滚动改编页审核本批映射", episodeN),
+				"episode_n": episodeN,
+				"redirect":  fmt.Sprintf("/projects/%d/adaptation?episode=%d", p.ID, episodeN),
+			})
+			return
+		}
+		if s.Adaptations == nil {
+			s.Projects.failPipeline(p.ID, fmt.Errorf("分集改编服务不可用"), false)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "分集改编服务不可用，无法按原著生成剧本", "episode_n": episodeN})
+			return
+		}
+		if _, err := s.Adaptations.GenerateScript(p.ID, episodeN); err != nil {
+			s.Projects.failPipeline(p.ID, err, false)
+			log.Printf("[script-generate] project=%d episode=%d adaptation-path failed: %v", p.ID, episodeN, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "episode_n": episodeN})
+			return
+		}
+		var current models.Project
+		if err := s.DB.First(&current, p.ID).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "episode_n": episodeN})
+			return
+		}
+		var adaptationScenes []models.Scene
+		if err := s.DB.Where("project_id = ? AND episode_n = ? AND (archived = ? OR archived IS NULL)", p.ID, episodeN, false).
+			Order("`order`").Find(&adaptationScenes).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "episode_n": episodeN})
+			return
+		}
+		log.Printf("[script-generate] project=%d episode=%d success scenes=%d source=episode_adaptation chapters=%s", p.ID, episodeN, len(adaptationScenes), adaptation.SourceChapterIDs)
+		c.JSON(http.StatusOK, gin.H{"project": current, "scenes": adaptationScenes, "episode_n": episodeN, "source": "episode_adaptation"})
+		return
+	}
+
 	p, scenes, err := s.Projects.GenerateScript(p, episodeN)
 	if err != nil {
 		s.Projects.failPipeline(p.ID, err, false)
@@ -977,8 +1020,8 @@ func (s *Service) HandleGenerateScript(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "episode_n": episodeN})
 		return
 	}
-	log.Printf("[script-generate] project=%d episode=%d success scenes=%d", p.ID, episodeN, len(scenes))
-	c.JSON(http.StatusOK, gin.H{"project": p, "scenes": scenes, "episode_n": episodeN})
+	log.Printf("[script-generate] project=%d episode=%d success scenes=%d source=legacy_plan", p.ID, episodeN, len(scenes))
+	c.JSON(http.StatusOK, gin.H{"project": p, "scenes": scenes, "episode_n": episodeN, "source": "legacy_plan"})
 }
 
 // HandleGenerateProject 启动剧本→画面→视频→合并的持久化一键生成流程。

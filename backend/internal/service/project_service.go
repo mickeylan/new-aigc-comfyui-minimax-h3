@@ -1093,13 +1093,73 @@ func boundedUTF8Text(value string, maxBytes int) string {
 	return strings.TrimSpace(out.String())
 }
 
+// authoritativeEpisodeScenes returns only the production-authoritative Scenes of one
+// episode: non-archived rows from that episode's latest Scene generation.
+// Project.Generation is global, so it cannot be used here.
+func (s *ProjectService) authoritativeEpisodeScenes(projectID uint, episodeN int) ([]models.Scene, error) {
+	generation, err := latestEpisodeGeneration(s.db, projectID, episodeN)
+	if err != nil {
+		return nil, err
+	}
+	query := s.db.Where("project_id = ? AND episode_n = ? AND (archived = ? OR archived IS NULL)", projectID, episodeN, false)
+	if generation > 0 {
+		query = query.Where("generation = ?", generation)
+	}
+	var scenes []models.Scene
+	if err := query.Order("`order` ASC, id ASC").Find(&scenes).Error; err != nil {
+		return nil, err
+	}
+	return scenes, nil
+}
+
+// previousEpisodeSceneCaps guarantees that the previous episode's ending is always
+// visible to the next episode. A flat per-scene cap lets early scenes consume the whole
+// budget, which previously hid the real ending and made the model re-stage it.
+func previousEpisodeSceneCaps(count int) []int {
+	caps := make([]int, count)
+	if count == 0 {
+		return caps
+	}
+	const (
+		sceneBudget = previousEpisodeContextLimit - 5000 // reserve dialogue/script
+		tailScenes  = 3
+		tailCap     = 900
+		minCap      = 220
+		maxCap      = 900
+	)
+	tail := tailScenes
+	if tail > count {
+		tail = count
+	}
+	rest := count - tail
+	restBudget := sceneBudget - tail*tailCap
+	restCap := maxCap
+	if rest > 0 {
+		restCap = restBudget / rest
+		if restCap > maxCap {
+			restCap = maxCap
+		}
+		if restCap < minCap {
+			restCap = minCap
+		}
+	}
+	for i := range caps {
+		if i >= count-tail {
+			caps[i] = tailCap
+		} else {
+			caps[i] = restCap
+		}
+	}
+	return caps
+}
+
 func (s *ProjectService) previousEpisodeProductionFacts(projectID uint, episodeN int) (string, error) {
 	if episodeN <= 1 {
 		return "", nil
 	}
 	previousN := episodeN - 1
-	var scenes []models.Scene
-	if err := s.db.Where("project_id = ? AND episode_n = ?", projectID, previousN).Order("`order` ASC, id ASC").Find(&scenes).Error; err != nil {
+	scenes, err := s.authoritativeEpisodeScenes(projectID, previousN)
+	if err != nil {
 		return "", err
 	}
 	var scripts map[int]string
@@ -1107,22 +1167,26 @@ func (s *ProjectService) previousEpisodeProductionFacts(projectID uint, episodeN
 	if err := s.db.Select("scripts").First(&project, projectID).Error; err == nil && strings.TrimSpace(project.Scripts) != "" {
 		_ = json.Unmarshal([]byte(project.Scripts), &scripts)
 	}
-	var out strings.Builder
+	out := strings.Builder{}
 	out.WriteString(fmt.Sprintf("第%d集已经发生的权威内容（只能承接，严禁重演、改写后重复或再次介绍）：\n", previousN))
 	if len(scenes) > 0 {
 		out.WriteString("【已完成Scene与Dialogue（生产权威）】\n")
 	}
-	for _, scene := range scenes {
-		// Include every Scene, including the episode ending. Per-Scene compaction avoids
-		// the old failure where early scenes exhausted the budget and hid the ending.
-		content := boundedUTF8Text(scene.Content, 900)
-		line := fmt.Sprintf("Scene %d「%s」：%s\n", scene.Order, strings.TrimSpace(scene.Title), content)
-		if out.Len()+len(line) > previousEpisodeContextLimit {
-			line = fmt.Sprintf("Scene %d「%s」\n", scene.Order, strings.TrimSpace(scene.Title))
-		}
-		if out.Len()+len(line) <= previousEpisodeContextLimit {
-			out.WriteString(line)
-		}
+	caps := previousEpisodeSceneCaps(len(scenes))
+	for i, scene := range scenes {
+		// Historical generations and archived rows are not production facts; mixing
+		// them in previously injected five conflicting versions of episode 1 and
+		// exhausted the budget before the real ending.
+		content := boundedUTF8Text(scene.Content, caps[i])
+		out.WriteString(fmt.Sprintf("Scene %d「%s」：%s\n", scene.Order, strings.TrimSpace(scene.Title), content))
+	}
+	var ending string
+	var previous models.EpisodeAdaptation
+	if err := s.db.Where("project_id = ? AND episode_n = ?", projectID, previousN).First(&previous).Error; err == nil {
+		ending = strings.TrimSpace(strings.Trim(previous.EndingState, `"`))
+	}
+	if ending != "" && ending != "null" {
+		out.WriteString("【上一集确认结束状态】\n" + boundedUTF8Text(ending, 1200) + "\n")
 	}
 	// Dialogue is appended only after every Scene summary is represented, so it can
 	// never crowd the episode ending out of the context.
@@ -1197,8 +1261,8 @@ func (s *ProjectService) crossEpisodeDuplicateIssues(projectID uint, episodeN in
 	if episodeN <= 1 {
 		return issues, nil
 	}
-	var previous []models.Scene
-	if err := s.db.Where("project_id = ? AND episode_n = ?", projectID, episodeN-1).Order("`order` ASC, id ASC").Find(&previous).Error; err != nil {
+	previous, err := s.authoritativeEpisodeScenes(projectID, episodeN-1)
+	if err != nil {
 		return nil, err
 	}
 	for i, current := range result.Scenes {
@@ -1209,6 +1273,54 @@ func (s *ProjectService) crossEpisodeDuplicateIssues(projectID uint, episodeN in
 		}
 	}
 	return issues, nil
+}
+
+// episodeSourceAuthority renders the approved source scope for one episode so repair
+// passes rewrite from the novel instead of inventing replacement plot.
+func (s *ProjectService) episodeSourceAuthority(projectID uint, episodeN int) string {
+	var ep models.EpisodeAdaptation
+	if err := s.db.Where("project_id = ? AND episode_n = ?", projectID, episodeN).First(&ep).Error; err != nil {
+		return ""
+	}
+	var out strings.Builder
+	if goal := strings.TrimSpace(ep.AdaptationGoal); goal != "" {
+		out.WriteString("审核通过的本集改编目标：\n" + goal + "\n")
+	}
+	if events := adaptationEventList(ep.MustKeepEvents); len(events) > 0 {
+		out.WriteString("必须保留的事件（逐项落地，不得替换为其他剧情）：\n")
+		for _, event := range events {
+			out.WriteString("- " + event + "\n")
+		}
+	}
+	if events := adaptationEventList(ep.OmittedEvents); len(events) > 0 {
+		out.WriteString("明确禁止出现的事件：\n")
+		for _, event := range events {
+			out.WriteString("- " + event + "\n")
+		}
+	}
+	if ending := strings.TrimSpace(strings.Trim(ep.EndingState, `"`)); ending != "" && ending != "null" {
+		out.WriteString("本集必须到达的结束状态：\n" + ending + "\n")
+	}
+	var ids []uint
+	_ = json.Unmarshal([]byte(ep.SourceChapterIDs), &ids)
+	if len(ids) == 0 {
+		return strings.TrimSpace(out.String())
+	}
+	var chapters []models.Chapter
+	if err := s.db.Where("project_id = ? AND id IN ?", projectID, ids).Order("chapter_order").Find(&chapters).Error; err != nil {
+		return strings.TrimSpace(out.String())
+	}
+	out.WriteString("原著正文（唯一可改编素材）：\n")
+	remaining := 16000
+	for _, chapter := range chapters {
+		if remaining <= 0 {
+			break
+		}
+		body := boundedUTF8Text(chapter.Content, remaining)
+		out.WriteString(fmt.Sprintf("【第%d章 %s】\n%s\n", chapter.Order, chapter.Title, body))
+		remaining -= len(body)
+	}
+	return strings.TrimSpace(out.String())
 }
 
 func (s *ProjectService) repairCrossEpisodeDuplicates(projectID uint, episodeN int, raw string) (string, error) {
@@ -1224,8 +1336,13 @@ func (s *ProjectService) repairCrossEpisodeDuplicates(projectID uint, episodeN i
 	if err != nil {
 		return "", err
 	}
-	system := "你是分集剧本排重修复器。只输出完整合法JSON。保持JSON结构、非重复场景、角色事实、当前集目标和对白字段；只重写列出的重复场景，使其从上一集结尾继续并产生新的剧情推进。不得用回忆、概述、换措辞或重复信息揭示来伪装重复。"
-	user := "检测到以下重复：\n- " + strings.Join(issues, "\n- ") + "\n\n上一集生产权威：\n" + previous + "\n\n待修复JSON：\n" + raw
+	source := s.episodeSourceAuthority(projectID, episodeN)
+	system := "你是分集剧本排重修复器。只输出完整合法JSON。保持JSON结构、非重复场景、角色事实、当前集目标和对白字段；只重写列出的重复场景，使其从上一集结尾之后继续并产生新的剧情推进。不得用回忆、概述、换措辞或重复信息揭示来伪装重复。你必须只使用【原著正文】中已有的情节、人物、法术、法器和台词来推进剧情：不得新增原著没有的战斗、技能、藤蔓法术、火墙、人物或台词，不得让原著中沉默的角色开口，不得用“新的冲突”替换必须保留的事件。必须保留的事件逐项落地，禁止出现明确禁止的事件。"
+	user := "检测到以下重复：\n- " + strings.Join(issues, "\n- ") + "\n\n"
+	if source != "" {
+		user += "=== 原著与本集审核约束（唯一事实来源） ===\n" + source + "\n\n"
+	}
+	user += "上一集生产权威：\n" + previous + "\n\n待修复JSON：\n" + raw
 	repaired, err := s.chatWithSkill(projectID, models.SkillStageStoryboard, system, user, map[string]string{"episode_n": fmt.Sprint(episodeN), "duplicate_issues": strings.Join(issues, "；")})
 	if err != nil {
 		return "", fmt.Errorf("跨集重复自动修复失败: %w", err)
