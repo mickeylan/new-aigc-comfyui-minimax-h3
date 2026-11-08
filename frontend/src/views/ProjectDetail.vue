@@ -701,8 +701,14 @@
         </div>
         <div class="field">
           <label>参考图片</label>
+          <div class="reference-search">
+            <input v-model="sceneReferenceSearch" type="search" class="input" aria-label="搜索参考素材" placeholder="输入人名、场景或道具名中的任意字，快速过滤素材">
+            <button v-if="sceneReferenceSearch" type="button" class="btn btn-xs btn-ghost" @click="sceneReferenceSearch=''">清空搜索</button>
+            <span class="field-hint" aria-live="polite">显示 {{filteredSceneReferenceCandidates.length}} / {{sceneReferenceCandidates.length}} 张 · 已选 {{selectedSceneReferences.length}} 张（筛选不影响勾选）</span>
+          </div>
+          <div v-if="sceneReferenceCandidates.length && !filteredSceneReferenceCandidates.length" class="field-hint">没有匹配的素材，请换个字或清空搜索；已选素材仍保留。</div>
           <div v-if="!sceneReferenceCandidates.length" class="field-hint">暂无可用图片，请先生成或上传人物四视图、造型、场景或道具参考图。</div>
-          <div class="reference-picker"><div v-for="ref in sceneReferenceCandidates" :key="ref.key" class="reference-option" :class="{ selected: referenceIndex(ref) >= 0 }"><img :src="api.inputUrl(id(), ref.image)" @click="toggleSceneReference(ref)"><div><strong>{{ referenceIndex(ref) >= 0 ? `${selectedSceneReferences[referenceIndex(ref)].use_krea2 ? '用于生成分镜图' : '不用于分镜图'} / ${selectedSceneReferences[referenceIndex(ref)].use_h3 ? '用于后续视频参考' : '不用于后续视频'}` : '未选择' }}</strong><span>{{ ref.label }}</span><div v-if="referenceIndex(ref) >= 0" class="reference-flags"><label><input v-model="selectedSceneReferences[referenceIndex(ref)].use_krea2" type="checkbox"> 生成分镜图时使用</label><label><input v-model="selectedSceneReferences[referenceIndex(ref)].use_h3" type="checkbox"> 后续视频时使用</label><button type="button" @click="moveReference(referenceIndex(ref), -1)">↑</button><button type="button" @click="moveReference(referenceIndex(ref), 1)">↓</button></div></div></div></div>
+          <div class="reference-picker"><div v-for="ref in filteredSceneReferenceCandidates" :key="ref.key" class="reference-option" :class="{ selected: referenceIndex(ref) >= 0 }"><img :src="api.inputUrl(id(), ref.image)" @click="toggleSceneReference(ref)"><div><strong>{{ referenceIndex(ref) >= 0 ? `${selectedSceneReferences[referenceIndex(ref)].use_krea2 ? '用于生成分镜图' : '不用于分镜图'} / ${selectedSceneReferences[referenceIndex(ref)].use_h3 ? '用于后续视频参考' : '不用于后续视频'}` : '未选择' }}</strong><span>{{ ref.label }}</span><div v-if="referenceIndex(ref) >= 0" class="reference-flags"><label><input v-model="selectedSceneReferences[referenceIndex(ref)].use_krea2" type="checkbox"> 生成分镜图时使用</label><label><input v-model="selectedSceneReferences[referenceIndex(ref)].use_h3" type="checkbox"> 后续视频时使用</label><button type="button" @click="moveReference(referenceIndex(ref), -1)">↑</button><button type="button" @click="moveReference(referenceIndex(ref), 1)">↓</button></div></div></div></div>
           <div class="field-hint"><strong>角色名变化：</strong>请在项目资产区点击“资产名称对账”，把“柳石”合并到已有“青衣高大男子”等同一角色；确认一次后，所有现有及未来Scene自动继承同一套标准像，无需逐镜绑定。<br><strong>生成场景图：</strong>MiniMax H3 SelfLift 最多 9 张参考图；Qwen-Image-2.1 多图编辑最多 16 张。出场人物四视图会自动补入。<br><strong>生成后续视频：</strong>已确认的分镜图作为起始帧；这里只选择需要额外提供给视频模型的人物、造型或道具参考图，最多 8 张。</div>
         </div>
         <div v-if="sceneError" class="notice error-notice">{{ sceneError }}</div>
@@ -1201,6 +1207,7 @@ import GeneratedMediaHistoryDrawer from '../components/GeneratedMediaHistoryDraw
 import ShotDirectorEditor from '../components/ShotDirectorEditor.vue'
 import { overlayDialogueExclusions, setDialogueItemExcluded, snapshotDialogueExclusions } from '../utils/dialogueAnalysis'
 import { estimateDialogueListDuration } from '../utils/dialogueDuration.js'
+import { filterReferenceCandidates } from '../utils/referenceSearch.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -1484,6 +1491,8 @@ function toggleSceneRole(role, name, checked) {
   if (checked && role !== 'mentioned') setSceneRole('mentioned', roleNames(sceneForm.mentioned_characters).filter(item => item !== name))
 }
 const sceneReferenceCandidates = ref([])
+const sceneReferenceSearch = ref('')
+const filteredSceneReferenceCandidates = computed(() => filterReferenceCandidates(sceneReferenceCandidates.value, sceneReferenceSearch.value))
 const selectedSceneReferences = ref([])
 const invalidSceneReferences = ref([])
 const sceneReferencesBaseline = ref(null)
@@ -3565,6 +3574,7 @@ async function openNextSceneWorkspace() {
 }
 
 async function openEditScene(sc, step = 'scene') {
+  sceneReferenceSearch.value = ''
   sceneWorkspaceStep.value = ['scene', 'director', 'media'].includes(step) ? step : 'scene'
   router.replace({ query: { ...route.query, episode: String(sc.episode_n || activeEpN.value), scene_page: String(scenePage.value), scene: String(sc.id), panel: 'director', step: sceneWorkspaceStep.value } })
   sceneError.value = ''
