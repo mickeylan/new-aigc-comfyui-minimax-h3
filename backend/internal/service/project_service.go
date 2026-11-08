@@ -1383,6 +1383,11 @@ func (s *ProjectService) GenerateScript(p *models.Project, episodeN int) (*model
 		user.WriteString("\n\n=== 上一集已完成内容（排重权威） ===\n" + previousFacts + "\n")
 	}
 
+	identities, err := loadProductionIdentities(s.db, p.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	user.WriteString("\n" + identities.promptCatalogue() + "\n")
 	system := scriptSystemPrompt
 	if strings.TrimSpace(p.Plan) != "" {
 		// 阶段 2：依据创作方案渲染分镜场景（人物外观沿用方案中的 trait/style 保持一致）
@@ -1508,6 +1513,13 @@ func (s *ProjectService) generateScriptCore(p *models.Project, episodeN int, raw
 		return nil, nil, fmt.Errorf("剧本结构不完整（可重试）: %w", err)
 	}
 
+	// Resolve project identities before persisting references, not just before
+	// building asset cards. Otherwise a reused card remains invisible to the Scene.
+	registry, err := loadProductionIdentities(s.db, p.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	registry.normalizeScenes(res.Scenes)
 	// 全局递增版本号，避免不同项目复用同一 generation。
 	var maxGeneration uint
 	if err := s.db.Model(&models.Project{}).Select("COALESCE(MAX(generation), 0)").Scan(&maxGeneration).Error; err != nil {

@@ -1013,7 +1013,7 @@ func (s *Service) HandleGenerateScript(c *gin.Context) {
 		return
 	}
 
-	p, scenes, err := s.Projects.GenerateScript(p, episodeN)
+	generatedProject, scenes, err := s.Projects.GenerateScript(p, episodeN)
 	if err != nil {
 		s.Projects.failPipeline(p.ID, err, false)
 		log.Printf("[script-generate] project=%d episode=%d failed: %v", p.ID, episodeN, err)
@@ -1021,7 +1021,7 @@ func (s *Service) HandleGenerateScript(c *gin.Context) {
 		return
 	}
 	log.Printf("[script-generate] project=%d episode=%d success scenes=%d source=legacy_plan", p.ID, episodeN, len(scenes))
-	c.JSON(http.StatusOK, gin.H{"project": p, "scenes": scenes, "episode_n": episodeN, "source": "legacy_plan"})
+	c.JSON(http.StatusOK, gin.H{"project": generatedProject, "scenes": scenes, "episode_n": episodeN, "source": "legacy_plan"})
 }
 
 // HandleGenerateProject 启动剧本→画面→视频→合并的持久化一键生成流程。

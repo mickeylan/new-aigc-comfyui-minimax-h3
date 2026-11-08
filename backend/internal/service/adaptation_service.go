@@ -26,28 +26,29 @@ type SourceTrace struct {
 }
 
 type EpisodeContext struct {
-	EpisodeTitle         string            `json:"episode_title,omitempty"`
-	TargetDuration       float64           `json:"target_duration"`
-	TargetScenes         int               `json:"target_scenes"`
-	AdaptationGoal       string            `json:"adaptation_goal,omitempty"`
-	MustKeepEvents       []string          `json:"must_keep_events,omitempty"`
-	OptionalEvents       []string          `json:"optional_events,omitempty"`
-	OmittedEvents        []string          `json:"omitted_events,omitempty"`
-	EndingState          string            `json:"approved_ending_state,omitempty"`
-	AdaptationRules      string            `json:"adaptation_rules"`
-	WorldRules           string            `json:"world_rules"`
-	MainPlot             string            `json:"main_plot"`
-	OpeningState         string            `json:"opening_state"`
-	PreviousEnding       string            `json:"previous_ending_state"`
-	PreviousContent      string            `json:"previous_episode_completed_content,omitempty"`
-	NextGoal             string            `json:"next_goal"`
-	ChapterAnalyses      []json.RawMessage `json:"chapter_analyses"`
-	SourceChapters       []SourceChapter   `json:"source_chapters"`
-	DialogueLedger       []SourceDialogue  `json:"source_dialogue_ledger"`
-	CompletedDialogues   []SourceDialogue  `json:"previously_completed_source_dialogues,omitempty"`
-	AvailableDialogues   []SourceDialogue  `json:"available_source_dialogues,omitempty"`
-	ReservedFutureEvents []string          `json:"reserved_future_events,omitempty"`
-	Traces               []SourceTrace     `json:"source_traces"`
+	ProjectAssetIdentities string            `json:"project_asset_identities,omitempty"`
+	EpisodeTitle           string            `json:"episode_title,omitempty"`
+	TargetDuration         float64           `json:"target_duration"`
+	TargetScenes           int               `json:"target_scenes"`
+	AdaptationGoal         string            `json:"adaptation_goal,omitempty"`
+	MustKeepEvents         []string          `json:"must_keep_events,omitempty"`
+	OptionalEvents         []string          `json:"optional_events,omitempty"`
+	OmittedEvents          []string          `json:"omitted_events,omitempty"`
+	EndingState            string            `json:"approved_ending_state,omitempty"`
+	AdaptationRules        string            `json:"adaptation_rules"`
+	WorldRules             string            `json:"world_rules"`
+	MainPlot               string            `json:"main_plot"`
+	OpeningState           string            `json:"opening_state"`
+	PreviousEnding         string            `json:"previous_ending_state"`
+	PreviousContent        string            `json:"previous_episode_completed_content,omitempty"`
+	NextGoal               string            `json:"next_goal"`
+	ChapterAnalyses        []json.RawMessage `json:"chapter_analyses"`
+	SourceChapters         []SourceChapter   `json:"source_chapters"`
+	DialogueLedger         []SourceDialogue  `json:"source_dialogue_ledger"`
+	CompletedDialogues     []SourceDialogue  `json:"previously_completed_source_dialogues,omitempty"`
+	AvailableDialogues     []SourceDialogue  `json:"available_source_dialogues,omitempty"`
+	ReservedFutureEvents   []string          `json:"reserved_future_events,omitempty"`
+	Traces                 []SourceTrace     `json:"source_traces"`
 }
 
 // adaptationEventList accepts every shape the planning model has produced for
@@ -673,6 +674,11 @@ func (s *AdaptationService) BuildContext(projectID uint, episode, maxChars int) 
 	// the events the user reviewed and approved.
 	ctx.OpeningState = strings.TrimSpace(strings.Trim(ctx.OpeningState, `"`))
 	ctx.EndingState = strings.TrimSpace(strings.Trim(ctx.EndingState, `"`))
+	registry, err := loadProductionIdentities(s.db, projectID)
+	if err != nil {
+		return nil, err
+	}
+	ctx.ProjectAssetIdentities = registry.promptCatalogue()
 	knownNames, err := s.dialogueSpeakerNames(projectID)
 	if err != nil {
 		return nil, err

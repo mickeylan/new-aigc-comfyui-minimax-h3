@@ -251,6 +251,11 @@ func (s *ProjectService) upsertAssetsFromPlan(p *models.Project, plan *dramaPlan
 // upsertAssetsFromScenes 分镜引用的道具/地点若尚未建卡则自动补建（source=auto），
 // 保证后续参考图生成与一致性注入可按名称匹配。
 func (s *ProjectService) upsertProductionEntitiesFromScenes(projectID uint, scenes []scriptScene) error {
+	registry, err := loadProductionIdentities(s.db, projectID)
+	if err != nil {
+		return err
+	}
+	registry.normalizeScenes(scenes)
 	type key struct{ kind, name string }
 	seenAssets := map[key]bool{}
 	seenCharacters := map[string]bool{}
@@ -306,8 +311,8 @@ func (s *ProjectService) upsertProductionEntitiesFromScenes(projectID uint, scen
 }
 
 func (s *ProjectService) SyncEpisodeProductionEntities(projectID uint, episodeN int) error {
-	var scenes []models.Scene
-	if err := s.db.Where("project_id = ? AND episode_n = ?", projectID, episodeN).Find(&scenes).Error; err != nil {
+	scenes, err := s.authoritativeEpisodeScenes(projectID, episodeN)
+	if err != nil {
 		return err
 	}
 	if len(scenes) == 0 {
