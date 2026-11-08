@@ -8,17 +8,17 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 
 	"comfyui-console/internal/models"
 )
 
-// Generated asset images are named <prefix>_<entityID>_<timestamp>.<ext>. When a
-// referenced file is deleted, the authoritative entity record still identifies the
-// same artwork. Restoring the current authoritative file is exact-identity
-// recovery; a historical variant is never substituted silently.
+// Generated asset images are named <prefix>_<entityID>_<timestamp>.<ext>. When the
+// referenced copy in ComfyUI/input was cleared, the authoritative source is the
+// generation task that produced it: its result file still lives in the ComfyUI
+// output directory (for example output/krea2). Recovery therefore re-downloads the
+// recorded output instead of guessing filenames or scanning local ComfyUI folders.
 var (
 	generatedCharSheetName    = regexp.MustCompile(`^char_sheet_(\d+)_\d+`)
 	generatedCharPortraitName = regexp.MustCompile(`^char_(\d+)_\d+`)
@@ -85,9 +85,73 @@ func (s *TaskService) resolveMissingInputOwner(projectID uint, name string) (*mi
 	return nil, fmt.Errorf("非项目资产生成文件")
 }
 
-// restoreMissingInputFile recreates one deleted generated asset file from the
-// entity's current authoritative image. Returns a human-readable source label.
-func (s *TaskService) restoreMissingInputFile(projectID uint, name string) (string, error) {
+func (s *TaskService) downloadTaskOutput(task *models.Task) ([]byte, error) {
+	file, _ := resultImageOf(task)
+	if strings.TrimSpace(file) == "" {
+		return nil, fmt.Errorf("任务 %s 没有记录生成的图片结果", task.TaskID)
+	}
+	if s.outputDownloader != nil {
+		return s.outputDownloader(task)
+	}
+	subfolder, filename := filepath.ToSlash(filepath.Dir(file)), filepath.Base(file)
+	if subfolder == "." {
+		subfolder = ""
+	}
+	client, err := s.clientForTask(task)
+	if err != nil {
+		return nil, err
+	}
+	return client.DownloadOutput(filename, subfolder, "output")
+}
+
+// restoreFromRecordedOutput re-downloads the exact artwork recorded for this
+// entity. Provenance stores the generating task id as "krea2_task:<taskID>".
+func (s *TaskService) restoreFromRecordedOutput(projectID uint, name string) (string, error) {
+	var versions []models.AssetVariant
+	s.db.Where("project_id = ? AND file = ?", projectID, name).Order("id DESC").Find(&versions)
+	if len(versions) == 0 {
+		if owner, err := s.resolveMissingInputOwner(projectID, name); err == nil {
+			s.db.Where("project_id = ? AND entity_type = ? AND entity_id = ?", projectID, owner.entityType, owner.entityID).
+				Order("selected DESC, id DESC").Find(&versions)
+		}
+	}
+	attempted := []string{}
+	for _, version := range versions {
+		provenance := strings.TrimSpace(version.Provenance)
+		taskID := strings.TrimSpace(strings.TrimPrefix(provenance, "krea2_task:"))
+		if taskID == "" || taskID == provenance {
+			continue
+		}
+		var task models.Task
+		if err := s.db.Where("task_id = ?", taskID).First(&task).Error; err != nil {
+			attempted = append(attempted, "任务记录已不存在: "+taskID)
+			continue
+		}
+		data, err := s.downloadTaskOutput(&task)
+		if err != nil || len(data) == 0 {
+			reason := "输出为空"
+			if err != nil {
+				reason = err.Error()
+			}
+			attempted = append(attempted, fmt.Sprintf("任务%s: %s", taskID, reason))
+			continue
+		}
+		if err := s.remote.WriteFile(s.inputFilePath(projectID, name), data, 0o644); err != nil {
+			return "", fmt.Errorf("恢复 %s 失败: %w", name, err)
+		}
+		log.Printf("[input-repair] restored %s from recorded ComfyUI output task=%s (project=%d)", name, taskID, projectID)
+		return "生成任务输出", nil
+	}
+	if len(attempted) > 0 {
+		return "", fmt.Errorf("素材 %s 在 input 目录已丢失，且无法从生成任务重新取回：%s", name, strings.Join(attempted, "；"))
+	}
+	return "", fmt.Errorf("素材 %s 在 input 目录已丢失，且没有记录可重新取回的生成任务", name)
+}
+
+// restoreFromAuthoritativeCurrent copies the entity's currently selected artwork
+// when that file still exists in the input directory. Historical variants are never
+// substituted silently, because that would change the appearance.
+func (s *TaskService) restoreFromAuthoritativeCurrent(projectID uint, name string) (string, error) {
 	owner, err := s.resolveMissingInputOwner(projectID, name)
 	if err != nil {
 		return "", err
@@ -96,36 +160,15 @@ func (s *TaskService) restoreMissingInputFile(projectID uint, name string) (stri
 	if authoritative == "" {
 		return "", fmt.Errorf("%s缺少当前有效图片，请在资产卡重新生成", owner.label)
 	}
-	sourcePath, readable := s.readableInputPath(projectID, authoritative)
-	if !readable {
-		var versions []models.AssetVariant
-		s.db.Where("project_id = ? AND entity_type = ? AND entity_id = ? AND file <> ''", projectID, owner.entityType, owner.entityID).
-			Order("selected DESC, id DESC").Find(&versions)
-		existing := []string{}
-		for _, version := range versions {
-			if file := strings.TrimSpace(version.File); file != "" {
-				if _, ok := s.readableInputPath(projectID, file); !ok {
-					continue
-				}
-				existing = append(existing, file)
-			}
-		}
-		if len(existing) == 0 {
-			return "", fmt.Errorf("%s的当前图片和历史版本都已丢失，请在资产卡重新生成", owner.label)
-		}
-		return "", fmt.Errorf("%s的当前图片已丢失（历史版本仍存在：%s）；请先在资产卡“版本”中选择一个仍然存在的图片，系统不会自动替换为旧版外观", owner.label, strings.Join(existing, "、"))
-	}
-	reader, err := s.remote.Open(sourcePath)
-	if err != nil {
-		return "", fmt.Errorf("读取%s当前图片失败: %w", owner.label, err)
+	sourcePath := s.inputFilePath(projectID, authoritative)
+	reader, openErr := s.remote.Open(sourcePath)
+	if openErr != nil {
+		return "", fmt.Errorf("%s的当前图片已丢失，且没有可重新取回的生成任务；请在资产卡重新生成或选择一个仍存在的历史版本", owner.label)
 	}
 	data, readErr := io.ReadAll(io.LimitReader(reader, 64<<20))
 	reader.Close()
-	if readErr != nil {
-		return "", fmt.Errorf("读取%s当前图片失败: %w", owner.label, readErr)
-	}
-	if len(data) == 0 {
-		return "", fmt.Errorf("%s当前图片为空，请重新生成", owner.label)
+	if readErr != nil || len(data) == 0 {
+		return "", fmt.Errorf("读取%s当前图片失败，请在资产卡重新生成", owner.label)
 	}
 	if err := s.remote.WriteFile(s.inputFilePath(projectID, name), data, 0o644); err != nil {
 		return "", fmt.Errorf("恢复%s失败: %w", owner.label, err)
@@ -163,13 +206,11 @@ func (s *TaskService) repairStaleSceneReferenceVariants(projectID uint, missingN
 			if refs[j].AssetVariantID == 0 {
 				continue
 			}
-			var variant models.AssetVariant
-			if err := s.db.First(&variant, refs[j].AssetVariantID).Error; err != nil {
-				continue
-			}
-			if strings.EqualFold(filepath.Base(variant.File), missingName) {
-				refs[j].AssetVariantID = 0
-				changed = true
+			for _, variant := range deleted {
+				if refs[j].AssetVariantID == variant.ID {
+					refs[j].AssetVariantID = 0
+					changed = true
+				}
 			}
 		}
 		if !changed {
@@ -183,85 +224,29 @@ func (s *TaskService) repairStaleSceneReferenceVariants(projectID uint, missingN
 	}
 }
 
-// fallbackComfyRoots are extra ComfyUI roots checked for an identical basename.
-// Same basename means the same generated file, so copying it cannot change
-// identity. Tests replace this slice with a temporary directory.
-var fallbackComfyRoots []string
-
-func (s *TaskService) candidateComfyRoots() []string {
-	if len(fallbackComfyRoots) > 0 {
-		return fallbackComfyRoots
-	}
-	if s.remote.Enabled() || runtime.GOOS != "windows" {
-		return nil
-	}
-	roots := []string{}
-	for letter := 'C'; letter <= 'Z'; letter++ {
-		drive := string(letter) + ":\\"
-		if _, err := os.Stat(drive); err != nil {
-			continue
-		}
-		for _, rel := range []string{"ComfyUI", "comfyui", "mickeylan\\comfyui", "opt\\comfyUI"} {
-			root := filepath.Join(drive, rel)
-			if fi, err := os.Stat(root); err == nil && fi.IsDir() {
-				roots = append(roots, root)
-			}
-		}
-	}
-	return roots
-}
-
-func sameFile(a, b string) bool {
-	absA, errA := filepath.Abs(a)
-	absB, errB := filepath.Abs(b)
-	return errA == nil && errB == nil && strings.EqualFold(filepath.Clean(absA), filepath.Clean(absB))
-}
-
-// readableInputPath finds a file in the configured input root, then in an
-// alternate local ComfyUI root with the identical basename.
-func (s *TaskService) readableInputPath(projectID uint, name string) (string, bool) {
+// ensureProjectInputFile returns a readable source path for a generated asset,
+// restoring it when the ComfyUI input copy was cleared. Only the recorded
+// generation output or the entity's current authoritative artwork is used.
+func (s *TaskService) ensureProjectInputFile(projectID uint, name string) (string, error) {
 	configured := s.inputFilePath(projectID, name)
 	if s.remote.Exists(configured) {
-		return configured, true
+		return configured, nil
 	}
-	if s.remote.Enabled() {
-		return "", false
-	}
-	for _, root := range s.candidateComfyRoots() {
-		if sameFile(filepath.Join(root, "input"), filepath.Join(s.cfg.Comfy.ComfyDir, "input")) {
-			continue
-		}
-		candidate := filepath.Join(root, "input", strconv.FormatUint(uint64(projectID), 10), name)
-		if fi, err := os.Stat(candidate); err == nil && fi.Mode().IsRegular() {
-			return candidate, true
-		}
-	}
-	return "", false
-}
-
-// ensureProjectInputFile returns a readable source path for a generated asset,
-// restoring it when the configured input directory was cleared. Only an identical
-// filename or the same entity's current authoritative artwork is used, never a
-// different-looking historical version.
-func (s *TaskService) ensureProjectInputFile(projectID uint, name string) (string, error) {
-	if path, ok := s.readableInputPath(projectID, name); ok {
-		if path != s.inputFilePath(projectID, name) {
-			// Best-effort copy back so later tasks read the configured location; the
-			// already-found path remains usable when the configured drive is offline.
-			if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
-				_ = s.remote.WriteFile(s.inputFilePath(projectID, name), data, 0o644)
+	// The recorded output is this exact file's own artwork, so Scene selections that
+	// reference it stay valid. Only falling back to the current authoritative image
+	// changes what the file looks like, and only then are stale selections repaired.
+	if _, err := s.restoreFromRecordedOutput(projectID, name); err == nil {
+		return configured, nil
+	} else {
+		outputErr := err
+		if _, currentErr := s.restoreFromAuthoritativeCurrent(projectID, name); currentErr != nil {
+			projectInput := filepath.Dir(configured)
+			if fi, statErr := os.Stat(projectInput); !s.remote.Enabled() && (statErr != nil || !fi.IsDir()) {
+				return "", fmt.Errorf("ComfyUI input 目录不可访问：%s；请检查配置 comfy_dir 是否正确、网络盘是否已连接（素材文件本身未被删除）", s.cfg.Comfy.ComfyDir)
 			}
-			s.repairStaleSceneReferenceVariants(projectID, name)
+			return "", fmt.Errorf("%v；%v", outputErr, currentErr)
 		}
-		return path, nil
-	}
-	projectInput := filepath.Dir(s.inputFilePath(projectID, name))
-	if fi, err := os.Stat(projectInput); !s.remote.Enabled() && (err != nil || !fi.IsDir()) {
-		return "", fmt.Errorf("ComfyUI input 目录不可访问：%s；请检查配置 comfy_dir 是否正确、网络盘是否已连接（素材文件本身可能未被删除）", s.cfg.Comfy.ComfyDir)
-	}
-	if _, err := s.restoreMissingInputFile(projectID, name); err != nil {
-		return "", err
 	}
 	s.repairStaleSceneReferenceVariants(projectID, name)
-	return s.inputFilePath(projectID, name), nil
+	return configured, nil
 }

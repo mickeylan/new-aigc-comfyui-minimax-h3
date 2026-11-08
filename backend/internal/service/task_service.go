@@ -46,6 +46,8 @@ type TaskService struct {
 	nodeClasses map[string]map[string]float64 // task_id -> node_id -> 进度权重
 	retryMu     sync.Mutex                    // 保护 retrying
 	retrying    map[string]bool               // task_id -> GPU 排队重试循环运行中标记
+	// outputDownloader overrides ComfyUI /view fetching for deterministic tests.
+	outputDownloader func(task *models.Task) ([]byte, error)
 }
 
 func NewTaskService(cfg *config.Config, db *gorm.DB, manager *InstanceManager, gpuMon *GPUMonitor, hub *Hub, remote *RemoteExec) *TaskService {
