@@ -197,8 +197,9 @@ func Load() *Config {
 	}
 	cfg.Storage.DBPath = resolveConfiguredPath(cfg.Storage.DBPath, configDir)
 	cfg.Storage.DataDir = resolveConfiguredPath(cfg.Storage.DataDir, configDir)
-	cfg.Storage.AssetDir = resolveConfiguredPath(cfg.Storage.AssetDir, configDir)
-	if cfg.Storage.AssetDir == "" {
+	if strings.TrimSpace(cfg.Storage.AssetDir) != "" {
+		cfg.Storage.AssetDir = resolveConfiguredPath(cfg.Storage.AssetDir, configDir)
+	} else {
 		cfg.Storage.AssetDir = filepath.Join(cfg.Storage.DataDir, "assets")
 	}
 	if absolute, err := filepath.Abs(cfg.Storage.AssetDir); err == nil {
