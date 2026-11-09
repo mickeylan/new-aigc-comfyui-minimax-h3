@@ -47,15 +47,13 @@ func (s *ContinuityService) ExtractAllSceneFrames(projectID, sceneID uint) (*Sce
 	if s.remote == nil {
 		return nil, fmt.Errorf("文件服务未配置")
 	}
-	inputDir := filepath.Join(s.cfg.Comfy.ComfyDir, "input", fmt.Sprint(projectID))
-	videoPath := ""
-	if strings.TrimSpace(scene.VideoInputFile) != "" {
-		videoPath = filepath.Join(inputDir, filepath.Base(scene.VideoInputFile))
-	} else if strings.TrimSpace(scene.VideoFile) != "" && scene.VideoGPU != nil {
-		videoPath = filepath.Join(s.cfg.Comfy.ComfyDir, "output_workers", fmt.Sprintf("gpu%d", *scene.VideoGPU), filepath.FromSlash(scene.VideoFile))
+	inputDir := s.sceneFrameDirectory(projectID)
+	videoPath, err := s.sceneFrameVideoPath(&scene)
+	if err != nil {
+		return nil, err
 	}
-	if videoPath == "" {
-		return nil, fmt.Errorf("当前分镜没有可读取的视频文件")
+	if err := s.remote.MkdirAll(inputDir, 0o755); err != nil {
+		return nil, fmt.Errorf("创建分镜帧目录失败: %w", err)
 	}
 	taskPart := continuityTaskIDSanitizer.ReplaceAllString(scene.VideoTaskID, "_")
 	if taskPart == "" {
@@ -125,7 +123,7 @@ func (s *ContinuityService) SaveExtractedSceneFrame(projectID, sceneID uint, ext
 		return nil, fmt.Errorf("文件服务未配置")
 	}
 	name := fmt.Sprintf("%s_%06d.png", extractionID, frameIndex+1)
-	source := filepath.Join(s.cfg.Comfy.ComfyDir, "input", fmt.Sprint(projectID), name)
+	source := filepath.Join(s.sceneFrameDirectory(projectID), name)
 	reader, err := s.remote.Open(source)
 	if err != nil {
 		return nil, fmt.Errorf("所选帧不存在或已失效")

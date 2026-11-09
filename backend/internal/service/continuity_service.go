@@ -55,8 +55,14 @@ func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, coun
 	if scene.VideoInputFile == "" || scene.VideoTaskID == "" || scene.Status != "video_ready" {
 		return nil, fmt.Errorf("场景视频尚未就绪")
 	}
-	inputDir := filepath.Join(s.cfg.Comfy.ComfyDir, "input", fmt.Sprint(projectID))
-	videoPath := filepath.Join(inputDir, filepath.Base(scene.VideoInputFile))
+	inputDir := s.sceneFrameDirectory(projectID)
+	videoPath, err := s.sceneFrameVideoPath(&scene)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.remote.MkdirAll(inputDir, 0o755); err != nil {
+		return nil, fmt.Errorf("创建衔接帧目录失败: %w", err)
+	}
 	extractionID := time.Now().UnixNano()
 	prefix := fmt.Sprintf("continuity_s%d_%s_%d_", scene.ID, continuityTaskIDSanitizer.ReplaceAllString(scene.VideoTaskID, "_"), extractionID)
 	pattern := filepath.Join(inputDir, prefix+"%03d.png")
@@ -113,7 +119,7 @@ func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, coun
 		candidates = append(candidates, models.FrameCandidate{ProjectID: projectID, SceneID: sceneID, VideoTaskID: scene.VideoTaskID, Type: boundary.kind, FrameIndex: boundary.index, ImageFile: boundary.name, Source: "extracted"})
 		uploads = append(uploads, models.UploadFile{TaskID: fmt.Sprint(projectID), Type: "image", Name: boundary.name, Path: filepath.ToSlash(filepath.Join(fmt.Sprint(projectID), boundary.name)), Size: info.Size()})
 	}
-	err := s.db.Transaction(func(tx *gorm.DB) error {
+	err = s.db.Transaction(func(tx *gorm.DB) error {
 		var current models.Scene
 		if err := tx.Where("id=? AND project_id=? AND video_task_id=? AND status=?", sceneID, projectID, scene.VideoTaskID, "video_ready").First(&current).Error; err != nil {
 			return fmt.Errorf("视频任务已变化，丢弃过期帧提取结果")
