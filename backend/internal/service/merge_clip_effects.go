@@ -37,6 +37,9 @@ func validateMergeClipEffects(v mergeResolvedVideo) error {
 	if err != nil {
 		return err
 	}
+	if err := validateClipTransform(v.Transform, d); err != nil {
+		return err
+	}
 	speed := mergeClipSpeed(v)
 	if speed < .25 || speed > 4 {
 		return fmt.Errorf("片段速度须在0.25到4之间")
@@ -128,6 +131,7 @@ func validateMergeTimelineEffects(videos []mergeResolvedVideo) error {
 	return nil
 }
 func resolvedVideoFromClip(c mergeEditClip, v mergeResolvedVideo) mergeResolvedVideo {
+	v.Transform = c.Transform
 	v.Speed = c.Speed
 	v.Volume = c.Volume
 	v.FadeIn = c.FadeIn

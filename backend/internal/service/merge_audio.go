@@ -62,7 +62,7 @@ func buildEditedVideoGraph(videos []mergeResolvedVideo, width, height int) []str
 	filters := make([]string, 0, len(videos)*2+2)
 	legacy := true
 	for _, v := range videos {
-		if v.Speed != 0 || v.Brightness != 0 || v.Contrast != 0 || v.Saturation != nil || mergeClipTransitionOverlap(v) != 0 || v.OverlayMaterialID != nil {
+		if v.Transform != nil || v.Speed != 0 || v.Brightness != 0 || v.Contrast != 0 || v.Saturation != nil || mergeClipTransitionOverlap(v) != 0 || v.OverlayMaterialID != nil {
 			legacy = false
 		}
 	}
@@ -77,7 +77,16 @@ func buildEditedVideoGraph(videos []mergeResolvedVideo, width, height int) []str
 		if video.SourceEnd != nil {
 			chain += ":end=" + ffnum(*video.SourceEnd)
 		}
-		chain += ",setpts=(PTS-STARTPTS)/" + ffnum(mergeClipSpeed(video)) + fmt.Sprintf(",fps=24,settb=AVTB,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1", width, height, width, height)
+		chain += ",setpts=(PTS-STARTPTS)/" + ffnum(mergeClipSpeed(video)) + ",fps=24,settb=AVTB"
+		if video.Transform != nil {
+			input := fmt.Sprintf("transformInput%d", i)
+			filters = append(filters, chain+"["+input+"]")
+			var transformed string
+			filters, transformed = appendClipTransform(filters, input, video.Transform, width, height, i)
+			chain = "[" + transformed + "]null"
+		} else {
+			chain += fmt.Sprintf(",scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1", width, height, width, height)
+		}
 		contrast := video.Contrast
 		if contrast == 0 {
 			contrast = 1
@@ -301,29 +310,30 @@ func buildEditedNativeAudioGraph(videos []mergeResolvedVideo, hasAudio []bool, t
 }
 
 type mergeEditClip struct {
-	ID                 string   `json:"id"`
-	SceneID            *uint    `json:"scene_id,omitempty"`
-	MaterialID         *uint    `json:"material_id,omitempty"`
-	Label              string   `json:"label"`
-	SourceStart        float64  `json:"source_start,omitempty"`
-	SourceEnd          *float64 `json:"source_end,omitempty"`
-	Speed              float64  `json:"speed,omitempty"`
-	Volume             *float64 `json:"volume,omitempty"`
-	FadeIn             float64  `json:"fade_in,omitempty"`
-	FadeOut            float64  `json:"fade_out,omitempty"`
-	Transition         string   `json:"transition,omitempty"`
-	TransitionDuration float64  `json:"transition_duration,omitempty"`
-	Brightness         float64  `json:"brightness,omitempty"`
-	Contrast           float64  `json:"contrast,omitempty"`
-	Saturation         *float64 `json:"saturation,omitempty"`
-	OverlayMaterialID  *uint    `json:"overlay_material_id,omitempty"`
-	OverlayX           float64  `json:"overlay_x,omitempty"`
-	OverlayY           float64  `json:"overlay_y,omitempty"`
-	OverlayWidth       float64  `json:"overlay_width,omitempty"`
-	OverlayOpacity     float64  `json:"overlay_opacity,omitempty"`
-	Title              string   `json:"title,omitempty"`
-	TitlePosition      string   `json:"title_position,omitempty"`
-	TitleSize          int      `json:"title_size,omitempty"`
+	ID                 string         `json:"id"`
+	SceneID            *uint          `json:"scene_id,omitempty"`
+	MaterialID         *uint          `json:"material_id,omitempty"`
+	Label              string         `json:"label"`
+	SourceStart        float64        `json:"source_start,omitempty"`
+	SourceEnd          *float64       `json:"source_end,omitempty"`
+	Speed              float64        `json:"speed,omitempty"`
+	Volume             *float64       `json:"volume,omitempty"`
+	FadeIn             float64        `json:"fade_in,omitempty"`
+	FadeOut            float64        `json:"fade_out,omitempty"`
+	Transition         string         `json:"transition,omitempty"`
+	TransitionDuration float64        `json:"transition_duration,omitempty"`
+	Brightness         float64        `json:"brightness,omitempty"`
+	Contrast           float64        `json:"contrast,omitempty"`
+	Saturation         *float64       `json:"saturation,omitempty"`
+	OverlayMaterialID  *uint          `json:"overlay_material_id,omitempty"`
+	OverlayX           float64        `json:"overlay_x,omitempty"`
+	OverlayY           float64        `json:"overlay_y,omitempty"`
+	OverlayWidth       float64        `json:"overlay_width,omitempty"`
+	OverlayOpacity     float64        `json:"overlay_opacity,omitempty"`
+	Title              string         `json:"title,omitempty"`
+	TitlePosition      string         `json:"title_position,omitempty"`
+	TitleSize          int            `json:"title_size,omitempty"`
+	Transform          *clipTransform `json:"transform,omitempty"`
 }
 
 func validateMergeEditSequence(clips []mergeEditClip) ([]uint, error) {
@@ -458,6 +468,7 @@ type mergeResolvedVideo struct {
 	OverlayIsImage                                   bool
 	Title, TitlePosition                             string
 	TitleSize                                        int
+	Transform                                        *clipTransform
 }
 
 func (s *ProjectService) resolveMergeVideos(p *models.Project, mt *models.MergeTask, scenes []models.Scene) ([]mergeResolvedVideo, error) {

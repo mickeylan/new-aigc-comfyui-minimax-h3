@@ -66,6 +66,19 @@ func validateEditingDraft(tx *gorm.DB, projectID uint, episode int, clips []edit
 		if _, err := validateMergeEditSequence(pair); err != nil {
 			return err
 		}
+		if c.Transform != nil {
+			end := c.Duration
+			if c.SourceEnd != nil {
+				end = *c.SourceEnd
+			}
+			duration := (end - c.SourceStart) / mergeClipSpeed(mergeResolvedVideo{Speed: c.Speed})
+			if !finite(duration) || duration <= 0 {
+				return fmt.Errorf("变换草稿需要有效片段时长")
+			}
+			if err := validateClipTransform(c.Transform, duration); err != nil {
+				return err
+			}
+		}
 		var count int64
 		if c.SceneID != nil {
 			tx.Model(&models.Scene{}).Where("id = ? AND project_id = ? AND episode_n = ? AND archived = ?", *c.SceneID, projectID, episode, false).Count(&count)

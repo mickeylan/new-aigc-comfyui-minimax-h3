@@ -1,3 +1,4 @@
+import { normalizeTransform, splitTransform } from './clipTransform.js'
 const MIN_TRIM = 0.05
 const TRANSITIONS = new Set(['cut', 'fade', 'wipeleft', 'slideright'])
 let nextOccurrence = 0
@@ -48,7 +49,8 @@ export function normalizeClip(clip, physicalDuration = clip.duration) {
   const overlay_y = ranged(clip.overlay_y, 0, 0, 1, 'overlay_y')
   const overlay_width = ranged(clip.overlay_width, .25, .05, 1, 'overlay_width')
   const overlay_opacity = ranged(clip.overlay_opacity, 1, .05, 1, 'overlay_opacity')
-  return { ...clip, id: clip.id || uniqueClipId(clip.scene_id ? 'scene' : 'material'), duration, source_start: start, source_end: end, speed, volume, fade_in, fade_out, transition, transition_duration, brightness, contrast, saturation, title, title_position, title_size, overlay_material_id, overlay_x, overlay_y, overlay_width, overlay_opacity }
+  const transform=normalizeTransform(clip.transform,outputDuration)
+  return { ...clip, transform, id: clip.id || uniqueClipId(clip.scene_id ? 'scene' : 'material'), duration, source_start: start, source_end: end, speed, volume, fade_in, fade_out, transition, transition_duration, brightness, contrast, saturation, title, title_position, title_size, overlay_material_id, overlay_x, overlay_y, overlay_width, overlay_opacity }
 }
 
 export function clipOutputDuration(clip) {
@@ -62,9 +64,10 @@ export function splitClip(clip, playhead) {
   if (at - normalized.source_start < MIN_TRIM || normalized.source_end - at < MIN_TRIM) throw new RangeError('split must leave at least 0.05s on each side')
   const leftOutput = (at - normalized.source_start) / normalized.speed
   const rightOutput = (normalized.source_end - at) / normalized.speed
+  const [leftTransform,rightTransform]=splitTransform(normalized.transform,leftOutput,leftOutput+rightOutput)
   return [
-    { ...normalized, id: uniqueClipId('clip'), source_end: at, fade_in: Math.min(normalized.fade_in, leftOutput), fade_out: 0, transition: 'cut', transition_duration: .3 },
-    { ...normalized, id: uniqueClipId('clip'), source_start: at, fade_in: 0, fade_out: Math.min(normalized.fade_out, rightOutput) },
+    { ...normalized, transform:leftTransform, id: uniqueClipId('clip'), source_end: at, fade_in: Math.min(normalized.fade_in, leftOutput), fade_out: 0, transition: 'cut', transition_duration: .3 },
+    { ...normalized, transform:rightTransform, id: uniqueClipId('clip'), source_start: at, fade_in: 0, fade_out: Math.min(normalized.fade_out, rightOutput) },
   ]
 }
 
@@ -88,6 +91,7 @@ export function buildEditSequence(clips) {
   })
   return normalized.map(clip => {
     const item = { id: clip.id, label: String(clip.label || ''), source_start: clip.source_start, source_end: clip.source_end >= clip.duration ? null : clip.source_end }
+    if(clip.transform) item.transform=clip.transform
     if (clip.scene_id != null) item.scene_id = clip.scene_id
     if (clip.material_id != null) item.material_id = clip.material_id
     putNonDefault(item, clip, 'speed', 1); putNonDefault(item, clip, 'volume', 1)
