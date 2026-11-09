@@ -59,19 +59,74 @@ func buildEditedVideoGraph(videos []mergeResolvedVideo, width, height int) []str
 	if len(videos) == 0 || width <= 0 || height <= 0 {
 		return nil
 	}
-	filters := make([]string, 0, len(videos)+2)
+	filters := make([]string, 0, len(videos)*2+2)
+	legacy := true
+	for _, v := range videos {
+		if v.Speed != 0 || v.Brightness != 0 || v.Contrast != 0 || v.Saturation != nil || mergeClipTransitionOverlap(v) != 0 || v.OverlayMaterialID != nil {
+			legacy = false
+		}
+	}
 	var concat strings.Builder
 	for i, video := range videos {
 		label := fmt.Sprintf("vnorm%d", i)
+		baseLabel := label
+		if video.OverlayMaterialID != nil {
+			baseLabel = fmt.Sprintf("vbase%d", i)
+		}
 		chain := fmt.Sprintf("[%d:v]trim=start=%s", i, ffnum(video.SourceStart))
 		if video.SourceEnd != nil {
 			chain += ":end=" + ffnum(*video.SourceEnd)
 		}
-		chain += fmt.Sprintf(",setpts=PTS-STARTPTS,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1[%s]", width, height, width, height, label)
+		chain += ",setpts=(PTS-STARTPTS)/" + ffnum(mergeClipSpeed(video)) + fmt.Sprintf(",fps=24,settb=AVTB,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1", width, height, width, height)
+		contrast := video.Contrast
+		if contrast == 0 {
+			contrast = 1
+		}
+		sat := 1.0
+		if video.Saturation != nil {
+			sat = *video.Saturation
+		}
+		if video.Brightness != 0 || contrast != 1 || sat != 1 {
+			chain += fmt.Sprintf(",eq=brightness=%s:contrast=%s:saturation=%s", ffnum(video.Brightness), ffnum(contrast), ffnum(sat))
+		}
+		outputDuration, _ := mergeClipOutputDuration(video)
+		if video.FadeIn > 0 {
+			fade := math.Min(video.FadeIn, outputDuration)
+			chain += fmt.Sprintf(",fade=t=in:st=0:d=%s", ffnum(fade))
+		}
+		if video.FadeOut > 0 {
+			fade := math.Min(video.FadeOut, outputDuration)
+			chain += fmt.Sprintf(",fade=t=out:st=%s:d=%s", ffnum(outputDuration-fade), ffnum(fade))
+		}
+		chain += "[" + baseLabel + "]"
 		filters = append(filters, chain)
+		filters, label = appendMergeOverlay(filters, baseLabel, video, width, i)
 		fmt.Fprintf(&concat, "[%s]", label)
 	}
-	filters = append(filters, concat.String()+fmt.Sprintf("concat=n=%d:v=1:a=0[vc]", len(videos)), "[vc]fps=24[v]")
+	if legacy {
+		filters[len(filters)-1] = strings.Replace(filters[len(filters)-1], ",setpts=(PTS-STARTPTS)/1.000,fps=24,settb=AVTB", ",setpts=PTS-STARTPTS", 1)
+		for i := 0; i < len(filters)-1; i++ {
+			filters[i] = strings.Replace(filters[i], ",setpts=(PTS-STARTPTS)/1.000,fps=24,settb=AVTB", ",setpts=PTS-STARTPTS", 1)
+		}
+		filters = append(filters, concat.String()+fmt.Sprintf("concat=n=%d:v=1:a=0[vc]", len(videos)), "[vc]fps=24[v]")
+		return filters
+	}
+	current := "vnorm0"
+	accumulated, _ := mergeClipOutputDuration(videos[0])
+	for i := 1; i < len(videos); i++ {
+		overlap := mergeClipTransitionOverlap(videos[i-1])
+		out := fmt.Sprintf("vchain%d", i)
+		if overlap > 0 {
+			filters = append(filters, fmt.Sprintf("[%s][vnorm%d]xfade=transition=%s:duration=%s:offset=%s[%s]", current, i, videos[i-1].Transition, ffnum(overlap), ffnum(accumulated-overlap), out))
+			accumulated -= overlap
+		} else {
+			filters = append(filters, fmt.Sprintf("[%s][vnorm%d]concat=n=2:v=1:a=0[%s]", current, i, out))
+		}
+		d, _ := mergeClipOutputDuration(videos[i])
+		accumulated += d
+		current = out
+	}
+	filters = append(filters, fmt.Sprintf("[%s]null[vc]", current), "[vc]fps=24[v]")
 	return filters
 }
 
@@ -202,24 +257,73 @@ func buildEditedNativeAudioGraph(videos []mergeResolvedVideo, hasAudio []bool, t
 		}
 		duration := end - start
 		label := fmt.Sprintf("am_native_clip_%d", i)
+		outputDuration := duration / mergeClipSpeed(video)
+		volume := 1.0
+		if video.Volume != nil {
+			volume = *video.Volume
+		}
+		commonFX := ",volume=" + ffnum(volume)
+		if video.FadeIn > 0 {
+			commonFX += fmt.Sprintf(",afade=t=in:st=0:d=%s", ffnum(video.FadeIn))
+		}
+		if video.FadeOut > 0 {
+			commonFX += fmt.Sprintf(",afade=t=out:st=%s:d=%s", ffnum(outputDuration-video.FadeOut), ffnum(video.FadeOut))
+		}
 		if hasAudio[i] {
-			filters = append(filters, fmt.Sprintf("[%d:a]atrim=start=%s:end=%s,asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,apad,atrim=duration=%s[%s]", i, ffnum(start), ffnum(end), ffnum(duration), label))
+			filters = append(filters, fmt.Sprintf("[%d:a]atrim=start=%s:end=%s,asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo%s%s,apad,atrim=duration=%s[%s]", i, ffnum(start), ffnum(end), atempoChain(mergeClipSpeed(video)), commonFX, ffnum(outputDuration), label))
 		} else {
-			filters = append(filters, fmt.Sprintf("anullsrc=r=48000:cl=stereo,atrim=duration=%s,asetpts=PTS-STARTPTS[%s]", ffnum(duration), label))
+			// Silence is already generated at output duration; applying atempo here
+			// would shorten it a second time for sped-up clips.
+			filters = append(filters, fmt.Sprintf("anullsrc=r=48000:cl=stereo,atrim=duration=%s,asetpts=PTS-STARTPTS%s[%s]", ffnum(outputDuration), commonFX, label))
 		}
 		fmt.Fprintf(&concat, "[%s]", label)
 	}
-	filters = append(filters, concat.String()+fmt.Sprintf("concat=n=%d:v=0:a=1,volume=%s,atrim=duration=%s[am_native_edited]", len(videos), ffnum(gain), ffnum(totalDuration)))
+	hasTransition := false
+	for _, v := range videos {
+		hasTransition = hasTransition || mergeClipTransitionOverlap(v) > 0
+	}
+	if !hasTransition {
+		filters = append(filters, concat.String()+fmt.Sprintf("concat=n=%d:v=0:a=1,volume=%s,atrim=duration=%s[am_native_edited]", len(videos), ffnum(gain), ffnum(totalDuration)))
+	} else {
+		current := "am_native_clip_0"
+		for i := 1; i < len(videos); i++ {
+			label := fmt.Sprintf("am_cross_%d", i)
+			if overlap := mergeClipTransitionOverlap(videos[i-1]); overlap > 0 {
+				filters = append(filters, fmt.Sprintf("[%s][am_native_clip_%d]acrossfade=d=%s:c1=tri:c2=tri[%s]", current, i, ffnum(overlap), label))
+			} else {
+				filters = append(filters, fmt.Sprintf("[%s][am_native_clip_%d]concat=n=2:v=0:a=1[%s]", current, i, label))
+			}
+			current = label
+		}
+		filters = append(filters, fmt.Sprintf("[%s]volume=%s,atrim=duration=%s[am_native_edited]", current, ffnum(gain), ffnum(totalDuration)))
+	}
 	return mergeAudioGraph{Filters: strings.Join(filters, ";"), Label: "[am_native_edited]"}
 }
 
 type mergeEditClip struct {
-	ID          string   `json:"id"`
-	SceneID     *uint    `json:"scene_id,omitempty"`
-	MaterialID  *uint    `json:"material_id,omitempty"`
-	Label       string   `json:"label"`
-	SourceStart float64  `json:"source_start,omitempty"`
-	SourceEnd   *float64 `json:"source_end,omitempty"`
+	ID                 string   `json:"id"`
+	SceneID            *uint    `json:"scene_id,omitempty"`
+	MaterialID         *uint    `json:"material_id,omitempty"`
+	Label              string   `json:"label"`
+	SourceStart        float64  `json:"source_start,omitempty"`
+	SourceEnd          *float64 `json:"source_end,omitempty"`
+	Speed              float64  `json:"speed,omitempty"`
+	Volume             *float64 `json:"volume,omitempty"`
+	FadeIn             float64  `json:"fade_in,omitempty"`
+	FadeOut            float64  `json:"fade_out,omitempty"`
+	Transition         string   `json:"transition,omitempty"`
+	TransitionDuration float64  `json:"transition_duration,omitempty"`
+	Brightness         float64  `json:"brightness,omitempty"`
+	Contrast           float64  `json:"contrast,omitempty"`
+	Saturation         *float64 `json:"saturation,omitempty"`
+	OverlayMaterialID  *uint    `json:"overlay_material_id,omitempty"`
+	OverlayX           float64  `json:"overlay_x,omitempty"`
+	OverlayY           float64  `json:"overlay_y,omitempty"`
+	OverlayWidth       float64  `json:"overlay_width,omitempty"`
+	OverlayOpacity     float64  `json:"overlay_opacity,omitempty"`
+	Title              string   `json:"title,omitempty"`
+	TitlePosition      string   `json:"title_position,omitempty"`
+	TitleSize          int      `json:"title_size,omitempty"`
 }
 
 func validateMergeEditSequence(clips []mergeEditClip) ([]uint, error) {
@@ -334,13 +438,26 @@ func (s *ProjectService) audioMixMediaPath(projectID uint, file string) (string,
 }
 
 type mergeResolvedVideo struct {
-	SceneID        uint
-	Order          int
-	Path           string
-	Label          string
-	SourceStart    float64
-	SourceEnd      *float64
-	SourceDuration float64
+	SceneID                                          uint
+	Order                                            int
+	Path                                             string
+	Label                                            string
+	SourceStart                                      float64
+	SourceEnd                                        *float64
+	SourceDuration                                   float64
+	Speed                                            float64
+	Volume                                           *float64
+	FadeIn, FadeOut                                  float64
+	Transition                                       string
+	TransitionDuration                               float64
+	Brightness, Contrast                             float64
+	Saturation                                       *float64
+	OverlayMaterialID                                *uint
+	OverlayX, OverlayY, OverlayWidth, OverlayOpacity float64
+	OverlayInputIndex                                int
+	OverlayIsImage                                   bool
+	Title, TitlePosition                             string
+	TitleSize                                        int
 }
 
 func (s *ProjectService) resolveMergeVideos(p *models.Project, mt *models.MergeTask, scenes []models.Scene) ([]mergeResolvedVideo, error) {
@@ -380,7 +497,7 @@ func (s *ProjectService) resolveMergeVideos(p *models.Project, mt *models.MergeT
 				}
 				abs = s.mediaPath("output_workers", fmt.Sprintf("gpu%d", *scene.VideoGPU), filepath.FromSlash(scene.VideoFile))
 			}
-			out = append(out, mergeResolvedVideo{SceneID: scene.ID, Order: scene.Order, Path: abs, Label: clip.Label, SourceStart: clip.SourceStart, SourceEnd: clip.SourceEnd})
+			out = append(out, resolvedVideoFromClip(clip, mergeResolvedVideo{SceneID: scene.ID, Order: scene.Order, Path: abs, Label: clip.Label, SourceStart: clip.SourceStart, SourceEnd: clip.SourceEnd}))
 			continue
 		}
 		var material models.Material
@@ -395,7 +512,7 @@ func (s *ProjectService) resolveMergeVideos(p *models.Project, mt *models.MergeT
 		if s.remote != nil && s.remote.Enabled() {
 			materialPath = s.mediaPath("input", clean)
 		}
-		out = append(out, mergeResolvedVideo{Path: materialPath, Label: clip.Label, SourceStart: clip.SourceStart, SourceEnd: clip.SourceEnd})
+		out = append(out, resolvedVideoFromClip(clip, mergeResolvedVideo{Path: materialPath, Label: clip.Label, SourceStart: clip.SourceStart, SourceEnd: clip.SourceEnd}))
 	}
 	return out, nil
 }
@@ -422,6 +539,7 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 	}
 	inputPaths := make([]string, 0, len(videos)+8)
 	remoteInputs := make([]string, 0, len(videos)+8)
+	inputLoopMode := make(map[int]string)
 	videoDurs := make([]sceneVideo, 0, len(videos))
 	timelineSceneIDs := make([]uint, 0, len(videos))
 	nativeCount, totalDuration := 0, 0.0
@@ -460,15 +578,54 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 				return
 			}
 		}
-		start, end, rangeErr := resolvedMergeClipRange(video, info.Duration)
+		_, _, rangeErr := resolvedMergeClipRange(video, info.Duration)
 		if rangeErr != nil {
 			fail(fmt.Errorf("编排片段%d: %w", index+1, rangeErr))
 			return
 		}
 		videos[index].SourceDuration = info.Duration
-		videoDurs = append(videoDurs, sceneVideo{abs: abs, dur: end - start})
+		outputDuration, durationErr := mergeClipOutputDuration(videos[index])
+		if durationErr != nil {
+			fail(durationErr)
+			return
+		}
+		videoDurs = append(videoDurs, sceneVideo{abs: abs, dur: outputDuration})
 		timelineSceneIDs = append(timelineSceneIDs, video.SceneID)
-		totalDuration += end - start
+		totalDuration += outputDuration
+	}
+	if err := validateMergeTimelineEffects(videos); err != nil {
+		fail(err)
+		return
+	}
+	for i := 0; i+1 < len(videos); i++ {
+		totalDuration -= mergeClipTransitionOverlap(videos[i])
+	}
+	for i := range videos {
+		videos[i].OverlayInputIndex = -1
+		if videos[i].OverlayMaterialID == nil {
+			continue
+		}
+		overlayPath, isImage, resolveErr := s.resolveMergeOverlay(p.ID, videos[i])
+		if resolveErr != nil {
+			fail(resolveErr)
+			return
+		}
+		info, probeErr := s.remote.ProbeMedia(overlayPath)
+		if probeErr != nil || info.Width <= 0 || info.Height <= 0 || (!isImage && info.Duration <= 0) {
+			fail(fmt.Errorf("探测第%d个片段叠加素材失败", i+1))
+			return
+		}
+		idx := len(inputPaths)
+		videos[i].OverlayInputIndex, videos[i].OverlayIsImage = idx, isImage
+		inputPaths = append(inputPaths, overlayPath)
+		if isImage {
+			inputLoopMode[idx] = "image"
+			remoteInputs = append(remoteInputs, "-loop", "1")
+		} else {
+			inputLoopMode[idx] = "video"
+			remoteInputs = append(remoteInputs, "-stream_loop", "-1")
+		}
+		remoteInputs = append(remoteInputs, "-i", shellQuote(overlayPath))
 	}
 
 	edited := strings.TrimSpace(mt.EditSequence) != ""
@@ -517,6 +674,7 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 		idx := len(inputPaths)
 		inputPaths = append(inputPaths, abs)
 		if layer.Loop {
+			inputLoopMode[idx] = "video"
 			remoteInputs = append(remoteInputs, "-stream_loop", "-1")
 		}
 		remoteInputs = append(remoteInputs, "-i", shellQuote(abs))
@@ -528,7 +686,11 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 		if layer.Kind == "bgm" && layer.Ducking {
 			windows = duckWindows
 		}
-		extras = append(extras, mergeAudioInput{Index: idx, Start: layer.StartTime, SourceStart: layer.SourceStart, Duration: layer.EndTime - layer.StartTime, Volume: gain, FadeIn: layer.FadeIn, FadeOut: layer.FadeOut, Loop: layer.Loop, Kind: layer.Kind, DuckWindows: windows})
+		renderSpeed := layer.RenderSpeed
+		if renderSpeed <= 0 {
+			renderSpeed = 1
+		}
+		extras = append(extras, mergeAudioInput{Index: idx, Start: layer.StartTime, SourceStart: layer.SourceStart, Duration: layer.EndTime - layer.StartTime, SourceDuration: (layer.EndTime - layer.StartTime) * renderSpeed, Speed: renderSpeed, Volume: gain, FadeIn: layer.FadeIn, FadeOut: layer.FadeOut, Loop: layer.Loop, Kind: layer.Kind, DuckWindows: windows})
 	}
 	for _, segment := range dialogueSegments {
 		if segment.AudioAbs == "" {
@@ -616,6 +778,27 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 			}
 		}
 	}
+	if titleCues := buildMergeTitleCues(videos); len(titleCues) > 0 {
+		registry := NewFontRegistry(s.cfg.Storage.DataDir)
+		font, fontErr := registry.Approved("noto-sans-sc")
+		if fontErr != nil {
+			fail(fmt.Errorf("片段标题正式导出被阻止: %w", fontErr))
+			return
+		}
+		if _, fontErr = registry.FilePath(font); fontErr != nil {
+			fail(fontErr)
+			return
+		}
+		assData, count := buildScreenTextASS(titleCues, []models.Scene{{Duration: totalDuration}}, []sceneVideo{{dur: totalDuration}}, firstWidth, firstHeight, font.Family, map[string]string{"noto-sans-sc": font.Family})
+		if count > 0 {
+			assAbs := s.mediaPath("output_workers", "gpu0", filepath.FromSlash(strings.TrimSuffix(outName, ".mp4")+".titles.ass"))
+			if err := s.remote.WriteFile(assAbs, assData, 0o644); err != nil {
+				fail(err)
+				return
+			}
+			textFilters = append(textFilters, fmt.Sprintf("subtitles=filename=%s:fontsdir=%s", escapeFilterPath(assAbs), escapeFilterPath(registry.Root())))
+		}
+	}
 	filters = applyMergeTextFilters(filters, textFilters)
 	audioGraph := buildMergeAudioGraph(len(videos), dub && nativeCount == len(videos), totalDuration, mt.NativeVolume, extras)
 	if edited {
@@ -658,21 +841,17 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 		}
 		args := []string{"-y"}
 		for i, input := range inputPaths {
-			loop := false
-			for _, extra := range extras {
-				if extra.Index == i && extra.Loop {
-					loop = true
-					break
-				}
-			}
-			if loop {
+			switch inputLoopMode[i] {
+			case "image":
+				args = append(args, "-loop", "1")
+			case "video":
 				args = append(args, "-stream_loop", "-1")
 			}
 			args = append(args, "-i", input)
 		}
 		args = append(args, "-filter_complex", filterComplex)
 		args = append(args, mapArgs...)
-		args = append(args, "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p", "-movflags", "+faststart", outAbs)
+		args = append(args, "-t", ffnum(totalDuration), "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p", "-movflags", "+faststart", outAbs)
 		if _, err := runLocalProgram(ffmpeg, args, 30*time.Minute); err != nil {
 			fail(err)
 			return
@@ -682,7 +861,7 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 		for i, arg := range mapArgs {
 			maps[i] = shellQuote(arg)
 		}
-		cmd := fmt.Sprintf("%s; mkdir -p %s; $FF -y %s -filter_complex %s %s -c:v libx264 -crf 18 -preset medium -pix_fmt yuv420p -movflags +faststart %s", ffmpegResolveCmd, shellQuote(path.Dir(outAbs)), strings.Join(remoteInputs, " "), shellQuote(filterComplex), strings.Join(maps, " "), shellQuote(outAbs))
+		cmd := fmt.Sprintf("%s; mkdir -p %s; $FF -y %s -filter_complex %s %s -t %s -c:v libx264 -crf 18 -preset medium -pix_fmt yuv420p -movflags +faststart %s", ffmpegResolveCmd, shellQuote(path.Dir(outAbs)), strings.Join(remoteInputs, " "), shellQuote(filterComplex), strings.Join(maps, " "), ffnum(totalDuration), shellQuote(outAbs))
 		log.Printf("[audio merge %d] %s", mt.ID, cmd)
 		if _, err := s.remote.RunTimeout(cmd, 30*time.Minute); err != nil {
 			fail(err)

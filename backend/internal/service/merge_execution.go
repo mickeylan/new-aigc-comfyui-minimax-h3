@@ -34,12 +34,42 @@ func (s *ProjectService) validateMergeExecution(p *models.Project, mt *models.Me
 		if info.Duration <= 0 || info.Width <= 0 || info.Height <= 0 {
 			return fmt.Errorf("编排片段%d的视频尺寸或时长无效", i+1)
 		}
-		start, end, rangeErr := resolvedMergeClipRange(video, info.Duration)
+		_, _, rangeErr := resolvedMergeClipRange(video, info.Duration)
 		if rangeErr != nil {
 			return fmt.Errorf("编排片段%d: %w", i+1, rangeErr)
 		}
 		videos[i].SourceDuration = info.Duration
-		total += end - start
+		duration, durationErr := mergeClipOutputDuration(videos[i])
+		if durationErr != nil {
+			return fmt.Errorf("编排片段%d: %w", i+1, durationErr)
+		}
+		total += duration
+		if video.OverlayMaterialID != nil {
+			file, image, err := s.resolveMergeOverlay(p.ID, video)
+			if err != nil {
+				return err
+			}
+			media, err := s.remote.ProbeMedia(file)
+			if err != nil || media.Width <= 0 || media.Height <= 0 || (!image && media.Duration <= 0) {
+				return fmt.Errorf("第%d个片段叠加素材不可用", i+1)
+			}
+		}
+		if strings.TrimSpace(video.Title) != "" {
+			registry := NewFontRegistry(s.cfg.Storage.DataDir)
+			font, err := registry.Approved("noto-sans-sc")
+			if err != nil {
+				return fmt.Errorf("片段标题缺少已安装并审核的中文字体: %w", err)
+			}
+			if _, err := registry.FilePath(font); err != nil {
+				return err
+			}
+		}
+	}
+	if err := validateMergeTimelineEffects(videos); err != nil {
+		return err
+	}
+	for i := 0; i+1 < len(videos); i++ {
+		total -= mergeClipTransitionOverlap(videos[i])
 	}
 	var layers []models.AudioLayer
 	if err := s.db.Where("project_id = ? AND episode_n = ?", p.ID, mt.EpisodeN).Order("start_time, id").Find(&layers).Error; err != nil {

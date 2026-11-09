@@ -19,7 +19,7 @@ func mergeTimelineClips(videos []mergeResolvedVideo, videoDurs []sceneVideo) ([]
 	out := 0.0
 	clips := make([]mergeTimelineClip, 0, len(videos))
 	for i, v := range videos {
-		start, end := 0.0, videoDurs[i].dur
+		start, end := 0.0, videoDurs[i].dur*mergeClipSpeed(v)
 		if v.SourceDuration > 0 {
 			var err error
 			start, end, err = resolvedMergeClipRange(v, v.SourceDuration)
@@ -27,8 +27,23 @@ func mergeTimelineClips(videos []mergeResolvedVideo, videoDurs []sceneVideo) ([]
 				return nil, 0, err
 			}
 		}
+		validationVideo := v
+		if validationVideo.SourceDuration <= 0 {
+			validationVideo.SourceDuration = end
+		}
+		if err := validateMergeClipEffects(validationVideo); err != nil {
+			return nil, 0, err
+		}
 		clips = append(clips, mergeTimelineClip{video: v, outStart: out, sourceStart: start, sourceEnd: end})
-		out += videoDurs[i].dur
+		clipDuration := (end - start) / mergeClipSpeed(v)
+		out += clipDuration
+		if i < len(videos)-1 {
+			overlap := mergeClipTransitionOverlap(v)
+			if overlap < 0 || overlap > clipDuration {
+				return nil, 0, fmt.Errorf("片段转场时长无效")
+			}
+			out -= overlap
+		}
 	}
 	return clips, out, nil
 }
@@ -85,9 +100,12 @@ func (s *ProjectService) buildEditedMergeDubTimeline(p *models.Project, mt *mode
 			if b <= a {
 				continue
 			}
-			seg.AudioSourceStart += (a - seg.Start) * seg.Speed
-			seg.SourceDur = (b - a) * seg.Speed
-			seg.Start, seg.End = c.outStart+a-c.sourceStart, c.outStart+b-c.sourceStart
+			originalSegmentSpeed := seg.Speed
+			seg.AudioSourceStart += (a - seg.Start) * originalSegmentSpeed
+			seg.SourceDur = (b - a) * originalSegmentSpeed
+			clipSpeed := mergeClipSpeed(c.video)
+			seg.Start, seg.End = c.outStart+(a-c.sourceStart)/clipSpeed, c.outStart+(b-c.sourceStart)/clipSpeed
+			seg.Speed *= clipSpeed
 			result = append(result, seg)
 		}
 	}
@@ -134,9 +152,14 @@ func (s *ProjectService) mapMergeAudioLayers(p *models.Project, mt *models.Merge
 				continue
 			}
 			copy := layer
-			copy.StartTime = c.outStart + x - c.sourceStart
-			copy.EndTime = c.outStart + y - c.sourceStart
+			speed := mergeClipSpeed(c.video)
+			copy.StartTime = c.outStart + (x-c.sourceStart)/speed
+			copy.EndTime = c.outStart + (y-c.sourceStart)/speed
 			copy.SourceStart += x - a
+			copy.RenderSpeed = speed
+			// A clipped occurrence must not restart an envelope which began before it.
+			copy.FadeIn = math.Min(copy.EndTime-copy.StartTime, math.Max(0, (layer.FadeIn-(x-a))/speed))
+			copy.FadeOut = math.Min(copy.EndTime-copy.StartTime, math.Max(0, (layer.FadeOut-(b-y))/speed))
 			out = append(out, copy)
 		}
 	}
@@ -148,7 +171,7 @@ func makeVideoDurations(videos []mergeResolvedVideo) []sceneVideo {
 	for i, v := range videos {
 		a, b, e := resolvedMergeClipRange(v, v.SourceDuration)
 		if e == nil {
-			d[i].dur = b - a
+			d[i].dur = (b - a) / mergeClipSpeed(v)
 		}
 	}
 	return d
@@ -188,8 +211,9 @@ func (s *ProjectService) mapMergeScreenTextCues(p *models.Project, mt *models.Me
 				continue
 			}
 			copy := cue
-			copy.StartTime = c.outStart + x - c.sourceStart
-			copy.EndTime = c.outStart + y - c.sourceStart
+			speed := mergeClipSpeed(c.video)
+			copy.StartTime = c.outStart + (x-c.sourceStart)/speed
+			copy.EndTime = c.outStart + (y-c.sourceStart)/speed
 			copy.SceneID = nil // Already remapped to absolute output time.
 			out = append(out, copy)
 		}

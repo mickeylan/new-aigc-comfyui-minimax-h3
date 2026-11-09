@@ -9236,18 +9236,34 @@ func (s *ProjectService) createMergeTaskRecord(p *models.Project, sceneIDs []uin
 		}
 		materials := make([]mergeMaterialFingerprint, 0)
 		for index, clip := range sequence.Clips {
-			if clip.MaterialID == nil {
-				continue
+			if clip.MaterialID != nil {
+				if *clip.MaterialID == 0 {
+					return fmt.Errorf("?%d????? ID ??", index+1)
+				}
+				var material models.Material
+				if err := tx.Where("id = ? AND project_id = ? AND type = ?", *clip.MaterialID, current.ID, "video").First(&material).Error; err != nil {
+					return fmt.Errorf("?%d??????????????", index+1)
+				}
+				clean := filepath.Clean(filepath.FromSlash(material.Path))
+				if material.Path == "" || filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+					return fmt.Errorf("?%d?????????", index+1)
+				}
+				materials = append(materials, mergeMaterialFingerprint{ID: material.ID, ProjectID: current.ID, Type: material.Type, Path: material.Path, Size: material.Size})
 			}
-			var material models.Material
-			if err := tx.Where("id = ? AND project_id = ? AND type = ?", *clip.MaterialID, current.ID, "video").First(&material).Error; err != nil {
-				return fmt.Errorf("第%d个插入视频不存在或不属于项目", index+1)
+			if clip.OverlayMaterialID != nil {
+				if *clip.OverlayMaterialID == 0 {
+					return fmt.Errorf("?%d????? ID ??", index+1)
+				}
+				var overlay models.Material
+				if err := tx.Where("id = ? AND project_id = ? AND type IN ?", *clip.OverlayMaterialID, current.ID, []string{"image", "video"}).First(&overlay).Error; err != nil {
+					return fmt.Errorf("?%d???????????????????", index+1)
+				}
+				clean := filepath.Clean(filepath.FromSlash(overlay.Path))
+				if overlay.Path == "" || filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+					return fmt.Errorf("?%d?????????", index+1)
+				}
+				materials = append(materials, mergeMaterialFingerprint{ID: overlay.ID, ProjectID: current.ID, Type: overlay.Type, Path: overlay.Path, Size: overlay.Size})
 			}
-			clean := filepath.Clean(filepath.FromSlash(material.Path))
-			if material.Path == "" || filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
-				return fmt.Errorf("第%d个插入视频路径无效", index+1)
-			}
-			materials = append(materials, mergeMaterialFingerprint{ID: material.ID, ProjectID: current.ID, Type: material.Type, Path: material.Path, Size: material.Size})
 		}
 		episodeGeneration, err := latestEpisodeGeneration(tx, current.ID, episodeN)
 		if err != nil {
@@ -9347,14 +9363,34 @@ func (s *ProjectService) validateMergeInputs(tx *gorm.DB, mt *models.MergeTask) 
 	}
 	materials := make([]mergeMaterialFingerprint, 0)
 	for index, clip := range clips {
-		if clip.MaterialID == nil {
-			continue
+		if clip.MaterialID != nil {
+			if *clip.MaterialID == 0 {
+				return nil, fmt.Errorf("?????????%d????? ID ??", index+1)
+			}
+			var material models.Material
+			if err := tx.Where("id = ? AND project_id = ? AND type = ?", *clip.MaterialID, mt.ProjectID, "video").First(&material).Error; err != nil {
+				return nil, fmt.Errorf("?????????%d????????", index+1)
+			}
+			clean := filepath.Clean(filepath.FromSlash(material.Path))
+			if material.Path == "" || filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+				return nil, fmt.Errorf("?????????%d??????????", index+1)
+			}
+			materials = append(materials, mergeMaterialFingerprint{ID: material.ID, ProjectID: mt.ProjectID, Type: material.Type, Path: material.Path, Size: material.Size})
 		}
-		var material models.Material
-		if err := tx.Where("id = ? AND project_id = ? AND type = ?", *clip.MaterialID, mt.ProjectID, "video").First(&material).Error; err != nil {
-			return nil, fmt.Errorf("合并任务已过期：第%d个插入视频已变化", index+1)
+		if clip.OverlayMaterialID != nil {
+			if *clip.OverlayMaterialID == 0 {
+				return nil, fmt.Errorf("?????????%d????? ID ??", index+1)
+			}
+			var overlay models.Material
+			if err := tx.Where("id = ? AND project_id = ? AND type IN ?", *clip.OverlayMaterialID, mt.ProjectID, []string{"image", "video"}).First(&overlay).Error; err != nil {
+				return nil, fmt.Errorf("?????????%d????????", index+1)
+			}
+			clean := filepath.Clean(filepath.FromSlash(overlay.Path))
+			if overlay.Path == "" || filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+				return nil, fmt.Errorf("?????????%d??????????", index+1)
+			}
+			materials = append(materials, mergeMaterialFingerprint{ID: overlay.ID, ProjectID: mt.ProjectID, Type: overlay.Type, Path: overlay.Path, Size: overlay.Size})
 		}
-		materials = append(materials, mergeMaterialFingerprint{ID: material.ID, ProjectID: mt.ProjectID, Type: material.Type, Path: material.Path, Size: material.Size})
 	}
 	actualSnapshot, err := s.captureMergeInputSnapshot(tx, mt.ProjectID, mt.EpisodeN, mt.Generation, fingerprints, materials, orderedIDs, mt.RequestedDub, mt.RequestedSubtitles, MergeAudioOptions{NativeVolume: mt.NativeVolume, DialogueVolume: mt.DialogueVolume, BGMVolume: mt.BGMVolume, DialogueMix: mt.DialogueMix, ScreenText: mt.RequestedScreenText}, mergeSnapshotOptions{Version: expectedSnapshot.Version, Clips: clips})
 	if err != nil {
@@ -9672,15 +9708,15 @@ func (s *ProjectService) writeMergeTimelineSRT(mt *models.MergeTask, srtAbs stri
 }
 
 func (s *ProjectService) buildMergeTimelineSRT(videos []mergeResolvedVideo, videoDurs []sceneVideo) (string, int, error) {
-	if len(videos) != len(videoDurs) {
-		return "", 0, fmt.Errorf("字幕时间线与视频片段不一致")
+	clips, _, err := mergeTimelineClips(videos, videoDurs)
+	if err != nil {
+		return "", 0, err
 	}
 	var sb strings.Builder
-	idx, global := 0, 0.0
-	for i, video := range videos {
-		dur := videoDurs[i].dur
+	idx := 0
+	for _, clip := range clips {
+		video := clip.video
 		if video.SceneID == 0 {
-			global += dur
 			continue
 		}
 		var dubs []models.Dialogue
@@ -9695,16 +9731,9 @@ func (s *ProjectService) buildMergeTimelineSRT(videos []mergeResolvedVideo, vide
 		}
 		sourceDur := video.SourceDuration
 		if sourceDur <= 0 {
-			sourceDur = dur
+			sourceDur = clip.sourceEnd
 		}
-		clipStart, clipEnd := 0.0, sourceDur
-		if video.SourceDuration > 0 {
-			var err error
-			clipStart, clipEnd, err = resolvedMergeClipRange(video, sourceDur)
-			if err != nil {
-				return "", 0, err
-			}
-		}
+		clipStart, clipEnd := clip.sourceStart, clip.sourceEnd
 		fallback := sourceDur
 		if len(valid) > 0 {
 			fallback = sourceDur / float64(len(valid))
@@ -9722,7 +9751,8 @@ func (s *ProjectService) buildMergeTimelineSRT(videos []mergeResolvedVideo, vide
 				continue
 			}
 			idx++
-			a, b = global+a-clipStart, global+b-clipStart
+			speed := mergeClipSpeed(video)
+			a, b = clip.outStart+(a-clipStart)/speed, clip.outStart+(b-clipStart)/speed
 			sb.WriteString(fmt.Sprintf("%d\n%s --> %s\n", idx, formatSRTTime(a), formatSRTTime(b)))
 			line := strings.TrimSpace(d.Text)
 			if strings.TrimSpace(d.Character) != "" {
@@ -9730,7 +9760,6 @@ func (s *ProjectService) buildMergeTimelineSRT(videos []mergeResolvedVideo, vide
 			}
 			sb.WriteString(line + "\n\n")
 		}
-		global += dur
 	}
 	return sb.String(), idx, nil
 }

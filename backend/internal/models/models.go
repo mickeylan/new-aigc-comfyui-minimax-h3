@@ -1272,6 +1272,8 @@ type AudioLayer struct {
 	StartTime   float64 `json:"start_time"`
 	EndTime     float64 `json:"end_time"`
 	SourceStart float64 `gorm:"column:source_start;default:0" json:"source_start"`
+	// RenderSpeed is derived for one edited clip occurrence, never persisted or accepted from clients.
+	RenderSpeed float64 `gorm:"-" json:"-"`
 	Volume      float64 `gorm:"default:1" json:"volume"`
 	FadeIn      float64 `json:"fade_in"`
 	FadeOut     float64 `json:"fade_out"`

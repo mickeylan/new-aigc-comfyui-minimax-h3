@@ -100,3 +100,40 @@ func TestMergeClipTimelineMaterialOnlyKeepsExplicitOutputAudio(t *testing.T) {
 		t.Fatalf("material-only lost output audio: %+v %v", got, err)
 	}
 }
+
+func TestMergeClipTimelineSpeedAndTransition(t *testing.T) {
+	videos := []mergeResolvedVideo{
+		{SourceDuration: 6, Speed: 2, Transition: "fade", TransitionDuration: .5},
+		{SourceDuration: 2},
+	}
+	clips, total, err := mergeTimelineClips(videos, makeVideoDurations(videos))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nearClipTime(t, clips[1].outStart, 2.5)
+	nearClipTime(t, total, 4.5)
+}
+
+func TestMergeClipTimelineSRTScalesSpeedAndTransition(t *testing.T) {
+	s, _, _, _, a, b := clipTimelineFixture(t)
+	for _, d := range []models.Dialogue{
+		{SceneID: a.ID, Order: 1, Text: "A", TimeSegment: "2-4秒"},
+		{SceneID: b.ID, Order: 1, Text: "B", TimeSegment: "0-1秒"},
+	} {
+		if err := s.db.Create(&d).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	videos := []mergeResolvedVideo{
+		{SceneID: a.ID, SourceDuration: 6, Speed: 2, Transition: "fade", TransitionDuration: .5},
+		{SceneID: b.ID, SourceDuration: 2},
+	}
+	text, count, err := s.buildMergeTimelineSRT(videos, makeVideoDurations(videos))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 || !strings.Contains(text, "00:00:01,000 --> 00:00:02,000\nA") ||
+		!strings.Contains(text, "00:00:02,500 --> 00:00:03,500\nB") {
+		t.Fatalf("count=%d subtitles=%s", count, text)
+	}
+}
