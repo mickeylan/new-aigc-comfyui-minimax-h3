@@ -25,7 +25,7 @@ export function normalizeClip(clip, physicalDuration = clip.duration) {
   if (duration < MIN_TRIM) throw new RangeError('duration is too short')
   const start = clip.source_start == null ? 0 : finiteNumber(clip.source_start, 'source_start')
   const end = clip.source_end == null ? duration : finiteNumber(clip.source_end, 'source_end')
-  if (start < 0 || end > duration || end - start < MIN_TRIM) throw new RangeError('invalid trim bounds')
+  if (start < 0 || end > duration || end - start < MIN_TRIM - 1e-9) throw new RangeError('invalid trim bounds')
   const speed = ranged(clip.speed, 1, .25, 4, 'speed')
   const volume = ranged(clip.volume, 1, 0, 4, 'volume')
   const outputDuration = (end - start) / speed

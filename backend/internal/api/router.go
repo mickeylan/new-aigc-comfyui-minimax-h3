@@ -151,6 +151,8 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/prompt-policy-overrides", svc.HandleCreatePromptPolicyOverride)
 	r.PUT("/api/projects/:id/prompt-policy-overrides/:poid", svc.HandleUpdatePromptPolicyOverride)
 	r.DELETE("/api/projects/:id/prompt-policy-overrides/:poid", svc.HandleDeletePromptPolicyOverride)
+	r.GET("/api/projects/:id/episodes/:number/editing-draft", svc.HandleGetEditingDraft)
+	r.PUT("/api/projects/:id/episodes/:number/editing-draft", svc.HandleSaveEditingDraft)
 	r.GET("/api/projects/:id/scenes/:sid/references", svc.HandleGetSceneReferences)
 	r.PUT("/api/projects/:id/scenes/:sid/references", svc.HandleUpdateSceneReferences)
 	r.PATCH("/api/projects/:id/scenes/:sid/locks", svc.HandleUpdateSceneLocks)

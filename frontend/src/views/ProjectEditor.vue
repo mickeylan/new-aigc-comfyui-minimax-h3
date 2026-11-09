@@ -38,8 +38,9 @@
       <div class="section-head"><div><span class="overline">FINAL CUT ASSEMBLY</span><h2>最终成片编排</h2><p class="sub">直接观看每个片段后决定保留、排除、排序或插入；只影响本次合并，不修改Scene、候选或原视频。</p></div><div class="section-actions"><input ref="mergeVideoUploadInput" type="file" accept="video/mp4,video/webm,video/quicktime,video/x-matroska" hidden @change="uploadMergeVideo"><button class="btn btn-sm btn-secondary" :disabled="mergeVideoUploading" @click="requestMergeVideoUpload(mergeSequence.length,0)">{{mergeVideoUploading?'上传中…':'上传视频并添加到末尾'}}</button><button class="btn btn-sm btn-ghost" @click="resetMergeSequence">按Scene重置</button></div></div>
       <div class="card final-cut-assembled">
         <video ref="assembledPreview" controls preload="metadata" @loadedmetadata="onAssembledMetadata" @timeupdate="onAssembledTime" @ended="advanceAssembledPreview"></video>
-        <div class="section-actions"><button class="btn btn-sm" :disabled="!mergeSequence.length" @click="playAssembledPreview">播放所选区间</button><button class="btn btn-sm btn-ghost" @click="stepPreview(-1)">后退约1帧</button><button class="btn btn-sm btn-ghost" @click="stepPreview(1)">前进约1帧</button><button class="btn btn-sm btn-ghost" @click="stopAssembledPreview">停止</button><button class="btn btn-sm btn-secondary" @click="saveFinalCutDraft">保存剪辑草稿</button><button class="btn btn-sm btn-secondary" @click="restoreFinalCutDraft">恢复剪辑草稿</button><button class="btn btn-sm" :disabled="busy||curMerging||mergeSequence.length<2" @click="mergeEpisode">渲染完整预览</button><strong>实际输出时长 {{totalTrimDuration.toFixed(2)}} 秒</strong></div>
+        <div class="section-actions"><button class="btn btn-sm" :disabled="!mergeSequence.length" @click="playAssembledPreview">播放所选区间</button><button class="btn btn-sm btn-ghost" @click="stepPreview(-1)">后退约1帧</button><button class="btn btn-sm btn-ghost" @click="stepPreview(1)">前进约1帧</button><button class="btn btn-sm btn-ghost" @click="stopAssembledPreview">停止</button><button class="btn btn-sm btn-secondary" @click="saveFinalCutDraft">保存剪辑草稿</button><button class="btn btn-sm btn-secondary" @click="restoreFinalCutDraft">恢复剪辑草稿</button><button class="btn btn-sm btn-secondary" :disabled="serverDraftBusy" @click="saveServerEditingDraft">保存到服务端</button><button class="btn btn-sm btn-secondary" :disabled="serverDraftBusy" @click="restoreServerEditingDraft">读取服务端草稿</button><button class="btn btn-sm" :disabled="busy||curMerging||mergeSequence.length<2" @click="mergeEpisode">渲染完整预览</button><strong>实际输出时长 {{totalTrimDuration.toFixed(2)}} 秒</strong></div>
         <p class="sub">快速原声预览（变速/调色）；转场/叠加/字幕以导出为准。“渲染完整预览”使用与导出相同的合并任务。</p>
+        <FinalCutTimeline :key="`timeline-${activeEpN}`" :clips="mergeSequence" :current-time="finalCutTime" @change="mergeSequence=$event" @seek="seekFinalCut" />
         <div class="final-cut-strip"><button v-for="(clip,index) in mergeSequence" :key="`strip-${clip.id}`" draggable="true" @dragstart="finalCutDragFrom=index" @dragover.prevent @drop="dropMergeClip(index)" :style="{flexGrow:Math.max(.1,clipTimelineDuration(clip))}">{{index+1}} · {{clipTimelineDuration(clip).toFixed(2)}}s</button></div>
       </div>
       <div class="final-cut-grid">
@@ -439,6 +440,10 @@ import GeneratedMediaHistoryDrawer from '../components/GeneratedMediaHistoryDraw
 import { compatibleSkills, projectSkillConfig, skillOperationOf } from '../utils/directorWorkflow.js'
 import { createDraftSafety } from '../utils/draftSafety.js'
 import { buildEditSequence, normalizeClip, sequenceDuration, splitClip, uniqueClipId } from '../utils/finalCutEditing.js'
+import FinalCutTimeline from '../components/FinalCutTimeline.vue'
+import { layoutClips } from '../utils/editingTimeline.js'
+const finalCutTime = ref(0)
+let timelineSeek = null
 
 const route = useRoute()
 const toast = useToastStore()
@@ -907,7 +912,7 @@ async function shiftSub(i, delta) {
   }
 }
 
-function stopAssembledPreview(){ previewEpoch+=1;previewIndex.value=-1;previewSnapshot.value=[];if(assembledPreview.value){assembledPreview.value.pause();assembledPreview.value.removeAttribute('src');assembledPreview.value.load()} }
+function stopAssembledPreview(){ timelineSeek=null;previewEpoch+=1;previewIndex.value=-1;previewSnapshot.value=[];if(assembledPreview.value){assembledPreview.value.pause();assembledPreview.value.removeAttribute('src');assembledPreview.value.load()} }
 function resetMergeSequence(){
   stopAssembledPreview()
   mergeSequence.value=scenes.value.filter(s=>s.status==='video_ready').map(s=>normalizeClip({id:uniqueClipId('scene'),scene_id:s.id,label:`Scene ${s.order} · ${s.title}`,video_url:s.video_url,duration:Number(s.video_dur||s.duration||0),source_start:0,source_end:null}))
@@ -938,16 +943,29 @@ function loadPreviewClip(){
   if(!clip||!video){stopAssembledPreview();return}
   previewEpoch+=1;video.dataset.previewEpoch=String(previewEpoch);video.src=clip.video_url
 }
+function seekFinalCut(time){
+  stopAssembledPreview()
+  finalCutTime.value=time
+  const rows=layoutClips(mergeSequence.value)
+  const row=rows.find(r=>time>=r.start&&time<r.end)||rows.at(-1)
+  if(!row)return
+  previewSnapshot.value=mergeSequence.value.map(c=>({...c}))
+  previewIndex.value=row.index
+  const clip=previewSnapshot.value[row.index]
+  timelineSeek=Number(clip.source_start||0)+Math.max(0,time-row.start)*Number(clip.speed||1)
+  loadPreviewClip()
+}
 function onAssembledMetadata(){
   const clip=previewSnapshot.value[previewIndex.value],video=assembledPreview.value,epoch=previewEpoch
   if(!clip||!video||Number(video.dataset.previewEpoch)!==epoch||absoluteUrl(video.currentSrc)!==absoluteUrl(clip.video_url))return
   const end=clip.source_end==null?Number(video.duration):clip.source_end
   if(!Number.isFinite(end)||end<=clip.source_start){toast.error('片段出入点无效');stopAssembledPreview();return}
+  if(timelineSeek!=null){video.currentTime=Math.min(end,timelineSeek);timelineSeek=null;applyClipPreview(clip,{target:video});video.pause();return}
   video.currentTime=clip.source_start||0
   applyClipPreview(clip,{target:video})
   video.play().catch(()=>{if(epoch===previewEpoch){toast.error('浏览器无法播放该片段');stopAssembledPreview()}})
 }
-function onAssembledTime(){const clip=previewSnapshot.value[previewIndex.value],video=assembledPreview.value;if(!clip||!video)return;const end=clip.source_end==null?Number(video.duration):clip.source_end;if(Number.isFinite(end)&&video.currentTime>=end-.01)advanceAssembledPreview()}
+function onAssembledTime(){const clip=previewSnapshot.value[previewIndex.value],video=assembledPreview.value;if(!clip||!video)return;const row=layoutClips(previewSnapshot.value)[previewIndex.value];if(row)finalCutTime.value=row.start+(video.currentTime-Number(clip.source_start||0))/Number(clip.speed||1);const end=clip.source_end==null?Number(video.duration):clip.source_end;if(Number.isFinite(end)&&video.currentTime>=end-.01)advanceAssembledPreview()}
 function advanceAssembledPreview(){if(previewIndex.value<0)return;previewIndex.value+=1;loadPreviewClip()}
 function applyClipPreview(clip,event){const video=event.target;video.playbackRate=Number(clip.speed||1);video.volume=Math.min(1,Number(clip.volume??1))}
 function previewFilter(clip){return {filter:`brightness(${Math.max(0,1+Number(clip.brightness||0))}) contrast(${Number(clip.contrast||1)}) saturate(${Number(clip.saturation??1)})`}}
@@ -961,10 +979,45 @@ function saveFinalCutDraft(){
   try{localStorage.setItem(draftKey.value,JSON.stringify({version:1,clips:buildEditSequence(mergeSequence.value).map((clip,index)=>({...clip,duration:mergeSequence.value[index].duration}))}));finalCutDirty.value=false;toast.success('剪辑草稿已保存')}
   catch(e){toast.error(e.message||'草稿保存失败')}
 }
-function restoreFinalCutDraft(){
-  const raw=localStorage.getItem(draftKey.value);if(!raw){toast.show('没有可恢复的剪辑草稿');return}
+function restoreFinalCutDraft(serverRaw=null){
+  const raw=typeof serverRaw==='string'?serverRaw:localStorage.getItem(draftKey.value);if(!raw){toast.show('没有可恢复的剪辑草稿');return}
   if(!window.confirm('恢复草稿将替换当前未保存编排，继续？'))return
-  try{const draft=JSON.parse(raw);if(draft.version!==1||!Array.isArray(draft.clips))throw new Error('草稿版本无效');const restored=[];for(const saved of draft.clips){let source;if(saved.scene_id!=null){const scene=scenes.value.find(row=>Number(row.id)===Number(saved.scene_id));if(scene)source={scene_id:scene.id,label:`Scene ${scene.order} · ${scene.title}`,video_url:scene.video_url,duration:Number(scene.video_dur||scene.duration||0)}}else if(saved.material_id!=null){const material=materials.value.find(row=>Number(row.id)===Number(saved.material_id));if(material&&material.type==='video')source={material_id:material.id,label:material.name||material.path,video_url:api.materialUrl(material.path),duration:Number(material.duration||saved.duration||0)}}if(!source||source.duration<.05)continue;restored.push(normalizeClip({...source,...saved,id:uniqueClipId(saved.scene_id?'scene':'material')},source.duration))}if(!restored.length)throw new Error('草稿引用的素材已不存在');mergeSequence.value=restored;ensureFinalCut();mergeSequenceEpisode.value=activeEpN.value;finalCutDirty.value=false;toast.success(`已恢复 ${restored.length} 个片段`)}catch(e){toast.error(e.message||'草稿恢复失败')}
+  try{const draft=JSON.parse(raw);if(draft.version!==1||!Array.isArray(draft.clips))throw new Error('草稿版本无效');const restored=[];for(const saved of draft.clips){let source;if(saved.scene_id!=null){const scene=scenes.value.find(row=>Number(row.id)===Number(saved.scene_id));if(scene)source={scene_id:scene.id,label:`Scene ${scene.order} · ${scene.title}`,video_url:scene.video_url,duration:Number(scene.video_dur||scene.duration||0)}}else if(saved.material_id!=null){const material=materials.value.find(row=>Number(row.id)===Number(saved.material_id));if(material&&material.type==='video')source={material_id:material.id,label:material.name||material.path,video_url:api.materialUrl(material.path),duration:Number(material.duration||saved.duration||0)}}if(!source||source.duration<.05)throw new Error('草稿引用的素材已不可用，当前编排保持不变');restored.push(normalizeClip({...saved,...source,label:saved.label||source.label,id:uniqueClipId(saved.scene_id?'scene':'material')},source.duration))}if(!restored.length)throw new Error('草稿引用的素材已不存在');mergeSequence.value=restored;ensureFinalCut();mergeSequenceEpisode.value=activeEpN.value;finalCutDirty.value=false;toast.success(`已恢复 ${restored.length} 个片段`);return true}catch(e){toast.error(e.message||'草稿恢复失败')}
+}
+const serverDraftBusy=ref(false)
+const serverDraftRevisions={}
+async function saveServerEditingDraft(){
+  if(serverDraftBusy.value)return
+  const episode=activeEpN.value,project=id(),key=`${project}:${episode}`
+  serverDraftBusy.value=true
+  try{
+    const clips=buildEditSequence(mergeSequence.value).map((clip,index)=>({...clip,duration:mergeSequence.value[index].duration}))
+    const before=JSON.stringify(mergeSequence.value)
+    let revision=serverDraftRevisions[key]
+    if(revision==null){
+      const {data}=await api.editingDraft(project,episode)
+      if(data.draft){toast.error('服务端已有草稿，请先读取并审核后再保存，避免覆盖其他设备的编排');return}
+      revision=0
+    }
+    const {data}=await api.saveEditingDraft(project,episode,revision,clips)
+    serverDraftRevisions[key]=data.draft.revision
+    if(episode===activeEpN.value&&before===JSON.stringify(mergeSequence.value))finalCutDirty.value=false
+    toast.success(`第${episode}集服务端草稿已保存（版本${data.draft.revision}）`)
+  }catch(e){toast.error(e.response?.data?.error||e.message)}finally{serverDraftBusy.value=false}
+}
+async function restoreServerEditingDraft(){
+  if(serverDraftBusy.value)return
+  const episode=activeEpN.value,project=id(),key=`${project}:${episode}`
+  serverDraftBusy.value=true
+  try{
+    const {data}=await api.editingDraft(project,episode)
+    if(episode!==activeEpN.value)return
+    if(!data.draft){serverDraftRevisions[key]=0;toast.info('服务端没有剪辑草稿');return}
+    const saved=JSON.parse(data.draft.edit_sequence)
+    // Resolve only against current production media; do not silently drop deleted clips.
+    if(saved.some(c=>c.scene_id!=null?!scenes.value.some(s=>s.id===c.scene_id):!materials.value.some(m=>m.id===c.material_id)))throw new Error('草稿引用的素材已不可用，当前编排保持不变')
+    if(restoreFinalCutDraft(JSON.stringify({version:1,clips:saved})))serverDraftRevisions[key]=data.draft.revision
+  }catch(e){toast.error(e.response?.data?.error||e.message)}finally{serverDraftBusy.value=false}
 }
 function insertMergeMaterial(index,after){
   const material=videoMaterials.value.find(m=>m.id===insertMaterialByIndex[index]);if(!material)return
@@ -1437,7 +1490,9 @@ async function editCurrentEpisode() {
 }
 
 function switchEp(dir) {
+  if(finalCutDirty.value&&!window.confirm('剪辑编排尚未保存，切换集数会丢弃当前修改，继续？'))return
   stopAssembledPreview()
+  finalCutTime.value=0
   const arr = epNums()
   epIndex.value = Math.max(0, Math.min(arr.length - 1, epIndex.value + dir))
   activeEpN.value = arr[epIndex.value] || 1

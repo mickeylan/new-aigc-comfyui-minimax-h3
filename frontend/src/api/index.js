@@ -17,6 +17,8 @@ async function mutateScreenText(id, request) {
 }
 
 export const api = {
+  editingDraft: (id, episode) => http.get(`/projects/${id}/episodes/${episode}/editing-draft`),
+  saveEditingDraft: (id, episode, revision, edit_sequence) => http.put(`/projects/${id}/episodes/${episode}/editing-draft`, {revision, edit_sequence}),
   instances: () => http.get('/instances'),
   startInstance: (id) => http.post(`/instances/${id}/start`),
   stopInstance: (id) => http.post(`/instances/${id}/stop`),

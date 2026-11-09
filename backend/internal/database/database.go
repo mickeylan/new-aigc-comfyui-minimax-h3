@@ -81,6 +81,7 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.ScriptRevision{},
 		&models.Scene{},
 		&models.MergeTask{},
+		&models.EditingDraft{},
 		&models.Material{},
 		&models.Character{},
 		&models.Asset{},
