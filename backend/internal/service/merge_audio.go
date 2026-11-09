@@ -32,6 +32,7 @@ type mergeAudioInput struct {
 	Speed          float64
 	Pitch          float64
 	DuckWindows    [][2]float64
+	VolumeEnvelope []clipVolumePoint
 }
 
 type mergeAudioGraph struct {
@@ -62,7 +63,7 @@ func buildEditedVideoGraph(videos []mergeResolvedVideo, width, height int) []str
 	filters := make([]string, 0, len(videos)*2+2)
 	legacy := true
 	for _, v := range videos {
-		if v.Transform != nil || v.Speed != 0 || v.Brightness != 0 || v.Contrast != 0 || v.Saturation != nil || mergeClipTransitionOverlap(v) != 0 || v.OverlayMaterialID != nil {
+		if len(v.VisualTracks) > 0 || v.Transform != nil || v.Speed != 0 || v.Brightness != 0 || v.Contrast != 0 || v.Saturation != nil || mergeClipTransitionOverlap(v) != 0 || v.OverlayMaterialID != nil {
 			legacy = false
 		}
 	}
@@ -70,7 +71,7 @@ func buildEditedVideoGraph(videos []mergeResolvedVideo, width, height int) []str
 	for i, video := range videos {
 		label := fmt.Sprintf("vnorm%d", i)
 		baseLabel := label
-		if video.OverlayMaterialID != nil {
+		if len(video.VisualTracks) > 0 || video.OverlayMaterialID != nil {
 			baseLabel = fmt.Sprintf("vbase%d", i)
 		}
 		chain := fmt.Sprintf("[%d:v]trim=start=%s", i, ffnum(video.SourceStart))
@@ -110,6 +111,12 @@ func buildEditedVideoGraph(videos []mergeResolvedVideo, width, height int) []str
 		chain += "[" + baseLabel + "]"
 		filters = append(filters, chain)
 		filters, label = appendMergeOverlay(filters, baseLabel, video, width, i)
+		filters, label = appendClipVisualTracks(filters, label, video, width, i)
+		// Downstream transition and concat paths expect a stable vnorm label.
+		if label != fmt.Sprintf("vnorm%d", i) {
+			filters = append(filters, fmt.Sprintf("[%s]null[vnorm%d]", label, i))
+			label = fmt.Sprintf("vnorm%d", i)
+		}
 		fmt.Fprintf(&concat, "[%s]", label)
 	}
 	if legacy {
@@ -216,7 +223,7 @@ func buildMergeAudioGraph(videoCount int, nativeReady bool, totalDuration, nativ
 		if input.Speed > 0 && math.Abs(input.Speed-1) > 0.0001 {
 			chain += atempoChain(input.Speed)
 		}
-		chain += ",volume=" + ffnum(input.Volume)
+		chain += ",volume=" + ffnum(input.Volume) + clipEnvelopeFilter(input.VolumeEnvelope)
 		if input.FadeIn > 0 {
 			fade := input.FadeIn
 			if fade > duration {
@@ -271,7 +278,7 @@ func buildEditedNativeAudioGraph(videos []mergeResolvedVideo, hasAudio []bool, t
 		if video.Volume != nil {
 			volume = *video.Volume
 		}
-		commonFX := ",volume=" + ffnum(volume)
+		commonFX := ",volume=" + ffnum(volume) + clipEnvelopeFilter(video.VolumeEnvelope)
 		if video.FadeIn > 0 {
 			commonFX += fmt.Sprintf(",afade=t=in:st=0:d=%s", ffnum(video.FadeIn))
 		}
@@ -310,30 +317,33 @@ func buildEditedNativeAudioGraph(videos []mergeResolvedVideo, hasAudio []bool, t
 }
 
 type mergeEditClip struct {
-	ID                 string         `json:"id"`
-	SceneID            *uint          `json:"scene_id,omitempty"`
-	MaterialID         *uint          `json:"material_id,omitempty"`
-	Label              string         `json:"label"`
-	SourceStart        float64        `json:"source_start,omitempty"`
-	SourceEnd          *float64       `json:"source_end,omitempty"`
-	Speed              float64        `json:"speed,omitempty"`
-	Volume             *float64       `json:"volume,omitempty"`
-	FadeIn             float64        `json:"fade_in,omitempty"`
-	FadeOut            float64        `json:"fade_out,omitempty"`
-	Transition         string         `json:"transition,omitempty"`
-	TransitionDuration float64        `json:"transition_duration,omitempty"`
-	Brightness         float64        `json:"brightness,omitempty"`
-	Contrast           float64        `json:"contrast,omitempty"`
-	Saturation         *float64       `json:"saturation,omitempty"`
-	OverlayMaterialID  *uint          `json:"overlay_material_id,omitempty"`
-	OverlayX           float64        `json:"overlay_x,omitempty"`
-	OverlayY           float64        `json:"overlay_y,omitempty"`
-	OverlayWidth       float64        `json:"overlay_width,omitempty"`
-	OverlayOpacity     float64        `json:"overlay_opacity,omitempty"`
-	Title              string         `json:"title,omitempty"`
-	TitlePosition      string         `json:"title_position,omitempty"`
-	TitleSize          int            `json:"title_size,omitempty"`
-	Transform          *clipTransform `json:"transform,omitempty"`
+	ID                 string            `json:"id"`
+	SceneID            *uint             `json:"scene_id,omitempty"`
+	MaterialID         *uint             `json:"material_id,omitempty"`
+	Label              string            `json:"label"`
+	SourceStart        float64           `json:"source_start,omitempty"`
+	SourceEnd          *float64          `json:"source_end,omitempty"`
+	Speed              float64           `json:"speed,omitempty"`
+	Volume             *float64          `json:"volume,omitempty"`
+	FadeIn             float64           `json:"fade_in,omitempty"`
+	FadeOut            float64           `json:"fade_out,omitempty"`
+	Transition         string            `json:"transition,omitempty"`
+	TransitionDuration float64           `json:"transition_duration,omitempty"`
+	Brightness         float64           `json:"brightness,omitempty"`
+	Contrast           float64           `json:"contrast,omitempty"`
+	Saturation         *float64          `json:"saturation,omitempty"`
+	OverlayMaterialID  *uint             `json:"overlay_material_id,omitempty"`
+	OverlayX           float64           `json:"overlay_x,omitempty"`
+	OverlayY           float64           `json:"overlay_y,omitempty"`
+	OverlayWidth       float64           `json:"overlay_width,omitempty"`
+	OverlayOpacity     float64           `json:"overlay_opacity,omitempty"`
+	Title              string            `json:"title,omitempty"`
+	TitlePosition      string            `json:"title_position,omitempty"`
+	TitleSize          int               `json:"title_size,omitempty"`
+	Transform          *clipTransform    `json:"transform,omitempty"`
+	VisualTracks       []clipVisualTrack `json:"visual_tracks,omitempty"`
+	VolumeEnvelope     []clipVolumePoint `json:"volume_envelope,omitempty"`
+	Markers            []clipMarker      `json:"markers,omitempty"`
 }
 
 func validateMergeEditSequence(clips []mergeEditClip) ([]uint, error) {
@@ -469,6 +479,9 @@ type mergeResolvedVideo struct {
 	Title, TitlePosition                             string
 	TitleSize                                        int
 	Transform                                        *clipTransform
+	VisualTracks                                     []clipVisualTrack
+	VolumeEnvelope                                   []clipVolumePoint
+	Markers                                          []clipMarker
 }
 
 func (s *ProjectService) resolveMergeVideos(p *models.Project, mt *models.MergeTask, scenes []models.Scene) ([]mergeResolvedVideo, error) {
@@ -611,6 +624,44 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 	for i := 0; i+1 < len(videos); i++ {
 		totalDuration -= mergeClipTransitionOverlap(videos[i])
 	}
+	// Allocate every visual input before allocating audio inputs; indices must stay
+	// identical in local and SSH ffmpeg commands.
+	for i := range videos {
+		for j := range videos[i].VisualTracks {
+			tr := &videos[i].VisualTracks[j]
+			if tr.Muted {
+				continue
+			}
+			id := tr.MaterialID
+			file, image, err := s.resolveMergeOverlay(p.ID, mergeResolvedVideo{OverlayMaterialID: &id})
+			if err != nil {
+				fail(err)
+				return
+			}
+			info, err := s.remote.ProbeMedia(file)
+			if err != nil || info.Width <= 0 || info.Height <= 0 || (!image && info.Duration <= 0) {
+				fail(fmt.Errorf("叠加轨媒体或起点无效"))
+				return
+			}
+			if image {
+				tr.SourceStart = 0
+			} else {
+				tr.SourceStart = math.Mod(tr.SourceStart, info.Duration)
+			}
+			idx := len(inputPaths)
+			tr.InputIndex = idx
+			tr.IsImage = image
+			inputPaths = append(inputPaths, file)
+			if image {
+				inputLoopMode[idx] = "image"
+				remoteInputs = append(remoteInputs, "-loop", "1")
+			} else {
+				inputLoopMode[idx] = "video"
+				remoteInputs = append(remoteInputs, "-stream_loop", "-1")
+			}
+			remoteInputs = append(remoteInputs, "-i", shellQuote(file))
+		}
+	}
 	for i := range videos {
 		videos[i].OverlayInputIndex = -1
 		if videos[i].OverlayMaterialID == nil {
@@ -701,7 +752,7 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 		if renderSpeed <= 0 {
 			renderSpeed = 1
 		}
-		extras = append(extras, mergeAudioInput{Index: idx, Start: layer.StartTime, SourceStart: layer.SourceStart, Duration: layer.EndTime - layer.StartTime, SourceDuration: (layer.EndTime - layer.StartTime) * renderSpeed, Speed: renderSpeed, Volume: gain, FadeIn: layer.FadeIn, FadeOut: layer.FadeOut, Loop: layer.Loop, Kind: layer.Kind, DuckWindows: windows})
+		extras = append(extras, mergeAudioInput{Index: idx, Start: layer.StartTime, SourceStart: layer.SourceStart, Duration: layer.EndTime - layer.StartTime, SourceDuration: (layer.EndTime - layer.StartTime) * renderSpeed, Speed: renderSpeed, Volume: gain, FadeIn: layer.FadeIn, FadeOut: layer.FadeOut, Loop: layer.Loop, Kind: layer.Kind, DuckWindows: windows, VolumeEnvelope: layer.VolumeEnvelope})
 	}
 	for _, segment := range dialogueSegments {
 		if segment.AudioAbs == "" {

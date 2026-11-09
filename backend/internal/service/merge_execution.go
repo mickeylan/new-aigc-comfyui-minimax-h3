@@ -44,6 +44,20 @@ func (s *ProjectService) validateMergeExecution(p *models.Project, mt *models.Me
 			return fmt.Errorf("编排片段%d: %w", i+1, durationErr)
 		}
 		total += duration
+		for _, tr := range video.VisualTracks {
+			if tr.Muted {
+				continue
+			}
+			id := tr.MaterialID
+			file, image, err := s.resolveMergeOverlay(p.ID, mergeResolvedVideo{OverlayMaterialID: &id})
+			if err != nil {
+				return err
+			}
+			media, err := s.remote.ProbeMedia(file)
+			if err != nil || media.Width <= 0 || media.Height <= 0 || (!image && media.Duration <= 0) {
+				return fmt.Errorf("第%d个片段叠加轨不可用", i+1)
+			}
+		}
 		if video.OverlayMaterialID != nil {
 			file, image, err := s.resolveMergeOverlay(p.ID, video)
 			if err != nil {
@@ -74,6 +88,11 @@ func (s *ProjectService) validateMergeExecution(p *models.Project, mt *models.Me
 	var layers []models.AudioLayer
 	if err := s.db.Where("project_id = ? AND episode_n = ?", p.ID, mt.EpisodeN).Order("start_time, id").Find(&layers).Error; err != nil {
 		return err
+	}
+	for _, layer := range layers {
+		if err := validateClipTracks(mergeResolvedVideo{VolumeEnvelope: layer.VolumeEnvelope}, layer.EndTime-layer.StartTime); err != nil {
+			return fmt.Errorf("音频层%d: %w", layer.ID, err)
+		}
 	}
 	if strings.TrimSpace(mt.EditSequence) != "" {
 		layers, err = s.mapMergeAudioLayers(p, mt, videos, layers)

@@ -157,6 +157,7 @@ func (s *ProjectService) mapMergeAudioLayers(p *models.Project, mt *models.Merge
 			copy.EndTime = c.outStart + (y-c.sourceStart)/speed
 			copy.SourceStart += x - a
 			copy.RenderSpeed = speed
+			copy.VolumeEnvelope = sliceVolumeEnvelope(layer.VolumeEnvelope, x-a, y-a, speed)
 			// A clipped occurrence must not restart an envelope which began before it.
 			copy.FadeIn = math.Min(copy.EndTime-copy.StartTime, math.Max(0, (layer.FadeIn-(x-a))/speed))
 			copy.FadeOut = math.Min(copy.EndTime-copy.StartTime, math.Max(0, (layer.FadeOut-(b-y))/speed))

@@ -76,6 +76,9 @@ func (s *ProjectService) AudioLayerPreflight(projectID uint, episodeN int) (*Aud
 	}
 	for _, decision := range resolveAudioLayerMix(layers) {
 		layer := decision.Layer
+		if err := validateClipTracks(mergeResolvedVideo{VolumeEnvelope: layer.VolumeEnvelope}, layer.EndTime-layer.StartTime); err != nil {
+			add("error", "invalid_envelope", fmt.Sprintf("音频层 #%d 包络无效：%v", layer.ID, err), layer.ID)
+		}
 		result.Layers = append(result.Layers, AudioLayerPreflightLayer{ID: layer.ID, MixStatus: decision.Status})
 		if !isFinite(layer.StartTime) || !isFinite(layer.EndTime) || layer.StartTime < 0 || layer.EndTime <= layer.StartTime || (episodeDuration > 0 && layer.EndTime > episodeDuration) {
 			add("error", "invalid_timing", fmt.Sprintf("音频层 #%d 的时间范围不在本集 0–%.1f 秒内", layer.ID, episodeDuration), layer.ID)

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -19,22 +20,23 @@ type AudioLayerService struct {
 func NewAudioLayerService(db *gorm.DB) *AudioLayerService { return &AudioLayerService{db: db} }
 
 type AudioLayerInput struct {
-	EpisodeN    int      `json:"episode_n"`
-	SceneID     *uint    `json:"scene_id"`
-	Kind        string   `json:"kind"`
-	Name        string   `json:"name"`
-	File        string   `json:"file"`
-	Description string   `json:"description"`
-	StartTime   float64  `json:"start_time"`
-	EndTime     float64  `json:"end_time"`
-	SourceStart float64  `json:"source_start"`
-	Volume      *float64 `json:"volume"`
-	FadeIn      float64  `json:"fade_in"`
-	FadeOut     float64  `json:"fade_out"`
-	Loop        bool     `json:"loop"`
-	Ducking     *bool    `json:"ducking"`
-	Muted       bool     `json:"muted"`
-	Status      string   `json:"status"`
+	VolumeEnvelope *[]models.AudioVolumePoint `json:"volume_envelope"`
+	EpisodeN       int                        `json:"episode_n"`
+	SceneID        *uint                      `json:"scene_id"`
+	Kind           string                     `json:"kind"`
+	Name           string                     `json:"name"`
+	File           string                     `json:"file"`
+	Description    string                     `json:"description"`
+	StartTime      float64                    `json:"start_time"`
+	EndTime        float64                    `json:"end_time"`
+	SourceStart    float64                    `json:"source_start"`
+	Volume         *float64                   `json:"volume"`
+	FadeIn         float64                    `json:"fade_in"`
+	FadeOut        float64                    `json:"fade_out"`
+	Loop           bool                       `json:"loop"`
+	Ducking        *bool                      `json:"ducking"`
+	Muted          bool                       `json:"muted"`
+	Status         string                     `json:"status"`
 }
 
 func isFinite(value float64) bool {
@@ -73,8 +75,16 @@ func normalizeAudioLayer(projectID uint, in AudioLayerInput) (models.AudioLayer,
 	if in.Ducking != nil {
 		ducking = *in.Ducking
 	}
+	var envelope []models.AudioVolumePoint
+	if in.VolumeEnvelope != nil {
+		envelope = *in.VolumeEnvelope
+	}
+	if err := validateClipTracks(mergeResolvedVideo{VolumeEnvelope: envelope}, in.EndTime-in.StartTime); err != nil {
+		return models.AudioLayer{}, err
+	}
 	return models.AudioLayer{
-		ProjectID: projectID, EpisodeN: in.EpisodeN, SceneID: in.SceneID, Kind: kind,
+		VolumeEnvelope: envelope,
+		ProjectID:      projectID, EpisodeN: in.EpisodeN, SceneID: in.SceneID, Kind: kind,
 		Name: strings.TrimSpace(in.Name), File: strings.TrimSpace(in.File), Description: strings.TrimSpace(in.Description),
 		StartTime: in.StartTime, EndTime: in.EndTime, SourceStart: in.SourceStart, Volume: volume, FadeIn: in.FadeIn, FadeOut: in.FadeOut,
 		Loop: in.Loop, Ducking: ducking, Muted: in.Muted, Status: status, Source: audioLayerSourceManual,
@@ -127,6 +137,9 @@ func (s *AudioLayerService) Update(projectID, id uint, in AudioLayerInput) (*mod
 		}
 		return nil, err
 	}
+	if in.VolumeEnvelope == nil {
+		in.VolumeEnvelope = &existing.VolumeEnvelope
+	}
 	layer, err := normalizeAudioLayer(projectID, in)
 	if err != nil {
 		return nil, err
@@ -146,6 +159,11 @@ func (s *AudioLayerService) Update(projectID, id uint, in AudioLayerInput) (*mod
 			delete(updates, key)
 		}
 	}
+	encodedEnvelope, encodeErr := json.Marshal(layer.VolumeEnvelope)
+	if encodeErr != nil {
+		return nil, encodeErr
+	}
+	updates["volume_envelope"] = string(encodedEnvelope)
 	if err := s.db.Model(&existing).Updates(updates).Error; err != nil {
 		return nil, err
 	}

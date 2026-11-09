@@ -1273,16 +1273,17 @@ type AudioLayer struct {
 	EndTime     float64 `json:"end_time"`
 	SourceStart float64 `gorm:"column:source_start;default:0" json:"source_start"`
 	// RenderSpeed is derived for one edited clip occurrence, never persisted or accepted from clients.
-	RenderSpeed float64 `gorm:"-" json:"-"`
-	Volume      float64 `gorm:"default:1" json:"volume"`
-	FadeIn      float64 `json:"fade_in"`
-	FadeOut     float64 `json:"fade_out"`
-	Loop        bool    `json:"loop"`
-	Ducking     bool    `gorm:"column:ducking;default:true" json:"ducking"`
-	Muted       bool    `json:"muted"`
-	Status      string  `gorm:"default:draft;index" json:"status"`
-	Stale       bool    `gorm:"default:false" json:"stale"`
-	StaleReason string  `json:"stale_reason"`
+	RenderSpeed    float64            `gorm:"-" json:"-"`
+	VolumeEnvelope []AudioVolumePoint `gorm:"serializer:json;type:text" json:"volume_envelope"`
+	Volume         float64            `gorm:"default:1" json:"volume"`
+	FadeIn         float64            `json:"fade_in"`
+	FadeOut        float64            `json:"fade_out"`
+	Loop           bool               `json:"loop"`
+	Ducking        bool               `gorm:"column:ducking;default:true" json:"ducking"`
+	Muted          bool               `json:"muted"`
+	Status         string             `gorm:"default:draft;index" json:"status"`
+	Stale          bool               `gorm:"default:false" json:"stale"`
+	StaleReason    string             `json:"stale_reason"`
 	// Source records how the layer was produced: manual (user authored) or
 	// music_cue (derived from an adopted Music 3 candidate). Derived layers keep
 	// their file and timeline bound to the source Cue.

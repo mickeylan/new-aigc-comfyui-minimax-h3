@@ -55,6 +55,9 @@ func appendMergeOverlay(filters []string, baseLabel string, video mergeResolvedV
 	}
 	overlayLabel := fmt.Sprintf("overlay_src_%d", clipIndex)
 	outLabel := fmt.Sprintf("vnorm%d", clipIndex)
+	if len(video.VisualTracks) > 0 {
+		outLabel = fmt.Sprintf("legacyOverlay%d", clipIndex)
+	}
 	filters = append(filters,
 		fmt.Sprintf("[%d:v]setpts=PTS-STARTPTS,fps=24,scale=%d:-2,format=rgba,colorchannelmixer=aa=%s[%s]", video.OverlayInputIndex, width, ffnum(opacity), overlayLabel),
 		fmt.Sprintf("[%s][%s]overlay=x=(W-w)*%s:y=(H-h)*%s:shortest=1[%s]", baseLabel, overlayLabel, ffnum(video.OverlayX), ffnum(video.OverlayY), outLabel),

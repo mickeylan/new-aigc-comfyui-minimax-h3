@@ -9112,8 +9112,9 @@ type mergeAudioLayerFingerprint struct {
 	StartTime, EndTime, Volume float64
 	FadeIn, FadeOut            float64
 	Loop, Muted, Stale         bool
-	SourceStart                float64 `json:"source_start,omitempty"`
-	Ducking                    bool    `json:"ducking,omitempty"`
+	SourceStart                float64                   `json:"source_start,omitempty"`
+	Ducking                    bool                      `json:"ducking,omitempty"`
+	VolumeEnvelope             []models.AudioVolumePoint `json:"volume_envelope,omitempty"`
 	Status                     string
 }
 
@@ -9265,6 +9266,11 @@ func (s *ProjectService) createMergeTaskRecord(p *models.Project, sceneIDs []uin
 				materials = append(materials, mergeMaterialFingerprint{ID: overlay.ID, ProjectID: current.ID, Type: overlay.Type, Path: overlay.Path, Size: overlay.Size})
 			}
 		}
+		trackMaterials, err := fingerprintClipTracks(tx, current.ID, sequence.Clips)
+		if err != nil {
+			return err
+		}
+		materials = append(materials, trackMaterials...)
 		episodeGeneration, err := latestEpisodeGeneration(tx, current.ID, episodeN)
 		if err != nil {
 			return err
@@ -9392,6 +9398,11 @@ func (s *ProjectService) validateMergeInputs(tx *gorm.DB, mt *models.MergeTask) 
 			materials = append(materials, mergeMaterialFingerprint{ID: overlay.ID, ProjectID: mt.ProjectID, Type: overlay.Type, Path: overlay.Path, Size: overlay.Size})
 		}
 	}
+	trackMaterials, trackErr := fingerprintClipTracks(tx, mt.ProjectID, clips)
+	if trackErr != nil {
+		return nil, trackErr
+	}
+	materials = append(materials, trackMaterials...)
 	actualSnapshot, err := s.captureMergeInputSnapshot(tx, mt.ProjectID, mt.EpisodeN, mt.Generation, fingerprints, materials, orderedIDs, mt.RequestedDub, mt.RequestedSubtitles, MergeAudioOptions{NativeVolume: mt.NativeVolume, DialogueVolume: mt.DialogueVolume, BGMVolume: mt.BGMVolume, DialogueMix: mt.DialogueMix, ScreenText: mt.RequestedScreenText}, mergeSnapshotOptions{Version: expectedSnapshot.Version, Clips: clips})
 	if err != nil {
 		return nil, err

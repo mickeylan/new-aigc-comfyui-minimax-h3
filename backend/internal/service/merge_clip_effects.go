@@ -37,6 +37,9 @@ func validateMergeClipEffects(v mergeResolvedVideo) error {
 	if err != nil {
 		return err
 	}
+	if err := validateClipTracks(v, d); err != nil {
+		return err
+	}
 	if err := validateClipTransform(v.Transform, d); err != nil {
 		return err
 	}
@@ -131,6 +134,9 @@ func validateMergeTimelineEffects(videos []mergeResolvedVideo) error {
 	return nil
 }
 func resolvedVideoFromClip(c mergeEditClip, v mergeResolvedVideo) mergeResolvedVideo {
+	v.VisualTracks = append([]clipVisualTrack(nil), c.VisualTracks...)
+	v.VolumeEnvelope = c.VolumeEnvelope
+	v.Markers = c.Markers
 	v.Transform = c.Transform
 	v.Speed = c.Speed
 	v.Volume = c.Volume

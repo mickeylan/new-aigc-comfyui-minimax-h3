@@ -52,6 +52,7 @@ func (s *ProjectService) captureMergeInputSnapshot(tx *gorm.DB, projectID uint, 
 			Kind: layer.Kind, File: layer.File, StartTime: layer.StartTime, EndTime: layer.EndTime,
 			Volume: layer.Volume, FadeIn: layer.FadeIn, FadeOut: layer.FadeOut, Loop: layer.Loop,
 			Muted: layer.Muted, Stale: layer.Stale, Status: layer.Status,
+			VolumeEnvelope: layer.VolumeEnvelope,
 		}
 		if opts.Version >= 7 {
 			fingerprint.SourceStart = layer.SourceStart

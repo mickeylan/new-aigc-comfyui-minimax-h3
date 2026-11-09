@@ -66,7 +66,7 @@ func validateEditingDraft(tx *gorm.DB, projectID uint, episode int, clips []edit
 		if _, err := validateMergeEditSequence(pair); err != nil {
 			return err
 		}
-		if c.Transform != nil {
+		if c.Transform != nil || len(c.VisualTracks) > 0 || len(c.VolumeEnvelope) > 0 || len(c.Markers) > 0 {
 			end := c.Duration
 			if c.SourceEnd != nil {
 				end = *c.SourceEnd
@@ -74,6 +74,9 @@ func validateEditingDraft(tx *gorm.DB, projectID uint, episode int, clips []edit
 			duration := (end - c.SourceStart) / mergeClipSpeed(mergeResolvedVideo{Speed: c.Speed})
 			if !finite(duration) || duration <= 0 {
 				return fmt.Errorf("变换草稿需要有效片段时长")
+			}
+			if err := validateClipTracks(resolvedVideoFromClip(c.mergeEditClip, mergeResolvedVideo{}), duration); err != nil {
+				return err
 			}
 			if err := validateClipTransform(c.Transform, duration); err != nil {
 				return err
@@ -95,6 +98,13 @@ func validateEditingDraft(tx *gorm.DB, projectID uint, episode int, clips []edit
 				return fmt.Errorf("叠加素材不可用")
 			}
 		}
+	}
+	values := make([]mergeEditClip, len(clips))
+	for i, c := range clips {
+		values[i] = c.mergeEditClip
+	}
+	if _, err := fingerprintClipTracks(tx, projectID, values); err != nil {
+		return err
 	}
 	return nil
 }
