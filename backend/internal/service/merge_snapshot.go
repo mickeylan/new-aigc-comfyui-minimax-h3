@@ -7,10 +7,19 @@ import (
 	"gorm.io/gorm"
 )
 
+type mergeSnapshotOptions struct {
+	Version int
+	Clips   []mergeEditClip
+}
+
 // captureMergeInputSnapshot records every database input that can affect the rendered merge.
-func (s *ProjectService) captureMergeInputSnapshot(tx *gorm.DB, projectID uint, episodeN int, generation uint, videos []sceneVideoFingerprint, materials []mergeMaterialFingerprint, sceneIDs []uint, dub, subtitles bool, audio MergeAudioOptions) ([]byte, error) {
+func (s *ProjectService) captureMergeInputSnapshot(tx *gorm.DB, projectID uint, episodeN int, generation uint, videos []sceneVideoFingerprint, materials []mergeMaterialFingerprint, sceneIDs []uint, dub, subtitles bool, audio MergeAudioOptions, options ...mergeSnapshotOptions) ([]byte, error) {
+	opts := mergeSnapshotOptions{Version: 6}
+	if len(options) > 0 {
+		opts = options[0]
+	}
 	snapshot := mergeInputSnapshot{
-		Version: 6, EpisodeGeneration: generation, Videos: videos, Materials: materials,
+		Version: opts.Version, EpisodeGeneration: generation, Videos: videos, Materials: materials,
 		Dub: dub, Subtitles: subtitles, NativeVolume: audio.NativeVolume,
 		DialogueVolume: audio.DialogueVolume, BGMVolume: audio.BGMVolume, DialogueMix: audio.DialogueMix, ScreenText: audio.ScreenText,
 		Dialogues: []mergeDialogueFingerprint{}, AudioLayers: []mergeAudioLayerFingerprint{}, ScreenTextCues: []mergeScreenTextCueFingerprint{},
@@ -21,12 +30,16 @@ func (s *ProjectService) captureMergeInputSnapshot(tx *gorm.DB, projectID uint, 
 			return nil, err
 		}
 		for _, d := range dialogues {
-			snapshot.Dialogues = append(snapshot.Dialogues, mergeDialogueFingerprint{
+			fingerprint := mergeDialogueFingerprint{
 				ID: d.ID, SceneID: d.SceneID, Order: d.Order, Character: d.Character, SpeechType: d.SpeechType,
 				Text: d.Text, Voice: d.Voice, H3VoiceDescription: d.H3VoiceDescription, Position: d.Position,
 				Offset: d.Offset, Speed: d.Speed, Pitch: d.Pitch, Volume: d.Volume, Emotion: d.Emotion,
 				Delivery: d.Delivery, AudioFile: d.AudioFile, AudioHash: d.AudioHash, Status: d.Status, AudioStale: d.AudioStale,
-			})
+			}
+			if opts.Version >= 7 {
+				fingerprint.TimeSegment = d.TimeSegment
+			}
+			snapshot.Dialogues = append(snapshot.Dialogues, fingerprint)
 		}
 	}
 	var layers []models.AudioLayer
@@ -34,12 +47,17 @@ func (s *ProjectService) captureMergeInputSnapshot(tx *gorm.DB, projectID uint, 
 		return nil, err
 	}
 	for _, layer := range layers {
-		snapshot.AudioLayers = append(snapshot.AudioLayers, mergeAudioLayerFingerprint{
+		fingerprint := mergeAudioLayerFingerprint{
 			ID: layer.ID, ProjectID: layer.ProjectID, EpisodeN: layer.EpisodeN, SceneID: layer.SceneID,
 			Kind: layer.Kind, File: layer.File, StartTime: layer.StartTime, EndTime: layer.EndTime,
 			Volume: layer.Volume, FadeIn: layer.FadeIn, FadeOut: layer.FadeOut, Loop: layer.Loop,
 			Muted: layer.Muted, Stale: layer.Stale, Status: layer.Status,
-		})
+		}
+		if opts.Version >= 7 {
+			fingerprint.SourceStart = layer.SourceStart
+			fingerprint.Ducking = layer.Ducking
+		}
+		snapshot.AudioLayers = append(snapshot.AudioLayers, fingerprint)
 	}
 	if audio.ScreenText && tx.Migrator().HasTable(&models.ScreenTextCue{}) {
 		var cues []models.ScreenTextCue
@@ -62,6 +80,17 @@ func (s *ProjectService) captureMergeInputSnapshot(tx *gorm.DB, projectID uint, 
 				PrimaryColor: cue.PrimaryColor, SubtextColor: cue.SubtextColor, OutlineColor: cue.OutlineColor, ShadowColor: cue.ShadowColor,
 				FontSize: cue.FontSize, SubtextSize: cue.SubtextSize, OutlineSize: cue.OutlineSize, ShadowSize: cue.ShadowSize, Animation: cue.Animation, Enabled: cue.Enabled, Order: cue.Order, ReviewStatus: cue.ReviewStatus,
 			})
+		}
+	}
+	if opts.Version >= 7 {
+		snapshot.EditSequence = opts.Clips
+		var timelineScenes []models.Scene
+		if err := tx.Where("project_id = ? AND episode_n = ? AND generation = ? AND archived = ?", projectID, episodeN, generation, false).Order("`order`, id").Find(&timelineScenes).Error; err != nil {
+			return nil, err
+		}
+		snapshot.EpisodeTimeline = make([]mergeEpisodeTimelineFingerprint, 0, len(timelineScenes))
+		for _, scene := range timelineScenes {
+			snapshot.EpisodeTimeline = append(snapshot.EpisodeTimeline, mergeEpisodeTimelineFingerprint{ID: scene.ID, Order: scene.Order, Duration: scene.Duration})
 		}
 	}
 	return json.Marshal(snapshot)

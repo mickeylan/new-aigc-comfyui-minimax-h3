@@ -84,7 +84,9 @@ test('最终成片按实际编排序列启用并提交集数', () => {
 test('最终合并前提供非破坏性成片编排界面', () => {
   assert.match(source, /FINAL CUT ASSEMBLY/)
   assert.match(source, /最终成片编排/)
-  assert.match(source, /edit_sequence: mergeSequence\.value/)
+  const mergeEpisodeBody = source.match(/async function mergeEpisode\(\) \{([\s\S]*?)\n\}/)?.[1] || ''
+  assert.match(mergeEpisodeBody, /edit_sequence: buildEditSequence\(mergeSequence\.value\)/)
+  assert.doesNotMatch(mergeEpisodeBody, /edit_sequence: mergeSequence\.value/)
   assert.match(source, /insertMergeMaterial/)
   assert.match(source, /moveMergeClip/)
   assert.match(source, /final-cut-preview/)

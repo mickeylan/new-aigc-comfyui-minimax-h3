@@ -34,11 +34,22 @@ func (s *ProjectService) validateMergeExecution(p *models.Project, mt *models.Me
 		if info.Duration <= 0 || info.Width <= 0 || info.Height <= 0 {
 			return fmt.Errorf("编排片段%d的视频尺寸或时长无效", i+1)
 		}
-		total += info.Duration
+		start, end, rangeErr := resolvedMergeClipRange(video, info.Duration)
+		if rangeErr != nil {
+			return fmt.Errorf("编排片段%d: %w", i+1, rangeErr)
+		}
+		videos[i].SourceDuration = info.Duration
+		total += end - start
 	}
 	var layers []models.AudioLayer
 	if err := s.db.Where("project_id = ? AND episode_n = ?", p.ID, mt.EpisodeN).Order("start_time, id").Find(&layers).Error; err != nil {
 		return err
+	}
+	if strings.TrimSpace(mt.EditSequence) != "" {
+		layers, err = s.mapMergeAudioLayers(p, mt, videos, layers)
+		if err != nil {
+			return err
+		}
 	}
 	warnings := make([]string, 0)
 	if mt.DialogueMix && mt.DialogueVolume > 0 {
@@ -56,7 +67,10 @@ func (s *ProjectService) validateMergeExecution(p *models.Project, mt *models.Me
 			warnings = append(warnings, fmt.Sprintf("对白%d未混入：%s", skip.Dialogue.ID, skip.Reason))
 		}
 		for _, dialogue := range ready {
-			abs := s.mediaPath("input", fmt.Sprint(p.ID), dialogue.AudioFile)
+			abs, pathErr := s.audioMixMediaPath(p.ID, dialogue.AudioFile)
+			if pathErr != nil {
+				return fmt.Errorf("对白%d的音频文件路径无效", dialogue.ID)
+			}
 			if _, probeErr := s.remote.ProbeMedia(abs); probeErr != nil {
 				return fmt.Errorf("对白%d的已就绪音频文件不可用", dialogue.ID)
 			}

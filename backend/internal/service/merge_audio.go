@@ -54,6 +54,27 @@ func buildNormalizedVideoGraph(videoCount, width, height int) []string {
 	return filters
 }
 
+// buildEditedVideoGraph trims each source before normalization and concatenation.
+func buildEditedVideoGraph(videos []mergeResolvedVideo, width, height int) []string {
+	if len(videos) == 0 || width <= 0 || height <= 0 {
+		return nil
+	}
+	filters := make([]string, 0, len(videos)+2)
+	var concat strings.Builder
+	for i, video := range videos {
+		label := fmt.Sprintf("vnorm%d", i)
+		chain := fmt.Sprintf("[%d:v]trim=start=%s", i, ffnum(video.SourceStart))
+		if video.SourceEnd != nil {
+			chain += ":end=" + ffnum(*video.SourceEnd)
+		}
+		chain += fmt.Sprintf(",setpts=PTS-STARTPTS,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1[%s]", width, height, width, height, label)
+		filters = append(filters, chain)
+		fmt.Fprintf(&concat, "[%s]", label)
+	}
+	filters = append(filters, concat.String()+fmt.Sprintf("concat=n=%d:v=1:a=0[vc]", len(videos)), "[vc]fps=24[v]")
+	return filters
+}
+
 func applyMergeTextFilters(filters []string, textFilters []string) []string {
 	if len(textFilters) == 0 || len(filters) == 0 {
 		return filters
@@ -166,11 +187,39 @@ func buildMergeAudioGraph(videoCount int, nativeReady bool, totalDuration, nativ
 	return mergeAudioGraph{Filters: strings.Join(filters, ";"), Label: "[amix]"}
 }
 
+// buildEditedNativeAudioGraph preserves native sound from clips that have it and
+// substitutes exact-length silence for clips that do not.
+func buildEditedNativeAudioGraph(videos []mergeResolvedVideo, hasAudio []bool, totalDuration, gain float64) mergeAudioGraph {
+	if len(videos) == 0 || len(hasAudio) != len(videos) || totalDuration <= 0 {
+		return mergeAudioGraph{}
+	}
+	filters := make([]string, 0, len(videos)+1)
+	var concat strings.Builder
+	for i, video := range videos {
+		start, end, err := resolvedMergeClipRange(video, video.SourceDuration)
+		if err != nil {
+			return mergeAudioGraph{}
+		}
+		duration := end - start
+		label := fmt.Sprintf("am_native_clip_%d", i)
+		if hasAudio[i] {
+			filters = append(filters, fmt.Sprintf("[%d:a]atrim=start=%s:end=%s,asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,apad,atrim=duration=%s[%s]", i, ffnum(start), ffnum(end), ffnum(duration), label))
+		} else {
+			filters = append(filters, fmt.Sprintf("anullsrc=r=48000:cl=stereo,atrim=duration=%s,asetpts=PTS-STARTPTS[%s]", ffnum(duration), label))
+		}
+		fmt.Fprintf(&concat, "[%s]", label)
+	}
+	filters = append(filters, concat.String()+fmt.Sprintf("concat=n=%d:v=0:a=1,volume=%s,atrim=duration=%s[am_native_edited]", len(videos), ffnum(gain), ffnum(totalDuration)))
+	return mergeAudioGraph{Filters: strings.Join(filters, ";"), Label: "[am_native_edited]"}
+}
+
 type mergeEditClip struct {
-	ID         string `json:"id"`
-	SceneID    *uint  `json:"scene_id,omitempty"`
-	MaterialID *uint  `json:"material_id,omitempty"`
-	Label      string `json:"label"`
+	ID          string   `json:"id"`
+	SceneID     *uint    `json:"scene_id,omitempty"`
+	MaterialID  *uint    `json:"material_id,omitempty"`
+	Label       string   `json:"label"`
+	SourceStart float64  `json:"source_start,omitempty"`
+	SourceEnd   *float64 `json:"source_end,omitempty"`
 }
 
 func validateMergeEditSequence(clips []mergeEditClip) ([]uint, error) {
@@ -181,6 +230,15 @@ func validateMergeEditSequence(clips []mergeEditClip) ([]uint, error) {
 	for index, clip := range clips {
 		if (clip.SceneID == nil) == (clip.MaterialID == nil) {
 			return nil, fmt.Errorf("第%d个片段必须且只能选择Scene或额外视频", index+1)
+		}
+		if (clip.SceneID != nil && *clip.SceneID == 0) || (clip.MaterialID != nil && *clip.MaterialID == 0) {
+			return nil, fmt.Errorf("第%d个片段来源ID无效", index+1)
+		}
+		if math.IsNaN(clip.SourceStart) || math.IsInf(clip.SourceStart, 0) || clip.SourceStart < 0 {
+			return nil, fmt.Errorf("第%d个片段裁剪起点无效", index+1)
+		}
+		if clip.SourceEnd != nil && (math.IsNaN(*clip.SourceEnd) || math.IsInf(*clip.SourceEnd, 0) || *clip.SourceEnd <= clip.SourceStart) {
+			return nil, fmt.Errorf("第%d个片段裁剪终点无效", index+1)
 		}
 		if clip.SceneID != nil && !seenScenes[*clip.SceneID] {
 			seenScenes[*clip.SceneID] = true
@@ -263,6 +321,12 @@ func (s *ProjectService) audioMixMediaPath(projectID uint, file string) (string,
 		return "", fmt.Errorf("音频层文件路径无效")
 	}
 	projectPrefix := fmt.Sprintf("material_p%d/", projectID)
+	if s.upload != nil && (s.remote == nil || !s.remote.Enabled()) {
+		if strings.HasPrefix(clean, projectPrefix) {
+			return filepath.Join(s.upload.InputDir(), filepath.FromSlash(clean)), nil
+		}
+		return filepath.Join(s.upload.InputDir(), fmt.Sprint(projectID), filepath.FromSlash(clean)), nil
+	}
 	if strings.HasPrefix(clean, projectPrefix) {
 		return s.mediaPath("input", filepath.FromSlash(clean)), nil
 	}
@@ -270,10 +334,13 @@ func (s *ProjectService) audioMixMediaPath(projectID uint, file string) (string,
 }
 
 type mergeResolvedVideo struct {
-	SceneID uint
-	Order   int
-	Path    string
-	Label   string
+	SceneID        uint
+	Order          int
+	Path           string
+	Label          string
+	SourceStart    float64
+	SourceEnd      *float64
+	SourceDuration float64
 }
 
 func (s *ProjectService) resolveMergeVideos(p *models.Project, mt *models.MergeTask, scenes []models.Scene) ([]mergeResolvedVideo, error) {
@@ -300,11 +367,20 @@ func (s *ProjectService) resolveMergeVideos(p *models.Project, mt *models.MergeT
 			if !ok {
 				return nil, fmt.Errorf("编排中的Scene %d已不存在", *clip.SceneID)
 			}
-			abs := s.mediaPath("output_workers", fmt.Sprintf("gpu%d", *scene.VideoGPU), filepath.FromSlash(scene.VideoFile))
+			var abs string
 			if (s.remote == nil || !s.remote.Enabled()) && scene.VideoInputFile != "" {
-				abs = filepath.Join(s.upload.InputDir(), fmt.Sprint(scene.ProjectID), filepath.FromSlash(scene.VideoInputFile))
+				clean := filepath.Clean(filepath.FromSlash(scene.VideoInputFile))
+				if filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+					return nil, fmt.Errorf("Scene %d视频路径无效", scene.ID)
+				}
+				abs = filepath.Join(s.upload.InputDir(), fmt.Sprint(scene.ProjectID), clean)
+			} else {
+				if scene.VideoGPU == nil {
+					return nil, fmt.Errorf("Scene %d缺少视频GPU信息", scene.ID)
+				}
+				abs = s.mediaPath("output_workers", fmt.Sprintf("gpu%d", *scene.VideoGPU), filepath.FromSlash(scene.VideoFile))
 			}
-			out = append(out, mergeResolvedVideo{SceneID: scene.ID, Order: scene.Order, Path: abs, Label: clip.Label})
+			out = append(out, mergeResolvedVideo{SceneID: scene.ID, Order: scene.Order, Path: abs, Label: clip.Label, SourceStart: clip.SourceStart, SourceEnd: clip.SourceEnd})
 			continue
 		}
 		var material models.Material
@@ -315,7 +391,11 @@ func (s *ProjectService) resolveMergeVideos(p *models.Project, mt *models.MergeT
 		if filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
 			return nil, fmt.Errorf("插入视频路径无效")
 		}
-		out = append(out, mergeResolvedVideo{Path: filepath.Join(s.upload.InputDir(), clean), Label: clip.Label})
+		materialPath := filepath.Join(s.upload.InputDir(), clean)
+		if s.remote != nil && s.remote.Enabled() {
+			materialPath = s.mediaPath("input", clean)
+		}
+		out = append(out, mergeResolvedVideo{Path: materialPath, Label: clip.Label, SourceStart: clip.SourceStart, SourceEnd: clip.SourceEnd})
 	}
 	return out, nil
 }
@@ -345,6 +425,7 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 	videoDurs := make([]sceneVideo, 0, len(videos))
 	timelineSceneIDs := make([]uint, 0, len(videos))
 	nativeCount, totalDuration := 0, 0.0
+	nativeAudio := make([]bool, 0, len(videos))
 	firstWidth, firstHeight := 0, 0
 	for index, video := range videos {
 		abs := video.Path
@@ -355,6 +436,7 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 			fail(probeErr)
 			return
 		}
+		nativeAudio = append(nativeAudio, hasAudio)
 		if hasAudio {
 			nativeCount++
 		}
@@ -378,15 +460,26 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 				return
 			}
 		}
-		videoDurs = append(videoDurs, sceneVideo{abs: abs, dur: info.Duration})
+		start, end, rangeErr := resolvedMergeClipRange(video, info.Duration)
+		if rangeErr != nil {
+			fail(fmt.Errorf("编排片段%d: %w", index+1, rangeErr))
+			return
+		}
+		videos[index].SourceDuration = info.Duration
+		videoDurs = append(videoDurs, sceneVideo{abs: abs, dur: end - start})
 		timelineSceneIDs = append(timelineSceneIDs, video.SceneID)
-		totalDuration += info.Duration
+		totalDuration += end - start
 	}
 
+	edited := strings.TrimSpace(mt.EditSequence) != ""
 	extras := make([]mergeAudioInput, 0)
 	var dialogueSegments []dubSegment
 	if mt.DialogueMix && mt.DialogueVolume > 0 {
 		segments, _, ready, err := s.buildDubTimeline(p, mt.EpisodeN, timelineSceneIDs, videoDurs)
+		if edited {
+			segments, err = s.buildEditedMergeDubTimeline(p, mt, videos, videoDurs)
+			ready = err == nil && len(segments) > 0
+		}
 		if err != nil {
 			fail(err)
 			return
@@ -403,6 +496,13 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 	if err := s.db.Where("project_id = ? AND episode_n = ?", p.ID, mt.EpisodeN).Order("start_time, id").Find(&layers).Error; err != nil {
 		fail(err)
 		return
+	}
+	if edited {
+		layers, err = s.mapMergeAudioLayers(p, mt, videos, layers)
+		if err != nil {
+			fail(err)
+			return
+		}
 	}
 	for _, decision := range resolveAudioLayerMix(layers) {
 		if decision.Status != audioLayerMixIncluded && decision.Status != audioLayerMixPartialOverlap {
@@ -437,10 +537,13 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 		idx := len(inputPaths)
 		inputPaths = append(inputPaths, segment.AudioAbs)
 		remoteInputs = append(remoteInputs, "-i", shellQuote(segment.AudioAbs))
-		extras = append(extras, mergeAudioInput{Index: idx, Start: segment.Start, Duration: segment.End - segment.Start, SourceDuration: segment.SourceDur, Volume: mt.DialogueVolume * segment.Volume, Speed: segment.Speed, Pitch: segment.Pitch, Kind: "dialogue"})
+		extras = append(extras, mergeAudioInput{Index: idx, Start: segment.Start, SourceStart: segment.AudioSourceStart, Duration: segment.End - segment.Start, SourceDuration: segment.SourceDur, Volume: mt.DialogueVolume * segment.Volume, Speed: segment.Speed, Pitch: segment.Pitch, Kind: "dialogue"})
 	}
 
 	filters := buildNormalizedVideoGraph(len(videos), firstWidth, firstHeight)
+	if edited {
+		filters = buildEditedVideoGraph(videos, firstWidth, firstHeight)
+	}
 	outName := fmt.Sprintf("merged/%s_merged_%d.mp4", projectFileTag(p), mt.ID)
 	outAbs := s.mediaPath("output_workers", "gpu0", filepath.FromSlash(outName))
 	textFilters := make([]string, 0, 2)
@@ -461,6 +564,13 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 		if err := s.db.Where("project_id = ? AND episode_n = ? AND enabled = ? AND review_status = ? AND (scene_id IS NULL OR scene_id IN ?)", p.ID, mt.EpisodeN, true, "approved", selectedIDs).Order("start_time, `order`, id").Find(&cues).Error; err != nil {
 			fail(err)
 			return
+		}
+		if edited {
+			cues, err = s.mapMergeScreenTextCues(p, mt, videos, cues)
+			if err != nil {
+				fail(err)
+				return
+			}
 		}
 		if len(cues) > 0 {
 			registry := NewFontRegistry(s.cfg.Storage.DataDir)
@@ -489,7 +599,12 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 				}
 				families[code] = selected.Family
 			}
-			assData, count := buildScreenTextASS(cues, scenes, videoDurs, firstWidth, firstHeight, font.Family, families)
+			assScenes, assDurs := scenes, videoDurs
+			if edited {
+				assScenes = []models.Scene{{Duration: totalDuration}}
+				assDurs = []sceneVideo{{dur: totalDuration}}
+			}
+			assData, count := buildScreenTextASS(cues, assScenes, assDurs, firstWidth, firstHeight, font.Family, families)
 			if count > 0 {
 				assAbs := s.mediaPath("output_workers", "gpu0", filepath.FromSlash(strings.TrimSuffix(outName, ".mp4")+".screen.ass"))
 				if err := s.remote.WriteFile(assAbs, assData, 0o644); err != nil {
@@ -503,7 +618,26 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 	}
 	filters = applyMergeTextFilters(filters, textFilters)
 	audioGraph := buildMergeAudioGraph(len(videos), dub && nativeCount == len(videos), totalDuration, mt.NativeVolume, extras)
-	if audioGraph.Filters != "" {
+	if edited {
+		nativeGraph := mergeAudioGraph{}
+		if dub {
+			nativeGraph = buildEditedNativeAudioGraph(videos, nativeAudio, totalDuration, mt.NativeVolume)
+		}
+		extraGraph := buildMergeAudioGraph(0, false, totalDuration, 0, extras)
+		switch {
+		case nativeGraph.Label != "" && extraGraph.Label != "":
+			filters = append(filters, nativeGraph.Filters, extraGraph.Filters, nativeGraph.Label+extraGraph.Label+fmt.Sprintf("amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,atrim=duration=%s,alimiter=limit=0.95[amix_edited]", ffnum(totalDuration)))
+			audioGraph = mergeAudioGraph{Label: "[amix_edited]"}
+		case nativeGraph.Label != "":
+			filters = append(filters, nativeGraph.Filters)
+			audioGraph = nativeGraph
+		case extraGraph.Label != "":
+			filters = append(filters, extraGraph.Filters)
+			audioGraph = extraGraph
+		default:
+			audioGraph = mergeAudioGraph{}
+		}
+	} else if audioGraph.Filters != "" {
 		filters = append(filters, audioGraph.Filters)
 	}
 	filterComplex := strings.Join(filters, ";")

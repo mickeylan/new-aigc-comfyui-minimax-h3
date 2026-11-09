@@ -9101,6 +9101,7 @@ type mergeDialogueFingerprint struct {
 	Emotion, Delivery, AudioFile       string
 	AudioHash, Status                  string
 	AudioStale                         bool
+	TimeSegment                        string `json:"time_segment,omitempty"`
 }
 
 type mergeAudioLayerFingerprint struct {
@@ -9111,6 +9112,8 @@ type mergeAudioLayerFingerprint struct {
 	StartTime, EndTime, Volume float64
 	FadeIn, FadeOut            float64
 	Loop, Muted, Stale         bool
+	SourceStart                float64 `json:"source_start,omitempty"`
+	Ducking                    bool    `json:"ducking,omitempty"`
 	Status                     string
 }
 
@@ -9139,21 +9142,29 @@ type mergeMaterialFingerprint struct {
 	Size      int64  `json:"size"`
 }
 
+type mergeEpisodeTimelineFingerprint struct {
+	ID       uint    `json:"id"`
+	Order    int     `json:"order"`
+	Duration float64 `json:"duration"`
+}
+
 type mergeInputSnapshot struct {
-	Version           int                             `json:"version"`
-	EpisodeGeneration uint                            `json:"episode_generation"`
-	Videos            []sceneVideoFingerprint         `json:"videos"`
-	Materials         []mergeMaterialFingerprint      `json:"materials"`
-	Dialogues         []mergeDialogueFingerprint      `json:"dialogues"`
-	AudioLayers       []mergeAudioLayerFingerprint    `json:"audio_layers"`
-	ScreenTextCues    []mergeScreenTextCueFingerprint `json:"screen_text_cues"`
-	Dub               bool                            `json:"dub"`
-	Subtitles         bool                            `json:"subtitles"`
-	NativeVolume      float64                         `json:"native_volume"`
-	DialogueVolume    float64                         `json:"dialogue_volume"`
-	BGMVolume         float64                         `json:"bgm_volume"`
-	DialogueMix       bool                            `json:"dialogue_mix"`
-	ScreenText        bool                            `json:"screen_text"`
+	Version           int                               `json:"version"`
+	EpisodeGeneration uint                              `json:"episode_generation"`
+	Videos            []sceneVideoFingerprint           `json:"videos"`
+	Materials         []mergeMaterialFingerprint        `json:"materials"`
+	Dialogues         []mergeDialogueFingerprint        `json:"dialogues"`
+	AudioLayers       []mergeAudioLayerFingerprint      `json:"audio_layers"`
+	ScreenTextCues    []mergeScreenTextCueFingerprint   `json:"screen_text_cues"`
+	Dub               bool                              `json:"dub"`
+	Subtitles         bool                              `json:"subtitles"`
+	NativeVolume      float64                           `json:"native_volume"`
+	DialogueVolume    float64                           `json:"dialogue_volume"`
+	BGMVolume         float64                           `json:"bgm_volume"`
+	DialogueMix       bool                              `json:"dialogue_mix"`
+	ScreenText        bool                              `json:"screen_text"`
+	EditSequence      []mergeEditClip                   `json:"edit_sequence,omitempty"`
+	EpisodeTimeline   []mergeEpisodeTimelineFingerprint `json:"episode_timeline,omitempty"`
 }
 
 func fingerprintSceneVideo(scene models.Scene) (sceneVideoFingerprint, error) {
@@ -9254,7 +9265,11 @@ func (s *ProjectService) createMergeTaskRecord(p *models.Project, sceneIDs []uin
 		if active > 0 {
 			return fmt.Errorf("第%d集已有进行中的合并任务，请等待完成", episodeN)
 		}
-		snapshot, err := s.captureMergeInputSnapshot(tx, current.ID, episodeN, episodeGeneration, fingerprints, materials, sceneIDs, dub, subtitles, audio)
+		snapshotVersion := 6
+		if len(sequence.Clips) > 0 {
+			snapshotVersion = 7
+		}
+		snapshot, err := s.captureMergeInputSnapshot(tx, current.ID, episodeN, episodeGeneration, fingerprints, materials, sceneIDs, dub, subtitles, audio, mergeSnapshotOptions{Version: snapshotVersion, Clips: sequence.Clips})
 		if err != nil {
 			return err
 		}
@@ -9319,6 +9334,13 @@ func (s *ProjectService) validateMergeInputs(tx *gorm.DB, mt *models.MergeTask) 
 		}
 		scenes = append(scenes, scene)
 	}
+	var expectedSnapshot mergeInputSnapshot
+	if err := json.Unmarshal([]byte(mt.InputSnapshot), &expectedSnapshot); err != nil {
+		return nil, fmt.Errorf("合并任务的输入快照损坏")
+	}
+	if expectedSnapshot.Version != 6 && expectedSnapshot.Version != 7 {
+		return nil, fmt.Errorf("合并任务的输入快照版本不受支持: %d", expectedSnapshot.Version)
+	}
 	var clips []mergeEditClip
 	if mt.EditSequence != "" && json.Unmarshal([]byte(mt.EditSequence), &clips) != nil {
 		return nil, fmt.Errorf("合并任务的成片编排快照损坏")
@@ -9334,7 +9356,7 @@ func (s *ProjectService) validateMergeInputs(tx *gorm.DB, mt *models.MergeTask) 
 		}
 		materials = append(materials, mergeMaterialFingerprint{ID: material.ID, ProjectID: mt.ProjectID, Type: material.Type, Path: material.Path, Size: material.Size})
 	}
-	actualSnapshot, err := s.captureMergeInputSnapshot(tx, mt.ProjectID, mt.EpisodeN, mt.Generation, fingerprints, materials, orderedIDs, mt.RequestedDub, mt.RequestedSubtitles, MergeAudioOptions{NativeVolume: mt.NativeVolume, DialogueVolume: mt.DialogueVolume, BGMVolume: mt.BGMVolume, DialogueMix: mt.DialogueMix, ScreenText: mt.RequestedScreenText})
+	actualSnapshot, err := s.captureMergeInputSnapshot(tx, mt.ProjectID, mt.EpisodeN, mt.Generation, fingerprints, materials, orderedIDs, mt.RequestedDub, mt.RequestedSubtitles, MergeAudioOptions{NativeVolume: mt.NativeVolume, DialogueVolume: mt.DialogueVolume, BGMVolume: mt.BGMVolume, DialogueMix: mt.DialogueMix, ScreenText: mt.RequestedScreenText}, mergeSnapshotOptions{Version: expectedSnapshot.Version, Clips: clips})
 	if err != nil {
 		return nil, err
 	}
@@ -9667,22 +9689,46 @@ func (s *ProjectService) buildMergeTimelineSRT(videos []mergeResolvedVideo, vide
 		}
 		valid := dubs[:0]
 		for _, d := range dubs {
-			if strings.TrimSpace(d.Text) != "" {
+			if strings.TrimSpace(d.Text) != "" && d.Source != "user_excluded" {
 				valid = append(valid, d)
 			}
 		}
-		if len(valid) > 0 {
-			seg := dur / float64(len(valid))
-			for lineIndex, d := range valid {
-				idx++
-				start := global + float64(lineIndex)*seg
-				sb.WriteString(fmt.Sprintf("%d\n%s --> %s\n", idx, formatSRTTime(start), formatSRTTime(start+seg)))
-				line := strings.TrimSpace(d.Text)
-				if strings.TrimSpace(d.Character) != "" {
-					line = d.Character + "：" + line
-				}
-				sb.WriteString(line + "\n\n")
+		sourceDur := video.SourceDuration
+		if sourceDur <= 0 {
+			sourceDur = dur
+		}
+		clipStart, clipEnd := 0.0, sourceDur
+		if video.SourceDuration > 0 {
+			var err error
+			clipStart, clipEnd, err = resolvedMergeClipRange(video, sourceDur)
+			if err != nil {
+				return "", 0, err
 			}
+		}
+		fallback := sourceDur
+		if len(valid) > 0 {
+			fallback = sourceDur / float64(len(valid))
+		}
+		for lineIndex, d := range valid {
+			start, end := float64(lineIndex)*fallback, float64(lineIndex+1)*fallback
+			if a, b, ok := parseDialogueTimeSegment(d.TimeSegment); ok {
+				start, end = a, b
+			} else if d.Position > 0 {
+				start = d.Position + d.Offset
+				end = start + fallback
+			}
+			a, b := math.Max(start, clipStart), math.Min(end, clipEnd)
+			if b <= a {
+				continue
+			}
+			idx++
+			a, b = global+a-clipStart, global+b-clipStart
+			sb.WriteString(fmt.Sprintf("%d\n%s --> %s\n", idx, formatSRTTime(a), formatSRTTime(b)))
+			line := strings.TrimSpace(d.Text)
+			if strings.TrimSpace(d.Character) != "" {
+				line = d.Character + "：" + line
+			}
+			sb.WriteString(line + "\n\n")
 		}
 		global += dur
 	}
@@ -9757,17 +9803,18 @@ type sceneVideo struct {
 
 // dubSegment 单句对白在成片全局时间轴上的位置
 type dubSegment struct {
-	DialogueID uint
-	SceneID    uint
-	Start      float64 // 全局秒
-	End        float64
-	Character  string
-	Text       string
-	AudioAbs   string // TTS 音频绝对路径（空表示无音频）
-	SourceDur  float64
-	Speed      float64
-	Pitch      float64
-	Volume     float64
+	DialogueID       uint
+	SceneID          uint
+	Start            float64 // 全局秒
+	End              float64
+	Character        string
+	Text             string
+	AudioAbs         string // TTS 音频绝对路径（空表示无音频）
+	SourceDur        float64
+	AudioSourceStart float64
+	Speed            float64
+	Pitch            float64
+	Volume           float64
 }
 
 type skippedDialogue struct {
@@ -9871,6 +9918,9 @@ func (s *ProjectService) buildDubTimeline(p *models.Project, episodeN int, scene
 			sourceDur := 2.0 // 无音频时的兜底时长
 			if d.AudioFile != "" {
 				audioAbs = s.mediaPath("input", fmt.Sprintf("%d", p.ID), filepath.FromSlash(d.AudioFile))
+				if s.upload != nil && (s.remote == nil || !s.remote.Enabled()) {
+					audioAbs = filepath.Join(s.upload.InputDir(), fmt.Sprint(p.ID), filepath.FromSlash(d.AudioFile))
+				}
 				if s.remote != nil {
 					if info, err := s.remote.ProbeMedia(audioAbs); err == nil && info.Duration > 0 {
 						sourceDur = info.Duration
