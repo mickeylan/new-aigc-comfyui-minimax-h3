@@ -12,6 +12,7 @@ import (
 // Tracks are ordered bottom-to-top and use output-local seconds after trim/speed.
 // Overlay audio is intentionally excluded; dialogue/BGM/SFX use AudioLayer.
 type clipVisualTrack struct {
+	Mask        string  `json:"mask,omitempty"`
 	MaterialID  uint    `json:"material_id"`
 	Start       float64 `json:"start"`
 	End         float64 `json:"end"`
@@ -35,6 +36,9 @@ func validateClipTracks(v mergeResolvedVideo, duration float64) error {
 		return fmt.Errorf("每段最多8条叠加轨、64个音量点、100个标记")
 	}
 	for _, tr := range v.VisualTracks {
+		if err := validateOverlayMask(tr.Mask); err != nil {
+			return err
+		}
 		if tr.MaterialID == 0 || !finite(tr.Start) || !finite(tr.End) || tr.Start < 0 || tr.End <= tr.Start || tr.End > duration || !finite(tr.SourceStart) || tr.SourceStart < 0 || !finite(tr.X) || tr.X < 0 || tr.X > 1 || !finite(tr.Y) || tr.Y < 0 || tr.Y > 1 || !finite(tr.Width) || tr.Width < .05 || tr.Width > 1 || !finite(tr.Opacity) || tr.Opacity < 0 || tr.Opacity > 1 {
 			return fmt.Errorf("叠加轨时间、位置、宽度或透明度无效")
 		}
@@ -127,7 +131,7 @@ func appendClipVisualTracks(filters []string, base string, video mergeResolvedVi
 		if scale < 2 {
 			scale = 2
 		}
-		filters = append(filters, fmt.Sprintf("[%d:v]trim=start=%s:duration=%s,setpts=PTS-STARTPTS+%s/TB,fps=24,scale=%d:-2,format=rgba,colorchannelmixer=aa=%s[%s]", tr.InputIndex, ffnum(tr.SourceStart), ffnum(tr.End-tr.Start), ffnum(tr.Start), scale, ffnum(tr.Opacity), label))
+		filters = append(filters, fmt.Sprintf("[%d:v]trim=start=%s:duration=%s,setpts=PTS-STARTPTS+%s/TB,fps=24,scale=%d:-2,format=rgba%s,colorchannelmixer=aa=%s[%s]", tr.InputIndex, ffnum(tr.SourceStart), ffnum(tr.End-tr.Start), ffnum(tr.Start), scale, overlayMaskFilter(tr.Mask), ffnum(tr.Opacity), label))
 		filters = append(filters, fmt.Sprintf("[%s][%s]overlay=x=(W-w)*%s:y=(H-h)*%s:eof_action=pass:repeatlast=0:enable='gte(t,%s)*lt(t,%s)'[%s]", current, label, ffnum(tr.X), ffnum(tr.Y), ffnum(tr.Start), ffnum(tr.End), out))
 		current = out
 	}

@@ -15,7 +15,7 @@
    <h4>图片/视频叠加轨（最多8条）</h4>
    <div class="row"><select v-model.number="newMaterial"><option :value="0">选择项目图片或视频</option><option v-for="m in visualMaterials" :key="m.id" :value="m.id">{{m.name||m.path}}</option></select><button type="button" @click="addTrack">新增叠加轨</button></div>
    <div v-for="(track,i) in tracks" :key="i" class="track-card">
-    <strong>轨{{i+1}} · {{materialName(track.material_id)}}</strong>
+    <strong>轨{{i+1}} · {{materialName(track.material_id)}}</strong><label>蒙版<select :value="track.mask||'none'" @change="editTrack(i,'mask',$event.target.value)"><option v-for="[code,label] in maskOptions" :key="code" :value="code">{{label}}</option></select></label>
     <div class="row"><label v-for="f in trackFields" :key="f.key">{{f.label}}<input type="number" :value="track[f.key]" :step="f.step" :min="f.min" :max="f.max??duration" @change="editTrack(i,f.key,Number($event.target.value))"></label></div>
     <div class="row"><label><input type="checkbox" :checked="track.muted" @change="editTrack(i,'muted',$event.target.checked)">隐藏该轨</label><button type="button" :disabled="i===0" @click="moveTrack(i,-1)">下移一层</button><button type="button" :disabled="i===tracks.length-1" @click="moveTrack(i,1)">上移一层</button><button type="button" @click="removeTrack(i)">删除轨</button></div>
    </div>
@@ -35,6 +35,7 @@
 <script setup>
 import {ref,computed,onBeforeUnmount} from 'vue'
 import AudioWaveform from './AudioWaveform.vue'
+import {maskOptions} from '../utils/visualPackaging.js'
 import {normalizeClipTracks,envelopeAt} from '../utils/clipTracks.js'
 const props=defineProps({clip:{type:Object,required:true},materials:{type:Array,default:()=>[]}}),emit=defineEmits(['change'])
 const open=ref(false),player=ref(null),time=ref(0),error=ref(''),newMaterial=ref(0),newGain=ref(1),markerLabel=ref('')

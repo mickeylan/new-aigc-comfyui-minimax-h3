@@ -75,6 +75,16 @@ func buildMergeTitleCues(videos []mergeResolvedVideo) []models.ScreenTextCue {
 		if strings.TrimSpace(video.Title) == "" {
 			continue
 		}
+		style, animation := "modern-horizontal-caption", ""
+		if video.Packaging != nil {
+			animation = video.Packaging.TitleAnimation
+			switch video.Packaging.TitleStyle {
+			case "chapter":
+				style = "xianxia-gold-title"
+			case "nameplate":
+				style = "cold-silver-runes"
+			}
+		}
 		anchor := "bottom_center"
 		if video.TitlePosition == "top" {
 			anchor = "top_center"
@@ -84,7 +94,7 @@ func buildMergeTitleCues(videos []mergeResolvedVideo) []models.ScreenTextCue {
 			size = 48
 		}
 		duration := (clips[i].sourceEnd - clips[i].sourceStart) / mergeClipSpeed(video)
-		cues = append(cues, models.ScreenTextCue{Text: video.Title, StartTime: clips[i].outStart, EndTime: clips[i].outStart + duration, WritingMode: "horizontal-ltr", Anchor: anchor, StyleCode: "modern-horizontal-caption", FontCode: "noto-sans-sc", FontSize: size, Enabled: true, ReviewStatus: "approved", Order: i})
+		cues = append(cues, models.ScreenTextCue{Text: video.Title, StartTime: clips[i].outStart, EndTime: clips[i].outStart + duration, WritingMode: "horizontal-ltr", Anchor: anchor, StyleCode: style, Animation: animation, FontCode: "noto-sans-sc", FontSize: size, Enabled: true, ReviewStatus: "approved", Order: i})
 	}
 	return cues
 }

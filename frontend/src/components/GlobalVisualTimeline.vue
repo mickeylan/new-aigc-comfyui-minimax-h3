@@ -12,7 +12,7 @@
    </div><div class="cursor" :style="{left:currentTime*scale+'px'}"></div>
   </div></div>
   <div v-for="(tr,i) in modelValue" :key="i" class="track-fields">
-   <strong>{{i+1}} · {{name(tr.material_id)}}</strong>
+   <strong>{{i+1}} · {{name(tr.material_id)}}</strong><label>蒙版<select :value="tr.mask||'none'" @change="edit(i,'mask',$event.target.value)"><option v-for="[code,label] in maskOptions" :key="code" :value="code">{{label}}</option></select></label>
    <label v-for="f in fields" :key="f.key">{{f.label}}<input type="number" :value="tr[f.key]" :min="f.min" :max="f.max??duration" :step="f.step" @change="edit(i,f.key,Number($event.target.value))"></label>
    <label><input type="checkbox" :checked="tr.muted" @change="edit(i,'muted',$event.target.checked)">隐藏</label>
    <button type="button" :disabled="i===0" @click="move(i,-1)">下一层</button><button type="button" :disabled="i===modelValue.length-1" @click="move(i,1)">上一层</button><button type="button" @click="emit('update:modelValue',modelValue.filter((_,n)=>n!==i))">删除</button>
@@ -24,6 +24,7 @@
 import {ref,computed,onBeforeUnmount} from 'vue'
 import {normalizeGlobalTracks,dragGlobalTrack} from '../utils/globalTracks.js'
 import {layoutClips} from '../utils/editingTimeline.js'
+import {maskOptions} from '../utils/visualPackaging.js'
 const props=defineProps({modelValue:{type:Array,default:()=>[]},clips:{type:Array,required:true},materials:{type:Array,default:()=>[]},duration:{type:Number,required:true},currentTime:{type:Number,default:0}})
 const emit=defineEmits(['update:modelValue','seek'])
 const material=ref(0),scale=ref(35),error=ref(''),preview=ref(null)

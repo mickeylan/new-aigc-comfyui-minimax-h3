@@ -1,7 +1,8 @@
 import { normalizeTransform, splitTransform } from './clipTransform.js'
 import { normalizeClipTracks, splitClipTracks } from './clipTracks.js'
 const MIN_TRIM = 0.05
-const TRANSITIONS = new Set(['cut', 'fade', 'wipeleft', 'slideright'])
+import {transitionOptions,normalizePackaging} from './visualPackaging.js'
+const TRANSITIONS = new Set(transitionOptions.map(([key])=>key))
 let nextOccurrence = 0
 
 function finiteNumber(value, name) {
@@ -51,7 +52,7 @@ export function normalizeClip(clip, physicalDuration = clip.duration) {
   const overlay_width = ranged(clip.overlay_width, .25, .05, 1, 'overlay_width')
   const overlay_opacity = ranged(clip.overlay_opacity, 1, .05, 1, 'overlay_opacity')
   const transform=normalizeTransform(clip.transform,outputDuration)
-  return { ...clip, ...normalizeClipTracks(clip,outputDuration), transform, id: clip.id || uniqueClipId(clip.scene_id ? 'scene' : 'material'), duration, source_start: start, source_end: end, speed, volume, fade_in, fade_out, transition, transition_duration, brightness, contrast, saturation, title, title_position, title_size, overlay_material_id, overlay_x, overlay_y, overlay_width, overlay_opacity }
+  return { ...clip, packaging:normalizePackaging(clip.packaging), ...normalizeClipTracks(clip,outputDuration), transform, id: clip.id || uniqueClipId(clip.scene_id ? 'scene' : 'material'), duration, source_start: start, source_end: end, speed, volume, fade_in, fade_out, transition, transition_duration, brightness, contrast, saturation, title, title_position, title_size, overlay_material_id, overlay_x, overlay_y, overlay_width, overlay_opacity }
 }
 
 export function clipOutputDuration(clip) {
@@ -93,6 +94,7 @@ export function buildEditSequence(clips) {
   })
   return normalized.map(clip => {
     const item = { id: clip.id, label: String(clip.label || ''), source_start: clip.source_start, source_end: clip.source_end >= clip.duration ? null : clip.source_end }
+    if(clip.packaging)item.packaging=clip.packaging
     if(clip.transform) item.transform=clip.transform
     for(const key of ['visual_tracks','volume_envelope','markers'])if(clip[key]?.length)item[key]=clip[key]
     if (clip.scene_id != null) item.scene_id = clip.scene_id

@@ -37,6 +37,9 @@ func validateMergeClipEffects(v mergeResolvedVideo) error {
 	if err != nil {
 		return err
 	}
+	if err := validateVisualPackaging(v.Packaging); err != nil {
+		return err
+	}
 	if err := validateClipTracks(v, d); err != nil {
 		return err
 	}
@@ -61,7 +64,7 @@ func validateMergeClipEffects(v mergeResolvedVideo) error {
 	if tr == "" {
 		tr = "cut"
 	}
-	if tr != "cut" && tr != "fade" && tr != "wipeleft" && tr != "slideright" {
+	if !validMergeTransition(tr) {
 		return fmt.Errorf("片段转场类型无效")
 	}
 	if tr == "cut" {
@@ -137,6 +140,7 @@ func resolvedVideoFromClip(c mergeEditClip, v mergeResolvedVideo) mergeResolvedV
 	v.VisualTracks = append([]clipVisualTrack(nil), c.VisualTracks...)
 	v.VolumeEnvelope = c.VolumeEnvelope
 	v.Markers = c.Markers
+	v.Packaging = c.Packaging
 	v.Transform = c.Transform
 	v.Speed = c.Speed
 	v.Volume = c.Volume

@@ -1,10 +1,11 @@
+import {normalizeMask} from './visualPackaging.js'
 function num(v,min,max){if(v==null||v===''||typeof v==='boolean'||!Number.isFinite(Number(v))||Number(v)<min||Number(v)>max)throw new RangeError('轨道参数或时间无效');return Number(v)}
 export function normalizeClipTracks(clip,duration){
  const tracks=clip.visual_tracks??[],points=clip.volume_envelope??[],markers=clip.markers??[]
  if(!Array.isArray(tracks)||!Array.isArray(points)||!Array.isArray(markers)||tracks.length>8||points.length>64||markers.length>100)throw new RangeError('轨道/包络/标记超过上限')
  let last=-1
  return {
-  visual_tracks:tracks.map(t=>{const material_id=num(t.material_id,1,Number.MAX_SAFE_INTEGER),start=num(t.start,0,duration),end=num(t.end,0,duration);if(!Number.isInteger(material_id)||end<=start)throw new RangeError('叠加轨范围无效');return {material_id,start,end,source_start:num(t.source_start??0,0,1e8),x:num(t.x??0,0,1),y:num(t.y??0,0,1),width:num(t.width??.25,.05,1),opacity:num(t.opacity??1,0,1),muted:Boolean(t.muted)}}),
+  visual_tracks:tracks.map(t=>{const material_id=num(t.material_id,1,Number.MAX_SAFE_INTEGER),start=num(t.start,0,duration),end=num(t.end,0,duration);if(!Number.isInteger(material_id)||end<=start)throw new RangeError('叠加轨范围无效');const mask=normalizeMask(t.mask);return {...(mask?{mask}:{}),material_id,start,end,source_start:num(t.source_start??0,0,1e8),x:num(t.x??0,0,1),y:num(t.y??0,0,1),width:num(t.width??.25,.05,1),opacity:num(t.opacity??1,0,1),muted:Boolean(t.muted)}}),
   volume_envelope:points.map(p=>{const time=num(p.time,0,duration),gain=num(p.gain,0,4);if(time<=last||(last>=0&&time-last<.001-1e-9))throw new RangeError('音量点须递增且间隔至少1毫秒');last=time;return {time,gain}}),
   markers:markers.map(m=>{if(String(m.label||'').length>100)throw new RangeError('标记文字过长');return {time:num(m.time,0,duration),label:String(m.label||'')}}),
  }
