@@ -598,6 +598,7 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 		fullPrompt = strings.Replace(fullPrompt, detail, composed, 1)
 		actionPrompt = composed
 	}
+	fullPrompt = bindH3ReferencePreview(fullPrompt, lines)
 	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "reference_bindings": sceneVideoReferenceBindings(refs, lines, fullPrompt), "template": template, "dialogue_count": len(validSceneDialogues(dubs)), "prompt_dialogue_count": len(h3SpokenTextPattern.FindAllStringSubmatch(fullPrompt, -1)), "dialogue_placement": DiagnoseH3DialoguePlacement(fullPrompt, dubs, lines)}
 	if continuity != nil && continuity.SelectedFrame != nil {
 		response["continuity_mode"] = continuity.Mode

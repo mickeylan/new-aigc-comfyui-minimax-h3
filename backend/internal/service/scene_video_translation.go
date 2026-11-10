@@ -336,6 +336,7 @@ func (s *Service) HandleTranslateSceneVideoPrompt(c *gin.Context) {
 	// The protocol structure is masked out before the call, so the translator can never
 	// rewrite <Picture N>, <Subject N>, timestamps or dialogue blocks. The server restores
 	// the exact original bytes afterwards.
+	_, _, referenceLines := s.sceneVideoPromptContinuity(&previewScene)
 	masked, tokens := maskH3Structure(source)
 	system := "Translate only the natural-language prose in this complete MiniMax H3 protocol prompt into " + target + ". The tokens [[[Tn]]] and [[[Dn]]] are opaque protocol placeholders: copy every one of them exactly once, in the same order, and never translate, renumber, merge or delete them. Keep all other content byte-identical unless it is natural-language prose. Translate faithfully without redesigning, summarizing, correcting or adding events. Preserve the scope of negation: a visible action/effect and a property that was not detected are separate statements; never turn the negative observation into absence of the visible action/effect. Preserve the subject and reference object of left/right relations and camera-relative facing exactly. Translate internal monologue as audible inner voice, not words spoken aloud; closed lips apply only during that inner-voice interval, not later ordinary dialogue. Return only the translated prompt."
 	translated, err := s.TextProviderFact.Chat(system, masked)
@@ -345,6 +346,9 @@ func (s *Service) HandleTranslateSceneVideoPrompt(c *gin.Context) {
 	}
 	translated = stripH3CodeFence(translated)
 	translated, markerWarnings := restoreH3StructureLenient(translated, tokens)
+	if len(referenceLines) > 0 {
+		translated = bindH3ReferencePreview(translated, referenceLines)
+	}
 	response := gin.H{"preview": translated, "prompt": translated, "language": language, "source_hash": h, "token": hashString(h + "\x00" + translated)}
 	if len(markerWarnings) > 0 {
 		response["warnings"] = markerWarnings

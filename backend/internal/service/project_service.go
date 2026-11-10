@@ -3692,17 +3692,25 @@ func explicitSceneSpeech(sc *models.Scene) []models.Dialogue {
 
 func mergeExplicitSceneSpeech(sc *models.Scene, dubs []models.Dialogue) []models.Dialogue {
 	out := append([]models.Dialogue(nil), dubs...)
+	consumed := map[int]bool{}
 	for _, extracted := range explicitSceneSpeech(sc) {
 		matched := false
 		for i := range out {
+			if consumed[i] {
+				continue
+			}
 			existingType, existingCharacter := normalizeScriptSpeech(out[i].SpeechType, out[i].Character)
 			if strings.TrimSpace(out[i].Text) != strings.TrimSpace(extracted.Text) {
 				continue
 			}
 			if existingType == "narration" || existingType == "monologue" {
+				if existingType == extracted.SpeechType && existingCharacter == extracted.Character {
+					consumed[i], matched = true, true
+					break
+				}
 				continue
 			}
-			matched = true
+			consumed[i], matched = true, true
 			// Explicitly reviewed attribution is authoritative. Legacy rows retain the
 			// historical behavior: source extraction may repair speaker/type mistakes.
 			if out[i].Source != "ai_reviewed" && out[i].Source != "user_excluded" {
@@ -3719,6 +3727,7 @@ func mergeExplicitSceneSpeech(sc *models.Scene, dubs []models.Dialogue) []models
 		}
 		if !matched {
 			extracted.Order = len(out) + 1
+			consumed[len(out)] = true
 			out = append(out, extracted)
 		}
 	}
