@@ -131,6 +131,9 @@ func TestPreflightMergeUsesExportValidationWithoutPersistingTask(t *testing.T) {
 	if result.Clips != 2 || math.Abs(result.Duration-7.5) > .01 {
 		t.Fatalf("preflight summary=%+v", result)
 	}
+	if len(result.Warnings) != 0 {
+		t.Fatalf("empty preflight warnings leaked placeholder values: %#v", result.Warnings)
+	}
 	var count int64
 	svc.DB.Model(&models.MergeTask{}).Count(&count)
 	if count != 0 {

@@ -3,6 +3,7 @@ package service
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -287,9 +288,18 @@ func (s *Service) HandlePreflightAudioMerge(c *gin.Context) {
 		}
 		result.Duration = total
 		result.Clips = len(resolved)
-		result.Warnings = strings.Split(strings.TrimSpace(mt.PreflightWarnings), "\n")
-		if len(result.Warnings) == 1 && result.Warnings[0] == "" {
-			result.Warnings = nil
+		result.Warnings = []string{}
+		if raw := strings.TrimSpace(mt.PreflightWarnings); raw != "" {
+			// PreflightWarnings is normally a JSON array; older tasks stored one
+			// message per line.
+			if json.Unmarshal([]byte(raw), &result.Warnings) != nil {
+				result.Warnings = []string{}
+				for _, line := range strings.Split(raw, "\n") {
+					if strings.TrimSpace(line) != "" {
+						result.Warnings = append(result.Warnings, line)
+					}
+				}
+			}
 		}
 		return errPreflightRollback
 	})
