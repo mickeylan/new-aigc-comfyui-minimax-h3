@@ -179,6 +179,12 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/scenes/:sid/video/prompt/confirm", svc.HandleConfirmSceneVideoPrompt)
 	r.PUT("/api/projects/:id/scenes/:sid/video/prompt", svc.HandleUpdateSceneVideoPrompt)
 	r.POST("/api/projects/:id/scenes/:sid/video/frame-upload", svc.HandleUploadSceneVideoFrame)
+	// 预览代理与帧精确定位元数据（只读源视频，不改 Scene）
+	r.GET("/api/projects/:id/scenes/:sid/media-info", svc.HandleSceneMediaInfo)
+	r.GET("/api/projects/:id/scenes/:sid/proxy", svc.HandleGetSceneProxy)
+	r.POST("/api/projects/:id/scenes/:sid/proxy", svc.HandleCreateSceneProxy)
+	// 导出前一致性检查：走与正式导出相同的校验，但不创建任务
+	r.POST("/api/projects/:id/audio-merge/preflight", svc.HandlePreflightAudioMerge)
 	r.POST("/api/projects/:id/scenes/:sid/video/cancel", svc.HandleCancelSceneVideo)
 	r.POST("/api/projects/:id/merge", svc.HandleCreateMerge)
 	r.POST("/api/projects/:id/audio-merge", svc.HandleCreateAudioMerge)

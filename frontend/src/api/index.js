@@ -19,6 +19,9 @@ async function mutateScreenText(id, request) {
 export const api = {
   editingDraft: (id, episode) => http.get(`/projects/${id}/episodes/${episode}/editing-draft`),
   saveEditingDraft: (id, episode, revision, edit_sequence, visual_tracks = []) => http.put(`/projects/${id}/episodes/${episode}/editing-draft`, {revision, edit_sequence, visual_tracks}),
+  sceneMediaInfo: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/media-info`),
+  createSceneProxy: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/proxy`, null, { timeout: 1800000 }),
+  preflightAudioMerge: (id, data) => http.post(`/projects/${id}/audio-merge/preflight`, data, { timeout: 300000 }),
   instances: () => http.get('/instances'),
   startInstance: (id) => http.post(`/instances/${id}/start`),
   stopInstance: (id) => http.post(`/instances/${id}/stop`),

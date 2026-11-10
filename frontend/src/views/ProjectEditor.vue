@@ -38,7 +38,9 @@
       <div class="section-head"><div><span class="overline">FINAL CUT ASSEMBLY</span><h2>最终成片编排</h2><p class="sub">直接观看每个片段后决定保留、排除、排序或插入；只影响本次合并，不修改Scene、候选或原视频。</p></div><div class="section-actions"><input ref="mergeVideoUploadInput" type="file" accept="video/mp4,video/webm,video/quicktime,video/x-matroska" hidden @change="uploadMergeVideo"><button class="btn btn-sm btn-secondary" :disabled="mergeVideoUploading" @click="requestMergeVideoUpload(mergeSequence.length,0)">{{mergeVideoUploading?'上传中…':'上传视频并添加到末尾'}}</button><button class="btn btn-sm btn-ghost" @click="resetMergeSequence">按Scene重置</button></div></div>
       <div class="card final-cut-assembled">
         <video ref="assembledPreview" controls preload="metadata" @loadedmetadata="onAssembledMetadata" @timeupdate="onAssembledTime" @ended="advanceAssembledPreview"></video>
-        <div class="section-actions"><button class="btn btn-sm" :disabled="!mergeSequence.length" @click="playAssembledPreview">播放所选区间</button><button class="btn btn-sm btn-ghost" @click="stepPreview(-1)">后退约1帧</button><button class="btn btn-sm btn-ghost" @click="stepPreview(1)">前进约1帧</button><button class="btn btn-sm btn-ghost" @click="stopAssembledPreview">停止</button><button class="btn btn-sm btn-secondary" @click="saveFinalCutDraft">保存剪辑草稿</button><button class="btn btn-sm btn-secondary" @click="restoreFinalCutDraft">恢复剪辑草稿</button><button class="btn btn-sm btn-secondary" :disabled="serverDraftBusy" @click="saveServerEditingDraft">保存到服务端</button><button class="btn btn-sm btn-secondary" :disabled="serverDraftBusy" @click="restoreServerEditingDraft">读取服务端草稿</button><button class="btn btn-sm" :disabled="busy||curMerging||mergeSequence.length<2" @click="mergeEpisode">渲染完整预览</button><strong>实际输出时长 {{totalTrimDuration.toFixed(2)}} 秒</strong></div>
+        <div class="section-actions"><button class="btn btn-sm" :disabled="!mergeSequence.length" @click="playAssembledPreview">播放所选区间</button><button class="btn btn-sm btn-ghost" @click="stepPreview(-1)">上一帧</button><button class="btn btn-sm btn-ghost" @click="stepPreview(1)">下一帧</button><button class="btn btn-sm btn-ghost" @click="stopAssembledPreview">停止</button><button class="btn btn-sm btn-secondary" @click="saveFinalCutDraft">保存剪辑草稿</button><button class="btn btn-sm btn-secondary" @click="restoreFinalCutDraft">恢复剪辑草稿</button><button class="btn btn-sm btn-secondary" :disabled="serverDraftBusy" @click="saveServerEditingDraft">保存到服务端</button><button class="btn btn-sm btn-secondary" :disabled="serverDraftBusy" @click="restoreServerEditingDraft">读取服务端草稿</button><button class="btn btn-sm btn-ghost" :disabled="preflightBusy" @click="preflightExport">{{preflightBusy?'检查中…':'导出前一致性检查'}}</button><button class="btn btn-sm" :disabled="busy||curMerging||mergeSequence.length<2" @click="mergeEpisode">渲染完整预览</button><strong>实际输出时长 {{totalTrimDuration.toFixed(2)}} 秒 · 时间码 {{previewTimecode}} · {{previewFrameRate}}fps</strong></div>
+        <div class="section-actions"><label class="merge-opt"><input type="checkbox" v-model="useProxyPreview">使用代理媒体预览</label><button class="btn btn-sm btn-ghost" :disabled="Object.keys(proxyBusy).some(key=>proxyBusy[key])" @click="prepareAllProxies">为全部Scene片段准备代理</button><span class="sub">代理就绪 {{Object.keys(proxyUrls).length}}/{{mergeSequence.filter(c=>c.scene_id!=null).length}} · 代理仅用于预览，导出始终使用原视频</span></div>
+        <div v-if="exportPreflight" class="card" :class="exportPreflight.consistent?'':'fail-msg'"><div class="merge-info"><span class="badge" :class="exportPreflight.consistent?'badge-green':'badge-red'">{{exportPreflight.consistent?'预览与导出一致':'时长不一致'}}</span><span>预览 {{Number(exportPreflight.preview).toFixed(2)}} 秒 · 正式导出 {{Number(exportPreflight.duration).toFixed(2)}} 秒 · {{exportPreflight.clips}} 个片段</span><span v-if="exportPreflight.warnings&&exportPreflight.warnings.length" v-for="(warning,index) in exportPreflight.warnings" :key="index">{{warning}}</span><span v-else class="sub">导出校验未返回警告。</span><span class="sub">检查使用与正式导出相同的所有权、时长、转场、素材、快照和音频层校验，但不创建任务、不启动渲染。</span></div></div>
         <p class="sub">快速原声预览（变速/调色，不含画面变换）；裁切/旋转/关键帧请展开片段的变换面板预览，转场/叠加/字幕以导出为准。“渲染完整预览”使用与导出相同的合并任务。</p>
         <FinalCutTimeline :key="`timeline-${activeEpN}`" :clips="mergeSequence" :global-tracks="globalVisualTracks" :current-time="finalCutTime" @change="mergeSequence=$event" @engineering-change="restoreEngineeringHistory" @seek="seekFinalCut" />
         <GlobalVisualTimeline :key="`global-tracks-${activeEpN}`" v-model="globalVisualTracks" :clips="mergeSequence" :materials="materials" :duration="totalTrimDuration" :current-time="finalCutTime" @seek="seekFinalCut" />
@@ -46,7 +48,7 @@
       </div>
       <div class="final-cut-grid">
         <article v-for="(clip,index) in mergeSequence" :key="clip.id" class="card final-cut-clip">
-          <div class="final-cut-preview"><video v-if="clip.video_url" :id="`final-cut-video-${clip.id}`" :src="clip.video_url" controls muted preload="metadata" :style="previewFilter(clip)" @play="applyClipPreview(clip,$event)" @loadedmetadata="setClipDuration(clip,$event)"></video><div v-else class="preview-empty">该片段暂无可预览视频</div><span class="final-cut-index">{{index+1}}</span></div>
+          <div class="final-cut-preview"><video v-if="clip.video_url" :id="`final-cut-video-${clip.id}`" :src="previewSrc(clip)" controls muted preload="metadata" :style="previewFilter(clip)" @play="applyClipPreview(clip,$event)" @loadedmetadata="setClipDuration(clip,$event)"></video><div v-else class="preview-empty">该片段暂无可预览视频</div><span class="final-cut-index">{{index+1}}</span></div>
           <div class="merge-info"><strong>{{clip.label}}</strong><span>{{clip.scene_id?'Scene片段':'插入视频素材'}} · 输出 {{clipTimelineDuration(clip).toFixed(2)}}秒</span></div>
           <div class="final-cut-trim"><label>入点 <input class="input input-sm" type="number" min="0" step="0.01" v-model.number="clip.source_start"></label><label>出点 <input class="input input-sm" type="number" min="0" :max="clip.duration" step="0.01" v-model.number="clip.source_end"></label><label>速度<input class="input input-sm" type="number" min=".25" max="4" step=".05" v-model.number="clip.speed"></label><label>音量<input class="input input-sm" type="number" min="0" max="4" step=".05" v-model.number="clip.volume"></label><label>淡入<input class="input input-sm" type="number" min="0" :max="clipTimelineDuration(clip)" step=".05" v-model.number="clip.fade_in"></label><label>淡出<input class="input input-sm" type="number" min="0" :max="clipTimelineDuration(clip)" step=".05" v-model.number="clip.fade_out"></label><button class="btn btn-xs btn-secondary" @click="markPlayhead(index,'start')">当前播放头设入点</button><button class="btn btn-xs btn-secondary" @click="markPlayhead(index,'end')">当前播放头设出点</button><button class="btn btn-xs btn-secondary" @click="resetTrim(index)">重置</button><button class="btn btn-xs btn-secondary" @click="splitAtPlayhead(index)">播放头处分割</button></div>
           <div class="final-cut-trim"><label>出站转场<select class="input input-sm" v-model="clip.transition" :disabled="index===mergeSequence.length-1"><option v-for="[code,label] in transitionOptions" :key="code" :value="code">{{label}}</option></select></label><label v-if="clip.transition!=='cut'">转场秒<input class="input input-sm" type="number" min=".05" max="2" step=".05" v-model.number="clip.transition_duration"></label><label>亮度<input class="input input-sm" type="number" min="-1" max="1" step=".05" v-model.number="clip.brightness"></label><label>对比度<input class="input input-sm" type="number" min=".1" max="3" step=".05" v-model.number="clip.contrast"></label><label>饱和度<input class="input input-sm" type="number" min="0" max="3" step=".05" v-model.number="clip.saturation"></label></div>
@@ -54,6 +56,7 @@
           <ClipPackagingEditor :model-value="clip.packaging" @change="updateTrim(index,{packaging:$event})" />
           <ClipTracksEditor :clip="clip" :materials="materials" @change="updateTrim(index,$event)" />
           <ClipTransformEditor :clip="clip" :aspect="clipAspectRatios[mergeSequence[0]?.id]||16/9" @change="updateTrim(index,{transform:$event})" />
+          <div class="section-actions"><button class="btn btn-xs btn-secondary" @click="prepareProxy(clip)" :disabled="clip.scene_id==null||proxyBusy[clip.scene_id]">{{proxyBusy[clip.scene_id]?'代理生成中…':proxyUrls[clip.scene_id]?'重建/校验代理':'生成预览代理'}}</button><span class="sub">{{proxyUrls[clip.scene_id]?'代理已就绪':clip.scene_id==null?'插入素材无代理':'未生成代理'}}</span></div>
           <div class="final-cut-actions"><button class="btn btn-xs btn-ghost" :disabled="index===0" @click="moveMergeClip(index,-1)">上移</button><button class="btn btn-xs btn-ghost" :disabled="index===mergeSequence.length-1" @click="moveMergeClip(index,1)">下移</button><button class="btn btn-xs btn-danger" @click="mergeSequence.splice(index,1)">排除</button></div>
           <div class="final-cut-insert"><select class="input" v-model.number="insertMaterialByIndex[index]"><option :value="0">选择已有项目视频</option><option v-for="m in videoMaterials" :key="m.id" :value="m.id">{{m.name||m.path}}</option></select><button class="btn btn-xs btn-primary" :disabled="!insertMaterialByIndex[index]" @click="replaceMergeMaterial(index)">替换为已有</button><button class="btn btn-xs btn-primary" @click="requestMergeVideoUpload(index,0,'replace')">上传并替换</button><button class="btn btn-xs btn-secondary" :disabled="!insertMaterialByIndex[index]" @click="insertMergeMaterial(index,0)">前插已有</button><button class="btn btn-xs btn-secondary" :disabled="!insertMaterialByIndex[index]" @click="insertMergeMaterial(index,1)">后插已有</button><button class="btn btn-xs btn-secondary" @click="requestMergeVideoUpload(index,0)">前插上传</button><button class="btn btn-xs btn-secondary" @click="requestMergeVideoUpload(index,1)">后插上传</button></div>
         </article>
@@ -451,6 +454,7 @@ import {transitionOptions} from '../utils/visualPackaging.js'
 import ClipTracksEditor from '../components/ClipTracksEditor.vue'
 import GlobalVisualTimeline from '../components/GlobalVisualTimeline.vue'
 import {normalizeGlobalTracks} from '../utils/globalTracks.js'
+import {cachedMedia,previewFPS,rememberMedia,timecodeAt} from '../utils/previewCache.js'
 import AudioWaveform from '../components/AudioWaveform.vue'
 import VolumeEnvelopeEditor from '../components/VolumeEnvelopeEditor.vue'
 const clipAspectRatios = reactive({})
@@ -494,10 +498,43 @@ const musicCandidates = ref([])
 const musicCandidateBusy = ref(false)
 const mergeSequence = ref([])
 const globalVisualTracks=ref([])
+const proxyUrls=reactive({})
+const proxyBusy=reactive({})
+const mediaInfo=reactive({})
+const useProxyPreview=ref(localStorage.getItem('project-editor-use-proxy')==='1')
+const exportPreflight=ref(null)
+const preflightBusy=ref(false)
+watch(useProxyPreview,value=>localStorage.setItem('project-editor-use-proxy',value?'1':'0'))
+const previewTimecode=computed(()=>timecodeAt(finalCutTime.value,previewFrameRate.value))
+function previewSrc(clip){if(!clip)return '';if(useProxyPreview.value&&clip.scene_id!=null&&proxyUrls[clip.scene_id])return proxyUrls[clip.scene_id];return clip.video_url}
+async function ensureMediaInfo(clip){
+ if(!clip||clip.scene_id==null||mediaInfo[clip.scene_id])return mediaInfo[clip.scene_id]||null
+ if(!api.sceneMediaInfo)return null
+ try{const {data}=await api.sceneMediaInfo(id(),clip.scene_id);mediaInfo[clip.scene_id]=data;rememberMedia(clip,data);if(data.proxy_ready)proxyUrls[clip.scene_id]=data.proxy_url;return data}
+ catch{return null}
+}
+async function prepareProxy(clip,quiet=false){
+ if(!clip||clip.scene_id==null)return
+ if(proxyBusy[clip.scene_id])return
+ proxyBusy[clip.scene_id]=true
+ try{const {data}=await api.createSceneProxy(id(),clip.scene_id);proxyUrls[clip.scene_id]=data.url;useProxyPreview.value=true;if(!quiet)toast.success(data.cached?'已找到缓存代理，预览将使用代理媒体':'代理已生成，预览将使用代理媒体')}
+ catch(e){if(!quiet)toast.error(e.response?.data?.error||'代理生成失败')}
+ finally{proxyBusy[clip.scene_id]=false}
+}
+async function prepareAllProxies(){
+ const scenes=mergeSequence.value.filter(c=>c.scene_id!=null)
+ let ready=0
+ for(const clip of scenes){if(proxyUrls[clip.scene_id]){ready++;continue}await prepareProxy(clip,true);if(proxyUrls[clip.scene_id])ready++}
+ toast.info(`代理就绪 ${ready}/${scenes.length}`)
+}
 function restoreEngineeringHistory(value){mergeSequence.value=value.clips;globalVisualTracks.value=value.tracks}
 const assembledPreview = ref(null)
 const previewSnapshot = ref([])
 const previewIndex = ref(-1)
+const previewFrameRate = computed(() => {
+  const clip = previewSnapshot.value[previewIndex.value] || mergeSequence.value[previewIndex.value] || mergeSequence.value[0]
+  return previewFPS(clip)
+})
 let previewEpoch = 0
 const totalTrimDuration = computed(() => { try { return sequenceDuration(mergeSequence.value) } catch { return 0 } })
 const finalCutDirty = ref(false)
@@ -950,7 +987,7 @@ function splitAtPlayhead(index){const video=clipVideo(index);try{mergeSequence.v
 function playAssembledPreview(){
   stopAssembledPreview()
   try{
-    previewSnapshot.value=mergeSequence.value.map(c=>{if(!String(c.video_url||'').trim())throw new Error('所有片段都必须有可预览视频');return normalizeClip({...c},c.duration)})
+    previewSnapshot.value=mergeSequence.value.map(c=>{const src=previewSrc(c);if(!String(src||'').trim())throw new Error('所有片段都必须有可预览视频');return normalizeClip({...c,preview_url:src},c.duration)})
   }catch(e){toast.error(e.message);return}
   previewIndex.value=0;loadPreviewClip()
 }
@@ -958,7 +995,7 @@ function absoluteUrl(value){try{return new URL(value,window.location.href).href}
 function loadPreviewClip(){
   const clip=previewSnapshot.value[previewIndex.value],video=assembledPreview.value
   if(!clip||!video){stopAssembledPreview();return}
-  previewEpoch+=1;video.dataset.previewEpoch=String(previewEpoch);video.src=clip.video_url
+  previewEpoch+=1;video.dataset.previewEpoch=String(previewEpoch);video.src=clip.preview_url||previewSrc(clip)||clip.video_url;ensureMediaInfo(clip)
 }
 function seekFinalCut(time){
   stopAssembledPreview()
@@ -966,7 +1003,7 @@ function seekFinalCut(time){
   const rows=layoutClips(mergeSequence.value)
   const row=rows.find(r=>time>=r.start&&time<r.end)||rows.at(-1)
   if(!row)return
-  previewSnapshot.value=mergeSequence.value.map(c=>({...c}))
+  previewSnapshot.value=mergeSequence.value.map(c=>({...c,preview_url:previewSrc(c)}))
   previewIndex.value=row.index
   const clip=previewSnapshot.value[row.index]
   timelineSeek=Number(clip.source_start||0)+Math.max(0,time-row.start)*Number(clip.speed||1)
@@ -974,7 +1011,7 @@ function seekFinalCut(time){
 }
 function onAssembledMetadata(){
   const clip=previewSnapshot.value[previewIndex.value],video=assembledPreview.value,epoch=previewEpoch
-  if(!clip||!video||Number(video.dataset.previewEpoch)!==epoch||absoluteUrl(video.currentSrc)!==absoluteUrl(clip.video_url))return
+  if(!clip||!video||Number(video.dataset.previewEpoch)!==epoch||absoluteUrl(video.currentSrc)!==absoluteUrl(clip.preview_url||clip.video_url))return
   const end=clip.source_end==null?Number(video.duration):clip.source_end
   if(!Number.isFinite(end)||end<=clip.source_start){toast.error('片段出入点无效');stopAssembledPreview();return}
   if(timelineSeek!=null){video.currentTime=Math.min(end,timelineSeek);timelineSeek=null;applyClipPreview(clip,{target:video});video.pause();return}
@@ -987,7 +1024,7 @@ function advanceAssembledPreview(){if(previewIndex.value<0)return;previewIndex.v
 function applyClipPreview(clip,event){const video=event.target;video.playbackRate=Number(clip.speed||1);video.volume=Math.min(1,Number(clip.volume??1))}
 function previewFilter(clip){return {filter:`brightness(${Math.max(0,1+Number(clip.brightness||0))}) contrast(${Number(clip.contrast||1)}) saturate(${Number(clip.saturation??1)})`}}
 function clipTimelineDuration(clip){try{return (Number(clip.source_end??clip.duration)-Number(clip.source_start||0))/Number(clip.speed||1)}catch{return 0}}
-function stepPreview(direction){const video=assembledPreview.value;if(video)video.currentTime=Math.max(0,video.currentTime+direction/24)}
+function stepPreview(direction){const video=assembledPreview.value;const step=1/previewFrameRate.value;if(video)video.currentTime=Math.max(0,Math.min(Number(video.duration)||Infinity,video.currentTime+direction*step));else seekFinalCut(Math.max(0,finalCutTime.value+direction*step))}
 function ensureFinalCut(){if(mergeSequence.value.length)mergeSequence.value[mergeSequence.value.length-1].transition='cut'}
 function moveMergeClip(index,delta){ const target=index+delta;if(target<0||target>=mergeSequence.value.length)return;const [clip]=mergeSequence.value.splice(index,1);mergeSequence.value.splice(target,0,clip);ensureFinalCut() }
 function dropMergeClip(index){if(finalCutDragFrom.value==null)return;const from=finalCutDragFrom.value;finalCutDragFrom.value=null;if(from===index)return;const [clip]=mergeSequence.value.splice(from,1);mergeSequence.value.splice(index,0,clip);ensureFinalCut()}
@@ -1069,16 +1106,33 @@ async function uploadMergeVideo(event){
   finally{mergeVideoUploading.value=false}
 }
 
+function exportPayload(){
+  const ids=[...new Set(mergeSequence.value.filter(c=>c.scene_id).map(c=>c.scene_id))]
+  return { scene_ids: ids, edit_sequence: buildEditSequence(mergeSequence.value), visual_tracks: normalizeGlobalTracks(globalVisualTracks.value,totalTrimDuration.value,materials.value), episode_n: activeEpN.value, dub: mergeDub.value, subtitles: mergeSub.value, screen_text: mergeScreenText.value, native_volume: nativeVolume.value, dialogue_volume: dialogueVolume.value, bgm_volume: bgmVolume.value }
+}
+async function preflightExport(){
+  if(mergeSequence.value.length<2){toast.show('最终成片至少需要2个有效视频片段');return}
+  if(preflightBusy.value)return
+  preflightBusy.value=true
+  try{
+    const {data}=await api.preflightAudioMerge(id(),exportPayload())
+    const preview=sequenceDuration(mergeSequence.value)
+    const diff=Math.abs(Number(data.duration)-preview)
+    exportPreflight.value={...data,preview,consistent:diff<=.05}
+    if(diff>.05)toast.error(`预览时长 ${preview.toFixed(2)}s 与正式导出 ${Number(data.duration).toFixed(2)}s 不一致`)
+    else toast.success(`一致性检查通过：${data.clips} 个片段，${Number(data.duration).toFixed(2)} 秒`)
+  }catch(e){exportPreflight.value=null;toast.error(e.response?.data?.error||'导出前一致性检查失败')}
+  finally{preflightBusy.value=false}
+}
 async function mergeEpisode() {
   if(mergeSequenceEpisode.value!==activeEpN.value||!mergeSequence.value.length)resetMergeSequence()
-  const ids = [...new Set(mergeSequence.value.filter(c=>c.scene_id).map(c=>c.scene_id))]
   if (mergeSequence.value.length < 2) {
     toast.show('最终成片至少需要 2 个有效视频片段')
     return
   }
   curMerging.value = true
   try {
-    await api.mergeAudioScenes(id(), { scene_ids: ids, edit_sequence: buildEditSequence(mergeSequence.value),visual_tracks:normalizeGlobalTracks(globalVisualTracks.value,totalTrimDuration.value,materials.value), episode_n: activeEpN.value, dub: mergeDub.value, subtitles: mergeSub.value, screen_text: mergeScreenText.value, native_volume: nativeVolume.value, dialogue_volume: dialogueVolume.value, bgm_volume: bgmVolume.value })
+    await api.mergeAudioScenes(id(), exportPayload())
     toast.show(`第${activeEpN.value}集合并已启动（对白字幕：${mergeSub.value?'开':'关'}；功能文字：${mergeScreenText.value?'开':'关'}）`)
     setTimeout(loadMerges, 3000)
   } catch (e) {

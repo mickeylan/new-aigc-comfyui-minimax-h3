@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +25,7 @@ type MediaInfo struct {
 	IsVideo    bool    `json:"is_video"`
 	IsImage    bool    `json:"is_image"`
 	Bitrate    int64   `json:"bitrate,omitempty"`
+	FPS        float64 `json:"fps,omitempty"`
 	VideoCodec string  `json:"video_codec,omitempty"`
 }
 
@@ -109,7 +111,7 @@ func probeLocalVideoWithFFprobe(path string, base *MediaInfo) (*MediaInfo, error
 	if err != nil {
 		return nil, err
 	}
-	out, err := exec.Command(ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,codec_name,bit_rate", "-show_entries", "format=duration,bit_rate", "-of", "json", path).Output()
+	out, err := exec.Command(ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,codec_name,bit_rate,avg_frame_rate,r_frame_rate", "-show_entries", "format=duration,bit_rate", "-of", "json", path).Output()
 	if err != nil {
 		return nil, err
 	}
@@ -119,6 +121,8 @@ func probeLocalVideoWithFFprobe(path string, base *MediaInfo) (*MediaInfo, error
 			Height    int    `json:"height"`
 			CodecName string `json:"codec_name"`
 			BitRate   string `json:"bit_rate"`
+			AvgRate   string `json:"avg_frame_rate"`
+			RealRate  string `json:"r_frame_rate"`
 		} `json:"streams"`
 		Format struct {
 			Duration string `json:"duration"`
@@ -144,7 +148,26 @@ func probeLocalVideoWithFFprobe(path string, base *MediaInfo) (*MediaInfo, error
 	if value, parseErr := strconv.ParseInt(bitrate, 10, 64); parseErr == nil {
 		info.Bitrate = value
 	}
+	info.FPS = parseFrameRate(payload.Streams[0].AvgRate)
+	if info.FPS <= 0 {
+		info.FPS = parseFrameRate(payload.Streams[0].RealRate)
+	}
 	return &info, nil
+}
+
+func parseFrameRate(value string) float64 {
+	if i := strings.IndexByte(value, '/'); i > 0 {
+		num, err1 := strconv.ParseFloat(value[:i], 64)
+		den, err2 := strconv.ParseFloat(value[i+1:], 64)
+		if err1 == nil && err2 == nil && den > 0 && num > 0 && num/den <= 1000 {
+			return math.Round(num/den*1000) / 1000
+		}
+		return 0
+	}
+	if v, err := strconv.ParseFloat(value, 64); err == nil && v > 0 && v <= 1000 {
+		return math.Round(v*1000) / 1000
+	}
+	return 0
 }
 
 // readAt 从远程文件随机读取
