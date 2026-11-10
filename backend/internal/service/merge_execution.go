@@ -85,6 +85,27 @@ func (s *ProjectService) validateMergeExecution(p *models.Project, mt *models.Me
 	for i := 0; i+1 < len(videos); i++ {
 		total -= mergeClipTransitionOverlap(videos[i])
 	}
+	global, err := decodeGlobalVisualTracks(mt.VisualTracks)
+	if err != nil {
+		return err
+	}
+	if err := validateGlobalVisualTracks(global, total); err != nil {
+		return err
+	}
+	for _, tr := range global {
+		if tr.Muted {
+			continue
+		}
+		id := tr.MaterialID
+		file, image, err := s.resolveMergeOverlay(p.ID, mergeResolvedVideo{OverlayMaterialID: &id})
+		if err != nil {
+			return err
+		}
+		info, err := s.remote.ProbeMedia(file)
+		if err != nil || info.Width <= 0 || info.Height <= 0 || (!image && info.Duration <= 0) {
+			return fmt.Errorf("全局叠加轨媒体不可用")
+		}
+	}
 	var layers []models.AudioLayer
 	if err := s.db.Where("project_id = ? AND episode_n = ?", p.ID, mt.EpisodeN).Order("start_time, id").Find(&layers).Error; err != nil {
 		return err

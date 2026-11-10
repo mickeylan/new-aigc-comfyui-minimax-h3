@@ -8,6 +8,7 @@ type EditingDraft struct {
 	ProjectID    uint      `gorm:"uniqueIndex:idx_editing_project_episode" json:"project_id"`
 	EpisodeN     int       `gorm:"uniqueIndex:idx_editing_project_episode" json:"episode_n"`
 	Revision     uint      `json:"revision"`
+	VisualTracks string    `gorm:"type:text" json:"visual_tracks"`
 	EditSequence string    `gorm:"type:text" json:"edit_sequence"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }

@@ -26,13 +26,13 @@
 import { computed, ref, watch } from 'vue'
 import { layoutClips, snapTime, trimTimelineClip, createEditHistory } from '../utils/editingTimeline.js'
 import { buildEditSequence } from '../utils/finalCutEditing.js'
-const props=defineProps({clips:{type:Array,required:true},currentTime:{type:Number,default:0}})
-const emit=defineEmits(['change','seek'])
+const props=defineProps({clips:{type:Array,required:true},globalTracks:{type:Array,default:()=>[]},currentTime:{type:Number,default:0}})
+const emit=defineEmits(['change','engineering-change','seek'])
 const scale=ref(35),snapping=ref(true),playhead=ref(0),error=ref(''),preview=ref(null)
 const history=createEditHistory(),canUndo=ref(false),canRedo=ref(false)
 let travelling=false
 function flags(){canUndo.value=history.canUndo;canRedo.value=history.canRedo}
-watch(()=>props.clips,value=>{if(!travelling)history.record(value);travelling=false;flags()},{deep:true,immediate:true})
+watch(()=>({clips:props.clips,tracks:props.globalTracks}),value=>{if(!travelling)history.record(value);travelling=false;flags()},{deep:true,immediate:true})
 watch(()=>props.currentTime,value=>{playhead.value=value})
 const clips=computed(()=>preview.value||props.clips)
 const rows=computed(()=>layoutClips(clips.value))
@@ -42,7 +42,7 @@ const width=computed(()=>Math.max(600,end.value*scale.value+60))
 const ticks=computed(()=>{const step=scale.value<25?10:scale.value<60?5:1;return Array.from({length:Math.min(10000,Math.ceil(end.value/step)+1)},(_,i)=>i*step)})
 function locate(value){playhead.value=Math.max(0,Math.min(end.value,value));emit('seek',playhead.value)}
 function seek(event){const rect=event.currentTarget.getBoundingClientRect();locate(snapTime((event.clientX-rect.left)/scale.value,[...rows.value.flatMap(r=>[r.start,r.end]),...markers.value.map(m=>m.time)],scale.value,snapping.value))}
-function travel(direction){const value=history[direction]();if(value){travelling=true;emit('change',value)}flags()}
+function travel(direction){const value=history[direction]();if(value){travelling=true;emit('engineering-change',value)}flags()}
 function keyboard(event){if(/input|textarea|select/i.test(event.target.tagName))return;if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();travel(event.shiftKey?'redo':'undo')}}
 function beginTrim(event,row,edge){
  const target=event.currentTarget,origin=event.clientX,source=JSON.parse(JSON.stringify(props.clips)),clip=source[row.index]

@@ -40,7 +40,8 @@
         <video ref="assembledPreview" controls preload="metadata" @loadedmetadata="onAssembledMetadata" @timeupdate="onAssembledTime" @ended="advanceAssembledPreview"></video>
         <div class="section-actions"><button class="btn btn-sm" :disabled="!mergeSequence.length" @click="playAssembledPreview">播放所选区间</button><button class="btn btn-sm btn-ghost" @click="stepPreview(-1)">后退约1帧</button><button class="btn btn-sm btn-ghost" @click="stepPreview(1)">前进约1帧</button><button class="btn btn-sm btn-ghost" @click="stopAssembledPreview">停止</button><button class="btn btn-sm btn-secondary" @click="saveFinalCutDraft">保存剪辑草稿</button><button class="btn btn-sm btn-secondary" @click="restoreFinalCutDraft">恢复剪辑草稿</button><button class="btn btn-sm btn-secondary" :disabled="serverDraftBusy" @click="saveServerEditingDraft">保存到服务端</button><button class="btn btn-sm btn-secondary" :disabled="serverDraftBusy" @click="restoreServerEditingDraft">读取服务端草稿</button><button class="btn btn-sm" :disabled="busy||curMerging||mergeSequence.length<2" @click="mergeEpisode">渲染完整预览</button><strong>实际输出时长 {{totalTrimDuration.toFixed(2)}} 秒</strong></div>
         <p class="sub">快速原声预览（变速/调色，不含画面变换）；裁切/旋转/关键帧请展开片段的变换面板预览，转场/叠加/字幕以导出为准。“渲染完整预览”使用与导出相同的合并任务。</p>
-        <FinalCutTimeline :key="`timeline-${activeEpN}`" :clips="mergeSequence" :current-time="finalCutTime" @change="mergeSequence=$event" @seek="seekFinalCut" />
+        <FinalCutTimeline :key="`timeline-${activeEpN}`" :clips="mergeSequence" :global-tracks="globalVisualTracks" :current-time="finalCutTime" @change="mergeSequence=$event" @engineering-change="restoreEngineeringHistory" @seek="seekFinalCut" />
+        <GlobalVisualTimeline :key="`global-tracks-${activeEpN}`" v-model="globalVisualTracks" :clips="mergeSequence" :materials="materials" :duration="totalTrimDuration" :current-time="finalCutTime" @seek="seekFinalCut" />
         <div class="final-cut-strip"><button v-for="(clip,index) in mergeSequence" :key="`strip-${clip.id}`" draggable="true" @dragstart="finalCutDragFrom=index" @dragover.prevent @drop="dropMergeClip(index)" :style="{flexGrow:Math.max(.1,clipTimelineDuration(clip))}">{{index+1}} · {{clipTimelineDuration(clip).toFixed(2)}}s</button></div>
       </div>
       <div class="final-cut-grid">
@@ -445,6 +446,8 @@ import { buildEditSequence, normalizeClip, sequenceDuration, splitClip, uniqueCl
 import FinalCutTimeline from '../components/FinalCutTimeline.vue'
 import ClipTransformEditor from '../components/ClipTransformEditor.vue'
 import ClipTracksEditor from '../components/ClipTracksEditor.vue'
+import GlobalVisualTimeline from '../components/GlobalVisualTimeline.vue'
+import {normalizeGlobalTracks} from '../utils/globalTracks.js'
 import AudioWaveform from '../components/AudioWaveform.vue'
 import VolumeEnvelopeEditor from '../components/VolumeEnvelopeEditor.vue'
 const clipAspectRatios = reactive({})
@@ -487,6 +490,8 @@ const musicCandidateCueId = ref(null)
 const musicCandidates = ref([])
 const musicCandidateBusy = ref(false)
 const mergeSequence = ref([])
+const globalVisualTracks=ref([])
+function restoreEngineeringHistory(value){mergeSequence.value=value.clips;globalVisualTracks.value=value.tracks}
 const assembledPreview = ref(null)
 const previewSnapshot = ref([])
 const previewIndex = ref(-1)
@@ -921,6 +926,7 @@ async function shiftSub(i, delta) {
 
 function stopAssembledPreview(){ timelineSeek=null;previewEpoch+=1;previewIndex.value=-1;previewSnapshot.value=[];if(assembledPreview.value){assembledPreview.value.pause();assembledPreview.value.removeAttribute('src');assembledPreview.value.load()} }
 function resetMergeSequence(){
+  globalVisualTracks.value=[]
   stopAssembledPreview()
   mergeSequence.value=scenes.value.filter(s=>s.status==='video_ready').map(s=>normalizeClip({id:uniqueClipId('scene'),scene_id:s.id,label:`Scene ${s.order} · ${s.title}`,video_url:s.video_url,duration:Number(s.video_dur||s.duration||0),source_start:0,source_end:null}))
   mergeSequenceEpisode.value=activeEpN.value
@@ -984,13 +990,13 @@ function moveMergeClip(index,delta){ const target=index+delta;if(target<0||targe
 function dropMergeClip(index){if(finalCutDragFrom.value==null)return;const from=finalCutDragFrom.value;finalCutDragFrom.value=null;if(from===index)return;const [clip]=mergeSequence.value.splice(from,1);mergeSequence.value.splice(index,0,clip);ensureFinalCut()}
 function mergeMaterialClip(material){const clip=normalizeClip({id:uniqueClipId('material'),material_id:material.id,label:material.name||material.path,video_url:api.materialUrl(material.path),duration:1,source_start:0,source_end:null});return {...clip,duration:Number(material.duration||0),source_end:null}}
 function saveFinalCutDraft(){
-  try{localStorage.setItem(draftKey.value,JSON.stringify({version:1,clips:buildEditSequence(mergeSequence.value).map((clip,index)=>({...clip,duration:mergeSequence.value[index].duration}))}));finalCutDirty.value=false;toast.success('剪辑草稿已保存')}
+  try{localStorage.setItem(draftKey.value,JSON.stringify({version:1,visual_tracks:normalizeGlobalTracks(globalVisualTracks.value,totalTrimDuration.value,materials.value),clips:buildEditSequence(mergeSequence.value).map((clip,index)=>({...clip,duration:mergeSequence.value[index].duration}))}));finalCutDirty.value=false;toast.success('剪辑草稿已保存')}
   catch(e){toast.error(e.message||'草稿保存失败')}
 }
 function restoreFinalCutDraft(serverRaw=null){
   const raw=typeof serverRaw==='string'?serverRaw:localStorage.getItem(draftKey.value);if(!raw){toast.show('没有可恢复的剪辑草稿');return}
   if(!window.confirm('恢复草稿将替换当前未保存编排，继续？'))return
-  try{const draft=JSON.parse(raw);if(draft.version!==1||!Array.isArray(draft.clips))throw new Error('草稿版本无效');const restored=[];for(const saved of draft.clips){let source;if(saved.scene_id!=null){const scene=scenes.value.find(row=>Number(row.id)===Number(saved.scene_id));if(scene)source={scene_id:scene.id,label:`Scene ${scene.order} · ${scene.title}`,video_url:scene.video_url,duration:Number(scene.video_dur||scene.duration||0)}}else if(saved.material_id!=null){const material=materials.value.find(row=>Number(row.id)===Number(saved.material_id));if(material&&material.type==='video')source={material_id:material.id,label:material.name||material.path,video_url:api.materialUrl(material.path),duration:Number(material.duration||saved.duration||0)}}if(!source||source.duration<.05)throw new Error('草稿引用的素材已不可用，当前编排保持不变');restored.push(normalizeClip({...saved,...source,label:saved.label||source.label,id:uniqueClipId(saved.scene_id?'scene':'material')},source.duration))}if(!restored.length)throw new Error('草稿引用的素材已不存在');mergeSequence.value=restored;ensureFinalCut();mergeSequenceEpisode.value=activeEpN.value;finalCutDirty.value=false;toast.success(`已恢复 ${restored.length} 个片段`);return true}catch(e){toast.error(e.message||'草稿恢复失败')}
+  try{const draft=JSON.parse(raw);if(draft.version!==1||!Array.isArray(draft.clips))throw new Error('草稿版本无效');const restored=[];for(const saved of draft.clips){let source;if(saved.scene_id!=null){const scene=scenes.value.find(row=>Number(row.id)===Number(saved.scene_id));if(scene)source={scene_id:scene.id,label:`Scene ${scene.order} · ${scene.title}`,video_url:scene.video_url,duration:Number(scene.video_dur||scene.duration||0)}}else if(saved.material_id!=null){const material=materials.value.find(row=>Number(row.id)===Number(saved.material_id));if(material&&material.type==='video')source={material_id:material.id,label:material.name||material.path,video_url:api.materialUrl(material.path),duration:Number(material.duration||saved.duration||0)}}if(!source||source.duration<.05)throw new Error('草稿引用的素材已不可用，当前编排保持不变');restored.push(normalizeClip({...saved,...source,label:saved.label||source.label,id:uniqueClipId(saved.scene_id?'scene':'material')},source.duration))}if(!restored.length)throw new Error('草稿引用的素材已不存在');const global=normalizeGlobalTracks(draft.visual_tracks||[],sequenceDuration(restored),materials.value);mergeSequence.value=restored;globalVisualTracks.value=global;ensureFinalCut();mergeSequenceEpisode.value=activeEpN.value;finalCutDirty.value=false;toast.success(`已恢复 ${restored.length} 个片段`);return true}catch(e){toast.error(e.message||'草稿恢复失败')}
 }
 const serverDraftBusy=ref(false)
 const serverDraftRevisions={}
@@ -1000,16 +1006,17 @@ async function saveServerEditingDraft(){
   serverDraftBusy.value=true
   try{
     const clips=buildEditSequence(mergeSequence.value).map((clip,index)=>({...clip,duration:mergeSequence.value[index].duration}))
-    const before=JSON.stringify(mergeSequence.value)
+    const global=normalizeGlobalTracks(globalVisualTracks.value,totalTrimDuration.value,materials.value)
+    const before=JSON.stringify({clips:mergeSequence.value,tracks:globalVisualTracks.value})
     let revision=serverDraftRevisions[key]
     if(revision==null){
       const {data}=await api.editingDraft(project,episode)
       if(data.draft){toast.error('服务端已有草稿，请先读取并审核后再保存，避免覆盖其他设备的编排');return}
       revision=0
     }
-    const {data}=await api.saveEditingDraft(project,episode,revision,clips)
+    const {data}=await api.saveEditingDraft(project,episode,revision,clips,global)
     serverDraftRevisions[key]=data.draft.revision
-    if(episode===activeEpN.value&&before===JSON.stringify(mergeSequence.value))finalCutDirty.value=false
+    if(episode===activeEpN.value&&before===JSON.stringify({clips:mergeSequence.value,tracks:globalVisualTracks.value}))finalCutDirty.value=false
     toast.success(`第${episode}集服务端草稿已保存（版本${data.draft.revision}）`)
   }catch(e){toast.error(e.response?.data?.error||e.message)}finally{serverDraftBusy.value=false}
 }
@@ -1024,7 +1031,7 @@ async function restoreServerEditingDraft(){
     const saved=JSON.parse(data.draft.edit_sequence)
     // Resolve only against current production media; do not silently drop deleted clips.
     if(saved.some(c=>c.scene_id!=null?!scenes.value.some(s=>s.id===c.scene_id):!materials.value.some(m=>m.id===c.material_id)))throw new Error('草稿引用的素材已不可用，当前编排保持不变')
-    if(restoreFinalCutDraft(JSON.stringify({version:1,clips:saved})))serverDraftRevisions[key]=data.draft.revision
+    if(restoreFinalCutDraft(JSON.stringify({version:1,clips:saved,visual_tracks:JSON.parse(data.draft.visual_tracks||'[]')||[]})))serverDraftRevisions[key]=data.draft.revision
   }catch(e){toast.error(e.response?.data?.error||e.message)}finally{serverDraftBusy.value=false}
 }
 function insertMergeMaterial(index,after){
@@ -1068,7 +1075,7 @@ async function mergeEpisode() {
   }
   curMerging.value = true
   try {
-    await api.mergeAudioScenes(id(), { scene_ids: ids, edit_sequence: buildEditSequence(mergeSequence.value), episode_n: activeEpN.value, dub: mergeDub.value, subtitles: mergeSub.value, screen_text: mergeScreenText.value, native_volume: nativeVolume.value, dialogue_volume: dialogueVolume.value, bgm_volume: bgmVolume.value })
+    await api.mergeAudioScenes(id(), { scene_ids: ids, edit_sequence: buildEditSequence(mergeSequence.value),visual_tracks:normalizeGlobalTracks(globalVisualTracks.value,totalTrimDuration.value,materials.value), episode_n: activeEpN.value, dub: mergeDub.value, subtitles: mergeSub.value, screen_text: mergeScreenText.value, native_volume: nativeVolume.value, dialogue_volume: dialogueVolume.value, bgm_volume: bgmVolume.value })
     toast.show(`第${activeEpN.value}集合并已启动（对白字幕：${mergeSub.value?'开':'关'}；功能文字：${mergeScreenText.value?'开':'关'}）`)
     setTimeout(loadMerges, 3000)
   } catch (e) {
@@ -1567,7 +1574,7 @@ onMounted(async () => {
 })
 onUnmounted(() => { editorScreenTextDisposed = true; clearInterval(timer); stopAssembledPreview(); videoDraftSafety?.dispose();window.removeEventListener('beforeunload',beforeUnload) })
 watch(videoPromptDraft, () => videoDraftSafety?.schedule())
-watch(mergeSequence,()=>{stopAssembledPreview();if(finalCutTracking)finalCutDirty.value=true},{deep:true})
+watch([mergeSequence,globalVisualTracks],()=>{stopAssembledPreview();if(finalCutTracking)finalCutDirty.value=true},{deep:true})
 watch(activeEpN, stopAssembledPreview)
 </script>
 

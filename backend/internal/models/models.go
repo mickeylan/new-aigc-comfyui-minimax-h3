@@ -443,6 +443,7 @@ type MergeTask struct {
 	EpisodeN               int       `gorm:"column:episode_n;default:1" json:"episode_n"` // 所属集数
 	Title                  string    `json:"title"`
 	SceneOrder             string    `json:"scene_order"`
+	VisualTracks           string    `gorm:"type:text" json:"visual_tracks"`
 	EditSequence           string    `gorm:"column:edit_sequence;type:text" json:"edit_sequence"` // 按序合并的场景 ID（逗号分隔）
 	SceneVideoFingerprints string    `gorm:"column:scene_video_fingerprints;type:text" json:"-"`  // 提交时的视频输入快照，防止过期合并结果发布
 	InputSnapshot          string    `gorm:"column:input_snapshot;type:text" json:"-"`            // 所有合并输入与选项的不可变快照

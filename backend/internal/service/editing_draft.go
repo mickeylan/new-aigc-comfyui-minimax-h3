@@ -108,18 +108,56 @@ func validateEditingDraft(tx *gorm.DB, projectID uint, episode int, clips []edit
 	}
 	return nil
 }
-func saveEditingDraft(db *gorm.DB, project uint, episode int, revision uint, clips []editingDraftClip) (models.EditingDraft, error) {
+func saveEditingDraft(db *gorm.DB, project uint, episode int, revision uint, clips []editingDraftClip, globalOptions ...[]clipVisualTrack) (models.EditingDraft, error) {
+	var global []clipVisualTrack
+	if len(globalOptions) > 0 {
+		global = globalOptions[0]
+	}
 	var out models.EditingDraft
 	err := db.Transaction(func(tx *gorm.DB) error {
+		// Older clients omit visual_tracks; preserve rather than silently erase it.
+		// An explicit [] is the only way to clear all global tracks.
+		if revision > 0 && global == nil {
+			var existing models.EditingDraft
+			if err := tx.Where("project_id = ? AND episode_n = ? AND revision = ?", project, episode, revision).First(&existing).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return errEditingDraftConflict
+				}
+				return err
+			}
+			var err error
+			global, err = decodeGlobalVisualTracks(existing.VisualTracks)
+			if err != nil {
+				return err
+			}
+		}
 		if err := validateEditingDraft(tx, project, episode, clips); err != nil {
 			return err
 		}
+		duration := 0.0
+		for i, c := range clips {
+			end := c.Duration
+			if c.SourceEnd != nil {
+				end = *c.SourceEnd
+			}
+			duration += (end - c.SourceStart) / mergeClipSpeed(mergeResolvedVideo{Speed: c.Speed})
+			if i < len(clips)-1 && c.Transition != "" && c.Transition != "cut" {
+				duration -= c.TransitionDuration
+			}
+		}
+		if err := validateGlobalVisualTracks(global, duration); err != nil {
+			return err
+		}
+		if _, err := fingerprintClipTracks(tx, project, []mergeEditClip{{VisualTracks: global}}); err != nil {
+			return err
+		}
+		globalJSON, _ := json.Marshal(global)
 		encoded, err := json.Marshal(clips)
 		if err != nil {
 			return err
 		}
 		if revision == 0 {
-			out = models.EditingDraft{ProjectID: project, EpisodeN: episode, Revision: 1, EditSequence: string(encoded)}
+			out = models.EditingDraft{ProjectID: project, EpisodeN: episode, Revision: 1, VisualTracks: string(globalJSON), EditSequence: string(encoded)}
 			result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&out)
 			if result.Error != nil {
 				return result.Error
@@ -129,7 +167,7 @@ func saveEditingDraft(db *gorm.DB, project uint, episode int, revision uint, cli
 			}
 			return nil
 		}
-		result := tx.Model(&models.EditingDraft{}).Where("project_id = ? AND episode_n = ? AND revision = ?", project, episode, revision).Updates(map[string]any{"revision": revision + 1, "edit_sequence": string(encoded), "updated_at": time.Now()})
+		result := tx.Model(&models.EditingDraft{}).Where("project_id = ? AND episode_n = ? AND revision = ?", project, episode, revision).Updates(map[string]any{"revision": revision + 1, "visual_tracks": string(globalJSON), "edit_sequence": string(encoded), "updated_at": time.Now()})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -147,6 +185,7 @@ func (s *Service) HandleSaveEditingDraft(c *gin.Context) {
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
 	var req struct {
+		VisualTracks []clipVisualTrack  `json:"visual_tracks"`
 		Revision     *uint              `json:"revision"`
 		EditSequence []editingDraftClip `json:"edit_sequence"`
 	}
@@ -160,7 +199,7 @@ func (s *Service) HandleSaveEditingDraft(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "草稿JSON存在多余内容"})
 		return
 	}
-	out, err := saveEditingDraft(s.DB, p.ID, n, *req.Revision, req.EditSequence)
+	out, err := saveEditingDraft(s.DB, p.ID, n, *req.Revision, req.EditSequence, req.VisualTracks)
 	if errors.Is(err, errEditingDraftConflict) {
 		c.JSON(409, gin.H{"error": err.Error()})
 		return

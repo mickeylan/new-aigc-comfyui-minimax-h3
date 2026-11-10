@@ -150,7 +150,7 @@ func applyMergeTextFilters(filters []string, textFilters []string) []string {
 	if len(textFilters) == 0 || len(filters) == 0 {
 		return filters
 	}
-	filters[len(filters)-1] = "[vc]fps=24," + textFilters[0] + "[vtext0]"
+	filters[len(filters)-1] = strings.TrimSuffix(filters[len(filters)-1], "[v]") + "," + textFilters[0] + "[vtext0]"
 	for i := 1; i < len(textFilters); i++ {
 		filters = append(filters, fmt.Sprintf("[vtext%d]%s[vtext%d]", i-1, textFilters[i], i))
 	}
@@ -380,15 +380,16 @@ func (s *Service) HandleCreateAudioMerge(c *gin.Context) {
 		return
 	}
 	var req struct {
-		SceneIDs       []uint          `json:"scene_ids"`
-		Dub            bool            `json:"dub"`
-		Subtitles      bool            `json:"subtitles"`
-		ScreenText     bool            `json:"screen_text"`
-		NativeVolume   *float64        `json:"native_volume"`
-		DialogueVolume *float64        `json:"dialogue_volume"`
-		BGMVolume      *float64        `json:"bgm_volume"`
-		EditSequence   []mergeEditClip `json:"edit_sequence"`
-		EpisodeN       int             `json:"episode_n"`
+		SceneIDs       []uint            `json:"scene_ids"`
+		Dub            bool              `json:"dub"`
+		Subtitles      bool              `json:"subtitles"`
+		ScreenText     bool              `json:"screen_text"`
+		NativeVolume   *float64          `json:"native_volume"`
+		DialogueVolume *float64          `json:"dialogue_volume"`
+		BGMVolume      *float64          `json:"bgm_volume"`
+		VisualTracks   []clipVisualTrack `json:"visual_tracks"`
+		EditSequence   []mergeEditClip   `json:"edit_sequence"`
+		EpisodeN       int               `json:"episode_n"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -409,7 +410,7 @@ func (s *Service) HandleCreateAudioMerge(c *gin.Context) {
 		}
 		req.SceneIDs = sequenceSceneIDs
 	}
-	mt, err := s.Projects.createAudioMergeTask(p, req.SceneIDs, req.EditSequence, req.EpisodeN, req.Dub, req.Subtitles, options)
+	mt, err := s.Projects.createAudioMergeTask(p, req.SceneIDs, req.EditSequence, req.EpisodeN, req.Dub, req.Subtitles, options, req.VisualTracks)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -417,8 +418,12 @@ func (s *Service) HandleCreateAudioMerge(c *gin.Context) {
 	c.JSON(http.StatusOK, mt)
 }
 
-func (s *ProjectService) createAudioMergeTask(p *models.Project, sceneIDs []uint, editSequence []mergeEditClip, episodeN int, dub, subtitles bool, audio MergeAudioOptions) (*models.MergeTask, error) {
-	mt, scenes, err := s.createMergeTaskRecord(p, sceneIDs, dub, subtitles, audio, mergeTaskSequence{Clips: editSequence, EpisodeN: episodeN})
+func (s *ProjectService) createAudioMergeTask(p *models.Project, sceneIDs []uint, editSequence []mergeEditClip, episodeN int, dub, subtitles bool, audio MergeAudioOptions, globalOptions ...[]clipVisualTrack) (*models.MergeTask, error) {
+	var global []clipVisualTrack
+	if len(globalOptions) > 0 {
+		global = globalOptions[0]
+	}
+	mt, scenes, err := s.createMergeTaskRecord(p, sceneIDs, dub, subtitles, audio, mergeTaskSequence{Clips: editSequence, EpisodeN: episodeN, VisualTracks: global})
 	if err != nil {
 		return nil, err
 	}
@@ -624,6 +629,15 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 	for i := 0; i+1 < len(videos); i++ {
 		totalDuration -= mergeClipTransitionOverlap(videos[i])
 	}
+	globalTracks, globalErr := decodeGlobalVisualTracks(mt.VisualTracks)
+	if globalErr != nil {
+		fail(globalErr)
+		return
+	}
+	if err := validateGlobalVisualTracks(globalTracks, totalDuration); err != nil {
+		fail(err)
+		return
+	}
 	// Allocate every visual input before allocating audio inputs; indices must stay
 	// identical in local and SSH ffmpeg commands.
 	for i := range videos {
@@ -690,6 +704,40 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 		remoteInputs = append(remoteInputs, "-i", shellQuote(overlayPath))
 	}
 
+	for j := range globalTracks {
+		tr := &globalTracks[j]
+		if tr.Muted {
+			continue
+		}
+		id := tr.MaterialID
+		file, image, err := s.resolveMergeOverlay(p.ID, mergeResolvedVideo{OverlayMaterialID: &id})
+		if err != nil {
+			fail(err)
+			return
+		}
+		info, err := s.remote.ProbeMedia(file)
+		if err != nil || info.Width <= 0 || info.Height <= 0 || (!image && info.Duration <= 0) {
+			fail(fmt.Errorf("全局叠加素材不可用"))
+			return
+		}
+		if image {
+			tr.SourceStart = 0
+		} else {
+			tr.SourceStart = math.Mod(tr.SourceStart, info.Duration)
+		}
+		idx := len(inputPaths)
+		tr.InputIndex = idx
+		tr.IsImage = image
+		inputPaths = append(inputPaths, file)
+		if image {
+			inputLoopMode[idx] = "image"
+			remoteInputs = append(remoteInputs, "-loop", "1")
+		} else {
+			inputLoopMode[idx] = "video"
+			remoteInputs = append(remoteInputs, "-stream_loop", "-1")
+		}
+		remoteInputs = append(remoteInputs, "-i", shellQuote(file))
+	}
 	edited := strings.TrimSpace(mt.EditSequence) != ""
 	extras := make([]mergeAudioInput, 0)
 	var dialogueSegments []dubSegment
@@ -861,6 +909,7 @@ func (s *ProjectService) runAudioMerge(p *models.Project, mt *models.MergeTask, 
 			textFilters = append(textFilters, fmt.Sprintf("subtitles=filename=%s:fontsdir=%s", escapeFilterPath(assAbs), escapeFilterPath(registry.Root())))
 		}
 	}
+	filters = applyGlobalVisualTracks(filters, globalTracks, firstWidth)
 	filters = applyMergeTextFilters(filters, textFilters)
 	audioGraph := buildMergeAudioGraph(len(videos), dub && nativeCount == len(videos), totalDuration, mt.NativeVolume, extras)
 	if edited {

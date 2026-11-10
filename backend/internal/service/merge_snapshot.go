@@ -8,8 +8,9 @@ import (
 )
 
 type mergeSnapshotOptions struct {
-	Version int
-	Clips   []mergeEditClip
+	VisualTracks []clipVisualTrack
+	Version      int
+	Clips        []mergeEditClip
 }
 
 // captureMergeInputSnapshot records every database input that can affect the rendered merge.
@@ -82,6 +83,9 @@ func (s *ProjectService) captureMergeInputSnapshot(tx *gorm.DB, projectID uint, 
 				FontSize: cue.FontSize, SubtextSize: cue.SubtextSize, OutlineSize: cue.OutlineSize, ShadowSize: cue.ShadowSize, Animation: cue.Animation, Enabled: cue.Enabled, Order: cue.Order, ReviewStatus: cue.ReviewStatus,
 			})
 		}
+	}
+	if opts.Version >= 8 {
+		snapshot.VisualTracks = opts.VisualTracks
 	}
 	if opts.Version >= 7 {
 		snapshot.EditSequence = opts.Clips

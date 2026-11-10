@@ -9168,6 +9168,7 @@ type mergeEpisodeTimelineFingerprint struct {
 }
 
 type mergeInputSnapshot struct {
+	VisualTracks      []clipVisualTrack                 `json:"visual_tracks,omitempty"`
 	Version           int                               `json:"version"`
 	EpisodeGeneration uint                              `json:"episode_generation"`
 	Videos            []sceneVideoFingerprint           `json:"videos"`
@@ -9194,8 +9195,9 @@ func fingerprintSceneVideo(scene models.Scene) (sceneVideoFingerprint, error) {
 }
 
 type mergeTaskSequence struct {
-	Clips    []mergeEditClip
-	EpisodeN int
+	VisualTracks []clipVisualTrack
+	Clips        []mergeEditClip
+	EpisodeN     int
 }
 
 func (s *ProjectService) createMergeTaskRecord(p *models.Project, sceneIDs []uint, dub, subtitles bool, audio MergeAudioOptions, sequenceOptions ...mergeTaskSequence) (*models.MergeTask, []models.Scene, error) {
@@ -9289,6 +9291,17 @@ func (s *ProjectService) createMergeTaskRecord(p *models.Project, sceneIDs []uin
 			return err
 		}
 		materials = append(materials, trackMaterials...)
+		globalMaterials, err := fingerprintClipTracks(tx, current.ID, []mergeEditClip{{VisualTracks: sequence.VisualTracks}})
+		if err != nil {
+			return err
+		}
+		materials = append(materials, globalMaterials...)
+		if len(sequence.VisualTracks) > 0 && len(sequence.Clips) == 0 {
+			return fmt.Errorf("全局叠加轨需要明确成片编排序列")
+		}
+		if err := validateGlobalVisualTracks(sequence.VisualTracks, 60*60*24); err != nil {
+			return err
+		}
 		episodeGeneration, err := latestEpisodeGeneration(tx, current.ID, episodeN)
 		if err != nil {
 			return err
@@ -9309,7 +9322,10 @@ func (s *ProjectService) createMergeTaskRecord(p *models.Project, sceneIDs []uin
 		if len(sequence.Clips) > 0 {
 			snapshotVersion = 7
 		}
-		snapshot, err := s.captureMergeInputSnapshot(tx, current.ID, episodeN, episodeGeneration, fingerprints, materials, sceneIDs, dub, subtitles, audio, mergeSnapshotOptions{Version: snapshotVersion, Clips: sequence.Clips})
+		if len(sequence.VisualTracks) > 0 {
+			snapshotVersion = 8
+		}
+		snapshot, err := s.captureMergeInputSnapshot(tx, current.ID, episodeN, episodeGeneration, fingerprints, materials, sceneIDs, dub, subtitles, audio, mergeSnapshotOptions{Version: snapshotVersion, Clips: sequence.Clips, VisualTracks: sequence.VisualTracks})
 		if err != nil {
 			return err
 		}
@@ -9329,7 +9345,8 @@ func (s *ProjectService) createMergeTaskRecord(p *models.Project, sceneIDs []uin
 			}
 			editSequence = string(value)
 		}
-		mt = models.MergeTask{ProjectID: current.ID, EpisodeN: episodeN, Title: fmt.Sprintf("第%d集 · %s", episodeN, current.Title), SceneOrder: strings.Join(ids, ","), EditSequence: editSequence, SceneVideoFingerprints: string(encoded), InputSnapshot: string(snapshot), Status: "pending", Generation: episodeGeneration, RequestedDub: dub, RequestedSubtitles: subtitles, RequestedScreenText: audio.ScreenText, NativeVolume: audio.NativeVolume, DialogueVolume: audio.DialogueVolume, BGMVolume: audio.BGMVolume, DialogueMix: audio.DialogueMix}
+		globalJSON, _ := json.Marshal(sequence.VisualTracks)
+		mt = models.MergeTask{VisualTracks: string(globalJSON), ProjectID: current.ID, EpisodeN: episodeN, Title: fmt.Sprintf("第%d集 · %s", episodeN, current.Title), SceneOrder: strings.Join(ids, ","), EditSequence: editSequence, SceneVideoFingerprints: string(encoded), InputSnapshot: string(snapshot), Status: "pending", Generation: episodeGeneration, RequestedDub: dub, RequestedSubtitles: subtitles, RequestedScreenText: audio.ScreenText, NativeVolume: audio.NativeVolume, DialogueVolume: audio.DialogueVolume, BGMVolume: audio.BGMVolume, DialogueMix: audio.DialogueMix}
 		return tx.Create(&mt).Error
 	})
 	if err != nil {
@@ -9378,7 +9395,7 @@ func (s *ProjectService) validateMergeInputs(tx *gorm.DB, mt *models.MergeTask) 
 	if err := json.Unmarshal([]byte(mt.InputSnapshot), &expectedSnapshot); err != nil {
 		return nil, fmt.Errorf("合并任务的输入快照损坏")
 	}
-	if expectedSnapshot.Version != 6 && expectedSnapshot.Version != 7 {
+	if expectedSnapshot.Version != 6 && expectedSnapshot.Version != 7 && expectedSnapshot.Version != 8 {
 		return nil, fmt.Errorf("合并任务的输入快照版本不受支持: %d", expectedSnapshot.Version)
 	}
 	var clips []mergeEditClip
@@ -9421,7 +9438,16 @@ func (s *ProjectService) validateMergeInputs(tx *gorm.DB, mt *models.MergeTask) 
 		return nil, trackErr
 	}
 	materials = append(materials, trackMaterials...)
-	actualSnapshot, err := s.captureMergeInputSnapshot(tx, mt.ProjectID, mt.EpisodeN, mt.Generation, fingerprints, materials, orderedIDs, mt.RequestedDub, mt.RequestedSubtitles, MergeAudioOptions{NativeVolume: mt.NativeVolume, DialogueVolume: mt.DialogueVolume, BGMVolume: mt.BGMVolume, DialogueMix: mt.DialogueMix, ScreenText: mt.RequestedScreenText}, mergeSnapshotOptions{Version: expectedSnapshot.Version, Clips: clips})
+	globalTracks, err := decodeGlobalVisualTracks(mt.VisualTracks)
+	if err != nil {
+		return nil, err
+	}
+	globalMaterials, err := fingerprintClipTracks(tx, mt.ProjectID, []mergeEditClip{{VisualTracks: globalTracks}})
+	if err != nil {
+		return nil, err
+	}
+	materials = append(materials, globalMaterials...)
+	actualSnapshot, err := s.captureMergeInputSnapshot(tx, mt.ProjectID, mt.EpisodeN, mt.Generation, fingerprints, materials, orderedIDs, mt.RequestedDub, mt.RequestedSubtitles, MergeAudioOptions{NativeVolume: mt.NativeVolume, DialogueVolume: mt.DialogueVolume, BGMVolume: mt.BGMVolume, DialogueMix: mt.DialogueMix, ScreenText: mt.RequestedScreenText}, mergeSnapshotOptions{Version: expectedSnapshot.Version, Clips: clips, VisualTracks: globalTracks})
 	if err != nil {
 		return nil, err
 	}
