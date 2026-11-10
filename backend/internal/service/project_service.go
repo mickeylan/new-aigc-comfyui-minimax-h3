@@ -2595,7 +2595,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 			if speaker == "" {
 				speaker = "旁白"
 			}
-			lines = append(lines, speaker+"："+strings.TrimSpace(d.Text))
+			lines = append(lines, "[speech_type="+d.SpeechType+"] "+speaker+"："+strings.TrimSpace(d.Text))
 		}
 		dialogueContext = strings.Join(lines, "\n")
 	}
@@ -2609,7 +2609,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 运镜必须自然融入动作句：明确运动类型；仅在确有意义时写小/大幅度和慢/快速，正常速度与中等幅度省略。运镜可以随时间从固定转为移动，按镜头时间顺序表达清楚，避免把人物运动误写成摄影机运动。
 按源文原序保留可见的起因/触发、物质或对象的出现与状态转变、主动运动的方向和作用力、对象间接触/作用、传播过程，以及环境最终状态。这些是动作链，不属于应删除的文学“前因后果”。不得复述剧情背景（指不可见的背景解释）、人物关系、心理活动、内心想法、氛围解释或观众感受；禁止“仿佛想说什么”“未说出口的问题”“沉默中充满”等文学化语言暗示。
 第一句以 [Shot 1] 开头，说明画面可从%s参考状态开始；随后直接写动作与镜头。不得新增角色、对白、道具、地点、胜负、伤亡或剧情结果。不得创造用户未写的威胁、攻击、应对或剧情推进。只有源文明确写出的角色反应才能加入；禁止为制造戏剧性而补出防御、反击或新结果。
-Dialogue只决定人物是否开口及必要口型时机；对白文本将由系统确定性加入，你不得在正文输出台词、<d>标签或改写台词。无结构化对白时，人物保持闭口，不得描写嘴唇微张、欲言又止或任何说话暗示。
+按每条Dialogue的speech_type分别处理发声方式：dialogue是现场说话，可在该句期间同步口型；monologue是可听见的内心画外声，该人物在该句期间嘴唇完全闭合，不做开口或说话口型，只保留原文的可见反应；narration和offscreen_dialogue不驱动画面人物口型。闭口要求仅作用于对应语句/时段，不得阻止同一人物后续dialogue正常开口。对白文本将由系统确定性加入，你不得在正文输出台词、<d>标签或改写台词。无结构化对白时，人物保持闭口，不得描写嘴唇微张、欲言又止或任何说话暗示。
 正文中的人物身份占位必须逐字使用【场景剧情】和【Shot导演设计】里的中文真实角色名，以便系统确定性替换为正确 <Subject N>；其余视觉叙述使用英文。严禁拼音、英文音译、别名，也禁止自行猜测Subject编号。
 四视图只负责人物身份与服装，场景图只负责环境；不得从参考图反推剧情，不得复述或猜测外貌、服装、陈设。
 场景类型规则：%s`, combatDetailRule, openingInstruction, h3SceneModeInstruction(sceneMode))
@@ -4401,7 +4401,13 @@ func h3SoundscapeContractForDialogues(dubs []models.Dialogue) string {
 	if narrationOnly {
 		return "Only natural location ambience and physically motivated diegetic action sounds are present. Structured speech consists only of audio-only narration track (S1) and appears only in the shot timeline; visible characters remain silent, with no additional speech, singing, humming, musical tones, or rhythmic score."
 	}
-	return h3SoundscapeContract(true)
+	contract := h3SoundscapeContract(true)
+	for _, d := range valid {
+		if d.SpeechType == "monologue" {
+			return contract + " Inner-monologue lines are audio-only inner voice, not sound spoken in the location; during each such line its character keeps their lips completely closed with no lip-sync. On-screen dialogue in other intervals remains normally spoken."
+		}
+	}
+	return contract
 }
 
 func h3NoMusicContract() string {

@@ -167,7 +167,9 @@ func renderH3PlannedDialogue(d models.Dialogue, id int, refs []string) string {
 	case "narration":
 		clause = speaker + " narrates: <d>[Chinese] " + text + "</d>."
 	case "monologue":
-		clause = speaker + " delivers an internal monologue: <d>[Chinese] " + text + "</d>."
+		// Use the same audio-only/closed-mouth contract as direct compilation.
+		// The planning pass must not downgrade thought audio into spoken dialogue.
+		return renderStructuredDialogue(d, id, refs)
 	case "offscreen_dialogue":
 		clause = speaker + " says in a clearly identified off-screen voice: <d>[Chinese] " + text + "</d>."
 	default:
