@@ -2561,6 +2561,9 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	generationContent := sceneDialogueGenerationContent(sc)
 	canonicalSceneContent := normalizeUserH3ShotMarkers(generationContent)
 	canonicalSceneContent, explicitTimedShotCount := normalizeSceneTimedBeats(canonicalSceneContent, normalizeSceneDuration(sc.Duration))
+	if explicitTimedShotCount == 0 && len(h3ShotMarkerPattern.FindAllStringIndex(canonicalSceneContent, -1)) > 1 {
+		return s.compileAuthoredH3ShotAction(sc, canonicalSceneContent, refLines)
+	}
 	sourceEventLedger := formatH3SourceEventLedger(canonicalSceneContent)
 	dubs := s.sceneVideoDialogues(sc)
 	shots, err := s.currentSceneDirectorShots(sc)
