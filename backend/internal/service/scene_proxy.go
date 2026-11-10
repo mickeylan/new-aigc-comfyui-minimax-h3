@@ -79,6 +79,17 @@ func (s *Service) HandleSceneMediaInfo(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"scene_id": sc.ID, "has_video": true, "error": "源视频暂时不可探测", "proxy_ready": false})
 		return
 	}
+	if info.FPS <= 0 && s.Remote.canProbeMediaLocally(source) {
+		// The internal MP4 box parser does not decode frame timing. Enrich the
+		// already valid dimensions with a local ffprobe pass so frame stepping
+		// uses the real source rate rather than an assumed 24fps.
+		if enriched, enrichErr := probeLocalVideoWithFFprobe(source, info); enrichErr == nil {
+			info.FPS = enriched.FPS
+			if enriched.Duration > 0 {
+				info.Duration = enriched.Duration
+			}
+		}
+	}
 	proxyURL, proxyReady := "", false
 	if s.Projects.proxyRoot() != "" {
 		if path, pathErr := s.Projects.proxyPath(p.ID, sc.ID, source); pathErr == nil {

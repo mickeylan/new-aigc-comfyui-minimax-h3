@@ -38,6 +38,15 @@ func proxyTestService(t *testing.T) (*Service, *config.Config, string) {
 	return &Service{Cfg: cfg, DB: db, Projects: projects, Upload: upload, Remote: remote, Materials: materials, Fonts: NewFontRegistry(cfg.Storage.DataDir)}, cfg, root
 }
 
+func TestParseFrameRate(t *testing.T) {
+	cases := map[string]float64{"24/1": 24, "30000/1001": 29.97, "25": 25, "0/0": 0, "": 0, "abc": 0, "1001/0": 0}
+	for input, want := range cases {
+		if got := parseFrameRate(input); math.Abs(got-want) > .001 {
+			t.Fatalf("parseFrameRate(%q)=%v want %v", input, got, want)
+		}
+	}
+}
+
 func TestProxyCacheKeyFollowsSourceIdentityAndRejectsTraversal(t *testing.T) {
 	svc, _, root := proxyTestService(t)
 	source := filepath.Join(root, "source.mp4")
