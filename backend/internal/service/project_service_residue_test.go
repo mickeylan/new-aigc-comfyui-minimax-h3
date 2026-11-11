@@ -21,6 +21,21 @@ func TestCompactFinalH3VisualBodyRemovesReportedTemplateResidue(t *testing.T) {
 	}
 }
 
+func TestCompactFinalH3VisualBodyKeepsInShotFadeAndWipePhysics(t *testing.T) {
+	input := "[Shot 1] The white blade light fades from tip to hilt as <Subject 1> wipes her tears. Dissolve.\n[Shot 2] At 00:05.000, the net's shadow fades in across the ground. Cross-dissolve transition."
+	got := compactFinalH3VisualBody(input)
+	for _, want := range []string{"The white blade light fades from tip to hilt", "wipes her tears", "the net's shadow fades in across the ground"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("lost in-shot visual fact %q: %s", want, got)
+		}
+	}
+	for _, bad := range []string{"Dissolve", "transition"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("retained editing-transition metadata %q: %s", bad, got)
+		}
+	}
+}
+
 func TestH3SubjectDefinitionsPreserveExactReferenceIdentity(t *testing.T) {
 	definitions, _, _ := h3VideoSubjects([]string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图", "- <Picture 3>：场景「天阙宗玉霄宫梵心桃花林」参考图"})
 	joined := strings.Join(definitions, "\n")

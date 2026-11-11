@@ -267,6 +267,14 @@ func (s *Service) HandlePreviewSceneBlockingPrompt(c *gin.Context) {
 				prompt = normalizeSavedH3Audio(prompt, dialogues, refLines, shots)
 				prompt = applyAuthoritativeSceneShotTimeline(prompt, scene.Content)
 				prompt = s.Projects.applySceneShotTimeline(scene, prompt)
+				if detail := h3PromptSection(prompt, "detailed_description:"); detail != "" {
+					marked, _ := applyH3DialogueMarkers(detail, dialogues, refLines)
+					prompt = strings.Replace(prompt, detail, marked, 1)
+				} else if detail := h3IntegratedDescription(prompt); detail != "" {
+					marked, _ := applyH3DialogueMarkers(detail, dialogues, refLines)
+					prompt = strings.Replace(prompt, detail, marked, 1)
+				}
+				actionPrompt = h3DialogueMarkerPattern.ReplaceAllString(actionPrompt, "")
 			}
 		}
 	default:
