@@ -44,7 +44,9 @@ func (s *ProjectService) composeH3DialogueTimeline(sc *models.Scene, visual stri
 		return visual, nil
 	}
 	diagnosis := DiagnoseH3DialoguePlacement(visual, valid, referenceLines)
-	if len(diagnosis.Unplaced) == 0 && len(placedOccurrences(visual)) == len(valid) && !h3DialogueOnlyAtShotEnds(visual) {
+	terminalDialogue := h3DialogueOnlyAtShotEnds(visual)
+	repairCluster := terminalDialogue && len(placedOccurrences(visual)) > 1
+	if len(diagnosis.Unplaced) == 0 && len(placedOccurrences(visual)) == len(valid) && !terminalDialogue {
 		return visual, nil
 	}
 	if s == nil || s.textProvider == nil {
@@ -83,7 +85,7 @@ func (s *ProjectService) composeH3DialogueTimeline(sc *models.Scene, visual stri
 		"scene_content": content, "accepted_visual_timeline": visual,
 		"actual_shot_numbers": shots, "quotes": quotes, "known_placements_must_preserve": known,
 	})
-	system := `Place each reviewed quote at its actual spoken beat, using scene_content and accepted_visual_timeline as planning context. Do not rewrite prose. Return only JSON: {"placements":[{"index":0,"shot":1,"after":"exact complete visual clause"}]}. "after" must be an exact, unique, complete substring from that shot's visual prose: the visual beat after which speech occurs and before subsequent action. Include every quote index exactly once in source order. Use only actual_shot_numbers. Preserve every known shot placement exactly.`
+	system := `Place each reviewed quote at its actual spoken beat, using scene_content and accepted_visual_timeline as planning context. Do not rewrite prose. Return only JSON: {"placements":[{"index":0,"shot":1,"after":"exact complete visual clause"}]}. "after" must be an exact, unique, complete substring from that shot's visual prose: the visual beat after which speech occurs and before subsequent action. Include every quote index exactly once in source order. Use only actual_shot_numbers. Preserve every known shot placement exactly. Do not collect all quotes after the final visual action: anchor each to its actual speaking beat, before any subsequent reaction or action. A final quote may follow the final visual beat, but earlier quotes must remain at their own earlier beats.`
 
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
@@ -115,7 +117,12 @@ func (s *ProjectService) composeH3DialogueTimeline(sc *models.Scene, visual stri
 			lastErr = err
 			continue
 		}
-		return applyH3DialoguePlan(visual, valid, referenceLines, plan), nil
+		composed := applyH3DialoguePlan(visual, valid, referenceLines, plan)
+		if repairCluster && h3DialogueOnlyAtShotEnds(composed) {
+			lastErr = fmt.Errorf("dialogue remains clustered at shot ends; use after anchors at the actual speaking beats before subsequent visual action")
+			continue
+		}
+		return composed, nil
 	}
 	return "", fmt.Errorf("AI未能完整安排对白: %v", lastErr)
 }
@@ -253,7 +260,8 @@ func h3ShotBody(body string, shot int) (string, bool) {
 }
 
 // A fully reconciled timeline is normally left untouched. The exception is the
-// old renderer's tell-tale form: every dialogue tag is the final content in its shot.
+// old renderer's tell-tale form: every dialogue is part of a terminal speech
+// cluster. Another speaker's clause after a tag is not intervening visual action.
 func h3DialogueOnlyAtShotEnds(body string) bool {
 	occ := placedOccurrences(body)
 	if len(occ) == 0 {
@@ -268,8 +276,13 @@ func h3DialogueOnlyAtShotEnds(body string) bool {
 		if tagEnd < 0 {
 			return false
 		}
-		tail := strings.Trim(body[o.position+tagEnd+len("</d>"):end], " \t\r\n.!?。；;<scenetrans><cutoff>")
-		if tail != "" {
+		tail := body[o.position+tagEnd+len("</d>") : end]
+		// Ignore subsequent complete speech clauses, but retain any action
+		// between them. Checking the raw tail misses every multi-speaker cluster.
+		tail = h3DialogueClausePattern.ReplaceAllString(tail, "")
+		tail = h3EnglishDialogueClausePattern.ReplaceAllString(tail, "")
+		tail = strings.NewReplacer("<scenetrans>", "", "<cutoff>", "").Replace(tail)
+		if strings.Trim(tail, " \t\r\n.!?。！？；;") != "" {
 			return false
 		}
 	}

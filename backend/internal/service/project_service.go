@@ -3395,6 +3395,16 @@ func precedingPronounSpeaker(content string, pronounPos int, names []string) str
 }
 
 func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Dialogue {
+	// Share source-span recognition with the coverage ledger. Repair only the
+	// local delimiter for attribution matching, never the persisted source/text.
+	_, quoteSpans := extractQuotedDialogueSpans(content)
+	local := []byte(content)
+	for _, span := range quoteSpans {
+		if span.end >= len("“") && strings.HasSuffix(content[span.start:span.end], "“") {
+			copy(local[span.end-len("“"):span.end], "”")
+		}
+	}
+	content = string(local)
 	type foundSpeech struct {
 		pos      int
 		dialogue models.Dialogue
@@ -3403,7 +3413,7 @@ func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Di
 	for _, name := range names {
 		// 接受“林采薇说道：\"...\"”“传来林采薇的声音说道：\"...\"”等明确发声写法。
 		// 必须同时具备已知角色名、明确说话动词和引号原文，避免把剧情说明猜成对白。
-		pattern := regexp.MustCompile(regexp.QuoteMeta(name) + `[^。！？!?\r\n]{0,160}?(?:厉喝|怒喝|大喝|喝道|喝喊|喊道|叫道|高喊|刚喊完|喊完|刚说完|说完|说道|回答道?|回应道?|念过一声|念道|念诵|说|问道|答道|开口(?:道)?)(?:\s*[:：]\s*["“]?|\s*["“])([^"”]+)["”]`)
+		pattern := regexp.MustCompile(regexp.QuoteMeta(name) + `[^。！？!?\r\n]{0,160}?(?:厉喝|怒喝|大喝|喝道|喝喊|喊道|叫道|高喊|刚喊完|喊完|刚说完|说完|说道|回答道?|回应道?|念过一声|念道|念诵|传音|说|问道|答道|开口(?:道)?)(?:\s*[:：]\s*["“]?|\s*["“])([^"”]+)["”]`)
 		for _, match := range pattern.FindAllStringSubmatchIndex(content, -1) {
 			clauseStart := 0
 			if boundary := strings.LastIndexAny(content[:match[0]], "。！？!?；;\r\n"); boundary >= 0 {
@@ -3411,6 +3421,7 @@ func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Di
 				clauseStart = boundary + size
 			}
 			beforeName := strings.Trim(strings.TrimSpace(content[clauseStart:match[0]]), `"“”'‘’`)
+			beforeName = h3BareShotPattern.ReplaceAllString(beforeName, "")
 			beforeName = sceneBracketTimelinePrefixPattern.ReplaceAllString(beforeName, "")
 			beforeName = sceneTimelinePrefixPattern.ReplaceAllString(beforeName, "")
 			continuityLead := strings.Trim(strings.TrimSpace(beforeName), "，,：:")
@@ -3446,7 +3457,7 @@ func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Di
 					contextRunes = contextRunes[len(contextRunes)-20:]
 				}
 				attribution := string(contextRunes) + lead
-				if strings.Contains(attribution, "传来") || strings.Contains(attribution, "响起") || strings.Contains(attribution, "门外") || strings.Contains(attribution, "屋外") || strings.Contains(attribution, "画外") || strings.Contains(attribution, "身后") || strings.Contains(attribution, "后方") || strings.Contains(attribution, "远处") {
+				if strings.Contains(attribution, "传来") || strings.Contains(attribution, "响起") || strings.Contains(attribution, "门外") || strings.Contains(attribution, "屋外") || strings.Contains(attribution, "画外") || strings.Contains(attribution, "身后") || strings.Contains(attribution, "后方") || strings.Contains(attribution, "远处") || strings.Contains(lead, "传音") {
 					speechType = "offscreen_dialogue"
 				}
 				found = append(found, foundSpeech{pos: match[0], dialogue: models.Dialogue{Character: name, SpeechType: speechType, Text: text}})

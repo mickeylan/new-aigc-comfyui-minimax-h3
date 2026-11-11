@@ -78,8 +78,22 @@ func extractQuotedDialogueSpans(content string) ([]SceneDialogueAnalysisItem, []
 			if n := strings.IndexByte(content[bodyStart:], '"'); n >= 0 {
 				closeAt = bodyStart + n
 			}
-		} else if n := strings.Index(content[bodyStart:], "”"); n >= 0 {
-			closeAt = bodyStart + n
+		} else if n := strings.IndexAny(content[bodyStart:], "“”"); n >= 0 {
+			candidate := bodyStart + n
+			if strings.HasPrefix(content[candidate:], "”") {
+				closeAt = candidate
+			} else {
+				// Tolerate a reversed closing quote only in an explicit colon-led
+				// speech span, on the same line, followed by prose punctuation.
+				// Never let an unclosed quote consume a later opening quote.
+				prefix := strings.TrimSpace(content[:start])
+				tail := strings.TrimLeft(content[candidate+width:], " \t")
+				if (strings.HasSuffix(prefix, "：") || strings.HasSuffix(prefix, ":")) &&
+					!strings.ContainsAny(content[bodyStart:candidate], "\r\n") &&
+					(tail == "" || strings.ContainsRune("，,。；;！？!?\r\n", []rune(tail)[0])) {
+					closeAt = candidate
+				}
+			}
 		}
 		if closeAt < 0 {
 			pos = bodyStart
