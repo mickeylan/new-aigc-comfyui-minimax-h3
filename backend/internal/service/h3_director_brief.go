@@ -12,6 +12,19 @@ import (
 var h3BriefHanOutsideNamePattern = regexp.MustCompile(`[\p{Han}]`)
 var h3BriefQuotedNamePattern = regexp.MustCompile(`[「（(][^」）)]*[」）)]`)
 
+// Models often drop the angle brackets ("Subject 2", "Subjects 5 and 1"); H3 binds
+// only the bracketed <Subject N> tag, so bare references are restored before use.
+var h3BriefBareSubjectListPattern = regexp.MustCompile(`\bSubjects\s+([0-9]+(?:\s*,\s*[0-9]+)*\s*,?\s+and\s+[0-9]+)\b`)
+var h3BriefBareSubjectPattern = regexp.MustCompile(`(^|[^<])\bSubject\s+([0-9]+)\b`)
+var h3BriefNumberPattern = regexp.MustCompile(`[0-9]+`)
+
+func normalizeH3BriefSubjectTags(text string) string {
+	text = h3BriefBareSubjectListPattern.ReplaceAllStringFunc(text, func(list string) string {
+		return h3BriefNumberPattern.ReplaceAllString(strings.TrimSpace(strings.TrimPrefix(list, "Subjects")), "<Subject $0>")
+	})
+	return h3BriefBareSubjectPattern.ReplaceAllString(text, "$1<Subject $2>")
+}
+
 type h3DirectorBrief struct {
 	Summary   string   `json:"summary"`
 	Retention []string `json:"retention"`
@@ -53,7 +66,7 @@ retention：2至5条英文，只写 detailed_description 已体现的连续性�
 }
 
 func validateH3DirectorBrief(brief h3DirectorBrief, definitions string) (string, []string, bool) {
-	summary := strings.Join(strings.Fields(brief.Summary), " ")
+	summary := normalizeH3BriefSubjectTags(strings.Join(strings.Fields(brief.Summary), " "))
 	if !strings.HasPrefix(summary, "[reference generation]") {
 		summary = strings.TrimSpace("[reference generation] " + summary)
 	}
@@ -62,7 +75,7 @@ func validateH3DirectorBrief(brief h3DirectorBrief, definitions string) (string,
 	}
 	notes := make([]string, 0, len(brief.Retention))
 	for _, note := range brief.Retention {
-		note = strings.Join(strings.Fields(note), " ")
+		note = normalizeH3BriefSubjectTags(strings.Join(strings.Fields(note), " "))
 		if note == "" {
 			continue
 		}
