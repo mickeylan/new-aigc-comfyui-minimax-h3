@@ -16,6 +16,7 @@ const (
 	TemplateQwen21T2I       = "qwen_image_2_1_t2i"
 	TemplateQwen21MultiEdit = "qwen_image_2_1_multi_edit"
 	TemplateMossSheet       = "moss_character_sheet"
+	TemplateMossT2I         = "moss_image_t2i"
 )
 
 // normalizeSheetImageEngine 角色四视图直接文生引擎，默认 Moss。
@@ -42,6 +43,16 @@ func normalizeAssetImageEngine(value string) (string, error) {
 		return "", fmt.Errorf("不支持的资产生图引擎")
 	}
 }
+// normalizeAssetReferenceEngine 道具/场景资产参考图引擎，默认 Moss（中文文字可读，Krea2 基本不可读）。
+// 标准照与换装仍用 normalizeAssetImageEngine，避免选了 Moss 却被静默当成 Krea2。
+func normalizeAssetReferenceEngine(value string) (string, error) {
+	switch strings.TrimSpace(value) {
+	case "", ImageEngineMoss:
+		return ImageEngineMoss, nil
+	}
+	return normalizeAssetImageEngine(value)
+}
+
 func normalizeSceneImageEngine(value string) (string, error) {
 	switch strings.TrimSpace(value) {
 	case "", ImageEngineMiniMaxH3:

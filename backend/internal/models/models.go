@@ -396,7 +396,7 @@ type Asset struct {
 	Description string    `gorm:"type:text" json:"description"`                                    // 外观描述（道具：形状/材质/颜色/细节；场景：空间/建筑/光线氛围）
 	VisualType  string    `gorm:"column:visual_type;default:normal" json:"visual_type"`            // 场景资产：normal/megastructure
 	MegaType    string    `gorm:"column:mega_type" json:"mega_type"`                               // 场景资产巨构类别
-	ImageEngine string    `gorm:"column:image_engine;default:krea2" json:"image_engine"`           // krea2/qwen_image_2_1
+	ImageEngine string    `gorm:"column:image_engine;default:krea2" json:"image_engine"`           // moss/krea2/qwen_image_2_1；新建资产由服务层显式写 moss，列默认值保留以免迁移重建表
 	VisibleText string    `gorm:"column:visible_text;type:text" json:"visible_text"`               // 必须逐字呈现在图中的可读文字
 	Image       string    `json:"image"`                                                           // 参考图文件名（input/<project_id>/ 下）
 	ImageTaskID string    `gorm:"column:image_task_id;index" json:"image_task_id"`                 // Krea2 参考图生成任务

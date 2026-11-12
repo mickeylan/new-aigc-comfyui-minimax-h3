@@ -287,7 +287,7 @@
               <span v-if="a.kind === 'prop' && a.sheet_task_id" class="char-voice">⏳ 道具四视图生成中</span>
               <span v-if="a.kind === 'prop' && a.sheet_error" class="fail-msg">{{ a.sheet_error }}</span>
               <div class="char-actions">
-                <button class="btn btn-sm btn-secondary" :disabled="busy || !!a.image_task_id || !assetEngineReady(a)" :title="assetEngineReady(a) ? '' : '所选 Qwen-Image-2.1 工作流模板未安装'" @click="genAssetImage(a)">
+                <button class="btn btn-sm btn-secondary" :disabled="busy || !!a.image_task_id || !assetEngineReady(a)" :title="assetEngineReady(a) ? '' : '所选 ' + imageEngineLabel(a.image_engine) + ' 工作流模板未安装'" @click="genAssetImage(a)">
                   {{ a.image_task_id ? imageEngineLabel(a.image_engine) + ' 生成中…' : (a.image ? imageEngineLabel(a.image_engine) + ' 重生成参考图' : imageEngineLabel(a.image_engine) + ' 生成参考图') }}
                 </button>
                 <button class="btn btn-sm btn-ghost" :disabled="busy || a._uploading" @click="uploadAssetImage(a)">
@@ -1106,8 +1106,8 @@
           <select v-if="assetForm.visual_type === 'megastructure'" v-model="assetForm.mega_type" class="input"><option value="architecture">建筑巨构</option><option value="creature">巨兽/生物</option><option value="geological">自然/地质</option><option value="mechanical">机械/载具</option><option value="surreal">超现实混合</option></select>
           <div class="field-hint">只影响该场景资产参考图：强化尺度参照、结构可读性、大气分层和重量感，不作用于剧情分镜。</div>
         </div>
-        <div class="field"><label>参考图生成模板</label><select v-model="assetForm.image_engine" class="input"><option value="krea2">Krea2（默认）</option><option value="qwen_image_2_1" :disabled="!qwenAssetTemplateReady">Qwen-Image-2.1{{ qwenAssetTemplateReady ? '' : '（工作流模板未安装）' }}</option></select><div class="field-hint">默认使用 Krea2；需要清晰中文时推荐 Qwen-Image-2.1。模板未安装时不可选择。</div></div>
-        <div class="field"><label>画面内可读文字 <span class="optional">可选，需逐字呈现</span></label><textarea v-model="assetForm.visible_text" class="textarea" rows="2" placeholder="例如：天阙宗；留空表示画面不需要文字"/><div v-if="assetForm.visible_text.trim() && !qwenAssetTemplateReady" class="field-hint warn">检测到可读文字，建议安装 Qwen-Image-2.1 文生图模板后生成。</div></div>
+        <div class="field"><label>参考图生成模板</label><select v-model="assetForm.image_engine" class="input"><option value="moss" :disabled="!mossAssetTemplateReady">Moss（默认）{{ mossAssetTemplateReady ? '' : '（工作流模板未安装）' }}</option><option value="krea2">Krea2</option><option value="qwen_image_2_1" :disabled="!qwenAssetTemplateReady">Qwen-Image-2.1{{ qwenAssetTemplateReady ? '' : '（工作流模板未安装）' }}</option></select><div class="field-hint">默认使用 Moss，中文文字可读；需要清晰中文时推荐 Moss 或 Qwen-Image-2.1，Krea2 生成的中文基本不可读。模板未安装时不可选择。</div></div>
+        <div class="field"><label>画面内可读文字 <span class="optional">可选，需逐字呈现</span></label><textarea v-model="assetForm.visible_text" class="textarea" rows="2" placeholder="例如：天阙宗；留空表示画面不需要文字"/><div v-if="assetForm.visible_text.trim() && assetForm.image_engine === 'krea2'" class="field-hint warn">检测到可读文字，Krea2 生成的中文基本不可读，建议改用 Moss 或 Qwen-Image-2.1。</div><div v-else-if="assetForm.visible_text.trim() && !mossAssetTemplateReady && !qwenAssetTemplateReady" class="field-hint warn">检测到可读文字，建议安装 Moss 或 Qwen-Image-2.1 文生图模板后生成。</div></div>
         <div class="field">
           <div class="field-label-actions"><label>简单说明 / AI 设计结果 <span class="optional">用于保证{{ assetKindLabel }}一致</span></label><button class="btn btn-sm btn-secondary" :disabled="redesigningAsset" @click="redesignAssetDescription">{{ redesigningAsset ? 'AI 设计中…' : 'AI 重新设计' }}</button></div>
           <textarea v-model="assetForm.description" class="textarea" rows="6"
@@ -1350,8 +1350,13 @@ function setAssetDeleting(kind, id, deleting) {
   deletingAssets.value = next
 }
 let assetRenameEpoch = 0
-const assetForm = reactive({ name: '', description: '', visual_type: 'normal', mega_type: 'architecture', image_engine: 'krea2', visible_text: '' })
-watch(() => assetForm.visible_text, value => { if (String(value || '').trim() && qwenAssetTemplateReady.value) assetForm.image_engine = 'qwen_image_2_1' })
+const assetForm = reactive({ name: '', description: '', visual_type: 'normal', mega_type: 'architecture', image_engine: 'moss', visible_text: '' })
+// 有可读文字时避开 Krea2（中文基本不可读）：优先 Moss，未安装时退到 Qwen。
+watch(() => assetForm.visible_text, value => {
+  if (!String(value || '').trim() || (assetForm.image_engine !== 'krea2' && assetEngineReady(assetForm))) return
+  if (mossAssetTemplateReady.value) assetForm.image_engine = 'moss'
+  else if (qwenAssetTemplateReady.value) assetForm.image_engine = 'qwen_image_2_1'
+})
 const redesigningAsset = ref(false)
 const voicePresets = ['Cherry', 'Ethan', 'Chelsie', 'Serena', 'Nofish', 'Dylan', 'Jada', 'Peter', 'Sunny', 'Luna']
 const showScript = ref(false)
@@ -1389,9 +1394,13 @@ const sheetEngineReady = ch => {
   return engine === 'moss' ? mossSheetTemplateReady.value : engine !== 'qwen_image_2_1' || qwenAssetTemplateReady.value
 }
 const sheetEngineLabel = engine => (engine || 'moss') === 'moss' ? 'Moss' : imageEngineLabel(engine)
-const assetEngineReady = a => (a.image_engine || 'krea2') !== 'qwen_image_2_1' || qwenAssetTemplateReady.value
+const mossAssetTemplateReady = computed(() => hasTemplate('moss_image_t2i'))
+const assetEngineReady = a => {
+  const engine = a.image_engine || 'moss'
+  return engine === 'moss' ? mossAssetTemplateReady.value : engine !== 'qwen_image_2_1' || qwenAssetTemplateReady.value
+}
 const sceneEngineReady = sc => (sc.image_engine || 'minimax_h3') !== 'qwen_image_2_1' || qwenSceneTemplateReady.value
-const imageEngineLabel = engine => engine === 'qwen_image_2_1' ? 'Qwen-Image-2.1' : 'Krea2'
+const imageEngineLabel = engine => engine === 'qwen_image_2_1' ? 'Qwen-Image-2.1' : engine === 'moss' ? 'Moss' : 'Krea2'
 const videoCatalog = computed(() => {
   const rows = modelCatalog.value.filter(m => String(m.mode || '').includes('video'))
   return rows.length ? rows : [
@@ -3402,12 +3411,12 @@ async function uploadPropSheet(a) {
 }
 function openCreateAsset() {
   assetError.value = ''
-  Object.assign(assetForm, { name: '', description: '', visual_type: 'normal', mega_type: 'architecture', image_engine: 'krea2', visible_text: '' })
+  Object.assign(assetForm, { name: '', description: '', visual_type: 'normal', mega_type: 'architecture', image_engine: 'moss', visible_text: '' })
   editingAsset.value = 'new'
 }
 function openEditAsset(a) {
   assetError.value = ''
-  Object.assign(assetForm, { name: a.name, description: a.description, visual_type: a.visual_type || 'normal', mega_type: a.mega_type || 'architecture', image_engine: a.image_engine || 'krea2', visible_text: a.visible_text || '' })
+  Object.assign(assetForm, { name: a.name, description: a.description, visual_type: a.visual_type || 'normal', mega_type: a.mega_type || 'architecture', image_engine: a.image_engine || 'moss', visible_text: a.visible_text || '' })
   editingAsset.value = a
 }
 async function redesignAssetDescription() {

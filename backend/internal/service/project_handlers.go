@@ -1945,10 +1945,13 @@ func (s *Service) HandleGenerateAssetImage(c *gin.Context) {
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
-	engine, _ := normalizeAssetImageEngine(a.ImageEngine)
+	engine, _ := normalizeAssetReferenceEngine(a.ImageEngine)
 	label := "Krea2"
-	if engine == ImageEngineQwen21 {
+	switch engine {
+	case ImageEngineQwen21:
 		label = "Qwen-Image-2.1"
+	case ImageEngineMoss:
+		label = "Moss"
 	}
 	c.JSON(http.StatusAccepted, gin.H{"ok": true, "message": fmt.Sprintf("%s「%s」%s 参考图任务已提交", AssetKindLabel(a.Kind), a.Name, label)})
 }

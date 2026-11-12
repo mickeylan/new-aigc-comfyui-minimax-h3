@@ -474,7 +474,7 @@ func createLocalCanon(tx *gorm.DB, projectID uint, entityType, name string) erro
 				return nil
 			}
 		}
-		return tx.Create(&models.Asset{ProjectID: projectID, Kind: entityType, Name: name, Source: "manual"}).Error
+		return tx.Create(&models.Asset{ProjectID: projectID, Kind: entityType, Name: name, Source: "manual", ImageEngine: ImageEngineMoss}).Error
 	default:
 		_ = count
 		return fmt.Errorf("invalid entity_type %q", entityType)

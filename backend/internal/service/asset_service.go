@@ -143,7 +143,7 @@ func (s *ProjectService) CreateAsset(a models.Asset) (*models.Asset, error) {
 	}
 	a.Source = "manual"
 	a.VisualType, a.MegaType = normalizeAssetVisual(a.Kind, a.VisualType, a.MegaType)
-	a.ImageEngine, err = normalizeAssetImageEngine(a.ImageEngine)
+	a.ImageEngine, err = normalizeAssetReferenceEngine(a.ImageEngine)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +169,7 @@ func (s *ProjectService) UpdateAsset(a *models.Asset, req models.Asset) error {
 		updates["name"] = newName
 	}
 	updates["description"] = strings.TrimSpace(req.Description)
-	engine, err := normalizeAssetImageEngine(req.ImageEngine)
+	engine, err := normalizeAssetReferenceEngine(req.ImageEngine)
 	if err != nil {
 		return err
 	}
@@ -240,7 +240,7 @@ func (s *ProjectService) upsertAssetsFromPlan(p *models.Project, plan *dramaPlan
 			continue
 		}
 		s.db.Create(&models.Asset{
-			ProjectID: p.ID, Kind: in.kind, Name: in.name, Description: in.desc, Source: "auto",
+			ProjectID: p.ID, Kind: in.kind, Name: in.name, Description: in.desc, Source: "auto", ImageEngine: ImageEngineMoss,
 		})
 	}
 	if len(incoming) > 0 {
@@ -264,7 +264,7 @@ func (s *ProjectService) upsertProductionEntitiesFromScenes(projectID uint, scen
 	for _, sc := range scenes {
 		if loc := strings.TrimSpace(sc.Location); loc != "" && !seenAssets[key{AssetKindLocation, loc}] {
 			seenAssets[key{AssetKindLocation, loc}] = true
-			assets = append(assets, models.Asset{ProjectID: projectID, Kind: AssetKindLocation, Name: loc, Source: "auto"})
+			assets = append(assets, models.Asset{ProjectID: projectID, Kind: AssetKindLocation, Name: loc, Source: "auto", ImageEngine: ImageEngineMoss})
 		}
 		for _, pn := range sc.Props {
 			name := strings.TrimSpace(pn)
@@ -272,7 +272,7 @@ func (s *ProjectService) upsertProductionEntitiesFromScenes(projectID uint, scen
 				continue
 			}
 			seenAssets[key{AssetKindProp, name}] = true
-			assets = append(assets, models.Asset{ProjectID: projectID, Kind: AssetKindProp, Name: name, Source: "auto"})
+			assets = append(assets, models.Asset{ProjectID: projectID, Kind: AssetKindProp, Name: name, Source: "auto", ImageEngine: ImageEngineMoss})
 		}
 		for _, name := range append(sceneVisibleNames(sc), sc.VoiceCharacters...) {
 			name = strings.TrimSpace(name)
@@ -382,13 +382,16 @@ func (s *ProjectService) StartAssetImage(a *models.Asset) error {
 	if err := s.db.First(&p, current.ProjectID).Error; err != nil {
 		return err
 	}
-	engine, err := normalizeAssetImageEngine(current.ImageEngine)
+	engine, err := normalizeAssetReferenceEngine(current.ImageEngine)
 	if err != nil {
 		return err
 	}
 	templateCode := "krea2_asset_reference"
-	if engine == ImageEngineQwen21 {
+	switch engine {
+	case ImageEngineQwen21:
 		templateCode = TemplateQwen21T2I
+	case ImageEngineMoss:
+		templateCode = TemplateMossT2I
 	}
 	tpl, err := enabledTemplateByCode(s.db, templateCode)
 	if err != nil {
@@ -396,8 +399,16 @@ func (s *ProjectService) StartAssetImage(a *models.Asset) error {
 	}
 	width, height := assetImageSize(&p, current.Kind)
 	params := map[string]any{"width": width, "height": height}
-	if engine == ImageEngineQwen21 {
+	switch engine {
+	case ImageEngineQwen21:
 		params = map[string]any{"aspect_ratio": qwenAspectRatio(p.AspectRatio), "megapixels": 2.5, "multiple": 8, "reference_resolution": 1024, "steps": 25, "cfg": 1, "negative_prompt": ""}
+	case ImageEngineMoss:
+		// 与 Krea2 尺寸一致：道具方图，场景跟随项目画幅。
+		ratio := qwenAspectRatio(p.AspectRatio)
+		if current.Kind == AssetKindProp {
+			ratio = qwenAspectRatio("1:1")
+		}
+		params = map[string]any{"aspect_ratio": ratio}
 	}
 	task, err := s.tasks.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: buildAssetPrompt(&p, &current), Params: params})
 	if err != nil {
