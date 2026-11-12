@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"comfyui-console/internal/models"
 	"github.com/gin-gonic/gin"
@@ -48,14 +49,42 @@ type directorLogicShotReview struct {
 	Advisories     []string `json:"advisories"`
 }
 
+// directorAuditText strips whitespace and quote marks so model-copied Dialogue can be
+// matched against authoritative text without treating punctuation style as a miss.
+func directorAuditText(value string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || strings.ContainsRune("“”\"‘’'「」『』", r) {
+			return -1
+		}
+		return r
+	}, canonicalDialogueText(value))
+}
+
 func buildDirectorLogicReview(draft *sceneDirectorDraft) []directorLogicShotReview {
+	return buildDirectorLogicReviewWithDialogues(draft, nil)
+}
+
+// buildDirectorLogicReviewWithDialogues audits a director draft. Blocking issues send the
+// draft back to the model; advisories are shown to the user. When authoritative
+// dialogues are supplied, Dialogue placement and speakability are audited too.
+func buildDirectorLogicReviewWithDialogues(draft *sceneDirectorDraft, dialogues []models.Dialogue) []directorLogicShotReview {
 	if draft == nil {
 		return nil
 	}
 	reviews := make([]directorLogicShotReview, len(draft.Shots))
 	seenInformation := map[string]int{}
+	seenCutReason := map[string]int{}
+	seenIntent := map[string]int{}
 	abstractPerformance := regexp.MustCompile(`^(表现|体现|传达|营造|展示|表达).*(情绪|感觉|氛围|关系|主题)`)
 	vagueCut := regexp.MustCompile(`^(切镜|转场|进入下一镜|换个角度|继续剧情|节奏需要)$`)
+	joinedDialogue := ""
+	dialogueShots := []int{}
+	for i, shot := range draft.Shots {
+		if text := directorAuditText(shot.Dialogue); text != "" {
+			joinedDialogue += text
+			dialogueShots = append(dialogueShots, i)
+		}
+	}
 	for i, shot := range draft.Shots {
 		review := directorLogicShotReview{Shot: i + 1, BlockingIssues: []string{}, Advisories: []string{}}
 		infoKey := canonicalDialogueText(strings.ToLower(shot.AudienceInformation))
@@ -63,6 +92,29 @@ func buildDirectorLogicReview(draft *sceneDirectorDraft) []directorLogicShotRevi
 			review.BlockingIssues = append(review.BlockingIssues, fmt.Sprintf("观众新增信息与镜头%d重复，不能用换景别重复同一剧情", previous))
 		} else if infoKey != "" {
 			seenInformation[infoKey] = i + 1
+		}
+		// A templated draft reuses one cut motivation or one intent for every Shot.
+		// Each cut is a distinct decision, so exact repeats are rejected.
+		if cutKey := directorAuditText(shot.CutReason); cutKey != "" {
+			if previous, ok := seenCutReason[cutKey]; ok {
+				review.BlockingIssues = append(review.BlockingIssues, fmt.Sprintf("切镜理由与镜头%d逐字相同，每次切镜必须有各自的具体动机", previous))
+			} else {
+				seenCutReason[cutKey] = i + 1
+			}
+		}
+		if intentKey := directorAuditText(shot.DirectorIntent); intentKey != "" {
+			if previous, ok := seenIntent[intentKey]; ok {
+				review.BlockingIssues = append(review.BlockingIssues, fmt.Sprintf("本镜目的与镜头%d逐字相同，说明仍在复制模板而非为本镜作决策", previous))
+			} else {
+				seenIntent[intentKey] = i + 1
+			}
+		}
+		// Speech must fit the Shot at the planning rate used elsewhere (9 chars/s).
+		if spoken := dialogueTextDuration(shot.Dialogue); spoken > 0 && shot.Duration > 0 && spoken > shot.Duration+0.5 {
+			review.BlockingIssues = append(review.BlockingIssues, fmt.Sprintf("本镜对白自然语速约需%.1f秒，超过镜头时长%.1f秒；请延长本镜或把对白分到相邻镜头", spoken, shot.Duration))
+		}
+		if i > 0 && shot.Duration > 0 && shot.Duration < 3 && draft.Shots[i-1].Duration > 0 && draft.Shots[i-1].Duration < 3 {
+			review.Advisories = append(review.Advisories, "连续两镜都短于3秒，请确认不是机械碎切")
 		}
 		if i > 0 {
 			previousEnd := canonicalDialogueText(draft.Shots[i-1].EndState)
@@ -82,7 +134,32 @@ func buildDirectorLogicReview(draft *sceneDirectorDraft) []directorLogicShotRevi
 		}
 		reviews[i] = review
 	}
+	// Dialogue placement audit against authoritative structured Dialogue. The user's
+	// recurring complaint is every line dumped into the final Shot, or lines dropped.
+	if len(dialogues) > 0 && len(draft.Shots) > 0 {
+		last := len(draft.Shots) - 1
+		for _, dialogue := range dialogues {
+			text := directorAuditText(dialogue.Text)
+			if text == "" {
+				continue
+			}
+			if !strings.Contains(joinedDialogue, text) {
+				reviews[last].BlockingIssues = append(reviews[last].BlockingIssues, fmt.Sprintf("结构化对白「%s」未逐字落到任何镜头的dialogue字段", truncateDirectorAuditText(dialogue.Text)))
+			}
+		}
+		if len(dialogueShots) == 1 && dialogueShots[0] == last && len(dialogues) >= 2 && len(draft.Shots) >= 3 {
+			reviews[last].BlockingIssues = append(reviews[last].BlockingIssues, "全部对白堆在最后一镜，前面的镜头无人说话；对白必须按发生顺序分布到对应镜头")
+		}
+	}
 	return reviews
+}
+
+func truncateDirectorAuditText(value string) string {
+	runes := []rune(strings.TrimSpace(value))
+	if len(runes) <= 12 {
+		return string(runes)
+	}
+	return string(runes[:12]) + "…"
 }
 
 type dialogueRhythmFragmentReview struct {
@@ -781,8 +858,10 @@ func requireDirectorThinking(draft *sceneDirectorDraft) error {
 	analysis.PerformanceFocus = strings.TrimSpace(analysis.PerformanceFocus)
 	analysis.SpatialAxis = strings.TrimSpace(analysis.SpatialAxis)
 	analysis.Specialty = strings.TrimSpace(analysis.Specialty)
-	if analysis.DramaticPurpose == "" || analysis.EmotionalArc == "" || analysis.PowerRelationship == "" || len(analysis.InformationOrder) == 0 || analysis.VisualQuestion == "" || analysis.PerformanceFocus == "" || analysis.SpatialAxis == "" || analysis.Specialty == "" {
-		return fmt.Errorf("Scene导演分析不完整；必须先明确戏剧任务、情绪曲线、权力关系、信息顺序、视觉问题、表演重点、空间轴线和专项类型")
+	// visual_question and withheld_information are specialty-dependent; a plain
+	// dialogue Scene has nothing to withhold and forcing text there yields filler.
+	if analysis.DramaticPurpose == "" || analysis.EmotionalArc == "" || analysis.PowerRelationship == "" || len(analysis.InformationOrder) == 0 || analysis.PerformanceFocus == "" || analysis.SpatialAxis == "" || analysis.Specialty == "" {
+		return fmt.Errorf("Scene导演分析不完整；必须先明确戏剧任务、情绪曲线、权力关系、信息顺序、表演重点、空间轴线和专项类型")
 	}
 	if len(draft.PerformanceBeats) == 0 {
 		return fmt.Errorf("Scene缺少表演Beat；不能直接把故事切成Shot")
@@ -791,16 +870,19 @@ func requireDirectorThinking(draft *sceneDirectorDraft) error {
 		beat := &draft.PerformanceBeats[i]
 		beat.Trigger, beat.Behavior = strings.TrimSpace(beat.Trigger), strings.TrimSpace(beat.Behavior)
 		beat.VisibleChange, beat.SpatialChange, beat.EndState = strings.TrimSpace(beat.VisibleChange), strings.TrimSpace(beat.SpatialChange), strings.TrimSpace(beat.EndState)
-		if beat.Trigger == "" || beat.Behavior == "" || beat.VisibleChange == "" || beat.SpatialChange == "" || beat.EndState == "" {
-			return fmt.Errorf("表演Beat %d不完整；必须包含触发、行为、可见变化、空间变化和结束状态", i+1)
+		// spatial_change is optional: many beats are purely facial or manual.
+		if beat.Trigger == "" || beat.Behavior == "" || beat.VisibleChange == "" || beat.EndState == "" {
+			return fmt.Errorf("表演Beat %d不完整；必须包含触发、行为、可见变化和结束状态", i+1)
 		}
 	}
 	for i := range draft.Shots {
 		shot := &draft.Shots[i]
+		// Only the fields that carry a decision are mandatory. trigger, eye_line,
+		// reaction and focus_subject are facts that exist in some Shots and not in
+		// others; forcing them produces invented stimuli and reactions.
 		fields := []struct{ name, value string }{
 			{"director_intent", shot.DirectorIntent}, {"audience_information", shot.AudienceInformation},
-			{"trigger", shot.Trigger}, {"performance", shot.Performance}, {"eye_line", shot.EyeLine},
-			{"blocking", shot.Blocking}, {"reaction", shot.Reaction}, {"focus_subject", shot.FocusSubject}, {"cut_reason", shot.CutReason},
+			{"performance", shot.Performance}, {"blocking", shot.Blocking}, {"cut_reason", shot.CutReason},
 		}
 		for _, field := range fields {
 			if strings.TrimSpace(field.value) == "" {
@@ -1698,28 +1780,87 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 	return nil
 }
 
+// directorSpecialtySkills maps a specialty name to its curated skill code. The map is
+// also the whitelist for a user-selected specialty override.
+var directorSpecialtySkills = map[string]string{
+	"general":      "director-scene-draft",
+	"drama":        "director-scene-drama",
+	"suspense":     "director-scene-suspense",
+	"emotion":      "director-scene-emotion",
+	"establishing": "director-scene-establishing",
+	"combat":       "fight-video-action-design",
+}
+
+// Specialty signals are weighted: strong cues name the dramatic device itself,
+// weak cues are everyday words that merely co-occur with it ("发现" appears in
+// almost any Scene). A weak cue alone must not decide the specialty.
+var (
+	directorSuspenseStrongCues     = regexp.MustCompile(`秘密|真相|线索|异响|隐瞒|怀疑|揭开|悬疑|跟踪|偷听|窥|暗中|不对劲|是谁`)
+	directorSuspenseWeakCues       = regexp.MustCompile(`脚步|藏|发现|为何|阴影|察觉`)
+	directorEmotionStrongCues      = regexp.MustCompile(`重逢|离别|拥抱|流泪|落泪|哭|愧疚|思念|心痛|释然|哽咽|颤抖|诀别`)
+	directorEmotionWeakCues        = regexp.MustCompile(`温柔|悲伤|沉默|安慰|叹|眼眶`)
+	directorEstablishingStrongCues = regexp.MustCompile(`初到|来到|抵达|踏入|远景|全景|城池|山谷|荒地|映入眼帘|放眼`)
+	directorEstablishingWeakCues   = regexp.MustCompile(`进入|走进|宫殿|庭院|大厅|房间|环境`)
+)
+
+func directorCueScore(text string, strong, weak *regexp.Regexp) int {
+	return 2*len(strong.FindAllStringIndex(text, -1)) + len(weak.FindAllStringIndex(text, -1))
+}
+
 func directorSceneSpecialty(scene *models.Scene, dialogues []models.Dialogue) (string, string) {
 	if scene == nil {
-		return "director-scene-draft", "general"
+		return directorSpecialtySkills["general"], "general"
 	}
 	mode := strings.TrimSpace(scene.SceneMode)
-	text := strings.ToLower(scene.Title + " " + scene.Content)
 	if mode == "武戏" || mode == "文武混合" {
-		return "fight-video-action-design", "combat"
+		return directorSpecialtySkills["combat"], "combat"
 	}
-	if regexp.MustCompile(`秘密|真相|线索|异响|脚步|藏|隐瞒|怀疑|发现|揭开|是谁|为何|悬疑|跟踪`).MatchString(text) {
-		return "director-scene-suspense", "suspense"
+	text := strings.ToLower(scene.Title + " " + scene.Content)
+	suspense := directorCueScore(text, directorSuspenseStrongCues, directorSuspenseWeakCues)
+	emotion := directorCueScore(text, directorEmotionStrongCues, directorEmotionWeakCues)
+	establishing := directorCueScore(text, directorEstablishingStrongCues, directorEstablishingWeakCues)
+	// A Scene with structured Dialogue is a dialogue Scene by default; suspense or
+	// emotion must clearly dominate the text to take over the direction.
+	threshold := 2
+	if len(dialogues) > 0 {
+		threshold = 4
 	}
-	if regexp.MustCompile(`重逢|离别|拥抱|流泪|哭|愧疚|思念|温柔|悲伤|心痛|沉默|释然|安慰`).MatchString(text) {
-		return "director-scene-emotion", "emotion"
+	best, bestScore := "", 0
+	for _, candidate := range []struct {
+		name  string
+		score int
+	}{{"suspense", suspense}, {"emotion", emotion}, {"establishing", establishing}} {
+		if candidate.score > bestScore {
+			best, bestScore = candidate.name, candidate.score
+		}
+	}
+	// Establishing is a weaker claim than suspense or emotion: it only wins when a
+	// dialogue-free Scene reads as arrival or spatial setup.
+	if best == "establishing" && len(dialogues) > 0 {
+		best, bestScore = "", 0
+	}
+	if best != "" && bestScore >= threshold {
+		return directorSpecialtySkills[best], best
 	}
 	if len(dialogues) > 0 {
-		return "director-scene-drama", "drama"
+		return directorSpecialtySkills["drama"], "drama"
 	}
-	if regexp.MustCompile(`初到|来到|进入|走进|远景|全景|宫殿|城池|山谷|荒地|庭院|大厅|房间|环境`).MatchString(text) {
-		return "director-scene-establishing", "establishing"
+	return directorSpecialtySkills["general"], "general"
+}
+
+// resolveDirectorSpecialtyOverride honours an explicit user choice. Combat stays
+// bound to the Scene mode so a drama Scene cannot be routed to fight design by
+// a dropdown alone.
+func resolveDirectorSpecialtyOverride(requested string, scene *models.Scene) (string, string, bool) {
+	requested = strings.ToLower(strings.TrimSpace(requested))
+	if requested == "" || requested == "auto" {
+		return "", "", false
 	}
-	return "director-scene-draft", "general"
+	code, ok := directorSpecialtySkills[requested]
+	if !ok || requested == "combat" {
+		return "", "", false
+	}
+	return code, requested, true
 }
 
 func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
@@ -1735,6 +1876,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		Brief            string                     `json:"brief"`
 		Requirements     string                     `json:"requirements"`
 		Mode             string                     `json:"mode"`
+		Specialty        string                     `json:"specialty"`
 		TargetShotCount  int                        `json:"target_shot_count"`
 		CombatReferences []CombatReferenceSelection `json:"combat_references"`
 	}
@@ -1791,6 +1933,10 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	}
 	dialogues = authoritativeSceneDialogues(dialogues)
 	specialtyOperation, specialty := directorSceneSpecialty(scene, dialogues)
+	specialtySource := "auto"
+	if code, name, ok := resolveDirectorSpecialtyOverride(req.Specialty, scene); ok {
+		specialtyOperation, specialty, specialtySource = code, name, "user"
+	}
 	if req.Mode != "combat_design" {
 		operation = specialtyOperation
 	}
@@ -1857,7 +2003,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 			parseErr = requireDirectorThinking(draft)
 		}
 		if parseErr == nil && req.Mode != "dialogue_rhythm" {
-			for _, review := range buildDirectorLogicReview(draft) {
+			for _, review := range buildDirectorLogicReviewWithDialogues(draft, dialogues) {
 				if len(review.BlockingIssues) > 0 {
 					parseErr = fmt.Errorf("镜头%d导演逻辑审计失败：%s", review.Shot, strings.Join(review.BlockingIssues, "；"))
 					break
@@ -1890,8 +2036,8 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	draft, err := validateDraft(output)
 	if err != nil {
 		initialValidationError := err.Error()
-		repairRequirements := fmt.Sprintf("%s\n上一次草稿校验失败：%s。只修复该错误及其他空必填字段；保持镜头顺序、剧情事实和结构化对白逐字不变。导演字段必须描述本镜目的、观众新增信息、可感知触发、演员可执行表演、视线、调度、反应、唯一视觉焦点和具体切镜动机，禁止把Scene剧情换句话复述。上一次JSON：\n%s", req.Requirements, err.Error(), output)
-		repairInstruction := "修复完整Scene导演草稿。逐镜补齐本镜目的、观众新增信息、可感知触发、演员可执行表演、视线、人物调度、可见反应、唯一视觉焦点和具体切镜动机；禁止只复述剧情、机械均分时长或让角色预知尚未感知的事件。保持剧情事实、镜头顺序和结构化Dialogue不变。"
+		repairRequirements := fmt.Sprintf("%s\n上一次草稿校验失败：%s。只修复该错误及其他空必填字段；保持镜头顺序、剧情事实和结构化对白逐字不变。必填导演字段是director_intent、audience_information、performance、blocking、cut_reason，每镜各不相同；trigger、eye_line、reaction、focus_subject只在本镜确有时填写。禁止把Scene剧情换句话复述，禁止多镜复用同一切镜理由。上一次JSON：\n%s", req.Requirements, err.Error(), output)
+		repairInstruction := "修复完整Scene导演草稿。逐镜补齐本镜目的、观众新增信息、演员可执行表演、人物调度和具体切镜动机；结构化对白按发生顺序落到对应镜头，每镜对白必须能在时长内说完。禁止只复述剧情、机械均分时长、多镜复用同一理由或让角色预知尚未感知的事件。保持剧情事实、镜头顺序和结构化Dialogue不变。"
 		if req.Mode == "dialogue_rhythm" {
 			repairInstruction = dialogueRhythmDirectorInstruction(dialogues, authoritativeCharacterList...) + "\n修复对白节奏导演草稿；不得改写、遗漏、重复或新增任何对白。同一说话人的长Dialogue可跨镜，多名角色的短促普通dialogue也可在同镜按故事顺序依次出现；仅不同speech_type必须分镜。必须保留或补齐每镜speech_presentation；仅listener_reaction_carryover可填写listener_character，且必须从上述权威角色白名单逐字选择。"
 		}
@@ -1933,7 +2079,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "AI导演方案无法解析为可编辑镜头: " + err.Error(), "raw_output": output, "server_repairs": serverRepairs})
 		return
 	}
-	response := gin.H{"draft": draft, "director_review": buildDirectorLogicReview(draft), "skill_code": operation, "director_specialty": specialty, "provider_id": s.TextProviderFact.Name(), "audited": true, "mode": req.Mode, "dialogue_duration": dialogueDuration, "requested_shot_count": req.TargetShotCount, "draft_warnings": dialogueDraftWarnings(draft, req.TargetShotCount), "server_repairs": serverRepairs}
+	response := gin.H{"draft": draft, "director_review": buildDirectorLogicReviewWithDialogues(draft, dialogues), "skill_code": operation, "director_specialty": specialty, "director_specialty_source": specialtySource, "provider_id": s.TextProviderFact.Name(), "audited": true, "mode": req.Mode, "dialogue_duration": dialogueDuration, "requested_shot_count": req.TargetShotCount, "draft_warnings": dialogueDraftWarnings(draft, req.TargetShotCount), "server_repairs": serverRepairs}
 	if req.Mode == "combat_design" {
 		response["combat_reference_audit"] = combatReferenceAudit
 		response["combat_reference_selection"] = req.CombatReferences

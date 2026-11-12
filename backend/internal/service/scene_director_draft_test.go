@@ -30,6 +30,21 @@ func TestSceneDirectorDraftRequiresDirectorThinkingFields(t *testing.T) {
 	if err := requireDirectorThinking(missingDraft); err == nil || !strings.Contains(err.Error(), "cut_reason") {
 		t.Fatalf("missing cut_reason should be rejected by generation gate, got %v", err)
 	}
+	// trigger/eye_line/reaction/focus_subject are facts that may not exist for a Shot;
+	// forcing them produces invented stimuli, so the gate must accept them empty.
+	optional := validSceneDirectorDraft
+	for _, field := range []string{`"trigger":"桌上传来轻微碰撞声"`, `"eye_line":"视线从门外转向桌面"`, `"reaction":"听见异响后停步屏息"`, `"focus_subject":"女主停在桌边的反应"`} {
+		optional = strings.Replace(optional, field, field[:strings.Index(field, ":")+1]+`""`, 1)
+	}
+	optional = strings.Replace(optional, `"visual_question":"桌边究竟发生了什么"`, `"visual_question":""`, 1)
+	optional = strings.Replace(optional, `"spatial_change":"从门边移至桌边停下"`, `"spatial_change":""`, 1)
+	optionalDraft, err := parseSceneDirectorDraft(optional)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := requireDirectorThinking(optionalDraft); err != nil {
+		t.Fatalf("optional director facts must not be forced: %v", err)
+	}
 }
 
 func TestDirectorSceneSpecialtyRoutesDistinctDramaticWork(t *testing.T) {
@@ -43,12 +58,40 @@ func TestDirectorSceneSpecialtyRoutesDistinctDramaticWork(t *testing.T) {
 		{scene: models.Scene{Content: "二人在厅中交谈"}, dialogues: []models.Dialogue{{Character: "甲", Text: "你来了。"}}, want: "director-scene-drama"},
 		{scene: models.Scene{Content: "众人初到山谷，远处宫殿显现"}, want: "director-scene-establishing"},
 		{scene: models.Scene{SceneMode: "武戏", Content: "二人交锋"}, want: "fight-video-action-design"},
+		// Everyday words must not hijack an ordinary dialogue Scene.
+		{scene: models.Scene{Content: "她走进房间，发现桌上放着一封信，便坐下来读。"}, dialogues: []models.Dialogue{{Character: "甲", Text: "是谁送来的？"}}, want: "director-scene-drama"},
+		{scene: models.Scene{Content: "两人沉默片刻，她温柔地把茶推过去。"}, dialogues: []models.Dialogue{{Character: "甲", Text: "喝吧。"}}, want: "director-scene-drama"},
+		// Strong, repeated cues still win over dialogue presence.
+		{scene: models.Scene{Content: "她怀疑屋里藏着人，循着异响摸向柜子，门后的秘密终于揭开。"}, dialogues: []models.Dialogue{{Character: "甲", Text: "谁在那里？"}}, want: "director-scene-suspense"},
+		{scene: models.Scene{Content: "母女重逢，她哽咽着流泪，久久拥抱不肯松手。"}, dialogues: []models.Dialogue{{Character: "甲", Text: "娘。"}}, want: "director-scene-emotion"},
+		// A dialogue-free Scene that merely mentions a room is general, not establishing.
+		{scene: models.Scene{Content: "她在房间里整理行囊。"}, want: "director-scene-draft"},
 	}
 	for _, tc := range cases {
 		got, _ := directorSceneSpecialty(&tc.scene, tc.dialogues)
 		if got != tc.want {
 			t.Fatalf("specialty route=%s want %s for %q", got, tc.want, tc.scene.Content)
 		}
+	}
+}
+
+func TestResolveDirectorSpecialtyOverride(t *testing.T) {
+	scene := &models.Scene{Content: "二人在厅中交谈"}
+	if _, _, ok := resolveDirectorSpecialtyOverride("", scene); ok {
+		t.Fatal("empty specialty must not override")
+	}
+	if _, _, ok := resolveDirectorSpecialtyOverride("auto", scene); ok {
+		t.Fatal("auto must not override")
+	}
+	if _, _, ok := resolveDirectorSpecialtyOverride("combat", scene); ok {
+		t.Fatal("combat is bound to scene mode and must not be selectable as a dropdown override")
+	}
+	if _, _, ok := resolveDirectorSpecialtyOverride("thriller", scene); ok {
+		t.Fatal("unknown specialty must be ignored")
+	}
+	code, name, ok := resolveDirectorSpecialtyOverride(" Suspense ", scene)
+	if !ok || code != "director-scene-suspense" || name != "suspense" {
+		t.Fatalf("override=%s/%s/%v", code, name, ok)
 	}
 }
 
@@ -60,6 +103,64 @@ func TestDirectorLogicReviewBlocksRepeatedInformationAndAdvisesAbstractDirection
 	review := buildDirectorLogicReview(draft)
 	if len(review) != 2 || len(review[1].BlockingIssues) == 0 || len(review[0].Advisories) < 2 {
 		t.Fatalf("unexpected director review: %+v", review)
+	}
+}
+
+func TestDirectorLogicReviewBlocksTemplatedDecisionsAndUnspeakableDialogue(t *testing.T) {
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
+		{Duration: 4, AudienceInformation: "门外有人", DirectorIntent: "推进剧情", CutReason: "视线转移后切镜"},
+		{Duration: 4, AudienceInformation: "她握紧剑柄", DirectorIntent: "推进剧情", CutReason: "视线转移后切镜"},
+		{Duration: 2, AudienceInformation: "门被推开", DirectorIntent: "揭示来者", CutReason: "门开后切入来者", Dialogue: "你终于来了，我等了你整整三年，这三年里我每一天都在想你。"},
+	}}
+	review := buildDirectorLogicReview(draft)
+	if len(review) != 3 {
+		t.Fatalf("review=%+v", review)
+	}
+	if len(review[0].BlockingIssues) != 0 {
+		t.Fatalf("first shot must not be blocked: %+v", review[0])
+	}
+	joined := strings.Join(review[1].BlockingIssues, "；")
+	if !strings.Contains(joined, "切镜理由与镜头1逐字相同") || !strings.Contains(joined, "本镜目的与镜头1逐字相同") {
+		t.Fatalf("repeated cut_reason/director_intent must block: %+v", review[1])
+	}
+	if joined := strings.Join(review[2].BlockingIssues, "；"); !strings.Contains(joined, "超过镜头时长2.0秒") {
+		t.Fatalf("unspeakable dialogue must block: %+v", review[2])
+	}
+}
+
+func TestDirectorLogicReviewAuditsDialoguePlacement(t *testing.T) {
+	dialogues := []models.Dialogue{{Character: "甲", Text: "你来了。"}, {Character: "乙", Text: "我来晚了。"}}
+	clustered := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
+		{Duration: 3, DirectorIntent: "a", CutReason: "a"},
+		{Duration: 3, DirectorIntent: "b", CutReason: "b"},
+		{Duration: 4, DirectorIntent: "c", CutReason: "c", Dialogue: "你来了。我来晚了。"},
+	}}
+	review := buildDirectorLogicReviewWithDialogues(clustered, dialogues)
+	if joined := strings.Join(review[2].BlockingIssues, "；"); !strings.Contains(joined, "全部对白堆在最后一镜") {
+		t.Fatalf("clustered dialogue must block: %+v", review)
+	}
+	missing := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
+		{Duration: 3, DirectorIntent: "a", CutReason: "a", Dialogue: "“你来了。”"},
+		{Duration: 3, DirectorIntent: "b", CutReason: "b"},
+	}}
+	review = buildDirectorLogicReviewWithDialogues(missing, dialogues)
+	if joined := strings.Join(review[1].BlockingIssues, "；"); !strings.Contains(joined, "「我来晚了。」未逐字落到") {
+		t.Fatalf("dropped dialogue must block: %+v", review)
+	}
+	if len(review[0].BlockingIssues) != 0 {
+		t.Fatalf("quoted but verbatim dialogue must not be reported missing: %+v", review[0])
+	}
+	spread := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
+		{Duration: 3, DirectorIntent: "a", CutReason: "a", Dialogue: "你来了。"},
+		{Duration: 3, DirectorIntent: "b", CutReason: "b", Dialogue: "我来晚了。"},
+	}}
+	for _, r := range buildDirectorLogicReviewWithDialogues(spread, dialogues) {
+		if len(r.BlockingIssues) != 0 {
+			t.Fatalf("well-placed dialogue must pass: %+v", r)
+		}
+	}
+	if len(buildDirectorLogicReview(spread)) != 2 {
+		t.Fatal("nil dialogues must still review every shot")
 	}
 }
 

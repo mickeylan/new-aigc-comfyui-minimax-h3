@@ -154,6 +154,13 @@ Skill 分为两类：
 - 五段导演提示词；
 - 自动检查项。
 
+### 专项路由与审计（v6）
+
+- 专项由正文关键词加权打分决定：强线索（秘密/真相/重逢/流泪/初到…）计 2 分，弱线索（发现/进入/房间/沉默…）计 1 分；有结构化对白的 Scene 默认走“文戏与对白”，悬疑/情绪需≥4 分才接管，纯对白 Scene 不会再因为“走进房间、发现”这类日常词被误判。
+- 面板新增“导演专项”下拉，可手动指定 drama / suspense / emotion / establishing / general；武戏始终由场景类型决定，不可下拉覆盖。响应中 `director_specialty_source` 标明是用户指定还是自动判断。
+- 审计门禁新增阻断项（触发后自动回传模型修复一次）：切镜理由或本镜目的跨镜逐字重复；本镜对白按每秒 9 字估算超出镜头时长；结构化对白未逐字落到任何镜头；全部对白堆在最后一镜。
+- 每镜必填导演字段缩减为 director_intent、audience_information、performance、blocking、cut_reason；trigger、eye_line、reaction、focus_subject 以及 scene_analysis 的 visual_question、Beat 的 spatial_change 改为“确有才填”，避免模型为凑字段编造刺激与反应。
+
 ### 操作
 
 1. 选择一个Scene；

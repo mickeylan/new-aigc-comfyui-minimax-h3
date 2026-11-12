@@ -187,6 +187,37 @@ func TestSkillService_CuratedDirectorSkills(t *testing.T) {
 	}
 }
 
+func TestDirectorSceneSkillsShareMethodDrivenPrompt(t *testing.T) {
+	db := newTestDB(t)
+	svc := NewSkillService(db)
+	if err := svc.InitSystemSkills(); err != nil {
+		t.Fatal(err)
+	}
+	wantVersion := map[string]int{"director-scene-draft": 6, "director-scene-drama": 2, "director-scene-suspense": 2, "director-scene-emotion": 2, "director-scene-establishing": 2}
+	for code, version := range wantVersion {
+		skill, err := svc.latestEnabledSkillByCode(code)
+		if err != nil {
+			t.Fatalf("%s: %v", code, err)
+		}
+		if skill.Version != version {
+			t.Fatalf("%s version=%d want %d", code, skill.Version, version)
+		}
+		for _, want := range []string{"【工作方法】", "【字段怎样才算合格】", "差：", "好：", "用户指定镜头数大于0时", "全部用简洁英文", "禁止全部堆到最后一镜", "按每秒9字估算"} {
+			if !strings.Contains(skill.SystemPrompt, want) {
+				t.Fatalf("%s system prompt lacks %q", code, want)
+			}
+		}
+		if !strings.Contains(skill.SystemPrompt, "【专项：") {
+			t.Fatalf("%s lacks a specialty section", code)
+		}
+		for _, placeholder := range []string{"{{dialogues}}", "{{target_shot_count}}", "{{target_duration}}"} {
+			if !strings.Contains(skill.PromptTemplate, placeholder) {
+				t.Fatalf("%s prompt template lacks %s", code, placeholder)
+			}
+		}
+	}
+}
+
 func TestSkillService_CreateSkill(t *testing.T) {
 	db := newTestDB(t)
 	svc := NewSkillService(db)
