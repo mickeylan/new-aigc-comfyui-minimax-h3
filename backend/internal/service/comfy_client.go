@@ -27,6 +27,17 @@ func NewComfyClient(host string, port int) *ComfyClient {
 	}
 }
 
+// instanceProbeTimeout 调度探测（/queue、/system_stats、/object_info）的单次请求超时。
+// 失联实例只拖慢对自身的探测，不能让派发长时间等待；测试可调小。
+var instanceProbeTimeout = 3 * time.Second
+
+// newComfyProbeClient 调度探测专用客户端，使用短超时。
+func newComfyProbeClient(host string, port int) *ComfyClient {
+	c := NewComfyClient(host, port)
+	c.HTTP = &http.Client{Timeout: instanceProbeTimeout}
+	return c
+}
+
 func (c *ComfyClient) baseURL() string {
 	return fmt.Sprintf("http://%s:%d", c.Host, c.Port)
 }

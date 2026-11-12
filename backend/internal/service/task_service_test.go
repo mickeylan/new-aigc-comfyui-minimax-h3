@@ -711,6 +711,82 @@ func TestReserveInstanceDistributesConcurrentTasksAcrossFreeGPUs(t *testing.T) {
 	}
 }
 
+func newSchedulingTestService(t *testing.T, servers ...*httptest.Server) (*TaskService, []models.Instance) {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	if err := db.AutoMigrate(&models.Instance{}, &models.Task{}); err != nil {
+		t.Fatal(err)
+	}
+	instances := make([]models.Instance, len(servers))
+	for i, server := range servers {
+		instances[i] = models.Instance{GPUIndex: i, Host: "127.0.0.1", Port: comfyTestPort(server), Status: "running"}
+	}
+	if err := db.Create(&instances).Error; err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	return &TaskService{cfg: cfg, db: db, manager: NewInstanceManager(cfg, db, NewRemoteExec(config.RemoteConfig{}))}, instances
+}
+
+// 失联实例（连上但不响应）只能拖慢一次短探测，不能让派发等待通用 30 秒超时 × 重试。
+func TestReserveInstanceSkipsUnresponsiveInstanceQuickly(t *testing.T) {
+	previous := instanceProbeTimeout
+	instanceProbeTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { instanceProbeTimeout = previous })
+	release := make(chan struct{})
+	hung := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release }))
+	t.Cleanup(hung.Close)
+	t.Cleanup(func() { close(release) })
+	idle := newComfyLoadServer(t, 0, 10<<30)
+
+	svc, instances := newSchedulingTestService(t, hung, idle)
+	task := models.Task{TaskID: "after-hung", Status: "pending"}
+	svc.db.Create(&task)
+	started := time.Now()
+	inst, err := svc.reserveInstance(&task, false, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inst.ID != instances[1].ID {
+		t.Fatalf("应选择可响应实例 %d，实际 %d", instances[1].ID, inst.ID)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("失联实例拖慢派发 %v", elapsed)
+	}
+}
+
+// 探测在调度锁外进行，选中实例在登记前可能已被其他任务预占：登记时必须复核并改选。
+func TestClaimInstanceRejectsInstanceTakenDuringProbe(t *testing.T) {
+	gpu0 := newComfyLoadServer(t, 0, 90<<30)
+	gpu1 := newComfyLoadServer(t, 0, 10<<30)
+	svc, instances := newSchedulingTestService(t, gpu0, gpu1)
+	task := models.Task{TaskID: "late", Status: "pending"}
+	svc.db.Create(&task)
+	svc.db.Create(&models.Task{TaskID: "early", Status: "queued", InstanceID: &instances[0].ID})
+
+	claimed, err := svc.claimInstance(&task, &instances[0], false)
+	if err != nil || claimed {
+		t.Fatalf("已被预占的实例不得重复登记: claimed=%v err=%v", claimed, err)
+	}
+	var stored models.Task
+	svc.db.First(&stored, task.ID)
+	if stored.Status != "pending" || stored.InstanceID != nil {
+		t.Fatalf("登记失败时任务必须保持 pending: %+v", stored)
+	}
+	inst, err := svc.reserveInstance(&task, false, nil, nil)
+	if err != nil || inst.ID != instances[1].ID {
+		t.Fatalf("应改选空闲实例 %d: %+v %v", instances[1].ID, inst, err)
+	}
+}
+
 func TestQueueRetryWhenFreeSingleLoop(t *testing.T) {
 	ts := &TaskService{retrying: map[string]bool{}}
 	ts.queueRetryWhenFree("t1")

@@ -716,7 +716,7 @@ func (s *TaskService) instanceSupportsClasses(inst models.Instance, required []s
 	if len(required) == 0 {
 		return nil
 	}
-	client := NewComfyClient(s.manager.comfyHostOfInstance(inst), inst.Port)
+	client := newComfyProbeClient(s.manager.comfyHostOfInstance(inst), inst.Port)
 	missing := []string{}
 	for _, classType := range required {
 		supported, err := client.HasNodeClass(classType)
@@ -745,9 +745,11 @@ func (s *TaskService) platformPortBusy(port int) bool {
 }
 
 func (s *TaskService) probeInstanceLoad(inst models.Instance) instanceLoad {
-	c := NewComfyClient(s.manager.comfyHostOfInstance(inst), inst.Port)
+	c := newComfyProbeClient(s.manager.comfyHostOfInstance(inst), inst.Port)
 	result := instanceLoad{inst: inst}
 	// ComfyUI 未就绪或瞬时网络故障时重试，避免把短暂探测失败当成空闲。
+	// 耗时已达单次探测超时即停止重试：失联实例不能把每轮派发拖上数十秒。
+	started := time.Now()
 	for attempt := 0; attempt < 3; attempt++ {
 		load, err := c.GetLoad()
 		if err == nil {
@@ -756,17 +758,18 @@ func (s *TaskService) probeInstanceLoad(inst models.Instance) instanceLoad {
 			result.vramFree = load.VRAMFree
 			break
 		}
+		if time.Since(started) >= instanceProbeTimeout {
+			break
+		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	return result
 }
 
-// reserveInstance 在同一调度临界区内完成并发限流、选卡与占用登记。
-// queued 状态在真正提交 ComfyUI 前写入，使后续并发任务能立即避开已预占 GPU。
+// reserveInstance 完成并发限流、选卡与占用登记。
+// 实例探测（HTTP）在调度锁外进行，失联实例只拖慢本次选卡，不阻塞其他任务派发；
+// 锁内只做数据库复核与占用登记。探测期间所选实例若被其他任务抢先预占则重新选卡。
 func (s *TaskService) reserveInstance(task *models.Task, video bool, forcePort *int, requiredClasses []string) (*models.Instance, error) {
-	s.scheduleMu.Lock()
-	defer s.scheduleMu.Unlock()
-
 	if video && s.runningVideoTaskCount() >= s.videoConcurrency() {
 		return nil, errVideoConcurrencyLimit
 	}
@@ -777,11 +780,38 @@ func (s *TaskService) reserveInstance(task *models.Task, video bool, forcePort *
 			preferredInstanceID = previous.InstanceID
 		}
 	}
-	inst, err := s.pickInstance(forcePort, requiredClasses, preferredInstanceID)
-	if err != nil {
-		return nil, err
+	var instanceCount int64
+	s.db.Model(&models.Instance{}).Count(&instanceCount)
+	// 每次抢占失败都意味着又有一台实例被占用，重选次数不会超过实例数。
+	for attempt := int64(0); attempt <= instanceCount; attempt++ {
+		inst, err := s.pickInstance(forcePort, requiredClasses, preferredInstanceID)
+		if err != nil {
+			return nil, err
+		}
+		claimed, err := s.claimInstance(task, inst, video)
+		if err != nil {
+			return nil, err
+		}
+		if claimed {
+			return inst, nil
+		}
 	}
+	return nil, errNoFreeGPU
+}
 
+// claimInstance 在调度临界区内复核视频并发与平台占用后登记任务。
+// queued 状态在真正提交 ComfyUI 前写入，使后续并发任务能立即避开已预占 GPU。
+// 返回 false 表示实例已被其他任务占用，调用方应重新选卡。
+func (s *TaskService) claimInstance(task *models.Task, inst *models.Instance, video bool) (bool, error) {
+	s.scheduleMu.Lock()
+	defer s.scheduleMu.Unlock()
+
+	if video && s.runningVideoTaskCount() >= s.videoConcurrency() {
+		return false, errVideoConcurrencyLimit
+	}
+	if s.platformInstanceBusy(inst.ID) {
+		return false, nil
+	}
 	now := time.Now()
 	claim := s.db.Model(&models.Task{}).
 		Where("id = ? AND status = ?", task.ID, "pending").
@@ -790,10 +820,10 @@ func (s *TaskService) reserveInstance(task *models.Task, video bool, forcePort *
 			"status": "queued", "started_at": now,
 		})
 	if claim.Error != nil {
-		return nil, claim.Error
+		return false, claim.Error
 	}
 	if claim.RowsAffected == 0 {
-		return nil, fmt.Errorf("任务状态已变化，无法分配 GPU")
+		return false, fmt.Errorf("任务状态已变化，无法分配 GPU")
 	}
 
 	task.InstanceID = &inst.ID
@@ -801,7 +831,7 @@ func (s *TaskService) reserveInstance(task *models.Task, video bool, forcePort *
 	task.Port = &inst.Port
 	task.Status = "queued"
 	task.StartedAt = &now
-	return inst, nil
+	return true, nil
 }
 
 func rankInstanceLoads(loads []instanceLoad) {

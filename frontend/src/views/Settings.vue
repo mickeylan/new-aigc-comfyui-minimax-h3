@@ -173,8 +173,8 @@
         </div>
         <div class="field">
           <label for="video_concurrency">视频生成并发数</label>
-          <input id="video_concurrency" v-model.number="form.video_concurrency" type="number" min="1" max="8" class="input" placeholder="4" />
-          <div class="field-hint">同时生成的视频任务数（默认 4，动态生效）</div>
+          <input id="video_concurrency" v-model.number="form.video_concurrency" type="number" min="1" :max="instanceCount || undefined" class="input" placeholder="4" />
+          <div class="field-hint">同时生成的视频任务数（默认 4，动态生效）；上限为已登记的 ComfyUI 实例数{{ instanceCount ? `（当前 ${instanceCount} 个）` : '' }}</div>
         </div>
         <div class="field">
           <label for="video_resolution">视频分辨率</label>
@@ -316,6 +316,11 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api'
+import { useAppStore } from '../stores/app'
+
+const store = useAppStore()
+// 视频并发上限跟随实例数（config.yaml 的 gpu_count），不再写死 8
+const instanceCount = computed(() => store.instances.length)
 
 const form = ref({})
 const saved = ref(false)
@@ -339,6 +344,7 @@ const aliConfigured = computed(() => !!(form.value.ali_api_key || aliKeyPlacehol
 const indexTTSModeLabel = computed(() => ({ comfyui:'ComfyUI集群', native_local:'Rust本地', disabled:'已关闭' }[form.value.index_tts_execution_mode] || 'ComfyUI集群'))
 
 onMounted(async () => {
+  if (!store.instances.length) api.instances().then(({ data }) => { if (Array.isArray(data)) store.instances = data }).catch(() => {})
   try {
     const { data } = await api.settings()
     form.value = { ...data }
@@ -388,7 +394,10 @@ async function save(showFeedback = true) {
     if (!payload.volc_api_key) delete payload.volc_api_key
     if (!payload.ali_api_key) delete payload.ali_api_key
     if (!payload.minimax_coding_api_key) delete payload.minimax_coding_api_key
-    if (payload.video_concurrency != null) payload.video_concurrency = String(payload.video_concurrency)
+    if (payload.video_concurrency != null) {
+      if (instanceCount.value && Number(payload.video_concurrency) > instanceCount.value) throw new Error(`视频生成并发数不能超过实例数 ${instanceCount.value}`)
+      payload.video_concurrency = String(payload.video_concurrency)
+    }
     if (payload.h3_max_duration_seconds != null) payload.h3_max_duration_seconds = String(payload.h3_max_duration_seconds)
     // 校验 JSON
     try { JSON.parse(aliStyleText.value) } catch { throw new Error('角色音色映射不是合法 JSON') }
