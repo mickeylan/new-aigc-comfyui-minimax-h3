@@ -830,6 +830,19 @@ func TestSpellCombatRequiresExecutableClashAndOfficialShotCuts(t *testing.T) {
 	}
 }
 
+func TestSpellCombatOneWayCastDoesNotRequireInventedDefense(t *testing.T) {
+	source := "柳石依旧一言不发，稳稳挡在柳乐儿身前。燕承左手猛扬，一团黑光飞出，展开成一张硕大的黑色大网，如黑云般压落，将两人同时罩住。柳石没有后退。"
+	steadfast := `[Shot 1] <Subject 3> flings his left hand upward and a fist-sized black light launches toward the space above <Subject 1> and <Subject 2>.
+[Shot 2] At 00:03.000, the black light spins open into a huge black net that descends like a dark cloud and covers both of them. <Subject 1> stays exactly where he stands without stepping back.`
+	if !h3SpellCombatContractMatches(source, steadfast) {
+		t.Fatal("one-way net cast was forced to invent a defense, contact boundary or shockwave")
+	}
+	decorative := "[Shot 1] A black net appears above them. <Subject 1> stands still."
+	if h3SpellCombatContractMatches(source, decorative) {
+		t.Fatal("spell without emission source or trajectory passed")
+	}
+}
+
 func TestPipelineFailureStatusIsNotOverwritten(t *testing.T) {
 	ps := newTestProjectService(t)
 	p := models.Project{Title: "t", Synopsis: "s", Status: "failed", PipelineStage: "failed"}
@@ -2564,12 +2577,6 @@ func TestSoloSwordTimingKeepsMovementActiveUntilFinalStance(t *testing.T) {
 			t.Fatalf("timing instruction missing %q: %s", want, instruction)
 		}
 	}
-	summary := enforceSoloSwordTimingSummary(source, active, 14, 4)
-	for _, want := range []string{"active through 00:12.500", "narration never freezes or slows", "final 1.5 seconds"} {
-		if !strings.Contains(summary, want) {
-			t.Fatalf("deterministic timing summary missing %q: %s", want, summary)
-		}
-	}
 }
 
 func TestSwordPracticeSuggestsInternalShotsAndRejectsMismatchedLegacyPlan(t *testing.T) {
@@ -2600,17 +2607,8 @@ func TestH3ActionTempoRejectsStaticDefenderAndEnforcesRealtime(t *testing.T) {
 	if !h3ActionTempoContractMatches(good) {
 		t.Fatal("real-time combat response rejected")
 	}
-	got := enforceH3ActionTempo("[Shot 1] the swordsman blocks the strike.", h3SceneAction)
-	for _, want := range []string{"full real-time speed", "immediate acceleration", "no slow motion", "no bullet time"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("tempo enforcement missing %q: %s", want, got)
-		}
-	}
-	if !h3ActionTempoContractMatches(got) {
-		t.Fatalf("negative no-slow-motion clause incorrectly failed contract: %s", got)
-	}
-	if got := enforceH3ActionTempo("[Shot 1] two sisters talk quietly.", h3SceneDrama); strings.Contains(got, "real-time speed") {
-		t.Fatalf("drama prompt received combat tempo suffix: %s", got)
+	if !h3ActionTempoContractMatches("[Shot 1] the swordsman blocks the strike at full real-time speed, no slow motion, no bullet time.") {
+		t.Fatal("negative no-slow-motion clause incorrectly failed contract")
 	}
 }
 
@@ -2664,15 +2662,15 @@ func TestGenerateSceneVideoActionCombatAlwaysPassesRequestAsBaseUser(t *testing.
 	}
 }
 
-func TestGenerateSceneVideoActionRepairsStaticCombatInsteadOfOnlyReturningValidationError(t *testing.T) {
+func TestGenerateSceneVideoActionKeepsSourceFaithfulStaticDefenderWithoutPaidRepair(t *testing.T) {
 	ps := newTestProjectService(t)
 	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SharedAssetReference{}); err != nil {
 		t.Fatal(err)
 	}
+	// The source says the man stands holding his blade, watching warily. Tempo and
+	// reaction wording are director choices, so no repair may invent a parry.
 	provider := &sequenceTextProvider{responses: []string{
 		"[Shot 1] six green snakes launch toward the bearded man while he stands and watches.",
-		"[Shot 1] six green snakes move toward the bearded man while he grips his blade.",
-		"[Shot 1] six green snakes burst from the grass at full speed; the bearded man instantly pivots and snaps his blade into guard, taking one sharp step back as grass and dust recoil around him.",
 	}}
 	ps.textProvider = provider
 	project := models.Project{Title: "测试"}
@@ -2684,13 +2682,11 @@ func TestGenerateSceneVideoActionRepairsStaticCombatInsteadOfOnlyReturningValida
 	if err != nil {
 		t.Fatal(err)
 	}
-	if provider.calls != 3 {
-		t.Fatalf("calls=%d, want initial + general repair + combat repair", provider.calls)
+	if provider.calls != 1 {
+		t.Fatalf("calls=%d, want only the initial director pass", provider.calls)
 	}
-	for _, want := range []string{"at full speed", "instantly pivots", "snaps his blade into guard", "one sharp step back"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("combat repair missing %q: %s", want, got)
-		}
+	if !strings.Contains(got, "stands and watches") || strings.Contains(got, "pivots") {
+		t.Fatalf("source-faithful reaction was rewritten: %s", got)
 	}
 	if regexp.MustCompile(`[\p{Han}]`).MatchString(got) {
 		t.Fatalf("combat repair retained Chinese visual prose: %s", got)
@@ -2881,16 +2877,29 @@ func TestNormalizeGeneratedH3ActionRestoresAuthoritativeSubjects(t *testing.T) {
 	}
 }
 
-func TestEnforceH3ActionTempoRemovesAffirmativeSlowCameraDirections(t *testing.T) {
-	input := "[Shot 1] The camera makes a slow push, then retreats at slow speed and freezes on the burst. The defender immediately pivots aside."
-	got := enforceH3ActionTempo(input, h3SceneAction)
-	for _, forbidden := range []string{"slow push", "slow speed", "freezes on the burst"} {
-		if strings.Contains(strings.ToLower(got), forbidden) {
-			t.Fatalf("slow camera residue %q remained: %s", forbidden, got)
-		}
+func TestGenerateSceneVideoActionKeepsDirectorCameraPacingInCombat(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SharedAssetReference{}); err != nil {
+		t.Fatal(err)
 	}
-	if !h3ActionTempoContractMatches(got) {
-		t.Fatalf("normalized combat prompt violates tempo contract: %s", got)
+	// "slowly" describes the camera, not the action speed; it is a director choice
+	// that must neither be deleted nor trigger a paid repair.
+	draft := "[Shot 1] Six green snakes shoot from the grass toward the bearded man, who grips his blade and watches warily. The camera slowly tracks sideways along the grass line."
+	provider := &sequenceTextProvider{responses: []string{draft}}
+	ps.textProvider = provider
+	project := models.Project{Title: "测试"}
+	ps.db.Create(&project)
+	sc := models.Scene{ProjectID: project.ID, SceneMode: "武戏", Duration: 10, Content: "齐人高杂草丛中，五六条青色长蛇射出，蛇口大张朝虚髯大汉狠狠咬去。虚髯大汉持朴刀而立，目光警惕。"}
+	ps.db.Create(&sc)
+	got, err := ps.GenerateSceneVideoAction(&sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("calls=%d, camera pacing wording triggered a repair", provider.calls)
+	}
+	if !strings.Contains(got, "slowly tracks sideways") || strings.Contains(got, "immediate acceleration") {
+		t.Fatalf("director camera wording was rewritten or boilerplate appended: %s", got)
 	}
 }
 
@@ -2963,7 +2972,7 @@ func TestCombatActionRepairRequestRequiresExactInternalShotCount(t *testing.T) {
 
 func TestCombatActionRepairRequestUsesNeutralReactionWhenOutcomeUnknown(t *testing.T) {
 	got := combatActionRepairRequest("蛇扑向持刀男子", "男子站立观察", 10)
-	for _, want := range []string{"opening 1–2 seconds", "actual referenced asset", "changes no hit/miss/block", "victory or defeat"} {
+	for _, want := range []string{"normal real-time speed", "actual referenced asset", "changes no hit/miss/block", "victory or defeat", "show that steadiness"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("combat repair request missing %q: %s", want, got)
 		}
@@ -3024,7 +3033,7 @@ func TestH3GeneratedCameraMoveConflict(t *testing.T) {
 	}
 }
 
-func TestGenerateSceneVideoActionUsesDeterministicDressingFallbackAfterInvalidRepair(t *testing.T) {
+func TestGenerateSceneVideoActionReportsStructureFailureInsteadOfCannedDressingTemplate(t *testing.T) {
 	ps := newTestProjectService(t)
 	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}); err != nil {
 		t.Fatal(err)
@@ -3037,13 +3046,11 @@ func TestGenerateSceneVideoActionUsesDeterministicDressingFallbackAfterInvalidRe
 	sc := &models.Scene{ProjectID: project.ID, Characters: "舒寒,上官若琳", Duration: 15, Content: "上官若琳见舒寒如此自信，心中稍安。舒寒点点头，披上玄黑色仙鹤纹锦袍，外罩流云披风。他推开房门，元婴期灵气震得宫灯摇曳。", ImageFile: "story.png"}
 	ps.db.Create(sc)
 	got, err := ps.GenerateSceneVideoAction(sc)
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || !strings.Contains(err.Error(), "未能按可见阶段拆成2个内部Shot") {
+		t.Fatalf("structure failure was not reported: err=%v got=%s", err, got)
 	}
-	for _, want := range []string{"[Shot 2] At 00:07.500,", "inserts the right arm", "fastens its neck clasp", "lanterns on both walls sway"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("deterministic fallback missing %q: %s", want, got)
-		}
+	if strings.Contains(got, "crane-patterned") || strings.Contains(got, "inserts the right arm") {
+		t.Fatalf("hardcoded dressing template replaced the director output: %s", got)
 	}
 }
 
@@ -4621,12 +4628,14 @@ func TestCrossShotDialogueUsesH3CarryoverSyntaxAndNotNarration(t *testing.T) {
 func TestResolveH3VisualConflictsCleansReportedFinalPromptVariants(t *testing.T) {
 	input := "<Subject 1>正面近景，神情从坚决逐渐转为温柔，手从握妹妹肩膀缓缓垂落；镜头缓慢后拉，从特写过渡至中近景，从肩部特写回到中近景；At MM:SS.mmm 开始口型配合，随后继续口型；眉心与目光的紧张感增强；转场dissolve叠化过渡。<Subject 2>静静倾听姐姐话语。"
 	got := resolveH3VisualConflicts(input)
-	for _, want := range []string{"原本向前抬起的手臂缓缓放下，自然垂落至身侧", "从面部特写过渡至肩部以上中近景", "眉心舒展，目光逐渐柔和", "始终保持双唇闭合，目光专注地望向画外的说话者"} {
+	// Director wording (gesture, expression, listening) is kept verbatim; only
+	// template residue, lip-sync placeholders and duplicated framing are removed.
+	for _, want := range []string{"手从握妹妹肩膀缓缓垂落", "从面部特写过渡至肩部以上中近景", "眉心与目光的紧张感增强", "静静倾听姐姐话语"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q: %s", want, got)
 		}
 	}
-	for _, bad := range []string{"妹妹肩膀", "At MM:SS.mmm", "口型配合", "随后继续口型", "眉心与目光的紧张感增强", "dissolve", "叠化过渡", "静静倾听姐姐话语", "从肩部特写回到中近景"} {
+	for _, bad := range []string{"At MM:SS.mmm", "口型配合", "随后继续口型", "dissolve", "叠化过渡", "从肩部特写回到中近景"} {
 		if strings.Contains(got, bad) {
 			t.Fatalf("retained %q: %s", bad, got)
 		}
@@ -4636,12 +4645,12 @@ func TestResolveH3VisualConflictsCleansReportedFinalPromptVariants(t *testing.T)
 func TestResolveH3VisualConflictsRemovesDuplicateFramingAndProtectsOffscreenSpeaker(t *testing.T) {
 	input := "神情从坚决转为温柔耐心，眉心与目光的紧张感增强；缓慢后拉，从特写过渡至中近景，从特写回到中近景；始终保持双唇闭合，目光专注地望向画外的说话者"
 	got := visualiseSpeechPerformanceNarration(resolveH3VisualConflicts(input), true)
-	for _, want := range []string{"眉心舒展，目光逐渐柔和", "从面部特写过渡至肩部以上中近景", "画外的说话者"} {
+	for _, want := range []string{"眉心与目光的紧张感增强", "从面部特写过渡至肩部以上中近景", "画外的说话者"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q: %s", want, got)
 		}
 	}
-	for _, bad := range []string{"眉心与目光的紧张感增强", "从特写回到中近景", "画外的唇部自然开合"} {
+	for _, bad := range []string{"从特写回到中近景", "画外的唇部自然开合"} {
 		if strings.Contains(got, bad) {
 			t.Fatalf("retained %q: %s", bad, got)
 		}
@@ -4705,12 +4714,12 @@ func TestBuildH3PromptResolvesReviewedVisualConflicts(t *testing.T) {
 	action := rebuildStructuredShotAction(shots)
 	lines := []string{"- <Picture 1>：角色「上官若琳」四视图", "- <Picture 2>：角色「上官若彤」四视图", "- <Picture 3>：场景「桃花林」参考图"}
 	prompt := buildMiniMaxH3RefPrompt(&models.Scene{VideoPrompt: action, Duration: 11}, nil, []models.Dialogue{{ID: 1, Character: "上官若琳", SpeechType: "dialogue", Text: "第一段，"}, {ID: 2, Character: "上官若琳", SpeechType: "dialogue", Text: "第二段，"}}, lines)
-	for _, want := range []string{"眉心舒展，目光逐渐柔和", "微微推进", "<Picture 3> establishes the full-frame environment and spatial layout throughout the video"} {
+	for _, want := range []string{"眉心与目光的紧张感增强", "微微推进", "<Picture 3> establishes the full-frame environment and spatial layout throughout the video"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("missing %q: %s", want, prompt)
 		}
 	}
-	for _, bad := range []string{"眉心与目光的紧张感增强", "轻微摇摄跟随", "<Subject 2> are silent listeners", "<Subject 3>", "remains visible in the background", "古风仙侠", "温柔细腻", "柔美内敛", "色调红金偏暖"} {
+	for _, bad := range []string{"<Subject 2> are silent listeners", "<Subject 3>", "remains visible in the background", "古风仙侠", "温柔细腻", "柔美内敛", "色调红金偏暖"} {
 		if strings.Contains(prompt, bad) {
 			t.Fatalf("retained %q: %s", bad, prompt)
 		}
@@ -4887,10 +4896,11 @@ func TestExplicitDialogueRangesValidateMergedGroupCoordinates(t *testing.T) {
 	}
 }
 
-func TestH3NormalizationRemovesStaticCameraConflictAndUnusedRetention(t *testing.T) {
+func TestH3NormalizationKeepsDirectorCameraProgressionAndTrimsUnusedRetention(t *testing.T) {
+	// "static, then pulls out" is a legitimate camera progression chosen by the director.
 	got := resolveH3VisualConflicts("The camera remains static, then pulls out while tracking the subject.")
-	if strings.Contains(strings.ToLower(got), "static") || !strings.Contains(got, "pulls out") {
-		t.Fatalf("camera conflict not normalized: %s", got)
+	if !strings.Contains(got, "remains static") || !strings.Contains(got, "pulls out") {
+		t.Fatalf("director camera progression was rewritten: %s", got)
 	}
 	retention := h3VisibleRetention("[Shot 1] <Subject 2> stands.", []string{"<Subject 1> - face.", "<Subject 2> - clothing."})
 	if len(retention) != 1 || strings.Contains(retention[0], "Subject 1") || !strings.Contains(retention[0], "[Shot 1]") {

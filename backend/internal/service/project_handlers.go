@@ -585,6 +585,12 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 		heading = "integrated_multimodal_description:"
 		detail = h3IntegratedDescription(fullPrompt)
 	}
+	// Director-placed [[Dn]] anchors win; an invalid set is stripped and the
+	// planner below places the speech instead.
+	if marked, _ := applyH3DialogueMarkers(detail, dubs, lines); marked != detail {
+		fullPrompt = strings.Replace(fullPrompt, detail, marked, 1)
+		detail, actionPrompt = marked, marked
+	}
 	if len(validSceneDialogues(dubs)) > 0 {
 		composed, composeErr := s.Projects.composeH3DialogueTimeline(sc, detail, dubs, lines)
 		if composeErr != nil {
@@ -599,6 +605,8 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 		actionPrompt = composed
 	}
 	fullPrompt = bindH3ReferencePreview(fullPrompt, lines)
+	// Runs after preview binding, which rebuilds retention_analysis from templates.
+	fullPrompt = s.Projects.applyH3DirectorBrief(sc, fullPrompt)
 	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "reference_bindings": sceneVideoReferenceBindings(refs, lines, fullPrompt), "template": template, "dialogue_count": len(validSceneDialogues(dubs)), "prompt_dialogue_count": len(h3SpokenTextPattern.FindAllStringSubmatch(fullPrompt, -1)), "dialogue_placement": DiagnoseH3DialoguePlacement(fullPrompt, dubs, lines)}
 	if continuity != nil && continuity.SelectedFrame != nil {
 		response["continuity_mode"] = continuity.Mode

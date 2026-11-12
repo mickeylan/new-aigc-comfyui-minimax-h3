@@ -1331,6 +1331,10 @@ func TestH3ClassifiesSpellClashAsAction(t *testing.T) {
 			t.Fatalf("H3 action instruction missing %q: %s", want, instruction)
 		}
 	}
+	net := &models.Scene{Content: "燕承左手猛扬，一团黑光飞出，展开成一张硕大的黑色大网，将两人同时罩住。"}
+	if got := classifyH3SceneMode(net, nil, nil); got != h3SceneAction {
+		t.Fatalf("one-way net spell was classified as %s; spell vocabulary must match the spell contract", got)
+	}
 }
 
 func TestParseSceneDirectorDraftNamesMissingRequiredField(t *testing.T) {
