@@ -358,6 +358,7 @@ type Character struct {
 	PortraitTaskID string `gorm:"column:portrait_task_id;index" json:"portrait_task_id"`       // Krea2 标准像生成任务
 	PortraitError  string `gorm:"type:text" json:"portrait_error"`                             // 标准像生成错误
 	Sheet          string `json:"sheet"`                                                       // 角色四视图文件名（input/<project_id>/ 下）
+	SheetEngine    string `gorm:"column:sheet_engine;default:moss" json:"sheet_engine"`       // 四视图直接文生引擎：moss/krea2/qwen_image_2_1
 	SheetTaskID    string `gorm:"column:sheet_task_id;index" json:"sheet_task_id"`             // Krea2 四视图生成任务
 	SheetError     string `gorm:"column:sheet_error;type:text" json:"sheet_error"`             // 四视图生成错误
 	Voice          string `json:"voice"`                                                       // 预设 TTS 音色 ID（角色级，配音优先于平台角色映射）

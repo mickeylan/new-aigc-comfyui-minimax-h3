@@ -6675,6 +6675,7 @@ func (s *ProjectService) CreateCharacter(ch models.Character) (*models.Character
 	}
 	ch.Source = "manual"
 	ch.PortraitEngine, _ = normalizeAssetImageEngine(ch.PortraitEngine)
+	ch.SheetEngine, _ = normalizeSheetImageEngine(ch.SheetEngine)
 	ch.Portrait = "" // 新建无标准像
 	if err := s.db.Create(&ch).Error; err != nil {
 		return nil, fmt.Errorf("角色名已存在或创建失败: %w", err)
@@ -6725,7 +6726,15 @@ func (s *ProjectService) UpdateCharacter(ch *models.Character, req models.Charac
 		return err
 	}
 	if portraitEngine != ch.PortraitEngine {
-		updates["portrait_engine"], updates["portrait"], updates["portrait_task_id"], updates["portrait_error"], updates["sheet"], updates["sheet_task_id"], updates["sheet_error"] = portraitEngine, "", "", "", "", "", ""
+		updates["portrait_engine"], updates["portrait"], updates["portrait_task_id"], updates["portrait_error"] = portraitEngine, "", "", ""
+	}
+	// 四视图引擎只决定下次如何生成，不作废已有四视图；旧客户端不传该字段时保持原值。
+	if strings.TrimSpace(req.SheetEngine) != "" {
+		sheetEngine, err := normalizeSheetImageEngine(req.SheetEngine)
+		if err != nil {
+			return err
+		}
+		updates["sheet_engine"] = sheetEngine
 	}
 	effectiveName := ch.Name
 	if newName != "" {
@@ -6931,7 +6940,6 @@ func (s *ProjectService) StartCharacterPortrait(ch *models.Character) error {
 	}
 	if err := s.db.Model(&models.Character{}).Where("id = ?", ch.ID).Updates(map[string]any{
 		"portrait_task_id": task.TaskID, "portrait_error": "",
-		"sheet": "", "sheet_task_id": "", "sheet_error": "",
 	}).Error; err != nil {
 		return err
 	}

@@ -12,9 +12,25 @@ const (
 	ImageEngineKrea2        = "krea2"
 	ImageEngineMiniMaxH3    = "minimax_h3"
 	ImageEngineQwen21       = "qwen_image_2_1"
+	ImageEngineMoss         = "moss"
 	TemplateQwen21T2I       = "qwen_image_2_1_t2i"
 	TemplateQwen21MultiEdit = "qwen_image_2_1_multi_edit"
+	TemplateMossSheet       = "moss_character_sheet"
 )
+
+// normalizeSheetImageEngine 角色四视图直接文生引擎，默认 Moss。
+func normalizeSheetImageEngine(value string) (string, error) {
+	switch strings.TrimSpace(value) {
+	case "", ImageEngineMoss:
+		return ImageEngineMoss, nil
+	case ImageEngineKrea2:
+		return ImageEngineKrea2, nil
+	case ImageEngineQwen21:
+		return ImageEngineQwen21, nil
+	default:
+		return "", fmt.Errorf("不支持的四视图生图引擎")
+	}
+}
 
 func normalizeAssetImageEngine(value string) (string, error) {
 	switch strings.TrimSpace(value) {

@@ -229,10 +229,12 @@
                 <button class="btn btn-sm btn-ghost" :disabled="busy || ch._uploading" @click="uploadPortrait(ch)">
                   {{ ch._uploading ? '上传中…' : '上传图片替换' }}
                 </button>
-                <button class="btn btn-sm btn-secondary" :disabled="busy || !ch.portrait || !!ch.sheet_task_id" @click="genCharacterSheet(ch)"
-                  :title="!ch.portrait ? '请先生成或上传标准像' : '下游分镜与 H3 视频将优先使用四视图'">
-                  {{ ch.sheet_task_id ? '四视图生成中…' : ch.sheet ? '重生成四视图' : '生成四视图' }}
+                <button class="btn btn-sm btn-secondary" :disabled="busy || !!ch.sheet_task_id || ch.profile_status !== 'approved' || !sheetEngineReady(ch)" @click="genCharacterSheet(ch)"
+                  :title="ch.profile_status !== 'approved' ? '请先审核通过角色档案' : !sheetEngineReady(ch) ? `所选 ${sheetEngineLabel(ch.sheet_engine)} 工作流模板未安装` : '直接文生四视图，无需标准像；下游分镜与 H3 视频将优先使用四视图'">
+                  {{ ch.sheet_task_id ? '四视图生成中…' : sheetEngineLabel(ch.sheet_engine) + (ch.sheet ? ' 重生成四视图' : ' 生成四视图') }}
                 </button>
+                <button v-if="ch.portrait" class="btn btn-sm btn-ghost" :disabled="busy || !!ch.sheet_task_id" @click="genCharacterSheet(ch, true)"
+                  title="以现有标准像锁定脸部，用 Krea2 编辑生成四视图">基于标准像生成四视图</button>
                 <button class="btn btn-sm btn-ghost" :disabled="busy || ch._sheetUploading" @click="uploadCharacterSheet(ch)"
                   title="已画好的四视图可直接上传，无需标准像；下游分镜与 H3 视频将优先使用它锁定身份">
                   {{ ch._sheetUploading ? '上传中…' : '上传四视图' }}
@@ -909,7 +911,8 @@
             <textarea v-model="charForm.style" class="textarea" rows="2"
               placeholder="标志性服装、配饰、主色调…" />
           </div>
-          <div class="field"><label>人物标准照生成模板</label><select v-model="charForm.portrait_engine" class="input"><option value="krea2">Krea2（默认）</option><option value="qwen_image_2_1" :disabled="!qwenAssetTemplateReady">Qwen-Image-2.1{{qwenAssetTemplateReady?'':'（工作流模板未安装）'}}</option></select><div class="field-hint">只影响人物标准照；角色四视图仍使用现有Krea2流程。</div></div>
+          <div class="field"><label>角色四视图生成模板</label><select v-model="charForm.sheet_engine" class="input"><option value="moss" :disabled="!mossSheetTemplateReady">Moss（默认）{{mossSheetTemplateReady?'':'（工作流模板未安装）'}}</option><option value="krea2">Krea2</option><option value="qwen_image_2_1" :disabled="!qwenAssetTemplateReady">Qwen-Image-2.1{{qwenAssetTemplateReady?'':'（工作流模板未安装）'}}</option></select><div class="field-hint">直接文生四视图，无需标准像；切换不会作废已有四视图。“基于标准像生成四视图”仍走Krea2编辑流程。</div></div>
+          <div class="field"><label>人物标准照生成模板 <span class="optional">可选</span></label><select v-model="charForm.portrait_engine" class="input"><option value="krea2">Krea2（默认）</option><option value="qwen_image_2_1" :disabled="!qwenAssetTemplateReady">Qwen-Image-2.1{{qwenAssetTemplateReady?'':'（工作流模板未安装）'}}</option></select><div class="field-hint">只影响可选的人物标准照。</div></div>
           <div class="field">
             <label>配音音色 <span class="optional">可选，预设音色 ID</span></label>
             <input v-model="charForm.voice" class="input" list="voice-presets" placeholder="如 Cherry / Ethan；留空使用平台设置的音色映射" />
@@ -1280,7 +1283,7 @@ const curEpDubReady = computed(() => {
   return dubs.length > 0 && dubs.every(d => d.status === 'ready')
 })
 const editingCharacter = ref(null)
-const charForm = reactive({ name: '', role: '', trait: '', style: '', voice: '', portrait_engine: 'krea2' })
+const charForm = reactive({ name: '', role: '', trait: '', style: '', voice: '', portrait_engine: 'krea2', sheet_engine: 'moss' })
 
 // 角色档案（LumxAI 风格）状态
 const charProfileTab = ref('basic') // basic / profile / prompt
@@ -1361,6 +1364,12 @@ const hasTemplate = code => modelCatalog.value.some(m => m.template_code === cod
 const qwenAssetTemplateReady = computed(() => hasTemplate('qwen_image_2_1_t2i'))
 const qwenSceneTemplateReady = computed(() => hasTemplate('qwen_image_2_1_t2i') || hasTemplate('qwen_image_2_1_multi_edit'))
 const portraitEngineReady = ch => (ch.portrait_engine || 'krea2') !== 'qwen_image_2_1' || qwenAssetTemplateReady.value
+const mossSheetTemplateReady = computed(() => hasTemplate('moss_character_sheet'))
+const sheetEngineReady = ch => {
+  const engine = ch.sheet_engine || 'moss'
+  return engine === 'moss' ? mossSheetTemplateReady.value : engine !== 'qwen_image_2_1' || qwenAssetTemplateReady.value
+}
+const sheetEngineLabel = engine => (engine || 'moss') === 'moss' ? 'Moss' : imageEngineLabel(engine)
 const assetEngineReady = a => (a.image_engine || 'krea2') !== 'qwen_image_2_1' || qwenAssetTemplateReady.value
 const sceneEngineReady = sc => (sc.image_engine || 'minimax_h3') !== 'qwen_image_2_1' || qwenSceneTemplateReady.value
 const imageEngineLabel = engine => engine === 'qwen_image_2_1' ? 'Qwen-Image-2.1' : 'Krea2'
@@ -2864,9 +2873,9 @@ async function resetPortrait(ch) {
   catch (e) { toast.error(e.response?.data?.error || '重置失败') }
   finally { ch._resetting = false }
 }
-async function genCharacterSheet(ch) {
+async function genCharacterSheet(ch, fromPortrait = false) {
   try {
-    const { data } = await api.generateCharacterSheet(id(), ch.id)
+    const { data } = await api.generateCharacterSheet(id(), ch.id, fromPortrait)
     toast.show(data.message || '角色四视图任务已提交')
     await load()
   } catch (e) {
@@ -2960,11 +2969,11 @@ async function toggleCharacterHistory(ch) {
   }
 }
 function openCreateCharacter() {
-  Object.assign(charForm, { name: '', role: '', trait: '', style: '', voice: '', portrait_engine: 'krea2' })
+  Object.assign(charForm, { name: '', role: '', trait: '', style: '', voice: '', portrait_engine: 'krea2', sheet_engine: 'moss' })
   editingCharacter.value = 'new'
 }
 function openEditCharacter(ch) {
-  Object.assign(charForm, { name: ch.name, role: ch.role, trait: ch.trait, style: ch.style, voice: ch.voice || '', portrait_engine: ch.portrait_engine || 'krea2' })
+  Object.assign(charForm, { name: ch.name, role: ch.role, trait: ch.trait, style: ch.style, voice: ch.voice || '', portrait_engine: ch.portrait_engine || 'krea2', sheet_engine: ch.sheet_engine || 'moss' })
   // 加载 LumxAI 风格档案字段
   Object.assign(charProfileForm, {
     gender: ch.gender || '',
@@ -3035,7 +3044,8 @@ async function generateCharacterProfile() {
       trait: data.character.trait || '',
       style: data.character.style || '',
       voice: data.character.voice || '',
-      portrait_engine: data.character.portrait_engine || 'krea2'
+      portrait_engine: data.character.portrait_engine || 'krea2',
+      sheet_engine: data.character.sheet_engine || 'moss'
     })
     Object.assign(charProfileForm, {
       gender: data.character.gender || '',

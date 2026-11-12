@@ -234,7 +234,7 @@ export const api = {
   generateCharacterPortrait: (id, cid) => http.post(`/projects/${id}/characters/${cid}/portrait`),
   recoverCharacterPortrait: (id, cid) => http.post(`/projects/${id}/characters/${cid}/portrait/recover`),
   resetCharacterPortrait: (id, cid) => http.post(`/projects/${id}/characters/${cid}/portrait/reset`),
-  generateCharacterSheet: (id, cid) => http.post(`/projects/${id}/characters/${cid}/sheet`),
+  generateCharacterSheet: (id, cid, fromPortrait = false) => http.post(`/projects/${id}/characters/${cid}/sheet${fromPortrait ? '?source=portrait' : ''}`),
   uploadCharacterPortrait: (id, cid, file) => {
     const fd = new FormData()
     fd.append('file', file)

@@ -31,16 +31,85 @@ func characterFootwear(project *models.Project, ch *models.Character) string {
 	return "与完整服装和时代背景一致的包头鞋履"
 }
 
-func buildCharacterSheetPrompt(project *models.Project, ch *models.Character) string {
-	return "Convert the exact same single character from the supplied face portrait into a clean four-view character sheet: face close-up, front full body, side full body, and back full body. Preserve identity, exact visual age, face, hairstyle, body proportions, complete outfit, colors, accessories and art style. " +
-		"角色完整服装档案：" + strings.TrimSpace(ch.WardrobeDetail) + "。指定鞋履：" + characterFootwear(project, ch) + "。" +
-		"正面全身、侧面全身、背面全身三个视图必须穿完全相同的鞋，并使用同一套服装；双脚必须完整穿鞋并位于画框内。禁止赤脚、露趾、裁脚、换装、丢失发饰和佩饰，禁止现代高跟鞋、运动鞋、现代皮鞋和日式木屐。Neutral white background, no text, no extra people."
+// characterSheetFootwearLock 锁定三个全身视图的鞋履，防止赤脚、裁脚和现代鞋。
+func characterSheetFootwearLock(project *models.Project, ch *models.Character) string {
+	return "指定鞋履：" + characterFootwear(project, ch) + "。" +
+		"正面全身、侧面全身、背面全身三个视图必须穿完全相同的鞋，并使用同一套服装；双脚必须完整穿鞋并位于画框内。禁止赤脚、露趾、裁脚、换装、丢失发饰和佩饰，禁止现代高跟鞋、运动鞋、现代皮鞋和日式木屐。"
 }
 
-// StartCharacterSheet submits a Krea2 image-edit task using the character portrait.
-func (s *ProjectService) StartCharacterSheet(ch *models.Character) error {
-	if strings.TrimSpace(ch.Portrait) == "" {
+// characterSheetHasHair 判断档案外貌是否已写明发型，已写明时不再重复注入时代发型约束。
+func characterSheetHasHair(text string) bool {
+	for _, word := range []string{"头发", "发型", "发丝", "发髻", "长发", "短发", "披发", "束发", "髻", "冠", "簪"} {
+		if strings.Contains(text, word) {
+			return true
+		}
+	}
+	return false
+}
+
+// buildCharacterSheetPrompt 直接文生四视图。结构与用户验证过的 Moss 样例一致：先写人物外貌、
+// 完整服装与画风，再写“由左到右排列”的四格版式与设定集画质要求。不经过标准像，
+// 避免大头照缺失的下半身、腰饰被编辑模型臆造。
+func buildCharacterSheetPrompt(project *models.Project, ch *models.Character) string {
+	parts := make([]string, 0, 8)
+	if subject := ageSubject(ch.Appearance, ch.Trait); subject != "" {
+		parts = append(parts, subject)
+	}
+	appearance := strings.TrimSpace(ch.Appearance)
+	if appearance == "" {
+		appearance = strings.TrimSpace(ch.Trait)
+	}
+	if appearance != "" {
+		parts = append(parts, appearance)
+	}
+	if !characterSheetHasHair(appearance) {
+		if hair := historicalPortraitHairConstraint(ch, project); hair != "" {
+			parts = append(parts, hair)
+		}
+	}
+	if wardrobe := primaryWardrobe(ch); wardrobe != "" {
+		parts = append(parts, "服饰："+wardrobe)
+	}
+	if palette := strings.TrimSpace(ch.ColorPalette); palette != "" {
+		parts = append(parts, "主色调："+palette)
+	}
+	if style := strings.TrimSpace(project.Style); style != "" {
+		parts = append(parts, style+"风格")
+	}
+	return normalizePortraitStyle(strings.Join(parts, "，"), project) + "。" + characterSheetFootwearLock(project, ch) +
+		"四格为同一人物、同一张脸、同一发型与同一套服装配饰，全身格从头顶到鞋底完整入镜。" +
+		"由左到右排列：正面面部特写、正面全身站立、侧面全身站立、背面全身站立。纯白色干净背景，影棚级柔和布光，角色设定集风格，画面中只有这一个角色且无文字标签，高分辨率，电影级质感，16:9画面比例。"
+}
+
+// buildCharacterSheetEditPrompt 保留“基于标准像”的编辑路径，供已定脸的角色沿用。
+func buildCharacterSheetEditPrompt(project *models.Project, ch *models.Character) string {
+	return "Convert the exact same single character from the supplied face portrait into a clean four-view character sheet: face close-up, front full body, side full body, and back full body. Preserve identity, exact visual age, face, hairstyle, body proportions, complete outfit, colors, accessories and art style. " +
+		"角色完整服装档案：" + strings.TrimSpace(ch.WardrobeDetail) + "。" + characterSheetFootwearLock(project, ch) + "Neutral white background, no text, no extra people."
+}
+
+// characterSheetTemplate 返回四视图直接文生所用模板与参数：Moss 使用专用四视图模板默认值，
+// Krea2/Qwen 复用各自文生图模板并改为横幅。
+func characterSheetTemplate(engine string) (string, map[string]any) {
+	switch engine {
+	case ImageEngineQwen21:
+		params := qwenPortraitParams()
+		params["aspect_ratio"] = qwenAspectRatio("16:9")
+		return TemplateQwen21T2I, params
+	case ImageEngineKrea2:
+		// Krea2 模板第二阶段放大 1.5 倍，实际输出约 2016x1152。
+		return "krea2_character_portrait", map[string]any{"width": 1344, "height": 768}
+	default:
+		return TemplateMossSheet, nil
+	}
+}
+
+// StartCharacterSheet 默认按角色四视图引擎（默认 Moss）直接文生四视图；fromPortrait 时沿用 Krea2 标准像编辑路径。
+func (s *ProjectService) StartCharacterSheet(ch *models.Character, fromPortrait bool) error {
+	if fromPortrait && strings.TrimSpace(ch.Portrait) == "" {
 		return fmt.Errorf("请先为角色「%s」生成或上传标准像", ch.Name)
+	}
+	if !fromPortrait && ch.ProfileStatus != models.ProfileStatusApproved {
+		return fmt.Errorf("请先审核通过角色「%s」的详细档案", ch.Name)
 	}
 	if s.tasks == nil {
 		return fmt.Errorf("角色四视图生成依赖 ComfyUI 任务服务")
@@ -48,20 +117,31 @@ func (s *ProjectService) StartCharacterSheet(ch *models.Character) error {
 	if s.sheetTaskActive(ch.SheetTaskID) {
 		return fmt.Errorf("%w：角色「%s」", errSheetActive, ch.Name)
 	}
-	var tpl models.Template
-	if err := s.db.Where("code = ? AND enabled = ?", "krea2_character_sheet", true).First(&tpl).Error; err != nil {
-		return fmt.Errorf("未找到已启用的 Krea2 角色四视图模板")
-	}
 	var project models.Project
 	if err := s.db.First(&project, ch.ProjectID).Error; err != nil {
 		return err
 	}
-	prompt := buildCharacterSheetPrompt(&project, ch)
-	task, err := s.tasks.CreateTask(CreateTaskReq{
-		TemplateID: tpl.ID,
-		Prompt:     prompt,
-		Files:      map[string][]FileMeta{"source_image": {{TaskID: fmt.Sprint(ch.ProjectID), Name: ch.Portrait}}},
-	})
+	req := CreateTaskReq{}
+	if fromPortrait {
+		tpl, err := enabledTemplateByCode(s.db, "krea2_character_sheet")
+		if err != nil {
+			return err
+		}
+		req = CreateTaskReq{TemplateID: tpl.ID, Prompt: buildCharacterSheetEditPrompt(&project, ch),
+			Files: map[string][]FileMeta{"source_image": {{TaskID: fmt.Sprint(ch.ProjectID), Name: ch.Portrait}}}}
+	} else {
+		engine, err := normalizeSheetImageEngine(ch.SheetEngine)
+		if err != nil {
+			return err
+		}
+		templateCode, params := characterSheetTemplate(engine)
+		tpl, err := enabledTemplateByCode(s.db, templateCode)
+		if err != nil {
+			return err
+		}
+		req = CreateTaskReq{TemplateID: tpl.ID, Prompt: buildCharacterSheetPrompt(&project, ch), Params: params}
+	}
+	task, err := s.tasks.CreateTask(req)
 	if err != nil {
 		return fmt.Errorf("创建角色四视图任务失败: %w", err)
 	}

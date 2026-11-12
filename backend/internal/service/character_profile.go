@@ -486,13 +486,11 @@ func sanitizePortraitHeadshotPrompt(prompt string) string {
 	return strings.Join(kept, "，")
 }
 
-func portraitStyling(char *models.Character) string {
+// primaryWardrobe 取档案里的第一套（日常）服装，去掉第二套/礼服等备选造型。
+func primaryWardrobe(char *models.Character) string {
 	wardrobe := strings.TrimSpace(char.WardrobeDetail)
 	if wardrobe == "" {
 		wardrobe = strings.TrimSpace(char.Style)
-	}
-	if wardrobe == "" {
-		return "简洁合体的中性基础上衣，衣料完整覆盖肩部与胸口"
 	}
 	for _, marker := range []string{"鹅黄色装扮：", "第二套", "另一套", "工作装束", "工作装：", "重要场合造型", "正式场合", "礼服造型"} {
 		if i := strings.Index(wardrobe, marker); i > 0 {
@@ -504,6 +502,14 @@ func portraitStyling(char *models.Character) string {
 			wardrobe = wardrobe[i+len(marker):]
 			break
 		}
+	}
+	return strings.TrimSpace(wardrobe)
+}
+
+func portraitStyling(char *models.Character) string {
+	wardrobe := primaryWardrobe(char)
+	if wardrobe == "" {
+		return "简洁合体的中性基础上衣，衣料完整覆盖肩部与胸口"
 	}
 	clothingWords := "衣衫袍裙领襟袖肩胸布绸丝麻纹色带搭"
 	excludedWords := []string{"岁", "男性", "女性", "身形", "面容", "眉", "眼", "鼻", "唇", "皮肤", "发髻", "头发", "发丝", "簪", "鞋", "靴", "足踏", "手持", "武器", "拂尘", "经历", "渴望", "机会", "修为", "性格"}

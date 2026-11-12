@@ -1675,7 +1675,8 @@ func (s *Service) HandleGenerateCharacterSheet(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := s.Projects.StartCharacterSheet(ch); err != nil {
+	// 默认直接文生四视图；?source=portrait 沿用标准像编辑路径。
+	if err := s.Projects.StartCharacterSheet(ch, c.Query("source") == "portrait"); err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, errSheetActive) {
 			status = http.StatusConflict
