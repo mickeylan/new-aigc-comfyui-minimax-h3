@@ -7412,6 +7412,15 @@ func (s *ProjectService) StartSceneImage(sc *models.Scene) error {
 		return err
 	}
 	go func() {
+		// A panic here used to kill the whole process with the claim still held, so
+		// the scene stayed image_pending until restart. Release it like any other
+		// failure; the same reasoning is already applied to script generation.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[storyboard-generate] project=%d scene=%d panic: %v", sc.ProjectID, sc.Order, r)
+				s.failSceneImage(sc, token, "分镜图生成异常中断，请重试")
+			}
+		}()
 		if err := s.generateClaimedSceneImage(sc, token); err != nil {
 			log.Printf("[project %d] scene %d image failed: %v", sc.ProjectID, sc.Order, err)
 		}
@@ -7419,14 +7428,91 @@ func (s *ProjectService) StartSceneImage(sc *models.Scene) error {
 	return nil
 }
 
+// sceneImageVideoPhaseStatuses are the states where Scene.Status is tracking a
+// live video task. Status is one shared field across both phases, so claiming an
+// image here would overwrite the state the video poller keys on and orphan that
+// task. These are the only states that still refuse an image claim.
+var sceneImageVideoPhaseStatuses = map[string]string{
+	"video_creating": "正在创建视频任务",
+	"video_pending":  "视频任务排队中",
+	"video_running":  "视频正在生成",
+}
+
+// sceneImageClaimStallTimeout bounds the window between claiming a scene image
+// and submitting its task. generateClaimedSceneImage only validates the prompt
+// and creates the task in that window -- no model call -- so a claim older than
+// this with no task behind it belongs to a worker that died.
+const sceneImageClaimStallTimeout = 5 * time.Minute
+
+// sceneImageClaimTime recovers when a claim was minted. The token already embeds
+// the claim timestamp, so liveness costs no extra column.
+func sceneImageClaimTime(token string) (time.Time, bool) {
+	i := strings.LastIndex(token, "-")
+	if i < 0 || i+1 >= len(token) {
+		return time.Time{}, false
+	}
+	ns, err := strconv.ParseInt(token[i+1:], 10, 64)
+	if err != nil || ns <= 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(0, ns), true
+}
+
+// sceneImageGenerationIsLive reports whether a held claim still has something
+// behind it that can finish. A generation that is genuinely running must not be
+// restarted by a second click, but one whose process died must not block the
+// scene forever: the claim alone cannot tell those apart, so ask the task.
+func (s *ProjectService) sceneImageGenerationIsLive(sc *models.Scene) bool {
+	if sc.Status != "image_pending" || sc.ImageToken == "" {
+		return false
+	}
+	if sc.ImageTaskID != "" {
+		var task models.Task
+		if err := s.db.Select("status").Where("task_id = ?", sc.ImageTaskID).First(&task).Error; err != nil {
+			// No task record can ever complete this claim.
+			return false
+		}
+		return task.Status == "pending" || task.Status == "queued" || task.Status == "running"
+	}
+	// Claimed but not yet submitted. Live only while inside the stall window.
+	claimed, ok := sceneImageClaimTime(sc.ImageToken)
+	if !ok {
+		return false
+	}
+	return time.Since(claimed) < sceneImageClaimStallTimeout
+}
+
+// claimSceneImage mints a fresh generation token for a scene image. It refuses
+// only while a generation is genuinely live; a claim left behind by a crashed
+// worker is taken over instead of blocking the scene until restart. The token,
+// not the refusal, is what protects data integrity: completion and failure paths
+// update only `WHERE image_token = <their token>`, so minting a new token
+// already makes a superseded worker's writeback a no-op.
 func (s *ProjectService) claimSceneImage(sc *models.Scene) (string, error) {
 	if sc.ImageLocked {
 		return "", fmt.Errorf("场景 %d 的分镜图已锁定，请先解锁", sc.Order)
 	}
+	var prior models.Scene
+	if err := s.db.Select("status", "image_token", "image_task_id").First(&prior, sc.ID).Error; err != nil {
+		return "", err
+	}
+	if reason, busy := sceneImageVideoPhaseStatuses[prior.Status]; busy {
+		return "", fmt.Errorf("场景 %d %s，请等待视频任务结束后再重新生成画面", sc.Order, reason)
+	}
+	if s.sceneImageGenerationIsLive(&prior) {
+		return "", fmt.Errorf("场景 %d 的分镜图正在生成中，请等待本次生成结束", sc.Order)
+	}
+	if prior.ImageToken != "" {
+		log.Printf("[storyboard-claim] scene=%d taking over stale claim token=%s task=%q status=%s",
+			sc.ID, prior.ImageToken, prior.ImageTaskID, prior.Status)
+	}
 	token := fmt.Sprintf("%d-%d", sc.ID, time.Now().UnixNano())
+	// Compare-and-swap on the exact token judged dead above: if a concurrent
+	// request claimed the scene in between, the token moved and this loses.
 	claim := s.db.Model(&models.Scene{}).
-		Where("id = ? AND project_id = ? AND generation = ? AND (archived = ? OR archived IS NULL) AND image_locked = ? AND image_token = '' AND status IN ?",
-			sc.ID, sc.ProjectID, sc.Generation, false, false, []string{"pending", "failed", "image_ready", "video_ready"}).
+		Where("id = ? AND project_id = ? AND generation = ? AND (archived = ? OR archived IS NULL) AND image_locked = ? AND image_token = ? AND status NOT IN ?",
+			sc.ID, sc.ProjectID, sc.Generation, false, false, prior.ImageToken,
+			[]string{"video_creating", "video_pending", "video_running"}).
 		Updates(map[string]any{
 			"status": "image_pending", "error": "", "image_token": token, "image_task_id": "",
 			"image_retries": gorm.Expr("image_retries + 1"),
@@ -7435,7 +7521,7 @@ func (s *ProjectService) claimSceneImage(sc *models.Scene) (string, error) {
 		return "", claim.Error
 	}
 	if claim.RowsAffected == 0 {
-		return "", fmt.Errorf("场景 %d 已在生成或状态已变化", sc.Order)
+		return "", fmt.Errorf("场景 %d 的分镜图刚被另一次生成接管，请稍后重试", sc.Order)
 	}
 	sc.ImageToken = token
 	s.pushProject(nil)
