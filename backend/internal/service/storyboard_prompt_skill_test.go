@@ -19,18 +19,24 @@ func TestReviewedStoryboardPromptSkillsAreCuratedAndVersioned(t *testing.T) {
 		version int
 		phrases []string
 	}{
-		{h3StoryboardImageSkillCode, 2, []string{
+		{h3StoryboardImageSkillCode, 3, []string{
 			"真正可见的人物", "支撑脚与重心", "道具由谁持有", "正向空间拓扑", "800至1800",
 			// v2 turns the prohibition list into a working method with graded examples.
 			"【工作方法】", "写完自检", "【正例与反例】",
+			// v3 declares the three frames of reference for left/right and orientation.
+			"【左右与朝向基准】", "永远属于角色自身，不随镜头改变", "横向序关系",
 		}},
-		{QwenImage21T2IProgram, 4, []string{
+		{QwenImage21T2IProgram, 5, []string{
 			"exact visible subject count", "support foot and weight", "prop ownership",
 			"Method: settle these six decisions", "Graded examples", "Wherever they would have to guess",
+			// v5 declares the three frames of reference for left/right and orientation.
+			"Frames of reference", "never flip with the camera", "survive a horizontal flip",
 		}},
-		{QwenImage21EditProgram, 4, []string{
+		{QwenImage21EditProgram, 5, []string{
 			"references do not automatically become visible subjects", "state each reference duty exactly once", "positive final topology",
 			"Method: settle these decisions", "Graded examples",
+			// v5 declares the three frames of reference for left/right and orientation.
+			"Frames of reference", "never flip with the camera", "survive a horizontal flip",
 		}},
 	}
 	for _, check := range checks {
