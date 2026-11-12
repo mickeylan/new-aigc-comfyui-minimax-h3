@@ -203,6 +203,7 @@ func (s *CharacterProfileService) GenerateProfile(char *models.Character, projec
 		"profile_status":   models.ProfileStatusDraft,
 		"profile_version":  gorm.Expr("profile_version + 1"),
 		"reference_prompt": "",
+		"sheet_prompt":     "",
 		"review_note":      "",
 		"portrait":         "",
 		"portrait_task_id": "",
@@ -753,6 +754,54 @@ func (s *CharacterProfileService) GenerateReferencePrompt(char *models.Character
 	return prompt, nil
 }
 
+const characterSheetPromptSystem = `你是角色设定集提示词设计师。根据审核通过的角色档案，写一段供文生图模型一次生成“角色四视图设定图”的中文人物描述。
+要求：
+1. 只输出一段连续的中文描述，短语之间用逗号或顿号连接；不要分行、标题、编号、引号或任何解释。
+2. 依次写：性别与年龄；发型（发色、长度、发髻或束发结构、碎发、发饰与位置）；脸型、五官与眼神气质；妆容与额饰；服饰制式与层次（领型、上衣、下装、腰封与腰饰、外搭、披帛、衣摆长度）；面料与材质质感；画风与质感；身材比例与辨识度。
+3. 下装、腰部配饰和鞋履必须完整写出，它们决定四视图全身格是否准确。
+4. 档案中的年龄、性别、发型、五官、服装、配色和画风是事实，不得改写，不得增加档案没有的人物、配饰或道具；档案写了多套造型时只用第一套日常造型。
+5. 不写四视图排版、由左到右、视角、背景、布光、画幅比例、分辨率、电影级等内容，这部分由系统追加。
+写法示例（只学习描述密度和语序，禁止照抄其中的年龄、发型、服装、配色或任何内容）：
+女性，20岁，漆黑纯澈的长发高挽成凌云单螺髻、留有轻盈龙须碎发并饰以翡翠银簪与青碧玉佩流苏，精致温婉的鹅蛋脸型，锐利冷酷且深邃的眼眸如寒潭般清冽、气场强大而具穿透力，素雅冷调妆面配眉心极简碧色冷霜花钿与自然润泽薄唇，骨感凌厉的寒锋斜挑眉，玄幻修仙灵秀剑仙服饰以碧波青与象牙白为主色调、多层叠穿交领内衬与斜襟轻薄长裙、腰身线条柔和紧致佩戴环佩腰封、外搭一袭青透薄雾般的云纱大袖衫与碧玉色长披帛、垂坠宽袍与曳地较长衣摆，通透细腻的三维写实皮肤纹理与极细透光云纱、哑光提花丝绸与金丝压边面料，3D国风动漫风格与写实国风玄幻质感、身材起伏有致且比例挺拔合理、角色特征个性鲜明极具辨识度`
+
+// GenerateSheetPrompt 由 LLM 按设定集样例的写法生成四视图人物描述，再固定追加鞋履锁定与四格版式，
+// 结果保存为可编辑的 sheet_prompt。没有文本模型时退回按档案确定性编译。
+// 提示词是派生内容，不改变审核状态，也不作废已有四视图。
+func (s *CharacterProfileService) GenerateSheetPrompt(char *models.Character, project *models.Project) (string, error) {
+	if strings.TrimSpace(char.Appearance) == "" && strings.TrimSpace(char.Trait) == "" {
+		return "", fmt.Errorf("请先完善角色外貌描述")
+	}
+	description := characterSheetDescription(project, char)
+	if s.textProvider != nil {
+		user := fmt.Sprintf("项目题材：%s\n项目画风：%s\n角色性别：%s\n外貌：%s\n服装：%s\n指定鞋履：%s\n角色配色：%s",
+			project.Genre, project.Style, char.Gender, strings.TrimSpace(char.Appearance), primaryWardrobe(char), characterFootwear(project, char), strings.TrimSpace(char.ColorPalette))
+		raw, err := s.textProvider.Chat(characterSheetPromptSystem, user)
+		if err != nil {
+			return "", fmt.Errorf("生成四视图提示词失败: %w", err)
+		}
+		generated := strings.Join(strings.Fields(strings.Trim(strings.TrimSpace(raw), "\"“”「」")), "，")
+		// 模型偶尔仍会自带版式句；截掉后统一由系统追加，避免版式重复或互相矛盾。
+		if i := strings.Index(generated, "由左到右"); i >= 0 {
+			generated = generated[:i]
+		}
+		generated = strings.TrimRight(generated, "。，,. ")
+		if generated == "" {
+			return "", fmt.Errorf("生成四视图提示词失败：模型返回为空")
+		}
+		description = generated
+	}
+	prompt := description + "。" + characterSheetLayoutTail(project, char)
+	if err := s.db.Model(char).Update("sheet_prompt", prompt).Error; err != nil {
+		return "", err
+	}
+	return prompt, nil
+}
+
+// SaveSheetPrompt 只保存用户修改后的四视图提示词；不改审核状态，也不作废已有四视图和标准像。
+func (s *CharacterProfileService) SaveSheetPrompt(char *models.Character, prompt string) error {
+	return s.db.Model(char).Update("sheet_prompt", strings.TrimSpace(prompt)).Error
+}
+
 // normalizePortraitStyle 删除与项目主画风直接冲突的泛化尾词，避免同一提示词同时要求动漫与写实。
 func normalizePortraitStyle(prompt string, project *models.Project) string {
 	if project == nil {
@@ -826,6 +875,7 @@ func (s *CharacterProfileService) UpdateProfile(char *models.Character, req mode
 		"emotions": strings.TrimSpace(req.Emotions), "habits": strings.TrimSpace(req.Habits),
 		"wardrobe_detail": strings.TrimSpace(req.WardrobeDetail), "lighting_mood": strings.TrimSpace(req.LightingMood),
 		"color_palette": strings.TrimSpace(req.ColorPalette), "reference_prompt": strings.TrimSpace(req.ReferencePrompt),
+		"sheet_prompt": strings.TrimSpace(req.SheetPrompt),
 	}
 
 	updates["profile_version"] = gorm.Expr("profile_version + 1")
@@ -858,6 +908,7 @@ func (s *CharacterProfileService) GetProfileFields(char *models.Character) map[s
 		"lighting_mood":    char.LightingMood,
 		"color_palette":    char.ColorPalette,
 		"reference_prompt": char.ReferencePrompt,
+		"sheet_prompt":     char.SheetPrompt,
 		"trait":            char.Trait,
 		"style":            char.Style,
 	}

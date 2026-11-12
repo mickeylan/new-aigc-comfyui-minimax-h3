@@ -47,10 +47,9 @@ func characterSheetHasHair(text string) bool {
 	return false
 }
 
-// buildCharacterSheetPrompt 直接文生四视图。结构与用户验证过的 Moss 样例一致：先写人物外貌、
-// 完整服装与画风，再写“由左到右排列”的四格版式与设定集画质要求。不经过标准像，
-// 避免大头照缺失的下半身、腰饰被编辑模型臆造。
-func buildCharacterSheetPrompt(project *models.Project, ch *models.Character) string {
+// characterSheetDescription 按档案确定性编译四视图的人物描述段（不含版式），
+// 用户未编辑四视图提示词或没有文本模型时使用。
+func characterSheetDescription(project *models.Project, ch *models.Character) string {
 	parts := make([]string, 0, 8)
 	if subject := ageSubject(ch.Appearance, ch.Trait); subject != "" {
 		parts = append(parts, subject)
@@ -76,9 +75,28 @@ func buildCharacterSheetPrompt(project *models.Project, ch *models.Character) st
 	if style := strings.TrimSpace(project.Style); style != "" {
 		parts = append(parts, style+"风格")
 	}
-	return normalizePortraitStyle(strings.Join(parts, "，"), project) + "。" + characterSheetFootwearLock(project, ch) +
+	return normalizePortraitStyle(strings.Join(parts, "，"), project)
+}
+
+// characterSheetLayoutTail 固定追加的鞋履锁定与四格版式，保证用户改写人物描述后版式不丢。
+func characterSheetLayoutTail(project *models.Project, ch *models.Character) string {
+	return characterSheetFootwearLock(project, ch) +
 		"四格为同一人物、同一张脸、同一发型与同一套服装配饰，全身格从头顶到鞋底完整入镜。" +
 		"由左到右排列：正面面部特写、正面全身站立、侧面全身站立、背面全身站立。纯白色干净背景，影棚级柔和布光，角色设定集风格，画面中只有这一个角色且无文字标签，高分辨率，电影级质感，16:9画面比例。"
+}
+
+// buildCharacterSheetPrompt 直接文生四视图。结构与用户验证过的 Moss 样例一致：先写人物外貌、
+// 完整服装与画风，再写“由左到右排列”的四格版式与设定集画质要求。不经过标准像，
+// 避免大头照缺失的下半身、腰饰被编辑模型臆造。用户编辑过的四视图提示词优先；
+// 其中已自带“由左到右”版式时原样提交，不再重复追加。
+func buildCharacterSheetPrompt(project *models.Project, ch *models.Character) string {
+	if custom := strings.TrimSpace(ch.SheetPrompt); custom != "" {
+		if strings.Contains(custom, "由左到右") {
+			return custom
+		}
+		return strings.TrimRight(custom, "。，,. ") + "。" + characterSheetLayoutTail(project, ch)
+	}
+	return characterSheetDescription(project, ch) + "。" + characterSheetLayoutTail(project, ch)
 }
 
 // buildCharacterSheetEditPrompt 保留“基于标准像”的编辑路径，供已定脸的角色沿用。

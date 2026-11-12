@@ -3072,6 +3072,54 @@ func (s *Service) HandleGenerateReferencePrompt(c *gin.Context) {
 	})
 }
 
+// HandleGenerateSheetPrompt 生成可编辑的角色四视图提示词
+func (s *Service) HandleGenerateSheetPrompt(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	ch, ok := s.loadCharacter(c)
+	if !ok {
+		return
+	}
+	prompt, err := s.CharacterProfiles.GenerateSheetPrompt(ch, p)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var updated models.Character
+	s.DB.First(&updated, ch.ID)
+	s.Projects.PushProject(nil)
+	c.JSON(200, gin.H{
+		"character": updated,
+		"prompt":    prompt,
+		"message":   fmt.Sprintf("角色「%s」四视图提示词已生成", ch.Name),
+	})
+}
+
+// HandleSaveSheetPrompt 保存用户修改后的四视图提示词，不触发档案重新审核
+func (s *Service) HandleSaveSheetPrompt(c *gin.Context) {
+	ch, ok := s.loadCharacter(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		SheetPrompt string `json:"sheet_prompt"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": "参数错误"})
+		return
+	}
+	if err := s.CharacterProfiles.SaveSheetPrompt(ch, req.SheetPrompt); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	var updated models.Character
+	s.DB.First(&updated, ch.ID)
+	s.Projects.PushProject(nil)
+	c.JSON(200, gin.H{"character": updated, "message": "四视图提示词已保存"})
+}
+
 // HandleUpdateCharacterProfile 手动更新角色档案字段
 func (s *Service) HandleUpdateCharacterProfile(c *gin.Context) {
 	ch, ok := s.loadCharacter(c)

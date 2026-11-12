@@ -6744,6 +6744,7 @@ func (s *ProjectService) UpdateCharacter(ch *models.Character, req models.Charac
 		updates["profile_status"] = models.ProfileStatusDraft
 		updates["review_note"] = ""
 		updates["reference_prompt"] = ""
+		updates["sheet_prompt"] = ""
 		updates["portrait"] = ""
 		updates["portrait_task_id"] = ""
 		updates["portrait_error"] = ""
@@ -6860,6 +6861,7 @@ func (s *ProjectService) upsertCharactersFromPlan(p *models.Project, plan *drama
 				updates["profile_status"] = models.ProfileStatusDraft
 				updates["profile_version"] = gorm.Expr("profile_version + 1")
 				updates["reference_prompt"] = ""
+				updates["sheet_prompt"] = ""
 				updates["review_note"] = ""
 				updates["portrait"] = ""
 				updates["portrait_task_id"] = ""

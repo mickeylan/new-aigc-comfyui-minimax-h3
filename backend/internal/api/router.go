@@ -277,6 +277,8 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	// 角色档案（LumxAI 风格结构化角色提示词 + 审核工作流）
 	r.POST("/api/projects/:id/characters/:cid/profile", svc.HandleGenerateCharacterProfile)                // LLM 生成完整角色档案
 	r.POST("/api/projects/:id/characters/:cid/profile/generate-prompt", svc.HandleGenerateReferencePrompt) // 单独生成参考像提示词
+	r.POST("/api/projects/:id/characters/:cid/profile/sheet-prompt", svc.HandleGenerateSheetPrompt)        // 生成可编辑的四视图提示词
+	r.PUT("/api/projects/:id/characters/:cid/profile/sheet-prompt", svc.HandleSaveSheetPrompt)             // 保存四视图提示词（不触发重审）
 	r.PUT("/api/projects/:id/characters/:cid/profile", svc.HandleUpdateCharacterProfile)                   // 手动更新角色档案字段
 	r.POST("/api/projects/:id/characters/:cid/profile/approve", svc.HandleApproveCharacterProfile)         // 审核通过
 	r.POST("/api/projects/:id/characters/:cid/profile/reject", svc.HandleRejectCharacterProfile)           // 审核驳回

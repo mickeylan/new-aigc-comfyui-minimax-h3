@@ -166,6 +166,90 @@ func TestUpdateCharacterSheetEngineKeepsExistingSheet(t *testing.T) {
 	}
 }
 
+func TestGenerateSheetPromptAppendsFixedLayoutToLLMDescription(t *testing.T) {
+	ps := newSheetGenerationService(t)
+	ch := createSheetCharacter(t, ps, "", "")
+	ch.Sheet = "sheet.png"
+	ps.db.Model(ch).Update("sheet", ch.Sheet)
+	var project models.Project
+	ps.db.First(&project, ch.ProjectID)
+	// 模型自带的版式句必须被截掉，由系统统一追加，避免重复或互相矛盾。
+	provider := &captureTextProvider{response: "女性，22岁，乌黑长发梳成垂鬟分肖髻，白色交领仙裙、银色腰封与青玉禁步。由左到右排列：正面、背面"}
+	prompt, err := NewCharacterProfileService(ps.db, provider).GenerateSheetPrompt(ch, &project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"银色腰封与青玉禁步", "月白云头绣鞋", "由左到右排列：正面面部特写、正面全身站立、侧面全身站立、背面全身站立", "16:9画面比例"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("sheet prompt missing %q: %s", want, prompt)
+		}
+	}
+	if strings.Count(prompt, "由左到右") != 1 {
+		t.Fatalf("layout must appear exactly once: %s", prompt)
+	}
+	if !strings.Contains(provider.user, "银色腰封") || !strings.Contains(provider.system, "下装、腰部配饰和鞋履必须完整写出") {
+		t.Fatalf("LLM request lost wardrobe facts or contract: system=%s user=%s", provider.system, provider.user)
+	}
+	var saved models.Character
+	ps.db.First(&saved, ch.ID)
+	if saved.SheetPrompt != prompt || saved.Sheet != "sheet.png" || saved.ProfileStatus != models.ProfileStatusApproved {
+		t.Fatalf("sheet prompt must persist without touching sheet or approval: %+v", saved)
+	}
+}
+
+func TestStartCharacterSheetUsesEditedSheetPrompt(t *testing.T) {
+	ps := newSheetGenerationService(t)
+	ch := createSheetCharacter(t, ps, "", "")
+	ch.SheetPrompt = "女性，22岁，腰间改系朱红丝绦"
+	ps.db.Model(ch).Update("sheet_prompt", ch.SheetPrompt)
+	if err := ps.StartCharacterSheet(ch, false); err != nil {
+		t.Fatal(err)
+	}
+	task, _ := startedSheetTask(t, ps, ch)
+	if !strings.HasPrefix(task.Prompt, "女性，22岁，腰间改系朱红丝绦。") || !strings.Contains(task.Prompt, "由左到右排列：正面面部特写") {
+		t.Fatalf("edited sheet prompt must be used with the fixed layout appended: %s", task.Prompt)
+	}
+	if strings.Contains(task.Prompt, "垂鬟分肖髻") {
+		t.Fatalf("edited sheet prompt must replace the compiled description: %s", task.Prompt)
+	}
+}
+
+func TestSaveSheetPromptKeepsApprovalAndAssets(t *testing.T) {
+	ps := newSheetGenerationService(t)
+	ch := createSheetCharacter(t, ps, "", "portrait.png")
+	ps.db.Model(ch).Update("sheet", "sheet.png")
+	if err := NewCharacterProfileService(ps.db, nil).SaveSheetPrompt(ch, "  女性，22岁，腰间改系朱红丝绦  "); err != nil {
+		t.Fatal(err)
+	}
+	var saved models.Character
+	ps.db.First(&saved, ch.ID)
+	if saved.SheetPrompt != "女性，22岁，腰间改系朱红丝绦" || saved.ProfileStatus != models.ProfileStatusApproved || saved.Sheet != "sheet.png" || saved.Portrait != "portrait.png" {
+		t.Fatalf("saving the sheet prompt must not reset approval or discard assets: %+v", saved)
+	}
+}
+
+func TestUpdateProfileClearsSheetPromptUnlessProvided(t *testing.T) {
+	ps := newSheetGenerationService(t)
+	ch := createSheetCharacter(t, ps, "", "")
+	ps.db.Model(ch).Update("sheet_prompt", "旧四视图提示词")
+	service := NewCharacterProfileService(ps.db, nil)
+	if err := service.UpdateProfile(ch, models.Character{Appearance: "新外貌", SheetPrompt: "用户修改后的四视图提示词"}); err != nil {
+		t.Fatal(err)
+	}
+	var saved models.Character
+	ps.db.First(&saved, ch.ID)
+	if saved.SheetPrompt != "用户修改后的四视图提示词" {
+		t.Fatalf("edited sheet prompt not saved: %q", saved.SheetPrompt)
+	}
+	if err := service.UpdateProfile(&saved, models.Character{Appearance: "再改外貌"}); err != nil {
+		t.Fatal(err)
+	}
+	ps.db.First(&saved, ch.ID)
+	if saved.SheetPrompt != "" {
+		t.Fatalf("profile replacement without sheet prompt must clear it: %q", saved.SheetPrompt)
+	}
+}
+
 func TestStartCharacterPortraitKeepsExistingSheet(t *testing.T) {
 	ps := newSheetGenerationService(t)
 	ch := createSheetCharacter(t, ps, ImageEngineKrea2, "")

@@ -169,8 +169,9 @@
         </section>
         <div v-if="characters.length" class="character-grid">
           <div v-for="ch in characters" :key="ch.id" class="card character-card">
-            <div class="character-card-main"><div class="char-portrait" @click="viewCharPortrait(ch)">
-              <img v-if="ch.portrait" :src="charPortraitUrl(ch)" alt="角色标准像" />
+            <div class="character-card-main"><div class="char-portrait" @click="viewCharPortrait(ch)" :title="ch.sheet ? '四视图面部特写，点击查看完整四视图' : ''">
+              <img v-if="ch.sheet" :src="api.inputUrl(id(), ch.sheet)" :class="ch._sheetWide === false ? 'sheet-whole' : 'sheet-face'" alt="角色四视图面部特写" @load="markSheetLayout(ch, $event)" />
+              <img v-else-if="ch.portrait" :src="charPortraitUrl(ch)" alt="角色标准像" />
               <div v-else class="char-portrait-ph">{{ (ch.name || '?').slice(0, 1) }}</div>
             </div>
             <div class="char-body">
@@ -888,7 +889,7 @@
           <button class="char-edit-tab" :class="{ active: charProfileTab === 'profile' }" @click="charProfileTab = 'profile'">
             详细档案 <span v-if="editingCharacter.profile_status" :class="'badge ' + profileStatusClass(editingCharacter.profile_status)">{{ profileStatusText(editingCharacter.profile_status) }}</span>
           </button>
-          <button class="char-edit-tab" :class="{ active: charProfileTab === 'prompt' }" @click="charProfileTab = 'prompt'">参考像提示词</button>
+          <button class="char-edit-tab" :class="{ active: charProfileTab === 'prompt' }" @click="charProfileTab = 'prompt'">四视图提示词</button>
         </div>
 
         <!-- 基础信息标签页 -->
@@ -1024,7 +1025,24 @@
         <!-- 参考像提示词标签页 -->
         <div v-if="charProfileTab === 'prompt'">
           <div class="profile-hint">
-            <p>💡 可由 AI 生成，也可直接人工修改。保存后以文本框中的当前提示词为准；已审核档案会自动回到草稿状态。</p>
+            <p>💡 四视图是角色的主身份参考。AI 按设定集样例写法生成人物描述，可针对发型、服饰、腰饰、鞋履等逐项修改；保存不会触发重新审核，也不会作废已有四视图。留空时生成四视图会按档案自动拼接。</p>
+            <div class="profile-actions">
+              <button class="btn btn-secondary btn-sm" :disabled="generatingSheetPrompt || editingCharacter === 'new'" @click="generateSheetPrompt">
+                {{ generatingSheetPrompt ? '生成中…' : '生成四视图提示词' }}
+              </button>
+              <button class="btn btn-sm" :disabled="busy || editingCharacter === 'new'" @click="saveSheetPrompt">{{ busy ? '保存中…' : '💾 保存四视图提示词' }}</button>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>四视图提示词</label>
+            <textarea v-model="charProfileForm.sheet_prompt" class="textarea" rows="10"
+              placeholder="女性，20岁，发型、五官、妆容、服饰层次、腰饰、鞋履、面料与画风……由左到右排列：正面面部特写、正面全身站立、侧面全身站立、背面全身站立。" />
+            <div class="field-hint">删掉“由左到右排列…”版式句时，生成四视图会自动补回鞋履锁定和四格版式。</div>
+          </div>
+
+          <div class="profile-hint">
+            <p>标准照提示词（可选）：可由 AI 生成，也可直接人工修改。保存后以文本框中的当前提示词为准；已审核档案会自动回到草稿状态。</p>
             <div class="profile-actions">
               <button class="btn btn-secondary btn-sm" :disabled="generatingPrompt || editingCharacter === 'new'" @click="generateReferencePrompt">
                 {{ generatingPrompt ? '生成中…' : '生成参考像提示词' }}
@@ -1034,7 +1052,7 @@
           </div>
 
           <div class="field">
-            <label>参考像提示词</label>
+            <label>标准照提示词 <span class="optional">可选，仅用于单独生成标准照</span></label>
             <textarea v-model="charProfileForm.reference_prompt" class="textarea" rows="8"
               placeholder="系统将根据角色档案生成高质量的参考像提示词，也可手动编辑…" />
             <div class="field-hint">提示词应包含人物正面/3/4侧面照描述、精确外貌特征、服装造型、场景环境、光影氛围、构图方式、画风描述。</div>
@@ -1290,10 +1308,11 @@ const charProfileTab = ref('basic') // basic / profile / prompt
 const charProfileForm = reactive({
   gender: '', appearance: '', personality: '', background: '', relationships: '',
   emotions: '', habits: '', wardrobe_detail: '', lighting_mood: '',
-  color_palette: '', reference_prompt: ''
+  color_palette: '', reference_prompt: '', sheet_prompt: ''
 })
 const generatingProfile = ref(false)
 const generatingPrompt = ref(false)
+const generatingSheetPrompt = ref(false)
 const profileStatusClass = (status) => ({
   draft: 'badge-gray', approved: 'badge-green', rejected: 'badge-red'
 }[status] || 'badge-gray')
@@ -2822,7 +2841,13 @@ async function generatePlan() {
 function charPortraitUrl(ch) {
   return api.inputUrl(project.value.id, ch.portrait)
 }
+// 角色卡优先展示四视图：横幅四格只显示第1格面部特写；手绘上传等非横幅版式整张显示，避免裁错。
+function markSheetLayout(ch, event) {
+  const img = event.target
+  ch._sheetWide = img.naturalWidth >= img.naturalHeight * 1.6
+}
 function viewCharPortrait(ch) {
+  if (ch.sheet) return viewCharacterSheet(ch)
   if (ch.portrait) {
     viewer.value = charPortraitUrl(ch)
     nextTick(() => viewerMask.value?.focus())
@@ -2986,7 +3011,8 @@ function openEditCharacter(ch) {
     wardrobe_detail: ch.wardrobe_detail || '',
     lighting_mood: ch.lighting_mood || '',
     color_palette: ch.color_palette || '',
-    reference_prompt: ch.reference_prompt || ''
+    reference_prompt: ch.reference_prompt || '',
+    sheet_prompt: ch.sheet_prompt || ''
   })
   charProfileTab.value = 'basic'
   editingCharacter.value = ch
@@ -3058,7 +3084,8 @@ async function generateCharacterProfile() {
       wardrobe_detail: data.character.wardrobe_detail || '',
       lighting_mood: data.character.lighting_mood || '',
       color_palette: data.character.color_palette || '',
-      reference_prompt: data.character.reference_prompt || ''
+      reference_prompt: data.character.reference_prompt || '',
+      sheet_prompt: data.character.sheet_prompt || ''
     })
     // 更新角色列表中的数据
     const idx = characters.value.findIndex(c => c.id === data.character.id)
@@ -3093,6 +3120,43 @@ async function generateReferencePrompt() {
     toast.show(e.response?.data?.error || '生成提示词失败')
   } finally {
     generatingPrompt.value = false
+  }
+}
+
+async function generateSheetPrompt() {
+  if (!editingCharacter.value || editingCharacter.value === 'new') {
+    toast.show('请先保存角色后再生成四视图提示词')
+    return
+  }
+  generatingSheetPrompt.value = true
+  try {
+    const { data } = await api.generateSheetPrompt(id(), editingCharacter.value.id)
+    charProfileForm.sheet_prompt = data.prompt
+    editingCharacter.value = data.character
+    const idx = characters.value.findIndex(c => c.id === data.character.id)
+    if (idx !== -1) characters.value[idx] = data.character
+    toast.show(data.message || '四视图提示词已生成')
+  } catch (e) {
+    toast.show(e.response?.data?.error || '生成四视图提示词失败')
+  } finally {
+    generatingSheetPrompt.value = false
+  }
+}
+
+// 四视图提示词单独保存：只改提示词，不把已审核档案退回草稿。
+async function saveSheetPrompt() {
+  if (!editingCharacter.value || editingCharacter.value === 'new') return
+  busy.value = true
+  try {
+    const { data } = await api.saveSheetPrompt(id(), editingCharacter.value.id, charProfileForm.sheet_prompt)
+    editingCharacter.value = data.character
+    const idx = characters.value.findIndex(c => c.id === data.character.id)
+    if (idx !== -1) characters.value[idx] = data.character
+    toast.show(data.message || '四视图提示词已保存')
+  } catch (e) {
+    toast.show(e.response?.data?.error || '保存失败')
+  } finally {
+    busy.value = false
   }
 }
 
@@ -4064,8 +4128,10 @@ onBeforeUnmount(() => {
 .char-voice { margin-top: 6px; font-size: 12px; color: var(--accent); font-weight: 600; }
 .character-card { padding: 0; overflow: hidden; }
 .character-card-main { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 18px; padding: 18px; }
-.char-portrait { width: 132px; aspect-ratio: 3/4; max-height: 176px; border-radius: 14px; overflow: hidden; background: rgba(0, 0, 0, 0.04); cursor: zoom-in; }
+.char-portrait { position: relative; width: 132px; aspect-ratio: 3/4; max-height: 176px; border-radius: 14px; overflow: hidden; background: rgba(0, 0, 0, 0.04); cursor: zoom-in; }
 .char-portrait img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.char-portrait img.sheet-face { position: absolute; left: 0; top: 50%; width: 400%; height: auto; max-width: none; object-fit: initial; transform: translateY(-50%); }
+.char-portrait img.sheet-whole { object-fit: contain; background: #fff; }
 .char-portrait-ph { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 34px; font-weight: 700; color: #fff; background: var(--gradient); }
 .char-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .char-name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

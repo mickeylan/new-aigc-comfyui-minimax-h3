@@ -200,6 +200,7 @@ func mergeDuplicateCharacterRecord(tx *gorm.DB, projectID uint, sourceName strin
 	fill("lighting_mood", target.LightingMood, source.LightingMood)
 	fill("color_palette", target.ColorPalette, source.ColorPalette)
 	fill("reference_prompt", target.ReferencePrompt, source.ReferencePrompt)
+	fill("sheet_prompt", target.SheetPrompt, source.SheetPrompt)
 	fill("review_note", target.ReviewNote, source.ReviewNote)
 	if target.ProfileStatus != models.ProfileStatusApproved && source.ProfileStatus == models.ProfileStatusApproved {
 		updates["profile_status"] = source.ProfileStatus

@@ -256,6 +256,8 @@ export const api = {
   // 角色档案（LumxAI 风格结构化角色提示词 + 审核工作流）
   generateCharacterProfile: (id, cid) => http.post(`/projects/${id}/characters/${cid}/profile`, null, { timeout: 300000 }),
   generateReferencePrompt: (id, cid) => http.post(`/projects/${id}/characters/${cid}/profile/generate-prompt`, null, { timeout: 300000 }),
+  generateSheetPrompt: (id, cid) => http.post(`/projects/${id}/characters/${cid}/profile/sheet-prompt`, null, { timeout: 300000 }),
+  saveSheetPrompt: (id, cid, sheetPrompt) => http.put(`/projects/${id}/characters/${cid}/profile/sheet-prompt`, { sheet_prompt: sheetPrompt }),
   updateCharacterProfile: (id, cid, data) => http.put(`/projects/${id}/characters/${cid}/profile`, data),
   approveCharacterProfile: (id, cid, note) => http.post(`/projects/${id}/characters/${cid}/profile/approve`, { note }),
   rejectCharacterProfile: (id, cid, reason) => http.post(`/projects/${id}/characters/${cid}/profile/reject`, { reason }),
