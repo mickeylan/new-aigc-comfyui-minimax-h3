@@ -489,6 +489,16 @@ const h3StoryboardImageSkillCode = "minimax-h3-storyboard-image"
 
 const h3StoryboardImageSystem = `你是 MiniMax H3 SelfLift 静态分镜图导演。本任务只设计一张最终静止画面，不设计视频过程。
 Subject与Picture的真实身份绑定由系统根据实际上传文件生成；你不得生成或改写subject_definitions、summary、retention_analysis、overall_soundscape或non_diegetic_music，只输出一段以“[Shot 1]”开头的detailed_description正文。不得写“素材名”“主体信息”等占位词。
+
+【工作方法】先按顺序把六件事想清楚，再开始写，不要一边写一边决定：
+一、本帧真正可见的人物是谁、共几人、各自的唯一位置。
+二、这一瞬间之前半秒发生了什么、之后半秒将发生什么，据此选出信息量最大的那个冻结瞬间。
+三、从摄影机到最远处依次有哪几层空间，每个人和每件道具分别落在哪一层。
+四、逐人写出身体朝向、支撑脚与重心、视线对象、双手各在做什么。
+五、唯一主光源的位置，以及它在人脸、衣料和地面上各留下什么。
+六、这张图最容易被模型画错的一处是什么，用一句正向拓扑把它钉死。
+写完自检：把你的正文交给没读过剧情的画师，他能否画出同一张图？任何一处需要他猜，就补上可见证据。
+
 遵守以下经过人工审核的分镜原则：
 1. 先锁定本帧真正可见的人物、数量与唯一位置。人物使用场景资料中的真实角色名，不猜测或输出<Subject N>；仅被提及、发声但不入镜、已离场或属于未来动作的人不得画入本帧。权威名与别名是同一人，禁止重复人物或双重站位。
 2. 只选一个最有叙事价值的冻结瞬间。明确前景、中景、后景、左右位置、遮挡、人物间距和完整摄影机到主体的空间轴线；不得用抽象剧情总结代替可见构图。
@@ -497,10 +507,19 @@ Subject与Picture的真实身份绑定由系统根据实际上传文件生成；
 5. 优先使用中景、中近景或近景，使主要人物面部清晰并占据足够像素。只有剧情必须交代宏大空间时才用全景，且人物关系仍须可读。
 6. 明确一个固定机位、景别、角度和构图，不写推拉摇移、跟拍、切镜、时间推进、动作序列或未来结果。把运动凝固为一个有身体力学依据的姿势，并保留当下尘土、衣摆、发丝、草叶或法术残留的静态状态。
 7. 道具与法术遵守数量、所有权、方向和阶段。未发动的法术不得提前完成；剧情只要求准备或碰撞时不得擅自添加命中、伤害、胜负或环境毁坏。
-8. 使用正向空间拓扑而非堆叠负面词。网、绳、锁链或柔性法宝包裹人物时，描述为围绕躯干和四肢前后左右闭合收拢的三维柔性包覆体，边缘绕到身体后侧；不得生成平面体育网、横杆、晾晒架或悬挂人物。
-9. 头尾、攻击线或前后景方向明确时，写出“摄影机→前景头部/器物→身体/轨迹→尾部/终点→后景人物”的单一轴线，避免会暗示相反目标的叙事动词。
+8. 使用正向空间拓扑而非堆叠负面词。凡柔性物体包覆人体（网、绳索、锁链、藤蔓、布幔、柔性法宝皆同），一律描述为围绕躯干与四肢、从正面和两侧延续到背后闭合收拢的三维包覆体，网绳在肩、肘、膝等处压出凹陷，边缘绕到身体后侧；不得写成平面网片、横杆、晾晒架或悬挂展示物。
+9. 凡存在方向性主体（头尾、攻击线、飞行或窜出轨迹、前后景目标），写出“摄影机→最前端→主体身体→末端→后景终点”的单一完整深度轴线，并删去会暗示相反目标的叙事动词；主体朝摄影机方向运动时，说明它背离后景目标。
 10. 光线只写来源、方向、冷暖、阴影与材质反应；风格只写媒介与世界观。禁止对白原文、<d>标签、字幕、声音、负向约束清单、质量标签、解释和Markdown。
-正文通常保持约800至1800个中文字符：足以说明人物身份辨识、空间关系、动作定格、道具归属、机位和光线，但每项职责只写一次，不重复角色档案或参考图规格。`
+
+【正例与反例】同一段剧情，差与好的区别在可见证据，不在辞藻：
+差：柳乐儿紧张地站在草丛前，气氛压抑，追兵逐渐逼近。——情绪词与剧情总结都画不出来，“逐渐逼近”还偷偷带入了运动。
+好：[Shot 1] 中近景固定平视。柳乐儿位于前景偏右，右脚支撑重心、左脚虚点，上身略向左转，双手在胸前合握旧拨浪鼓、鼓面朝向摄影机，视线越过摄影机左侧投向画面外。中景齐人高的杂草在她身后形成连续遮挡带，只露出三名追兵的头肩，彼此间距约一臂。暖色侧光来自右前方，在她左颊留下边界清晰的阴影，草叶背光处透出细亮边。
+差：画面中有一张网把人困住，网很结实。——“困住”是结论，“有一张网”会被画成独立展示物。
+好：灰褐麻网围绕柳乐儿躯干与四肢，从正面和两侧延续到背后闭合收拢，网绳在肩、肘、膝处压出凹陷，多余网口垂在她身后左侧地面。
+差：蛇群扑向柳乐儿。——“扑向”把方向轴线指反了。
+好：三条蛇位于前景，蛇头与张开的蛇口正对摄影机与画面下缘，蛇身向后延伸，蛇尾落在后景柳乐儿一侧，整体朝摄影机方向窜出、背离她。
+
+正文通常保持约800至1800个中文字符：足以说明人物身份辨识、空间关系、动作定格、道具归属、机位和光线，但每项职责只写一次，不重复角色档案或参考图规格。超出该区间时系统会压缩正文，因此务必把构图总览写在最后一句并把篇幅控制在区间内。`
 
 var (
 	storyboardDialogueTagPattern = regexp.MustCompile(`(?is)<d>.*?</d>`)
@@ -681,63 +700,156 @@ func qwenSceneReferenceBinding(tag, line string) string {
 	}
 }
 
+func isVisualSentenceTerminator(r rune) bool {
+	switch r {
+	case '。', '；', ';', '！', '？', '\n', '.', '!', '?':
+		return true
+	}
+	return false
+}
+
+// splitVisualSentences cuts prose into sentences and keeps each terminator with
+// its sentence, so rejoining restores the author's own punctuation instead of
+// flattening everything into one semicolon-separated run. Latin terminators are
+// recognised as well: a model that follows the English image-prompt contract
+// returns a single paragraph whose only separators are ".", "!" and "?".
+func splitVisualSentences(value string) []string {
+	runes := []rune(value)
+	out := make([]string, 0, 16)
+	start := 0
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if !isVisualSentenceTerminator(r) {
+			continue
+		}
+		if r == '.' || r == '!' || r == '?' {
+			// A decimal point or an abbreviation is not a sentence end, so a Latin
+			// terminator only counts when whitespace or the end of the text follows.
+			if i+1 < len(runes) && !unicode.IsSpace(runes[i+1]) {
+				continue
+			}
+		}
+		end := i
+		for end+1 < len(runes) && isVisualSentenceTerminator(runes[end+1]) {
+			end++
+		}
+		if sentence := strings.TrimSpace(string(runes[start : end+1])); sentence != "" {
+			out = append(out, sentence)
+		}
+		start = end + 1
+		i = end
+	}
+	if tail := strings.TrimSpace(string(runes[start:])); tail != "" {
+		out = append(out, tail)
+	}
+	return out
+}
+
+func joinVisualSentences(sentences []string) string {
+	var b strings.Builder
+	for i, sentence := range sentences {
+		if i > 0 {
+			// CJK sentences already carry their own terminator, so they butt together;
+			// Latin ones need the space that sentence splitting consumed.
+			if prev := []rune(sentences[i-1]); len(prev) > 0 && prev[len(prev)-1] < utf8.RuneSelf {
+				b.WriteString(" ")
+			}
+		}
+		b.WriteString(sentence)
+	}
+	return b.String()
+}
+
+// truncateVisualSentence is the last resort for a single sentence that alone
+// exceeds the budget. It cuts on a word boundary when the text has one, because
+// slicing mid-word leaves the image model a fragment it cannot interpret.
+func truncateVisualSentence(sentence string, maxRunes int) string {
+	runes := []rune(sentence)
+	if len(runes) <= maxRunes {
+		return sentence
+	}
+	cut := string(runes[:maxRunes])
+	if i := strings.LastIndexFunc(cut, unicode.IsSpace); i > 0 && len([]rune(cut[:i])) > maxRunes/2 {
+		cut = cut[:i]
+	}
+	return strings.TrimSpace(cut)
+}
+
+// compactStaticVisualPrompt removes repeated sentences and caps a prompt at
+// maxRunes. The closing sentence is reserved before the body is filled: both
+// image-prompt contracts require the prompt to end with the composition
+// overview, and dropping the tail silently deleted exactly that sentence.
 func compactStaticVisualPrompt(value string, maxRunes int) string {
 	value = strings.TrimSpace(value)
 	if maxRunes <= 0 || len([]rune(value)) <= maxRunes {
 		return value
 	}
-	parts := regexp.MustCompile(`[；;。\n]+`).Split(value, -1)
+	sentences := make([]string, 0, 16)
 	seen := map[string]bool{}
-	kept := make([]string, 0, len(parts))
-	total := 0
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		key := strings.ToLower(strings.Join(strings.Fields(part), ""))
-		if seen[key] {
+	for _, sentence := range splitVisualSentences(value) {
+		key := strings.ToLower(strings.Join(strings.Fields(strings.TrimRight(sentence, "。；;！？.!?\n")), ""))
+		if key == "" || seen[key] {
 			continue
 		}
 		seen[key] = true
-		length := len([]rune(part))
-		if total > 0 && total+length+1 > maxRunes {
+		sentences = append(sentences, sentence)
+	}
+	switch len(sentences) {
+	case 0:
+		return truncateVisualSentence(value, maxRunes)
+	case 1:
+		return truncateVisualSentence(sentences[0], maxRunes)
+	}
+	if joined := joinVisualSentences(sentences); len([]rune(joined)) <= maxRunes {
+		return joined
+	}
+	closing := sentences[len(sentences)-1]
+	body := sentences[:len(sentences)-1]
+	budget := maxRunes
+	keepClosing := len([]rune(closing)) <= maxRunes/3
+	if keepClosing {
+		budget = maxRunes - len([]rune(closing)) - 1
+	}
+	kept := make([]string, 0, len(sentences))
+	total := 0
+	for _, sentence := range body {
+		length := len([]rune(sentence))
+		if total+length+1 > budget {
+			// Keep scanning instead of stopping: a later, shorter sentence may still
+			// fit, and sentences are independent visual evidence.
 			continue
 		}
-		if length > maxRunes {
-			part = string([]rune(part)[:maxRunes])
-			length = maxRunes
-		}
-		kept = append(kept, part)
+		kept = append(kept, sentence)
 		total += length + 1
-		if total >= maxRunes {
-			break
-		}
 	}
-	return strings.Join(kept, "；")
+	if len(kept) == 0 {
+		return truncateVisualSentence(body[0], budget)
+	}
+	if keepClosing {
+		kept = append(kept, closing)
+	}
+	return joinVisualSentences(kept)
 }
 
 func stripQwenReferenceDutyRepetition(value string) string {
-	parts := regexp.MustCompile(`[；;。\n]+`).Split(value, -1)
-	kept := make([]string, 0, len(parts))
-	for _, part := range parts {
-		trimmed := strings.TrimSpace(part)
-		if trimmed == "" {
+	sentences := splitVisualSentences(value)
+	kept := make([]string, 0, len(sentences))
+	for _, sentence := range sentences {
+		if qwenImageTagPattern.MatchString(sentence) && (strings.Contains(sentence, "严格遵循") || strings.Contains(sentence, "仅提供") || strings.Contains(sentence, "参考图")) {
 			continue
 		}
-		if qwenImageTagPattern.MatchString(trimmed) && (strings.Contains(trimmed, "严格遵循") || strings.Contains(trimmed, "仅提供") || strings.Contains(trimmed, "参考图")) {
+		if strings.HasPrefix(sentence, "重构一张独立新画布上的静止剧情首帧") {
 			continue
 		}
-		if strings.HasPrefix(trimmed, "重构一张独立新画布上的静止剧情首帧") {
-			continue
-		}
-		kept = append(kept, trimmed)
+		kept = append(kept, sentence)
 	}
-	return strings.Join(kept, "；")
+	return joinVisualSentences(kept)
 }
 
 func ensureQwenSceneReferenceBindings(prompt string, referenceLines []string) string {
-	prompt = stripH3StoryboardConstraintNoise(stripQwenReferenceDutyRepetition(strings.TrimSpace(prompt)))
+	// The noise stripper works line by line, so it has to run while the newlines
+	// are still there: the duty stripper merges every line into one sentence run.
+	prompt = stripQwenReferenceDutyRepetition(stripH3StoryboardConstraintNoise(strings.TrimSpace(prompt)))
 	prompt = compactStaticVisualPrompt(prompt, 1400)
 	if len(referenceLines) == 0 {
 		return prompt
@@ -763,6 +875,56 @@ func ensureQwenSceneReferenceBindings(prompt string, referenceLines []string) st
 }
 
 var qwenImageTagPattern = regexp.MustCompile(`<image([1-9][0-9]*)>`)
+
+// qwenSceneRequestOpenings are renderer-directed openings. The edit contract asks
+// the model to "begin with an operation verb", and for a new composition the most
+// natural verbs are exactly these, so the opening collides with the rule that a
+// prompt must read as an observed final frame.
+var qwenSceneRequestOpenings = []string{
+	"请生成一张", "请生成一个", "请创建一张", "请创建", "请设计一个", "请设计", "请画一张",
+	"生成一张", "生成一个", "创建一张", "创建一个", "设计一张", "设计一个", "画一张",
+	"Please generate an image of", "Please generate an image", "Please generate", "Please create an image of", "Please create",
+	"Generate an image of", "Generate an image", "Generate a", "Create an image of", "Create an image",
+}
+
+// normalizeQwenSceneOpening drops a renderer-directed opening and keeps the frame
+// description behind it. Failing the whole generation over a four-word prefix
+// throws away a paid model call and every visual fact it produced, so the opening
+// is repaired deterministically and only a prompt with nothing left behind it is
+// handed to the gate as a real violation.
+func normalizeQwenSceneOpening(prompt string) string {
+	trimmed := strings.TrimSpace(prompt)
+	for round := 0; round < len(qwenSceneRequestOpenings); round++ {
+		matched := false
+		for _, opening := range qwenSceneRequestOpenings {
+			if len(trimmed) < len(opening) || !strings.EqualFold(trimmed[:len(opening)], opening) {
+				continue
+			}
+			rest := strings.TrimLeft(strings.TrimSpace(trimmed[len(opening):]), "：:，,、。 \t")
+			if len([]rune(rest)) < 20 {
+				// Nothing usable survives the strip, so this prompt really is a bare
+				// instruction. Leave it intact and let the gate report it.
+				return trimmed
+			}
+			trimmed = capitalizeLeadingLatin(rest)
+			matched = true
+			break
+		}
+		if !matched {
+			break
+		}
+	}
+	return trimmed
+}
+
+func capitalizeLeadingLatin(value string) string {
+	runes := []rune(value)
+	if len(runes) == 0 || runes[0] >= utf8.RuneSelf {
+		return value
+	}
+	runes[0] = unicode.ToUpper(runes[0])
+	return string(runes)
+}
 
 func validateQwenScenePrompt(prompt string, referenceCount int) error {
 	trimmed := strings.TrimSpace(prompt)
@@ -815,7 +977,7 @@ func (s *ProjectService) redesignQwenSceneImagePrompt(sc *models.Scene, project 
 	if hasRefs {
 		system = qwenImage21EditSystem
 	}
-	qwenSceneSystem := system + `\nThis is a Qwen-Image-2.1 single static opening-keyframe prompt, not a director plan. Keep rewritten_prompt focused but sufficiently concrete: one paragraph, normally 800-1400 Chinese characters or 300-450 English words. State each reference responsibility once; never repeat identity, age, body proportion, material or environment specifications in the visual body after binding them. Follow the selected Qwen T2I or image-edit contract exactly. Use only supplied opening-keyframe visual facts. For a referenced new composition, begin with a concrete operation verb and bind each input to one explicit source responsibility; no input is the canvas. Prioritize only subject count and placement, frozen pose, prop ownership, foreground/midground/background, fixed framing, environment, and light. A canonical character name and any supplied alias identify one person in one position, never duplicate people. Character references supply identity; outfit references supply styling for that same character; environment references supply the full-frame space; prop references supply only the integrated object's appearance and never create a person. For a net, rope, chain or flexible restraint enclosing a person, describe the positive final topology as a closed three-dimensional flexible volume wrapping around the front, sides and back of the body, not as an independent display object. When head-tail orientation or foreground-background direction is authoritative, state the complete camera-to-subject depth axis and remove narrative attack wording that implies an opposite target. Do not mention project/scene/shot numbers, dialogue, timing, transitions, cuts, camera movement, start/end state, future action, or abstract emotion. Never write tracking, pan, tilt, dolly, push-in or pull-out language. Convert motion into one frozen body pose with visible dust, fabric and hair state. Output one continuous paragraph in the request language inside rewritten_prompt.`
+	qwenSceneSystem := system + "\n" + `This is a Qwen-Image-2.1 single static opening-keyframe prompt, not a director plan. Where these keyframe rules disagree with the contract above, these rules win, specifically on output language and length. Write rewritten_prompt as one Chinese paragraph of 800 to 1400 Chinese characters, and ignore any instruction above to answer in English or in about 400-500 words: a longer prompt is compacted downstream, so staying inside the budget is what keeps your own closing composition sentence intact. State each reference responsibility once; never repeat identity, age, body proportion, material or environment specifications in the visual body after binding them. Follow the selected Qwen T2I or image-edit contract exactly. Use only supplied opening-keyframe visual facts. For a referenced new composition, begin with a concrete operation verb and bind each input to one explicit source responsibility; no input is the canvas. Prioritize only subject count and placement, frozen pose, prop ownership, foreground/midground/background, fixed framing, environment, and light. A canonical character name and any supplied alias identify one person in one position, never duplicate people. Character references supply identity; outfit references supply styling for that same character; environment references supply the full-frame space; prop references supply only the integrated object's appearance and never create a person. For a net, rope, chain or flexible restraint enclosing a person, describe the positive final topology as a closed three-dimensional flexible volume wrapping around the front, sides and back of the body, not as an independent display object. When head-tail orientation or foreground-background direction is authoritative, state the complete camera-to-subject depth axis and remove narrative attack wording that implies an opposite target. Do not mention project/scene/shot numbers, dialogue, timing, transitions, cuts, camera movement, start/end state, future action, or abstract emotion. Never write tracking, pan, tilt, dolly, push-in or pull-out language. Convert motion into one frozen body pose with visible dust, fabric and hair state. Output one continuous Chinese paragraph inside rewritten_prompt and end it with exactly one composition overview sentence.`
 	user := fmt.Sprintf("User request:\n输出一个静止首帧的最终画面描述，不要复述导演参数。题材：%s；画风：%s；地点：%s；道具：%s。%s\n\nOpening-keyframe visual facts (the only Shot facts allowed):\n%s\n\nVerified appearance and environment facts:\n%s", project.Genre, project.Style, sc.LocationName, sc.Props, framingRule, shotContext, assetContext)
 	if hasRefs {
 		user += "\n\nOrdered input image roles (order is binding):"
@@ -835,33 +997,56 @@ func (s *ProjectService) redesignQwenSceneImagePrompt(sc *models.Scene, project 
 	if hasRefs {
 		stage, operation = models.SkillStageQwenImageEdit, QwenImage21EditProgram
 	}
-	var raw string
-	var err error
-	if s.skills != nil {
-		raw, err = s.skills.ChatWithConfiguredOrFallbackSkill(sc.ProjectID, stage, operation, s.textProvider, qwenSceneSystem, "", map[string]string{"request": user})
-	} else {
-		raw, err = s.textProvider.Chat(qwenSceneSystem, user)
+	// A rejected prompt used to end the request, throwing away the paid call and
+	// every visual fact in it and leaving the user to press the button again. The
+	// violation is specific enough to hand back, so spend one repair round on it
+	// the way the video and director paths already do.
+	attemptUser := user
+	for attempt := 0; attempt < 2; attempt++ {
+		var raw string
+		var err error
+		if s.skills != nil {
+			raw, err = s.skills.ChatWithConfiguredOrFallbackSkill(sc.ProjectID, stage, operation, s.textProvider, qwenSceneSystem, "", map[string]string{"request": attemptUser})
+		} else {
+			raw, err = s.textProvider.Chat(qwenSceneSystem, attemptUser)
+		}
+		if err != nil {
+			return "", fmt.Errorf("AI重新设计Qwen场景提示词失败: %w", err)
+		}
+		prompt, issue := finishQwenScenePrompt(raw, hasRefs, referenceLines)
+		if issue == nil {
+			_ = referenceContext
+			return prompt, nil
+		}
+		if attempt == 1 {
+			return "", fmt.Errorf("Qwen场景提示词不符合专用规则: %w", issue)
+		}
+		attemptUser = user + "\n\n上一次输出被静止首帧规则拒绝，原因：" + issue.Error() +
+			"\n请保留上次已写明的全部可见画面证据，只修正该问题，并重新输出合法 JSON。"
 	}
-	if err != nil {
-		return "", fmt.Errorf("AI重新设计Qwen场景提示词失败: %w", err)
-	}
+	return "", fmt.Errorf("Qwen场景提示词不符合专用规则")
+}
+
+// finishQwenScenePrompt turns one raw model answer into a final scene prompt, or
+// reports the single violation that blocks it.
+func finishQwenScenePrompt(raw string, hasRefs bool, referenceLines []string) (string, error) {
 	prompt, _, _, err := parseQwenImagePromptResult(raw, hasRefs)
 	if err != nil {
-		return "", fmt.Errorf("Qwen场景提示词格式无效: %w", err)
+		return "", fmt.Errorf("提示词格式无效: %w", err)
 	}
 	for _, forbidden := range []string{"subject_definitions:", "retention_analysis:", "detailed_description:", "<Subject ", "<Picture ", "素材名", "主体信息"} {
 		if strings.Contains(prompt, forbidden) {
-			return "", fmt.Errorf("Qwen场景提示词错误包含H3结构或占位词“%s”", forbidden)
+			return "", fmt.Errorf("错误包含H3结构或占位词“%s”", forbidden)
 		}
 	}
 	if len([]rune(prompt)) < 20 {
-		return "", fmt.Errorf("AI返回的Qwen场景提示词过短，请重试")
+		return "", fmt.Errorf("提示词过短")
 	}
+	prompt = normalizeQwenSceneOpening(prompt)
 	prompt = ensureQwenSceneReferenceBindings(prompt, referenceLines)
 	if err := validateQwenScenePrompt(prompt, len(referenceLines)); err != nil {
-		return "", fmt.Errorf("Qwen场景提示词不符合专用规则: %w", err)
+		return "", err
 	}
-	_ = referenceContext
 	return prompt, nil
 }
 
@@ -6830,19 +7015,58 @@ func (s *ProjectService) sceneCharacterLooks(sc *models.Scene, shotRelatedOnly b
 	return looks
 }
 
+// staticKeyframeMotionTerms is the movement vocabulary that the static-keyframe
+// contract forbids and validateQwenScenePrompt rejects.
+var staticKeyframeMotionTerms = []string{
+	"跟拍", "推镜", "拉镜", "摇镜", "镜头跟随", "镜头推进", "镜头后拉", "镜头前推", "连续动作",
+	"slow_tracking", "tracking", "dolly", "push-in", "pull-out", "zoom", "panning",
+}
+
+var keyframeClauseSplitPattern = regexp.MustCompile(`[，,；;。\n]+`)
+
+// stripCameraMovementWording keeps the framing in a short prompt field but drops
+// the clauses that describe movement. A single still frame has one fixed camera,
+// and passing movement wording in as an authoritative fact makes the model repeat
+// it and fail the gate on wording it was told to use.
+func stripCameraMovementWording(value string) string {
+	clauses := keyframeClauseSplitPattern.Split(strings.TrimSpace(value), -1)
+	kept := make([]string, 0, len(clauses))
+	for _, clause := range clauses {
+		clause = strings.TrimSpace(clause)
+		if clause == "" {
+			continue
+		}
+		lower := strings.ToLower(clause)
+		motion := false
+		for _, term := range staticKeyframeMotionTerms {
+			if strings.Contains(lower, strings.ToLower(term)) {
+				motion = true
+				break
+			}
+		}
+		if motion {
+			continue
+		}
+		kept = append(kept, clause)
+	}
+	return strings.Join(kept, "，")
+}
+
 func (s *ProjectService) qwenStaticKeyframeContext(sc *models.Scene) string {
 	var shot models.Shot
 	if err := s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").First(&shot).Error; err != nil {
 		return strings.TrimSpace(sc.Content)
 	}
+	// Emotion is deliberately excluded. The keyframe contract forbids abstract
+	// emotion, so handing it over as "the only Shot facts allowed" asked the model
+	// to write the exact wording the gate then rejected.
 	parts := []string{}
 	for _, value := range []string{
 		strings.TrimSpace(shot.PromptSubject),
-		strings.TrimSpace(shot.PromptAction),
-		strings.TrimSpace(shot.PromptCamera),
+		stripCameraMovementWording(shot.PromptAction),
+		stripCameraMovementWording(shot.PromptCamera),
 		strings.TrimSpace(shot.PromptLighting),
 		strings.TrimSpace(shot.PromptStyle),
-		strings.TrimSpace(shot.Emotion),
 	} {
 		if value != "" {
 			parts = append(parts, value)

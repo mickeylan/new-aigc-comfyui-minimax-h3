@@ -1992,6 +1992,97 @@ func TestValidateQwenScenePromptRejectsGenericInstructionAndMissingReferences(t 
 	}
 }
 
+func TestQwenStaticKeyframeContextExcludesMovementAndAbstractEmotion(t *testing.T) {
+	ps := newTestProjectService(t)
+	project := models.Project{Title: "静帧事实"}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Title: "院墙前", Content: "女子停在院墙前"}
+	if err := ps.db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	shot := models.Shot{
+		SceneID:        scene.ID,
+		Order:          1,
+		PromptSubject:  "女子全身可见",
+		PromptAction:   "右手提灯站定，镜头跟随她的脚步连续动作",
+		PromptCamera:   "中近景，镜头缓慢推镜",
+		PromptLighting: "暖色侧光",
+		PromptStyle:    "写实仙侠",
+		Emotion:        "坚定而担忧",
+	}
+	if err := ps.db.Create(&shot).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	got := ps.qwenStaticKeyframeContext(&scene)
+	for _, forbidden := range []string{"镜头跟随", "连续动作", "推镜", "坚定而担忧"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("keyframe facts still carry %q: %s", forbidden, got)
+		}
+	}
+	for _, want := range []string{"女子全身可见", "右手提灯站定", "中近景", "暖色侧光", "写实仙侠"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("keyframe facts lost visible evidence %q: %s", want, got)
+		}
+	}
+	// The facts are handed to the model as authoritative, so they must not contain
+	// wording that the prompt gate would then reject.
+	if err := validateQwenScenePrompt(got, 0); err != nil {
+		t.Fatalf("keyframe facts would fail the prompt gate: %v", err)
+	}
+}
+
+func TestNormalizeQwenSceneOpeningRepairsRendererDirectedVerbs(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "chinese generation verb",
+			in:   "生成一张静止剧情首帧，女子站在院墙左侧，右手提着铜灯，暖色侧光在地面留下同向阴影。",
+			want: "静止剧情首帧，女子站在院墙左侧，右手提着铜灯，暖色侧光在地面留下同向阴影。",
+		},
+		{
+			name: "english generation verb is recapitalised",
+			in:   "Generate an image of a woman standing beside the courtyard wall holding a bronze lantern in her right hand.",
+			want: "A woman standing beside the courtyard wall holding a bronze lantern in her right hand.",
+		},
+		{
+			name: "polite request with colon",
+			in:   "请生成一张：女子站在院墙左侧，右手提着铜灯，暖色侧光在地面留下同向阴影。",
+			want: "女子站在院墙左侧，右手提着铜灯，暖色侧光在地面留下同向阴影。",
+		},
+	}
+	for _, c := range cases {
+		got := normalizeQwenSceneOpening(c.in)
+		if got != c.want {
+			t.Fatalf("%s: got %q want %q", c.name, got, c.want)
+		}
+		if err := validateQwenScenePrompt(got, 0); err != nil {
+			t.Fatalf("%s: repaired prompt still rejected: %v", c.name, err)
+		}
+	}
+
+	// A legitimate edit-contract opening is an operation verb and must survive.
+	edit := "将输入图中的女子重新置于院墙左侧，保持身份与服饰不变，暖色侧光在地面留下同向阴影。"
+	if got := normalizeQwenSceneOpening(edit); got != edit {
+		t.Fatalf("edit-contract opening was rewritten: %q", got)
+	}
+
+	// A bare instruction with no frame description behind it stays intact so the
+	// gate can still report it instead of being silently turned into prose.
+	bare := "生成一张图"
+	if got := normalizeQwenSceneOpening(bare); got != bare {
+		t.Fatalf("bare instruction was laundered into a prompt: %q", got)
+	}
+	if err := validateQwenScenePrompt(normalizeQwenSceneOpening(bare), 0); err == nil {
+		t.Fatal("bare instruction accepted after normalization")
+	}
+}
+
 func TestEnsureQwenSceneReferenceBindingsDeterministicallyAddsMissingImages(t *testing.T) {
 	got := ensureQwenSceneReferenceBindings(
 		"以<image2>中的桃花林作为环境来源，上官若彤在暖色侧光下神情焦急。",
