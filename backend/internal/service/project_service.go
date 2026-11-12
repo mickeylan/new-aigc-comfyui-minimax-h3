@@ -11208,6 +11208,17 @@ func (s *ProjectService) dubVoiceFor(d *models.Dialogue) (string, string, string
 	return "", "", ""
 }
 
+// dubbingUsesClonedVoice 报告配音是否会用到阿里云复刻音色 ID。
+// IndexTTS 的两种执行方式都直接引用角色的参考语音文件作为音色来源
+// （native_local 见 LocalIndexTTS.referenceFor，comfyui 见 dialogueComfyVoiceRef），
+// 只有关闭 IndexTTS 后的云端合成分支才会用 Character.VoiceID。
+func (s *ProjectService) dubbingUsesClonedVoice() bool {
+	if s == nil {
+		return true
+	}
+	return s.indexTTSExecutionMode() == "disabled"
+}
+
 func validateDialogueSpeaker(d models.Dialogue) error {
 	if spokenDialogueText(d.Text) == "" {
 		return nil

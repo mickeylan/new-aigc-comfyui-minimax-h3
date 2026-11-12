@@ -2155,25 +2155,31 @@ func (s *Service) HandleUploadCharacterVoice(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	ali := NewAliyunTTS(s.DB)
-	voiceID, cloneErr := ali.CloneVoice(base64.StdEncoding.EncodeToString(data), audioMimeOf(ext),
-		fmt.Sprintf("p%dc%d", ch.ProjectID, ch.ID))
-	if cloneErr == nil && voiceID != "" {
-		if err := s.DB.Model(&models.Character{}).Where("id = ?", ch.ID).
-			Updates(map[string]any{"voice_id": voiceID, "voice_model": QwenTTSVCModel}).Error; err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
-			return
+	resp := gin.H{"ok": true, "voice_ref": filepath.Base(path), "voice_id": ""}
+	// IndexTTS 直接把参考语音文件当音色来源，云端复刻音色 ID 用不上，
+	// 所以此时不去注册，免得报一条与当前配音管线无关的失败警告。
+	if !s.Projects.dubbingUsesClonedVoice() {
+		resp["message"] = "参考语音已上传，将直接作为该角色的音色来源（IndexTTS 引用参考音频，无需注册云端复刻音色）"
+	} else {
+		ali := NewAliyunTTS(s.DB)
+		voiceID, cloneErr := ali.CloneVoice(base64.StdEncoding.EncodeToString(data), audioMimeOf(ext),
+			fmt.Sprintf("p%dc%d", ch.ProjectID, ch.ID))
+		if cloneErr == nil && voiceID != "" {
+			if err := s.DB.Model(&models.Character{}).Where("id = ?", ch.ID).
+				Updates(map[string]any{"voice_id": voiceID, "voice_model": QwenTTSVCModel}).Error; err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+		}
+		if cloneErr != nil {
+			resp["warning"] = "参考语音已保存，但音色注册失败：" + cloneErr.Error() + "（配音时将回退到角色预设音色，可稍后重试注册）"
+		} else {
+			resp["voice_id"] = voiceID
+			resp["message"] = "参考语音已上传并注册为角色复刻音色，该角色配音将保持音色一致"
 		}
 	}
 	_ = invalidateCharacterDialogueAudio(s.DB, ch.ProjectID, ch.Name, "角色音色配置已更新")
 	s.Projects.PushProject(nil)
-	resp := gin.H{"ok": true, "voice_ref": filepath.Base(path), "voice_id": ""}
-	if cloneErr != nil {
-		resp["warning"] = "参考语音已保存，但音色注册失败：" + cloneErr.Error() + "（配音时将回退到角色预设音色，可稍后重试注册）"
-	} else {
-		resp["voice_id"] = voiceID
-		resp["message"] = "参考语音已上传并注册为角色复刻音色，该角色配音将保持音色一致"
-	}
 	c.JSON(200, resp)
 }
 
@@ -2185,6 +2191,10 @@ func (s *Service) HandleCloneCharacterVoice(c *gin.Context) {
 	}
 	if ch.VoiceRef == "" {
 		c.JSON(400, gin.H{"error": "该角色尚未上传参考语音"})
+		return
+	}
+	if !s.Projects.dubbingUsesClonedVoice() {
+		c.JSON(400, gin.H{"error": "当前配音使用 IndexTTS，直接引用已上传的参考语音作为音色来源，无需注册云端复刻音色"})
 		return
 	}
 	abs := filepath.Join(s.Upload.InputDir(), fmt.Sprintf("%d", ch.ProjectID), ch.VoiceRef)

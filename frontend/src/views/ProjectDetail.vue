@@ -1216,6 +1216,7 @@ import ShotDirectorEditor from '../components/ShotDirectorEditor.vue'
 import { overlayDialogueExclusions, setDialogueItemExcluded, snapshotDialogueExclusions } from '../utils/dialogueAnalysis'
 import { estimateDialogueListDuration } from '../utils/dialogueDuration.js'
 import { filterReferenceCandidates } from '../utils/referenceSearch.js'
+import { requestErrorMessage } from '../utils/requestError.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -2899,7 +2900,7 @@ async function uploadPortrait(ch) {
       toast.show('照片已设为角色标准像')
       await load()
     } catch (e) {
-      toast.show(e.response?.data?.error || '上传失败')
+      toast.error(requestErrorMessage(e, '上传标准像失败'))
     } finally {
       ch._uploading = false
     }
@@ -2931,7 +2932,7 @@ async function uploadCharacterSheet(ch) {
       toast.show('图片已设为角色四视图')
       await load()
     } catch (e) {
-      toast.show(e.response?.data?.error || '上传失败')
+      toast.error(requestErrorMessage(e, '上传角色四视图失败'))
     } finally {
       ch._sheetUploading = false
     }
@@ -3182,11 +3183,11 @@ async function uploadVoice(ch) {
     ch._voiceUploading = true
     try {
       const { data } = await api.uploadCharacterVoice(id(), ch.id, f)
-      if (data.warning) toast.show(data.warning)
-      else toast.show(data.message || '参考语音已上传')
+      if (data.warning) toast.warning(data.warning)
+      else toast.success(data.message || '参考语音已上传')
       await load()
     } catch (e) {
-      toast.show(e.response?.data?.error || '上传失败')
+      toast.error(requestErrorMessage(e, '上传参考语音失败'))
     } finally {
       ch._voiceUploading = false
     }
@@ -3197,10 +3198,10 @@ async function retryCloneVoice(ch) {
   ch._voiceUploading = true
   try {
     const { data } = await api.cloneCharacterVoice(id(), ch.id)
-    toast.show(data.message || '复刻音色注册成功')
+    toast.success(data.message || '复刻音色注册成功')
     await load()
   } catch (e) {
-    toast.show(e.response?.data?.error || '注册失败')
+    toast.error(requestErrorMessage(e, '音色注册失败'))
   } finally {
     ch._voiceUploading = false
   }
@@ -3286,7 +3287,7 @@ function uploadAssetImage(a) {
       toast.show('图片已设为参考图')
       await load()
     } catch (e) {
-      toast.show(e.response?.data?.error || '上传失败')
+      toast.error(requestErrorMessage(e, '上传参考图失败'))
     } finally {
       a._uploading = false
     }
@@ -3318,7 +3319,7 @@ async function uploadPropSheet(a) {
       toast.show('图片已设为道具四视图')
       await load()
     } catch (e) {
-      toast.show(e.response?.data?.error || '上传失败')
+      toast.error(requestErrorMessage(e, '上传道具四视图失败'))
     } finally {
       a._sheetUploading = false
     }
