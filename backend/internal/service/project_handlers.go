@@ -1686,6 +1686,57 @@ func (s *Service) HandleGenerateCharacterSheet(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"ok": true, "message": fmt.Sprintf("角色「%s」四视图任务已提交", ch.Name)})
 }
 
+// HandleUploadCharacterSheet 上传画好的四视图作为角色四视图（替代 Krea2 生成）
+// 不要求已有标准像：标准像只是生成四视图时的源图，手工上传无需源图。
+func (s *Service) HandleUploadCharacterSheet(c *gin.Context) {
+	ch, ok := s.loadCharacter(c)
+	if !ok {
+		return
+	}
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(400, gin.H{"error": "file required: " + err.Error()})
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if len(data) == 0 {
+		c.JSON(400, gin.H{"error": "空文件"})
+		return
+	}
+	ext := filepath.Ext(header.Filename)
+	if ext == "" {
+		ext = detectImageExt(data)
+	}
+	if ext == "" {
+		ext = ".jpg"
+	}
+	name := fmt.Sprintf("char_sheet_%d_%d%s", ch.ID, time.Now().UnixNano(), ext)
+	path, _, err := s.Upload.SaveFile(fmt.Sprintf("%d", ch.ProjectID), "image", name, data)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if _, _, err := updateSelectedAsset(s.DB, ch.ProjectID, VariantCharacterSheet, ch.ID, filepath.Base(path), "", "manual_upload", map[string]any{
+		"sheet_task_id": "", "sheet_error": "",
+	}, "", nil); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	// 上传结果优先：清空 sheet_task_id 已让同步器的 task-id 条件失配，在途任务回来无法覆盖上传图；再取消任务只为释放 GPU。
+	if ch.SheetTaskID != "" && s.Tasks != nil {
+		if err := s.Tasks.CancelTask(ch.SheetTaskID); err != nil && !strings.Contains(err.Error(), "已结束") {
+			log.Printf("[character %d] cancel replaced sheet task %s failed: %v", ch.ID, ch.SheetTaskID, err)
+		}
+	}
+	s.Projects.PushProject(nil)
+	c.JSON(200, gin.H{"ok": true, "message": "图片已设为角色四视图", "sheet": filepath.Base(path)})
+}
+
 func (s *Service) HandleGenerateAllPortraits(c *gin.Context) {
 	p, ok := s.loadProject(c)
 	if !ok {
@@ -1915,6 +1966,61 @@ func (s *Service) HandleGeneratePropSheet(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"ok": true, "message": fmt.Sprintf("道具「%s」四视图任务已提交", a.Name)})
+}
+
+// HandleUploadPropSheet 上传画好的四视图作为道具四视图（替代 Krea2 生成）
+// 不要求已有参考图：参考图只是生成四视图时的源图，手工上传无需源图。
+func (s *Service) HandleUploadPropSheet(c *gin.Context) {
+	a, ok := s.loadAsset(c)
+	if !ok {
+		return
+	}
+	if a.Kind != AssetKindProp {
+		c.JSON(400, gin.H{"error": "场景资产不需要四视图"})
+		return
+	}
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(400, gin.H{"error": "file required: " + err.Error()})
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if len(data) == 0 {
+		c.JSON(400, gin.H{"error": "空文件"})
+		return
+	}
+	ext := filepath.Ext(header.Filename)
+	if ext == "" {
+		ext = detectImageExt(data)
+	}
+	if ext == "" {
+		ext = ".jpg"
+	}
+	name := fmt.Sprintf("prop_sheet_%d_%d%s", a.ID, time.Now().UnixNano(), ext)
+	path, _, err := s.Upload.SaveFile(fmt.Sprintf("%d", a.ProjectID), "image", name, data)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if _, _, err := updateSelectedAsset(s.DB, a.ProjectID, VariantAssetSheet, a.ID, filepath.Base(path), "", "manual_upload", map[string]any{
+		"sheet_task_id": "", "sheet_error": "",
+	}, "", nil); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	// 上传结果优先：清空 sheet_task_id 已让同步器的 task-id 条件失配，在途任务回来无法覆盖上传图；再取消任务只为释放 GPU。
+	if a.SheetTaskID != "" && s.Tasks != nil {
+		if err := s.Tasks.CancelTask(a.SheetTaskID); err != nil && !strings.Contains(err.Error(), "已结束") {
+			log.Printf("[asset %d] cancel replaced sheet task %s failed: %v", a.ID, a.SheetTaskID, err)
+		}
+	}
+	s.Projects.PushProject(nil)
+	c.JSON(200, gin.H{"ok": true, "message": "图片已设为道具四视图", "sheet": filepath.Base(path)})
 }
 
 // HandleUploadAssetImage 上传图片作为资产参考图（替代文生图）

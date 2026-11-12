@@ -243,6 +243,14 @@ export const api = {
       timeout: 120000
     })
   },
+  uploadCharacterSheet: (id, cid, file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return http.post(`/projects/${id}/characters/${cid}/sheet/upload`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000
+    })
+  },
   generateAllPortraits: (id) => http.post(`/projects/${id}/characters/portraits`),
 
   // 角色档案（LumxAI 风格结构化角色提示词 + 审核工作流）
@@ -295,6 +303,14 @@ export const api = {
   deleteAsset: (id, kind, aid) => http.delete(`/projects/${id}/assets/${kind}/${aid}`),
   generateAssetImage: (id, kind, aid) => http.post(`/projects/${id}/assets/${kind}/${aid}/image`),
   generatePropSheet: (id, aid) => http.post(`/projects/${id}/assets/prop/${aid}/sheet`),
+  uploadPropSheet: (id, aid, file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return http.post(`/projects/${id}/assets/prop/${aid}/sheet/upload`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000
+    })
+  },
   uploadAssetImage: (id, kind, aid, file) => {
     const fd = new FormData()
     fd.append('file', file)

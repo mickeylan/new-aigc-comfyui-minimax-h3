@@ -233,6 +233,10 @@
                   :title="!ch.portrait ? '请先生成或上传标准像' : '下游分镜与 H3 视频将优先使用四视图'">
                   {{ ch.sheet_task_id ? '四视图生成中…' : ch.sheet ? '重生成四视图' : '生成四视图' }}
                 </button>
+                <button class="btn btn-sm btn-ghost" :disabled="busy || ch._sheetUploading" @click="uploadCharacterSheet(ch)"
+                  title="已画好的四视图可直接上传，无需标准像；下游分镜与 H3 视频将优先使用它锁定身份">
+                  {{ ch._sheetUploading ? '上传中…' : '上传四视图' }}
+                </button>
                 <button v-if="ch.sheet" class="btn btn-sm btn-ghost" @click="viewCharacterSheet(ch)">查看四视图</button>
                 <button class="btn btn-sm btn-ghost" @click="openVariants('character_portrait', ch.id, ch.name + ' · 标准像')">标准像版本</button>
                 <button class="btn btn-sm btn-ghost" @click="openVariants('character_sheet', ch.id, ch.name + ' · 四视图')">四视图版本</button>
@@ -289,6 +293,10 @@
                 <button v-if="a.kind === 'prop'" class="btn btn-sm btn-secondary" :disabled="busy || !a.image || !!a.sheet_task_id" @click="genPropSheet(a)"
                   :title="!a.image ? '请先生成或上传道具参考图' : '下游分镜与 H3 视频将优先使用四视图'">
                   {{ a.sheet_task_id ? '四视图生成中…' : a.sheet ? '重生成四视图' : '生成四视图' }}
+                </button>
+                <button v-if="a.kind === 'prop'" class="btn btn-sm btn-ghost" :disabled="busy || a._sheetUploading" @click="uploadPropSheet(a)"
+                  title="已画好的四视图可直接上传，无需参考图；下游分镜与 H3 视频将优先使用它">
+                  {{ a._sheetUploading ? '上传中…' : '上传四视图' }}
                 </button>
                 <button v-if="a.kind === 'prop' && a.sheet" class="btn btn-sm btn-ghost" @click="viewPropSheet(a)">查看四视图</button>
                 <button class="btn btn-sm btn-ghost" @click="openVariants('asset_image', a.id, a.name + ' · 参考图')">参考图版本</button>
@@ -2898,6 +2906,38 @@ async function uploadPortrait(ch) {
   }
   input.click()
 }
+async function uploadCharacterSheet(ch) {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = 'image/*'
+  input.onchange = async () => {
+    const f = input.files && input.files[0]
+    if (!f) return
+    if (!/^image\/(jpeg|png|webp)$/.test(f.type)) {
+      toast.show('请上传 JPG/PNG/WebP 图片')
+      return
+    }
+    if (f.size > 10 * 1024 * 1024) {
+      toast.show('图片不能超过 10MB')
+      return
+    }
+    ch._sheetUploading = true
+    try {
+      const { data } = await api.uploadCharacterSheet(id(), ch.id, f)
+      // 上传结果优先于仍在运行的生成任务，先更新本地状态以免误报为 Krea2 完成。
+      ch.sheet = data.sheet || ch.sheet
+      ch.sheet_task_id = ''
+      ch.sheet_error = ''
+      toast.show('图片已设为角色四视图')
+      await load()
+    } catch (e) {
+      toast.show(e.response?.data?.error || '上传失败')
+    } finally {
+      ch._sheetUploading = false
+    }
+  }
+  input.click()
+}
 function historyShotCount(episode) {
   return (episode?.scenes || []).reduce((total, scene) => total + (scene.shots?.length || 0), 0)
 }
@@ -3249,6 +3289,38 @@ function uploadAssetImage(a) {
       toast.show(e.response?.data?.error || '上传失败')
     } finally {
       a._uploading = false
+    }
+  }
+  input.click()
+}
+async function uploadPropSheet(a) {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = 'image/*'
+  input.onchange = async () => {
+    const f = input.files && input.files[0]
+    if (!f) return
+    if (!/^image\/(jpeg|png|webp)$/.test(f.type)) {
+      toast.show('请上传 JPG/PNG/WebP 图片')
+      return
+    }
+    if (f.size > 10 * 1024 * 1024) {
+      toast.show('图片不能超过 10MB')
+      return
+    }
+    a._sheetUploading = true
+    try {
+      const { data } = await api.uploadPropSheet(id(), a.id, f)
+      // 上传结果优先于仍在运行的生成任务，先更新本地状态以免误报为 Krea2 完成。
+      a.sheet = data.sheet || a.sheet
+      a.sheet_task_id = ''
+      a.sheet_error = ''
+      toast.show('图片已设为道具四视图')
+      await load()
+    } catch (e) {
+      toast.show(e.response?.data?.error || '上传失败')
+    } finally {
+      a._sheetUploading = false
     }
   }
   input.click()

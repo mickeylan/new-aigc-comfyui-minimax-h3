@@ -267,6 +267,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/characters/:cid/portrait/reset", svc.HandleResetCharacterPortrait)
 	r.POST("/api/projects/:id/characters/:cid/portrait/upload", svc.HandleUploadCharacterPortrait)
 	r.POST("/api/projects/:id/characters/:cid/sheet", svc.HandleGenerateCharacterSheet)
+	r.POST("/api/projects/:id/characters/:cid/sheet/upload", svc.HandleUploadCharacterSheet) // 上传画好的四视图
 	// Reusable uploaded motion references; deliberately not injected into static H3 references.
 	r.GET("/api/projects/:id/characters/:cid/motion-references", svc.HandleListCharacterMotionReferences)
 	r.POST("/api/projects/:id/characters/:cid/motion-references", svc.HandleUploadCharacterMotionReference)
@@ -336,6 +337,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/assets/:kind/:aid/image", svc.HandleGenerateAssetImage)
 	r.POST("/api/projects/:id/assets/:kind/:aid/image/upload", svc.HandleUploadAssetImage)
 	r.POST("/api/projects/:id/assets/:kind/:aid/sheet", svc.HandleGeneratePropSheet)
+	r.POST("/api/projects/:id/assets/:kind/:aid/sheet/upload", svc.HandleUploadPropSheet) // 上传画好的四视图（仅道具）
 	r.GET("/api/input/:taskid/*path", svc.HandleInputFile)
 
 	// 创作技能管理
