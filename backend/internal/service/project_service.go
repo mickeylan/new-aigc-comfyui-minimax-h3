@@ -831,25 +831,92 @@ func compactStaticVisualPrompt(value string, maxRunes int) string {
 	return joinVisualSentences(kept)
 }
 
+// qwenDutyVerbs and qwenDutyObjects together identify reference bookkeeping. The
+// authoritative binding header already states every duty once, so a duty clause
+// in the visual body is pure repetition. Both halves must match: "仅用于确定" plus
+// an identity or environment object is bookkeeping, while "柳石仅用右手" is not.
+var (
+	qwenDutyVerbs   = []string{"仅用于确定", "仅锁定", "严格遵循", "仅提供", "作为身份来源", "作为环境来源"}
+	qwenDutyObjects = []string{"身份", "外形", "面部", "年龄感", "身体比例", "环境结构", "空间布局", "固定陈设", "造型", "材质"}
+)
+
+func isQwenReferenceDutyText(value string) bool {
+	hasVerb := false
+	for _, verb := range qwenDutyVerbs {
+		if strings.Contains(value, verb) {
+			hasVerb = true
+			break
+		}
+	}
+	if !hasVerb {
+		return false
+	}
+	for _, object := range qwenDutyObjects {
+		if strings.Contains(value, object) {
+			return true
+		}
+	}
+	return false
+}
+
+// stripQwenReferenceDutyRepetition drops reference bookkeeping from the visual
+// body. It works clause by clause rather than sentence by sentence: a model often
+// packs one duty clause into a sentence that also carries real composition, and
+// dropping the whole sentence would throw that away. Duty text is recognised by
+// its wording, not by an <imageN> tag, because the tags are replaced with plain
+// asset names before the prompt is ever reprocessed.
 func stripQwenReferenceDutyRepetition(value string) string {
 	sentences := splitVisualSentences(value)
 	kept := make([]string, 0, len(sentences))
 	for _, sentence := range sentences {
-		if qwenImageTagPattern.MatchString(sentence) && (strings.Contains(sentence, "严格遵循") || strings.Contains(sentence, "仅提供") || strings.Contains(sentence, "参考图")) {
-			continue
-		}
 		if strings.HasPrefix(sentence, "重构一张独立新画布上的静止剧情首帧") {
 			continue
 		}
-		kept = append(kept, sentence)
+		trailing := ""
+		core := sentence
+		if runes := []rune(sentence); len(runes) > 0 && isVisualSentenceTerminator(runes[len(runes)-1]) {
+			trailing, core = string(runes[len(runes)-1]), string(runes[:len(runes)-1])
+		}
+		clauses := strings.Split(core, "，")
+		keptClauses := make([]string, 0, len(clauses))
+		for _, clause := range clauses {
+			if strings.TrimSpace(clause) == "" || isQwenReferenceDutyText(clause) {
+				continue
+			}
+			keptClauses = append(keptClauses, clause)
+		}
+		if len(keptClauses) == 0 {
+			continue
+		}
+		kept = append(kept, strings.Join(keptClauses, "，")+trailing)
 	}
 	return joinVisualSentences(kept)
+}
+
+// qwenSceneBindingHeader is prepended to every bound scene prompt. The stored
+// prompt is bound again at execution time, so the header has to be removed before
+// it is rebuilt; otherwise each pass stacks another copy onto the prompt that
+// actually reaches the image model.
+const qwenSceneBindingHeader = "静止剧情首帧。参考绑定："
+
+const qwenSceneBindingBodyMarker = "。画面："
+
+func stripQwenSceneBindingHeader(prompt string) string {
+	for strings.HasPrefix(prompt, qwenSceneBindingHeader) {
+		i := strings.Index(prompt, qwenSceneBindingBodyMarker)
+		if i < 0 {
+			break
+		}
+		prompt = strings.TrimSpace(prompt[i+len(qwenSceneBindingBodyMarker):])
+	}
+	return prompt
 }
 
 func ensureQwenSceneReferenceBindings(prompt string, referenceLines []string) string {
 	// The noise stripper works line by line, so it has to run while the newlines
 	// are still there: the duty stripper merges every line into one sentence run.
-	prompt = stripQwenReferenceDutyRepetition(stripH3StoryboardConstraintNoise(strings.TrimSpace(prompt)))
+	prompt = stripQwenSceneBindingHeader(strings.TrimSpace(prompt))
+	prompt = stripQwenReferenceDutyRepetition(stripH3StoryboardConstraintNoise(prompt))
 	prompt = compactStaticVisualPrompt(prompt, 1400)
 	if len(referenceLines) == 0 {
 		return prompt

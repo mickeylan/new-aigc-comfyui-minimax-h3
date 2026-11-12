@@ -91,6 +91,75 @@ func TestCompactStaticVisualPromptKeepsSentencesAndClosingComposition(t *testing
 	}
 }
 
+func TestQwenSceneBindingIsIdempotentAndStripsUntaggedDutyRepetition(t *testing.T) {
+	refs := []string{
+		"- <Picture 1>：角色「柳乐儿」四视图",
+		"- <Picture 2>：角色「齐姓道士」四视图",
+		"- <Picture 3>：角色「燕承」四视图；别名「虬髯大汉」",
+		"- <Picture 4>：场景「灰白巨石所在处」参考图",
+	}
+	// Shape taken from a real generated prompt: the model restates every reference
+	// duty in Chinese asset labels with no <imageN> tag, and packs one duty clause
+	// into a sentence that also carries real composition.
+	body := "构建一幅全新的横向静态画面：角色「柳乐儿」四视图仅用于确定远处柳乐儿的人物身份、面部、年龄感与身体比例，角色「齐姓道士」四视图仅用于确定齐姓道士的人物身份、面部、年龄感与身体比例。" +
+		"场景「灰白巨石所在处」参考图仅用于确定苍黄荒地的环境结构、空间布局、材质与固定陈设。" +
+		"画面仅呈现三名人物：燕承位于左侧前景，柳乐儿位于远处背景偏左。" +
+		"燕承左臂弯曲并单手握住旧拨浪鼓，角色「燕承」四视图仅用于确定燕承的身份与外形，重量稳落左脚。" +
+		"最终画面构成清晰的三层静态叙事。"
+
+	first := ensureQwenSceneReferenceBindings(body, refs)
+
+	// Defect A: the stored prompt is bound again at execution time.
+	second := ensureQwenSceneReferenceBindings(first, refs)
+	third := ensureQwenSceneReferenceBindings(second, refs)
+	if n := strings.Count(second, "静止剧情首帧。参考绑定："); n != 1 {
+		t.Fatalf("binding header stacked %d times on reprocess: %s", n, second)
+	}
+	if second != first || third != first {
+		t.Fatalf("binding is not idempotent:\nfirst=%s\nsecond=%s", first, second)
+	}
+
+	// Defect B: untagged duty bookkeeping must go, and the authoritative header
+	// must still state each duty exactly once.
+	if strings.Contains(first, "仅用于确定") {
+		t.Fatalf("untagged duty repetition survived: %s", first)
+	}
+	if n := strings.Count(first, "人物身份、面部、年龄感与身体比例"); n != 0 {
+		t.Fatalf("identity duty prose repeated %d times in body: %s", n, first)
+	}
+	for i := 1; i <= 4; i++ {
+		tag := fmt.Sprintf("<image%d>", i)
+		if n := strings.Count(first, tag); n != 1 {
+			t.Fatalf("%s bound %d times, want exactly 1: %s", tag, n, first)
+		}
+	}
+
+	// Clause-level stripping must not take real composition with it.
+	for _, want := range []string{
+		"画面仅呈现三名人物",
+		"燕承位于左侧前景",
+		"燕承左臂弯曲并单手握住旧拨浪鼓",
+		"重量稳落左脚",
+		"最终画面构成清晰的三层静态叙事。",
+	} {
+		if !strings.Contains(first, want) {
+			t.Fatalf("visual evidence %q was dropped with the duty text: %s", want, first)
+		}
+	}
+	if !strings.HasSuffix(first, "最终画面构成清晰的三层静态叙事。") {
+		t.Fatalf("closing composition is no longer last: %s", first)
+	}
+	if err := validateQwenScenePrompt(first, len(refs)); err != nil {
+		t.Fatalf("bound prompt fails the gate: %v", err)
+	}
+
+	// A "仅" that is not reference bookkeeping must survive.
+	kept := ensureQwenSceneReferenceBindings("柳石仅用右手抵住网面，左手垂在身侧。", nil)
+	if !strings.Contains(kept, "柳石仅用右手抵住网面") {
+		t.Fatalf("non-duty wording was stripped as bookkeeping: %s", kept)
+	}
+}
+
 func TestReviewedStoryboardPromptBudgetsPreserveUsefulComposition(t *testing.T) {
 	var body strings.Builder
 	for i := 0; i < 45; i++ {
