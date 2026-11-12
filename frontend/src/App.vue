@@ -41,7 +41,7 @@
         <div v-for="t in toast.items" :key="t.id" class="toast" :class="'toast-' + t.type">
           <span class="toast-icon">{{ toastIcon(t.type) }}</span>
           <span class="toast-msg">{{ t.message }}</span>
-          <span class="toast-actions"><button v-if="t.type === 'error'" type="button" title="复制错误" @click="copyToast(t.message)">复制</button><button type="button" title="关闭" @click="toast.dismiss(t.id)">×</button></span>
+          <span class="toast-actions"><button v-if="t.type === 'error' || t.type === 'warning'" type="button" title="复制信息" @click="copyToast(t.message)">复制</button><button type="button" title="关闭" @click="toast.dismiss(t.id)">×</button></span>
         </div>
       </transition-group>
     </div>
@@ -79,7 +79,7 @@ const navItems = [
   { to: '/settings', label: '平台设置', icon: '⚙' }
 ]
 function toastIcon(type) {
-  return { success: '✓', error: '!', info: 'i' }[type] || 'i'
+  return { success: '✓', error: '!', warning: '!', info: 'i' }[type] || 'i'
 }
 
 // 主题切换（深色/浅色），持久化到 localStorage
@@ -241,6 +241,8 @@ onBeforeUnmount(() => {
 .toast-success .toast-icon { background: var(--green); }
 .toast-error { border-color: rgba(255, 69, 58, 0.3); }
 .toast-error .toast-icon { background: var(--red); }
+.toast-warning { border-color: rgba(255, 159, 10, 0.35); }
+.toast-warning .toast-icon { background: var(--orange); }
 .toast-info { border-color: rgba(10, 132, 255, 0.3); }
 .toast-info .toast-icon { background: var(--accent); }
 .toast-msg { line-height: 1.45; flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }

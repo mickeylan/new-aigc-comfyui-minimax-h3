@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 
-// 全局通知：普通消息自动消失；错误默认保留，便于阅读和复制。
+// 全局通知：普通消息自动消失；错误与警告默认保留，便于阅读和复制。
 export const useToastStore = defineStore('toast', {
   state: () => ({
     items: [],
@@ -19,6 +19,8 @@ export const useToastStore = defineStore('toast', {
     },
     success(msg, timeout) { return this.show(msg, 'success', timeout) },
     error(msg, timeout) { return this.show(msg, 'error', timeout ?? 0) },
+    // 警告是“部分成功”：主操作已生效，仅附带项失败，所以同样常驻等待阅读。
+    warning(msg, timeout) { return this.show(msg, 'warning', timeout ?? 0) },
     info(msg, timeout) { return this.show(msg, 'info', timeout) },
     dismiss(id) {
       const i = this.items.findIndex((x) => x.id === id)
