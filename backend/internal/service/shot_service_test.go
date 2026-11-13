@@ -1466,6 +1466,19 @@ func TestShotActionTimelineExistingShotUpdatesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRebalanceShotDurationsKeepsShortCutsAndLongScenes(t *testing.T) {
+	got, err := rebalanceShotDurations([]models.Shot{{Duration: 2}, {Duration: 4}, {Duration: 4}}, 10)
+	if err != nil || got[0].Duration != 2 {
+		t.Fatalf("2-second internal cut rejected: shots=%+v err=%v", got, err)
+	}
+	if _, err := rebalanceShotDurations([]models.Shot{{Duration: 10}, {Duration: 10}}, 24); err != nil {
+		t.Fatalf("24-second Scene rejected: %v", err)
+	}
+	if _, err := rebalanceShotDurations([]models.Shot{{Duration: 5}}, 20); err == nil {
+		t.Fatal("a single Shot over 15 seconds must be rejected")
+	}
+}
+
 func TestRebalanceShotDurationsScalesActionTimeline(t *testing.T) {
 	shots := []models.Shot{{Duration: 6, ActionTimeline: []models.ShotActionTimelineEntry{
 		{Start: 0, End: 3, Subject: "甲", Action: "起身", State: "站立", Camera: "固定"},

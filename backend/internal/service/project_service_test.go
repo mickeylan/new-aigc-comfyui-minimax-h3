@@ -2683,6 +2683,45 @@ func TestSwordPracticeSuggestsInternalShotsAndRejectsMismatchedLegacyPlan(t *tes
 	if !structuredShotsCoverScene(valid, 14) {
 		t.Fatal("valid 14-second Shot plan was rejected")
 	}
+	withReaction := []models.Shot{{Duration: 5}, {Duration: 2}, {Duration: 7}}
+	if !structuredShotsCoverScene(withReaction, 14) {
+		t.Fatal("a 2-second internal reaction Shot must not discard a plan whose total matches the Scene")
+	}
+}
+
+func TestSceneShotUsageSurfacesIgnoredShotPlans(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Dialogue{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "usage"}
+	if err := ps.db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	combat := "大汉挥剑横斩，长蛇扑咬反击。"
+	scene := models.Scene{ProjectID: project.ID, Content: combat, Duration: 14, SceneMode: string(h3SceneAction)}
+	if err := ps.db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	if usage := ps.sceneShotUsage(&scene, nil); usage.Status != "empty" {
+		t.Fatalf("empty plan status=%q", usage.Status)
+	}
+	mismatched := []models.Shot{{SceneID: scene.ID, Duration: 2}, {SceneID: scene.ID, Duration: 3}}
+	if usage := ps.sceneShotUsage(&scene, mismatched); usage.Status != "duration_mismatch" || usage.ShotTotal != 5 || usage.SceneDuration != 14 {
+		t.Fatalf("mismatched plan usage=%+v", usage)
+	}
+	if usage := ps.sceneShotUsage(&scene, []models.Shot{{SceneID: scene.ID, Duration: 7}, {SceneID: scene.ID, Duration: 7}}); usage.Status != "active" {
+		t.Fatalf("covering plan status=%q", usage.Status)
+	}
+	scene.DirectorSourceStale = true
+	if usage := ps.sceneShotUsage(&scene, []models.Shot{{SceneID: scene.ID, Duration: 7}, {SceneID: scene.ID, Duration: 7}}); usage.Status != "stale" {
+		t.Fatalf("stale plan status=%q", usage.Status)
+	}
+	scene.DirectorSourceStale = false
+	scene.Content = "[Shot 1] 大汉挥剑横斩。[Shot 2] 长蛇扑咬反击。"
+	if usage := ps.sceneShotUsage(&scene, []models.Shot{{SceneID: scene.ID, Duration: 7}, {SceneID: scene.ID, Duration: 7}}); usage.Status != "overridden" {
+		t.Fatalf("authored markers status=%q", usage.Status)
+	}
 }
 
 func TestH3ActionTempoRejectsStaticDefenderAndEnforcesRealtime(t *testing.T) {

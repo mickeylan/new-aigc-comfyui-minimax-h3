@@ -1302,7 +1302,7 @@ func (s *Service) HandleGetSceneShots(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{"shots": rows, "dialogue_snapshot": dialogueSnapshot})
+	c.JSON(200, gin.H{"shots": rows, "dialogue_snapshot": dialogueSnapshot, "usage": s.Projects.sceneShotUsage(&scene, shots)})
 }
 
 func (s *Service) HandlePreviewShotRetime(c *gin.Context) { s.handleShotRetime(c, false) }

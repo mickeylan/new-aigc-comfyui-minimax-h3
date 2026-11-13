@@ -128,8 +128,8 @@ func shotDurationTotal(shots []models.Shot) float64 {
 }
 
 func rebalanceShotDurations(shots []models.Shot, target float64) ([]models.Shot, error) {
-	if len(shots) == 0 || target < 3 || target > 15 {
-		return nil, fmt.Errorf("Scene时长必须为3至15秒且至少包含一个Shot")
+	if len(shots) == 0 || target < 3 || target > maxLongSceneVideoDuration {
+		return nil, fmt.Errorf("Scene时长必须为3至%.0f秒且至少包含一个Shot", maxLongSceneVideoDuration)
 	}
 	total := shotDurationTotal(shots)
 	if total <= 0 {
@@ -144,8 +144,9 @@ func rebalanceShotDurations(shots []models.Shot, target float64) ([]models.Shot,
 			result[i].Duration = math.Round((result[i].Duration/total*target)*10) / 10
 			used += result[i].Duration
 		}
-		if result[i].Duration < 3 || result[i].Duration > 15 {
-			return nil, fmt.Errorf("Scene时长不足以让每个Shot保持3至15秒，请减少Shot数量或调整Scene时长")
+		// Internal cut points may be short, matching validateShot.
+		if result[i].Duration <= 0 || result[i].Duration > 15 {
+			return nil, fmt.Errorf("按比例调整后Shot时长必须大于0且不超过15秒，请调整Shot数量或Scene时长")
 		}
 		if shots[i].Duration > 0 && len(result[i].ActionTimeline) > 0 {
 			ratio := result[i].Duration / shots[i].Duration

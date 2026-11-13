@@ -913,14 +913,14 @@ func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue, characterNam
 	if len(allowed) > 0 {
 		listenerRule = "listener_character只能从以下当前项目权威角色中逐字选择，不得使用别名、称谓或创造人物：" + strings.Join(allowed, "、") + "。"
 	}
-	return `按对白自然语速和语义停顿拆成多个3–15秒Native H3镜头。可以交替使用说话人近景、包含说话人的双人/前后景镜头，以及对白结束后的纯听者反应镜头。硬规则：
+	return `按对白自然语速和语义停顿拆成多个Native H3镜头，常态每镜3–15秒。可以交替使用说话人近景、包含说话人的双人/前后景镜头，以及对白结束后的纯听者反应镜头。硬规则：
 1. Dialogue字段只能填下列结构化对白的连续原文片段，不得改写、增删、重复或创造旁白；无发声镜头必须为空。
 2. 所有镜头Dialogue按顺序拼接后必须逐字等于下列完整对白原文按顺序拼接的结果。
 3. 普通dialogue默认让真实说话人清晰可见并由其同步口型；也允许同一句对白跨切到纯听者反应镜头，但必须明确写出“原说话人姓名+声音跨切延续”，听者必须闭口，且不得把这种连续对白改写成旁白或独立画外音。只有明确speech_type为offscreen_dialogue时才设计独立画外对白且说话人不得入镜；narration不得驱动画面人物口型；monologue必须明确人物闭口且不做口型。
 4. 纯听者反应镜头承载普通对白时只能承接上一镜已经开始的同一句对白；不能在听者镜头中开始一条新对白，也不能改变说话人。
 5. 同一句对白没有逗号、句号、分号、冒号或省略号等停顿依据时，默认禁止在该处切镜；仅允许说话人在前后镜持续可见并同步表演，或按第3、4条明确切到闭口听者反应且原说话人声音跨切延续。
 6. 同一镜头可按故事顺序承载多名角色的短促普通dialogue，每一段仍绑定各自权威说话人；同一说话人的长Dialogue也可跨镜延续。dialogue、offscreen_dialogue、narration、monologue等不同speech_type不可用一个speech_presentation混合，必须分镜。
-7. 每镜3–15秒，一个主要情绪、一个主要动作、一种主要构图和明确结束状态。每镜必须填写导演字段：director_intent说明本镜为何存在；audience_information只写本镜让观众新获得的信息；trigger写触发角色行动的可见刺激；performance写演员可执行的身体、表情和手部表演；eye_line写视线对象与方向；blocking写人物站位、朝向、重心和移动；reaction写刺激后的可见反应；focus_subject写唯一主要视觉焦点；cut_reason写在此切入或切出的具体动机。
+7. 每镜不超过15秒，常态不短于3秒；纯听者反应或细节镜头可以短到2秒，但不得连续两镜都短于3秒。每镜一个主要情绪、一个主要动作、一种主要构图和明确结束状态。每镜必须填写导演字段：director_intent说明本镜为何存在；audience_information只写本镜让观众新获得的信息；trigger写触发角色行动的可见刺激；performance写演员可执行的身体、表情和手部表演；eye_line写视线对象与方向；blocking写人物站位、朝向、重心和移动；reaction写刺激后的可见反应；focus_subject写唯一主要视觉焦点；cut_reason写在此切入或切出的具体动机。
 8. 切镜必须由新信息、视线转移、动作触发、权力变化、听者反应、空间重建、情绪转折或动作结果驱动，禁止按字符数或均分时长机械切镜。角色不得提前知道尚未发生或未被感知的事件。
 9. 对白自然时长决定总时长，不得压缩语速，也不得用重复动作填时长。
 10. 每个输出必须是独立可制作的Native H3镜头，禁止使用 Endless 或 Canvas，也禁止无限延长和单条连续长镜头。
@@ -931,7 +931,7 @@ func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue, characterNam
 }
 
 func manualDialogueRhythmInstruction(count int) string {
-	return fmt.Sprintf(`人工指定镜头数：必须恰好输出%d个Native H3镜头，不能多一镜或少一镜。镜头数由用户决定，但每镜仍必须满足3–15秒、权威声音身份不可混合、完整Dialogue逐字连续覆盖及有效语义/表演切点。不得为了凑镜数删改对白、重复对白、创造发声、使用Endless/Canvas或加入无意义空镜。`, count)
+	return fmt.Sprintf(`人工指定镜头数：必须恰好输出%d个Native H3镜头，不能多一镜或少一镜。镜头数由用户决定，但每镜仍必须满足不超过15秒、不连续两镜短于3秒、权威声音身份不可混合、完整Dialogue逐字连续覆盖及有效语义/表演切点。不得为了凑镜数删改对白、重复对白、创造发声、使用Endless/Canvas或加入无意义空镜。`, count)
 }
 
 func dialogueDraftWarnings(draft *sceneDirectorDraft, count int) []string {
@@ -942,9 +942,13 @@ func dialogueDraftWarnings(draft *sceneDirectorDraft, count int) []string {
 	if count > 0 && len(draft.Shots) != count {
 		warnings = append(warnings, fmt.Sprintf("用户希望拆成%d镜，模型返回%d镜；可人工增删镜头", count, len(draft.Shots)))
 	}
+	// Mirrors the director skill rule: reaction/detail cuts may be 2 seconds,
+	// but two consecutive cuts under 3 seconds read as jitter.
 	for i, shot := range draft.Shots {
-		if shot.Duration < 3 || shot.Duration > 15 {
-			warnings = append(warnings, fmt.Sprintf("第%d镜时长%.1f秒不在建议的3–15秒范围；可人工调整", i+1, shot.Duration))
+		if shot.Duration < 2 || shot.Duration > 15 {
+			warnings = append(warnings, fmt.Sprintf("第%d镜时长%.1f秒不在建议的2–15秒范围；可人工调整", i+1, shot.Duration))
+		} else if i > 0 && shot.Duration < 3 && draft.Shots[i-1].Duration >= 2 && draft.Shots[i-1].Duration < 3 {
+			warnings = append(warnings, fmt.Sprintf("第%d、%d镜连续短于3秒，节奏可能过碎；可人工合并", i, i+1))
 		}
 	}
 	return warnings
@@ -960,7 +964,7 @@ func actionRhythmDirectorInstruction(dialogues []models.Dialogue) string {
 		dialogueRule = "结构化对白仍是唯一发声来源；各Shot的dialogue只能按顺序承载以下原文，拼接后必须逐字一致，不得把招式、动作或爆炸声写成对白：\n" + strings.Join(lines, "\n")
 	}
 	return `按武戏、追逐、近身攻防或仙术对轰的动作节拍拆成可审核的Native H3镜头。保持Scene为生产单元，Shot只作为内部导演节拍；不使用Endless。硬规则：
-1. 每个Shot为3–6秒，只承载一个可验证结果：位移完成、一次攻击命中/落空/被挡、一次闪避完成、一次法术释放、一次碰撞爆发或一次受力落点。禁止把冲刺、蓄力、连续挥砍、碰撞和落地塞进同一长镜。
+1. 每个Shot不超过6秒，常态3–6秒；纯受力反应或细节镜头可以短到2秒，但不得连续两镜都短于3秒。每个Shot只承载一个可验证结果：位移完成、一次攻击命中/落空/被挡、一次闪避完成、一次法术释放、一次碰撞爆发或一次受力落点。禁止把冲刺、蓄力、连续挥砍、碰撞和落地塞进同一长镜。
 2. 动作按实时速度执行：立即启动、快速完成、撞击后立刻产生位移；禁止慢动作、子弹时间、逐渐、缓缓、悬停展示、长时间蓄力、戏剧性停顿和命中后定格。
 3. description与prompt_action必须明确主体、起点、运动方向、目标、武器/法术归属、命中或落空、受力方向及本Shot结束姿态；仙术对轰还必须明确双方能量来源、飞行方向、碰撞点和爆发后的空间结果。
 4. 每个Shot只能使用一种主要摄影机策略。主体高速移动时优先固定机位、短促横移或有限跟随；禁止同时推拉摇移、环绕和变焦，禁止用慢运镜拖慢动作。

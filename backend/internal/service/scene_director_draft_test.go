@@ -495,14 +495,20 @@ func TestDialogueRhythmQueryQuotesReservedOrderColumn(t *testing.T) {
 
 func TestManualDialogueRhythmShotCountIsUserOwnedAndDraftValidated(t *testing.T) {
 	instruction := manualDialogueRhythmInstruction(4)
-	for _, want := range []string{"恰好输出4个", "每镜仍必须满足3–15秒", "不得为了凑镜数删改对白"} {
+	for _, want := range []string{"恰好输出4个", "不超过15秒", "不连续两镜短于3秒", "不得为了凑镜数删改对白"} {
 		if !strings.Contains(instruction, want) {
 			t.Fatalf("manual count instruction missing %q: %s", want, instruction)
 		}
 	}
-	warnings := dialogueDraftWarnings(&sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 2.5}, {Duration: 16}, {Duration: 4}}}, 4)
+	warnings := dialogueDraftWarnings(&sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 1.5}, {Duration: 16}, {Duration: 4}}}, 4)
 	if len(warnings) != 3 || !strings.Contains(strings.Join(warnings, "|"), "可人工") {
 		t.Fatalf("non-blocking draft warnings=%v", warnings)
+	}
+	if warnings := dialogueDraftWarnings(&sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 5}, {Duration: 2}, {Duration: 6}}}, 0); len(warnings) != 0 {
+		t.Fatalf("a single 2-second reaction cut must not warn: %v", warnings)
+	}
+	if warnings := dialogueDraftWarnings(&sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 5}, {Duration: 2}, {Duration: 2.5}}}, 0); len(warnings) != 1 || !strings.Contains(warnings[0], "连续短于3秒") {
+		t.Fatalf("consecutive short cuts must warn once: %v", warnings)
 	}
 }
 

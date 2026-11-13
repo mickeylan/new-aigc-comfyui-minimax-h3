@@ -273,6 +273,20 @@ func TestGroupNativeShotsPacksAdjacentShotsUpToFifteenSeconds(t *testing.T) {
 	}
 }
 
+func TestMaterializationAcceptsShortInternalShotsButRejectsShortGroups(t *testing.T) {
+	short := []models.Shot{{ID: 1, Duration: 5, Description: "a"}, {ID: 2, Duration: 2, Description: "b"}, {ID: 3, Duration: 6, Description: "c"}}
+	if err := validateMaterializationShots(short); err != nil {
+		t.Fatalf("2-second internal Shot rejected: %v", err)
+	}
+	if err := validateNativeShotGroups(groupNativeShots(short, make([][]dialogueFragment, len(short)))); err != nil {
+		t.Fatalf("13-second group rejected: %v", err)
+	}
+	tail := []models.Shot{{ID: 1, Duration: 8}, {ID: 2, Duration: 6}, {ID: 3, Duration: 2}}
+	if err := validateNativeShotGroups(groupNativeShots(tail, make([][]dialogueFragment, len(tail)))); err == nil {
+		t.Fatal("a 2-second standalone Native group must be rejected")
+	}
+}
+
 func TestRenumberSceneTitlesUpdatesOnlyNumericPrefix(t *testing.T) {
 	db := newShotMaterializationDB(t)
 	project := models.Project{Title: "p", Generation: 1}

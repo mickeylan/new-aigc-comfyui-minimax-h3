@@ -95,6 +95,17 @@ func groupNativeShots(shots []models.Shot, fragments [][]dialogueFragment) []nat
 	return groups
 }
 
+// validateNativeShotGroups enforces the standalone 3-second Scene minimum on
+// each packed group rather than on individual internal Shots.
+func validateNativeShotGroups(groups []nativeShotGroup) error {
+	for i, group := range groups {
+		if group.Duration < 3 {
+			return fmt.Errorf("Native段%d合计仅%.1f秒，不足3秒；请把过短镜头并入相邻镜头", i+1, group.Duration)
+		}
+	}
+	return nil
+}
+
 // groupedNarrativeContent keeps the reviewed visual description and places each
 // spoken fragment beside the shot in which it occurs. Fragment text is never
 // rewritten: it is also the authority used to create the child Dialogue rows.
@@ -192,8 +203,10 @@ func validateMaterializationShots(shots []models.Shot) error {
 		return fmt.Errorf("至少需要两个已保存导演镜头才能拆成可制作场景")
 	}
 	for i, shot := range shots {
-		if shot.Duration < 3 || shot.Duration > maxNativeSceneDuration {
-			return fmt.Errorf("镜头%d时长必须为3至15秒", i+1)
+		// Shots are internal cuts and may be short; the 3-second minimum applies to
+		// each packed Native scene (see validateNativeShotGroups).
+		if shot.Duration <= 0 || shot.Duration > maxNativeSceneDuration {
+			return fmt.Errorf("镜头%d时长必须大于0且不超过15秒", i+1)
 		}
 		if strings.TrimSpace(shot.Description) == "" {
 			return fmt.Errorf("镜头%d缺少镜头说明", i+1)
@@ -214,10 +227,6 @@ func (s *ShotService) PreviewMaterialization(projectID, sceneID uint) (*ShotMate
 	if err := validateMaterializationShots(shots); err != nil {
 		return nil, err
 	}
-	var dialogues []models.Dialogue
-	if err := s.db.Where("scene_id = ? AND project_id = ?", sceneID, projectID).Order("`order` ASC, `id` ASC").Find(&dialogues).Error; err != nil {
-		return nil, err
-	}
 	authoritativeDialogues := materializationDialogues(s.db, &scene)
 	if len(authoritativeDialogues) > 0 {
 		if err := restoreAuthoritativeShotDialogues(shots, authoritativeDialogues); err != nil {
@@ -228,7 +237,11 @@ func (s *ShotService) PreviewMaterialization(projectID, sceneID uint) (*ShotMate
 	if err != nil {
 		return nil, err
 	}
-	preview := buildShotMaterializationPreview(scene, groupNativeShots(shots, fragments), len(shots))
+	groups := groupNativeShots(shots, fragments)
+	if err := validateNativeShotGroups(groups); err != nil {
+		return nil, err
+	}
+	preview := buildShotMaterializationPreview(scene, groups, len(shots))
 	return &preview, nil
 }
 
@@ -276,10 +289,6 @@ func (s *ShotService) Materialize(projectID, sceneID uint) ([]models.Scene, erro
 		if err := validateMaterializationShots(shots); err != nil {
 			return err
 		}
-		var dialogues []models.Dialogue
-		if err := tx.Where("scene_id = ? AND project_id = ?", sceneID, projectID).Order("`order` ASC, `id` ASC").Find(&dialogues).Error; err != nil {
-			return err
-		}
 		authoritativeDialogues := materializationDialogues(tx, &source)
 		if len(authoritativeDialogues) > 0 {
 			if err := restoreAuthoritativeShotDialogues(shots, authoritativeDialogues); err != nil {
@@ -291,6 +300,9 @@ func (s *ShotService) Materialize(projectID, sceneID uint) ([]models.Scene, erro
 			return err
 		}
 		groups := groupNativeShots(shots, fragments)
+		if err := validateNativeShotGroups(groups); err != nil {
+			return err
+		}
 
 		var sceneLooks []models.SceneCharacterLook
 		var sceneOutfits []models.SceneCharacterOutfit

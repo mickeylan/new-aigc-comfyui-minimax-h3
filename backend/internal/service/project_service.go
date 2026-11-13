@@ -2718,9 +2718,11 @@ func structuredShotsCoverScene(shots []models.Shot, duration float64) bool {
 	if len(shots) == 0 || duration <= 0 {
 		return false
 	}
+	// Shots are internal cut points and may be shorter than 3 seconds; only
+	// their total has to match the Scene that is actually generated.
 	total := 0.0
 	for _, shot := range shots {
-		if shot.Duration < 3 || shot.Duration > maxSceneVideoDuration {
+		if shot.Duration <= 0 || shot.Duration > maxSceneVideoDuration {
 			return false
 		}
 		total += shot.Duration
@@ -2848,7 +2850,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 按源文原序保留可见的起因/触发、物质或对象的出现与状态转变、主动运动的方向和作用力、对象间接触/作用、传播过程，以及环境最终状态。这些是动作链，不属于应删除的文学“前因后果”。不得复述剧情背景（指不可见的背景解释）、人物关系、心理活动、内心想法、氛围解释或观众感受；禁止“仿佛想说什么”“未说出口的问题”“沉默中充满”等文学化语言暗示。
 第一句以 [Shot 1] 开头，%s。不得新增角色、对白、道具、地点、胜负、伤亡或剧情结果。不得创造用户未写的威胁、攻击、应对或剧情推进；禁止为制造戏剧性而补出防御、反击或新结果，也不得写出与原文状态矛盾的反应（原文写“没有后退”就不得后退，写“一言不发”就保持闭口）。
 导演权：在不改变上述剧情事实的前提下，你必须主动设计镜头语言——每个Shot的景别、机位角度、运镜、前景/构图与光线变化；开场写清每个人物在画面左/中/右的位置与朝向，全片保持同一对峙轴线，切镜不越轴；术法、兵器光效和法宝写明归属与发出部位。只写该机位实际看得见的细节：背对镜头或被遮挡的人物不写表情、脸色、眼神或嘴唇；按每段动作量分配各Shot时长，不得让对白镜头占满大部分时长而把多个动作挤进最后一两秒。你可以把原文已经表达的情绪（紧张、恐惧、凶狠、沉稳）落成不改变剧情的可见细节表演，如视线追随、眉头压低、指节收紧、肩膀缩起、双脚站稳；这些是镜头表演，不是新剧情。最后一个Shot停在原文的最终状态，不得越过它继续推进。
-按每条Dialogue的speech_type分别处理发声方式：dialogue是现场说话，可在该句期间同步口型；monologue是可听见的内心画外声，该人物在该句期间嘴唇完全闭合，不做开口或说话口型，只保留原文的可见反应；narration和offscreen_dialogue不驱动画面人物口型。闭口要求仅作用于对应语句/时段，不得阻止同一人物后续dialogue正常开口。对白文本将由系统确定性加入，你不得在正文输出台词、<d>标签或改写台词；但你要在该句实际说出的Shot里写一个独立的可见说话节拍句（说话人、朝向谁、神态，如 「燕承 glares at 柳石 and shouts.」），并紧接该句单独写对应占位符 [[D1]]、[[D2]]……（序号即结构化对白的D编号，每条恰好一次、按顺序），系统会把占位符确定性替换为台词；把与台词同时发生的动作（原文“话音未落”等）写在该节拍之后的同一Shot内，并为该Shot留足台词时长（约每秒4个汉字，省略号停顿约0.5秒）。无结构化对白时，人物保持闭口，不得描写嘴唇微张、欲言又止或任何说话暗示。
+按每条Dialogue的speech_type分别处理发声方式：dialogue是现场说话，可在该句期间同步口型；monologue是可听见的内心画外声，该人物在该句期间嘴唇完全闭合，不做开口或说话口型，只保留原文的可见反应；narration和offscreen_dialogue不驱动画面人物口型。闭口要求仅作用于对应语句/时段，不得阻止同一人物后续dialogue正常开口。对白文本将由系统确定性加入，你不得在正文输出台词、<d>标签或改写台词；但你要在该句实际说出的Shot里写一个独立的可见说话节拍句（说话人、朝向谁、神态，如 「燕承 glares at 柳石 and shouts.」），并紧接该句单独写对应占位符 [[D1]]、[[D2]]……（序号即结构化对白的D编号，每条恰好一次、按顺序），系统会把占位符确定性替换为台词；把与台词同时发生的动作（原文“话音未落”等）写在该节拍之后的同一Shot内，并为该Shot留足台词时长（按每秒9个汉字估算，标点只加短暂停顿，连续标点按一次停顿计算）。无结构化对白时，人物保持闭口，不得描写嘴唇微张、欲言又止或任何说话暗示。
 正文中的人物身份占位必须逐字使用【场景剧情】和【Shot导演设计】里的中文真实角色名，以便系统确定性替换为正确 <Subject N>；【实际参考绑定】中的道具和场景同样逐字使用其中文名（如道具「X」写作 X），系统会替换为对应 <Picture N> 引用；其余视觉叙述使用英文。严禁拼音、英文音译、别名，也禁止自行猜测Subject编号。
 四视图只负责人物身份与服装，场景图只负责环境；不得从参考图反推剧情，不得复述或猜测外貌、服装、陈设。
 场景类型规则：%s`, combatDetailRule, openingInstruction, h3SceneModeInstruction(sceneMode))
@@ -7162,6 +7164,42 @@ func (s *ProjectService) currentSceneDirectorShots(sc *models.Scene) ([]models.S
 	var shots []models.Shot
 	err := s.db.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error
 	return shots, err
+}
+
+// SceneShotUsage tells the director editor whether saved Shots will actually
+// drive video generation. It mirrors the authority order in
+// GenerateSceneVideoAction so a silently ignored plan becomes visible.
+type SceneShotUsage struct {
+	Status        string  `json:"status"` // active, empty, stale, overridden, duration_mismatch
+	Message       string  `json:"message"`
+	ShotTotal     float64 `json:"shot_total"`
+	SceneDuration float64 `json:"scene_duration"`
+}
+
+func (s *ProjectService) sceneShotUsage(sc *models.Scene, shots []models.Shot) SceneShotUsage {
+	duration := normalizeSceneDuration(sc.Duration)
+	usage := SceneShotUsage{Status: "active", ShotTotal: shotDurationTotal(shots), SceneDuration: duration}
+	if len(shots) == 0 {
+		usage.Status = "empty"
+		return usage
+	}
+	content := normalizeUserH3ShotMarkers(sceneDialogueGenerationContent(sc))
+	content, timedCount := normalizeSceneTimedBeats(content, duration)
+	switch {
+	case timedCount == 0 && len(h3ShotMarkerPattern.FindAllStringIndex(content, -1)) > 1:
+		usage.Status, usage.Message = "overridden", "Scene正文已用[Shot N]写明镜头，生成视频时以正文为准，已保存的导演镜头不参与。"
+	case sc.DirectorSourceStale:
+		usage.Status, usage.Message = "stale", "Scene正文在保存这些镜头后被修改过，旧镜头仅作历史保留，不参与生成；请重新生成或确认保存导演方案。"
+	case timedCount > 0:
+		usage.Status, usage.Message = "overridden", "Scene正文已包含逐段时间轴，生成视频时以正文时间轴为准，已保存的导演镜头不参与。"
+	default:
+		mode := classifyH3SceneMode(sc, shots, s.sceneVideoDialogues(sc))
+		if (mode == h3SceneAction || mode == h3SceneMixed) && !structuredShotsCoverScene(shots, duration) {
+			usage.Status = "duration_mismatch"
+			usage.Message = fmt.Sprintf("镜头合计%.1f秒，与Scene时长%.1f秒相差超过%.1f秒（或单镜超过15秒）；武戏生成视频时会忽略这套镜头。", usage.ShotTotal, duration, shotDurationTolerance)
+		}
+	}
+	return usage
 }
 
 func (s *ProjectService) sceneShotContext(sc *models.Scene) string {

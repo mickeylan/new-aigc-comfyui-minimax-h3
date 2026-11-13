@@ -189,7 +189,7 @@
         <div class="field">
           <label for="h3_max_duration_seconds">MiniMax H3 单任务时长上限（秒）</label>
           <input id="h3_max_duration_seconds" v-model.number="form.h3_max_duration_seconds" type="number" min="3" max="60" step="1" class="input" />
-          <div class="field-hint">默认15秒。超过15秒只用于已实测的高显存实例；本机约12GB显存不建议提高，30秒以上通常风险很高。该设置是执行门禁，不改变内部Shot的3–15秒规则。</div>
+          <div class="field-hint">默认15秒。超过15秒只用于已实测的高显存实例；本机约12GB显存不建议提高，30秒以上通常风险很高。该设置是执行门禁，不改变内部Shot规则（单镜不超过15秒，反应/细节镜头可短于3秒）。</div>
         </div>
         <div class="field">
           <label for="comfy_output_subfolders">ComfyUI 输出子目录（恢复素材用）</label>
