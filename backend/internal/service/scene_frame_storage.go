@@ -8,9 +8,14 @@ import (
 	"comfyui-console/internal/models"
 )
 
+// sceneFrameCacheCategory 是「查看全部帧」的专用缓存目录名。那些 PNG 只用于人工挑帧：
+// 不写数据库、不被任何素材记录引用，一次浏览就可能产生上千张。放在固定的独立目录里，
+// 用户可以整目录删除而不必担心误删素材，项目素材目录也保持干净。
+const sceneFrameCacheCategory = "_frame_cache"
+
 // Frame images and saved selections must use the same storage root served by
 // /api/input. Remote-only execution retains its existing remote staging directory.
-func (s *ContinuityService) sceneFrameDirectory(projectID uint) string {
+func (s *ContinuityService) sceneFrameRoot() string {
 	root := s.cfg.AssetsRoot()
 	if s.upload != nil {
 		root = s.upload.InputDir()
@@ -18,7 +23,16 @@ func (s *ContinuityService) sceneFrameDirectory(projectID uint) string {
 	if s.remote != nil && s.remote.Enabled() {
 		root = filepath.Join(s.cfg.Comfy.ComfyDir, "input")
 	}
-	return filepath.Join(root, fmt.Sprint(projectID))
+	return root
+}
+
+func (s *ContinuityService) sceneFrameDirectory(projectID uint) string {
+	return filepath.Join(s.sceneFrameRoot(), fmt.Sprint(projectID))
+}
+
+// sceneFrameCacheDirectory 与项目素材目录同根但互不混杂，仍由 /api/input/*path 提供预览。
+func (s *ContinuityService) sceneFrameCacheDirectory(projectID uint) string {
+	return filepath.Join(s.sceneFrameRoot(), sceneFrameCacheCategory, fmt.Sprint(projectID))
 }
 
 func (s *ContinuityService) sceneFrameVideoPath(scene *models.Scene) (string, error) {

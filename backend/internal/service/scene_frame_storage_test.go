@@ -45,9 +45,15 @@ func TestSceneFramesUseDurableAssetDirectoryWhenLegacyInputIsAbsent(t *testing.T
 	if len(all.Frames) != 12 {
 		t.Fatalf("all frames=%d", len(all.Frames))
 	}
+	// 浏览帧改放独立缓存目录（仍在持久素材根下，仍由 /api/input 提供预览），
+	// 以免上千张临时帧混进项目素材目录。素材目录本身必须保持干净。
+	cacheDir := svc.sceneFrameCacheDirectory(p.ID)
 	for _, frame := range all.Frames {
-		if _, err := os.Stat(filepath.Join(dir, frame.File)); err != nil {
-			t.Fatalf("preview file not in served asset directory: %v", err)
+		if _, err := os.Stat(filepath.Join(cacheDir, frame.File)); err != nil {
+			t.Fatalf("preview file not in frame cache directory: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, frame.File)); !os.IsNotExist(err) {
+			t.Fatalf("浏览帧污染了项目素材目录: %s", frame.File)
 		}
 	}
 	saved, err := svc.SaveExtractedSceneFrame(p.ID, sc.ID, all.ExtractionID, 4)
