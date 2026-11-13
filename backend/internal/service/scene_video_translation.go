@@ -158,6 +158,142 @@ func restoreH3StructureLenient(translated string, tokens []string) (string, []st
 	return restored, issues
 }
 
+// h3MarkerPositions maps each surviving marker ID to its byte range in text. Marker
+// IDs are unique, so a dropped marker can be located precisely by its neighbours.
+func h3MarkerPositions(text string, count int) map[int][2]int {
+	positions := make(map[int][2]int, count)
+	for _, loc := range h3MarkerRE.FindAllStringSubmatchIndex(text, -1) {
+		index, err := strconv.Atoi(text[loc[4]:loc[5]])
+		if err != nil || index < 0 || index >= count {
+			continue
+		}
+		if _, exists := positions[index]; exists {
+			continue
+		}
+		positions[index] = [2]int{loc[0], loc[1]}
+	}
+	return positions
+}
+
+// h3MaskedTokenLineStarts reports, per token, whether its marker opens a line in the
+// masked source. A dropped [Shot N] belongs back at the head of its line, while an
+// inline binding such as <Subject 1> or (S1) belongs next to the prose it introduces.
+// The flag is read off the source itself rather than assumed, so a token that sits
+// somewhere unusual is still put back where it actually was.
+func h3MaskedTokenLineStarts(masked string, count int) []bool {
+	starts := make([]bool, count)
+	for _, loc := range h3MarkerRE.FindAllStringSubmatchIndex(masked, -1) {
+		index, err := strconv.Atoi(masked[loc[4]:loc[5]])
+		if err != nil || index < 0 || index >= count {
+			continue
+		}
+		prefix := masked[:loc[0]]
+		if cut := strings.LastIndexByte(prefix, '\n'); cut >= 0 {
+			prefix = prefix[cut+1:]
+		}
+		starts[index] = strings.TrimSpace(prefix) == ""
+	}
+	return starts
+}
+
+// h3DroppedMarkerInsertionPoint brackets a missing line-opening marker between its
+// nearest surviving neighbours and reports the line head it belongs to. It reports
+// false whenever that line head is not identifiable, because a marker such as
+// [Shot 2] carries a cut: putting it on the wrong line silently rewrites the shot
+// timeline, which is worse than leaving it missing and translating again.
+func h3DroppedMarkerInsertionPoint(text string, positions map[int][2]int, target, count int) (int, bool) {
+	gapStart, gapEnd := 0, len(text)
+	for i := target - 1; i >= 0; i-- {
+		if span, ok := positions[i]; ok {
+			gapStart = span[1]
+			break
+		}
+	}
+	for i := target + 1; i < count; i++ {
+		if span, ok := positions[i]; ok {
+			gapEnd = span[0]
+			break
+		}
+	}
+	if gapStart > gapEnd {
+		// The translator reordered the surviving markers, so this is not a real
+		// interval and the gap says nothing about where the marker belongs.
+		return 0, false
+	}
+	cut := strings.LastIndexByte(text[gapStart:gapEnd], '\n')
+	if cut < 0 {
+		// The line break that carried this marker did not survive, so the line head
+		// is gone too. Appending to the previous marker would merge two shots.
+		return 0, false
+	}
+	return gapStart + cut + 1, true
+}
+
+// reinsertDroppedH3Markers puts line-opening structure markers the translator deleted
+// back into the translated text before restoration, anchored on the surviving markers
+// around them. Two kinds of token are deliberately left alone: dialogue, which
+// restoreH3StructureLenient appends instead because its place in translated prose
+// cannot be inferred, and inline tokens such as <Subject 1> or (S1), which sit inside a
+// sentence the translator has rewritten and so have no anchor of their own. Those stay
+// missing and are reported, rather than being dropped at a guessed offset.
+func reinsertDroppedH3Markers(translated string, tokens []string, lineStarts []bool) (string, []int) {
+	var placed []int
+	for attempt := 0; attempt < len(tokens); attempt++ {
+		positions := h3MarkerPositions(translated, len(tokens))
+		target := -1
+		for i, token := range tokens {
+			if strings.HasPrefix(token, "<d>") || !lineStarts[i] {
+				continue
+			}
+			if _, ok := positions[i]; !ok {
+				target = i
+				break
+			}
+		}
+		if target < 0 {
+			break
+		}
+		at, ok := h3DroppedMarkerInsertionPoint(translated, positions, target, len(tokens))
+		if !ok {
+			break
+		}
+		marker := fmt.Sprintf("[[[T%d]]]", target)
+		if at < len(translated) && translated[at] != ' ' && translated[at] != '\n' && translated[at] != '\t' {
+			marker += " "
+		}
+		translated = translated[:at] + marker + translated[at:]
+		placed = append(placed, target)
+	}
+	return translated, placed
+}
+
+// restoreH3StructureWithRecovery restores a translation that dropped protocol markers:
+// structure markers are put back positionally, dialogue is recovered by
+// restoreH3StructureLenient, and the number of structure markers that still could not
+// be placed is reported so the caller can decide whether to pay for another attempt.
+func restoreH3StructureWithRecovery(translated, masked string, tokens []string) (string, []string, int) {
+	repaired, placed := reinsertDroppedH3Markers(translated, tokens, h3MaskedTokenLineStarts(masked, len(tokens)))
+	restored, issues := restoreH3StructureLenient(repaired, tokens)
+	if len(placed) > 0 {
+		labels := make([]string, 0, len(placed))
+		for _, index := range placed {
+			labels = append(labels, tokens[index])
+		}
+		issues = append(issues, fmt.Sprintf("已按相邻结构标记补回 %d 个被翻译删除的标记（%s），请复核位置", len(placed), strings.Join(labels, "、")))
+	}
+	missing := 0
+	positions := h3MarkerPositions(repaired, len(tokens))
+	for i, token := range tokens {
+		if strings.HasPrefix(token, "<d>") {
+			continue
+		}
+		if _, ok := positions[i]; !ok {
+			missing++
+		}
+	}
+	return restored, issues, missing
+}
+
 // stripH3CodeFence removes a markdown fence the translator may have wrapped around the prompt.
 func stripH3CodeFence(raw string) string {
 	text := strings.TrimSpace(raw)
@@ -344,8 +480,20 @@ func (s *Service) HandleTranslateSceneVideoPrompt(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	translated = stripH3CodeFence(translated)
-	translated, markerWarnings := restoreH3StructureLenient(translated, tokens)
+	translated, markerWarnings, missingStructure := restoreH3StructureWithRecovery(stripH3CodeFence(translated), masked, tokens)
+	if missingStructure > 0 {
+		// Translators drop a shot marker often enough that a single pass is not
+		// dependable, and a marker that could not be placed positionally would
+		// silently flatten the shot timeline. One more call is cheaper than a
+		// wrong video; the better of the two results wins.
+		if retry, retryErr := s.TextProviderFact.Chat(system, masked); retryErr == nil {
+			candidate, candidateWarnings, candidateMissing := restoreH3StructureWithRecovery(stripH3CodeFence(retry), masked, tokens)
+			if candidateMissing < missingStructure {
+				translated, markerWarnings, missingStructure = candidate, candidateWarnings, candidateMissing
+			}
+			markerWarnings = append(markerWarnings, "首轮翻译丢失结构标记且无法按位置补回，已自动重译一次")
+		}
+	}
 	if len(referenceLines) > 0 {
 		translated = bindH3ReferencePreview(translated, referenceLines)
 	}
@@ -438,8 +586,8 @@ func (s *Service) HandleConfirmSceneVideoPrompt(c *gin.Context) {
 		return
 	}
 	if h3MarkerRE.MatchString(req.ExecPrompt) {
-		_, tokens := maskH3Structure(sc.VideoPromptMasterZH)
-		restored, _ := restoreH3StructureLenient(req.ExecPrompt, tokens)
+		masked, tokens := maskH3Structure(sc.VideoPromptMasterZH)
+		restored, _, _ := restoreH3StructureWithRecovery(req.ExecPrompt, masked, tokens)
 		req.ExecPrompt = restored
 		if h3MarkerRE.MatchString(req.ExecPrompt) {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "英文执行稿仍含未还原的内部翻译标记，请重新翻译后再确认"})
