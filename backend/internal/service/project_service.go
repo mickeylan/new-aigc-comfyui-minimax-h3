@@ -5555,7 +5555,17 @@ func englishH3ReferenceDescription(desc string, n int) string {
 	case strings.Contains(desc, "当前分镜画面"):
 		return "the storyboard composition and action-state reference"
 	case strings.Contains(desc, "角色") && name != "":
-		return fmt.Sprintf("the character named 「%s」 shown in the four-view reference", name)
+		// 描述必须与实际提交的那张图一致。只有标准像的角色不能被说成四视图，
+		// 否则模型会去找并不存在的多视角信息，分镜图提示词与视频提示词也会
+		// 对同一张参考图给出互相矛盾的类型。
+		switch {
+		case strings.Contains(desc, "四视图"):
+			return fmt.Sprintf("the character named 「%s」 shown in the four-view reference", name)
+		case strings.Contains(desc, "标准像") || strings.Contains(desc, "标准照") || strings.Contains(desc, "定妆照"):
+			return fmt.Sprintf("the character named 「%s」 shown in the single standard portrait reference", name)
+		default:
+			return fmt.Sprintf("the character named 「%s」 shown in the identity reference", name)
+		}
 	case strings.Contains(desc, "造型") && name != "":
 		return fmt.Sprintf("the approved character look named 「%s」", name)
 	case strings.Contains(desc, "场景") && name != "":
@@ -6143,40 +6153,19 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 		lines = append(lines, fmt.Sprintf("- <Picture %d>：%s", len(refs), description))
 	}
 	if selected, selectedLines, explicit := s.selectedSceneReferenceFiles(sc, "h3"); explicit {
-		// 显式选择按Scene人物出场顺序 → 其余人物造型 → 场景 → 道具及其他。
-		used := make([]bool, len(selected))
-		appendSelected := func(i int) {
-			if i < 0 || i >= len(selected) || i >= len(selectedLines) || used[i] || len(refs) >= maxSceneReferenceImages-1 {
-				return
+		// 顺序已由 selectedSceneReferenceFiles 统一确定，这里必须原样消费。
+		// 分镜图提示词与视频提示词共用同一套 <Picture N> 编号，视频侧一旦再按
+		// 出场顺序重排，同一个 <Picture 2> 就会在两份提示词里指向不同的人物。
+		for i := range selected {
+			if i >= len(selectedLines) || len(refs) >= maxSceneReferenceImages-1 {
+				break
 			}
-			used[i] = true
 			refs = append(refs, selected[i])
 			description := strings.TrimSpace(selectedLines[i])
 			if parts := strings.SplitN(description, "：", 2); len(parts) == 2 {
 				description = strings.TrimSpace(parts[1])
 			}
 			lines = append(lines, fmt.Sprintf("- <Picture %d>：%s", len(refs), description))
-		}
-		for _, name := range visibleSceneCharacterNames(sc) {
-			marker := "角色「" + name + "」"
-			for i, line := range selectedLines {
-				if strings.Contains(line, marker) {
-					appendSelected(i)
-				}
-			}
-		}
-		for priority := 0; priority < 3; priority++ {
-			for i, line := range selectedLines {
-				linePriority := 2
-				if strings.Contains(line, "角色「") {
-					linePriority = 0
-				} else if strings.Contains(line, "场景「") {
-					linePriority = 1
-				}
-				if linePriority == priority {
-					appendSelected(i)
-				}
-			}
 		}
 		appendStoryboard()
 		return refs, lines

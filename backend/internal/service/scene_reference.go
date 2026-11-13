@@ -466,25 +466,26 @@ func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target st
 			selectedKeys[referenceKey(ref)] = true
 		}
 	}
-	if target == "krea2" { // legacy field name; this target is MiniMax H3 SelfLift scene generation
-		// 显式参考列表是用户最终决定：不自动补回被取消的标准像或旧四视图。
-		priority := func(r SceneReferenceSelection) int {
-			// SelfLift 对前序图片权重更敏感：人物身份图必须先于环境图，
-			// 否则模型容易复刻空场景而忽略动作主体。
-			if r.SourceType == "character" || r.SourceType == "outfit" {
-				return 0
-			}
-			if r.SourceType == "look" {
-				return 1
-			}
-			c, ok := byKey[referenceKey(r)]
-			if ok && c.Category == AssetKindLocation {
-				return 2
-			}
-			return 3
+	// 显式参考列表是用户最终决定：不自动补回被取消的标准像或旧四视图。
+	// 这个顺序对分镜图和后续视频必须完全一致：两份提示词共用同一套 <Picture N>
+	// 编号，任何一侧单独重排都会让同一个编号在两份提示词里指向不同的人物。
+	priority := func(r SceneReferenceSelection) int {
+		// SelfLift 对前序图片权重更敏感：人物身份图必须先于环境图，
+		// 否则模型容易复刻空场景而忽略动作主体。
+		if r.SourceType == "character" || r.SourceType == "outfit" {
+			return 0
 		}
-		sort.SliceStable(selected, func(i, j int) bool { return priority(selected[i]) < priority(selected[j]) })
+		if r.SourceType == "look" {
+			return 1
+		}
+		c, ok := byKey[referenceKey(r)]
+		if ok && c.Category == AssetKindLocation {
+			return 2
+		}
+		return 3
 	}
+	// 稳定排序：同一优先级内保留用户在界面上用 ↑↓ 调整的相对顺序。
+	sort.SliceStable(selected, func(i, j int) bool { return priority(selected[i]) < priority(selected[j]) })
 	refs, lines := []FileMeta{}, []string{}
 	for _, r := range selected {
 		if (target == "krea2" && !r.UseKrea2) || (target == "h3" && !r.UseH3) {
