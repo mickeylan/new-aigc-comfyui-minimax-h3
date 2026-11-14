@@ -104,6 +104,7 @@ func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, coun
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("ffmpeg未产生候选帧")
 	}
+	s.scoreFrameCandidates(inputDir, candidates)
 	// Keep a view of the slice: GORM fills IDs on candidates only after insertion.
 	// Copying these structs before Create returned zero IDs to the selection UI.
 	tailCount := len(candidates)
@@ -152,6 +153,30 @@ func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, coun
 		return nil, err
 	}
 	return candidates[:tailCount], nil
+}
+
+// scoreFrameCandidates fills SharpnessScore and marks one recommended frame. Scoring is
+// advisory: an unreadable frame scores -1 and never fails the extraction.
+func (s *ContinuityService) scoreFrameCandidates(dir string, candidates []models.FrameCandidate) {
+	scores, lumas := make([]float64, len(candidates)), make([]float64, len(candidates))
+	for i := range candidates {
+		scores[i] = -1
+		f, err := s.remote.Open(filepath.Join(dir, candidates[i].ImageFile))
+		if err != nil {
+			continue
+		}
+		score, luma, err := frameSharpness(f)
+		f.Close()
+		if err == nil {
+			scores[i], lumas[i] = score, luma
+		}
+	}
+	for i := range candidates {
+		candidates[i].SharpnessScore = scores[i]
+	}
+	if best := recommendSharpestFrame(scores, lumas); best >= 0 {
+		candidates[best].Recommended = true
+	}
 }
 
 func markReextractedFrameReferences(tx *gorm.DB, sceneID uint) error {

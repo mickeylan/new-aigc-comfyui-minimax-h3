@@ -16,11 +16,12 @@
 
     <section v-if="mode !== 'independent' && sourceSceneId" class="block">
       <h4>选择第{{ sourceSceneOrder }}镜的末尾帧</h4>
-      <p class="hint">这里展示的是上一镜视频末尾约1秒的22帧候选。选中的图片将作为当前第{{ sceneOrder }}镜的起始衔接帧。</p>
+      <p class="hint">这里展示的是上一镜视频末尾约1秒的22帧候选。选中的图片将作为当前第{{ sceneOrder }}镜的起始衔接帧。标「推荐」的是清晰度最高且未渐黑的一帧，仅供参考，请以画面内容为准。</p>
       <p v-if="!sourceVideoReady" class="warning">第{{ sourceSceneOrder }}镜视频尚未完成，请先生成上一镜视频。</p>
       <div v-else class="actions"><button class="btn btn-sm" :disabled="loading" @click="extract">{{ loading ? '提取中…' : '重新提取上一镜末尾22帧' }}</button></div>
       <div v-if="frames.length" class="frame-grid">
-        <button v-for="f in frames" :key="f.id" class="frame" :class="{ selected: f.id === selectedFrameId }" @click="select(f)">
+        <button v-for="f in frames" :key="f.id" class="frame" :class="{ selected: f.id === selectedFrameId, recommended: f.recommended }" :title="f.sharpness_score >= 0 ? `清晰度 ${Math.round(f.sharpness_score)}` : '未能计算清晰度'" @click="select(f)">
+          <em v-if="f.recommended" class="recommend-badge">推荐</em>
           <img :src="f.image_url" :alt="`上一镜候选帧${f.frame_index + 1}`" />
           <span>{{ f.frame_index + 1 }}/{{ frames.length }} · {{ timeLabel(f.timestamp_ms) }}</span>
         </button>
@@ -130,5 +131,5 @@ onMounted(() => load().catch(e => { error.value = e.response?.data?.error || e.m
 </script>
 
 <style scoped>
-.continuity-panel{padding:20px;background:var(--card);color:var(--text-primary);border-radius:12px}.panel-head{display:flex;justify-content:space-between;align-items:center}.block{margin-top:18px;padding:14px;border:1px solid var(--border);border-radius:8px}.block h4{margin:0 0 8px}.hint,.empty{color:var(--text-secondary);font-size:13px}.actions{margin-top:12px;display:flex;gap:8px}.frame-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(135px,1fr));gap:10px;margin-top:12px}.frame{padding:0;overflow:hidden;border:2px solid transparent;border-radius:6px;background:var(--bg-secondary);color:var(--text-secondary);cursor:pointer}.frame.selected{border-color:#4caf50}.frame img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover}.frame span{display:block;padding:5px;font-size:11px}.input{width:100%;padding:8px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);border-radius:6px}.warning{margin-top:10px;padding:8px;color:#ffb74d;background:rgba(255,152,0,.12);border-radius:6px}.replace-row{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:12px;padding:10px;background:var(--bg-secondary);border-radius:6px;font-size:13px}
+.continuity-panel{padding:20px;background:var(--card);color:var(--text-primary);border-radius:12px}.panel-head{display:flex;justify-content:space-between;align-items:center}.block{margin-top:18px;padding:14px;border:1px solid var(--border);border-radius:8px}.block h4{margin:0 0 8px}.hint,.empty{color:var(--text-secondary);font-size:13px}.actions{margin-top:12px;display:flex;gap:8px}.frame-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(135px,1fr));gap:10px;margin-top:12px}.frame{padding:0;overflow:hidden;border:2px solid transparent;border-radius:6px;background:var(--bg-secondary);color:var(--text-secondary);cursor:pointer}.frame{position:relative}.frame.recommended:not(.selected){border-color:#64b5f6}.frame.selected{border-color:#4caf50}.recommend-badge{position:absolute;top:4px;left:4px;padding:1px 6px;font-size:11px;font-style:normal;color:#fff;background:#1e88e5;border-radius:4px}.frame img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover}.frame span{display:block;padding:5px;font-size:11px}.input{width:100%;padding:8px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);border-radius:6px}.warning{margin-top:10px;padding:8px;color:#ffb74d;background:rgba(255,152,0,.12);border-radius:6px}.replace-row{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:12px;padding:10px;background:var(--bg-secondary);border-radius:6px;font-size:13px}
 </style>

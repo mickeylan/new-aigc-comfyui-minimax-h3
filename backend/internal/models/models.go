@@ -1270,8 +1270,12 @@ type FrameCandidate struct {
 	ImageFile         string             `json:"image_file"` // input/<projectID> 下的当前有效图片
 	OriginalImageFile string             `json:"original_image_file,omitempty"`
 	Source            string             `gorm:"default:extracted" json:"source"` // extracted/manual_upload
-	SelectedAt        *time.Time         `json:"selected_at,omitempty"`
-	CreatedAt         time.Time          `json:"created_at"`
+	// SharpnessScore is the Laplacian variance of the frame (-1 when it could not be read).
+	// Recommended marks the sharpest non-dark frame of an extraction; it is advice only.
+	SharpnessScore float64    `gorm:"default:-1" json:"sharpness_score"`
+	Recommended    bool       `gorm:"default:false" json:"recommended"`
+	SelectedAt     *time.Time `json:"selected_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
 }
 
 // SceneContinuity 是当前 Scene 对上一 Scene 的显式依赖。
