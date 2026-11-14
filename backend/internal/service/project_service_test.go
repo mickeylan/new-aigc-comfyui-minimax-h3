@@ -2933,6 +2933,63 @@ func TestSoloSwordMotionFlowRejectsEndpointPoseSequence(t *testing.T) {
 	}
 }
 
+func TestCombatPlotAnchorsTriggerRepairAndAreStripped(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SharedAssetReference{}); err != nil {
+		t.Fatal(err)
+	}
+	action := "The woman moves at full real-time speed, steps forward with her right foot for one diagonal rising cut, shifts her weight onto the left foot for one straight thrust, then makes one horizontal cut and finishes upright with the peach branch angled down."
+	provider := &sequenceTextProvider{responses: []string{
+		"[Shot 1] The woman raises the peach branch in the peach grove.〔P02〕 " + action + "〔P02〕",
+		"[Shot 1] The woman raises the peach branch in the peach grove.〔P01〕 " + action + "〔P02〕",
+	}}
+	ps.textProvider = provider
+	project := models.Project{Title: "剧情锚点测试"}
+	ps.db.Create(&project)
+	content := "上官若琳以桃枝为剑，在桃林中进行单人剑术演练。右脚前踏，完成斜撩、直刺、横削，最后收步直立。"
+	scene := models.Scene{ProjectID: project.ID, SceneMode: "武戏", Duration: 8, Content: content}
+	ps.db.Create(&scene)
+	got, err := ps.GenerateSceneVideoAction(&scene)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 2 {
+		t.Fatalf("calls=%d, want initial + one repair", provider.calls)
+	}
+	if !strings.Contains(provider.users[0], "〔剧情节点账本〕") || !strings.Contains(provider.users[0], "P02 右脚前踏") {
+		t.Fatalf("initial request lacks plot ledger: %s", provider.users[0])
+	}
+	for _, want := range []string{"缺少剧情锚点P01", "剧情锚点P02重复", "〔剧情节点账本〕"} {
+		if !strings.Contains(provider.users[1], want) {
+			t.Fatalf("repair request lacks %q: %s", want, provider.users[1])
+		}
+	}
+	if h3PlotAnchorPattern.MatchString(got) || strings.ContainsAny(got, "〔〕") {
+		t.Fatalf("anchors left in final action: %s", got)
+	}
+}
+
+func TestCombatOutputWithoutAnchorsIsNotRepairedForAnchors(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SharedAssetReference{}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &sequenceTextProvider{responses: []string{
+		"[Shot 1] The woman moves at full real-time speed, steps forward with her right foot for one diagonal rising cut, shifts her weight onto the left foot for one straight thrust, then makes one horizontal cut and finishes upright with the peach branch angled down.",
+	}}
+	ps.textProvider = provider
+	project := models.Project{Title: "无锚点测试"}
+	ps.db.Create(&project)
+	scene := models.Scene{ProjectID: project.ID, SceneMode: "武戏", Duration: 8, Content: "上官若琳以桃枝为剑，在桃林中进行单人剑术演练。右脚前踏，完成斜撩、直刺、横削，最后收步直立。"}
+	ps.db.Create(&scene)
+	if _, err := ps.GenerateSceneVideoAction(&scene); err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("calls=%d: an unanchored but valid draft must not cost a repair", provider.calls)
+	}
+}
+
 func TestCombatRepairRetriesWithExactValidationFailures(t *testing.T) {
 	ps := newTestProjectService(t)
 	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SharedAssetReference{}); err != nil {

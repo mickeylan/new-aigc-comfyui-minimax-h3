@@ -118,8 +118,11 @@ func TestH3CombatSkillUsesAssetsInsteadOfWeaponEnumeration(t *testing.T) {
 		t.Fatal(err)
 	}
 	contract := skill.SystemPrompt + skill.PromptTemplate
-	if skill.Version != 7 {
-		t.Fatalf("combat skill version=%d, want 7", skill.Version)
+	if skill.Version != 8 {
+		t.Fatalf("combat skill version=%d, want 8", skill.Version)
+	}
+	if !strings.Contains(contract, "〔剧情节点账本〕") || !strings.Contains(contract, "〔人声账本〕") {
+		t.Fatalf("combat skill missing plot-anchor and voice-ledger rules: %s", contract)
 	}
 	if !strings.Contains(contract, "仅当原文写明对方抵抗或双方对撞时") {
 		t.Fatalf("combat skill still forces a defender response for one-way spells: %s", contract)

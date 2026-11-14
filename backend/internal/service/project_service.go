@@ -2888,7 +2888,19 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	if explicitTimedShotCount > 0 {
 		contentInstruction = "逐段忠实编译Scene显式时间轴中的全部可见事实；不得把具体观察、手部动作、道具状态、步法、视线、说话动作或结束状态概括掉。"
 	}
-	user := fmt.Sprintf("目标时长：%.1f秒。%s场景剧情中已明确存在的每个[Shot N]都必须原序保留，禁止合并或删除。%s\n\n【场景剧情（视觉与时间线最高权威）】\n%s\n\n【SOURCE EVENT LEDGER（逐项覆盖，不是Shot计划）】\n%s\n\n【Shot导演设计（仅供机位、构图、光线等电影化语境；不得覆盖、删减或替换当前Scene事实，即使Scene没有显式时间轴）】\n%s\n\n【结构化对白（仅判断口型时机）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s%s", normalizeSceneDuration(sc.Duration), contentInstruction, actionTask, canonicalSceneContent, sourceEventLedger, shotContext, dialogueContext, strings.Join(refLines, "\n"), sceneBlockingPromptContext(sc)+s.sceneInheritedStateContext(sc)+sceneCallContext(s.db, sc))
+	// Combat requests carry a plot-node ledger; the model anchors each completed node and the
+	// anchors are checked, then stripped, before any normalization sees the text.
+	var plotNodes []string
+	plotLedger := ""
+	if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
+		plotNodes = h3PlotNodes(canonicalSceneContent)
+		var voices []string
+		if len(validDialogues) > 0 {
+			voices = strings.Split(dialogueContext, "\n")
+		}
+		plotLedger = formatH3PlotLedger(plotNodes, voices)
+	}
+	user := fmt.Sprintf("目标时长：%.1f秒。%s场景剧情中已明确存在的每个[Shot N]都必须原序保留，禁止合并或删除。%s\n\n【场景剧情（视觉与时间线最高权威）】\n%s\n\n【SOURCE EVENT LEDGER（逐项覆盖，不是Shot计划）】\n%s\n\n【Shot导演设计（仅供机位、构图、光线等电影化语境；不得覆盖、删减或替换当前Scene事实，即使Scene没有显式时间轴）】\n%s\n\n【结构化对白（仅判断口型时机）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s%s%s", normalizeSceneDuration(sc.Duration), contentInstruction, actionTask, canonicalSceneContent, sourceEventLedger, shotContext, dialogueContext, strings.Join(refLines, "\n"), sceneBlockingPromptContext(sc)+s.sceneInheritedStateContext(sc)+sceneCallContext(s.db, sc), plotLedger)
 	policy, err := NewPromptPolicyService(s.db).Resolve(PromptPolicyContext{ProjectID: sc.ProjectID, SceneID: &sc.ID}, PromptPolicyVideoPolish, system)
 	if err != nil {
 		return "", fmt.Errorf("解析视频提示词策略失败: %w", err)
@@ -2950,8 +2962,27 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 		return useSubjectTags(strings.TrimSpace(visual), refLines)
 	}
 	authoritativeBoundAction := useSubjectTags(authoritativeFallback(), refLines)
+	// anchorIssues is keyed by the prepared text (with and without Subject tags), so only
+	// model output is held to the plot-anchor contract, never a deterministic fallback.
+	// Output with no anchor at all ignored the protocol and cannot be checked: that is
+	// only logged, so it never costs a repair or loses an otherwise valid draft.
+	anchorIssues := map[string][]string{}
 	prepareGeneratedAction := func(value string, allowSubjects bool) string {
-		return normalizeGeneratedH3Action(value, allowSubjects, expectedShotCount, sceneMode, refLines, canonicalSceneContent, authoritativeBoundAction)
+		var issues []string
+		if combatMode {
+			anchored := h3PlotAnchorPattern.MatchString(value)
+			value, issues = checkH3PlotAnchors(value, len(plotNodes))
+			if !anchored && len(plotNodes) > 0 {
+				log.Printf("[h3-prompt-quality] scene=%d notes=%q", sc.ID, "模型未标注剧情锚点，无法校验剧情节点完整性")
+				issues = nil
+			}
+		}
+		prepared := normalizeGeneratedH3Action(value, allowSubjects, expectedShotCount, sceneMode, refLines, canonicalSceneContent, authoritativeBoundAction)
+		if len(issues) > 0 {
+			anchorIssues[prepared] = issues
+			anchorIssues[useSubjectTags(prepared, refLines)] = issues
+		}
+		return prepared
 	}
 	// Hard issues are facts the director cannot override: untranslated prose, broken
 	// Subject/Shot structure, lost characters or source techniques, and speech that
@@ -2999,6 +3030,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 			if issue := h3SoloSwordFidelityIssue(canonicalSceneContent, value); issue != "" {
 				issues = append(issues, issue)
 			}
+			issues = append(issues, anchorIssues[value]...)
 		}
 		issues = append(issues, h3BalancedActionHardIssues(value, expectedShotCount, requireBalancedTimeline, len(validDialogues) > 0)...)
 		issues = append(issues, contract.ShotStructureIssues(expectedShotCount)...)
@@ -3053,7 +3085,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 			shotCountRule = fmt.Sprintf("Produce exactly %d Shot paragraphs in original event order; omit, merge, reorder, retime, or invent nothing.", expectedShotCount)
 		}
 		for attempt := 1; attempt <= 2; attempt++ {
-			repairUser := fmt.Sprintf("Rewrite the draft into concise official English H3 shot prose using the authoritative Scene facts below. %s%s Convert psychology into visible facial or posture changes. For dressing, show physical garment handling and intermediate states instead of jumping to the completed outfit. Visible cause-and-effect mechanics are executable facts, not optional background: retain every stated trigger, object appearance, state transition, force interaction, propagation and environmental result in source order. For combat or spell clashes, motion proceeds at full real-time speed; include only the responses and outcomes actually stated in the authoritative source, never invent a defender, counterattack or impact. No slow motion, bullet time, hovering display, prolonged charging, or lingering pause. Output no dialogue, <d>, headings, Markdown or explanation. End with a complete sentence.\n\nEXACT FAILURES TO FIX:\n%s\n\nAUTHORITATIVE SCENE FACTS:\n%s\n\nINCOMPLETE DRAFT TO REPAIR:\n%s", shotCountRule, balanceRule, actionTrustIssues(failedDraft), authoritativeFacts, failedDraft)
+			repairUser := fmt.Sprintf("Rewrite the draft into concise official English H3 shot prose using the authoritative Scene facts below. %s%s Convert psychology into visible facial or posture changes. For dressing, show physical garment handling and intermediate states instead of jumping to the completed outfit. Visible cause-and-effect mechanics are executable facts, not optional background: retain every stated trigger, object appearance, state transition, force interaction, propagation and environmental result in source order. For combat or spell clashes, motion proceeds at full real-time speed; include only the responses and outcomes actually stated in the authoritative source, never invent a defender, counterattack or impact. No slow motion, bullet time, hovering display, prolonged charging, or lingering pause. Output no dialogue, <d>, headings, Markdown or explanation. End with a complete sentence.\n\nEXACT FAILURES TO FIX:\n%s\n\nAUTHORITATIVE SCENE FACTS:\n%s\n\nINCOMPLETE DRAFT TO REPAIR:\n%s%s", shotCountRule, balanceRule, actionTrustIssues(failedDraft), authoritativeFacts, failedDraft, plotLedger)
 			repaired, repairErr := chatAction(repairUser)
 			if repairErr != nil {
 				continue
@@ -3096,7 +3128,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 			failures := make([]string, 0, 3)
 			repairedOK := false
 			for attempt := 1; attempt <= 3; attempt++ {
-				repairRequest := combatActionRepairRequestWithIssues(repairSource, failedDraft, sc.Duration, failure, expectedShotCount)
+				repairRequest := combatActionRepairRequestWithIssues(repairSource, failedDraft, sc.Duration, failure, expectedShotCount) + plotLedger
 				repaired, repairErr := chatAction(repairRequest)
 				if repairErr != nil {
 					failures = append(failures, fmt.Sprintf("第%d次调用失败：%v", attempt, repairErr))
