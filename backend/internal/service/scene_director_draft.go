@@ -1867,6 +1867,15 @@ func resolveDirectorSpecialtyOverride(requested string, scene *models.Scene) (st
 	return code, requested, true
 }
 
+type sceneDirectorDraftRequest struct {
+	Brief            string                     `json:"brief"`
+	Requirements     string                     `json:"requirements"`
+	Mode             string                     `json:"mode"`
+	Specialty        string                     `json:"specialty"`
+	TargetShotCount  int                        `json:"target_shot_count"`
+	CombatReferences []CombatReferenceSelection `json:"combat_references"`
+}
+
 func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	scene, ok := s.loadScene(c)
 	if !ok {
@@ -1876,18 +1885,17 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "当前文生文 provider 未配置"})
 		return
 	}
-	var req struct {
-		Brief            string                     `json:"brief"`
-		Requirements     string                     `json:"requirements"`
-		Mode             string                     `json:"mode"`
-		Specialty        string                     `json:"specialty"`
-		TargetShotCount  int                        `json:"target_shot_count"`
-		CombatReferences []CombatReferenceSelection `json:"combat_references"`
-	}
+	var req sceneDirectorDraftRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	c.JSON(s.generateSceneDirectorDraft(scene, req))
+}
+
+// generateSceneDirectorDraft is shared by the interactive endpoint and the episode
+// shot-split batch, so both paths get identical validation, repair and snapshot.
+func (s *Service) generateSceneDirectorDraft(scene *models.Scene, req sceneDirectorDraftRequest) (int, gin.H) {
 	req.Brief, req.Requirements = strings.TrimSpace(req.Brief), strings.TrimSpace(req.Requirements)
 	generationContent := sceneDialogueGenerationContent(scene)
 	if req.Brief == "" {
@@ -1897,32 +1905,27 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		req.Requirements = strings.TrimSpace(req.Requirements + fmt.Sprintf("\n用户已排除%d条引号误识别，不得当作发声。", excludedCount))
 	}
 	if req.Brief == "" || len([]rune(req.Brief)) > 4000 || len([]rune(req.Requirements)) > 2000 {
-		c.JSON(400, gin.H{"error": "请填写有效的场景概况（最多4000字）和补充要求（最多2000字）"})
-		return
+		return 400, gin.H{"error": "请填写有效的场景概况（最多4000字）和补充要求（最多2000字）"}
 	}
 	// Director generation is an explicit write operation: materialize only unambiguous
 	// speech from Scene.Content before taking the snapshot used by generation and save.
 	if err := s.DB.Transaction(func(tx *gorm.DB) error { return syncExplicitSceneSpeech(tx, scene) }); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "同步场景正文台词失败，请稍后重试"})
-		return
+		return http.StatusInternalServerError, gin.H{"error": "同步场景正文台词失败，请稍后重试"}
 	}
 	assets, err := s.sceneAssetBible(scene)
 	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
+		return 500, gin.H{"error": err.Error()}
 	}
 	operation, instruction := "director-scene-draft", "生成完整Scene导演方案草稿；只预览，不保存。"
 	combatReferenceText := ""
 	var combatReferenceAudit []CombatReferenceAudit
 	if req.Mode == "combat_design" {
 		if s.CombatReferences == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "战斗资料库未加载"})
-			return
+			return http.StatusServiceUnavailable, gin.H{"error": "战斗资料库未加载"}
 		}
 		bundle, compileErr := s.CombatReferences.CompileSelection(req.CombatReferences, 30000)
 		if compileErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": compileErr.Error()})
-			return
+			return http.StatusBadRequest, gin.H{"error": compileErr.Error()}
 		}
 		combatReferenceText, combatReferenceAudit = bundle.Text, bundle.Audit
 		operation = "fight-video-action-design"
@@ -1932,8 +1935,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	authoritativeCharacterList := []string{}
 	dialogueDuration := 0.0
 	if err := s.DB.Where("scene_id = ? AND project_id = ?", scene.ID, scene.ProjectID).Order("`order` ASC, `id` ASC").Find(&dialogues).Error; err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
+		return 500, gin.H{"error": err.Error()}
 	}
 	dialogues = authoritativeSceneDialogues(dialogues)
 	specialtyOperation, specialty := directorSceneSpecialty(scene, dialogues)
@@ -1956,12 +1958,10 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 			var listenerErr error
 			authoritativeCharacterList, _, listenerErr = authoritativeSceneListenerCharacters(s.DB, scene)
 			if listenerErr != nil {
-				c.JSON(500, gin.H{"error": listenerErr.Error()})
-				return
+				return 500, gin.H{"error": listenerErr.Error()}
 			}
 			if len(dialogues) == 0 {
-				c.JSON(400, gin.H{"error": "当前Scene没有可用于拆镜的结构化对白"})
-				return
+				return 400, gin.H{"error": "当前Scene没有可用于拆镜的结构化对白"}
 			}
 			dialogueDuration = modelDialoguesMinDuration(dialogues)
 			instruction = dialogueRhythmDirectorInstruction(dialogues, authoritativeCharacterList...)
@@ -1990,8 +1990,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 	}
 	output, err := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出完整合法JSON，不要Markdown或解释。", instruction, map[string]string{"scene_facts": generationContent, "asset_context": assets, "dialogues": dialogueContext, "brief": req.Brief, "requirements": req.Requirements, "combat_references": combatReferenceText, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration)), "target_shot_count": strconv.Itoa(req.TargetShotCount)})
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-		return
+		return http.StatusBadGateway, gin.H{"error": err.Error()}
 	}
 	validateDraft := func(raw string) (*sceneDirectorDraft, error) {
 		// Every director mode describes internal Scene cut points; standalone 3–15s
@@ -2054,8 +2053,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		repaired, repairErr := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出修复后的完整合法JSON，不要Markdown或解释。", repairInstruction, map[string]string{"scene_facts": scene.Content, "asset_context": assets, "dialogues": dialogueContext, "brief": req.Brief, "requirements": repairRequirements, "combat_references": combatReferenceText, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration)), "target_shot_count": strconv.Itoa(req.TargetShotCount)})
 		if repairErr != nil {
 			serverRepairs = append(serverRepairs, serverRepair{Stage: "model_repair", Reason: initialValidationError, Result: "provider_error: " + repairErr.Error()})
-			c.JSON(http.StatusBadGateway, gin.H{"error": "AI导演方案自动修复失败: " + repairErr.Error(), "raw_output": output, "server_repairs": serverRepairs})
-			return
+			return http.StatusBadGateway, gin.H{"error": "AI导演方案自动修复失败: " + repairErr.Error(), "raw_output": output, "server_repairs": serverRepairs}
 		}
 		draft, err = validateDraft(repaired)
 		repairResult := "accepted"
@@ -2080,8 +2078,7 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		}
 	}
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "AI导演方案无法解析为可编辑镜头: " + err.Error(), "raw_output": output, "server_repairs": serverRepairs})
-		return
+		return http.StatusBadGateway, gin.H{"error": "AI导演方案无法解析为可编辑镜头: " + err.Error(), "raw_output": output, "server_repairs": serverRepairs}
 	}
 	response := gin.H{"draft": draft, "director_review": buildDirectorLogicReviewWithDialogues(draft, dialogues), "skill_code": operation, "director_specialty": specialty, "director_specialty_source": specialtySource, "provider_id": s.TextProviderFact.Name(), "audited": true, "mode": req.Mode, "dialogue_duration": dialogueDuration, "requested_shot_count": req.TargetShotCount, "draft_warnings": dialogueDraftWarnings(draft, req.TargetShotCount), "server_repairs": serverRepairs}
 	if req.Mode == "combat_design" {
@@ -2092,5 +2089,5 @@ func (s *Service) HandleGenerateSceneDirectorDraft(c *gin.Context) {
 		response["dialogue_review"] = buildDialogueRhythmReview(draft, dialogues)
 	}
 	response["dialogue_snapshot"] = dialogueSnapshotToken(dialogues)
-	c.JSON(200, response)
+	return 200, response
 }

@@ -62,6 +62,9 @@ type Service struct {
 	ScriptRevisions           *ScriptRevisionService           // 剧本安全快照
 	GeneratedMedia            *GeneratedMediaHistoryService    // 统一生成历史与安全清理
 	CombatReferences          *CombatReferenceService          // 战斗场景、方案、招式、技能和剧本确定性检索
+
+	shotSplitDraftFn  func(*models.Scene) (int, gin.H) // 整集拆镜的导演草稿生成；测试可替换
+	shotSplitLaunchFn func(batchID uint)               // 整集拆镜的后台启动；测试可替换为同步执行
 }
 
 func New(cfg *config.Config, db *gorm.DB) *Service {
@@ -160,6 +163,9 @@ func (s *Service) Start() error {
 	}
 	if err := s.Projects.RecoverDialogueSynthesisBatches(); err != nil {
 		log.Printf("[dialogue-batch] recover batches failed: %v", err)
+	}
+	if err := s.RecoverShotSplitBatches(); err != nil {
+		log.Printf("[shot-split] recover batches failed: %v", err)
 	}
 	if err := InitSystemTemplates(s.DB, s.Cfg.TemplatesDir); err != nil {
 		log.Printf("[templates] seed failed: %v", err)

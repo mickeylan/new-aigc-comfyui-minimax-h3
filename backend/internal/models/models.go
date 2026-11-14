@@ -584,6 +584,45 @@ type DialogueSynthesisItem struct {
 	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
+// ShotSplitBatch is a durable episode-scoped plot shot split. Revision is a write
+// fence: pause/resume/cancel bump it so a superseded runner cannot claim more scenes.
+type ShotSplitBatch struct {
+	ID           uint       `gorm:"primaryKey" json:"id"`
+	ProjectID    uint       `gorm:"column:project_id;index:idx_shot_split_batch_episode" json:"project_id"`
+	EpisodeN     int        `gorm:"column:episode_n;index:idx_shot_split_batch_episode" json:"episode_n"`
+	Generation   uint       `gorm:"default:0" json:"generation"`
+	Status       string     `gorm:"size:32;default:queued;index" json:"status"` // queued/running/paused/completed/failed/cancelled
+	Revision     int        `gorm:"default:1" json:"revision"`
+	TotalItems   int        `gorm:"column:total_items;default:0" json:"total_items"`
+	SavedItems   int        `gorm:"column:saved_items;default:0" json:"saved_items"`
+	SkippedItems int        `gorm:"column:skipped_items;default:0" json:"skipped_items"`
+	FailedItems  int        `gorm:"column:failed_items;default:0" json:"failed_items"`
+	Error        string     `gorm:"type:text" json:"error"`
+	StartedAt    *time.Time `gorm:"column:started_at" json:"started_at,omitempty"`
+	FinishedAt   *time.Time `gorm:"column:finished_at" json:"finished_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+// ShotSplitItem is one Scene of a shot split batch. ContentHash is the Scene.Content
+// the draft was generated from; a mismatch at save time discards the draft.
+type ShotSplitItem struct {
+	ID          uint       `gorm:"primaryKey" json:"id"`
+	BatchID     uint       `gorm:"column:batch_id;index;uniqueIndex:idx_shot_split_item" json:"batch_id"`
+	SceneID     uint       `gorm:"column:scene_id;index;uniqueIndex:idx_shot_split_item" json:"scene_id"`
+	ItemOrder   int        `gorm:"column:item_order" json:"order"`
+	Status      string     `gorm:"size:32;default:queued;index" json:"status"` // queued/running/saved/skipped/failed/cancelled
+	SkipReason  string     `gorm:"column:skip_reason;size:255" json:"skip_reason"`
+	ContentHash string     `gorm:"column:content_hash;size:64" json:"content_hash"`
+	Attempts    int        `gorm:"default:0" json:"attempts"`
+	ShotCount   int        `gorm:"column:shot_count;default:0" json:"shot_count"`
+	Error       string     `gorm:"type:text" json:"error"`
+	StartedAt   *time.Time `gorm:"column:started_at" json:"started_at,omitempty"`
+	FinishedAt  *time.Time `gorm:"column:finished_at" json:"finished_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
 // DialogueAudioCandidate retains immutable local/cloud speech takes while Dialogue.AudioFile remains the selected production projection.
 // SceneAudioCandidate is an immutable, review-gated continuous track derived from accepted Dialogue takes.
 // SourceHash binds ordered Dialogue text/timing/audio-candidate identities so stale mixes cannot feed H3.

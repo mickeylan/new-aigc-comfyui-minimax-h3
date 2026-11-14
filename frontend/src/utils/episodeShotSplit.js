@@ -1,7 +1,7 @@
-// Plot-driven Shot splitting for a whole episode reuses the per-Scene director draft
-// endpoint, so every Scene passes the same validation and dialogue snapshot as a manual
-// draft. Saved Shots are an editable reference for H3; Scenes the user already directed,
-// produced, or is generating are never touched.
+// Plot-driven Shot splitting for a whole episode runs as a durable backend batch that
+// reuses the per-Scene director draft, so every Scene passes the same validation and
+// dialogue snapshot as a manual draft. Saved Shots are an editable reference for H3;
+// Scenes the user already directed, produced, or is generating are never touched.
 const workingStatuses = ['image_pending', 'video_pending', 'video_creating', 'video_running']
 
 export function episodeShotSplitSkipReason(scene) {
@@ -16,30 +16,31 @@ export function directorDraftShotPayload(draft) {
   return (draft?.shots || []).map(({ checks, ...shot }) => ({ ...shot, speech_presentation: shot.speech_presentation || '', listener_character: shot.listener_character || '' }))
 }
 
-// Scenes run one at a time: each draft is one or two model calls, and a failure is
-// recorded per Scene instead of aborting the episode.
-export async function splitEpisodeShots({ scenes, generate, save, onProgress = () => {}, cancelled = () => false }) {
-  const result = { saved: [], skipped: [], failed: [], cancelled: false }
-  const queue = []
-  for (const scene of scenes || []) {
-    const reason = episodeShotSplitSkipReason(scene)
-    if (reason) result.skipped.push({ scene, reason })
-    else queue.push(scene)
+export function shotSplitBatchActive(batch) {
+  return ['queued', 'running'].includes(batch?.status)
+}
+
+export function shotSplitBatchOpen(batch) {
+  return shotSplitBatchActive(batch) || batch?.status === 'paused'
+}
+
+const statusLabels = { queued: '排队中', running: '拆镜中', paused: '已暂停', completed: '已完成', failed: '部分失败', cancelled: '已取消' }
+
+export function shotSplitStatusLabel(status) {
+  return statusLabels[status] || status || ''
+}
+
+// Groups batch items by outcome and attaches the Scene for display; Scenes that were
+// regenerated or deleted since the batch started still show by id.
+export function shotSplitReport(detail, scenes = []) {
+  const byId = new Map((scenes || []).map(scene => [scene.id, scene]))
+  const report = { saved: [], skipped: [], failed: [], pending: [] }
+  for (const item of detail?.items || []) {
+    const row = { item, scene: byId.get(item.scene_id) || { id: item.scene_id, order: item.order, title: '' } }
+    if (item.status === 'saved') report.saved.push(row)
+    else if (item.status === 'skipped') report.skipped.push(row)
+    else if (item.status === 'failed') report.failed.push(row)
+    else if (item.status === 'queued' || item.status === 'running') report.pending.push(row)
   }
-  for (let i = 0; i < queue.length; i++) {
-    if (cancelled()) { result.cancelled = true; break }
-    const scene = queue[i]
-    onProgress({ done: i, total: queue.length, scene })
-    try {
-      const { data } = await generate(scene)
-      const shots = directorDraftShotPayload(data?.draft)
-      if (!shots.length) throw new Error('导演草稿没有镜头')
-      await save(scene, shots, data?.dialogue_snapshot || '')
-      result.saved.push({ scene, count: shots.length })
-    } catch (error) {
-      result.failed.push({ scene, error })
-    }
-  }
-  onProgress({ done: result.saved.length + result.failed.length, total: queue.length, scene: null })
-  return result
+  return report
 }

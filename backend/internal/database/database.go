@@ -91,6 +91,8 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.VoiceStudioSRTImport{},
 		&models.DialogueSynthesisBatch{},
 		&models.DialogueSynthesisItem{},
+		&models.ShotSplitBatch{},
+		&models.ShotSplitItem{},
 		&models.DialogueAudioCandidate{},
 		&models.SceneAudioCandidate{},
 		&models.Skill{},

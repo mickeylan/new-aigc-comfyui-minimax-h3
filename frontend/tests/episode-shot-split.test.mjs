@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { directorDraftShotPayload, episodeShotSplitSkipReason, splitEpisodeShots } from '../src/utils/episodeShotSplit.js'
+import { directorDraftShotPayload, episodeShotSplitSkipReason, shotSplitBatchActive, shotSplitBatchOpen, shotSplitReport, shotSplitStatusLabel } from '../src/utils/episodeShotSplit.js'
 
 const scene = (id, extra = {}) => ({ id, content: `第${id}场正文`, status: 'pending', shot_count: 0, ...extra })
 
@@ -21,43 +21,42 @@ test('草稿镜头去掉审计字段并补齐对白呈现字段', () => {
   ])
 })
 
-test('逐场生成并携带台词快照保存；单场失败不中断整集', async () => {
-  const saves = []
-  const progress = []
-  const result = await splitEpisodeShots({
-    scenes: [scene(1), scene(2, { shot_count: 2 }), scene(3), scene(4)],
-    generate: async sc => {
-      if (sc.id === 3) throw new Error('provider failed')
-      return { data: { draft: { shots: [{ description: `${sc.id}-1` }, { description: `${sc.id}-2` }] }, dialogue_snapshot: `snap-${sc.id}` } }
-    },
-    save: async (sc, shots, snapshot) => { saves.push([sc.id, shots.length, snapshot]) },
-    onProgress: p => progress.push([p.done, p.total]),
-  })
-  assert.deepEqual(saves, [[1, 2, 'snap-1'], [4, 2, 'snap-4']])
-  assert.deepEqual(result.saved.map(r => r.scene.id), [1, 4])
-  assert.deepEqual(result.skipped.map(r => [r.scene.id, r.reason]), [[2, '已有导演Shot']])
-  assert.deepEqual(result.failed.map(r => [r.scene.id, r.error.message]), [[3, 'provider failed']])
-  assert.deepEqual(progress, [[0, 3], [1, 3], [2, 3], [3, 3]])
+test('后端拆镜批次按结果分组并关联场景；已删除场景仍按id显示', () => {
+  const detail = { batch: { id: 9, status: 'running' }, items: [
+    { id: 1, scene_id: 1, order: 1, status: 'saved', shot_count: 2 },
+    { id: 2, scene_id: 2, order: 2, status: 'skipped', skip_reason: '已有导演Shot' },
+    { id: 3, scene_id: 3, order: 3, status: 'failed', error: 'provider failed' },
+    { id: 4, scene_id: 4, order: 4, status: 'running' },
+    { id: 5, scene_id: 99, order: 5, status: 'queued' },
+    { id: 6, scene_id: 6, order: 6, status: 'cancelled' },
+  ] }
+  const report = shotSplitReport(detail, [scene(1), scene(2), scene(3), scene(4)])
+  assert.deepEqual(report.saved.map(r => [r.scene.id, r.item.shot_count]), [[1, 2]])
+  assert.deepEqual(report.skipped.map(r => r.item.skip_reason), ['已有导演Shot'])
+  assert.deepEqual(report.failed.map(r => r.item.error), ['provider failed'])
+  assert.deepEqual(report.pending.map(r => r.scene.id), [4, 99])
+  assert.equal(report.pending[1].scene.order, 5)
 })
 
-test('空草稿记为失败且不保存；取消后不再请求', async () => {
-  let saves = 0
-  const empty = await splitEpisodeShots({ scenes: [scene(1)], generate: async () => ({ data: { draft: { shots: [] } } }), save: async () => { saves++ } })
-  assert.equal(saves, 0)
-  assert.equal(empty.failed[0].error.message, '导演草稿没有镜头')
-  let calls = 0
-  let stop = false
-  const stopped = await splitEpisodeShots({ scenes: [scene(1), scene(2)], generate: async () => { calls++; stop = true; return { data: { draft: { shots: [{ description: 'A' }] } } } }, save: async () => {}, cancelled: () => stop })
-  assert.equal(calls, 1)
-  assert.equal(stopped.cancelled, true)
+test('拆镜批次状态：只有排队/运行中需要轮询，暂停仍占用入口', () => {
+  assert.equal(shotSplitBatchActive({ status: 'running' }), true)
+  assert.equal(shotSplitBatchActive({ status: 'paused' }), false)
+  assert.equal(shotSplitBatchOpen({ status: 'paused' }), true)
+  assert.equal(shotSplitBatchOpen({ status: 'failed' }), false)
+  assert.equal(shotSplitBatchOpen(null), false)
+  assert.equal(shotSplitStatusLabel('paused'), '已暂停')
 })
 
-test('分镜工作区提供整集按剧情拆镜入口并复用单场导演草稿接口', () => {
+test('分镜工作区通过后端批次按剧情拆镜并轮询进度，不再在浏览器内逐场循环', () => {
   const source = readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
-  assert.match(source, /splitEpisodeShots\(/)
-  assert.match(source, /api\.sceneDirectorDraft\(id\(\), sc\.id, \{ mode: 'standard' \}\)/)
-  assert.match(source, /api\.replaceSceneShots\(id\(\), sc\.id, shots, snapshot\)/)
+  assert.match(source, /api\.createShotSplitBatch\(id\(\), activeEpN\.value\)/)
+  assert.match(source, /api\.getShotSplitBatch\(/)
+  assert.match(source, /api\.controlShotSplitBatch\(id\(\), batch\.episode_n, batch\.id, action\)/)
+  assert.match(source, /clearTimeout\(shotSplitTimer\)/)
+  assert.doesNotMatch(source, /splitEpisodeShots\(/)
   assert.match(source, /按剧情拆镜/)
+  const api = readFileSync(new URL('../src/api/index.js', import.meta.url), 'utf8')
+  assert.match(api, /\/episodes\/\$\{number\}\/shot-split\/\$\{bid\}\/\$\{action\}/)
 })
 
 test('剪辑台视觉节拍复用导演草稿接口并携带台词快照保存', () => {
