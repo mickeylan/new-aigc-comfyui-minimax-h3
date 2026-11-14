@@ -236,7 +236,7 @@ func (s *ProjectService) currentSceneAudioSnapshot(sc *models.Scene, dialogues [
 		}
 		snapshot.Sources = append(snapshot.Sources, sceneAudioSource{DialogueID: dialogue.ID, CandidateID: rows[0].ID, InputHash: rows[0].InputHash, File: rows[0].File, FileSHA256: rows[0].FileSHA256, FileSize: rows[0].FileSize, Position: dialogue.Position, Offset: dialogue.Offset, Speed: dialogueSpeed(dialogue), Pitch: dialogue.Pitch, Volume: dialogueVolume(dialogue), Duration: rows[0].Duration})
 	}
-	cursor := 0.4
+	cursor := dialogueOpeningClosingMargin
 	for i := range snapshot.Sources {
 		source := &snapshot.Sources[i]
 		if source.Position > 0 {
@@ -247,7 +247,7 @@ func (s *ProjectService) currentSceneAudioSnapshot(sc *models.Scene, dialogues [
 		if source.TimelineEnd > snapshot.SceneDuration+0.001 {
 			return snapshot, "", fmt.Errorf("Dialogue %d 音频结束于 %.3f 秒，超过Scene时长 %.3f 秒", source.DialogueID, source.TimelineEnd, snapshot.SceneDuration)
 		}
-		cursor = source.TimelineEnd + 0.35
+		cursor = source.TimelineEnd + dialogueTimelineGap
 	}
 	shots, err := s.sceneAudioShotContract(sc, dialogues, snapshot.Sources)
 	if err != nil {

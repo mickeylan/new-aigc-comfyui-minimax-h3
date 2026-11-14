@@ -19,6 +19,9 @@ const (
 	maxChineseCharsPerSecond     = 10.0
 	dialogueOpeningClosingMargin = 0.4
 	speakerChangePause           = 0.15
+	// Silent gap kept after each placed line on the dub/export timeline. It matches the
+	// opening margin so a line never butts against the previous one.
+	dialogueTimelineGap = 0.4
 	// One readable on-screen action needs about 2.5 seconds in a continuous H3 shot.
 	actionBeatSeconds = 2.5
 	// A sparse scene may breathe a little past its content load, never to an arbitrary length.

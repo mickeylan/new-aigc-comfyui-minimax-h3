@@ -10365,7 +10365,7 @@ func (s *ProjectService) loadReadyDialogues(tx *gorm.DB, sceneIDs []uint) ([]mod
 }
 
 // buildDubTimeline 构建该集对白时间轴：
-// 场景按顺序排布（起点 = 前序视频时长累加），场景内对白按序排列（句间 0.35s 间隔）。
+// 场景按顺序排布（起点 = 前序视频时长累加），场景内对白按序排列（句间 dialogueTimelineGap=0.4s 间隔）。
 // 未就绪对白不混音，但仍以兜底时长占据原时间位置，避免后续对白前移。
 func (s *ProjectService) buildDubTimeline(p *models.Project, episodeN int, sceneIDs []uint, videoDurs []sceneVideo) ([]dubSegment, float64, bool, error) {
 	ready, skipped, err := s.loadReadyDialogues(s.db, sceneIDs)
@@ -10401,7 +10401,7 @@ func (s *ProjectService) buildDubTimeline(p *models.Project, episodeN int, scene
 		byScene[d.SceneID] = append(byScene[d.SceneID], d)
 	}
 
-	const gap = 0.35
+	const gap = dialogueTimelineGap
 	segs := make([]dubSegment, 0, len(dubs))
 	global := 0.0
 	sceneDur := make([]float64, len(sceneIDs))
@@ -10417,7 +10417,7 @@ func (s *ProjectService) buildDubTimeline(p *models.Project, episodeN int, scene
 			global += sceneDur[i]
 			continue
 		}
-		cursor := sceneStart + 0.4
+		cursor := sceneStart + dialogueOpeningClosingMargin
 		for _, d := range list {
 			if d.Position > 0 {
 				cursor = sceneStart + d.Position
@@ -10899,14 +10899,14 @@ func (s *ProjectService) EditorSubtitleTimelineRaw(p *models.Project, scenes []m
 		}
 		sceneDur[i] = d
 	}
-	const gap = 0.35
+	const gap = dialogueTimelineGap
 	for i, sc := range scenes {
 		list := byScene[sc.ID]
 		if len(list) == 0 {
 			global += sceneDur[i]
 			continue
 		}
-		cursor := global + 0.4
+		cursor := global + dialogueOpeningClosingMargin
 		if !ready {
 			seg := sceneDur[i] / float64(len(list))
 			for _, d := range list {
