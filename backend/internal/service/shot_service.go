@@ -210,7 +210,7 @@ func validateShot(shot *models.Shot) error {
 	}
 	// A persisted Shot is an internal cut point of its parent Scene, not an
 	// independently submitted video template. Keep short cuts intact; standalone
-	// Scene execution remains responsible for its 3–15 second template contract.
+	// Scene execution remains responsible for its 4–15 second template contract.
 	if shot.Duration <= 0 || shot.Duration > maxShotDuration || math.IsNaN(shot.Duration) || math.IsInf(shot.Duration, 0) {
 		return fmt.Errorf("每镜时长必须大于 0 且不超过 %.0f 秒", maxShotDuration)
 	}

@@ -7,7 +7,7 @@ export const MODEL_LIMIT_DEFAULTS = Object.freeze({
   reaction_shot_min_seconds: 2,
   combat_shot_max_seconds: 6,
   long_shot_seconds: 10,
-  scene_min_seconds: 3,
+  scene_min_seconds: 4,
   scene_max_seconds: 60,
   h3_generation_max_seconds: 15,
   h3_high_risk_seconds: 30,

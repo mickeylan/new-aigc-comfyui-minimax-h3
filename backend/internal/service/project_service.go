@@ -1946,14 +1946,14 @@ func configuredH3GenerationDuration(db *gorm.DB) float64 {
 }
 
 // normalizeSceneDuration only protects malformed legacy values. A Scene may be a
-// long H3 generation unit; internal director Shots and dialogue materialization
-// retain their independent 3–15 second limits.
+// long H3 generation unit; internal director Shots keep their own limits. A legacy
+// 3 s Scene stays 3 s here; preflight reports it as below the 4 s generation minimum.
 func normalizeSceneDuration(duration float64) float64 {
 	if duration == 0 {
 		return 5
 	}
-	if duration < minSceneVideoDuration {
-		return minSceneVideoDuration
+	if duration < minLegacySceneDuration {
+		return minLegacySceneDuration
 	}
 	if duration > maxLongSceneVideoDuration {
 		return maxLongSceneVideoDuration
@@ -10843,7 +10843,7 @@ func buildEpisodePreflight(scenes []models.Scene, shotTotals map[uint]float64, c
 			unknownDialogue = append(unknownDialogue, dialogue.SceneID)
 		}
 	}
-	appendCheck("scene_duration", fmt.Sprintf("所有Scene时长均为3–%.0f秒", maxLongSceneVideoDuration), fmt.Sprintf("时长不在3–%.0f秒", maxLongSceneVideoDuration), invalidDuration)
+	appendCheck("scene_duration", fmt.Sprintf("所有Scene时长均为%.0f–%.0f秒", minSceneVideoDuration, maxLongSceneVideoDuration), fmt.Sprintf("时长不在%.0f–%.0f秒（短于%.0f秒请与相邻Scene合并）", minSceneVideoDuration, maxLongSceneVideoDuration, minSceneVideoDuration), invalidDuration)
 	shotTimingText := "内部Shot配时与Scene一致"
 	if len(mismatch) > 0 {
 		shotTimingText = fmt.Sprintf("%d个Scene的内部Shot合计与Scene时长不同，仅作配时建议，不阻止生成", len(mismatch))

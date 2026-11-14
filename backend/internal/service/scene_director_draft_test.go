@@ -164,6 +164,40 @@ func TestDirectorLogicReviewAuditsDialoguePlacement(t *testing.T) {
 	}
 }
 
+// Speech capacity (director rules SND-01) only advises: a crowded Shot never blocks,
+// a same-speaker run is one talk unit, and narration is not a speaking role.
+func TestDirectorLogicReviewAdvisesShotSpeechCapacity(t *testing.T) {
+	dialogues := []models.Dialogue{
+		{Character: "甲", Text: "站住。"}, {Character: "甲", Text: "别走。"},
+		{Character: "乙", Text: "凭什么？"}, {Character: "丙", Text: "都住手！"},
+		{Character: "旁白", SpeechType: "narration", Text: "夜色更深。"},
+		{Character: "乙", Text: "好。"}, {Character: "甲", Text: "走吧。"},
+	}
+	draft := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{
+		{Duration: 6, DirectorIntent: "a", CutReason: "a", Dialogue: "站住。别走。凭什么？都住手！"},
+		{Duration: 6, DirectorIntent: "b", CutReason: "b", Dialogue: "夜色更深。好。走吧。"},
+	}}
+	review := buildDirectorLogicReviewWithDialogues(draft, dialogues)
+	first := strings.Join(review[0].Advisories, "；")
+	if !strings.Contains(first, "本镜有3名不同发声角色（甲、乙、丙），超过建议的2人") {
+		t.Fatalf("three speakers in one Shot must be advised: %+v", review[0])
+	}
+	if strings.Contains(first, "独立台词单元") {
+		t.Fatalf("甲's consecutive lines are one unit, so 3 units must not be advised: %+v", review[0])
+	}
+	if len(review[0].BlockingIssues) != 0 {
+		t.Fatalf("speech capacity must never block: %+v", review[0])
+	}
+	if second := strings.Join(review[1].Advisories, "；"); strings.Contains(second, "发声角色") || strings.Contains(second, "台词单元") {
+		t.Fatalf("narration plus two speakers is within capacity: %+v", review[1])
+	}
+	alternating := []models.Dialogue{{Character: "甲", Text: "一。"}, {Character: "乙", Text: "二。"}, {Character: "甲", Text: "三。"}, {Character: "乙", Text: "四。"}}
+	single := &sceneDirectorDraft{Shots: []sceneDirectorDraftShot{{Duration: 6, DirectorIntent: "a", CutReason: "a", Dialogue: "一。二。三。四。"}}}
+	if got := strings.Join(buildDirectorLogicReviewWithDialogues(single, alternating)[0].Advisories, "；"); !strings.Contains(got, "本镜约有4个独立台词单元，超过建议的3个") {
+		t.Fatalf("four alternating turns must be advised: %s", got)
+	}
+}
+
 func TestSceneDirectorDraftSubjectActionAlias(t *testing.T) {
 	for _, preserve := range []bool{false, true} {
 		for _, duplicate := range []bool{false, true} {

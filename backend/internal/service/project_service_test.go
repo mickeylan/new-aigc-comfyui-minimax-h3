@@ -66,7 +66,7 @@ func (s *sequenceTextProvider) Chat(_, user string) (string, error) {
 
 func TestScriptFromPlanPromptMatchesStoryboardSchema(t *testing.T) {
 	prompt := scriptFromPlanSystemPrompt(180, 25)
-	for _, field := range []string{"visual_bible", "duration", "3~15", "180", "25"} {
+	for _, field := range []string{"visual_bible", "duration", "4~15", "180", "25"} {
 		if !strings.Contains(prompt, field) {
 			t.Fatalf("方案转分镜提示词缺少 %q", field)
 		}
@@ -373,7 +373,7 @@ func TestRebalanceScriptDurationsMeetsTarget(t *testing.T) {
 	}
 	var total float64
 	for _, scene := range res.Scenes {
-		if scene.Duration < 3 || scene.Duration > 15 {
+		if scene.Duration < minSceneVideoDuration || scene.Duration > 15 {
 			t.Fatalf("duration out of range: %v", scene.Duration)
 		}
 		total += scene.Duration
@@ -389,7 +389,7 @@ func TestValidateScriptResultAcceptsFeasibleSceneCountBelowTargetTolerance(t *te
 		res.Scenes[i] = scriptScene{Content: "动作", ImagePrompt: "画面", Duration: 180.0 / 17}
 	}
 	if err := validateScriptResult(res, 180.0, 25); err != nil {
-		t.Fatalf("17 scenes can carry 180 seconds within 3-15 seconds each: %v", err)
+		t.Fatalf("17 scenes can carry 180 seconds within 4-15 seconds each: %v", err)
 	}
 }
 
@@ -760,7 +760,8 @@ func TestValidateScriptResultAndDuration(t *testing.T) {
 	if got := normalizeSceneDuration(0); got != 5 {
 		t.Fatalf("默认时长 = %v", got)
 	}
-	if got := normalizeSceneDuration(1); got != 3 {
+	// Legacy 3 s Scenes are kept as-is; preflight flags them below the 4 s minimum.
+	if got := normalizeSceneDuration(1); got != minLegacySceneDuration {
 		t.Fatalf("最小时长 = %v", got)
 	}
 	if got := normalizeSceneDuration(20); got != 20 {

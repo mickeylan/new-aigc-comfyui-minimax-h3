@@ -109,7 +109,7 @@ func fragmentsContinueDialogue(before, after []dialogueFragment) bool {
 
 // moveNativeCutToSentenceBoundary returns the start of the next group. When the incoming
 // Shot continues a Dialogue from the current group, trailing Shots move forward to the
-// latest boundary no Dialogue crosses, keeping the current group >=3s and the next <=15s.
+// latest boundary no Dialogue crosses, keeping the current group >=4s and the next <=15s.
 // If no such boundary exists the original cut is kept.
 func moveNativeCutToSentenceBoundary(current *nativeShotGroup, incoming []dialogueFragment, incomingDuration float64) nativeShotGroup {
 	last := len(current.Shots) - 1
@@ -132,7 +132,7 @@ func moveNativeCutToSentenceBoundary(current *nativeShotGroup, incoming []dialog
 	return nativeShotGroup{}
 }
 
-// validateNativeShotGroups enforces the standalone 3-second Scene minimum on
+// validateNativeShotGroups enforces the standalone 4-second Scene minimum on
 // each packed group rather than on individual internal Shots.
 func validateNativeShotGroups(groups []nativeShotGroup) error {
 	for i, group := range groups {
@@ -202,6 +202,66 @@ func groupedDialogue(shots []models.Shot) string {
 	return strings.Join(parts, "")
 }
 
+// nativeSegmentWarnings reports advisory speech capacity per H3 segment. A segment is
+// one generation and reads as one continuous scene, so it allows one more speaking
+// character than a Shot; exceeding that only warns.
+func nativeSegmentWarnings(groups []nativeShotGroup) []string {
+	var warnings []string
+	for i, group := range groups {
+		stats := directorSpeechStats{}
+		for _, fragments := range group.FragmentSets {
+			for _, fragment := range fragments {
+				kind, speaker := normalizeScriptSpeech(fragment.Source.SpeechType, fragment.Source.Character)
+				if kind == "narration" {
+					continue
+				}
+				stats.add(speaker)
+			}
+		}
+		if len(stats.Speakers) > maxSegmentSpeakers {
+			warnings = append(warnings, fmt.Sprintf("Native段%d有%d名不同发声角色（%s），超过建议的%d人；可考虑在此处另起一段，不要删改台词", i+1, len(stats.Speakers), strings.Join(stats.Speakers, "、"), maxSegmentSpeakers))
+		}
+	}
+	return warnings
+}
+
+// nativeCutActionWarnings flags a Native boundary that appears to slice one continuous
+// physical action (director rule ACT-04). A Native boundary always falls between Shots
+// and each action timeline is local to its Shot, so the only signal is the same subject
+// continuing the same action from the last entry before the cut into the first entry
+// after it. Advisory only: the cut is never moved, because only the author knows where
+// the action ends.
+func nativeCutActionWarnings(groups []nativeShotGroup) []string {
+	var warnings []string
+	cut := 0.0
+	for i := 0; i+1 < len(groups); i++ {
+		cut += groups[i].Duration
+		before := groups[i].Shots[len(groups[i].Shots)-1].ActionTimeline
+		after := groups[i+1].Shots[0].ActionTimeline
+		if len(before) == 0 || len(after) == 0 {
+			continue
+		}
+		if actionContinuesAcrossCut(before[len(before)-1], after[0]) {
+			warnings = append(warnings, fmt.Sprintf("第%d段与第%d段的分界（%.1f秒）落在同一动作「%s」中间，建议把分界移到动作开始前或完成后", i+1, i+2, cut, truncateDirectorAuditText(after[0].Action)))
+		}
+	}
+	return warnings
+}
+
+// actionContinuesAcrossCut recognises the model's way of writing one action that keeps
+// going after a cut: the same subject with the same wording on both sides. Short generic
+// phrasing is ignored so identical verbs alone do not raise a warning.
+func actionContinuesAcrossCut(before, after models.ShotActionTimelineEntry) bool {
+	if strings.TrimSpace(before.Action) == "" || strings.TrimSpace(before.Subject) != strings.TrimSpace(after.Subject) {
+		return false
+	}
+	left, right := directorAuditText(before.Action), directorAuditText(after.Action)
+	if left == "" || len([]rune(left)) < 4 || len([]rune(right)) < 4 {
+		return false
+	}
+	return strings.Contains(left, right) || strings.Contains(right, left)
+}
+
 func buildShotMaterializationPreview(scene models.Scene, groups []nativeShotGroup, shotCount int) ShotMaterializationPreview {
 	items := make([]ShotMaterializationItem, 0, len(groups))
 	for i, group := range groups {
@@ -211,7 +271,13 @@ func buildShotMaterializationPreview(scene models.Scene, groups []nativeShotGrou
 		}
 		items = append(items, ShotMaterializationItem{ShotID: ids[0], ShotIDs: ids, Order: i + 1, Title: fmt.Sprintf("%s · Native段%d", nativeSceneBaseTitle(scene.Title), i+1), Duration: group.Duration, Content: groupedNarrativeContent(group), Dialogue: groupedDialogue(group.Shots)})
 	}
-	return ShotMaterializationPreview{SourceSceneID: scene.ID, ShotCount: shotCount, Items: items, Warning: fmt.Sprintf("确认后将按%.0f秒上限把相邻导演Shot合并为Native场景并替换原场景；每个场景内部仍保留不同Shot。原场景图片、视频、配音及连续性结果会失效。", maxNativeSceneDuration)}
+	// Advisory notes go after the destructive-action notice; none of them blocks.
+	notes := append(nativeSegmentWarnings(groups), nativeCutActionWarnings(groups)...)
+	warning := fmt.Sprintf("确认后将按%.0f秒上限把相邻导演Shot合并为Native场景并替换原场景；每个场景内部仍保留不同Shot。原场景图片、视频、配音及连续性结果会失效。", maxNativeSceneDuration)
+	if len(notes) > 0 {
+		warning += "\n\n" + strings.Join(notes, "\n")
+	}
+	return ShotMaterializationPreview{SourceSceneID: scene.ID, ShotCount: shotCount, Items: items, Warning: warning}
 }
 
 // materializationDialogues resolves the same effective, read-only dialogue source used
@@ -240,7 +306,7 @@ func validateMaterializationShots(shots []models.Shot) error {
 		return fmt.Errorf("至少需要两个已保存导演镜头才能拆成可制作场景")
 	}
 	for i, shot := range shots {
-		// Shots are internal cuts and may be short; the 3-second minimum applies to
+		// Shots are internal cuts and may be short; the 4-second minimum applies to
 		// each packed Native scene (see validateNativeShotGroups).
 		if shot.Duration <= 0 || shot.Duration > maxNativeSceneDuration {
 			return fmt.Errorf("镜头%d时长必须大于0且不超过%.0f秒", i+1, maxNativeSceneDuration)

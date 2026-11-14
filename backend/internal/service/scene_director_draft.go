@@ -64,6 +64,80 @@ func buildDirectorLogicReview(draft *sceneDirectorDraft) []directorLogicShotRevi
 	return buildDirectorLogicReviewWithDialogues(draft, nil)
 }
 
+// directorSpeechStats counts who speaks inside one span of authoritative dialogue.
+// Speakers lists the distinct speaking characters in order of appearance; Units counts
+// talk units, where one continuous run by the same character is a single unit. Narration
+// is not an on-screen speaking role, so it is excluded from both counts.
+type directorSpeechStats struct {
+	Speakers []string
+	Units    int
+	last     string
+}
+
+func (s *directorSpeechStats) add(character string) {
+	character = strings.TrimSpace(character)
+	if character == "" {
+		return
+	}
+	// A run by the same character is one unit; an interruption by anyone else starts
+	// a new unit even when that character has spoken before.
+	if s.last != character {
+		s.Units++
+		s.last = character
+	}
+	for _, name := range s.Speakers {
+		if name == character {
+			return
+		}
+	}
+	s.Speakers = append(s.Speakers, character)
+}
+
+type directorSpeechSpan struct {
+	start, end int
+	character  string
+}
+
+// directorSpeechSpans lays the authoritative dialogue end to end so a Shot's dialogue
+// slice can be attributed without re-reading the text the model produced.
+func directorSpeechSpans(dialogues []models.Dialogue) []directorSpeechSpan {
+	spans := make([]directorSpeechSpan, 0, len(dialogues))
+	offset := 0
+	for _, dialogue := range dialogues {
+		length := len(canonicalDialogueRunes(dialogue.Text))
+		kind, speaker := normalizeScriptSpeech(dialogue.SpeechType, dialogue.Character)
+		if kind == "narration" {
+			speaker = ""
+		}
+		spans = append(spans, directorSpeechSpan{start: offset, end: offset + length, character: speaker})
+		offset += length
+	}
+	return spans
+}
+
+// directorSpeechStatsByShot walks the draft's shot-by-shot dialogue in order and returns
+// one entry per Shot. A draft whose dialogue does not align with the authoritative text
+// is already caught by the placement audit, so misalignment only yields empty stats.
+func directorSpeechStatsByShot(draft *sceneDirectorDraft, dialogues []models.Dialogue) []directorSpeechStats {
+	if draft == nil || len(dialogues) == 0 {
+		return nil
+	}
+	spans := directorSpeechSpans(dialogues)
+	stats := make([]directorSpeechStats, len(draft.Shots))
+	cursor := 0
+	for i, shot := range draft.Shots {
+		end := cursor + len(canonicalDialogueRunes(shot.Dialogue))
+		for _, span := range spans {
+			if end <= span.start || cursor >= span.end {
+				continue
+			}
+			stats[i].add(span.character)
+		}
+		cursor = end
+	}
+	return stats
+}
+
 // buildDirectorLogicReviewWithDialogues audits a director draft. Blocking issues send the
 // draft back to the model; advisories are shown to the user. When authoritative
 // dialogues are supplied, Dialogue placement and speakability are audited too.
@@ -137,6 +211,16 @@ func buildDirectorLogicReviewWithDialogues(draft *sceneDirectorDraft, dialogues 
 	// Dialogue placement audit against authoritative structured Dialogue. The user's
 	// recurring complaint is every line dumped into the final Shot, or lines dropped.
 	if len(dialogues) > 0 && len(draft.Shots) > 0 {
+		// Speech capacity is advisory (director rules SND-01): a crowded Shot is a
+		// review prompt, never a reason to cut or rewrite a line of dialogue.
+		for i, stats := range directorSpeechStatsByShot(draft, dialogues) {
+			if len(stats.Speakers) > maxShotSpeakers {
+				reviews[i].Advisories = append(reviews[i].Advisories, fmt.Sprintf("本镜有%d名不同发声角色（%s），超过建议的%d人，可考虑把部分对白分到相邻镜头", len(stats.Speakers), strings.Join(stats.Speakers, "、"), maxShotSpeakers))
+			}
+			if stats.Units > maxShotTalkUnits {
+				reviews[i].Advisories = append(reviews[i].Advisories, fmt.Sprintf("本镜约有%d个独立台词单元，超过建议的%d个，可考虑重新组织镜头，不要删改原台词或加快语速", stats.Units, maxShotTalkUnits))
+			}
+		}
 		last := len(draft.Shots) - 1
 		for _, dialogue := range dialogues {
 			text := directorAuditText(dialogue.Text)
@@ -762,7 +846,7 @@ func parseSceneDirectorDraftForReview(output string) (*sceneDirectorDraft, error
 
 func parseSceneDirectorDraft(output string) (*sceneDirectorDraft, error) {
 	// Director Shots are internal cut points inside a Scene production unit. They may
-	// be shorter than the 3-second standalone Scene template minimum.
+	// be shorter than the 4-second standalone Scene template minimum.
 	return parseSceneDirectorDraftWithOptions(output, true)
 }
 
@@ -913,7 +997,7 @@ func dialogueRhythmDirectorInstruction(dialogues []models.Dialogue, characterNam
 	if len(allowed) > 0 {
 		listenerRule = "listener_character只能从以下当前项目权威角色中逐字选择，不得使用别名、称谓或创造人物：" + strings.Join(allowed, "、") + "。"
 	}
-	return pacing(`按对白自然语速和语义停顿拆成多个Native H3镜头，常态每镜{scene_min}–{shot_max}秒。可以交替使用说话人近景、包含说话人的双人/前后景镜头，以及对白结束后的纯听者反应镜头。硬规则：
+	return pacing(`按对白自然语速和语义停顿拆成多个Native H3镜头，常态每镜{shot_typical_min}–{shot_max}秒。可以交替使用说话人近景、包含说话人的双人/前后景镜头，以及对白结束后的纯听者反应镜头。硬规则：
 1. Dialogue字段只能填下列结构化对白的连续原文片段，不得改写、增删、重复或创造旁白；无发声镜头必须为空。
 2. 所有镜头Dialogue按顺序拼接后必须逐字等于下列完整对白原文按顺序拼接的结果。
 3. 普通dialogue默认让真实说话人清晰可见并由其同步口型；也允许同一句对白跨切到纯听者反应镜头，但必须明确写出“原说话人姓名+声音跨切延续”，听者必须闭口，且不得把这种连续对白改写成旁白或独立画外音。只有明确speech_type为offscreen_dialogue时才设计独立画外对白且说话人不得入镜；narration不得驱动画面人物口型；monologue必须明确人物闭口且不做口型。
@@ -1089,7 +1173,7 @@ func normalizeDialogueRhythmDraftDurations(draft *sceneDirectorDraft) {
 }
 
 func normalizeDialogueRhythmReviewDurations(draft *sceneDirectorDraft, dialogues []models.Dialogue) error {
-	// Natural speech duration is advisory. Keep the model's executable 3–15 second
+	// Natural speech duration is advisory. Keep the model's executable Shot
 	// timing unchanged and expose any shortfall through buildDialogueRhythmReview.
 	return nil
 }
@@ -1999,7 +2083,7 @@ func (s *Service) generateSceneDirectorDraft(scene *models.Scene, req sceneDirec
 		return http.StatusBadGateway, gin.H{"error": err.Error()}
 	}
 	validateDraft := func(raw string) (*sceneDirectorDraft, error) {
-		// Every director mode describes internal Scene cut points; standalone 3–15s
+		// Every director mode describes internal Scene cut points; standalone 4–15s
 		// template limits are applied only when a Scene is submitted for execution.
 		var draft *sceneDirectorDraft
 		var parseErr error

@@ -49,6 +49,36 @@ func TestGroupedNarrativeContentPreservesAttributionAndRepeatedOccurrences(t *te
 	}
 }
 
+// Segment capacity (SND-01) and ACT-04 are appended to the preview warning as advice;
+// they never fail the preview or change the grouping.
+func TestNativePreviewWarnsSegmentSpeakersAndCutInsideAction(t *testing.T) {
+	speaker := func(name string) []dialogueFragment {
+		return []dialogueFragment{{Source: models.Dialogue{Character: name, SpeechType: "dialogue"}, Text: "台词。"}}
+	}
+	narration := []dialogueFragment{{Source: models.Dialogue{Character: "旁白", SpeechType: "narration"}, Text: "夜深。"}}
+	lunge := models.ShotActionTimelineEntry{Start: 0, End: 5, Subject: "甲", Action: "持刀向前扑刺", State: "刀尖逼近", Camera: "固定"}
+	groups := []nativeShotGroup{
+		{Shots: []models.Shot{{Duration: 5}, {Duration: 5, ActionTimeline: []models.ShotActionTimelineEntry{lunge}}}, FragmentSets: [][]dialogueFragment{append(speaker("甲"), speaker("乙")...), append(append(speaker("丙"), speaker("丁")...), narration...)}, Duration: 10},
+		{Shots: []models.Shot{{Duration: 6, ActionTimeline: []models.ShotActionTimelineEntry{{Start: 0, End: 6, Subject: "甲", Action: "持刀向前扑刺", State: "刺空", Camera: "跟拍"}}}}, FragmentSets: [][]dialogueFragment{speaker("甲")}, Duration: 6},
+		{Shots: []models.Shot{{Duration: 5, ActionTimeline: []models.ShotActionTimelineEntry{{Start: 0, End: 5, Subject: "乙", Action: "侧身闪开", State: "落地", Camera: "固定"}}}}, FragmentSets: [][]dialogueFragment{nil}, Duration: 5},
+	}
+	preview := buildShotMaterializationPreview(models.Scene{Title: "场景1"}, groups, 4)
+	for _, want := range []string{
+		"Native段1有4名不同发声角色（甲、乙、丙、丁），超过建议的3人",
+		"第1段与第2段的分界（10.0秒）落在同一动作「持刀向前扑刺」中间",
+	} {
+		if !strings.Contains(preview.Warning, want) {
+			t.Fatalf("preview warning missing %q: %s", want, preview.Warning)
+		}
+	}
+	if strings.Contains(preview.Warning, "Native段2有") || strings.Contains(preview.Warning, "第2段与第3段") {
+		t.Fatalf("within-capacity segment or a distinct next action must not warn: %s", preview.Warning)
+	}
+	if len(preview.Items) != 3 {
+		t.Fatalf("advisories must not change grouping: %+v", preview.Items)
+	}
+}
+
 func TestMaterializeShotsCreatesNativeScenesAndPreservesDialogue(t *testing.T) {
 	db := newShotMaterializationDB(t)
 	project := models.Project{Title: "p", Generation: 1}

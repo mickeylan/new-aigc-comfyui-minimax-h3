@@ -13,8 +13,12 @@ import (
 const (
 	// One H3 generation lasts at most 15 s, so an internal Shot or Native segment does too.
 	h3SegmentMaxSeconds = 15.0
-	// Shortest Scene or Native segment submitted to a video template.
-	minSceneVideoDuration = 3.0
+	// Shortest Scene or Native segment submitted to a video template; H3 output starts at 4 s.
+	// Internal Shots are cuts inside one generation and may be shorter.
+	minSceneVideoDuration = 4.0
+	// Scenes saved before the 4 s minimum may still last 3 s; their existing videos and
+	// timelines keep that length instead of being stretched.
+	minLegacySceneDuration = 3.0
 	// A long Scene may reach 60 s; it is materialized as Native segments of at most 15 s.
 	maxLongSceneVideoDuration = 60.0
 	// Scene reference images per generation; H3 reserves one slot for the start frame.
@@ -39,6 +43,13 @@ const (
 	maxShotsPerGeneration = 5
 	// A plot-driven Scene usually lasts at least 5 s.
 	minTypicalSceneSeconds = 5.0
+	// Advisory speech capacity (director rules SND-01). Exceeding these counts only
+	// raises a warning: dialogue is never dropped, reordered, or spoken faster.
+	// A Shot that keeps more speaking characters strains face and voice attribution;
+	// a whole H3 segment is read as one continuous scene, so it allows one more.
+	maxShotSpeakers    = 2
+	maxShotTalkUnits   = 3
+	maxSegmentSpeakers = 3
 	// Above 10 s a Shot or segment counts as long: it carries an action timeline, a Scene of
 	// that length usually takes 2-4 cuts, and shorter merged segments generate more reliably.
 	longShotSeconds = 10.0
