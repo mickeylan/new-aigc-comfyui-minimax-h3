@@ -526,6 +526,7 @@
           </div>
 
           <div class="scene-actions">
+            <button class="btn btn-sm btn-secondary" :disabled="busy" @click="openSceneSupplement(sc)">在此后插入补镜</button>
             <router-link class="btn btn-sm btn-secondary" :to="{ path: `/projects/${id()}/editor`, query: { episode: sc.episode_n || activeEpN, scene: sc.id, screen_text: 1, screen_text_cue: sceneScreenTextCues(sc)[0]?.id || undefined } }">{{sceneScreenTextCues(sc).length?'编辑功能字幕/屏幕文字':'＋ 功能字幕/屏幕文字'}}</router-link>
             <!-- 画面：无图生成，有图重新生成（始终可单独触发） -->
             <template v-if="!sc.image_file">
@@ -648,6 +649,24 @@
         <div v-if="mergeError" class="notice error-notice">{{ mergeError }}</div>
         <label class="merge-confirm"><input v-model="sceneMergeConfirmed" type="checkbox" /> 我确认归档原分镜，并创建无图片、无视频的新分镜</label>
         <div class="modal-actions"><button class="btn btn-ghost" :disabled="mergeBusy" @click="closeSceneMergePreview">取消</button><button class="btn btn-danger" :disabled="mergeBusy || !sceneMergeConfirmed" @click="applySelectedSceneMerge">{{ mergeBusy ? '合并中…' : '确认合镜' }}</button></div>
+      </div>
+    </div>
+
+    <div v-if="supplementScene" class="modal-mask" @click.self="closeSceneSupplement">
+      <div class="modal card modal-lg scene-supplement-modal">
+        <h2>在「{{ supplementScene.title }}」之后插入补镜</h2>
+        <div class="field"><label>补镜描述（本场唯一剧情来源；台词只能写在这里）</label><textarea v-model="supplementBrief" class="textarea" rows="3" :disabled="supplementBusy" placeholder="例：韩立收功起身，望向洞外" /></div>
+        <p class="field-hint">前后相邻场景只用于保持人物、服装、伤势、道具和光线连续；地点默认沿用前一场。草稿确认后才插入，不会自动生成图片或视频。</p>
+        <template v-if="supplementDraft">
+          <div class="field"><label>标题</label><input v-model="supplementDraft.draft.title" class="input" /></div>
+          <div class="field"><label>正文</label><textarea v-model="supplementDraft.draft.content" class="textarea" rows="6" /></div>
+          <div class="field"><label>时长（秒）</label><input v-model.number="supplementDraft.draft.duration" type="number" :min="sceneMinSeconds" :max="shotMaxSeconds" step="0.5" class="input" /></div>
+          <p>地点：{{ supplementDraft.draft.location || '未指定' }} · 人物：{{ (supplementDraft.draft.characters || []).join('、') || '无' }}</p>
+          <div v-if="supplementDraft.draft.dialogues?.length" class="scene-dialogues"><div v-for="(d, i) in supplementDraft.draft.dialogues" :key="i" class="dialogue-row"><span class="dl-char">{{ d.character || '旁白' }}</span><span class="dl-text">{{ d.text }}</span></div></div>
+          <ul v-if="supplementDraft.warnings?.length" class="scene-merge-warnings"><li v-for="warning in supplementDraft.warnings" :key="warning">{{ warning }}</li></ul>
+        </template>
+        <div v-if="supplementError" class="notice error-notice">{{ supplementError }}</div>
+        <div class="modal-actions"><button class="btn btn-ghost" :disabled="supplementBusy" @click="closeSceneSupplement">取消</button><button class="btn btn-secondary" :disabled="supplementBusy || !supplementBrief.trim()" @click="draftSceneSupplement">{{ supplementBusy && !supplementDraft ? '生成中…' : (supplementDraft ? '重新生成草稿' : '生成草稿') }}</button><button class="btn" :disabled="supplementBusy || !supplementDraft" @click="applySceneSupplementDraft">确认插入</button></div>
       </div>
     </div>
 
@@ -1834,6 +1853,56 @@ let sceneMergeEpoch = 0
 const availableScenes = computed(() => currentScenes.value.filter(sc => Number(sc.duration || 0) >= 5 && !isWorking(sc)))
 const selectedMergeScenes = computed(() => currentScenes.value.filter(sc => selectedMergeSceneIDs.value.includes(sc.id)))
 const mergeSelectionConsecutive = computed(() => selectedMergeScenes.value.length >= 2 && selectedMergeScenes.value.every((sc, index, rows) => index === 0 || sc.order === rows[index - 1].order + 1))
+// Supplement drafts are reviewed and editable here; the server re-validates dialogue against the
+// brief and the insertion point before inserting, and never starts image or video generation.
+const supplementScene = ref(null)
+const supplementBrief = ref('')
+const supplementDraft = ref(null)
+const supplementBusy = ref(false)
+const supplementError = ref('')
+function openSceneSupplement(sc) {
+  supplementScene.value = sc
+  supplementBrief.value = ''
+  supplementDraft.value = null
+  supplementError.value = ''
+}
+function closeSceneSupplement() {
+  if (supplementBusy.value) return
+  supplementScene.value = null
+  supplementDraft.value = null
+}
+async function draftSceneSupplement() {
+  const sc = supplementScene.value
+  if (!sc || supplementBusy.value) return
+  supplementBusy.value = true
+  supplementError.value = ''
+  try {
+    const { data } = await api.sceneSupplementDraft(id(), sc.id, supplementBrief.value.trim())
+    if (supplementScene.value === sc) supplementDraft.value = data
+  } catch (e) {
+    supplementError.value = e.response?.data?.error || '补镜草稿生成失败'
+  } finally {
+    supplementBusy.value = false
+  }
+}
+async function applySceneSupplementDraft() {
+  const sc = supplementScene.value
+  const draft = supplementDraft.value
+  if (!sc || !draft || supplementBusy.value) return
+  supplementBusy.value = true
+  supplementError.value = ''
+  try {
+    await api.applySceneSupplement(id(), sc.id, { brief: supplementBrief.value.trim(), source_hash: draft.source_hash, draft: draft.draft })
+    supplementBusy.value = false
+    closeSceneSupplement()
+    await load()
+    toast.success('补镜已插入；未自动生成图片或视频')
+  } catch (e) {
+    supplementError.value = e.response?.data?.error || '补镜插入失败'
+  } finally {
+    supplementBusy.value = false
+  }
+}
 function toggleMergeScene(sc) {
   const ids = selectedMergeSceneIDs.value
   selectedMergeSceneIDs.value = ids.includes(sc.id) ? ids.filter(value => value !== sc.id) : [...ids, sc.id]

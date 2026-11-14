@@ -260,6 +260,7 @@ func (s *SkillService) InitSystemSkills() error {
 		},
 		sceneEndStateArchivistSkill,
 		shotRefinePatchSkill,
+		sceneSupplementSkill,
 		characterRegistrationPhotoSkill,
 		assetSceneDescriptionPolishSkill,
 		assetCharacterDescriptionPolishSkill,

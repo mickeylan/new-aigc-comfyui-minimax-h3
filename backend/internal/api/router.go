@@ -135,6 +135,8 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.PUT("/api/projects/:id/scenes/:sid/end-state", svc.HandleSaveSceneEndState)
 	r.POST("/api/projects/:id/scenes/:sid/end-state/extract", svc.HandleExtractSceneEndState)
 	r.GET("/api/projects/:id/scenes/:sid/generation-snapshots", svc.HandleListGenerationSnapshots)
+	r.POST("/api/projects/:id/scenes/:sid/supplement/draft", svc.HandleSceneSupplementDraft)
+	r.POST("/api/projects/:id/scenes/:sid/supplement/apply", svc.HandleApplySceneSupplement)
 	r.POST("/api/projects/:id/scenes/:sid/shots/refine-patch", svc.HandleShotRefinePatchDraft)
 	r.POST("/api/projects/:id/scenes/:sid/shots/refine-patch/apply", svc.HandleApplyShotRefinePatch)
 	r.GET("/api/projects/:id/scenes/:sid/shots/refine-patches", svc.HandleListShotRefinePatches)
