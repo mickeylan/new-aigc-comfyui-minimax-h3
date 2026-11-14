@@ -380,7 +380,8 @@
           <button class="btn btn-ghost btn-sm" :disabled="revisionBusy" @click="toggleRevisions">
             {{ showRevisions ? '收起版本' : '版本历史' }}
           </button>
-          <button class="btn btn-ghost btn-sm" :disabled="screenplayBusy" @click="importScreenplay">{{ screenplayBusy ? '导入中…' : '导入剧本' }}</button>
+          <button class="btn btn-ghost btn-sm" :disabled="screenplayBusy" @click="importScreenplay(false)">{{ screenplayBusy ? '导入中…' : '导入剧本' }}</button>
+          <button class="btn btn-ghost btn-sm" :disabled="screenplayBusy" title="外部剧本先由AI只整理格式外壳；原文每句话必须原样保留且只出现一次，否则拒绝导入并列出差异" @click="importScreenplay(true)">AI 整理格式后导入</button>
           <button class="btn btn-ghost btn-sm" :disabled="busy || storyDialogueSyncBusy" @click="syncStoryDialogues">{{ storyDialogueSyncBusy ? '补回中…' : '补回本集对白到故事内容' }}</button>
           <a v-for="format in ['fountain', 'fdx', 'txt']" :key="format" class="btn btn-ghost btn-sm" :href="api.screenplayExportUrl(id(), activeEpN, format)">导出 {{ format.toUpperCase() }}</a>
           <button class="btn btn-secondary btn-sm" :disabled="busy || expandingScript || !scriptDraft.trim()" @click="aiExpand">
@@ -2583,27 +2584,36 @@ async function syncStoryDialogues() {
   }
 }
 
-async function importScreenplay() {
+// adapt=true first asks the format Skill to reshape an external script; the server rejects the
+// result unless every original sentence survived exactly once. Either way the user confirms the
+// preview, and imported Scenes carry no Shots until the plot-based director split runs.
+async function importScreenplay(adapt = false) {
   const input = document.createElement('input')
   input.type = 'file'
-  input.accept = '.fountain,.fdx,.txt,text/plain,application/xml'
+  input.accept = adapt ? '.txt,.fountain,.md,text/plain' : '.fountain,.fdx,.txt,text/plain,application/xml'
   input.onchange = async () => {
     const file = input.files?.[0]
     if (!file) return
     screenplayBusy.value = true
+    let imported = false
     try {
-      const { data: preview } = await api.previewScreenplayImport(id(), activeEpN.value, file)
+      const { data: preview } = adapt ? await api.adaptScreenplayImport(id(), activeEpN.value, file) : await api.previewScreenplayImport(id(), activeEpN.value, file)
       const headings = (preview.scenes || []).slice(0, 5).map((scene, index) => `${index + 1}. ${scene.heading}`).join('\n')
-      if (!window.confirm(`导入预览：${preview.scene_count} 场、${preview.element_count} 个元素\n${headings}\n\n应用后将替换本集场景、镜头与对白，是否继续？`)) return
+      const notes = [...(preview.conflicts || []).map(c => `格式冲突：${c}`), ...(preview.warnings || [])].slice(0, 8).join('\n')
+      if (!window.confirm(`导入预览：${preview.scene_count} 场、${preview.element_count} 个元素\n${headings}${notes ? `\n\n请核对：\n${notes}` : ''}\n\n应用后将替换本集场景、镜头与对白，是否继续？`)) return
       await api.applyScreenplayImport(id(), activeEpN.value, preview)
       scriptDirty.value = false
       await load()
       toast.success('剧本已导入，原内容已保存为安全版本')
+      imported = true
     } catch (e) {
-      toast.error('剧本导入失败：' + (e.response?.data?.error || e.message))
+      const issues = (e.response?.data?.issues || []).slice(0, 5).map(i => `「${i.sentence}」原文${i.expected}次，结果${i.actual}次`).join('；')
+      toast.error('剧本导入失败：' + (e.response?.data?.error || e.message) + (issues ? `：${issues}` : ''))
     } finally {
       screenplayBusy.value = false
     }
+    // Imported Scenes go through the director draft; splitEpisodeByPlot asks before any model call.
+    if (imported) await splitEpisodeByPlot()
   }
   input.click()
 }

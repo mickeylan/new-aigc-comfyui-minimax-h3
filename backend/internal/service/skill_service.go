@@ -261,6 +261,7 @@ func (s *SkillService) InitSystemSkills() error {
 		sceneEndStateArchivistSkill,
 		shotRefinePatchSkill,
 		sceneSupplementSkill,
+		screenplayFormatAdaptSkill,
 		characterRegistrationPhotoSkill,
 		assetSceneDescriptionPolishSkill,
 		assetCharacterDescriptionPolishSkill,

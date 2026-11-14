@@ -86,6 +86,11 @@ export const api = {
     if (format) fd.append('format', format)
     return http.post(`/projects/${id}/episodes/${number}/screenplay/preview`, fd, { headers: { 'Content-Type': 'multipart/form-data' } })
   },
+  adaptScreenplayImport: (id, number, file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return http.post(`/projects/${id}/episodes/${number}/screenplay/adapt`, fd, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 600000 })
+  },
   applyScreenplayImport: (id, number, preview) => http.post(`/projects/${id}/episodes/${number}/screenplay/apply`, preview),
   screenplayExportUrl: (id, number, format) => `/api/projects/${id}/episodes/${number}/screenplay/export/${format}`,
   episodeContinuity: (id, number) => http.get(`/projects/${id}/episodes/${number}/continuity`),

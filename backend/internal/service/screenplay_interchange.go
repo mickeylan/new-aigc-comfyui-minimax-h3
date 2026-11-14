@@ -208,10 +208,15 @@ func previewToDatabase(tx *gorm.DB, project *models.Project, episodeN int, previ
 	}
 
 	for sceneIndex, imported := range preview.Scenes {
+		// Action and transition lines are story text, not camera setups. They stay in
+		// Scene.Content and no Shot is created, so the plot-based director draft splits
+		// imported Scenes into Shots the same way as generated ones.
 		actions := []string{}
 		for _, element := range imported.Elements {
-			if element.Type == "action" {
-				actions = append(actions, strings.TrimSpace(element.Text))
+			if element.Type == "action" || element.Type == "transition" {
+				if text := strings.TrimSpace(element.Text); text != "" {
+					actions = append(actions, text)
+				}
 			}
 		}
 		scene := models.Scene{ProjectID: project.ID, EpisodeN: episodeN, Order: sceneIndex + 1, Generation: project.Generation,
@@ -219,7 +224,7 @@ func previewToDatabase(tx *gorm.DB, project *models.Project, episodeN int, previ
 		if err := tx.Create(&scene).Error; err != nil {
 			return err
 		}
-		shotOrder, dialogueOrder := 0, 0
+		dialogueOrder := 0
 		character, parenthetical := "", ""
 		for _, element := range imported.Elements {
 			text := strings.TrimSpace(element.Text)
@@ -227,12 +232,6 @@ func previewToDatabase(tx *gorm.DB, project *models.Project, episodeN int, previ
 				continue
 			}
 			switch element.Type {
-			case "action", "transition":
-				shotOrder++
-				shot := models.Shot{SceneID: scene.ID, Order: shotOrder, ActType: models.ShotActSetup, ShotType: element.Type, Duration: 3, Description: text}
-				if err := tx.Create(&shot).Error; err != nil {
-					return err
-				}
 			case "character":
 				character = text
 				parenthetical = ""
@@ -251,9 +250,6 @@ func previewToDatabase(tx *gorm.DB, project *models.Project, episodeN int, previ
 				}
 				parenthetical = ""
 			}
-		}
-		if err := tx.Model(&scene).Update("shot_count", shotOrder).Error; err != nil {
-			return err
 		}
 	}
 	var scripts map[int]string
