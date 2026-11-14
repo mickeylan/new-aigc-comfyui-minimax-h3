@@ -933,9 +933,10 @@
             <input v-model="charForm.role" class="input" placeholder="主角 / 女主 / 反派 / 配角…" />
           </div>
           <div class="field">
-            <label>外貌特征 <span class="optional">用于保证人物一致</span></label>
+            <div class="field-label-actions"><label>外貌特征 <span class="optional">用于保证人物一致</span></label><button class="btn btn-sm btn-secondary" :disabled="polishing || !charForm.name.trim() || !charForm.trait.trim()" @click="polishDescription('character', charForm, 'trait')">{{ polishing ? '润色中…' : '润色' }}</button></div>
             <textarea v-model="charForm.trait" class="textarea" rows="3"
               placeholder="发型、五官、体型、年龄感、肤色…" />
+            <div v-if="polishDraft && polishDraft.form === charForm" class="polish-compare"><div><strong>润色前</strong><p>{{ polishDraft.before }}</p></div><div><strong>润色后</strong><p>{{ polishDraft.after }}</p></div><div class="modal-actions"><button class="btn btn-sm btn-ghost" @click="polishDraft = null">放弃</button><button class="btn btn-sm" @click="acceptPolish">采用（保存后生效）</button></div></div>
           </div>
           <div class="field">
             <label>服装造型</label>
@@ -1142,6 +1143,8 @@
           <div class="field-label-actions"><label>简单说明 / AI 设计结果 <span class="optional">用于保证{{ assetKindLabel }}一致</span></label><button class="btn btn-sm btn-secondary" :disabled="redesigningAsset" @click="redesignAssetDescription">{{ redesigningAsset ? 'AI 设计中…' : 'AI 重新设计' }}</button></div>
           <textarea v-model="assetForm.description" class="textarea" rows="6"
             :placeholder="assetTab === 'prop' ? '简单写：青玉玉佩，金色云纹；AI 会补全形状、材质、比例和辨识细节。' : '简单写：云隐宗大殿，宏伟、晨雾；AI 会补全空间布局、建筑、陈设、材质和光线。'" />
+          <button v-if="assetTab === 'location'" class="btn btn-sm btn-ghost" :disabled="polishing || !assetForm.name.trim()" @click="polishDescription('scene', assetForm, 'description')">{{ polishing ? '润色中…' : '润色（保留原有设定）' }}</button>
+          <div v-if="polishDraft && polishDraft.form === assetForm" class="polish-compare"><div><strong>润色前</strong><p>{{ polishDraft.before }}</p></div><div><strong>润色后</strong><p>{{ polishDraft.after }}</p></div><div class="modal-actions"><button class="btn btn-sm btn-ghost" @click="polishDraft = null">放弃</button><button class="btn btn-sm" @click="acceptPolish">采用（保存后生效）</button></div></div>
         </div>
         <div v-if="assetError" class="notice error-notice">{{ assetError }}</div>
         <div class="modal-actions">
@@ -1383,6 +1386,25 @@ function setAssetDeleting(kind, id, deleting) {
 }
 let assetRenameEpoch = 0
 const assetForm = reactive({ name: '', description: '', visual_type: 'normal', mega_type: 'architecture', image_engine: 'moss', visible_text: '' })
+// Polish returns a draft only; adopting it fills the form, and the user's own save persists it.
+const polishing = ref(false)
+const polishDraft = ref(null)
+async function polishDescription(target, form, field) {
+  polishing.value = true
+  try {
+    const { data } = await api.polishDescription(id(), { target, name: form.name.trim(), description: form[field].trim() })
+    polishDraft.value = { form, field, before: data.before, after: data.after }
+  } catch (e) {
+    toast.error(e.response?.data?.error || 'AI 润色失败')
+  } finally {
+    polishing.value = false
+  }
+}
+function acceptPolish() {
+  const draft = polishDraft.value
+  if (draft) draft.form[draft.field] = draft.after
+  polishDraft.value = null
+}
 // 有可读文字时避开 Krea2（中文基本不可读）：优先 Moss，未安装时退到 Qwen。
 watch(() => assetForm.visible_text, value => {
   if (!String(value || '').trim() || (assetForm.image_engine !== 'krea2' && assetEngineReady(assetForm))) return
@@ -4579,6 +4601,9 @@ onBeforeUnmount(() => {
 .continuity-prompt-source p { margin: 4px 0 0; color: var(--text-secondary); font-size: 13px; }
 .task-prompt { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-secondary); padding: 14px; border-radius: 8px; font-size: 12px; line-height: 1.6; }
 .field-label-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.polish-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; padding: 10px; border: 1px solid var(--border, #ddd); border-radius: 6px; }
+.polish-compare p { margin: 4px 0 0; white-space: pre-wrap; font-size: 13px; }
+.polish-compare .modal-actions { grid-column: 1 / -1; }
 .reference-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; margin-top: 8px; }
 .reference-option { display: grid; grid-template-columns: auto 46px 1fr; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
 .reference-option img { width: 46px; height: 46px; object-fit: cover; border-radius: 6px; }

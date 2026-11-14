@@ -309,6 +309,7 @@ export const api = {
   // 视觉资产（kind: prop=道具 / location=场景）
   assets: (id, kind) => http.get(`/projects/${id}/assets/${kind}`),
   redesignAssetDescription: (id, kind, data) => http.post(`/projects/${id}/assets/${kind}/redesign`, data, { timeout: 300000 }),
+  polishDescription: (id, data) => http.post(`/projects/${id}/description-polish`, data, { timeout: 300000 }),
   createAsset: (id, kind, data) => http.post(`/projects/${id}/assets/${kind}`, data),
   updateAsset: (id, kind, aid, data) => http.put(`/projects/${id}/assets/${kind}/${aid}`, data),
   renameAsset: (id, kind, aid, name) => http.patch(`/projects/${id}/assets/${kind}/${aid}/name`, { name }),

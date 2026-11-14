@@ -261,6 +261,8 @@ func (s *SkillService) InitSystemSkills() error {
 		sceneEndStateArchivistSkill,
 		shotRefinePatchSkill,
 		characterRegistrationPhotoSkill,
+		assetSceneDescriptionPolishSkill,
+		assetCharacterDescriptionPolishSkill,
 	}
 
 	for _, skill := range systemSkills {

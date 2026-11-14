@@ -345,6 +345,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	// 视觉资产（道具 / 场景，跨分镜一致性参考图）
 	r.GET("/api/projects/:id/assets/:kind", svc.HandleListAssets)
 	r.POST("/api/projects/:id/assets/:kind/redesign", svc.HandleRedesignAssetDescription)
+	r.POST("/api/projects/:id/description-polish", svc.HandlePolishDescription)
 	r.POST("/api/projects/:id/assets/:kind", svc.HandleCreateAsset)
 	r.POST("/api/projects/:id/assets/:kind/images", svc.HandleGenerateAllAssetImages)
 	r.PUT("/api/projects/:id/assets/:kind/:aid", svc.HandleUpdateAsset)
