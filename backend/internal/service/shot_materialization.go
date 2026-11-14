@@ -122,7 +122,7 @@ func moveNativeCutToSentenceBoundary(current *nativeShotGroup, incoming []dialog
 		if moved > maxNativeSceneDuration {
 			break
 		}
-		if current.Duration-moved+incomingDuration < 3 || fragmentsContinueDialogue(current.FragmentSets[k-1], current.FragmentSets[k]) {
+		if current.Duration-moved+incomingDuration < minSceneVideoDuration || fragmentsContinueDialogue(current.FragmentSets[k-1], current.FragmentSets[k]) {
 			continue
 		}
 		next := nativeShotGroup{Shots: append([]models.Shot(nil), current.Shots[k:]...), FragmentSets: append([][]dialogueFragment(nil), current.FragmentSets[k:]...), Duration: moved - incomingDuration}
@@ -136,8 +136,8 @@ func moveNativeCutToSentenceBoundary(current *nativeShotGroup, incoming []dialog
 // each packed group rather than on individual internal Shots.
 func validateNativeShotGroups(groups []nativeShotGroup) error {
 	for i, group := range groups {
-		if group.Duration < 3 {
-			return fmt.Errorf("Native段%d合计仅%.1f秒，不足3秒；请把过短镜头并入相邻镜头", i+1, group.Duration)
+		if group.Duration < minSceneVideoDuration {
+			return fmt.Errorf("Native段%d合计仅%.1f秒，不足%.0f秒；请把过短镜头并入相邻镜头", i+1, group.Duration, minSceneVideoDuration)
 		}
 	}
 	return nil
@@ -211,7 +211,7 @@ func buildShotMaterializationPreview(scene models.Scene, groups []nativeShotGrou
 		}
 		items = append(items, ShotMaterializationItem{ShotID: ids[0], ShotIDs: ids, Order: i + 1, Title: fmt.Sprintf("%s · Native段%d", nativeSceneBaseTitle(scene.Title), i+1), Duration: group.Duration, Content: groupedNarrativeContent(group), Dialogue: groupedDialogue(group.Shots)})
 	}
-	return ShotMaterializationPreview{SourceSceneID: scene.ID, ShotCount: shotCount, Items: items, Warning: "确认后将按15秒上限把相邻导演Shot合并为Native场景并替换原场景；每个场景内部仍保留不同Shot。原场景图片、视频、配音及连续性结果会失效。"}
+	return ShotMaterializationPreview{SourceSceneID: scene.ID, ShotCount: shotCount, Items: items, Warning: fmt.Sprintf("确认后将按%.0f秒上限把相邻导演Shot合并为Native场景并替换原场景；每个场景内部仍保留不同Shot。原场景图片、视频、配音及连续性结果会失效。", maxNativeSceneDuration)}
 }
 
 // materializationDialogues resolves the same effective, read-only dialogue source used
@@ -243,7 +243,7 @@ func validateMaterializationShots(shots []models.Shot) error {
 		// Shots are internal cuts and may be short; the 3-second minimum applies to
 		// each packed Native scene (see validateNativeShotGroups).
 		if shot.Duration <= 0 || shot.Duration > maxNativeSceneDuration {
-			return fmt.Errorf("镜头%d时长必须大于0且不超过15秒", i+1)
+			return fmt.Errorf("镜头%d时长必须大于0且不超过%.0f秒", i+1, maxNativeSceneDuration)
 		}
 		if strings.TrimSpace(shot.Description) == "" {
 			return fmt.Errorf("镜头%d缺少镜头说明", i+1)

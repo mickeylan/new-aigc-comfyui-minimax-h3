@@ -163,6 +163,7 @@ export const api = {
   getSceneEndState: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/end-state`),
   saveSceneEndState: (id, sid, state) => http.put(`/projects/${id}/scenes/${sid}/end-state`, state),
   extractSceneEndState: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/end-state/extract`, null, { timeout: 300000 }),
+  sceneGenerationSnapshots: (id, sid, kind = '') => http.get(`/projects/${id}/scenes/${sid}/generation-snapshots`, { params: kind ? { kind } : {} }),
   previewSceneBlockingPrompt: (id, sid, kind) => http.post(`/projects/${id}/scenes/${sid}/blocking/prompts/${kind}/preview`, null, { timeout: 300000 }),
   applySceneBlockingPrompt: (id, sid, kind, data) => http.post(`/projects/${id}/scenes/${sid}/blocking/prompts/${kind}/apply`, data),
   updateSceneLocks: (id, sid, data) => http.patch(`/projects/${id}/scenes/${sid}/locks`, data),

@@ -209,8 +209,8 @@
           </div>
           <div class="duration-edit">
             <label>目标时长</label>
-            <input type="number" class="input input-sm" v-model.number="durationInput" min="3" :max="h3DurationMax" step="0.5" @change="saveDuration" />
-            <span class="dur-unit">秒 · 当前上限 {{h3DurationMax}}<span v-if="durationInput > 15"> · 长视频高显存</span></span>
+            <input type="number" class="input input-sm" v-model.number="durationInput" :min="sceneMinSeconds" :max="h3DurationMax" step="0.5" @change="saveDuration" />
+            <span class="dur-unit">秒 · 当前上限 {{h3DurationMax}}<span v-if="durationInput > shotMaxSeconds"> · 长视频高显存</span></span>
             <button class="btn btn-sm btn-secondary" :disabled="durationSaving" @click="saveDuration">{{ durationSaving ? '保存中…' : '保存' }}</button>
           </div>
         </div>
@@ -592,6 +592,9 @@ const dialogueVolume = ref(1)
 const bgmVolume = ref(1)
 const durationSaving = ref(false)
 const durationInput = ref(5)
+const modelLimits = ref({ shot_max_seconds: 15, scene_min_seconds: 3 })
+const shotMaxSeconds = computed(() => Number(modelLimits.value.shot_max_seconds || 15))
+const sceneMinSeconds = computed(() => Number(modelLimits.value.scene_min_seconds || 3))
 const h3DurationMax = ref(15)
 const sceneModeSaving = ref(false)
 const sceneModeInput = ref('')
@@ -747,10 +750,11 @@ async function loadSkillAudit() {
 
 async function load() {
   try {
-    const [{ data }, episodeRes, catalogRes] = await Promise.all([api.editorData(id(), activeEpN.value), api.projectEpisodes(id()), api.modelCatalog()])
+    const [{ data }, episodeRes, catalogRes, limitsRes] = await Promise.all([api.editorData(id(), activeEpN.value), api.projectEpisodes(id()), api.modelCatalog(), api.modelCapabilities().catch(() => null)])
     if (editorDisposed) return
+    if (limitsRes?.data) modelLimits.value = limitsRes.data
     const h3 = (catalogRes.data?.items || []).find(item => item.template_code === 'minimax_h3_ref2v')
-    h3DurationMax.value = Number(h3?.duration?.max || 15)
+    h3DurationMax.value = Number(h3?.duration?.max || shotMaxSeconds.value)
     project.value = data.project
     episodes.value = episodeRes.data || []
     scenes.value = data.scenes || []

@@ -113,8 +113,8 @@ func buildDirectorLogicReviewWithDialogues(draft *sceneDirectorDraft, dialogues 
 		if spoken := dialogueTextDuration(shot.Dialogue); spoken > 0 && shot.Duration > 0 && spoken > shot.Duration+0.5 {
 			review.BlockingIssues = append(review.BlockingIssues, fmt.Sprintf("本镜对白自然语速约需%.1f秒，超过镜头时长%.1f秒；请延长本镜或把对白分到相邻镜头", spoken, shot.Duration))
 		}
-		if i > 0 && shot.Duration > 0 && shot.Duration < 3 && draft.Shots[i-1].Duration > 0 && draft.Shots[i-1].Duration < 3 {
-			review.Advisories = append(review.Advisories, "连续两镜都短于3秒，请确认不是机械碎切")
+		if i > 0 && shot.Duration > 0 && shot.Duration < minTypicalShotSeconds && draft.Shots[i-1].Duration > 0 && draft.Shots[i-1].Duration < minTypicalShotSeconds {
+			review.Advisories = append(review.Advisories, fmt.Sprintf("连续两镜都短于%.0f秒，请确认不是机械碎切", minTypicalShotSeconds))
 		}
 		if i > 0 {
 			previousEnd := canonicalDialogueText(draft.Shots[i-1].EndState)
@@ -327,7 +327,7 @@ func normalizeShortDirectorShots(draft *sceneDirectorDraft) error {
 	}
 	for i := 0; i < len(draft.Shots); {
 		shot := draft.Shots[i]
-		if shot.Duration <= 0 || shot.Duration >= 3 {
+		if shot.Duration <= 0 || shot.Duration >= minTypicalShotSeconds {
 			i++
 			continue
 		}
@@ -345,7 +345,7 @@ func normalizeShortDirectorShots(draft *sceneDirectorDraft) error {
 			}
 			continue
 		}
-		return fmt.Errorf("镜头%d时长%.1f秒，无法与相邻镜头合并到3至15秒范围", i+1, shot.Duration)
+		return fmt.Errorf("镜头%d时长%.1f秒，无法与相邻镜头合并到%.0f至%.0f秒范围", i+1, shot.Duration, minTypicalShotSeconds, maxShotDuration)
 	}
 	return nil
 }
@@ -945,10 +945,10 @@ func dialogueDraftWarnings(draft *sceneDirectorDraft, count int) []string {
 	// Mirrors the director skill rule: reaction/detail cuts may be 2 seconds,
 	// but two consecutive cuts under 3 seconds read as jitter.
 	for i, shot := range draft.Shots {
-		if shot.Duration < 2 || shot.Duration > maxShotDuration {
-			warnings = append(warnings, fmt.Sprintf("第%d镜时长%.1f秒不在建议的2–15秒范围；可人工调整", i+1, shot.Duration))
-		} else if i > 0 && shot.Duration < 3 && draft.Shots[i-1].Duration >= 2 && draft.Shots[i-1].Duration < 3 {
-			warnings = append(warnings, fmt.Sprintf("第%d、%d镜连续短于3秒，节奏可能过碎；可人工合并", i, i+1))
+		if shot.Duration < minReactionShotSeconds || shot.Duration > maxShotDuration {
+			warnings = append(warnings, fmt.Sprintf("第%d镜时长%.1f秒不在建议的%.0f–%.0f秒范围；可人工调整", i+1, shot.Duration, minReactionShotSeconds, maxShotDuration))
+		} else if i > 0 && shot.Duration < minTypicalShotSeconds && draft.Shots[i-1].Duration >= minReactionShotSeconds && draft.Shots[i-1].Duration < minTypicalShotSeconds {
+			warnings = append(warnings, fmt.Sprintf("第%d、%d镜连续短于%.0f秒，节奏可能过碎；可人工合并", i, i+1, minTypicalShotSeconds))
 		}
 	}
 	return warnings
@@ -1445,7 +1445,7 @@ func buildDialogueRhythmReview(draft *sceneDirectorDraft, dialogues []models.Dia
 			advisories = append(advisories, "本镜混合多个权威speech_type；建议人工检查旁白、内心独白、画外对白与普通对白的画面呈现")
 		}
 		if minimum > maxSceneVideoDuration {
-			advisories = append(advisories, fmt.Sprintf("本镜权威语音自然时长下限%.1f秒超过Native H3的15秒上限，建议继续拆镜；当前创作节奏仍可预览、保存和制作", minimum))
+			advisories = append(advisories, fmt.Sprintf("本镜权威语音自然时长下限%.1f秒超过Native H3的%.0f秒上限，建议继续拆镜；当前创作节奏仍可预览、保存和制作", minimum, maxSceneVideoDuration))
 		}
 		if shot.Duration+0.001 < minimum {
 			advisories = append(advisories, fmt.Sprintf("本镜时长%.1f秒低于权威语音自然时长下限%.1f秒；不会删减台词或强制加速", shot.Duration, minimum))

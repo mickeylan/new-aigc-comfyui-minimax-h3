@@ -181,8 +181,8 @@ func scriptDialoguesMinDuration(dialogues []scriptDialogue) float64 {
 
 func sceneDialogueDurationFloor(scene scriptScene) float64 {
 	floor := math.Max(scriptDialoguesMinDuration(scene.Dialogues), scene.MinDuration)
-	if floor < 3 {
-		floor = 3
+	if floor < minSceneVideoDuration {
+		floor = minSceneVideoDuration
 	}
 	return floor
 }

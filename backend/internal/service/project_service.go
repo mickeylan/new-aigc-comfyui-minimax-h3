@@ -7223,7 +7223,7 @@ func (s *ProjectService) sceneShotUsage(sc *models.Scene, shots []models.Shot) S
 		mode := classifyH3SceneMode(sc, shots, s.sceneVideoDialogues(sc))
 		if (mode == h3SceneAction || mode == h3SceneMixed) && !structuredShotsCoverScene(shots, duration) {
 			usage.Status = "duration_mismatch"
-			usage.Message = fmt.Sprintf("镜头合计%.1f秒，与Scene时长%.1f秒相差超过%.1f秒（或单镜超过15秒）；武戏生成视频时会忽略这套镜头。", usage.ShotTotal, duration, shotDurationTolerance)
+			usage.Message = fmt.Sprintf("镜头合计%.1f秒，与Scene时长%.1f秒相差超过%.1f秒（或单镜超过%.0f秒）；武戏生成视频时会忽略这套镜头。", usage.ShotTotal, duration, shotDurationTolerance, maxShotDuration)
 		}
 	}
 	if usage.Status == "active" {

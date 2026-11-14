@@ -236,7 +236,7 @@ func validateNativeShotMode(shot models.Shot) error {
 		"使用canvas", "采用canvas", "切换canvas", "canvas workflow", "use canvas",
 	} {
 		if strings.Contains(text, marker) {
-			return fmt.Errorf("导演镜头只能使用3至15秒Native H3流程，禁止使用Endless或Canvas")
+			return fmt.Errorf("导演镜头只能使用%.0f至%.0f秒Native H3流程，禁止使用Endless或Canvas", minSceneVideoDuration, maxSceneVideoDuration)
 		}
 	}
 	return nil

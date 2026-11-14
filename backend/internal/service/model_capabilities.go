@@ -20,6 +20,14 @@ const (
 	maxShotDuration        = h3SegmentMaxSeconds
 )
 
+// Director pacing rules for internal Shots. They are editorial advice, not model limits:
+// a typical cut lasts at least 3 s, a reaction/detail cut may be 2 s, and two
+// consecutive cuts under 3 s read as jitter.
+const (
+	minTypicalShotSeconds  = 3.0
+	minReactionShotSeconds = 2.0
+)
+
 // ModelCapabilityLimits is the read model the UI uses for duration inputs and reference pickers.
 type ModelCapabilityLimits struct {
 	ShotMaxSeconds         float64 `json:"shot_max_seconds"`

@@ -188,8 +188,8 @@
         </div>
         <div class="field">
           <label for="h3_max_duration_seconds">MiniMax H3 单任务时长上限（秒）</label>
-          <input id="h3_max_duration_seconds" v-model.number="form.h3_max_duration_seconds" type="number" min="3" max="60" step="1" class="input" />
-          <div class="field-hint">默认15秒。超过15秒只用于已实测的高显存实例；本机约12GB显存不建议提高，30秒以上通常风险很高。该设置是执行门禁，不改变内部Shot规则（单镜不超过15秒，反应/细节镜头可短于3秒）。</div>
+          <input id="h3_max_duration_seconds" v-model.number="form.h3_max_duration_seconds" type="number" :min="modelLimits.scene_min_seconds" :max="modelLimits.scene_max_seconds" step="1" class="input" />
+          <div class="field-hint">默认{{modelLimits.shot_max_seconds}}秒。超过{{modelLimits.shot_max_seconds}}秒只用于已实测的高显存实例；本机约12GB显存不建议提高，30秒以上通常风险很高。该设置是执行门禁，不改变内部Shot规则（单镜不超过{{modelLimits.shot_max_seconds}}秒，反应/细节镜头可短于3秒）。</div>
         </div>
         <div class="field">
           <label for="comfy_output_subfolders">ComfyUI 输出子目录（恢复素材用）</label>
@@ -339,11 +339,13 @@ const aliKeyPlaceholder = ref('')
 const miniMaxKeyPlaceholder = ref('')
 
 const apiKeyPlaceholder = ref('')
+const modelLimits = ref({ shot_max_seconds: 15, scene_min_seconds: 3, scene_max_seconds: 60 })
 
 const aliConfigured = computed(() => !!(form.value.ali_api_key || aliKeyPlaceholder.value))
 const indexTTSModeLabel = computed(() => ({ comfyui:'ComfyUI集群', native_local:'Rust本地', disabled:'已关闭' }[form.value.index_tts_execution_mode] || 'ComfyUI集群'))
 
 onMounted(async () => {
+  api.modelCapabilities().then(({ data }) => { if (data?.shot_max_seconds) modelLimits.value = data }).catch(() => {})
   if (!store.instances.length) api.instances().then(({ data }) => { if (Array.isArray(data)) store.instances = data }).catch(() => {})
   try {
     const { data } = await api.settings()
@@ -364,7 +366,7 @@ onMounted(async () => {
       form.value.minimax_coding_model = 'MiniMax-M2.5'
     }
     if (!form.value.h3_max_duration_seconds) {
-      form.value.h3_max_duration_seconds = 15
+      form.value.h3_max_duration_seconds = modelLimits.value.shot_max_seconds
     }
     aliStyleText.value = data.ali_tts_style || '{}'
     aliExtraText.value = data.ali_tts_extra || '{}'
