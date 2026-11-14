@@ -265,6 +265,10 @@ type SourceDialogue struct {
 	Offset    int    `json:"offset"`
 	Speaker   string `json:"speaker"`
 	Text      string `json:"text"`
+	// PrevSceneOrder/NextSceneOrder are set only on missing lines: the scenes holding the
+	// nearest covered source lines before and after it, i.e. where it most likely belongs.
+	PrevSceneOrder int `json:"prev_scene_order,omitempty"`
+	NextSceneOrder int `json:"next_scene_order,omitempty"`
 }
 
 var (
@@ -854,12 +858,17 @@ func dialogueCoverage(raw string, ledger []SourceDialogue) DialogueCoverage {
 		return coverage
 	}
 	var actual []scriptDialogue
-	for _, scene := range res.Scenes {
+	var actualScene []int
+	for i, scene := range res.Scenes {
 		actual = append(actual, scene.Dialogues...)
+		for range scene.Dialogues {
+			actualScene = append(actualScene, i+1)
+		}
 	}
 	used := make([]bool, len(actual))
+	foundScene := make([]int, len(ledger))
 	last := -1
-	for _, source := range ledger {
+	for k, source := range ledger {
 		found := -1
 		for i := range actual {
 			// An unattributed source quote remains diagnostic data, but any actual
@@ -870,10 +879,10 @@ func dialogueCoverage(raw string, ledger []SourceDialogue) DialogueCoverage {
 			}
 		}
 		if found < 0 {
-			coverage.Missing = append(coverage.Missing, source)
 			continue
 		}
 		used[found] = true
+		foundScene[k] = actualScene[found]
 		coverage.Covered++
 		if found < last {
 			coverage.OutOfOrder++
@@ -882,7 +891,35 @@ func dialogueCoverage(raw string, ledger []SourceDialogue) DialogueCoverage {
 			last = found
 		}
 	}
+	coverage.Missing = missingWithPlacement(ledger, foundScene)
 	return coverage
+}
+
+// missingWithPlacement lists uncovered source lines in source order, each annotated with
+// the scenes of its nearest covered neighbours. foundScene[k] is 0 for a missing line and
+// -1 for a covered line whose scene is unknown (it stops the search but gives no hint).
+// The hint is advisory; it never moves or inserts dialogue.
+func missingWithPlacement(ledger []SourceDialogue, foundScene []int) []SourceDialogue {
+	missing := []SourceDialogue{}
+	for k, source := range ledger {
+		if foundScene[k] != 0 {
+			continue
+		}
+		for p := k - 1; p >= 0; p-- {
+			if foundScene[p] != 0 {
+				source.PrevSceneOrder = max(foundScene[p], 0)
+				break
+			}
+		}
+		for n := k + 1; n < len(ledger); n++ {
+			if foundScene[n] != 0 {
+				source.NextSceneOrder = max(foundScene[n], 0)
+				break
+			}
+		}
+		missing = append(missing, source)
+	}
+	return missing
 }
 
 // normalizeAdaptationDialogue is deliberately local to adaptation persistence: model
@@ -964,16 +1001,18 @@ func normalizeAdaptationDialogue(dialogue scriptDialogue) (string, string) {
 	return t, character
 }
 
-func persistedDialogueCoverage(rows []models.Dialogue, ledger []SourceDialogue) DialogueCoverage {
+// sceneOrders maps SceneID to Scene.Order for placement hints; a nil map omits them.
+func persistedDialogueCoverage(rows []models.Dialogue, ledger []SourceDialogue, sceneOrders map[uint]int) DialogueCoverage {
 	coverage := DialogueCoverage{Total: len(ledger), Missing: []SourceDialogue{}, OrderPassed: true}
 	used := make([]bool, len(rows))
+	foundScene := make([]int, len(ledger))
 	last := -1
 	for _, row := range rows {
 		if strings.TrimSpace(row.Character) == "" {
 			coverage.Unbound++
 		}
 	}
-	for _, source := range ledger {
+	for k, source := range ledger {
 		found := -1
 		for i, row := range rows {
 			if !used[i] && strings.TrimSpace(row.Text) == source.Text && (source.Speaker == "" || strings.TrimSpace(row.Character) == source.Speaker) {
@@ -982,10 +1021,15 @@ func persistedDialogueCoverage(rows []models.Dialogue, ledger []SourceDialogue) 
 			}
 		}
 		if found < 0 {
-			coverage.Missing = append(coverage.Missing, source)
 			continue
 		}
 		used[found] = true
+		// -1 marks a covered line whose scene order is unknown: it still counts as covered
+		// but gives no placement hint.
+		foundScene[k] = -1
+		if order := sceneOrders[rows[found].SceneID]; order > 0 {
+			foundScene[k] = order
+		}
 		coverage.Covered++
 		if found < last {
 			coverage.OutOfOrder++
@@ -994,6 +1038,7 @@ func persistedDialogueCoverage(rows []models.Dialogue, ledger []SourceDialogue) 
 			last = found
 		}
 	}
+	coverage.Missing = missingWithPlacement(ledger, foundScene)
 	return coverage
 }
 
@@ -1386,14 +1431,18 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 			return nil, err
 		}
 	}
-	coverage = persistedDialogueCoverage(persistedDialogues, ctx.DialogueLedger)
-	coverage.StoryPendingSceneOrders = storyPendingSceneOrders(raw)
 	if len(storedSceneIDs) > 0 {
 		// Re-read: generateScriptCore stored the rebalanced durations, not the model's.
 		if err := s.db.Where("id IN ?", storedSceneIDs).Order("`order`").Find(&storedScenes).Error; err != nil {
 			return nil, err
 		}
 	}
+	sceneOrders := make(map[uint]int, len(storedScenes))
+	for _, scene := range storedScenes {
+		sceneOrders[scene.ID] = scene.Order
+	}
+	coverage = persistedDialogueCoverage(persistedDialogues, ctx.DialogueLedger, sceneOrders)
+	coverage.StoryPendingSceneOrders = storyPendingSceneOrders(raw)
 	coverage.SceneAdvisories = sceneAdvisoryWarnings(storedScenes, persistedDialogues)
 	traces, _ := json.Marshal(ctx.Traces)
 	coverageJSON, _ := json.Marshal(coverage)

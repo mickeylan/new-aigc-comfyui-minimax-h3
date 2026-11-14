@@ -86,13 +86,16 @@ func sceneDialogueConsistencyIssues(content string, rows []models.Dialogue) []st
 	for i, row := range rows {
 		keys[i] = speechMatchKey(row.Text)
 	}
+	// A quote equal to a whole row consumes it, so a repeated quote cannot match the same
+	// row twice. A partial match (one row quoted in several pieces) does not consume.
+	used := make([]bool, len(rows))
 	find := func(text string, from int) int {
 		key := speechMatchKey(text)
 		if key == "" {
 			return -2
 		}
 		for i := from; i < len(keys); i++ {
-			if strings.Contains(keys[i], key) {
+			if !used[i] && strings.Contains(keys[i], key) {
 				return i
 			}
 		}
@@ -108,12 +111,15 @@ func sceneDialogueConsistencyIssues(content string, rows []models.Dialogue) []st
 		switch at := find(text, last); {
 		case at >= 0:
 			last = at
+			used[at] = keys[at] == speechMatchKey(text)
 		case at == -1 && find(text, 0) >= 0:
 			issues = append(issues, fmt.Sprintf("正文引号“%s”与对白行顺序不一致", text))
 		case at == -1:
 			issues = append(issues, fmt.Sprintf("正文引号“%s”没有对应的对白行", text))
 		}
 	}
+	// Speaker labels are checked against every row, independent of quote consumption.
+	clear(used)
 	for _, match := range sceneLabeledSpeechPattern.FindAllStringSubmatch(content, -1) {
 		speaker, text := strings.TrimSpace(match[1]), strings.TrimSpace(match[2])
 		if speaker == "待确认" {

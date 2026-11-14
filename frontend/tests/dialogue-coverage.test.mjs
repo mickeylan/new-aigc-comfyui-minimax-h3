@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { parseDialogueCoverage, parseSceneAdvisories, validateSceneOrders } from '../src/utils/dialogueCoverage.js'
+import { missingDialoguePlacement, parseDialogueCoverage, parseSceneAdvisories, validateSceneOrders } from '../src/utils/dialogueCoverage.js'
 
 const view = readFileSync(new URL('../src/views/AdaptationPlan.vue', import.meta.url), 'utf8')
 
@@ -28,9 +28,19 @@ test('遗漏覆盖数据保留章节、位置、speaker和原句', () => {
   }), {
     total: 3,
     covered: 2,
-    missing: [{ chapter_id: 7, chapter_no: 4, offset: 18, speaker: '', text: '你终于来了。' }],
+    missing: [{ chapter_id: 7, chapter_no: 4, offset: 18, speaker: '', text: '你终于来了。', placement: '' }],
     story_pending_scene_orders: []
   })
+})
+
+test('遗漏台词按相邻已匹配台词所在场次给出位置提示', () => {
+  assert.equal(missingDialoguePlacement({ prev_scene_order: 4, next_scene_order: 5 }), '应放在第4场与第5场之间')
+  assert.equal(missingDialoguePlacement({ prev_scene_order: 6, next_scene_order: 6 }), '应放在第6场内')
+  assert.equal(missingDialoguePlacement({ prev_scene_order: 9 }), '应放在第9场之后')
+  assert.equal(missingDialoguePlacement({ next_scene_order: 1 }), '应放在第1场之前')
+  assert.equal(missingDialoguePlacement({}), '')
+  assert.equal(parseDialogueCoverage({ total: 2, covered: 1, missing: [{ text: '甲', prev_scene_order: 2, next_scene_order: 3 }] }).missing[0].placement, '应放在第2场与第3场之间')
+  assert.match(view, /<small v-if="item\.placement" class="missing-placement">\{\{item\.placement\}\}<\/small>/)
 })
 
 test('待整合场次只保留唯一正整数且不改变覆盖统计', () => {

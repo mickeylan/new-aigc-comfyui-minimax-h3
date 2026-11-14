@@ -282,7 +282,7 @@ func TestAdaptationDialogueNormalizationKeepsUnboundAndUnknownForReview(t *testi
 		}
 		rows = append(rows, models.Dialogue{Order: round + 1, Character: character, SpeechType: typ, Text: d.Text})
 	}
-	coverage := persistedDialogueCoverage(rows, []SourceDialogue{{Speaker: "甲", Text: "一"}, {Speaker: "乙", Text: "二"}, {Speaker: "丙", Text: "三"}})
+	coverage := persistedDialogueCoverage(rows, []SourceDialogue{{Speaker: "甲", Text: "一"}, {Speaker: "乙", Text: "二"}, {Speaker: "丙", Text: "三"}}, nil)
 	if len(rows) != 13 || coverage.Covered != 2 || len(coverage.Missing) != 1 || coverage.Unbound != 6 {
 		t.Fatalf("rows=%d coverage=%+v", len(rows), coverage)
 	}
