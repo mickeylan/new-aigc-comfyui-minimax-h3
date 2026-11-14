@@ -34,7 +34,7 @@ func NewContinuityService(cfg *config.Config, db *gorm.DB, remote *RemoteExec, u
 
 func (s *ContinuityService) previousScene(scene *models.Scene) (*models.Scene, error) {
 	var previous models.Scene
-	result := s.db.Where("project_id = ? AND episode_n = ? AND generation = ? AND `order` < ?", scene.ProjectID, scene.EpisodeN, scene.Generation, scene.Order).Order("`order` DESC").Limit(1).Find(&previous)
+	result := s.db.Where("project_id = ? AND episode_n = ? AND generation = ? AND `order` < ? AND (archived = ? OR archived IS NULL)", scene.ProjectID, scene.EpisodeN, scene.Generation, scene.Order, false).Order("`order` DESC, id DESC").Limit(1).Find(&previous)
 	if result.Error != nil {
 		return nil, result.Error
 	}

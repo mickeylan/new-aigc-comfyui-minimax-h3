@@ -317,3 +317,30 @@ func TestContinuityInvalidatesTransitiveDependents(t *testing.T) {
 		t.Fatalf("unexpected statuses: %s %s", c2.Status, c3.Status)
 	}
 }
+
+func TestPreviousSceneSkipsArchivedScenes(t *testing.T) {
+	svc, db := newContinuityTestService(t)
+	p := models.Project{Title: "p"}
+	db.Create(&p)
+	active := models.Scene{ProjectID: p.ID, EpisodeN: 1, Generation: 1, Order: 1, Content: "active", VideoPrompt: "active end"}
+	archived := models.Scene{ProjectID: p.ID, EpisodeN: 1, Generation: 1, Order: 2, Content: "archived", VideoPrompt: "archived end", Archived: true}
+	current := models.Scene{ProjectID: p.ID, EpisodeN: 1, Generation: 1, Order: 3}
+	db.Create(&active)
+	db.Create(&archived)
+	db.Create(&current)
+	previous, err := svc.previousScene(&current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous == nil || previous.ID != active.ID {
+		t.Fatalf("previous scene=%+v, want active scene %d", previous, active.ID)
+	}
+	if got := (&Service{DB: db}).previousSceneEndState(&current); got != "active end" {
+		t.Fatalf("previous end state=%q", got)
+	}
+	first := models.Scene{ProjectID: p.ID, EpisodeN: 1, Generation: 1, Order: 2}
+	db.Model(&active).Update("archived", true)
+	if previous, err := svc.previousScene(&first); err != nil || previous != nil {
+		t.Fatalf("previous scene=%+v err=%v, want none", previous, err)
+	}
+}
