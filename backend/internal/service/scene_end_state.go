@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"unicode"
 
 	"comfyui-console/internal/models"
 	"github.com/gin-gonic/gin"
@@ -123,8 +124,12 @@ func sceneEndStateSourceHash(scene *models.Scene, shots []models.Shot) string {
 }
 
 func (s *Service) sceneEndStateSource(scene *models.Scene) (string, []models.Shot, error) {
+	return sceneEndStateSourceFrom(s.DB, scene)
+}
+
+func sceneEndStateSourceFrom(db *gorm.DB, scene *models.Scene) (string, []models.Shot, error) {
 	var shots []models.Shot
-	if err := s.DB.Where("scene_id = ?", scene.ID).Order("order_num, id").Find(&shots).Error; err != nil {
+	if err := db.Where("scene_id = ?", scene.ID).Order("order_num, id").Find(&shots).Error; err != nil {
 		return "", nil, err
 	}
 	return sceneEndStateSourceHash(scene, shots), shots, nil
@@ -139,13 +144,17 @@ type sceneEndStateView struct {
 }
 
 func (s *Service) loadSceneEndState(scene *models.Scene) (*sceneEndStateView, error) {
-	hash, _, err := s.sceneEndStateSource(scene)
+	return loadSceneEndStateFrom(s.DB, scene)
+}
+
+func loadSceneEndStateFrom(db *gorm.DB, scene *models.Scene) (*sceneEndStateView, error) {
+	hash, _, err := sceneEndStateSourceFrom(db, scene)
 	if err != nil {
 		return nil, err
 	}
 	view := &sceneEndStateView{SourceSHA256: hash}
 	var row models.SceneEndState
-	if result := s.DB.Where("scene_id = ?", scene.ID).Limit(1).Find(&row); result.Error != nil {
+	if result := db.Where("scene_id = ?", scene.ID).Limit(1).Find(&row); result.Error != nil {
 		return nil, result.Error
 	} else if result.RowsAffected == 0 {
 		return view, nil
@@ -255,14 +264,98 @@ func formatInheritedSceneState(state sceneEndStateData, current *models.Scene, b
 // inheritedSceneStartState returns the previous Scene's end state prepared for the current
 // Scene, or empty when none was saved or it no longer matches the previous Scene.
 func (s *Service) inheritedSceneStartState(current, previous *models.Scene) string {
+	return inheritedSceneStartStateFrom(s.DB, current, previous)
+}
+
+// A fresh saved record wins; otherwise an authored end-state block in the previous Scene
+// is used directly, so writers who state it explicitly never need an extraction call.
+func inheritedSceneStartStateFrom(db *gorm.DB, current, previous *models.Scene) string {
 	if previous == nil {
 		return ""
 	}
-	view, err := s.loadSceneEndState(previous)
-	if err != nil || view.State == nil || view.Stale {
+	view, err := loadSceneEndStateFrom(db, previous)
+	if err != nil {
 		return ""
 	}
-	return formatInheritedSceneState(*view.State, current, sceneBoundaryBreak(previous, current))
+	state := view.State
+	if state == nil || view.Stale {
+		if explicit, ok := parseExplicitSceneEndState(previous.Content); ok {
+			state = &explicit
+		} else {
+			return ""
+		}
+	}
+	return formatInheritedSceneState(*state, current, sceneBoundaryBreak(previous, current))
+}
+
+// sceneInheritedStateContext is the prompt block for the image and H3 generators. Like the
+// blocking context it is generation-time reference only and stays out of review hashes.
+func (s *ProjectService) sceneInheritedStateContext(sc *models.Scene) string {
+	previous, err := previousEpisodeSceneFrom(s.db, sc)
+	if err != nil {
+		return ""
+	}
+	if block := inheritedSceneStartStateFrom(s.db, sc, previous); block != "" {
+		return "\n\n" + block
+	}
+	return ""
+}
+
+var sceneEndStateLabels = map[string]func(*sceneEndCharacterState) *string{
+	"姿态": func(c *sceneEndCharacterState) *string { return &c.Posture },
+	"面部": func(c *sceneEndCharacterState) *string { return &c.Face },
+	"持有": func(c *sceneEndCharacterState) *string { return &c.Holding },
+	"情绪": func(c *sceneEndCharacterState) *string { return &c.Emotion },
+	"伤势": func(c *sceneEndCharacterState) *string { return &c.Injury },
+}
+
+// parseExplicitSceneEndState reads an authored block that starts with a line containing
+// 「本场结尾状态」 and ends at a blank line or the next 【…】 heading. Each line is either
+// 「道具 名：位置」 or 「角色名：姿态 …；伤势 …」; unlabeled character text is kept as posture.
+func parseExplicitSceneEndState(content string) (sceneEndStateData, bool) {
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	// The marker must open its line (after bullets, emoji or 【), so a line of dialogue that
+	// merely mentions it does not turn the following dialogue into state entries.
+	start := slices.IndexFunc(lines, func(line string) bool {
+		return strings.HasPrefix(strings.TrimLeftFunc(line, func(r rune) bool { return !unicode.IsLetter(r) }), "本场结尾状态")
+	})
+	if start < 0 {
+		return sceneEndStateData{}, false
+	}
+	state := sceneEndStateData{Characters: map[string]sceneEndCharacterState{}, Props: map[string]string{}}
+	for _, line := range lines[start+1:] {
+		line = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "-•·*"))
+		if line == "" || strings.HasPrefix(line, "【") {
+			break
+		}
+		name, body, ok := strings.Cut(strings.Replace(line, ":", "：", 1), "：")
+		name, body = strings.TrimSpace(name), strings.TrimSpace(body)
+		if !ok || name == "" || body == "" {
+			continue
+		}
+		if prop, isProp := strings.CutPrefix(name, "道具"); isProp {
+			state.Props[strings.TrimSpace(prop)] = body
+			continue
+		}
+		c := state.Characters[name]
+		var loose []string
+		for _, part := range strings.FieldsFunc(body, func(r rune) bool { return r == '；' || r == ';' }) {
+			part = strings.TrimSpace(part)
+			if label, value, found := strings.Cut(part, " "); found && sceneEndStateLabels[label] != nil {
+				*sceneEndStateLabels[label](&c) = strings.TrimSpace(value)
+			} else if len([]rune(part)) > 2 && sceneEndStateLabels[string([]rune(part)[:2])] != nil {
+				*sceneEndStateLabels[string([]rune(part)[:2])](&c) = strings.TrimSpace(strings.TrimLeft(string([]rune(part)[2:]), "：:"))
+			} else if part != "" {
+				loose = append(loose, part)
+			}
+		}
+		if len(loose) > 0 && c.Posture == "" {
+			c.Posture = strings.Join(loose, "；")
+		}
+		state.Characters[name] = c
+	}
+	state = normalizeSceneEndState(state)
+	return state, len(state.Characters)+len(state.Props) > 0
 }
 
 func (s *Service) sceneEndStateSkillReady() bool {
@@ -309,6 +402,18 @@ func (s *Service) HandleSaveSceneEndState(c *gin.Context) {
 func (s *Service) HandleExtractSceneEndState(c *gin.Context) {
 	scene, ok := s.loadScene(c)
 	if !ok {
+		return
+	}
+	if explicit, ok := parseExplicitSceneEndState(scene.Content); ok {
+		hash, _, err := s.sceneEndStateSource(scene)
+		if err == nil {
+			_, err = s.saveSceneEndState(scene, explicit, hash, "explicit", 0)
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		s.HandleGetSceneEndState(c)
 		return
 	}
 	if !s.textProviderConfigured() {

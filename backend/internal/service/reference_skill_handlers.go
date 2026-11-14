@@ -8,6 +8,7 @@ import (
 
 	"comfyui-console/internal/models"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func (s *Service) sceneAssetBible(scene *models.Scene) (string, error) {
@@ -40,8 +41,12 @@ func (s *Service) sceneAssetBible(scene *models.Scene) (string, error) {
 }
 
 func (s *Service) previousEpisodeScene(scene *models.Scene) (*models.Scene, error) {
+	return previousEpisodeSceneFrom(s.DB, scene)
+}
+
+func previousEpisodeSceneFrom(db *gorm.DB, scene *models.Scene) (*models.Scene, error) {
 	var previous models.Scene
-	if err := s.DB.Where("project_id = ? AND generation = ? AND episode_n = ? AND `order` < ? AND (archived = ? OR archived IS NULL)", scene.ProjectID, scene.Generation, scene.EpisodeN, scene.Order, false).
+	if err := db.Where("project_id = ? AND generation = ? AND episode_n = ? AND `order` < ? AND (archived = ? OR archived IS NULL)", scene.ProjectID, scene.Generation, scene.EpisodeN, scene.Order, false).
 		Order("`order` DESC, id DESC").First(&previous).Error; err != nil {
 		return nil, err
 	}

@@ -53,6 +53,57 @@ func TestParseSceneEndStateOutputAcceptsObjectAndArrayForms(t *testing.T) {
 	}
 }
 
+func TestParseExplicitSceneEndStateBlock(t *testing.T) {
+	content := "韩立被一掌击退，撞上石壁。\n\n本场结尾状态：\n- 韩立：姿态 单膝跪地；伤势 左肩剑伤；持有：右手青竹蜂云剑\n· 厉飞雨: 倚在门边喘气\n道具 玉瓶：碎在地上\n\n【下一场】韩立醒来"
+	state, ok := parseExplicitSceneEndState(content)
+	if !ok {
+		t.Fatal("explicit block not detected")
+	}
+	han := state.Characters["韩立"]
+	if han.Posture != "单膝跪地" || han.Injury != "左肩剑伤" || han.Holding != "右手青竹蜂云剑" {
+		t.Fatalf("韩立=%+v", han)
+	}
+	if state.Characters["厉飞雨"].Posture != "倚在门边喘气" || state.Props["玉瓶"] != "碎在地上" {
+		t.Fatalf("state=%+v", state)
+	}
+	if _, ok := parseExplicitSceneEndState("📎【本场结尾状态】\n韩立：伤势 左肩剑伤"); !ok {
+		t.Fatal("a bracketed marker with emoji must be detected")
+	}
+	if _, ok := parseExplicitSceneEndState("韩立说：本场结尾状态很差\n柳石：滚"); ok {
+		t.Fatal("a mention without entries must not count as a block")
+	}
+	if _, ok := parseExplicitSceneEndState("韩立被击退"); ok {
+		t.Fatal("no block expected")
+	}
+}
+
+func TestExplicitEndStateFeedsChainAndPromptsWithoutLLM(t *testing.T) {
+	svc, db, p := newSceneEndStateTestService(t)
+	prev := models.Scene{ProjectID: p.ID, EpisodeN: 1, Generation: 1, Order: 1, LocationName: "洞府", Content: "韩立被击退。\n本场结尾状态\n韩立：姿态 跪地；伤势 左肩剑伤"}
+	cur := models.Scene{ProjectID: p.ID, EpisodeN: 1, Generation: 1, Order: 2, LocationName: "洞府", VisibleCharacters: "韩立", CharacterRolesSet: true, Content: "韩立起身"}
+	db.Create(&prev)
+	db.Create(&cur)
+	projects := &ProjectService{db: db}
+	if got := projects.sceneInheritedStateContext(&cur); !strings.Contains(got, "跪地") || !strings.Contains(got, "左肩剑伤") {
+		t.Fatalf("unsaved explicit block must reach image/H3 prompts, got %q", got)
+	}
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/api/projects/:id/scenes/:sid/end-state/extract", svc.HandleExtractSceneEndState)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("POST", fmt.Sprintf("/api/projects/%d/scenes/%d/end-state/extract", p.ID, prev.ID), nil))
+	if w.Code != 200 {
+		t.Fatalf("explicit extract must not need a provider or Skill: status=%d %s", w.Code, w.Body.String())
+	}
+	var out sceneEndStateView
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || out.Record == nil || out.Record.ExtractedBy != "explicit" || out.Stale {
+		t.Fatalf("out=%+v err=%v", out, err)
+	}
+	if got := projects.sceneInheritedStateContext(&models.Scene{ProjectID: p.ID, EpisodeN: 1, Generation: 1, Order: 2, LocationName: "山门", VisibleCharacters: "韩立", CharacterRolesSet: true}); strings.Contains(got, "跪地") || !strings.Contains(got, "左肩剑伤") {
+		t.Fatalf("a place change must keep only injuries, got %q", got)
+	}
+}
+
 func TestSceneEndStateArchivistSkillIsSeeded(t *testing.T) {
 	svc, db, _ := newSceneEndStateTestService(t)
 	if err := db.AutoMigrate(&models.Skill{}); err != nil {

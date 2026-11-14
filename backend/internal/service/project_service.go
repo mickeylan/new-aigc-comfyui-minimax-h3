@@ -571,7 +571,7 @@ func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, err
 	if err := s.db.First(&project, sc.ProjectID).Error; err != nil {
 		return "", err
 	}
-	assetContext := s.assetContextForScene(sc) + sceneBlockingPromptContext(sc) + s.sceneImageAliasIdentityContext(sc)
+	assetContext := s.assetContextForScene(sc) + sceneBlockingPromptContext(sc) + s.sceneInheritedStateContext(sc) + s.sceneImageAliasIdentityContext(sc)
 	shotContext := s.sceneOpeningDirectorContext(sc)
 	_, referenceLines, explicitReferences := s.selectedSceneReferenceFiles(sc, "krea2")
 	if !explicitReferences {
@@ -2888,7 +2888,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	if explicitTimedShotCount > 0 {
 		contentInstruction = "逐段忠实编译Scene显式时间轴中的全部可见事实；不得把具体观察、手部动作、道具状态、步法、视线、说话动作或结束状态概括掉。"
 	}
-	user := fmt.Sprintf("目标时长：%.1f秒。%s场景剧情中已明确存在的每个[Shot N]都必须原序保留，禁止合并或删除。%s\n\n【场景剧情（视觉与时间线最高权威）】\n%s\n\n【SOURCE EVENT LEDGER（逐项覆盖，不是Shot计划）】\n%s\n\n【Shot导演设计（仅供机位、构图、光线等电影化语境；不得覆盖、删减或替换当前Scene事实，即使Scene没有显式时间轴）】\n%s\n\n【结构化对白（仅判断口型时机）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s%s", normalizeSceneDuration(sc.Duration), contentInstruction, actionTask, canonicalSceneContent, sourceEventLedger, shotContext, dialogueContext, strings.Join(refLines, "\n"), sceneBlockingPromptContext(sc))
+	user := fmt.Sprintf("目标时长：%.1f秒。%s场景剧情中已明确存在的每个[Shot N]都必须原序保留，禁止合并或删除。%s\n\n【场景剧情（视觉与时间线最高权威）】\n%s\n\n【SOURCE EVENT LEDGER（逐项覆盖，不是Shot计划）】\n%s\n\n【Shot导演设计（仅供机位、构图、光线等电影化语境；不得覆盖、删减或替换当前Scene事实，即使Scene没有显式时间轴）】\n%s\n\n【结构化对白（仅判断口型时机）】\n%s\n\n【实际参考绑定（仅身份与外观）】\n%s%s", normalizeSceneDuration(sc.Duration), contentInstruction, actionTask, canonicalSceneContent, sourceEventLedger, shotContext, dialogueContext, strings.Join(refLines, "\n"), sceneBlockingPromptContext(sc)+s.sceneInheritedStateContext(sc))
 	policy, err := NewPromptPolicyService(s.db).Resolve(PromptPolicyContext{ProjectID: sc.ProjectID, SceneID: &sc.ID}, PromptPolicyVideoPolish, system)
 	if err != nil {
 		return "", fmt.Errorf("解析视频提示词策略失败: %w", err)
