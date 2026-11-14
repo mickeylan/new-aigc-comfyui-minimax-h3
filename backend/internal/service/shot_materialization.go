@@ -81,11 +81,17 @@ func planDialogueFragments(shots []models.Shot, dialogues []models.Dialogue) ([]
 
 // groupNativeShots keeps every reviewed camera setup as a Shot, but packs adjacent
 // short Shots into the fewest sequential Native scenes whose total duration is <=15s.
+// A Native boundary is a separate H3 generation, so a sentence spanning it would be cut
+// in half; the cut moves back to the latest sentence boundary when both sides still fit.
 func groupNativeShots(shots []models.Shot, fragments [][]dialogueFragment) []nativeShotGroup {
 	groups := make([]nativeShotGroup, 0, len(shots))
 	for i, shot := range shots {
 		if len(groups) == 0 || groups[len(groups)-1].Duration+shot.Duration > maxNativeSceneDuration {
-			groups = append(groups, nativeShotGroup{})
+			next := nativeShotGroup{}
+			if len(groups) > 0 {
+				next = moveNativeCutToSentenceBoundary(&groups[len(groups)-1], fragments[i], shot.Duration)
+			}
+			groups = append(groups, next)
 		}
 		group := &groups[len(groups)-1]
 		group.Shots = append(group.Shots, shot)
@@ -93,6 +99,39 @@ func groupNativeShots(shots []models.Shot, fragments [][]dialogueFragment) []nat
 		group.Duration += shot.Duration
 	}
 	return groups
+}
+
+func fragmentsContinueDialogue(before, after []dialogueFragment) bool {
+	if len(before) == 0 || len(after) == 0 {
+		return false
+	}
+	left, right := before[len(before)-1].Source, after[0].Source
+	return left.ID != 0 && left.ID == right.ID
+}
+
+// moveNativeCutToSentenceBoundary returns the start of the next group. When the incoming
+// Shot continues a Dialogue from the current group, trailing Shots move forward to the
+// latest boundary no Dialogue crosses, keeping the current group >=3s and the next <=15s.
+// If no such boundary exists the original cut is kept.
+func moveNativeCutToSentenceBoundary(current *nativeShotGroup, incoming []dialogueFragment, incomingDuration float64) nativeShotGroup {
+	last := len(current.Shots) - 1
+	if last < 0 || !fragmentsContinueDialogue(current.FragmentSets[last], incoming) {
+		return nativeShotGroup{}
+	}
+	moved := incomingDuration
+	for k := last; k >= 1; k-- {
+		moved += current.Shots[k].Duration
+		if moved > maxNativeSceneDuration {
+			break
+		}
+		if current.Duration-moved+incomingDuration < 3 || fragmentsContinueDialogue(current.FragmentSets[k-1], current.FragmentSets[k]) {
+			continue
+		}
+		next := nativeShotGroup{Shots: append([]models.Shot(nil), current.Shots[k:]...), FragmentSets: append([][]dialogueFragment(nil), current.FragmentSets[k:]...), Duration: moved - incomingDuration}
+		current.Shots, current.FragmentSets, current.Duration = current.Shots[:k], current.FragmentSets[:k], current.Duration-next.Duration
+		return next
+	}
+	return nativeShotGroup{}
 }
 
 // validateNativeShotGroups enforces the standalone 3-second Scene minimum on

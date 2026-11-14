@@ -227,6 +227,43 @@ func TestGenerateScriptPreservesSpeakerAliasesThroughAllDialogueStages(t *testin
 	}
 }
 
+func TestGenerateScriptKeepsDialogueFloorForAuthoritativeRows(t *testing.T) {
+	provider := &adaptationMockTextProvider{}
+	svc, project, chapter := newAdaptationDialogueTestService(t, provider)
+	ledger := extractSourceDialogues(chapter, "虬髯大汉", "马脸男子", "齐姓道士")
+	provider.responses = []string{adaptationScriptFixture(t, "floor-script", ledger, true)}
+	if _, err := svc.GenerateScript(project.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	var scenes []models.Scene
+	if err := svc.db.Where("project_id = ? AND archived = ?", project.ID, false).Order("`order`").Find(&scenes).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(scenes) != 20 {
+		t.Fatalf("scenes=%d, want the model's 20 (authoritative rows must not be split)", len(scenes))
+	}
+	longest := 0
+	for i, d := range ledger {
+		if len([]rune(d.Text)) > len([]rune(ledger[longest].Text)) {
+			longest = i
+		}
+		floor := scriptDialoguesMinDuration([]scriptDialogue{{Character: d.Speaker, SpeechType: "dialogue", Text: d.Text}})
+		if scenes[i].Duration < floor {
+			t.Fatalf("scene %d duration %.1f below natural speech %.1f for %q", i+1, scenes[i].Duration, floor, d.Text)
+		}
+	}
+	if floor := scriptDialoguesMinDuration([]scriptDialogue{{Text: ledger[longest].Text}}); floor <= 9 {
+		t.Fatalf("fixture's longest line needs %.1f s; it must exceed the model's 9 s to exercise the floor", floor)
+	}
+	var rows []models.Dialogue
+	if err := svc.db.Where("scene_id = ?", scenes[longest].ID).Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Text != ledger[longest].Text {
+		t.Fatalf("authoritative row changed: %+v", rows)
+	}
+}
+
 func TestAdaptationDialogueNormalizationKeepsUnboundAndUnknownForReview(t *testing.T) {
 	raw := `{"scenes":[{"dialogues":[{"speaker":"甲","speechType":"对白","text":"一"},{"character_name":"乙","speech_type":"","text":"二"},{"character":"","speech_type":"unexpected","text":"三"},{"character":"","speech_type":"","text":"四"}]}]}`
 	parsed, err := parseScriptJSON(raw)

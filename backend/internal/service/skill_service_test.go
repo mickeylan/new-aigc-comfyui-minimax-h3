@@ -77,10 +77,10 @@ func TestNovelEpisodeSkillRequiresPureStringCollections(t *testing.T) {
 	if err := db.Where("code = ?", "novel-episode-script").Order("version DESC,id DESC").First(&skill).Error; err != nil {
 		t.Fatal(err)
 	}
-	if skill.Version != 4 {
-		t.Fatalf("novel episode skill version=%d, want 4", skill.Version)
+	if skill.Version != 5 {
+		t.Fatalf("novel episode skill version=%d, want 5", skill.Version)
 	}
-	for _, want := range []string{"必须是纯字符串数组", "数组元素禁止输出对象", "must_keep_events逐项落地", "不得发明原著没有的战斗"} {
+	for _, want := range []string{"必须是纯字符串数组", "数组元素禁止输出对象", "must_keep_events逐项落地", "不得发明原著没有的战斗", "动作数约为时长÷2.5", "场景数随剧情发展", "拟声词和音效只写进content"} {
 		if !strings.Contains(skill.SystemPrompt, want) {
 			t.Fatalf("novel episode skill missing %q: %s", want, skill.SystemPrompt)
 		}
@@ -196,7 +196,7 @@ func TestDirectorSceneSkillsShareMethodDrivenPrompt(t *testing.T) {
 	if err := svc.InitSystemSkills(); err != nil {
 		t.Fatal(err)
 	}
-	wantVersion := map[string]int{"director-scene-draft": 6, "director-scene-drama": 2, "director-scene-suspense": 2, "director-scene-emotion": 2, "director-scene-establishing": 2}
+	wantVersion := map[string]int{"director-scene-draft": 7, "director-scene-drama": 3, "director-scene-suspense": 3, "director-scene-emotion": 3, "director-scene-establishing": 3}
 	for code, version := range wantVersion {
 		skill, err := svc.latestEnabledSkillByCode(code)
 		if err != nil {
@@ -205,7 +205,7 @@ func TestDirectorSceneSkillsShareMethodDrivenPrompt(t *testing.T) {
 		if skill.Version != version {
 			t.Fatalf("%s version=%d want %d", code, skill.Version, version)
 		}
-		for _, want := range []string{"【工作方法】", "【字段怎样才算合格】", "差：", "好：", "用户指定镜头数大于0时", "全部用简洁英文", "禁止全部堆到最后一镜", "按每秒9字估算"} {
+		for _, want := range []string{"【工作方法】", "【字段怎样才算合格】", "差：", "好：", "用户指定镜头数大于0时", "全部用简洁英文", "禁止全部堆到最后一镜", "按每秒9字估算", "镜头数是结果而非目标", "一次15秒生成内不超过5镜", "不在一句对白中途切镜"} {
 			if !strings.Contains(skill.SystemPrompt, want) {
 				t.Fatalf("%s system prompt lacks %q", code, want)
 			}

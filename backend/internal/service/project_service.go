@@ -1296,6 +1296,9 @@ type scriptScene struct {
 	VisualType          string           `json:"visual_type"`
 	MegaType            string           `json:"mega_type"`
 	Dialogues           []scriptDialogue `json:"dialogues"`
+	// MinDuration carries a natural-speech floor computed from dialogue rows that the
+	// caller persists separately (episode adaptation), so duration planning still honors it.
+	MinDuration float64 `json:"min_duration,omitempty"`
 }
 
 type scriptResult struct {
@@ -1769,6 +1772,8 @@ func (s *ProjectService) generateScriptCore(p *models.Project, episodeN int, raw
 	if targetScenes <= 0 {
 		targetScenes = 25
 	}
+	// 拟声词/音效不是可配音对白：移回画面描写，避免生成空说话人或“待确认”对白行。
+	moveSoundEffectsToContent(res.Scenes, nil)
 	// 对白自然语速是硬约束：先按完整句子/说话人拆分超长镜头，再以目标总时长作为可超出的参考下限。
 	splitScenesForDialogueDuration(res)
 	rebalanceScriptDurations(res, targetDuration)
@@ -2870,6 +2875,9 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 			actionTask += fmt.Sprintf("\n\n【无结构化Shot的可见阶段拆分】当前Scene包含多个连续可见阶段，必须生成恰好%d个内部Shot并保持一个连续视频；Shot 1不得带时间戳，Shot 2必须使用合理的官方At MM:SS.mmm切入时间。第一镜完整表现前一阶段的实际动作步骤，后一镜表现后续动作与环境结果。不得把全部剧情压缩成一个Shot，不得只写dons/puts on而跳过穿袖、合襟、束带、披挂或扣合等原文所要求的可见过程。心理状态必须改写为可见表情或姿态变化。", suggestedShotCount)
 		}
 	}
+	if len(promptShots) > 1 && explicitTimedShotCount == 0 {
+		actionTask += fmt.Sprintf("\n\n【导演镜头参考】已保存%d个导演Shot，是推荐的切镜方案：优先沿用其切点、景别和对白归属；剧情确有需要时可以合并或增加切点。每个Shot使用官方[Shot N]标记，Shot 2起必须带递增的At MM:SS.mmm切入时间。", len(promptShots))
+	}
 	if sceneMode == h3SceneAction || sceneMode == h3SceneMixed {
 		actionTask += "\n\n【武戏硬任务】动作必须从开头立即以正常实时速度启动。武器、法宝、灵兽、术法和能量形态只能读取下方Scene与实际参考绑定，不得用通用武器替换，不得创造未提供的装备或术法。严格编译原文实际写出的攻击、应对、命中、胜负与环境反馈；原文没有写出的威胁或响应一律不得补造。每个动作按其真实过程分配时长，不得用慢速或停顿填充。"
 	}
@@ -2912,9 +2920,12 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 		}
 		return defaultSceneVideoAction(sc)
 	}
-	expectedShotCount := len(promptShots)
-	if suggestedShotCount > expectedShotCount {
-		expectedShotCount = suggestedShotCount
+	// Saved director Shots are a reviewed reference, not a binding cut plan: the H3
+	// director may merge or add cuts. Only cuts authored in the Scene text and the
+	// suggested stage count fix the count; a single long Native Shot stays one Shot.
+	expectedShotCount := suggestedShotCount
+	if requireBalancedTimeline {
+		expectedShotCount = 1
 	}
 	combatMode := sceneMode == h3SceneAction || sceneMode == h3SceneMixed
 	for _, marker := range h3ShotMarkerPattern.FindAllStringSubmatch(canonicalSceneContent, -1) {
@@ -3056,8 +3067,12 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 		authoritativeFacts := useSubjectTags(canonicalSceneContent, refLines)
 		failedDraft := boundDraft
 		repairedOK := false
+		shotCountRule := "Keep the draft's Shot structure in original event order; omit, reorder, or invent nothing."
+		if expectedShotCount > 0 {
+			shotCountRule = fmt.Sprintf("Produce exactly %d Shot paragraphs in original event order; omit, merge, reorder, retime, or invent nothing.", expectedShotCount)
+		}
 		for attempt := 1; attempt <= 2; attempt++ {
-			repairUser := fmt.Sprintf("Rewrite the draft into concise official English H3 shot prose using the authoritative Scene facts below. Produce exactly %d Shot paragraphs in original event order; omit, merge, reorder, retime, or invent nothing.%s Convert psychology into visible facial or posture changes. For dressing, show physical garment handling and intermediate states instead of jumping to the completed outfit. Visible cause-and-effect mechanics are executable facts, not optional background: retain every stated trigger, object appearance, state transition, force interaction, propagation and environmental result in source order. For combat or spell clashes, motion proceeds at full real-time speed; include only the responses and outcomes actually stated in the authoritative source, never invent a defender, counterattack or impact. No slow motion, bullet time, hovering display, prolonged charging, or lingering pause. Output no dialogue, <d>, headings, Markdown or explanation. End with a complete sentence.\n\nEXACT FAILURES TO FIX:\n%s\n\nAUTHORITATIVE SCENE FACTS:\n%s\n\nINCOMPLETE DRAFT TO REPAIR:\n%s", expectedShotCount, balanceRule, actionTrustIssues(failedDraft), authoritativeFacts, failedDraft)
+			repairUser := fmt.Sprintf("Rewrite the draft into concise official English H3 shot prose using the authoritative Scene facts below. %s%s Convert psychology into visible facial or posture changes. For dressing, show physical garment handling and intermediate states instead of jumping to the completed outfit. Visible cause-and-effect mechanics are executable facts, not optional background: retain every stated trigger, object appearance, state transition, force interaction, propagation and environmental result in source order. For combat or spell clashes, motion proceeds at full real-time speed; include only the responses and outcomes actually stated in the authoritative source, never invent a defender, counterattack or impact. No slow motion, bullet time, hovering display, prolonged charging, or lingering pause. Output no dialogue, <d>, headings, Markdown or explanation. End with a complete sentence.\n\nEXACT FAILURES TO FIX:\n%s\n\nAUTHORITATIVE SCENE FACTS:\n%s\n\nINCOMPLETE DRAFT TO REPAIR:\n%s", shotCountRule, balanceRule, actionTrustIssues(failedDraft), authoritativeFacts, failedDraft)
 			repaired, repairErr := chatAction(repairUser)
 			if repairErr != nil {
 				continue
@@ -4449,10 +4464,27 @@ func duplicateH3ShotNumbers(prompt string) []int {
 	return out
 }
 
-func ensureStructuredShotMarkers(prompt string, shots []models.Shot) string {
+// ensureStructuredShotMarkers treats saved Shots as a reference: a prompt with its
+// own contiguous [Shot 1..k] structure is kept even when k differs from the plan.
+// Only a broken structure is rebuilt: numbering gaps, or duplicate markers that
+// collapsed the cuts below the plan.
+func ensureStructuredShotMarkers(prompt string, shots []models.Shot, collapsed bool) string {
 	if len(shots) <= 1 {
 		return prompt
 	}
+	seen := distinctH3ShotNumbers(prompt)
+	for i := 1; i <= len(seen); i++ {
+		if !seen[i] {
+			return rebuildStructuredShotAction(shots)
+		}
+	}
+	if collapsed && len(seen) < len(shots) {
+		return rebuildStructuredShotAction(shots)
+	}
+	return prompt
+}
+
+func distinctH3ShotNumbers(prompt string) map[int]bool {
 	seen := map[int]bool{}
 	for _, match := range h3ShotMarkerPattern.FindAllStringSubmatch(prompt, -1) {
 		if len(match) == 2 {
@@ -4461,12 +4493,7 @@ func ensureStructuredShotMarkers(prompt string, shots []models.Shot) string {
 			}
 		}
 	}
-	for i := 1; i <= len(shots); i++ {
-		if !seen[i] {
-			return rebuildStructuredShotAction(shots)
-		}
-	}
-	return prompt
+	return seen
 }
 
 var h3TimelineMarkerPattern = regexp.MustCompile(`\[Shot\s+([1-9][0-9]*)(?:\s*\|[^\]]*)?\](?:\s+At\s+[0-9]{2}:[0-9]{2}\.[0-9]{3},)?`)
@@ -4480,6 +4507,11 @@ func applyShotTimeline(prompt string, shots []models.Shot, totalDuration float64
 		if timed != detail {
 			return strings.Replace(prompt, detail, timed, 1)
 		}
+		return prompt
+	}
+	// Saved Shot timing applies only when the prompt kept the reference cut plan;
+	// a director who merged or added cuts keeps their own At timestamps.
+	if len(distinctH3ShotNumbers(prompt)) != len(shots) {
 		return prompt
 	}
 	if totalDuration <= 0 {
@@ -4864,7 +4896,9 @@ func appendExplicitDialogueRangesToShots(body string, dubs []models.Dialogue, re
 			break
 		}
 	}
-	if !hasRanges {
+	if !hasRanges || len(distinctH3ShotNumbers(body)) != len(shots) {
+		// Ranges are keyed by Shot order; when the prompt changed the cut plan the
+		// timestamp-based placement must place speech instead of dropping it.
 		return body, false
 	}
 	byID := map[uint]models.Dialogue{}
@@ -5400,13 +5434,14 @@ func normalizeSavedH3Audio(prompt string, dubs []models.Dialogue, referenceLines
 	if keyframeMode {
 		detail = h3IntegratedDescription(prompt)
 	}
+	collapsedShots := len(duplicateH3ShotNumbers(detail)) > 0
 	detail = coalesceDuplicateH3Shots(detail)
 	originalDetail := detail
 	detail = stripStructuredDialogueFromAction(detail, dubs)
 	detail = strings.ReplaceAll(detail, "<scenetrans>", "")
 	detail = regexp.MustCompile(`(?i)The same voice continues uninterrupted across the cut\.`).ReplaceAllString(detail, "")
 	if len(shotSets) > 0 {
-		detail = ensureStructuredShotMarkers(detail, shotSets[0])
+		detail = ensureStructuredShotMarkers(detail, shotSets[0], collapsedShots)
 		detail = stripStructuredDialogueFromAction(detail, dubs)
 	}
 	if !h3ShotOnePattern.MatchString(detail) {
@@ -6239,82 +6274,85 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 	return refs, lines
 }
 
-// rebalanceScriptDurations treats the episode target as a reference minimum. It may add
-// breathing room to short scenes, but never shortens a scene below its natural dialogue floor.
+// rebalanceScriptDurations sizes each scene by its content load (natural speech plus
+// silent action beats) and treats the episode target as a soft minimum. Extra time goes
+// to scenes in proportion to their load, but a sparse scene is never stretched past
+// sceneStretchFactor of its load; when the content cannot fill the target the shortfall
+// is accepted and false is returned. A scene never drops below its natural dialogue floor.
 func rebalanceScriptDurations(res *scriptResult, target float64) bool {
 	if res == nil || len(res.Scenes) == 0 || target <= 0 {
 		return false
 	}
-	floors := make([]float64, len(res.Scenes))
-	minimumTotal := 0.0
-	for i := range res.Scenes {
-		floors[i] = sceneDialogueDurationFloor(res.Scenes[i])
-		if current := normalizeSceneDuration(res.Scenes[i].Duration); current > floors[i] {
-			floors[i] = current
-		}
-		minimumTotal += floors[i]
-	}
-	if minimumTotal >= target {
-		for i := range res.Scenes {
-			res.Scenes[i].Duration = floors[i]
-		}
-		return true
-	}
-	weights := make([]float64, len(res.Scenes))
+	n := len(res.Scenes)
+	floors, loads, ceilings, values := make([]float64, n), make([]float64, n), make([]float64, n), make([]float64, n)
+	total := 0.0
 	for i, scene := range res.Scenes {
-		weights[i] = scene.Duration
-		if weights[i] <= 0 || math.IsNaN(weights[i]) || math.IsInf(weights[i], 0) {
-			weights[i] = 5
+		floors[i] = sceneDialogueDurationFloor(scene)
+		speech := math.Max(scriptDialoguesMinDuration(scene.Dialogues), scene.MinDuration)
+		load, authored := sceneContentLoad(scene.Content, speech)
+		// Action beats alone never push a scene past one H3 shot (an overloaded scene is
+		// flagged for review instead); only whole speech or an authored timeline may.
+		limit := math.Max(maxSceneVideoDuration, floors[i])
+		if authored {
+			limit = math.Max(limit, math.Min(load, maxLongSceneVideoDuration))
 		}
-	}
-	remaining := target - minimumTotal
-	active := make(map[int]bool, len(weights))
-	for i := range weights {
-		active[i] = true
-	}
-	values := append([]float64(nil), floors...)
-	for len(active) > 0 {
-		weightTotal := 0.0
-		for i := range active {
-			weightTotal += weights[i]
+		loads[i] = math.Min(math.Max(load, floors[i]), limit)
+		ceilings[i] = loads[i]
+		if !authored {
+			ceilings[i] = math.Min(math.Max(loads[i]*sceneStretchFactor, minSceneStretchCeiling), limit)
 		}
-		changed := false
-		for i := range active {
-			addition := remaining * weights[i] / weightTotal
-			if values[i]+addition > maxSceneVideoDuration {
-				capacity := maxSceneVideoDuration - values[i]
-				if capacity < 0 {
-					capacity = 0
-				}
-				values[i], remaining, changed = maxSceneVideoDuration, remaining-capacity, true
-				delete(active, i)
+		// The model's duration is a hint inside [load, ceiling], not a weight for padding.
+		values[i] = math.Min(math.Max(normalizeSceneDuration(scene.Duration), loads[i]), ceilings[i])
+		total += values[i]
+	}
+	if total < target {
+		remaining := target - total
+		active := make(map[int]bool, n)
+		for i := range values {
+			if values[i] < ceilings[i] {
+				active[i] = true
 			}
 		}
-		if !changed {
+		for len(active) > 0 && remaining > 1e-9 {
+			weightTotal := 0.0
 			for i := range active {
-				values[i] += remaining * weights[i] / weightTotal
+				weightTotal += loads[i]
 			}
-			break
+			changed := false
+			for i := range active {
+				if values[i]+remaining*loads[i]/weightTotal >= ceilings[i] {
+					remaining -= ceilings[i] - values[i]
+					values[i], changed = ceilings[i], true
+					delete(active, i)
+				}
+			}
+			if !changed {
+				for i := range active {
+					values[i] += remaining * loads[i] / weightTotal
+				}
+				remaining = 0
+			}
 		}
 	}
 	// Round to tenths, then put rounding residue on the last scene without breaking bounds.
-	total := 0.0
+	total = 0.0
 	for i := range values {
 		values[i] = math.Round(values[i]*10) / 10
 		total += values[i]
 	}
-	delta := math.Round((target-total)*10) / 10
-	for i := len(values) - 1; i >= 0 && math.Abs(delta) >= 0.05; i-- {
-		adjusted := values[i] + delta
-		if adjusted >= floors[i] && adjusted <= maxSceneVideoDuration {
-			values[i] = adjusted
-			delta = 0
+	reached := total >= target-0.05
+	if delta := math.Round((target-total)*10) / 10; math.Abs(delta) >= 0.05 && math.Abs(delta) <= 0.5 {
+		for i := len(values) - 1; i >= 0; i-- {
+			if adjusted := values[i] + delta; adjusted >= floors[i] && adjusted <= math.Max(ceilings[i], values[i]) {
+				values[i], reached = adjusted, true
+				break
+			}
 		}
 	}
 	for i := range res.Scenes {
 		res.Scenes[i].Duration = values[i]
 	}
-	return math.Abs(delta) < 0.05
+	return reached
 }
 
 func validateScriptResult(res *scriptResult, targets ...any) error {
@@ -6324,24 +6362,11 @@ func validateScriptResult(res *scriptResult, targets ...any) error {
 	if strings.TrimSpace(res.VisualBible) == "" {
 		return fmt.Errorf("缺少角色与画风视觉基准")
 	}
-	targetDuration, targetScenes := 180.0, 25
-	if len(targets) > 0 {
-		if v, ok := targets[0].(float64); ok && v > 0 {
-			targetDuration = v
-		}
-	}
-	if len(targets) > 1 {
-		if v, ok := targets[1].(int); ok && v > 0 {
-			targetScenes = v
-		}
-	}
-	// 总时长不是硬上限；镜头数仍保留宽松的节奏底线，避免整集退化成少量超长镜头。
-	minScenes := int(math.Ceil(float64(targetScenes) * 0.6))
-	if minScenes < 1 {
-		minScenes = 1
-	}
-	if len(res.Scenes) < minScenes {
-		return fmt.Errorf("分镜数量至少应为 %d 个（目标 %d 个的节奏底线），实际为 %d 个", minScenes, targetScenes, len(res.Scenes))
+	// 时长与镜头数都只是参考：场景数随剧情发展，内容凑不够目标时长也不强求。
+	// 单场景时长已由 rebalanceScriptDurations 按内容负载限制，不会退化成少量超长镜头。
+	_ = targets
+	if len(res.Scenes) == 0 {
+		return fmt.Errorf("缺少分镜场景")
 	}
 	for i, sc := range res.Scenes {
 		if strings.TrimSpace(sc.Content) == "" || strings.TrimSpace(sc.ImagePrompt) == "" {
@@ -6351,7 +6376,6 @@ func validateScriptResult(res *scriptResult, targets ...any) error {
 			return fmt.Errorf("场景 %d 时长必须为 3~%.0f 秒", i+1, maxLongSceneVideoDuration)
 		}
 	}
-	_ = targetDuration
 	return nil
 }
 
@@ -7198,6 +7222,9 @@ func (s *ProjectService) sceneShotUsage(sc *models.Scene, shots []models.Shot) S
 			usage.Status = "duration_mismatch"
 			usage.Message = fmt.Sprintf("镜头合计%.1f秒，与Scene时长%.1f秒相差超过%.1f秒（或单镜超过15秒）；武戏生成视频时会忽略这套镜头。", usage.ShotTotal, duration, shotDurationTolerance)
 		}
+	}
+	if usage.Status == "active" {
+		usage.Message = "已保存镜头作为H3切镜参考：优先沿用其切点、景别和对白归属，H3可按剧情合并或增加切点，不限定最终镜头数。"
 	}
 	return usage
 }

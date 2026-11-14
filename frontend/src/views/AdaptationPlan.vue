@@ -74,6 +74,7 @@
               <template v-if="dialogueCoverage(ep)">
                 <strong>原文对白 {{dialogueCoverage(ep).total}} · 已安排 {{dialogueCoverage(ep).covered}} · 遗漏 {{dialogueCoverage(ep).missing.length}}</strong>
                 <p v-for="order in dialogueCoverage(ep).story_pending_scene_orders" :key="`pending-${order}`" class="coverage-warning">第{{order}}场对白尚未自然融入故事内容，请到编辑场景→按原文整合对白预览审核</p>
+                <details v-if="sceneAdvisories(ep).length" class="scene-advisories"><summary>场景拆分提示 {{sceneAdvisories(ep).length}} 条（仅供参考，不影响后续操作）</summary><p v-for="(note,index) in sceneAdvisories(ep)" :key="`advisory-${index}`" class="coverage-warning">{{note}}</p></details>
                 <p v-if="dialogueCoverage(ep).missing.length" class="coverage-warning">以下是生成结果警告，不会禁用后续操作，也不会自动覆写已有媒体或结构化编辑草稿。</p>
                 <ul v-if="dialogueCoverage(ep).missing.length" class="missing-dialogues">
                   <li v-for="(item,index) in dialogueCoverage(ep).missing" :key="`${item.chapter_id}-${item.offset}-${index}`">
@@ -106,7 +107,7 @@
 import { computed,onBeforeUnmount,onMounted,reactive,ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api'
-import { parseDialogueCoverage } from '../utils/dialogueCoverage'
+import { parseDialogueCoverage, parseSceneAdvisories } from '../utils/dialogueCoverage'
 const id=useRoute().params.id,project=ref(null),arcs=ref([]),selectedArcIds=ref([]),batches=ref([]),detail=ref(null),snapshot=ref(null),busy=ref(false),error=ref(''),totalTarget=ref(0),generating=ref(0),elapsed=ref(0),progress=ref(0)
 const reflowStart=ref(Math.max(2,Number(useRoute().query.episode)||3)),reflowPreview=ref(null),reflowResult=ref('')
 async function previewReflow(){busy.value=true;error.value='';reflowPreview.value=null;reflowResult.value='';try{reflowPreview.value=(await api.reflowAdaptations(id,{start_episode:reflowStart.value})).data}catch(e){error.value=e.response?.data?.error||e.message}finally{busy.value=false}}
@@ -120,6 +121,7 @@ const statusLabel=s=>({draft:'待生成',generating:'生成中',review:'待审�
 const episodeStatusLabel=s=>({draft:'映射待审核',approved:'映射已审核',scripted:'剧本已生成',reviewed:'连续性已通过'}[s]||s)
 const episodeHasScript=ep=>Boolean(String(ep?.script||'').trim())
 const dialogueCoverage=ep=>parseDialogueCoverage(ep?.dialogue_coverage_json)
+const sceneAdvisories=ep=>parseSceneAdvisories(ep?.dialogue_coverage_json)
 async function load(){try{const [p,a,b]=await Promise.all([api.project(id),api.novelArcs(id),api.planningBatches(id)]);project.value=p.data.project||p.data;arcs.value=a.data.arcs||a.data||[];batches.value=b.data.batches||[];totalTarget.value=b.data.total_episode_target||0;if(!form.title){form.episode_start=nextStart.value;form.episode_end=nextStart.value+9;form.title=`第${batches.value.length+1}批`}}catch(e){error.value=e.response?.data?.error||e.message}}
 async function run(fn){busy.value=true;error.value='';try{await fn();await load()}catch(e){error.value=e.response?.data?.error||e.message}finally{busy.value=false}}
 const createBatch=()=>run(async()=>{await api.createPlanningBatch(id,{...form});form.title='';detail.value=null})

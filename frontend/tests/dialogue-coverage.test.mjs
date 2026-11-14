@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { parseDialogueCoverage, validateSceneOrders } from '../src/utils/dialogueCoverage.js'
+import { parseDialogueCoverage, parseSceneAdvisories, validateSceneOrders } from '../src/utils/dialogueCoverage.js'
 
 const view = readFileSync(new URL('../src/views/AdaptationPlan.vue', import.meta.url), 'utf8')
 
@@ -66,4 +66,12 @@ test('覆盖提示是非阻断警告且剧本生成后刷新详情', () => {
   assert.match(view, /不会禁用后续操作，也不会自动覆写已有媒体或结构化编辑草稿/)
   assert.match(view, /generateAdaptationScript[\s\S]*?planningBatch\(id,ep\.batch_id\)/)
   assert.doesNotMatch(view, /:disabled="[^"]*dialogueCoverage/)
+})
+
+test('场景拆分提示只解析字符串数组且仅作展示', () => {
+  assert.deepEqual(parseSceneAdvisories(JSON.stringify({ scene_advisories: ['第3场过疏', '', null, 7] })), ['第3场过疏', '7'])
+  assert.deepEqual(parseSceneAdvisories('{bad json'), [])
+  assert.deepEqual(parseSceneAdvisories({ scene_advisories: '第1场' }), [])
+  assert.match(view, /场景拆分提示 \{\{sceneAdvisories\(ep\)\.length\}\} 条（仅供参考，不影响后续操作）/)
+  assert.doesNotMatch(view, /:disabled="[^"]*sceneAdvisories/)
 })

@@ -33,3 +33,13 @@ export function parseDialogueCoverage(raw) {
 
   return { total, covered, missing, story_pending_scene_orders }
 }
+
+// Non-blocking scene density / content-vs-dialogue notes written by script generation.
+export function parseSceneAdvisories(raw) {
+  let value = raw
+  if (typeof raw === 'string') {
+    try { value = JSON.parse(raw) } catch { return [] }
+  }
+  if (!value || typeof value !== 'object' || !Array.isArray(value.scene_advisories)) return []
+  return value.scene_advisories.map(item => String(item ?? '').trim()).filter(Boolean)
+}

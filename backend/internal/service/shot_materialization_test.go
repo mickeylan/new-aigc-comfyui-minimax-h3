@@ -254,6 +254,23 @@ func TestNativeSceneBaseTitleRemovesRepeatedSegmentSuffixes(t *testing.T) {
 	}
 }
 
+func TestGroupNativeShotsKeepsSentenceInOneGeneration(t *testing.T) {
+	line := models.Dialogue{ID: 7, Character: "林夏", Text: "第一句很长"}
+	other := models.Dialogue{ID: 8, Character: "顾川", Text: "回答"}
+	shots := []models.Shot{{ID: 1, Duration: 6}, {ID: 2, Duration: 4}, {ID: 3, Duration: 4}, {ID: 4, Duration: 4}}
+	fragments := [][]dialogueFragment{{{Source: other, Text: "回答"}}, nil, {{Source: line, Text: "第一句"}}, {{Source: line, Text: "很长"}}}
+	groups := groupNativeShots(shots, fragments)
+	if len(groups) != 2 || len(groups[0].Shots) != 2 || groups[0].Duration != 10 || groups[1].Duration != 8 {
+		t.Fatalf("sentence split across Native generations: %+v", groups)
+	}
+	// Without a reachable sentence boundary the 15-second packing is unchanged.
+	long := []models.Shot{{ID: 1, Duration: 12}, {ID: 2, Duration: 6}}
+	longFragments := [][]dialogueFragment{{{Source: line, Text: "第一句"}}, {{Source: line, Text: "很长"}}}
+	if got := groupNativeShots(long, longFragments); len(got) != 2 || got[0].Duration != 12 || got[1].Duration != 6 {
+		t.Fatalf("fallback packing changed: %+v", got)
+	}
+}
+
 func TestGroupNativeShotsPacksAdjacentShotsUpToFifteenSeconds(t *testing.T) {
 	durations := []float64{4, 3, 3, 5, 5, 4, 5, 4, 4, 3, 4, 5, 4}
 	shots := make([]models.Shot, len(durations))

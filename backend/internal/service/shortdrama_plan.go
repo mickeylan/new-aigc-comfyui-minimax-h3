@@ -169,9 +169,10 @@ func scriptFromPlanSystemPrompt(targetDuration float64, targetScenes int) string
   ]
 }
 【时长规划】
-- 总时长参考：约 ` + fmt.Sprintf("%.0f", targetDuration) + ` 秒；这是节奏参考而非上限，自然对白需要时允许超过
-- 镜头数参考：约 ` + fmt.Sprintf("%d", targetScenes) + ` 个镜头
+- 总时长参考：约 ` + fmt.Sprintf("%.0f", targetDuration) + ` 秒；原则上不少于该时长，自然对白需要时允许超过，剧情内容确实不够时不强求
+- 镜头数参考：约 ` + fmt.Sprintf("%d", targetScenes) + ` 个镜头；仅作参考，场景数随剧情发展，不设上限也不凑数
 - 单镜时长范围：` + fmt.Sprintf("%d", minSceneDur) + `~` + fmt.Sprintf("%d", maxSceneDur) + ` 秒
+- ` + sceneSplitRule + `
 - 按8~10个汉字/秒、默认9字/秒估算短剧对白；连续标点只算一次短暂停顿，整段仅留0.4秒余量，不因过量预留拆出大量短镜
 - 对白自然说完需要超过 15 秒时，按完整句子、说话人或动作节点拆为连续镜头；不得删改对白或提高语速来凑总时长
 3. 人物一致性至关重要：同一角色在多个场景出现时，image_prompt 必须严格沿用创作方案中该角色的 trait（外貌特征）与 style（服装造型），且所有场景画风描述保持一致。

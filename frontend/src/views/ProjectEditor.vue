@@ -446,6 +446,7 @@ import CharacterHistoryDrawer from '../components/CharacterHistoryDrawer.vue'
 import GeneratedMediaHistoryDrawer from '../components/GeneratedMediaHistoryDrawer.vue'
 import { compatibleSkills, projectSkillConfig, skillOperationOf } from '../utils/directorWorkflow.js'
 import { createDraftSafety } from '../utils/draftSafety.js'
+import { directorDraftShotPayload } from '../utils/episodeShotSplit.js'
 import { buildEditSequence, normalizeClip, sequenceDuration, splitClip, uniqueClipId } from '../utils/finalCutEditing.js'
 import FinalCutTimeline from '../components/FinalCutTimeline.vue'
 import ClipTransformEditor from '../components/ClipTransformEditor.vue'
@@ -569,6 +570,7 @@ const showGeneratedHistory = ref(false)
 const continuity = ref(null)
 const intentDraft = ref('')
 const visualBeatDraft = ref('')
+let visualBeatResult = null
 const polishDraft = ref('')
 const assetReviewDraft = ref('')
 const coverageReviewDraft = ref('')
@@ -667,7 +669,9 @@ const durProgressClass = computed(() => {
   return 'dur-early'
 })
 
-function id() { return route.params.id }
+// 固定为挂载时的项目：离开剪辑台后仍在途的刷新若读新路由（如 /materials）会拿到空 id，触发 invalid id 报错。
+const editorProjectId = route.params.id
+function id() { return editorProjectId }
 function outputUrl(path) { return `/api/output/0/${path}` }
 function screenTextRenderPreviewUrl(cueId) {
   const cue = screenTextCues.value.find(row => Number(row.id) === Number(cueId))
@@ -744,6 +748,7 @@ async function loadSkillAudit() {
 async function load() {
   try {
     const [{ data }, episodeRes, catalogRes] = await Promise.all([api.editorData(id(), activeEpN.value), api.projectEpisodes(id()), api.modelCatalog()])
+    if (editorDisposed) return
     const h3 = (catalogRes.data?.items || []).find(item => item.template_code === 'minimax_h3_ref2v')
     h3DurationMax.value = Number(h3?.duration?.max || 15)
     project.value = data.project
@@ -786,7 +791,7 @@ async function deleteMergeRecord(row){
   finally{row._deleting=false}
 }
 
-function clearSceneDrafts() { videoDraftSafety?.dispose(); videoDraftSafety = null; visualBeatDraft.value = ''; polishDraft.value = ''; assetReviewDraft.value = ''; coverageReviewDraft.value = ''; videoPromptDraft.value = '' }
+function clearSceneDrafts() { videoDraftSafety?.dispose(); videoDraftSafety = null; visualBeatDraft.value = ''; visualBeatResult = null; polishDraft.value = ''; assetReviewDraft.value = ''; coverageReviewDraft.value = ''; videoPromptDraft.value = '' }
 function startVideoDraftSafety() { videoDraftSafety?.dispose(); videoDraftSafety = createDraftSafety({ key: `draft:h3-prompt:${id()}:${selected.value.id}`, getDraft: () => ({ prompt: videoPromptDraft.value, template: videoPromptTemplate.value }), applyDraft: d => { videoPromptDraft.value = d.prompt || ''; videoPromptTemplate.value = d.template || 'minimax_h3_ref2v' }, save: () => saveReviewedVideoPrompt(false) }); videoDraftSafety.start() }
 async function previewAndApplyRetime() {
   if(!selected.value)return
@@ -1167,9 +1172,13 @@ async function moveSceneEpisode() {
   try { await api.reassignSceneEpisode(id(), selected.value.id, number); toast.success('场景已移动'); selected.value = null; await load() }
   catch (e) { toast.error(e.response?.data?.error || '移动失败') }
 }
+// Visual beats share the director-draft flow: the same plot-driven cut rules, validation
+// and dialogue snapshot as the Shot editor and the episode-wide split.
 async function runVisualBeats() {
-  try { const { data } = await api.visualBeatDraft(id(), selected.value.id, { target_duration: selected.value.duration }); visualBeatDraft.value = data.draft; toast.success('已生成视觉节拍草稿（未自动保存）') }
+  busy.value = true
+  try { const { data } = await api.sceneDirectorDraft(id(), selected.value.id, { mode: 'standard' }); visualBeatResult = data; visualBeatDraft.value = (data.draft?.shots || []).map((s, i) => `${i + 1}. ${s.shot_type || ''} ${Number(s.duration || 0).toFixed(1)}秒：${s.description || ''}${s.dialogue ? `\n   对白：${s.dialogue}` : ''}`).join('\n'); toast.success('已按剧情生成视觉节拍草稿（未自动保存）') }
   catch (e) { toast.error(e.response?.data?.error || '生成失败') }
+  finally { busy.value = false }
 }
 async function runFirstFramePolish() {
   busy.value = true
@@ -1198,12 +1207,11 @@ async function runFaithfulPolish() {
 function parseSkillJSON(text) { const clean = String(text || '').trim().replace(/^```json\s*/i, '').replace(/```$/, '').trim(); return JSON.parse(clean) }
 async function applyVisualBeats() {
   try {
-    const parsed = parseSkillJSON(visualBeatDraft.value); const rows = Array.isArray(parsed) ? parsed : parsed.shots
-    if (!Array.isArray(rows) || !rows.length) throw new Error('草稿中没有shots数组')
-    const shots = rows.map((s, i) => ({ act_type: ['setup','rising','midpoint','falling','resolution'][Math.min(4, Math.floor(i * 5 / rows.length))], shot_type: s.shot_type || '中景', camera_angle: s.camera_angle || '平视', camera_movement: s.camera_movement || '固定', duration: Math.max(0.1, Number(s.duration) || 2), description: s.description || '', dialogue: Array.isArray(s.dialogues) ? s.dialogues.map(d => d.text || d).join('\n') : (s.dialogue || ''), emotion: s.emotion || '', prompt_subject: '', prompt_action: '', prompt_camera: '', prompt_lighting: '', prompt_style: '', negative_prompt: '' }))
+    const shots = directorDraftShotPayload(visualBeatResult?.draft)
+    if (!shots.length) throw new Error('草稿中没有镜头，请重新生成')
     if (!window.confirm(`将以${shots.length}个镜头替换当前Shot导演设计。Scene剧情正文和起始帧提示词不会被覆盖，是否继续？`)) return
-    await api.replaceSceneShots(id(), selected.value.id, shots); visualBeatDraft.value = ''; await reloadSelectedScene(); toast.success('视觉节拍已导入Shot导演层')
-  } catch (e) { toast.error(e.response?.data?.error || e.message || '视觉节拍草稿格式无效') }
+    await api.replaceSceneShots(id(), selected.value.id, shots, visualBeatResult?.dialogue_snapshot || ''); visualBeatDraft.value = ''; visualBeatResult = null; await reloadSelectedScene(); toast.success('视觉节拍已导入Shot导演层')
+  } catch (e) { toast.error(e.response?.data?.error || e.message || '视觉节拍草稿无效') }
 }
 async function applyPolishDraft() { try { await api.updateScene(id(), selected.value.id, { image_prompt: polishDraft.value }); polishDraft.value = ''; await reloadSelectedScene(); toast.success('润色草稿已应用到Scene起始帧提示词') } catch (e) { toast.error(e.response?.data?.error || '应用失败') } }
 async function generateSelectedImage() { busy.value = true; try { await api.generateSceneImage(id(), selected.value.id); toast.success('分镜图任务已提交，已组合Scene事实、Shot导演设计、参考图与负向约束'); await reloadSelectedScene() } catch (e) { toast.error(e.response?.data?.error || '提交分镜图失败') } finally { busy.value = false } }
@@ -1611,6 +1619,7 @@ async function openRequestedScreenTextCue() {
 }
 
 let timer = null
+let editorDisposed = false
 let finalCutTracking = false
 function beforeUnload(event){if(!finalCutDirty.value)return;event.preventDefault();event.returnValue=''}
 onBeforeRouteLeave(() => !finalCutDirty.value || window.confirm('剪辑编排尚未保存为草稿，确定离开？'))
@@ -1619,6 +1628,8 @@ onMounted(async () => {
   if (requestedEpisode > 0) activeEpN.value = requestedEpisode
   await load()
   await openRequestedScreenTextCue()
+  // 首次加载期间已离开页面：onUnmounted 早已执行，不能再挂上永不清除的轮询。
+  if (editorDisposed) return
   await nextTick();finalCutDirty.value=false;finalCutTracking=true
   window.addEventListener('beforeunload',beforeUnload)
   timer = setInterval(async () => {
@@ -1629,7 +1640,7 @@ onMounted(async () => {
     }
   }, 8000)
 })
-onUnmounted(() => { editorScreenTextDisposed = true; clearInterval(timer); stopAssembledPreview(); videoDraftSafety?.dispose();window.removeEventListener('beforeunload',beforeUnload) })
+onUnmounted(() => { editorDisposed = true; editorScreenTextDisposed = true; clearInterval(timer); stopAssembledPreview(); videoDraftSafety?.dispose();window.removeEventListener('beforeunload',beforeUnload) })
 watch(videoPromptDraft, () => videoDraftSafety?.schedule())
 watch([mergeSequence,globalVisualTracks],()=>{stopAssembledPreview();if(finalCutTracking)finalCutDirty.value=true},{deep:true})
 watch(activeEpN, stopAssembledPreview)

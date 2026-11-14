@@ -446,6 +446,12 @@
           <button class="btn" :disabled="busy || curImageReadyScenes === 0" @click="allVideos">
             🎬 生成该集全部视频 ({{ curImageReadyScenes }})
           </button>
+          <button v-if="!shotSplitProgress" class="btn btn-secondary" :disabled="busy || curShotSplitScenes === 0" title="逐场调用AI导演草稿，按剧情变化拆成内部Shot并保存；已有Shot、已出片或生成中的场景会跳过。保存的Shot只作H3参考，可随时人工修改。" @click="splitEpisodeByPlot">
+            🎞 按剧情拆镜 ({{ curShotSplitScenes }})
+          </button>
+          <button v-else class="btn btn-danger" @click="stopShotSplit">
+            停止拆镜 {{ shotSplitProgress.done }}/{{ shotSplitProgress.total }}
+          </button>
           <button class="btn btn-secondary" :disabled="selectedMergeSceneIDs.length < 2 || mergeBusy || !mergeSelectionConsecutive" @click="previewSelectedSceneMerge">
             {{ mergeBusy ? '处理中…' : `预览合镜 (${selectedMergeSceneIDs.length})` }}
           </button>
@@ -453,6 +459,14 @@
             ⚡ 进入最终成片编排
           </router-link>
         </div>
+      </div>
+
+      <div v-if="shotSplitReport" class="card shot-split-report">
+        <div class="section-head"><strong>按剧情拆镜结果：已保存 {{ shotSplitReport.saved.length }} 场 · 跳过 {{ shotSplitReport.skipped.length }} 场 · 失败 {{ shotSplitReport.failed.length }} 场{{ shotSplitReport.cancelled ? ' · 已停止' : '' }}</strong><button class="btn btn-sm btn-ghost" @click="shotSplitReport = null">关闭</button></div>
+        <p class="field-hint">Shot 只作 H3 镜头参考，不限定最终镜头数；请在各场景的导演 Shot 中逐场审核和修改。</p>
+        <ul v-if="shotSplitReport.saved.length"><li v-for="row in shotSplitReport.saved" :key="`s${row.scene.id}`">#{{ row.scene.order }} {{ row.scene.title }}：{{ row.count }} 个Shot</li></ul>
+        <ul v-if="shotSplitReport.failed.length"><li v-for="row in shotSplitReport.failed" :key="`f${row.scene.id}`" class="error-text">#{{ row.scene.order }} {{ row.scene.title }}：{{ requestErrorMessage(row.error, '拆镜失败') }}</li></ul>
+        <details v-if="shotSplitReport.skipped.length"><summary>跳过的场景</summary><ul><li v-for="row in shotSplitReport.skipped" :key="`k${row.scene.id}`">#{{ row.scene.order }} {{ row.scene.title }}：{{ row.reason }}</li></ul></details>
       </div>
 
       <div class="scene-grid">
@@ -1238,6 +1252,7 @@ import { overlayDialogueExclusions, setDialogueItemExcluded, snapshotDialogueExc
 import { estimateDialogueListDuration } from '../utils/dialogueDuration.js'
 import { filterReferenceCandidates } from '../utils/referenceSearch.js'
 import { requestErrorMessage } from '../utils/requestError.js'
+import { episodeShotSplitSkipReason, splitEpisodeShots } from '../utils/episodeShotSplit.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -1469,6 +1484,9 @@ const sceneAudioAuditConfirmed = ref({})
 const viewerMask = ref(null)
 const showGeneratedHistory = ref(false)
 const busy = ref(false)
+const shotSplitProgress = ref(null)
+const shotSplitReport = ref(null)
+let shotSplitCancelled = false
 const generatingScript = ref(false)
 const generatingEpisodeN = ref(0)
 const rollingPlanningTarget = ref(0)
@@ -3615,6 +3633,33 @@ async function allImages() {
   } catch (e) {
     toast.show(e.response?.data?.error || '提交失败')
   } finally {
+    busy.value = false
+    refreshSoon()
+  }
+}
+
+function stopShotSplit() { shotSplitCancelled = true }
+const curShotSplitScenes = computed(() => currentScenes.value.filter(sc => !episodeShotSplitSkipReason(sc)).length)
+async function splitEpisodeByPlot() {
+  const count = curShotSplitScenes.value
+  if (!count || !confirm(`将逐场调用AI导演，为第${activeEpN.value}集 ${count} 个尚无Shot的场景按剧情拆镜并保存。\n已有Shot、已出片或生成中的场景会跳过；每场约需一到两次模型调用。是否继续？`)) return
+  busy.value = true
+  shotSplitCancelled = false
+  shotSplitReport.value = null
+  shotSplitProgress.value = { done: 0, total: count }
+  try {
+    const report = await splitEpisodeShots({
+      scenes: currentScenes.value,
+      generate: sc => api.sceneDirectorDraft(id(), sc.id, { mode: 'standard' }),
+      save: (sc, shots, snapshot) => api.replaceSceneShots(id(), sc.id, shots, snapshot),
+      onProgress: p => { if (!detailDisposed) shotSplitProgress.value = { done: p.done, total: p.total } },
+      cancelled: () => shotSplitCancelled || detailDisposed,
+    })
+    if (detailDisposed) return
+    shotSplitReport.value = report
+    toast.show(`按剧情拆镜：保存 ${report.saved.length} 场，失败 ${report.failed.length} 场`)
+  } finally {
+    shotSplitProgress.value = null
     busy.value = false
     refreshSoon()
   }

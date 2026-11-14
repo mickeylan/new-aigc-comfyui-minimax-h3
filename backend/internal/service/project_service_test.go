@@ -364,6 +364,8 @@ func TestGenerateScriptCoreRetriesTargetedRepairOnce(t *testing.T) {
 func TestRebalanceScriptDurationsMeetsTarget(t *testing.T) {
 	res := &scriptResult{Scenes: make([]scriptScene, 20)}
 	for i := range res.Scenes {
+		// Three silent action beats: content can carry ~7.5–9.4 seconds.
+		res.Scenes[i].Content = "燕承拔刀上前。青年抬手扣住刀腕。燕承发力回抽却纹丝不动。"
 		res.Scenes[i].Duration = 5
 	}
 	if !rebalanceScriptDurations(res, 180) {
@@ -391,23 +393,34 @@ func TestValidateScriptResultAcceptsFeasibleSceneCountBelowTargetTolerance(t *te
 	}
 }
 
-func TestValidateScriptResultRejectsSceneCountThatCannotCarryDuration(t *testing.T) {
+// Scene count follows the plot and 180 s is a soft minimum (user rulings): a short
+// episode is accepted rather than rejected or padded with filler scenes.
+func TestValidateScriptResultAcceptsPlotDrivenShortEpisode(t *testing.T) {
 	res := &scriptResult{Script: "正文", VisualBible: "视觉基准", Scenes: make([]scriptScene, 10)}
 	for i := range res.Scenes {
 		res.Scenes[i] = scriptScene{Content: "动作", ImagePrompt: "画面", Duration: 15}
 	}
-	if err := validateScriptResult(res, 180.0, 25); err == nil {
-		t.Fatal("10 scenes cannot carry 180 seconds within the 15-second maximum")
+	if err := validateScriptResult(res, 180.0, 25); err != nil {
+		t.Fatalf("plot-driven 10-scene episode must be accepted: %v", err)
+	}
+	if err := validateScriptResult(&scriptResult{Script: "正文", VisualBible: "视觉基准"}, 180.0, 25); err == nil {
+		t.Fatal("an episode without scenes must still be rejected")
 	}
 }
 
-func TestRebalanceScriptDurationsRejectsImpossibleTarget(t *testing.T) {
+func TestRebalanceScriptDurationsReportsShortfallWithoutPadding(t *testing.T) {
 	res := &scriptResult{Scenes: make([]scriptScene, 10)}
 	for i := range res.Scenes {
+		res.Scenes[i].Content = "燕承拔刀上前。青年抬手扣住刀腕。"
 		res.Scenes[i].Duration = 5
 	}
 	if rebalanceScriptDurations(res, 180) {
-		t.Fatal("10 scenes cannot reach 180 seconds within the 15-second maximum")
+		t.Fatal("10 two-beat scenes cannot reach 180 seconds; the shortfall must be reported")
+	}
+	for i, scene := range res.Scenes {
+		if scene.Duration > 5*sceneStretchFactor+0.05 {
+			t.Fatalf("scene %d padded to %.1f s beyond its stretch cap", i+1, scene.Duration)
+		}
 	}
 }
 
@@ -2710,7 +2723,7 @@ func TestSceneShotUsageSurfacesIgnoredShotPlans(t *testing.T) {
 	if usage := ps.sceneShotUsage(&scene, mismatched); usage.Status != "duration_mismatch" || usage.ShotTotal != 5 || usage.SceneDuration != 14 {
 		t.Fatalf("mismatched plan usage=%+v", usage)
 	}
-	if usage := ps.sceneShotUsage(&scene, []models.Shot{{SceneID: scene.ID, Duration: 7}, {SceneID: scene.ID, Duration: 7}}); usage.Status != "active" {
+	if usage := ps.sceneShotUsage(&scene, []models.Shot{{SceneID: scene.ID, Duration: 7}, {SceneID: scene.ID, Duration: 7}}); usage.Status != "active" || !strings.Contains(usage.Message, "参考") {
 		t.Fatalf("covering plan status=%q", usage.Status)
 	}
 	scene.DirectorSourceStale = true

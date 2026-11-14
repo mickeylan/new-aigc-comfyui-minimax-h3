@@ -836,6 +836,8 @@ type DialogueCoverage struct {
 	// MustKeepWarnings lists approved events that the draft only partially realized.
 	// They are advisory: the episode is still faithful to the approved source scope.
 	MustKeepWarnings []string `json:"must_keep_warnings,omitempty"`
+	// SceneAdvisories are non-blocking scene density and content-vs-dialogue notes.
+	SceneAdvisories []string `json:"scene_advisories,omitempty"`
 }
 
 func dialogueKey(speaker, text string) string { return speaker + "\x00" + text }
@@ -1192,7 +1194,7 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 		return nil, fmt.Errorf("第%d集映射与前集实际剧情冲突：来源对白已在前集全部使用，当前必保事件又要求重复使用其中的原文台词；不会再次生成相同章节。须先审核调整剩余分集事件范围，现有剧本和媒体未修改", episode)
 	}
 	input, _ := json.Marshal(ctx)
-	system := "只改编提供的上下文并输出JSON。source_chapters是本集审核映射的原文权威，source_dialogue_ledger是按原文顺序提取的对白清单：必须逐字、逐条、按序保留到scenes[].dialogues，并依据原文把是谁说、画外空间位置和发生时间自然融入同场content；content必须自然包含引号原句且归属时序与dialogues完全一致，禁止台词清单、末尾追加标签和【对白待确认】。不得因180秒或25镜头目标删减或硬凑镜头。未知说话者只保留原文明示的描述性身份与offscreen类型，不按别名猜人；人名后置归属必须保留，多角色歧义保持未明多人物语音。不得发明原文未提供的咒语或台词：原文中沉默的角色必须保持沉默，原文没有的旁白、内心独白和对白一律不得新增。must_keep_events是已审核的必保留事件，必须逐项落地为可见场景；omitted_events禁止出现；approved_ending_state必须在本集结尾达到。previous_episode_completed_content是上一集已完成内容的排重权威；本集必须从其结尾后的第一个原文瞬间开始，严禁重演、改写后重复、重新介绍或回顾其中已经完成的事件、动作、信息揭示、对白与情感节点，尤其禁止重新描述上一集已经拍过的巨石爆裂、人物现身或对峙。"
+	system := "只改编提供的上下文并输出JSON。source_chapters是本集审核映射的原文权威，source_dialogue_ledger是按原文顺序提取的对白清单：必须逐字、逐条、按序保留到scenes[].dialogues，并依据原文把是谁说、画外空间位置和发生时间自然融入同场content；content必须自然包含引号原句且归属时序与dialogues完全一致，禁止台词清单、末尾追加标签和【对白待确认】。不得因180秒或25镜头目标删减或硬凑镜头。未知说话者只保留原文明示的描述性身份与offscreen类型，不按别名猜人；人名后置归属必须保留，多角色歧义保持未明多人物语音。不得发明原文未提供的咒语或台词：原文中沉默的角色必须保持沉默，原文没有的旁白、内心独白和对白一律不得新增。must_keep_events是已审核的必保留事件，必须逐项落地为可见场景；omitted_events禁止出现；approved_ending_state必须在本集结尾达到。previous_episode_completed_content是上一集已完成内容的排重权威；本集必须从其结尾后的第一个原文瞬间开始，严禁重演、改写后重复、重新介绍或回顾其中已经完成的事件、动作、信息揭示、对白与情感节点，尤其禁止重新描述上一集已经拍过的巨石爆裂、人物现身或对峙。" + sceneSplitRule
 	raw, err := s.skills.ChatWithSkill(projectID, models.SkillStageEpisodeAdaptation, s.provider, system+"\n"+episodeBoundaryInstruction, "", map[string]string{"episode_n": strconv.Itoa(episode), "target_duration": fmt.Sprint(ep.TargetDuration), "target_scenes": strconv.Itoa(ep.TargetScenes), "episode_context": string(input)})
 	if err != nil {
 		return nil, err
@@ -1301,6 +1303,11 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 		return nil, parseErr
 	}
 	applyAdaptationDialogueAliases(raw, structured)
+	sourceSpeech := make(map[string]bool, len(ctx.DialogueLedger))
+	for _, d := range ctx.DialogueLedger {
+		sourceSpeech[speechMatchKey(d.Text)] = true
+	}
+	moveSoundEffectsToContent(structured.Scenes, sourceSpeech)
 	rendered := *structured
 	rendered.Scenes = append([]scriptScene(nil), structured.Scenes...)
 	for i := range rendered.Scenes {
@@ -1308,6 +1315,10 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 		// merely a visual synopsis. Keep the exact speech here as well as in
 		// the authoritative dialogue rows written below.
 		rendered.Scenes[i].Content = sceneStoryContentWithDialogues(structured.Scenes[i].Content, structured.Scenes[i].Dialogues)
+		// Stripping the rows must not strip their natural speaking time. Scenes stay
+		// index-aligned with structured.Scenes, so a long floor keeps one longer Scene
+		// instead of splitting the authoritative dialogue rows.
+		rendered.Scenes[i].MinDuration = scriptDialoguesMinDuration(structured.Scenes[i].Dialogues)
 		rendered.Scenes[i].Dialogues = nil
 	}
 	if strings.TrimSpace(rendered.Script) == "" {
@@ -1376,6 +1387,13 @@ func (s *AdaptationService) GenerateScript(projectID uint, episode int) (*models
 	}
 	coverage = persistedDialogueCoverage(persistedDialogues, ctx.DialogueLedger)
 	coverage.StoryPendingSceneOrders = storyPendingSceneOrders(raw)
+	if len(storedSceneIDs) > 0 {
+		// Re-read: generateScriptCore stored the rebalanced durations, not the model's.
+		if err := s.db.Where("id IN ?", storedSceneIDs).Order("`order`").Find(&storedScenes).Error; err != nil {
+			return nil, err
+		}
+	}
+	coverage.SceneAdvisories = sceneAdvisoryWarnings(storedScenes, persistedDialogues)
 	traces, _ := json.Marshal(ctx.Traces)
 	coverageJSON, _ := json.Marshal(coverage)
 	// Generated states are evidence in the review report, never replacements for
