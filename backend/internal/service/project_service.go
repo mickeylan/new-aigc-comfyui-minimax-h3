@@ -2990,14 +2990,10 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 		if allowSubjects && len(subjectTagsByH3Shot(authoritativeBoundAction)) > 0 && !strings.Contains(value, "<Subject ") {
 			issues = append(issues, "缺少Subject绑定")
 		}
-		for _, match := range h3SubjectTagPattern.FindAllStringSubmatch(value, -1) {
-			n, _ := strconv.Atoi(match[1])
-			if n < 1 || n > len(refLines) {
-				issues = append(issues, fmt.Sprintf("Subject编号%d超出已选参考图范围1-%d", n, len(refLines)))
-			}
-		}
+		contract := parseH3PromptContract(value)
+		issues = append(issues, contract.SubjectRangeIssues(len(refLines))...)
 		if combatMode {
-			if !h3CombatShotMarkersMatchTimestamps(value) {
+			if contract.BareTimestamps > 0 {
 				issues = append(issues, "时间切点必须使用官方[Shot N] At MM:SS.mmm,标记，不能只在同一个Shot正文中写裸At时间")
 			}
 			if issue := h3SoloSwordFidelityIssue(canonicalSceneContent, value); issue != "" {
@@ -3005,26 +3001,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 			}
 		}
 		issues = append(issues, h3BalancedActionHardIssues(value, expectedShotCount, requireBalancedTimeline, len(validDialogues) > 0)...)
-		if expectedShotCount > 0 {
-			seen := map[int]bool{}
-			for _, marker := range h3ShotMarkerPattern.FindAllStringSubmatch(value, -1) {
-				if len(marker) != 2 {
-					issues = append(issues, "无法读取的Shot标记")
-					continue
-				}
-				n, _ := strconv.Atoi(marker[1])
-				if n < 1 || n > expectedShotCount {
-					issues = append(issues, fmt.Sprintf("Shot %d超出范围1-%d", n, expectedShotCount))
-				}
-				if seen[n] {
-					issues = append(issues, fmt.Sprintf("Shot %d重复", n))
-				}
-				seen[n] = true
-			}
-			if len(seen) != expectedShotCount {
-				issues = append(issues, fmt.Sprintf("Shot数量为%d，期望%d", len(seen), expectedShotCount))
-			}
-		}
+		issues = append(issues, contract.ShotStructureIssues(expectedShotCount)...)
 		return issues
 	}
 	// Quality notes are director choices (pacing words, camera wording, choreography
@@ -3044,6 +3021,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 			notes = append(notes, "仙术来源、轨迹或源文对撞的接触反馈描写不完整")
 		}
 		notes = append(notes, h3BalancedActionQualityNotes(value, normalizeSceneDuration(sc.Duration), expectedShotCount, requireBalancedTimeline)...)
+		notes = append(notes, parseH3PromptContract(value).TimelineNotes(normalizeSceneDuration(sc.Duration))...)
 		return notes
 	}
 	actionTrusted := func(value string, allowSubjects bool) bool {
