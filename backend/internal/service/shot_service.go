@@ -128,8 +128,8 @@ func shotDurationTotal(shots []models.Shot) float64 {
 }
 
 func rebalanceShotDurations(shots []models.Shot, target float64) ([]models.Shot, error) {
-	if len(shots) == 0 || target < 3 || target > maxLongSceneVideoDuration {
-		return nil, fmt.Errorf("Scene时长必须为3至%.0f秒且至少包含一个Shot", maxLongSceneVideoDuration)
+	if len(shots) == 0 || target < minSceneVideoDuration || target > maxLongSceneVideoDuration {
+		return nil, fmt.Errorf("Scene时长必须为%.0f至%.0f秒且至少包含一个Shot", minSceneVideoDuration, maxLongSceneVideoDuration)
 	}
 	total := shotDurationTotal(shots)
 	if total <= 0 {
@@ -145,8 +145,8 @@ func rebalanceShotDurations(shots []models.Shot, target float64) ([]models.Shot,
 			used += result[i].Duration
 		}
 		// Internal cut points may be short, matching validateShot.
-		if result[i].Duration <= 0 || result[i].Duration > 15 {
-			return nil, fmt.Errorf("按比例调整后Shot时长必须大于0且不超过15秒，请调整Shot数量或Scene时长")
+		if result[i].Duration <= 0 || result[i].Duration > maxShotDuration {
+			return nil, fmt.Errorf("按比例调整后Shot时长必须大于0且不超过%.0f秒，请调整Shot数量或Scene时长", maxShotDuration)
 		}
 		if shots[i].Duration > 0 && len(result[i].ActionTimeline) > 0 {
 			ratio := result[i].Duration / shots[i].Duration
@@ -211,8 +211,8 @@ func validateShot(shot *models.Shot) error {
 	// A persisted Shot is an internal cut point of its parent Scene, not an
 	// independently submitted video template. Keep short cuts intact; standalone
 	// Scene execution remains responsible for its 3–15 second template contract.
-	if shot.Duration <= 0 || shot.Duration > 15 || math.IsNaN(shot.Duration) || math.IsInf(shot.Duration, 0) {
-		return fmt.Errorf("每镜时长必须大于 0 且不超过 15 秒")
+	if shot.Duration <= 0 || shot.Duration > maxShotDuration || math.IsNaN(shot.Duration) || math.IsInf(shot.Duration, 0) {
+		return fmt.Errorf("每镜时长必须大于 0 且不超过 %.0f 秒", maxShotDuration)
 	}
 	if err := validateShotActionTimeline(shot.ActionTimeline, shot.Duration); err != nil {
 		return err

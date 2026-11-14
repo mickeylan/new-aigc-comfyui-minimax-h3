@@ -94,6 +94,7 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.ShotSplitBatch{},
 		&models.ShotSplitItem{},
 		&models.SceneEndState{},
+		&models.GenerationSnapshot{},
 		&models.DialogueAudioCandidate{},
 		&models.SceneAudioCandidate{},
 		&models.Skill{},

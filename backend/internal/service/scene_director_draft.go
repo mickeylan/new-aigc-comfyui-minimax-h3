@@ -331,12 +331,12 @@ func normalizeShortDirectorShots(draft *sceneDirectorDraft) error {
 			i++
 			continue
 		}
-		if i+1 < len(draft.Shots) && shot.Duration+draft.Shots[i+1].Duration <= 15 && directorShotsSpeechCompatible(shot, draft.Shots[i+1]) {
+		if i+1 < len(draft.Shots) && shot.Duration+draft.Shots[i+1].Duration <= maxShotDuration && directorShotsSpeechCompatible(shot, draft.Shots[i+1]) {
 			draft.Shots[i] = mergeDirectorShotPair(shot, draft.Shots[i+1])
 			draft.Shots = append(draft.Shots[:i+1], draft.Shots[i+2:]...)
 			continue
 		}
-		if i > 0 && draft.Shots[i-1].Duration+shot.Duration <= 15 && directorShotsSpeechCompatible(draft.Shots[i-1], shot) {
+		if i > 0 && draft.Shots[i-1].Duration+shot.Duration <= maxShotDuration && directorShotsSpeechCompatible(draft.Shots[i-1], shot) {
 			draft.Shots[i-1] = mergeDirectorShotPair(draft.Shots[i-1], shot)
 			draft.Shots = append(draft.Shots[:i], draft.Shots[i+1:]...)
 			i--
@@ -831,8 +831,8 @@ func parseSceneDirectorDraftWithOptions(output string, preserveShortShots bool) 
 			d.ListenerCharacter = ""
 			d.Checks = append(d.Checks, "系统已清除不适用于当前speech_presentation的listener_character")
 		}
-		if d.Duration <= 0 || d.Duration > 15 || math.IsNaN(d.Duration) || math.IsInf(d.Duration, 0) {
-			return nil, fmt.Errorf("镜头%d时长必须大于0且不超过15秒", i+1)
+		if d.Duration <= 0 || d.Duration > maxShotDuration || math.IsNaN(d.Duration) || math.IsInf(d.Duration, 0) {
+			return nil, fmt.Errorf("镜头%d时长必须大于0且不超过%.0f秒", i+1, maxShotDuration)
 		}
 		shot := models.Shot{ActType: d.ActType, ShotType: d.ShotType, CameraAngle: d.CameraAngle, CameraMovement: d.CameraMovement, TransitionType: d.TransitionType, TransitionNote: d.TransitionNote, StartState: d.StartState, EndState: d.EndState, Duration: d.Duration, Description: d.Description, DirectorIntent: d.DirectorIntent, AudienceInformation: d.AudienceInformation, PerformanceTrigger: d.Trigger, Performance: d.Performance, EyeLine: d.EyeLine, Blocking: d.Blocking, Reaction: d.Reaction, FocusSubject: d.FocusSubject, CutReason: d.CutReason, Dialogue: d.Dialogue, SpeechPresentation: d.SpeechPresentation, ListenerCharacter: d.ListenerCharacter, Emotion: d.Emotion, PromptSubject: d.PromptSubject, PromptAction: d.PromptAction, PromptCamera: d.PromptCamera, PromptLighting: d.PromptLighting, PromptStyle: d.PromptStyle, NegativePrompt: d.NegativePrompt, ActionTimeline: d.ActionTimeline}
 		if err := validateShot(&shot); err != nil {
@@ -945,7 +945,7 @@ func dialogueDraftWarnings(draft *sceneDirectorDraft, count int) []string {
 	// Mirrors the director skill rule: reaction/detail cuts may be 2 seconds,
 	// but two consecutive cuts under 3 seconds read as jitter.
 	for i, shot := range draft.Shots {
-		if shot.Duration < 2 || shot.Duration > 15 {
+		if shot.Duration < 2 || shot.Duration > maxShotDuration {
 			warnings = append(warnings, fmt.Sprintf("第%d镜时长%.1f秒不在建议的2–15秒范围；可人工调整", i+1, shot.Duration))
 		} else if i > 0 && shot.Duration < 3 && draft.Shots[i-1].Duration >= 2 && draft.Shots[i-1].Duration < 3 {
 			warnings = append(warnings, fmt.Sprintf("第%d、%d镜连续短于3秒，节奏可能过碎；可人工合并", i, i+1))
@@ -1014,8 +1014,8 @@ func validateCombatReferenceDraft(draft *sceneDirectorDraft, dialogues []models.
 		return fmt.Errorf("战斗资料导演草稿为空")
 	}
 	for i, shot := range draft.Shots {
-		if shot.Duration <= 0 || shot.Duration > 15 {
-			return fmt.Errorf("战斗资料镜头%d时长必须大于0且不超过15秒", i+1)
+		if shot.Duration <= 0 || shot.Duration > maxShotDuration {
+			return fmt.Errorf("战斗资料镜头%d时长必须大于0且不超过%.0f秒", i+1, maxShotDuration)
 		}
 		if shot.Duration > 6 && len(shot.ActionTimeline) == 0 {
 			return fmt.Errorf("战斗资料镜头%d超过6秒，必须用动作时间轴证明动作因果和连续覆盖", i+1)
@@ -1658,8 +1658,8 @@ func validateDialogueRhythmDraft(draft *sceneDirectorDraft, dialogues []models.D
 		expected.WriteString(canonicalDialogueText(d.Text))
 	}
 	for i, shot := range draft.Shots {
-		if shot.Duration <= 0 || shot.Duration > 15 {
-			return fmt.Errorf("对白拆镜%d时长必须大于0且不超过15秒", i+1)
+		if shot.Duration <= 0 || shot.Duration > maxShotDuration {
+			return fmt.Errorf("对白拆镜%d时长必须大于0且不超过%.0f秒", i+1, maxShotDuration)
 		}
 		if !validShotSpeechPresentation(shot.SpeechPresentation) {
 			return fmt.Errorf("对白拆镜%d的speech_presentation无效", i+1)

@@ -756,8 +756,8 @@ func (s *Service) HandleUpdateScene(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "场景正文和画面提示词不能为空"})
 		return
 	}
-	if req.Duration < 3 || req.Duration > maxLongSceneVideoDuration {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("场景视频时长必须在 3–%.0f 秒之间；超过15秒需要更多显存", maxLongSceneVideoDuration)})
+	if req.Duration < minSceneVideoDuration || req.Duration > maxLongSceneVideoDuration {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("场景视频时长必须在 %.0f–%.0f 秒之间；超过%.0f秒需要更多显存", minSceneVideoDuration, maxLongSceneVideoDuration, h3SegmentMaxSeconds)})
 		return
 	}
 	imageEngine, err := normalizeSceneImageEngine(req.ImageEngine)
@@ -2352,8 +2352,8 @@ func (s *Service) HandleUpdateSceneDuration(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "参数错误"})
 		return
 	}
-	if req.Duration < 3 || req.Duration > maxLongSceneVideoDuration {
-		c.JSON(400, gin.H{"error": fmt.Sprintf("时长需在 3~%.0f 秒之间；超过15秒需要更多显存", maxLongSceneVideoDuration)})
+	if req.Duration < minSceneVideoDuration || req.Duration > maxLongSceneVideoDuration {
+		c.JSON(400, gin.H{"error": fmt.Sprintf("时长需在 %.0f~%.0f 秒之间；超过%.0f秒需要更多显存", minSceneVideoDuration, maxLongSceneVideoDuration, h3SegmentMaxSeconds)})
 		return
 	}
 	if err := s.DB.Model(&models.Scene{}).Where("id = ?", sc.ID).Update("duration", req.Duration).Error; err != nil {

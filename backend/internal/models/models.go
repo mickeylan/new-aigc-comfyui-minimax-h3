@@ -1520,3 +1520,20 @@ type SceneEndState struct {
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
+
+// GenerationSnapshot freezes what a Scene image/video submission actually used, so a
+// take can be traced to its exact prompt, reference files and template revision.
+type GenerationSnapshot struct {
+	ID             uint      `gorm:"primaryKey" json:"id"`
+	ProjectID      uint      `gorm:"index" json:"project_id"`
+	SceneID        uint      `gorm:"index" json:"scene_id"`
+	Kind           string    `gorm:"size:16;index" json:"kind"` // image/video
+	TaskID         string    `gorm:"index" json:"task_id"`
+	TemplateCode   string    `json:"template_code"`
+	TemplateSHA256 string    `gorm:"size:64" json:"template_sha256"`
+	PromptSHA256   string    `gorm:"size:64" json:"prompt_sha256"`
+	FullPrompt     string    `gorm:"type:text" json:"full_prompt"`
+	RefsJSON       string    `gorm:"type:text" json:"refs_json"` // [{role,file,sha256}]
+	ParamsJSON     string    `gorm:"type:text" json:"params_json"`
+	CreatedAt      time.Time `json:"created_at"`
+}

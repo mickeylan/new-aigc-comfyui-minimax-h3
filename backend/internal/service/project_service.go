@@ -347,6 +347,9 @@ func (s *ProjectService) DeleteProject(id uint) error {
 			if err := deleteIfTable(tx, &models.SceneEndState{}, "scene_id IN ?", sceneIDs); err != nil {
 				return err
 			}
+			if err := deleteIfTable(tx, &models.GenerationSnapshot{}, "scene_id IN ?", sceneIDs); err != nil {
+				return err
+			}
 		}
 		if err := tx.Where("project_id = ?", id).Delete(&models.FrameCandidate{}).Error; err != nil {
 			return err
@@ -1923,8 +1926,7 @@ func (s *ProjectService) planEpisodeInfo(p *models.Project, n int) (string, stri
 }
 
 const (
-	maxLongSceneVideoDuration   = 60.0
-	defaultH3GenerationDuration = 15.0
+	defaultH3GenerationDuration = h3SegmentMaxSeconds
 	settingH3MaxDurationSeconds = "h3_max_duration_seconds"
 )
 
@@ -1937,7 +1939,7 @@ func configuredH3GenerationDuration(db *gorm.DB) float64 {
 		return defaultH3GenerationDuration
 	}
 	value, err := strconv.ParseFloat(strings.TrimSpace(setting.Value), 64)
-	if err != nil || value < 3 {
+	if err != nil || value < minSceneVideoDuration {
 		return defaultH3GenerationDuration
 	}
 	return math.Min(value, maxLongSceneVideoDuration)
@@ -1950,8 +1952,8 @@ func normalizeSceneDuration(duration float64) float64 {
 	if duration == 0 {
 		return 5
 	}
-	if duration < 3 {
-		return 3
+	if duration < minSceneVideoDuration {
+		return minSceneVideoDuration
 	}
 	if duration > maxLongSceneVideoDuration {
 		return maxLongSceneVideoDuration
@@ -2019,8 +2021,6 @@ func (s *ProjectService) projectImageSize(projectID uint) string {
 	}
 	return aspectImageSize("")
 }
-
-const maxSceneReferenceImages = 9
 
 func visibleSceneCharacterNames(sc *models.Scene) []string {
 	if sc.CharacterRolesSet {
@@ -2730,7 +2730,7 @@ func structuredShotsCoverScene(shots []models.Shot, duration float64) bool {
 	// their total has to match the Scene that is actually generated.
 	total := 0.0
 	for _, shot := range shots {
-		if shot.Duration <= 0 || shot.Duration > maxSceneVideoDuration {
+		if shot.Duration <= 0 || shot.Duration > maxShotDuration {
 			return false
 		}
 		total += shot.Duration
@@ -6375,8 +6375,8 @@ func validateScriptResult(res *scriptResult, targets ...any) error {
 		if strings.TrimSpace(sc.Content) == "" || strings.TrimSpace(sc.ImagePrompt) == "" {
 			return fmt.Errorf("场景 %d 缺少视频或画面提示词", i+1)
 		}
-		if sc.Duration < 3 || sc.Duration > maxLongSceneVideoDuration {
-			return fmt.Errorf("场景 %d 时长必须为 3~%.0f 秒", i+1, maxLongSceneVideoDuration)
+		if sc.Duration < minSceneVideoDuration || sc.Duration > maxLongSceneVideoDuration {
+			return fmt.Errorf("场景 %d 时长必须为 %.0f~%.0f 秒", i+1, minSceneVideoDuration, maxLongSceneVideoDuration)
 		}
 	}
 	return nil
@@ -8013,6 +8013,7 @@ func (s *ProjectService) generateClaimedSceneImage(sc *models.Scene, token strin
 		s.failSceneImage(sc, token, "创建场景图任务失败: "+err.Error())
 		return err
 	}
+	s.recordGenerationSnapshot(sc, "image", task, tpl, map[string][]FileMeta{"ref_images": refs})
 	bound := s.db.Model(&models.Scene{}).
 		Where("id = ? AND image_token = ? AND generation = ?", sc.ID, token, sc.Generation).
 		Update("image_task_id", task.TaskID)
@@ -8443,6 +8444,7 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		s.failScene(sc, "创建视频任务失败: "+err.Error())
 		return err
 	}
+	s.recordGenerationSnapshot(sc, "video", task, tpl, videoFiles)
 	updated := s.db.Model(&models.Scene{}).Where("id = ? AND generation = ? AND status = ?", sc.ID, sc.Generation, "video_creating").Updates(map[string]any{
 		"video_task_id": task.TaskID,
 		"status":        "video_pending", "error": "",
@@ -10804,7 +10806,7 @@ func buildEpisodePreflight(scenes []models.Scene, shotTotals map[uint]float64, c
 	}
 	invalidDuration, mismatch, stale, missingPrompt, invalidContinuity := []uint{}, []uint{}, []uint{}, []uint{}, []uint{}
 	for _, scene := range scenes {
-		if scene.Duration < 3 || scene.Duration > maxLongSceneVideoDuration {
+		if scene.Duration < minSceneVideoDuration || scene.Duration > maxLongSceneVideoDuration {
 			invalidDuration = append(invalidDuration, scene.ID)
 		}
 		if scene.ShotCount > 0 && math.Abs(shotTotals[scene.ID]-scene.Duration) > shotDurationTolerance {

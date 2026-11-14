@@ -15,3 +15,8 @@ func (s *Service) HandleListModelCatalog(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"items": entries})
 }
+
+// HandleModelCapabilities exposes the system-wide duration and reference limits.
+func (s *Service) HandleModelCapabilities(c *gin.Context) {
+	c.JSON(http.StatusOK, modelCapabilityLimits(s.DB))
+}

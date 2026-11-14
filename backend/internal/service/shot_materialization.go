@@ -9,8 +9,6 @@ import (
 	"gorm.io/gorm"
 )
 
-const maxNativeSceneDuration = 15.0
-
 type ShotMaterializationItem struct {
 	ShotID   uint    `json:"shot_id,omitempty"` // 兼容旧前端；多镜组时为首镜 ID
 	ShotIDs  []uint  `json:"shot_ids"`

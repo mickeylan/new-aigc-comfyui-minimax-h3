@@ -38,6 +38,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.GET("/api/templates", svc.HandleListTemplates)
 	r.POST("/api/templates/reload", svc.HandleReloadTemplates)
 	r.GET("/api/model-catalog", svc.HandleListModelCatalog)
+	r.GET("/api/model-capabilities", svc.HandleModelCapabilities)
 
 	// 项目无关的生产试验场
 	r.GET("/api/playground/runs", svc.HandleListPlaygroundRuns)
@@ -133,6 +134,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.GET("/api/projects/:id/scenes/:sid/end-state", svc.HandleGetSceneEndState)
 	r.PUT("/api/projects/:id/scenes/:sid/end-state", svc.HandleSaveSceneEndState)
 	r.POST("/api/projects/:id/scenes/:sid/end-state/extract", svc.HandleExtractSceneEndState)
+	r.GET("/api/projects/:id/scenes/:sid/generation-snapshots", svc.HandleListGenerationSnapshots)
 	r.POST("/api/projects/:id/episodes/:number/shot-split", svc.HandleCreateShotSplitBatch)
 	r.GET("/api/projects/:id/episodes/:number/shot-split", svc.HandleListShotSplitBatches)
 	r.GET("/api/projects/:id/episodes/:number/shot-split/:bid", svc.HandleGetShotSplitBatch)

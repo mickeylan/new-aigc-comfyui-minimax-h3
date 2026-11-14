@@ -506,7 +506,7 @@
           <div v-if="sceneDialogues(sc).length" class="scene-dialogues">
             <div class="dialogue-budget" :class="{ danger: dialogueBudget(sc).overflow }">
               对白预计 {{ dialogueBudget(sc).minimum.toFixed(1) }} 秒 · 镜头 {{ Number(sc.duration || 0).toFixed(1) }} 秒
-              <span v-if="dialogueBudget(sc).overflow">{{ dialogueBudget(sc).minimum > 15 ? '建议拆分镜头' : '建议增加时长' }}（不阻止生成）</span>
+              <span v-if="dialogueBudget(sc).overflow">{{ dialogueBudget(sc).minimum > shotMaxSeconds ? '建议拆分镜头' : '建议增加时长' }}（不阻止生成）</span>
               <button v-if="dialogueBudget(sc).overflow && dialogueBudget(sc).minimum <= 15" class="btn btn-xs btn-ghost" :disabled="busy" @click="applyDialogueDuration(sc)">应用建议时长</button>
             </div>
             <div v-for="d in sceneDialogues(sc)" :key="d.id" class="dialogue-row">
@@ -1407,7 +1407,10 @@ const videoTaskScene = ref(null)
 const videoTaskPromptDraft = ref('')
 const videoTaskTemplate = ref('minimax_h3_ref2v')
 const modelCatalog = ref([])
-const h3DurationMax = computed(() => Number(modelCatalog.value.find(m => m.template_code === 'minimax_h3_ref2v')?.duration?.max || 15))
+// System-wide limits from /model-capabilities; the fallback mirrors the backend values.
+const modelLimits = ref({ shot_max_seconds: 15 })
+const shotMaxSeconds = computed(() => Number(modelLimits.value.shot_max_seconds || 15))
+const h3DurationMax = computed(() => Number(modelCatalog.value.find(m => m.template_code === 'minimax_h3_ref2v')?.duration?.max || shotMaxSeconds.value))
 const hasTemplate = code => modelCatalog.value.some(m => m.template_code === code)
 const qwenAssetTemplateReady = computed(() => hasTemplate('qwen_image_2_1_t2i'))
 const qwenSceneTemplateReady = computed(() => hasTemplate('qwen_image_2_1_t2i') || hasTemplate('qwen_image_2_1_multi_edit'))
@@ -2354,9 +2357,10 @@ async function load() {
   projectLoadInFlight = true
   const requestEpoch = ++loadRequestEpoch
   try {
-    const [{ data }, catalogRes, materialsRes] = await Promise.all([api.project(id()), api.modelCatalog(), api.materials({ project_id: id(), type: 'video' })])
+    const [{ data }, catalogRes, materialsRes, limitsRes] = await Promise.all([api.project(id()), api.modelCatalog(), api.materials({ project_id: id(), type: 'video' }), api.modelCapabilities().catch(() => null)])
     if (requestEpoch !== loadRequestEpoch || savingScene.value || storyApplyBusy.value) return
     modelCatalog.value = catalogRes.data?.items || []
+    if (limitsRes?.data) modelLimits.value = limitsRes.data
     projectVideoMaterials.value = (materialsRes.data || []).filter(item => item.type === 'video')
     loadError.value = ''
     project.value = data.project
@@ -3518,7 +3522,7 @@ function dialogueBudget(sc) {
 }
 async function applyDialogueDuration(sc) {
   const duration = dialogueBudget(sc).minimum
-  if (!duration || duration > 15) return
+  if (!duration || duration > shotMaxSeconds.value) return
   busy.value = true
   try {
     await api.updateScene(id(), sc.id, { title: sc.title, content: sc.content, image_prompt: sc.image_prompt, duration })
