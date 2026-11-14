@@ -15,6 +15,8 @@ const (
 	// Planning estimate requested for short-drama dialogue (8–10 chars/s).
 	// This does not change TTS playback speed or measured audio duration.
 	defaultChineseCharsPerSecond = 9.0
+	minChineseCharsPerSecond     = 8.0
+	maxChineseCharsPerSecond     = 10.0
 	dialogueOpeningClosingMargin = 0.4
 	speakerChangePause           = 0.15
 	// One readable on-screen action needs about 2.5 seconds in a continuous H3 shot.

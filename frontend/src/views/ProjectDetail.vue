@@ -643,7 +643,7 @@
         <h2>确认合并 {{ sceneMergePreview.scene_ids.length }} 个相邻分镜</h2>
         <div class="field"><label>新分镜标题（预览，只读）</label><input :value="sceneMergePreview.title" class="input" readonly /></div>
         <div class="field"><label>合并内容（预览，只读，不进行 AI 重写）</label><textarea :value="sceneMergePreview.content" class="textarea" rows="10" readonly /></div>
-        <p>总时长：{{ Number(sceneMergePreview.duration || 0).toFixed(1) }} 秒。默认镜头建议约 15 秒；超过 15 秒仍可手工合并，约 10 秒一段通常更便于后续生成。</p>
+        <p>总时长：{{ Number(sceneMergePreview.duration || 0).toFixed(1) }} 秒。默认镜头建议约 {{ shotMaxSeconds }} 秒；超过 {{ shotMaxSeconds }} 秒仍可手工合并，约 10 秒一段通常更便于后续生成。</p>
         <ul class="scene-merge-warnings"><li v-for="warning in sceneMergePreview.warnings" :key="warning">{{ warning }}</li><li>原分镜将归档且媒体保留；新分镜不带图片或视频，不会自动生成图片或视频。</li></ul>
         <div v-if="mergeError" class="notice error-notice">{{ mergeError }}</div>
         <label class="merge-confirm"><input v-model="sceneMergeConfirmed" type="checkbox" /> 我确认归档原分镜，并创建无图片、无视频的新分镜</label>
@@ -698,8 +698,8 @@
         </div>
         <div class="field">
           <label>分镜时长（秒）</label>
-          <input v-model.number="sceneForm.duration" class="input" type="number" min="3" :max="h3DurationMax" step="0.1" />
-          <div class="field-hint">当前平台生成上限为 {{h3DurationMax}} 秒；普通分镜建议保持3–15秒，只有高显存实例实测通过后才应提高平台上限。</div>
+          <input v-model.number="sceneForm.duration" class="input" type="number" :min="sceneMinSeconds" :max="h3DurationMax" step="0.1" />
+          <div class="field-hint">当前平台生成上限为 {{h3DurationMax}} 秒；普通分镜建议保持{{sceneMinSeconds}}–{{shotMaxSeconds}}秒，只有高显存实例实测通过后才应提高平台上限。</div>
         </div>
         <div class="field">
           <label>导演类型</label>
@@ -1440,6 +1440,7 @@ const modelCatalog = ref([])
 // System-wide limits from /model-capabilities; the fallback mirrors the backend values.
 const modelLimits = ref({ shot_max_seconds: 15 })
 const shotMaxSeconds = computed(() => Number(modelLimits.value.shot_max_seconds || 15))
+const sceneMinSeconds = computed(() => Number(modelLimits.value.scene_min_seconds || 3))
 const h3DurationMax = computed(() => Number(modelCatalog.value.find(m => m.template_code === 'minimax_h3_ref2v')?.duration?.max || shotMaxSeconds.value))
 const hasTemplate = code => modelCatalog.value.some(m => m.template_code === code)
 const qwenAssetTemplateReady = computed(() => hasTemplate('qwen_image_2_1_t2i'))

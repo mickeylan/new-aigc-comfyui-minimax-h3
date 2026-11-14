@@ -1313,7 +1313,7 @@ type scriptResult struct {
 	Scenes      []scriptScene `json:"scenes"`
 }
 
-const scriptSystemPrompt = `你是一位专业的漫剧编剧与分镜师。根据用户提供的故事创意，创作一部完整的漫剧剧本，并拆分为多个分镜场景，供后续"文生图 + 图生视频"流水线使用。
+var scriptSystemPrompt = pacing(`你是一位专业的漫剧编剧与分镜师。根据用户提供的故事创意，创作一部完整的漫剧剧本，并拆分为多个分镜场景，供后续"文生图 + 图生视频"流水线使用。
 要求：
 1. 只输出一个合法的 JSON 对象，不要输出任何解释、Markdown 代码块标记或其它文字。
 2. JSON 结构固定为：
@@ -1338,12 +1338,12 @@ const scriptSystemPrompt = `你是一位专业的漫剧编剧与分镜师。根�
     }
   ]
 }
-3. 默认以约 180 秒、20~30 个镜头作为节奏参考，但自然对白优先，总时长允许超过目标。每镜为 3~15 秒独立视频片段；按8~10个汉字/秒、默认9字/秒估算短剧对白；标点只加短暂停顿，连续标点按一次停顿计算，整段仅留0.4秒余量，不因过量预留将完整话语拆成大量短镜。对白自然说完需要超过 15 秒时，必须按完整句子、说话人或动作节点拆成连续镜头，不得删改对白或通过提高语速压缩。
+3. 默认以约 {episode_seconds} 秒、约 {episode_scenes} 个镜头作为节奏参考，但自然对白优先，总时长允许超过目标；镜头数随剧情发展，不设上限也不凑数。每镜为 {scene_min}~{shot_max} 秒独立视频片段；按{speech_rate_min}~{speech_rate_max}个汉字/秒、默认{speech_rate}字/秒估算短剧对白；标点只加短暂停顿，连续标点按一次停顿计算，整段仅留0.4秒余量，不因过量预留将完整话语拆成大量短镜。对白自然说完需要超过 {shot_max} 秒时，必须按完整句子、说话人或动作节点拆成连续镜头，不得删改对白或通过提高语速压缩。
 4. 人物一致性至关重要：同一角色在多个场景出现时，image_prompt 必须重复其外貌特征（发型、服装颜色、体型），且所有场景画风描述保持一致。
 5. 必须区分人物用途：visible_characters 只列本镜最终画面中真实可见的人物（包括回忆画面、照片、倒影中确实被画出的角色）；voice_characters 只列画外对白或内心独白的发声者；mentioned_characters 只列剧情说明、对白或独白中被提到但不会出现在画面中的人物。人物名字出现在文字中不等于画面出场。characters 为兼容字段，必须与 visible_characters 完全相同。只有 visible_characters 会要求人物四视图。
 6. script 正文优先使用固定格式：【动作】画面描述、【对白｜角色名】原文、【画外对白｜角色名】原文、【旁白】原文、【内心独白｜角色名】原文。逐场检查故事正文和分镜内容中的明确发声标注，并忠实提取到 dialogues：明确命名角色从画外发声使用 offscreen_dialogue，无角色身份的旁白使用 narration，角色内心独白使用 monologue，角色在画面中说话使用 dialogue。只复制标注后的原文，不改写、不概括、不补充。不得把“他心里疑惑”“气氛压抑”等心理、动作或氛围描写转换成独白或旁白。speech_type 只能是 dialogue、offscreen_dialogue、narration 或 monologue；dialogue/offscreen_dialogue/monologue 的 character 必须是角色名，narration 的 character 固定为“旁白”。正文和分镜内容均未明确出现可发声内容时必须为空数组。
 7. 第一个场景尽量给出大场景/环境交代，后续场景聚焦人物动作与剧情推进。
-8. 道具与场景一致性：贯穿剧情的关键道具（信物/武器等）与主要地点必须在 props/location 中用统一名称标出（系统会用同名资产参考图锁定其外观），同一道具/地点在不同场景中名称必须完全相同。`
+8. 道具与场景一致性：贯穿剧情的关键道具（信物/武器等）与主要地点必须在 props/location 中用统一名称标出（系统会用同名资产参考图锁定其外观），同一道具/地点在不同场景中名称必须完全相同。`)
 
 const previousEpisodeContextLimit = 48000
 
@@ -1773,10 +1773,10 @@ func (s *ProjectService) generateScriptCore(p *models.Project, episodeN int, raw
 	}
 	_, _, targetDuration, targetScenes := s.planEpisodeInfo(p, episodeN)
 	if targetDuration <= 0 {
-		targetDuration = 180
+		targetDuration = defaultEpisodeTargetSeconds
 	}
 	if targetScenes <= 0 {
-		targetScenes = 25
+		targetScenes = defaultEpisodeTargetScenes
 	}
 	// 拟声词/音效不是可配音对白：移回画面描写，避免生成空说话人或“待确认”对白行。
 	moveSoundEffectsToContent(res.Scenes, nil)
@@ -1910,14 +1910,14 @@ func (s *ProjectService) planEpisodeInfo(p *models.Project, n int) (string, stri
 	}
 	for _, ep := range plan.Episodes {
 		if ep.N == n {
-			// 兼容旧项目缺失字段：默认 180 秒 / 25 个镜头
+			// 兼容旧项目缺失字段：使用默认分集时长与镜头数
 			targetDuration := ep.TargetDuration
 			if targetDuration <= 0 {
-				targetDuration = 180
+				targetDuration = defaultEpisodeTargetSeconds
 			}
 			targetScenes := ep.TargetScenes
 			if targetScenes <= 0 {
-				targetScenes = 25
+				targetScenes = defaultEpisodeTargetScenes
 			}
 			return ep.Title, ep.Brief, targetDuration, targetScenes
 		}
@@ -2858,7 +2858,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 按源文原序保留可见的起因/触发、物质或对象的出现与状态转变、主动运动的方向和作用力、对象间接触/作用、传播过程，以及环境最终状态。这些是动作链，不属于应删除的文学“前因后果”。不得复述剧情背景（指不可见的背景解释）、人物关系、心理活动、内心想法、氛围解释或观众感受；禁止“仿佛想说什么”“未说出口的问题”“沉默中充满”等文学化语言暗示。
 第一句以 [Shot 1] 开头，%s。不得新增角色、对白、道具、地点、胜负、伤亡或剧情结果。不得创造用户未写的威胁、攻击、应对或剧情推进；禁止为制造戏剧性而补出防御、反击或新结果，也不得写出与原文状态矛盾的反应（原文写“没有后退”就不得后退，写“一言不发”就保持闭口）。
 导演权：在不改变上述剧情事实的前提下，你必须主动设计镜头语言——每个Shot的景别、机位角度、运镜、前景/构图与光线变化；开场写清每个人物在画面左/中/右的位置与朝向，全片保持同一对峙轴线，切镜不越轴；术法、兵器光效和法宝写明归属与发出部位。只写该机位实际看得见的细节：背对镜头或被遮挡的人物不写表情、脸色、眼神或嘴唇；按每段动作量分配各Shot时长，不得让对白镜头占满大部分时长而把多个动作挤进最后一两秒。你可以把原文已经表达的情绪（紧张、恐惧、凶狠、沉稳）落成不改变剧情的可见细节表演，如视线追随、眉头压低、指节收紧、肩膀缩起、双脚站稳；这些是镜头表演，不是新剧情。最后一个Shot停在原文的最终状态，不得越过它继续推进。
-按每条Dialogue的speech_type分别处理发声方式：dialogue是现场说话，可在该句期间同步口型；monologue是可听见的内心画外声，该人物在该句期间嘴唇完全闭合，不做开口或说话口型，只保留原文的可见反应；narration和offscreen_dialogue不驱动画面人物口型。闭口要求仅作用于对应语句/时段，不得阻止同一人物后续dialogue正常开口。对白文本将由系统确定性加入，你不得在正文输出台词、<d>标签或改写台词；但你要在该句实际说出的Shot里写一个独立的可见说话节拍句（说话人、朝向谁、神态，如 「燕承 glares at 柳石 and shouts.」），并紧接该句单独写对应占位符 [[D1]]、[[D2]]……（序号即结构化对白的D编号，每条恰好一次、按顺序），系统会把占位符确定性替换为台词；把与台词同时发生的动作（原文“话音未落”等）写在该节拍之后的同一Shot内，并为该Shot留足台词时长（按每秒9个汉字估算，标点只加短暂停顿，连续标点按一次停顿计算）。无结构化对白时，人物保持闭口，不得描写嘴唇微张、欲言又止或任何说话暗示。
+按每条Dialogue的speech_type分别处理发声方式：dialogue是现场说话，可在该句期间同步口型；monologue是可听见的内心画外声，该人物在该句期间嘴唇完全闭合，不做开口或说话口型，只保留原文的可见反应；narration和offscreen_dialogue不驱动画面人物口型。闭口要求仅作用于对应语句/时段，不得阻止同一人物后续dialogue正常开口。对白文本将由系统确定性加入，你不得在正文输出台词、<d>标签或改写台词；但你要在该句实际说出的Shot里写一个独立的可见说话节拍句（说话人、朝向谁、神态，如 「燕承 glares at 柳石 and shouts.」），并紧接该句单独写对应占位符 [[D1]]、[[D2]]……（序号即结构化对白的D编号，每条恰好一次、按顺序），系统会把占位符确定性替换为台词；把与台词同时发生的动作（原文“话音未落”等）写在该节拍之后的同一Shot内，并为该Shot留足台词时长（按每秒`+pacingNumber(defaultChineseCharsPerSecond)+`个汉字估算，标点只加短暂停顿，连续标点按一次停顿计算）。无结构化对白时，人物保持闭口，不得描写嘴唇微张、欲言又止或任何说话暗示。
 正文中的人物身份占位必须逐字使用【场景剧情】和【Shot导演设计】里的中文真实角色名，以便系统确定性替换为正确 <Subject N>；【实际参考绑定】中的道具和场景同样逐字使用其中文名（如道具「X」写作 X），系统会替换为对应 <Picture N> 引用；其余视觉叙述使用英文。严禁拼音、英文音译、别名，也禁止自行猜测Subject编号。
 四视图只负责人物身份与服装，场景图只负责环境；不得从参考图反推剧情，不得复述或猜测外貌、服装、陈设。
 场景类型规则：%s`, combatDetailRule, openingInstruction, h3SceneModeInstruction(sceneMode))

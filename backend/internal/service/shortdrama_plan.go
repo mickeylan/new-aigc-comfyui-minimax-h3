@@ -126,24 +126,23 @@ func planSystemPrompt() string {
   "locations": [{"name": "场景名", "description": "主要场景环境（空间/建筑/陈设/光线氛围），供画面生成保持一致"}],
   "episodes": [{"n": 1, "title": "集标题", "brief": "核心冲突或爽点一句话", "hook": "钩子类型（悬念钩/反转钩/情绪钩/信息钩/危机钩）", "tag": "🔥或💰或空", "target_duration": 180, "target_scenes": 25}]
 }
-3. episodes 必须覆盖全集数（与用户配置的集数一致），体现三幕节奏；前10集至少3个🔥和2个💰；🔥占比25-35%，💰占比10-15%。每集必须设定 target_duration（约180秒，即3分钟）和 target_scenes（约25个镜头，单镜3-15秒）。
+3. episodes 必须覆盖全集数（与用户配置的集数一致），体现三幕节奏；前10集至少3个🔥和2个💰；🔥占比25-35%，💰占比10-15%。每集必须设定 target_duration（约` + pacing("{episode_seconds}") + `秒，即` + pacingNumber(defaultEpisodeTargetSeconds/60) + `分钟）和 target_scenes（约` + pacing("{episode_scenes}个镜头，单镜{scene_min}-{shot_max}秒") + `）。
 4. 必须从故事创意中识别并生成 2~8 个主要角色（包括主角、关键配角和反派）；每个角色必须完整填写 characters 模板的全部字段。appearance 必须覆盖性别呈现、年龄感、发型发色、脸型、眼神、妆造、眉形、肤色、体型和特殊标记；wardrobe_detail 必须覆盖款式、配色、配饰和材质。角色由用户审核修改后再用于生图，禁止返回空 characters。
 5. 必须给出贯穿全剧的关键道具清单 props（2~8 项，如信物/武器/法宝/手机等反复出现、影响剧情的物件）与主要场景清单 locations（2~8 个地点），每项给出具体外观/环境描述；后续分镜只引用这些名称，系统会用它们生成参考图保证道具与场景全剧一致。`
 }
 
 // scriptFromPlanSystemPrompt 阶段 2 系统提示词：依据创作方案渲染分镜场景
-// targetDuration: 目标总时长（秒），默认 180
-// targetScenes: 目标镜头数，默认 25
+// targetDuration: 目标总时长（秒），缺省取 defaultEpisodeTargetSeconds
+// targetScenes: 目标镜头数，缺省取 defaultEpisodeTargetScenes
 func scriptFromPlanSystemPrompt(targetDuration float64, targetScenes int) string {
 	// 兼容旧项目缺失字段
 	if targetDuration <= 0 {
-		targetDuration = 180
+		targetDuration = defaultEpisodeTargetSeconds
 	}
 	if targetScenes <= 0 {
-		targetScenes = 25
+		targetScenes = defaultEpisodeTargetScenes
 	}
-	// 单镜时长范围：3-15 秒
-	minSceneDur, maxSceneDur := 3, 15
+	minSceneDur, maxSceneDur := int(minSceneVideoDuration), int(maxShotDuration)
 
 	return `你是专业的漫剧编剧与分镜师。根据给定的创作方案，把故事转化为一条适合"文生图 + 图生视频"流水线的分镜序列。
 要求：
@@ -173,8 +172,8 @@ func scriptFromPlanSystemPrompt(targetDuration float64, targetScenes int) string
 - 镜头数参考：约 ` + fmt.Sprintf("%d", targetScenes) + ` 个镜头；仅作参考，场景数随剧情发展，不设上限也不凑数
 - 单镜时长范围：` + fmt.Sprintf("%d", minSceneDur) + `~` + fmt.Sprintf("%d", maxSceneDur) + ` 秒
 - ` + sceneSplitRule + `
-- 按8~10个汉字/秒、默认9字/秒估算短剧对白；连续标点只算一次短暂停顿，整段仅留0.4秒余量，不因过量预留拆出大量短镜
-- 对白自然说完需要超过 15 秒时，按完整句子、说话人或动作节点拆为连续镜头；不得删改对白或提高语速来凑总时长
+- ` + pacing("按{speech_rate_min}~{speech_rate_max}个汉字/秒、默认{speech_rate}字/秒") + `估算短剧对白；连续标点只算一次短暂停顿，整段仅留0.4秒余量，不因过量预留拆出大量短镜
+- 对白自然说完需要超过 ` + pacing("{shot_max}") + ` 秒时，按完整句子、说话人或动作节点拆为连续镜头；不得删改对白或提高语速来凑总时长
 3. 人物一致性至关重要：同一角色在多个场景出现时，image_prompt 必须严格沿用创作方案中该角色的 trait（外貌特征）与 style（服装造型），且所有场景画风描述保持一致。
 4. 必须区分人物用途：visible_characters 只列本镜最终画面中真实可见的人物；voice_characters 只列画外对白或内心独白的发声者；mentioned_characters 只列剧情说明、对白或独白中被提到但不会出现在画面中的人物。名字出现在文字中不等于画面出场。characters 为兼容字段，必须与 visible_characters 完全相同；只有 visible_characters 会要求人物四视图。
 5. script 正文优先使用固定格式：【动作】画面描述、【对白｜角色名】原文、【画外对白｜角色名】原文、【旁白】原文、【内心独白｜角色名】原文。逐场检查故事正文和分镜内容中的明确发声标注，并忠实提取到 dialogues：明确命名角色从画外发声使用 offscreen_dialogue，无角色身份的旁白使用 narration，角色内心独白使用 monologue，角色在画面中说话使用 dialogue。只复制标注后的原文，不改写、不概括、不补充。不得把“他心里疑惑”“气氛压抑”等心理、动作或氛围描写转换成独白或旁白。speech_type 只能是 dialogue、offscreen_dialogue、narration 或 monologue；dialogue/offscreen_dialogue/monologue 的 character 必须是角色名，narration 的 character 固定为“旁白”。正文和分镜内容均未明确出现可发声内容时必须为空数组。
