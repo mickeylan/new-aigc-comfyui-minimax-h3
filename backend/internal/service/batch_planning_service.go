@@ -682,7 +682,7 @@ func (s *BatchPlanningService) generateBatchDraft(projectID, batchID uint) (*Pla
 		}
 		if outlineMode {
 			ep.ChapterStart, ep.ChapterEnd, ep.SourceChapterIDs = 0, 0, "[]"
-			if ep.TargetDuration < 162 || ep.TargetDuration > 198 || ep.TargetScenes < 20 || ep.TargetScenes > 30 {
+			if ep.TargetDuration < 162 || ep.TargetDuration > 198 || ep.TargetScenes < 1 || ep.TargetScenes > 100 {
 				return nil, fmt.Errorf("第%d集: 时长或镜头数超出范围", ep.EpisodeN)
 			}
 		} else {

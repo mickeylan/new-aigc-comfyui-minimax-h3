@@ -415,8 +415,9 @@ func validateAdaptation(v *models.EpisodeAdaptation) error {
 	if v.TargetDuration < 162 || v.TargetDuration > 198 {
 		return fmt.Errorf("target_duration must be within 180 seconds ±10%%")
 	}
-	if v.TargetScenes < 20 || v.TargetScenes > 30 {
-		return fmt.Errorf("target_scenes must be between 20 and 30")
+	// Scene count follows the plot: target_scenes is a planning hint, not a quota.
+	if v.TargetScenes < 1 || v.TargetScenes > 100 {
+		return fmt.Errorf("target_scenes must be between 1 and 100")
 	}
 	var ids []uint
 	if json.Unmarshal([]byte(v.SourceChapterIDs), &ids) != nil || len(ids) == 0 {

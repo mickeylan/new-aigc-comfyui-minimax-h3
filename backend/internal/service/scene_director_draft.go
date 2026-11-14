@@ -1921,6 +1921,7 @@ func (s *Service) generateSceneDirectorDraft(scene *models.Scene, req sceneDirec
 			assets = strings.TrimSpace(assets + "\n" + inherited)
 		}
 	}
+	assets = strings.TrimSpace(assets + sceneCallContext(s.DB, scene))
 	operation, instruction := "director-scene-draft", "生成完整Scene导演方案草稿；只预览，不保存。"
 	combatReferenceText := ""
 	var combatReferenceAudit []CombatReferenceAudit
