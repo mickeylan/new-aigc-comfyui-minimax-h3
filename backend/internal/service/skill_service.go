@@ -256,6 +256,7 @@ func (s *SkillService) InitSystemSkills() error {
 			IsSystem:       true, Enabled: true, SortOrder: 1,
 		},
 		sceneEndStateArchivistSkill,
+		shotRefinePatchSkill,
 	}
 
 	for _, skill := range systemSkills {
