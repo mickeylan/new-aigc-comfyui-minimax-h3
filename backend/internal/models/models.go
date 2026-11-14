@@ -1505,3 +1505,18 @@ type SceneContinuity struct {
 	CreatedAt         time.Time       `json:"created_at"`
 	UpdatedAt         time.Time       `json:"updated_at"`
 }
+
+// SceneEndState records where each character and key prop is when a Scene ends. It is
+// reference context for the next Scene only and never rewrites story content. It lives
+// apart from SceneContinuity so extracting it cannot stale a reviewed video prompt.
+type SceneEndState struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	ProjectID    uint      `gorm:"index" json:"project_id"`
+	SceneID      uint      `gorm:"uniqueIndex" json:"scene_id"`
+	StateJSON    string    `gorm:"type:text" json:"state_json"`
+	SourceSHA256 string    `gorm:"size:64" json:"source_sha256"`
+	ExtractedBy  string    `json:"extracted_by"` // explicit/llm/manual
+	SkillVersion int       `json:"skill_version"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}

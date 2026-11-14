@@ -255,6 +255,7 @@ func (s *SkillService) InitSystemSkills() error {
 			SystemPrompt:   "只输出严格JSON对象，根字段只能为cues。不要生成音频。每项只能包含kind,start_time,end_time,intensity,mood,instrument_note,user_requirements,caption。caption只能包含global_metadata,vocal_details,arrangement,lyrics_input。先根据当前Episode的故事环境、人物情绪、空间气质和叙事节奏只选择一个明确主方向：华语影视抒情配乐、华语流行器乐、古风流行器乐、东方幻想影视配乐、现代都市华语配乐、武侠动作配乐或中国古典跨界之一。禁止把多个方向混成不中不洋、不古不今的折中风格。华语流行、摇滚、爵士与电子元素本身允许，只要符合所选主方向和故事环境。不得强制任何固定音阶、固定调式或固定乐器清单；配器依据叙事功能、音域、节奏与用户要求自由选择，用户明确指定乐器时必须保留。只拒绝与故事无关的好莱坞预告片轰鸣、英雄铜管固定音型或泛西方奇幻号角。不得点名、仿写或复制任何具体游戏、影视配乐或作曲家。严格遵循本地官方music-caption-rewriter契约：Caption字段全部使用自然英文，三部分合计约250–450个英文单词；global_metadata写genre/subgenres、合理的tempo范围、emotional progression和overall sonic/production profile；vocal_details对器乐只需明确instrumental并指出承担主旋律的乐器或纹理，禁止堆砌人声否定词；arrangement按Intro、Development、Climax、Outro等音乐段落描述主次乐器的进入、退出、变化、groove、texture和transition。禁止输出数据库式key:value字段堆叠、Scene编号、人物姓名、剧情复述、剑招或逐秒时间表。lyrics_input在方案JSON中保持空字符串；正式执行时由后端生成仅含官方方括号器乐段落标签的控制输入。根据对白区间给对白留出中频与动态空间，避免墙式配乐。总时长不超过300秒时只生成一个整集Cue；超过300秒时恰好生成两个首尾连续Cue，两段保持同一主题、整体审美、BPM范围、总体音色关系与制作身份，第二段发展主题而非重新开曲。instrument_note仅在用户本轮明确指定乐器时记录该要求，否则必须留空；不得自行发明“核心配器”“核心乐器”或规定某乐器负责某功能。kind仅限opening/scene/action/emotion/transition/ending/bgm；intensity仅限soft/medium/intense/climax；mood仅限tension/joyful/mysterious/romantic/epic/sad/calm。",
 			IsSystem:       true, Enabled: true, SortOrder: 1,
 		},
+		sceneEndStateArchivistSkill,
 	}
 
 	for _, skill := range systemSkills {

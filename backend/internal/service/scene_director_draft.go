@@ -1916,6 +1916,11 @@ func (s *Service) generateSceneDirectorDraft(scene *models.Scene, req sceneDirec
 	if err != nil {
 		return 500, gin.H{"error": err.Error()}
 	}
+	if previous, err := s.previousEpisodeScene(scene); err == nil {
+		if inherited := s.inheritedSceneStartState(scene, previous); inherited != "" {
+			assets = strings.TrimSpace(assets + "\n" + inherited)
+		}
+	}
 	operation, instruction := "director-scene-draft", "生成完整Scene导演方案草稿；只预览，不保存。"
 	combatReferenceText := ""
 	var combatReferenceAudit []CombatReferenceAudit

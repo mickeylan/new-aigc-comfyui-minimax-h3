@@ -39,11 +39,22 @@ func (s *Service) sceneAssetBible(scene *models.Scene) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
-func (s *Service) previousSceneEndState(scene *models.Scene) string {
+func (s *Service) previousEpisodeScene(scene *models.Scene) (*models.Scene, error) {
 	var previous models.Scene
 	if err := s.DB.Where("project_id = ? AND generation = ? AND episode_n = ? AND `order` < ? AND (archived = ? OR archived IS NULL)", scene.ProjectID, scene.Generation, scene.EpisodeN, scene.Order, false).
 		Order("`order` DESC, id DESC").First(&previous).Error; err != nil {
+		return nil, err
+	}
+	return &previous, nil
+}
+
+func (s *Service) previousSceneEndState(scene *models.Scene) string {
+	previous, err := s.previousEpisodeScene(scene)
+	if err != nil {
 		return "无（本场景为当前序列首场）"
+	}
+	if inherited := s.inheritedSceneStartState(scene, previous); inherited != "" {
+		return inherited
 	}
 	if value := strings.TrimSpace(previous.VideoPrompt); value != "" {
 		return value

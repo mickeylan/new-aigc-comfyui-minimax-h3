@@ -791,6 +791,12 @@
         <div class="field-row"><div class="field"><label>机位 / 镜头</label><input v-model="blockingDraft.camera" class="input"></div><div class="field"><label>起始状态</label><input v-model="blockingDraft.start" class="input"></div><div class="field"><label>结束状态</label><input v-model="blockingDraft.end" class="input"></div></div><div class="field"><label>站位摘要</label><textarea v-model="blockingDraft.summary" class="textarea" rows="2" /></div>
         <div v-if="blockingScene.blocking_json" class="modal-actions"><button class="btn btn-secondary" :disabled="blockingBusy" @click="previewBlockingPrompt('image')">按此站位更新分镜图提示词</button><button class="btn btn-secondary" :disabled="blockingBusy" @click="previewBlockingPrompt('video')">按此站位更新视频完整执行稿</button></div><div v-if="blockingPromptPreview.kind" class="field"><label>{{blockingPromptPreview.kind==='image'?'分镜图提示词':'英文完整视频执行稿'}}预览（可编辑，尚未保存）</label><textarea v-model="blockingPromptPreview.prompt" class="textarea" rows="10"/><p v-if="blockingPromptPreview.kind==='video'" class="field-hint">这是按当前参考图、对白和站位编译的完整合法执行稿。明确确认后将保存为实际生成使用的 video_full_prompt，并同步提取动作正文；不会自动启动 GPU。</p><button class="btn" :disabled="blockingBusy||!blockingPromptPreview.prompt.trim()" @click="applyBlockingPrompt">确认保存此{{blockingPromptPreview.kind==='video'?'完整执行稿':'提示词'}}</button></div>
         <div v-if="blockingError" class="notice error-notice">{{blockingError}}</div><div class="modal-actions"><button class="btn btn-ghost" @click="closeBlocking">关闭</button><button class="btn" :disabled="blockingBusy" @click="saveBlocking">显式保存</button></div>
+        <div class="scene-end-state"><div class="field-label-actions"><label>本场结尾人物状态（下一场连续性参考）</label><span v-if="endState.stale" class="error-text">正文、角色或镜头结束状态已变化，此记录已失效，不会注入下一场</span><span v-else-if="endState.extractedBy" class="field-hint">来源：{{ endState.extractedBy === 'llm' ? 'AI提取' : '手动' }}</span></div>
+          <p class="field-hint">下一场若同地点、同时段，继承全部字段；换地点、换时段或回忆/梦境切换时只延续伤势。只注入下一场画面中可见的角色，与下一场正文冲突时以正文为准。</p>
+          <div v-for="(c,index) in endState.characters" :key="`c${index}`" class="blocking-character-row"><input v-model="c.name" class="input" placeholder="姓名"><input v-model="c.posture" class="input" placeholder="姿态与位置"><input v-model="c.face" class="input" placeholder="面部"><input v-model="c.holding" class="input" placeholder="持有物（哪只手）"><input v-model="c.emotion" class="input" placeholder="可见情绪"><input v-model="c.injury" class="input" placeholder="伤势"><button type="button" class="btn btn-sm btn-danger" @click="endState.characters.splice(index,1)">删除</button></div>
+          <div v-for="(p,index) in endState.props" :key="`p${index}`" class="blocking-character-row"><input v-model="p.name" class="input" placeholder="道具"><input v-model="p.state" class="input" placeholder="位置或持有者"><button type="button" class="btn btn-sm btn-danger" @click="endState.props.splice(index,1)">删除</button></div>
+          <div class="modal-actions"><button type="button" class="btn btn-sm btn-secondary" @click="endState.characters.push({name:'',posture:'',face:'',holding:'',emotion:'',injury:''})">＋ 人物</button><button type="button" class="btn btn-sm btn-secondary" @click="endState.props.push({name:'',state:''})">＋ 道具</button><button class="btn btn-secondary" :disabled="endStateBusy || !endState.skillReady" :title="endState.skillReady ? '根据本场正文与各镜头结束状态提取，会覆盖当前记录' : '人物结尾状态归档 Skill 尚未启用，目前只能手动填写'" @click="extractEndState">{{ endStateBusy ? '处理中…' : 'AI提取' }}</button><button class="btn" :disabled="endStateBusy" @click="saveEndState">保存结尾状态</button></div>
+          <div v-if="endStateError" class="notice error-notice">{{ endStateError }}</div></div>
       </div>
     </div>
 
@@ -1530,6 +1536,9 @@ let blockingEpoch = 0
 const blockingBusy = ref(false)
 const blockingError = ref('')
 const blockingPromptPreview = reactive({ kind: '', prompt: '', blockingHash: '' })
+const endState = reactive({ characters: [], props: [], stale: false, skillReady: false, extractedBy: '' })
+const endStateBusy = ref(false)
+const endStateError = ref('')
 const savingProject = ref(false)
 const combatLoraTarget = ref(null)
 const combatLoraBusy = ref(false)
@@ -3742,8 +3751,47 @@ function parseBlocking(sc) { try { return JSON.parse(sc?.blocking_json || '') } 
 function blockingSummary(sc) { const value = parseBlocking(sc); return value?.summary || (sc?.blocking_json ? '已保存站位' : '未设置') }
 function setBlockingDraft(value = {}) { blockingDraft.schema_version = 2; blockingDraft.source_content_hash = value.source_content_hash || ''; blockingDraft.factsText = Array.isArray(value.facts) ? value.facts.join('\n') : ''; blockingDraft.suggestionsText = Array.isArray(value.suggestions) ? value.suggestions.join('\n') : ''; blockingDraft.characters = Array.isArray(value.characters) ? value.characters.map(character => ({ name: '', position: '', facing: '', gaze: '', visibility: '', ...character })) : []; blockingDraft.relations = Array.isArray(value.relations) ? value.relations.slice(0,40).map(relation => ({ id:'', kind:'interpersonal', subject:'', reference:'', relation:'', start:'', end:'', functional_end:'', trajectory:'', source:'suggestion', ...relation, evidenceText:Array.isArray(relation.evidence)?relation.evidence.join('\n'):'' })) : []; blockingDraft.camera = value.camera || ''; blockingDraft.start = value.start || ''; blockingDraft.end = value.end || ''; blockingDraft.summary = value.summary || '' }
 function blockingPayload() { const lines = text => text.split(/\r?\n/).map(line => line.trim()).filter(Boolean); return { schema_version: 2, source_content_hash: blockingDraft.source_content_hash, facts: lines(blockingDraft.factsText), suggestions: lines(blockingDraft.suggestionsText), characters: blockingDraft.characters.map(character => ({ ...character })), relations: blockingDraft.relations.slice(0,40).map(({evidenceText,...relation})=>({...relation,evidence:lines(evidenceText||'')})), camera: blockingDraft.camera, start: blockingDraft.start, end: blockingDraft.end, summary: blockingDraft.summary } }
-function openBlocking(sc) { blockingEpoch++; blockingScene.value = sc; blockingBusy.value = false; blockingError.value = ''; Object.assign(blockingPromptPreview,{kind:'',prompt:'',blockingHash:''}); const value=parseBlocking(sc)||{}; if(!value.source_content_hash&&sc.blocking_content_hash)value.source_content_hash=sc.blocking_content_hash; setBlockingDraft(value) }
+function openBlocking(sc) { blockingEpoch++; blockingScene.value = sc; blockingBusy.value = false; blockingError.value = ''; Object.assign(blockingPromptPreview,{kind:'',prompt:'',blockingHash:''}); const value=parseBlocking(sc)||{}; if(!value.source_content_hash&&sc.blocking_content_hash)value.source_content_hash=sc.blocking_content_hash; setBlockingDraft(value); loadEndState() }
 function closeBlocking(){ blockingEpoch++; blockingScene.value=null; blockingBusy.value=false }
+function applyEndStateView(data) {
+  const state = data?.state || {}
+  endState.characters = Object.entries(state.characters || {}).map(([name, c]) => ({ name, posture: '', face: '', holding: '', emotion: '', injury: '', ...c }))
+  endState.props = Object.entries(state.props || {}).map(([name, value]) => ({ name, state: value }))
+  endState.stale = !!data?.stale
+  endState.skillReady = !!data?.skill_ready
+  endState.extractedBy = data?.record?.extracted_by || ''
+}
+function endStatePayload() {
+  const characters = {}
+  for (const c of endState.characters) {
+    const name = (c.name || '').trim()
+    if (name) characters[name] = { posture: c.posture || '', face: c.face || '', holding: c.holding || '', emotion: c.emotion || '', injury: c.injury || '' }
+  }
+  const props = {}
+  for (const p of endState.props) {
+    const name = (p.name || '').trim()
+    if (name && (p.state || '').trim()) props[name] = p.state.trim()
+  }
+  return { characters, props }
+}
+// Every end-state request re-checks the open Scene so a slow reply never lands in another Scene's form.
+async function runEndState(request, fallback) {
+  const sceneId = blockingScene.value?.id
+  if (!sceneId) return
+  endStateBusy.value = true
+  endStateError.value = ''
+  try {
+    const { data } = await request(id(), sceneId)
+    if (blockingScene.value?.id === sceneId) applyEndStateView(data)
+  } catch (e) {
+    if (blockingScene.value?.id === sceneId) endStateError.value = requestErrorMessage(e, fallback)
+  } finally {
+    if (blockingScene.value?.id === sceneId) endStateBusy.value = false
+  }
+}
+function loadEndState() { applyEndStateView(null); return runEndState(api.getSceneEndState, '读取结尾状态失败') }
+function extractEndState() { return runEndState(api.extractSceneEndState, 'AI提取结尾状态失败') }
+function saveEndState() { const payload = endStatePayload(); return runEndState((pid, sid) => api.saveSceneEndState(pid, sid, payload), '保存结尾状态失败') }
 function addBlockingCharacter() { blockingDraft.characters.push({ name: '', position: '', facing: '', gaze: '', visibility: '' }) }
 function removeBlockingCharacter(index) { blockingDraft.characters.splice(index, 1) }
 function addBlockingRelation(){ if(blockingDraft.relations.length<40)blockingDraft.relations.push({id:'',kind:'interpersonal',source:'suggestion',subject:'',reference:'',relation:'',functional_end:'',start:'',end:'',trajectory:'',evidenceText:''}) }

@@ -344,6 +344,9 @@ func (s *ProjectService) DeleteProject(id uint) error {
 			if err := tx.Where("scene_id IN ? OR source_scene_id IN ?", sceneIDs, sceneIDs).Delete(&models.SceneContinuity{}).Error; err != nil {
 				return err
 			}
+			if err := deleteIfTable(tx, &models.SceneEndState{}, "scene_id IN ?", sceneIDs); err != nil {
+				return err
+			}
 		}
 		if err := tx.Where("project_id = ?", id).Delete(&models.FrameCandidate{}).Error; err != nil {
 			return err
