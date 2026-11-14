@@ -358,15 +358,19 @@ type Character struct {
 	PortraitTaskID string `gorm:"column:portrait_task_id;index" json:"portrait_task_id"`       // Krea2 标准像生成任务
 	PortraitError  string `gorm:"type:text" json:"portrait_error"`                             // 标准像生成错误
 	Sheet          string `json:"sheet"`                                                       // 角色四视图文件名（input/<project_id>/ 下）
-	SheetEngine    string `gorm:"column:sheet_engine;default:moss" json:"sheet_engine"`       // 四视图直接文生引擎：moss/krea2/qwen_image_2_1
-	SheetPrompt    string `gorm:"column:sheet_prompt;type:text" json:"sheet_prompt"`          // 用户可编辑的四视图提示词；为空时按档案自动编译
+	SheetEngine    string `gorm:"column:sheet_engine;default:moss" json:"sheet_engine"`        // 四视图直接文生引擎：moss/krea2/qwen_image_2_1
+	SheetPrompt    string `gorm:"column:sheet_prompt;type:text" json:"sheet_prompt"`           // 用户可编辑的四视图提示词；为空时按档案自动编译
 	SheetTaskID    string `gorm:"column:sheet_task_id;index" json:"sheet_task_id"`             // Krea2 四视图生成任务
 	SheetError     string `gorm:"column:sheet_error;type:text" json:"sheet_error"`             // 四视图生成错误
-	Voice          string `json:"voice"`                                                       // 预设 TTS 音色 ID（角色级，配音优先于平台角色映射）
-	VoiceRef       string `gorm:"column:voice_ref" json:"voice_ref"`                           // 参考语音文件名（input/<project_id>/ 下）
-	VoiceID        string `gorm:"column:voice_id" json:"voice_id"`                             // 参考语音注册的复刻音色 ID（阿里云 qwen-voice-enrollment）
-	VoiceModel     string `gorm:"column:voice_model" json:"voice_model"`                       // 复刻音色绑定的合成模型（须与注册时 target_model 一致）
-	Source         string `json:"source"`                                                      // auto(方案抽取) / manual(手动新建)
+	// 登记照：从四视图提取的单人正面胸像，供分镜/H3 显式选作人脸参考
+	RegistrationPhoto  string `gorm:"column:registration_photo" json:"registration_photo"`           // 登记照文件名（input/<project_id>/ 下）
+	RegistrationTaskID string `gorm:"column:registration_task_id;index" json:"registration_task_id"` // 登记照生成任务
+	RegistrationError  string `gorm:"column:registration_error;type:text" json:"registration_error"` // 登记照生成错误
+	Voice              string `json:"voice"`                                                         // 预设 TTS 音色 ID（角色级，配音优先于平台角色映射）
+	VoiceRef           string `gorm:"column:voice_ref" json:"voice_ref"`                             // 参考语音文件名（input/<project_id>/ 下）
+	VoiceID            string `gorm:"column:voice_id" json:"voice_id"`                               // 参考语音注册的复刻音色 ID（阿里云 qwen-voice-enrollment）
+	VoiceModel         string `gorm:"column:voice_model" json:"voice_model"`                         // 复刻音色绑定的合成模型（须与注册时 target_model 一致）
+	Source             string `json:"source"`                                                        // auto(方案抽取) / manual(手动新建)
 
 	// --- LumxAI 风格结构化角色档案字段 ---
 	Appearance      string                 `gorm:"type:text" json:"appearance"`                               // 详细外貌描述（发型/发色/脸型/眉眼/鼻嘴/肤色/体型/特殊标记）

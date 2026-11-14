@@ -216,6 +216,8 @@
               <span v-if="ch.portrait_error" class="fail-msg">{{ ch.portrait_error }}</span>
               <span v-if="ch.sheet_task_id" class="char-voice">⏳ 角色四视图生成中</span>
               <span v-if="ch.sheet_error" class="fail-msg">{{ ch.sheet_error }}</span>
+              <span v-if="ch.registration_task_id" class="char-voice">⏳ 登记照生成中</span>
+              <span v-if="ch.registration_error" class="fail-msg">{{ ch.registration_error }}</span>
               <div class="character-look-entry">
                 <div><strong>基于标准像换装</strong><span>锁定同一张脸，重新设计服装、鞋履、发型与配饰，生成可按场景选择的新形象。</span></div>
                 <div class="character-look-entry-actions"><router-link :to="`/projects/${id()}/characters/${ch.id}/looks?mode=outfits&design=1`" class="btn btn-sm">＋ AI换装设计</router-link><router-link :to="`/projects/${id()}/characters/${ch.id}/looks?mode=outfits`" class="btn btn-sm btn-secondary">管理完整套装</router-link></div>
@@ -241,6 +243,11 @@
                   {{ ch._sheetUploading ? '上传中…' : '上传四视图' }}
                 </button>
                 <button v-if="ch.sheet" class="btn btn-sm btn-ghost" @click="viewCharacterSheet(ch)">查看四视图</button>
+                <button v-if="ch.sheet" class="btn btn-sm btn-ghost" :disabled="busy || !!ch.registration_task_id" @click="genRegistrationPhoto(ch)"
+                  title="用 Qwen Edit 从四视图提取单人正面胸像；生成后可在分镜参考图中勾选作为人脸参考">
+                  {{ ch.registration_task_id ? '登记照生成中…' : ch.registration_photo ? '重生成登记照' : '生成登记照' }}
+                </button>
+                <button v-if="ch.registration_photo" class="btn btn-sm btn-ghost" @click="viewRegistrationPhoto(ch)">查看登记照</button>
                 <button class="btn btn-sm btn-ghost" @click="openVariants('character_portrait', ch.id, ch.name + ' · 标准像')">标准像版本</button>
                 <button class="btn btn-sm btn-ghost" @click="openVariants('character_sheet', ch.id, ch.name + ' · 四视图')">四视图版本</button>
                 <button class="btn btn-sm btn-ghost" @click="openEditCharacter(ch)">编辑角色档案</button>
@@ -2401,6 +2408,11 @@ async function load() {
       } else if (previous?.sheet_task_id && !character.sheet_task_id && character.sheet_error) {
         toast.error(`角色「${character.name}」四视图生成失败：${character.sheet_error}`)
       }
+      if (previous?.registration_task_id && !character.registration_task_id && character.registration_photo && character.registration_photo !== previous.registration_photo) {
+        toast.success(`角色「${character.name}」登记照生成完成`)
+      } else if (previous?.registration_task_id && !character.registration_task_id && character.registration_error) {
+        toast.error(`角色「${character.name}」登记照生成失败：${character.registration_error}`)
+      }
     }
     characters.value = nextCharacters
     characterCounts.value = data.character_counts || {}
@@ -2952,6 +2964,21 @@ async function genCharacterSheet(ch, fromPortrait = false) {
     await load()
   } catch (e) {
     toast.error(e.response?.data?.error || '角色四视图任务提交失败')
+  }
+}
+async function genRegistrationPhoto(ch) {
+  try {
+    const { data } = await api.generateCharacterRegistrationPhoto(id(), ch.id)
+    toast.show(data.message || '登记照任务已提交')
+    await load()
+  } catch (e) {
+    toast.error(e.response?.data?.error || '登记照任务提交失败')
+  }
+}
+function viewRegistrationPhoto(ch) {
+  if (ch.registration_photo) {
+    viewer.value = api.inputUrl(project.value.id, ch.registration_photo)
+    nextTick(() => viewerMask.value?.focus())
   }
 }
 function viewCharacterSheet(ch) {

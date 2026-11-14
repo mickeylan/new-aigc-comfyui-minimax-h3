@@ -268,27 +268,34 @@ func (s *ProjectService) syncSheets() {
 			}
 		}
 	}
+	changed = s.syncRegistrationPhotos() || changed
 	if changed {
 		s.pushProject(nil)
 	}
 }
 
 func (s *ProjectService) sheetTaskUpdates(taskID, baseName string, projectID uint) (map[string]any, bool) {
+	return s.imageTaskUpdates(taskID, baseName, projectID, "四视图", "sheet", "sheet_task_id", "sheet_error")
+}
+
+// imageTaskUpdates downloads a finished single-image task into the project input folder and
+// returns the column updates; ok is false while the task is still running.
+func (s *ProjectService) imageTaskUpdates(taskID, baseName string, projectID uint, label, fileField, taskField, errorField string) (map[string]any, bool) {
 	var task models.Task
 	if err := s.db.Where("task_id = ?", taskID).First(&task).Error; err != nil {
-		return map[string]any{"sheet_task_id": "", "sheet_error": "四视图任务不存在，请重新生成"}, true
+		return map[string]any{taskField: "", errorField: label + "任务不存在，请重新生成"}, true
 	}
 	switch task.Status {
 	case "failed", "cancelled":
 		msg := strings.TrimSpace(task.Error)
 		if msg == "" {
-			msg = "四视图任务已" + map[string]string{"failed": "失败", "cancelled": "取消"}[task.Status]
+			msg = label + "任务已" + map[string]string{"failed": "失败", "cancelled": "取消"}[task.Status]
 		}
-		return map[string]any{"sheet_task_id": "", "sheet_error": msg}, true
+		return map[string]any{taskField: "", errorField: msg}, true
 	case "success":
 		file, _ := resultImageOf(&task)
 		if file == "" || task.Port == nil || s.upload == nil || s.tasks == nil {
-			return map[string]any{"sheet_task_id": "", "sheet_error": "四视图任务成功但未返回可用图片"}, true
+			return map[string]any{taskField: "", errorField: label + "任务成功但未返回可用图片"}, true
 		}
 		subfolder, filename := filepath.ToSlash(filepath.Dir(file)), filepath.Base(file)
 		if subfolder == "." {
@@ -296,7 +303,7 @@ func (s *ProjectService) sheetTaskUpdates(taskID, baseName string, projectID uin
 		}
 		data, err := NewComfyClient(s.tasks.comfyHostForTask(&task), *task.Port).DownloadOutput(filename, subfolder, "output")
 		if err != nil {
-			return map[string]any{"sheet_task_id": "", "sheet_error": "读取四视图失败: " + err.Error()}, true
+			return map[string]any{taskField: "", errorField: "读取" + label + "失败: " + err.Error()}, true
 		}
 		ext := filepath.Ext(file)
 		if ext == "" {
@@ -304,9 +311,9 @@ func (s *ProjectService) sheetTaskUpdates(taskID, baseName string, projectID uin
 		}
 		path, _, err := s.upload.SaveFile(fmt.Sprint(projectID), "image", baseName+ext, data)
 		if err != nil {
-			return map[string]any{"sheet_task_id": "", "sheet_error": "保存四视图失败: " + err.Error()}, true
+			return map[string]any{taskField: "", errorField: "保存" + label + "失败: " + err.Error()}, true
 		}
-		return map[string]any{"sheet": filepath.Base(path), "sheet_task_id": "", "sheet_error": ""}, true
+		return map[string]any{fileField: filepath.Base(path), taskField: "", errorField: ""}, true
 	}
 	return nil, false
 }

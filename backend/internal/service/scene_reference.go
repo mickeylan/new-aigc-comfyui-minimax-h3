@@ -68,6 +68,9 @@ func (s *ProjectService) sceneReferenceCandidates(sc *models.Scene) []SceneRefer
 		if ch.Sheet != "" {
 			out = append(out, candidate("character", ch.ID, "sheet", characterLabel(ch.Name, "四视图"), "character", ch.Sheet))
 		}
+		if ch.RegistrationPhoto != "" {
+			out = append(out, candidate("character", ch.ID, "registration", characterLabel(ch.Name, "登记照（正面胸像，人脸参考）"), "character", ch.RegistrationPhoto))
+		}
 	}
 	// Merges can retain a source character's selected file as a historical variant.
 	// Address it explicitly so rewriting the owner ID never silently changes the image.
