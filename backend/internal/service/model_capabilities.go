@@ -39,6 +39,32 @@ const (
 	maxShotsPerGeneration = 5
 	// A plot-driven Scene usually lasts at least 5 s.
 	minTypicalSceneSeconds = 5.0
+	// Above 10 s a Shot or segment counts as long: it carries an action timeline, a Scene of
+	// that length usually takes 2-4 cuts, and shorter merged segments generate more reliably.
+	longShotSeconds = 10.0
+	// Usual cut counts: a short Scene (typical minimum to typical maximum) takes 1-2 Shots,
+	// a long Scene (longShotSeconds to the segment cap) takes 2-4.
+	shortSceneShotsMin = 1
+	shortSceneShotsMax = 2
+	longSceneShotsMin  = 2
+	longSceneShotsMax  = 4
+	// Only the final combat Shot may settle into a held stance, for about its last 1.5 s.
+	finalShotSettleSeconds = 1.5
+)
+
+// Scene density advice. A Scene at least sparseSceneMinSeconds long with one static action
+// reads as empty; the prompt illustrates overload with a Scene of densityExampleSeconds
+// carrying as many split-second actions.
+const (
+	sparseSceneMinSeconds = 7.0
+	densityExampleSeconds = 6
+)
+
+// H3 duration risk guidance for the settings page: the 15 s default was validated on a GPU
+// with about 12 GB of VRAM, and generations of 30 s or more are usually high risk.
+const (
+	h3ReferenceGPUMemoryGB = 12
+	h3HighRiskSeconds      = 30.0
 )
 
 // Episode planning defaults: soft references for pacing, never padding or compression targets.
@@ -62,6 +88,15 @@ var pacingText = strings.NewReplacer(
 	"{reaction_min}", pacingNumber(minReactionShotSeconds),
 	"{combat_shot_max}", pacingNumber(maxCombatShotSeconds),
 	"{shots_per_generation}", strconv.Itoa(maxShotsPerGeneration),
+	"{long_shot}", pacingNumber(longShotSeconds),
+	"{short_scene_shots_min}", strconv.Itoa(shortSceneShotsMin),
+	"{short_scene_shots_max}", strconv.Itoa(shortSceneShotsMax),
+	"{long_scene_shots_min}", strconv.Itoa(longSceneShotsMin),
+	"{long_scene_shots_max}", strconv.Itoa(longSceneShotsMax),
+	"{final_settle}", pacingNumber(finalShotSettleSeconds),
+	"{sparse_scene_min}", pacingNumber(sparseSceneMinSeconds),
+	"{density_example}", strconv.Itoa(densityExampleSeconds),
+	"{dialogue_margin}", pacingNumber(dialogueOpeningClosingMargin),
 	"{action_beat}", pacingNumber(actionBeatSeconds),
 	"{speech_rate}", pacingNumber(defaultChineseCharsPerSecond),
 	"{speech_rate_min}", pacingNumber(minChineseCharsPerSecond),
@@ -80,6 +115,9 @@ type ModelCapabilityLimits struct {
 	ShotTypicalMinSeconds  float64 `json:"shot_typical_min_seconds"`
 	ReactionShotMinSeconds float64 `json:"reaction_shot_min_seconds"`
 	CombatShotMaxSeconds   float64 `json:"combat_shot_max_seconds"`
+	LongShotSeconds        float64 `json:"long_shot_seconds"`
+	H3HighRiskSeconds      float64 `json:"h3_high_risk_seconds"`
+	H3ReferenceGPUMemoryGB int     `json:"h3_reference_gpu_memory_gb"`
 	SceneMinSeconds        float64 `json:"scene_min_seconds"`
 	SceneMaxSeconds        float64 `json:"scene_max_seconds"`
 	H3GenerationMaxSeconds float64 `json:"h3_generation_max_seconds"`
@@ -91,6 +129,7 @@ func modelCapabilityLimits(db *gorm.DB) ModelCapabilityLimits {
 	return ModelCapabilityLimits{
 		ShotMaxSeconds: maxShotDuration, SceneMinSeconds: minSceneVideoDuration, SceneMaxSeconds: maxLongSceneVideoDuration,
 		ShotTypicalMinSeconds: minTypicalShotSeconds, ReactionShotMinSeconds: minReactionShotSeconds, CombatShotMaxSeconds: maxCombatShotSeconds,
+		LongShotSeconds: longShotSeconds, H3HighRiskSeconds: h3HighRiskSeconds, H3ReferenceGPUMemoryGB: h3ReferenceGPUMemoryGB,
 		H3GenerationMaxSeconds: configuredH3GenerationDuration(db),
 		SceneReferenceImages:   maxSceneReferenceImages, H3ReferenceImages: maxSceneReferenceImages - 1,
 	}

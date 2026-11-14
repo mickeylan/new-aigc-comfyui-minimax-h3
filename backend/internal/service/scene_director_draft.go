@@ -317,7 +317,7 @@ func mergeDirectorShotPair(first, second sceneDirectorDraftShot) sceneDirectorDr
 		first.ActionTimeline = []models.ShotActionTimelineEntry{}
 	}
 	first.Checks = append(first.Checks, second.Checks...)
-	first.Checks = append(first.Checks, "系统已将不足3秒的相邻镜头合并为一个Native H3镜头")
+	first.Checks = append(first.Checks, pacing("系统已将不足{shot_typical_min}秒的相邻镜头合并为一个Native H3镜头"))
 	return first
 }
 

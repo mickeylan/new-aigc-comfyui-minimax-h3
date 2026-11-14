@@ -45,7 +45,7 @@ func TestModelCapabilitiesHTTPReflectsConfiguredH3Duration(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	want := ModelCapabilityLimits{ShotMaxSeconds: 15, ShotTypicalMinSeconds: 3, ReactionShotMinSeconds: 2, CombatShotMaxSeconds: 6, SceneMinSeconds: 3, SceneMaxSeconds: 60, H3GenerationMaxSeconds: 20, SceneReferenceImages: 9, H3ReferenceImages: 8}
+	want := ModelCapabilityLimits{ShotMaxSeconds: 15, ShotTypicalMinSeconds: 3, ReactionShotMinSeconds: 2, CombatShotMaxSeconds: 6, LongShotSeconds: 10, H3HighRiskSeconds: 30, H3ReferenceGPUMemoryGB: 12, SceneMinSeconds: 3, SceneMaxSeconds: 60, H3GenerationMaxSeconds: 20, SceneReferenceImages: 9, H3ReferenceImages: 8}
 	if w.Code != 200 || got != want {
 		t.Fatalf("status=%d got=%+v", w.Code, got)
 	}

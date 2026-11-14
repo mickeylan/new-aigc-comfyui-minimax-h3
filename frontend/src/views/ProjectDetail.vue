@@ -643,7 +643,7 @@
         <h2>确认合并 {{ sceneMergePreview.scene_ids.length }} 个相邻分镜</h2>
         <div class="field"><label>新分镜标题（预览，只读）</label><input :value="sceneMergePreview.title" class="input" readonly /></div>
         <div class="field"><label>合并内容（预览，只读，不进行 AI 重写）</label><textarea :value="sceneMergePreview.content" class="textarea" rows="10" readonly /></div>
-        <p>总时长：{{ Number(sceneMergePreview.duration || 0).toFixed(1) }} 秒。默认镜头建议约 {{ shotMaxSeconds }} 秒；超过 {{ shotMaxSeconds }} 秒仍可手工合并，约 10 秒一段通常更便于后续生成。</p>
+        <p>总时长：{{ Number(sceneMergePreview.duration || 0).toFixed(1) }} 秒。默认镜头建议约 {{ shotMaxSeconds }} 秒；超过 {{ shotMaxSeconds }} 秒仍可手工合并，约 {{ longShotSeconds }} 秒一段通常更便于后续生成。</p>
         <ul class="scene-merge-warnings"><li v-for="warning in sceneMergePreview.warnings" :key="warning">{{ warning }}</li><li>原分镜将归档且媒体保留；新分镜不带图片或视频，不会自动生成图片或视频。</li></ul>
         <div v-if="mergeError" class="notice error-notice">{{ mergeError }}</div>
         <label class="merge-confirm"><input v-model="sceneMergeConfirmed" type="checkbox" /> 我确认归档原分镜，并创建无图片、无视频的新分镜</label>
@@ -1269,6 +1269,7 @@ import GeneratedMediaHistoryDrawer from '../components/GeneratedMediaHistoryDraw
 import ShotDirectorEditor from '../components/ShotDirectorEditor.vue'
 import { overlayDialogueExclusions, setDialogueItemExcluded, snapshotDialogueExclusions } from '../utils/dialogueAnalysis'
 import { estimateDialogueListDuration } from '../utils/dialogueDuration.js'
+import { MODEL_LIMIT_DEFAULTS, mergeModelLimits } from '../utils/modelLimits.js'
 import { filterReferenceCandidates } from '../utils/referenceSearch.js'
 import { requestErrorMessage } from '../utils/requestError.js'
 import { episodeShotSplitSkipReason, shotSplitBatchActive, shotSplitBatchOpen, shotSplitReport, shotSplitStatusLabel } from '../utils/episodeShotSplit.js'
@@ -1438,9 +1439,10 @@ const videoTaskPromptDraft = ref('')
 const videoTaskTemplate = ref('minimax_h3_ref2v')
 const modelCatalog = ref([])
 // System-wide limits from /model-capabilities; the fallback mirrors the backend values.
-const modelLimits = ref({ shot_max_seconds: 15 })
-const shotMaxSeconds = computed(() => Number(modelLimits.value.shot_max_seconds || 15))
-const sceneMinSeconds = computed(() => Number(modelLimits.value.scene_min_seconds || 3))
+const modelLimits = ref({ ...MODEL_LIMIT_DEFAULTS })
+const shotMaxSeconds = computed(() => modelLimits.value.shot_max_seconds)
+const sceneMinSeconds = computed(() => modelLimits.value.scene_min_seconds)
+const longShotSeconds = computed(() => modelLimits.value.long_shot_seconds)
 const h3DurationMax = computed(() => Number(modelCatalog.value.find(m => m.template_code === 'minimax_h3_ref2v')?.duration?.max || shotMaxSeconds.value))
 const hasTemplate = code => modelCatalog.value.some(m => m.template_code === code)
 const qwenAssetTemplateReady = computed(() => hasTemplate('qwen_image_2_1_t2i'))
@@ -2395,7 +2397,7 @@ async function load() {
     const [{ data }, catalogRes, materialsRes, limitsRes] = await Promise.all([api.project(id()), api.modelCatalog(), api.materials({ project_id: id(), type: 'video' }), api.modelCapabilities().catch(() => null)])
     if (requestEpoch !== loadRequestEpoch || savingScene.value || storyApplyBusy.value) return
     modelCatalog.value = catalogRes.data?.items || []
-    if (limitsRes?.data) modelLimits.value = limitsRes.data
+    if (limitsRes?.data) modelLimits.value = mergeModelLimits(limitsRes.data)
     projectVideoMaterials.value = (materialsRes.data || []).filter(item => item.type === 'video')
     loadError.value = ''
     project.value = data.project

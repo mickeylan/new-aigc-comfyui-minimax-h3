@@ -78,6 +78,7 @@ import { useToastStore } from '../stores/toast'
 import { promptHistoryLabel } from '../utils/directorWorkflow.js'
 import { createDraftSafety } from '../utils/draftSafety.js'
 import { refineFieldLabel, refineRationaleText, refineStateLabel, selectedRefineEdits } from '../utils/shotRefinePatch.js'
+import { MODEL_LIMIT_DEFAULTS, mergeModelLimits } from '../utils/modelLimits.js'
 const emit = defineEmits(['scene-changed','scene-materialized'])
 const props = defineProps({ projectId: { type: [String, Number], required: true }, sceneId: { type: [String, Number], required: true }, genre: { type: String, default: '' }, tone: { type: String, default: '' }, sceneTitle: { type: String, default: '' }, sceneContent: { type: String, default: '' }, sceneMode: { type: String, default: '' } })
 const toast = useToastStore(); const shots = ref([]); const isPreviouslySplitScene = ref(false); const materializing = ref(false); const combatQuery = ref(''); const combatSearching = ref(false); const combatSourceCommit = ref(''); const combatResults = ref([]); const combatSelected = ref([]); const combatDraftSelection = ref([]); const combatPreview = ref(null); const combatReferenceAudit = ref([]); const presets = ref([]); const characters = ref([]); const looks = ref({}); const outfits = ref({}); const loading = ref(false); const saving = ref(false); const generatingDirector = ref(false); const directorElapsed = ref(0); const directorRequestMode = ref('standard'); const directorBrief = ref(''); const directorRequirements = ref(''); const directorManualShotCount = ref(3); const directorRequestedShotCount = ref(0); const directorDraft = ref(null); const directorLogicReview = ref([]); const directorSpecialty = ref(''); const directorSpecialtySource = ref(''); const directorRequestedSpecialty = ref('auto'); const directorSpecialtyOptions = [{ value: 'auto', label: '自动判断' }, { value: 'drama', label: '文戏与对白' }, { value: 'suspense', label: '悬疑与揭示' }, { value: 'emotion', label: '情绪表演' }, { value: 'establishing', label: '场面建置' }, { value: 'general', label: '通用' }]; const directorDraftMode = ref('standard'); const directorDialogueDuration = ref(0); const directorDialogueReview = ref([]); const directorDialogueSnapshot = ref(''); const savedDialogueSnapshot = ref(''); const directorServerRepairs = ref([]); const shotUsage = ref(null); let directorTimer; let key = 0; let draftSafety
@@ -134,7 +135,7 @@ function startDraftSafety() { draftSafety?.dispose(); draftSafety = createDraftS
 const acts = [{ value: 'setup', label: '建置' }, { value: 'rising', label: '发展' }, { value: 'midpoint', label: '转折' }, { value: 'falling', label: '回落' }, { value: 'resolution', label: '收束' }]
 const speechPresentations = [{ value:'visible_speaker_lipsync', label:'可见说话人同步口型' }, { value:'listener_reaction_carryover', label:'闭口听者反应 · 原声跨切' }, { value:'offscreen_dialogue', label:'独立画外对白' }, { value:'narration_voiceover', label:'旁白' }, { value:'internal_monologue', label:'内心独白 · 人物闭口' }, { value:'silent_visual', label:'无发声纯画面' }]
 const actLabel = value => acts.find(a => a.value === value)?.label || '建置'
-const blank = (actType = 'setup') => ({ _key: `new-${++key}`, _preset: '', _history: [], start_state: '', end_state: '', _stateDraft: '', director_intent: '', audience_information: '', trigger: '', performance: '', eye_line: '', blocking: '', reaction: '', focus_subject: '', cut_reason: '', act_type: actType, shot_type: '中景', camera_angle: '平视', camera_movement: '固定', transition_type: '', transition_note: '', duration: 3, description: '', dialogue: '', speech_presentation: 'silent_visual', listener_character: '', emotion: '', prompt_subject: '', prompt_action: '', prompt_camera: '', prompt_lighting: '', prompt_style: '', negative_prompt: '', action_timeline: [] })
+const blank = (actType = 'setup') => ({ _key: `new-${++key}`, _preset: '', _history: [], start_state: '', end_state: '', _stateDraft: '', director_intent: '', audience_information: '', trigger: '', performance: '', eye_line: '', blocking: '', reaction: '', focus_subject: '', cut_reason: '', act_type: actType, shot_type: '中景', camera_angle: '平视', camera_movement: '固定', transition_type: '', transition_note: '', description: '', dialogue: '', speech_presentation: 'silent_visual', listener_character: '', emotion: '', prompt_subject: '', prompt_action: '', prompt_camera: '', prompt_lighting: '', prompt_style: '', negative_prompt: '', action_timeline: [], duration: shotTypicalMinSeconds.value })
 const hydrate = s => ({ ...s, director_intent: s.director_intent || '', audience_information: s.audience_information || '', trigger: s.trigger || '', performance: s.performance || '', eye_line: s.eye_line || '', blocking: s.blocking || '', reaction: s.reaction || '', focus_subject: s.focus_subject || '', cut_reason: s.cut_reason || '', _key: `shot-${s.id}`, _preset: '', _history: [], _presets: [], _looks: [], _outfits: {}, _assetBusy: false, _pairedEnglish: '', start_state: s.start_state || '', end_state: s.end_state || '', speech_presentation: s.speech_presentation || '', listener_character: s.listener_character || '', action_timeline: Array.isArray(s.action_timeline) ? s.action_timeline : [], _stateDraft: '' })
 function onSpeechPresentationChange(shot) { if (shot.speech_presentation !== 'listener_reaction_carryover') shot.listener_character = '' }
 function assembledPrompt(s) { return [s.prompt_subject, s.prompt_action, s.prompt_camera, s.prompt_lighting, s.prompt_style].map(v => (v || '').trim()).filter(Boolean).join(', ') }
@@ -212,19 +213,13 @@ async function draftRefinePatch() { refineBusy.value = true; try { const { data 
 async function loadRefineHistory() { try { const { data } = await api.shotRefinePatches(props.projectId, props.sceneId); refineHistory.value = data?.items || [] } catch (e) { toast.error(e.response?.data?.error || '加载精修记录失败') } }
 async function applyRefinePatch() { const edits = selectedRefineEdits(refinePatch.value?.edits, refineSelected.value); if (!edits.length) return; refineBusy.value = true; try { await api.applyShotRefinePatch(props.projectId, props.sceneId, { source_hash: refineSourceHash.value, instruction: refineInstruction.value, edits }); refinePatch.value = null; refineSelected.value = []; await refreshSavedShots(); draftSafety?.markSaved(); await loadRefineHistory(); emit('scene-changed'); toast.success(`已应用${edits.length}处精修，可在精修记录中撤销`) } catch (e) { toast.error(e.response?.data?.error || '应用精修失败') } finally { refineBusy.value = false } }
 async function rollbackRefinePatch(item) { if (!window.confirm(`撤销这次精修（${item.edits?.length || 0}处）并恢复原值？`)) return; refineBusy.value = true; try { await api.rollbackShotRefinePatch(props.projectId, props.sceneId, item.id); await refreshSavedShots(); draftSafety?.markSaved(); await loadRefineHistory(); emit('scene-changed'); toast.success('已撤销该次精修') } catch (e) { toast.error(e.response?.data?.error || '撤销精修失败') } finally { refineBusy.value = false } }
-// Offline fallbacks only; the server's /model-capabilities values replace them on load.
-const shotMaxSeconds = ref(15)
-const sceneMinSeconds = ref(3)
-const shotTypicalMinSeconds = ref(3)
-const reactionShotMinSeconds = ref(2)
-const combatShotMaxSeconds = ref(6)
-api.modelCapabilities().then(({ data }) => {
-  if (data?.shot_max_seconds) shotMaxSeconds.value = Number(data.shot_max_seconds)
-  if (data?.scene_min_seconds) sceneMinSeconds.value = Number(data.scene_min_seconds)
-  if (data?.shot_typical_min_seconds) shotTypicalMinSeconds.value = Number(data.shot_typical_min_seconds)
-  if (data?.reaction_shot_min_seconds) reactionShotMinSeconds.value = Number(data.reaction_shot_min_seconds)
-  if (data?.combat_shot_max_seconds) combatShotMaxSeconds.value = Number(data.combat_shot_max_seconds)
-}).catch(() => {})
+const modelLimits = ref({ ...MODEL_LIMIT_DEFAULTS })
+const shotMaxSeconds = computed(() => modelLimits.value.shot_max_seconds)
+const sceneMinSeconds = computed(() => modelLimits.value.scene_min_seconds)
+const shotTypicalMinSeconds = computed(() => modelLimits.value.shot_typical_min_seconds)
+const reactionShotMinSeconds = computed(() => modelLimits.value.reaction_shot_min_seconds)
+const combatShotMaxSeconds = computed(() => modelLimits.value.combat_shot_max_seconds)
+api.modelCapabilities().then(({ data }) => { modelLimits.value = mergeModelLimits(data) }).catch(() => {})
 async function load() {
   directorBrief.value = props.sceneContent || directorBrief.value; combatResults.value=[]; combatSelected.value=[]; combatPreview.value=null; combatSourceCommit.value=''; abandonDirectorDraft(); isPreviouslySplitScene.value=/\s*·\s*(?:镜头|Native段)\d+$/.test(props.sceneTitle||''); loading.value = true
   try {
@@ -242,11 +237,11 @@ async function load() {
 }
 async function saveShotAssets(shot) { shot._assetBusy = true; try { const lookRows = shot._looks.map((lookId, order) => ({ look_id: Number(lookId), order, is_featured: order === 0 })); const outfitRows = Object.entries(shot._outfits).filter(([, outfitId]) => outfitId).map(([characterId, outfitId]) => ({ character_id: Number(characterId), outfit_id: Number(outfitId) })); await Promise.all([api.updateShotLooks(props.projectId, shot.id, lookRows), api.updateShotOutfits(props.projectId, shot.id, outfitRows)]); emit('scene-changed'); toast.success('镜头造型已保存') } catch (e) { toast.error(e.response?.data?.error || '保存镜头造型失败') } finally { shot._assetBusy = false } }
 function addShot() { shots.value.push(blank(shots.value.at(-1)?.act_type || 'setup')) }
-function createFiveActSkeleton() { if (shots.value.length && !window.confirm('创建五幕骨架会替换当前尚未保存的镜头，是否继续？')) return; shots.value = acts.map((act, index) => ({ ...blank(act.value), shot_type: index === 0 ? '全景' : index === 2 ? '特写' : '中景', description: `${act.label}：`, duration: 3 })) }
+function createFiveActSkeleton() { if (shots.value.length && !window.confirm('创建五幕骨架会替换当前尚未保存的镜头，是否继续？')) return; shots.value = acts.map((act, index) => ({ ...blank(act.value), shot_type: index === 0 ? '全景' : index === 2 ? '特写' : '中景', description: `${act.label}：`, duration: shotTypicalMinSeconds.value })) }
 function removeShot(index) { shots.value.splice(index, 1) }
 function addTimelineStep(shot) {
   const list = shot.action_timeline || (shot.action_timeline = [])
-  const duration = Number(shot.duration || 3)
+  const duration = Number(shot.duration || shotTypicalMinSeconds.value)
   if (!list.length) {
     list.push({ start: 0, end: duration, subject: '', action: '', state: '', camera: shot.camera_movement || '固定' })
     return

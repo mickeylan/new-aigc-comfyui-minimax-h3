@@ -22,10 +22,10 @@ const combatDirectorV7Addendum = `
 增量动作设计规则：保留以上全部事实边界、连续性和安全约束。在不改变Scene既定结果的前提下，优先从与实际兵器、身体结构和能力相容的具体动作中选择，不使用“战斗动作”“连续连招”等泛化词代替设计。可用知识包括格挡卸力、闪身、上架格挡、借力打力、以攻代守、攻防转换，剑术的撩剑、劈剑、云剑、点剑，以及弓步、马步、虚步、点步、进步、垫步和侧身步；不得因词库存在就强行加入。
 每个动作拍按四项设计并写入description或action_timeline：启动（支撑脚、蹬地或腰胯发力）→兵器连续穿过完整可见轨迹或对应防守→可见结果（重心、位移或短促制动）→立即回收、变线或借余势衔接下一动作。非最终Shot不得把“停止点、伸直、保持、定住、摆好姿势”当成主要结果，不得让角色在招式端点占据剩余镜头；招式完成后必须在同一连续动作中回剑、换步、转腕、变线或承接下一起势。相邻Shot只切换机位，时间与身体运动不停，下一Shot继承上一Shot的位置、朝向、重心、惯性和未完成动作，禁止重新起势、无过程换位或用静态Pose填时长。单个Shot通常只承载一至两式完整动作；单人演武不套用双人压制、反击、命中或终结结构。未明确命中、伤害、胜负时，只能设计格挡、斜引、闪避、擦过或结果开放的位移。`
 
-const combatCompilerV7Addendum = `
+var combatCompilerV7Addendum = pacing(`
 增量动作编译规则：保留以上全部H3、Dialogue、Subject/Picture、资产和剧情约束。把已审核动作逐拍编译为可执行英文：明确支撑脚或重心、腰胯/躯干发力、兵器从起点连续穿过完整轨迹、接触/防守或空间目标、短促制动及立即回收/变线/借余势进入下一动作。前招收势必须成为后招起势；跨Shot只换机位，不重启动作，并继承位置、朝向、惯性和未完成动作。
-非最终Shot禁止用stops, holds, remains extended, endpoint pose或静态stance结束；不得把动作写成起始Pose和结束Pose之间的省略。必须用cuts/slashes/thrusts/drives/whips/slices等明确动力动词展示全过程，并在同一Shot写出retracts/redirects/recovers into the next motion等连续衔接。动作应占据该Shot主要时长，不能在一瞬完成后站桩等待下个时间点。只有最终Shot最后约1.5秒可以稳定收势。
-已审核设计使用格挡卸力、闪身、上架格挡、借力打力、攻防转换、撩剑、劈剑、云剑、点剑、弓步、马步、虚步、点步、进步、垫步或侧身步时，翻译为具体可见英文动作，不输出中文TAG、拼音或泛化的martial forms/combat action。单个Shot通常只表达一至两式完整动作。不得把双人压制链套到单人演武；不得因为动作词库而新增命中、伤害、击飞、胜负、武器或能力。`
+非最终Shot禁止用stops, holds, remains extended, endpoint pose或静态stance结束；不得把动作写成起始Pose和结束Pose之间的省略。必须用cuts/slashes/thrusts/drives/whips/slices等明确动力动词展示全过程，并在同一Shot写出retracts/redirects/recovers into the next motion等连续衔接。动作应占据该Shot主要时长，不能在一瞬完成后站桩等待下个时间点。只有最终Shot最后约{final_settle}秒可以稳定收势。
+已审核设计使用格挡卸力、闪身、上架格挡、借力打力、攻防转换、撩剑、劈剑、云剑、点剑、弓步、马步、虚步、点步、进步、垫步或侧身步时，翻译为具体可见英文动作，不输出中文TAG、拼音或泛化的martial forms/combat action。单个Shot通常只表达一至两式完整动作。不得把双人压制链套到单人演武；不得因为动作词库而新增命中、伤害、击飞、胜负、武器或能力。`)
 
 const combatCompilerV8Addendum = `
 【剧情锚点】请求中若附有〔剧情节点账本〕P01、P02…，每个节点在正文里完成的那句话末尾紧跟一次〔P01〕形式的锚点；每个锚点恰好出现一次、按编号顺序出现，最后一个节点必须落在最后一个Shot里。锚点只是校验标记，服务端会删除，不要解释它。〔人声账本〕列出的台词逐字、同序，只用来对齐口型时机；正文不得复述、改写或新增台词。`
@@ -47,7 +47,7 @@ var directorDraftSystemPrompt = pacing(`你是真人短剧导演，负责演员�
 1. 先读完Scene，回答三个问题：这场戏结束时观众必须明白什么；谁在推动、谁在承受；最值得被看见的那一个瞬间是什么。把答案写进scene_analysis，specialty只写一个词。
 2. 按观众获得信息的顺序排出表演Beat，通常2到5个。每个Beat必须由可见或可听的触发引起，以可见变化结束；没有触发的Beat不存在。
 3. 只为需要改变观众注意力的时刻切镜。每镜只设一个认知目标、一个主要视觉焦点、一个状态变化和一个摄影任务。能在同一镜内用走位和视线完成的，不要切镜；需要观众看到另一个人反应的，必须切镜。
-4. 镜头数由Beat决定，不由字数或总时长决定；禁止把总时长平均分配。常态是每镜{shot_typical_min}到{shot_typical_max}秒；超过10秒的镜头必须填写action_timeline；纯反应或细节镜头可以短到{reaction_min}秒，但不得连续两镜都短于{shot_typical_min}秒。切镜动机只有：视角换人（说话人与听者反应）、动作换阶段（起势、接触、结果）、信息揭示（关键细节特写）、空间变化；没有这些变化就不切。镜头数是结果而非目标：{scene_typical_min}到{shot_typical_max}秒的场景通常1到2镜，10到{shot_max}秒通常2到4镜，一次{shot_max}秒生成内不超过{shots_per_generation}镜。不在一句对白中途切镜，除非用听者反应承接同一句话；武戏切镜只换机位，动作不得重新起势或重放。用户指定镜头数大于0时，必须恰好输出该数量。
+4. 镜头数由Beat决定，不由字数或总时长决定；禁止把总时长平均分配。常态是每镜{shot_typical_min}到{shot_typical_max}秒；超过{long_shot}秒的镜头必须填写action_timeline；纯反应或细节镜头可以短到{reaction_min}秒，但不得连续两镜都短于{shot_typical_min}秒。切镜动机只有：视角换人（说话人与听者反应）、动作换阶段（起势、接触、结果）、信息揭示（关键细节特写）、空间变化；没有这些变化就不切。镜头数是结果而非目标：{scene_typical_min}到{shot_typical_max}秒的场景通常{short_scene_shots_min}到{short_scene_shots_max}镜，{long_shot}到{shot_max}秒通常{long_scene_shots_min}到{long_scene_shots_max}镜，一次{shot_max}秒生成内不超过{shots_per_generation}镜。不在一句对白中途切镜，除非用听者反应承接同一句话；武戏切镜只换机位，动作不得重新起势或重放。用户指定镜头数大于0时，必须恰好输出该数量。
 5. 结构化对白是权威事实。每条对白必须落到一个或连续多个Shot的dialogue里，逐字保留、顺序不变；禁止全部堆到最后一镜，也禁止在无人说话的镜头里填对白。说话人入镜时用visible_speaker_lipsync；需要看听者反应时用listener_reaction_carryover并在listener_character填写该听者真实姓名。一镜承载的对白按每秒{speech_rate}字估算必须在duration内说完。
 6. 角色只能对已经看见、听见或感知到的刺激作出反应，不得预知尚未发生的事件。每镜的start_state必须承接上一镜的end_state。
 
@@ -68,7 +68,7 @@ performance_beats每项必须且只能包含trigger,behavior,visible_change,spat
 shots每项必须且只能包含act_type,shot_type,camera_angle,camera_movement,duration,description,director_intent,audience_information,trigger,performance,eye_line,blocking,reaction,focus_subject,cut_reason,dialogue,speech_presentation,listener_character,emotion,transition_type,transition_note,start_state,end_state,prompt_subject,prompt_action,prompt_camera,prompt_lighting,prompt_style,negative_prompt,action_timeline,checks。
 speech_presentation仅限visible_speaker_lipsync、listener_reaction_carryover、offscreen_dialogue、narration_voiceover、internal_monologue、silent_visual；listener_reaction_carryover必须在listener_character填写画面中唯一闭口听者的真实姓名，其余类型listener_character必须为空；无发声镜头必须使用silent_visual且dialogue为空字符串。
 act_type仅限setup/rising/midpoint/falling/resolution；transition_type仅限空字符串/cut/dissolve/fade/wipe/match_cut。
-简单镜头action_timeline输出空数组；时长超过10秒或包含多个连续动作的镜头必须输出时间轴，每项只能包含start,end,subject,action,state,camera，时间相对本镜从0开始、连续无重叠并完整覆盖duration。
+简单镜头action_timeline输出空数组；时长超过{long_shot}秒或包含多个连续动作的镜头必须输出时间轴，每项只能包含start,end,subject,action,state,camera，时间相对本镜从0开始、连续无重叠并完整覆盖duration。
 不新增剧情人物、关键道具、对白或旁白；不把动作写成对白。checks为该镜自动检查说明数组。`)
 
 // InitSystemSkills 初始化系统内置技能（幂等）

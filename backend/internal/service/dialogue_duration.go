@@ -108,7 +108,7 @@ func sceneDensityIssue(content string, speech, duration float64) string {
 	// Descriptive sentences also count as beats, so only twice the readable load is flagged.
 	case beats >= 3 && needed > duration*2:
 		return fmt.Sprintf("过密：%.1f秒内约%d个动作%s，建议每个动作约%.1f秒，拆成连续场景或删减次要动作", duration, beats, speechNote(speech), actionBeatSeconds)
-	case duration >= 7 && beats <= 1 && speech < duration/2:
+	case duration >= sparseSceneMinSeconds && beats <= 1 && speech < duration/2:
 		return fmt.Sprintf("过疏：%.1f秒内仅约%d个动作%s，建议与同一回合的相邻场景合并或补足原文动作", duration, beats, speechNote(speech))
 	}
 	return ""

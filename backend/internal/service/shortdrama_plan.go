@@ -172,7 +172,7 @@ func scriptFromPlanSystemPrompt(targetDuration float64, targetScenes int) string
 - 镜头数参考：约 ` + fmt.Sprintf("%d", targetScenes) + ` 个镜头；仅作参考，场景数随剧情发展，不设上限也不凑数
 - 单镜时长范围：` + fmt.Sprintf("%d", minSceneDur) + `~` + fmt.Sprintf("%d", maxSceneDur) + ` 秒
 - ` + sceneSplitRule + `
-- ` + pacing("按{speech_rate_min}~{speech_rate_max}个汉字/秒、默认{speech_rate}字/秒") + `估算短剧对白；连续标点只算一次短暂停顿，整段仅留0.4秒余量，不因过量预留拆出大量短镜
+- ` + pacing("按{speech_rate_min}~{speech_rate_max}个汉字/秒、默认{speech_rate}字/秒估算短剧对白；连续标点只算一次短暂停顿，整段仅留{dialogue_margin}秒余量") + `，不因过量预留拆出大量短镜
 - 对白自然说完需要超过 ` + pacing("{shot_max}") + ` 秒时，按完整句子、说话人或动作节点拆为连续镜头；不得删改对白或提高语速来凑总时长
 3. 人物一致性至关重要：同一角色在多个场景出现时，image_prompt 必须严格沿用创作方案中该角色的 trait（外貌特征）与 style（服装造型），且所有场景画风描述保持一致。
 4. 必须区分人物用途：visible_characters 只列本镜最终画面中真实可见的人物；voice_characters 只列画外对白或内心独白的发声者；mentioned_characters 只列剧情说明、对白或独白中被提到但不会出现在画面中的人物。名字出现在文字中不等于画面出场。characters 为兼容字段，必须与 visible_characters 完全相同；只有 visible_characters 会要求人物四视图。

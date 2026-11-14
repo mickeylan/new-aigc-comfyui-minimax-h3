@@ -446,6 +446,7 @@ import CharacterHistoryDrawer from '../components/CharacterHistoryDrawer.vue'
 import GeneratedMediaHistoryDrawer from '../components/GeneratedMediaHistoryDrawer.vue'
 import { compatibleSkills, projectSkillConfig, skillOperationOf } from '../utils/directorWorkflow.js'
 import { createDraftSafety } from '../utils/draftSafety.js'
+import { MODEL_LIMIT_DEFAULTS, mergeModelLimits } from '../utils/modelLimits.js'
 import { directorDraftShotPayload } from '../utils/episodeShotSplit.js'
 import { buildEditSequence, normalizeClip, sequenceDuration, splitClip, uniqueClipId } from '../utils/finalCutEditing.js'
 import FinalCutTimeline from '../components/FinalCutTimeline.vue'
@@ -592,10 +593,10 @@ const dialogueVolume = ref(1)
 const bgmVolume = ref(1)
 const durationSaving = ref(false)
 const durationInput = ref(5)
-const modelLimits = ref({ shot_max_seconds: 15, scene_min_seconds: 3 })
-const shotMaxSeconds = computed(() => Number(modelLimits.value.shot_max_seconds || 15))
-const sceneMinSeconds = computed(() => Number(modelLimits.value.scene_min_seconds || 3))
-const h3DurationMax = ref(15)
+const modelLimits = ref({ ...MODEL_LIMIT_DEFAULTS })
+const shotMaxSeconds = computed(() => modelLimits.value.shot_max_seconds)
+const sceneMinSeconds = computed(() => modelLimits.value.scene_min_seconds)
+const h3DurationMax = ref(MODEL_LIMIT_DEFAULTS.shot_max_seconds)
 const sceneModeSaving = ref(false)
 const sceneModeInput = ref('')
 const dragFrom = ref(null)
@@ -752,7 +753,7 @@ async function load() {
   try {
     const [{ data }, episodeRes, catalogRes, limitsRes] = await Promise.all([api.editorData(id(), activeEpN.value), api.projectEpisodes(id()), api.modelCatalog(), api.modelCapabilities().catch(() => null)])
     if (editorDisposed) return
-    if (limitsRes?.data) modelLimits.value = limitsRes.data
+    if (limitsRes?.data) modelLimits.value = mergeModelLimits(limitsRes.data)
     const h3 = (catalogRes.data?.items || []).find(item => item.template_code === 'minimax_h3_ref2v')
     h3DurationMax.value = Number(h3?.duration?.max || shotMaxSeconds.value)
     project.value = data.project

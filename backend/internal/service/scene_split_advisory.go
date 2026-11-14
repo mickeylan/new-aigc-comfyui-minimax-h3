@@ -11,7 +11,7 @@ import (
 
 // sceneSplitRule is shared by every episode-script prompt: a Scene is one independent
 // H3 generation, so its size and count follow the plot and the per-action capacity.
-var sceneSplitRule = pacing("【场景拆分】每个场景是一次独立的视频生成，承载同一时空、同一回合的一段连续剧情，时长{scene_typical_min}~{shot_max}秒（只有完整对白自然说完需要更久时才可更长）；场景内部可以按剧情切换机位（说话人、听者反应、关键细节特写等），场景拆分只决定剧情段落，不等于一镜到底。按每个可见动作约{action_beat}秒安排容量：场景内动作数约为时长÷{action_beat}，6秒场景不得塞入6个分秒动作，7秒以上场景不得只有一个静态动作。同一回合的连续招式（出手、格挡、反击、受制、挣脱）必须放在同一场景，不得把一个动作的起势与结果拆进两个场景。场景数完全随剧情发展：不设上限，也不为凑目标镜头数或总时长而拆分、合并或注水；总时长原则上不少于目标，原文内容确实不够时不强求，也绝不压缩对白。拟声词与音效（如“轰”“砰”“嗖”、破空声、撞击声）只写进content的动作描写，不得作为dialogues条目。")
+var sceneSplitRule = pacing("【场景拆分】每个场景是一次独立的视频生成，承载同一时空、同一回合的一段连续剧情，时长{scene_typical_min}~{shot_max}秒（只有完整对白自然说完需要更久时才可更长）；场景内部可以按剧情切换机位（说话人、听者反应、关键细节特写等），场景拆分只决定剧情段落，不等于一镜到底。按每个可见动作约{action_beat}秒安排容量：场景内动作数约为时长÷{action_beat}，{density_example}秒场景不得塞入{density_example}个分秒动作，{sparse_scene_min}秒以上场景不得只有一个静态动作。同一回合的连续招式（出手、格挡、反击、受制、挣脱）必须放在同一场景，不得把一个动作的起势与结果拆进两个场景。场景数完全随剧情发展：不设上限，也不为凑目标镜头数或总时长而拆分、合并或注水；总时长原则上不少于目标，原文内容确实不够时不强求，也绝不压缩对白。拟声词与音效（如“轰”“砰”“嗖”、破空声、撞击声）只写进content的动作描写，不得作为dialogues条目。")
 
 var (
 	soundEffectSpeakerPattern = regexp.MustCompile(`(?:声|音效|拟声)$`)

@@ -391,7 +391,7 @@ func (v *VolcClient) AllSettings() map[string]string {
 		SettingMiniMaxAPIKey, SettingMiniMaxBaseURL, SettingMiniMaxModel, "video_concurrency", "video_resolution", settingH3MaxDurationSeconds}
 	defs := []string{"", DefaultVolcBaseURL, DefaultVolcTextModel, DefaultVolcImgModel, DefaultVolcImgSize,
 		"", "https://llm-ebg0fg1ejgmvv30a.cn-beijing.maas.aliyuncs.com", "qwen3-tts-flash", "Cherry", "Ethan", "{}", "{}",
-		"", "", DefaultMiniMaxModel, "4", "480p", "15"}
+		"", "", DefaultMiniMaxModel, "4", "480p", pacingNumber(defaultH3GenerationDuration)}
 	out := map[string]string{}
 	for i, k := range keys {
 		out[k] = v.GetSetting(k, defs[i])
