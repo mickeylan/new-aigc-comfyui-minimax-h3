@@ -61,6 +61,10 @@ const (
 	longSceneShotsMax  = 4
 	// Only the final combat Shot may settle into a held stance, for about its last 1.5 s.
 	finalShotSettleSeconds = 1.5
+	// A Scene without authored [Shot N] gets suggested internal cuts only from 9 s; a solo sword
+	// practice with three or more distinct techniques gets four cuts instead of three from 12 s.
+	minSuggestedCutSceneSeconds     = 9.0
+	minFourCutSoloSwordSceneSeconds = 12.0
 )
 
 // Scene density advice. A Scene at least sparseSceneMinSeconds long with one static action

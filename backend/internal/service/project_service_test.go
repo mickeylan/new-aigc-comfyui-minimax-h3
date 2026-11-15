@@ -3265,6 +3265,26 @@ func TestSuggestedUnstructuredH3ShotCount(t *testing.T) {
 	}
 }
 
+func TestSuggestedUnstructuredH3ShotCountHonoursNamedThresholds(t *testing.T) {
+	dressing := "舒寒披上锦袍和披风，随后推开房门，灵气震得宫灯摇曳。"
+	if got := suggestedUnstructuredH3ShotCount(dressing, minSuggestedCutSceneSeconds); got != 2 {
+		t.Fatalf("at the minimum the Scene may be split, got %d", got)
+	}
+	if got := suggestedUnstructuredH3ShotCount(dressing, minSuggestedCutSceneSeconds-0.5); got != 0 {
+		t.Fatalf("below the minimum the Scene must not be split, got %d", got)
+	}
+	sword := "韩立独自在院中练剑：先斜撩，再直刺，最后横削收剑。"
+	if !h3SoloSwordPracticeCuePattern.MatchString(sword) {
+		t.Fatalf("fixture no longer matches the solo sword cue: %q", sword)
+	}
+	if got := suggestedUnstructuredH3ShotCount(sword, minFourCutSoloSwordSceneSeconds); got != 4 {
+		t.Fatalf("solo sword practice at the four-cut threshold got %d", got)
+	}
+	if got := suggestedUnstructuredH3ShotCount(sword, minFourCutSoloSwordSceneSeconds-0.5); got != 3 {
+		t.Fatalf("solo sword practice below the four-cut threshold got %d", got)
+	}
+}
+
 func TestGenerateSceneVideoActionDoesNotRecycleOldVisualDescription(t *testing.T) {
 	ps := newTestProjectService(t)
 	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}); err != nil {

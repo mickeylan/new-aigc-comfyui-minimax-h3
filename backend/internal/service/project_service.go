@@ -2662,7 +2662,7 @@ func normalizeSceneTimedBeats(content string, duration float64) (string, int) {
 // clearly contains several visible production stages. It never changes Scene authority or
 // persists Shots; it prevents a long multi-stage action from being flattened into one summary.
 func suggestedUnstructuredH3ShotCount(content string, duration float64) int {
-	if duration < 9 || strings.Contains(content, "[Shot ") {
+	if duration < minSuggestedCutSceneSeconds || strings.Contains(content, "[Shot ") {
 		return 0
 	}
 	combatBeats := 0
@@ -2681,7 +2681,7 @@ func suggestedUnstructuredH3ShotCount(content string, duration float64) int {
 		}
 	}
 	if combatBeats >= 3 {
-		if duration >= 12 && h3SoloSwordPracticeCuePattern.MatchString(content) {
+		if duration >= minFourCutSoloSwordSceneSeconds && h3SoloSwordPracticeCuePattern.MatchString(content) {
 			return 4
 		}
 		return 3
