@@ -1215,7 +1215,7 @@ async function applyVisualBeats() {
     const shots = directorDraftShotPayload(visualBeatResult?.draft)
     if (!shots.length) throw new Error('草稿中没有镜头，请重新生成')
     if (!window.confirm(`将以${shots.length}个镜头替换当前Shot导演设计。Scene剧情正文和起始帧提示词不会被覆盖，是否继续？`)) return
-    await api.replaceSceneShots(id(), selected.value.id, shots, visualBeatResult?.dialogue_snapshot || ''); visualBeatDraft.value = ''; visualBeatResult = null; await reloadSelectedScene(); toast.success('视觉节拍已导入Shot导演层')
+    await api.replaceSceneShots(id(), selected.value.id, shots, visualBeatResult?.dialogue_snapshot || '', { draft_version_id: Number(visualBeatResult?.draft_version_id) || 0 }); visualBeatDraft.value = ''; visualBeatResult = null; await reloadSelectedScene(); toast.success('视觉节拍已导入Shot导演层')
   } catch (e) { toast.error(e.response?.data?.error || e.message || '视觉节拍草稿无效') }
 }
 async function applyPolishDraft() { try { await api.updateScene(id(), selected.value.id, { image_prompt: polishDraft.value }); polishDraft.value = ''; await reloadSelectedScene(); toast.success('润色草稿已应用到Scene起始帧提示词') } catch (e) { toast.error(e.response?.data?.error || '应用失败') } }

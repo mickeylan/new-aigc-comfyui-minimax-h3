@@ -184,6 +184,10 @@ test('AI导演支持可审核的长对白Native拆镜', () => {
   assert.match(source, /speech_presentation: shot\.speech_presentation \|\| ''/)
   assert.match(source, /listener_character: shot\.listener_character \|\| ''/)
   assert.match(source, /replaceSceneShots\(props\.projectId, props\.sceneId, payload, directorDialogueSnapshot\.value, provenance\)/)
+  // P5-2: the generated draft's history row is confirmed only by the import that saves it.
+  assert.match(source, /directorDraftVersionId\.value = Number\(data\.draft_version_id\) \|\| 0/)
+  assert.match(source, /draft_version_id: directorDraftVersionId\.value/)
+  assert.match(source, /skill_provenance: refineProvenance\.value/)
   const apiSource = readFileSync(new URL('../src/api/index.js', import.meta.url), 'utf8')
   assert.match(apiSource, /dialogue_snapshot: dialogueSnapshot/)
   assert.match(apiSource, /\.\.\.provenance/)

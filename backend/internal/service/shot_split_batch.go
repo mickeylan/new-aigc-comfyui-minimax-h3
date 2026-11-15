@@ -317,6 +317,9 @@ func (s *Service) runShotSplitItem(batch *models.ShotSplitBatch, item *models.Sh
 		s.finishShotSplitItem(item.ID, shotSplitFailed, err.Error(), 0)
 		return
 	}
+	if versionID, ok := response["draft_version_id"].(uint); ok {
+		s.markDirectorDraftVersionApplied(&scene, versionID)
+	}
 	if s.Projects != nil {
 		s.Projects.CancelStaleSceneTasks(scene.ID, scene.ImageTaskID, scene.VideoTaskID)
 	}

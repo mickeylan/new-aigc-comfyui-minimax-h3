@@ -2793,7 +2793,30 @@ func validateCombatShotProvenance(shots []models.Shot) error {
 	return nil
 }
 
+// h3PromptTrace collects which Skill revisions produced one H3 prompt generation. Calls made
+// without a Skill (plain translation or design prompts) are not listed.
+type h3PromptTrace struct {
+	Source string            `json:"source,omitempty"`
+	Skills []SkillProvenance `json:"skills"`
+}
+
+func (t *h3PromptTrace) add(p *SkillProvenance) {
+	if t != nil && p != nil {
+		t.Skills = append(t.Skills, *p)
+	}
+}
+
+func (t *h3PromptTrace) setSource(source string) {
+	if t != nil {
+		t.Source = source
+	}
+}
+
 func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, error) {
+	return s.generateSceneVideoAction(sc, nil)
+}
+
+func (s *ProjectService) generateSceneVideoAction(sc *models.Scene, trace *h3PromptTrace) (string, error) {
 	if s.textProvider == nil {
 		return "", fmt.Errorf("文本生成服务未配置")
 	}
@@ -2810,6 +2833,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	canonicalSceneContent := normalizeUserH3ShotMarkers(generationContent)
 	canonicalSceneContent, explicitTimedShotCount := normalizeSceneTimedBeats(canonicalSceneContent, normalizeSceneDuration(sc.Duration))
 	if explicitTimedShotCount == 0 && len(h3ShotMarkerPattern.FindAllStringIndex(canonicalSceneContent, -1)) > 1 {
+		trace.setSource("authored_shot_translation")
 		return s.compileAuthoredH3ShotAction(sc, canonicalSceneContent, refLines)
 	}
 	sourceEventLedger := formatH3SourceEventLedger(canonicalSceneContent)
@@ -2911,7 +2935,11 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 	effectiveSystem := effectiveGenerationSystem(system, policy)
 	chatAction := func(request string) (string, error) {
 		if (sceneMode == h3SceneAction || sceneMode == h3SceneMixed) && s.skills != nil {
-			return s.skills.ChatWithConfiguredOrFallbackSkill(sc.ProjectID, models.SkillStageVideoPrompt, h3CombatActionSkillCode, s.textProvider, effectiveSystem, request, map[string]string{"request": request})
+			output, provenance, err := s.skills.ChatWithConfiguredOrFallbackSkillTraced(sc.ProjectID, models.SkillStageVideoPrompt, h3CombatActionSkillCode, s.textProvider, effectiveSystem, request, map[string]string{"request": request})
+			if err == nil {
+				trace.add(provenance)
+			}
+			return output, err
 		}
 		return s.textProvider.Chat(effectiveSystem, request)
 	}
@@ -3180,6 +3208,7 @@ func (s *ProjectService) GenerateSceneVideoAction(sc *models.Scene) (string, err
 		log.Printf("[h3-prompt-quality] scene=%d notes=%q", sc.ID, strings.Join(notes, "；"))
 	}
 	log.Printf("[h3-prompt] regenerated scene=%d mode=%s source=%s shots=%d chars=%d", sc.ID, sceneMode, generationSource, expectedShotCount, len([]rune(out)))
+	trace.setSource(generationSource)
 	return out, nil
 }
 

@@ -210,6 +210,57 @@ func TestShotRefineRollbackRefusesAfterLaterManualEdit(t *testing.T) {
 	}
 }
 
+func TestShotRefineAppliedVersionRecordsVerifiedSkillProvenance(t *testing.T) {
+	reply := `{"action":"apply","edits":[{"shot_order":2,"field":"reaction","replacement":"南宫婉眼眶一红","rationale":{"issue":"反应"}}]}`
+	s, db, scene, _ := newShotRefineTestService(t, reply)
+	r := shotRefineRouter(s)
+	base := fmt.Sprintf("/api/projects/%d/scenes/%d/shots", scene.ProjectID, scene.ID)
+	draftAndApply := func(provenance func(*SkillProvenance) *SkillProvenance) map[string]any {
+		w := shotRefineCall(r, "POST", base+"/refine-patch", map[string]string{"instruction": "加点反应"})
+		var draft struct {
+			Patch           shotRefinePatch  `json:"patch"`
+			SourceHash      string           `json:"source_hash"`
+			SkillProvenance *SkillProvenance `json:"skill_provenance"`
+		}
+		json.Unmarshal(w.Body.Bytes(), &draft)
+		if draft.SkillProvenance == nil || draft.SkillProvenance.Code != shotRefinePatchSkillCode || draft.SkillProvenance.Version != 1 || len(draft.SkillProvenance.InputSHA256) != 64 {
+			t.Fatalf("draft provenance=%+v body=%s", draft.SkillProvenance, w.Body.String())
+		}
+		w = shotRefineCall(r, "POST", base+"/refine-patch/apply", map[string]any{"source_hash": draft.SourceHash, "edits": draft.Patch.Edits, "skill_provenance": provenance(draft.SkillProvenance)})
+		var applied struct {
+			VersionID uint `json:"version_id"`
+		}
+		json.Unmarshal(w.Body.Bytes(), &applied)
+		var version models.PromptVersion
+		if err := db.First(&version, applied.VersionID).Error; err != nil {
+			t.Fatalf("apply status=%d %s err=%v", w.Code, w.Body.String(), err)
+		}
+		var meta map[string]any
+		json.Unmarshal([]byte(version.Metadata), &meta)
+		// Roll back so the next round starts from the original values.
+		shotRefineCall(r, "POST", fmt.Sprintf("%s/refine-patches/%d/rollback", base, applied.VersionID), nil)
+		return meta
+	}
+	var audit models.SkillAuditLog
+	meta := draftAndApply(func(p *SkillProvenance) *SkillProvenance { return p })
+	db.Order("id DESC").First(&audit)
+	if meta["skill_code"] != shotRefinePatchSkillCode || meta["skill_version"] != float64(1) || meta["input_sha256"] != audit.InputHash {
+		t.Fatalf("verified metadata=%v audit hash=%s", meta, audit.InputHash)
+	}
+	meta = draftAndApply(func(p *SkillProvenance) *SkillProvenance {
+		forged := *p
+		forged.Version = 99
+		return &forged
+	})
+	if _, ok := meta["skill_version"]; ok || meta["skill_code"] != shotRefinePatchSkillCode {
+		t.Fatalf("unverified provenance must not be recorded: %v", meta)
+	}
+	w := shotRefineCall(r, "GET", base+"/refine-patches", nil)
+	if !strings.Contains(w.Body.String(), `"skill_version":1`) {
+		t.Fatalf("history must expose the verified skill version: %s", w.Body.String())
+	}
+}
+
 func TestShotRefineDraftRejectsWholePatchOnLockedField(t *testing.T) {
 	reply := `{"action":"apply","edits":[{"shot_order":1,"field":"reaction","replacement":"抬眼","rationale":{"issue":"x"}},{"shot_order":2,"field":"dialogue","replacement":"改台词","rationale":{"issue":"x"}}]}`
 	s, _, scene, _ := newShotRefineTestService(t, reply)

@@ -46,6 +46,41 @@ func TestStageDefaultSkillIgnoresSpecializedSkills(t *testing.T) {
 	}
 }
 
+func TestChatWithSkillTracedReturnsAuditedProvenance(t *testing.T) {
+	db := newTestDB(t)
+	svc := NewSkillService(db)
+	if err := svc.InitSystemSkills(); err != nil {
+		t.Fatal(err)
+	}
+	provider := &captureTextProvider{response: "ok"}
+	out, provenance, err := svc.ChatWithConfiguredOrFallbackSkillTraced(3, models.SkillStageStoryboard, shotRefinePatchSkillCode, provider, "BASE", "USER", map[string]string{"instruction": "x"})
+	if err != nil || out != "ok" || provenance == nil {
+		t.Fatalf("out=%q provenance=%+v err=%v", out, provenance, err)
+	}
+	if provenance.Code != shotRefinePatchSkillCode || provenance.Version != 1 || provenance.InputSHA256 != skillInputSHA256(provider.user) {
+		t.Fatalf("provenance=%+v", provenance)
+	}
+	var audit models.SkillAuditLog
+	if err := db.Where("project_id = ?", 3).First(&audit).Error; err != nil || audit.InputHash != provenance.InputSHA256 || audit.SkillVersion != provenance.Version {
+		t.Fatalf("audit=%+v err=%v", audit, err)
+	}
+	if !svc.VerifySkillProvenance(3, provenance) {
+		t.Fatal("audited provenance must verify")
+	}
+	forged := *provenance
+	forged.InputSHA256 = skillInputSHA256("forged")
+	if svc.VerifySkillProvenance(3, &forged) || svc.VerifySkillProvenance(4, provenance) || svc.VerifySkillProvenance(3, nil) {
+		t.Fatal("forged, foreign-project or missing provenance must not verify")
+	}
+	// A project-disabled Skill sends the base prompts unchanged and reports no provenance.
+	disabled := models.ProjectSkillConfig{ProjectID: 5, Stage: models.SkillStageStoryboard, Operation: shotRefinePatchSkillCode}
+	db.Create(&disabled)
+	db.Model(&disabled).Update("enabled", false) // default:true ignores a zero value on Create
+	if _, provenance, err := svc.ChatWithConfiguredOrFallbackSkillTraced(5, models.SkillStageStoryboard, shotRefinePatchSkillCode, provider, "BASE", "USER", nil); err != nil || provenance != nil || provider.user != "USER" {
+		t.Fatalf("disabled skill provenance=%+v user=%q err=%v", provenance, provider.user, err)
+	}
+}
+
 func TestInitSystemSkillsMigratesGenericOperationAndTagsModelFamilies(t *testing.T) {
 	db := newTestDB(t)
 	if err := db.AutoMigrate(&models.ProjectSkillConfig{}); err != nil {

@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -533,7 +534,8 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 	if !ok {
 		return
 	}
-	actionPrompt, err := s.Projects.GenerateSceneVideoAction(sc)
+	trace := &h3PromptTrace{Skills: []SkillProvenance{}}
+	actionPrompt, err := s.Projects.generateSceneVideoAction(sc, trace)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
@@ -592,7 +594,7 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 		detail, actionPrompt = marked, marked
 	}
 	if len(validSceneDialogues(dubs)) > 0 {
-		composed, composeErr := s.Projects.composeH3DialogueTimeline(sc, detail, dubs, lines)
+		composed, composeErr := s.Projects.composeH3DialogueTimelineTraced(sc, detail, dubs, lines, trace)
 		if composeErr != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": composeErr.Error(), "code": "dialogue_composition_failed"})
 			return
@@ -607,7 +609,14 @@ func (s *Service) HandleRegenerateSceneVideoPrompt(c *gin.Context) {
 	fullPrompt = bindH3ReferencePreview(fullPrompt, lines)
 	// Runs after preview binding, which rebuilds retention_analysis from templates.
 	fullPrompt = s.Projects.applyH3DirectorBrief(sc, fullPrompt)
-	response := gin.H{"prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "reference_bindings": sceneVideoReferenceBindings(refs, lines, fullPrompt), "template": template, "dialogue_count": len(validSceneDialogues(dubs)), "prompt_dialogue_count": len(h3SpokenTextPattern.FindAllStringSubmatch(fullPrompt, -1)), "dialogue_placement": DiagnoseH3DialoguePlacement(fullPrompt, dubs, lines)}
+	// Provenance of the latest AI generation is kept on the Scene and copied into the
+	// GenerationSnapshot at the next video submit; a failed write never blocks the preview.
+	if provenance, marshalErr := json.Marshal(trace); marshalErr == nil {
+		if err := s.DB.Model(&models.Scene{}).Where("id = ?", sc.ID).UpdateColumn("video_prompt_provenance", string(provenance)).Error; err != nil {
+			log.Printf("[h3-prompt-provenance] scene=%d failed: %v", sc.ID, err)
+		}
+	}
+	response := gin.H{"prompt_provenance": trace, "prompt": fullPrompt, "full_prompt": fullPrompt, "action_prompt": actionPrompt, "reference_count": len(refs), "reference_bindings": sceneVideoReferenceBindings(refs, lines, fullPrompt), "template": template, "dialogue_count": len(validSceneDialogues(dubs)), "prompt_dialogue_count": len(h3SpokenTextPattern.FindAllStringSubmatch(fullPrompt, -1)), "dialogue_placement": DiagnoseH3DialoguePlacement(fullPrompt, dubs, lines)}
 	if continuity != nil && continuity.SelectedFrame != nil {
 		response["continuity_mode"] = continuity.Mode
 		response["continuity_frame"] = s.frameResponses([]models.FrameCandidate{*continuity.SelectedFrame})[0]

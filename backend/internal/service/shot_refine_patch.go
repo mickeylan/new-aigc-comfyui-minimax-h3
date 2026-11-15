@@ -250,7 +250,7 @@ func (s *Service) HandleShotRefinePatchDraft(c *gin.Context) {
 		return
 	}
 	hash := shotRefineSourceHash(scene.Content, shots)
-	output, err := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, shotRefinePatchSkillCode, s.TextProviderFact, "只输出完整合法JSON，不要Markdown或解释。", "按用户要求精修本场镜头。", map[string]string{
+	output, provenance, err := s.Skills.ChatWithConfiguredOrFallbackSkillTraced(scene.ProjectID, models.SkillStageStoryboard, shotRefinePatchSkillCode, s.TextProviderFact, "只输出完整合法JSON，不要Markdown或解释。", "按用户要求精修本场镜头。", map[string]string{
 		"scene_content": scene.Content, "shots_json": shotRefinePromptShots(shots), "instruction": strings.TrimSpace(req.Instruction),
 	})
 	if err != nil {
@@ -271,7 +271,7 @@ func (s *Service) HandleShotRefinePatchDraft(c *gin.Context) {
 	if patch.Edits == nil {
 		patch.Edits = []shotRefineEdit{}
 	}
-	c.JSON(http.StatusOK, gin.H{"patch": patch, "source_hash": hash, "skill_code": shotRefinePatchSkillCode, "persisted": false})
+	c.JSON(http.StatusOK, gin.H{"patch": patch, "source_hash": hash, "skill_code": shotRefinePatchSkillCode, "skill_provenance": provenance, "persisted": false})
 }
 
 var errShotRefineStale = errors.New("场景正文或镜头已在生成建议后变化，请重新生成精修建议")
@@ -303,13 +303,19 @@ func (s *Service) HandleApplyShotRefinePatch(c *gin.Context) {
 		return
 	}
 	var req struct {
-		SourceHash  string           `json:"source_hash"`
-		Instruction string           `json:"instruction"`
-		Edits       []shotRefineEdit `json:"edits"`
+		SourceHash      string           `json:"source_hash"`
+		Instruction     string           `json:"instruction"`
+		Edits           []shotRefineEdit `json:"edits"`
+		SkillProvenance *SkillProvenance `json:"skill_provenance"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || len(req.Edits) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请至少选择一处修改"})
 		return
+	}
+	versionMeta := map[string]any{"instruction": strings.TrimSpace(req.Instruction), "source_hash": req.SourceHash, "skill_code": shotRefinePatchSkillCode}
+	// Client-echoed provenance is recorded only when it matches an audited call of this project.
+	if s.Skills != nil && s.Skills.VerifySkillProvenance(scene.ProjectID, req.SkillProvenance) {
+		versionMeta["skill_code"], versionMeta["skill_version"], versionMeta["input_sha256"] = req.SkillProvenance.Code, req.SkillProvenance.Version, req.SkillProvenance.InputSHA256
 	}
 	var version models.PromptVersion
 	var edits []shotRefineEdit
@@ -332,7 +338,7 @@ func (s *Service) HandleApplyShotRefinePatch(c *gin.Context) {
 			return err
 		}
 		content, _ := json.Marshal(edits)
-		metadata, _ := json.Marshal(map[string]any{"instruction": strings.TrimSpace(req.Instruction), "source_hash": req.SourceHash, "skill_code": shotRefinePatchSkillCode})
+		metadata, _ := json.Marshal(versionMeta)
 		version = models.PromptVersion{ProjectID: scene.ProjectID, EntityType: shotRefineVersionEntity, EntityID: scene.ID, Content: string(content), Action: shotRefineVersionAction, State: PromptVersionStateApplied, Metadata: string(metadata)}
 		return tx.Create(&version).Error
 	})
@@ -422,10 +428,12 @@ func (s *Service) HandleListShotRefinePatches(c *gin.Context) {
 		var edits []shotRefineEdit
 		_ = json.Unmarshal([]byte(version.Content), &edits)
 		var metadata struct {
-			Instruction string `json:"instruction"`
+			Instruction  string `json:"instruction"`
+			SkillCode    string `json:"skill_code"`
+			SkillVersion int    `json:"skill_version"`
 		}
 		_ = json.Unmarshal([]byte(version.Metadata), &metadata)
-		items = append(items, gin.H{"id": version.ID, "state": version.State, "instruction": metadata.Instruction, "edits": edits, "created_at": version.CreatedAt})
+		items = append(items, gin.H{"id": version.ID, "state": version.State, "instruction": metadata.Instruction, "skill_code": metadata.SkillCode, "skill_version": metadata.SkillVersion, "edits": edits, "created_at": version.CreatedAt})
 	}
 	c.JSON(http.StatusOK, gin.H{"items": items})
 }

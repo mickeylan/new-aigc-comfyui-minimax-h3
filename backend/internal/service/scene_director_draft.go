@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"regexp"
@@ -2078,7 +2079,7 @@ func (s *Service) generateSceneDirectorDraft(scene *models.Scene, req sceneDirec
 	for _, dialogue := range dialogues {
 		dialogueContext += fmt.Sprintf("[%s|%s] %s\n", dialogue.SpeechType, dialogue.Character, dialogue.Text)
 	}
-	output, err := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出完整合法JSON，不要Markdown或解释。", instruction, map[string]string{"scene_facts": generationContent, "asset_context": assets, "dialogues": dialogueContext, "brief": req.Brief, "requirements": req.Requirements, "combat_references": combatReferenceText, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration)), "target_shot_count": strconv.Itoa(req.TargetShotCount)})
+	output, provenance, err := s.Skills.ChatWithConfiguredOrFallbackSkillTraced(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出完整合法JSON，不要Markdown或解释。", instruction, map[string]string{"scene_facts": generationContent, "asset_context": assets, "dialogues": dialogueContext, "brief": req.Brief, "requirements": req.Requirements, "combat_references": combatReferenceText, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration)), "target_shot_count": strconv.Itoa(req.TargetShotCount)})
 	if err != nil {
 		return http.StatusBadGateway, gin.H{"error": err.Error()}
 	}
@@ -2140,11 +2141,13 @@ func (s *Service) generateSceneDirectorDraft(scene *models.Scene, req sceneDirec
 		if req.Mode == "action_rhythm" || req.Mode == "combat_design" {
 			repairInstruction = "修复武戏/仙术动作节拍草稿；保持实时速度、单一动作结果、空间轴线和结构化对白，不得使用慢动作。逐镜补齐本镜目的、观众新增信息、动作触发、演员身体表演、视线、调度、反应、主要视觉焦点和切镜动机。"
 		}
-		repaired, repairErr := s.Skills.ChatWithConfiguredOrFallbackSkill(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出修复后的完整合法JSON，不要Markdown或解释。", repairInstruction, map[string]string{"scene_facts": scene.Content, "asset_context": assets, "dialogues": dialogueContext, "brief": req.Brief, "requirements": repairRequirements, "combat_references": combatReferenceText, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration)), "target_shot_count": strconv.Itoa(req.TargetShotCount)})
+		repaired, repairProvenance, repairErr := s.Skills.ChatWithConfiguredOrFallbackSkillTraced(scene.ProjectID, models.SkillStageStoryboard, operation, s.TextProviderFact, "只输出修复后的完整合法JSON，不要Markdown或解释。", repairInstruction, map[string]string{"scene_facts": scene.Content, "asset_context": assets, "dialogues": dialogueContext, "brief": req.Brief, "requirements": repairRequirements, "combat_references": combatReferenceText, "target_duration": fmt.Sprintf("%.1f", math.Max(scene.Duration, dialogueDuration)), "target_shot_count": strconv.Itoa(req.TargetShotCount)})
 		if repairErr != nil {
 			serverRepairs = append(serverRepairs, serverRepair{Stage: "model_repair", Reason: initialValidationError, Result: "provider_error: " + repairErr.Error()})
 			return http.StatusBadGateway, gin.H{"error": "AI导演方案自动修复失败: " + repairErr.Error(), "raw_output": output, "server_repairs": serverRepairs}
 		}
+		// The accepted draft comes from the repair call, so its revision is the one recorded.
+		provenance = repairProvenance
 		draft, err = validateDraft(repaired)
 		repairResult := "accepted"
 		if err != nil {
@@ -2179,5 +2182,46 @@ func (s *Service) generateSceneDirectorDraft(scene *models.Scene, req sceneDirec
 		response["dialogue_review"] = buildDialogueRhythmReview(draft, dialogues)
 	}
 	response["dialogue_snapshot"] = dialogueSnapshotToken(dialogues)
+	response["skill_provenance"] = provenance
+	if versionID := s.recordDirectorDraftVersion(scene, draft, req.Mode, operation, provenance, len(serverRepairs) > 0); versionID != 0 {
+		response["draft_version_id"] = versionID
+	}
 	return 200, response
+}
+
+const (
+	directorDraftVersionEntity = "scene_director_draft"
+	directorDraftVersionAction = "director_draft"
+)
+
+// recordDirectorDraftVersion keeps an unconfirmed history row for a generated director draft.
+// Like generation snapshots it is diagnostic only: a failed write is logged, never surfaced.
+func (s *Service) recordDirectorDraftVersion(scene *models.Scene, draft *sceneDirectorDraft, mode, operation string, provenance *SkillProvenance, repaired bool) uint {
+	content, err := json.Marshal(draft)
+	if err != nil {
+		return 0
+	}
+	meta := map[string]any{"mode": mode, "skill_code": operation, "repaired": repaired}
+	if provenance != nil {
+		meta["skill_code"], meta["skill_version"], meta["input_sha256"] = provenance.Code, provenance.Version, provenance.InputSHA256
+	}
+	metadata, _ := json.Marshal(meta)
+	version := models.PromptVersion{ProjectID: scene.ProjectID, EntityType: directorDraftVersionEntity, EntityID: scene.ID, Content: string(content), Action: directorDraftVersionAction, State: PromptVersionStateDraft, Metadata: string(metadata)}
+	if err := s.DB.Create(&version).Error; err != nil {
+		log.Printf("[director-draft-version] scene=%d failed: %v", scene.ID, err)
+		return 0
+	}
+	return version.ID
+}
+
+// markDirectorDraftVersionApplied flips the draft row of this Scene to applied once its
+// Shots were saved. Unknown, foreign or already-applied ids are ignored.
+func (s *Service) markDirectorDraftVersionApplied(scene *models.Scene, versionID uint) {
+	if versionID == 0 {
+		return
+	}
+	err := s.DB.Model(&models.PromptVersion{}).Where("id = ? AND project_id = ? AND entity_type = ? AND entity_id = ? AND state = ?", versionID, scene.ProjectID, directorDraftVersionEntity, scene.ID, PromptVersionStateDraft).Update("state", PromptVersionStateApplied).Error
+	if err != nil {
+		log.Printf("[director-draft-version] scene=%d version=%d mark applied failed: %v", scene.ID, versionID, err)
+	}
 }

@@ -1087,6 +1087,7 @@ func (s *Service) HandleCreateShots(c *gin.Context) {
 		DirectorSource       string                     `json:"director_source"`
 		CombatReferences     []CombatReferenceSelection `json:"combat_references"`
 		CombatReferenceAudit []CombatReferenceAudit     `json:"combat_reference_audit"`
+		DraftVersionID       uint                       `json:"draft_version_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
@@ -1148,6 +1149,7 @@ func (s *Service) HandleCreateShots(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
+	s.markDirectorDraftVersionApplied(&scene, req.DraftVersionID)
 	s.Projects.CancelStaleSceneTasks(scene.ID, scene.ImageTaskID, scene.VideoTaskID)
 	c.JSON(200, gin.H{"shots": shots, "count": len(shots)})
 }

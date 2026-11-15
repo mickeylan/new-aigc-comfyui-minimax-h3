@@ -835,21 +835,46 @@ func (s *SkillService) latestEnabledSkillByCode(code string) (*models.Skill, err
 	return &skill, nil
 }
 
+// SkillProvenance identifies the exact Skill revision and rendered input behind one model
+// call. InputSHA256 uses the same hash as SkillAuditLog.InputHash, so the two can be joined.
+type SkillProvenance struct {
+	Code        string `json:"skill_code"`
+	Version     int    `json:"skill_version"`
+	InputSHA256 string `json:"input_sha256"`
+}
+
+func skillInputSHA256(input string) string {
+	if input == "" {
+		return ""
+	}
+	h := sha256.Sum256([]byte(input))
+	return hex.EncodeToString(h[:])
+}
+
 // ChatWithConfiguredOrFallbackSkill uses an explicitly configured project skill when present;
 // otherwise it uses the named curated fallback. Every real invocation is audited.
 func (s *SkillService) ChatWithConfiguredOrFallbackSkill(projectID uint, stage, fallbackCode string, provider TextProvider, baseSystem, baseUser string, params map[string]string) (string, error) {
+	output, _, err := s.ChatWithConfiguredOrFallbackSkillTraced(projectID, stage, fallbackCode, provider, baseSystem, baseUser, params)
+	return output, err
+}
+
+// ChatWithConfiguredOrFallbackSkillTraced is ChatWithConfiguredOrFallbackSkill that also
+// reports which Skill revision was used. Provenance is nil when the project disabled the
+// Skill and the base prompts went to the provider unchanged.
+func (s *SkillService) ChatWithConfiguredOrFallbackSkillTraced(projectID uint, stage, fallbackCode string, provider TextProvider, baseSystem, baseUser string, params map[string]string) (string, *SkillProvenance, error) {
 	var skill *models.Skill
 	config, err := s.GetProjectOperationConfig(projectID, stage, fallbackCode)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if config != nil && !config.Enabled {
-		return provider.Chat(baseSystem, baseUser)
+		output, chatErr := provider.Chat(baseSystem, baseUser)
+		return output, nil, chatErr
 	}
 	if config != nil && config.SkillID != nil {
 		configured, err := s.GetSkill(*config.SkillID)
 		if err != nil || !configured.Enabled {
-			return "", fmt.Errorf("项目配置的技能不可用")
+			return "", nil, fmt.Errorf("项目配置的技能不可用")
 		}
 		operation := strings.TrimSpace(configured.Operation)
 		if operation == "" {
@@ -864,7 +889,7 @@ func (s *SkillService) ChatWithConfiguredOrFallbackSkill(projectID uint, stage, 
 	if skill == nil {
 		skill, err = s.latestEnabledSkillByCode(fallbackCode)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 	}
 	system, user := s.AssemblePrompt(skill, params)
@@ -874,6 +899,7 @@ func (s *SkillService) ChatWithConfiguredOrFallbackSkill(projectID uint, stage, 
 	if strings.TrimSpace(baseUser) != "" {
 		user = baseUser + "\n\n" + user
 	}
+	provenance := &SkillProvenance{Code: skill.Code, Version: skill.Version, InputSHA256: skillInputSHA256(user)}
 	started := time.Now()
 	output, chatErr := provider.Chat(system, user)
 	errText := ""
@@ -882,12 +908,23 @@ func (s *SkillService) ChatWithConfiguredOrFallbackSkill(projectID uint, stage, 
 	}
 	auditErr := s.LogSkillUsage(projectID, stage, skill, user, len(output), time.Since(started).Milliseconds(), chatErr == nil, errText)
 	if chatErr != nil {
-		return output, chatErr
+		return output, provenance, chatErr
 	}
 	if auditErr != nil {
-		return "", fmt.Errorf("Skill 审计写入失败: %w", auditErr)
+		return "", provenance, fmt.Errorf("Skill 审计写入失败: %w", auditErr)
 	}
-	return output, nil
+	return output, provenance, nil
+}
+
+// VerifySkillProvenance reports whether a successful audited call in this project matches
+// the provenance, so a client round-trip cannot fabricate which Skill produced a draft.
+func (s *SkillService) VerifySkillProvenance(projectID uint, p *SkillProvenance) bool {
+	if p == nil || p.Code == "" || p.InputSHA256 == "" {
+		return false
+	}
+	var count int64
+	err := s.db.Model(&models.SkillAuditLog{}).Where("project_id = ? AND skill_code = ? AND skill_version = ? AND input_hash = ? AND success = ?", projectID, p.Code, p.Version, p.InputSHA256, true).Count(&count).Error
+	return err == nil && count > 0
 }
 
 // ChatWithSkill 执行阶段化文本生成，并记录成功或失败的 Skill 版本审计。
@@ -915,11 +952,7 @@ func (s *SkillService) ChatWithSkill(projectID uint, stage string, provider Text
 
 // LogSkillUsage 记录技能使用（审计日志）
 func (s *SkillService) LogSkillUsage(projectID uint, stage string, skill *models.Skill, input string, outputLength int, durationMS int64, success bool, errMsg string) error {
-	inputHash := ""
-	if input != "" {
-		h := sha256.Sum256([]byte(input))
-		inputHash = hex.EncodeToString(h[:])
-	}
+	inputHash := skillInputSHA256(input)
 
 	log := models.SkillAuditLog{
 		ProjectID:    projectID,

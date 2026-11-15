@@ -66,6 +66,9 @@ func (s *ProjectService) recordGenerationSnapshot(sc *models.Scene, kind string,
 		PromptSHA256:   sha256Hex([]byte(task.Prompt)), FullPrompt: task.Prompt,
 		RefsJSON: string(refsJSON), ParamsJSON: task.ParamsJSON,
 	}
+	if kind == "video" {
+		row.PromptProvenanceJSON = sc.VideoPromptProvenance
+	}
 	if err := s.db.Create(&row).Error; err != nil {
 		log.Printf("[generation-snapshot] scene=%d task=%s kind=%s failed: %v", sc.ID, task.TaskID, kind, err)
 	}

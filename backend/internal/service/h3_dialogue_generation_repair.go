@@ -39,6 +39,10 @@ func parseH3DialoguePlan(raw string) (h3DialoguePlan, error) {
 // decision. Rendering is deterministic, so accepted visual prose is never
 // rewritten by the model.
 func (s *ProjectService) composeH3DialogueTimeline(sc *models.Scene, visual string, dubs []models.Dialogue, referenceLines []string) (string, error) {
+	return s.composeH3DialogueTimelineTraced(sc, visual, dubs, referenceLines, nil)
+}
+
+func (s *ProjectService) composeH3DialogueTimelineTraced(sc *models.Scene, visual string, dubs []models.Dialogue, referenceLines []string, trace *h3PromptTrace) (string, error) {
 	valid := validSceneDialogues(dubs)
 	if len(valid) == 0 {
 		return visual, nil
@@ -100,7 +104,11 @@ func (s *ProjectService) composeH3DialogueTimeline(sc *models.Scene, visual stri
 			if sc != nil {
 				projectID = sc.ProjectID
 			}
-			raw, err = s.skills.ChatWithConfiguredOrFallbackSkill(projectID, models.SkillStageVideoPrompt, h3DialogueTimelineSkillCode, s.textProvider, system, request, map[string]string{"request": request})
+			var provenance *SkillProvenance
+			raw, provenance, err = s.skills.ChatWithConfiguredOrFallbackSkillTraced(projectID, models.SkillStageVideoPrompt, h3DialogueTimelineSkillCode, s.textProvider, system, request, map[string]string{"request": request})
+			if err == nil {
+				trace.add(provenance)
+			}
 		} else {
 			raw, err = s.textProvider.Chat(system, request)
 		}

@@ -236,6 +236,7 @@ type Scene struct {
 	VideoPrompt              string     `gorm:"column:video_prompt;type:text" json:"video_prompt"`           // 用户可编辑的动作正文
 	VideoFullPrompt          string     `gorm:"column:video_full_prompt;type:text" json:"video_full_prompt"` // 用户审核后最终提交的完整 H3 提示词
 	VideoPromptMasterZH      string     `gorm:"column:video_prompt_master_zh;type:text" json:"video_prompt_master_zh"`
+	VideoPromptProvenance    string     `gorm:"column:video_prompt_provenance;type:text" json:"video_prompt_provenance"` // 最近一次 AI 生成视频提示词的 Skill 来源 JSON；仅作追溯
 	VideoExecSourceHash      string     `gorm:"column:video_exec_source_hash" json:"video_exec_source_hash"`
 	VideoExecConfirmedHash   string     `gorm:"column:video_exec_confirmed_hash" json:"video_exec_confirmed_hash"`
 	VideoExecConfirmedAt     *time.Time `gorm:"column:video_exec_confirmed_at" json:"video_exec_confirmed_at"`
@@ -1550,7 +1551,10 @@ type GenerationSnapshot struct {
 	FullPrompt     string    `gorm:"type:text" json:"full_prompt"`
 	RefsJSON       string    `gorm:"type:text" json:"refs_json"` // [{role,file,sha256}]
 	ParamsJSON     string    `gorm:"type:text" json:"params_json"`
-	CreatedAt      time.Time `json:"created_at"`
+	// PromptProvenanceJSON copies Scene.VideoPromptProvenance at submit: the Skill revisions of
+	// the latest AI generation, which the user may have edited before this submission.
+	PromptProvenanceJSON string    `gorm:"type:text" json:"prompt_provenance_json"`
+	CreatedAt            time.Time `json:"created_at"`
 }
 
 // StoryboardSheet is a pencil storyboard overview of one Scene for human review only. It is
