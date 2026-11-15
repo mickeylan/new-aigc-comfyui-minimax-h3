@@ -2995,30 +2995,32 @@ func (s *ProjectService) generateSceneVideoAction(sc *models.Scene, trace *h3Pro
 	authoritativeBoundAction := useSubjectTags(authoritativeFallback(), refLines)
 	// anchorIssues is keyed by the prepared text (with and without Subject tags), so only
 	// model output is held to the plot-anchor contract, never a deterministic fallback.
-	// Output with no anchor at all ignored the protocol and cannot be checked: that is
-	// only logged, so it never costs a repair or loses an otherwise valid draft.
+	// Output with no anchor at all cannot prove that any plot node was completed, so it is
+	// a hard issue like any missing anchor and goes through the combat repair rounds; after
+	// the last round the best-effort draft is still kept.
 	anchorIssues := map[string][]string{}
 	prepareGeneratedAction := func(value string, allowSubjects bool) string {
 		var issues []string
 		if combatMode {
-			anchored := h3PlotAnchorPattern.MatchString(value)
 			value, issues = checkH3PlotAnchors(value, len(plotNodes))
-			if !anchored && len(plotNodes) > 0 {
-				log.Printf("[h3-prompt-quality] scene=%d notes=%q", sc.ID, "模型未标注剧情锚点，无法校验剧情节点完整性")
-				issues = nil
-			}
 		}
 		prepared := normalizeGeneratedH3Action(value, allowSubjects, expectedShotCount, sceneMode, refLines, canonicalSceneContent, authoritativeBoundAction)
-		if len(issues) > 0 {
-			anchorIssues[prepared] = issues
-			anchorIssues[useSubjectTags(prepared, refLines)] = issues
+		// The key is the anchor-free text, so a repair that only adds the missing anchors maps
+		// to the same key as the failed draft: the latest check must replace the old result.
+		for _, key := range []string{prepared, useSubjectTags(prepared, refLines)} {
+			if len(issues) > 0 {
+				anchorIssues[key] = issues
+			} else {
+				delete(anchorIssues, key)
+			}
 		}
 		return prepared
 	}
 	// Hard issues are facts the director cannot override: untranslated prose, broken
 	// Subject/Shot structure, lost characters or source techniques, and speech that
-	// contradicts the Dialogue. Only these trigger a paid repair round.
-	actionHardIssues := func(value string, allowSubjects bool) []string {
+	// contradicts the Dialogue. Only these trigger a paid repair round. Plot-anchor issues
+	// are added separately so a draft failing only on anchors can be recognised.
+	actionNonAnchorIssues := func(value string, allowSubjects bool) []string {
 		issues := make([]string, 0, 8)
 		if strings.TrimSpace(value) == "" {
 			issues = append(issues, "模型返回了空动作正文")
@@ -3061,11 +3063,27 @@ func (s *ProjectService) generateSceneVideoAction(sc *models.Scene, trace *h3Pro
 			if issue := h3SoloSwordFidelityIssue(canonicalSceneContent, value); issue != "" {
 				issues = append(issues, issue)
 			}
-			issues = append(issues, anchorIssues[value]...)
 		}
 		issues = append(issues, h3BalancedActionHardIssues(value, expectedShotCount, requireBalancedTimeline, len(validDialogues) > 0)...)
 		issues = append(issues, contract.ShotStructureIssues(expectedShotCount)...)
 		return issues
+	}
+	actionHardIssues := func(value string, allowSubjects bool) []string {
+		issues := actionNonAnchorIssues(value, allowSubjects)
+		if combatMode {
+			issues = append(issues, anchorIssues[value]...)
+		}
+		return issues
+	}
+	// anchorOnlyDraft keeps the latest model draft whose only hard issue is the plot-anchor
+	// contract. If every repair round fails, that English draft is kept instead of falling
+	// back to the Chinese Scene text (user decision: anchors are repaired, never at the cost
+	// of losing an otherwise valid draft).
+	anchorOnlyDraft := ""
+	noteAnchorOnlyDraft := func(value string, allowSubjects bool) {
+		if combatMode && len(anchorIssues[value]) > 0 && len(actionNonAnchorIssues(value, allowSubjects)) == 0 {
+			anchorOnlyDraft = useSubjectTags(value, refLines)
+		}
 	}
 	// Quality notes are director choices (pacing words, camera wording, choreography
 	// detail, cut count). They are logged for review and never force a rewrite.
@@ -3099,6 +3117,7 @@ func (s *ProjectService) generateSceneVideoAction(sc *models.Scene, trace *h3Pro
 	}
 	generationSource := "initial_model"
 	out = prepareGeneratedAction(out, false)
+	noteAnchorOnlyDraft(out, false)
 	if !actionTrusted(out, false) {
 		boundDraft := useSubjectTags(out, refLines)
 		balanceRule := ""
@@ -3122,6 +3141,7 @@ func (s *ProjectService) generateSceneVideoAction(sc *models.Scene, trace *h3Pro
 				continue
 			}
 			candidate := prepareGeneratedAction(repaired, true)
+			noteAnchorOnlyDraft(candidate, true)
 			failedDraft = candidate
 			if actionTrusted(candidate, true) {
 				out = candidate
@@ -3131,7 +3151,11 @@ func (s *ProjectService) generateSceneVideoAction(sc *models.Scene, trace *h3Pro
 			}
 		}
 		if !repairedOK {
-			if timed := authoritativeTimedFallback(); timed != "" {
+			if anchorOnlyDraft != "" {
+				// The combat block below still gives the anchors their own repair rounds.
+				out = anchorOnlyDraft
+				generationSource = "anchor_unverified_model_draft"
+			} else if timed := authoritativeTimedFallback(); timed != "" {
 				out = timed
 				generationSource = "explicit_scene_timeline_fallback"
 			} else {
@@ -3166,6 +3190,7 @@ func (s *ProjectService) generateSceneVideoAction(sc *models.Scene, trace *h3Pro
 					continue
 				}
 				candidate := useSubjectTags(prepareGeneratedAction(repaired, true), refLines)
+				noteAnchorOnlyDraft(candidate, true)
 				candidateValid := actionTrusted(candidate, true)
 				if candidateValid {
 					out = candidate
@@ -3182,9 +3207,13 @@ func (s *ProjectService) generateSceneVideoAction(sc *models.Scene, trace *h3Pro
 				// Do not discard three paid model responses behind a validation error.
 				// Keep the latest non-empty best-effort action and surface diagnostics in
 				// logs; MiniMax H3 itself is tolerant of imperfect prose and structure.
-				if strings.TrimSpace(failedDraft) != "" {
+				switch {
+				case anchorOnlyDraft != "":
+					// Only the anchors are unverified; keep that valid English draft.
+					out = anchorOnlyDraft
+				case strings.TrimSpace(failedDraft) != "":
 					out = failedDraft
-				} else {
+				default:
 					out = useSubjectTags(authoritativeFallback(), refLines)
 				}
 				generationSource = "combat_skill_repair_best_effort"
