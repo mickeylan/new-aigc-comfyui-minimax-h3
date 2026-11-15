@@ -693,6 +693,7 @@ type Skill struct {
 	PromptTemplate string    `gorm:"type:text" json:"prompt_template"`                            // 提示词模板（支持 {{param}} 占位符）
 	SystemPrompt   string    `gorm:"type:text" json:"system_prompt"`                              // 系统提示词片段（追加到主 system prompt）
 	Operation      string    `gorm:"column:operation;index" json:"operation"`                     // 精确操作契约；空值向后兼容为 Code
+	ModelFamilies  string    `gorm:"column:model_families" json:"model_families"`                 // 适用模型族（逗号分隔，如 minimax_h3）；空表示通用，仅作展示
 	IsSystem       bool      `gorm:"column:is_system;default:false" json:"is_system"`             // 是否系统内置（系统技能不可删除，只可升级版本）
 	Enabled        bool      `gorm:"default:true" json:"enabled"`                                 // 是否启用
 	SortOrder      int       `gorm:"default:0" json:"sort_order"`                                 // 排序顺序（同一阶段内）
@@ -721,6 +722,12 @@ const (
 	SkillStageQwenImageEdit     = "qwen_image_edit_prompt"     // Qwen-Image-2.1 多图编辑提示词
 	SkillStageQwenCharacterCard = "qwen_character_card_prompt" // Qwen-Image-2.1 角色设定卡提示词
 	SkillStageMusicCueSheet     = "music_cue_sheet"            // 配乐 Cue Sheet：基于 Episode/Scene/Shot/Dialogue 时间轴生成 Structured Caption
+)
+
+// Skill 适用模型族标签
+const (
+	ModelFamilyMiniMaxH3   = "minimax_h3"
+	ModelFamilyQwenImage21 = "qwen_image_2_1"
 )
 
 // ProjectSkillConfig 项目级技能配置：支持项目选择特定技能或覆盖系统默认

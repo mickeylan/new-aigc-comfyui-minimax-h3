@@ -159,6 +159,7 @@
                   <span class="skill-name">{{ s.name }}</span>
                   <span v-if="s.is_system" class="system-badge">系统</span>
                   <span class="version-badge">v{{ s.version }}</span>
+                  <span v-for="f in modelFamilyLabels(s)" :key="f" class="family-badge" title="适用模型族（仅展示）">{{ f }}</span>
                 </div>
                 <div class="skill-desc">{{ s.description || '无描述' }}</div>
                 <div class="skill-code">{{ s.code }}</div>
@@ -215,6 +216,7 @@
         <div v-if="!detail.presentation" class="detail-meta">
           <span class="meta-tag">{{ detail.is_system ? '系统技能' : '自定义技能' }}</span>
           <span class="meta-tag">v{{ detail.version }}</span>
+          <span v-for="f in modelFamilyLabels(detail)" :key="f" class="meta-tag">适用：{{ f }}</span>
           <span class="meta-tag" :class="{ 'enabled': detail.enabled, 'disabled': !detail.enabled }">
             {{ detail.enabled ? '已启用' : '已禁用' }}
           </span>
@@ -382,6 +384,11 @@ const groupedSkills = computed(() => availableStages.value
   })))
 
 const totalSkills = computed(() => skills.value.length)
+// Model-family tags are display-only; they never filter which Skill is used.
+const MODEL_FAMILY_LABELS = { minimax_h3: 'MiniMax H3', qwen_image_2_1: 'Qwen-Image-2.1' }
+function modelFamilyLabels(skill) {
+  return String(skill?.model_families || '').split(',').map(f => f.trim()).filter(Boolean).map(f => MODEL_FAMILY_LABELS[f] || f)
+}
 const systemSkillCount = computed(() => skills.value.filter(s => s.is_system).length)
 const customSkillCount = computed(() => skills.value.filter(s => !s.is_system).length)
 const enabledSkillCount = computed(() => skills.value.filter(s => s.enabled).length)
@@ -607,6 +614,7 @@ onUnmounted(() => window.removeEventListener('keydown', handleGlobalEscape))
 .skill-name { font-weight: 600; font-size: 14px; }
 .system-badge { background: var(--accent); color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; }
 .version-badge { color: var(--text-tertiary); font-size: 11px; }
+.family-badge { border: 1px solid var(--border); color: var(--text-secondary); padding: 1px 6px; border-radius: 4px; font-size: 10px; }
 .skill-desc { font-size: 12px; color: var(--text-secondary); margin-bottom: 2px; }
 .skill-code { font-size: 11px; color: var(--text-tertiary); font-family: monospace; }
 .skill-actions { display: flex; align-items: center; gap: 6px; }

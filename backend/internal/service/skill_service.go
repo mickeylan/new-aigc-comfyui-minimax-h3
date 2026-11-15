@@ -270,9 +270,13 @@ func (s *SkillService) InitSystemSkills() error {
 	}
 
 	for _, skill := range systemSkills {
+		if genericStageSkillCodes[skill.Code] {
+			skill.Operation = skill.Stage
+		}
 		if skill.Operation == "" {
 			skill.Operation = skill.Code
 		}
+		skill.ModelFamilies = systemSkillModelFamilies[skill.Code]
 		var latest models.Skill
 		err := s.db.Where("code = ?", skill.Code).Order("version DESC, id DESC").First(&latest).Error
 		switch {
@@ -292,6 +296,58 @@ func (s *SkillService) InitSystemSkills() error {
 				return fmt.Errorf("backfill skill operation %s failed: %w", skill.Code, err)
 			}
 		}
+		if err := s.syncSystemSkillGovernance(skill); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// genericStageSkillCodes are the system Skills that serve a whole stage. Their operation is the
+// stage itself, so the stage-default lookup never picks a specialized Skill (for example the
+// Scene content expander) and injects its rules into an unrelated call.
+var genericStageSkillCodes = map[string]bool{
+	"short-drama-plan": true, "character-standard": true, "storyboard-generate": true,
+	"image-prompt-optimize": true, "video-prompt-enhance": true, "quality-review": true,
+	"novel-chapter-analysis": true, "novel-arc-merge": true, "novel-story-bible": true,
+	"novel-episode-mapping": true, "novel-episode-script": true, "novel-continuity-review": true,
+	"krea2-megastructure-prompt": true,
+}
+
+// systemSkillModelFamilies tags model-specific system Skills (comma separated). The tag is shown
+// on the Skill page only; it does not filter selection.
+var systemSkillModelFamilies = map[string]string{
+	h3StoryboardImageSkillCode:      models.ModelFamilyMiniMaxH3,
+	h3CombatActionSkillCode:         models.ModelFamilyMiniMaxH3,
+	h3DialogueTimelineSkillCode:     models.ModelFamilyMiniMaxH3,
+	QwenImage21T2IProgram:           models.ModelFamilyQwenImage21,
+	QwenImage21EditProgram:          models.ModelFamilyQwenImage21,
+	QwenImage21CharacterCardProgram: models.ModelFamilyQwenImage21,
+	characterRegistrationSkillCode:  models.ModelFamilyQwenImage21,
+}
+
+// syncSystemSkillGovernance applies operation and model-family metadata to every stored version
+// of a system Skill. Neither changes the rendered prompt, so no version bump is involved.
+func (s *SkillService) syncSystemSkillGovernance(skill models.Skill) error {
+	if genericStageSkillCodes[skill.Code] {
+		if err := s.db.Model(&models.Skill{}).Where("code = ? AND is_system = ? AND COALESCE(operation, '') <> ?", skill.Code, true, skill.Stage).
+			Update("operation", skill.Stage).Error; err != nil {
+			return fmt.Errorf("sync skill operation %s failed: %w", skill.Code, err)
+		}
+		// Project configs saved under the old code-based operation follow, unless the project
+		// already has a stage-level row (the unique index forbids two).
+		if !s.db.Migrator().HasTable(&models.ProjectSkillConfig{}) {
+			return nil
+		}
+		if err := s.db.Exec("UPDATE project_skill_configs SET operation = ? WHERE stage = ? AND operation = ? AND NOT EXISTS "+
+			"(SELECT 1 FROM project_skill_configs o WHERE o.project_id = project_skill_configs.project_id AND o.stage = project_skill_configs.stage AND o.operation = ?)",
+			skill.Stage, skill.Stage, skill.Code, skill.Stage).Error; err != nil {
+			return fmt.Errorf("sync project skill operation %s failed: %w", skill.Code, err)
+		}
+	}
+	if err := s.db.Model(&models.Skill{}).Where("code = ? AND is_system = ? AND COALESCE(model_families, '') <> ?", skill.Code, true, skill.ModelFamilies).
+		Update("model_families", skill.ModelFamilies).Error; err != nil {
+		return fmt.Errorf("sync skill model families %s failed: %w", skill.Code, err)
 	}
 	return nil
 }
@@ -506,6 +562,8 @@ func (s *SkillService) UpgradeSkill(id uint, newVersion int, newPromptTemplate, 
 		Version:        newVersion,
 		Description:    latest.Description,
 		Stage:          latest.Stage,
+		Operation:      latest.Operation,
+		ModelFamilies:  latest.ModelFamilies,
 		PromptTemplate: newPromptTemplate,
 		SystemPrompt:   newSystemPrompt,
 		IsSystem:       true,
@@ -699,6 +757,10 @@ func (s *SkillService) GetEffectiveSkill(projectID uint, stage string) (*models.
 	}
 	return s.GetEffectiveOperationSkill(projectID, stage, stage)
 }
+
+// stagesWithoutDefaultSkill 列出不附加阶段默认 Skill 的阶段。
+var stagesWithoutDefaultSkill = map[string]bool{models.SkillStageStoryboard: true}
+
 func (s *SkillService) GetEffectiveOperationSkill(projectID uint, stage, operation string) (*models.Skill, error) {
 	if operation == "" {
 		operation = stage
@@ -722,12 +784,17 @@ func (s *SkillService) GetEffectiveOperationSkill(projectID uint, stage, operati
 		}
 	}
 
-	// 2. 查每个 code 的最新系统版本，再按 sort_order 选择默认
-	var skill models.Skill
-	query := s.db.Where("stage = ? AND enabled = ? AND is_system = ?", stage, true, true)
-	if operation != stage {
-		query = query.Where("COALESCE(NULLIF(operation, ''), code) = ?", operation)
+	// 剧本生成类调用的主提示词已包含现行规则，阶段通用 Skill 内容过时，不再作为默认附加；
+	// 项目显式配置的 Skill 仍按上方逻辑生效。
+	if operation == stage && stagesWithoutDefaultSkill[stage] {
+		return nil, nil
 	}
+
+	// 2. 查每个 code 的最新系统版本，再按 sort_order 选择默认。阶段默认只取 operation 等于
+	// 阶段名的通用 Skill，专用 Skill 只能按自己的 operation 精确选用。
+	var skill models.Skill
+	query := s.db.Where("stage = ? AND enabled = ? AND is_system = ?", stage, true, true).
+		Where("COALESCE(NULLIF(operation, ''), code) = ?", operation)
 	err = query.Where("NOT EXISTS (SELECT 1 FROM skills newer WHERE newer.code = skills.code AND newer.version > skills.version)").
 		Order("sort_order ASC, version DESC, id ASC").
 		First(&skill).Error
