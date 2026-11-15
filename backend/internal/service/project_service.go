@@ -350,6 +350,9 @@ func (s *ProjectService) DeleteProject(id uint) error {
 			if err := deleteIfTable(tx, &models.GenerationSnapshot{}, "scene_id IN ?", sceneIDs); err != nil {
 				return err
 			}
+			if err := deleteIfTable(tx, &models.StoryboardSheet{}, "scene_id IN ?", sceneIDs); err != nil {
+				return err
+			}
 		}
 		if err := tx.Where("project_id = ?", id).Delete(&models.FrameCandidate{}).Error; err != nil {
 			return err

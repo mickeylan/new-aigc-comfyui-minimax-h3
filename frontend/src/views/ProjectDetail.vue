@@ -528,6 +528,7 @@
 
           <div class="scene-actions">
             <button class="btn btn-sm btn-secondary" :disabled="busy" @click="openSceneSupplement(sc)">在此后插入补镜</button>
+            <button class="btn btn-sm btn-secondary" :disabled="busy" title="铅笔故事版总图，仅供审阅，不进入视频生成" @click="openStoryboardSheet(sc)">故事版总图</button>
             <router-link class="btn btn-sm btn-secondary" :to="{ path: `/projects/${id()}/editor`, query: { episode: sc.episode_n || activeEpN, scene: sc.id, screen_text: 1, screen_text_cue: sceneScreenTextCues(sc)[0]?.id || undefined } }">{{sceneScreenTextCues(sc).length?'编辑功能字幕/屏幕文字':'＋ 功能字幕/屏幕文字'}}</router-link>
             <!-- 画面：无图生成，有图重新生成（始终可单独触发） -->
             <template v-if="!sc.image_file">
@@ -650,6 +651,21 @@
         <div v-if="mergeError" class="notice error-notice">{{ mergeError }}</div>
         <label class="merge-confirm"><input v-model="sceneMergeConfirmed" type="checkbox" /> 我确认归档原分镜，并创建无图片、无视频的新分镜</label>
         <div class="modal-actions"><button class="btn btn-ghost" :disabled="mergeBusy" @click="closeSceneMergePreview">取消</button><button class="btn btn-danger" :disabled="mergeBusy || !sceneMergeConfirmed" @click="applySelectedSceneMerge">{{ mergeBusy ? '合并中…' : '确认合镜' }}</button></div>
+      </div>
+    </div>
+
+    <div v-if="sheetScene" class="modal-mask" @click.self="closeStoryboardSheet">
+      <div class="modal card modal-lg storyboard-sheet-modal">
+        <h2>「{{ sheetScene.title }}」故事版总图</h2>
+        <p class="field-hint">先生成或手写锚点（每行一个「P1：…」，最多15个），确认后再提交 Qwen 出图。总图只供审阅，不会作为 H3 参考图，也不会进入任何视频提交。</p>
+        <div class="field"><label>故事版锚点</label><textarea v-model="sheetAnchors" class="textarea" rows="8" :disabled="sheetBusy" placeholder="P1：……&#10;P2：……" /></div>
+        <div v-if="sheetError" class="notice error-notice">{{ sheetError }}</div>
+        <div class="modal-actions"><button class="btn btn-ghost" :disabled="sheetBusy" @click="closeStoryboardSheet">关闭</button><button class="btn btn-secondary" :disabled="sheetBusy" @click="draftStoryboardAnchors">{{ sheetBusy && !sheetAnchors ? '拆解中…' : (sheetAnchors ? '重新拆解锚点' : 'AI拆解锚点') }}</button><button class="btn" :disabled="sheetBusy || !sheetAnchors.trim() || sheetGenerating" @click="submitStoryboardSheet">{{ sheetGenerating ? '出图中…' : '确认锚点并出图' }}</button></div>
+        <template v-if="sheetLatest">
+          <p v-if="sheetLatest.source_sha256 && sheetLatest.source_sha256 !== sheetSourceHash" class="error-text">本场正文、镜头或对白在出图后已变化，此总图可能过期</p>
+          <div v-if="sheetLatest.error" class="notice error-notice">{{ sheetLatest.error }}</div>
+          <img v-if="sheetLatest.image" :src="api.inputUrl(id(), sheetLatest.image)" class="storyboard-sheet-image" alt="故事版总图" @click="viewer = api.inputUrl(id(), sheetLatest.image)" />
+        </template>
       </div>
     </div>
 
@@ -1854,6 +1870,83 @@ let sceneMergeEpoch = 0
 const availableScenes = computed(() => currentScenes.value.filter(sc => Number(sc.duration || 0) >= 5 && !isWorking(sc)))
 const selectedMergeScenes = computed(() => currentScenes.value.filter(sc => selectedMergeSceneIDs.value.includes(sc.id)))
 const mergeSelectionConsecutive = computed(() => selectedMergeScenes.value.length >= 2 && selectedMergeScenes.value.every((sc, index, rows) => index === 0 || sc.order === rows[index - 1].order + 1))
+// Storyboard sheets are review-only: anchors are drafted, edited and confirmed here, and the
+// resulting image is never used as an H3 reference.
+const sheetScene = ref(null)
+const sheetAnchors = ref('')
+const sheetSourceHash = ref('')
+const sheetLatest = ref(null)
+const sheetBusy = ref(false)
+const sheetError = ref('')
+const sheetGenerating = computed(() => !!sheetLatest.value?.task_id)
+let sheetPollTimer = null
+function stopStoryboardSheetPoll() {
+  if (sheetPollTimer) clearInterval(sheetPollTimer)
+  sheetPollTimer = null
+}
+async function loadStoryboardSheets(sc) {
+  const { data } = await api.listStoryboardSheets(id(), sc.id)
+  if (sheetScene.value !== sc) return
+  sheetSourceHash.value = data.source_hash || ''
+  sheetLatest.value = data.items?.[0] || null
+  if (!sheetGenerating.value) stopStoryboardSheetPoll()
+}
+function pollStoryboardSheets(sc) {
+  stopStoryboardSheetPoll()
+  sheetPollTimer = setInterval(() => { loadStoryboardSheets(sc).catch(() => {}) }, 5000)
+}
+async function openStoryboardSheet(sc) {
+  sheetScene.value = sc
+  sheetAnchors.value = ''
+  sheetLatest.value = null
+  sheetError.value = ''
+  try {
+    await loadStoryboardSheets(sc)
+    if (sheetScene.value !== sc) return
+    sheetAnchors.value = sheetLatest.value?.anchors || ''
+    if (sheetGenerating.value) pollStoryboardSheets(sc)
+  } catch (e) {
+    sheetError.value = requestErrorMessage(e, '读取故事版总图失败')
+  }
+}
+function closeStoryboardSheet() {
+  if (sheetBusy.value) return
+  stopStoryboardSheetPoll()
+  sheetScene.value = null
+}
+async function draftStoryboardAnchors() {
+  const sc = sheetScene.value
+  if (!sc || sheetBusy.value) return
+  sheetBusy.value = true
+  sheetError.value = ''
+  try {
+    const { data } = await api.storyboardSheetAnchors(id(), sc.id)
+    if (sheetScene.value !== sc) return
+    sheetAnchors.value = data.anchors
+    sheetSourceHash.value = data.source_hash
+  } catch (e) {
+    sheetError.value = requestErrorMessage(e, '故事版锚点生成失败')
+  } finally {
+    sheetBusy.value = false
+  }
+}
+async function submitStoryboardSheet() {
+  const sc = sheetScene.value
+  if (!sc || sheetBusy.value) return
+  sheetBusy.value = true
+  sheetError.value = ''
+  try {
+    const { data } = await api.generateStoryboardSheet(id(), sc.id, { anchors: sheetAnchors.value.trim(), source_hash: sheetSourceHash.value })
+    if (sheetScene.value !== sc) return
+    sheetLatest.value = data.sheet
+    pollStoryboardSheets(sc)
+    toast.success(data.message || '故事版总图任务已提交')
+  } catch (e) {
+    sheetError.value = requestErrorMessage(e, '故事版总图提交失败')
+  } finally {
+    sheetBusy.value = false
+  }
+}
 // Supplement drafts are reviewed and editable here; the server re-validates dialogue against the
 // brief and the insertion point before inserting, and never starts image or video generation.
 const supplementScene = ref(null)
@@ -4307,6 +4400,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   clearInterval(planProgressTimer)
+  stopStoryboardSheetPoll()
   detailDisposed = true
   ++loadRequestEpoch
   document.removeEventListener('visibilitychange', refreshScreenTextOnFocus)
@@ -4592,6 +4686,7 @@ onBeforeUnmount(() => {
 
 /* 角色档案编辑样式 */
 .modal-lg { max-width: 800px; }
+.storyboard-sheet-image { width: 100%; margin-top: 8px; border: 1px solid var(--border, #ddd); cursor: zoom-in; }
 .char-edit-tabs {
   display: flex;
   gap: 8px;

@@ -1545,3 +1545,21 @@ type GenerationSnapshot struct {
 	ParamsJSON     string    `gorm:"type:text" json:"params_json"`
 	CreatedAt      time.Time `json:"created_at"`
 }
+
+// StoryboardSheet is a pencil storyboard overview of one Scene for human review only. It is
+// never submitted as an H3 reference or injected into any video prompt.
+type StoryboardSheet struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	ProjectID    uint      `gorm:"index" json:"project_id"`
+	SceneID      uint      `gorm:"index" json:"scene_id"`
+	Anchors      string    `gorm:"type:text" json:"anchors"` // P1：… one per line, user-confirmed
+	FullPrompt   string    `gorm:"type:text" json:"full_prompt"`
+	TemplateCode string    `json:"template_code"`
+	SourceSHA256 string    `gorm:"size:64" json:"source_sha256"`
+	SkillVersion int       `json:"skill_version"`
+	TaskID       string    `gorm:"index" json:"task_id"`
+	Image        string    `json:"image"`
+	Error        string    `gorm:"type:text" json:"error"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}

@@ -269,6 +269,7 @@ func (s *ProjectService) syncSheets() {
 		}
 	}
 	changed = s.syncRegistrationPhotos() || changed
+	changed = s.syncStoryboardSheets() || changed
 	if changed {
 		s.pushProject(nil)
 	}

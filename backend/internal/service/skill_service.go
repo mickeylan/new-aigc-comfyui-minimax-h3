@@ -263,6 +263,7 @@ func (s *SkillService) InitSystemSkills() error {
 		sceneSupplementSkill,
 		screenplayFormatAdaptSkill,
 		stylePresetScreenshotSkill,
+		storyboardSheetSkill,
 		characterRegistrationPhotoSkill,
 		assetSceneDescriptionPolishSkill,
 		assetCharacterDescriptionPolishSkill,
