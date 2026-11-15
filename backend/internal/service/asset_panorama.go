@@ -1,0 +1,210 @@
+package service
+
+import (
+	"bytes"
+	"fmt"
+	"image"
+	"image/draw"
+	"image/jpeg"
+	"math"
+	"net/http"
+	"path/filepath"
+	"strconv"
+	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"comfyui-console/internal/models"
+)
+
+// Location panoramas: a true equirectangular (ERP, 2:1, 360°×180°) image is sampled locally into
+// horizontal 16:9 perspective views. Each view is registered as an unselected asset_image variant
+// of the location, so the user previews them in the version list and explicitly picks one; the
+// current reference image and its consumers are untouched until then.
+const (
+	panoramaMaxUpload   = 64 << 20
+	panoramaMinWidth    = 2048
+	panoramaMaxPixels   = 8192 * 4096
+	panoramaRatioMin    = 1.95
+	panoramaRatioMax    = 2.05
+	panoramaFOVDegrees  = 75.0
+	panoramaMaxTileW    = 1280
+	panoramaMinTileW    = 640
+	panoramaDefaultView = 6
+)
+
+// panoramaViewCounts stay within MaxNonFavoriteAssetVariants so one split cannot push out the views
+// it just created.
+var panoramaViewCounts = map[int]bool{4: true, 6: true, 8: true}
+
+// panoramaTileSize matches a view's native ERP resolution, clamped to [640,1280] wide.
+func panoramaTileSize(panoWidth int) (int, int) {
+	w := int(float64(panoWidth) * panoramaFOVDegrees / 360)
+	w = min(panoramaMaxTileW, max(panoramaMinTileW, w/16*16))
+	return w, w * 9 / 16
+}
+
+// erpToPerspective samples a pinhole view looking at yawDeg (0 = panorama centre, positive turns
+// right) with pitch 0 and a horizontal field of view of fovDeg. The panorama wraps horizontally.
+func erpToPerspective(pano *image.RGBA, outW, outH int, yawDeg, fovDeg float64) *image.RGBA {
+	pw, ph := pano.Bounds().Dx(), pano.Bounds().Dy()
+	out := image.NewRGBA(image.Rect(0, 0, outW, outH))
+	f := float64(outW) / 2 / math.Tan(fovDeg*math.Pi/360)
+	sinY, cosY := math.Sincos(yawDeg * math.Pi / 180)
+	for y := 0; y < outH; y++ {
+		gy := float64(y) + 0.5 - float64(outH)/2
+		for x := 0; x < outW; x++ {
+			gx := float64(x) + 0.5 - float64(outW)/2
+			dx, dz := gx*cosY+f*sinY, -gx*sinY+f*cosY
+			lon := math.Atan2(dx, dz)
+			lat := math.Atan2(gy, math.Hypot(dx, dz))
+			u := (lon/(2*math.Pi)+0.5)*float64(pw) - 0.5
+			v := math.Min(math.Max((lat/math.Pi+0.5)*float64(ph)-0.5, 0), float64(ph-1))
+			u0, v0 := int(math.Floor(u)), int(v)
+			du, dv := u-float64(u0), v-float64(v0)
+			u0 = ((u0 % pw) + pw) % pw
+			u1, v1 := (u0+1)%pw, min(v0+1, ph-1)
+			o := out.PixOffset(x, y)
+			for c := 0; c < 3; c++ {
+				p := func(px, py int) float64 { return float64(pano.Pix[pano.PixOffset(px, py)+c]) }
+				top := p(u0, v0)*(1-du) + p(u1, v0)*du
+				bot := p(u0, v1)*(1-du) + p(u1, v1)*du
+				out.Pix[o+c] = uint8(math.Round(top*(1-dv) + bot*dv))
+			}
+			out.Pix[o+3] = 255
+		}
+	}
+	return out
+}
+
+type panoramaView struct {
+	Yaw  float64
+	JPEG []byte
+}
+
+// splitPanorama validates data as a true ERP panorama and returns count evenly spaced views.
+func splitPanorama(data []byte, count int) ([]panoramaView, error) {
+	if !panoramaViewCounts[count] {
+		return nil, fmt.Errorf("视角数只能是 4、6 或 8")
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("无法读取全景图: %w", err)
+	}
+	ratio := float64(cfg.Width) / float64(max(1, cfg.Height))
+	if ratio < panoramaRatioMin || ratio > panoramaRatioMax {
+		return nil, fmt.Errorf("不是标准 ERP 全景图：宽高比应为 2:1（360°×180°），当前 %dx%d（%.2f:1）；裁切过的宽幅图或普通照片无法拆出正确视角", cfg.Width, cfg.Height, ratio)
+	}
+	if cfg.Width < panoramaMinWidth {
+		return nil, fmt.Errorf("全景图宽度至少 %d 像素，当前 %d", panoramaMinWidth, cfg.Width)
+	}
+	if cfg.Width*cfg.Height > panoramaMaxPixels {
+		return nil, fmt.Errorf("全景图过大（最大 8192x4096），当前 %dx%d", cfg.Width, cfg.Height)
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("解码全景图失败: %w", err)
+	}
+	pano := image.NewRGBA(image.Rect(0, 0, img.Bounds().Dx(), img.Bounds().Dy()))
+	draw.Draw(pano, pano.Bounds(), img, img.Bounds().Min, draw.Src)
+	tw, th := panoramaTileSize(cfg.Width)
+	views := make([]panoramaView, 0, count)
+	for i := 0; i < count; i++ {
+		yaw := float64(i) * 360 / float64(count)
+		var buf bytes.Buffer
+		if err := jpeg.Encode(&buf, erpToPerspective(pano, tw, th, yaw, panoramaFOVDegrees), &jpeg.Options{Quality: 92}); err != nil {
+			return nil, err
+		}
+		views = append(views, panoramaView{Yaw: yaw, JPEG: buf.Bytes()})
+	}
+	return views, nil
+}
+
+// panoramaYawLabel names a view direction relative to the panorama centre.
+func panoramaYawLabel(yaw float64) string {
+	switch {
+	case yaw == 0:
+		return "正前方"
+	case yaw == 180:
+		return "正后方"
+	case yaw < 180:
+		return fmt.Sprintf("向右 %g°", yaw)
+	default:
+		return fmt.Sprintf("向左 %g°", 360-yaw)
+	}
+}
+
+// SplitLocationPanorama stores the panorama and registers its views as unselected variants.
+func (s *ProjectService) SplitLocationPanorama(asset *models.Asset, data []byte, ext string, count int) ([]models.AssetVariant, error) {
+	if asset.Kind != AssetKindLocation {
+		return nil, fmt.Errorf("全景拆视角只用于场景资产")
+	}
+	views, err := splitPanorama(data, count)
+	if err != nil {
+		return nil, err
+	}
+	pid := fmt.Sprint(asset.ProjectID)
+	stamp := time.Now().UnixNano()
+	panoPath, _, err := s.upload.SaveFile(pid, "image", fmt.Sprintf("pano_%d_%d%s", asset.ID, stamp, ext), data)
+	if err != nil {
+		return nil, fmt.Errorf("保存全景图失败: %w", err)
+	}
+	panoFile := filepath.Base(panoPath)
+	variants := NewAssetVariantService(s.db)
+	out := make([]models.AssetVariant, 0, len(views))
+	for i, view := range views {
+		path, _, err := s.upload.SaveFile(pid, "image", fmt.Sprintf("pano_%d_%d_v%d.jpg", asset.ID, stamp, i+1), view.JPEG)
+		if err != nil {
+			return out, fmt.Errorf("保存第 %d 个视角失败: %w", i+1, err)
+		}
+		row, err := variants.Register(models.AssetVariant{ProjectID: asset.ProjectID, EntityType: VariantAssetImage, EntityID: asset.ID,
+			File: filepath.Base(path), Prompt: fmt.Sprintf("全景视角 %d/%d · %s（水平视场 %g°）", i+1, len(views), panoramaYawLabel(view.Yaw), panoramaFOVDegrees),
+			Provenance: fmt.Sprintf("panorama:%s;yaw=%g;fov=%g", panoFile, view.Yaw, panoramaFOVDegrees)})
+		if err != nil {
+			return out, err
+		}
+		out = append(out, *row)
+	}
+	s.pushProject(nil)
+	return out, nil
+}
+
+func (s *Service) HandleSplitLocationPanorama(c *gin.Context) {
+	a, ok := s.loadAsset(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, panoramaMaxUpload+uploadMultipartOverhead)
+	count := panoramaDefaultView
+	if raw := c.PostForm("view_count"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "视角数只能是 4、6 或 8"})
+			return
+		}
+		count = n
+	}
+	file, _, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请上传全景图: " + err.Error()})
+		return
+	}
+	defer file.Close()
+	data, err := readBoundedUpload(file, panoramaMaxUpload)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	// detectImageExt falls back to .png; a non-image body then fails to decode in splitPanorama.
+	ext := detectImageExt(data)
+	if ext != ".jpg" && ext != ".png" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "全景图只支持 JPG 或 PNG"})
+		return
+	}
+	rows, err := s.Projects.SplitLocationPanorama(a, data, ext, count)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "variants": rows})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"variants": rows, "message": fmt.Sprintf("已拆出 %d 个视角，加入「参考图版本」；当前参考图未改变，请在版本中选用", len(rows))})
+}

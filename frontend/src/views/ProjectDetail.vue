@@ -310,6 +310,9 @@
                 </button>
                 <button v-if="a.kind === 'prop' && a.sheet" class="btn btn-sm btn-ghost" @click="viewPropSheet(a)">查看四视图</button>
                 <button class="btn btn-sm btn-ghost" @click="openVariants('asset_image', a.id, a.name + ' · 参考图')">参考图版本</button>
+                <button v-if="a.kind === 'location'" class="btn btn-sm btn-ghost" :disabled="busy || a._panoSplitting" title="上传 2:1 等距柱状（ERP）360° 全景图，本地拆成水平 16:9 视角，加入「参考图版本」供选用；当前参考图不变" @click="splitPanorama(a)">
+                  {{ a._panoSplitting ? '拆视角中…' : '全景图拆视角' }}
+                </button>
                 <button v-if="a.kind === 'prop'" class="btn btn-sm btn-ghost" @click="openVariants('asset_sheet', a.id, a.name + ' · 四视图')">四视图版本</button>
                 <button v-if="topviewEnabled && a.kind === 'location'" class="btn btn-sm btn-secondary" :disabled="busy || !a.image || !!a.topview_task_id" :title="!a.image ? '请先生成或上传场景参考图' : '实验：只还原参考图可见区域、不含人物的正俯视结构图，按场景图缓存'" @click="genTopviewStructure(a, topviewCacheValid(a))">
                   {{ a.topview_task_id ? '俯视图生成中…' : (topviewCacheValid(a) ? '重新生成俯视图' : '生成俯视图（实验）') }}
@@ -3696,6 +3699,33 @@ async function genAssetImage(a) {
   } catch (e) {
     toast.error(e.response?.data?.error || 'Krea2 参考图任务提交失败')
   }
+}
+// ERP 全景图拆出的视角只进入版本列表，由用户在版本弹窗里显式选用。
+function splitPanorama(a) {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = 'image/jpeg,image/png'
+  input.onchange = async () => {
+    const f = input.files && input.files[0]
+    if (!f) return
+    if (f.size > 64 * 1024 * 1024) {
+      toast.show('全景图不能超过 64MB')
+      return
+    }
+    const raw = window.prompt('拆出几个视角？（4 / 6 / 8，沿水平方向均匀分布）', '6')
+    if (raw === null) return
+    a._panoSplitting = true
+    try {
+      const { data } = await api.splitLocationPanorama(id(), a.id, f, Number(raw.trim()) || 6)
+      toast.success(data.message || '已拆出全景视角')
+      await openVariants('asset_image', a.id, a.name + ' · 参考图')
+    } catch (e) {
+      toast.error(requestErrorMessage(e, '全景图拆视角失败'))
+    } finally {
+      a._panoSplitting = false
+    }
+  }
+  input.click()
 }
 function uploadAssetImage(a) {
   const input = document.createElement('input')

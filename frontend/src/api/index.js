@@ -354,6 +354,15 @@ export const api = {
       timeout: 120000
     })
   },
+  splitLocationPanorama: (id, aid, file, viewCount = 6) => {
+    const fd = new FormData()
+    fd.append('view_count', String(viewCount))
+    fd.append('file', file)
+    return http.post(`/projects/${id}/assets/location/${aid}/panorama`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 180000
+    })
+  },
   generateAllAssetImages: (id, kind) => http.post(`/projects/${id}/assets/${kind}/images`),
   // 对白配音与字幕
   sceneDialogues: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/dialogues`),
