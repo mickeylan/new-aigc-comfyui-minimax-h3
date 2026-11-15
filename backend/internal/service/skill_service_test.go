@@ -199,7 +199,8 @@ func TestDirectorSceneSkillsShareMethodDrivenPrompt(t *testing.T) {
 	if err := svc.InitSystemSkills(); err != nil {
 		t.Fatal(err)
 	}
-	wantVersion := map[string]int{"director-scene-draft": 7, "director-scene-drama": 3, "director-scene-suspense": 3, "director-scene-emotion": 3, "director-scene-establishing": 3}
+	// P3-4 (user-approved): the shared prompt gained 【场景调用上下文】, so every director Skill is one version up.
+	wantVersion := map[string]int{"director-scene-draft": 8, "director-scene-drama": 4, "director-scene-suspense": 4, "director-scene-emotion": 4, "director-scene-establishing": 4}
 	for code, version := range wantVersion {
 		skill, err := svc.latestEnabledSkillByCode(code)
 		if err != nil {
@@ -208,7 +209,8 @@ func TestDirectorSceneSkillsShareMethodDrivenPrompt(t *testing.T) {
 		if skill.Version != version {
 			t.Fatalf("%s version=%d want %d", code, skill.Version, version)
 		}
-		for _, want := range []string{"【工作方法】", "【字段怎样才算合格】", "差：", "好：", "用户指定镜头数大于0时", "全部用简洁英文", "禁止全部堆到最后一镜", "按每秒9字估算", "镜头数是结果而非目标", "一次15秒生成内不超过5镜", "不在一句对白中途切镜"} {
+		for _, want := range []string{"【工作方法】", "【字段怎样才算合格】", "差：", "好：", "用户指定镜头数大于0时", "全部用简洁英文", "禁止全部堆到最后一镜", "按每秒9字估算", "镜头数是结果而非目标", "一次15秒生成内不超过5镜", "不在一句对白中途切镜",
+			"【场景调用上下文】", "「场景调用类型」和「允许黄金3秒开场」", "同场景续段直接承接上一场的人物位置、姿态与动作"} {
 			if !strings.Contains(skill.SystemPrompt, want) {
 				t.Fatalf("%s system prompt lacks %q", code, want)
 			}
