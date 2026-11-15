@@ -30,6 +30,21 @@ var combatCompilerV7Addendum = pacing(`
 const combatCompilerV8Addendum = `
 【剧情锚点】请求中若附有〔剧情节点账本〕P01、P02…，每个节点在正文里完成的那句话末尾紧跟一次〔P01〕形式的锚点；每个锚点恰好出现一次、按编号顺序出现，最后一个节点必须落在最后一个Shot里。锚点只是校验标记，服务端会删除，不要解释它。〔人声账本〕列出的台词逐字、同序，只用来对齐口型时机；正文不得复述、改写或新增台词。`
 
+// skillOutputRule 是新增Skill统一的输出规范（P5-3）。已审核的Skill保留各自既有措辞与版本：
+// 不得为套用本条而改写它们，也不得因此升版本；新Skill用 withSkillOutputRule 追加。
+const skillOutputRule = "只输出最终结果：不输出思考过程，不使用 Markdown 或代码块，不输出解释、前言或总结。"
+
+// withSkillOutputRule 把统一输出规范追加到Skill的系统提示词末尾，供新增Skill使用。
+func withSkillOutputRule(systemPrompt string) string {
+	if strings.Contains(systemPrompt, skillOutputRule) {
+		return systemPrompt
+	}
+	if strings.TrimSpace(systemPrompt) == "" {
+		return skillOutputRule
+	}
+	return strings.TrimSpace(systemPrompt) + "\n" + skillOutputRule
+}
+
 // NewSkillService 创建技能服务
 func NewSkillService(db *gorm.DB) *SkillService {
 	return &SkillService{db: db}

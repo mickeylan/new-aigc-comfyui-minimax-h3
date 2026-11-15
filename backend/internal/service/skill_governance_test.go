@@ -1,10 +1,48 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"comfyui-console/internal/models"
 )
+
+// TestSkillOutputRuleIsSharedButNotAppliedToApprovedSkills pins the approved P5-3 wording and
+// keeps it off the already approved Skills: their prompts and versions must not change.
+// When a new Skill adopts the rule, allow that Skill's code here instead of rewriting wording.
+func TestSkillOutputRuleIsSharedButNotAppliedToApprovedSkills(t *testing.T) {
+	const approved = "只输出最终结果：不输出思考过程，不使用 Markdown 或代码块，不输出解释、前言或总结。"
+	if skillOutputRule != approved {
+		t.Fatalf("shared output rule = %q", skillOutputRule)
+	}
+	if got := withSkillOutputRule("BASE"); got != "BASE\n"+approved {
+		t.Fatalf("append = %q", got)
+	}
+	if got := withSkillOutputRule("BASE\n" + approved); got != "BASE\n"+approved {
+		t.Fatalf("a prompt already carrying the rule must not repeat it: %q", got)
+	}
+	if got := withSkillOutputRule("   "); got != approved {
+		t.Fatalf("empty prompt = %q", got)
+	}
+
+	db := newTestDB(t)
+	svc := NewSkillService(db)
+	if err := svc.InitSystemSkills(); err != nil {
+		t.Fatal(err)
+	}
+	var skills []models.Skill
+	if err := db.Find(&skills).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) == 0 {
+		t.Fatal("no seeded skills")
+	}
+	for _, skill := range skills {
+		if strings.Contains(skill.SystemPrompt, skillOutputRule) {
+			t.Errorf("skill %s v%d already carries the new rule; approved wording must stay unchanged", skill.Code, skill.Version)
+		}
+	}
+}
 
 func TestStageDefaultSkillIgnoresSpecializedSkills(t *testing.T) {
 	db := newTestDB(t)
