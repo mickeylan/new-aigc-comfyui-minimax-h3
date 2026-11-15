@@ -106,6 +106,29 @@
               <button class="btn btn-sm btn-secondary" :disabled="!roleCustomSelection[role.name] || voiceSavingRole===role.name" @click="applyRoleCustomVoice(role)">绑定该音色</button>
             </div>
             <div v-if="selectedCustomVoice(role.name)" class="role-preset-preview"><audio :src="selectedCustomVoice(role.name).url" controls preload="none"></audio><small>用户自定义参考音频，可重新绑定给任意角色或旁白。</small></div>
+            <details v-if="role.character_id" class="voice-extract" @toggle="$event.target.open && loadExtractions(role)">
+              <summary>从 Scene 视频片段提取人声（2–30 秒）</summary>
+              <div class="role-voice-actions">
+                <select v-model="extractForm(role).sceneId" class="input input-sm" aria-label="选择有视频的 Scene">
+                  <option :value="0">选择有视频的 Scene</option>
+                  <option v-for="sc in videoScenes" :key="sc.id" :value="sc.id">Scene {{ sc.order }}{{ sc.video_dur ? ` · ${Number(sc.video_dur).toFixed(1)}秒` : '' }}</option>
+                </select>
+                <label>起点(秒)<input v-model.number="extractForm(role).start" class="input input-sm" type="number" min="0" step="0.1" /></label>
+                <label>时长(秒)<input v-model.number="extractForm(role).duration" class="input input-sm" type="number" min="2" max="30" step="0.1" /></label>
+                <button class="btn btn-sm btn-secondary" :disabled="!extractForm(role).sceneId || extractingRole===role.name" @click="startExtraction(role)">{{ extractingRole===role.name ? '提交中…' : '分离人声' }}</button>
+              </div>
+              <AudioWaveform v-if="extractScene(role)" :src="extractScene(role).video_url" :start="extractForm(role).start" :end="extractForm(role).start + extractForm(role).duration" @seek="t => extractForm(role).start = Number(t.toFixed(1))" />
+              <small>Demucs 只保留人声作为音色参考，不做对白识别；建议选单人连续说话、音乐较弱的片段。草稿需试听后点“确认绑定”才会替换当前音色。</small>
+              <div v-for="ex in roleExtractions[role.name] || []" :key="ex.id" class="role-preset-preview">
+                <span class="badge" :class="ex.status==='failed' ? 'warn' : 'badge-gray'">{{ extractionStatusLabel(ex) }}</span>
+                <small>Scene#{{ ex.scene_id }} {{ ex.start_time }}s 起 {{ ex.duration }}s{{ ex.speech_ratio ? ` · 有声比例 ${Math.round(ex.speech_ratio*100)}%` : '' }}</small>
+                <audio v-if="ex.draft_file" :src="api.dubAudioUrl(projectId, ex.draft_file)" controls preload="none"></audio>
+                <small v-if="ex.warning" class="warn-text">{{ ex.warning }}</small>
+                <small v-if="ex.error" class="warn-text">{{ ex.error }}</small>
+                <button v-if="ex.status==='ready'" class="btn btn-sm btn-primary" :disabled="voiceSavingRole===role.name" @click="confirmExtraction(role, ex)">确认绑定为参考音色</button>
+              </div>
+              <button class="btn btn-sm btn-ghost" @click="loadExtractions(role)">刷新提取状态</button>
+            </details>
             <router-link v-if="role.missing && role.character_id" :to="`/projects/${projectId}`" class="role-config-link">也可前往角色资料上传固定参考音频</router-link>
           </article>
         </div>
@@ -222,6 +245,7 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { useToastStore } from '../stores/toast'
+import AudioWaveform from '../components/AudioWaveform.vue'
 
 const route = useRoute()
 const toast = useToastStore()
@@ -398,6 +422,45 @@ async function uploadRoleVoice(role) {
     delete pendingRoleVoiceURLs[role.name]
     await refresh({ quiet: true })
   } catch (e) { toast.error(e.response?.data?.error || e.message || '上传自定义音色失败') }
+  finally { voiceSavingRole.value = '' }
+}
+const videoScenes = ref([])
+const extractForms = reactive({})
+const roleExtractions = reactive({})
+const extractingRole = ref('')
+const extractForm = role => (extractForms[role.name] ||= { sceneId: 0, start: 0, duration: 5 })
+const extractScene = role => videoScenes.value.find(sc => sc.id === extractForm(role).sceneId)
+const extractionStatusLabel = ex => ({ separating: '分离中', ready: '待试听确认', failed: '分离失败', confirmed: '已绑定' })[ex.status] || ex.status
+async function loadVideoScenes() {
+  try {
+    const { data } = await api.editorData(projectId, episodeN)
+    videoScenes.value = (data?.scenes || []).filter(sc => sc.video_url)
+  } catch { videoScenes.value = [] }
+}
+async function loadExtractions(role) {
+  if (!videoScenes.value.length) await loadVideoScenes()
+  try {
+    const { data } = await api.characterVoiceExtractions(projectId, role.character_id)
+    roleExtractions[role.name] = data || []
+  } catch (e) { toast.error(e.response?.data?.error || '读取提取记录失败') }
+}
+async function startExtraction(role) {
+  const form = extractForm(role)
+  extractingRole.value = role.name
+  try {
+    const { data } = await api.startCharacterVoiceExtraction(projectId, role.character_id, { scene_id: form.sceneId, start_time: Number(form.start), duration: Number(form.duration) })
+    toast.success(data?.message || '已提交人声分离')
+    await loadExtractions(role)
+  } catch (e) { toast.error(e.response?.data?.error || e.message || '提交人声分离失败') }
+  finally { extractingRole.value = '' }
+}
+async function confirmExtraction(role, ex) {
+  voiceSavingRole.value = role.name
+  try {
+    const { data } = await api.confirmCharacterVoiceExtraction(projectId, role.character_id, ex.id)
+    toast.success(data?.message || '已绑定为角色参考音色')
+    await Promise.all([loadExtractions(role), refresh({ quiet: true })])
+  } catch (e) { toast.error(e.response?.data?.error || e.message || '确认绑定失败') }
   finally { voiceSavingRole.value = '' }
 }
 async function saveDialogue(d, notify = true) {

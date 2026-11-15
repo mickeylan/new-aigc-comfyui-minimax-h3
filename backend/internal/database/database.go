@@ -135,6 +135,7 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.CharacterMotionReference{},
 		&models.SharedAssetReference{},
 		&models.SceneReferenceFaceCover{},
+		&models.CharacterVoiceExtraction{},
 		&models.SceneContinuity{},
 	); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)

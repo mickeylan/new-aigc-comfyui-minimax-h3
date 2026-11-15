@@ -320,6 +320,10 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/characters/:cid/voice/upload", svc.HandleUploadCharacterVoice)
 	r.POST("/api/projects/:id/characters/:cid/voice/clone", svc.HandleCloneCharacterVoice)
 	r.POST("/api/projects/:id/characters/:cid/voice/clear", svc.HandleClearCharacterVoice)
+	// 从 Scene 视频片段分离人声作为参考语音草稿；试听确认后才绑定，不是对白识别
+	r.GET("/api/projects/:id/characters/:cid/voice/extractions", svc.HandleListCharacterVoiceExtractions)
+	r.POST("/api/projects/:id/characters/:cid/voice/extractions", svc.HandleStartCharacterVoiceExtraction)
+	r.POST("/api/projects/:id/characters/:cid/voice/extractions/:eid/confirm", svc.HandleConfirmCharacterVoiceExtraction)
 	// 角色造型资产（CharacterLook：独立于角色档案的造型变体）
 	r.GET("/api/projects/:id/characters/:cid/looks", svc.HandleListCharacterLooks)                            // 角色的所有造型
 	r.POST("/api/projects/:id/characters/:cid/looks", svc.HandleCreateCharacterLook)                          // 创建造型

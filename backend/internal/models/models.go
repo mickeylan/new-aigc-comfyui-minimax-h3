@@ -1538,6 +1538,29 @@ type SceneReferenceFaceCover struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
+// CharacterVoiceExtraction is a reviewable voice-reference draft cut from a Scene video and
+// vocal-separated by ComfyUI Demucs. It is never dialogue recognition, and nothing is bound to
+// the character until the user previews and confirms the draft.
+type CharacterVoiceExtraction struct {
+	ID               uint      `gorm:"primaryKey" json:"id"`
+	ProjectID        uint      `gorm:"index" json:"project_id"`
+	CharacterID      uint      `gorm:"index" json:"character_id"`
+	SceneID          uint      `json:"scene_id"`
+	StartTime        float64   `json:"start_time"`
+	Duration         float64   `json:"duration"`
+	SourceFile       string    `json:"source_file"`
+	TaskID           string    `gorm:"index" json:"task_id"`
+	Status           string    `gorm:"index" json:"status"` // separating | ready | failed | confirmed
+	DraftFile        string    `json:"draft_file"`
+	VoiceFile        string    `json:"voice_file"`
+	MeasuredDuration float64   `json:"measured_duration"`
+	SpeechRatio      float64   `json:"speech_ratio"`
+	Warning          string    `json:"warning"`
+	Error            string    `json:"error"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
 type SceneContinuity struct {
 	ID                uint            `gorm:"primaryKey" json:"id"`
 	SceneID           uint            `gorm:"uniqueIndex" json:"scene_id"`

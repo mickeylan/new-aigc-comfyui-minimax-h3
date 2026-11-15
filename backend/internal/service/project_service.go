@@ -330,6 +330,9 @@ func (s *ProjectService) DeleteProject(id uint) error {
 		if err := deleteIfTable(tx, &models.SceneReferenceFaceCover{}, "project_id = ?", id); err != nil {
 			return err
 		}
+		if err := deleteIfTable(tx, &models.CharacterVoiceExtraction{}, "project_id = ?", id); err != nil {
+			return err
+		}
 		if err := tx.Where("scene_id IN (?)", sceneIDsQuery).Delete(&models.Shot{}).Error; err != nil {
 			return err
 		}
@@ -6931,6 +6934,9 @@ func (s *ProjectService) DeleteCharacter(projectID, id uint) error {
 		if err := tx.Where("character_id = ?", id).Delete(&models.CharacterLook{}).Error; err != nil {
 			return err
 		}
+		if err := deleteIfTable(tx, &models.CharacterVoiceExtraction{}, "project_id = ? AND character_id = ?", projectID, id); err != nil {
+			return err
+		}
 		return tx.Where("id = ?", id).Delete(&models.Character{}).Error
 	}); err != nil {
 		return err
@@ -8619,6 +8625,7 @@ func (s *ProjectService) CancelSceneVideo(p *models.Project, sc *models.Scene) e
 func (s *ProjectService) syncGenerationOutputs() {
 	s.syncDialogueAudioTasks()
 	s.syncMusic3Candidates()
+	s.syncCharacterVoiceExtractions()
 	s.syncCharacterPortraits()
 	s.syncAssetImages()
 	if s.characterLooks != nil {
