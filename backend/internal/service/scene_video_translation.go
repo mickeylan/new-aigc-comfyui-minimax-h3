@@ -350,6 +350,10 @@ type sceneVideoSourceHash struct {
 	Dialogues      []models.Dialogue                       `json:"dialogues"`
 	Project        struct{ Style, Genre, Ratio string }    `json:"project"`
 	Continuity     *models.SceneContinuity                 `json:"continuity,omitempty"`
+	// RefFiles/RefLines are the Ref2V reference images actually submitted, including continuity,
+	// clay/line-art and top-view references; they are empty for non-Ref2V templates.
+	RefFiles []FileMeta `json:"ref_files,omitempty"`
+	RefLines []string   `json:"ref_lines,omitempty"`
 	StoryboardRole string                                  `json:"storyboard_role"`
 	StoryboardTime *float64                                `json:"storyboard_time,omitempty"`
 }
@@ -389,8 +393,11 @@ func (s *Service) sceneVideoPromptSourceHash(sc *models.Scene) (string, error) {
 	if err := s.DB.Where("code = ? AND enabled = ?", template, true).First(&tpl).Error; err != nil {
 		return "", fmt.Errorf("视频模板不可用: %w", err)
 	}
-	continuity, _, _ := s.sceneVideoPromptContinuity(sc)
+	continuity, refFiles, refLines := s.sceneVideoPromptContinuity(sc)
 	v := sceneVideoSourceHash{Compiler: sceneVideoPromptCompilerVersion, Master: sc.VideoPromptMasterZH, Files: files, Shots: shots, Dialogues: s.Projects.sceneVideoDialogues(sc), Continuity: continuity, StoryboardRole: storyboardVideoRole(sc), StoryboardTime: sc.StoryboardVideoTime}
+	if isH3Ref2VTemplate(template) {
+		v.RefFiles, v.RefLines = refFiles, refLines
+	}
 	v.Scene.Content, v.Scene.Duration, v.Scene.Mode, v.Scene.References = sc.Content, normalizeSceneDuration(sc.Duration), sc.SceneMode, sc.ReferenceImagesJSON
 	v.Scene.Identity, v.Scene.Visible, v.Scene.Voice, v.Scene.Mentioned = sc.Characters, sc.VisibleCharacters, sc.VoiceCharacters, sc.MentionedCharacters
 	v.Scene.Location, v.Scene.Props, v.Scene.First, v.Scene.Last, v.Scene.Image = sc.LocationName, sc.Props, sc.VideoFirstFrameImg, sc.VideoLastFrameImg, sc.ImageFile

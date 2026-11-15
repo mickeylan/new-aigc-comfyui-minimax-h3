@@ -387,6 +387,10 @@ func (s *ProjectService) StartTopviewStructure(a *models.Asset, force bool) (boo
 		_ = s.tasks.CancelTask(task.TaskID)
 		return false, err
 	}
+	if a.TopviewImage != "" {
+		// Dropping the old map changes the references these Scenes would submit.
+		s.markTopviewScenesStale(a)
+	}
 	go func() {
 		if err := s.tasks.Execute(task.TaskID); err != nil && !errors.Is(err, errNoFreeGPU) {
 			log.Printf("[asset %d] execute topview task %s failed: %v", a.ID, task.TaskID, err)
@@ -410,8 +414,34 @@ func (s *ProjectService) syncTopviewStructures() bool {
 		}
 		res := s.db.Model(&models.Asset{}).Where("id = ? AND topview_task_id = ?", a.ID, a.TopviewTaskID).Updates(updates)
 		changed = changed || res.RowsAffected > 0
+		if file, _ := updates["topview_image"].(string); file != "" && res.RowsAffected > 0 {
+			s.markTopviewScenesStale(&a)
+		}
 	}
 	return changed
+}
+
+// markTopviewScenesStale flags saved video prompts of Scenes whose location is a, because the
+// top-view map they would submit has changed. Like other reference changes this is advisory: the
+// saved prompt is kept and the user re-confirms it.
+func (s *ProjectService) markTopviewScenesStale(a *models.Asset) {
+	if !s.topviewEnabled() {
+		return
+	}
+	var scenes []models.Scene
+	if s.db.Where("project_id = ? AND (archived = ? OR archived IS NULL) AND COALESCE(video_full_prompt, '') <> ''", a.ProjectID, false).Find(&scenes).Error != nil {
+		return
+	}
+	for i := range scenes {
+		for _, matched := range s.sceneMatchedAssets(&scenes[i]) {
+			if matched.ID == a.ID {
+				if err := s.db.Model(&models.Scene{}).Where("id = ?", scenes[i].ID).Update("prompt_stale", true).Error; err != nil {
+					log.Printf("[asset %d] mark scene %d prompt stale failed: %v", a.ID, scenes[i].ID, err)
+				}
+				break
+			}
+		}
+	}
 }
 
 // sceneTopviewReference returns the cached structure image of the Scene's location, or false

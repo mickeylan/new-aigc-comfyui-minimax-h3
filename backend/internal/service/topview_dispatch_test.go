@@ -212,3 +212,74 @@ func TestTopviewDispatchDraftAndApplyWriteBlockingStartAndEnd(t *testing.T) {
 		t.Fatalf("blocking=%+v saved=%+v", blocking, saved)
 	}
 }
+
+func TestVideoPromptSourceHashCoversSubmittedRef2VReferences(t *testing.T) {
+	f := newTranslationHTTPFixture(t)
+	configureDefaultRef2VFixture(t, f)
+	f.svc.Projects.volc = topviewGetter(true)
+	hash := func() string {
+		t.Helper()
+		var sc models.Scene
+		f.db.First(&sc, f.sc.ID)
+		h, err := f.svc.sceneVideoPromptSourceHash(&sc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	base := hash()
+	if hash() != base {
+		t.Fatal("source hash must be stable")
+	}
+	// A new top-view map is a new submitted reference.
+	f.db.Model(&models.Asset{}).Where("name = ?", "茶馆").Updates(map[string]any{"topview_image": "top1.png", "topview_source_image": "teahouse.png"})
+	withTop := hash()
+	if withTop == base {
+		t.Fatal("adding the top-view map must change the source hash")
+	}
+	f.db.Model(&models.Asset{}).Where("name = ?", "茶馆").Update("topview_image", "top2.png")
+	regenerated := hash()
+	if regenerated == withTop {
+		t.Fatal("a regenerated top-view map must change the source hash")
+	}
+	// Other Ref2V reference images were not hashed before either.
+	f.db.Model(&models.Character{}).Where("name = ?", "阿青").Update("portrait", "aqing-v2.png")
+	if hash() == regenerated {
+		t.Fatal("a replaced character reference image must change the source hash")
+	}
+}
+
+func TestTopviewMapChangeMarksSavedPromptsOfThatLocationStale(t *testing.T) {
+	ps := newTestProjectService(t)
+	p := models.Project{Title: "俯视"}
+	ps.db.Create(&p)
+	gate := models.Asset{ProjectID: p.ID, Kind: AssetKindLocation, Name: "城门", Image: "gate.png", TopviewImage: "gate_top.png", TopviewSourceImage: "gate.png"}
+	ps.db.Create(&gate)
+	ps.db.Create(&models.Asset{ProjectID: p.ID, Kind: AssetKindLocation, Name: "河岸", Image: "river.png"})
+	saved := models.Scene{ProjectID: p.ID, Order: 1, LocationName: "城门", VideoFullPrompt: "reviewed"}
+	unsaved := models.Scene{ProjectID: p.ID, Order: 2, LocationName: "城门"}
+	elsewhere := models.Scene{ProjectID: p.ID, Order: 3, LocationName: "河岸", VideoFullPrompt: "reviewed"}
+	for _, sc := range []*models.Scene{&saved, &unsaved, &elsewhere} {
+		ps.db.Create(sc)
+	}
+	stale := func(id uint) bool {
+		var sc models.Scene
+		ps.db.First(&sc, id)
+		return sc.PromptStale
+	}
+	ps.volc = topviewGetter(false)
+	ps.markTopviewScenesStale(&gate)
+	if stale(saved.ID) {
+		t.Fatal("experiment off must not touch prompts")
+	}
+	ps.volc = topviewGetter(true)
+	ps.markTopviewScenesStale(&gate)
+	if !stale(saved.ID) || stale(unsaved.ID) || stale(elsewhere.ID) {
+		t.Fatalf("stale saved=%v unsaved=%v elsewhere=%v", stale(saved.ID), stale(unsaved.ID), stale(elsewhere.ID))
+	}
+	var kept models.Scene
+	ps.db.First(&kept, saved.ID)
+	if kept.VideoFullPrompt != "reviewed" {
+		t.Fatal("the saved prompt must be kept for re-confirmation")
+	}
+}
