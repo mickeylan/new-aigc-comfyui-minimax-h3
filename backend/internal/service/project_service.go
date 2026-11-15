@@ -6226,6 +6226,14 @@ func (s *ProjectService) sceneVideoContinuityBaseReferences(sc *models.Scene, pi
 			return refs, lines, cfg
 		}
 		frameFile, frameDesc = derived.ImageFile, desc
+	} else if cfg.ReferenceForm == FrameReferenceHD {
+		// The upscaled frame is the same picture at higher resolution, so it keeps the
+		// opening-frame description.
+		derived, err := s.continuity.DerivedReference(cfg.SelectedFrame, FrameReferenceHD)
+		if err != nil || derived == nil {
+			return refs, lines, cfg
+		}
+		frameFile = derived.ImageFile
 	}
 	replacedStoryboard := false
 	for i := len(lines) - 1; i >= 0; i-- {

@@ -382,7 +382,7 @@ func (s *ContinuityService) PrepareScene(scene *models.Scene) error {
 	if cfg.Mode == models.ContinuityModeBridge {
 		scene.VideoTemplate, scene.VideoFirstFrameImg, scene.VideoLastFrameImg = "minimax_h3_first_last", cfg.SelectedFrame.ImageFile, scene.ImageFile
 	} else {
-		if form := cfg.ReferenceForm; form == FrameReferenceClay || form == FrameReferenceLineart {
+		if form := cfg.ReferenceForm; form == FrameReferenceClay || form == FrameReferenceLineart || form == FrameReferenceHD {
 			if derived, err := s.DerivedReference(cfg.SelectedFrame, form); err != nil {
 				return err
 			} else if derived == nil {

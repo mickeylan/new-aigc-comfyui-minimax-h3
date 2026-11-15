@@ -554,6 +554,7 @@ export const api = {
   selectFrame: (id, sid, frameId) => http.put(`/projects/${id}/scenes/${sid}/continuity/frames/select`, { frame_id: frameId }),
   replaceSelectedFrame: (id, sid, form) => http.post(`/projects/${id}/scenes/${sid}/continuity/frames/replace`, form, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 180000 }),
   convertFrameCandidate: (id, sid, frameId, kind) => http.post(`/projects/${id}/scenes/${sid}/continuity/frames/${frameId}/convert`, { kind }),
+  upscaleFrameCandidate: (id, sid, frameId) => http.post(`/projects/${id}/scenes/${sid}/continuity/frames/${frameId}/upscale`, {}, { timeout: 330000 }),
   getContinuity: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/continuity`),
   configureContinuity: (id, sid, data) => http.put(`/projects/${id}/scenes/${sid}/continuity`, data),
 }

@@ -121,6 +121,12 @@
         <p class="hint">默认关闭。打开后可为场景资产生成俯视结构图，并在人物站位中推演本 Scene 结尾的俯视调度；俯视图只在 H3 参考槽位有空余时作为可选参考注入。是否默认开启需先做 3 个 Scene 的 A/B 对比。</p>
       </div>
 
+      <div class="provider-config">
+        <label for="realesrgan_path">本地超分引擎（realesrgan-ncnn-vulkan.exe）完整路径</label>
+        <input id="realesrgan_path" v-model="form.realesrgan_path" type="text" class="input" placeholder="留空则依次使用环境变量 REALESRGAN_PATH 和 PATH" />
+        <p class="hint">用于衔接尾帧「高清（本地超分）」。exe 同目录下需有 models/realesrgan-x4plus.bin 与 .param；只在本机运行，不占 ComfyUI 队列，SSH 远程模式不可用。</p>
+      </div>
+
       <div v-if="error" class="notice error-notice">{{ error }}</div>
       <div v-if="success" class="notice success-notice">{{ success }}</div>
 

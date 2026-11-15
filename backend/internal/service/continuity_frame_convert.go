@@ -23,6 +23,9 @@ const (
 	FrameReferenceOriginal = "original"
 	FrameReferenceClay     = "clay"
 	FrameReferenceLineart  = "lineart"
+	// FrameReferenceHD is a local Real-ESRGAN upscale of the tail frame; unlike clay and line
+	// art it is still the full-colour opening picture of the next Scene.
+	FrameReferenceHD = "hd"
 
 	continuityFrameClaySkillCode    = "continuity-frame-clay"
 	continuityFrameLineartSkillCode = "continuity-frame-lineart"
@@ -55,7 +58,7 @@ var frameConvertSkills = map[string]*models.Skill{
 	FrameReferenceLineart: &continuityFrameLineartSkill,
 }
 
-var frameConvertLabels = map[string]string{FrameReferenceClay: "白模", FrameReferenceLineart: "线稿"}
+var frameConvertLabels = map[string]string{FrameReferenceClay: "白模", FrameReferenceLineart: "线稿", FrameReferenceHD: "高清"}
 
 // continuityReferenceFormLines describe a derived tail frame to H3. They deliberately avoid the
 // opening-frame markers read by openingPictureTag, so a clay or line-art image never becomes
@@ -260,32 +263,44 @@ func (s *ProjectService) applyFrameConversion(frame *models.FrameCandidate, resu
 	if d := ratioDrift(resultRatio, sourceRatio); d > frameConvertMaxRatioDrift {
 		return fmt.Errorf("%s结果宽高比与原尾帧相差 %.1f%%，超过 4%%，已丢弃", label, d*100)
 	}
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	_, err = s.recordDerivedFrame(&current, frame.ConvertKind, resultFile)
+	return err
+}
+
+// recordDerivedFrame stores resultFile as a new derived row of current (kind clay/lineart/hd) and
+// invalidates the Scenes that already use that form of the frame.
+func (s *ProjectService) recordDerivedFrame(current *models.FrameCandidate, kind, resultFile string) (*models.FrameCandidate, error) {
+	var derived models.FrameCandidate
+	err := s.db.Transaction(func(tx *gorm.DB) error {
 		// FrameIndex is part of the history key; derived rows take a fresh index after every frame.
 		var maxIndex int
 		if err := tx.Model(&models.FrameCandidate{}).Where("scene_id = ? AND video_task_id = ?", current.SceneID, current.VideoTaskID).
 			Select("COALESCE(MAX(frame_index), 0)").Scan(&maxIndex).Error; err != nil {
 			return err
 		}
-		derived := models.FrameCandidate{ProjectID: current.ProjectID, SceneID: current.SceneID, VideoTaskID: current.VideoTaskID,
+		derived = models.FrameCandidate{ProjectID: current.ProjectID, SceneID: current.SceneID, VideoTaskID: current.VideoTaskID,
 			Type: models.FrameCandidateDerived, FrameIndex: maxIndex + 1, TimestampMS: current.TimestampMS, ImageFile: resultFile,
-			Source: frame.ConvertKind, DerivedFromID: &current.ID, DerivedSourceFile: current.ImageFile}
+			Source: kind, DerivedFromID: &current.ID, DerivedSourceFile: current.ImageFile}
 		if err := tx.Create(&derived).Error; err != nil {
 			return err
 		}
 		// Scenes already using this form of the frame now receive a different reference image.
 		var dependentIDs []uint
-		if err := tx.Model(&models.SceneContinuity{}).Where("selected_frame_id = ? AND reference_form = ?", current.ID, frame.ConvertKind).
+		if err := tx.Model(&models.SceneContinuity{}).Where("selected_frame_id = ? AND reference_form = ?", current.ID, kind).
 			Pluck("scene_id", &dependentIDs).Error; err != nil {
 			return err
 		}
 		for _, id := range dependentIDs {
-			if err := invalidateSceneVideoTx(tx, current.ProjectID, id, "上一镜尾帧"+label+"已更新"); err != nil {
+			if err := invalidateSceneVideoTx(tx, current.ProjectID, id, "上一镜尾帧"+frameConvertLabels[kind]+"已更新"); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return &derived, nil
 }
 
 // DerivedReference returns the newest clay/line-art row made from frame's current image, or nil.
@@ -334,9 +349,9 @@ func normalizeFrameReferenceForm(form, mode string) (string, error) {
 	switch strings.TrimSpace(form) {
 	case "", FrameReferenceOriginal:
 		return FrameReferenceOriginal, nil
-	case FrameReferenceClay, FrameReferenceLineart:
+	case FrameReferenceClay, FrameReferenceLineart, FrameReferenceHD:
 		if mode != models.ContinuityModeContinue {
-			return "", fmt.Errorf("白模和线稿只用于「从上一镜末尾帧继续」；首尾桥接必须使用原图")
+			return "", fmt.Errorf("白模、线稿和高清参考只用于「从上一镜末尾帧继续」；首尾桥接必须使用原图")
 		}
 		return strings.TrimSpace(form), nil
 	}

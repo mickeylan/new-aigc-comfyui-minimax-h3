@@ -38,12 +38,16 @@
             <option value="original">原图</option>
             <option value="clay">白模</option>
             <option value="lineart">线稿</option>
+            <option value="hd">高清（本地超分）</option>
           </select>
-          <button v-if="referenceForm !== 'original'" class="btn btn-sm btn-secondary" :disabled="converting || !!selectedOutput.convert_task_id" @click="convert">{{ selectedOutput.convert_task_id ? '转换中…' : (derivedFor(referenceForm) ? `重新生成${formLabels[referenceForm]}` : `生成${formLabels[referenceForm]}`) }}</button>
+          <button v-if="referenceForm === 'hd'" class="btn btn-sm btn-secondary" :disabled="upscaling" @click="upscale">{{ upscaling ? '超分中…' : (derivedFor('hd') ? '重新超分' : '本地超分') }}</button>
+          <button v-else-if="referenceForm !== 'original'" class="btn btn-sm btn-secondary" :disabled="converting || !!selectedOutput.convert_task_id" @click="convert">{{ selectedOutput.convert_task_id ? '转换中…' : (derivedFor(referenceForm) ? `重新生成${formLabels[referenceForm]}` : `生成${formLabels[referenceForm]}`) }}</button>
         </div>
-        <p v-if="referenceForm !== 'original'" class="hint">{{ formLabels[referenceForm] }}只约束人物姿势、站位、遮挡和场景几何，不作为开始画面；视频从0秒起仍是完整彩色画面。转换结果另存，原尾帧保持不变。</p>
+        <p v-if="referenceForm === 'hd'" class="hint">用本机 Real-ESRGAN 把尾帧放大到长边 2048，仍是本镜 0.00 秒的开始画面；不调用模型服务、不占 ComfyUI 队列。引擎路径在「设置」中填写。结果另存，原尾帧保持不变。</p>
+        <p v-else-if="referenceForm !== 'original'" class="hint">{{ formLabels[referenceForm] }}只约束人物姿势、站位、遮挡和场景几何，不作为开始画面；视频从0秒起仍是完整彩色画面。转换结果另存，原尾帧保持不变。</p>
         <img v-if="referenceForm !== 'original' && derivedFor(referenceForm)" class="derived-preview" :src="derivedFor(referenceForm).image_url" :alt="`尾帧${formLabels[referenceForm]}`" />
-        <p v-else-if="referenceForm !== 'original' && !selectedOutput.convert_task_id" class="warning">尚无{{ formLabels[referenceForm] }}结果，生成前无法提交本镜视频。</p>
+        <p v-else-if="referenceForm !== 'original' && !selectedOutput.convert_task_id && !upscaling" class="warning">尚无{{ formLabels[referenceForm] }}结果，生成前无法提交本镜视频。</p>
+        <p v-if="upscaleMessage" class="hint">{{ upscaleMessage }}</p>
         <p v-if="selectedOutput.convert_error" class="warning">上次转换失败：{{ selectedOutput.convert_error }}</p>
       </div>
     </section>
@@ -76,7 +80,9 @@ const selectedFrameId = ref(0)
 const error = ref('')
 const referenceForm = ref('original')
 const converting = ref(false)
-const formLabels = { clay: '白模', lineart: '线稿' }
+const upscaling = ref(false)
+const upscaleMessage = ref('')
+const formLabels = { clay: '白模', lineart: '线稿', hd: '高清图' }
 let pollTimer = null
 
 async function load() {
@@ -118,6 +124,20 @@ async function convert() {
     startPolling()
   } catch (e) { error.value = e.response?.data?.error || e.message }
   finally { converting.value = false }
+}
+// Local upscaling runs synchronously on the backend, so there is no task to poll.
+async function upscale() {
+  if (!selectedOutput.value) return
+  upscaling.value = true
+  error.value = ''
+  upscaleMessage.value = ''
+  try {
+    const res = await api.upscaleFrameCandidate(props.projectId, props.sourceSceneId, selectedOutput.value.id)
+    selectedOutput.value = { ...selectedOutput.value, ...res.data.frame }
+    frames.value = frames.value.map(f => f.id === res.data.frame.id ? { ...f, ...res.data.frame } : f)
+    upscaleMessage.value = res.data.message || ''
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { upscaling.value = false }
 }
 async function extract() {
   if (!props.sourceSceneId) return
