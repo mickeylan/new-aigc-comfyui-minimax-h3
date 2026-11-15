@@ -311,8 +311,13 @@
                 <button v-if="a.kind === 'prop' && a.sheet" class="btn btn-sm btn-ghost" @click="viewPropSheet(a)">查看四视图</button>
                 <button class="btn btn-sm btn-ghost" @click="openVariants('asset_image', a.id, a.name + ' · 参考图')">参考图版本</button>
                 <button v-if="a.kind === 'prop'" class="btn btn-sm btn-ghost" @click="openVariants('asset_sheet', a.id, a.name + ' · 四视图')">四视图版本</button>
+                <button v-if="topviewEnabled && a.kind === 'location'" class="btn btn-sm btn-secondary" :disabled="busy || !a.image || !!a.topview_task_id" :title="!a.image ? '请先生成或上传场景参考图' : '实验：只还原参考图可见区域、不含人物的正俯视结构图，按场景图缓存'" @click="genTopviewStructure(a, topviewCacheValid(a))">
+                  {{ a.topview_task_id ? '俯视图生成中…' : (topviewCacheValid(a) ? '重新生成俯视图' : '生成俯视图（实验）') }}
+                </button>
+                <button v-if="topviewEnabled && a.kind === 'location' && topviewCacheValid(a)" class="btn btn-sm btn-ghost" @click="viewTopview(a)">查看俯视图</button>
                 <button class="btn btn-sm btn-ghost" @click="openEditAsset(a)">编辑</button>
               </div>
+              <span v-if="topviewEnabled && a.kind === 'location' && a.topview_error" class="fail-msg">{{ a.topview_error }}</span>
             </div>
           </div>
         </div>
@@ -832,6 +837,16 @@
         <div class="blocking-characters"><div class="field-label-actions"><label>人物表</label><button type="button" class="btn btn-sm btn-secondary" @click="addBlockingCharacter">＋ 添加人物</button></div><div v-for="(character,index) in blockingDraft.characters" :key="index" class="blocking-character-row"><input v-model="character.name" class="input" placeholder="姓名"><input v-model="character.position" class="input" placeholder="位置"><input v-model="character.facing" class="input" placeholder="面向谁 / 相对镜头正面、侧面、背面" title="例如：面向青年，身体相对镜头三分之二侧面；视线在右侧单独填写"><input v-model="character.gaze" class="input" placeholder="视线"><input v-model="character.visibility" class="input" placeholder="可见性"><button type="button" class="btn btn-sm btn-danger" @click="removeBlockingCharacter(index)">删除</button></div></div>
         <div class="blocking-relations"><div class="field-label-actions"><label>空间与动作关系（最多40条）</label><button type="button" class="btn btn-sm btn-secondary" :disabled="blockingDraft.relations.length>=40" @click="addBlockingRelation">＋ 添加关系</button></div><div v-for="(relation,index) in blockingDraft.relations" :key="relation.id||index" class="card dialogue-analysis-item"><div class="field-row"><div class="field"><label>类型</label><select v-model="relation.kind" class="input"><option value="interpersonal">人物关系</option><option value="camera">机位关系</option><option value="object_function">物体功能</option><option value="motion">动作轨迹</option></select></div><div class="field"><label>来源</label><select v-model="relation.source" class="input"><option value="fact">原文事实</option><option value="suggestion">建议</option></select></div></div><div class="field-row"><div class="field"><label>主体</label><input v-model="relation.subject" class="input"></div><div class="field"><label>参照物</label><input v-model="relation.reference" class="input"></div><div class="field"><label>关系</label><input v-model="relation.relation" class="input"></div></div><div class="field-row"><div class="field"><label>功能终点</label><input v-model="relation.functional_end" class="input"></div><div class="field"><label>起点</label><input v-model="relation.start" class="input"></div><div class="field"><label>终点</label><input v-model="relation.end" class="input"></div><div class="field"><label>轨迹</label><input v-model="relation.trajectory" class="input"></div></div><div class="field"><label>原文证据（每行一条；事实必填）</label><textarea v-model="relation.evidenceText" class="textarea" rows="2"/></div><button type="button" class="btn btn-sm btn-danger" @click="removeBlockingRelation(index)">删除关系</button></div></div>
         <div class="field-row"><div class="field"><label>机位 / 镜头</label><input v-model="blockingDraft.camera" class="input"></div><div class="field"><label>起始状态</label><input v-model="blockingDraft.start" class="input"></div><div class="field"><label>结束状态</label><input v-model="blockingDraft.end" class="input"></div></div><div class="field"><label>站位摘要</label><textarea v-model="blockingDraft.summary" class="textarea" rows="2" /></div>
+        <div v-if="topviewEnabled" class="topview-dispatch card">
+          <div class="field-label-actions"><label>实验：本 Scene 结尾俯视调度</label><button type="button" class="btn btn-sm btn-secondary" :disabled="topviewBusy || blockingBusy" @click="draftTopviewDispatch">{{ topviewBusy ? '推演中…' : 'AI推演结尾调度' }}</button></div>
+          <p class="field-hint">只推演可见人物在本 Scene 结束时锚定场景地标的位置，不写画面坐标和外观；人物颜色标记跨 Scene 保持不变。确认后上一 Scene 的结尾写入「起始状态」、本次结果写入「结束状态」。</p>
+          <template v-if="topviewDraft">
+            <p class="field-hint">上一 Scene 结尾：{{ topviewPreviousEnd }}</p>
+            <div v-for="(character, index) in topviewDraft.characters" :key="character.name" class="blocking-character-row"><span class="topview-marker">{{ character.name }}（{{ character.marker_color }}）</span><input v-model="topviewDraft.characters[index].position" class="input" placeholder="锚定场景地标的位置"><input v-model="topviewDraft.characters[index].posture" class="input" placeholder="姿态"><input v-model="topviewDraft.characters[index].facing" class="input" placeholder="朝向"><input v-model="topviewDraft.characters[index].holding" class="input" placeholder="持有物"></div>
+            <div class="field"><label>概括</label><input v-model="topviewDraft.summary" class="input"></div>
+            <div class="modal-actions"><button class="btn btn-ghost" :disabled="topviewBusy" @click="topviewDraft = null">放弃</button><button class="btn" :disabled="topviewBusy" @click="applyTopviewDispatch">确认写入人物站位</button></div>
+          </template>
+        </div>
         <div v-if="blockingScene.blocking_json" class="modal-actions"><button class="btn btn-secondary" :disabled="blockingBusy" @click="previewBlockingPrompt('image')">按此站位更新分镜图提示词</button><button class="btn btn-secondary" :disabled="blockingBusy" @click="previewBlockingPrompt('video')">按此站位更新视频完整执行稿</button></div><div v-if="blockingPromptPreview.kind" class="field"><label>{{blockingPromptPreview.kind==='image'?'分镜图提示词':'英文完整视频执行稿'}}预览（可编辑，尚未保存）</label><textarea v-model="blockingPromptPreview.prompt" class="textarea" rows="10"/><p v-if="blockingPromptPreview.kind==='video'" class="field-hint">这是按当前参考图、对白和站位编译的完整合法执行稿。明确确认后将保存为实际生成使用的 video_full_prompt，并同步提取动作正文；不会自动启动 GPU。</p><button class="btn" :disabled="blockingBusy||!blockingPromptPreview.prompt.trim()" @click="applyBlockingPrompt">确认保存此{{blockingPromptPreview.kind==='video'?'完整执行稿':'提示词'}}</button></div>
         <div v-if="blockingError" class="notice error-notice">{{blockingError}}</div><div class="modal-actions"><button class="btn btn-ghost" @click="closeBlocking">关闭</button><button class="btn" :disabled="blockingBusy" @click="saveBlocking">显式保存</button></div>
         <div class="scene-end-state"><div class="field-label-actions"><label>本场结尾人物状态（下一场连续性参考）</label><span v-if="endState.stale" class="error-text">正文、角色或镜头结束状态已变化，此记录已失效，不会注入下一场</span><span v-else-if="endState.extractedBy" class="field-hint">来源：{{ ({ llm: 'AI提取', explicit: '正文结尾状态块' })[endState.extractedBy] || '手动' }}</span></div>
@@ -1608,6 +1623,11 @@ let blockingEpoch = 0
 const blockingBusy = ref(false)
 const blockingError = ref('')
 const blockingPromptPreview = reactive({ kind: '', prompt: '', blockingHash: '' })
+// Experimental top-view dispatch (off unless enabled in Settings).
+const topviewEnabled = ref(false)
+const topviewBusy = ref(false)
+const topviewDraft = ref(null)
+const topviewPreviousEnd = ref('')
 const endState = reactive({ characters: [], props: [], stale: false, skillReady: false, extractedBy: '' })
 const endStateBusy = ref(false)
 const generationSnapshots = ref([])
@@ -3580,6 +3600,53 @@ async function genPropSheet(a) {
     toast.error(e.response?.data?.error || '道具四视图任务提交失败')
   }
 }
+// ---------- 实验：俯视调度 ----------
+function topviewCacheValid(a) { return !!(a && a.image && a.topview_image && a.topview_source_image === a.image) }
+async function genTopviewStructure(a, force) {
+  try {
+    const { data } = await api.generateTopviewStructure(id(), a.id, force)
+    toast.show(data.message || '俯视结构图任务已提交')
+    await load()
+  } catch (e) {
+    toast.error(e.response?.data?.error || '俯视结构图任务提交失败')
+  }
+}
+function viewTopview(a) {
+  if (!topviewCacheValid(a)) return
+  viewer.value = api.inputUrl(project.value.id, a.topview_image)
+  nextTick(() => viewerMask.value?.focus())
+}
+async function draftTopviewDispatch() {
+  if (!blockingScene.value) return
+  const sceneId = blockingScene.value.id
+  topviewBusy.value = true
+  blockingError.value = ''
+  try {
+    const { data } = await api.draftTopviewDispatch(id(), sceneId)
+    if (blockingScene.value?.id !== sceneId) return
+    topviewDraft.value = data.dispatch
+    topviewPreviousEnd.value = data.previous_end || '无'
+  } catch (e) {
+    blockingError.value = e.response?.data?.error || '俯视调度推演失败'
+  } finally { topviewBusy.value = false }
+}
+async function applyTopviewDispatch() {
+  if (!blockingScene.value || !topviewDraft.value) return
+  const sceneId = blockingScene.value.id
+  topviewBusy.value = true
+  blockingError.value = ''
+  try {
+    const { data } = await api.applyTopviewDispatch(id(), sceneId, topviewDraft.value)
+    if (blockingScene.value?.id !== sceneId) return
+    const local = scenes.value.find(x => x.id === sceneId)
+    if (local) { local.blocking_json = JSON.stringify(data.blocking); local.topview_dispatch_json = JSON.stringify(data.dispatch) }
+    setBlockingDraft(data.blocking)
+    topviewDraft.value = null
+    toast.show('俯视调度已写入人物站位的起始/结束状态')
+  } catch (e) {
+    blockingError.value = e.response?.data?.error || '俯视调度保存失败'
+  } finally { topviewBusy.value = false }
+}
 function viewPropSheet(a) {
   if (a.sheet) {
     viewer.value = api.inputUrl(project.value.id, a.sheet)
@@ -3984,7 +4051,7 @@ function parseBlocking(sc) { try { return JSON.parse(sc?.blocking_json || '') } 
 function blockingSummary(sc) { const value = parseBlocking(sc); return value?.summary || (sc?.blocking_json ? '已保存站位' : '未设置') }
 function setBlockingDraft(value = {}) { blockingDraft.schema_version = 2; blockingDraft.source_content_hash = value.source_content_hash || ''; blockingDraft.factsText = Array.isArray(value.facts) ? value.facts.join('\n') : ''; blockingDraft.suggestionsText = Array.isArray(value.suggestions) ? value.suggestions.join('\n') : ''; blockingDraft.characters = Array.isArray(value.characters) ? value.characters.map(character => ({ name: '', position: '', facing: '', gaze: '', visibility: '', ...character })) : []; blockingDraft.relations = Array.isArray(value.relations) ? value.relations.slice(0,40).map(relation => ({ id:'', kind:'interpersonal', subject:'', reference:'', relation:'', start:'', end:'', functional_end:'', trajectory:'', source:'suggestion', ...relation, evidenceText:Array.isArray(relation.evidence)?relation.evidence.join('\n'):'' })) : []; blockingDraft.camera = value.camera || ''; blockingDraft.start = value.start || ''; blockingDraft.end = value.end || ''; blockingDraft.summary = value.summary || '' }
 function blockingPayload() { const lines = text => text.split(/\r?\n/).map(line => line.trim()).filter(Boolean); return { schema_version: 2, source_content_hash: blockingDraft.source_content_hash, facts: lines(blockingDraft.factsText), suggestions: lines(blockingDraft.suggestionsText), characters: blockingDraft.characters.map(character => ({ ...character })), relations: blockingDraft.relations.slice(0,40).map(({evidenceText,...relation})=>({...relation,evidence:lines(evidenceText||'')})), camera: blockingDraft.camera, start: blockingDraft.start, end: blockingDraft.end, summary: blockingDraft.summary } }
-function openBlocking(sc) { blockingEpoch++; blockingScene.value = sc; blockingBusy.value = false; blockingError.value = ''; Object.assign(blockingPromptPreview,{kind:'',prompt:'',blockingHash:''}); const value=parseBlocking(sc)||{}; if(!value.source_content_hash&&sc.blocking_content_hash)value.source_content_hash=sc.blocking_content_hash; setBlockingDraft(value); loadEndState() }
+function openBlocking(sc) { blockingEpoch++; blockingScene.value = sc; blockingBusy.value = false; blockingError.value = ''; topviewDraft.value = null; topviewPreviousEnd.value = ''; Object.assign(blockingPromptPreview,{kind:'',prompt:'',blockingHash:''}); const value=parseBlocking(sc)||{}; if(!value.source_content_hash&&sc.blocking_content_hash)value.source_content_hash=sc.blocking_content_hash; setBlockingDraft(value); loadEndState() }
 function closeBlocking(){ blockingEpoch++; blockingScene.value=null; blockingBusy.value=false }
 function applyEndStateView(data) {
   const state = data?.state || {}
@@ -4381,6 +4448,7 @@ watch(
 )
 
 onMounted(async () => {
+  api.settings().then(({ data }) => { topviewEnabled.value = data?.['experimental.topview'] === 'true' }).catch(() => {})
   await load()
   const requestedSceneID = Number(route.query.scene || 0)
   if (route.query.panel === 'director' && requestedSceneID > 0) {
@@ -4413,6 +4481,8 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .plan-generation-progress { margin: 12px 0 20px; padding: 16px 18px; border-left: 4px solid #6257d9; }
+.topview-dispatch { margin: 12px 0; padding: 12px; }
+.topview-marker { min-width: 96px; align-self: center; font-size: 13px; }
 .plan-progress-head { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
 .plan-progress-head span, .plan-generation-progress p { color: var(--text-muted, #8f98aa); }
 .plan-generation-progress p { margin: 9px 0 0; font-size: 13px; }

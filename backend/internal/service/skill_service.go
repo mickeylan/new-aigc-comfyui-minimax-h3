@@ -282,6 +282,8 @@ func (s *SkillService) InitSystemSkills() error {
 		characterRegistrationPhotoSkill,
 		continuityFrameClaySkill,
 		continuityFrameLineartSkill,
+		topviewStructureSkill,
+		topviewEndDispatchSkill,
 		assetSceneDescriptionPolishSkill,
 		assetCharacterDescriptionPolishSkill,
 	}
@@ -343,6 +345,7 @@ var systemSkillModelFamilies = map[string]string{
 	characterRegistrationSkillCode:  models.ModelFamilyQwenImage21,
 	continuityFrameClaySkillCode:    models.ModelFamilyQwenImage21,
 	continuityFrameLineartSkillCode: models.ModelFamilyQwenImage21,
+	topviewStructureSkillCode:       models.ModelFamilyQwenImage21,
 }
 
 // syncSystemSkillGovernance applies operation and model-family metadata to every stored version

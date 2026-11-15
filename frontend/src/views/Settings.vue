@@ -116,6 +116,11 @@
         <p class="hint">默认关闭。只有打开后才会把截图或首帧图片发给上面选中的文本模型（用于「从截图提取风格」和首帧润色）；系统不会按模型名猜测，模型不支持看图时会直接显示接口报错。</p>
       </div>
 
+      <div class="provider-config">
+        <label class="vision-switch"><input v-model="form['experimental.topview']" type="checkbox" true-value="true" false-value="false" /> 实验：俯视调度</label>
+        <p class="hint">默认关闭。打开后可为场景资产生成俯视结构图，并在人物站位中推演本 Scene 结尾的俯视调度；俯视图只在 H3 参考槽位有空余时作为可选参考注入。是否默认开启需先做 3 个 Scene 的 A/B 对比。</p>
+      </div>
+
       <div v-if="error" class="notice error-notice">{{ error }}</div>
       <div v-if="success" class="notice success-notice">{{ success }}</div>
 

@@ -254,6 +254,9 @@ type Scene struct {
 	BlockingVideoAppliedHash string     `gorm:"column:blocking_video_applied_hash;size:129" json:"blocking_video_applied_hash"`
 	BlockingImageApplied     bool       `gorm:"-" json:"blocking_image_applied"`
 	BlockingVideoApplied     bool       `gorm:"-" json:"blocking_video_applied"`
+	// TopviewDispatchJSON is the user-confirmed end-of-Scene dispatch (experimental top-view, P2-4);
+	// the next Scene reads it as its starting positions.
+	TopviewDispatchJSON string `gorm:"column:topview_dispatch_json;type:text" json:"topview_dispatch_json"`
 	DialogueAnalysisJSON     string     `gorm:"column:dialogue_analysis_json;type:text" json:"dialogue_analysis_json"` // 原文台词及 AI 归属审阅数据
 	ImageRetries             int        `gorm:"column:image_retries" json:"image_retries"`                             // 画面生成已重试次数
 	VideoRetries             int        `gorm:"column:video_retries" json:"video_retries"`                             // 视频生成已重试次数
@@ -409,6 +412,12 @@ type Asset struct {
 	Sheet       string    `json:"sheet"`                                                           // 道具四视图文件名（input/<project_id>/ 下；location 不使用）
 	SheetTaskID string    `gorm:"column:sheet_task_id;index" json:"sheet_task_id"`                 // Krea2 道具四视图任务
 	SheetError  string    `gorm:"column:sheet_error;type:text" json:"sheet_error"`                 // 道具四视图错误
+	// Topview* cache the experimental orthographic structure image of a location (P2-4). The
+	// cache is valid only while TopviewSourceImage equals Image.
+	TopviewImage       string `gorm:"column:topview_image" json:"topview_image"`
+	TopviewSourceImage string `gorm:"column:topview_source_image" json:"topview_source_image"`
+	TopviewTaskID      string `gorm:"column:topview_task_id;index" json:"topview_task_id"`
+	TopviewError       string `gorm:"column:topview_error;type:text" json:"topview_error"`
 	Source      string    `json:"source"`                                                          // auto(方案抽取) / manual(手动新建)
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`

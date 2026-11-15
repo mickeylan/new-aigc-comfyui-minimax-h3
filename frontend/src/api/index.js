@@ -170,6 +170,8 @@ export const api = {
   analyzeSceneBlocking: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/blocking/analyze`, null, { timeout: 300000 }),
   inheritSceneBlocking: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/blocking/inherit`),
   saveSceneBlocking: (id, sid, blocking) => http.put(`/projects/${id}/scenes/${sid}/blocking`, blocking),
+  draftTopviewDispatch: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/topview/dispatch`, null, { timeout: 300000 }),
+  applyTopviewDispatch: (id, sid, dispatch) => http.put(`/projects/${id}/scenes/${sid}/topview/dispatch`, dispatch),
   getSceneEndState: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/end-state`),
   saveSceneEndState: (id, sid, state) => http.put(`/projects/${id}/scenes/${sid}/end-state`, state),
   extractSceneEndState: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/end-state/extract`, null, { timeout: 300000 }),
@@ -326,6 +328,7 @@ export const api = {
   deleteAsset: (id, kind, aid) => http.delete(`/projects/${id}/assets/${kind}/${aid}`),
   generateAssetImage: (id, kind, aid) => http.post(`/projects/${id}/assets/${kind}/${aid}/image`),
   generatePropSheet: (id, aid) => http.post(`/projects/${id}/assets/prop/${aid}/sheet`),
+  generateTopviewStructure: (id, aid, force = false) => http.post(`/projects/${id}/assets/location/${aid}/topview`, { force }),
   uploadPropSheet: (id, aid, file) => {
     const fd = new FormData()
     fd.append('file', file)

@@ -129,6 +129,8 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.PUT("/api/projects/:id/scenes/:sid/blocking", svc.HandleSaveSceneBlocking)
 	r.POST("/api/projects/:id/scenes/:sid/blocking/prompts/:kind/preview", svc.HandlePreviewSceneBlockingPrompt)
 	r.POST("/api/projects/:id/scenes/:sid/blocking/prompts/:kind/apply", svc.HandleApplySceneBlockingPrompt)
+	r.POST("/api/projects/:id/scenes/:sid/topview/dispatch", svc.HandleTopviewDispatchDraft)
+	r.PUT("/api/projects/:id/scenes/:sid/topview/dispatch", svc.HandleApplyTopviewDispatch)
 	r.POST("/api/projects/:id/scenes/:sid/reassign-episode", svc.HandleReassignSceneEpisode)
 	r.POST("/api/projects/:id/scenes/:sid/prompt/redesign", svc.HandleRedesignScenePrompt)
 	r.POST("/api/projects/:id/scenes/:sid/shots/director-draft", svc.HandleGenerateSceneDirectorDraft)
@@ -360,6 +362,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/assets/:kind/:aid/image", svc.HandleGenerateAssetImage)
 	r.POST("/api/projects/:id/assets/:kind/:aid/image/upload", svc.HandleUploadAssetImage)
 	r.POST("/api/projects/:id/assets/:kind/:aid/sheet", svc.HandleGeneratePropSheet)
+	r.POST("/api/projects/:id/assets/:kind/:aid/topview", svc.HandleGenerateTopviewStructure)
 	r.POST("/api/projects/:id/assets/:kind/:aid/sheet/upload", svc.HandleUploadPropSheet) // 上传画好的四视图（仅道具）
 	r.GET("/api/input/:taskid/*path", svc.HandleInputFile)
 

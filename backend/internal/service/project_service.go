@@ -5719,6 +5719,8 @@ func h3VideoSubjects(referenceLines []string) (definitions, retention, subjectRe
 			definitions = append(definitions, fmt.Sprintf("<Picture %d> provides a generic important-moment full-frame reference and does not define the opening state.", n))
 		case strings.Contains(line, "道具「"):
 			definitions = append(definitions, fmt.Sprintf("<Picture %d> establishes the referenced prop appearance: %s.", n, english))
+		case strings.Contains(line, "场景俯视结构图"):
+			definitions = append(definitions, fmt.Sprintf("<Picture %d> is a top-down layout map used only for the relative positions of landmarks; it is not frame content, and the video never shows a top-down view.", n))
 		default:
 			definitions = append(definitions, fmt.Sprintf("<Picture %d> provides full-frame reference information: %s.", n, english))
 		}
@@ -6152,6 +6154,17 @@ func ValidateVideoPrompt(detailText, charStr, locStr, propStr string) []string {
 }
 
 func (s *ProjectService) sceneVideoContinuityReferences(sc *models.Scene, pid string) ([]FileMeta, []string, *models.SceneContinuity) {
+	refs, lines, cfg := s.sceneVideoContinuityBaseReferences(sc, pid)
+	// The experimental top-view map is optional: it only fills a free slot and never displaces
+	// a character, look, location, prop, storyboard or tail-frame reference.
+	if image, ok := s.sceneTopviewReference(sc); ok && len(refs) < maxSceneReferenceImages {
+		refs = append(refs, FileMeta{TaskID: pid, Name: image})
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：%s", len(refs), topviewReferenceLine))
+	}
+	return refs, lines, cfg
+}
+
+func (s *ProjectService) sceneVideoContinuityBaseReferences(sc *models.Scene, pid string) ([]FileMeta, []string, *models.SceneContinuity) {
 	refs, lines := s.sceneVideoReferenceFiles(sc, pid)
 	if s.continuity == nil {
 		return refs, lines, nil

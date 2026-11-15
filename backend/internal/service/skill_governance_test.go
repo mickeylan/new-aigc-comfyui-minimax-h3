@@ -37,7 +37,15 @@ func TestSkillOutputRuleIsSharedButNotAppliedToApprovedSkills(t *testing.T) {
 	if len(skills) == 0 {
 		t.Fatal("no seeded skills")
 	}
+	// New Skills that adopted the shared rule.
+	adopted := map[string]bool{topviewEndDispatchSkillCode: true}
 	for _, skill := range skills {
+		if adopted[skill.Code] {
+			if !strings.HasSuffix(skill.SystemPrompt, "\n"+skillOutputRule) {
+				t.Errorf("skill %s adopted the shared rule but does not end with it", skill.Code)
+			}
+			continue
+		}
 		if strings.Contains(skill.SystemPrompt, skillOutputRule) {
 			t.Errorf("skill %s v%d already carries the new rule; approved wording must stay unchanged", skill.Code, skill.Version)
 		}
