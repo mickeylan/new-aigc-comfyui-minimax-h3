@@ -8,6 +8,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/pkg/sftp v1.13.11
 	golang.org/x/crypto v0.54.0
+	golang.org/x/image v0.5.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.2
 )

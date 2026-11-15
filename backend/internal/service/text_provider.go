@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,10 +19,23 @@ type TextProviderCapability struct {
 	FirstFrameGroundedPolish bool   `json:"first_frame_grounded_polish"`
 }
 
-// MultimodalTextProvider is optional. A provider must explicitly implement it before image data is sent.
+// TextImage is one image already validated and encoded for a text model request.
+type TextImage struct {
+	MIME string
+	Data []byte
+}
+
+func (i TextImage) dataURL() string {
+	return "data:" + i.MIME + ";base64," + base64.StdEncoding.EncodeToString(i.Data)
+}
+
+// MultimodalTextProvider is optional. A provider must explicitly implement it, and the user must
+// turn on SettingTextVisionEnabled, before image data is sent. Vision support is never guessed
+// from the model name; a wrong setting surfaces as the provider's own API error.
 type MultimodalTextProvider interface {
 	TextProvider
-	ChatWithImage(system, user, imagePath string) (string, error)
+	SupportsImages() bool
+	ChatWithImages(system, user string, images []TextImage) (string, error)
 }
 
 var ErrMultimodalUnsupported = fmt.Errorf("selected text provider does not support multimodal messages")
@@ -85,7 +99,13 @@ const (
 	SettingLlamaBaseURL = "llama_base_url"
 	SettingLlamaModel   = "llama_model"
 	SettingTextProvider = "text_provider" // "volcano" | "llama"
+	// SettingTextVisionEnabled is the user's 「当前文本模型支持看图」 switch, "true" or "false" (default).
+	SettingTextVisionEnabled = "text_provider_vision"
 )
+
+func textVisionEnabled(getter IGetter) bool {
+	return getter != nil && getter.GetSetting(SettingTextVisionEnabled, "false") == "true"
+}
 
 const (
 	DefaultLlamaBaseURL = "http://localhost:8080/v1"
@@ -125,10 +145,10 @@ func (l *LlamaProvider) Name() string {
 
 // OpenAI-compatible request/response types
 type openAIChatReq struct {
-	Model          string                `json:"model"`
-	Messages       []openAIMessage       `json:"messages"`
-	Stream         bool                  `json:"stream"`
-	ResponseFormat *openAIResponseFormat `json:"response_format,omitempty"`
+	Model          string                 `json:"model"`
+	Messages       []openAIRequestMessage `json:"messages"`
+	Stream         bool                   `json:"stream"`
+	ResponseFormat *openAIResponseFormat  `json:"response_format,omitempty"`
 }
 
 type openAIResponseFormat struct {
@@ -138,6 +158,23 @@ type openAIResponseFormat struct {
 type openAIMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+}
+
+// openAIRequestMessage carries either a plain string or, for image requests, a list of
+// openAIContentPart values.
+type openAIRequestMessage struct {
+	Role    string `json:"role"`
+	Content any    `json:"content"`
+}
+
+type openAIContentPart struct {
+	Type     string          `json:"type"`
+	Text     string          `json:"text,omitempty"`
+	ImageURL *openAIImageURL `json:"image_url,omitempty"`
+}
+
+type openAIImageURL struct {
+	URL string `json:"url"`
 }
 
 type openAIChatResp struct {
@@ -181,7 +218,7 @@ func (l *LlamaProvider) Chat(system, user string) (string, error) {
 		if attempt > 0 {
 			time.Sleep(time.Second)
 		}
-		text, err := l.chatOnce(system, user)
+		text, err := l.chatOnce(system, user, nil)
 		if err == nil {
 			return text, nil
 		}
@@ -190,7 +227,19 @@ func (l *LlamaProvider) Chat(system, user string) (string, error) {
 	return "", lastErr
 }
 
-func (l *LlamaProvider) chatOnce(system, user string) (string, error) {
+func (l *LlamaProvider) SupportsImages() bool {
+	return textVisionEnabled(l.db)
+}
+
+// ChatWithImages sends the user text followed by the images as OpenAI image_url content parts.
+func (l *LlamaProvider) ChatWithImages(system, user string, images []TextImage) (string, error) {
+	if !l.SupportsImages() {
+		return "", ErrMultimodalUnsupported
+	}
+	return l.chatOnce(system, user, images)
+}
+
+func (l *LlamaProvider) chatOnce(system, user string, images []TextImage) (string, error) {
 	cfg := l.Config()
 	if !cfg.Configured() {
 		return "", fmt.Errorf("尚未配置 llama.cpp 服务器地址和模型名，请在「平台设置」中填写")
@@ -200,11 +249,19 @@ func (l *LlamaProvider) chatOnce(system, user string) (string, error) {
 	if wantsJSON {
 		system += llamaJSONDiscipline
 	}
-	messages := []openAIMessage{}
+	messages := []openAIRequestMessage{}
 	if system != "" {
-		messages = append(messages, openAIMessage{Role: "system", Content: system})
+		messages = append(messages, openAIRequestMessage{Role: "system", Content: system})
 	}
-	messages = append(messages, openAIMessage{Role: "user", Content: user})
+	if len(images) == 0 {
+		messages = append(messages, openAIRequestMessage{Role: "user", Content: user})
+	} else {
+		parts := []openAIContentPart{{Type: "text", Text: user}}
+		for _, image := range images {
+			parts = append(parts, openAIContentPart{Type: "image_url", ImageURL: &openAIImageURL{URL: image.dataURL()}})
+		}
+		messages = append(messages, openAIRequestMessage{Role: "user", Content: parts})
+	}
 
 	requestBody := openAIChatReq{Model: cfg.Model, Messages: messages, Stream: false}
 	if wantsJSON {
@@ -342,7 +399,8 @@ func TextProviderCapabilities(provider TextProvider) TextProviderCapability {
 		return capability
 	}
 	capability.Provider = provider.Name()
-	_, capability.MultimodalMessages = provider.(MultimodalTextProvider)
+	multimodal, ok := provider.(MultimodalTextProvider)
+	capability.MultimodalMessages = ok && multimodal.SupportsImages()
 	capability.FirstFrameGroundedPolish = capability.MultimodalMessages
 	return capability
 }
@@ -351,13 +409,18 @@ func (f *TextProviderFactory) Capabilities() TextProviderCapability {
 	return TextProviderCapabilities(f.Create())
 }
 
-func (f *TextProviderFactory) PolishWithFirstFrame(system, user, imagePath string) (string, error) {
-	provider := f.Create()
-	multimodal, ok := provider.(MultimodalTextProvider)
-	if !ok {
+// SupportsImages reports whether the currently selected provider may receive images.
+func (f *TextProviderFactory) SupportsImages() bool {
+	return f.Capabilities().MultimodalMessages
+}
+
+// ChatWithImages routes an image request to the currently selected provider.
+func (f *TextProviderFactory) ChatWithImages(system, user string, images []TextImage) (string, error) {
+	multimodal, ok := f.Create().(MultimodalTextProvider)
+	if !ok || !multimodal.SupportsImages() {
 		return "", ErrMultimodalUnsupported
 	}
-	return multimodal.ChatWithImage(system, user, imagePath)
+	return multimodal.ChatWithImages(system, user, images)
 }
 
 // Create 返回当前选中的 TextProvider
@@ -388,6 +451,17 @@ func (a *VolcTextAdapter) Name() string {
 
 func (a *VolcTextAdapter) Chat(system, user string) (string, error) {
 	return a.volc.Chat(system, user)
+}
+
+func (a *VolcTextAdapter) SupportsImages() bool {
+	return textVisionEnabled(a.volc)
+}
+
+func (a *VolcTextAdapter) ChatWithImages(system, user string, images []TextImage) (string, error) {
+	if !a.SupportsImages() {
+		return "", ErrMultimodalUnsupported
+	}
+	return a.volc.chatOnce(system, user, images)
 }
 
 func (a *VolcTextAdapter) HealthCheck(ctx context.Context) error {

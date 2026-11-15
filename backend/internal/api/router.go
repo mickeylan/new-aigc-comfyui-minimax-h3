@@ -505,14 +505,15 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/prompts/rollback", svc.HandleRollbackPrompt)   // 回滚提示词
 
 	// 风格预设
-	r.GET("/api/presets", svc.HandleListPresets)                    // 列出预设
-	r.GET("/api/presets/categories", svc.HandleGetPresetCategories) // 获取分类
-	r.GET("/api/presets/recommend", svc.HandleGetRecommendations)   // 获取推荐（查询参数）
-	r.GET("/api/presets/:id", svc.HandleGetPreset)                  // 获取单个预设
-	r.POST("/api/presets/:id/apply", svc.HandleApplyPreset)         // 应用预设
-	r.POST("/api/presets", svc.HandleCreatePreset)                  // 创建自定义预设
-	r.PUT("/api/presets/:id", svc.HandleUpdatePreset)               // 更新预设
-	r.DELETE("/api/presets/:id", svc.HandleDeletePreset)            // 删除预设
+	r.GET("/api/presets", svc.HandleListPresets)                                  // 列出预设
+	r.GET("/api/presets/categories", svc.HandleGetPresetCategories)               // 获取分类
+	r.GET("/api/presets/recommend", svc.HandleGetRecommendations)                 // 获取推荐（查询参数）
+	r.GET("/api/presets/:id", svc.HandleGetPreset)                                // 获取单个预设
+	r.POST("/api/presets/:id/apply", svc.HandleApplyPreset)                       // 应用预设
+	r.POST("/api/presets", svc.HandleCreatePreset)                                // 创建自定义预设
+	r.POST("/api/presets/from-screenshots", svc.HandleStylePresetFromScreenshots) // 截图提取风格草稿（不保存）
+	r.PUT("/api/presets/:id", svc.HandleUpdatePreset)                             // 更新预设
+	r.DELETE("/api/presets/:id", svc.HandleDeletePreset)                          // 删除预设
 
 	// 前端静态资源 (SPA)
 	r.NoRoute(func(c *gin.Context) {

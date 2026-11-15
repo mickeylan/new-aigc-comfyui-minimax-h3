@@ -1190,7 +1190,7 @@ async function runFirstFramePolish() {
   try {
     const { data: capability } = await api.textProviderCapabilities()
     if (!capability.first_frame_grounded_polish) { toast.error('当前文本模型不支持图片输入，未执行伪多模态润色'); return }
-    const { data } = await api.firstFramePolish({ prompt: selected.value.image_prompt || selected.value.content || '', image_path: selected.value.image_file })
+    const { data } = await api.firstFramePolish({ project_id: Number(editorProjectId), prompt: selected.value.image_prompt || selected.value.content || '', image_path: selected.value.image_file })
     polishDraft.value = data.prompt || ''
     toast.success('已依据实际首帧生成润色草稿（未自动保存）')
   } catch (e) { toast.error(e.response?.data?.error || '看图润色失败') }

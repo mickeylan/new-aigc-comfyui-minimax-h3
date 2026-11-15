@@ -445,6 +445,13 @@ export const api = {
   presets: (params) => http.get('/presets', { params }),
   presetRecommendations: (params) => http.get('/presets/recommend', { params }),
   applyPreset: (presetId, basePrompt) => http.post(`/presets/${presetId}/apply`, { base_prompt: basePrompt }),
+  createPreset: (preset) => http.post('/presets', preset),
+  stylePresetFromScreenshots: (projectId, files) => {
+    const fd = new FormData()
+    for (const file of files) fd.append('files', file)
+    fd.append('project_id', projectId)
+    return http.post('/presets/from-screenshots', fd, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 600000 })
+  },
 
   // 长篇小说导入与章节管理
   createNovelProject: (data) => http.post('/projects/novel', data),

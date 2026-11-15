@@ -142,8 +142,9 @@ type volcResponseMessage struct {
 }
 
 type volcResponseContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"` // input_image: data:image/...;base64,...
 }
 
 type volcResponsesReq struct {
@@ -175,7 +176,7 @@ func (v *VolcClient) Chat(system, user string) (string, error) {
 		if attempt > 0 {
 			time.Sleep(time.Second)
 		}
-		text, err := v.chatOnce(system, user)
+		text, err := v.chatOnce(system, user, nil)
 		if err == nil {
 			return text, nil
 		}
@@ -184,7 +185,7 @@ func (v *VolcClient) Chat(system, user string) (string, error) {
 	return "", lastErr
 }
 
-func (v *VolcClient) chatOnce(system, user string) (string, error) {
+func (v *VolcClient) chatOnce(system, user string, images []TextImage) (string, error) {
 	cfg := v.Config()
 	if !cfg.Configured() {
 		return "", fmt.Errorf("尚未配置火山引擎 API Key，请到「平台设置」中填写")
@@ -193,7 +194,11 @@ func (v *VolcClient) chatOnce(system, user string) (string, error) {
 	if system != "" {
 		input = append(input, volcResponseInput{Role: "system", Content: []volcResponseContent{{Type: "input_text", Text: system}}})
 	}
-	input = append(input, volcResponseInput{Role: "user", Content: []volcResponseContent{{Type: "input_text", Text: user}}})
+	userContent := []volcResponseContent{{Type: "input_text", Text: user}}
+	for _, image := range images {
+		userContent = append(userContent, volcResponseContent{Type: "input_image", ImageURL: image.dataURL()})
+	}
+	input = append(input, volcResponseInput{Role: "user", Content: userContent})
 	body, _ := json.Marshal(volcResponsesReq{Model: cfg.TextModel, Stream: false, Input: input})
 
 	req, err := http.NewRequest("POST", cfg.Endpoint("/responses"), bytes.NewReader(body))
@@ -388,10 +393,10 @@ func (v *VolcClient) SetSetting(key, value string) {
 func (v *VolcClient) AllSettings() map[string]string {
 	keys := []string{SettingVolcAPIKey, SettingVolcBaseURL, SettingVolcTextModel, SettingVolcImgModel, SettingVolcImgSize,
 		SettingAliAPIKey, SettingAliBaseURL, SettingAliTTSModel, SettingAliTTSVoice, SettingAliVoiceMale, SettingAliTTSStyle, SettingAliTTSExtra,
-		SettingMiniMaxAPIKey, SettingMiniMaxBaseURL, SettingMiniMaxModel, "video_concurrency", "video_resolution", settingH3MaxDurationSeconds}
+		SettingMiniMaxAPIKey, SettingMiniMaxBaseURL, SettingMiniMaxModel, "video_concurrency", "video_resolution", settingH3MaxDurationSeconds, SettingTextVisionEnabled}
 	defs := []string{"", DefaultVolcBaseURL, DefaultVolcTextModel, DefaultVolcImgModel, DefaultVolcImgSize,
 		"", "https://llm-ebg0fg1ejgmvv30a.cn-beijing.maas.aliyuncs.com", "qwen3-tts-flash", "Cherry", "Ethan", "{}", "{}",
-		"", "", DefaultMiniMaxModel, "4", "480p", pacingNumber(defaultH3GenerationDuration)}
+		"", "", DefaultMiniMaxModel, "4", "480p", pacingNumber(defaultH3GenerationDuration), "false"}
 	out := map[string]string{}
 	for i, k := range keys {
 		out[k] = v.GetSetting(k, defs[i])

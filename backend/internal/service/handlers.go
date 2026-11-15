@@ -1522,6 +1522,7 @@ func (s *Service) HandleTextProviderCapabilities(c *gin.Context) {
 
 func (s *Service) HandleFirstFramePromptPolish(c *gin.Context) {
 	var req struct {
+		ProjectID uint   `json:"project_id"`
 		Prompt    string `json:"prompt"`
 		ImagePath string `json:"image_path"`
 	}
@@ -1530,19 +1531,31 @@ func (s *Service) HandleFirstFramePromptPolish(c *gin.Context) {
 		return
 	}
 	req.ImagePath = strings.TrimSpace(req.ImagePath)
-	if req.ImagePath == "" || filepath.IsAbs(req.ImagePath) || filepath.Base(req.ImagePath) != req.ImagePath || strings.Contains(req.ImagePath, "..") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "image_path 必须是项目 input 目录中的安全文件名"})
+	if req.ProjectID == 0 || req.ImagePath == "" || filepath.IsAbs(req.ImagePath) || filepath.Base(req.ImagePath) != req.ImagePath || strings.Contains(req.ImagePath, "..") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "需要 project_id，且 image_path 必须是项目 input 目录中的安全文件名"})
 		return
 	}
 	if s.TextProviderFact == nil || !s.TextProviderFact.Capabilities().FirstFrameGroundedPolish {
-		capability := TextProviderCapability{}
-		if s.TextProviderFact != nil {
-			capability = s.TextProviderFact.Capabilities()
-		}
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": ErrMultimodalUnsupported.Error(), "code": "multimodal_unsupported", "capability": capability})
+		s.multimodalUnsupported(c)
 		return
 	}
-	out, err := s.TextProviderFact.PolishWithFirstFrame("Polish the prompt using the supplied first frame as factual visual grounding. Return only the prompt.", req.Prompt, req.ImagePath)
+	reader, err := s.Remote.Open(s.Upload.ResolveReadPath(strconv.FormatUint(uint64(req.ProjectID), 10), req.ImagePath))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "首帧图片不存在"})
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(reader, maxStyleScreenshotBytes+1))
+	reader.Close()
+	if err != nil || len(data) > maxStyleScreenshotBytes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "首帧图片读取失败或超过 20MB"})
+		return
+	}
+	frame, err := normalizeStyleScreenshot(data)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	out, err := s.TextProviderFact.ChatWithImages("Polish the prompt using the supplied first frame as factual visual grounding. Return only the prompt.", req.Prompt, []TextImage{frame})
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return

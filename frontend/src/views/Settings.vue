@@ -111,6 +111,11 @@
         </div>
       </div>
 
+      <div class="provider-config">
+        <label class="vision-switch"><input v-model="form.text_provider_vision" type="checkbox" true-value="true" false-value="false" /> 当前文本模型支持看图</label>
+        <p class="hint">默认关闭。只有打开后才会把截图或首帧图片发给上面选中的文本模型（用于「从截图提取风格」和首帧润色）；系统不会按模型名猜测，模型不支持看图时会直接显示接口报错。</p>
+      </div>
+
       <div v-if="error" class="notice error-notice">{{ error }}</div>
       <div v-if="success" class="notice success-notice">{{ success }}</div>
 
