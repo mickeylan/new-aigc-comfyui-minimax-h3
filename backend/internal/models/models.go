@@ -1521,6 +1521,23 @@ type SharedAssetReference struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+// SceneReferenceFaceCover is a Scene-scoped solid-color face cover rendered locally over one
+// supplementary reference image. The source image is never modified; deleting the row restores it.
+// The cover applies only while the candidate still points at SourceFile.
+type SceneReferenceFaceCover struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	ProjectID    uint      `gorm:"index" json:"project_id"`
+	SceneID      uint      `gorm:"uniqueIndex:idx_scene_ref_face_cover" json:"scene_id"`
+	ReferenceKey string    `gorm:"size:200;uniqueIndex:idx_scene_ref_face_cover" json:"reference_key"`
+	SourceFile   string    `json:"source_file"`
+	SourceSHA256 string    `gorm:"column:source_sha256" json:"source_sha256"`
+	CoveredFile  string    `json:"covered_file"`
+	BoxesJSON    string    `gorm:"type:text" json:"-"`
+	Color        string    `json:"color"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
 type SceneContinuity struct {
 	ID                uint            `gorm:"primaryKey" json:"id"`
 	SceneID           uint            `gorm:"uniqueIndex" json:"scene_id"`

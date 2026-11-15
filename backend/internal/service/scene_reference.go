@@ -28,6 +28,8 @@ type SceneReferenceCandidate struct {
 	Label    string `json:"label"`
 	Category string `json:"category"`
 	Image    string `json:"image"`
+	// CoveredImage is this Scene's local face-cover derivative of Image; submissions use it instead.
+	CoveredImage string `json:"covered_image,omitempty"`
 }
 
 func referenceKey(r SceneReferenceSelection) string {
@@ -153,6 +155,7 @@ func (s *ProjectService) sceneReferenceCandidates(sc *models.Scene) []SceneRefer
 		}
 		out = append(out, candidate("shared_material", id, variant, fmt.Sprintf("共享素材「%s」· %s/%s", item.Material.Name, scope, item.Mode), "shared", item.Path))
 	}
+	s.attachFaceCovers(sc, out)
 	return out
 }
 
@@ -501,12 +504,14 @@ func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target st
 		// 显式勾选是用户的最终决定。不要再按Shot/Characters元数据静默丢弃，
 		// 否则界面显示已选三张，实际提示词和任务却只提交两张。
 		// 自动补入的角色仍由 sceneCharacterPortraits 按镜头可见性筛选。
-		if r.SourceType == "shared_material" {
-			refs = append(refs, fileMetaForSharedMaterial(sc.ProjectID, c.Image))
-		} else {
-			refs = append(refs, FileMeta{TaskID: fmt.Sprint(sc.ProjectID), Name: c.Image})
-		}
 		label := c.Label
+		if c.CoveredImage != "" {
+			// The covered copy is always stored under the project, whatever the original's location.
+			refs = append(refs, FileMeta{TaskID: fmt.Sprint(sc.ProjectID), Name: c.CoveredImage})
+			label += faceCoverReferenceNote
+		} else {
+			refs = append(refs, candidateFileMeta(sc.ProjectID, c))
+		}
 		if r.BindCharacter != "" && (r.SourceType == "character" || r.SourceType == "look" || r.SourceType == "outfit") {
 			label = fmt.Sprintf("角色「%s」（由%s显式绑定，仅用于该Scene的身份外观）", r.BindCharacter, c.Label)
 		}

@@ -784,7 +784,7 @@
           </div>
           <div v-if="sceneReferenceCandidates.length && !filteredSceneReferenceCandidates.length" class="field-hint">没有匹配的素材，请换个字或清空搜索；已选素材仍保留。</div>
           <div v-if="!sceneReferenceCandidates.length" class="field-hint">暂无可用图片，请先生成或上传人物四视图、造型、场景或道具参考图。</div>
-          <div class="reference-picker"><div v-for="ref in filteredSceneReferenceCandidates" :key="ref.key" class="reference-option" :class="{ selected: referenceIndex(ref) >= 0 }"><img :src="api.inputUrl(id(), ref.image)" @click="toggleSceneReference(ref)"><div><strong>{{ referenceIndex(ref) >= 0 ? `${selectedSceneReferences[referenceIndex(ref)].use_krea2 ? '用于生成分镜图' : '不用于分镜图'} / ${selectedSceneReferences[referenceIndex(ref)].use_h3 ? '用于后续视频参考' : '不用于后续视频'}` : '未选择' }}</strong><span>{{ ref.label }}</span><div v-if="referenceIndex(ref) >= 0" class="reference-flags"><label><input v-model="selectedSceneReferences[referenceIndex(ref)].use_krea2" type="checkbox"> 生成分镜图时使用</label><label><input v-model="selectedSceneReferences[referenceIndex(ref)].use_h3" type="checkbox"> 后续视频时使用</label><button type="button" @click="moveReference(referenceIndex(ref), -1)">↑</button><button type="button" @click="moveReference(referenceIndex(ref), 1)">↓</button></div></div></div></div>
+          <div class="reference-picker"><div v-for="ref in filteredSceneReferenceCandidates" :key="ref.key" class="reference-option" :class="{ selected: referenceIndex(ref) >= 0 }"><img :src="api.inputUrl(id(), ref.covered_image || ref.image)" @click="toggleSceneReference(ref)"><div><strong>{{ referenceIndex(ref) >= 0 ? `${selectedSceneReferences[referenceIndex(ref)].use_krea2 ? '用于生成分镜图' : '不用于分镜图'} / ${selectedSceneReferences[referenceIndex(ref)].use_h3 ? '用于后续视频参考' : '不用于后续视频'}` : '未选择' }}</strong><span>{{ ref.label }}</span><div v-if="faceCoverAllowed(ref)" class="reference-face-cover"><em v-if="ref.covered_image" class="tag">已遮脸（仅本Scene）</em><button type="button" class="btn btn-xs btn-ghost" @click="faceCoverTarget = ref">{{ ref.covered_image ? '调整遮脸 / 恢复原图' : '局部遮脸' }}</button></div><div v-if="referenceIndex(ref) >= 0" class="reference-flags"><label><input v-model="selectedSceneReferences[referenceIndex(ref)].use_krea2" type="checkbox"> 生成分镜图时使用</label><label><input v-model="selectedSceneReferences[referenceIndex(ref)].use_h3" type="checkbox"> 后续视频时使用</label><button type="button" @click="moveReference(referenceIndex(ref), -1)">↑</button><button type="button" @click="moveReference(referenceIndex(ref), 1)">↓</button></div></div></div></div>
           <div class="field-hint"><strong>角色名变化：</strong>请在项目资产区点击“资产名称对账”，把“柳石”合并到已有“青衣高大男子”等同一角色；确认一次后，所有现有及未来Scene自动继承同一套标准像，无需逐镜绑定。<br><strong>生成场景图：</strong>MiniMax H3 SelfLift 最多 9 张参考图；Qwen-Image-2.1 多图编辑最多 16 张。出场人物四视图会自动补入。<br><strong>生成后续视频：</strong>已确认的分镜图作为起始帧；这里只选择需要额外提供给视频模型的人物、造型或道具参考图，最多 8 张。</div>
         </div>
         <div v-if="sceneError" class="notice error-notice">{{ sceneError }}</div>
@@ -1259,6 +1259,21 @@
       </div>
     </div>
 
+    <!-- Scene 补充参考图局部遮脸 -->
+    <div v-if="faceCoverTarget && editingScene" class="modal-mask" @click.self="faceCoverTarget = null">
+      <div class="modal card face-cover-modal">
+        <FaceCoverEditor
+          :project-id="Number(id())"
+          :scene-id="editingScene.id"
+          :reference-key="faceCoverTarget.key"
+          :label="faceCoverTarget.label"
+          :image-url="api.inputUrl(id(), faceCoverTarget.image)"
+          @close="faceCoverTarget = null"
+          @changed="onFaceCoverChanged"
+        />
+      </div>
+    </div>
+
     <!-- 资产图片版本 -->
     <div v-if="variantTarget" class="modal-mask" @click.self="variantTarget = null">
       <div class="modal card">
@@ -1318,6 +1333,7 @@ import FrameSelector from '../components/FrameSelector.vue'
 import SceneFrameBrowser from '../components/SceneFrameBrowser.vue'
 import GeneratedMediaHistoryDrawer from '../components/GeneratedMediaHistoryDrawer.vue'
 import ShotDirectorEditor from '../components/ShotDirectorEditor.vue'
+import FaceCoverEditor from '../components/FaceCoverEditor.vue'
 import { overlayDialogueExclusions, setDialogueItemExcluded, snapshotDialogueExclusions } from '../utils/dialogueAnalysis'
 import { estimateDialogueListDuration } from '../utils/dialogueDuration.js'
 import { MODEL_LIMIT_DEFAULTS, mergeModelLimits } from '../utils/modelLimits.js'
@@ -1661,6 +1677,9 @@ function toggleSceneRole(role, name, checked) {
 }
 const sceneReferenceCandidates = ref([])
 const sceneReferenceSearch = ref('')
+// 遮脸只用于补充参考图；人物、造型、新形象是正式身份参考，后端同样拒绝。
+const faceCoverTarget = ref(null)
+const faceCoverAllowed = (ref) => ref.source_type === 'asset' || ref.source_type === 'shared_material'
 const filteredSceneReferenceCandidates = computed(() => filterReferenceCandidates(sceneReferenceCandidates.value, sceneReferenceSearch.value))
 const selectedSceneReferences = ref([])
 const invalidSceneReferences = ref([])
@@ -4230,6 +4249,18 @@ function canonicalSceneOutfits(outfits) { return JSON.stringify(sceneOutfitAssig
 function referenceKey(ref) { const base = `${ref.source_type}:${ref.source_id}:${ref.variant}`; return Number(ref.asset_variant_id || 0) ? `${base}:${Number(ref.asset_variant_id)}` : base }
 function referenceIndex(ref) { const key = referenceKey(ref); return selectedSceneReferences.value.findIndex(x => referenceKey(x) === key) }
 function toggleSceneReference(ref) { const i = referenceIndex(ref); if (i >= 0) selectedSceneReferences.value.splice(i, 1); else selectedSceneReferences.value.push({ source_type: ref.source_type, source_id: ref.source_id, variant: ref.variant, asset_variant_id: Number(ref.asset_variant_id || 0), use_krea2: true, use_h3: true, bind_character: '' }) }
+// 遮脸只刷新候选缩略图，不覆盖尚未保存的参考图勾选与排序。
+async function onFaceCoverChanged(message) {
+  faceCoverTarget.value = null
+  toast.success(message)
+  if (!editingScene.value) return
+  try {
+    const { data } = await api.sceneReferences(id(), editingScene.value.id)
+    sceneReferenceCandidates.value = data.candidates || []
+  } catch (e) {
+    sceneError.value = e.response?.data?.error || '刷新参考图库失败'
+  }
+}
 function moveReference(index, delta) { const target = index + delta; if (target < 0 || target >= selectedSceneReferences.value.length) return; const [item] = selectedSceneReferences.value.splice(index, 1); selectedSceneReferences.value.splice(target, 0, item) }
 
 function closeStoryPreview() {
@@ -4854,6 +4885,8 @@ onBeforeUnmount(() => {
 .reference-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; margin-top: 8px; }
 .reference-option { display: grid; grid-template-columns: auto 46px 1fr; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
 .reference-option img { width: 46px; height: 46px; object-fit: cover; border-radius: 6px; }
+.reference-face-cover { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.modal.face-cover-modal { width: min(880px, 94vw); max-height: 92vh; }
 .outfit-select-row { display: grid; grid-template-columns: minmax(90px, auto) minmax(220px, 1fr) auto; align-items: center; gap: 10px; margin-top: 8px; }
 .role-grid { display: grid; gap: 8px; }
 .role-row { display: grid; grid-template-columns: minmax(100px, 1fr) repeat(3, minmax(90px, auto)); gap: 12px; align-items: center; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
