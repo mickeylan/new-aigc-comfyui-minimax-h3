@@ -6162,18 +6162,28 @@ func (s *ProjectService) sceneVideoContinuityReferences(sc *models.Scene, pid st
 	}
 	// Continue 模式下，当前分镜图与上一镜尾帧互斥：保留人物、造型、场景和道具参考，
 	// 但用上一镜选定尾帧替换当前分镜图，避免两张完整构图竞争起始画面。
+	// 白模/线稿占用同一槽位，但只约束几何，不再是开始画面。
+	frameFile, frameDesc := cfg.SelectedFrame.ImageFile, "上一镜确认尾帧（本镜 0.00 秒唯一开始画面）"
+	if desc, ok := continuityReferenceFormLines[cfg.ReferenceForm]; ok {
+		derived, err := s.continuity.DerivedReference(cfg.SelectedFrame, cfg.ReferenceForm)
+		if err != nil || derived == nil {
+			// PrepareScene blocks submission in this state; previews simply omit the frame.
+			return refs, lines, cfg
+		}
+		frameFile, frameDesc = derived.ImageFile, desc
+	}
 	replacedStoryboard := false
 	for i := len(lines) - 1; i >= 0; i-- {
 		if strings.Contains(lines[i], "当前分镜") {
-			refs[i] = FileMeta{TaskID: pid, Name: cfg.SelectedFrame.ImageFile}
-			lines[i] = fmt.Sprintf("- <Picture %d>：上一镜确认尾帧（本镜 0.00 秒唯一开始画面）", i+1)
+			refs[i] = FileMeta{TaskID: pid, Name: frameFile}
+			lines[i] = fmt.Sprintf("- <Picture %d>：%s", i+1, frameDesc)
 			replacedStoryboard = true
 			break
 		}
 	}
 	if !replacedStoryboard && len(refs) < maxSceneReferenceImages {
-		refs = append(refs, FileMeta{TaskID: pid, Name: cfg.SelectedFrame.ImageFile})
-		lines = append(lines, fmt.Sprintf("- <Picture %d>：上一镜确认尾帧（本镜 0.00 秒唯一开始画面）", len(refs)))
+		refs = append(refs, FileMeta{TaskID: pid, Name: frameFile})
+		lines = append(lines, fmt.Sprintf("- <Picture %d>：%s", len(refs), frameDesc))
 	}
 	for i, line := range lines {
 		description := strings.TrimSpace(line)

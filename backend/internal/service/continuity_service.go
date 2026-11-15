@@ -272,6 +272,8 @@ type ConfigureContinuityRequest struct {
 	SourceMode    string `json:"source_mode"`
 	SourceSceneID uint   `json:"source_scene_id"`
 	FrameID       uint   `json:"frame_id"`
+	// ReferenceForm selects original/clay/lineart for the selected tail frame (continue mode only).
+	ReferenceForm string `json:"reference_form"`
 }
 
 func (s *ContinuityService) Configure(projectID, sceneID uint, req ConfigureContinuityRequest) (*models.SceneContinuity, error) {
@@ -285,7 +287,11 @@ func (s *ContinuityService) Configure(projectID, sceneID uint, req ConfigureCont
 	if req.Mode != models.ContinuityModeIndependent && req.Mode != models.ContinuityModeContinue && req.Mode != models.ContinuityModeBridge {
 		return nil, fmt.Errorf("不支持的连续性模式")
 	}
-	cfg := models.SceneContinuity{SceneID: sceneID, Mode: req.Mode, SourceMode: req.SourceMode, Status: "not_required", Version: 1}
+	form, err := normalizeFrameReferenceForm(req.ReferenceForm, req.Mode)
+	if err != nil {
+		return nil, err
+	}
+	cfg := models.SceneContinuity{SceneID: sceneID, Mode: req.Mode, SourceMode: req.SourceMode, ReferenceForm: form, Status: "not_required", Version: 1}
 	var old models.SceneContinuity
 	if result := s.db.Where("scene_id = ?", sceneID).Limit(1).Find(&old); result.Error != nil {
 		return nil, result.Error
@@ -313,7 +319,7 @@ func (s *ContinuityService) Configure(projectID, sceneID uint, req ConfigureCont
 		cfg.Status = "waiting"
 		if req.FrameID > 0 {
 			var frame models.FrameCandidate
-			if s.db.Where("id = ? AND scene_id = ? AND video_task_id = ?", req.FrameID, source.ID, source.VideoTaskID).First(&frame).Error == nil {
+			if s.db.Where("id = ? AND scene_id = ? AND video_task_id = ? AND type IN ?", req.FrameID, source.ID, source.VideoTaskID, []models.FrameCandidateType{models.FrameCandidateCandidate, models.FrameCandidateSelected}).First(&frame).Error == nil {
 				cfg.SelectedFrameID = &frame.ID
 				cfg.Status = "ready"
 			}
@@ -376,6 +382,13 @@ func (s *ContinuityService) PrepareScene(scene *models.Scene) error {
 	if cfg.Mode == models.ContinuityModeBridge {
 		scene.VideoTemplate, scene.VideoFirstFrameImg, scene.VideoLastFrameImg = "minimax_h3_first_last", cfg.SelectedFrame.ImageFile, scene.ImageFile
 	} else {
+		if form := cfg.ReferenceForm; form == FrameReferenceClay || form == FrameReferenceLineart {
+			if derived, err := s.DerivedReference(cfg.SelectedFrame, form); err != nil {
+				return err
+			} else if derived == nil {
+				return fmt.Errorf("已选择以%s作为参考形式，但当前尾帧尚无%s结果，请先转换或改用原图", frameConvertLabels[form], frameConvertLabels[form])
+			}
+		}
 		// Continue mode keeps Ref2VA references, but its selected tail frame replaces the current storyboard image.
 		scene.VideoTemplate, scene.VideoFirstFrameImg, scene.VideoLastFrameImg = "minimax_h3_ref2v", "", ""
 	}

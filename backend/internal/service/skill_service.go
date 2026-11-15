@@ -280,6 +280,8 @@ func (s *SkillService) InitSystemSkills() error {
 		stylePresetScreenshotSkill,
 		storyboardSheetSkill,
 		characterRegistrationPhotoSkill,
+		continuityFrameClaySkill,
+		continuityFrameLineartSkill,
 		assetSceneDescriptionPolishSkill,
 		assetCharacterDescriptionPolishSkill,
 	}
@@ -339,6 +341,8 @@ var systemSkillModelFamilies = map[string]string{
 	QwenImage21EditProgram:          models.ModelFamilyQwenImage21,
 	QwenImage21CharacterCardProgram: models.ModelFamilyQwenImage21,
 	characterRegistrationSkillCode:  models.ModelFamilyQwenImage21,
+	continuityFrameClaySkillCode:    models.ModelFamilyQwenImage21,
+	continuityFrameLineartSkillCode: models.ModelFamilyQwenImage21,
 }
 
 // syncSystemSkillGovernance applies operation and model-family metadata to every stored version

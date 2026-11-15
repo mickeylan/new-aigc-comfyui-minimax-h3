@@ -1268,6 +1268,7 @@ const (
 	FrameCandidateSelected   FrameCandidateType = "selected"    // 已选帧（人工选择作为衔接帧）
 	FrameCandidateVideoFirst FrameCandidateType = "video_first" // 成片实际首帧
 	FrameCandidateVideoLast  FrameCandidateType = "video_last"  // 成片实际尾帧
+	FrameCandidateDerived    FrameCandidateType = "derived"     // 由某张尾帧转换的白模/线稿参考，不可单独选为衔接帧
 )
 
 // FrameCandidate 是某次视频任务末尾提取的候选衔接帧。
@@ -1281,13 +1282,22 @@ type FrameCandidate struct {
 	TimestampMS       int64              `json:"timestamp_ms"`
 	ImageFile         string             `json:"image_file"` // input/<projectID> 下的当前有效图片
 	OriginalImageFile string             `json:"original_image_file,omitempty"`
-	Source            string             `gorm:"default:extracted" json:"source"` // extracted/manual_upload
+	Source            string             `gorm:"default:extracted" json:"source"` // extracted/manual_upload/clay/lineart
 	// SharpnessScore is the Laplacian variance of the frame (-1 when it could not be read).
 	// Recommended marks the sharpest non-dark frame of an extraction; it is advice only.
 	SharpnessScore float64    `gorm:"default:-1" json:"sharpness_score"`
 	Recommended    bool       `gorm:"default:false" json:"recommended"`
 	SelectedAt     *time.Time `json:"selected_at,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
+	// A clay/line-art reference is a separate row derived from one tail frame; DerivedSourceFile
+	// is that frame's image at conversion time, so a later replacement makes the derivative stale.
+	DerivedFromID     *uint  `gorm:"index" json:"derived_from_id,omitempty"`
+	DerivedSourceFile string `json:"derived_source_file,omitempty"`
+	// Convert* track the single in-flight conversion of this frame (empty task id when idle).
+	ConvertTaskID       string    `gorm:"index" json:"convert_task_id,omitempty"`
+	ConvertKind         string    `json:"convert_kind,omitempty"`
+	ConvertError        string    `gorm:"type:text" json:"convert_error,omitempty"`
+	ConvertSourceSHA256 string    `gorm:"column:convert_source_sha256" json:"-"`
+	CreatedAt           time.Time `json:"created_at"`
 }
 
 // SceneContinuity 是当前 Scene 对上一 Scene 的显式依赖。
@@ -1510,6 +1520,8 @@ type SceneContinuity struct {
 	SourceSceneID     *uint           `gorm:"index" json:"source_scene_id,omitempty"`
 	SelectedFrameID   *uint           `gorm:"index" json:"selected_frame_id,omitempty"`
 	SourceVideoTaskID string          `gorm:"index" json:"source_video_task_id"`
+	// ReferenceForm is original/clay/lineart; clay and line art apply to continue mode only.
+	ReferenceForm     string          `gorm:"default:original" json:"reference_form"`
 	Status            string          `gorm:"default:not_required;index" json:"status"`
 	Error             string          `gorm:"type:text" json:"error"`
 	Version           int             `gorm:"default:1" json:"version"`

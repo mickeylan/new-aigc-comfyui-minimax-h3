@@ -497,6 +497,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.GET("/api/projects/:id/scenes/:sid/continuity/frames", svc.HandleGetFrameCandidates)
 	r.PUT("/api/projects/:id/scenes/:sid/continuity/frames/select", svc.HandleSelectFrame)
 	r.POST("/api/projects/:id/scenes/:sid/continuity/frames/replace", svc.HandleReplaceSelectedFrame)
+	r.POST("/api/projects/:id/scenes/:sid/continuity/frames/:fid/convert", svc.HandleConvertFrameCandidate)
 	r.GET("/api/projects/:id/scenes/:sid/continuity", svc.HandleGetContinuity)
 	r.PUT("/api/projects/:id/scenes/:sid/continuity", svc.HandleConfigureContinuity)
 

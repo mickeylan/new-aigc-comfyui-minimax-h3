@@ -31,6 +31,21 @@
         <span>已选上一镜末尾帧：{{ selectedOutput.source === 'manual_upload' ? '用户高清替换图' : timeLabel(selectedOutput.timestamp_ms) }}</span>
         <label class="btn btn-sm btn-secondary">上传高清图替换<input hidden type="file" accept="image/png,image/jpeg,image/webp" @change="replaceFrame" /></label>
       </div>
+      <div v-if="mode === 'continue_from_previous' && selectedOutput" class="form-block">
+        <div class="form-row">
+          <span>参考形式：</span>
+          <select v-model="referenceForm" class="input form-select">
+            <option value="original">原图</option>
+            <option value="clay">白模</option>
+            <option value="lineart">线稿</option>
+          </select>
+          <button v-if="referenceForm !== 'original'" class="btn btn-sm btn-secondary" :disabled="converting || !!selectedOutput.convert_task_id" @click="convert">{{ selectedOutput.convert_task_id ? '转换中…' : (derivedFor(referenceForm) ? `重新生成${formLabels[referenceForm]}` : `生成${formLabels[referenceForm]}`) }}</button>
+        </div>
+        <p v-if="referenceForm !== 'original'" class="hint">{{ formLabels[referenceForm] }}只约束人物姿势、站位、遮挡和场景几何，不作为开始画面；视频从0秒起仍是完整彩色画面。转换结果另存，原尾帧保持不变。</p>
+        <img v-if="referenceForm !== 'original' && derivedFor(referenceForm)" class="derived-preview" :src="derivedFor(referenceForm).image_url" :alt="`尾帧${formLabels[referenceForm]}`" />
+        <p v-else-if="referenceForm !== 'original' && !selectedOutput.convert_task_id" class="warning">尚无{{ formLabels[referenceForm] }}结果，生成前无法提交本镜视频。</p>
+        <p v-if="selectedOutput.convert_error" class="warning">上次转换失败：{{ selectedOutput.convert_error }}</p>
+      </div>
     </section>
 
     <p v-if="error" class="warning">{{ error }}</p>
@@ -39,7 +54,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { api } from '../api'
 
 const props = defineProps({
@@ -59,12 +74,17 @@ const saving = ref(false)
 const selectedOutput = ref(null)
 const selectedFrameId = ref(0)
 const error = ref('')
+const referenceForm = ref('original')
+const converting = ref(false)
+const formLabels = { clay: '白模', lineart: '线稿' }
+let pollTimer = null
 
 async function load() {
   error.value = ''
   const cfg = await api.getContinuity(props.projectId, props.sceneId)
   continuity.value = cfg.data.continuity || null
   mode.value = continuity.value?.mode || 'independent'
+  referenceForm.value = continuity.value?.reference_form || 'original'
   if (!props.sourceSceneId) {
     mode.value = 'independent'
     return
@@ -74,6 +94,30 @@ async function load() {
   const configuredFrameId = Number(continuity.value?.selected_frame_id || 0)
   selectedOutput.value = frames.value.find(f => f.id === configuredFrameId) || frames.value.find(f => f.selected) || null
   selectedFrameId.value = selectedOutput.value?.id || 0
+  if (selectedOutput.value?.convert_task_id) startPolling()
+}
+function derivedFor(kind) { return selectedOutput.value?.derived?.[kind] || null }
+async function refreshSelected() {
+  const fr = await api.getFrameCandidates(props.projectId, props.sourceSceneId)
+  frames.value = fr.data.frames || []
+  selectedOutput.value = frames.value.find(f => f.id === selectedFrameId.value) || selectedOutput.value
+  if (!selectedOutput.value?.convert_task_id) stopPolling()
+}
+function startPolling() {
+  stopPolling()
+  pollTimer = setInterval(() => refreshSelected().catch(e => { error.value = e.response?.data?.error || e.message }), 5000)
+}
+function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null } }
+async function convert() {
+  if (!selectedOutput.value) return
+  converting.value = true
+  error.value = ''
+  try {
+    const res = await api.convertFrameCandidate(props.projectId, props.sourceSceneId, selectedOutput.value.id, referenceForm.value)
+    selectedOutput.value = { ...selectedOutput.value, ...res.data.frame }
+    startPolling()
+  } catch (e) { error.value = e.response?.data?.error || e.message }
+  finally { converting.value = false }
 }
 async function extract() {
   if (!props.sourceSceneId) return
@@ -120,6 +164,7 @@ async function saveMode(openPrompt) {
     if (mode.value !== 'independent') {
       payload.source_scene_id = props.sourceSceneId
       if (selectedFrameId.value) payload.frame_id = selectedFrameId.value
+      payload.reference_form = mode.value === 'continue_from_previous' ? referenceForm.value : 'original'
     }
     continuity.value = (await api.configureContinuity(props.projectId, props.sceneId, payload)).data.continuity
     emit('applied', continuity.value, openPrompt)
@@ -128,8 +173,9 @@ async function saveMode(openPrompt) {
 }
 function timeLabel(ms) { const value = Number(ms || 0); return value < 0 ? `${(value / 1000).toFixed(3)}s（距结尾）` : `${(value / 1000).toFixed(3)}s` }
 onMounted(() => load().catch(e => { error.value = e.response?.data?.error || e.message }))
+onUnmounted(stopPolling)
 </script>
 
 <style scoped>
-.continuity-panel{padding:20px;background:var(--card);color:var(--text-primary);border-radius:12px}.panel-head{display:flex;justify-content:space-between;align-items:center}.block{margin-top:18px;padding:14px;border:1px solid var(--border);border-radius:8px}.block h4{margin:0 0 8px}.hint,.empty{color:var(--text-secondary);font-size:13px}.actions{margin-top:12px;display:flex;gap:8px}.frame-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(135px,1fr));gap:10px;margin-top:12px}.frame{padding:0;overflow:hidden;border:2px solid transparent;border-radius:6px;background:var(--bg-secondary);color:var(--text-secondary);cursor:pointer}.frame{position:relative}.frame.recommended:not(.selected){border-color:#64b5f6}.frame.selected{border-color:#4caf50}.recommend-badge{position:absolute;top:4px;left:4px;padding:1px 6px;font-size:11px;font-style:normal;color:#fff;background:#1e88e5;border-radius:4px}.frame img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover}.frame span{display:block;padding:5px;font-size:11px}.input{width:100%;padding:8px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);border-radius:6px}.warning{margin-top:10px;padding:8px;color:#ffb74d;background:rgba(255,152,0,.12);border-radius:6px}.replace-row{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:12px;padding:10px;background:var(--bg-secondary);border-radius:6px;font-size:13px}
+.continuity-panel{padding:20px;background:var(--card);color:var(--text-primary);border-radius:12px}.panel-head{display:flex;justify-content:space-between;align-items:center}.block{margin-top:18px;padding:14px;border:1px solid var(--border);border-radius:8px}.block h4{margin:0 0 8px}.hint,.empty{color:var(--text-secondary);font-size:13px}.actions{margin-top:12px;display:flex;gap:8px}.frame-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(135px,1fr));gap:10px;margin-top:12px}.frame{padding:0;overflow:hidden;border:2px solid transparent;border-radius:6px;background:var(--bg-secondary);color:var(--text-secondary);cursor:pointer}.frame{position:relative}.frame.recommended:not(.selected){border-color:#64b5f6}.frame.selected{border-color:#4caf50}.recommend-badge{position:absolute;top:4px;left:4px;padding:1px 6px;font-size:11px;font-style:normal;color:#fff;background:#1e88e5;border-radius:4px}.frame img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover}.frame span{display:block;padding:5px;font-size:11px}.input{width:100%;padding:8px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);border-radius:6px}.warning{margin-top:10px;padding:8px;color:#ffb74d;background:rgba(255,152,0,.12);border-radius:6px}.replace-row{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:12px;padding:10px;background:var(--bg-secondary);border-radius:6px;font-size:13px}.form-block{margin-top:12px}.form-row{display:flex;align-items:center;gap:8px;font-size:13px}.form-select{width:auto}.derived-preview{display:block;max-width:320px;margin-top:8px;border-radius:6px}
 </style>

@@ -53,8 +53,17 @@ func (s *Service) HandleGetFrameCandidates(c *gin.Context) {
 }
 func (s *Service) frameResponses(frames []models.FrameCandidate) []gin.H {
 	out := make([]gin.H, 0, len(frames))
+	derived := s.Continuity.derivedReferences(frames)
 	for _, f := range frames {
-		out = append(out, gin.H{"id": f.ID, "scene_id": f.SceneID, "video_task_id": f.VideoTaskID, "frame_index": f.FrameIndex, "timestamp_ms": f.TimestampMS, "image_file": f.ImageFile, "original_image_file": f.OriginalImageFile, "source": f.Source, "image_url": s.Continuity.FrameURL(f), "selected": f.Type == models.FrameCandidateSelected})
+		row := gin.H{"id": f.ID, "scene_id": f.SceneID, "video_task_id": f.VideoTaskID, "frame_index": f.FrameIndex, "timestamp_ms": f.TimestampMS, "image_file": f.ImageFile, "original_image_file": f.OriginalImageFile, "source": f.Source, "image_url": s.Continuity.FrameURL(f), "selected": f.Type == models.FrameCandidateSelected,
+			"sharpness_score": f.SharpnessScore, "recommended": f.Recommended, "convert_task_id": f.ConvertTaskID, "convert_kind": f.ConvertKind, "convert_error": f.ConvertError}
+		// Clay/line-art references made from this frame's current image, keyed by kind.
+		refs := gin.H{}
+		for kind, d := range derived[f.ID] {
+			refs[kind] = gin.H{"id": d.ID, "image_file": d.ImageFile, "image_url": s.Continuity.FrameURL(d)}
+		}
+		row["derived"] = refs
+		out = append(out, row)
 	}
 	return out
 }
