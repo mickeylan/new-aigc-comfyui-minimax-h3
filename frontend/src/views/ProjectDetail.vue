@@ -578,11 +578,12 @@
 
           <div v-if="sc.video_input_file || (sc.video_file && sc.video_gpu !== null && sc.video_gpu !== undefined)" class="video-box">
             <div class="scene-video-stage">
-              <video :src="videoUrl(sc)" controls preload="metadata" class="scene-video" @timeupdate="sceneVideoTimes[sc.id]=$event.target.currentTime" @seeked="sceneVideoTimes[sc.id]=$event.target.currentTime"></video>
+              <video :ref="el => sceneVideoEls[sc.id] = el" :src="videoUrl(sc)" controls preload="metadata" class="scene-video" @timeupdate="sceneVideoTimes[sc.id]=$event.target.currentTime" @seeked="sceneVideoTimes[sc.id]=$event.target.currentTime"></video>
               <div v-for="cue in activeSceneScreenText(sc)" :key="cue.id" class="scene-screen-text" :style="sceneScreenTextStyle(cue)"><strong>{{sceneScreenTextValue(cue)}}</strong><small v-if="cue.subtext" :style="cue.subtext_size>0?{fontSize:`${cue.subtext_size}px`}:{}">{{cue.subtext}}</small></div>
             </div>
             <p v-if="screenTextCues.some(cue=>cue.scene_id===sc.id&&cue.enabled&&cue.review_status==='approved')" class="screen-text-preview-note">当前播放器按本分镜0秒起实时预览功能文字；原始视频不变，正式导出使用同一相对时间。</p>
             <a class="btn btn-sm btn-ghost download" :href="videoUrl(sc) + '?download=1'">下载原始视频</a>
+            <SceneSubtitleCheck :project-id="project.id" :scene-id="sc.id" @seek="t => seekSceneVideo(sc, t)" />
           </div>
         </div>
       </div>
@@ -1334,6 +1335,7 @@ import SceneFrameBrowser from '../components/SceneFrameBrowser.vue'
 import GeneratedMediaHistoryDrawer from '../components/GeneratedMediaHistoryDrawer.vue'
 import ShotDirectorEditor from '../components/ShotDirectorEditor.vue'
 import FaceCoverEditor from '../components/FaceCoverEditor.vue'
+import SceneSubtitleCheck from '../components/SceneSubtitleCheck.vue'
 import { overlayDialogueExclusions, setDialogueItemExcluded, snapshotDialogueExclusions } from '../utils/dialogueAnalysis'
 import { estimateDialogueListDuration } from '../utils/dialogueDuration.js'
 import { MODEL_LIMIT_DEFAULTS, mergeModelLimits } from '../utils/modelLimits.js'
@@ -1398,6 +1400,8 @@ const historyLoading = ref(null)
 const dialogues = ref([])
 const screenTextCues = ref([])
 const sceneVideoTimes = reactive({})
+const sceneVideoEls = {}
+function seekSceneVideo(sc, seconds) { const el = sceneVideoEls[sc.id]; if (el) { el.currentTime = Number(seconds) || 0; el.pause() } }
 const curEpDubReady = computed(() => {
   const ids = currentScenes.value.map(s => s.id)
   const dubs = dialogues.value.filter(d => ids.includes(d.scene_id))

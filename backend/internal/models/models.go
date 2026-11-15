@@ -1561,6 +1561,24 @@ type CharacterVoiceExtraction struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
+// SceneSubtitleCheck is the latest local, advisory burned-in subtitle check of a Scene video.
+// It only gives timestamp hints; the video itself is never modified. "uncertain" results need
+// a manual Decision, which is ignored once the source video changes (SourceKey mismatch).
+type SceneSubtitleCheck struct {
+	ID        uint       `gorm:"primaryKey" json:"id"`
+	ProjectID uint       `gorm:"index" json:"project_id"`
+	SceneID   uint       `gorm:"uniqueIndex" json:"scene_id"`
+	SourceKey string     `json:"source_key"`
+	Status    string     `json:"status"` // clean | subtitles | uncertain
+	Detail    string     `json:"detail"`
+	HintsJSON string     `gorm:"type:text" json:"-"`
+	Samples   int        `json:"samples"`
+	Decision  string     `json:"decision"` // "" | has_subtitles | no_subtitles
+	DecidedAt *time.Time `json:"decided_at"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+}
+
 type SceneContinuity struct {
 	ID                uint            `gorm:"primaryKey" json:"id"`
 	SceneID           uint            `gorm:"uniqueIndex" json:"scene_id"`

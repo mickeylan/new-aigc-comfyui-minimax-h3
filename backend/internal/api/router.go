@@ -176,6 +176,10 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.PUT("/api/projects/:id/episodes/:number/editing-draft", svc.HandleSaveEditingDraft)
 	r.GET("/api/projects/:id/scenes/:sid/references", svc.HandleGetSceneReferences)
 	r.PUT("/api/projects/:id/scenes/:sid/references", svc.HandleUpdateSceneReferences)
+	// 本地烧录字幕检测：只给时间提示，不修改视频；不确定需人工判断
+	r.GET("/api/projects/:id/scenes/:sid/subtitle-check", svc.HandleGetSceneSubtitleCheck)
+	r.POST("/api/projects/:id/scenes/:sid/subtitle-check", svc.HandleRunSceneSubtitleCheck)
+	r.PUT("/api/projects/:id/scenes/:sid/subtitle-check/decision", svc.HandleDecideSceneSubtitleCheck)
 	r.GET("/api/projects/:id/scenes/:sid/references/face-cover", svc.HandleGetSceneReferenceFaceCover)
 	r.PUT("/api/projects/:id/scenes/:sid/references/face-cover", svc.HandleSaveSceneReferenceFaceCover)
 	r.DELETE("/api/projects/:id/scenes/:sid/references/face-cover", svc.HandleRestoreSceneReferenceFaceCover)

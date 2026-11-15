@@ -53,6 +53,8 @@ type ProjectService struct {
 	sceneAudioMu   sync.Mutex // 串行化Scene连续音轨渲染与发布，避免重复文件和候选
 	faceCoverMu    sync.Mutex
 	faceCoverBusy  map[string]bool // 正在遮脸/恢复的 Scene 参考图，重复请求返回 409
+	subtitleMu     sync.Mutex
+	subtitleBusy   map[uint]bool // 正在做字幕检测的 Scene，重复请求返回 409
 }
 
 func NewProjectService(cfg *config.Config, db *gorm.DB, textProvider TextProvider, volc *VolcClient, tasks *TaskService, remote *RemoteExec, upload *UploadManager, hub *Hub, materials *MaterialService) *ProjectService {
@@ -331,6 +333,9 @@ func (s *ProjectService) DeleteProject(id uint) error {
 			return err
 		}
 		if err := deleteIfTable(tx, &models.CharacterVoiceExtraction{}, "project_id = ?", id); err != nil {
+			return err
+		}
+		if err := deleteIfTable(tx, &models.SceneSubtitleCheck{}, "project_id = ?", id); err != nil {
 			return err
 		}
 		if err := tx.Where("scene_id IN (?)", sceneIDsQuery).Delete(&models.Shot{}).Error; err != nil {
