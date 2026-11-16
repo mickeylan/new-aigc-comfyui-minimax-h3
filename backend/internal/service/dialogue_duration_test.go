@@ -157,6 +157,38 @@ func TestMinDurationKeepsStrippedDialogueFloorWithoutSplitting(t *testing.T) {
 	}
 }
 
+func TestOverlongSpeechSplitsAtClausePausesWhenNoSentenceEnderExists(t *testing.T) {
+	original := strings.Repeat("这妖孽当真狡猾得紧，", 14)
+	if scriptDialoguesMinDuration([]scriptDialogue{{Text: original}}) <= maxSceneVideoDuration {
+		t.Fatalf("fixture must outlast one generation to exercise the split")
+	}
+	parts := splitDialogueText(original)
+	if len(parts) < 2 {
+		t.Fatalf("clause pauses were not used as seams: %d piece(s)", len(parts))
+	}
+	for i, part := range parts {
+		if !strings.HasSuffix(part, "，") {
+			t.Fatalf("piece %d does not end at a clause pause: %q", i, part)
+		}
+		if got := scriptDialoguesMinDuration([]scriptDialogue{{Text: part}}); got > maxSceneVideoDuration {
+			t.Fatalf("piece %d still lasts %.1f s, over the %.0f s generation cap", i, got, maxSceneVideoDuration)
+		}
+	}
+	if strings.Join(parts, "") != original {
+		t.Fatalf("speech changed during split\nwant=%q\ngot=%q", original, strings.Join(parts, ""))
+	}
+}
+
+func TestUnpunctuatedOverlongSpeechIsKeptWholeInsteadOfCutMidWord(t *testing.T) {
+	// 200 characters with no ender and no pause. The previous length-based fallback
+	// sliced this at character 131, splitting a word across two generations.
+	original := strings.Repeat("字", 200)
+	parts := splitDialogueText(original)
+	if len(parts) != 1 || parts[0] != original {
+		t.Fatalf("speech with no natural seam must stay whole, got %d piece(s): %+v", len(parts), parts)
+	}
+}
+
 func TestValidateScriptAllowsEpisodeToExceedReferenceDuration(t *testing.T) {
 	result := &scriptResult{Script: "正文", VisualBible: "视觉", Scenes: []scriptScene{{Content: "动作", ImagePrompt: "画面", Duration: 15}, {Content: "动作", ImagePrompt: "画面", Duration: 15}}}
 	if err := validateScriptResult(result, 20.0, 1); err != nil {

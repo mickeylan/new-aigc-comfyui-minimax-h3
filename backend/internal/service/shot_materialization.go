@@ -107,13 +107,33 @@ func fragmentsContinueDialogue(before, after []dialogueFragment) bool {
 	return left.ID != 0 && left.ID == right.ID
 }
 
+// fragmentSeamIsNaturalPause reports whether the speech before a seam stops where the
+// speaker would breathe. Speech longer than one generation crosses every seam, so a
+// Dialogue boundary alone cannot be the test: without this, no acceptable cut exists
+// and the arithmetic one is kept, landing inside a word. A full stop or clause pause
+// is audible as a pause instead.
+func fragmentSeamIsNaturalPause(before []dialogueFragment) bool {
+	for i := len(before) - 1; i >= 0; i-- {
+		text := strings.TrimSpace(before[i].Text)
+		if text == "" {
+			continue
+		}
+		return strings.Contains(dialogueSentenceEnders+dialogueClausePauses, lastRune(text))
+	}
+	return false
+}
+
 // moveNativeCutToSentenceBoundary returns the start of the next group. When the incoming
 // Shot continues a Dialogue from the current group, trailing Shots move forward to the
-// latest boundary no Dialogue crosses, keeping the current group >=4s and the next <=15s.
-// If no such boundary exists the original cut is kept.
+// latest boundary that no Dialogue crosses or that falls on a natural pause, keeping the
+// current group >=4s and the next <=15s. If no such boundary exists the original cut is kept.
 func moveNativeCutToSentenceBoundary(current *nativeShotGroup, incoming []dialogueFragment, incomingDuration float64) nativeShotGroup {
 	last := len(current.Shots) - 1
 	if last < 0 || !fragmentsContinueDialogue(current.FragmentSets[last], incoming) {
+		return nativeShotGroup{}
+	}
+	// The incoming cut already lands on a breath, so no Shot has to move.
+	if fragmentSeamIsNaturalPause(current.FragmentSets[last]) {
 		return nativeShotGroup{}
 	}
 	moved := incomingDuration
@@ -122,7 +142,10 @@ func moveNativeCutToSentenceBoundary(current *nativeShotGroup, incoming []dialog
 		if moved > maxNativeSceneDuration {
 			break
 		}
-		if current.Duration-moved+incomingDuration < minSceneVideoDuration || fragmentsContinueDialogue(current.FragmentSets[k-1], current.FragmentSets[k]) {
+		if current.Duration-moved+incomingDuration < minSceneVideoDuration {
+			continue
+		}
+		if fragmentsContinueDialogue(current.FragmentSets[k-1], current.FragmentSets[k]) && !fragmentSeamIsNaturalPause(current.FragmentSets[k-1]) {
 			continue
 		}
 		next := nativeShotGroup{Shots: append([]models.Shot(nil), current.Shots[k:]...), FragmentSets: append([][]dialogueFragment(nil), current.FragmentSets[k:]...), Duration: moved - incomingDuration}

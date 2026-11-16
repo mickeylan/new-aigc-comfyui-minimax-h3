@@ -301,6 +301,35 @@ func TestGroupNativeShotsKeepsSentenceInOneGeneration(t *testing.T) {
 	}
 }
 
+func TestGroupNativeShotsCutsLongSpeechAtABreathInsteadOfMidClause(t *testing.T) {
+	// One line outlasts a generation, so every Shot boundary crosses it. Before natural
+	// pauses counted as seams, no boundary qualified and the 15-second cut stayed
+	// between 「还没」 and 「追上」.
+	line := models.Dialogue{ID: 9, Character: "马脸男子", Text: "这妖孽当真狡猾，我们追了三天三夜，还没追上。"}
+	shots := []models.Shot{{ID: 1, Duration: 5}, {ID: 2, Duration: 5}, {ID: 3, Duration: 4}, {ID: 4, Duration: 4}}
+	fragments := [][]dialogueFragment{
+		{{Source: line, Text: "这妖孽当真狡猾，"}},
+		{{Source: line, Text: "我们追了三天三夜，"}},
+		{{Source: line, Text: "还没"}},
+		{{Source: line, Text: "追上。"}},
+	}
+	groups := groupNativeShots(shots, fragments)
+	if len(groups) != 2 || len(groups[0].Shots) != 2 || groups[0].Duration != 10 || groups[1].Duration != 8 {
+		t.Fatalf("generation seam did not move back to the clause pause: %+v", groups)
+	}
+
+	// When the 15-second cut already lands on a pause, nothing moves.
+	onPause := [][]dialogueFragment{
+		{{Source: line, Text: "这妖孽"}},
+		{{Source: line, Text: "当真狡猾"}},
+		{{Source: line, Text: "我们追了三天三夜，"}},
+		{{Source: line, Text: "还没追上。"}},
+	}
+	if got := groupNativeShots(shots, onPause); len(got) != 2 || got[0].Duration != 14 || got[1].Duration != 4 {
+		t.Fatalf("a cut already on a pause was moved: %+v", got)
+	}
+}
+
 func TestGroupNativeShotsPacksAdjacentShotsUpToFifteenSeconds(t *testing.T) {
 	durations := []float64{4, 3, 3, 5, 5, 4, 5, 4, 4, 3, 4, 5, 4}
 	shots := make([]models.Shot, len(durations))

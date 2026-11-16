@@ -27,6 +27,11 @@ const (
 	// A sparse scene may breathe a little past its content load, never to an arbitrary length.
 	sceneStretchFactor     = 1.25
 	minSceneStretchCeiling = 5.0
+	// Seam candidates for splitting speech that outlasts one generation, in preference
+	// order. A sentence ender is a full stop the audience already expects; a clause pause
+	// is where the speaker breathes. Anything else would cut inside a word.
+	dialogueSentenceEnders = "。！？!?；;"
+	dialogueClausePauses   = "，,、：:…"
 )
 
 var (
@@ -254,6 +259,10 @@ func splitDialogueList(dialogues []scriptDialogue) [][]scriptDialogue {
 	return chunks
 }
 
+// splitDialogueText breaks one over-long line into pieces that each fit a single
+// generation. Sentence enders are tried first, then clause pauses. A run carrying
+// neither is kept whole: a cut inside a word reads worse than an over-long piece,
+// which stays visible for a human to re-split or re-voice.
 func splitDialogueText(text string) []string {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -262,14 +271,28 @@ func splitDialogueText(text string) []string {
 	if scriptDialoguesMinDuration([]scriptDialogue{{Text: text}}) <= maxSceneVideoDuration {
 		return []string{text}
 	}
+	safe := []string{}
+	for _, part := range splitDialogueAfterRunes(text, dialogueSentenceEnders) {
+		if scriptDialoguesMinDuration([]scriptDialogue{{Text: part}}) <= maxSceneVideoDuration {
+			safe = append(safe, part)
+			continue
+		}
+		safe = append(safe, splitDialogueAfterRunes(part, dialogueClausePauses)...)
+	}
+	return safe
+}
+
+// splitDialogueAfterRunes cuts after each separator, keeping the separator with the
+// piece it closes. Text without any separator is returned whole, never sliced by
+// length. Characters are only regrouped, never dropped or rewritten.
+func splitDialogueAfterRunes(text, separators string) []string {
 	parts, start := []string{}, 0
 	runes := []rune(text)
 	for i, r := range runes {
-		if !strings.ContainsRune("。！？!?；;", r) {
+		if !strings.ContainsRune(separators, r) {
 			continue
 		}
-		candidate := strings.TrimSpace(string(runes[start : i+1]))
-		if candidate != "" {
+		if candidate := strings.TrimSpace(string(runes[start : i+1])); candidate != "" {
 			parts = append(parts, candidate)
 		}
 		start = i + 1
@@ -277,22 +300,10 @@ func splitDialogueText(text string) []string {
 	if tail := strings.TrimSpace(string(runes[start:])); tail != "" {
 		parts = append(parts, tail)
 	}
-	maxChars := int(math.Floor((maxSceneVideoDuration - dialogueOpeningClosingMargin) * defaultChineseCharsPerSecond))
-	if maxChars < 1 {
-		maxChars = 1
+	if len(parts) == 0 {
+		return []string{text}
 	}
-	safe := make([]string, 0, len(parts))
-	for _, part := range parts {
-		partRunes := []rune(part)
-		for len(partRunes) > maxChars {
-			safe = append(safe, string(partRunes[:maxChars]))
-			partRunes = partRunes[maxChars:]
-		}
-		if len(partRunes) > 0 {
-			safe = append(safe, string(partRunes))
-		}
-	}
-	return safe
+	return parts
 }
 
 func chinesePartNumber(n int) string {
