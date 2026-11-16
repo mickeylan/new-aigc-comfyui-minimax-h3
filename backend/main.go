@@ -2,8 +2,10 @@ package main
 
 import (
 	"log"
+	"time"
 
 	"comfyui-console/internal/api"
+	"comfyui-console/internal/applog"
 	"comfyui-console/internal/config"
 	"comfyui-console/internal/database"
 	"comfyui-console/internal/service"
@@ -11,6 +13,13 @@ import (
 
 func main() {
 	cfg := config.Load()
+
+	if logFile, logPath, err := applog.Setup(cfg.Storage.DataDir, time.Now()); err != nil {
+		log.Printf("[log] file log disabled, console only: %v", err)
+	} else {
+		defer logFile.Close()
+		log.Printf("[log] writing console log to %s", logPath)
+	}
 
 	db, err := database.Init(cfg)
 	if err != nil {

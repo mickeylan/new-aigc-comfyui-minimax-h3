@@ -90,7 +90,7 @@
         <div class="shot-grid"><label>阶段<select v-model="skillStage" class="input" @change="onSkillStageChange"><option v-for="s in skillStages" :key="s.value" :value="s.value">{{ s.label }}</option></select></label><label>操作契约<select v-model="skillOperation" class="input" @change="loadSkillPanel"><option v-for="op in stageOperations" :key="op" :value="op">{{ op }}</option></select></label><label>Skill<select v-model="selectedSkillId" class="input"><option value="">使用系统默认</option><option v-for="s in operationSkills" :key="s.id" :value="String(s.id)">{{ s.name }} · v{{ s.version }}</option></select></label></div>
         <div class="section-actions"><button class="btn btn-sm" @click="saveProjectSkill">保存项目配置</button><button class="btn btn-sm btn-ghost" @click="resetProjectSkill">恢复系统默认</button><button class="btn btn-sm btn-ghost" @click="loadSkillAudit">刷新审计</button></div>
         <p class="sub" v-if="effectiveSkill">当前有效：{{ effectiveSkill.name }}（{{ effectiveSkill.operation || effectiveSkill.code }}）</p>
-        <div v-if="skillAudits.length" class="history"><div v-for="row in skillAudits" :key="row.id" class="history-item">{{ row.stage }} · {{ row.skill_code }} · {{ row.success ? '成功' : ('失败：' + (row.error || '未知错误')) }} · {{ new Date(row.created_at).toLocaleString() }}</div></div>
+        <div v-if="skillAudits.length" class="history"><div v-for="row in skillAudits" :key="row.id" class="history-item">{{ row.stage }} · {{ row.skill_code }} · {{ row.success ? '成功' : ('失败：' + (row.error || '未知错误')) }} · 耗时 {{ (Number(row.duration_ms || 0) / 1000).toFixed(1) }}s · {{ new Date(row.created_at).toLocaleString() }}</div></div>
       </details>
     </section>
 
