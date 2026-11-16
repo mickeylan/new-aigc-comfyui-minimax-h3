@@ -99,6 +99,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.GET("/api/projects/:id/episodes/:number/screenplay/export/:format", svc.HandleExportScreenplay)
 	r.GET("/api/projects/:id/episodes/:number/continuity", svc.HandleEpisodeContinuity)
 	r.POST("/api/projects/:id/episodes/:number/continuity/regenerate", svc.HandleRegenerateEpisodeContinuity)
+	r.GET("/api/projects/:id/episodes/:number/continuity/chain", svc.HandleEpisodeContinuityChain) // 只读链式预览：按显式连续性来源排出等待关系
 	r.PUT("/api/projects/:id", svc.HandleUpdateProject)
 	r.DELETE("/api/projects/:id", svc.HandleDeleteProject)
 	r.POST("/api/projects/:id/script", svc.HandleGenerateScript)

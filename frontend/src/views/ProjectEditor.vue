@@ -69,6 +69,21 @@
       <div class="card" v-if="continuity"><p><strong>上一集摘要：</strong><span v-if="continuity.previous_episode?.summary_stale" class="badge warn">已过期</span> {{ continuity.previous_summary || '暂无' }}</p><p><strong>结尾钩子：</strong><span v-if="continuity.previous_episode?.next_hook_stale" class="badge warn">已过期</span> {{ continuity.previous_hook || '暂无' }}</p><p><strong>本集角色：</strong>{{ (continuity.character_appearances || []).map(v => v.name).join('、') || '暂无' }}</p><div class="merge-links" v-if="continuity.last_scene_images?.length"><span v-for="f in continuity.last_scene_images" :key="f">{{ f }}</span></div><pre v-if="intentDraft" class="prompt-preview">{{ intentDraft }}</pre></div>
     </section>
 
+    <section v-show="workspaceTab==='continuity'" class="section continuity-chain-section">
+      <div class="section-head"><div><span class="overline">CHAIN PREVIEW</span><h2>本集链式预览</h2><p class="sub">只按各 Scene 显式设置的连续性来源排出等待关系，不按顺序或名称推断；只读预览，不提交任何生成。</p></div><div class="section-actions"><button class="btn btn-sm btn-ghost" :disabled="chainLoading" @click="loadContinuityChain">{{ chainLoading ? '读取中…' : '刷新链式预览' }}</button></div></div>
+      <div v-if="chainPlan" class="card">
+        <p class="sub">现在可提交：{{ chainPlan.start_now.length ? chainPlan.start_now.map(chainSceneLabel).join('、') : '无' }}</p>
+        <div v-for="chain in chainPlan.chains" :key="chain.chain_id" class="chain-row">
+          <button v-for="sid in chain.scene_ids" :key="sid" type="button" class="chain-node" :class="'chain-' + chainItem(sid).state" :style="{ marginLeft: (chainItem(sid).depth * 12) + 'px' }" :title="chainItem(sid).message || ''" @click="selectChainScene(sid)">
+            <strong>{{ chainSceneLabel(sid) }}</strong>
+            <span>{{ chainModeLabels[chainItem(sid).mode] || chainItem(sid).mode }}<template v-if="chainItem(sid).source_scene_id"> ← {{ chainSceneLabel(chainItem(sid).source_scene_id) }}</template></span>
+            <small>{{ chainStateLabels[chainItem(sid).state] || chainItem(sid).state }}<template v-if="chainItem(sid).message"> · {{ chainItem(sid).message }}</template></small>
+          </button>
+        </div>
+        <p v-if="!chainPlan.items.length" class="board-empty">本集暂无 Scene。</p>
+      </div>
+    </section>
+
     <section v-show="workspaceTab==='advanced'" class="section">
       <details class="card"><summary><strong>项目 Skill 配置与审计</strong></summary>
         <p class="sub">项目配置仅在 Skill 的 operation 与具体操作契约一致时生效；否则安全回退到系统专用 Skill。</p>
@@ -1155,7 +1170,26 @@ async function mergeEpisode() {
 async function loadEpisodeContinuity() {
   try { const { data } = await api.episodeContinuity(id(), activeEpN.value); continuity.value = data }
   catch { continuity.value = null }
+  await loadContinuityChain()
 }
+// 链式预览只读：按显式连续性来源展示等待关系，换集时丢弃旧响应。
+const chainPlan = ref(null)
+const chainLoading = ref(false)
+const chainModeLabels = { independent: '独立', continue_from_previous: '续接', bridge_to_storyboard: '首尾桥接' }
+const chainStateLabels = { done: '已出片', generating: '生成中', ready: '可提交', waiting_source: '等待上游', needs_action: '需处理', invalid_source: '来源无效' }
+async function loadContinuityChain() {
+  const key = `${id()}:${activeEpN.value}`
+  chainLoading.value = true
+  try {
+    const { data } = await api.episodeContinuityChain(id(), activeEpN.value)
+    if (key === `${id()}:${activeEpN.value}`) chainPlan.value = data
+  } catch (e) {
+    if (key === `${id()}:${activeEpN.value}`) { chainPlan.value = null; toast.error('链式预览读取失败：' + (e.response?.data?.error || e.message)) }
+  } finally { chainLoading.value = false }
+}
+function chainItem(sid) { return chainPlan.value?.items.find(item => item.scene_id === sid) || {} }
+function chainSceneLabel(sid) { const item = chainItem(sid); return item.order ? `场景${item.order}` : `Scene#${sid}` }
+function selectChainScene(sid) { const sc = scenes.value.find(row => row.id === sid); if (sc) selectScene(sc) }
 async function regenerateContinuity() {
   try { await api.regenerateEpisodeContinuity(id(), activeEpN.value); toast.success('连续性摘要已更新'); await loadEpisodeContinuity() }
   catch (e) { toast.error(e.response?.data?.error || '生成失败') }
@@ -1657,6 +1691,7 @@ watch(activeEpN, stopAssembledPreview)
 @media (max-width: 980px) { .editor-split { grid-template-columns: 1fr; } }
 
 .production-board{display:grid;grid-template-columns:repeat(7,minmax(180px,1fr));gap:12px;overflow-x:auto}.board-column{min-height:150px;padding:10px;border:1px solid var(--border);border-radius:12px;background:var(--surface-secondary)}.board-column header{display:flex;justify-content:space-between;margin-bottom:8px}.board-card{display:grid;width:100%;gap:4px;margin-bottom:7px;padding:9px;text-align:left;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text-primary);cursor:pointer}.board-card.active{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}.board-card.severity-warn{border-left:3px solid #f59e0b}.board-card.severity-error{border-left:3px solid #ef4444}.board-card.severity-success{border-left:3px solid #22c55e}.board-card small,.board-empty{color:var(--text-tertiary)}.warn-msg{color:#f59e0b}.preflight{margin-top:14px;padding:14px}.preflight summary{cursor:pointer}.preflight-issues{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:7px;margin:12px 0}.preflight-issue{display:flex;justify-content:space-between;gap:8px;padding:8px;border:1px solid #ef4444;border-radius:8px;background:rgba(239,68,68,.06);color:var(--text-primary);cursor:pointer;text-align:left}.preflight-issue span{color:var(--text-secondary);font-size:12px;white-space:nowrap}.check-ok{color:#22c55e;margin-top:7px}.check-fail{color:#ef4444;margin-top:7px}
+.chain-row{display:flex;flex-wrap:wrap;gap:6px;padding:8px 0;border-top:1px dashed var(--border)}.chain-node{display:grid;gap:2px;min-width:160px;padding:7px 9px;text-align:left;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text-primary);cursor:pointer}.chain-node small{color:var(--text-tertiary)}.chain-done{border-left:3px solid #22c55e}.chain-ready{border-left:3px solid var(--accent)}.chain-generating{border-left:3px solid #3b82f6}.chain-waiting_source{border-left:3px solid #94a3b8}.chain-needs_action{border-left:3px solid #f59e0b}.chain-invalid_source{border-left:3px solid #ef4444}
 .timeline-card { padding: 16px; overflow: visible; }
 .timeline-scroll {
   width: 100%; overflow-x: scroll; overflow-y: hidden; padding: 2px 0 12px;

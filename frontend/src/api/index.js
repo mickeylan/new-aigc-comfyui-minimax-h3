@@ -94,6 +94,7 @@ export const api = {
   applyScreenplayImport: (id, number, preview) => http.post(`/projects/${id}/episodes/${number}/screenplay/apply`, preview),
   screenplayExportUrl: (id, number, format) => `/api/projects/${id}/episodes/${number}/screenplay/export/${format}`,
   episodeContinuity: (id, number) => http.get(`/projects/${id}/episodes/${number}/continuity`),
+  episodeContinuityChain: (id, number) => http.get(`/projects/${id}/episodes/${number}/continuity/chain`),
   regenerateEpisodeContinuity: (id, number) => http.post(`/projects/${id}/episodes/${number}/continuity/regenerate`, {}, { timeout: 300000 }),
   reassignSceneEpisode: (id, sid, episodeN) => http.post(`/projects/${id}/scenes/${sid}/reassign-episode`, { episode_n: episodeN }),
   sceneDirectorDraft: (id, sid, data = {}) => http.post(`/projects/${id}/scenes/${sid}/shots/director-draft`, data, { timeout: 600000 }),
