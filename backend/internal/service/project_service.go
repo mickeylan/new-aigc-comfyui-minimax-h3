@@ -3008,14 +3008,19 @@ func (s *ProjectService) generateSceneVideoAction(sc *models.Scene, trace *h3Pro
 	authoritativeBoundAction := useSubjectTags(authoritativeFallback(), refLines)
 	// anchorIssues is keyed by the prepared text (with and without Subject tags), so only
 	// model output is held to the plot-anchor contract, never a deterministic fallback.
-	// Output with no anchor at all cannot prove that any plot node was completed, so it is
-	// a hard issue like any missing anchor and goes through the combat repair rounds; after
-	// the last round the best-effort draft is still kept.
+	// Output with no anchor at all ignored the protocol and cannot be checked: that is only
+	// logged. Repairing it does not make the model add anchors; it only multiplies paid calls
+	// and returns the same draft. Partial, duplicate or disordered anchors are still repaired.
 	anchorIssues := map[string][]string{}
 	prepareGeneratedAction := func(value string, allowSubjects bool) string {
 		var issues []string
 		if combatMode {
+			anchored := h3PlotAnchorPattern.MatchString(value)
 			value, issues = checkH3PlotAnchors(value, len(plotNodes))
+			if !anchored && len(plotNodes) > 0 {
+				log.Printf("[h3-prompt-quality] scene=%d notes=%q", sc.ID, "模型未标注剧情锚点，无法校验剧情节点完整性")
+				issues = nil
+			}
 		}
 		prepared := normalizeGeneratedH3Action(value, allowSubjects, expectedShotCount, sceneMode, refLines, canonicalSceneContent, authoritativeBoundAction)
 		// The key is the anchor-free text, so a repair that only adds the missing anchors maps

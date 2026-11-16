@@ -2806,23 +2806,17 @@ func TestGenerateSceneVideoActionCombatAlwaysPassesRequestAsBaseUser(t *testing.
 	}
 }
 
-// unanchoredRepairResponses repeats one draft for the initial call and every repair round
-// (2 general + 3 combat): a model that never adds plot anchors.
-func unanchoredRepairResponses(draft string) []string {
-	return []string{draft, draft, draft, draft, draft, draft}
-}
-
-func TestGenerateSceneVideoActionKeepsSourceFaithfulStaticDefenderWhenOnlyAnchorsFail(t *testing.T) {
+func TestGenerateSceneVideoActionKeepsSourceFaithfulStaticDefenderWithoutPaidRepair(t *testing.T) {
 	ps := newTestProjectService(t)
 	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SharedAssetReference{}); err != nil {
 		t.Fatal(err)
 	}
 	// The source says the man stands holding his blade, watching warily. Tempo and
 	// reaction wording are director choices, so no repair may invent a parry. The draft has
-	// no plot anchors: it is repaired for anchors only, and the English draft is kept.
-	provider := &sequenceTextProvider{responses: unanchoredRepairResponses(
+	// no plot anchors at all, which is only logged and never costs a repair.
+	provider := &sequenceTextProvider{responses: []string{
 		"[Shot 1] six green snakes launch toward the bearded man while he stands and watches.",
-	)}
+	}}
 	ps.textProvider = provider
 	project := models.Project{Title: "测试"}
 	ps.db.Create(&project)
@@ -2833,8 +2827,8 @@ func TestGenerateSceneVideoActionKeepsSourceFaithfulStaticDefenderWhenOnlyAnchor
 	if err != nil {
 		t.Fatal(err)
 	}
-	if provider.calls != 6 {
-		t.Fatalf("calls=%d, want the initial pass + 5 anchor-only repair rounds", provider.calls)
+	if provider.calls != 1 {
+		t.Fatalf("calls=%d, want only the initial director pass", provider.calls)
 	}
 	if !strings.Contains(got, "stands and watches") || strings.Contains(got, "pivots") {
 		t.Fatalf("source-faithful reaction was rewritten: %s", got)
@@ -2895,7 +2889,7 @@ func TestCombatRepairIncludesCurrentSceneSwordChoreographyDespiteLegacyShot(t *t
 	provider := &sequenceTextProvider{responses: []string{
 		"[Shot 1] The woman immediately brandishes a peach branch through martial forms at full speed.",
 		"[Shot 1] The woman immediately sweeps broad blade-like strokes at full speed.",
-		// The accepted draft must carry both plot anchors: an unanchored draft is now repaired.
+		// The accepted draft carries both plot anchors, so the anchor check passes as well.
 		"[Shot 1] " + anchoredSwordAction(true),
 	}}
 	ps.textProvider = provider
@@ -2988,34 +2982,26 @@ func anchoredSwordAction(anchored bool) string {
 	return "The woman moves at full real-time speed" + p1 + ", steps forward with her right foot for one diagonal rising cut, shifts her weight onto the left foot for one straight thrust, then makes one horizontal cut and finishes upright with the peach branch angled down." + p2
 }
 
-// An unanchored combat draft cannot prove its plot nodes were completed, so it is repaired
-// like any other missing anchor (user decision; previously it was only logged).
-func TestCombatOutputWithoutAnchorsTriggersRepair(t *testing.T) {
+// A combat draft with no anchor at all ignored the protocol: repairing it only repeats paid
+// calls that return the same draft, so it is logged and accepted.
+func TestCombatOutputWithoutAnchorsIsNotRepairedForAnchors(t *testing.T) {
 	ps := newTestProjectService(t)
 	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SharedAssetReference{}); err != nil {
 		t.Fatal(err)
 	}
 	provider := &sequenceTextProvider{responses: []string{
 		"[Shot 1] " + anchoredSwordAction(false),
-		"[Shot 1] " + anchoredSwordAction(true),
 	}}
 	ps.textProvider = provider
 	project := models.Project{Title: "无锚点测试"}
 	ps.db.Create(&project)
 	scene := models.Scene{ProjectID: project.ID, SceneMode: "武戏", Duration: 8, Content: "上官若琳以桃枝为剑，在桃林中进行单人剑术演练。右脚前踏，完成斜撩、直刺、横削，最后收步直立。"}
 	ps.db.Create(&scene)
-	got, err := ps.GenerateSceneVideoAction(&scene)
-	if err != nil {
+	if _, err := ps.GenerateSceneVideoAction(&scene); err != nil {
 		t.Fatal(err)
 	}
-	if provider.calls != 2 || len(provider.users) != 2 {
-		t.Fatalf("calls=%d users=%d: an unanchored draft must get exactly one repair here", provider.calls, len(provider.users))
-	}
-	if !strings.Contains(provider.users[1], "缺少剧情锚点P01、P02") {
-		t.Fatalf("repair request must name the missing anchors: %s", provider.users[1])
-	}
-	if h3PlotAnchorPattern.MatchString(got) {
-		t.Fatalf("anchors left in final action: %s", got)
+	if provider.calls != 1 {
+		t.Fatalf("calls=%d: an unanchored but valid draft must not cost a repair", provider.calls)
 	}
 }
 
@@ -3028,7 +3014,7 @@ func TestCombatRepairRetriesWithExactValidationFailures(t *testing.T) {
 		"[Shot 1] The woman immediately brandishes a peach branch through martial forms at full speed.",
 		"[Shot 1] The woman sweeps broad strokes at full real-time speed.",
 		"[Shot 1] The woman makes one diagonal rising cut at full real-time speed and finishes upright.",
-		// The accepted draft must carry both plot anchors: an unanchored draft is now repaired.
+		// The accepted draft carries both plot anchors, so the anchor check passes as well.
 		"[Shot 1] " + anchoredSwordAction(true),
 	}}
 	ps.textProvider = provider
@@ -3112,10 +3098,10 @@ func TestGenerateSceneVideoActionKeepsDirectorCameraPacingInCombat(t *testing.T)
 	if err := ps.db.AutoMigrate(&models.Shot{}, &models.Dialogue{}, &models.Character{}, &models.Asset{}, &models.SharedAssetReference{}); err != nil {
 		t.Fatal(err)
 	}
-	// "slowly" describes the camera, not the action speed; it is a director choice that must
-	// not be deleted. The repairs here are for the missing plot anchors only.
+	// "slowly" describes the camera, not the action speed; it is a director choice
+	// that must neither be deleted nor trigger a paid repair.
 	draft := "[Shot 1] Six green snakes shoot from the grass toward the bearded man, who grips his blade and watches warily. The camera slowly tracks sideways along the grass line."
-	provider := &sequenceTextProvider{responses: unanchoredRepairResponses(draft)}
+	provider := &sequenceTextProvider{responses: []string{draft}}
 	ps.textProvider = provider
 	project := models.Project{Title: "测试"}
 	ps.db.Create(&project)
@@ -3125,13 +3111,8 @@ func TestGenerateSceneVideoActionKeepsDirectorCameraPacingInCombat(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if provider.calls != 6 {
-		t.Fatalf("calls=%d, want the initial pass + 5 anchor-only repair rounds", provider.calls)
-	}
-	for _, user := range provider.users[1:] {
-		if strings.Contains(user, "slow") && !strings.Contains(user, "缺少剧情锚点") {
-			t.Fatalf("camera pacing wording itself triggered a repair: %s", user)
-		}
+	if provider.calls != 1 {
+		t.Fatalf("calls=%d, camera pacing wording triggered a repair", provider.calls)
 	}
 	if !strings.Contains(got, "slowly tracks sideways") || strings.Contains(got, "immediate acceleration") {
 		t.Fatalf("director camera wording was rewritten or boilerplate appended: %s", got)

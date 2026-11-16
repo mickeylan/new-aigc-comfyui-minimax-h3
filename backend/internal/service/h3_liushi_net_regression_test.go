@@ -117,11 +117,10 @@ func TestLiuShiNetRegenerationHTTPMatchesBenchmarkStructure(t *testing.T) {
 	model.mu.Unlock()
 
 	// One-way cast: the spell contract accepts the director body; nothing pushes it to invent
-	// a defense. The draft carries no plot anchors, so it goes through the anchor repair
-	// rounds (2 general + 3 combat, user decision A) and, since only anchors failed, the
-	// original English body is kept rather than replaced by the Chinese Scene text.
-	if actionCalls != 6 {
-		t.Fatalf("unanchored draft made %d action calls, want initial + 5 anchor repairs: %q", actionCalls, model.actionSystems)
+	// a defense. The draft carries no plot anchors at all; that is only logged and never
+	// costs a repair round, so the director body is accepted in a single call.
+	if actionCalls != 1 {
+		t.Fatalf("unanchored draft made %d action calls (repair loop): %q", actionCalls, model.actionSystems)
 	}
 	// Director-placed marker: speech lands at the shout beat, before the blade
 	// light, without the separate placement planner.
