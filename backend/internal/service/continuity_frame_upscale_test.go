@@ -2,13 +2,10 @@ package service
 
 import (
 	"bytes"
-	"context"
+	"encoding/json"
 	"fmt"
 	"image"
-	"image/png"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,116 +14,13 @@ import (
 	"comfyui-console/internal/models"
 )
 
-// fakeRealESRGAN installs a fake engine directory and replaces realESRGANRun. Each call pops one
-// scripted exit; a zero exit writes a 4x PNG to the -o path like the real x4plus model.
-func fakeRealESRGAN(t *testing.T, exits []struct {
-	code   int
-	output string
-}) (exe string, calls *[][]string) {
+func installVOSR2Template(t *testing.T, f frameConvertFixture) models.Template {
 	t.Helper()
-	dir := t.TempDir()
-	exe = filepath.Join(dir, "realesrgan-ncnn-vulkan.exe")
-	os.WriteFile(exe, []byte("fake"), 0o644)
-	os.MkdirAll(filepath.Join(dir, "models"), 0o755)
-	os.WriteFile(filepath.Join(dir, "models", "realesrgan-x4plus.bin"), []byte("m"), 0o644)
-	os.WriteFile(filepath.Join(dir, "models", "realesrgan-x4plus.param"), []byte("m"), 0o644)
-	recorded := [][]string{}
-	calls = &recorded
-	prev := realESRGANRun
-	t.Cleanup(func() { realESRGANRun = prev })
-	realESRGANRun = func(_ context.Context, _ string, args []string) (string, int, error) {
-		recorded = append(recorded, args)
-		exit := exits[0]
-		if len(exits) > 1 {
-			exits = exits[1:]
-		}
-		if exit.code != 0 {
-			return exit.output, exit.code, nil
-		}
-		in, out := argAfter(args, "-i"), argAfter(args, "-o")
-		f, err := os.Open(in)
-		if err != nil {
-			return err.Error(), 1, nil
-		}
-		cfg, _, err := image.DecodeConfig(f)
-		f.Close()
-		if err != nil {
-			return err.Error(), 1, nil
-		}
-		var buf bytes.Buffer
-		png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, cfg.Width*4, cfg.Height*4)))
-		os.WriteFile(out, buf.Bytes(), 0o644)
-		return "", 0, nil
-	}
-	return exe, calls
-}
-
-func argAfter(args []string, flag string) string {
-	for i := 0; i+1 < len(args); i++ {
-		if args[i] == flag {
-			return args[i+1]
-		}
-	}
-	return ""
-}
-
-func okExit() []struct {
-	code   int
-	output string
-} {
-	return []struct {
-		code   int
-		output string
-	}{{0, ""}}
-}
-
-func TestResolveRealESRGANRequiresConfiguredFileAndModels(t *testing.T) {
-	exe, _ := fakeRealESRGAN(t, okExit())
-	engine, err := resolveRealESRGAN(exe)
-	if err != nil || engine.Exe != exe || engine.ModelDir != filepath.Join(filepath.Dir(exe), "models") {
-		t.Fatalf("engine=%+v err=%v", engine, err)
-	}
-	if _, err := resolveRealESRGAN(filepath.Join(t.TempDir(), "missing.exe")); err == nil || !strings.Contains(err.Error(), "不存在") {
-		t.Fatalf("a configured path that does not exist must fail, err=%v", err)
-	}
-	os.Remove(filepath.Join(filepath.Dir(exe), "models", "realesrgan-x4plus.param"))
-	if _, err := resolveRealESRGAN(exe); err == nil || !strings.Contains(err.Error(), "realesrgan-x4plus.param") {
-		t.Fatalf("missing model file must fail, err=%v", err)
-	}
-}
-
-func TestUpscaleImageRetriesSmallerTilesOnlyAfterGPUMemoryFailure(t *testing.T) {
-	exe, calls := fakeRealESRGAN(t, []struct {
-		code   int
-		output string
-	}{{1, "vkAllocateMemory failed -2"}, {-1073741819, ""}, {0, ""}}) // -1073741819 == 0xC0000005
-	engine, _ := resolveRealESRGAN(exe)
-	out, lowMemory, err := upscaleImage(engine, testPNG(t, 640, 360), ".png")
-	if err != nil {
+	tpl := loadTemplateForTest(t, "vosr2_image_upscale.json")
+	if err := f.ps.db.Create(&tpl).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(*calls) != 3 || argAfter((*calls)[0], "-t") != "0" || argAfter((*calls)[1], "-t") != "256" || argAfter((*calls)[2], "-t") != "128" || !lowMemory {
-		t.Fatalf("tile attempts=%v lowMemory=%v", *calls, lowMemory)
-	}
-	if argAfter((*calls)[2], "-s") != "4" || argAfter((*calls)[2], "-j") != "1:1:1" {
-		t.Fatalf("args=%v", (*calls)[2])
-	}
-	cfg, _, _ := image.DecodeConfig(bytes.NewReader(out))
-	if cfg.Width != 2048 || cfg.Height != 1152 {
-		t.Fatalf("output %dx%d, want 2048x1152", cfg.Width, cfg.Height)
-	}
-
-	exe, calls = fakeRealESRGAN(t, []struct {
-		code   int
-		output string
-	}{{3, "invalid gpu device"}})
-	engine, _ = resolveRealESRGAN(exe)
-	if _, _, err := upscaleImage(engine, testPNG(t, 640, 360), ".png"); err == nil || !strings.Contains(err.Error(), "退出码 3") || len(*calls) != 1 {
-		t.Fatalf("a non-memory failure must not retry, err=%v calls=%d", err, len(*calls))
-	}
-	if _, _, err := upscaleImage(engine, testPNG(t, 2048, 1152), ".png"); err == nil || !strings.Contains(err.Error(), "无需超分") {
-		t.Fatalf("a frame already at 2K must be refused, err=%v", err)
-	}
+	return tpl
 }
 
 func TestUpscaleTargetSizeKeepsAspect(t *testing.T) {
@@ -137,10 +31,77 @@ func TestUpscaleTargetSizeKeepsAspect(t *testing.T) {
 	}
 }
 
-func TestUpscaleFrameAddsHDRowUsedAsOpeningFrame(t *testing.T) {
+func TestFrameUpscaleFactorReachesLongEdgeWithinCap(t *testing.T) {
+	for longEdge, want := range map[int]int{1280: 2, 1024: 2, 1025: 2, 832: 3, 640: 4, 64: 4} {
+		if got := frameUpscaleFactor(longEdge); got != want {
+			t.Fatalf("factor(%d)=%d, want %d", longEdge, got, want)
+		}
+	}
+}
+
+func TestVOSR2TemplateRendersBF16LoaderAndTiledUpscale(t *testing.T) {
+	tpl := loadTemplateForTest(t, "vosr2_image_upscale.json")
+	params := map[string]any{"upscale": 2, "_task_id": "hd-task"}
+	if err := normalizeTemplateFiles(&tpl, params, map[string][]FileMeta{"source_image": {{TaskID: "7", Name: "tail.png"}}}); err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := (&TaskService{}).RenderWorkflow(&tpl, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(workflow)
+	if strings.Contains(string(encoded), "{{") {
+		t.Fatalf("工作流仍有未渲染占位符: %s", encoded)
+	}
+	node := func(id string) map[string]any { return workflow[id].(map[string]any)["inputs"].(map[string]any) }
+	if node("1")["image"] != "7/tail.png" || node("2")["model"] != "VOSR2" || node("2")["dtype"] != "bf16" {
+		t.Fatalf("loader inputs: image=%v model=%v", node("1"), node("2"))
+	}
+	up := node("3")
+	if up["upscale"] != "2" || up["seed"] != "42" || up["color_alignment"] != "wavelet" || up["tile_size"] != float64(512) || up["vae_tile_size"] != float64(1024) {
+		t.Fatalf("upscale inputs=%v", up)
+	}
+	if node("4")["filename_prefix"] != "vosr2/upscale_hd-task" {
+		t.Fatalf("save inputs=%v", node("4"))
+	}
+}
+
+func TestStartFrameUpscaleSubmitsVOSR2TaskAndKeepsSource(t *testing.T) {
 	f := newFrameConvertFixture(t)
-	exe, _ := fakeRealESRGAN(t, okExit())
-	t.Setenv("REALESRGAN_PATH", exe)
+	if _, err := f.ps.StartFrameConversion(f.source.ProjectID, f.source.ID, f.frame.ID, FrameReferenceHD); err == nil || !strings.Contains(err.Error(), TemplateVOSR2Upscale) {
+		t.Fatalf("a missing VOSR2 template must be reported, err=%v", err)
+	}
+	tpl := installVOSR2Template(t, f)
+	if _, err := f.ps.frameUpscaleTaskRequest(f.source.ProjectID, "big.png", testPNG(t, 2048, 1152)); err == nil || !strings.Contains(err.Error(), "无需超分") {
+		t.Fatalf("a frame already at 2K must be refused, err=%v", err)
+	}
+	got, err := f.ps.StartFrameConversion(f.source.ProjectID, f.source.ID, f.frame.ID, FrameReferenceHD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var task models.Task
+	if err := f.ps.db.Where("task_id = ?", got.ConvertTaskID).First(&task).Error; err != nil {
+		t.Fatalf("upscale task not recorded: %v", err)
+	}
+	var params map[string]any
+	json.Unmarshal([]byte(task.ParamsJSON), &params)
+	// The 64×36 fixture needs 32x; the generative step is capped and the final resize covers the rest.
+	if task.TemplateID != tpl.ID || params["upscale"] != float64(4) || params["model_dtype"] != "bf16" || !strings.Contains(task.InputsJSON, `"source_image"`) || !strings.Contains(task.InputsJSON, "tail.png") {
+		t.Fatalf("task template=%d params=%s inputs=%s", task.TemplateID, task.ParamsJSON, task.InputsJSON)
+	}
+	var saved models.FrameCandidate
+	f.ps.db.First(&saved, f.frame.ID)
+	if saved.ConvertKind != FrameReferenceHD || saved.ConvertSourceSHA256 == "" || saved.ImageFile != "tail.png" || saved.Source != "extracted" || saved.Type != models.FrameCandidateSelected {
+		t.Fatalf("source frame must stay untouched while upscaling: %+v", saved)
+	}
+	if _, err := f.ps.StartFrameConversion(f.source.ProjectID, f.source.ID, f.frame.ID, FrameReferenceClay); err != errFrameConvertActive {
+		t.Fatalf("a second conversion of the same frame must conflict, err=%v", err)
+	}
+}
+
+func TestApplyFrameUpscaleResizesToLongEdgeAndStaysOpeningFrame(t *testing.T) {
+	f := newFrameConvertFixture(t)
+	pid := fmt.Sprint(f.source.ProjectID)
 	current := models.Scene{ProjectID: f.source.ProjectID, EpisodeN: 1, Generation: 1, Order: 2, ImageFile: "story.png", StoryboardVideoRole: "start"}
 	f.ps.db.Create(&current)
 	if _, err := f.ps.continuity.Configure(current.ProjectID, current.ID, ConfigureContinuityRequest{Mode: models.ContinuityModeBridge, SourceSceneID: f.source.ID, FrameID: f.frame.ID, ReferenceForm: FrameReferenceHD}); err == nil {
@@ -153,15 +114,16 @@ func TestUpscaleFrameAddsHDRowUsedAsOpeningFrame(t *testing.T) {
 	if err := f.ps.continuity.PrepareScene(&current); err == nil || !strings.Contains(err.Error(), "尚无高清") {
 		t.Fatalf("submission without an hd result must be blocked, err=%v", err)
 	}
-	frame, message, err := f.ps.UpscaleFrame(f.source.ProjectID, f.source.ID, f.frame.ID)
-	if err != nil {
+	f.upload.SaveFile(pid, "image", "same.png", testPNG(t, 64, 36))
+	if err := f.ps.applyFrameConversion(claimedFrame(t, f, FrameReferenceHD), "same.png"); err == nil || !strings.Contains(err.Error(), "没有比原尾帧") {
+		t.Fatalf("a result that is not larger must be discarded, err=%v", err)
+	}
+	f.upload.SaveFile(pid, "image", "vosr2.png", testPNG(t, 256, 144))
+	if err := f.ps.applyFrameConversion(claimedFrame(t, f, FrameReferenceHD), "vosr2.png"); err != nil {
 		t.Fatal(err)
 	}
-	if frame.ID != f.frame.ID || !strings.Contains(message, "原尾帧保持不变") {
-		t.Fatalf("frame=%+v message=%q", frame, message)
-	}
 	derived, err := f.ps.continuity.DerivedReference(&f.frame, FrameReferenceHD)
-	if err != nil || derived == nil || derived.Type != models.FrameCandidateDerived || derived.DerivedSourceFile != "tail.png" || !strings.HasPrefix(derived.ImageFile, fmt.Sprintf("continuity_s%d_hd_", f.source.ID)) {
+	if err != nil || derived == nil || derived.Type != models.FrameCandidateDerived || derived.DerivedSourceFile != "tail.png" || derived.ImageFile != "vosr2.png" {
 		t.Fatalf("derived=%+v err=%v", derived, err)
 	}
 	data, err := f.ps.readProjectInput(f.source.ProjectID, derived.ImageFile)
@@ -169,18 +131,17 @@ func TestUpscaleFrameAddsHDRowUsedAsOpeningFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg, _, _ := image.DecodeConfig(bytes.NewReader(data)); cfg.Width != 2048 || cfg.Height != 1152 {
-		t.Fatalf("hd file %dx%d", cfg.Width, cfg.Height)
+		t.Fatalf("hd file %dx%d, want 2048x1152", cfg.Width, cfg.Height)
 	}
 	var source models.FrameCandidate
 	f.ps.db.First(&source, f.frame.ID)
 	if source.ImageFile != "tail.png" || source.Source != "extracted" || source.Type != models.FrameCandidateSelected {
 		t.Fatalf("source frame changed: %+v", source)
 	}
-	// Recording the result invalidated the Scene that already chose the hd form.
 	if err := f.ps.continuity.PrepareScene(&current); err != nil {
 		t.Fatal(err)
 	}
-	refs, lines, _ := f.ps.sceneVideoContinuityReferences(&current, fmt.Sprint(current.ProjectID))
+	refs, lines, _ := f.ps.sceneVideoContinuityReferences(&current, pid)
 	if len(refs) != 1 || refs[0].Name != derived.ImageFile || !strings.Contains(lines[0], "唯一开始画面") {
 		t.Fatalf("hd frame must stay the opening frame: refs=%+v lines=%+v", refs, lines)
 	}
@@ -189,22 +150,19 @@ func TestUpscaleFrameAddsHDRowUsedAsOpeningFrame(t *testing.T) {
 	}
 }
 
-func TestHandleUpscaleFrameCandidateConflictsWhileEngineBusy(t *testing.T) {
+func TestHandleConvertFrameCandidateAcceptsHDKind(t *testing.T) {
 	f := newFrameConvertFixture(t)
-	exe, _ := fakeRealESRGAN(t, okExit())
-	t.Setenv("REALESRGAN_PATH", exe)
+	installVOSR2Template(t, f)
 	svc := &Service{DB: f.ps.db, Projects: f.ps, Continuity: f.ps.continuity}
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.POST("/api/projects/:id/scenes/:sid/continuity/frames/:fid/upscale", svc.HandleUpscaleFrameCandidate)
-	url := fmt.Sprintf("/api/projects/%d/scenes/%d/continuity/frames/%d/upscale", f.source.ProjectID, f.source.ID, f.frame.ID)
-	frameUpscaleMu.Lock()
-	w := shotRefineCall(r, http.MethodPost, url, nil)
-	frameUpscaleMu.Unlock()
-	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "另一张图片") {
+	r.POST("/api/projects/:id/scenes/:sid/continuity/frames/:fid/convert", svc.HandleConvertFrameCandidate)
+	url := fmt.Sprintf("/api/projects/%d/scenes/%d/continuity/frames/%d/convert", f.source.ProjectID, f.source.ID, f.frame.ID)
+	w := shotRefineCall(r, http.MethodPost, url, map[string]string{"kind": FrameReferenceHD})
+	if w.Code != http.StatusAccepted || !strings.Contains(w.Body.String(), `"convert_kind":"hd"`) || !strings.Contains(w.Body.String(), "尾帧高清任务已提交") {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-	if w := shotRefineCall(r, http.MethodPost, url, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"hd"`) {
-		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	if w := shotRefineCall(r, http.MethodPost, url, map[string]string{"kind": FrameReferenceHD}); w.Code != http.StatusConflict {
+		t.Fatalf("an in-flight upscale must conflict, status=%d body=%s", w.Code, w.Body.String())
 	}
 }

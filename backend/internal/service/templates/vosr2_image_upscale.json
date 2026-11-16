@@ -1,0 +1,85 @@
+{
+  "name": "VOSR2 图像超分",
+  "code": "vosr2_image_upscale",
+  "description": "用 ComfyUI-VOSR2 一步生成式超分放大单张图片，用于衔接尾帧高清图。需安装 ComfyUI-VOSR2 节点，并把模型放在 models/vosr2/VOSR2。",
+  "inputs": [
+    {
+      "key": "source_image",
+      "type": "image",
+      "label": "待放大图片",
+      "required": true
+    },
+    {
+      "key": "upscale",
+      "type": "int",
+      "label": "放大倍数",
+      "default": 2,
+      "min": 1,
+      "max": 8
+    },
+    {
+      "key": "seed",
+      "type": "int",
+      "label": "随机种子",
+      "default": 42,
+      "min": 0
+    },
+    {
+      "key": "model_name",
+      "type": "string",
+      "label": "VOSR2 模型目录",
+      "default": "VOSR2"
+    },
+    {
+      "key": "model_dtype",
+      "type": "string",
+      "label": "模型精度",
+      "default": "bf16"
+    }
+  ],
+  "workflow": {
+    "1": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "{{img:source_image}}"
+      }
+    },
+    "2": {
+      "class_type": "VOSR2ModelLoader",
+      "inputs": {
+        "model": "{{model_name}}",
+        "dtype": "{{model_dtype}}"
+      }
+    },
+    "3": {
+      "class_type": "VOSR2Upscale",
+      "inputs": {
+        "model": [
+          "2",
+          0
+        ],
+        "image": [
+          "1",
+          0
+        ],
+        "upscale": "{{upscale}}",
+        "seed": "{{seed}}",
+        "color_alignment": "wavelet",
+        "tile_size": 512,
+        "tile_overlap": 64,
+        "vae_tile_size": 1024,
+        "vae_tile_overlap": 128
+      }
+    },
+    "4": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "images": [
+          "3",
+          0
+        ],
+        "filename_prefix": "vosr2/upscale_{{task_id}}"
+      }
+    }
+  }
+}

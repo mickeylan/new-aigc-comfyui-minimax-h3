@@ -23,8 +23,8 @@ const (
 	FrameReferenceOriginal = "original"
 	FrameReferenceClay     = "clay"
 	FrameReferenceLineart  = "lineart"
-	// FrameReferenceHD is a local Real-ESRGAN upscale of the tail frame; unlike clay and line
-	// art it is still the full-colour opening picture of the next Scene.
+	// FrameReferenceHD is a ComfyUI VOSR2 upscale of the tail frame; unlike clay and line art it
+	// is still the full-colour opening picture of the next Scene.
 	FrameReferenceHD = "hd"
 
 	continuityFrameClaySkillCode    = "continuity-frame-clay"
@@ -133,11 +133,11 @@ func frameConvertPrompt(skills *SkillService, kind string) string {
 }
 
 // StartFrameConversion submits a Qwen Edit task turning one tail frame of sceneID into a clay or
-// line-art reference. The source frame row and its image are never modified; the result becomes
-// a separate derived FrameCandidate once the task finishes.
+// line-art reference, or a VOSR2 task upscaling it (kind hd). The source frame row and its image
+// are never modified; the result becomes a separate derived FrameCandidate once the task finishes.
 func (s *ProjectService) StartFrameConversion(projectID, sceneID, frameID uint, kind string) (*models.FrameCandidate, error) {
-	if _, ok := frameConvertSkills[kind]; !ok {
-		return nil, fmt.Errorf("参考形式只能是白模或线稿")
+	if _, ok := frameConvertSkills[kind]; !ok && kind != FrameReferenceHD {
+		return nil, fmt.Errorf("参考形式只能是白模、线稿或高清")
 	}
 	if s.tasks == nil {
 		return nil, fmt.Errorf("尾帧转换依赖 ComfyUI 任务服务")
@@ -161,22 +161,30 @@ func (s *ProjectService) StartFrameConversion(projectID, sceneID, frameID uint, 
 	if err != nil {
 		return nil, fmt.Errorf("读取尾帧失败: %w", err)
 	}
-	ratio, err := imageRatio(data)
-	if err != nil {
-		return nil, err
+	var req CreateTaskReq
+	if kind == FrameReferenceHD {
+		if req, err = s.frameUpscaleTaskRequest(projectID, frame.ImageFile, data); err != nil {
+			return nil, err
+		}
+	} else {
+		ratio, err := imageRatio(data)
+		if err != nil {
+			return nil, err
+		}
+		aspect, err := closestQwenAspect(ratio)
+		if err != nil {
+			return nil, err
+		}
+		tpl, err := enabledTemplateByCode(s.db, TemplateQwen21MultiEdit)
+		if err != nil {
+			return nil, err
+		}
+		params := qwenPortraitParams()
+		params["aspect_ratio"] = aspect
+		req = CreateTaskReq{TemplateID: tpl.ID, Prompt: frameConvertPrompt(s.skills, kind), Params: params,
+			Files: map[string][]FileMeta{"ref_images": {{TaskID: fmt.Sprint(projectID), Name: frame.ImageFile}}}}
 	}
-	aspect, err := closestQwenAspect(ratio)
-	if err != nil {
-		return nil, err
-	}
-	tpl, err := enabledTemplateByCode(s.db, TemplateQwen21MultiEdit)
-	if err != nil {
-		return nil, err
-	}
-	params := qwenPortraitParams()
-	params["aspect_ratio"] = aspect
-	task, err := s.tasks.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: frameConvertPrompt(s.skills, kind), Params: params,
-		Files: map[string][]FileMeta{"ref_images": {{TaskID: fmt.Sprint(projectID), Name: frame.ImageFile}}}})
+	task, err := s.tasks.CreateTask(req)
 	if err != nil {
 		return nil, fmt.Errorf("创建%s任务失败: %w", frameConvertLabels[kind], err)
 	}
@@ -262,6 +270,11 @@ func (s *ProjectService) applyFrameConversion(frame *models.FrameCandidate, resu
 	}
 	if d := ratioDrift(resultRatio, sourceRatio); d > frameConvertMaxRatioDrift {
 		return fmt.Errorf("%s结果宽高比与原尾帧相差 %.1f%%，超过 4%%，已丢弃", label, d*100)
+	}
+	if frame.ConvertKind == FrameReferenceHD {
+		if resultFile, err = s.finishFrameUpscale(&current, source, result, resultFile); err != nil {
+			return err
+		}
 	}
 	_, err = s.recordDerivedFrame(&current, frame.ConvertKind, resultFile)
 	return err
