@@ -418,6 +418,11 @@ type Asset struct {
 	TopviewSourceImage string `gorm:"column:topview_source_image" json:"topview_source_image"`
 	TopviewTaskID      string `gorm:"column:topview_task_id;index" json:"topview_task_id"`
 	TopviewError       string `gorm:"column:topview_error;type:text" json:"topview_error"`
+	// Panorama* track the MiniMax H3-Image ERP panorama of a location. On success its views are
+	// split into unselected asset_image variants; Image itself is never changed.
+	PanoramaImage  string `gorm:"column:panorama_image" json:"panorama_image"`
+	PanoramaTaskID string `gorm:"column:panorama_task_id;index" json:"panorama_task_id"`
+	PanoramaError  string `gorm:"column:panorama_error;type:text" json:"panorama_error"`
 	Source      string    `json:"source"`                                                          // auto(方案抽取) / manual(手动新建)
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`

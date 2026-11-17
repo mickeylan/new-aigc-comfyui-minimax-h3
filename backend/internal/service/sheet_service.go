@@ -272,6 +272,7 @@ func (s *ProjectService) syncSheets() {
 	changed = s.syncStoryboardSheets() || changed
 	changed = s.syncFrameConversions() || changed
 	changed = s.syncTopviewStructures() || changed
+	changed = s.syncLocationPanoramas() || changed
 	if changed {
 		s.pushProject(nil)
 	}

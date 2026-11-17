@@ -355,6 +355,7 @@ export const api = {
       timeout: 120000
     })
   },
+  generateLocationPanorama: (id, aid) => http.post(`/projects/${id}/assets/location/${aid}/panorama/generate`),
   splitLocationPanorama: (id, aid, file, viewCount = 6) => {
     const fd = new FormData()
     fd.append('view_count', String(viewCount))

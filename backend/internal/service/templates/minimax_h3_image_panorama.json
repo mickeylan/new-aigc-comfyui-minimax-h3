@@ -1,0 +1,25 @@
+{
+  "name": "MiniMax H3-Image 360° 全景图",
+  "code": "minimax_h3_image_panorama",
+  "description": "MiniMax H3-Image 原生文生图，输出 2:1 等距柱状（ERP）全景图，供场景资产拆视角。6 步、CFG 1、无负面提示词；需 ComfyUI 0.45.0+ 和 H3-Image 模型文件。",
+  "inputs": [
+    { "key": "prompt", "type": "prompt", "label": "全景图提示词", "required": true },
+    { "key": "width", "type": "int", "label": "宽度", "default": 5632, "min": 2048, "max": 8192, "step": 32 },
+    { "key": "height", "type": "int", "label": "高度（宽度的一半）", "default": 2816, "min": 1024, "max": 4096, "step": 32 },
+    { "key": "seed", "type": "int", "label": "随机种子", "default": -1, "min": -1 },
+    { "key": "steps", "type": "int", "label": "采样步数", "default": 6, "min": 1, "max": 30 },
+    { "key": "unet_name", "type": "string", "label": "unet_name", "default": "minimax-h3-image\\minimax_h3_image_pruned_int8_convrot.safetensors" },
+    { "key": "clip_name", "type": "string", "label": "clip_name", "default": "minimax-h3\\qwen3vl_32b_minimax_h3_int8_convrot.safetensors" },
+    { "key": "vae_name", "type": "string", "label": "vae_name", "default": "minimax-h3-image\\minimax_h3_image_vae_fp16.safetensors" }
+  ],
+  "workflow": {
+    "1": { "class_type": "UNETLoader", "inputs": { "unet_name": "{{unet_name}}", "weight_dtype": "default" } },
+    "2": { "class_type": "CLIPLoader", "inputs": { "clip_name": "{{clip_name}}", "type": "minimax", "device": "default" } },
+    "3": { "class_type": "VAELoader", "inputs": { "vae_name": "{{vae_name}}" } },
+    "5": { "class_type": "MiniMaxH3ImageConditioning", "inputs": { "clip": ["2", 0], "vae": ["3", 0], "prompt": "{{prompt}}", "width": "{{width}}", "height": "{{height}}" } },
+    "6": { "class_type": "ConditioningZeroOut", "inputs": { "conditioning": ["5", 0] } },
+    "7": { "class_type": "KSampler", "inputs": { "seed": "{{seed}}", "steps": "{{steps}}", "cfg": 1, "sampler_name": "euler", "scheduler": "simple", "denoise": 1, "model": ["1", 0], "positive": ["5", 0], "negative": ["6", 0], "latent_image": ["5", 1] } },
+    "8": { "class_type": "VAEDecode", "inputs": { "samples": ["7", 0], "vae": ["3", 0] } },
+    "9": { "class_type": "SaveImage", "inputs": { "images": ["8", 0], "filename_prefix": "minimax_h3_image/panorama_{{task_id}}" } }
+  }
+}

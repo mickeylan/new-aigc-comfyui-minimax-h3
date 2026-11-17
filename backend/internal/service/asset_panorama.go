@@ -2,14 +2,17 @@ package service
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"image"
 	"image/draw"
 	"image/jpeg"
+	"log"
 	"math"
 	"net/http"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -143,13 +146,17 @@ func (s *ProjectService) SplitLocationPanorama(asset *models.Asset, data []byte,
 	if err != nil {
 		return nil, err
 	}
-	pid := fmt.Sprint(asset.ProjectID)
 	stamp := time.Now().UnixNano()
-	panoPath, _, err := s.upload.SaveFile(pid, "image", fmt.Sprintf("pano_%d_%d%s", asset.ID, stamp, ext), data)
+	panoPath, _, err := s.upload.SaveFile(fmt.Sprint(asset.ProjectID), "image", fmt.Sprintf("pano_%d_%d%s", asset.ID, stamp, ext), data)
 	if err != nil {
 		return nil, fmt.Errorf("保存全景图失败: %w", err)
 	}
-	panoFile := filepath.Base(panoPath)
+	return s.registerPanoramaViews(asset, filepath.Base(panoPath), views, stamp)
+}
+
+// registerPanoramaViews saves views of the stored panorama panoFile as unselected variants.
+func (s *ProjectService) registerPanoramaViews(asset *models.Asset, panoFile string, views []panoramaView, stamp int64) ([]models.AssetVariant, error) {
+	pid := fmt.Sprint(asset.ProjectID)
 	variants := NewAssetVariantService(s.db)
 	out := make([]models.AssetVariant, 0, len(views))
 	for i, view := range views {
@@ -207,4 +214,139 @@ func (s *Service) HandleSplitLocationPanorama(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"variants": rows, "message": fmt.Sprintf("已拆出 %d 个视角，加入「参考图版本」；当前参考图未改变，请在版本中选用", len(rows))})
+}
+
+// Generated panoramas: MiniMax H3-Image renders a 2:1 ERP canvas from the location text alone (no
+// reference image, no prompt expander, whose ratio list has no 2:1). The finished panorama is split
+// automatically with the default view count. Seams and pole distortion are not checked.
+const (
+	TemplateH3ImagePanorama = "minimax_h3_image_panorama"
+	panoramaGenWidth        = 5632
+	panoramaGenHeight       = 2816
+)
+
+var errPanoramaActive = errors.New("该场景的全景图正在生成")
+
+// buildPanoramaPrompt writes the approved English ERP framing around the location's own fields.
+func buildPanoramaPrompt(p *models.Project, a *models.Asset) string {
+	lines := []string{"A seamless 360-degree equirectangular panorama in 2:1 spherical projection, covering 360 degrees horizontally and 180 degrees vertically, of an empty environment with no people. The camera stands at eye level in the middle of the space, and the horizon runs straight across the exact vertical centre of the image. The left and right edges join seamlessly into one continuous scene. Straight lines curve naturally as in an equirectangular projection; the top edge is the sky or ceiling directly overhead and the bottom edge is the ground directly below, each stretched evenly across the full width. Every direction is fully built out: the front, both sides and the area behind the camera all show the same location with consistent lighting, time of day and materials."}
+	if desc := styleDescriptor(p.Style); desc != "" {
+		lines = append(lines, "Style: "+desc)
+	}
+	lines = append(lines, "Location: 「"+strings.TrimSpace(a.Name)+"」")
+	if d := strings.TrimSpace(a.Description); d != "" {
+		lines = append(lines, "Environment appearance, follow exactly: "+d)
+	}
+	noText := ", no text"
+	if text := strings.TrimSpace(a.VisibleText); text != "" {
+		lines = append(lines, "The following text must appear exactly as written, legible, unchanged and untranslated, with no other text: \""+strings.ReplaceAll(text, "\"", "\\\"")+"\"")
+		noText = ""
+	}
+	lines = append(lines, "No people, no characters, no figures, no watermark, no captions"+noText+", no collage, no split panels, no borders, no circular fisheye frame.")
+	return strings.Join(lines, "\n")
+}
+
+// StartLocationPanorama submits a MiniMax H3-Image panorama task for a location asset.
+func (s *ProjectService) StartLocationPanorama(a *models.Asset) error {
+	if a.Kind != AssetKindLocation {
+		return fmt.Errorf("全景图只用于场景资产")
+	}
+	if s.tasks == nil {
+		return fmt.Errorf("全景图生成依赖 ComfyUI 任务服务")
+	}
+	s.assetMu.Lock()
+	defer s.assetMu.Unlock()
+	var current models.Asset
+	if err := s.db.First(&current, a.ID).Error; err != nil {
+		return err
+	}
+	if s.sheetTaskActive(current.PanoramaTaskID) {
+		return errPanoramaActive
+	}
+	var p models.Project
+	if err := s.db.First(&p, current.ProjectID).Error; err != nil {
+		return err
+	}
+	tpl, err := enabledTemplateByCode(s.db, TemplateH3ImagePanorama)
+	if err != nil {
+		return err
+	}
+	task, err := s.tasks.CreateTask(CreateTaskReq{TemplateID: tpl.ID, Prompt: buildPanoramaPrompt(&p, &current),
+		Params: map[string]any{"width": panoramaGenWidth, "height": panoramaGenHeight}})
+	if err != nil {
+		return fmt.Errorf("创建全景图任务失败: %w", err)
+	}
+	if err := s.db.Model(&models.Asset{}).Where("id = ?", current.ID).Updates(map[string]any{
+		"panorama_task_id": task.TaskID, "panorama_error": "",
+	}).Error; err != nil {
+		_ = s.tasks.CancelTask(task.TaskID)
+		return err
+	}
+	go func() {
+		if err := s.tasks.Execute(task.TaskID); err != nil && !errors.Is(err, errNoFreeGPU) {
+			log.Printf("[asset %d] execute panorama task %s failed: %v", current.ID, task.TaskID, err)
+		}
+	}()
+	s.pushProject(nil)
+	return nil
+}
+
+// syncLocationPanoramas stores finished panoramas and splits each one exactly once: only the
+// caller whose conditional update clears the task id goes on to register views.
+func (s *ProjectService) syncLocationPanoramas() bool {
+	var assets []models.Asset
+	if s.db.Where("kind = ? AND panorama_task_id != ''", AssetKindLocation).Find(&assets).Error != nil {
+		return false
+	}
+	changed := false
+	for i := range assets {
+		a := &assets[i]
+		updates, ok := s.imageTaskUpdates(a.PanoramaTaskID, fmt.Sprintf("pano_%d_%d", a.ID, time.Now().UnixNano()), a.ProjectID,
+			"全景图", "panorama_image", "panorama_task_id", "panorama_error")
+		if !ok {
+			continue
+		}
+		res := s.db.Model(&models.Asset{}).Where("id = ? AND panorama_task_id = ?", a.ID, a.PanoramaTaskID).Updates(updates)
+		if res.Error != nil || res.RowsAffected == 0 {
+			continue
+		}
+		changed = true
+		file, _ := updates["panorama_image"].(string)
+		if file == "" {
+			continue
+		}
+		if err := s.splitGeneratedPanorama(a, file); err != nil {
+			s.db.Model(&models.Asset{}).Where("id = ?", a.ID).Update("panorama_error", "全景图已保存，但自动拆视角失败: "+err.Error())
+		}
+	}
+	return changed
+}
+
+func (s *ProjectService) splitGeneratedPanorama(a *models.Asset, file string) error {
+	data, err := s.readProjectInput(a.ProjectID, file)
+	if err != nil {
+		return err
+	}
+	views, err := splitPanorama(data, panoramaDefaultView)
+	if err != nil {
+		return err
+	}
+	_, err = s.registerPanoramaViews(a, file, views, time.Now().UnixNano())
+	return err
+}
+
+func (s *Service) HandleGenerateLocationPanorama(c *gin.Context) {
+	a, ok := s.loadAsset(c)
+	if !ok {
+		return
+	}
+	if err := s.Projects.StartLocationPanorama(a); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errPanoramaActive) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"message": fmt.Sprintf("场景「%s」全景图任务已提交；完成后自动拆成 %d 个视角加入「参考图版本」，当前参考图不变", a.Name, panoramaDefaultView)})
 }

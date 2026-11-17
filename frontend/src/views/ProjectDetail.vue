@@ -313,6 +313,9 @@
                 <button v-if="a.kind === 'location'" class="btn btn-sm btn-ghost" :disabled="busy || a._panoSplitting" title="上传 2:1 等距柱状（ERP）360° 全景图，本地拆成水平 16:9 视角，加入「参考图版本」供选用；当前参考图不变" @click="splitPanorama(a)">
                   {{ a._panoSplitting ? '拆视角中…' : '全景图拆视角' }}
                 </button>
+                <button v-if="a.kind === 'location'" class="btn btn-sm btn-ghost" :disabled="busy || !!a.panorama_task_id" title="用 MiniMax H3-Image 按场景描述生成 2:1 的 360° 全景图（5632×2816），完成后自动拆成 6 个视角加入「参考图版本」；当前参考图不变。生成式全景可能有接缝或变形，请核对「正后方」视角" @click="genLocationPanorama(a)">
+                  {{ a.panorama_task_id ? '全景图生成中…' : '生成全景图' }}
+                </button>
                 <button v-if="a.kind === 'prop'" class="btn btn-sm btn-ghost" @click="openVariants('asset_sheet', a.id, a.name + ' · 四视图')">四视图版本</button>
                 <button v-if="topviewEnabled && a.kind === 'location'" class="btn btn-sm btn-secondary" :disabled="busy || !a.image || !!a.topview_task_id" :title="!a.image ? '请先生成或上传场景参考图' : '实验：只还原参考图可见区域、不含人物的正俯视结构图，按场景图缓存'" @click="genTopviewStructure(a, topviewCacheValid(a))">
                   {{ a.topview_task_id ? '俯视图生成中…' : (topviewCacheValid(a) ? '重新生成俯视图' : '生成俯视图（实验）') }}
@@ -321,6 +324,7 @@
                 <button class="btn btn-sm btn-ghost" @click="openEditAsset(a)">编辑</button>
               </div>
               <span v-if="topviewEnabled && a.kind === 'location' && a.topview_error" class="fail-msg">{{ a.topview_error }}</span>
+              <span v-if="a.kind === 'location' && a.panorama_error" class="fail-msg">{{ a.panorama_error }}</span>
             </div>
           </div>
         </div>
@@ -3736,6 +3740,16 @@ async function genAssetImage(a) {
     await load()
   } catch (e) {
     toast.error(e.response?.data?.error || 'Krea2 参考图任务提交失败')
+  }
+}
+// 生成的全景图在后端完成后自动拆视角，同样只进入版本列表。
+async function genLocationPanorama(a) {
+  try {
+    const { data } = await api.generateLocationPanorama(id(), a.id)
+    toast.show(data.message || '全景图任务已提交')
+    await load()
+  } catch (e) {
+    toast.error(requestErrorMessage(e, '全景图任务提交失败'))
   }
 }
 // ERP 全景图拆出的视角只进入版本列表，由用户在版本弹窗里显式选用。

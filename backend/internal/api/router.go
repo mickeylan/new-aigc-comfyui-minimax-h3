@@ -374,6 +374,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/assets/:kind/:aid/image", svc.HandleGenerateAssetImage)
 	r.POST("/api/projects/:id/assets/:kind/:aid/image/upload", svc.HandleUploadAssetImage)
 	r.POST("/api/projects/:id/assets/:kind/:aid/panorama", svc.HandleSplitLocationPanorama) // ERP 全景图 → 多视角参考图版本（仅场景）
+	r.POST("/api/projects/:id/assets/:kind/:aid/panorama/generate", svc.HandleGenerateLocationPanorama) // MiniMax H3-Image 生成全景图并自动拆视角
 	r.POST("/api/projects/:id/assets/:kind/:aid/sheet", svc.HandleGeneratePropSheet)
 	r.POST("/api/projects/:id/assets/:kind/:aid/topview", svc.HandleGenerateTopviewStructure)
 	r.POST("/api/projects/:id/assets/:kind/:aid/sheet/upload", svc.HandleUploadPropSheet) // 上传画好的四视图（仅道具）
