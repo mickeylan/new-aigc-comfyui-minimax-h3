@@ -393,7 +393,7 @@ func (s *Service) HandleRedesignScenePrompt(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{"prompt": prompt})
+	c.JSON(200, gin.H{"prompt": prompt, "storyboard_bindings": sceneStoryboardReferenceBindings(s.Projects.sceneStoryboardReferences(sc))})
 }
 
 type sceneVideoReferenceBinding struct {
@@ -418,29 +418,9 @@ func sceneVideoReferenceBindings(refs []FileMeta, lines []string, prompt string)
 	appearances := h3SubjectShotAppearances(body)
 	out := make([]sceneVideoReferenceBinding, 0, len(refs))
 	for i, ref := range refs {
-		label := fmt.Sprintf("Reference %d", i+1)
-		if i < len(lines) {
-			label = strings.TrimSpace(strings.TrimPrefix(lines[i], "-"))
-		}
-		role, usage := "reference", "外观参考"
-		switch {
-		case strings.Contains(label, "当前分镜") || strings.Contains(label, "开始画面"):
-			role, usage = "storyboard", "起始构图与动作状态"
-		case strings.Contains(label, "场景") || strings.Contains(label, "环境"):
-			role, usage = "location", "环境与空间参考"
-		case strings.Contains(label, "道具"):
-			role, usage = "prop", "道具外观参考"
-		case strings.Contains(label, "造型"):
-			role, usage = "look", "服装、发型与配饰参考"
-		case strings.Contains(label, "角色"):
-			role, usage = "character", "身份、五官与年龄参考"
-		}
-		identity := label
-		if left := strings.Index(label, "「"); left >= 0 {
-			if right := strings.Index(label[left+len("「"):], "」"); right >= 0 {
-				identity = label[left+len("「") : left+len("「")+right]
-			}
-		}
+		label := referenceBindingLabel(lines, i)
+		role, usage := referenceLabelRole(label)
+		identity := referenceLabelIdentity(label)
 		value := i + 1
 		subject := &value
 		orders := appearances[value]
@@ -452,6 +432,69 @@ func sceneVideoReferenceBindings(refs []FileMeta, lines []string, prompt string)
 			}
 		}
 		out = append(out, sceneVideoReferenceBinding{Picture: value, Subject: subject, Role: role, Identity: identity, Usage: usage, ShotOrders: orders, RetentionMode: mode, Label: label, TaskID: ref.TaskID, Name: ref.Name, ImageURL: fmt.Sprintf("/api/input/%s/%s", ref.TaskID, ref.Name)})
+	}
+	return out
+}
+
+func referenceBindingLabel(lines []string, i int) string {
+	if i < len(lines) {
+		return strings.TrimSpace(strings.TrimPrefix(lines[i], "-"))
+	}
+	return fmt.Sprintf("Reference %d", i+1)
+}
+
+func referenceLabelRole(label string) (role, usage string) {
+	switch {
+	case strings.Contains(label, "当前分镜") || strings.Contains(label, "开始画面"):
+		return "storyboard", "起始构图与动作状态"
+	case strings.Contains(label, "场景") || strings.Contains(label, "环境"):
+		return "location", "环境与空间参考"
+	case strings.Contains(label, "道具"):
+		return "prop", "道具外观参考"
+	case strings.Contains(label, "造型"):
+		return "look", "服装、发型与配饰参考"
+	case strings.Contains(label, "角色"):
+		return "character", "身份、五官与年龄参考"
+	}
+	return "reference", "外观参考"
+}
+
+func referenceLabelIdentity(label string) string {
+	if left := strings.Index(label, "「"); left >= 0 {
+		if right := strings.Index(label[left+len("「"):], "」"); right >= 0 {
+			return label[left+len("「") : left+len("「")+right]
+		}
+	}
+	return label
+}
+
+// sceneStoryboardReferenceBindings describes the H3 storyboard-image references in submission
+// order. Unlike the video prompt, only a character's first picture becomes a Subject; scene,
+// prop and same-character supplement pictures are referenced as <Picture N> only, exactly as
+// h3StoryboardSubjects writes subject_definitions.
+func sceneStoryboardReferenceBindings(refs []FileMeta, lines []string) []sceneVideoReferenceBinding {
+	_, _, subjects := h3StoryboardSubjects(lines)
+	primary := map[int]bool{}
+	for _, tag := range subjects {
+		var n int
+		if _, err := fmt.Sscanf(tag, "<Subject %d>", &n); err == nil {
+			primary[n] = true
+		}
+	}
+	out := make([]sceneVideoReferenceBinding, 0, len(refs))
+	for i, ref := range refs {
+		label := referenceBindingLabel(lines, i)
+		role, usage := referenceLabelRole(label)
+		identity := referenceLabelIdentity(label)
+		value := i + 1
+		var subject *int
+		if primary[value] {
+			subject = &value
+			role, usage = "character", "身份、五官与年龄参考"
+		} else if i < len(lines) && storyboardCharacterReferenceName(lines[i]) != "" {
+			role, usage = "look", "同一角色的外观补充（不是新的主体）"
+		}
+		out = append(out, sceneVideoReferenceBinding{Picture: value, Subject: subject, Role: role, Identity: identity, Usage: usage, Label: label, TaskID: ref.TaskID, Name: ref.Name, ImageURL: fmt.Sprintf("/api/input/%s/%s", ref.TaskID, ref.Name)})
 	}
 	return out
 }

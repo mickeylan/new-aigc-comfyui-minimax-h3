@@ -131,6 +131,88 @@ func TestSubjectBindingsAgreeBetweenImageAndVideoPrompts(t *testing.T) {
 	}
 }
 
+// 界面上的引用条按 storyboard_bindings 把 <Subject N>/<Picture N> 渲染成图片和名字，
+// 它的编号必须与 RedesignSceneImagePrompt 实际写进提示词的编号逐位一致。
+func TestStoryboardBindingsMatchCompiledStoryboardPrompt(t *testing.T) {
+	db := setupTestDB(t)
+	if err := db.AutoMigrate(&models.Asset{}, &models.CharacterOutfit{}, &models.SceneCharacterOutfit{}); err != nil {
+		t.Fatal(err)
+	}
+	project := models.Project{Title: "引用条", Style: "3D国漫"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	lead := models.Character{ProjectID: project.ID, Name: "金虎", Sheet: "jinhu-sheet.png"}
+	sidekick := models.Character{ProjectID: project.ID, Name: "钢蛋儿", Sheet: "gangdan-sheet.png"}
+	for _, ch := range []*models.Character{&lead, &sidekick} {
+		if err := db.Create(ch).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	office := models.Asset{ProjectID: project.ID, Kind: AssetKindLocation, Name: "顶楼办公室", Image: "office.png"}
+	cigar := models.Asset{ProjectID: project.ID, Kind: AssetKindProp, Name: "金虎雪茄", Image: "cigar.png"}
+	for _, a := range []*models.Asset{&office, &cigar} {
+		if err := db.Create(a).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 保存顺序把场景放在最前；实际提交顺序会把人物身份图排到前面。
+	saved := fmt.Sprintf(`[
+		{"source_type":"asset","source_id":%d,"variant":"image","use_krea2":true,"use_h3":true},
+		{"source_type":"character","source_id":%d,"variant":"sheet","use_krea2":true,"use_h3":true},
+		{"source_type":"asset","source_id":%d,"variant":"image","use_krea2":true,"use_h3":true},
+		{"source_type":"character","source_id":%d,"variant":"sheet","use_krea2":true,"use_h3":true}
+	]`, office.ID, lead.ID, cigar.ID, sidekick.ID)
+	scene := models.Scene{ProjectID: project.ID, EpisodeN: 1, Order: 1, Characters: "金虎,钢蛋儿", VisibleCharacters: "金虎,钢蛋儿",
+		ImagePrompt: "[Shot 1] 金虎坐在办公桌后，钢蛋儿低头站着。", ReferenceImagesJSON: saved}
+	if err := db.Create(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	ps := &ProjectService{db: db}
+	refs, lines := ps.sceneStoryboardReferences(&scene)
+	got := sceneStoryboardReferenceBindings(refs, lines)
+	if len(got) != 4 {
+		t.Fatalf("bindings=%+v", got)
+	}
+	compiled := buildH3StoryboardPrompt(&scene, &project, lines)
+	definitions := h3PromptSection(compiled, "subject_definitions:")
+	for _, b := range got {
+		picture := fmt.Sprintf("<Picture %d>", b.Picture)
+		if !strings.Contains(definitions, picture) || b.Name != refs[b.Picture-1].Name {
+			t.Fatalf("binding %+v does not match compiled picture order:\n%s", b, definitions)
+		}
+		subjectDefined := strings.Contains(definitions, fmt.Sprintf("<Subject %d> 是 %s", b.Picture, picture))
+		if (b.Subject != nil) != subjectDefined {
+			t.Fatalf("binding %+v subject=%v but compiled defines subject=%v:\n%s", b, b.Subject != nil, subjectDefined, definitions)
+		}
+	}
+	wantIdentity := []string{"金虎", "钢蛋儿", "顶楼办公室", "金虎雪茄"}
+	for i, b := range got {
+		if b.Identity != wantIdentity[i] {
+			t.Fatalf("binding %d identity=%q, want %q (lines=%v)", i, b.Identity, wantIdentity[i], lines)
+		}
+	}
+	if got[2].Subject != nil || got[2].Role != "location" || got[3].Subject != nil || got[3].Role != "prop" {
+		t.Fatalf("environment/prop must not be subjects: %+v %+v", got[2], got[3])
+	}
+}
+
+func TestStoryboardBindingsTreatSameCharacterSupplementAsPictureOnly(t *testing.T) {
+	refs := []FileMeta{{TaskID: "1", Name: "a.png"}, {TaskID: "1", Name: "b.png"}}
+	lines := []string{"- <Picture 1>：角色「舒寒」四视图", "- <Picture 2>：角色造型「舒寒」竖版套装图"}
+	got := sceneStoryboardReferenceBindings(refs, lines)
+	if got[0].Subject == nil || *got[0].Subject != 1 {
+		t.Fatalf("primary=%+v", got[0])
+	}
+	if got[1].Subject != nil || got[1].Role != "look" {
+		t.Fatalf("supplement must be <Picture 2> only: %+v", got[1])
+	}
+	if !strings.Contains(buildH3StoryboardPrompt(&models.Scene{ImagePrompt: "[Shot 1] 舒寒站立。"}, nil, lines), "<Picture 2> supplements <Subject 1>") {
+		t.Fatal("compiled prompt no longer writes the supplement form this binding mirrors")
+	}
+}
+
 // 分镜图提示词与视频提示词共用同一套 <Picture N> 编号。两条路径各自排序时，
 // 同一个编号会在两份提示词里指向不同的人物，LLM 写进提示词正文的 <Subject N>
 // 也就跟着错位。这里锁定“两侧顺序逐位一致、视频只在末尾多一张分镜帧”。

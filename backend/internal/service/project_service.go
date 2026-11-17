@@ -592,10 +592,7 @@ func (s *ProjectService) RedesignSceneImagePrompt(sc *models.Scene) (string, err
 	}
 	assetContext := s.assetContextForScene(sc) + sceneBlockingPromptContext(sc) + s.sceneInheritedStateContext(sc) + s.sceneImageAliasIdentityContext(sc)
 	shotContext := s.sceneOpeningDirectorContext(sc)
-	_, referenceLines, explicitReferences := s.selectedSceneReferenceFiles(sc, "krea2")
-	if !explicitReferences {
-		_, referenceLines = s.sceneImageReferenceFiles(sc)
-	}
+	_, referenceLines := s.sceneStoryboardReferences(sc)
 	referenceContext := "无可用参考图"
 	if len(referenceLines) > 0 {
 		referenceContext = strings.Join(referenceLines, "\n")

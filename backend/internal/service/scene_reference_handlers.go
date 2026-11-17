@@ -15,7 +15,8 @@ func (s *Service) HandleGetSceneReferences(c *gin.Context) {
 	selected = s.Projects.normalizeSceneReferences(sc.ProjectID, selected)
 	candidates := s.Projects.sceneReferenceCandidates(sc)
 	valid, invalid := partitionSceneReferences(selected, candidates)
-	c.JSON(http.StatusOK, gin.H{"candidates": candidates, "references": valid, "invalid_references": invalid, "explicit": explicit, "max_krea2": maxSceneReferenceImages, "max_h3": maxSceneReferenceImages - 1})
+	c.JSON(http.StatusOK, gin.H{"candidates": candidates, "references": valid, "invalid_references": invalid, "explicit": explicit, "max_krea2": maxSceneReferenceImages, "max_h3": maxSceneReferenceImages - 1,
+		"storyboard_bindings": sceneStoryboardReferenceBindings(s.Projects.sceneStoryboardReferences(sc))})
 }
 
 func (s *Service) HandleUpdateSceneReferences(c *gin.Context) {

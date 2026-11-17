@@ -425,6 +425,16 @@ func cancelSceneTasks(tasks *TaskService, taskIDs []string) {
 	}
 }
 
+// sceneStoryboardReferences returns the references an H3 storyboard image is built from:
+// the explicit selection when the user saved one, otherwise the automatic set.
+func (s *ProjectService) sceneStoryboardReferences(sc *models.Scene) ([]FileMeta, []string) {
+	refs, lines, explicit := s.selectedSceneReferenceFiles(sc, "krea2") // 旧数据库用途名；实际按 image_engine 提交
+	if !explicit {
+		refs, lines = s.sceneImageReferenceFiles(sc)
+	}
+	return refs, lines
+}
+
 func (s *ProjectService) selectedSceneReferenceFiles(sc *models.Scene, target string) ([]FileMeta, []string, bool) {
 	selected, explicit := parseSceneReferences(sc)
 	if !explicit {
