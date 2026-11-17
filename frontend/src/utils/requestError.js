@@ -23,6 +23,21 @@ export function requestErrorMessage(error, fallback = '请求失败') {
   return `${fallback}：${error.message || '无法连接后端服务'}`
 }
 
+// 多步操作失败时先说明是哪一步。AI 接口超时不是文件大小问题：前端只是不再
+// 等待，后端仍会把这次调用跑完，所以要写清等了多久。
+export function stepErrorMessage(error, step) {
+  const response = error?.response
+  if (response) {
+    const served = serverMessage(response.data)
+    return served ? `${step}：${served}（HTTP ${response.status}）` : `${step}：HTTP ${response.status}`
+  }
+  if (error?.code === 'ECONNABORTED' || /timeout/i.test(error?.message || '')) {
+    const minutes = Math.round(Number(error?.config?.timeout || 0) / 60000)
+    return `${step}：前端等待${minutes > 0 ? ` ${minutes} 分钟` : ''}后超时，后端可能仍在处理`
+  }
+  return `${step}：${error?.message || '无法连接后端服务'}`
+}
+
 // serverMessage 只提取可读的服务端说明；HTML 错误页会淹没真正的线索，丢弃之后
 // 由状态码说明问题。
 function serverMessage(data) {

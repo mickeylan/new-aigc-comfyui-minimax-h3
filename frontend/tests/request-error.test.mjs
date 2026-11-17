@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { requestErrorMessage } from '../src/utils/requestError.js'
+import { requestErrorMessage, stepErrorMessage } from '../src/utils/requestError.js'
 
 test('请求失败提示始终给出原因：服务端消息、状态码、超时或网络错误', () => {
   // 服务端 JSON 消息优先，但状态码仍然保留：409 和 500 的处理方式不同。
@@ -40,6 +40,30 @@ test('请求失败提示始终给出原因：服务端消息、状态码、超�
   )
   assert.equal(requestErrorMessage({}, '上传失败'), '上传失败：无法连接后端服务')
   assert.equal(requestErrorMessage(null, '上传失败'), '上传失败')
+})
+
+test('多步 AI 操作失败时写明失败步骤，超时说明等待时长而非文件过大', () => {
+  assert.equal(
+    stepErrorMessage({ code: 'ECONNABORTED', message: 'timeout of 300000ms exceeded', config: { timeout: 300000 } }, '翻译中文预览失败'),
+    '翻译中文预览失败：前端等待 5 分钟后超时，后端可能仍在处理'
+  )
+  assert.equal(
+    stepErrorMessage({ response: { status: 502, data: { error: '角色名李小虎没有对应的已选人物参考图，无法绑定到Subject' } } }, 'AI 生成英文稿失败'),
+    'AI 生成英文稿失败：角色名李小虎没有对应的已选人物参考图，无法绑定到Subject（HTTP 502）'
+  )
+  assert.equal(stepErrorMessage({ response: { status: 504, data: '<html>504</html>' } }, '翻译中文预览失败'), '翻译中文预览失败：HTTP 504')
+  assert.equal(stepErrorMessage({ message: 'Network Error' }, '翻译中文预览失败'), '翻译中文预览失败：Network Error')
+})
+
+test('视频提示词翻译失败时保留已生成的英文稿，并可只重试翻译', () => {
+  const source = readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
+  const regenerate = source.slice(source.indexOf('async function regenerateVideoPrompt()'), source.indexOf('async function retryGeneratedVideoTranslation'))
+  assert.doesNotMatch(regenerate, /'AI 重新生成失败'/)
+  assert.ok(regenerate.indexOf('videoTaskUntranslated.value = true') < regenerate.indexOf('translateGeneratedVideoPrompt('))
+  const translate = source.slice(source.indexOf('async function translateGeneratedVideoPrompt'), source.indexOf('async function uploadVideoFrame'))
+  // 失败分支在清除「待翻译」标记之前返回，重试按钮因此保持可见。
+  assert.ok(translate.indexOf('return }') < translate.indexOf('videoTaskUntranslated.value = false'))
+  assert.match(source, /v-if="videoTaskUntranslated"[^>]*@click="retryGeneratedVideoTranslation"/)
 })
 
 test('上传失败使用常驻错误Toast并按入口区分原因', () => {
