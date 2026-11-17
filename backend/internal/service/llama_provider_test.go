@@ -127,6 +127,88 @@ func TestMiniMaxCodingProviderChatUsesBearerAuth(t *testing.T) {
 	}
 }
 
+func miniMaxStreamGetter(url string) *mockGetter {
+	return &mockGetter{settings: map[string]string{
+		SettingMiniMaxBaseURL: url + "/v1",
+		SettingMiniMaxModel:   "MiniMax-M2.7",
+		SettingMiniMaxAPIKey:  "test-key",
+	}}
+}
+
+func TestMiniMaxCodingProviderStreamsAndJoinsDeltas(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["stream"] != true {
+			t.Errorf("stream = %#v, want true", body["stream"])
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, line := range []string{
+			`data: {"choices":[{"delta":{"role":"assistant","content":"<think>先想"}}]}`,
+			`data: {"choices":[{"delta":{"content":"一想</think>"}}]}`,
+			`data: {"choices":[{"delta":{"content":"[Shot 1] 正"}}]}`,
+			`data: {"choices":[{"delta":{"content":"文"},"finish_reason":"stop"}]}`,
+			`data: [DONE]`,
+		} {
+			_, _ = w.Write([]byte(line + "\n\n"))
+		}
+	}))
+	defer server.Close()
+	text, err := NewMiniMaxCodingProvider(miniMaxStreamGetter(server.URL)).Chat("system", "user")
+	if err != nil || text != "[Shot 1] 正文" {
+		t.Fatalf("Chat() = %q, %v", text, err)
+	}
+}
+
+func TestMiniMaxCodingProviderRejectsTruncatedStream(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":"[Shot 1] 半截"}}]}` + "\n\n"))
+	}))
+	defer server.Close()
+	text, err := NewMiniMaxCodingProvider(miniMaxStreamGetter(server.URL)).Chat("system", "user")
+	if err == nil || !strings.Contains(err.Error(), "未正常结束") || text != "" {
+		t.Fatalf("Chat() = %q, %v; want truncated-stream error", text, err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want the existing single retry", calls)
+	}
+}
+
+func TestMiniMaxCodingProviderReportsStreamErrorEvent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"error":{"message":"rate limit"}}` + "\n\n"))
+	}))
+	defer server.Close()
+	_, err := NewMiniMaxCodingProvider(miniMaxStreamGetter(server.URL)).Chat("system", "user")
+	if err == nil || !strings.Contains(err.Error(), "MiniMax Coding Plan接口错误: rate limit") {
+		t.Fatalf("unexpected stream error: %v", err)
+	}
+}
+
+func TestLlamaProviderDoesNotRequestStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["stream"] != false {
+			t.Errorf("stream = %#v, want false for llama.cpp", body["stream"])
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer server.Close()
+	g := &mockGetter{settings: map[string]string{SettingLlamaBaseURL: server.URL, SettingLlamaModel: "m"}}
+	if _, err := NewLlamaProvider(g).Chat("system", "user"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMiniMaxCodingProviderErrorsUseConfiguredProviderName(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)

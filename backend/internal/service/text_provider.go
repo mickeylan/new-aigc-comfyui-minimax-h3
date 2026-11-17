@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -73,6 +74,8 @@ type LlamaProvider struct {
 	apiKeyKey    string
 	defaultURL   string
 	defaultModel string
+	// stream 请求 SSE 流式返回：推理模型先长时间思考，非流式时连接上几十秒没有任何字节。
+	stream bool
 }
 
 // IGetter 设置读取接口（兼容 VolcClient 的 db 方式）
@@ -86,7 +89,9 @@ func NewLlamaProvider(db IGetter) *LlamaProvider {
 }
 
 func NewMiniMaxCodingProvider(db IGetter) *LlamaProvider {
-	return newOpenAICompatibleProvider(db, "MiniMax Coding Plan", SettingMiniMaxBaseURL, SettingMiniMaxModel, SettingMiniMaxAPIKey, "", DefaultMiniMaxModel)
+	p := newOpenAICompatibleProvider(db, "MiniMax Coding Plan", SettingMiniMaxBaseURL, SettingMiniMaxModel, SettingMiniMaxAPIKey, "", DefaultMiniMaxModel)
+	p.stream = true
+	return p
 }
 
 func newOpenAICompatibleProvider(db IGetter, name, baseURLKey, modelKey, apiKeyKey, defaultURL, defaultModel string) *LlamaProvider {
@@ -186,6 +191,16 @@ type openAIChoice struct {
 	Message openAIMessage `json:"message"`
 }
 
+type openAIStreamChunk struct {
+	Choices []struct {
+		Delta struct {
+			Content string `json:"content"`
+		} `json:"delta"`
+		FinishReason *string `json:"finish_reason"`
+	} `json:"choices"`
+	Error *openAIError `json:"error"`
+}
+
 type openAIMessageContent struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
@@ -263,7 +278,7 @@ func (l *LlamaProvider) chatOnce(system, user string, images []TextImage) (strin
 		messages = append(messages, openAIRequestMessage{Role: "user", Content: parts})
 	}
 
-	requestBody := openAIChatReq{Model: cfg.Model, Messages: messages, Stream: false}
+	requestBody := openAIChatReq{Model: cfg.Model, Messages: messages, Stream: l.stream}
 	if wantsJSON {
 		// llama.cpp maps OpenAI JSON mode to a grammar-constrained sampler. This
 		// prevents ordinary Chinese names such as 雷/舒 from escaping a JSON string.
@@ -280,6 +295,9 @@ func (l *LlamaProvider) chatOnce(system, user string, images []TextImage) (strin
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if l.stream {
+		req.Header.Set("Accept", "text/event-stream")
+	}
 	if cfg.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 	}
@@ -290,26 +308,76 @@ func (l *LlamaProvider) chatOnce(system, user string, images []TextImage) (strin
 	}
 	defer resp.Body.Close()
 
-	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
+		data, _ := io.ReadAll(resp.Body)
 		return "", fmt.Errorf("%s接口返回 %d: %s", l.name, resp.StatusCode, truncateStr(string(data), 300))
 	}
 
-	var out openAIChatResp
-	if err := json.Unmarshal(data, &out); err != nil {
-		return "", fmt.Errorf("解析%s响应失败: %w", l.name, err)
+	var raw string
+	// 服务端可能忽略 stream 参数而返回普通 JSON，按实际 Content-Type 解析。
+	if strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		if raw, err = readOpenAIChatStream(resp.Body, l.name); err != nil {
+			return "", err
+		}
+	} else {
+		data, _ := io.ReadAll(resp.Body)
+		var out openAIChatResp
+		if err := json.Unmarshal(data, &out); err != nil {
+			return "", fmt.Errorf("解析%s响应失败: %w", l.name, err)
+		}
+		if out.Error != nil {
+			return "", fmt.Errorf("%s接口错误: %s", l.name, out.Error.Message)
+		}
+		if len(out.Choices) == 0 {
+			return "", fmt.Errorf("%s未返回内容（原始响应: %s）", l.name, truncateStr(string(data), 200))
+		}
+		raw = out.Choices[0].Message.Content
 	}
-	if out.Error != nil {
-		return "", fmt.Errorf("%s接口错误: %s", l.name, out.Error.Message)
-	}
-	if len(out.Choices) == 0 {
-		return "", fmt.Errorf("%s未返回内容（原始响应: %s）", l.name, truncateStr(string(data), 200))
-	}
-	content := stripThinkBlocks(out.Choices[0].Message.Content)
+	content := stripThinkBlocks(raw)
 	if content == "" {
 		return "", fmt.Errorf("llama.cpp 仅返回了思考内容，未返回最终答案")
 	}
 	return content, nil
+}
+
+// readOpenAIChatStream 拼接 SSE 流中的 delta.content。流在收到 finish_reason 或 [DONE]
+// 之前断开时报错，不把半截输出当作完整答案返回。
+func readOpenAIChatStream(body io.Reader, name string) (string, error) {
+	var content strings.Builder
+	finished := false
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "[DONE]" {
+			finished = true
+			break
+		}
+		var chunk openAIStreamChunk
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			return "", fmt.Errorf("解析%s流式响应失败: %w", name, err)
+		}
+		if chunk.Error != nil {
+			return "", fmt.Errorf("%s接口错误: %s", name, chunk.Error.Message)
+		}
+		for _, choice := range chunk.Choices {
+			content.WriteString(choice.Delta.Content)
+			if choice.FinishReason != nil && *choice.FinishReason != "" {
+				finished = true
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("读取%s流式响应中断: %w", name, err)
+	}
+	if !finished {
+		return "", fmt.Errorf("%s流式响应未正常结束（已收到 %d 字符）", name, content.Len())
+	}
+	return content.String(), nil
 }
 
 // stripThinkBlocks 清除 Qwen 推理模型可能混入 content 的 <think>...</think>，避免干扰 JSON 解析。
