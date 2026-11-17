@@ -55,7 +55,8 @@ func (s *ContinuityService) ExtractFrameCandidates(projectID, sceneID uint, coun
 	if scene.VideoInputFile == "" || scene.VideoTaskID == "" || scene.Status != "video_ready" {
 		return nil, fmt.Errorf("场景视频尚未就绪")
 	}
-	inputDir := s.sceneFrameDirectory(projectID)
+	// 候选帧与首尾帧落在 frames 子目录；数据库与 UploadFile 仍登记纯文件名，由读取端兜底查找。
+	inputDir := s.sceneFrameCandidateDirectory(projectID)
 	videoPath, err := s.sceneFrameVideoPath(&scene)
 	if err != nil {
 		return nil, err

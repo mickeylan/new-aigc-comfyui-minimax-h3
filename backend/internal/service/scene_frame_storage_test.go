@@ -70,12 +70,28 @@ func TestSceneFramesUseDurableAssetDirectoryWhenLegacyInputIsAbsent(t *testing.T
 	if len(tail) != 3 {
 		t.Fatalf("tail frames=%d", len(tail))
 	}
-	for _, frame := range tail {
+	// 衔接候选帧与成片首尾帧落在 frames 子目录，项目素材目录只留正式素材；
+	// 数据库仍登记纯文件名，ResolveReadPath 必须能找回它们（预览、续接、高清转换都走这里）。
+	framesDir := filepath.Join(dir, sceneFrameSubdir)
+	var boundary []models.FrameCandidate
+	if err := db.Where("scene_id = ? AND type IN ?", sc.ID, []models.FrameCandidateType{models.FrameCandidateVideoFirst, models.FrameCandidateVideoLast}).Find(&boundary).Error; err != nil || len(boundary) != 2 {
+		t.Fatalf("boundary frames=%d err=%v", len(boundary), err)
+	}
+	for _, frame := range append(tail, boundary...) {
 		if frame.ID == 0 {
 			t.Fatal("missing persisted frame id")
 		}
-		if _, err := os.Stat(filepath.Join(dir, frame.ImageFile)); err != nil {
-			t.Fatalf("tail in wrong directory: %v", err)
+		if filepath.Base(frame.ImageFile) != frame.ImageFile {
+			t.Fatalf("frame must be recorded as a bare name: %s", frame.ImageFile)
+		}
+		if _, err := os.Stat(filepath.Join(framesDir, frame.ImageFile)); err != nil {
+			t.Fatalf("frame not in frames directory: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, frame.ImageFile)); !os.IsNotExist(err) {
+			t.Fatalf("frame polluted the project asset directory: %s", frame.ImageFile)
+		}
+		if got := svc.upload.ResolveReadPath(fmt.Sprint(p.ID), frame.ImageFile); got != filepath.Join(framesDir, frame.ImageFile) {
+			t.Fatalf("read path=%s", got)
 		}
 	}
 	if _, err := os.Stat(oldDir); !os.IsNotExist(err) {

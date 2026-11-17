@@ -13,6 +13,10 @@ import (
 // 用户可以整目录删除而不必担心误删素材，项目素材目录也保持干净。
 const sceneFrameCacheCategory = "_frame_cache"
 
+// sceneFrameSubdir 存放每次提取的衔接候选帧与成片首尾帧，避免它们和正式素材混在项目目录里。
+// 数据库仍只登记纯文件名，读取端（ResolveReadPath / existingInputPath）在项目目录找不到时再查这里。
+const sceneFrameSubdir = "frames"
+
 // Frame images and saved selections must use the same storage root served by
 // /api/input. Remote-only execution retains its existing remote staging directory.
 func (s *ContinuityService) sceneFrameRoot() string {
@@ -28,6 +32,11 @@ func (s *ContinuityService) sceneFrameRoot() string {
 
 func (s *ContinuityService) sceneFrameDirectory(projectID uint) string {
 	return filepath.Join(s.sceneFrameRoot(), fmt.Sprint(projectID))
+}
+
+// sceneFrameCandidateDirectory 是衔接候选帧与成片首尾帧的落盘目录（项目目录下的 frames）。
+func (s *ContinuityService) sceneFrameCandidateDirectory(projectID uint) string {
+	return filepath.Join(s.sceneFrameDirectory(projectID), sceneFrameSubdir)
 }
 
 // sceneFrameCacheDirectory 与项目素材目录同根但互不混杂，仍由 /api/input/*path 提供预览。

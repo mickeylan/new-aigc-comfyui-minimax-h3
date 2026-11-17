@@ -193,6 +193,19 @@ func (m *UploadManager) LegacyInputDir() string {
 // ResolveReadPath 返回素材的持久路径：优先 data/assets；仅当旧文件仍留在 ComfyUI
 // input 时按需复制到持久目录，避免用户只备份 data（含数据库）却丢素材。
 func (m *UploadManager) ResolveReadPath(taskID, name string) string {
+	resolved := m.resolveReadPath(taskID, name)
+	// 衔接候选帧与成片首尾帧登记为纯文件名，实际存放在项目的 frames 子目录。
+	bare := strings.TrimLeft(filepath.ToSlash(name), "/")
+	if m.remote == nil || bare == "" || strings.Contains(bare, "/") || m.remote.Exists(resolved) {
+		return resolved
+	}
+	if framed := m.resolveReadPath(taskID, path.Join(sceneFrameSubdir, bare)); m.remote.Exists(framed) {
+		return framed
+	}
+	return resolved
+}
+
+func (m *UploadManager) resolveReadPath(taskID, name string) string {
 	rel := filepath.Join(taskID, filepath.FromSlash(name))
 	primary := filepath.Join(m.InputDir(), rel)
 	if m.remote != nil && !m.remote.Enabled() {
@@ -253,7 +266,7 @@ func (m *UploadManager) MigrateLegacyAssets() {
 			continue
 		}
 		primary := filepath.Join(m.InputDir(), file.TaskID, filepath.FromSlash(file.Name))
-		if m.remote.Exists(primary) {
+		if m.remote.Exists(primary) || m.remote.Exists(filepath.Join(m.InputDir(), file.TaskID, sceneFrameSubdir, filepath.FromSlash(file.Name))) {
 			continue
 		}
 		legacy := filepath.Join(legacyRoot, file.TaskID, filepath.FromSlash(file.Name))

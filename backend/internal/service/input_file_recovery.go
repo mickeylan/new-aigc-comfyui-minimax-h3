@@ -44,6 +44,11 @@ func (s *TaskService) legacyInputFilePath(projectID uint, name string) string {
 	return filepath.Join(s.cfg.Comfy.ComfyDir, "input", strconv.FormatUint(uint64(projectID), 10), name)
 }
 
+// framedInputFilePath is where extracted continuity frames live; the database keeps bare names.
+func (s *TaskService) framedInputFilePath(projectID uint, name string) string {
+	return filepath.Join(s.cfg.AssetsRoot(), strconv.FormatUint(uint64(projectID), 10), sceneFrameSubdir, name)
+}
+
 func (s *TaskService) existingInputPath(projectID uint, name string) (string, bool) {
 	primary := s.inputFilePath(projectID, name)
 	if s.remote.Exists(primary) {
@@ -52,6 +57,14 @@ func (s *TaskService) existingInputPath(projectID uint, name string) (string, bo
 	legacy := s.legacyInputFilePath(projectID, name)
 	if s.remote.Exists(legacy) {
 		return legacy, true
+	}
+	if filepath.Base(name) == name {
+		if framed := s.framedInputFilePath(projectID, name); s.remote.Exists(framed) {
+			return framed, true
+		}
+		if legacyFramed := s.legacyInputFilePath(projectID, filepath.Join(sceneFrameSubdir, name)); s.remote.Exists(legacyFramed) {
+			return legacyFramed, true
+		}
 	}
 	return "", false
 }
@@ -306,16 +319,21 @@ func (s *TaskService) ensureProjectInputFile(projectID uint, name string) (strin
 	configured := s.inputFilePath(projectID, name)
 	if existing, ok := s.existingInputPath(projectID, name); ok {
 		// Lazy migration: keep serving from the durable root once possible.
-		if existing == configured {
-			return configured, nil
+		// Frames already sit in the durable frames subdirectory; copying them back would undo the separation.
+		if existing == configured || existing == s.framedInputFilePath(projectID, name) {
+			return existing, nil
+		}
+		target := configured
+		if existing == s.legacyInputFilePath(projectID, filepath.Join(sceneFrameSubdir, name)) {
+			target = s.framedInputFilePath(projectID, name)
 		}
 		if data, readErr := s.remote.Open(existing); readErr == nil {
 			content, copyErr := io.ReadAll(io.LimitReader(data, 64<<20))
 			data.Close()
 			if copyErr == nil && len(content) > 0 {
-				if writeErr := s.remote.WriteFile(configured, content, 0o644); writeErr == nil {
+				if writeErr := s.remote.WriteFile(target, content, 0o644); writeErr == nil {
 					log.Printf("[assets] migrated %s from legacy ComfyUI input (project=%d)", name, projectID)
-					return configured, nil
+					return target, nil
 				}
 			}
 		}
