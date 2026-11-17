@@ -480,26 +480,17 @@ func (s *Service) HandleTranslateSceneVideoPrompt(c *gin.Context) {
 	// rewrite <Picture N>, <Subject N>, timestamps or dialogue blocks. The server restores
 	// the exact original bytes afterwards.
 	_, _, referenceLines := s.sceneVideoPromptContinuity(&previewScene)
-	masked, tokens := maskH3Structure(source)
 	system := "Translate only the natural-language prose in this complete MiniMax H3 protocol prompt into " + target + ". The tokens [[[Tn]]] and [[[Dn]]] are opaque protocol placeholders: copy every one of them exactly once, in the same order, and never translate, renumber, merge or delete them. Keep all other content byte-identical unless it is natural-language prose. Translate faithfully without redesigning, summarizing, correcting or adding events. Preserve the scope of negation: a visible action/effect and a property that was not detected are separate statements; never turn the negative observation into absence of the visible action/effect. Preserve the subject and reference object of left/right relations and camera-relative facing exactly. Translate internal monologue as audible inner voice, not words spoken aloud; closed lips apply only during that inner-voice interval, not later ordinary dialogue. Return only the translated prompt."
-	translated, err := s.TextProviderFact.Chat(system, masked)
+	var translated string
+	var markerWarnings []string
+	if language == "zh" && len([]rune(source)) >= h3ChunkedTranslationMinRunes {
+		translated, markerWarnings, err = translateH3PromptChunked(s.TextProviderFact.Chat, system, source)
+	} else {
+		translated, markerWarnings, err = translateH3Masked(s.TextProviderFact.Chat, system, source, nil)
+	}
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
-	}
-	translated, markerWarnings, missingStructure := restoreH3StructureWithRecovery(stripH3CodeFence(translated), masked, tokens)
-	if missingStructure > 0 {
-		// Translators drop a shot marker often enough that a single pass is not
-		// dependable, and a marker that could not be placed positionally would
-		// silently flatten the shot timeline. One more call is cheaper than a
-		// wrong video; the better of the two results wins.
-		if retry, retryErr := s.TextProviderFact.Chat(system, masked); retryErr == nil {
-			candidate, candidateWarnings, candidateMissing := restoreH3StructureWithRecovery(stripH3CodeFence(retry), masked, tokens)
-			if candidateMissing < missingStructure {
-				translated, markerWarnings, missingStructure = candidate, candidateWarnings, candidateMissing
-			}
-			markerWarnings = append(markerWarnings, "首轮翻译丢失结构标记且无法按位置补回，已自动重译一次")
-		}
 	}
 	if len(referenceLines) > 0 {
 		translated = bindH3ReferencePreview(translated, referenceLines)
