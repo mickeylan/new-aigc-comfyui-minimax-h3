@@ -27,6 +27,22 @@ test('场景资产卡可用 MiniMax H3-Image 生成全景图，进行中禁用�
   assert.doesNotMatch(fn, /selectAssetVariant/)
 })
 
+test('生成后的全景原图可在场景卡上查看大图', () => {
+  assert.match(detail, /v-if="a\.kind === 'location' && a\.panorama_image"[^>]*@click="viewLocationPanorama\(a\)"/)
+  const fn = detail.slice(detail.indexOf('function viewLocationPanorama('), detail.indexOf('async function genLocationPanorama('))
+  assert.match(fn, /viewer\.value = api\.inputUrl\(project\.value\.id, a\.panorama_image\)/)
+})
+
+test('参考图版本逐条显示缩略图，点击打开大图，拆出的视角可直接核对', () => {
+  const modal = detail.slice(detail.indexOf('<!-- 资产图片版本 -->'), detail.indexOf('<GeneratedMediaHistoryDrawer'))
+  assert.match(modal, /<img :src="api\.inputUrl\(id\(\), variant\.file\)" class="variant-thumb"[^>]*@click="viewVariant\(variant\)"/)
+  assert.match(modal, /variant\.prompt \|\| variant\.file/)
+  const fn = detail.slice(detail.indexOf('function viewVariant('), detail.indexOf('async function selectVariant('))
+  assert.match(fn, /viewer\.value = api\.inputUrl\(id\(\), variant\.file\)/)
+  // 大图弹窗写在版本弹窗之后，同层级时盖在上方，关闭后回到版本列表。
+  assert.ok(detail.indexOf('<!-- 图片查看弹窗 -->') > detail.indexOf('<!-- 资产图片版本 -->'))
+})
+
 test('生成全景接口只提交任务，不上传文件', () => {
   assert.match(api, /generateLocationPanorama: \(id, aid\) => http\.post\(`\/projects\/\$\{id\}\/assets\/location\/\$\{aid\}\/panorama\/generate`\)/)
 })

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"image"
 	"image/draw"
-	"image/jpeg"
+	"image/png"
 	"log"
 	"math"
 	"net/http"
@@ -21,7 +21,7 @@ import (
 )
 
 // Location panoramas: a true equirectangular (ERP, 2:1, 360°×180°) image is sampled locally into
-// horizontal 16:9 perspective views. Each view is registered as an unselected asset_image variant
+// horizontal 16:9 perspective PNG views. Each view is registered as an unselected asset_image variant
 // of the location, so the user previews them in the version list and explicitly picks one; the
 // current reference image and its consumers are untouched until then.
 const (
@@ -81,8 +81,8 @@ func erpToPerspective(pano *image.RGBA, outW, outH int, yawDeg, fovDeg float64) 
 }
 
 type panoramaView struct {
-	Yaw  float64
-	JPEG []byte
+	Yaw float64
+	PNG []byte
 }
 
 // splitPanorama validates data as a true ERP panorama and returns count evenly spaced views.
@@ -115,10 +115,10 @@ func splitPanorama(data []byte, count int) ([]panoramaView, error) {
 	for i := 0; i < count; i++ {
 		yaw := float64(i) * 360 / float64(count)
 		var buf bytes.Buffer
-		if err := jpeg.Encode(&buf, erpToPerspective(pano, tw, th, yaw, panoramaFOVDegrees), &jpeg.Options{Quality: 92}); err != nil {
+		if err := png.Encode(&buf, erpToPerspective(pano, tw, th, yaw, panoramaFOVDegrees)); err != nil {
 			return nil, err
 		}
-		views = append(views, panoramaView{Yaw: yaw, JPEG: buf.Bytes()})
+		views = append(views, panoramaView{Yaw: yaw, PNG: buf.Bytes()})
 	}
 	return views, nil
 }
@@ -160,7 +160,7 @@ func (s *ProjectService) registerPanoramaViews(asset *models.Asset, panoFile str
 	variants := NewAssetVariantService(s.db)
 	out := make([]models.AssetVariant, 0, len(views))
 	for i, view := range views {
-		path, _, err := s.upload.SaveFile(pid, "image", fmt.Sprintf("pano_%d_%d_v%d.jpg", asset.ID, stamp, i+1), view.JPEG)
+		path, _, err := s.upload.SaveFile(pid, "image", fmt.Sprintf("pano_%d_%d_v%d.png", asset.ID, stamp, i+1), view.PNG)
 		if err != nil {
 			return out, fmt.Errorf("保存第 %d 个视角失败: %w", i+1, err)
 		}

@@ -316,6 +316,7 @@
                 <button v-if="a.kind === 'location'" class="btn btn-sm btn-ghost" :disabled="busy || !!a.panorama_task_id" title="用 MiniMax H3-Image 按场景描述生成 2:1 的 360° 全景图（5632×2816），完成后自动拆成 6 个视角加入「参考图版本」；当前参考图不变。生成式全景可能有接缝或变形，请核对「正后方」视角" @click="genLocationPanorama(a)">
                   {{ a.panorama_task_id ? '全景图生成中…' : '生成全景图' }}
                 </button>
+                <button v-if="a.kind === 'location' && a.panorama_image" class="btn btn-sm btn-ghost" title="查看最近一次生成的 2:1 全景原图；拆出的视角在「参考图版本」中预览" @click="viewLocationPanorama(a)">查看全景图</button>
                 <button v-if="a.kind === 'prop'" class="btn btn-sm btn-ghost" @click="openVariants('asset_sheet', a.id, a.name + ' · 四视图')">四视图版本</button>
                 <button v-if="topviewEnabled && a.kind === 'location'" class="btn btn-sm btn-secondary" :disabled="busy || !a.image || !!a.topview_task_id" :title="!a.image ? '请先生成或上传场景参考图' : '实验：只还原参考图可见区域、不含人物的正俯视结构图，按场景图缓存'" @click="genTopviewStructure(a, topviewCacheValid(a))">
                   {{ a.topview_task_id ? '俯视图生成中…' : (topviewCacheValid(a) ? '重新生成俯视图' : '生成俯视图（实验）') }}
@@ -1294,7 +1295,8 @@
         <div v-if="variantBusy" class="field-hint">版本加载中…</div>
         <div v-else-if="!assetVariantRows.length" class="empty-inline">暂无历史版本。</div>
         <div v-for="variant in assetVariantRows" :key="variant.id" class="revision-row">
-          <div><strong>{{ variant.file }}</strong><span class="field-hint">{{ variant.provenance || '未记录来源' }} · {{ formatRevisionTime(variant.created_at) }}</span></div>
+          <img :src="api.inputUrl(id(), variant.file)" class="variant-thumb" :alt="variant.prompt || variant.file" title="点击查看大图" loading="lazy" @click="viewVariant(variant)" />
+          <div class="variant-info"><strong>{{ variant.prompt || variant.file }}</strong><span class="field-hint">{{ variant.file }} · {{ variant.provenance || '未记录来源' }} · {{ formatRevisionTime(variant.created_at) }}</span></div>
           <div class="section-actions"><span v-if="variant.selected" class="tag">当前</span><button class="btn btn-sm btn-ghost" @click="toggleVariantFavorite(variant)">{{ variant.favorite ? '★ 已收藏' : '☆ 收藏' }}</button><button class="btn btn-sm btn-secondary" :disabled="variant.selected" @click="selectVariant(variant)">设为当前</button></div>
         </div>
         <div class="modal-actions"><button class="btn btn-ghost" @click="variantTarget = null">关闭</button></div>
@@ -2912,6 +2914,10 @@ async function openVariants(entityType, entityId, label) {
   assetVariantRows.value = []
   await loadVariants()
 }
+function viewVariant(variant) {
+  viewer.value = api.inputUrl(id(), variant.file)
+  nextTick(() => viewerMask.value?.focus())
+}
 async function selectVariant(variant) {
   try { await api.selectAssetVariant(id(), variant.id); await Promise.all([loadVariants(), load()]); toast.success('已切换当前资产版本') }
   catch (e) { toast.error('切换失败：' + (e.response?.data?.error || e.message)) }
@@ -3741,6 +3747,11 @@ async function genAssetImage(a) {
   } catch (e) {
     toast.error(e.response?.data?.error || 'Krea2 参考图任务提交失败')
   }
+}
+function viewLocationPanorama(a) {
+  if (!a.panorama_image) return
+  viewer.value = api.inputUrl(project.value.id, a.panorama_image)
+  nextTick(() => viewerMask.value?.focus())
 }
 // 生成的全景图在后端完成后自动拆视角，同样只进入版本列表。
 async function genLocationPanorama(a) {
@@ -4875,6 +4886,8 @@ onBeforeUnmount(() => {
 .revision-card { margin-bottom: 12px; padding: 8px 16px; }
 .revision-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .revision-row:last-child { border-bottom: 0; }
+.variant-thumb { width: 96px; height: 54px; flex: 0 0 96px; object-fit: cover; border-radius: 6px; background: #111; cursor: zoom-in; }
+.variant-info { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
 .revision-row .field-hint { display: block; }
 .notice { border-radius: 12px; padding: 10px 14px; font-size: 13px; margin-top: 14px; }
 .error-notice { background: rgba(255, 69, 58, 0.1); color: var(--red); }

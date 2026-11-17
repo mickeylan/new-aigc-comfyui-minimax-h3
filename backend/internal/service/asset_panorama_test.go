@@ -77,8 +77,8 @@ func TestSplitPanoramaRequiresTrueERP(t *testing.T) {
 	if len(views) != 4 || views[1].Yaw != 90 || views[3].Yaw != 270 {
 		t.Fatalf("views=%d yaws=%v,%v", len(views), views[1].Yaw, views[3].Yaw)
 	}
-	cfg, format, _ := image.DecodeConfig(bytes.NewReader(views[0].JPEG))
-	if format != "jpeg" || cfg.Width != 640 || cfg.Height != 360 {
+	cfg, format, _ := image.DecodeConfig(bytes.NewReader(views[0].PNG))
+	if format != "png" || cfg.Width != 640 || cfg.Height != 360 {
 		t.Fatalf("view %s %dx%d", format, cfg.Width, cfg.Height)
 	}
 }
@@ -100,7 +100,7 @@ func TestSplitLocationPanoramaAddsUnselectedVariants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 6 || rows[0].Selected || !strings.Contains(rows[0].Prompt, "正前方") || !strings.Contains(rows[3].Prompt, "正后方") || !strings.HasPrefix(rows[1].Provenance, "panorama:pano_") {
+	if len(rows) != 6 || rows[0].Selected || !strings.HasSuffix(rows[0].File, ".png") || !strings.Contains(rows[0].Prompt, "正前方") || !strings.Contains(rows[3].Prompt, "正后方") || !strings.HasPrefix(rows[1].Provenance, "panorama:pano_") {
 		t.Fatalf("rows=%+v", rows)
 	}
 	var reloaded models.Asset
