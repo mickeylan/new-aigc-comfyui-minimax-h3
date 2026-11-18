@@ -253,7 +253,11 @@ func (s *Service) HandleGenerateAdaptationAssets(c *gin.Context) {
 	}
 	generatedAssets := 0
 	for i := range assets {
-		description, err := s.Projects.RedesignAssetDescription(p, assets[i].Kind, assets[i].Name, fmt.Sprintf("依据第%d集已生成场景补充资产设定。场景上下文：%s", n, string(contextJSON)))
+		brief := fmt.Sprintf("依据第%d集已生成场景补充资产设定。场景上下文：%s", n, string(contextJSON))
+		if directions := ParseAssetDesignDirections(assets[i].DesignDirections); len(directions) > 0 {
+			brief = "用户的长期方向（必须全部体现）：" + strings.Join(directions, "；") + "\n" + brief
+		}
+		description, err := s.Projects.RedesignAssetDescription(p, assets[i].Kind, assets[i].Name, brief)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("%s「%s」AI描述生成失败: %v", AssetKindLabel(assets[i].Kind), assets[i].Name, err))
 			continue

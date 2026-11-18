@@ -285,7 +285,7 @@
                 <span class="char-name">{{ a.name }}</span>
                 <button type="button" class="btn btn-sm btn-ghost" @click="openAssetRename('asset', a)">改名</button>
                 <button type="button" class="btn btn-sm btn-danger" :disabled="isAssetDeleting(a.kind, a.id)" @click="removeAsset(a)">{{ isAssetDeleting(a.kind, a.id) ? '删除中…' : '删除' }}</button>
-                <span v-if="a.source === 'auto'" class="tag tag-gray">方案抽取</span><span v-if="a.kind === 'location' && a.visual_type === 'megastructure'" class="tag badge-mega">巨构 · {{ assetMegaLabel(a.mega_type) }}</span>
+                <span v-if="a.source === 'auto'" class="tag tag-gray">方案抽取</span><span v-if="a.kind === 'location' && a.visual_type === 'megastructure'" class="tag badge-mega">巨构 · {{ assetMegaLabel(a.mega_type) }}</span><span v-if="a.derived_from_id" class="tag tag-gray" :title="'出图时以来源的当前参考图为底，用 Qwen-Image-2.1 编辑'">派生自 {{ assetBaseName(a) }}</span>
               </div>
               <p v-if="a.description" class="char-trait">📝 {{ a.description }}</p>
               <span class="char-appear">出场 {{ assetCounts[a.id] || 0 }} 场</span>
@@ -294,7 +294,10 @@
               <span v-if="a.kind === 'prop' && a.sheet_task_id" class="char-voice">⏳ 道具四视图生成中</span>
               <span v-if="a.kind === 'prop' && a.sheet_error" class="fail-msg">{{ a.sheet_error }}</span>
               <div class="char-actions">
-                <button class="btn btn-sm btn-secondary" :disabled="busy || !!a.image_task_id || !assetEngineReady(a)" :title="assetEngineReady(a) ? '' : '所选 ' + imageEngineLabel(a.image_engine) + ' 工作流模板未安装'" @click="genAssetImage(a)">
+                <button v-if="a.derived_from_id" class="btn btn-sm btn-secondary" :disabled="busy || !!a.image_task_id || !qwenEditTemplateReady || !assetBaseHasImage(a)" :title="derivedImageBlocker(a) || '以「' + assetBaseName(a) + '」当前参考图为底，按变化清单用 Qwen-Image-2.1 编辑'" @click="genAssetImage(a)">
+                  {{ a.image_task_id ? 'Qwen 编辑中…' : (a.image ? 'Qwen 重新编辑派生图' : 'Qwen 编辑生成派生图') }}
+                </button>
+                <button v-else class="btn btn-sm btn-secondary" :disabled="busy || !!a.image_task_id || !assetEngineReady(a)" :title="assetEngineReady(a) ? '' : '所选 ' + imageEngineLabel(a.image_engine) + ' 工作流模板未安装'" @click="genAssetImage(a)">
                   {{ a.image_task_id ? imageEngineLabel(a.image_engine) + ' 生成中…' : (a.image ? imageEngineLabel(a.image_engine) + ' 重生成参考图' : imageEngineLabel(a.image_engine) + ' 生成参考图') }}
                 </button>
                 <button class="btn btn-sm btn-ghost" :disabled="busy || a._uploading" @click="uploadAssetImage(a)">
@@ -323,6 +326,7 @@
                 </button>
                 <button v-if="topviewEnabled && a.kind === 'location' && topviewCacheValid(a)" class="btn btn-sm btn-ghost" @click="viewTopview(a)">查看俯视图</button>
                 <button class="btn btn-sm btn-ghost" @click="openEditAsset(a)">编辑</button>
+                <button class="btn btn-sm btn-ghost" title="以此为基础派生一个新资产（如爆碎后、破损后），出图时以本资产当前参考图为底编辑" @click="openDeriveAsset(a)">以此派生</button>
               </div>
               <span v-if="topviewEnabled && a.kind === 'location' && a.topview_error" class="fail-msg">{{ a.topview_error }}</span>
               <span v-if="a.kind === 'location' && a.panorama_error" class="fail-msg">{{ a.panorama_error }}</span>
@@ -1201,6 +1205,15 @@
           <select v-if="assetForm.visual_type === 'megastructure'" v-model="assetForm.mega_type" class="input"><option value="architecture">建筑巨构</option><option value="creature">巨兽/生物</option><option value="geological">自然/地质</option><option value="mechanical">机械/载具</option><option value="surreal">超现实混合</option></select>
           <div class="field-hint">只影响该场景资产参考图：强化尺度参照、结构可读性、大气分层和重量感，不作用于剧情分镜。</div>
         </div>
+        <div class="field">
+          <label>交互设计 <span class="optional">AI 出稿 → 你指方向 → AI 改稿；稿子只在这里，保存才写入</span></label>
+          <AssetDesignPanel :key="assetDesignKey" v-model:base-id="assetForm.derived_from_id" v-model:directions="assetForm.design_directions" :project-id="id()" :kind="assetTab" :asset-id="editingAsset === 'new' ? 0 : editingAsset.id" :name="assetForm.name" :description="assetForm.description" :base-options="assetBaseOptions" @adopt="adoptAssetDesign" />
+        </div>
+        <div v-if="assetForm.derived_from_id" class="field">
+          <label>相对来源的变化 <span class="optional">每行一条；派生出图时作为 Qwen 编辑指令</span></label>
+          <textarea v-model="assetForm.derive_changes" class="textarea" rows="3" placeholder="例如：巨石已碎成散落的碎块&#10;天色转为深夜" />
+          <div class="field-hint">派生资产出图固定以来源的当前参考图为底，用 Qwen-Image-2.1 编辑（下面的模板选项对它不生效）；不会退回文生图。<span v-if="!qwenEditTemplateReady" class="warn">Qwen-Image-2.1 编辑模板未安装，暂时无法出图。</span></div>
+        </div>
         <div class="field"><label>参考图生成模板</label><select v-model="assetForm.image_engine" class="input"><option value="moss" :disabled="!mossAssetTemplateReady">Moss（默认）{{ mossAssetTemplateReady ? '' : '（工作流模板未安装）' }}</option><option value="krea2">Krea2</option><option value="qwen_image_2_1" :disabled="!qwenAssetTemplateReady">Qwen-Image-2.1{{ qwenAssetTemplateReady ? '' : '（工作流模板未安装）' }}</option></select><div class="field-hint">默认使用 Moss，中文文字可读；需要清晰中文时推荐 Moss 或 Qwen-Image-2.1，Krea2 生成的中文基本不可读。模板未安装时不可选择。</div></div>
         <div class="field"><label>画面内可读文字 <span class="optional">可选，需逐字呈现</span></label><textarea v-model="assetForm.visible_text" class="textarea" rows="2" placeholder="例如：天阙宗；留空表示画面不需要文字"/><div v-if="assetForm.visible_text.trim() && assetForm.image_engine === 'krea2'" class="field-hint warn">检测到可读文字，Krea2 生成的中文基本不可读，建议改用 Moss 或 Qwen-Image-2.1。</div><div v-else-if="assetForm.visible_text.trim() && !mossAssetTemplateReady && !qwenAssetTemplateReady" class="field-hint warn">检测到可读文字，建议安装 Moss 或 Qwen-Image-2.1 文生图模板后生成。</div></div>
         <div class="field">
@@ -1373,6 +1386,7 @@ import SceneSubtitleCheck from '../components/SceneSubtitleCheck.vue'
 import PromptReferenceBar from '../components/PromptReferenceBar.vue'
 import PromptReferenceEditor from '../components/PromptReferenceEditor.vue'
 import PanoramaViewer from '../components/PanoramaViewer.vue'
+import AssetDesignPanel from '../components/AssetDesignPanel.vue'
 import { promptReferenceIssues } from '../utils/promptReferences.js'
 import { overlayDialogueExclusions, setDialogueItemExcluded, snapshotDialogueExclusions } from '../utils/dialogueAnalysis'
 import { estimateDialogueListDuration } from '../utils/dialogueDuration.js'
@@ -1495,7 +1509,9 @@ function setAssetDeleting(kind, id, deleting) {
   deletingAssets.value = next
 }
 let assetRenameEpoch = 0
-const assetForm = reactive({ name: '', description: '', visual_type: 'normal', mega_type: 'architecture', image_engine: 'moss', visible_text: '' })
+const assetForm = reactive({ name: '', description: '', visual_type: 'normal', mega_type: 'architecture', image_engine: 'moss', visible_text: '', design_directions: '', derived_from_id: 0, derive_changes: '' })
+// 每次打开弹窗重建设计面板，上一次的稿子不带过来。
+const assetDesignKey = ref(0)
 // Polish returns a draft only; adopting it fills the form, and the user's own save persists it.
 const polishing = ref(false)
 const polishDraft = ref(null)
@@ -1566,6 +1582,7 @@ const sheetEngineReady = ch => {
 }
 const sheetEngineLabel = engine => (engine || 'moss') === 'moss' ? 'Moss' : imageEngineLabel(engine)
 const mossAssetTemplateReady = computed(() => hasTemplate('moss_image_t2i'))
+const qwenEditTemplateReady = computed(() => hasTemplate('qwen_image_2_1_multi_edit'))
 const assetEngineReady = a => {
   const engine = a.image_engine || 'moss'
   return engine === 'moss' ? mossAssetTemplateReady.value : engine !== 'qwen_image_2_1' || qwenAssetTemplateReady.value
@@ -1824,6 +1841,17 @@ const approvedCharsWithoutPortrait = computed(() => characters.value.filter(c =>
 const propAssets = computed(() => assets.value.filter(a => a.kind === 'prop'))
 const locationAssets = computed(() => assets.value.filter(a => a.kind === 'location'))
 const currentAssets = computed(() => (assetTab.value === 'location' ? locationAssets.value : propAssets.value))
+// 可选的派生来源：同类资产，排除正在编辑的自己；成环由后端校验。
+const assetBaseOptions = computed(() => currentAssets.value.filter(a => editingAsset.value === 'new' || a.id !== editingAsset.value?.id))
+const assetBase = a => currentAssets.value.find(x => x.id === a.derived_from_id) || null
+const assetBaseName = a => assetBase(a)?.name || '已删除的资产'
+const assetBaseHasImage = a => !!assetBase(a)?.image
+const derivedImageBlocker = a => {
+  if (!assetBase(a)) return '派生来源已删除，请在「编辑」里重新选择来源或取消派生'
+  if (!assetBaseHasImage(a)) return `请先给「${assetBaseName(a)}」生成或上传参考图`
+  if (!qwenEditTemplateReady.value) return 'Qwen-Image-2.1 编辑工作流模板未安装'
+  return ''
+}
 const assetKindLabel = computed(() => (assetTab.value === 'location' ? '场景' : '道具'))
 const assetsWithoutImage = computed(() => currentAssets.value.filter(a => !a.image && !a.image_task_id).length)
 const allAssetImagesReady = computed(() => assets.value.length === 0 || assets.value.every(a => a.image))
@@ -3888,13 +3916,27 @@ async function uploadPropSheet(a) {
 }
 function openCreateAsset() {
   assetError.value = ''
-  Object.assign(assetForm, { name: '', description: '', visual_type: 'normal', mega_type: 'architecture', image_engine: 'moss', visible_text: '' })
+  Object.assign(assetForm, { name: '', description: '', visual_type: 'normal', mega_type: 'architecture', image_engine: 'moss', visible_text: '', design_directions: '', derived_from_id: 0, derive_changes: '' })
+  assetDesignKey.value++
   editingAsset.value = 'new'
 }
 function openEditAsset(a) {
   assetError.value = ''
-  Object.assign(assetForm, { name: a.name, description: a.description, visual_type: a.visual_type || 'normal', mega_type: a.mega_type || 'architecture', image_engine: a.image_engine || 'moss', visible_text: a.visible_text || '' })
+  Object.assign(assetForm, { name: a.name, description: a.description, visual_type: a.visual_type || 'normal', mega_type: a.mega_type || 'architecture', image_engine: a.image_engine || 'moss', visible_text: a.visible_text || '', design_directions: a.design_directions || '', derived_from_id: a.derived_from_id || 0, derive_changes: a.derive_changes || '' })
+  assetDesignKey.value++
   editingAsset.value = a
+}
+// 以此派生：新建同类资产，类型、文字、长期方向沿用来源，描述留空等 AI 或用户填。
+function openDeriveAsset(a) {
+  assetError.value = ''
+  Object.assign(assetForm, { name: '', description: '', visual_type: a.visual_type || 'normal', mega_type: a.mega_type || 'architecture', image_engine: a.image_engine || 'moss', visible_text: a.visible_text || '', design_directions: a.design_directions || '', derived_from_id: a.id, derive_changes: '' })
+  assetDesignKey.value++
+  editingAsset.value = 'new'
+}
+function adoptAssetDesign({ description, changes }) {
+  assetForm.description = description
+  if (assetForm.derived_from_id) assetForm.derive_changes = changes.join('\n')
+  toast.success('已填入描述框，确认后点「保存」')
 }
 async function redesignAssetDescription() {
   if (!assetForm.name.trim()) {

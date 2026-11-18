@@ -423,7 +423,13 @@ type Asset struct {
 	PanoramaImage  string `gorm:"column:panorama_image" json:"panorama_image"`
 	PanoramaTaskID string `gorm:"column:panorama_task_id;index" json:"panorama_task_id"`
 	PanoramaError  string `gorm:"column:panorama_error;type:text" json:"panorama_error"`
-	Source      string    `json:"source"`                                                          // auto(方案抽取) / manual(手动新建)
+	// DesignDirections 用户指过的长期设计方向（每行一条），之后每次 AI 设计与批量补全都会带上。
+	DesignDirections string `gorm:"column:design_directions;type:text" json:"design_directions"`
+	// DerivedFromID 派生来源资产（同项目同类别），0 表示非派生；来源删除后保留原值，出图时显式报错。
+	DerivedFromID uint `gorm:"column:derived_from_id;index" json:"derived_from_id"`
+	// DeriveChanges 相对来源资产的变化（每行一条），派生出图时作为 Qwen 编辑指令。
+	DeriveChanges string    `gorm:"column:derive_changes;type:text" json:"derive_changes"`
+	Source        string    `json:"source"`                                                          // auto(方案抽取) / manual(手动新建)
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }

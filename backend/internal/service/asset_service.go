@@ -148,6 +148,14 @@ func (s *ProjectService) CreateAsset(a models.Asset) (*models.Asset, error) {
 		return nil, err
 	}
 	a.VisibleText = strings.TrimSpace(a.VisibleText)
+	a.DesignDirections = joinAssetDesignLines(strings.Split(a.DesignDirections, "\n"))
+	a.DeriveChanges = joinAssetDesignLines(strings.Split(a.DeriveChanges, "\n"))
+	if err := s.validateAssetDerivation(a.ProjectID, kind, a.DerivedFromID, 0); err != nil {
+		return nil, err
+	}
+	if a.DerivedFromID == 0 {
+		a.DeriveChanges = ""
+	}
 	a.Image = "" // 新建无参考图
 	if err := s.db.Create(&a).Error; err != nil {
 		return nil, fmt.Errorf("%s名已存在或创建失败: %w", AssetKindLabel(kind), err)
@@ -156,9 +164,33 @@ func (s *ProjectService) CreateAsset(a models.Asset) (*models.Asset, error) {
 	return &a, nil
 }
 
+// AssetDesignFields 编辑资产时可选更新的交互设计字段；缺省（nil）表示保持原值。
+type AssetDesignFields struct {
+	DesignDirections *string `json:"design_directions"`
+	DerivedFromID    *uint   `json:"derived_from_id"`
+	DeriveChanges    *string `json:"derive_changes"`
+}
+
 // UpdateAsset 编辑资产（改名需保证项目内同类别唯一）；不影响已生成的参考图
-func (s *ProjectService) UpdateAsset(a *models.Asset, req models.Asset) error {
+func (s *ProjectService) UpdateAsset(a *models.Asset, req models.Asset, design AssetDesignFields) error {
 	updates := map[string]any{}
+	if design.DesignDirections != nil {
+		updates["design_directions"] = joinAssetDesignLines(strings.Split(*design.DesignDirections, "\n"))
+	}
+	derivedFrom := a.DerivedFromID
+	if design.DerivedFromID != nil && *design.DerivedFromID != a.DerivedFromID {
+		if err := s.validateAssetDerivation(a.ProjectID, a.Kind, *design.DerivedFromID, a.ID); err != nil {
+			return err
+		}
+		derivedFrom = *design.DerivedFromID
+		updates["derived_from_id"] = derivedFrom
+	}
+	if design.DeriveChanges != nil {
+		updates["derive_changes"] = joinAssetDesignLines(strings.Split(*design.DeriveChanges, "\n"))
+	}
+	if derivedFrom == 0 {
+		updates["derive_changes"] = ""
+	}
 	newName := strings.TrimSpace(req.Name)
 	if newName != "" && newName != a.Name {
 		var cnt int64
@@ -346,7 +378,8 @@ func (s *ProjectService) GenerateAllAssetImages(p *models.Project, kind string) 
 	submitted := 0
 	for i := range assets {
 		if err := s.StartAssetImage(&assets[i]); err != nil {
-			if errors.Is(err, errAssetImageActive) {
+			// 派生资产要等来源出图后才能编辑，不阻断其余资产。
+			if errors.Is(err, errAssetImageActive) || errors.Is(err, errAssetDeriveBaseNotReady) {
 				continue
 			}
 			return submitted, err
@@ -381,6 +414,9 @@ func (s *ProjectService) StartAssetImage(a *models.Asset) error {
 	var p models.Project
 	if err := s.db.First(&p, current.ProjectID).Error; err != nil {
 		return err
+	}
+	if current.DerivedFromID != 0 {
+		return s.startDerivedAssetImageLocked(&p, &current)
 	}
 	engine, err := normalizeAssetReferenceEngine(current.ImageEngine)
 	if err != nil {

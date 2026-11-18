@@ -1904,6 +1904,46 @@ func (s *Service) HandleRedesignAssetDescription(c *gin.Context) {
 	c.JSON(200, gin.H{"description": description})
 }
 
+// HandleAssetDesign 交互设计：:step = draft（第一稿）/ revise（按方向修改）/ options（先给 3 个方向）。
+// 只返回草稿，不写库；用户确认后由前端走保存接口。
+func (s *Service) HandleAssetDesign(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	kind, ok := assetKindOf(c)
+	if !ok {
+		return
+	}
+	var req AssetDesignRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": "参数错误"})
+		return
+	}
+	var (
+		result any
+		err    error
+	)
+	switch c.Param("step") {
+	case "draft":
+		result, err = s.Projects.DraftAssetDesign(p, kind, req)
+	case "revise":
+		result, err = s.Projects.ReviseAssetDesign(p, kind, req)
+	case "options":
+		var options []AssetDesignOption
+		options, err = s.Projects.AssetDesignOptions(p, kind, req)
+		result = gin.H{"options": options}
+	default:
+		c.JSON(404, gin.H{"error": "未知的设计步骤"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, result)
+}
+
 func (s *Service) HandleCreateAsset(c *gin.Context) {
 	p, ok := s.loadProject(c)
 	if !ok {
@@ -1934,12 +1974,18 @@ func (s *Service) HandleUpdateAsset(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var req models.Asset
+	// 外层指针字段优先于内嵌 Asset 的同名字段：未传时为 nil，保持原值。
+	var req struct {
+		models.Asset
+		DesignDirections *string `json:"design_directions"`
+		DerivedFromID    *uint   `json:"derived_from_id"`
+		DeriveChanges    *string `json:"derive_changes"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": "参数错误"})
 		return
 	}
-	if err := s.Projects.UpdateAsset(a, req); err != nil {
+	if err := s.Projects.UpdateAsset(a, req.Asset, AssetDesignFields{DesignDirections: req.DesignDirections, DerivedFromID: req.DerivedFromID, DeriveChanges: req.DeriveChanges}); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
@@ -1993,12 +2039,18 @@ func (s *Service) HandleGenerateAssetImage(c *gin.Context) {
 		status := http.StatusInternalServerError
 		if errors.Is(err, errAssetImageActive) {
 			status = http.StatusConflict
+		} else if errors.Is(err, errAssetDeriveBaseNotReady) {
+			status = http.StatusBadRequest
 		}
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 	engine, _ := normalizeAssetReferenceEngine(a.ImageEngine)
 	label := "Krea2"
+	if a.DerivedFromID != 0 {
+		c.JSON(http.StatusAccepted, gin.H{"ok": true, "message": fmt.Sprintf("%s「%s」已提交 Qwen-Image-2.1 基于来源原图的编辑任务", AssetKindLabel(a.Kind), a.Name)})
+		return
+	}
 	switch engine {
 	case ImageEngineQwen21:
 		label = "Qwen-Image-2.1"
