@@ -483,7 +483,10 @@ func (s *Service) HandleTranslateSceneVideoPrompt(c *gin.Context) {
 	system := "Translate only the natural-language prose in this complete MiniMax H3 protocol prompt into " + target + ". The tokens [[[Tn]]] and [[[Dn]]] are opaque protocol placeholders: copy every one of them exactly once, in the same order, and never translate, renumber, merge or delete them. Keep all other content byte-identical unless it is natural-language prose. Translate faithfully without redesigning, summarizing, correcting or adding events. Preserve the scope of negation: a visible action/effect and a property that was not detected are separate statements; never turn the negative observation into absence of the visible action/effect. Preserve the subject and reference object of left/right relations and camera-relative facing exactly. Translate internal monologue as audible inner voice, not words spoken aloud; closed lips apply only during that inner-voice interval, not later ordinary dialogue. Return only the translated prompt."
 	var translated string
 	var markerWarnings []string
-	if language == "zh" && len([]rune(source)) >= h3ChunkedTranslationMinRunes {
+	// Apply the existing long-prompt sectioning and clean-chunk cache to both
+	// translation directions, including Chinese-master to English preview.
+	// Short prompts keep the existing uncached whole-prompt path.
+	if len([]rune(source)) >= h3ChunkedTranslationMinRunes {
 		translated, markerWarnings, err = translateH3PromptChunked(s.TextProviderFact.Chat, system, source)
 	} else {
 		translated, markerWarnings, err = translateH3Masked(s.TextProviderFact.Chat, system, source, nil)
