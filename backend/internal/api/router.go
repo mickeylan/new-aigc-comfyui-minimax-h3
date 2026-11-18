@@ -305,6 +305,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.DELETE("/api/projects/:id/characters/:cid/motion-references/:rid", svc.HandleDeleteCharacterMotionReference)
 
 	// 角色档案（LumxAI 风格结构化角色提示词 + 审核工作流）
+	r.POST("/api/projects/:id/characters/:cid/profile/preview", svc.HandlePreviewCharacterProfile)
 	r.POST("/api/projects/:id/characters/:cid/profile", svc.HandleGenerateCharacterProfile)                // LLM 生成完整角色档案
 	r.POST("/api/projects/:id/characters/:cid/profile/generate-prompt", svc.HandleGenerateReferencePrompt) // 单独生成参考像提示词
 	r.POST("/api/projects/:id/characters/:cid/profile/sheet-prompt", svc.HandleGenerateSheetPrompt)        // 生成可编辑的四视图提示词

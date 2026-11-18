@@ -277,6 +277,7 @@ export const api = {
   generateAllPortraits: (id) => http.post(`/projects/${id}/characters/portraits`),
 
   // 角色档案（LumxAI 风格结构化角色提示词 + 审核工作流）
+  previewCharacterProfile: (id, cid, data) => http.post(`/projects/${id}/characters/${cid}/profile/preview`, data, { timeout: 300000 }),
   generateCharacterProfile: (id, cid) => http.post(`/projects/${id}/characters/${cid}/profile`, null, { timeout: 300000 }),
   generateReferencePrompt: (id, cid) => http.post(`/projects/${id}/characters/${cid}/profile/generate-prompt`, null, { timeout: 300000 }),
   generateSheetPrompt: (id, cid) => http.post(`/projects/${id}/characters/${cid}/profile/sheet-prompt`, null, { timeout: 300000 }),

@@ -32,6 +32,8 @@ type AssetDesignRequest struct {
 	Current     string   `json:"current"`
 	Instruction string   `json:"instruction"`
 	Selection   string   `json:"selection"`
+	// SelectionStart is a Unicode code-point offset, not a browser UTF-16 offset.
+	SelectionStart *int `json:"selection_start,omitempty"`
 }
 
 type AssetDesignSource struct {
@@ -284,9 +286,9 @@ func (s *ProjectService) ReviseAssetDesign(p *models.Project, kind string, req A
 	if instruction == "" {
 		return nil, fmt.Errorf("请填写这次要怎么改")
 	}
-	selection := strings.TrimSpace(req.Selection)
-	if selection != "" && !strings.Contains(current, selection) {
-		return nil, fmt.Errorf("选中的文字已不在当前稿中，请重新选择")
+	selection := req.Selection
+	if selection != "" {
+		return s.reviseAssetSelection(s.assetDesignUserContext(p, kind, req, base), kind, req)
 	}
 	system := "你是影视美术设定师，正在按用户的方向修改一份" + AssetKindLabel(kind) + "设定稿。\n" +
 		"只改用户这次指出的地方；给了选中片段时只改该片段及必要的衔接词，其余句子逐字保留。不添加人物或剧情。\n" +

@@ -79,7 +79,7 @@ func TestAssetDesignFallsBackToRawTextWithoutRepairCall(t *testing.T) {
 
 func TestReviseAssetDesignSendsSelectionAndRejectsStaleSelection(t *testing.T) {
 	ps := newTestProjectService(t)
-	provider := &captureTextProvider{response: `{"description":"旷野地面布满纵横交错的深裂缝，远山轮廓不变，夜色浓重","sources":[{"tag":"按你的要求","text":"旷野地面布满纵横交错的深裂缝"}],"changes":[]}`}
+	provider := &captureTextProvider{response: `{"replacement":"旷野地面布满纵横交错的深裂缝","changes":[]}`}
 	ps.textProvider = provider
 	p := models.Project{Title: "狐仙"}
 	ps.db.Create(&p)
@@ -93,7 +93,7 @@ func TestReviseAssetDesignSendsSelectionAndRejectsStaleSelection(t *testing.T) {
 			t.Fatalf("revise prompt missing %q:\n%s", want, provider.user)
 		}
 	}
-	if !strings.Contains(provider.system, "其余句子逐字保留") || !strings.Contains(provider.system, "完整变化清单") || !strings.Contains(draft.Description, "纵横交错") {
+	if !strings.Contains(provider.system, "其他内容由程序原样保留") || !strings.Contains(provider.system, "完整变化清单") || draft.Description != "旷野地面布满纵横交错的深裂缝，远山轮廓不变，夜色浓重" {
 		t.Fatalf("system=%s draft=%+v", provider.system, draft)
 	}
 	if _, err := ps.ReviseAssetDesign(&p, AssetKindLocation, AssetDesignRequest{Name: "巨石爆碎后", Current: current, Selection: "不存在的片段", Instruction: "改"}); err == nil {

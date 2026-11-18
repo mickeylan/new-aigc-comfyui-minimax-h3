@@ -1025,11 +1025,12 @@
 
         <!-- 详细档案标签页（LumxAI 风格） -->
         <div v-if="charProfileTab === 'profile'">
+          <CharacterProfileDesign v-if="editingCharacter !== 'new'" ref="profileDesigner" :key="editingCharacter.id" :project-id="id()" :character-id="editingCharacter.id" :form="charProfileForm" :disabled="busy" @adopt="patch => Object.assign(charProfileForm, patch)" />
           <div class="profile-hint">
             <p>💡 AI 将从故事内容中提取角色的详细特征；所有字段均可人工修改。已审核档案修改保存后会自动回到草稿状态。</p>
             <div class="profile-actions">
               <button class="btn btn-secondary btn-sm" :disabled="generatingProfile || editingCharacter === 'new'" @click="generateCharacterProfile">
-                {{ generatingProfile ? 'AI 生成中…' : '🤖 AI 生成完整档案' }}
+                {{ generatingProfile ? 'AI 生成中…' : '🤖 AI 生成完整档案草稿' }}
               </button>
               <button class="btn btn-sm" :disabled="busy || editingCharacter === 'new'" @click="saveCharacterProfile">{{ busy ? '保存中…' : '💾 保存详细档案' }}</button>
             </div>
@@ -1387,6 +1388,7 @@ import PromptReferenceBar from '../components/PromptReferenceBar.vue'
 import PromptReferenceEditor from '../components/PromptReferenceEditor.vue'
 import PanoramaViewer from '../components/PanoramaViewer.vue'
 import AssetDesignPanel from '../components/AssetDesignPanel.vue'
+import CharacterProfileDesign from '../components/CharacterProfileDesign.vue'
 import { promptReferenceIssues } from '../utils/promptReferences.js'
 import { overlayDialogueExclusions, setDialogueItemExcluded, snapshotDialogueExclusions } from '../utils/dialogueAnalysis'
 import { estimateDialogueListDuration } from '../utils/dialogueDuration.js'
@@ -1469,6 +1471,7 @@ const charProfileForm = reactive({
   emotions: '', habits: '', wardrobe_detail: '', lighting_mood: '',
   color_palette: '', reference_prompt: '', sheet_prompt: ''
 })
+const profileDesigner = ref(null)
 const generatingProfile = ref(false)
 const generatingPrompt = ref(false)
 const generatingSheetPrompt = ref(false)
@@ -3478,37 +3481,7 @@ async function generateCharacterProfile() {
   }
   generatingProfile.value = true
   try {
-    const { data } = await api.generateCharacterProfile(id(), editingCharacter.value.id)
-    // 更新当前编辑的角色数据，并同步刷新“基础信息”标签中的身份、外貌和服装摘要。
-    editingCharacter.value = data.character
-    Object.assign(charForm, {
-      name: data.character.name || '',
-      role: data.character.role || '',
-      trait: data.character.trait || '',
-      style: data.character.style || '',
-      voice: data.character.voice || '',
-      portrait_engine: data.character.portrait_engine || 'krea2',
-      sheet_engine: data.character.sheet_engine || 'moss'
-    })
-    Object.assign(charProfileForm, {
-      gender: data.character.gender || '',
-      appearance: data.character.appearance || '',
-      personality: data.character.personality || '',
-      background: data.character.background || '',
-      relationships: data.character.relationships || '',
-      emotions: data.character.emotions || '',
-      habits: data.character.habits || '',
-      wardrobe_detail: data.character.wardrobe_detail || '',
-      lighting_mood: data.character.lighting_mood || '',
-      color_palette: data.character.color_palette || '',
-      reference_prompt: data.character.reference_prompt || '',
-      sheet_prompt: data.character.sheet_prompt || ''
-    })
-    // 更新角色列表中的数据
-    const idx = characters.value.findIndex(c => c.id === data.character.id)
-    if (idx !== -1) characters.value[idx] = data.character
-    toast.show(data.message || '角色档案已生成')
-    await load()
+    await profileDesigner.value?.generateFull()
   } catch (e) {
     toast.show(e.response?.data?.error || '生成档案失败')
   } finally {

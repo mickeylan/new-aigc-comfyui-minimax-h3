@@ -16,6 +16,7 @@
         <small v-if="!directionList.length">暂无。修改时勾选「记为长期方向」会加到这里，之后的 AI 设计和批量补全都会带上。</small>
       </div>
     </div>
+    <DesignQuestions :kind="kind" :disabled="!!busy" @answer="applyAnswers" />
     <textarea v-model="ideas" class="textarea" rows="2" placeholder="我的想法：可留空，留空 = AI 做主" />
     <div class="asset-design-actions">
       <button type="button" class="btn btn-sm" :disabled="busy" @click="runDraft">{{ busy === 'draft' ? 'AI 出稿中…' : drafts.length ? 'AI 重新出一稿' : 'AI 生成第一稿' }}</button>
@@ -67,8 +68,10 @@
   </div>
 </template>
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { createDesignRequestGate } from '../utils/designRequest.js'
 import { api } from '../api'
+import DesignQuestions from './DesignQuestions.vue'
 import { ASSET_SOURCE_TAGS, diffText, markSources, splitDesignLines } from '../utils/assetDesign.js'
 // 资产交互设计面板：AI 出稿 → 指方向 → AI 改稿 → 采用。所有稿子只在面板里，关掉即丢弃。
 const props = defineProps({
@@ -92,6 +95,7 @@ const instruction = ref('')
 const onlySelection = ref(false)
 const remember = ref(true)
 const selection = ref('')
+const selectionStart = ref(null)
 const options = ref([])
 const busy = ref('')
 const error = ref('')
@@ -103,8 +107,14 @@ const active = computed(() => drafts.value[activeIndex.value] || null)
 const diffSegments = computed(() => activeIndex.value > 0 ? diffText(drafts.value[activeIndex.value - 1].description, active.value.description) : [])
 const sourceSegments = computed(() => active.value ? markSources(active.value.description, active.value.sources) : [])
 
+const gate = createDesignRequestGate()
+watch(contextSnapshot, () => gate.invalidate(), { flush: 'sync' })
+onBeforeUnmount(() => gate.dispose())
 // 换了派生来源，旧稿的“沿用/变化”已不成立。
-watch(() => props.baseId, () => { drafts.value = []; activeIndex.value = 0; options.value = [] })
+watch(() => [props.projectId, props.kind, props.assetId, props.baseId], () => {
+  drafts.value = []; activeIndex.value = 0; options.value = []
+  selection.value = ''; selectionStart.value = null; onlySelection.value = false
+}, { flush: 'sync' })
 
 function request(extra = {}) {
   return { asset_id: props.assetId, name: props.name.trim(), base_id: props.baseId || 0, directions: directionList.value, ...extra }
@@ -117,17 +127,22 @@ function pushDraft(draft, origin) {
 function selectDraft(i) {
   activeIndex.value = i
   selection.value = ''
+  selectionStart.value = null
   onlySelection.value = false
   if (i === 0) view.value = 'sources'
 }
 async function call(step, payload, onDone) {
   if (!props.name.trim()) { error.value = '请先填写名称，AI需要名称来识别设计对象'; return }
+  if (busy.value) return
+  const snapshot = gate.capture()
   busy.value = step
   error.value = ''
   try {
     const { data } = await api.assetDesign(props.projectId, props.kind, step, payload)
+    if (!gate.accepts(snapshot)) { error.value = '设计对象或当前稿已变化，未应用旧请求结果，请重新操作'; return }
     onDone(data)
   } catch (e) {
+    if (!gate.accepts(snapshot)) return
     error.value = e.response?.data?.error || e.message || 'AI 设计失败'
   } finally {
     busy.value = ''
@@ -146,7 +161,7 @@ function pickOption(o) {
 function runRevise() {
   const text = instruction.value.trim()
   if (!text || !active.value || busy.value) return
-  const payload = request({ current: active.value.description, instruction: text, selection: onlySelection.value ? selection.value : '' })
+  const payload = request({ current: active.value.description, instruction: text, selection: onlySelection.value ? selection.value : '', selection_start: onlySelection.value ? selectionStart.value : undefined })
   call('revise', payload, data => {
     // 派生变化以最新稿为准；模型没给时沿用上一稿的变化清单。
     if (!data.changes?.length && props.baseId) data.changes = active.value.changes
@@ -159,11 +174,29 @@ function importDescription() {
   pushDraft({ description: props.description.trim(), sources: [], changes: active.value?.changes || [] }, 'manual')
 }
 function captureSelection() {
+  selection.value = ''
+  selectionStart.value = null
+  onlySelection.value = false
+  if (view.value === 'diff') { error.value = '请切换到「来源标注」后选择当前稿文字；对比视图不能建立选区'; return }
   const sel = window.getSelection()
-  const text = sel && draftBox.value?.contains(sel.anchorNode) ? sel.toString().trim() : ''
-  // 对比视图里含删去的字，选区可能不在当前稿中，交给后端校验并提示。
+  if (!sel?.rangeCount || !draftBox.value) return
+  const range = sel.getRangeAt(0)
+  if (!draftBox.value.contains(range.startContainer) || !draftBox.value.contains(range.endContainer)) return
+  const prefix = range.cloneRange()
+  prefix.selectNodeContents(draftBox.value)
+  prefix.setEnd(range.startContainer, range.startOffset)
+  const text = range.toString()
+  const start = Array.from(prefix.toString()).length
+  if (!text || Array.from(active.value.description).slice(start, start + Array.from(text).length).join('') !== text) return
   selection.value = text
-  onlySelection.value = !!text
+  selectionStart.value = start
+  onlySelection.value = true
+}
+function contextSnapshot() {
+  return JSON.stringify([props.projectId, props.kind, props.assetId, props.name, props.baseId, props.directions, props.description, selection.value, selectionStart.value, onlySelection.value, remember.value, ideas.value, instruction.value, activeIndex.value, active.value?.description])
+}
+function applyAnswers(text) {
+  if (text) ideas.value = [ideas.value.trim(), text].filter(Boolean).join('\n')
 }
 function addDirection(text) {
   emit('update:directions', splitDesignLines([...directionList.value, text].join('\n')).join('\n'))

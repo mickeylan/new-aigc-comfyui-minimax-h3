@@ -47,11 +47,15 @@ test('角色编辑弹窗按当前标签保存对应档案字段', () => {
   assert.ok((projectDetail.match(/@click="saveCharacterProfile"/g) || []).length >= 3)
 })
 
-test('AI重新生成完整档案同步刷新角色基础信息', () => {
-  assert.match(projectDetail, /Object\.assign\(charForm, \{/)
-  assert.match(projectDetail, /role: data\.character\.role/)
-  assert.match(projectDetail, /trait: data\.character\.trait/)
-  assert.match(projectDetail, /style: data\.character\.style/)
+test('AI完整档案改为草稿预览，采用只填表单，显式保存才更新角色', () => {
+  const generate = projectDetail.match(/async function generateCharacterProfile\(\) \{[\s\S]*?\n\}/)?.[0]
+  assert.ok(generate)
+  assert.match(generate, /profileDesigner\.value\?\.generateFull\(\)/)
+  assert.doesNotMatch(generate, /api\.generateCharacterProfile|editingCharacter\.value\s*=(?!=)|api\.updateCharacterProfile/)
+  assert.match(projectDetail, /@adopt="patch => Object\.assign\(charProfileForm, patch\)"/)
+  const save = projectDetail.match(/async function saveCharacterProfile\(\) \{[\s\S]*?\n\}/)?.[0]
+  assert.match(save, /api\.updateCharacterProfile/)
+  assert.match(save, /editingCharacter\.value = data\.character/)
 })
 
 test('项目详情可直接打开统一生成图片历史并删除旧版本', () => {
