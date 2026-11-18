@@ -27,10 +27,16 @@ test('场景资产卡可用 MiniMax H3-Image 生成全景图，进行中禁用�
   assert.doesNotMatch(fn, /selectAssetVariant/)
 })
 
-test('生成后的全景原图可在场景卡上查看大图', () => {
+test('生成后的全景原图可在场景卡上 360° 拖动查看，并保留查看平铺原图', () => {
   assert.match(detail, /v-if="a\.kind === 'location' && a\.panorama_image"[^>]*@click="viewLocationPanorama\(a\)"/)
   const fn = detail.slice(detail.indexOf('function viewLocationPanorama('), detail.indexOf('async function genLocationPanorama('))
-  assert.match(fn, /viewer\.value = api\.inputUrl\(project\.value\.id, a\.panorama_image\)/)
+  assert.match(fn, /panoramaView\.value = \{ src: api\.inputUrl\(project\.value\.id, a\.panorama_image\)/)
+  assert.match(fn, /function viewPanoramaOriginal\(\) \{\s*viewer\.value = panoramaView\.value\?\.src/)
+  const modal = detail.slice(detail.indexOf('<!-- 360° 全景查看'), detail.indexOf('<!-- 图片查看弹窗 -->'))
+  assert.match(modal, /<PanoramaViewer :src="panoramaView\.src" \/>/)
+  assert.match(modal, /@click="viewPanoramaOriginal"[^<]*查看原图/)
+  // 原图大图弹窗写在全景弹窗之后，同层级时盖在上方，关闭后回到全景。
+  assert.ok(detail.indexOf('<!-- 360° 全景查看') < detail.indexOf('<!-- 图片查看弹窗 -->'))
 })
 
 test('参考图版本逐条显示缩略图，点击打开大图，拆出的视角可直接核对', () => {

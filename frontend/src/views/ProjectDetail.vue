@@ -1305,6 +1305,27 @@
 
     <GeneratedMediaHistoryDrawer :project-id="id()" :open="showGeneratedHistory" @close="showGeneratedHistory=false" @changed="load" />
 
+    <!-- 360° 全景查看：写在图片查看弹窗之前，「查看原图」打开的大图盖在上方，关闭后回到全景 -->
+    <div v-if="panoramaView" class="modal-mask viewer-mask" tabindex="-1" ref="panoramaMask" @click.self="closePanoramaView" @keydown.esc="closePanoramaView">
+      <div class="viewer-panel panorama-panel" role="dialog" aria-modal="true" aria-label="360° 全景查看">
+        <div class="viewer-head">
+          <span>360° 全景 · {{ panoramaView.name }}</span>
+          <button class="viewer-close" type="button" @click="closePanoramaView" aria-label="关闭全景查看" title="关闭 (Esc)">✕</button>
+        </div>
+        <div class="viewer-body panorama-body">
+          <PanoramaViewer :src="panoramaView.src" />
+        </div>
+        <div class="viewer-foot">
+          <span class="viewer-hint">方向与拆出视角的标签一致；点击遮罩或按 Esc 关闭</span>
+          <div class="viewer-actions">
+            <button class="btn btn-sm btn-ghost" type="button" @click="viewPanoramaOriginal">查看原图</button>
+            <a :href="panoramaView.src + '?download=1'" class="btn btn-sm btn-download" @click.stop>下载原图</a>
+            <button class="btn btn-sm btn-ghost btn-close" type="button" @click="closePanoramaView">关闭</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 图片查看弹窗 -->
     <div v-if="viewer" class="modal-mask viewer-mask" tabindex="-1" ref="viewerMask" @click.self="closeViewer" @keydown.esc="closeViewer">
       <div class="viewer-panel" role="dialog" aria-modal="true" aria-label="图片预览">
@@ -1351,6 +1372,7 @@ import FaceCoverEditor from '../components/FaceCoverEditor.vue'
 import SceneSubtitleCheck from '../components/SceneSubtitleCheck.vue'
 import PromptReferenceBar from '../components/PromptReferenceBar.vue'
 import PromptReferenceEditor from '../components/PromptReferenceEditor.vue'
+import PanoramaViewer from '../components/PanoramaViewer.vue'
 import { promptReferenceIssues } from '../utils/promptReferences.js'
 import { overlayDialogueExclusions, setDialogueItemExcluded, snapshotDialogueExclusions } from '../utils/dialogueAnalysis'
 import { estimateDialogueListDuration } from '../utils/dialogueDuration.js'
@@ -1517,6 +1539,8 @@ const variantTarget = ref(null)
 const assetVariantRows = ref([])
 const showPlan = ref(false)
 const viewer = ref(null)
+const panoramaView = ref(null)
+const panoramaMask = ref(null)
 const continuityScene = ref(null)
 const continuitySourceScene = ref(null)
 const frameBrowserScene = ref(null)
@@ -3750,7 +3774,15 @@ async function genAssetImage(a) {
 }
 function viewLocationPanorama(a) {
   if (!a.panorama_image) return
-  viewer.value = api.inputUrl(project.value.id, a.panorama_image)
+  panoramaView.value = { src: api.inputUrl(project.value.id, a.panorama_image), name: a.name }
+  nextTick(() => panoramaMask.value?.querySelector('.pano-viewer')?.focus())
+}
+function closePanoramaView() {
+  panoramaView.value = null
+}
+// 平铺的 2:1 原图仍可查看，用于核对左右接缝和两极变形。
+function viewPanoramaOriginal() {
+  viewer.value = panoramaView.value?.src || null
   nextTick(() => viewerMask.value?.focus())
 }
 // 生成的全景图在后端完成后自动拆视角，同样只进入版本列表。
@@ -4875,6 +4907,8 @@ onBeforeUnmount(() => {
 .viewer-actions { display: flex; align-items: center; gap: 10px; }
 .viewer-foot .btn-download { background: var(--accent); color: #fff; border-color: transparent; }
 .viewer-foot .btn-close { min-width: 68px; }
+.panorama-panel { width: min(1180px, calc(100vw - 64px)); max-height: none; height: min(86vh, 820px); }
+.panorama-body { padding: 0; }
 .modal { width: min(520px, calc(100vw - 32px)); padding: 28px; animation: pop 0.25s ease; max-height: 90vh; overflow-y: auto; }
 .modal h2 { margin: 0 0 18px; font-size: 19px; }
 .combat-lora-modal{width:min(820px,calc(100vw - 32px))}.combat-lora-modes{display:flex;gap:20px;margin:16px 0}.combat-lora-modes label{display:flex;align-items:center;gap:7px}.combat-lora-slots{display:grid;gap:10px}.combat-lora-slot{display:grid;grid-template-columns:auto minmax(180px,1fr) 110px auto auto auto;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--border)}
