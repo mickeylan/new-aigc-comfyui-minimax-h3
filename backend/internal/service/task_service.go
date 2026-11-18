@@ -1088,6 +1088,10 @@ func (s *TaskService) Execute(taskID string) error {
 		s.mu.Unlock()
 		return err
 	}
+	if task.SubmitAttemptedAt != nil || task.ComfyPromptID != "" {
+		s.mu.Unlock()
+		return fmt.Errorf("任务已有提交记录，必须先核查上游结果，不能再次提交")
+	}
 	if task.Status != "pending" {
 		s.mu.Unlock()
 		return fmt.Errorf("任务状态不允许执行: %s", task.Status)
@@ -1172,18 +1176,44 @@ func (s *TaskService) Execute(taskID string) error {
 		s.failTask(&task, "同步输入素材失败: "+err.Error())
 		return err
 	}
+	// Persist intent BEFORE the network call. A crash or lost response must not
+	// turn into a second upstream submission on restart.
+	attempted := time.Now()
+	claim := s.db.Model(&models.Task{}).Where("id = ? AND status = ? AND submit_attempted_at IS NULL AND COALESCE(comfy_prompt_id, '') = ''", task.ID, "queued").Updates(map[string]any{"submit_attempted_at": attempted, "provider_outcome": "submitting", "recovery_note": "正在提交；响应未确认前不得重复提交"})
+	if claim.Error != nil {
+		return claim.Error
+	}
+	if claim.RowsAffected != 1 {
+		return fmt.Errorf("任务状态已变化或已尝试提交")
+	}
+	task.SubmitAttemptedAt = &attempted
 	promptID, err := c.SubmitPrompt(workflow, clientID)
 	if err != nil {
-		s.failTask(&task, "提交失败: "+err.Error())
-		return err
+		var rejected *PromptRejectedError
+		if errors.As(err, &rejected) {
+			s.failTask(&task, "提交被拒绝: "+err.Error())
+		} else {
+			s.recoveryState(&task, "unknown", "提交结果未知，上游可能已接收；不会自动重提交。请核查实例队列/历史或输出文件。原因："+err.Error())
+		}
+		// Submission uncertainty is an active durable task, not a creation failure.
+		// Return nil so callers retain the original task binding.
+		return nil
 	}
 
 	now := time.Now()
-	s.db.Model(&task).Updates(map[string]any{
+	stored := s.db.Model(&task).Where("status IN ?", []string{"queued", "running"}).Updates(map[string]any{
 		"comfy_prompt_id": promptID, "started_at": now,
+		"provider_outcome": gorm.Expr("CASE WHEN provider_outcome = 'cancel_requested' THEN provider_outcome ELSE 'accepted' END"),
+		"recovery_note":    gorm.Expr("CASE WHEN provider_outcome = 'cancel_requested' THEN recovery_note ELSE '' END"),
 	})
 	task.ComfyPromptID = promptID
-	task.StartedAt = &now
+	if stored.Error != nil || stored.RowsAffected != 1 {
+		s.recoveryState(&task, "unknown", "上游已接收，但任务ID持久化未确认；保留提交记录，不会重提交，请核查原实例。")
+		return nil
+	}
+	if err := s.db.First(&task, task.ID).Error; err != nil {
+		return nil
+	}
 	s.push(&task)
 
 	s.listenWS(&task, c)
@@ -1423,12 +1453,16 @@ func (s *TaskService) handleWSEvent(taskID string, type_ string, data map[string
 	if err := s.db.Where("task_id = ?", taskID).First(&task).Error; err != nil {
 		return
 	}
-	// Some ComfyUI/proxy variants accept /prompt but omit prompt_id in the HTTP response.
-	// WS execution events still carry the authoritative ID; persist it before history lookup.
-	if eventPromptID, _ := data["prompt_id"].(string); eventPromptID != "" && task.ComfyPromptID == "" {
-		if result := s.db.Model(&task).Where("comfy_prompt_id = ''").Update("comfy_prompt_id", eventPromptID); result.Error == nil && result.RowsAffected == 1 {
-			task.ComfyPromptID = eventPromptID
-		}
+	if task.Status == "success" || task.Status == "failed" || task.Status == "cancelled" {
+		return
+	}
+	// Never adopt an arbitrary broadcast identity, or another task's event.
+	eventID, _ := data["prompt_id"].(string)
+	if task.ComfyPromptID == "" || (eventID != "" && eventID != task.ComfyPromptID) {
+		return
+	}
+	if eventID == "" {
+		return
 	}
 
 	switch type_ {
@@ -1443,7 +1477,8 @@ func (s *TaskService) handleWSEvent(taskID string, type_ string, data map[string
 		promptID, _ := data["prompt_id"].(string)
 		// 部分 ComfyUI 版本不会发送 execution_success，而以 executing(node=null)
 		// 表示当前 prompt 已完成。只处理属于本任务的完成事件。
-		if (!hasNode || node == nil) && (promptID == "" || promptID == task.ComfyPromptID) {
+		if (!hasNode || node == nil) && promptID == task.ComfyPromptID {
+			s.recoveryState(&task, "awaiting_result", "上游报告完成，等待取回结果")
 			// history 写入可能略晚于 WS 完成事件；异步协调，避免把短暂缺失误判为失败。
 			go func(id string) {
 				time.Sleep(500 * time.Millisecond)
@@ -1512,12 +1547,15 @@ func (s *TaskService) handleWSEvent(taskID string, type_ string, data map[string
 			}
 		}
 	case "execution_success":
+		s.recoveryState(&task, "awaiting_result", "上游报告完成，等待取回结果")
 		s.finishTask(&task)
 	case "execution_error":
 		msg := s.errorMessage(data)
 		s.failTask(&task, "执行错误: "+msg)
 	case "execution_interrupted":
-		s.db.Model(&task).Updates(map[string]any{"status": "cancelled", "error": "执行被中断"})
+		now := time.Now()
+		s.db.Model(&task).Updates(map[string]any{"status": "cancelled", "error": "执行被中断", "finished_at": now, "provider_outcome": "", "recovery_note": ""})
+		task.ProviderOutcome, task.RecoveryNote, task.FinishedAt = "", "", &now
 		task.Status = "cancelled"
 		task.Error = "执行被中断"
 		s.push(&task)
@@ -1664,9 +1702,10 @@ func (s *TaskService) finishTask(task *models.Task) {
 	now := time.Now()
 	s.db.Model(task).Updates(map[string]any{
 		"status": "success", "progress": 100, "result_files": string(filesJSON),
-		"finished_at": now, "error": "",
+		"finished_at": now, "error": "", "provider_outcome": "", "recovery_note": "",
 	})
 	task.Status = "success"
+	task.ProviderOutcome, task.RecoveryNote = "", ""
 	task.Progress = 100
 	task.ResultFiles = string(filesJSON)
 	s.push(task)
@@ -1676,9 +1715,10 @@ func (s *TaskService) finishTask(task *models.Task) {
 func (s *TaskService) failTask(task *models.Task, errMsg string) {
 	now := time.Now()
 	s.db.Model(task).Updates(map[string]any{
-		"status": "failed", "error": errMsg, "finished_at": now,
+		"status": "failed", "error": errMsg, "finished_at": now, "provider_outcome": "", "recovery_note": "",
 	})
 	task.Status = "failed"
+	task.ProviderOutcome, task.RecoveryNote = "", ""
 	task.Error = errMsg
 	s.push(task)
 	s.stopListener(task.TaskID)
@@ -1690,30 +1730,64 @@ func (s *TaskService) reconcile(taskID string) {
 	if err := s.db.Where("task_id = ?", taskID).First(&task).Error; err != nil {
 		return
 	}
-	if task.Status != "running" && task.Status != "queued" {
+	if task.Status != "running" && task.Status != "queued" && task.Status != "pending" {
 		return
 	}
 	if task.Port == nil || task.ComfyPromptID == "" {
+		if task.SubmitAttemptedAt != nil || task.Status != "pending" {
+			if task.ProviderOutcome == "cancel_requested" {
+				s.recoveryState(&task, "cancel_requested", "停止请求待确认：缺少上游任务ID，无法自动查询或确认停止；请人工核查原实例，不会重提交")
+			} else {
+				s.recoveryState(&task, "unknown", "缺少上游任务ID，无法自动查询；请人工核查原实例，不会自动重提交")
+			}
+		}
 		return
 	}
 	c, clientErr := s.clientForTask(&task)
 	if clientErr != nil {
+		s.recoveryState(&task, "unknown", "实例暂不可达，执行结果待确认")
 		return
 	}
-	// 不等待实例全局队列清空：同一实例持续有其他任务时，本任务可能早已完成。
-	// 每次协调都先按 prompt_id 查询自己的 history。
-	if hist, err := c.GetHistory(task.ComfyPromptID); err == nil && historyHasPrompt(hist, task.ComfyPromptID) {
+	hist, histErr := c.GetHistory(task.ComfyPromptID)
+	if histErr == nil && historyHasPrompt(hist, task.ComfyPromptID) {
 		s.finishTask(&task)
 		return
 	}
-	load, err := c.GetLoad()
-	if err != nil {
+	item, _ := hist[task.ComfyPromptID].(map[string]any)
+	if item == nil {
+		item = hist
+	}
+	status, _ := item["status"].(map[string]any)
+	if status["completed"] == true || status["status_str"] == "success" {
+		s.recoveryState(&task, "awaiting_result", "上游已完成，等待可用输出；查询不会重提交")
 		return
 	}
-	if load.QueueRunning == 0 && load.QueuePending == 0 {
-		// 队列已空且 history 不存在，通常是 ComfyUI 重启丢失内存记录。
-		s.recoverFromOutput(&task)
+	queueState, err := promptQueueState(c, task.ComfyPromptID)
+	if err != nil {
+		s.recoveryState(&task, "unknown", "无法查询上游队列，执行结果待确认："+err.Error())
+		return
 	}
+	if queueState == "absent" {
+		if histErr != nil {
+			s.recoveryState(&task, "unknown", "历史查询失败且队列中未发现任务；不会自动重提交")
+			return
+		}
+		s.recoverFromOutput(&task)
+		return
+	}
+	observedStatus := "queued"
+	if queueState == "queue_running" {
+		observedStatus = "running"
+	}
+	if err := s.db.Model(&task).Where("status IN ?", []string{"pending", "queued", "running"}).Update("status", observedStatus).Error; err != nil {
+		return
+	}
+	task.Status = observedStatus
+	if task.ProviderOutcome == "cancel_requested" {
+		s.push(&task)
+		return
+	}
+	s.recoveryState(&task, "accepted", "已按上游任务ID确认状态："+observedStatus)
 }
 
 // RefreshTaskResult 主动按任务自己的 prompt_id 查询 history。
@@ -1800,14 +1874,9 @@ func (s *TaskService) recoverStartupOrphans() {
 			go s.reconcile(task.TaskID)
 			continue
 		}
-		if task.Status != "pending" {
-			if err := s.db.Model(&models.Task{}).Where("id = ? AND status IN ?", task.ID, []string{"queued", "running"}).Updates(map[string]any{
-				"status": "pending", "instance_id": nil, "gpu_index": nil, "port": nil,
-				"started_at": nil, "progress": 0, "current_node": "", "error": "",
-			}).Error; err != nil {
-				log.Printf("[recover] reset orphan task %s failed: %v", task.TaskID, err)
-				continue
-			}
+		if task.SubmitAttemptedAt != nil || task.Status != "pending" {
+			s.recoveryState(&task, "unknown", "服务重启后提交结果待确认；没有可查询的上游任务ID，不会自动重提交。旧任务同样保守保留。")
+			continue
 		}
 		go func(id string) {
 			if err := s.Execute(id); err != nil {
@@ -1864,7 +1933,7 @@ func (s *TaskService) recoverFromOutput(task *models.Task) {
 	if s.tryRecoverTaskOutput(task) {
 		return
 	}
-	s.failTask(task, "执行中断: 实例已重启, 未发现输出文件")
+	s.recoveryState(task, "unknown", "上游队列/历史未发现任务，尚未找到输出；无法据此证明失败，不会自动重提交")
 }
 
 // tryRecoverTaskOutput 同时兼容多GPU output_workers 和标准 ComfyUI/output。
@@ -1965,22 +2034,20 @@ func (s *TaskService) RequeueTask(taskID string) error {
 	if task.Status != "queued" {
 		return fmt.Errorf("仅排队中（queued）任务可重新排队")
 	}
-	// 从原实例队列摘除（不 Interrupt，避免打断同实例正在运行的其他任务）
-	if task.Port != nil && task.ComfyPromptID != "" {
-		c, clientErr := s.clientForTask(&task)
-		if clientErr == nil {
-			if err := c.DeletePrompt(task.ComfyPromptID); err != nil {
-				log.Printf("[task] %s requeue delete prompt failed: %v", taskID, err)
-			}
-		}
+	if task.SubmitAttemptedAt != nil || task.ComfyPromptID != "" || task.ProviderOutcome == "unknown" {
+		return fmt.Errorf("任务已有上游提交记录；请先核查并确认取消，再显式重试，不能直接重新排队")
 	}
 	s.stopListener(taskID)
 	// 解除 GPU 绑定回 pending，等待重新调度
-	if err := s.db.Model(&task).Updates(map[string]any{
+	reset := s.db.Model(&task).Where("status = 'queued' AND submit_attempted_at IS NULL AND COALESCE(comfy_prompt_id, '') = ''").Updates(map[string]any{
 		"status": "pending", "instance_id": nil, "gpu_index": nil, "port": nil,
 		"comfy_prompt_id": "", "started_at": nil, "progress": 0, "current_node": "", "error": "",
-	}).Error; err != nil {
-		return err
+	})
+	if reset.Error != nil {
+		return reset.Error
+	}
+	if reset.RowsAffected != 1 {
+		return fmt.Errorf("任务状态或提交证据已变化，拒绝重新排队")
 	}
 	task.Status = "pending"
 	s.push(&task)
@@ -2002,17 +2069,37 @@ func (s *TaskService) CancelTask(taskID string) error {
 	if task.Status == "success" || task.Status == "failed" || task.Status == "cancelled" {
 		return fmt.Errorf("任务已结束")
 	}
-	if task.Port != nil {
-		c, clientErr := s.clientForTask(&task)
-		if clientErr == nil {
-			if task.ComfyPromptID != "" {
-				_ = c.DeletePrompt(task.ComfyPromptID)
+	needsConfirmation := task.SubmitAttemptedAt != nil || task.ComfyPromptID != "" || task.Status == "running" || task.ProviderOutcome == "unknown"
+	if needsConfirmation {
+		confirmed := false
+		if task.ComfyPromptID != "" && task.Port != nil {
+			if c, err := s.clientForTask(&task); err == nil {
+				if state, err := promptQueueState(c, task.ComfyPromptID); err == nil && state == "queue_pending" {
+					if c.DeletePrompt(task.ComfyPromptID) == nil {
+						state, err = promptQueueState(c, task.ComfyPromptID)
+						confirmed = err == nil && state == "absent"
+					}
+				}
 			}
-			_ = c.Interrupt()
+		}
+		if !confirmed {
+			s.recoveryState(&task, "cancel_requested", "已记录停止请求，上游尚未确认停止；仍会核查并接收原任务结果。实例级 interrupt 可能误停其他任务，未自动发送；如需立即中断，请到原实例核查后操作。")
+			return nil
 		}
 	}
 	finished := time.Now()
-	s.db.Model(&task).Updates(map[string]any{"status": "cancelled", "error": "用户取消", "finished_at": finished})
+	query := s.db.Model(&task).Where("status IN ?", []string{"pending", "queued", "running"})
+	if !needsConfirmation {
+		query = query.Where("submit_attempted_at IS NULL AND COALESCE(comfy_prompt_id, '') = ''")
+	}
+	res := query.Updates(map[string]any{"status": "cancelled", "error": "已确认取消", "finished_at": finished, "provider_outcome": "", "recovery_note": ""})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return fmt.Errorf("任务状态或提交证据已变化，请核查后重试停止")
+	}
+	task.ProviderOutcome, task.RecoveryNote = "", ""
 	task.Status = "cancelled"
 	task.Error = "用户取消"
 	task.FinishedAt = &finished
@@ -2030,7 +2117,10 @@ func (s *TaskService) CancelAllTasks() (int, error) {
 	count := 0
 	for i := range tasks {
 		if err := s.CancelTask(tasks[i].TaskID); err == nil {
-			count++
+			var latest models.Task
+			if s.db.Where("task_id = ?", tasks[i].TaskID).First(&latest).Error == nil && latest.Status == "cancelled" {
+				count++
+			}
 		}
 	}
 	return count, nil

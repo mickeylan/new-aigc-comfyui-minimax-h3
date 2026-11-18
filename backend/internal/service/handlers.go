@@ -421,9 +421,7 @@ func (s *Service) HandleClearTasks(c *gin.Context) {
 }
 
 func (s *Service) HandleGetTask(c *gin.Context) {
-	if s.Tasks != nil {
-		s.Tasks.RefreshTaskResult(c.Param("id"))
-	}
+	// Reads never query or mutate the provider; recovery is explicit.
 	var task models.Task
 	if err := s.DB.Where("task_id = ?", c.Param("id")).First(&task).Error; err != nil {
 		c.JSON(404, gin.H{"error": "task not found"})
@@ -494,7 +492,7 @@ func (s *Service) HandleCancelAllTasks(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{"ok": true, "cancelled": count})
+	c.JSON(200, gin.H{"ok": true, "cancelled": count, "message": "仅计入已确认取消；其余任务停止请求待核查，请刷新查看"})
 }
 
 // HandleRerunTask 重新运行失败/取消的任务

@@ -150,13 +150,17 @@ func (h *Hub) Broadcast(type_ string, payload any) {
 // TaskUpdate 任务状态推送
 func TaskUpdatePayload(t *models.Task) map[string]any {
 	return map[string]any{
-		"task_id":      t.TaskID,
-		"status":       t.Status,
-		"progress":     t.Progress,
-		"current_node": t.CurrentNode,
-		"error":        t.Error,
-		"gpu_index":    t.GPUIndex,
-		"port":         t.Port,
-		"result_files": t.ResultFiles,
+		"task_id":             t.TaskID,
+		"status":              t.Status,
+		"progress":            t.Progress,
+		"current_node":        t.CurrentNode,
+		"error":               t.Error,
+		"gpu_index":           t.GPUIndex,
+		"port":                t.Port,
+		"result_files":        t.ResultFiles,
+		"provider_outcome":    t.ProviderOutcome,
+		"recovery_note":       t.RecoveryNote,
+		"submit_attempted_at": t.SubmitAttemptedAt,
+		"last_reconciled_at":  t.LastReconciledAt,
 	}
 }

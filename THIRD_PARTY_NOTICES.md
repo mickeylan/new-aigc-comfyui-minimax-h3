@@ -47,3 +47,22 @@ The optional local ComfyUI integration under `integrations/comfyui-indextts25-lo
 - Developer: Bilibili Index Team
 
 The integration includes a copy of the model license and disclaimer. Users must obtain authorization for cloned voices and comply with the model license and applicable law. The node implementation is a clean, minimal integration; the separate `comfyui-indextts25-t8` repository was inspected only as a behavioral reference and its extended workflow implementation was not copied.
+
+## three.js 0.180.0
+
+The optional Scene previsualization dynamically loads three.js core and its MIT-licensed GLTFLoader addon for user-selected, self-contained GLB files. It does not fetch external model/texture URLs or compressed-model decoders. Imported models are stored in the current browser's IndexedDB, not uploaded; users remain responsible for model/animation licenses. The server only validates and stores rehearsal metadata. White-model/depth PNG and ZIP exports are local downloads, not automatic generation references. The isolated QA fixture additionally uses GLTFExporter to generate its own skinned test asset; no third-party model is redistributed.
+
+- Source: https://github.com/mrdoob/three.js
+- License: MIT
+- Copyright © 2010-2025 three.js authors
+- Verified production chunks: three.js core 704.89 kB / gzip 181.19 kB; GLTFLoader 45.68 kB / gzip 13.46 kB; asset runtime 7.10 kB / gzip 3.40 kB; previsualization component 38.63 kB / gzip 14.45 kB. These are lazy-loaded, not initial-entry dependencies (Vite build measurement).
+
+The MIT License
+
+Copyright © 2010-2025 three.js authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

@@ -72,6 +72,10 @@ type Task struct {
 	GPUIndex          *int       `gorm:"column:gpu_index" json:"gpu_index"`
 	Port              *int       `gorm:"column:port" json:"port"`
 	ComfyPromptID     string     `gorm:"column:comfy_prompt_id" json:"comfy_prompt_id"`
+	SubmitAttemptedAt *time.Time `json:"submit_attempted_at"`
+	ProviderOutcome   string     `json:"provider_outcome"` // submitting/unknown/accepted/awaiting_result/cancel_requested
+	RecoveryNote      string     `gorm:"type:text" json:"recovery_note"`
+	LastReconciledAt  *time.Time `json:"last_reconciled_at"`
 	Status            string     `gorm:"index:idx_task_status_updated,priority:1;index:idx_task_status_template,priority:1" json:"status"` // pending/queued/running/success/failed/cancelled
 	Progress          float64    `json:"progress"`
 	CurrentNode       string     `gorm:"column:current_node" json:"current_node"`

@@ -260,7 +260,7 @@ func TestSceneVideoTranslationHTTPReturnsPreviewDespiteSourceChange(t *testing.T
 	}
 }
 
-func TestSceneVideoTranslationHTTPConfirmDoesNotBlockChangedSource(t *testing.T) {
+func TestSceneVideoTranslationHTTPConfirmRejectsChangedSource(t *testing.T) {
 	f := newTranslationHTTPFixture(t)
 	w := translationRequest(f.svc, http.MethodPost, f.p.ID, f.sc.ID, "/translate", `{"language":"en"}`)
 	if w.Code != http.StatusOK {
@@ -275,15 +275,15 @@ func TestSceneVideoTranslationHTTPConfirmDoesNotBlockChangedSource(t *testing.T)
 	}
 	body, _ := json.Marshal(map[string]any{"exec_prompt": translationEnglish, "source_hash": oldHash})
 	w = translationRequest(f.svc, http.MethodPost, f.p.ID, f.sc.ID, "/confirm", string(body))
-	if w.Code != http.StatusOK {
-		t.Fatalf("changed source blocked English save status=%d %s", w.Code, w.Body.String())
+	if w.Code != http.StatusConflict {
+		t.Fatalf("stale English preview must conflict status=%d %s", w.Code, w.Body.String())
 	}
 	var saved models.Scene
 	if err := f.db.First(&saved, f.sc.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if saved.VideoFullPrompt != translationEnglish || saved.PromptStale {
-		t.Fatalf("English prompt was not saved against current source: %+v", saved)
+	if saved.VideoFullPrompt != "old reviewed prompt" || saved.Content != "changed while user reviews English" || saved.VideoPromptMasterZH != translationMaster+"\n用户随后补充" {
+		t.Fatalf("stale preview overwrote current edited source or reviewed prompt: %+v", saved)
 	}
 }
 

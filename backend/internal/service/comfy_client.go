@@ -9,8 +9,15 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"time"
 )
+
+// PromptRejectedError means the provider explicitly rejected the submission.
+// Other errors are ambiguous: the upstream may already have accepted the work.
+type PromptRejectedError struct{ Message string }
+
+func (e *PromptRejectedError) Error() string { return e.Message }
 
 // ComfyClient 与单个 ComfyUI 实例通信
 type ComfyClient struct {
@@ -93,10 +100,13 @@ func (c *ComfyClient) GetLoad() (*InstanceLoad, error) {
 
 // SubmitPrompt 提交工作流
 func (c *ComfyClient) SubmitPrompt(workflow map[string]any, clientID string) (string, error) {
-	body, _ := json.Marshal(map[string]any{
+	body, marshalErr := json.Marshal(map[string]any{
 		"prompt":    workflow,
 		"client_id": clientID,
 	})
+	if marshalErr != nil {
+		return "", &PromptRejectedError{Message: "工作流无法编码"}
+	}
 	// 大型 H3 工作流在显存紧张或 ComfyUI 正在释放模型时，/prompt 的校验响应
 	// 可能超过通用查询所用的 30 秒。此时请求可能已被 ComfyUI 接收，过早超时会
 	// 把任务误标失败并丢失 prompt_id，后续即使成功也无法同步结果。
@@ -109,9 +119,16 @@ func (c *ComfyClient) SubmitPrompt(workflow map[string]any, clientID string) (st
 		return "", err
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
+	data, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return "", readErr
+	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("submit prompt failed %d: %s", resp.StatusCode, string(data))
+		err := fmt.Errorf("submit prompt failed %d: %s", resp.StatusCode, truncateStr(string(data), 500))
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusRequestTimeout {
+			return "", &PromptRejectedError{Message: err.Error()}
+		}
+		return "", err
 	}
 	var out struct {
 		PromptID string `json:"prompt_id"`
@@ -121,7 +138,10 @@ func (c *ComfyClient) SubmitPrompt(workflow map[string]any, clientID string) (st
 		return "", err
 	}
 	if out.Error != nil {
-		return "", fmt.Errorf("comfy error: %v", out.Error)
+		return "", &PromptRejectedError{Message: fmt.Sprintf("comfy error: %v", out.Error)}
+	}
+	if strings.TrimSpace(out.PromptID) == "" {
+		return "", fmt.Errorf("提交响应缺少 prompt_id，结果未知")
 	}
 	return out.PromptID, nil
 }
@@ -184,12 +204,15 @@ func (c *ComfyClient) Interrupt() error {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("ComfyUI 操作未确认: HTTP %d", resp.StatusCode)
+	}
 	return nil
 }
 
 // DeletePrompt 从队列删除任务
 func (c *ComfyClient) DeletePrompt(promptID string) error {
-	body, _ := json.Marshal(map[string]string{"delete": promptID})
+	body, _ := json.Marshal(map[string]any{"delete": []string{promptID}})
 	req, _ := http.NewRequest(http.MethodPost, c.baseURL()+"/queue", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.HTTP.Do(req)
@@ -197,6 +220,9 @@ func (c *ComfyClient) DeletePrompt(promptID string) error {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("ComfyUI 操作未确认: HTTP %d", resp.StatusCode)
+	}
 	return nil
 }
 

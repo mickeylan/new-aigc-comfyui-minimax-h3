@@ -17,6 +17,10 @@ async function mutateScreenText(id, request) {
 }
 
 export const api = {
+  planScenePrevisualization: (id, sid, data) => http.post(`/projects/${id}/scenes/${sid}/previsualization/plan`, data),
+  getScenePrevisualization: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/previsualization`),
+  saveScenePrevisualization: (id, sid, data) => http.put(`/projects/${id}/scenes/${sid}/previsualization`, data),
+  scenePreparationStages: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/preparation-stages`),
   editingDraft: (id, episode) => http.get(`/projects/${id}/episodes/${episode}/editing-draft`),
   saveEditingDraft: (id, episode, revision, edit_sequence, visual_tracks = []) => http.put(`/projects/${id}/episodes/${episode}/editing-draft`, {revision, edit_sequence, visual_tracks}),
   sceneMediaInfo: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/media-info`),
@@ -46,6 +50,7 @@ export const api = {
   createTask: (data) => http.post('/tasks', data),
   cancelTask: (id) => http.post(`/tasks/${id}/cancel`),
   taskDiagnostics: (id) => http.get(`/tasks/${id}/diagnostics`),
+  reconcileTask: (id) => http.post(`/tasks/${id}/reconcile`),
   requeueTask: (id) => http.post(`/tasks/${id}/requeue`),
   cancelAllTasks: () => http.post('/tasks/cancel-all'),
   rerunTask: (id) => http.post(`/tasks/${id}/rerun`),
@@ -177,7 +182,7 @@ export const api = {
   saveSceneEndState: (id, sid, state) => http.put(`/projects/${id}/scenes/${sid}/end-state`, state),
   extractSceneEndState: (id, sid) => http.post(`/projects/${id}/scenes/${sid}/end-state/extract`, null, { timeout: 300000 }),
   sceneGenerationSnapshots: (id, sid, kind = '') => http.get(`/projects/${id}/scenes/${sid}/generation-snapshots`, { params: kind ? { kind } : {} }),
-  previewSceneBlockingPrompt: (id, sid, kind) => http.post(`/projects/${id}/scenes/${sid}/blocking/prompts/${kind}/preview`, null, { timeout: 300000 }),
+  previewSceneBlockingPrompt: (id, sid, kind, draft = null) => http.post(`/projects/${id}/scenes/${sid}/blocking/prompts/${kind}/preview`, draft, { timeout: 300000 }),
   applySceneBlockingPrompt: (id, sid, kind, data) => http.post(`/projects/${id}/scenes/${sid}/blocking/prompts/${kind}/apply`, data),
   updateSceneLocks: (id, sid, data) => http.patch(`/projects/${id}/scenes/${sid}/locks`, data),
   redesignScenePrompt: (id, sid, data) => http.post(`/projects/${id}/scenes/${sid}/prompt/redesign`, typeof data === 'string' ? { brief: data } : data, { timeout: 300000 }),

@@ -772,7 +772,7 @@ func TestValidateScriptResultAndDuration(t *testing.T) {
 	}
 }
 
-func TestSuccessfulTaskWithoutVideoFailsScene(t *testing.T) {
+func TestSuccessfulTaskWithoutVideoKeepsOriginalForRetrieval(t *testing.T) {
 	ps := newTestProjectService(t)
 	p := models.Project{Title: "t", Synopsis: "s", Status: "producing"}
 	ps.db.Create(&p)
@@ -783,8 +783,8 @@ func TestSuccessfulTaskWithoutVideoFailsScene(t *testing.T) {
 	ps.syncSceneVideos()
 	var got models.Scene
 	ps.db.First(&got, sc.ID)
-	if got.Status != "failed" || got.Error == "" {
-		t.Fatalf("无视频输出的成功任务必须失败: %+v", got)
+	if got.Status != "video_pending" || !strings.Contains(got.Error, "待取回") || got.VideoTaskID != task.TaskID || got.VideoRetries != 2 {
+		t.Fatalf("无视频输出的完成任务必须保留原绑定待取回，不得失败或重新生成: %+v", got)
 	}
 }
 
@@ -941,7 +941,7 @@ func TestUpdateScenePreservesCompletedMediaForSourceChanges(t *testing.T) {
 	}
 }
 
-func TestUpdateSceneDetachesAndCancelsActiveVideoTask(t *testing.T) {
+func TestUpdateSceneDetachesAndRequestsStopForActiveVideoTask(t *testing.T) {
 	ps := newTestProjectService(t)
 	ps.tasks = &TaskService{db: ps.db, hub: NewHub()}
 	p := models.Project{Title: "测试"}
@@ -957,8 +957,8 @@ func TestUpdateSceneDetachesAndCancelsActiveVideoTask(t *testing.T) {
 	var got models.Scene
 	ps.db.First(&got, sc.ID)
 	ps.db.First(&task, task.ID)
-	if got.VideoTaskID != "" || task.Status != "cancelled" {
-		t.Fatalf("活动任务未解除并取消: scene=%+v task=%+v", got, task)
+	if got.VideoTaskID != "" || task.Status != "running" || task.ProviderOutcome != "cancel_requested" || task.FinishedAt != nil {
+		t.Fatalf("旧活动任务应解绑并记录停止待确认，不得宣称上游已取消: scene=%+v task=%+v", got, task)
 	}
 	if got.VideoFile != "existing.mp4" || got.VideoInputFile != "play.mp4" || got.Status != "video_running" {
 		t.Fatalf("取消活动任务不得删除已有媒体或改变状态: %+v", got)
@@ -1451,8 +1451,8 @@ func TestSaveSceneReferencesChangesPreserveCompletedMediaAndExplicitEmpty(t *tes
 	if err := ps.db.First(&active, active.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if running.VideoTaskID != "" || running.ImageFile != "kept.png" || running.VideoFile != "kept.mp4" || running.Status != "video_ready" || active.Status != "cancelled" {
-		t.Fatalf("changed refs did not cancel/detach active task while retaining completed media: scene=%+v task=%+v", running, active)
+	if running.VideoTaskID != "" || running.ImageFile != "kept.png" || running.VideoFile != "kept.mp4" || running.Status != "video_ready" || active.Status != "running" || active.ProviderOutcome != "cancel_requested" || active.FinishedAt != nil {
+		t.Fatalf("changed refs must detach active task, retain completed media, and leave unconfirmed upstream stop pending: scene=%+v task=%+v", running, active)
 	}
 }
 

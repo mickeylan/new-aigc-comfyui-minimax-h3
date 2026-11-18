@@ -353,6 +353,8 @@ type sceneVideoSourceHash struct {
 	// RefFiles/RefLines are the Ref2V reference images actually submitted, including continuity,
 	// clay/line-art and top-view references; they are empty for non-Ref2V templates.
 	RefFiles []FileMeta `json:"ref_files,omitempty"`
+	FileDigests map[string][]string `json:"file_digests"`
+	RefDigests []string `json:"ref_digests"`
 	RefLines []string   `json:"ref_lines,omitempty"`
 	StoryboardRole string                                  `json:"storyboard_role"`
 	StoryboardTime *float64                                `json:"storyboard_time,omitempty"`
@@ -360,7 +362,12 @@ type sceneVideoSourceHash struct {
 
 // sceneVideoPromptSourceHash binds the review to the effective compiler inputs, never to VideoFullPrompt.
 func (s *Service) sceneVideoPromptSourceHash(sc *models.Scene) (string, error) {
-	if s.Projects.continuity != nil {
+	return s.sceneVideoPromptSourceHashWithPreparation(sc, true)
+}
+
+// Draft adoption must not prepare or rewrite authority before its atomic update.
+func (s *Service) sceneVideoPromptSourceHashWithPreparation(sc *models.Scene, prepare bool) (string, error) {
+	if prepare && s.Projects.continuity != nil {
 		if err := s.Projects.continuity.PrepareScene(sc); err != nil {
 			return "", err
 		}
@@ -373,7 +380,7 @@ func (s *Service) sceneVideoPromptSourceHash(sc *models.Scene) (string, error) {
 	if err := s.DB.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
 		return "", err
 	}
-	shots = s.Projects.ensureShotDialogueRanges(sc.ID, shots)
+	if prepare { shots = s.Projects.ensureShotDialogueRanges(sc.ID, shots) }
 	template := enforceSceneModeVideoTemplate(sc, sc.VideoTemplate)
 	if template == "" {
 		template = "minimax_h3_ref2v"
@@ -398,6 +405,11 @@ func (s *Service) sceneVideoPromptSourceHash(sc *models.Scene) (string, error) {
 	if isH3Ref2VTemplate(template) {
 		v.RefFiles, v.RefLines = refFiles, refLines
 	}
+	v.FileDigests = map[string][]string{}
+	for role, refs := range files {
+		for _, ref := range refs { v.FileDigests[role] = append(v.FileDigests[role], s.Projects.fileSHA256(ref)) }
+	}
+	for _, ref := range v.RefFiles { v.RefDigests = append(v.RefDigests, s.Projects.fileSHA256(ref)) }
 	v.Scene.Content, v.Scene.Duration, v.Scene.Mode, v.Scene.References = sc.Content, normalizeSceneDuration(sc.Duration), sc.SceneMode, sc.ReferenceImagesJSON
 	v.Scene.Identity, v.Scene.Visible, v.Scene.Voice, v.Scene.Mentioned = sc.Characters, sc.VisibleCharacters, sc.VoiceCharacters, sc.MentionedCharacters
 	v.Scene.Location, v.Scene.Props, v.Scene.First, v.Scene.Last, v.Scene.Image = sc.LocationName, sc.Props, sc.VideoFirstFrameImg, sc.VideoLastFrameImg, sc.ImageFile
@@ -486,7 +498,9 @@ func (s *Service) HandleTranslateSceneVideoPrompt(c *gin.Context) {
 	// Apply the existing long-prompt sectioning and clean-chunk cache to both
 	// translation directions, including Chinese-master to English preview.
 	// Short prompts keep the existing uncached whole-prompt path.
-	if len([]rune(source)) >= h3ChunkedTranslationMinRunes {
+	if s.DB.Migrator().HasTable(&models.PreparationStage{}) {
+		translated, markerWarnings, err = s.translatePreparedH3(&previewScene, h, language, system, source)
+	} else if len([]rune(source)) >= h3ChunkedTranslationMinRunes {
 		translated, markerWarnings, err = translateH3PromptChunked(s.TextProviderFact.Chat, system, source)
 	} else {
 		translated, markerWarnings, err = translateH3Masked(s.TextProviderFact.Chat, system, source, nil)
@@ -598,6 +612,10 @@ func (s *Service) HandleConfirmSceneVideoPrompt(c *gin.Context) {
 	current, err := s.sceneVideoPromptSourceHash(sc)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if req.SourceHash != "" && req.SourceHash != current {
+		c.JSON(http.StatusConflict, gin.H{"error": "输入版本已变化，请重新查询/翻译后审阅确认；旧预览仍保留，不会覆盖当前稿"})
 		return
 	}
 	now := time.Now()

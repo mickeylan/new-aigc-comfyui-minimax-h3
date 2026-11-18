@@ -1,7 +1,9 @@
 <template>
   <div class="page fade-up">
     <h1 class="page-title">任务中心</h1>
-    <p class="page-sub">所有生成任务与实时进度</p>
+    <p class="page-sub">所有生成任务与实时进度。刷新/重新连接只读取状态，不重复提交。</p>
+    <p v-if="!connected" role="status">实时连接已断开，页面状态可能过期；不代表任务失败或停止。正在重连，可手动查询原任务。</p>
+    <p v-if="loadError" role="alert">{{ loadError }}</p>
 
     <div class="filter-row">
       <div class="filter-group">
@@ -40,8 +42,8 @@
           <div class="td id mono">{{ shortId(t.task_id) }}</div>
           <div class="td td-tpl">{{ t.template_name }}</div>
           <div class="td"><span class="badge" :class="badgeClass(t.status)">
-            <span class="dot" :class="{ pulse: t.status === 'running' }"></span>{{ statusText(t.status) }}
-          </span></div>
+            <span class="dot" :class="{ pulse: t.status === 'running' }"></span>{{ taskRecoveryText(t) || statusText(t.status) }}
+          </span><small v-if="t.recovery_note" :title="t.recovery_note">{{ t.recovery_note }}</small></div>
           <div class="td progress">
             <div class="progress-track">
               <div class="progress-fill" :style="{ width: (t.status === 'success' ? 100 : t.progress) + '%' }"></div>
@@ -52,8 +54,9 @@
           <div class="td time" :title="`创建于 ${fmtTime(t.created_at)}`">{{ durationText(t, now) }}</div>
           <div class="td actions">
             <button v-if="['pending','queued','running'].includes(t.status)" class="btn btn-sm btn-danger"
-              @click.stop="cancel(t)">取消</button>
-            <button v-if="t.status === 'queued'" class="btn btn-sm btn-secondary" title="解除 GPU 绑定后按并发与空闲 GPU 重新分配"
+              @click.stop="cancel(t)">请求停止</button>
+            <button v-if="['pending','queued','running'].includes(t.status)" class="btn btn-sm btn-secondary" :disabled="checking.has(t.task_id)" @click.stop="reconcile(t)">查询/取回</button>
+            <button v-if="t.status === 'queued' && !t.submit_attempted_at && !t.comfy_prompt_id && !taskRecoveryText(t)" class="btn btn-sm btn-secondary" title="解除 GPU 绑定后按并发与空闲 GPU 重新分配"
               @click.stop="requeue(t)">重新排队</button>
             <button v-else-if="['failed','cancelled'].includes(t.status)" class="btn btn-sm btn-secondary"
               @click.stop="rerun(t)">重试</button>
@@ -79,6 +82,7 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, wsUrl } from '../api'
+import { connectTaskUpdates, taskRecoveryText } from '../utils/taskRecovery.js'
 
 const router = useRouter()
 const items = ref([])
@@ -98,17 +102,21 @@ const filters = [
   { label: '已完成', value: 'success' },
   { label: '失败', value: 'failed' }
 ]
-let ws = null
+let stopUpdates = null
 let clock = null
+let disposed = false
+let loadEpoch = 0
+const connected = ref(false)
+const loadError = ref('')
+const checking = ref(new Set())
 
 async function load() {
-  const { data } = await api.tasks({
-    page: page.value, size: pageSize,
-    status: filter.value || undefined,
-    template_name: tplFilter.value || undefined
-  })
-  items.value = data.items
-  total.value = data.total
+  const epoch = ++loadEpoch
+  try {
+    const { data } = await api.tasks({ page: page.value, size: pageSize, status: filter.value || undefined, template_name: tplFilter.value || undefined })
+    if (disposed || epoch !== loadEpoch) return
+    items.value = data.items; total.value = data.total; loadError.value = ''
+  } catch (err) { if (!disposed && epoch === loadEpoch) loadError.value = err.response?.data?.error || err.message }
 }
 
 function go(id) { router.push(`/tasks/${id}`) }
@@ -121,17 +129,16 @@ function statusText(s) {
   return { pending: '待提交', queued: '排队中', running: '生成中', success: '已完成', failed: '失败', cancelled: '已取消' }[s] || s
 }
 async function cancel(t) {
-  if (!confirm(`确定取消任务 ${t.task_id}？`)) return
-  await api.cancelTask(t.task_id)
-  load()
+  if (!confirm(`请求停止任务 ${t.task_id}？上游未确认前不视为已取消；不会盲目中断共享实例。`)) return
+  try { await api.cancelTask(t.task_id); await load() } catch (err) { alert(err.response?.data?.error || err.message) }
 }
 
 async function cancelAll() {
-  if (!confirm('确定取消全部进行中的任务？（排队/生成中的任务将全部停止）')) return
+  if (!confirm('对全部未完成任务请求停止？无法确认上游停止的任务会保留待核查，不保证全部停止。')) return
   cancelling.value = true
   try {
     const { data } = await api.cancelAllTasks()
-    alert(`已取消 ${data.cancelled} 个任务`)
+    alert(`已确认取消 ${data.cancelled} 个任务；其他停止请求待确认，请查看列表。`)
     await load()
   } catch (err) {
     alert(err.response?.data?.error || err.message)
@@ -140,8 +147,14 @@ async function cancelAll() {
   }
 }
 async function rerun(t) {
-  await api.rerunTask(t.task_id)
-  load()
+  if (!confirm('这会创建新的生成任务，可能产生费用。确定重试？')) return
+  try { await api.rerunTask(t.task_id); await load() } catch (err) { alert(err.response?.data?.error || err.message) }
+}
+async function reconcile(t) {
+  if (checking.value.has(t.task_id)) return
+  checking.value.add(t.task_id)
+  try { await api.reconcileTask(t.task_id); await load() } catch (err) { alert(err.response?.data?.error || err.message) }
+  finally { checking.value.delete(t.task_id) }
 }
 
 async function requeue(t) {
@@ -185,8 +198,7 @@ onMounted(() => {
   load()
   api.templates().then(({ data }) => { allTemplates.value = data }).catch(() => {})
   clock = setInterval(() => { now.value = Date.now() }, 1000)
-  ws = new WebSocket(wsUrl())
-  ws.onmessage = (e) => {
+  stopUpdates = connectTaskUpdates({ url: wsUrl, reload: load, onConnection: value => { connected.value = value }, onMessage: (e) => {
     try {
       const msg = JSON.parse(e.data)
       if (msg.type === 'task_update') {
@@ -195,10 +207,11 @@ onMounted(() => {
         if (idx >= 0) Object.assign(items.value[idx], upd)
       }
     } catch (_) {}
-  }
+  } })
 })
 onBeforeUnmount(() => {
-  if (ws) ws.close()
+  disposed = true; loadEpoch++
+  if (stopUpdates) stopUpdates()
   if (clock) clearInterval(clock)
 })
 </script>

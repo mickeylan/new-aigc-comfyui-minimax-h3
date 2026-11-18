@@ -2943,7 +2943,7 @@ func (s *ProjectService) generateSceneVideoAction(sc *models.Scene, trace *h3Pro
 		return "", fmt.Errorf("解析视频提示词策略失败: %w", err)
 	}
 	effectiveSystem := effectiveGenerationSystem(system, policy)
-	chatAction := func(request string) (string, error) {
+	callAction := func(request string) (string, error) {
 		if (sceneMode == h3SceneAction || sceneMode == h3SceneMixed) && s.skills != nil {
 			output, provenance, err := s.skills.ChatWithConfiguredOrFallbackSkillTraced(sc.ProjectID, models.SkillStageVideoPrompt, h3CombatActionSkillCode, s.textProvider, effectiveSystem, request, map[string]string{"request": request})
 			if err == nil {
@@ -2952,6 +2952,27 @@ func (s *ProjectService) generateSceneVideoAction(sc *models.Scene, trace *h3Pro
 			return output, err
 		}
 		return s.textProvider.Chat(effectiveSystem, request)
+	}
+	stepNumber := 0
+	version := s.preparationVideoVersion(sc)
+	chatAction := func(request string) (string, error) {
+		stepNumber++
+		stage := "video_prompt"
+		if stepNumber > 1 { stage = fmt.Sprintf("plot_anchor_or_structure_repair_%d", stepNumber-1) }
+		type checkpoint struct { Output string; Skills []SkillProvenance }
+		raw, err := preparationStep(s.db, sc.ProjectID, sc.ID, stage, version, effectiveSystem, request, func() (string, error) {
+			output, err := callAction(request)
+			if err != nil { return "", err }
+			var skills []SkillProvenance
+			if trace != nil { skills = trace.Skills }
+			body, err := json.Marshal(checkpoint{Output: output, Skills: skills})
+			return string(body), err
+		})
+		if err != nil { return "", err }
+		var saved checkpoint
+		if err := json.Unmarshal([]byte(raw), &saved); err != nil { return "", err }
+		if trace != nil { trace.Skills = saved.Skills }
+		return saved.Output, nil
 	}
 	out, err := chatAction(user)
 	if err != nil {
@@ -7597,6 +7618,7 @@ func joinSceneCharacters(names []string) string {
 
 // GenerateSceneImage 生成单个场景画面：文生图 → 保存到 input/<project_id>/scene_N.png
 func (s *ProjectService) GenerateSceneImage(sc *models.Scene) error {
+	if err := s.validateSceneReferenceBindings(sc); err != nil { return err }
 	token, err := s.claimSceneImage(sc)
 	if err != nil {
 		return err
@@ -8401,6 +8423,7 @@ func stableSceneVideoSeed(templateCode, prompt string, files map[string][]FileMe
 // GenerateSceneVideo 创建场景视频任务；T2V可无分镜图，其余模板要求相应画面输入。
 // 用户主动生成/重新生成时使用新的随机 seed；失败任务的快照重试由 TaskService 保留原参数。
 func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene) error {
+	if err := s.validateSceneReferenceBindings(sc); err != nil { return err }
 	var latest models.Scene
 	if err := s.db.First(&latest, sc.ID).Error; err != nil {
 		return err
@@ -8958,7 +8981,7 @@ func (s *ProjectService) syncSceneImages() {
 		case "success":
 			file, _ := resultImageOf(&task)
 			if file == "" || task.Port == nil || s.tasks == nil || s.upload == nil {
-				s.failSceneImage(sc, sc.ImageToken, "MiniMax H3 分镜候选任务成功但未返回可用帧")
+				s.db.Model(sc).Update("error", "上游已完成，分镜帧待取回；不会重新生成")
 				continue
 			}
 			subfolder, filename := filepath.ToSlash(filepath.Dir(file)), filepath.Base(file)
@@ -8967,7 +8990,7 @@ func (s *ProjectService) syncSceneImages() {
 			}
 			data, err := NewComfyClient(s.tasks.comfyHostForTask(&task), *task.Port).DownloadOutput(filename, subfolder, "output")
 			if err != nil {
-				s.failSceneImage(sc, sc.ImageToken, "读取 MiniMax H3 分镜候选帧失败: "+err.Error())
+				s.db.Model(sc).Update("error", "上游已完成，分镜帧待取回（不会重新生成）: "+err.Error())
 				continue
 			}
 			ext := filepath.Ext(file)
@@ -8977,7 +9000,7 @@ func (s *ProjectService) syncSceneImages() {
 			name := fmt.Sprintf("scene_g%d_%d_%d%s", sc.Generation, sc.Order, time.Now().UnixNano(), ext)
 			path, _, err := s.upload.SaveFile(fmt.Sprint(sc.ProjectID), "image", name, data)
 			if err != nil {
-				s.failSceneImage(sc, sc.ImageToken, "保存 Krea2 分镜图片失败: "+err.Error())
+				s.db.Model(sc).Update("error", "上游已完成，分镜帧保存待恢复（不会重新生成）: "+err.Error())
 				continue
 			}
 			candidate, captureErr := s.completeSceneCandidate(SceneCandidateCapture{
@@ -9386,7 +9409,7 @@ func (s *ProjectService) syncSceneVideos() {
 		case "success":
 			file, gpu := resultVideoOf(&task)
 			if file == "" || gpu == nil || task.Port == nil || s.upload == nil {
-				s.retryOrFailVideo(sc, &task, "任务成功但未返回视频文件、端口或 GPU 信息")
+				s.db.Model(sc).Update("error", "上游已完成，结果待取回：缺少视频文件、端口或 GPU 信息；不会重新生成")
 				changed = true
 				continue
 			}
@@ -9396,14 +9419,14 @@ func (s *ProjectService) syncSceneVideos() {
 			}
 			data, err := NewComfyClient(s.tasks.comfyHostForTask(&task), *task.Port).DownloadOutput(filename, subfolder, "output")
 			if err != nil {
-				s.retryOrFailVideo(sc, &task, "下载生成视频失败: "+err.Error())
+				s.db.Model(sc).Update("error", "上游已完成，下载结果待恢复（不会重新生成）: "+err.Error())
 				changed = true
 				continue
 			}
 			localName := fmt.Sprintf("scene_video_g%d_%d_%d%s", sc.Generation, sc.Order, time.Now().UnixNano(), filepath.Ext(file))
 			localPath, _, err := s.upload.SaveFile(fmt.Sprint(sc.ProjectID), "video", localName, data)
 			if err != nil {
-				s.retryOrFailVideo(sc, &task, "保存生成视频失败: "+err.Error())
+				s.db.Model(sc).Update("error", "上游已完成，保存结果待恢复（不会重新生成）: "+err.Error())
 				changed = true
 				continue
 			}
@@ -9421,7 +9444,10 @@ func (s *ProjectService) syncSceneVideos() {
 				continue
 			}
 			changed = true
-		case "failed", "cancelled":
+		case "cancelled":
+			s.db.Model(sc).Updates(map[string]any{"status": "image_ready", "error": "视频任务已确认取消；不会自动重新生成"})
+			changed = true
+		case "failed":
 			msg := task.Error
 			if msg == "" {
 				msg = task.Status

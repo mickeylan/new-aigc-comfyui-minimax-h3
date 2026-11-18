@@ -12,6 +12,13 @@ import (
 func newSheetGenerationService(t *testing.T) *ProjectService {
 	t.Helper()
 	ps := newTestProjectService(t)
+	// Each :memory: connection is a different database. Background Execute and
+	// assertions must share the migrated schema, rather than open an empty DB.
+	sqlDB, err := ps.db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(1)
 	if err := ps.db.AutoMigrate(&models.Template{}, &models.Setting{}, &models.Instance{}, &models.UploadFile{}); err != nil {
 		t.Fatal(err)
 	}

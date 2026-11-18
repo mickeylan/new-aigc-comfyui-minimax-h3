@@ -109,7 +109,7 @@
             </div>
           </div>
           <span class="badge" :class="badgeClass(t.status)">
-            <span class="dot" :class="{ pulse: t.status === 'running' }"></span>{{ statusText(t.status) }}
+            <span class="dot" :class="{ pulse: t.status === 'running' }"></span>{{ taskRecoveryText(t) || statusText(t.status) }}
           </span>
           <span class="task-gpu" v-if="t.gpu_index !== null">GPU {{ t.gpu_index }}</span>
         </router-link>
@@ -125,6 +125,7 @@
 <script setup>
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import { api } from '../api'
+import { taskRecoveryText } from '../utils/taskRecovery.js'
 import { useAppStore } from '../stores/app'
 
 const store = useAppStore()

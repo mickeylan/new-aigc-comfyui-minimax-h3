@@ -232,6 +232,35 @@ func (s *Service) HandlePreviewSceneBlockingPrompt(c *gin.Context) {
 	if !ok {
 		return
 	}
+	var draftRequest struct {
+		Blocking json.RawMessage `json:"blocking"`
+	}
+	if c.Request.ContentLength != 0 {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSceneBlockingBytes+4096)
+		if err := c.ShouldBindJSON(&draftRequest); err != nil {
+			c.JSON(400, gin.H{"error": "站位草稿格式错误或过大"})
+			return
+		}
+	}
+	var draft *SceneBlocking
+	sourceVersion := ""
+	if len(draftRequest.Blocking) > 0 {
+		value, err := normalizedBlockingDraft(scene, draftRequest.Blocking)
+		if err != nil {
+			c.JSON(409, gin.H{"error": err.Error()})
+			return
+		}
+		sourceVersion, err = s.blockingDraftSource(s.DB, scene)
+		if err != nil {
+			c.JSON(500, gin.H{"error": "读取预览来源失败"})
+			return
+		}
+		draft = &value
+		preview := *scene
+		preview.BlockingJSON = blockingJSON(value)
+		preview.BlockingContentHash = value.SourceContentHash
+		scene = &preview
+	}
 	if strings.TrimSpace(scene.BlockingJSON) == "" {
 		c.JSON(400, gin.H{"error": "请先保存人物站位"})
 		return
@@ -243,7 +272,11 @@ func (s *Service) HandlePreviewSceneBlockingPrompt(c *gin.Context) {
 	case "image":
 		prompt, err = s.Projects.RedesignSceneImagePrompt(scene)
 	case "video":
-		actionPrompt, err = s.Projects.GenerateSceneVideoAction(scene)
+		if draft != nil {
+			actionPrompt, err = s.Projects.generateVideoActionFromBlockingDraft(scene)
+		} else {
+			actionPrompt, err = s.Projects.GenerateSceneVideoAction(scene)
+		}
 		if err == nil {
 			var project models.Project
 			if err = s.DB.First(&project, scene.ProjectID).Error; err == nil {
@@ -263,7 +296,9 @@ func (s *Service) HandlePreviewSceneBlockingPrompt(c *gin.Context) {
 				prompt = compileH3PromptForTemplate(template, &preview, &project, dialogues, refLines)
 				var shots []models.Shot
 				_ = s.DB.Where("scene_id = ?", scene.ID).Order("order_num, id").Find(&shots).Error
-				shots = s.Projects.ensureShotDialogueRanges(scene.ID, shots)
+				if draft == nil {
+					shots = s.Projects.ensureShotDialogueRanges(scene.ID, shots)
+				}
 				prompt = normalizeSavedH3Audio(prompt, dialogues, refLines, shots)
 				prompt = applyAuthoritativeSceneShotTimeline(prompt, scene.Content)
 				prompt = s.Projects.applySceneShotTimeline(scene, prompt)
@@ -285,7 +320,7 @@ func (s *Service) HandlePreviewSceneBlockingPrompt(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{"prompt": prompt, "action_prompt": actionPrompt, "kind": kind, "blocking_hash": blockingDigest(scene.BlockingJSON), "persisted": false})
+	c.JSON(200, gin.H{"prompt": prompt, "action_prompt": actionPrompt, "kind": kind, "blocking_hash": blockingDigest(scene.BlockingJSON), "persisted": false, "blocking": draft, "source_version": sourceVersion})
 }
 
 // HandleApplySceneBlockingPrompt only persists the reviewed prompt and its exact blocking/prompt association.
@@ -295,17 +330,54 @@ func (s *Service) HandleApplySceneBlockingPrompt(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Prompt       string `json:"prompt"`
-		BlockingHash string `json:"blocking_hash"`
+		Prompt         string          `json:"prompt"`
+		BlockingHash   string          `json:"blocking_hash"`
+		Blocking       json.RawMessage `json:"blocking"`
+		SourceVersion  string          `json:"source_version"`
+		ConfirmReplace bool            `json:"confirm_replace"`
 	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 512<<10)
 	if c.ShouldBindJSON(&req) != nil || strings.TrimSpace(req.Prompt) == "" {
 		c.JSON(400, gin.H{"error": "提示词不能为空"})
 		return
+	}
+	var draft *SceneBlocking
+	originalUpdatedAt := scene.UpdatedAt
+	if len(req.Blocking) > 0 {
+		if !req.ConfirmReplace {
+			c.JSON(400, gin.H{"error": "请明确确认同时保存站位并替换对应提示词"})
+			return
+		}
+		value, err := normalizedBlockingDraft(scene, req.Blocking)
+		if err != nil {
+			c.JSON(409, gin.H{"error": err.Error()})
+			return
+		}
+		version, err := s.blockingDraftSource(s.DB, scene)
+		if err != nil {
+			c.JSON(500, gin.H{"error": "读取采用来源失败"})
+			return
+		}
+		if req.SourceVersion == "" || req.SourceVersion != version || req.BlockingHash != blockingDigest(blockingJSON(value)) {
+			c.JSON(409, gin.H{"error": "预览来源已变化，请保留草稿，重新生成预览后采用"})
+			return
+		}
+		draft = &value
+		scene.BlockingJSON = blockingJSON(value)
+		scene.BlockingContentHash = value.SourceContentHash
 	}
 	blockingMatches := strings.TrimSpace(scene.BlockingJSON) != "" && req.BlockingHash == blockingDigest(scene.BlockingJSON)
 	kind := c.Param("kind")
 	updates := map[string]any{}
 	response := gin.H{"prompt": req.Prompt, "kind": kind, "applied": blockingMatches}
+	if draft != nil {
+		updates["blocking_json"] = scene.BlockingJSON
+		updates["blocking_content_hash"] = scene.BlockingContentHash
+		updates["blocking_image_applied_hash"] = ""
+		updates["blocking_video_applied_hash"] = ""
+		updates["prompt_stale"] = true
+		response["blocking"] = draft
+	}
 	switch kind {
 	case "image":
 		updates["image_prompt"] = req.Prompt
@@ -330,7 +402,7 @@ func (s *Service) HandleApplySceneBlockingPrompt(c *gin.Context) {
 			response["warning"] = "人物站位已变化；完整执行稿仍已保存，但未标记为已应用当前站位"
 		}
 		if strings.TrimSpace(scene.VideoPromptMasterZH) != "" {
-			current, err := s.sceneVideoPromptSourceHash(scene)
+			current, err := s.sceneVideoPromptSourceHashWithPreparation(scene, draft == nil)
 			if err != nil {
 				c.JSON(500, gin.H{"error": err.Error()})
 				return
@@ -348,7 +420,36 @@ func (s *Service) HandleApplySceneBlockingPrompt(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "未知提示词类型"})
 		return
 	}
-	if err := s.DB.Model(&models.Scene{}).Where("id=? AND project_id=?", scene.ID, scene.ProjectID).Updates(updates).Error; err != nil {
+	conflict := false
+	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		query := tx.Model(&models.Scene{}).Where("id=? AND project_id=?", scene.ID, scene.ProjectID)
+		if draft != nil {
+			var current models.Scene
+			if err := tx.First(&current, scene.ID).Error; err != nil {
+				return err
+			}
+			version, err := s.blockingDraftSource(tx, &current)
+			if err != nil {
+				return err
+			}
+			if version != req.SourceVersion {
+				conflict = true
+				return fmt.Errorf("预览来源已变化")
+			}
+			query = query.Where("updated_at = ?", originalUpdatedAt)
+		}
+		result := query.Updates(updates)
+		if draft != nil && result.Error == nil && result.RowsAffected != 1 {
+			conflict = true
+			return fmt.Errorf("Scene已被修改")
+		}
+		return result.Error
+	})
+	if conflict {
+		c.JSON(409, gin.H{"error": "预览来源已变化，请保留草稿，重新准备后采用"})
+		return
+	}
+	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}

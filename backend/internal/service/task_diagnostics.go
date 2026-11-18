@@ -67,6 +67,8 @@ func (s *Service) HandleTaskDiagnostics(c *gin.Context) {
 		"task_id": task.TaskID, "status": task.Status, "progress": task.Progress,
 		"elapsed_ms": taskElapsedMS(&task, time.Now()), "created_at": task.CreatedAt,
 		"started_at": task.StartedAt, "finished_at": task.FinishedAt,
+		"submit_attempted_at": task.SubmitAttemptedAt, "provider_outcome": task.ProviderOutcome,
+		"last_reconciled_at": task.LastReconciledAt, "recovery_note": sanitizeDiagnosticText(task.RecoveryNote),
 		"provider_ids": gin.H{"template_id": task.TemplateID, "instance_id": task.InstanceID, "gpu_index": task.GPUIndex, "port": task.Port, "comfy_prompt_id": task.ComfyPromptID},
 		"current_node": task.CurrentNode, "error": sanitizeDiagnosticText(task.Error), "events": outEvents,
 	})

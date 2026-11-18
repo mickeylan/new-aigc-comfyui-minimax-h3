@@ -36,6 +36,13 @@ type frameConvertFixture struct {
 func newFrameConvertFixture(t *testing.T) frameConvertFixture {
 	t.Helper()
 	ps := newSheetGenerationService(t)
+	// :memory: is private to each SQLite connection. Background Execute and the
+	// next HTTP request must see the same migrated test database.
+	sqlDB, err := ps.db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(1)
 	if err := ps.db.AutoMigrate(&models.FrameCandidate{}, &models.SceneContinuity{}, &models.Skill{}, &models.ProjectSkillConfig{}, &models.SkillAuditLog{}); err != nil {
 		t.Fatal(err)
 	}

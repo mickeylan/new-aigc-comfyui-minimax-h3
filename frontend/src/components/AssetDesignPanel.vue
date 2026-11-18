@@ -19,8 +19,8 @@
     <DesignQuestions :kind="kind" :disabled="!!busy" @answer="applyAnswers" />
     <textarea v-model="ideas" class="textarea" rows="2" placeholder="我的想法：可留空，留空 = AI 做主" />
     <div class="asset-design-actions">
-      <button type="button" class="btn btn-sm" :disabled="busy" @click="runDraft">{{ busy === 'draft' ? 'AI 出稿中…' : drafts.length ? 'AI 重新出一稿' : 'AI 生成第一稿' }}</button>
-      <button type="button" class="btn btn-sm btn-secondary" :disabled="busy" @click="runOptions">{{ busy === 'options' ? '思考中…' : '先给我 3 个方向' }}</button>
+      <button type="button" class="btn btn-sm" :disabled="!!busy" @click="runDraft">{{ busy === 'draft' ? 'AI 出稿中…' : drafts.length ? 'AI 重新出一稿' : 'AI 生成第一稿' }}</button>
+      <button type="button" class="btn btn-sm btn-secondary" :disabled="!!busy" @click="runOptions">{{ busy === 'options' ? '思考中…' : '先给我 3 个方向' }}</button>
       <button type="button" class="btn btn-sm btn-ghost" :disabled="busy || !description.trim()" title="把下面描述框里手改过的内容放进稿子列表，之后可以在它基础上让 AI 改" @click="importDescription">描述框作为新稿</button>
     </div>
     <div v-if="options.length" class="asset-design-options">

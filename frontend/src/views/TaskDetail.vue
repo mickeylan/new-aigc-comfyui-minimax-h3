@@ -9,7 +9,7 @@
         <div class="task-meta">
           <span class="mono">{{ task.task_id }}</span>
           <span class="badge" :class="badgeClass(task.status)">
-            <span class="dot" :class="{ pulse: task.status === 'running' }"></span>{{ statusText(task.status) }}
+            <span class="dot" :class="{ pulse: task.status === 'running' }"></span>{{ taskRecoveryText(task) || statusText(task.status) }}
           </span>
           <span v-if="task.gpu_index !== null" class="badge badge-blue">GPU {{ task.gpu_index }} · 端口 {{ task.port }}</span>
           <span class="badge badge-gray">总耗时 {{ totalDuration }}</span>
@@ -17,8 +17,9 @@
       </div>
       <div class="head-actions">
         <button v-if="['pending','queued','running'].includes(task.status)" class="btn btn-danger"
-          @click="cancel">取消任务</button>
-        <button v-else-if="['failed','cancelled'].includes(task.status)" class="btn"
+          @click="cancel">请求停止</button>
+        <button class="btn btn-secondary" :disabled="checking" @click="reconcile">{{ checking ? '查询中…' : '查询/取回原任务' }}</button>
+        <button v-if="['failed','cancelled'].includes(task.status)" class="btn"
           @click="rerun">重新生成</button>
         <button v-if="task.status === 'success'" class="btn btn-secondary" @click="download">
           下载视频
@@ -26,6 +27,10 @@
       </div>
     </div>
 
+    <p v-if="!connected" role="status">实时连接已断开，显示可能过期；不代表生成失败。重连和刷新不会重新提交。</p>
+    <p v-if="task.recovery_note" role="status">{{ task.recovery_note }}</p>
+    <p v-if="loadError" role="alert">{{ loadError }}</p>
+    <p v-if="task.last_reconciled_at">最近核查：{{ task.last_reconciled_at }}</p>
     <!-- 生成结果（视频置顶全宽，最显眼）-->
     <div v-if="resultFiles.length" class="card result-card-top">
       <div v-for="(r, i) in resultFiles" :key="i" class="result-item">
@@ -58,7 +63,7 @@
           <span v-if="task.status === 'running' && task.current_node" class="progress-node">
             {{ nodeLabel(task.current_node) }}
           </span>
-          <span v-else class="progress-node">{{ statusText(task.status) }}</span>
+          <span v-else class="progress-node">{{ taskRecoveryText(task) || statusText(task.status) }}</span>
         </div>
       </div>
       <div v-if="task.error" class="error-box">
@@ -89,9 +94,10 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, wsUrl } from '../api'
+import { connectTaskUpdates, taskRecoveryText } from '../utils/taskRecovery.js'
 
 const route = useRoute()
 const task = ref(null)
@@ -152,8 +158,14 @@ const totalDuration = computed(() => formatDuration(
   task.value?.created_at,
   task.value?.finished_at || now.value
 ))
-let ws = null
+let stopUpdates = null
 let clock = null
+let disposed = false
+let loadEpoch = 0
+const connected = ref(false)
+const checking = ref(false)
+const loadError = ref('')
+watch(() => route.params.id, () => { task.value = null; load() })
 
 const nodeNames = {
   UNETLoader: '加载模型',
@@ -174,19 +186,28 @@ const nodeNames = {
 function nodeLabel(id) { return nodeNames[id] || id }
 
 async function load() {
-  const { data } = await api.task(route.params.id)
-  task.value = data
-  try { diagnostics.value = (await api.taskDiagnostics(route.params.id)).data } catch { diagnostics.value = null }
-  loadMediaInfo()
+  const id = route.params.id, epoch = ++loadEpoch
+  try {
+    const { data } = await api.task(id)
+    if (disposed || id !== route.params.id || epoch !== loadEpoch) return
+    task.value = data; loadError.value = ''; mediaInfo.value = {}; videoMeta.value = {}
+    try {
+      const result = await api.taskDiagnostics(id)
+      if (!disposed && id === route.params.id && epoch === loadEpoch) diagnostics.value = result.data
+    } catch { if (!disposed && id === route.params.id && epoch === loadEpoch) diagnostics.value = null }
+    if (!disposed && id === route.params.id && epoch === loadEpoch) loadMediaInfo()
+  } catch (err) { if (!disposed && id === route.params.id && epoch === loadEpoch) loadError.value = err.response?.data?.error || err.message }
 }
 
 // loadMediaInfo 查询每个结果文件的元数据（分辨率/时长/大小）
 async function loadMediaInfo() {
   const files = resultFiles.value
+  const id = route.params.id, snapshot = task.value, epoch = loadEpoch
   for (let i = 0; i < files.length; i++) {
     const r = files[i]
     try {
-      const { data } = await api.mediaInfo(task.value.gpu_index, (r.subfolder ? r.subfolder + '/' : '') + r.filename)
+      const { data } = await api.mediaInfo(snapshot.gpu_index, (r.subfolder ? r.subfolder + '/' : '') + r.filename)
+      if (disposed || route.params.id !== id || epoch !== loadEpoch) return
       mediaInfo.value[i] = data
     } catch (_) { /* 非视频/图片文件或查询失败时忽略 */ }
   }
@@ -236,13 +257,22 @@ function download() {
 }
 
 async function cancel() {
-  if (!confirm('确定取消该任务？')) return
-  await api.cancelTask(task.value.task_id)
-  load()
+  if (!confirm('请求停止该任务？上游未确认前仍会接收原任务结果，不会盲目中断共享实例。')) return
+  const id = task.value.task_id
+  try { await api.cancelTask(id); if (route.params.id === id) await load() } catch (err) { alert(err.response?.data?.error || err.message) }
 }
 async function rerun() {
-  await api.rerunTask(task.value.task_id)
-  load()
+  if (!confirm('将创建新的生成任务，可能产生费用。确定重试？')) return
+  const id = task.value.task_id
+  try { await api.rerunTask(id); if (route.params.id === id) await load() } catch (err) { alert(err.response?.data?.error || err.message) }
+}
+async function reconcile() {
+  if (checking.value || !task.value) return
+  const id = task.value.task_id
+  checking.value = true
+  try { await api.reconcileTask(id); if (!disposed && route.params.id === id) await load() }
+  catch (err) { if (!disposed && route.params.id === id) loadError.value = err.response?.data?.error || err.message }
+  finally { checking.value = false }
 }
 
 function badgeClass(s) {
@@ -275,18 +305,18 @@ function formatDuration(startValue, endValue) {
 onMounted(() => {
   load()
   clock = setInterval(() => { now.value = Date.now() }, 1000)
-  ws = new WebSocket(wsUrl())
-  ws.onmessage = (e) => {
+  stopUpdates = connectTaskUpdates({ url: wsUrl, reload: load, onConnection: value => { connected.value = value }, onMessage: (e) => {
     try {
       const msg = JSON.parse(e.data)
-      if (msg.type === 'task_update' && msg.data.task_id === route.params.id) {
+      if (msg.type === 'task_update' && task.value && msg.data.task_id === route.params.id) {
         Object.assign(task.value, msg.data)
       }
     } catch (_) {}
-  }
+  } })
 })
 onBeforeUnmount(() => {
-  if (ws) ws.close()
+  disposed = true; loadEpoch++
+  if (stopUpdates) stopUpdates()
   if (clock) clearInterval(clock)
 })
 </script>

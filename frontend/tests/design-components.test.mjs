@@ -7,27 +7,48 @@ const require = createRequire(new URL('../package.json', import.meta.url))
 const { parse, compileScript } = require('@vue/compiler-sfc')
 const { createRenderer, reactive, nextTick } = require('vue')
 
-async function component(name) {
+async function component(name, renderTemplate = false) {
   const url = new URL(`../src/components/${name}.vue`, import.meta.url)
   const { descriptor } = parse(fs.readFileSync(url, 'utf8'))
-  let source = compileScript(descriptor, { id: name }).content
+  let source = compileScript(descriptor, { id: name, inlineTemplate: renderTemplate }).content
   source = source.replace(/from ['"]vue['"]/g, `from '${pathToFileURL(require.resolve('vue/dist/vue.runtime.esm-bundler.js')).href}'`)
     .replace(/import \{ api \} from ['"]\.\.\/api['"]/g, 'const api = new Proxy({}, { get: (_, key) => (...args) => globalThis.__designTestAPI[key](...args) })')
     .replace(/import DesignQuestions from [^\n]+/g, 'const DesignQuestions = {}')
     .replace(/from ['"](\.\.\/utils\/[^'"]+)['"]/g, (_, path) => `from '${new URL(path, url).href}'`)
   const module = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
-  return { ...module.default, render: () => null }
+  return renderTemplate ? module.default : { ...module.default, render: () => null }
 }
 const renderer = createRenderer({
-  createElement: () => ({ children: [] }), createText: text => ({ text }), createComment: () => ({}),
-  setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null,
-  insert(child, parent) { parent.children.push(child) }, remove() {}
+  createElement: tag => ({ tag, tagName: tag.toUpperCase(), children: [], props: {}, options: [], addEventListener() {}, setAttribute() {}, removeAttribute() {} }), createText: text => ({ text }), createComment: () => ({}),
+  setText(node, text) { node.text = text }, setElementText(node, text) { node.text = text }, patchProp(node, key, old, value) { node.props[key] = value }, parentNode: node => node.parent || null, nextSibling: () => null,
+  insert(child, parent) { child.parent = parent; parent.children.push(child) }, remove(node) { if (node.parent) node.parent.children = node.parent.children.filter(child => child !== node) }
 })
 function mount(Component, props) {
   const app = renderer.createApp(Component, props)
   const instance = app.mount({ children: [] })
   return { state: instance.$.setupState, app }
 }
+
+test('真实模板的两个AI入口空闲可点击、请求中禁用、完成后恢复', async () => {
+  let finish
+  globalThis.__designTestAPI = { assetDesign: () => new Promise(resolve => { finish = resolve }) }
+  const Component = await component('AssetDesignPanel', true)
+  const root = { children: [] }
+  const app = renderer.createApp(Component, { projectId: 1, kind: 'prop', name: '玉佩' })
+  app.config.warnHandler = () => {} // The question child is intentionally stubbed in this focused render.
+  app.mount(root)
+  const nodes = node => [node, ...(node.children || []).flatMap(nodes)]
+  const buttons = () => nodes(root).filter(node => node.tag === 'button' && /AI 生成第一稿|AI 出稿中|先给我 3 个方向|思考中/.test(node.text || ''))
+  assert.equal(buttons().length, 2)
+  assert.ok(buttons().every(button => button.props.disabled === false))
+  buttons()[0].props.onClick()
+  await nextTick()
+  assert.ok(buttons().every(button => button.props.disabled === true))
+  finish({ data: { description: '测试稿', sources: [], changes: [] } })
+  await new Promise(resolve => setTimeout(resolve, 0)); await nextTick()
+  assert.ok(buttons().every(button => button.props.disabled === false))
+  app.unmount()
+})
 
 test('角色草稿先预览、不修改表单；采用只改所选字段，支持撤销，手工编辑使旧稿失效', async () => {
   let submitted

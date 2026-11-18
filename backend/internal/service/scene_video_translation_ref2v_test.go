@@ -98,7 +98,7 @@ func TestDefaultRef2VTranslationUsesActualReferenceFileOrder(t *testing.T) {
 	}
 }
 
-func TestDefaultRef2VSourceChangesDoNotBlockReviewedEnglishSave(t *testing.T) {
+func TestDefaultRef2VSourceChangesRejectObsoletePreviewAdoption(t *testing.T) {
 	mutations := map[string]func(*translationHTTPFixture){
 		"reference order": func(f *translationHTTPFixture) {
 			var refs []SceneReferenceSelection
@@ -128,8 +128,15 @@ func TestDefaultRef2VSourceChangesDoNotBlockReviewedEnglishSave(t *testing.T) {
 			mutate(f)
 			body, _ := json.Marshal(map[string]any{"exec_prompt": bilingualRef2VEnglish, "source_hash": oldHash})
 			w := translationRequest(f.svc, http.MethodPost, f.p.ID, f.sc.ID, "/confirm", string(body))
-			if w.Code != http.StatusOK {
-				t.Fatalf("source change blocked reviewed English save status=%d %s", w.Code, w.Body.String())
+			if w.Code != http.StatusConflict {
+				t.Fatalf("obsolete reference preview must conflict status=%d %s", w.Code, w.Body.String())
+			}
+			var current models.Scene
+			if err := f.db.First(&current, f.sc.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if current.VideoFullPrompt != f.sc.VideoFullPrompt || current.VideoFile != f.sc.VideoFile {
+				t.Fatal("obsolete preview overwrote reviewed prompt or media")
 			}
 		})
 	}

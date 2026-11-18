@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -14,9 +15,15 @@ import (
 )
 
 type generationSnapshotRef struct {
-	Role   string `json:"role"`
-	File   string `json:"file"`
-	SHA256 string `json:"sha256"`
+	Role           string `json:"role"`
+	File           string `json:"file"`
+	SHA256         string `json:"sha256"`
+	SchemaVersion  int    `json:"schema_version,omitempty"`
+	Order          int    `json:"order,omitempty"`
+	SourceType     string `json:"source_type,omitempty"`
+	SourceID       uint   `json:"source_id,omitempty"`
+	Variant        string `json:"variant,omitempty"`
+	AssetVariantID uint   `json:"asset_variant_id,omitempty"`
 }
 
 func sha256Hex(data []byte) string {
@@ -53,10 +60,26 @@ func (s *ProjectService) recordGenerationSnapshot(sc *models.Scene, kind string,
 		roles = append(roles, role)
 	}
 	sort.Strings(roles)
+	identities := map[string]SceneReferenceSelection{}
+	selected, _ := parseSceneReferences(sc)
+	byKey := map[string]SceneReferenceCandidate{}
+	for _, c := range s.sceneReferenceCandidates(sc) {
+		byKey[c.Key] = c
+	}
+	for _, r := range selected {
+		if c, ok := byKey[referenceKey(r)]; ok {
+			f := candidateFileMeta(sc.ProjectID, c)
+			if c.CoveredImage != "" {
+				f = FileMeta{TaskID: fmt.Sprint(sc.ProjectID), Name: c.CoveredImage}
+			}
+			identities[f.TaskID+"/"+f.Name] = r
+		}
+	}
 	refs := []generationSnapshotRef{}
 	for _, role := range roles {
-		for _, ref := range files[role] {
-			refs = append(refs, generationSnapshotRef{Role: role, File: ref.TaskID + "/" + ref.Name, SHA256: s.fileSHA256(ref)})
+		for i, ref := range files[role] {
+			identity := identities[ref.TaskID+"/"+ref.Name]
+			refs = append(refs, generationSnapshotRef{SchemaVersion: 2, Order: i + 1, SourceType: identity.SourceType, SourceID: identity.SourceID, Variant: identity.Variant, AssetVariantID: identity.AssetVariantID, Role: role, File: ref.TaskID + "/" + ref.Name, SHA256: s.fileSHA256(ref)})
 		}
 	}
 	refsJSON, _ := json.Marshal(refs)

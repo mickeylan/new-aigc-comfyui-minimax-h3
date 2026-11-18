@@ -20,6 +20,10 @@ type SceneReferenceSelection struct {
 	UseKrea2       bool   `json:"use_krea2"`
 	UseH3          bool   `json:"use_h3"`
 	BindCharacter  string `json:"bind_character,omitempty"`
+	BindingVersion int    `json:"binding_version,omitempty"`
+	BoundFile      string `json:"bound_file,omitempty"`
+	BoundSHA256    string `json:"bound_sha256,omitempty"`
+	InvalidReason  string `json:"invalid_reason,omitempty"`
 }
 
 type SceneReferenceCandidate struct {
@@ -306,8 +310,10 @@ func (s *ProjectService) SaveSceneReferences(sc *models.Scene, refs []SceneRefer
 	refs = s.normalizeSceneReferences(sc.ProjectID, refs)
 	candidates := s.sceneReferenceCandidates(sc)
 	allowed := make(map[string]bool, len(candidates))
+	byKey := make(map[string]SceneReferenceCandidate, len(candidates))
 	for _, c := range candidates {
 		allowed[c.Key] = true
+		byKey[c.Key] = c
 	}
 	allowedBindings := map[string]bool{}
 	for _, raw := range []string{sc.Characters, sc.VisibleCharacters, sc.VoiceCharacters, sc.MentionedCharacters} {
@@ -327,6 +333,15 @@ func (s *ProjectService) SaveSceneReferences(sc *models.Scene, refs []SceneRefer
 			return fmt.Errorf("参考图重复: %s", key)
 		}
 		seen[key] = true
+		if ref.BindingVersion > 0 {
+			if issue := s.referenceBindingIssue(sc.ProjectID, ref, byKey[key], true); issue != "" {
+				return fmt.Errorf("参考图%s失效：%s", key, issue)
+			}
+		} else {
+			// Explicitly saving upgrades legacy/new picks to reviewed-byte bindings.
+			refs[i] = s.bindSceneReference(sc.ProjectID, refs[i], byKey[key])
+		}
+		refs[i].InvalidReason = ""
 		if ref.BindCharacter != "" {
 			if ref.SourceType != "character" && ref.SourceType != "look" && ref.SourceType != "outfit" {
 				return fmt.Errorf("只有人物、造型或套装参考图可以绑定角色: %s", key)
