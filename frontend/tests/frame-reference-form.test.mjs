@@ -8,11 +8,14 @@ const api = readFileSync(new URL('../src/api/index.js', import.meta.url), 'utf8'
 test('续接模式提供 原图/白模/线稿 参考形式，转换结果另存、原尾帧不变', () => {
   assert.match(source, /参考形式：/)
   assert.match(source, /<option value="original">原图<\/option>/)
-  assert.match(source, /<option value="clay">白模<\/option>/)
-  assert.match(source, /<option value="lineart">线稿<\/option>/)
-  // The option only exists for continue mode; bridge mode always uses the original frame.
-  assert.match(source, /v-if="mode === 'continue_from_previous' && selectedOutput"/)
-  assert.match(source, /payload\.reference_form = mode\.value === 'continue_from_previous' \? referenceForm\.value : 'original'/)
+  assert.match(source, /<option v-if="mode === 'continue_from_previous'" value="clay">白模<\/option>/)
+  assert.match(source, /<option v-if="mode === 'continue_from_previous'" value="lineart">线稿<\/option>/)
+  // Clay/lineart remain continue-only; HD is available in every generation mode.
+  assert.match(source, /<section v-if="sourceSceneId" class="block">/)
+  assert.match(source, /<div v-if="selectedOutput" class="form-block">/)
+  assert.match(source, /payload\.reference_form = referenceForm\.value/)
+  assert.match(source, /watch\(mode/)
+  assert.match(source, /\['clay', 'lineart'\]\.includes\(referenceForm\.value\)/)
   assert.match(source, /原尾帧保持不变/)
   assert.match(source, /不作为开始画面/)
 })

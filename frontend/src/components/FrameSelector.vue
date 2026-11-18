@@ -14,9 +14,10 @@
       <div v-if="continuity?.status === 'source_invalidated'" class="warning">上一镜视频已变化，请重新选择末尾帧并保存。</div>
     </section>
 
-    <section v-if="mode !== 'independent' && sourceSceneId" class="block">
+    <section v-if="sourceSceneId" class="block">
       <h4>选择第{{ sourceSceneOrder }}镜的末尾帧</h4>
-      <p class="hint">这里展示的是上一镜视频末尾约1秒的22帧候选。选中的图片将作为当前第{{ sceneOrder }}镜的起始衔接帧。标「推荐」的是清晰度最高且未渐黑的一帧，仅供参考，请以画面内容为准。</p>
+      <p v-if="mode === 'independent'" class="hint">独立生成也可选帧和超分，但不会自动把选定帧用于本镜视频。</p>
+      <p class="hint">这里展示的是上一镜视频末尾约1秒的22帧候选。续接或首尾桥接时，选中的图片将作为当前第{{ sceneOrder }}镜的起始衔接帧。标「推荐」的是清晰度最高且未渐黑的一帧，仅供参考，请以画面内容为准。</p>
       <p v-if="!sourceVideoReady" class="warning">第{{ sourceSceneOrder }}镜视频尚未完成，请先生成上一镜视频。</p>
       <div v-else class="actions"><button class="btn btn-sm" :disabled="loading" @click="extract">{{ loading ? '提取中…' : '重新提取上一镜末尾22帧' }}</button></div>
       <div v-if="frames.length" class="frame-grid">
@@ -31,21 +32,21 @@
         <span>已选上一镜末尾帧：{{ selectedOutput.source === 'manual_upload' ? '用户高清替换图' : timeLabel(selectedOutput.timestamp_ms) }}</span>
         <label class="btn btn-sm btn-secondary">上传高清图替换<input hidden type="file" accept="image/png,image/jpeg,image/webp" @change="replaceFrame" /></label>
       </div>
-      <div v-if="mode === 'continue_from_previous' && selectedOutput" class="form-block">
+      <div v-if="selectedOutput" class="form-block">
         <div class="form-row">
           <span>参考形式：</span>
           <select v-model="referenceForm" class="input form-select">
             <option value="original">原图</option>
-            <option value="clay">白模</option>
-            <option value="lineart">线稿</option>
+            <option v-if="mode === 'continue_from_previous'" value="clay">白模</option>
+            <option v-if="mode === 'continue_from_previous'" value="lineart">线稿</option>
             <option value="hd">高清（VOSR2 超分）</option>
           </select>
           <button v-if="referenceForm !== 'original'" class="btn btn-sm btn-secondary" :disabled="converting || !!selectedOutput.convert_task_id" @click="convert">{{ selectedOutput.convert_task_id ? '转换中…' : (derivedFor(referenceForm) ? `重新生成${formLabels[referenceForm]}` : `生成${formLabels[referenceForm]}`) }}</button>
         </div>
-        <p v-if="referenceForm === 'hd'" class="hint">在 ComfyUI 中用 VOSR2 把尾帧放大到长边 2048，仍是本镜 0.00 秒的开始画面。生成式超分可能补出原图没有的细节，请核对人脸和服装。结果另存，原尾帧保持不变。</p>
+        <p v-if="referenceForm === 'hd'" class="hint">在 ComfyUI 中用 VOSR2 把尾帧放大到长边 2048。续接或首尾桥接时，高清结果仍是本镜 0.00 秒的开始画面；独立生成不会自动引用。生成式超分可能补出原图没有的细节，请核对人脸和服装。结果另存，原尾帧保持不变。</p>
         <p v-else-if="referenceForm !== 'original'" class="hint">{{ formLabels[referenceForm] }}只约束人物姿势、站位、遮挡和场景几何，不作为开始画面；视频从0秒起仍是完整彩色画面。转换结果另存，原尾帧保持不变。</p>
         <img v-if="referenceForm !== 'original' && derivedFor(referenceForm)" class="derived-preview" :src="derivedFor(referenceForm).image_url" :alt="`尾帧${formLabels[referenceForm]}`" />
-        <p v-else-if="referenceForm !== 'original' && !selectedOutput.convert_task_id" class="warning">尚无{{ formLabels[referenceForm] }}结果，生成前无法提交本镜视频。</p>
+        <p v-else-if="mode !== 'independent' && referenceForm !== 'original' && !selectedOutput.convert_task_id" class="warning">尚无{{ formLabels[referenceForm] }}结果，生成前无法提交本镜视频。</p>
         <p v-if="selectedOutput.convert_error" class="warning">上次转换失败：{{ selectedOutput.convert_error }}</p>
       </div>
     </section>
@@ -56,7 +57,7 @@
 </template>
 
 <script setup>
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { api } from '../api'
 
 const props = defineProps({
@@ -80,6 +81,9 @@ const referenceForm = ref('original')
 const converting = ref(false)
 const formLabels = { clay: '白模', lineart: '线稿', hd: '高清图' }
 let pollTimer = null
+watch(mode, value => {
+  if (value !== 'continue_from_previous' && ['clay', 'lineart'].includes(referenceForm.value)) referenceForm.value = 'original'
+})
 
 async function load() {
   error.value = ''
@@ -166,7 +170,7 @@ async function saveMode(openPrompt) {
     if (mode.value !== 'independent') {
       payload.source_scene_id = props.sourceSceneId
       if (selectedFrameId.value) payload.frame_id = selectedFrameId.value
-      payload.reference_form = mode.value === 'continue_from_previous' ? referenceForm.value : 'original'
+      payload.reference_form = referenceForm.value
     }
     continuity.value = (await api.configureContinuity(props.projectId, props.sceneId, payload)).data.continuity
     emit('applied', continuity.value, openPrompt)

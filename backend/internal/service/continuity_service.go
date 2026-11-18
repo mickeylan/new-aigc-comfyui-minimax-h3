@@ -273,7 +273,7 @@ type ConfigureContinuityRequest struct {
 	SourceMode    string `json:"source_mode"`
 	SourceSceneID uint   `json:"source_scene_id"`
 	FrameID       uint   `json:"frame_id"`
-	// ReferenceForm selects original/clay/lineart for the selected tail frame (continue mode only).
+	// ReferenceForm selects original/hd for opening frames; clay/lineart are continue-only.
 	ReferenceForm string `json:"reference_form"`
 }
 
@@ -381,7 +381,18 @@ func (s *ContinuityService) PrepareScene(scene *models.Scene) error {
 		return fmt.Errorf("上一镜视频或衔接帧已失效，请重新选择")
 	}
 	if cfg.Mode == models.ContinuityModeBridge {
-		scene.VideoTemplate, scene.VideoFirstFrameImg, scene.VideoLastFrameImg = "minimax_h3_first_last", cfg.SelectedFrame.ImageFile, scene.ImageFile
+		openingFile := cfg.SelectedFrame.ImageFile
+		if cfg.ReferenceForm == FrameReferenceHD {
+			derived, err := s.DerivedReference(cfg.SelectedFrame, FrameReferenceHD)
+			if err != nil {
+				return err
+			}
+			if derived == nil {
+				return fmt.Errorf("已选择高清首帧，但当前尾帧尚无高清结果，请先超分或改用原图")
+			}
+			openingFile = derived.ImageFile
+		}
+		scene.VideoTemplate, scene.VideoFirstFrameImg, scene.VideoLastFrameImg = "minimax_h3_first_last", openingFile, scene.ImageFile
 	} else {
 		if form := cfg.ReferenceForm; form == FrameReferenceClay || form == FrameReferenceLineart || form == FrameReferenceHD {
 			if derived, err := s.DerivedReference(cfg.SelectedFrame, form); err != nil {

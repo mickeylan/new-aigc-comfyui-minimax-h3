@@ -565,6 +565,14 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 			if continuity.Mode == models.ContinuityModeBridge && !sceneExplicitlyRequiresCombatTemplate(sc) {
 				response["template"] = "minimax_h3_first_last"
 				response["first_frame_img"] = continuity.SelectedFrame.ImageFile
+				if continuity.ReferenceForm == FrameReferenceHD {
+					// Never let opening the editor silently replace the selected HD input
+					// with its original low-resolution source.
+					response["first_frame_img"] = ""
+					if derived, err := s.Projects.continuity.DerivedReference(continuity.SelectedFrame, FrameReferenceHD); err == nil && derived != nil {
+						response["first_frame_img"] = derived.ImageFile
+					}
+				}
 				response["last_frame_img"] = sc.ImageFile
 			}
 		}

@@ -4762,7 +4762,7 @@ func h3SoundscapeContractForDialogues(dubs []models.Dialogue) string {
 }
 
 func h3NoMusicContract() string {
-	return "No non-diegetic music. No background music, score, soundtrack, melody, instrumental music, vocal music, or musical ambience at any point."
+	return "N/A"
 }
 
 func isNarrationSpeaker(name string) bool {
@@ -5603,7 +5603,8 @@ func videoAudioContractMatches(fullPrompt string, dubs []models.Dialogue) bool {
 	valid := validSceneDialogues(dubs)
 	soundscape := h3PromptSection(fullPrompt, "overall_soundscape:")
 	music := strings.ToLower(h3PromptSection(fullPrompt, "non_diegetic_music:"))
-	if !strings.Contains(music, "no non-diegetic music") || !strings.Contains(music, "no background music") {
+	// Accept the canonical N/A and previously saved explicit no-music clauses.
+	if music != "n/a" && (!strings.Contains(music, "no non-diegetic music") || !strings.Contains(music, "no background music")) {
 		return false
 	}
 	if strings.Contains(soundscape, "<d>") || strings.Contains(soundscape, "</d>") {

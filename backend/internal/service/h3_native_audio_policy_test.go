@@ -12,7 +12,7 @@ func TestSilentH3SceneUsesPromptPolicyWithoutDestructivePostprocessing(t *testin
 			t.Fatalf("silent-scene prompt contract missing %q: %s", want, contract)
 		}
 	}
-	if !strings.Contains(h3NoMusicContract(), "No background music") {
+	if h3NoMusicContract() != "N/A" {
 		t.Fatalf("no-music prompt contract missing: %s", h3NoMusicContract())
 	}
 }

@@ -362,9 +362,11 @@ func normalizeFrameReferenceForm(form, mode string) (string, error) {
 	switch strings.TrimSpace(form) {
 	case "", FrameReferenceOriginal:
 		return FrameReferenceOriginal, nil
-	case FrameReferenceClay, FrameReferenceLineart, FrameReferenceHD:
+	case FrameReferenceHD:
+		return FrameReferenceHD, nil
+	case FrameReferenceClay, FrameReferenceLineart:
 		if mode != models.ContinuityModeContinue {
-			return "", fmt.Errorf("白模、线稿和高清参考只用于「从上一镜末尾帧继续」；首尾桥接必须使用原图")
+			return "", fmt.Errorf("白模和线稿参考只用于「从上一镜末尾帧继续」")
 		}
 		return strings.TrimSpace(form), nil
 	}

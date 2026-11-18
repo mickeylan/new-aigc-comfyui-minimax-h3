@@ -104,8 +104,8 @@ func TestApplyFrameUpscaleResizesToLongEdgeAndStaysOpeningFrame(t *testing.T) {
 	pid := fmt.Sprint(f.source.ProjectID)
 	current := models.Scene{ProjectID: f.source.ProjectID, EpisodeN: 1, Generation: 1, Order: 2, ImageFile: "story.png", StoryboardVideoRole: "start"}
 	f.ps.db.Create(&current)
-	if _, err := f.ps.continuity.Configure(current.ProjectID, current.ID, ConfigureContinuityRequest{Mode: models.ContinuityModeBridge, SourceSceneID: f.source.ID, FrameID: f.frame.ID, ReferenceForm: FrameReferenceHD}); err == nil {
-		t.Fatal("bridge mode must reject the hd reference form")
+	if _, err := f.ps.continuity.Configure(current.ProjectID, current.ID, ConfigureContinuityRequest{Mode: models.ContinuityModeBridge, SourceSceneID: f.source.ID, FrameID: f.frame.ID, ReferenceForm: FrameReferenceHD}); err != nil {
+		t.Fatalf("bridge mode must accept the hd reference form: %v", err)
 	}
 	if _, err := f.ps.continuity.Configure(current.ProjectID, current.ID, ConfigureContinuityRequest{Mode: models.ContinuityModeContinue, SourceSceneID: f.source.ID, FrameID: f.frame.ID, ReferenceForm: FrameReferenceHD}); err != nil {
 		t.Fatal(err)
@@ -147,6 +147,27 @@ func TestApplyFrameUpscaleResizesToLongEdgeAndStaysOpeningFrame(t *testing.T) {
 	}
 	if tag := openingPictureTag(lines); tag != "<Picture 1>" {
 		t.Fatalf("opening tag=%q", tag)
+	}
+	if _, err := f.ps.continuity.Configure(current.ProjectID, current.ID, ConfigureContinuityRequest{Mode: models.ContinuityModeBridge, SourceSceneID: f.source.ID, FrameID: f.frame.ID, ReferenceForm: FrameReferenceHD}); err != nil {
+		t.Fatal(err)
+	}
+	var bridge models.Scene
+	f.ps.db.First(&bridge, current.ID)
+	if err := f.ps.continuity.PrepareScene(&bridge); err != nil {
+		t.Fatal(err)
+	}
+	if bridge.VideoTemplate != "minimax_h3_first_last" || bridge.VideoFirstFrameImg != derived.ImageFile || bridge.VideoLastFrameImg != "story.png" {
+		t.Fatalf("bridge must use hd opening and current storyboard ending: %+v", bridge)
+	}
+	if _, err := f.ps.continuity.Configure(current.ProjectID, current.ID, ConfigureContinuityRequest{Mode: models.ContinuityModeIndependent, ReferenceForm: FrameReferenceHD}); err != nil {
+		t.Fatal(err)
+	}
+	independent := models.Scene{ID: current.ID, VideoTemplate: "minimax_h3_ref2v"}
+	if err := f.ps.continuity.PrepareScene(&independent); err != nil {
+		t.Fatal(err)
+	}
+	if independent.VideoTemplate != "minimax_h3_ref2v" || independent.VideoFirstFrameImg != "" || independent.VideoLastFrameImg != "" {
+		t.Fatal("independent mode must not automatically bind an upscaled frame")
 	}
 }
 
