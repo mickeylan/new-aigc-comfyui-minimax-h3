@@ -13,20 +13,28 @@ import (
 
 var errSheetActive = errors.New("四视图正在生成")
 
-func characterFootwear(project *models.Project, ch *models.Character) string {
+// classicalChineseSetting 判断项目或角色是否为中国古典题材（修仙、仙侠、武侠等）。
+func classicalChineseSetting(project *models.Project, ch *models.Character) bool {
 	context := strings.Join([]string{project.Genre, project.Style, project.Synopsis, ch.Role, ch.Appearance, ch.WardrobeDetail}, "，")
+	for _, keyword := range []string{"修仙", "仙侠", "古典", "古代", "国风", "武侠", "汉服", "宗门", "朝代", "中国古"} {
+		if strings.Contains(context, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func characterFootwear(project *models.Project, ch *models.Character) string {
 	for _, word := range []string{"鞋", "靴", "履", "木屐", "凉鞋", "高跟"} {
 		if strings.Contains(ch.WardrobeDetail, word) {
 			return strings.TrimSpace(ch.WardrobeDetail)
 		}
 	}
-	for _, keyword := range []string{"修仙", "仙侠", "古典", "古代", "国风", "武侠", "汉服", "宗门", "朝代", "中国古"} {
-		if strings.Contains(context, keyword) {
-			if strings.Contains(ch.Appearance+ch.Role, "女") {
-				return "与服装主色一致的中式软底云头绣鞋（包头、平底、非露趾）"
-			}
-			return "与服装主色一致的中式云纹皂靴（包头、平底）"
+	if classicalChineseSetting(project, ch) {
+		if strings.Contains(ch.Appearance+ch.Role, "女") {
+			return "与服装主色一致的中式软底云头绣鞋（包头、平底、非露趾）"
 		}
+		return "与服装主色一致的中式云纹皂靴（包头、平底）"
 	}
 	return "与完整服装和时代背景一致的包头鞋履"
 }

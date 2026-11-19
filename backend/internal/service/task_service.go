@@ -324,6 +324,24 @@ func (s *TaskService) RenderWorkflow(tpl *models.Template, params map[string]any
 	if err := json.Unmarshal([]byte(tpl.WorkflowJSON), &nodes); err != nil {
 		return nil, fmt.Errorf("模板 JSON 解析失败: %w", err)
 	}
+	// 模板后来新增的参数（如 use_aspect_ratio）在旧任务快照里没有；只在占位符缺参数时用模板默认值兜底，
+	// 不改变 seed、length 等已有参数的推导。
+	defaults := map[string]any{}
+	var declared []TemplateInput
+	if err := json.Unmarshal([]byte(tpl.InputsJSON), &declared); err == nil {
+		for _, input := range declared {
+			if !fileInputTypes[input.Type] && input.Default != nil {
+				defaults[input.Key] = input.Default
+			}
+		}
+	}
+	paramOrDefault := func(key string) (any, bool) {
+		if v, ok := params[key]; ok {
+			return v, true
+		}
+		v, ok := defaults[key]
+		return v, ok
+	}
 
 	// 时长(秒) -> 帧数, 对齐 17k+5 网格 (与 ComfyUI align_frame_count 一致)
 	if _, ok := params["length"]; !ok {
@@ -361,6 +379,14 @@ func (s *TaskService) RenderWorkflow(tpl *models.Template, params map[string]any
 		if !ok {
 			return val
 		}
+		// 整个值就是一个布尔参数占位符时保留 JSON 布尔类型：ComfyUI 校验 BOOLEAN 输入时按 bool(val) 转换，字符串 "false" 会被当成 true。
+		if m := placeholderRe.FindStringSubmatch(str); m != nil && m[0] == str {
+			if v, _ := paramOrDefault(m[1]); v != nil {
+				if b, ok := v.(bool); ok {
+					return b
+				}
+			}
+		}
 		replaced := placeholderRe.ReplaceAllStringFunc(str, func(m string) string {
 			inner := m[2 : len(m)-2]
 			if fileKeyRe.FindStringSubmatch(inner) != nil {
@@ -369,7 +395,7 @@ func (s *TaskService) RenderWorkflow(tpl *models.Template, params map[string]any
 			if inner == "task_id" {
 				return fmt.Sprint(params["_task_id"])
 			}
-			v, ok := params[inner]
+			v, ok := paramOrDefault(inner)
 			if !ok {
 				if missingErr == nil {
 					missingErr = fmt.Errorf("缺少参数 %s", inner)

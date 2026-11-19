@@ -896,3 +896,31 @@ func TestRemoteLocalRoots(t *testing.T) {
 		t.Fatalf("本地 Stat 失败: %v %v", fi, err)
 	}
 }
+
+// Qwen 多图编辑的画布开关：默认（含旧任务快照缺参数）跟随参考图，四视图打开后按 aspect_ratio 出图；
+// 渲染结果必须是 JSON 布尔值，字符串 "false" 会被 ComfyUI 当成 true。
+func TestQwenMultiEditCanvasSwitchRendersAsBool(t *testing.T) {
+	tpl := loadTemplateForTest(t, "qwen_image_2_1_multi_edit.json")
+	for _, tc := range []struct {
+		name   string
+		params map[string]any
+		want   bool
+	}{
+		{name: "legacy snapshot without the switch", params: map[string]any{}, want: false},
+		{name: "explicit off", params: map[string]any{"use_aspect_ratio": false}, want: false},
+		{name: "four-view sheet", params: map[string]any{"use_aspect_ratio": true}, want: true},
+	} {
+		params := map[string]any{"prompt": "<image1>", "ref_image_0": "face.png"}
+		for k, v := range tc.params {
+			params[k] = v
+		}
+		workflow, err := (&TaskService{}).RenderWorkflow(&tpl, params)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		got := workflow["459:468"].(map[string]any)["inputs"].(map[string]any)["switch"]
+		if b, ok := got.(bool); !ok || b != tc.want {
+			t.Fatalf("%s: switch=%#v, want bool %v", tc.name, got, tc.want)
+		}
+	}
+}

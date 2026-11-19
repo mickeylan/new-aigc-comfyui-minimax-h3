@@ -272,3 +272,47 @@ func TestStartCharacterPortraitKeepsExistingSheet(t *testing.T) {
 		t.Fatalf("regenerating the optional portrait must not clear the sheet: %+v", saved)
 	}
 }
+
+// 四视图人物描述与角色档案走同一套通用角色 Skill（与出图模型无关）；成年女性用美术增强 Skill，并写审计。
+func TestGenerateSheetPromptUsesProjectCharacterSkill(t *testing.T) {
+	ps := newSheetGenerationService(t)
+	if err := ps.db.AutoMigrate(&models.Skill{}, &models.ProjectSkillConfig{}, &models.SkillAuditLog{}); err != nil {
+		t.Fatal(err)
+	}
+	skills := NewSkillService(ps.db)
+	if err := skills.InitSystemSkills(); err != nil {
+		t.Fatal(err)
+	}
+	ch := createSheetCharacter(t, ps, "", "")
+	var project models.Project
+	ps.db.First(&project, ch.ProjectID)
+	provider := &captureTextProvider{response: "女性，22岁，乌黑长发梳成垂鬟分肖髻，白色交领仙裙、银色腰封"}
+	profiles := NewCharacterProfileService(ps.db, provider)
+	profiles.skills = skills
+	if _, err := profiles.GenerateSheetPrompt(ch, &project); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"下装、腰部配饰和鞋履必须完整写出", "【当前项目 Skill】", "女性角色美术增强契约"} {
+		if !strings.Contains(provider.system, want) {
+			t.Fatalf("sheet prompt request missing %q:\n%s", want, provider.system)
+		}
+	}
+	var audits int64
+	ps.db.Model(&models.SkillAuditLog{}).Where("project_id = ? AND skill_code = ?", project.ID, femaleCharacterBeautySkillCode).Count(&audits)
+	if audits != 1 {
+		t.Fatalf("skill use must be audited once, got %d", audits)
+	}
+
+	male := models.Character{ProjectID: project.ID, Name: "沈既白", Gender: "男性", ProfileStatus: models.ProfileStatusApproved, Appearance: "30岁男性，黑发高髻", WardrobeDetail: "玄色圆领袍"}
+	ps.db.Create(&male)
+	if _, err := profiles.GenerateSheetPrompt(&male, &project); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(provider.system, "东方幻想漫剧角色设计师") || strings.Contains(provider.user, "请为以下角色生成完整的结构化档案") {
+		t.Fatalf("non-female sheet prompt must use only the character-standard rules:\nsystem=%s\nuser=%s", provider.system, provider.user)
+	}
+	ps.db.Model(&models.SkillAuditLog{}).Where("project_id = ? AND skill_code = ?", project.ID, "character-standard").Count(&audits)
+	if audits != 1 {
+		t.Fatalf("character-standard use must be audited once, got %d", audits)
+	}
+}

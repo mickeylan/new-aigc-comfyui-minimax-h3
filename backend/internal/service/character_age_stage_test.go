@@ -180,8 +180,8 @@ func TestAgeStageDefaultsToQwenEditSheetWithMainPortrait(t *testing.T) {
 	if err := json.Unmarshal([]byte(task.ParamsJSON), &params); err != nil {
 		t.Fatal(err)
 	}
-	if params["aspect_ratio"] != "16:9 (Widescreen)" {
-		t.Fatalf("stage sheet must be 16:9, got %+v", params)
+	if params["aspect_ratio"] != "16:9 (Widescreen)" || params["use_aspect_ratio"] != true {
+		t.Fatalf("stage sheet must switch on the fixed 16:9 canvas, got %+v", params)
 	}
 	var saved models.CharacterAgeStage
 	if err := svc.db.First(&saved, stage.ID).Error; err != nil {
@@ -293,20 +293,33 @@ func TestLegacyStageMovesToReferencedSheet(t *testing.T) {
 
 func TestExpandAgeStageAppearanceKeepsUserTextAndDoesNotSave(t *testing.T) {
 	svc, project, character := setupAgeStageTestDB(t)
-	if _, err := svc.ExpandAgeStageAppearance(project.ID, character.ID, AgeStageExpandInput{Name: "童年", Age: intPtr(6), Brief: "齐刘海"}); err == nil {
+	attachAgeStageSkills(t, svc)
+	if _, _, err := svc.ExpandAgeStageAppearance(project.ID, character.ID, AgeStageExpandInput{Name: "童年", Age: intPtr(6), Brief: "齐刘海"}); err == nil {
 		t.Fatal("expand without a text provider must fail")
 	}
 	provider := &captureTextProvider{response: "<think>草稿</think>“6岁女孩，圆脸，齐刘海短发，约115厘米。基础服饰：浅蓝棉布童装，布鞋。”"}
 	svc.textProvider = provider
-	if _, err := svc.ExpandAgeStageAppearance(project.ID, character.ID, AgeStageExpandInput{Name: "童年", Age: intPtr(6)}); err == nil {
+	if _, _, err := svc.ExpandAgeStageAppearance(project.ID, character.ID, AgeStageExpandInput{Name: "童年", Age: intPtr(6)}); err == nil {
 		t.Fatal("empty brief must be rejected before calling the model")
 	}
-	text, err := svc.ExpandAgeStageAppearance(project.ID, character.ID, AgeStageExpandInput{Name: "童年", Age: intPtr(6), Brief: "齐刘海短发，圆脸"})
+	text, skill, err := svc.ExpandAgeStageAppearance(project.ID, character.ID, AgeStageExpandInput{Name: "童年", Age: intPtr(6), Brief: "齐刘海短发，圆脸"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if text != "6岁女孩，圆脸，齐刘海短发，约115厘米。基础服饰：浅蓝棉布童装，布鞋。" {
 		t.Fatalf("think block and quotes must be stripped, got %q", text)
+	}
+	// 非成年女性阶段走角色设定阶段的项目 Skill（默认“角色设定标准”），且只取其设计规则。
+	if !strings.HasPrefix(skill, "角色设定标准 v") || !strings.Contains(provider.system, "【当前项目 Skill】") || !strings.Contains(provider.system, "东方幻想漫剧角色设计师") {
+		t.Fatalf("expansion must use the project character skill, skill=%q system:\n%s", skill, provider.system)
+	}
+	if strings.Contains(provider.user, "请为以下角色生成完整的结构化档案") {
+		t.Fatalf("the profile skill's full-profile request must not be sent for a stage expansion:\n%s", provider.user)
+	}
+	var audits int64
+	svc.db.Model(&models.SkillAuditLog{}).Where("project_id = ? AND skill_code = ?", project.ID, "character-standard").Count(&audits)
+	if audits != 1 {
+		t.Fatalf("skill use must be audited once, got %d", audits)
 	}
 	for _, want := range []string{"用户描述：齐刘海短发，圆脸", "该阶段年龄：6岁", "28岁女性，高挑"} {
 		if !strings.Contains(provider.user, want) {
@@ -320,6 +333,90 @@ func TestExpandAgeStageAppearanceKeepsUserTextAndDoesNotSave(t *testing.T) {
 	svc.db.Model(&models.CharacterAgeStage{}).Count(&count)
 	if count != 0 {
 		t.Fatal("expanding must not create or save a stage")
+	}
+}
+
+func attachAgeStageSkills(t *testing.T, svc *CharacterLookService) {
+	t.Helper()
+	if err := svc.db.AutoMigrate(&models.Skill{}, &models.ProjectSkillConfig{}, &models.SkillAuditLog{}); err != nil {
+		t.Fatal(err)
+	}
+	svc.skills = NewSkillService(svc.db)
+	if err := svc.skills.InitSystemSkills(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 成年女性阶段与角色档案一致，走“成年女性角色美术增强”Skill。
+func TestExpandAdultFemaleAgeStageUsesBeautySkill(t *testing.T) {
+	svc, project, character := setupAgeStageTestDB(t)
+	attachAgeStageSkills(t, svc)
+	if err := svc.db.Model(&character).Update("gender", "女性").Error; err != nil {
+		t.Fatal(err)
+	}
+	provider := &captureTextProvider{response: "20岁女性，鹅蛋脸，杏眼。"}
+	svc.textProvider = provider
+	_, skill, err := svc.ExpandAgeStageAppearance(project.ID, character.ID, AgeStageExpandInput{Name: "成年", Age: intPtr(20), Brief: "杏眼"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(skill, "成年女性角色美术增强 v") || !strings.Contains(provider.system, "女性角色美术增强契约") {
+		t.Fatalf("adult female stage must use the beauty skill, skill=%q system:\n%s", skill, provider.system)
+	}
+	// 女性优先：没填阶段年龄也走美术增强；用户描述写明未成年时改走通用角色 Skill。
+	if _, skill, err = svc.ExpandAgeStageAppearance(project.ID, character.ID, AgeStageExpandInput{Name: "宗主", Brief: "杏眼"}); err != nil || !strings.HasPrefix(skill, "成年女性角色美术增强 v") {
+		t.Fatalf("female stage without age must prefer the beauty skill, skill=%q err=%v", skill, err)
+	}
+	if _, skill, err = svc.ExpandAgeStageAppearance(project.ID, character.ID, AgeStageExpandInput{Name: "少女", Brief: "15岁，杏眼"}); err != nil || !strings.HasPrefix(skill, "角色设定标准 v") {
+		t.Fatalf("minor female stage must use the general character skill, skill=%q err=%v", skill, err)
+	}
+}
+
+// 古典修仙题材：扩写约束中国古代形制与平底鞋履；模型写出短裙、高跟鞋时丢弃结果；四视图提示词与负面词同样约束。
+func TestClassicalAgeStageForbidsModernDress(t *testing.T) {
+	svc, project, character := setupAgeStageTestDB(t)
+	attachAgeStageSkills(t, svc)
+	attachAgeStageTaskService(t, svc, "qwen_image_2_1_multi_edit.json")
+	registerAgeStageUploads(t, svc, project.ID, "face.png")
+	if err := svc.db.Model(&project).Update("genre", "古典修仙").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.db.Model(&character).Update("gender", "女性").Error; err != nil {
+		t.Fatal(err)
+	}
+	provider := &captureTextProvider{response: "20岁女性，杏眼。基础服饰：粉色短裙，白色高跟鞋。"}
+	svc.textProvider = provider
+	if _, _, err := svc.ExpandAgeStageAppearance(project.ID, character.ID, AgeStageExpandInput{Name: "成年", Age: intPtr(20), Brief: "杏眼"}); err == nil || !strings.Contains(err.Error(), "古典题材") {
+		t.Fatalf("modern dress in a classical project must be rejected, got %v", err)
+	}
+	for _, want := range []string{"中国古代形制", "禁止短裙", "高跟鞋"} {
+		if !strings.Contains(provider.system, want) {
+			t.Fatalf("classical rule missing %q:\n%s", want, provider.system)
+		}
+	}
+	provider.response = "20岁女性，杏眼。基础服饰：藕色交领襦裙，长及脚踝，藕色绣鞋。"
+	if text, _, err := svc.ExpandAgeStageAppearance(project.ID, character.ID, AgeStageExpandInput{Name: "成年", Age: intPtr(20), Brief: "杏眼"}); err != nil || !strings.Contains(text, "交领襦裙") {
+		t.Fatalf("classical dress must pass, text=%q err=%v", text, err)
+	}
+	stage, err := svc.SaveAgeStage(project.ID, character.ID, 0, AgeStageInput{Name: "成年", Age: intPtr(20), Appearance: "20岁女性，杏眼"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.StartAgeStagePortrait(project.ID, character.ID, stage.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	task, _ := onlyTaskInputs(t, svc)
+	for _, want := range []string{"中国古代形制朴素日常服装", "不出现短裙、丝袜、高跟鞋", "中式软底云头绣鞋", "16:9画面比例"} {
+		if !strings.Contains(task.Prompt, want) {
+			t.Fatalf("classical sheet prompt missing %q:\n%s", want, task.Prompt)
+		}
+	}
+	var params map[string]any
+	if err := json.Unmarshal([]byte(task.ParamsJSON), &params); err != nil {
+		t.Fatal(err)
+	}
+	if neg, _ := params["negative_prompt"].(string); !strings.Contains(neg, "短裙") || !strings.Contains(neg, "高跟鞋") {
+		t.Fatalf("classical sheet negative prompt must forbid modern dress, got %q", neg)
 	}
 }
 

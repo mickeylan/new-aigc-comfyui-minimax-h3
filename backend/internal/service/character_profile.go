@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -128,14 +129,14 @@ func (s *CharacterProfileService) GenerateProfile(char *models.Character, projec
 	// 调用 LLM
 	var raw string
 	var err error
-	isAdultFemale := authoritativeAdultFemale(char)
-	if s.skills != nil && isAdultFemale {
+	useFemaleBeauty := femaleBeautyDesignApplies(char)
+	if s.skills != nil && useFemaleBeauty {
 		raw, err = s.skills.ChatWithConfiguredOrFallbackSkill(project.ID, models.SkillStageCharacter, femaleCharacterBeautySkillCode, s.textProvider, characterProfileSystemPrompt, user.String(), map[string]string{"character_info": user.String()})
 	} else if s.skills != nil {
 		raw, err = s.skills.ChatWithSkill(project.ID, models.SkillStageCharacter, s.textProvider, characterProfileSystemPrompt, user.String(), map[string]string{"character_info": user.String()})
 	} else {
 		system := characterProfileSystemPrompt
-		if isAdultFemale {
+		if useFemaleBeauty {
 			system += "\n\n" + femaleCharacterBeautyDesignContract
 		}
 		raw, err = s.textProvider.Chat(system, user.String())
@@ -429,20 +430,23 @@ func portraitGenderIdentity(char *models.Character) string {
 	return portraitGenderFromText(strings.Join([]string{char.Role, char.Appearance, char.Trait, char.Background, char.WardrobeDetail}, " "))
 }
 
-func authoritativeAdultFemale(char *models.Character) bool {
+// femaleBeautyDesignApplies 判定人物设计是否走“成年女性角色美术增强”：女性角色优先使用，
+// 只有档案明确写成未成年（年龄不足18岁或女童等）时改用通用角色 Skill，避免把成年服装尺度用到儿童身上。
+// 年龄只看身份、外貌和特征；背景里“五岁入宗门”之类的经历年龄不代表角色当前年龄。
+func femaleBeautyDesignApplies(char *models.Character) bool {
 	if char == nil || portraitGenderIdentity(char) != "女性" {
 		return false
 	}
-	text := strings.Join([]string{char.Role, char.Appearance, char.Trait, char.Background, char.WardrobeDetail}, " ")
-	if strings.Contains(text, "成年女性") || strings.Contains(text, "成年女子") || strings.Contains(text, "成年女人") {
-		return true
+	text := strings.Join([]string{char.Role, char.Appearance, char.Trait}, " ")
+	for _, word := range []string{"未成年", "女童", "幼女", "小女孩", "女婴"} {
+		if strings.Contains(text, word) {
+			return false
+		}
 	}
-	match := characterAgePattern.FindStringSubmatch(text)
-	if len(match) != 2 {
+	if minAge, _, ok := explicitCharacterAgeRange(text); ok && minAge < 18 {
 		return false
 	}
-	age, err := strconv.Atoi(match[1])
-	return err == nil && age >= 18
+	return true
 }
 
 func portraitFaceIdentity(appearance, trait string) string {
@@ -775,7 +779,7 @@ const characterSheetPromptSystem = `你是角色设定集提示词设计师。�
 写法示例（只学习描述密度和语序，禁止照抄其中的年龄、发型、服装、配色或任何内容）：
 女性，20岁，漆黑纯澈的长发高挽成凌云单螺髻、留有轻盈龙须碎发并饰以翡翠银簪与青碧玉佩流苏，精致温婉的鹅蛋脸型，锐利冷酷且深邃的眼眸如寒潭般清冽、气场强大而具穿透力，素雅冷调妆面配眉心极简碧色冷霜花钿与自然润泽薄唇，骨感凌厉的寒锋斜挑眉，玄幻修仙灵秀剑仙服饰以碧波青与象牙白为主色调、多层叠穿交领内衬与斜襟轻薄长裙、腰身线条柔和紧致佩戴环佩腰封、外搭一袭青透薄雾般的云纱大袖衫与碧玉色长披帛、垂坠宽袍与曳地较长衣摆，通透细腻的三维写实皮肤纹理与极细透光云纱、哑光提花丝绸与金丝压边面料，3D国风动漫风格与写实国风玄幻质感、身材起伏有致且比例挺拔合理、角色特征个性鲜明极具辨识度`
 
-// GenerateSheetPrompt 由 LLM 按设定集样例的写法生成四视图人物描述，再固定追加鞋履锁定与四格版式，
+// GenerateSheetPrompt 由 LLM 按设定集样例的写法并结合项目角色 Skill 生成四视图人物描述，再固定追加鞋履锁定与四格版式，
 // 结果保存为可编辑的 sheet_prompt。没有文本模型时退回按档案确定性编译。
 // 提示词是派生内容，不改变审核状态，也不作废已有四视图。
 func (s *CharacterProfileService) GenerateSheetPrompt(char *models.Character, project *models.Project) (string, error) {
@@ -786,7 +790,7 @@ func (s *CharacterProfileService) GenerateSheetPrompt(char *models.Character, pr
 	if s.textProvider != nil {
 		user := fmt.Sprintf("项目题材：%s\n项目画风：%s\n角色性别：%s\n外貌：%s\n服装：%s\n指定鞋履：%s\n角色配色：%s",
 			project.Genre, project.Style, char.Gender, strings.TrimSpace(char.Appearance), primaryWardrobe(char), characterFootwear(project, char), strings.TrimSpace(char.ColorPalette))
-		raw, err := s.textProvider.Chat(characterSheetPromptSystem, user)
+		raw, _, err := chatWithCharacterDesignSkill(s.skills, s.textProvider, project.ID, femaleBeautyDesignApplies(char), characterSheetPromptSystem, user)
 		if err != nil {
 			return "", fmt.Errorf("生成四视图提示词失败: %w", err)
 		}
@@ -806,6 +810,58 @@ func (s *CharacterProfileService) GenerateSheetPrompt(char *models.Character, pr
 		return "", err
 	}
 	return prompt, nil
+}
+
+// characterDesignSkillHeader 引出附加在人物设计任务后的项目角色 Skill，并说明其中哪些要求不适用于短描述任务。
+const characterDesignSkillHeader = "【当前项目 Skill】（只用于约束五官、发型、服装层次、材质配色和时代鞋履的设计精度；其中要求输出结构化档案、JSON、性格背景、姿态、灯光、背景、画幅或构图的部分不适用于本任务，仍以上方输出要求为准）"
+
+// chatWithCharacterDesignSkill 让四视图描述、阶段形象扩写等人物设计文本与角色档案走同一套通用角色 Skill，
+// 与最终使用哪个出图模型无关：女性优先用“成年女性角色美术增强”（明确未成年除外），其余用角色设定阶段的项目有效 Skill。
+// 只附加 Skill 的设计规则，不发送其“生成完整结构化档案”的用户模板；返回 Skill 名称与版本并写审计。
+func chatWithCharacterDesignSkill(skills *SkillService, provider TextProvider, projectID uint, femaleBeauty bool, system, user string) (string, string, error) {
+	if skills == nil {
+		raw, err := provider.Chat(system, user)
+		return raw, "", err
+	}
+	params := map[string]string{"character_info": user}
+	if femaleBeauty {
+		raw, provenance, err := skills.ChatWithConfiguredOrFallbackSkillTraced(projectID, models.SkillStageCharacter, femaleCharacterBeautySkillCode, provider, system+"\n\n"+characterDesignSkillHeader, user, params)
+		label := ""
+		if provenance != nil {
+			label = characterSkillLabel(skills.db, provenance.Code, provenance.Version)
+		}
+		return raw, label, err
+	}
+	skill, err := skills.GetEffectiveSkill(projectID, models.SkillStageCharacter)
+	if err != nil {
+		return "", "", err
+	}
+	if skill == nil {
+		raw, err := provider.Chat(system, user)
+		return raw, "", err
+	}
+	fullSystem := system
+	if rules, _ := skills.AssemblePrompt(skill, params); strings.TrimSpace(rules) != "" {
+		fullSystem += "\n\n" + characterDesignSkillHeader + "\n" + rules
+	}
+	started := time.Now()
+	raw, err := provider.Chat(fullSystem, user)
+	errText := ""
+	if err != nil {
+		errText = err.Error()
+	}
+	if auditErr := skills.LogSkillUsage(projectID, models.SkillStageCharacter, skill, user, len(raw), time.Since(started).Milliseconds(), err == nil, errText); err == nil && auditErr != nil {
+		return "", "", fmt.Errorf("Skill 审计写入失败: %w", auditErr)
+	}
+	return raw, fmt.Sprintf("%s v%d", skill.Name, skill.Version), err
+}
+
+func characterSkillLabel(db *gorm.DB, code string, version int) string {
+	var skill models.Skill
+	if err := db.Where("code = ? AND version = ?", code, version).First(&skill).Error; err == nil {
+		return fmt.Sprintf("%s v%d", skill.Name, skill.Version)
+	}
+	return fmt.Sprintf("%s v%d", code, version)
 }
 
 // SaveSheetPrompt 只保存用户修改后的四视图提示词；不改审核状态，也不作废已有四视图和标准像。

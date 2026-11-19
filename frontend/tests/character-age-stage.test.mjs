@@ -91,6 +91,8 @@ test('编辑年龄阶段可 AI 扩写人物形象，结果只填入文本框且�
   assert.match(looks, /\$\{stageURL\(\)\}\/expand-appearance`,jsonOpt\('POST',\{name:stageForm\.name\?\.trim\(\)\|\|'',age,brief:before\.trim\(\)\}\)/)
   assert.match(looks, /@click="expandStageAppearance">\{\{stageExpanding\?'AI扩写中…':'AI扩写'\}\}/)
   assert.match(looks, /撤销扩写/)
+  assert.match(looks, /stageExpandSkill\.value=d\.skill\|\|''/)
+  assert.match(looks, /本次使用 Skill：\{\{stageExpandSkill\}\}/)
   assert.match(looks, /stageAppearanceBefore\.value=before;stageForm\.appearance=d\.appearance/)
 })
 

@@ -98,12 +98,12 @@ func (s *Service) HandleExpandCharacterAgeStageAppearance(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "参数错误"})
 		return
 	}
-	text, err := s.CharacterLooks.ExpandAgeStageAppearance(pid, cid, req)
+	text, skill, err := s.CharacterLooks.ExpandAgeStageAppearance(pid, cid, req)
 	if err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{"appearance": text})
+	c.JSON(200, gin.H{"appearance": text, "skill": skill})
 }
 
 func (s *Service) HandleDeleteCharacterAgeStage(c *gin.Context) {

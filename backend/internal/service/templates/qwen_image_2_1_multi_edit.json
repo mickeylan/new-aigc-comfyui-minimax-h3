@@ -24,6 +24,12 @@
       "default": ""
     },
     {
+      "key": "use_aspect_ratio",
+      "type": "bool",
+      "label": "按输出画幅出图（关闭时尺寸跟随参考图）",
+      "default": false
+    },
+    {
       "key": "aspect_ratio",
       "type": "select",
       "label": "输出画幅",
@@ -267,7 +273,7 @@
     "459:468": {
       "class_type": "ComfySwitchNode",
       "inputs": {
-        "switch": false,
+        "switch": "{{use_aspect_ratio}}",
         "on_false": [
           "459:474",
           2

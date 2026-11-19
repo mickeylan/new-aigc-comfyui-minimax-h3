@@ -54,7 +54,7 @@ func (s *CharacterProfileService) PreviewProfile(ch *models.Character, p *models
 	user := fmt.Sprintf("角色：%s\n身份：%s\n既有外貌：%s\n既有服装：%s\n项目题材：%s\n故事：%s\n当前表单：%s\n仅允许修改字段：%s\n用户方向：%s\n选中片段：%s", ch.Name, ch.Role, ch.Appearance, ch.Style, p.Genre, p.Synopsis, current, fields, req.Instruction, req.Selection)
 	system := characterProfileSystemPrompt + "\n本次为档案局部草稿。以上是领域规则，不是本次输出格式。只输出被选字段的 JSON 对象，例如 {\"appearance\":\"新外貌\"}。不得输出其他字段，不得改变姓名、年龄、性别等权威事实；用户明确要求修改的部分除外。新增且无来源的设定必须注明‘AI建议，待确认’，不要臆测参考图细节。"
 	user += fmt.Sprintf("\n既有性别：%s\n既有特征：%s\n既有背景：%s\n创作方案：%s", ch.Gender, ch.Trait, ch.Background, p.Plan)
-	if authoritativeAdultFemale(ch) {
+	if femaleBeautyDesignApplies(ch) {
 		system += "\n" + femaleCharacterBeautyDesignContract
 	}
 	if req.Selection != "" {

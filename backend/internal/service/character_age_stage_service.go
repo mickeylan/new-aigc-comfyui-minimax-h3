@@ -131,47 +131,82 @@ type AgeStageExpandInput struct {
 
 // ExpandAgeStageAppearance 按用户输入扩写该年龄的人物形象描述，只返回文本供用户修改，不保存。
 // 用户写明的内容为准；主档案只用于延续发色、瞳色等天生特征，不沿用主档案的年龄与体型。
-func (s *CharacterLookService) ExpandAgeStageAppearance(projectID, characterID uint, req AgeStageExpandInput) (string, error) {
+// 第二个返回值是实际使用的项目 Skill（名称与版本），供界面展示。
+func (s *CharacterLookService) ExpandAgeStageAppearance(projectID, characterID uint, req AgeStageExpandInput) (string, string, error) {
 	brief := strings.TrimSpace(req.Brief)
 	if brief == "" {
-		return "", fmt.Errorf("请先写几句该年龄的形象要点，再让 AI 扩写")
+		return "", "", fmt.Errorf("请先写几句该年龄的形象要点，再让 AI 扩写")
 	}
 	if req.Age != nil && (*req.Age < 1 || *req.Age > 120) {
-		return "", fmt.Errorf("年龄必须在1到120之间")
+		return "", "", fmt.Errorf("年龄必须在1到120之间")
 	}
-	if s.textProvider == nil {
-		return "", fmt.Errorf("文本生成服务未配置")
+	if s.textProvider == nil || s.skills == nil {
+		return "", "", fmt.Errorf("文本生成服务未配置")
 	}
 	var project models.Project
 	var ch models.Character
 	if err := s.db.First(&project, projectID).Error; err != nil {
-		return "", err
+		return "", "", err
 	}
 	if err := s.db.Where("id = ? AND project_id = ?", characterID, projectID).First(&ch).Error; err != nil {
-		return "", fmt.Errorf("角色不存在")
+		return "", "", fmt.Errorf("角色不存在")
 	}
 	age := "未指定（按用户描述判断）"
 	if req.Age != nil {
 		age = fmt.Sprintf("%d岁", *req.Age)
 	}
+	classical := classicalChineseSetting(&project, &ch)
 	system := `你是影视角色设定师。把用户对同一角色某个年龄阶段的简要描述，扩写成可直接用于生成角色四视图的中文人物形象描述。
 规则：
 1. 用户写明的内容是权威，必须全部保留且不得改写或矛盾；只补全用户没写的部分。
 2. 依次写：年龄与性别、脸型与五官、发型发色、身高头身比与体态、神态气质，最后以“基础服饰：”写一套符合该年龄与时代背景的日常服装和鞋履。
-3. 年龄感、头身比和面部成熟度必须严格符合该年龄。角色主档案只用于延续发色、瞳色、肤色、痣痣等天生特征，不得沿用主档案的年龄、体型、发型和服装。
+3. 年龄感、头身比和面部成熟度必须严格符合该年龄；本任务给出的阶段年龄优先于任何“成年年龄”要求。角色主档案只用于延续发色、瞳色、肤色、痣痣等天生特征，不得沿用主档案的年龄、体型、发型和服装。
 4. 不写姓名、剧情、动作、姿势、镜头、构图、背景、画风，不加武器、法宝或剧情道具。
-5. 只输出一段纯文本，不超过220字，不要标题、列表、引号或解释。`
+5. 只输出一段纯文本，不超过300字，不要标题、列表、引号或解释。`
+	if classical {
+		system += "\n" + ageStageClassicalDressRule
+	}
 	user := fmt.Sprintf("项目题材：%s\n项目画风：%s\n角色性别：%s\n角色身份：%s\n角色主档案外貌（仅供延续天生特征）：%s\n阶段名称：%s\n该阶段年龄：%s\n用户描述：%s",
 		project.Genre, project.Style, ch.Gender, ch.Role, ch.Appearance, strings.TrimSpace(req.Name), age, brief)
-	raw, err := s.textProvider.Chat(system, user)
+	// 女性优先用“成年女性角色美术增强”；阶段年龄或用户描述明确未满18岁时改用通用角色 Skill。
+	female := portraitGenderIdentity(&ch) == "女性"
+	if req.Age != nil && *req.Age < 18 {
+		female = false
+	} else if minAge, _, ok := explicitCharacterAgeRange(brief); ok && minAge < 18 {
+		female = false
+	}
+	raw, skillLabel, err := chatWithCharacterDesignSkill(s.skills, s.textProvider, projectID, female, system, user)
 	if err != nil {
-		return "", fmt.Errorf("AI扩写失败: %w", err)
+		return "", "", fmt.Errorf("AI扩写失败: %w", err)
 	}
 	text := strings.Trim(strings.TrimSpace(stripThinkBlocks(raw)), "\"“”`")
 	if text == "" {
-		return "", fmt.Errorf("AI扩写未返回内容，请重试或手动填写")
+		return "", "", fmt.Errorf("AI扩写未返回内容，请重试或手动填写")
 	}
-	return text, nil
+	if classical {
+		if word := ageStageModernDressWord(text, brief); word != "" {
+			return "", "", fmt.Errorf("AI扩写写出了与古典题材不符的“%s”，已丢弃，请重试或手动填写", word)
+		}
+	}
+	return text, skillLabel, nil
+}
+
+// ageStageClassicalDressRule 约束古典修仙、仙侠、武侠题材的阶段服饰：只用中国古代形制与平底鞋履。
+const ageStageClassicalDressRule = "6. 本项目为中国古典题材：服装必须是中国古代形制（如交领或对襟襦裙、长衫、袍服、褙子），下装长及脚踝；鞋履只能是中国古代平底布履、绣鞋或靴。禁止短裙、超短裙、热裤、丝袜、现代服装，禁止高跟鞋、运动鞋和现代皮鞋。"
+
+// ageStageClassicalNegative 是古典题材阶段四视图的负面提示词。
+const ageStageClassicalNegative = "短裙，超短裙，迷你裙，热裤，丝袜，高跟鞋，运动鞋，现代皮鞋，现代服装，露腿，竖版构图"
+
+// ageStageModernDressWords 是古典题材下扩写结果不允许出现的现代服饰词（用户自己写明的除外）。
+var ageStageModernDressWords = []string{"高跟", "短裙", "超短裙", "迷你裙", "热裤", "丝袜", "连裤袜", "西装", "牛仔", "T恤", "运动鞋", "皮鞋"}
+
+func ageStageModernDressWord(text, brief string) string {
+	for _, word := range ageStageModernDressWords {
+		if strings.Contains(text, word) && !strings.Contains(brief, word) {
+			return word
+		}
+	}
+	return ""
 }
 
 func sameOptionalInt(a, b *int) bool {
@@ -248,8 +283,16 @@ func ageStageSheetBody(project *models.Project, ch *models.Character, stage *mod
 		parts = append(parts, fmt.Sprintf("%d岁%s，年龄感、身高头身比例与面部成熟度严格符合%d岁", *stage.Age, ageStageGenderNoun(ch.Gender, *stage.Age), *stage.Age))
 	}
 	parts = append(parts, strings.TrimSpace(stage.Appearance))
+	classical := classicalChineseSetting(project, &view)
 	if ageStageClause(stage.Appearance, "服", "衣", "衫", "裙", "袍", "裤", "褂", "甲") == "" {
-		parts = append(parts, "服饰：符合该年龄与时代背景的朴素日常基础服装，款式简洁，不加额外配饰")
+		if classical {
+			parts = append(parts, "服饰：符合该年龄的中国古代形制朴素日常服装，下装长及脚踝，款式简洁，不加额外配饰")
+		} else {
+			parts = append(parts, "服饰：符合该年龄与时代背景的朴素日常基础服装，款式简洁，不加额外配饰")
+		}
+	}
+	if classical {
+		parts = append(parts, "服装与鞋履均为中国古代形制，不出现短裙、丝袜、高跟鞋或任何现代服饰")
 	}
 	if style := strings.TrimSpace(project.Style); style != "" {
 		parts = append(parts, style+"风格")
@@ -346,8 +389,13 @@ func (s *CharacterLookService) StartAgeStagePortrait(projectID, characterID, sta
 	if err := checkAgeStageReferenceBinding(prompt); err != nil {
 		return err
 	}
+	// 多图编辑默认输出尺寸跟随参考图（竖版标准像会得到竖版图）；四视图打开 use_aspect_ratio，按 aspect_ratio 固定 16:9 横幅。
 	params := qwenPortraitParams()
 	params["aspect_ratio"] = qwenAspectRatio("16:9")
+	params["use_aspect_ratio"] = true
+	if classicalChineseSetting(&project, &ch) {
+		params["negative_prompt"] = ageStageClassicalNegative
+	}
 	files := map[string][]FileMeta{"ref_images": {{TaskID: fmt.Sprint(projectID), Name: ch.Portrait}}}
 	tpl, err := enabledTemplateByCode(s.db, TemplateQwen21MultiEdit)
 	if err != nil {

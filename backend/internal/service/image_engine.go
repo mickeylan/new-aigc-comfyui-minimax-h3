@@ -43,6 +43,7 @@ func normalizeAssetImageEngine(value string) (string, error) {
 		return "", fmt.Errorf("不支持的资产生图引擎")
 	}
 }
+
 // normalizeAssetReferenceEngine 道具/场景资产参考图引擎，默认 Moss（中文文字可读，Krea2 基本不可读）。
 // 标准照与换装仍用 normalizeAssetImageEngine，避免选了 Moss 却被静默当成 Krea2。
 func normalizeAssetReferenceEngine(value string) (string, error) {

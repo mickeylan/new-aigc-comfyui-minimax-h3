@@ -64,20 +64,24 @@ func TestGenerateAdultFemaleProfileUsesAuditedBeautySkill(t *testing.T) {
 	}
 }
 
-func TestFemaleBeautySkillRequiresAuthoritativeAdultEvidence(t *testing.T) {
+// 女性角色优先走美术增强 Skill（用户要求）；只有明确未成年时改走通用角色 Skill。
+func TestFemaleBeautySkillPreferredForWomenExceptMinors(t *testing.T) {
 	cases := []struct {
 		character models.Character
 		want      bool
 	}{
 		{models.Character{Gender: "女性", Appearance: "20岁女性，黑色长发"}, true},
 		{models.Character{Gender: "女性", Appearance: "成年女子，乌黑长发"}, true},
+		{models.Character{Gender: "女性", Appearance: "年龄原文未明确"}, true},
+		{models.Character{Gender: "女性", Appearance: "黑色长发", Background: "五岁入宗门修行"}, true},
 		{models.Character{Gender: "女性", Appearance: "六岁女童，乌黑长发"}, false},
-		{models.Character{Gender: "女性", Appearance: "年龄原文未明确"}, false},
+		{models.Character{Gender: "女性", Appearance: "15岁少女，乌黑长发"}, false},
+		{models.Character{Gender: "男性", Appearance: "20岁男性"}, false},
 		{models.Character{Gender: "原文未明确", Appearance: "年轻角色"}, false},
 	}
 	for _, tc := range cases {
-		if got := authoritativeAdultFemale(&tc.character); got != tc.want {
-			t.Fatalf("authoritativeAdultFemale(%+v)=%v want=%v", tc.character, got, tc.want)
+		if got := femaleBeautyDesignApplies(&tc.character); got != tc.want {
+			t.Fatalf("femaleBeautyDesignApplies(%+v)=%v want=%v", tc.character, got, tc.want)
 		}
 	}
 }

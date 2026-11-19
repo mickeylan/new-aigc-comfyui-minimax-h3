@@ -98,6 +98,7 @@ func New(cfg *config.Config, db *gorm.DB) *Service {
 	stylePresets := NewStylePresetService(db)
 	charLooks := NewCharacterLookService(db, textProviderFact)
 	charLooks.SetDeps(tasks, remote, upload)
+	charLooks.skills = skills
 	projects.characterLooks = charLooks
 	continuity := NewContinuityService(cfg, db, remote, upload)
 	projects.continuity = continuity
