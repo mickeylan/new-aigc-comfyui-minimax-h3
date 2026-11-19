@@ -852,7 +852,7 @@
       <div class="modal card blocking-modal"><h2>场景 {{blockingScene.order}} · 人物站位 · 空间与动作关系</h2><p class="field-hint">原文事实与 AI 建议分开保存；仅作为后续分镜图/视频提示词上下文，不自动生成、不阻断生成。朝向请同时写“面向谁”和“相对镜头正面/侧面/背面”。例如抱拳行礼应面向受礼者，不是两人一起向镜头行礼。</p>
         <div class="modal-actions"><button class="btn btn-secondary" :disabled="blockingBusy" @click="analyzeBlocking">{{blockingBusy?'分析中…':'AI站位分析'}}</button><button class="btn btn-ghost" :disabled="blockingBusy" @click="inheritBlocking">继承上一镜</button></div>
         <button v-if="!showScenePrevis" type="button" class="btn btn-secondary" @click="showScenePrevis=true">打开轻量 3D 站位 / 机位预演</button>
-        <ScenePrevisualization v-if="showScenePrevis" :key="blockingScene.id" :project-id="id()" :scene-id="blockingScene.id" :names="blockingDraft.characters.map(c=>c.name).filter(Boolean)" @adopt="adoptScenePrevis" @preview-prompt="preparePrevisPrompt" @invalidate-prompt="previsPromptRequest=null" @close="showScenePrevis=false" />
+        <ScenePrevisualization v-if="showScenePrevis" :key="blockingScene.id" :project-id="id()" :scene-id="blockingScene.id" :names="blockingDraft.characters.map(c=>c.name).filter(Boolean)" @adopt="adoptScenePrevis" @preview-prompt="preparePrevisPrompt" @frame-prompt-adopted="applyShotFramePromptResult" @invalidate-prompt="previsPromptRequest=null" @close="showScenePrevis=false" />
         <SceneBlockingPromptDraft v-if="previsPromptRequest" :key="previsPromptRequest.key" :project-id="id()" :scene-id="blockingScene.id" :request="previsPromptRequest" @close="previsPromptRequest=null" @adopted="applyPrevisPromptResult" />
         <div class="field-row"><div class="field"><label>原文事实（每行一条）</label><textarea v-model="blockingDraft.factsText" class="textarea" rows="4" /></div><div class="field"><label>站位建议（每行一条）</label><textarea v-model="blockingDraft.suggestionsText" class="textarea" rows="4" /></div></div>
         <div class="blocking-characters"><div class="field-label-actions"><label>人物表</label><button type="button" class="btn btn-sm btn-secondary" @click="addBlockingCharacter">＋ 添加人物</button></div><div v-for="(character,index) in blockingDraft.characters" :key="index" class="blocking-character-row"><input v-model="character.name" class="input" placeholder="姓名"><input v-model="character.position" class="input" placeholder="位置"><input v-model="character.facing" class="input" placeholder="面向谁 / 相对镜头正面、侧面、背面" title="例如：面向青年，身体相对镜头三分之二侧面；视线在右侧单独填写"><input v-model="character.gaze" class="input" placeholder="视线"><input v-model="character.visibility" class="input" placeholder="可见性"><button type="button" class="btn btn-sm btn-danger" @click="removeBlockingCharacter(index)">删除</button></div></div>
@@ -1716,6 +1716,15 @@ let previsPromptKey = 0
 watch([showScenePrevis,blockingScene],()=>{previsPromptRequest.value=null},{flush:'sync'})
 function preparePrevisPrompt({kind,suggestion}) {
   previsPromptRequest.value={key:++previsPromptKey,kind,blocking:mergePrevisBlocking(blockingPayload(),suggestion)}
+}
+function applyShotFramePromptResult(data) {
+  const local=scenes.value.find(x=>x.id===blockingScene.value?.id)
+  if(!local)return
+  local.image_prompt=data.prompt;local.blocking_image_applied=false;local.prompt_stale=true
+  if(editingScene.value?.id===local.id)editingScene.value.image_prompt=data.prompt
+  previsPromptRequest.value=null
+  Object.assign(blockingPromptPreview,{kind:'',prompt:'',blockingHash:''})
+  toast.success('已采用Shot选帧分镜图提示词；未修改站位或启动生成')
 }
 function applyPrevisPromptResult(data) {
   const local=scenes.value.find(x=>x.id===blockingScene.value?.id)

@@ -17,6 +17,10 @@ async function mutateScreenText(id, request) {
 }
 
 export const api = {
+  listShotPrevisFrames: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/previsualization/frames`),
+  bindShotPrevisFrame: (id, sid, data) => http.post(`/projects/${id}/scenes/${sid}/previsualization/frames`, data),
+  previewShotPrevisFramePrompt: (id, sid, fid) => http.post(`/projects/${id}/scenes/${sid}/previsualization/frames/${fid}/prompt/preview`),
+  applyShotPrevisFramePrompt: (id, sid, fid, data) => http.post(`/projects/${id}/scenes/${sid}/previsualization/frames/${fid}/prompt/apply`, data),
   planScenePrevisualization: (id, sid, data) => http.post(`/projects/${id}/scenes/${sid}/previsualization/plan`, data),
   getScenePrevisualization: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/previsualization`),
   saveScenePrevisualization: (id, sid, data) => http.put(`/projects/${id}/scenes/${sid}/previsualization`, data),

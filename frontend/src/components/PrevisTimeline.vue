@@ -23,8 +23,8 @@ const selected=computed(()=>props.document.objects.find(o=>o.id===props.selected
 const time=ref(0),playing=ref(false),cut=ref(false),start=ref(0),end=ref(3),command=ref(''),answer=ref(''),questions=ref([]),plan=ref(null),chosen=ref([]),busy=ref(false),error=ref(''),status=ref(''),history=ref([])
 let frame=0,last=0,alive=true,epoch=0
 const name=id=>props.document.objects.find(o=>o.id===id)?.name||id
-function pause(clear=true){playing.value=false;cancelAnimationFrame(frame);frame=0;if(clear)emit('sample',null)}
-function stop(){pause();time.value=0}
+function pause(clear=true){playing.value=false;cancelAnimationFrame(frame);frame=0;if(clear)emit('sample',null,time.value)}
+function stop(){time.value=0;pause()}
 function showSample(){emit('sample',sampleTimeline(props.document,time.value),time.value)}
 function seek(t){pause(false);time.value=t;showSample()}
 function tick(now){if(!playing.value||!alive)return;time.value=Math.min(props.document.duration_ms,time.value+Math.max(0,now-last));last=now;showSample();if(time.value>=props.document.duration_ms){pause(false);return}frame=requestAnimationFrame(tick)}
@@ -43,9 +43,9 @@ async function prepare(){const token=++epoch,base=JSON.stringify(props.document)
 function respond(){command.value+='\n补充回答：'+answer.value;answer.value='';prepare()}
 function execute(){try{const next=applyPrevisPlan(props.document,plan.value,chosen.value);if(!window.confirm('将所选操作应用到本地预演草稿？保存前不会写入服务器，也不会修改提示词。'))return;update(next);plan.value=null;status.value='计划已应用到本地草稿，请播放检查后保存预演'}catch(e){error.value=e.message}}
 function undo(){const h=history.value.at(-1);if(!h)return;if(JSON.stringify(props.document)!==h.after){error.value='后续已有其他编辑，为避免覆盖不能撤销，请先手工核对';return}history.value.pop();pause();emit('update-document',h.before)}
-watch(()=>JSON.stringify(props.document),()=>{epoch++;busy.value=false;plan.value=null;questions.value=[];pause();time.value=Math.min(time.value,props.document.duration_ms)})
+watch(()=>JSON.stringify(props.document),()=>{epoch++;busy.value=false;plan.value=null;questions.value=[];time.value=Math.min(time.value,props.document.duration_ms);pause()})
 watch(command,()=>{plan.value=null;questions.value=[]})
-defineExpose({pause:()=>pause(false)})
+defineExpose({pause:()=>pause(false),freeze:()=>{pause(false);showSample()}})
 onBeforeUnmount(()=>{alive=false;epoch++;pause()})
 </script>
 <style scoped>.timeline{border:1px solid var(--border);padding:.8rem;margin:.8rem 0}.controls{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.5rem 0}input[type=number]{width:5rem}textarea{width:100%;box-sizing:border-box}.operation{display:block}pre{white-space:pre-wrap;font-size:.8rem;max-height:180px;overflow:auto}[role=alert]{color:var(--danger)}</style>
