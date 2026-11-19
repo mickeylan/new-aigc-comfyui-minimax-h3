@@ -18,7 +18,59 @@ const (
 	VariantCharacterLook     = "character_look"
 	VariantAssetImage        = "asset_image"
 	VariantAssetSheet        = "asset_sheet"
+	VariantOutfitImage       = "character_outfit_image"
+	VariantOutfitSheet       = "character_outfit_sheet"
 )
+
+// keepAllAssetVariants 是不做数量清理的历史类型：角色旧标准像/四视图与套装旧图可能在
+// 回忆、闪回等段落重新使用，用户要求一张都不丢。
+var keepAllAssetVariants = map[string]bool{
+	VariantCharacterPortrait: true, VariantCharacterSheet: true,
+	VariantOutfitImage: true, VariantOutfitSheet: true,
+}
+
+// preserveAssetVariant 把即将被替换或清空的当前文件登记为未选中的历史版本（已登记则不重复）。
+func preserveAssetVariant(tx *gorm.DB, projectID uint, entityType string, entityID uint, file, provenance string) error {
+	file = strings.TrimSpace(file)
+	if file == "" || projectID == 0 || entityID == 0 || !tx.Migrator().HasTable(&models.AssetVariant{}) {
+		return nil
+	}
+	var count int64
+	if err := tx.Model(&models.AssetVariant{}).Where("project_id = ? AND entity_type = ? AND entity_id = ? AND file = ?", projectID, entityType, entityID, file).Count(&count).Error; err != nil || count > 0 {
+		return err
+	}
+	return tx.Create(&models.AssetVariant{ProjectID: projectID, EntityType: entityType, EntityID: entityID, File: file, Provenance: provenance}).Error
+}
+
+// recordCurrentAssetVariant 登记新的当前文件并把它标为唯一选中版本，不触发下游失效（由调用方自行处理）。
+func recordCurrentAssetVariant(tx *gorm.DB, projectID uint, entityType string, entityID uint, file, provenance string) error {
+	if !tx.Migrator().HasTable(&models.AssetVariant{}) {
+		return nil
+	}
+	if err := tx.Model(&models.AssetVariant{}).Where("project_id = ? AND entity_type = ? AND entity_id = ?", projectID, entityType, entityID).Update("selected", false).Error; err != nil {
+		return err
+	}
+	if err := preserveAssetVariant(tx, projectID, entityType, entityID, file, provenance); err != nil {
+		return err
+	}
+	return tx.Model(&models.AssetVariant{}).Where("project_id = ? AND entity_type = ? AND entity_id = ? AND file = ?", projectID, entityType, entityID, strings.TrimSpace(file)).Update("selected", true).Error
+}
+
+// preserveCharacterVisuals 在清空角色标准像/四视图前保留它们的历史版本。
+func preserveCharacterVisuals(tx *gorm.DB, ch *models.Character) error {
+	if err := preserveAssetVariant(tx, ch.ProjectID, VariantCharacterPortrait, ch.ID, ch.Portrait, "replaced"); err != nil {
+		return err
+	}
+	return preserveAssetVariant(tx, ch.ProjectID, VariantCharacterSheet, ch.ID, ch.Sheet, "replaced")
+}
+
+// preserveOutfitVisuals 在替换或清空套装定妆照/四视图前保留它们的历史版本。
+func preserveOutfitVisuals(tx *gorm.DB, outfit *models.CharacterOutfit) error {
+	if err := preserveAssetVariant(tx, outfit.ProjectID, VariantOutfitImage, outfit.ID, outfit.Image, "replaced"); err != nil {
+		return err
+	}
+	return preserveAssetVariant(tx, outfit.ProjectID, VariantOutfitSheet, outfit.ID, outfit.Sheet, "replaced")
+}
 
 type AssetVariantService struct{ db *gorm.DB }
 
@@ -98,6 +150,9 @@ func (s *AssetVariantService) Delete(projectID, variantID uint) error {
 }
 
 func cleanupAssetVariants(tx *gorm.DB, projectID uint, entityType string, entityID uint) error {
+	if keepAllAssetVariants[entityType] {
+		return nil
+	}
 	var stale []models.AssetVariant
 	if err := tx.Where("project_id = ? AND entity_type = ? AND entity_id = ? AND favorite = ? AND selected = ?", projectID, entityType, entityID, false, false).
 		Order("created_at DESC, id DESC").Offset(MaxNonFavoriteAssetVariants).Find(&stale).Error; err != nil {
@@ -125,6 +180,8 @@ func validateVariantOwner(db *gorm.DB, projectID uint, entityType string, entity
 		db.Model(&models.CharacterLook{}).Where("id = ? AND project_id = ?", entityID, projectID).Count(&count)
 	case VariantAssetImage, VariantAssetSheet:
 		db.Model(&models.Asset{}).Where("id = ? AND project_id = ?", entityID, projectID).Count(&count)
+	case VariantOutfitImage, VariantOutfitSheet:
+		db.Model(&models.CharacterOutfit{}).Where("id = ? AND project_id = ?", entityID, projectID).Count(&count)
 	default:
 		return fmt.Errorf("invalid entity_type")
 	}
@@ -223,6 +280,20 @@ func variantConsumerSceneIDs(tx *gorm.DB, projectID uint, entityType string, ent
 			return nil, err
 		}
 		add(rows)
+	case VariantOutfitImage, VariantOutfitSheet:
+		if err := tx.Table("scene_character_outfits AS sco").Select("DISTINCT sco.scene_id").
+			Joins("JOIN scenes AS s ON s.id = sco.scene_id").Where("sco.outfit_id = ? AND s.project_id = ? AND s.generation = ?", entityID, projectID, project.Generation).
+			Pluck("sco.scene_id", &rows).Error; err != nil {
+			return nil, err
+		}
+		add(rows)
+		rows = nil
+		if err := tx.Table("shot_character_outfits AS shco").Select("DISTINCT shots.scene_id").
+			Joins("JOIN shots ON shots.id = shco.shot_id").Joins("JOIN scenes AS s ON s.id = shots.scene_id").
+			Where("shco.outfit_id = ? AND s.project_id = ? AND s.generation = ?", entityID, projectID, project.Generation).Pluck("shots.scene_id", &rows).Error; err != nil {
+			return nil, err
+		}
+		add(rows)
 	case VariantAssetImage, VariantAssetSheet:
 		var asset models.Asset
 		if err := tx.Where("id = ? AND project_id = ?", entityID, projectID).First(&asset).Error; err != nil {
@@ -287,6 +358,10 @@ func variantEntityTarget(entityType string) (any, string, error) {
 		return &models.Asset{}, "image", nil
 	case VariantAssetSheet:
 		return &models.Asset{}, "sheet", nil
+	case VariantOutfitImage:
+		return &models.CharacterOutfit{}, "image", nil
+	case VariantOutfitSheet:
+		return &models.CharacterOutfit{}, "sheet", nil
 	default:
 		return nil, "", fmt.Errorf("invalid entity_type")
 	}
@@ -322,6 +397,20 @@ func updateSelectedAsset(db *gorm.DB, projectID uint, entityType string, entityI
 			updates[key] = value
 		}
 		updates[field] = file
+		// 早期生成或旁路写入的当前文件可能从未登记为版本；被替换前先补登记，保证可恢复。
+		var previous []string
+		prevQuery := tx.Model(model).Where("id = ? AND project_id = ?", entityID, projectID)
+		if guardField != "" {
+			prevQuery = prevQuery.Where(guardField+" = ?", guardValue)
+		}
+		if err := prevQuery.Pluck(field, &previous).Error; err != nil {
+			return err
+		}
+		if len(previous) == 1 && strings.TrimSpace(previous[0]) != file {
+			if err := preserveAssetVariant(tx, projectID, entityType, entityID, previous[0], "replaced"); err != nil {
+				return err
+			}
+		}
 		query := tx.Model(model).Where("id = ? AND project_id = ?", entityID, projectID)
 		if guardField != "" {
 			query = query.Where(guardField+" = ?", guardValue)

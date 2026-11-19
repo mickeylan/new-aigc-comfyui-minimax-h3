@@ -73,3 +73,11 @@ test('阶段提示词可只保存不生成，历史标准像保留并可恢复',
   assert.match(looks, /历史标准像（保留，可恢复）/)
   assert.match(looks, /if\(created&&row\?\.id\)await openStagePrompt\(row\)/)
 })
+
+test('套装旧定妆照/四视图有历史版本入口并可设为当前', () => {
+  assert.match(looks, /@click="openOutfitHistory\(o\)">历史版本<\/button>/)
+  assert.match(looks, /asset-variants\?entity_type=\$\{t\}&entity_id=\$\{h\.outfit\.id\}/)
+  assert.match(looks, /'character_outfit_image','character_outfit_sheet'/)
+  assert.match(looks, /asset-variants\/\$\{v\.id\}\/select`/)
+  assert.match(detail, /替换下来的旧标准像\/四视图全部保留，不自动清理/)
+})

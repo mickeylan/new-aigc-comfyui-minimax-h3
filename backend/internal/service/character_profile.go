@@ -218,7 +218,13 @@ func (s *CharacterProfileService) GenerateProfile(char *models.Character, projec
 		"style": strings.TrimSpace(result.WardrobeDetail),
 	}
 
-	return s.db.Model(char).Updates(updates).Error
+	// 重新生成档案会清空当前标准像/四视图；旧图保留为历史版本，可在“标准像版本”中恢复。
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := preserveCharacterVisuals(tx, char); err != nil {
+			return err
+		}
+		return tx.Model(char).Updates(updates).Error
+	})
 }
 
 var characterAgePattern = regexp.MustCompile(`(?:年龄(?:为|约|：|:)?\s*)?(\d{1,2})\s*岁`)
@@ -748,7 +754,12 @@ func (s *CharacterProfileService) GenerateReferencePrompt(char *models.Character
 		updates["profile_status"] = models.ProfileStatusDraft
 		updates["review_note"] = ""
 	}
-	if err := s.db.Model(char).Updates(updates).Error; err != nil {
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := preserveCharacterVisuals(tx, char); err != nil {
+			return err
+		}
+		return tx.Model(char).Updates(updates).Error
+	}); err != nil {
 		return "", err
 	}
 	return prompt, nil

@@ -6923,7 +6923,14 @@ func (s *ProjectService) UpdateCharacter(ch *models.Character, req models.Charac
 		updates["sheet_error"] = ""
 		updates["profile_version"] = gorm.Expr("profile_version + 1")
 	}
-	if err := s.db.Model(ch).Updates(updates).Error; err != nil {
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if _, clears := updates["portrait"]; clears {
+			if err := preserveCharacterVisuals(tx, ch); err != nil {
+				return err
+			}
+		}
+		return tx.Model(ch).Updates(updates).Error
+	}); err != nil {
 		return err
 	}
 	s.pushProject(nil)
@@ -6961,6 +6968,9 @@ func (s *ProjectService) DeleteCharacter(projectID, id uint) error {
 				return err
 			}
 			if err := tx.Where("outfit_id IN ?", outfitIDs).Delete(&models.ShotCharacterOutfit{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("project_id = ? AND entity_type IN ? AND entity_id IN ?", projectID, []string{VariantOutfitImage, VariantOutfitSheet}, outfitIDs).Delete(&models.AssetVariant{}).Error; err != nil {
 				return err
 			}
 		}
@@ -9112,11 +9122,11 @@ func (s *ProjectService) recoverCharacterPortraitFromDisk(ch *models.Character) 
 			if err != nil {
 				return err
 			}
-			res := s.db.Model(&models.Character{}).Where("id = ? AND portrait_task_id = ?", ch.ID, ch.PortraitTaskID).Updates(map[string]any{"portrait": filepath.Base(path), "portrait_task_id": "", "portrait_error": ""})
-			if res.Error != nil {
-				return res.Error
+			_, applied, err := updateSelectedAsset(s.db, ch.ProjectID, VariantCharacterPortrait, ch.ID, filepath.Base(path), ch.ReferencePrompt, "recovered_from_disk", map[string]any{"portrait_task_id": "", "portrait_error": ""}, "portrait_task_id", ch.PortraitTaskID)
+			if err != nil {
+				return err
 			}
-			if res.RowsAffected > 0 {
+			if applied {
 				s.pushProject(nil)
 				return nil
 			}

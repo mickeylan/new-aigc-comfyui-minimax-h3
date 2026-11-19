@@ -236,6 +236,9 @@ func (s *CharacterLookService) SaveOutfit(projectID, characterID, outfitID uint,
 				updates["audit_status"] = models.LookStatusDraft
 				updates["audit_note"] = ""
 			}
+			if err := preserveOutfitVisuals(tx, &outfit); err != nil {
+				return err
+			}
 			if err := tx.Model(&outfit).Updates(updates).Error; err != nil {
 				return err
 			}
@@ -323,6 +326,9 @@ func (s *CharacterLookService) DeleteOutfit(projectID, characterID, outfitID uin
 			return err
 		}
 		if err := tx.Where("outfit_id = ?", outfitID).Delete(&models.ShotCharacterOutfit{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ? AND entity_type IN ? AND entity_id = ?", projectID, []string{VariantOutfitImage, VariantOutfitSheet}, outfitID).Delete(&models.AssetVariant{}).Error; err != nil {
 			return err
 		}
 		return tx.Delete(&outfit).Error
@@ -643,7 +649,19 @@ func (s *CharacterLookService) SaveOutfitUploadedImage(projectID, characterID, o
 		updates["sheet_task_id"] = ""
 		updates["sheet_error"] = "换装定妆照已替换，请重新生成 Krea2 四视图"
 	}
-	return s.db.Model(&outfit).Updates(updates).Error
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := preserveOutfitVisuals(tx, &outfit); err != nil {
+			return err
+		}
+		if err := tx.Model(&outfit).Updates(updates).Error; err != nil {
+			return err
+		}
+		variantType := VariantOutfitImage
+		if sheet {
+			variantType = VariantOutfitSheet
+		}
+		return recordCurrentAssetVariant(tx, projectID, variantType, outfit.ID, filepath.Base(path), "manual_upload")
+	})
 }
 
 func outfitResultFilename(prefix string, outfitID uint, taskID, ext string) string {
@@ -697,7 +715,20 @@ func (s *CharacterLookService) SyncOutfitImages() {
 				s.db.Model(outfit).Where(state.taskField+" = ?", state.taskID).Updates(map[string]any{state.taskField: "", state.errorField: err.Error()})
 				continue
 			}
-			s.db.Model(outfit).Where(state.taskField+" = ?", state.taskID).Updates(map[string]any{state.fileField: filepath.Base(path), state.taskField: "", state.errorField: ""})
+			variantType, previous := VariantOutfitImage, outfit.Image
+			if state.fileField == "sheet" {
+				variantType, previous = VariantOutfitSheet, outfit.Sheet
+			}
+			_ = s.db.Transaction(func(tx *gorm.DB) error {
+				res := tx.Model(outfit).Where(state.taskField+" = ?", state.taskID).Updates(map[string]any{state.fileField: filepath.Base(path), state.taskField: "", state.errorField: ""})
+				if res.Error != nil || res.RowsAffected == 0 {
+					return res.Error
+				}
+				if err := preserveAssetVariant(tx, outfit.ProjectID, variantType, outfit.ID, previous, "replaced"); err != nil {
+					return err
+				}
+				return recordCurrentAssetVariant(tx, outfit.ProjectID, variantType, outfit.ID, filepath.Base(path), "task:"+state.taskID)
+			})
 		}
 	}
 }

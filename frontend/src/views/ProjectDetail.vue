@@ -1310,7 +1310,7 @@
     <div v-if="variantTarget" class="modal-mask" @click.self="variantTarget = null">
       <div class="modal card">
         <h2>{{ variantTarget.label }}</h2>
-        <p class="field-hint">生成与上传产生的历史版本。收藏版本不会被自动清理。</p>
+        <p class="field-hint">{{ ['character_portrait', 'character_sheet'].includes(variantTarget.entityType) ? '生成、上传、重新生成档案或改名时替换下来的旧标准像/四视图全部保留，不自动清理；回忆、闪回段落可设为当前，或在 Scene 参考图里直接选用历史版本。' : '生成与上传产生的历史版本。收藏版本不会被自动清理。' }}</p>
         <div v-if="variantBusy" class="field-hint">版本加载中…</div>
         <div v-else-if="!assetVariantRows.length" class="empty-inline">暂无历史版本。</div>
         <div v-for="variant in assetVariantRows" :key="variant.id" class="revision-row">
