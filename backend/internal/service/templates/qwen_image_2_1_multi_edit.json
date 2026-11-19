@@ -100,7 +100,7 @@
       "key": "unet_name",
       "type": "string",
       "label": "UNET",
-      "default": "qwen-image2.1\\qwen_image_2.1_bf16.safetensors"
+      "default": "qwen-image2.1\\qwen_image_2.1_int8_convrot.safetensors"
     },
     {
       "key": "clip_name",
