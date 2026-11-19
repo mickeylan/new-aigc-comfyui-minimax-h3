@@ -1,13 +1,12 @@
 // 角色年龄阶段的前端纯逻辑：标签、套装分组与批量指定摘要。页面只负责渲染。
 
-// 阶段形象直接生成四视图（自带正面面部特写），必须以角色主标准像为参考；Moss 只支持文生图，不提供。
-// 旧的文生图取值（qwen_image_2_1、moss）按 Qwen 多图编辑显示。
+// 阶段形象直接生成四视图（自带正面面部特写），必须以角色主标准像为参考；Moss 与 Krea2 只支持文生图，不提供。
+// 旧取值（qwen_image_2_1、moss、krea2）一律按 Qwen 多图编辑显示。
 export const ageStagePortraitEngines = [
-  { value: 'qwen_edit', label: 'Qwen-Image-2.1 多图编辑（参考主标准像，推荐）' },
-  { value: 'krea2', label: 'Krea2 四视图编辑（参考主标准像）' },
+  { value: 'qwen_edit', label: 'Qwen-Image-2.1 多图编辑（参考主标准像）' },
 ]
 
-export const normalizeStageEngine = value => value === 'krea2' ? 'krea2' : 'qwen_edit'
+export const normalizeStageEngine = () => 'qwen_edit'
 
 export function ageStageLabel(stage) {
   if (!stage) return ''

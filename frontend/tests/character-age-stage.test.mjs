@@ -75,13 +75,14 @@ test('阶段提示词可只保存不生成，历史四视图保留并可恢复',
   assert.match(looks, /if\(created&&row\?\.id\)await openStagePrompt\(row\)/)
 })
 
-// 用户要求：阶段四视图必须有参考图；Moss 只支持文生图，因此只提供 Qwen 多图编辑与 Krea2 编辑。
-test('阶段四视图必须参考主标准像，不提供文生图引擎，旧取值按 Qwen 多图编辑显示', () => {
-  assert.deepEqual(ageStagePortraitEngines.map(e => e.value), ['qwen_edit', 'krea2'])
+// 用户要求：阶段四视图必须有参考图；Moss 与 Krea2 都只支持文生图，因此只提供 Qwen 多图编辑。
+test('阶段四视图必须参考主标准像，只用 Qwen 多图编辑，旧取值按 Qwen 多图编辑显示', () => {
+  assert.deepEqual(ageStagePortraitEngines.map(e => e.value), ['qwen_edit'])
   assert.equal(normalizeStageEngine('moss'), 'qwen_edit')
   assert.equal(normalizeStageEngine('qwen_image_2_1'), 'qwen_edit')
   assert.equal(normalizeStageEngine(''), 'qwen_edit')
-  assert.equal(normalizeStageEngine('krea2'), 'krea2')
+  assert.equal(normalizeStageEngine('krea2'), 'qwen_edit')
+  assert.doesNotMatch(looks, /Krea2 四视图编辑/)
   assert.match(looks, /:disabled="!!s\.portrait_task_id\|\|!character\?\.portrait"[^>]*@click="openStagePrompt\(s\)">\{\{s\.portrait_task_id\?'生成中…':'审阅提示词并生成四视图'\}\}/)
   assert.match(looks, /以角色主标准像为参考/)
 })

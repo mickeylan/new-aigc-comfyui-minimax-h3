@@ -195,24 +195,33 @@ func TestAgeStageDefaultsToQwenEditSheetWithMainPortrait(t *testing.T) {
 	}
 }
 
-// Krea2 备选：同一套 Moss 结构提示词，以主标准像作 source_image 走 Krea2 四视图编辑模板。
-func TestAgeStageKrea2SheetUsesMainPortraitAsSource(t *testing.T) {
-	svc, project, character := setupAgeStageTestDB(t)
-	attachAgeStageTaskService(t, svc, "krea2_character_sheet.json")
-	registerAgeStageUploads(t, svc, project.ID, "face.png")
-	stage, err := svc.SaveAgeStage(project.ID, character.ID, 0, AgeStageInput{Name: "少年", Age: intPtr(15), Appearance: "15岁少女，马尾", PortraitEngine: ImageEngineKrea2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.StartAgeStagePortrait(project.ID, character.ID, stage.ID, ""); err != nil {
-		t.Fatal(err)
-	}
-	task, files := onlyTaskInputs(t, svc)
-	if refs := files["source_image"]; len(files) != 1 || len(refs) != 1 || refs[0].Name != "face.png" {
-		t.Fatalf("krea2 stage sheet must use the main portrait as source, got %+v", files)
-	}
-	if task.Prompt != ageStageSheetPrompt(&project, &character, stage) || !strings.HasPrefix(task.Prompt, "参考图是角色") || strings.Contains(task.Prompt, "<image1>") || !strings.Contains(task.Prompt, "15岁少女，马尾") || strings.Contains(task.Prompt, "28岁") {
-		t.Fatalf("krea2 must submit the Moss-structured sheet prompt bound to its source image: %s", task.Prompt)
+// 用户确认 Moss 与 Krea2 都只支持文生图：选过 krea2/moss 的阶段也只走 Qwen 多图编辑并带主标准像。
+func TestAgeStageTextOnlyEnginesFallBackToQwenEdit(t *testing.T) {
+	for _, engine := range []string{ImageEngineKrea2, ImageEngineMoss} {
+		svc, project, character := setupAgeStageTestDB(t)
+		attachAgeStageTaskService(t, svc, "qwen_image_2_1_multi_edit.json")
+		registerAgeStageUploads(t, svc, project.ID, "face.png")
+		stage, err := svc.SaveAgeStage(project.ID, character.ID, 0, AgeStageInput{Name: "少年", Age: intPtr(15), Appearance: "15岁少女，马尾", PortraitEngine: engine})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stage.PortraitEngine != AgeStagePortraitQwenEdit {
+			t.Fatalf("%s must be saved as qwen_edit, got %q", engine, stage.PortraitEngine)
+		}
+		if err := svc.StartAgeStagePortrait(project.ID, character.ID, stage.ID, ""); err != nil {
+			t.Fatal(err)
+		}
+		task, files := onlyTaskInputs(t, svc)
+		if refs := files["ref_images"]; len(files) != 1 || len(refs) != 1 || refs[0].Name != "face.png" {
+			t.Fatalf("%s stage sheet must reference the main portrait, got %+v", engine, files)
+		}
+		var tpl models.Template
+		if err := svc.db.First(&tpl, task.TemplateID).Error; err != nil || tpl.Code != TemplateQwen21MultiEdit {
+			t.Fatalf("%s stage sheet must use the Qwen multi-edit template, got %q %v", engine, tpl.Code, err)
+		}
+		if !strings.HasPrefix(task.Prompt, "<image1>") || !strings.Contains(task.Prompt, "15岁少女，马尾") || strings.Contains(task.Prompt, "28岁") {
+			t.Fatalf("%s stage sheet prompt must bind <image1> and keep the stage appearance: %s", engine, task.Prompt)
+		}
 	}
 }
 

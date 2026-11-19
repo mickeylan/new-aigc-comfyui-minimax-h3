@@ -13,8 +13,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// AgeStagePortraitQwenEdit 以角色主标准像为 <image1>、经 Qwen-Image-2.1 多图编辑生成阶段四视图；默认来源。
-// Moss 只支持文生图，不能带参考图，因此不作为阶段来源。
+// AgeStagePortraitQwenEdit 以角色主标准像为 <image1>、经 Qwen-Image-2.1 多图编辑生成阶段四视图。
+// 这是唯一来源：Moss 与 Krea2 都只支持文生图，不能带参考图。
 const AgeStagePortraitQwenEdit = "qwen_edit"
 
 type AgeStageInput struct {
@@ -24,14 +24,12 @@ type AgeStageInput struct {
 	PortraitEngine string `json:"portrait_engine"`
 }
 
-// normalizeAgeStagePortraitEngine 阶段四视图必须带参考图：Qwen 多图编辑（默认）或 Krea2 四视图编辑。
-// 旧的文生图取值（qwen_image_2_1、moss）一律改为 Qwen 多图编辑。
+// normalizeAgeStagePortraitEngine 阶段四视图必须带参考图，只用 Qwen 多图编辑。
+// 旧取值（qwen_image_2_1、moss、krea2）一律改为 Qwen 多图编辑。
 func normalizeAgeStagePortraitEngine(value string) (string, error) {
 	switch strings.TrimSpace(value) {
-	case "", AgeStagePortraitQwenEdit, ImageEngineQwen21, ImageEngineMoss:
+	case "", AgeStagePortraitQwenEdit, ImageEngineQwen21, ImageEngineMoss, ImageEngineKrea2:
 		return AgeStagePortraitQwenEdit, nil
-	case ImageEngineKrea2:
-		return ImageEngineKrea2, nil
 	}
 	return "", fmt.Errorf("不支持的年龄阶段四视图引擎")
 }
@@ -238,11 +236,7 @@ func (s *CharacterLookService) AgeStagePortraitPrompt(projectID, characterID, st
 // “由左到右”四格版式）。四视图自带正面面部特写，不再单独生成阶段标准像。
 // 参考图只负责同一人物的脸部特征与画风；年龄、体型、发型与服装以阶段外貌为准，外貌未写服装/鞋履时才补默认值。
 func ageStageSheetPrompt(project *models.Project, ch *models.Character, stage *models.CharacterAgeStage) string {
-	reference := "参考图"
-	if engine, _ := normalizeAgeStagePortraitEngine(stage.PortraitEngine); engine == AgeStagePortraitQwenEdit {
-		reference = "<image1>"
-	}
-	binding := fmt.Sprintf("%s是角色「%s」的主标准像，仅用于保持同一人物的脸部特征（眼型、眉形、鼻型、脸部轮廓的延续）与项目画风；不沿用%s中的年龄、头身比例、发型与服装。", reference, ch.Name, reference)
+	binding := fmt.Sprintf("<image1>是角色「%s」的主标准像，仅用于保持同一人物的脸部特征（眼型、眉形、鼻型、脸部轮廓的延续）与项目画风；不沿用<image1>中的年龄、头身比例、发型与服装。", ch.Name)
 	return binding + ageStageSheetBody(project, ch, stage)
 }
 
@@ -305,15 +299,15 @@ func (s *CharacterLookService) SaveAgeStagePortraitPrompt(projectID, characterID
 	if prompt == "" {
 		return fmt.Errorf("提示词不能为空")
 	}
-	if err := checkAgeStageReferenceBinding(stage.PortraitEngine, prompt); err != nil {
+	if err := checkAgeStageReferenceBinding(prompt); err != nil {
 		return err
 	}
 	return s.db.Model(&models.CharacterAgeStage{}).Where("id = ?", stage.ID).Update("portrait_prompt", prompt).Error
 }
 
 // checkAgeStageReferenceBinding Qwen 多图编辑的提示词必须用 <image1> 绑定主标准像。
-func checkAgeStageReferenceBinding(engine, prompt string) error {
-	if engine, _ := normalizeAgeStagePortraitEngine(engine); engine == AgeStagePortraitQwenEdit && !strings.Contains(prompt, "<image1>") {
+func checkAgeStageReferenceBinding(prompt string) error {
+	if !strings.Contains(prompt, "<image1>") {
 		return fmt.Errorf("阶段四视图以主标准像为参考，提示词必须保留 <image1>")
 	}
 	return nil
@@ -339,10 +333,6 @@ func (s *CharacterLookService) StartAgeStagePortrait(projectID, characterID, sta
 	if err := s.db.Where("id = ? AND project_id = ?", characterID, projectID).First(&ch).Error; err != nil {
 		return err
 	}
-	engine, err := normalizeAgeStagePortraitEngine(stage.PortraitEngine)
-	if err != nil {
-		return err
-	}
 	if strings.TrimSpace(ch.Portrait) == "" {
 		return fmt.Errorf("阶段四视图以角色「%s」的主标准像为参考，请先生成或上传主标准像；也可直接上传阶段四视图", ch.Name)
 	}
@@ -353,16 +343,13 @@ func (s *CharacterLookService) StartAgeStagePortrait(projectID, characterID, sta
 	if prompt == "" {
 		prompt = ageStageSheetPrompt(&project, &ch, stage)
 	}
-	if err := checkAgeStageReferenceBinding(engine, prompt); err != nil {
+	if err := checkAgeStageReferenceBinding(prompt); err != nil {
 		return err
 	}
-	reference := []FileMeta{{TaskID: fmt.Sprint(projectID), Name: ch.Portrait}}
-	templateCode, params, files := TemplateQwen21MultiEdit, qwenPortraitParams(), map[string][]FileMeta{"ref_images": reference}
+	params := qwenPortraitParams()
 	params["aspect_ratio"] = qwenAspectRatio("16:9")
-	if engine == ImageEngineKrea2 {
-		templateCode, params, files = "krea2_character_sheet", nil, map[string][]FileMeta{"source_image": reference}
-	}
-	tpl, err := enabledTemplateByCode(s.db, templateCode)
+	files := map[string][]FileMeta{"ref_images": {{TaskID: fmt.Sprint(projectID), Name: ch.Portrait}}}
+	tpl, err := enabledTemplateByCode(s.db, TemplateQwen21MultiEdit)
 	if err != nil {
 		return err
 	}
@@ -379,7 +366,7 @@ func (s *CharacterLookService) StartAgeStagePortrait(projectID, characterID, sta
 		}
 		return fmt.Errorf("该阶段四视图任务已存在")
 	}
-	log.Printf("[age-stage-submit] project=%d character=%d stage=%d engine=%s template=%s", projectID, characterID, stage.ID, engine, templateCode)
+	log.Printf("[age-stage-submit] project=%d character=%d stage=%d template=%s ref=%s", projectID, characterID, stage.ID, TemplateQwen21MultiEdit, ch.Portrait)
 	go func() {
 		if err := s.tasks.Execute(task.TaskID); err != nil && !errors.Is(err, errNoFreeGPU) {
 			log.Printf("[age-stage %d] task %s failed: %v", stage.ID, task.TaskID, err)
