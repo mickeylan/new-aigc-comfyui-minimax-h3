@@ -5163,3 +5163,57 @@ func TestWriteSRTEntry(t *testing.T) {
 		t.Fatalf("旁白不应加说话人前缀: %q", sb2.String())
 	}
 }
+
+// 用户要求：Skill 是通用的。Qwen 标准像以 Qwen 文生图 Skill 的 JSON/画幅契约为准，再附加通用角色 Skill：
+// 女性优先“成年女性角色美术增强”，男性用“角色设定标准”；不使用 qwen-image-2.1-character-card 等模型专用角色 Skill。
+func TestBuildQwenPortraitPromptAddsGenericCharacterSkill(t *testing.T) {
+	ps := newTestProjectService(t)
+	if err := ps.db.AutoMigrate(&models.Skill{}, &models.ProjectSkillConfig{}, &models.SkillAuditLog{}); err != nil {
+		t.Fatal(err)
+	}
+	ps.skills = NewSkillService(ps.db)
+	if err := ps.skills.InitSystemSkills(); err != nil {
+		t.Fatal(err)
+	}
+	provider := &captureTextProvider{response: `{"rewritten_prompt":"A vertical portrait photograph of one woman against a clean off-white studio background, her complete hairstyle visible and the neckline clearly framed under soft frontal light.","wh_ratio":"9:16"}`}
+	ps.textProvider = provider
+	p := &models.Project{ID: 1, Style: "真人写实"}
+	cases := []struct {
+		ch        *models.Character
+		skillCode string
+		want      string
+	}{
+		{&models.Character{ProjectID: 1, Name: "上官若琳", Gender: "女性", Appearance: "鹅蛋脸，杏眼", WardrobeDetail: "红金宫装", ReferencePrompt: "单一角色标准像"}, femaleCharacterBeautySkillCode, "女性角色美术增强契约"},
+		{&models.Character{ProjectID: 1, Name: "舒寒", Gender: "男性", Appearance: "剑眉，高束发", WardrobeDetail: "玄色劲装", ReferencePrompt: "单一角色标准像"}, "character-standard", "东方幻想漫剧角色设计师"},
+	}
+	for _, tc := range cases {
+		got, err := ps.buildQwenPortraitPrompt(p, tc.ch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(got, "portrait photograph") {
+			t.Fatalf("prompt not parsed from the T2I contract: %s", got)
+		}
+		for _, want := range []string{"400-500 words", "【当前项目 Skill】", tc.want} {
+			if !strings.Contains(provider.system, want) {
+				t.Fatalf("%s system missing %q:\n%s", tc.ch.Name, want, provider.system)
+			}
+		}
+		for _, banned := range []string{"professional character-design-card", "请为以下角色生成完整的结构化档案"} {
+			if strings.Contains(provider.system, banned) || strings.Contains(provider.user, banned) {
+				t.Fatalf("%s must not carry %q", tc.ch.Name, banned)
+			}
+		}
+		if !strings.Contains(provider.user, "Explicit output aspect ratio: 9:16") {
+			t.Fatalf("T2I request missing ratio: %s", provider.user)
+		}
+		var count int64
+		if err := ps.db.Model(&models.SkillAuditLog{}).Where("skill_code = ?", tc.skillCode).Count(&count).Error; err != nil || count != 1 {
+			t.Fatalf("%s character skill audit=%d err=%v", tc.skillCode, count, err)
+		}
+	}
+	var t2iCount int64
+	if err := ps.db.Model(&models.SkillAuditLog{}).Where("skill_code = ?", QwenImage21T2IProgram).Count(&t2iCount).Error; err != nil || t2iCount != 2 {
+		t.Fatalf("Qwen T2I skill audit=%d err=%v", t2iCount, err)
+	}
+}

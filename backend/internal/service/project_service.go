@@ -7176,7 +7176,7 @@ func (s *ProjectService) buildQwenPortraitPrompt(p *models.Project, ch *models.C
 	var raw string
 	var err error
 	if s.skills != nil {
-		raw, err = s.skills.ChatWithConfiguredOrFallbackSkill(ch.ProjectID, models.SkillStageQwenImageT2I, QwenImage21T2IProgram, s.textProvider, "", "", map[string]string{"request": request})
+		raw, err = s.chatQwenPortraitWithSkills(ch, context, request)
 	} else {
 		raw, err = s.textProvider.Chat(qwenImage21T2ISystem, request)
 	}
@@ -7193,6 +7193,41 @@ func (s *ProjectService) buildQwenPortraitPrompt(p *models.Project, ch *models.C
 	return prompt, nil
 }
 
+// chatQwenPortraitWithSkills 以 Qwen 文生图 Skill 的输出契约（JSON、独立画幅）为准，再附加与出图模型无关的
+// 通用角色 Skill 设计规则：女性优先“成年女性角色美术增强”（明确未成年除外），其余用角色设定阶段的项目有效 Skill。
+// 两个 Skill 分别写审计；项目停用 Qwen 文生图 Skill 时退回内置的同一契约。
+func (s *ProjectService) chatQwenPortraitWithSkills(ch *models.Character, characterInfo, request string) (string, error) {
+	t2iSkill, err := s.skills.ConfiguredOrFallbackSkill(ch.ProjectID, models.SkillStageQwenImageT2I, QwenImage21T2IProgram)
+	if err != nil {
+		return "", err
+	}
+	system, user := qwenImage21T2ISystem, request
+	if t2iSkill != nil {
+		system, user = s.skills.AssemblePrompt(t2iSkill, map[string]string{"request": request})
+	}
+	system, characterSkill, err := withCharacterDesignSkill(s.skills, ch.ProjectID, femaleBeautyDesignApplies(ch), system, characterInfo)
+	if err != nil {
+		return "", err
+	}
+	started := time.Now()
+	raw, chatErr := s.textProvider.Chat(system, user)
+	if t2iSkill != nil {
+		errText := ""
+		if chatErr != nil {
+			errText = chatErr.Error()
+		}
+		if auditErr := s.skills.LogSkillUsage(ch.ProjectID, models.SkillStageQwenImageT2I, t2iSkill, user, len(raw), time.Since(started).Milliseconds(), chatErr == nil, errText); chatErr == nil && auditErr != nil {
+			return "", fmt.Errorf("Skill 审计写入失败: %w", auditErr)
+		}
+	}
+	if characterSkill != nil {
+		if auditErr := logCharacterDesignSkill(s.skills, ch.ProjectID, characterSkill, characterInfo, raw, started, chatErr); auditErr != nil {
+			return "", auditErr
+		}
+	}
+	return raw, chatErr
+}
+
 func buildPortraitPrompt(p *models.Project, ch *models.Character) string {
 	parts := make([]string, 0, 8)
 	if prompt := strings.TrimSpace(ch.ReferencePrompt); prompt != "" {
@@ -7200,8 +7235,9 @@ func buildPortraitPrompt(p *models.Project, ch *models.Character) string {
 		// 兼容修复前保存的旧提示词：提交生图前剔除腰部以下描述，保证大头照构图。
 		parts = append(parts, sanitizePortraitHeadshotPrompt(prompt))
 	} else {
-		if anchor := characterAgeAnchor(ch.Appearance, ch.Trait); anchor != "" {
-			parts = append(parts, ageSubject(ch.Appearance, ch.Trait), anchor)
+		// 年龄只写一次：原先“22岁女性，22岁人物”重复了同一年龄。
+		if subject := ageSubject(ch.Appearance, ch.Trait); subject != "" {
+			parts = append(parts, subject)
 		}
 		if desc := styleDescriptor(p.Style); desc != "" {
 			parts = append(parts, desc)

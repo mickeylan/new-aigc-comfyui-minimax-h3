@@ -149,10 +149,14 @@ func TestAgeStageDefaultsToQwenEditSheetWithMainPortrait(t *testing.T) {
 	if !strings.HasPrefix(draft, "<image1>是角色「林采微」的主标准像") {
 		t.Fatalf("draft must bind the main portrait first:\n%s", draft)
 	}
-	for _, want := range []string{"不沿用<image1>中的年龄", "6岁人物", "6岁女孩，圆脸，齐刘海短发", "由左到右排列：正面面部特写、正面全身站立、侧面全身站立、背面全身站立", "指定鞋履："} {
+	for _, want := range []string{"不沿用<image1>中的年龄", "6岁女孩，圆脸，齐刘海短发，年龄感、身高头身比例与面部成熟度严格符合该年龄", "由左到右排列：正面面部特写、正面全身站立、侧面全身站立、背面全身站立", "指定鞋履："} {
 		if !strings.Contains(draft, want) {
 			t.Fatalf("draft missing %q:\n%s", want, draft)
 		}
+	}
+	// 用户要求：阶段外貌已写明年龄时不再前置“6岁人物”，同一年龄只出现一次，也不出现“。，”。
+	if strings.Count(draft, "6岁") != 1 || strings.Contains(draft, "。，") {
+		t.Fatalf("age must appear once without broken punctuation:\n%s", draft)
 	}
 	for _, banned := range []string{"28岁", "高挑", "标准参考像"} {
 		if strings.Contains(draft, banned) {
@@ -254,8 +258,11 @@ func TestAgeStageSheetPromptLeadsWithAgeAndKeepsDeclaredOutfit(t *testing.T) {
 	if !strings.HasPrefix(prompt, "<image1>是角色「柳乐儿」的主标准像") {
 		t.Fatalf("prompt must bind the main portrait first:\n%s", prompt)
 	}
-	if !strings.Contains(prompt, "与服装。19岁女性，年龄感、身高头身比例与面部成熟度严格符合19岁，身着白色衫裙") {
+	if !strings.Contains(prompt, "与服装。19岁女性，年龄感、身高头身比例与面部成熟度严格符合该年龄，身着白色衫裙") {
 		t.Fatalf("age must lead the subject right after the reference binding:\n%s", prompt)
+	}
+	if strings.Count(prompt, "19岁") != 1 || strings.Contains(prompt, "。，") {
+		t.Fatalf("stage age must be written once without broken punctuation:\n%s", prompt)
 	}
 	for _, want := range []string{"指定鞋履：脚穿藕色布制中国古典短靴", "由左到右排列"} {
 		if !strings.Contains(prompt, want) {

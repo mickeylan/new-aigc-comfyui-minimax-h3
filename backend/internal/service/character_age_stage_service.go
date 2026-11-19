@@ -278,11 +278,21 @@ func ageStageSheetPrompt(project *models.Project, ch *models.Character, stage *m
 func ageStageSheetBody(project *models.Project, ch *models.Character, stage *models.CharacterAgeStage) string {
 	// 阶段外貌里写明的鞋履交给鞋履锁定，避免被按时代背景推断的默认鞋覆盖。
 	view := models.Character{Name: ch.Name, Role: ch.Role, Gender: ch.Gender, Appearance: stage.Appearance, WardrobeDetail: ageStageClause(stage.Appearance, "鞋", "靴", "履", "屐")}
-	parts := []string{}
-	if stage.Age != nil && *stage.Age > 0 {
-		parts = append(parts, fmt.Sprintf("%d岁%s，年龄感、身高头身比例与面部成熟度严格符合%d岁", *stage.Age, ageStageGenderNoun(ch.Gender, *stage.Age), *stage.Age))
+	age := 0
+	if stage.Age != nil {
+		age = *stage.Age
 	}
-	parts = append(parts, strings.TrimSpace(stage.Appearance))
+	// 年龄来自阶段数据，只写一次（阶段外貌已写明同一年龄时不再前置）；锁定句用“该年龄”指代，不重复数字。
+	const ageLock = "年龄感、身高头身比例与面部成熟度严格符合该年龄"
+	appearance := strings.TrimSpace(stage.Appearance)
+	parts := []string{}
+	if prefix := ageLeadPrefix(appearance, ch.Gender, age); prefix != "" {
+		parts = append(parts, prefix, ageLock, appearance)
+	} else if _, _, written := explicitCharacterAgeRange(appearance); age > 0 || written {
+		parts = append(parts, appearance, ageLock)
+	} else {
+		parts = append(parts, appearance)
+	}
 	classical := classicalChineseSetting(project, &view)
 	if ageStageClause(stage.Appearance, "服", "衣", "衫", "裙", "袍", "裤", "褂", "甲") == "" {
 		if classical {
@@ -297,7 +307,7 @@ func ageStageSheetBody(project *models.Project, ch *models.Character, stage *mod
 	if style := strings.TrimSpace(project.Style); style != "" {
 		parts = append(parts, style+"风格")
 	}
-	return normalizePortraitStyle(strings.Join(nonEmptyStrings(parts), "，"), project) + "。" + characterSheetLayoutTail(project, &view)
+	return normalizePortraitStyle(joinPromptClauses(parts), project) + "。" + characterSheetLayoutTail(project, &view)
 }
 
 // ageStageClause 返回外貌中第一个包含任一关键词的分句，没有时返回空串。

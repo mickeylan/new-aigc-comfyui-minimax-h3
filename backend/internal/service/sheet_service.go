@@ -59,16 +59,17 @@ func characterSheetHasHair(text string) bool {
 // 用户未编辑四视图提示词或没有文本模型时使用。
 func characterSheetDescription(project *models.Project, ch *models.Character) string {
 	parts := make([]string, 0, 8)
-	if subject := ageSubject(ch.Appearance, ch.Trait); subject != "" {
-		parts = append(parts, subject)
-	}
 	appearance := strings.TrimSpace(ch.Appearance)
 	if appearance == "" {
 		appearance = strings.TrimSpace(ch.Trait)
 	}
-	if appearance != "" {
-		parts = append(parts, appearance)
+	age := 0
+	if _, _, ok := explicitCharacterAgeRange(appearance); !ok {
+		if traitAge, _, ok := explicitCharacterAgeRange(ch.Trait); ok {
+			age = traitAge
+		}
 	}
+	parts = append(parts, ageLeadPrefix(appearance, portraitGenderIdentity(ch), age), appearance)
 	if !characterSheetHasHair(appearance) {
 		if hair := historicalPortraitHairConstraint(ch, project); hair != "" {
 			parts = append(parts, hair)
@@ -83,7 +84,30 @@ func characterSheetDescription(project *models.Project, ch *models.Character) st
 	if style := strings.TrimSpace(project.Style); style != "" {
 		parts = append(parts, style+"风格")
 	}
-	return normalizePortraitStyle(strings.Join(parts, "，"), project)
+	return normalizePortraitStyle(joinPromptClauses(parts), project)
+}
+
+// ageLeadPrefix 返回写在外貌前的年龄主体（如“15岁少女”）。年龄只取自数据（age 为 0 表示未知，返回空）；
+// 外貌已写明同一年龄时返回空，避免同一年龄出现两遍，外貌原文保持不动；称谓按年龄与性别推断，不写死“青年”等年龄段。
+func ageLeadPrefix(appearance, gender string, age int) string {
+	if age <= 0 || strings.Contains(appearance, fmt.Sprintf("%d岁", age)) {
+		return ""
+	}
+	if written, _, ok := explicitCharacterAgeRange(appearance); ok && written == age {
+		return ""
+	}
+	return fmt.Sprintf("%d岁%s", age, ageStageGenderNoun(gender, age))
+}
+
+// joinPromptClauses 用逗号连接非空分句，先去掉各分句末尾的标点，避免出现“。，”。
+func joinPromptClauses(parts []string) string {
+	clauses := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimRight(strings.TrimSpace(part), "。，,；; "); part != "" {
+			clauses = append(clauses, part)
+		}
+	}
+	return strings.Join(clauses, "，")
 }
 
 // characterSheetLayoutTail 固定追加的鞋履锁定与四格版式，保证用户改写人物描述后版式不丢。

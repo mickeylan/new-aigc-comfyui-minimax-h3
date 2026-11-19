@@ -341,19 +341,6 @@ func validateProfileAgeAgainstSources(appearance string, char *models.Character,
 	return nil
 }
 
-func characterAgeAnchor(appearance, trait string) string {
-	match := characterAgePattern.FindStringSubmatch(appearance + "，" + trait)
-	if len(match) < 2 {
-		return ""
-	}
-	age, err := strconv.Atoi(match[1])
-	if err != nil || age < 1 || age > 99 {
-		return ""
-	}
-	anchor := fmt.Sprintf("%d岁人物", age)
-	return anchor
-}
-
 func normalizeCharacterGender(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	switch value {
@@ -565,14 +552,19 @@ func ageSubject(appearance, trait string) string {
 	if len(match) < 2 {
 		return ""
 	}
-	gender := "青年人物"
+	age, err := strconv.Atoi(match[1])
+	if err != nil || age < 1 {
+		return ""
+	}
+	// 称谓按实际年龄推断（女孩/少女/女性等），不写死“青年”。
+	gender := ""
 	text := appearance + trait
 	if strings.Contains(text, "女性") || strings.Contains(text, "女子") || strings.Contains(text, "女孩") {
-		gender = "青年女性"
+		gender = "女性"
 	} else if strings.Contains(text, "男性") || strings.Contains(text, "男子") || strings.Contains(text, "男孩") {
-		gender = "青年男性"
+		gender = "男性"
 	}
-	return match[1] + "岁" + gender
+	return fmt.Sprintf("%d岁%s", age, ageStageGenderNoun(gender, age))
 }
 
 const defaultHistoricalMaleHair = "乌黑长发全部向后梳理，在头顶挽成紧实高发髻，以深褐色木簪横向固定，额头完整露出，两鬓整齐，无刘海，无披散碎发"
@@ -823,37 +815,50 @@ func chatWithCharacterDesignSkill(skills *SkillService, provider TextProvider, p
 		raw, err := provider.Chat(system, user)
 		return raw, "", err
 	}
-	params := map[string]string{"character_info": user}
-	if femaleBeauty {
-		raw, provenance, err := skills.ChatWithConfiguredOrFallbackSkillTraced(projectID, models.SkillStageCharacter, femaleCharacterBeautySkillCode, provider, system+"\n\n"+characterDesignSkillHeader, user, params)
-		label := ""
-		if provenance != nil {
-			label = characterSkillLabel(skills.db, provenance.Code, provenance.Version)
-		}
-		return raw, label, err
-	}
-	skill, err := skills.GetEffectiveSkill(projectID, models.SkillStageCharacter)
+	fullSystem, skill, err := withCharacterDesignSkill(skills, projectID, femaleBeauty, system, user)
 	if err != nil {
 		return "", "", err
 	}
-	if skill == nil {
-		raw, err := provider.Chat(system, user)
-		return raw, "", err
-	}
-	fullSystem := system
-	if rules, _ := skills.AssemblePrompt(skill, params); strings.TrimSpace(rules) != "" {
-		fullSystem += "\n\n" + characterDesignSkillHeader + "\n" + rules
-	}
 	started := time.Now()
 	raw, err := provider.Chat(fullSystem, user)
-	errText := ""
-	if err != nil {
-		errText = err.Error()
+	if skill == nil {
+		return raw, "", err
 	}
-	if auditErr := skills.LogSkillUsage(projectID, models.SkillStageCharacter, skill, user, len(raw), time.Since(started).Milliseconds(), err == nil, errText); err == nil && auditErr != nil {
-		return "", "", fmt.Errorf("Skill 审计写入失败: %w", auditErr)
+	if auditErr := logCharacterDesignSkill(skills, projectID, skill, user, raw, started, err); auditErr != nil {
+		return "", "", auditErr
 	}
 	return raw, fmt.Sprintf("%s v%d", skill.Name, skill.Version), err
+}
+
+// withCharacterDesignSkill 在 system 后附加通用角色 Skill 的设计规则：女性优先“成年女性角色美术增强”（明确未成年除外），
+// 其余用角色设定阶段的项目有效 Skill。项目停用时原样返回 system 与 nil Skill。
+func withCharacterDesignSkill(skills *SkillService, projectID uint, femaleBeauty bool, system, info string) (string, *models.Skill, error) {
+	var skill *models.Skill
+	var err error
+	if femaleBeauty {
+		skill, err = skills.ConfiguredOrFallbackSkill(projectID, models.SkillStageCharacter, femaleCharacterBeautySkillCode)
+	} else {
+		skill, err = skills.GetEffectiveSkill(projectID, models.SkillStageCharacter)
+	}
+	if err != nil || skill == nil {
+		return system, nil, err
+	}
+	if rules, _ := skills.AssemblePrompt(skill, map[string]string{"character_info": info}); strings.TrimSpace(rules) != "" {
+		system += "\n\n" + characterDesignSkillHeader + "\n" + rules
+	}
+	return system, skill, nil
+}
+
+// logCharacterDesignSkill 按角色设定阶段写入通用角色 Skill 的使用审计；仅在调用成功而审计失败时返回错误。
+func logCharacterDesignSkill(skills *SkillService, projectID uint, skill *models.Skill, input, output string, started time.Time, chatErr error) error {
+	errText := ""
+	if chatErr != nil {
+		errText = chatErr.Error()
+	}
+	if auditErr := skills.LogSkillUsage(projectID, models.SkillStageCharacter, skill, input, len(output), time.Since(started).Milliseconds(), chatErr == nil, errText); chatErr == nil && auditErr != nil {
+		return fmt.Errorf("Skill 审计写入失败: %w", auditErr)
+	}
+	return nil
 }
 
 func characterSkillLabel(db *gorm.DB, code string, version int) string {

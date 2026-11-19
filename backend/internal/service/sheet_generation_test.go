@@ -316,3 +316,34 @@ func TestGenerateSheetPromptUsesProjectCharacterSkill(t *testing.T) {
 		t.Fatalf("character-standard use must be audited once, got %d", audits)
 	}
 }
+
+// 用户要求：年龄不写死。年龄只取自数据，称谓随年龄变化；外貌已写明同一年龄时不再重复，也不出现“。，”。
+func TestSheetAgeSubjectComesFromDataOnly(t *testing.T) {
+	cases := []struct {
+		appearance, gender string
+		age                int
+		want               string
+	}{
+		{"圆脸，齐刘海", "女", 6, "6岁女孩"},
+		{"马尾", "女", 15, "15岁少女"},
+		{"黑发高髻", "男性", 40, "40岁男性"},
+		{"6岁女孩，圆脸", "女", 6, ""},
+		{"黑发", "女", 0, ""},
+	}
+	for _, tc := range cases {
+		if got := ageLeadPrefix(tc.appearance, tc.gender, tc.age); got != tc.want {
+			t.Fatalf("ageLeadPrefix(%q,%q,%d)=%q want %q", tc.appearance, tc.gender, tc.age, got, tc.want)
+		}
+	}
+	for appearance, want := range map[string]string{"8岁女孩，圆脸": "8岁女孩", "45岁男性，虬髯": "45岁男性", "22岁女性，长发": "22岁女性"} {
+		if got := ageSubject(appearance, ""); got != want {
+			t.Fatalf("ageSubject(%q)=%q want %q", appearance, got, want)
+		}
+	}
+	project := models.Project{Genre: "古典修仙", Style: "国风写实"}
+	ch := models.Character{Name: "柳乐儿", Gender: "女", Appearance: "8岁女孩，圆脸。", WardrobeDetail: "藕色交领襦裙。"}
+	desc := characterSheetDescription(&project, &ch)
+	if strings.Count(desc, "8岁") != 1 || strings.Contains(desc, "青年") || strings.Contains(desc, "。，") {
+		t.Fatalf("sheet description must state the age once from data, without 青年 or broken punctuation: %s", desc)
+	}
+}

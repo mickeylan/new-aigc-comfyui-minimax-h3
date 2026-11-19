@@ -886,35 +886,13 @@ func (s *SkillService) ChatWithConfiguredOrFallbackSkill(projectID uint, stage, 
 // reports which Skill revision was used. Provenance is nil when the project disabled the
 // Skill and the base prompts went to the provider unchanged.
 func (s *SkillService) ChatWithConfiguredOrFallbackSkillTraced(projectID uint, stage, fallbackCode string, provider TextProvider, baseSystem, baseUser string, params map[string]string) (string, *SkillProvenance, error) {
-	var skill *models.Skill
-	config, err := s.GetProjectOperationConfig(projectID, stage, fallbackCode)
+	skill, err := s.ConfiguredOrFallbackSkill(projectID, stage, fallbackCode)
 	if err != nil {
 		return "", nil, err
 	}
-	if config != nil && !config.Enabled {
+	if skill == nil {
 		output, chatErr := provider.Chat(baseSystem, baseUser)
 		return output, nil, chatErr
-	}
-	if config != nil && config.SkillID != nil {
-		configured, err := s.GetSkill(*config.SkillID)
-		if err != nil || !configured.Enabled {
-			return "", nil, fmt.Errorf("项目配置的技能不可用")
-		}
-		operation := strings.TrimSpace(configured.Operation)
-		if operation == "" {
-			operation = configured.Code
-		}
-		// Stage configuration is broad; it may replace a specialized operation only
-		// when the selected skill explicitly implements the same operation contract.
-		if configured.Stage == stage && operation == fallbackCode {
-			skill = configured
-		}
-	}
-	if skill == nil {
-		skill, err = s.latestEnabledSkillByCode(fallbackCode)
-		if err != nil {
-			return "", nil, err
-		}
 	}
 	system, user := s.AssemblePrompt(skill, params)
 	if strings.TrimSpace(baseSystem) != "" {
@@ -938,6 +916,35 @@ func (s *SkillService) ChatWithConfiguredOrFallbackSkillTraced(projectID uint, s
 		return "", provenance, fmt.Errorf("Skill 审计写入失败: %w", auditErr)
 	}
 	return output, provenance, nil
+}
+
+// ConfiguredOrFallbackSkill resolves the Skill ChatWithConfiguredOrFallbackSkillTraced would
+// use: nil when the project disabled it, the configured Skill when it implements fallbackCode,
+// otherwise the latest enabled fallbackCode revision.
+func (s *SkillService) ConfiguredOrFallbackSkill(projectID uint, stage, fallbackCode string) (*models.Skill, error) {
+	config, err := s.GetProjectOperationConfig(projectID, stage, fallbackCode)
+	if err != nil {
+		return nil, err
+	}
+	if config != nil && !config.Enabled {
+		return nil, nil
+	}
+	if config != nil && config.SkillID != nil {
+		configured, err := s.GetSkill(*config.SkillID)
+		if err != nil || !configured.Enabled {
+			return nil, fmt.Errorf("项目配置的技能不可用")
+		}
+		operation := strings.TrimSpace(configured.Operation)
+		if operation == "" {
+			operation = configured.Code
+		}
+		// Stage configuration is broad; it may replace a specialized operation only
+		// when the selected skill explicitly implements the same operation contract.
+		if configured.Stage == stage && operation == fallbackCode {
+			return configured, nil
+		}
+	}
+	return s.latestEnabledSkillByCode(fallbackCode)
 }
 
 // VerifySkillProvenance reports whether a successful audited call in this project matches
