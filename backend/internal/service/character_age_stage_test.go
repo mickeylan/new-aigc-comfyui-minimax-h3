@@ -149,7 +149,7 @@ func TestAgeStageDefaultsToQwenEditSheetWithMainPortrait(t *testing.T) {
 	if !strings.HasPrefix(draft, "<image1>是角色「林采微」的主标准像") {
 		t.Fatalf("draft must bind the main portrait first:\n%s", draft)
 	}
-	for _, want := range []string{"不沿用<image1>中的年龄", "6岁女孩，圆脸，齐刘海短发，年龄感、身高头身比例与面部成熟度严格符合该年龄", "由左到右排列：正面面部特写、正面全身站立、侧面全身站立、背面全身站立", "指定鞋履："} {
+	for _, want := range []string{"不沿用<image1>中的年龄", "6岁女孩，圆脸，齐刘海短发，年龄感、身高头身比例与面部成熟度严格符合该年龄", "由左到右排列：第1格正面面部特写", "第2至第4格从头顶到鞋底完整入镜", "指定鞋履："} {
 		if !strings.Contains(draft, want) {
 			t.Fatalf("draft missing %q:\n%s", want, draft)
 		}

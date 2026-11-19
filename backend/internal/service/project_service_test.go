@@ -1875,7 +1875,7 @@ func TestBuildCharacterSheetPromptLocksHistoricalFootwear(t *testing.T) {
 	p := &models.Project{Genre: "古典修仙", Style: "国风仙侠", Synopsis: "中国古代宗门修炼故事"}
 	ch := &models.Character{Name: "林舒", Appearance: "22岁女性", WardrobeDetail: "白色交领仙裙，银色腰封"}
 	prompt := buildCharacterSheetPrompt(p, ch)
-	for _, want := range []string{"白色交领仙裙", "软底云头绣鞋", "正面全身、侧面全身、背面全身三个视图必须穿完全相同的鞋", "双脚必须完整穿鞋", "高跟鞋", "日式木屐"} {
+	for _, want := range []string{"白色交领仙裙", "软底云头绣鞋", "正面全身、侧面全身、背面全身三格必须穿完全相同的鞋", "双脚完整穿鞋", "高跟鞋", "日式木屐", "第1格正面面部特写，只画头部与肩部", "第2至第4格从头顶到鞋底完整入镜"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("sheet prompt missing %q: %s", want, prompt)
 		}
@@ -1886,7 +1886,7 @@ func TestBuildCharacterSheetPromptUsesDeclaredFootwear(t *testing.T) {
 	p := &models.Project{Genre: "古典修仙"}
 	ch := &models.Character{WardrobeDetail: "玄色长袍，黑色云纹长靴"}
 	prompt := buildCharacterSheetPrompt(p, ch)
-	if !strings.Contains(prompt, "指定鞋履：玄色长袍，黑色云纹长靴") || !strings.Contains(prompt, "三个视图必须穿完全相同的鞋") {
+	if !strings.Contains(prompt, "指定鞋履：玄色长袍，黑色云纹长靴") || !strings.Contains(prompt, "三格必须穿完全相同的鞋") {
 		t.Fatalf("declared footwear not preserved: %s", prompt)
 	}
 }

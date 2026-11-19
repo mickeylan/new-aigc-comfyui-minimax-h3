@@ -76,7 +76,7 @@ func TestStartCharacterSheetDefaultsToMossWithoutPortrait(t *testing.T) {
 	if params["aspect_ratio"] != "16:9 (Widescreen)" {
 		t.Fatalf("Moss sheet must be 16:9, got %v", params["aspect_ratio"])
 	}
-	for _, want := range []string{"由左到右排列：正面面部特写、正面全身站立、侧面全身站立、背面全身站立", "银色腰封", "青玉禁步", "月白云头绣鞋", "从头顶到鞋底完整入镜", "纯白色干净背景"} {
+	for _, want := range []string{"由左到右排列：第1格正面面部特写", "第2格正面全身站立", "第2至第4格从头顶到鞋底完整入镜", "银色腰封", "青玉禁步", "月白云头绣鞋", "纯白色干净背景"} {
 		if !strings.Contains(task.Prompt, want) {
 			t.Fatalf("sheet prompt missing %q: %s", want, task.Prompt)
 		}
@@ -186,7 +186,7 @@ func TestGenerateSheetPromptAppendsFixedLayoutToLLMDescription(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"银色腰封与青玉禁步", "月白云头绣鞋", "由左到右排列：正面面部特写、正面全身站立、侧面全身站立、背面全身站立", "16:9画面比例"} {
+	for _, want := range []string{"银色腰封与青玉禁步", "月白云头绣鞋", "由左到右排列：第1格正面面部特写", "16:9画面比例"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("sheet prompt missing %q: %s", want, prompt)
 		}
@@ -213,7 +213,7 @@ func TestStartCharacterSheetUsesEditedSheetPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	task, _ := startedSheetTask(t, ps, ch)
-	if !strings.HasPrefix(task.Prompt, "女性，22岁，腰间改系朱红丝绦。") || !strings.Contains(task.Prompt, "由左到右排列：正面面部特写") {
+	if !strings.HasPrefix(task.Prompt, "女性，22岁，腰间改系朱红丝绦。") || !strings.Contains(task.Prompt, "由左到右排列：第1格正面面部特写") {
 		t.Fatalf("edited sheet prompt must be used with the fixed layout appended: %s", task.Prompt)
 	}
 	if strings.Contains(task.Prompt, "垂鬟分肖髻") {

@@ -40,9 +40,11 @@ func characterFootwear(project *models.Project, ch *models.Character) string {
 }
 
 // characterSheetFootwearLock 锁定三个全身视图的鞋履，防止赤脚、裁脚和现代鞋。
+// 只覆盖第 2-4 格：第 1 格是头肩特写，不含鞋，写成全局约束会把特写也画成全身。
 func characterSheetFootwearLock(project *models.Project, ch *models.Character) string {
-	return "指定鞋履：" + characterFootwear(project, ch) + "。" +
-		"正面全身、侧面全身、背面全身三个视图必须穿完全相同的鞋，并使用同一套服装；双脚必须完整穿鞋并位于画框内。禁止赤脚、露趾、裁脚、换装、丢失发饰和佩饰，禁止现代高跟鞋、运动鞋、现代皮鞋和日式木屐。"
+	footwear := strings.TrimPrefix(characterFootwear(project, ch), "穿")
+	return "指定鞋履：" + footwear + "。" +
+		"正面全身、侧面全身、背面全身三格必须穿完全相同的鞋并使用同一套服装，双脚完整穿鞋且位于画框内；禁止赤脚、露趾、裁脚、换装、丢失发饰和佩饰，禁止现代高跟鞋、运动鞋、现代皮鞋和日式木屐。"
 }
 
 // characterSheetHasHair 判断档案外貌是否已写明发型，已写明时不再重复注入时代发型约束。
@@ -111,10 +113,12 @@ func joinPromptClauses(parts []string) string {
 }
 
 // characterSheetLayoutTail 固定追加的鞋履锁定与四格版式，保证用户改写人物描述后版式不丢。
+// 鞋履锁定只作用于第 2-4 格的全身视图：第 1 格是头肩特写，本来就没有鞋，若把「每格都要完整穿鞋、
+// 不许裁脚」写成全局约束，模型会把特写格也画成全身，出现两张正面站立而没有特写。
 func characterSheetLayoutTail(project *models.Project, ch *models.Character) string {
 	return characterSheetFootwearLock(project, ch) +
-		"四格为同一人物、同一张脸、同一发型与同一套服装配饰，全身格从头顶到鞋底完整入镜。" +
-		"由左到右排列：正面面部特写、正面全身站立、侧面全身站立、背面全身站立。纯白色干净背景，影棚级柔和布光，角色设定集风格，画面中只有这一个角色且无文字标签，高分辨率，电影级质感，16:9画面比例。"
+		"四格为同一人物、同一张脸、同一发型与同一套服装配饰。" +
+		"由左到右排列：第1格正面面部特写，只画头部与肩部，不画全身也不画鞋；第2格正面全身站立；第3格侧面全身站立；第4格背面全身站立，第2至第4格从头顶到鞋底完整入镜。纯白色干净背景，影棚级柔和布光，角色设定集风格，画面中只有这一个角色且无文字标签，高分辨率，电影级质感，16:9画面比例。"
 }
 
 // buildCharacterSheetPrompt 直接文生四视图。结构与用户验证过的 Moss 样例一致：先写人物外貌、
