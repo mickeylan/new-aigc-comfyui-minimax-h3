@@ -6,14 +6,15 @@
  <p>导出排除网格、箭头、A/B标记、天气粒子和雾；白模保留体积光照，深度为近白远黑的8位线性灰度，仅下载，不自动接入生成。导出前请检查所有模型已恢复。</p>
  <div class="row"><label>深度近界（米）<input type="number" min="0" max="499.9" step="0.1" v-model.number="near"></label><label>深度远界（米）<input type="number" min="0.1" max="500" step="0.1" v-model.number="far"></label></div>
  <div class="row"><button type="button" :disabled="busy||!ready" @click="$emit('export',{mode:'white',depth_range:{near,far}})">导出当前帧白模 PNG</button><button type="button" :disabled="busy||!ready" @click="$emit('export',{mode:'depth',depth_range:{near,far}})">导出当前帧深度 PNG</button></div>
- <div class="row"><label>序列起秒<input type="number" min="0" step="0.1" v-model.number="from"></label><label>序列止秒<input type="number" min="0" step="0.1" v-model.number="to"></label><label>FPS<select v-model.number="fps"><option v-for="n in [1,6,12,24]" :key="n" :value="n">{{n}}</option></select></label><label>画面<select v-model="pass"><option value="white">白模</option><option value="depth">深度</option></select></label><button type="button" :disabled="busy||!ready" @click="$emit('export',{mode:pass,from_ms:Math.round(from*1000),to_ms:Math.round(to*1000),fps,depth_range:{near,far}})">导出序列ZIP（最多240帧）</button></div>
+ <div class="row"><label>序列起秒<input type="number" min="0" step="0.1" v-model.number="from"></label><label>序列止秒<input type="number" min="0" step="0.1" v-model.number="to"></label><label>FPS<select v-model.number="fps"><option v-for="n in [1,6,12,24]" :key="n" :value="n">{{n}}</option></select></label><label>画面<select v-model="pass"><option value="white">白模</option><option value="depth">深度</option></select></label><button type="button" :disabled="busy||!ready" @click="$emit('export',{mode:pass,from_ms:Math.round(from*1000),to_ms:Math.round(to*1000),fps,depth_range:{near,far}})">导出序列ZIP（最多240帧）</button><button type="button" :disabled="busy||!ready" @click="$emit('export-video',{mode:pass,from_ms:Math.round(from*1000),to_ms:Math.round(to*1000),fps,depth_range:{near,far}})">导出 WebM 视频（最多2880帧）</button></div>
+ <p>视频按帧序号逐帧编码（VP9/VP8，1280×720，无音轨），渲染慢不会丢帧或变速；需浏览器支持 WebCodecs。深度视频为有损编码，仅供审阅运动与机位，精确深度请用PNG序列。</p>
  </section>
 </template>
 <script setup>
 import{computed,ref}from'vue'
 import{defaultWeather}from'../utils/previsEnvironment.js'
 const props=defineProps({document:Object,selected:Object,information:Object,busy:Boolean,ready:Boolean})
-const emit=defineEmits(['update-document','import-model','export'])
+const emit=defineEmits(['update-document','import-model','export','export-video'])
 const presets={clear:'晴',overcast:'阴',rain:'雨',snow:'雪',fog:'雾'},from=ref(0),to=ref(3),fps=ref(12),pass=ref('white'),near=ref(0.1),far=ref(50)
 const binding=computed(()=>props.document.models?.find(b=>b.object_id===props.selected?.id))
 function weather(key,value){emit('update-document',{...props.document,schema_version:3,weather:{...defaultWeather(),...props.document.weather,[key]:value}})}

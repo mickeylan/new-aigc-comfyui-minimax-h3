@@ -35,7 +35,9 @@ export function createAssetRuntime(T,scene){
  function dispose(){alive=false;for(const i of models.values()){i.mixer.stopAllAction();i.mixer.uncacheRoot(i.gltf.scene)}disposeTree(root);disposeTree(weatherGroup);disposeTree(floor);scene.remove(root,weatherGroup,light,floor);models.clear()}
  return{root,weatherGroup,floor,models,load,ensure,update,dispose}
 }
-export async function exportPrevisFrame(T,renderer,scene,camera,geometryGroup,assets,mode,depthRange={near:0.1,far:50}){
+export function exportPrevisFrame(T,renderer,scene,camera,geometryGroup,assets,mode,depthRange){return renderExportPass(T,renderer,scene,camera,geometryGroup,assets,mode,depthRange,canvas=>new Promise((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(Error('PNG导出失败')),'image/png')))}
+// Renders one clean 1280×720 white/depth pass, lets capture read the canvas, then restores the editor view.
+export async function renderExportPass(T,renderer,scene,camera,geometryGroup,assets,mode,depthRange={near:0.1,far:50},capture){
  if(!Number.isFinite(depthRange.near)||!Number.isFinite(depthRange.far)||depthRange.near<0||depthRange.far>500||depthRange.far-depthRange.near<0.1)throw Error('深度范围须满足0≤近<远≤500米，间距至少0.1米')
  const hidden=[],old={background:scene.background,fog:scene.fog,override:scene.overrideMaterial,pixelRatio:renderer.getPixelRatio(),size:renderer.getSize(new T.Vector2()),aspect:camera.aspect}
  const hide=o=>{hidden.push([o,o.visible]);o.visible=false}
@@ -43,6 +45,6 @@ export async function exportPrevisFrame(T,renderer,scene,camera,geometryGroup,as
  hide(assets.weatherGroup)
  const material=mode==='depth'?new T.MeshDepthMaterial({depthPacking:T.BasicDepthPacking}):new T.MeshStandardMaterial({color:0xeeeeee,roughness:1,metalness:0})
  if(mode==='depth')material.onBeforeCompile=shader=>{shader.uniforms.exportNear={value:camera.near};shader.uniforms.exportFar={value:camera.far};shader.uniforms.rangeNear={value:depthRange.near};shader.uniforms.rangeFar={value:depthRange.far};shader.fragmentShader='uniform float exportNear; uniform float exportFar; uniform float rangeNear; uniform float rangeFar;\n'+shader.fragmentShader.replace('gl_FragColor = vec4( vec3( 1.0 - fragCoordZ ), opacity );','float distanceToCamera = -perspectiveDepthToViewZ(fragCoordZ, exportNear, exportFar); float gray = 1.0 - clamp((distanceToCamera-rangeNear)/(rangeFar-rangeNear),0.0,1.0); gl_FragColor = vec4(vec3(gray),1.0);')}
- try{scene.fog=null;scene.background=new T.Color(mode==='depth'?0x000000:0xaeb4bc);scene.overrideMaterial=material;renderer.setPixelRatio(1);renderer.setSize(1280,720,false);camera.aspect=1280/720;camera.updateProjectionMatrix();renderer.render(scene,camera);return await new Promise((resolve,reject)=>renderer.domElement.toBlob(b=>b?resolve(b):reject(Error('PNG导出失败')),'image/png'))}
+ try{scene.fog=null;scene.background=new T.Color(mode==='depth'?0x000000:0xaeb4bc);scene.overrideMaterial=material;renderer.setPixelRatio(1);renderer.setSize(1280,720,false);camera.aspect=1280/720;camera.updateProjectionMatrix();renderer.render(scene,camera);return await capture(renderer.domElement)}
  finally{for(const [o,v]of hidden)o.visible=v;scene.background=old.background;scene.fog=old.fog;scene.overrideMaterial=old.override;renderer.setPixelRatio(old.pixelRatio);renderer.setSize(old.size.x,old.size.y,false);camera.aspect=old.aspect;camera.updateProjectionMatrix();material.dispose();renderer.render(scene,camera)}
 }

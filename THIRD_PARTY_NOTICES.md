@@ -55,7 +55,7 @@ The optional Scene previsualization dynamically loads three.js core and its MIT-
 - Source: https://github.com/mrdoob/three.js
 - License: MIT
 - Copyright © 2010-2025 three.js authors
-- Verified production chunks: three.js core 704.89 kB / gzip 181.19 kB; GLTFLoader 45.68 kB / gzip 13.46 kB; asset runtime 7.10 kB / gzip 3.40 kB; previsualization component (including Shot frame review) 47.61 kB / gzip 17.35 kB. These are lazy-loaded, not initial-entry dependencies (Vite build measurement).
+- Verified production chunks: three.js core 704.89 kB / gzip 181.19 kB; GLTFLoader 45.68 kB / gzip 13.46 kB; asset runtime 7.18 kB / gzip 3.43 kB; previsualization component (including Shot frame review and WebM video export, no extra dependency) 54.48 kB / gzip 19.99 kB. These are lazy-loaded, not initial-entry dependencies (Vite build measurement).
 
 The MIT License
 
