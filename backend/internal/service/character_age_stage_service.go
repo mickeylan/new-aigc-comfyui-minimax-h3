@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -201,6 +202,22 @@ func ageStagePortraitTemplate(engine string) string {
 	}
 }
 
+// SaveAgeStagePortraitPrompt 只保存人工审阅后的阶段标准像提示词，不提交生成、不改动阶段标准像与审核状态。
+func (s *CharacterLookService) SaveAgeStagePortraitPrompt(projectID, characterID, stageID uint, prompt string) error {
+	stage, err := s.loadAgeStage(s.db, projectID, characterID, stageID)
+	if err != nil {
+		return err
+	}
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return fmt.Errorf("提示词不能为空")
+	}
+	if (stage.PortraitEngine == "" || stage.PortraitEngine == AgeStagePortraitQwenEdit) && !strings.Contains(prompt, "<image1>") {
+		return fmt.Errorf("以主标准像改年龄的提示词必须保留 <image1>")
+	}
+	return s.db.Model(&models.CharacterAgeStage{}).Where("id = ?", stage.ID).Update("portrait_prompt", prompt).Error
+}
+
 // StartAgeStagePortrait 提交阶段标准像任务。prompt 为空时使用已保存稿或默认稿；提交前由用户审阅。
 func (s *CharacterLookService) StartAgeStagePortrait(projectID, characterID, stageID uint, prompt string) error {
 	if s.tasks == nil {
@@ -295,26 +312,81 @@ func (s *CharacterLookService) SaveAgeStageUploadedPortrait(projectID, character
 	return s.applyAgeStagePortrait(stage.ID, "", filepath.Base(path))
 }
 
-// applyAgeStagePortrait 写入新阶段标准像。阶段需重新审核；其下套装定妆照/四视图以旧脸部锚点生成，
-// 一并清空并提示重新生成。expectTaskID 非空时只在任务仍是当前任务时写入，防止旧任务覆盖新结果。
+const ageStageOutfitOutdatedNote = "年龄阶段标准像已更换；已有定妆照与四视图保留，如需与新标准像一致请重新生成"
+
+func ageStagePortraitHistory(raw string) []string {
+	var files []string
+	if strings.TrimSpace(raw) != "" {
+		_ = json.Unmarshal([]byte(raw), &files)
+	}
+	return files
+}
+
+// pushAgeStagePortraitHistory 把被替换的标准像放到历史最前面，并从历史中移除即将成为当前的那张。
+func pushAgeStagePortraitHistory(raw, previous, next string) string {
+	out := []string{}
+	if previous != "" && previous != next {
+		out = append(out, previous)
+	}
+	for _, file := range ageStagePortraitHistory(raw) {
+		if file != "" && file != next && file != previous {
+			out = append(out, file)
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	body, _ := json.Marshal(out)
+	return string(body)
+}
+
+// RestoreAgeStagePortrait 把历史中的某张阶段标准像恢复为当前；当前这张进入历史，不删除任何文件。
+func (s *CharacterLookService) RestoreAgeStagePortrait(projectID, characterID, stageID uint, file string) error {
+	stage, err := s.loadAgeStage(s.db, projectID, characterID, stageID)
+	if err != nil {
+		return err
+	}
+	if stage.PortraitTaskID != "" {
+		return fmt.Errorf("该阶段标准像正在生成，请完成后再恢复历史版本")
+	}
+	file = strings.TrimSpace(file)
+	for _, old := range ageStagePortraitHistory(stage.PortraitHistory) {
+		if old == file && file != "" {
+			return s.applyAgeStagePortrait(stage.ID, "", file)
+		}
+	}
+	return fmt.Errorf("该图片不在此阶段的历史标准像中")
+}
+
+// applyAgeStagePortrait 写入新阶段标准像，旧标准像进入历史（不删除文件）。阶段需重新审核；
+// 其下套装已有的定妆照/四视图保留，只取消在途任务并提示可重新生成。
+// expectTaskID 非空时只在任务仍是当前任务时写入，防止旧任务覆盖新结果。
 func (s *CharacterLookService) applyAgeStagePortrait(stageID uint, expectTaskID, file string) error {
 	var cancel []string
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var current models.CharacterAgeStage
+		if err := tx.First(&current, stageID).Error; err != nil {
+			return err
+		}
+		if expectTaskID != "" && current.PortraitTaskID != expectTaskID {
+			return nil
+		}
 		q := tx.Model(&models.CharacterAgeStage{}).Where("id = ?", stageID)
 		if expectTaskID != "" {
 			q = q.Where("portrait_task_id = ?", expectTaskID)
 		}
-		res := q.Updates(map[string]any{"portrait": file, "portrait_task_id": "", "portrait_error": "", "audit_status": models.LookStatusDraft, "audit_note": "", "version": gorm.Expr("version + 1")})
+		res := q.Updates(map[string]any{"portrait": file, "portrait_history": pushAgeStagePortraitHistory(current.PortraitHistory, current.Portrait, file), "portrait_task_id": "", "portrait_error": "", "audit_status": models.LookStatusDraft, "audit_note": "", "version": gorm.Expr("version + 1")})
 		if res.Error != nil || res.RowsAffected == 0 {
 			return res.Error
 		}
+		// 已生成的套装定妆照/四视图属于用户资产，保留不删；只取消以旧标准像在途的任务并提示可重新生成。
 		var outfits []models.CharacterOutfit
 		if err := tx.Where("age_stage_id = ?", stageID).Find(&outfits).Error; err != nil {
 			return err
 		}
 		for _, outfit := range outfits {
 			cancel = append(cancel, nonEmptyStrings([]string{outfit.ImageTaskID, outfit.SheetTaskID})...)
-			if err := tx.Model(&outfit).Updates(map[string]any{"image": "", "image_task_id": "", "image_error": "年龄阶段标准像已更新，请重新生成套装定妆照", "sheet": "", "sheet_task_id": "", "sheet_error": ""}).Error; err != nil {
+			if err := tx.Model(&outfit).Updates(map[string]any{"image_task_id": "", "image_error": ageStageOutfitOutdatedNote, "sheet_task_id": ""}).Error; err != nil {
 				return err
 			}
 		}

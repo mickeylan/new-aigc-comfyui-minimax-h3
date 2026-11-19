@@ -125,6 +125,25 @@ func (s *Service) HandlePreviewCharacterAgeStagePortraitPrompt(c *gin.Context) {
 	c.JSON(200, gin.H{"saved_prompt": saved, "draft_prompt": draft})
 }
 
+func (s *Service) HandleSaveCharacterAgeStagePortraitPrompt(c *gin.Context) {
+	pid, cid, sid, ok := s.loadAgeStageRoute(c, true)
+	if !ok {
+		return
+	}
+	var req struct {
+		Prompt string `json:"prompt"`
+	}
+	if c.ShouldBindJSON(&req) != nil {
+		c.JSON(400, gin.H{"error": "参数错误"})
+		return
+	}
+	if err := s.CharacterLooks.SaveAgeStagePortraitPrompt(pid, cid, sid, req.Prompt); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true})
+}
+
 func (s *Service) HandleGenerateCharacterAgeStagePortrait(c *gin.Context) {
 	pid, cid, sid, ok := s.loadAgeStageRoute(c, true)
 	if !ok {
@@ -142,6 +161,25 @@ func (s *Service) HandleGenerateCharacterAgeStagePortrait(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"ok": true})
+}
+
+func (s *Service) HandleRestoreCharacterAgeStagePortrait(c *gin.Context) {
+	pid, cid, sid, ok := s.loadAgeStageRoute(c, true)
+	if !ok {
+		return
+	}
+	var req struct {
+		File string `json:"file"`
+	}
+	if c.ShouldBindJSON(&req) != nil {
+		c.JSON(400, gin.H{"error": "参数错误"})
+		return
+	}
+	if err := s.CharacterLooks.RestoreAgeStagePortrait(pid, cid, sid, req.File); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true})
 }
 
 func (s *Service) HandleUploadCharacterAgeStagePortrait(c *gin.Context) {

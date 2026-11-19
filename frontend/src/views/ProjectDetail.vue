@@ -219,8 +219,8 @@
               <span v-if="ch.registration_task_id" class="char-voice">⏳ 登记照生成中</span>
               <span v-if="ch.registration_error" class="fail-msg">{{ ch.registration_error }}</span>
               <div class="character-look-entry">
-                <div><strong>基于标准像换装</strong><span>锁定同一张脸，重新设计服装、鞋履、发型与配饰，生成可按场景选择的新形象。</span></div>
-                <div class="character-look-entry-actions"><router-link :to="`/projects/${id()}/characters/${ch.id}/looks?mode=outfits&design=1`" class="btn btn-sm">＋ AI换装设计</router-link><router-link :to="`/projects/${id()}/characters/${ch.id}/looks?mode=outfits`" class="btn btn-sm btn-secondary">管理完整套装</router-link></div>
+                <div><strong>基于标准像换装 / 追加年龄形象</strong><span>新形象都是追加的，不会替换当前标准像、四视图或已有套装。剧情跨年龄（如6岁→15岁）时，为每个年龄追加一个形象，再按集指定。</span></div>
+                <div class="character-look-entry-actions"><router-link :to="`/projects/${id()}/characters/${ch.id}/looks?mode=stages&new=1`" class="btn btn-sm">＋ 追加年龄形象</router-link><router-link :to="`/projects/${id()}/characters/${ch.id}/looks?mode=outfits&design=1`" class="btn btn-sm">＋ AI换装设计</router-link><router-link :to="`/projects/${id()}/characters/${ch.id}/looks?mode=outfits`" class="btn btn-sm btn-secondary">管理完整套装</router-link></div>
               </div>
               <div class="char-actions">
                 <button class="btn btn-sm btn-secondary" :disabled="busy || ch._portraitSubmitting || !!ch.portrait_task_id || ch.profile_status !== 'approved' || !ch.reference_prompt || !portraitEngineReady(ch)" @click="genPortrait(ch)"
@@ -1029,6 +1029,7 @@
 
         <!-- 详细档案标签页（LumxAI 风格） -->
         <div v-if="charProfileTab === 'profile'">
+          <div v-if="editingCharacter !== 'new'" class="field-hint">这里修改的是角色<strong>主档案</strong>（默认年龄的形象），采用并保存后会改变主形象描述。要追加其他年龄或新造型、且保留现有形象，请使用<router-link :to="`/projects/${id()}/characters/${editingCharacter.id}/looks?mode=stages&new=1`">追加年龄形象</router-link>或<router-link :to="`/projects/${id()}/characters/${editingCharacter.id}/looks?mode=outfits&design=1`">AI换装设计</router-link>。</div>
           <CharacterProfileDesign v-if="editingCharacter !== 'new'" ref="profileDesigner" :key="editingCharacter.id" :project-id="id()" :character-id="editingCharacter.id" :form="charProfileForm" :disabled="busy" @adopt="patch => Object.assign(charProfileForm, patch)" />
           <div class="profile-hint">
             <p>💡 AI 将从故事内容中提取角色的详细特征；所有字段均可人工修改。已审核档案修改保存后会自动回到草稿状态。</p>

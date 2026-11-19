@@ -58,3 +58,18 @@ test('场景造型下拉按主形象与年龄阶段分组', () => {
   assert.match(detail, /groupOutfitsByStage\(sceneOutfitOptions\[ch\.id\]\|\|\[\]\)/)
   assert.match(detail, /<optgroup v-for="g in groupOutfitsByStage/)
 })
+
+test('角色卡提供追加年龄形象入口，且说明不会替换现有形象', () => {
+  assert.match(detail, /looks\?mode=stages&new=1/)
+  assert.match(detail, /＋ 追加年龄形象/)
+  assert.match(detail, /不会替换当前标准像、四视图或已有套装/)
+  assert.match(looks, /r\.query\.new==='1'&&mode\.value==='stages'\)openStage\(\)/)
+})
+
+test('阶段提示词可只保存不生成，历史标准像保留并可恢复', () => {
+  assert.match(looks, /只保存提示词/)
+  assert.match(looks, /portrait\/prompt`,jsonOpt\('PUT'/)
+  assert.match(looks, /portrait\/restore/)
+  assert.match(looks, /历史标准像（保留，可恢复）/)
+  assert.match(looks, /if\(created&&row\?\.id\)await openStagePrompt\(row\)/)
+})

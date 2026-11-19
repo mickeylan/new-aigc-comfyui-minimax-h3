@@ -278,11 +278,15 @@ func TestNewAgeStagePortraitInvalidatesItsOutfitImagesOnly(t *testing.T) {
 	if saved.Portrait != "new_child.png" || saved.AuditStatus != models.LookStatusDraft || saved.PortraitTaskID != "" {
 		t.Fatalf("stage portrait not applied for review: %+v", saved)
 	}
+	if got := ageStagePortraitHistory(saved.PortraitHistory); len(got) != 1 || got[0] != "old_child.png" {
+		t.Fatalf("replaced stage portrait must be kept in history: %q", saved.PortraitHistory)
+	}
+	// 用户要求旧资产不被覆盖：阶段套装已有的定妆照/四视图保留，只提示可重新生成。
 	var gotStage, gotMain models.CharacterOutfit
 	svc.db.First(&gotStage, stageOutfit.ID)
 	svc.db.First(&gotMain, mainOutfit.ID)
-	if gotStage.Image != "" || gotStage.Sheet != "" || !strings.Contains(gotStage.ImageError, "年龄阶段标准像已更新") {
-		t.Fatalf("stage outfit images were not invalidated: %+v", gotStage)
+	if gotStage.Image != "child_outfit.png" || gotStage.Sheet != "child_sheet.png" || !strings.Contains(gotStage.ImageError, "年龄阶段标准像已更换") {
+		t.Fatalf("stage outfit images must be kept with an outdated hint: %+v", gotStage)
 	}
 	if gotMain.Image != "adult_outfit.png" || gotMain.Sheet != "adult_outfit_sheet.png" {
 		t.Fatalf("main outfit was touched: %+v", gotMain)
@@ -307,5 +311,83 @@ func TestDeleteAgeStageRefusesWhileOutfitsAttached(t *testing.T) {
 	}
 	if err := svc.DeleteAgeStage(project.ID, character.ID, stage.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAgeStagesAreIndependentAndPortraitHistoryRestorable(t *testing.T) {
+	svc, project, character := setupAgeStageTestDB(t)
+	six, err := svc.SaveAgeStage(project.ID, character.ID, 0, AgeStageInput{Name: "童年", Age: intPtr(6), Appearance: "6岁女孩"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.applyAgeStagePortrait(six.ID, "", "six_v1.png"); err != nil {
+		t.Fatal(err)
+	}
+	nine, err := svc.SaveAgeStage(project.ID, character.ID, 0, AgeStageInput{Name: "九岁", Age: intPtr(9), Appearance: "9岁女孩"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nine.ID == six.ID {
+		t.Fatal("a new age must create a new stage")
+	}
+	if err := svc.applyAgeStagePortrait(nine.ID, "", "nine_v1.png"); err != nil {
+		t.Fatal(err)
+	}
+	var gotSix models.CharacterAgeStage
+	svc.db.First(&gotSix, six.ID)
+	if gotSix.Portrait != "six_v1.png" {
+		t.Fatalf("generating the 9-year-old look replaced the 6-year-old look: %+v", gotSix)
+	}
+	var ch models.Character
+	svc.db.First(&ch, character.ID)
+	if ch.Portrait != "face.png" || ch.Sheet != "adult_sheet.png" {
+		t.Fatalf("age stages must never touch the main portrait/sheet: %+v", ch)
+	}
+
+	if err := svc.applyAgeStagePortrait(six.ID, "", "six_v2.png"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RestoreAgeStagePortrait(project.ID, character.ID, six.ID, "six_v1.png"); err != nil {
+		t.Fatal(err)
+	}
+	svc.db.First(&gotSix, six.ID)
+	if gotSix.Portrait != "six_v1.png" {
+		t.Fatalf("restore did not bring back the old portrait: %+v", gotSix)
+	}
+	if got := ageStagePortraitHistory(gotSix.PortraitHistory); len(got) != 1 || got[0] != "six_v2.png" {
+		t.Fatalf("restore must keep the replaced portrait in history: %q", gotSix.PortraitHistory)
+	}
+	if err := svc.RestoreAgeStagePortrait(project.ID, character.ID, six.ID, "nine_v1.png"); err == nil {
+		t.Fatal("restoring another stage's portrait must be rejected")
+	}
+}
+
+func TestSaveAgeStagePortraitPromptOnlySavesPrompt(t *testing.T) {
+	svc, project, character := setupAgeStageTestDB(t)
+	stage, err := svc.SaveAgeStage(project.ID, character.ID, 0, AgeStageInput{Name: "童年", Age: intPtr(6), Appearance: "6岁女孩"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.applyAgeStagePortrait(stage.ID, "", "six.png"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ApproveAgeStage(project.ID, character.ID, stage.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SaveAgeStagePortraitPrompt(project.ID, character.ID, stage.ID, "没有参考图标记"); err == nil {
+		t.Fatal("qwen_edit prompt without <image1> must be rejected")
+	}
+	prompt := "<image1>是角色主标准像。6岁女孩，齐刘海。"
+	if err := svc.SaveAgeStagePortraitPrompt(project.ID, character.ID, stage.ID, prompt); err != nil {
+		t.Fatal(err)
+	}
+	var got models.CharacterAgeStage
+	svc.db.First(&got, stage.ID)
+	if got.PortraitPrompt != prompt || got.Portrait != "six.png" || got.AuditStatus != models.LookStatusApproved || got.PortraitTaskID != "" {
+		t.Fatalf("saving the prompt must not touch portrait, review or tasks: %+v", got)
+	}
+	saved, _, err := svc.AgeStagePortraitPrompt(project.ID, character.ID, stage.ID)
+	if err != nil || saved != prompt {
+		t.Fatalf("saved prompt not returned for review: %q %v", saved, err)
 	}
 }

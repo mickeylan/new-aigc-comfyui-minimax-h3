@@ -360,8 +360,10 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.DELETE("/api/projects/:id/characters/:cid/age-stages/:asid", svc.HandleDeleteCharacterAgeStage)
 	r.POST("/api/projects/:id/characters/:cid/age-stages/:asid/approve", svc.HandleApproveCharacterAgeStage)
 	r.GET("/api/projects/:id/characters/:cid/age-stages/:asid/portrait/prompt", svc.HandlePreviewCharacterAgeStagePortraitPrompt)
+	r.PUT("/api/projects/:id/characters/:cid/age-stages/:asid/portrait/prompt", svc.HandleSaveCharacterAgeStagePortraitPrompt)
 	r.POST("/api/projects/:id/characters/:cid/age-stages/:asid/portrait", svc.HandleGenerateCharacterAgeStagePortrait)
 	r.POST("/api/projects/:id/characters/:cid/age-stages/:asid/portrait/upload", svc.HandleUploadCharacterAgeStagePortrait)
+	r.POST("/api/projects/:id/characters/:cid/age-stages/:asid/portrait/restore", svc.HandleRestoreCharacterAgeStagePortrait)
 	// 角色造型套装（由独立造型资产组合）
 	r.GET("/api/projects/:id/characters/:cid/outfits", svc.HandleListCharacterOutfits)
 	r.POST("/api/projects/:id/characters/:cid/outfits/design", svc.HandleDesignCharacterOutfit)
