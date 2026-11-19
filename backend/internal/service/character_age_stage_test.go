@@ -132,7 +132,9 @@ func TestAgeStageBelongsToCharacter(t *testing.T) {
 	}
 }
 
-func TestAgeStageQwenEditPortraitUsesMainPortraitAsOnlyReference(t *testing.T) {
+// 用户要求：阶段形象直接生成四视图（自带正面特写），不再先生成标准像；提示词沿用 Moss 四视图结构，
+// 且必须带主标准像参考（Moss 只支持文生图，默认改用 Qwen 多图编辑）。
+func TestAgeStageDefaultsToQwenEditSheetWithMainPortrait(t *testing.T) {
 	svc, project, character := setupAgeStageTestDB(t)
 	attachAgeStageTaskService(t, svc, "qwen_image_2_1_multi_edit.json")
 	registerAgeStageUploads(t, svc, project.ID, "face.png")
@@ -144,13 +146,21 @@ func TestAgeStageQwenEditPortraitUsesMainPortraitAsOnlyReference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"<image1>", "童年（6岁）", "6岁女孩，圆脸，齐刘海短发", "不沿用<image1>中的年龄"} {
+	if !strings.HasPrefix(draft, "<image1>是角色「林采微」的主标准像") {
+		t.Fatalf("draft must bind the main portrait first:\n%s", draft)
+	}
+	for _, want := range []string{"不沿用<image1>中的年龄", "6岁人物", "6岁女孩，圆脸，齐刘海短发", "由左到右排列：正面面部特写、正面全身站立、侧面全身站立、背面全身站立", "指定鞋履："} {
 		if !strings.Contains(draft, want) {
 			t.Fatalf("draft missing %q:\n%s", want, draft)
 		}
 	}
-	if err := svc.StartAgeStagePortrait(project.ID, character.ID, stage.ID, "没有图片绑定的提示词"); err == nil {
-		t.Fatal("qwen edit prompt without <image1> was submitted")
+	for _, banned := range []string{"28岁", "高挑", "标准参考像"} {
+		if strings.Contains(draft, banned) {
+			t.Fatalf("draft must not carry %q:\n%s", banned, draft)
+		}
+	}
+	if err := svc.StartAgeStagePortrait(project.ID, character.ID, stage.ID, "6岁女孩。由左到右排列四视图"); err == nil {
+		t.Fatal("a prompt that drops the <image1> binding was submitted")
 	}
 	if err := svc.StartAgeStagePortrait(project.ID, character.ID, stage.ID, ""); err != nil {
 		t.Fatal(err)
@@ -159,9 +169,19 @@ func TestAgeStageQwenEditPortraitUsesMainPortraitAsOnlyReference(t *testing.T) {
 	if task.Prompt != draft {
 		t.Fatalf("submitted prompt differs from reviewed draft")
 	}
-	refs := files["ref_images"]
-	if len(refs) != 1 || refs[0].Name != "face.png" {
-		t.Fatalf("qwen edit must reference only the main portrait, got %+v", refs)
+	if refs := files["ref_images"]; len(files) != 1 || len(refs) != 1 || refs[0].Name != "face.png" {
+		t.Fatalf("stage sheet must use only the main portrait as reference, got %+v", files)
+	}
+	var tpl models.Template
+	if err := svc.db.First(&tpl, task.TemplateID).Error; err != nil || tpl.Code != TemplateQwen21MultiEdit {
+		t.Fatalf("stage sheet must use the Qwen multi-edit template, got %q %v", tpl.Code, err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal([]byte(task.ParamsJSON), &params); err != nil {
+		t.Fatal(err)
+	}
+	if params["aspect_ratio"] != "16:9 (Widescreen)" {
+		t.Fatalf("stage sheet must be 16:9, got %+v", params)
 	}
 	var saved models.CharacterAgeStage
 	if err := svc.db.First(&saved, stage.ID).Error; err != nil {
@@ -175,9 +195,11 @@ func TestAgeStageQwenEditPortraitUsesMainPortraitAsOnlyReference(t *testing.T) {
 	}
 }
 
-func TestAgeStageTextToImagePortraitHasNoAdultReference(t *testing.T) {
+// Krea2 备选：同一套 Moss 结构提示词，以主标准像作 source_image 走 Krea2 四视图编辑模板。
+func TestAgeStageKrea2SheetUsesMainPortraitAsSource(t *testing.T) {
 	svc, project, character := setupAgeStageTestDB(t)
-	attachAgeStageTaskService(t, svc, "krea2_character_portrait.json")
+	attachAgeStageTaskService(t, svc, "krea2_character_sheet.json")
+	registerAgeStageUploads(t, svc, project.ID, "face.png")
 	stage, err := svc.SaveAgeStage(project.ID, character.ID, 0, AgeStageInput{Name: "少年", Age: intPtr(15), Appearance: "15岁少女，马尾", PortraitEngine: ImageEngineKrea2})
 	if err != nil {
 		t.Fatal(err)
@@ -186,11 +208,109 @@ func TestAgeStageTextToImagePortraitHasNoAdultReference(t *testing.T) {
 		t.Fatal(err)
 	}
 	task, files := onlyTaskInputs(t, svc)
-	if len(files) != 0 {
-		t.Fatalf("text-to-image stage portrait must not carry references, got %+v", files)
+	if refs := files["source_image"]; len(files) != 1 || len(refs) != 1 || refs[0].Name != "face.png" {
+		t.Fatalf("krea2 stage sheet must use the main portrait as source, got %+v", files)
 	}
-	if !strings.Contains(task.Prompt, "15岁人物") || !strings.Contains(task.Prompt, "15岁少女，马尾") || strings.Contains(task.Prompt, "28岁") {
-		t.Fatalf("unexpected text-to-image prompt: %s", task.Prompt)
+	if task.Prompt != ageStageSheetPrompt(&project, &character, stage) || !strings.HasPrefix(task.Prompt, "参考图是角色") || strings.Contains(task.Prompt, "<image1>") || !strings.Contains(task.Prompt, "15岁少女，马尾") || strings.Contains(task.Prompt, "28岁") {
+		t.Fatalf("krea2 must submit the Moss-structured sheet prompt bound to its source image: %s", task.Prompt)
+	}
+}
+
+func TestAgeStageSheetRequiresMainPortrait(t *testing.T) {
+	svc, project, character := setupAgeStageTestDB(t)
+	attachAgeStageTaskService(t, svc, "qwen_image_2_1_multi_edit.json")
+	if err := svc.db.Model(&character).Update("portrait", "").Error; err != nil {
+		t.Fatal(err)
+	}
+	stage, err := svc.SaveAgeStage(project.ID, character.ID, 0, AgeStageInput{Name: "童年", Age: intPtr(6), Appearance: "6岁女孩"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.StartAgeStagePortrait(project.ID, character.ID, stage.ID, ""); err == nil || !strings.Contains(err.Error(), "主标准像") {
+		t.Fatalf("stage sheet without a main portrait reference must be refused, got %v", err)
+	}
+	var count int64
+	svc.db.Model(&models.Task{}).Count(&count)
+	if count != 0 {
+		t.Fatal("no task may be created without a reference image")
+	}
+}
+
+// 用户实例：柳乐儿 19 岁阶段。年龄写在主体最前，阶段外貌里的衣裙与短靴原样进入提示词并锁定鞋履。
+func TestAgeStageSheetPromptLeadsWithAgeAndKeepsDeclaredOutfit(t *testing.T) {
+	project := models.Project{Style: "国漫", Genre: "古风仙侠"}
+	ch := models.Character{Name: "柳乐儿", Gender: "女", Appearance: "6岁女孩，圆脸"}
+	stage := models.CharacterAgeStage{Name: "青年", Age: intPtr(19), Appearance: "身着白色衫裙的20岁模样俏丽女子，黑发及腰，脚穿藕色布制中国古典短靴"}
+	prompt := ageStageSheetPrompt(&project, &ch, &stage)
+	if !strings.HasPrefix(prompt, "<image1>是角色「柳乐儿」的主标准像") {
+		t.Fatalf("prompt must bind the main portrait first:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "与服装。19岁女性，年龄感、身高头身比例与面部成熟度严格符合19岁，身着白色衫裙") {
+		t.Fatalf("age must lead the subject right after the reference binding:\n%s", prompt)
+	}
+	for _, want := range []string{"指定鞋履：脚穿藕色布制中国古典短靴", "由左到右排列"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	for _, banned := range []string{"6岁", "圆脸", "朴素日常基础服装", "云头绣鞋"} {
+		if strings.Contains(prompt, banned) {
+			t.Fatalf("prompt must not carry %q:\n%s", banned, prompt)
+		}
+	}
+}
+
+// 旧数据：文生图来源（qwen_image_2_1）改为 Qwen 多图编辑；旧的 9:16 阶段标准像提示词不再复用。
+func TestLegacyStageMovesToReferencedSheet(t *testing.T) {
+	svc, project, character := setupAgeStageTestDB(t)
+	attachAgeStageTaskService(t, svc, "qwen_image_2_1_multi_edit.json")
+	registerAgeStageUploads(t, svc, project.ID, "face.png")
+	stage := models.CharacterAgeStage{ProjectID: project.ID, CharacterID: character.ID, Name: "童年", Age: intPtr(6), Appearance: "6岁女孩", PortraitEngine: ImageEngineQwen21, PortraitPrompt: "6岁人物，正面肩部以上头像，9:16竖版标准参考像", AuditStatus: models.LookStatusDraft}
+	if err := svc.db.Create(&stage).Error; err != nil {
+		t.Fatal(err)
+	}
+	saved, draft, err := svc.AgeStagePortraitPrompt(project.ID, character.ID, stage.ID)
+	if err != nil || saved != "" || !strings.HasPrefix(draft, "<image1>") || !strings.Contains(draft, "由左到右") {
+		t.Fatalf("legacy portrait prompt must not be offered for a sheet: saved=%q draft=%q err=%v", saved, draft, err)
+	}
+	if err := svc.StartAgeStagePortrait(project.ID, character.ID, stage.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	task, files := onlyTaskInputs(t, svc)
+	if refs := files["ref_images"]; len(refs) != 1 || refs[0].Name != "face.png" || task.Prompt != draft {
+		t.Fatalf("legacy stage must submit a referenced sheet: files=%+v prompt=%s", files, task.Prompt)
+	}
+}
+
+func TestExpandAgeStageAppearanceKeepsUserTextAndDoesNotSave(t *testing.T) {
+	svc, project, character := setupAgeStageTestDB(t)
+	if _, err := svc.ExpandAgeStageAppearance(project.ID, character.ID, AgeStageExpandInput{Name: "童年", Age: intPtr(6), Brief: "齐刘海"}); err == nil {
+		t.Fatal("expand without a text provider must fail")
+	}
+	provider := &captureTextProvider{response: "<think>草稿</think>“6岁女孩，圆脸，齐刘海短发，约115厘米。基础服饰：浅蓝棉布童装，布鞋。”"}
+	svc.textProvider = provider
+	if _, err := svc.ExpandAgeStageAppearance(project.ID, character.ID, AgeStageExpandInput{Name: "童年", Age: intPtr(6)}); err == nil {
+		t.Fatal("empty brief must be rejected before calling the model")
+	}
+	text, err := svc.ExpandAgeStageAppearance(project.ID, character.ID, AgeStageExpandInput{Name: "童年", Age: intPtr(6), Brief: "齐刘海短发，圆脸"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "6岁女孩，圆脸，齐刘海短发，约115厘米。基础服饰：浅蓝棉布童装，布鞋。" {
+		t.Fatalf("think block and quotes must be stripped, got %q", text)
+	}
+	for _, want := range []string{"用户描述：齐刘海短发，圆脸", "该阶段年龄：6岁", "28岁女性，高挑"} {
+		if !strings.Contains(provider.user, want) {
+			t.Fatalf("model input missing %q:\n%s", want, provider.user)
+		}
+	}
+	if !strings.Contains(provider.system, "不得沿用主档案的年龄") || !strings.Contains(provider.system, "用户写明的内容是权威") {
+		t.Fatalf("system prompt lost its age/authority rules:\n%s", provider.system)
+	}
+	var count int64
+	svc.db.Model(&models.CharacterAgeStage{}).Count(&count)
+	if count != 0 {
+		t.Fatal("expanding must not create or save a stage")
 	}
 }
 
@@ -285,7 +405,7 @@ func TestNewAgeStagePortraitInvalidatesItsOutfitImagesOnly(t *testing.T) {
 	var gotStage, gotMain models.CharacterOutfit
 	svc.db.First(&gotStage, stageOutfit.ID)
 	svc.db.First(&gotMain, mainOutfit.ID)
-	if gotStage.Image != "child_outfit.png" || gotStage.Sheet != "child_sheet.png" || !strings.Contains(gotStage.ImageError, "年龄阶段标准像已更换") {
+	if gotStage.Image != "child_outfit.png" || gotStage.Sheet != "child_sheet.png" || !strings.Contains(gotStage.ImageError, "年龄阶段四视图已更换") {
 		t.Fatalf("stage outfit images must be kept with an outdated hint: %+v", gotStage)
 	}
 	if gotMain.Image != "adult_outfit.png" || gotMain.Sheet != "adult_outfit_sheet.png" {
@@ -374,10 +494,10 @@ func TestSaveAgeStagePortraitPromptOnlySavesPrompt(t *testing.T) {
 	if err := svc.ApproveAgeStage(project.ID, character.ID, stage.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.SaveAgeStagePortraitPrompt(project.ID, character.ID, stage.ID, "没有参考图标记"); err == nil {
-		t.Fatal("qwen_edit prompt without <image1> must be rejected")
+	if err := svc.SaveAgeStagePortraitPrompt(project.ID, character.ID, stage.ID, "6岁女孩，齐刘海。由左到右排列四视图。"); err == nil {
+		t.Fatal("a sheet prompt without the <image1> reference binding must be rejected")
 	}
-	prompt := "<image1>是角色主标准像。6岁女孩，齐刘海。"
+	prompt := "<image1>是角色主标准像，只参考脸部特征。6岁女孩，齐刘海。由左到右排列：正面面部特写、正面全身站立、侧面全身站立、背面全身站立。"
 	if err := svc.SaveAgeStagePortraitPrompt(project.ID, character.ID, stage.ID, prompt); err != nil {
 		t.Fatal(err)
 	}

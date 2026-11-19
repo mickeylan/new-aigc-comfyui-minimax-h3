@@ -356,6 +356,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	// 角色年龄阶段（同一角色不同年龄的外貌锚点；其下可挂多套服装）
 	r.GET("/api/projects/:id/characters/:cid/age-stages", svc.HandleListCharacterAgeStages)
 	r.POST("/api/projects/:id/characters/:cid/age-stages", svc.HandleCreateCharacterAgeStage)
+	r.POST("/api/projects/:id/characters/:cid/age-stages/expand-appearance", svc.HandleExpandCharacterAgeStageAppearance) // AI 扩写阶段形象描述（不保存）
 	r.PUT("/api/projects/:id/characters/:cid/age-stages/:asid", svc.HandleUpdateCharacterAgeStage)
 	r.DELETE("/api/projects/:id/characters/:cid/age-stages/:asid", svc.HandleDeleteCharacterAgeStage)
 	r.POST("/api/projects/:id/characters/:cid/age-stages/:asid/approve", svc.HandleApproveCharacterAgeStage)

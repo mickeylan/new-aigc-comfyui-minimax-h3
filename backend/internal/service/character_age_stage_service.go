@@ -13,7 +13,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// AgeStagePortraitQwenEdit 以角色主标准像为参考、经 Qwen 多图编辑改写年龄；默认来源。
+// AgeStagePortraitQwenEdit 以角色主标准像为 <image1>、经 Qwen-Image-2.1 多图编辑生成阶段四视图；默认来源。
+// Moss 只支持文生图，不能带参考图，因此不作为阶段来源。
 const AgeStagePortraitQwenEdit = "qwen_edit"
 
 type AgeStageInput struct {
@@ -23,17 +24,21 @@ type AgeStageInput struct {
 	PortraitEngine string `json:"portrait_engine"`
 }
 
+// normalizeAgeStagePortraitEngine 阶段四视图必须带参考图：Qwen 多图编辑（默认）或 Krea2 四视图编辑。
+// 旧的文生图取值（qwen_image_2_1、moss）一律改为 Qwen 多图编辑。
 func normalizeAgeStagePortraitEngine(value string) (string, error) {
 	switch strings.TrimSpace(value) {
-	case "", AgeStagePortraitQwenEdit:
+	case "", AgeStagePortraitQwenEdit, ImageEngineQwen21, ImageEngineMoss:
 		return AgeStagePortraitQwenEdit, nil
 	case ImageEngineKrea2:
 		return ImageEngineKrea2, nil
-	case ImageEngineQwen21:
-		return ImageEngineQwen21, nil
-	default:
-		return "", fmt.Errorf("不支持的年龄阶段标准像来源")
 	}
+	return "", fmt.Errorf("不支持的年龄阶段四视图引擎")
+}
+
+// ageStageSheetLayout 判断提示词是否是四视图版式；旧版 9:16 阶段标准像提示词不再复用。
+func ageStageSheetLayout(prompt string) bool {
+	return strings.Contains(prompt, "由左到右")
 }
 
 func ageStageApproved(stage *models.CharacterAgeStage) bool {
@@ -100,7 +105,8 @@ func (s *CharacterLookService) SaveAgeStage(projectID, characterID, stageID uint
 	}
 	appearanceChanged := stage.Appearance != req.Appearance || !sameOptionalInt(stage.Age, req.Age)
 	updates := map[string]any{"name": req.Name, "age": req.Age, "appearance": req.Appearance, "portrait_engine": engine}
-	if appearanceChanged || stage.PortraitEngine != engine {
+	oldEngine, _ := normalizeAgeStagePortraitEngine(stage.PortraitEngine)
+	if appearanceChanged || oldEngine != engine {
 		// 提示词由外貌与来源推导；旧提示词不再代表当前设计，审核需重新确认。
 		updates["portrait_prompt"] = ""
 		updates["audit_status"] = models.LookStatusDraft
@@ -116,6 +122,58 @@ func (s *CharacterLookService) SaveAgeStage(projectID, characterID, stageID uint
 		}
 	}
 	return s.loadAgeStage(s.db, projectID, characterID, stage.ID)
+}
+
+// AgeStageExpandInput 是“AI 扩写”的输入：用户在编辑阶段时写下的简要形象描述。
+type AgeStageExpandInput struct {
+	Name  string `json:"name"`
+	Age   *int   `json:"age"`
+	Brief string `json:"brief"`
+}
+
+// ExpandAgeStageAppearance 按用户输入扩写该年龄的人物形象描述，只返回文本供用户修改，不保存。
+// 用户写明的内容为准；主档案只用于延续发色、瞳色等天生特征，不沿用主档案的年龄与体型。
+func (s *CharacterLookService) ExpandAgeStageAppearance(projectID, characterID uint, req AgeStageExpandInput) (string, error) {
+	brief := strings.TrimSpace(req.Brief)
+	if brief == "" {
+		return "", fmt.Errorf("请先写几句该年龄的形象要点，再让 AI 扩写")
+	}
+	if req.Age != nil && (*req.Age < 1 || *req.Age > 120) {
+		return "", fmt.Errorf("年龄必须在1到120之间")
+	}
+	if s.textProvider == nil {
+		return "", fmt.Errorf("文本生成服务未配置")
+	}
+	var project models.Project
+	var ch models.Character
+	if err := s.db.First(&project, projectID).Error; err != nil {
+		return "", err
+	}
+	if err := s.db.Where("id = ? AND project_id = ?", characterID, projectID).First(&ch).Error; err != nil {
+		return "", fmt.Errorf("角色不存在")
+	}
+	age := "未指定（按用户描述判断）"
+	if req.Age != nil {
+		age = fmt.Sprintf("%d岁", *req.Age)
+	}
+	system := `你是影视角色设定师。把用户对同一角色某个年龄阶段的简要描述，扩写成可直接用于生成角色四视图的中文人物形象描述。
+规则：
+1. 用户写明的内容是权威，必须全部保留且不得改写或矛盾；只补全用户没写的部分。
+2. 依次写：年龄与性别、脸型与五官、发型发色、身高头身比与体态、神态气质，最后以“基础服饰：”写一套符合该年龄与时代背景的日常服装和鞋履。
+3. 年龄感、头身比和面部成熟度必须严格符合该年龄。角色主档案只用于延续发色、瞳色、肤色、痣痣等天生特征，不得沿用主档案的年龄、体型、发型和服装。
+4. 不写姓名、剧情、动作、姿势、镜头、构图、背景、画风，不加武器、法宝或剧情道具。
+5. 只输出一段纯文本，不超过220字，不要标题、列表、引号或解释。`
+	user := fmt.Sprintf("项目题材：%s\n项目画风：%s\n角色性别：%s\n角色身份：%s\n角色主档案外貌（仅供延续天生特征）：%s\n阶段名称：%s\n该阶段年龄：%s\n用户描述：%s",
+		project.Genre, project.Style, ch.Gender, ch.Role, ch.Appearance, strings.TrimSpace(req.Name), age, brief)
+	raw, err := s.textProvider.Chat(system, user)
+	if err != nil {
+		return "", fmt.Errorf("AI扩写失败: %w", err)
+	}
+	text := strings.Trim(strings.TrimSpace(stripThinkBlocks(raw)), "\"“”`")
+	if text == "" {
+		return "", fmt.Errorf("AI扩写未返回内容，请重试或手动填写")
+	}
+	return text, nil
 }
 
 func sameOptionalInt(a, b *int) bool {
@@ -149,12 +207,13 @@ func (s *CharacterLookService) ApproveAgeStage(projectID, characterID, stageID u
 		return err
 	}
 	if strings.TrimSpace(stage.Portrait) == "" {
-		return fmt.Errorf("请先生成或上传该阶段标准像")
+		return fmt.Errorf("请先生成或上传该阶段四视图")
 	}
 	return s.db.Model(stage).Updates(map[string]any{"audit_status": models.LookStatusApproved, "audit_note": ""}).Error
 }
 
 // AgeStagePortraitPrompt 返回当前保存的提示词（可能是用户改过的）与系统默认稿。
+// 旧版阶段标准像提示词不是四视图版式，不再作为已保存稿返回。
 func (s *CharacterLookService) AgeStagePortraitPrompt(projectID, characterID, stageID uint) (saved, draft string, err error) {
 	stage, err := s.loadAgeStage(s.db, projectID, characterID, stageID)
 	if err != nil {
@@ -168,41 +227,75 @@ func (s *CharacterLookService) AgeStagePortraitPrompt(projectID, characterID, st
 	if err := s.db.Where("id = ? AND project_id = ?", characterID, projectID).First(&ch).Error; err != nil {
 		return "", "", err
 	}
-	return stage.PortraitPrompt, ageStagePortraitPrompt(&project, &ch, stage), nil
+	saved = stage.PortraitPrompt
+	if !ageStageSheetLayout(saved) {
+		saved = ""
+	}
+	return saved, ageStageSheetPrompt(&project, &ch, stage), nil
 }
 
-func ageStagePortraitPrompt(project *models.Project, ch *models.Character, stage *models.CharacterAgeStage) string {
-	label := ageStageLabel(stage)
-	composition := "单一角色，正面肩部以上头像，头发与发型完整入镜，直视镜头，自然中性表情，衣领与肩部清晰，纯净背景，柔和均匀自然光，不出现文字或水印。"
-	style := styleDescriptor(project.Style)
-	if stage.PortraitEngine == "" || stage.PortraitEngine == AgeStagePortraitQwenEdit {
-		return strings.Join(nonEmptyStrings([]string{
-			fmt.Sprintf("<image1>是角色「%s」的主标准像，仅作为同一人物的血缘相似脸部特征（眼型、眉形、鼻型、脸部轮廓的延续）与项目画风参考；不沿用<image1>中的年龄、头身比例、发型与服装。", ch.Name),
-			fmt.Sprintf("最终画面是同一人物在「%s」时的9:16竖版标准参考像。该阶段外貌以以下描述为准，年龄感、身高头身比例与面部成熟度必须严格符合该阶段：%s", label, stage.Appearance),
-			style,
-			composition,
-		}), "\n\n")
+// ageStageSheetPrompt 先绑定主标准像参考，再接与角色四视图同一套 Moss 结构（人物外貌、服饰、画风，
+// “由左到右”四格版式）。四视图自带正面面部特写，不再单独生成阶段标准像。
+// 参考图只负责同一人物的脸部特征与画风；年龄、体型、发型与服装以阶段外貌为准，外貌未写服装/鞋履时才补默认值。
+func ageStageSheetPrompt(project *models.Project, ch *models.Character, stage *models.CharacterAgeStage) string {
+	reference := "参考图"
+	if engine, _ := normalizeAgeStagePortraitEngine(stage.PortraitEngine); engine == AgeStagePortraitQwenEdit {
+		reference = "<image1>"
 	}
+	binding := fmt.Sprintf("%s是角色「%s」的主标准像，仅用于保持同一人物的脸部特征（眼型、眉形、鼻型、脸部轮廓的延续）与项目画风；不沿用%s中的年龄、头身比例、发型与服装。", reference, ch.Name, reference)
+	return binding + ageStageSheetBody(project, ch, stage)
+}
+
+func ageStageSheetBody(project *models.Project, ch *models.Character, stage *models.CharacterAgeStage) string {
+	// 阶段外貌里写明的鞋履交给鞋履锁定，避免被按时代背景推断的默认鞋覆盖。
+	view := models.Character{Name: ch.Name, Role: ch.Role, Gender: ch.Gender, Appearance: stage.Appearance, WardrobeDetail: ageStageClause(stage.Appearance, "鞋", "靴", "履", "屐")}
 	parts := []string{}
 	if stage.Age != nil && *stage.Age > 0 {
-		parts = append(parts, fmt.Sprintf("%d岁人物", *stage.Age))
+		parts = append(parts, fmt.Sprintf("%d岁%s，年龄感、身高头身比例与面部成熟度严格符合%d岁", *stage.Age, ageStageGenderNoun(ch.Gender, *stage.Age), *stage.Age))
 	}
-	parts = append(parts, style, "人物外貌必须严格固定："+stage.Appearance, composition)
-	return normalizePortraitStyle(strings.Join(nonEmptyStrings(parts), "，"), project)
+	parts = append(parts, strings.TrimSpace(stage.Appearance))
+	if ageStageClause(stage.Appearance, "服", "衣", "衫", "裙", "袍", "裤", "褂", "甲") == "" {
+		parts = append(parts, "服饰：符合该年龄与时代背景的朴素日常基础服装，款式简洁，不加额外配饰")
+	}
+	if style := strings.TrimSpace(project.Style); style != "" {
+		parts = append(parts, style+"风格")
+	}
+	return normalizePortraitStyle(strings.Join(nonEmptyStrings(parts), "，"), project) + "。" + characterSheetLayoutTail(project, &view)
 }
 
-func ageStagePortraitTemplate(engine string) string {
-	switch engine {
-	case ImageEngineKrea2:
-		return "krea2_character_portrait"
-	case ImageEngineQwen21:
-		return TemplateQwen21T2I
-	default:
-		return TemplateQwen21MultiEdit
+// ageStageClause 返回外貌中第一个包含任一关键词的分句，没有时返回空串。
+func ageStageClause(text string, words ...string) string {
+	for _, clause := range strings.FieldsFunc(text, func(r rune) bool { return r == '，' || r == '。' || r == '；' || r == ',' || r == '\n' }) {
+		for _, word := range words {
+			if strings.Contains(clause, word) {
+				return strings.TrimSpace(clause)
+			}
+		}
 	}
+	return ""
 }
 
-// SaveAgeStagePortraitPrompt 只保存人工审阅后的阶段标准像提示词，不提交生成、不改动阶段标准像与审核状态。
+// ageStageGenderNoun 按年龄给出主体称谓，未知性别时用“人物”。
+func ageStageGenderNoun(gender string, age int) string {
+	female, male := strings.Contains(gender, "女"), strings.Contains(gender, "男")
+	switch {
+	case female && age < 12:
+		return "女孩"
+	case male && age < 12:
+		return "男孩"
+	case female && age < 18:
+		return "少女"
+	case male && age < 18:
+		return "少年"
+	case female:
+		return "女性"
+	case male:
+		return "男性"
+	}
+	return "人物"
+}
+
+// SaveAgeStagePortraitPrompt 只保存人工审阅后的阶段四视图提示词，不提交生成、不改动阶段四视图与审核状态。
 func (s *CharacterLookService) SaveAgeStagePortraitPrompt(projectID, characterID, stageID uint, prompt string) error {
 	stage, err := s.loadAgeStage(s.db, projectID, characterID, stageID)
 	if err != nil {
@@ -212,23 +305,31 @@ func (s *CharacterLookService) SaveAgeStagePortraitPrompt(projectID, characterID
 	if prompt == "" {
 		return fmt.Errorf("提示词不能为空")
 	}
-	if (stage.PortraitEngine == "" || stage.PortraitEngine == AgeStagePortraitQwenEdit) && !strings.Contains(prompt, "<image1>") {
-		return fmt.Errorf("以主标准像改年龄的提示词必须保留 <image1>")
+	if err := checkAgeStageReferenceBinding(stage.PortraitEngine, prompt); err != nil {
+		return err
 	}
 	return s.db.Model(&models.CharacterAgeStage{}).Where("id = ?", stage.ID).Update("portrait_prompt", prompt).Error
 }
 
-// StartAgeStagePortrait 提交阶段标准像任务。prompt 为空时使用已保存稿或默认稿；提交前由用户审阅。
+// checkAgeStageReferenceBinding Qwen 多图编辑的提示词必须用 <image1> 绑定主标准像。
+func checkAgeStageReferenceBinding(engine, prompt string) error {
+	if engine, _ := normalizeAgeStagePortraitEngine(engine); engine == AgeStagePortraitQwenEdit && !strings.Contains(prompt, "<image1>") {
+		return fmt.Errorf("阶段四视图以主标准像为参考，提示词必须保留 <image1>")
+	}
+	return nil
+}
+
+// StartAgeStagePortrait 以角色主标准像为参考提交阶段四视图任务。prompt 为空时使用已保存稿或默认稿；提交前由用户审阅。
 func (s *CharacterLookService) StartAgeStagePortrait(projectID, characterID, stageID uint, prompt string) error {
 	if s.tasks == nil {
-		return fmt.Errorf("年龄阶段标准像生成依赖 ComfyUI 任务服务")
+		return fmt.Errorf("年龄阶段四视图生成依赖 ComfyUI 任务服务")
 	}
 	stage, err := s.loadAgeStage(s.db, projectID, characterID, stageID)
 	if err != nil {
 		return err
 	}
 	if stage.PortraitTaskID != "" {
-		return fmt.Errorf("该阶段标准像正在生成，请勿重复提交")
+		return fmt.Errorf("该阶段四视图正在生成，请勿重复提交")
 	}
 	var project models.Project
 	var ch models.Character
@@ -242,29 +343,26 @@ func (s *CharacterLookService) StartAgeStagePortrait(projectID, characterID, sta
 	if err != nil {
 		return err
 	}
+	if strings.TrimSpace(ch.Portrait) == "" {
+		return fmt.Errorf("阶段四视图以角色「%s」的主标准像为参考，请先生成或上传主标准像；也可直接上传阶段四视图", ch.Name)
+	}
 	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
+	if prompt == "" && ageStageSheetLayout(stage.PortraitPrompt) {
 		prompt = strings.TrimSpace(stage.PortraitPrompt)
 	}
 	if prompt == "" {
-		prompt = ageStagePortraitPrompt(&project, &ch, stage)
+		prompt = ageStageSheetPrompt(&project, &ch, stage)
 	}
-	var files map[string][]FileMeta
-	params := map[string]any{}
-	switch engine {
-	case AgeStagePortraitQwenEdit:
-		if strings.TrimSpace(ch.Portrait) == "" {
-			return fmt.Errorf("以主标准像改年龄需要角色「%s」先有标准像；也可改用文生图或上传", ch.Name)
-		}
-		if !strings.Contains(prompt, "<image1>") {
-			return fmt.Errorf("提示词未绑定角色主标准像 <image1>，已阻止生成")
-		}
-		files = map[string][]FileMeta{"ref_images": {{TaskID: fmt.Sprint(projectID), Name: ch.Portrait}}}
-		params = qwenPortraitParams()
-	case ImageEngineQwen21:
-		params = qwenPortraitParams()
+	if err := checkAgeStageReferenceBinding(engine, prompt); err != nil {
+		return err
 	}
-	tpl, err := enabledTemplateByCode(s.db, ageStagePortraitTemplate(engine))
+	reference := []FileMeta{{TaskID: fmt.Sprint(projectID), Name: ch.Portrait}}
+	templateCode, params, files := TemplateQwen21MultiEdit, qwenPortraitParams(), map[string][]FileMeta{"ref_images": reference}
+	params["aspect_ratio"] = qwenAspectRatio("16:9")
+	if engine == ImageEngineKrea2 {
+		templateCode, params, files = "krea2_character_sheet", nil, map[string][]FileMeta{"source_image": reference}
+	}
+	tpl, err := enabledTemplateByCode(s.db, templateCode)
 	if err != nil {
 		return err
 	}
@@ -279,9 +377,9 @@ func (s *CharacterLookService) StartAgeStagePortrait(projectID, characterID, sta
 		if res.Error != nil {
 			return res.Error
 		}
-		return fmt.Errorf("该阶段标准像任务已存在")
+		return fmt.Errorf("该阶段四视图任务已存在")
 	}
-	log.Printf("[age-stage-submit] project=%d character=%d stage=%d engine=%s files=%v", projectID, characterID, stage.ID, engine, files)
+	log.Printf("[age-stage-submit] project=%d character=%d stage=%d engine=%s template=%s", projectID, characterID, stage.ID, engine, templateCode)
 	go func() {
 		if err := s.tasks.Execute(task.TaskID); err != nil && !errors.Is(err, errNoFreeGPU) {
 			log.Printf("[age-stage %d] task %s failed: %v", stage.ID, task.TaskID, err)
@@ -312,7 +410,7 @@ func (s *CharacterLookService) SaveAgeStageUploadedPortrait(projectID, character
 	return s.applyAgeStagePortrait(stage.ID, "", filepath.Base(path))
 }
 
-const ageStageOutfitOutdatedNote = "年龄阶段标准像已更换；已有定妆照与四视图保留，如需与新标准像一致请重新生成"
+const ageStageOutfitOutdatedNote = "年龄阶段四视图已更换；已有定妆照与四视图保留，如需与新阶段形象一致请重新生成"
 
 func ageStagePortraitHistory(raw string) []string {
 	var files []string
@@ -322,7 +420,7 @@ func ageStagePortraitHistory(raw string) []string {
 	return files
 }
 
-// pushAgeStagePortraitHistory 把被替换的标准像放到历史最前面，并从历史中移除即将成为当前的那张。
+// pushAgeStagePortraitHistory 把被替换的阶段四视图放到历史最前面，并从历史中移除即将成为当前的那张。
 func pushAgeStagePortraitHistory(raw, previous, next string) string {
 	out := []string{}
 	if previous != "" && previous != next {
@@ -340,14 +438,14 @@ func pushAgeStagePortraitHistory(raw, previous, next string) string {
 	return string(body)
 }
 
-// RestoreAgeStagePortrait 把历史中的某张阶段标准像恢复为当前；当前这张进入历史，不删除任何文件。
+// RestoreAgeStagePortrait 把历史中的某张阶段四视图恢复为当前；当前这张进入历史，不删除任何文件。
 func (s *CharacterLookService) RestoreAgeStagePortrait(projectID, characterID, stageID uint, file string) error {
 	stage, err := s.loadAgeStage(s.db, projectID, characterID, stageID)
 	if err != nil {
 		return err
 	}
 	if stage.PortraitTaskID != "" {
-		return fmt.Errorf("该阶段标准像正在生成，请完成后再恢复历史版本")
+		return fmt.Errorf("该阶段四视图正在生成，请完成后再恢复历史版本")
 	}
 	file = strings.TrimSpace(file)
 	for _, old := range ageStagePortraitHistory(stage.PortraitHistory) {
@@ -355,10 +453,10 @@ func (s *CharacterLookService) RestoreAgeStagePortrait(projectID, characterID, s
 			return s.applyAgeStagePortrait(stage.ID, "", file)
 		}
 	}
-	return fmt.Errorf("该图片不在此阶段的历史标准像中")
+	return fmt.Errorf("该图片不在此阶段的历史四视图中")
 }
 
-// applyAgeStagePortrait 写入新阶段标准像，旧标准像进入历史（不删除文件）。阶段需重新审核；
+// applyAgeStagePortrait 写入新阶段四视图，旧图进入历史（不删除文件）。阶段需重新审核；
 // 其下套装已有的定妆照/四视图保留，只取消在途任务并提示可重新生成。
 // expectTaskID 非空时只在任务仍是当前任务时写入，防止旧任务覆盖新结果。
 func (s *CharacterLookService) applyAgeStagePortrait(stageID uint, expectTaskID, file string) error {
@@ -379,7 +477,7 @@ func (s *CharacterLookService) applyAgeStagePortrait(stageID uint, expectTaskID,
 		if res.Error != nil || res.RowsAffected == 0 {
 			return res.Error
 		}
-		// 已生成的套装定妆照/四视图属于用户资产，保留不删；只取消以旧标准像在途的任务并提示可重新生成。
+		// 已生成的套装定妆照/四视图属于用户资产，保留不删；只取消以旧阶段形象在途的任务并提示可重新生成。
 		var outfits []models.CharacterOutfit
 		if err := tx.Where("age_stage_id = ?", stageID).Find(&outfits).Error; err != nil {
 			return err

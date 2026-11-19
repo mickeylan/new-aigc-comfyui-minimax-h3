@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { ageStageLabel, groupOutfitsByStage, episodeAssignSummary, validEpisodeRange, stageApproved } from '../src/utils/characterAgeStage.js'
+import { ageStagePortraitEngines, normalizeStageEngine, ageStageLabel, groupOutfitsByStage, episodeAssignSummary, validEpisodeRange, stageApproved } from '../src/utils/characterAgeStage.js'
 
 const looks = readFileSync(new URL('../src/views/CharacterLooks.vue', import.meta.url), 'utf8')
 const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
@@ -66,12 +66,31 @@ test('角色卡提供追加年龄形象入口，且说明不会替换现有形�
   assert.match(looks, /r\.query\.new==='1'&&mode\.value==='stages'\)openStage\(\)/)
 })
 
-test('阶段提示词可只保存不生成，历史标准像保留并可恢复', () => {
+test('阶段提示词可只保存不生成，历史四视图保留并可恢复', () => {
   assert.match(looks, /只保存提示词/)
   assert.match(looks, /portrait\/prompt`,jsonOpt\('PUT'/)
   assert.match(looks, /portrait\/restore/)
-  assert.match(looks, /历史标准像（保留，可恢复）/)
+  // 用户要求阶段形象直接生成四视图，不再单独生成标准像，历史区随之改名。
+  assert.match(looks, /历史四视图（保留，可恢复）/)
   assert.match(looks, /if\(created&&row\?\.id\)await openStagePrompt\(row\)/)
+})
+
+// 用户要求：阶段四视图必须有参考图；Moss 只支持文生图，因此只提供 Qwen 多图编辑与 Krea2 编辑。
+test('阶段四视图必须参考主标准像，不提供文生图引擎，旧取值按 Qwen 多图编辑显示', () => {
+  assert.deepEqual(ageStagePortraitEngines.map(e => e.value), ['qwen_edit', 'krea2'])
+  assert.equal(normalizeStageEngine('moss'), 'qwen_edit')
+  assert.equal(normalizeStageEngine('qwen_image_2_1'), 'qwen_edit')
+  assert.equal(normalizeStageEngine(''), 'qwen_edit')
+  assert.equal(normalizeStageEngine('krea2'), 'krea2')
+  assert.match(looks, /:disabled="!!s\.portrait_task_id\|\|!character\?\.portrait"[^>]*@click="openStagePrompt\(s\)">\{\{s\.portrait_task_id\?'生成中…':'审阅提示词并生成四视图'\}\}/)
+  assert.match(looks, /以角色主标准像为参考/)
+})
+
+test('编辑年龄阶段可 AI 扩写人物形象，结果只填入文本框且可撤销', () => {
+  assert.match(looks, /\$\{stageURL\(\)\}\/expand-appearance`,jsonOpt\('POST',\{name:stageForm\.name\?\.trim\(\)\|\|'',age,brief:before\.trim\(\)\}\)/)
+  assert.match(looks, /@click="expandStageAppearance">\{\{stageExpanding\?'AI扩写中…':'AI扩写'\}\}/)
+  assert.match(looks, /撤销扩写/)
+  assert.match(looks, /stageAppearanceBefore\.value=before;stageForm\.appearance=d\.appearance/)
 })
 
 test('套装旧定妆照/四视图有历史版本入口并可设为当前', () => {

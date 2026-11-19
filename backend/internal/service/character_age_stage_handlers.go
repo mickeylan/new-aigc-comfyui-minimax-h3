@@ -88,6 +88,24 @@ func (s *Service) HandleUpdateCharacterAgeStage(c *gin.Context) {
 	c.JSON(200, row)
 }
 
+func (s *Service) HandleExpandCharacterAgeStageAppearance(c *gin.Context) {
+	pid, cid, _, ok := s.loadAgeStageRoute(c, false)
+	if !ok {
+		return
+	}
+	var req AgeStageExpandInput
+	if c.ShouldBindJSON(&req) != nil {
+		c.JSON(400, gin.H{"error": "参数错误"})
+		return
+	}
+	text, err := s.CharacterLooks.ExpandAgeStageAppearance(pid, cid, req)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"appearance": text})
+}
+
 func (s *Service) HandleDeleteCharacterAgeStage(c *gin.Context) {
 	pid, cid, sid, ok := s.loadAgeStageRoute(c, true)
 	if !ok {
