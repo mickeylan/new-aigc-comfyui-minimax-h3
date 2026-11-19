@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"comfyui-console/internal/models"
 	"github.com/gin-gonic/gin"
@@ -284,6 +285,34 @@ func TestSceneVideoTranslationHTTPConfirmRejectsChangedSource(t *testing.T) {
 	}
 	if saved.VideoFullPrompt != "old reviewed prompt" || saved.Content != "changed while user reviews English" || saved.VideoPromptMasterZH != translationMaster+"\n用户随后补充" {
 		t.Fatalf("stale preview overwrote current edited source or reviewed prompt: %+v", saved)
+	}
+}
+
+// Shot dialogue edited away from the structured Dialogue rows leaves no ranges. Reading the
+// source hash must not rewrite those rows, or translate→confirm conflicts forever.
+func TestSceneVideoTranslationHTTPConfirmSucceedsWhenShotDialogueDiverges(t *testing.T) {
+	f := newTranslationHTTPFixture(t)
+	if err := f.db.Model(&models.Shot{}).Where("scene_id = ?", f.sc.ID).Update("dialogue", "导演改写的台词").Error; err != nil {
+		t.Fatal(err)
+	}
+	var before models.Shot
+	f.db.Where("scene_id = ?", f.sc.ID).First(&before)
+	for attempt := 1; attempt <= 2; attempt++ {
+		w := translationRequest(f.svc, http.MethodPost, f.p.ID, f.sc.ID, "/translate", `{"language":"en"}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("attempt %d translate status=%d %s", attempt, w.Code, w.Body.String())
+		}
+		hash := decodeTranslationBody(t, w)["source_hash"].(string)
+		time.Sleep(5 * time.Millisecond)
+		body, _ := json.Marshal(map[string]any{"exec_prompt": translationEnglish, "source_hash": hash})
+		if w = translationRequest(f.svc, http.MethodPost, f.p.ID, f.sc.ID, "/confirm", string(body)); w.Code != http.StatusOK {
+			t.Fatalf("attempt %d unchanged source was rejected status=%d %s", attempt, w.Code, w.Body.String())
+		}
+	}
+	var after models.Shot
+	f.db.Where("scene_id = ?", f.sc.ID).First(&after)
+	if !after.UpdatedAt.Equal(before.UpdatedAt) || after.Dialogue != "导演改写的台词" {
+		t.Fatalf("hash reads rewrote the shot: before=%s after=%s dialogue=%q", before.UpdatedAt, after.UpdatedAt, after.Dialogue)
 	}
 }
 

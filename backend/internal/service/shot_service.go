@@ -290,7 +290,9 @@ func clearShotDialogueRanges(tx *gorm.DB, sceneID uint, shots []models.Shot) err
 	for i := range shots {
 		shots[i].DialogueRanges = []models.ShotDialogueRange{}
 	}
-	return tx.Model(&models.Shot{}).Where("scene_id = ?", sceneID).Update("dialogue_ranges_json", "[]").Error
+	// Only touch rows that still carry ranges: rewriting an already-empty mapping would bump
+	// updated_at on every read, and Shot rows feed the video prompt source hash.
+	return tx.Model(&models.Shot{}).Where("scene_id = ? AND dialogue_ranges_json IS NOT NULL AND dialogue_ranges_json NOT IN ('', '[]', 'null')", sceneID).Update("dialogue_ranges_json", "[]").Error
 }
 
 func assignShotDialogueRanges(tx *gorm.DB, sceneID uint, shots []models.Shot) error {
