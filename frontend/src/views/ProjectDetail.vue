@@ -219,7 +219,7 @@
               <span v-if="ch.registration_task_id" class="char-voice">⏳ 登记照生成中</span>
               <span v-if="ch.registration_error" class="fail-msg">{{ ch.registration_error }}</span>
               <div class="character-look-entry">
-                <div><strong>基于标准像换装 / 追加年龄形象</strong><span>新形象都是追加的，不会替换当前标准像、四视图或已有套装。剧情跨年龄（如6岁→15岁）时，为每个年龄追加一个形象，再按集指定。</span></div>
+                <div><strong>基于标准像换装 / 追加年龄形象</strong><span>新形象都是追加的，不会替换当前标准像、四视图或已有套装；跨年龄（如6岁→15岁）就每个年龄各追加一个，再按集指定。</span></div>
                 <div class="character-look-entry-actions"><router-link :to="`/projects/${id()}/characters/${ch.id}/looks?mode=stages&new=1`" class="btn btn-sm">＋ 追加年龄形象</router-link><router-link :to="`/projects/${id()}/characters/${ch.id}/looks?mode=outfits&design=1`" class="btn btn-sm">＋ AI换装设计</router-link><router-link :to="`/projects/${id()}/characters/${ch.id}/looks?mode=outfits`" class="btn btn-sm btn-secondary">管理完整套装</router-link></div>
               </div>
               <div class="char-actions">
@@ -4845,12 +4845,12 @@ onBeforeUnmount(() => {
 .char-history-context { display: flex; flex-direction: column; gap: 3px; margin-top: 7px; }
 .char-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
 .char-actions .btn { padding: 5px 9px; font-size: 11px; }
-.character-look-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; margin-top: 12px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border)); border-radius: 11px; background: linear-gradient(135deg, var(--accent-soft), transparent); }
+.character-look-entry { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 10px; margin-top: 12px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border)); border-radius: 11px; background: linear-gradient(135deg, var(--accent-soft), transparent); }
 .character-look-entry > div:first-child { display: grid; gap: 2px; min-width: 0; }
 .character-look-entry strong { font-size: 13px; color: var(--accent); }
 .character-look-entry span { font-size: 11px; color: var(--text-secondary); line-height: 1.4; }
-.character-look-entry-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; flex: 0 0 auto; }
-@media (max-width: 720px) { .character-alias-form { grid-template-columns: 1fr; } .character-grid { grid-template-columns: 1fr; } .character-card-main { grid-template-columns: 92px minmax(0, 1fr); gap: 12px; padding: 14px; } .char-portrait { width: 92px; } .character-look-entry { grid-template-columns: 1fr; } .character-look-entry-actions { justify-content: flex-start; } }
+.character-look-entry-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-start; }
+@media (max-width: 720px) { .character-alias-form { grid-template-columns: 1fr; } .character-grid { grid-template-columns: 1fr; } .character-card-main { grid-template-columns: 92px minmax(0, 1fr); gap: 12px; padding: 14px; } .char-portrait { width: 92px; } }
 .empty-inline { padding: 18px; color: var(--text-tertiary); font-size: 13px; text-align: center; }
 .field .req { color: var(--red); margin-left: 4px; font-weight: 400; }
 .field .optional { color: var(--text-tertiary); font-weight: 400; margin-left: 4px; }
