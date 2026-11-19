@@ -326,6 +326,9 @@ func (s *ProjectService) DeleteProject(id uint) error {
 				return err
 			}
 		}
+		if err := deleteIfTable(tx, &models.CharacterAgeStage{}, "project_id = ?", id); err != nil {
+			return err
+		}
 		if err := deleteIfTable(tx, &models.ScreenTextCue{}, "project_id = ?", id); err != nil {
 			return err
 		}
@@ -4704,14 +4707,15 @@ func (s *ProjectService) applySceneShotTimeline(sc *models.Scene, prompt string)
 	if sc == nil {
 		return prompt
 	}
+	// 所有生成/预览/提交路径都经过这里，镜头换装句（ADR-0012）在时间线定稿后统一重写。
 	if _, count := normalizeSceneTimedBeats(normalizeUserH3ShotMarkers(sc.Content), normalizeSceneDuration(sc.Duration)); count > 0 {
-		return applyAuthoritativeSceneShotTimeline(prompt, sc.Content)
+		return s.applyShotOutfitChanges(sc, applyAuthoritativeSceneShotTimeline(prompt, sc.Content))
 	}
 	shots, err := s.currentSceneDirectorShots(sc)
 	if err != nil {
 		return prompt
 	}
-	return applyShotTimeline(prompt, shots, normalizeSceneDuration(sc.Duration))
+	return s.applyShotOutfitChanges(sc, applyShotTimeline(prompt, shots, normalizeSceneDuration(sc.Duration)))
 }
 
 func stripStructuredDialogueFromAction(prompt string, dubs []models.Dialogue) string {
@@ -5767,6 +5771,13 @@ func h3VideoSubjects(referenceLines []string) (definitions, retention, subjectRe
 			continue
 		}
 		switch {
+		case strings.Contains(line, "换装参考："):
+			// 镜头级换装（ADR-0012）：同一已定义人物的后续外观，不是新 Subject，也不是开场造型。
+			name, shot := storyboardCharacterReferenceName(strings.Replace(line, "换装参考：「", "角色「", 1)), ""
+			if m := shotOutfitReferenceShotPattern.FindStringSubmatch(line); len(m) == 2 {
+				shot = " from [Shot " + m[1] + "] on"
+			}
+			definitions = append(definitions, fmt.Sprintf("<Picture %d> shows the later outfit of 「%s」%s; it is the same person and face, not a new subject, and not the opening look.", n, name, shot))
 		case strings.Contains(line, "场景「") || strings.Contains(line, "环境「"):
 			definitions = append(definitions, fmt.Sprintf("<Picture %d> establishes the full-frame environment and spatial layout throughout the video: %s.", n, english))
 		case strings.Contains(line, "上一镜确认尾帧"):
@@ -6346,6 +6357,7 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 			}
 			lines = append(lines, fmt.Sprintf("- <Picture %d>：%s", len(refs), description))
 		}
+		refs, lines = s.appendShotOutfitReferences(sc, pid, refs, lines, maxSceneReferenceImages-1)
 		appendStoryboard()
 		return refs, lines
 	}
@@ -6412,6 +6424,7 @@ func (s *ProjectService) sceneVideoReferenceFiles(sc *models.Scene, pid string) 
 		refs = append(refs, FileMeta{TaskID: pid, Name: name})
 		lines = append(lines, fmt.Sprintf("- <Picture %d>：%s「%s」%s", len(refs), AssetKindLabel(a.Kind), a.Name, kind))
 	}
+	refs, lines = s.appendShotOutfitReferences(sc, pid, refs, lines, maxSceneReferenceImages-1)
 	appendStoryboard()
 	return refs, lines
 }
@@ -6968,6 +6981,9 @@ func (s *ProjectService) DeleteCharacter(projectID, id uint) error {
 		if err := tx.Where("character_id = ?", id).Delete(&models.CharacterOutfit{}).Error; err != nil {
 			return err
 		}
+		if err := deleteIfTable(tx, &models.CharacterAgeStage{}, "character_id = ?", id); err != nil {
+			return err
+		}
 		if err := tx.Where("character_id = ?", id).Delete(&models.CharacterLook{}).Error; err != nil {
 			return err
 		}
@@ -7216,10 +7232,16 @@ func (s *ProjectService) characterContextForScene(sc *models.Scene) string {
 	for _, c := range chars {
 		byName[c.Name] = c
 	}
+	stages := sceneAgeStagesByCharacter(s.db, sc)
 	lines := make([]string, 0, len(names))
 	for _, n := range names {
 		c, ok := byName[n]
 		if !ok {
+			continue
+		}
+		// 场景选用了年龄阶段套装时，阶段外貌替代主档案，避免文字仍写成人而参考图是童年。
+		if selected, ok := stages[c.ID]; ok {
+			lines = append(lines, "- "+c.Name+"："+ageStageCharacterDescription(selected))
 			continue
 		}
 		// 注入完整外貌：trait（五官/发型/体型）+ style（默认服装/特征），保证人物一致。
@@ -7242,13 +7264,9 @@ func (s *ProjectService) characterContextForScene(sc *models.Scene) string {
 	return "【角色设定（必须严格遵守，保证人物一致）】\n" + strings.Join(lines, "\n")
 }
 
+// sceneCharacterOutfits 返回开场（Shot 1）实际造型：Shot 1 的镜头覆盖替代场景级选择（ADR-0012）。
 func (s *ProjectService) sceneCharacterOutfits(sc *models.Scene) []models.CharacterOutfit {
-	var outfits []models.CharacterOutfit
-	_ = s.db.Model(&models.CharacterOutfit{}).
-		Joins("JOIN scene_character_outfits ON scene_character_outfits.outfit_id = character_outfits.id").
-		Where("scene_character_outfits.scene_id = ? AND character_outfits.project_id = ? AND character_outfits.audit_status IN ?", sc.ID, sc.ProjectID, []models.CharacterLookStatus{models.LookStatusApproved, models.LookStatusPublished}).
-		Preload("Character").Order("scene_character_outfits.id").Find(&outfits).Error
-	return outfits
+	return sceneOpeningOutfits(s.db, sc)
 }
 
 func (s *ProjectService) sceneCharacterLooks(sc *models.Scene, shotRelatedOnly bool) []models.CharacterLook {
@@ -8670,6 +8688,7 @@ func (s *ProjectService) syncGenerationOutputs() {
 	if s.characterLooks != nil {
 		s.characterLooks.SyncImages()
 		s.characterLooks.SyncOutfitImages()
+		s.characterLooks.SyncAgeStagePortraits()
 	}
 	s.syncSheets()
 	s.syncSceneImages()

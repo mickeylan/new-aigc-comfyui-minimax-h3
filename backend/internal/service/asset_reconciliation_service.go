@@ -231,7 +231,7 @@ func mergeDuplicateCharacterRecord(tx *gorm.DB, projectID uint, sourceName strin
 			return err
 		}
 	}
-	for _, table := range []string{"character_looks", "character_outfits", "character_motion_references"} {
+	for _, table := range []string{"character_looks", "character_age_stages", "character_outfits", "character_motion_references"} {
 		if reconciliationHasTable(tx, table) {
 			if err := tx.Table(table).Where("character_id = ?", source.ID).Update("character_id", target.ID).Error; err != nil {
 				return fmt.Errorf("迁移%s失败（可能存在同名资产，请先重命名冲突项）: %w", table, err)

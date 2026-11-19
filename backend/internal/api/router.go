@@ -353,6 +353,15 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/characters/:cid/looks/:lid/approve", svc.HandleApproveCharacterLook)            // 审核通过
 	r.POST("/api/projects/:id/characters/:cid/looks/:lid/reject", svc.HandleRejectCharacterLook)              // 审核驳回
 	r.POST("/api/projects/:id/characters/:cid/looks/:lid/publish", svc.HandlePublishCharacterLook)            // 发布造型
+	// 角色年龄阶段（同一角色不同年龄的外貌锚点；其下可挂多套服装）
+	r.GET("/api/projects/:id/characters/:cid/age-stages", svc.HandleListCharacterAgeStages)
+	r.POST("/api/projects/:id/characters/:cid/age-stages", svc.HandleCreateCharacterAgeStage)
+	r.PUT("/api/projects/:id/characters/:cid/age-stages/:asid", svc.HandleUpdateCharacterAgeStage)
+	r.DELETE("/api/projects/:id/characters/:cid/age-stages/:asid", svc.HandleDeleteCharacterAgeStage)
+	r.POST("/api/projects/:id/characters/:cid/age-stages/:asid/approve", svc.HandleApproveCharacterAgeStage)
+	r.GET("/api/projects/:id/characters/:cid/age-stages/:asid/portrait/prompt", svc.HandlePreviewCharacterAgeStagePortraitPrompt)
+	r.POST("/api/projects/:id/characters/:cid/age-stages/:asid/portrait", svc.HandleGenerateCharacterAgeStagePortrait)
+	r.POST("/api/projects/:id/characters/:cid/age-stages/:asid/portrait/upload", svc.HandleUploadCharacterAgeStagePortrait)
 	// 角色造型套装（由独立造型资产组合）
 	r.GET("/api/projects/:id/characters/:cid/outfits", svc.HandleListCharacterOutfits)
 	r.POST("/api/projects/:id/characters/:cid/outfits/design", svc.HandleDesignCharacterOutfit)
@@ -363,6 +372,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/characters/:cid/outfits/:oid/image", svc.HandleGenerateCharacterOutfitImage)
 	r.POST("/api/projects/:id/characters/:cid/outfits/:oid/image/upload", svc.HandleUploadCharacterOutfitImage)
 	r.POST("/api/projects/:id/characters/:cid/outfits/:oid/sheet", svc.HandleGenerateCharacterOutfitSheet)
+	r.POST("/api/projects/:id/characters/:cid/outfits/:oid/assign-episodes", svc.HandleAssignCharacterOutfitEpisodes) // 按集数范围批量指定（preview=true 只预览）
 	// 场景/镜头造型关联
 	r.GET("/api/projects/:id/scenes/:sid/looks", svc.HandleGetSceneLooks)    // 获取场景造型关联
 	r.PUT("/api/projects/:id/scenes/:sid/looks", svc.HandleAssignSceneLooks) // 设置场景造型关联

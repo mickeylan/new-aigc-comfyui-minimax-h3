@@ -7,6 +7,7 @@ type CharacterOutfit struct {
 	ID          uint                  `gorm:"primaryKey" json:"id"`
 	ProjectID   uint                  `gorm:"index;uniqueIndex:idx_outfit_character_name" json:"project_id"`
 	CharacterID uint                  `gorm:"index;uniqueIndex:idx_outfit_character_name" json:"character_id"`
+	AgeStageID  uint                  `gorm:"index;default:0" json:"age_stage_id"` // 0 = 沿用角色主档案与主标准像
 	Name        string                `gorm:"uniqueIndex:idx_outfit_character_name" json:"name"`
 	Description string                `gorm:"type:text" json:"description"`
 	ImageEngine string                `gorm:"size:32;default:krea2" json:"image_engine"`
@@ -23,6 +24,7 @@ type CharacterOutfit struct {
 	CreatedAt   time.Time             `json:"created_at"`
 	UpdatedAt   time.Time             `json:"updated_at"`
 	Character   *Character            `gorm:"foreignKey:CharacterID" json:"character,omitempty"`
+	AgeStage    *CharacterAgeStage    `gorm:"foreignKey:AgeStageID" json:"age_stage,omitempty"`
 	Items       []CharacterOutfitLook `gorm:"foreignKey:OutfitID" json:"items,omitempty"`
 }
 

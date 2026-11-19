@@ -184,8 +184,13 @@ func (s *Service) sceneContentExpandContext(scene *models.Scene) (string, error)
 		fmt.Fprintln(&b, "- 本集当前版本没有后一Scene。")
 	}
 	fmt.Fprintln(&b, "当前角色（仅可使用已给事实）：")
+	stages := sceneAgeStagesByCharacter(s.DB, scene)
 	for _, ch := range characters {
-		fmt.Fprintf(&b, "- %s（%s）；特征：%s；行为/情绪：%s %s\n", ch.Name, ch.Role, ch.Trait, ch.Emotions, ch.Habits)
+		trait := ch.Trait
+		if selected, ok := stages[ch.ID]; ok {
+			trait = ageStageCharacterDescription(selected)
+		}
+		fmt.Fprintf(&b, "- %s（%s）；特征：%s；行为/情绪：%s %s\n", ch.Name, ch.Role, trait, ch.Emotions, ch.Habits)
 	}
 	fmt.Fprintln(&b, "当前资产（不得据此臆造未写明细节）：")
 	for _, a := range assets {

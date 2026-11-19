@@ -789,7 +789,7 @@
         <div class="field">
           <label>本场角色造型套装</label>
           <div v-if="!sceneCharactersForOutfits().length" class="field-hint">本场未识别到项目角色。</div>
-          <div v-for="ch in sceneCharactersForOutfits()" :key="ch.id" class="outfit-select-row"><strong>{{ch.name}}</strong><select v-model.number="selectedSceneOutfits[ch.id]" class="input"><option :value="0">未选择（使用默认）</option><option v-for="o in sceneOutfitOptions[ch.id]||[]" :key="o.id" :value="o.id" :disabled="o.audit_status!=='approved'&&o.audit_status!=='published'">{{o.name}} · {{o.audit_status}}</option></select><router-link :to="`/projects/${id()}/characters/${ch.id}/looks`" class="btn btn-sm btn-ghost">管理造型</router-link></div>
+          <div v-for="ch in sceneCharactersForOutfits()" :key="ch.id" class="outfit-select-row"><strong>{{ch.name}}</strong><select v-model.number="selectedSceneOutfits[ch.id]" class="input"><option :value="0">未选择（使用默认）</option><optgroup v-for="g in groupOutfitsByStage(sceneOutfitOptions[ch.id]||[])" :key="g.key" :label="g.label"><option v-for="o in g.outfits" :key="o.id" :value="o.id" :disabled="o.audit_status!=='approved'&&o.audit_status!=='published'">{{o.name}} · {{o.audit_status}}</option></optgroup></select><router-link :to="`/projects/${id()}/characters/${ch.id}/looks`" class="btn btn-sm btn-ghost">管理造型</router-link></div>
           <div class="field-hint">每个角色在一个场景中选择一套完整造型；镜头未单独覆盖时继承本场选择。</div>
         </div>
         <div class="field">
@@ -1398,6 +1398,7 @@ import PanoramaViewer from '../components/PanoramaViewer.vue'
 import AssetDesignPanel from '../components/AssetDesignPanel.vue'
 import CharacterProfileDesign from '../components/CharacterProfileDesign.vue'
 import { promptReferenceIssues } from '../utils/promptReferences.js'
+import { groupOutfitsByStage } from '../utils/characterAgeStage.js'
 import { overlayDialogueExclusions, setDialogueItemExcluded, snapshotDialogueExclusions } from '../utils/dialogueAnalysis'
 import { estimateDialogueListDuration } from '../utils/dialogueDuration.js'
 import { MODEL_LIMIT_DEFAULTS, mergeModelLimits } from '../utils/modelLimits.js'

@@ -238,6 +238,32 @@ func (s *Service) HandleGenerateCharacterOutfitSheet(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"ok": true})
 }
 
+func (s *Service) HandleAssignCharacterOutfitEpisodes(c *gin.Context) {
+	p, ok := s.loadProject(c)
+	if !ok {
+		return
+	}
+	cid, ok := characterParam(c)
+	if !ok {
+		return
+	}
+	oid, ok := outfitParam(c)
+	if !ok {
+		return
+	}
+	var req OutfitEpisodeAssignInput
+	if c.ShouldBindJSON(&req) != nil {
+		c.JSON(400, gin.H{"error": "参数错误"})
+		return
+	}
+	result, err := s.CharacterLooks.AssignOutfitToEpisodes(p.ID, cid, oid, req)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, result)
+}
+
 func (s *Service) HandleGetSceneOutfits(c *gin.Context) {
 	p, ok := s.loadProject(c)
 	if !ok {

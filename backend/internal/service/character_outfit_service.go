@@ -19,6 +19,7 @@ type OutfitInput struct {
 	ImageEngine string `json:"image_engine"`
 	IsDefault   bool   `json:"is_default"`
 	LookIDs     []uint `json:"look_ids"`
+	AgeStageID  uint   `json:"age_stage_id"`
 }
 
 type OutfitAssignment struct {
@@ -31,6 +32,7 @@ type OutfitDesignInput struct {
 	Name        string `json:"name"`
 	ImageEngine string `json:"image_engine"`
 	IsDefault   bool   `json:"is_default"`
+	AgeStageID  uint   `json:"age_stage_id"`
 }
 
 type outfitDesignAsset struct {
@@ -108,10 +110,18 @@ func (s *CharacterLookService) DesignOutfit(projectID, characterID uint, req Out
 	if strings.TrimSpace(character.Portrait) == "" {
 		return nil, fmt.Errorf("请先为角色「%s」生成或上传标准像；新形象必须绑定标准像设计", character.Name)
 	}
+	appearance := character.Appearance
+	if req.AgeStageID != 0 {
+		stage, err := s.loadAgeStage(s.db, projectID, characterID, req.AgeStageID)
+		if err != nil {
+			return nil, err
+		}
+		appearance = ageStageLabel(stage) + "：" + stage.Appearance
+	}
 	system := `你是影视角色造型设计师。根据用户的完整形象概念，设计一套统一的新造型，并拆成独立资产。
 只输出严格JSON：{"name":"套装名","description":"整套形象说明","assets":[{"name":"资产名","category":"clothing|shoes|hair|hair_accessory|jewelry|bag","description":"材质、颜色、款式、结构细节"}]}。
 必须包含clothing和shoes。hair仅在用户明确要求改变发型时加入；用户未提发型时必须沿用角色标准像发型，不得自行设计新发型。hair_accessory、jewelry、bag仅在用户明确要求时加入。每类最多一个。资产描述只写该单件资产，不写人物姓名、脸、身体、姿势或构图。不得加入武器、法宝、剧情道具，不得混入多个互斥方案。`
-	user := fmt.Sprintf("项目题材：%s\n项目画风：%s\n角色：%s（仅用于理解身份，不得写入资产描述）\n角色性别：%s\n角色身份：%s\n角色现有外貌与发型：%s\n角色标准像提示词：%s\n用户命名：%s\n新形象概念：%s", project.Genre, project.Style, character.Name, character.Gender, character.Role, character.Appearance, character.ReferencePrompt, strings.TrimSpace(req.Name), concept)
+	user := fmt.Sprintf("项目题材：%s\n项目画风：%s\n角色：%s（仅用于理解身份，不得写入资产描述）\n角色性别：%s\n角色身份：%s\n角色现有外貌与发型：%s\n角色标准像提示词：%s\n用户命名：%s\n新形象概念：%s", project.Genre, project.Style, character.Name, character.Gender, character.Role, appearance, character.ReferencePrompt, strings.TrimSpace(req.Name), concept)
 	raw, err := s.textProvider.Chat(system, user)
 	if err != nil {
 		return nil, fmt.Errorf("AI设计新形象失败: %w", err)
@@ -146,7 +156,7 @@ func (s *CharacterLookService) DesignOutfit(projectID, characterID uint, req Out
 	design.Description = strings.TrimSpace(design.Description + "\n用户原始造型要求：" + concept)
 	var outfit models.CharacterOutfit
 	err = s.db.Transaction(func(tx *gorm.DB) error {
-		outfit = models.CharacterOutfit{ProjectID: projectID, CharacterID: characterID, Name: design.Name, Description: design.Description, ImageEngine: engine, IsDefault: req.IsDefault, AuditStatus: models.LookStatusDraft, Version: 1}
+		outfit = models.CharacterOutfit{ProjectID: projectID, CharacterID: characterID, AgeStageID: req.AgeStageID, Name: design.Name, Description: design.Description, ImageEngine: engine, IsDefault: req.IsDefault, AuditStatus: models.LookStatusDraft, Version: 1}
 		if err := tx.Create(&outfit).Error; err != nil {
 			return err
 		}
@@ -178,7 +188,7 @@ func (s *CharacterLookService) DesignOutfit(projectID, characterID uint, req Out
 
 func (s *CharacterLookService) ListOutfits(projectID, characterID uint) ([]models.CharacterOutfit, error) {
 	var outfits []models.CharacterOutfit
-	err := s.db.Preload("Items", func(db *gorm.DB) *gorm.DB { return db.Order("`order`, id") }).Preload("Items.Look").
+	err := s.db.Preload("Items", func(db *gorm.DB) *gorm.DB { return db.Order("`order`, id") }).Preload("Items.Look").Preload("AgeStage").
 		Where("project_id = ? AND character_id = ?", projectID, characterID).Order("is_default DESC, id").Find(&outfits).Error
 	return outfits, err
 }
@@ -199,10 +209,15 @@ func (s *CharacterLookService) SaveOutfit(projectID, characterID, outfitID uint,
 	if len(looks) == 0 {
 		return nil, fmt.Errorf("套装至少需要一个造型资产")
 	}
+	if req.AgeStageID != 0 {
+		if _, err := s.loadAgeStage(s.db, projectID, characterID, req.AgeStageID); err != nil {
+			return nil, err
+		}
+	}
 	var outfit models.CharacterOutfit
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		if outfitID == 0 {
-			outfit = models.CharacterOutfit{ProjectID: projectID, CharacterID: characterID, Name: req.Name, Description: strings.TrimSpace(req.Description), ImageEngine: engine, IsDefault: req.IsDefault, AuditStatus: models.LookStatusDraft, Version: 1}
+			outfit = models.CharacterOutfit{ProjectID: projectID, CharacterID: characterID, AgeStageID: req.AgeStageID, Name: req.Name, Description: strings.TrimSpace(req.Description), ImageEngine: engine, IsDefault: req.IsDefault, AuditStatus: models.LookStatusDraft, Version: 1}
 			if err := tx.Create(&outfit).Error; err != nil {
 				return err
 			}
@@ -214,9 +229,9 @@ func (s *CharacterLookService) SaveOutfit(projectID, characterID, outfitID uint,
 			if oldEngine == "" {
 				oldEngine = ImageEngineKrea2
 			}
-			sameDesign := outfit.Name == req.Name && strings.TrimSpace(outfit.Description) == strings.TrimSpace(req.Description) && outfitLookIDsEqual(outfit.Items, req.LookIDs)
+			sameDesign := outfit.Name == req.Name && strings.TrimSpace(outfit.Description) == strings.TrimSpace(req.Description) && outfitLookIDsEqual(outfit.Items, req.LookIDs) && outfit.AgeStageID == req.AgeStageID
 			engineOnlyChange := sameDesign && oldEngine != engine
-			updates := map[string]any{"name": req.Name, "description": strings.TrimSpace(req.Description), "image_engine": engine, "is_default": req.IsDefault, "image": "", "image_task_id": "", "image_error": "", "sheet": "", "sheet_task_id": "", "sheet_error": "", "version": gorm.Expr("version + 1")}
+			updates := map[string]any{"age_stage_id": req.AgeStageID, "name": req.Name, "description": strings.TrimSpace(req.Description), "image_engine": engine, "is_default": req.IsDefault, "image": "", "image_task_id": "", "image_error": "", "sheet": "", "sheet_task_id": "", "sheet_error": "", "version": gorm.Expr("version + 1")}
 			if !engineOnlyChange {
 				updates["audit_status"] = models.LookStatusDraft
 				updates["audit_note"] = ""
@@ -371,6 +386,18 @@ func (s *CharacterLookService) StartOutfitImage(projectID, characterID, outfitID
 	}
 	refs := []FileMeta{{TaskID: fmt.Sprint(projectID), Name: ch.Portrait}}
 	hasCharacterSheet := strings.TrimSpace(ch.Sheet) != ""
+	if outfit.AgeStageID != 0 {
+		// 年龄阶段套装以阶段标准像锁定脸部与年龄感；成人四视图的头身比例不适用于其他年龄段。
+		stage, err := s.loadAgeStage(s.db, projectID, characterID, outfit.AgeStageID)
+		if err != nil {
+			return err
+		}
+		if !ageStageApproved(stage) || strings.TrimSpace(stage.Portrait) == "" {
+			return fmt.Errorf("请先生成并审核通过年龄阶段「%s」的标准像", ageStageLabel(stage))
+		}
+		refs = []FileMeta{{TaskID: fmt.Sprint(projectID), Name: stage.Portrait}}
+		hasCharacterSheet = false
+	}
 	if !sheet && hasCharacterSheet {
 		refs = append(refs, FileMeta{TaskID: fmt.Sprint(projectID), Name: ch.Sheet})
 	}
@@ -754,7 +781,34 @@ func (s *CharacterLookService) AssignShotOutfits(projectID, shotID uint, assignm
 	if err := s.validateOutfitAssignments(projectID, assignments); err != nil {
 		return err
 	}
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	var existing []models.ShotCharacterOutfit
+	if err := s.db.Where("shot_id = ?", shotID).Find(&existing).Error; err != nil {
+		return err
+	}
+	if len(existing) == len(assignments) {
+		current := make(map[uint]uint, len(existing))
+		for _, row := range existing {
+			current[row.CharacterID] = row.OutfitID
+		}
+		same := true
+		for _, a := range assignments {
+			if current[a.CharacterID] != a.OutfitID {
+				same = false
+				break
+			}
+		}
+		if same {
+			return nil
+		}
+	}
+	// 镜头覆盖参与开场参考图与视频换装句（ADR-0012），失效语义与场景造型一致。
+	var scene models.Scene
+	if err := s.db.First(&scene, shot.SceneID).Error; err != nil {
+		return err
+	}
+	updates := map[string]any{"prompt_stale": true}
+	cancelTasks := staleSceneTaskUpdates(s.db, &scene, updates)
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("shot_id = ?", shotID).Delete(&models.ShotCharacterOutfit{}).Error; err != nil {
 			return err
 		}
@@ -763,8 +817,12 @@ func (s *CharacterLookService) AssignShotOutfits(projectID, shotID uint, assignm
 				return err
 			}
 		}
-		return nil
-	})
+		return tx.Model(&models.Scene{}).Where("id = ?", scene.ID).Updates(updates).Error
+	}); err != nil {
+		return err
+	}
+	cancelSceneTasks(s.tasks, cancelTasks)
+	return markSceneMediaSourceChanged(s.db, projectID, scene.ID, "", "镜头角色造型覆盖已修改")
 }
 
 func (s *CharacterLookService) ListShotOutfits(projectID, shotID uint) ([]models.ShotCharacterOutfit, error) {

@@ -124,6 +124,7 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.CharacterLook{},
 		&models.SceneCharacterLook{},
 		&models.ShotCharacterLook{},
+		&models.CharacterAgeStage{},
 		&models.CharacterOutfit{},
 		&models.CharacterOutfitLook{},
 		&models.SceneCharacterOutfit{},

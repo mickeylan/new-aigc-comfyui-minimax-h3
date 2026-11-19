@@ -1,0 +1,74 @@
+# ADR-0011：角色年龄阶段形象与按集批量指定
+
+状态：已采纳（用户确认：阶段标准像默认 Qwen 编辑改龄；批量指定默认不覆盖手动选择）。已实现并通过本地后端/前端测试；尚未做真实生成验收。
+
+## 背景
+
+同一角色在不同集数需要 6/10/15/20 岁等不同外观。现状（代码核对结果）：
+
+- `Character` 只有一份档案与一套标准像/四视图/登记照；年龄只写在 `Appearance`/`Trait` 文本里。
+- 「新形象」`CharacterOutfit` 只换装：生成套装图时角色标准像固定为第一参考图，提示词锁定“同一张脸、五官、年龄感”（`character_outfit_service.go:489/523/531`），并把成人四视图作为“头身比例”参考（`:373-375`）。用它做童年形象会得到成人脸、成人体型。
+- 场景选择 `SceneCharacterOutfit` 每角色一套，选中后在分镜图/视频参考图中替换该角色标准像与四视图（`project_service.go:6352/8186`、`scene_reference.go:468`、缺参考检查 `:8045`）。
+- 但文字侧仍注入成人档案：分镜图提示词【角色设定】使用 `Trait`+`Style`（`project_service.go:7205`，经 `:7456/:7476` 进入 Krea2/H3 分镜提示与 Skill 参数）；Scene 正文扩写上下文使用 `Trait`（`scene_content_expand.go:188`）。
+- 铅笔分镜表参考图忽略场景造型，固定用角色四视图/标准像（`storyboard_sheet.go:177`）。
+- 无按集数范围批量指定造型的接口，只能逐 Scene 选择。
+- 已有缺口（与本ADR相关但独立）：镜头级 `ShotCharacterOutfit` 可保存，但生成参考图与提示词路径未读取，只在复制/清理/历史中出现。
+
+## 决策
+
+### 数据（只增不改，双读兼容）
+
+- 新表 `CharacterAgeStage`：`ProjectID`、`CharacterID`、`Name`（如“童年”）、`Age`（整数，可空，用于排序与展示）、`Appearance`（该阶段性别/年龄/脸型/发型/体型的权威外貌文本）、`Portrait`/`PortraitTaskID`/`PortraitError`/`PortraitPrompt`、`PortraitEngine`、`AuditStatus`、`Version`。同角色内 `Name` 唯一。
+- `CharacterOutfit` 新增可空 `AgeStageID`。0 表示沿用角色主档案（现有全部套装行为不变）。一个阶段可挂多套服装（如“6岁·日常”“6岁·节日”），共享该阶段的脸部锚点。
+- 场景仍是“每角色一套 Outfit”，不新增场景级阶段表；阶段由所选 Outfit 推导。
+
+### 生成
+
+- 阶段标准像三种来源，提交前提示词均可人工编辑审阅：
+  1. Qwen-Image-2.1 编辑：以角色主标准像为 `<image1>`，指令为“同一人物在 N 岁时”，保留家族相似性，年龄外观以阶段 `Appearance` 为准。
+  2. 文生图（Krea2 标准像模板或 Qwen T2I）：只用阶段 `Appearance`，不带成人参考。
+  3. 手动上传。
+- 阶段套装图：`<Picture 1>` / `<image1>` 改用阶段标准像；**不再传成人四视图作为头身比例参考**；锁定措辞中的“年龄感”随之指向阶段标准像。四视图仍由套装图派生，不变。
+- 阶段标准像变更后，其下套装图/四视图按现有规则清空并标记需重新生成；已使用这些套装的 Scene 标记 `prompt_stale` 与候选过期，不删除已生成媒体。
+
+### 提示词消费方（逐项修改）
+
+- `characterContextForScene`：场景所选 Outfit 属于某阶段时，该角色行改用阶段 `Appearance` + 套装说明，替代 `Trait`+`Style`；未选阶段的角色不变。
+- `scene_content_expand.go` 角色上下文：同样按场景所选阶段替换特征文本。
+- `storyboardSheetReferenceFiles`：场景已选 Outfit 时使用套装四视图/套装图，与分镜图/视频参考保持一致。
+- 不改：角色档案/主标准像/主四视图生成、配音性别判断（`project_service.go:4290` 只读性别）、角色级 Skill 参考，以及未被调用的 `scenePortraitRefs`。
+- 档案年龄校验 `validateProfileAgeAgainstSources` 不用于阶段；阶段年龄由用户审核。
+
+### 按集批量指定
+
+- `POST /api/projects/:id/characters/:cid/outfits/:oid/assign-episodes`，请求体 `{from_episode, to_episode, overwrite, preview}`。
+- 范围仅限当前 generation、未归档、该角色在 Scene 中可见（沿用 `sceneHasCharacter`）的 Scene。
+- `preview=true` 只返回受影响清单（集/Scene/当前所选/将改为/是否已有媒体），不写库。
+- 应用必须显式确认；默认 `overwrite=false`，跳过已显式选择其他套装的 Scene；单事务写入；每个改变的 Scene 沿用 `AssignSceneOutfits` 语义（`prompt_stale`、取消在途任务、候选过期），不删除已生成图片或视频，不自动重新生成。
+- 只接受已审核的套装；阶段标准像未审核时拒绝。
+
+### 展示
+
+- 角色「新形象与服装」页新增「年龄阶段」区：按年龄排序的阶段卡片（阶段标准像、外貌、其下套装、已使用集数摘要），以及“按集批量指定”对话框（先预览再确认）。
+- 场景编辑「本场角色造型套装」下拉按“主形象 / 各年龄阶段”分组，标签如“6岁 · 日常”。
+- 项目角色卡显示阶段标签。
+
+## 不做
+
+- 不按小说自动推断每集年龄，不自动分配。
+- 不做阶段配音音色（童声）；可后续单独评估。
+- 不迁移或合并已有“柳乐儿（6岁）”式独立角色。
+- 不在本ADR内接通镜头级造型覆盖；该缺口单独确认后再修。
+- 不调用真实图片/视频生成做验收。
+
+## 实施顺序（每步测试通过后再进行下一步）
+
+1. 后端模型、迁移、阶段 CRUD 与审核；阶段标准像提示词预览/提交/上传；阶段套装图换锚点与去除成人四视图。
+2. 三处文字/参考消费方改造及回归测试（含“未选阶段时输出逐字不变”）。
+3. 按集批量预览/应用接口与测试（跳过、覆盖、范围、可见性、在途任务取消、媒体保留）。
+4. 前端：阶段区、批量对话框、场景下拉分组、角色卡标签。
+5. 全量 `go -C backend test ./... -count=1`、`go -C backend build ./...`、`npm --prefix frontend test`、`npm --prefix frontend run build`。
+
+## 验收（需用户在另一台机器）
+
+用柳乐儿建立两个阶段，生成阶段标准像与套装图，批量指定到不同集数范围，检查分镜图提示词【角色设定】与参考图列表是否切换为对应阶段。

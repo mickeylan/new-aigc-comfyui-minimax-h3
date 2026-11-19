@@ -173,11 +173,13 @@ func (s *Service) HandleStoryboardSheetAnchors(c *gin.Context) {
 }
 
 // storyboardSheetReferenceFiles uses each visible character's sheet (or portrait) as the sole
-// design master; locations and props are left out so the pencil sheet stays readable.
+// design master; locations and props are left out so the pencil sheet stays readable. A scene
+// outfit replaces the character master, matching storyboard image and video references.
 func (s *ProjectService) storyboardSheetReferenceFiles(sc *models.Scene) ([]FileMeta, []string) {
 	pid := fmt.Sprint(sc.ProjectID)
 	var refs []FileMeta
 	var lines []string
+	outfits := s.sceneOutfitsByCharacter(sc)
 	for _, ch := range s.sceneCharacterPortraits(sc) {
 		if len(refs) >= maxSceneReferenceImages {
 			break
@@ -185,6 +187,12 @@ func (s *ProjectService) storyboardSheetReferenceFiles(sc *models.Scene) ([]File
 		name, kind := ch.Sheet, "四视图"
 		if name == "" {
 			name, kind = ch.Portrait, "标准像"
+		}
+		if outfit, ok := outfits[ch.ID]; ok && outfitReferenceFile(outfit) != "" {
+			name, kind = outfit.Sheet, "新形象「"+outfit.Name+"」四视图"
+			if name == "" {
+				name, kind = outfit.Image, "新形象「"+outfit.Name+"」定妆照"
+			}
 		}
 		if name == "" {
 			continue
