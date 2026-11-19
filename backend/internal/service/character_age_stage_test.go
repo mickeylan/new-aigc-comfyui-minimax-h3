@@ -2,6 +2,9 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -592,6 +595,92 @@ func TestAgeStagesAreIndependentAndPortraitHistoryRestorable(t *testing.T) {
 	}
 	if err := svc.RestoreAgeStagePortrait(project.ID, character.ID, six.ID, "nine_v1.png"); err == nil {
 		t.Fatal("restoring another stage's portrait must be rejected")
+	}
+}
+
+func TestDeleteAgeStagePortraitHistoryRemovesEntryAndFileOnly(t *testing.T) {
+	svc, project, character := setupAgeStageTestDB(t)
+	root := t.TempDir()
+	cfg := &config.Config{
+		Comfy:   config.ComfyConfig{ComfyDir: filepath.Join(root, "ComfyUI")},
+		Storage: config.StorageConfig{DataDir: filepath.Join(root, "data")},
+	}
+	remote := NewRemoteExec(config.RemoteConfig{})
+	remote.SetLocalRoots([]string{cfg.Comfy.ComfyDir, cfg.Storage.DataDir, cfg.AssetsRoot()})
+	upload := NewUploadManager(cfg, svc.db, remote)
+	svc.SetDeps(nil, remote, upload)
+
+	stage, err := svc.SaveAgeStage(project.ID, character.ID, 0, AgeStageInput{Name: "童年", Age: intPtr(6), Appearance: "6岁女孩"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{"stage_v1.png", "stage_v2.png", "stage_v3.png"} {
+		if _, _, err := upload.SaveFile(fmt.Sprint(project.ID), "image", file, []byte("png")); err != nil {
+			t.Fatal(err)
+		}
+		if err := svc.applyAgeStagePortrait(stage.ID, "", file); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got models.CharacterAgeStage
+	svc.db.First(&got, stage.ID)
+	if got.Portrait != "stage_v3.png" || strings.Join(ageStagePortraitHistory(got.PortraitHistory), ",") != "stage_v2.png,stage_v1.png" {
+		t.Fatalf("setup history=%q portrait=%q", got.PortraitHistory, got.Portrait)
+	}
+	assetPath := func(file string) string { return filepath.Join(cfg.AssetsRoot(), fmt.Sprint(project.ID), file) }
+
+	if _, err := svc.DeleteAgeStagePortraitHistory(project.ID, character.ID, stage.ID, ""); err == nil {
+		t.Fatal("an empty file name must be rejected")
+	}
+	if _, err := svc.DeleteAgeStagePortraitHistory(project.ID, character.ID, stage.ID, "stage_v3.png"); err == nil {
+		t.Fatal("the portrait currently in use must not be deleted")
+	}
+	if _, err := svc.DeleteAgeStagePortraitHistory(project.ID, character.ID, stage.ID, "not_in_history.png"); err == nil {
+		t.Fatal("a file that is not in history must be rejected")
+	}
+
+	remaining, err := svc.DeleteAgeStagePortraitHistory(project.ID, character.ID, stage.ID, "stage_v1.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(remaining, ",") != "stage_v2.png" {
+		t.Fatalf("remaining history=%q", remaining)
+	}
+	svc.db.First(&got, stage.ID)
+	if got.Portrait != "stage_v3.png" || strings.Join(ageStagePortraitHistory(got.PortraitHistory), ",") != "stage_v2.png" {
+		t.Fatalf("deleting history must not touch the current portrait: %+v", got)
+	}
+	if _, err := os.Stat(assetPath("stage_v1.png")); !os.IsNotExist(err) {
+		t.Fatalf("the deleted history image must be removed from disk: %v", err)
+	}
+	var records int64
+	svc.db.Model(&models.UploadFile{}).Where("task_id = ? AND name = ?", fmt.Sprint(project.ID), "stage_v1.png").Count(&records)
+	if records != 0 {
+		t.Fatalf("the upload record of the deleted history image must be removed: %d", records)
+	}
+	for _, keep := range []string{"stage_v2.png", "stage_v3.png"} {
+		if _, err := os.Stat(assetPath(keep)); err != nil {
+			t.Fatalf("%s must be kept: %v", keep, err)
+		}
+	}
+	var ch models.Character
+	svc.db.First(&ch, character.ID)
+	if ch.Portrait != "face.png" || ch.Sheet != "adult_sheet.png" {
+		t.Fatalf("deleting age-stage history must never touch the main portrait/sheet: %+v", ch)
+	}
+
+	if remaining, err = svc.DeleteAgeStagePortraitHistory(project.ID, character.ID, stage.ID, "stage_v2.png"); err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("remaining history=%q", remaining)
+	}
+	svc.db.First(&got, stage.ID)
+	if got.PortraitHistory != "" {
+		t.Fatalf("an empty history must be stored as an empty string: %q", got.PortraitHistory)
+	}
+	if _, err := os.Stat(assetPath("stage_v2.png")); !os.IsNotExist(err) {
+		t.Fatalf("the deleted history image must be removed from disk: %v", err)
 	}
 }
 

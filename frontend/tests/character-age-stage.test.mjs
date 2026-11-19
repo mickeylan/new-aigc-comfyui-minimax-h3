@@ -71,8 +71,19 @@ test('阶段提示词可只保存不生成，历史四视图保留并可恢复',
   assert.match(looks, /portrait\/prompt`,jsonOpt\('PUT'/)
   assert.match(looks, /portrait\/restore/)
   // 用户要求阶段形象直接生成四视图，不再单独生成标准像，历史区随之改名。
-  assert.match(looks, /历史四视图（保留，可恢复）/)
+  // 用户追加要求：历史四视图可以删除不满意的图，标签补上“或删除”。
+  assert.match(looks, /历史四视图（保留，可恢复或删除）/)
   assert.match(looks, /if\(created&&row\?\.id\)await openStagePrompt\(row\)/)
+})
+
+test('历史四视图可删除不满意的图，删除前二次确认并调用删除接口', () => {
+  assert.match(looks, /@click="deleteStagePortrait\(s,f\)">删除<\/button>/)
+  // 删除按钮与“恢复”并排显示在每张历史图下面。
+  assert.match(looks, /@click="restoreStagePortrait\(s,f\)">恢复<\/button><button class="btn btn-xs btn-danger"[^>]*@click="deleteStagePortrait\(s,f\)">删除<\/button>/)
+  assert.match(looks, /async function deleteStagePortrait\(s,file\)\{if\(!confirm\(`删除这张历史四视图？图片文件会一起删除，无法找回。/)
+  assert.match(looks, /portrait\/history\/delete`,jsonOpt\('POST',\{file\}\)/)
+  // 当前正在使用的那张由后端拒绝，前端说明里明确讲清。
+  assert.match(looks, /当前正在使用的四视图不受影响/)
 })
 
 // 用户要求：阶段四视图必须有参考图；Moss 与 Krea2 都只支持文生图，因此只提供多图编辑。

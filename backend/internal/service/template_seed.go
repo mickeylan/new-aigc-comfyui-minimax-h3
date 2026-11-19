@@ -316,6 +316,14 @@ func safeFileSegment(value, label string) (string, error) {
 	return value, nil
 }
 
+// RemoveFile 删除持久化素材文件（远程模式走 SFTP）；文件已不存在不算错误。
+func (m *UploadManager) RemoveFile(taskID, name string) error {
+	if m == nil || m.remote == nil {
+		return fmt.Errorf("上传服务未配置")
+	}
+	return m.remote.Remove(m.ResolveReadPath(taskID, name))
+}
+
 // SaveFile 保存上传文件到 ComfyUI input 目录（远程模式走 SFTP），返回 input 相对路径 (taskId/filename)
 func (m *UploadManager) SaveFile(taskID, ftype, filename string, data []byte) (string, int64, error) {
 	var err error

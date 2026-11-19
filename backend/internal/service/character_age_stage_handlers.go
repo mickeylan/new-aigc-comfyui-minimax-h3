@@ -181,6 +181,26 @@ func (s *Service) HandleGenerateCharacterAgeStagePortrait(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"ok": true})
 }
 
+func (s *Service) HandleDeleteCharacterAgeStagePortraitHistory(c *gin.Context) {
+	pid, cid, sid, ok := s.loadAgeStageRoute(c, true)
+	if !ok {
+		return
+	}
+	var req struct {
+		File string `json:"file"`
+	}
+	if c.ShouldBindJSON(&req) != nil {
+		c.JSON(400, gin.H{"error": "参数错误"})
+		return
+	}
+	remaining, err := s.CharacterLooks.DeleteAgeStagePortraitHistory(pid, cid, sid, req.File)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true, "history": remaining})
+}
+
 func (s *Service) HandleRestoreCharacterAgeStagePortrait(c *gin.Context) {
 	pid, cid, sid, ok := s.loadAgeStageRoute(c, true)
 	if !ok {

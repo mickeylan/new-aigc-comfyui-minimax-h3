@@ -365,6 +365,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/characters/:cid/age-stages/:asid/portrait", svc.HandleGenerateCharacterAgeStagePortrait)
 	r.POST("/api/projects/:id/characters/:cid/age-stages/:asid/portrait/upload", svc.HandleUploadCharacterAgeStagePortrait)
 	r.POST("/api/projects/:id/characters/:cid/age-stages/:asid/portrait/restore", svc.HandleRestoreCharacterAgeStagePortrait)
+	r.POST("/api/projects/:id/characters/:cid/age-stages/:asid/portrait/history/delete", svc.HandleDeleteCharacterAgeStagePortraitHistory)
 	// 角色造型套装（由独立造型资产组合）
 	r.GET("/api/projects/:id/characters/:cid/outfits", svc.HandleListCharacterOutfits)
 	r.POST("/api/projects/:id/characters/:cid/outfits/design", svc.HandleDesignCharacterOutfit)

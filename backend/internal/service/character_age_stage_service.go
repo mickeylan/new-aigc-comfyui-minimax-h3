@@ -543,6 +543,52 @@ func pushAgeStagePortraitHistory(raw, previous, next string) string {
 	return string(body)
 }
 
+// DeleteAgeStagePortraitHistory 删除历史里一张不满意的阶段四视图：先移除历史记录，再删文件。
+// 当前正在使用的那张不许删（要先把它换下来）；文件删除失败只记日志，历史记录照常移除。
+func (s *CharacterLookService) DeleteAgeStagePortraitHistory(projectID, characterID, stageID uint, file string) ([]string, error) {
+	stage, err := s.loadAgeStage(s.db, projectID, characterID, stageID)
+	if err != nil {
+		return nil, err
+	}
+	file = strings.TrimSpace(file)
+	if file == "" || strings.ContainsAny(file, `/\`) {
+		return nil, fmt.Errorf("要删除的历史四视图文件名无效")
+	}
+	if file == stage.Portrait {
+		return nil, fmt.Errorf("这张是当前使用的四视图，不能删除；请先把其它历史版本恢复为当前")
+	}
+	history := ageStagePortraitHistory(stage.PortraitHistory)
+	remaining := make([]string, 0, len(history))
+	found := false
+	for _, old := range history {
+		if old == file {
+			found = true
+			continue
+		}
+		remaining = append(remaining, old)
+	}
+	if !found {
+		return nil, fmt.Errorf("该图片不在此阶段的历史四视图中")
+	}
+	raw := ""
+	if len(remaining) > 0 {
+		body, _ := json.Marshal(remaining)
+		raw = string(body)
+	}
+	if err := s.db.Model(&models.CharacterAgeStage{}).Where("id = ?", stage.ID).Update("portrait_history", raw).Error; err != nil {
+		return nil, err
+	}
+	if s.upload != nil {
+		if err := s.upload.RemoveFile(fmt.Sprint(projectID), file); err != nil {
+			log.Printf("[age-stage %d] 删除历史四视图文件 %s 失败: %v", stage.ID, file, err)
+		}
+		if err := s.db.Where("task_id = ? AND name = ?", fmt.Sprint(projectID), file).Delete(&models.UploadFile{}).Error; err != nil {
+			log.Printf("[age-stage %d] 删除历史四视图上传记录 %s 失败: %v", stage.ID, file, err)
+		}
+	}
+	return remaining, nil
+}
+
 // RestoreAgeStagePortrait 把历史中的某张阶段四视图恢复为当前；当前这张进入历史，不删除任何文件。
 func (s *CharacterLookService) RestoreAgeStagePortrait(projectID, characterID, stageID uint, file string) error {
 	stage, err := s.loadAgeStage(s.db, projectID, characterID, stageID)
