@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { ageStagePortraitEngines, normalizeStageEngine, ageStageLabel, groupOutfitsByStage, episodeAssignSummary, validEpisodeRange, stageApproved } from '../src/utils/characterAgeStage.js'
+import { ageStagePortraitEngines, normalizeStageEngine, stageReferenceToken, ageStageLabel, groupOutfitsByStage, episodeAssignSummary, validEpisodeRange, stageApproved } from '../src/utils/characterAgeStage.js'
 
 const looks = readFileSync(new URL('../src/views/CharacterLooks.vue', import.meta.url), 'utf8')
 const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.meta.url), 'utf8')
@@ -75,16 +75,27 @@ test('阶段提示词可只保存不生成，历史四视图保留并可恢复',
   assert.match(looks, /if\(created&&row\?\.id\)await openStagePrompt\(row\)/)
 })
 
-// 用户要求：阶段四视图必须有参考图；Moss 与 Krea2 都只支持文生图，因此只提供 Qwen 多图编辑。
-test('阶段四视图必须参考主标准像，只用 Qwen 多图编辑，旧取值按 Qwen 多图编辑显示', () => {
-  assert.deepEqual(ageStagePortraitEngines.map(e => e.value), ['qwen_edit'])
+// 用户要求：阶段四视图必须有参考图；Moss 与 Krea2 都只支持文生图，因此只提供多图编辑。
+// 用户追加要求：在多图编辑之外再给一个 MiniMax H3-Image 编辑选项，默认仍是 Qwen。
+test('阶段四视图必须参考主标准像，可选 Qwen 或 MiniMax H3-Image，默认 Qwen，旧取值按 Qwen 显示', () => {
+  assert.deepEqual(ageStagePortraitEngines.map(e => e.value), ['qwen_edit', 'minimax_h3_edit'])
   assert.equal(normalizeStageEngine('moss'), 'qwen_edit')
   assert.equal(normalizeStageEngine('qwen_image_2_1'), 'qwen_edit')
   assert.equal(normalizeStageEngine(''), 'qwen_edit')
   assert.equal(normalizeStageEngine('krea2'), 'qwen_edit')
+  assert.equal(normalizeStageEngine('minimax_h3_edit'), 'minimax_h3_edit')
+  // 两个引擎的参考图绑定写法不同，提示词必须跟着引擎走。
+  assert.equal(stageReferenceToken('qwen_edit'), '<image1>')
+  assert.equal(stageReferenceToken('minimax_h3_edit'), '<Picture 1>')
   assert.doesNotMatch(looks, /Krea2 四视图编辑/)
   assert.match(looks, /:disabled="!!s\.portrait_task_id\|\|!character\?\.portrait"[^>]*@click="openStagePrompt\(s\)">\{\{s\.portrait_task_id\?'生成中…':'审阅提示词并生成四视图'\}\}/)
   assert.match(looks, /以角色主标准像为参考/)
+  // 引擎选择在阶段表单里，由 ageStagePortraitEngines 渲染；提示文案标明该引擎要保留的绑定写法。
+  assert.match(looks, /<label>四视图引擎<select v-model="stageForm\.portrait_engine"/)
+  assert.match(looks, /v-for="e in ageStagePortraitEngines"/)
+  assert.match(looks, /提示词须保留 \$\{stageReferenceToken\(s\?\.portrait_engine\)\}/)
+  // 四视图引擎标签直接显示后端保存的取值。
+  assert.match(looks, /四视图引擎：\{\{stageEngineLabel\(s\.portrait_engine\)\}\}/)
 })
 
 test('编辑年龄阶段可 AI 扩写人物形象，结果只填入文本框且可撤销', () => {

@@ -1,0 +1,49 @@
+{
+  "name": "MiniMax H3-Image 多图编辑",
+  "code": "minimax_h3_image_edit",
+  "description": "MiniMax H3-Image 参考图编辑：1-3 张有序参考图（提示词中用 <Picture 1> 至 <Picture 3> 指代）+ 编辑指令，按指定宽高出图。6 步、CFG 1、条件零化负向；需 ComfyUI 0.45.0+ 与 H3-Image 模型文件。",
+  "inputs": [
+    {
+      "key": "ref_images",
+      "type": "images",
+      "label": "有序参考图",
+      "required": true,
+      "min_count": 1,
+      "max_count": 3,
+      "help": "提示词按顺序用 <Picture 1>、<Picture 2>、<Picture 3> 指代这些参考图"
+    },
+    { "key": "prompt", "type": "prompt", "label": "编辑提示词", "required": true },
+    { "key": "width", "type": "int", "label": "宽度", "default": 2048, "min": 256, "max": 8192, "step": 32 },
+    { "key": "height", "type": "int", "label": "高度", "default": 1152, "min": 256, "max": 8192, "step": 32 },
+    { "key": "seed", "type": "int", "label": "随机种子", "default": -1, "min": -1 },
+    { "key": "steps", "type": "int", "label": "采样步数", "default": 6, "min": 1, "max": 30 },
+    { "key": "unet_name", "type": "string", "label": "unet_name", "default": "minimax-h3-image\\minimax_h3_image_pruned_int8_convrot.safetensors" },
+    { "key": "clip_name", "type": "string", "label": "clip_name", "default": "minimax-h3\\qwen3vl_32b_minimax_h3_int8_convrot.safetensors" },
+    { "key": "vae_name", "type": "string", "label": "vae_name", "default": "minimax-h3-image\\minimax_h3_image_vae_fp16.safetensors" }
+  ],
+  "workflow": {
+    "1": { "class_type": "UNETLoader", "inputs": { "unet_name": "{{unet_name}}", "weight_dtype": "default" } },
+    "2": { "class_type": "CLIPLoader", "inputs": { "clip_name": "{{clip_name}}", "type": "minimax", "device": "default" } },
+    "3": { "class_type": "VAELoader", "inputs": { "vae_name": "{{vae_name}}" } },
+    "4": { "class_type": "LoadImage", "inputs": { "image": "{{img:ref_image_0}}" } },
+    "5": { "class_type": "LoadImage", "inputs": { "image": "{{img:ref_image_1}}" } },
+    "6": { "class_type": "LoadImage", "inputs": { "image": "{{img:ref_image_2}}" } },
+    "10": {
+      "class_type": "MiniMaxH3ImageConditioning",
+      "inputs": {
+        "clip": ["2", 0],
+        "vae": ["3", 0],
+        "prompt": "{{prompt}}",
+        "width": "{{width}}",
+        "height": "{{height}}",
+        "images.image_1": ["4", 0],
+        "images.image_2": ["5", 0],
+        "images.image_3": ["6", 0]
+      }
+    },
+    "11": { "class_type": "ConditioningZeroOut", "inputs": { "conditioning": ["10", 0] } },
+    "12": { "class_type": "KSampler", "inputs": { "seed": "{{seed}}", "steps": "{{steps}}", "cfg": 1, "sampler_name": "euler", "scheduler": "simple", "denoise": 1, "model": ["1", 0], "positive": ["10", 0], "negative": ["11", 0], "latent_image": ["10", 1] } },
+    "13": { "class_type": "VAEDecode", "inputs": { "samples": ["12", 0], "vae": ["3", 0] } },
+    "14": { "class_type": "SaveImage", "inputs": { "images": ["13", 0], "filename_prefix": "minimax_h3_image/edit_{{task_id}}" } }
+  }
+}

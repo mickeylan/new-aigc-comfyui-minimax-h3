@@ -15,6 +15,7 @@ const (
 	ImageEngineMoss         = "moss"
 	TemplateQwen21T2I       = "qwen_image_2_1_t2i"
 	TemplateQwen21MultiEdit = "qwen_image_2_1_multi_edit"
+	TemplateH3ImageEdit     = "minimax_h3_image_edit"
 	TemplateMossSheet       = "moss_character_sheet"
 	TemplateMossT2I         = "moss_image_t2i"
 )

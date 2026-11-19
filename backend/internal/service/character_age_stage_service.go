@@ -14,8 +14,18 @@ import (
 )
 
 // AgeStagePortraitQwenEdit 以角色主标准像为 <image1>、经 Qwen-Image-2.1 多图编辑生成阶段四视图。
-// 这是唯一来源：Moss 与 Krea2 都只支持文生图，不能带参考图。
-const AgeStagePortraitQwenEdit = "qwen_edit"
+// AgeStagePortraitH3Edit 用 MiniMax H3-Image 多图编辑做同一件事，提示词用 <Picture 1> 指代主标准像。
+// 两者都必需参考图：Moss 与 Krea2 只支持文生图，不能带参考图。
+const (
+	AgeStagePortraitQwenEdit = "qwen_edit"
+	AgeStagePortraitH3Edit   = "minimax_h3_edit"
+)
+
+// 阶段四视图固定 16:9 横幅（H3-Image 要求宽高为 32 的倍数）。
+const (
+	ageStageSheetWidth  = 2048
+	ageStageSheetHeight = 1152
+)
 
 type AgeStageInput struct {
 	Name           string `json:"name"`
@@ -24,14 +34,25 @@ type AgeStageInput struct {
 	PortraitEngine string `json:"portrait_engine"`
 }
 
-// normalizeAgeStagePortraitEngine 阶段四视图必须带参考图，只用 Qwen 多图编辑。
-// 旧取值（qwen_image_2_1、moss、krea2）一律改为 Qwen 多图编辑。
+// normalizeAgeStagePortraitEngine 阶段四视图必须带参考图，只用多图编辑（Qwen 或 MiniMax H3-Image）。
+// 旧取值（qwen_image_2_1、moss、krea2）一律改为 Qwen 多图编辑，与改动前的行为一致。
 func normalizeAgeStagePortraitEngine(value string) (string, error) {
 	switch strings.TrimSpace(value) {
 	case "", AgeStagePortraitQwenEdit, ImageEngineQwen21, ImageEngineMoss, ImageEngineKrea2:
 		return AgeStagePortraitQwenEdit, nil
+	case AgeStagePortraitH3Edit:
+		return AgeStagePortraitH3Edit, nil
 	}
 	return "", fmt.Errorf("不支持的年龄阶段四视图引擎")
+}
+
+// ageStageReferenceToken 是提示词里指代主标准像的写法：Qwen 多图编辑用 <image1>，
+// MiniMax H3-Image 按官方多图编辑约定用 <Picture 1>。
+func ageStageReferenceToken(engine string) string {
+	if engine == AgeStagePortraitH3Edit {
+		return "<Picture 1>"
+	}
+	return "<image1>"
 }
 
 // ageStageSheetLayout 判断提示词是否是四视图版式；旧版 9:16 阶段标准像提示词不再复用。
@@ -264,14 +285,28 @@ func (s *CharacterLookService) AgeStagePortraitPrompt(projectID, characterID, st
 	if !ageStageSheetLayout(saved) {
 		saved = ""
 	}
-	return saved, ageStageSheetPrompt(&project, &ch, stage), nil
+	engine, err := normalizeAgeStagePortraitEngine(stage.PortraitEngine)
+	if err != nil {
+		return "", "", err
+	}
+	// 换了引擎后旧稿的绑定写法不再适用，按未保存处理，界面显示对新引擎生成的默认稿。
+	if saved != "" && checkAgeStageReferenceBindingFor(saved, engine) != nil {
+		saved = ""
+	}
+	return saved, ageStageSheetPromptFor(&project, &ch, stage, engine), nil
 }
 
 // ageStageSheetPrompt 先绑定主标准像参考，再接与角色四视图同一套 Moss 结构（人物外貌、服饰、画风，
 // “由左到右”四格版式）。四视图自带正面面部特写，不再单独生成阶段标准像。
 // 参考图只负责同一人物的脸部特征与画风；年龄、体型、发型与服装以阶段外貌为准，外貌未写服装/鞋履时才补默认值。
 func ageStageSheetPrompt(project *models.Project, ch *models.Character, stage *models.CharacterAgeStage) string {
-	binding := fmt.Sprintf("<image1>是角色「%s」的主标准像，仅用于保持同一人物的脸部特征（眼型、眉形、鼻型、脸部轮廓的延续）与项目画风；不沿用<image1>中的年龄、头身比例、发型与服装。", ch.Name)
+	return ageStageSheetPromptFor(project, ch, stage, AgeStagePortraitQwenEdit)
+}
+
+// ageStageSheetPromptFor 按所选引擎生成默认稿，只有参考图绑定写法随引擎不同。
+func ageStageSheetPromptFor(project *models.Project, ch *models.Character, stage *models.CharacterAgeStage, engine string) string {
+	token := ageStageReferenceToken(engine)
+	binding := fmt.Sprintf("%s是角色「%s」的主标准像，仅用于保持同一人物的脸部特征（眼型、眉形、鼻型、脸部轮廓的延续）与项目画风；不沿用%s中的年龄、头身比例、发型与服装。", token, ch.Name, token)
 	return binding + ageStageSheetBody(project, ch, stage)
 }
 
@@ -352,18 +387,42 @@ func (s *CharacterLookService) SaveAgeStagePortraitPrompt(projectID, characterID
 	if prompt == "" {
 		return fmt.Errorf("提示词不能为空")
 	}
-	if err := checkAgeStageReferenceBinding(prompt); err != nil {
+	if err := checkAgeStageReferenceBindingFor(prompt, stage.PortraitEngine); err != nil {
 		return err
 	}
 	return s.db.Model(&models.CharacterAgeStage{}).Where("id = ?", stage.ID).Update("portrait_prompt", prompt).Error
 }
 
-// checkAgeStageReferenceBinding Qwen 多图编辑的提示词必须用 <image1> 绑定主标准像。
-func checkAgeStageReferenceBinding(prompt string) error {
-	if !strings.Contains(prompt, "<image1>") {
-		return fmt.Errorf("阶段四视图以主标准像为参考，提示词必须保留 <image1>")
+// checkAgeStageReferenceBindingFor 提示词必须用所选引擎的写法绑定主标准像。
+func checkAgeStageReferenceBindingFor(prompt, engine string) error {
+	token := ageStageReferenceToken(engine)
+	if !strings.Contains(prompt, token) {
+		return fmt.Errorf("阶段四视图以主标准像为参考，提示词必须保留 %s", token)
 	}
 	return nil
+}
+
+// ageStageTemplate 返回阶段四视图使用的模板代码。两个引擎都只用一张参考图（主标准像）。
+func ageStageTemplate(engine string) string {
+	if engine == AgeStagePortraitH3Edit {
+		return TemplateH3ImageEdit
+	}
+	return TemplateQwen21MultiEdit
+}
+
+// ageStageParams 按引擎给出出图参数：两者都固定 16:9 横幅，不跟随竖版主标准像。
+// H3-Image 走本地宽高参数、无负向提示词（负向由条件零化代替），古典服饰限制只能写在正向提示词里。
+func ageStageParams(engine string, project *models.Project, ch *models.Character) map[string]any {
+	if engine == AgeStagePortraitH3Edit {
+		return map[string]any{"width": ageStageSheetWidth, "height": ageStageSheetHeight}
+	}
+	params := qwenPortraitParams()
+	params["aspect_ratio"] = qwenAspectRatio("16:9")
+	params["use_aspect_ratio"] = true
+	if classicalChineseSetting(project, ch) {
+		params["negative_prompt"] = ageStageClassicalNegative
+	}
+	return params
 }
 
 // StartAgeStagePortrait 以角色主标准像为参考提交阶段四视图任务。prompt 为空时使用已保存稿或默认稿；提交前由用户审阅。
@@ -389,25 +448,26 @@ func (s *CharacterLookService) StartAgeStagePortrait(projectID, characterID, sta
 	if strings.TrimSpace(ch.Portrait) == "" {
 		return fmt.Errorf("阶段四视图以角色「%s」的主标准像为参考，请先生成或上传主标准像；也可直接上传阶段四视图", ch.Name)
 	}
+	engine, err := normalizeAgeStagePortraitEngine(stage.PortraitEngine)
+	if err != nil {
+		return err
+	}
 	prompt = strings.TrimSpace(prompt)
-	if prompt == "" && ageStageSheetLayout(stage.PortraitPrompt) {
+	// 已保存稿是给另一个引擎写的（绑定写法不同）时不能直接提交，按未填写处理。
+	if prompt == "" && ageStageSheetLayout(stage.PortraitPrompt) && checkAgeStageReferenceBindingFor(stage.PortraitPrompt, engine) == nil {
 		prompt = strings.TrimSpace(stage.PortraitPrompt)
 	}
 	if prompt == "" {
-		prompt = ageStageSheetPrompt(&project, &ch, stage)
+		prompt = ageStageSheetPromptFor(&project, &ch, stage, engine)
 	}
-	if err := checkAgeStageReferenceBinding(prompt); err != nil {
+	if err := checkAgeStageReferenceBindingFor(prompt, engine); err != nil {
 		return err
 	}
-	// 多图编辑默认输出尺寸跟随参考图（竖版标准像会得到竖版图）；四视图打开 use_aspect_ratio，按 aspect_ratio 固定 16:9 横幅。
-	params := qwenPortraitParams()
-	params["aspect_ratio"] = qwenAspectRatio("16:9")
-	params["use_aspect_ratio"] = true
-	if classicalChineseSetting(&project, &ch) {
-		params["negative_prompt"] = ageStageClassicalNegative
-	}
+	// 两个引擎都固定 16:9 横幅：Qwen 打开 use_aspect_ratio，H3-Image 直接给宽高，都不跟随竖版主标准像。
+	params := ageStageParams(engine, &project, &ch)
 	files := map[string][]FileMeta{"ref_images": {{TaskID: fmt.Sprint(projectID), Name: ch.Portrait}}}
-	tpl, err := enabledTemplateByCode(s.db, TemplateQwen21MultiEdit)
+	templateCode := ageStageTemplate(engine)
+	tpl, err := enabledTemplateByCode(s.db, templateCode)
 	if err != nil {
 		return err
 	}
@@ -424,7 +484,7 @@ func (s *CharacterLookService) StartAgeStagePortrait(projectID, characterID, sta
 		}
 		return fmt.Errorf("该阶段四视图任务已存在")
 	}
-	log.Printf("[age-stage-submit] project=%d character=%d stage=%d template=%s ref=%s", projectID, characterID, stage.ID, TemplateQwen21MultiEdit, ch.Portrait)
+	log.Printf("[age-stage-submit] project=%d character=%d stage=%d template=%s ref=%s", projectID, characterID, stage.ID, templateCode, ch.Portrait)
 	go func() {
 		if err := s.tasks.Execute(task.TaskID); err != nil && !errors.Is(err, errNoFreeGPU) {
 			log.Printf("[age-stage %d] task %s failed: %v", stage.ID, task.TaskID, err)

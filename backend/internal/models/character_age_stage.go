@@ -11,7 +11,7 @@ type CharacterAgeStage struct {
 	Name           string `gorm:"uniqueIndex:idx_age_stage_character_name" json:"name"`
 	Age            *int   `json:"age"`
 	Appearance     string `gorm:"type:text" json:"appearance"`
-	PortraitEngine string `gorm:"size:32;default:qwen_edit" json:"portrait_engine"` // 仅 qwen_edit：阶段四视图以主标准像为参考
+	PortraitEngine string `gorm:"size:32;default:qwen_edit" json:"portrait_engine"` // qwen_edit / minimax_h3_edit：阶段四视图都以主标准像为参考
 	PortraitPrompt string `gorm:"type:text" json:"portrait_prompt"`
 	Portrait       string `json:"portrait"`
 	// PortraitHistory 是被新结果替换下来的旧阶段标准像文件名（JSON 数组，新的在前），可随时恢复。
