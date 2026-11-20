@@ -557,6 +557,11 @@ func (s *CharacterLookService) DeleteAgeStagePortraitHistory(projectID, characte
 	if file == stage.Portrait {
 		return nil, fmt.Errorf("这张是当前使用的四视图，不能删除；请先把其它历史版本恢复为当前")
 	}
+	if used, err := faceDesignUsesFile(s.db, projectID, file); err != nil {
+		return nil, err
+	} else if used {
+		return nil, fmt.Errorf("这张图片被角色参考人脸设计使用，不能删除")
+	}
 	history := ageStagePortraitHistory(stage.PortraitHistory)
 	remaining := make([]string, 0, len(history))
 	found := false

@@ -224,7 +224,11 @@ func (s *ProjectService) DeleteAsset(projectID, id uint) error {
 	if err := s.db.Where("id = ? AND project_id = ?", id, projectID).First(&a).Error; err != nil {
 		return err
 	}
-	if a.Image != "" && s.cfg != nil && s.remote != nil && s.upload != nil {
+	imageReferenced, err := faceDesignUsesFile(s.db, projectID, a.Image)
+	if err != nil {
+		return err
+	}
+	if !imageReferenced && a.Image != "" && s.cfg != nil && s.remote != nil && s.upload != nil {
 		path := filepath.Join(s.upload.InputDir(), fmt.Sprintf("%d", projectID), a.Image)
 		if _, err := s.remote.Run("rm -f -- " + shellQuote(path)); err != nil {
 			log.Printf("[asset %d] cleanup image %s failed: %v", a.ID, path, err)

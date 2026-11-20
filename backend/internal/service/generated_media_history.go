@@ -195,6 +195,11 @@ func (s *GeneratedMediaHistoryService) removeUnreferencedProjectFile(projectID u
 	if file == "" || s.upload == nil || s.upload.remote == nil {
 		return nil
 	}
+	if used, err := faceDesignUsesFile(s.db, projectID, file); err != nil {
+		return err
+	} else if used {
+		return nil
+	}
 	var refs int64
 	queries := []struct {
 		model any

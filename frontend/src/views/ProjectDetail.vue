@@ -227,6 +227,7 @@
                   :title="ch.profile_status !== 'approved' ? '请先审核通过角色档案' : !ch.reference_prompt ? '请先生成或填写参考像提示词' : !portraitEngineReady(ch) ? '所选 Qwen-Image-2.1 工作流模板未安装' : ch.portrait_task_id ? '已有任务，不会重复提交；请先检查生成结果' : ''">
                   {{ ch._portraitSubmitting ? '正在提交任务…' : ch.portrait_task_id ? '标准像生成中…' : ch.portrait ? imageEngineLabel(ch.portrait_engine) + ' 重生成标准像' : imageEngineLabel(ch.portrait_engine) + ' 生成标准像' }}
                 </button>
+                <CharacterFaceDesign :project-id="id()" :character="ch" :disabled="busy || ch._portraitSubmitting" @submitted="load" />
                 <button v-if="ch.portrait_task_id" class="btn btn-sm btn-ghost" :disabled="ch._recovering" @click="recoverPortrait(ch)">{{ch._recovering?'检查中…':'检查生成结果'}}</button>
                 <button v-if="ch.portrait_task_id" class="btn btn-sm btn-danger" :disabled="ch._resetting" @click="resetPortrait(ch)">{{ch._resetting?'重置中…':'重置生成状态'}}</button>
                 <button class="btn btn-sm btn-ghost" :disabled="busy || ch._uploading" @click="uploadPortrait(ch)">
@@ -1380,6 +1381,7 @@
 <script setup>
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import ScenePreparationStages from '../components/ScenePreparationStages.vue'
+import CharacterFaceDesign from '../components/CharacterFaceDesign.vue'
 const ScenePrevisualization = defineAsyncComponent(() => import('../components/ScenePrevisualization.vue'))
 const SceneBlockingPromptDraft = defineAsyncComponent(() => import('../components/SceneBlockingPromptDraft.vue'))
 import { mergePrevisBlocking } from '../utils/scenePrevisualization.js'

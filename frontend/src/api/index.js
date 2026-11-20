@@ -17,6 +17,10 @@ async function mutateScreenText(id, request) {
 }
 
 export const api = {
+  faceDesignOptions: (id, cid) => http.get(`/projects/${id}/characters/${cid}/face-design`),
+  uploadFaceDesignReference: (id, cid, data) => http.post(`/projects/${id}/characters/${cid}/face-design/references`, data),
+  previewFaceDesign: (id, cid, data) => http.post(`/projects/${id}/characters/${cid}/face-design/preview`, data),
+  generateFaceDesign: (id, cid, data) => http.post(`/projects/${id}/characters/${cid}/face-design/generate`, data),
   listShotPrevisFrames: (id, sid) => http.get(`/projects/${id}/scenes/${sid}/previsualization/frames`),
   bindShotPrevisFrame: (id, sid, data) => http.post(`/projects/${id}/scenes/${sid}/previsualization/frames`, data),
   previewShotPrevisFramePrompt: (id, sid, fid) => http.post(`/projects/${id}/scenes/${sid}/previsualization/frames/${fid}/prompt/preview`),

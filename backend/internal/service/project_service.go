@@ -6950,7 +6950,11 @@ func (s *ProjectService) DeleteCharacter(projectID, id uint) error {
 	if listenerRefs > 0 {
 		return fmt.Errorf("角色正被%d个导演Shot作为闭口听者引用；请先重新指定这些Shot的listener_character，再删除角色", listenerRefs)
 	}
-	if ch.Portrait != "" && s.cfg != nil && s.remote != nil && s.upload != nil {
+	portraitReferenced, err := faceDesignUsesFile(s.db, projectID, ch.Portrait)
+	if err != nil {
+		return err
+	}
+	if !portraitReferenced && ch.Portrait != "" && s.cfg != nil && s.remote != nil && s.upload != nil {
 		path := filepath.Join(s.upload.InputDir(), fmt.Sprintf("%d", projectID), ch.Portrait)
 		if _, err := s.remote.Run("rm -f -- " + shellQuote(path)); err != nil {
 			log.Printf("[character %d] cleanup portrait %s failed: %v", ch.ID, path, err)
@@ -9192,7 +9196,9 @@ func (s *ProjectService) syncCharacterPortraits() {
 		_ = s.recoverCharacterPortraitFromDisk(ch)
 		var refreshed models.Character
 		_ = s.db.First(&refreshed, ch.ID).Error
-		if refreshed.Portrait != "" || refreshed.PortraitTaskID == "" {
+		// Reference design deliberately keeps the old portrait until its new task
+		// succeeds; an existing image must not prevent that result being applied.
+		if refreshed.PortraitTaskID == "" || (refreshed.Portrait != "" && !faceDesignTask(s.db, ch.ProjectID, ch.ID, refreshed.PortraitTaskID)) {
 			changed = true
 			continue
 		}
