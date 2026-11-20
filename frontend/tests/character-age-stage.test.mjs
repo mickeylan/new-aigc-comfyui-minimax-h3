@@ -77,9 +77,10 @@ test('阶段提示词可只保存不生成，历史四视图保留并可恢复',
 })
 
 test('历史四视图可删除不满意的图，删除前二次确认并调用删除接口', () => {
-  assert.match(looks, /@click="deleteStagePortrait\(s,f\)">删除<\/button>/)
-  // 删除按钮与“恢复”并排显示在每张历史图下面。
-  assert.match(looks, /@click="restoreStagePortrait\(s,f\)">恢复<\/button><button class="btn btn-xs btn-danger"[^>]*@click="deleteStagePortrait\(s,f\)">删除<\/button>/)
+  // 用户要求：删除改为缩略图右上角的“×”按钮，不再与“恢复”并排；点击不触发看大图。
+  assert.match(looks, /<div class="stage-thumb"><img [^>]*历史四视图`\)"><button class="thumb-del"[^>]*@click\.stop="deleteStagePortrait\(s,f\)">×<\/button><\/div><button class="btn btn-xs btn-ghost"[^>]*@click="restoreStagePortrait\(s,f\)">恢复<\/button><\/figure>/)
+  assert.match(looks, /\.stage-thumb\{position:relative\}\.thumb-del\{position:absolute;top:-6px;right:-6px;/)
+  assert.doesNotMatch(looks, /deleteStagePortrait\(s,f\)">删除<\/button>/)
   assert.match(looks, /async function deleteStagePortrait\(s,file\)\{if\(!confirm\(`删除这张历史四视图？图片文件会一起删除，无法找回。/)
   assert.match(looks, /portrait\/history\/delete`,jsonOpt\('POST',\{file\}\)/)
   // 当前正在使用的那张由后端拒绝，前端说明里明确讲清。
