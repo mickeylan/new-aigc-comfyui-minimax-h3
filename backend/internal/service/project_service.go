@@ -3764,7 +3764,7 @@ func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Di
 	for _, name := range names {
 		// 接受“林采薇说道：\"...\"”“传来林采薇的声音说道：\"...\"”等明确发声写法。
 		// 必须同时具备已知角色名、明确说话动词和引号原文，避免把剧情说明猜成对白。
-		pattern := regexp.MustCompile(regexp.QuoteMeta(name) + `[^。！？!?\r\n]{0,160}?(?:厉喝|怒喝|大喝|喝道|喝喊|喊道|叫道|高喊|刚喊完|喊完|刚说完|说完|说道|回答道?|回应道?|念过一声|念道|念诵|传音|说|问道|答道|开口(?:道)?)(?:\s*[:：]\s*["“]?|\s*["“])([^"”]+)["”]`)
+		pattern := regexp.MustCompile(regexp.QuoteMeta(name) + `[^。！？!?\r\n]{0,160}?(?:厉喝|怒喝|大喝|喝道|喝喊|喊道|叫道|高喊|刚喊完|喊完|刚说完|说完|说道|回答道?|回应道?|念过一声|念道|念诵|传音|低声道|轻声道|小声道|说|问道|答道|开口(?:道)?)(?:\s*[:：]\s*["“]?|\s*["“])([^"”]+)["”]`)
 		for _, match := range pattern.FindAllStringSubmatchIndex(content, -1) {
 			clauseStart := 0
 			if boundary := strings.LastIndexAny(content[:match[0]], "。！？!?；;\r\n"); boundary >= 0 {
@@ -3783,11 +3783,11 @@ func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Di
 				continue // the name is an object or other non-subject mention
 			}
 			shadowed := false
-			nearestOtherAt := -1
+			nearestOtherAt, nearestOtherEnd := -1, -1
 			for _, other := range names {
 				if other != name {
 					if at := strings.LastIndex(lead, other); at > nearestOtherAt {
-						nearestOtherAt = at
+						nearestOtherAt, nearestOtherEnd = at, at+len(other)
 					}
 				}
 			}
@@ -3796,6 +3796,13 @@ func explicitlyQuotedCharacterSpeech(content string, names []string) []models.Di
 				// 朝/向/对 introduce a recipient or gaze target, not a speaker.
 				prefix := strings.TrimSpace(lead[:nearestOtherAt])
 				shadowed = !strings.HasSuffix(prefix, "朝") && !strings.HasSuffix(prefix, "向") && !strings.HasSuffix(prefix, "对")
+				// A target's body part is not a new speaking subject, e.g.
+				// “甲的手悬在乙颈侧前，低声道…”. Both spatial preposition
+				// and body-part complement are required for this exception.
+				otherTail := lead[nearestOtherEnd:]
+				if strings.HasSuffix(prefix, "在") && regexp.MustCompile(`^(?:的)?(?:颈侧|颈前|脖颈|喉前|胸前|肩头|肩侧|身前|面前|耳边|头顶)`).MatchString(otherTail) {
+					shadowed = false
+				}
 			}
 			if shadowed {
 				continue // a nearer known character owns the speaking verb
