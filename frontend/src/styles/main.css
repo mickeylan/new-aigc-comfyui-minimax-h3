@@ -164,6 +164,7 @@ body::before {
 }
 .btn-danger:hover { background: #e03227; }
 
+.btn-xs { padding: 3px 9px; font-size: 12px; }
 .btn-sm { padding: 6px 15px; font-size: 13px; }
 .btn-lg { padding: 14px 34px; font-size: 17px; }
 
