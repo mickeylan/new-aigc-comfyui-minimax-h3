@@ -1,5 +1,5 @@
 <template>
-  <button class="btn btn-sm btn-secondary" :disabled="disabled || character.profile_status !== 'approved' || !!character.portrait_task_id" @click="open">参考人脸设计</button>
+  <button class="btn btn-sm btn-secondary" :disabled="!!blockedReason" :title="blockedReason" @click="open">参考人脸设计</button>
   <Teleport to="body">
     <div v-if="visible" class="modal-mask face-design-mask" @click.self="close">
       <section class="modal card face-design" role="dialog" aria-modal="true" aria-labelledby="face-design-title">
@@ -41,6 +41,8 @@ const emit = defineEmits(['submitted'])
 const visible=ref(false), busy=ref(false), error=ref(''), files=ref([]), engines=ref([]), designs=ref([]), selectedFile=ref(''), draft=ref(null), prompt=ref(''), reviewed=ref(false)
 const config=reactive({preset:'dual_parent',engine:'qwen_edit',requirements:'',references:[]})
 const engine=computed(()=>engines.value.find(e=>e.code===config.engine))
+// 按钮被禁用时必须给出原因：此前禁用条件只在 disabled 属性里，点不动也没有任何提示。
+const blockedReason=computed(()=>props.character.profile_status!=='approved'?'请先审核通过角色档案，才能用参考人脸设计':props.character.portrait_task_id?'标准像任务正在生成，完成后才能用参考人脸设计':props.disabled?'当前有其它角色操作正在进行，请稍候':'')
 const capacityError=computed(()=>!engine.value?.available ? '所选模板不可用' : config.references.length<2 ? '至少需要两张不同参考图' : config.preset==='dual_parent' && config.references.length!==2 ? '双亲参考需要两张图片' : config.references.length>engine.value.max_count ? `所选引擎最多支持${engine.value.max_count}张` : '')
 const validSlots=computed(()=>config.preset!=='dual_parent' || config.references.filter(r=>r.slot==='father').length===1 && config.references.filter(r=>r.slot==='mother').length===1)
 watch(config,()=>{draft.value=null;reviewed.value=false},{deep:true,flush:'sync'})
@@ -56,5 +58,8 @@ async function generate(){if(!draft.value||!reviewed.value)return;busy.value=tru
 </script>
 
 <style scoped>
-.face-design pre{white-space:pre-wrap;overflow-wrap:anywhere}.face-design figure{margin:6px;max-width:180px}.face-design-mask{z-index:1400}.face-design{width:min(760px,94vw);max-height:90vh;overflow:auto;padding:22px;display:grid;gap:12px}.face-design header,.reference-add,.face-reference,.reference-actions{display:flex;align-items:center;gap:10px}.face-design header{justify-content:space-between}.face-design fieldset{border:0;margin:0;padding:0;display:grid;gap:12px;min-width:0}.face-design label{display:grid;gap:6px}.reference-add{flex-wrap:wrap}.reference-add select{flex:1;min-width:140px}.face-reference{padding:10px;border:1px solid var(--border);border-radius:8px}.face-reference img{width:64px;height:64px;object-fit:cover;border-radius:6px}.face-reference>div{display:grid;gap:6px;flex:1;min-width:0}.face-reference .reference-actions{flex:0 0 auto}.error-text{color:var(--red);white-space:pre-wrap}.face-design textarea{width:100%;box-sizing:border-box}@media(max-width:600px){.face-reference{flex-wrap:wrap}.face-reference .reference-actions{display:flex;flex-basis:100%}}
+/* 弹窗 Teleport 到 body，ProjectDetail 里 .modal-mask 是 scoped 规则，作用域哈希对不上这里，
+   缺了定位时整个弹窗会掉到文档末尾（页面底部）等于点了没反应，所以本组件必须自带遮罩样式。 */
+.face-design-mask{position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(10px);display:flex;align-items:center;justify-content:center;padding:24px;z-index:1400}
+.face-design pre{white-space:pre-wrap;overflow-wrap:anywhere}.face-design figure{margin:6px;max-width:180px}.face-design{width:min(760px,94vw);max-height:90vh;overflow:auto;padding:22px;display:grid;gap:12px}.face-design header,.reference-add,.face-reference,.reference-actions{display:flex;align-items:center;gap:10px}.face-design header{justify-content:space-between}.face-design fieldset{border:0;margin:0;padding:0;display:grid;gap:12px;min-width:0}.face-design label{display:grid;gap:6px}.reference-add{flex-wrap:wrap}.reference-add select{flex:1;min-width:140px}.face-reference{padding:10px;border:1px solid var(--border);border-radius:8px}.face-reference img{width:64px;height:64px;object-fit:cover;border-radius:6px}.face-reference>div{display:grid;gap:6px;flex:1;min-width:0}.face-reference .reference-actions{flex:0 0 auto}.error-text{color:var(--red);white-space:pre-wrap}.face-design textarea{width:100%;box-sizing:border-box}@media(max-width:600px){.face-reference{flex-wrap:wrap}.face-reference .reference-actions{display:flex;flex-basis:100%}}
 </style>

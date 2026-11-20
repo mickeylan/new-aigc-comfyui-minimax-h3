@@ -42,3 +42,23 @@ test('设计来源记录展示具体参考图片、顺序、职责与任务', ()
   for (const field of ['r.file', 'r.position', 'r.responsibility', 'd.task_id', 'd.prompt']) assert.ok(source.includes(field))
   assert.match(source, /移除选择不会删除原始图片/)
 })
+
+test('Teleport 到 body 的弹窗自带遮罩定位，不会掉到页面底部', () => {
+  // ProjectDetail 的 .modal-mask 是 scoped 规则，作用域哈希对不上 Teleport 出来的节点，
+  // 缺失定位时弹窗会渲染在文档末尾，表现为“点了没反应”。
+  const mask = source.match(/\.face-design-mask\{([^}]*)\}/)
+  assert.ok(mask, '组件必须自己定义 .face-design-mask')
+  assert.match(mask[1], /position:fixed/)
+  assert.match(mask[1], /inset:0/)
+  assert.match(mask[1], /display:flex/)
+  assert.match(mask[1], /z-index:1400/)
+})
+
+test('按钮禁用时必须给出原因，不能点了毫无反应', () => {
+  assert.match(source, /:disabled="!!blockedReason" :title="blockedReason"/)
+  assert.match(source, /const blockedReason=computed/)
+  assert.match(source, /请先审核通过角色档案/)
+  assert.match(source, /标准像任务正在生成/)
+  assert.match(source, /当前有其它角色操作正在进行/)
+  assert.doesNotMatch(source, /:disabled="disabled \|\| character\.profile_status !== 'approved' \|\| !!character\.portrait_task_id"/)
+})
