@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -233,7 +234,10 @@ func (l *LlamaProvider) Chat(system, user string) (string, error) {
 		if attempt > 0 {
 			time.Sleep(time.Second)
 		}
+		started := time.Now()
+		log.Printf("[text-chat] provider=%q attempt=%d status=started input_chars=%d", l.name, attempt+1, len([]rune(system))+len([]rune(user)))
 		text, err := l.chatOnce(system, user, nil)
+		log.Printf("[text-chat] provider=%q attempt=%d elapsed=%s success=%t output_chars=%d", l.name, attempt+1, time.Since(started).Round(time.Millisecond), err == nil, len([]rune(text)))
 		if err == nil {
 			return text, nil
 		}
@@ -369,6 +373,12 @@ func readOpenAIChatStream(body io.Reader, name string) (string, error) {
 			if choice.FinishReason != nil && *choice.FinishReason != "" {
 				finished = true
 			}
+		}
+		// finish_reason is already a terminal signal. Some gateways keep the
+		// SSE connection open without [DONE]; waiting for EOF discards a complete
+		// answer on client timeout and makes Chat submit the entire request again.
+		if finished {
+			break
 		}
 	}
 	if err := scanner.Err(); err != nil {
