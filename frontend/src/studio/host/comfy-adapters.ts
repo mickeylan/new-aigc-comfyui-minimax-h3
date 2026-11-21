@@ -9,6 +9,7 @@ import {
   type VideoEditorAdapters,
 } from "../video-editor/index";
 import { api } from "../../api";
+import { createComfyExportSink } from "./export-sink.js";
 import {
   parseRunResults,
   runResultKind,
@@ -32,12 +33,19 @@ interface GalleryItem {
   createdAt: number;
 }
 
-export function createComfyAdapters(): VideoEditorAdapters {
+export function createComfyAdapters(
+  options: { projectId?: string } = {},
+): VideoEditorAdapters {
   const base = createDefaultAdapters();
   return {
     ...base,
     mediaSource: createComfyMediaSource(base.mediaSource),
     assetGallery: createComfyAssetGallery(),
+    // 磁盘下载沿用默认 sink，另加一条「存到媒体库」→ POST /api/materials。
+    exportSink: createComfyExportSink({
+      diskSink: base.exportSink,
+      projectId: options.projectId,
+    }),
   };
 }
 

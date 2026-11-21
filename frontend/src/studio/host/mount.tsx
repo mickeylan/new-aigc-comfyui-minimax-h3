@@ -151,7 +151,7 @@ export function mountVideoEditor(
 
   // Initialize before React mounts: EditorCore is first-wins, so this pins
   // the ComfyStudio adapter bundle before EditorProvider's own initialize call.
-  const adapters = createComfyAdapters();
+  const adapters = createComfyAdapters({ projectId: options.projectId });
   EditorCore.initialize({ adapters });
 
   const editor = EditorCore.getInstance();
