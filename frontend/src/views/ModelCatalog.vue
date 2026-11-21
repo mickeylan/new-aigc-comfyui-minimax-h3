@@ -2,7 +2,7 @@
   <div class="catalog-page">
     <header class="page-head">
       <div>
-        <p class="eyebrow">MODEL CATALOG</p>
+        <p class="eyebrow">模型目录</p>
         <h1>模型能力目录</h1>
         <p class="subtitle">由当前启用的工作流模板实时派生，仅供查看。</p>
       </div>

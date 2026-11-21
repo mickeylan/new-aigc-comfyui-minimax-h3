@@ -74,7 +74,7 @@
     <section class="section" v-if="project.plan || !project.plan === false">
       <div class="section-head">
         <div>
-          <span class="overline">CREATIVE PLAN</span>
+          <span class="overline">创作规划</span>
           <h2>创作方案</h2>
           <p class="sub" v-if="plan">剧名「{{ plan.title }}」· {{ plan.logline }}</p>
         </div>
@@ -137,7 +137,7 @@
     <section class="section" v-if="characters.length || assets.length || project.plan !== undefined">
       <div class="section-head">
         <div>
-          <span class="overline">ASSET BIBLE</span>
+          <span class="overline">资产设定</span>
           <h2>角色 · 道具 · 场景</h2>
           <p class="sub">统一角色外貌、道具与场景环境，并可锁定角色音色；分镜画面生成时自动注入设定与参考图，保证跨集一致</p>
         </div>
@@ -164,7 +164,7 @@
       <!-- 角色卡片 -->
       <div v-show="assetTab === 'char'">
         <section id="character-alias-panel" class="card character-alias-panel" aria-label="角色别名与身份合并">
-          <div><span class="overline">CHARACTER IDENTITY</span><h3>角色别名与身份合并</h3><p class="sub">同一人物前期可能叫“青衣高大男子 / 石头哥哥”，后期揭示为“柳石”。在这里确认一次后，所有现有及未来Scene自动继承目标角色的标准像、四视图、套装和H3 Subject。</p></div>
+          <div><span class="overline">角色身份</span><h3>角色别名与身份合并</h3><p class="sub">同一人物前期可能叫“青衣高大男子 / 石头哥哥”，后期揭示为“柳石”。在这里确认一次后，所有现有及未来Scene自动继承目标角色的标准像、四视图、套装和H3 Subject。</p></div>
           <div class="character-alias-form"><label>剧本中出现的别名<input v-model.trim="characterAliasForm.alias" class="input" placeholder="例如：柳石"></label><label>合并到现有角色<select v-model.number="characterAliasForm.target_id" class="input"><option :value="0">请选择权威角色</option><option v-for="ch in characters" :key="ch.id" :value="ch.id">{{ch.name}}{{ch.portrait||ch.sheet?' · 已有参考图':' · 暂无参考图'}}</option></select></label><button type="button" class="btn btn-primary" :disabled="reconciliationBusy||!characterAliasForm.alias||!characterAliasForm.target_id" @click="confirmCharacterAlias">确认全项目继承</button></div>
           <p class="field-hint">示例：别名填“柳石”，目标选择“青衣高大男子”。这不会复制人物，也不需要逐个分镜重复绑定。</p>
         </section>
@@ -370,7 +370,7 @@
 
     <section class="section episode-production-center" aria-label="分集制作与剧本生成">
       <div class="section-head">
-        <div><span class="overline">EPISODE PRODUCTION</span><h2>分集制作</h2><p class="sub">在这里进入任意规划分集，并直接生成或重新生成该集剧本。</p></div>
+        <div><span class="overline">分集制作</span><h2>分集制作</h2><p class="sub">在这里进入任意规划分集，并直接生成或重新生成该集剧本。</p></div>
         <div class="episode-production-current"><span>当前页面</span><strong>第{{activeEpN}}集</strong><small>{{currentEpTitle}}</small></div>
       </div>
       <div class="card episode-production-controls">
@@ -388,7 +388,7 @@
     <section id="episode-workspace" class="section" v-if="project.script || project.scripts">
       <div class="section-head">
         <div>
-          <span class="overline">SCENARIO</span>
+          <span class="overline">剧情</span>
           <h2>第{{ activeEpN }}集 剧本 <span v-if="currentEpTitle && !currentEpTitle.includes('第')">· {{ currentEpTitle }}</span></h2>
           <p class="sub">修改本集剧本正文后点击「保存并 AI 重新生成分镜」，将按新剧本重建该集的分镜场景</p>
         </div>
@@ -448,7 +448,7 @@
 
     <section class="section compact-tool-section">
       <div class="section-head">
-        <div><span class="overline">PROMPT POLICY</span><h2>提示词策略覆盖</h2><p class="sub">按项目维护图像/视频提示词策略，并查看当前生效来源。</p></div>
+        <div><span class="overline">提示词策略</span><h2>提示词策略覆盖</h2><p class="sub">按项目维护图像/视频提示词策略，并查看当前生效来源。</p></div>
         <div class="section-actions"><button class="btn btn-sm btn-ghost" :disabled="policyBusy" @click="loadPromptPolicies">刷新</button><button class="btn btn-sm btn-secondary" :disabled="policyBusy" @click="editPromptPolicy()">新增项目覆盖</button></div>
       </div>
       <div class="card compact-list">
@@ -464,7 +464,7 @@
     <section class="section" v-if="currentScenes.length">
       <div class="section-head">
         <div>
-          <span class="overline">STORYBOARD</span>
+          <span class="overline">分镜</span>
           <h2>第{{ activeEpN }}集 · {{ currentEpTitle }} <span class="count">{{ curReadyText }}</span></h2>
         </div>
         <div class="section-actions">
@@ -628,7 +628,7 @@
     <section class="section" v-if="visibleMerges.length">
       <div class="section-head">
         <div>
-          <span class="overline">EXPORTED CUTS</span>
+          <span class="overline">已导出成片</span>
           <h2>第{{ activeEpN }}集 · 成片历史</h2>
           <p class="sub">这里只播放和下载已经提交的成片，不提供第二套合并或编排操作。</p>
         </div>
@@ -740,7 +740,7 @@
     <div v-if="editingScene" class="modal-mask scene-director-mask" role="dialog" aria-modal="true" aria-label="Scene导演工作台">
       <div class="modal card scene-edit-modal scene-director-workspace">
         <div class="scene-workspace-head">
-          <div><span class="overline">SCENE DIRECTOR WORKSPACE</span><h2>场景 {{ editingScene.order }} · {{ editingScene.title || '未命名' }}</h2><p class="sub">在当前页连续完成场景扩写、导演拆镜、参考图和生成准备；关闭后仍保留原分页与步骤。</p></div>
+          <div><span class="overline">场景导演工作区</span><h2>场景 {{ editingScene.order }} · {{ editingScene.title || '未命名' }}</h2><p class="sub">在当前页连续完成场景扩写、导演拆镜、参考图和生成准备；关闭后仍保留原分页与步骤。</p></div>
           <button class="btn btn-sm btn-ghost" @click="closeSceneWorkspace">关闭</button>
         </div>
         <nav class="scene-workspace-steps" aria-label="Scene导演流程">

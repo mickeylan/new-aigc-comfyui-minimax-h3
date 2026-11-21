@@ -3,7 +3,7 @@
     <div class="settings-hero">
       <div class="settings-hero-icon">⚡</div>
       <div>
-        <span class="hero-eyebrow">PLATFORM SETTINGS</span>
+        <span class="hero-eyebrow">平台设置</span>
         <h1>平台设置</h1>
         <p>配置文生文、文生图、配音等服务提供商。切换文生文模型后，所有剧本生成功能将使用新的模型。</p>
       </div>

@@ -1,6 +1,6 @@
 <template>
   <div class="page fade-up">
-    <div class="section-head"><div><span class="overline">PLAYGROUND</span><h1>生成试验场</h1><p class="sub">不创建项目，直接使用现有模板批量试验；满意结果可显式加入素材库。</p></div><button class="btn btn-ghost" @click="load">刷新</button></div>
+    <div class="section-head"><div><span class="overline">生成试验场</span><h1>生成试验场</h1><p class="sub">不创建项目，直接使用现有模板批量试验；满意结果可显式加入素材库。</p></div><button class="btn btn-ghost" @click="load">刷新</button></div>
     <section class="card form-card">
       <div class="field-row"><label>模式<select v-model="form.mode" class="input"><option v-for="mode in modes" :key="mode" :value="mode">{{ mode }}</option></select></label><label>模型模板<select v-model="form.template" class="input"><option v-for="item in templates" :key="item.template_code" :value="item.template_code">{{ item.name }}</option></select></label><label>批量<input v-model.number="form.batch_count" type="number" min="1" max="4" class="input" /></label></div>
       <label>提示词<textarea v-model="form.prompt" class="textarea" rows="5" /></label>

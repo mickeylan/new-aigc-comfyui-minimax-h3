@@ -3,7 +3,7 @@
     <header class="voice-head">
       <div>
         <router-link :to="`/projects/${projectId}/episodes/${episodeN}/screenplay`" class="back">← 返回本集剧本</router-link>
-        <span class="overline">VOICE STUDIO</span>
+        <span class="overline">配音间</span>
         <h1>第{{ episodeN }}集 · 声音工作台</h1>
         <p class="sub">{{ episodeTitle || '集中完成角色配音、试听、字幕检查与成片混音。' }} · 引擎：{{ providerLabel }}</p>
         <p v-if="studio.tts_provider === 'index_tts_rust' && studio.tts_available === false" class="runtime-warning">本地配音暂不可用：{{ studio.tts_error || '运行时未加载' }}。剧本、图片、视频、导演和混音等其他功能不受影响。</p>
@@ -58,7 +58,7 @@
       </section>
 
       <section class="section batch-section" aria-label="批量配音任务">
-        <div class="section-head"><div><span class="overline">BATCHES</span><h2>批量任务</h2><p class="sub">任务状态由服务端持久保存，离开页面后仍可继续查看和重试。</p></div></div>
+        <div class="section-head"><div><span class="overline">批量任务</span><h2>批量任务</h2><p class="sub">任务状态由服务端持久保存，离开页面后仍可继续查看和重试。</p></div></div>
         <div v-if="dubBatches.length" class="batch-list">
           <article v-for="batch in dubBatches" :key="batchId(batch)" class="card batch-card">
             <div>
@@ -78,7 +78,7 @@
       </section>
 
       <section class="section">
-        <div class="section-head"><div><span class="overline">CAST</span><h2>本集角色与音色</h2></div></div>
+        <div class="section-head"><div><span class="overline">角色与音色</span><h2>本集角色与音色</h2></div></div>
         <div class="role-grid" v-if="roles.length">
           <article v-for="role in roles" :key="role.name" class="card role-card">
             <strong>{{ role.name }}</strong><span>{{ role.count }} 句</span>
@@ -137,7 +137,7 @@
 
       <section class="section">
         <div class="section-head dialogue-head">
-          <div><span class="overline">DIALOGUES</span><h2>对白制作</h2><p class="sub">语速、情绪与表演说明保存后会使旧音频标记为待更新。{{ studio.tts_emotion_supported ? '当前本地运行时会将情绪与表演说明作为原生情感文本条件。' : '当前运行时不支持情感条件，参数仅用于审核且不会伪装为已生效。' }}</p></div>
+          <div><span class="overline">对白制作</span><h2>对白制作</h2><p class="sub">语速、情绪与表演说明保存后会使旧音频标记为待更新。{{ studio.tts_emotion_supported ? '当前本地运行时会将情绪与表演说明作为原生情感文本条件。' : '当前运行时不支持情感条件，参数仅用于审核且不会伪装为已生效。' }}</p></div>
           <div class="filters">
             <select v-model="statusFilter" class="input" aria-label="按状态筛选">
               <option value="all">全部状态</option><option value="ready">已就绪</option><option value="pending">待生成</option><option value="synthesizing">生成中</option><option value="failed">失败</option>
@@ -197,7 +197,7 @@
 
       <section class="studio-bottom">
         <article class="card srt-panel">
-          <div class="section-head"><div><span class="overline">SRT PREFLIGHT</span><h2>SRT 文件预览</h2><p class="sub">仅检查，不会覆盖现有对白。</p></div></div>
+          <div class="section-head"><div><span class="overline">SRT 预检</span><h2>SRT 文件预览</h2><p class="sub">仅检查，不会覆盖现有对白。</p></div></div>
           <label class="file-picker">选择 .srt 文件<input type="file" accept=".srt,application/x-subrip,text/plain" @change="previewSRT" /></label>
           <div v-if="srtLoading" class="inline-status" role="status">正在分析字幕…</div>
           <template v-if="srtPreview">
@@ -216,7 +216,7 @@
         </article>
 
         <article class="card mix-panel">
-          <div class="section-head"><div><span class="overline">MIX & EXPORT</span><h2>混音与导出</h2><p class="sub">使用本集已就绪场景创建成片，或单独下载字幕。</p></div></div>
+          <div class="section-head"><div><span class="overline">混音与导出</span><h2>混音与导出</h2><p class="sub">使用本集已就绪场景创建成片，或单独下载字幕。</p></div></div>
           <label><input v-model="mix.subtitles" type="checkbox" /> 烧录字幕</label>
           <label><input v-model="mix.dub" type="checkbox" /> 保留视频原声</label>
           <label>原声音量 <input v-model.number="mix.nativeVolume" class="input" type="number" min="0" max="4" step="0.1" /></label>

@@ -2,7 +2,7 @@
   <div class="page fade-up">
     <section class="materials-hero">
       <div class="hero-copy">
-        <span class="hero-eyebrow">MATERIAL LIBRARY</span>
+        <span class="hero-eyebrow">素材库</span>
         <h1>素材库</h1>
         <p>漫剧分镜生成的画面自动归档于此，也支持手动上传图片 / 视频 / 音频素材，统一管理复用。</p>
         <div class="hero-actions">

@@ -6,7 +6,7 @@ const detail = readFileSync(new URL('../src/views/ProjectDetail.vue', import.met
 const director = readFileSync(new URL('../src/components/ShotDirectorEditor.vue', import.meta.url), 'utf8')
 
 test('Scene导演流程在项目详情内连续完成而不跳转剪辑台', () => {
-  assert.match(detail, /SCENE DIRECTOR WORKSPACE/)
+  assert.match(detail, /场景导演工作区/)
   assert.match(detail, /1\. 场景扩写/)
   assert.match(detail, /2\. AI导演拆镜/)
   assert.match(detail, /3\. 参考图与生成/)

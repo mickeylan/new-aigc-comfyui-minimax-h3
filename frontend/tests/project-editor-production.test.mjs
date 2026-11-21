@@ -13,7 +13,7 @@ test('项目详情不再绕过最终成片编排直接提交合并', () => {
   assert.doesNotMatch(detailSource, /MERGE & EDIT/)
   assert.doesNotMatch(detailSource, /class="merge-select"/)
   assert.equal((detailSource.match(/workspace=delivery/g) || []).length, 1)
-  assert.match(detailSource, /EXPORTED CUTS/)
+  assert.match(detailSource, /已导出成片/)
   assert.match(detailSource, /不提供第二套合并或编排操作/)
   assert.match(source, /route\.query\.workspace/)
 })
@@ -82,7 +82,7 @@ test('最终成片按实际编排序列启用并提交集数', () => {
 })
 
 test('最终合并前提供非破坏性成片编排界面', () => {
-  assert.match(source, /FINAL CUT ASSEMBLY/)
+  assert.match(source, /成片编排/)
   assert.match(source, /最终成片编排/)
   const payloadBody = source.match(/function exportPayload\(\)\{([\s\S]*?)\n\}/)?.[1] || ''
   const mergeEpisodeBody = source.match(/async function mergeEpisode\(\) \{([\s\S]*?)\n\}/)?.[1] || ''
@@ -107,7 +107,7 @@ test('最终合并前提供非破坏性成片编排界面', () => {
 })
 
 test('剪辑台提供Scene生产看板和只读双层时间轴', () => {
-  assert.match(source, /PRODUCTION BOARD/)
+  assert.match(source, /生产看板/)
   assert.match(source, /Scene是唯一生产单元/)
   assert.match(source, /场景\{\{selected\.order\}\}内部Shot/)
   assert.match(source, /continues_from_previous/)
@@ -127,7 +127,7 @@ test('剪辑台提供Scene生产看板和只读双层时间轴', () => {
 })
 
 test('剪辑台提供跨集复用的项目配乐库', () => {
-  assert.match(source, /PROJECT SCORE LIBRARY/)
+  assert.match(source, /项目配乐库/)
   assert.match(source, /全剧可复用配乐库/)
   assert.match(source, /draftMusicLibrary/)
   assert.match(source, /api\.musicLibrary/)
@@ -194,7 +194,7 @@ test('剪辑台场景时间轴保留独立可见横向滚动条', () => {
 })
 
 test('剪辑台展示连续性三图对比和正式Picture Subject顺序', () => {
-  assert.match(source, /CONTINUITY COMPARE/)
+  assert.match(source, /连续性对比/)
   assert.match(source, /上一Scene确认尾帧/)
   assert.match(source, /当前Scene分镜图/)
   assert.match(source, /当前视频真实首帧/)

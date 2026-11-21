@@ -2,7 +2,7 @@
   <div class="page fade-up">
     <section class="skills-hero">
       <div class="hero-copy">
-        <span class="hero-eyebrow">DRAMA SKILLS</span>
+        <span class="hero-eyebrow">漫剧 Skill</span>
         <h1>漫剧生成 Skill</h1>
         <p>平台集成的漫剧创作全链路 skill：每个环节的方法论、模型、输入输出、关键参数与触发方式。点击任意环节查看详细说明。</p>
       </div>

@@ -2,7 +2,7 @@
   <div class="page fade-up rolling-page">
     <div class="head-links"><router-link :to="`/projects/${id}/story-bible`" class="back">← 故事圣经</router-link></div>
     <header class="page-head">
-      <div><span class="overline">ROLLING ADAPTATION</span><h1>长篇滚动改编规划</h1><p class="sub">全剧可以是上千集；每次只展开5–20集，审核后再滚动下一批。</p></div>
+      <div><span class="overline">滚动改编</span><h1>长篇滚动改编规划</h1><p class="sub">全剧可以是上千集；每次只展开5–20集，审核后再滚动下一批。</p></div>
       <router-link :to="`/projects/${id}`" class="btn btn-ghost">返回项目</router-link>
     </header>
     <div v-if="error" class="generation-error-toast" role="alert" aria-live="assertive"><div><strong>操作失败</strong><span>{{ error }}</span></div><button type="button" class="btn btn-xs btn-ghost" @click="copyError">复制错误</button><button type="button" class="toast-close" aria-label="关闭错误提示" @click="error=''">×</button></div>

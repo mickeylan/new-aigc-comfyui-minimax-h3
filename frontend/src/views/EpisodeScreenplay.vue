@@ -3,7 +3,7 @@
     <header class="screenplay-head">
       <div>
         <router-link :to="`/projects/${projectId}`" class="back">← 返回项目</router-link>
-        <span class="overline">STRUCTURED SCREENPLAY</span>
+        <span class="overline">结构化剧本</span>
         <h1>第{{ episodeN }}集 · 结构化剧本</h1>
         <p class="sub">Scene 是剧情与生成权威；保存后同步对白、导演拆镜及后续图片/视频流水线。</p>
       </div>

@@ -39,7 +39,7 @@
     </section>
 
     <div class="content-heading">
-      <div><span class="overline">YOUR STORIES</span><h2>全部项目</h2></div>
+      <div><span class="overline">我的故事</span><h2>全部项目</h2></div>
       <button class="compact-create" @click="openCreate"><span>＋</span> 新建项目</button>
     </div>
 
