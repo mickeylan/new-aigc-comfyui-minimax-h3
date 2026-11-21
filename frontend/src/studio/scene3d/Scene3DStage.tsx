@@ -1,3 +1,4 @@
+// 移植自 ArtCraft（MIT / Apache-2.0 双许可）；来源与依赖声明见 ../THIRD_PARTY_NOTICES.md。
 import {
   useCallback,
   useEffect,

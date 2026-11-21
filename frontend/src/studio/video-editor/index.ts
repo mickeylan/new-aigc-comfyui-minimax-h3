@@ -1,4 +1,5 @@
 // Public API for @storyteller/ui-video-editor.
+// 移植自 opencut-classic（MIT）；来源与依赖声明见 ../THIRD_PARTY_NOTICES.md。
 
 // --- Top-level component ---
 // The bundled editor shell: provider + header + assets / preview /
