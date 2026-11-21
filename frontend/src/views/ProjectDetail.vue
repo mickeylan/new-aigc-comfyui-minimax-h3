@@ -33,6 +33,7 @@
         <router-link :to="`/projects/${id()}/episodes/${activeEpN}/voice`" class="btn btn-secondary btn-sm">🎙️ 第{{ activeEpN }}集声音工作台</router-link>
         <button class="btn btn-secondary btn-sm" @click="showGeneratedHistory = true">🖼 生成图片历史</button>
         <router-link :to="`/projects/${id()}/editor`" class="btn btn-secondary btn-sm">🎬 剪辑台</router-link>
+        <router-link :to="`/studio/video/${id()}`" class="btn btn-secondary btn-sm">🎞 视频剪辑</router-link>
         <a class="btn btn-ghost btn-sm" :href="api.srtUrl(id(), activeEpN)" target="_blank">📜 第{{ activeEpN }}集字幕</a>
         <button class="btn btn-danger btn-sm" @click="removeProject">🗑 删除</button>
       </div>

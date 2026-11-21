@@ -24,6 +24,9 @@
         <button v-if="task.status === 'success'" class="btn btn-secondary" @click="download">
           下载视频
         </button>
+        <button v-if="task.status === 'success' && resultFiles.length" class="btn btn-secondary" @click="openInEditor">
+          🎞 进入视频剪辑
+        </button>
       </div>
     </div>
 
@@ -95,11 +98,13 @@
 
 <script setup>
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api, wsUrl } from '../api'
 import { connectTaskUpdates, taskRecoveryText } from '../utils/taskRecovery.js'
+import { stashStudioMedia } from '../studio/initial-media.js'
 
 const route = useRoute()
+const router = useRouter()
 const task = ref(null)
 const diagnostics = ref(null)
 const params = computed(() => {
@@ -254,6 +259,22 @@ function download() {
   a.href = url
   a.download = resultFiles.value[0].filename
   a.click()
+}
+
+function editorKind(r) {
+  if (/\.(mp4|webm|mov|mkv)$/i.test(r.filename)) return 'video'
+  if (r.type === 'images' || r.type === 'gifs' || /\.(png|jpe?g|webp|gif|avif)$/i.test(r.filename)) return 'image'
+  return 'audio'
+}
+
+function openInEditor() {
+  const media = resultFiles.value.map((r) => ({
+    url: fileUrl(r),
+    name: r.filename,
+    kind: editorKind(r),
+  }))
+  if (!stashStudioMedia(media)) return
+  router.push(`/studio/video/${task.value.task_id}`)
 }
 
 async function cancel() {

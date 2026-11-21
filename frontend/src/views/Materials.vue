@@ -10,6 +10,7 @@
             <span class="plus">＋</span> 上传素材
           </button>
           <input ref="fileInput" type="file" hidden accept="image/*,video/*,audio/*" @change="onPick" />
+          <router-link to="/studio/video" class="btn btn-lg btn-secondary">🎞 进入视频剪辑</router-link>
         </div>
       </div>
       <div class="hero-orb" aria-hidden="true"><span>图</span></div>

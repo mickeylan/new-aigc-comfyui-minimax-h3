@@ -61,6 +61,7 @@
             <button v-else-if="['failed','cancelled'].includes(t.status)" class="btn btn-sm btn-secondary"
               @click.stop="rerun(t)">重试</button>
             <button v-else class="btn btn-sm btn-ghost" @click.stop="go(t.task_id)">查看</button>
+            <button v-if="t.status === 'success' && editorMedia(t).length" class="btn btn-sm btn-secondary" @click.stop="openEditor(t)">剪辑</button>
           </div>
         </div>
       </div>
@@ -83,6 +84,8 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, wsUrl } from '../api'
 import { connectTaskUpdates, taskRecoveryText } from '../utils/taskRecovery.js'
+import { parseRunResults, runResultKind, runResultUrl } from '../utils/playgroundResults.js'
+import { stashStudioMedia } from '../studio/initial-media.js'
 
 const router = useRouter()
 const items = ref([])
@@ -120,6 +123,22 @@ async function load() {
 }
 
 function go(id) { router.push(`/tasks/${id}`) }
+
+function editorMedia(t) {
+  return parseRunResults(t.result_files)
+    .filter((file) => ['video', 'image', 'audio'].includes(runResultKind(file)))
+    .map((file) => ({
+      url: runResultUrl(t, file),
+      name: file.filename,
+      kind: runResultKind(file),
+    }))
+}
+
+function openEditor(t) {
+  const media = editorMedia(t)
+  if (!stashStudioMedia(media)) return
+  router.push(`/studio/video/${t.task_id}`)
+}
 function shortId(id) { return id.length > 22 ? id.slice(0, 22) + '…' : id }
 function fmtTime(t) { return t ? t.replace('T', ' ').slice(0, 19) : '' }
 function badgeClass(s) {
