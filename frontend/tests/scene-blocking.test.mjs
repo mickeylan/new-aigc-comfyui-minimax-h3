@@ -44,3 +44,11 @@ test('站位提示词必须先预览编辑再显式确认且显示两类应用�
   assert.match(api, /applySceneBlockingPrompt/)
   assert.match(detail, /完整视频执行稿已确认保存，未启动生成任务/)
 })
+
+test('正文改动后站位被忽略时必须显式提示，不能静默失效', () => {
+  assert.match(detail, /sc\.blocking_json && sc\.blocking_stale/)
+  assert.match(detail, /站位已失效/)
+  assert.match(detail, /v-if="blockingScene\.blocking_stale"/)
+  assert.match(detail, /不会再注入分镜图或视频提示词/)
+  assert.match(detail, /重新做「AI站位分析」或重新「显式保存」/)
+})

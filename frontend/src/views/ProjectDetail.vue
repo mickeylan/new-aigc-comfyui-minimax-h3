@@ -526,7 +526,7 @@
           </div>
 
           <p class="scene-content">{{ sc.content }}</p>
-          <div class="scene-blocking-summary"><button class="btn btn-xs btn-secondary" @click="openDialogueAnalysis(sc)">对白分析</button><button class="btn btn-xs btn-secondary scene-blocking-entry" @click="openBlocking(sc)">人物站位</button><span>{{ blockingSummary(sc) }}</span><span v-if="sc.blocking_json" class="badge" :class="sc.blocking_image_applied?'badge-green':'badge-gray'">分镜图{{sc.blocking_image_applied?'已应用':'未应用'}}</span><span v-if="sc.blocking_json" class="badge" :class="sc.blocking_video_applied?'badge-green':'badge-gray'">视频{{sc.blocking_video_applied?'已应用':'未应用'}}</span></div>
+          <div class="scene-blocking-summary"><button class="btn btn-xs btn-secondary" @click="openDialogueAnalysis(sc)">对白分析</button><button class="btn btn-xs btn-secondary scene-blocking-entry" @click="openBlocking(sc)">人物站位</button><span>{{ blockingSummary(sc) }}</span><span v-if="sc.blocking_json" class="badge" :class="sc.blocking_image_applied?'badge-green':'badge-gray'">分镜图{{sc.blocking_image_applied?'已应用':'未应用'}}</span><span v-if="sc.blocking_json" class="badge" :class="sc.blocking_video_applied?'badge-green':'badge-gray'">视频{{sc.blocking_video_applied?'已应用':'未应用'}}</span><span v-if="sc.blocking_json && sc.blocking_stale" class="badge badge-red" title="本场正文已改动，已保存的人物站位不会再注入分镜图或视频提示词；请重新做站位分析或重新保存">站位已失效</span></div>
           <div class="scene-flow-status" aria-label="Scene生产进度"><span v-for="item in sceneWorkflowStages(sc)" :key="item.key" class="badge" :class="item.done?'badge-green':item.current?'badge-orange':'badge-gray'">{{item.label}}</span></div>
           <p v-if="sc.image_prompt" class="scene-prompt">🎨 {{ sc.image_prompt }}</p>
           <div v-if="sceneDialogues(sc).length" class="scene-dialogues">
@@ -852,6 +852,7 @@
     <div v-if="blockingScene" class="modal-mask" @click.self="requestCloseBlocking">
       <div class="modal card blocking-modal"><h2>场景 {{blockingScene.order}} · 人物站位 · 空间与动作关系</h2><p class="field-hint">原文事实与 AI 建议分开保存；仅作为后续分镜图/视频提示词上下文，不自动生成、不阻断生成。朝向请同时写“面向谁”和“相对镜头正面/侧面/背面”。例如抱拳行礼应面向受礼者，不是两人一起向镜头行礼。</p>
         <div class="modal-actions"><button class="btn btn-secondary" :disabled="blockingBusy" @click="analyzeBlocking">{{blockingBusy?'分析中…':'AI站位分析'}}</button><button class="btn btn-ghost" :disabled="blockingBusy" @click="inheritBlocking">继承上一镜</button></div>
+        <p v-if="blockingScene.blocking_stale" class="error-text" role="alert">本场正文已改动，已保存的人物站位不会再注入分镜图或视频提示词；请重新做「AI站位分析」或重新「显式保存」。</p>
         <button v-if="!showScenePrevis" type="button" class="btn btn-secondary" @click="showScenePrevis=true">打开轻量 3D 站位 / 机位预演</button>
         <ScenePrevisualization v-if="showScenePrevis" :key="blockingScene.id" :project-id="id()" :scene-id="blockingScene.id" :names="blockingDraft.characters.map(c=>c.name).filter(Boolean)" @adopt="adoptScenePrevis" @preview-prompt="preparePrevisPrompt" @frame-prompt-adopted="applyShotFramePromptResult" @invalidate-prompt="previsPromptRequest=null" @close="showScenePrevis=false" />
         <SceneBlockingPromptDraft v-if="previsPromptRequest" :key="previsPromptRequest.key" :project-id="id()" :scene-id="blockingScene.id" :request="previsPromptRequest" @close="previsPromptRequest=null" @adopted="applyPrevisPromptResult" />

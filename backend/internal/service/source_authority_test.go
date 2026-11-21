@@ -56,3 +56,36 @@ func TestSceneBlockingContextRequiresCurrentStoryAuthority(t *testing.T) {
 		t.Fatal("hashless blocking survived known story edit")
 	}
 }
+
+// The UI must be able to say why a saved blocking stopped being injected; hiding the
+// mismatch made an AI analysis look like it was never used.
+func TestSceneBlockingStaleFlagMirrorsPromptContext(t *testing.T) {
+	current := models.Scene{Content: "甲站在门边。", BlockingJSON: `{"summary":"甲面向乙"}`, BlockingContentHash: models.DialogueContentHash("甲站在门边。")}
+	if err := current.AfterFind(nil); err != nil {
+		t.Fatal(err)
+	}
+	if current.BlockingStale {
+		t.Fatal("matching content hash reported as stale")
+	}
+	if sceneBlockingPromptContext(&current) == "" {
+		t.Fatal("matching blocking should still be injected")
+	}
+	current.Content = "甲已经离开。"
+	_ = current.AfterFind(nil)
+	if !current.BlockingStale {
+		t.Fatal("edited content must mark the saved blocking stale")
+	}
+	if sceneBlockingPromptContext(&current) != "" {
+		t.Fatal("stale flag disagrees with prompt context")
+	}
+	legacy := models.Scene{Content: "甲站在门边。", BlockingJSON: `{"summary":"甲面向乙"}`, StoryContentEdited: true}
+	_ = legacy.AfterFind(nil)
+	if !legacy.BlockingStale {
+		t.Fatal("hashless blocking after a story edit must be stale")
+	}
+	empty := models.Scene{Content: "甲站在门边。"}
+	_ = empty.AfterFind(nil)
+	if empty.BlockingStale {
+		t.Fatal("scene without blocking reported stale")
+	}
+}

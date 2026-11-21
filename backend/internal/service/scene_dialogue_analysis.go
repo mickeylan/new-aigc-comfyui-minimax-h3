@@ -1,8 +1,6 @@
 package service
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,8 +32,7 @@ type SceneDialogueAnalysis struct {
 }
 
 func sceneDialogueContentHash(content string) string {
-	sum := sha256.Sum256([]byte(content))
-	return hex.EncodeToString(sum[:])
+	return models.DialogueContentHash(content)
 }
 
 func currentSavedDialogueAnalysis(sc *models.Scene) (SceneDialogueAnalysis, bool) {

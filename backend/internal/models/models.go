@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -258,6 +259,8 @@ type Scene struct {
 	BlockingVideoAppliedHash string     `gorm:"column:blocking_video_applied_hash;size:129" json:"blocking_video_applied_hash"`
 	BlockingImageApplied     bool       `gorm:"-" json:"blocking_image_applied"`
 	BlockingVideoApplied     bool       `gorm:"-" json:"blocking_video_applied"`
+	// 站位保存后正文又被改过时，站位不会再注入提示词；界面据此直接提示，不必用户自己发现。
+	BlockingStale bool `gorm:"-" json:"blocking_stale"`
 	// TopviewDispatchJSON is the user-confirmed end-of-Scene dispatch (experimental top-view, P2-4);
 	// the next Scene reads it as its starting positions.
 	TopviewDispatchJSON string `gorm:"column:topview_dispatch_json;type:text" json:"topview_dispatch_json"`
@@ -283,7 +286,26 @@ func (s *Scene) AfterFind(_ *gorm.DB) error {
 	}
 	s.BlockingImageApplied = s.BlockingJSON != "" && s.BlockingImageAppliedHash == sceneBlockingAppliedHash(s.BlockingJSON, s.ImagePrompt)
 	s.BlockingVideoApplied = s.BlockingJSON != "" && s.BlockingVideoAppliedHash == sceneBlockingAppliedHash(s.BlockingJSON, s.VideoFullPrompt)
+	s.BlockingStale = sceneBlockingStale(s)
 	return nil
+}
+
+// DialogueContentHash 是 Scene 正文的内容指纹：站位、对白分析、结尾状态都靠它判断记录是否过期。
+func DialogueContentHash(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
+}
+
+// sceneBlockingStale 与 service 里 sceneBlockingPromptContext 的丢弃条件保持一致：有指纹比指纹，
+// 历史记录没有指纹时，正文一旦被改过即视为过期。
+func sceneBlockingStale(s *Scene) bool {
+	if strings.TrimSpace(s.BlockingJSON) == "" {
+		return false
+	}
+	if s.BlockingContentHash != "" {
+		return s.BlockingContentHash != DialogueContentHash(s.Content)
+	}
+	return s.StoryContentEdited
 }
 
 // Chapter 小说章节（仅 source_type=novel 的项目使用）
