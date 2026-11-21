@@ -98,3 +98,49 @@ test('属性面板页签与参数名是中文', () => {
   }
   assert.match(params, /label: "不透明度"/)
 })
+
+const timelineFiles = [
+  'video-editor/lib/timeline/components/timeline-toolbar.tsx',
+  'video-editor/lib/timeline/components/index.tsx',
+  'video-editor/lib/timeline/components/timeline-playhead.tsx',
+  'video-editor/lib/timeline/components/timeline-ruler.tsx',
+  'video-editor/lib/timeline/components/timeline-element.tsx',
+  'video-editor/lib/timeline/components/audio-volume-line.tsx',
+  'video-editor/lib/timeline/bookmarks/components/bookmarks.tsx',
+  'video-editor/lib/preview/components/context-menu.tsx',
+  'video-editor/lib/preview/components/toolbar.tsx',
+  'video-editor/lib/panels/assets/views/assets.tsx',
+  'video-editor/lib/media/upload-toast.ts',
+  'video-editor/lib/media/processing.ts',
+]
+
+const timelineBanned = [
+  'Split element',
+  'Delete element',
+  'Duplicate element',
+  'Auto snapping',
+  'Ripple editing',
+  'Add bookmark',
+  'Timeline playhead',
+  'Drag playhead',
+  'Timeline ruler',
+  'Switch to grid view',
+  'Switch to list view',
+  'Failed to copy snapshot',
+  'Failed to save snapshot',
+  'No media assets were uploaded',
+  'Could not load media',
+  'Mute track',
+  'Hide track',
+]
+
+test('时间线、预览与素材列表不再出现英文界面短语', () => {
+  const offenders = []
+  for (const file of timelineFiles) {
+    const src = readFileSync(resolve(studioDir, file), 'utf8')
+    for (const phrase of timelineBanned) {
+      if (src.includes(phrase)) offenders.push(`${file}: ${phrase}`)
+    }
+  }
+  assert.deepEqual(offenders, [], `仍是英文：\n${offenders.join('\n')}`)
+})

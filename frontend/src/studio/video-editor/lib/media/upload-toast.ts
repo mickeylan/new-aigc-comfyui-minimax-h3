@@ -13,7 +13,7 @@ export interface MediaUploadToastResult {
 }
 
 function getAssetLabel({ count }: { count: number }): string {
-  return count === 1 ? "media asset" : "media assets";
+  return count === 1 ? "1 个素材" : `${count} 个素材`;
 }
 
 function waitForNextPaint(): Promise<void> {
@@ -34,7 +34,7 @@ export async function showMediaUploadToast<T extends MediaUploadToastResult>({
   promise: Promise<T> | (() => Promise<T>);
 }): Promise<T> {
   const run = typeof promise === "function" ? promise : () => promise;
-  toast.info(`Uploading ${getAssetLabel({ count: filesCount })}...`);
+  toast.info(`正在上传 ${getAssetLabel({ count: filesCount })}…`);
   await waitForNextPaint();
 
   try {
@@ -44,17 +44,17 @@ export async function showMediaUploadToast<T extends MediaUploadToastResult>({
       const assetName = assetNames?.[0];
       toast.success(
         assetName
-          ? `${assetName} has been uploaded`
-          : "1 media asset has been uploaded",
+          ? `${assetName} 已上传`
+          : "已上传 1 个素材",
       );
     } else if (uploadedCount > 1) {
-      toast.success(`${uploadedCount} media assets have been uploaded`);
+      toast.success(`已上传 ${uploadedCount} 个素材`);
     } else {
-      toast.warning("No media assets were uploaded");
+      toast.warning("没有上传任何素材");
     }
     return result;
   } catch (error) {
-    toast.error(`Failed to upload ${getAssetLabel({ count: filesCount })}`, {
+    toast.error(`上传${getAssetLabel({ count: filesCount })}失败`, {
       description: error instanceof Error ? error.message : undefined,
     });
     throw error;

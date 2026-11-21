@@ -33,8 +33,8 @@ export function PreviewContextMenu({
     const result = await editor.renderer.copySnapshot();
 
     if (!result.success) {
-      toast.error("Failed to copy snapshot", {
-        description: result.error ?? "Please try again",
+      toast.error("快照复制失败", {
+        description: result.error ?? "请重试",
       });
       return;
     }
@@ -44,8 +44,8 @@ export function PreviewContextMenu({
     const result = await editor.renderer.saveSnapshot();
 
     if (!result.success) {
-      toast.error("Failed to save snapshot", {
-        description: result.error ?? "Please try again",
+      toast.error("快照保存失败", {
+        description: result.error ?? "请重试",
       });
       return;
     }

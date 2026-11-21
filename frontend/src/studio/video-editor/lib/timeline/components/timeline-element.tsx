@@ -344,7 +344,7 @@ export function TimelineElement({
   const sourceAudioLabel =
     element.type === "video"
       ? getSourceAudioActionLabel({ element })
-      : "Extract audio";
+      : "提取音频";
   const hasKeyframes = elementKeyframes.length > 0;
   const expansionHeight = getExpansionHeight({ rows: expandedRows });
   const baseTrackHeight = getTrackHeight({ type: track.type });
@@ -472,7 +472,7 @@ export function TimelineElement({
                 toggleElementExpanded(element.id);
               }}
             >
-              {isExpanded ? "Collapse keyframes" : "Expand keyframes"}
+              {isExpanded ? "收起关键帧" : "展开关键帧"}
             </ContextMenuItem>
           )}
           {selectedElements.length === 1 && hasMediaId(element) && (
@@ -717,7 +717,7 @@ function KeyframeIndicators({
             indicatorTime: indicator.time,
           })
         }
-        aria-label="Select keyframe"
+        aria-label="选择关键帧"
       >
         <HugeiconsIcon
           icon={KeyframeIcon}
@@ -870,7 +870,7 @@ function ExpandedKeyframeLanes({
                       indicatorTime: kf.time,
                     });
                   }}
-                  aria-label="Select keyframe"
+                  aria-label="选择关键帧"
                 >
                   <HugeiconsIcon
                     icon={KeyframeIcon}

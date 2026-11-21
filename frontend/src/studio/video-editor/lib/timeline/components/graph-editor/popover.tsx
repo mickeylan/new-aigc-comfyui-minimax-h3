@@ -321,7 +321,7 @@ function CurveThumb({ value }: { value: NormalizedCubicBezier }) {
       height={THUMB_HEIGHT}
       viewBox={`0 0 ${THUMB_WIDTH} ${THUMB_HEIGHT}`}
     >
-      <title>Curve preset preview</title>
+      <title>曲线预设预览</title>
       <path
         d={`M${points.join("L")}`}
         fill="none"

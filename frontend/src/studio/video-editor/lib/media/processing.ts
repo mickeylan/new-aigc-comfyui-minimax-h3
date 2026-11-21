@@ -26,7 +26,7 @@ const getUnsupportedVideoDescription = ({
 }: {
   codec: VideoFileData["codec"];
 }): string => {
-  const codecLabel = codec ? codec.toUpperCase() : "this video codec";
+  const codecLabel = codec ? codec.toUpperCase() : "该视频编码";
 
   return codec === "hevc"
     ? `${codecLabel} cannot be decoded in this browser, so this clip may not preview correctly. Convert it to H.264 MP4 or try importing it in Safari.`
@@ -58,7 +58,7 @@ async function generateImageThumbnail({
         });
       } catch (error) {
         reject(
-          error instanceof Error ? error : new Error("Could not render image"),
+          error instanceof Error ? error : new Error("无法渲染图片"),
         );
       } finally {
         URL.revokeObjectURL(objectUrl);
@@ -69,7 +69,7 @@ async function generateImageThumbnail({
     image.addEventListener("error", () => {
       URL.revokeObjectURL(objectUrl);
       image.remove();
-      reject(new Error("Could not load image"));
+      reject(new Error("无法读取图片"));
     });
 
     image.src = objectUrl;
@@ -157,7 +157,7 @@ export async function processMediaAssets({
           const message =
             error instanceof Error
               ? error.message
-              : "Could not process video";
+              : "无法处理视频";
 
           toast.error(`Couldn't process ${file.name}`, {
             description: message,
@@ -239,7 +239,7 @@ const getMediaDuration = ({ file }: { file: File }): Promise<number> => {
     });
 
     element.addEventListener("error", () => {
-      reject(new Error("Could not load media"));
+      reject(new Error("无法读取媒体"));
       URL.revokeObjectURL(objectUrl);
       element.remove();
     });
