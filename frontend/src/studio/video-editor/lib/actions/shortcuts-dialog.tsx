@@ -17,6 +17,18 @@ import {
   DialogTitle,
 } from "../components/ui/dialog";
 
+// 快捷键分类的中文名；未收录的分类直接显原文。
+const CATEGORY_LABELS: Record<string, string> = {
+  playback: "播放",
+  navigation: "导航",
+  editing: "编辑",
+  selection: "选择",
+  history: "历史",
+  timeline: "时间线",
+  controls: "控件",
+  assets: "素材",
+};
+
 export function ShortcutsDialog({
   isOpen,
   onOpenChange,
@@ -58,7 +70,7 @@ export function ShortcutsDialog({
         });
         if (conflict) {
           toast.error(
-            `Key "${keyString}" is already bound to "${conflict.existingAction}"`,
+            `按键「${keyString}」已绑定给「${conflict.existingAction}」`,
           );
           setRecordingShortcut(null);
           return;
@@ -112,7 +124,7 @@ export function ShortcutsDialog({
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[80vh] max-w-2xl flex-col p-0">
         <DialogHeader>
-          <DialogTitle>Keyboard shortcuts</DialogTitle>
+          <DialogTitle>快捷键</DialogTitle>
         </DialogHeader>
 
         <DialogBody className="scrollbar-thin grow overflow-y-auto">
@@ -120,7 +132,7 @@ export function ShortcutsDialog({
             {categories.map((category) => (
               <div key={category} className="flex flex-col gap-1">
                 <h3 className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
-                  {category}
+                  {CATEGORY_LABELS[category] ?? category}
                 </h3>
                 <div className="flex flex-col gap-1">
                   {shortcuts
@@ -142,7 +154,7 @@ export function ShortcutsDialog({
         </DialogBody>
         <DialogFooter>
           <Button variant="destructive" onClick={resetToDefaults}>
-            Reset to default
+            恢复默认
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -195,7 +207,7 @@ function ShortcutItem({
               })}
             </div>
             {index < displayKeys.length - 1 && (
-              <span className="text-muted-foreground text-xs">or</span>
+              <span className="text-muted-foreground text-xs">或</span>
             )}
           </div>
         ))}
@@ -225,7 +237,7 @@ function EditableShortcutKey({
       size="sm"
       onClick={handleClick}
       title={
-        isRecording ? "Press any key combination..." : "Click to edit shortcut"
+        isRecording ? "按下要绑定的按键组合…" : "点击修改快捷键"
       }
     >
       {children}

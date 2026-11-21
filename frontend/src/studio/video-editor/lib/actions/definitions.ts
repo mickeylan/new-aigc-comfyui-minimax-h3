@@ -23,128 +23,128 @@ export interface TActionDefinition extends TActionBaseDefinition {
 
 export const ACTIONS = {
   "toggle-play": {
-    description: "Play/Pause",
+    description: "播放 / 暂停",
     category: "playback",
   },
   "stop-playback": {
-    description: "Stop playback",
+    description: "停止播放",
     category: "playback",
   },
   "seek-forward": {
-    description: "Seek forward 1 second",
+    description: "前进 1 秒",
     category: "playback",
     args: { seconds: "number" },
   },
   "seek-backward": {
-    description: "Seek backward 1 second",
+    description: "后退 1 秒",
     category: "playback",
     args: { seconds: "number" },
   },
   "frame-step-forward": {
-    description: "Frame step forward",
+    description: "向前一帧",
     category: "navigation",
   },
   "frame-step-backward": {
-    description: "Frame step backward",
+    description: "向后一帧",
     category: "navigation",
   },
   "jump-forward": {
-    description: "Jump forward 5 seconds",
+    description: "快进 5 秒",
     category: "navigation",
     args: { seconds: "number" },
   },
   "jump-backward": {
-    description: "Jump backward 5 seconds",
+    description: "后退 5 秒",
     category: "navigation",
     args: { seconds: "number" },
   },
   "goto-start": {
-    description: "Go to timeline start",
+    description: "跳到时间线开头",
     category: "navigation",
   },
   "goto-end": {
-    description: "Go to timeline end",
+    description: "跳到时间线末尾",
     category: "navigation",
   },
   split: {
-    description: "Split elements at playhead",
+    description: "在播放头处分割",
     category: "editing",
   },
   "split-left": {
-    description: "Split and remove left",
+    description: "分割并删除左侧",
     category: "editing",
   },
   "split-right": {
-    description: "Split and remove right",
+    description: "分割并删除右侧",
     category: "editing",
   },
   "delete-selected": {
-    description: "Delete current selection",
+    description: "删除当前选中",
     category: "editing",
   },
   "copy-selected": {
-    description: "Copy selected elements",
+    description: "复制选中片段",
     category: "editing",
   },
   "paste-copied": {
-    description: "Paste elements at playhead",
+    description: "在播放头处粘贴",
     category: "editing",
   },
   "toggle-snapping": {
-    description: "Toggle snapping",
+    description: "开关吸附",
     category: "editing",
   },
   "toggle-ripple-editing": {
-    description: "Toggle ripple editing",
+    description: "开关波纹编辑",
     category: "editing",
   },
   "toggle-source-audio": {
-    description: "Extract or recover source audio",
+    description: "提取或恢复原始音频",
     category: "editing",
   },
   "select-all": {
-    description: "Select all elements",
+    description: "全选片段",
     category: "selection",
   },
   "cancel-interaction": {
-    description: "Cancel current interaction",
+    description: "取消当前操作",
     category: "controls",
   },
   "deselect-all": {
-    description: "Deselect all elements",
+    description: "取消全选",
     category: "selection",
   },
   "duplicate-selected": {
-    description: "Duplicate selected element",
+    description: "复制一份选中片段",
     category: "selection",
   },
   "toggle-elements-muted-selected": {
-    description: "Mute/unmute selected elements",
+    description: "静音 / 取消静音",
     category: "selection",
   },
   "toggle-elements-visibility-selected": {
-    description: "Show/hide selected elements",
+    description: "显示 / 隐藏选中片段",
     category: "selection",
   },
   "toggle-bookmark": {
-    description: "Toggle bookmark at playhead",
+    description: "在播放头处开关书签",
     category: "timeline",
   },
   undo: {
-    description: "Undo",
+    description: "撤销",
     category: "history",
   },
   redo: {
-    description: "Redo",
+    description: "重做",
     category: "history",
   },
   "remove-media-asset": {
-    description: "Remove media asset",
+    description: "移除素材",
     category: "assets",
     args: { projectId: "string", assetId: "string" },
   },
   "remove-media-assets": {
-    description: "Remove media assets",
+    description: "移除多个素材",
     category: "assets",
     args: { projectId: "string", assetIds: "string[]" },
   },

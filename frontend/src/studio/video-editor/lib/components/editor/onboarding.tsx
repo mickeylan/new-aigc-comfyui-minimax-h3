@@ -84,13 +84,13 @@ export function Onboarding() {
   const getStepTitle = () => {
     switch (step) {
       case 0:
-        return "Welcome to the editor";
+        return "欢迎使用剪辑器";
       case 1:
-        return "Early preview — expect rough edges";
+        return "早期预览版 · 界面可能还有粗糙之处";
       case 2:
-        return "Have fun creating!";
+        return "开始创作吧！";
       default:
-        return "Editor Onboarding";
+        return "剪辑器新手指引";
     }
   };
 
@@ -100,10 +100,10 @@ export function Onboarding() {
         return (
           <div className="space-y-5">
             <div className="space-y-3">
-              <Title title="Welcome to the editor" />
-              <Description description="Drop media onto the timeline, scrub the playhead to preview, and use the panels on the right to tune properties, animations, and effects." />
+              <Title title="欢迎使用剪辑器" />
+              <Description description="把素材拖到时间线上，拖动播放头即可预览；右侧面板可以调属性、动画和特效。" />
             </div>
-            <NextButton onClick={handleNext}>Next</NextButton>
+            <NextButton onClick={handleNext}>下一步</NextButton>
           </div>
         );
       case 1:
@@ -111,10 +111,10 @@ export function Onboarding() {
           <div className="space-y-5">
             <div className="space-y-3">
               <Title title={getStepTitle()} />
-              <Description description="This editor is in active development." />
-              <Description description="A lot of features are still being built out — if something looks off, it probably is. Save often." />
+              <Description description="这个剪辑器仍在开发中。" />
+              <Description description="很多功能还在完善，看起来怪的地方可能真的是缺陷。记得随时保存。" />
             </div>
-            <NextButton onClick={handleNext}>Next</NextButton>
+            <NextButton onClick={handleNext}>下一步</NextButton>
           </div>
         );
       case 2:
@@ -122,9 +122,9 @@ export function Onboarding() {
           <div className="space-y-5">
             <div className="space-y-3">
               <Title title={getStepTitle()} />
-              <Description description="Keyboard shortcuts are available under the project menu — press the Shortcuts entry to view or rebind them." />
+              <Description description="快捷键在项目菜单里：点「快捷键」可以查看或重新绑定。" />
             </div>
-            <NextButton onClick={handleClose}>Finish</NextButton>
+            <NextButton onClick={handleClose}>完成</NextButton>
           </div>
         );
       default:

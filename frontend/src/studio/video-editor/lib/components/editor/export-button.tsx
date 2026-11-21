@@ -134,7 +134,7 @@ export function ExportButton() {
           }}
         >
           <HugeiconsIcon icon={TransitionTopIcon} className="z-50 size-3.5" />
-          <span className="z-50 text-[0.875rem]">Export</span>
+          <span className="z-50 text-[0.875rem]">导出</span>
         </Button>
       </PopoverTrigger>
       {hasProject && <ExportPopover onOpenChange={setIsExportPopoverOpen} />}
@@ -230,8 +230,8 @@ function ExportPopover({
         setSaveState((prev) => finalizeSaveState(prev));
       } catch (error) {
         console.error("Export sink failed:", error);
-        toast.error("Couldn't save exported video", {
-          description: error instanceof Error ? error.message : "Unknown error",
+        toast.error("导出视频保存失败", {
+          description: error instanceof Error ? error.message : "未知错误",
         });
         setSaveState((prev) => finalizeSaveState(prev));
         return;
@@ -253,14 +253,14 @@ function ExportPopover({
     <PopoverContent className="bg-ui-controls mr-4 flex w-80 flex-col p-0">
       {exportResult && !exportResult.success ? (
         <ExportError
-          error={exportResult.error || "Unknown error occurred"}
+          error={exportResult.error || "发生未知错误"}
           onRetry={handleExport}
         />
       ) : (
         <>
           <div className="flex items-center justify-between p-3 border-b border-ui-controls-border">
             <h3 className="font-medium text-sm">
-              {isExporting ? "Exporting project" : "Export project"}
+              {isExporting ? "正在导出项目" : "导出项目"}
             </h3>
           </div>
 
@@ -274,7 +274,7 @@ function ExportPopover({
                     showTopBorder={false}
                   >
                     <SectionHeader>
-                      <SectionTitle>Format</SectionTitle>
+                      <SectionTitle>格式</SectionTitle>
                     </SectionHeader>
                     <SectionContent>
                       <RadioGroup
@@ -288,13 +288,13 @@ function ExportPopover({
                         <div className="flex items-center space-x-2">
                           <RadioGroupItem value="mp4" id="mp4" />
                           <Label htmlFor="mp4">
-                            MP4 (H.264) - Better compatibility
+                            MP4 (H.264) · 兼容性更好
                           </Label>
                         </div>
                         <div className="flex items-center space-x-2">
                           <RadioGroupItem value="webm" id="webm" />
                           <Label htmlFor="webm">
-                            WebM (VP9) - Smaller file size
+                            WebM (VP9) · 文件更小
                           </Label>
                         </div>
                       </RadioGroup>
@@ -303,7 +303,7 @@ function ExportPopover({
 
                   <Section collapsible defaultOpen={false}>
                     <SectionHeader>
-                      <SectionTitle>Quality</SectionTitle>
+                      <SectionTitle>画质</SectionTitle>
                     </SectionHeader>
                     <SectionContent>
                       <RadioGroup
@@ -316,20 +316,20 @@ function ExportPopover({
                       >
                         <div className="flex items-center space-x-2">
                           <RadioGroupItem value="low" id="low" />
-                          <Label htmlFor="low">Low - Smallest file size</Label>
+                          <Label htmlFor="low">低 · 文件最小</Label>
                         </div>
                         <div className="flex items-center space-x-2">
                           <RadioGroupItem value="medium" id="medium" />
-                          <Label htmlFor="medium">Medium - Balanced</Label>
+                          <Label htmlFor="medium">中 · 均衡</Label>
                         </div>
                         <div className="flex items-center space-x-2">
                           <RadioGroupItem value="high" id="high" />
-                          <Label htmlFor="high">High - Recommended</Label>
+                          <Label htmlFor="high">高 · 推荐</Label>
                         </div>
                         <div className="flex items-center space-x-2">
                           <RadioGroupItem value="very_high" id="very_high" />
                           <Label htmlFor="very_high">
-                            Very high - Largest file size
+                            Very high · 文件最大
                           </Label>
                         </div>
                       </RadioGroup>
@@ -338,7 +338,7 @@ function ExportPopover({
 
                   <Section collapsible defaultOpen={false}>
                     <SectionHeader>
-                      <SectionTitle>Audio</SectionTitle>
+                      <SectionTitle>音频</SectionTitle>
                     </SectionHeader>
                     <SectionContent>
                       <div className="flex items-center space-x-2">
@@ -350,7 +350,7 @@ function ExportPopover({
                           }
                         />
                         <Label htmlFor="include-audio">
-                          Include audio in export
+                          导出时包含音频
                         </Label>
                       </div>
                     </SectionContent>
@@ -358,7 +358,7 @@ function ExportPopover({
 
                   <Section collapsible defaultOpen={true}>
                     <SectionHeader>
-                      <SectionTitle>Destination</SectionTitle>
+                      <SectionTitle>保存位置</SectionTitle>
                     </SectionHeader>
                     <SectionContent>
                       <div className="flex flex-col gap-2">
@@ -371,7 +371,7 @@ function ExportPopover({
                             }
                           />
                           <Label htmlFor="save-to-disk">
-                            Save to disk
+                            存到本机
                           </Label>
                         </div>
                         {supportsLibrary && (
@@ -384,13 +384,13 @@ function ExportPopover({
                               }
                             />
                             <Label htmlFor="save-to-library">
-                              Save to my media library
+                              存入素材库
                             </Label>
                           </div>
                         )}
                         {!canExport && (
                           <p className="text-muted-foreground text-xs">
-                            Pick at least one destination.
+                            至少选择一个保存位置。
                           </p>
                         )}
                       </div>
@@ -405,7 +405,7 @@ function ExportPopover({
                     className="w-full gap-2"
                   >
                     <Download className="size-4" />
-                    Export
+                    导出
                   </Button>
                 </div>
               </>
@@ -428,7 +428,7 @@ function ExportPopover({
                   className="w-full rounded-md"
                   onClick={handleCancel}
                 >
-                  Cancel
+                  取消
                 </Button>
               </div>
             )}
@@ -466,9 +466,9 @@ function SavePhasePanel({
   );
   const headerLabel = settled
     ? allSucceeded
-      ? "Export saved"
-      : "Export finished with errors"
-    : "Saving export";
+      ? "导出已保存"
+      : "导出完成但有错误"
+    : "正在保存导出";
 
   return (
     <div className="space-y-4 p-3">
@@ -489,7 +489,7 @@ function SavePhasePanel({
           className="w-full rounded-md"
           onClick={onDismiss}
         >
-          Close
+          关闭
         </Button>
       )}
     </div>
@@ -506,7 +506,7 @@ function DestinationRow({
   error?: string;
 }) {
   const label =
-    destination === "disk" ? "Saving to disk" : "Saving to media library";
+    destination === "disk" ? "正在存到本机" : "正在存入素材库";
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center gap-2 text-xs">
@@ -514,12 +514,12 @@ function DestinationRow({
         <span className="text-foreground">
           {status === "success"
             ? destination === "disk"
-              ? "Saved to disk"
-              : "Saved to media library"
+              ? "已存到本机"
+              : "已存入素材库"
             : status === "error"
               ? destination === "disk"
-                ? "Disk save failed"
-                : "Library upload failed"
+                ? "本机保存失败"
+                : "素材库上传失败"
               : label}
         </span>
       </div>
@@ -571,7 +571,7 @@ function ExportError({
   return (
     <div className="space-y-4 p-3">
       <div className="flex flex-col gap-1.5">
-        <p className="text-destructive text-sm font-medium">Export failed</p>
+        <p className="text-destructive text-sm font-medium">导出失败</p>
         <p className="text-muted-foreground text-xs">{error}</p>
       </div>
 
@@ -583,7 +583,7 @@ function ExportError({
           onClick={handleCopy}
         >
           {copied ? <Check className="text-constructive" /> : <Copy />}
-          Copy
+          复制
         </Button>
         <Button
           variant="outline"
@@ -592,7 +592,7 @@ function ExportError({
           onClick={onRetry}
         >
           <RotateCcw />
-          Retry
+          重试
         </Button>
       </div>
     </div>
