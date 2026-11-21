@@ -180,6 +180,8 @@ func (s *PlaygroundService) sync(run *models.PlaygroundRun) error {
 	if len(result) == 0 || !json.Valid(result) {
 		result = json.RawMessage(`[]`)
 	}
+	// 输出地址要用到实例与 GPU 槽位，这两项不落库，读的时候一起带上。
+	run.GPUIndex, run.InstanceID = task.GPUIndex, task.InstanceID
 	if run.Status != task.Status || string(run.Result) != string(result) {
 		if err := s.db.Model(run).Updates(map[string]any{"status": task.Status, "result": []byte(result)}).Error; err != nil {
 			return err

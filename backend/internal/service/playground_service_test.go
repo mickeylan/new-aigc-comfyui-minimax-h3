@@ -67,7 +67,10 @@ func TestPlaygroundReadSyncsTaskStatusAndResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := `[{"type":"images","filename":"result.png","subfolder":"samples"}]`
-	if err := db.Model(&models.Task{}).Where("task_id = ?", runs[0].TaskID).Updates(map[string]any{"status": "success", "result_files": result}).Error; err != nil {
+	gpu, instance := 2, uint(7)
+	if err := db.Model(&models.Task{}).Where("task_id = ?", runs[0].TaskID).Updates(map[string]any{
+		"status": "success", "result_files": result, "gpu_index": gpu, "instance_id": instance,
+	}).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -77,6 +80,10 @@ func TestPlaygroundReadSyncsTaskStatusAndResult(t *testing.T) {
 	}
 	if run.Status != "success" || string(run.Result) != result {
 		t.Fatalf("task state was not synced: %#v", run)
+	}
+	// 前端要靠这两项把结果拼成 /api/instances/:id/output/… 才能在卡片里显示图片。
+	if run.GPUIndex == nil || *run.GPUIndex != gpu || run.InstanceID == nil || *run.InstanceID != instance {
+		t.Fatalf("gpu/instance not carried to the run: %#v", run)
 	}
 }
 

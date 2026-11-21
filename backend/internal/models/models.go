@@ -101,6 +101,10 @@ type PlaygroundRun struct {
 	Result    json.RawMessage `gorm:"type:text" json:"result"`
 	Starred   bool            `gorm:"index;default:false" json:"starred"`
 	CreatedAt time.Time       `gorm:"index" json:"created_at"`
+
+	// 结果文件要拼成可访问地址才能显示；GPU 槽位与实例随任务读取时同步返回，不落库。
+	GPUIndex   *int  `gorm:"-" json:"gpu_index"`
+	InstanceID *uint `gorm:"-" json:"instance_id"`
 }
 
 // Event 任务事件日志
