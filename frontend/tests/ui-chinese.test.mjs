@@ -182,3 +182,41 @@ test('遮罩名称、遮罩面板与 2D 画布工具栏是中文', () => {
   }
   assert.doesNotMatch(toolbar, /label: "(Brush|Eraser|Undo|Redo|Mask)"/)
 })
+
+test('剪辑器零散文案与浏览器原生提示也是中文', () => {
+  const checks = [
+    ['video-editor/lib/media/processing.ts', ['不支持的文件类型：', '无法预览 ', '无法处理 ', '处理 ', '失败']],
+    ['video-editor/lib/media/rehydrate.ts', ['无法恢复 ']],
+    ['video-editor/lib/media/upload-toast.ts', ['没有上传任何素材']],
+    ['video-editor/lib/core/managers/media-manager.ts', ['添加媒体失败']],
+    ['video-editor/lib/sounds/sounds-store.ts', ['保存音效失败', '移除音效失败', '音效文件不可用']],
+    ['video-editor/lib/components/ui/dialog.tsx', ['关闭']],
+    ['video-editor/lib/components/ui/sheet.tsx', ['关闭']],
+    ['video-editor/lib/components/ui/input.tsx', ['清空输入']],
+    ['video-editor/lib/components/ui/number-field.tsx', ['拖动调整数值', '恢复默认']],
+    ['video-editor/lib/components/ui/color-picker.tsx', ['选择模式', '自定义', '已收藏']],
+    ['pagedraw/shims.tsx', ['确定要继续吗？']],
+  ]
+  for (const [file, needles] of checks) {
+    const src = readFileSync(resolve(studioDir, file), 'utf8')
+    for (const needle of needles) {
+      assert.ok(src.includes(needle), `${file} 缺少中文文案：${needle}`)
+    }
+  }
+
+  // 这几个文件里不得再出现已翻译掉的英文原文。
+  const banned = {
+    'video-editor/lib/media/processing.ts': ['Unsupported file type', 'Failed to process'],
+    'video-editor/lib/sounds/sounds-store.ts': [': "Failed to save sound"', ': "Failed to remove sound"', '"Sound file not available"'],
+    'video-editor/lib/components/ui/dialog.tsx': ['sr-only">Close'],
+    'pagedraw/shims.tsx': ['Are you sure?'],
+  }
+  const offenders = []
+  for (const [file, phrases] of Object.entries(banned)) {
+    const src = readFileSync(resolve(studioDir, file), 'utf8')
+    for (const phrase of phrases) {
+      if (src.includes(phrase)) offenders.push(`${file}: ${phrase}`)
+    }
+  }
+  assert.deepEqual(offenders, [], `仍是英文：\n${offenders.join('\n')}`)
+})

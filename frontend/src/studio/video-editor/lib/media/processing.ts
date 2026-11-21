@@ -111,7 +111,7 @@ export async function processMediaAssets({
     const fileType = getMediaTypeFromFile({ file });
 
     if (!fileType) {
-      toast.error(`Unsupported file type: ${file.name}`);
+      toast.error(`不支持的文件类型：${file.name}`);
       continue;
     }
 
@@ -147,7 +147,7 @@ export async function processMediaAssets({
           thumbnailUrl = videoData.thumbnailUrl ?? undefined;
 
           if (!videoData.canDecode) {
-            toast.error(`Can't preview ${file.name}`, {
+            toast.error(`无法预览 ${file.name}`, {
               description: getUnsupportedVideoDescription({
                 codec: videoData.codec,
               }),
@@ -159,7 +159,7 @@ export async function processMediaAssets({
               ? error.message
               : "无法处理视频";
 
-          toast.error(`Couldn't process ${file.name}`, {
+          toast.error(`无法处理 ${file.name}`, {
             description: message,
           });
         }
@@ -200,7 +200,7 @@ export async function processMediaAssets({
       }
     } catch (error) {
       console.error("Error processing file:", file.name, error);
-      toast.error(`Failed to process ${file.name}`);
+      toast.error(`处理 ${file.name} 失败`);
       if (resolved && mediaSource.releaseResolved) {
         mediaSource.releaseResolved(resolved);
       }

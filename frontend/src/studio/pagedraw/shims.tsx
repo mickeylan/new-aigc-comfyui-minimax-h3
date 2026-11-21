@@ -44,7 +44,7 @@ export const showActionReminder = (options: {
   onPrimaryAction?: () => void;
 }) => {
   if (typeof window === "undefined") return;
-  if (window.confirm(options.title || "Are you sure?")) {
+  if (window.confirm(options.title || "确定要继续吗？")) {
     options.onPrimaryAction?.();
   }
 };

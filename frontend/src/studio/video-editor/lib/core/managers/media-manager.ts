@@ -55,7 +55,7 @@ export class MediaManager {
         ...this.assets.slice(insertIndex + 1),
       ];
       this.notify();
-      this.editor.adapters.toast.error("Failed to add media", {
+      this.editor.adapters.toast.error("添加媒体失败", {
         description: error instanceof Error ? error.message : undefined,
       });
       return null;

@@ -183,9 +183,9 @@ export const useSoundsStore = create<SoundsStore>((set, get) => ({
       });
     } catch (error) {
       const errorMessage =
-        error instanceof Error ? error.message : "Failed to save sound";
+        error instanceof Error ? error.message : "保存音效失败";
       set({ savedSoundsError: errorMessage });
-      EditorCore.getInstance().adapters.toast.error("Failed to save sound");
+      EditorCore.getInstance().adapters.toast.error("保存音效失败");
       console.error("Failed to save sound:", error);
     }
   },
@@ -200,9 +200,9 @@ export const useSoundsStore = create<SoundsStore>((set, get) => ({
       }));
     } catch (error) {
       const errorMessage =
-        error instanceof Error ? error.message : "Failed to remove sound";
+        error instanceof Error ? error.message : "移除音效失败";
       set({ savedSoundsError: errorMessage });
-      EditorCore.getInstance().adapters.toast.error("Failed to remove sound");
+      EditorCore.getInstance().adapters.toast.error("移除音效失败");
       console.error("Failed to remove sound:", error);
     }
   },
@@ -254,7 +254,7 @@ export const useSoundsStore = create<SoundsStore>((set, get) => ({
       }
     }
     if (!audioUrl) {
-      editor.adapters.toast.error("Sound file not available");
+      editor.adapters.toast.error("音效文件不可用");
       return false;
     }
 

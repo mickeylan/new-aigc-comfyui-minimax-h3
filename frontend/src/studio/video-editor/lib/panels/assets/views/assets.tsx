@@ -179,7 +179,7 @@ export function MediaView() {
                   selection.name,
                   error,
                 );
-                toast.error(`Couldn't import ${selection.name}`, {
+                toast.error(`无法导入 ${selection.name}`, {
                   description:
                     error instanceof Error ? error.message : undefined,
                 });
