@@ -1,0 +1,395 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Theme values copied from ArtCraft (app/src/styles/base.css) so the video
+ * editor keeps its dark, near-black look. ComfyStudio does not define these
+ * variables, so setting them globally cannot clash with its own theme.
+ */
+:root {
+  --background: 225 10% 8%;
+  --foreground: 0 0% 98%;
+  --card: 240 11% 7%;
+  --card-foreground: 0 0% 98%;
+  --popover: 240 11% 7%;
+  --popover-foreground: 0 0% 98%;
+  --muted: 240 4% 9%;
+  --muted-foreground: 0 0% 64%;
+  --accent: 240 4% 9%;
+  --accent-foreground: 0 0% 98%;
+  --destructive: 0 70% 50%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 0 0% 100% / 0.15;
+  --input: 0 0% 100% / 0.15;
+  --ring: 217 100% 73%;
+  --radius: 0.375rem;
+
+  --st-bg: #121316;
+  --st-panel: #101014;
+  --st-panel-border: rgba(255, 255, 255, 0.15);
+  --st-controls: #1e1f22;
+  --st-controls-rgb: 30 31 34;
+  --st-controls-border: rgba(255, 255, 255, 0.15);
+  --st-sunken: #060607;
+  --st-fg: #f2f1ee;
+  --st-fg-rgb: 242 241 238;
+  --st-divider: rgba(255, 255, 255, 0.15);
+}
+
+/*
+ * Scoped stand-in for Tailwind preflight. `.studio-theme` is added to <body>
+ * while the editor route is mounted, which covers Radix portals that render
+ * outside `.studio-root` (dialogs, dropdowns, tooltips).
+ */
+@layer base {
+  .studio-root,
+  .studio-theme,
+  .studio-root *,
+  .studio-root *::before,
+  .studio-root *::after,
+  .studio-theme *,
+  .studio-theme *::before,
+  .studio-theme *::after {
+    box-sizing: border-box;
+    border-width: 0;
+    border-style: solid;
+    border-color: hsl(var(--border));
+  }
+
+  .studio-root {
+    font-family:
+      system-ui,
+      -apple-system,
+      BlinkMacSystemFont,
+      "Segoe UI",
+      Roboto,
+      "Helvetica Neue",
+      Arial,
+      sans-serif;
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+  }
+
+  .studio-root button,
+  .studio-theme button,
+  .studio-root input,
+  .studio-theme input,
+  .studio-root textarea,
+  .studio-theme textarea,
+  .studio-root select,
+  .studio-theme select {
+    font: inherit;
+    color: inherit;
+  }
+
+  .studio-root img,
+  .studio-root video,
+  .studio-root canvas {
+    display: block;
+    max-width: 100%;
+  }
+
+  .studio-root .lucide,
+  .studio-theme .lucide {
+    display: inline-block;
+    width: 1.2em;
+    height: 1.2em;
+    vertical-align: -0.2em;
+  }
+}
+
+/*
+ * Unlayered on purpose: the two rules above were dropped by Tailwind's
+ * base-layer processing in this setup, and the editor relies on the root
+ * inheriting a light foreground on the dark surface.
+ */
+.studio-root {
+  font-family:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+.studio-root img,
+.studio-root video,
+.studio-root canvas {
+  display: block;
+  max-width: 100%;
+}
+
+/*
+ * Tailwind preflight is switched off, so a bare <button> keeps the browser's
+ * light `buttonface` fill. The editors' outline-only buttons then paint light
+ * text on that light fill and their labels disappear. Reset only the paint,
+ * which is what preflight would have done.
+ */
+.studio-root button,
+.studio-theme button,
+.studio-root [role="button"],
+.studio-theme [role="button"] {
+  background-color: transparent;
+  background-image: none;
+}
+
+/*
+ * ComfyStudio material picker. It is appended to <body> (not inside
+ * .studio-root) so it can cover the editor; body carries .studio-theme
+ * while the editor is mounted, which keeps the variables in scope.
+ */
+.studio-theme .comfy-gallery-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.68);
+  backdrop-filter: blur(3px);
+}
+
+.studio-theme .comfy-gallery-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(980px, 94vw);
+  height: min(680px, 86vh);
+  overflow: hidden;
+  border: 1px solid var(--st-panel-border);
+  border-radius: 14px;
+  background: #17181c;
+  color: var(--st-fg);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.62);
+  font-family: inherit;
+}
+
+.studio-theme .comfy-gallery-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--st-divider);
+}
+
+.studio-theme .comfy-gallery-title {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.studio-theme .comfy-gallery-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  color: rgba(var(--st-fg-rgb), 0.58);
+}
+
+.studio-theme .comfy-gallery-close {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(var(--st-fg-rgb), 0.7);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.studio-theme .comfy-gallery-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--st-fg);
+}
+
+.studio-theme .comfy-gallery-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px 20px;
+}
+
+.studio-theme .comfy-gallery-loading,
+.studio-theme .comfy-gallery-warning {
+  padding: 40px 12px;
+  text-align: center;
+  font-size: 13px;
+  color: rgba(var(--st-fg-rgb), 0.55);
+}
+
+.studio-theme .comfy-gallery-warning {
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid rgba(255, 179, 71, 0.35);
+  border-radius: 8px;
+  background: rgba(255, 179, 71, 0.08);
+  color: #ffcf87;
+  text-align: left;
+}
+
+.studio-theme .comfy-gallery-section + .comfy-gallery-section {
+  margin-top: 22px;
+}
+
+.studio-theme .comfy-gallery-section-title {
+  margin-bottom: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(var(--st-fg-rgb), 0.52);
+}
+
+.studio-theme .comfy-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 12px;
+}
+
+.studio-theme .comfy-gallery-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: #1e1f24;
+  color: var(--st-fg);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.studio-theme .comfy-gallery-card:hover {
+  background: #26272d;
+}
+
+.studio-theme .comfy-gallery-card.is-selected {
+  border-color: #5b8cff;
+  background: rgba(91, 140, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(91, 140, 255, 0.55);
+}
+
+.studio-theme .comfy-gallery-thumb {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #0b0c0e;
+}
+
+.studio-theme .comfy-gallery-thumb img,
+.studio-theme .comfy-gallery-thumb video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.studio-theme .comfy-gallery-badge {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.72);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #fff;
+}
+
+.studio-theme .comfy-gallery-audio {
+  font-size: 34px;
+  color: rgba(var(--st-fg-rgb), 0.35);
+}
+
+.studio-theme .comfy-gallery-name {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-theme .comfy-gallery-source {
+  overflow: hidden;
+  font-size: 10px;
+  color: rgba(var(--st-fg-rgb), 0.48);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-theme .comfy-gallery-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--st-divider);
+}
+
+.studio-theme .comfy-gallery-count {
+  font-size: 12px;
+  color: rgba(var(--st-fg-rgb), 0.6);
+}
+
+.studio-theme .comfy-gallery-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.studio-theme .comfy-gallery-cancel,
+.studio-theme .comfy-gallery-ok {
+  min-width: 84px;
+  padding: 8px 16px;
+  border: 1px solid var(--st-controls-border);
+  border-radius: 8px;
+  background: var(--st-controls);
+  color: var(--st-fg);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.studio-theme .comfy-gallery-cancel:hover,
+.studio-theme .comfy-gallery-ok:hover:not(:disabled) {
+  background: #2a2b31;
+}
+
+.studio-theme .comfy-gallery-ok {
+  border-color: transparent;
+  background: #5b8cff;
+  color: #fff;
+  font-weight: 600;
+}
+
+.studio-theme .comfy-gallery-ok:hover:not(:disabled) {
+  background: #6d99ff;
+}
+
+.studio-theme .comfy-gallery-ok:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/*
+ * The 2D canvas (pagedraw port) ships a few ArtCraft utility classes that
+ * ComfyStudio does not define. They are scoped under .studio-theme so they can
+ * never leak into the host app.
+ */
+.studio-theme .glass {
+  background: rgba(16, 16, 20, 0.92);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--st-panel-border);
+}
+
+.studio-theme .preserve-aspect-ratio {
+  contain: layout paint;
+}

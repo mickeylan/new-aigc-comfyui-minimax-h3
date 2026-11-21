@@ -10,14 +10,46 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@hugeicons/core-free-icons": "^1.2.1",
+    "@hugeicons/react": "^1.0.4",
+    "@radix-ui/react-separator": "^1.1.7",
+    "@uiw/color-convert": "^2.10.4",
     "axios": "^1.7.9",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "culori": "^4.0.1",
+    "eventemitter3": "^4.0.7",
+    "framer-motion": "12.40.0",
+    "konva": "^9.3.20",
+    "lucide-react": "^0.512.0",
+    "mediabunny": "^1.29.1",
+    "motion-dom": "12.40.0",
+    "opencut-wasm": "^0.2.10",
     "pinia": "^2.2.6",
+    "radix-ui": "^1.4.3",
+    "react": "^18.3.1",
+    "react-colorful": "^5.6.1",
+    "react-dom": "^18.3.1",
+    "react-konva": "^18.2.10",
+    "react-resizable-panels": "^2.1.7",
+    "react-router-dom": "^6.29.0",
+    "react-window": "^2.2.7",
+    "soundtouchjs": "^0.3.0",
+    "tailwind-merge": "^2.2.2",
     "three": "0.180.0",
+    "use-deep-compare-effect": "^1.8.1",
+    "uuid": "^11.0.5",
     "vue": "^3.5.13",
-    "vue-router": "^4.5.0"
+    "vue-router": "^4.5.0",
+    "zustand": "^5.0.5"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
     "@vitejs/plugin-vue": "^5.2.1",
-    "vite": "^6.0.7"
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.3",
+    "vite": "^6.0.7",
+    "vite-plugin-wasm": "^3.5.0"
   }
 }
