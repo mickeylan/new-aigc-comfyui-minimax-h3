@@ -2,7 +2,7 @@
   <div class="frame-browser" role="dialog" aria-modal="true" :aria-label="`分镜${sceneOrder}逐帧浏览器`">
     <header class="frame-browser-head">
       <div>
-        <span class="overline">FRAME REVIEW</span>
+        <span class="overline">帧审阅</span>
         <h3>分镜 {{ sceneOrder }} · 查看全部帧</h3>
         <p>从当前正式分镜视频逐帧提取。选择一帧后可将独立图片保存到项目磁盘，原视频不会改变。</p>
       </div>

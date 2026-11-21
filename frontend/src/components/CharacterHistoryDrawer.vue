@@ -1,7 +1,7 @@
 <template>
   <div v-if="open" class="drawer-mask" @click.self="$emit('close')">
     <aside class="drawer" aria-label="角色历史">
-      <header><div><span class="overline">CHARACTER HISTORY</span><h2>角色历史</h2></div><button class="btn btn-sm btn-ghost" @click="$emit('close')">关闭</button></header>
+      <header><div><span class="overline">角色历史</span><h2>角色历史</h2></div><button class="btn btn-sm btn-ghost" @click="$emit('close')">关闭</button></header>
       <div v-if="loading" class="empty">加载中…</div>
       <div v-else-if="!rows.length" class="empty">暂无角色历史。</div>
       <article v-for="row in rows" :key="row.character.id" class="history-card">

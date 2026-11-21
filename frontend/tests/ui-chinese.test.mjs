@@ -11,15 +11,18 @@ const studioDir = resolve(dirname(fileURLToPath(import.meta.url)), '../src/studi
 
 const allowed = new Set(['COMFYSTUDIO', 'MINIMAX H3', 'QWEN-IMAGE-2.1', 'BGM', 'SRT'])
 
-test('主站 Vue 视图里没有残留的英文小标题', () => {
+test('主站 Vue 视图与共享组件里没有残留的英文小标题', () => {
   const offenders = []
-  for (const file of readdirSync(viewsDir)) {
-    if (!file.endsWith('.vue')) continue
-    const src = readFileSync(resolve(viewsDir, file), 'utf8')
-    for (const m of src.matchAll(/(?:overline|eyebrow)"[^>]*>\s*([A-Za-z][A-Za-z0-9 &/.-]{2,})</g)) {
-      const label = m[1].trim()
-      if (allowed.has(label)) continue
-      offenders.push(`${file}: ${label}`)
+  const dirs = [viewsDir, resolve(viewsDir, '../components')]
+  for (const dir of dirs) {
+    for (const file of readdirSync(dir)) {
+      if (!file.endsWith('.vue')) continue
+      const src = readFileSync(resolve(dir, file), 'utf8')
+      for (const m of src.matchAll(/(?:overline|eyebrow)"[^>]*>\s*([A-Za-z][A-Za-z0-9 &/.-]{2,})</g)) {
+        const label = m[1].trim()
+        if (allowed.has(label)) continue
+        offenders.push(`${file}: ${label}`)
+      }
     }
   }
   assert.deepEqual(offenders, [], `仍是英文的小标题：\n${offenders.join('\n')}`)

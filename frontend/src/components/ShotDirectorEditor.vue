@@ -1,7 +1,7 @@
 <template>
   <section class="section director">
     <div class="section-head">
-      <div><span class="overline">AI DIRECTOR</span><h2>AI导演方案</h2><p class="sub">输入场景概况，AI先完成镜头设计；你只需审核和修改。</p></div>
+      <div><span class="overline">AI 导演</span><h2>AI导演方案</h2><p class="sub">输入场景概况，AI先完成镜头设计；你只需审核和修改。</p></div>
     </div>
     <div class="card ai-director-card">
       <label>场景概况<textarea v-model="directorBrief" class="textarea" rows="4" placeholder="默认使用Scene剧情；可补充你希望这段怎么拍" /></label>
