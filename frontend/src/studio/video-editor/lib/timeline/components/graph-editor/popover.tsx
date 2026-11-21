@@ -178,7 +178,7 @@ export function GraphEditorPopover({
                     className="size-3.5 opacity-40"
                   />
                 </div>
-                <span className="text-[10px] leading-tight">Save</span>
+                <span className="text-[10px] leading-tight">保存</span>
               </button>
             </div>
           </TabsContent>

@@ -43,7 +43,7 @@ export function useEditorAdapters(): VideoEditorAdapters {
   if (!ctx) {
     throw new Error(
       "useEditorAdapters must be used inside <EditorProvider>. " +
-        "Mount your <VideoEditor> below an <EditorProvider>.",
+        "请把 <VideoEditor> 放在 <EditorProvider> 内部。",
     );
   }
   return ctx;

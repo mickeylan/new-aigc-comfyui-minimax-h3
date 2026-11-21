@@ -147,7 +147,7 @@ function SoundEffectsView() {
           console.error("Failed to fetch top sounds:", error);
           setError({
             error:
-              error instanceof Error ? error.message : "Failed to load sounds",
+              error instanceof Error ? error.message : "加载音效失败",
           });
         }
       } finally {
@@ -260,7 +260,7 @@ function SoundEffectsView() {
             <div className="text-muted-foreground px-2 py-1.5 text-xs">
               {showCommercialOnly
                 ? "Only showing sounds licensed for commercial use"
-                : "Showing all sounds regardless of license"}
+                : "已忽略授权，显示全部音效"}
             </div>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -291,7 +291,7 @@ function SoundEffectsView() {
             ))}
             {!isLoading && !isSearching && displayedSounds.length === 0 && (
               <div className="text-muted-foreground text-sm">
-                {searchQuery ? "No sounds found" : "No sounds available"}
+                {searchQuery ? "没找到音效" : "暂无可用音效"}
               </div>
             )}
             {isLoadingMore && (
@@ -549,7 +549,7 @@ function AudioItem({ sound, isPlaying, onPlay }: AudioItemProps) {
               : "text-muted-foreground"
           }`}
           onClick={handleSaveClick}
-          title={isSaved ? "Remove from saved" : "Save sound"}
+          title={isSaved ? "取消收藏" : "收藏音效"}
         >
           <HugeiconsIcon
             icon={FavouriteIcon}

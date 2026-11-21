@@ -78,7 +78,7 @@ export const HistoryStack = ({
     setPendingRemoveTargetId(id);
     showActionReminder({
       reminderType: "default",
-      title: "Remove pending generation",
+      title: "移除待生成项",
       primaryActionIcon: Trash2Icon,
       primaryActionBtnClassName: "bg-red hover:bg-red/80",
       message: (
@@ -93,7 +93,7 @@ export const HistoryStack = ({
           </p>
         </>
       ),
-      primaryActionText: "Remove",
+      primaryActionText: "移除",
       onPrimaryAction: () => {
         onPendingRemove(id);
         setPendingRemoveTargetId(null);
@@ -319,7 +319,7 @@ export const HistoryStack = ({
                         e.stopPropagation();
                         showActionReminder({
                           reminderType: "default",
-                          title: "Remove Image",
+                          title: "移除图片",
                           primaryActionIcon: Trash2Icon,
                           primaryActionBtnClassName: "bg-red hover:bg-red/80",
                           message: (
@@ -333,7 +333,7 @@ export const HistoryStack = ({
                             </p>
                             </>
                           ),
-                          primaryActionText: "Delete",
+                          primaryActionText: "删除",
                           onPrimaryAction: () => {
                             handleOnImageRemove(image);
                             isActionReminderOpen.value = false;
@@ -362,7 +362,7 @@ export const HistoryStack = ({
         <div className="glass w-fit rounded-xl border-2 border-red/50 shadow-lg hover:border-red/80">
           <div className="relative h-full">
             <Tooltip
-              content="Reset All"
+              content="全部重置"
               position="left"
               closeOnClick={true}
               className="ms-1 rounded-md bg-red px-3 py-1"
@@ -373,7 +373,7 @@ export const HistoryStack = ({
                 onClick={() =>
                   showActionReminder({
                     reminderType: "default",
-                    title: "Reset All",
+                    title: "全部重置",
                     primaryActionIcon: Trash2Icon,
                     primaryActionBtnClassName: "bg-red hover:bg-red/80",
                     message: (
@@ -382,7 +382,7 @@ export const HistoryStack = ({
                         your work and cannot be undone.
                       </p>
                     ),
-                    primaryActionText: "Reset all",
+                    primaryActionText: "全部重置",
                     onPrimaryAction: () => {
                       handleClear();
                       isActionReminderOpen.value = false;

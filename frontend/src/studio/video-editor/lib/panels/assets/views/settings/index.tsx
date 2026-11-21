@@ -289,7 +289,7 @@ export function SettingsView() {
               <div className="pb-2">
                 <AspectRatioItem
                   key="custom"
-                  label="Custom"
+                  label="自定义"
                   previewIcon={<OcSquarePlusIcon />}
                   isSelected={isCustomSelected}
                   onClick={selectCustomCanvasSize}

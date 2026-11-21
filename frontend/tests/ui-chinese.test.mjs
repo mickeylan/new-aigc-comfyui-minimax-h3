@@ -144,3 +144,41 @@ test('时间线、预览与素材列表不再出现英文界面短语', () => {
   }
   assert.deepEqual(offenders, [], `仍是英文：\n${offenders.join('\n')}`)
 })
+
+test('遮罩名称、遮罩面板与 2D 画布工具栏是中文', () => {
+  const maskNames = {
+    'cinematic-bars': '影院黑边',
+    diamond: '菱形',
+    ellipse: '椭圆',
+    heart: '心形',
+    rectangle: '矩形',
+    split: '分割',
+    star: '星形',
+    text: '文字',
+  }
+  for (const [file, name] of Object.entries(maskNames)) {
+    const src = readFileSync(
+      resolve(studioDir, `video-editor/lib/masks/builtin/definitions/${file}.ts`),
+      'utf8',
+    )
+    assert.match(src, new RegExp(`name: "${name}"`), `${file} 遮罩名不是中文`)
+  }
+
+  const masksTab = readFileSync(
+    resolve(studioDir, 'video-editor/lib/masks/components/masks-tab.tsx'),
+    'utf8',
+  )
+  for (const label of ['位置', '尺寸', '羽化', '描边', '文字内容']) {
+    assert.match(masksTab, new RegExp(`SectionField label="${label}"`), `缺少 ${label}`)
+  }
+  assert.doesNotMatch(masksTab, /SectionField label="(Position|Size|Feather|Stroke|Content)"/)
+
+  const toolbar = readFileSync(
+    resolve(studioDir, 'pagedraw/components/ui/SideToolbar.tsx'),
+    'utf8',
+  )
+  for (const label of ['选择与移动', '添加形状', '上传图片', '笔刷', '橡皮', '画布背景', '撤销', '重做']) {
+    assert.match(toolbar, new RegExp(`label: "${label}"`), `画布工具栏缺少 ${label}`)
+  }
+  assert.doesNotMatch(toolbar, /label: "(Brush|Eraser|Undo|Redo|Mask)"/)
+})

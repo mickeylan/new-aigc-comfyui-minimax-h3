@@ -185,7 +185,7 @@ function ToolbarLeftSection() {
 
         <ToolbarButton
           icon={<HugeiconsIcon icon={SnowIcon} />}
-          tooltip="Freeze frame (coming soon)"
+          tooltip="定格帧（即将支持）"
           disabled={true}
           onClick={({ event: _event }) => {}}
         />

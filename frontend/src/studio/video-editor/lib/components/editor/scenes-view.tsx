@@ -196,7 +196,7 @@ function DeleteDialog({
       <DialogTrigger asChild>{trigger}</DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Delete Scenes</DialogTitle>
+          <DialogTitle>删除场景</DialogTitle>
           <DialogDescription>
             Are you sure you want to delete {count} scene
             {count === 1 ? "" : "s"}? This action cannot be undone.

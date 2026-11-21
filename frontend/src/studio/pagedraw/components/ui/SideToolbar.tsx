@@ -195,7 +195,7 @@ const SideToolbar: React.FC<SideToolbarProps> = ({
 
     <>
       <div className="relative">
-        <p className="mb-2 text-sm font-medium text-white">Brush Size</p>
+        <p className="mb-2 text-sm font-medium text-white">笔刷大小</p>
         <SliderWithIndicator
           value={brushSize}
           onChange={(size) => {
@@ -216,7 +216,7 @@ const SideToolbar: React.FC<SideToolbarProps> = ({
   // separate from the brush so switching tools doesn't clobber either.
   const EraserPopout = (
     <div className="glass relative w-56 rounded-2xl p-4 shadow-lg">
-      <p className="mb-2 text-sm font-medium text-white">Eraser Size</p>
+      <p className="mb-2 text-sm font-medium text-white">橡皮大小</p>
       <SliderWithIndicator
         value={eraserSize}
         onChange={setEraserSize}
@@ -230,7 +230,7 @@ const SideToolbar: React.FC<SideToolbarProps> = ({
   const tools = [
     {
       id: "select",
-      label: "Select & Move",
+      label: "选择与移动",
       icon: (
         <MousePointerIcon  className="pl-0.5 text-lg" />
       ),
@@ -241,7 +241,7 @@ const SideToolbar: React.FC<SideToolbarProps> = ({
     { id: "separator-1", type: "separator" },
     {
       id: "add-shape",
-      label: "Add Shape",
+      label: "添加形状",
       icon: <ShapesIcon  className="h-5 w-5" />,
       onClick: () => {
         store.selectNode(null);
@@ -275,7 +275,7 @@ const SideToolbar: React.FC<SideToolbarProps> = ({
     },
     {
       id: "upload",
-      label: "Upload Image",
+      label: "上传图片",
       icon: <ImageIcon  className="h-5 w-5" />,
       onClick: () => {
         onUploadImage();
@@ -284,7 +284,7 @@ const SideToolbar: React.FC<SideToolbarProps> = ({
     { id: "separator-2", type: "separator" },
     {
       id: "draw",
-      label: "Brush",
+      label: "笔刷",
       icon: null,
       onClick: () => {
         sendPaint(hsvaToHex(brushHsva), brushSize, brushHsva.a);
@@ -294,7 +294,7 @@ const SideToolbar: React.FC<SideToolbarProps> = ({
     },
     {
       id: "inpaint",
-      label: "Mask",
+      label: "蒙版",
       icon: <SendToBackIcon  className="h-5 w-5" />,
       onClick: () => {
         store.setActiveTool("inpaint");
@@ -302,7 +302,7 @@ const SideToolbar: React.FC<SideToolbarProps> = ({
     },
     {
       id: "erase",
-      label: "Eraser",
+      label: "橡皮",
       icon: <EraserIcon  className="h-5 w-5" />,
       onClick: () => {
         store.setActiveTool("eraser");
@@ -312,7 +312,7 @@ const SideToolbar: React.FC<SideToolbarProps> = ({
     { id: "separator-3", type: "separator" },
     {
       id: "background",
-      label: "Canvas Background",
+      label: "画布背景",
       icon: (
         <div className="relative inline-flex h-5 w-5 items-center justify-center">
           <span
@@ -331,7 +331,7 @@ const SideToolbar: React.FC<SideToolbarProps> = ({
     },
     {
       id: "undo",
-      label: "Undo",
+      label: "撤销",
       icon: <RotateCcwIcon  className="h-5 w-5" />,
       onClick: () => {
         store.undo();
@@ -339,7 +339,7 @@ const SideToolbar: React.FC<SideToolbarProps> = ({
     },
     {
       id: "redo",
-      label: "Redo",
+      label: "重做",
       icon: <Redo2Icon  className="h-5 w-5" />,
       onClick: () => {
         store.redo();
@@ -354,7 +354,7 @@ const SideToolbar: React.FC<SideToolbarProps> = ({
   const handleResetCanvas = () => {
     showActionReminder({
       reminderType: "default",
-      title: "Reset Canvas",
+      title: "重置画布",
       primaryActionIcon: Trash2Icon,
       primaryActionBtnClassName: "bg-red hover:bg-red/80",
       message: (
@@ -363,7 +363,7 @@ const SideToolbar: React.FC<SideToolbarProps> = ({
           work and cannot be undone.
         </p>
       ),
-      primaryActionText: "Reset all",
+      primaryActionText: "全部重置",
       onPrimaryAction: () => {
         store.setNodes([]);
         store.drawNodes.filter((n) => n.type === "line").forEach((lineNode) => {
@@ -600,7 +600,7 @@ const SideToolbar: React.FC<SideToolbarProps> = ({
       <div className="glass absolute -bottom-14 left-1/2 -translate-x-1/2 rounded-xl border-2 border-red/50 shadow-lg hover:border-red/80">
         <div className="relative">
           <Tooltip
-            content="Reset Canvas"
+            content="重置画布"
             position="right"
             closeOnClick={true}
             className="ms-1 rounded-md bg-red px-3 py-1"

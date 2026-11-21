@@ -51,7 +51,7 @@ const TEXT_MASK_ALIGNMENT = "center";
 const TEXT_MASK_PARAMS: ParamDefinition<keyof TextMaskParams & string>[] = [
   {
     key: "centerX",
-    label: "X",
+    label: "水平位置",
     type: "number",
     default: 0,
     min: -100,
@@ -60,7 +60,7 @@ const TEXT_MASK_PARAMS: ParamDefinition<keyof TextMaskParams & string>[] = [
   },
   {
     key: "centerY",
-    label: "Y",
+    label: "垂直位置",
     type: "number",
     default: 0,
     min: -100,
@@ -69,7 +69,7 @@ const TEXT_MASK_PARAMS: ParamDefinition<keyof TextMaskParams & string>[] = [
   },
   {
     key: "fontSize",
-    label: "Size",
+    label: "字号",
     type: "number",
     default: 15,
     min: MIN_FONT_SIZE,
@@ -78,7 +78,7 @@ const TEXT_MASK_PARAMS: ParamDefinition<keyof TextMaskParams & string>[] = [
   },
   {
     key: "rotation",
-    label: "Rotation",
+    label: "旋转",
     type: "number",
     default: 0,
     min: 0,
@@ -87,7 +87,7 @@ const TEXT_MASK_PARAMS: ParamDefinition<keyof TextMaskParams & string>[] = [
   },
   {
     key: "scale",
-    label: "Scale",
+    label: "缩放",
     type: "number",
     default: 1,
     min: 1,
@@ -218,7 +218,7 @@ function computeTextMaskParamUpdate({
 
 export const textMaskDefinition: MaskDefinition<"text"> = {
   type: "text",
-  name: "Text",
+  name: "文字",
   features: {
     hasPosition: true,
     hasRotation: true,
