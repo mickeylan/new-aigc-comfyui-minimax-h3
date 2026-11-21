@@ -1,0 +1,28 @@
+{
+  "name": "图片生成 3D（Hunyuan3D 2.1）",
+  "code": "image_to_3d_hunyuan3d",
+  "description": "ComfyUI 原生 Hunyuan3D 2.1 图生 3D：单张参考图 → 体素 → 网格 → GLB。只需把 hunyuan_3d_v2.1.safetensors 放到 models/checkpoints，CLIP Vision 与 VAE 已打包在该 checkpoint 内。",
+  "inputs": [
+    { "key": "image", "type": "image", "label": "参考图", "required": true },
+    { "key": "ckpt_name", "type": "string", "label": "Hunyuan3D 2.1 checkpoint", "default": "hunyuan_3d_v2.1.safetensors" },
+    { "key": "steps", "type": "int", "label": "采样步数", "default": 30, "min": 1, "max": 100 },
+    { "key": "cfg", "type": "float", "label": "CFG", "default": 5.0, "min": 0.0, "max": 30.0, "step": 0.1 },
+    { "key": "shift", "type": "float", "label": "采样偏移", "default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01 },
+    { "key": "seed", "type": "int", "label": "随机种子", "default": -1, "min": -1 },
+    { "key": "resolution", "type": "int", "label": "体素分辨率", "default": 4096, "min": 256, "max": 8192 },
+    { "key": "octree_resolution", "type": "int", "label": "八叉树分辨率", "default": 256, "min": 16, "max": 512 },
+    { "key": "threshold", "type": "float", "label": "网格阈值", "default": 0.6, "min": -1.0, "max": 1.0, "step": 0.01 }
+  ],
+  "workflow": {
+    "1": { "class_type": "ImageOnlyCheckpointLoader", "inputs": { "ckpt_name": "{{ckpt_name}}" } },
+    "2": { "class_type": "LoadImage", "inputs": { "image": "{{img:image}}" } },
+    "3": { "class_type": "CLIPVisionEncode", "inputs": { "clip_vision": ["1", 1], "image": ["2", 0], "crop": "center" } },
+    "4": { "class_type": "Hunyuan3Dv2Conditioning", "inputs": { "clip_vision_output": ["3", 0] } },
+    "5": { "class_type": "ModelSamplingAuraFlow", "inputs": { "model": ["1", 0], "shift": "{{shift}}", "sampling": "flow" } },
+    "6": { "class_type": "EmptyLatentHunyuan3Dv2", "inputs": { "resolution": "{{resolution}}", "batch_size": 1 } },
+    "7": { "class_type": "KSampler", "inputs": { "seed": "{{seed}}", "steps": "{{steps}}", "cfg": "{{cfg}}", "sampler_name": "euler", "scheduler": "normal", "denoise": 1.0, "model": ["5", 0], "positive": ["4", 0], "negative": ["4", 1], "latent_image": ["6", 0] } },
+    "8": { "class_type": "VAEDecodeHunyuan3D", "inputs": { "samples": ["7", 0], "vae": ["1", 2], "num_chunks": 8000, "octree_resolution": "{{octree_resolution}}" } },
+    "9": { "class_type": "VoxelToMesh", "inputs": { "voxel": ["8", 0], "algorithm": "surface net", "threshold": "{{threshold}}" } },
+    "10": { "class_type": "SaveGLB", "inputs": { "mesh": ["9", 0], "filename_prefix": "3d/{{task_id}}" } }
+  }
+}

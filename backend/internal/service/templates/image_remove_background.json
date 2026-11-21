@@ -1,0 +1,19 @@
+{
+  "name": "图像抠图 / 背景移除（BEN2）",
+  "code": "image_remove_background",
+  "description": "用 ComfyUI-RMBG 的 Remove Background (RMBG) 节点抠图，默认 BEN2（发丝与半透明边缘优于 BiRefNet general），输出带 alpha 的透明 PNG；models 下拉可切 RMBG-2.0 / INSPYRENET / BEN。首次运行会自动下载所选模型到 models/RMBG。",
+  "inputs": [
+    { "key": "image", "type": "image", "label": "原图", "required": true },
+    { "key": "model", "type": "select", "label": "抠图模型", "default": "BEN2", "options": ["BEN2", "RMBG-2.0", "INSPYRENET", "BEN"] },
+    { "key": "sensitivity", "type": "float", "label": "检测强度", "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01 },
+    { "key": "process_res", "type": "int", "label": "处理分辨率", "default": 1024, "min": 256, "max": 2048, "step": 8 },
+    { "key": "mask_blur", "type": "int", "label": "蒙版羽化", "default": 0, "min": 0, "max": 64 },
+    { "key": "mask_offset", "type": "int", "label": "蒙版收缩/扩张", "default": 0, "min": -64, "max": 64 },
+    { "key": "refine_foreground", "type": "bool", "label": "前景颜色修正", "default": true }
+  ],
+  "workflow": {
+    "1": { "class_type": "LoadImage", "inputs": { "image": "{{img:image}}" } },
+    "2": { "class_type": "RMBG", "inputs": { "image": ["1", 0], "model": "{{model}}", "sensitivity": "{{sensitivity}}", "process_res": "{{process_res}}", "mask_blur": "{{mask_blur}}", "mask_offset": "{{mask_offset}}", "invert_output": false, "refine_foreground": "{{refine_foreground}}", "background": "Alpha" } },
+    "3": { "class_type": "SaveImage", "inputs": { "images": ["2", 0], "filename_prefix": "matting/{{task_id}}" } }
+  }
+}

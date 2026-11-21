@@ -1,0 +1,20 @@
+{
+  "name": "主体分割（SAM3 文本定位）",
+  "code": "image_segment_sam3",
+  "description": "用 SAM3 按文本描述定位主体（例如 person / cat / red car），输出透明背景的 PNG。与抠图模板的区别：抠图是「整张图去背景」，这个模板是「只要你说的那个东西」——一张图里有多个主体时可以指定要哪个。SAM3 的蒙版边缘偏硬，做半透明发丝/透明材质请用 image_segment_sam3_matte。需要 models/sam3/sam3.1_multiplex_fp16.safetensors。",
+  "inputs": [
+    { "key": "image", "type": "image", "label": "原图", "required": true },
+    { "key": "prompt", "type": "prompt", "label": "要定位的主体（英文更准）", "required": true },
+    { "key": "sam3_model", "type": "string", "label": "SAM3 模型", "default": "sam3.1_multiplex_fp16.safetensors" },
+    { "key": "threshold", "type": "float", "label": "检测置信度阈值", "default": 0.4, "min": 0.0, "max": 1.0, "step": 0.05 },
+    { "key": "detection_limit", "type": "int", "label": "最多保留几个检测框", "default": -1, "min": -1, "max": 1000 },
+    { "key": "precision", "type": "string", "label": "推理精度", "default": "fp16" }
+  ],
+  "workflow": {
+    "1": { "class_type": "LoadImage", "inputs": { "image": "{{img:image}}" } },
+    "2": { "class_type": "easy sam3ModelLoader", "inputs": { "model": "{{sam3_model}}", "segmentor": "image", "device": "cuda", "precision": "{{precision}}" } },
+    "3": { "class_type": "easy sam3ImageSegmentation", "inputs": { "sam3_model": ["2", 0], "images": ["1", 0], "prompt": "{{prompt}}", "threshold": "{{threshold}}", "keep_model_loaded": false, "add_background": "none", "detection_limit": "{{detection_limit}}" } },
+    "4": { "class_type": "JoinImageWithAlpha", "inputs": { "image": ["1", 0], "alpha": ["3", 0] } },
+    "5": { "class_type": "SaveImage", "inputs": { "images": ["4", 0], "filename_prefix": "segment-sam3/{{task_id}}" } }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "name": "图像局部重绘（Qwen-Image 2.1 Inpaint）",
+  "code": "image_inpaint",
+  "description": "用 Qwen-Image 2.1 做局部重绘：上传原图与蒙版（白色为重绘区域），只重绘蒙版区域，其余像素保持不变。关键是把蒙版区域先填充成中性色再交给模型当参考图，模型才会按提示词重新生成该区域；直接用原图做参考时模型会照抄原像素，蒙版区域几乎不变。需要 qwen-image2.1 的 UNET / CLIP / VAE 三个模型文件。",
+  "inputs": [
+    { "key": "image", "type": "image", "label": "原图", "required": true },
+    { "key": "mask", "type": "image", "label": "蒙版（白色=重绘）", "required": true },
+    { "key": "prompt", "type": "prompt", "label": "重绘提示词", "required": true },
+    { "key": "negative_prompt", "type": "prompt", "label": "负面提示词", "default": "" },
+    { "key": "unet_name", "type": "string", "label": "Qwen-Image 2.1 UNET", "default": "qwen-image2.1\\qwen_image_2.1_int8_convrot.safetensors" },
+    { "key": "clip_name", "type": "string", "label": "Qwen3-VL 文本编码器", "default": "qwen-image2.1\\qwen3vl_8b_int8_convrot.safetensors" },
+    { "key": "vae_name", "type": "string", "label": "Qwen-Image 2.1 VAE", "default": "qwen-image2.1\\qwen_image_2.1_vae_bf16.safetensors" },
+    { "key": "steps", "type": "int", "label": "采样步数", "default": 25, "min": 1, "max": 100 },
+    { "key": "cfg", "type": "float", "label": "CFG", "default": 1.0, "min": 0.0, "max": 20.0, "step": 0.1 },
+    { "key": "seed", "type": "int", "label": "随机种子", "default": -1, "min": -1 },
+    { "key": "grow_mask_by", "type": "int", "label": "蒙版外扩像素", "default": 8, "min": 0, "max": 128 },
+    { "key": "mask_expand", "type": "int", "label": "参考图遮罩外扩像素", "default": 48, "min": 0, "max": 256 },
+    { "key": "fill_mode", "type": "string", "label": "遮罩填充方式", "default": "neutral" },
+    { "key": "falloff", "type": "int", "label": "填充羽化像素", "default": 0, "min": 0, "max": 8191 },
+    { "key": "reference_resolution", "type": "int", "label": "参考图编码分辨率", "default": 1024, "min": 0, "max": 4096, "step": 32 }
+  ],
+  "workflow": {
+    "1": { "class_type": "UNETLoader", "inputs": { "unet_name": "{{unet_name}}", "weight_dtype": "default" } },
+    "2": { "class_type": "CLIPLoader", "inputs": { "clip_name": "{{clip_name}}", "type": "qwen_image", "device": "default" } },
+    "3": { "class_type": "VAELoader", "inputs": { "vae_name": "{{vae_name}}" } },
+    "4": { "class_type": "LoadImage", "inputs": { "image": "{{img:image}}" } },
+    "5": { "class_type": "LoadImage", "inputs": { "image": "{{img:mask}}" } },
+    "6": { "class_type": "ImageToMask", "inputs": { "image": ["5", 0], "channel": "red" } },
+    "7": { "class_type": "GrowMask", "inputs": { "mask": ["6", 0], "expand": "{{mask_expand}}", "tapered_corners": true } },
+    "8": { "class_type": "INPAINT_MaskedFill", "inputs": { "image": ["4", 0], "mask": ["7", 0], "fill": "{{fill_mode}}", "falloff": "{{falloff}}" } },
+    "9": { "class_type": "TextEncodeQwenImage21", "inputs": { "clip": ["2", 0], "prompt": "{{prompt}}", "negative_prompt": "{{negative_prompt}}", "vae": ["3", 0], "resolution": "{{reference_resolution}}", "images.image_1": ["8", 0] } },
+    "10": { "class_type": "QwenImage21Cache", "inputs": { "model": ["1", 0], "device": "auto", "dtype": "default" } },
+    "11": { "class_type": "VAEEncodeForInpaint", "inputs": { "pixels": ["4", 0], "vae": ["3", 0], "mask": ["7", 0], "grow_mask_by": "{{grow_mask_by}}" } },
+    "12": { "class_type": "KSampler", "inputs": { "seed": "{{seed}}", "steps": "{{steps}}", "cfg": "{{cfg}}", "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["10", 0], "positive": ["9", 0], "negative": ["9", 1], "latent_image": ["11", 0] } },
+    "13": { "class_type": "VAEDecode", "inputs": { "samples": ["12", 0], "vae": ["3", 0] } },
+    "14": { "class_type": "SaveImage", "inputs": { "images": ["13", 0], "filename_prefix": "inpaint/{{task_id}}" } }
+  }
+}

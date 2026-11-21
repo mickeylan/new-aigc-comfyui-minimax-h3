@@ -1,0 +1,35 @@
+{
+  "name": "图像局部重绘（Krea2 Inpaint）",
+  "code": "image_inpaint_krea2",
+  "description": "用 Krea2（FLUX 系 turbo 模型）做局部重绘：上传原图与蒙版（白色为重绘区域），只重绘蒙版区域，其余像素保持不变。步数少、速度快，风格化更强，适合插画/概念图；写实照片细节不如 Qwen-Image 2.1。需要 krea2 的 UNET / Qwen3-VL 4B 文本编码器与 qwen_image_vae。",
+  "inputs": [
+    { "key": "image", "type": "image", "label": "原图", "required": true },
+    { "key": "mask", "type": "image", "label": "蒙版（白色=重绘）", "required": true },
+    { "key": "prompt", "type": "prompt", "label": "重绘提示词", "required": true },
+    { "key": "negative_prompt", "type": "prompt", "label": "负面提示词", "default": "" },
+    { "key": "unet_name", "type": "string", "label": "Krea2 UNET", "default": "krea2\\Krea2-MuseByStable_v15Turbo_fp8.safetensors" },
+    { "key": "clip_name", "type": "string", "label": "Qwen3-VL 4B 文本编码器", "default": "krea2\\qwen3vl_4b_fp8_scaled.safetensors" },
+    { "key": "vae_name", "type": "string", "label": "VAE", "default": "qwen_image_vae.safetensors" },
+    { "key": "steps", "type": "int", "label": "采样步数", "default": 12, "min": 1, "max": 100 },
+    { "key": "cfg", "type": "float", "label": "CFG", "default": 1.0, "min": 0.0, "max": 20.0, "step": 0.1 },
+    { "key": "seed", "type": "int", "label": "随机种子", "default": -1, "min": -1 },
+    { "key": "grow_mask_by", "type": "int", "label": "蒙版外扩像素", "default": 32, "min": 0, "max": 256 },
+    { "key": "sampler_name", "type": "string", "label": "采样器", "default": "euler" },
+    { "key": "scheduler", "type": "string", "label": "调度器", "default": "simple" }
+  ],
+  "workflow": {
+    "1": { "class_type": "UNETLoader", "inputs": { "unet_name": "{{unet_name}}", "weight_dtype": "default" } },
+    "2": { "class_type": "CLIPLoader", "inputs": { "clip_name": "{{clip_name}}", "type": "krea2", "device": "default" } },
+    "3": { "class_type": "VAELoader", "inputs": { "vae_name": "{{vae_name}}" } },
+    "4": { "class_type": "LoadImage", "inputs": { "image": "{{img:image}}" } },
+    "5": { "class_type": "LoadImage", "inputs": { "image": "{{img:mask}}" } },
+    "6": { "class_type": "ImageToMask", "inputs": { "image": ["5", 0], "channel": "red" } },
+    "7": { "class_type": "GrowMask", "inputs": { "mask": ["6", 0], "expand": "{{grow_mask_by}}", "tapered_corners": true } },
+    "8": { "class_type": "CLIPTextEncode", "inputs": { "clip": ["2", 0], "text": "{{prompt}}" } },
+    "9": { "class_type": "CLIPTextEncode", "inputs": { "clip": ["2", 0], "text": "{{negative_prompt}}" } },
+    "10": { "class_type": "InpaintModelConditioning", "inputs": { "positive": ["8", 0], "negative": ["9", 0], "vae": ["3", 0], "pixels": ["4", 0], "mask": ["7", 0], "noise_mask": true } },
+    "11": { "class_type": "KSampler", "inputs": { "seed": "{{seed}}", "steps": "{{steps}}", "cfg": "{{cfg}}", "sampler_name": "{{sampler_name}}", "scheduler": "{{scheduler}}", "denoise": 1.0, "model": ["1", 0], "positive": ["10", 0], "negative": ["10", 1], "latent_image": ["10", 2] } },
+    "12": { "class_type": "VAEDecode", "inputs": { "samples": ["11", 0], "vae": ["3", 0] } },
+    "13": { "class_type": "SaveImage", "inputs": { "images": ["12", 0], "filename_prefix": "inpaint-krea2/{{task_id}}" } }
+  }
+}

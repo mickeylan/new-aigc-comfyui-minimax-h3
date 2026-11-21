@@ -1,0 +1,22 @@
+{
+  "name": "主体分割 + SDMatte 精修",
+  "code": "image_segment_sam3_matte",
+  "description": "SAM3 先按文本定位主体，再用 SDMatte 精修边缘（发丝、半透明、毛绒）。实测 RTX 4070 12 GB / process_res 768：整条链路约 16 秒，边缘柔和比例 3.6%（纯 SAM3 是 0%）。process_res 1024 会明显变慢（此前观测到 5 分钟级并伴随显存吃紧），12 GB 卡建议保持 768。需要 models/sam3/sam3.1_multiplex_fp16.safetensors 与 models/RMBG/SDMatte/SDMatte.safetensors。",
+  "inputs": [
+    { "key": "image", "type": "image", "label": "原图", "required": true },
+    { "key": "prompt", "type": "prompt", "label": "要定位的主体（英文更准）", "required": true },
+    { "key": "sam3_model", "type": "string", "label": "SAM3 模型", "default": "sam3.1_multiplex_fp16.safetensors" },
+    { "key": "threshold", "type": "float", "label": "检测置信度阈值", "default": 0.4, "min": 0.0, "max": 1.0, "step": 0.05 },
+    { "key": "matte_model", "type": "string", "label": "SDMatte 变体", "default": "SDMatte" },
+    { "key": "process_res", "type": "int", "label": "精修处理分辨率", "default": 768, "min": 256, "max": 2048, "step": 8 },
+    { "key": "mask_blur", "type": "int", "label": "边缘羽化像素", "default": 0, "min": 0, "max": 64 },
+    { "key": "mask_offset", "type": "int", "label": "边缘外扩像素", "default": 0, "min": -64, "max": 64 }
+  ],
+  "workflow": {
+    "1": { "class_type": "LoadImage", "inputs": { "image": "{{img:image}}" } },
+    "2": { "class_type": "easy sam3ModelLoader", "inputs": { "model": "{{sam3_model}}", "segmentor": "image", "device": "cuda", "precision": "fp16" } },
+    "3": { "class_type": "easy sam3ImageSegmentation", "inputs": { "sam3_model": ["2", 0], "images": ["1", 0], "prompt": "{{prompt}}", "threshold": "{{threshold}}", "keep_model_loaded": false, "add_background": "none", "detection_limit": -1 } },
+    "4": { "class_type": "AILab_SDMatte", "inputs": { "image": ["1", 0], "model": "{{matte_model}}", "device": "Auto", "process_res": "{{process_res}}", "mask": ["3", 0], "transparent_object": true, "mask_refine": true, "sensitivity": 0.9, "mask_blur": "{{mask_blur}}", "mask_offset": "{{mask_offset}}", "invert_output": false, "background": "Alpha" } },
+    "5": { "class_type": "SaveImage", "inputs": { "images": ["4", 0], "filename_prefix": "segment-sam3-matte/{{task_id}}" } }
+  }
+}
