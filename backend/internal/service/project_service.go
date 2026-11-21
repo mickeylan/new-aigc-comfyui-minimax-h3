@@ -2847,7 +2847,8 @@ func (s *ProjectService) generateSceneVideoAction(sc *models.Scene, trace *h3Pro
 	canonicalSceneContent, explicitTimedShotCount := normalizeSceneTimedBeats(canonicalSceneContent, normalizeSceneDuration(sc.Duration))
 	if explicitTimedShotCount == 0 && len(h3ShotMarkerPattern.FindAllStringIndex(canonicalSceneContent, -1)) > 1 {
 		trace.setSource("authored_shot_translation")
-		return s.compileAuthoredH3ShotAction(sc, canonicalSceneContent, refLines)
+		// 作者镜头仍是权威；已保存站位与上一场结尾状态只补原文没写的空间细节。
+		return s.compileAuthoredH3ShotAction(sc, canonicalSceneContent, refLines, sceneBlockingPromptContext(sc)+s.sceneInheritedStateContext(sc))
 	}
 	sourceEventLedger := formatH3SourceEventLedger(canonicalSceneContent)
 	dubs := s.sceneVideoDialogues(sc)

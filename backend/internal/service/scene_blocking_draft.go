@@ -54,7 +54,7 @@ func (s *ProjectService) generateVideoActionFromBlockingDraft(scene *models.Scen
 	source, timedCount := normalizeSceneTimedBeats(source, normalizeSceneDuration(scene.Duration))
 	if timedCount == 0 && len(h3ShotMarkerPattern.FindAllStringIndex(source, -1)) > 1 {
 		_, refs := s.sceneVideoReferenceFiles(scene, fmt.Sprint(scene.ProjectID))
-		return s.compileAuthoredH3ShotActionWithSpatialDraft(scene, source, refs, sceneBlockingPromptContext(scene))
+		return s.compileAuthoredH3ShotAction(scene, source, refs, sceneBlockingPromptContext(scene))
 	}
 	return s.GenerateSceneVideoAction(scene)
 }
