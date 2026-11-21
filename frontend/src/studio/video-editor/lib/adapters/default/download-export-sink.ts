@@ -12,6 +12,8 @@ import type { ExportSinkAdapter } from "../export-sink";
 const REVOKE_DELAY_MS = 60_000;
 
 export const downloadExportSink: ExportSinkAdapter = {
+  // 浏览器下载 sink 没有媒体库后端；显式声明，供导出面板隐藏该选项。
+  supportsLibrary: false,
   async accept(artifact, options) {
     const saveToDisk = options?.saveToDisk ?? true;
     const onProgress = options?.onProgress;

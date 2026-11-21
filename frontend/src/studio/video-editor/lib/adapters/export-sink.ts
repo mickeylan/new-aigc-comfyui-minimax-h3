@@ -33,6 +33,10 @@ export interface ExportSinkOptions {
 }
 
 export interface ExportSinkAdapter {
+  // 宿主是否真的接得上媒体库。缺省视为不支持：导出面板据此隐藏
+  // 「Save to my media library」选项，避免用户勾选后必然拿到
+  // "Library upload failed"（文件其实已存盘）。
+  supportsLibrary?: boolean;
   // Returns the absolute filesystem path of the saved disk artifact
   // when the sink can determine it (e.g. a native save-dialog flow),
   // or `null` otherwise. Browser-download sinks cannot observe the

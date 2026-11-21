@@ -27,6 +27,7 @@ import {
 import { useEditor } from "../../editor/use-editor";
 import { useEditorAdapters } from "../../EditorProvider";
 import { DEFAULT_EXPORT_OPTIONS } from "../../export/defaults";
+import { resolveExportDestinations } from "../../export/destinations.js";
 import { mediaTimeToSeconds } from "../../wasm";
 import type {
   ExportDestination,
@@ -160,11 +161,17 @@ function ExportPopover({
   const [shouldIncludeAudio, setShouldIncludeAudio] = useState<boolean>(
     DEFAULT_EXPORT_OPTIONS.includeAudio ?? true,
   );
+  const supportsLibrary = exportSink.supportsLibrary === true;
   const [saveToDisk, setSaveToDisk] = useState<boolean>(true);
-  const [saveToLibrary, setSaveToLibrary] = useState<boolean>(true);
+  const [saveToLibrary, setSaveToLibrary] = useState<boolean>(supportsLibrary);
   const [saveState, setSaveState] = useState<SaveState>(INITIAL_SAVE_STATE);
 
-  const canExport = saveToDisk || saveToLibrary;
+  const destinations = resolveExportDestinations({
+    supportsLibrary,
+    saveToDisk,
+    saveToLibrary,
+  });
+  const canExport = destinations.canExport;
 
   const handleExport = async () => {
     if (!activeProject || !canExport) return;
@@ -198,8 +205,8 @@ function ExportPopover({
       // only renders rows for what's actually running.
       setSaveState({
         phase: "saving",
-        disk: { status: saveToDisk ? "pending" : "skipped" },
-        library: { status: saveToLibrary ? "pending" : "skipped" },
+        disk: { status: destinations.disk ? "pending" : "skipped" },
+        library: { status: destinations.library ? "pending" : "skipped" },
       });
 
       const handleProgress = (event: ExportSinkProgressEvent) => {
@@ -215,8 +222,8 @@ function ExportPopover({
             durationMs: durationMs > 0 ? durationMs : undefined,
           },
           {
-            saveToDisk,
-            saveToLibrary,
+            saveToDisk: destinations.disk,
+            saveToLibrary: destinations.library,
             onProgress: handleProgress,
           },
         );
@@ -367,18 +374,20 @@ function ExportPopover({
                             Save to disk
                           </Label>
                         </div>
-                        <div className="flex items-center space-x-2">
-                          <Checkbox
-                            id="save-to-library"
-                            checked={saveToLibrary}
-                            onCheckedChange={(checked) =>
-                              setSaveToLibrary(!!checked)
-                            }
-                          />
-                          <Label htmlFor="save-to-library">
-                            Save to my media library
-                          </Label>
-                        </div>
+                        {supportsLibrary && (
+                          <div className="flex items-center space-x-2">
+                            <Checkbox
+                              id="save-to-library"
+                              checked={saveToLibrary}
+                              onCheckedChange={(checked) =>
+                                setSaveToLibrary(!!checked)
+                              }
+                            />
+                            <Label htmlFor="save-to-library">
+                              Save to my media library
+                            </Label>
+                          </div>
+                        )}
                         {!canExport && (
                           <p className="text-muted-foreground text-xs">
                             Pick at least one destination.
