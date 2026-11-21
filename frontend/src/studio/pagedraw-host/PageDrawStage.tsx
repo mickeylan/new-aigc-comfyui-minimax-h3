@@ -7,6 +7,7 @@ import { useSceneStore } from "../pagedraw/stores/SceneState";
 import type { LineNode } from "../pagedraw/stores/SceneState";
 import type { Node } from "../pagedraw/Node";
 import type { BaseSelectorImage } from "../pagedraw/types";
+import { findTemplateId } from "../host/template-cache.js";
 
 interface PageDrawStageProps {
   initialImageUrl?: string;
@@ -47,18 +48,6 @@ async function uploadImage(blob: Blob, name: string): Promise<UploadResult> {
     throw new Error(`上传失败：${response.status} ${await response.text()}`);
   }
   return (await response.json()) as UploadResult;
-}
-
-async function findTemplateId(code: string): Promise<number> {
-  const response = await fetch("/api/templates");
-  if (!response.ok) throw new Error(`读取模板失败：${response.status}`);
-  const payload = await response.json();
-  const templates = Array.isArray(payload) ? payload : payload.items ?? [];
-  const template = templates.find(
-    (item: { code?: string }) => item.code === code,
-  );
-  if (!template) throw new Error(`缺少工作流模板：${code}`);
-  return template.id as number;
 }
 
 async function createTask(options: {

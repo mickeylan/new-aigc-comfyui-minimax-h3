@@ -11,6 +11,7 @@ import { TransformControls } from "three/examples/jsm/controls/TransformControls
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
+import { findTemplateId } from "../host/template-cache.js";
 
 interface Scene3DStageProps {
   exitTo?: string;
@@ -126,18 +127,6 @@ async function uploadImage(blob: Blob, name: string) {
     throw new Error(`上传失败：${response.status} ${await response.text()}`);
   }
   return (await response.json()) as { task_id: string; name: string };
-}
-
-async function findTemplateId(code: string) {
-  const response = await fetch("/api/templates");
-  if (!response.ok) throw new Error(`读取模板失败：${response.status}`);
-  const payload = await response.json();
-  const templates = Array.isArray(payload) ? payload : payload.items ?? [];
-  const template = templates.find(
-    (item: { code?: string }) => item.code === code,
-  );
-  if (!template) throw new Error(`缺少工作流模板：${code}`);
-  return template.id as number;
 }
 
 async function createImageTo3DTask(upload: { task_id: string; name: string }) {
