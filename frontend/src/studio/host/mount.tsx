@@ -28,6 +28,8 @@ export interface MountVideoEditorOptions {
   projectId?: string;
   exitTo?: string;
   initialMedia?: InitialMediaEntry[];
+  // 分镜上下文：编辑器据此把成片写回这个 Scene（另存候选）。
+  scene?: { projectId: string | number; sceneId: number } | null;
 }
 
 export interface VideoEditorHandle {
@@ -151,7 +153,10 @@ export function mountVideoEditor(
 
   // Initialize before React mounts: EditorCore is first-wins, so this pins
   // the ComfyStudio adapter bundle before EditorProvider's own initialize call.
-  const adapters = createComfyAdapters({ projectId: options.projectId });
+  const adapters = createComfyAdapters({
+    projectId: options.projectId,
+    scene: options.scene ?? null,
+  });
   EditorCore.initialize({ adapters });
 
   const editor = EditorCore.getInstance();

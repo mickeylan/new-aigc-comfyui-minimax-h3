@@ -7,7 +7,7 @@ import { resolveExportDestinations } from '../src/studio/video-editor/lib/export
 
 test('宿主没有媒体库时，即使界面勾着也不交给 sink', () => {
   const d = resolveExportDestinations({ supportsLibrary: false, saveToDisk: true, saveToLibrary: true })
-  assert.deepEqual(d, { disk: true, library: false, canExport: true })
+  assert.deepEqual(d, { disk: true, library: false, scene: false, canExport: true })
 })
 
 test('supportsLibrary 缺省视为不支持', () => {
@@ -19,11 +19,11 @@ test('supportsLibrary 缺省视为不支持', () => {
 test('宿主支持媒体库时按用户勾选传递', () => {
   assert.deepEqual(
     resolveExportDestinations({ supportsLibrary: true, saveToDisk: false, saveToLibrary: true }),
-    { disk: false, library: true, canExport: true },
+    { disk: false, library: true, scene: false, canExport: true },
   )
   assert.deepEqual(
     resolveExportDestinations({ supportsLibrary: true, saveToDisk: true, saveToLibrary: false }),
-    { disk: true, library: false, canExport: true },
+    { disk: true, library: false, scene: false, canExport: true },
   )
 })
 
@@ -34,5 +34,5 @@ test('两个目的地都关掉时禁止导出', () => {
 
 test('不支持媒体库且用户取消存盘时，cannot export 而不是静默失败', () => {
   const d = resolveExportDestinations({ supportsLibrary: false, saveToDisk: false, saveToLibrary: true })
-  assert.deepEqual(d, { disk: false, library: false, canExport: false })
+  assert.deepEqual(d, { disk: false, library: false, scene: false, canExport: false })
 })

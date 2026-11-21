@@ -195,6 +195,8 @@
             <button class="btn btn-sm" :disabled="busy || !selected.image_file || selected.video_locked" @click="prepareVideoPrompt">{{ selected.video_locked ? '视频已锁定' : '准备并审核视频提示词' }}</button>
             <button class="btn btn-sm btn-ghost" @click="setSceneLock('video', !selected.video_locked)">{{ selected.video_locked ? '解锁视频' : '锁定视频' }}</button>
             <a v-if="selected.video_url" class="btn btn-sm btn-ghost" :href="selected.video_url + '?download=1'">下载视频</a>
+            <button v-if="selected.video_url" class="btn btn-sm btn-secondary" @click="refineCurrentSceneVideo">精修分镜视频</button>
+            <button v-if="selected.image_url" class="btn btn-sm btn-secondary" @click="refineCurrentSceneImage">精修分镜图</button>
             <input ref="sceneVideoUploadInput" type="file" accept="video/mp4,video/webm,video/quicktime,video/x-matroska" hidden @change="uploadCurrentSceneVideo">
             <button class="btn btn-sm btn-secondary" :disabled="sceneVideoReplacing" @click="sceneVideoUploadInput?.click()">{{sceneVideoReplacing?'替换中…':'上传视频作为当前分镜'}}</button>
             <select v-model.number="sceneVideoMaterialID" class="input input-sm"><option :value="0">从项目视频素材选择</option><option v-for="m in videoMaterials" :key="m.id" :value="m.id">{{m.name||m.path}}</option></select>
@@ -407,6 +409,7 @@
           :source-video-ready="Boolean(previousScene?.video_url || previousScene?.video_file)"
           @close="showFrameSelector = false"
           @frame-selected="onFrameSelected"
+          @refine-frame="refineSelectedFrame"
           @applied="onContinuityApplied"
         />
       </div>
@@ -452,7 +455,7 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { useToastStore } from '../stores/toast'
 import ShotDirectorEditor from '../components/ShotDirectorEditor.vue'
@@ -460,6 +463,7 @@ import FrameSelector from '../components/FrameSelector.vue'
 import CharacterHistoryDrawer from '../components/CharacterHistoryDrawer.vue'
 import GeneratedMediaHistoryDrawer from '../components/GeneratedMediaHistoryDrawer.vue'
 import { compatibleSkills, projectSkillConfig, skillOperationOf } from '../utils/directorWorkflow.js'
+import { stashStudioMedia, stashStudioScene } from '../studio/initial-media.js'
 import { createDraftSafety } from '../utils/draftSafety.js'
 import { MODEL_LIMIT_DEFAULTS, mergeModelLimits } from '../utils/modelLimits.js'
 import { directorDraftShotPayload } from '../utils/episodeShotSplit.js'
@@ -480,6 +484,7 @@ const finalCutTime = ref(0)
 let timelineSeek = null
 
 const route = useRoute()
+const router = useRouter()
 const toast = useToastStore()
 const workspaceTabs = [
   {key:'production',label:'分镜制作',description:'Scene、Shot、图片与视频'},
@@ -1254,6 +1259,31 @@ async function applyVisualBeats() {
 }
 async function applyPolishDraft() { try { await api.updateScene(id(), selected.value.id, { image_prompt: polishDraft.value }); polishDraft.value = ''; await reloadSelectedScene(); toast.success('润色草稿已应用到Scene起始帧提示词') } catch (e) { toast.error(e.response?.data?.error || '应用失败') } }
 async function generateSelectedImage() { busy.value = true; try { await api.generateSceneImage(id(), selected.value.id); toast.success('分镜图任务已提交，已组合Scene事实、Shot导演设计、参考图与负向约束'); await reloadSelectedScene() } catch (e) { toast.error(e.response?.data?.error || '提交分镜图失败') } finally { busy.value = false } }
+// 把当前分镜视频送进剪辑器精修；导出时可选「写回分镜（另存候选）」。
+function refineCurrentSceneVideo(){
+  const sc=selected.value
+  if(!sc?.video_url)return
+  const name=sc.video_input_file||`scene_${sc.id}.mp4`
+  const stashed=stashStudioMedia([{url:sc.video_url,name,kind:'video'}])
+  if(!stashed){toast.error('当前分镜视频地址不可用，无法送进剪辑器');return}
+  stashStudioScene({projectId:id(),sceneId:sc.id,episodeN:sc.episode_n,sceneLabel:`场景 ${sc.order} · ${sc.title||'未命名'}`,returnTo:route.fullPath})
+  router.push(`/studio/video/${id()}`)
+}
+// 把当前分镜图送进 2D 画布精修；画布顶栏「写回分镜」另存候选，旧图仍可切回。
+function refineCurrentSceneImage(){
+  const sc=selected.value
+  if(!sc?.image_url)return
+  stashStudioScene({projectId:id(),sceneId:sc.id,episodeN:sc.episode_n,sceneLabel:`场景 ${sc.order} · ${sc.title||'未命名'}`,returnTo:route.fullPath,mode:'sceneImage',imageUrl:sc.image_url})
+  router.push('/studio/draw')
+}
+// 上一镜衔接帧 → 画布精修 → 写回时替换该帧（后端保留原图）。
+function refineSelectedFrame(frame){
+  const sc=selected.value
+  if(!sc||!frame?.frame_id||!frame?.image_url)return
+  stashStudioScene({projectId:id(),sceneId:frame.scene_id||previousScene?.value?.id,episodeN:sc.episode_n,sceneLabel:`场景 ${sc.order} · 衔接帧`,returnTo:route.fullPath,mode:'frame',frameId:frame.frame_id,imageUrl:frame.image_url})
+  showFrameSelector.value=false
+  router.push('/studio/draw')
+}
 async function uploadCurrentSceneVideo(event) {
   const file=event.target.files?.[0];event.target.value='';if(!file||!selected.value)return
   if(!window.confirm('将上传视频设为当前分镜正式视频？原视频和历史候选会保留，但进行中的合并及已提取首尾帧会失效。'))return

@@ -7,12 +7,12 @@ import type { ExportArtifact } from "./types";
 //
 // The editor calls `accept(artifact, options?)` once per finished
 // render. Options let the host's export-popover UI pick which
-// destinations to send to (disk, library, both); onProgress fires
+// destinations to send to (disk, library, scene, any combination); onProgress fires
 // per-destination lifecycle events so the UI can render inline
 // progress rows while the sinks run. Adapters resolve the returned
 // promise only after every requested destination has settled.
 
-export type ExportDestination = "disk" | "library";
+export type ExportDestination = "disk" | "library" | "scene";
 
 export type ExportSinkProgressEvent =
   | { destination: ExportDestination; status: "pending" | "uploading" }
@@ -26,6 +26,9 @@ export interface ExportSinkOptions {
   // Defaults to `false` — only hosts that wire a real library backend
   // should opt in. The default downloadExportSink ignores this.
   saveToLibrary?: boolean;
+  // Write the result back to the storyboard scene the editor was opened
+  // from. Only meaningful when the adapter declares `supportsScene`.
+  saveToScene?: boolean;
   // Fires once per destination as it changes phase. Implementers are
   // expected to call it at least once per requested destination so the
   // UI can transition out of the initial "pending" state.
@@ -37,6 +40,9 @@ export interface ExportSinkAdapter {
   // 「Save to my media library」选项，避免用户勾选后必然拿到
   // "Library upload failed"（文件其实已存盘）。
   supportsLibrary?: boolean;
+  // 宿主是否带着分镜上下文打开编辑器；只有为 true 时导出面板才显示
+  // 「写回分镜」选项，避免从素材页进入时出现一个必然失败的开关。
+  supportsScene?: boolean;
   // Returns the absolute filesystem path of the saved disk artifact
   // when the sink can determine it (e.g. a native save-dialog flow),
   // or `null` otherwise. Browser-download sinks cannot observe the

@@ -5,6 +5,9 @@ import "../styles/studio.css";
 export interface MountPageDrawOptions {
   initialImageUrl?: string;
   exitTo?: string;
+  /** 写回分镜（由 Vue 宿主按上下文构建）；缺省时画布不显示写回按钮。 */
+  writeBack?: (blob: Blob, filename?: string) => Promise<string>;
+  writeBackLabel?: string;
 }
 
 export interface PageDrawHandle {
@@ -25,6 +28,8 @@ export function mountPageDraw(
     <PageDrawStage
       initialImageUrl={options.initialImageUrl}
       exitTo={options.exitTo}
+      writeBack={options.writeBack}
+      writeBackLabel={options.writeBackLabel}
     />,
   );
   return {

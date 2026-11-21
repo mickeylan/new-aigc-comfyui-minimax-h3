@@ -333,7 +333,7 @@ func (m *UploadManager) SaveFile(taskID, ftype, filename string, data []byte) (s
 	if filename, err = safeFileSegment(filename, "文件名"); err != nil {
 		return "", 0, err
 	}
-	if ftype != "image" && ftype != "video" && ftype != "audio" && ftype != "novel" && ftype != "document" {
+	if ftype != "image" && ftype != "video" && ftype != "audio" && ftype != "novel" && ftype != "document" && ftype != "3d" {
 		return "", 0, fmt.Errorf("文件类型无效")
 	}
 	relPath := path.Join(taskID, filename)

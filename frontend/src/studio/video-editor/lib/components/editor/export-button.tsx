@@ -11,7 +11,7 @@ import { Progress } from "../ui/progress";
 import { Checkbox } from "../ui/checkbox";
 import { cn } from "../../utils/ui";
 import { getExportMimeType, getExportFileExtension } from "../../export";
-import { AlertCircle, Check, Copy, Download, Library, Loader2, RotateCcw } from "lucide-react";
+import { AlertCircle, Check, Copy, Download, Film, Library, Loader2, RotateCcw } from "lucide-react";
 import {
   EXPORT_FORMAT_VALUES,
   EXPORT_QUALITY_VALUES,
@@ -48,12 +48,14 @@ interface SaveState {
   phase: "idle" | "saving" | "settled";
   disk: { status: DestinationStatus; error?: string };
   library: { status: DestinationStatus; error?: string };
+  scene: { status: DestinationStatus; error?: string };
 }
 
 const INITIAL_SAVE_STATE: SaveState = {
   phase: "idle",
   disk: { status: "skipped" },
   library: { status: "skipped" },
+  scene: { status: "skipped" },
 };
 
 function updateDestinationStatus(
@@ -67,7 +69,9 @@ function updateDestinationStatus(
       : { status: event.status };
   return event.destination === "disk"
     ? { ...state, disk: update }
-    : { ...state, library: update };
+    : event.destination === "library"
+      ? { ...state, library: update }
+      : { ...state, scene: update };
 }
 
 function isTerminalStatus(status: DestinationStatus): boolean {
@@ -87,6 +91,9 @@ function finalizeSaveState(state: SaveState): SaveState {
       : { status: "success" },
     library: isTerminalStatus(state.library.status)
       ? state.library
+      : { status: "success" },
+    scene: isTerminalStatus(state.scene.status)
+      ? state.scene
       : { status: "success" },
   };
 }
@@ -162,14 +169,18 @@ function ExportPopover({
     DEFAULT_EXPORT_OPTIONS.includeAudio ?? true,
   );
   const supportsLibrary = exportSink.supportsLibrary === true;
+  const supportsScene = exportSink.supportsScene === true;
   const [saveToDisk, setSaveToDisk] = useState<boolean>(true);
   const [saveToLibrary, setSaveToLibrary] = useState<boolean>(supportsLibrary);
+  const [saveToScene, setSaveToScene] = useState<boolean>(supportsScene);
   const [saveState, setSaveState] = useState<SaveState>(INITIAL_SAVE_STATE);
 
   const destinations = resolveExportDestinations({
     supportsLibrary,
+    supportsScene,
     saveToDisk,
     saveToLibrary,
+    saveToScene,
   });
   const canExport = destinations.canExport;
 
@@ -207,6 +218,7 @@ function ExportPopover({
         phase: "saving",
         disk: { status: destinations.disk ? "pending" : "skipped" },
         library: { status: destinations.library ? "pending" : "skipped" },
+        scene: { status: destinations.scene ? "pending" : "skipped" },
       });
 
       const handleProgress = (event: ExportSinkProgressEvent) => {
@@ -224,6 +236,7 @@ function ExportPopover({
           {
             saveToDisk: destinations.disk,
             saveToLibrary: destinations.library,
+            saveToScene: destinations.scene,
             onProgress: handleProgress,
           },
         );
@@ -388,6 +401,20 @@ function ExportPopover({
                             </Label>
                           </div>
                         )}
+                        {supportsScene && (
+                          <div className="flex items-center space-x-2">
+                            <Checkbox
+                              id="save-to-scene"
+                              checked={saveToScene}
+                              onCheckedChange={(checked) =>
+                                setSaveToScene(!!checked)
+                              }
+                            />
+                            <Label htmlFor="save-to-scene">
+                              写回分镜（另存候选）
+                            </Label>
+                          </div>
+                        )}
                         {!canExport && (
                           <p className="text-muted-foreground text-xs">
                             至少选择一个保存位置。
@@ -454,10 +481,14 @@ function SavePhasePanel({
   onDismiss: () => void;
 }) {
   const settled = saveState.phase === "settled";
-  const visibleDestinations = (["disk", "library"] as ExportDestination[])
+  const visibleDestinations = (["disk", "library", "scene"] as ExportDestination[])
     .map((destination) => ({
       destination,
-      ...(destination === "disk" ? saveState.disk : saveState.library),
+      ...(destination === "disk"
+        ? saveState.disk
+        : destination === "library"
+          ? saveState.library
+          : saveState.scene),
     }))
     .filter((entry) => entry.status !== "skipped");
 
@@ -506,20 +537,32 @@ function DestinationRow({
   error?: string;
 }) {
   const label =
-    destination === "disk" ? "正在存到本机" : "正在存入素材库";
+    destination === "disk"
+      ? "正在存到本机"
+      : destination === "library"
+        ? "正在存入素材库"
+        : "正在写回分镜";
+  const successLabel =
+    destination === "disk"
+      ? "已存到本机"
+      : destination === "library"
+        ? "已存入素材库"
+        : "已写回分镜（新候选）";
+  const errorLabel =
+    destination === "disk"
+      ? "本机保存失败"
+      : destination === "library"
+        ? "素材库上传失败"
+        : "写回分镜失败";
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center gap-2 text-xs">
         <DestinationIcon destination={destination} status={status} />
         <span className="text-foreground">
           {status === "success"
-            ? destination === "disk"
-              ? "已存到本机"
-              : "已存入素材库"
+            ? successLabel
             : status === "error"
-              ? destination === "disk"
-                ? "本机保存失败"
-                : "素材库上传失败"
+              ? errorLabel
               : label}
         </span>
       </div>
@@ -548,8 +591,10 @@ function DestinationIcon({
   }
   return destination === "disk" ? (
     <Download className="text-muted-foreground size-3.5" />
-  ) : (
+  ) : destination === "library" ? (
     <Library className="text-muted-foreground size-3.5" />
+  ) : (
+    <Film className="text-muted-foreground size-3.5" />
   );
 }
 

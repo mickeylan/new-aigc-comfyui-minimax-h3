@@ -46,6 +46,26 @@ func (m *MaterialService) SaveGeneratedImage(sc *models.Scene, inputPath string,
 
 // SaveUpload 手动上传素材入库（保存到 input/<materials>/<name>）
 func (m *MaterialService) SaveUpload(projectID *uint, ftype, name string, data []byte) (*models.Material, error) {
+	return m.SaveUploadWithThumb(projectID, ftype, name, data, "", nil)
+}
+
+// SaveUploadWithThumb 与 SaveUpload 相同，另存一张预览图（3D 素材用：客户端截一帧）。
+// 缩略图与模型文件落在同一 task 目录，删除素材时一起清理。
+func (m *MaterialService) SaveUploadWithThumb(projectID *uint, ftype, name string, data []byte, thumbName string, thumb []byte) (*models.Material, error) {
+	return m.saveUpload(projectID, ftype, name, data, thumbName, thumb, "upload")
+}
+
+// SaveStudioModel 保存 3D 编辑器导出的模型与缩略图，来源标记为 studio_3d，
+// 与素材库手动上传区分开（素材页显示「3D 编辑器」）。
+func (m *MaterialService) SaveStudioModel(projectID *uint, name string, data, thumb []byte) (*models.Material, error) {
+	thumbName := ""
+	if len(thumb) > 0 {
+		thumbName = strings.TrimSuffix(name, filepath.Ext(name)) + "_thumb.png"
+	}
+	return m.saveUpload(projectID, "3d", name, data, thumbName, thumb, "studio_3d")
+}
+
+func (m *MaterialService) saveUpload(projectID *uint, ftype, name string, data []byte, thumbName string, thumb []byte, source string) (*models.Material, error) {
 	taskID := "materials"
 	if projectID != nil {
 		taskID = fmt.Sprintf("material_p%d", *projectID)
@@ -54,9 +74,16 @@ func (m *MaterialService) SaveUpload(projectID *uint, ftype, name string, data [
 	if err != nil {
 		return nil, err
 	}
+	thumbPath := ""
+	if len(thumb) > 0 && strings.TrimSpace(thumbName) != "" {
+		thumbPath, _, err = m.upload.SaveFile(taskID, "image", thumbName, thumb)
+		if err != nil {
+			return nil, err
+		}
+	}
 	mat := models.Material{
-		Name: name, Type: ftype, Source: "upload",
-		ProjectID: projectID, Path: path, Size: size,
+		Name: name, Type: ftype, Source: source,
+		ProjectID: projectID, Path: path, ThumbPath: thumbPath, Size: size,
 	}
 	if err := m.db.Create(&mat).Error; err != nil {
 		return nil, err
@@ -94,10 +121,15 @@ func (m *MaterialService) Delete(id uint) error {
 		return ErrMaterialReferenced
 	}
 	// 删除 input 文件（场景共享素材不物理删除，避免影响场景引用）
-	if mat.Source == "upload" {
-		full := m.upload.InputDir() + "/" + mat.Path
-		if _, err := m.remote.Run(fmt.Sprintf("rm -f '%s'", full)); err != nil {
-			return err
+	if mat.Source == "upload" || mat.Source == "studio_3d" {
+		for _, rel := range []string{mat.Path, mat.ThumbPath} {
+			if strings.TrimSpace(rel) == "" {
+				continue
+			}
+			full := m.upload.InputDir() + "/" + rel
+			if _, err := m.remote.Run(fmt.Sprintf("rm -f '%s'", full)); err != nil {
+				return err
+			}
 		}
 	}
 	return m.db.Delete(&mat).Error

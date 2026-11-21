@@ -12,6 +12,9 @@ import { findTemplateId } from "../host/template-cache.js";
 interface PageDrawStageProps {
   initialImageUrl?: string;
   exitTo?: string;
+  /** 写回分镜：由宿主注入（改哪个 Scene、写图还是写衔接帧）。缺省时不显示按钮。 */
+  writeBack?: (blob: Blob, filename?: string) => Promise<string>;
+  writeBackLabel?: string;
 }
 
 interface UploadResult {
@@ -112,11 +115,15 @@ function resultUrl(task: {
 export default function PageDrawStage({
   initialImageUrl,
   exitTo = "/studio/draw",
+  writeBack,
+  writeBackLabel = "写回分镜（另存候选）",
 }: PageDrawStageProps) {
   const store = useSceneStore();
   const [fillColor, setFillColor] = useState("#ffffff");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [writing, setWriting] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [inpaintModel, setInpaintModel] = useState("image_inpaint");
   const [kreaUnet, setKreaUnet] = useState(KREA2_UNETS[0].value);
@@ -498,6 +505,25 @@ export default function PageDrawStage({
     link.click();
   };
 
+  // 把画布当前画面按 PNG 交给宿主写回分镜；不下载、不关编辑器，用户可继续改。
+  const handleWriteBack = async () => {
+    const stage = stageRef.current;
+    if (!writeBack || !stage) return;
+    setWriting(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const dataUrl = stage.toDataURL({ pixelRatio: 1 });
+      const blob = await (await fetch(dataUrl)).blob();
+      const message = await writeBack(blob, `canvas-${Date.now()}.png`);
+      setNotice(message);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setWriting(false);
+    }
+  };
+
   const inpaintNodes = useMemo(() => store.inpaintLineNodes, [store]);
 
   return (
@@ -658,6 +684,17 @@ export default function PageDrawStage({
           >
             下载 PNG
           </button>
+          {writeBack && (
+            <button
+              type="button"
+              className="rounded-md border border-emerald-400/40 px-3 py-1.5 text-sm text-emerald-200 hover:bg-emerald-400/10 disabled:opacity-50"
+              onClick={() => void handleWriteBack()}
+              disabled={writing || Boolean(busy)}
+              title="把画布当前画面写成一张新候选，旧版本仍可在候选中切回"
+            >
+              {writing ? "写回中…" : writeBackLabel}
+            </button>
+          )}
         </div>
       </div>
 
@@ -818,6 +855,11 @@ export default function PageDrawStage({
       {error && (
         <div className="fixed bottom-20 left-1/2 z-50 -translate-x-1/2 rounded-md border border-red-400/40 bg-red-950/90 px-4 py-2 text-sm text-red-100">
           {error}
+        </div>
+      )}
+      {notice && !error && (
+        <div className="fixed bottom-20 left-1/2 z-50 -translate-x-1/2 rounded-md border border-emerald-400/40 bg-emerald-950/90 px-4 py-2 text-sm text-emerald-100">
+          {notice}
         </div>
       )}
       {busy && (

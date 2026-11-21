@@ -702,6 +702,36 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     }
   }, []);
 
+  // 3D 资产入库：模型本体进素材库（type=3d，可被预演绑定），预览图取当前渲染帧。
+  const saveToLibrary = useCallback(async () => {
+    if (objectsRef.current.length === 0) return;
+    setBusy("正在存入素材库…");
+    setError(null);
+    try {
+      const binary = await exportGeometry();
+      const glb = new Blob([binary], { type: "model/gltf-binary" });
+      const renderer = rendererRef.current;
+      const thumb = renderer?.domElement.toDataURL("image/png");
+      const form = new FormData();
+      form.append("file", glb, `scene-${Date.now()}.glb`);
+      form.append("type", "3d");
+      if (thumb) {
+        form.append("thumbnail", await (await fetch(thumb)).blob(), "thumb.png");
+      }
+      const response = await fetch("/api/materials", { method: "POST", body: form });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `存入素材库失败（HTTP ${response.status}）`);
+      }
+      const material = await response.json();
+      setStatus(`已存入素材库：${material.name}（约 ${(binary.byteLength / 1024 / 1024).toFixed(1)} MB）`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }, [exportGeometry]);
+
   const saveScene = useCallback(async () => {
     const camera = cameraRef.current;
     const controls = controlsRef.current;
@@ -853,6 +883,15 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           title="把场景里的模型导出为 GLB"
         >
           导出 GLB
+        </button>
+        <button
+          type="button"
+          className="rounded-md border border-sky-400/40 px-3 py-1.5 text-sm text-sky-200 hover:bg-sky-400/10 disabled:opacity-40"
+          onClick={() => void saveToLibrary()}
+          disabled={objects.length === 0 || Boolean(busy)}
+          title="把模型存入素材库（含当前画面预览图），供漫剧调度预演绑定"
+        >
+          存入素材库
         </button>
         <button
           type="button"

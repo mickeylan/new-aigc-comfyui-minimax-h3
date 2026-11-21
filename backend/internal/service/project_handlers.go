@@ -1182,7 +1182,7 @@ func (s *Service) HandleUploadSceneImage(c *gin.Context) {
 	if !ok {
 		return
 	}
-	file, _, err := c.Request.FormFile("file")
+	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		c.JSON(400, gin.H{"error": "file required: " + err.Error()})
 		return
@@ -1211,6 +1211,20 @@ func (s *Service) HandleUploadSceneImage(c *gin.Context) {
 	path, _, err := s.Upload.SaveFile(fmt.Sprintf("%d", p.ID), "image", name, data)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	// 画布精修结果默认另存候选：与生成任务共用候选通道，旧分镜图降级为历史候选可切回；
+	// 旧视频与依赖它的衔接帧按既有替换规则失效。
+	if c.PostForm("as_candidate") == "1" || c.PostForm("as_candidate") == "true" {
+		candidate, err := s.Projects.SaveStudioSceneImageCandidate(sc, filepath.Base(path), header.Filename)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{
+			"ok": true, "candidate_id": candidate.ID, "image_file": candidate.File,
+			"message": "已保存为新的分镜图候选并设为当前；旧版本可在候选中切回",
+		})
 		return
 	}
 	if err := s.Projects.ReplaceSceneImage(sc, filepath.Base(path)); err != nil {
@@ -1255,6 +1269,20 @@ func (s *Service) HandleUploadSceneVideo(c *gin.Context) {
 	path, _, err := s.Upload.SaveFile(fmt.Sprintf("%d", p.ID), "video", stored, data)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	// 剪辑器精修结果默认另存候选：与生成任务共用候选通道，旧版本仍可切回，
+	// 下游连续性与在跑的成片合并由后续提交规则统一处理。
+	if c.PostForm("as_candidate") == "1" || c.PostForm("as_candidate") == "true" {
+		candidate, err := s.Projects.SaveStudioSceneVideoCandidate(sc, filepath.Base(path), header.Filename)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusCreated, gin.H{
+			"ok": true, "candidate_id": candidate.ID, "video_input_file": candidate.VideoInputFile,
+			"message": "已保存为新的分镜视频候选并设为当前；旧版本可在候选中切回",
+		})
 		return
 	}
 	if err := s.Projects.ReplaceSceneVideo(sc, filepath.Base(path), "upload"); err != nil {
@@ -2965,6 +2993,28 @@ func (s *Service) HandleUploadMaterial(c *gin.Context) {
 	data, err := io.ReadAll(file)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if ftype == "3d" {
+		ext := strings.ToLower(filepath.Ext(header.Filename))
+		switch ext {
+		case ".glb", ".gltf", ".obj", ".fbx", ".ply", ".splat":
+		default:
+			c.JSON(400, gin.H{"error": "3D 素材仅支持 GLB/GLTF/OBJ/FBX/PLY/SPLAT"})
+			return
+		}
+		// 3D 素材由 3D 编辑器客户端导出并截一帧作为预览图，一起上传。
+		var thumb []byte
+		if thumbFile, _, err := c.Request.FormFile("thumbnail"); err == nil {
+			defer thumbFile.Close()
+			thumb, _ = io.ReadAll(io.LimitReader(thumbFile, 8<<20))
+		}
+		mat, err := s.Materials.SaveStudioModel(projectID, header.Filename, data, thumb)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, mat)
 		return
 	}
 	mat, err := s.Materials.SaveUpload(projectID, ftype, header.Filename, data)

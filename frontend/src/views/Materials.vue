@@ -9,7 +9,7 @@
           <button class="btn btn-lg" @click="pickFile">
             <span class="plus">＋</span> 上传素材
           </button>
-          <input ref="fileInput" type="file" hidden accept="image/*,video/*,audio/*" @change="onPick" />
+          <input ref="fileInput" type="file" hidden accept="image/*,video/*,audio/*,.glb,.gltf,.obj,.fbx,.ply,.splat" @change="onPick" />
           <router-link to="/studio/video" class="btn btn-lg btn-secondary">🎞 进入视频剪辑</router-link>
         </div>
       </div>
@@ -23,6 +23,7 @@
         <button class="chip" :class="{ active: filter.type === 'image' }" @click="setType('image')">🖼 图片</button>
         <button class="chip" :class="{ active: filter.type === 'video' }" @click="setType('video')">🎬 视频</button>
         <button class="chip" :class="{ active: filter.type === 'audio' }" @click="setType('audio')">🎵 音频</button>
+        <button class="chip" :class="{ active: filter.type === '3d' }" @click="setType('3d')">🧊 3D 模型</button>
       </div>
       <select v-model="filter.project_id" class="input select-sm" @change="load">
         <option value="">全部项目</option>
@@ -44,6 +45,11 @@
         <div class="mat-preview" :class="typeTone(m.type)">
           <img v-if="m.type === 'image'" :src="api.materialUrl(m.path)" loading="lazy" alt="素材" @click="viewer = m" />
           <video v-else-if="m.type === 'video'" :src="api.materialUrl(m.path)" controls preload="metadata" muted></video>
+          <!-- 3D 素材用客户端截的那一帧做预览；下载后可拖进 3D 编辑器或预演绑定。 -->
+          <div v-else-if="m.type === '3d'" class="model-preview" @click="m.thumb_path && (viewer = m)">
+            <img v-if="m.thumb_path" :src="api.materialUrl(m.thumb_path)" loading="lazy" alt="3D 模型预览" />
+            <span v-else class="audio-icon">🧊</span>
+          </div>
           <div v-else class="audio-preview">
             <span class="audio-icon">♪</span>
             <audio :src="api.materialUrl(m.path)" controls preload="none"></audio>
@@ -54,7 +60,7 @@
           <div class="mat-name" :title="m.name">{{ m.name }}</div>
           <div class="mat-meta">
             <span class="tag" :class="m.source === 'scene' ? 'tag-blue' : 'tag-gray'">
-              {{ m.source === 'scene' ? '场景生成' : '手动上传' }}
+              {{ sourceText(m.source) }}
             </span>
             <span v-if="m.project_id" class="mat-project">项目 #{{ m.project_id }}</span>
           </div>
@@ -70,7 +76,7 @@
     <!-- 预览弹窗 -->
     <div v-if="viewer" class="modal-mask viewer-mask" tabindex="-1" @click.self="viewer = null" @keydown.esc="viewer = null">
       <button class="viewer-close" @click="viewer = null" title="关闭 (Esc)">✕</button>
-      <img :src="api.materialUrl(viewer.path)" alt="素材预览" class="viewer-img" @click="viewer = null" />
+      <img :src="api.materialUrl(viewer.thumb_path || viewer.path)" alt="素材预览" class="viewer-img" @click="viewer = null" />
       <div class="viewer-foot">
         <span class="viewer-name">{{ viewer.name }}</span>
         <a :href="api.materialUrl(viewer.path) + '?download=1'" class="btn btn-sm btn-download" @click.stop>下载</a>
@@ -123,11 +129,15 @@ function pickFile() {
   fileInput.value?.click()
 }
 
+const MODEL_EXTENSIONS = /\.(glb|gltf|obj|fbx|ply|splat)$/i
+
 async function onPick(e) {
   const file = e.target.files?.[0]
   e.target.value = ''
   if (!file) return
-  const type = file.type.startsWith('image/') ? 'image'
+  // 浏览器给 .glb 的 MIME 通常是空串或 model/gltf-binary，按扩展名兜底识别 3D 素材。
+  const type = MODEL_EXTENSIONS.test(file.name) ? '3d'
+    : file.type.startsWith('image/') ? 'image'
     : file.type.startsWith('video/') ? 'video'
     : file.type.startsWith('audio/') ? 'audio' : 'image'
   uploading.value = true
@@ -152,10 +162,20 @@ async function remove(m) {
 }
 
 function typeText(t) {
-  return { image: '图片', video: '视频', audio: '音频' }[t] || t
+  return { image: '图片', video: '视频', audio: '音频', '3d': '3D 模型' }[t] || t
+}
+// 来源标签：场景自动入库、手动上传、3D 编辑器导出、剪辑器/画布写回。
+function sourceText(source) {
+  return {
+    scene: '场景生成',
+    upload: '手动上传',
+    studio_3d: '3D 编辑器',
+    studio_video: '剪辑器写回',
+    studio_canvas: '画布写回'
+  }[source] || '手动上传'
 }
 function typeTone(t) {
-  return { image: 'tone-blue', video: 'tone-purple', audio: 'tone-green' }[t] || 'tone-gray'
+  return { image: 'tone-blue', video: 'tone-purple', audio: 'tone-green', '3d': 'tone-amber' }[t] || 'tone-gray'
 }
 </script>
 
@@ -214,7 +234,10 @@ function typeTone(t) {
 .tone-blue { background: rgba(10, 132, 255, 0.9); }
 .tone-purple { background: rgba(191, 90, 242, 0.9); }
 .tone-green { background: rgba(48, 209, 88, 0.9); }
+.tone-amber { background: rgba(255, 159, 10, 0.9); }
 .tone-gray { background: rgba(0, 0, 0, 0.4); }
+.model-preview { width: 100%; height: 100%; cursor: zoom-in; }
+.model-preview img { width: 100%; height: 100%; object-fit: contain; background: #1b1d22; }
 .audio-preview { display: flex; flex-direction: column; align-items: center; gap: 10px; width: 100%; padding: 12px; }
 .audio-icon { font-size: 32px; color: var(--text-tertiary); }
 .audio-preview audio { width: 100%; }

@@ -34,17 +34,19 @@ interface GalleryItem {
 }
 
 export function createComfyAdapters(
-  options: { projectId?: string } = {},
+  options: { projectId?: string; scene?: { projectId: string | number; sceneId: number } | null } = {},
 ): VideoEditorAdapters {
   const base = createDefaultAdapters();
   return {
     ...base,
     mediaSource: createComfyMediaSource(base.mediaSource),
     assetGallery: createComfyAssetGallery(),
-    // 磁盘下载沿用默认 sink，另加一条「存到媒体库」→ POST /api/materials。
+    // 磁盘下载沿用默认 sink，另加「存到素材库」→ POST /api/materials
+    // 与「写回分镜」→ POST /api/projects/:id/scenes/:sid/video/upload。
     exportSink: createComfyExportSink({
       diskSink: base.exportSink,
       projectId: options.projectId,
+      scene: options.scene ?? null,
     }),
   };
 }

@@ -1,7 +1,7 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
-import { takeStudioMedia } from "../studio/initial-media.js";
+import { takeStudioMedia, takeStudioScene } from "../studio/initial-media.js";
 
 const el = ref(null)
 const route = useRoute();
@@ -11,6 +11,8 @@ let unmounted = false;
 
 onMounted(async () => {
   const initialMedia = takeStudioMedia();
+  // 从分镜进入时带上 Scene 上下文：导出面板会出现「写回分镜」，退出回到原页面。
+  const scene = takeStudioScene();
   // Lazy-load the React island so Vue-only routes never download React or
   // the editor's wasm/renderer chunks.
   const { mountVideoEditor } = await import("../studio/host/mount");
@@ -19,8 +21,9 @@ onMounted(async () => {
   if (unmounted || !el.value) return;
   handle = mountVideoEditor(el.value, {
     projectId: route.params.projectId,
-    exitTo: "/projects",
+    exitTo: scene?.returnTo || "/projects",
     initialMedia,
+    scene,
   });
   loading.value = false;
 });

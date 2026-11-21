@@ -31,6 +31,7 @@
       <div v-if="selectedOutput" class="replace-row">
         <span>已选上一镜末尾帧：{{ selectedOutput.source === 'manual_upload' ? '用户高清替换图' : timeLabel(selectedOutput.timestamp_ms) }}</span>
         <label class="btn btn-sm btn-secondary">上传高清图替换<input hidden type="file" accept="image/png,image/jpeg,image/webp" @change="replaceFrame" /></label>
+        <button class="btn btn-sm btn-secondary" @click="refineSelected">画布精修</button>
       </div>
       <div v-if="selectedOutput" class="form-block">
         <div class="form-row">
@@ -68,7 +69,7 @@ const props = defineProps({
   sourceSceneOrder: { type: Number, default: 0 },
   sourceVideoReady: { type: Boolean, default: false }
 })
-const emit = defineEmits(['close', 'frame-selected', 'applied'])
+const emit = defineEmits(['close', 'frame-selected', 'refine-frame', 'applied'])
 const frames = ref([])
 const continuity = ref(null)
 const mode = ref('independent')
@@ -161,6 +162,12 @@ async function replaceFrame(event) {
     selectedFrameId.value = replaced.id
     emit('frame-selected', replaced)
   } catch (e) { error.value = e.response?.data?.error || e.message }
+}
+// 把选中帧送进 2D 画布精修；写回走 replace（后端保留 original_image_file）。
+function refineSelected() {
+  const frame = selectedOutput.value
+  if (!frame?.image_url || !props.sourceSceneId) return
+  emit('refine-frame', { frame_id: frame.id, image_url: frame.image_url, scene_id: props.sourceSceneId })
 }
 async function saveMode(openPrompt) {
   saving.value = true

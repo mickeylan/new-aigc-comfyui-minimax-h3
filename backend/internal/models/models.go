@@ -525,12 +525,15 @@ type MergeTask struct {
 type Material struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
 	Name      string    `json:"name"`
-	Type      string    `gorm:"index" json:"type"`                         // image/video/audio
-	Source    string    `json:"source"`                                    // scene(场景生成)/upload(手动上传)
+	Type      string    `gorm:"index" json:"type"`                         // image/video/audio/3d
+	Source    string    `json:"source"`                                    // scene(场景生成)/upload(手动上传)/studio_3d(3D 编辑器)
 	ProjectID *uint     `gorm:"column:project_id;index" json:"project_id"` // 关联项目（可选）
 	SceneID   *uint     `gorm:"column:scene_id" json:"scene_id"`           // 关联场景（可选）
 	Path      string    `json:"path"`                                      // input 相对路径（task_id/filename）
-	Prompt    string    `json:"prompt"`                                    // 生成提示词（可选）
+	// ThumbPath 是 3D 素材的预览图（客户端截一帧后随文件一起上传），
+	// 与 Path 同一 task 目录下的 image 文件；其它类型留空。
+	ThumbPath string    `gorm:"column:thumb_path" json:"thumb_path,omitempty"`
+	Prompt    string    `json:"prompt"` // 生成提示词（可选）
 	Size      int64     `json:"size"`
 	CreatedAt time.Time `json:"created_at"`
 }

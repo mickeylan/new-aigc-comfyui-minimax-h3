@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -9035,6 +9036,48 @@ func (s *ProjectService) completeSceneCandidate(in SceneCandidateCapture) (*mode
 		}(in.ProjectID, in.SceneID)
 	}
 	return candidate, nil
+}
+
+// studioCandidateSeq 保证同一纳秒内的多次写回也拿到不同的候选 task id：
+// Windows 的时钟粒度可能到十几毫秒，光用 UnixNano 会让两次写回合并成一条候选。
+var studioCandidateSeq atomic.Uint64
+
+func studioCandidateTaskID(prefix string, sceneID uint) string {
+	return fmt.Sprintf("%s-%d-%d-%d", prefix, sceneID, time.Now().UnixNano(), studioCandidateSeq.Add(1))
+}
+
+// SaveStudioSceneVideoCandidate 把剪辑器导出的成片存成新的分镜视频候选并设为当前。
+// 走与生成任务相同的候选通道：旧版本自动降级为历史候选（可切回），下游连续性与
+// 正在跑的成片合并按既有规则失效；Scene.Duration 不改，成片时长与目标时长不一致
+// 由用户在成片编排阶段处理。
+func (s *ProjectService) SaveStudioSceneVideoCandidate(sc *models.Scene, file, sourceFilename string) (*models.GenerationCandidate, error) {
+	if sc == nil || sc.ID == 0 || strings.TrimSpace(file) == "" {
+		return nil, fmt.Errorf("场景和视频不能为空")
+	}
+	return s.completeSceneCandidate(SceneCandidateCapture{
+		ProjectID: sc.ProjectID, SceneID: sc.ID, MediaType: "video",
+		TaskID:         studioCandidateTaskID("studio-video", sc.ID),
+		File:           filepath.Base(file),
+		VideoInputFile: filepath.Base(file),
+		Prompt:         sc.VideoFullPrompt,
+		Provenance:     map[string]any{"source": "studio_video", "source_filename": sourceFilename},
+	})
+}
+
+// SaveStudioSceneImageCandidate 把 2D 画布精修后的分镜图存成新的分镜图候选并设为当前。
+// 与生成任务共用候选通道：旧分镜图降级为历史候选（可切回），旧视频与衔接帧
+// 按「分镜图已更新」的既有规则失效。
+func (s *ProjectService) SaveStudioSceneImageCandidate(sc *models.Scene, file, sourceFilename string) (*models.GenerationCandidate, error) {
+	if sc == nil || sc.ID == 0 || strings.TrimSpace(file) == "" {
+		return nil, fmt.Errorf("场景和分镜图不能为空")
+	}
+	return s.completeSceneCandidate(SceneCandidateCapture{
+		ProjectID: sc.ProjectID, SceneID: sc.ID, MediaType: "image",
+		TaskID:     studioCandidateTaskID("studio-image", sc.ID),
+		File:       filepath.Base(file),
+		Prompt:     sc.ImagePrompt,
+		Provenance: map[string]any{"source": "studio_canvas", "source_filename": sourceFilename},
+	})
 }
 
 func (s *ProjectService) syncSceneImages() {

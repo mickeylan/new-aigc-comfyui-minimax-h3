@@ -434,6 +434,7 @@ export const api = {
       timeout: 300000
     })
   },
+  // 3D 编辑器写入素材库走原始 fetch（React 岛内不引 axios 实例），这里不额外包一层。
   deleteMaterial: (id) => http.delete(`/materials/${id}`),
   sharedAssetReferences: (id) => http.get(`/projects/${id}/shared-asset-references`),
   effectiveSharedAssets: (id, params = {}) => http.get(`/projects/${id}/shared-assets/effective`, { params }),
