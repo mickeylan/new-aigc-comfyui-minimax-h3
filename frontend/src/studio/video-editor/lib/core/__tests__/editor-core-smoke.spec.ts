@@ -76,7 +76,7 @@ function buildInMemoryAdapters(): VideoEditorAdapters {
 }
 
 function buildSampleProject(): TProject {
-  const scene = buildDefaultScene({ name: "Main scene", isMain: true });
+  const scene = buildDefaultScene({ name: "主场景", isMain: true });
   return {
     metadata: {
       id: SAMPLE_PROJECT_ID,

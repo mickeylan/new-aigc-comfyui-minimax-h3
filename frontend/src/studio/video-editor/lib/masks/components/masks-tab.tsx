@@ -277,8 +277,8 @@ export function MasksTab({ element, trackId }: MasksTabProps) {
                 </span>
               </TooltipTrigger>
               <TooltipContent className="max-w-56 text-balance">
-                Only one mask is supported right now. If you need more,
-                duplicate the clip and apply a different mask to each copy.
+                目前每层只支持一个遮罩。需要多个的话，把片段复制一份，
+                再给副本换一种遮罩。
               </TooltipContent>
             </Tooltip>
           ) : (
@@ -849,11 +849,11 @@ function EmptyView({ onAddMask }: EmptyViewProps) {
       <div className="flex flex-col gap-2">
         <h3 className="font-medium text-foreground">还没有遮罩</h3>
         <p className="text-muted-foreground text-sm text-balance max-w-40">
-          Add a mask to hide or reveal parts of this layer.
+          加一个遮罩，就能遮住或露出这一层的局部。
         </p>
       </div>
       <Button variant="default" size="sm" onClick={onAddMask}>
-        Add mask
+        添加遮罩
       </Button>
     </div>
   );

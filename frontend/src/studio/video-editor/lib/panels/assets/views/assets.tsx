@@ -606,6 +606,13 @@ function MediaPreview({
   );
 }
 
+const SORT_LABELS: Record<MediaSortKey, string> = {
+  name: "名称",
+  type: "类型",
+  duration: "时长",
+  size: "文件大小",
+};
+
 function MediaActions({
   mediaViewMode,
   setMediaViewMode,
@@ -702,8 +709,8 @@ function MediaActions({
           </DropdownMenu>
           <TooltipContent>
             <p>
-              Sort by {sortBy} (
-              {sortOrder === "asc" ? "升序" : "降序"})
+              按{SORT_LABELS[sortBy]}排序（
+              {sortOrder === "asc" ? "升序" : "降序"}）
             </p>
           </TooltipContent>
         </Tooltip>
@@ -717,7 +724,7 @@ function MediaActions({
           className="items-center justify-center gap-1.5"
         >
           <HugeiconsIcon icon={FolderLibraryIcon} />
-          Browse
+          浏览
         </Button>
       ) : null}
       <Button
@@ -728,7 +735,7 @@ function MediaActions({
         className="items-center justify-center gap-1.5"
       >
         <HugeiconsIcon icon={CloudUploadIcon} />
-        Import
+        导入
       </Button>
     </div>
   );

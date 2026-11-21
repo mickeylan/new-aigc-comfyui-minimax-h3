@@ -152,7 +152,7 @@ export const useSoundsStore = create<SoundsStore>((set, get) => ({
       });
     } catch (error) {
       const errorMessage =
-        error instanceof Error ? error.message : "Failed to load saved sounds";
+        error instanceof Error ? error.message : "收藏的音效加载失败";
       set({
         savedSoundsError: errorMessage,
         isLoadingSavedSounds: false,
@@ -232,10 +232,10 @@ export const useSoundsStore = create<SoundsStore>((set, get) => ({
       });
     } catch (error) {
       const errorMessage =
-        error instanceof Error ? error.message : "Failed to clear saved sounds";
+        error instanceof Error ? error.message : "收藏的音效清空失败";
       set({ savedSoundsError: errorMessage });
       EditorCore.getInstance().adapters.toast.error(
-        "Failed to clear saved sounds",
+        "收藏的音效清空失败",
       );
       console.error("Failed to clear saved sounds:", error);
     }
@@ -263,7 +263,7 @@ export const useSoundsStore = create<SoundsStore>((set, get) => ({
 
       const response = await fetch(audioUrl);
       if (!response.ok)
-        throw new Error(`Failed to download audio: ${response.statusText}`);
+        throw new Error(`音频下载失败：${response.statusText}`);
 
       const arrayBuffer = await response.arrayBuffer();
       const audioContext = new AudioContext();
@@ -287,7 +287,7 @@ export const useSoundsStore = create<SoundsStore>((set, get) => ({
       editor.adapters.toast.error(
         error instanceof Error
           ? error.message
-          : "Failed to add sound to timeline",
+          : "音效加入时间线失败",
       );
       return false;
     }

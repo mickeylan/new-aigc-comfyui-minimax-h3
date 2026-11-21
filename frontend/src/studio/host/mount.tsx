@@ -37,12 +37,12 @@ export interface VideoEditorHandle {
 }
 
 function buildBootstrapProject({ id }: { id: string }): TProject {
-  const scene = buildDefaultScene({ name: "Main scene", isMain: true });
+  const scene = buildDefaultScene({ name: "主场景", isMain: true });
   const now = new Date();
   return {
     metadata: {
       id,
-      name: "Untitled project",
+      name: "未命名项目",
       duration: ZERO_MEDIA_TIME,
       createdAt: now,
       updatedAt: now,

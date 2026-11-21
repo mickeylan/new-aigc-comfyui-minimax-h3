@@ -6,7 +6,7 @@ import { type MediaTime, ZERO_MEDIA_TIME } from "../../wasm";
 // already-earliest element later in time keeps the rest of the track
 // stationary (we don't shift everyone forward).
 
-export const MAIN_TRACK_NAME = "Main Track";
+export const MAIN_TRACK_NAME = "主轨道";
 
 export function getEarliestMainTrackElement({
   mainTrack,

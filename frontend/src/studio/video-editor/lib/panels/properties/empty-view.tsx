@@ -12,7 +12,7 @@ export function EmptyView() {
       <div className="flex flex-col gap-2 text-center">
         <p className="text-lg font-medium ">这里还空着</p>
         <p className="text-muted-foreground text-sm text-balance">
-          Click an element on the timeline to edit its properties
+          点时间线上的元素，就能在这里改属性
         </p>
       </div>
     </div>

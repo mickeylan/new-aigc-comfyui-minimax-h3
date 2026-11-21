@@ -342,7 +342,7 @@ function ExportPopover({
                         <div className="flex items-center space-x-2">
                           <RadioGroupItem value="very_high" id="very_high" />
                           <Label htmlFor="very_high">
-                            Very high · 文件最大
+                            极高 · 文件最大
                           </Label>
                         </div>
                       </RadioGroup>

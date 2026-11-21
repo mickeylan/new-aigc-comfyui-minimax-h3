@@ -216,7 +216,7 @@ function EmptyView() {
       <div className="flex flex-col gap-2">
         <h3 className="font-medium text-foreground">还没有特效</h3>
         <p className="text-muted-foreground text-sm text-balance max-w-44">
-          Add effects to this layer from the Assets panel.
+          在素材面板里把特效加给这一层。
         </p>
       </div>
       <Button
@@ -224,7 +224,7 @@ function EmptyView() {
         size="sm"
         onClick={() => setActiveTab("effects")}
       >
-        Open effects
+        打开特效面板
       </Button>
     </div>
   );

@@ -255,11 +255,11 @@ function SoundEffectsView() {
               checked={showCommercialOnly}
               onCheckedChange={() => toggleCommercialFilter()}
             >
-              Show only commercially licensed
+              只看可商用授权的音效
             </DropdownMenuCheckboxItem>
             <div className="text-muted-foreground px-2 py-1.5 text-xs">
               {showCommercialOnly
-                ? "Only showing sounds licensed for commercial use"
+                ? "当前只显示可商用授权的音效"
                 : "已忽略授权，显示全部音效"}
             </div>
           </DropdownMenuContent>
@@ -275,7 +275,7 @@ function SoundEffectsView() {
           <div className="flex flex-col gap-4">
             {isLoading && !searchQuery && (
               <div className="text-muted-foreground text-sm">
-                Loading sounds...
+                正在加载音效…
               </div>
             )}
             {isSearching && searchQuery && (
@@ -296,7 +296,7 @@ function SoundEffectsView() {
             )}
             {isLoadingMore && (
               <div className="text-muted-foreground py-4 text-center text-sm">
-                Loading more sounds...
+                正在加载更多音效…
               </div>
             )}
           </div>
@@ -384,7 +384,7 @@ function SavedSoundsView() {
     return (
       <div className="flex h-full items-center justify-center">
         <div className="text-muted-foreground text-sm">
-          Loading saved sounds...
+          正在加载收藏的音效…
         </div>
       </div>
     );
@@ -394,7 +394,7 @@ function SavedSoundsView() {
     return (
       <div className="flex h-full items-center justify-center">
         <div className="text-destructive text-sm">
-          Error: {savedSoundsError}
+          出错了：{savedSoundsError}
         </div>
       </div>
     );
@@ -410,7 +410,7 @@ function SavedSoundsView() {
         <div className="flex flex-col gap-2 text-center">
           <p className="text-lg font-medium">还没有收藏的音效</p>
           <p className="text-muted-foreground text-sm text-balance">
-            Click the heart icon on any sound to save it here
+            点任意音效上的爱心图标，就能收藏到这里
           </p>
         </div>
       </div>
@@ -431,20 +431,19 @@ function SavedSoundsView() {
               size="sm"
               className="text-muted-foreground hover:text-destructive h-auto !opacity-100"
             >
-              Clear all
+              全部清空
             </Button>
           </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>清空全部收藏的音效？</DialogTitle>
               <DialogDescription>
-                This will permanently remove all {savedSounds.length} saved
-                sounds from your collection. This action cannot be undone.
+                会从收藏里永久删除全部 {savedSounds.length} 个音效，此操作不可撤销。
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
               <Button variant="text" onClick={() => setShowClearDialog(false)}>
-                Cancel
+                取消
               </Button>
               <Button
                 variant="destructive"
@@ -454,7 +453,7 @@ function SavedSoundsView() {
                   setShowClearDialog(false);
                 }}
               >
-                Clear all sounds
+                清空全部音效
               </Button>
             </DialogFooter>
           </DialogContent>

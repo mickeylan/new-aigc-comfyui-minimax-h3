@@ -252,14 +252,14 @@ function resolvePropertySelection({
   if (propertyKeyframes.keyframes.length > 2) {
     return {
       reason: "multiple-keyframes-selected",
-      message: "Select at most two adjacent keyframes per property.",
+      message: "每个属性最多选两个相邻关键帧。",
     };
   }
 
   if (!element.animations) {
     return {
       reason: "selected-element-has-no-animations",
-      message: "The selected keyframe has no editable graph.",
+      message: "选中的关键帧没有可编辑的曲线。",
     };
   }
 
@@ -270,7 +270,7 @@ function resolvePropertySelection({
   if (!scalarResult || scalarResult.channels.length === 0) {
     return {
       reason: "selected-keyframe-has-no-scalar-channel",
-      message: "The selected keyframe has no editable graph channel.",
+      message: "选中的关键帧没有可编辑的曲线通道。",
     };
   }
 
@@ -324,7 +324,7 @@ function resolvePropertySelection({
   if (contexts.length === 0) {
     return {
       reason: "selected-keyframe-missing-on-channel",
-      message: "The selected keyframe is not editable as a graph segment.",
+      message: "选中的关键帧不能作为曲线段编辑。",
     };
   }
 
@@ -336,7 +336,7 @@ function resolvePropertySelection({
       ? [
           {
             key: "value",
-            label: "Curve",
+            label: "曲线",
             context: contexts[0].context,
             allContexts: contexts.map(({ context }) => context),
           },
@@ -389,14 +389,14 @@ function resolveSegmentForOption({
   if (!option) {
     return {
       reason: "selected-properties-have-no-shared-component",
-      message: "Selected properties do not share a graph-editable channel.",
+      message: "选中的属性没有共用的可编辑曲线通道。",
     };
   }
 
   if (!option.context.nextKey) {
     return {
       reason: "selected-keyframe-has-no-next-segment",
-      message: "Select a keyframe that has an outgoing segment.",
+      message: "请选一个后面还有曲线段的关键帧。",
     };
   }
 
@@ -406,14 +406,14 @@ function resolveSegmentForOption({
   ) {
     return {
       reason: "selected-keyframes-are-not-adjacent",
-      message: "Selected keyframes must be adjacent on each property.",
+      message: "每个属性上的关键帧必须相邻。",
     };
   }
 
   if (option.context.keyframe.segmentToNext === "step") {
     return {
       reason: "selected-segment-is-hold",
-      message: "Hold segments have a fixed value - easing has no effect here.",
+      message: "保持段的值是固定的，缓动在这里不起作用。",
     };
   }
 
@@ -430,7 +430,7 @@ function resolveSegmentForOption({
     return {
       reason: "selected-segment-is-flat",
       message:
-        "Cannot edit a segment where both keyframes are at the same time.",
+        "两个关键帧在同一时刻的段无法编辑。",
     };
   }
 
@@ -458,7 +458,7 @@ export function resolveGraphEditorSelectionState({
   if (selectedKeyframes.length === 0) {
     return createUnavailableState({
       reason: "no-keyframe-selected",
-      message: "Select a keyframe to edit its curve.",
+      message: "选一个关键帧来编辑它的曲线。",
     });
   }
 
@@ -469,7 +469,7 @@ export function resolveGraphEditorSelectionState({
   if (!primaryKeyframe) {
     return createUnavailableState({
       reason: "no-keyframe-selected",
-      message: "Select a keyframe to edit its curve.",
+      message: "选一个关键帧来编辑它的曲线。",
     });
   }
 
@@ -480,7 +480,7 @@ export function resolveGraphEditorSelectionState({
   if (!selectedElement) {
     return createUnavailableState({
       reason: "selected-element-missing",
-      message: "The selected keyframe could not be resolved.",
+      message: "无法定位选中的关键帧。",
     });
   }
 
@@ -492,7 +492,7 @@ export function resolveGraphEditorSelectionState({
   if (spansMultipleElements) {
     return createUnavailableState({
       reason: "selected-keyframes-span-multiple-elements",
-      message: "Selected keyframes must be on the same element.",
+      message: "选中的关键帧必须属于同一个元素。",
     });
   }
 
@@ -534,7 +534,7 @@ export function resolveGraphEditorSelectionState({
   if (componentOptions.length === 0) {
     return createUnavailableState({
       reason: "selected-properties-have-no-shared-component",
-      message: "Selected properties do not share a graph-editable channel.",
+      message: "选中的属性没有共用的可编辑曲线通道。",
     });
   }
 
@@ -587,7 +587,7 @@ export function resolveGraphEditorSelectionState({
   if (!primarySegment) {
     return createUnavailableState({
       reason: "selected-keyframe-missing-on-channel",
-      message: "The selected keyframe is not editable as a graph segment.",
+      message: "选中的关键帧不能作为曲线段编辑。",
       componentOptions,
       activeComponentKey,
     });
@@ -597,7 +597,7 @@ export function resolveGraphEditorSelectionState({
     status: "ready",
     message:
       segments.length === 1
-        ? "Edit graph"
+        ? "编辑曲线"
         : `Edit graph for ${segments.length} properties`,
     componentOptions,
     activeComponentKey,

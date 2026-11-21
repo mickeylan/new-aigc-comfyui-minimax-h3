@@ -54,17 +54,17 @@ export function PreviewContextMenu({
   return (
     <ContextMenuContent className="w-56" container={container}>
       <ContextMenuItem onClick={viewport.fitToScreen} inset>
-        Fit to screen
+        适应画面
       </ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuItem onClick={onToggleFullscreen} inset>
-        Full screen
+        全屏查看
       </ContextMenuItem>
       <ContextMenuItem onClick={handleSaveSnapshot} inset>
-        Save snapshot
+        保存当前帧为图片
       </ContextMenuItem>
       <ContextMenuItem onClick={handleCopySnapshot} inset>
-        Copy snapshot
+        复制当前帧
       </ContextMenuItem>
       {overlayControls.length > 0 ? <ContextMenuSeparator /> : null}
       {overlayControls.map((overlayControl) => (

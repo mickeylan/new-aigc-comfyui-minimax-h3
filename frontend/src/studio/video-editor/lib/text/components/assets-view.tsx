@@ -26,7 +26,7 @@ export function TextView() {
   return (
     <PanelView title="文字">
       <DraggableItem
-        name="Default text"
+        name="默认文字"
         preview={
           <div className="bg-accent flex size-full items-center justify-center rounded-lg">
             <span className="text-xs select-none">默认文字</span>
@@ -36,7 +36,7 @@ export function TextView() {
           id: "temp-text-id",
           type: DEFAULTS.text.element.type,
           name: DEFAULTS.text.element.name,
-          content: "Default text",
+          content: "默认文字",
         }}
         aspectRatio={1}
         onAddToTimeline={handleAddToTimeline}

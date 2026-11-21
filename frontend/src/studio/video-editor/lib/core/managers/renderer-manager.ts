@@ -53,7 +53,7 @@ export class RendererManager {
     if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
       return {
         success: false,
-        error: "Clipboard image copy is not supported in this browser",
+        error: "当前浏览器不支持复制图片到剪贴板",
       };
     }
 
@@ -73,7 +73,7 @@ export class RendererManager {
       console.error("Copy snapshot failed:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
+        error: error instanceof Error ? error.message : "未知错误",
       };
     }
   }
@@ -84,12 +84,12 @@ export class RendererManager {
       const activeProject = this.editor.project.getActive();
 
       if (!renderTree || !activeProject) {
-        return { success: false, error: "No project or scene to capture" };
+        return { success: false, error: "没有可截取的项目或场景" };
       }
 
       const duration = this.editor.timeline.getTotalDuration();
       if (duration === 0) {
-        return { success: false, error: "Project is empty" };
+        return { success: false, error: "项目还是空的" };
       }
 
       const { canvasSize, fps } = activeProject.settings;
@@ -119,7 +119,7 @@ export class RendererManager {
       });
 
       if (!blob) {
-        return { success: false, error: "Failed to create image" };
+        return { success: false, error: "生成图片失败" };
       }
 
       const timecode = formatTimecode({ time: renderTime, rate: fps })!.replace(/:/g, "-");
@@ -133,7 +133,7 @@ export class RendererManager {
       console.error("Snapshot capture failed:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
+        error: error instanceof Error ? error.message : "未知错误",
       };
     }
   }
@@ -155,12 +155,12 @@ export class RendererManager {
       const activeProject = this.editor.project.getActive();
 
       if (!activeProject) {
-        return { success: false, error: "No active project" };
+        return { success: false, error: "当前没有打开的项目" };
       }
 
       const duration = this.editor.timeline.getTotalDuration();
       if (duration === 0) {
-        return { success: false, error: "Project is empty" };
+        return { success: false, error: "项目还是空的" };
       }
 
       const exportFps = fps ?? activeProject.settings.fps;
@@ -220,7 +220,7 @@ export class RendererManager {
         }
 
         if (!buffer) {
-          return { success: false, error: "Export failed to produce buffer" };
+          return { success: false, error: "导出没有产出文件内容" };
         }
 
         return {
@@ -234,7 +234,7 @@ export class RendererManager {
       console.error("Export failed:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : "Unknown export error",
+        error: error instanceof Error ? error.message : "导出失败，原因未知",
       };
     }
   }

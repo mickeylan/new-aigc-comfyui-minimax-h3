@@ -223,3 +223,115 @@ test('剪辑器零散文案与浏览器原生提示也是中文', () => {
   }
   assert.deepEqual(offenders, [], `仍是英文：\n${offenders.join('\n')}`)
 })
+
+// 第二轮中文化：空项目首页能看到的全部提示，以及各面板的次要文案。
+const secondPassBanned = {
+  'host/mount.tsx': ['Untitled project', 'Main scene'],
+  'video-editor/lib/timeline/scenes.ts': ['Main scene', 'Cannot delete main scene'],
+  'video-editor/lib/timeline/placement/main-track.ts': ['Main Track'],
+  'video-editor/lib/timeline/components/timeline-track.tsx': ['Select ${track.name} track'],
+  'video-editor/lib/panels/assets/views/assets.tsx': ['Sort by {sortBy}'],
+  'video-editor/lib/panels/assets/drag-overlay.tsx': [
+    'Drag and drop videos, photos, and audio files here',
+    'Processing your files',
+  ],
+  'video-editor/lib/panels/properties/empty-view.tsx': [
+    'Click an element on the timeline to edit its properties',
+  ],
+  'video-editor/lib/preview/components/toolbar.tsx': ['? "Fit" :'],
+  'video-editor/lib/preview/components/context-menu.tsx': [
+    'Fit to screen',
+    'Full screen',
+    'Save snapshot',
+    'Copy snapshot',
+  ],
+  'video-editor/lib/components/ui/font-picker.tsx': [
+    'All fonts',
+    'My fonts',
+    'Select a font',
+    'Loading fonts',
+    'Failed to load font previews',
+    'No fonts found',
+  ],
+  'video-editor/lib/graphics/definitions/shared.ts': ['label: "Stroke align"', 'label: "Inside"'],
+  'video-editor/lib/graphics/definitions/rectangle.ts': ['Corner radius', 'name: "Rectangle"'],
+  'video-editor/lib/graphics/definitions/polygon.ts': ['Corner radius', 'name: "Polygon"'],
+  'video-editor/lib/graphics/definitions/star.ts': ['label: "Points"', 'name: "Star"'],
+  'video-editor/lib/graphics/definitions/ellipse.ts': ['name: "Ellipse"'],
+  'video-editor/lib/timeline/components/graph-editor/easing-presets.ts': [
+    'Ease out',
+    'Ease in',
+    'In out',
+  ],
+  'video-editor/lib/timeline/components/graph-editor/popover.tsx': ['>\n              Presets', '>\n              Saved'],
+  'video-editor/lib/timeline/components/graph-editor/session.ts': [
+    'Select a keyframe to edit its curve.',
+    'Selected properties do not share a graph-editable channel.',
+  ],
+  'video-editor/lib/stickers/index.ts': ['Recently used'],
+  'video-editor/lib/stickers/components/assets-view.tsx': ['See all', 'No stickers available yet'],
+  'video-editor/lib/sounds/components/assets-view.tsx': [
+    'Show only commercially licensed',
+    'Loading sounds',
+    'Loading more sounds',
+    'Loading saved sounds',
+    'Click the heart icon on any sound',
+    'Clear all',
+  ],
+  'video-editor/lib/sounds/use-sound-search.ts': ['Load more failed', 'Search failed'],
+  'video-editor/lib/masks/components/masks-tab.tsx': ['Only one mask is supported', 'Add mask'],
+  'video-editor/lib/effects/components/effects-tab.tsx': [
+    'Add effects to this layer',
+    'Open effects',
+  ],
+  'video-editor/lib/components/editor/scenes-view.tsx': [
+    'No scenes available',
+    'Switch between scenes in your project',
+    'Select scenes to delete',
+  ],
+  'video-editor/lib/components/editor/editor-error-boundary.tsx': [
+    'The editor ran into a problem',
+    'logged to the developer console',
+  ],
+  'video-editor/lib/timeline/components/index.tsx': ['Paste elements', 'Delete track'],
+  'video-editor/lib/timeline/components/timeline-element.tsx': [
+    'Reveal media',
+    'Replace media',
+  ],
+  'video-editor/lib/timeline/tracks.ts': ['Video track', 'Audio track', 'Text track'],
+  'video-editor/lib/timeline/components/expanded-layout.ts': ['Position X', 'Scale X', 'Corner Radius'],
+  'video-editor/lib/timeline/audio-separation/index.ts': ['Extract audio', 'Recover audio'],
+  'video-editor/lib/background/blur.ts': ['label: "Light"', 'label: "Heavy"'],
+  'video-editor/lib/effects/definitions/blur.ts': ['name: "Blur"'],
+  'video-editor/lib/stickers/providers/shapes.ts': ['name: "Square"', 'name: "Hexagon"'],
+  'video-editor/lib/components/section.tsx': ['Collapse section', 'Expand section'],
+  'video-editor/lib/components/editable-timecode.tsx': ['Click to edit time'],
+  'video-editor/lib/panels/assets/draggable-item.tsx': ['Add to timeline or drag to position'],
+  'video-editor/lib/adapters/default/download-export-sink.ts': ['Download failed'],
+}
+
+test('剪辑器第二轮中文化不留英文原文', () => {
+  const offenders = []
+  for (const [file, phrases] of Object.entries(secondPassBanned)) {
+    const src = readFileSync(resolve(studioDir, file), 'utf8')
+    for (const phrase of phrases) {
+      if (src.includes(phrase)) offenders.push(`${file}: ${phrase}`)
+    }
+  }
+  assert.deepEqual(offenders, [], `仍是英文：\n${offenders.join('\n')}`)
+
+  // 单个单词的按钮文案用整行匹配，避免把 import 语句、组件名当成文案。
+  const lineChecks = [
+    ['video-editor/lib/panels/assets/views/assets.tsx', [/^\s+Browse$/m, /^\s+Import$/m]],
+    ['video-editor/lib/components/ui/font-picker.tsx', [/^\s+Retry$/m]],
+    ['video-editor/lib/components/editor/editor-error-boundary.tsx', [/^\s+Reload editor$/m]],
+  ]
+  const lineOffenders = []
+  for (const [file, patterns] of lineChecks) {
+    const src = readFileSync(resolve(studioDir, file), 'utf8')
+    for (const pattern of patterns) {
+      if (pattern.test(src)) lineOffenders.push(`${file}: ${pattern}`)
+    }
+  }
+  assert.deepEqual(lineOffenders, [], `仍是英文：\n${lineOffenders.join('\n')}`)
+})

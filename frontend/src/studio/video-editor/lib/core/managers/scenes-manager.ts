@@ -36,7 +36,7 @@ export class ScenesManager {
     isMain: boolean;
   }): Promise<string> {
     if (!this.editor.project.getActive()) {
-      throw new Error("No active project");
+      throw new Error("当前没有打开的项目");
     }
 
     const command = new CreateSceneCommand({ name, isMain });
@@ -48,7 +48,7 @@ export class ScenesManager {
     const sceneToDelete = this.list.find((s) => s.id === sceneId);
 
     if (!sceneToDelete) {
-      throw new Error("Scene not found");
+      throw new Error("找不到这个场景");
     }
 
     const { canDelete, reason } = canDeleteScene({ scene: sceneToDelete });
@@ -57,7 +57,7 @@ export class ScenesManager {
     }
 
     if (!this.editor.project.getActive()) {
-      throw new Error("No active project");
+      throw new Error("当前没有打开的项目");
     }
 
     const command = new DeleteSceneCommand(sceneId);
@@ -72,7 +72,7 @@ export class ScenesManager {
     name: string;
   }): Promise<void> {
     if (!this.editor.project.getActive()) {
-      throw new Error("No active project");
+      throw new Error("当前没有打开的项目");
     }
 
     const command = new RenameSceneCommand({
@@ -86,7 +86,7 @@ export class ScenesManager {
     const targetScene = this.list.find((s) => s.id === sceneId);
 
     if (!targetScene) {
-      throw new Error("Scene not found");
+      throw new Error("找不到这个场景");
     }
 
     const activeProject = this.editor.project.getActive();
@@ -217,7 +217,7 @@ export class ScenesManager {
 
   getActiveScene(): TScene {
     if (!this.active) {
-      throw new Error("No active scene.");
+      throw new Error("当前没有选中的场景。");
     }
     return this.active;
   }

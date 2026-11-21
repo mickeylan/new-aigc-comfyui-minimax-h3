@@ -25,7 +25,7 @@ export function SelectableSurface({
   orderedIds,
   children,
   className,
-  ariaLabel = "Selectable items",
+  ariaLabel = "可选元素",
   revealId = null,
   onRevealComplete,
   onSelectionChange,

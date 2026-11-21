@@ -323,7 +323,7 @@ export class ProjectManager {
     options: ExportOptions;
   }): Promise<ExportResult> {
     if (this.exportState.isExporting) {
-      return { success: false, error: "Export already in progress" };
+      return { success: false, error: "导出已在进行中" };
     }
 
     this.exportCancelRequested = false;
@@ -357,7 +357,7 @@ export class ProjectManager {
       return result;
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "Unknown export error";
+        error instanceof Error ? error.message : "导出失败，原因未知";
       const failure: ExportResult = { success: false, error: message };
       this.exportState = {
         isExporting: false,

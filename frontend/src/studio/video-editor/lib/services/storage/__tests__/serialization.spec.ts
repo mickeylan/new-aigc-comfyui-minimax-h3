@@ -121,7 +121,7 @@ describe("project document serialization", () => {
 });
 
 function buildSampleProject(): TProject {
-  const scene = buildDefaultScene({ name: "Main scene", isMain: true });
+  const scene = buildDefaultScene({ name: "主场景", isMain: true });
   return {
     metadata: {
       id: "proj-1",

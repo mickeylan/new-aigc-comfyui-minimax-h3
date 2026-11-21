@@ -426,7 +426,7 @@ export function TimelineElement({
             action="split"
             icon={<HugeiconsIcon icon={ScissorIcon} />}
           >
-            Split
+            分割
           </ActionMenuItem>
           <CopyMenuItem />
           {selectedElements.length === 1 && (
@@ -434,7 +434,7 @@ export function TimelineElement({
               action="duplicate-selected"
               icon={<HugeiconsIcon icon={Copy01Icon} />}
             >
-              Duplicate
+              复制一份
             </ActionMenuItem>
           )}
           {canElementHaveAudio(element) && hasAudio && (
@@ -483,13 +483,13 @@ export function TimelineElement({
                   handleRevealInMedia({ event })
                 }
               >
-                Reveal media
+                在素材库里定位
               </ContextMenuItem>
               <ContextMenuItem
                 icon={<HugeiconsIcon icon={Exchange01Icon} />}
                 disabled
               >
-                Replace media
+                替换素材
               </ContextMenuItem>
             </>
           )}
@@ -1180,7 +1180,7 @@ function CopyMenuItem() {
       action="copy-selected"
       icon={<HugeiconsIcon icon={Copy01Icon} />}
     >
-      Copy
+      复制
     </ActionMenuItem>
   );
 }

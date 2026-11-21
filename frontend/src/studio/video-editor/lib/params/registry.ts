@@ -188,7 +188,7 @@ const textElementParams: ElementParamDefinition[] = [
     key: "content",
     label: "文字内容",
     type: "text",
-    default: "Default text",
+    default: "默认文字",
     keyframable: false,
   },
   {

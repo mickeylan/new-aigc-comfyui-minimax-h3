@@ -126,10 +126,10 @@ export function GraphEditorPopover({
         <Tabs variant="underline" defaultValue="presets" className="flex flex-col gap-2">
           <TabsList className="px-3">
             <TabsTrigger value="presets" className="text-xs">
-              Presets
+              预设
             </TabsTrigger>
             <TabsTrigger value="saved" className="text-xs">
-              Saved
+              已保存
             </TabsTrigger>
           </TabsList>
           <TabsContent value="presets" className="px-3 pb-0">

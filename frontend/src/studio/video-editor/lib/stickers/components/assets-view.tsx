@@ -231,7 +231,7 @@ function StickersContentView() {
           viewMode === "search"
             ? `No stickers found for "${searchQuery}"`
             : selectedCategory === "all"
-              ? "No stickers available yet."
+              ? "还没有可用的贴纸。"
               : `No stickers available in ${categoryLabel.toLowerCase()} yet.`
         }
       />
@@ -284,7 +284,7 @@ function StickerSection({
                 size="sm"
                 className="h-auto gap-1 p-0 text-xs text-muted-foreground"
               >
-                Clear
+                清空
               </Button>
             )}
 
@@ -297,7 +297,7 @@ function StickerSection({
                   onSeeAll(section.action?.category as StickerCategory);
                 }}
               >
-                See all
+                查看全部
               </Button>
             )}
           </div>

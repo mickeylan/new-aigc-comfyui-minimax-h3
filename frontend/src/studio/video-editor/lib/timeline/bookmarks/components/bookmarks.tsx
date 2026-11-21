@@ -435,7 +435,7 @@ function BookmarkPopoverContent({
         aria-label="删除书签"
       >
         <HugeiconsIcon icon={Delete02Icon} className="!size-3.5" />
-        Delete
+        删除
       </Button>
     </>
   );
