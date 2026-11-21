@@ -407,6 +407,11 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/assets/:kind/:aid/sheet", svc.HandleGeneratePropSheet)
 	r.POST("/api/projects/:id/assets/:kind/:aid/topview", svc.HandleGenerateTopviewStructure)
 	r.POST("/api/projects/:id/assets/:kind/:aid/sheet/upload", svc.HandleUploadPropSheet) // 上传画好的四视图（仅道具）
+	// 场景参考设计：场景图 + 人物 + 道具 → 新的场景画面（结果进 asset_image 未选中变体，仅场景）
+	r.GET("/api/projects/:id/assets/:kind/:aid/location-design", svc.HandleLocationDesignOptions)
+	r.POST("/api/projects/:id/assets/:kind/:aid/location-design/references", svc.HandleUploadLocationDesignReference)
+	r.POST("/api/projects/:id/assets/:kind/:aid/location-design/preview", svc.HandlePreviewLocationDesign)
+	r.POST("/api/projects/:id/assets/:kind/:aid/location-design/generate", svc.HandleStartLocationDesign)
 	r.GET("/api/input/:taskid/*path", svc.HandleInputFile)
 
 	// 创作技能管理

@@ -8743,6 +8743,7 @@ func (s *ProjectService) syncGenerationOutputs() {
 	s.syncCharacterVoiceExtractions()
 	s.syncCharacterPortraits()
 	s.syncAssetImages()
+	s.syncLocationDesigns()
 	if s.characterLooks != nil {
 		s.characterLooks.SyncImages()
 		s.characterLooks.SyncOutfitImages()

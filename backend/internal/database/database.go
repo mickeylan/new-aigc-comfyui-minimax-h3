@@ -86,6 +86,8 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.Character{},
 		&models.CharacterFaceDesign{},
 		&models.CharacterFaceReference{},
+		&models.LocationReferenceDesign{},
+		&models.LocationReferenceDesignFile{},
 		&models.Asset{},
 		&models.AssetVariant{},
 		&models.CharacterMergeRedirect{},

@@ -326,6 +326,7 @@
                   {{ a.topview_task_id ? '俯视图生成中…' : (topviewCacheValid(a) ? '重新生成俯视图' : '生成俯视图（实验）') }}
                 </button>
                 <button v-if="topviewEnabled && a.kind === 'location' && topviewCacheValid(a)" class="btn btn-sm btn-ghost" @click="viewTopview(a)">查看俯视图</button>
+                <LocationReferenceDesign v-if="a.kind === 'location'" :project-id="id()" :location="a" :disabled="busy" @submitted="load" />
                 <button class="btn btn-sm btn-ghost" @click="openEditAsset(a)">编辑</button>
                 <button class="btn btn-sm btn-ghost" title="以此为基础派生一个新资产（如爆碎后、破损后），出图时以本资产当前参考图为底编辑" @click="openDeriveAsset(a)">以此派生</button>
               </div>
@@ -1383,6 +1384,7 @@
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import ScenePreparationStages from '../components/ScenePreparationStages.vue'
 import CharacterFaceDesign from '../components/CharacterFaceDesign.vue'
+import LocationReferenceDesign from '../components/LocationReferenceDesign.vue'
 const ScenePrevisualization = defineAsyncComponent(() => import('../components/ScenePrevisualization.vue'))
 const SceneBlockingPromptDraft = defineAsyncComponent(() => import('../components/SceneBlockingPromptDraft.vue'))
 import { mergePrevisBlocking } from '../utils/scenePrevisualization.js'
