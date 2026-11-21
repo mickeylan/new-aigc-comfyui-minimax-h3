@@ -5,14 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "node --test tests/*.test.mjs",
+    "test": "node --test tests/*.test.mjs && vitest run",
+    "test:unit": "node --test tests/*.test.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
     "@hugeicons/core-free-icons": "^1.2.1",
     "@hugeicons/react": "^1.0.4",
-    "@radix-ui/react-separator": "^1.1.7",
     "@uiw/color-convert": "^2.10.4",
     "axios": "^1.7.9",
     "class-variance-authority": "^0.7.1",
@@ -47,9 +47,11 @@
     "@vitejs/plugin-react": "^4.3.4",
     "@vitejs/plugin-vue": "^5.2.1",
     "autoprefixer": "^10.4.20",
+    "jsdom": "^29.1.1",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.3",
     "vite": "^6.0.7",
-    "vite-plugin-wasm": "^3.5.0"
+    "vite-plugin-wasm": "^3.5.0",
+    "vitest": "^5.1.1"
   }
 }
