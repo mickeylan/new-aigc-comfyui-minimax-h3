@@ -75,3 +75,26 @@ test('素材面板分类页签是中文', () => {
   }
   assert.doesNotMatch(src, /label: "(Media|Sounds|Text|Stickers|Effects|Captions|Settings)"/)
 })
+
+test('属性面板页签与参数名是中文', () => {
+  const tabs = readFileSync(
+    resolve(studioDir, 'video-editor/lib/panels/properties/registry.tsx'),
+    'utf8',
+  )
+  for (const label of ['变换', '混合', '音频', '速度', '遮罩', '特效', '文字', '图形']) {
+    assert.match(tabs, new RegExp(`label: "${label}"`), `缺少中文页签 ${label}`)
+  }
+  assert.doesNotMatch(
+    tabs,
+    /label: "(Transform|Blending|Audio|Speed|Masks|Effects|Text|Graphic)"/,
+  )
+
+  const params = readFileSync(
+    resolve(studioDir, 'video-editor/lib/params/registry.ts'),
+    'utf8',
+  )
+  for (const banned of ['Opacity', 'Blend Mode', 'Position X', 'Font Family', 'Line Height']) {
+    assert.ok(!params.includes(`label: "${banned}"`), `参数名仍是英文：${banned}`)
+  }
+  assert.match(params, /label: "不透明度"/)
+})

@@ -78,7 +78,7 @@ export function MediaView() {
   const processFiles = async ({ files }: { files: File[] }) => {
     if (!files || files.length === 0) return;
     if (!activeProject) {
-      toast.error("No active project");
+      toast.error("没有打开的项目");
       return;
     }
 
@@ -131,7 +131,7 @@ export function MediaView() {
       });
     } catch (error) {
       console.error("Gallery picker failed:", error);
-      toast.error("Couldn't open the gallery");
+      toast.error("打开素材库失败");
       return;
     }
     if (selections.length === 0) return;
@@ -297,7 +297,7 @@ export function MediaView() {
       <input {...fileInputProps} />
 
       <PanelView
-        title="Assets"
+        title="素材"
         actions={
           <MediaActions
             mediaViewMode={mediaViewMode}

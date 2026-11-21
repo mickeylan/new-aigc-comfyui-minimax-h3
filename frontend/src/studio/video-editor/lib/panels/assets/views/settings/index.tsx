@@ -223,8 +223,8 @@ export function SettingsView() {
           }}
         >
           <TabsList>
-            <TabsTrigger value="project-info">Project info</TabsTrigger>
-            <TabsTrigger value="background">Background</TabsTrigger>
+            <TabsTrigger value="project-info">项目信息</TabsTrigger>
+            <TabsTrigger value="background">背景</TabsTrigger>
           </TabsList>
         </Tabs>
       }
@@ -233,7 +233,7 @@ export function SettingsView() {
         <div className="flex flex-col">
           <Section showTopBorder={false}>
             <SectionHeader>
-              <SectionTitle className="flex-1">Name</SectionTitle>
+              <SectionTitle className="flex-1">名称</SectionTitle>
               <span className="text-sm truncate">
                 {activeProject.metadata.name}
               </span>
@@ -241,7 +241,7 @@ export function SettingsView() {
           </Section>
           <Section showTopBorder={false}>
             <SectionHeader className="justify-between">
-              <SectionTitle className="flex-1">Frame rate</SectionTitle>
+              <SectionTitle className="flex-1">帧率</SectionTitle>
               <Select
                 value={String(
                   Math.round(frameRateToFloat(activeProject.settings.fps)),
@@ -252,7 +252,7 @@ export function SettingsView() {
                 }}
               >
                 <SelectTrigger className="bg-transparent border-none p-1 h-auto">
-                  <SelectValue placeholder="Select a frame rate" />
+                  <SelectValue placeholder="选择帧率" />
                 </SelectTrigger>
                 <SelectContent>
                   {FPS_PRESETS.map((preset) => (
@@ -270,7 +270,7 @@ export function SettingsView() {
             sectionKey="settings:aspect-ratio"
           >
             <SectionHeader>
-              <SectionTitle className="flex-1">Aspect ratio</SectionTitle>
+              <SectionTitle className="flex-1">画面比例</SectionTitle>
             </SectionHeader>
             <SectionContent className="px-2 flex flex-col gap-1 pb-2">
               {presetItems.map((preset) => (
@@ -298,7 +298,7 @@ export function SettingsView() {
                       <NumberField
                         value={widthDraft.displayValue}
                         className="w-full"
-                        aria-label="Canvas width"
+                        aria-label="画布宽度"
                         onFocus={widthDraft.onFocus}
                         onChange={widthDraft.onChange}
                         onBlur={widthDraft.onBlur}
@@ -306,7 +306,7 @@ export function SettingsView() {
                       <NumberField
                         value={heightDraft.displayValue}
                         className="w-full"
-                        aria-label="Canvas height"
+                        aria-label="画布高度"
                         onFocus={heightDraft.onFocus}
                         onChange={heightDraft.onChange}
                         onBlur={heightDraft.onBlur}

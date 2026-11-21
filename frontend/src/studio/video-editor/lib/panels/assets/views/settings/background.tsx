@@ -158,7 +158,7 @@ function CustomColorPreview({
             isSelected && "border-primary border-2",
           )}
           type="button"
-          aria-label="Pick a custom background color"
+          aria-label="选择自定义背景色"
         >
           <span
             className="absolute inset-0"
@@ -263,7 +263,7 @@ export function BackgroundContent() {
         showTopBorder={false}
       >
         <SectionHeader>
-          <SectionTitle>Blur</SectionTitle>
+          <SectionTitle>模糊</SectionTitle>
         </SectionHeader>
         <SectionContent>
           <div className="flex flex-wrap gap-2">{blurPreviews}</div>

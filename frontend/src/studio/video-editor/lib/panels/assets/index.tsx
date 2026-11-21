@@ -14,7 +14,7 @@ import { EffectsView } from "../../effects/components/assets-view";
 // subsystem which is deferred per port scope.
 function ComingSoon({ label }: { label: string }) {
   return (
-    <div className="text-muted-foreground p-4">{label} view coming soon...</div>
+    <div className="text-muted-foreground p-4">{label}面板还在开发中…</div>
   );
 }
 
@@ -27,7 +27,7 @@ export function AssetsPanel() {
     text: <TextView />,
     stickers: <StickersView />,
     effects: <EffectsView />,
-    captions: <ComingSoon label="Captions" />,
+    captions: <ComingSoon label="字幕" />,
     settings: <SettingsView />,
   };
 
