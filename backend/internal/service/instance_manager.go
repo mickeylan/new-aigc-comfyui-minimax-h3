@@ -106,6 +106,85 @@ func (m *InstanceManager) ByID(id uint) (models.Instance, error) {
 	return inst, m.db.First(&inst, id).Error
 }
 
+// RegisterEndpoint 登记一台由人工启动、不由平台管理的 ComfyUI 端点。
+// 生产环境里实例由运维手动拉起，平台只负责发现与调度：同一个 host:port
+// 重复登记直接返回已有记录，新端点分配一个未占用的逻辑槽位。
+func (m *InstanceManager) RegisterEndpoint(host string, port int) (models.Instance, error) {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return models.Instance{}, fmt.Errorf("host 不能为空")
+	}
+	if port <= 0 || port > 65535 {
+		return models.Instance{}, fmt.Errorf("端口不合法: %d", port)
+	}
+	var existing models.Instance
+	if err := m.db.Where("host = ? AND port = ?", host, port).First(&existing).Error; err == nil {
+		return existing, nil
+	} else if err != gorm.ErrRecordNotFound {
+		return models.Instance{}, err
+	}
+	// 本机回环地址等价于「默认主机」：配置里没写 host 的实例行必须复用，
+	// 否则同一台 ComfyUI 会登记成两行，调度器以为有两个空闲实例，重复派发。
+	if isLoopbackHost(host) {
+		var local models.Instance
+		if err := m.db.Where("(host IS NULL OR host = '' OR host = 'localhost' OR host = '127.0.0.1' OR host = '::1') AND port = ?", port).First(&local).Error; err == nil {
+			return local, nil
+		} else if err != gorm.ErrRecordNotFound {
+			return models.Instance{}, err
+		}
+	}
+
+	var maxSlot int
+	m.db.Model(&models.Instance{}).Select("COALESCE(MAX(gpu_index), -1)").Scan(&maxSlot)
+	inst := models.Instance{
+		GPUIndex:      maxSlot + 1,
+		Host:          host,
+		Port:          port,
+		Managed:       false,
+		EnableManager: false,
+		Status:        "stopped",
+	}
+	if err := m.db.Create(&inst).Error; err != nil {
+		return models.Instance{}, err
+	}
+	// managed/enable_manager 的 GORM 默认值是 true，零值插入会落成默认值；
+	// 用 map 更新把这些零值真正写进去，避免外部端点被当成平台管理实例。
+	if err := m.db.Model(&models.Instance{}).Where("id = ?", inst.ID).Updates(map[string]any{
+		"managed": false, "enable_manager": false,
+	}).Error; err != nil {
+		return models.Instance{}, err
+	}
+	inst.Managed, inst.EnableManager = false, false
+	return inst, nil
+}
+
+// DeleteInstance 移除端点登记。平台管理的实例会被配置重新创建，因此只允许
+// 删除手工登记的端点，且必须没有任务正在使用。
+func (m *InstanceManager) DeleteInstance(id uint) error {
+	inst, err := m.ByID(id)
+	if err != nil {
+		return err
+	}
+	if inst.Managed {
+		return fmt.Errorf("实例 %d 由平台管理，不能删除", id)
+	}
+	var active int64
+	m.db.Model(&models.Task{}).Where("instance_id = ? AND status IN ?", id, []string{"running", "queued"}).Count(&active)
+	if active > 0 {
+		return fmt.Errorf("实例 %d 还有 %d 个任务在跑，不能删除", id, active)
+	}
+	return m.db.Delete(&models.Instance{}, id).Error
+}
+
+// isLoopbackHost 判断 host 是否指向本机回环地址。
+func isLoopbackHost(host string) bool {
+	switch strings.ToLower(strings.TrimSpace(host)) {
+	case "", "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
+}
+
 func (m *InstanceManager) ByPort(port int) (models.Instance, error) {
 	var rows []models.Instance
 	if err := m.db.Where("port = ?", port).Limit(2).Find(&rows).Error; err != nil {

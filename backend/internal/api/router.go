@@ -24,6 +24,8 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 
 	// 实例管理
 	r.GET("/api/instances", svc.HandleListInstances)
+	r.POST("/api/instances", svc.HandleRegisterInstance)
+	r.DELETE("/api/instances/:id", svc.HandleDeleteInstance)
 	r.POST("/api/instances/:id/start", svc.HandleInstanceStart)
 	r.POST("/api/instances/:id/stop", svc.HandleInstanceStop)
 	r.POST("/api/instances/:id/restart", svc.HandleInstanceRestart)

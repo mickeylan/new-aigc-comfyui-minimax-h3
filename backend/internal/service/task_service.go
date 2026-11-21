@@ -1702,7 +1702,7 @@ func (s *TaskService) finishTask(task *models.Task) {
 		if !ok {
 			continue
 		}
-		for _, ftype := range []string{"videos", "gifs", "images", "audio", "audios", "files"} {
+		for _, ftype := range []string{"videos", "gifs", "images", "audio", "audios", "files", "3d"} {
 			list, ok := o[ftype].([]any)
 			if !ok {
 				continue
@@ -1856,7 +1856,7 @@ func historyHasPrompt(history map[string]any, promptID string) bool {
 	}
 	for _, raw := range outputs {
 		node, _ := raw.(map[string]any)
-		for _, kind := range []string{"videos", "gifs", "images", "audio", "audios", "files"} {
+		for _, kind := range []string{"videos", "gifs", "images", "audio", "audios", "files", "3d"} {
 			list, _ := node[kind].([]any)
 			for _, entry := range list {
 				file, _ := entry.(map[string]any)
@@ -2023,6 +2023,8 @@ func (s *TaskService) findTaskOutputs(root, taskID string) []map[string]string {
 					ftype = "files"
 				case ".gif":
 					ftype = "gifs"
+				case ".glb", ".gltf", ".obj", ".fbx", ".ply", ".splat":
+					ftype = "3d"
 				}
 				out = append(out, map[string]string{
 					"type": ftype, "filename": e.Name(),

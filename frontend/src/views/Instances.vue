@@ -65,6 +65,20 @@
       </div>
     </div>
 
+    <!-- 登记人工启动的 ComfyUI 端点 -->
+    <div class="card register-card">
+      <div class="host-title">登记外部 ComfyUI 端点</div>
+      <p class="page-sub reg-hint">生产环境的 ComfyUI 由人工启动，平台只负责发现与调度。填 host:port 后立即探测并加入调度池。</p>
+      <div class="reg-row">
+        <input v-model="newHost" class="input" placeholder="主机，如 192.168.1.20 或 127.0.0.1" />
+        <input v-model="newPort" class="input reg-port" placeholder="端口 8188" inputmode="numeric" />
+        <button class="btn" :disabled="registering || !newHost || !newPort" @click="registerEndpoint">
+          {{ registering ? '登记中…' : '登记' }}
+        </button>
+      </div>
+      <p v-if="registerMsg" class="reg-msg">{{ registerMsg }}</p>
+    </div>
+
     <div class="inst-grid">
       <div v-for="inst in sortedInstances" :key="inst.id" class="card inst-card"
         :class="{ 'inst-on': inst.status === 'running' }">
@@ -106,6 +120,8 @@
 
         <div class="inst-actions-row">
           <span v-if="!inst.managed" class="badge badge-gray">外部管理</span>
+          <button v-if="!inst.managed" class="btn btn-sm btn-secondary"
+            @click="removeInstance(inst)" :disabled="busy">移出调度</button>
           <button v-if="inst.managed && inst.status === 'running'" class="btn btn-sm btn-secondary"
             @click="restart(inst)" :disabled="busy">重启</button>
           <button v-if="inst.managed && inst.status === 'running'" class="btn btn-sm btn-danger"
@@ -196,6 +212,32 @@ async function run(fn) {
 const start = (inst) => run(() => api.startInstance(inst.id))
 const stop = (inst) => run(() => api.stopInstance(inst.id))
 const restart = (inst) => run(() => api.restartInstance(inst.id))
+
+const newHost = ref('')
+const newPort = ref('')
+const registering = ref(false)
+const registerMsg = ref('')
+
+async function registerEndpoint() {
+  registering.value = true
+  registerMsg.value = ''
+  try {
+    const { data } = await api.registerInstance(newHost.value.trim(), Number(newPort.value))
+    registerMsg.value = data.reachable
+      ? `已加入调度：${data.instance.host}:${data.instance.port}`
+      : (data.message || '已登记，但当前连不上该端点')
+    await reload()
+  } catch (e) {
+    registerMsg.value = e.response?.data?.error || e.message
+  } finally {
+    registering.value = false
+  }
+}
+
+async function removeInstance(inst) {
+  if (!confirm(`把 ${inst.host}:${inst.port} 移出调度？正在跑的任务会保留，但不再分配新任务。`)) return
+  await run(() => api.deleteInstance(inst.id))
+}
 const concurrency = ref(4)
 const startAll = () => {
   openBatch('start')
@@ -280,4 +322,9 @@ onBeforeUnmount(() => { if (batchTimer) clearInterval(batchTimer) })
 .batch-row.err .batch-check { color: var(--red); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 @keyframes pop { from { transform: scale(0.94); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.register-card { margin-bottom: 16px; }
+.reg-hint { margin: 4px 0 10px; }
+.reg-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.reg-port { max-width: 150px; }
+.reg-msg { margin-top: 8px; font-size: 13px; color: var(--text-secondary); }
 </style>

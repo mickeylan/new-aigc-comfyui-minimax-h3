@@ -235,6 +235,46 @@ func (s *Service) refreshInstances(insts *[]models.Instance) {
 	}
 }
 
+// HandleRegisterInstance 登记一台人工启动的 ComfyUI 端点（POST /api/instances）。
+// 生产环境里实例由运维手动拉起，平台不负责启动，只负责发现与调度。
+func (s *Service) HandleRegisterInstance(c *gin.Context) {
+	var body struct {
+		Host string `json:"host"`
+		Port int    `json:"port"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(400, gin.H{"error": "无效的请求体"})
+		return
+	}
+	inst, err := s.Mgr.RegisterEndpoint(body.Host, body.Port)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	client := NewComfyClient(s.Mgr.comfyHostOfInstance(inst), inst.Port)
+	if err := client.Ping(); err != nil {
+		c.JSON(200, gin.H{"instance": inst, "reachable": false, "message": "已登记，但当前连不上该端点：" + err.Error()})
+		return
+	}
+	s.DB.Model(&models.Instance{}).Where("id = ?", inst.ID).Update("status", "running")
+	inst.Status = "running"
+	c.JSON(200, gin.H{"instance": inst, "reachable": true})
+}
+
+// HandleDeleteInstance 删除人工登记的端点（DELETE /api/instances/:id）。
+func (s *Service) HandleDeleteInstance(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "invalid id"})
+		return
+	}
+	if err := s.Mgr.DeleteInstance(uint(id)); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true})
+}
+
 func (s *Service) HandleInstanceStart(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -680,7 +720,28 @@ func (s *Service) HandleInstanceOutputFile(c *gin.Context) {
 	}
 	query := url.Values{"filename": {filepath.Base(rel)}, "subfolder": {subfolder}, "type": {"output"}}
 	target := fmt.Sprintf("http://%s:%d/view?%s", s.Mgr.comfyHostOfInstance(inst), inst.Port, query.Encode())
-	c.Redirect(http.StatusTemporaryRedirect, target)
+	// 服务端转发而不是 307：浏览器 fetch 跟随跨源重定向会被 CORS 拦掉，
+	// 跨机器的实例更是必须由控制台代理才能取到产物。
+	response, err := http.Get(target)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "实例不可达: " + err.Error()})
+		return
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		c.JSON(http.StatusNotFound, gin.H{"error": "实例上没有这个文件"})
+		return
+	}
+	contentType := response.Header.Get("Content-Type")
+	if contentType != "" {
+		c.Header("Content-Type", contentType)
+	} else {
+		c.Header("Content-Type", mimeTypeOf(rel))
+	}
+	c.Header("Cache-Control", "private, max-age=60")
+	if _, err := io.Copy(c.Writer, response.Body); err != nil {
+		log.Printf("[output] 转发实例文件失败 %s: %v", target, err)
+	}
 }
 
 // HandleOutputFile 提供任务输出文件静态访问: /api/output/:gpu/*path
@@ -692,8 +753,11 @@ func (s *Service) HandleOutputFile(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "invalid path"})
 		return
 	}
-	root := filepath.Join(s.Cfg.Comfy.ComfyDir, "output_workers", "gpu"+gpu)
-	full := filepath.Join(root, path)
+	full, err := s.resolveOutputFile(gpu, path)
+	if err != nil {
+		c.JSON(404, gin.H{"error": "file not found"})
+		return
+	}
 
 	size, err := s.Remote.Size(full)
 	if err != nil {
@@ -747,14 +811,43 @@ func (s *Service) HandleMediaInfo(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "invalid path"})
 		return
 	}
-	root := filepath.Join(s.Cfg.Comfy.ComfyDir, "output_workers", "gpu"+gpu)
-	full := filepath.Join(root, path)
+	full, err := s.resolveOutputFile(gpu, path)
+	if err != nil {
+		c.JSON(404, gin.H{"error": "media not found"})
+		return
+	}
 	info, err := s.Remote.ProbeMedia(full)
 	if err != nil {
 		c.JSON(404, gin.H{"error": "media not found"})
 		return
 	}
 	c.JSON(200, info)
+}
+
+// outputFileRoots 列出任务产物可能落盘的位置，最具体的在前。
+// 平台自启的实例带 --output-directory，产物在 output_workers/gpuN；
+// 用默认目录启动的实例产物在 output/，两种都要能取到。
+func (s *Service) outputFileRoots(gpu string) []string {
+	workerRoot := filepath.Join(s.Cfg.Comfy.ComfyDir, "output_workers", "gpu"+gpu)
+	standardRoot := filepath.Join(s.Cfg.Comfy.ComfyDir, "output")
+	if workerRoot == standardRoot {
+		return []string{workerRoot}
+	}
+	return []string{workerRoot, standardRoot}
+}
+
+// resolveOutputFile 按 candidate 根目录依次探测，返回第一个真实存在文件的绝对路径。
+func (s *Service) resolveOutputFile(gpu, rel string) (string, error) {
+	var lastErr error
+	for _, root := range s.outputFileRoots(gpu) {
+		full := filepath.Join(root, rel)
+		if _, err := s.Remote.Size(full); err != nil {
+			lastErr = err
+			continue
+		}
+		return full, nil
+	}
+	return "", lastErr
 }
 
 // mimeTypeOf 根据扩展名返回 MIME
