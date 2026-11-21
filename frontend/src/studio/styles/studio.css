@@ -140,6 +140,31 @@
 }
 
 /*
+ * Radix 的弹层挂在 <body> 下，而工作台自己是全屏定位容器（画布/3D 用
+ * z-index:100，剪辑器用 z-index:1000）。body 级弹层的层级都低于工作台，
+ * 于是提示气泡、下拉菜单、弹窗被整块盖住——看上去就是「弹窗里看不到文字」。
+ * 这里统一把挂到 body 的弹层抬到工作台之上。
+ */
+body.studio-theme [data-radix-popper-content-wrapper] {
+  /* Radix 会把内容的 computed z-index 复制成这里的行内样式，必须 !important 才能盖住。 */
+  z-index: 1200 !important;
+}
+
+/* Radix 的遮罩与弹窗内容都是 <body> 直属子节点，只带 data-state。 */
+body.studio-theme > [data-state] {
+  z-index: 1200;
+}
+
+/*
+ * 不同 Radix 版本对弹层的包裹层不一致（有的套一层 popper wrapper，有的把
+ * Content 直接挂到 body），所以对 body 下除应用根节点以外的所有直属层统一抬升，
+ * 免得漏掉某一类弹层。
+ */
+body.studio-theme > :not(#app):not(.comfy-gallery-overlay) {
+  z-index: 1200;
+}
+
+/*
  * ComfyStudio material picker. It is appended to <body> (not inside
  * .studio-root) so it can cover the editor; body carries .studio-theme
  * while the editor is mounted, which keeps the variables in scope.
