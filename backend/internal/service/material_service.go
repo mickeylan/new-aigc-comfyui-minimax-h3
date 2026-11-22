@@ -60,9 +60,22 @@ func (m *MaterialService) SaveUploadWithThumb(projectID *uint, ftype, name strin
 func (m *MaterialService) SaveStudioModel(projectID *uint, name string, data, thumb []byte) (*models.Material, error) {
 	thumbName := ""
 	if len(thumb) > 0 {
-		thumbName = strings.TrimSuffix(name, filepath.Ext(name)) + "_thumb.png"
+		thumbName = strings.TrimSuffix(name, filepath.Ext(name)) + "_thumb" + thumbExtension(thumb)
 	}
 	return m.saveUpload(projectID, "3d", name, data, thumbName, thumb, "studio_3d")
+}
+
+// thumbExtension 按字节魔数判断缩略图格式。前端从 PNG 换成了 JPEG（体积小一个
+// 量级），老存档里的 PNG 缩略图还得继续认，所以不能写死后缀。
+func thumbExtension(thumb []byte) string {
+	if len(thumb) >= 8 && thumb[0] == 0x89 && thumb[1] == 'P' && thumb[2] == 'N' && thumb[3] == 'G' {
+		return ".png"
+	}
+	if len(thumb) >= 3 && thumb[0] == 0xFF && thumb[1] == 0xD8 && thumb[2] == 0xFF {
+		return ".jpg"
+	}
+	// 认不出来按 PNG 处理：与改动前的行为一致，不因为嗅探失败丢缩略图。
+	return ".png"
 }
 
 func (m *MaterialService) saveUpload(projectID *uint, ftype, name string, data []byte, thumbName string, thumb []byte, source string) (*models.Material, error) {

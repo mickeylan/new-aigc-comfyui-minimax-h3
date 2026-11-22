@@ -39,10 +39,10 @@ test('缩略图自动取景：临时推相机框住全部对象，截完还原�
   assert.ok(!/\n\s*await /.test(slice), '取景与取图之间不能有 await（注释里提到的不算）')
 })
 
-test('缩略图缩到最长边 512，不再整张 4K 传上去', () => {
+test('缩略图缩到最长边 512 并编成 JPEG，不再整张 4K PNG 传上去', () => {
   assert.match(stage, /const THUMBNAIL_MAX_EDGE = 512;/)
-  const fn = stage.match(/async function shrinkToPngBlob\(([\s\S]*?)\n\}/)
-  assert.ok(fn, '缺 shrinkToPngBlob')
+  const fn = stage.match(/async function shrinkToThumbBlob\(([\s\S]*?)\n\}/)
+  assert.ok(fn, '缺 shrinkToThumbBlob')
   const body = fn[1]
   // 只缩不放
   assert.match(body, /Math\.min\(1, maxEdge \/ Math\.max\(canvas\.width, canvas\.height\)\)/)
@@ -52,8 +52,11 @@ test('缩略图缩到最长边 512，不再整张 4K 传上去', () => {
     body.indexOf('drawImage') < body.indexOf('toBlob'),
     'drawImage 必须在 toBlob 之前（WebGL 缓冲可能已被清）',
   )
+  // 3D 预览不需要透明，PNG 同尺寸大一个数量级，改 JPEG
+  assert.match(body, /out\.toBlob\(\(blob\) => resolve\(blob\), "image\/jpeg", 0\.85\)/)
+  assert.doesNotMatch(body, /"image\/png"/, '缩略图不该再编成 PNG')
   // captureThumbnail 要真的用它，且留了整套原图的退路
-  assert.match(stage, /const shrunk = await shrinkToPngBlob\(canvas\);/)
+  assert.match(stage, /const shrunk = await shrinkToThumbBlob\(canvas\);/)
   assert.match(stage, /if \(shrunk\) return shrunk;/)
 })
 

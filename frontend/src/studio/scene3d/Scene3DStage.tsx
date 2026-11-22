@@ -244,8 +244,9 @@ const THUMBNAIL_MAX_EDGE = 512;
 /**
  * 把整张画布缩成缩略图。必须在 render 之后的同一个任务里调用：
  * drawImage 是同步取像素的，等 toBlob 期间缓冲被清也不影响结果。
+ * 编码用 JPEG：3D 预览不需要透明通道，同尺寸比 PNG 再小一个数量级。
  */
-async function shrinkToPngBlob(canvas: HTMLCanvasElement, maxEdge = THUMBNAIL_MAX_EDGE): Promise<Blob | null> {
+async function shrinkToThumbBlob(canvas: HTMLCanvasElement, maxEdge = THUMBNAIL_MAX_EDGE): Promise<Blob | null> {
   const scale = Math.min(1, maxEdge / Math.max(canvas.width, canvas.height));
   const out = document.createElement("canvas");
   out.width = Math.max(1, Math.round(canvas.width * scale));
@@ -253,7 +254,7 @@ async function shrinkToPngBlob(canvas: HTMLCanvasElement, maxEdge = THUMBNAIL_MA
   const ctx = out.getContext("2d");
   if (!ctx) return null;
   ctx.drawImage(canvas, 0, 0, out.width, out.height);
-  return await new Promise((resolve) => out.toBlob((blob) => resolve(blob), "image/png"));
+  return await new Promise((resolve) => out.toBlob((blob) => resolve(blob), "image/jpeg", 0.85));
 }
 
 /** 泼溅首次出现前 Spark 要在线程里建 LoD 树，大文件会有几秒空白，用这条占住 busy。 */
@@ -1520,9 +1521,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       }
       // 取景后必须在同一个任务里立刻抓，中间不能 await，否则绘制缓冲可能已被清掉。
       if (scene && camera) renderer.render(scene, camera);
-      const shrunk = await shrinkToPngBlob(canvas);
+      const shrunk = await shrinkToThumbBlob(canvas);
       if (shrunk) return shrunk;
-      // 极少数环境拿不到 2D 上下文时，退回整张原图，别让存库直接失败。
+      // 极少数环境拿不到 2D 上下文时，退回整张原图（PNG），别让存库直接失败。
       const dataUrl = canvas.toDataURL("image/png");
       return await (await fetch(dataUrl)).blob();
     } finally {
