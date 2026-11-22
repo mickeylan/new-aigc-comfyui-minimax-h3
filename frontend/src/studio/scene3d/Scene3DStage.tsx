@@ -588,6 +588,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     const animate = () => {
       frame = requestAnimationFrame(animate);
       controls.update();
+      // 红球按相机距离定大小，每帧跟一次（22 根骨，开销可忽略）。
+      // 注意是 fkRef（FKHelper 实例），posingRef 只是摆姿开关的布尔值。
+      fkRef.current?.updateCameraScale();
       renderer.render(scene, camera);
     };
     animate();

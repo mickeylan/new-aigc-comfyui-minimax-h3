@@ -1,6 +1,9 @@
 import * as THREE from "three";
 import {
+  FK_SPHERE_GEOMETRY_RADIUS,
   applyBonePose,
+  boneSphereLocalScale,
+  boneSphereWorldRadius,
   collectPoseableBones,
   findSkeletonRoot,
   hasSkeleton,
@@ -164,4 +167,28 @@ test("空姿势或没有骨骼时还原返回 false 而不是抛错", () => {
       children: [],
     }),
   ).toBe(false);
+});
+
+test("红球半径随相机距离变大，保证屏幕上大小恒定", () => {
+  // 远处的球世界半径必须更大，否则默认机位下只有 4 px，鼠标点不中。
+  const near = boneSphereWorldRadius(2);
+  const far = boneSphereWorldRadius(8);
+  expect(far).toBeGreaterThan(near);
+  expect(far / near).toBeCloseTo(4, 6);
+  // 距离异常时退回最小半径，不产生 0 或 NaN。
+  expect(boneSphereWorldRadius(0)).toBeGreaterThan(0);
+  expect(Number.isFinite(boneSphereWorldRadius(Number.NaN))).toBe(true);
+});
+
+test("骨的 world scale 会被反向抵消，球在任何骨上都是同一个世界尺寸", () => {
+  const radius = 0.048;
+  const normal = boneSphereLocalScale(radius, [1, 1, 1]);
+  // 几何体自带半径是 0.015，要放到 0.048 就得放大 3.2 倍。
+  expect(normal[0]).toBeCloseTo(radius / FK_SPHERE_GEOMETRY_RADIUS, 6);
+
+  // Mixamo 的骨世界缩放常见 0.01 级：局部缩放要乘 100 才能得到同样的世界半径。
+  const tiny = boneSphereLocalScale(radius, [0.01, 0.01, 0.01]);
+  expect(tiny[0]).toBeCloseTo((radius / FK_SPHERE_GEOMETRY_RADIUS) * 100, 4);
+  // 世界半径 = 几何半径 × 骨缩放 × 局部缩放，两者应一致。
+  expect(FK_SPHERE_GEOMETRY_RADIUS * 0.01 * tiny[0]).toBeCloseTo(radius, 6);
 });

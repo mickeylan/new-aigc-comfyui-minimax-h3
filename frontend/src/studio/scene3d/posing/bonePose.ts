@@ -76,6 +76,40 @@ export interface BonePoseNode {
   children: BonePoseNode[];
 }
 
+/** 红球几何体自带半径（FKHelper 里 SphereGeometry 的入参，两处必须一致）。 */
+export const FK_SPHERE_GEOMETRY_RADIUS = 0.015;
+
+/**
+ * 球的屏幕尺寸占比：相机距离 × 这个系数 = 期望的世界半径。
+ * 固定世界半径会让远处/近处的球一个点不到、一个大得挡住模型
+ * （默认机位下 0.015 半径只有 4 px，鼠标根本瞄不中）。
+ */
+export const FK_SPHERE_SCREEN_RATIO = 0.012;
+
+export const FK_SPHERE_MIN_RADIUS = 0.01;
+
+/** 让红球在屏幕上大小恒定：半径跟着相机距离线性放大。 */
+export function boneSphereWorldRadius(cameraDistance: number) {
+  if (!Number.isFinite(cameraDistance) || cameraDistance <= 0) return FK_SPHERE_MIN_RADIUS;
+  return Math.max(FK_SPHERE_MIN_RADIUS, cameraDistance * FK_SPHERE_SCREEN_RATIO);
+}
+
+/**
+ * 把「期望的世界半径」折算成球在骨局部空间里的缩放。
+ * Mixamo 的骨世界缩放常在 0.01 级，不反向抵消的话球会小到看不见。
+ */
+export function boneSphereLocalScale(
+  worldRadius: number,
+  boneWorldScale: [number, number, number],
+): [number, number, number] {
+  const radius = Math.max(worldRadius, 1e-6) / FK_SPHERE_GEOMETRY_RADIUS;
+  return boneWorldScale.map((scale) => radius / (Math.abs(scale) > 1e-6 ? Math.abs(scale) : 1)) as [
+    number,
+    number,
+    number,
+  ];
+}
+
 function snapshotBone(bone: THREE.Bone): BonePoseNode {
   return {
     name: bone.name,

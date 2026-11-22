@@ -2,7 +2,12 @@
 // 骨骼摆姿（FK）的交互层：给每根可摆的骨挂一个红球，点球把旋转 gizmo 吸到该骨上。
 import * as THREE from "three";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
-import { isPoseableBone } from "./bonePose.js";
+import {
+  FK_SPHERE_GEOMETRY_RADIUS,
+  boneSphereLocalScale,
+  boneSphereWorldRadius,
+  isPoseableBone,
+} from "./bonePose.js";
 
 export const FK_SPHERE_NAME = "__FKHelperSphere__";
 
@@ -56,7 +61,7 @@ export class FKHelper {
     });
     if (bones.length === 0) return false;
 
-    const sphereGeometry = new THREE.SphereGeometry(0.015, 16, 16);
+    const sphereGeometry = new THREE.SphereGeometry(FK_SPHERE_GEOMETRY_RADIUS, 16, 16);
     for (const bone of bones) {
       // depthTest:false 让红球永远画在模型前面，否则躯干内的骨会被遮住。
       const material = new THREE.MeshBasicMaterial({
@@ -65,19 +70,22 @@ export class FKHelper {
         transparent: true,
       });
       const sphere = new THREE.Mesh(sphereGeometry, material);
-      // 骨的世界缩放常常很小（Mixamo 模型缩到 0.01 级别），球要反向缩放才看得出大小。
+      // 骨的世界缩放常常很小（Mixamo 模型缩到 0.01 级别），球要反向缩放才看得出来。
       const parentScale = new THREE.Vector3();
       bone.getWorldScale(parentScale);
-      sphere.scale.set(
-        parentScale.x ? 1 / parentScale.x : 1,
-        parentScale.y ? 1 / parentScale.y : 1,
-        parentScale.z ? 1 / parentScale.z : 1,
-      );
+      const [sx, sy, sz] = boneSphereLocalScale(FK_SPHERE_GEOMETRY_RADIUS, [
+        parentScale.x,
+        parentScale.y,
+        parentScale.z,
+      ]);
+      sphere.scale.set(sx, sy, sz);
       sphere.name = FK_SPHERE_NAME;
       sphere.renderOrder = 999;
       bone.add(sphere);
       this.spheres.push(sphere);
     }
+    // 建好后按当前相机距离定一次大小，之后由 updateCameraScale 每帧跟随。
+    this.updateCameraScale();
 
     this.skeletonHelper = new THREE.SkeletonHelper(target);
     (this.skeletonHelper.material as THREE.LineBasicMaterial).depthTest = false;
@@ -114,6 +122,26 @@ export class FKHelper {
   /** 姿势还原或撤销后，让 gizmo 跟着更新。 */
   refresh() {
     this.controls.object?.updateMatrixWorld(true);
+  }
+
+  /**
+   * 每帧按相机距离缩放红球，保证不管推远拉近都是同一个屏幕尺寸（约 6–7 px 半径），
+   * 否则默认机位下球只有 4 px，鼠标根本点不中。
+   */
+  updateCameraScale() {
+    const camera = this.controls.camera as THREE.PerspectiveCamera | undefined;
+    if (!camera || this.spheres.length === 0) return;
+    const worldPosition = new THREE.Vector3();
+    const boneScale = new THREE.Vector3();
+    for (const sphere of this.spheres) {
+      const bone = sphere.parent;
+      if (!bone) continue;
+      sphere.getWorldPosition(worldPosition);
+      const worldRadius = boneSphereWorldRadius(camera.position.distanceTo(worldPosition));
+      bone.getWorldScale(boneScale);
+      const [sx, sy, sz] = boneSphereLocalScale(worldRadius, [boneScale.x, boneScale.y, boneScale.z]);
+      sphere.scale.set(sx, sy, sz);
+    }
   }
 
   getAttachedBoneName() {
