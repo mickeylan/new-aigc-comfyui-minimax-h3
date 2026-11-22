@@ -372,6 +372,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const imageInputRef = useRef<HTMLInputElement>(null);
   const splatInputRef = useRef<HTMLInputElement>(null);
   const identityInputRef = useRef<HTMLInputElement>(null);
+  /** 「AI 生成」下拉：点完动作要自动收起，否则面板会盖住画布。 */
+  const aiMenuRef = useRef<HTMLDetailsElement>(null);
   const imagePlaneInputRef = useRef<HTMLInputElement>(null);
   const videoPlaneInputRef = useRef<HTMLInputElement>(null);
   const skyboxInputRef = useRef<HTMLInputElement>(null);
@@ -1521,8 +1523,21 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     [applyLightPreset, syncObjects],
   );
 
+  const closeAiMenu = useCallback(() => {
+    if (aiMenuRef.current) aiMenuRef.current.open = false;
+  }, []);
+
   return (
-    <div className="studio-root studio-theme fixed inset-0 z-[100] overflow-hidden bg-[#121316] text-[#f2f1ee]">
+    <div
+      className="studio-root studio-theme fixed inset-0 z-[100] overflow-hidden bg-[#121316] text-[#f2f1ee]"
+      onPointerDownCapture={(event) => {
+        // details 自己不会因为点外面而收起，落在面板之外就手动关一次。
+        const target = event.target as Node | null;
+        if (aiMenuRef.current && target && !aiMenuRef.current.contains(target)) {
+          aiMenuRef.current.open = false;
+        }
+      }}
+    >
       <div
         ref={containerRef}
         className="absolute inset-0"
@@ -1563,48 +1578,74 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         >
           导入模型
         </button>
-        <button
-          type="button"
-          className="rounded-md border border-sky-400/40 px-3 py-1.5 text-sm text-sky-200 hover:bg-sky-400/10 disabled:opacity-50"
-          onClick={() => imageInputRef.current?.click()}
-          disabled={Boolean(busy)}
-        >
-          AI 图生 3D
-        </button>
-        <button
-          type="button"
-          className="rounded-md border border-violet-400/40 px-3 py-1.5 text-sm text-violet-200 hover:bg-violet-400/10 disabled:opacity-50"
-          onClick={() => splatInputRef.current?.click()}
-          disabled={Boolean(busy)}
-          title="参考图 → TripoSplat → .spz 高斯泼溅，作为可绕行的 3D 世界"
-        >
-          AI 图生 3D 世界
-        </button>
-        <select
-          value={splatMatteEngine}
-          onChange={(event) => setSplatMatteEngine(event.target.value as SplatMatteEngine)}
-          disabled={Boolean(busy)}
-          title="图生 3D 世界的抠图方式：RMBG-3.0 边缘细致但慢，BiRefNet 快但硬边"
-          className="h-9 rounded-md border border-violet-400/30 bg-white/5 px-2 text-sm text-violet-100 disabled:opacity-50"
-        >
-          <option value="rmbg3">RMBG-3.0 抠图</option>
-          <option value="birefnet">BiRefNet 抠图</option>
-        </select>
-        <input
-          value={identityPrompt}
-          onChange={(event) => setIdentityPrompt(event.target.value)}
-          placeholder="身份迁移：用 <image1> 指 3D 快照、<image2> 指角色主形象"
-          className="h-9 w-72 rounded-md border border-white/10 bg-white/5 px-3 text-sm text-white placeholder:text-white/40"
-        />
-        <button
-          type="button"
-          className="rounded-md border border-amber-400/40 px-3 py-1.5 text-sm text-amber-200 hover:bg-amber-400/10 disabled:opacity-50"
-          onClick={() => identityInputRef.current?.click()}
-          disabled={Boolean(busy)}
-          title="当前 3D 画面当 image1、角色主形象当 image2，出一张身份迁移图放进场景"
-        >
-          身份迁移出图
-        </button>
+        <details ref={aiMenuRef} className="relative">
+          <summary
+            className="cursor-pointer list-none rounded-md border border-sky-400/40 px-3 py-1.5 text-sm text-sky-200 marker:hidden hover:bg-sky-400/10 [&::-webkit-details-marker]:hidden"
+            title="AI 生成：图生 3D 模型、图生 3D 世界、身份迁移出图"
+          >
+            AI 生成 ▾
+          </summary>
+          <div className="absolute left-0 top-full z-50 mt-1 w-80 space-y-2 rounded-lg border border-white/15 bg-[#16171c] p-3 shadow-2xl">
+            <button
+              type="button"
+              className="w-full rounded-md border border-sky-400/40 px-3 py-1.5 text-left text-sm text-sky-200 hover:bg-sky-400/10 disabled:opacity-50"
+              onClick={() => {
+                closeAiMenu();
+                imageInputRef.current?.click();
+              }}
+              disabled={Boolean(busy)}
+              title="参考图 → Hunyuan3D → GLB 网格模型"
+            >
+              AI 图生 3D
+            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="flex-1 rounded-md border border-violet-400/40 px-3 py-1.5 text-left text-sm text-violet-200 hover:bg-violet-400/10 disabled:opacity-50"
+                onClick={() => {
+                  closeAiMenu();
+                  splatInputRef.current?.click();
+                }}
+                disabled={Boolean(busy)}
+                title="参考图 → TripoSplat → .spz 高斯泼溅，作为可绕行的 3D 世界"
+              >
+                AI 图生 3D 世界
+              </button>
+              <select
+                value={splatMatteEngine}
+                onChange={(event) => setSplatMatteEngine(event.target.value as SplatMatteEngine)}
+                disabled={Boolean(busy)}
+                title="图生 3D 世界的抠图方式：RMBG-3.0 边缘细致但慢，BiRefNet 快但硬边"
+                className="h-9 rounded-md border border-violet-400/30 bg-white/5 px-2 text-sm text-violet-100 disabled:opacity-50"
+              >
+                <option value="rmbg3">RMBG-3.0 抠图</option>
+                <option value="birefnet">BiRefNet 抠图</option>
+              </select>
+            </div>
+            <label className="block text-[11px] text-white/45" htmlFor="identity-prompt">
+              身份迁移提示词（当前 3D 画面当 image1，角色主形象当 image2）
+            </label>
+            <input
+              id="identity-prompt"
+              value={identityPrompt}
+              onChange={(event) => setIdentityPrompt(event.target.value)}
+              placeholder="身份迁移：用 <image1> 指 3D 快照、<image2> 指角色主形象"
+              className="h-9 w-full rounded-md border border-white/10 bg-white/5 px-3 text-sm text-white placeholder:text-white/40"
+            />
+            <button
+              type="button"
+              className="w-full rounded-md border border-amber-400/40 px-3 py-1.5 text-left text-sm text-amber-200 hover:bg-amber-400/10 disabled:opacity-50"
+              onClick={() => {
+                closeAiMenu();
+                identityInputRef.current?.click();
+              }}
+              disabled={Boolean(busy)}
+              title="当前 3D 画面当 image1、角色主形象当 image2，出一张身份迁移图放进场景"
+            >
+              身份迁移出图
+            </button>
+          </div>
+        </details>
         <div className="mx-2 flex rounded-md border border-white/10">
           {(["translate", "rotate", "scale"] as TransformMode[]).map((item) => (
             <button
