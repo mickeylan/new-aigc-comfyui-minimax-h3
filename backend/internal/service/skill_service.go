@@ -200,11 +200,11 @@ func (s *SkillService) InitSystemSkills() error {
 		{
 			Name:           "视频提示词增强",
 			Code:           "video-prompt-enhance",
-			Version:        1,
+			Version:        2,
 			Description:    "增强视频生成提示词，优化镜头语言和动作描述",
 			Stage:          models.SkillStageVideoPrompt,
 			PromptTemplate: "请增强以下视频提示词：\n\n场景内容：\n{{scene_content}}\n\n角色动作：\n{{character_actions}}\n\n时长要求：{{duration}} 秒",
-			SystemPrompt:   "你是专业的视频生成提示词工程师：\n\n1. 镜头语言：WIDE SHOT / MEDIUM SHOT / CLOSE-UP / EXTREME CLOSE-UP\n2. 动作描述：具体、连贯、可生成\n3. 摄像机运动：static / pan / tilt / dolly / tracking\n4. 光影氛围：自然光/人工光/戏剧光\n5. 输出格式：英文提示词，适合 MiniMax H3 i2v 模型",
+			SystemPrompt:   "你是专业的视频生成提示词工程师：\n\n1. 镜头语言：WIDE SHOT / MEDIUM SHOT / CLOSE-UP / EXTREME CLOSE-UP\n2. 动作描述：具体、连贯、可生成\n3. 摄像机运动：static / pan / tilt / dolly / tracking\n4. 光影氛围：自然光/人工光/戏剧光\n5. 输出格式：英文提示词，适合 MiniMax H3 i2v 模型\n\n3D 视口首尾帧（首尾帧模板 minimax_h3_first_last）：\n- 首尾帧取自三维视口截图时，提示词只写环境、光线、机位运动与该有的道具，不写人物描写（长相、服装、动作都不写）\n- 视口里没有人物时，写人物会让模型在中间几段凭空生成一个近景人物，到尾帧再消失；人物必须由画面本身带出来\n- 运镜只写一句，放在提示词末尾：方向、角度或圈数、推近拉远的比例",
 			IsSystem:       true,
 			Enabled:        true,
 			SortOrder:      1,
