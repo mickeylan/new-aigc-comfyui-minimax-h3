@@ -160,8 +160,11 @@ func (m *MaterialService) Delete(id uint) error {
 			if shared {
 				continue
 			}
-			full := m.upload.InputDir() + "/" + rel
-			if _, err := m.remote.Run(fmt.Sprintf("rm -f '%s'", full)); err != nil {
+			full := filepath.Join(m.upload.InputDir(), rel)
+			// 走 remote.Remove：本机直接 os.Remove，远端走 SFTP。
+			// 这里以前拼 "rm -f 'E:\...'" 交给 bash，Windows 上反斜杠路径在 bash 里
+			// 对不上真实文件，-f 又把「不存在」当成功，于是文件从来没被真删过。
+			if err := m.remote.Remove(full); err != nil {
 				return err
 			}
 		}

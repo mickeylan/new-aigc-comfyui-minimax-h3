@@ -9,10 +9,8 @@ import (
 )
 
 // 同一份文件被存了两次（素材库里常见的重复行）：删掉其中一行时，
-// 文件还有人引用就不能删，否则另一行的缩略图/模型当场变空白。
-//
-// 注意：真删文件走 remote.Run("rm -f ...")，Windows 上没有 rm 可执行文件，
-// 所以这里只断言"删掉共享行之后文件仍在"，不断言"删掉最后一行后文件消失"。
+// 文件还有人引用就不能删，否则另一行的缩略图/模型当场变空白；
+// 删到最后一行时才真把文件收走（走 remote.Remove，本机 os.Remove）。
 func TestDeleteMaterialKeepsFileStillReferencedByDuplicateRow(t *testing.T) {
 	svc, _, _ := proxyTestService(t)
 	dir := svc.Upload.InputDir()
@@ -51,6 +49,16 @@ func TestDeleteMaterialKeepsFileStillReferencedByDuplicateRow(t *testing.T) {
 	// 第一行记录确实没了
 	if err := svc.DB.First(&models.Material{}, first.ID).Error; err == nil {
 		t.Fatal("第一行记录应已删除")
+	}
+
+	// 删最后一行时才真正把文件收走
+	if err := svc.Materials.Delete(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{modelRel, thumbRel} {
+		if _, err := os.Stat(filepath.Join(dir, rel)); !os.IsNotExist(err) {
+			t.Fatalf("没有别的行引用了，文件 %s 应被删除（err=%v）", rel, err)
+		}
 	}
 }
 
