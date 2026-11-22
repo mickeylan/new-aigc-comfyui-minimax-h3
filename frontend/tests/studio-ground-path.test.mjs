@@ -12,6 +12,7 @@ const {
   groundPathYaw,
   normalizeGroundPath,
   normalizeGroundPoint,
+  moveGroundPoint,
   toGroundPath,
 } = await import('../src/studio/scene3d/ground-path.ts')
 
@@ -55,12 +56,14 @@ test('两点间距按三维距离算，只有一端时没有路径', () => {
 
 test('编辑器：只对地面拾取、拖拽超过阈值不落点、参考图导出时藏起标记', () => {
   // 选点期间点击走射线；只对地面做 intersectObject，点模型不该变成落点
-  assert.match(stage, /const hit = raycaster\.intersectObject\(ground, false\)\[0\];/)
+  assert.match(stage, /const onGround = hit\.raycaster\.intersectObject\(ground, false\)\[0\];/)
   // 地面网格只有 20×20，点远处会打空：退回无限平面，否则用户会觉得点了没反应
-  assert.match(stage, /: raycaster\.ray\.intersectPlane\(/)
-  assert.match(stage, /if \(!onPlane\) return;/)
+  assert.match(stage, /: hit\.raycaster\.ray\.intersectPlane\(/)
+  assert.match(stage, /if \(!onPlane\) return null;/)
   assert.match(stage, /if \(moved > 4\) return;/)
-  assert.match(stage, /const point = clampGroundPoint\(\[onPlane\.x, 0\.02, onPlane\.z\]\);/)
+  assert.match(stage, /return clampGroundPoint\(\[onPlane\.x, 0\.02, onPlane\.z\]\);/)
+  // 落点与拖动共用同一个射线助手（落点/微调走同一套地面拾取语义）
+  assert.match(stage, /const groundPointOf = \(event: PointerEvent \| MouseEvent\): GroundPoint \| null => \{/)
   // 落点标记不进参考图
   assert.match(stage, /hide\(groundPathGroupRef\.current\);/)
 })
@@ -128,8 +131,8 @@ test('地面路径进出存档：写入可选字段、载入时校验、UI 能�
   assert.match(stage, /const path = toGroundPath\(groundPoints\);/)
   assert.match(stage, /path \? `\$\{groundPathLength\(path\)\.toFixed\(1\)\} m` : "起点 \/ 终点"/)
   // 两端标记 + 中间虚线
-  assert.match(stage, /if \(groundPoints\.start\) ring\(groundPoints\.start, 0x22c55e\);/)
-  assert.match(stage, /if \(groundPoints\.end\) ring\(groundPoints\.end, 0xf59e0b\);/)
+  assert.match(stage, /if \(groundPoints\.start\) ring\(groundPoints\.start, 0x22c55e, \{ kind: "start" \}\);/)
+  assert.match(stage, /if \(groundPoints\.end\) ring\(groundPoints\.end, 0xf59e0b, \{ kind: "end" \}\);/)
   assert.match(stage, /new THREE\.LineDashedMaterial\(\{ color: 0x94a3b8, dashSize: 0\.18, gapSize: 0\.12 \}\)/)
 })
 
@@ -232,7 +235,10 @@ test('编辑器接上多途经点：追加落点、上限提示、撤销/清除�
   assert.match(stage, /if \(taken >= MAX_GROUND_VIAS\) \{/)
   assert.match(stage, /vias: \[\.\.\.\(current\.vias \?\? \[\]\), point\]\.slice\(0, MAX_GROUND_VIAS\),/)
   // 标记逐个画，路径按途经点数量加密采样
-  assert.match(stage, /for \(const point of groundPoints\.vias \?\? \[\]\) ring\(point, 0x38bdf8\);/)
+  assert.match(
+    stage,
+    /\(groundPoints\.vias \?\? \[\]\)\.forEach\(\(point, index\) => ring\(point, 0x38bdf8, \{ kind: "via", index \}\)\);/,
+  )
   assert.match(stage, /const samples = path\.vias\?\.length \? 32 \* path\.vias\.length : 1;/)
   // 撤销 = 去掉最后一个（并更新状态条）；清除途经 = 清空数组
   assert.match(stage, /vias: \(current\.vias \?\? \[\]\)\.slice\(0, -1\),/)
@@ -241,4 +247,58 @@ test('编辑器接上多途经点：追加落点、上限提示、撤销/清除�
   // 落点 toast 与提示语区分 A / B / 第 N 个途经点
   assert.match(stage, /`途经点 \$\{Math\.min\(taken \+ 1, MAX_GROUND_VIAS\)\} 已记录/)
   assert.match(stage, /`第 \$\{\(groundPoints\.vias\?\.length \?\? 0\) \+ 1\} 个途经点（蓝，路径会穿过它）`/)
+})
+
+test('拖动微调：只换指定那一格，别的点与入参都不动', () => {
+  const points = {
+    start: [0, 0.02, 0],
+    end: [4, 0.02, 0],
+    vias: [[1, 0.02, 1], [2, 0.02, 1], [3, 0.02, 1]],
+  }
+  const snapshot = JSON.parse(JSON.stringify(points))
+  const movedEnd = moveGroundPoint(points, { kind: 'end' }, [5, 0.02, 2])
+  assert.deepEqual(movedEnd.end, [5, 0.02, 2])
+  assert.deepEqual(movedEnd.start, points.start)
+  assert.deepEqual(movedEnd.vias, points.vias)
+  const movedVia = moveGroundPoint(points, { kind: 'via', index: 1 }, [2.5, 0.02, -1])
+  assert.deepEqual(movedVia.vias, [[1, 0.02, 1], [2.5, 0.02, -1], [3, 0.02, 1]])
+  assert.deepEqual(movedVia.start, points.start)
+  assert.deepEqual(points, snapshot, '纯函数不能改入参')
+  assert.notEqual(movedVia.vias, points.vias, '返回新数组，React 才好判断变了')
+})
+
+test('拖动微调：越界的途经点下标原样返回，不误改端点', () => {
+  const points = { start: [0, 0.02, 0], end: [4, 0.02, 0], vias: [[1, 0.02, 1]] }
+  assert.equal(moveGroundPoint(points, { kind: 'via', index: 3 }, [9, 0.02, 9]), points)
+  assert.equal(moveGroundPoint(points, { kind: 'via', index: -1 }, [9, 0.02, 9]), points)
+  // 没有途经点时拖「第 0 个」也不能凭空造一个出来
+  const bare = { start: [0, 0.02, 0], end: [4, 0.02, 0], vias: null }
+  assert.equal(moveGroundPoint(bare, { kind: 'via', index: 0 }, [1, 0.02, 1]), bare)
+})
+
+test('拖动微调：落点照样钳在地面范围内', () => {
+  const points = { start: [0, 0.02, 0], end: [4, 0.02, 0], vias: null }
+  const far = moveGroundPoint(points, { kind: 'start' }, [99, 0.02, -99])
+  assert.deepEqual(far.start, [GROUND_EXTENT, 0.02, -GROUND_EXTENT])
+})
+
+test('编辑器接上拖动微调：命中盘 -> 锁控制器 -> 拖动改点 -> 松手报位置', () => {
+  // 每个标记都带一个透明命中盘，userData 里记着动的是哪一格
+  assert.match(stage, /new THREE\.CircleGeometry\(0\.55, 24\)/)
+  assert.match(stage, /handle\.userData\.groundSlot = slot;/)
+  assert.match(stage, /ring\(groundPoints\.start, 0x22c55e, \{ kind: "start" \}\)/)
+  assert.match(stage, /ring\(groundPoints\.end, 0xf59e0b, \{ kind: "end" \}\)/)
+  // 按在标记上：记住槽位、锁轨道控制、抓住指针
+  assert.match(stage, /const slot = marker\?\.object\.userData\?\.groundSlot as GroundSlot \| undefined;/)
+  assert.match(stage, /draggingGroundRef\.current = slot;\n\s+pointerStart = null;\n\s+controls\.enabled = false;/)
+  assert.match(stage, /setPointerCapture\?\.\(event\.pointerId\)/)
+  // 拖动期间按射线落点改，松手恢复控制器并报位置
+  assert.match(stage, /setGroundPoints\(\(current\) => moveGroundPoint\(current, slot, point\)\)/)
+  assert.match(stage, /controls\.enabled = true;/)
+  assert.match(stage, /已移动到（\$\{point\[0\]\.toFixed\(1\)\}, \$\{point\[2\]\.toFixed\(1\)\}）/)
+  // 落点模式下不抢拖动，否则点空白处会先被标记吃掉
+  assert.match(stage, /if \(placingGroundRef\.current\) return;/)
+  // 监听器成对注册/注销
+  assert.match(stage, /addEventListener\("pointermove", onPointerMove\)/)
+  assert.match(stage, /removeEventListener\("pointermove", onPointerMove\)/)
 })

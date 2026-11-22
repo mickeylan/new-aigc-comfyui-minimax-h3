@@ -44,10 +44,12 @@ import {
   groundPathPointAt,
   groundPathYaw,
   MAX_GROUND_VIAS,
+  moveGroundPoint,
   normalizeGroundPath,
   toGroundPath,
   type GroundPoint,
   type GroundPoints,
+  type GroundSlot,
 } from "./ground-path.js";
 import AssetLibraryPanel from "./AssetLibraryPanel";
 import { ASSET_DRAG_MIME, assetKind, assetUrl, type LibraryAsset } from "./assetLibrary.js";
@@ -623,6 +625,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const groundPathGroupRef = useRef<THREE.Group | null>(null);
   // 拾取回调在初始化 effect 的闭包里，读 state 会读到挂载时的旧值，用 ref 镜像。
   const placingGroundRef = useRef<"start" | "via" | "end" | null>(null);
+  // 拖动微调：pointerdown 时记住动的是哪一格，pointermove 期间直接用闭包变量，
+  // 不动 state（否则每帧一次 setState 会把渲染循环拖慢）。
+  const draggingGroundRef = useRef<GroundSlot | null>(null);
   const moveRafRef = useRef<number | null>(null);
   const cameraPathRef = useRef<number | null>(null);
   // 播放兜底定时器：切到后台标签页时 rAF 会被浏览器暂停，靠它把「播放中…」收回来。
@@ -899,40 +904,90 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     fkRef.current = fk;
 
     // 点击选骨：拖动超过阈值算转相机，不当作点选，避免摆姿势时误切骨。
+    // 落点微调：按在 A/B/途经点的圆盘上就是拖它，期间锁住轨道控制（否则拖点顺手转视角）。
     let pointerStart: { x: number; y: number } | null = null;
+    const ndcOf = (event: PointerEvent | MouseEvent) => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
+      return {
+        ndc: new THREE.Vector2(
+          ((event.clientX - rect.left) / rect.width) * 2 - 1,
+          -((event.clientY - rect.top) / rect.height) * 2 + 1,
+        ),
+        raycaster: new THREE.Raycaster(),
+      };
+    };
+    // 射线打地面：先打 20×20 的地面网格，打空就退回无限平面（远处也能落点）。
+    // 射线朝天（地平线以上）时两条路都没有交点，返回 null。
+    const groundPointOf = (event: PointerEvent | MouseEvent): GroundPoint | null => {
+      const hit = ndcOf(event);
+      if (!hit) return null;
+      hit.raycaster.setFromCamera(hit.ndc, camera);
+      const onGround = hit.raycaster.intersectObject(ground, false)[0];
+      const onPlane = onGround
+        ? onGround.point
+        : hit.raycaster.ray.intersectPlane(
+            new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
+            new THREE.Vector3(),
+          );
+      if (!onPlane) return null;
+      return clampGroundPoint([onPlane.x, 0.02, onPlane.z]);
+    };
     const onPointerDown = (event: PointerEvent) => {
       pointerStart = { x: event.clientX, y: event.clientY };
+      draggingGroundRef.current = null;
+      // 正在落点时不抢拖动：否则想点空白处落点会先被标记圆盘吃掉。
+      if (placingGroundRef.current) return;
+      const group = groundPathGroupRef.current;
+      if (!group || group.children.length === 0) return;
+      const hit = ndcOf(event);
+      if (!hit) return;
+      hit.raycaster.setFromCamera(hit.ndc, camera);
+      const marker = hit.raycaster
+        .intersectObjects(group.children, false)
+        .find((item) => item.object.userData?.groundSlot);
+      const slot = marker?.object.userData?.groundSlot as GroundSlot | undefined;
+      if (!slot) return;
+      draggingGroundRef.current = slot;
+      pointerStart = null;
+      controls.enabled = false;
+      renderer.domElement.setPointerCapture?.(event.pointerId);
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      const slot = draggingGroundRef.current;
+      if (!slot) return;
+      const point = groundPointOf(event);
+      if (!point) return;
+      setGroundPoints((current) => moveGroundPoint(current, slot, point));
     };
     const onPointerUp = (event: PointerEvent) => {
       const start = pointerStart;
       pointerStart = null;
+      const slot = draggingGroundRef.current;
+      if (slot) {
+        draggingGroundRef.current = null;
+        controls.enabled = true;
+        renderer.domElement.releasePointerCapture?.(event.pointerId);
+        const point = groundPointOf(event);
+        if (point) {
+          setStatus(
+            `${slot.kind === "start" ? "A" : slot.kind === "end" ? "B" : `途经点 ${slot.index + 1}`} 已移动到（${point[0].toFixed(1)}, ${point[2].toFixed(1)}）`,
+          );
+        }
+        return;
+      }
       const placing = placingGroundRef.current;
       if (!start || (!placing && !posingRef.current)) return;
       const moved = Math.hypot(event.clientX - start.x, event.clientY - start.y);
       // 拖过 4px 算转相机，不当作点选，免得转视角时误落点。
       if (moved > 4) return;
-      const rect = renderer.domElement.getBoundingClientRect();
-      if (!rect.width || !rect.height) return;
-      const ndc = new THREE.Vector2(
-        ((event.clientX - rect.left) / rect.width) * 2 - 1,
-        -((event.clientY - rect.top) / rect.height) * 2 + 1,
-      );
       if (placing) {
-        const raycaster = new THREE.Raycaster();
-        raycaster.setFromCamera(ndc, camera);
         // 只对地面做拾取：模型身上的点击不该变成落点。地面网格只有 20×20，
         // 点远处会打空（用户会以为「点了没反应」），所以再退回无限平面，
         // 越界由 clampGroundPoint 拉回地面范围内。
-        const hit = raycaster.intersectObject(ground, false)[0];
-        const onPlane = hit
-          ? hit.point
-          : raycaster.ray.intersectPlane(
-              new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
-              new THREE.Vector3(),
-            );
+        const point = groundPointOf(event);
         // 射线朝天（地平线以上）时两条路都没有交点，不落点。
-        if (!onPlane) return;
-        const point = clampGroundPoint([onPlane.x, 0.02, onPlane.z]);
+        if (!point) return;
         placingGroundRef.current = null;
         setPlacingGround(null);
         if (placing === "via") {
@@ -957,10 +1012,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         );
         return;
       }
-      setActiveBone(fk.handleClick(ndc));
+      const ndc = ndcOf(event)?.ndc;
+      if (ndc) setActiveBone(fk.handleClick(ndc));
     };
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
+    renderer.domElement.addEventListener("pointermove", onPointerMove);
     renderer.domElement.addEventListener("pointerup", onPointerUp);
+    renderer.domElement.addEventListener("pointercancel", onPointerUp);
 
     const grid = new THREE.GridHelper(20, 40, 0x4b5563, 0x252a33);
     scene.add(grid);
@@ -1046,7 +1104,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       cancelAnimationFrame(frame);
       observer.disconnect();
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
+      renderer.domElement.removeEventListener("pointermove", onPointerMove);
       renderer.domElement.removeEventListener("pointerup", onPointerUp);
+      renderer.domElement.removeEventListener("pointercancel", onPointerUp);
       fk.dispose();
       fkRef.current = null;
       // 卸载时把视频平面的解码与全景纹理一起收掉，否则离开页面后仍在后台跑。
@@ -1097,7 +1157,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       if (Array.isArray(material)) material.forEach((item) => item.dispose());
       else material?.dispose();
     }
-    const ring = (point: GroundPoint, color: number) => {
+    const ring = (point: GroundPoint, color: number, slot: GroundSlot) => {
       const marker = new THREE.Mesh(
         new THREE.RingGeometry(0.26, 0.36, 32),
         new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, depthWrite: false }),
@@ -1106,6 +1166,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       marker.position.set(point[0], point[1] + 0.004, point[2]);
       marker.renderOrder = 2;
       group?.add(marker);
+      // 拖动微调的命中盘：环本身太细，按不准。用半径 0.55 的透明圆盘当把手，
+      // 全透明但要能被射线打中（visible=false 会被 raycast 跳过，所以走 opacity 0）。
+      const handle = new THREE.Mesh(
+        new THREE.CircleGeometry(0.55, 24),
+        new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+      );
+      handle.rotation.x = -Math.PI / 2;
+      handle.position.set(point[0], point[1] + 0.006, point[2]);
+      handle.userData.groundSlot = slot;
+      group?.add(handle);
       // 竖杆让落点在俯视/远距离下也能看见。
       const pole = new THREE.Mesh(
         new THREE.CylinderGeometry(0.02, 0.02, 0.9, 8),
@@ -1114,11 +1184,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       pole.position.set(point[0], point[1] + 0.45, point[2]);
       group?.add(pole);
     };
-    if (groundPoints.start) ring(groundPoints.start, 0x22c55e);
-    if (groundPoints.end) ring(groundPoints.end, 0xf59e0b);
-    // 途经点：蓝色，路径会绕它拐一下。
+    if (groundPoints.start) ring(groundPoints.start, 0x22c55e, { kind: "start" });
+    if (groundPoints.end) ring(groundPoints.end, 0xf59e0b, { kind: "end" });
     // 途经点：蓝色，路径会穿过每一个（最多 MAX_GROUND_VIAS 个）。
-    for (const point of groundPoints.vias ?? []) ring(point, 0x38bdf8);
+    (groundPoints.vias ?? []).forEach((point, index) => ring(point, 0x38bdf8, { kind: "via", index }));
     const path = toGroundPath(groundPoints);
     if (path) {
       // 有途经点就沿曲线采样，没有就是一条直线；虚线长度由 computeLineDistances 算。

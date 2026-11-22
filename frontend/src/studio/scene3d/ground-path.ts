@@ -72,11 +72,37 @@ function pointDistance(a: GroundPoint, b: GroundPoint): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
 
+/**
+ * 拖动微调时「动的是哪一格」：起点、终点，或第几个途经点。
+ *
+ * 用带标签的对象而不是裸字符串 + 下标：路过点越界时能原样返回，不会把终点点到起点上。
+ */
+export type GroundSlot = { kind: "start" } | { kind: "end" } | { kind: "via"; index: number };
+
 /** 落在网格外太远的点会飘在空地上，直接钳到地面范围内。 */
 export function clampGroundPoint(point: GroundPoint, extent = GROUND_EXTENT): GroundPoint {
   const limit = Math.max(0, extent);
   const clamp = (value: number) => Math.min(limit, Math.max(-limit, value));
   return [clamp(point[0]), point[1], clamp(point[2])];
+}
+
+/**
+ * 拖动微调：把 slot 指的那一格换成新落点，别的点一个都不动。
+ *
+ * 纯函数、不修改入参：React state 里能安全地拿旧值算新值。
+ * 途经点下标越界（比如刚撤销了一个还在拖）时原样返回旧值，不抛错、也不误改端点。
+ */
+export function moveGroundPoint(
+  points: GroundPoints,
+  slot: GroundSlot,
+  point: GroundPoint,
+): GroundPoints {
+  const next = clampGroundPoint(point);
+  if (slot.kind === "start") return { ...points, start: next };
+  if (slot.kind === "end") return { ...points, end: next };
+  const vias = points.vias ?? [];
+  if (!Number.isInteger(slot.index) || slot.index < 0 || slot.index >= vias.length) return points;
+  return { ...points, vias: vias.map((item, index) => (index === slot.index ? next : item)) };
 }
 
 /** 路径的骨架点：起点、途经点、终点。 */
