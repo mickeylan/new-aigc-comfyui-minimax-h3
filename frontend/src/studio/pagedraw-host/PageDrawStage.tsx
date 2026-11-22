@@ -1082,7 +1082,8 @@ export default function PageDrawStage({
             onCommit={(dataUrl, params) => void commitModelView(dataUrl, params)}
             onDismiss={() => setEditing3dNodeId(null)}
           />
-          <div className="fixed inset-x-0 bottom-24 z-[60] flex flex-wrap items-center justify-center gap-2">
+          {/* toast 在 bottom-20，这一行要抬到它上面，否则两者重叠互相遮挡。 */}
+          <div className="fixed inset-x-0 bottom-32 z-[60] flex flex-wrap items-center justify-center gap-2 rounded-lg bg-[#101014]/80 px-2 py-1 backdrop-blur">
             <ScrubPad
               label="左右拖：转相机"
               onDrag={(dx, dy) => overlayRef.current?.onRotateDrag(dx, dy)}

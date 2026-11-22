@@ -28,9 +28,12 @@ export interface Model3DParams {
 }
 
 export const DEFAULT_MODEL3D_PARAMS: Model3DParams = {
-  cameraPosition: { x: 1.5, y: 1.5, z: 1.5 },
-  cameraTarget: { x: 0, y: 0.4, z: 0 },
-  fov: 50,
+  // 归一化后模型最大边为 2、底面贴 y=0，所以机身高度约 0–2、重心在 y≈1。
+  // 机位放在斜上方 45° 左右、距离约 4，fov 45 时竖向可见高度约 3.3，
+  // 2 单位高的模型能完整入画并留出边距（早先的 (1.5,1.5,1.5) 会把头顶切掉）。
+  cameraPosition: { x: 2.2, y: 1.8, z: 3.2 },
+  cameraTarget: { x: 0, y: 0.95, z: 0 },
+  fov: 45,
   modelScale: 1,
   nativeWidth: 512,
   nativeHeight: 512,

@@ -79,4 +79,20 @@ describe("render3DModelToDataUrl", () => {
     expect(renderers[0].dispose).toHaveBeenCalledTimes(1);
     expect(renderers[0].forceContextLoss).toHaveBeenCalledTimes(1);
   });
+
+  it("默认取景能把 2 单位高的模型完整收进画面", () => {
+    const p = DEFAULT_MODEL3D_PARAMS;
+    const distance = Math.hypot(
+      p.cameraPosition.x - p.cameraTarget.x,
+      p.cameraPosition.y - p.cameraTarget.y,
+      p.cameraPosition.z - p.cameraTarget.z,
+    );
+    const visibleHeight = 2 * distance * Math.tan((p.fov * Math.PI) / 360);
+
+    // normalizeAndPlaceModel 把最大边缩到 2，且底面贴 y=0 → 高度最多 2。
+    expect(visibleHeight).toBeGreaterThan(2.4);
+    // 视线要落在模型身体上（0–2 之间），不能贴地也不能对着天上。
+    expect(p.cameraTarget.y).toBeGreaterThan(0.6);
+    expect(p.cameraTarget.y).toBeLessThan(1.4);
+  });
 });

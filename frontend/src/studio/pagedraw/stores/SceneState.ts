@@ -846,6 +846,9 @@ export const useSceneStore = create<SceneState>((set, get, store) => ({
       .setImageFromUrl(renderedDataUrl)
       .then(() => {
         get().addNode(node);
+        // 刚放下的模型直接选中：不然「调 3D 视角」入口不出现，
+        // 用户会以为提示里的按钮没做。
+        get().selectNode(nodeId);
       })
       .catch((error) => console.error("Error loading 3D model render:", error));
   },
