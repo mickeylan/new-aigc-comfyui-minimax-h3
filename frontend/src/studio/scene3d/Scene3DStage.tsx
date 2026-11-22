@@ -60,6 +60,14 @@ import {
   type MovableCamera,
 } from "./camera-frames.js";
 import { firstLastMotionNote } from "./camera-motion-note.js";
+import {
+  answerCameraQuestion,
+  describeMove,
+  parseCameraBrief,
+  planCameraMoves,
+  type CameraIntent,
+  type CameraPlan,
+} from "./camera-agent.js";
 import AssetLibraryPanel from "./AssetLibraryPanel";
 import { ASSET_DRAG_MIME, assetKind, assetUrl, type LibraryAsset } from "./assetLibrary.js";
 import {
@@ -694,6 +702,11 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [cameraKeys, setCameraKeys] = useState<CameraKey[]>([]);
   // 导出首尾帧时算出来的运镜文案：首尾帧只锚两端，中间怎么动得靠这句话写进提示词。
   const [firstLastNote, setFirstLastNote] = useState("");
+  // 相机 Agent：一句话 → 结构化运镜；缺参数就追问，出预览再采用（可撤销）。
+  const [agentBrief, setAgentBrief] = useState("");
+  const [agentIntent, setAgentIntent] = useState<CameraIntent | null>(null);
+  const [agentAnswer, setAgentAnswer] = useState("");
+  const [agentPlan, setAgentPlan] = useState<CameraPlan | null>(null);
   // 地面落点：先分别记，两个都有才算一条路径（只点 A 时不显示距离）。
   // vias 是追加的途经点（0–3 个），曲线会穿过每一个。
   const [groundPoints, setGroundPoints] = useState<GroundPoints>({ start: null, end: null });
@@ -1878,6 +1891,77 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   useEffect(() => {
     setFirstLastNote("");
   }, [cameraKeys]);
+
+  // ---------------- 相机 Agent：一句话 → 结构化机位 ----------------
+  // 只排相机：不选角色、不改场景、不写提示词。缺参数一次问一句，出预览再采用，采用可撤销。
+  const agentUndoRef = useRef<CameraKey[] | null>(null);
+
+  const parseAgentBrief = useCallback(() => {
+    const intent = parseCameraBrief(agentBrief);
+    setAgentIntent(intent);
+    setAgentPlan(null);
+    if (intent.questions.length > 0) {
+      setStatus(`还差一句：${intent.questions[0]}`);
+      return;
+    }
+    setStatus(`解析出 ${intent.moves.length} 段：${intent.moves.map(describeMove).join(" → ")}`);
+  }, [agentBrief]);
+
+  const answerAgentQuestion = useCallback(() => {
+    if (!agentIntent) return;
+    const next = answerCameraQuestion(agentIntent, agentAnswer);
+    setAgentIntent(next);
+    setAgentAnswer("");
+    setAgentPlan(null);
+    setStatus(next.questions.length > 0 ? `下一个问题：${next.questions[0]}` : "参数齐了，可以生成预览");
+  }, [agentAnswer, agentIntent]);
+
+  /** 预览只算机位，不动相机：看说明与数量够了再「采用」。 */
+  const previewAgentPlan = useCallback(() => {
+    const camera = cameraRef.current as THREE.PerspectiveCamera | null;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+    if (!agentIntent) {
+      setError("先写一句运镜并点「解析」");
+      return;
+    }
+    const path = editorGroundPath(groundPoints);
+    const plan = planCameraMoves(
+      agentIntent,
+      {
+        position: [camera.position.x, camera.position.y, camera.position.z],
+        target: [controls.target.x, controls.target.y, controls.target.z],
+        fov: normalizeCameraFov(camera.fov),
+      },
+      path ? (t) => groundPathPointAt(path, t) : null,
+    );
+    setAgentPlan(plan);
+    if (plan.problems.length > 0) {
+      setStatus(`预览不成立：${plan.problems[0]}`);
+      return;
+    }
+    const seconds = plan.keys.slice(0, -1).reduce((sum, key) => sum + key.duration, 0);
+    setStatus(`预览：${plan.keys.length} 个机位，共 ${seconds.toFixed(1)} 秒。确认无误点「采用」`);
+  }, [agentIntent, groundPoints]);
+
+  const applyAgentPlan = useCallback(() => {
+    if (!agentPlan || agentPlan.keys.length < 2) return;
+    agentUndoRef.current = cameraKeys;
+    setCameraKeys(agentPlan.keys.map((key) => ({ id: crypto.randomUUID(), ...key })));
+    const seconds = agentPlan.keys.slice(0, -1).reduce((sum, key) => sum + key.duration, 0);
+    setStatus(`已采用 ${agentPlan.keys.length} 个机位（${seconds.toFixed(1)} 秒），可用「撤销」回退`);
+  }, [agentPlan, cameraKeys]);
+
+  const undoAgentPlan = useCallback(() => {
+    const previous = agentUndoRef.current;
+    if (!previous) {
+      setStatus("没有可撤销的 Agent 操作");
+      return;
+    }
+    agentUndoRef.current = null;
+    setCameraKeys(previous);
+    setStatus("已撤销，机位回到采用之前");
+  }, []);
 
   /**
    * 环绕：绕选中对象（没选中就绕当前相机目标）转一圈，把采样出的机位追加到序列末尾。
@@ -3799,6 +3883,90 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               <div className="mt-0.5 text-[11px] leading-snug text-white/70">{firstLastNote}</div>
             </div>
           ) : null}
+
+          {/* 相机 Agent：一句话排运镜。追问 → 预览 → 采用 → 撤销，都不碰角色与提示词。 */}
+          <div className="mt-2 rounded-md border border-white/10 bg-black/20 px-2 py-1">
+            <div className="text-[11px] text-white/40">相机 Agent（一句话排运镜）</div>
+            <textarea
+              rows={2}
+              value={agentBrief}
+              onChange={(event) => setAgentBrief(event.target.value)}
+              placeholder="例：从正面绕到背后半圈，然后推近 40%"
+              className="mt-1 w-full resize-none rounded border border-white/10 bg-black/30 px-1.5 py-1 text-[11px] text-white/70"
+            />
+            <div className="mt-1 flex items-center gap-1">
+              <button
+                type="button"
+                className="flex-1 rounded-md bg-white/5 px-2 py-1 text-xs text-white/60 hover:bg-white/10 disabled:opacity-40"
+                onClick={parseAgentBrief}
+                disabled={!agentBrief.trim()}
+              >
+                解析
+              </button>
+              <button
+                type="button"
+                className="flex-1 rounded-md bg-emerald-400/15 px-2 py-1 text-xs text-emerald-200 hover:bg-emerald-400/25 disabled:opacity-40"
+                onClick={previewAgentPlan}
+                disabled={!agentIntent || agentIntent.questions.length > 0}
+              >
+                生成预览
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-white/5 px-2 py-1 text-xs text-white/50 hover:bg-white/10"
+                onClick={undoAgentPlan}
+              >
+                撤销
+              </button>
+            </div>
+            {agentIntent && agentIntent.questions.length > 0 ? (
+              <div className="mt-1">
+                <div className="text-[11px] leading-snug text-amber-200/80">{agentIntent.questions[0]}</div>
+                <div className="mt-1 flex items-center gap-1">
+                  <input
+                    value={agentAnswer}
+                    onChange={(event) => setAgentAnswer(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") answerAgentQuestion();
+                    }}
+                    placeholder="回答这一句"
+                    className="flex-1 rounded border border-white/10 bg-black/30 px-1.5 py-0.5 text-[11px] text-white/70"
+                  />
+                  <button
+                    type="button"
+                    className="rounded bg-white/5 px-2 py-0.5 text-[11px] text-white/60 hover:bg-white/10 disabled:opacity-40"
+                    onClick={answerAgentQuestion}
+                    disabled={!agentAnswer.trim()}
+                  >
+                    回答
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            {agentPlan && agentPlan.keys.length > 0 ? (
+              <div className="mt-1 rounded border border-white/10 bg-black/20 px-1.5 py-1">
+                <div className="text-[11px] text-white/40">
+                  预览：{agentPlan.keys.length} 个机位，共{" "}
+                  {agentPlan.keys
+                    .slice(0, -1)
+                    .reduce((sum, key) => sum + key.duration, 0)
+                    .toFixed(1)}{" "}
+                  秒
+                </div>
+                <div className="mt-0.5 text-[11px] leading-snug text-white/70">{agentPlan.notes.join(" → ")}</div>
+                <button
+                  type="button"
+                  className="mt-1 w-full rounded-md bg-emerald-400/20 px-2 py-1 text-xs text-emerald-100 hover:bg-emerald-400/30"
+                  onClick={applyAgentPlan}
+                >
+                  采用（替换当前机位，可撤销）
+                </button>
+              </div>
+            ) : null}
+            {agentPlan && agentPlan.problems.length > 0 ? (
+              <div className="mt-1 text-[11px] leading-snug text-rose-200/80">{agentPlan.problems[0]}</div>
+            ) : null}
+          </div>
 
           {/* 环绕：绕选中对象转一圈，一键把整段机位追加到序列末尾。 */}
           <div className="mt-1 flex items-center gap-1 px-1">
