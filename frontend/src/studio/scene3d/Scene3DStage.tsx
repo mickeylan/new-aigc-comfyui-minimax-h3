@@ -167,6 +167,14 @@ const REFERENCE_BUSY_PREFIX = "正在渲染参考图";
 const SEQUENCE_MAX_FRAMES = 240;
 const SEQUENCE_FPS_OPTIONS = [6, 8, 12];
 const DEFAULT_SEQUENCE_FPS = 8;
+/** 序列导出的宽度：0 = 跟随视口原尺寸；其余按宽度等比缩。 */
+const SEQUENCE_WIDTH_OPTIONS = [0, 1280, 960, 720];
+const SEQUENCE_WIDTH_LABELS: Record<number, string> = {
+  0: "视口原尺寸",
+  1280: "1280 宽",
+  960: "960 宽",
+  720: "720 宽",
+};
 
 function cameraPathSegments(keys: CameraKey[]) {
   return keys.slice(0, -1).map((from, index) => ({
@@ -679,6 +687,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   } | null>(null);
   // 序列导出的帧率：8fps 够当视频参考，再高只是白白多渲。
   const [sequenceFps, setSequenceFps] = useState(DEFAULT_SEQUENCE_FPS);
+  // 序列宽度：0 跟随视口；小图导出能少很多体积，当视频参考够用。
+  const [sequenceWidth, setSequenceWidth] = useState(0);
   const [playingPath, setPlayingPath] = useState(false);
   const [poseSlots, setPoseSlots] = useState<{ a: boolean; b: boolean }>({ a: false, b: false });
   const [poseBlend, setPoseBlend] = useState(0);
@@ -2420,6 +2430,17 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const savedPosition = camera.position.clone();
       const savedTarget = controls.target.clone();
       const savedFov = camera.fov;
+      // 分辨率：选了非 0 宽度就把画布临时缩到那个宽度，导完再还原。
+      // 视口是 3840 宽时每帧 200–370 KB，1280 宽够当视频参考、体积小一大截。
+      const renderer = rendererRef.current;
+      const savedSize = renderer ? renderer.getSize(new THREE.Vector2()) : null;
+      const savedAspect = camera.aspect;
+      if (renderer && sequenceWidth > 0) {
+        const height = Math.max(1, Math.round(sequenceWidth / savedAspect));
+        renderer.setSize(sequenceWidth, height, false);
+        camera.aspect = sequenceWidth / height;
+        camera.updateProjectionMatrix();
+      }
       // 角色走完停在 B 点，也要还原，否则编辑器里对象被挪走了。
       const savedMover = mover
         ? { position: mover.object.position.clone(), quaternion: mover.object.quaternion.clone() }
@@ -2490,10 +2511,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           mover.object.position.copy(savedMover.position);
           mover.object.quaternion.copy(savedMover.quaternion);
         }
+        // 画布尺寸与投影一起还原，否则编辑器停在导出分辨率上。
+        if (renderer && savedSize && sequenceWidth > 0) {
+          renderer.setSize(savedSize.x, savedSize.y, false);
+          camera.aspect = savedAspect;
+          camera.updateProjectionMatrix();
+        }
         setBusy((current) => (current && current.startsWith(REFERENCE_BUSY_PREFIX) ? null : current));
       }
     },
-    [cameraKeys, captureReference, followMover, groundPoints, moveSeconds, moverId, sequenceFps],
+    [cameraKeys, captureReference, followMover, groundPoints, moveSeconds, moverId, sequenceFps, sequenceWidth],
   );
   /** 在编辑器里先看一眼走位：直接沿路径推对象，走完停在 B 点。 */
   const previewMove = useCallback(() => {
@@ -3550,6 +3577,18 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               {SEQUENCE_FPS_OPTIONS.map((value) => (
                 <option key={value} value={value}>
                   {value} fps
+                </option>
+              ))}
+            </select>
+            <select
+              value={sequenceWidth}
+              onChange={(event) => setSequenceWidth(Number(event.target.value) || 0)}
+              title="序列导出的画面宽度：原尺寸最大也最清楚，小一点体积小很多"
+              className="rounded border border-white/10 bg-black/30 px-1 py-0.5 text-[11px] text-white/70"
+            >
+              {SEQUENCE_WIDTH_OPTIONS.map((value) => (
+                <option key={value} value={value}>
+                  {SEQUENCE_WIDTH_LABELS[value]}
                 </option>
               ))}
             </select>
