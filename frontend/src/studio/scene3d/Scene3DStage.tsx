@@ -4,6 +4,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type DragEvent,
 } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -13,6 +14,21 @@ import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { findTemplateId } from "../host/template-cache.js";
 import { FKHelper } from "./posing/FKHelper.js";
+import AssetLibraryPanel from "./AssetLibraryPanel";
+import { ASSET_DRAG_MIME, assetKind, assetUrl, type LibraryAsset } from "./assetLibrary.js";
+import {
+  DEFAULT_PLANE_LAYER,
+  DEFAULT_PLANE_ASPECT,
+  DEFAULT_SKYBOX,
+  IMAGE_PLANE_ACCEPT,
+  VIDEO_PLANE_ACCEPT,
+  clampOpacity,
+  detectMediaKind,
+  isExportablePlane,
+  planeSize,
+  type MediaKind,
+  type SkyboxSettings,
+} from "./compositing.js";
 import {
   applyBonePose,
   findSkeletonRoot,
@@ -33,6 +49,10 @@ interface SceneObjectEntry {
   bonePose?: BonePoseNode | null;
   /** 模型刚载入时的绑定姿势，用于「恢复初始姿势」。 */
   initialBonePose?: BonePoseNode | null;
+  /** 图片/视频平面层：记录媒体类型，导出时跳过视频（glTF 内嵌不了播放中的视频帧）。 */
+  mediaKind?: MediaKind;
+  /** 视频平面自己的 <video> 与纹理，删除对象和卸载时要停掉并释放。 */
+  video?: { element: HTMLVideoElement; texture: THREE.VideoTexture } | null;
 }
 
 type TransformMode = "translate" | "rotate" | "scale";
@@ -248,6 +268,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sceneInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const imagePlaneInputRef = useRef<HTMLInputElement>(null);
+  const videoPlaneInputRef = useRef<HTMLInputElement>(null);
+  const skyboxInputRef = useRef<HTMLInputElement>(null);
+  const skyboxTextureRef = useRef<THREE.Texture | null>(null);
   const fkRef = useRef<FKHelper | null>(null);
   // 画布指针事件挂在初始化 effect 里，读 ref 才能拿到最新的摆姿开关。
   const posingRef = useRef(false);
@@ -271,6 +295,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [activeBone, setActiveBone] = useState<string | null>(null);
   // 选中对象是否有骨骼（决定「骨骼摆姿」入口是否可用）。
   const [selectedHasSkeleton, setSelectedHasSkeleton] = useState(false);
+  // 3D 合成：全景天空盒与平面层设置。
+  const [skybox, setSkybox] = useState<SkyboxSettings>(DEFAULT_SKYBOX);
+  const [skyboxName, setSkyboxName] = useState<string | null>(null);
+  const [planeSettings, setPlaneSettings] = useState(DEFAULT_PLANE_LAYER);
 
   useEffect(() => {
     document.body.classList.add("studio-theme");
@@ -292,7 +320,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     const entry = objectsRef.current.find((item) => item.id === id);
 
     // 骨骼摆姿只对当前选中的模型生效：换对象就换 FK 目标，换到没有骨骼的对象则退出摆姿。
-    const skeleton = entry ? hasSkeleton(entry.object) : false;
+    const skeleton = entry ? findSkeletonRoot(entry.object) !== null : false;
     setSelectedHasSkeleton(skeleton);
     const fk = fkRef.current;
     if (fk) {
@@ -343,13 +371,15 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   }, []);
 
   const addObject = useCallback(
-    (object: THREE.Object3D, name: string) => {
+    (object: THREE.Object3D, name: string, dropPoint?: THREE.Vector3 | null) => {
       const scene = sceneRef.current;
       if (!scene) return;
       normalizeObject(object);
       const group = new THREE.Group();
       group.name = name;
       group.add(object);
+      // 拖进来的资产落在鼠标指到的地面位置，而不是永远堆在原点。
+      if (dropPoint) group.position.set(dropPoint.x, 0, dropPoint.z);
       scene.add(group);
       const entry: SceneObjectEntry = { id: crypto.randomUUID(), name, object: group };
       // 带骨骼的模型（Mixamo 角色等）记一份绑定姿势，供摆姿与「恢复初始」使用。
@@ -497,6 +527,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       renderer.domElement.removeEventListener("pointerup", onPointerUp);
       fk.dispose();
       fkRef.current = null;
+      // 卸载时把视频平面的解码与全景纹理一起收掉，否则离开页面后仍在后台跑。
+      objectsRef.current.forEach((entry) => {
+        if (!entry.video) return;
+        entry.video.element.pause();
+        entry.video.element.removeAttribute("src");
+        entry.video.element.load();
+        entry.video.texture.dispose();
+      });
+      skyboxTextureRef.current?.dispose();
+      skyboxTextureRef.current = null;
       transform.dispose();
       controls.dispose();
       renderer.dispose();
@@ -542,6 +582,213 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     addObject(gltf.scene, name);
   };
 
+  // 从素材库取模型放进来：glb/gltf 直接加载，obj 要取文本再解析。
+  const loadLibraryAsset = useCallback(
+    async (asset: LibraryAsset, dropPoint?: THREE.Vector3 | null) => {
+      const kind = assetKind(asset.path || asset.name);
+      setError(null);
+      if (kind === "unsupported") {
+        setError(`暂不支持这个格式，请先转成 GLB 再放进场景：${asset.name}`);
+        return;
+      }
+      setBusy(`正在载入 ${asset.name}…`);
+      try {
+        const url = assetUrl(asset.path);
+        if (kind === "obj") {
+          const response = await fetch(url);
+          if (!response.ok) throw new Error(`读取素材失败（HTTP ${response.status}）`);
+          addObject(new OBJLoader().parse(await response.text()), asset.name, dropPoint);
+        } else {
+          const gltf = await new GLTFLoader().loadAsync(url);
+          addObject(gltf.scene, asset.name, dropPoint);
+        }
+        setStatus(dropPoint ? `已放入 ${asset.name}` : `已放入 ${asset.name}（原点）`);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [addObject],
+  );
+
+  // 把拖放点的屏幕坐标投到 y=0 地面上，得到摆放位置。
+  const dropPointFromEvent = useCallback((event: DragEvent) => {
+    const renderer = rendererRef.current;
+    const camera = cameraRef.current;
+    if (!renderer || !camera) return null;
+    const rect = renderer.domElement.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const ndc = new THREE.Vector2(
+      ((event.clientX - rect.left) / rect.width) * 2 - 1,
+      -((event.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(ndc, camera);
+    const point = new THREE.Vector3();
+    return raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), point)
+      ? point
+      : null;
+  }, []);
+
+  // 图片/视频平面层：当背景板或参考板用，参与 3D 遮挡。
+  const addPlane = useCallback(
+    async (url: string, name: string, kind: MediaKind, dropPoint?: THREE.Vector3 | null) => {
+      const scene = sceneRef.current;
+      if (!scene) return;
+      setBusy(`正在载入 ${name}…`);
+      setError(null);
+      try {
+        let texture: THREE.Texture;
+        let aspect = DEFAULT_PLANE_ASPECT;
+        let video: SceneObjectEntry["video"] = null;
+
+        if (kind === "video") {
+          const element = document.createElement("video");
+          element.src = url;
+          element.loop = true;
+          element.muted = true;
+          element.playsInline = true;
+          element.crossOrigin = "anonymous";
+          await new Promise<void>((resolve, reject) => {
+            element.onloadedmetadata = () => resolve();
+            element.onerror = () => reject(new Error("视频无法解码（浏览器不支持这个编码）"));
+          });
+          aspect = element.videoWidth / Math.max(1, element.videoHeight);
+          // 自动播放可能被浏览器拦下，此时保留首帧静态效果，不当作失败。
+          await element.play().catch(() => undefined);
+          const videoTexture = new THREE.VideoTexture(element);
+          videoTexture.colorSpace = THREE.SRGBColorSpace;
+          texture = videoTexture;
+          video = { element, texture: videoTexture };
+        } else {
+          texture = await new THREE.TextureLoader().loadAsync(url);
+          texture.colorSpace = THREE.SRGBColorSpace;
+          const image = texture.image as { naturalWidth?: number; naturalHeight?: number; width?: number; height?: number };
+          const width = image.naturalWidth ?? image.width ?? 1;
+          const height = image.naturalHeight ?? image.height ?? 1;
+          aspect = width / Math.max(1, height);
+        }
+
+        const { width, height } = planeSize(aspect);
+        const opacity = clampOpacity(planeSettings.opacity);
+        // 图片已经解码进纹理，blob URL 可以立刻释放；视频要等删除对象时再收。
+        if (kind === "image" && url.startsWith("blob:")) URL.revokeObjectURL(url);
+        const material = new THREE.MeshBasicMaterial({
+          map: texture,
+          side: planeSettings.doubleSided ? THREE.DoubleSide : THREE.FrontSide,
+          alphaTest: planeSettings.alphaTest,
+          transparent: opacity < 1,
+          opacity,
+        });
+        const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), material);
+        mesh.name = name;
+        const group = new THREE.Group();
+        group.name = name;
+        group.add(mesh);
+        // 默认立在原点前方 3 米，拖进来则落在鼠标位置、底边贴地。
+        if (dropPoint) group.position.set(dropPoint.x, height / 2, dropPoint.z);
+        else group.position.set(0, height / 2, -3);
+        scene.add(group);
+
+        const entry: SceneObjectEntry = {
+          id: crypto.randomUUID(),
+          name,
+          object: group,
+          mediaKind: kind,
+          video,
+        };
+        objectsRef.current = [...objectsRef.current, entry];
+        syncObjects();
+        selectObject(entry.id);
+        setStatus(`已加入${kind === "video" ? "视频" : "图片"}平面 ${name}`);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [planeSettings, selectObject, syncObjects],
+  );
+
+  // 只对选中的平面层生效：透明度、单双面、透明裁切。
+  const applyPlaneSettings = useCallback(
+    (patch: Partial<typeof DEFAULT_PLANE_LAYER>) => {
+      const next = { ...planeSettings, ...patch };
+      setPlaneSettings(next);
+      const id = selectedIdRef.current;
+      const entry = id ? objectsRef.current.find((item) => item.id === id) : null;
+      if (!entry?.mediaKind) return;
+      const opacity = clampOpacity(next.opacity);
+      entry.object.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        const material = mesh.material as THREE.MeshBasicMaterial | undefined;
+        if (!mesh.isMesh || !material || !("map" in material)) return;
+        material.opacity = opacity;
+        material.transparent = opacity < 1;
+        material.side = next.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
+        material.alphaTest = next.alphaTest;
+        material.needsUpdate = true;
+      });
+    },
+    [planeSettings],
+  );
+
+  // 等距柱状全景图当背景与环境光照。
+  const applySkybox = useCallback(
+    async (url: string, name: string) => {
+      const scene = sceneRef.current;
+      if (!scene) return;
+      setBusy(`正在载入全景图 ${name}…`);
+      setError(null);
+      try {
+        const texture = await new THREE.TextureLoader().loadAsync(url);
+        texture.mapping = THREE.EquirectangularReflectionMapping;
+        texture.colorSpace = THREE.SRGBColorSpace;
+        skyboxTextureRef.current?.dispose();
+        skyboxTextureRef.current = texture;
+        scene.background = texture;
+        scene.backgroundIntensity = skybox.intensity;
+        if (skybox.asEnvironment) scene.environment = texture;
+        setSkybox((current) => ({ ...current, enabled: true }));
+        setSkyboxName(name);
+        setStatus(`已设置天空盒 ${name}`);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [skybox.asEnvironment, skybox.intensity],
+  );
+
+  const clearSkybox = useCallback(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    scene.environment = null;
+    skyboxTextureRef.current?.dispose();
+    skyboxTextureRef.current = null;
+    // 背景回到当前灯光预设的底色。
+    scene.background = new THREE.Color(LIGHT_PRESETS[lightPreset].background);
+    scene.backgroundIntensity = 1;
+    setSkybox((current) => ({ ...current, enabled: false }));
+    setSkyboxName(null);
+    setStatus("已清除天空盒");
+  }, [lightPreset]);
+
+  const setSkyboxIntensity = useCallback((value: number) => {
+    setSkybox((current) => ({ ...current, intensity: value }));
+    const scene = sceneRef.current;
+    if (scene && skyboxTextureRef.current) scene.backgroundIntensity = value;
+  }, []);
+
+  const setSkyboxAsEnvironment = useCallback((enabled: boolean) => {
+    setSkybox((current) => ({ ...current, asEnvironment: enabled }));
+    const scene = sceneRef.current;
+    if (!scene || !skyboxTextureRef.current) return;
+    scene.environment = enabled ? skyboxTextureRef.current : null;
+  }, []);
+
   const runImageTo3D = async (file: File) => {
     setBusy("正在上传参考图…");
     setError(null);
@@ -576,6 +823,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         if (Array.isArray(material)) material.forEach((item) => item.dispose());
         else material?.dispose();
       });
+      // 视频平面要停掉播放并释放纹理，否则删掉后仍在后台解码。
+      if (entry.video) {
+        entry.video.element.pause();
+        const src = entry.video.element.currentSrc || entry.video.element.src;
+        entry.video.element.removeAttribute("src");
+        entry.video.element.load();
+        entry.video.texture.dispose();
+        // 本地导入的视频用的是 blob URL，删掉对象时一并释放。
+        if (src.startsWith("blob:")) URL.revokeObjectURL(src);
+      }
       objectsRef.current = objectsRef.current.filter((item) => item.id !== id);
       syncObjects();
       selectObject(null);
@@ -596,7 +853,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     const scene = sceneRef.current;
     if (!lights || !scene) return;
     const preset = LIGHT_PRESETS[name];
-    scene.background = new THREE.Color(preset.background);
+    // 设了天空盒时背景归全景图管，切灯光预设只换灯，不把背景顶掉。
+    if (!skyboxTextureRef.current) scene.background = new THREE.Color(preset.background);
     lights.hemi.color.set(preset.hemi.sky);
     lights.hemi.groundColor.set(preset.hemi.ground);
     lights.hemi.intensity = preset.hemi.intensity;
@@ -823,6 +1081,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const exportGeometry = useCallback(async (options: { flattenTransforms?: boolean } = {}) => {
     const root = new THREE.Group();
     objectsRef.current.forEach((entry) => {
+      // 视频平面不进导出：glTF 内嵌不了正在播放的视频帧，硬塞会得到一个静止首帧。
+      if (!isExportablePlane(entry.mediaKind ?? "image")) return;
       const clone = entry.object.clone(true);
       if (options.flattenTransforms) {
         // 场景存档里变换单独记录，几何体按局部坐标导出，避免节点 TRS 与存档重复叠加。
@@ -995,7 +1255,29 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
 
   return (
     <div className="studio-root studio-theme fixed inset-0 z-[100] overflow-hidden bg-[#121316] text-[#f2f1ee]">
-      <div ref={containerRef} className="absolute inset-0" />
+      <div
+        ref={containerRef}
+        className="absolute inset-0"
+        onDragOver={(event) => {
+          // 只接管本面板的拖放，别影响浏览器默认的「拖文件进来」。
+          if (!event.dataTransfer.types.includes(ASSET_DRAG_MIME)) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+        }}
+        onDrop={(event) => {
+          const raw = event.dataTransfer.getData(ASSET_DRAG_MIME);
+          if (!raw) return;
+          event.preventDefault();
+          let asset: LibraryAsset;
+          try {
+            asset = JSON.parse(raw) as LibraryAsset;
+          } catch {
+            setError("拖放的资产信息已损坏，请从面板重新拖一次");
+            return;
+          }
+          void loadLibraryAsset(asset, dropPointFromEvent(event));
+        }}
+      />
 
       <div className="fixed inset-x-0 top-0 z-40 flex h-14 items-center gap-2 border-b border-white/10 bg-[#101014]/95 px-3 backdrop-blur">
         <button
@@ -1119,9 +1401,55 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             event.target.value = "";
           }}
         />
+        <input
+          ref={imagePlaneInputRef}
+          type="file"
+          accept={IMAGE_PLANE_ACCEPT}
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (!file) return;
+            const kind = detectMediaKind(file.name);
+            if (kind !== "image") {
+              setError(`不是可识别的图片格式：${file.name}`);
+              return;
+            }
+            void addPlane(URL.createObjectURL(file), file.name, "image");
+          }}
+        />
+        <input
+          ref={videoPlaneInputRef}
+          type="file"
+          accept={VIDEO_PLANE_ACCEPT}
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (!file) return;
+            const kind = detectMediaKind(file.name);
+            if (kind !== "video") {
+              setError(`不是可识别的视频格式：${file.name}`);
+              return;
+            }
+            void addPlane(URL.createObjectURL(file), file.name, "video");
+          }}
+        />
+        <input
+          ref={skyboxInputRef}
+          type="file"
+          accept={IMAGE_PLANE_ACCEPT}
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (!file) return;
+            void applySkybox(URL.createObjectURL(file), file.name);
+          }}
+        />
       </div>
 
-      <div className="fixed left-3 top-20 z-30 w-56 rounded-lg border border-white/10 bg-[#101014]/90 p-2 backdrop-blur">
+      <div className="fixed left-3 top-20 z-30 w-56 max-h-[calc(100vh-6rem)] overflow-y-auto rounded-lg border border-white/10 bg-[#101014]/90 p-2 backdrop-blur">
         <div className="mb-2 px-1 text-xs uppercase tracking-wide text-white/40">
           场景对象
         </div>
@@ -1143,6 +1471,15 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             </button>
           ))
         )}
+        <div className="mt-2 border-t border-white/10 pt-2">
+          <div className="mb-2 px-1 text-xs uppercase tracking-wide text-white/40">
+            资产库（拖进画面摆位）
+          </div>
+          <AssetLibraryPanel
+            onPlace={(asset) => void loadLibraryAsset(asset)}
+            onError={(message) => setError(message)}
+          />
+        </div>
       </div>
 
       <div className="fixed right-3 top-20 z-30 w-64 space-y-3 rounded-lg border border-white/10 bg-[#101014]/90 p-3 text-sm text-white/80 backdrop-blur">
@@ -1251,6 +1588,106 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           ) : (
             <p className="px-1 text-xs text-white/40">先选中一个对象</p>
           )}
+        </section>
+
+        <section>
+          <div className="mb-1.5 px-1 text-xs uppercase tracking-wide text-white/40">背景与平面层</div>
+          <div className="space-y-1">
+            <div className="flex gap-1">
+              <button
+                type="button"
+                onClick={() => imagePlaneInputRef.current?.click()}
+                className="flex-1 rounded-md bg-white/5 px-2 py-1 text-xs text-white/70 hover:bg-white/10"
+                title="把图片当背景板/参考板放进 3D 场景"
+              >
+                图片平面
+              </button>
+              <button
+                type="button"
+                onClick={() => videoPlaneInputRef.current?.click()}
+                className="flex-1 rounded-md bg-white/5 px-2 py-1 text-xs text-white/70 hover:bg-white/10"
+                title="把视频当动态背景板放进 3D 场景（不参与 GLB 导出）"
+              >
+                视频平面
+              </button>
+            </div>
+            <div className="flex gap-1">
+              <button
+                type="button"
+                onClick={() => skyboxInputRef.current?.click()}
+                className="flex-1 rounded-md bg-white/5 px-2 py-1 text-xs text-white/70 hover:bg-white/10"
+                title="导入等距柱状全景图作为天球背景"
+              >
+                导入天空盒
+              </button>
+              <button
+                type="button"
+                onClick={clearSkybox}
+                disabled={!skybox.enabled}
+                className="flex-1 rounded-md bg-white/5 px-2 py-1 text-xs text-white/50 hover:bg-white/10 disabled:opacity-40"
+              >
+                清除
+              </button>
+            </div>
+            {skybox.enabled && (
+              <div className="space-y-1 rounded-md bg-white/5 px-2 py-1.5">
+                <div className="truncate text-[11px] text-white/45">{skyboxName}</div>
+                <label className="block text-[11px] text-white/50">
+                  <span className="flex justify-between">
+                    <span>亮度</span>
+                    <span>{skybox.intensity.toFixed(2)}</span>
+                  </span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={2}
+                    step={0.05}
+                    value={skybox.intensity}
+                    onChange={(event) => setSkyboxIntensity(Number(event.target.value))}
+                    className="w-full"
+                  />
+                </label>
+                <label className="flex items-center gap-1.5 text-[11px] text-white/50">
+                  <input
+                    type="checkbox"
+                    checked={skybox.asEnvironment}
+                    onChange={(event) => setSkyboxAsEnvironment(event.target.checked)}
+                  />
+                  同时当环境光（影响金属反射）
+                </label>
+              </div>
+            )}
+            {selectedId && objects.find((item) => item.id === selectedId)?.mediaKind && (
+              <div className="space-y-1 rounded-md bg-white/5 px-2 py-1.5">
+                <label className="block text-[11px] text-white/50">
+                  <span className="flex justify-between">
+                    <span>平面不透明度</span>
+                    <span>{planeSettings.opacity.toFixed(2)}</span>
+                  </span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={planeSettings.opacity}
+                    onChange={(event) => applyPlaneSettings({ opacity: Number(event.target.value) })}
+                    className="w-full"
+                  />
+                </label>
+                <label className="flex items-center gap-1.5 text-[11px] text-white/50">
+                  <input
+                    type="checkbox"
+                    checked={planeSettings.doubleSided}
+                    onChange={(event) => applyPlaneSettings({ doubleSided: event.target.checked })}
+                  />
+                  双面可见
+                </label>
+                <p className="text-[10px] leading-3 text-white/30">
+                  视频平面只在编辑器里预览，不进 GLB 与场景存档
+                </p>
+              </div>
+            )}
+          </div>
         </section>
 
         <section>
