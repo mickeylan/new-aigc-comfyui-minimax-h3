@@ -69,6 +69,8 @@ interface SceneObjectEntry {
   video?: { element: HTMLVideoElement; texture: THREE.VideoTexture } | null;
   /** 高斯泼溅对象：Spark 有独立缓冲，要调它自己的 dispose，不走几何释放。 */
   splat?: THREE.Object3D | null;
+  /** 泼溅的来源地址（/api/output 或 /api/input）：场景存档要把字节内嵌，得先取回来。 */
+  splatUrl?: string;
 }
 
 type TransformMode = "translate" | "rotate" | "scale";
@@ -96,8 +98,18 @@ interface PoseSnapshot {
 
 // 场景存档：几何体以 GLB 形式内嵌，灯光、机位与每个对象的变换单独记录；
 // 变换不依赖导出器是否保留节点 TRS，载入时按名字（缺名字则按顺序）回填。
+// v2 起高斯泼溅单独用 splats 内嵌 .spz 字节：SplatMesh 进不了 glTF，只能自带数据。
+interface SplatDocument {
+  name: string;
+  /** .spz/.splat/.ksplat 原始字节的 base64。 */
+  data: string;
+  position: [number, number, number];
+  quaternion: [number, number, number, number];
+  scale: [number, number, number];
+}
+
 interface SceneDocument {
-  version: 1;
+  version: 1 | 2;
   createdAt: string;
   lightPreset: LightPresetName;
   camera: { position: [number, number, number]; target: [number, number, number] };
@@ -109,6 +121,8 @@ interface SceneDocument {
     /** 骨骼摆姿快照；非角色没有这个字段。 */
     bonePose?: BonePoseNode | null;
   }>;
+  /** 高斯泼溅层；v1 存档没有这个字段。 */
+  splats?: SplatDocument[];
   model: { name: string; data: string };
 }
 
@@ -490,6 +504,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       syncObjects();
       selectObject(entry.id);
       setStatus(`已加载 ${name}`);
+      // 返回 entry：泼溅要把来源地址记下来，存档时才好把字节取回来内嵌。
+      return entry;
     },
     [selectObject, syncObjects],
   );
@@ -697,7 +713,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const loadSplatUrl = useCallback(
     async (url: string, name: string, dropPoint?: THREE.Vector3 | null) => {
       const mesh = await loadSplatMesh(url, { placeOnGround: false });
-      addObject(mesh, name, dropPoint);
+      const entry = addObject(mesh, name, dropPoint);
+      // 存下来源地址，场景存档时按它把 .spz 字节取回来内嵌。
+      if (entry) entry.splatUrl = url;
     },
     [addObject],
   );
@@ -1267,6 +1285,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     objectsRef.current.forEach((entry) => {
       // 视频平面不进导出：glTF 内嵌不了正在播放的视频帧，硬塞会得到一个静止首帧。
       if (!isExportablePlane(entry.mediaKind ?? "image")) return;
+      // 高斯泼溅也进不了 glTF：Spark 的 SplatMesh 不是普通几何体，场景存档另有 splats 字段。
+      if (entry.splat) return;
       const clone = entry.object.clone(true);
       if (options.flattenTransforms) {
         // 场景存档里变换单独记录，几何体按局部坐标导出，避免节点 TRS 与存档重复叠加。
@@ -1289,6 +1309,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const exportGlb = useCallback(async () => {
     setBusy("正在导出 GLB…");
     try {
+      // 泼溅进不了 glTF，纯泼溅场景导出会得到一个空 GLB，不如直接说明。
+      if (!objectsRef.current.some((entry) => !entry.splat)) {
+        throw new Error("场景里只有泼溅，导出不了 GLB；请先存成场景存档");
+      }
       const binary = await exportGeometry();
       const url = URL.createObjectURL(new Blob([binary], { type: "model/gltf-binary" }));
       const link = document.createElement("a");
@@ -1307,6 +1331,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   // 3D 资产入库：模型本体进素材库（type=3d，可被预演绑定），预览图取当前渲染帧。
   const saveToLibrary = useCallback(async () => {
     if (objectsRef.current.length === 0) return;
+    if (!objectsRef.current.some((entry) => !entry.splat)) {
+      setError("场景里只有泼溅，存不了 GLB 素材；请先存成场景存档");
+      return;
+    }
     setBusy("正在存入素材库…");
     setError(null);
     try {
@@ -1341,22 +1369,44 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     setBusy("正在保存场景…");
     try {
       const binary = await exportGeometry({ flattenTransforms: true });
+      // 泼溅不在 GLB 里，得先把 .spz 字节取回来内嵌；取不到就整体失败，
+      // 否则用户会得到一个默默丢了泼溅层的存档。
+      const splats: SplatDocument[] = [];
+      for (const entry of objectsRef.current) {
+        if (!entry.splat) continue;
+        if (!entry.splatUrl) throw new Error(`泼溅「${entry.name}」没有来源地址，无法写入存档`);
+        const response = await fetch(entry.splatUrl);
+        if (!response.ok) {
+          throw new Error(`读取泼溅失败（${entry.name}，HTTP ${response.status}）`);
+        }
+        splats.push({
+          name: entry.name,
+          data: arrayBufferToBase64(await response.arrayBuffer()),
+          position: entry.object.position.toArray() as [number, number, number],
+          quaternion: entry.object.quaternion.toArray() as [number, number, number, number],
+          scale: entry.object.scale.toArray() as [number, number, number],
+        });
+      }
       const doc: SceneDocument = {
-        version: 1,
+        version: 2,
         createdAt: new Date().toISOString(),
         lightPreset,
         camera: {
           position: camera.position.toArray() as [number, number, number],
           target: controls.target.toArray() as [number, number, number],
         },
-        objects: objectsRef.current.map((entry) => ({
-          name: entry.name,
-          position: entry.object.position.toArray() as [number, number, number],
-          quaternion: entry.object.quaternion.toArray() as [number, number, number, number],
-          scale: entry.object.scale.toArray() as [number, number, number],
-          // 骨骼姿势只影响骨节点，导出几何仍是绑定姿势，靠这里回填。
-          bonePose: entry.bonePose ?? null,
-        })),
+        objects: objectsRef.current
+          // 泼溅的变换记在 splats 里，不能混进 GLB 节点名单，否则载入时按名回填会错位。
+          .filter((entry) => !entry.splat)
+          .map((entry) => ({
+            name: entry.name,
+            position: entry.object.position.toArray() as [number, number, number],
+            quaternion: entry.object.quaternion.toArray() as [number, number, number, number],
+            scale: entry.object.scale.toArray() as [number, number, number],
+            // 骨骼姿势只影响骨节点，导出几何仍是绑定姿势，靠这里回填。
+            bonePose: entry.bonePose ?? null,
+          })),
+        splats,
         model: {
           name: objectsRef.current.map((entry) => entry.name).join("+") || "scene",
           data: arrayBufferToBase64(binary),
@@ -1383,9 +1433,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       setError(null);
       try {
         const doc = JSON.parse(await file.text()) as SceneDocument;
-        if (doc.version !== 1 || !doc.model?.data) throw new Error("不是可识别的场景文件");
+        // v1 是没泼溅层的老存档，仍然要能读。
+        if ((doc.version !== 1 && doc.version !== 2) || !doc.model?.data) {
+          throw new Error("不是可识别的场景文件");
+        }
         const scene = sceneRef.current;
-        objectsRef.current.forEach((entry) => scene?.remove(entry.object));
+        objectsRef.current.forEach((entry) => {
+          scene?.remove(entry.object);
+          // 泼溅有自己的 GPU 缓冲，移除后要显式释放。
+          if (entry.splat) disposeSplat(entry.splat);
+        });
         objectsRef.current = [];
         syncObjects();
         selectObject(null);
@@ -1416,7 +1473,30 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           return entry;
         });
         entries.forEach((entry) => sceneRef.current?.add(entry.object));
-        objectsRef.current = entries;
+        // 泼溅层：存档里自带 .spz 字节，解成 blob URL 重新交给 Spark，
+        // 这样存档不依赖 ComfyUI output 或素材库文件还在不在。
+        const splatEntries: SceneObjectEntry[] = [];
+        for (const saved of doc.splats ?? []) {
+          const blob = new Blob([base64ToArrayBuffer(saved.data)], { type: "application/octet-stream" });
+          const url = URL.createObjectURL(blob);
+          const mesh = await loadSplatMesh(url, { placeOnGround: false });
+          // 和其他对象一样包一层 Group：归一化与用户摆位都记在这层上。
+          const group = new THREE.Group();
+          group.name = saved.name;
+          group.add(mesh);
+          group.position.fromArray(saved.position);
+          group.quaternion.fromArray(saved.quaternion);
+          group.scale.fromArray(saved.scale);
+          sceneRef.current?.add(group);
+          splatEntries.push({
+            id: crypto.randomUUID(),
+            name: saved.name,
+            object: group,
+            splat: mesh,
+            splatUrl: url,
+          });
+        }
+        objectsRef.current = [...entries, ...splatEntries];
         syncObjects();
         selectObject(entries[0]?.id ?? null);
         applyLightPreset(doc.lightPreset);
@@ -1427,7 +1507,11 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           controls.target.set(...doc.camera.target);
           controls.update();
         }
-        setStatus(`已载入场景（${entries.length} 个对象）`);
+        setStatus(
+          splatEntries.length > 0
+            ? `已载入场景（${entries.length} 个对象 + ${splatEntries.length} 个泼溅）`
+            : `已载入场景（${entries.length} 个对象）`,
+        );
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
