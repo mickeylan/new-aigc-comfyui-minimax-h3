@@ -54,8 +54,11 @@ test('两点间距按三维距离算，只有一端时没有路径', () => {
 test('编辑器：只对地面拾取、拖拽超过阈值不落点、参考图导出时藏起标记', () => {
   // 选点期间点击走射线；只对地面做 intersectObject，点模型不该变成落点
   assert.match(stage, /const hit = raycaster\.intersectObject\(ground, false\)\[0\];/)
+  // 地面网格只有 20×20，点远处会打空：退回无限平面，否则用户会觉得点了没反应
+  assert.match(stage, /: raycaster\.ray\.intersectPlane\(/)
+  assert.match(stage, /if \(!onPlane\) return;/)
   assert.match(stage, /if \(moved > 4\) return;/)
-  assert.match(stage, /const point = clampGroundPoint\(\[hit\.point\.x, 0\.02, hit\.point\.z\]\);/)
+  assert.match(stage, /const point = clampGroundPoint\(\[onPlane\.x, 0\.02, onPlane\.z\]\);/)
   // 落点标记不进参考图
   assert.match(stage, /hide\(groundPathGroupRef\.current\);/)
 })

@@ -108,12 +108,17 @@ interface CameraKey {
   duration: number;
   /** 这一段按哪种缓动走。 */
   easing: CameraEasing;
+  /** 这个机位的视角（度）：越小越「推」，越大越「拉」。 */
+  fov: number;
 }
 
 /** 老存档 / 新记录的默认段时长，与改动前的硬编码 1.6 秒一致。 */
 const DEFAULT_CAMERA_SEGMENT_SECONDS = 1.6;
 const DEFAULT_CAMERA_EASING: CameraEasing = "easeInOut";
 const CAMERA_SEGMENT_LIMITS = { min: 0.2, max: 20 };
+// 15° 已经很「长焦」，90° 接近广角极限；再外扩就不是摄影而是鱼眼了。
+const DEFAULT_CAMERA_FOV = 45;
+const CAMERA_FOV_LIMITS = { min: 15, max: 90 };
 
 const CAMERA_EASINGS: Record<CameraEasing, { label: string; fn: (t: number) => number }> = {
   // 匀速看起来最"塑料"，但需要机械感时得能选。
@@ -122,6 +127,11 @@ const CAMERA_EASINGS: Record<CameraEasing, { label: string; fn: (t: number) => n
   easeIn: { label: "缓入", fn: (t) => t * t },
   easeOut: { label: "缓出", fn: (t) => 1 - (1 - t) * (1 - t) },
 };
+
+function normalizeCameraFov(value: unknown) {
+  const fov = typeof value === "number" && Number.isFinite(value) ? value : DEFAULT_CAMERA_FOV;
+  return Math.min(CAMERA_FOV_LIMITS.max, Math.max(CAMERA_FOV_LIMITS.min, fov));
+}
 
 function normalizeCameraDuration(value: unknown) {
   const seconds = Number(value);
@@ -176,9 +186,13 @@ function sampleCameraPath(keys: CameraKey[], elapsed: number) {
       from[1] + (to[1] - from[1]) * ratio,
       from[2] + (to[2] - from[2]) * ratio,
     ] as [number, number, number];
+  const fromFov = normalizeCameraFov(active.from.fov);
+  const toFov = normalizeCameraFov(active.to.fov);
   return {
     position: mix(active.from.position, active.to.position),
     target: mix(active.from.target, active.to.target),
+    // 推拉：两个机位视角不同就一路变焦过去。
+    fov: fromFov + (toFov - fromFov) * ratio,
   };
 }
 
@@ -858,10 +872,19 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       if (placing) {
         const raycaster = new THREE.Raycaster();
         raycaster.setFromCamera(ndc, camera);
-        // 只对地面做拾取：模型身上的点击不该变成落点。
+        // 只对地面做拾取：模型身上的点击不该变成落点。地面网格只有 20×20，
+        // 点远处会打空（用户会以为「点了没反应」），所以再退回无限平面，
+        // 越界由 clampGroundPoint 拉回地面范围内。
         const hit = raycaster.intersectObject(ground, false)[0];
-        if (!hit) return;
-        const point = clampGroundPoint([hit.point.x, 0.02, hit.point.z]);
+        const onPlane = hit
+          ? hit.point
+          : raycaster.ray.intersectPlane(
+              new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
+              new THREE.Vector3(),
+            );
+        // 射线朝天（地平线以上）时两条路都没有交点，不落点。
+        if (!onPlane) return;
+        const point = clampGroundPoint([onPlane.x, 0.02, onPlane.z]);
         placingGroundRef.current = null;
         setPlacingGround(null);
         setGroundPoints((current) => ({ ...current, [placing]: point }));
@@ -1494,6 +1517,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       position: [camera.position.x, camera.position.y, camera.position.z],
       target: [controls.target.x, controls.target.y, controls.target.z],
       duration: DEFAULT_CAMERA_SEGMENT_SECONDS,
+      fov: normalizeCameraFov(camera.fov),
       easing: DEFAULT_CAMERA_EASING,
     };
     setCameraKeys((current) => {
@@ -1561,6 +1585,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       if (pose) {
         camera.position.set(...pose.position);
         controls.target.set(...pose.target);
+        if (Math.abs(camera.fov - pose.fov) > 1e-4) {
+          camera.fov = pose.fov;
+          camera.updateProjectionMatrix();
+        }
         controls.update();
       }
       if (elapsed >= total) {
@@ -1966,6 +1994,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           target: key.target,
           duration: normalizeCameraDuration(key.duration),
           easing: normalizeCameraEasing(key.easing),
+          fov: normalizeCameraFov(key.fov),
         })),
         model: {
           name: objectsRef.current.map((entry) => entry.name).join("+") || "scene",
@@ -2082,6 +2111,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             target: key.target,
             duration: normalizeCameraDuration(key.duration),
             easing: normalizeCameraEasing(key.easing),
+            fov: normalizeCameraFov(key.fov),
           })),
         );
         const camera = cameraRef.current;
@@ -2242,6 +2272,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       // 导出会一路推相机，结束后必须放回原处，否则用户回到编辑器发现机位跑了。
       const savedPosition = camera.position.clone();
       const savedTarget = controls.target.clone();
+      const savedFov = camera.fov;
       // 角色走完停在 B 点，也要还原，否则编辑器里对象被挪走了。
       const savedMover = mover
         ? { position: mover.object.position.clone(), quaternion: mover.object.quaternion.clone() }
@@ -2254,6 +2285,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           camera.position.set(...sample.position);
           controls.target.set(...sample.target);
           controls.update();
+          if (Math.abs(camera.fov - sample.fov) > 1e-4) {
+            camera.fov = sample.fov;
+            camera.updateProjectionMatrix();
+          }
           if (mover && path && moverSeconds) {
             // 移动与相机各走各的时钟：按同一帧时间 / 移动总时长取进度，超出就停在 B。
             const progress = Math.min(1, index / fps / moverSeconds);
@@ -2284,6 +2319,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       } finally {
         camera.position.copy(savedPosition);
         controls.target.copy(savedTarget);
+        if (Math.abs(camera.fov - savedFov) > 1e-4) {
+          camera.fov = savedFov;
+          camera.updateProjectionMatrix();
+        }
         controls.update();
         if (mover && savedMover) {
           mover.object.position.copy(savedMover.position);
@@ -3088,6 +3127,19 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                         </select>
                       </>
                     )}
+                    {/* 视角对终点也要能改：最后一段的「推/拉」目标就是终点的 fov。 */}
+                    <input
+                      type="number"
+                      min={CAMERA_FOV_LIMITS.min}
+                      max={CAMERA_FOV_LIMITS.max}
+                      step={1}
+                      value={key.fov}
+                      onChange={(event) =>
+                        updateCameraKey(key.id, { fov: normalizeCameraFov(Number(event.target.value)) })
+                      }
+                      className="w-12 shrink-0 rounded bg-black/30 px-1 py-0.5 text-right text-[11px] text-white/70"
+                      title="这个机位的视角（度）：越小越推近，越大越拉远"
+                    />
                     <span className="flex-1" />
                     <button
                       type="button"

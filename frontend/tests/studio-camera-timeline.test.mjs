@@ -10,6 +10,7 @@ test('相机关键帧带时长与缓动，存进 v3 存档并能读回', () => {
   assert.ok(type, '缺 CameraKey 类型')
   assert.match(type[1], /duration: number;/, '关键帧要带段时长')
   assert.match(type[1], /easing: CameraEasing;/, '关键帧要带缓动')
+  assert.match(type[1], /fov: number;/, '关键帧要带视角（推拉）')
 
   // 存档里写的是同一份结构，不是只写位置
   const saved = stage.match(/cameraKeys: cameraKeys\.map\(\(key\) => \(\{([\s\S]*?)\}\)\),/)
@@ -19,7 +20,8 @@ test('相机关键帧带时长与缓动，存进 v3 存档并能读回', () => {
 
   // 载入时老存档没这个字段要清空 + 补默认，不能让上一个场景的机位串进来
   assert.match(stage, /setCameraKeys\(\s*\n\s*\(doc\.cameraKeys \?\? \[\]\)\.map/)
-  assert.match(stage, /duration: normalizeCameraDuration\(key\.duration\),\s*\n\s*easing: normalizeCameraEasing\(key\.easing\),\s*\n\s*\}\)\),\s*\n\s*\);\s*\n\s*const camera = cameraRef\.current;/)
+  // fov 是后加的字段：载入时也过一遍 normalizeCameraFov（老存档没有就回 45°）
+  assert.match(stage, /duration: normalizeCameraDuration\(key\.duration\),\s*\n\s*easing: normalizeCameraEasing\(key\.easing\),\s*\n\s*fov: normalizeCameraFov\(key\.fov\),\s*\n\s*\}\)\),\s*\n\s*\);\s*\n\s*const camera = cameraRef\.current;/)
 })
 
 test('段时长/缓动有默认值与上下限，坏数据不会把相机甩飞', () => {
