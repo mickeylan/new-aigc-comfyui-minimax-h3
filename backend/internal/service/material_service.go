@@ -138,6 +138,15 @@ func (m *MaterialService) Delete(id uint) error {
 			if strings.TrimSpace(rel) == "" {
 				continue
 			}
+			// 同名同文件被重复存进库很常见（多行指向一个文件）。删其中一行时
+			// 如果还有别的行引用同一份文件，就不能把文件带走。
+			shared, err := m.otherMaterialUsesPath(rel, id)
+			if err != nil {
+				return err
+			}
+			if shared {
+				continue
+			}
 			full := m.upload.InputDir() + "/" + rel
 			if _, err := m.remote.Run(fmt.Sprintf("rm -f '%s'", full)); err != nil {
 				return err
@@ -145,6 +154,18 @@ func (m *MaterialService) Delete(id uint) error {
 		}
 	}
 	return m.db.Delete(&mat).Error
+}
+
+// otherMaterialUsesPath 查除 excludeID 之外的素材行是否还引用同一个文件路径。
+func (m *MaterialService) otherMaterialUsesPath(rel string, excludeID uint) (bool, error) {
+	var count int64
+	err := m.db.Model(&models.Material{}).
+		Where("id <> ? AND (path = ? OR thumb_path = ?)", excludeID, rel, rel).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // TaskIDOf 解析素材 input 相对路径的目录段（用于预览 URL）
