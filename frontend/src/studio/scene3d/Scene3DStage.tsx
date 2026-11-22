@@ -37,6 +37,14 @@ import {
   sequenceLibraryBlocker,
 } from "./reference-library.js";
 import {
+  archiveSizeLabel,
+  parseSceneArchiveList,
+  sceneArchiveBlocker,
+  sceneArchiveFileName,
+  sceneArchiveFormBody,
+  type SceneArchiveItem,
+} from "./scene-archive.js";
+import {
   GROUND_EXTENT,
   clampGroundPoint,
   groundPathFollowDelta,
@@ -2408,12 +2416,14 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     }
   }, [captureThumbnail]);
 
-  const saveScene = useCallback(async () => {
+  // 本地下载与「存到后端」共用同一份文档：GLB、泼溅、机位序列都在这里成型。
+  const buildSceneDocument = useCallback(async (): Promise<SceneDocument> => {
     const camera = cameraRef.current;
     const controls = controlsRef.current;
-    if (objectsRef.current.length === 0 || !camera || !controls) return;
-    setBusy("正在保存场景…");
-    try {
+    if (objectsRef.current.length === 0 || !camera || !controls) {
+      throw new Error("视口里还没有对象，先放入模型再存场景");
+    }
+    {
       const binary = await exportGeometry({ flattenTransforms: true });
       // 泼溅不在 GLB 里，得先把 .spz 字节取回来内嵌；取不到就整体失败，
       // 否则用户会得到一个默默丢了泼溅层的存档。
@@ -2477,27 +2487,65 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           data: arrayBufferToBase64(binary),
         },
       };
-      const json = JSON.stringify(doc);
+      return doc;
+    }
+  }, [cameraKeys, exportGeometry, followMover, groundPoints, lightPreset, moveSeconds, moverId]);
+
+  const saveScene = useCallback(async () => {
+    if (objectsRef.current.length === 0) return;
+    setBusy("正在保存场景…");
+    try {
+      const json = JSON.stringify(await buildSceneDocument());
       const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
       const link = document.createElement("a");
       link.href = url;
-      link.download = `scene-${Date.now()}.json`;
+      link.download = sceneArchiveFileName(Date.now());
       link.click();
       URL.revokeObjectURL(url);
-      setStatus(`已保存场景 ${Math.max(1, Math.round(json.length / 1024))} KB`);
+      setStatus(`已保存场景 ${Math.max(1, Math.round(json.length / 1024))} KB（本地文件）`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(null);
     }
-  }, [cameraKeys, exportGeometry, groundPoints, lightPreset, moveSeconds, moverId]);
+  }, [buildSceneDocument]);
 
-  const loadScene = useCallback(
-    async (file: File) => {
+  // 存到后端：JSON 落 data/scene-archives/<id>.json，前端刷新或换机器都能选回来。
+  const saveSceneToServer = useCallback(async () => {
+    if (objectsRef.current.length === 0) return;
+    setBusy("正在存到后端…");
+    try {
+      const json = JSON.stringify(await buildSceneDocument());
+      const blocker = sceneArchiveBlocker(json);
+      if (blocker) throw new Error(blocker);
+      const name = sceneArchiveFileName(Date.now());
+      const projectId = Number(promptProjectId) || null;
+      const response = await fetch("/api/scene-archives", {
+        method: "POST",
+        body: sceneArchiveFormBody(json, name, projectId),
+      });
+      if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+        throw new Error(`存到后端失败（HTTP ${response.status}）${detail ? `：${detail.slice(0, 200)}` : ""}`);
+      }
+      const saved = (await response.json().catch(() => null)) as { id?: number } | null;
+      setStatus(
+        `已存到后端${saved?.id ? `（存档 #${saved.id}）` : ""}：${archiveSizeLabel(json.length)}，${name}`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }, [buildSceneDocument, promptProjectId]);
+
+  // 本地文件与后端存档都走这一条：解析、校验 version/model.data、回填对象与机位。
+  const importSceneText = useCallback(
+    async (text: string) => {
       setBusy("正在载入场景…");
       setError(null);
       try {
-        const doc = JSON.parse(await file.text()) as SceneDocument;
+        const doc = JSON.parse(text) as SceneDocument;
         // v1 是没泼溅层的老存档、v2 多了泼溅层，都仍然要能读；v3 多了机位序列。
         if ((doc.version !== 1 && doc.version !== 2 && doc.version !== 3) || !doc.model?.data) {
           throw new Error("不是可识别的场景文件");
@@ -2617,6 +2665,55 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       }
     },
     [applyLightPreset, beginSplatLodWait, syncObjects],
+  );
+
+  const loadScene = useCallback(
+    async (file: File) => {
+      await importSceneText(await file.text());
+    },
+    [importSceneText],
+  );
+
+  // 后端存档：列表与载入。项目沿用提示词面板里选的项目，没选就不过滤。
+  const [archivesOpen, setArchivesOpen] = useState(false);
+  const [archives, setArchives] = useState<SceneArchiveItem[]>([]);
+  const [archivesBusy, setArchivesBusy] = useState(false);
+
+  const loadSceneArchives = useCallback(async () => {
+    setArchivesBusy(true);
+    setError(null);
+    try {
+      const projectId = Number(promptProjectId) || 0;
+      const query = projectId > 0 ? `?project_id=${projectId}` : "";
+      const response = await fetch(`/api/scene-archives${query}`);
+      if (!response.ok) throw new Error(`读取后端存档失败（HTTP ${response.status}）`);
+      setArchives(parseSceneArchiveList(await response.json()));
+      setArchivesOpen(true);
+      setStatus("后端存档列表已刷新");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setArchivesBusy(false);
+    }
+  }, [promptProjectId]);
+
+  const openSceneArchive = useCallback(
+    async (item: SceneArchiveItem) => {
+      setBusy(`正在载入后端存档 #${item.id}…`);
+      setError(null);
+      try {
+        const response = await fetch(`/api/scene-archives/${item.id}`);
+        if (!response.ok) throw new Error(`读取存档 #${item.id} 失败（HTTP ${response.status}）`);
+        // importSceneText 自己会再设 busy/status；这里只负责取字节。
+        await importSceneText(await response.text());
+        setArchivesOpen(false);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [importSceneText],
   );
 
   // 渲一帧参考图并取回 PNG：藏编辑器痕迹、换材质、黑底、取图、还原都在这里。
@@ -3386,18 +3483,36 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           className="rounded-md border border-white/10 px-3 py-1.5 text-sm hover:bg-white/10 disabled:opacity-40"
           onClick={() => void saveScene()}
           disabled={objects.length === 0 || Boolean(busy)}
-          title="把模型、灯光和机位存成场景文件"
+          title="把模型、灯光和机位存成场景文件（下载到本地）"
         >
           保存场景
         </button>
         <button
           type="button"
           className="rounded-md border border-white/10 px-3 py-1.5 text-sm hover:bg-white/10 disabled:opacity-40"
+          onClick={() => void saveSceneToServer()}
+          disabled={objects.length === 0 || Boolean(busy)}
+          title="把场景存到后端，刷新或换机器后还能从「后端存档」里选回来"
+        >
+          存到后端
+        </button>
+        <button
+          type="button"
+          className="rounded-md border border-white/10 px-3 py-1.5 text-sm hover:bg-white/10 disabled:opacity-40"
           onClick={() => sceneInputRef.current?.click()}
           disabled={Boolean(busy)}
-          title="载入之前保存的场景文件"
+          title="载入之前保存到本地的场景文件"
         >
           载入场景
+        </button>
+        <button
+          type="button"
+          className="rounded-md border border-white/10 px-3 py-1.5 text-sm hover:bg-white/10 disabled:opacity-40"
+          onClick={() => void loadSceneArchives()}
+          disabled={Boolean(busy) || archivesBusy}
+          title="列出存在后端的场景存档，点一条就载入"
+        >
+          {archivesBusy ? "读取存档…" : "后端存档"}
         </button>
         <button
           type="button"
@@ -3417,6 +3532,59 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             event.target.value = "";
           }}
         />
+        {archivesOpen ? (
+          <div
+            className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6"
+            onClick={() => setArchivesOpen(false)}
+          >
+            <div
+              className="max-h-[70vh] w-full max-w-md overflow-auto rounded-lg border border-white/10 bg-neutral-900 p-4 text-sm shadow-xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="mb-3 flex items-center justify-between">
+                <span className="font-medium">
+                  后端存档{archives.length > 0 ? `（${archives.length}）` : ""}
+                </span>
+                <button
+                  type="button"
+                  className="text-xs text-white/60 hover:text-white"
+                  onClick={() => setArchivesOpen(false)}
+                >
+                  关闭
+                </button>
+              </div>
+              {archives.length === 0 ? (
+                <p className="text-xs text-white/50">
+                  {archivesBusy
+                    ? "正在读取…"
+                    : promptProjectId
+                      ? "这个项目下还没有存档：先在视口里搭好，再点「存到后端」。"
+                      : "还没有存档：先在视口里搭好，再点「存到后端」。"}
+                </p>
+              ) : (
+                <ul className="space-y-1">
+                  {archives.map((item) => (
+                    <li key={item.id}>
+                      <button
+                        type="button"
+                        className="w-full rounded px-2 py-1.5 text-left hover:bg-white/10 disabled:opacity-40"
+                        disabled={Boolean(busy)}
+                        onClick={() => void openSceneArchive(item)}
+                        title={`载入存档 #${item.id}`}
+                      >
+                        <span className="block truncate">{item.name}</span>
+                        <span className="block text-xs text-white/50">
+                          #{item.id} · {item.sizeLabel}
+                          {item.createdLabel ? ` · ${item.createdLabel}` : ""}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        ) : null}
         <input
           ref={fileInputRef}
           type="file"
