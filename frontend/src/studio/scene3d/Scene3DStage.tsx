@@ -197,9 +197,30 @@ async function createImageTo3DTask(upload: { task_id: string; name: string }) {
   return response.json() as Promise<{ task_id: string }>;
 }
 
+/**
+ * 图生 3D 世界的抠图引擎 → 模板 code。
+ * rmbg3：RMBG-3.0 出软 alpha matte（发丝细节好，但每张多花十几秒、要 8B 权重）；
+ * birefnet：ComfyUI 核心 BiRefNet，3 秒级、硬边，权重许可也不是非商用限制。
+ */
+const SPLAT_MATTE_TEMPLATES = {
+  rmbg3: "image_to_3d_triposplat",
+  birefnet: "image_to_3d_triposplat_birefnet",
+} as const;
+type SplatMatteEngine = keyof typeof SPLAT_MATTE_TEMPLATES;
+
 /** 图生 3D 高斯泼溅：走 TripoSplat 模板，输出 .spz。 */
-async function createImageToSplatTask(upload: { task_id: string; name: string }) {
-  const templateId = await findTemplateId("image_to_3d_triposplat");
+async function createImageToSplatTask(
+  upload: { task_id: string; name: string },
+  matteEngine: SplatMatteEngine = "rmbg3",
+) {
+  let templateId: number;
+  try {
+    templateId = await findTemplateId(SPLAT_MATTE_TEMPLATES[matteEngine]);
+  } catch (err) {
+    // 装了 RMBG-3 版却缺 BiRefNet 变体模板时，别让按钮直接失败，退回默认模板。
+    if (matteEngine === "rmbg3") throw err;
+    templateId = await findTemplateId(SPLAT_MATTE_TEMPLATES.rmbg3);
+  }
   const response = await fetch("/api/tasks", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -367,6 +388,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [selectedHasSkeleton, setSelectedHasSkeleton] = useState(false);
   // 身份迁移：3D 快照 + 角色主形象 → 多图编辑。
   const [identityPrompt, setIdentityPrompt] = useState(DEFAULT_IDENTITY_PROMPT);
+  // 图生 3D 世界的抠图引擎，默认 RMBG-3.0 软 matte。
+  const [splatMatteEngine, setSplatMatteEngine] = useState<SplatMatteEngine>("rmbg3");
   // 3D 合成：全景天空盒与平面层设置。
   const [skybox, setSkybox] = useState<SkyboxSettings>(DEFAULT_SKYBOX);
   const [skyboxName, setSkyboxName] = useState<string | null>(null);
@@ -914,7 +937,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     setStatus("");
     try {
       const upload = await uploadImage(file, `splat-ref-${Date.now()}.png`);
-      const task = await createImageToSplatTask(upload);
+      const task = await createImageToSplatTask(upload, splatMatteEngine);
       setBusy("正在生成高斯泼溅，等待 ComfyUI 返回…");
       const finished = await waitForTask(task.task_id);
       const url = taskResultUrl(finished);
@@ -1470,6 +1493,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         >
           AI 图生 3D 世界
         </button>
+        <select
+          value={splatMatteEngine}
+          onChange={(event) => setSplatMatteEngine(event.target.value as SplatMatteEngine)}
+          disabled={Boolean(busy)}
+          title="图生 3D 世界的抠图方式：RMBG-3.0 边缘细致但慢，BiRefNet 快但硬边"
+          className="h-9 rounded-md border border-violet-400/30 bg-white/5 px-2 text-sm text-violet-100 disabled:opacity-50"
+        >
+          <option value="rmbg3">RMBG-3.0 抠图</option>
+          <option value="birefnet">BiRefNet 抠图</option>
+        </select>
         <input
           value={identityPrompt}
           onChange={(event) => setIdentityPrompt(event.target.value)}
