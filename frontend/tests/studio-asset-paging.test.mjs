@@ -43,3 +43,15 @@ test('面板按页拉 24 条，能追加加载更多', () => {
   assert.match(panel, /setHasMore\(list\.length >= ASSET_PAGE_SIZE\)/)
   assert.match(panel, /加载更多/)
 })
+
+// 素材库页面原来一次拉全量，素材多起来会卡；跟 3D 面板同一套分页
+test('素材库页面也按页拉取，能加载更多', () => {
+  const view = readFileSync(new URL('../src/views/Materials.vue', import.meta.url), 'utf8')
+  assert.match(view, /const PAGE_SIZE = 48/i, '缺页大小')
+  assert.match(view, /const params = \{ page: target, page_size: PAGE_SIZE \}/, '请求要带分页参数')
+  assert.match(view, /materials\.value = \[\.\.\.materials\.value, \.\.\.list\]/, '加载更多应追加')
+  assert.match(view, /hasMore\.value = list\.length >= PAGE_SIZE/, '按本页是否塞满推断还有更多')
+  assert.match(view, /加载更多/)
+  // 未传 page_size 的老后端会一次给全量，这条退路不能被破坏
+  assert.match(view, /Array\.isArray\(data\) \? data : \(data\.items \?\? \[\]\)/, '两种返回结构都要认')
+})

@@ -29,7 +29,7 @@
         <option value="">全部项目</option>
         <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.title }}</option>
       </select>
-      <span class="count">{{ materials.length }} 个素材</span>
+      <span class="count">{{ materials.length }} 个素材{{ hasMore ? '（还有更多）' : '' }}</span>
       <span v-if="uploading" class="uploading"><span class="dot blue pulse"></span>上传中…</span>
     </div>
 
@@ -72,6 +72,11 @@
         </div>
       </div>
     </div>
+    <div v-if="hasMore" class="load-more">
+      <button class="btn btn-ghost" :disabled="loading" @click="loadMore">
+        {{ loading ? '加载中…' : '加载更多' }}
+      </button>
+    </div>
 
     <!-- 预览弹窗 -->
     <div v-if="viewer" class="modal-mask viewer-mask" tabindex="-1" @click.self="viewer = null" @keydown.esc="viewer = null">
@@ -97,6 +102,10 @@ const uploading = ref(false)
 const viewer = ref(null)
 const fileInput = ref(null)
 const filter = reactive({ type: '', project_id: '' })
+/** 素材多的项目全量拉一次太伤：一页 48 条，够铺三四屏。 */
+const PAGE_SIZE = 48
+const page = ref(1)
+const hasMore = ref(false)
 
 onMounted(async () => {
   load()
@@ -106,14 +115,37 @@ onMounted(async () => {
   } catch (_) {}
 })
 
+async function fetchPage(target) {
+  const params = { page: target, page_size: PAGE_SIZE }
+  if (filter.type) params.type = filter.type
+  if (filter.project_id) params.project_id = filter.project_id
+  const { data } = await api.materials(params)
+  // 后端也可能返回 {items: []}（分页包装），两种都认
+  return Array.isArray(data) ? data : (data.items ?? [])
+}
+
 async function load() {
   loading.value = true
   try {
-    const params = {}
-    if (filter.type) params.type = filter.type
-    if (filter.project_id) params.project_id = filter.project_id
-    const { data } = await api.materials(params)
-    materials.value = data
+    const list = await fetchPage(1)
+    materials.value = list
+    page.value = 1
+    // 这一页塞满才可能还有更多（旧后端不支持 page_size 时会一次返回全量）
+    hasMore.value = list.length >= PAGE_SIZE
+  } catch (_) {
+  } finally {
+    loading.value = false
+  }
+}
+
+async function loadMore() {
+  loading.value = true
+  try {
+    const next = page.value + 1
+    const list = await fetchPage(next)
+    materials.value = [...materials.value, ...list]
+    page.value = next
+    hasMore.value = list.length >= PAGE_SIZE
   } catch (_) {
   } finally {
     loading.value = false
@@ -220,6 +252,7 @@ function typeTone(t) {
 .count { margin-left: auto; font-size: 12.5px; color: var(--text-tertiary); font-weight: 600; }
 .uploading { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--accent); }
 .material-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+.load-more { display: flex; justify-content: center; margin-top: 16px; }
 .material-card { padding: 14px; display: flex; flex-direction: column; }
 .mat-preview {
   position: relative; border-radius: 12px; overflow: hidden; background: rgba(0, 0, 0, 0.05);
