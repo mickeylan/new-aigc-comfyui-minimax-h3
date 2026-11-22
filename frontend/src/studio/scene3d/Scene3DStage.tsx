@@ -117,6 +117,62 @@ function normalizeCameraDuration(value: unknown) {
   return Math.min(CAMERA_SEGMENT_LIMITS.max, Math.max(CAMERA_SEGMENT_LIMITS.min, seconds));
 }
 
+/** 参考图三种 pass：素模、法线、深度。给视频生成当控制图用。 */
+type ReferencePass = "clay" | "normal" | "depth";
+
+const REFERENCE_PASS_LABELS: Record<ReferencePass, string> = {
+  clay: "白模",
+  normal: "法线",
+  depth: "深度",
+};
+
+const REFERENCE_BUSY_PREFIX = "正在渲染参考图";
+
+/**
+ * 参考图专用材质。三种都要盖到场景里所有网格上，渲完必须无条件还原（外面 finally 保证）。
+ * 深度用独立的线性深度 shader：近黑远白。
+ * 深度范围不能直接用 camera.near/far（0.1–1000），那样几米内的模型只占 1% 灰度，
+ * 看上去就是一整张黑图；要按模型自身的包围盒算一段贴身区间。
+ */
+function createReferenceMaterial(
+  pass: ReferencePass,
+  depthRange: { near: number; far: number },
+) {
+  if (pass === "clay") {
+    // 白模要保留灯光关系，只把材质换成中性白。GLB 常见单面片，双面才不会从背后看就消失。
+    return new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.95,
+      metalness: 0,
+      side: THREE.DoubleSide,
+    });
+  }
+  if (pass === "normal") {
+    return new THREE.MeshNormalMaterial({ side: THREE.DoubleSide });
+  }
+  return new THREE.ShaderMaterial({
+    side: THREE.DoubleSide,
+    uniforms: { uNear: { value: depthRange.near }, uFar: { value: depthRange.far } },
+    vertexShader: `
+      varying float vViewDepth;
+      void main() {
+        vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
+        vViewDepth = -viewPosition.z;
+        gl_Position = projectionMatrix * viewPosition;
+      }
+    `,
+    fragmentShader: `
+      uniform float uNear;
+      uniform float uFar;
+      varying float vViewDepth;
+      void main() {
+        float linearDepth = clamp((vViewDepth - uNear) / (uFar - uNear), 0.0, 1.0);
+        gl_FragColor = vec4(vec3(linearDepth), 1.0);
+      }
+    `,
+  });
+}
+
 function normalizeCameraEasing(value: unknown): CameraEasing {
   return typeof value === "string" && value in CAMERA_EASINGS
     ? (value as CameraEasing)
@@ -448,6 +504,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const cameraPathRef = useRef<number | null>(null);
   // 播放兜底定时器：切到后台标签页时 rAF 会被浏览器暂停，靠它把「播放中…」收回来。
   const cameraPathTimerRef = useRef<number | null>(null);
+  // 旧预览的 blob URL：换新图时释放，避免一直攒着。
+  const referenceUrlRef = useRef<string | null>(null);
   const posesRef = useRef<Record<string, { a?: PoseSnapshot; b?: PoseSnapshot }>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sceneInputRef = useRef<HTMLInputElement>(null);
@@ -489,6 +547,14 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [lightPreset, setLightPreset] = useState<LightPresetName>("studio");
   const [material, setMaterial] = useState<MaterialSettings>(DEFAULT_MATERIAL);
   const [cameraKeys, setCameraKeys] = useState<CameraKey[]>([]);
+  // 最近一张参考图：面板里直接预览，同时给下载按钮用。
+  const [referenceShot, setReferenceShot] = useState<{
+    pass: ReferencePass;
+    url: string;
+    bytes: number;
+    width: number;
+    height: number;
+  } | null>(null);
   const [playingPath, setPlayingPath] = useState(false);
   const [poseSlots, setPoseSlots] = useState<{ a: boolean; b: boolean }>({ a: false, b: false });
   const [poseBlend, setPoseBlend] = useState(0);
@@ -1878,6 +1944,105 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     [applyLightPreset, beginSplatLodWait, syncObjects],
   );
 
+  const exportReference = useCallback(async (pass: ReferencePass) => {
+    const renderer = rendererRef.current;
+    const scene = sceneRef.current;
+    const camera = cameraRef.current as THREE.PerspectiveCamera | null;
+    if (!renderer || !scene || !camera) return;
+    setBusy(`${REFERENCE_BUSY_PREFIX}（${REFERENCE_PASS_LABELS[pass]}）…`);
+    setError(null);
+    const previousOverride = scene.overrideMaterial;
+    const previousBackground = scene.background;
+    const hidden: THREE.Object3D[] = [];
+    // 逐个网格换材质：scene.overrideMaterial 会把模型整块画没了（只留黑底），
+    // 逐网格替换才能稳定出图。
+    const swapped: Array<{ mesh: THREE.Mesh; material: THREE.Material | THREE.Material[] }> = [];
+    // 深度范围按模型自己的包围盒算：直接用 camera.near/far（0.1–1000）时，
+    // 几米内的模型只占 1% 灰度，看上去就是一整张黑图。
+    const bounds = new THREE.Box3();
+    objectsRef.current.forEach((entry) => bounds.expandByObject(entry.object));
+    const depthRange = { near: camera.near, far: camera.far };
+    if (!bounds.isEmpty()) {
+      const center = bounds.getCenter(new THREE.Vector3());
+      const radius = Math.max(0.25, bounds.getSize(new THREE.Vector3()).length() / 2);
+      const distance = camera.position.distanceTo(center);
+      depthRange.near = Math.max(0.01, distance - radius);
+      depthRange.far = Math.max(depthRange.near + 0.5, distance + radius);
+    }
+    const material = createReferenceMaterial(pass, depthRange);
+    const hide = (object: THREE.Object3D | null | undefined) => {
+      if (!object || !object.visible) return;
+      object.visible = false;
+      hidden.push(object);
+    };
+    try {
+      // 网格线、地面、gizmo、骨架线都不进参考图：它们不是要被约束的几何。
+      hide(gridRef.current);
+      hide(groundRef.current);
+      hide(transformRef.current?.getHelper?.() ?? null);
+      scene.children.forEach((child) => {
+        if (child instanceof THREE.SkeletonHelper) hide(child);
+      });
+      // 泼溅由 Spark 自己光栅化，overrideMaterial 管不到它；混进灰度图会变成彩色噪点。
+      hide(sparkRef.current);
+      const paint = (object: THREE.Object3D) => {
+        const mesh = object as THREE.Mesh;
+        if (mesh.isMesh) {
+          const geometry = mesh.geometry as THREE.BufferGeometry | undefined;
+          // 没存法线的 GLB 很常见；换成 Standard / Normal 材质后光照拿不到法线，
+          // 整块会渲成纯黑。先在原几何体上补一份。
+          if (geometry && !geometry.getAttribute("normal")) {
+            geometry.computeVertexNormals();
+          }
+          swapped.push({ mesh, material: mesh.material });
+          mesh.material = material;
+        }
+        object.children.forEach(paint);
+      };
+      objectsRef.current.forEach((entry) => paint(entry.object));
+      // 黑色背景：深度图里天空=0，稳定；白模/法线也不想要灰底混进来。
+      scene.background = new THREE.Color(0x000000);
+      // render 与取图必须在同一个任务里，隔帧再取可能已被下一帧清掉。
+      renderer.clear();
+      renderer.render(scene, camera);
+      const width = renderer.domElement.width;
+      const height = renderer.domElement.height;
+      // 先把这一帧同步拷进 2D 画布再编码：WebGL 缓冲在等 toBlob 期间会被下一帧清掉，
+      // 直接 toBlob 会拿到黑图（缩略图那条路踩过同一个坑）。
+      const snapshot = document.createElement("canvas");
+      snapshot.width = width;
+      snapshot.height = height;
+      const context = snapshot.getContext("2d");
+      if (!context) throw new Error("取不到 2D 画布上下文");
+      context.drawImage(renderer.domElement, 0, 0, width, height);
+      const blob = await new Promise<Blob | null>((resolve) => {
+        snapshot.toBlob((value) => resolve(value), "image/png");
+      });
+      if (!blob) throw new Error("取不到参考图（画布为空）");
+      if (referenceUrlRef.current) URL.revokeObjectURL(referenceUrlRef.current);
+      const url = URL.createObjectURL(blob);
+      referenceUrlRef.current = url;
+      setReferenceShot({ pass, url, bytes: blob.size, width, height });
+      setStatus(
+        `已生成${REFERENCE_PASS_LABELS[pass]}参考图 ${width}×${height}（${Math.max(1, Math.round(blob.size / 1024))} KB）`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      // 无论如何都要还原，否则编辑器会一直停在参考图材质上。
+      scene.overrideMaterial = previousOverride;
+      scene.background = previousBackground;
+      swapped.forEach((item) => {
+        item.mesh.material = item.material;
+      });
+      hidden.forEach((object) => {
+        object.visible = true;
+      });
+      material.dispose();
+      setBusy((current) => (current && current.startsWith(REFERENCE_BUSY_PREFIX) ? null : current));
+    }
+  }, []);
+
   const closeAiMenu = useCallback(() => {
     if (aiMenuRef.current) aiMenuRef.current.open = false;
   }, []);
@@ -2219,7 +2384,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         </div>
       </div>
 
-      <div className="fixed right-3 top-20 z-30 w-64 space-y-3 rounded-lg border border-white/10 bg-[#101014]/90 p-3 text-sm text-white/80 backdrop-blur">
+      <div className="fixed right-3 top-20 z-30 max-h-[calc(100vh-6rem)] w-64 space-y-3 overflow-y-auto rounded-lg border border-white/10 bg-[#101014]/90 p-3 text-sm text-white/80 backdrop-blur">
         <section>
           <div className="mb-1.5 px-1 text-xs uppercase tracking-wide text-white/40">灯光</div>
           <div className="grid grid-cols-4 gap-1">
@@ -2679,6 +2844,63 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                 秒。时长与缓动跟场景一起存档（v3）。
               </p>
             </div>
+          )}
+        </section>
+
+        <section>
+          <div className="mb-1.5 flex items-center justify-between px-1 text-xs uppercase tracking-wide text-white/40">
+            <span>参考图导出</span>
+            <span className="text-white/30">
+              {referenceShot ? `${referenceShot.width}×${referenceShot.height}` : "白模 / 法线 / 深度"}
+            </span>
+          </div>
+          <div className="flex gap-1">
+            {(Object.keys(REFERENCE_PASS_LABELS) as ReferencePass[]).map((pass) => (
+              <button
+                key={pass}
+                type="button"
+                onClick={() => void exportReference(pass)}
+                disabled={Boolean(busy)}
+                className="flex-1 rounded-md bg-white/5 px-2 py-1 text-xs text-white/70 hover:bg-white/10 disabled:opacity-40"
+              >
+                {REFERENCE_PASS_LABELS[pass]}
+              </button>
+            ))}
+          </div>
+          {referenceShot ? (
+            <div className="mt-1.5 space-y-1">
+              {/* 点开原图：面板里只有 256px 宽，细节（比如深度灰度、法线朝向）必须放大看。 */}
+              <a
+                href={referenceShot.url}
+                target="_blank"
+                rel="noreferrer"
+                title="在新标签打开原图"
+                className="block"
+              >
+                <img
+                  src={referenceShot.url}
+                  alt={`${REFERENCE_PASS_LABELS[referenceShot.pass]}参考图`}
+                  className="w-full rounded border border-white/10"
+                />
+              </a>
+              <div className="flex items-center justify-between px-1 text-[11px] text-white/40">
+                <span>
+                  {REFERENCE_PASS_LABELS[referenceShot.pass]} ·{" "}
+                  {Math.max(1, Math.round(referenceShot.bytes / 1024))} KB
+                </span>
+                <a
+                  href={referenceShot.url}
+                  download={`${referenceShot.pass}-reference.png`}
+                  className="text-sky-300 hover:text-sky-200"
+                >
+                  下载
+                </a>
+              </div>
+            </div>
+          ) : (
+            <p className="px-1 text-[11px] leading-4 text-white/35">
+              按当前机位渲一张参考图给视频生成当控制图：白模看结构、法线看朝向、深度看前后关系（近黑远白）。
+            </p>
           )}
         </section>
       </div>
