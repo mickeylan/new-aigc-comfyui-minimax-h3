@@ -207,6 +207,38 @@ async function createImageToSplatTask(upload: { task_id: string; name: string })
   return response.json() as Promise<{ task_id: string }>;
 }
 
+/**
+ * 身份迁移：复用 Qwen-Image 2.1 多图编辑模板，ref_images 是有序图，
+ * prompt 里用 <image1>/<image2> 指代。第 1 张是 3D 场景快照（定机位与氛围），
+ * 第 2 张是角色主形象（定脸与服装）。
+ */
+async function createIdentityTransferTask(options: {
+  snapshot: { task_id: string; name: string };
+  character: { task_id: string; name: string };
+  prompt: string;
+}) {
+  const templateId = await findTemplateId("qwen_image_2_1_multi_edit");
+  const response = await fetch("/api/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      template_id: templateId,
+      prompt: options.prompt,
+      params: { prompt: options.prompt },
+      files: {
+        ref_images: [
+          { task_id: options.snapshot.task_id, name: options.snapshot.name },
+          { task_id: options.character.task_id, name: options.character.name },
+        ],
+      },
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`创建任务失败：${response.status} ${await response.text()}`);
+  }
+  return response.json() as Promise<{ task_id: string }>;
+}
+
 async function waitForTask(taskId: string) {
   const started = Date.now();
   while (Date.now() - started < TASK_TIMEOUT_MS) {
@@ -295,6 +327,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const sceneInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const splatInputRef = useRef<HTMLInputElement>(null);
+  const identityInputRef = useRef<HTMLInputElement>(null);
   const imagePlaneInputRef = useRef<HTMLInputElement>(null);
   const videoPlaneInputRef = useRef<HTMLInputElement>(null);
   const skyboxInputRef = useRef<HTMLInputElement>(null);
@@ -323,6 +356,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [activeBone, setActiveBone] = useState<string | null>(null);
   // 选中对象是否有骨骼（决定「骨骼摆姿」入口是否可用）。
   const [selectedHasSkeleton, setSelectedHasSkeleton] = useState(false);
+  // 身份迁移：3D 快照 + 角色主形象 → 多图编辑。提示词留空由用户写，
+  // 这里只给占位说明，避免替用户定死渲染措辞。
+  const [identityPrompt, setIdentityPrompt] = useState("");
   // 3D 合成：全景天空盒与平面层设置。
   const [skybox, setSkybox] = useState<SkyboxSettings>(DEFAULT_SKYBOX);
   const [skyboxName, setSkyboxName] = useState<string | null>(null);
@@ -882,6 +918,41 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     }
   };
 
+  // 身份迁移：当前 3D 画面当 image1（定机位），角色主形象当 image2（定脸与服装），
+  // 出来的一张图直接进场景当参考板，方便继续对着它摆位。
+  const runIdentityTransfer = async (character: File) => {
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+    if (!identityPrompt.trim()) {
+      setError("请先写清楚要生成什么，用 <image1> 指 3D 快照、<image2> 指角色主形象");
+      return;
+    }
+    setBusy("正在上传 3D 快照与角色主形象…");
+    setError(null);
+    setStatus("");
+    try {
+      const snapshotBlob = await (await fetch(renderer.domElement.toDataURL("image/png"))).blob();
+      const snapshot = await uploadImage(snapshotBlob, `scene-snapshot-${Date.now()}.png`);
+      const characterUpload = await uploadImage(character, `character-${Date.now()}.png`);
+      const task = await createIdentityTransferTask({
+        snapshot,
+        character: characterUpload,
+        prompt: identityPrompt,
+      });
+      setBusy("正在生成身份迁移图，等待 ComfyUI 返回…");
+      const finished = await waitForTask(task.task_id);
+      const url = taskResultUrl(finished);
+      if (!url) throw new Error("任务没有图片输出");
+      setBusy("正在把结果放进场景…");
+      await addPlane(url, `identity-${task.task_id}.png`, "image");
+      setStatus("身份迁移完成，已放进场景当参考板");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const removeSelected = () => {
     const id = selectedIdRef.current;
     if (!id) return;
@@ -1388,6 +1459,21 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         >
           AI 图生 3D 世界
         </button>
+        <input
+          value={identityPrompt}
+          onChange={(event) => setIdentityPrompt(event.target.value)}
+          placeholder="身份迁移：用 <image1> 指 3D 快照、<image2> 指角色主形象"
+          className="h-9 w-72 rounded-md border border-white/10 bg-white/5 px-3 text-sm text-white placeholder:text-white/40"
+        />
+        <button
+          type="button"
+          className="rounded-md border border-amber-400/40 px-3 py-1.5 text-sm text-amber-200 hover:bg-amber-400/10 disabled:opacity-50"
+          onClick={() => identityInputRef.current?.click()}
+          disabled={Boolean(busy)}
+          title="当前 3D 画面当 image1、角色主形象当 image2，出一张身份迁移图放进场景"
+        >
+          身份迁移出图
+        </button>
         <div className="mx-2 flex rounded-md border border-white/10">
           {(["translate", "rotate", "scale"] as TransformMode[]).map((item) => (
             <button
@@ -1494,6 +1580,17 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           onChange={(event) => {
             const file = event.target.files?.[0];
             if (file) void runImageToSplat(file);
+            event.target.value = "";
+          }}
+        />
+        <input
+          ref={identityInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) void runIdentityTransfer(file);
             event.target.value = "";
           }}
         />
