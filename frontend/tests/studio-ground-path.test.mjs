@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 const {
   GROUND_EXTENT,
   clampGroundPoint,
+  groundPathFollowDelta,
   groundPathLength,
   groundPathPointAt,
   groundPathYaw,
@@ -94,7 +95,8 @@ test('导出序列时逐帧推角色、结束还原，预览走同一个取样�
   // 进度 = 帧时间 / 移动时长，超出停在 B
   assert.match(stage, /const progress = Math\.min\(1, index \/ fps \/ moverSeconds\);/)
   assert.match(stage, /mover\.object\.position\.set\(\.\.\.groundPathPointAt\(path, progress\)\);/)
-  assert.match(stage, /mover\.object\.rotation\.y = groundPathYaw\(path\);/)
+  // 朝向也按当前进度取切线（有途经点时是一条曲线，不能用固定朝向）
+  assert.match(stage, /mover\.object\.rotation\.y = groundPathYaw\(path, progress\);/)
   // 导出后对象要回到原位，不能停在 B 点
   assert.match(stage, /mover\.object\.position\.copy\(savedMover\.position\);/)
   assert.match(stage, /mover\.object\.quaternion\.copy\(savedMover\.quaternion\);/)
@@ -116,11 +118,11 @@ test('移动计划进出存档：按名字找对象（载入后 id 会变）', (
 })
 
 test('地面路径进出存档：写入可选字段、载入时校验、UI 能点选/清除', () => {
-  // 存档字段仍是 v3 的可选字段，老存档没有就清空
-  assert.match(stage, /groundPath\?: \{ start: GroundPoint; end: GroundPoint \} \| null;/)
+  // 存档字段仍是 v3 的可选字段（via 是有途经点时才写的可选子字段），老存档没有就清空
+  assert.match(stage, /groundPath\?: \{ start: GroundPoint; end: GroundPoint; via\?: GroundPoint \} \| null;/)
   assert.match(stage, /groundPath: toGroundPath\(groundPoints\),/)
   assert.match(stage, /const savedPath = normalizeGroundPath\(doc\.groundPath\);/)
-  assert.match(stage, /setGroundPoints\(\{ start: savedPath\?\.start \?\? null, end: savedPath\?\.end \?\? null \}\);/)
+  assert.match(stage, /via: savedPath\?\.via \?\? null,/)
   // 只点一端时不算路径，UI 上也不显示距离
   assert.match(stage, /const path = toGroundPath\(groundPoints\);/)
   assert.match(stage, /path \? `\$\{groundPathLength\(path\)\.toFixed\(1\)\} m` : "起点 \/ 终点"/)
@@ -128,4 +130,60 @@ test('地面路径进出存档：写入可选字段、载入时校验、UI 能�
   assert.match(stage, /if \(groundPoints\.start\) ring\(groundPoints\.start, 0x22c55e\);/)
   assert.match(stage, /if \(groundPoints\.end\) ring\(groundPoints\.end, 0xf59e0b\);/)
   assert.match(stage, /new THREE\.LineDashedMaterial\(\{ color: 0x94a3b8, dashSize: 0\.18, gapSize: 0\.12 \}\)/)
+})
+
+// 2026-11-22 新增：途经点。直线走位绕不过桌子/柱子，而「角色沿路径移动」
+// 恰好是 3D 参考片里最需要被复刻的东西，所以给 A→B 加一个可选途经点，走二次贝塞尔。
+test('有途经点时走二次贝塞尔并穿过途经点：端点不动、中点就是途经点、长度变长', () => {
+  const path = { start: [0, 0.02, 0], end: [4, 0.02, 0], via: [2, 0.02, 3] }
+  assert.deepEqual(groundPathPointAt(path, 0), [0, 0.02, 0])
+  assert.deepEqual(groundPathPointAt(path, 1), [4, 0.02, 0])
+  // 控制点取 2V-(A+B)/2，所以 t=0.5 正好踩在途经点上（角色真的绕过障碍物，不是擦里侧）
+  const mid = groundPathPointAt(path, 0.5)
+  assert.ok(Math.abs(mid[0] - 2) < 1e-9, `中点 x 应等于途经点，实际 ${mid[0]}`)
+  assert.ok(Math.abs(mid[2] - 3) < 1e-9, `中点 z 应等于途经点，实际 ${mid[2]}`)
+  // 前后两半都朝同一侧偏，说明整条线是弧不是折线
+  assert.ok(groundPathPointAt(path, 0.25)[2] > 1)
+  assert.ok(groundPathPointAt(path, 0.75)[2] > 1)
+  // 弧长大于直线距离 4（UI 上显示的长度不能把弯路说短）
+  assert.ok(groundPathLength(path) > 5, `弧长应明显大于直线，实际 ${groundPathLength(path)}`)
+})
+
+test('途经点的朝向按曲线切线算，不是固定的 A→B 方向', () => {
+  const path = { start: [0, 0.02, 0], end: [4, 0.02, 0], via: [0, 0.02, 3] }
+  // 控制点 C = 2V-(A+B)/2 = (-2, 0, 6)；t=0 切线 = 2(C-A) = (-4, 0, 12)
+  assert.ok(Math.abs(groundPathYaw(path, 0) - Math.atan2(-4, 12)) < 1e-9)
+  // t=1 切线 = 2(B-C) = (12, 0, -12)
+  assert.ok(Math.abs(groundPathYaw(path, 1) - Math.atan2(12, -12)) < 1e-9)
+  // t=0.5 切线 = (C-A)+(B-C) = B-A → 正 +X
+  assert.ok(Math.abs(groundPathYaw(path, 0.5) - Math.PI / 2) < 1e-9)
+})
+
+test('途经点与端点重合、或老存档没有 via，都退回直线（不产生零长度曲线）', () => {
+  const base = { start: [0, 0.02, 0], end: [4, 0.02, 0] }
+  assert.deepEqual(normalizeGroundPath({ ...base, via: [0, 0.02, 0] }), base)
+  assert.deepEqual(normalizeGroundPath({ ...base, via: [4, 0.02, 0] }), base)
+  assert.deepEqual(normalizeGroundPath({ ...base, via: null }), base)
+  assert.deepEqual(normalizeGroundPath(base), base)
+  // 跟拍位移仍只取水平分量：镜头不会跟着角色上下飘
+  const path = toGroundPath({ start: [0, 0.5, 0], end: [4, 0.5, 0], via: [2, 0.5, 2] })
+  assert.ok(path?.via, 'via 应该被保留')
+  const delta = groundPathFollowDelta(path, 1)
+  assert.equal(delta[1], 0)
+  assert.ok(Math.abs(delta[0] - 4) < 1e-9)
+  assert.ok(Math.abs(delta[2]) < 1e-9)
+})
+
+test('编辑器接上途经点：第三个落点按钮、蓝色标记、曲线采样、存档字段', () => {
+  assert.match(stage, /\{\(\["start", "via", "end"\] as const\)\.map\(\(which\) => \(/)
+  assert.match(stage, /which === "start" \? "点选 A" : which === "via" \? "途经" : "点选 B"/)
+  assert.match(stage, /if \(groundPoints\.via\) ring\(groundPoints\.via, 0x38bdf8\);/)
+  // 有途经点才按 32 段采样，直线仍是两点
+  assert.match(stage, /const samples = path\.via \? 32 : 1;/)
+  // 「走直线」把途经点清掉
+  assert.match(stage, /onClick=\{\(\) => setGroundPoints\(\(current\) => \(\{ \.\.\.current, via: null \}\)\)\}/)
+  // 落点 toast 区分 A / B / 途经点
+  assert.match(stage, /\$\{placing === "start" \? "A" : placing === "end" \? "B" : "途经点"\} 已记录/)
+  // 落点提示语同样区分三者（选了途经却提示「B」会让人以为点错按钮）
+  assert.match(stage, /: "途经点（蓝，路径会穿过它）"\n/)
 })

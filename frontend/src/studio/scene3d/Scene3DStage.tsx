@@ -328,8 +328,8 @@ interface SceneDocument {
   splats?: SplatDocument[];
   /** 相机关键帧序列；v3 起入库，v1/v2 存档没有这个字段。 */
   cameraKeys?: CameraKey[];
-  /** 地面 A/B 落点；仍在 v3 里当可选字段，老存档没有就按没有处理。 */
-  groundPath?: { start: GroundPoint; end: GroundPoint } | null;
+  /** 地面 A/B 落点（via 为可选途经点，走曲线时才写）；老存档没有就按没有处理。 */
+  groundPath?: { start: GroundPoint; end: GroundPoint; via?: GroundPoint } | null;
   /** 角色沿 A→B 移动的计划：谁走、走多久、相机要不要跟拍。没有落点时不写。 */
   move?: { targetName: string; seconds: number; follow?: boolean } | null;
   model: { name: string; data: string };
@@ -621,7 +621,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const gridRef = useRef<THREE.GridHelper | null>(null);
   const groundPathGroupRef = useRef<THREE.Group | null>(null);
   // 拾取回调在初始化 effect 的闭包里，读 state 会读到挂载时的旧值，用 ref 镜像。
-  const placingGroundRef = useRef<"start" | "end" | null>(null);
+  const placingGroundRef = useRef<"start" | "via" | "end" | null>(null);
   const moveRafRef = useRef<number | null>(null);
   const cameraPathRef = useRef<number | null>(null);
   // 播放兜底定时器：切到后台标签页时 rAF 会被浏览器暂停，靠它把「播放中…」收回来。
@@ -672,7 +672,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   // 地面落点：先分别记，两个都有才算一条路径（只点 A 时不显示距离）。
   const [groundPoints, setGroundPoints] = useState<GroundPoints>({ start: null, end: null });
   // 正在等用户在画布上点哪一端；null = 没在选点。
-  const [placingGround, setPlacingGround] = useState<"start" | "end" | null>(null);
+  const [placingGround, setPlacingGround] = useState<"start" | "via" | "end" | null>(null);
   // 沿 A→B 移动的对象（按 id 指向场景对象）与走完全程的秒数。
   const [moverId, setMoverId] = useState<string | null>(null);
   const [moveSeconds, setMoveSeconds] = useState(3);
@@ -932,7 +932,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         setPlacingGround(null);
         setGroundPoints((current) => ({ ...current, [placing]: point }));
         setStatus(
-          `${placing === "start" ? "A" : "B"} 点已记录（${point[0].toFixed(1)}, ${point[2].toFixed(1)}）`,
+          `${placing === "start" ? "A" : placing === "end" ? "B" : "途经点"} 已记录（${point[0].toFixed(1)}, ${point[2].toFixed(1)}）`,
         );
         return;
       }
@@ -1095,12 +1095,18 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     };
     if (groundPoints.start) ring(groundPoints.start, 0x22c55e);
     if (groundPoints.end) ring(groundPoints.end, 0xf59e0b);
+    // 途经点：蓝色，路径会绕它拐一下。
+    if (groundPoints.via) ring(groundPoints.via, 0x38bdf8);
     const path = toGroundPath(groundPoints);
     if (path) {
-      const geometry = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(path.start[0], path.start[1] + 0.02, path.start[2]),
-        new THREE.Vector3(path.end[0], path.end[1] + 0.02, path.end[2]),
-      ]);
+      // 有途经点就沿曲线采样，没有就是一条直线；虚线长度由 computeLineDistances 算。
+      const samples = path.via ? 32 : 1;
+      const points: THREE.Vector3[] = [];
+      for (let index = 0; index <= samples; index += 1) {
+        const at = groundPathPointAt(path, index / samples);
+        points.push(new THREE.Vector3(at[0], at[1] + 0.02, at[2]));
+      }
+      const geometry = new THREE.BufferGeometry().setFromPoints(points);
       const line = new THREE.Line(
         geometry,
         new THREE.LineDashedMaterial({ color: 0x94a3b8, dashSize: 0.18, gapSize: 0.12 }),
@@ -1653,7 +1659,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         if (followPath && followMoverEntry && followSeconds) {
           const progress = Math.min(1, elapsed / followSeconds);
           followMoverEntry.object.position.set(...groundPathPointAt(followPath, progress));
-          followMoverEntry.object.rotation.y = groundPathYaw(followPath);
+          followMoverEntry.object.rotation.y = groundPathYaw(followPath, progress);
           delta = groundPathFollowDelta(followPath, progress);
         }
         camera.position.set(
@@ -2268,8 +2274,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         setMoveSeconds(normalizeMoveSeconds(savedMove?.seconds));
         setFollowMover(Boolean(savedMove?.follow));
         applyLightPreset(doc.lightPreset);
-        // 落点恢复
-        setGroundPoints({ start: savedPath?.start ?? null, end: savedPath?.end ?? null });
+        // 落点恢复（via 是可选途经点：老存档没有就是直线走位）
+        setGroundPoints({
+          start: savedPath?.start ?? null,
+          end: savedPath?.end ?? null,
+          via: savedPath?.via ?? null,
+        });
         placingGroundRef.current = null;
         setPlacingGround(null);
         // 机位序列（v3）：老存档没有就清空，免得上一个场景的机位串进来。
@@ -2473,7 +2483,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             // 移动与相机各走各的时钟：按同一帧时间 / 移动总时长取进度，超出就停在 B。
             const progress = Math.min(1, index / fps / moverSeconds);
             mover.object.position.set(...groundPathPointAt(path, progress));
-            mover.object.rotation.y = groundPathYaw(path);
+            mover.object.rotation.y = groundPathYaw(path, progress);
             if (followMover) {
               // 跟拍：相机与目标整体加上角色的水平位移，构图不变。
               const delta = groundPathFollowDelta(path, progress);
@@ -2656,7 +2666,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const progress = Math.min(1, (performance.now() - started) / (seconds * 1000));
       mover.object.position.set(...groundPathPointAt(path, progress));
       // 朝向行进方向：模型默认面朝 +Z，yaw 直接由方向算。
-      mover.object.rotation.y = groundPathYaw(path);
+      mover.object.rotation.y = groundPathYaw(path, progress);
       if (progress < 1) {
         moveRafRef.current = requestAnimationFrame(step);
         return;
@@ -3586,7 +3596,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             </span>
           </div>
           <div className="flex gap-1">
-            {(["start", "end"] as const).map((which) => (
+            {(["start", "via", "end"] as const).map((which) => (
               <button
                 key={which}
                 type="button"
@@ -3595,13 +3605,20 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                   placingGroundRef.current = next;
                   setPlacingGround(next);
                 }}
+                title={
+                  which === "via"
+                    ? "在地面上点一个途经点，A→B 的走位会弯成经过它的曲线（绕桌子/绕柱子时用）"
+                    : which === "start"
+                      ? "在地面上点起点 A"
+                      : "在地面上点终点 B"
+                }
                 className={`flex-1 rounded-md px-2 py-1 text-xs ${
                   placingGround === which
                     ? "bg-emerald-500/20 text-emerald-200"
                     : "bg-white/5 text-white/70 hover:bg-white/10"
                 }`}
               >
-                {which === "start" ? "点选 A" : "点选 B"}
+                {which === "start" ? "点选 A" : which === "via" ? "途经" : "点选 B"}
               </button>
             ))}
             <button
@@ -3611,12 +3628,25 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                 setPlacingGround(null);
                 setGroundPoints({ start: null, end: null });
               }}
-              disabled={!groundPoints.start && !groundPoints.end}
+              disabled={!groundPoints.start && !groundPoints.end && !groundPoints.via}
               className="flex-1 rounded-md bg-white/5 px-2 py-1 text-xs text-white/70 hover:bg-white/10 disabled:opacity-40"
             >
               清除
             </button>
           </div>
+          {groundPoints.via ? (
+            <div className="mt-1 flex items-center gap-1 px-1">
+              <span className="text-[11px] text-sky-300/70">已设途经点</span>
+              <button
+                type="button"
+                onClick={() => setGroundPoints((current) => ({ ...current, via: null }))}
+                title="去掉途经点，回到直线 A→B"
+                className="rounded-md bg-white/5 px-1.5 py-0.5 text-[11px] text-white/60 hover:bg-white/10"
+              >
+                走直线
+              </button>
+            </div>
+          ) : null}
           <div className="mt-1 flex items-center gap-1 px-1">
             <select
               value={moverId ?? ""}
@@ -3675,8 +3705,14 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           </label>
           <p className="mt-1 px-1 text-[11px] leading-4 text-white/35">
             {placingGround
-              ? `在地面上点一下，记下${placingGround === "start" ? " A（绿，起点）" : " B（橙，终点）"}。`
-              : `A=起点（绿）、B=终点（橙）。选好谁在走，导出序列时角色会沿 A→B 移动，相机按机位路径走；勾上「跟拍」相机就跟着角色平移。`}
+              ? `在地面上点一下，记下${
+                  placingGround === "start"
+                    ? " A（绿，起点）"
+                    : placingGround === "end"
+                      ? " B（橙，终点）"
+                      : "途经点（蓝，路径会穿过它）"
+                }。`
+              : `A=起点（绿）、B=终点（橙）、途经点（蓝，可选）。选好谁在走，导出序列时角色会沿这条路径移动，相机按机位路径走；勾上「跟拍」相机就跟着角色平移。`}
           </p>
         </section>
 
