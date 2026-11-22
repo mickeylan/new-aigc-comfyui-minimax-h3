@@ -44,6 +44,11 @@ export function placeSplatOnGround(mesh: THREE.Object3D): THREE.Vector3 {
  * depthWrite 必须关——泼溅边缘大多是半透明的，让它写深度会把后面的东西
  * 挖出洞来，这是它被默认关掉的原因。反过来"泼溅挡住网格"做不到，
  * 属于已知限制。
+ *
+ * 实测记录（2026-11-22，同场景泼溅 + 10 MB GLB，网格分别放前后各截一张）：
+ * depthWrite 改 true 之后，「泼溅挡网格」确实成立了，但代价是泼溅被切成硬边
+ * 锯齿、内部出现白斑与黑洞、地面浮出多余白块——透明累积被深度写破坏。
+ * 所以这条路放弃，要双向遮挡只能自写 depth-only pass + 后处理合成。
  */
 export function createSplatRenderer(renderer: THREE.WebGLRenderer): SparkRenderer {
   return new SparkRenderer({
