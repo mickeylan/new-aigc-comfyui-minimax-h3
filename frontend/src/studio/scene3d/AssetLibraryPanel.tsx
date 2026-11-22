@@ -18,6 +18,34 @@ export interface AssetLibraryPanelProps {
 /** 一次拉多少个素材。24 大致是一屏半，再多就让人滚得心烦。 */
 const ASSET_PAGE_SIZE = 24;
 
+/**
+ * 缩略图块。没缩略图的素材（例：从命令行丢进素材目录的模型）
+ * 不能把 <img> 指向 .glb——浏览器只会渲成空白格，所以直接给占位块；
+ * 有缩略图但加载失败时同样退回占位块。
+ */
+function AssetThumbnail({ asset }: { asset: LibraryAsset }) {
+  const [failed, setFailed] = useState(!asset.thumb_path);
+  if (failed) {
+    return (
+      <span
+        aria-hidden
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-white/10 bg-white/5 text-[10px] text-white/30"
+      >
+        3D
+      </span>
+    );
+  }
+  return (
+    <img
+      src={thumbnailUrl(asset)}
+      alt=""
+      loading="lazy"
+      className="h-8 w-8 shrink-0 rounded border border-white/10 object-cover"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 export default function AssetLibraryPanel({ onPlace, onError }: AssetLibraryPanelProps) {
   const [items, setItems] = useState<LibraryAsset[]>([]);
   const [loading, setLoading] = useState(false);
@@ -117,15 +145,7 @@ export default function AssetLibraryPanel({ onPlace, onError }: AssetLibraryPane
                     : `暂不支持 ${assetKind(asset.path || asset.name) === "unsupported" ? "这个格式" : assetKind(asset.path || asset.name)}，请先转成 GLB`
                 }
               >
-                <img
-                  src={thumbnailUrl(asset)}
-                  alt=""
-                  loading="lazy"
-                  className="h-8 w-8 shrink-0 rounded border border-white/10 object-cover"
-                  onError={(event) => {
-                    (event.currentTarget as HTMLImageElement).style.visibility = "hidden";
-                  }}
-                />
+                <AssetThumbnail asset={asset} />
                 <span className="min-w-0 flex-1 truncate">{asset.name}</span>
                 {supported ? (
                   <button

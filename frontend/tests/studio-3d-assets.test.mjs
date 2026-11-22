@@ -37,3 +37,12 @@ test('素材库里的高斯泼溅拖进场景走 Spark 解码，不走 GLTFLoade
   assert.match(stage3d, /await loadSplatUrl\(url, asset\.name, dropPoint\)/, '.spz 应交给 Spark 加载')
   assert.match(stage3d, /\[addObject, loadSplatUrl\]/, '回调依赖里要带上 loadSplatUrl')
 })
+
+// 没有缩略图的素材（或缩略图加载失败）不能留一个空白 <img>
+test('素材库面板给缺缩略图的素材一个占位块', () => {
+  const panel = read('../src/studio/scene3d/AssetLibraryPanel.tsx')
+  assert.match(panel, /function AssetThumbnail\(/, '缺少缩略图组件')
+  assert.match(panel, /useState\(!asset\.thumb_path\)/, '没缩略图时应直接进占位状态')
+  assert.match(panel, /onError=\{\(\) => setFailed\(true\)\}/, '加载失败也要退回占位块')
+  assert.match(panel, /<AssetThumbnail asset=\{asset\} \/>/, '列表行应使用缩略图组件')
+})
