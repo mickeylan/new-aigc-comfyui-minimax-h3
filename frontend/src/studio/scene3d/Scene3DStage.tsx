@@ -59,6 +59,7 @@ import {
   firstLastCameraFrames,
   type MovableCamera,
 } from "./camera-frames.js";
+import { firstLastMotionNote } from "./camera-motion-note.js";
 import AssetLibraryPanel from "./AssetLibraryPanel";
 import { ASSET_DRAG_MIME, assetKind, assetUrl, type LibraryAsset } from "./assetLibrary.js";
 import {
@@ -691,6 +692,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [lightPreset, setLightPreset] = useState<LightPresetName>("studio");
   const [material, setMaterial] = useState<MaterialSettings>(DEFAULT_MATERIAL);
   const [cameraKeys, setCameraKeys] = useState<CameraKey[]>([]);
+  // 导出首尾帧时算出来的运镜文案：首尾帧只锚两端，中间怎么动得靠这句话写进提示词。
+  const [firstLastNote, setFirstLastNote] = useState("");
   // 地面落点：先分别记，两个都有才算一条路径（只点 A 时不显示距离）。
   // vias 是追加的途经点（0–3 个），曲线会穿过每一个。
   const [groundPoints, setGroundPoints] = useState<GroundPoints>({ start: null, end: null });
@@ -1870,6 +1873,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     cameraPathRef.current = requestAnimationFrame(step);
   }, [cameraKeys, followMover, groundPoints, moveSeconds, moverId]);
 
+  // 机位一改，上次算出来的运镜文案就过期了（它描述的是旧的两端）。
+  // 导出首尾帧本身不动机位，所以文案能留住；录机位、删机位、清空才会清掉。
+  useEffect(() => {
+    setFirstLastNote("");
+  }, [cameraKeys]);
+
   /**
    * 环绕：绕选中对象（没选中就绕当前相机目标）转一圈，把采样出的机位追加到序列末尾。
    * 半径和高度都照当前机位量，所以看到什么角度就绕什么角度。
@@ -2695,8 +2704,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           size: Math.max(1, Math.round(shot.blob.size / 1024)),
         });
       }
+      setFirstLastNote(firstLastMotionNote(cameraKeys));
       setStatus(
-        `已渲出首尾帧并存进素材库：起幅 ${results[0].name}（${results[0].size} KB）、落幅 ${results[1].name}（${results[1].size} KB）。去「视频」页把这两张挂成首帧/尾帧，模板选 minimax_h3_first_last。`,
+        `已渲出首尾帧并存进素材库：起幅 ${results[0].name}（${results[0].size} KB）、落幅 ${results[1].name}（${results[1].size} KB）。运镜文案在下面，粘进视频提示词一起提交，模板选 minimax_h3_first_last。`,
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -2704,6 +2714,17 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       setBusy(null);
     }
   }, [cameraKeys, captureViewportAt]);
+
+  /** 运镜文案只读展示 + 一键复制：首尾帧只锚两端，提交时必须把这句话一起写进提示词。 */
+  const copyFirstLastNote = useCallback(async () => {
+    if (!firstLastNote) return;
+    try {
+      await navigator.clipboard.writeText(firstLastNote);
+      setStatus(`运镜文案已复制：${firstLastNote}`);
+    } catch {
+      setError("复制失败，请手动选中下面的文案");
+    }
+  }, [firstLastNote]);
 
   const exportReference = useCallback(
     async (pass: ReferencePass) => {
@@ -3762,6 +3783,22 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           >
             导出首尾帧（存素材库）
           </button>
+          {/* 运镜文案：首尾帧只定两端，中间怎么动得靠这句话；空着就等于让模型自由发挥。 */}
+          {firstLastNote ? (
+            <div className="mt-1 rounded-md border border-white/10 bg-black/20 px-2 py-1">
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-[11px] text-white/40">运镜文案（写进提示词）</span>
+                <button
+                  type="button"
+                  className="rounded bg-white/5 px-1.5 py-0.5 text-[11px] text-white/50 hover:bg-white/10"
+                  onClick={copyFirstLastNote}
+                >
+                  复制
+                </button>
+              </div>
+              <div className="mt-0.5 text-[11px] leading-snug text-white/70">{firstLastNote}</div>
+            </div>
+          ) : null}
 
           {/* 环绕：绕选中对象转一圈，一键把整段机位追加到序列末尾。 */}
           <div className="mt-1 flex items-center gap-1 px-1">
