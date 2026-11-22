@@ -1556,11 +1556,17 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const playCameraPath = useCallback(() => {
     const camera = cameraRef.current;
     const controls = controlsRef.current;
-    if (!camera || !controls || cameraKeys.length < 2) return;
+    if (!camera || !controls || cameraKeys.length < 2) {
+      setStatus("至少要两个机位才能播放：转好角度点「记录机位」");
+      return;
+    }
     if (cameraPathRef.current !== null) cancelAnimationFrame(cameraPathRef.current);
     // 每段时长与缓动各自独立：改一段不影响别的段，总时长由各段相加。
     const total = cameraPathDuration(cameraKeys);
-    if (total <= 0) return;
+    if (total <= 0) {
+      setStatus("机位总时长为 0，先把每段秒数调到 0.2 秒以上");
+      return;
+    }
     const started = performance.now();
     // 收尾只走这一条：清 rAF、清兜底定时器、放开按钮。
     const finish = () => {

@@ -69,3 +69,9 @@ test('右栏能改时长/缓动、上下移、删除单个机位', () => {
   assert.match(stage, /title="删除这个机位"/)
   assert.match(stage, /时长与缓动跟场景一起存档（v3）。/)
 })
+
+// 点了没反应最难受：播放按钮点不动时要说清原因，而不是静默 return。
+test('播放条件不满足时给提示，不静默失败', () => {
+  assert.match(stage, /setStatus\("至少要两个机位才能播放：转好角度点「记录机位」"\);/)
+  assert.match(stage, /setStatus\("机位总时长为 0，先把每段秒数调到 0\.2 秒以上"\);/)
+})
