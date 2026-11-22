@@ -36,6 +36,11 @@ import {
   serializeBonePose,
   type BonePoseNode,
 } from "./posing/bonePose.js";
+import {
+  createSplatRenderer,
+  disposeSplat,
+  loadSplatMesh,
+} from "./splat.js";
 
 interface Scene3DStageProps {
   exitTo?: string;
@@ -53,6 +58,8 @@ interface SceneObjectEntry {
   mediaKind?: MediaKind;
   /** 视频平面自己的 <video> 与纹理，删除对象和卸载时要停掉并释放。 */
   video?: { element: HTMLVideoElement; texture: THREE.VideoTexture } | null;
+  /** 高斯泼溅对象：Spark 有独立缓冲，要调它自己的 dispose，不走几何释放。 */
+  splat?: THREE.Object3D | null;
 }
 
 type TransformMode = "translate" | "rotate" | "scale";
@@ -181,6 +188,25 @@ async function createImageTo3DTask(upload: { task_id: string; name: string }) {
   return response.json() as Promise<{ task_id: string }>;
 }
 
+/** 图生 3D 高斯泼溅：走 TripoSplat 模板，输出 .spz。 */
+async function createImageToSplatTask(upload: { task_id: string; name: string }) {
+  const templateId = await findTemplateId("image_to_3d_triposplat");
+  const response = await fetch("/api/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      template_id: templateId,
+      prompt: "",
+      params: {},
+      files: { image: [{ task_id: upload.task_id, name: upload.name }] },
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`创建任务失败：${response.status} ${await response.text()}`);
+  }
+  return response.json() as Promise<{ task_id: string }>;
+}
+
 async function waitForTask(taskId: string) {
   const started = Date.now();
   while (Date.now() - started < TASK_TIMEOUT_MS) {
@@ -268,11 +294,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sceneInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const splatInputRef = useRef<HTMLInputElement>(null);
   const imagePlaneInputRef = useRef<HTMLInputElement>(null);
   const videoPlaneInputRef = useRef<HTMLInputElement>(null);
   const skyboxInputRef = useRef<HTMLInputElement>(null);
   const skyboxTextureRef = useRef<THREE.Texture | null>(null);
   const fkRef = useRef<FKHelper | null>(null);
+  const sparkRef = useRef<ReturnType<typeof createSplatRenderer> | null>(null);
   // 画布指针事件挂在初始化 effect 里，读 ref 才能拿到最新的摆姿开关。
   const posingRef = useRef(false);
 
@@ -382,6 +410,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       if (dropPoint) group.position.set(dropPoint.x, 0, dropPoint.z);
       scene.add(group);
       const entry: SceneObjectEntry = { id: crypto.randomUUID(), name, object: group };
+      // 泼溅要留一份句柄：释放走 Spark 自己的 dispose，不能按几何/材质处理。
+      const splatChild = object.userData.isSplat ? object : null;
+      if (splatChild) entry.splat = splatChild;
       // 带骨骼的模型（Mixamo 角色等）记一份绑定姿势，供摆姿与「恢复初始」使用。
       if (hasSkeleton(group)) {
         const bindPose = serializeBonePose(group);
@@ -422,6 +453,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
+
+    // Spark 负责把高斯泼溅光栅化；不加进场景，SplatMesh 只是数据不会被画出来。
+    const spark = createSplatRenderer(renderer);
+    spark.name = "__SparkRenderer__";
+    scene.add(spark);
+    sparkRef.current = spark;
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.target.set(0, 1, 0);
@@ -529,6 +566,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       fkRef.current = null;
       // 卸载时把视频平面的解码与全景纹理一起收掉，否则离开页面后仍在后台跑。
       objectsRef.current.forEach((entry) => {
+        if (entry.splat) disposeSplat(entry.splat);
         if (!entry.video) return;
         entry.video.element.pause();
         entry.video.element.removeAttribute("src");
@@ -537,6 +575,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       });
       skyboxTextureRef.current?.dispose();
       skyboxTextureRef.current = null;
+      sparkRef.current?.dispose?.();
+      sparkRef.current = null;
       transform.dispose();
       controls.dispose();
       renderer.dispose();
@@ -581,6 +621,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     const gltf = await new GLTFLoader().loadAsync(url);
     addObject(gltf.scene, name);
   };
+
+  // 泼溅：Spark 自己解码，拿到 mesh 后交给 addObject 统一做归一化与列表登记。
+  // 贴地交给 normalizeObject，这里不再重复摆一次。
+  const loadSplatUrl = useCallback(
+    async (url: string, name: string, dropPoint?: THREE.Vector3 | null) => {
+      const mesh = await loadSplatMesh(url, { placeOnGround: false });
+      addObject(mesh, name, dropPoint);
+    },
+    [addObject],
+  );
 
   // 从素材库取模型放进来：glb/gltf 直接加载，obj 要取文本再解析。
   const loadLibraryAsset = useCallback(
@@ -810,12 +860,38 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     }
   };
 
+  // 图生 3D 世界：参考图 → TripoSplat → .spz 泼溅，直接放进当前场景。
+  const runImageToSplat = async (file: File) => {
+    setBusy("正在上传参考图…");
+    setError(null);
+    setStatus("");
+    try {
+      const upload = await uploadImage(file, `splat-ref-${Date.now()}.png`);
+      const task = await createImageToSplatTask(upload);
+      setBusy("正在生成高斯泼溅，等待 ComfyUI 返回…");
+      const finished = await waitForTask(task.task_id);
+      const url = taskResultUrl(finished);
+      if (!url) throw new Error("任务没有泼溅输出");
+      setBusy("正在解码泼溅…");
+      await loadSplatUrl(url, `splat-${task.task_id}.spz`);
+      setStatus("3D 世界生成完成");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const removeSelected = () => {
     const id = selectedIdRef.current;
     if (!id) return;
     const entry = objectsRef.current.find((item) => item.id === id);
     if (entry) {
       sceneRef.current?.remove(entry.object);
+      // 泼溅有自己的缓冲，先走 Spark 的 dispose；其余按几何/材质释放。
+      if (entry.splat) {
+        disposeSplat(entry.splat);
+      }
       entry.object.traverse((child) => {
         const mesh = child as THREE.Mesh;
         mesh.geometry?.dispose();
@@ -1303,6 +1379,15 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         >
           AI 图生 3D
         </button>
+        <button
+          type="button"
+          className="rounded-md border border-violet-400/40 px-3 py-1.5 text-sm text-violet-200 hover:bg-violet-400/10 disabled:opacity-50"
+          onClick={() => splatInputRef.current?.click()}
+          disabled={Boolean(busy)}
+          title="参考图 → TripoSplat → .spz 高斯泼溅，作为可绕行的 3D 世界"
+        >
+          AI 图生 3D 世界
+        </button>
         <div className="mx-2 flex rounded-md border border-white/10">
           {(["translate", "rotate", "scale"] as TransformMode[]).map((item) => (
             <button
@@ -1398,6 +1483,17 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           onChange={(event) => {
             const file = event.target.files?.[0];
             if (file) void runImageTo3D(file);
+            event.target.value = "";
+          }}
+        />
+        <input
+          ref={splatInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) void runImageToSplat(file);
             event.target.value = "";
           }}
         />

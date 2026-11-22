@@ -13,6 +13,7 @@
   "dependencies": {
     "@hugeicons/core-free-icons": "^1.2.1",
     "@hugeicons/react": "^1.0.4",
+    "@sparkjsdev/spark": "^2.4.0",
     "@uiw/color-convert": "^2.10.4",
     "axios": "^1.7.9",
     "class-variance-authority": "^0.7.1",
