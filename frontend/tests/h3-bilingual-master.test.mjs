@@ -21,7 +21,8 @@ test('Chinese master workflow cannot overwrite legacy English through old PUT', 
 })
 
 test('preview invalidation keeps English text but revokes confirmation', () => {
-  assert.match(detail, /watch\(\[videoTaskMasterZH, videoTaskTemplate, videoTaskFirstFrame, videoTaskLastFrame\]/)
+  // 2026-11-22 有意变更：watch 数组加了 videoTaskRef3D（换 3D 结构参考视频同样要作废英文预览确认）。
+  assert.match(detail, /watch\(\[videoTaskMasterZH, videoTaskTemplate, videoTaskFirstFrame, videoTaskLastFrame, videoTaskRef3D\]/)
   const invalidate = detail.slice(detail.indexOf('function invalidateVideoPromptPreview'), detail.indexOf('watch([videoTaskMasterZH'))
   assert.match(invalidate, /videoTaskSourceHash\.value = ''/)
   assert.match(invalidate, /persistVideoPromptDraft\(\)/)

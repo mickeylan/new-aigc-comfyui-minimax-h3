@@ -252,6 +252,7 @@ type Scene struct {
 	VideoTemplate            string     `gorm:"column:video_template" json:"video_template"`               // 视频模板（minimax_h3_i2v/ref2v/t2v/first_last 等；空则自动选择）
 	VideoFirstFrameImg       string     `gorm:"column:video_first_frame_img" json:"video_first_frame_img"` // 首尾帧模板的首帧图文件名
 	VideoLastFrameImg        string     `gorm:"column:video_last_frame_img" json:"video_last_frame_img"`   // 首尾帧模板的尾帧图文件名
+	Video3DRefVideo          string     `gorm:"column:video_3d_ref_video" json:"video_3d_ref_video"`       // 3D 结构参考视频（素材库里 mp4 的文件名；非空时走 minimax_h3_ref2v_3d）
 	Status                   string     `gorm:"index" json:"status"`                                       // pending/image_pending/image_ready/video_pending/video_running/video_ready/failed
 	Error                    string     `json:"error"`
 	PromptStale              bool       `gorm:"column:prompt_stale;default:false" json:"prompt_stale"`                   // 来源变化后需重新确认完整视频提示词
@@ -267,15 +268,15 @@ type Scene struct {
 	BlockingStale bool `gorm:"-" json:"blocking_stale"`
 	// TopviewDispatchJSON is the user-confirmed end-of-Scene dispatch (experimental top-view, P2-4);
 	// the next Scene reads it as its starting positions.
-	TopviewDispatchJSON string `gorm:"column:topview_dispatch_json;type:text" json:"topview_dispatch_json"`
-	DialogueAnalysisJSON     string     `gorm:"column:dialogue_analysis_json;type:text" json:"dialogue_analysis_json"` // 原文台词及 AI 归属审阅数据
-	ImageRetries             int        `gorm:"column:image_retries" json:"image_retries"`                             // 画面生成已重试次数
-	VideoRetries             int        `gorm:"column:video_retries" json:"video_retries"`                             // 视频生成已重试次数
-	ImageCandidateParentID   *uint      `gorm:"column:image_candidate_parent_id" json:"-"`                             // 当前图片任务的候选分支来源
-	VideoCandidateParentID   *uint      `gorm:"column:video_candidate_parent_id" json:"-"`                             // 当前视频任务的候选分支来源
-	ShotCount                int        `gorm:"column:shot_count;default:0" json:"shot_count"`                         // 镜头数量
-	CreatedAt                time.Time  `json:"created_at"`
-	UpdatedAt                time.Time  `json:"updated_at"`
+	TopviewDispatchJSON    string    `gorm:"column:topview_dispatch_json;type:text" json:"topview_dispatch_json"`
+	DialogueAnalysisJSON   string    `gorm:"column:dialogue_analysis_json;type:text" json:"dialogue_analysis_json"` // 原文台词及 AI 归属审阅数据
+	ImageRetries           int       `gorm:"column:image_retries" json:"image_retries"`                             // 画面生成已重试次数
+	VideoRetries           int       `gorm:"column:video_retries" json:"video_retries"`                             // 视频生成已重试次数
+	ImageCandidateParentID *uint     `gorm:"column:image_candidate_parent_id" json:"-"`                             // 当前图片任务的候选分支来源
+	VideoCandidateParentID *uint     `gorm:"column:video_candidate_parent_id" json:"-"`                             // 当前视频任务的候选分支来源
+	ShotCount              int       `gorm:"column:shot_count;default:0" json:"shot_count"`                         // 镜头数量
+	CreatedAt              time.Time `json:"created_at"`
+	UpdatedAt              time.Time `json:"updated_at"`
 }
 
 func sceneBlockingAppliedHash(blocking, prompt string) string {
@@ -427,21 +428,21 @@ type Character struct {
 
 // Asset 视觉资产卡：道具（prop）/场景（location）参考图，项目内可复用，跨分镜保持一致
 type Asset struct {
-	ID          uint      `gorm:"primaryKey" json:"id"`
-	ProjectID   uint      `gorm:"column:project_id;index;uniqueIndex:idx_asset_project_kind_name" json:"project_id"`
-	Kind        string    `gorm:"column:kind;uniqueIndex:idx_asset_project_kind_name" json:"kind"` // prop(道具) / location(场景)
-	Name        string    `gorm:"uniqueIndex:idx_asset_project_kind_name" json:"name"`             // 项目内同类别唯一
-	Description string    `gorm:"type:text" json:"description"`                                    // 外观描述（道具：形状/材质/颜色/细节；场景：空间/建筑/光线氛围）
-	VisualType  string    `gorm:"column:visual_type;default:normal" json:"visual_type"`            // 场景资产：normal/megastructure
-	MegaType    string    `gorm:"column:mega_type" json:"mega_type"`                               // 场景资产巨构类别
-	ImageEngine string    `gorm:"column:image_engine;default:krea2" json:"image_engine"`           // moss/krea2/qwen_image_2_1；新建资产由服务层显式写 moss，列默认值保留以免迁移重建表
-	VisibleText string    `gorm:"column:visible_text;type:text" json:"visible_text"`               // 必须逐字呈现在图中的可读文字
-	Image       string    `json:"image"`                                                           // 参考图文件名（input/<project_id>/ 下）
-	ImageTaskID string    `gorm:"column:image_task_id;index" json:"image_task_id"`                 // Krea2 参考图生成任务
-	ImageError  string    `gorm:"column:image_error;type:text" json:"image_error"`                 // 参考图生成错误
-	Sheet       string    `json:"sheet"`                                                           // 道具四视图文件名（input/<project_id>/ 下；location 不使用）
-	SheetTaskID string    `gorm:"column:sheet_task_id;index" json:"sheet_task_id"`                 // Krea2 道具四视图任务
-	SheetError  string    `gorm:"column:sheet_error;type:text" json:"sheet_error"`                 // 道具四视图错误
+	ID          uint   `gorm:"primaryKey" json:"id"`
+	ProjectID   uint   `gorm:"column:project_id;index;uniqueIndex:idx_asset_project_kind_name" json:"project_id"`
+	Kind        string `gorm:"column:kind;uniqueIndex:idx_asset_project_kind_name" json:"kind"` // prop(道具) / location(场景)
+	Name        string `gorm:"uniqueIndex:idx_asset_project_kind_name" json:"name"`             // 项目内同类别唯一
+	Description string `gorm:"type:text" json:"description"`                                    // 外观描述（道具：形状/材质/颜色/细节；场景：空间/建筑/光线氛围）
+	VisualType  string `gorm:"column:visual_type;default:normal" json:"visual_type"`            // 场景资产：normal/megastructure
+	MegaType    string `gorm:"column:mega_type" json:"mega_type"`                               // 场景资产巨构类别
+	ImageEngine string `gorm:"column:image_engine;default:krea2" json:"image_engine"`           // moss/krea2/qwen_image_2_1；新建资产由服务层显式写 moss，列默认值保留以免迁移重建表
+	VisibleText string `gorm:"column:visible_text;type:text" json:"visible_text"`               // 必须逐字呈现在图中的可读文字
+	Image       string `json:"image"`                                                           // 参考图文件名（input/<project_id>/ 下）
+	ImageTaskID string `gorm:"column:image_task_id;index" json:"image_task_id"`                 // Krea2 参考图生成任务
+	ImageError  string `gorm:"column:image_error;type:text" json:"image_error"`                 // 参考图生成错误
+	Sheet       string `json:"sheet"`                                                           // 道具四视图文件名（input/<project_id>/ 下；location 不使用）
+	SheetTaskID string `gorm:"column:sheet_task_id;index" json:"sheet_task_id"`                 // Krea2 道具四视图任务
+	SheetError  string `gorm:"column:sheet_error;type:text" json:"sheet_error"`                 // 道具四视图错误
 	// Topview* cache the experimental orthographic structure image of a location (P2-4). The
 	// cache is valid only while TopviewSourceImage equals Image.
 	TopviewImage       string `gorm:"column:topview_image" json:"topview_image"`
@@ -459,9 +460,9 @@ type Asset struct {
 	DerivedFromID uint `gorm:"column:derived_from_id;index" json:"derived_from_id"`
 	// DeriveChanges 相对来源资产的变化（每行一条），派生出图时作为 Qwen 编辑指令。
 	DeriveChanges string    `gorm:"column:derive_changes;type:text" json:"derive_changes"`
-	Source        string    `json:"source"`                                                          // auto(方案抽取) / manual(手动新建)
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	Source        string    `json:"source"` // auto(方案抽取) / manual(手动新建)
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // CharacterMergeRedirect durably records a verified, project-scoped identity merge.
@@ -523,13 +524,13 @@ type MergeTask struct {
 
 // Material 素材库：生成的图片/视频自动入库，也支持手动上传管理
 type Material struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	Name      string    `json:"name"`
-	Type      string    `gorm:"index" json:"type"`                         // image/video/audio/3d
-	Source    string    `json:"source"`                                    // scene(场景生成)/upload(手动上传)/studio_3d(3D 编辑器)
-	ProjectID *uint     `gorm:"column:project_id;index" json:"project_id"` // 关联项目（可选）
-	SceneID   *uint     `gorm:"column:scene_id" json:"scene_id"`           // 关联场景（可选）
-	Path      string    `json:"path"`                                      // input 相对路径（task_id/filename）
+	ID        uint   `gorm:"primaryKey" json:"id"`
+	Name      string `json:"name"`
+	Type      string `gorm:"index" json:"type"`                         // image/video/audio/3d
+	Source    string `json:"source"`                                    // scene(场景生成)/upload(手动上传)/studio_3d(3D 编辑器)
+	ProjectID *uint  `gorm:"column:project_id;index" json:"project_id"` // 关联项目（可选）
+	SceneID   *uint  `gorm:"column:scene_id" json:"scene_id"`           // 关联场景（可选）
+	Path      string `json:"path"`                                      // input 相对路径（task_id/filename）
 	// ThumbPath 是 3D 素材的预览图（客户端截一帧后随文件一起上传），
 	// 与 Path 同一 task 目录下的 image 文件；其它类型留空。
 	ThumbPath string    `gorm:"column:thumb_path" json:"thumb_path,omitempty"`
@@ -1624,25 +1625,25 @@ type SceneSubtitleCheck struct {
 }
 
 type SceneContinuity struct {
-	ID                uint            `gorm:"primaryKey" json:"id"`
-	SceneID           uint            `gorm:"uniqueIndex" json:"scene_id"`
-	Mode              string          `gorm:"default:independent;index" json:"mode"`
-	SourceMode        string          `gorm:"default:auto_previous" json:"source_mode"`
-	SourceSceneID     *uint           `gorm:"index" json:"source_scene_id,omitempty"`
-	SelectedFrameID   *uint           `gorm:"index" json:"selected_frame_id,omitempty"`
-	SourceVideoTaskID string          `gorm:"index" json:"source_video_task_id"`
+	ID                uint   `gorm:"primaryKey" json:"id"`
+	SceneID           uint   `gorm:"uniqueIndex" json:"scene_id"`
+	Mode              string `gorm:"default:independent;index" json:"mode"`
+	SourceMode        string `gorm:"default:auto_previous" json:"source_mode"`
+	SourceSceneID     *uint  `gorm:"index" json:"source_scene_id,omitempty"`
+	SelectedFrameID   *uint  `gorm:"index" json:"selected_frame_id,omitempty"`
+	SourceVideoTaskID string `gorm:"index" json:"source_video_task_id"`
 	// ReferenceForm is original/clay/lineart; clay and line art apply to continue mode only.
-	ReferenceForm     string          `gorm:"default:original" json:"reference_form"`
-	Status            string          `gorm:"default:not_required;index" json:"status"`
-	Error             string          `gorm:"type:text" json:"error"`
-	Version           int             `gorm:"default:1" json:"version"`
-	AnalysisStatus    string          `gorm:"default:not_started" json:"analysis_status"`
-	AnalysisJSON      string          `gorm:"type:text" json:"analysis_json,omitempty"`
-	AnalysisModel     string          `json:"analysis_model,omitempty"`
-	AnalysisVersion   int             `gorm:"default:0" json:"analysis_version"`
-	SelectedFrame     *FrameCandidate `gorm:"foreignKey:SelectedFrameID" json:"selected_frame,omitempty"`
-	CreatedAt         time.Time       `json:"created_at"`
-	UpdatedAt         time.Time       `json:"updated_at"`
+	ReferenceForm   string          `gorm:"default:original" json:"reference_form"`
+	Status          string          `gorm:"default:not_required;index" json:"status"`
+	Error           string          `gorm:"type:text" json:"error"`
+	Version         int             `gorm:"default:1" json:"version"`
+	AnalysisStatus  string          `gorm:"default:not_started" json:"analysis_status"`
+	AnalysisJSON    string          `gorm:"type:text" json:"analysis_json,omitempty"`
+	AnalysisModel   string          `json:"analysis_model,omitempty"`
+	AnalysisVersion int             `gorm:"default:0" json:"analysis_version"`
+	SelectedFrame   *FrameCandidate `gorm:"foreignKey:SelectedFrameID" json:"selected_frame,omitempty"`
+	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
 // SceneEndState records where each character and key prop is when a Scene ends. It is
@@ -1663,17 +1664,17 @@ type SceneEndState struct {
 // GenerationSnapshot freezes what a Scene image/video submission actually used, so a
 // take can be traced to its exact prompt, reference files and template revision.
 type GenerationSnapshot struct {
-	ID             uint      `gorm:"primaryKey" json:"id"`
-	ProjectID      uint      `gorm:"index" json:"project_id"`
-	SceneID        uint      `gorm:"index" json:"scene_id"`
-	Kind           string    `gorm:"size:16;index" json:"kind"` // image/video
-	TaskID         string    `gorm:"index" json:"task_id"`
-	TemplateCode   string    `json:"template_code"`
-	TemplateSHA256 string    `gorm:"size:64" json:"template_sha256"`
-	PromptSHA256   string    `gorm:"size:64" json:"prompt_sha256"`
-	FullPrompt     string    `gorm:"type:text" json:"full_prompt"`
-	RefsJSON       string    `gorm:"type:text" json:"refs_json"` // [{role,file,sha256}]
-	ParamsJSON     string    `gorm:"type:text" json:"params_json"`
+	ID             uint   `gorm:"primaryKey" json:"id"`
+	ProjectID      uint   `gorm:"index" json:"project_id"`
+	SceneID        uint   `gorm:"index" json:"scene_id"`
+	Kind           string `gorm:"size:16;index" json:"kind"` // image/video
+	TaskID         string `gorm:"index" json:"task_id"`
+	TemplateCode   string `json:"template_code"`
+	TemplateSHA256 string `gorm:"size:64" json:"template_sha256"`
+	PromptSHA256   string `gorm:"size:64" json:"prompt_sha256"`
+	FullPrompt     string `gorm:"type:text" json:"full_prompt"`
+	RefsJSON       string `gorm:"type:text" json:"refs_json"` // [{role,file,sha256}]
+	ParamsJSON     string `gorm:"type:text" json:"params_json"`
 	// PromptProvenanceJSON copies Scene.VideoPromptProvenance at submit: the Skill revisions of
 	// the latest AI generation, which the user may have edited before this submission.
 	PromptProvenanceJSON string    `gorm:"type:text" json:"prompt_provenance_json"`

@@ -546,6 +546,8 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 		"source_hash": sc.VideoExecSourceHash, "current_source_hash": currentSourceHash, "exec_hash": sc.VideoExecConfirmedHash, "confirmed_at": sc.VideoExecConfirmedAt,
 		"reference_limit_warning": s.Projects.sceneVideoReferenceWarning(sc, len(refs)),
 		"template":                template, "width": width, "height": height, "reference_count": len(refs),
+		// 3D 结构参考视频：模板走 ref2v_3d 时，这条 mp4 会作为 ref_videos 提交。
+		"ref3d_video": sc.Video3DRefVideo,
 		"duration": normalizeSceneDuration(sc.Duration), "fps": 24, "steps": 20,
 		"reference_bindings": sceneVideoReferenceBindings(refs, refLines, fullPrompt),
 		"reviewed_audio":     audioSelection,
@@ -723,6 +725,8 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 		Template      string `json:"template"`        // 可选：用户指定视频模板
 		FirstFrameImg string `json:"first_frame_img"` // 首尾帧模板的首帧图
 		LastFrameImg  string `json:"last_frame_img"`  // 首尾帧模板的尾帧图
+		// 3D 结构参考视频（素材库里 mp4 文件名）：指针类型，传空串表示清掉。
+		Ref3DVideo *string `json:"ref3d_video"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -770,6 +774,10 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 	if strings.TrimSpace(req.LastFrameImg) != "" {
 		updates["video_last_frame_img"] = strings.TrimSpace(req.LastFrameImg)
 	}
+	if req.Ref3DVideo != nil {
+		// 空串是显式清除（用指针区分「没传」和「清掉」）。
+		updates["video_3d_ref_video"] = strings.TrimSpace(*req.Ref3DVideo)
+	}
 	result := s.DB.Model(&models.Scene{}).Where("id = ? AND project_id = ?", sc.ID, sc.ProjectID).Updates(updates)
 	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
@@ -782,11 +790,11 @@ func (s *Service) HandleUpdateSceneVideoPrompt(c *gin.Context) {
 		}
 	}
 	var saved models.Scene
-	if err := s.DB.Select("video_full_prompt", "video_template", "video_first_frame_img", "video_last_frame_img").First(&saved, sc.ID).Error; err != nil {
+	if err := s.DB.Select("video_full_prompt", "video_template", "video_first_frame_img", "video_last_frame_img", "video_3d_ref_video").First(&saved, sc.ID).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "video_full_prompt": saved.VideoFullPrompt, "video_template": saved.VideoTemplate, "first_frame_img": saved.VideoFirstFrameImg, "last_frame_img": saved.VideoLastFrameImg})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "video_full_prompt": saved.VideoFullPrompt, "video_template": saved.VideoTemplate, "first_frame_img": saved.VideoFirstFrameImg, "last_frame_img": saved.VideoLastFrameImg, "ref3d_video": saved.Video3DRefVideo})
 }
 
 func (s *Service) HandleUpdateScene(c *gin.Context) {

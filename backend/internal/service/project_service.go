@@ -2963,20 +2963,35 @@ func (s *ProjectService) generateSceneVideoAction(sc *models.Scene, trace *h3Pro
 	chatAction := func(request string) (string, error) {
 		stepNumber++
 		stage := "video_prompt"
-		if stepNumber > 1 { stage = fmt.Sprintf("plot_anchor_or_structure_repair_%d", stepNumber-1) }
-		type checkpoint struct { Output string; Skills []SkillProvenance }
+		if stepNumber > 1 {
+			stage = fmt.Sprintf("plot_anchor_or_structure_repair_%d", stepNumber-1)
+		}
+		type checkpoint struct {
+			Output string
+			Skills []SkillProvenance
+		}
 		raw, err := preparationStep(s.db, sc.ProjectID, sc.ID, stage, version, effectiveSystem, request, func() (string, error) {
 			output, err := callAction(request)
-			if err != nil { return "", err }
+			if err != nil {
+				return "", err
+			}
 			var skills []SkillProvenance
-			if trace != nil { skills = trace.Skills }
+			if trace != nil {
+				skills = trace.Skills
+			}
 			body, err := json.Marshal(checkpoint{Output: output, Skills: skills})
 			return string(body), err
 		})
-		if err != nil { return "", err }
+		if err != nil {
+			return "", err
+		}
 		var saved checkpoint
-		if err := json.Unmarshal([]byte(raw), &saved); err != nil { return "", err }
-		if trace != nil { trace.Skills = saved.Skills }
+		if err := json.Unmarshal([]byte(raw), &saved); err != nil {
+			return "", err
+		}
+		if trace != nil {
+			trace.Skills = saved.Skills
+		}
 		return saved.Output, nil
 	}
 	out, err := chatAction(user)
@@ -7695,7 +7710,9 @@ func joinSceneCharacters(names []string) string {
 
 // GenerateSceneImage 生成单个场景画面：文生图 → 保存到 input/<project_id>/scene_N.png
 func (s *ProjectService) GenerateSceneImage(sc *models.Scene) error {
-	if err := s.validateSceneReferenceBindings(sc); err != nil { return err }
+	if err := s.validateSceneReferenceBindings(sc); err != nil {
+		return err
+	}
 	token, err := s.claimSceneImage(sc)
 	if err != nil {
 		return err
@@ -8454,15 +8471,35 @@ const (
 	h3AudioDrivenRef2VTemplate      = "minimax_h3_audio_driven_ref2v"
 	h3AudioDrivenT8EnhancedTemplate = "minimax_h3_audio_driven_ref2v_t8_enhanced"
 	h3VideoThenAudioMuxTemplate     = "minimax_h3_video_then_audio_mux"
+	// h3Ref2V3DTemplate 与 minimax_h3_ref2v 同一工作流，另接一条 ref_videos（3D 白模/深度序列）。
+	h3Ref2V3DTemplate = "minimax_h3_ref2v_3d"
 )
 
 func isH3Ref2VTemplate(templateCode string) bool {
 	switch strings.TrimSpace(templateCode) {
-	case "minimax_h3_ref2v", "minimax_h3_ref2v_single", h3CombatRef2VTemplate, h3AudioDrivenRef2VTemplate, h3AudioDrivenT8EnhancedTemplate, h3VideoThenAudioMuxTemplate:
+	case "minimax_h3_ref2v", "minimax_h3_ref2v_single", h3CombatRef2VTemplate, h3AudioDrivenRef2VTemplate, h3AudioDrivenT8EnhancedTemplate, h3VideoThenAudioMuxTemplate, h3Ref2V3DTemplate:
 		return true
 	default:
 		return false
 	}
+}
+
+// scene3DRefVideo 场景选中的 3D 结构参考视频文件名（素材库里 clay-seq-….mp4 这类）。
+func scene3DRefVideo(sc *models.Scene) string {
+	if sc == nil {
+		return ""
+	}
+	return strings.TrimSpace(sc.Video3DRefVideo)
+}
+
+// scene3DRefVideoFiles 把 3D 参考视频包成模板的 ref_videos 输入。
+// 3D 编辑器导出的序列存在素材库 task 目录 materials 下，所以 TaskID 固定为 materials。
+func scene3DRefVideoFiles(sc *models.Scene) map[string][]FileMeta {
+	name := scene3DRefVideo(sc)
+	if name == "" {
+		return nil
+	}
+	return map[string][]FileMeta{"ref_videos": {{TaskID: "materials", Name: name}}}
 }
 
 func hasAuditedCombatShots(shots []models.Shot) bool {
@@ -8500,7 +8537,9 @@ func stableSceneVideoSeed(templateCode, prompt string, files map[string][]FileMe
 // GenerateSceneVideo 创建场景视频任务；T2V可无分镜图，其余模板要求相应画面输入。
 // 用户主动生成/重新生成时使用新的随机 seed；失败任务的快照重试由 TaskService 保留原参数。
 func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene) error {
-	if err := s.validateSceneReferenceBindings(sc); err != nil { return err }
+	if err := s.validateSceneReferenceBindings(sc); err != nil {
+		return err
+	}
 	var latest models.Scene
 	if err := s.db.First(&latest, sc.ID).Error; err != nil {
 		return err
@@ -8551,6 +8590,16 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 				files["ref_images"] = append(files["ref_images"], refFiles...)
 			}
 		}
+		if code == h3Ref2V3DTemplate {
+			if ref3D := scene3DRefVideoFiles(sc); ref3D != nil {
+				if files == nil {
+					files = map[string][]FileMeta{}
+				}
+				for key, items := range ref3D {
+					files[key] = append(files[key], items...)
+				}
+			}
+		}
 		return code, prompt, files
 	}
 	requestedTemplate := enforceSceneModeVideoTemplate(sc, sc.VideoTemplate)
@@ -8559,6 +8608,15 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 			return err
 		}
 		requestedTemplate = h3CombatRef2VTemplate
+	}
+	if scene3DRefVideo(sc) != "" {
+		// 选了 3D 结构参考视频：只有 Ref2V 家族有 ref_videos 通路。别静默丢掉参考，
+		// 首尾帧/武戏专用/纯文生视频一律明确拒绝。
+		if requestedTemplate == "" || isH3Ref2VTemplate(requestedTemplate) {
+			requestedTemplate = h3Ref2V3DTemplate
+		} else {
+			return fmt.Errorf("场景 %d 的模板 %s 没有 3D 视频参考通路；请改用参考生视频模板或清掉 3D 参考视频", sc.Order, requestedTemplate)
+		}
 	}
 	tplCode, promptText, videoFiles := assemble(requestedTemplate)
 	if strings.TrimSpace(sc.VideoPromptMasterZH) != "" {
@@ -8629,7 +8687,7 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 		return fmt.Errorf("场景 %d 已在生成或状态已变化", sc.Order)
 	}
 	videoFileNames := []string{}
-	for _, key := range []string{"ref_images", "first_frame", "last_frame"} {
+	for _, key := range []string{"ref_images", "ref_videos", "first_frame", "last_frame"} {
 		for i, ref := range videoFiles[key] {
 			videoFileNames = append(videoFileNames, fmt.Sprintf("%s[%d]=%s/%s", key, i, ref.TaskID, ref.Name))
 		}

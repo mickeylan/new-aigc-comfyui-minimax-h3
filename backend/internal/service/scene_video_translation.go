@@ -344,20 +344,20 @@ type sceneVideoSourceHash struct {
 		Mode, References                                                         string
 		Identity, Visible, Voice, Mentioned, Location, Props, First, Last, Image string
 	} `json:"scene"`
-	Template       struct{ Code, Workflow, Inputs string } `json:"template"`
-	Files          map[string][]FileMeta                   `json:"files"`
-	Shots          []models.Shot                           `json:"shots"`
-	Dialogues      []models.Dialogue                       `json:"dialogues"`
-	Project        struct{ Style, Genre, Ratio string }    `json:"project"`
-	Continuity     *models.SceneContinuity                 `json:"continuity,omitempty"`
+	Template   struct{ Code, Workflow, Inputs string } `json:"template"`
+	Files      map[string][]FileMeta                   `json:"files"`
+	Shots      []models.Shot                           `json:"shots"`
+	Dialogues  []models.Dialogue                       `json:"dialogues"`
+	Project    struct{ Style, Genre, Ratio string }    `json:"project"`
+	Continuity *models.SceneContinuity                 `json:"continuity,omitempty"`
 	// RefFiles/RefLines are the Ref2V reference images actually submitted, including continuity,
 	// clay/line-art and top-view references; they are empty for non-Ref2V templates.
-	RefFiles []FileMeta `json:"ref_files,omitempty"`
-	FileDigests map[string][]string `json:"file_digests"`
-	RefDigests []string `json:"ref_digests"`
-	RefLines []string   `json:"ref_lines,omitempty"`
-	StoryboardRole string                                  `json:"storyboard_role"`
-	StoryboardTime *float64                                `json:"storyboard_time,omitempty"`
+	RefFiles       []FileMeta          `json:"ref_files,omitempty"`
+	FileDigests    map[string][]string `json:"file_digests"`
+	RefDigests     []string            `json:"ref_digests"`
+	RefLines       []string            `json:"ref_lines,omitempty"`
+	StoryboardRole string              `json:"storyboard_role"`
+	StoryboardTime *float64            `json:"storyboard_time,omitempty"`
 }
 
 // sceneVideoPromptSourceHash binds the review to the effective compiler inputs, never to VideoFullPrompt.
@@ -380,7 +380,9 @@ func (s *Service) sceneVideoPromptSourceHashWithPreparation(sc *models.Scene, pr
 	if err := s.DB.Where("scene_id = ?", sc.ID).Order("order_num, id").Find(&shots).Error; err != nil {
 		return "", err
 	}
-	if prepare { shots = s.Projects.ensureShotDialogueRanges(sc.ID, shots) }
+	if prepare {
+		shots = s.Projects.ensureShotDialogueRanges(sc.ID, shots)
+	}
 	template := enforceSceneModeVideoTemplate(sc, sc.VideoTemplate)
 	if template == "" {
 		template = "minimax_h3_ref2v"
@@ -407,9 +409,13 @@ func (s *Service) sceneVideoPromptSourceHashWithPreparation(sc *models.Scene, pr
 	}
 	v.FileDigests = map[string][]string{}
 	for role, refs := range files {
-		for _, ref := range refs { v.FileDigests[role] = append(v.FileDigests[role], s.Projects.fileSHA256(ref)) }
+		for _, ref := range refs {
+			v.FileDigests[role] = append(v.FileDigests[role], s.Projects.fileSHA256(ref))
+		}
 	}
-	for _, ref := range v.RefFiles { v.RefDigests = append(v.RefDigests, s.Projects.fileSHA256(ref)) }
+	for _, ref := range v.RefFiles {
+		v.RefDigests = append(v.RefDigests, s.Projects.fileSHA256(ref))
+	}
 	v.Scene.Content, v.Scene.Duration, v.Scene.Mode, v.Scene.References = sc.Content, normalizeSceneDuration(sc.Duration), sc.SceneMode, sc.ReferenceImagesJSON
 	v.Scene.Identity, v.Scene.Visible, v.Scene.Voice, v.Scene.Mentioned = sc.Characters, sc.VisibleCharacters, sc.VoiceCharacters, sc.MentionedCharacters
 	v.Scene.Location, v.Scene.Props, v.Scene.First, v.Scene.Last, v.Scene.Image = sc.LocationName, sc.Props, sc.VideoFirstFrameImg, sc.VideoLastFrameImg, sc.ImageFile
@@ -529,6 +535,7 @@ func (s *Service) HandlePutSceneVideoPromptMaster(c *gin.Context) {
 		Template       string  `json:"template"`
 		FirstFrameImg  *string `json:"first_frame_img"`
 		LastFrameImg   *string `json:"last_frame_img"`
+		Ref3DVideo     *string `json:"ref3d_video"` // 3D 结构参考视频（素材库 mp4 文件名），空串=清除
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.MasterPromptZH) == "" {
 		c.JSON(400, gin.H{"error": "master_prompt_zh 不能为空"})
@@ -545,7 +552,10 @@ func (s *Service) HandlePutSceneVideoPromptMaster(c *gin.Context) {
 	if req.LastFrameImg != nil {
 		updates["video_last_frame_img"] = strings.TrimSpace(*req.LastFrameImg)
 	}
-	changed := master != sc.VideoPromptMasterZH || (req.Template != "" && strings.TrimSpace(req.Template) != sc.VideoTemplate) || (req.FirstFrameImg != nil && strings.TrimSpace(*req.FirstFrameImg) != sc.VideoFirstFrameImg) || (req.LastFrameImg != nil && strings.TrimSpace(*req.LastFrameImg) != sc.VideoLastFrameImg)
+	if req.Ref3DVideo != nil {
+		updates["video_3d_ref_video"] = strings.TrimSpace(*req.Ref3DVideo)
+	}
+	changed := master != sc.VideoPromptMasterZH || (req.Template != "" && strings.TrimSpace(req.Template) != sc.VideoTemplate) || (req.FirstFrameImg != nil && strings.TrimSpace(*req.FirstFrameImg) != sc.VideoFirstFrameImg) || (req.LastFrameImg != nil && strings.TrimSpace(*req.LastFrameImg) != sc.VideoLastFrameImg) || (req.Ref3DVideo != nil && strings.TrimSpace(*req.Ref3DVideo) != sc.Video3DRefVideo)
 	if changed {
 		updates["prompt_stale"] = true
 		updates["video_exec_source_hash"], updates["video_exec_confirmed_hash"], updates["video_exec_confirmed_at"] = "", "", nil
