@@ -3043,6 +3043,21 @@ func (s *Service) HandleUploadMaterial(c *gin.Context) {
 	c.JSON(200, mat)
 }
 
+// HandleComposeSequenceVideo 把素材库里同一次导出的 3D 参考图序列合成 mp4（H3 视频参考用）
+func (s *Service) HandleComposeSequenceVideo(c *gin.Context) {
+	var req SequenceVideoRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": "参数格式错误：需要 pass / stamp / fps"})
+		return
+	}
+	mat, err := s.Materials.ComposeSequenceVideo(nil, req)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, mat)
+}
+
 // HandleDeleteMaterial 删除素材
 func (s *Service) HandleDeleteMaterial(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))

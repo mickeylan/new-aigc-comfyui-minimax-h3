@@ -2605,7 +2605,41 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       setBusy(null);
     }
   }, []);
-  /** 在编辑器里先看一眼走位：直接沿路径推对象，走完停在 B 点。 */
+
+  /**
+   * 把素材库里这组序列帧合成 mp4（后端 ffmpeg）：H3 的视频参考要的是视频，
+   * 图片序列直接喂不进去。合成结果也在素材库里（type=video）。
+   */
+  const composeSequenceVideo = useCallback(async () => {
+    const cache = sequenceFramesRef.current;
+    if (!cache) {
+      setError("先导出一次序列，再合成视频");
+      return;
+    }
+    const blocker = sequenceLibraryBlocker(cache.blobs.length);
+    if (blocker) {
+      setError(blocker);
+      return;
+    }
+    setBusy(`正在把 ${cache.blobs.length} 帧合成视频…`);
+    setError(null);
+    try {
+      const response = await fetch("/api/materials/sequence-video", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pass: cache.pass, stamp: cache.stamp, fps: sequenceFps }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || `合成视频失败（HTTP ${response.status}）`);
+      }
+      setStatus(`已合成 ${payload.name}（${cache.blobs.length} 帧 · ${sequenceFps} fps，在素材库里）`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }, [sequenceFps]);
   const previewMove = useCallback(() => {
     const path = toGroundPath(groundPoints);
     const mover = moverId ? objectsRef.current.find((entry) => entry.id === moverId) ?? null : null;
@@ -3706,6 +3740,15 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               className="rounded-md bg-white/5 px-1.5 py-0.5 text-[11px] text-emerald-200/80 hover:bg-white/10 disabled:opacity-40"
             >
               序列存库
+            </button>
+            <button
+              type="button"
+              onClick={() => void composeSequenceVideo()}
+              disabled={Boolean(busy) || cameraKeys.length < 2}
+              title="把这些帧合成 mp4（后端 ffmpeg），H3 视频参考要视频；先把序列存库"
+              className="rounded-md bg-white/5 px-1.5 py-0.5 text-[11px] text-sky-200/80 hover:bg-white/10 disabled:opacity-40"
+            >
+              合成视频
             </button>
           </div>
           {referenceShot ? (

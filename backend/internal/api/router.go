@@ -438,6 +438,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	// 素材库
 	r.GET("/api/materials", svc.HandleListMaterials)
 	r.POST("/api/materials", svc.HandleUploadMaterial)
+	r.POST("/api/materials/sequence-video", svc.HandleComposeSequenceVideo)
 	r.DELETE("/api/materials/:id", svc.HandleDeleteMaterial)
 	// 用户显式创建的共享素材引用，以及全局+项目引用的有效素材视图
 	r.GET("/api/projects/:id/shared-asset-references", svc.HandleListSharedAssetReferences)
