@@ -76,3 +76,15 @@ export function toGroundPath(points: GroundPoints): GroundPath | null {
   if (!points.start || !points.end) return null;
   return normalizeGroundPath({ start: points.start, end: points.end });
 }
+
+/**
+ * 跟拍位移：角色走到 t（0..1）时相对起点的水平位移。
+ *
+ * 相机把自己的位置与目标整体加上这个位移，构图不变、只是跟着角色走；
+ * 只取水平分量，免得角色起点比地面高时镜头跟着往上飘。
+ */
+export function groundPathFollowDelta(path: GroundPath, t: number): GroundPoint {
+  const now = groundPathPointAt(path, t);
+  const start = groundPathPointAt(path, 0);
+  return [now[0] - start[0], 0, now[2] - start[2]];
+}

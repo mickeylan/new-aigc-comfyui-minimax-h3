@@ -108,8 +108,8 @@ test('导出序列时逐帧推角色、结束还原，预览走同一个取样�
 })
 
 test('移动计划进出存档：按名字找对象（载入后 id 会变）', () => {
-  assert.match(stage, /move\?: \{ targetName: string; seconds: number \} \| null;/)
-  assert.match(stage, /const movePlan =[\s\S]{0,120}targetName: moverEntry\.name, seconds: normalizeMoveSeconds\(moveSeconds\)/)
+  assert.match(stage, /move\?: \{ targetName: string; seconds: number; follow\?: boolean \} \| null;/)
+  assert.match(stage, /const movePlan =[\s\S]{0,160}targetName: moverEntry\.name, seconds: normalizeMoveSeconds\(moveSeconds\), follow: followMover/)
   assert.match(stage, /const loadedMover = savedMove/)
   assert.match(stage, /objectsRef\.current\.find\(\(entry\) => entry\.name === savedMove\.targetName\) \?\? null/)
   assert.match(stage, /setMoverId\(loadedMover\?\.id \?\? null\);/)

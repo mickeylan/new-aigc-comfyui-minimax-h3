@@ -18,6 +18,7 @@ import { createStoreZip } from "./zip.js";
 import {
   GROUND_EXTENT,
   clampGroundPoint,
+  groundPathFollowDelta,
   groundPathLength,
   groundPathPointAt,
   groundPathYaw,
@@ -300,8 +301,8 @@ interface SceneDocument {
   cameraKeys?: CameraKey[];
   /** 地面 A/B 落点；仍在 v3 里当可选字段，老存档没有就按没有处理。 */
   groundPath?: { start: GroundPoint; end: GroundPoint } | null;
-  /** 角色沿 A→B 移动的计划：谁走、走多久。没有落点时不写。 */
-  move?: { targetName: string; seconds: number } | null;
+  /** 角色沿 A→B 移动的计划：谁走、走多久、相机要不要跟拍。没有落点时不写。 */
+  move?: { targetName: string; seconds: number; follow?: boolean } | null;
   model: { name: string; data: string };
 }
 
@@ -647,6 +648,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [moverId, setMoverId] = useState<string | null>(null);
   const [moveSeconds, setMoveSeconds] = useState(3);
   const [playingMove, setPlayingMove] = useState(false);
+  // 跟拍：播放/导出时相机整体随角色平移，构图不变，只是跟着人走。
+  const [followMover, setFollowMover] = useState(false);
   // 最近一张参考图：面板里直接预览，同时给下载按钮用。
   const [referenceShot, setReferenceShot] = useState<{
     pass: ReferencePass;
@@ -1568,6 +1571,18 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       return;
     }
     const started = performance.now();
+    // 跟拍得知道“谁在走”与“往哪走”；没有角色或路径就只放相机。
+    const followPath = followMover ? toGroundPath(groundPoints) : null;
+    const followMoverEntry =
+      followPath && moverId ? objectsRef.current.find((entry) => entry.id === moverId) ?? null : null;
+    const followSeconds = followPath && followMoverEntry ? normalizeMoveSeconds(moveSeconds) : null;
+    // 播完把角色放回原处，否则看一次预览角色就跑到 B 点了。
+    const savedMover = followMoverEntry
+      ? {
+          position: followMoverEntry.object.position.clone(),
+          rotationY: followMoverEntry.object.rotation.y,
+        }
+      : null;
     // 收尾只走这一条：清 rAF、清兜底定时器、放开按钮。
     const finish = () => {
       if (cameraPathRef.current !== null) {
@@ -1577,6 +1592,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       if (cameraPathTimerRef.current !== null) {
         window.clearTimeout(cameraPathTimerRef.current);
         cameraPathTimerRef.current = null;
+      }
+      if (followMoverEntry && savedMover) {
+        followMoverEntry.object.position.copy(savedMover.position);
+        followMoverEntry.object.rotation.y = savedMover.rotationY;
       }
       setPlayingPath(false);
     };
@@ -1589,8 +1608,24 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       // 找到当前落在哪一段（超过总时长时停在最后一段的末尾）。
       const pose = sampleCameraPath(cameraKeys, elapsed);
       if (pose) {
-        camera.position.set(...pose.position);
-        controls.target.set(...pose.target);
+        // 跟拍：角色按同一时钟走 A→B，相机整体加上它的位移（构图不变）。
+        let delta: [number, number, number] = [0, 0, 0];
+        if (followPath && followMoverEntry && followSeconds) {
+          const progress = Math.min(1, elapsed / followSeconds);
+          followMoverEntry.object.position.set(...groundPathPointAt(followPath, progress));
+          followMoverEntry.object.rotation.y = groundPathYaw(followPath);
+          delta = groundPathFollowDelta(followPath, progress);
+        }
+        camera.position.set(
+          pose.position[0] + delta[0],
+          pose.position[1] + delta[1],
+          pose.position[2] + delta[2],
+        );
+        controls.target.set(
+          pose.target[0] + delta[0],
+          pose.target[1] + delta[1],
+          pose.target[2] + delta[2],
+        );
         if (Math.abs(camera.fov - pose.fov) > 1e-4) {
           camera.fov = pose.fov;
           camera.updateProjectionMatrix();
@@ -1604,7 +1639,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       cameraPathRef.current = requestAnimationFrame(step);
     };
     cameraPathRef.current = requestAnimationFrame(step);
-  }, [cameraKeys]);
+  }, [cameraKeys, followMover, groundPoints, moveSeconds, moverId]);
 
   const setTransformValue = useCallback((axis: "x" | "y" | "z" | "scale" | "rotateY", value: number) => {
     const id = selectedIdRef.current;
@@ -1969,7 +2004,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       // 落点齐了、也选了对象，才把移动计划写进存档。
       const movePlan =
         moverEntry && toGroundPath(groundPoints)
-          ? { targetName: moverEntry.name, seconds: normalizeMoveSeconds(moveSeconds) }
+          ? { targetName: moverEntry.name, seconds: normalizeMoveSeconds(moveSeconds), follow: followMover }
           : null;
       const doc: SceneDocument = {
         version: 3,
@@ -2096,16 +2131,19 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         if (splatEntries.length > 0) beginSplatLodWait();
         syncObjects();
         selectObject(entries[0]?.id ?? null);
+        // 地面路径与移动目标（v3 可选字段）：老存档没有就清空，别把上一个场景的带走。
+        // 这两行必须先取出来：下面「按名字找移动目标」要用，写在后面会撞上暂时性死区。
+        const savedPath = normalizeGroundPath(doc.groundPath);
+        const savedMove = doc.move && typeof doc.move.targetName === "string" ? doc.move : null;
         // 移动目标按名字找：载入后对象 id 是新的，只有名字能对上。
         const loadedMover = savedMove
           ? objectsRef.current.find((entry) => entry.name === savedMove.targetName) ?? null
           : null;
         setMoverId(loadedMover?.id ?? null);
         setMoveSeconds(normalizeMoveSeconds(savedMove?.seconds));
+        setFollowMover(Boolean(savedMove?.follow));
         applyLightPreset(doc.lightPreset);
-        // 地面路径（v3 可选字段）：老存档没有就清空，别把上一个场景的落点带进来。
-        const savedPath = normalizeGroundPath(doc.groundPath);
-        const savedMove = doc.move && typeof doc.move.targetName === "string" ? doc.move : null;
+        // 落点恢复
         setGroundPoints({ start: savedPath?.start ?? null, end: savedPath?.end ?? null });
         placingGroundRef.current = null;
         setPlacingGround(null);
@@ -2300,6 +2338,21 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             const progress = Math.min(1, index / fps / moverSeconds);
             mover.object.position.set(...groundPathPointAt(path, progress));
             mover.object.rotation.y = groundPathYaw(path);
+            if (followMover) {
+              // 跟拍：相机与目标整体加上角色的水平位移，构图不变。
+              const delta = groundPathFollowDelta(path, progress);
+              camera.position.set(
+                camera.position.x + delta[0],
+                camera.position.y + delta[1],
+                camera.position.z + delta[2],
+              );
+              controls.target.set(
+                controls.target.x + delta[0],
+                controls.target.y + delta[1],
+                controls.target.z + delta[2],
+              );
+              controls.update();
+            }
           }
           const shot = await captureReference(pass);
           if (!shot) break;
@@ -2337,7 +2390,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         setBusy((current) => (current && current.startsWith(REFERENCE_BUSY_PREFIX) ? null : current));
       }
     },
-    [cameraKeys, captureReference, groundPoints, moveSeconds, moverId, sequenceFps],
+    [cameraKeys, captureReference, followMover, groundPoints, moveSeconds, moverId, sequenceFps],
   );
   /** 在编辑器里先看一眼走位：直接沿路径推对象，走完停在 B 点。 */
   const previewMove = useCallback(() => {
@@ -3276,10 +3329,20 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               {playingMove ? "移动中…" : "预览"}
             </button>
           </div>
+          <label className="mt-1 flex items-center gap-1.5 px-1 text-[11px] text-white/50">
+            <input
+              type="checkbox"
+              checked={followMover}
+              onChange={(event) => setFollowMover(event.target.checked)}
+              disabled={!toGroundPath(groundPoints) || !moverId}
+              title="跟拍：相机整体随角色平移，构图不变，角色始终停在画框里的同一位置"
+            />
+            跟拍（相机跟着角色走）
+          </label>
           <p className="mt-1 px-1 text-[11px] leading-4 text-white/35">
             {placingGround
               ? `在地面上点一下，记下${placingGround === "start" ? " A（绿，起点）" : " B（橙，终点）"}。`
-              : `A=起点（绿）、B=终点（橙）。选好谁在走，导出序列时角色会沿 A→B 移动，相机按机位路径走。`}
+              : `A=起点（绿）、B=终点（橙）。选好谁在走，导出序列时角色会沿 A→B 移动，相机按机位路径走；勾上「跟拍」相机就跟着角色平移。`}
           </p>
         </section>
 
