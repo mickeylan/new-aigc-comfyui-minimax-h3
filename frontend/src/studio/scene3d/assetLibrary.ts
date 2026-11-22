@@ -29,18 +29,23 @@ export function thumbnailUrl(asset: LibraryAsset) {
   return assetUrl(asset.thumb_path || asset.path);
 }
 
-export type AssetKind = "glb" | "gltf" | "obj" | "unsupported";
+export type AssetKind = "glb" | "gltf" | "obj" | "splat" | "unsupported";
 
-/** 3D 编辑器只认这三种；fbx/ply/splat 需要先转 GLB，面板上要明说而不是静默失败。 */
+/**
+ * 3D 编辑器直接吃的格式：模型 glb/gltf/obj，高斯泼溅 spz/splat/ksplat（Spark 自己解码）。
+ * fbx 与网格 .ply 仍需先转 GLB；.ply 不进 splat 是因为普通网格 PLY 会被 Spark 当泼溅解错。
+ * 面板上要明说而不是静默失败。
+ */
 export function assetKind(nameOrPath: string): AssetKind {
   const extension = nameOrPath.split("?")[0].split(".").pop()?.toLowerCase();
   if (extension === "glb") return "glb";
   if (extension === "gltf") return "gltf";
   if (extension === "obj") return "obj";
+  if (extension === "spz" || extension === "splat" || extension === "ksplat") return "splat";
   return "unsupported";
 }
 
-export const SUPPORTED_ASSET_KINDS: AssetKind[] = ["glb", "gltf", "obj"];
+export const SUPPORTED_ASSET_KINDS: AssetKind[] = ["glb", "gltf", "obj", "splat"];
 
 export function isSupportedAsset(nameOrPath: string) {
   return assetKind(nameOrPath) !== "unsupported";

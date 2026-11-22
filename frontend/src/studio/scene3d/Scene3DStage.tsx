@@ -702,7 +702,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     [addObject],
   );
 
-  // 从素材库取模型放进来：glb/gltf 直接加载，obj 要取文本再解析。
+  // 从素材库取资产放进来：glb/gltf 直接加载，obj 要取文本再解析，泼溅交给 Spark 解码。
   const loadLibraryAsset = useCallback(
     async (asset: LibraryAsset, dropPoint?: THREE.Vector3 | null) => {
       const kind = assetKind(asset.path || asset.name);
@@ -714,7 +714,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       setBusy(`正在载入 ${asset.name}…`);
       try {
         const url = assetUrl(asset.path);
-        if (kind === "obj") {
+        if (kind === "splat") {
+          // 泼溅不能走 GLTFLoader（.spz 不是 glTF）；贴地与归一化仍由 addObject 统一做。
+          await loadSplatUrl(url, asset.name, dropPoint);
+        } else if (kind === "obj") {
           const response = await fetch(url);
           if (!response.ok) throw new Error(`读取素材失败（HTTP ${response.status}）`);
           addObject(new OBJLoader().parse(await response.text()), asset.name, dropPoint);
@@ -729,7 +732,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         setBusy(null);
       }
     },
-    [addObject],
+    [addObject, loadSplatUrl],
   );
 
   // 把拖放点的屏幕坐标投到 y=0 地面上，得到摆放位置。

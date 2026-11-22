@@ -241,6 +241,10 @@ func TestHandleUploadMaterial3DAcceptsThumbnailAndRejectsOtherExtensions(t *test
 	if mat.Type != "3d" || mat.Source != "studio_3d" || mat.ThumbPath == "" {
 		t.Fatalf("3D 素材应带缩略图且来源为 studio_3d：%+v", mat)
 	}
+	// 高斯泼溅素材（TripoSplat 的 .spz 输出）也要能进库，否则泼溅无法复用。
+	if w := send("world-1700.spz", false); w.Code != http.StatusOK {
+		t.Fatalf(".spz 素材应被接受，status=%d body=%s", w.Code, w.Body.String())
+	}
 	if w := send("note.txt", false); w.Code != http.StatusBadRequest {
 		t.Fatalf("非 3D 扩展名应被拒绝，status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -290,5 +294,19 @@ func TestSaveStudioModelStoresThumbnailForMaterialLibrary(t *testing.T) {
 	}
 	if _, _, err := upload.SaveFile("materials", "script", "x.txt", []byte("x")); err == nil {
 		t.Fatal("未知类型仍应被拒绝")
+	}
+}
+
+// 3D 素材后缀白名单：网格模型与高斯泼溅都收，其余一律挡在落盘之前。
+func TestStudioModelExtensionsWhitelist(t *testing.T) {
+	for _, ext := range []string{".glb", ".gltf", ".obj", ".fbx", ".ply", ".splat", ".spz", ".ksplat"} {
+		if _, ok := studioModelExtensions[ext]; !ok {
+			t.Fatalf("%s 应该在 3D 素材白名单里", ext)
+		}
+	}
+	for _, ext := range []string{"", ".exe", ".mp4", ".png"} {
+		if _, ok := studioModelExtensions[ext]; ok {
+			t.Fatalf("%q 不应被当作 3D 素材", ext)
+		}
 	}
 }

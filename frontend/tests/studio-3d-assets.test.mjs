@@ -13,7 +13,7 @@ test('素材库支持 3D 分组：筛选、缩略图与来源标签', () => {
   assert.match(materials, /setType\('3d'\)/, '缺少 3D 筛选')
   assert.match(materials, /viewer\.thumb_path \|\| viewer\.path/, '3D 素材应优先显示缩略图')
   assert.match(materials, /studio_3d: '3D 编辑器'/, '缺少 3D 编辑器来源标签')
-  assert.match(materials, /\.\(glb\|gltf\|obj\|fbx\|ply\|splat\)\$/, '上传时应识别 3D 扩展名')
+  assert.match(materials, /\.\(glb\|gltf\|obj\|fbx\|ply\|splat\|spz\|ksplat\)\$/, '上传时应识别 3D 扩展名')
 })
 
 test('3D 编辑器存入素材库带模型与预览图，类型固定 3d', () => {
@@ -30,4 +30,10 @@ test('调度预演可以从素材库选 GLB 绑定到当前对象', () => {
   assert.match(previsPanel, /emit\('import-model'/, '应复用同一条 GLB 导入流程')
   assert.match(previs, /api\.materials\(\{type:'3d'\}\)/, '预演应拉取 3D 素材列表')
   assert.match(previs, /:models-3d="libraryModels"/, '应把列表传给面板')
+})
+
+test('素材库里的高斯泼溅拖进场景走 Spark 解码，不走 GLTFLoader', () => {
+  assert.match(stage3d, /if \(kind === "splat"\) \{/, '应单独分派 splat 分支')
+  assert.match(stage3d, /await loadSplatUrl\(url, asset\.name, dropPoint\)/, '.spz 应交给 Spark 加载')
+  assert.match(stage3d, /\[addObject, loadSplatUrl\]/, '回调依赖里要带上 loadSplatUrl')
 })

@@ -2971,6 +2971,12 @@ func (s *Service) HandleListMaterials(c *gin.Context) {
 	c.JSON(200, list)
 }
 
+// studioModelExtensions 3D 素材允许的后缀：网格模型 + 高斯泼溅（.spz/.splat/.ksplat 由 Spark 解码）。
+var studioModelExtensions = map[string]struct{}{
+	".glb": {}, ".gltf": {}, ".obj": {}, ".fbx": {}, ".ply": {},
+	".splat": {}, ".spz": {}, ".ksplat": {},
+}
+
 // HandleUploadMaterial 上传素材到素材库 (multipart: file/type/project_id)
 func (s *Service) HandleUploadMaterial(c *gin.Context) {
 	ftype := c.PostForm("type")
@@ -2997,10 +3003,8 @@ func (s *Service) HandleUploadMaterial(c *gin.Context) {
 	}
 	if ftype == "3d" {
 		ext := strings.ToLower(filepath.Ext(header.Filename))
-		switch ext {
-		case ".glb", ".gltf", ".obj", ".fbx", ".ply", ".splat":
-		default:
-			c.JSON(400, gin.H{"error": "3D 素材仅支持 GLB/GLTF/OBJ/FBX/PLY/SPLAT"})
+		if _, ok := studioModelExtensions[ext]; !ok {
+			c.JSON(400, gin.H{"error": "3D 素材仅支持 GLB/GLTF/OBJ/FBX/PLY/SPLAT/SPZ/KSPLAT"})
 			return
 		}
 		// 3D 素材由 3D 编辑器客户端导出并截一帧作为预览图，一起上传。

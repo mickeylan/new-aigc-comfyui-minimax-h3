@@ -9,7 +9,7 @@
           <button class="btn btn-lg" @click="pickFile">
             <span class="plus">＋</span> 上传素材
           </button>
-          <input ref="fileInput" type="file" hidden accept="image/*,video/*,audio/*,.glb,.gltf,.obj,.fbx,.ply,.splat" @change="onPick" />
+          <input ref="fileInput" type="file" hidden accept="image/*,video/*,audio/*,.glb,.gltf,.obj,.fbx,.ply,.splat,.spz,.ksplat" @change="onPick" />
           <router-link to="/studio/video" class="btn btn-lg btn-secondary">🎞 进入视频剪辑</router-link>
         </div>
       </div>
@@ -129,7 +129,7 @@ function pickFile() {
   fileInput.value?.click()
 }
 
-const MODEL_EXTENSIONS = /\.(glb|gltf|obj|fbx|ply|splat)$/i
+const MODEL_EXTENSIONS = /\.(glb|gltf|obj|fbx|ply|splat|spz|ksplat)$/i
 
 async function onPick(e) {
   const file = e.target.files?.[0]

@@ -16,19 +16,27 @@ test("缩略图优先用后端截的帧，没有就退回模型文件", () => {
   expect(thumbnailUrl({ id: 2, name: "b", path: "3d/b.glb" })).toBe("/api/input/3d/b.glb");
 });
 
-test("只有 glb/gltf/obj 能直接放进场景", () => {
+test("glb/gltf/obj 与高斯泼溅能直接放进场景，fbx 与网格 ply 仍需转 GLB", () => {
   expect(assetKind("3d/robot.glb")).toBe("glb");
   expect(assetKind("3d/robot.GLB")).toBe("glb");
   expect(assetKind("3d/robot.gltf")).toBe("gltf");
   expect(assetKind("3d/robot.obj")).toBe("obj");
   expect(assetKind("3d/robot.fbx")).toBe("unsupported");
+  // 网格 PLY 与泼溅 PLY 同后缀、语义不同，宁可不认也不解错。
   expect(assetKind("3d/robot.ply")).toBe("unsupported");
-  expect(assetKind("3d/robot.splat")).toBe("unsupported");
   expect(assetKind("robot")).toBe("unsupported");
+  // Spark 能直接解码的泼溅格式。
+  expect(assetKind("3d/world.spz")).toBe("splat");
+  expect(assetKind("3d/world.SPZ")).toBe("splat");
+  expect(assetKind("3d/world.splat")).toBe("splat");
+  expect(assetKind("3d/world.ksplat")).toBe("splat");
   // 查询串不该干扰后缀判定。
   expect(assetKind("3d/robot.glb?v=2")).toBe("glb");
+  expect(assetKind("3d/world.spz?v=2")).toBe("splat");
   expect(isSupportedAsset("3d/robot.glb")).toBe(true);
+  expect(isSupportedAsset("3d/world.spz")).toBe(true);
   expect(isSupportedAsset("3d/robot.fbx")).toBe(false);
+  expect(isSupportedAsset("3d/robot.ply")).toBe(false);
 });
 
 test("拖放只用编辑器私有的 MIME 类型", () => {
