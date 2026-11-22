@@ -23,6 +23,12 @@ import {
   orbitCameraKeys,
 } from "./camera-orbit.js";
 import {
+  DEFAULT_DOLLY_SECONDS,
+  dollyZoomKeys,
+  normalizeDollyRange,
+  normalizeDollySeconds,
+} from "./dolly-zoom.js";
+import {
   GROUND_EXTENT,
   clampGroundPoint,
   groundPathFollowDelta,
@@ -660,6 +666,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   // 环绕运镜的两个参数：转几圈、转完总几秒。
   const [orbitTurns, setOrbitTurns] = useState(1);
   const [orbitSeconds, setOrbitSeconds] = useState(DEFAULT_ORBIT_SECONDS);
+  // 希区柯克：推进到起始距离的多少倍（<1 推进）、几秒。
+  const [dollyRange, setDollyRange] = useState(0.35);
+  const [dollySeconds, setDollySeconds] = useState(DEFAULT_DOLLY_SECONDS);
   // 最近一张参考图：面板里直接预览，同时给下载按钮用。
   const [referenceShot, setReferenceShot] = useState<{
     pass: ReferencePass;
@@ -1693,6 +1702,47 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       `已追加环绕 ${orbitTurns} 圈、${keys.length} 个机位（${orbitSeconds} 秒）${entry ? `，绕「${entry.name}」` : "，绕当前相机目标"}`,
     );
   }, [orbitSeconds, orbitTurns]);
+
+  /**
+   * 希区柯克：对着选中对象（没选中就对着当前相机目标）推进，距离变、视角跟着反向变，
+   * 目标在画面里的大小基本不变。同样把整段机位追加到序列末尾。
+   */
+  const addDollyShot = useCallback(() => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+    const entry = selectedIdRef.current
+      ? objectsRef.current.find((item) => item.id === selectedIdRef.current) ?? null
+      : null;
+    const target: [number, number, number] = entry
+      ? [entry.object.position.x, entry.object.position.y, entry.object.position.z]
+      : [controls.target.x, controls.target.y, controls.target.z];
+    const keys = dollyZoomKeys({
+      start: [camera.position.x, camera.position.y, camera.position.z],
+      target,
+      fov: camera.fov,
+      range: dollyRange,
+      seconds: dollySeconds,
+    });
+    if (keys.length === 0) {
+      setStatus("相机已经贴在目标上了，先拉开距离再推");
+      return;
+    }
+    setCameraKeys((current) => [
+      ...current,
+      ...keys.map((key) => ({
+        id: crypto.randomUUID(),
+        position: key.position,
+        target: key.target,
+        duration: normalizeCameraDuration(key.duration),
+        easing: DEFAULT_CAMERA_EASING,
+        fov: normalizeCameraFov(key.fov),
+      })),
+    ]);
+    setStatus(
+      `已追加希区柯克 ${keys.length} 个机位（${dollySeconds} 秒，推进到 ${Math.round(dollyRange * 100)}%）${entry ? `，对着「${entry.name}」` : ""}`,
+    );
+  }, [dollyRange, dollySeconds]);
 
   const setTransformValue = useCallback((axis: "x" | "y" | "z" | "scale" | "rotateY", value: number) => {
     const id = selectedIdRef.current;
@@ -3229,6 +3279,42 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               title="绕左栏选中的对象转圈（没选中就绕当前相机目标），机位追加到序列末尾"
             >
               环绕
+            </button>
+          </div>
+
+          {/* 希区柯克：位置推进 + 视角反向补偿，目标大小不变、背景被拉。 */}
+          <div className="mt-1 flex items-center gap-1 px-1">
+            <span className="text-[11px] text-white/40">希区柯克</span>
+            <span className="text-[11px] text-white/30">推进到</span>
+            <input
+              type="number"
+              min={10}
+              max={300}
+              step={5}
+              value={Math.round(dollyRange * 100)}
+              onChange={(event) => setDollyRange(normalizeDollyRange(Number(event.target.value) / 100))}
+              title="结束时相机离目标是初始距离的百分之几（小于 100 是推进，大于 100 是后退）"
+              className="w-12 rounded border border-white/10 bg-black/30 px-1 py-0.5 text-[11px] text-white/70"
+            />
+            <span className="text-[11px] text-white/30">%</span>
+            <input
+              type="number"
+              min={0.5}
+              max={30}
+              step={0.5}
+              value={dollySeconds}
+              onChange={(event) => setDollySeconds(normalizeDollySeconds(Number(event.target.value)))}
+              title="推完用几秒"
+              className="w-12 rounded border border-white/10 bg-black/30 px-1 py-0.5 text-[11px] text-white/70"
+            />
+            <span className="text-[11px] text-white/40">秒</span>
+            <button
+              type="button"
+              onClick={addDollyShot}
+              className="rounded-md bg-white/5 px-1.5 py-0.5 text-[11px] text-white/60 hover:bg-white/10"
+              title="对着左栏选中的对象推进并反向变焦（没选中就对着当前相机目标），机位追加到序列末尾"
+            >
+              推
             </button>
           </div>
 
