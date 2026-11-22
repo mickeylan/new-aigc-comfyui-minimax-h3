@@ -29,6 +29,12 @@ import {
   normalizeDollySeconds,
 } from "./dolly-zoom.js";
 import {
+  fileNameStamp,
+  referenceFileName,
+  sequenceFrameFileName,
+  sequenceLibraryBlocker,
+} from "./reference-library.js";
+import {
   GROUND_EXTENT,
   clampGroundPoint,
   groundPathFollowDelta,
@@ -689,6 +695,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [sequenceFps, setSequenceFps] = useState(DEFAULT_SEQUENCE_FPS);
   // 序列宽度：0 跟随视口；小图导出能少很多体积，当视频参考够用。
   const [sequenceWidth, setSequenceWidth] = useState(0);
+  // 最近一次导出的序列帧（存素材库用，避免再渲一遍）。
+  const sequenceFramesRef = useRef<{ pass: ReferencePass; stamp: string; blobs: Blob[] } | null>(null);
   const [playingPath, setPlayingPath] = useState(false);
   const [poseSlots, setPoseSlots] = useState<{ a: boolean; b: boolean }>({ a: false, b: false });
   const [poseBlend, setPoseBlend] = useState(0);
@@ -2487,6 +2495,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           setBusy(`${REFERENCE_BUSY_PREFIX}（序列 ${index + 1}/${frames}）…`);
         }
         if (entries.length === 0) throw new Error("没有取到任何帧");
+        // 先留一份帧，用户想存素材库时不用再渲一遍。
+        sequenceFramesRef.current = {
+          pass,
+          stamp: fileNameStamp(new Date()),
+          blobs: entries.map((entry) => new Blob([entry.data], { type: "image/png" })),
+        };
         const zip = createStoreZip(entries);
         const url = URL.createObjectURL(new Blob([zip], { type: "application/zip" }));
         const link = document.createElement("a");
@@ -2522,6 +2536,75 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     },
     [cameraKeys, captureReference, followMover, groundPoints, moveSeconds, moverId, sequenceFps, sequenceWidth],
   );
+
+  /**
+   * 把刚导出的那张参考图存进素材库（POST /api/materials，type=image）。
+   * 用途：白模/深度图当视频生成的参考底图，存进库就能在其他页面复用。
+   */
+  const saveReferenceToLibrary = useCallback(async () => {
+    const shot = referenceShot;
+    if (!shot) {
+      setError("先导出一张参考图，再存素材库");
+      return;
+    }
+    setBusy("正在把参考图存进素材库…");
+    setError(null);
+    try {
+      const blob = await fetch(shot.url).then((response) => response.blob());
+      const form = new FormData();
+      form.append("file", blob, referenceFileName(shot.pass, fileNameStamp(new Date())));
+      form.append("type", "image");
+      const response = await fetch("/api/materials", { method: "POST", body: form });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `存素材库失败（HTTP ${response.status}）`);
+      }
+      const material = await response.json();
+      setStatus(`已把${REFERENCE_PASS_LABELS[shot.pass]}参考图存进素材库：${material.name}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }, [referenceShot]);
+
+  /** 把刚导出的序列逐帧存进素材库；帧数超过上限就明说，不硬刷库。 */
+  const saveSequenceToLibrary = useCallback(async () => {
+    const cache = sequenceFramesRef.current;
+    if (!cache) {
+      setError("先导出一次序列，再把帧存进素材库");
+      return;
+    }
+    const blocker = sequenceLibraryBlocker(cache.blobs.length);
+    if (blocker) {
+      setError(blocker);
+      return;
+    }
+    setBusy(`正在把 ${cache.blobs.length} 帧存进素材库…`);
+    setError(null);
+    try {
+      let saved = 0;
+      for (let index = 0; index < cache.blobs.length; index += 1) {
+        const form = new FormData();
+        form.append("file", cache.blobs[index], sequenceFrameFileName(cache.pass, cache.stamp, index));
+        form.append("type", "image");
+        const response = await fetch("/api/materials", { method: "POST", body: form });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error || `第 ${index + 1} 帧存库失败（HTTP ${response.status}）`);
+        }
+        saved += 1;
+        setBusy(`正在存序列进素材库（${saved}/${cache.blobs.length}）…`);
+      }
+      setStatus(
+        `已把 ${saved} 帧${REFERENCE_PASS_LABELS[cache.pass]}序列存进素材库（素材库页可直接看）`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }, []);
   /** 在编辑器里先看一眼走位：直接沿路径推对象，走完停在 B 点。 */
   const previewMove = useCallback(() => {
     const path = toGroundPath(groundPoints);
@@ -3615,6 +3698,15 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                 {REFERENCE_PASS_LABELS[pass]}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => void saveSequenceToLibrary()}
+              disabled={Boolean(busy) || cameraKeys.length < 2}
+              title="把最近一次导出的序列逐帧存进素材库（一次最多 60 帧）"
+              className="rounded-md bg-white/5 px-1.5 py-0.5 text-[11px] text-emerald-200/80 hover:bg-white/10 disabled:opacity-40"
+            >
+              序列存库
+            </button>
           </div>
           {referenceShot ? (
             <div className="mt-1.5 space-y-1">
@@ -3644,6 +3736,15 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                 >
                   下载
                 </a>
+                <button
+                  type="button"
+                  onClick={() => void saveReferenceToLibrary()}
+                  disabled={Boolean(busy)}
+                  title="把这张参考图（白模/法线/深度）存进素材库，供视频生成当参考底图"
+                  className="text-emerald-300 hover:text-emerald-200 disabled:opacity-40"
+                >
+                  存素材库
+                </button>
               </div>
             </div>
           ) : (
