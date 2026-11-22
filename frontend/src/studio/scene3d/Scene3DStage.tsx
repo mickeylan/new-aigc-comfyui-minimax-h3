@@ -46,6 +46,15 @@ interface Scene3DStageProps {
   exitTo?: string;
 }
 
+/**
+ * 身份迁移的默认提示词（已由用户逐字确认）。
+ * <image1> = 当前 3D 画面（定机位、构图、景别、光影）
+ * <image2> = 角色主形象（定脸型、五官、发型、服装）
+ */
+const DEFAULT_IDENTITY_PROMPT = `以<image2>的人物身份替换<image1>中的主体，保持<image1>的机位、构图、
+景别与光影不变；脸型、五官、发型与服装以<image2>为准；
+输出写实摄影风格，不要 3D 渲染感、不要塑料皮肤。`;
+
 interface SceneObjectEntry {
   id: string;
   name: string;
@@ -356,9 +365,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [activeBone, setActiveBone] = useState<string | null>(null);
   // 选中对象是否有骨骼（决定「骨骼摆姿」入口是否可用）。
   const [selectedHasSkeleton, setSelectedHasSkeleton] = useState(false);
-  // 身份迁移：3D 快照 + 角色主形象 → 多图编辑。提示词留空由用户写，
-  // 这里只给占位说明，避免替用户定死渲染措辞。
-  const [identityPrompt, setIdentityPrompt] = useState("");
+  // 身份迁移：3D 快照 + 角色主形象 → 多图编辑。
+  const [identityPrompt, setIdentityPrompt] = useState(DEFAULT_IDENTITY_PROMPT);
   // 3D 合成：全景天空盒与平面层设置。
   const [skybox, setSkybox] = useState<SkyboxSettings>(DEFAULT_SKYBOX);
   const [skyboxName, setSkyboxName] = useState<string | null>(null);

@@ -48,6 +48,18 @@ test('3D 快照取自当前渲染画布，不是固定图片', () => {
   )
 })
 
+test('默认提示词是已批准的那一段，逐字不变', () => {
+  const block = stage3d.match(/const DEFAULT_IDENTITY_PROMPT = `([\s\S]*?)`/)
+  assert.ok(block, '缺少默认提示词常量')
+  const prompt = block[1].replace(/\s+/g, ' ').trim()
+  assert.equal(
+    prompt,
+    '以<image2>的人物身份替换<image1>中的主体，保持<image1>的机位、构图、 景别与光影不变；脸型、五官、发型与服装以<image2>为准； 输出写实摄影风格，不要 3D 渲染感、不要塑料皮肤。',
+    '默认提示词被改动了，改措辞要先重新获批',
+  )
+  assert.match(stage3d, /useState\(DEFAULT_IDENTITY_PROMPT\)/, '输入框默认值应取该常量')
+})
+
 test('结果回场景当图片参考板', () => {
   assert.match(
     stage3d,
