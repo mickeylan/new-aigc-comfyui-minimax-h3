@@ -1,7 +1,7 @@
 {
   "name": "图片生成 3D 高斯泼溅（TripoSplat）",
   "code": "image_to_3d_triposplat",
-  "description": "ComfyUI 原生 TripoSplat 图生 3D：单张参考图 → 高斯泼溅 → .spz 文件。输出走 SplatToFile3D 的 spz 格式（Niantic 压缩，体积约为 ply 的十分之一）。需要 models/diffusion_models/triposplat_fp16.safetensors、models/clip_vision/dino_v3_vit_h.safetensors、models/vae/triposplat_vae_decoder_fp16.safetensors、models/vae/flux2-vae.safetensors、models/background_removal/birefnet.safetensors 五件套。背景默认先用 BiRefNet 抠掉再进预处理。",
+  "description": "ComfyUI 原生 TripoSplat 图生 3D：单张参考图 → 高斯泼溅 → .spz 文件。输出走 SplatToFile3D 的 spz 格式（Niantic 压缩，体积约为 ply 的十分之一）。抠图默认用 RMBG-3.0（Fibo2 图生图 4 步，提示词固定），也可切回 BiRefNet；两者都输出前景=1 的 mask，直接进 TripoSplat 预处理。RMBG-3.0 需要 models/diffusion_models/rmbg3_int8_convrot.safetensors、models/text_encoders 下的 Qwen3-VL-4B 文本编码器（fibo2 类型）与 models/vae/flux2-vae.safetensors；BiRefNet 需要 models/background_removal/birefnet.safetensors。另需 TripoSplat 三件套 triposplat_fp16.safetensors、dino_v3_vit_h.safetensors、triposplat_vae_decoder_fp16.safetensors。注意 RMBG-3.0 权重是 CC BY-NC 4.0，仅限非商用；商用请把 use_rmbg3 关掉走 BiRefNet，或改用 Bria 授权版本。",
   "inputs": [
     {
       "key": "image",
@@ -87,14 +87,39 @@
     {
       "key": "vae_name_flux2",
       "type": "string",
-      "label": "Flux2 VAE（条件编码用）",
+      "label": "Flux2 VAE（条件编码与抠图解码用）",
       "default": "flux2-vae.safetensors"
+    },
+    {
+      "key": "use_rmbg3",
+      "type": "bool",
+      "label": "用 RMBG-3.0 抠图（关掉则用 BiRefNet）",
+      "default": true
     },
     {
       "key": "bg_removal_name",
       "type": "string",
-      "label": "背景去除模型",
+      "label": "BiRefNet 权重（use_rmbg3 关掉时生效）",
       "default": "birefnet.safetensors"
+    },
+    {
+      "key": "rmbg3_unet",
+      "type": "string",
+      "label": "抠图 UNET（RMBG-3.0）",
+      "default": "rmbg3_int8_convrot.safetensors"
+    },
+    {
+      "key": "rmbg3_clip",
+      "type": "string",
+      "label": "抠图文本编码器（Qwen3-VL-4B / fibo2）",
+      "default": "krea2\\qwen3vl_4b_fp8_scaled.safetensors"
+    },
+    {
+      "key": "matte_seed",
+      "type": "int",
+      "label": "抠图随机种子",
+      "default": 0,
+      "min": 0
     }
   ],
   "workflow": {
@@ -105,31 +130,40 @@
       }
     },
     "2": {
-      "class_type": "LoadBackgroundRemovalModel",
+      "class_type": "UNETLoader",
       "inputs": {
-        "bg_removal_name": "{{bg_removal_name}}"
+        "unet_name": "{{rmbg3_unet}}",
+        "weight_dtype": "default"
       }
     },
     "3": {
-      "class_type": "RemoveBackground",
+      "class_type": "CLIPLoader",
       "inputs": {
-        "image": [
-          "1",
-          0
-        ],
-        "bg_removal_model": [
-          "2",
-          0
-        ]
+        "clip_name": "{{rmbg3_clip}}",
+        "type": "fibo2",
+        "device": "default"
       }
     },
     "4": {
-      "class_type": "InvertMask",
+      "class_type": "TextEncodeFibo2",
       "inputs": {
-        "mask": [
+        "clip": [
           "3",
           0
-        ]
+        ],
+        "vae": [
+          "7",
+          0
+        ],
+        "images.image_1": [
+          "1",
+          0
+        ],
+        "prompt": "Generate a detailed grayscale alpha matte. Map the opaque foreground to white and the background to black. Produce soft, anti-aliased grayscale gradients at the edges of the subject to represent fine details and transparency.",
+        "negative_prompt": "",
+        "width": 0,
+        "height": 0,
+        "batch_size": 1
       }
     },
     "5": {
@@ -140,7 +174,7 @@
           0
         ],
         "mask": [
-          "4",
+          "22",
           0
         ],
         "erode_radius": "{{erode_radius}}",
@@ -249,6 +283,115 @@
           0
         ],
         "filename_prefix": "3d/{{task_id}}"
+      }
+    },
+    "15": {
+      "class_type": "KSampler",
+      "inputs": {
+        "seed": "{{matte_seed}}",
+        "steps": 4,
+        "cfg": 1,
+        "sampler_name": "euler",
+        "scheduler": "simple",
+        "denoise": 1,
+        "model": [
+          "2",
+          0
+        ],
+        "positive": [
+          "4",
+          0
+        ],
+        "negative": [
+          "4",
+          1
+        ],
+        "latent_image": [
+          "4",
+          2
+        ]
+      }
+    },
+    "16": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": [
+          "15",
+          0
+        ],
+        "vae": [
+          "7",
+          0
+        ]
+      }
+    },
+    "17": {
+      "class_type": "ImageToMask",
+      "inputs": {
+        "image": [
+          "16",
+          0
+        ],
+        "channel": "red"
+      }
+    },
+    "18": {
+      "class_type": "ThresholdMask",
+      "inputs": {
+        "mask": [
+          "17",
+          0
+        ],
+        "value": 0.02
+      }
+    },
+    "19": {
+      "class_type": "MaskComposite",
+      "inputs": {
+        "destination": [
+          "17",
+          0
+        ],
+        "source": [
+          "18",
+          0
+        ],
+        "x": 0,
+        "y": 0,
+        "operation": "multiply"
+      }
+    },
+    "20": {
+      "class_type": "LoadBackgroundRemovalModel",
+      "inputs": {
+        "bg_removal_name": "{{bg_removal_name}}"
+      }
+    },
+    "21": {
+      "class_type": "RemoveBackground",
+      "inputs": {
+        "image": [
+          "1",
+          0
+        ],
+        "bg_removal_model": [
+          "20",
+          0
+        ]
+      }
+    },
+    "22": {
+      "class_type": "ComfySwitchNode",
+      "inputs": {
+        "switch": "{{use_rmbg3}}",
+        "on_true": [
+          "19",
+          0
+        ],
+        "on_false": [
+          "21",
+          0
+        ]
       }
     }
   }
