@@ -34,6 +34,16 @@ export function placeSplatOnGround(mesh: THREE.Object3D): THREE.Vector3 {
   return box.getSize(new THREE.Vector3());
 }
 
+export interface SplatRendererOptions {
+  /**
+   * 目标 splat 数上限（LoD 会按屏幕尺寸在树里挑，而不是硬砍尾部）。
+   * 不传就用 Spark 的平台默认值（桌面 2.5M）。
+   */
+  lodSplatCount?: number;
+  /** Spark 认为需要重画时调（排序或 LoD 更新完成都会触发），可一帧多次。 */
+  onDirty?: () => void;
+}
+
 /**
  * 创建 Spark 的渲染器。必须加进场景，splat 才会被绘制——
  * SplatMesh 自己只是数据，真正的光栅化在 SparkRenderer 里。
@@ -50,12 +60,19 @@ export function placeSplatOnGround(mesh: THREE.Object3D): THREE.Vector3 {
  * 锯齿、内部出现白斑与黑洞、地面浮出多余白块——透明累积被深度写破坏。
  * 所以这条路放弃，要双向遮挡只能自写 depth-only pass + 后处理合成。
  */
-export function createSplatRenderer(renderer: THREE.WebGLRenderer): SparkRenderer {
+export function createSplatRenderer(
+  renderer: THREE.WebGLRenderer,
+  options: SplatRendererOptions = {},
+): SparkRenderer {
   return new SparkRenderer({
     renderer,
     transparent: true,
     depthTest: true,
     depthWrite: false,
+    // LoD：远处的 splat 用低级别代替，避免大场景把显存与带宽吃满。
+    enableLod: true,
+    ...(options.lodSplatCount ? { lodSplatCount: options.lodSplatCount } : {}),
+    ...(options.onDirty ? { onDirty: options.onDirty } : {}),
   });
 }
 

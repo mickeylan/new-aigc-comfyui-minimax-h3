@@ -167,6 +167,21 @@ test("SparkRenderer 收下 WebGLRenderer，并把深度策略写死", () => {
   expect(sparkRenderer.options.depthWrite).toBe(false);
 });
 
+test("SparkRenderer 默认开 LoD，细节上限可选", async () => {
+  const renderer = { domElement: {} } as unknown as THREE.WebGLRenderer;
+  const withDefault = createSplatRenderer(renderer) as unknown as {
+    options: { enableLod?: boolean; lodSplatCount?: number };
+  };
+  expect(withDefault.options.enableLod).toBe(true);
+  // 不传上限时别硬塞一个数进去，让库按平台取默认（桌面 2.5M）。
+  expect("lodSplatCount" in withDefault.options).toBe(false);
+
+  const withLimit = createSplatRenderer(renderer, { lodSplatCount: 750_000 }) as unknown as {
+    options: { lodSplatCount?: number };
+  };
+  expect(withLimit.options.lodSplatCount).toBe(750_000);
+});
+
 test("释放走 Spark 自己的 dispose", async () => {
   const mesh = await loadSplatMesh("x.spz", { placeOnGround: false });
   disposeSplat(mesh);

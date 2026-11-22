@@ -222,6 +222,20 @@ const SPLAT_MATTE_TEMPLATES = {
 } as const;
 type SplatMatteEngine = keyof typeof SPLAT_MATTE_TEMPLATES;
 
+/**
+ * 泼溅细节档位。Spark 的 LoD 是按屏幕尺寸在 splat 树里挑代表点，
+ * 所以调这个数不会像"截断前 N 个"那样直接把远处砍掉。
+ */
+const SPLAT_DETAIL_PRESETS = [
+  { label: "省显存", count: 500_000 },
+  { label: "均衡", count: 1_000_000 },
+  { label: "高", count: 2_000_000 },
+  { label: "最高", count: 5_000_000 },
+] as const;
+
+/** 泼溅首次出现前 Spark 要在线程里建 LoD 树，大文件会有几秒空白，用这条占住 busy。 */
+const SPLAT_LOD_BUSY = "正在建泼溅细节层…";
+
 /** 图生 3D 高斯泼溅：走 TripoSplat 模板，输出 .spz。 */
 async function createImageToSplatTask(
   upload: { task_id: string; name: string },
@@ -387,6 +401,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const skyboxTextureRef = useRef<THREE.Texture | null>(null);
   const fkRef = useRef<FKHelper | null>(null);
   const sparkRef = useRef<ReturnType<typeof createSplatRenderer> | null>(null);
+  // 初始化 effect 只跑一次，细节档位要读 ref 才能拿到最新值；改档位时直接改
+  // SparkRenderer 实例上的 lodSplatCount，不用重建渲染器。（用常量初值，
+  // 避免引用到下面才声明的 state 触发 TDZ。）
+  const splatDetailRef = useRef<number>(SPLAT_DETAIL_PRESETS[1].count);
+  // 是否还在等 Spark 建细节层（只置一次，onDirty 来第一发就收掉）。
+  const splatLodPendingRef = useRef(false);
   // 画布指针事件挂在初始化 effect 里，读 ref 才能拿到最新的摆姿开关。
   const posingRef = useRef(false);
 
@@ -413,6 +433,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [identityPrompt, setIdentityPrompt] = useState(DEFAULT_IDENTITY_PROMPT);
   // 图生 3D 世界的抠图引擎，默认 RMBG-3.0 软 matte。
   const [splatMatteEngine, setSplatMatteEngine] = useState<SplatMatteEngine>("rmbg3");
+  // 泼溅细节上限：凭 LoD 按屏幕尺寸挑 splat，而不是硬砍尾部。默认跟平台默认对齐。
+  const [splatDetail, setSplatDetail] = useState<number>(SPLAT_DETAIL_PRESETS[1].count);
   // 3D 合成：全景天空盒与平面层设置。
   const [skybox, setSkybox] = useState<SkyboxSettings>(DEFAULT_SKYBOX);
   const [skyboxName, setSkyboxName] = useState<string | null>(null);
@@ -547,7 +569,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     rendererRef.current = renderer;
 
     // Spark 负责把高斯泼溅光栅化；不加进场景，SplatMesh 只是数据不会被画出来。
-    const spark = createSplatRenderer(renderer);
+    const spark = createSplatRenderer(renderer, {
+      lodSplatCount: splatDetailRef.current,
+      onDirty: () => {
+        // onDirty 一帧可能触发多次，只有确实挂着“建细节层”提示时才动 state，
+        // 免得每帧都 setState 把渲染循环拖慢。
+        if (!splatLodPendingRef.current) return;
+        splatLodPendingRef.current = false;
+        setBusy((current) => (current === SPLAT_LOD_BUSY ? null : current));
+      },
+    });
     spark.name = "__SparkRenderer__";
     scene.add(spark);
     sparkRef.current = spark;
@@ -686,6 +717,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     };
   }, []);
 
+  // 细节档位只在初始化时传给 SparkRenderer 一次，之后靠实例属性热改。
+  useEffect(() => {
+    splatDetailRef.current = splatDetail;
+    const spark = sparkRef.current;
+    if (spark) spark.lodSplatCount = splatDetail;
+  }, [splatDetail]);
+
   useEffect(() => {
     const transform = transformRef.current;
     if (transform) transform.setMode(mode);
@@ -725,6 +763,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const entry = addObject(mesh, name, dropPoint);
       // 存下来源地址，场景存档时按它把 .spz 字节取回来内嵌。
       if (entry) entry.splatUrl = url;
+      // LoD 树要建完才能画第一帧，这几秒挂上提示，等 SparkRenderer.onDirty 来收。
+      splatLodPendingRef.current = true;
+      setBusy(SPLAT_LOD_BUSY);
     },
     [addObject],
   );
@@ -756,7 +797,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
-        setBusy(null);
+        // 泼溅的 busy 归 SparkRenderer.onDirty 管，这里别提前抹掉。
+        setBusy((current) => (current === SPLAT_LOD_BUSY ? current : null));
       }
     },
     [addObject, loadSplatUrl],
@@ -1544,6 +1586,11 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           });
         }
         objectsRef.current = [...entries, ...splatEntries];
+        // 载入的存档带泼溅：同样要等 LoD 树建完才能画，挂上提示等 onDirty 收。
+        if (splatEntries.length > 0) {
+          splatLodPendingRef.current = true;
+          setBusy(SPLAT_LOD_BUSY);
+        }
         syncObjects();
         selectObject(entries[0]?.id ?? null);
         applyLightPreset(doc.lightPreset);
@@ -1562,7 +1609,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
-        setBusy(null);
+        // 带泼溅的存档把 busy 交给 SparkRenderer.onDirty 收尾。
+        setBusy((current) => (current === SPLAT_LOD_BUSY ? current : null));
       }
     },
     [applyLightPreset, syncObjects],
@@ -1923,6 +1971,27 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                 }`}
               >
                 {LIGHT_PRESETS[name].label}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section>
+          <div className="mb-1.5 px-1 text-xs uppercase tracking-wide text-white/40">泼溅细节</div>
+          <div className="grid grid-cols-4 gap-1">
+            {SPLAT_DETAIL_PRESETS.map((preset) => (
+              <button
+                key={preset.count}
+                type="button"
+                onClick={() => setSplatDetail(preset.count)}
+                title={`目标 ${preset.count.toLocaleString()} 个 splat；LoD 按屏幕尺寸挑代表点，不是直接砍掉远处`}
+                className={`rounded-md px-1 py-1 text-xs ${
+                  splatDetail === preset.count
+                    ? "bg-violet-400/35 text-white"
+                    : "bg-white/5 text-white/60 hover:bg-white/10"
+                }`}
+              >
+                {preset.label}
               </button>
             ))}
           </div>
