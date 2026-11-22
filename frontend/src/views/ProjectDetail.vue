@@ -1413,6 +1413,7 @@ import { filterReferenceCandidates } from '../utils/referenceSearch.js'
 import { requestErrorMessage, stepErrorMessage } from '../utils/requestError.js'
 import { episodeShotSplitSkipReason, shotSplitBatchActive, shotSplitBatchOpen, shotSplitReport, shotSplitStatusLabel } from '../utils/episodeShotSplit.js'
 import { compareGenerationSnapshots, parseSnapshotRefs } from '../utils/generationSnapshot.js'
+import { materialList } from '../utils/materialList.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -2433,8 +2434,9 @@ async function viewVideoPrompt(sc) {
     videoTaskLastFrame.value = preview.last_frame_img || sc.video_last_frame_img || ''
     videoTaskRef3D.value = preview.ref3d_video || sc.video_3d_ref_video || ''
     // 3D 结构参考视频只能从素材库的视频分栏里挑（3D 编辑器「合成视频」产出）。
+    // 裸数组与 {items: []} 两种响应都认：只认 data.items 时下拉框会永远为空。
     api.materials({ type: 'video', page_size: 100 })
-      .then(({ data }) => { if (epoch === videoPromptRequestEpoch) videoRef3DOptions.value = data?.items || [] })
+      .then(({ data }) => { if (epoch === videoPromptRequestEpoch) videoRef3DOptions.value = materialList(data) })
       .catch(() => { videoRef3DOptions.value = [] })
     await nextTick()
     videoPromptHydrating = false
