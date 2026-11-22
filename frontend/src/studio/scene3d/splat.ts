@@ -38,9 +38,20 @@ export function placeSplatOnGround(mesh: THREE.Object3D): THREE.Vector3 {
  * 创建 Spark 的渲染器。必须加进场景，splat 才会被绘制——
  * SplatMesh 自己只是数据，真正的光栅化在 SparkRenderer 里。
  * 官方建议 WebGLRenderer 用 antialias: false（抗锯齿对泼溅无效还掉帧）。
+ *
+ * 深度：SparkRenderer 本质是个 transparent 的 Mesh，three 把它排在所有不透明
+ * 物体之后画，所以只要 depthTest 开着，网格就能挡住泼溅（泼溅在后）。
+ * depthWrite 必须关——泼溅边缘大多是半透明的，让它写深度会把后面的东西
+ * 挖出洞来，这是它被默认关掉的原因。反过来"泼溅挡住网格"做不到，
+ * 属于已知限制。
  */
 export function createSplatRenderer(renderer: THREE.WebGLRenderer): SparkRenderer {
-  return new SparkRenderer({ renderer });
+  return new SparkRenderer({
+    renderer,
+    transparent: true,
+    depthTest: true,
+    depthWrite: false,
+  });
 }
 
 export interface LoadSplatOptions {

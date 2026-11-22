@@ -154,13 +154,17 @@ test("scale 参数乘到自身缩放上", async () => {
   expect(mesh.scale.y).toBeCloseTo(2);
 });
 
-test("SparkRenderer 收下 WebGLRenderer", () => {
+test("SparkRenderer 收下 WebGLRenderer，并把深度策略写死", () => {
   // jsdom 里没有 WebGL 上下文，构造真 renderer 会抛错，用替身顶替。
   const renderer = { domElement: {} } as unknown as THREE.WebGLRenderer;
   const sparkRenderer = createSplatRenderer(renderer) as unknown as {
-    options: { renderer: unknown };
+    options: { renderer: unknown; transparent?: boolean; depthTest?: boolean; depthWrite?: boolean };
   };
   expect(sparkRenderer.options.renderer).toBe(renderer);
+  // 三个值都是故意显式传的：库默认变了也要保持"能挡泼溅、不挖洞"的行为。
+  expect(sparkRenderer.options.transparent).toBe(true);
+  expect(sparkRenderer.options.depthTest).toBe(true);
+  expect(sparkRenderer.options.depthWrite).toBe(false);
 });
 
 test("释放走 Spark 自己的 dispose", async () => {
