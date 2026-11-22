@@ -54,6 +54,11 @@ import {
   type GroundPoints,
   type GroundSlot,
 } from "./ground-path.js";
+import {
+  cameraFrameFileName,
+  firstLastCameraFrames,
+  type MovableCamera,
+} from "./camera-frames.js";
 import AssetLibraryPanel from "./AssetLibraryPanel";
 import { ASSET_DRAG_MIME, assetKind, assetUrl, type LibraryAsset } from "./assetLibrary.js";
 import {
@@ -2531,6 +2536,122 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     }
   }, []);
 
+  /**
+   * 按指定机位渲一帧「视口原样」画面（带材质/灯光/天空盒/泼溅），只藏编辑器痕迹。
+   *
+   * 和 captureReference 的区别：不换材质、不拉黑背景。首尾帧是交给 H3 的定妆图，
+   * 白模那种灰板子本身就是「内容」，会被照着画出来，所以这里必须是真实画面。
+   */
+  const captureViewportAt = useCallback(async (pose: MovableCamera) => {
+    const renderer = rendererRef.current;
+    const scene = sceneRef.current;
+    const camera = cameraRef.current as THREE.PerspectiveCamera | null;
+    const controls = controlsRef.current;
+    if (!renderer || !scene || !camera) return null;
+    const previous = {
+      position: camera.position.clone(),
+      target: controls ? controls.target.clone() : null,
+      fov: camera.fov,
+    };
+    const hidden: THREE.Object3D[] = [];
+    const hide = (object: THREE.Object3D | null | undefined) => {
+      if (!object || !object.visible) return;
+      object.visible = false;
+      hidden.push(object);
+    };
+    try {
+      hide(gridRef.current);
+      hide(groundRef.current);
+      hide(groundPathGroupRef.current);
+      hide(transformRef.current?.getHelper?.() ?? null);
+      scene.children.forEach((child) => {
+        if (child instanceof THREE.SkeletonHelper) hide(child);
+      });
+      camera.position.set(pose.position[0], pose.position[1], pose.position[2]);
+      camera.fov = Math.min(90, Math.max(15, Number(pose.fov) || camera.fov));
+      camera.updateProjectionMatrix();
+      if (controls) {
+        controls.target.set(pose.target[0], pose.target[1], pose.target[2]);
+        controls.update();
+      }
+      camera.lookAt(new THREE.Vector3(pose.target[0], pose.target[1], pose.target[2]));
+      renderer.clear();
+      renderer.render(scene, camera);
+      const width = renderer.domElement.width;
+      const height = renderer.domElement.height;
+      // 同步拷进 2D 画布再编码：WebGL 缓冲在等 toBlob 期间会被下一帧清掉。
+      const snapshot = document.createElement("canvas");
+      snapshot.width = width;
+      snapshot.height = height;
+      const context = snapshot.getContext("2d");
+      if (!context) throw new Error("取不到 2D 画布上下文");
+      context.drawImage(renderer.domElement, 0, 0, width, height);
+      const blob = await new Promise<Blob | null>((resolve) => {
+        snapshot.toBlob((value) => resolve(value), "image/png");
+      });
+      if (!blob) throw new Error("取不到画面（画布为空）");
+      return { blob, width, height };
+    } finally {
+      // 无论如何都要把视角还回去，否则用户眼前会突然跳到落幅机位。
+      hidden.forEach((object) => {
+        object.visible = true;
+      });
+      camera.position.copy(previous.position);
+      camera.fov = previous.fov;
+      camera.updateProjectionMatrix();
+      if (controls && previous.target) {
+        controls.target.copy(previous.target);
+        controls.update();
+      }
+    }
+  }, []);
+
+  /**
+   * 导出首尾帧并存进素材库：起幅取第一个机位、落幅取最后一个机位。
+   *
+   * 存库而不是直接塞进场景：H3 首尾帧模板吃的是素材库里的图片文件名，
+   * 用户在「视频」页选完这两张、模板选 minimax_h3_first_last 就能生成。
+   */
+  const exportFirstLastFrames = useCallback(async () => {
+    const pair = firstLastCameraFrames(cameraKeys);
+    if (!pair) {
+      setError("先记录两个机位（起幅和落幅），再导首尾帧");
+      return;
+    }
+    setBusy("正在渲起幅/落幅两帧…");
+    setError(null);
+    try {
+      const stamp = fileNameStamp(new Date());
+      const results: Array<{ edge: "first" | "last"; name: string; size: number }> = [];
+      for (const edge of ["first", "last"] as const) {
+        const pose = edge === "first" ? pair.first : pair.last;
+        const shot = await captureViewportAt(pose);
+        if (!shot) throw new Error("取不到画面（画布为空）");
+        const form = new FormData();
+        form.append("file", shot.blob, cameraFrameFileName(edge, stamp));
+        form.append("type", "image");
+        const response = await fetch("/api/materials", { method: "POST", body: form });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error || `存素材库失败（HTTP ${response.status}）`);
+        }
+        const material = await response.json();
+        results.push({
+          edge,
+          name: material.name ?? cameraFrameFileName(edge, stamp),
+          size: Math.max(1, Math.round(shot.blob.size / 1024)),
+        });
+      }
+      setStatus(
+        `已渲出首尾帧并存进素材库：起幅 ${results[0].name}（${results[0].size} KB）、落幅 ${results[1].name}（${results[1].size} KB）。去「视频」页把这两张挂成首帧/尾帧，模板选 minimax_h3_first_last。`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }, [cameraKeys, captureViewportAt]);
+
   const exportReference = useCallback(
     async (pass: ReferencePass) => {
       setBusy(`${REFERENCE_BUSY_PREFIX}（${REFERENCE_PASS_LABELS[pass]}）…`);
@@ -3529,6 +3650,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               清空
             </button>
           </div>
+          {/* 首尾帧：改成 H3 首尾帧模板后不再传 ref_video，白模画面就漏不进成片了。 */}
+          <button
+            type="button"
+            className="mt-1 w-full rounded-md bg-white/5 px-2 py-1 text-xs text-white/60 hover:bg-white/10 disabled:opacity-40"
+            onClick={exportFirstLastFrames}
+            disabled={cameraKeys.length < 2}
+            title="按第一个机位和最后一个机位各渲一帧当前画面，存进素材库当 H3 的首帧/尾帧（模板选 minimax_h3_first_last）"
+          >
+            导出首尾帧（存素材库）
+          </button>
 
           {/* 环绕：绕选中对象转一圈，一键把整段机位追加到序列末尾。 */}
           <div className="mt-1 flex items-center gap-1 px-1">
