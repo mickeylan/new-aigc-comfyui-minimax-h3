@@ -6,6 +6,8 @@ const {
   GROUND_EXTENT,
   clampGroundPoint,
   groundPathLength,
+  groundPathPointAt,
+  groundPathYaw,
   normalizeGroundPath,
   normalizeGroundPoint,
   toGroundPath,
@@ -56,6 +58,58 @@ test('编辑器：只对地面拾取、拖拽超过阈值不落点、参考图�
   assert.match(stage, /const point = clampGroundPoint\(\[hit\.point\.x, 0\.02, hit\.point\.z\]\);/)
   // 落点标记不进参考图
   assert.match(stage, /hide\(groundPathGroupRef\.current\);/)
+})
+
+test('沿路径取点：两端精确、中间线性、越界钳到端点', () => {
+  const path = { start: [0, 0.02, 0], end: [4, 0.02, 2] }
+  assert.deepEqual(groundPathPointAt(path, 0), [0, 0.02, 0])
+  assert.deepEqual(groundPathPointAt(path, 1), [4, 0.02, 2])
+  assert.deepEqual(groundPathPointAt(path, 0.5), [2, 0.02, 1])
+  // 进度是帧号除以时长算出来的，可能略越界或出现 NaN
+  assert.deepEqual(groundPathPointAt(path, 1.7), [4, 0.02, 2])
+  assert.deepEqual(groundPathPointAt(path, -0.2), [0, 0.02, 0])
+  assert.deepEqual(groundPathPointAt(path, Number.NaN), [0, 0.02, 0])
+})
+
+test('行进朝向按 +Z 为 0 计算：走 +X 转 90°、走 -Z 转 180°', () => {
+  assert.equal(groundPathYaw({ start: [0, 0, 0], end: [0, 0, 5] }), 0)
+  assert.ok(Math.abs(groundPathYaw({ start: [0, 0, 0], end: [5, 0, 0] }) - Math.PI / 2) < 1e-9)
+  assert.ok(Math.abs(Math.abs(groundPathYaw({ start: [0, 0, 0], end: [0, 0, -5] })) - Math.PI) < 1e-9)
+})
+
+test('序列总时长取相机路径与角色移动里较长的一条，帧数随之变', () => {
+  // 相机 2 段各 1.6s = 3.2s；角色 5s → 按 5s 出帧
+  assert.match(stage, /const seconds = Math\.max\(cameraPathDuration\(cameraKeys\), moverSeconds \?\? 0\);/)
+  assert.match(stage, /frames: Math\.min\(SEQUENCE_MAX_FRAMES, Math\.max\(1, Math\.round\(seconds \* fps\)\)\),/)
+  assert.match(stage, /const plan = sequencePlan\(cameraKeys, moverSeconds, fps\);/)
+  // 移动时长有上下限，别让 0.01 秒或 1 小时把帧数算爆
+  assert.match(stage, /const MOVE_SECONDS_LIMITS = \{ min: 0\.5, max: 30 \};/)
+  assert.match(stage, /Math\.min\(MOVE_SECONDS_LIMITS\.max, Math\.max\(MOVE_SECONDS_LIMITS\.min, seconds\)\)/)
+})
+
+test('导出序列时逐帧推角色、结束还原，预览走同一个取样函数', () => {
+  // 进度 = 帧时间 / 移动时长，超出停在 B
+  assert.match(stage, /const progress = Math\.min\(1, index \/ fps \/ moverSeconds\);/)
+  assert.match(stage, /mover\.object\.position\.set\(\.\.\.groundPathPointAt\(path, progress\)\);/)
+  assert.match(stage, /mover\.object\.rotation\.y = groundPathYaw\(path\);/)
+  // 导出后对象要回到原位，不能停在 B 点
+  assert.match(stage, /mover\.object\.position\.copy\(savedMover\.position\);/)
+  assert.match(stage, /mover\.object\.quaternion\.copy\(savedMover\.quaternion\);/)
+  // 编辑器里的预览与导出共用取样，不另写一份插值
+  assert.match(stage, /mover\.object\.position\.set\(\.\.\.groundPathPointAt\(path, progress\)\);/)
+  assert.match(stage, /const \[playingMove, setPlayingMove\] = useState\(false\);/)
+  assert.match(stage, /\{playingMove \? "移动中…" : "预览"\}/)
+  // 无头环境改不动 <select>，所以另给一个「用左栏选中对象」的按钮，顺手也更好用
+  assert.match(stage, /onClick=\{\(\) => setMoverId\(selectedId\)\}/)
+  assert.match(stage, /用左栏选中的对象当移动目标/)
+})
+
+test('移动计划进出存档：按名字找对象（载入后 id 会变）', () => {
+  assert.match(stage, /move\?: \{ targetName: string; seconds: number \} \| null;/)
+  assert.match(stage, /const movePlan =[\s\S]{0,120}targetName: moverEntry\.name, seconds: normalizeMoveSeconds\(moveSeconds\)/)
+  assert.match(stage, /const loadedMover = savedMove/)
+  assert.match(stage, /objectsRef\.current\.find\(\(entry\) => entry\.name === savedMove\.targetName\) \?\? null/)
+  assert.match(stage, /setMoverId\(loadedMover\?\.id \?\? null\);/)
 })
 
 test('地面路径进出存档：写入可选字段、载入时校验、UI 能点选/清除', () => {

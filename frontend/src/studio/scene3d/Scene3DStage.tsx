@@ -19,6 +19,8 @@ import {
   GROUND_EXTENT,
   clampGroundPoint,
   groundPathLength,
+  groundPathPointAt,
+  groundPathYaw,
   normalizeGroundPath,
   toGroundPath,
   type GroundPoint,
@@ -180,6 +182,22 @@ function sampleCameraPath(keys: CameraKey[], elapsed: number) {
   };
 }
 
+const MOVE_SECONDS_LIMITS = { min: 0.5, max: 30 };
+
+function normalizeMoveSeconds(value: unknown) {
+  const seconds = typeof value === "number" && Number.isFinite(value) ? value : 3;
+  return Math.min(MOVE_SECONDS_LIMITS.max, Math.max(MOVE_SECONDS_LIMITS.min, seconds));
+}
+
+/** 序列总时长取「相机路径时长」与「角色移动时长」中较长的一条：两者谁长都不能被截断。 */
+function sequencePlan(cameraKeys: CameraKey[], moverSeconds: number | null, fps: number) {
+  const seconds = Math.max(cameraPathDuration(cameraKeys), moverSeconds ?? 0);
+  return {
+    seconds,
+    frames: Math.min(SEQUENCE_MAX_FRAMES, Math.max(1, Math.round(seconds * fps))),
+  };
+}
+
 /**
  * 参考图专用材质。三种都要盖到场景里所有网格上，渲完必须无条件还原（外面 finally 保证）。
  * 深度用独立的线性深度 shader：近黑远白。
@@ -268,6 +286,8 @@ interface SceneDocument {
   cameraKeys?: CameraKey[];
   /** 地面 A/B 落点；仍在 v3 里当可选字段，老存档没有就按没有处理。 */
   groundPath?: { start: GroundPoint; end: GroundPoint } | null;
+  /** 角色沿 A→B 移动的计划：谁走、走多久。没有落点时不写。 */
+  move?: { targetName: string; seconds: number } | null;
   model: { name: string; data: string };
 }
 
@@ -558,6 +578,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const groundPathGroupRef = useRef<THREE.Group | null>(null);
   // 拾取回调在初始化 effect 的闭包里，读 state 会读到挂载时的旧值，用 ref 镜像。
   const placingGroundRef = useRef<"start" | "end" | null>(null);
+  const moveRafRef = useRef<number | null>(null);
   const cameraPathRef = useRef<number | null>(null);
   // 播放兜底定时器：切到后台标签页时 rAF 会被浏览器暂停，靠它把「播放中…」收回来。
   const cameraPathTimerRef = useRef<number | null>(null);
@@ -608,6 +629,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [groundPoints, setGroundPoints] = useState<GroundPoints>({ start: null, end: null });
   // 正在等用户在画布上点哪一端；null = 没在选点。
   const [placingGround, setPlacingGround] = useState<"start" | "end" | null>(null);
+  // 沿 A→B 移动的对象（按 id 指向场景对象）与走完全程的秒数。
+  const [moverId, setMoverId] = useState<string | null>(null);
+  const [moveSeconds, setMoveSeconds] = useState(3);
+  const [playingMove, setPlayingMove] = useState(false);
   // 最近一张参考图：面板里直接预览，同时给下载按钮用。
   const [referenceShot, setReferenceShot] = useState<{
     pass: ReferencePass;
@@ -1904,6 +1929,14 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           scale: entry.object.scale.toArray() as [number, number, number],
         });
       }
+      const moverEntry = moverId
+        ? objectsRef.current.find((entry) => entry.id === moverId) ?? null
+        : null;
+      // 落点齐了、也选了对象，才把移动计划写进存档。
+      const movePlan =
+        moverEntry && toGroundPath(groundPoints)
+          ? { targetName: moverEntry.name, seconds: normalizeMoveSeconds(moveSeconds) }
+          : null;
       const doc: SceneDocument = {
         version: 3,
         createdAt: new Date().toISOString(),
@@ -1926,6 +1959,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         splats,
         // 机位序列以前只活在内存里，刷新就没；v3 起跟场景一起存。
         groundPath: toGroundPath(groundPoints),
+        move: movePlan,
         cameraKeys: cameraKeys.map((key) => ({
           id: key.id,
           position: key.position,
@@ -1951,7 +1985,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     } finally {
       setBusy(null);
     }
-  }, [cameraKeys, exportGeometry, groundPoints, lightPreset]);
+  }, [cameraKeys, exportGeometry, groundPoints, lightPreset, moveSeconds, moverId]);
 
   const loadScene = useCallback(
     async (file: File) => {
@@ -2027,9 +2061,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         if (splatEntries.length > 0) beginSplatLodWait();
         syncObjects();
         selectObject(entries[0]?.id ?? null);
+        // 移动目标按名字找：载入后对象 id 是新的，只有名字能对上。
+        const loadedMover = savedMove
+          ? objectsRef.current.find((entry) => entry.name === savedMove.targetName) ?? null
+          : null;
+        setMoverId(loadedMover?.id ?? null);
+        setMoveSeconds(normalizeMoveSeconds(savedMove?.seconds));
         applyLightPreset(doc.lightPreset);
         // 地面路径（v3 可选字段）：老存档没有就清空，别把上一个场景的落点带进来。
         const savedPath = normalizeGroundPath(doc.groundPath);
+        const savedMove = doc.move && typeof doc.move.targetName === "string" ? doc.move : null;
         setGroundPoints({ start: savedPath?.start ?? null, end: savedPath?.end ?? null });
         placingGroundRef.current = null;
         setPlacingGround(null);
@@ -2189,14 +2230,22 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         setError("先记录至少两个机位，序列才有路径可走");
         return;
       }
-      const duration = cameraPathDuration(cameraKeys);
+      const path = toGroundPath(groundPoints);
+      const mover =
+        moverId ? objectsRef.current.find((entry) => entry.id === moverId) ?? null : null;
+      const moverSeconds = mover && path ? normalizeMoveSeconds(moveSeconds) : null;
       const fps = sequenceFps;
-      const frames = Math.min(SEQUENCE_MAX_FRAMES, Math.max(1, Math.round(duration * fps)));
+      const plan = sequencePlan(cameraKeys, moverSeconds, fps);
+      const frames = plan.frames;
       setError(null);
       setBusy(`${REFERENCE_BUSY_PREFIX}（序列 0/${frames}）…`);
       // 导出会一路推相机，结束后必须放回原处，否则用户回到编辑器发现机位跑了。
       const savedPosition = camera.position.clone();
       const savedTarget = controls.target.clone();
+      // 角色走完停在 B 点，也要还原，否则编辑器里对象被挪走了。
+      const savedMover = mover
+        ? { position: mover.object.position.clone(), quaternion: mover.object.quaternion.clone() }
+        : null;
       const entries: Array<{ name: string; data: Uint8Array }> = [];
       try {
         for (let index = 0; index < frames; index += 1) {
@@ -2205,6 +2254,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           camera.position.set(...sample.position);
           controls.target.set(...sample.target);
           controls.update();
+          if (mover && path && moverSeconds) {
+            // 移动与相机各走各的时钟：按同一帧时间 / 移动总时长取进度，超出就停在 B。
+            const progress = Math.min(1, index / fps / moverSeconds);
+            mover.object.position.set(...groundPathPointAt(path, progress));
+            mover.object.rotation.y = groundPathYaw(path);
+          }
           const shot = await captureReference(pass);
           if (!shot) break;
           entries.push({
@@ -2230,11 +2285,47 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         camera.position.copy(savedPosition);
         controls.target.copy(savedTarget);
         controls.update();
+        if (mover && savedMover) {
+          mover.object.position.copy(savedMover.position);
+          mover.object.quaternion.copy(savedMover.quaternion);
+        }
         setBusy((current) => (current && current.startsWith(REFERENCE_BUSY_PREFIX) ? null : current));
       }
     },
-    [cameraKeys, captureReference, sequenceFps],
+    [cameraKeys, captureReference, groundPoints, moveSeconds, moverId, sequenceFps],
   );
+  /** 在编辑器里先看一眼走位：直接沿路径推对象，走完停在 B 点。 */
+  const previewMove = useCallback(() => {
+    const path = toGroundPath(groundPoints);
+    const mover = moverId ? objectsRef.current.find((entry) => entry.id === moverId) ?? null : null;
+    if (!path || !mover) return;
+    const seconds = normalizeMoveSeconds(moveSeconds);
+    if (moveRafRef.current !== null) cancelAnimationFrame(moveRafRef.current);
+    setPlayingMove(true);
+    const started = performance.now();
+    const step = () => {
+      const progress = Math.min(1, (performance.now() - started) / (seconds * 1000));
+      mover.object.position.set(...groundPathPointAt(path, progress));
+      // 朝向行进方向：模型默认面朝 +Z，yaw 直接由方向算。
+      mover.object.rotation.y = groundPathYaw(path);
+      if (progress < 1) {
+        moveRafRef.current = requestAnimationFrame(step);
+        return;
+      }
+      moveRafRef.current = null;
+      setPlayingMove(false);
+    };
+    step();
+  }, [groundPoints, moveSeconds, moverId]);
+
+  // 卸载时别留 rAF。
+  useEffect(
+    () => () => {
+      if (moveRafRef.current !== null) cancelAnimationFrame(moveRafRef.current);
+    },
+    [],
+  );
+
   const closeAiMenu = useCallback(() => {
     if (aiMenuRef.current) aiMenuRef.current.open = false;
   }, []);
@@ -3081,10 +3172,56 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               清除
             </button>
           </div>
+          <div className="mt-1 flex items-center gap-1 px-1">
+            <select
+              value={moverId ?? ""}
+              onChange={(event) => setMoverId(event.target.value || null)}
+              title="谁沿 A→B 移动"
+              className="min-w-0 flex-1 rounded border border-white/10 bg-black/30 px-1 py-0.5 text-[11px] text-white/70"
+            >
+              <option value="">不移动</option>
+              {objects.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => setMoverId(selectedId)}
+              disabled={!selectedId}
+              title="用左栏选中的对象当移动目标"
+              className="rounded-md bg-white/5 px-1.5 py-0.5 text-[11px] text-white/60 hover:bg-white/10 disabled:opacity-40"
+            >
+              用选中
+            </button>
+          </div>
+          <div className="mt-1 flex items-center gap-1 px-1">
+            <span className="text-[11px] text-white/40">走完用</span>
+            <input
+              type="number"
+              min={MOVE_SECONDS_LIMITS.min}
+              max={MOVE_SECONDS_LIMITS.max}
+              step={0.5}
+              value={moveSeconds}
+              onChange={(event) => setMoveSeconds(normalizeMoveSeconds(Number(event.target.value)))}
+              title="走完全程用几秒"
+              className="w-12 rounded border border-white/10 bg-black/30 px-1 py-0.5 text-[11px] text-white/70"
+            />
+            <span className="text-[11px] text-white/40">秒</span>
+            <button
+              type="button"
+              onClick={previewMove}
+              disabled={!toGroundPath(groundPoints) || !moverId || playingMove}
+              className="rounded-md bg-white/5 px-1.5 py-0.5 text-[11px] text-white/60 hover:bg-white/10 disabled:opacity-40"
+            >
+              {playingMove ? "移动中…" : "预览"}
+            </button>
+          </div>
           <p className="mt-1 px-1 text-[11px] leading-4 text-white/35">
             {placingGround
               ? `在地面上点一下，记下${placingGround === "start" ? " A（绿，起点）" : " B（橙，终点）"}。`
-              : `A=起点（绿）、B=终点（橙），两点间距 ${GROUND_EXTENT * 2} 米内可用。下一步让角色沿 A→B 走、相机跟拍。`}
+              : `A=起点（绿）、B=终点（橙）。选好谁在走，导出序列时角色会沿 A→B 移动，相机按机位路径走。`}
           </p>
         </section>
 
@@ -3124,10 +3261,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             <span className="text-[11px] text-white/35">
               {cameraKeys.length < 2
                 ? "先记录两个机位"
-                : `${Math.min(
-                    SEQUENCE_MAX_FRAMES,
-                    Math.max(1, Math.round(cameraPathDuration(cameraKeys) * sequenceFps)),
-                  )} 帧`}
+                : `${
+                    sequencePlan(
+                      cameraKeys,
+                      moverId && toGroundPath(groundPoints) ? normalizeMoveSeconds(moveSeconds) : null,
+                      sequenceFps,
+                    ).frames
+                  } 帧`}
             </span>
             {(["clay", "normal", "depth"] as ReferencePass[]).map((pass) => (
               <button

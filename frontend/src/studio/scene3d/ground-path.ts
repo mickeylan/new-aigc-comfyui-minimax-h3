@@ -56,6 +56,21 @@ export function groundPathLength(path: GroundPath): number {
   );
 }
 
+/** 沿路径取位置：t 为 0..1 的比例，超出范围钳到端点。 */
+export function groundPathPointAt(path: GroundPath, t: number): GroundPoint {
+  const ratio = Math.min(1, Math.max(0, Number.isFinite(t) ? t : 0));
+  return [
+    path.start[0] + (path.end[0] - path.start[0]) * ratio,
+    path.start[1] + (path.end[1] - path.start[1]) * ratio,
+    path.start[2] + (path.end[2] - path.start[2]) * ratio,
+  ];
+}
+
+/** 行进朝向：模型默认面朝 +Z，yaw = atan2(dx, dz)。 */
+export function groundPathYaw(path: GroundPath): number {
+  return Math.atan2(path.end[0] - path.start[0], path.end[2] - path.start[2]);
+}
+
 /** 从零散落点收成一条路径：只落了一个点时返回 null。 */
 export function toGroundPath(points: GroundPoints): GroundPath | null {
   if (!points.start || !points.end) return null;
