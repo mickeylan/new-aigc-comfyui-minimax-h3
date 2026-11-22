@@ -319,6 +319,13 @@ function taskResultUrl(task: {
   return `/api/output/${task.gpu_index ?? 0}/${path}`;
 }
 
+/** 泼溅存库时用的文件名：来源本来就是 .spz/.splat/.ksplat 就原样保留，其它按 .spz 交上去。 */
+function splatFileName(name: string): string {
+  const lower = name.toLowerCase();
+  const keep = ["spz", "splat", "ksplat"].find((ext) => lower.endsWith(`.${ext}`));
+  return keep ? name : `${name}.spz`;
+}
+
 function arrayBufferToBase64(buffer: ArrayBuffer) {
   const bytes = new Uint8Array(buffer);
   let text = "";
@@ -1331,10 +1338,11 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   }, []);
 
   // 3D 资产入库：模型本体进素材库（type=3d，可被预演绑定），预览图取当前渲染帧。
+  // 泼溅进不了 GLB，要单层单独存——见下面 saveSplatToLibrary。
   const saveToLibrary = useCallback(async () => {
     if (objectsRef.current.length === 0) return;
     if (!objectsRef.current.some((entry) => !entry.splat)) {
-      setError("场景里只有泼溅，存不了 GLB 素材；请先存成场景存档");
+      setError("场景里只有泼溅，造不了 GLB 素材；请在左侧对象列表里逐层「存库」，或先存成场景存档");
       return;
     }
     setBusy("正在存入素材库…");
@@ -1356,13 +1364,50 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         throw new Error(payload.error || `存入素材库失败（HTTP ${response.status}）`);
       }
       const material = await response.json();
-      setStatus(`已存入素材库：${material.name}（约 ${(binary.byteLength / 1024 / 1024).toFixed(1)} MB）`);
+      const skipped = objectsRef.current.filter((entry) => entry.splat).length;
+      setStatus(
+        `已存入素材库：${material.name}（约 ${(binary.byteLength / 1024 / 1024).toFixed(1)} MB）` +
+          (skipped > 0 ? `；${skipped} 层泼溅进不了 GLB，需逐层「存库」` : ""),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(null);
     }
   }, [exportGeometry]);
+
+  // 泼溅单独入库：把 .spz 原始字节按原样交上去，预览图取当前渲染帧。
+  const saveSplatToLibrary = useCallback(async (entry: SceneObjectEntry) => {
+    if (!entry.splatUrl) {
+      setError(`泼溅「${entry.name}」没有来源地址，存不了素材库`);
+      return;
+    }
+    setBusy(`正在存入泼溅「${entry.name}」…`);
+    setError(null);
+    try {
+      const source = await fetch(entry.splatUrl);
+      if (!source.ok) throw new Error(`读取泼溅失败（HTTP ${source.status}）`);
+      const bytes = await source.arrayBuffer();
+      const thumbnail = rendererRef.current?.domElement.toDataURL("image/png");
+      const form = new FormData();
+      form.append("file", new Blob([bytes], { type: "application/octet-stream" }), splatFileName(entry.name));
+      form.append("type", "3d");
+      if (thumbnail) {
+        form.append("thumbnail", await (await fetch(thumbnail)).blob(), "thumb.png");
+      }
+      const response = await fetch("/api/materials", { method: "POST", body: form });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `存入素材库失败（HTTP ${response.status}）`);
+      }
+      const material = await response.json();
+      setStatus(`已存入素材库：${material.name}（约 ${(bytes.byteLength / 1024 / 1024).toFixed(1)} MB）`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }, []);
 
   const saveScene = useCallback(async () => {
     const camera = cameraRef.current;
@@ -1822,18 +1867,35 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           <div className="px-1 py-2 text-xs text-white/40">还没有模型</div>
         ) : (
           objects.map((entry) => (
-            <button
+            <div
               key={entry.id}
-              type="button"
-              className={`mb-1 flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm ${
-                selectedId === entry.id
-                  ? "bg-sky-500/20 text-sky-100"
-                  : "text-white/70 hover:bg-white/10"
+              className={`mb-1 flex items-center gap-1 rounded-md ${
+                selectedId === entry.id ? "bg-sky-500/20" : ""
               }`}
-              onClick={() => selectObject(entry.id)}
             >
-              <span className="truncate">{entry.name}</span>
-            </button>
+              <button
+                type="button"
+                className={`min-w-0 flex-1 rounded-md px-2 py-1.5 text-left text-sm ${
+                  selectedId === entry.id
+                    ? "text-sky-100"
+                    : "text-white/70 hover:bg-white/10"
+                }`}
+                onClick={() => selectObject(entry.id)}
+              >
+                <span className="block truncate">{entry.name}</span>
+              </button>
+              {entry.splat ? (
+                <button
+                  type="button"
+                  className="shrink-0 rounded px-1.5 py-1 text-[11px] text-violet-200 hover:bg-violet-400/10 disabled:opacity-40"
+                  onClick={() => void saveSplatToLibrary(entry)}
+                  disabled={Boolean(busy)}
+                  title="把这层泼溅存进素材库（含当前画面预览图）；泼溅进不了 GLB，只能逐层存"
+                >
+                  存库
+                </button>
+              ) : null}
+            </div>
           ))
         )}
         <div className="mt-2 border-t border-white/10 pt-2">

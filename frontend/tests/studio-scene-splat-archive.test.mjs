@@ -32,7 +32,7 @@ test('载入 v1 与 v2，泼溅按 blob URL 交给 Spark 重建并回填变换',
 test('泼溅不进 GLB 导出，纯泼溅场景给出明确提示', () => {
   assert.match(stage, /if \(entry\.splat\) return;/, 'exportGeometry 要跳过泼溅')
   assert.match(stage, /场景里只有泼溅，导出不了 GLB；请先存成场景存档/)
-  assert.match(stage, /场景里只有泼溅，存不了 GLB 素材；请先存成场景存档/)
+  assert.match(stage, /场景里只有泼溅，造不了 GLB 素材；请在左侧对象列表里逐层「存库」，或先存成场景存档/)
 })
 
 test('载入新场景时释放旧泼溅的 GPU 缓冲', () => {
