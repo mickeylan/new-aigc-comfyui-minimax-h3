@@ -49,9 +49,9 @@ test('深度范围按模型包围盒算，没法线的几何体先补法线', ()
   assert.match(stage, /geometry\.computeVertexNormals\(\);/)
 })
 
-test('渲染前藏掉编辑器痕迹与泼溅，渲完 finally 无条件还原', () => {
-  const fn = stage.match(/const exportReference = useCallback\(async \(pass: ReferencePass\) => \{([\s\S]*?)\n  \}, \[\]\);/)
-  assert.ok(fn, '缺 exportReference')
+test('渲一帧前藏掉编辑器痕迹与泼溅，渲完 finally 无条件还原', () => {
+  const fn = stage.match(/const captureReference = useCallback\(async \(pass: ReferencePass\) => \{([\s\S]*?)\n  \}, \[\]\);/)
+  assert.ok(fn, '缺 captureReference')
   const body = fn[1]
 
   // 网格线/地面/gizmo/骨架线不是要被约束的几何
@@ -80,14 +80,15 @@ test('渲染前藏掉编辑器痕迹与泼溅，渲完 finally 无条件还原',
   assert.match(restore[1], /material\.dispose\(\);/)
 })
 
-test('右栏能按三种 pass 导出，出图可预览可下载', () => {  // 三个按钮由标签表驱动，避免 UI 与类型漂移
+test('右栏能按三种 pass 导出，出图可预览可下载', () => {
+  // 三个按钮由标签表驱动，避免 UI 与类型漂移
   assert.match(stage, /\(Object\.keys\(REFERENCE_PASS_LABELS\) as ReferencePass\[\]\)\.map\(\(pass\) => \(/)
   assert.match(stage, /onClick=\{\(\) => void exportReference\(pass\)\}/)
   // 预览 + 下载 + 尺寸/体积提示
   assert.match(stage, /src=\{referenceShot\.url\}/)
   assert.match(stage, /download=\{`\$\{referenceShot\.pass\}-reference\.png`\}/)
-  assert.match(stage, /setReferenceShot\(\{ pass, url, bytes: blob\.size, width, height \}\)/)
-  assert.match(stage, /已生成\$\{REFERENCE_PASS_LABELS\[pass\]\}参考图 \$\{width\}×\$\{height\}/)
+  assert.match(stage, /setReferenceShot\(\{ pass, url, bytes: shot\.blob\.size, width: shot\.width, height: shot\.height \}\)/)
+  assert.match(stage, /已生成\$\{REFERENCE_PASS_LABELS\[pass\]\}参考图 \$\{shot\.width\}×\$\{shot\.height\}/)
   // 换图时释放旧 blob URL
   assert.match(stage, /if \(referenceUrlRef\.current\) URL\.revokeObjectURL\(referenceUrlRef\.current\);/)
   // 未出图时给一句说明，别让面板空着

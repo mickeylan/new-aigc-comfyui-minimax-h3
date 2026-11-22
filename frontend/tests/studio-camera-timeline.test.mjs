@@ -39,13 +39,17 @@ test('四档缓动齐备，回放按每一段自己的时长与曲线走', () =>
   for (const name of ['linear', 'easeInOut', 'easeIn', 'easeOut']) {
     assert.match(stage, new RegExp(`\\b${name}: \\{ label:`), `缺缓动 ${name}`)
   }
-  // 回放不再用统一 1.6 秒，而是逐段取时长、逐段取缓动函数
-  assert.match(stage, /const segments = cameraKeys\.slice\(0, -1\)\.map\(\(from, index\) => \(\{/)
+  // 回放不再用统一 1.6 秒，而是逐段取时长、逐段取缓动函数；
+  // 取样抽成 cameraPathSegments / cameraPathDuration 后，回放与序列导出共用同一条路径。
+  assert.match(stage, /function cameraPathSegments\(keys: CameraKey\[\]\) \{\n  return keys\.slice\(0, -1\)\.map\(\(from, index\) => \(\{/)
   assert.match(stage, /seconds: normalizeCameraDuration\(from\.duration\),/)
   assert.match(stage, /ease: CAMERA_EASINGS\[normalizeCameraEasing\(from\.easing\)\]\.fn,/)
-  assert.match(stage, /const total = segments\.reduce\(\(sum, item\) => sum \+ item\.seconds, 0\);/)
+  assert.match(stage, /return cameraPathSegments\(keys\)\.reduce\(\(sum, item\) => sum \+ item\.seconds, 0\);/)
+  // 回放走同一个取样函数，不再各写一份插值
+  assert.match(stage, /const pose = sampleCameraPath\(cameraKeys, elapsed\);/)
   // 超过总时长时停在最后一段末尾
-  assert.match(stage, /\/\/ 找到当前落在哪一段（超过总时长时停在最后一段的末尾）。/)
+  assert.match(stage, /\/\*\* 按时间从路径上取一个机位；超过总时长停在最后一段末尾。 \*\//)
+  assert.match(stage, /const local = Math\.min\(1, Math\.max\(0, \(elapsed - cursor\) \/ active\.seconds\)\);/)
   assert.doesNotMatch(stage, /const segment = 1\.6;/, '不该再留硬编码的单段时长')
 })
 

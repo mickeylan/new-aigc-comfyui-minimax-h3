@@ -14,6 +14,7 @@ import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { findTemplateId } from "../host/template-cache.js";
 import { FKHelper } from "./posing/FKHelper.js";
+import { createStoreZip } from "./zip.js";
 import AssetLibraryPanel from "./AssetLibraryPanel";
 import { ASSET_DRAG_MIME, assetKind, assetUrl, type LibraryAsset } from "./assetLibrary.js";
 import {
@@ -127,6 +128,48 @@ const REFERENCE_PASS_LABELS: Record<ReferencePass, string> = {
 };
 
 const REFERENCE_BUSY_PREFIX = "正在渲染参考图";
+// 序列帧上限：一按就渲上千帧会把页面卡死，240 帧 ≈ 30 秒 @8fps 已经够当参考。
+const SEQUENCE_MAX_FRAMES = 240;
+const SEQUENCE_FPS_OPTIONS = [6, 8, 12];
+const DEFAULT_SEQUENCE_FPS = 8;
+
+function cameraPathSegments(keys: CameraKey[]) {
+  return keys.slice(0, -1).map((from, index) => ({
+    from,
+    to: keys[index + 1],
+    seconds: normalizeCameraDuration(from.duration),
+    ease: CAMERA_EASINGS[normalizeCameraEasing(from.easing)].fn,
+  }));
+}
+
+function cameraPathDuration(keys: CameraKey[]) {
+  return cameraPathSegments(keys).reduce((sum, item) => sum + item.seconds, 0);
+}
+
+/** 按时间从路径上取一个机位；超过总时长停在最后一段末尾。 */
+function sampleCameraPath(keys: CameraKey[], elapsed: number) {
+  const segments = cameraPathSegments(keys);
+  if (segments.length === 0) return null;
+  let cursor = 0;
+  let active = segments[0];
+  for (const item of segments) {
+    active = item;
+    if (elapsed < cursor + item.seconds) break;
+    cursor += item.seconds;
+  }
+  const local = Math.min(1, Math.max(0, (elapsed - cursor) / active.seconds));
+  const ratio = active.ease(local);
+  const mix = (from: [number, number, number], to: [number, number, number]) =>
+    [
+      from[0] + (to[0] - from[0]) * ratio,
+      from[1] + (to[1] - from[1]) * ratio,
+      from[2] + (to[2] - from[2]) * ratio,
+    ] as [number, number, number];
+  return {
+    position: mix(active.from.position, active.to.position),
+    target: mix(active.from.target, active.to.target),
+  };
+}
 
 /**
  * 参考图专用材质。三种都要盖到场景里所有网格上，渲完必须无条件还原（外面 finally 保证）。
@@ -555,6 +598,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     width: number;
     height: number;
   } | null>(null);
+  // 序列导出的帧率：8fps 够当视频参考，再高只是白白多渲。
+  const [sequenceFps, setSequenceFps] = useState(DEFAULT_SEQUENCE_FPS);
   const [playingPath, setPlayingPath] = useState(false);
   const [poseSlots, setPoseSlots] = useState<{ a: boolean; b: boolean }>({ a: false, b: false });
   const [poseBlend, setPoseBlend] = useState(0);
@@ -1373,14 +1418,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     if (!camera || !controls || cameraKeys.length < 2) return;
     if (cameraPathRef.current !== null) cancelAnimationFrame(cameraPathRef.current);
     // 每段时长与缓动各自独立：改一段不影响别的段，总时长由各段相加。
-    const segments = cameraKeys.slice(0, -1).map((from, index) => ({
-      from,
-      to: cameraKeys[index + 1],
-      seconds: normalizeCameraDuration(from.duration),
-      ease: CAMERA_EASINGS[normalizeCameraEasing(from.easing)].fn,
-    }));
-    if (segments.length === 0) return;
-    const total = segments.reduce((sum, item) => sum + item.seconds, 0);
+    const total = cameraPathDuration(cameraKeys);
+    if (total <= 0) return;
     const started = performance.now();
     // 收尾只走这一条：清 rAF、清兜底定时器、放开按钮。
     const finish = () => {
@@ -1401,28 +1440,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     const step = () => {
       const elapsed = (performance.now() - started) / 1000;
       // 找到当前落在哪一段（超过总时长时停在最后一段的末尾）。
-      let cursor = 0;
-      let active = segments[0];
-      for (const item of segments) {
-        active = item;
-        if (elapsed < cursor + item.seconds) break;
-        cursor += item.seconds;
+      const pose = sampleCameraPath(cameraKeys, elapsed);
+      if (pose) {
+        camera.position.set(...pose.position);
+        controls.target.set(...pose.target);
+        controls.update();
       }
-      const local = Math.min(1, Math.max(0, (elapsed - cursor) / active.seconds));
-      const from = active.from;
-      const to = active.to;
-      const t = active.ease(local);
-      camera.position.set(
-        from.position[0] + (to.position[0] - from.position[0]) * t,
-        from.position[1] + (to.position[1] - from.position[1]) * t,
-        from.position[2] + (to.position[2] - from.position[2]) * t,
-      );
-      controls.target.set(
-        from.target[0] + (to.target[0] - from.target[0]) * t,
-        from.target[1] + (to.target[1] - from.target[1]) * t,
-        from.target[2] + (to.target[2] - from.target[2]) * t,
-      );
-      controls.update();
       if (elapsed >= total) {
         finish();
         return;
@@ -1944,13 +1967,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     [applyLightPreset, beginSplatLodWait, syncObjects],
   );
 
-  const exportReference = useCallback(async (pass: ReferencePass) => {
+  // 渲一帧参考图并取回 PNG：藏编辑器痕迹、换材质、黑底、取图、还原都在这里。
+  // 单帧导出和序列导出共用同一条路径，免得两条路各修一遍。
+  const captureReference = useCallback(async (pass: ReferencePass) => {
     const renderer = rendererRef.current;
     const scene = sceneRef.current;
     const camera = cameraRef.current as THREE.PerspectiveCamera | null;
-    if (!renderer || !scene || !camera) return;
-    setBusy(`${REFERENCE_BUSY_PREFIX}（${REFERENCE_PASS_LABELS[pass]}）…`);
-    setError(null);
+    if (!renderer || !scene || !camera) return null;
     const previousOverride = scene.overrideMaterial;
     const previousBackground = scene.background;
     const hidden: THREE.Object3D[] = [];
@@ -1983,7 +2006,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       scene.children.forEach((child) => {
         if (child instanceof THREE.SkeletonHelper) hide(child);
       });
-      // 泼溅由 Spark 自己光栅化，overrideMaterial 管不到它；混进灰度图会变成彩色噪点。
+      // 泼溅由 Spark 自己光栅化，逐网格换材质管不到它；混进灰度图会变成彩色噪点。
       hide(sparkRef.current);
       const paint = (object: THREE.Object3D) => {
         const mesh = object as THREE.Mesh;
@@ -2019,15 +2042,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         snapshot.toBlob((value) => resolve(value), "image/png");
       });
       if (!blob) throw new Error("取不到参考图（画布为空）");
-      if (referenceUrlRef.current) URL.revokeObjectURL(referenceUrlRef.current);
-      const url = URL.createObjectURL(blob);
-      referenceUrlRef.current = url;
-      setReferenceShot({ pass, url, bytes: blob.size, width, height });
-      setStatus(
-        `已生成${REFERENCE_PASS_LABELS[pass]}参考图 ${width}×${height}（${Math.max(1, Math.round(blob.size / 1024))} KB）`,
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      return { blob, width, height };
     } finally {
       // 无论如何都要还原，否则编辑器会一直停在参考图材质上。
       scene.overrideMaterial = previousOverride;
@@ -2039,10 +2054,88 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         object.visible = true;
       });
       material.dispose();
-      setBusy((current) => (current && current.startsWith(REFERENCE_BUSY_PREFIX) ? null : current));
     }
   }, []);
 
+  const exportReference = useCallback(
+    async (pass: ReferencePass) => {
+      setBusy(`${REFERENCE_BUSY_PREFIX}（${REFERENCE_PASS_LABELS[pass]}）…`);
+      setError(null);
+      try {
+        const shot = await captureReference(pass);
+        if (!shot) return;
+        if (referenceUrlRef.current) URL.revokeObjectURL(referenceUrlRef.current);
+        const url = URL.createObjectURL(shot.blob);
+        referenceUrlRef.current = url;
+        setReferenceShot({ pass, url, bytes: shot.blob.size, width: shot.width, height: shot.height });
+        setStatus(
+          `已生成${REFERENCE_PASS_LABELS[pass]}参考图 ${shot.width}×${shot.height}（${Math.max(1, Math.round(shot.blob.size / 1024))} KB）`,
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy((current) => (current && current.startsWith(REFERENCE_BUSY_PREFIX) ? null : current));
+      }
+    },
+    [captureReference],
+  );
+
+  /** 沿相机路径逐帧渲参考图，打包成一个 zip 下载。 */
+  const exportSequence = useCallback(
+    async (pass: ReferencePass) => {
+      const camera = cameraRef.current as THREE.PerspectiveCamera | null;
+      const controls = controlsRef.current;
+      if (!camera || !controls) return;
+      if (cameraKeys.length < 2) {
+        setError("先记录至少两个机位，序列才有路径可走");
+        return;
+      }
+      const duration = cameraPathDuration(cameraKeys);
+      const fps = sequenceFps;
+      const frames = Math.min(SEQUENCE_MAX_FRAMES, Math.max(1, Math.round(duration * fps)));
+      setError(null);
+      setBusy(`${REFERENCE_BUSY_PREFIX}（序列 0/${frames}）…`);
+      // 导出会一路推相机，结束后必须放回原处，否则用户回到编辑器发现机位跑了。
+      const savedPosition = camera.position.clone();
+      const savedTarget = controls.target.clone();
+      const entries: Array<{ name: string; data: Uint8Array }> = [];
+      try {
+        for (let index = 0; index < frames; index += 1) {
+          const sample = sampleCameraPath(cameraKeys, index / fps);
+          if (!sample) break;
+          camera.position.set(...sample.position);
+          controls.target.set(...sample.target);
+          controls.update();
+          const shot = await captureReference(pass);
+          if (!shot) break;
+          entries.push({
+            name: `${pass}-${String(index).padStart(3, "0")}.png`,
+            data: new Uint8Array(await shot.blob.arrayBuffer()),
+          });
+          setBusy(`${REFERENCE_BUSY_PREFIX}（序列 ${index + 1}/${frames}）…`);
+        }
+        if (entries.length === 0) throw new Error("没有取到任何帧");
+        const zip = createStoreZip(entries);
+        const url = URL.createObjectURL(new Blob([zip], { type: "application/zip" }));
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${pass}-sequence-${entries.length}f.zip`;
+        link.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+        setStatus(
+          `已导出${REFERENCE_PASS_LABELS[pass]}序列 ${entries.length} 帧（${Math.max(1, Math.round(zip.byteLength / 1024 / 1024))} MB）`,
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        camera.position.copy(savedPosition);
+        controls.target.copy(savedTarget);
+        controls.update();
+        setBusy((current) => (current && current.startsWith(REFERENCE_BUSY_PREFIX) ? null : current));
+      }
+    },
+    [cameraKeys, captureReference, sequenceFps],
+  );
   const closeAiMenu = useCallback(() => {
     if (aiMenuRef.current) aiMenuRef.current.open = false;
   }, []);
@@ -2862,6 +2955,40 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                 onClick={() => void exportReference(pass)}
                 disabled={Boolean(busy)}
                 className="flex-1 rounded-md bg-white/5 px-2 py-1 text-xs text-white/70 hover:bg-white/10 disabled:opacity-40"
+              >
+                {REFERENCE_PASS_LABELS[pass]}
+              </button>
+            ))}
+          </div>
+          <div className="mt-1 flex items-center gap-1 px-1">
+            <span className="text-[11px] text-white/40">序列</span>
+            <select
+              value={sequenceFps}
+              onChange={(event) => setSequenceFps(Number(event.target.value) || DEFAULT_SEQUENCE_FPS)}
+              className="rounded border border-white/10 bg-black/30 px-1 py-0.5 text-[11px] text-white/70"
+            >
+              {SEQUENCE_FPS_OPTIONS.map((value) => (
+                <option key={value} value={value}>
+                  {value} fps
+                </option>
+              ))}
+            </select>
+            <span className="text-[11px] text-white/35">
+              {cameraKeys.length < 2
+                ? "先记录两个机位"
+                : `${Math.min(
+                    SEQUENCE_MAX_FRAMES,
+                    Math.max(1, Math.round(cameraPathDuration(cameraKeys) * sequenceFps)),
+                  )} 帧`}
+            </span>
+            {(["clay", "normal", "depth"] as ReferencePass[]).map((pass) => (
+              <button
+                key={pass}
+                type="button"
+                onClick={() => void exportSequence(pass)}
+                disabled={Boolean(busy) || cameraKeys.length < 2}
+                title={`沿相机路径导出${REFERENCE_PASS_LABELS[pass]}序列（zip）`}
+                className="rounded-md bg-white/5 px-1.5 py-0.5 text-[11px] text-white/60 hover:bg-white/10 disabled:opacity-40"
               >
                 {REFERENCE_PASS_LABELS[pass]}
               </button>
