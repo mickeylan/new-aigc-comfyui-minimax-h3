@@ -146,6 +146,7 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&models.CharacterVoiceExtraction{},
 		&models.SceneSubtitleCheck{},
 		&models.SceneContinuity{},
+		&models.SceneArchive{},
 	); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}

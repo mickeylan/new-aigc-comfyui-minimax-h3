@@ -219,6 +219,10 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/scenes/:sid/video/prompt/confirm", svc.HandleConfirmSceneVideoPrompt)
 	r.PUT("/api/projects/:id/scenes/:sid/video/prompt", svc.HandleUpdateSceneVideoPrompt)
 	r.POST("/api/projects/:id/scenes/:sid/video/frame-upload", svc.HandleUploadSceneVideoFrame)
+	// 3D 场景编辑器的存档：JSON 落在 data/scene-archives，表里只存元数据
+	r.POST("/api/scene-archives", svc.HandleCreateSceneArchive)
+	r.GET("/api/scene-archives", svc.HandleListSceneArchives)
+	r.GET("/api/scene-archives/:id", svc.HandleGetSceneArchive)
 	// 预览代理与帧精确定位元数据（只读源视频，不改 Scene）
 	r.GET("/api/projects/:id/scenes/:sid/media-info", svc.HandleSceneMediaInfo)
 	r.GET("/api/projects/:id/scenes/:sid/proxy", svc.HandleGetSceneProxy)
