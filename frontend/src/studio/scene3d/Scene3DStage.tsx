@@ -43,6 +43,7 @@ import {
   groundPathLength,
   groundPathPointAt,
   groundPathYaw,
+  MAX_GROUND_VIAS,
   normalizeGroundPath,
   toGroundPath,
   type GroundPoint,
@@ -328,8 +329,8 @@ interface SceneDocument {
   splats?: SplatDocument[];
   /** 相机关键帧序列；v3 起入库，v1/v2 存档没有这个字段。 */
   cameraKeys?: CameraKey[];
-  /** 地面 A/B 落点（via 为可选途经点，走曲线时才写）；老存档没有就按没有处理。 */
-  groundPath?: { start: GroundPoint; end: GroundPoint; via?: GroundPoint } | null;
+  /** 地面 A/B 落点（vias 是 0–3 个途经点，走曲线时才写）；老存档没有就按没有处理。 */
+  groundPath?: { start: GroundPoint; end: GroundPoint; vias?: GroundPoint[] } | null;
   /** 角色沿 A→B 移动的计划：谁走、走多久、相机要不要跟拍。没有落点时不写。 */
   move?: { targetName: string; seconds: number; follow?: boolean } | null;
   model: { name: string; data: string };
@@ -670,7 +671,11 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [material, setMaterial] = useState<MaterialSettings>(DEFAULT_MATERIAL);
   const [cameraKeys, setCameraKeys] = useState<CameraKey[]>([]);
   // 地面落点：先分别记，两个都有才算一条路径（只点 A 时不显示距离）。
+  // vias 是追加的途经点（0–3 个），曲线会穿过每一个。
   const [groundPoints, setGroundPoints] = useState<GroundPoints>({ start: null, end: null });
+  // 拾取回调在初始化 effect 的闭包里，读 state 会读到旧值：给个镜像。
+  const groundPointsRef = useRef<GroundPoints>(groundPoints);
+  groundPointsRef.current = groundPoints;
   // 正在等用户在画布上点哪一端；null = 没在选点。
   const [placingGround, setPlacingGround] = useState<"start" | "via" | "end" | null>(null);
   // 沿 A→B 移动的对象（按 id 指向场景对象）与走完全程的秒数。
@@ -930,9 +935,25 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         const point = clampGroundPoint([onPlane.x, 0.02, onPlane.z]);
         placingGroundRef.current = null;
         setPlacingGround(null);
+        if (placing === "via") {
+          // 途经点是追加：连点几下就能拉出「绕桌子再避开柱子」的多段走位。
+          const taken = groundPointsRef.current?.vias?.length ?? 0;
+          if (taken >= MAX_GROUND_VIAS) {
+            setStatus(`途经点最多 ${MAX_GROUND_VIAS} 个，想改就「撤销」或「清除途经」`);
+            return;
+          }
+          setGroundPoints((current) => ({
+            ...current,
+            vias: [...(current.vias ?? []), point].slice(0, MAX_GROUND_VIAS),
+          }));
+          setStatus(
+            `途经点 ${Math.min(taken + 1, MAX_GROUND_VIAS)} 已记录（${point[0].toFixed(1)}, ${point[2].toFixed(1)}）`,
+          );
+          return;
+        }
         setGroundPoints((current) => ({ ...current, [placing]: point }));
         setStatus(
-          `${placing === "start" ? "A" : placing === "end" ? "B" : "途经点"} 已记录（${point[0].toFixed(1)}, ${point[2].toFixed(1)}）`,
+          `${placing === "start" ? "A" : "B"} 已记录（${point[0].toFixed(1)}, ${point[2].toFixed(1)}）`,
         );
         return;
       }
@@ -1096,11 +1117,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     if (groundPoints.start) ring(groundPoints.start, 0x22c55e);
     if (groundPoints.end) ring(groundPoints.end, 0xf59e0b);
     // 途经点：蓝色，路径会绕它拐一下。
-    if (groundPoints.via) ring(groundPoints.via, 0x38bdf8);
+    // 途经点：蓝色，路径会穿过每一个（最多 MAX_GROUND_VIAS 个）。
+    for (const point of groundPoints.vias ?? []) ring(point, 0x38bdf8);
     const path = toGroundPath(groundPoints);
     if (path) {
       // 有途经点就沿曲线采样，没有就是一条直线；虚线长度由 computeLineDistances 算。
-      const samples = path.via ? 32 : 1;
+      const samples = path.vias?.length ? 32 * path.vias.length : 1;
       const points: THREE.Vector3[] = [];
       for (let index = 0; index <= samples; index += 1) {
         const at = groundPathPointAt(path, index / samples);
@@ -2274,11 +2296,11 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         setMoveSeconds(normalizeMoveSeconds(savedMove?.seconds));
         setFollowMover(Boolean(savedMove?.follow));
         applyLightPreset(doc.lightPreset);
-        // 落点恢复（via 是可选途经点：老存档没有就是直线走位）
+        // 落点恢复（vias 是可选途经点数组：老存档没有、或只有单个 via，都由 normalizeGroundPath 归一）
         setGroundPoints({
           start: savedPath?.start ?? null,
           end: savedPath?.end ?? null,
-          via: savedPath?.via ?? null,
+          vias: savedPath?.vias ?? null,
         });
         placingGroundRef.current = null;
         setPlacingGround(null);
@@ -3607,7 +3629,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                 }}
                 title={
                   which === "via"
-                    ? "在地面上点一个途经点，A→B 的走位会弯成经过它的曲线（绕桌子/绕柱子时用）"
+                    ? `在地面上点途经点（最多 ${MAX_GROUND_VIAS} 个），A→B 的走位会弯成穿过每一个的曲线（绕桌子/绕柱子时用）`
                     : which === "start"
                       ? "在地面上点起点 A"
                       : "在地面上点终点 B"
@@ -3628,22 +3650,43 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                 setPlacingGround(null);
                 setGroundPoints({ start: null, end: null });
               }}
-              disabled={!groundPoints.start && !groundPoints.end && !groundPoints.via}
+              disabled={!groundPoints.start && !groundPoints.end && !(groundPoints.vias?.length ?? 0)}
               className="flex-1 rounded-md bg-white/5 px-2 py-1 text-xs text-white/70 hover:bg-white/10 disabled:opacity-40"
             >
               清除
             </button>
           </div>
-          {groundPoints.via ? (
+          {(groundPoints.vias?.length ?? 0) > 0 ? (
             <div className="mt-1 flex items-center gap-1 px-1">
-              <span className="text-[11px] text-sky-300/70">已设途经点</span>
+              <span className="text-[11px] text-sky-300/70">
+                途经点 {groundPoints.vias?.length}/{MAX_GROUND_VIAS}
+              </span>
               <button
                 type="button"
-                onClick={() => setGroundPoints((current) => ({ ...current, via: null }))}
-                title="去掉途经点，回到直线 A→B"
+                onClick={() => {
+                  // 状态条也更新：否则「最多 3 个」这类提示会一直挂着，看不出撤销生效没有。
+                  const left = Math.max(0, (groundPoints.vias?.length ?? 0) - 1);
+                  setGroundPoints((current) => ({
+                    ...current,
+                    vias: (current.vias ?? []).slice(0, -1),
+                  }));
+                  setStatus(left > 0 ? `已撤掉最后一个途经点，还剩 ${left} 个` : "已撤掉全部途经点，走直线 A→B");
+                }}
+                title="撤掉最后一个途经点"
                 className="rounded-md bg-white/5 px-1.5 py-0.5 text-[11px] text-white/60 hover:bg-white/10"
               >
-                走直线
+                撤销
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setGroundPoints((current) => ({ ...current, vias: [] }));
+                  setStatus("已去掉全部途经点，走直线 A→B");
+                }}
+                title="去掉全部途经点，回到直线 A→B"
+                className="rounded-md bg-white/5 px-1.5 py-0.5 text-[11px] text-white/60 hover:bg-white/10"
+              >
+                清除途经
               </button>
             </div>
           ) : null}
@@ -3710,9 +3753,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                     ? " A（绿，起点）"
                     : placingGround === "end"
                       ? " B（橙，终点）"
-                      : "途经点（蓝，路径会穿过它）"
+                      : `第 ${(groundPoints.vias?.length ?? 0) + 1} 个途经点（蓝，路径会穿过它）`
                 }。`
-              : `A=起点（绿）、B=终点（橙）、途经点（蓝，可选）。选好谁在走，导出序列时角色会沿这条路径移动，相机按机位路径走；勾上「跟拍」相机就跟着角色平移。`}
+              : `A=起点（绿）、B=终点（橙）、途经点（蓝，最多 ${MAX_GROUND_VIAS} 个，曲线穿过每一个）。选好谁在走，导出序列时角色会沿这条路径移动，相机按机位路径走；勾上「跟拍」相机就跟着角色平移。`}
           </p>
         </section>
 

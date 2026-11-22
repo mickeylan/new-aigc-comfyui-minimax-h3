@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 
 const {
   GROUND_EXTENT,
+  MAX_GROUND_VIAS,
   clampGroundPoint,
   groundPathFollowDelta,
   groundPathLength,
@@ -118,11 +119,11 @@ test('移动计划进出存档：按名字找对象（载入后 id 会变）', (
 })
 
 test('地面路径进出存档：写入可选字段、载入时校验、UI 能点选/清除', () => {
-  // 存档字段仍是 v3 的可选字段（via 是有途经点时才写的可选子字段），老存档没有就清空
-  assert.match(stage, /groundPath\?: \{ start: GroundPoint; end: GroundPoint; via\?: GroundPoint \} \| null;/)
+  // 存档字段仍是 v3 的可选字段（vias 是有途经点时才写的可选子字段），老存档没有就清空
+  assert.match(stage, /groundPath\?: \{ start: GroundPoint; end: GroundPoint; vias\?: GroundPoint\[\] \} \| null;/)
   assert.match(stage, /groundPath: toGroundPath\(groundPoints\),/)
   assert.match(stage, /const savedPath = normalizeGroundPath\(doc\.groundPath\);/)
-  assert.match(stage, /via: savedPath\?\.via \?\? null,/)
+  assert.match(stage, /vias: savedPath\?\.vias \?\? null,/)
   // 只点一端时不算路径，UI 上也不显示距离
   assert.match(stage, /const path = toGroundPath\(groundPoints\);/)
   assert.match(stage, /path \? `\$\{groundPathLength\(path\)\.toFixed\(1\)\} m` : "起点 \/ 终点"/)
@@ -132,13 +133,13 @@ test('地面路径进出存档：写入可选字段、载入时校验、UI 能�
   assert.match(stage, /new THREE\.LineDashedMaterial\(\{ color: 0x94a3b8, dashSize: 0\.18, gapSize: 0\.12 \}\)/)
 })
 
-// 2026-11-22 新增：途经点。直线走位绕不过桌子/柱子，而「角色沿路径移动」
-// 恰好是 3D 参考片里最需要被复刻的东西，所以给 A→B 加一个可选途经点，走二次贝塞尔。
-test('有途经点时走二次贝塞尔并穿过途经点：端点不动、中点就是途经点、长度变长', () => {
-  const path = { start: [0, 0.02, 0], end: [4, 0.02, 0], via: [2, 0.02, 3] }
+// 2026-11-22 新增：途经点（0–3 个）。直线走位绕不过桌子/柱子，而「角色沿路径移动」
+// 恰好是 3D 参考片里最需要被复刻的东西。曲线用向心 Catmull-Rom，穿过每一个骨架点。
+test('单个途经点：曲线穿过它、端点不动、长度变长、两侧同向偏', () => {
+  const path = { start: [0, 0.02, 0], end: [4, 0.02, 0], vias: [[2, 0.02, 3]] }
   assert.deepEqual(groundPathPointAt(path, 0), [0, 0.02, 0])
   assert.deepEqual(groundPathPointAt(path, 1), [4, 0.02, 0])
-  // 控制点取 2V-(A+B)/2，所以 t=0.5 正好踩在途经点上（角色真的绕过障碍物，不是擦里侧）
+  // 对称放置时途经点正好在 t=0.5 的参数位置（向心参数化按 距离^0.5 分段）
   const mid = groundPathPointAt(path, 0.5)
   assert.ok(Math.abs(mid[0] - 2) < 1e-9, `中点 x 应等于途经点，实际 ${mid[0]}`)
   assert.ok(Math.abs(mid[2] - 3) < 1e-9, `中点 z 应等于途经点，实际 ${mid[2]}`)
@@ -149,41 +150,95 @@ test('有途经点时走二次贝塞尔并穿过途经点：端点不动、中�
   assert.ok(groundPathLength(path) > 5, `弧长应明显大于直线，实际 ${groundPathLength(path)}`)
 })
 
-test('途经点的朝向按曲线切线算，不是固定的 A→B 方向', () => {
-  const path = { start: [0, 0.02, 0], end: [4, 0.02, 0], via: [0, 0.02, 3] }
-  // 控制点 C = 2V-(A+B)/2 = (-2, 0, 6)；t=0 切线 = 2(C-A) = (-4, 0, 12)
-  assert.ok(Math.abs(groundPathYaw(path, 0) - Math.atan2(-4, 12)) < 1e-9)
-  // t=1 切线 = 2(B-C) = (12, 0, -12)
-  assert.ok(Math.abs(groundPathYaw(path, 1) - Math.atan2(12, -12)) < 1e-9)
-  // t=0.5 切线 = (C-A)+(B-C) = B-A → 正 +X
-  assert.ok(Math.abs(groundPathYaw(path, 0.5) - Math.PI / 2) < 1e-9)
+test('曲线穿过每一个途经点（最多 3 个），骨架点都落在曲线上', () => {
+  const path = {
+    start: [-4, 0.02, -4],
+    end: [4, 0.02, 4],
+    vias: [
+      [-2, 0.02, 2],
+      [0, 0.02, -2],
+      [2, 0.02, 2],
+    ],
+  }
+  const knots = [path.start, ...path.vias, path.end]
+  const nearest = (knot) => {
+    let best = Infinity
+    for (let index = 0; index <= 4000; index += 1) {
+      const at = groundPathPointAt(path, index / 4000)
+      best = Math.min(best, Math.hypot(at[0] - knot[0], at[1] - knot[1], at[2] - knot[2]))
+    }
+    return best
+  }
+  // 采样步长 1/4000，最近距离只应剩采样误差（< 5e-3）
+  for (const knot of knots) assert.ok(nearest(knot) < 5e-3, `骨架点 ${knot} 没落在曲线上`)
+  // 弯曲的路径比 11.3 的直线长，但也不会绕成两三倍
+  const length = groundPathLength(path)
+  assert.ok(length > 11.3 && length < 26, `曲线长度不合理：${length}`)
+  // 过冲受控：不超出骨架点包络 0.5 m（向心参数化的意义就在这，均匀参数化会甩出去）
+  for (let index = 0; index <= 2000; index += 1) {
+    const at = groundPathPointAt(path, index / 2000)
+    assert.ok(Math.abs(at[0]) <= 4.5 && Math.abs(at[2]) <= 4.5, `曲线过冲太远：${at}`)
+  }
 })
 
-test('途经点与端点重合、或老存档没有 via，都退回直线（不产生零长度曲线）', () => {
+test('途经点的朝向按曲线切线算：起步朝第一个途经点，不是固定的 A→B 方向', () => {
+  const path = { start: [0, 0.02, 0], end: [4, 0.02, 0], vias: [[0, 0.02, 3]] }
+  // 起点切线 = 指向第一个途经点 (0, 3) → yaw 0（差分数值求导，容差留 1e-2 ≈ 0.6°）
+  assert.ok(Math.abs(groundPathYaw(path, 0)) < 1e-2, `起步应朝 +Z，实际 ${groundPathYaw(path, 0)}`)
+  // 收尾切线 = 从途经点指向终点 (4, -3)
+  assert.ok(Math.abs(groundPathYaw(path, 1) - Math.atan2(4, -3)) < 1e-2)
+  // 对称单途经点：过途经点那一刻朝向正好是 +X
+  const symmetric = { start: [0, 0.02, 0], end: [4, 0.02, 0], vias: [[2, 0.02, 3]] }
+  assert.ok(Math.abs(groundPathYaw(symmetric, 0.5) - Math.PI / 2) < 1e-2)
+})
+
+test('老存档的单数 via 仍能读出来；跟端点重合的途经点被丢掉', () => {
   const base = { start: [0, 0.02, 0], end: [4, 0.02, 0] }
-  assert.deepEqual(normalizeGroundPath({ ...base, via: [0, 0.02, 0] }), base)
-  assert.deepEqual(normalizeGroundPath({ ...base, via: [4, 0.02, 0] }), base)
-  assert.deepEqual(normalizeGroundPath({ ...base, via: null }), base)
-  assert.deepEqual(normalizeGroundPath(base), base)
+  // 老存档：单个 via → 归一成一个元素的 vias
+  assert.deepEqual(normalizeGroundPath({ ...base, via: [2, 0.02, 3] }), {
+    ...base,
+    vias: [[2, 0.02, 3]],
+  })
+  // 与端点/前一个途经点重合的丢掉，非法项丢掉
+  assert.deepEqual(normalizeGroundPath({ ...base, vias: [[0, 0.02, 0], [4, 0.02, 0]] }), base)
+  assert.deepEqual(normalizeGroundPath({ ...base, vias: [['x', 0, 0]] }), base)
+  assert.deepEqual(normalizeGroundPath({ ...base, vias: [] }), base)
+  // 超过上限截断到 3 个
+  const many = normalizeGroundPath({
+    ...base,
+    vias: [
+      [0.5, 0.02, 1],
+      [1.5, 0.02, 1],
+      [2.5, 0.02, 1],
+      [3.5, 0.02, 1],
+    ],
+  })
+  assert.equal(many?.vias?.length, MAX_GROUND_VIAS)
+  assert.equal(MAX_GROUND_VIAS, 3)
   // 跟拍位移仍只取水平分量：镜头不会跟着角色上下飘
-  const path = toGroundPath({ start: [0, 0.5, 0], end: [4, 0.5, 0], via: [2, 0.5, 2] })
-  assert.ok(path?.via, 'via 应该被保留')
+  const path = toGroundPath({ start: [0, 0.5, 0], end: [4, 0.5, 0], vias: [[2, 0.5, 2]] })
+  assert.ok(path?.vias?.length, 'vias 应该被保留')
   const delta = groundPathFollowDelta(path, 1)
   assert.equal(delta[1], 0)
   assert.ok(Math.abs(delta[0] - 4) < 1e-9)
   assert.ok(Math.abs(delta[2]) < 1e-9)
 })
 
-test('编辑器接上途经点：第三个落点按钮、蓝色标记、曲线采样、存档字段', () => {
+test('编辑器接上多途经点：追加落点、上限提示、撤销/清除、蓝色标记', () => {
   assert.match(stage, /\{\(\["start", "via", "end"\] as const\)\.map\(\(which\) => \(/)
   assert.match(stage, /which === "start" \? "点选 A" : which === "via" \? "途经" : "点选 B"/)
-  assert.match(stage, /if \(groundPoints\.via\) ring\(groundPoints\.via, 0x38bdf8\);/)
-  // 有途经点才按 32 段采样，直线仍是两点
-  assert.match(stage, /const samples = path\.via \? 32 : 1;/)
-  // 「走直线」把途经点清掉
-  assert.match(stage, /onClick=\{\(\) => setGroundPoints\(\(current\) => \(\{ \.\.\.current, via: null \}\)\)\}/)
-  // 落点 toast 区分 A / B / 途经点
-  assert.match(stage, /\$\{placing === "start" \? "A" : placing === "end" \? "B" : "途经点"\} 已记录/)
-  // 落点提示语同样区分三者（选了途经却提示「B」会让人以为点错按钮）
-  assert.match(stage, /: "途经点（蓝，路径会穿过它）"\n/)
+  // 途经点是追加，并且挡住第 4 个
+  assert.match(stage, /if \(placing === "via"\) \{/)
+  assert.match(stage, /if \(taken >= MAX_GROUND_VIAS\) \{/)
+  assert.match(stage, /vias: \[\.\.\.\(current\.vias \?\? \[\]\), point\]\.slice\(0, MAX_GROUND_VIAS\),/)
+  // 标记逐个画，路径按途经点数量加密采样
+  assert.match(stage, /for \(const point of groundPoints\.vias \?\? \[\]\) ring\(point, 0x38bdf8\);/)
+  assert.match(stage, /const samples = path\.vias\?\.length \? 32 \* path\.vias\.length : 1;/)
+  // 撤销 = 去掉最后一个（并更新状态条）；清除途经 = 清空数组
+  assert.match(stage, /vias: \(current\.vias \?\? \[\]\)\.slice\(0, -1\),/)
+  assert.match(stage, /setStatus\(left > 0 \? `已撤掉最后一个途经点，还剩 \$\{left\} 个` : "已撤掉全部途经点，走直线 A→B"\);/)
+  assert.match(stage, /onClick=\{\(\) => \{\n\s+setGroundPoints\(\(current\) => \(\{ \.\.\.current, vias: \[\] \}\)\);\n\s+setStatus\("已去掉全部途经点，走直线 A→B"\);/)
+  // 落点 toast 与提示语区分 A / B / 第 N 个途经点
+  assert.match(stage, /`途经点 \$\{Math\.min\(taken \+ 1, MAX_GROUND_VIAS\)\} 已记录/)
+  assert.match(stage, /`第 \$\{\(groundPoints\.vias\?\.length \?\? 0\) \+ 1\} 个途经点（蓝，路径会穿过它）`/)
 })
