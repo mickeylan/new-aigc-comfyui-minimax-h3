@@ -235,6 +235,8 @@ const SPLAT_DETAIL_PRESETS = [
 
 /** 泼溅首次出现前 Spark 要在线程里建 LoD 树，大文件会有几秒空白，用这条占住 busy。 */
 const SPLAT_LOD_BUSY = "正在建泼溅细节层…";
+/** onDirty 通常几十秒内就来；万一 Spark 没触发，到时自己收掉，别把界面锁死。 */
+const SPLAT_LOD_TIMEOUT_MS = 90_000;
 
 /** 图生 3D 高斯泼溅：走 TripoSplat 模板，输出 .spz。 */
 async function createImageToSplatTask(
@@ -407,6 +409,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const splatDetailRef = useRef<number>(SPLAT_DETAIL_PRESETS[1].count);
   // 是否还在等 Spark 建细节层（只置一次，onDirty 来第一发就收掉）。
   const splatLodPendingRef = useRef(false);
+  const splatLodTimerRef = useRef<number | null>(null);
   // 画布指针事件挂在初始化 effect 里，读 ref 才能拿到最新的摆姿开关。
   const posingRef = useRef(false);
 
@@ -757,6 +760,17 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
 
   // 泼溅：Spark 自己解码，拿到 mesh 后交给 addObject 统一做归一化与列表登记。
   // 贴地交给 normalizeObject，这里不再重复摆一次。
+  // 挂忙态 + 起一个兜底计时器：两条载入路径共用，免得各自复制一份。
+  const beginSplatLodWait = useCallback(() => {
+    splatLodPendingRef.current = true;
+    setBusy(SPLAT_LOD_BUSY);
+    if (splatLodTimerRef.current !== null) window.clearTimeout(splatLodTimerRef.current);
+    splatLodTimerRef.current = window.setTimeout(() => {
+      splatLodPendingRef.current = false;
+      setBusy((current) => (current === SPLAT_LOD_BUSY ? null : current));
+    }, SPLAT_LOD_TIMEOUT_MS);
+  }, []);
+
   const loadSplatUrl = useCallback(
     async (url: string, name: string, dropPoint?: THREE.Vector3 | null) => {
       const mesh = await loadSplatMesh(url, { placeOnGround: false });
@@ -764,10 +778,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       // 存下来源地址，场景存档时按它把 .spz 字节取回来内嵌。
       if (entry) entry.splatUrl = url;
       // LoD 树要建完才能画第一帧，这几秒挂上提示，等 SparkRenderer.onDirty 来收。
-      splatLodPendingRef.current = true;
-      setBusy(SPLAT_LOD_BUSY);
+      beginSplatLodWait();
     },
-    [addObject],
+    [addObject, beginSplatLodWait],
   );
 
   // 从素材库取资产放进来：glb/gltf 直接加载，obj 要取文本再解析，泼溅交给 Spark 解码。
@@ -1587,10 +1600,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         }
         objectsRef.current = [...entries, ...splatEntries];
         // 载入的存档带泼溅：同样要等 LoD 树建完才能画，挂上提示等 onDirty 收。
-        if (splatEntries.length > 0) {
-          splatLodPendingRef.current = true;
-          setBusy(SPLAT_LOD_BUSY);
-        }
+        if (splatEntries.length > 0) beginSplatLodWait();
         syncObjects();
         selectObject(entries[0]?.id ?? null);
         applyLightPreset(doc.lightPreset);
@@ -1613,7 +1623,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         setBusy((current) => (current === SPLAT_LOD_BUSY ? current : null));
       }
     },
-    [applyLightPreset, syncObjects],
+    [applyLightPreset, beginSplatLodWait, syncObjects],
   );
 
   const closeAiMenu = useCallback(() => {

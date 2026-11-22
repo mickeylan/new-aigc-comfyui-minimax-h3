@@ -27,20 +27,21 @@ test('右栏有「泼溅细节」四个按钮，点了改档位', () => {
   assert.match(stage, /splatDetail === preset\.count/)
 })
 
-// LoD 打开后首帧要等 Spark 把细节树建完，大泼溅会空白几秒，必须给提示。
+// LoD 打开后首帧要等 Spark 把细节树建完，大泼溅会空白几十秒，必须给提示。
 test('泼溅首次出现前挂「正在建细节层」提示，建完由 onDirty 收掉', () => {
   assert.match(stage, /const SPLAT_LOD_BUSY = "正在建泼溅细节层…"/)
-  // 放素材入库与载入存档两条路径都要挂
-  assert.match(stage, /setBusy\(SPLAT_LOD_BUSY\);/, '缺挂忙态的地方')
+  // 两条路径共用 beginSplatLodWait，不再各写一份
+  assert.match(stage, /const beginSplatLodWait = useCallback\(\(\) => \{/)
+  assert.match(stage, /setBusy\(SPLAT_LOD_BUSY\);/)
   assert.equal(
-    (stage.match(/setBusy\(SPLAT_LOD_BUSY\)/g) || []).length,
+    (stage.match(/beginSplatLodWait\(\)/g) || []).length,
     2,
-    '放入泼溅与载入存档各一处',
+    '放入泼溅、载入存档各调 1 处（定义那行不带括号）',
   )
   // onDirty 只在正是这条提示时清，别把别的 busy 顺手抹掉
   assert.match(
     stage,
-    /onDirty: \(\) => \{[\s\S]{0,200}setBusy\(\(current\) => \(current === SPLAT_LOD_BUSY \? null : current\)\)/,
+    /onDirty: \(\) => \{[\s\S]{0,240}setBusy\(\(current\) => \(current === SPLAT_LOD_BUSY \? null : current\)\)/,
   )
   // 两个 finally 都不能提前把泼溅的忙态清成 null
   assert.equal(
@@ -48,4 +49,19 @@ test('泼溅首次出现前挂「正在建细节层」提示，建完由 onDirty
     2,
     '放入素材与载入存档的 finally 各一处守卫',
   )
+})
+
+// 真机上遇到过 onDirty 一直不来、界面被 busy 锁住 100 秒以上的情况，加兜底。
+test('等细节层带 90 秒兜底，不会把界面锁死', () => {
+  assert.match(stage, /const SPLAT_LOD_TIMEOUT_MS = 90_000;/)
+  const fn = stage.match(/const beginSplatLodWait = useCallback\(\(\) => \{([\s\S]*?)\n  \}, \[\]\);/)
+  assert.ok(fn, '缺 beginSplatLodWait')
+  const body = fn[1]
+  assert.match(body, /splatLodPendingRef\.current = true;/)
+  assert.match(body, /window\.setTimeout\(/, '要有兜底计时器')
+  assert.match(body, /}, SPLAT_LOD_TIMEOUT_MS\);/, '用常量，不写魔数')
+  // 计时器要能覆盖：连着放两个泼溅时不能留下上一个
+  assert.match(body, /if \(splatLodTimerRef\.current !== null\) window\.clearTimeout\(splatLodTimerRef\.current\);/)
+  // 兜底里也要把 pending 放掉，否则缩略图截图会一直等
+  assert.match(body, /splatLodPendingRef\.current = false;/)
 })
