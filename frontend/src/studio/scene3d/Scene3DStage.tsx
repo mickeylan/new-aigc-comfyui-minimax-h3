@@ -238,6 +238,24 @@ const SPLAT_DETAIL_PRESETS = [
 /** 「自动」从哪一档起步：均衡。之后由帧率守护上下调。 */
 const SPLAT_DETAIL_AUTO_START = 1;
 
+/** 素材库缩略图不需要 4K：最长边缩到 512，PNG 体积能小一个数量级。 */
+const THUMBNAIL_MAX_EDGE = 512;
+
+/**
+ * 把整张画布缩成缩略图。必须在 render 之后的同一个任务里调用：
+ * drawImage 是同步取像素的，等 toBlob 期间缓冲被清也不影响结果。
+ */
+async function shrinkToPngBlob(canvas: HTMLCanvasElement, maxEdge = THUMBNAIL_MAX_EDGE): Promise<Blob | null> {
+  const scale = Math.min(1, maxEdge / Math.max(canvas.width, canvas.height));
+  const out = document.createElement("canvas");
+  out.width = Math.max(1, Math.round(canvas.width * scale));
+  out.height = Math.max(1, Math.round(canvas.height * scale));
+  const ctx = out.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(canvas, 0, 0, out.width, out.height);
+  return await new Promise((resolve) => out.toBlob((blob) => resolve(blob), "image/png"));
+}
+
 /** 泼溅首次出现前 Spark 要在线程里建 LoD 树，大文件会有几秒空白，用这条占住 busy。 */
 const SPLAT_LOD_BUSY = "正在建泼溅细节层…";
 /** onDirty 通常几十秒内就来；万一 Spark 没触发，到时自己收掉，别把界面锁死。 */
@@ -1502,6 +1520,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       }
       // 取景后必须在同一个任务里立刻抓，中间不能 await，否则绘制缓冲可能已被清掉。
       if (scene && camera) renderer.render(scene, camera);
+      const shrunk = await shrinkToPngBlob(canvas);
+      if (shrunk) return shrunk;
+      // 极少数环境拿不到 2D 上下文时，退回整张原图，别让存库直接失败。
       const dataUrl = canvas.toDataURL("image/png");
       return await (await fetch(dataUrl)).blob();
     } finally {

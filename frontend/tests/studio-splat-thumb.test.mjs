@@ -39,6 +39,24 @@ test('缩略图自动取景：临时推相机框住全部对象，截完还原�
   assert.ok(!/\n\s*await /.test(slice), '取景与取图之间不能有 await（注释里提到的不算）')
 })
 
+test('缩略图缩到最长边 512，不再整张 4K 传上去', () => {
+  assert.match(stage, /const THUMBNAIL_MAX_EDGE = 512;/)
+  const fn = stage.match(/async function shrinkToPngBlob\(([\s\S]*?)\n\}/)
+  assert.ok(fn, '缺 shrinkToPngBlob')
+  const body = fn[1]
+  // 只缩不放
+  assert.match(body, /Math\.min\(1, maxEdge \/ Math\.max\(canvas\.width, canvas\.height\)\)/)
+  // 像素要同步拷到离屏画布，再让 toBlob 慢慢编码
+  assert.match(body, /ctx\.drawImage\(canvas, 0, 0, out\.width, out\.height\);/)
+  assert.ok(
+    body.indexOf('drawImage') < body.indexOf('toBlob'),
+    'drawImage 必须在 toBlob 之前（WebGL 缓冲可能已被清）',
+  )
+  // captureThumbnail 要真的用它，且留了整套原图的退路
+  assert.match(stage, /const shrunk = await shrinkToPngBlob\(canvas\);/)
+  assert.match(stage, /if \(shrunk\) return shrunk;/)
+})
+
 test('两条入素材库的路径都用 captureThumbnail，不再直取 canvas', () => {
   // 保存 GLB 与保存泼溅各一次
   assert.equal(
