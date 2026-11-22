@@ -8,7 +8,7 @@
 |---|---|---|
 | `video-editor/` | [opencut-classic](https://github.com/opencut-app/opencut-classic)（原 opencut-app/opencut 的上一代实现）：时间线、属性面板、素材面板、字体选择器、对话框与编辑器外壳 | MIT |
 | `pagedraw/`、`pagedraw-host/` | ArtCraft（本项目作者自有仓库）：2D 画布外壳、图层与笔刷交互 | 双许可 MIT / Apache-2.0 |
-| `scene3d/` | ArtCraft（本项目作者自有仓库）：3D 场景外壳与变换 gizmo | 双许可 MIT / Apache-2.0 |
+| `scene3d/` | ArtCraft（本项目作者自有仓库）：3D 场景外壳、变换 gizmo 与骨级摆姿（FK） | 双许可 MIT / Apache-2.0 |
 
 opencut-classic 的 MIT 许可要求保留版权声明与许可全文。本项目根目录的 `LICENSE` 只覆盖本仓库自身代码，不替代上游声明，因此移植部分按下列方式声明：
 

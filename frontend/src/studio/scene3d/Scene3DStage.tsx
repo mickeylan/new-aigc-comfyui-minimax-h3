@@ -12,6 +12,14 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { findTemplateId } from "../host/template-cache.js";
+import { FKHelper } from "./posing/FKHelper.js";
+import {
+  applyBonePose,
+  findSkeletonRoot,
+  hasSkeleton,
+  serializeBonePose,
+  type BonePoseNode,
+} from "./posing/bonePose.js";
 
 interface Scene3DStageProps {
   exitTo?: string;
@@ -21,6 +29,10 @@ interface SceneObjectEntry {
   id: string;
   name: string;
   object: THREE.Object3D;
+  /** 骨骼摆姿快照；有骨骼的角色才有，随场景存档一起保存。 */
+  bonePose?: BonePoseNode | null;
+  /** 模型刚载入时的绑定姿势，用于「恢复初始姿势」。 */
+  initialBonePose?: BonePoseNode | null;
 }
 
 type TransformMode = "translate" | "rotate" | "scale";
@@ -58,6 +70,8 @@ interface SceneDocument {
     position: [number, number, number];
     quaternion: [number, number, number, number];
     scale: [number, number, number];
+    /** 骨骼摆姿快照；非角色没有这个字段。 */
+    bonePose?: BonePoseNode | null;
   }>;
   model: { name: string; data: string };
 }
@@ -234,6 +248,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sceneInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const fkRef = useRef<FKHelper | null>(null);
+  // 画布指针事件挂在初始化 effect 里，读 ref 才能拿到最新的摆姿开关。
+  const posingRef = useRef(false);
 
   const [objects, setObjects] = useState<SceneObjectEntry[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -248,6 +265,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [poseSlots, setPoseSlots] = useState<{ a: boolean; b: boolean }>({ a: false, b: false });
   const [poseBlend, setPoseBlend] = useState(0);
   const [transform, setTransform] = useState({ x: 0, y: 0, z: 0, rotateY: 0, scale: 1 });
+  // 骨骼摆姿：posing 开启时画布点击用于选骨，主 gizmo 让位给骨骼 gizmo。
+  const [posing, setPosing] = useState(false);
+  const [posingBones, setPosingBones] = useState(0);
+  const [activeBone, setActiveBone] = useState<string | null>(null);
+  // 选中对象是否有骨骼（决定「骨骼摆姿」入口是否可用）。
+  const [selectedHasSkeleton, setSelectedHasSkeleton] = useState(false);
 
   useEffect(() => {
     document.body.classList.add("studio-theme");
@@ -266,8 +289,27 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     selectedIdRef.current = id;
     setSelectedId(id);
     const transform = transformRef.current;
-    if (!transform) return;
     const entry = objectsRef.current.find((item) => item.id === id);
+
+    // 骨骼摆姿只对当前选中的模型生效：换对象就换 FK 目标，换到没有骨骼的对象则退出摆姿。
+    const skeleton = entry ? hasSkeleton(entry.object) : false;
+    setSelectedHasSkeleton(skeleton);
+    const fk = fkRef.current;
+    if (fk) {
+      if (entry && skeleton && posingRef.current) {
+        setPosingBones(fk.setTarget(entry.object) ? fk.boneCount : 0);
+      } else {
+        fk.clear();
+        setPosingBones(0);
+        setActiveBone(null);
+      }
+      if (!skeleton || !entry) {
+        posingRef.current = false;
+        setPosing(false);
+      }
+    }
+
+    if (!transform) return;
     if (entry) {
       transform.attach(entry.object);
       // 选中的新对象自带材质，面板显示它的真实参数，避免滑块与画面不一致。
@@ -309,7 +351,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       group.name = name;
       group.add(object);
       scene.add(group);
-      const entry = { id: crypto.randomUUID(), name, object: group };
+      const entry: SceneObjectEntry = { id: crypto.randomUUID(), name, object: group };
+      // 带骨骼的模型（Mixamo 角色等）记一份绑定姿势，供摆姿与「恢复初始」使用。
+      if (hasSkeleton(group)) {
+        const bindPose = serializeBonePose(group);
+        entry.bonePose = bindPose;
+        entry.initialBonePose = bindPose;
+      }
       objectsRef.current = [...objectsRef.current, entry];
       syncObjects();
       selectObject(entry.id);
@@ -358,6 +406,42 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     });
     scene.add(transform.getHelper());
     transformRef.current = transform;
+
+    // 骨骼摆姿：红球标骨 + 局部旋转 gizmo，拖动时暂停轨道控制。
+    const fk = new FKHelper({
+      camera,
+      domElement: renderer.domElement,
+      scene,
+      onDragChange: (dragging) => {
+        controls.enabled = !dragging;
+      },
+      onBoneSelected: (boneName) => setActiveBone(boneName),
+    });
+    fkRef.current = fk;
+
+    // 点击选骨：拖动超过阈值算转相机，不当作点选，避免摆姿势时误切骨。
+    let pointerStart: { x: number; y: number } | null = null;
+    const onPointerDown = (event: PointerEvent) => {
+      pointerStart = { x: event.clientX, y: event.clientY };
+    };
+    const onPointerUp = (event: PointerEvent) => {
+      if (!pointerStart || !posingRef.current) {
+        pointerStart = null;
+        return;
+      }
+      const moved = Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y);
+      pointerStart = null;
+      if (moved > 4) return;
+      const rect = renderer.domElement.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const ndc = new THREE.Vector2(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -((event.clientY - rect.top) / rect.height) * 2 + 1,
+      );
+      setActiveBone(fk.handleClick(ndc));
+    };
+    renderer.domElement.addEventListener("pointerdown", onPointerDown);
+    renderer.domElement.addEventListener("pointerup", onPointerUp);
 
     const grid = new THREE.GridHelper(20, 40, 0x4b5563, 0x252a33);
     scene.add(grid);
@@ -409,6 +493,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     return () => {
       cancelAnimationFrame(frame);
       observer.disconnect();
+      renderer.domElement.removeEventListener("pointerdown", onPointerDown);
+      renderer.domElement.removeEventListener("pointerup", onPointerUp);
+      fk.dispose();
+      fkRef.current = null;
       transform.dispose();
       controls.dispose();
       renderer.dispose();
@@ -661,6 +749,76 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     setPoseBlend(value);
   }, []);
 
+  // 骨骼摆姿开关：开启时把红球标到当前角色骨上，主 gizmo 让位给骨骼旋转 gizmo。
+  const togglePosing = useCallback(() => {
+    const id = selectedIdRef.current;
+    const entry = id ? objectsRef.current.find((item) => item.id === id) : null;
+    const fk = fkRef.current;
+    if (!entry || !fk) return;
+    if (posingRef.current) {
+      posingRef.current = false;
+      setPosing(false);
+      fk.clear();
+      setPosingBones(0);
+      setActiveBone(null);
+      transformRef.current?.attach(entry.object);
+      setStatus("已退出骨骼摆姿");
+      return;
+    }
+    if (!fk.setTarget(entry.object)) {
+      setError("这个模型没有可摆的骨骼（需要带 Mixamo 等骨架的 GLB/FBX）");
+      return;
+    }
+    posingRef.current = true;
+    setPosing(true);
+    setPosingBones(fk.boneCount);
+    setActiveBone(null);
+    // 整体 gizmo 与骨骼 gizmo 同时出现会互相遮挡，摆姿时先收起来。
+    transformRef.current?.detach();
+    setStatus(`骨骼摆姿已开启，点红球选骨（共 ${fk.boneCount} 根）`);
+  }, []);
+
+  // 把当前骨姿存进对象条目，随场景一起保存。
+  const saveBonePose = useCallback(() => {
+    const id = selectedIdRef.current;
+    const entry = id ? objectsRef.current.find((item) => item.id === id) : null;
+    if (!entry) return;
+    const pose = serializeBonePose(entry.object);
+    if (!pose) {
+      setError("这个模型没有可保存的骨骼姿势");
+      return;
+    }
+    entry.bonePose = pose;
+    syncObjects();
+    setStatus("已保存当前骨骼姿势");
+  }, [syncObjects]);
+
+  // 还原到上次保存的骨姿（载入场景后或摆乱之后回来）。
+  const restoreBonePose = useCallback(() => {
+    const id = selectedIdRef.current;
+    const entry = id ? objectsRef.current.find((item) => item.id === id) : null;
+    if (!entry) return;
+    if (!applyBonePose(entry.object, entry.bonePose)) {
+      setError("没有可还原的骨骼姿势");
+      return;
+    }
+    fkRef.current?.refresh();
+    setStatus("已还原到保存的骨骼姿势");
+  }, []);
+
+  // 恢复模型载入时的绑定姿势。
+  const resetBonePose = useCallback(() => {
+    const id = selectedIdRef.current;
+    const entry = id ? objectsRef.current.find((item) => item.id === id) : null;
+    if (!entry) return;
+    if (!applyBonePose(entry.object, entry.initialBonePose)) {
+      setError("没有可恢复的初始骨骼姿势");
+      return;
+    }
+    fkRef.current?.refresh();
+    setStatus("已恢复初始姿势");
+  }, []);
+
   // 场景存档与 GLB 导出共用同一份几何导出逻辑：只打包用户模型，辅助线与灯光不落盘。
   const exportGeometry = useCallback(async (options: { flattenTransforms?: boolean } = {}) => {
     const root = new THREE.Group();
@@ -752,6 +910,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           position: entry.object.position.toArray() as [number, number, number],
           quaternion: entry.object.quaternion.toArray() as [number, number, number, number],
           scale: entry.object.scale.toArray() as [number, number, number],
+          // 骨骼姿势只影响骨节点，导出几何仍是绑定姿势，靠这里回填。
+          bonePose: entry.bonePose ?? null,
         })),
         model: {
           name: objectsRef.current.map((entry) => entry.name).join("+") || "scene",
@@ -790,18 +950,26 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         // 不再套一层空 Group，否则面板读到的是那层空壳的 0 变换。
         const imported = gltf.scene.children.slice();
         gltf.scene.clear();
-        const entries = imported.map((child, index) => {
+        const entries: SceneObjectEntry[] = imported.map((child, index) => {
           const saved = doc.objects?.find((item) => item.name === child.name) ?? doc.objects?.[index];
           if (saved) {
             child.position.fromArray(saved.position);
             child.quaternion.fromArray(saved.quaternion);
             child.scale.fromArray(saved.scale);
           }
-          return {
+          const entry: SceneObjectEntry = {
             id: crypto.randomUUID(),
             name: saved?.name || child.name || doc.model.name,
             object: child,
           };
+          // 先在绑定姿势上记一份初始快照，再把存档里的摆姿套回去。
+          const bindPose = serializeBonePose(child);
+          if (bindPose) {
+            entry.initialBonePose = bindPose;
+            entry.bonePose = saved?.bonePose ?? bindPose;
+            if (saved?.bonePose) applyBonePose(child, saved.bonePose);
+          }
+          return entry;
         });
         entries.forEach((entry) => sceneRef.current?.add(entry.object));
         objectsRef.current = entries;
@@ -1086,7 +1254,59 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         </section>
 
         <section>
-          <div className="mb-1.5 px-1 text-xs uppercase tracking-wide text-white/40">角色姿势</div>
+          <div className="mb-1.5 px-1 text-xs uppercase tracking-wide text-white/40">骨骼摆姿</div>
+          {!selectedId ? (
+            <p className="px-1 text-xs text-white/40">先选中一个对象</p>
+          ) : !selectedHasSkeleton ? (
+            <p className="px-1 text-[11px] leading-4 text-white/40">
+              这个模型没有骨骼，导入带骨架的 GLB 才能摆姿势
+            </p>
+          ) : (
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={togglePosing}
+                className={`w-full rounded-md px-2 py-1 text-xs ${
+                  posing ? "bg-sky-500/25 text-sky-100" : "bg-white/5 text-white/70 hover:bg-white/10"
+                }`}
+              >
+                {posing ? "退出摆姿" : "开启摆姿"}
+              </button>
+              {posing && (
+                <p className="px-1 text-[11px] leading-4 text-white/45">
+                  点画面里的红球选骨，用圆环绕骨自身旋转，共 {posingBones} 根可摆骨。当前骨：
+                  {activeBone ?? "还没选"}
+                </p>
+              )}
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  onClick={saveBonePose}
+                  className="flex-1 rounded-md bg-white/5 px-2 py-1 text-xs text-white/70 hover:bg-white/10"
+                >
+                  保存姿势
+                </button>
+                <button
+                  type="button"
+                  onClick={restoreBonePose}
+                  className="flex-1 rounded-md bg-white/5 px-2 py-1 text-xs text-white/70 hover:bg-white/10"
+                >
+                  还原
+                </button>
+                <button
+                  type="button"
+                  onClick={resetBonePose}
+                  className="flex-1 rounded-md bg-white/5 px-2 py-1 text-xs text-white/50 hover:bg-white/10"
+                >
+                  初始
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+
+        <section>
+          <div className="mb-1.5 px-1 text-xs uppercase tracking-wide text-white/40">整体姿势混合</div>
           {selectedId ? (
             <div className="space-y-2">
               <div className="flex gap-1">
