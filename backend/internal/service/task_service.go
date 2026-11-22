@@ -483,31 +483,49 @@ func (s *TaskService) fileNameOf(params map[string]any, key string) string {
 	return name
 }
 
-// pruneRefs 删除引用已被移除节点的输入项
+// pruneRefs 删除引用已被移除节点的输入项。
+// 顶层输入指向被移除的节点时，这个节点自己也不再完整（ComfyUI 校验缺必填输入直接失败），
+// 所以整条链路一起级联移除；自动增长槽（ref_images.ref_image_2 这类嵌套引用）只摘键不级联，
+// 否则少传一张参考图就会把 ReferenceToVideo 整个删掉。
 func (s *TaskService) pruneRefs(nodes map[string]any, removed map[string]bool) {
-	for _, raw := range nodes {
-		node, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		inputs, _ := node["inputs"].(map[string]any)
-		for k, v := range inputs {
-			switch t := v.(type) {
-			case []any:
-				if len(t) == 2 {
-					if id, ok := t[0].(string); ok && removed[id] {
-						delete(inputs, k)
+	for {
+		cascaded := false
+		for nodeID, raw := range nodes {
+			if removed[nodeID] {
+				continue
+			}
+			node, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			inputs, _ := node["inputs"].(map[string]any)
+			for k, v := range inputs {
+				switch t := v.(type) {
+				case []any:
+					if len(t) == 2 {
+						if id, ok := t[0].(string); ok && removed[id] {
+							delete(inputs, k)
+							// 自动增长槽的扁平键（ref_images.ref_image_2）只摘键：少一张参考图不该
+							// 把 ReferenceToVideo 整个删掉；带点号的键没有必然的必填语义。
+							if !strings.Contains(k, ".") {
+								removed[nodeID] = true
+								cascaded = true
+							}
+						}
 					}
-				}
-			case map[string]any:
-				for kk, vv := range t {
-					if arr, ok := vv.([]any); ok && len(arr) == 2 {
-						if id, ok := arr[0].(string); ok && removed[id] {
-							delete(t, kk)
+				case map[string]any:
+					for kk, vv := range t {
+						if arr, ok := vv.([]any); ok && len(arr) == 2 {
+							if id, ok := arr[0].(string); ok && removed[id] {
+								delete(t, kk)
+							}
 						}
 					}
 				}
 			}
+		}
+		if !cascaded {
+			break
 		}
 	}
 	for id := range removed {

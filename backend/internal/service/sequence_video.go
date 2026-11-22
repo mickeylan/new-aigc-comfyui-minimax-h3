@@ -21,7 +21,9 @@ const (
 	sequenceVideoMaxFrames  = 240
 	sequenceVideoDefaultFPS = 8
 	sequenceVideoMaxFPS     = 30
-	sequenceVideoTimeout    = 5 * time.Minute
+	// H3 的视频参考帧按 24 fps 吃（ref_videos 的 tooltip 写死），合成时统一成这个帧率。
+	sequenceVideoOutputFPS = 24
+	sequenceVideoTimeout   = 5 * time.Minute
 )
 
 // clay-seq-20261122-174038-007.png → pass=clay stamp=20261122-174038 index=007
@@ -100,7 +102,9 @@ func orderSequenceFrames(names []string, pass, stamp string) ([]string, error) {
 	return ordered, nil
 }
 
-// sequenceVideoArgs 图片序列 → H.264 mp4：H3 的视频参考要能直接解码，yuv420p 最稳。
+// sequenceVideoArgs 图片序列 → H.264 mp4：H3 的视频参考按 24 fps 的帧吃，
+// 但序列帧本身是「按 fps 采样」出来的，所以输入按 fps、输出统一 24 fps
+// （ffmpeg 复制帧补满，时长不变）——这样 8 fps 拍的 13 帧到了 H3 手里是 24 fps 的 39 帧。
 func sequenceVideoArgs(pattern string, fps int, outputPath string) []string {
 	return []string{
 		"-y", "-hide_banner", "-loglevel", "error",
@@ -108,6 +112,7 @@ func sequenceVideoArgs(pattern string, fps int, outputPath string) []string {
 		"-start_number", "0",
 		"-i", pattern,
 		"-c:v", "libx264", "-pix_fmt", "yuv420p",
+		"-r", strconv.Itoa(sequenceVideoOutputFPS),
 		"-movflags", "+faststart",
 		outputPath,
 	}

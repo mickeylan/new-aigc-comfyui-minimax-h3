@@ -62,7 +62,8 @@ func TestSequenceVideoNamingAndEncodingArgs(t *testing.T) {
 		t.Fatalf("video name = %s", got)
 	}
 	args := strings.Join(sequenceVideoArgs("/tmp/clay-seq-1-%03d.png", 8, "/tmp/out.mp4"), " ")
-	for _, want := range []string{"-framerate 8", "-start_number 0", "-c:v libx264", "-pix_fmt yuv420p", "/tmp/out.mp4"} {
+	// 输入按采样帧率 8 fps 读，输出统一 24 fps：H3 的视频参考帧要求 24 fps。
+	for _, want := range []string{"-framerate 8", "-start_number 0", "-c:v libx264", "-pix_fmt yuv420p", "-r 24", "/tmp/out.mp4"} {
 		if !strings.Contains(args, want) {
 			t.Fatalf("args missing %q: %s", want, args)
 		}
@@ -109,7 +110,10 @@ func TestComposeSequenceVideoEncodesRealMP4(t *testing.T) {
 	if !strings.Contains(probe, "Video: h264") {
 		t.Fatalf("mp4 is not h264: %s", probe)
 	}
-	if !strings.Contains(probe, "8 fps") {
-		t.Fatalf("mp4 does not carry 8 fps: %s", probe)
+	if !strings.Contains(probe, "24 fps") {
+		t.Fatalf("mp4 must be re-timed to 24 fps for H3 reference frames: %s", probe)
+	}
+	if !strings.Contains(probe, "Duration: 00:00:00.38") {
+		t.Fatalf("3 frames at 8 fps must stay 0.375s after the 24 fps re-time: %s", probe)
 	}
 }
