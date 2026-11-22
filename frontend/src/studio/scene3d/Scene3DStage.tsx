@@ -61,6 +61,14 @@ import {
 } from "./camera-frames.js";
 import { firstLastMotionNote } from "./camera-motion-note.js";
 import {
+  appendMotionToPrompt,
+  motionPromptLine,
+  projectChoices,
+  scenePromptChoices,
+  type ProjectChoice,
+  type PromptSceneChoice,
+} from "./motion-prompt.js";
+import {
   answerCameraQuestion,
   describeMove,
   parseCameraBrief,
@@ -702,6 +710,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [cameraKeys, setCameraKeys] = useState<CameraKey[]>([]);
   // 导出首尾帧时算出来的运镜文案：首尾帧只锚两端，中间怎么动得靠这句话写进提示词。
   const [firstLastNote, setFirstLastNote] = useState("");
+  // 把运镜文案写进某一场的视频提示词：只追加，人点两次才动手（选项目/场次 + 追加）。
+  const [promptPanelOpen, setPromptPanelOpen] = useState(false);
+  const [promptProjects, setPromptProjects] = useState<ProjectChoice[]>([]);
+  const [promptProjectId, setPromptProjectId] = useState("");
+  const [promptScenes, setPromptScenes] = useState<PromptSceneChoice[]>([]);
+  const [promptSceneId, setPromptSceneId] = useState("");
+  const [promptBusy, setPromptBusy] = useState(false);
   // 相机 Agent：一句话 → 结构化运镜；缺参数就追问，出预览再采用（可撤销）。
   const [agentBrief, setAgentBrief] = useState("");
   const [agentIntent, setAgentIntent] = useState<CameraIntent | null>(null);
@@ -2810,6 +2825,107 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     }
   }, [firstLastNote]);
 
+  /**
+   * 拉取某个项目的场次列表。写提示词之前必须先看清「写到哪一场」，
+   * 所以这里只读 GET /api/projects/:id，不缓存、不改任何东西。
+   */
+  const loadPromptScenes = useCallback(async (projectId: string) => {
+    if (!projectId) {
+      setPromptScenes([]);
+      setPromptSceneId("");
+      return;
+    }
+    const response = await fetch(`/api/projects/${projectId}`);
+    if (!response.ok) throw new Error(`读取项目失败（HTTP ${response.status}）`);
+    const choices = scenePromptChoices(await response.json());
+    setPromptScenes(choices);
+    setPromptSceneId(choices.length ? String(choices[0].id) : "");
+  }, []);
+
+  const openPromptPanel = useCallback(async () => {
+    setPromptPanelOpen(true);
+    setPromptBusy(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/projects");
+      if (!response.ok) throw new Error(`读取项目列表失败（HTTP ${response.status}）`);
+      const projects = projectChoices(await response.json());
+      setPromptProjects(projects);
+      if (projects.length === 0) {
+        setPromptScenes([]);
+        setPromptSceneId("");
+        setStatus("还没有项目：先建一个项目，再回来写运镜");
+        return;
+      }
+      const next = projects.some((item) => item.id === promptProjectId) ? promptProjectId : projects[0].id;
+      setPromptProjectId(next);
+      await loadPromptScenes(next);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPromptBusy(false);
+    }
+  }, [promptProjectId, loadPromptScenes]);
+
+  const switchPromptProject = useCallback(
+    async (projectId: string) => {
+      setPromptProjectId(projectId);
+      setPromptBusy(true);
+      setError(null);
+      try {
+        await loadPromptScenes(projectId);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setPromptBusy(false);
+      }
+    },
+    [loadPromptScenes],
+  );
+
+  /**
+   * 把运镜这一句追加到选定场次的视频提示词。
+   * 只改 video_full_prompt（后端顺带重算执行稿），模板 / 首尾帧 / 3D 参考视频一概不动，
+   * 也不会提交任务；已经在稿里就跳过，不重复写。
+   */
+  const appendNoteToScene = useCallback(async () => {
+    const choice = promptScenes.find((item) => String(item.id) === promptSceneId);
+    if (!choice) {
+      setError("先选要写进哪一场");
+      return;
+    }
+    if (!firstLastNote) {
+      setError("还没有运镜文案：先导出首尾帧");
+      return;
+    }
+    const next = appendMotionToPrompt(choice.prompt, firstLastNote);
+    if (!next.added) {
+      setStatus(`${choice.label} 的提示词里已经有这句运镜了，没有重复写`);
+      return;
+    }
+    setPromptBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/projects/${promptProjectId}/scenes/${choice.id}/video/prompt`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prompt: next.prompt }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `写入失败（HTTP ${response.status}）`);
+      setPromptScenes((current) =>
+        current.map((item) =>
+          item.id === choice.id ? { ...item, prompt: String(payload.video_full_prompt ?? next.prompt) } : item,
+        ),
+      );
+      setStatus(`已把「${next.line}」追加到 ${choice.label} 的视频提示词（模板与首尾帧没动）`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPromptBusy(false);
+    }
+  }, [promptScenes, promptSceneId, promptProjectId, firstLastNote]);
+
   const exportReference = useCallback(
     async (pass: ReferencePass) => {
       setBusy(`${REFERENCE_BUSY_PREFIX}（${REFERENCE_PASS_LABELS[pass]}）…`);
@@ -3881,6 +3997,55 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                 </button>
               </div>
               <div className="mt-0.5 text-[11px] leading-snug text-white/70">{firstLastNote}</div>
+              {/* 免复制粘贴：把这一句直接追加进某一场的视频提示词（只追加，其他字段不动）。 */}
+              <button
+                type="button"
+                className="mt-1 w-full rounded bg-white/5 px-1.5 py-0.5 text-[11px] text-white/55 hover:bg-white/10"
+                onClick={() => (promptPanelOpen ? setPromptPanelOpen(false) : void openPromptPanel())}
+              >
+                {promptPanelOpen ? "收起「写进场景提示词」" : "写进场景提示词…"}
+              </button>
+              {promptPanelOpen ? (
+                <div className="mt-1 rounded border border-white/10 bg-black/20 px-1.5 py-1">
+                  <div className="flex items-center gap-1">
+                    <select
+                      value={promptProjectId}
+                      onChange={(event) => void switchPromptProject(event.target.value)}
+                      className="min-w-0 flex-1 rounded bg-black/30 px-1 py-0.5 text-[11px] text-white/70"
+                    >
+                      {promptProjects.length === 0 ? <option value="">读取中…</option> : null}
+                      {promptProjects.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={promptSceneId}
+                      onChange={(event) => setPromptSceneId(event.target.value)}
+                      className="min-w-0 flex-1 rounded bg-black/30 px-1 py-0.5 text-[11px] text-white/70"
+                    >
+                      {promptScenes.length === 0 ? <option value="">没有场次</option> : null}
+                      {promptScenes.map((item) => (
+                        <option key={item.id} value={String(item.id)}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="mt-1 text-[11px] leading-snug text-white/45">
+                    将追加这一行（其他文字、模板、首尾帧都不动）：{motionPromptLine(firstLastNote) || "（空）"}
+                  </div>
+                  <button
+                    type="button"
+                    className="mt-1 w-full rounded-md bg-sky-400/20 px-2 py-1 text-xs text-sky-100 hover:bg-sky-400/30 disabled:opacity-40"
+                    onClick={() => void appendNoteToScene()}
+                    disabled={promptBusy || !promptSceneId}
+                  >
+                    {promptBusy ? "处理中…" : "追加到这一场"}
+                  </button>
+                </div>
+              ) : null}
             </div>
           ) : null}
 
