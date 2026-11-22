@@ -15,6 +15,15 @@ import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { findTemplateId } from "../host/template-cache.js";
 import { FKHelper } from "./posing/FKHelper.js";
 import { createStoreZip } from "./zip.js";
+import {
+  GROUND_EXTENT,
+  clampGroundPoint,
+  groundPathLength,
+  normalizeGroundPath,
+  toGroundPath,
+  type GroundPoint,
+  type GroundPoints,
+} from "./ground-path.js";
 import AssetLibraryPanel from "./AssetLibraryPanel";
 import { ASSET_DRAG_MIME, assetKind, assetUrl, type LibraryAsset } from "./assetLibrary.js";
 import {
@@ -257,6 +266,8 @@ interface SceneDocument {
   splats?: SplatDocument[];
   /** 相机关键帧序列；v3 起入库，v1/v2 存档没有这个字段。 */
   cameraKeys?: CameraKey[];
+  /** 地面 A/B 落点；仍在 v3 里当可选字段，老存档没有就按没有处理。 */
+  groundPath?: { start: GroundPoint; end: GroundPoint } | null;
   model: { name: string; data: string };
 }
 
@@ -544,6 +555,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   } | null>(null);
   const groundRef = useRef<THREE.Mesh | null>(null);
   const gridRef = useRef<THREE.GridHelper | null>(null);
+  const groundPathGroupRef = useRef<THREE.Group | null>(null);
+  // 拾取回调在初始化 effect 的闭包里，读 state 会读到挂载时的旧值，用 ref 镜像。
+  const placingGroundRef = useRef<"start" | "end" | null>(null);
   const cameraPathRef = useRef<number | null>(null);
   // 播放兜底定时器：切到后台标签页时 rAF 会被浏览器暂停，靠它把「播放中…」收回来。
   const cameraPathTimerRef = useRef<number | null>(null);
@@ -590,6 +604,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [lightPreset, setLightPreset] = useState<LightPresetName>("studio");
   const [material, setMaterial] = useState<MaterialSettings>(DEFAULT_MATERIAL);
   const [cameraKeys, setCameraKeys] = useState<CameraKey[]>([]);
+  // 地面落点：先分别记，两个都有才算一条路径（只点 A 时不显示距离）。
+  const [groundPoints, setGroundPoints] = useState<GroundPoints>({ start: null, end: null });
+  // 正在等用户在画布上点哪一端；null = 没在选点。
+  const [placingGround, setPlacingGround] = useState<"start" | "end" | null>(null);
   // 最近一张参考图：面板里直接预览，同时给下载按钮用。
   const [referenceShot, setReferenceShot] = useState<{
     pass: ReferencePass;
@@ -799,12 +817,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       pointerStart = { x: event.clientX, y: event.clientY };
     };
     const onPointerUp = (event: PointerEvent) => {
-      if (!pointerStart || !posingRef.current) {
-        pointerStart = null;
-        return;
-      }
-      const moved = Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y);
+      const start = pointerStart;
       pointerStart = null;
+      const placing = placingGroundRef.current;
+      if (!start || (!placing && !posingRef.current)) return;
+      const moved = Math.hypot(event.clientX - start.x, event.clientY - start.y);
+      // 拖过 4px 算转相机，不当作点选，免得转视角时误落点。
       if (moved > 4) return;
       const rect = renderer.domElement.getBoundingClientRect();
       if (!rect.width || !rect.height) return;
@@ -812,6 +830,21 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         ((event.clientX - rect.left) / rect.width) * 2 - 1,
         -((event.clientY - rect.top) / rect.height) * 2 + 1,
       );
+      if (placing) {
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(ndc, camera);
+        // 只对地面做拾取：模型身上的点击不该变成落点。
+        const hit = raycaster.intersectObject(ground, false)[0];
+        if (!hit) return;
+        const point = clampGroundPoint([hit.point.x, 0.02, hit.point.z]);
+        placingGroundRef.current = null;
+        setPlacingGround(null);
+        setGroundPoints((current) => ({ ...current, [placing]: point }));
+        setStatus(
+          `${placing === "start" ? "A" : "B"} 点已记录（${point[0].toFixed(1)}, ${point[2].toFixed(1)}）`,
+        );
+        return;
+      }
       setActiveBone(fk.handleClick(ndc));
     };
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
@@ -846,6 +879,11 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     };
     groundRef.current = ground;
     gridRef.current = grid;
+    // A/B 落点标记单独一层：导出参考图时整层隐藏，它不是要被约束的几何。
+    const groundPathGroup = new THREE.Group();
+    groundPathGroup.name = "__GroundPath__";
+    scene.add(groundPathGroup);
+    groundPathGroupRef.current = groundPathGroup;
 
     let frame = 0;
     // 帧率守护：每秒统计一次，只有处在「自动」时才真正改档。
@@ -927,6 +965,60 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   }, []);
 
   // 细节档位只在初始化时传给 SparkRenderer 一次，之后靠实例属性热改。
+  // 落点标记：绿=A（起点）、橙=B（终点），两点之间拉一条虚线。
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    let group = groundPathGroupRef.current;
+    if (!group) {
+      group = new THREE.Group();
+      group.name = "__GroundPath__";
+      scene.add(group);
+      groundPathGroupRef.current = group;
+    }
+    // 每次重建：落点最多两个，重建比逐帧改属性简单也不会有残留。
+    for (const child of group.children.slice()) {
+      group.remove(child);
+      const mesh = child as THREE.Mesh;
+      mesh.geometry?.dispose();
+      const material = mesh.material;
+      if (Array.isArray(material)) material.forEach((item) => item.dispose());
+      else material?.dispose();
+    }
+    const ring = (point: GroundPoint, color: number) => {
+      const marker = new THREE.Mesh(
+        new THREE.RingGeometry(0.26, 0.36, 32),
+        new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, depthWrite: false }),
+      );
+      marker.rotation.x = -Math.PI / 2;
+      marker.position.set(point[0], point[1] + 0.004, point[2]);
+      marker.renderOrder = 2;
+      group?.add(marker);
+      // 竖杆让落点在俯视/远距离下也能看见。
+      const pole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.02, 0.02, 0.9, 8),
+        new THREE.MeshBasicMaterial({ color }),
+      );
+      pole.position.set(point[0], point[1] + 0.45, point[2]);
+      group?.add(pole);
+    };
+    if (groundPoints.start) ring(groundPoints.start, 0x22c55e);
+    if (groundPoints.end) ring(groundPoints.end, 0xf59e0b);
+    const path = toGroundPath(groundPoints);
+    if (path) {
+      const geometry = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(path.start[0], path.start[1] + 0.02, path.start[2]),
+        new THREE.Vector3(path.end[0], path.end[1] + 0.02, path.end[2]),
+      ]);
+      const line = new THREE.Line(
+        geometry,
+        new THREE.LineDashedMaterial({ color: 0x94a3b8, dashSize: 0.18, gapSize: 0.12 }),
+      );
+      line.computeLineDistances();
+      group.add(line);
+    }
+  }, [groundPoints]);
+
   useEffect(() => {
     splatDetailRef.current = splatDetail;
     const spark = sparkRef.current;
@@ -1833,6 +1925,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           })),
         splats,
         // 机位序列以前只活在内存里，刷新就没；v3 起跟场景一起存。
+        groundPath: toGroundPath(groundPoints),
         cameraKeys: cameraKeys.map((key) => ({
           id: key.id,
           position: key.position,
@@ -1858,7 +1951,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     } finally {
       setBusy(null);
     }
-  }, [cameraKeys, exportGeometry, lightPreset]);
+  }, [cameraKeys, exportGeometry, groundPoints, lightPreset]);
 
   const loadScene = useCallback(
     async (file: File) => {
@@ -1935,6 +2028,11 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         syncObjects();
         selectObject(entries[0]?.id ?? null);
         applyLightPreset(doc.lightPreset);
+        // 地面路径（v3 可选字段）：老存档没有就清空，别把上一个场景的落点带进来。
+        const savedPath = normalizeGroundPath(doc.groundPath);
+        setGroundPoints({ start: savedPath?.start ?? null, end: savedPath?.end ?? null });
+        placingGroundRef.current = null;
+        setPlacingGround(null);
         // 机位序列（v3）：老存档没有就清空，免得上一个场景的机位串进来。
         setCameraKeys(
           (doc.cameraKeys ?? []).map((key) => ({
@@ -2002,6 +2100,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       // 网格线、地面、gizmo、骨架线都不进参考图：它们不是要被约束的几何。
       hide(gridRef.current);
       hide(groundRef.current);
+      hide(groundPathGroupRef.current);
       hide(transformRef.current?.getHelper?.() ?? null);
       scene.children.forEach((child) => {
         if (child instanceof THREE.SkeletonHelper) hide(child);
@@ -2938,6 +3037,55 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               </p>
             </div>
           )}
+        </section>
+
+        <section>
+          <div className="mb-1.5 flex items-center justify-between px-1 text-xs uppercase tracking-wide text-white/40">
+            <span>地面路径 A → B</span>
+            <span className="text-white/30">
+              {(() => {
+                const path = toGroundPath(groundPoints);
+                return path ? `${groundPathLength(path).toFixed(1)} m` : "起点 / 终点";
+              })()}
+            </span>
+          </div>
+          <div className="flex gap-1">
+            {(["start", "end"] as const).map((which) => (
+              <button
+                key={which}
+                type="button"
+                onClick={() => {
+                  const next = placingGround === which ? null : which;
+                  placingGroundRef.current = next;
+                  setPlacingGround(next);
+                }}
+                className={`flex-1 rounded-md px-2 py-1 text-xs ${
+                  placingGround === which
+                    ? "bg-emerald-500/20 text-emerald-200"
+                    : "bg-white/5 text-white/70 hover:bg-white/10"
+                }`}
+              >
+                {which === "start" ? "点选 A" : "点选 B"}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => {
+                placingGroundRef.current = null;
+                setPlacingGround(null);
+                setGroundPoints({ start: null, end: null });
+              }}
+              disabled={!groundPoints.start && !groundPoints.end}
+              className="flex-1 rounded-md bg-white/5 px-2 py-1 text-xs text-white/70 hover:bg-white/10 disabled:opacity-40"
+            >
+              清除
+            </button>
+          </div>
+          <p className="mt-1 px-1 text-[11px] leading-4 text-white/35">
+            {placingGround
+              ? `在地面上点一下，记下${placingGround === "start" ? " A（绿，起点）" : " B（橙，终点）"}。`
+              : `A=起点（绿）、B=终点（橙），两点间距 ${GROUND_EXTENT * 2} 米内可用。下一步让角色沿 A→B 走、相机跟拍。`}
+          </p>
         </section>
 
         <section>
