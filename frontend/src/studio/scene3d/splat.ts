@@ -76,6 +76,58 @@ export function createSplatRenderer(
   });
 }
 
+/**
+ * 帧率守护的阈值。26~34fps 这段留作滞回区，避免在临界点来回跳档。
+ * 冷却时间是为了让一档的改动有机会被"感受"到，而不是一秒钟连降两档。
+ */
+export const SPLAT_FPS_GUARD = {
+  low: 28,
+  high: 55,
+  lowHoldMs: 2_000,
+  highHoldMs: 5_000,
+  cooldownMs: 30_000,
+} as const;
+
+export interface SplatDetailGuardState {
+  /** 当前档位下标 */
+  index: number;
+  /** 低帧率从什么时候开始持续；恢复就清空 */
+  belowSince: number | null;
+  /** 高帧率从什么时候开始持续 */
+  aboveSince: number | null;
+  /** 这个时间点之前不再调整 */
+  cooldownUntil: number;
+}
+
+/**
+ * 纯函数：按实测帧率决定要不要升降一档。
+ *
+ * - 连续 lowHoldMs 都低于 low → 降一档
+ * - 连续 highHoldMs 都高于 high → 升一档（升比降慢，避免反复抖）
+ * - 到顶/到底就不再动；改动后进 cooldownMs 冷却
+ */
+export function stepSplatDetail(
+  state: SplatDetailGuardState,
+  fps: number,
+  now: number,
+  maxIndex: number,
+): SplatDetailGuardState {
+  if (now < state.cooldownUntil) return state;
+
+  const canDown = state.index > 0;
+  const canUp = state.index < maxIndex;
+  const belowSince = fps < SPLAT_FPS_GUARD.low && canDown ? state.belowSince ?? now : null;
+  const aboveSince = fps > SPLAT_FPS_GUARD.high && canUp ? state.aboveSince ?? now : null;
+
+  if (belowSince !== null && now - belowSince >= SPLAT_FPS_GUARD.lowHoldMs) {
+    return { index: state.index - 1, belowSince: null, aboveSince: null, cooldownUntil: now + SPLAT_FPS_GUARD.cooldownMs };
+  }
+  if (aboveSince !== null && now - aboveSince >= SPLAT_FPS_GUARD.highHoldMs) {
+    return { index: state.index + 1, belowSince: null, aboveSince: null, cooldownUntil: now + SPLAT_FPS_GUARD.cooldownMs };
+  }
+  return { index: state.index, belowSince, aboveSince, cooldownUntil: state.cooldownUntil };
+}
+
 export interface LoadSplatOptions {
   /** 关掉 Spark 自己的抗锯齿排序副作用，默认 true */
   placeOnGround?: boolean;

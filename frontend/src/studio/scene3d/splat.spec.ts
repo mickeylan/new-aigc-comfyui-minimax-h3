@@ -43,12 +43,15 @@ vi.mock("@sparkjsdev/spark", () => {
 
 import {
   SPLAT_EXTENSIONS,
+  SPLAT_FPS_GUARD,
   createSplatRenderer,
   disposeSplat,
   isSplatUrl,
   loadSplatMesh,
   placeSplatOnGround,
   splatExtension,
+  stepSplatDetail,
+  type SplatDetailGuardState,
 } from "./splat";
 
 async function sparkMock() {
@@ -180,6 +183,50 @@ test("SparkRenderer 默认开 LoD，细节上限可选", async () => {
     options: { lodSplatCount?: number };
   };
   expect(withLimit.options.lodSplatCount).toBe(750_000);
+});
+
+test("帧率守护：连续掉帧降一档，恢复后升一档，升降之间带滞回与冷却", () => {
+  const fresh: SplatDetailGuardState = { index: 2, belowSince: null, aboveSince: null, cooldownUntil: 0 };
+
+  // 一帧掉到 20fps 不够，记下起点但不动档
+  const first = stepSplatDetail(fresh, 20, 1_000, 3);
+  expect(first.index).toBe(2);
+  expect(first.belowSince).toBe(1_000);
+  // 还没到 2 秒
+  expect(stepSplatDetail(first, 20, 2_500, 3).index).toBe(2);
+  // 满 2 秒 → 降一档，并进 30 秒冷却
+  const down = stepSplatDetail(first, 20, 3_000, 3);
+  expect(down.index).toBe(1);
+  expect(down.cooldownUntil).toBe(3_000 + SPLAT_FPS_GUARD.cooldownMs);
+  expect(down.belowSince).toBeNull();
+
+  // 冷却期内即使一直很高也不升
+  expect(stepSplatDetail(down, 120, 10_000, 3).index).toBe(1);
+
+  // 帧率回中间区（30~50fps）不累积任何趋势
+  const calm = stepSplatDetail(down, 45, 40_000, 3);
+  expect(calm.aboveSince).toBeNull();
+  expect(calm.belowSince).toBeNull();
+
+  // 持续 5 秒高帧率 → 升一档
+  const highStart = stepSplatDetail(down, 120, 40_000, 3);
+  expect(highStart.aboveSince).toBe(40_000);
+  expect(stepSplatDetail(highStart, 120, 44_000, 3).index).toBe(1);
+  expect(stepSplatDetail(highStart, 120, 45_000, 3).index).toBe(2);
+});
+
+test("帧率守护不会越界：最低档不再降，最高档不再升", () => {
+  const bottom: SplatDetailGuardState = { index: 0, belowSince: null, aboveSince: null, cooldownUntil: 0 };
+  const stillBottom = stepSplatDetail(bottom, 5, 1_000, 3);
+  expect(stillBottom.index).toBe(0);
+  expect(stillBottom.belowSince).toBeNull();
+  expect(stepSplatDetail(stillBottom, 5, 60_000, 3).index).toBe(0);
+
+  const top: SplatDetailGuardState = { index: 3, belowSince: null, aboveSince: null, cooldownUntil: 0 };
+  const stillTop = stepSplatDetail(top, 120, 1_000, 3);
+  expect(stillTop.index).toBe(3);
+  expect(stillTop.aboveSince).toBeNull();
+  expect(stepSplatDetail(stillTop, 120, 60_000, 3).index).toBe(3);
 });
 
 test("释放走 Spark 自己的 dispose", async () => {

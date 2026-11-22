@@ -5,26 +5,41 @@ import { readFileSync } from 'node:fs'
 const stage = readFileSync(new URL('../src/studio/scene3d/Scene3DStage.tsx', import.meta.url), 'utf8')
 
 // 泼溅细节靠 Spark 的 LoD 上限调节：大场景吃显存时降档，不必重载场景。
-test('细节档位有四个可选值，默认取「均衡」', () => {
+test('细节档位有四个可选值，默认交给帧率守护', () => {
   const block = stage.match(/const SPLAT_DETAIL_PRESETS = \[([\s\S]*?)\] as const;/)
   assert.ok(block, '缺少 SPLAT_DETAIL_PRESETS')
   const counts = [...block[1].matchAll(/count: ([\d_]+)/g)].map((m) => Number(m[1].replace(/_/g, '')))
   assert.deepEqual(counts, [500000, 1000000, 2000000, 5000000], '档位与顺序不该漂')
-  assert.match(stage, /useState<number>\(SPLAT_DETAIL_PRESETS\[1\]\.count\)/, '默认档位应是第二项')
+  assert.match(stage, /useState<number \| "auto">\("auto"\)/, '默认应是自动')
+  assert.match(stage, /const SPLAT_DETAIL_AUTO_START = 1;/, '自动从均衡起步')
 })
 
 test('初始化时把档位交给 SparkRenderer，之后改档位热更新实例属性', () => {
-  assert.match(stage, /createSplatRenderer\(renderer, \{[\s\S]{0,120}lodSplatCount: splatDetailRef\.current/)
-  assert.match(stage, /if \(spark\) spark\.lodSplatCount = splatDetail;/)
+  assert.match(stage, /createSplatRenderer\(renderer, \{[\s\S]{0,160}lodSplatCount:/)
+  assert.match(stage, /spark\.lodSplatCount = splatDetail === "auto" \? autoDetailRef\.current : splatDetail;/)
   // 改档位不能重跑初始化 effect，否则整个场景重建
   assert.match(stage, /\}, \[splatDetail\]\);/, '档位变化应走独立 effect')
 })
 
-test('右栏有「泼溅细节」四个按钮，点了改档位', () => {
+test('右栏有「自动」开关与四个手动档位', () => {
   assert.match(stage, />泼溅细节</)
   assert.match(stage, /SPLAT_DETAIL_PRESETS\.map\(/)
   assert.match(stage, /onClick=\{\(\) => setSplatDetail\(preset\.count\)\}/)
   assert.match(stage, /splatDetail === preset\.count/)
+  // 手动点档位就是退出自动，点「自动」回去
+  assert.match(stage, /onClick=\{\(\) => setSplatDetail\("auto"\)\}/)
+  assert.match(stage, /splatDetail === "auto"/)
+})
+
+// 帧率守护：只有自动模式下才动档，且只改 Spark 实例 + 显示值，不重建播放器。
+test('渲染循环里量帧率并调档', () => {
+  assert.match(stage, /stepSplatDetail\(/)
+  assert.match(stage, /if \(splatDetailRef\.current === "auto"\) \{/)
+  assert.match(stage, /const count = SPLAT_DETAIL_PRESETS\[next\.index\]\.count;/)
+  assert.match(stage, /spark\.lodSplatCount = count;/)
+  assert.match(stage, /setAutoDetail\(count\);/)
+  // 阈值不能写死在循环里，统一从 splat.ts 拿
+  assert.match(stage, /SPLAT_DETAIL_PRESETS\.length - 1,/, '上限由档位表决定')
 })
 
 // LoD 打开后首帧要等 Spark 把细节树建完，大泼溅会空白几十秒，必须给提示。

@@ -40,6 +40,8 @@ import {
   createSplatRenderer,
   disposeSplat,
   loadSplatMesh,
+  stepSplatDetail,
+  type SplatDetailGuardState,
 } from "./splat.js";
 
 interface Scene3DStageProps {
@@ -233,6 +235,9 @@ const SPLAT_DETAIL_PRESETS = [
   { label: "最高", count: 5_000_000 },
 ] as const;
 
+/** 「自动」从哪一档起步：均衡。之后由帧率守护上下调。 */
+const SPLAT_DETAIL_AUTO_START = 1;
+
 /** 泼溅首次出现前 Spark 要在线程里建 LoD 树，大文件会有几秒空白，用这条占住 busy。 */
 const SPLAT_LOD_BUSY = "正在建泼溅细节层…";
 /** onDirty 通常几十秒内就来；万一 Spark 没触发，到时自己收掉，别把界面锁死。 */
@@ -406,7 +411,15 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   // 初始化 effect 只跑一次，细节档位要读 ref 才能拿到最新值；改档位时直接改
   // SparkRenderer 实例上的 lodSplatCount，不用重建渲染器。（用常量初值，
   // 避免引用到下面才声明的 state 触发 TDZ。）
-  const splatDetailRef = useRef<number>(SPLAT_DETAIL_PRESETS[1].count);
+  const splatDetailRef = useRef<number | "auto">("auto");
+  // 守护读写的当前档位与滞回状态，都放 ref 里，避免每帧依赖 state。
+  const autoDetailRef = useRef<number>(SPLAT_DETAIL_PRESETS[SPLAT_DETAIL_AUTO_START].count);
+  const splatGuardRef = useRef<SplatDetailGuardState>({
+    index: SPLAT_DETAIL_AUTO_START,
+    belowSince: null,
+    aboveSince: null,
+    cooldownUntil: 0,
+  });
   // 是否还在等 Spark 建细节层（只置一次，onDirty 来第一发就收掉）。
   const splatLodPendingRef = useRef(false);
   const splatLodTimerRef = useRef<number | null>(null);
@@ -436,8 +449,11 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [identityPrompt, setIdentityPrompt] = useState(DEFAULT_IDENTITY_PROMPT);
   // 图生 3D 世界的抠图引擎，默认 RMBG-3.0 软 matte。
   const [splatMatteEngine, setSplatMatteEngine] = useState<SplatMatteEngine>("rmbg3");
-  // 泼溅细节上限：凭 LoD 按屏幕尺寸挑 splat，而不是硬砍尾部。默认跟平台默认对齐。
-  const [splatDetail, setSplatDetail] = useState<number>(SPLAT_DETAIL_PRESETS[1].count);
+  // 泼溅细节上限：凭 LoD 按屏幕尺寸挑 splat，而不是硬砍尾部。
+  // 数字 = 用户手选的档位；"auto" = 交给帧率守护。
+  const [splatDetail, setSplatDetail] = useState<number | "auto">("auto");
+  /** 守护当前停在哪一档（只在自动模式下有意义的显示值） */
+  const [autoDetail, setAutoDetail] = useState<number>(SPLAT_DETAIL_PRESETS[SPLAT_DETAIL_AUTO_START].count);
   // 3D 合成：全景天空盒与平面层设置。
   const [skybox, setSkybox] = useState<SkyboxSettings>(DEFAULT_SKYBOX);
   const [skyboxName, setSkyboxName] = useState<string | null>(null);
@@ -573,7 +589,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
 
     // Spark 负责把高斯泼溅光栅化；不加进场景，SplatMesh 只是数据不会被画出来。
     const spark = createSplatRenderer(renderer, {
-      lodSplatCount: splatDetailRef.current,
+      lodSplatCount: typeof splatDetailRef.current === "number" ? splatDetailRef.current : autoDetailRef.current,
       onDirty: () => {
         // onDirty 一帧可能触发多次，只有确实挂着“建细节层”提示时才动 state，
         // 免得每帧都 setState 把渲染循环拖慢。
@@ -667,8 +683,33 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     gridRef.current = grid;
 
     let frame = 0;
+    // 帧率守护：每秒统计一次，只有处在「自动」时才真正改档。
+    let guardFrames = 0;
+    let guardSince = performance.now();
     const animate = () => {
       frame = requestAnimationFrame(animate);
+      guardFrames += 1;
+      const now = performance.now();
+      if (now - guardSince >= 1_000) {
+        const fps = (guardFrames * 1_000) / (now - guardSince);
+        guardFrames = 0;
+        guardSince = now;
+        if (splatDetailRef.current === "auto") {
+          const next = stepSplatDetail(
+            splatGuardRef.current,
+            fps,
+            now,
+            SPLAT_DETAIL_PRESETS.length - 1,
+          );
+          splatGuardRef.current = next;
+          const count = SPLAT_DETAIL_PRESETS[next.index].count;
+          if (count !== autoDetailRef.current) {
+            autoDetailRef.current = count;
+            spark.lodSplatCount = count;
+            setAutoDetail(count);
+          }
+        }
+      }
       controls.update();
       // 红球按相机距离定大小，每帧跟一次（22 根骨，开销可忽略）。
       // 注意是 fkRef（FKHelper 实例），posingRef 只是摆姿开关的布尔值。
@@ -724,7 +765,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   useEffect(() => {
     splatDetailRef.current = splatDetail;
     const spark = sparkRef.current;
-    if (spark) spark.lodSplatCount = splatDetail;
+    if (!spark) return;
+    spark.lodSplatCount = splatDetail === "auto" ? autoDetailRef.current : splatDetail;
   }, [splatDetail]);
 
   useEffect(() => {
@@ -2064,7 +2106,21 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         </section>
 
         <section>
-          <div className="mb-1.5 px-1 text-xs uppercase tracking-wide text-white/40">泼溅细节</div>
+          <div className="mb-1.5 flex items-center justify-between px-1 text-xs uppercase tracking-wide text-white/40">
+            <span>泼溅细节</span>
+            <button
+              type="button"
+              onClick={() => setSplatDetail("auto")}
+              title={`按实测帧率自动在四档间升降，当前 ${autoDetail.toLocaleString()} 个 splat；手点任一档位就退出自动`}
+              className={`rounded px-1.5 py-0.5 text-[10px] normal-case tracking-normal ${
+                splatDetail === "auto"
+                  ? "bg-violet-400/35 text-white"
+                  : "bg-white/5 text-white/60 hover:bg-white/10"
+              }`}
+            >
+              自动
+            </button>
+          </div>
           <div className="grid grid-cols-4 gap-1">
             {SPLAT_DETAIL_PRESETS.map((preset) => (
               <button
@@ -2081,6 +2137,11 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                 {preset.label}
               </button>
             ))}
+          </div>
+          <div className="mt-1 px-1 text-[10px] leading-snug text-white/35">
+            {splatDetail === "auto"
+              ? `自动：掉到 28fps 以下降档，回到 55fps 以上升档，改动后等 30 秒再看。当前 ${autoDetail.toLocaleString()}。`
+              : "手动锁档：不会自动调解，想要自动就点上面的「自动」"}
           </div>
         </section>
 
