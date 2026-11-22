@@ -1734,6 +1734,9 @@ func (s *TaskService) finishTask(task *models.Task) {
 					"type":      ftype,
 					"filename":  fmt.Sprint(f["filename"]),
 					"subfolder": fmt.Sprint(f["subfolder"]),
+					// source_type 保留 ComfyUI 的原始归属（input/output）：LoadVideo 这类回显输入的
+					// 节点也会出现在 outputs 里，只看桶名 type 分不清「产物」和「输入」。
+					"source_type": fmt.Sprint(f["type"]),
 				})
 			}
 		}

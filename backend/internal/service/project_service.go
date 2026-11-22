@@ -8666,6 +8666,11 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	if isH3Ref2VTemplate(tplCode) {
 		_, finalReferenceLines, _ = s.sceneVideoContinuityReferences(sc, pid)
 	}
+	if false && tplCode == h3Ref2V3DTemplate {
+		// 有 3D 结构参考片时才写 <Video 1>：这是 H3 认标签的唯一通路，
+		// 措辞固定（见 h3_video1_structure_reference.go），不交给模型自由发挥。
+		promptText = injectH3Video1StructureReference(promptText)
+	}
 	if issues := validateFinalH3Submission(promptText, tplCode, duration, finalReferenceLines, dialogues, structuredShots); len(issues) > 0 {
 		// MiniMax H3 tolerates imperfect prompt prose and protocol spelling. These
 		// diagnostics must never block a user-reviewed prompt from reaching the
@@ -8831,18 +8836,31 @@ func (s *ProjectService) WatchSceneVideos() {
 	go func() {
 		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
+		ticks := 0
 		for {
 			select {
 			case <-s.stopped:
 				return
 			case <-ticker.C:
-				if s.hasRecentGenerationTasks() {
+				ticks++
+				// 高频：有在跑/刚跑完的任务就同步。低频：场景仍停在「生成中」说明结果没取回，
+				// 一次瞬时下载失败不该把场景永久卡在 video_running，所以每 60 秒兜底对账一次。
+				if s.hasRecentGenerationTasks() || (ticks%20 == 0 && s.hasUnsavedSceneOutputs()) {
 					s.syncGenerationOutputs()
 				}
 				s.advanceAutoPipelines()
 			}
 		}
 	}()
+}
+
+// hasUnsavedSceneOutputs 是否还有场景停在视频生成中（可能上游早已结束但结果没落库）。
+func (s *ProjectService) hasUnsavedSceneOutputs() bool {
+	var count int64
+	err := s.db.Model(&models.Scene{}).
+		Where("status IN ?", []string{"video_pending", "video_running"}).
+		Limit(1).Count(&count).Error
+	return err == nil && count > 0
 }
 
 func (s *ProjectService) recoverInterruptedProjects() {
@@ -9600,6 +9618,10 @@ func (s *ProjectService) syncSceneVideos() {
 			}
 			data, err := NewComfyClient(s.tasks.comfyHostForTask(&task), *task.Port).DownloadOutput(filename, subfolder, "output")
 			if err != nil {
+				// 失败要把请求的实际来源写清楚，否则只剩「404」没法定位是文件还没落盘、端口不对还是实例不对。
+				host := s.tasks.comfyHostForTask(&task)
+				log.Printf("[scene %d] output download failed task=%s host=%s port=%d subfolder=%q filename=%q: %v",
+					sc.ID, task.TaskID, host, *task.Port, subfolder, filename, err)
 				s.db.Model(sc).Update("error", "上游已完成，下载结果待恢复（不会重新生成）: "+err.Error())
 				changed = true
 				continue
@@ -9808,18 +9830,54 @@ func resultVideoOf(task *models.Task) (string, *int) {
 	if err := json.Unmarshal([]byte(task.ResultFiles), &files); err != nil {
 		return "", nil
 	}
+	// LoadVideo 这类节点会把上传的输入视频回显到 outputs 里，名称与产物同样以 .mp4 结尾。
+	// 直接从输出里取第一条视频会把「3D 参考视频」当成成片去下载（404 recipe），必须先排除输入。
+	inputs := taskInputFileNames(task.InputsJSON)
+	var fallback string
 	for _, f := range files {
 		// ComfyUI 的不同视频保存节点会把 mp4 放在 videos、images 或 gifs 字段；
 		// 文件扩展名才是稳定信号，不能按输出字段类型排除有效视频。
-		if f["type"] == "videos" || isVideoExt(f["filename"]) {
-			sub, name := f["subfolder"], f["filename"]
-			if sub != "" {
-				return sub + "/" + name, task.GPUIndex
-			}
-			return name, task.GPUIndex
+		if f["type"] != "videos" && !isVideoExt(f["filename"]) {
+			continue
+		}
+		if strings.EqualFold(f["source_type"], "input") || inputs[strings.ToLower(f["filename"])] {
+			continue
+		}
+		path := f["filename"]
+		if sub := f["subfolder"]; sub != "" {
+			path = sub + "/" + path
+		}
+		if sample := f["source_type"]; sample == "" || sample == "output" {
+			return path, task.GPUIndex
+		}
+		if fallback == "" {
+			fallback = path
 		}
 	}
+	if fallback != "" {
+		return fallback, task.GPUIndex
+	}
 	return "", nil
+}
+
+// taskInputFileNames 收集本任务提交过的输入文件名（小写），用来把回显的输入从输出里剔除。
+func taskInputFileNames(inputsJSON string) map[string]bool {
+	out := map[string]bool{}
+	var inputs map[string][]struct {
+		TaskID string `json:"task_id"`
+		Name   string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(inputsJSON), &inputs); err != nil {
+		return out
+	}
+	for _, items := range inputs {
+		for _, item := range items {
+			if name := strings.ToLower(strings.TrimSpace(item.Name)); name != "" {
+				out[name] = true
+			}
+		}
+	}
+	return out
 }
 
 // ---------- 视频合并（ffmpeg concat） ----------
