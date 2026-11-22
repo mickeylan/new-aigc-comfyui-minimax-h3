@@ -5,8 +5,8 @@ import { readFileSync } from 'node:fs'
 const stage = readFileSync(new URL('../src/studio/scene3d/Scene3DStage.tsx', import.meta.url), 'utf8')
 
 // 泼溅进不了 GLB，只能把 .spz 原始字节单独交进素材库，并配一张当前画面当缩略图。
-const saveFn = stage.match(/const saveSplatToLibrary = useCallback\(([\s\S]*?)\n  \}, \[\]\);/)
-
+const saveFn = stage.match(/const saveSplatToLibrary = useCallback\(([\s\S]*?)\n  \}, \[captureThumbnail\]\);/)
+// 缩略图改走 captureThumbnail（先等泼溅真画出来、藏 gizmo 再截），不再直取 canvas。
 test('泼溅单独入库：取原始字节，按 type=3d 交给 /api/materials', () => {
   assert.ok(saveFn, '缺少 saveSplatToLibrary')
   const body = saveFn[1]
@@ -19,8 +19,8 @@ test('泼溅单独入库：取原始字节，按 type=3d 交给 /api/materials',
 
 test('入库带一张当前渲染帧当缩略图', () => {
   const body = saveFn[1]
-  assert.match(body, /rendererRef\.current\?\.domElement\.toDataURL\("image\/png"\)/)
-  assert.match(body, /form\.append\("thumbnail",/)
+  assert.match(body, /await captureThumbnail\(\)/, '缩略图要走等首帧的助手')
+  assert.match(body, /if \(thumbnail\) form\.append\("thumbnail", thumbnail, "thumb\.png"\)/)
 })
 
 test('没有来源地址就不提交，避免存进一个空壳素材', () => {

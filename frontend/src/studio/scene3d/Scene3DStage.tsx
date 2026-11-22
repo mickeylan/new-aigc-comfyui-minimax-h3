@@ -1392,6 +1392,88 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     }
   }, []);
 
+  // 缩略图不能「抓到什么算什么」：泼溅首帧要等 Spark 建完细节层，太早截会
+  // 得到一张空视口图（素材库里就是一格空地网格）。所以先强制重画一帧，再采样
+  // 确认画面不是纯底色，必要时最多等 timeoutMs。
+  const captureThumbnail = useCallback(async (timeoutMs = 60_000): Promise<Blob | null> => {
+    const renderer = rendererRef.current;
+    const scene = sceneRef.current;
+    const camera = cameraRef.current;
+    if (!renderer) return null;
+    const canvas = renderer.domElement;
+    const probe = document.createElement("canvas");
+    probe.width = 32;
+    probe.height = 18;
+    const ctx = probe.getContext("2d", { willReadFrequently: true });
+    // 以左上角为底色，差异化像素不到 5% 就当空视口。
+    const looksBlank = () => {
+      if (!ctx) return false;
+      ctx.drawImage(canvas, 0, 0, probe.width, probe.height);
+      const { data } = ctx.getImageData(0, 0, probe.width, probe.height);
+      const [r0, g0, b0] = data;
+      let diff = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        if (Math.abs(data[i] - r0) + Math.abs(data[i + 1] - g0) + Math.abs(data[i + 2] - b0) > 24) {
+          diff += 1;
+        }
+      }
+      return diff < probe.width * probe.height * 0.05;
+    };
+    // 选中对象的红绿蓝箭头是编辑器 chrome，不该烤进素材缩略图。
+    const gizmo = transformRef.current?.getHelper();
+    const gizmoVisible = gizmo?.visible ?? false;
+    if (gizmo) gizmo.visible = false;
+    const controls = controlsRef.current;
+    const savedPosition = camera?.position.clone();
+    const savedTarget = controls?.target.clone();
+    try {
+      // 1) 先等画面真的有内容：泼溅还在建细节层时截出来是空的。
+      const deadline = performance.now() + timeoutMs;
+      for (;;) {
+        if (scene && camera) renderer.render(scene, camera);
+        if (!splatLodPendingRef.current && !looksBlank()) break;
+        if (performance.now() >= deadline) break;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      // 2) 照当前视角截，模型常常只占中间一小块；把相机临时推到能框住全部
+      //    可见对象的位置（留 35% 余量，泼溅毛边不至于出画），截完立刻还原，用户视角不受影响。
+      const box = new THREE.Box3();
+      for (const entry of objectsRef.current) {
+        entry.object.updateMatrixWorld(true);
+        if (entry.splat) {
+          box.union(entry.splat.getBoundingBox(false).applyMatrix4(entry.object.matrixWorld));
+        } else {
+          box.union(new THREE.Box3().setFromObject(entry.object));
+        }
+      }
+      if (camera && controls && !box.isEmpty()) {
+        const center = box.getCenter(new THREE.Vector3());
+        const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 0.001);
+        const fov = (camera.fov * Math.PI) / 180;
+        const distance = (radius / Math.sin(fov / 2)) * 1.35;
+        const direction = camera.position.clone().sub(controls.target).normalize();
+        if (direction.lengthSq() === 0) direction.set(0.35, 0.3, 0.9).normalize();
+        camera.position.copy(center).addScaledVector(direction, distance);
+        camera.lookAt(center);
+        controls.target.copy(center);
+        controls.update();
+      }
+      // 取景后必须在同一个任务里立刻抓，中间不能 await，否则绘制缓冲可能已被清掉。
+      if (scene && camera) renderer.render(scene, camera);
+      const dataUrl = canvas.toDataURL("image/png");
+      return await (await fetch(dataUrl)).blob();
+    } finally {
+      // 还原视角与 gizmo，并补一帧，免得屏幕上留下临时取景的残影。
+      if (camera && savedPosition) camera.position.copy(savedPosition);
+      if (controls && savedTarget) {
+        controls.target.copy(savedTarget);
+        controls.update();
+      }
+      if (gizmo) gizmo.visible = gizmoVisible;
+      if (scene && camera) renderer.render(scene, camera);
+    }
+  }, []);
+
   // 3D 资产入库：模型本体进素材库（type=3d，可被预演绑定），预览图取当前渲染帧。
   // 泼溅进不了 GLB，要单层单独存——见下面 saveSplatToLibrary。
   const saveToLibrary = useCallback(async () => {
@@ -1405,14 +1487,11 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     try {
       const binary = await exportGeometry();
       const glb = new Blob([binary], { type: "model/gltf-binary" });
-      const renderer = rendererRef.current;
-      const thumb = renderer?.domElement.toDataURL("image/png");
+      const thumb = await captureThumbnail();
       const form = new FormData();
       form.append("file", glb, `scene-${Date.now()}.glb`);
       form.append("type", "3d");
-      if (thumb) {
-        form.append("thumbnail", await (await fetch(thumb)).blob(), "thumb.png");
-      }
+      if (thumb) form.append("thumbnail", thumb, "thumb.png");
       const response = await fetch("/api/materials", { method: "POST", body: form });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
@@ -1429,7 +1508,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     } finally {
       setBusy(null);
     }
-  }, [exportGeometry]);
+  }, [captureThumbnail, exportGeometry]);
 
   // 泼溅单独入库：把 .spz 原始字节按原样交上去，预览图取当前渲染帧。
   const saveSplatToLibrary = useCallback(async (entry: SceneObjectEntry) => {
@@ -1443,13 +1522,11 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const source = await fetch(entry.splatUrl);
       if (!source.ok) throw new Error(`读取泼溅失败（HTTP ${source.status}）`);
       const bytes = await source.arrayBuffer();
-      const thumbnail = rendererRef.current?.domElement.toDataURL("image/png");
+      const thumbnail = await captureThumbnail();
       const form = new FormData();
       form.append("file", new Blob([bytes], { type: "application/octet-stream" }), splatFileName(entry.name));
       form.append("type", "3d");
-      if (thumbnail) {
-        form.append("thumbnail", await (await fetch(thumbnail)).blob(), "thumb.png");
-      }
+      if (thumbnail) form.append("thumbnail", thumbnail, "thumb.png");
       const response = await fetch("/api/materials", { method: "POST", body: form });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
@@ -1462,7 +1539,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     } finally {
       setBusy(null);
     }
-  }, []);
+  }, [captureThumbnail]);
 
   const saveScene = useCallback(async () => {
     const camera = cameraRef.current;
