@@ -14,6 +14,7 @@ const {
   normalizeGroundPoint,
   moveGroundPoint,
   routeAroundObstacles,
+  routeAroundObstaclesDetailed,
   GROUND_OBSTACLE_MARGIN,
   toGroundPath,
 } = await import('../src/studio/scene3d/ground-path.ts')
@@ -322,6 +323,29 @@ test('自动避障：没有障碍就原样返回，不做任何加工', () => {
   // 盒子在远处、跟这一段无关
   const far = [{ min: [6, 6], max: [7, 7] }]
   assert.equal(routeAroundObstacles(path, far), path)
+})
+
+test('绕行预算用完时给出 exhausted 标记（不再静默直穿）', () => {
+  const path = { start: [-2, 0.02, 0], end: [2, 0.02, 0] }
+  const box = { min: [-0.4, -0.4], max: [0.4, 0.4] }
+  // 够绕：插了自动点、没被判定为用尽
+  const ok = routeAroundObstaclesDetailed(path, [box])
+  assert.equal(ok.detoured, true)
+  assert.equal(ok.exhausted, false)
+  assert.ok(ok.path.vias.length > 0)
+  // 预算是 0：明明挡着却绕不了，标记出来让界面提示
+  const starved = routeAroundObstaclesDetailed(path, [box], { maxDetours: 0 })
+  assert.equal(starved.exhausted, true)
+  assert.equal(starved.detoured, false)
+  assert.equal(starved.path, path)
+})
+
+test('障碍不在路上时不会被误判成预算用尽', () => {
+  const path = { start: [-2, 0.02, 0], end: [2, 0.02, 0] }
+  const far = [{ min: [6, 6], max: [7, 7] }]
+  const result = routeAroundObstaclesDetailed(path, far, { maxDetours: 0 })
+  assert.equal(result.exhausted, false)
+  assert.equal(result.path, path)
 })
 
 test('自动避障：盒子挡在中间就贴盒边绕过去，曲线不再穿过模型', () => {

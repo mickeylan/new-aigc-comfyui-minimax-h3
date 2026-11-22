@@ -390,25 +390,50 @@ export function routeAroundObstacles(
   obstacles: GroundObstacle[] | null | undefined,
   options: RouteOptions = {},
 ): GroundPath {
+  return routeAroundObstaclesDetailed(path, obstacles, options).path;
+}
+
+export interface RouteResult {
+  path: GroundPath;
+  /** 这次真的插了自动绕行点。 */
+  detoured: boolean;
+  /** 绕行预算（maxDetours）用完，还有一段会直穿障碍——调用方该提示用户。 */
+  exhausted: boolean;
+}
+
+/**
+ * 同 routeAroundObstacles，但把「绕行预算是否用完」也带出来。
+ * 之前用尽预算时只 break，路就这样直穿模型过去，界面上看不出任何异常。
+ */
+export function routeAroundObstaclesDetailed(
+  path: GroundPath,
+  obstacles: GroundObstacle[] | null | undefined,
+  options: RouteOptions = {},
+): RouteResult {
   const margin = Math.max(0, Number(options.margin ?? GROUND_OBSTACLE_MARGIN) || 0);
   const maxDetours = Math.max(0, Math.floor(Number(options.maxDetours ?? MAX_ROUTE_DETOURS) || 0));
   const boxes = (obstacles ?? [])
     .map((item) => normalizeObstacle(item, margin))
     .filter((item): item is GroundObstacle => !!item)
     .filter((box) => !boxContainsPoint(box, path.start) && !boxContainsPoint(box, path.end));
-  if (boxes.length === 0) return path;
+  if (boxes.length === 0) return { path, detoured: false, exhausted: false };
 
   const knots = [path.start, ...(path.vias ?? []), path.end];
   const route: GroundPoint[] = [path.start];
   let detours = 0;
+  let exhausted = false;
   for (let index = 0; index < knots.length - 1; index += 1) {
     const target = knots[index + 1];
     // 一段可能连穿几个盒子：绕着走直到这一段不再撞任何盒子为止。
     for (let guard = 0; guard < MAX_ROUTE_DETOURS; guard += 1) {
       const from = route[route.length - 1];
-      if (detours >= maxDetours) break;
       const box = boxes.find((item) => segmentHitsBox(from, target, item));
       if (!box) break;
+      // 预算用完但还有盒子挡住：这一段只能直穿，交给调用方提醒用户。
+      if (detours >= maxDetours) {
+        exhausted = true;
+        break;
+      }
       const detour = detourAroundBox(from, target, box);
       if (!detour) break;
       for (const point of detour) {
@@ -425,7 +450,8 @@ export function routeAroundObstacles(
     if (pointDistance(clampedTarget, last) >= 1e-4) route.push(clampedTarget);
   }
   const inner = route.slice(1, -1);
-  return inner.length > 0 ? { start: route[0], end: route[route.length - 1], vias: inner } : path;
+  const result = inner.length > 0 ? { start: route[0], end: route[route.length - 1], vias: inner } : path;
+  return { path: result, detoured: detours > 0, exhausted };
 }
 
 /** 从零散落点收成一条路径：只落了一个点时返回 null。 */
