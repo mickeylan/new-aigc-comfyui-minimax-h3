@@ -8,6 +8,20 @@ import type { LineNode } from "../pagedraw/stores/SceneState";
 import type { Node } from "../pagedraw/Node";
 import type { BaseSelectorImage } from "../pagedraw/types";
 import { findTemplateId } from "../host/template-cache.js";
+import {
+  Model3DOverlay,
+  type Model3DOverlayHandle,
+} from "../pagedraw/components/Model3DOverlay";
+import {
+  DEFAULT_MODEL3D_PARAMS,
+  render3DModelToDataUrl,
+  type Model3DParams,
+} from "../pagedraw/utilities/render3DModel";
+import {
+  assetKind,
+  assetUrl,
+  type LibraryAsset,
+} from "../scene3d/assetLibrary.js";
 
 interface PageDrawStageProps {
   initialImageUrl?: string;
@@ -25,6 +39,47 @@ interface UploadResult {
 
 const POLL_INTERVAL_MS = 2000;
 const TASK_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * 覆盖层上的「拖一条滑杆」动作：按下后左右/上下拖，按位移量驱动相机或模型。
+ * 用它而不是让用户直接在 3D 视图里拖，是因为覆盖层下面就是画布的
+ * 节点拖拽与选中框，直接拖必然打架。
+ */
+function ScrubPad({
+  label,
+  onDrag,
+}: {
+  label: string;
+  onDrag: (dx: number, dy: number) => void;
+}) {
+  const last = useRef<{ x: number; y: number } | null>(null);
+  return (
+    <button
+      type="button"
+      className="cursor-ew-resize rounded-md border border-white/20 bg-[#101014]/90 px-3 py-1.5 text-xs text-white/80 hover:bg-white/10"
+      onPointerDown={(event) => {
+        last.current = { x: event.clientX, y: event.clientY };
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }}
+      onPointerMove={(event) => {
+        const start = last.current;
+        if (!start) return;
+        const dx = event.clientX - start.x;
+        const dy = event.clientY - start.y;
+        last.current = { x: event.clientX, y: event.clientY };
+        onDrag(dx, dy);
+      }}
+      onPointerUp={() => {
+        last.current = null;
+      }}
+      onPointerCancel={() => {
+        last.current = null;
+      }}
+    >
+      {label}
+    </button>
+  );
+}
 
 /** Krea2 微调版本，值为 ComfyUI 里的 diffusion_models 相对路径。 */
 const KREA2_UNETS = [
@@ -137,6 +192,12 @@ export default function PageDrawStage({
   const stageRef = useRef<Konva.Stage>(null);
   const transformerRefs = useRef<Record<string, Konva.Transformer>>({});
   const baseImageRef = useRef<Konva.Image>(null);
+  // 3D 模型节点：选材面板 + 实时调视角覆盖层。
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [modelAssets, setModelAssets] = useState<LibraryAsset[]>([]);
+  const [modelBusy, setModelBusy] = useState(false);
+  const [editing3dNodeId, setEditing3dNodeId] = useState<string | null>(null);
+  const overlayRef = useRef<Model3DOverlayHandle>(null);
 
   useEffect(() => {
     document.body.classList.add("studio-theme");
@@ -526,6 +587,97 @@ export default function PageDrawStage({
 
   const inpaintNodes = useMemo(() => store.inpaintLineNodes, [store]);
 
+  // 舞台中心在舞台坐标系里的位置：新节点默认放在用户正在看的地方。
+  const stageCenter = () => {
+    const stage = stageRef.current;
+    if (!stage) return { x: 0, y: 0 };
+    const container = stage.container();
+    const scale = stage.scaleX() || 1;
+    return {
+      x: (container.offsetWidth / 2 - stage.x()) / scale,
+      y: (container.offsetHeight / 2 - stage.y()) / scale,
+    };
+  };
+
+  const openModelPicker = async () => {
+    setModelPickerOpen((open) => !open);
+    if (modelAssets.length > 0) return;
+    try {
+      const response = await fetch("/api/materials?type=3d");
+      if (!response.ok) throw new Error(`读取素材库失败：${response.status}`);
+      const payload = await response.json();
+      const items: LibraryAsset[] = Array.isArray(payload) ? payload : payload.items ?? [];
+      setModelAssets(items);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  // 从素材库挑一个 GLB 放到画布中心，先离屏渲一帧当占位图。
+  const placeModel = async (asset: LibraryAsset) => {
+    const kind = assetKind(asset.path || asset.name);
+    if (kind !== "glb" && kind !== "gltf") {
+      setError(`只支持 GLB / glTF 放进画布，请先转换：${asset.name}`);
+      return;
+    }
+    setModelBusy(true);
+    setError(null);
+    try {
+      const url = assetUrl(asset.path);
+      const params: Model3DParams = { ...DEFAULT_MODEL3D_PARAMS };
+      const center = stageCenter();
+      const dataUrl = await render3DModelToDataUrl(url, params, 512, 512);
+      useSceneStore.getState().createImageFrom3DModel(
+        center.x - 256,
+        center.y - 256,
+        dataUrl,
+        url,
+        params,
+        512,
+        512,
+      );
+      setModelPickerOpen(false);
+      setNotice(`已放入 ${asset.name}，可点「调 3D 视角」改机位`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setModelBusy(false);
+    }
+  };
+
+  // 选中的单个节点若是 3D 模型渲染出来的，就允许回到 3D 里改机位。
+  const selectedModelNode = useMemo(() => {
+    if (store.selectedNodeIds.length !== 1) return null;
+    const id = store.selectedNodeIds[0];
+    const node = store.drawNodes.find((item) => item.id === id) as Node | undefined;
+    return node?.modelUrl ? node : null;
+  }, [store.selectedNodeIds, store.drawNodes]);
+
+  const commitModelView = async (dataUrl: string, params: Model3DParams) => {
+    const id = editing3dNodeId;
+    setEditing3dNodeId(null);
+    if (!id) return;
+    const state = useSceneStore.getState();
+    const node = state.drawNodes.find((item) => item.id === id) as Node | undefined;
+    if (!node) return;
+    try {
+      await node.setImageFromUrl(dataUrl);
+      // 换一张新的 imageElement 引用，Konva 才会重画；顺带把新机位存进节点。
+      state.updateNode(id, {
+        imageUrl: dataUrl,
+        imageElement: node.imageElement,
+        model3dParams: params,
+      });
+      setNotice("已更新 3D 视角");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const editing3dNode = editing3dNodeId
+    ? (store.drawNodes.find((item) => item.id === editing3dNodeId) as Node | undefined)
+    : undefined;
+
   return (
     <div
       className="studio-root studio-theme fixed inset-0 z-[100] overflow-hidden bg-[#121316] text-[#f2f1ee]"
@@ -615,6 +767,24 @@ export default function PageDrawStage({
         >
           去背景
         </button>
+        <button
+          type="button"
+          className={`rounded-md border px-3 py-1.5 text-sm ${modelPickerOpen ? "border-violet-400/60 bg-violet-400/10 text-violet-200" : "border-white/10 hover:bg-white/10"}`}
+          onClick={() => void openModelPicker()}
+          title="从素材库放一个 GLB 到画布，渲成一张可再编辑的图"
+        >
+          放 3D 模型
+        </button>
+        {selectedModelNode && (
+          <button
+            type="button"
+            className="rounded-md border border-violet-400/40 px-3 py-1.5 text-sm text-violet-200 hover:bg-violet-400/10"
+            onClick={() => setEditing3dNodeId(selectedModelNode.id)}
+            title="回到 3D 里改机位，改完写回这张图"
+          >
+            调 3D 视角
+          </button>
+        )}
         <button
           type="button"
           className="rounded-md border border-sky-400/40 px-3 py-1.5 text-sm text-sky-200 hover:bg-sky-400/10 disabled:opacity-50"
@@ -851,6 +1021,90 @@ export default function PageDrawStage({
           </div>
         )}
       </aside>
+
+      {modelPickerOpen && (
+        <aside className="fixed left-3 top-20 z-30 w-72 rounded-lg border border-violet-400/30 bg-[#101014]/95 p-3 text-sm text-white/80 backdrop-blur">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-xs text-white/60">素材库里的 3D 模型</span>
+            <button
+              type="button"
+              className="px-1 text-xs text-white/60 hover:text-white"
+              onClick={() => setModelPickerOpen(false)}
+            >
+              ✕
+            </button>
+          </div>
+          {modelBusy && <p className="py-2 text-xs text-violet-200">正在渲染缩略图…</p>}
+          {!modelBusy && modelAssets.length === 0 && (
+            <p className="py-2 text-xs text-white/40">素材库里还没有 3D 模型</p>
+          )}
+          <div className="max-h-[50vh] space-y-1 overflow-auto">
+            {modelAssets.map((asset) => {
+              const kind = assetKind(asset.path || asset.name);
+              const usable = kind === "glb" || kind === "gltf";
+              return (
+                <button
+                  key={asset.id}
+                  type="button"
+                  disabled={!usable || modelBusy}
+                  onClick={() => void placeModel(asset)}
+                  className={`flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs ${
+                    usable ? "bg-white/5 hover:bg-white/15" : "cursor-not-allowed bg-white/5 opacity-50"
+                  }`}
+                  title={usable ? "放到画布中心" : "需要先转成 GLB"}
+                >
+                  {asset.thumb_path ? (
+                    <img
+                      src={assetUrl(asset.thumb_path)}
+                      alt=""
+                      className="h-8 w-8 rounded object-cover"
+                    />
+                  ) : (
+                    <span className="flex h-8 w-8 items-center justify-center rounded bg-white/10 text-[10px]">
+                      3D
+                    </span>
+                  )}
+                  <span className="flex-1 truncate">{asset.name}</span>
+                  {!usable && <span className="text-white/40">需转 GLB</span>}
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+      )}
+
+      {editing3dNode && (
+        <>
+          <Model3DOverlay
+            ref={overlayRef}
+            node={editing3dNode}
+            stageRef={stageRef}
+            onCommit={(dataUrl, params) => void commitModelView(dataUrl, params)}
+            onDismiss={() => setEditing3dNodeId(null)}
+          />
+          <div className="fixed inset-x-0 bottom-24 z-[60] flex flex-wrap items-center justify-center gap-2">
+            <ScrubPad
+              label="左右拖：转相机"
+              onDrag={(dx, dy) => overlayRef.current?.onRotateDrag(dx, dy)}
+            />
+            <ScrubPad
+              label="左右拖：缩模型"
+              onDrag={(dx, dy) => overlayRef.current?.onScaleDrag(dx, dy)}
+            />
+            <ScrubPad
+              label="左右拖：改视角"
+              onDrag={(dx, dy) => overlayRef.current?.onFovDrag(dx, dy)}
+            />
+            <button
+              type="button"
+              className="rounded-md border border-emerald-400/50 bg-emerald-400/10 px-3 py-1.5 text-xs text-emerald-200 hover:bg-emerald-400/20"
+              onClick={() => overlayRef.current?.commit()}
+            >
+              完成
+            </button>
+          </div>
+        </>
+      )}
 
       {error && (
         <div className="fixed bottom-20 left-1/2 z-50 -translate-x-1/2 rounded-md border border-red-400/40 bg-red-950/90 px-4 py-2 text-sm text-red-100">

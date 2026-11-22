@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
-function disposeObject3D(object: THREE.Object3D) {
+export function disposeObject3D(object: THREE.Object3D) {
   object.traverse((child) => {
     const mesh = child as THREE.Mesh;
     mesh.geometry?.dispose();
