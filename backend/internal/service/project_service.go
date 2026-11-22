@@ -8666,7 +8666,7 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	if isH3Ref2VTemplate(tplCode) {
 		_, finalReferenceLines, _ = s.sceneVideoContinuityReferences(sc, pid)
 	}
-	if false && tplCode == h3Ref2V3DTemplate {
+	if tplCode == h3Ref2V3DTemplate {
 		// 有 3D 结构参考片时才写 <Video 1>：这是 H3 认标签的唯一通路，
 		// 措辞固定（见 h3_video1_structure_reference.go），不交给模型自由发挥。
 		promptText = injectH3Video1StructureReference(promptText)
