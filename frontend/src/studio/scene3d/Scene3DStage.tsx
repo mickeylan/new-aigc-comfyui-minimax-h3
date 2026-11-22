@@ -75,6 +75,14 @@ import {
   type SkyboxSettings,
 } from "./compositing.js";
 import {
+  findImage,
+  imageMaterialOptions,
+  imagePlaneName,
+  materialUrl,
+  skyboxLabel,
+  type LibraryImage,
+} from "./background-library.js";
+import {
   applyBonePose,
   findSkeletonRoot,
   hasSkeleton,
@@ -745,6 +753,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [skybox, setSkybox] = useState<SkyboxSettings>(DEFAULT_SKYBOX);
   const [skyboxName, setSkyboxName] = useState<string | null>(null);
   const [planeSettings, setPlaneSettings] = useState(DEFAULT_PLANE_LAYER);
+  // 素材库里能当背景的图片；不给文件选择器也能铺背景板/天空盒。
+  const [backgroundImages, setBackgroundImages] = useState<LibraryImage[]>([]);
+  const [backgroundImageId, setBackgroundImageId] = useState("");
+  const [backgroundLoading, setBackgroundLoading] = useState(false);
 
   useEffect(() => {
     document.body.classList.add("studio-theme");
@@ -1519,6 +1531,47 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     if (!scene || !skyboxTextureRef.current) return;
     scene.environment = enabled ? skyboxTextureRef.current : null;
   }, []);
+
+  // 从素材库拉一页图片当背景候选：只读 /api/materials?type=image，不另存副本。
+  const loadBackgroundImages = useCallback(async () => {
+    setBackgroundLoading(true);
+    try {
+      const response = await fetch("/api/materials?type=image&page=1&page_size=40");
+      if (!response.ok) throw new Error(`读取素材库失败（HTTP ${response.status}）`);
+      const options = imageMaterialOptions(await response.json());
+      setBackgroundImages(options);
+      if (options.length === 0) {
+        setStatus("素材库里还没有图片素材");
+        setBackgroundImageId("");
+      } else {
+        setBackgroundImageId((current) => (findImage(options, current) ? current : String(options[0].id)));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBackgroundLoading(false);
+    }
+  }, []);
+
+  const applyBackgroundAsPlane = useCallback(() => {
+    const image = findImage(backgroundImages, backgroundImageId);
+    if (!image) {
+      setError("先在下拉里选一张素材库图片");
+      return;
+    }
+    const url = materialUrl(image.path);
+    void addPlane(url, imagePlaneName(image), "image");
+  }, [backgroundImages, backgroundImageId, addPlane]);
+
+  const applyBackgroundAsSkybox = useCallback(() => {
+    const image = findImage(backgroundImages, backgroundImageId);
+    if (!image) {
+      setError("先在下拉里选一张素材库图片");
+      return;
+    }
+    const url = materialUrl(image.path);
+    void applySkybox(url, skyboxLabel(image));
+  }, [backgroundImages, backgroundImageId, applySkybox]);
 
   const runImageTo3D = async (file: File) => {
     setBusy("正在上传参考图…");
@@ -3458,6 +3511,55 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               >
                 清除
               </button>
+            </div>
+            <div className="space-y-1 rounded-md bg-white/5 px-2 py-1.5">
+              <div className="flex items-center justify-between text-[11px] text-white/45">
+                <span>从素材库选图</span>
+                <button
+                  type="button"
+                  onClick={() => void loadBackgroundImages()}
+                  className="rounded px-1 text-[11px] text-white/55 hover:bg-white/10"
+                >
+                  {backgroundLoading ? "读取中…" : "刷新"}
+                </button>
+              </div>
+              <select
+                value={backgroundImageId}
+                onChange={(event) => setBackgroundImageId(event.target.value)}
+                onFocus={() => {
+                  if (backgroundImages.length === 0 && !backgroundLoading) void loadBackgroundImages();
+                }}
+                className="w-full rounded bg-black/30 px-1 py-1 text-[11px] text-white/70"
+              >
+                <option value="">
+                  {backgroundImages.length ? "请选择一张图…" : "点「刷新」读取素材库"}
+                </option>
+                {backgroundImages.map((image) => (
+                  <option key={image.id} value={image.id}>
+                    {image.name}
+                  </option>
+                ))}
+              </select>
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  onClick={applyBackgroundAsPlane}
+                  disabled={!findImage(backgroundImages, backgroundImageId)}
+                  className="flex-1 rounded-md bg-white/5 px-2 py-1 text-xs text-white/70 hover:bg-white/10 disabled:opacity-40"
+                  title="把素材库里的这张图当背景板放进 3D 场景（不再需要文件选择器）"
+                >
+                  铺成图片平面
+                </button>
+                <button
+                  type="button"
+                  onClick={applyBackgroundAsSkybox}
+                  disabled={!findImage(backgroundImages, backgroundImageId)}
+                  className="flex-1 rounded-md bg-white/5 px-2 py-1 text-xs text-white/70 hover:bg-white/10 disabled:opacity-40"
+                  title="把素材库里的这张图当天球背景（等距柱状全景最理想）"
+                >
+                  设为天空盒
+                </button>
+              </div>
             </div>
             {skybox.enabled && (
               <div className="space-y-1 rounded-md bg-white/5 px-2 py-1.5">
