@@ -15,28 +15,59 @@ export interface AssetLibraryPanelProps {
   onError: (message: string) => void;
 }
 
+/** 一次拉多少个素材。24 大致是一屏半，再多就让人滚得心烦。 */
+const ASSET_PAGE_SIZE = 24;
+
 export default function AssetLibraryPanel({ onPlace, onError }: AssetLibraryPanelProps) {
   const [items, setItems] = useState<LibraryAsset[]>([]);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  /** 素材越存越多，面板一次只拉一页；旧后端不认这两个参数会退回全量。 */
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+
+  const fetchPage = useCallback(async (target: number) => {
+    // React 岛内不引 axios 实例，素材库直接打 fetch（3D 编辑器存入素材库也是这么做的）。
+    const response = await fetch(
+      `/api/materials?type=3d&page=${target}&page_size=${ASSET_PAGE_SIZE}`,
+    );
+    if (!response.ok) throw new Error(`读取素材库失败（HTTP ${response.status}）`);
+    const payload = await response.json();
+    // 后端可能直接返回数组，也可能包一层 {items: []}，两种都认。
+    const list: LibraryAsset[] = Array.isArray(payload) ? payload : (payload.items ?? []);
+    return list;
+  }, []);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      // React 岛内不引 axios 实例，素材库直接打 fetch（3D 编辑器存入素材库也是这么做的）。
-      const response = await fetch("/api/materials?type=3d");
-      if (!response.ok) throw new Error(`读取素材库失败（HTTP ${response.status}）`);
-      const payload = await response.json();
-      // 后端可能直接返回数组，也可能包一层 {items: []}，两种都认。
-      const list = Array.isArray(payload) ? payload : (payload.items ?? []);
+      const list = await fetchPage(1);
       setItems(list);
+      setPage(1);
+      setHasMore(list.length >= ASSET_PAGE_SIZE);
       setLoaded(true);
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, [onError]);
+  }, [fetchPage, onError]);
+
+  const loadMore = useCallback(async () => {
+    setLoading(true);
+    try {
+      const next = page + 1;
+      const list = await fetchPage(next);
+      // 追加而不是替换：上一页已经在列表里了。
+      setItems((current) => [...current, ...list]);
+      setPage(next);
+      setHasMore(list.length >= ASSET_PAGE_SIZE);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchPage, onError, page]);
 
   // 首次展开时拉一次；之后靠「刷新」按钮。
   useEffect(() => {
@@ -47,7 +78,7 @@ export default function AssetLibraryPanel({ onPlace, onError }: AssetLibraryPane
     <div className="space-y-1.5">
       <div className="flex items-center justify-between px-1">
         <span className="text-[11px] text-white/40">
-          {loading ? "正在读取…" : `共 ${items.length} 个 3D 素材`}
+          {loading ? "正在读取…" : `已加载 ${items.length} 个 3D 素材`}
         </span>
         <button
           type="button"
@@ -110,6 +141,16 @@ export default function AssetLibraryPanel({ onPlace, onError }: AssetLibraryPane
               </div>
             );
           })}
+          {hasMore ? (
+            <button
+              type="button"
+              onClick={() => void loadMore()}
+              disabled={loading}
+              className="w-full rounded-md bg-white/5 px-1.5 py-1 text-[11px] text-white/60 hover:bg-white/15 disabled:opacity-40"
+            >
+              {loading ? "正在读取…" : "加载更多"}
+            </button>
+          ) : null}
         </div>
       )}
     </div>

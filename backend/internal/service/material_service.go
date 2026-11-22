@@ -91,8 +91,14 @@ func (m *MaterialService) saveUpload(projectID *uint, ftype, name string, data [
 	return &mat, nil
 }
 
-// List 素材列表，支持类型/项目筛选
+// List 素材列表，支持类型/项目筛选（不分页，老调用方用这个）
 func (m *MaterialService) List(ftype string, projectID *uint) ([]models.Material, error) {
+	return m.ListPaged(ftype, projectID, 1, 0)
+}
+
+// ListPaged 分页列表：page 从 1 开始；pageSize <= 0 表示不分页。
+// 排序固定 id desc，新入的素材总在第一页。
+func (m *MaterialService) ListPaged(ftype string, projectID *uint, page, pageSize int) ([]models.Material, error) {
 	var list []models.Material
 	q := m.db.Model(&models.Material{})
 	if ftype != "" {
@@ -100,6 +106,12 @@ func (m *MaterialService) List(ftype string, projectID *uint) ([]models.Material
 	}
 	if projectID != nil {
 		q = q.Where("project_id = ?", *projectID)
+	}
+	if pageSize > 0 {
+		if page < 1 {
+			page = 1
+		}
+		q = q.Limit(pageSize).Offset((page - 1) * pageSize)
 	}
 	if err := q.Order("id desc").Find(&list).Error; err != nil {
 		return nil, err

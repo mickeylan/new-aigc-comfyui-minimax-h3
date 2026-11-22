@@ -2952,7 +2952,21 @@ func (s *Service) HandleEpisodeSRT(c *gin.Context) {
 
 // ---------- 素材库 ----------
 
-// HandleListMaterials 素材列表（?type=image|video|audio&project_id=N）
+// parseIntQuery 读一个整数 query 参数，缺省或非法时返回 0（调用方按"未指定"处理）。
+func parseIntQuery(c *gin.Context, name string) int {
+	v := c.Query(name)
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// HandleListMaterials 素材列表（?type=image|video|audio&project_id=N&page=1&page_size=24）
+// page_size 不传或 <=0 时不分页，保持旧调用方拿全量。
 func (s *Service) HandleListMaterials(c *gin.Context) {
 	ftype := c.Query("type")
 	var projectID *uint
@@ -2963,7 +2977,7 @@ func (s *Service) HandleListMaterials(c *gin.Context) {
 			projectID = &pid
 		}
 	}
-	list, err := s.Materials.List(ftype, projectID)
+	list, err := s.Materials.ListPaged(ftype, projectID, parseIntQuery(c, "page"), parseIntQuery(c, "page_size"))
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
