@@ -16,8 +16,10 @@ import { findTemplateId } from "../host/template-cache.js";
 import { FKHelper } from "./posing/FKHelper.js";
 import { createStoreZip } from "./zip.js";
 import {
+  DEFAULT_ORBIT_PITCH,
   DEFAULT_ORBIT_SECONDS,
   ORBIT_SEGMENTS_LIMITS,
+  normalizeOrbitPitch,
   normalizeOrbitSeconds,
   normalizeOrbitTurns,
   orbitCameraKeys,
@@ -677,9 +679,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [playingMove, setPlayingMove] = useState(false);
   // 跟拍：播放/导出时相机整体随角色平移，构图不变，只是跟着人走。
   const [followMover, setFollowMover] = useState(false);
-  // 环绕运镜的两个参数：转几圈、转完总几秒。
+  // 环绕运镜的三个参数：转几圈、转完总几秒、收尾时抬高/压低多少度（0 = 平视环绕）。
   const [orbitTurns, setOrbitTurns] = useState(1);
   const [orbitSeconds, setOrbitSeconds] = useState(DEFAULT_ORBIT_SECONDS);
+  const [orbitPitch, setOrbitPitch] = useState(DEFAULT_ORBIT_PITCH);
   // 希区柯克：推进到起始距离的多少倍（<1 推进）、几秒。
   const [dollyRange, setDollyRange] = useState(0.35);
   const [dollySeconds, setDollySeconds] = useState(DEFAULT_DOLLY_SECONDS);
@@ -1699,6 +1702,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       turns: orbitTurns,
       seconds: orbitSeconds,
       segments: Math.max(ORBIT_SEGMENTS_LIMITS.min, Math.round(orbitTurns * 8)),
+      pitch: orbitPitch,
     });
     if (keys.length === 0) {
       setStatus("相机就在环绕中心上，先拉开一点距离再环绕");
@@ -1717,9 +1721,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       })),
     ]);
     setStatus(
-      `已追加环绕 ${orbitTurns} 圈、${keys.length} 个机位（${orbitSeconds} 秒）${entry ? `，绕「${entry.name}」` : "，绕当前相机目标"}`,
+      `已追加环绕 ${orbitTurns} 圈、${keys.length} 个机位（${orbitSeconds} 秒${orbitPitch === 0 ? "" : `，收尾抬高 ${orbitPitch}°`}）${entry ? `，绕「${entry.name}」` : "，绕当前相机目标"}`,
     );
-  }, [orbitSeconds, orbitTurns]);
+  }, [orbitPitch, orbitSeconds, orbitTurns]);
 
   /**
    * 希区柯克：对着选中对象（没选中就对着当前相机目标）推进，距离变、视角跟着反向变，
@@ -3416,6 +3420,18 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               className="w-12 rounded border border-white/10 bg-black/30 px-1 py-0.5 text-[11px] text-white/70"
             />
             <span className="text-[11px] text-white/40">秒</span>
+            {/* 俯仰：收尾时机位比起幅抬高/压低多少度；0 就是老的平视环绕。 */}
+            <input
+              type="number"
+              min={-60}
+              max={60}
+              step={5}
+              value={orbitPitch}
+              onChange={(event) => setOrbitPitch(normalizeOrbitPitch(Number(event.target.value)))}
+              title="收尾时机位抬高多少度（0=保持起幅高度；负数压低）。转着圈升空就是俯拍环绕"
+              className="w-12 rounded border border-white/10 bg-black/30 px-1 py-0.5 text-[11px] text-white/70"
+            />
+            <span className="text-[11px] text-white/40">°</span>
             <button
               type="button"
               onClick={addOrbitShot}
