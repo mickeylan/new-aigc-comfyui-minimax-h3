@@ -424,8 +424,16 @@ test('编辑器接上自动避障：包围盒收集、统一走 editorGroundPath
   assert.match(stage, /if \(entry\.splat\) continue;/)
   // 渲染/预览/导出/长度全走 editorGroundPath（不然面板上的长度和实际走位对不上）
   assert.match(stage, /const editorGroundPath = \(points: GroundPoints\): GroundPath \| null => \{/)
-  assert.match(stage, /return routeAroundObstacles\(path, collectGroundObstacles\(\)\);/)
+  // 走 Detailed 版：既拿到路径，也拿到「绕行预算用尽」这个信号
+  assert.match(stage, /const routed = routeAroundObstaclesDetailed\(path, collectGroundObstacles\(\)\);/)
+  assert.match(stage, /routeStarvedRef\.current = routed\.exhausted;/)
+  assert.match(stage, /routeStarvedRef\.current = false;/)
   assert.equal(/const path = toGroundPath\(groundPoints\);/.test(stage), false)
+  // 用尽时界面要说一声，不能静默直穿
+  assert.match(
+    stage,
+    /if \(routeStarvedRef\.current\) \{\n\s+setStatus\("自动避障绕不过去：有一小段会直接穿过模型/,
+  )
   // 存档还只存用户点的点：模型一挪就能重新绕
   assert.match(stage, /groundPath: toGroundPath\(groundPoints\),/)
   // 开关 + 说明

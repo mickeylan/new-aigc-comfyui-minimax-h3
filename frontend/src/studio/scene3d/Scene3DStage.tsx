@@ -47,6 +47,7 @@ import {
   moveGroundPoint,
   normalizeGroundPath,
   routeAroundObstacles,
+  routeAroundObstaclesDetailed,
   toGroundPath,
   type GroundObstacle,
   type GroundPath,
@@ -740,6 +741,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [avoidObstacles, setAvoidObstacles] = useState(true);
   const avoidObstaclesRef = useRef(avoidObstacles);
   avoidObstaclesRef.current = avoidObstacles;
+  // editorGroundPath 在渲染期被调用多次，不能在里面 setState：只记一个标记，画线 effect 里报告。
+  const routeStarvedRef = useRef(false);
   // 环绕运镜的三个参数：转几圈、转完总几秒、收尾时抬高/压低多少度（0 = 平视环绕）。
   const [orbitTurns, setOrbitTurns] = useState(1);
   const [orbitSeconds, setOrbitSeconds] = useState(DEFAULT_ORBIT_SECONDS);
@@ -825,8 +828,14 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
    */
   const editorGroundPath = (points: GroundPoints): GroundPath | null => {
     const path = toGroundPath(points);
-    if (!path || !avoidObstaclesRef.current) return path;
-    return routeAroundObstacles(path, collectGroundObstacles());
+    if (!path || !avoidObstaclesRef.current) {
+      routeStarvedRef.current = false;
+      return path;
+    }
+    // 绕行预算用尽时这里是 true：路径会直穿模型，得让界面说一声（见下面画线的 effect）。
+    const routed = routeAroundObstaclesDetailed(path, collectGroundObstacles());
+    routeStarvedRef.current = routed.exhausted;
+    return routed.path;
   };
 
   const selectObject = useCallback((id: string | null) => {
@@ -1286,6 +1295,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       );
       line.computeLineDistances();
       group.add(line);
+    }
+    // 绕行预算用尽：路径这一段会从模型身上穿过去，界面必须说清楚，否则只能靠盯预览发现。
+    if (routeStarvedRef.current) {
+      setStatus("自动避障绕不过去：有一小段会直接穿过模型——删掉挡路的模型，或再加一个途经点。");
     }
   }, [groundPoints, avoidObstacles]);
 
