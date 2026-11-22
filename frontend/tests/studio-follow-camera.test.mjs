@@ -30,8 +30,9 @@ test('跟拍接进播放与序列导出：相机位置和目标一起平移', ()
   assert.match(stage, /const \[followMover, setFollowMover\] = useState\(false\);/)
   assert.match(stage, /follow: followMover/)
   assert.match(stage, /setFollowMover\(Boolean\(savedMove\?\.follow\)\)/)
-  // 播放：角色在播放期间自己走 A→B，相机加同一个位移
-  assert.match(stage, /const followPath = followMover \? toGroundPath\(groundPoints\) : null;/)
+  // 播放：角色在播放期间自己走 A→B，相机加同一个位移（2026-11-22：跟拍也走 editorGroundPath，
+  // 自动避障插的拐点同样要跟到）
+  assert.match(stage, /const followPath = followMover \? editorGroundPath\(groundPoints\) : null;/)
   assert.match(stage, /delta = groundPathFollowDelta\(followPath, progress\);/)
   assert.match(stage, /pose\.position\[0\] \+ delta\[0\],/)
   assert.match(stage, /pose\.target\[2\] \+ delta\[2\],/)

@@ -13,6 +13,8 @@ const {
   normalizeGroundPath,
   normalizeGroundPoint,
   moveGroundPoint,
+  routeAroundObstacles,
+  GROUND_OBSTACLE_MARGIN,
   toGroundPath,
 } = await import('../src/studio/scene3d/ground-path.ts')
 
@@ -127,8 +129,8 @@ test('地面路径进出存档：写入可选字段、载入时校验、UI 能�
   assert.match(stage, /groundPath: toGroundPath\(groundPoints\),/)
   assert.match(stage, /const savedPath = normalizeGroundPath\(doc\.groundPath\);/)
   assert.match(stage, /vias: savedPath\?\.vias \?\? null,/)
-  // 只点一端时不算路径，UI 上也不显示距离
-  assert.match(stage, /const path = toGroundPath\(groundPoints\);/)
+  // 只点一端时不算路径，UI 上也不显示距离（2026-11-22：面板改走 editorGroundPath，自动避障也算进长度）
+  assert.match(stage, /const path = editorGroundPath\(groundPoints\);/)
   assert.match(stage, /path \? `\$\{groundPathLength\(path\)\.toFixed\(1\)\} m` : "起点 \/ 终点"/)
   // 两端标记 + 中间虚线
   assert.match(stage, /if \(groundPoints\.start\) ring\(groundPoints\.start, 0x22c55e, \{ kind: "start" \}\);/)
@@ -301,4 +303,109 @@ test('编辑器接上拖动微调：命中盘 -> 锁控制器 -> 拖动改点 ->
   // 监听器成对注册/注销
   assert.match(stage, /addEventListener\("pointermove", onPointerMove\)/)
   assert.match(stage, /removeEventListener\("pointermove", onPointerMove\)/)
+})
+// 2026-11-22 新增：自动避障。模型站在 A→B 之间时，直线（和手工曲线）会从模型身上穿过去，
+// 导出的参考片就成了「角色从别人身体里穿出来」。这里让路径自己绕盒子。
+function samplesOf(path, count = 96) {
+  const out = []
+  for (let index = 0; index <= count; index += 1) out.push(groundPathPointAt(path, index / count))
+  return out
+}
+function insideBox(point, min, max) {
+  return point[0] > min[0] && point[0] < max[0] && point[2] > min[1] && point[2] < max[1]
+}
+
+test('自动避障：没有障碍就原样返回，不做任何加工', () => {
+  const path = { start: [-2, 0.02, 0], end: [2, 0.02, 0] }
+  assert.equal(routeAroundObstacles(path, []), path)
+  assert.equal(routeAroundObstacles(path, null), path)
+  // 盒子在远处、跟这一段无关
+  const far = [{ min: [6, 6], max: [7, 7] }]
+  assert.equal(routeAroundObstacles(path, far), path)
+})
+
+test('自动避障：盒子挡在中间就贴盒边绕过去，曲线不再穿过模型', () => {
+  const path = { start: [-2, 0.02, 0], end: [2, 0.02, 0] }
+  const box = { min: [-0.4, -0.4], max: [0.4, 0.4] }
+  const routed = routeAroundObstacles(path, [box])
+  assert.ok(routed.vias && routed.vias.length >= 2, '至少要插两个拐点才绕得过去')
+  // 自动点都在盒外（按外扩余量留出的边界之外）
+  for (const point of routed.vias) {
+    assert.ok(
+      Math.abs(point[0]) > 0.4 + GROUND_OBSTACLE_MARGIN - 1e-6 ||
+        Math.abs(point[2]) > 0.4 + GROUND_OBSTACLE_MARGIN - 1e-6,
+      '自动点不能落在扩张后的盒子里',
+    )
+  }
+  // 整条曲线（含平滑部分）都不进模型自身的包围盒
+  for (const point of samplesOf(routed)) {
+    assert.equal(insideBox(point, box.min, box.max), false, '曲线穿进模型了')
+  }
+  assert.equal(routed.start[0], -2)
+  assert.equal(routed.end[0], 2)
+  assert.ok(groundPathLength(routed) > groundPathLength(path) + 0.2, '绕路必须比直线长')
+})
+
+test('自动避障：同输入同输出（不改入参、顺序也稳）', () => {
+  const path = { start: [-2, 0.02, 0], end: [2, 0.02, 1], vias: [[-1, 0.02, -1]] }
+  const snapshot = JSON.parse(JSON.stringify(path))
+  const boxes = [{ min: [0, -0.5], max: [1, 0.5] }]
+  const first = routeAroundObstacles(path, boxes)
+  const second = routeAroundObstacles(path, boxes)
+  assert.deepEqual(first, second)
+  assert.deepEqual(path, snapshot)
+})
+
+test('自动避障：起点/终点就在盒子里时不绕（那是角色自己站的位置）', () => {
+  const path = { start: [0, 0.02, 0], end: [2, 0.02, 0] }
+  const aroundStart = [{ min: [-0.5, -0.5], max: [0.5, 0.5] }]
+  assert.equal(routeAroundObstacles(path, aroundStart), path)
+  const aroundEnd = [{ min: [1.6, -0.4], max: [2.4, 0.4] }]
+  const anchored = { start: [0, 0.02, 0], end: [2, 0.02, 0] }
+  assert.equal(routeAroundObstacles(anchored, aroundEnd), anchored)
+})
+
+test('自动避障：绕行时仍然穿过用户点的途经点', () => {
+  const via = [0, 0.02, 1.2]
+  const path = { start: [-2, 0.02, 0], end: [2, 0.02, 0], vias: [via] }
+  const box = { min: [-1.6, -0.4], max: [-0.6, 0.4] }
+  const routed = routeAroundObstacles(path, [box])
+  // 途经点还在路线里（自动点只做追加，不顶掉用户的点）
+  assert.ok(
+    routed.vias.some((point) => Math.abs(point[0] - via[0]) < 1e-6 && Math.abs(point[2] - via[2]) < 1e-6),
+    '用户的途经点被吃掉了',
+  )
+  for (const point of samplesOf(routed)) {
+    assert.equal(insideBox(point, box.min, box.max), false, '曲线穿进模型了')
+  }
+})
+
+test('自动避障：尽头是盒子边角时也能绕（不抛错、不多插点）', () => {
+  const path = { start: [0, 0.02, -2], end: [0, 0.02, 2] }
+  const boxes = [
+    { min: [-0.4, -0.4], max: [0.4, 0.4] },
+    { min: [-0.3, 1.0], max: [0.3, 1.6] },
+  ]
+  const routed = routeAroundObstacles(path, boxes)
+  assert.ok(routed.vias.length >= 2)
+  for (const point of samplesOf(routed, 200)) {
+    for (const box of boxes) assert.equal(insideBox(point, box.min, box.max), false)
+  }
+})
+
+test('编辑器接上自动避障：包围盒收集、统一走 editorGroundPath、存档只存用户点', () => {
+  // XZ 包围盒来自场景对象；泼溅是整片世界，跳过
+  assert.match(stage, /const box = new THREE\.Box3\(\)\.setFromObject\(entry\.object\);/)
+  assert.match(stage, /list\.push\(\{ min: \[box\.min\.x, box\.min\.z\], max: \[box\.max\.x, box\.max\.z\] \}\);/)
+  assert.match(stage, /if \(entry\.splat\) continue;/)
+  // 渲染/预览/导出/长度全走 editorGroundPath（不然面板上的长度和实际走位对不上）
+  assert.match(stage, /const editorGroundPath = \(points: GroundPoints\): GroundPath \| null => \{/)
+  assert.match(stage, /return routeAroundObstacles\(path, collectGroundObstacles\(\)\);/)
+  assert.equal(/const path = toGroundPath\(groundPoints\);/.test(stage), false)
+  // 存档还只存用户点的点：模型一挪就能重新绕
+  assert.match(stage, /groundPath: toGroundPath\(groundPoints\),/)
+  // 开关 + 说明
+  assert.match(stage, /const \[avoidObstacles, setAvoidObstacles\] = useState\(true\);/)
+  assert.match(stage, /checked=\{avoidObstacles\}/)
+  assert.match(stage, /自动避障（撞上模型就绕开）/)
 })

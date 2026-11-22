@@ -242,6 +242,192 @@ export function groundPathYaw(path: GroundPath, t = 1): number {
   return Math.atan2(dx, dz);
 }
 
+/**
+ * 曲线避障：盒子是模型在 XZ 平面上的包围盒（A 世界坐标的 min/max 两角）。
+ * 路径撞上就自动插两个点从盒角外侧绕过去。
+ *
+ * 为什么不让用户手点：模型一挪，手工绕的点就废了；自动绕只需要知道「谁挡路」，
+ * 而且自动插入的点不进存档（存档里只留用户点的 A/B/途经点）。
+ */
+export interface GroundObstacle {
+  /** [x, z] 的最小角 */
+  min: [number, number];
+  /** [x, z] 的最大角 */
+  max: [number, number];
+}
+
+/** 障碍盒外扩多少米：贴着模型边缘走会蹭到裙摆/披风，留半米更稳。 */
+export const GROUND_OBSTACLE_MARGIN = 0.35;
+/** 最多插多少个自动点：再多说明场景本身挤成一团，硬绕也不好看了。 */
+const MAX_ROUTE_DETOURS = 12;
+
+interface RouteOptions {
+  margin?: number;
+  maxDetours?: number;
+}
+
+function normalizeObstacle(value: GroundObstacle, margin: number): GroundObstacle | null {
+  const min = value?.min;
+  const max = value?.max;
+  if (!Array.isArray(min) || !Array.isArray(max)) return null;
+  if (min.length !== 2 || max.length !== 2) return null;
+  if (![...min, ...max].every((item) => typeof item === "number" && Number.isFinite(item))) return null;
+  const lo: [number, number] = [Math.min(min[0], max[0]) - margin, Math.min(min[1], max[1]) - margin];
+  const hi: [number, number] = [Math.max(min[0], max[0]) + margin, Math.max(min[1], max[1]) + margin];
+  // 退化成一个点/一条线的盒子绕不开，直接丢掉。
+  if (hi[0] - lo[0] < 1e-6 || hi[1] - lo[1] < 1e-6) return null;
+  return { min: lo, max: hi };
+}
+
+function boxContainsPoint(box: GroundObstacle, point: GroundPoint): boolean {
+  return (
+    point[0] >= box.min[0] &&
+    point[0] <= box.max[0] &&
+    point[2] >= box.min[1] &&
+    point[2] <= box.max[1]
+  );
+}
+
+/**
+ * 2D 线段与盒子内部是否相交（slab 法）。盒子先内缩 1e-6：
+ * 贴着盒角走到拐点是允许的（那是绕行本身），只有穿进内部才算撞上。
+ */
+function segmentHitsBox(a: GroundPoint, b: GroundPoint, box: GroundObstacle): boolean {
+  const shrink = 1e-6;
+  let t0 = 0;
+  let t1 = 1;
+  const origin = [a[0], a[2]];
+  const delta = [b[0] - a[0], b[2] - a[2]];
+  const bounds: Array<[number, number]> = [
+    [box.min[0] + shrink, box.max[0] - shrink],
+    [box.min[1] + shrink, box.max[1] - shrink],
+  ];
+  for (let axis = 0; axis < 2; axis += 1) {
+    const o = origin[axis];
+    const d = delta[axis];
+    const [lo, hi] = bounds[axis];
+    if (Math.abs(d) < 1e-9) {
+      if (o < lo || o > hi) return false;
+      continue;
+    }
+    let near = (lo - o) / d;
+    let far = (hi - o) / d;
+    if (near > far) [near, far] = [far, near];
+    t0 = Math.max(t0, near);
+    t1 = Math.min(t1, far);
+    if (t0 > t1) return false;
+  }
+  return true;
+}
+
+function boxCorners(box: GroundObstacle): GroundPoint[] {
+  return [
+    [box.min[0], 0.02, box.min[1]],
+    [box.max[0], 0.02, box.min[1]],
+    [box.min[0], 0.02, box.max[1]],
+    [box.max[0], 0.02, box.max[1]],
+  ];
+}
+
+function flatDistance(a: GroundPoint, b: GroundPoint): number {
+  return Math.hypot(a[0] - b[0], a[2] - b[2]);
+}
+
+/**
+ * 绕一个盒子：四条边各是一对拐点（同一条边上的两个角），挑总长最短且三段都不穿盒子的那组。
+ *
+ * 用「整条边」而不是单个角：只走一个角时，角到终点那段常常又切回盒子里，
+ * 走完整条边（贴着盒边外侧）才真正绕得过去。
+ */
+function detourAroundBox(a: GroundPoint, b: GroundPoint, box: GroundObstacle): GroundPoint[] | null {
+  const [c00, c10, c01, c11] = boxCorners(box);
+  const sides: Array<[GroundPoint, GroundPoint]> = [
+    [c00, c10],
+    [c01, c11],
+    [c00, c01],
+    [c10, c11],
+  ];
+  let best: { points: GroundPoint[]; cost: number } | null = null;
+  for (const [first, second] of sides) {
+    for (const pair of [
+      [first, second],
+      [second, first],
+    ] as Array<[GroundPoint, GroundPoint]>) {
+      const [p1, p2] = pair;
+      if (segmentHitsBox(a, p1, box)) continue;
+      if (segmentHitsBox(p1, p2, box)) continue;
+      if (segmentHitsBox(p2, b, box)) continue;
+      const cost = flatDistance(a, p1) + flatDistance(p1, p2) + flatDistance(p2, b);
+      // 同长时按坐标定序，保证同输入永远给出同一条路线。
+      if (
+        !best ||
+        cost < best.cost - 1e-9 ||
+        (Math.abs(cost - best.cost) <= 1e-9 && comparePoints([p1, p2], best.points) < 0)
+      ) {
+        best = { points: [p1, p2], cost };
+      }
+    }
+  }
+  return best ? best.points : null;
+}
+
+function comparePoints(a: GroundPoint[], b: GroundPoint[]): number {
+  for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
+    const diff = a[index][0] - b[index][0] || a[index][2] - b[index][2];
+    if (Math.abs(diff) > 1e-9) return diff;
+  }
+  return a.length - b.length;
+}
+
+/**
+ * 让路径绕开障碍：原来的骨架点不动，撞到盒子的那一段换成「过盒边两个拐点」。
+ *
+ * 起点/终点落在盒子里的障碍直接忽略 —— 那通常就是角色自己站的位置，
+ * 绕开它等于把角色从自己身上挪走。
+ */
+export function routeAroundObstacles(
+  path: GroundPath,
+  obstacles: GroundObstacle[] | null | undefined,
+  options: RouteOptions = {},
+): GroundPath {
+  const margin = Math.max(0, Number(options.margin ?? GROUND_OBSTACLE_MARGIN) || 0);
+  const maxDetours = Math.max(0, Math.floor(Number(options.maxDetours ?? MAX_ROUTE_DETOURS) || 0));
+  const boxes = (obstacles ?? [])
+    .map((item) => normalizeObstacle(item, margin))
+    .filter((item): item is GroundObstacle => !!item)
+    .filter((box) => !boxContainsPoint(box, path.start) && !boxContainsPoint(box, path.end));
+  if (boxes.length === 0) return path;
+
+  const knots = [path.start, ...(path.vias ?? []), path.end];
+  const route: GroundPoint[] = [path.start];
+  let detours = 0;
+  for (let index = 0; index < knots.length - 1; index += 1) {
+    const target = knots[index + 1];
+    // 一段可能连穿几个盒子：绕着走直到这一段不再撞任何盒子为止。
+    for (let guard = 0; guard < MAX_ROUTE_DETOURS; guard += 1) {
+      const from = route[route.length - 1];
+      if (detours >= maxDetours) break;
+      const box = boxes.find((item) => segmentHitsBox(from, target, item));
+      if (!box) break;
+      const detour = detourAroundBox(from, target, box);
+      if (!detour) break;
+      for (const point of detour) {
+        const clamped = clampGroundPoint(point);
+        const last = route[route.length - 1];
+        if (pointDistance(clamped, last) < 1e-3) continue;
+        if (pointDistance(clamped, target) < 1e-3) continue;
+        route.push(clamped);
+        detours += 1;
+      }
+    }
+    const clampedTarget = clampGroundPoint(target);
+    const last = route[route.length - 1];
+    if (pointDistance(clampedTarget, last) >= 1e-4) route.push(clampedTarget);
+  }
+  const inner = route.slice(1, -1);
+  return inner.length > 0 ? { start: route[0], end: route[route.length - 1], vias: inner } : path;
+}
+
 /** 从零散落点收成一条路径：只落了一个点时返回 null。 */
 export function toGroundPath(points: GroundPoints): GroundPath | null {
   if (!points.start || !points.end) return null;

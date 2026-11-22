@@ -46,7 +46,10 @@ import {
   MAX_GROUND_VIAS,
   moveGroundPoint,
   normalizeGroundPath,
+  routeAroundObstacles,
   toGroundPath,
+  type GroundObstacle,
+  type GroundPath,
   type GroundPoint,
   type GroundPoints,
   type GroundSlot,
@@ -689,6 +692,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [playingMove, setPlayingMove] = useState(false);
   // 跟拍：播放/导出时相机整体随角色平移，构图不变，只是跟着人走。
   const [followMover, setFollowMover] = useState(false);
+  // 自动避障：路径撞上模型就在 XZ 上绕开它（模型一挪就自动重算，不用手点拐点）。
+  const [avoidObstacles, setAvoidObstacles] = useState(true);
+  const avoidObstaclesRef = useRef(avoidObstacles);
+  avoidObstaclesRef.current = avoidObstacles;
   // 环绕运镜的三个参数：转几圈、转完总几秒、收尾时抬高/压低多少度（0 = 平视环绕）。
   const [orbitTurns, setOrbitTurns] = useState(1);
   const [orbitSeconds, setOrbitSeconds] = useState(DEFAULT_ORBIT_SECONDS);
@@ -746,6 +753,33 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const syncObjects = useCallback(() => {
     setObjects([...objectsRef.current]);
   }, []);
+
+  /**
+   * 场景里挡路的模型：取每个对象在世界坐标下的包围盒，只留 XZ 两维。
+   * 泼溅（.spz）不参与：它本身就是整片世界，绕开它等于没有路可走。
+   */
+  const collectGroundObstacles = (): GroundObstacle[] => {
+    const list: GroundObstacle[] = [];
+    for (const entry of objectsRef.current) {
+      if (entry.splat) continue;
+      const box = new THREE.Box3().setFromObject(entry.object);
+      if (box.isEmpty()) continue;
+      list.push({ min: [box.min.x, box.min.z], max: [box.max.x, box.max.z] });
+    }
+    return list;
+  };
+
+  /**
+   * 编辑器里真正要走的那条线：用户的 A/B/途经点 + 自动避障插的点。
+   *
+   * 渲染、预览、导出、面板上的长度都走这一个函数，四处才不会各算各的；
+   * 存档仍旧只存 toGroundPath（用户点的点），模型一挪就能按新障碍重算。
+   */
+  const editorGroundPath = (points: GroundPoints): GroundPath | null => {
+    const path = toGroundPath(points);
+    if (!path || !avoidObstaclesRef.current) return path;
+    return routeAroundObstacles(path, collectGroundObstacles());
+  };
 
   const selectObject = useCallback((id: string | null) => {
     selectedIdRef.current = id;
@@ -1188,7 +1222,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     if (groundPoints.end) ring(groundPoints.end, 0xf59e0b, { kind: "end" });
     // 途经点：蓝色，路径会穿过每一个（最多 MAX_GROUND_VIAS 个）。
     (groundPoints.vias ?? []).forEach((point, index) => ring(point, 0x38bdf8, { kind: "via", index }));
-    const path = toGroundPath(groundPoints);
+    const path = editorGroundPath(groundPoints);
     if (path) {
       // 有途经点就沿曲线采样，没有就是一条直线；虚线长度由 computeLineDistances 算。
       const samples = path.vias?.length ? 32 * path.vias.length : 1;
@@ -1205,7 +1239,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       line.computeLineDistances();
       group.add(line);
     }
-  }, [groundPoints]);
+  }, [groundPoints, avoidObstacles]);
 
   useEffect(() => {
     splatDetailRef.current = splatDetail;
@@ -1709,7 +1743,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     }
     const started = performance.now();
     // 跟拍得知道“谁在走”与“往哪走”；没有角色或路径就只放相机。
-    const followPath = followMover ? toGroundPath(groundPoints) : null;
+    const followPath = followMover ? editorGroundPath(groundPoints) : null;
     const followMoverEntry =
       followPath && moverId ? objectsRef.current.find((entry) => entry.id === moverId) ?? null : null;
     const followSeconds = followPath && followMoverEntry ? normalizeMoveSeconds(moveSeconds) : null;
@@ -2530,7 +2564,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         setError("先记录至少两个机位，序列才有路径可走");
         return;
       }
-      const path = toGroundPath(groundPoints);
+      const path = editorGroundPath(groundPoints);
       const mover =
         moverId ? objectsRef.current.find((entry) => entry.id === moverId) ?? null : null;
       const moverSeconds = mover && path ? normalizeMoveSeconds(moveSeconds) : null;
@@ -2746,7 +2780,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     }
   }, [sequenceFps]);
   const previewMove = useCallback(() => {
-    const path = toGroundPath(groundPoints);
+    const path = editorGroundPath(groundPoints);
     const mover = moverId ? objectsRef.current.find((entry) => entry.id === moverId) ?? null : null;
     if (!path || !mover) return;
     const seconds = normalizeMoveSeconds(moveSeconds);
@@ -3681,7 +3715,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             <span>地面路径 A → B</span>
             <span className="text-white/30">
               {(() => {
-                const path = toGroundPath(groundPoints);
+                const path = editorGroundPath(groundPoints);
                 return path ? `${groundPathLength(path).toFixed(1)} m` : "起点 / 终点";
               })()}
             </span>
@@ -3814,6 +3848,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               title="跟拍：相机整体随角色平移，构图不变，角色始终停在画框里的同一位置"
             />
             跟拍（相机跟着角色走）
+          </label>
+          <label className="mt-1 flex items-center gap-1.5 px-1 text-[11px] text-white/50">
+            <input
+              type="checkbox"
+              checked={avoidObstacles}
+              onChange={(event) => setAvoidObstacles(event.target.checked)}
+              disabled={!toGroundPath(groundPoints)}
+              title="自动避障：路径撞上模型就在地面上绕过去（自动插入的拐点不进存档，挪模型会重算）"
+            />
+            自动避障（撞上模型就绕开）
           </label>
           <p className="mt-1 px-1 text-[11px] leading-4 text-white/35">
             {placingGround
