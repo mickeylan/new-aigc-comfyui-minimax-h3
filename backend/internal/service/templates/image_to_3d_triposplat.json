@@ -1,0 +1,255 @@
+{
+  "name": "图片生成 3D 高斯泼溅（TripoSplat）",
+  "code": "image_to_3d_triposplat",
+  "description": "ComfyUI 原生 TripoSplat 图生 3D：单张参考图 → 高斯泼溅 → .spz 文件。输出走 SplatToFile3D 的 spz 格式（Niantic 压缩，体积约为 ply 的十分之一）。需要 models/diffusion_models/triposplat_fp16.safetensors、models/clip_vision/dino_v3_vit_h.safetensors、models/vae/triposplat_vae_decoder_fp16.safetensors、models/vae/flux2-vae.safetensors、models/background_removal/birefnet.safetensors 五件套。背景默认先用 BiRefNet 抠掉再进预处理。",
+  "inputs": [
+    {
+      "key": "image",
+      "type": "image",
+      "label": "参考图",
+      "required": true
+    },
+    {
+      "key": "erode_radius",
+      "type": "int",
+      "label": "透明度腐蚀半径",
+      "default": 1,
+      "min": 0,
+      "max": 16
+    },
+    {
+      "key": "size",
+      "type": "int",
+      "label": "预处理尺寸",
+      "default": 1024,
+      "min": 256,
+      "max": 4096,
+      "step": 16
+    },
+    {
+      "key": "steps",
+      "type": "int",
+      "label": "采样步数",
+      "default": 20,
+      "min": 1,
+      "max": 100
+    },
+    {
+      "key": "cfg",
+      "type": "float",
+      "label": "CFG",
+      "default": 3,
+      "min": 0,
+      "max": 20,
+      "step": 0.1
+    },
+    {
+      "key": "seed",
+      "type": "int",
+      "label": "采样随机种子",
+      "default": -1,
+      "min": -1
+    },
+    {
+      "key": "num_gaussians",
+      "type": "int",
+      "label": "高斯点数量",
+      "default": 262144,
+      "min": 32768,
+      "max": 1048576,
+      "step": 32
+    },
+    {
+      "key": "decode_seed",
+      "type": "int",
+      "label": "解码采样种子",
+      "default": 0,
+      "min": 0
+    },
+    {
+      "key": "unet_name",
+      "type": "string",
+      "label": "UNET",
+      "default": "triposplat_fp16.safetensors"
+    },
+    {
+      "key": "clip_name",
+      "type": "string",
+      "label": "CLIP Vision",
+      "default": "dino_v3_vit_h.safetensors"
+    },
+    {
+      "key": "vae_name",
+      "type": "string",
+      "label": "TripoSplat VAE 解码器",
+      "default": "triposplat_vae_decoder_fp16.safetensors"
+    },
+    {
+      "key": "vae_name_flux2",
+      "type": "string",
+      "label": "Flux2 VAE（条件编码用）",
+      "default": "flux2-vae.safetensors"
+    },
+    {
+      "key": "bg_removal_name",
+      "type": "string",
+      "label": "背景去除模型",
+      "default": "birefnet.safetensors"
+    }
+  ],
+  "workflow": {
+    "1": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "{{img:image}}"
+      }
+    },
+    "2": {
+      "class_type": "LoadBackgroundRemovalModel",
+      "inputs": {
+        "bg_removal_name": "{{bg_removal_name}}"
+      }
+    },
+    "3": {
+      "class_type": "RemoveBackground",
+      "inputs": {
+        "image": [
+          "1",
+          0
+        ],
+        "bg_removal_model": [
+          "2",
+          0
+        ]
+      }
+    },
+    "4": {
+      "class_type": "InvertMask",
+      "inputs": {
+        "mask": [
+          "3",
+          0
+        ]
+      }
+    },
+    "5": {
+      "class_type": "TripoSplatPreprocessImage",
+      "inputs": {
+        "image": [
+          "1",
+          0
+        ],
+        "mask": [
+          "4",
+          0
+        ],
+        "erode_radius": "{{erode_radius}}",
+        "size": "{{size}}"
+      }
+    },
+    "6": {
+      "class_type": "CLIPVisionLoader",
+      "inputs": {
+        "clip_name": "{{clip_name}}"
+      }
+    },
+    "7": {
+      "class_type": "VAELoader",
+      "inputs": {
+        "vae_name": "{{vae_name_flux2}}"
+      }
+    },
+    "8": {
+      "class_type": "VAELoader",
+      "inputs": {
+        "vae_name": "{{vae_name}}"
+      }
+    },
+    "9": {
+      "class_type": "UNETLoader",
+      "inputs": {
+        "unet_name": "{{unet_name}}",
+        "weight_dtype": "default"
+      }
+    },
+    "10": {
+      "class_type": "TripoSplatConditioning",
+      "inputs": {
+        "clip_vision": [
+          "6",
+          0
+        ],
+        "vae": [
+          "7",
+          0
+        ],
+        "image": [
+          "5",
+          0
+        ]
+      }
+    },
+    "11": {
+      "class_type": "KSampler",
+      "inputs": {
+        "seed": "{{seed}}",
+        "steps": "{{steps}}",
+        "cfg": "{{cfg}}",
+        "sampler_name": "dpmpp_2m",
+        "scheduler": "simple",
+        "denoise": 1,
+        "model": [
+          "9",
+          0
+        ],
+        "positive": [
+          "10",
+          0
+        ],
+        "negative": [
+          "10",
+          1
+        ],
+        "latent_image": [
+          "10",
+          2
+        ]
+      }
+    },
+    "12": {
+      "class_type": "VAEDecodeTripoSplat",
+      "inputs": {
+        "samples": [
+          "11",
+          0
+        ],
+        "vae": [
+          "8",
+          0
+        ],
+        "num_gaussians": "{{num_gaussians}}",
+        "seed": "{{decode_seed}}"
+      }
+    },
+    "13": {
+      "class_type": "SplatToFile3D",
+      "inputs": {
+        "splat": [
+          "12",
+          0
+        ],
+        "format": "spz"
+      }
+    },
+    "14": {
+      "class_type": "SaveGLB",
+      "inputs": {
+        "mesh": [
+          "13",
+          0
+        ],
+        "filename_prefix": "3d/{{task_id}}"
+      }
+    }
+  }
+}

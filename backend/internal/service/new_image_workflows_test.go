@@ -26,6 +26,7 @@ func TestNewImageWorkflowsAreEmbedded(t *testing.T) {
 		"image_inpaint_krea2.json",
 		"image_segment_sam3.json",
 		"image_segment_sam3_matte.json",
+		"image_to_3d_triposplat.json",
 	} {
 		if _, ok := files[name]; !ok {
 			t.Fatalf("%s is not embedded in the binary", name)
@@ -94,6 +95,14 @@ func TestNewImageWorkflowsRender(t *testing.T) {
 			params: map[string]any{
 				"image":    fileParam("photo.png"),
 				"prompt":   "person",
+				"_task_id": "task-1",
+			},
+		},
+		{
+			file: "image_to_3d_triposplat.json",
+			code: "image_to_3d_triposplat",
+			params: map[string]any{
+				"image":    fileParam("character.png"),
 				"_task_id": "task-1",
 			},
 		},
