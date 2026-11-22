@@ -16,6 +16,13 @@ import { findTemplateId } from "../host/template-cache.js";
 import { FKHelper } from "./posing/FKHelper.js";
 import { createStoreZip } from "./zip.js";
 import {
+  DEFAULT_ORBIT_SECONDS,
+  ORBIT_SEGMENTS_LIMITS,
+  normalizeOrbitSeconds,
+  normalizeOrbitTurns,
+  orbitCameraKeys,
+} from "./camera-orbit.js";
+import {
   GROUND_EXTENT,
   clampGroundPoint,
   groundPathFollowDelta,
@@ -650,6 +657,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [playingMove, setPlayingMove] = useState(false);
   // 跟拍：播放/导出时相机整体随角色平移，构图不变，只是跟着人走。
   const [followMover, setFollowMover] = useState(false);
+  // 环绕运镜的两个参数：转几圈、转完总几秒。
+  const [orbitTurns, setOrbitTurns] = useState(1);
+  const [orbitSeconds, setOrbitSeconds] = useState(DEFAULT_ORBIT_SECONDS);
   // 最近一张参考图：面板里直接预览，同时给下载按钮用。
   const [referenceShot, setReferenceShot] = useState<{
     pass: ReferencePass;
@@ -1640,6 +1650,49 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     };
     cameraPathRef.current = requestAnimationFrame(step);
   }, [cameraKeys, followMover, groundPoints, moveSeconds, moverId]);
+
+  /**
+   * 环绕：绕选中对象（没选中就绕当前相机目标）转一圈，把采样出的机位追加到序列末尾。
+   * 半径和高度都照当前机位量，所以看到什么角度就绕什么角度。
+   */
+  const addOrbitShot = useCallback(() => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+    const entry =
+      (selectedIdRef.current
+        ? objectsRef.current.find((item) => item.id === selectedIdRef.current) ?? null
+        : null) ?? null;
+    const center: [number, number, number] = entry
+      ? [entry.object.position.x, entry.object.position.y, entry.object.position.z]
+      : [controls.target.x, controls.target.y, controls.target.z];
+    const keys = orbitCameraKeys({
+      center,
+      start: [camera.position.x, camera.position.y, camera.position.z],
+      turns: orbitTurns,
+      seconds: orbitSeconds,
+      segments: Math.max(ORBIT_SEGMENTS_LIMITS.min, Math.round(orbitTurns * 8)),
+    });
+    if (keys.length === 0) {
+      setStatus("相机就在环绕中心上，先拉开一点距离再环绕");
+      return;
+    }
+    const fov = normalizeCameraFov(camera.fov);
+    setCameraKeys((current) => [
+      ...current,
+      ...keys.map((key) => ({
+        id: crypto.randomUUID(),
+        position: key.position,
+        target: key.target,
+        duration: normalizeCameraDuration(key.duration),
+        easing: DEFAULT_CAMERA_EASING,
+        fov,
+      })),
+    ]);
+    setStatus(
+      `已追加环绕 ${orbitTurns} 圈、${keys.length} 个机位（${orbitSeconds} 秒）${entry ? `，绕「${entry.name}」` : "，绕当前相机目标"}`,
+    );
+  }, [orbitSeconds, orbitTurns]);
 
   const setTransformValue = useCallback((axis: "x" | "y" | "z" | "scale" | "rotateY", value: number) => {
     const id = selectedIdRef.current;
@@ -3141,6 +3194,41 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               onClick={() => setCameraKeys([])}
             >
               清空
+            </button>
+          </div>
+
+          {/* 环绕：绕选中对象转一圈，一键把整段机位追加到序列末尾。 */}
+          <div className="mt-1 flex items-center gap-1 px-1">
+            <span className="text-[11px] text-white/40">环绕</span>
+            <input
+              type="number"
+              min={0.25}
+              max={3}
+              step={0.25}
+              value={orbitTurns}
+              onChange={(event) => setOrbitTurns(normalizeOrbitTurns(Number(event.target.value)))}
+              title="绕几圈"
+              className="w-12 rounded border border-white/10 bg-black/30 px-1 py-0.5 text-[11px] text-white/70"
+            />
+            <span className="text-[11px] text-white/40">圈</span>
+            <input
+              type="number"
+              min={0.5}
+              max={60}
+              step={0.5}
+              value={orbitSeconds}
+              onChange={(event) => setOrbitSeconds(normalizeOrbitSeconds(Number(event.target.value)))}
+              title="绕完用几秒"
+              className="w-12 rounded border border-white/10 bg-black/30 px-1 py-0.5 text-[11px] text-white/70"
+            />
+            <span className="text-[11px] text-white/40">秒</span>
+            <button
+              type="button"
+              onClick={addOrbitShot}
+              className="rounded-md bg-white/5 px-1.5 py-0.5 text-[11px] text-white/60 hover:bg-white/10"
+              title="绕左栏选中的对象转圈（没选中就绕当前相机目标），机位追加到序列末尾"
+            >
+              环绕
             </button>
           </div>
 
