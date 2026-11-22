@@ -86,10 +86,41 @@ interface MaterialSettings {
   opacity: number;
 }
 
+type CameraEasing = "linear" | "easeInOut" | "easeIn" | "easeOut";
+
 interface CameraKey {
   id: string;
   position: [number, number, number];
   target: [number, number, number];
+  /** 从这个机位走到下一个机位的秒数（最后一个机位用不到）。 */
+  duration: number;
+  /** 这一段按哪种缓动走。 */
+  easing: CameraEasing;
+}
+
+/** 老存档 / 新记录的默认段时长，与改动前的硬编码 1.6 秒一致。 */
+const DEFAULT_CAMERA_SEGMENT_SECONDS = 1.6;
+const DEFAULT_CAMERA_EASING: CameraEasing = "easeInOut";
+const CAMERA_SEGMENT_LIMITS = { min: 0.2, max: 20 };
+
+const CAMERA_EASINGS: Record<CameraEasing, { label: string; fn: (t: number) => number }> = {
+  // 匀速看起来最"塑料"，但需要机械感时得能选。
+  linear: { label: "匀速", fn: (t) => t },
+  easeInOut: { label: "缓入缓出", fn: (t) => t * t * (3 - 2 * t) },
+  easeIn: { label: "缓入", fn: (t) => t * t },
+  easeOut: { label: "缓出", fn: (t) => 1 - (1 - t) * (1 - t) },
+};
+
+function normalizeCameraDuration(value: unknown) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) return DEFAULT_CAMERA_SEGMENT_SECONDS;
+  return Math.min(CAMERA_SEGMENT_LIMITS.max, Math.max(CAMERA_SEGMENT_LIMITS.min, seconds));
+}
+
+function normalizeCameraEasing(value: unknown): CameraEasing {
+  return typeof value === "string" && value in CAMERA_EASINGS
+    ? (value as CameraEasing)
+    : DEFAULT_CAMERA_EASING;
 }
 
 interface PoseSnapshot {
@@ -111,7 +142,7 @@ interface SplatDocument {
 }
 
 interface SceneDocument {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   createdAt: string;
   lightPreset: LightPresetName;
   camera: { position: [number, number, number]; target: [number, number, number] };
@@ -125,6 +156,8 @@ interface SceneDocument {
   }>;
   /** 高斯泼溅层；v1 存档没有这个字段。 */
   splats?: SplatDocument[];
+  /** 相机关键帧序列；v3 起入库，v1/v2 存档没有这个字段。 */
+  cameraKeys?: CameraKey[];
   model: { name: string; data: string };
 }
 
@@ -413,6 +446,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const groundRef = useRef<THREE.Mesh | null>(null);
   const gridRef = useRef<THREE.GridHelper | null>(null);
   const cameraPathRef = useRef<number | null>(null);
+  // 播放兜底定时器：切到后台标签页时 rAF 会被浏览器暂停，靠它把「播放中…」收回来。
+  const cameraPathTimerRef = useRef<number | null>(null);
   const posesRef = useRef<Record<string, { a?: PoseSnapshot; b?: PoseSnapshot }>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sceneInputRef = useRef<HTMLInputElement>(null);
@@ -1230,28 +1265,87 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       id: crypto.randomUUID(),
       position: [camera.position.x, camera.position.y, camera.position.z],
       target: [controls.target.x, controls.target.y, controls.target.z],
+      duration: DEFAULT_CAMERA_SEGMENT_SECONDS,
+      easing: DEFAULT_CAMERA_EASING,
     };
-    setCameraKeys((current) => [...current, key]);
-    setStatus(`已记录第 ${cameraKeys.length + 1} 个机位`);
+    setCameraKeys((current) => {
+      setStatus(`已记录第 ${current.length + 1} 个机位`);
+      return [...current, key];
+    });
   }, [cameraKeys.length]);
+
+  const updateCameraKey = useCallback(
+    (id: string, patch: Partial<Pick<CameraKey, "duration" | "easing">>) => {
+      setCameraKeys((current) =>
+        current.map((key) =>
+          key.id === id ? { ...key, ...patch, duration: normalizeCameraDuration(patch.duration ?? key.duration) } : key,
+        ),
+      );
+    },
+    [],
+  );
+
+  // 顺序就是运镜顺序：上移/下移直接换位置，别让用户重录一遍。
+  const moveCameraKey = useCallback((id: string, delta: -1 | 1) => {
+    setCameraKeys((current) => {
+      const index = current.findIndex((key) => key.id === id);
+      const target = index + delta;
+      if (index < 0 || target < 0 || target >= current.length) return current;
+      const next = current.slice();
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }, []);
+
+  const removeCameraKey = useCallback((id: string) => {
+    setCameraKeys((current) => current.filter((key) => key.id !== id));
+  }, []);
 
   const playCameraPath = useCallback(() => {
     const camera = cameraRef.current;
     const controls = controlsRef.current;
     if (!camera || !controls || cameraKeys.length < 2) return;
     if (cameraPathRef.current !== null) cancelAnimationFrame(cameraPathRef.current);
-    const segment = 1.6;
-    const total = (cameraKeys.length - 1) * segment;
+    // 每段时长与缓动各自独立：改一段不影响别的段，总时长由各段相加。
+    const segments = cameraKeys.slice(0, -1).map((from, index) => ({
+      from,
+      to: cameraKeys[index + 1],
+      seconds: normalizeCameraDuration(from.duration),
+      ease: CAMERA_EASINGS[normalizeCameraEasing(from.easing)].fn,
+    }));
+    if (segments.length === 0) return;
+    const total = segments.reduce((sum, item) => sum + item.seconds, 0);
     const started = performance.now();
+    // 收尾只走这一条：清 rAF、清兜底定时器、放开按钮。
+    const finish = () => {
+      if (cameraPathRef.current !== null) {
+        cancelAnimationFrame(cameraPathRef.current);
+        cameraPathRef.current = null;
+      }
+      if (cameraPathTimerRef.current !== null) {
+        window.clearTimeout(cameraPathTimerRef.current);
+        cameraPathTimerRef.current = null;
+      }
+      setPlayingPath(false);
+    };
     setPlayingPath(true);
-    const ease = (t: number) => t * t * (3 - 2 * t);
+    // 大兜底：rAF 被节流或挂起时也保证按钮不会永久卡在「播放中…」。
+    if (cameraPathTimerRef.current !== null) window.clearTimeout(cameraPathTimerRef.current);
+    cameraPathTimerRef.current = window.setTimeout(finish, total * 1000 + 80);
     const step = () => {
       const elapsed = (performance.now() - started) / 1000;
-      const index = Math.min(cameraKeys.length - 2, Math.floor(elapsed / segment));
-      const local = Math.min(1, Math.max(0, (elapsed - index * segment) / segment));
-      const from = cameraKeys[index];
-      const to = cameraKeys[index + 1];
-      const t = ease(local);
+      // 找到当前落在哪一段（超过总时长时停在最后一段的末尾）。
+      let cursor = 0;
+      let active = segments[0];
+      for (const item of segments) {
+        active = item;
+        if (elapsed < cursor + item.seconds) break;
+        cursor += item.seconds;
+      }
+      const local = Math.min(1, Math.max(0, (elapsed - cursor) / active.seconds));
+      const from = active.from;
+      const to = active.to;
+      const t = active.ease(local);
       camera.position.set(
         from.position[0] + (to.position[0] - from.position[0]) * t,
         from.position[1] + (to.position[1] - from.position[1]) * t,
@@ -1264,8 +1358,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       );
       controls.update();
       if (elapsed >= total) {
-        cameraPathRef.current = null;
-        setPlayingPath(false);
+        finish();
         return;
       }
       cameraPathRef.current = requestAnimationFrame(step);
@@ -1631,7 +1724,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         });
       }
       const doc: SceneDocument = {
-        version: 2,
+        version: 3,
         createdAt: new Date().toISOString(),
         lightPreset,
         camera: {
@@ -1650,6 +1743,14 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             bonePose: entry.bonePose ?? null,
           })),
         splats,
+        // 机位序列以前只活在内存里，刷新就没；v3 起跟场景一起存。
+        cameraKeys: cameraKeys.map((key) => ({
+          id: key.id,
+          position: key.position,
+          target: key.target,
+          duration: normalizeCameraDuration(key.duration),
+          easing: normalizeCameraEasing(key.easing),
+        })),
         model: {
           name: objectsRef.current.map((entry) => entry.name).join("+") || "scene",
           data: arrayBufferToBase64(binary),
@@ -1668,7 +1769,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     } finally {
       setBusy(null);
     }
-  }, [exportGeometry, lightPreset]);
+  }, [cameraKeys, exportGeometry, lightPreset]);
 
   const loadScene = useCallback(
     async (file: File) => {
@@ -1676,8 +1777,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       setError(null);
       try {
         const doc = JSON.parse(await file.text()) as SceneDocument;
-        // v1 是没泼溅层的老存档，仍然要能读。
-        if ((doc.version !== 1 && doc.version !== 2) || !doc.model?.data) {
+        // v1 是没泼溅层的老存档、v2 多了泼溅层，都仍然要能读；v3 多了机位序列。
+        if ((doc.version !== 1 && doc.version !== 2 && doc.version !== 3) || !doc.model?.data) {
           throw new Error("不是可识别的场景文件");
         }
         const scene = sceneRef.current;
@@ -1745,6 +1846,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         syncObjects();
         selectObject(entries[0]?.id ?? null);
         applyLightPreset(doc.lightPreset);
+        // 机位序列（v3）：老存档没有就清空，免得上一个场景的机位串进来。
+        setCameraKeys(
+          (doc.cameraKeys ?? []).map((key) => ({
+            id: key.id || crypto.randomUUID(),
+            position: key.position,
+            target: key.target,
+            duration: normalizeCameraDuration(key.duration),
+            easing: normalizeCameraEasing(key.easing),
+          })),
+        );
         const camera = cameraRef.current;
         const controls = controlsRef.current;
         if (camera && controls) {
@@ -2486,6 +2597,89 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               清空
             </button>
           </div>
+
+          {/* 关键帧列表：顺序就是运镜顺序，每段自己带时长与缓动。 */}
+          {cameraKeys.length > 0 && (
+            <div className="mt-1.5 space-y-1">
+              {cameraKeys.map((key, index) => {
+                const isLast = index === cameraKeys.length - 1;
+                return (
+                  <div
+                    key={key.id}
+                    className="flex items-center gap-1 rounded-md bg-white/5 px-1.5 py-1 text-[11px] text-white/60"
+                  >
+                    <span className="w-4 shrink-0 text-center text-white/40">{index + 1}</span>
+                    {isLast ? (
+                      <span className="flex-1 text-white/25">终点</span>
+                    ) : (
+                      <>
+                        <input
+                          type="number"
+                          min={CAMERA_SEGMENT_LIMITS.min}
+                          max={CAMERA_SEGMENT_LIMITS.max}
+                          step={0.1}
+                          value={key.duration}
+                          onChange={(event) => updateCameraKey(key.id, { duration: Number(event.target.value) })}
+                          className="w-12 shrink-0 rounded bg-black/30 px-1 py-0.5 text-right text-[11px] text-white/70"
+                          title="这一段走多少秒"
+                        />
+                        <span className="shrink-0 text-white/30">秒</span>
+                        <select
+                          value={key.easing}
+                          onChange={(event) =>
+                            updateCameraKey(key.id, { easing: event.target.value as CameraEasing })
+                          }
+                          className="ml-1 shrink-0 rounded bg-black/30 px-1 py-0.5 text-[11px] text-white/70"
+                          title="这一段怎么加减速"
+                        >
+                          {(Object.keys(CAMERA_EASINGS) as CameraEasing[]).map((name) => (
+                            <option key={name} value={name}>
+                              {CAMERA_EASINGS[name].label}
+                            </option>
+                          ))}
+                        </select>
+                      </>
+                    )}
+                    <span className="flex-1" />
+                    <button
+                      type="button"
+                      onClick={() => moveCameraKey(key.id, -1)}
+                      disabled={index === 0}
+                      className="rounded px-1 text-white/40 hover:bg-white/10 disabled:opacity-20"
+                      title="上移"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => moveCameraKey(key.id, 1)}
+                      disabled={isLast}
+                      className="rounded px-1 text-white/40 hover:bg-white/10 disabled:opacity-20"
+                      title="下移"
+                    >
+                      ↓
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeCameraKey(key.id)}
+                      className="rounded px-1 text-white/40 hover:bg-rose-500/20 hover:text-rose-200"
+                      title="删除这个机位"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                );
+              })}
+              <p className="px-1 text-[11px] leading-4 text-white/35">
+                按顺序播放，共{" "}
+                {cameraKeys
+                  .slice(0, -1)
+                  .reduce((sum, key) => sum + normalizeCameraDuration(key.duration), 0)
+                  .toFixed(1)}{" "}
+                秒。时长与缓动跟场景一起存档（v3）。
+              </p>
+            </div>
+          )}
         </section>
       </div>
 

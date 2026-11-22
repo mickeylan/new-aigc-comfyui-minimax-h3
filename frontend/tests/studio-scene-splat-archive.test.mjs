@@ -4,12 +4,13 @@ import { readFileSync } from 'node:fs'
 
 const stage = readFileSync(new URL('../src/studio/scene3d/Scene3DStage.tsx', import.meta.url), 'utf8')
 
-test('存档升到 v2，泼溅单独用 splats 字段内嵌字节', () => {
+test('存档升到 v3，泼溅单独用 splats 字段内嵌字节、机位序列进 cameraKeys', () => {
   assert.match(stage, /interface SplatDocument \{/)
   assert.match(stage, /data: string;/, '泼溅字节要 base64 内嵌')
-  assert.match(stage, /version: 1 \| 2;/)
+  assert.match(stage, /version: 1 \| 2 \| 3;/)
   assert.match(stage, /splats\?: SplatDocument\[\];/)
-  assert.match(stage, /version: 2,/, '新存档写 v2')
+  assert.match(stage, /cameraKeys\?: CameraKey\[\];/, 'v3 起机位序列要入库')
+  assert.match(stage, /version: 3,/, '新存档写 v3')
 })
 
 test('保存时先把 .spz 字节取回来，取不到就整体失败', () => {
@@ -20,8 +21,8 @@ test('保存时先把 .spz 字节取回来，取不到就整体失败', () => {
   assert.match(stage, /\.filter\(\(entry\) => !entry\.splat\)/)
 })
 
-test('载入 v1 与 v2，泼溅按 blob URL 交给 Spark 重建并回填变换', () => {
-  assert.match(stage, /if \(\(doc\.version !== 1 && doc\.version !== 2\)/, 'v1 老存档仍要能读')
+test('载入 v1 / v2 / v3，泼溅按 blob URL 交给 Spark 重建并回填变换', () => {
+  assert.match(stage, /if \(\(doc\.version !== 1 && doc\.version !== 2 && doc\.version !== 3\)/, 'v1/v2 老存档仍要能读')
   assert.match(stage, /for \(const saved of doc\.splats \?\? \[\]\)/)
   assert.match(stage, /new Blob\(\[base64ToArrayBuffer\(saved\.data\)\]/)
   assert.match(stage, /await loadSplatMesh\(url, \{ placeOnGround: false \}\)/)
