@@ -227,6 +227,8 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/scene-archives", svc.HandleCreateSceneArchive)
 	r.GET("/api/scene-archives", svc.HandleListSceneArchives)
 	r.GET("/api/scene-archives/:id", svc.HandleGetSceneArchive)
+	r.PATCH("/api/scene-archives/:id", svc.HandleRenameSceneArchive)
+	r.DELETE("/api/scene-archives/:id", svc.HandleDeleteSceneArchive)
 	// 预览代理与帧精确定位元数据（只读源视频，不改 Scene）
 	r.GET("/api/projects/:id/scenes/:sid/media-info", svc.HandleSceneMediaInfo)
 	r.GET("/api/projects/:id/scenes/:sid/proxy", svc.HandleGetSceneProxy)
@@ -412,7 +414,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.DELETE("/api/projects/:id/assets/:kind/:aid", svc.HandleDeleteAsset)
 	r.POST("/api/projects/:id/assets/:kind/:aid/image", svc.HandleGenerateAssetImage)
 	r.POST("/api/projects/:id/assets/:kind/:aid/image/upload", svc.HandleUploadAssetImage)
-	r.POST("/api/projects/:id/assets/:kind/:aid/panorama", svc.HandleSplitLocationPanorama) // ERP 全景图 → 多视角参考图版本（仅场景）
+	r.POST("/api/projects/:id/assets/:kind/:aid/panorama", svc.HandleSplitLocationPanorama)             // ERP 全景图 → 多视角参考图版本（仅场景）
 	r.POST("/api/projects/:id/assets/:kind/:aid/panorama/generate", svc.HandleGenerateLocationPanorama) // MiniMax H3-Image 生成全景图并自动拆视角
 	r.POST("/api/projects/:id/assets/:kind/:aid/sheet", svc.HandleGeneratePropSheet)
 	r.POST("/api/projects/:id/assets/:kind/:aid/topview", svc.HandleGenerateTopviewStructure)

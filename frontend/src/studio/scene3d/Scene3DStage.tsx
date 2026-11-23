@@ -704,6 +704,15 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [frameAspect, setFrameAspect] = useState<FrameAspect>('16:9');
   const [focal, setFocal] = useState(focalFromFov(45));
   const [archiveName, setArchiveName] = useState('');
+  const [archiveProjectId, setArchiveProjectId] = useState('');
+  const [archiveProjects, setArchiveProjects] = useState<ProjectChoice[]>([]);
+  useEffect(() => {
+    let active = true;
+    void fetch('/api/projects').then(r => { if (!r.ok) throw new Error('读取项目失败'); return r.json(); })
+      .then(data => { if (active) setArchiveProjects(projectChoices(data)); })
+      .catch(err => { if (active) setError(String(err)); });
+    return () => { active = false; };
+  }, []);
   const selectedIdRef = useRef<string | null>(null);
   const lightsRef = useRef<{
     hemi: THREE.HemisphereLight;
@@ -2790,7 +2799,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const blocker = sceneArchiveBlocker(json);
       if (blocker) throw new Error(blocker);
       const name = archiveName.trim() ? `${archiveName.trim().replace(/[\\/:*?"<>|]/g, '_')}.json` : sceneArchiveFileName(Date.now());
-      const projectId = Number(promptProjectId) || null;
+      const projectId = Number(archiveProjectId) || null;
       const response = await fetch("/api/scene-archives", {
         method: "POST",
         body: sceneArchiveFormBody(json, name, projectId),
@@ -2803,8 +2812,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const unchanged = before === fingerprintRef.current();
       if (unchanged) { saveGuardRef.current.markSaved(before); setDirty(false); }
       else { setDirty(true); setError('快照已存入后端，但场景随后发生变化；当前修改尚未保存'); }
-      const projectQuery = projectId ? `?project_id=${projectId}` : '';
-      try { const list = await fetch(`/api/scene-archives${projectQuery}`); if (list.ok) setArchives(parseSceneArchiveList(await list.json())); } catch { /* Saving succeeded; list refresh is best effort. */ }
+      // 列表在打开时按独立筛选与页码刷新；保存不覆盖正在浏览的分页上下文。
       setStatus(
         `已存到后端${saved?.id ? `（存档 #${saved.id}）` : ""}：${archiveSizeLabel(json.length)}，${name}`,
       );
@@ -2813,7 +2821,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     } finally {
       operation.finish(); setBusy(null);
     }
-  }, [buildSceneDocument, promptProjectId, archiveName]);
+  }, [buildSceneDocument, archiveProjectId, archiveName]);
 
   // 本地文件与后端存档都走这一条：解析、校验 version/model.data、回填对象与机位。
   const importSceneText = useCallback(
@@ -3018,22 +3026,29 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     [importSceneText],
   );
 
-  // 后端存档：列表与载入。项目沿用提示词面板里选的项目，没选就不过滤。
+  // 存档项目归属与列表筛选独立，不受提示词面板影响。
   const [archivesOpen, setArchivesOpen] = useState(false);
   const [archives, setArchives] = useState<SceneArchiveItem[]>([]);
   const [archivesBusy, setArchivesBusy] = useState(false);
+  const [archiveFilter, setArchiveFilter] = useState('all');
+  const [archivePage, setArchivePage] = useState(1);
+  const [archiveTotal, setArchiveTotal] = useState(0);
+  const [renameId, setRenameId] = useState<number | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [deleteArchive, setDeleteArchive] = useState<SceneArchiveItem | null>(null);
   const [archivePreview, setArchivePreview] = useState<{ name: string; preview?: string; count: number; aspect: string; restore: () => Promise<void> } | null>(null);
   const archiveRequestRef = useRef(0);
 
-  const loadSceneArchives = useCallback(async () => {
+  const loadSceneArchives = useCallback(async (page = 1, filter = archiveFilter) => {
     setArchivesBusy(true);
     setError(null);
     try {
-      const projectId = Number(promptProjectId) || 0;
-      const query = projectId > 0 ? `?project_id=${projectId}` : "";
+      const query = `?page=${page}&page_size=10${filter === 'all' ? '' : `&project_id=${encodeURIComponent(filter)}`}`;
       const response = await fetch(`/api/scene-archives${query}`);
       if (!response.ok) throw new Error(`读取后端存档失败（HTTP ${response.status}）`);
-      setArchives(parseSceneArchiveList(await response.json()));
+      const data = await response.json();
+      setArchives(parseSceneArchiveList(data));
+      setArchiveTotal(data.total); setArchivePage(page); setArchiveFilter(filter);
       setArchivesOpen(true);
       setStatus("后端存档列表已刷新");
     } catch (err) {
@@ -3041,7 +3056,21 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     } finally {
       setArchivesBusy(false);
     }
-  }, [promptProjectId]);
+  }, [archiveFilter]);
+
+  const manageArchive = async (id: number, method: 'PATCH' | 'DELETE') => {
+    setArchivesBusy(true);
+    try {
+      const response = await fetch(`/api/scene-archives/${id}`, {
+        method, headers: { 'Content-Type': 'application/json' },
+        ...(method === 'PATCH' ? { body: JSON.stringify({ name: renameValue.trim() }) } : {}),
+      });
+      if (!response.ok) throw new Error(`存档操作失败（HTTP ${response.status}）`);
+      setRenameId(null); setDeleteArchive(null);
+      await loadSceneArchives(method === 'DELETE' && archives.length === 1 ? Math.max(1, archivePage-1) : archivePage);
+      setStatus(method === 'DELETE' ? '已移入回收区，原始文件保留' : '已更新存档列表名称');
+    } catch (err) { setError(String(err)); } finally { setArchivesBusy(false); }
+  };
 
   const openSceneArchive = useCallback(
     async (item: SceneArchiveItem) => {
@@ -3958,7 +3987,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             >
               <div className="mb-3 flex items-center justify-between">
                 <span className="font-medium">
-                  后端存档{archives.length > 0 ? `（${archives.length}）` : ""}
+                  后端存档（共 {archiveTotal} 份）
                 </span>
                 <button
                   type="button"
@@ -3968,11 +3997,15 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                   关闭
                 </button>
               </div>
+              <select aria-label="存档列表项目筛选" value={archiveFilter} disabled={archivesBusy} className="w-full bg-neutral-800" onChange={e => void loadSceneArchives(1, e.target.value)}>
+                <option value="all">全部项目</option><option value="0">无项目归属</option>
+                {archiveProjects.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+              </select>
               {archives.length === 0 ? (
                 <p className="text-xs text-white/50">
                   {archivesBusy
                     ? "正在读取…"
-                    : promptProjectId
+                    : archiveFilter !== 'all'
                       ? "这个项目下还没有存档：先在视口里搭好，再点「存到后端」。"
                       : "还没有存档：先在视口里搭好，再点「存到后端」。"}
                 </p>
@@ -3983,7 +4016,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                       <button
                         type="button"
                         className="w-full rounded px-2 py-1.5 text-left hover:bg-white/10 disabled:opacity-40"
-                        disabled={Boolean(busy)}
+                        disabled={Boolean(busy) || archivesBusy}
                         onClick={() => void openSceneArchive(item)}
                         title={`载入存档 #${item.id}`}
                       >
@@ -3993,10 +4026,26 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                           {item.createdLabel ? ` · ${item.createdLabel}` : ""}
                         </span>
                       </button>
+                      {renameId === item.id ? <div className="flex gap-2">
+                        <input aria-label="存档新名称" maxLength={200} value={renameValue} onChange={e => setRenameValue(e.target.value)} className="bg-neutral-800" />
+                        <button disabled={archivesBusy || !renameValue.trim()} onClick={() => void manageArchive(item.id, 'PATCH')}>保存名称</button>
+                        <button onClick={() => setRenameId(null)}>取消改名</button>
+                      </div> : <button disabled={archivesBusy} onClick={() => { setRenameId(item.id); setRenameValue(item.name); }}>重命名 #{item.id}</button>}
+                      <button className="ml-3 text-red-300" disabled={archivesBusy} onClick={() => setDeleteArchive(item)}>移入回收区 #{item.id}</button>
                     </li>
                   ))}
                 </ul>
               )}
+              {deleteArchive ? <div className="my-3 border border-red-400 p-2">
+                将「{deleteArchive.name}」移入回收区？原始文件保留，恢复需管理员操作。
+                <button disabled={archivesBusy} onClick={() => void manageArchive(deleteArchive.id, 'DELETE')}>确认移入回收区</button>
+                <button disabled={archivesBusy} onClick={() => setDeleteArchive(null)}>取消删除</button>
+              </div> : null}
+              <div className="mt-3 flex justify-between">
+                <button disabled={archivesBusy || archivePage <= 1} onClick={() => void loadSceneArchives(archivePage-1)}>上一页</button>
+                <span>第 {archivePage} / {Math.max(1, Math.ceil(archiveTotal/10))} 页</span>
+                <button disabled={archivesBusy || archivePage*10 >= archiveTotal} onClick={() => void loadSceneArchives(archivePage+1)}>下一页</button>
+              </div>
             </div>
           </div>
         ) : null}
@@ -4097,6 +4146,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         <div className="mb-2 space-y-1 text-xs">
           <label>画幅 <select aria-label="场景画幅" value={frameAspect} onChange={e => { frameRef.current = e.target.value as FrameAspect; setFrameAspect(frameRef.current); resizeFrameRef.current(); setLocationGenerationOpen(false); }}>{Object.keys(FRAME_ASPECTS).map(a => <option key={a}>{a}</option>)}</select></label>
           <label className="block">焦距 mm（24mm传感器高）<input aria-label="焦距毫米" type="number" min="12" max="92" value={Math.round(focal * 10) / 10} onChange={e => { const mm = Number(e.target.value); if (!Number.isFinite(mm) || mm < 12 || mm > 92 || !cameraRef.current) return; cameraRef.current.fov = fovFromFocal(mm); cameraRef.current.updateProjectionMatrix(); setFocal(mm); setLocationGenerationOpen(false); }} className="w-full bg-black/30" /></label>
+          <label className="block text-xs">新存档归属（不改变旧档）
+            <select aria-label="新存档项目" value={archiveProjectId} onChange={e => setArchiveProjectId(e.target.value)} className="w-full bg-neutral-800">
+              <option value="">无项目归属</option>
+              {archiveProjects.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+            </select>
+          </label>
           <input aria-label="存档名称" placeholder="存档名称（另存为）" value={archiveName} onChange={e => setArchiveName(e.target.value)} className="w-full bg-black/30" />
         </div>
         <div className="mb-2 px-1 text-xs uppercase tracking-wide text-white/40">场景对象</div>
