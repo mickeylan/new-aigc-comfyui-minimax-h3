@@ -20,7 +20,7 @@ test('3D 编辑器存入素材库带模型与预览图，类型固定 3d', () =>
   assert.match(stage3d, /saveToLibrary/, '缺少存入素材库入口')
   assert.match(stage3d, /form\.append\("type", "3d"\)/, '素材类型必须是 3d')
   assert.match(stage3d, /form\.append\("thumbnail"/, '必须带客户端截的预览图')
-  assert.match(stage3d, /domElement\.toDataURL\("image\/png"\)/, '预览图取当前渲染帧')
+  assert.match(stage3d, /await captureThumbnail\(\)/, '预览图必须走等待首帧完成的缩略图助手')
   assert.match(stage3d, /\/api\/materials/, '应提交到素材库接口')
 })
 

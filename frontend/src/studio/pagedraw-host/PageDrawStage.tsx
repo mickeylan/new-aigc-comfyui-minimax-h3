@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Konva from "konva";
-import { PaintSurface, INPAINT_LAYER_ID } from "../pagedraw/PaintSurface";
+import { PaintSurface, INPAINT_LAYER_ID, BG_LAYER_ID, DRAW_LAYER_ID } from "../pagedraw/PaintSurface";
+import { captureDocumentCanvas } from "../pagedraw/utilities/exportDocument";
 import SideToolbar from "../pagedraw/components/ui/SideToolbar";
 import InpaintToolBar from "../pagedraw/components/ui/InpaintToolBar";
 import { useSceneStore } from "../pagedraw/stores/SceneState";
@@ -174,7 +175,8 @@ export default function PageDrawStage({
   writeBackLabel = "写回分镜（另存候选）",
 }: PageDrawStageProps) {
   const store = useSceneStore();
-  const [fillColor, setFillColor] = useState("#ffffff");
+  const fillColor = store.fillColor;
+  const setFillColor = store.setFillColor;
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -185,10 +187,16 @@ export default function PageDrawStage({
   const [sidePanel, setSidePanel] = useState<"layers" | "history">("layers");
   const [cropMode, setCropMode] = useState(false);
   const [cropRect, setCropRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
-  const [hiddenLayers, setHiddenLayers] = useState<Array<Node | LineNode>>([]);
   const cropAnchorRef = useRef<{ x: number; y: number } | null>(null);
   const [negativePrompt, setNegativePrompt] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const layerInputRef = useRef<HTMLInputElement>(null);
+  const opacityDirtyRef = useRef(false);
+  const commitOpacity = () => {
+    if (!opacityDirtyRef.current) return;
+    opacityDirtyRef.current = false;
+    useSceneStore.getState().saveState();
+  };
   const stageRef = useRef<Konva.Stage>(null);
   const transformerRefs = useRef<Record<string, Konva.Transformer>>({});
   const baseImageRef = useRef<Konva.Image>(null);
@@ -370,33 +378,32 @@ export default function PageDrawStage({
     setCropMode(false);
   }, [cropRect]);
 
-  const layerRows = useMemo(
-    () => [...useSceneStore.getState().drawNodes].reverse(),
-    // drawNodes 的引用在每次增删时变化，用 length + 最后一项 id 作为依赖足够
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [store.drawNodes.length, store.drawNodes[store.drawNodes.length - 1]?.id],
-  );
+  const layerRows = useMemo(() => [...store.drawNodes].reverse(), [store.drawNodes]);
 
-  const toggleLayerVisibility = (id: string) => {
+  const updateLayer = (node: Node | LineNode, updates: { visible?: boolean; layerOpacity?: number }, save = true) => {
     const state = useSceneStore.getState();
-    const node = state.drawNodes.find((item) => item.id === id);
-    if (!node) return;
-    // Konva 的入场淡入会把新节点的 opacity 拉回 1，靠 opacity 做隐藏并不可靠；
-    // 这里把节点从渲染列表里摘出来单独记着，再点一次原样放回，绘图层行为一致。
-    state.removeNode(id, true);
-    setHiddenLayers((current) => [...current, node]);
+    if (node.type === "line") state.updateLineNode(node.id, updates, save);
+    else state.updateNode(node.id, updates, save);
+    if (updates.visible === false) state.selectNode(null);
   };
 
-  const restoreLayer = (id: string) => {
-    const state = useSceneStore.getState();
-    const node = hiddenLayers.find((item) => item.id === id);
-    if (!node) return;
-    if (node.type === "line") {
-      state.addLineNode(node, true);
-    } else {
-      state.addNode(node as never);
+  const addImageLayers = async (files: File[]) => {
+    setError(null);
+    setBusy("正在添加图片层…");
+    try {
+      for (const file of files) {
+        await useSceneStore.getState().createImageFromFile(0, 0, file);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
     }
-    setHiddenLayers((current) => current.filter((item) => item.id !== id));
+  };
+
+  const documentPNG = (stage: Konva.Stage) => {
+    const { width, height } = useSceneStore.getState().getAspectRatioDimensions();
+    return captureDocumentCanvas(stage, width, height, [BG_LAYER_ID, DRAW_LAYER_ID]).toDataURL("image/png");
   };
 
   const exportMask = async (
@@ -560,10 +567,14 @@ export default function PageDrawStage({
   const handleDownload = () => {
     const stage = stageRef.current;
     if (!stage) return;
-    const link = document.createElement("a");
-    link.download = `artcraft-${Date.now()}.png`;
-    link.href = stage.toDataURL({ pixelRatio: 1 });
-    link.click();
+    try {
+      const link = document.createElement("a");
+      link.download = `artcraft-${Date.now()}.png`;
+      link.href = documentPNG(stage);
+      link.click();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   // 把画布当前画面按 PNG 交给宿主写回分镜；不下载、不关编辑器，用户可继续改。
@@ -574,7 +585,7 @@ export default function PageDrawStage({
     setError(null);
     setNotice(null);
     try {
-      const dataUrl = stage.toDataURL({ pixelRatio: 1 });
+      const dataUrl = documentPNG(stage);
       const blob = await (await fetch(dataUrl)).blob();
       const message = await writeBack(blob, `canvas-${Date.now()}.png`);
       setNotice(message);
@@ -717,7 +728,7 @@ export default function PageDrawStage({
           className="rounded-md border border-white/10 px-3 py-1.5 text-sm hover:bg-white/10"
           onClick={() => fileInputRef.current?.click()}
         >
-          上传图片
+          替换底图
         </button>
         <input
           ref={fileInputRef}
@@ -726,6 +737,16 @@ export default function PageDrawStage({
           className="hidden"
           onChange={handleFileChange}
         />
+        <button type="button" className="rounded-md border border-white/10 px-3 py-1.5 text-sm hover:bg-white/10 disabled:opacity-40"
+          disabled={Boolean(busy)} onClick={() => layerInputRef.current?.click()}>
+          添加图片层
+        </button>
+        <input ref={layerInputRef} type="file" accept="image/*" multiple className="hidden"
+          onChange={(event) => {
+            const files = Array.from(event.currentTarget.files || []);
+            event.currentTarget.value = "";
+            if (files.length) void addImageLayers(files);
+          }} />
         <button
           type="button"
           className={`rounded-md border px-3 py-1.5 text-sm ${cropMode ? "border-amber-400/60 bg-amber-400/10 text-amber-200" : "border-white/10 hover:bg-white/10"}`}
@@ -935,17 +956,18 @@ export default function PageDrawStage({
               <p className="px-1 py-2 text-xs text-white/40">还没有绘制内容</p>
             )}
             {layerRows.map((node) => {
-              const hidden = (node.opacity ?? 1) === 0;
-              const label = node.type === "line" ? "笔迹" : node.type;
+              const hidden = node.visible === false;
+              const label = node.type === "line" ? "笔迹" : node.type === "image" ? (node.imageFile?.name || "图片") : node.type;
               const selected = store.selectedNodeIds.includes(node.id);
               return (
                 <div
                   key={node.id}
-                  className={`flex items-center gap-1 rounded-md px-2 py-1 ${selected ? "bg-sky-400/15" : "bg-white/5"}`}
+                  className={`flex flex-wrap items-center gap-1 rounded-md px-2 py-1 ${selected ? "bg-sky-400/15" : "bg-white/5"}`}
                 >
                   <button
                     type="button"
                     className="flex-1 truncate text-left text-xs"
+                    disabled={hidden}
                     onClick={() => store.selectNode(node.id, false)}
                     title="选中该图层"
                   >
@@ -954,7 +976,7 @@ export default function PageDrawStage({
                   <button
                     type="button"
                     className="px-1 text-xs text-white/60 hover:text-white"
-                    onClick={() => toggleLayerVisibility(node.id)}
+                    onClick={() => updateLayer(node, { visible: hidden })}
                     title={hidden ? "显示" : "隐藏"}
                   >
                     {hidden ? "○" : "●"}
@@ -967,32 +989,30 @@ export default function PageDrawStage({
                   >
                     ✕
                   </button>
+                  <div className="flex w-full items-center gap-1 text-xs">
+                    {([
+                      ["置底", "sendToBack"], ["下移", "sendBackward"],
+                      ["上移", "bringForward"], ["置顶", "bringToFront"],
+                    ] as const).map(([label, action]) => (
+                      <button key={action} type="button" className="rounded border border-white/10 px-1 hover:bg-white/10"
+                        onClick={() => { store[action]([node.id]); }}>{label}</button>
+                    ))}
+                  </div>
+                  <label className="flex w-full items-center gap-1 text-xs">
+                    不透明度
+                    <input type="range" min="0" max="100" aria-label={`${label}不透明度`}
+                      className="min-w-0 flex-1" value={Math.round((node.layerOpacity ?? 1) * 100)}
+                      onChange={(event) => {
+                        opacityDirtyRef.current = true;
+                        updateLayer(node, { layerOpacity: Number(event.currentTarget.value) / 100 }, false);
+                      }}
+                      onPointerUp={commitOpacity} onKeyUp={commitOpacity}
+                      onBlur={commitOpacity} />
+                    <span>{Math.round((node.layerOpacity ?? 1) * 100)}%</span>
+                  </label>
                 </div>
               );
             })}
-            {hiddenLayers.map((node) => (
-              <div key={node.id} className="flex items-center gap-1 rounded-md bg-white/5 px-2 py-1 opacity-60">
-                <span className="flex-1 truncate text-xs line-through">
-                  {node.type === "line" ? "笔迹" : node.type}
-                </span>
-                <button
-                  type="button"
-                  className="px-1 text-xs text-white/60 hover:text-white"
-                  onClick={() => restoreLayer(node.id)}
-                  title="恢复显示"
-                >
-                  ○
-                </button>
-                <button
-                  type="button"
-                  className="px-1 text-xs text-white/60 hover:text-white"
-                  onClick={() => setHiddenLayers((current) => current.filter((item) => item.id !== node.id))}
-                  title="删除"
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
           </div>
         ) : (
           <div className="space-y-2 text-xs text-white/70">

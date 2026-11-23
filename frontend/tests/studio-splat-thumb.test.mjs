@@ -67,9 +67,11 @@ test('两条入素材库的路径都用 captureThumbnail，不再直取 canvas',
     2,
     'GLB 存库与泼溅存库都要走助手',
   )
-  // 直取 canvas 只应留在「截图」这种"看到什么存什么"的地方
+  // 截图和身份迁移改用干净取景，禁止绕过隐藏辅助物的捕获路径。
   const direct = stage.match(/domElement\.toDataURL/g) || []
-  assert.equal(direct.length, 2, `直取 canvas 还剩 ${direct.length} 处，多出来的可能漏改`)
+  assert.equal(direct.length, 0, `直取 canvas 还剩 ${direct.length} 处，可能漏过了干净取景`)
+  assert.match(stage, /const snapshotBlob = await captureCurrentView\(\)/)
+  assert.match(stage, /URL\.createObjectURL\(await captureCurrentView\(\)\)/)
 })
 
 test('缩略图上传用助手返回的 Blob，不再二次 fetch dataURL', () => {

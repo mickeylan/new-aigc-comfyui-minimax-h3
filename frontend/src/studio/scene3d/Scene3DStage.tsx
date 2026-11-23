@@ -7,6 +7,7 @@ import {
   type DragEvent,
 } from "react";
 import * as THREE from "three";
+import { DEFAULT_PLANE_SETTINGS, normalizePlaneSettings, planeMaterial, mediaDataURL, validateSceneSize, validateCompositionDocument, type PlaneSettings } from "./planeDocument";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -146,12 +147,28 @@ interface SceneObjectEntry {
   initialBonePose?: BonePoseNode | null;
   /** 图片/视频平面层：记录媒体类型，导出时跳过视频（glTF 内嵌不了播放中的视频帧）。 */
   mediaKind?: MediaKind;
+  plane?: PlaneSettings;
+  mediaSource?: string;
   /** 视频平面自己的 <video> 与纹理，删除对象和卸载时要停掉并释放。 */
   video?: { element: HTMLVideoElement; texture: THREE.VideoTexture } | null;
   /** 高斯泼溅对象：Spark 有独立缓冲，要调它自己的 dispose，不走几何释放。 */
   splat?: THREE.Object3D | null;
   /** 泼溅的来源地址（/api/output 或 /api/input）：场景存档要把字节内嵌，得先取回来。 */
   splatUrl?: string;
+}
+
+function disposeSceneEntry(entry: SceneObjectEntry) {
+  if (entry.splat) { disposeSplat(entry.splat); if (entry.splatUrl?.startsWith("blob:")) URL.revokeObjectURL(entry.splatUrl); return; }
+  if (entry.video) { entry.video.element.pause(); entry.video.element.removeAttribute("src"); entry.video.element.load(); entry.video.texture.dispose(); }
+  entry.object.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    mesh.geometry?.dispose();
+    const materials = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+    materials.forEach((material) => {
+      Object.values(material).forEach((value) => { if (value instanceof THREE.Texture) value.dispose(); });
+      material.dispose();
+    });
+  });
 }
 
 type TransformMode = "translate" | "rotate" | "scale";
@@ -357,11 +374,14 @@ interface SplatDocument {
 }
 
 interface SceneDocument {
-  version: 1 | 2 | 3;
+  version: 1 | 2 | 3 | 4;
+  planes?: Array<{ id: string; name: string; kind: MediaKind; source: string; settings: PlaneSettings; position: [number, number, number]; quaternion: [number, number, number, number]; scale: [number, number, number] }>;
+  skybox?: { source: string; name: string; intensity: number; asEnvironment: boolean } | null;
   createdAt: string;
   lightPreset: LightPresetName;
-  camera: { position: [number, number, number]; target: [number, number, number] };
+  camera: { position: [number, number, number]; target: [number, number, number]; fov?: number };
   objects: Array<{
+    id?: string;
     name: string;
     position: [number, number, number];
     quaternion: [number, number, number, number];
@@ -688,6 +708,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const videoPlaneInputRef = useRef<HTMLInputElement>(null);
   const skyboxInputRef = useRef<HTMLInputElement>(null);
   const skyboxTextureRef = useRef<THREE.Texture | null>(null);
+  const skyboxSourceRef = useRef<string | null>(null);
   const fkRef = useRef<FKHelper | null>(null);
   const sparkRef = useRef<ReturnType<typeof createSplatRenderer> | null>(null);
   // 初始化 effect 只跑一次，细节档位要读 ref 才能拿到最新值；改档位时直接改
@@ -794,7 +815,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   // 3D 合成：全景天空盒与平面层设置。
   const [skybox, setSkybox] = useState<SkyboxSettings>(DEFAULT_SKYBOX);
   const [skyboxName, setSkyboxName] = useState<string | null>(null);
-  const [planeSettings, setPlaneSettings] = useState(DEFAULT_PLANE_LAYER);
+  const [planeSettings, setPlaneSettings] = useState(DEFAULT_PLANE_SETTINGS);
   // 素材库里能当背景的图片；不给文件选择器也能铺背景板/天空盒。
   const [backgroundImages, setBackgroundImages] = useState<LibraryImage[]>([]);
   const [backgroundImageId, setBackgroundImageId] = useState("");
@@ -851,6 +872,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     setSelectedId(id);
     const transform = transformRef.current;
     const entry = objectsRef.current.find((item) => item.id === id);
+    setPlaneSettings(normalizePlaneSettings(entry?.plane));
 
     // 骨骼摆姿只对当前选中的模型生效：换对象就换 FK 目标，换到没有骨骼的对象则退出摆姿。
     const skeleton = entry ? findSkeletonRoot(entry.object) !== null : false;
@@ -1209,14 +1231,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       fk.dispose();
       fkRef.current = null;
       // 卸载时把视频平面的解码与全景纹理一起收掉，否则离开页面后仍在后台跑。
-      objectsRef.current.forEach((entry) => {
-        if (entry.splat) disposeSplat(entry.splat);
-        if (!entry.video) return;
-        entry.video.element.pause();
-        entry.video.element.removeAttribute("src");
-        entry.video.element.load();
-        entry.video.texture.dispose();
-      });
+      objectsRef.current.forEach(disposeSceneEntry);
       skyboxTextureRef.current?.dispose();
       skyboxTextureRef.current = null;
       sparkRef.current?.dispose?.();
@@ -1428,19 +1443,22 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
 
   // 图片/视频平面层：当背景板或参考板用，参与 3D 遮挡。
   const addPlane = useCallback(
-    async (url: string, name: string, kind: MediaKind, dropPoint?: THREE.Vector3 | null) => {
+    async (url: string, name: string, kind: MediaKind, dropPoint?: THREE.Vector3 | null, settings: PlaneSettings = DEFAULT_PLANE_SETTINGS, detached = false) => {
       const scene = sceneRef.current;
       if (!scene) return;
-      setBusy(`正在载入 ${name}…`);
-      setError(null);
+      if (!detached) { setBusy(`正在载入 ${name}…`); setError(null); }
+      let decodingVideo: HTMLVideoElement | null = null;
+      let completed = false;
       try {
+        const source = detached ? url : await mediaDataURL(url);
         let texture: THREE.Texture;
         let aspect = DEFAULT_PLANE_ASPECT;
         let video: SceneObjectEntry["video"] = null;
 
         if (kind === "video") {
           const element = document.createElement("video");
-          element.src = url;
+          decodingVideo = element;
+          element.src = source;
           element.loop = true;
           element.muted = true;
           element.playsInline = true;
@@ -1457,7 +1475,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           texture = videoTexture;
           video = { element, texture: videoTexture };
         } else {
-          texture = await new THREE.TextureLoader().loadAsync(url);
+          texture = await new THREE.TextureLoader().loadAsync(source);
           texture.colorSpace = THREE.SRGBColorSpace;
           const image = texture.image as { naturalWidth?: number; naturalHeight?: number; width?: number; height?: number };
           const width = image.naturalWidth ?? image.width ?? 1;
@@ -1466,16 +1484,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         }
 
         const { width, height } = planeSize(aspect);
-        const opacity = clampOpacity(planeSettings.opacity);
+        const normalizedSettings = normalizePlaneSettings(settings);
         // 图片已经解码进纹理，blob URL 可以立刻释放；视频要等删除对象时再收。
         if (kind === "image" && url.startsWith("blob:")) URL.revokeObjectURL(url);
-        const material = new THREE.MeshBasicMaterial({
-          map: texture,
-          side: planeSettings.doubleSided ? THREE.DoubleSide : THREE.FrontSide,
-          alphaTest: planeSettings.alphaTest,
-          transparent: opacity < 1,
-          opacity,
-        });
+        const material = planeMaterial(texture, normalizedSettings);
         const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), material);
         mesh.name = name;
         const group = new THREE.Group();
@@ -1484,49 +1496,55 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         // 默认立在原点前方 3 米，拖进来则落在鼠标位置、底边贴地。
         if (dropPoint) group.position.set(dropPoint.x, height / 2, dropPoint.z);
         else group.position.set(0, height / 2, -3);
-        scene.add(group);
+        if (!detached) scene.add(group);
 
         const entry: SceneObjectEntry = {
           id: crypto.randomUUID(),
           name,
           object: group,
           mediaKind: kind,
+          plane: normalizedSettings,
+          mediaSource: source,
           video,
         };
-        objectsRef.current = [...objectsRef.current, entry];
-        syncObjects();
-        selectObject(entry.id);
-        setStatus(`已加入${kind === "video" ? "视频" : "图片"}平面 ${name}`);
+        if (!detached) {
+          objectsRef.current = [...objectsRef.current, entry];
+          syncObjects();
+          selectObject(entry.id);
+          setStatus(`已加入${kind === "video" ? "视频" : "图片"}平面 ${name}`);
+        }
+        completed = true;
+        return entry;
       } catch (err) {
+        if (detached) throw err;
         setError(err instanceof Error ? err.message : String(err));
       } finally {
-        setBusy(null);
+        if (!completed && decodingVideo) { decodingVideo.pause(); decodingVideo.removeAttribute("src"); decodingVideo.load(); }
+        if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+        if (!detached) setBusy(null);
       }
     },
-    [planeSettings, selectObject, syncObjects],
+    [selectObject, syncObjects],
   );
 
   // 只对选中的平面层生效：透明度、单双面、透明裁切。
   const applyPlaneSettings = useCallback(
-    (patch: Partial<typeof DEFAULT_PLANE_LAYER>) => {
-      const next = { ...planeSettings, ...patch };
-      setPlaneSettings(next);
+    (patch: Partial<PlaneSettings>) => {
       const id = selectedIdRef.current;
       const entry = id ? objectsRef.current.find((item) => item.id === id) : null;
       if (!entry?.mediaKind) return;
-      const opacity = clampOpacity(next.opacity);
+      const next = normalizePlaneSettings({ ...entry.plane, ...patch });
+      entry.plane = next;
+      setPlaneSettings(next);
       entry.object.traverse((child) => {
         const mesh = child as THREE.Mesh;
         const material = mesh.material as THREE.MeshBasicMaterial | undefined;
         if (!mesh.isMesh || !material || !("map" in material)) return;
-        material.opacity = opacity;
-        material.transparent = opacity < 1;
-        material.side = next.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
-        material.alphaTest = next.alphaTest;
-        material.needsUpdate = true;
+        mesh.material = planeMaterial(material.map!, next);
+        material.dispose();
       });
     },
-    [planeSettings],
+    [],
   );
 
   // 等距柱状全景图当背景与环境光照。
@@ -1537,14 +1555,17 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       setBusy(`正在载入全景图 ${name}…`);
       setError(null);
       try {
-        const texture = await new THREE.TextureLoader().loadAsync(url);
+        const source = await mediaDataURL(url);
+        const texture = await new THREE.TextureLoader().loadAsync(source);
+        if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+        skyboxSourceRef.current = source;
         texture.mapping = THREE.EquirectangularReflectionMapping;
         texture.colorSpace = THREE.SRGBColorSpace;
         skyboxTextureRef.current?.dispose();
         skyboxTextureRef.current = texture;
         scene.background = texture;
         scene.backgroundIntensity = skybox.intensity;
-        if (skybox.asEnvironment) scene.environment = texture;
+        scene.environment = skybox.asEnvironment ? texture : null;
         setSkybox((current) => ({ ...current, enabled: true }));
         setSkyboxName(name);
         setStatus(`已设置天空盒 ${name}`);
@@ -1568,6 +1589,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     scene.backgroundIntensity = 1;
     setSkybox((current) => ({ ...current, enabled: false }));
     setSkyboxName(null);
+    skyboxSourceRef.current = null;
     setStatus("已清除天空盒");
   }, [lightPreset]);
 
@@ -1681,7 +1703,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     setError(null);
     setStatus("");
     try {
-      const snapshotBlob = await (await fetch(renderer.domElement.toDataURL("image/png"))).blob();
+      const snapshotBlob = await captureCurrentView();
       const snapshot = await uploadImage(snapshotBlob, `scene-snapshot-${Date.now()}.png`);
       const characterUpload = await uploadImage(character, `character-${Date.now()}.png`);
       const task = await createIdentityTransferTask({
@@ -1736,13 +1758,25 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     }
   };
 
-  const downloadScreenshot = () => {
-    const renderer = rendererRef.current;
-    if (!renderer) return;
-    const link = document.createElement("a");
-    link.download = `scene-${Date.now()}.png`;
-    link.href = renderer.domElement.toDataURL("image/png");
-    link.click();
+  const captureCurrentView = async () => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) throw new Error("相机尚未就绪");
+    const shot = await captureViewportAt({ position: camera.position.toArray() as [number, number, number],
+      target: controls.target.toArray() as [number, number, number], fov: camera.fov });
+    if (!shot) throw new Error("取景失败");
+    return shot.blob;
+  };
+
+  const downloadScreenshot = async () => {
+    try {
+      const url = URL.createObjectURL(await captureCurrentView());
+      const link = document.createElement("a");
+      link.download = `scene-${Date.now()}.png`;
+      link.href = url;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
   };
 
   const applyLightPreset = useCallback((name: LightPresetName) => {
@@ -2217,18 +2251,21 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
 
   // 场景存档与 GLB 导出共用同一份几何导出逻辑：只打包用户模型，辅助线与灯光不落盘。
   const exportGeometry = useCallback(async (options: { flattenTransforms?: boolean } = {}) => {
-    const root = new THREE.Group();
+    // Export a Scene, not a Group: a Group becomes an extra glTF node and breaks object-ID matching on reload.
+    const root = new THREE.Scene();
     objectsRef.current.forEach((entry) => {
       // 视频平面不进导出：glTF 内嵌不了正在播放的视频帧，硬塞会得到一个静止首帧。
       if (!isExportablePlane(entry.mediaKind ?? "image")) return;
       // 高斯泼溅也进不了 glTF：Spark 的 SplatMesh 不是普通几何体，场景存档另有 splats 字段。
       if (entry.splat) return;
+      if (options.flattenTransforms && entry.mediaKind) return;
       const clone = entry.object.clone(true);
       if (options.flattenTransforms) {
         // 场景存档里变换单独记录，几何体按局部坐标导出，避免节点 TRS 与存档重复叠加。
         clone.position.set(0, 0, 0);
         clone.quaternion.identity();
         clone.scale.set(1, 1, 1);
+        clone.userData.sceneDocumentId = entry.id;
       }
       root.add(clone);
     });
@@ -2246,8 +2283,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     setBusy("正在导出 GLB…");
     try {
       // 泼溅进不了 glTF，纯泼溅场景导出会得到一个空 GLB，不如直接说明。
-      if (!objectsRef.current.some((entry) => !entry.splat)) {
-        throw new Error("场景里只有泼溅，导出不了 GLB；请先存成场景存档");
+      if (!objectsRef.current.some((entry) => !entry.splat && isExportablePlane(entry.mediaKind ?? "image"))) {
+        throw new Error("没有可导出GLB的对象（视频或泼溅请保存场景存档）");
       }
       const binary = await exportGeometry();
       const url = URL.createObjectURL(new Blob([binary], { type: "model/gltf-binary" }));
@@ -2452,17 +2489,26 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           ? { targetName: moverEntry.name, seconds: normalizeMoveSeconds(moveSeconds), follow: followMover }
           : null;
       const doc: SceneDocument = {
-        version: 3,
+        version: 4,
+        planes: objectsRef.current.filter((entry) => entry.mediaKind).map((entry) => {
+          if (!entry.mediaSource) throw new Error(`平面${entry.name}缺少可恢复的媒体来源`);
+          return { id: entry.id, name: entry.name, kind: entry.mediaKind!, source: entry.mediaSource,
+            settings: normalizePlaneSettings(entry.plane), position: entry.object.position.toArray() as [number, number, number],
+            quaternion: entry.object.quaternion.toArray() as [number, number, number, number], scale: entry.object.scale.toArray() as [number, number, number] };
+        }),
+        skybox: skyboxSourceRef.current ? { source: skyboxSourceRef.current, name: skyboxName || "全景", intensity: skybox.intensity, asEnvironment: skybox.asEnvironment } : null,
         createdAt: new Date().toISOString(),
         lightPreset,
         camera: {
           position: camera.position.toArray() as [number, number, number],
           target: controls.target.toArray() as [number, number, number],
+          fov: camera.fov,
         },
         objects: objectsRef.current
           // 泼溅的变换记在 splats 里，不能混进 GLB 节点名单，否则载入时按名回填会错位。
-          .filter((entry) => !entry.splat)
+          .filter((entry) => !entry.splat && !entry.mediaKind)
           .map((entry) => ({
+            id: entry.id,
             name: entry.name,
             position: entry.object.position.toArray() as [number, number, number],
             quaternion: entry.object.quaternion.toArray() as [number, number, number, number],
@@ -2487,9 +2533,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           data: arrayBufferToBase64(binary),
         },
       };
+      validateSceneSize(JSON.stringify(doc));
       return doc;
     }
-  }, [cameraKeys, exportGeometry, followMover, groundPoints, lightPreset, moveSeconds, moverId]);
+  }, [cameraKeys, exportGeometry, followMover, groundPoints, lightPreset, moveSeconds, moverId, skybox, skyboxName]);
 
   const saveScene = useCallback(async () => {
     if (objectsRef.current.length === 0) return;
@@ -2544,35 +2591,47 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     async (text: string) => {
       setBusy("正在载入场景…");
       setError(null);
+      const pending: SceneObjectEntry[] = [];
+      let pendingSky: THREE.Texture | null = null;
+      let committed = false;
       try {
         const doc = JSON.parse(text) as SceneDocument;
+        validateCompositionDocument(doc);
         // v1 是没泼溅层的老存档、v2 多了泼溅层，都仍然要能读；v3 多了机位序列。
-        if ((doc.version !== 1 && doc.version !== 2 && doc.version !== 3) || !doc.model?.data) {
+        if ((doc.version !== 1 && doc.version !== 2 && doc.version !== 3 && doc.version !== 4) || !doc.model?.data) {
           throw new Error("不是可识别的场景文件");
         }
-        const scene = sceneRef.current;
-        objectsRef.current.forEach((entry) => {
-          scene?.remove(entry.object);
-          // 泼溅有自己的 GPU 缓冲，移除后要显式释放。
-          if (entry.splat) disposeSplat(entry.splat);
-        });
-        objectsRef.current = [];
-        syncObjects();
-        selectObject(null);
+        validateSceneSize(text);
         const gltf = await new GLTFLoader().parseAsync(base64ToArrayBuffer(doc.model.data), "");
+        pending.push({ id: "pending-geometry", name: doc.model.name, object: gltf.scene });
+        const restoredPlanes: SceneObjectEntry[] = [];
+        for (const saved of doc.planes ?? []) {
+          if (!/^data:(image|video)\//.test(saved.source) || !["image", "video"].includes(saved.kind)) throw new Error("平面媒体来源无效");
+          const entry = await addPlane(saved.source, saved.name, saved.kind, null, saved.settings, true);
+          if (!entry) throw new Error(`平面恢复失败：${saved.name}`);
+          entry.id = saved.id || entry.id;
+          entry.object.position.fromArray(saved.position);
+          entry.object.quaternion.fromArray(saved.quaternion);
+          entry.object.scale.fromArray(saved.scale);
+          restoredPlanes.push(entry);
+          pending.push(entry);
+        }
+        if (doc.skybox && !/^data:image\//.test(doc.skybox.source)) throw new Error("天空盒媒体来源无效");
+        const restoredSky = doc.skybox ? await new THREE.TextureLoader().loadAsync(doc.skybox.source) : null;
+        pendingSky = restoredSky;
         // 导出时每个对象都是带自身变换的顶层节点，直接接管为场景对象，
         // 不再套一层空 Group，否则面板读到的是那层空壳的 0 变换。
         const imported = gltf.scene.children.slice();
         gltf.scene.clear();
         const entries: SceneObjectEntry[] = imported.map((child, index) => {
-          const saved = doc.objects?.find((item) => item.name === child.name) ?? doc.objects?.[index];
+          const saved = doc.version === 4 ? doc.objects?.find((item) => item.id === child.userData.sceneDocumentId) ?? doc.objects?.[index] : doc.objects?.find((item) => item.name === child.name) ?? doc.objects?.[index];
           if (saved) {
             child.position.fromArray(saved.position);
             child.quaternion.fromArray(saved.quaternion);
             child.scale.fromArray(saved.scale);
           }
           const entry: SceneObjectEntry = {
-            id: crypto.randomUUID(),
+            id: saved?.id || crypto.randomUUID(),
             name: saved?.name || child.name || doc.model.name,
             object: child,
           };
@@ -2585,14 +2644,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           }
           return entry;
         });
-        entries.forEach((entry) => sceneRef.current?.add(entry.object));
+        pending.push(...entries);
         // 泼溅层：存档里自带 .spz 字节，解成 blob URL 重新交给 Spark，
         // 这样存档不依赖 ComfyUI output 或素材库文件还在不在。
         const splatEntries: SceneObjectEntry[] = [];
         for (const saved of doc.splats ?? []) {
           const blob = new Blob([base64ToArrayBuffer(saved.data)], { type: "application/octet-stream" });
           const url = URL.createObjectURL(blob);
-          const mesh = await loadSplatMesh(url, { placeOnGround: false });
+          let mesh: Awaited<ReturnType<typeof loadSplatMesh>>;
+          try { mesh = await loadSplatMesh(url, { placeOnGround: false }); }
+          catch (err) { URL.revokeObjectURL(url); throw err; }
           // 和其他对象一样包一层 Group：归一化与用户摆位都记在这层上。
           const group = new THREE.Group();
           group.name = saved.name;
@@ -2600,20 +2661,39 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           group.position.fromArray(saved.position);
           group.quaternion.fromArray(saved.quaternion);
           group.scale.fromArray(saved.scale);
-          sceneRef.current?.add(group);
-          splatEntries.push({
+          const splatEntry: SceneObjectEntry = {
             id: crypto.randomUUID(),
             name: saved.name,
             object: group,
             splat: mesh,
             splatUrl: url,
-          });
+          };
+          splatEntries.push(splatEntry);
+          pending.push(splatEntry);
         }
-        objectsRef.current = [...entries, ...splatEntries];
+        const scene = sceneRef.current;
+        if (!scene) throw new Error("场景已关闭");
+        selectObject(null);
+        objectsRef.current.forEach((entry) => { scene.remove(entry.object); disposeSceneEntry(entry); });
+        clearSkybox();
+        if (restoredSky && doc.skybox) {
+          restoredSky.mapping = THREE.EquirectangularReflectionMapping;
+          restoredSky.colorSpace = THREE.SRGBColorSpace;
+          skyboxTextureRef.current = restoredSky;
+          skyboxSourceRef.current = doc.skybox.source;
+          scene.background = restoredSky;
+          scene.backgroundIntensity = doc.skybox.intensity;
+          scene.environment = doc.skybox.asEnvironment ? restoredSky : null;
+          setSkybox({ enabled: true, intensity: doc.skybox.intensity, asEnvironment: doc.skybox.asEnvironment });
+          setSkyboxName(doc.skybox.name);
+        }
+        objectsRef.current = [...entries, ...splatEntries, ...restoredPlanes];
+        objectsRef.current.forEach((entry) => scene.add(entry.object));
+        committed = true;
         // 载入的存档带泼溅：同样要等 LoD 树建完才能画，挂上提示等 onDirty 收。
         if (splatEntries.length > 0) beginSplatLodWait();
         syncObjects();
-        selectObject(entries[0]?.id ?? null);
+        selectObject(objectsRef.current[0]?.id ?? null);
         // 地面路径与移动目标（v3 可选字段）：老存档没有就清空，别把上一个场景的带走。
         // 这两行必须先取出来：下面「按名字找移动目标」要用，写在后面会撞上暂时性死区。
         const savedPath = normalizeGroundPath(doc.groundPath);
@@ -2650,6 +2730,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         if (camera && controls) {
           camera.position.set(...doc.camera.position);
           controls.target.set(...doc.camera.target);
+          camera.fov = normalizeCameraFov(doc.camera.fov);
+          camera.updateProjectionMatrix();
           controls.update();
         }
         setStatus(
@@ -2660,11 +2742,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
+        if (!committed) { pending.forEach(disposeSceneEntry); pendingSky?.dispose(); }
         // 带泼溅的存档把 busy 交给 SparkRenderer.onDirty 收尾。
         setBusy((current) => (current === SPLAT_LOD_BUSY ? current : null));
       }
     },
-    [applyLightPreset, beginSplatLodWait, syncObjects],
+    [applyLightPreset, beginSplatLodWait, syncObjects, addPlane, clearSkybox],
   );
 
   const loadScene = useCallback(
@@ -2874,6 +2957,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         controls.target.copy(previous.target);
         controls.update();
       }
+      renderer.render(scene, camera);
     }
   }, []);
 
@@ -4016,8 +4100,17 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                   />
                   双面可见
                 </label>
+                <label className="flex items-center gap-1.5 text-[11px] text-white/50">
+                  <input type="checkbox" checked={planeSettings.chromaKey} onChange={(event) => applyPlaneSettings({ chromaKey: event.target.checked })} />色键抠像
+                  <input aria-label="抠像颜色" type="color" value={planeSettings.keyColor} onChange={(event) => applyPlaneSettings({ keyColor: event.target.value })} />
+                </label>
+                {planeSettings.chromaKey && (["similarity", "smoothness", "spill"] as const).map((key) => (
+                  <label key={key} className="block text-[11px] text-white/50">{key === "similarity" ? "相似度" : key === "smoothness" ? "边缘柔化" : "溢色抑制"}
+                    <input aria-label={key} type="range" min="0.001" max="1" step="0.001" value={planeSettings[key]} onChange={(event) => applyPlaneSettings({ [key]: Number(event.target.value) })} className="w-full" />
+                  </label>
+                ))}
                 <p className="text-[10px] leading-3 text-white/30">
-                  视频平面只在编辑器里预览，不进 GLB 与场景存档
+                  视频平面随场景存档保存；GLB格式不支持视频
                 </p>
               </div>
             )}

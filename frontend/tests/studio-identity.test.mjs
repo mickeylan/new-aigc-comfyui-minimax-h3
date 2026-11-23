@@ -40,12 +40,12 @@ test('出图前要求先写提示词，并说明两个占位指代', () => {
   assert.match(stage3d, /<image2>/, '应说明 <image2> 指什么')
 })
 
-test('3D 快照取自当前渲染画布，不是固定图片', () => {
-  assert.match(
-    stage3d,
-    /renderer\.domElement\.toDataURL\("image\/png"\)/,
-    '快照应来自 WebGL 画布',
-  )
+test('3D 身份迁移快照来自当前相机的干净WebGL取景', () => {
+  assert.match(stage3d, /const snapshotBlob = await captureCurrentView\(\)/)
+  assert.match(stage3d, /const shot = await captureViewportAt\(/)
+  assert.match(stage3d, /context\.drawImage\(renderer\.domElement, 0, 0, width, height\)/)
+  assert.match(stage3d, /hide\(gridRef\.current\)/)
+  assert.match(stage3d, /hide\(transformRef\.current\?\.getHelper/)
 })
 
 test('默认提示词是已批准的那一段，逐字不变', () => {

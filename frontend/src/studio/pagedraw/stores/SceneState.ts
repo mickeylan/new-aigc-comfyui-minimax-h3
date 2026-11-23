@@ -28,6 +28,8 @@ export type LineNode = {
   offsetX?: number;
   offsetY?: number;
   locked?: boolean;
+  layerOpacity?: number;
+  visible?: boolean;
   globalCompositeOperation?: string;
   zIndex?: number; // Used by PageEdit for z-ordering; ignored in PageDraw
 };
@@ -90,6 +92,8 @@ type SerializedNodeData = {
   offsetX: number;
   offsetY: number;
   locked: boolean;
+  layerOpacity?: number;
+  visible?: boolean;
   modelUrl?: string;
   model3dParams?: Model3DParams;
 };
@@ -218,7 +222,7 @@ export interface SceneState {
     file: File,
     width?: number,
     height?: number,
-  ) => void;
+  ) => Promise<void>;
 
   // Add method for URL-based images
   createImageFromUrl: (
@@ -565,6 +569,8 @@ export const useSceneStore = create<SceneState>((set, get, store) => ({
               offsetX: n.offsetX || 0,
               offsetY: n.offsetY || 0,
               locked: n.locked || false,
+              layerOpacity: n.layerOpacity,
+              visible: n.visible,
               modelUrl: n.modelUrl,
               model3dParams: n.model3dParams,
             } as SerializedNodeData;
@@ -773,28 +779,21 @@ export const useSceneStore = create<SceneState>((set, get, store) => ({
   },
 
   // Add a specific method for file uploads
-  createImageFromFile: (
-    x: number,
-    y: number,
-    file: File,
-    width?: number,
-    height?: number,
-  ) => {
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const dataUrl = event.target?.result as string;
-      if (dataUrl) {
-        const img = new Image();
-        img.onload = () => {
-          const aspectRatio = img.naturalWidth / img.naturalHeight;
-          const finalWidth = width || Math.min(img.naturalWidth, 512);
-          const finalHeight = height || finalWidth / aspectRatio;
-          get().createImage(x, y, file, finalWidth, finalHeight);
-        };
-        img.src = dataUrl;
-      }
-    };
-    reader.readAsDataURL(file);
+  createImageFromFile: async (x, y, file, width, height) => {
+    const node = new Node({ id: generateId(), type: "image", x, y,
+      width: 1, height: 1, fill: "transparent", strokeWidth: 0, draggable: true });
+    await node.setImageFromFile(file);
+    const img = node.imageElement!;
+    const state = get();
+    const dimensions = state.getAspectRatioDimensions();
+    const canvasWidth = state.baseImageBitmap?.naturalWidth || dimensions.width;
+    const canvasHeight = state.baseImageBitmap?.naturalHeight || dimensions.height;
+    const fit = Math.min(1, canvasWidth / img.naturalWidth, canvasHeight / img.naturalHeight);
+    node.width = width ?? img.naturalWidth * fit;
+    node.height = height ?? node.width * img.naturalHeight / img.naturalWidth;
+    get().addNode(node);
+    get().selectNode(node.id);
+    get().setActiveTool("select");
   },
 
   // Add method for URL-based images
@@ -810,7 +809,7 @@ export const useSceneStore = create<SceneState>((set, get, store) => ({
       const blob = await response.blob();
       const filename = url.split("/").pop() || "image.png";
       const file = new File([blob], filename, { type: blob.type });
-      get().createImageFromFile(x, y, file, width, height);
+      await get().createImageFromFile(x, y, file, width, height);
     } catch (error) {
       console.error("Error loading image from URL:", url, error);
     }
@@ -1095,6 +1094,8 @@ export const useSceneStore = create<SceneState>((set, get, store) => ({
           offsetX: node.offsetX || 0,
           offsetY: node.offsetY || 0,
           locked: node.locked || false,
+          layerOpacity: node.layerOpacity,
+          visible: node.visible,
         };
 
         if (node.imageFile && node.imageFile instanceof File) {
@@ -1118,7 +1119,7 @@ export const useSceneStore = create<SceneState>((set, get, store) => ({
       eraserSize: state.eraserSize,
       fillColor: state.fillColor,
       aspectRatioType: state.aspectRatioType,
-      version: "2.0",
+      version: "2.1",
     };
 
     return JSON.stringify(sceneData, null, 2);
@@ -1426,6 +1427,8 @@ export const useSceneStore = create<SceneState>((set, get, store) => ({
               offsetX: n.offsetX || 0,
               offsetY: n.offsetY || 0,
               locked: n.locked || false,
+              layerOpacity: n.layerOpacity,
+              visible: n.visible,
               modelUrl: n.modelUrl,
               model3dParams: n.model3dParams,
             } as SerializedNodeData;

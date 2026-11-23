@@ -9,6 +9,7 @@ import { useShallow } from "zustand/react/shallow";
 import {
   Stage,
   Layer,
+  Group,
   Rect,
   Ellipse,
   Circle,
@@ -705,6 +706,7 @@ export const PaintSurface = ({
       const selectedIds: string[] = [];
 
       drawNodes.forEach((n) => {
+        if (n.visible === false) return;
         if (n instanceof Node) {
           if (
             n.x + n.width >= left &&
@@ -1511,7 +1513,7 @@ export const PaintSurface = ({
 
     return [...drawNodes, ...inpaintLineNodes].map((node) => {
       const isSelected = selectedNodeIds.includes(node.id);
-      if (!isSelected) return null;
+      if (!isSelected || node.visible === false) return null;
 
       const isShape =
         node.type === "rectangle" ||
@@ -1610,6 +1612,7 @@ export const PaintSurface = ({
             } else {
               updateNode(nodeId, { ...commonNodeUpdates }, false);
             }
+            saveState();
           }}
         />
       );
@@ -1719,6 +1722,7 @@ export const PaintSurface = ({
               <Rect
                 x={0}
                 y={0}
+                name="editor-only"
                 fillPatternImage={checkerImage || undefined}
                 fillPatternRepeat="repeat"
                 fillPatternScaleX={window.devicePixelRatio}
@@ -1739,16 +1743,6 @@ export const PaintSurface = ({
                 zIndex={-1}
               />
 
-              {!baseImageBitmap && (
-                <Rect
-                  x={0}
-                  y={0}
-                  width={getAspectRatioDimensions().width}
-                  height={getAspectRatioDimensions().height}
-                  fill="white"
-                  listening={false}
-                />
-              )}
               <Image
                 ref={baseImageRef}
                 x={0}
@@ -1772,7 +1766,12 @@ export const PaintSurface = ({
               }}
               pixelRatio={1}
             >
-              {drawNodes.map((node) => renderNode(node))}
+              {drawNodes.map((node) => (
+                <Group key={node.id} visible={node.visible !== false} opacity={node.layerOpacity ?? 1}
+                  name={node.type === "line" ? undefined : "document-layer"}>
+                  {renderNode(node)}
+                </Group>
+              ))}
 
               {currentLineId &&
                 !currentLineId.startsWith("line-inpaint") &&
@@ -1780,6 +1779,7 @@ export const PaintSurface = ({
                   <Line
                     ref={currentLineKonvaRef}
                     key="current-drawing"
+                    name="editor-only"
                     id={currentLineId}
                     points={currentLinePointsRef.current}
                     stroke={currentLinePendingRef.current.stroke}
@@ -1801,6 +1801,7 @@ export const PaintSurface = ({
               {selectionRect && (
                 <Rect
                   ref={selectionRectRef}
+                  name="editor-only"
                   x={Math.min(selectionRect.startX, selectionRect.endX)}
                   y={Math.min(selectionRect.startY, selectionRect.endY)}
                   width={Math.abs(selectionRect.endX - selectionRect.startX)}
@@ -1815,6 +1816,7 @@ export const PaintSurface = ({
 
               {shapePreview && (
                 <Rect
+                  name="editor-only"
                   x={shapePreview.x}
                   y={shapePreview.y}
                   width={shapePreview.width}

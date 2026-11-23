@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import Konva from "konva";
 import { BG_LAYER_ID, DRAW_LAYER_ID } from "../PaintSurface";
+import { captureDocumentCanvas } from "../utilities/exportDocument";
 
 export const captureStageEditsBitmap = async (
   stageRef: React.RefObject<Konva.Stage>,
@@ -12,60 +13,12 @@ export const captureStageEditsBitmap = async (
     return undefined;
   }
 
-  const oldPos = { ...stageRef.current.position() };
-  const oldScale = {
-    x: stageRef.current.scaleX(),
-    y: stageRef.current.scaleY(),
-  };
-
-  // Hide all transformers
-  Object.values(transformerRefs.current || {}).forEach(
-    (transformer: Konva.Transformer) => {
-      transformer.visible(false);
-    },
-  );
-
-  // Disable all the layers that we don't need
-  // We only need the base image layer and the edits layer
-  stageRef.current.getLayers().forEach((layer) => {
-    if (layer.id() == BG_LAYER_ID || layer.id() == DRAW_LAYER_ID) {
-      layer.visible(true);
-    } else {
-      layer.visible(false);
-    }
-  });
-
-  stageRef.current.position({ x: 0, y: 0 });
-  stageRef.current.scale({ x: 1, y: 1 });
-  stageRef.current.draw();
-
   try {
-    const canvas = stageRef.current.toCanvas({
-      width,
-      height,
-      pixelRatio: 1,
-    });
-
+    const canvas = captureDocumentCanvas(stageRef.current, width, height, [BG_LAYER_ID, DRAW_LAYER_ID]);
     return await createImageBitmap(canvas);
   } catch (error) {
     console.error("Failed to create ImageBitmap:", error);
     return undefined;
-  } finally {
-    // Restore transformers
-    Object.values(transformerRefs.current || {}).forEach(
-      (transformer: Konva.Transformer) => {
-        transformer.visible(true);
-      },
-    );
-
-    // Restore all layers visibility
-    stageRef.current.getLayers().forEach((layer) => {
-      layer.visible(true);
-    });
-
-    stageRef.current.position(oldPos);
-    stageRef.current.scale(oldScale);
-    stageRef.current.draw();
   }
 };
 
@@ -84,35 +37,7 @@ export const useStageSnapshot = (
   ): string => {
     if (!stageRef.current) return "";
 
-    const oldPos = { ...stageRef.current.position() };
-    const oldScale = {
-      x: stageRef.current.scaleX(),
-      y: stageRef.current.scaleY(),
-    };
-
-    // Hide all transformers
-    Object.values(transformerRefs.current || {}).forEach(
-      (transformer: Konva.Transformer) => {
-        transformer.visible(false);
-      },
-    );
-
-    stageRef.current.position({ x: 0, y: 0 });
-    stageRef.current.scale({ x: 1, y: 1 });
-    stageRef.current.draw();
-    const uri = stageRef.current.toDataURL({ width, height, pixelRatio: 1 });
-
-    // Restore transformers
-    Object.values(transformerRefs.current || {}).forEach(
-      (transformer: Konva.Transformer) => {
-        transformer.visible(true);
-      },
-    );
-
-    stageRef.current.position(oldPos);
-    stageRef.current.scale(oldScale);
-    stageRef.current.draw();
-    return uri;
+    return captureDocumentCanvas(stageRef.current, width, height, [BG_LAYER_ID, DRAW_LAYER_ID]).toDataURL("image/png");
   };
 
   useEffect(() => {

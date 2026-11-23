@@ -24,6 +24,8 @@ export interface NodeProps {
   offsetY?: number;
   zIndex?: number;
   locked?: boolean;
+  layerOpacity?: number;
+  visible?: boolean;
   /** If set, this image node was rendered from a 3D model and can be re-edited in 3D. */
   modelUrl?: string;
   /** Last-used Three.js camera/fov/scale params for re-editing the 3D model. */
@@ -52,6 +54,8 @@ export class Node {
   offsetY: number;
   zIndex: number;
   locked: boolean;
+  layerOpacity: number;
+  visible: boolean;
   modelUrl?: string;
   model3dParams?: Model3DParams;
 
@@ -77,6 +81,8 @@ export class Node {
     offsetY = 0,
     zIndex = 0,
     locked = false,
+    layerOpacity = 1,
+    visible = true,
     modelUrl,
     model3dParams,
   }: NodeProps) {
@@ -101,6 +107,8 @@ export class Node {
     this.offsetY = offsetY;
     this.zIndex = zIndex;
     this.locked = locked;
+    this.layerOpacity = Number.isFinite(layerOpacity) ? Math.max(0, Math.min(1, layerOpacity)) : 1;
+    this.visible = visible;
     this.modelUrl = modelUrl;
     this.model3dParams = model3dParams;
   }
