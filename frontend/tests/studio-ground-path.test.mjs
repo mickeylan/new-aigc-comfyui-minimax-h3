@@ -117,11 +117,23 @@ test('导出序列时逐帧推角色、结束还原，预览走同一个取样�
 })
 
 test('移动计划进出存档：稳定ID绑定，旧档按名字回退', () => {
-  assert.match(stage, /move\?: \{ targetId\?: string; targetName: string; seconds: number; follow\?: boolean \} \| null;/)
+  assert.match(stage, /move\?: \{ targetId\?: string; targetName: string; seconds: number; follow\?: boolean; animation\?: SavedMoveAnimation \} \| null;/)
   assert.match(stage, /const movePlan =[\s\S]{0,200}targetId: moverEntry.id, targetName: moverEntry\.name, seconds: normalizeMoveSeconds\(moveSeconds\), follow: followMover/)
   assert.match(stage, /const loadedMover = savedMove/)
-  assert.match(stage, /objectsRef\.current\.find\(\(entry\) => savedMove\.targetId \? entry\.id === savedMove\.targetId : entry\.name === savedMove\.targetName\) \?\? null/)
+  // Resolve/validate against pending objects before committing the replacement.
+  assert.match(stage, /\[\.\.\.entries, \.\.\.splatEntries, \.\.\.restoredPlanes\]\.find\(entry => savedMove\.targetId \? entry\.id === savedMove\.targetId : entry\.name === savedMove\.targetName\) \?\? null/)
+  assert.ok(stage.indexOf('const loadedAnimationIndex = restoreMoveAnimation(') < stage.indexOf('objectsRef.current = [...entries, ...splatEntries, ...restoredPlanes]'))
   assert.match(stage, /setMoverId\(loadedMover\?\.id \?\? null\);/)
+})
+
+test('路径动作选择写入引用，恢复不被目标effect清空，选择修改进入存档指纹', () => {
+  assert.match(stage, /animation: saveMoveAnimation\(moverEntry\.object\.animations, moveAnimationIndex\)/)
+  assert.match(stage, /previousMoverRef\.current = loadedMover\?\.id \?\? null;/)
+  assert.match(stage, /setMoveAnimationIndex\(loadedAnimationIndex\);/)
+  assert.match(stage, /if \(previousMoverRef\.current !== moverId\) setMoveAnimationIndex\(-1\);/)
+  assert.match(stage, /documentMetaRef\.current = JSON\.stringify\([^\n]*moveAnimationIndex/)
+  const body = stage.slice(stage.indexOf('const importSceneText ='), stage.indexOf('const loadScene ='))
+  assert.doesNotMatch(body, /setMoveAnimationIndex\(-1\)/, 'bad imports must not clear the active choice')
 })
 
 test('地面路径进出存档：写入可选字段、载入时校验、UI 能点选/清除', () => {

@@ -4,13 +4,13 @@ import { readFileSync } from 'node:fs'
 
 const stage = readFileSync(new URL('../src/studio/scene3d/Scene3DStage.tsx', import.meta.url), 'utf8')
 
-test('存档升到 v5，保留泼溅机位合成平面与对象状态', () => {
+test('存档升到 v6，保留泼溅机位合成平面与对象状态', () => {
   assert.match(stage, /interface SplatDocument \{/)
   assert.match(stage, /data: string;/, '泼溅字节要 base64 内嵌')
-  assert.match(stage, /version: 1 \| 2 \| 3 \| 4 \| 5;/)
+  assert.match(stage, /version: 1 \| 2 \| 3 \| 4 \| 5 \| 6;/)
   assert.match(stage, /splats\?: SplatDocument\[\];/)
   assert.match(stage, /cameraKeys\?: CameraKey\[\];/, 'v3 起机位序列要入库')
-  assert.match(stage, /version: 5,/, '新存档写 v5')
+  assert.match(stage, /version: 6,/, '新存档写 v6，携带对象动作资源')
   assert.match(stage, /onlyVisible: !options\.flattenTransforms/, '存档必须包含隐藏几何')
   assert.match(stage, /visible: entry\.object\.visible, locked: !!entry\.locked/)
   assert.match(stage, /planes: objectsRef\.current\.filter\(\(entry\) => entry\.mediaKind\)/)
@@ -24,8 +24,8 @@ test('保存时先把 .spz 字节取回来，取不到就整体失败', () => {
   assert.match(stage, /\.filter\(\(entry\) => !entry\.splat && !entry\.mediaKind\)/)
 })
 
-test('载入 v1 / v2 / v3 / v4 / v5，泼溅按 blob URL 交给 Spark 重建并回填变换', () => {
-  assert.match(stage, /if \(\(doc\.version !== 1 && doc\.version !== 2 && doc\.version !== 3 && doc\.version !== 4 && doc\.version !== 5\)/, 'v1/v2 老存档仍要能读')
+test('载入 v1 / v2 / v3 / v4 / v5 / v6，泼溅按 blob URL 交给 Spark 重建并回填变换', () => {
+  assert.match(stage, /if \(\(doc\.version !== 1 && doc\.version !== 2 && doc\.version !== 3 && doc\.version !== 4 && doc\.version !== 5 && doc\.version !== 6\)/, 'v1/v2 老存档仍要能读')
   assert.match(stage, /for \(const saved of doc\.splats \?\? \[\]\)/)
   assert.match(stage, /new Blob\(\[base64ToArrayBuffer\(saved\.data\)\]/)
   assert.match(stage, /await loadSplatMesh\(url, \{ placeOnGround: false \}\)/)

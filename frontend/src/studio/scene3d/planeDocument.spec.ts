@@ -7,6 +7,14 @@ const plane = (id: string, kind = "image") => ({ id, name: "same-name", kind, so
 const doc = (version = 4) => ({ version, model: { data: "Z2xi" }, camera: { position: [1, 2, 3], target: [0, 0, 0] }, objects: [], planes: [plane("a"), plane("b", "video")], skybox: { source: "data:image/png;base64,YQ==", intensity: 0.7, asEnvironment: true } });
 
 describe("3D composition layers", () => {
+  it("accepts v6 while retaining mandatory stable identities and rejecting v7", () => {
+    const current = { ...doc(6), planes: [], objects: [{ id: 'actor', visible: true, locked: false, ...transform }] };
+    expect(() => validateCompositionDocument(current)).not.toThrow();
+    expect(() => validateCompositionDocument({ ...current, version: 7 })).toThrow();
+    expect(() => validateCompositionDocument({ ...current, objects: [{ ...current.objects[0], id: '' }] })).toThrow();
+    expect(() => validateCompositionDocument({ ...current, objects: [current.objects[0], current.objects[0]] })).toThrow();
+    expect(() => validateCompositionDocument({ ...current, objects: [{ ...current.objects[0], visible: undefined }] })).toThrow();
+  });
   it("defaults legacy fields, clamps invalid values and never mutates another layer", () => {
     const a = normalizePlaneSettings({ opacity: 0.2, chromaKey: true });
     const b = normalizePlaneSettings();
