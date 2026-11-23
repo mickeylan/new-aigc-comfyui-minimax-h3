@@ -71,6 +71,17 @@ describe("3D composition layers", () => {
     restored.objects[0].id = 'a'; expect(() => validateCompositionDocument(restored)).toThrow('重复');
     restored.objects[0].id = 'mesh'; restored.objects[0].locked = 'false'; expect(() => validateCompositionDocument(restored)).toThrow('锁定');
   });
+  it('preserves optional splat normalization TRS and rejects malformed content before decoding', () => {
+    const value: any = doc(5); value.planes = [];
+    value.splats = [{ id: 'splat', visible: true, locked: false, ...transform, contentTransform: { position: [.2, .4, .1], quaternion: [0, 0, 1, 0], scale: [2, 2, 2] } }];
+    const restored = JSON.parse(JSON.stringify(value)); validateCompositionDocument(restored);
+    expect(restored.splats[0].contentTransform).toEqual(value.splats[0].contentTransform);
+    for (const invalid of [null, {}, { ...transform, scale: [1, NaN, 1] }, { ...transform, quaternion: [0, 1] }]) {
+      restored.splats[0].contentTransform = invalid;
+      expect(() => validateCompositionDocument(restored)).toThrow('泼溅内容变换');
+    }
+    delete restored.splats[0].contentTransform; expect(() => validateCompositionDocument(restored)).not.toThrow();
+  });
   it("checks actual UTF8 bytes rather than character count", () => {
     expect(() => validateSceneSize("x")).not.toThrow();
     expect(() => validateSceneSize("界".repeat(Math.floor(SCENE_MAX_BYTES / 3) + 1))).toThrow("32MiB");

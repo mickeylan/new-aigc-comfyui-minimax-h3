@@ -371,6 +371,8 @@ interface PoseSnapshot {
 // 变换不依赖导出器是否保留节点 TRS，载入时按名字（缺名字则按顺序）回填。
 // v2 起高斯泼溅单独用 splats 内嵌 .spz 字节：SplatMesh 进不了 glTF，只能自带数据。
 interface SplatDocument {
+  /** Preserve decoder/normalization TRS separately from the user-editable group. */
+  contentTransform?: PoseSnapshot;
   id?: string;
   visible?: boolean;
   locked?: boolean;
@@ -1864,11 +1866,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         const url = URL.createObjectURL(await response.blob());
         let mesh: THREE.Object3D;
         try { mesh = await loadSplatMesh(url, { placeOnGround: false }); } catch (e) { URL.revokeObjectURL(url); throw e; }
+        mesh.position.copy(entry.splat.position); mesh.quaternion.copy(entry.splat.quaternion); mesh.scale.copy(entry.splat.scale);
         const group = new THREE.Group(); group.add(mesh);
         copy = { id: crypto.randomUUID(), name: `${entry.name} 副本`, object: group, splat: mesh, splatUrl: url };
       } else copy = { ...entry, id: crypto.randomUUID(), name: `${entry.name} 副本`, object: duplicateMesh(entry.object), locked: false };
       copy.object.position.copy(entry.object.position).add(new THREE.Vector3(.5, 0, .5)); copy.object.quaternion.copy(entry.object.quaternion); copy.object.scale.copy(entry.object.scale); copy.object.visible = entry.object.visible;
-      if (epoch !== sceneEpochRef.current || !sceneRef.current) { disposeSceneEntry(copy); return; }
+      if (!copy.object.visible) copy.video?.element.pause();
+      if (epoch !== sceneEpochRef.current || !sceneRef.current || !objectsRef.current.includes(entry)) { disposeSceneEntry(copy); return; }
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); return; }
     historyRef.current.checkpoint(objectsRef.current);
     objectsRef.current = [...objectsRef.current, copy]; sceneRef.current?.add(copy.object);
@@ -2014,6 +2018,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       return;
     }
     const started = performance.now();
+    const epoch = sceneEpochRef.current;
     // 跟拍得知道“谁在走”与“往哪走”；没有角色或路径就只放相机。
     const followPath = followMover ? editorGroundPath(groundPoints) : null;
     const followMoverEntry =
@@ -2036,7 +2041,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         window.clearTimeout(cameraPathTimerRef.current);
         cameraPathTimerRef.current = null;
       }
-      if (followMoverEntry && savedMover) {
+      if (epoch === sceneEpochRef.current && followMoverEntry && savedMover && canMoveEntry(followMoverEntry) && objectsRef.current.includes(followMoverEntry)) {
         followMoverEntry.object.position.copy(savedMover.position);
         followMoverEntry.object.rotation.y = savedMover.rotationY;
       }
@@ -2047,13 +2052,14 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     if (cameraPathTimerRef.current !== null) window.clearTimeout(cameraPathTimerRef.current);
     cameraPathTimerRef.current = window.setTimeout(finish, total * 1000 + 80);
     const step = () => {
+      if (epoch !== sceneEpochRef.current) { finish(); return; }
       const elapsed = (performance.now() - started) / 1000;
       // 找到当前落在哪一段（超过总时长时停在最后一段的末尾）。
       const pose = sampleCameraPath(cameraKeys, elapsed);
       if (pose) {
         // 跟拍：角色按同一时钟走 A→B，相机整体加上它的位移（构图不变）。
         let delta: [number, number, number] = [0, 0, 0];
-        if (followPath && followMoverEntry && followSeconds && canMoveEntry(followMoverEntry)) {
+        if (followPath && followMoverEntry && followSeconds && canMoveEntry(followMoverEntry) && objectsRef.current.includes(followMoverEntry)) {
           const progress = Math.min(1, elapsed / followSeconds);
           followMoverEntry.object.position.set(...groundPathPointAt(followPath, progress));
           followMoverEntry.object.rotation.y = groundPathYaw(followPath, progress);
@@ -2617,6 +2623,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           id: entry.id, visible: entry.object.visible, locked: !!entry.locked,
           name: entry.name,
           data: arrayBufferToBase64(await response.arrayBuffer()),
+          contentTransform: { position: entry.splat.position.toArray() as [number, number, number], quaternion: entry.splat.quaternion.toArray() as [number, number, number, number], scale: entry.splat.scale.toArray() as [number, number, number] },
           position: entry.object.position.toArray() as [number, number, number],
           quaternion: entry.object.quaternion.toArray() as [number, number, number, number],
           scale: entry.object.scale.toArray() as [number, number, number],
@@ -2763,6 +2770,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       setBusy("正在载入场景…");
       setError(null);
       const epoch = ++sceneEpochRef.current;
+      // Cancel synchronously: throttled rAF must not leave playback UI or an old timer alive.
+      if (moveRafRef.current !== null) cancelAnimationFrame(moveRafRef.current);
+      if (cameraPathRef.current !== null) cancelAnimationFrame(cameraPathRef.current);
+      if (cameraPathTimerRef.current !== null) window.clearTimeout(cameraPathTimerRef.current);
+      moveRafRef.current = null; cameraPathRef.current = null; cameraPathTimerRef.current = null;
+      setPlayingMove(false); setPlayingPath(false);
       const pending: SceneObjectEntry[] = [];
       let pendingSky: THREE.Texture | null = null;
       let committed = false;
@@ -2833,6 +2846,11 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           let mesh: Awaited<ReturnType<typeof loadSplatMesh>>;
           try { mesh = await loadSplatMesh(url, { placeOnGround: false }); }
           catch (err) { URL.revokeObjectURL(url); throw err; }
+          if (saved.contentTransform) {
+            mesh.position.fromArray(saved.contentTransform.position);
+            mesh.quaternion.fromArray(saved.contentTransform.quaternion);
+            mesh.scale.fromArray(saved.contentTransform.scale);
+          }
           // 和其他对象一样包一层 Group：归一化与用户摆位都记在这层上。
           const group = new THREE.Group();
           group.name = saved.name;
@@ -2871,6 +2889,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         objectsRef.current = [...entries, ...splatEntries, ...restoredPlanes];
         objectsRef.current.forEach((entry) => scene.add(entry.object));
         committed = true;
+        sequenceFramesRef.current = null;
+        if (referenceUrlRef.current) URL.revokeObjectURL(referenceUrlRef.current);
+        referenceUrlRef.current = null; setReferenceShot(null);
         cleanOnRenderRef.current = true;
         setDirty(false);
         // 载入的存档带泼溅：同样要等 LoD 树建完才能画，挂上提示等 onDirty 收。
@@ -3066,11 +3087,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const context = snapshot.getContext("2d");
       if (!context) throw new Error("取不到 2D 画布上下文");
       context.drawImage(renderer.domElement, 0, 0, width, height);
-      const blob = await new Promise<Blob | null>((resolve) => {
+      // Return the encoding promise without awaiting: finally restores live scene state synchronously.
+      return new Promise<Blob | null>((resolve) => {
         snapshot.toBlob((value) => resolve(value), "image/png");
+      }).then((blob) => {
+        if (!blob) throw new Error("取不到参考图（画布为空）");
+        return { blob, width, height };
       });
-      if (!blob) throw new Error("取不到参考图（画布为空）");
-      return { blob, width, height };
     } finally {
       // 无论如何都要还原，否则编辑器会一直停在参考图材质上。
       scene.overrideMaterial = previousOverride;
@@ -3137,11 +3160,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const context = snapshot.getContext("2d");
       if (!context) throw new Error("取不到 2D 画布上下文");
       context.drawImage(renderer.domElement, 0, 0, width, height);
-      const blob = await new Promise<Blob | null>((resolve) => {
+      // Do not keep the temporary camera/helper state alive while PNG encoding is pending.
+      return new Promise<Blob | null>((resolve) => {
         snapshot.toBlob((value) => resolve(value), "image/png");
+      }).then((blob) => {
+        if (!blob) throw new Error("取不到画面（画布为空）");
+        return { blob, width, height };
       });
-      if (!blob) throw new Error("取不到画面（画布为空）");
-      return { blob, width, height };
     } finally {
       // 无论如何都要把视角还回去，否则用户眼前会突然跳到落幅机位。
       restorePoseHelpers();
@@ -3171,6 +3196,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       setError("先记录两个机位（起幅和落幅），再导首尾帧");
       return;
     }
+    const epoch = sceneEpochRef.current;
+    const assertCurrent = () => { if (epoch !== sceneEpochRef.current) throw new Error('场景已替换，已停止首尾帧导出'); };
+    const operation = operationsRef.current.start('正在渲起幅/落幅两帧…');
     setBusy("正在渲起幅/落幅两帧…");
     setError(null);
     try {
@@ -3178,7 +3206,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const results: Array<{ edge: "first" | "last"; name: string; size: number }> = [];
       for (const edge of ["first", "last"] as const) {
         const pose = edge === "first" ? pair.first : pair.last;
+        assertCurrent();
         const shot = await captureViewportAt(pose);
+        assertCurrent();
         if (!shot) throw new Error("取不到画面（画布为空）");
         const form = new FormData();
         form.append("file", shot.blob, cameraFrameFileName(edge, stamp));
@@ -3189,6 +3219,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           throw new Error(payload.error || `存素材库失败（HTTP ${response.status}）`);
         }
         const material = await response.json();
+        assertCurrent();
         results.push({
           edge,
           name: material.name ?? cameraFrameFileName(edge, stamp),
@@ -3202,7 +3233,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(null);
+      operation.finish(); setBusy(null);
     }
   }, [cameraKeys, captureViewportAt]);
 
@@ -3320,11 +3351,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
 
   const exportReference = useCallback(
     async (pass: ReferencePass) => {
+      const epoch = sceneEpochRef.current;
+      const operation = operationsRef.current.start(`${REFERENCE_BUSY_PREFIX}（${REFERENCE_PASS_LABELS[pass]}）…`);
       setBusy(`${REFERENCE_BUSY_PREFIX}（${REFERENCE_PASS_LABELS[pass]}）…`);
       setError(null);
       try {
         const shot = await captureReference(pass);
-        if (!shot) return;
+        if (!shot || epoch !== sceneEpochRef.current) return;
         if (referenceUrlRef.current) URL.revokeObjectURL(referenceUrlRef.current);
         const url = URL.createObjectURL(shot.blob);
         referenceUrlRef.current = url;
@@ -3335,6 +3368,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
+        operation.finish();
         setBusy((current) => (current && current.startsWith(REFERENCE_BUSY_PREFIX) ? null : current));
       }
     },
@@ -3351,6 +3385,11 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         setError("先记录至少两个机位，序列才有路径可走");
         return;
       }
+      const epoch = sceneEpochRef.current;
+      const assertCurrent = () => {
+        if (epoch !== sceneEpochRef.current) throw new Error('场景已替换，已停止序列导出');
+        if (mover && (!canMoveEntry(mover) || !objectsRef.current.includes(mover))) throw new Error('移动对象已隐藏、锁定或删除，已停止序列导出');
+      };
       const path = editorGroundPath(groundPoints);
       const mover =
         moverId ? objectsRef.current.find((entry) => entry.id === moverId && canMoveEntry(entry)) ?? null : null;
@@ -3359,6 +3398,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const plan = sequencePlan(cameraKeys, moverSeconds, fps);
       const frames = plan.frames;
       setError(null);
+      const operation = operationsRef.current.start(`${REFERENCE_BUSY_PREFIX}（序列 0/${frames}）…`);
       setBusy(`${REFERENCE_BUSY_PREFIX}（序列 0/${frames}）…`);
       // 导出会一路推相机，结束后必须放回原处，否则用户回到编辑器发现机位跑了。
       const savedPosition = camera.position.clone();
@@ -3384,6 +3424,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const entries: Array<{ name: string; data: Uint8Array }> = [];
       try {
         for (let index = 0; index < frames; index += 1) {
+          assertCurrent();
           const sample = sampleCameraPath(cameraKeys, index / fps);
           if (!sample) break;
           camera.position.set(...sample.position);
@@ -3415,11 +3456,14 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             }
           }
           const shot = await captureReference(pass);
+          assertCurrent();
           if (!shot) break;
           entries.push({
             name: `${pass}-${String(index).padStart(3, "0")}.png`,
             data: new Uint8Array(await shot.blob.arrayBuffer()),
           });
+          assertCurrent();
+          operation.update(`${REFERENCE_BUSY_PREFIX}（序列 ${index + 1}/${frames}）…`);
           setBusy(`${REFERENCE_BUSY_PREFIX}（序列 ${index + 1}/${frames}）…`);
         }
         if (entries.length === 0) throw new Error("没有取到任何帧");
@@ -3442,23 +3486,29 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
-        camera.position.copy(savedPosition);
-        controls.target.copy(savedTarget);
-        if (Math.abs(camera.fov - savedFov) > 1e-4) {
-          camera.fov = savedFov;
-          camera.updateProjectionMatrix();
-        }
-        controls.update();
-        if (mover && savedMover) {
-          mover.object.position.copy(savedMover.position);
-          mover.object.quaternion.copy(savedMover.quaternion);
-        }
-        // 画布尺寸与投影一起还原，否则编辑器停在导出分辨率上。
-        if (renderer && savedSize && sequenceWidth > 0) {
+        operation.finish();
+        if (epoch === sceneEpochRef.current) {
+          camera.position.copy(savedPosition);
+          controls.target.copy(savedTarget);
+          if (Math.abs(camera.fov - savedFov) > 1e-4) {
+            camera.fov = savedFov;
+            camera.updateProjectionMatrix();
+          }
+          controls.update();
+          if (mover && savedMover && canMoveEntry(mover) && objectsRef.current.includes(mover)) {
+            mover.object.position.copy(savedMover.position);
+            mover.object.quaternion.copy(savedMover.quaternion);
+          }
+          // 画布尺寸与投影一起还原，否则编辑器停在导出分辨率上。
+          if (renderer && savedSize && sequenceWidth > 0) {
+            renderer.setPixelRatio(savedPixelRatio);
+            renderer.setSize(savedSize.x, savedSize.y, false);
+            camera.aspect = savedAspect;
+            camera.updateProjectionMatrix();
+          }
+        } else if (renderer && renderer === rendererRef.current) {
           renderer.setPixelRatio(savedPixelRatio);
-          renderer.setSize(savedSize.x, savedSize.y, false);
-          camera.aspect = savedAspect;
-          camera.updateProjectionMatrix();
+          resizeFrameRef.current(); // Keep the new scene's frame, not the old export dimensions.
         }
         setBusy((current) => (current && current.startsWith(REFERENCE_BUSY_PREFIX) ? null : current));
       }
@@ -3580,7 +3630,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     historyRef.current.checkpoint(objectsRef.current);
     const epoch = sceneEpochRef.current;
     const step = () => {
-      if (epoch !== sceneEpochRef.current || !canMoveEntry(mover)) { moveRafRef.current = null; setPlayingMove(false); return; }
+      if (epoch !== sceneEpochRef.current || !objectsRef.current.includes(mover) || !canMoveEntry(mover)) { moveRafRef.current = null; setPlayingMove(false); return; }
       const progress = Math.min(1, (performance.now() - started) / (seconds * 1000));
       mover.object.position.set(...groundPathPointAt(path, progress));
       // 朝向行进方向：模型默认面朝 +Z，yaw 直接由方向算。

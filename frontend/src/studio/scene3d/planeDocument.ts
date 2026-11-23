@@ -65,6 +65,9 @@ export function validateCompositionDocument(doc: any) {
       if (typeof item.visible !== 'boolean' || typeof item.locked !== 'boolean') throw new Error('对象显隐/锁定无效');
     }
   }
+  for (const splat of doc.splats ?? []) {
+    if (splat.contentTransform !== undefined && !transform(splat.contentTransform)) throw new Error('泼溅内容变换无效');
+  }
   for (const object of doc.objects ?? []) {
     validateBonePose(object.bonePose);
     validateBonePose(object.initialBonePose);
