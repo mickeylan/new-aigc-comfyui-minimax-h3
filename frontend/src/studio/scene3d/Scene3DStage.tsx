@@ -19,6 +19,7 @@ import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { findTemplateId } from "../host/template-cache.js";
 import { FKHelper } from "./posing/FKHelper.js";
+import { PreviewPlayhead, PREVIEW_FPS, previewFrameCount, previewFrameTime } from './previewPlayhead';
 import { AnimationPreview, skeletalClips, saveAnimationClips, restoreAnimationClips, saveMoveAnimation, restoreMoveAnimation, type SavedMoveAnimation, type SavedAnimationClip } from './animationPreview';
 import { createStoreZip } from "./zip.js";
 import {
@@ -275,7 +276,7 @@ function sampleCameraPath(keys: CameraKey[], elapsed: number) {
   let active = segments[0];
   for (const item of segments) {
     active = item;
-    if (elapsed < cursor + item.seconds) break;
+    if (elapsed < cursor + item.seconds || item === segments[segments.length - 1]) break;
     cursor += item.seconds;
   }
   const local = Math.min(1, Math.max(0, (elapsed - cursor) / active.seconds));
@@ -712,7 +713,14 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [moveAnimationIndex, setMoveAnimationIndex] = useState(-1);
   const [animationState, setAnimationState] = useState<'stopped' | 'playing' | 'paused'>('stopped');
   const [animationIndex, setAnimationIndex] = useState(0);
+  const scrubRef = useRef<{ session: PreviewPlayhead; id?: string; pose: BonePoseNode | null } | null>(null);
+  const [previewFrame, setPreviewFrame] = useState(0);
   const stopAnimation = useCallback(() => {
+    if (scrubRef.current) {
+      scrubRef.current.session.stop(); scrubRef.current = null; setPreviewFrame(0);
+      const selected = objectsRef.current.find(e => e.id === selectedIdRef.current);
+      if (selected && !selected.locked && selected.object.visible) transformRef.current?.attach(selected.object);
+    }
     cancelCameraPreviewRef.current?.();
     cancelCameraPreviewRef.current = null;
     cancelMoveRef.current?.();
@@ -912,7 +920,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const documentMetaRef = useRef('');
   documentMetaRef.current = JSON.stringify({ archiveName, frameAspect, lightPreset, skybox, skyboxName, cameraKeys, groundPoints, moverId, moveSeconds, followMover, moveAnimationIndex });
   fingerprintRef.current = () => JSON.stringify({ epoch: sceneEpochRef.current, meta: documentMetaRef.current,
-    objects: objectsRef.current.map(e => ({ id: e.id, name: e.name, p: e.object.position.toArray(), q: e.object.quaternion.toArray(), s: e.object.scale.toArray(), visible: e.object.visible, locked: !!e.locked, plane: e.plane, source: e.mediaSource, splat: e.splatUrl, pose: animationRef.current?.id === e.id ? animationRef.current.pose : serializeBonePose(e.object), initial: e.initialBonePose,
+    objects: objectsRef.current.map(e => ({ id: e.id, name: e.name, p: (scrubRef.current?.id === e.id ? scrubRef.current.session.position : e.object.position)?.toArray(), q: (scrubRef.current?.id === e.id ? scrubRef.current.session.quaternion : e.object.quaternion)?.toArray(), s: e.object.scale.toArray(), visible: e.object.visible, locked: !!e.locked, plane: e.plane, source: e.mediaSource, splat: e.splatUrl, pose: scrubRef.current?.id === e.id ? scrubRef.current.pose : animationRef.current?.id === e.id ? animationRef.current.pose : serializeBonePose(e.object), initial: e.initialBonePose,
       materials: (() => { const rows: unknown[] = []; e.object.traverse(o => { if (isPoseEditorHelper(o)) return; const m = (o as THREE.Mesh).material; if (m) for (const v of Array.isArray(m) ? m : [m]) rows.push(materialRevision(v as THREE.MeshStandardMaterial)); }); return rows; })() })) });
   if (cleanOnRenderRef.current) { saveGuardRef.current.markSaved(fingerprintRef.current()); cleanOnRenderRef.current = false; }
   useEffect(() => {
@@ -1342,6 +1350,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     return () => {
       cancelAnimationFrame(frame);
       cancelCameraPreviewRef.current?.();
+      scrubRef.current?.session.stop(); scrubRef.current = null;
       cancelCameraPreviewRef.current = null;
       cancelMoveRef.current?.();
       cancelMoveRef.current = null;
@@ -2249,6 +2258,47 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     };
     cameraPathRef.current = requestAnimationFrame(step);
   }, [cameraKeys, followMover, groundPoints, moveSeconds, moverId, moveAnimationIndex, busy]);
+
+  // Session-only random access. Configuration edits invalidate the captured baseline.
+  useEffect(() => { if (scrubRef.current) stopAnimation(); }, [cameraKeys, groundPoints, moverId, moveSeconds, followMover, moveAnimationIndex, stopAnimation]);
+  const scrubMover = objectsRef.current.find(e => e.id === moverId && canMoveEntry(e));
+  const scrubPath = scrubMover ? editorGroundPath(groundPoints) : null;
+  const scrubDuration = Math.max(cameraPathDuration(cameraKeys), scrubPath ? normalizeMoveSeconds(moveSeconds) : 0);
+  const scrubLastFrame = previewFrameCount(scrubDuration);
+  const seekPreviewFrame = (requestedFrame: number) => {
+    if (busy || operationBusy || !scrubLastFrame) return;
+    const camera = cameraRef.current, controls = controlsRef.current;
+    if (!camera || !controls) return;
+    const { frame, seconds } = previewFrameTime(requestedFrame, scrubDuration);
+    try {
+      if (!scrubRef.current) {
+        stopAnimation();
+        fkRef.current?.clear(); posingRef.current = false; setPosing(false); setPosingBones(0); setActiveBone(null);
+        const mover = scrubPath ? scrubMover : undefined;
+        const clip = mover?.object.animations[moveAnimationIndex];
+        if (mover && moveAnimationIndex >= 0 && !clip) throw new Error('移动对象的动作片段已变化，请重新选择');
+        const pose = mover ? serializeBonePose(mover.object) : null;
+        scrubRef.current = { session: new PreviewPlayhead(camera, controls, mover?.object, clip), id: mover?.id, pose };
+        transformRef.current?.detach();
+      }
+      scrubRef.current.session.sample(seconds, normalizeMoveSeconds(moveSeconds), time => {
+        let delta: [number, number, number] = [0, 0, 0];
+        if (scrubPath && scrubMover) {
+          const progress = Math.min(1, time / normalizeMoveSeconds(moveSeconds));
+          scrubMover.object.position.set(...groundPathPointAt(scrubPath, progress));
+          scrubMover.object.rotation.y = groundPathYaw(scrubPath, progress);
+          if (followMover) delta = groundPathFollowDelta(scrubPath, progress);
+        }
+        const pose = sampleCameraPath(cameraKeys, time);
+        if (pose) {
+          camera.position.set(pose.position[0] + delta[0], pose.position[1] + delta[1], pose.position[2] + delta[2]);
+          controls.target.set(pose.target[0] + delta[0], pose.target[1] + delta[1], pose.target[2] + delta[2]);
+          camera.fov = pose.fov; camera.updateProjectionMatrix(); controls.update();
+        }
+      });
+      setPreviewFrame(frame);
+    } catch (err) { stopAnimation(); setError(String(err)); }
+  };
 
   // 机位一改，上次算出来的运镜文案就过期了（它描述的是旧的两端）。
   // 导出首尾帧本身不动机位，所以文案能留住；录机位、删机位、清空才会清掉。
@@ -3945,6 +3995,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const selectedAnimationEntry = objectsRef.current.find(e => e.id === selectedId);
   const animationClips = selectedAnimationEntry?.object.animations ?? [];
   const playAnimation = () => {
+    if (scrubRef.current) stopAnimation();
     if (busy || playingPath || playingMove || operationBusy) return;
     const entry = objectsRef.current.find(e => e.id === selectedIdRef.current);
     if (!entry || entry.locked || !entry.object.visible) return;
@@ -5142,6 +5193,18 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             >
               推
             </button>
+          </div>
+
+          <div data-animation-preview className="mt-2 rounded bg-white/5 p-2 text-xs">
+            <div>播放头 · {PREVIEW_FPS}fps · {previewFrameTime(previewFrame, scrubDuration).seconds.toFixed(3)} / {scrubDuration.toFixed(3)}秒</div>
+            <input aria-label="3D预览播放头" type="range" min={0} max={scrubLastFrame} step={1} value={previewFrame}
+              disabled={!scrubLastFrame || !!busy || operationBusy} onChange={event => seekPreviewFrame(Number(event.target.value))} className="w-full" />
+            <div className="flex gap-2">
+              <button type="button" disabled={!scrubLastFrame || previewFrame <= 0 || !!busy || operationBusy} onClick={() => seekPreviewFrame(previewFrame - 1)}>上一帧</button>
+              <button type="button" disabled={!scrubLastFrame || previewFrame >= scrubLastFrame || !!busy || operationBusy} onClick={() => seekPreviewFrame(previewFrame + 1)}>下一帧</button>
+              <button type="button" onClick={stopAnimation}>停止逐帧预览并还原</button>
+            </div>
+            <p className="mt-1 text-white/40">拖动保留临时姿态；编辑或保存前还原，不写入存档。</p>
           </div>
 
           {/* 关键帧列表：顺序就是运镜顺序，每段自己带时长与缓动。 */}
