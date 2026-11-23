@@ -23,11 +23,12 @@ test('拖放用编辑器私有 MIME，不抢占浏览器拖文件', () => {
   assert.match(stage3d, /getData\(ASSET_DRAG_MIME\)/, '落下时读资产数据')
 })
 
-test('落点投到地面 y=0，资产摆在鼠标位置而不是永远堆原点', () => {
+test('落点优先真实表面并保留高度，空命中回退地面', () => {
   assert.match(stage3d, /dropPointFromEvent/, '缺少落点计算')
   assert.match(stage3d, /intersectPlane/, '应把屏幕点投到地面平面')
   assert.match(stage3d, /new THREE\.Plane\(new THREE\.Vector3\(0, 1, 0\), 0\)/, '地面平面是 y=0')
-  assert.match(stage3d, /group\.position\.set\(dropPoint\.x, 0, dropPoint\.z\)/, '应按落点移动对象')
+  assert.match(stage3d, /surfaceDrop\(raycaster, objectsRef\.current\)/, '应查询可见内容表面')
+  assert.match(stage3d, /group\.position\.copy\(dropPoint\)/, '保留表面高度')
   assert.match(stage3d, /已放入 \$\{asset\.name\}（原点）/, '点按钮放入时要说明落在原点')
 })
 

@@ -111,9 +111,27 @@ func (m *MaterialService) List(ftype string, projectID *uint) ([]models.Material
 
 // ListPaged 分页列表：page 从 1 开始；pageSize <= 0 表示不分页。
 // 排序固定 id desc，新入的素材总在第一页。
-func (m *MaterialService) ListPaged(ftype string, projectID *uint, page, pageSize int) ([]models.Material, error) {
+func (m *MaterialService) ListPaged(ftype string, projectID *uint, page, pageSize int, filters ...string) ([]models.Material, error) {
 	var list []models.Material
 	q := m.db.Model(&models.Material{})
+	// Literal substring search, applied before pagination. Bind all user input.
+	if len(filters) > 0 && strings.TrimSpace(filters[0]) != "" {
+		term := strings.ToLower(strings.TrimSpace(filters[0]))
+		term = strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(term)
+		q = q.Where("LOWER(name) LIKE ? ESCAPE '!'", "%"+term+"%")
+	}
+	if len(filters) > 1 && filters[1] != "" {
+		// Deterministic file-format groups, not guessed semantic character/location tags.
+		const splats = "(LOWER(path) LIKE '%.spz' OR LOWER(path) LIKE '%.splat' OR LOWER(path) LIKE '%.ksplat')"
+		switch filters[1] {
+		case "splat":
+			q = q.Where("type = ?", "3d").Where(splats)
+		case "model":
+			q = q.Where("type = ?", "3d").Where("(LOWER(path) LIKE '%.glb' OR LOWER(path) LIKE '%.gltf' OR LOWER(path) LIKE '%.obj')")
+		default:
+			return nil, fmt.Errorf("unsupported material category")
+		}
+	}
 	if ftype != "" {
 		q = q.Where("type = ?", ftype)
 	}

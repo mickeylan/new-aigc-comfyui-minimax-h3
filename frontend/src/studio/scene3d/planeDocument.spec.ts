@@ -59,7 +59,17 @@ describe("3D composition layers", () => {
     expect(() => validateCompositionDocument(duplicate)).toThrow("重复");
     const invalid = doc(); invalid.planes[0].position = [NaN, 0, 0];
     expect(() => validateCompositionDocument(invalid)).toThrow("变换");
-    expect(() => validateCompositionDocument(doc(5))).toThrow();
+    expect(() => validateCompositionDocument(doc(6))).toThrow();
+  });
+  it('validates v5 hidden/locked state and globally unique stable identities', () => {
+    const value: any = doc(5);
+    value.planes.forEach((p: any) => { p.visible = false; p.locked = true; });
+    value.objects = [{ id: 'mesh', visible: false, locked: true, ...transform }];
+    validateCompositionDocument(value);
+    const restored = JSON.parse(JSON.stringify(value)); validateCompositionDocument(restored);
+    expect(restored.objects[0]).toMatchObject({ id: 'mesh', visible: false, locked: true });
+    restored.objects[0].id = 'a'; expect(() => validateCompositionDocument(restored)).toThrow('重复');
+    restored.objects[0].id = 'mesh'; restored.objects[0].locked = 'false'; expect(() => validateCompositionDocument(restored)).toThrow('锁定');
   });
   it("checks actual UTF8 bytes rather than character count", () => {
     expect(() => validateSceneSize("x")).not.toThrow();

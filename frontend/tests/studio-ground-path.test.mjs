@@ -116,11 +116,11 @@ test('导出序列时逐帧推角色、结束还原，预览走同一个取样�
   assert.match(stage, /用左栏选中的对象当移动目标/)
 })
 
-test('移动计划进出存档：按名字找对象（载入后 id 会变）', () => {
-  assert.match(stage, /move\?: \{ targetName: string; seconds: number; follow\?: boolean \} \| null;/)
-  assert.match(stage, /const movePlan =[\s\S]{0,160}targetName: moverEntry\.name, seconds: normalizeMoveSeconds\(moveSeconds\), follow: followMover/)
+test('移动计划进出存档：稳定ID绑定，旧档按名字回退', () => {
+  assert.match(stage, /move\?: \{ targetId\?: string; targetName: string; seconds: number; follow\?: boolean \} \| null;/)
+  assert.match(stage, /const movePlan =[\s\S]{0,200}targetId: moverEntry.id, targetName: moverEntry\.name, seconds: normalizeMoveSeconds\(moveSeconds\), follow: followMover/)
   assert.match(stage, /const loadedMover = savedMove/)
-  assert.match(stage, /objectsRef\.current\.find\(\(entry\) => entry\.name === savedMove\.targetName\) \?\? null/)
+  assert.match(stage, /objectsRef\.current\.find\(\(entry\) => savedMove\.targetId \? entry\.id === savedMove\.targetId : entry\.name === savedMove\.targetName\) \?\? null/)
   assert.match(stage, /setMoverId\(loadedMover\?\.id \?\? null\);/)
 })
 
@@ -421,7 +421,7 @@ test('编辑器接上自动避障：包围盒收集、统一走 editorGroundPath
   // XZ 包围盒来自场景对象；泼溅是整片世界，跳过
   assert.match(stage, /const box = new THREE\.Box3\(\)\.setFromObject\(entry\.object\);/)
   assert.match(stage, /list\.push\(\{ min: \[box\.min\.x, box\.min\.z\], max: \[box\.max\.x, box\.max\.z\] \}\);/)
-  assert.match(stage, /if \(entry\.splat\) continue;/)
+  assert.match(stage, /if \(entry\.splat \|\| !entry\.object\.visible\) continue;/)
   // 渲染/预览/导出/长度全走 editorGroundPath（不然面板上的长度和实际走位对不上）
   assert.match(stage, /const editorGroundPath = \(points: GroundPoints\): GroundPath \| null => \{/)
   // 走 Detailed 版：既拿到路径，也拿到「绕行预算用尽」这个信号

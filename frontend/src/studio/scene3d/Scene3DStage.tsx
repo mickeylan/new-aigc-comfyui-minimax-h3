@@ -7,6 +7,9 @@ import {
   type DragEvent,
 } from "react";
 import * as THREE from "three";
+import { SceneOperations, SceneSaveGuard, canMoveEntry, materialRevision } from './sceneSafety';
+import { ObjectHistory, duplicateMesh, surfaceDrop } from './kitbashEditor';
+import { FRAME_ASPECTS, fitFrame, focalFromFov, fovFromFocal, type FrameAspect } from './sceneFrame';
 import { DEFAULT_PLANE_SETTINGS, normalizePlaneSettings, planeMaterial, mediaDataURL, validateSceneSize, validateCompositionDocument, type PlaneSettings } from "./planeDocument";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
@@ -87,6 +90,8 @@ import {
   type CameraPlan,
 } from "./camera-agent.js";
 import AssetLibraryPanel from "./AssetLibraryPanel";
+import LocationGenerationPanel from "./LocationGenerationPanel";
+import { clonePosedContent, hidePoseEditorHelpers, isPoseEditorHelper } from "./posing/poseExport";
 import { ASSET_DRAG_MIME, assetKind, assetUrl, type LibraryAsset } from "./assetLibrary.js";
 import {
   DEFAULT_PLANE_LAYER,
@@ -138,6 +143,7 @@ const DEFAULT_IDENTITY_PROMPT = `以<image2>的人物身份替换<image1>中的�
 输出写实摄影风格，不要 3D 渲染感、不要塑料皮肤。`;
 
 interface SceneObjectEntry {
+  locked?: boolean;
   id: string;
   name: string;
   object: THREE.Object3D;
@@ -159,7 +165,7 @@ interface SceneObjectEntry {
 
 function disposeSceneEntry(entry: SceneObjectEntry) {
   if (entry.splat) { disposeSplat(entry.splat); if (entry.splatUrl?.startsWith("blob:")) URL.revokeObjectURL(entry.splatUrl); return; }
-  if (entry.video) { entry.video.element.pause(); entry.video.element.removeAttribute("src"); entry.video.element.load(); entry.video.texture.dispose(); }
+  if (entry.video) { const src = entry.video.element.currentSrc || entry.video.element.src; entry.video.element.pause(); entry.video.element.removeAttribute("src"); entry.video.element.load(); entry.video.texture.dispose(); if (src.startsWith('blob:')) URL.revokeObjectURL(src); }
   entry.object.traverse((child) => {
     const mesh = child as THREE.Mesh;
     mesh.geometry?.dispose();
@@ -365,6 +371,9 @@ interface PoseSnapshot {
 // 变换不依赖导出器是否保留节点 TRS，载入时按名字（缺名字则按顺序）回填。
 // v2 起高斯泼溅单独用 splats 内嵌 .spz 字节：SplatMesh 进不了 glTF，只能自带数据。
 interface SplatDocument {
+  id?: string;
+  visible?: boolean;
+  locked?: boolean;
   name: string;
   /** .spz/.splat/.ksplat 原始字节的 base64。 */
   data: string;
@@ -374,13 +383,18 @@ interface SplatDocument {
 }
 
 interface SceneDocument {
-  version: 1 | 2 | 3 | 4;
-  planes?: Array<{ id: string; name: string; kind: MediaKind; source: string; settings: PlaneSettings; position: [number, number, number]; quaternion: [number, number, number, number]; scale: [number, number, number] }>;
+  version: 1 | 2 | 3 | 4 | 5;
+  frame?: { aspect: FrameAspect };
+  name?: string;
+  preview?: string;
+  planes?: Array<{ id: string; visible?: boolean; locked?: boolean; name: string; kind: MediaKind; source: string; settings: PlaneSettings; position: [number, number, number]; quaternion: [number, number, number, number]; scale: [number, number, number] }>;
   skybox?: { source: string; name: string; intensity: number; asEnvironment: boolean } | null;
   createdAt: string;
   lightPreset: LightPresetName;
   camera: { position: [number, number, number]; target: [number, number, number]; fov?: number };
   objects: Array<{
+    visible?: boolean;
+    locked?: boolean;
     id?: string;
     name: string;
     position: [number, number, number];
@@ -388,6 +402,7 @@ interface SceneDocument {
     scale: [number, number, number];
     /** 骨骼摆姿快照；非角色没有这个字段。 */
     bonePose?: BonePoseNode | null;
+    initialBonePose?: BonePoseNode | null;
   }>;
   /** 高斯泼溅层；v1 存档没有这个字段。 */
   splats?: SplatDocument[];
@@ -396,7 +411,7 @@ interface SceneDocument {
   /** 地面 A/B 落点（vias 是 0–3 个途经点，走曲线时才写）；老存档没有就按没有处理。 */
   groundPath?: { start: GroundPoint; end: GroundPoint; vias?: GroundPoint[] } | null;
   /** 角色沿 A→B 移动的计划：谁走、走多久、相机要不要跟拍。没有落点时不写。 */
-  move?: { targetName: string; seconds: number; follow?: boolean } | null;
+  move?: { targetId?: string; targetName: string; seconds: number; follow?: boolean } | null;
   model: { name: string; data: string };
 }
 
@@ -675,6 +690,17 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const controlsRef = useRef<OrbitControls | null>(null);
   const transformRef = useRef<TransformControls | null>(null);
   const objectsRef = useRef<SceneObjectEntry[]>([]);
+  const historyRef = useRef(new ObjectHistory<SceneObjectEntry>(disposeSceneEntry));
+  const sceneEpochRef = useRef(0);
+  const saveGuardRef = useRef(new SceneSaveGuard());
+  const cleanOnRenderRef = useRef(true);
+  const fingerprintRef = useRef<() => string>(() => '');
+  const [dirty, setDirty] = useState(false);
+  const frameRef = useRef<FrameAspect>('16:9');
+  const resizeFrameRef = useRef<() => void>(() => {});
+  const [frameAspect, setFrameAspect] = useState<FrameAspect>('16:9');
+  const [focal, setFocal] = useState(focalFromFov(45));
+  const [archiveName, setArchiveName] = useState('');
   const selectedIdRef = useRef<string | null>(null);
   const lightsRef = useRef<{
     hemi: THREE.HemisphereLight;
@@ -732,8 +758,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [objects, setObjects] = useState<SceneObjectEntry[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mode, setMode] = useState<TransformMode>("translate");
-  const [busy, setBusy] = useState<string | null>(null);
+  const [legacyBusy, setBusy] = useState<string | null>(null);
+  const [operationBusy, setOperationBusy] = useState<string | null>(null);
+  const operationsRef = useRef(new SceneOperations(setOperationBusy));
+  const busy = operationBusy ?? legacyBusy;
   const [error, setError] = useState<string | null>(null);
+  const [locationGenerationOpen, setLocationGenerationOpen] = useState(false);
   const [status, setStatus] = useState("");
   const [lightPreset, setLightPreset] = useState<LightPresetName>("studio");
   const [material, setMaterial] = useState<MaterialSettings>(DEFAULT_MATERIAL);
@@ -796,7 +826,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [playingPath, setPlayingPath] = useState(false);
   const [poseSlots, setPoseSlots] = useState<{ a: boolean; b: boolean }>({ a: false, b: false });
   const [poseBlend, setPoseBlend] = useState(0);
-  const [transform, setTransform] = useState({ x: 0, y: 0, z: 0, rotateY: 0, scale: 1 });
+  const [transform, setTransform] = useState({ x: 0, y: 0, z: 0, rotateX: 0, rotateY: 0, rotateZ: 0, scale: 1, scaleX: 1, scaleY: 1, scaleZ: 1 });
   // 骨骼摆姿：posing 开启时画布点击用于选骨，主 gizmo 让位给骨骼 gizmo。
   const [posing, setPosing] = useState(false);
   const [posingBones, setPosingBones] = useState(0);
@@ -830,6 +860,20 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     };
   }, []);
 
+  const documentMetaRef = useRef('');
+  documentMetaRef.current = JSON.stringify({ archiveName, frameAspect, lightPreset, skybox, skyboxName, cameraKeys, groundPoints, moverId, moveSeconds, followMover });
+  fingerprintRef.current = () => JSON.stringify({ epoch: sceneEpochRef.current, meta: documentMetaRef.current,
+    objects: objectsRef.current.map(e => ({ id: e.id, name: e.name, p: e.object.position.toArray(), q: e.object.quaternion.toArray(), s: e.object.scale.toArray(), visible: e.object.visible, locked: !!e.locked, plane: e.plane, source: e.mediaSource, splat: e.splatUrl, pose: serializeBonePose(e.object), initial: e.initialBonePose,
+      materials: (() => { const rows: unknown[] = []; e.object.traverse(o => { if (isPoseEditorHelper(o)) return; const m = (o as THREE.Mesh).material; if (m) for (const v of Array.isArray(m) ? m : [m]) rows.push(materialRevision(v as THREE.MeshStandardMaterial)); }); return rows; })() })) });
+  if (cleanOnRenderRef.current) { saveGuardRef.current.markSaved(fingerprintRef.current()); cleanOnRenderRef.current = false; }
+  useEffect(() => {
+    const timer = window.setInterval(() => setDirty(saveGuardRef.current.isDirty(fingerprintRef.current())), 500);
+    const unload = (e: BeforeUnloadEvent) => { if (saveGuardRef.current.isDirty(fingerprintRef.current())) { e.preventDefault(); e.returnValue = ''; } };
+    const leave = (e: MouseEvent) => { const a = (e.target as HTMLElement)?.closest('a[href]'); if (a && saveGuardRef.current.isDirty(fingerprintRef.current()) && !window.confirm('场景有未保存的修改，仍要离开？')) { e.preventDefault(); e.stopPropagation(); } };
+    window.addEventListener('beforeunload', unload); document.addEventListener('click', leave, true);
+    return () => { clearInterval(timer); window.removeEventListener('beforeunload', unload); document.removeEventListener('click', leave, true); };
+  }, []);
+
   const syncObjects = useCallback(() => {
     setObjects([...objectsRef.current]);
   }, []);
@@ -841,7 +885,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const collectGroundObstacles = (): GroundObstacle[] => {
     const list: GroundObstacle[] = [];
     for (const entry of objectsRef.current) {
-      if (entry.splat) continue;
+      if (entry.splat || !entry.object.visible) continue;
       const box = new THREE.Box3().setFromObject(entry.object);
       if (box.isEmpty()) continue;
       list.push({ min: [box.min.x, box.min.z], max: [box.max.x, box.max.z] });
@@ -875,7 +919,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     setPlaneSettings(normalizePlaneSettings(entry?.plane));
 
     // 骨骼摆姿只对当前选中的模型生效：换对象就换 FK 目标，换到没有骨骼的对象则退出摆姿。
-    const skeleton = entry ? findSkeletonRoot(entry.object) !== null : false;
+    const skeleton = entry && !entry.locked && entry.object.visible ? hasSkeleton(entry.object) : false;
     setSelectedHasSkeleton(skeleton);
     const fk = fkRef.current;
     if (fk) {
@@ -894,7 +938,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
 
     if (!transform) return;
     if (entry) {
-      transform.attach(entry.object);
+      if (entry.locked || !entry.object.visible) transform.detach();
+      else transform.attach(entry.object);
       // 选中的新对象自带材质，面板显示它的真实参数，避免滑块与画面不一致。
       entry.object.traverse((child) => {
         const mesh = child as THREE.Mesh;
@@ -917,6 +962,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         x: Number(entry.object.position.x.toFixed(2)),
         y: Number(entry.object.position.y.toFixed(2)),
         z: Number(entry.object.position.z.toFixed(2)),
+        rotateX: THREE.MathUtils.radToDeg(entry.object.rotation.x),
+        rotateZ: THREE.MathUtils.radToDeg(entry.object.rotation.z),
+        scaleX: entry.object.scale.x, scaleY: entry.object.scale.y, scaleZ: entry.object.scale.z,
         rotateY: Math.round((entry.object.rotation.y * 180) / Math.PI),
         scale: Number(entry.object.scale.x.toFixed(2)),
       });
@@ -934,7 +982,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       group.name = name;
       group.add(object);
       // 拖进来的资产落在鼠标指到的地面位置，而不是永远堆在原点。
-      if (dropPoint) group.position.set(dropPoint.x, 0, dropPoint.z);
+      if (dropPoint) group.position.copy(dropPoint);
       scene.add(group);
       const entry: SceneObjectEntry = { id: crypto.randomUUID(), name, object: group };
       // 泼溅要留一份句柄：释放走 Spark 自己的 dispose，不能按几何/材质处理。
@@ -946,7 +994,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         entry.bonePose = bindPose;
         entry.initialBonePose = bindPose;
       }
+      historyRef.current.checkpoint(objectsRef.current);
       objectsRef.current = [...objectsRef.current, entry];
+      historyRef.current.collect(objectsRef.current);
       syncObjects();
       selectObject(entry.id);
       setStatus(`已加载 ${name}`);
@@ -966,7 +1016,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
 
     const camera = new THREE.PerspectiveCamera(
       45,
-      container.clientWidth / Math.max(1, container.clientHeight),
+      FRAME_ASPECTS[frameRef.current],
       0.1,
       1000,
     );
@@ -978,7 +1028,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       preserveDrawingBuffer: true,
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(container.clientWidth, container.clientHeight);
+    const initialFrame = fitFrame(container.clientWidth, container.clientHeight, frameRef.current);
+    renderer.setSize(initialFrame.width, initialFrame.height);
+    Object.assign(renderer.domElement.style, { position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)' });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
@@ -1008,7 +1060,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     transform.setSize(0.9);
     transform.addEventListener("dragging-changed", (event) => {
       controls.enabled = !event.value;
+      if (event.value) historyRef.current.checkpoint(objectsRef.current);
+      else { historyRef.current.collect(objectsRef.current); selectObject(selectedIdRef.current); }
     });
+    transform.setTranslationSnap(0.1);
+    transform.setRotationSnap(THREE.MathUtils.degToRad(15));
+    transform.setScaleSnap(0.1);
     scene.add(transform.getHelper());
     transformRef.current = transform;
 
@@ -1212,13 +1269,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     };
     animate();
 
-    const observer = new ResizeObserver(() => {
-      const width = container.clientWidth || 1;
-      const height = container.clientHeight || 1;
-      camera.aspect = width / height;
+    resizeFrameRef.current = () => {
+      const { width, height, aspect } = fitFrame(container.clientWidth || 1, container.clientHeight || 1, frameRef.current);
+      camera.aspect = aspect;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height);
-    });
+    };
+    const observer = new ResizeObserver(() => resizeFrameRef.current());
     observer.observe(container);
 
     return () => {
@@ -1231,6 +1288,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       fk.dispose();
       fkRef.current = null;
       // 卸载时把视频平面的解码与全景纹理一起收掉，否则离开页面后仍在后台跑。
+      sceneEpochRef.current++;
+      sceneRef.current = null;
+      historyRef.current.clear(objectsRef.current);
       objectsRef.current.forEach(disposeSceneEntry);
       skyboxTextureRef.current?.dispose();
       skyboxTextureRef.current = null;
@@ -1338,28 +1398,34 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   }, [mode]);
 
   const loadFile = async (file: File) => {
+    const operation = operationsRef.current.start(`正在加载 ${file.name}…`);
     setError(null);
     setBusy(`正在加载 ${file.name}…`);
+    const epoch = sceneEpochRef.current;
     try {
       const extension = file.name.split(".").pop()?.toLowerCase();
       if (extension === "obj") {
         const text = await file.text();
         const parsed = new OBJLoader().parse(text);
+        if (epoch !== sceneEpochRef.current || !sceneRef.current) { disposeSceneEntry({ id: '', name: '', object: parsed }); return; }
         addObject(parsed, file.name);
       } else {
         const buffer = await file.arrayBuffer();
         const gltf = await new GLTFLoader().parseAsync(buffer, "");
+        if (epoch !== sceneEpochRef.current || !sceneRef.current) { disposeSceneEntry({ id: '', name: '', object: gltf.scene }); return; }
         addObject(gltf.scene, file.name);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(null);
+      operation.finish(); setBusy(null);
     }
   };
 
   const loadUrl = async (url: string, name: string) => {
+    const epoch = sceneEpochRef.current;
     const gltf = await new GLTFLoader().loadAsync(url);
+    if (epoch !== sceneEpochRef.current || !sceneRef.current) { disposeSceneEntry({ id: '', name: '', object: gltf.scene }); return; }
     addObject(gltf.scene, name);
   };
 
@@ -1378,7 +1444,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
 
   const loadSplatUrl = useCallback(
     async (url: string, name: string, dropPoint?: THREE.Vector3 | null) => {
+      const epoch = sceneEpochRef.current;
       const mesh = await loadSplatMesh(url, { placeOnGround: false });
+      if (epoch !== sceneEpochRef.current || !sceneRef.current) { disposeSplat(mesh); if (url.startsWith('blob:')) URL.revokeObjectURL(url); return; }
       const entry = addObject(mesh, name, dropPoint);
       // 存下来源地址，场景存档时按它把 .spz 字节取回来内嵌。
       if (entry) entry.splatUrl = url;
@@ -1397,7 +1465,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         setError(`暂不支持这个格式，请先转成 GLB 再放进场景：${asset.name}`);
         return;
       }
+      const operation = operationsRef.current.start(`正在载入 ${asset.name}…`);
       setBusy(`正在载入 ${asset.name}…`);
+      const epoch = sceneEpochRef.current;
+      const commit = (object: THREE.Object3D) => { if (epoch !== sceneEpochRef.current || !sceneRef.current) { disposeSceneEntry({ id: '', name: '', object }); return; } return addObject(object, asset.name, dropPoint); };
       try {
         const url = assetUrl(asset.path);
         if (kind === "splat") {
@@ -1406,15 +1477,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         } else if (kind === "obj") {
           const response = await fetch(url);
           if (!response.ok) throw new Error(`读取素材失败（HTTP ${response.status}）`);
-          addObject(new OBJLoader().parse(await response.text()), asset.name, dropPoint);
+          commit(new OBJLoader().parse(await response.text()));
         } else {
           const gltf = await new GLTFLoader().loadAsync(url);
-          addObject(gltf.scene, asset.name, dropPoint);
+          commit(gltf.scene);
         }
         setStatus(dropPoint ? `已放入 ${asset.name}` : `已放入 ${asset.name}（原点）`);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
+        operation.finish();
         // 泼溅的 busy 归 SparkRenderer.onDirty 管，这里别提前抹掉。
         setBusy((current) => (current === SPLAT_LOD_BUSY ? current : null));
       }
@@ -1435,10 +1507,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     );
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(ndc, camera);
-    const point = new THREE.Vector3();
-    return raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), point)
-      ? point
-      : null;
+    return surfaceDrop(raycaster, objectsRef.current);
   }, []);
 
   // 图片/视频平面层：当背景板或参考板用，参与 3D 遮挡。
@@ -1446,6 +1515,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     async (url: string, name: string, kind: MediaKind, dropPoint?: THREE.Vector3 | null, settings: PlaneSettings = DEFAULT_PLANE_SETTINGS, detached = false) => {
       const scene = sceneRef.current;
       if (!scene) return;
+      const epoch = sceneEpochRef.current;
+      const operation = detached ? null : operationsRef.current.start(`正在载入 ${name}…`);
       if (!detached) { setBusy(`正在载入 ${name}…`); setError(null); }
       let decodingVideo: HTMLVideoElement | null = null;
       let completed = false;
@@ -1483,6 +1554,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           aspect = width / Math.max(1, height);
         }
 
+        if (!detached && (epoch !== sceneEpochRef.current || !sceneRef.current)) { texture.dispose(); return; }
         const { width, height } = planeSize(aspect);
         const normalizedSettings = normalizePlaneSettings(settings);
         // 图片已经解码进纹理，blob URL 可以立刻释放；视频要等删除对象时再收。
@@ -1494,7 +1566,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         group.name = name;
         group.add(mesh);
         // 默认立在原点前方 3 米，拖进来则落在鼠标位置、底边贴地。
-        if (dropPoint) group.position.set(dropPoint.x, height / 2, dropPoint.z);
+        if (dropPoint) group.position.set(dropPoint.x, dropPoint.y + height / 2, dropPoint.z);
         else group.position.set(0, height / 2, -3);
         if (!detached) scene.add(group);
 
@@ -1508,7 +1580,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           video,
         };
         if (!detached) {
+          historyRef.current.checkpoint(objectsRef.current);
           objectsRef.current = [...objectsRef.current, entry];
+          historyRef.current.collect(objectsRef.current);
           syncObjects();
           selectObject(entry.id);
           setStatus(`已加入${kind === "video" ? "视频" : "图片"}平面 ${name}`);
@@ -1521,6 +1595,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       } finally {
         if (!completed && decodingVideo) { decodingVideo.pause(); decodingVideo.removeAttribute("src"); decodingVideo.load(); }
         if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+        operation?.finish();
         if (!detached) setBusy(null);
       }
     },
@@ -1552,11 +1627,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     async (url: string, name: string) => {
       const scene = sceneRef.current;
       if (!scene) return;
+      const epoch = sceneEpochRef.current;
       setBusy(`正在载入全景图 ${name}…`);
       setError(null);
       try {
         const source = await mediaDataURL(url);
         const texture = await new THREE.TextureLoader().loadAsync(source);
+        if (epoch !== sceneEpochRef.current || !sceneRef.current) { texture.dispose(); return; }
         if (url.startsWith("blob:")) URL.revokeObjectURL(url);
         skyboxSourceRef.current = source;
         texture.mapping = THREE.EquirectangularReflectionMapping;
@@ -1648,6 +1725,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   }, [backgroundImages, backgroundImageId, applySkybox]);
 
   const runImageTo3D = async (file: File) => {
+    const operation = operationsRef.current.start('正在生成3D模型…');
+    const epoch = sceneEpochRef.current;
     setBusy("正在上传参考图…");
     setError(null);
     setStatus("");
@@ -1656,6 +1735,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const task = await createImageTo3DTask(upload);
       setBusy("正在生成 3D 模型，等待 ComfyUI 返回…");
       const finished = await waitForTask(task.task_id);
+      if (epoch !== sceneEpochRef.current || !sceneRef.current) throw new Error(`任务 ${task.task_id} 已返回，但原场景已关闭或替换；未放入新场景`);
       const url = taskResultUrl(finished);
       if (!url) throw new Error("任务没有 GLB 输出");
       setBusy("正在加载生成结果…");
@@ -1664,12 +1744,14 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(null);
+      operation.finish(); setBusy(null);
     }
   };
 
   // 图生 3D 世界：参考图 → TripoSplat → .spz 泼溅，直接放进当前场景。
   const runImageToSplat = async (file: File) => {
+    const operation = operationsRef.current.start('正在生成高斯泼溅…');
+    const epoch = sceneEpochRef.current;
     setBusy("正在上传参考图…");
     setError(null);
     setStatus("");
@@ -1678,6 +1760,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const task = await createImageToSplatTask(upload, splatMatteEngine);
       setBusy("正在生成高斯泼溅，等待 ComfyUI 返回…");
       const finished = await waitForTask(task.task_id);
+      if (epoch !== sceneEpochRef.current || !sceneRef.current) throw new Error(`任务 ${task.task_id} 已返回，但原场景已关闭或替换；未放入新场景`);
       const url = taskResultUrl(finished);
       if (!url) throw new Error("任务没有泼溅输出");
       setBusy("正在解码泼溅…");
@@ -1686,19 +1769,21 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(null);
+      operation.finish(); setBusy(null);
     }
   };
 
   // 身份迁移：当前 3D 画面当 image1（定机位），角色主形象当 image2（定脸与服装），
   // 出来的一张图直接进场景当参考板，方便继续对着它摆位。
   const runIdentityTransfer = async (character: File) => {
+    const epoch = sceneEpochRef.current;
     const renderer = rendererRef.current;
     if (!renderer) return;
     if (!identityPrompt.trim()) {
       setError("请先写清楚要生成什么，用 <image1> 指 3D 快照、<image2> 指角色主形象");
       return;
     }
+    const operation = operationsRef.current.start('正在身份迁移…');
     setBusy("正在上传 3D 快照与角色主形象…");
     setError(null);
     setStatus("");
@@ -1713,6 +1798,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       });
       setBusy("正在生成身份迁移图，等待 ComfyUI 返回…");
       const finished = await waitForTask(task.task_id);
+      if (epoch !== sceneEpochRef.current || !sceneRef.current) throw new Error(`任务 ${task.task_id} 已返回，但原场景已关闭或替换；未放入新场景`);
       const url = taskResultUrl(finished);
       if (!url) throw new Error("任务没有图片输出");
       setBusy("正在把结果放进场景…");
@@ -1721,42 +1807,84 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(null);
+      operation.finish(); setBusy(null);
     }
   };
 
   const removeSelected = () => {
-    const id = selectedIdRef.current;
-    if (!id) return;
-    const entry = objectsRef.current.find((item) => item.id === id);
-    if (entry) {
-      sceneRef.current?.remove(entry.object);
-      // 泼溅有自己的缓冲，先走 Spark 的 dispose；其余按几何/材质释放。
-      if (entry.splat) {
-        disposeSplat(entry.splat);
-      }
-      entry.object.traverse((child) => {
-        const mesh = child as THREE.Mesh;
-        mesh.geometry?.dispose();
-        const material = mesh.material;
-        if (Array.isArray(material)) material.forEach((item) => item.dispose());
-        else material?.dispose();
-      });
-      // 视频平面要停掉播放并释放纹理，否则删掉后仍在后台解码。
-      if (entry.video) {
-        entry.video.element.pause();
-        const src = entry.video.element.currentSrc || entry.video.element.src;
-        entry.video.element.removeAttribute("src");
-        entry.video.element.load();
-        entry.video.texture.dispose();
-        // 本地导入的视频用的是 blob URL，删掉对象时一并释放。
-        if (src.startsWith("blob:")) URL.revokeObjectURL(src);
-      }
-      objectsRef.current = objectsRef.current.filter((item) => item.id !== id);
-      syncObjects();
-      selectObject(null);
-    }
+    const entry = objectsRef.current.find(item => item.id === selectedIdRef.current);
+    if (!entry || entry.locked) return;
+    historyRef.current.checkpoint(objectsRef.current);
+    sceneRef.current?.remove(entry.object);
+    entry.video?.element.pause();
+    objectsRef.current = objectsRef.current.filter(item => item !== entry);
+    historyRef.current.collect(objectsRef.current);
+    syncObjects(); selectObject(null);
   };
+  const restoreHistory = (redo = false) => {
+    const current = objectsRef.current;
+    selectObject(null);
+    const restored = redo ? historyRef.current.redo(current) : historyRef.current.undo(current);
+    if (!restored) return;
+    current.forEach(e => { sceneRef.current?.remove(e.object); e.video?.element.pause(); });
+    objectsRef.current = restored;
+    restored.forEach(e => { sceneRef.current?.add(e.object); if (e.video && e.object.visible) void e.video.element.play().catch(() => {}); });
+    historyRef.current.collect(restored); syncObjects();
+  };
+  const toggleEntry = (entry: SceneObjectEntry, key: 'visible' | 'locked') => {
+    historyRef.current.checkpoint(objectsRef.current);
+    if (key === 'visible') { entry.object.visible = !entry.object.visible; if (!entry.object.visible) entry.video?.element.pause(); else void entry.video?.element.play().catch(() => {}); }
+    else entry.locked = !entry.locked;
+    historyRef.current.collect(objectsRef.current); syncObjects(); selectObject(entry.id);
+  };
+  const focusEntry = (entry: SceneObjectEntry) => {
+    const camera = cameraRef.current, controls = controlsRef.current;
+    if (!camera || !controls || !entry.object.visible) return;
+    const box = new THREE.Box3().setFromObject(clonePosedContent(entry.object));
+    if (box.isEmpty()) return;
+    const center = box.getCenter(new THREE.Vector3());
+    const distance = Math.max(1, box.getSize(new THREE.Vector3()).length() / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2)));
+    const direction = camera.position.clone().sub(controls.target).normalize();
+    camera.position.copy(center).addScaledVector(direction.lengthSq() ? direction : new THREE.Vector3(0, 0, 1), distance);
+    controls.target.copy(center); controls.update();
+  };
+  const duplicateSelected = async () => {
+    const entry = objectsRef.current.find(e => e.id === selectedIdRef.current);
+    if (!entry) return;
+    const epoch = sceneEpochRef.current;
+    let copy: SceneObjectEntry;
+    try {
+      if (entry.mediaKind) {
+        if (!entry.mediaSource) throw new Error('平面缺少媒体来源');
+        const restored = await addPlane(entry.mediaSource, `${entry.name} 副本`, entry.mediaKind, null, entry.plane, true);
+        if (!restored) return; copy = restored;
+      } else if (entry.splat) {
+        if (!entry.splatUrl) throw new Error('泼溅缺少来源');
+        const response = await fetch(entry.splatUrl); if (!response.ok) throw new Error('泼溅读取失败');
+        const url = URL.createObjectURL(await response.blob());
+        let mesh: THREE.Object3D;
+        try { mesh = await loadSplatMesh(url, { placeOnGround: false }); } catch (e) { URL.revokeObjectURL(url); throw e; }
+        const group = new THREE.Group(); group.add(mesh);
+        copy = { id: crypto.randomUUID(), name: `${entry.name} 副本`, object: group, splat: mesh, splatUrl: url };
+      } else copy = { ...entry, id: crypto.randomUUID(), name: `${entry.name} 副本`, object: duplicateMesh(entry.object), locked: false };
+      copy.object.position.copy(entry.object.position).add(new THREE.Vector3(.5, 0, .5)); copy.object.quaternion.copy(entry.object.quaternion); copy.object.scale.copy(entry.object.scale); copy.object.visible = entry.object.visible;
+      if (epoch !== sceneEpochRef.current || !sceneRef.current) { disposeSceneEntry(copy); return; }
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); return; }
+    historyRef.current.checkpoint(objectsRef.current);
+    objectsRef.current = [...objectsRef.current, copy]; sceneRef.current?.add(copy.object);
+    historyRef.current.collect(objectsRef.current); syncObjects(); selectObject(copy.id);
+  };
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      if ((event.target as HTMLElement)?.closest('input,textarea,select,[contenteditable="true"]')) return;
+      if (event.ctrlKey || event.metaKey) {
+        if (event.key.toLowerCase() === 'z') { event.preventDefault(); restoreHistory(event.shiftKey); }
+        if (event.key.toLowerCase() === 'y') { event.preventDefault(); restoreHistory(true); }
+        if (event.key.toLowerCase() === 'd') { event.preventDefault(); void duplicateSelected(); }
+      } else if (event.key === 'Delete') removeSelected();
+    };
+    window.addEventListener('keydown', keydown); return () => window.removeEventListener('keydown', keydown);
+  });
 
   const captureCurrentView = async () => {
     const camera = cameraRef.current;
@@ -1889,7 +2017,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     // 跟拍得知道“谁在走”与“往哪走”；没有角色或路径就只放相机。
     const followPath = followMover ? editorGroundPath(groundPoints) : null;
     const followMoverEntry =
-      followPath && moverId ? objectsRef.current.find((entry) => entry.id === moverId) ?? null : null;
+      followPath && moverId ? objectsRef.current.find((entry) => entry.id === moverId && canMoveEntry(entry)) ?? null : null;
     const followSeconds = followPath && followMoverEntry ? normalizeMoveSeconds(moveSeconds) : null;
     // 播完把角色放回原处，否则看一次预览角色就跑到 B 点了。
     const savedMover = followMoverEntry
@@ -1925,7 +2053,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       if (pose) {
         // 跟拍：角色按同一时钟走 A→B，相机整体加上它的位移（构图不变）。
         let delta: [number, number, number] = [0, 0, 0];
-        if (followPath && followMoverEntry && followSeconds) {
+        if (followPath && followMoverEntry && followSeconds && canMoveEntry(followMoverEntry)) {
           const progress = Math.min(1, elapsed / followSeconds);
           followMoverEntry.object.position.set(...groundPathPointAt(followPath, progress));
           followMoverEntry.object.rotation.y = groundPathYaw(followPath, progress);
@@ -2118,22 +2246,27 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     );
   }, [dollyRange, dollySeconds]);
 
-  const setTransformValue = useCallback((axis: "x" | "y" | "z" | "scale" | "rotateY", value: number) => {
+  const setTransformValue = useCallback((axis: "x" | "y" | "z" | "scale" | "rotateX" | "rotateY" | "rotateZ" | "scaleX" | "scaleY" | "scaleZ", value: number) => {
     const id = selectedIdRef.current;
     const entry = id ? objectsRef.current.find((item) => item.id === id) : null;
-    if (!entry) return;
+    if (!entry || entry.locked || !entry.object.visible || !Number.isFinite(value)) return;
+    historyRef.current.checkpoint(objectsRef.current);
     const object = entry.object;
     if (axis === "scale") {
       object.scale.setScalar(Math.max(0.05, value));
-    } else if (axis === "rotateY") {
-      object.rotation.y = (value * Math.PI) / 180;
+    } else if (axis.startsWith('rotate')) {
+      object.rotation[axis.slice(-1).toLowerCase() as 'x' | 'y' | 'z'] = THREE.MathUtils.degToRad(value);
+    } else if (axis.startsWith('scale')) {
+      object.scale[axis.slice(-1).toLowerCase() as 'x' | 'y' | 'z'] = Math.max(.05, value);
     } else {
-      object.position[axis] = value;
+      object.position[axis as 'x' | 'y' | 'z'] = value;
     }
     setTransform({
       x: object.position.x,
       y: object.position.y,
       z: object.position.z,
+      rotateX: THREE.MathUtils.radToDeg(object.rotation.x), rotateZ: THREE.MathUtils.radToDeg(object.rotation.z),
+      scaleX: object.scale.x, scaleY: object.scale.y, scaleZ: object.scale.z,
       rotateY: Math.round((object.rotation.y * 180) / Math.PI),
       scale: Number(object.scale.x.toFixed(2)),
     });
@@ -2159,7 +2292,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     const id = selectedIdRef.current;
     const entry = id ? objectsRef.current.find((item) => item.id === id) : null;
     const poses = id ? posesRef.current[id] : undefined;
-    if (!entry || !poses?.a || !poses?.b) return;
+    if (!entry || entry.locked || !entry.object.visible || !poses?.a || !poses?.b) return;
+    historyRef.current.checkpoint(objectsRef.current);
     const a = poses.a;
     const b = poses.b;
     const object = entry.object;
@@ -2184,7 +2318,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     const id = selectedIdRef.current;
     const entry = id ? objectsRef.current.find((item) => item.id === id) : null;
     const fk = fkRef.current;
-    if (!entry || !fk) return;
+    if (!entry || !fk || entry.locked || !entry.object.visible) return;
     if (posingRef.current) {
       posingRef.current = false;
       setPosing(false);
@@ -2220,16 +2354,17 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     }
     entry.bonePose = pose;
     syncObjects();
-    setStatus("已保存当前骨骼姿势");
+    setStatus("已记住当前骨骼姿势（仅本次编辑）；持久保存请点击保存场景或存到后端");
   }, [syncObjects]);
 
   // 还原到上次保存的骨姿（载入场景后或摆乱之后回来）。
   const restoreBonePose = useCallback(() => {
     const id = selectedIdRef.current;
     const entry = id ? objectsRef.current.find((item) => item.id === id) : null;
-    if (!entry) return;
+    if (!entry || entry.locked || !entry.object.visible) return;
+    historyRef.current.checkpoint(objectsRef.current);
     if (!applyBonePose(entry.object, entry.bonePose)) {
-      setError("没有可还原的骨骼姿势");
+      setError("没有可还原的骨骼姿势，或骨架与记忆不兼容（未修改当前姿势）");
       return;
     }
     fkRef.current?.refresh();
@@ -2240,9 +2375,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const resetBonePose = useCallback(() => {
     const id = selectedIdRef.current;
     const entry = id ? objectsRef.current.find((item) => item.id === id) : null;
-    if (!entry) return;
+    if (!entry || entry.locked || !entry.object.visible) return;
+    historyRef.current.checkpoint(objectsRef.current);
     if (!applyBonePose(entry.object, entry.initialBonePose)) {
-      setError("没有可恢复的初始骨骼姿势");
+      setError("没有可恢复的初始骨骼姿势，或骨架已变化（未修改当前姿势）");
       return;
     }
     fkRef.current?.refresh();
@@ -2259,7 +2395,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       // 高斯泼溅也进不了 glTF：Spark 的 SplatMesh 不是普通几何体，场景存档另有 splats 字段。
       if (entry.splat) return;
       if (options.flattenTransforms && entry.mediaKind) return;
-      const clone = entry.object.clone(true);
+      const clone = clonePosedContent(entry.object);
       if (options.flattenTransforms) {
         // 场景存档里变换单独记录，几何体按局部坐标导出，避免节点 TRS 与存档重复叠加。
         clone.position.set(0, 0, 0);
@@ -2274,7 +2410,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         root,
         (result) => resolve(result as ArrayBuffer),
         (err) => reject(err),
-        { binary: true },
+        { binary: true, onlyVisible: !options.flattenTransforms },
       );
     });
   }, []);
@@ -2329,6 +2465,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       return diff < probe.width * probe.height * 0.05;
     };
     // 选中对象的红绿蓝箭头是编辑器 chrome，不该烤进素材缩略图。
+    const restorePoseHelpers = scene ? hidePoseEditorHelpers(scene) : () => {};
     const gizmo = transformRef.current?.getHelper();
     const gizmoVisible = gizmo?.visible ?? false;
     if (gizmo) gizmo.visible = false;
@@ -2348,11 +2485,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       //    可见对象的位置（留 35% 余量，泼溅毛边不至于出画），截完立刻还原，用户视角不受影响。
       const box = new THREE.Box3();
       for (const entry of objectsRef.current) {
+        if (!entry.object.visible) continue;
         entry.object.updateMatrixWorld(true);
         if (entry.splat) {
           box.union(entry.splat.getBoundingBox(false).applyMatrix4(entry.object.matrixWorld));
         } else {
-          box.union(new THREE.Box3().setFromObject(entry.object));
+          box.union(new THREE.Box3().setFromObject(clonePosedContent(entry.object)));
         }
       }
       if (camera && controls && !box.isEmpty()) {
@@ -2382,6 +2520,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         controls.update();
       }
       if (gizmo) gizmo.visible = gizmoVisible;
+      restorePoseHelpers();
       if (scene && camera) renderer.render(scene, camera);
     }
   }, []);
@@ -2461,6 +2600,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       throw new Error("视口里还没有对象，先放入模型再存场景");
     }
     {
+      const before = fingerprintRef.current();
+      const epoch = sceneEpochRef.current;
       const binary = await exportGeometry({ flattenTransforms: true });
       // 泼溅不在 GLB 里，得先把 .spz 字节取回来内嵌；取不到就整体失败，
       // 否则用户会得到一个默默丢了泼溅层的存档。
@@ -2473,6 +2614,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           throw new Error(`读取泼溅失败（${entry.name}，HTTP ${response.status}）`);
         }
         splats.push({
+          id: entry.id, visible: entry.object.visible, locked: !!entry.locked,
           name: entry.name,
           data: arrayBufferToBase64(await response.arrayBuffer()),
           position: entry.object.position.toArray() as [number, number, number],
@@ -2486,13 +2628,15 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       // 落点齐了、也选了对象，才把移动计划写进存档。
       const movePlan =
         moverEntry && toGroundPath(groundPoints)
-          ? { targetName: moverEntry.name, seconds: normalizeMoveSeconds(moveSeconds), follow: followMover }
+          ? { targetId: moverEntry.id, targetName: moverEntry.name, seconds: normalizeMoveSeconds(moveSeconds), follow: followMover }
           : null;
       const doc: SceneDocument = {
-        version: 4,
+        version: 5,
+        name: archiveName.trim(),
+        frame: { aspect: frameRef.current },
         planes: objectsRef.current.filter((entry) => entry.mediaKind).map((entry) => {
           if (!entry.mediaSource) throw new Error(`平面${entry.name}缺少可恢复的媒体来源`);
-          return { id: entry.id, name: entry.name, kind: entry.mediaKind!, source: entry.mediaSource,
+          return { id: entry.id, visible: entry.object.visible, locked: !!entry.locked, name: entry.name, kind: entry.mediaKind!, source: entry.mediaSource,
             settings: normalizePlaneSettings(entry.plane), position: entry.object.position.toArray() as [number, number, number],
             quaternion: entry.object.quaternion.toArray() as [number, number, number, number], scale: entry.object.scale.toArray() as [number, number, number] };
         }),
@@ -2508,13 +2652,14 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           // 泼溅的变换记在 splats 里，不能混进 GLB 节点名单，否则载入时按名回填会错位。
           .filter((entry) => !entry.splat && !entry.mediaKind)
           .map((entry) => ({
-            id: entry.id,
+            id: entry.id, visible: entry.object.visible, locked: !!entry.locked,
             name: entry.name,
             position: entry.object.position.toArray() as [number, number, number],
             quaternion: entry.object.quaternion.toArray() as [number, number, number, number],
             scale: entry.object.scale.toArray() as [number, number, number],
-            // 骨骼姿势只影响骨节点，导出几何仍是绑定姿势，靠这里回填。
-            bonePose: entry.bonePose ?? null,
+            // 存盘始终记录当前骨姿，不依赖是否点过内存记忆按钮。
+            bonePose: serializeBonePose(entry.object),
+            initialBonePose: entry.initialBonePose ?? null,
           })),
         splats,
         // 机位序列以前只活在内存里，刷新就没；v3 起跟场景一起存。
@@ -2533,39 +2678,58 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           data: arrayBufferToBase64(binary),
         },
       };
+      if (epoch !== sceneEpochRef.current) throw new Error('保存期间场景已替换，请重新保存');
+      saveGuardRef.current.assertUnchanged(before, fingerprintRef.current());
       validateSceneSize(JSON.stringify(doc));
       return doc;
     }
-  }, [cameraKeys, exportGeometry, followMover, groundPoints, lightPreset, moveSeconds, moverId, skybox, skyboxName]);
+  }, [cameraKeys, exportGeometry, followMover, groundPoints, lightPreset, moveSeconds, moverId, skybox, skyboxName, archiveName]);
 
   const saveScene = useCallback(async () => {
     if (objectsRef.current.length === 0) return;
+    const before = fingerprintRef.current();
+    const operation = operationsRef.current.start('正在保存场景…');
     setBusy("正在保存场景…");
     try {
-      const json = JSON.stringify(await buildSceneDocument());
+      const snapshotDoc = await buildSceneDocument();
+      const image = await createImageBitmap(await captureCurrentView());
+      const previewCanvas = window.document.createElement('canvas'); previewCanvas.width = 240; previewCanvas.height = Math.max(1, Math.round(240 * image.height / image.width));
+      previewCanvas.getContext('2d')?.drawImage(image, 0, 0, previewCanvas.width, previewCanvas.height); image.close();
+      snapshotDoc.preview = previewCanvas.toDataURL('image/jpeg', .65);
+      const json = JSON.stringify(snapshotDoc); validateSceneSize(json);
+      saveGuardRef.current.assertUnchanged(before, fingerprintRef.current());
       const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
       const link = document.createElement("a");
       link.href = url;
-      link.download = sceneArchiveFileName(Date.now());
+      link.download = archiveName.trim() ? `${archiveName.trim().replace(/[\\/:*?"<>|]/g, '_')}.json` : sceneArchiveFileName(Date.now());
       link.click();
       URL.revokeObjectURL(url);
+      saveGuardRef.current.markSaved(before); setDirty(false);
       setStatus(`已保存场景 ${Math.max(1, Math.round(json.length / 1024))} KB（本地文件）`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(null);
+      operation.finish(); setBusy(null);
     }
-  }, [buildSceneDocument]);
+  }, [buildSceneDocument, archiveName]);
 
   // 存到后端：JSON 落 data/scene-archives/<id>.json，前端刷新或换机器都能选回来。
   const saveSceneToServer = useCallback(async () => {
     if (objectsRef.current.length === 0) return;
+    const before = fingerprintRef.current();
+    const operation = operationsRef.current.start('正在存到后端…');
     setBusy("正在存到后端…");
     try {
-      const json = JSON.stringify(await buildSceneDocument());
+      const snapshotDoc = await buildSceneDocument();
+      const image = await createImageBitmap(await captureCurrentView());
+      const previewCanvas = window.document.createElement('canvas'); previewCanvas.width = 240; previewCanvas.height = Math.max(1, Math.round(240 * image.height / image.width));
+      previewCanvas.getContext('2d')?.drawImage(image, 0, 0, previewCanvas.width, previewCanvas.height); image.close();
+      snapshotDoc.preview = previewCanvas.toDataURL('image/jpeg', .65);
+      const json = JSON.stringify(snapshotDoc); validateSceneSize(json);
+      saveGuardRef.current.assertUnchanged(before, fingerprintRef.current());
       const blocker = sceneArchiveBlocker(json);
       if (blocker) throw new Error(blocker);
-      const name = sceneArchiveFileName(Date.now());
+      const name = archiveName.trim() ? `${archiveName.trim().replace(/[\\/:*?"<>|]/g, '_')}.json` : sceneArchiveFileName(Date.now());
       const projectId = Number(promptProjectId) || null;
       const response = await fetch("/api/scene-archives", {
         method: "POST",
@@ -2576,21 +2740,29 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         throw new Error(`存到后端失败（HTTP ${response.status}）${detail ? `：${detail.slice(0, 200)}` : ""}`);
       }
       const saved = (await response.json().catch(() => null)) as { id?: number } | null;
+      const unchanged = before === fingerprintRef.current();
+      if (unchanged) { saveGuardRef.current.markSaved(before); setDirty(false); }
+      else { setDirty(true); setError('快照已存入后端，但场景随后发生变化；当前修改尚未保存'); }
+      const projectQuery = projectId ? `?project_id=${projectId}` : '';
+      try { const list = await fetch(`/api/scene-archives${projectQuery}`); if (list.ok) setArchives(parseSceneArchiveList(await list.json())); } catch { /* Saving succeeded; list refresh is best effort. */ }
       setStatus(
         `已存到后端${saved?.id ? `（存档 #${saved.id}）` : ""}：${archiveSizeLabel(json.length)}，${name}`,
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(null);
+      operation.finish(); setBusy(null);
     }
-  }, [buildSceneDocument, promptProjectId]);
+  }, [buildSceneDocument, promptProjectId, archiveName]);
 
   // 本地文件与后端存档都走这一条：解析、校验 version/model.data、回填对象与机位。
   const importSceneText = useCallback(
     async (text: string) => {
+      if (saveGuardRef.current.isDirty(fingerprintRef.current()) && !window.confirm('场景有未保存的修改，仍要载入其他场景？')) return;
+      const operation = operationsRef.current.start('正在载入场景…');
       setBusy("正在载入场景…");
       setError(null);
+      const epoch = ++sceneEpochRef.current;
       const pending: SceneObjectEntry[] = [];
       let pendingSky: THREE.Texture | null = null;
       let committed = false;
@@ -2598,7 +2770,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         const doc = JSON.parse(text) as SceneDocument;
         validateCompositionDocument(doc);
         // v1 是没泼溅层的老存档、v2 多了泼溅层，都仍然要能读；v3 多了机位序列。
-        if ((doc.version !== 1 && doc.version !== 2 && doc.version !== 3 && doc.version !== 4) || !doc.model?.data) {
+        if ((doc.version !== 1 && doc.version !== 2 && doc.version !== 3 && doc.version !== 4 && doc.version !== 5) || !doc.model?.data) {
           throw new Error("不是可识别的场景文件");
         }
         validateSceneSize(text);
@@ -2610,6 +2782,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           const entry = await addPlane(saved.source, saved.name, saved.kind, null, saved.settings, true);
           if (!entry) throw new Error(`平面恢复失败：${saved.name}`);
           entry.id = saved.id || entry.id;
+          entry.locked = saved.locked ?? false;
+          entry.object.visible = saved.visible ?? true;
+          if (!entry.object.visible) entry.video?.element.pause();
           entry.object.position.fromArray(saved.position);
           entry.object.quaternion.fromArray(saved.quaternion);
           entry.object.scale.fromArray(saved.scale);
@@ -2624,7 +2799,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         const imported = gltf.scene.children.slice();
         gltf.scene.clear();
         const entries: SceneObjectEntry[] = imported.map((child, index) => {
-          const saved = doc.version === 4 ? doc.objects?.find((item) => item.id === child.userData.sceneDocumentId) ?? doc.objects?.[index] : doc.objects?.find((item) => item.name === child.name) ?? doc.objects?.[index];
+          const saved = doc.version >= 4 ? doc.objects?.find((item) => item.id === child.userData.sceneDocumentId) ?? doc.objects?.[index] : doc.objects?.find((item) => item.name === child.name) ?? doc.objects?.[index];
           if (saved) {
             child.position.fromArray(saved.position);
             child.quaternion.fromArray(saved.quaternion);
@@ -2633,18 +2808,22 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           const entry: SceneObjectEntry = {
             id: saved?.id || crypto.randomUUID(),
             name: saved?.name || child.name || doc.model.name,
-            object: child,
+            object: child, locked: saved?.locked ?? false,
           };
+          child.visible = saved?.visible ?? true;
           // 先在绑定姿势上记一份初始快照，再把存档里的摆姿套回去。
           const bindPose = serializeBonePose(child);
           if (bindPose) {
-            entry.initialBonePose = bindPose;
+            entry.initialBonePose = saved?.initialBonePose ?? bindPose;
             entry.bonePose = saved?.bonePose ?? bindPose;
-            if (saved?.bonePose) applyBonePose(child, saved.bonePose);
+            if (saved?.bonePose && !applyBonePose(child, saved.bonePose)) {
+              disposeSceneEntry(entry);
+              throw new Error("骨骼姿势与模型不兼容，场景未替换");
+            }
           }
+          pending.push(entry);
           return entry;
         });
-        pending.push(...entries);
         // 泼溅层：存档里自带 .spz 字节，解成 blob URL 重新交给 Spark，
         // 这样存档不依赖 ComfyUI output 或素材库文件还在不在。
         const splatEntries: SceneObjectEntry[] = [];
@@ -2661,8 +2840,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           group.position.fromArray(saved.position);
           group.quaternion.fromArray(saved.quaternion);
           group.scale.fromArray(saved.scale);
+          group.visible = saved.visible ?? true;
           const splatEntry: SceneObjectEntry = {
-            id: crypto.randomUUID(),
+            id: saved.id || crypto.randomUUID(), locked: saved.locked ?? false,
             name: saved.name,
             object: group,
             splat: mesh,
@@ -2672,8 +2852,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           pending.push(splatEntry);
         }
         const scene = sceneRef.current;
-        if (!scene) throw new Error("场景已关闭");
+        if (!scene || epoch !== sceneEpochRef.current) throw new Error("场景已关闭或载入已被较新的请求替代");
         selectObject(null);
+        historyRef.current.clear(objectsRef.current);
         objectsRef.current.forEach((entry) => { scene.remove(entry.object); disposeSceneEntry(entry); });
         clearSkybox();
         if (restoredSky && doc.skybox) {
@@ -2690,6 +2871,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         objectsRef.current = [...entries, ...splatEntries, ...restoredPlanes];
         objectsRef.current.forEach((entry) => scene.add(entry.object));
         committed = true;
+        cleanOnRenderRef.current = true;
+        setDirty(false);
         // 载入的存档带泼溅：同样要等 LoD 树建完才能画，挂上提示等 onDirty 收。
         if (splatEntries.length > 0) beginSplatLodWait();
         syncObjects();
@@ -2700,7 +2883,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         const savedMove = doc.move && typeof doc.move.targetName === "string" ? doc.move : null;
         // 移动目标按名字找：载入后对象 id 是新的，只有名字能对上。
         const loadedMover = savedMove
-          ? objectsRef.current.find((entry) => entry.name === savedMove.targetName) ?? null
+          ? objectsRef.current.find((entry) => savedMove.targetId ? entry.id === savedMove.targetId : entry.name === savedMove.targetName) ?? null
           : null;
         setMoverId(loadedMover?.id ?? null);
         setMoveSeconds(normalizeMoveSeconds(savedMove?.seconds));
@@ -2734,6 +2917,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           camera.updateProjectionMatrix();
           controls.update();
         }
+        frameRef.current = doc.frame?.aspect ?? '16:9'; setFrameAspect(frameRef.current); resizeFrameRef.current();
+        setFocal(focalFromFov(cameraRef.current?.fov ?? 45)); setArchiveName(doc.name ?? '');
+        setLocationGenerationOpen(false);
         setStatus(
           splatEntries.length > 0
             ? `已载入场景（${entries.length} 个对象 + ${splatEntries.length} 个泼溅）`
@@ -2743,6 +2929,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         if (!committed) { pending.forEach(disposeSceneEntry); pendingSky?.dispose(); }
+        operation.finish();
         // 带泼溅的存档把 busy 交给 SparkRenderer.onDirty 收尾。
         setBusy((current) => (current === SPLAT_LOD_BUSY ? current : null));
       }
@@ -2761,6 +2948,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [archivesOpen, setArchivesOpen] = useState(false);
   const [archives, setArchives] = useState<SceneArchiveItem[]>([]);
   const [archivesBusy, setArchivesBusy] = useState(false);
+  const [archivePreview, setArchivePreview] = useState<{ name: string; preview?: string; count: number; aspect: string; restore: () => Promise<void> } | null>(null);
+  const archiveRequestRef = useRef(0);
 
   const loadSceneArchives = useCallback(async () => {
     setArchivesBusy(true);
@@ -2782,14 +2971,18 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
 
   const openSceneArchive = useCallback(
     async (item: SceneArchiveItem) => {
+      const ticket = ++archiveRequestRef.current;
       setBusy(`正在载入后端存档 #${item.id}…`);
       setError(null);
       try {
         const response = await fetch(`/api/scene-archives/${item.id}`);
         if (!response.ok) throw new Error(`读取存档 #${item.id} 失败（HTTP ${response.status}）`);
-        // importSceneText 自己会再设 busy/status；这里只负责取字节。
-        await importSceneText(await response.text());
-        setArchivesOpen(false);
+        const text = await response.text(); validateSceneSize(text);
+        const doc = JSON.parse(text) as SceneDocument; validateCompositionDocument(doc);
+        if (ticket !== archiveRequestRef.current) return;
+        setArchivePreview({ name: item.name, preview: typeof doc.preview === 'string' && doc.preview.length < 256_000 && /^data:image\/(png|jpeg);base64,/.test(doc.preview) ? doc.preview : undefined,
+          count: (doc.objects?.length ?? 0) + (doc.planes?.length ?? 0) + (doc.splats?.length ?? 0), aspect: doc.frame?.aspect ?? '16:9',
+          restore: async () => { await importSceneText(text); setArchivePreview(null); setArchivesOpen(false); } });
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -2815,7 +3008,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     // 深度范围按模型自己的包围盒算：直接用 camera.near/far（0.1–1000）时，
     // 几米内的模型只占 1% 灰度，看上去就是一整张黑图。
     const bounds = new THREE.Box3();
-    objectsRef.current.forEach((entry) => bounds.expandByObject(entry.object));
+    objectsRef.current.filter(entry => entry.object.visible).forEach((entry) => bounds.expandByObject(entry.splat ? entry.object : clonePosedContent(entry.object)));
     const depthRange = { near: camera.near, far: camera.far };
     if (!bounds.isEmpty()) {
       const center = bounds.getCenter(new THREE.Vector3());
@@ -2825,6 +3018,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       depthRange.far = Math.max(depthRange.near + 0.5, distance + radius);
     }
     const material = createReferenceMaterial(pass, depthRange);
+    const restoreReferencePoseHelpers = hidePoseEditorHelpers(scene);
     const hide = (object: THREE.Object3D | null | undefined) => {
       if (!object || !object.visible) return;
       object.visible = false;
@@ -2842,6 +3036,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       // 泼溅由 Spark 自己光栅化，逐网格换材质管不到它；混进灰度图会变成彩色噪点。
       hide(sparkRef.current);
       const paint = (object: THREE.Object3D) => {
+        if (isPoseEditorHelper(object)) return;
         const mesh = object as THREE.Mesh;
         if (mesh.isMesh) {
           const geometry = mesh.geometry as THREE.BufferGeometry | undefined;
@@ -2887,6 +3082,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         object.visible = true;
       });
       material.dispose();
+      restoreReferencePoseHelpers();
     }
   }, []);
 
@@ -2908,6 +3104,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       fov: camera.fov,
     };
     const hidden: THREE.Object3D[] = [];
+    const restorePoseHelpers = hidePoseEditorHelpers(scene);
     const hide = (object: THREE.Object3D | null | undefined) => {
       if (!object || !object.visible) return;
       object.visible = false;
@@ -2947,6 +3144,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       return { blob, width, height };
     } finally {
       // 无论如何都要把视角还回去，否则用户眼前会突然跳到落幅机位。
+      restorePoseHelpers();
       hidden.forEach((object) => {
         object.visible = true;
       });
@@ -3155,7 +3353,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       }
       const path = editorGroundPath(groundPoints);
       const mover =
-        moverId ? objectsRef.current.find((entry) => entry.id === moverId) ?? null : null;
+        moverId ? objectsRef.current.find((entry) => entry.id === moverId && canMoveEntry(entry)) ?? null : null;
       const moverSeconds = mover && path ? normalizeMoveSeconds(moveSeconds) : null;
       const fps = sequenceFps;
       const plan = sequencePlan(cameraKeys, moverSeconds, fps);
@@ -3170,9 +3368,11 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       // 视口是 3840 宽时每帧 200–370 KB，1280 宽够当视频参考、体积小一大截。
       const renderer = rendererRef.current;
       const savedSize = renderer ? renderer.getSize(new THREE.Vector2()) : null;
+      const savedPixelRatio = renderer?.getPixelRatio() ?? 1;
       const savedAspect = camera.aspect;
       if (renderer && sequenceWidth > 0) {
         const height = Math.max(1, Math.round(sequenceWidth / savedAspect));
+        renderer.setPixelRatio(1); // Export width is physical pixels, not device-scaled CSS pixels.
         renderer.setSize(sequenceWidth, height, false);
         camera.aspect = sequenceWidth / height;
         camera.updateProjectionMatrix();
@@ -3193,7 +3393,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             camera.fov = sample.fov;
             camera.updateProjectionMatrix();
           }
-          if (mover && path && moverSeconds) {
+          if (mover && path && moverSeconds && canMoveEntry(mover)) {
             // 移动与相机各走各的时钟：按同一帧时间 / 移动总时长取进度，超出就停在 B。
             const progress = Math.min(1, index / fps / moverSeconds);
             mover.object.position.set(...groundPathPointAt(path, progress));
@@ -3255,6 +3455,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         }
         // 画布尺寸与投影一起还原，否则编辑器停在导出分辨率上。
         if (renderer && savedSize && sequenceWidth > 0) {
+          renderer.setPixelRatio(savedPixelRatio);
           renderer.setSize(savedSize.x, savedSize.y, false);
           camera.aspect = savedAspect;
           camera.updateProjectionMatrix();
@@ -3370,13 +3571,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   }, [sequenceFps]);
   const previewMove = useCallback(() => {
     const path = editorGroundPath(groundPoints);
-    const mover = moverId ? objectsRef.current.find((entry) => entry.id === moverId) ?? null : null;
-    if (!path || !mover) return;
+    const mover = moverId ? objectsRef.current.find((entry) => entry.id === moverId && canMoveEntry(entry)) ?? null : null;
+    if (!path || !mover || !canMoveEntry(mover)) return;
     const seconds = normalizeMoveSeconds(moveSeconds);
     if (moveRafRef.current !== null) cancelAnimationFrame(moveRafRef.current);
     setPlayingMove(true);
     const started = performance.now();
+    historyRef.current.checkpoint(objectsRef.current);
+    const epoch = sceneEpochRef.current;
     const step = () => {
+      if (epoch !== sceneEpochRef.current || !canMoveEntry(mover)) { moveRafRef.current = null; setPlayingMove(false); return; }
       const progress = Math.min(1, (performance.now() - started) / (seconds * 1000));
       mover.object.position.set(...groundPathPointAt(path, progress));
       // 朝向行进方向：模型默认面朝 +Z，yaw 直接由方向算。
@@ -3438,6 +3642,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         }}
       />
 
+      {locationGenerationOpen && <LocationGenerationPanel disabled={Boolean(busy)} close={() => setLocationGenerationOpen(false)} waitForTask={waitForTask} capture={async () => {
+        const camera = cameraRef.current, controls = controlsRef.current;
+        if (!camera || !controls) throw new Error("相机尚未就绪");
+        const pose = { position: camera.position.toArray(), target: controls.target.toArray(), fov: camera.fov, frame: { aspect: frameRef.current }, sensorHeight: 24 };
+        return { blob: await captureCurrentView(), camera: pose };
+      }} />}
       <div className="fixed inset-x-0 top-0 z-40 flex h-14 items-center gap-2 border-b border-white/10 bg-[#101014]/95 px-3 backdrop-blur">
         <button
           type="button"
@@ -3447,6 +3657,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           返回
         </button>
         <span className="mr-2 text-sm font-medium">3D 场景</span>
+        <button type="button" className="rounded-md border border-violet-400/40 px-3 py-1.5 text-sm" disabled={Boolean(busy)} onClick={() => setLocationGenerationOpen(true)}>机位出图</button>
         <button
           type="button"
           className="rounded-md border border-white/10 px-3 py-1.5 text-sm hover:bg-white/10"
@@ -3530,6 +3741,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               className={`px-3 py-1.5 text-sm ${
                 mode === item ? "bg-white/15 text-white" : "text-white/60 hover:bg-white/10"
               }`}
+              disabled={posing}
+              title={posing ? "骨骼摆姿中仅支持局部旋转；退出摆姿后可变换整个对象" : "变换整个对象"}
               onClick={() => setMode(item)}
             >
               {item === "translate" ? "移动" : item === "rotate" ? "旋转" : "缩放"}
@@ -3616,6 +3829,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             event.target.value = "";
           }}
         />
+        {archivePreview ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6" role="dialog" aria-label="存档恢复预览"><div className="max-w-md rounded bg-neutral-900 p-4 space-y-3">
+          <h3>{archivePreview.name}</h3>
+          {archivePreview.preview ? <img src={archivePreview.preview} alt="存档取景预览" className="max-h-64 mx-auto" /> : <p>旧存档无缩略图</p>}
+          <p>{archivePreview.count} 个对象 · {archivePreview.aspect} · 确认后替换当前场景</p>
+          <button onClick={() => void archivePreview.restore()}>确认恢复</button> <button onClick={() => setArchivePreview(null)}>取消</button>
+        </div></div> : null}
         {archivesOpen ? (
           <div
             className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6"
@@ -3762,8 +3981,20 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       </div>
 
       <div className="fixed left-3 top-20 z-30 w-56 max-h-[calc(100vh-6rem)] overflow-y-auto rounded-lg border border-white/10 bg-[#101014]/90 p-2 backdrop-blur">
-        <div className="mb-2 px-1 text-xs uppercase tracking-wide text-white/40">
-          场景对象
+        <div role="status" className="mb-1 text-xs text-amber-200">{dirty ? '● 未保存' : '已保存 / 无修改'}</div>
+        <div className="mb-2 space-y-1 text-xs">
+          <label>画幅 <select aria-label="场景画幅" value={frameAspect} onChange={e => { frameRef.current = e.target.value as FrameAspect; setFrameAspect(frameRef.current); resizeFrameRef.current(); setLocationGenerationOpen(false); }}>{Object.keys(FRAME_ASPECTS).map(a => <option key={a}>{a}</option>)}</select></label>
+          <label className="block">焦距 mm（24mm传感器高）<input aria-label="焦距毫米" type="number" min="12" max="92" value={Math.round(focal * 10) / 10} onChange={e => { const mm = Number(e.target.value); if (!Number.isFinite(mm) || mm < 12 || mm > 92 || !cameraRef.current) return; cameraRef.current.fov = fovFromFocal(mm); cameraRef.current.updateProjectionMatrix(); setFocal(mm); setLocationGenerationOpen(false); }} className="w-full bg-black/30" /></label>
+          <input aria-label="存档名称" placeholder="存档名称（另存为）" value={archiveName} onChange={e => setArchiveName(e.target.value)} className="w-full bg-black/30" />
+        </div>
+        <div className="mb-2 px-1 text-xs uppercase tracking-wide text-white/40">场景对象</div>
+        <div className="flex gap-2 text-xs mb-2">
+          <button onClick={() => restoreHistory()}>撤销</button><button onClick={() => restoreHistory(true)}>重做</button>
+          <button disabled={!selectedId} onClick={() => void duplicateSelected()}>复制</button>
+        </div>
+        <div className="flex gap-2 text-xs mb-2">
+          <select aria-label="变换坐标系" onChange={e => transformRef.current?.setSpace(e.target.value as 'world' | 'local')}><option value="world">世界</option><option value="local">局部</option></select>
+          <label><input type="checkbox" defaultChecked onChange={e => { transformRef.current?.setTranslationSnap(e.target.checked ? .1 : null); transformRef.current?.setRotationSnap(e.target.checked ? Math.PI / 12 : null); transformRef.current?.setScaleSnap(e.target.checked ? .1 : null); }} />吸附 0.1 / 15°</label>
         </div>
         {objects.length === 0 ? (
           <div className="px-1 py-2 text-xs text-white/40">还没有模型</div>
@@ -3786,6 +4017,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               >
                 <span className="block truncate">{entry.name}</span>
               </button>
+              <button title="显隐" aria-label={`显隐 ${entry.name}`} aria-pressed={entry.object.visible} onClick={() => toggleEntry(entry, 'visible')}>{entry.object.visible ? '显' : '隐'}</button>
+              <button title="锁定" aria-label={`锁定 ${entry.name}`} aria-pressed={!!entry.locked} onClick={() => toggleEntry(entry, 'locked')}>{entry.locked ? '锁' : '解'}</button>
+              <button title="聚焦" aria-label={`聚焦 ${entry.name}`} onClick={() => focusEntry(entry)}>◎</button>
               {entry.splat ? (
                 <button
                   type="button"
@@ -3800,6 +4034,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             </div>
           ))
         )}
+        <div className="mt-2 flex flex-wrap gap-2 text-xs">
+          {(['立方体', '球体', '圆柱', '圆环'] as const).map((label, index) => <button key={label} onClick={() => {
+            const geometry = index === 0 ? new THREE.BoxGeometry() : index === 1 ? new THREE.SphereGeometry(.5, 24, 16) : index === 2 ? new THREE.CylinderGeometry(.5, .5, 1, 24) : new THREE.TorusGeometry(.5, .15, 12, 32);
+            addObject(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: '#cfd4dc' })), label);
+          }}>{label}</button>)}
+        </div>
         <div className="mt-2 border-t border-white/10 pt-2">
           <div className="mb-2 px-1 text-xs uppercase tracking-wide text-white/40">
             资产库（拖进画面摆位）
@@ -3930,7 +4170,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                   </label>
                 ))}
               </div>
-              <div className="grid grid-cols-2 gap-1">
+              <div className="grid grid-cols-3 gap-1">
+                {(['rotateX', 'rotateZ', 'scaleX', 'scaleY', 'scaleZ'] as const).map(axis => <label key={axis} className="text-[11px] text-white/50">{axis}<input aria-label={axis} type="number" step={axis.startsWith('rotate') ? 15 : .1} value={transform[axis]} onChange={event => setTransformValue(axis, Number(event.target.value))} className="w-full rounded bg-black/30" /></label>)}
                 <label className="block text-[11px] text-white/50">
                   <span>旋转 Y°</span>
                   <input
@@ -4130,6 +4371,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               <button
                 type="button"
                 onClick={togglePosing}
+                aria-pressed={posing}
                 className={`w-full rounded-md px-2 py-1 text-xs ${
                   posing ? "bg-sky-500/25 text-sky-100" : "bg-white/5 text-white/70 hover:bg-white/10"
                 }`}
@@ -4142,24 +4384,27 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                   {activeBone ?? "还没选"}
                 </p>
               )}
+              <p className="px-1 text-[11px] leading-4 text-white/45">保存姿势仅记在本次编辑内存中；保存场景/存到后端会持久保存当前画面姿势与初始姿势，无需先点此按钮。</p>
               <div className="flex gap-1">
                 <button
                   type="button"
                   onClick={saveBonePose}
                   className="flex-1 rounded-md bg-white/5 px-2 py-1 text-xs text-white/70 hover:bg-white/10"
                 >
-                  保存姿势
+                  保存姿势（内存）
                 </button>
                 <button
                   type="button"
-                  onClick={restoreBonePose}
+                  title="回到上次内存记忆的姿势"
+                  onClick={() => { if (window.confirm("还原到上次记住的姿势？当前未记忆的调整将被覆盖。")) restoreBonePose(); }}
                   className="flex-1 rounded-md bg-white/5 px-2 py-1 text-xs text-white/70 hover:bg-white/10"
                 >
                   还原
                 </button>
                 <button
                   type="button"
-                  onClick={resetBonePose}
+                  title="恢复模型最初载入时的姿势"
+                  onClick={() => { if (window.confirm("恢复模型初始姿势？当前调整将被覆盖。")) resetBonePose(); }}
                   className="flex-1 rounded-md bg-white/5 px-2 py-1 text-xs text-white/50 hover:bg-white/10"
                 >
                   初始

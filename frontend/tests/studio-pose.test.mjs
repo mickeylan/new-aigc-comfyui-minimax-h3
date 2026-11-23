@@ -45,8 +45,9 @@ test('画布点选骨不会把转相机误判成选骨', () => {
 })
 
 test('骨骼姿势随场景存档往返，且能恢复初始姿势', () => {
-  assert.match(stage3d, /bonePose: entry\.bonePose \?\? null/, '场景存档要写入骨骼姿势')
-  assert.match(stage3d, /initialBonePose/, '要记一份绑定姿势')
+  assert.match(stage3d, /bonePose: serializeBonePose\(entry\.object\)/, '场景存档必须写入当前骨姿，而非上次内存记忆')
+  assert.match(stage3d, /initialBonePose: entry\.initialBonePose \?\? null/, '必须独立持久化初始骨姿')
+  assert.match(stage3d, /entry\.initialBonePose = saved\?\.initialBonePose \?\? bindPose/, '重载优先使用独立初始骨姿，旧档保留回退')
   assert.match(stage3d, /saved\?\.bonePose/, '载入场景时读回骨骼姿势')
   assert.match(stage3d, /applyBonePose\(child, saved\.bonePose\)/, '载入后应套回骨骼姿势')
   assert.match(stage3d, /保存姿势/, '缺少保存姿势入口')

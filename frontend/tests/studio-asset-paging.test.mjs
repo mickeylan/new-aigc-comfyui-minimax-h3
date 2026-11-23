@@ -14,7 +14,7 @@ const handlers = readFileSync(
 
 // 素材越存越多：面板只拉一页，后端要能按页返回；但老调用方（预演、画布）不能被改坏。
 test('后端支持 page/page_size，缺省时仍返回全量', () => {
-  assert.match(service, /func \(m \*MaterialService\) ListPaged\(ftype string, projectID \*uint, page, pageSize int\)/)
+  assert.match(service, /func \(m \*MaterialService\) ListPaged\(ftype string, projectID \*uint, page, pageSize int, filters \.\.\.string\)/)
   // 不分页的老调用方必须还能拿到全部
   assert.match(service, /return m\.ListPaged\(ftype, projectID, 1, 0\)/)
   assert.match(service, /if pageSize > 0 \{/)

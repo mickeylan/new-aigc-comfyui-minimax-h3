@@ -37,6 +37,7 @@ export class FKHelper {
     this.controls.setSpace("local");
     this.controls.setMode("rotate");
     this.controls.setSize(0.5);
+    this.controls.getHelper().userData.poseEditorHelper = true;
     this.controls.addEventListener("dragging-changed", (event) => {
       onDragChange(Boolean((event as { value?: boolean }).value));
     });
@@ -170,9 +171,10 @@ export class FKHelper {
   }
 
   private removeSpheres() {
+    const geometries = new Set(this.spheres.map(sphere => sphere.geometry));
+    geometries.forEach(geometry => geometry.dispose());
     for (const sphere of this.spheres) {
       sphere.parent?.remove(sphere);
-      sphere.geometry.dispose();
       (sphere.material as THREE.Material).dispose();
     }
     this.spheres.length = 0;

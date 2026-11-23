@@ -24,7 +24,8 @@ test('缩略图自动取景：临时推相机框住全部对象，截完还原�
   const body = fn[1]
   // 泼溅用自己的包围盒，网格用 setFromObject
   assert.match(body, /box\.union\(entry\.splat\.getBoundingBox\(false\)/)
-  assert.match(body, /box\.union\(new THREE\.Box3\(\)\.setFromObject\(entry\.object\)\)/)
+  // 摆姿红球不能扩大自动取景边界，必须以干净的骨架克隆计算网格包围盒。
+  assert.match(body, /box\.union\(new THREE\.Box3\(\)\.setFromObject\(clonePosedContent\(entry\.object\)\)\)/)
   // 距离按 fov 算，带余量
   // getBoundingBox(false)：连 splat 自身尺度一起算，默认只取中心点会低估
   assert.match(body, /radius \/ Math\.sin\(fov \/ 2\)\) \* 1\.35/)

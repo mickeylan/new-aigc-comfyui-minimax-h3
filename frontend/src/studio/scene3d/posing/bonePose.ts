@@ -65,7 +65,9 @@ export function findSkeletonRoot(root: THREE.Object3D): THREE.Bone | null {
     if (!hip && bone.name.toLowerCase().includes("mixamorighips")) hip = bone;
     if (!anyRoot && !(bone.parent as THREE.Bone | null)?.isBone) anyRoot = bone;
   });
-  return hip ?? anyRoot;
+  let selected = hip ?? anyRoot;
+  while (selected && (selected.parent as THREE.Bone | null)?.isBone) selected = selected.parent as THREE.Bone;
+  return selected;
 }
 
 export interface BonePoseNode {
@@ -74,6 +76,8 @@ export interface BonePoseNode {
   quaternion: [number, number, number, number];
   scale: [number, number, number];
   children: BonePoseNode[];
+  /** Other independent skeleton roots; absent in legacy documents. */
+  additionalRoots?: BonePoseNode[];
 }
 
 /** 红球几何体自带半径（FKHelper 里 SphereGeometry 的入参，两处必须一致）。 */
@@ -124,33 +128,77 @@ function snapshotBone(bone: THREE.Bone): BonePoseNode {
 export function serializeBonePose(root: THREE.Object3D): BonePoseNode | null {
   const bone = findSkeletonRoot(root);
   if (!bone) return null;
-  return snapshotBone(bone);
+  const pose = snapshotBone(bone);
+  const roots: THREE.Bone[] = [];
+  root.traverse(child => { if ((child as THREE.Bone).isBone && !(child.parent as THREE.Bone)?.isBone && child !== bone) roots.push(child as THREE.Bone); });
+  const extra = roots.filter(candidate => { let p: THREE.Object3D | null = bone; while (p) { if (p === candidate) return false; p = p.parent; } return true; });
+  if (extra.length) pose.additionalRoots = extra.map(snapshotBone);
+  return pose;
 }
 
-function restoreBone(bone: THREE.Bone, node: BonePoseNode) {
-  bone.position.set(node.position[0], node.position[1], node.position[2]);
-  bone.quaternion.set(node.quaternion[0], node.quaternion[1], node.quaternion[2], node.quaternion[3]);
-  bone.scale.set(node.scale[0], node.scale[1], node.scale[2]);
+/** Reject malformed/unbounded input before touching any live bone. */
+export function validateBonePose(value: unknown): void {
+  if (value == null) return;
+  let count = 0;
+  const seen = new Set<object>();
+  const vector = (v: unknown, n: number) => Array.isArray(v) && v.length === n && v.every(x => typeof x === "number" && Number.isFinite(x));
+  const visit = (node: any, depth: number) => {
+    if (!node || typeof node !== "object" || seen.has(node) || depth > 128 || ++count > 4096 || typeof node.name !== "string" || node.name.length > 1024 ||
+      !vector(node.position, 3) || !vector(node.quaternion, 4) || !Number.isFinite(Math.hypot(...node.quaternion)) || Math.hypot(...node.quaternion) < 1e-12 || !vector(node.scale, 3) || !Array.isArray(node.children)) throw new Error("骨骼姿势无效或超过安全上限");
+    seen.add(node);
+    for (const child of node.children) visit(child, depth + 1);
+    if (node.additionalRoots !== undefined) {
+      if (depth !== 0 || !Array.isArray(node.additionalRoots)) throw new Error("骨骼根列表无效");
+      for (const child of node.additionalRoots) visit(child, depth + 1);
+    }
+  };
+  visit(value, 0);
+}
+
+function planRestore(bone: THREE.Bone, node: BonePoseNode, plan: Array<[THREE.Bone, BonePoseNode]>) {
+  plan.push([bone, node]);
+  let complete = true;
 
   // 先按名字配对子骨；名字对不上（导出的骨名带前缀/后缀）时退回按顺序配。
   const boneChildren = bone.children.filter((child) => (child as THREE.Bone).isBone) as THREE.Bone[];
-  const used = new Set<string>();
+  const used = new Set<THREE.Bone>();
   for (const childNode of node.children) {
     const matched =
-      boneChildren.find((candidate) => candidate.name === childNode.name && !used.has(candidate.name)) ??
-      boneChildren.find((candidate) => !used.has(candidate.name));
-    if (!matched) break;
-    used.add(matched.name);
-    restoreBone(matched, childNode);
+      boneChildren.find((candidate) => candidate.name === childNode.name && !used.has(candidate)) ??
+      boneChildren.find((candidate) => !used.has(candidate) && !node.children.some(other => other.name === candidate.name));
+    if (!matched) { complete = false; continue; }
+    used.add(matched);
+    if (!planRestore(matched, childNode, plan)) complete = false;
   }
+  return complete;
 }
 
 /** 把存档里的骨树姿势套回模型；成功返回 true。 */
 export function applyBonePose(root: THREE.Object3D, pose: BonePoseNode | null | undefined) {
   if (!pose) return false;
-  const bone = findSkeletonRoot(root);
+  validateBonePose(pose);
+  // Legacy snapshots may start at Hips rather than its Bone ancestor.
+  const named = root.getObjectByName(pose.name) as THREE.Bone | undefined;
+  const bone = named?.isBone ? named : findSkeletonRoot(root);
   if (!bone) return false;
-  restoreBone(bone, pose);
-  bone.updateMatrixWorld(true);
+  const plan: Array<[THREE.Bone, BonePoseNode]> = [];
+  let complete = planRestore(bone, pose, plan);
+  const roots: THREE.Bone[] = [];
+  root.traverse(child => { if ((child as THREE.Bone).isBone && !(child.parent as THREE.Bone)?.isBone && child !== bone) roots.push(child as THREE.Bone); });
+  const used = new Set<THREE.Bone>();
+  for (const saved of pose.additionalRoots ?? []) {
+    const matched = roots.find(b => b.name === saved.name && !used.has(b)) ?? roots.find(b => !used.has(b));
+    if (matched) { used.add(matched); if (!planRestore(matched, saved, plan)) complete = false; }
+    else complete = false;
+  }
+  // Incompatible rigs must not silently leave a half-applied pose.
+  if (!complete) return false;
+  for (const [target, node] of plan) {
+    target.position.fromArray(node.position);
+    const length = Math.hypot(...node.quaternion);
+    target.quaternion.set(node.quaternion[0] / length, node.quaternion[1] / length, node.quaternion[2] / length, node.quaternion[3] / length);
+    target.scale.fromArray(node.scale);
+  }
+  root.updateMatrixWorld(true);
   return true;
 }

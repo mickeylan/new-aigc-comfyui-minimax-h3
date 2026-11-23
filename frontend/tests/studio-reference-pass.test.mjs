@@ -40,7 +40,8 @@ test('深度用线性深度 shader，近黑远白，不是硬关 depthWrite', ()
 test('深度范围按模型包围盒算，没法线的几何体先补法线', () => {
   // 直接用 camera.near/far（0.1–1000）：几米内的模型只占 1% 灰度，看着就是黑图。
   assert.match(stage, /const bounds = new THREE\.Box3\(\);/)
-  assert.match(stage, /objectsRef\.current\.forEach\(\(entry\) => bounds\.expandByObject\(entry\.object\)\);/)
+  // 骨骼红球不属于内容，不能影响深度标定范围；泼溅仍保留独立边界路径。
+  assert.match(stage, /objectsRef\.current\.filter\(entry => entry\.object\.visible\)\.forEach\(\(entry\) => bounds\.expandByObject\(entry\.splat \? entry\.object : clonePosedContent\(entry\.object\)\)\);/)
   assert.match(stage, /depthRange\.near = Math\.max\(0\.01, distance - radius\);/)
   assert.match(stage, /depthRange\.far = Math\.max\(depthRange\.near \+ 0\.5, distance \+ radius\);/)
 
@@ -79,6 +80,13 @@ test('渲一帧前藏掉编辑器痕迹与泼溅，渲完 finally 无条件还�
   assert.match(restore[1], /object\.visible = true;/)
   assert.match(restore[1], /material\.dispose\(\);/)
 })
+
+test('序列指定宽度使用物理像素并在finally恢复屏幕DPI', () => {
+  const body = stage.slice(stage.indexOf('const exportSequence = useCallback('), stage.indexOf('const saveSequenceToLibrary = useCallback('));
+  assert.match(body, /const savedPixelRatio = renderer\?\.getPixelRatio\(\) \?\? 1;/);
+  assert.match(body, /renderer\.setPixelRatio\(1\);[\s\S]*?renderer\.setSize\(sequenceWidth, height, false\);/);
+  assert.match(body, /finally \{[\s\S]*?renderer\.setPixelRatio\(savedPixelRatio\);\s*renderer\.setSize\(savedSize\.x, savedSize\.y, false\);/);
+});
 
 test('右栏能按三种 pass 导出，出图可预览可下载', () => {
   // 三个按钮由标签表驱动，避免 UI 与类型漂移

@@ -2985,7 +2985,12 @@ func (s *Service) HandleListMaterials(c *gin.Context) {
 			projectID = &pid
 		}
 	}
-	list, err := s.Materials.ListPaged(ftype, projectID, parseIntQuery(c, "page"), parseIntQuery(c, "page_size"))
+	category := c.Query("category")
+	if category != "" && category != "model" && category != "splat" {
+		c.JSON(400, gin.H{"error": "unsupported material category"})
+		return
+	}
+	list, err := s.Materials.ListPaged(ftype, projectID, parseIntQuery(c, "page"), parseIntQuery(c, "page_size"), c.Query("q"), category)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return

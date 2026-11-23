@@ -8808,6 +8808,7 @@ func (s *ProjectService) syncGenerationOutputs() {
 	s.syncCharacterPortraits()
 	s.syncAssetImages()
 	s.syncLocationDesigns()
+	s.syncStudioLocations()
 	if s.characterLooks != nil {
 		s.characterLooks.SyncImages()
 		s.characterLooks.SyncOutfitImages()

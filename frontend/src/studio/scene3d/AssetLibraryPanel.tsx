@@ -1,6 +1,6 @@
 // 移植自 ArtCraft（MIT / Apache-2.0 双许可）；来源与依赖声明见 ../THIRD_PARTY_NOTICES.md。
 // 资产库面板（kitbashing）：从素材库拖模型进 3D 场景摆位。
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ASSET_DRAG_MIME,
   assetKind,
@@ -49,7 +49,10 @@ function AssetThumbnail({ asset }: { asset: LibraryAsset }) {
 export default function AssetLibraryPanel({ onPlace, onError }: AssetLibraryPanelProps) {
   const [items, setItems] = useState<LibraryAsset[]>([]);
   const [loading, setLoading] = useState(false);
-  const [loaded, setLoaded] = useState(false);
+  const [query, setQuery] = useState('');
+  const [category, setCategory] = useState('');
+  const requestRef = useRef(0);
+  const onErrorRef = useRef(onError); onErrorRef.current = onError;
   /** 素材越存越多，面板一次只拉一页；旧后端不认这两个参数会退回全量。 */
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
@@ -57,53 +60,60 @@ export default function AssetLibraryPanel({ onPlace, onError }: AssetLibraryPane
   const fetchPage = useCallback(async (target: number) => {
     // React 岛内不引 axios 实例，素材库直接打 fetch（3D 编辑器存入素材库也是这么做的）。
     const response = await fetch(
-      `/api/materials?type=3d&page=${target}&page_size=${ASSET_PAGE_SIZE}`,
+      `/api/materials?type=3d&page=${target}&page_size=${ASSET_PAGE_SIZE}&q=${encodeURIComponent(query)}&category=${encodeURIComponent(category)}`,
     );
     if (!response.ok) throw new Error(`读取素材库失败（HTTP ${response.status}）`);
     const payload = await response.json();
     // 后端可能直接返回数组，也可能包一层 {items: []}，两种都认。
     const list: LibraryAsset[] = Array.isArray(payload) ? payload : (payload.items ?? []);
     return list;
-  }, []);
+  }, [query, category]);
 
   const refresh = useCallback(async () => {
+    const ticket = ++requestRef.current;
     setLoading(true);
     try {
       const list = await fetchPage(1);
+      if (ticket !== requestRef.current) return;
       setItems(list);
       setPage(1);
       setHasMore(list.length >= ASSET_PAGE_SIZE);
-      setLoaded(true);
     } catch (err) {
-      onError(err instanceof Error ? err.message : String(err));
+      if (ticket === requestRef.current) onErrorRef.current(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (ticket === requestRef.current) setLoading(false);
     }
-  }, [fetchPage, onError]);
+  }, [fetchPage]);
 
   const loadMore = useCallback(async () => {
+    const ticket = ++requestRef.current;
     setLoading(true);
     try {
       const next = page + 1;
       const list = await fetchPage(next);
+      if (ticket !== requestRef.current) return;
       // 追加而不是替换：上一页已经在列表里了。
       setItems((current) => [...current, ...list]);
       setPage(next);
       setHasMore(list.length >= ASSET_PAGE_SIZE);
     } catch (err) {
-      onError(err instanceof Error ? err.message : String(err));
+      if (ticket === requestRef.current) onErrorRef.current(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (ticket === requestRef.current) setLoading(false);
     }
-  }, [fetchPage, onError, page]);
+  }, [fetchPage, page]);
 
-  // 首次展开时拉一次；之后靠「刷新」按钮。
+  // Query transitions invalidate even a response that arrives before the debounce expires.
   useEffect(() => {
-    if (!loaded && !loading) void refresh();
-  }, [loaded, loading, refresh]);
+    requestRef.current++; setItems([]); setPage(1); setHasMore(false); setLoading(true);
+    const timer = setTimeout(() => void refresh(), 250);
+    return () => { clearTimeout(timer); requestRef.current++; };
+  }, [refresh]);
 
   return (
     <div className="space-y-1.5">
+      <input aria-label="搜索全部3D素材" placeholder="搜索全部3D素材" value={query} onChange={e => { requestRef.current++; setQuery(e.target.value); }} className="w-full rounded bg-black/30 px-2 py-1 text-xs" />
+      <select aria-label="素材格式分类" value={category} onChange={e => { requestRef.current++; setCategory(e.target.value); }} className="w-full rounded bg-black/30 text-xs"><option value="">全部格式</option><option value="model">网格 GLB / GLTF / OBJ</option><option value="splat">高斯泼溅</option></select>
       <div className="flex items-center justify-between px-1">
         <span className="text-[11px] text-white/40">
           {loading ? "正在读取…" : `已加载 ${items.length} 个 3D 素材`}

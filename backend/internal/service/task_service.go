@@ -1163,6 +1163,10 @@ func (s *TaskService) Execute(taskID string) error {
 		s.failTask(&task, err.Error())
 		return err
 	}
+	if err := s.validateStudioLocationSnapshot(&task, &tpl); err != nil {
+		s.failTask(&task, err.Error())
+		return err
+	}
 
 	// 模拟模式：不连接 ComfyUI，按模板参考耗时模拟进度推进直至成功
 	if s.cfg.Simulate {

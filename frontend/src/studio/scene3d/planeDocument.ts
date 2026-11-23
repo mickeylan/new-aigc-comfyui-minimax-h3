@@ -1,5 +1,6 @@
 // ArtCraft chroma-key UV-distance approach; MIT/Apache-2.0, see THIRD_PARTY_NOTICES.md.
 import * as THREE from "three";
+import { validateBonePose } from "./posing/bonePose";
 import { SCENE_ARCHIVE_MAX_BYTES } from "./scene-archive";
 import { DEFAULT_PLANE_LAYER, clampOpacity, type PlaneLayerSettings } from "./compositing";
 export interface PlaneSettings extends PlaneLayerSettings { chromaKey: boolean; keyColor: string; similarity: number; smoothness: number; spill: number }
@@ -49,18 +50,30 @@ export function validateSceneSize(text: string) {
 export function validateCompositionDocument(doc: any) {
   const vector = (value: unknown, length: number) => Array.isArray(value) && value.length === length && value.every((n) => typeof n === "number" && Number.isFinite(n));
   const transform = (item: any) => item && vector(item.position, 3) && vector(item.quaternion, 4) && vector(item.scale, 3);
-  if (!doc || ![1, 2, 3, 4].includes(doc.version) || typeof doc.model?.data !== "string" || !doc.model.data ||
+  if (!doc || ![1, 2, 3, 4, 5].includes(doc.version) || typeof doc.model?.data !== "string" || !doc.model.data ||
     !vector(doc.camera?.position, 3) || !vector(doc.camera?.target, 3)) throw new Error("不是可识别的场景文件");
+  if (doc.frame && !['16:9', '9:16', '1:1', '3:2', '2:3'].includes(doc.frame.aspect)) throw new Error('场景画幅无效');
   const ids = new Set<string>();
   for (const key of ["objects", "planes", "splats", "cameraKeys"]) {
     if (doc[key] !== undefined && !Array.isArray(doc[key])) throw new Error("场景图层列表无效");
   }
   for (const item of [...(doc.objects ?? []), ...(doc.splats ?? []), ...(doc.planes ?? [])]) {
     if (!transform(item)) throw new Error("场景对象变换无效");
+    if (doc.version === 5) {
+      if (typeof item.id !== 'string' || !item.id || ids.has(item.id)) throw new Error('对象ID缺失或重复');
+      ids.add(item.id);
+      if (typeof item.visible !== 'boolean' || typeof item.locked !== 'boolean') throw new Error('对象显隐/锁定无效');
+    }
+  }
+  for (const object of doc.objects ?? []) {
+    validateBonePose(object.bonePose);
+    validateBonePose(object.initialBonePose);
   }
   for (const plane of doc.planes ?? []) {
-    if (!plane.id || ids.has(plane.id)) throw new Error("平面ID缺失或重复");
-    ids.add(plane.id);
+    if (doc.version < 5) {
+      if (!plane.id || ids.has(plane.id)) throw new Error("平面ID缺失或重复");
+      ids.add(plane.id);
+    }
     if (!["image", "video"].includes(plane.kind) || typeof plane.source !== "string" || !plane.source.startsWith(`data:${plane.kind}/`)) throw new Error("平面媒体来源无效");
   }
   if (doc.skybox && (typeof doc.skybox.source !== "string" || !doc.skybox.source.startsWith("data:image/") || !Number.isFinite(doc.skybox.intensity) || doc.skybox.intensity < 0 || doc.skybox.intensity > 2)) throw new Error("天空盒无效");
