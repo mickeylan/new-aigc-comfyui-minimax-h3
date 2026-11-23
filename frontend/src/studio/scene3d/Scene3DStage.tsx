@@ -8,6 +8,7 @@ import {
 } from "react";
 import * as THREE from "three";
 import { SceneOperations, SceneSaveGuard, canMoveEntry, materialRevision } from './sceneSafety';
+import { referencePlaneMaterial } from './referenceAlpha';
 import { ObjectHistory, duplicateMesh, surfaceDrop } from './kitbashEditor';
 import { FRAME_ASPECTS, fitFrame, focalFromFov, fovFromFocal, type FrameAspect } from './sceneFrame';
 import { DEFAULT_PLANE_SETTINGS, normalizePlaneSettings, planeMaterial, mediaDataURL, validateSceneSize, validateCompositionDocument, type PlaneSettings } from "./planeDocument";
@@ -316,7 +317,7 @@ function sequencePlan(cameraKeys: CameraKey[], moverSeconds: number | null, fps:
  * 深度范围不能直接用 camera.near/far（0.1–1000），那样几米内的模型只占 1% 灰度，
  * 看上去就是一整张黑图；要按模型自身的包围盒算一段贴身区间。
  */
-function createReferenceMaterial(
+export function createReferenceMaterial(
   pass: ReferencePass,
   depthRange: { near: number; far: number },
 ) {
@@ -1716,6 +1717,58 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     void addPlane(url, imagePlaneName(image), "image");
   }, [backgroundImages, backgroundImageId, addPlane]);
 
+  // Explicit task only; preserve the original and commit a separately decoded RGBA plane.
+  const cutoutSelected = async () => {
+    const source = objectsRef.current.find((entry) => entry.id === selectedId);
+    if (!source || source.mediaKind !== 'image' || source.locked || !source.object.visible || !source.mediaSource) return;
+    const epoch = sceneEpochRef.current;
+    const live = () => epoch === sceneEpochRef.current && !!sceneRef.current && objectsRef.current.includes(source) && !source.locked && source.object.visible;
+    const operation = operationsRef.current.start('正在抠图…');
+    let result: SceneObjectEntry | undefined;
+    setError(null);
+    try {
+      const response = await fetch(source.mediaSource);
+      if (!response.ok) throw new Error('无法读取抠图原图');
+      const blob = await response.blob();
+      if (!live()) return;
+      const upload = await uploadImage(blob, `cutout-source-${Date.now()}.png`);
+      if (!live()) return;
+      const templateId = await findTemplateId('image_remove_background');
+      if (!live()) return;
+      const created = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template_id: templateId, prompt: '', params: {}, files: { image: [upload] } }) });
+      if (!created.ok) throw new Error(`创建抠图任务失败：HTTP ${created.status}`);
+      const task = await created.json();
+      const finished = await waitForTask(task.task_id);
+      if (!live()) return;
+      const url = taskResultUrl(finished);
+      if (!url) throw new Error('抠图任务没有图片输出');
+      const portable = await mediaDataURL(url);
+      if (!live()) return;
+      result = await addPlane(portable, `${source.name} 抠图`, 'image', undefined,
+        { ...source.plane, chromaKey: false }, true);
+      if (!result) throw new Error('抠图结果无法解码');
+      if (!live()) { disposeSceneEntry(result); result = undefined; return; }
+      // Background removal retains canvas dimensions; keep the source plane's exact placement.
+      const sourceMesh = source.object.children[0] as THREE.Mesh;
+      const resultMesh = result.object.children[0] as THREE.Mesh;
+      resultMesh.geometry.dispose(); resultMesh.geometry = sourceMesh.geometry.clone();
+      result.object.position.copy(source.object.position);
+      result.object.quaternion.copy(source.object.quaternion);
+      result.object.scale.copy(source.object.scale);
+      historyRef.current.checkpoint(objectsRef.current);
+      sceneRef.current!.add(result.object);
+      objectsRef.current = [...objectsRef.current, result];
+      historyRef.current.collect(objectsRef.current);
+      syncObjects(); selectObject(result.id);
+      setStatus('抠图已作为独立图片平面加入；原图保留，可在对象列表隐藏');
+      result = undefined;
+    } catch (err) {
+      if (result) disposeSceneEntry(result);
+      if (epoch === sceneEpochRef.current) setError(err instanceof Error ? err.message : String(err));
+    } finally { operation.finish(); }
+  };
+
   const applyBackgroundAsSkybox = useCallback(() => {
     const image = findImage(backgroundImages, backgroundImageId);
     if (!image) {
@@ -3026,6 +3079,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     // 逐个网格换材质：scene.overrideMaterial 会把模型整块画没了（只留黑底），
     // 逐网格替换才能稳定出图。
     const swapped: Array<{ mesh: THREE.Mesh; material: THREE.Material | THREE.Material[] }> = [];
+    const alphaMaterials: THREE.Material[] = [];
     // 深度范围按模型自己的包围盒算：直接用 camera.near/far（0.1–1000）时，
     // 几米内的模型只占 1% 灰度，看上去就是一整张黑图。
     const bounds = new THREE.Box3();
@@ -3067,7 +3121,14 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             geometry.computeVertexNormals();
           }
           swapped.push({ mesh, material: mesh.material });
-          mesh.material = material;
+          const entry = objectsRef.current.find((item) => item.mediaKind && (item.object === mesh || item.object.children.includes(mesh)));
+          const sourceMaterial = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+          const texture = (sourceMaterial as THREE.MeshBasicMaterial)?.map;
+          if (entry?.plane && texture) {
+            const alphaMaterial = referencePlaneMaterial(material, texture, entry.plane);
+            alphaMaterials.push(alphaMaterial);
+            mesh.material = alphaMaterial;
+          } else mesh.material = material;
         }
         object.children.forEach(paint);
       };
@@ -3104,6 +3165,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       hidden.forEach((object) => {
         object.visible = true;
       });
+      alphaMaterials.forEach((temporary) => temporary.dispose());
       material.dispose();
       restoreReferencePoseHelpers();
     }
@@ -4368,6 +4430,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             )}
             {selectedId && objects.find((item) => item.id === selectedId)?.mediaKind && (
               <div className="space-y-1 rounded-md bg-white/5 px-2 py-1.5">
+                {objects.find((item) => item.id === selectedId)?.mediaKind === 'image' && (
+                  <button type="button" onClick={() => void cutoutSelected()}
+                    disabled={Boolean(busy) || !!objects.find((item) => item.id === selectedId)?.locked || !objects.find((item) => item.id === selectedId)?.object.visible}
+                    className="w-full rounded bg-emerald-500/15 px-2 py-1 text-xs text-emerald-200 disabled:opacity-40">
+                    去背景并加入独立平面
+                  </button>
+                )}
                 <label className="block text-[11px] text-white/50">
                   <span className="flex justify-between">
                     <span>平面不透明度</span>

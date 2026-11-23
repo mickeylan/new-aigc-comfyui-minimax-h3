@@ -5,6 +5,7 @@ import { captureDocumentCanvas } from "../pagedraw/utilities/exportDocument";
 import SideToolbar from "../pagedraw/components/ui/SideToolbar";
 import InpaintToolBar from "../pagedraw/components/ui/InpaintToolBar";
 import { useSceneStore } from "../pagedraw/stores/SceneState";
+import { DRAW_DOCUMENT_MAX_BYTES, exportDrawDocument, prepareDrawDocument } from './drawDocument';
 import type { LineNode } from "../pagedraw/stores/SceneState";
 import type { Node } from "../pagedraw/Node";
 import type { BaseSelectorImage } from "../pagedraw/types";
@@ -192,6 +193,41 @@ export default function PageDrawStage({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const layerInputRef = useRef<HTMLInputElement>(null);
   const opacityDirtyRef = useRef(false);
+  const projectInputRef = useRef<HTMLInputElement>(null);
+  const projectRequestRef = useRef(0);
+  const mountedRef = useRef(true);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; ++projectRequestRef.current; }; }, []);
+  const saveProject = async () => {
+    const request = ++projectRequestRef.current;
+    setBusy('正在保存2D工程…'); setError(null);
+    try {
+      const text = await exportDrawDocument(useSceneStore.getState());
+      if (!mountedRef.current || request !== projectRequestRef.current) return;
+      const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+      const link = document.createElement('a'); link.href = url;
+      link.download = `studio-draw-${Date.now()}.json`; link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setNotice('2D工程已保存为自包含文件（含底图与图片层）');
+    } catch (err) { if (mountedRef.current && request === projectRequestRef.current) setError(err instanceof Error ? err.message : String(err)); }
+    finally { if (mountedRef.current && request === projectRequestRef.current) setBusy(null); }
+  };
+  const restoreProject = async (file: File) => {
+    if (!window.confirm('恢复2D工程会替换当前画布，未保存内容将丢失。继续？')) return;
+    const request = ++projectRequestRef.current;
+    const before = useSceneStore.getState();
+    setBusy('正在校验并载入2D工程…'); setError(null);
+    try {
+      if (file.size > DRAW_DOCUMENT_MAX_BYTES) throw new Error('2D工程超过32MiB');
+      const prepared = await prepareDrawDocument(await file.text());
+      if (!mountedRef.current || request !== projectRequestRef.current) return;
+      const current = useSceneStore.getState();
+      if (current.drawNodes !== before.drawNodes || current.inpaintLineNodes !== before.inpaintLineNodes || current.baseImageInfo !== before.baseImageInfo || current.aspectRatioType !== before.aspectRatioType) throw new Error('载入期间画布已修改，未替换当前工程；请重新载入');
+      current.restorePreparedDocument(prepared);
+      setEditing3dNodeId(null); setCropMode(false); setCropRect(null);
+      setNotice('2D工程已恢复；旧2.1文件不含底图时按无底图恢复');
+    } catch (err) { if (mountedRef.current && request === projectRequestRef.current) setError(err instanceof Error ? err.message : String(err)); }
+    finally { if (mountedRef.current && request === projectRequestRef.current) setBusy(null); }
+  };
   const commitOpacity = () => {
     if (!opacityDirtyRef.current) return;
     opacityDirtyRef.current = false;
@@ -723,6 +759,12 @@ export default function PageDrawStage({
           返回
         </button>
         <span className="mr-2 text-sm font-medium">画布</span>
+        <button type="button" disabled={Boolean(busy)} onClick={() => void saveProject()}
+          className="rounded-md border border-white/10 px-3 py-1.5 text-sm disabled:opacity-40">保存工程</button>
+        <button type="button" disabled={Boolean(busy)} onClick={() => projectInputRef.current?.click()}
+          className="rounded-md border border-white/10 px-3 py-1.5 text-sm disabled:opacity-40">恢复工程</button>
+        <input ref={projectInputRef} type="file" accept=".json,application/json" aria-label="恢复2D工程文件" className="hidden"
+          onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; if (file) void restoreProject(file); }} />
         <button
           type="button"
           className="rounded-md border border-white/10 px-3 py-1.5 text-sm hover:bg-white/10"

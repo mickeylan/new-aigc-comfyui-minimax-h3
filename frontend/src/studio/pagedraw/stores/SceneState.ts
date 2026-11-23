@@ -323,6 +323,8 @@ export interface SceneState {
   baseImageInfo: BaseSelectorImage | null;
   baseImageBitmap: HTMLImageElement | null;
   setBaseImageInfo: (image: BaseSelectorImage | null) => void;
+  /** Only accepts a fully decoded document; one commit also cancels old base-image loads. */
+  restorePreparedDocument: (document: Pick<SceneState, 'drawNodes' | 'inpaintLineNodes' | 'baseImageInfo' | 'baseImageBitmap' | 'aspectRatioType' | 'brushColor' | 'brushSize' | 'eraserSize' | 'fillColor'>) => void;
 }
 
 export const generateId = (): string => {
@@ -1391,6 +1393,13 @@ export const useSceneStore = create<SceneState>((set, get, store) => ({
       default:
         return { width: 1024, height: 683 };
     }
+  },
+
+  restorePreparedDocument: (document) => {
+    ++baseImageLoadGen;
+    set({ ...document, selectedNodeIds: [], clipboard: [], history: [], historyIndex: -1,
+      historyImageNodeMap: new Map(), historyImageBundles: [], activeTool: 'select', pendingGenerations: [] });
+    get().saveState();
   },
 
   setBaseImageInfo: (image: BaseSelectorImage | null) => {
