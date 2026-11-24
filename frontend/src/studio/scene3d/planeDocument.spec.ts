@@ -7,7 +7,16 @@ const plane = (id: string, kind = "image") => ({ id, name: "same-name", kind, so
 const doc = (version = 4) => ({ version, model: { data: "Z2xi" }, camera: { position: [1, 2, 3], target: [0, 0, 0] }, objects: [], planes: [plane("a"), plane("b", "video")], skybox: { source: "data:image/png;base64,YQ==", intensity: 0.7, asEnvironment: true } });
 
 describe("3D composition layers", () => {
-  it("accepts v6 while retaining mandatory stable identities and rejecting v7", () => {
+  it('validates v7 recipe references, preserves v6 identities and rejects unknown versions', () => {
+    const current: any = { ...doc(7), planes: [], procedural: { version: 1, definitions: [{}] }, objects: [{ id: 'set', visible: true, locked: false, procedural: 0, ...transform }] };
+    expect(() => validateCompositionDocument(current)).not.toThrow();
+    for (const index of [-1, 1, .5, '0', null]) expect(() => validateCompositionDocument({ ...current, objects: [{ ...current.objects[0], procedural: index }] })).toThrow('引用');
+    expect(() => validateCompositionDocument({ ...current, version: 6 })).toThrow('旧版');
+    expect(() => validateCompositionDocument({ ...current, version: 8 })).toThrow();
+    expect(() => validateCompositionDocument({ ...current, procedural: { version: 99, definitions: [] } })).toThrow('版本');
+    expect(() => validateCompositionDocument({ ...current, objects: [current.objects[0], current.objects[0]] })).toThrow('重复');
+  });
+  it("accepts v6 while retaining mandatory stable identities and rejecting v7 without recipes", () => {
     const current = { ...doc(6), planes: [], objects: [{ id: 'actor', visible: true, locked: false, ...transform }] };
     expect(() => validateCompositionDocument(current)).not.toThrow();
     expect(() => validateCompositionDocument({ ...current, version: 7 })).toThrow();

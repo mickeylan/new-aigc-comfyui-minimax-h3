@@ -50,7 +50,7 @@ export function validateSceneSize(text: string) {
 export function validateCompositionDocument(doc: any) {
   const vector = (value: unknown, length: number) => Array.isArray(value) && value.length === length && value.every((n) => typeof n === "number" && Number.isFinite(n));
   const transform = (item: any) => item && vector(item.position, 3) && vector(item.quaternion, 4) && vector(item.scale, 3);
-  if (!doc || ![1, 2, 3, 4, 5, 6].includes(doc.version) || typeof doc.model?.data !== "string" || !doc.model.data ||
+  if (!doc || ![1, 2, 3, 4, 5, 6, 7].includes(doc.version) || typeof doc.model?.data !== "string" || !doc.model.data ||
     !vector(doc.camera?.position, 3) || !vector(doc.camera?.target, 3)) throw new Error("不是可识别的场景文件");
   if (doc.frame && !['16:9', '9:16', '1:1', '3:2', '2:3'].includes(doc.frame.aspect)) throw new Error('场景画幅无效');
   const ids = new Set<string>();
@@ -67,6 +67,11 @@ export function validateCompositionDocument(doc: any) {
   }
   for (const splat of doc.splats ?? []) {
     if (splat.contentTransform !== undefined && !transform(splat.contentTransform)) throw new Error('泼溅内容变换无效');
+  }
+  if (doc.version < 7 && (doc.procedural !== undefined || (doc.objects ?? []).some((object: any) => object.procedural !== undefined))) throw new Error('旧版场景不支持程序化配方');
+  if (doc.version === 7) {
+    if (!doc.procedural || doc.procedural.version !== 1 || !Array.isArray(doc.procedural.definitions)) throw new Error('程序化存档版本无效');
+    for (const object of doc.objects ?? []) if (object.procedural !== undefined && (!Number.isSafeInteger(object.procedural) || object.procedural < 0 || object.procedural >= doc.procedural.definitions.length)) throw new Error('布景配方引用无效');
   }
   for (const object of doc.objects ?? []) {
     validateBonePose(object.bonePose);

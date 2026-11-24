@@ -94,6 +94,8 @@ import {
   type CameraPlan,
 } from "./camera-agent.js";
 import AssetLibraryPanel from "./AssetLibraryPanel";
+import ProceduralAssetPanel from './ProceduralAssetPanel';
+import SetTemplatePanel from './SetTemplatePanel';
 import LocationGenerationPanel from "./LocationGenerationPanel";
 import { clonePosedContent, hidePoseEditorHelpers, isPoseEditorHelper } from "./posing/poseExport";
 import { ASSET_DRAG_MIME, assetKind, assetUrl, type LibraryAsset } from "./assetLibrary.js";
@@ -394,7 +396,8 @@ interface SplatDocument {
 }
 
 interface SceneDocument {
-  version: 1 | 2 | 3 | 4 | 5 | 6;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  procedural?: import('./proceduralArchive').RecipeArchive;
   frame?: { aspect: FrameAspect };
   name?: string;
   preview?: string;
@@ -415,11 +418,14 @@ interface SceneDocument {
     bonePose?: BonePoseNode | null;
     initialBonePose?: BonePoseNode | null;
     animations?: SavedAnimationClip[];
+    procedural?: number;
   }>;
   /** 高斯泼溅层；v1 存档没有这个字段。 */
   splats?: SplatDocument[];
   /** 相机关键帧序列；v3 起入库，v1/v2 存档没有这个字段。 */
   cameraKeys?: CameraKey[];
+  /** 剧本镜头表（可选）：旧存档没有这个字段，读取后不补造。 */
+  scriptShots?: import('./toonflowSets').ScriptShotPlan;
   /** 地面 A/B 落点（vias 是 0–3 个途经点，走曲线时才写）；老存档没有就按没有处理。 */
   groundPath?: { start: GroundPoint; end: GroundPoint; vias?: GroundPoint[] } | null;
   /** 角色沿 A→B 移动的计划：谁走、走多久、相机要不要跟拍。没有落点时不写。 */
@@ -712,8 +718,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [animationState, setAnimationState] = useState<'stopped' | 'playing' | 'paused'>('stopped');
   const [animationIndex, setAnimationIndex] = useState(0);
   const scrubRef = useRef<{ session: PreviewPlayhead; id?: string; pose: BonePoseNode | null } | null>(null);
+  // 逐镜走位播放期间对象被临时移动/摆骨：指纹按播放前基线计算，避免把预演当成未保存编辑。
+  const motionBaselineRef = useRef(new Map<string, { position: THREE.Vector3; quaternion: THREE.Quaternion; pose: ReturnType<typeof serializeBonePose> }>());
+  // 连续逐镜播放：rAF 推进时间轴、兜底定时器收尾、token 作废迟到的懒加载启动。
+  const shotPlaybackRef = useRef<number | null>(null);
+  const shotPlaybackTimerRef = useRef<number | null>(null);
+  const shotPlaybackTokenRef = useRef(0);
   const [previewFrame, setPreviewFrame] = useState(0);
   const stopAnimation = useCallback(() => {
+    // 作废尚未落地的逐镜播放启动（模块是懒加载的），避免停止后迟到启动。
+    shotPlaybackTokenRef.current += 1;
     if (scrubRef.current) {
       scrubRef.current.session.stop(); scrubRef.current = null; setPreviewFrame(0);
       const selected = objectsRef.current.find(e => e.id === selectedIdRef.current);
@@ -813,10 +827,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const busy = operationBusy ?? legacyBusy;
   const [error, setError] = useState<string | null>(null);
   const [locationGenerationOpen, setLocationGenerationOpen] = useState(false);
+  const [proceduralAssetsOpen, setProceduralAssetsOpen] = useState(false);
   const [status, setStatus] = useState("");
   const [lightPreset, setLightPreset] = useState<LightPresetName>("studio");
   const [material, setMaterial] = useState<MaterialSettings>(DEFAULT_MATERIAL);
   const [cameraKeys, setCameraKeys] = useState<CameraKey[]>([]);
+  /** 剧本镜头表：可选字段，随场景存档一起保存；旧存档没有时保持 null。 */
+  const [scriptShots, setScriptShots] = useState<import('./toonflowSets').ScriptShotPlan | null>(null);
   // 导出首尾帧时算出来的运镜文案：首尾帧只锚两端，中间怎么动得靠这句话写进提示词。
   const [firstLastNote, setFirstLastNote] = useState("");
   // 把运镜文案写进某一场的视频提示词：只追加，人点两次才动手（选项目/场次 + 追加）。
@@ -879,6 +896,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   // 最近一次导出的序列帧（存素材库用，避免再渲一遍）。
   const sequenceFramesRef = useRef<{ pass: ReferencePass; stamp: string; blobs: Blob[]; fps: number; projectId: number | null; frameIds: number[] } | null>(null);
   const [playingPath, setPlayingPath] = useState(false);
+  // 逐镜播放的当前镜下标与总镜数；null 表示没有在播放。
+  const [shotPlayback, setShotPlayback] = useState<{ index: number; shots: number; line: string | null } | null>(null);
   const [poseSlots, setPoseSlots] = useState<{ a: boolean; b: boolean }>({ a: false, b: false });
   const [poseBlend, setPoseBlend] = useState(0);
   const [transform, setTransform] = useState({ x: 0, y: 0, z: 0, rotateX: 0, rotateY: 0, rotateZ: 0, scale: 1, scaleX: 1, scaleY: 1, scaleZ: 1 });
@@ -916,11 +935,15 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   }, []);
 
   const documentMetaRef = useRef('');
-  documentMetaRef.current = JSON.stringify({ archiveName, frameAspect, lightPreset, skybox, skyboxName, cameraKeys, groundPoints, moverId, moveSeconds, followMover, moveAnimationIndex });
+  documentMetaRef.current = JSON.stringify({ archiveName, frameAspect, lightPreset, skybox, skyboxName, cameraKeys, scriptShots, groundPoints, moverId, moveSeconds, followMover, moveAnimationIndex });
   fingerprintRef.current = () => buildSceneFingerprint(
     { epoch: sceneEpochRef.current, meta: documentMetaRef.current },
-    objectsRef.current.map(e => ({ id: e.id, name: e.name, p: (scrubRef.current?.id === e.id ? scrubRef.current.session.position : e.object.position)?.toArray(), q: (scrubRef.current?.id === e.id ? scrubRef.current.session.quaternion : e.object.quaternion)?.toArray(), s: e.object.scale.toArray(), visible: e.object.visible, locked: !!e.locked, plane: e.plane, source: e.mediaSource, splat: e.splatUrl, pose: scrubRef.current?.id === e.id ? scrubRef.current.pose : animationRef.current?.id === e.id ? animationRef.current.pose : serializeBonePose(e.object), initial: e.initialBonePose,
-      materials: (() => { const rows: unknown[] = []; e.object.traverse(o => { if (isPoseEditorHelper(o)) return; const m = (o as THREE.Mesh).material; if (m) for (const v of Array.isArray(m) ? m : [m]) rows.push(materialRevision(v as THREE.MeshStandardMaterial)); }); return rows; })() })),
+    objectsRef.current.map(e => {
+      const scrub = scrubRef.current?.id === e.id ? scrubRef.current : null;
+      const motion = motionBaselineRef.current.get(e.id);
+      return { id: e.id, name: e.name, p: (scrub ? scrub.session.position : motion ? motion.position : e.object.position)?.toArray(), q: (scrub ? scrub.session.quaternion : motion ? motion.quaternion : e.object.quaternion)?.toArray(), s: e.object.scale.toArray(), visible: e.object.visible, locked: !!e.locked, plane: e.plane, source: e.mediaSource, splat: e.splatUrl, pose: scrub ? scrub.pose : animationRef.current?.id === e.id ? animationRef.current.pose : motion ? motion.pose : serializeBonePose(e.object), initial: e.initialBonePose,
+        materials: (() => { const rows: unknown[] = []; e.object.traverse(o => { if (isPoseEditorHelper(o)) return; const m = (o as THREE.Mesh).material; if (m) for (const v of Array.isArray(m) ? m : [m]) rows.push(materialRevision(v as THREE.MeshStandardMaterial)); }); return rows; })() };
+    }),
   );
   if (cleanOnRenderRef.current) { const fresh = fingerprintRef.current(); saveGuardRef.current.markSaved(fresh.full(), fresh); cleanOnRenderRef.current = false; }
   useEffect(() => {
@@ -2260,6 +2283,168 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     cameraPathRef.current = requestAnimationFrame(step);
   }, [cameraKeys, followMover, groundPoints, moveSeconds, moverId, moveAnimationIndex, busy]);
 
+  /**
+   * 连续逐镜播放：按已确认镜头表的时间轴，在现有视口里切换人工记录的机位，
+   * 并对每一镜人工绑定的角色走位/骨骼 clip 做确定性采样。走位是平地直线 XZ 位移，
+   * 不做地形或障碍避让；停止或结束时把机位、角色位置与骨姿还原到播放前。
+   */
+  const playScriptShots = useCallback(async (plan: import('./toonflowSets').ScriptShotPlan) => {
+    if (busy) return;
+    stopAnimation();
+    const token = ++shotPlaybackTokenRef.current;
+    const epoch = sceneEpochRef.current;
+    let module: typeof import('./toonflowSets');
+    let ready: import('./toonflowSets').ScriptShotPlan;
+    try {
+      // 保持 toonflowSets 懒加载：静态 import 会把整套素材塞进主视口包。
+      module = await import('./toonflowSets');
+      // 机位就绪后，再用当前场景的真实对象校验走位目标：存在、可见、未锁定、clip 仍匹配。
+      ready = module.assertScriptShotMotionTargets(module.assertScriptShotPlaybackReady(plan), objectsRef.current.map(entry => ({
+        id: entry.id, name: entry.name, visible: entry.object.visible, locked: !!entry.locked,
+        animations: entry.object.animations.map((clip, index) => ({ index, name: clip.name, duration: clip.duration })),
+      })));
+    } catch (cause) {
+      if (token === shotPlaybackTokenRef.current) setError(cause instanceof Error ? cause.message : String(cause));
+      return;
+    }
+    if (token !== shotPlaybackTokenRef.current || epoch !== sceneEpochRef.current || busy) return;
+    const camera = cameraRef.current; const controls = controlsRef.current;
+    if (!camera || !controls) { setError('视口尚未就绪，无法连续逐镜播放'); return; }
+    const total = ready.shots[ready.shots.length - 1]!.end;
+    const session = new PreviewPlayhead(camera, controls);
+    const started = performance.now();
+    let finished = false;
+    let lastIndex = -1;
+    let lastLine: string | null = null;
+    let activeTargets = new Set<string>();
+    // 播放期间角色被临时移动/摆骨：记录播放前基线，供停止还原和场景指纹遮罩共用。
+    const actors = new Map<string, { entry: SceneObjectEntry; position: THREE.Vector3; quaternion: THREE.Quaternion; pose: ReturnType<typeof serializeBonePose>; preview: AnimationPreview | null; previewKey: string }>();
+    const actorAt = (targetId: string) => {
+      const existing = actors.get(targetId);
+      if (existing) return existing;
+      const entry = objectsRef.current.find(item => item.id === targetId);
+      if (!entry) throw new Error(`走位目标 ${targetId} 已不在场景中，播放已停止`);
+      const actor = {
+        entry, position: entry.object.position.clone(), quaternion: entry.object.quaternion.clone(),
+        pose: serializeBonePose(entry.object), preview: null as AnimationPreview | null, previewKey: '',
+      };
+      actors.set(targetId, actor);
+      motionBaselineRef.current.set(targetId, { position: actor.position, quaternion: actor.quaternion, pose: actor.pose });
+      return actor;
+    };
+    const endPreview = (targetId: string) => {
+      const actor = actors.get(targetId);
+      if (!actor?.preview) return;
+      actor.preview.stop(); actor.preview = null; actor.previewKey = '';
+    };
+    const restoreActors = () => {
+      // 场景已替换时不要动新场景里的同名对象。
+      if (epoch === sceneEpochRef.current) {
+        for (const actor of actors.values()) {
+          actor.preview?.stop();
+          actor.preview = null;
+          if (!objectsRef.current.includes(actor.entry)) continue;
+          actor.entry.object.position.copy(actor.position);
+          actor.entry.object.quaternion.copy(actor.quaternion);
+          actor.entry.object.updateMatrixWorld(true);
+        }
+      }
+      for (const targetId of actors.keys()) motionBaselineRef.current.delete(targetId);
+      actors.clear();
+    };
+    const applyMotion = (sample: import('./toonflowSets').ScriptShotMotionSample) => {
+      const entry = objectsRef.current.find(item => item.id === sample.targetId);
+      if (!entry || !canMoveEntry(entry)) throw new Error(`第 ${sample.order} 镜的走位目标「${sample.targetName}」已隐藏、锁定或删除，播放已停止`);
+      const actor = actorAt(sample.targetId);
+      // 只改 XZ 与朝向；Y 跟随对象原高度，不做地形抬升。
+      entry.object.position.x = sample.position.x;
+      entry.object.position.z = sample.position.z;
+      entry.object.rotation.y = sample.yaw;
+      if (sample.animation) {
+        const clip = entry.object.animations[sample.animation.index];
+        if (!clip || clip.name !== sample.animation.name || clip.duration !== sample.animation.duration) {
+          throw new Error(`第 ${sample.order} 镜的骨骼动作「${sample.animation.name}」已变化，播放已停止`);
+        }
+        const key = `${sample.animation.index}\u0000${sample.animation.name}\u0000${sample.animation.duration}`;
+        if (actor.previewKey !== key) {
+          actor.preview?.stop();
+          actor.preview = new AnimationPreview(entry.object, clip);
+          actor.previewKey = key;
+        }
+        // 采样到 clip 末尾时留 0.1ms 余量，避免 LoopRepeat 正好回绕到第 0 帧。
+        actor.preview?.sampleAt(Math.min(sample.animationSeconds, Math.max(0, sample.animation.duration - 1e-4)));
+      } else endPreview(sample.targetId);
+      entry.object.updateMatrixWorld(true);
+    };
+    // 收尾只走这一条：清 rAF/兜底定时器，再由 PreviewPlayhead 还原机位、把角色与骨姿还原到基线。
+    const finish = (message: string) => {
+      if (finished) return;
+      finished = true;
+      if (cancelCameraPreviewRef.current === cancelPlayback) cancelCameraPreviewRef.current = null;
+      if (shotPlaybackRef.current !== null) {
+        cancelAnimationFrame(shotPlaybackRef.current);
+        shotPlaybackRef.current = null;
+      }
+      if (shotPlaybackTimerRef.current !== null) {
+        window.clearTimeout(shotPlaybackTimerRef.current);
+        shotPlaybackTimerRef.current = null;
+      }
+      session.stop();
+      restoreActors();
+      setShotPlayback(null);
+      setStatus(message);
+    };
+    const cancelPlayback = () => finish('已停止连续逐镜播放，视口机位、角色位置与骨姿已还原');
+    cancelCameraPreviewRef.current = cancelPlayback;
+    setShotPlayback({ index: 0, shots: ready.shots.length, line: null });
+    setStatus(`开始连续逐镜播放：${ready.shots.length} 镜 · ${total.toFixed(2)} 秒（人工机位 ${ready.shots.length} 镜 · 人工走位 ${ready.shots.filter(shot => shot.motion).length} 镜；平地直线，不避障）`);
+    // 大兜底：rAF 被节流或挂起时也保证不会永久停在播放中。
+    shotPlaybackTimerRef.current = window.setTimeout(() => finish('连续逐镜播放结束，视口机位、角色位置与骨姿已还原'), total * 1000 + 80);
+    const step = () => {
+      if (finished) return;
+      if (epoch !== sceneEpochRef.current) { finish('场景已替换，连续逐镜播放已停止'); return; }
+      let sample: import('./toonflowSets').ScriptShotPlaybackSample;
+      try {
+        sample = module.sampleScriptShotPlayback(ready, (performance.now() - started) / 1000);
+        // 镜次边界前把上一镜走位补到终点，避免因帧落在边界后而少走最后几厘米。
+        if (sample.index !== lastIndex && lastIndex >= 0) {
+          const previous = ready.shots[lastIndex];
+          if (previous?.motion) {
+            const endpoint = module.sampleScriptShotMotionAt(previous, previous.end);
+            if (endpoint) applyMotion(endpoint);
+          }
+        }
+        const nextTargets = new Set<string>();
+        if (sample.motion) { applyMotion(sample.motion); nextTargets.add(sample.motion.targetId); }
+        // 下一镜没有该角色的走位时，结束它的骨骼动作但保留已经走到的位置。
+        for (const targetId of activeTargets) if (!nextTargets.has(targetId)) endPreview(targetId);
+        activeTargets = nextTargets;
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+        finish('连续逐镜播放失败，视口机位、角色位置与骨姿已还原');
+        return;
+      }
+      const shotIndex = lastIndex;
+      if (sample.index !== lastIndex) {
+        lastIndex = sample.index;
+        // 边界处直接切机位，不插值、不借用上一镜的构图。
+        session.sample(sample.seconds, total, () => {
+          camera.position.set(...sample.camera.position);
+          camera.fov = sample.camera.fov; camera.updateProjectionMatrix();
+          controls.target.set(...sample.camera.target); controls.update();
+        });
+      }
+      const line = sample.line ? `${sample.line.speaker}：${sample.line.line || '（无台词）'}` : null;
+      if (line !== lastLine || sample.index !== shotIndex) {
+        lastLine = line;
+        setShotPlayback({ index: sample.index, shots: ready.shots.length, line });
+      }
+      if (sample.seconds >= total) { finish(`连续逐镜播放结束：${ready.shots.length} 镜，视口机位、角色位置与骨姿已还原`); return; }
+      shotPlaybackRef.current = requestAnimationFrame(step);
+    };
+    shotPlaybackRef.current = requestAnimationFrame(step);
+  }, [busy, stopAnimation]);
+
   // Session-only random access. Configuration edits invalidate the captured baseline.
   useEffect(() => { if (scrubRef.current) stopAnimation(); }, [cameraKeys, groundPoints, moverId, moveSeconds, followMover, moveAnimationIndex, stopAnimation]);
   const scrubMover = objectsRef.current.find(e => e.id === moverId && canMoveEntry(e));
@@ -2607,7 +2792,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   }, []);
 
   // 场景存档与 GLB 导出共用同一份几何导出逻辑：只打包用户模型，辅助线与灯光不落盘。
-  const exportGeometry = useCallback(async (options: { flattenTransforms?: boolean } = {}) => {
+  const exportGeometry = useCallback(async (options: { flattenTransforms?: boolean; recipeIds?: ReadonlySet<string> } = {}) => {
     stopAnimation();
     // Export a Scene, not a Group: a Group becomes an extra glTF node and breaks object-ID matching on reload.
     const root = new THREE.Scene();
@@ -2616,6 +2801,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       if (!isExportablePlane(entry.mediaKind ?? "image")) return;
       // 高斯泼溅也进不了 glTF：Spark 的 SplatMesh 不是普通几何体，场景存档另有 splats 字段。
       if (entry.splat) return;
+      if (options.recipeIds?.has(entry.id)) return;
       if (options.flattenTransforms && entry.mediaKind) return;
       const clone = clonePosedContent(entry.object);
       if (options.flattenTransforms) {
@@ -2825,7 +3011,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     {
       const before = fingerprintRef.current().full();
       const epoch = sceneEpochRef.current;
-      const binary = await exportGeometry({ flattenTransforms: true });
+      const recipeModule = objectsRef.current.some(entry => entry.object.userData.proceduralSource?.generator === 'toonflow-set') ? await import('./proceduralArchive') : null;
+      const recipes = recipeModule?.createRecipeArchive(objectsRef.current);
+      if (recipes) recipeModule!.validateRecipeArchive(recipes.archive);
+      const binary = await exportGeometry({ flattenTransforms: true, recipeIds: new Set(recipes?.references.keys()) });
       // 泼溅不在 GLB 里，得先把 .spz 字节取回来内嵌；取不到就整体失败，
       // 否则用户会得到一个默默丢了泼溅层的存档。
       const splats: SplatDocument[] = [];
@@ -2856,7 +3045,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               animation: saveMoveAnimation(moverEntry.object.animations, moveAnimationIndex) }
           : null;
       const doc: SceneDocument = {
-        version: 6,
+        version: recipes?.references.size ? 7 : 6,
+        ...(recipes?.references.size ? { procedural: recipes.archive } : {}),
         name: archiveName.trim(),
         frame: { aspect: frameRef.current },
         planes: objectsRef.current.filter((entry) => entry.mediaKind).map((entry) => {
@@ -2886,6 +3076,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             bonePose: serializeBonePose(entry.object),
             initialBonePose: entry.initialBonePose ?? null,
             animations: saveAnimationClips(entry.object),
+            ...(recipes?.references.has(entry.id) ? { procedural: recipes.references.get(entry.id) } : {}),
           })),
         splats,
         // 机位序列以前只活在内存里，刷新就没；v3 起跟场景一起存。
@@ -2899,6 +3090,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           easing: normalizeCameraEasing(key.easing),
           fov: normalizeCameraFov(key.fov),
         })),
+        // 镜头表是可选的：没有计划时不写字段，旧读取路径不受影响。
+        ...(scriptShots ? { scriptShots } : {}),
         model: {
           name: objectsRef.current.map((entry) => entry.name).join("+") || "scene",
           data: arrayBufferToBase64(binary),
@@ -2909,7 +3102,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       validateSceneSize(JSON.stringify(doc));
       return doc;
     }
-  }, [cameraKeys, exportGeometry, followMover, groundPoints, lightPreset, moveSeconds, moverId, moveAnimationIndex, skybox, skyboxName, archiveName]);
+  }, [cameraKeys, exportGeometry, followMover, groundPoints, lightPreset, moveSeconds, moverId, moveAnimationIndex, skybox, skyboxName, archiveName, scriptShots]);
 
   const saveScene = useCallback(async () => {
     if (objectsRef.current.length === 0) return;
@@ -3005,10 +3198,14 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         const doc = JSON.parse(text) as SceneDocument;
         validateCompositionDocument(doc);
         // v1 是没泼溅层的老存档、v2 多了泼溅层，都仍然要能读；v3 多了机位序列。
-        if ((doc.version !== 1 && doc.version !== 2 && doc.version !== 3 && doc.version !== 4 && doc.version !== 5 && doc.version !== 6) || !doc.model?.data) {
+        if ((doc.version !== 1 && doc.version !== 2 && doc.version !== 3 && doc.version !== 4 && doc.version !== 5 && doc.version !== 6 && doc.version !== 7) || !doc.model?.data) {
           throw new Error("不是可识别的场景文件");
         }
         validateSceneSize(text);
+        // 镜头表是可选字段：老存档没有就保持 null；有但不认识的版本/结构直接失败，不替换当前场景。
+        const restoredShots = doc.scriptShots === undefined ? null : (await import('./toonflowSets')).validateScriptShotPlan(doc.scriptShots);
+        const recipeModule = doc.version === 7 ? await import('./proceduralArchive') : null;
+        if (recipeModule) recipeModule.validateRecipeArchive(doc.procedural);
         const gltf = await new GLTFLoader().parseAsync(base64ToArrayBuffer(doc.model.data), "");
         pending.push({ id: "pending-geometry", name: doc.model.name, object: gltf.scene });
         const restoredPlanes: SceneObjectEntry[] = [];
@@ -3032,7 +3229,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         // 导出时每个对象都是带自身变换的顶层节点，直接接管为场景对象，
         // 不再套一层空 Group，否则面板读到的是那层空壳的 0 变换。
         const imported = gltf.scene.children.slice();
-        if (doc.version === 6 && (imported.length !== doc.objects?.length || new Set(imported.map(child => child.userData.sceneDocumentId)).size !== imported.length || imported.some(child => !doc.objects.some(item => item.id === child.userData.sceneDocumentId)))) {
+        const geometryObjects = doc.objects?.filter(item => item.procedural === undefined);
+        if (doc.version >= 6 && (imported.length !== geometryObjects?.length || new Set(imported.map(child => child.userData.sceneDocumentId)).size !== imported.length || imported.some(child => !geometryObjects.some(item => item.id === child.userData.sceneDocumentId)))) {
           throw new Error('对象动作归属与场景几何不兼容，场景未替换');
         }
         const entries: SceneObjectEntry[] = imported.map((child, index) => {
@@ -3063,6 +3261,18 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           return entry;
         });
         gltf.scene.clear(); // Keep unprocessed children owned by pending geometry until all bindings validate.
+        if (recipeModule && doc.procedural) {
+          for (const saved of doc.objects.filter(item => item.procedural !== undefined)) {
+            if (saved.animations?.length || saved.bonePose || saved.initialBonePose) throw new Error('程序化布景不支持骨骼资源，请保留GLB');
+            const object = recipeModule.restoreRecipeObject(doc.procedural, saved.procedural!);
+            const entry: SceneObjectEntry = { id: saved.id!, name: saved.name, locked: saved.locked, object };
+            pending.push(entry);
+            object.position.fromArray(saved.position); object.quaternion.fromArray(saved.quaternion); object.scale.fromArray(saved.scale); object.visible = saved.visible!;
+            entries.push(entry);
+          }
+          const order = new Map(doc.objects.map((item, index) => [item.id, index]));
+          entries.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
+        }
         // 泼溅层：存档里自带 .spz 字节，解成 blob URL 重新交给 Spark，
         // 这样存档不依赖 ComfyUI output 或素材库文件还在不在。
         const splatEntries: SceneObjectEntry[] = [];
@@ -3170,6 +3380,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           camera.updateProjectionMatrix();
           controls.update();
         }
+        setScriptShots(restoredShots);
         frameRef.current = doc.frame?.aspect ?? '16:9'; setFrameAspect(frameRef.current); resizeFrameRef.current();
         setFocal(focalFromFov(cameraRef.current?.fov ?? 45)); setArchiveName(doc.name ?? '');
         setLocationGenerationOpen(false);
@@ -3847,6 +4058,106 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   );
 
   /**
+   * 逐镜有序参考包：按已确认镜头表的镜序，在每镜开始秒数用人工记录的机位渲白模/法线/深度三张 PNG，
+   * 与 manifest.json 一起打成一个 zip 本地下载。清单先整份算好；缺机位、取图失败或场景被替换都整包放弃，
+   * 不下载半份。结束后把视口还原到导出前机位。不编码视频、不上传素材库、不写业务库。
+   */
+  const exportShotReferencePack = useCallback(
+    async (plan: import('./toonflowSets').ScriptShotPlan) => {
+      if (busy) return false;
+      stopAnimation();
+      const camera = cameraRef.current as THREE.PerspectiveCamera | null;
+      const controls = controlsRef.current;
+      if (!camera || !controls) { setError('视口尚未就绪，无法导出逐镜参考包'); return false; }
+      const epoch = sceneEpochRef.current;
+      let module: typeof import('./toonflowSets');
+      let pack: import('./toonflowSets').ScriptReferencePack & { exportedSceneFingerprint?: string; scope?: string };
+      const sourceState = fingerprintRef.current().full();
+      const assertSource = () => {
+        if (epoch !== sceneEpochRef.current || sourceState !== fingerprintRef.current().full()) throw new Error('导出期间场景发生变化，已放弃整包，请重新核对后导出');
+      };
+      try {
+        // 保持 toonflowSets 懒加载：静态 import 会把整套素材塞进主视口包。
+        module = await import('./toonflowSets');
+        if (objectsRef.current.some(entry => entry.splat || entry.mediaKind === 'video')) throw new Error('逐镜参考包暂不支持包含泼溅或视频平面的场景：不能省略或使用未同步画面，请先显式移除后导出');
+        pack = { ...module.buildScriptShotReferencePack(plan, { now: new Date() }), exportedSceneFingerprint: module.scriptFingerprint(sourceState), scope: 'static-mesh-reference-passes' };
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+        return false;
+      }
+      if (epoch !== sceneEpochRef.current || busy) { setError('场景已替换，已停止导出逐镜参考包'); return false; }
+      const savedPosition = camera.position.clone();
+      const savedTarget = controls.target.clone();
+      const savedQuaternion = camera.quaternion.clone();
+      const savedFov = camera.fov;
+      const savedEnabled = controls.enabled;
+      const savedDamping = controls.enableDamping;
+      const total = pack.shots.length;
+      const operation = operationsRef.current.start(`${REFERENCE_BUSY_PREFIX}（逐镜参考包 0/${total} 镜）…`);
+      setBusy(`${REFERENCE_BUSY_PREFIX}（逐镜参考包 0/${total} 镜）…`);
+      setError(null);
+      const entries: Array<{ name: string; data: Uint8Array }> = [];
+      try {
+        controls.enabled = false;
+        controls.enableDamping = false;
+        controls.update();
+        for (let index = 0; index < total; index += 1) {
+          const shot = pack.shots[index]!;
+          assertSource();
+          // 采样时刻来自清单（本镜开始秒数），不读实时播放头，也不在镜间插值。
+          camera.position.set(...shot.camera.position);
+          if (Math.abs(camera.fov - shot.camera.fov) > 1e-4) { camera.fov = shot.camera.fov; camera.updateProjectionMatrix(); }
+          controls.target.set(...shot.camera.target);
+          controls.update();
+          for (const file of shot.files) {
+            const frame = await captureReference(file.pass);
+            if (!frame) throw new Error(`第 ${shot.order} 镜的${file.pass}参考图没有取到`);
+            assertSource();
+            const data = new Uint8Array(await frame.blob.arrayBuffer());
+            assertSource();
+            entries.push({ name: file.name, data });
+          }
+          const progress = `${REFERENCE_BUSY_PREFIX}（逐镜参考包 ${index + 1}/${total} 镜）…`;
+          operation.update(progress);
+          setBusy(progress);
+        }
+        if (entries.length !== total * pack.passes.length) throw new Error('参考包张数与清单不一致，已放弃导出');
+        assertSource();
+        entries.push({ name: pack.manifestFile, data: new TextEncoder().encode(module.scriptShotReferenceManifestText(pack)) });
+        const zip = createStoreZip(entries);
+        const url = URL.createObjectURL(new Blob([zip], { type: "application/zip" }));
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${pack.sceneId}-shot-reference-pack-${total}shots.zip`;
+        link.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+        setStatus(
+          `已导出逐镜参考包：${total} 镜 × ${pack.passes.length} 张 + manifest.json（${Math.max(1, Math.round(zip.byteLength / 1024))} KB）；仅本地下载，未存素材库、未提交生成。`,
+        );
+        return true;
+      } catch (err) {
+        // 半成品不落地：entries 只有在全部取图成功后才打包下载。
+        setError(err instanceof Error ? err.message : String(err));
+        return false;
+      } finally {
+        if (epoch === sceneEpochRef.current) {
+          camera.position.copy(savedPosition);
+          controls.target.copy(savedTarget);
+          if (Math.abs(camera.fov - savedFov) > 1e-4) { camera.fov = savedFov; camera.updateProjectionMatrix(); }
+          controls.update();
+          camera.position.copy(savedPosition); controls.target.copy(savedTarget);
+          camera.quaternion.copy(savedQuaternion); camera.updateMatrixWorld(true);
+          controls.enabled = savedEnabled;
+          controls.enableDamping = savedDamping;
+        }
+        operation.finish();
+        setBusy((current) => (current && current.startsWith(REFERENCE_BUSY_PREFIX) ? null : current));
+      }
+    },
+    [busy, captureReference, stopAnimation],
+  );
+
+  /**
    * 把刚导出的那张参考图存进素材库（POST /api/materials，type=image）。
    * 用途：白模/深度图当视频生成的参考底图，存进库就能在其他页面复用。
    */
@@ -4004,10 +4315,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     step();
   }, [groundPoints, moveSeconds, moverId, moveAnimationIndex, busy, playingPath, syncObjects]);
 
-  // 卸载时别留 rAF。
+  // 卸载时别留 rAF 或逐镜播放定时器；同时作废尚未落地的懒加载启动。
   useEffect(
     () => () => {
       if (moveRafRef.current !== null) cancelAnimationFrame(moveRafRef.current);
+      if (shotPlaybackRef.current !== null) cancelAnimationFrame(shotPlaybackRef.current);
+      if (shotPlaybackTimerRef.current !== null) window.clearTimeout(shotPlaybackTimerRef.current);
+      shotPlaybackTokenRef.current += 1;
     },
     [],
   );
@@ -4509,6 +4823,61 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             onPlace={(asset) => void loadLibraryAsset(asset)}
             onError={(message) => setError(message)}
           />
+          <details className="mt-2 border-t border-white/10 pt-2" onToggle={event => setProceduralAssetsOpen(event.currentTarget.open)}>
+            <summary className="cursor-pointer text-xs">本地程序化素材</summary>
+            {proceduralAssetsOpen && <>
+              <ProceduralAssetPanel disabled={Boolean(busy)} onAdd={(object, name) => {
+                const entry = addObject(object, name);
+                if (!entry) disposeSceneEntry({ id: '', name, object });
+              }} />
+              <SetTemplatePanel disabled={Boolean(busy)} onApply={(draft, entries, x, z) => {
+                const scene = sceneRef.current;
+                if (!scene) throw new Error('场景尚未就绪，请重试');
+                const ids = new Set(objectsRef.current.map(entry => entry.id));
+                if (entries.some(entry => ids.has(entry.id)) || new Set(entries.map(entry => entry.id)).size !== entries.length) throw new Error('布景实例身份冲突，请重新生成草稿');
+                stopAnimation();
+                const empty = objectsRef.current.length === 0;
+                entries.forEach(entry => { entry.object.position.x += x; entry.object.position.z += z; });
+                historyRef.current.checkpoint(objectsRef.current);
+                entries.forEach(entry => scene.add(entry.object));
+                objectsRef.current = [...objectsRef.current, ...entries];
+                historyRef.current.collect(objectsRef.current);
+                syncObjects();
+                if (empty && cameraRef.current && controlsRef.current) {
+                  const view = draft.document.view;
+                  cameraRef.current.position.set(view.position.x + x, view.position.y, view.position.z + z);
+                  cameraRef.current.fov = view.fov ?? 45; cameraRef.current.updateProjectionMatrix();
+                  controlsRef.current.target.set(view.target.x + x, view.target.y, view.target.z + z);
+                  controlsRef.current.update();
+                }
+                selectObject(entries[0]?.id ?? null);
+                setStatus(`已追加 ${draft.name}：${entries.length} 个可编辑实例（静态布景）`);
+              }} onCaptureCamera={() => {
+                const camera = cameraRef.current; const controls = controlsRef.current;
+                if (!camera || !controls) throw new Error('视口尚未就绪，无法记录机位');
+                return { position: camera.position.toArray() as [number, number, number], target: controls.target.toArray() as [number, number, number], fov: camera.fov };
+              }} onPreviewShot={(shotCamera) => {
+                const camera = cameraRef.current; const controls = controlsRef.current;
+                if (!camera || !controls) throw new Error('视口尚未就绪，无法预览机位');
+                // 复用现有视口相机与 OrbitControls，不新建预览器；这只是取景预览，不是成片渲染。
+                stopAnimation();
+                camera.position.set(...shotCamera.position);
+                camera.fov = shotCamera.fov; camera.updateProjectionMatrix();
+                controls.target.set(...shotCamera.target); controls.update();
+                setStatus('已用视口相机预览镜头机位（取景预览，未渲染序列）');
+              }} onApplyShots={(plan) => {
+                // 换计划前还原旧播放，避免界面台词与仍在播放的旧机位错配。
+                stopAnimation();
+                // 只把已确认的镜头表接入场景状态，随现有存档保存；不改对象、不触发生成。
+                setScriptShots(plan);
+                setStatus(`已接入镜头表：${plan.shots.length} 镜 · ${plan.shots[plan.shots.length - 1]!.end.toFixed(2)} 秒（未指定机位 ${plan.shots.filter(shot => !shot.camera).length} 镜），保存场景后随存档保留`);
+              }} appliedPlan={scriptShots} shotPlayback={shotPlayback} onPlayShots={(plan) => { void playScriptShots(plan); }} onStopShots={stopAnimation} onExportShotPack={exportShotReferencePack}
+                listMotionTargets={() => objectsRef.current.map(entry => ({
+                  id: entry.id, name: entry.name, visible: entry.object.visible, locked: !!entry.locked,
+                  animations: entry.object.animations.map((clip, index) => ({ index, name: clip.name, duration: clip.duration })),
+                }))} />
+            </>}
+          </details>
         </div>
       </div>
 
