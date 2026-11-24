@@ -91,7 +91,8 @@ test('行进朝向按 +Z 为 0 计算：走 +X 转 90°、走 -Z 转 180°', () 
 test('序列总时长取相机路径与角色移动里较长的一条，帧数随之变', () => {
   // 相机 2 段各 1.6s = 3.2s；角色 5s → 按 5s 出帧
   assert.match(stage, /const seconds = Math\.max\(cameraPathDuration\(cameraKeys\), moverSeconds \?\? 0\);/)
-  assert.match(stage, /frames: Math\.min\(SEQUENCE_MAX_FRAMES, Math\.max\(1, Math\.round\(seconds \* fps\)\)\),/)
+  assert.match(stage, /return sequenceTiming\(seconds, fps, SEQUENCE_MAX_FRAMES\);/)
+  assert.match(stage, /if \(plan\.exceedsLimit\)/)
   assert.match(stage, /const plan = sequencePlan\(cameraKeys, moverSeconds, fps\);/)
   // 移动时长有上下限，别让 0.01 秒或 1 小时把帧数算爆
   assert.match(stage, /const MOVE_SECONDS_LIMITS = \{ min: 0\.5, max: 30 \};/)
@@ -100,7 +101,8 @@ test('序列总时长取相机路径与角色移动里较长的一条，帧数�
 
 test('导出序列时逐帧推角色、结束还原，预览走同一个取样函数', () => {
   // 进度 = 帧时间 / 移动时长，超出停在 B
-  assert.match(stage, /const progress = Math\.min\(1, index \/ fps \/ moverSeconds\);/)
+  assert.match(stage, /const sampleTime = sequenceSampleTime\(index, frames, plan\.seconds, fps\);/)
+  assert.match(stage, /const progress = Math\.min\(1, sampleTime \/ moverSeconds\);/)
   assert.match(stage, /mover\.object\.position\.set\(\.\.\.groundPathPointAt\(path, progress\)\);/)
   // 朝向也按当前进度取切线（有途经点时是一条曲线，不能用固定朝向）
   assert.match(stage, /mover\.object\.rotation\.y = groundPathYaw\(path, progress\);/)

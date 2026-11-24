@@ -3063,7 +3063,18 @@ func (s *Service) HandleComposeSequenceVideo(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "参数格式错误：需要 pass / stamp / fps"})
 		return
 	}
-	mat, err := s.Materials.ComposeSequenceVideo(nil, req)
+	if req.ProjectID != nil {
+		if *req.ProjectID == 0 {
+			c.JSON(400, gin.H{"error": "project_id 必须为正整数或null"})
+			return
+		}
+		var project models.Project
+		if err := s.DB.First(&project, *req.ProjectID).Error; err != nil {
+			c.JSON(400, gin.H{"error": "项目不存在"})
+			return
+		}
+	}
+	mat, err := s.Materials.ComposeSequenceVideo(req.ProjectID, req)
 	if err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return

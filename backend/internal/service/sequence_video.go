@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"comfyui-console/internal/models"
+	"github.com/google/uuid"
 )
 
 // 3D 编辑器导出的参考图序列（白模/法线/深度各一组，同一次导出的帧共用文件名里的时间戳）
@@ -27,17 +28,19 @@ const (
 )
 
 // clay-seq-20261122-174038-007.png → pass=clay stamp=20261122-174038 index=007
-var sequenceFrameNamePattern = regexp.MustCompile(`^([a-z]+)-seq-(\d{8}-\d{6})-(\d{3})\.png$`)
+var sequenceFrameNamePattern = regexp.MustCompile(`^([a-z]+)-seq-(\d{8}-\d{6}(?:-[a-f0-9]{32})?)-(\d{3})\.png$`)
 
-var sequenceStampPattern = regexp.MustCompile(`^\d{8}-\d{6}$`)
+var sequenceStampPattern = regexp.MustCompile(`^\d{8}-\d{6}(?:-[a-f0-9]{32})?$`)
 
 var sequencePasses = map[string]bool{"clay": true, "normal": true, "depth": true, "ref": true}
 
 // SequenceVideoRequest 把素材库里的一组序列帧合成 mp4。
 type SequenceVideoRequest struct {
-	Pass  string `json:"pass"`  // clay / normal / depth / ref
-	Stamp string `json:"stamp"` // 20261122-174038，和帧文件名里的一致
-	FPS   int    `json:"fps"`   // 缺省 8，1–30
+	Pass      string `json:"pass"`  // clay / normal / depth / ref
+	Stamp     string `json:"stamp"` // 20261122-174038，和帧文件名里的一致
+	FPS       int    `json:"fps"`   // 缺省 8，1–30
+	ProjectID *uint  `json:"project_id"`
+	FrameIDs  []uint `json:"frame_ids"` // Exact upload identities, not a global filename search.
 }
 
 // normalizeSequencePass 只认 3D 编辑器导出的那几种 pass，避免拿任意文件名拼路径。
@@ -132,8 +135,30 @@ func (m *MaterialService) ComposeSequenceVideo(projectID *uint, req SequenceVide
 
 	var rows []models.Material
 	prefix := fmt.Sprintf("%s-seq-%s-", pass, stamp)
-	if err := m.db.Where("type = ? AND name LIKE ?", "image", prefix+"%").Order("name ASC").Find(&rows).Error; err != nil {
+	query := m.db.Where("type = ? AND name LIKE ?", "image", prefix+"%")
+	if projectID == nil {
+		query = query.Where("project_id IS NULL")
+	} else {
+		query = query.Where("project_id = ?", *projectID)
+	}
+	if len(req.FrameIDs) > 0 {
+		if len(req.FrameIDs) > sequenceVideoMaxFrames {
+			return nil, fmt.Errorf("序列帧ID超过上限")
+		}
+		seen := map[uint]bool{}
+		for _, id := range req.FrameIDs {
+			if id == 0 || seen[id] {
+				return nil, fmt.Errorf("序列帧ID无效或重复")
+			}
+			seen[id] = true
+		}
+		query = query.Where("id IN ?", req.FrameIDs)
+	}
+	if err := query.Order("name ASC").Find(&rows).Error; err != nil {
 		return nil, err
+	}
+	if len(req.FrameIDs) > 0 && len(rows) != len(req.FrameIDs) {
+		return nil, fmt.Errorf("序列帧缺失或不属于当前项目/批次")
 	}
 	names := make([]string, 0, len(rows))
 	for _, row := range rows {
@@ -148,10 +173,28 @@ func (m *MaterialService) ComposeSequenceVideo(projectID *uint, req SequenceVide
 		return nil, fmt.Errorf("远程 ComfyUI 模式下暂不支持本机合成序列视频，请在本机模式使用")
 	}
 	root := m.upload.InputDir()
-	dir := filepath.Dir(filepath.Join(root, filepath.FromSlash(rows[0].Path)))
+	// Stage only selected records in a private directory; never read adjacent session frames.
+	dir, err := os.MkdirTemp("", "seqframes-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	byName := map[string]models.Material{}
+	for _, row := range rows {
+		byName[row.Name] = row
+	}
 	for _, name := range ordered {
-		if _, statErr := os.Stat(filepath.Join(dir, name)); statErr != nil {
+		source := filepath.Join(root, filepath.FromSlash(byName[name].Path))
+		rel, relErr := filepath.Rel(root, source)
+		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("序列帧路径越界")
+		}
+		data, readErr := os.ReadFile(source)
+		if readErr != nil {
 			return nil, fmt.Errorf("序列帧不在本机磁盘上: %s", name)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+			return nil, err
 		}
 	}
 
@@ -180,9 +223,8 @@ func (m *MaterialService) ComposeSequenceVideo(projectID *uint, req SequenceVide
 	return m.SaveStudioSequenceVideo(projectID, outName, data)
 }
 
-// SaveStudioSequenceVideo 3D 编辑器合成的序列视频入库：同名重复合成只留一条记录，
-// 文件同路径覆盖（素材库删记录时按路径清理，不会残留多份）。
+// SaveStudioSequenceVideo keeps each result immutable; never delete another session's video by name.
 func (m *MaterialService) SaveStudioSequenceVideo(projectID *uint, name string, data []byte) (*models.Material, error) {
-	m.db.Where("name = ? AND type = ?", name, "video").Delete(&models.Material{})
+	name = strings.TrimSuffix(name, ".mp4") + "-" + strings.ReplaceAll(uuid.NewString(), "-", "") + ".mp4"
 	return m.saveUpload(projectID, "video", name, data, "", nil, "studio_3d")
 }

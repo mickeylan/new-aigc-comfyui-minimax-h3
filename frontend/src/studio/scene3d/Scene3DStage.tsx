@@ -7,7 +7,8 @@ import {
   type DragEvent,
 } from "react";
 import * as THREE from "three";
-import { SceneOperations, SceneSaveGuard, canMoveEntry, materialRevision } from './sceneSafety';
+import { SceneOperations, SceneSaveGuard, buildSceneFingerprint, canMoveEntry, materialRevision, type SceneFingerprint } from './sceneSafety';
+import { sequenceTiming, sequenceSampleTime } from './sequenceTiming';
 import { referencePlaneMaterial } from './referenceAlpha';
 import { ObjectHistory, duplicateMesh, surfaceDrop } from './kitbashEditor';
 import { FRAME_ASPECTS, fitFrame, focalFromFov, fovFromFocal, type FrameAspect } from './sceneFrame';
@@ -307,10 +308,7 @@ function normalizeMoveSeconds(value: unknown) {
 /** 序列总时长取「相机路径时长」与「角色移动时长」中较长的一条：两者谁长都不能被截断。 */
 function sequencePlan(cameraKeys: CameraKey[], moverSeconds: number | null, fps: number) {
   const seconds = Math.max(cameraPathDuration(cameraKeys), moverSeconds ?? 0);
-  return {
-    seconds,
-    frames: Math.min(SEQUENCE_MAX_FRAMES, Math.max(1, Math.round(seconds * fps))),
-  };
+  return sequenceTiming(seconds, fps, SEQUENCE_MAX_FRAMES);
 }
 
 /**
@@ -736,7 +734,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const sceneEpochRef = useRef(0);
   const saveGuardRef = useRef(new SceneSaveGuard());
   const cleanOnRenderRef = useRef(true);
-  const fingerprintRef = useRef<() => string>(() => '');
+  const fingerprintRef = useRef<() => SceneFingerprint>(() => ({ structure: '', media: [], full: () => '' }));
   const [dirty, setDirty] = useState(false);
   const frameRef = useRef<FrameAspect>('16:9');
   const resizeFrameRef = useRef<() => void>(() => {});
@@ -879,7 +877,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   // 序列宽度：0 跟随视口；小图导出能少很多体积，当视频参考够用。
   const [sequenceWidth, setSequenceWidth] = useState(0);
   // 最近一次导出的序列帧（存素材库用，避免再渲一遍）。
-  const sequenceFramesRef = useRef<{ pass: ReferencePass; stamp: string; blobs: Blob[] } | null>(null);
+  const sequenceFramesRef = useRef<{ pass: ReferencePass; stamp: string; blobs: Blob[]; fps: number; projectId: number | null; frameIds: number[] } | null>(null);
   const [playingPath, setPlayingPath] = useState(false);
   const [poseSlots, setPoseSlots] = useState<{ a: boolean; b: boolean }>({ a: false, b: false });
   const [poseBlend, setPoseBlend] = useState(0);
@@ -919,14 +917,17 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
 
   const documentMetaRef = useRef('');
   documentMetaRef.current = JSON.stringify({ archiveName, frameAspect, lightPreset, skybox, skyboxName, cameraKeys, groundPoints, moverId, moveSeconds, followMover, moveAnimationIndex });
-  fingerprintRef.current = () => JSON.stringify({ epoch: sceneEpochRef.current, meta: documentMetaRef.current,
-    objects: objectsRef.current.map(e => ({ id: e.id, name: e.name, p: (scrubRef.current?.id === e.id ? scrubRef.current.session.position : e.object.position)?.toArray(), q: (scrubRef.current?.id === e.id ? scrubRef.current.session.quaternion : e.object.quaternion)?.toArray(), s: e.object.scale.toArray(), visible: e.object.visible, locked: !!e.locked, plane: e.plane, source: e.mediaSource, splat: e.splatUrl, pose: scrubRef.current?.id === e.id ? scrubRef.current.pose : animationRef.current?.id === e.id ? animationRef.current.pose : serializeBonePose(e.object), initial: e.initialBonePose,
-      materials: (() => { const rows: unknown[] = []; e.object.traverse(o => { if (isPoseEditorHelper(o)) return; const m = (o as THREE.Mesh).material; if (m) for (const v of Array.isArray(m) ? m : [m]) rows.push(materialRevision(v as THREE.MeshStandardMaterial)); }); return rows; })() })) });
-  if (cleanOnRenderRef.current) { saveGuardRef.current.markSaved(fingerprintRef.current()); cleanOnRenderRef.current = false; }
+  fingerprintRef.current = () => buildSceneFingerprint(
+    { epoch: sceneEpochRef.current, meta: documentMetaRef.current },
+    objectsRef.current.map(e => ({ id: e.id, name: e.name, p: (scrubRef.current?.id === e.id ? scrubRef.current.session.position : e.object.position)?.toArray(), q: (scrubRef.current?.id === e.id ? scrubRef.current.session.quaternion : e.object.quaternion)?.toArray(), s: e.object.scale.toArray(), visible: e.object.visible, locked: !!e.locked, plane: e.plane, source: e.mediaSource, splat: e.splatUrl, pose: scrubRef.current?.id === e.id ? scrubRef.current.pose : animationRef.current?.id === e.id ? animationRef.current.pose : serializeBonePose(e.object), initial: e.initialBonePose,
+      materials: (() => { const rows: unknown[] = []; e.object.traverse(o => { if (isPoseEditorHelper(o)) return; const m = (o as THREE.Mesh).material; if (m) for (const v of Array.isArray(m) ? m : [m]) rows.push(materialRevision(v as THREE.MeshStandardMaterial)); }); return rows; })() })),
+  );
+  if (cleanOnRenderRef.current) { const fresh = fingerprintRef.current(); saveGuardRef.current.markSaved(fresh.full(), fresh); cleanOnRenderRef.current = false; }
   useEffect(() => {
-    const timer = window.setInterval(() => setDirty(saveGuardRef.current.isDirty(fingerprintRef.current())), 500);
-    const unload = (e: BeforeUnloadEvent) => { if (saveGuardRef.current.isDirty(fingerprintRef.current())) { e.preventDefault(); e.returnValue = ''; } };
-    const leave = (e: MouseEvent) => { const a = (e.target as HTMLElement)?.closest('a[href]'); if (a && saveGuardRef.current.isDirty(fingerprintRef.current()) && !window.confirm('场景有未保存的修改，仍要离开？')) { e.preventDefault(); e.stopPropagation(); } };
+    // 500ms 轮询只看结构 + 媒体来源，不重新拼接内嵌媒体正文。
+    const timer = window.setInterval(() => setDirty(saveGuardRef.current.isDirtyState(fingerprintRef.current())), 500);
+    const unload = (e: BeforeUnloadEvent) => { if (saveGuardRef.current.isDirty(fingerprintRef.current().full())) { e.preventDefault(); e.returnValue = ''; } };
+    const leave = (e: MouseEvent) => { const a = (e.target as HTMLElement)?.closest('a[href]'); if (a && saveGuardRef.current.isDirty(fingerprintRef.current().full()) && !window.confirm('场景有未保存的修改，仍要离开？')) { e.preventDefault(); e.stopPropagation(); } };
     window.addEventListener('beforeunload', unload); document.addEventListener('click', leave, true);
     return () => { clearInterval(timer); window.removeEventListener('beforeunload', unload); document.removeEventListener('click', leave, true); };
   }, []);
@@ -2822,7 +2823,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       throw new Error("视口里还没有对象，先放入模型再存场景");
     }
     {
-      const before = fingerprintRef.current();
+      const before = fingerprintRef.current().full();
       const epoch = sceneEpochRef.current;
       const binary = await exportGeometry({ flattenTransforms: true });
       // 泼溅不在 GLB 里，得先把 .spz 字节取回来内嵌；取不到就整体失败，
@@ -2904,7 +2905,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         },
       };
       if (epoch !== sceneEpochRef.current) throw new Error('保存期间场景已替换，请重新保存');
-      saveGuardRef.current.assertUnchanged(before, fingerprintRef.current());
+      saveGuardRef.current.assertUnchanged(before, fingerprintRef.current().full());
       validateSceneSize(JSON.stringify(doc));
       return doc;
     }
@@ -2912,7 +2913,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
 
   const saveScene = useCallback(async () => {
     if (objectsRef.current.length === 0) return;
-    const before = fingerprintRef.current();
+    const fingerprint = fingerprintRef.current();
+    const before = fingerprint.full();
     const operation = operationsRef.current.start('正在保存场景…');
     setBusy("正在保存场景…");
     try {
@@ -2922,14 +2924,14 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       previewCanvas.getContext('2d')?.drawImage(image, 0, 0, previewCanvas.width, previewCanvas.height); image.close();
       snapshotDoc.preview = previewCanvas.toDataURL('image/jpeg', .65);
       const json = JSON.stringify(snapshotDoc); validateSceneSize(json);
-      saveGuardRef.current.assertUnchanged(before, fingerprintRef.current());
+      saveGuardRef.current.assertUnchanged(before, fingerprintRef.current().full());
       const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
       const link = document.createElement("a");
       link.href = url;
       link.download = archiveName.trim() ? `${archiveName.trim().replace(/[\\/:*?"<>|]/g, '_')}.json` : sceneArchiveFileName(Date.now());
       link.click();
       URL.revokeObjectURL(url);
-      saveGuardRef.current.markSaved(before); setDirty(false);
+      saveGuardRef.current.markSaved(before, fingerprint); setDirty(false);
       setStatus(`已保存场景 ${Math.max(1, Math.round(json.length / 1024))} KB（本地文件）`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -2941,7 +2943,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   // 存到后端：JSON 落 data/scene-archives/<id>.json，前端刷新或换机器都能选回来。
   const saveSceneToServer = useCallback(async () => {
     if (objectsRef.current.length === 0) return;
-    const before = fingerprintRef.current();
+    const fingerprint = fingerprintRef.current();
+    const before = fingerprint.full();
     const operation = operationsRef.current.start('正在存到后端…');
     setBusy("正在存到后端…");
     try {
@@ -2951,7 +2954,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       previewCanvas.getContext('2d')?.drawImage(image, 0, 0, previewCanvas.width, previewCanvas.height); image.close();
       snapshotDoc.preview = previewCanvas.toDataURL('image/jpeg', .65);
       const json = JSON.stringify(snapshotDoc); validateSceneSize(json);
-      saveGuardRef.current.assertUnchanged(before, fingerprintRef.current());
+      saveGuardRef.current.assertUnchanged(before, fingerprintRef.current().full());
       const blocker = sceneArchiveBlocker(json);
       if (blocker) throw new Error(blocker);
       const name = archiveName.trim() ? `${archiveName.trim().replace(/[\\/:*?"<>|]/g, '_')}.json` : sceneArchiveFileName(Date.now());
@@ -2965,8 +2968,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         throw new Error(`存到后端失败（HTTP ${response.status}）${detail ? `：${detail.slice(0, 200)}` : ""}`);
       }
       const saved = (await response.json().catch(() => null)) as { id?: number } | null;
-      const unchanged = before === fingerprintRef.current();
-      if (unchanged) { saveGuardRef.current.markSaved(before); setDirty(false); }
+      const unchanged = before === fingerprintRef.current().full();
+      if (unchanged) { saveGuardRef.current.markSaved(before, fingerprint); setDirty(false); }
       else { setDirty(true); setError('快照已存入后端，但场景随后发生变化；当前修改尚未保存'); }
       // 列表在打开时按独立筛选与页码刷新；保存不覆盖正在浏览的分页上下文。
       setStatus(
@@ -2983,7 +2986,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const importSceneText = useCallback(
     async (text: string) => {
       stopAnimation();
-      if (saveGuardRef.current.isDirty(fingerprintRef.current()) && !window.confirm('场景有未保存的修改，仍要载入其他场景？')) return;
+      if (saveGuardRef.current.isDirty(fingerprintRef.current().full()) && !window.confirm('场景有未保存的修改，仍要载入其他场景？')) return;
       const operation = operationsRef.current.start('正在载入场景…');
       // Retain the current path action until the replacement and its reference validate.
       setBusy("正在载入场景…");
@@ -3206,8 +3209,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [deleteArchive, setDeleteArchive] = useState<SceneArchiveItem | null>(null);
   const [archivePreview, setArchivePreview] = useState<{ name: string; preview?: string; count: number; aspect: string; restore: () => Promise<void> } | null>(null);
   const archiveRequestRef = useRef(0);
+  const archiveListRequestRef = useRef(0);
 
   const loadSceneArchives = useCallback(async (page = 1, filter = archiveFilter) => {
+    const ticket = ++archiveListRequestRef.current;
     setArchivesBusy(true);
     setError(null);
     try {
@@ -3215,19 +3220,24 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const response = await fetch(`/api/scene-archives${query}`);
       if (!response.ok) throw new Error(`读取后端存档失败（HTTP ${response.status}）`);
       const data = await response.json();
+      if (ticket !== archiveListRequestRef.current) return false;
       setArchives(parseSceneArchiveList(data));
       setArchiveTotal(data.total); setArchivePage(page); setArchiveFilter(filter);
       setArchivesOpen(true);
       setStatus("后端存档列表已刷新");
+      return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (ticket === archiveListRequestRef.current) setError(err instanceof Error ? err.message : String(err));
+      return false;
     } finally {
-      setArchivesBusy(false);
+      if (ticket === archiveListRequestRef.current) setArchivesBusy(false);
     }
   }, [archiveFilter]);
 
   const manageArchive = async (id: number, method: 'PATCH' | 'DELETE') => {
+    const ticket = ++archiveListRequestRef.current;
     setArchivesBusy(true);
+    setStatus('');
     try {
       const response = await fetch(`/api/scene-archives/${id}`, {
         method, headers: { 'Content-Type': 'application/json' },
@@ -3235,15 +3245,17 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       });
       if (!response.ok) throw new Error(`存档操作失败（HTTP ${response.status}）`);
       setRenameId(null); setDeleteArchive(null);
-      await loadSceneArchives(method === 'DELETE' && archives.length === 1 ? Math.max(1, archivePage-1) : archivePage);
-      setStatus(method === 'DELETE' ? '已移入回收区，原始文件保留' : '已更新存档列表名称');
-    } catch (err) { setError(String(err)); } finally { setArchivesBusy(false); }
+      if (ticket !== archiveListRequestRef.current) return;
+      const refreshed = await loadSceneArchives(method === 'DELETE' && archives.length === 1 ? Math.max(1, archivePage-1) : archivePage);
+      if (refreshed) setStatus(method === 'DELETE' ? '已移入回收区，原始文件保留' : '已更新存档列表名称');
+    } catch (err) { if (ticket === archiveListRequestRef.current) setError(String(err)); }
+    finally { if (ticket === archiveListRequestRef.current) setArchivesBusy(false); }
   };
 
   const openSceneArchive = useCallback(
     async (item: SceneArchiveItem) => {
       const ticket = ++archiveRequestRef.current;
-      setBusy(`正在载入后端存档 #${item.id}…`);
+      const operation = operationsRef.current.start(`正在载入后端存档 #${item.id}…`);
       setError(null);
       try {
         const response = await fetch(`/api/scene-archives/${item.id}`);
@@ -3255,9 +3267,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           count: (doc.objects?.length ?? 0) + (doc.planes?.length ?? 0) + (doc.splats?.length ?? 0), aspect: doc.frame?.aspect ?? '16:9',
           restore: async () => { await importSceneText(text); setArchivePreview(null); setArchivesOpen(false); } });
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+        if (ticket === archiveRequestRef.current) setError(err instanceof Error ? err.message : String(err));
       } finally {
-        setBusy(null);
+        operation.finish();
       }
     },
     [importSceneText],
@@ -3696,6 +3708,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const fps = sequenceFps;
       const plan = sequencePlan(cameraKeys, moverSeconds, fps);
       const frames = plan.frames;
+      if (plan.exceedsLimit) { setError(`序列需要 ${frames} 帧，超过 ${SEQUENCE_MAX_FRAMES} 帧上限；请降低帧率或缩短路径，不会截断导出`); return; }
       setError(null);
       const operation = operationsRef.current.start(`${REFERENCE_BUSY_PREFIX}（序列 0/${frames}）…`);
       setBusy(`${REFERENCE_BUSY_PREFIX}（序列 0/${frames}）…`);
@@ -3724,7 +3737,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       try {
         for (let index = 0; index < frames; index += 1) {
           assertCurrent();
-          const sample = sampleCameraPath(cameraKeys, index / fps);
+          const sampleTime = sequenceSampleTime(index, frames, plan.seconds, fps);
+          const sample = sampleCameraPath(cameraKeys, sampleTime);
           if (!sample) break;
           camera.position.set(...sample.position);
           controls.target.set(...sample.target);
@@ -3735,7 +3749,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           }
           if (mover && path && moverSeconds && canMoveEntry(mover)) {
             // 移动与相机各走各的时钟：按同一帧时间 / 移动总时长取进度，超出就停在 B。
-            const progress = Math.min(1, index / fps / moverSeconds);
+            const progress = Math.min(1, sampleTime / moverSeconds);
             mover.object.position.set(...groundPathPointAt(path, progress));
             mover.object.rotation.y = groundPathYaw(path, progress);
             if (followMover) {
@@ -3760,7 +3774,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               if (mover && path && moverSeconds) {
                 const clip = mover.object.animations[moveAnimationIndex];
                 if (moveAnimationIndex >= 0 && !clip) throw new Error('移动动作已失效，请重新选择');
-                if (clip) { preview = new AnimationPreview(mover.object, clip); preview.sampleAt(Math.min(index / fps, moverSeconds)); }
+                if (clip) { preview = new AnimationPreview(mover.object, clip); preview.sampleAt(Math.min(sampleTime, moverSeconds)); }
               }
             } catch (err) { preview?.stop(); throw err; }
             return () => {
@@ -3784,7 +3798,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         // 先留一份帧，用户想存素材库时不用再渲一遍。
         sequenceFramesRef.current = {
           pass,
-          stamp: fileNameStamp(new Date()),
+          stamp: `${fileNameStamp(new Date())}-${crypto.randomUUID().replaceAll('-', '')}`,
+          fps, projectId: Number(archiveProjectId) || null, frameIds: [],
           blobs: entries.map((entry) => new Blob([entry.data], { type: "image/png" })),
         };
         const zip = createStoreZip(entries);
@@ -3828,7 +3843,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         setBusy((current) => (current && current.startsWith(REFERENCE_BUSY_PREFIX) ? null : current));
       }
     },
-    [cameraKeys, captureReference, followMover, groundPoints, moveSeconds, moveAnimationIndex, busy, moverId, sequenceFps, sequenceWidth],
+    [cameraKeys, captureReference, followMover, groundPoints, moveSeconds, moveAnimationIndex, busy, moverId, sequenceFps, sequenceWidth, archiveProjectId],
   );
 
   /**
@@ -3874,29 +3889,38 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       setError(blocker);
       return;
     }
+    const epoch = sceneEpochRef.current;
+    const operation = operationsRef.current.start('正在存序列…');
+    const assertCurrent = () => { if (epoch !== sceneEpochRef.current || cache !== sequenceFramesRef.current) throw new Error('场景或序列已替换，停止存库'); };
+    let saved = cache.frameIds.length;
     setBusy(`正在把 ${cache.blobs.length} 帧存进素材库…`);
     setError(null);
     try {
-      let saved = 0;
-      for (let index = 0; index < cache.blobs.length; index += 1) {
+      for (let index = saved; index < cache.blobs.length; index += 1) {
+        assertCurrent();
         const form = new FormData();
         form.append("file", cache.blobs[index], sequenceFrameFileName(cache.pass, cache.stamp, index));
         form.append("type", "image");
+        if (cache.projectId !== null) form.append('project_id', String(cache.projectId));
         const response = await fetch("/api/materials", { method: "POST", body: form });
         if (!response.ok) {
           const payload = await response.json().catch(() => ({}));
           throw new Error(payload.error || `第 ${index + 1} 帧存库失败（HTTP ${response.status}）`);
         }
+        const material = await response.json();
+        if (!Number.isSafeInteger(material.id) || material.id <= 0) throw new Error('序列入库未返回有效素材ID');
+        cache.frameIds.push(material.id);
         saved += 1;
+        assertCurrent();
         setBusy(`正在存序列进素材库（${saved}/${cache.blobs.length}）…`);
       }
       setStatus(
         `已把 ${saved} 帧${REFERENCE_PASS_LABELS[cache.pass]}序列存进素材库（素材库页可直接看）`,
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(`已成功存入 ${saved}/${cache.blobs.length} 帧；${err instanceof Error ? err.message : String(err)}（再次存库将续传剩余帧）`);
     } finally {
-      setBusy(null);
+      operation.finish(); setBusy(null);
     }
   }, []);
 
@@ -3915,19 +3939,20 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       setError(blocker);
       return;
     }
+    if (cache.frameIds.length !== cache.blobs.length) { setError('请先完成序列存库，再合成视频'); return; }
     setBusy(`正在把 ${cache.blobs.length} 帧合成视频…`);
     setError(null);
     try {
       const response = await fetch("/api/materials/sequence-video", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pass: cache.pass, stamp: cache.stamp, fps: sequenceFps }),
+        body: JSON.stringify({ pass: cache.pass, stamp: cache.stamp, fps: cache.fps, project_id: cache.projectId, frame_ids: cache.frameIds }),
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(payload.error || `合成视频失败（HTTP ${response.status}）`);
       }
-      setStatus(`已合成 ${payload.name}（${cache.blobs.length} 帧 · ${sequenceFps} fps，在素材库里）`);
+      setStatus(`已合成 ${payload.name}（${cache.blobs.length} 帧 · ${cache.fps} fps，在素材库里）`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

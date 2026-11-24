@@ -10,7 +10,7 @@ test('序列合成视频：编辑器打新接口，带上 pass/stamp/fps', () =>
   assert.match(stage, /fetch\("\/api\/materials\/sequence-video", \{/)
   assert.match(
     stage,
-    /body: JSON\.stringify\(\{ pass: cache\.pass, stamp: cache\.stamp, fps: sequenceFps \}\)/,
+    /body: JSON\.stringify\(\{ pass: cache\.pass, stamp: cache\.stamp, fps: cache\.fps, project_id: cache\.projectId, frame_ids: cache\.frameIds \}\)/,
   )
   // 帧数上限沿用存库那套校验，超 60 帧不合成
   assert.match(stage, /const blocker = sequenceLibraryBlocker\(cache\.blobs\.length\);/)

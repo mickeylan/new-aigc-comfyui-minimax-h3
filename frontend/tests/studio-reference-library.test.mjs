@@ -37,7 +37,7 @@ test('编辑器接线：单帧/序列都能存进素材库（type=image）', () 
   assert.match(stage, /form\.append\("file", blob, referenceFileName\(shot\.pass, fileNameStamp\(new Date\(\)\)\)\);/)
   assert.match(stage, /form\.append\("type", "image"\);/)
   // 序列：导出时把帧留一份，存库时逐帧上传
-  assert.match(stage, /const sequenceFramesRef = useRef<\{ pass: ReferencePass; stamp: string; blobs: Blob\[\] \} \| null>\(null\);/)
+  assert.match(stage, /const sequenceFramesRef = useRef<\{ pass: ReferencePass; stamp: string; blobs: Blob\[\]; fps: number; projectId: number \| null; frameIds: number\[\] \} \| null>\(null\);/)
   assert.match(stage, /sequenceFramesRef\.current = \{/)
   assert.match(stage, /const saveSequenceToLibrary = useCallback\(async \(\) => \{/)
   assert.match(stage, /const blocker = sequenceLibraryBlocker\(cache\.blobs\.length\);/)

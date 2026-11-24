@@ -1,8 +1,30 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { PreviewPlayhead, PREVIEW_FPS, previewFrameCount, previewFrameTime } from './previewPlayhead';
 
 describe('24fps session playhead', () => {
+  it('preserves exact random-access and stop baselines with real OrbitControls', () => {
+    const camera = new THREE.PerspectiveCamera(47);
+    camera.position.set(4.5, 3.199999999999998, 6);
+    const controls = new OrbitControls(camera, document.createElement('canvas'));
+    controls.target.set(.125, .75, .375); controls.enableDamping = true; controls.update();
+    const snapshot = () => ({ p: camera.position.toArray(), q: camera.quaternion.toArray(), target: controls.target.toArray(), fov: camera.fov });
+    const baseline = snapshot();
+    const session = new PreviewPlayhead(camera, controls);
+    const sample = (t: number) => {
+      session.sample(t, 2, time => {
+        camera.position.set(4 + time, 3, 2); controls.target.set(time / 3, .75, .375);
+        camera.fov = 55; camera.updateProjectionMatrix(); controls.update();
+      });
+      return snapshot();
+    };
+    const first = sample(1); sample(.25); sample(3);
+    expect(sample(1)).toEqual(first);
+    session.stop(); expect(snapshot()).toEqual(baseline);
+    expect(controls.enabled).toBe(true); expect(controls.enableDamping).toBe(true);
+    controls.dispose();
+  });
   it('clamps frame edges and represents a fractional final frame exactly', () => {
     expect(PREVIEW_FPS).toBe(24);
     expect(previewFrameCount(1.01)).toBe(25);

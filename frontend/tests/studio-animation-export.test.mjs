@@ -33,7 +33,8 @@ test('两个捕获入口仅同步占用导出采样并在编码完成前finally�
 test('序列骨骼按逐帧绝对时间取样，停止绑定并同步恢复编辑变换', () => {
   const body = section('const exportSequence =', 'const saveReferenceToLibrary =');
   assert.match(body, /stopAnimation\(\)/);
-  assert.match(body, /preview\.sampleAt\(Math\.min\(index \/ fps, moverSeconds\)\)/);
+  assert.match(body, /const sampleTime = sequenceSampleTime\(index, frames, plan\.seconds, fps\)/);
+  assert.match(body, /preview\.sampleAt\(Math\.min\(sampleTime, moverSeconds\)\)/);
   assert.match(body, /return \(\) => \{\s*preview\?\.stop\(\)/);
   assert.match(body, /camera\.position\.copy\(savedPosition\)/);
   assert.match(body, /mover\.object\.quaternion\.copy\(savedMover\.quaternion\)/);

@@ -19,7 +19,7 @@ test('序列导出可选分辨率：临时缩画布，导完还原', () => {
   assert.match(stage, /camera\.aspect = savedAspect;/)
   // UI 下拉 + 依赖
   assert.match(stage, /title="序列导出的画面宽度：原尺寸最大也最清楚，小一点体积小很多"/)
-  assert.match(stage, /moverId, sequenceFps, sequenceWidth\],/)
+  assert.match(stage, /moverId, sequenceFps, sequenceWidth, archiveProjectId\],/)
 })
 
 test('分辨率选项文案：0 就是跟随视口', () => {

@@ -137,3 +137,15 @@
 
 - 用户既有女剑客 Blender 资产仅在 `.rscode/` 导出副本：24骨、23条原生 CUBICSPLINE 通道。界面保存、刷新重载、播放与停止还原通过；与原 GLTFLoader 多时间点采样最大差值为0。后续造型、剑术和衣摆副本也通过相同往返检查，其中13条动作轨道均为 CUBICSPLINE。模型、临时脚本与视频均不入库，原 Blender 文件未改动。
 - 提交前再次运行 `npm --prefix frontend test` 与 `npm --prefix frontend run build`，均退出0；Vitest 126项、18个文件通过，构建11.39秒，仍有既有大包警告。未运行H3、未新增真实后端上传验收；原生工作流不宣称完成。
+
+### ArtCraft 迁移核对补修与第八刀补验收（已授权，未提交）
+
+- 随机定位前重置相机、target、FOV与角色基线；停止时先同步OrbitControls内部状态，再精确复制回基线向量，避免浮点重计算覆盖恢复值。新增真实OrbitControls回归，不将精确相等改成宽容差。
+- 序列统一含起点和精确终点：帧数为ceil(seconds×fps)+1，中间帧取index/fps，末帧取duration。超过240帧明确拒绝，不静默裁短；24fps时与播放头时间点逐帧一致。合成仍为固定fps，含终点帧意味着视频播放时长为帧数/fps，不承诺等于路径时长。
+- 序列缓存固定导出时fps与项目；批次stamp增加随机32位hex。逐帧记录上传ID，失败报告成功帧数并续传剩余帧，未全部存库禁止合成。后端按项目（null仅查无项目）及传入frame_ids查询，再把选中帧复制到私有临时目录交给ffmpeg；视频文件名增加唯一后缀，不按全局同名删除旧结果。旧无frame_ids请求保留兼容，但同样受项目筛选约束；项目筛选不是鉴权。
+- 存档列表独立请求代次保护，只允许最新响应更新列表/清忙态；载入使用SceneOperations令牌，旧请求收尾不得清除其他操作的忙态。改名/删除只在刷新列表成功后提示成功。
+- 最终 `npm --prefix frontend test` 退出0：Node 657/657、Vitest 132/132（20文件）；`npm --prefix frontend run build` 退出0（18.39秒，既有大包警告）；`go -C backend test ./... -count=1` 退出0。3项定向序列测试PASS，含真实ffmpeg编码、跨项目同名帧/外来ID/重复ID拒绝、无项目隔离及两次结果互不覆盖。google/uuid已在go.mod声明，未增加依赖。
+- 隔离5180浏览器输出 `BROWSER_REMEDIATION_QA=PASS`：真实OrbitControls+骨骼乱序采样与停止基线精确相等；实际UI覆盖1.1秒终点、前后帧、乱序相机定位、精确停止还原、dirty及保存临时姿态保护；实际ZIP解析为10帧；上传第2帧失败后成功计数1/10、续传剩余9帧并携带10个精确ID合成；列表两个项目请求逆序完成仅保留最新结果。列表并发通过程序事件注入（主动解除disabled）构造，不代表正常UI允许并发点击。
+- 前端全量曾因旧静态断言锁死缓存结构、合成payload及导出依赖数组失败；仅按已授权新契约更新这些断言，保留原命名、限额、路由、分辨率还原检查。浏览器夹具曾因捕获实例render方式错误、误把载入前文档坐标当成载入后的基线、重复派发select事件失败，修正夹具后通过；另捕获停止时真实位置舍入问题并修复，未放宽精确断言。
+- 上传/合成HTTP及存档列表在浏览器内mock，未写业务数据、未运行H3或真实生成、未触碰18000、未同步后端嵌入资源。骨骼为合成单骨夹具，不新增外部角色全兼容结论；存档载入并发本轮依靠接线回归，未新增双载入浏览器验收。原生audit仍停在user_decision，不宣称原生流程完成。不提交、不推送、不部署。
+- 本轮补真实 HTTP 层隔离验收（Go，`backend/internal/service/sequence_video_test.go` 的 `TestComposeSequenceVideoHTTPIsolatesProjects`）：临时内存 SQLite 加 `t.TempDir()`，用真实 multipart 上传两个项目各两帧（32 位 hex 批次 stamp），断言素材落库的项目归属；再经真实路由 `POST /api/materials/sequence-video` 断言外来项目帧 ID、无项目作用域、`project_id=0`、项目 999 不存在、重复 ID 均为 400；本机 ffmpeg 可用时对自有帧合成返回 200，名称带批次前缀与唯一后缀，第二次合成 ID/Path/Name 均不同且视频行数为 2，产物在 `upload.InputDir()` 下真实存在，ffmpeg 读回为 `Video: h264` 且 `Duration: 00:00:00.25`（两帧 @8fps），证明私有临时目录只暂存了本项目选中的两帧。`go -C backend test ./... -count=1` 退出 0（service 41.65 秒）。双载入浏览器验收仍未新增，也未触碰 18000 或业务库。

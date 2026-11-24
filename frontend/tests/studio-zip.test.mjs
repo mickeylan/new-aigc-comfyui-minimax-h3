@@ -87,10 +87,12 @@ test('序列导出走这条打包路径，并按相机路径逐帧取样', () =>
   assert.match(stage, /const exportSequence = useCallback\(/)
   assert.match(stage, /createStoreZip\(entries\)/)
   // 逐帧按当前路径取机位，不是原地重渲同一张
-  assert.match(stage, /const sample = sampleCameraPath\(cameraKeys, index \/ fps\);/)
+  assert.match(stage, /const sample = sampleCameraPath\(cameraKeys, sampleTime\);/)
+  assert.match(stage, /const sampleTime = sequenceSampleTime\(index, frames, plan\.seconds, fps\);/)
   // 帧数由总时长 × fps 决定，并有上限，防止一按就渲上千帧
   // （总时长与帧数现在由 sequencePlan 统一算：相机路径与角色移动取长者）
-  assert.match(stage, /frames: Math\.min\(SEQUENCE_MAX_FRAMES, Math\.max\(1, Math\.round\(seconds \* fps\)\)\),/)
+  assert.match(stage, /return sequenceTiming\(seconds, fps, SEQUENCE_MAX_FRAMES\);/)
+  assert.match(stage, /if \(plan\.exceedsLimit\)/)
   // 导出完要把相机放回原处，否则编辑器停在最后一帧的机位
   assert.match(stage, /camera\.position\.copy\(savedPosition\);/)
   assert.match(stage, /controls\.target\.copy\(savedTarget\);/)
