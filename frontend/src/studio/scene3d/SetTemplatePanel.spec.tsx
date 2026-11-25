@@ -12,6 +12,9 @@ const engine = vi.hoisted(() => ({
   assertScriptShotPlaybackReady: vi.fn(), assertScriptShotReferenceReady: vi.fn(),
 }));
 vi.mock('./toonflowSets', () => engine);
+// Import the large real catalog during suite collection, before any React root
+// owns an act() scope. Cold module loading is not a UI interaction under test.
+const actual = await vi.importActual<typeof import('./toonflowSets')>('./toonflowSets');
 let host: HTMLDivElement, root: Root;
 const onApply = vi.fn();
 const onApplyShots = vi.fn();
@@ -213,6 +216,60 @@ describe('script staging human gates', () => {
     // 清除走位同样走模块，不保留旧动画。
     await click(host.querySelector('[aria-label="镜 1 清除走位"]')!);
     expect(engine.clearScriptShotMotion).toHaveBeenCalledWith(moved, 'shot-1');
+  });
+  it.each(['repeat', 'coordinates', 'duration', 'navigation-only', 'character-only'])('preserves enhancements through basic movement editing: %s', async mode => {
+    const animation = { index: 0, name: 'walk', duration: 1.2 };
+    const characterMotion = { version: 1, blend: { animation: { index: 1, name: 'idle', duration: 2 }, weight: 0.4, fadeSeconds: 0.2 },
+      feet: { left: { hip: 'lh', knee: 'lk', ankle: 'la' }, right: { hip: 'rh', knee: 'rk', ankle: 'ra' }, soleOffset: 0.09, maxCorrection: 0.3 } };
+    const navigation = { version: 1, mode: 'avoid', radius: 0.4, speed: 3 };
+    const motion = { targetId: 'actor-1', targetName: '张三', start: { x: 0, z: 0 }, end: { x: 2, z: 1 }, duration: 1,
+      animation, ...(mode !== 'navigation-only' ? { characterMotion } : {}), ...(mode !== 'character-only' ? { navigation } : {}) };
+    const plan = { ...readyPlan, shots: [{ ...readyPlan.shots[0], motion }, readyPlan.shots[1]] };
+    const before = JSON.stringify(plan);
+    const targets = [{ id: 'actor-1', name: '改名后的张三', visible: true, locked: false, animations: [animation, characterMotion.blend.animation] }];
+    // Keep the UI event path, but use real replacement and target validation here.
+    engine.setScriptShotMotion.mockImplementation(actual.setScriptShotMotion);
+    engine.assertScriptShotMotionTargets.mockImplementation(actual.assertScriptShotMotionTargets);
+    await act(async () => { root.render(<SetTemplatePanel disabled={false} onApply={onApply} onApplyShots={onApplyShots} appliedPlan={plan} listMotionTargets={() => targets} />); });
+    await click(button('载入场景镜头表审阅'));
+    if (mode === 'coordinates') await input('镜 1 走位终点X', '4');
+    if (mode === 'duration') await input('镜 1 走位时长', '1.4');
+    if (mode === 'navigation-only') await input('镜 1 骨骼动作', '1');
+    await click(host.querySelector('[aria-label="镜 1 应用走位"]')!);
+    const expected = { ...motion, targetName: targets[0].name,
+      ...(mode === 'coordinates' ? { end: { x: 4, z: 1 } } : {}), ...(mode === 'duration' ? { duration: 1.4 } : {}),
+      ...(mode === 'navigation-only' ? { animation: characterMotion.blend.animation } : {}) };
+    expect(engine.setScriptShotMotion).toHaveBeenLastCalledWith(plan, 'shot-1', expected);
+    await click(host.querySelector('[aria-label="确认镜头表"]')!);
+    await click(button('确认应用镜头表'));
+    expect(onApplyShots.mock.calls.at(-1)![0].shots[0].motion).toEqual(expected);
+    const restored = actual.validateScriptShotPlan(JSON.parse(JSON.stringify(onApplyShots.mock.calls.at(-1)![0])));
+    expect(restored.shots[0].motion).toEqual(expected);
+    expect(JSON.stringify(plan)).toBe(before);
+  });
+  it.each(['target', 'clip', 'clear-clip', 'clip-name', 'clip-duration'])('rejects incompatible enhanced movement without writing the plan: %s', async mode => {
+    const animation = { index: 0, name: 'walk', duration: 1.2 };
+    const motion = { targetId: 'actor-1', targetName: '张三', start: { x: 0, z: 0 }, end: { x: 2, z: 1 }, duration: 1,
+      animation, characterMotion: { version: 1, blend: { animation: { index: 1, name: 'idle', duration: 2 }, weight: 0.4, fadeSeconds: 0 } },
+      navigation: { version: 1, mode: 'avoid', radius: 0.4, speed: 3 } };
+    const plan = { ...readyPlan, shots: [{ ...readyPlan.shots[0], motion }, readyPlan.shots[1]] };
+    const before = JSON.stringify(plan);
+    const changed = { ...animation, ...(mode === 'clip-name' ? { name: 'replacement' } : {}), ...(mode === 'clip-duration' ? { duration: 3 } : {}) };
+    const targets = ['actor-1', 'actor-2'].map(id => ({ id, name: '张三', visible: true, locked: false, animations: [changed, motion.characterMotion.blend.animation] }));
+    await act(async () => { root.render(<SetTemplatePanel disabled={false} onApply={onApply} onApplyShots={onApplyShots} appliedPlan={plan} listMotionTargets={() => targets} />); });
+    await click(button('载入场景镜头表审阅'));
+    if (mode === 'target') await input('镜 1 走位对象', 'actor-2');
+    if (mode === 'clip') await input('镜 1 骨骼动作', '1');
+    if (mode === 'clear-clip') await input('镜 1 骨骼动作', '');
+    await click(host.querySelector('[aria-label="镜 1 应用走位"]')!);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('请先');
+    expect(engine.setScriptShotMotion).not.toHaveBeenCalled();
+    expect(onApplyShots).not.toHaveBeenCalled();
+    expect(JSON.stringify(plan)).toBe(before);
+    // Explicit clearing remains available after a rejected edit.
+    engine.clearScriptShotMotion.mockReturnValue(readyPlan);
+    await click(host.querySelector('[aria-label="镜 1 清除走位"]')!);
+    expect(engine.clearScriptShotMotion).toHaveBeenCalledWith(plan, 'shot-1');
   });
   it('never selects clip zero implicitly and reports a disappeared explicit clip without applying', async () => {
     let targets = [{ id: 'actor-1', name: '张三', visible: true, locked: false, animations: [{ index: 0, name: 'walk', duration: 1.2 }] }];

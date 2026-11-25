@@ -33,6 +33,18 @@ function ShotMotionEditor({ shot, targets, disabled, pending, onSet, onClear }: 
   const apply = () => {
     const clip = form.animationIndex === '' ? undefined : animations.find(item => item.index === Number(form.animationIndex));
     if (form.animationIndex !== '' && !clip) { setError('所选骨骼动作已变化，请重新选择'); return; }
+    const previous = shot.motion;
+    // This form edits base movement, not enhancement ownership. Never silently
+    // transplant rig-specific settings to another target or reinterpret a clip.
+    if (previous && (previous.characterMotion || previous.navigation) && previous.targetId !== form.targetId) {
+      setError('走位目标改变与已有增强不兼容；请先在镜头增强中移除增强，或清除走位后重新绑定'); return;
+    }
+    const sameAnimation = previous?.animation
+      ? !!clip && previous.animation.index === clip.index && previous.animation.name === clip.name && previous.animation.duration === clip.duration
+      : !clip;
+    if (previous?.characterMotion && !sameAnimation) {
+      setError('主动作改变与已有角色增强不兼容；请先在镜头增强中移除角色增强，或清除走位后重新绑定'); return;
+    }
     setError('');
     onSet({
       targetId: form.targetId,
@@ -41,6 +53,8 @@ function ShotMotionEditor({ shot, targets, disabled, pending, onSet, onClear }: 
       end: { x: Number(form.endX), z: Number(form.endZ) },
       duration: Number(form.duration),
       ...(clip ? { animation: { index: clip.index, name: clip.name, duration: clip.duration } } : {}),
+      ...(previous?.characterMotion ? { characterMotion: previous.characterMotion } : {}),
+      ...(previous?.navigation ? { navigation: previous.navigation } : {}),
     });
   };
   return <div className="space-y-1 rounded border border-zinc-800 p-1" aria-label={`镜 ${shot.order} 走位`}>
