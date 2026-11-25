@@ -3006,8 +3006,54 @@ var studioModelExtensions = map[string]struct{}{
 	".splat": {}, ".spz": {}, ".ksplat": {},
 }
 
+const materialThumbnailLimit int64 = 8 << 20
+const materialRequestLimit int64 = (512 << 20) + materialThumbnailLimit + maxMaterialDerivationBytes + uploadMultipartOverhead
+
+func materialFileLimit(kind string) int64 {
+	switch kind {
+	case "audio":
+		return 100 << 20
+	case "video", "3d":
+		return 512 << 20
+	default:
+		return 20 << 20
+	}
+}
+
 // HandleUploadMaterial 上传素材到素材库 (multipart: file/type/project_id/derivation_manifest?)
 func (s *Service) HandleUploadMaterial(c *gin.Context) {
+	s.handleBoundedMaterialUpload(c, materialRequestLimit, materialThumbnailLimit, materialFileLimit)
+}
+
+// Explicit budgets also let boundary tests exercise the actual handler without
+// allocating half-gigabyte fixtures or changing global production limits.
+func (s *Service) handleBoundedMaterialUpload(c *gin.Context, requestLimit, thumbnailLimit int64, fileLimit func(string) int64) {
+	if c.Request.ContentLength > requestLimit {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "素材上传请求超过大小限制"})
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, requestLimit)
+	defer func() {
+		if c.Request.MultipartForm != nil {
+			_ = c.Request.MultipartForm.RemoveAll()
+		}
+	}()
+	// Parse explicitly: PostForm otherwise hides request-size and multipart errors.
+	err := c.Request.ParseMultipartForm(8 << 20)
+	if err == nil {
+		// The final multipart boundary can precede EOF. Count trailing bytes too,
+		// particularly for chunked requests whose Content-Length is unknown.
+		_, err = io.Copy(io.Discard, c.Request.Body)
+	}
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "素材上传请求超过大小限制"})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "file required: 上传表单无效"})
+		}
+		return
+	}
 	ftype := c.PostForm("type")
 	if ftype == "" {
 		ftype = "image"
@@ -3033,9 +3079,14 @@ func (s *Service) HandleUploadMaterial(c *gin.Context) {
 		return
 	}
 	defer file.Close()
-	data, err := io.ReadAll(file)
+	limit := fileLimit(ftype)
+	if header.Size > limit {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": fmt.Sprintf("文件超过 %d MiB 限制", limit>>20)})
+		return
+	}
+	data, err := readBoundedUpload(file, limit)
 	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	if ftype == "3d" {
@@ -3046,9 +3097,20 @@ func (s *Service) HandleUploadMaterial(c *gin.Context) {
 		}
 		// 3D 素材由 3D 编辑器客户端导出并截一帧作为预览图，一起上传。
 		var thumb []byte
-		if thumbFile, _, err := c.Request.FormFile("thumbnail"); err == nil {
+		if thumbFile, thumbHeader, thumbErr := c.Request.FormFile("thumbnail"); thumbErr == nil {
 			defer thumbFile.Close()
-			thumb, _ = io.ReadAll(io.LimitReader(thumbFile, 8<<20))
+			if thumbHeader.Size > thumbnailLimit {
+				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "3D 缩略图超过大小限制"})
+				return
+			}
+			thumb, err = readBoundedUpload(thumbFile, thumbnailLimit)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+		} else if !errors.Is(thumbErr, http.ErrMissingFile) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "3D 缩略图读取失败"})
+			return
 		}
 		mat, err := s.Materials.SaveStudioModel(projectID, header.Filename, data, thumb)
 		if err != nil {

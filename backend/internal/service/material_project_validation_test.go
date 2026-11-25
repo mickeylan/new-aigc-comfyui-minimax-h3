@@ -56,6 +56,32 @@ func TestMaterialHandlersRejectInvalidProjectBeforeSideEffects(t *testing.T) {
 	}
 }
 
+func TestMaterialUploadRejectsOversizedImageBeforePersistence(t *testing.T) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "oversized.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = part.Write(bytes.Repeat([]byte{0}, (20<<20)+1)); err != nil {
+		t.Fatal(err)
+	}
+	if err = writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Recovery turns any attempt to use nil persistence into an observable 500.
+	router := gin.New()
+	router.Use(gin.Recovery())
+	router.POST("/api/materials", (&Service{}).HandleUploadMaterial)
+	req := httptest.NewRequest("POST", "/api/materials", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != 413 {
+		t.Fatalf("status=%d want=413 body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestMaterialUploadAbsentProjectPreservesValidationPath(t *testing.T) {
 	rec := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(rec)
