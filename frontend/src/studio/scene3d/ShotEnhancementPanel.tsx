@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { draftShotDirection } from './shotDirection';
 import { compileShotNavigation, type ShotSceneEntry } from './shotNavigation';
 import { validateCharacterMotionSettings } from './characterMotion';
-import { validateScriptShotPlan, type ScriptShotPlan, type ScriptShotMotionAnimation } from './toonflowSets';
+import { validateScriptShotPlan, type ScriptShotPlan, type ScriptShotMotionAnimation } from './scriptShotPlan';
 import type { SceneEnvironment } from './ground-path';
 
 type Props = { plan: ScriptShotPlan; entries: readonly ShotSceneEntry[]; environment: SceneEnvironment | null; disabled: boolean; onApply: (plan: ScriptShotPlan) => void };

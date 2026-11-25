@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { validateScriptShotPlan, type ScriptShotPlan, type ScriptShotMotion } from './toonflowSets';
+import { validateScriptShotPlan, type ScriptShotPlan, type ScriptShotMotion } from './scriptShotPlan';
 import { proveWalkableLine, WALK_MAX_SLOPE, type GroundObstacle, type SceneEnvironment } from './ground-path';
 
 export type ShotSceneEntry = { id: string; name: string; object: THREE.Object3D; locked?: boolean; splat?: unknown };

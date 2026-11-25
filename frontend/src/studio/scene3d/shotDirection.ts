@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { validateScriptShotPlan, type ScriptShotPlan, type ScriptShotMotionAnimation } from './toonflowSets';
+import { validateScriptShotPlan, type ScriptShotPlan, type ScriptShotMotionAnimation } from './scriptShotPlan';
 import { groundHeightAt, type SceneEnvironment } from './ground-path';
 import { snapshotShotBounds, type ShotSceneEntry, type ShotNavigation } from './shotNavigation';
 

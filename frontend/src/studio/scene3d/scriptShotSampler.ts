@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { assertScriptShotMotionTargets, assertScriptShotPlaybackReady, sampleScriptShotPlayback, sampleScriptShotMotionAt, type ScriptShotPlan, type ScriptShotMotionSample } from './toonflowSets';
+import { assertScriptShotMotionTargets, assertScriptShotPlaybackReady, sampleScriptShotPlayback, sampleScriptShotMotionAt, type ScriptShotPlan, type ScriptShotMotionSample } from './scriptShotPlan';
 import { AnimationPreview } from './animationPreview';
 import { createCharacterMotionRuntime } from './characterMotion';
 import { compileShotNavigation } from './shotNavigation';
