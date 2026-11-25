@@ -103,6 +103,43 @@
 
 本地可跑收尾本轮已连续完成；无需用户提供ComfyUI地址来结束本轮本地验收。上述SKIPPED/未通过/未验收不能算入通过数量。
 
+## 素材上传有界读取契约（2026-11-25）
+
+用户已选择先记录分类上限再实施：图片/文档20MiB、音频100MiB、视频/3D512MiB；未知类型沿用现有类型语义但按20MiB兜底，不新增类型/MIME白名单。3D缩略图限8MiB，超过后明确拒绝，不再截断。派生清单仍限1MiB。
+
+- 在任何表单解析前限制完整请求体：512MiB主文件 + 8MiB缩略图 + 1MiB清单 + 1MiB multipart/其他字段开销；不是允许多个主文件各占512MiB。已知Content-Length与未知长度流均须受限。
+- 完整请求或选定主文件/缩略图超限返回413；读取失败返回明确错误；不得吞掉multipart解析或缩略图读取错误。拒绝发生在持久化调用前，零素材/缩略图文件、零Material/UploadFile记录；清理解析产生的临时文件。此保证不扩展为所有存储失败的事务原子性。
+- 默认image、project_id校验、无清单旧上传、带清单视频、项目归属、响应结构及生成链保持；非法清单仍400。允许范围内的旧上传兼容；大于新上限的旧上传有意改为413，不宣称无条件向后兼容。
+- 测试覆盖分类选择、阈值与加一、已知/未知请求长度、总量超限、临时文件清理、拒绝零持久化以及旧上传/清单视频/3D缩略图。测试使用临时目录和隔离SQLite，不访问业务数据库或ComfyUI。
+
+### 本项执行信号与新机范围更正
+
+- 修复前 `go -C backend test ./internal/service -run TestMaterialUploadRejectsOversizedImageBeforePersistence -count=1` exit1：真实20MiB+1图片仍进入持久化，nil服务哨兵由Recovery转为500，断言为`status=500 want=413`；修复后同一测试exit0。
+- 复用既有有界读取工具，增加解析前522MiB完整请求闸门、分类主文件限额及8MiB缩略图拒绝。显式处理解析错误，未知长度及multipart最终边界后尾随数据也受请求体限额约束；没有新增MIME白名单或存档字段。
+- 小预算注入仅用于私有同一处理路径的边界测试，不修改全局生产限额：5类×阈值/加一×已知/未知长度共20组；缩略图/完整请求阈值、流式超限、尾随超限、损坏multipart、9MiB落盘后拒绝清理共8组。生产分类常量和真实20MiB+1另有断言，不冒称实际上传512MiB压力验收。拒绝路径检查Material/UploadFile均零行且素材目录无文件；成功路径回读主文件和缩略图字节一致。
+- 专项exit0，信号`MATERIAL_UPLOAD_BOUNDARIES=PASS exact=accepted over=413 malformed=400 rejectedWrites=0 temporaryFiles=0`；旧无清单上传、清单视频及SQLite重开来源留存仍通过。
+- `go -C backend test ./... -count=1` exit0，service25.760秒。未部署、未提交推送、未改用户H3模板；日志 `.rscode/material-upload-limits-go-tests.log` 不提交。本项仅后端/文档，无新增前端改动，不把上一项前端测试当作本项重新执行。
+- **用户在本项期间更正机器条件：当前电脑配置较高，可以测试ComfyUI。** 前文“本机无法运行”的SKIPPED记录仅描述旧环境，不再作为当前机器不测试的理由；新机实机消费、生成与回溯仍为待执行，不能因此改为PASS。本项没有连接或启动ComfyUI、没有创建真实生成任务；实机测试仍须确认当前实例、模型和明确测试范围，H3实验沿用8步及不超过832×480的约束。
+
+### Chrome原生multipart补验（2026-11-25）
+
+- 隔离HeadlessChrome/157.0.0.0通过原生Blob/FormData/fetch访问127.0.0.1:18081上的真实 `Service{}.HandleUploadMaterial`。临时Go哨兵不初始化数据库/存储/ComfyUI；误达持久化将由Recovery显式变500，绝不连接真实服务。编译 `go -C backend build -o ../.rscode/upload-browser-sentinel.exe ./.rscode-upload-probe` exit0。
+- 浏览器脚本 `node .rscode/motion-upload-chrome.mjs` 最终exit0：真实20MiB+1 image及unknown主文件均413且响应“文件超过20MiB限制”；非法project_id用例400，损坏multipart400；联合信号 `CHROME_COMPONENT_AND_UPLOAD_FIXTURE=PASS`。20MiB带非法项目用例仅验证非法项目拒绝，不是“20MiB合法上传接受”的证明。完整接收/入库继续仅由隔离Go夹具证明，不冒称Chrome成功入库、视频/3D512MiB、缩略图8MiB或压力验收。
+- 首轮浏览器脚本exit1：超限夹具错误附带project_id=0，按既有前置项目校验返回400（`400 !== 413`）；读处理器确认后仅移除超限夹具无关字段，保留413断言，非法项目仍单独400；未改产品逻辑或削弱断言。临时服务初版用相对路径读bundle导致HTTP500，改为可执行文件目录定位后HTTP200；独立脚本规避PowerShell内联引号错误。以上均为夹具准备问题，不作为产品失败或PASS隐去。
+- 临时Go哨兵源在 `backend/.rscode-upload-probe/`，脚本/bundle/JSON/log/profile在 `.rscode/`，均不提交。结束后已停止核对过路径的进程并取得 `SENTINEL_STOPPED=PASS`；未访问真实业务后端、未写真实素材、未触发生成。没有完整应用上传UI/像素验收。qa-only流程仍因缺fresh project-gate evidence而blocked。
+
+## 新机顺序验收补记（2026-11-25）
+
+用户要求按播放→新机性能→ComfyUI实机逐项推进，并选择在旧文件缺失时重建独立夹具。真实 `ScriptVideoPanel`/采样器/WebGL/WebCodecs路径的新64镜简化场景导出2880帧VP9/120秒/1280×720，Chrome157、RTX4070、D3D11VideoDecoder连续播放到ended=true，60/110秒seek后继续播放，无媒体错误；严格FFmpeg全片解码exit0，ffprobe确认为2880帧。`NEW_UPPER_PANEL_PLAYBACK=PASS`，完整条件、旧文件缺失及夹具首次身份错误见[高性能验收清单§3](../2026-11-25-Toonflow迁移-高性能电脑待验收清单.md)。**这是新机新片通过，不确认或推翻旧故障硬件假设，不代表复杂雨天角色压力通过。**
+
+第2项已重建古街19组1577实例/20配方定义，生成断言exit0；实际页面自动化两次exit1（`Could not find node with given id`），收窄API拦截仍未解决；已按停止规则暂停，不做第三次变体，没有可报告的有效性能样本。T03/T04仍未验，第3项实机生成未开始，不能沿用下方历史“本机无法运行”理由。本轮无产品代码修改、无真实素材写入、无生成、无提交推送。
+
+### 继续测试：第2项部分通过与新seek失败
+
+用户要求继续测试后，先只读诊断入口模块（当前Scene3DStage和input均挂载，无模块加载失败，旧空白根因未确认），再定位刷新后读取旧input的夹具竞态；等待新文档load事件后，1577实例载入、选择、0.1m移动、撤销、聚焦、显隐、鼠标旋转、保存刷新重载断言exit0（`NEW_SCALE_INTERACTION_AND_ROUNDTRIP=PASS`）。最终静置35.22次RAF/s、旋转16.49次RAF/s、旋转p95=83.4ms/56个>50ms长帧，不能报交互流畅。JS堆只有阶段快照，NVIDIA每秒47个整卡样本观察最高7533MiB，不归因网页、不冒称精确峰值或进程显存。
+
+新3网格64镜简化档真实导出193条目参考包，192张1424×801 PNG逐张对应清单；视频导出1280×720/64秒/12fps/768帧/2546046字节，追溯清单帧数/FPS/artifactId断言通过。但真实Chrome起播后seek60秒，观察到 `PipelineStatus::PIPELINE_ERROR_DECODE: video decode error!`、readyState=1、seeking=true，后续play Promise导致30秒CDP超时；整条压力脚本exit1，不报视频通过，不提高超时。FFmpeg严格全片解码exit0、FFprobe768帧；包时间戳单调/32个每2秒关键帧检查通过仍不证明Chrome兼容或根因。保留原2880片PASS与本768片FAIL各自范围；停止失败播放路径，未进入ComfyUI，不越序生成。完整原始日志、夹具准备失败、数值及未验项见[验收清单§8](../2026-11-25-Toonflow迁移-高性能电脑待验收清单.md)。本轮只改临时脚本和执行记录，未修改产品、模板、提示词、业务数据，未提交推送；原生investigate仍不代表根因确认或完成。
+
 ## 未完成的边界
 
 本文以上是当时的逐步记录；后续用户明确授权六类增强，已按[ADR-0022](0022-studio-character-direction-and-surface-enhancements.md)统一实现IK/脚底贴合、混合、人工校准重定向、人工引导机位/表演、顺序时序避让及现代surfacePaint/59种程序材质，真实小场景入口/存档/画面已验。不再将这些实现记作「未迁入」。**ComfyUI依赖真实生成验收按用户要求SKIPPED**，不是继续等待授权的阻塞；离线交接不能替代实机消费证明。Chrome上限视频播放仍失败，跨设备/大场景交互性能、59种材质逐项外观未验收，峰值显存不可得，不反复施压弱显卡。本地可测项与全环境验收分别报告，不能以跳过或全量测试通过宣称所有环境已通过。

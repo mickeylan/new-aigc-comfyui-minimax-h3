@@ -15,7 +15,28 @@
 
 ## 1. 源仓库与许可核对
 
-- 源路径：`J:/mickeylan/ai/Toonflow-app`（本次只读意图）。
+### 2026-11-25 来源锚点与发布许可补齐契约
+
+用户授权补齐可确认项并单独记录阻塞；本机实际源目录为 `E:/mickeylan/ai/Toonflow-app`，旧 `J:/` 记录保留为历史上下文。源目录只读，不以当前HEAD冒充历史迁移提交。
+
+- 在来源清单登记本轮核验的源HEAD、源工作区状态、列举文件及许可原件SHA-256，与本地适配文件对应；明确这些是本轮对照锚点。仅逐文件相同或可解释适配得到的证据可用于确认来源，不能反推未知迁移时间。源工作区有差异时原样登记而非标为提交内容。
+- Apache-2.0依赖补确切版本、版权及本地包内完整许可；检查包内NOTICE，不能凭空创建上游归属声明。
+- MPL依赖提供确切版本的可验证下载入口、包完整性、包内源码/许可位置及全文；不将浮动仓库首页当对应源码交付。生产构建继续携带唯一声明源，不另建易漂移副本。
+- Hugeicons当前包条款含商业允许与分发限制；授权范围未证明前保留发布阻塞，不擅自替换图标或宣称已经合法/违法。最终Go嵌入产物缺失声明也是独立发布阻塞，前端构建通过不等于已发布二进制通过。
+- 逐文件验证并补来源哈希、许可全文与构建分发测试；不改提示词、用户模板、依赖版本或业务数据，不提交推送。本项为工程合规证据，不是法律意见或发布批准。
+
+### 第四项执行记录（2026-11-25）
+
+- 主代理获本轮只读授权后核验本机源库成功：HEAD=`eecf51547af47eb504822186bd3f2dee369125ff`，已跟踪文件status为空；不是先前审计执行节点的访问拒绝所能代替的结果。Git工具对Windows盘符路径解析异常，改用显式 `git -C E:/mickeylan/ai/Toonflow-app` 只读命令确认，未改源库。
+- `SOURCE_MANIFEST.json` 新增本轮核验快照：1129份源提交原始字节SHA-256、源工作树SHA-256和本地适配SHA-256，以及根LICENSE、插件readme哈希。1129份源工作树内容均与该提交一致；1117份按明确列出的版权头/换行/主机导入变换相等，另外12份逐项差异已检查并登记。12份包括动作目录绑定扩展、几何池所有权释放、显式.ts导入、type-only zod替换和8份空白变化。不触碰任何源提示词正文。历史迁移提交仍为null，不用本轮HEAD冒充。
+- Apache：`class-variance-authority@0.7.1` 原包LICENSE全文（含Copyright 2022 Joe Bell）已纳入唯一分发声明，安装包未发现单独NOTICE。MPL：`mediabunny@1.29.1` 全文、固定npm源码包URL与lockfile SRI已补齐；实际下载校验信号 `MPL_SOURCE_DOWNLOAD=PASS`，58份package/src源码与LICENSE均同安装包逐字相等。源码包仅放 `.rscode/`，不提交；发布仍应复核可获取性。
+- 新增两项回归先exit1：缺核验快照、缺Apache全文；补齐后与原声明测试共7/7通过。`npm --prefix frontend test` exit0：Node670/670、Vitest41文件343/343；`npm --prefix frontend run build` exit0：4510模块、29.67秒。前端dist声明与唯一源逐字相等：41083字节，SHA-256=`01fa0a5bc4e9a289cfdebe8b6c6b27c502a77594880642b116b90ba89cbac866`。
+- **仍阻塞发布**：Hugeicons渲染包当前分发方式的授权证据不足；本地 `backend/internal/static/dist/THIRD_PARTY_NOTICES.md` 缺失（`GO_EMBEDDED_NOTICE=MISSING_RELEASE_BLOCKED`），没有把前端构建冒充Go二进制/镜像验收，也未覆盖构建旧产物；历史迁移提交无法从本轮对照证明。未擅自替换依赖、同步嵌入目录、提交推送、触发生成或宣称完整法律合规。
+- 原生audit流程的设计审查分支遇到memory review锁而失败，另两支给出报告；用户问答已授权补可确认项并保留阻塞。工作流仍停在remediation_decision，当前工具没有接收该决定的字段，因此不宣称workflow完成。临时核验脚本、差异、源码包和日志均在 `.rscode/`，不提交。
+
+### 初次迁移核对记录
+
+- 源路径：`J:/mickeylan/ai/Toonflow-app`（初次记录；本机现为上述E盘路径）。
 - 主代理已实际读取源 `README.md:254–310`、根 `LICENSE` 及 `packages/nodes/trumanMap/readme.md`。
   根许可为 MIT，Copyright (c) 2026 HBAI-Ltd；迁入代码保留版权及完整许可。
 - 插件声明本地素材为原创程序化几何；Holodeck 派生内容为 MIT、其 examples 为 CC0；Quaternius 动作为 CC0；

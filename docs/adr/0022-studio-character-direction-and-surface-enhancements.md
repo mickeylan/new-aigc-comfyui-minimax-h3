@@ -93,3 +93,47 @@
 - **新构建真实Chrome**：`.rscode/verify-four-fix-browser.mjs` exit0，`FOUR_FIX_BROWSER=PASS oldArchiveLight=night aspects=5 encodedFrames=10 consoleErrors=[]`。载入无环境旧档后背景080b14、三盏方向光强度0.7/0.3/1.2；五画幅各导出2秒/1fps视频，在首帧真实PNG编码挂起时通过CDP改窗口并等待ResizeObserver，导出画布保持目标尺寸，实际10个VideoFrame、WebM播放器尺寸及清单全部一致，完成后按新容器恢复。视频readyState≥2/error=null；这是小样本尺寸/恢复回归，不代替2880帧播放、长片性能或跨设备验收。
 - 临时浏览器脚本及`.rscode/four-fix-browser-result.json`不入库；未访问业务数据库或18000、未入库素材或创建生成任务。ComfyUI实机继续**SKIPPED：本机无法运行**。
 - **验证纠错**：首个`npm --prefix frontend exec -- vitest ...`被本机npm解析掉参数，误用根目录配置收集Node套件（exit1，`No test suite found`/缺DOM）；检查项目`vitest.config.js`后使用`node frontend/node_modules/vitest/vitest.mjs run --root frontend ...`。新增回调夹具首轮缺天空盒ref、把TS类型import替换成运行时表达式；补齐依赖且只替换运行时导入后，原断言准确复现两项产品缺陷，再修改产品代码通过。没有调整测试超时或削弱断言。
+
+## 镜头契约与布景引擎依赖边界（2026-11-25）
+
+用户选择最小边界修复：抽出独立镜头契约模块，包含镜头类型、校验、时间轴纯数据计算与参考包清单；不改变原函数行为、错误文案、存档格式或版本。布景适配器可重导出原接口兼容既有调用；镜头契约不得运行时反向依赖布景模板、素材目录、模型解析及几何构建。增强校验允许复用已有角色校验，但须检查传递运行时依赖。
+
+- 静态镜头消费者（导演、导航、增强面板、逐镜采样器）直接依赖独立契约，不经布景适配器重导出绕回重模块。
+- 只修上述依赖边界；不改变布景/程序化素材面板挂载即加载、存档配方物化或环境渲染行为，不承诺所有大目录直到用户展开才加载，也不采用强制manualChunks隐藏循环依赖。
+- 先采集当前构建的chunk静态闭包、模块归属和原始/gzip字节，改后同方式比较；纯镜头契约静态闭包不得含布景引擎/目录构建器。包体可能仅重新分配，不以单个chunk缩小冒充总下载减少或首屏性能提升。
+- 逐文件验证；原接口重导出兼容、镜头全量回归及构建通过后才算此小项代码完成。新增源码按既有导入门禁仅逐路径登记intent-to-add，不暂存内容、不提交推送。
+
+### 最小边界修复执行记录
+
+- 将镜头段整体移入 `scriptShotPlan.ts`，原 `toonflowSets.ts` 保留兼容重导出。与HEAD比较原函数正文33065字节逐字一致（`SHOT_CONTRACT_BEHAVIOR_COPY=PASS`）；仅新增模块头和改变四个静态消费者的import路径。类型引用会被擦除，不作为运行时反向依赖。
+- 新增esbuild真实打包闭包回归5项，修复前exit1：四个已有消费者各引入5个禁止重模块，新契约文件尚不存在；不是五项都复现了同一种产品缺陷。修复后5/5通过。逐文件专项也均exit0，未放宽断言。
+- `npm --prefix frontend test` exit0：Node668/668，Vitest41文件343/343；`npm --prefix frontend run build` exit0：4510模块、25.48秒。存档、参考包、视频、增强与真实Stage回读沿用既有全量测试。
+- 用同一临时Vite插件于generateBundle阶段捕获新旧代码与静态模块图（两次均exit0）：四个镜头消费者各自的禁止重模块数5→0，新契约为0；场景入口静态chunk闭包内禁止重模块数5→0，信号 `SHOT_BOUNDARY_VITE_GRAPH=PASS`。未改manualChunks或构建配置。
+- 同一采样阶段的场景入口code字节15125435→3124305、gzip5433465→1082518；入口及其静态chunk闭包合计字节16252942→4251812、逐chunk gzip之和5754144→1403195。这是JS静态闭包，不含动态请求、CSS、WASM或浏览器缓存，亦非实际网络传输/首屏耗时。Vite最终写盘报告略有渲染差异（改后入口3125.39kB/gzip1082.91kB）。
+- 大目录转到动态chunk而非被删除：`toonflowPrimitives` code10689800字节/gzip4001202字节，`toonflowSets` code116380/gzip37408；仍有大chunk警告。面板挂载仍可能立即请求动态目录，因此不能宣称进入3D页不下载目录，或用户可感知性能已通过。未做Chrome网络/像素验收或ComfyUI实机测试。
+- 首次临时基线脚本从仓库根运行，Tailwind提示content缺失且PowerShell把stderr记为exit1；没有用此轮作为最终基线。修正脚本工作目录为frontend并用cmd捕获真实退出码后重新测量，未更改项目配置。临时日志/模块图在 `.rscode/shot-boundary-*`，不提交。原生workflow仍停在ADR user_decision，用户已在问答选择补ADR后最小实施，但工具没有接收该决定的入口，不宣称workflow完成。
+
+## 基础走位编辑与增强配置的保留契约（2026-11-25）
+
+用户已选择先补充本 ADR 再实施。本节规定基础走位表单的行为，不改变完整 motion 替换接口、存档字段或版本。
+
+- 基础走位编辑不等于清除增强。同一稳定 targetId、同一主动作引用（index/name/duration 全部相等，或都未选）时，重复应用及修改起止坐标/时长须保留已有 `characterMotion` 与 `navigation`。
+- 存在 `characterMotion` 时，主动作改变采取保守拒绝；存在任一增强时，目标改变拒绝。不按显示名、同名 clip 或索引单独推断兼容。不兼容操作不得写入计划，须明确提示先在增强面板移除对应配置，或显式清除走位后重新绑定。只有导航且目标不变时，切换主动作不影响导航配置。
+- 保留配置不是保留安全证明。坐标/时长变化后的播放与导出仍走既有统一采样器重新检查，不复用旧路径或可走证明。
+- 「清除走位」仍显式移除整份 motion；增强面板仍负责显式移除增强。无增强旧档保持原编辑行为，不自动启用新配置。
+- 验收须覆盖真实 React 输入/点击的重复应用、坐标/时长修改、动作引用变化及目标切换原子拒绝、显式清除，以及完整 motion 经既有校验/JSON 回读后增强字段不丢失。实现与执行结果另按实际信号报告，不以本节契约宣称测试通过。
+
+### 本项执行记录
+
+- 先新增10项真实React事件回归，专项命令 `node frontend/node_modules/vitest/vitest.mjs run --root frontend src/studio/scene3d/SetTemplatePanel.spec.tsx` 修复前exit1：10失败、原17通过；传给完整替换接口的值明确缺少增强字段，不兼容变更也未被拒绝。只改基础表单保留与拒绝逻辑后，相同27项exit0，没有修改既有断言。
+- 新增保留用例进一步调用真实 `setScriptShotMotion`、目标校验与JSON回读校验；与分场、逐镜采样、真实Stage存档专项共4文件93项通过，含既有增强资源两轮GLB/JSON往返。未改变完整motion替换接口及存档版本。
+- 首次前端全量exit1：新增用例内部冷加载完整素材模块触发 `Test timed out in 5000ms`，并产生后续React act/DOM级联错误（19项失败）。将该真实模块的加载移至测试文件收集阶段、React root创建前；未改超时、断言或产品逻辑。此后 `npm --prefix frontend test` exit0：Node663/663，Vitest41文件343/343。
+- `npm --prefix frontend run build` exit0，4509模块、27.04秒，仍有既有大chunk及动态/静态混用警告；不将构建成功当作懒加载缺口已解决。
+- 初轮没有新增真实Chrome验收；后续组件级Chrome补验见下。React测试与生产回调测试不冒充浏览器像素验收。不运行ComfyUI、不触碰业务数据、不部署、不提交推送，不修改用户H3模板。临时日志在 `.rscode/toonflow-motion-fix-*.log`，不提交。
+
+### 真实Chrome组件级补验（2026-11-25）
+
+- 检查时5173/18000均ECONNREFUSED，工具自带Chrome启动失败；改用独立隔离profile的HeadlessChrome/157.0.0.0，不接触用户浏览器。临时esbuild bundle挂载真实SetTemplatePanel与真实布景模块/契约，没有mock引擎；在127.0.0.1:18081夹具页操作原生输入/选择/按钮，并经真实校验和JSON回读捕获应用计划。
+- `node .rscode/motion-upload-chrome.mjs` 最终exit0，`CHROME_COMPONENT_AND_UPLOAD_FIXTURE=PASS`：9组走位场景通过——双增强/仅导航/仅角色增强重复应用保留、坐标时长修改保留、换目标/换主动作/清空动作拒绝、仅导航时切主动作保留、显式清除。拒绝场景应用回调计数为0；浏览器未捕获error事件。
+- 是真实Chrome组件/DOM事件验收，不是完整Scene3DStage/WebGL像素、真实存档上传或业务端到端验收；未证明视觉效果、避障安全或目录请求时机。与上传共用脚本首轮在后续上传夹具的非法project_id前置校验处失败，走位已执行但未当整轮PASS；修正上传输入准备且保留原断言后整轮通过。
+- 临时脚本、bundle、结果与profile在 `.rscode/`，Go无数据库哨兵源在 `backend/.rscode-upload-probe/`，均不提交。临时哨兵已停止并断言端口拒绝连接，未启动真实前后端或ComfyUI。qa-only流程仍因缺fresh project-gate evidence而blocked，不宣称workflow完成。
