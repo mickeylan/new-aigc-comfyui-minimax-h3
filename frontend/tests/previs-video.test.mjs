@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {videoFrameTimes,pickVideoCodec,encodePrevisVideo,webmBlob,videoManifest,VIDEO_MAX_FRAMES} from '../src/utils/previsVideo.js'
+import {videoFrameTimes,pickVideoCodec,encodePrevisVideo,webmBlob,videoManifest,VIDEO_MAX_FRAMES,VIDEO_MAX_BYTES} from '../src/utils/previsVideo.js'
 import {createAssetRuntime,renderExportPass} from '../src/utils/previsRenderAssets.js'
 import * as T from 'three'
 // Minimal EBML reader: returns [{id,start,dataStart,end,children?}] for master elements we care about.
@@ -19,6 +19,16 @@ const codec={name:'VP8',codec:'vp8',webm:'V_VP8',config:{codec:'vp8'}}
 
 test('视频帧时间与PNG序列一致（起点含、终点不含），上限2880帧且超限拒绝不截断',()=>{assert.deepEqual(videoFrameTimes(1000,2000,6,5000).slice(0,2),[1000,1000+1000/6]);assert.equal(videoFrameTimes(0,120000,24,120000).length,VIDEO_MAX_FRAMES);assert.throws(()=>videoFrameTimes(0,120042,24,121000),/最多2880帧/);assert.throws(()=>videoFrameTimes(0,1000,30,5000),/FPS/);assert.throws(()=>videoFrameTimes(0,6000,24,5000))})
 test('编码器选择：VP9优先、退回VP8；不支持WebCodecs明确提示改用PNG序列',async()=>{const{E}=fakeEncoder();const picked=await pickVideoCodec(E,class{},12);assert.equal(picked.name,'VP8');assert.equal(picked.config.width,1280);assert.equal(picked.config.framerate,12);await assert.rejects(()=>pickVideoCodec(undefined,undefined,12),/PNG序列/);await assert.rejects(()=>pickVideoCodec({isConfigSupported:async()=>({supported:false})},class{},12),/VP9\/VP8/);const vp9=await pickVideoCodec({isConfigSupported:async c=>({supported:true})},class{},24);assert.equal(vp9.name,'VP9')})
+test('可选画幅同步编码配置及WebM轨道；非法/超像素尺寸在探测编码器前拒绝',async()=>{
+ for(const [width,height]of [[1280,720],[720,1280],[960,960],[1152,768],[768,1152]]){
+  const {E}=fakeEncoder(),picked=await pickVideoCodec(E,class{},6,{width,height});assert.equal(picked.config.width,width);assert.equal(picked.config.height,height)
+  const b=new Uint8Array(await webmBlob({codecID:picked.webm,width,height,fps:6,chunks:[{timestamp_ms:0,key:true,data:Uint8Array.of(1)}],durationMs:1000/6}).arrayBuffer())
+  const track=find(find(parse(b)[1].children,0x1654AE6B).children,0xAE),video=find(track.children,0xE0);assert.equal(uintAt(b,find(video.children,0xB0)),width);assert.equal(uintAt(b,find(video.children,0xBA)),height)
+ }
+ let probes=0;const E={isConfigSupported:async()=>{probes++;return {supported:true}}}
+ for(const [width,height]of [[1,2],[1281,720],[1280,1280],[720.5,1280],[NaN,720],[0,720]])await assert.rejects(()=>pickVideoCodec(E,class{},6,{width,height}),/视频尺寸/)
+ assert.equal(probes,0)
+})
 test('按帧序号确定时间戳与每2秒关键帧，渲染慢不影响时长；帧全部关闭、编码器关闭',async()=>{const{E,log}=fakeEncoder(),times=videoFrameTimes(0,5000,6,5000);let progress=0;const result=await encodePrevisVideo({times,fps:6,codec,Encoder:E,renderFrame:frames(log),onProgress:n=>progress=n,tick:async()=>{}});assert.equal(result.chunks.length,30);assert.equal(progress,30);assert.equal(result.duration_ms,5000);assert.deepEqual(log.encoded.filter(e=>e.key).map(e=>e.ts),[0,2000000,4000000]);assert.equal(log.encoded[1].ts,166667);assert.deepEqual(result.chunks.map(c=>c.timestamp_ms).slice(0,3),[0,167,333]);assert.ok(log.frames.every(f=>f.closed));assert.equal(log.closed,1);assert.equal(log.configured.codec,'vp8')})
 test('队列积压时等待；取消、编码错误、超体积、帧数不完整都拒绝且关闭编码器',async()=>{const times=videoFrameTimes(0,2000,12,2000)
  {const{E,log}=fakeEncoder({deferred:true});let ticks=0,instance;class Slow extends E{constructor(i){super(i);instance=this}}const result=await encodePrevisVideo({times,fps:12,codec,Encoder:Slow,renderFrame:frames(log),tick:async()=>{ticks++;if(instance.encodeQueueSize>4)instance.drain()}});assert.equal(log.maxQueue,5);assert.ok(ticks>=times.length);assert.equal(result.chunks.length,times.length)}
@@ -26,6 +36,18 @@ test('队列积压时等待；取消、编码错误、超体积、帧数不完�
  {const{E,log}=fakeEncoder({failAt:3});await assert.rejects(()=>encodePrevisVideo({times,fps:12,codec,Encoder:E,renderFrame:frames(log),tick:async()=>{}}),/GPU lost/);assert.equal(log.closed,1)}
  {const{E,log}=fakeEncoder({sizeOf:()=>600});await assert.rejects(()=>encodePrevisVideo({times,fps:12,codec,Encoder:E,renderFrame:frames(log),maxBytes:6000,tick:async()=>{}}),/256MiB/);assert.equal(log.closed,1)}
  {const{E,log}=fakeEncoder({dropAt:5});await assert.rejects(()=>encodePrevisVideo({times,fps:12,codec,Encoder:E,renderFrame:frames(log),tick:async()=>{}}),/帧数不完整/);assert.equal(log.closed,1)}
+})
+test('真实256MiB编码预算在复制超大chunk前拒绝，且编码帧和编码器关闭',async()=>{
+ const{E,log}=fakeEncoder({sizeOf:()=>VIDEO_MAX_BYTES+1});let copied=false
+ class BudgetEncoder extends E{encode(frame,opt){log.encoded.push(frame.timestamp);this.init.output({timestamp:frame.timestamp,type:'key',byteLength:VIDEO_MAX_BYTES+1,copyTo(){copied=true;throw Error('must reject before copying')}})}}
+ await assert.rejects(()=>encodePrevisVideo({times:[0],fps:1,codec,Encoder:BudgetEncoder,renderFrame:frames(log),tick:async()=>{}}),/256MiB/)
+ assert.equal(copied,false);assert.equal(log.closed,1);assert.ok(log.frames.every(f=>f.closed))
+})
+test('256MiB限制包含WebM封装开销，在Blob复制payload前拒绝',()=>{
+ // Reuse a single 1MiB buffer; the declared aggregate payload is exactly 256MiB.
+ const data=new Uint8Array(1024*1024),chunks=Array.from({length:256},(_,i)=>({timestamp_ms:i*1000,key:true,data}))
+ assert.equal(chunks.reduce((n,c)=>n+c.data.length,0),VIDEO_MAX_BYTES)
+ assert.throws(()=>webmBlob({codecID:'V_VP8',fps:1,chunks,durationMs:256000}),/256MiB/)
 })
 test('WebM结构：EBML头、时长、轨道编码与默认帧时长、簇时间码、关键帧标志、SeekHead与Cues位置正确',async()=>{const chunks=[];for(let i=0;i<60;i++)chunks.push({timestamp_ms:Math.round(i*1000/12),key:i%24===0,data:Uint8Array.of(i,i,i)});const blob=webmBlob({codecID:'V_VP9',fps:12,chunks,durationMs:5000}),b=new Uint8Array(await blob.arrayBuffer());assert.equal(blob.type,'video/webm');const top=parse(b);assert.equal(top.length,2);assert.equal(strAt(b,find(top[0].children,0x4282)),'webm');const seg=top[1],kids=seg.children;assert.equal(seg.end,b.length);const info=find(kids,0x1549A966);assert.equal(uintAt(b,find(info.children,0x2AD7B1)),1000000);const dur=find(info.children,0x4489);assert.equal(new DataView(b.buffer,dur.dataStart,8).getFloat64(0),5000);const track=find(find(kids,0x1654AE6B).children,0xAE);assert.equal(strAt(b,find(track.children,0x86)),'V_VP9');assert.equal(uintAt(b,find(track.children,0x23E383)),83333333);const video=find(track.children,0xE0);assert.equal(uintAt(b,find(video.children,0xB0)),1280);assert.equal(uintAt(b,find(video.children,0xBA)),720)
  const clusters=all(kids,0x1F43B675);assert.deepEqual(clusters.map(c=>uintAt(b,find(c.children,0xE7))),[0,2000,4000]);let total=0;for(const c of clusters){const blocks=all(c.children,0xA3);total+=blocks.length;const flags=blocks.map(s=>b[s.dataStart+3]);assert.equal(flags[0],0x80);assert.ok(flags.slice(1).every(f=>f===0));const rel=blocks.map(s=>(b[s.dataStart+1]<<8)|b[s.dataStart+2]);assert.deepEqual(rel.slice(0,2),[0,83]);assert.equal(b[blocks[0].dataStart],0x81)}assert.equal(total,60)

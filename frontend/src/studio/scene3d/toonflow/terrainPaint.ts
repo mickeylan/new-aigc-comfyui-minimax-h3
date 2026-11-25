@@ -1,7 +1,7 @@
 // Derived from Toonflow-app; Copyright (c) 2026 HBAI-Ltd; MIT. See ../../THIRD_PARTY_NOTICES.md.
 import { gzipSync, Gunzip } from "three/addons/libs/fflate.module.js";
 import type { SceneTerrain } from "./sceneDocument";
-import { terrainSurfaceMaxId, terrainSurfaceOptions } from "./terrainSurfaces";
+import { terrainSurfaceMaxId, terrainSurfaceOptions } from "./terrainSurfaces.ts";
 
 type TerrainPaintRecord = NonNullable<SceneTerrain["surfacePaint"]>;
 type TerrainPaintStyle = NonNullable<TerrainPaintRecord["styles"]>[number];

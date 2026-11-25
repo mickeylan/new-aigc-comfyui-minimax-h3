@@ -23,9 +23,18 @@ export function duplicateMesh(root: THREE.Object3D) {
     m.material = Array.isArray(m.material) ? m.material.map(duplicate) : duplicate(m.material);
   }); copy.position.x += .5; copy.position.z += .5; return copy;
 }
-export function surfaceDrop(ray: THREE.Raycaster, entries: Array<EditableEntry & { splat?: unknown }>) {
+/**
+ * 拖放落点：先打场景里已有的网格，再打地形（有地形时地面不再是 y=0 平面），
+ * 最后才退回无限水平面，避免把物件放到半空或山里。
+ */
+export function surfaceDrop(
+  ray: THREE.Raycaster,
+  entries: Array<EditableEntry & { splat?: unknown }>,
+  terrain?: THREE.Object3D | null,
+) {
   const targets: THREE.Object3D[] = [];
   for (const e of entries) if (e.object.visible && !e.splat) e.object.traverse(o => { if ((o as THREE.Mesh).isMesh && !isPoseEditorHelper(o)) { let p: THREE.Object3D | null = o; let visible = true; while (p) { if (!p.visible || isPoseEditorHelper(p)) visible = false; p = p.parent; } if (visible) targets.push(o); } });
+  if (terrain?.visible) targets.push(terrain);
   const hit = ray.intersectObjects(targets, false)[0];
   return hit ? hit.point.clone() : ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), new THREE.Vector3());
 }

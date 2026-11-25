@@ -27,7 +27,8 @@ test('落点优先真实表面并保留高度，空命中回退地面', () => {
   assert.match(stage3d, /dropPointFromEvent/, '缺少落点计算')
   assert.match(stage3d, /intersectPlane/, '应把屏幕点投到地面平面')
   assert.match(stage3d, /new THREE\.Plane\(new THREE\.Vector3\(0, 1, 0\), 0\)/, '地面平面是 y=0')
-  assert.match(stage3d, /surfaceDrop\(raycaster, objectsRef\.current\)/, '应查询可见内容表面')
+  // 2026-11-25：地形网格也是可落地的表面，排在无限平面之前（否则拖进山里会落回 y=0）
+  assert.match(stage3d, /surfaceDrop\(raycaster, objectsRef\.current, terrainMeshRef\.current\)/, '应查询可见内容表面（含地形）')
   assert.match(stage3d, /group\.position\.copy\(dropPoint\)/, '保留表面高度')
   assert.match(stage3d, /已放入 \$\{asset\.name\}（原点）/, '点按钮放入时要说明落在原点')
 })

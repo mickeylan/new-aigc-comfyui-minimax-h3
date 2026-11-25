@@ -3,7 +3,24 @@
  *
  * 这里只放纯数据与拾取点的钳制逻辑（能被 node --test 直接跑），
  * three 的射线拾取留在编辑器里。
+ *
+ * 同一文件还存放**场景环境**（时间 / 天气 / 地形）的纯计算：地形一启用，
+ * 「地面」就不再是固定的 20×20 平面，落点、走位可行性与渲染光照都必须读同一份
+ * 高度场与同一套太阳参数，否则面板说的和画面看到的会不一致。因此环境采样与
+ * 地面采样放在一起，并由编辑器把它同时喂给视口、截图、序列与参考图取样。
  */
+
+import type { SceneTerrain } from "./toonflow/sceneDocument";
+import { validateTerrainPaint } from "./toonflow/terrainPaint.ts";
+
+/**
+ * 地表编号上限（Toonflow 的 terrainSurfaceMaxId = terrainSurfaceOptions.length − 1，当前 58）。
+ *
+ * 不直接 import 那个模块：本文件必须能被 `node --test` 直接跑（见文件头），
+ * 而 toonflow/terrainModel 是一条带 three/fflate 的依赖链。这里硬编码上限，
+ * 由 environment.spec.ts 对照真实模块断言两者相等——调色板一扩就会红。
+ */
+const TERRAIN_SURFACE_MAX_ID = 58;
 
 export type GroundPoint = [number, number, number];
 
@@ -250,6 +267,8 @@ export function groundPathYaw(path: GroundPath, t = 1): number {
  * 而且自动插入的点不进存档（存档里只留用户点的 A/B/途经点）。
  */
 export interface GroundObstacle {
+  /** 可选诊断名，不用于推断碰撞语义。 */
+  name?: string;
   /** [x, z] 的最小角 */
   min: [number, number];
   /** [x, z] 的最大角 */
@@ -474,4 +493,527 @@ export function groundPathFollowDelta(path: GroundPath, t: number): GroundPoint 
   const now = groundPathPointAt(path, t);
   const start = groundPathPointAt(path, 0);
   return [now[0] - start[0], 0, now[2] - start[2]];
+}
+
+// ---------------------------------------------------------------------------
+// 场景环境：时间 / 天气 / 地形
+//
+// 版本化文档成员（version 1）。旧存档没有这个字段，读出为 null，行为与以前完全一致
+// （20×20 平地、灯光预设）；一旦启用，太阳方向、雾、天空底色与地面高度都以这里为准。
+// 所有函数都是纯函数：同一份环境在视口、截图、序列与参考图取样里得到同一结果，
+// 不使用 Math.random、不读系统时间。
+// ---------------------------------------------------------------------------
+
+export const WEATHER_CONDITIONS = ["clear", "cloudy", "rain", "snow", "fog"] as const;
+export type WeatherCondition = (typeof WEATHER_CONDITIONS)[number];
+
+export interface SceneWeatherState {
+  condition: WeatherCondition;
+  /** 0–1，同一 preset 的强弱（雨量、雾浓度、云量）。 */
+  intensity: number;
+  /** 0–1，控制雨雪水平漂移；不改变光照。 */
+  wind: number;
+}
+
+export interface SceneEnvironment {
+  version: 1;
+  /** 一天中的小时（0–24，允许小数）。不做自动走时：同一个值永远画同一张图。 */
+  hour: number;
+  /** 纬度（-66–66）。春分近似下太阳轨迹只由纬度与小时决定。 */
+  latitude: number;
+  /** 场景北向相对 -Z 的偏移（度），只旋转太阳的水平方位。 */
+  northOffset: number;
+  weather: SceneWeatherState;
+  /** 高度场地形；null = 平地，沿用原有的 20×20 地面与 GROUND_EXTENT。 */
+  terrain: SceneTerrain | null;
+}
+
+export const TERRAIN_LIMITS = {
+  minSize: 20,
+  maxSize: 1024,
+  minSegments: 64,
+  maxSegments: 256,
+  minHeight: -12,
+  maxHeight: 40,
+  maxSeed: 2147483647,
+} as const;
+
+/** 默认环境：正午、晴天、平地。地形单独由 `createEnvironmentTerrain` 打开。 */
+export function defaultSceneEnvironment(): SceneEnvironment {
+  return {
+    version: 1,
+    hour: 12,
+    latitude: 30,
+    northOffset: 0,
+    weather: { condition: "clear", intensity: 0.5, wind: 0.2 },
+    terrain: null,
+  };
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+function rejectUnknownKeys(value: Record<string, unknown>, allowed: readonly string[], label: string) {
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) throw new Error(`${label}包含未支持的字段「${key}」`);
+  }
+}
+
+function finiteIn(value: unknown, min: number, max: number, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max) {
+    throw new Error(`${label}须为 ${min}–${max} 的有限数`);
+  }
+  return value;
+}
+
+function integerIn(value: unknown, min: number, max: number, label: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+    throw new Error(`${label}须为 ${min}–${max} 的整数`);
+  }
+  return value;
+}
+
+const TERRAIN_KEYS = ["size", "segments", "heights", "surfaces", "seed", "waterLevels", "surfaceBlend", "surfaceColors", "waterColors", "surfacePaint"] as const;
+
+/** 只接受编辑器实际会渲染的高度场字段：多带字段就拒绝，避免存了看不见的语义。 */
+function validateSceneTerrain(value: unknown): SceneTerrain {
+  if (!isRecord(value)) throw new Error("地形不是对象");
+  rejectUnknownKeys(value, TERRAIN_KEYS, "地形");
+  const size = finiteIn(value.size, TERRAIN_LIMITS.minSize, TERRAIN_LIMITS.maxSize, "地形边长");
+  const segments = integerIn(value.segments, TERRAIN_LIMITS.minSegments, TERRAIN_LIMITS.maxSegments, "地形分段数");
+  const count = (segments + 1) ** 2;
+  const heights = value.heights;
+  const surfaces = value.surfaces;
+  if (!Array.isArray(heights) || heights.length !== count) throw new Error(`地形高度数组长度须为 ${count}`);
+  if (!Array.isArray(surfaces) || surfaces.length !== count) throw new Error(`地形地表数组长度须为 ${count}`);
+  const checkedHeights = heights.map((height, index) =>
+    finiteIn(height, TERRAIN_LIMITS.minHeight, TERRAIN_LIMITS.maxHeight, `地形高度[${index}]`));
+  const checkedSurfaces = surfaces.map((surface, index) =>
+    integerIn(surface, 0, TERRAIN_SURFACE_MAX_ID, `地形地表[${index}]`));
+  const seed = integerIn(value.seed, 0, TERRAIN_LIMITS.maxSeed, "地形种子");
+  let waterLevels: (number | null)[] | undefined;
+  if (value.waterLevels !== undefined) {
+    if (!Array.isArray(value.waterLevels) || value.waterLevels.length !== count) throw new Error(`水面数组长度须为 ${count}`);
+    waterLevels = value.waterLevels.map((level, index) => {
+      if (level === null) return null;
+      const checked = finiteIn(level, TERRAIN_LIMITS.minHeight, TERRAIN_LIMITS.maxHeight, `水面高度[${index}]`);
+      if (checkedSurfaces[index] !== 2 || checked <= checkedHeights[index] + 0.01) throw new Error(`水面[${index}]须在河床上方且地表为水体`);
+      return checked;
+    });
+  }
+  let surfaceBlend: SceneTerrain['surfaceBlend'];
+  if (value.surfaceBlend !== undefined) {
+    const blend = value.surfaceBlend;
+    if (!isRecord(blend)) throw new Error('地表混合不是对象');
+    rejectUnknownKeys(blend, ['surfaces', 'weights'], '地表混合');
+    if (!Array.isArray(blend.surfaces) || blend.surfaces.length !== count || !Array.isArray(blend.weights) || blend.weights.length !== count) throw new Error(`地表混合数组长度须为 ${count}`);
+    surfaceBlend = {
+      surfaces: blend.surfaces.map((id, index) => integerIn(id, 0, TERRAIN_SURFACE_MAX_ID, `混合地表[${index}]`)),
+      weights: blend.weights.map((weight, index) => finiteIn(weight, 0, 1, `混合权重[${index}]`)),
+    };
+  }
+  const colors = (raw: unknown, water: boolean): Record<string, string> | undefined => {
+    if (raw === undefined) return undefined;
+    const label = water ? '水色' : '地表色';
+    if (!isRecord(raw)) throw new Error(`${label}不是对象`);
+    const result: Record<string, string> = {};
+    for (const [key, color] of Object.entries(raw)) {
+      if (!/^(0|[1-9][0-9]*)$/.test(key) || !Number.isSafeInteger(Number(key)) || Number(key) > (water ? count - 1 : TERRAIN_SURFACE_MAX_ID) || (!water && Number(key) === 38)) throw new Error(`${label}索引无效`);
+      if (typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color)) throw new Error(`${label}须为六位十六进制颜色`);
+      if (water && typeof waterLevels?.[Number(key)] !== 'number') throw new Error('水色只能覆盖有水顶点');
+      result[key] = color;
+    }
+    return result;
+  };
+  let surfacePaint: SceneTerrain['surfacePaint'];
+  if (value.surfacePaint !== undefined) {
+    const paint = value.surfacePaint;
+    if (!isRecord(paint)) throw new Error('地表绘图不是对象');
+    rejectUnknownKeys(paint, ['segments', 'data', 'styles'], '地表绘图');
+    if (![256, 512, 1024].includes(paint.segments as number) || typeof paint.data !== 'string') throw new Error('地表绘图分辨率或数据无效');
+    if (paint.styles !== undefined) {
+      if (!Array.isArray(paint.styles) || paint.styles.length < 1 || paint.styles.length > 256) throw new Error('地表样式数量无效');
+      for (const style of paint.styles) {
+        if (!isRecord(style)) throw new Error('地表样式不是对象');
+        rejectUnknownKeys(style, ['surface', 'color'], '地表样式');
+        integerIn(style.surface, 0, TERRAIN_SURFACE_MAX_ID, '样式材质');
+        if (typeof style.color !== 'string' || !/^#[0-9a-f]{6}$/i.test(style.color)) throw new Error('样式颜色无效');
+      }
+    }
+    surfacePaint = { segments: paint.segments as number, data: paint.data, ...(paint.styles ? { styles: (paint.styles as NonNullable<SceneTerrain['surfacePaint']>['styles'])!.map(style => ({ ...style })) } : {}) };
+    const error = validateTerrainPaint(surfacePaint);
+    if (error) throw new Error(error);
+  }
+  const surfaceColors = colors(value.surfaceColors, false), waterColors = colors(value.waterColors, true);
+  return { size, segments, heights: checkedHeights, surfaces: checkedSurfaces, seed, ...(waterLevels ? { waterLevels } : {}), ...(surfaceBlend ? { surfaceBlend } : {}), ...(surfaceColors ? { surfaceColors } : {}), ...(waterColors ? { waterColors } : {}), ...(surfacePaint ? { surfacePaint } : {}) };
+}
+
+/**
+ * 校验一份环境文档。未知版本、未知字段、越界数值一律显式报错，
+ * 不做默认补齐；返回值是深拷贝，调用方之后改对象不会污染已校验的数据。
+ */
+export function validateSceneEnvironment(value: unknown): SceneEnvironment {
+  if (!isRecord(value)) throw new Error("环境不是对象");
+  rejectUnknownKeys(value, ["version", "hour", "latitude", "northOffset", "weather", "terrain"], "环境");
+  if (value.version !== 1) throw new Error("不支持的环境版本");
+  const hour = finiteIn(value.hour, 0, 24, "环境小时");
+  const latitude = finiteIn(value.latitude, -66, 66, "环境纬度");
+  const northOffset = finiteIn(value.northOffset, -180, 180, "环境北向偏移");
+  if (!isRecord(value.weather)) throw new Error("天气不是对象");
+  rejectUnknownKeys(value.weather, ["condition", "intensity", "wind"], "天气");
+  const condition = value.weather.condition;
+  if (typeof condition !== "string" || !(WEATHER_CONDITIONS as readonly string[]).includes(condition)) {
+    throw new Error("天气类型无效");
+  }
+  const weather: SceneWeatherState = {
+    condition: condition as WeatherCondition,
+    intensity: finiteIn(value.weather.intensity, 0, 1, "天气强度"),
+    wind: finiteIn(value.weather.wind, 0, 1, "风力"),
+  };
+  const terrain = value.terrain === null || value.terrain === undefined ? null : validateSceneTerrain(value.terrain);
+  return { version: 1, hour, latitude, northOffset, weather, terrain };
+}
+
+const DEG = Math.PI / 180;
+const clampUnit = (value: number) => Math.min(1, Math.max(0, value));
+const mix = (from: number, to: number, ratio: number) => Math.round(from + (to - from) * clampUnit(ratio));
+const hex = (value: number) => `#${value.toString(16).padStart(6, "0")}`;
+
+function mixHex(from: string, to: string, ratio: number): string {
+  const a = parseInt(from.slice(1), 16);
+  const b = parseInt(to.slice(1), 16);
+  const channel = (shift: number) => mix((a >> shift) & 0xff, (b >> shift) & 0xff, ratio) << shift;
+  return hex(channel(16) | channel(8) | channel(0));
+}
+
+export interface EnvironmentLight {
+  /** 单位向量，方向是「从场景指向太阳」；three 的平行光位置直接乘距离即可。 */
+  sunDirection: [number, number, number];
+  sunElevation: number;
+  sunAzimuth: number;
+  sunColor: string;
+  sunIntensity: number;
+  ambientColor: string;
+  ambientIntensity: number;
+  skyColor: string;
+  /** 半球光地面色：晴天是土色，夜里趋近黑。 */
+  groundColor: string;
+  background: string;
+  fogColor: string;
+  /** THREE.FogExp2 的密度；0 表示无雾。 */
+  fogDensity: number;
+  /** 0–1：太阳在地平线以上的程度，供界面显示「白天/黄昏/夜」。 */
+  daylight: number;
+}
+
+const WEATHER_SUN_DIM: Record<WeatherCondition, number> = {
+  clear: 1, cloudy: 0.62, rain: 0.4, snow: 0.5, fog: 0.3,
+};
+const WEATHER_FOG: Record<WeatherCondition, number> = {
+  clear: 0.0006, cloudy: 0.004, rain: 0.011, snow: 0.008, fog: 0.03,
+};
+
+/**
+ * 由时间/纬度/天气推出确定性光照与天空色。
+ *
+ * 天文口径：春分近似（太阳赤纬 0），只由纬度与小时决定高度与方位；
+ * 不含黄赤交角、均时差与大气折射。用于画面氛围与可复现取样，不作天文数据。
+ */
+export function environmentLight(env: SceneEnvironment): EnvironmentLight {
+  const latitude = env.latitude * DEG;
+  const hourAngle = (env.hour - 12) * 15 * DEG;
+  const sinElevation = Math.cos(latitude) * Math.cos(hourAngle);
+  const elevation = Math.asin(Math.min(1, Math.max(-1, sinElevation)));
+  // 世界坐标：+X 东、+Y 上、-Z 北（相机默认朝 -Z）。
+  const east = -Math.sin(hourAngle);
+  const north = -Math.sin(latitude) * Math.cos(hourAngle);
+  const up = Math.cos(latitude) * Math.cos(hourAngle);
+  const rotation = env.northOffset * DEG;
+  const x = east * Math.cos(rotation) + north * Math.sin(rotation);
+  const z = -east * Math.sin(rotation) + north * Math.cos(rotation);
+  const length = Math.hypot(x, up, z) || 1;
+  const sunDirection: [number, number, number] = [x / length, up / length, z / length];
+
+  const elevationDeg = elevation / DEG;
+  const daylight = clampUnit((elevationDeg + 2) / 10);
+  const dim = WEATHER_SUN_DIM[env.weather.condition] * (1 - 0.35 * env.weather.intensity);
+  const sunIntensity = Math.max(0, 3.2 * daylight * dim);
+  const sunColor = mixHex("#ff9d5c", "#fff6e8", elevationDeg / 25);
+  const skyDay = mixHex("#ffb27a", "#b8d4ff", clampUnit(elevationDeg / 30));
+  const sky = mixHex("#0a0f1c", skyDay, daylight);
+  const weatherGray = env.weather.condition === "clear" ? 0 : 0.55 * env.weather.intensity;
+  const skyColor = mixHex(sky, "#8d949e", weatherGray);
+  const fogDensity = WEATHER_FOG[env.weather.condition] * (0.25 + env.weather.intensity);
+  return {
+    sunDirection,
+    sunElevation: elevationDeg,
+    sunAzimuth: Math.atan2(east, north) / DEG,
+    sunColor,
+    sunIntensity,
+    ambientColor: skyColor,
+    ambientIntensity: 0.18 + 0.62 * daylight,
+    skyColor,
+    groundColor: mixHex("#05070c", "#4a4034", daylight),
+    background: skyColor,
+    fogColor: mixHex(skyColor, "#7d838c", weatherGray),
+    fogDensity,
+    daylight,
+  };
+}
+
+/** 面板/诊断用摘要：不含高度数组，避免把几十 KB 塞进状态文本。 */
+export function summarizeEnvironment(env: SceneEnvironment): string {
+  const light = environmentLight(env);
+  const phase = light.daylight <= 0 ? "夜" : light.daylight < 0.6 ? "黄昏/清晨" : "白天";
+  const terrain = env.terrain
+    ? `地形 ${env.terrain.size}×${env.terrain.size} 米 / ${env.terrain.segments} 段 / 种子 ${env.terrain.seed}`
+    : "平地（无地形）";
+  return `${phase} ${env.hour.toFixed(2)} 点 · 太阳高度 ${light.sunElevation.toFixed(1)}° · ${env.weather.condition} ${env.weather.intensity.toFixed(2)} · ${terrain}`;
+}
+
+function smoothstep(edge0: number, edge1: number, value: number): number {
+  const ratio = clampUnit((value - edge0) / (edge1 - edge0 || 1));
+  return ratio * ratio * (3 - 2 * ratio);
+}
+
+/** 确定性整数哈希：不用 Math.random，也不用三角函数哈希（跨引擎尾数不同）。 */
+function hashGrid(x: number, z: number, seed: number): number {
+  let hash = Math.imul(x, 0x27d4eb2d) ^ Math.imul(z, 0x165667b1) ^ Math.imul(seed, 0x9e3779b1);
+  hash = Math.imul(hash ^ (hash >>> 15), 0x85ebca6b);
+  hash = Math.imul(hash ^ (hash >>> 13), 0xc2b2ae35);
+  hash ^= hash >>> 16;
+  return (hash >>> 0) / 4294967296;
+}
+
+function valueNoise(x: number, z: number, seed: number): number {
+  const column = Math.floor(x);
+  const row = Math.floor(z);
+  const u = smoothstep(0, 1, x - column);
+  const v = smoothstep(0, 1, z - row);
+  const a = hashGrid(column, row, seed);
+  const b = hashGrid(column + 1, row, seed);
+  const c = hashGrid(column, row + 1, seed);
+  const d = hashGrid(column + 1, row + 1, seed);
+  return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+}
+
+export interface TerrainOptions {
+  size?: number;
+  segments?: number;
+  seed?: number;
+  /** 起伏幅度（米）；0 = 完全平地。 */
+  amplitude?: number;
+}
+
+/**
+ * 生成一块确定性高度场地形：同一组参数永远得到同一份 heights。
+ *
+ * 中心留一块平垫（半径随世界边长增长），让原点附近的角色/道具仍站在平地上；
+ * 此函数只生成高度场；人工抬升/整平/平滑/地表编辑由 environmentEdit 的不可变笔刷处理。
+ */
+export function createEnvironmentTerrain(options: TerrainOptions = {}): SceneTerrain {
+  const size = options.size === undefined ? 80 : finiteIn(options.size, TERRAIN_LIMITS.minSize, TERRAIN_LIMITS.maxSize, "地形边长");
+  const segments = options.segments === undefined
+    ? 64
+    : integerIn(options.segments, TERRAIN_LIMITS.minSegments, TERRAIN_LIMITS.maxSegments, "地形分段数");
+  const seed = options.seed === undefined ? 41317 : integerIn(options.seed, 0, TERRAIN_LIMITS.maxSeed, "地形种子");
+  const amplitude = options.amplitude === undefined ? 6 : finiteIn(options.amplitude, 0, 16, "地形起伏");
+  const width = segments + 1;
+  const spacing = size / segments;
+  const pad = Math.max(4, size * 0.06);
+  const heights: number[] = [];
+  for (let row = 0; row < width; row += 1) {
+    for (let column = 0; column < width; column += 1) {
+      const x = column * spacing - size / 2;
+      const z = row * spacing - size / 2;
+      const fade = smoothstep(pad, pad * 1.8, Math.hypot(x, z));
+      const broad = valueNoise(x / Math.max(6, size * 0.12), z / Math.max(6, size * 0.12), seed);
+      const detail = valueNoise(x / Math.max(2, size * 0.035), z / Math.max(2, size * 0.035), seed + 1);
+      const height = (broad * 0.65 + detail * 0.35 - 0.5) * 2 * amplitude * fade;
+      const clamped = Math.min(TERRAIN_LIMITS.maxHeight, Math.max(TERRAIN_LIMITS.minHeight, height));
+      heights.push(Math.round(clamped * 10000) / 10000 || 0); // Canonical JSON zero, not -0.
+    }
+  }
+  return { size, segments, heights, surfaces: Array(width * width).fill(38), seed };
+}
+
+export interface TerrainBounds {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  minHeight: number;
+  maxHeight: number;
+}
+
+export function terrainBounds(terrain: SceneTerrain): TerrainBounds {
+  let minHeight = Infinity;
+  let maxHeight = -Infinity;
+  for (const height of terrain.heights) {
+    minHeight = Math.min(minHeight, height);
+    maxHeight = Math.max(maxHeight, height);
+  }
+  const half = terrain.size / 2;
+  return {
+    minX: -half, maxX: half, minZ: -half, maxZ: half,
+    minHeight: Number.isFinite(minHeight) ? minHeight : 0,
+    maxHeight: Number.isFinite(maxHeight) ? maxHeight : 0,
+  };
+}
+
+/**
+ * 地形高度：与 toonflow/terrainModel.getTerrainHeight 逐行同构（a/b/d、b/c/d 三角划分，
+ * 与渲染网格的索引一致，山坡上不会一处悬空一处穿透）。
+ *
+ * 为什么在这里再写一遍：ground-path.ts 要能被 `node --test` 直接跑，而 terrainModel
+ * 是一条带 three/fflate 的依赖链。两边的等价性由 environment.spec.ts 的对照测试守住，
+ * 谁改了插值另一边就会红。
+ */
+function terrainHeightOf(terrain: SceneTerrain, x: number, z: number): number {
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return 0;
+  if (Math.abs(x) > terrain.size / 2 || Math.abs(z) > terrain.size / 2) return 0;
+  const gx = (x / terrain.size + 0.5) * terrain.segments;
+  const gz = (z / terrain.size + 0.5) * terrain.segments;
+  const column = Math.min(terrain.segments - 1, Math.floor(gx));
+  const row = Math.min(terrain.segments - 1, Math.floor(gz));
+  const u = gx - column;
+  const v = gz - row;
+  const a = row * (terrain.segments + 1) + column;
+  const b = a + terrain.segments + 1;
+  const d = a + 1;
+  const c = b + 1;
+  return u + v <= 1
+    ? terrain.heights[a]! + (terrain.heights[d]! - terrain.heights[a]!) * u + (terrain.heights[b]! - terrain.heights[a]!) * v
+    : terrain.heights[c]! + (terrain.heights[b]! - terrain.heights[c]!) * (1 - u) + (terrain.heights[d]! - terrain.heights[c]!) * (1 - v);
+}
+
+/** 地面高度：没有地形就是 0（与旧行为一致），有地形则按渲染网格同一套三角插值取值。 */
+export function groundHeightAt(terrain: SceneTerrain | null | undefined, x: number, z: number): number {
+  if (!terrain) return 0;
+  return terrainHeightOf(terrain, x, z);
+}
+
+/** 落点钳制：有地形时钳到地形内圈，Y 落在地面上（+2cm 防 z-fighting），否则沿用旧的 20×20 平地。 */
+export function clampGroundPointToTerrain(terrain: SceneTerrain | null | undefined, point: GroundPoint): GroundPoint {
+  if (!terrain) return clampGroundPoint(point);
+  const limit = Math.max(0, terrain.size / 2 - 0.5);
+  const clamp = (value: number) => Math.min(limit, Math.max(-limit, value));
+  const x = clamp(Number.isFinite(point[0]) ? point[0] : 0);
+  const z = clamp(Number.isFinite(point[2]) ? point[2] : 0);
+  return [x, groundHeightAt(terrain, x, z) + 0.02, z];
+}
+
+/** 坡度（无量纲，竖直变化/水平距离）。地形外或非有限坐标按 0 处理。 */
+export function terrainSlopeAt(terrain: SceneTerrain, x: number, z: number): number {
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return 0;
+  if (Math.abs(x) > terrain.size / 2 || Math.abs(z) > terrain.size / 2) return 0;
+  const step = Math.max(0.05, terrain.size / terrain.segments * 0.5);
+  const dx = (groundHeightAt(terrain, x + step, z) - groundHeightAt(terrain, x - step, z)) / (2 * step);
+  const dz = (groundHeightAt(terrain, x, z + step) - groundHeightAt(terrain, x, z - step)) / (2 * step);
+  return Math.hypot(dx, dz);
+}
+
+/** 默认可行走坡度上限：0.6 ≈ 31°，再陡就不是走位而是攀爬。 */
+export const WALK_MAX_SLOPE = 0.6;
+
+export interface WalkProof {
+  ok: boolean;
+  /** 不可走时的原因；可走时说明采样口径。 */
+  reason: string;
+  samples: number;
+  maxSlope: number;
+  /** 终点高度 − 起点高度（米）。 */
+  climb: number;
+  startY: number;
+  endY: number;
+}
+
+/**
+ * 沿地面路径取样时把 Y 压到当前地形上：路径存的是「地面上的点」，
+ * 地形一换，同一个 XZ 的地面高度就变了。没有地形时返回原来的插值结果，
+ * 因此旧存档（y≈0.02 的平地落点）行为不变。
+ */
+export function groundPathPointOnTerrain(
+  terrain: SceneTerrain | null | undefined,
+  path: GroundPath,
+  t: number,
+): GroundPoint {
+  const point = groundPathPointAt(path, t);
+  if (!terrain) return point;
+  return [point[0], groundHeightAt(terrain, point[0], point[2]) + 0.02, point[2]];
+}
+
+/**
+ * 走位可行性证明：沿两点之间的 XZ 直线等距取样，逐点检查是否在地形范围内、
+ * 坡度是否超过上限，并对调用方提供的静态XZ障碍盒作连续相交检查。
+ * 不隐式绕行；未提供障碍时保留旧行为。不证明动态碰撞、脚底贴合或寻路。
+ */
+export function proveWalkableLine(
+  terrain: SceneTerrain | null | undefined,
+  start: { x: number; z: number },
+  end: { x: number; z: number },
+  options: { maxSlope?: number; step?: number; obstacles?: readonly GroundObstacle[]; obstacleMargin?: number } = {},
+): WalkProof {
+  const endpoint = (point: { x: number; z: number }, label: string) => {
+    if (typeof point?.x !== "number" || typeof point?.z !== "number" || !Number.isFinite(point.x) || !Number.isFinite(point.z)) {
+      throw new Error(`${label}不是有限 XZ 坐标`);
+    }
+  };
+  endpoint(start, "走位起点");
+  endpoint(end, "走位终点");
+  const maxSlope = options.maxSlope === undefined
+    ? WALK_MAX_SLOPE
+    : finiteIn(options.maxSlope, 0.01, 10, "坡度上限");
+  const step = options.step === undefined ? 0.5 : finiteIn(options.step, 0.05, 10, "取样间距");
+  const distance = Math.hypot(end.x - start.x, end.z - start.z);
+  const margin = options.obstacleMargin === undefined ? GROUND_OBSTACLE_MARGIN : finiteIn(options.obstacleMargin, 0, 10, '障碍安全边距');
+  for (const obstacle of options.obstacles ?? []) {
+    const box = normalizeObstacle(obstacle, margin);
+    if (!box) throw Error('障碍包围盒无效，无法证明可走');
+    if (segmentHitsBox([start.x, 0, start.z], [end.x, 0, end.z], box)) {
+      return { ok: false, reason: `直线走位与障碍「${obstacle.name || '未命名对象'}」相交（安全边距 ${margin} 米），请调整走位或布景；不会自动绕行`, samples: 0, maxSlope: 0, climb: 0,
+        startY: groundHeightAt(terrain, start.x, start.z), endY: groundHeightAt(terrain, end.x, end.z) };
+    }
+  }
+  if (!terrain) {
+    return { ok: true, reason: "平地（未启用地形）：沿用原有平地直线", samples: 2, maxSlope: 0, climb: 0, startY: 0, endY: 0 };
+  }
+  const half = terrain.size / 2;
+  for (const [point, label] of [[start, "起点"], [end, "终点"]] as const) {
+    if (Math.abs(point.x) > half || Math.abs(point.z) > half) {
+      return {
+        ok: false,
+        reason: `${label}在地形范围外（X/Z 须在 ±${half} 米内），无法证明可走`,
+        samples: 0, maxSlope: 0, climb: 0,
+        startY: groundHeightAt(terrain, start.x, start.z), endY: groundHeightAt(terrain, end.x, end.z),
+      };
+    }
+  }
+  const samples = Math.min(400, Math.max(2, Math.ceil(distance / step) + 1));
+  let worstSlope = 0;
+  for (let index = 0; index < samples; index += 1) {
+    const ratio = samples === 1 ? 0 : index / (samples - 1);
+    const x = start.x + (end.x - start.x) * ratio;
+    const z = start.z + (end.z - start.z) * ratio;
+    const cell = Math.round((z / terrain.size + 0.5) * terrain.segments) * (terrain.segments + 1) + Math.round((x / terrain.size + 0.5) * terrain.segments);
+    if (typeof terrain.waterLevels?.[cell] === 'number') return { ok: false, reason: `第 ${index + 1}/${samples} 个采样点为水域，不支持涉水，请调整走位`, samples, maxSlope: worstSlope, climb: 0, startY: groundHeightAt(terrain, start.x, start.z), endY: groundHeightAt(terrain, end.x, end.z) };
+    const slope = terrainSlopeAt(terrain, x, z);
+    worstSlope = Math.max(worstSlope, slope);
+    if (slope > maxSlope) {
+      return {
+        ok: false,
+        reason: `第 ${index + 1}/${samples} 个采样点坡度 ${slope.toFixed(2)} 超过上限 ${maxSlope.toFixed(2)}，无法证明可走`,
+        samples, maxSlope: worstSlope,
+        climb: groundHeightAt(terrain, end.x, end.z) - groundHeightAt(terrain, start.x, start.z),
+        startY: groundHeightAt(terrain, start.x, start.z), endY: groundHeightAt(terrain, end.x, end.z),
+      };
+    }
+  }
+  const startY = groundHeightAt(terrain, start.x, start.z);
+  const endY = groundHeightAt(terrain, end.x, end.z);
+  return {
+    ok: true,
+    reason: `${samples} 点取样，最大坡度 ${worstSlope.toFixed(2)}（上限 ${maxSlope.toFixed(2)}）`,
+    samples, maxSlope: worstSlope, climb: endY - startY, startY, endY,
+  };
 }

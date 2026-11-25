@@ -548,7 +548,7 @@ func (s *Service) HandleGetSceneVideoPrompt(c *gin.Context) {
 		"template":                template, "width": width, "height": height, "reference_count": len(refs),
 		// 3D 结构参考视频：模板走 ref2v_3d 时，这条 mp4 会作为 ref_videos 提交。
 		"ref3d_video": sc.Video3DRefVideo,
-		"duration": normalizeSceneDuration(sc.Duration), "fps": 24, "steps": 20,
+		"duration":    normalizeSceneDuration(sc.Duration), "fps": 24, "steps": 20,
 		"reference_bindings": sceneVideoReferenceBindings(refs, refLines, fullPrompt),
 		"reviewed_audio":     audioSelection,
 		"dialogue_placement": DiagnoseH3DialoguePlacement(fullPrompt, s.Projects.sceneVideoDialogues(sc), refLines),
@@ -3004,7 +3004,7 @@ var studioModelExtensions = map[string]struct{}{
 	".splat": {}, ".spz": {}, ".ksplat": {},
 }
 
-// HandleUploadMaterial 上传素材到素材库 (multipart: file/type/project_id)
+// HandleUploadMaterial 上传素材到素材库 (multipart: file/type/project_id/derivation_manifest?)
 func (s *Service) HandleUploadMaterial(c *gin.Context) {
 	ftype := c.PostForm("type")
 	if ftype == "" {
@@ -3016,6 +3016,11 @@ func (s *Service) HandleUploadMaterial(c *gin.Context) {
 			pid := uint(id)
 			projectID = &pid
 		}
+	}
+	manifest, manifestErr := validateMaterialDerivation(c.PostForm("derivation_manifest"), ftype)
+	if manifestErr != nil {
+		c.JSON(400, gin.H{"error": manifestErr.Error()})
+		return
 	}
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
@@ -3048,7 +3053,7 @@ func (s *Service) HandleUploadMaterial(c *gin.Context) {
 		c.JSON(200, mat)
 		return
 	}
-	mat, err := s.Materials.SaveUpload(projectID, ftype, header.Filename, data)
+	mat, err := s.Materials.SaveUploadWithDerivation(projectID, ftype, header.Filename, data, manifest)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return

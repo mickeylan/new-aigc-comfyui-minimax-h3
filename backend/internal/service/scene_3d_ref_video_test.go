@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"comfyui-console/internal/models"
@@ -137,6 +138,59 @@ func TestUpdateSceneVideoPromptStoresRef3D(t *testing.T) {
 	}
 	if got := decodeTranslationBody(t, w)["ref3d_video"]; got != "" {
 		t.Fatalf("empty ref3d_video must clear it, got %#v", got)
+	}
+}
+
+// A capability failure must not fall back to a plain template and silently drop the selected clip.
+// No TaskService/instance manager is installed: the rejection must precede any submission side effect.
+func TestScene3DRefVideoFailsClosedWithoutCapableTemplate(t *testing.T) {
+	for _, state := range []string{"missing", "disabled", "malformed", "incompatible"} {
+		t.Run(state, func(t *testing.T) {
+			f := newTranslationHTTPFixture(t)
+			configureDefaultRef2VFixture(t, f)
+			if err := f.db.AutoMigrate(&models.Task{}, &models.Setting{}); err != nil {
+				t.Fatal(err)
+			}
+			plain := loadTemplateForTest(t, "minimax_h3_ref2v.json")
+			if err := f.db.Model(&models.Template{}).Where("code = ?", plain.Code).Updates(map[string]any{"workflow_json": plain.WorkflowJSON, "inputs_json": plain.InputsJSON}).Error; err != nil {
+				t.Fatal(err)
+			}
+			if state == "disabled" || state == "malformed" {
+				tpl := loadTemplateForTest(t, "minimax_h3_ref2v_3d.json")
+				if state == "malformed" {
+					tpl.InputsJSON = "{}"
+				}
+				if err := f.db.Create(&models.Template{Name: tpl.Name, Code: tpl.Code, WorkflowJSON: tpl.WorkflowJSON, InputsJSON: tpl.InputsJSON, Enabled: state != "disabled"}).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			template := ""
+			if state == "incompatible" {
+				template = "minimax_h3_first_last"
+			}
+			if err := f.db.Model(&models.Scene{}).Where("id = ?", f.sc.ID).Updates(map[string]any{"video_template": template, "video_3d_ref_video": "reviewed.webm", "status": "image_ready"}).Error; err != nil {
+				t.Fatal(err)
+			}
+			err := f.svc.Projects.GenerateSceneVideo(&f.p, &f.sc)
+			want := "禁止回退并丢弃已选参考视频"
+			if state == "incompatible" {
+				want = "没有 3D 视频参考通路"
+			}
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("expected fail-closed %q, got %v", want, err)
+			}
+			var saved models.Scene
+			if err := f.db.First(&saved, f.sc.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			var count int64
+			if err := f.db.Model(&models.Task{}).Count(&count).Error; err != nil || count != 0 {
+				t.Fatalf("unexpected tasks=%d err=%v", count, err)
+			}
+			if saved.Status != "image_ready" || saved.Video3DRefVideo != "reviewed.webm" || saved.VideoTaskID != "" {
+				t.Fatalf("rejection changed scene: status=%s ref=%s task=%s", saved.Status, saved.Video3DRefVideo, saved.VideoTaskID)
+			}
+		})
 	}
 }
 

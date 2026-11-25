@@ -11,7 +11,7 @@ import { SceneOperations, SceneSaveGuard, buildSceneFingerprint, canMoveEntry, m
 import { sequenceTiming, sequenceSampleTime } from './sequenceTiming';
 import { referencePlaneMaterial } from './referenceAlpha';
 import { ObjectHistory, duplicateMesh, surfaceDrop } from './kitbashEditor';
-import { FRAME_ASPECTS, fitFrame, focalFromFov, fovFromFocal, type FrameAspect } from './sceneFrame';
+import { FRAME_ASPECTS, FRAME_VIDEO_SIZES, fitFrame, focalFromFov, fovFromFocal, type FrameAspect } from './sceneFrame';
 import { DEFAULT_PLANE_SETTINGS, normalizePlaneSettings, planeMaterial, mediaDataURL, validateSceneSize, validateCompositionDocument, type PlaneSettings } from "./planeDocument";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
@@ -21,7 +21,8 @@ import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { findTemplateId } from "../host/template-cache.js";
 import { FKHelper } from "./posing/FKHelper.js";
 import { PreviewPlayhead, PREVIEW_FPS, previewFrameCount, previewFrameTime } from './previewPlayhead';
-import { AnimationPreview, skeletalClips, saveAnimationClips, restoreAnimationClips, saveMoveAnimation, restoreMoveAnimation, type SavedMoveAnimation, type SavedAnimationClip } from './animationPreview';
+import { AnimationPreview, skeletalClips, saveAnimationClips, restoreAnimationClips, markAnimationArchivePaths, attachAnimationClip, saveMoveAnimation, restoreMoveAnimation, type SavedMoveAnimation, type SavedAnimationClip } from './animationPreview';
+import { findCapsuleRigs, gaitCapsuleRig, resetCapsuleRig } from './toonflow/capsuleRig';
 import { createStoreZip } from "./zip.js";
 import {
   DEFAULT_ORBIT_PITCH,
@@ -54,23 +55,43 @@ import {
 } from "./scene-archive.js";
 import {
   GROUND_EXTENT,
+  WEATHER_CONDITIONS,
   clampGroundPoint,
+  clampGroundPointToTerrain,
+  createEnvironmentTerrain,
+  defaultSceneEnvironment,
+  environmentLight,
+  groundHeightAt,
   groundPathFollowDelta,
   groundPathLength,
-  groundPathPointAt,
+  groundPathPointOnTerrain,
   groundPathYaw,
   MAX_GROUND_VIAS,
   moveGroundPoint,
   normalizeGroundPath,
+  proveWalkableLine,
   routeAroundObstacles,
   routeAroundObstaclesDetailed,
+  summarizeEnvironment,
   toGroundPath,
+  validateSceneEnvironment,
   type GroundObstacle,
   type GroundPath,
   type GroundPoint,
   type GroundPoints,
   type GroundSlot,
+  type SceneEnvironment,
+  type WeatherCondition,
 } from "./ground-path.js";
+import type { SceneTerrain } from './toonflow/sceneDocument';
+import type { CharacterAnimationBinding, CharacterAnimationCatalogEntry, CharacterAnimationCatalogSummary } from './toonflow/characterAnimations';
+import { releaseMeshGeometry } from './toonflow/sceneResources';
+import { createEnvironmentTerrainMesh, disposeEnvironmentTerrainMesh } from './environmentTerrain';
+import { createEnvironmentEffects } from './environmentEffects';
+import EnvironmentBrushPanel from './EnvironmentBrushPanel';
+import ScriptVideoPanel, { type ScriptVideoArtifact, type ScriptVideoMode } from './ScriptVideoPanel';
+import ShotEnhancementPanel from './ShotEnhancementPanel';
+import CharacterMotionPanel from './CharacterMotionPanel';
 import {
   cameraFrameFileName,
   firstLastCameraFrames,
@@ -174,7 +195,10 @@ function disposeSceneEntry(entry: SceneObjectEntry) {
   if (entry.video) { const src = entry.video.element.currentSrc || entry.video.element.src; entry.video.element.pause(); entry.video.element.removeAttribute("src"); entry.video.element.load(); entry.video.texture.dispose(); if (src.startsWith('blob:')) URL.revokeObjectURL(src); }
   entry.object.traverse((child) => {
     const mesh = child as THREE.Mesh;
-    mesh.geometry?.dispose();
+    if (mesh.isMesh) {
+      releaseMeshGeometry(mesh).forEach(geometry => geometry.dispose());
+      if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) (mesh as THREE.SkinnedMesh).skeleton.dispose();
+    } else mesh.geometry?.dispose();
     const materials = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
     materials.forEach((material) => {
       Object.values(material).forEach((value) => { if (value instanceof THREE.Texture) value.dispose(); });
@@ -426,6 +450,12 @@ interface SceneDocument {
   cameraKeys?: CameraKey[];
   /** 剧本镜头表（可选）：旧存档没有这个字段，读取后不补造。 */
   scriptShots?: import('./toonflowSets').ScriptShotPlan;
+  /**
+   * 场景环境（可选，version 1）：时间 / 天气 / 地形高度场。
+   * 旧存档没有这个字段 → 读出 null，沿用原有的平地与灯光预设，行为不变。
+   * 有字段但版本或结构不认识 → 显式报错且不替换当前场景。
+   */
+  environment?: SceneEnvironment;
   /** 地面 A/B 落点（vias 是 0–3 个途经点，走曲线时才写）；老存档没有就按没有处理。 */
   groundPath?: { start: GroundPoint; end: GroundPoint; vias?: GroundPoint[] } | null;
   /** 角色沿 A→B 移动的计划：谁走、走多久、相机要不要跟拍。没有落点时不写。 */
@@ -484,6 +514,15 @@ const LIGHT_PRESETS: Record<
     fill: { color: "#8fb4ff", intensity: 0.25, position: [-3, 2, 4] },
     rim: { color: "#ffffff", intensity: 4.0, position: [-2, 5, -9] },
   },
+};
+
+// 环境的天气词表与 Toonflow/Vue 预演一致：clear/cloudy/rain/snow/fog（Vue 的 overcast 视为 cloudy）。
+const WEATHER_LABELS: Record<WeatherCondition, string> = {
+  clear: "晴",
+  cloudy: "多云",
+  rain: "雨",
+  snow: "雪",
+  fog: "雾",
 };
 
 const POLL_INTERVAL_MS = 2000;
@@ -724,6 +763,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const shotPlaybackRef = useRef<number | null>(null);
   const shotPlaybackTimerRef = useRef<number | null>(null);
   const shotPlaybackTokenRef = useRef(0);
+  const shotVideoExportRef = useRef<AbortSignal | null>(null);
   const [previewFrame, setPreviewFrame] = useState(0);
   const stopAnimation = useCallback(() => {
     // 作废尚未落地的逐镜播放启动（模块是懒加载的），避免停止后迟到启动。
@@ -774,6 +814,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const groundRef = useRef<THREE.Mesh | null>(null);
   const gridRef = useRef<THREE.GridHelper | null>(null);
   const groundPathGroupRef = useRef<THREE.Group | null>(null);
+  // 环境（时间/天气/地形）：拾取与播放回调也在初始化 effect 的闭包里，同样用 ref 镜像。
+  const environmentRef = useRef<SceneEnvironment | null>(null);
+  const terrainMeshRef = useRef<THREE.Mesh | null>(null);
+  const weatherEffectsRef = useRef<ReturnType<typeof createEnvironmentEffects> | null>(null);
   // 拾取回调在初始化 effect 的闭包里，读 state 会读到挂载时的旧值，用 ref 镜像。
   const placingGroundRef = useRef<"start" | "via" | "end" | null>(null);
   // 拖动微调：pointerdown 时记住动的是哪一格，pointermove 期间直接用闭包变量，
@@ -830,6 +874,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [proceduralAssetsOpen, setProceduralAssetsOpen] = useState(false);
   const [status, setStatus] = useState("");
   const [lightPreset, setLightPreset] = useState<LightPresetName>("studio");
+  // 场景环境：null = 未启用，沿用上面的灯光预设与 20×20 平地（旧存档行为）。
+  const [environment, setEnvironment] = useState<SceneEnvironment | null>(null);
+  // 地形生成参数：只影响「生成地形」这一次动作，不写进存档（存档存的是生成后的高度场）。
+  const [terrainDraft, setTerrainDraft] = useState({ size: 80, amplitude: 6, seed: 41317 });
   const [material, setMaterial] = useState<MaterialSettings>(DEFAULT_MATERIAL);
   const [cameraKeys, setCameraKeys] = useState<CameraKey[]>([]);
   /** 剧本镜头表：可选字段，随场景存档一起保存；旧存档没有时保持 null。 */
@@ -907,6 +955,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [activeBone, setActiveBone] = useState<string | null>(null);
   // 选中对象是否有骨骼（决定「骨骼摆姿」入口是否可用）。
   const [selectedHasSkeleton, setSelectedHasSkeleton] = useState(false);
+  // 动作目录（Toonflow CC0）：按需懒加载，避免把 1.2 MB 动作数据静态塞进主视口包。
+  const [animationCatalog, setAnimationCatalog] = useState<{ summary: CharacterAnimationCatalogSummary; entries: readonly CharacterAnimationCatalogEntry[] } | null>(null);
+  const [animationCatalogId, setAnimationCatalogId] = useState("");
+  const animationCatalogRef = useRef<typeof import("./toonflow/characterAnimations") | null>(null);
   // 身份迁移：3D 快照 + 角色主形象 → 多图编辑。
   const [identityPrompt, setIdentityPrompt] = useState(DEFAULT_IDENTITY_PROMPT);
   // 图生 3D 世界的抠图引擎，默认 RMBG-3.0 软 matte。
@@ -935,13 +987,15 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   }, []);
 
   const documentMetaRef = useRef('');
-  documentMetaRef.current = JSON.stringify({ archiveName, frameAspect, lightPreset, skybox, skyboxName, cameraKeys, scriptShots, groundPoints, moverId, moveSeconds, followMover, moveAnimationIndex });
+  documentMetaRef.current = JSON.stringify({ archiveName, frameAspect, lightPreset, skybox, skyboxName, cameraKeys, scriptShots, environment, groundPoints, moverId, moveSeconds, followMover, moveAnimationIndex });
   fingerprintRef.current = () => buildSceneFingerprint(
     { epoch: sceneEpochRef.current, meta: documentMetaRef.current },
     objectsRef.current.map(e => {
       const scrub = scrubRef.current?.id === e.id ? scrubRef.current : null;
       const motion = motionBaselineRef.current.get(e.id);
       return { id: e.id, name: e.name, p: (scrub ? scrub.session.position : motion ? motion.position : e.object.position)?.toArray(), q: (scrub ? scrub.session.quaternion : motion ? motion.quaternion : e.object.quaternion)?.toArray(), s: e.object.scale.toArray(), visible: e.object.visible, locked: !!e.locked, plane: e.plane, source: e.mediaSource, splat: e.splatUrl, pose: scrub ? scrub.pose : animationRef.current?.id === e.id ? animationRef.current.pose : motion ? motion.pose : serializeBonePose(e.object), initial: e.initialBonePose,
+        // 动作资源也是场景内容：加入/替换动作必须触发未保存提示，否则重开会静默丢动作。
+        clips: e.object.animations.map(clip => `${clip.uuid}:${clip.name}@${clip.duration}#${clip.tracks.length}`).join("|"),
         materials: (() => { const rows: unknown[] = []; e.object.traverse(o => { if (isPoseEditorHelper(o)) return; const m = (o as THREE.Mesh).material; if (m) for (const v of Array.isArray(m) ? m : [m]) rows.push(materialRevision(v as THREE.MeshStandardMaterial)); }); return rows; })() };
     }),
   );
@@ -991,6 +1045,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     routeStarvedRef.current = routed.exhausted;
     return routed.path;
   };
+
+  /**
+   * 地面路径取样：渲染、预览、首尾帧与序列都走这一个入口。
+   * 有地形时 Y 压到地形上，没有地形时与原来的插值完全一致（旧档不变）。
+   */
+  const groundPathPoint = (path: GroundPath, t: number): GroundPoint =>
+    groundPathPointOnTerrain(environmentRef.current?.terrain ?? null, path, t);
 
   const selectObject = useCallback((id: string | null) => {
     stopAnimation();
@@ -1186,7 +1247,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const hit = ndcOf(event);
       if (!hit) return null;
       hit.raycaster.setFromCamera(hit.ndc, camera);
-      const onGround = hit.raycaster.intersectObject(ground, false)[0];
+      // 有地形时先打地形网格：落点要贴在地面上，而不是穿过山体的 y=0 平面。
+      const terrainMesh = terrainMeshRef.current;
+      const onTerrain = terrainMesh ? hit.raycaster.intersectObject(terrainMesh, false)[0] : undefined;
+      const onGround = onTerrain ?? hit.raycaster.intersectObject(ground, false)[0];
       const onPlane = onGround
         ? onGround.point
         : hit.raycaster.ray.intersectPlane(
@@ -1194,7 +1258,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             new THREE.Vector3(),
           );
       if (!onPlane) return null;
-      return clampGroundPoint([onPlane.x, 0.02, onPlane.z]);
+      const terrain = environmentRef.current?.terrain ?? null;
+      // 没有地形：保持原来的平地落点（XZ 钳到 ±9.5，y=0.02）。
+      if (!terrain) return clampGroundPoint([onPlane.x, 0.02, onPlane.z]);
+      return clampGroundPointToTerrain(terrain, [onPlane.x, onPlane.y, onPlane.z]);
     };
     const onPointerDown = (event: PointerEvent) => {
       pointerStart = { x: event.clientX, y: event.clientY };
@@ -1327,6 +1394,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       frame = requestAnimationFrame(animate);
       guardFrames += 1;
       const now = performance.now();
+      weatherEffectsRef.current?.sampleAt(now / 1000);
       const active = animationRef.current;
       if (active) {
         const entry = objectsRef.current.find(e => e.id === active.id);
@@ -1358,6 +1426,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       // 红球按相机距离定大小，每帧跟一次（22 根骨，开销可忽略）。
       // 注意是 fkRef（FKHelper 实例），posingRef 只是摆姿开关的布尔值。
       fkRef.current?.updateCameraScale();
+      // Empty Spark still traverses the entire scene several times in onBeforeRender.
+      // Keep the original path for ANY registered splat, including hidden/loading entries.
+      spark.visible = objectsRef.current.some(entry => !!entry.splat);
       renderer.render(scene, camera);
     };
     animate();
@@ -1389,9 +1460,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       fkRef.current = null;
       // 卸载时把视频平面的解码与全景纹理一起收掉，否则离开页面后仍在后台跑。
       sceneEpochRef.current++;
+      weatherEffectsRef.current?.dispose(); weatherEffectsRef.current = null;
+      if (terrainMeshRef.current) {
+        scene.remove(terrainMeshRef.current); disposeEnvironmentTerrainMesh(terrainMeshRef.current); terrainMeshRef.current = null;
+      }
       sceneRef.current = null;
       historyRef.current.clear(objectsRef.current);
-      objectsRef.current.forEach(disposeSceneEntry);
+      objectsRef.current.forEach(entry => { scene.remove(entry.object); disposeSceneEntry(entry); });
       skyboxTextureRef.current?.dispose();
       skyboxTextureRef.current = null;
       sparkRef.current?.dispose?.();
@@ -1468,7 +1543,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const samples = path.vias?.length ? 32 * path.vias.length : 1;
       const points: THREE.Vector3[] = [];
       for (let index = 0; index <= samples; index += 1) {
-        const at = groundPathPointAt(path, index / samples);
+        const at = groundPathPoint(path, index / samples);
         points.push(new THREE.Vector3(at[0], at[1] + 0.02, at[2]));
       }
       const geometry = new THREE.BufferGeometry().setFromPoints(points);
@@ -1610,7 +1685,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     );
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(ndc, camera);
-    return surfaceDrop(raycaster, objectsRef.current);
+    // 有地形时把地形网格也当落点目标：拖进来的物件应站在坡上，而不是穿到 y=0。
+    return surfaceDrop(raycaster, objectsRef.current, terrainMeshRef.current);
   }, []);
 
   // 图片/视频平面层：当背景板或参考板用，参与 3D 遮挡。
@@ -1764,8 +1840,11 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     scene.environment = null;
     skyboxTextureRef.current?.dispose();
     skyboxTextureRef.current = null;
-    // 背景回到当前灯光预设的底色。
-    scene.background = new THREE.Color(LIGHT_PRESETS[lightPreset].background);
+    // 背景回到当前灯光预设的底色；环境启用时天色归环境管，预设不能把它顶掉。
+    const environment = environmentRef.current;
+    scene.background = environment
+      ? new THREE.Color(environmentLight(environment).background)
+      : new THREE.Color(LIGHT_PRESETS[lightPreset].background);
     scene.backgroundIntensity = 1;
     setSkybox((current) => ({ ...current, enabled: false }));
     setSkyboxName(null);
@@ -2095,6 +2174,96 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     setLightPreset(name);
   }, []);
 
+  /**
+   * 用高度场重建地形网格。三角划分与 getTerrainHeight 的插值一致（a/b/d、b/c/d），
+   * 否则落点会与画面差半个三角形。
+   */
+  const rebuildTerrainMesh = useCallback((terrain: SceneTerrain | null) => {
+    const scene = sceneRef.current;
+    const previous = terrainMeshRef.current;
+    if (previous) {
+      scene?.remove(previous);
+      disposeEnvironmentTerrainMesh(previous);
+      terrainMeshRef.current = null;
+    }
+    // 有地形时隐藏原来的 20×20 平地；关掉地形后恢复，旧场景行为不变。
+    if (groundRef.current) groundRef.current.visible = !terrain;
+    if (!scene || !terrain) return;
+    const mesh = createEnvironmentTerrainMesh(terrain);
+    scene.add(mesh);
+    terrainMeshRef.current = mesh;
+  }, []);
+
+  /**
+   * 应用环境：太阳方向/强度、天空底色、雾与地形一次改完。
+   *
+   * 视口、缩略图、截图、序列与参考图取样都读这份场景状态，所以同一份环境在同一时刻
+   * 得到同一画面；关闭后回到原来的灯光预设 + 20×20 平地（旧存档行为）。
+   */
+  const applyEnvironment = useCallback((next: SceneEnvironment | null) => {
+    environmentRef.current = next;
+    setEnvironment(next);
+    if (terrainMeshRef.current?.userData.sourceTerrain !== (next?.terrain ?? null)) rebuildTerrainMesh(next?.terrain ?? null);
+    weatherEffectsRef.current?.dispose();
+    weatherEffectsRef.current = null;
+    const scene = sceneRef.current;
+    if (scene && next) {
+      const effects = createEnvironmentEffects(next);
+      scene.add(effects.object); weatherEffectsRef.current = effects;
+    }
+    const lights = lightsRef.current;
+    if (!scene || !lights) return;
+    if (!next) {
+      scene.fog = null;
+      applyLightPreset(lightPreset);
+      return;
+    }
+    const light = environmentLight(next);
+    const modernTerrain = terrainMeshRef.current?.userData.terrainMaterial as ReturnType<typeof import('./toonflow/terrainMaterial').createTerrainMaterial> | undefined;
+    modernTerrain?.setRain(next.weather.condition === 'rain' ? next.weather.intensity : 0);
+    modernTerrain?.setEnvironment(new THREE.Color(light.skyColor), new THREE.Color(light.groundColor), new THREE.Color(light.sunColor), new THREE.Vector3(...light.sunDirection));
+    scene.fog = light.fogDensity > 0 ? new THREE.FogExp2(light.fogColor, light.fogDensity) : null;
+    // 天空盒是用户显式选的背景，环境只换灯不顶掉它。
+    if (!skyboxTextureRef.current) scene.background = new THREE.Color(light.background);
+    const distance = 30;
+    lights.key.position.set(
+      light.sunDirection[0] * distance,
+      light.sunDirection[1] * distance,
+      light.sunDirection[2] * distance,
+    );
+    lights.key.color.set(light.sunColor);
+    lights.key.intensity = light.sunIntensity;
+    lights.hemi.color.set(light.skyColor);
+    lights.hemi.groundColor.set(light.groundColor);
+    lights.hemi.intensity = light.ambientIntensity;
+    // 环境接管主光与半球光：补光/轮廓光归零，免得同一份环境被预设补光改出两种结果。
+    lights.fill.intensity = 0;
+    lights.rim.intensity = 0;
+  }, [applyLightPreset, lightPreset, rebuildTerrainMesh]);
+
+  /**
+   * 换地形：同时把已有 A/B/途经点贴到新地面。
+   *
+   * 落点的语义就是「地面上的点」，地形换了还留着旧高度会飘在半空或埋进山里；
+   * 这是用户点「生成/清除地形」触发的显式动作，状态栏会写明改了什么。
+   */
+  const applyTerrainChange = useCallback((terrain: SceneTerrain | null) => {
+    const current = environmentRef.current;
+    if (!current) return;
+    applyEnvironment({ ...current, terrain });
+    setGroundPoints((points) => {
+      const snap = (point: GroundPoint | null): GroundPoint | null => {
+        if (!point) return null;
+        return terrain ? clampGroundPointToTerrain(terrain, point) : [point[0], 0.02, point[2]];
+      };
+      return {
+        start: snap(points.start),
+        end: snap(points.end),
+        vias: points.vias ? points.vias.map((point) => snap(point)!) : points.vias,
+      };
+    });
+  }, [applyEnvironment]);
+
   // 把材质设置写到选中对象下所有网格上，兼容 GLTF 里的多材质数组。
   const applyMaterial = useCallback((patch: Partial<MaterialSettings>) => {
     setMaterial((current) => {
@@ -2253,7 +2422,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         let delta: [number, number, number] = [0, 0, 0];
         if (followPath && followMoverEntry && followSeconds && canMoveEntry(followMoverEntry) && objectsRef.current.includes(followMoverEntry)) {
           const progress = Math.min(1, elapsed / followSeconds);
-          followMoverEntry.object.position.set(...groundPathPointAt(followPath, progress));
+          followMoverEntry.object.position.set(...groundPathPoint(followPath, progress));
           followMoverEntry.object.rotation.y = groundPathYaw(followPath, progress);
           preview?.sampleAt(Math.min(elapsed, followSeconds));
           delta = groundPathFollowDelta(followPath, progress);
@@ -2285,8 +2454,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
 
   /**
    * 连续逐镜播放：按已确认镜头表的时间轴，在现有视口里切换人工记录的机位，
-   * 并对每一镜人工绑定的角色走位/骨骼 clip 做确定性采样。走位是平地直线 XZ 位移，
-   * 不做地形或障碍避让；停止或结束时把机位、角色位置与骨姿还原到播放前。
+   * 与参考包/视频复用同一绝对时间采样器。旧镜保持直线障碍拒绝；仅显式启用的镜头
+   * 使用避让、动作混合与双腿IK；结束时还原机位、位置、骨姿及指纹遮罩。
    */
   const playScriptShots = useCallback(async (plan: import('./toonflowSets').ScriptShotPlan) => {
     if (busy) return;
@@ -2295,6 +2464,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     const epoch = sceneEpochRef.current;
     let module: typeof import('./toonflowSets');
     let ready: import('./toonflowSets').ScriptShotPlan;
+    let makeSampler: typeof import('./scriptShotSampler').createScriptShotSampler;
     try {
       // 保持 toonflowSets 懒加载：静态 import 会把整套素材塞进主视口包。
       module = await import('./toonflowSets');
@@ -2303,6 +2473,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         id: entry.id, name: entry.name, visible: entry.object.visible, locked: !!entry.locked,
         animations: entry.object.animations.map((clip, index) => ({ index, name: clip.name, duration: clip.duration })),
       })));
+      // 与视频/参考包使用同一编辑基线障碍快照；失败发生在任何临时位移之前。
+      const sampling = await import('./scriptShotSampler');
+      makeSampler = sampling.createScriptShotSampler;
     } catch (cause) {
       if (token === shotPlaybackTokenRef.current) setError(cause instanceof Error ? cause.message : String(cause));
       return;
@@ -2311,71 +2484,15 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     const camera = cameraRef.current; const controls = controlsRef.current;
     if (!camera || !controls) { setError('视口尚未就绪，无法连续逐镜播放'); return; }
     const total = ready.shots[ready.shots.length - 1]!.end;
-    const session = new PreviewPlayhead(camera, controls);
+    let session: ReturnType<typeof makeSampler>;
+    try { session = makeSampler(ready, { camera, controls, entries: () => objectsRef.current, environment: environmentRef.current, baselines: motionBaselineRef.current, isCurrent: () => epoch === sceneEpochRef.current }); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); return; }
     const started = performance.now();
     let finished = false;
     let lastIndex = -1;
     let lastLine: string | null = null;
-    let activeTargets = new Set<string>();
-    // 播放期间角色被临时移动/摆骨：记录播放前基线，供停止还原和场景指纹遮罩共用。
-    const actors = new Map<string, { entry: SceneObjectEntry; position: THREE.Vector3; quaternion: THREE.Quaternion; pose: ReturnType<typeof serializeBonePose>; preview: AnimationPreview | null; previewKey: string }>();
-    const actorAt = (targetId: string) => {
-      const existing = actors.get(targetId);
-      if (existing) return existing;
-      const entry = objectsRef.current.find(item => item.id === targetId);
-      if (!entry) throw new Error(`走位目标 ${targetId} 已不在场景中，播放已停止`);
-      const actor = {
-        entry, position: entry.object.position.clone(), quaternion: entry.object.quaternion.clone(),
-        pose: serializeBonePose(entry.object), preview: null as AnimationPreview | null, previewKey: '',
-      };
-      actors.set(targetId, actor);
-      motionBaselineRef.current.set(targetId, { position: actor.position, quaternion: actor.quaternion, pose: actor.pose });
-      return actor;
-    };
-    const endPreview = (targetId: string) => {
-      const actor = actors.get(targetId);
-      if (!actor?.preview) return;
-      actor.preview.stop(); actor.preview = null; actor.previewKey = '';
-    };
-    const restoreActors = () => {
-      // 场景已替换时不要动新场景里的同名对象。
-      if (epoch === sceneEpochRef.current) {
-        for (const actor of actors.values()) {
-          actor.preview?.stop();
-          actor.preview = null;
-          if (!objectsRef.current.includes(actor.entry)) continue;
-          actor.entry.object.position.copy(actor.position);
-          actor.entry.object.quaternion.copy(actor.quaternion);
-          actor.entry.object.updateMatrixWorld(true);
-        }
-      }
-      for (const targetId of actors.keys()) motionBaselineRef.current.delete(targetId);
-      actors.clear();
-    };
-    const applyMotion = (sample: import('./toonflowSets').ScriptShotMotionSample) => {
-      const entry = objectsRef.current.find(item => item.id === sample.targetId);
-      if (!entry || !canMoveEntry(entry)) throw new Error(`第 ${sample.order} 镜的走位目标「${sample.targetName}」已隐藏、锁定或删除，播放已停止`);
-      const actor = actorAt(sample.targetId);
-      // 只改 XZ 与朝向；Y 跟随对象原高度，不做地形抬升。
-      entry.object.position.x = sample.position.x;
-      entry.object.position.z = sample.position.z;
-      entry.object.rotation.y = sample.yaw;
-      if (sample.animation) {
-        const clip = entry.object.animations[sample.animation.index];
-        if (!clip || clip.name !== sample.animation.name || clip.duration !== sample.animation.duration) {
-          throw new Error(`第 ${sample.order} 镜的骨骼动作「${sample.animation.name}」已变化，播放已停止`);
-        }
-        const key = `${sample.animation.index}\u0000${sample.animation.name}\u0000${sample.animation.duration}`;
-        if (actor.previewKey !== key) {
-          actor.preview?.stop();
-          actor.preview = new AnimationPreview(entry.object, clip);
-          actor.previewKey = key;
-        }
-        // 采样到 clip 末尾时留 0.1ms 余量，避免 LoopRepeat 正好回绕到第 0 帧。
-        actor.preview?.sampleAt(Math.min(sample.animationSeconds, Math.max(0, sample.animation.duration - 1e-4)));
-      } else endPreview(sample.targetId);
-      entry.object.updateMatrixWorld(true);
-    };
+    // Viewport, reference captures and videos now own exactly the same absolute
+    // actor/IK/blend/navigation evaluator and editing-baseline restoration.
     // 收尾只走这一条：清 rAF/兜底定时器，再由 PreviewPlayhead 还原机位、把角色与骨姿还原到基线。
     const finish = (message: string) => {
       if (finished) return;
@@ -2390,14 +2507,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         shotPlaybackTimerRef.current = null;
       }
       session.stop();
-      restoreActors();
       setShotPlayback(null);
       setStatus(message);
     };
     const cancelPlayback = () => finish('已停止连续逐镜播放，视口机位、角色位置与骨姿已还原');
     cancelCameraPreviewRef.current = cancelPlayback;
     setShotPlayback({ index: 0, shots: ready.shots.length, line: null });
-    setStatus(`开始连续逐镜播放：${ready.shots.length} 镜 · ${total.toFixed(2)} 秒（人工机位 ${ready.shots.length} 镜 · 人工走位 ${ready.shots.filter(shot => shot.motion).length} 镜；平地直线，不避障）`);
+    setStatus(`开始连续逐镜播放：${ready.shots.length} 镜 · ${total.toFixed(2)} 秒（人工机位 ${ready.shots.length} 镜 · 角色走位 ${ready.shots.filter(shot => shot.motion).length} 镜；按镜头表启用避让/骨骼增强）`);
     // 大兜底：rAF 被节流或挂起时也保证不会永久停在播放中。
     shotPlaybackTimerRef.current = window.setTimeout(() => finish('连续逐镜播放结束，视口机位、角色位置与骨姿已还原'), total * 1000 + 80);
     const step = () => {
@@ -2405,20 +2521,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       if (epoch !== sceneEpochRef.current) { finish('场景已替换，连续逐镜播放已停止'); return; }
       let sample: import('./toonflowSets').ScriptShotPlaybackSample;
       try {
-        sample = module.sampleScriptShotPlayback(ready, (performance.now() - started) / 1000);
-        // 镜次边界前把上一镜走位补到终点，避免因帧落在边界后而少走最后几厘米。
-        if (sample.index !== lastIndex && lastIndex >= 0) {
-          const previous = ready.shots[lastIndex];
-          if (previous?.motion) {
-            const endpoint = module.sampleScriptShotMotionAt(previous, previous.end);
-            if (endpoint) applyMotion(endpoint);
-          }
-        }
-        const nextTargets = new Set<string>();
-        if (sample.motion) { applyMotion(sample.motion); nextTargets.add(sample.motion.targetId); }
-        // 下一镜没有该角色的走位时，结束它的骨骼动作但保留已经走到的位置。
-        for (const targetId of activeTargets) if (!nextTargets.has(targetId)) endPreview(targetId);
-        activeTargets = nextTargets;
+        sample = session.sampleAt((performance.now() - started) / 1000);
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : String(cause));
         finish('连续逐镜播放失败，视口机位、角色位置与骨姿已还原');
@@ -2427,12 +2530,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const shotIndex = lastIndex;
       if (sample.index !== lastIndex) {
         lastIndex = sample.index;
-        // 边界处直接切机位，不插值、不借用上一镜的构图。
-        session.sample(sample.seconds, total, () => {
-          camera.position.set(...sample.camera.position);
-          camera.fov = sample.camera.fov; camera.updateProjectionMatrix();
-          controls.target.set(...sample.camera.target); controls.update();
-        });
+        // Camera cuts are applied by the same absolute sampler used in exports.
       }
       const line = sample.line ? `${sample.line.speaker}：${sample.line.line || '（无台词）'}` : null;
       if (line !== lastLine || sample.index !== shotIndex) {
@@ -2471,7 +2569,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         let delta: [number, number, number] = [0, 0, 0];
         if (scrubPath && scrubMover) {
           const progress = Math.min(1, time / normalizeMoveSeconds(moveSeconds));
-          scrubMover.object.position.set(...groundPathPointAt(scrubPath, progress));
+          scrubMover.object.position.set(...groundPathPoint(scrubPath, progress));
           scrubMover.object.rotation.y = groundPathYaw(scrubPath, progress);
           if (followMover) delta = groundPathFollowDelta(scrubPath, progress);
         }
@@ -2533,7 +2631,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         target: [controls.target.x, controls.target.y, controls.target.z],
         fov: normalizeCameraFov(camera.fov),
       },
-      path ? (t) => groundPathPointAt(path, t) : null,
+      path ? (t) => groundPathPoint(path, t) : null,
     );
     setAgentPlan(plan);
     if (plan.problems.length > 0) {
@@ -2804,6 +2902,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       if (options.recipeIds?.has(entry.id)) return;
       if (options.flattenTransforms && entry.mediaKind) return;
       const clone = clonePosedContent(entry.object);
+      markAnimationArchivePaths(clone);
       if (options.flattenTransforms) {
         // 场景存档里变换单独记录，几何体按局部坐标导出，避免节点 TRS 与存档重复叠加。
         clone.position.set(0, 0, 0);
@@ -3092,6 +3191,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         })),
         // 镜头表是可选的：没有计划时不写字段，旧读取路径不受影响。
         ...(scriptShots ? { scriptShots } : {}),
+        // 环境同样是可选成员：没启用就不写字段，旧档保持「平地 + 灯光预设」。
+        // 写前再校验一次（存档版本由 environment.version 自己承担），未知结构不会落盘。
+        ...(environment ? { environment: validateSceneEnvironment(environment) } : {}),
         model: {
           name: objectsRef.current.map((entry) => entry.name).join("+") || "scene",
           data: arrayBufferToBase64(binary),
@@ -3102,7 +3204,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       validateSceneSize(JSON.stringify(doc));
       return doc;
     }
-  }, [cameraKeys, exportGeometry, followMover, groundPoints, lightPreset, moveSeconds, moverId, moveAnimationIndex, skybox, skyboxName, archiveName, scriptShots]);
+  }, [cameraKeys, exportGeometry, followMover, groundPoints, lightPreset, moveSeconds, moverId, moveAnimationIndex, skybox, skyboxName, archiveName, scriptShots, environment]);
 
   const saveScene = useCallback(async () => {
     if (objectsRef.current.length === 0) return;
@@ -3177,9 +3279,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
 
   // 本地文件与后端存档都走这一条：解析、校验 version/model.data、回填对象与机位。
   const importSceneText = useCallback(
-    async (text: string) => {
+    async (source: string | (() => Promise<string>)) => {
       stopAnimation();
-      if (saveGuardRef.current.isDirty(fingerprintRef.current().full()) && !window.confirm('场景有未保存的修改，仍要载入其他场景？')) return;
+      if (saveGuardRef.current.isDirty(fingerprintRef.current().full()) && !window.confirm('场景有未保存的修改，仍要载入其他场景？')) return false;
       const operation = operationsRef.current.start('正在载入场景…');
       // Retain the current path action until the replacement and its reference validate.
       setBusy("正在载入场景…");
@@ -3195,6 +3297,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       let pendingSky: THREE.Texture | null = null;
       let committed = false;
       try {
+        // Reserve this generation at selection time, before File.text() can resolve out of order.
+        const text = typeof source === 'function' ? await source() : source;
+        if (epoch !== sceneEpochRef.current) return false;
         const doc = JSON.parse(text) as SceneDocument;
         validateCompositionDocument(doc);
         // v1 是没泼溅层的老存档、v2 多了泼溅层，都仍然要能读；v3 多了机位序列。
@@ -3204,6 +3309,11 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         validateSceneSize(text);
         // 镜头表是可选字段：老存档没有就保持 null；有但不认识的版本/结构直接失败，不替换当前场景。
         const restoredShots = doc.scriptShots === undefined ? null : (await import('./toonflowSets')).validateScriptShotPlan(doc.scriptShots);
+        // 环境是可选成员：旧档没有就保持 null（平地 + 灯光预设）；有但不认识就显式失败。
+        // 这一步在替换当前场景之前，失败不会动到现在打开的场景。
+        const restoredEnvironment = doc.environment === undefined || doc.environment === null
+          ? null
+          : validateSceneEnvironment(doc.environment);
         const recipeModule = doc.version === 7 ? await import('./proceduralArchive') : null;
         if (recipeModule) recipeModule.validateRecipeArchive(doc.procedural);
         const gltf = await new GLTFLoader().parseAsync(base64ToArrayBuffer(doc.model.data), "");
@@ -3352,6 +3462,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         setMoveSeconds(normalizeMoveSeconds(savedMove?.seconds));
         setFollowMover(Boolean(savedMove?.follow));
         applyLightPreset(doc.lightPreset);
+        // 环境在场景替换后应用：地形网格、太阳、雾与天空一起换，旧档读出 null 就回平地。
+        applyEnvironment(restoredEnvironment);
         // 落点恢复（vias 是可选途经点数组：老存档没有、或只有单个 via，都由 normalizeGroundPath 归一）
         setGroundPoints({
           start: savedPath?.start ?? null,
@@ -3389,21 +3501,24 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             ? `已载入场景（${entries.length} 个对象 + ${splatEntries.length} 个泼溅）`
             : `已载入场景（${entries.length} 个对象）`,
         );
+        return true;
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+        if (epoch === sceneEpochRef.current) setError(err instanceof Error ? err.message : String(err));
+        return false;
       } finally {
         if (!committed) { pending.forEach(disposeSceneEntry); pendingSky?.dispose(); }
         operation.finish();
+        // A stale load owns its resources, never the current load's error or busy state.
         // 带泼溅的存档把 busy 交给 SparkRenderer.onDirty 收尾。
-        setBusy((current) => (current === SPLAT_LOD_BUSY ? current : null));
+        if (epoch === sceneEpochRef.current) setBusy((current) => (current === SPLAT_LOD_BUSY ? current : null));
       }
     },
-    [applyLightPreset, beginSplatLodWait, syncObjects, addPlane, clearSkybox],
+    [applyEnvironment, applyLightPreset, beginSplatLodWait, syncObjects, addPlane, clearSkybox],
   );
 
   const loadScene = useCallback(
     async (file: File) => {
-      await importSceneText(await file.text());
+      await importSceneText(() => file.text());
     },
     [importSceneText],
   );
@@ -3476,7 +3591,11 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         if (ticket !== archiveRequestRef.current) return;
         setArchivePreview({ name: item.name, preview: typeof doc.preview === 'string' && doc.preview.length < 256_000 && /^data:image\/(png|jpeg);base64,/.test(doc.preview) ? doc.preview : undefined,
           count: (doc.objects?.length ?? 0) + (doc.planes?.length ?? 0) + (doc.splats?.length ?? 0), aspect: doc.frame?.aspect ?? '16:9',
-          restore: async () => { await importSceneText(text); setArchivePreview(null); setArchivesOpen(false); } });
+          restore: async () => {
+            if (ticket !== archiveRequestRef.current) return;
+            const restored = await importSceneText(text);
+            if (restored && ticket === archiveRequestRef.current) { setArchivePreview(null); setArchivesOpen(false); }
+          } });
       } catch (err) {
         if (ticket === archiveRequestRef.current) setError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -3500,6 +3619,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     if (!renderer || !scene || !camera) return null;
     const previousOverride = scene.overrideMaterial;
     const previousBackground = scene.background;
+    // 参考图是几何/法线/深度 pass，不烘天气：雾是画面效果，混进去会让同一份几何两张图不一样。
+    // 取图期间临时关掉，finally 里按原值放回。
+    const previousFog = scene.fog;
     const hidden: THREE.Object3D[] = [];
     // 逐个网格换材质：scene.overrideMaterial 会把模型整块画没了（只留黑底），
     // 逐网格替换才能稳定出图。
@@ -3509,6 +3631,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     // 几米内的模型只占 1% 灰度，看上去就是一整张黑图。
     const bounds = new THREE.Box3();
     objectsRef.current.filter(entry => entry.object.visible).forEach((entry) => bounds.expandByObject(entry.splat ? entry.object : clonePosedContent(entry.object)));
+    // 地形是有内容的地面（不是编辑器地面网格）：参与参考图，也参与深度范围计算。
+    if (terrainMeshRef.current) bounds.expandByObject(terrainMeshRef.current);
     const depthRange = { near: camera.near, far: camera.far };
     if (!bounds.isEmpty()) {
       const center = bounds.getCenter(new THREE.Vector3());
@@ -3535,6 +3659,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       });
       // 泼溅由 Spark 自己光栅化，逐网格换材质管不到它；混进灰度图会变成彩色噪点。
       hide(sparkRef.current);
+      hide(scene.getObjectByName('__Weather__')); // Particles are atmosphere, never geometry/depth constraints.
       const paint = (object: THREE.Object3D) => {
         if (isPoseEditorHelper(object)) return;
         const mesh = object as THREE.Mesh;
@@ -3558,8 +3683,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         object.children.forEach(paint);
       };
       objectsRef.current.forEach((entry) => paint(entry.object));
+      if (terrainMeshRef.current) paint(terrainMeshRef.current);
       // 黑色背景：深度图里天空=0，稳定；白模/法线也不想要灰底混进来。
       scene.background = new THREE.Color(0x000000);
+      scene.fog = null;
       // render 与取图必须在同一个任务里，隔帧再取可能已被下一帧清掉。
       renderer.clear();
       renderer.render(scene, camera);
@@ -3584,6 +3711,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       // 无论如何都要还原，否则编辑器会一直停在参考图材质上。
       scene.overrideMaterial = previousOverride;
       scene.background = previousBackground;
+      scene.fog = previousFog;
       swapped.forEach((item) => {
         item.mesh.material = item.material;
       });
@@ -3692,12 +3820,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       return;
     }
     const epoch = sceneEpochRef.current;
+    const sourceState = fingerprintRef.current().full();
+    const viewState = () => [...(cameraRef.current?.position.toArray() ?? []), ...(controlsRef.current?.target.toArray() ?? []), cameraRef.current?.fov ?? 0];
+    const sourceView = viewState();
     const path = editorGroundPath(groundPoints);
     const mover = path && moverId ? objectsRef.current.find(e => e.id === moverId && canMoveEntry(e)) ?? null : null;
     const seconds = normalizeMoveSeconds(moveSeconds);
     const assertCurrent = () => {
       if (epoch !== sceneEpochRef.current) throw new Error('场景已替换，已停止首尾帧导出');
       if (mover && (!canMoveEntry(mover) || !objectsRef.current.includes(mover))) throw new Error('移动对象已隐藏、锁定或删除，已停止首尾帧导出');
+      if (sourceState !== fingerprintRef.current().full() || viewState().some((value, index) => Math.abs(value - sourceView[index]) > 1e-7)) throw new Error('导出期间场景或机位发生变化，已停止首尾帧导出，请重新核对；已入库的帧不会自动删除');
     };
     const operation = operationsRef.current.start('正在渲起幅/落幅两帧…');
     setBusy("正在渲起幅/落幅两帧…");
@@ -3720,7 +3852,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             const clip = mover.object.animations[moveAnimationIndex];
             if (moveAnimationIndex >= 0 && !clip) throw new Error('移动动作已失效，请重新选择');
             if (clip) { preview = new AnimationPreview(mover.object, clip); preview.sampleAt(Math.min(elapsed, seconds)); }
-            mover.object.position.set(...groundPathPointAt(path, progress));
+            mover.object.position.set(...groundPathPoint(path, progress));
             mover.object.rotation.y = groundPathYaw(path, progress);
             mover.object.updateMatrixWorld(true);
           } catch (err) { preview?.stop(); mover.object.position.copy(p); mover.object.quaternion.copy(q); throw err; }
@@ -3871,13 +4003,18 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
 
   const exportReference = useCallback(
     async (pass: ReferencePass) => {
+      stopAnimation();
       const epoch = sceneEpochRef.current;
+      const sourceState = fingerprintRef.current().full();
+      const viewState = () => [...(cameraRef.current?.position.toArray() ?? []), ...(controlsRef.current?.target.toArray() ?? []), cameraRef.current?.fov ?? 0];
+      const sourceView = viewState();
       const operation = operationsRef.current.start(`${REFERENCE_BUSY_PREFIX}（${REFERENCE_PASS_LABELS[pass]}）…`);
       setBusy(`${REFERENCE_BUSY_PREFIX}（${REFERENCE_PASS_LABELS[pass]}）…`);
       setError(null);
       try {
         const shot = await captureReference(pass);
         if (!shot || epoch !== sceneEpochRef.current) return;
+        if (sourceState !== fingerprintRef.current().full() || viewState().some((value, index) => Math.abs(value - sourceView[index]) > 1e-7)) throw new Error('导出期间场景或机位发生变化，已放弃参考图，请重新核对后导出');
         if (referenceUrlRef.current) URL.revokeObjectURL(referenceUrlRef.current);
         const url = URL.createObjectURL(shot.blob);
         referenceUrlRef.current = url;
@@ -3895,6 +4032,53 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     [captureReference],
   );
 
+  /** Local shot video reuses the Vue previs encoder; no generation requests. */
+  const exportScriptVideo = useCallback(async (plan: import('./toonflowSets').ScriptShotPlan, fps: number, mode: ScriptVideoMode, signal: AbortSignal): Promise<ScriptVideoArtifact> => {
+    if (busy || shotVideoExportRef.current) throw new Error('请等待当前场景操作完成');
+    stopAnimation();
+    const renderer = rendererRef.current, camera = cameraRef.current, controls = controlsRef.current;
+    if (!renderer || !camera || !controls) throw new Error('视口尚未就绪');
+    if (objectsRef.current.some(entry => entry.mediaKind === 'video')) throw new Error('视频平面尚未按逐镜时间同步，请显式移除后再导出');
+    if (mode !== 'viewport' && objectsRef.current.some(entry => entry.splat)) throw new Error('泼溅不支持白模/法线/深度视频，请选择材质原样或显式移除泼溅');
+    shotVideoExportRef.current = signal;
+    const epoch = sceneEpochRef.current, source = fingerprintRef.current().full();
+    const sourceFrame = frameRef.current, outputSize = FRAME_VIDEO_SIZES[sourceFrame];
+    const size = renderer.getSize(new THREE.Vector2()), ratio = renderer.getPixelRatio(), aspect = camera.aspect;
+    const operation = operationsRef.current.start('正在准备逐镜视频…'); setBusy('正在准备逐镜视频…'); setError(null);
+    const assertSource = () => {
+      if (signal.aborted) throw new Error('导出已取消');
+      if (epoch !== sceneEpochRef.current || source !== fingerprintRef.current().full()) throw new Error('场景在导出期间变化，视频已放弃，请重新审阅后导出');
+    };
+    try {
+      const [{ renderScriptShotVideo }, module] = await Promise.all([import('./scriptShotVideo'), import('./toonflowSets')]);
+      assertSource();
+      renderer.setPixelRatio(1); renderer.setSize(outputSize.width, outputSize.height, false); camera.aspect = outputSize.width / outputSize.height; camera.updateProjectionMatrix();
+      const result = await renderScriptShotVideo(plan, {
+        camera, controls, entries: () => objectsRef.current, environment: environmentRef.current ? validateSceneEnvironment(environmentRef.current) : null,
+        baselines: motionBaselineRef.current, isCurrent: () => epoch === sceneEpochRef.current,
+        fps, mode, size: outputSize, Encoder: globalThis.VideoEncoder, Frame: globalThis.VideoFrame, signal, sourceFingerprint: module.scriptFingerprint(source), assertSource,
+        onProgress: (done, total) => { const label = `正在渲染逐镜视频（${done}/${total} 帧）…`; operation.update(label); setBusy(label); },
+        renderFrame: async (sample, seconds, timing) => {
+          weatherEffectsRef.current?.sampleAt(seconds);
+          const shot = mode === 'viewport' ? await captureViewportAt(sample.camera) : await captureReference(mode);
+          assertSource(); if (!shot) throw new Error('逐镜视频未取到完整画面');
+          const bitmap = await createImageBitmap(shot.blob);
+          try { assertSource(); return new globalThis.VideoFrame(bitmap, timing); } finally { bitmap.close(); }
+        },
+      });
+      assertSource(); setStatus(`逐镜视频已生成：${result.manifest.frameCount} 帧，尚未入库、未关联Scene、未提交生成`);
+      return { ...result, source, epoch, projectId: Number(archiveProjectId) || null };
+    } finally {
+      shotVideoExportRef.current = null;
+      if (renderer === rendererRef.current) {
+        renderer.setPixelRatio(ratio);
+        if (epoch === sceneEpochRef.current && sourceFrame === frameRef.current) { renderer.setSize(size.x, size.y, false); camera.aspect = aspect; camera.updateProjectionMatrix(); }
+        else resizeFrameRef.current();
+      }
+      operation.finish(); setBusy(null);
+    }
+  }, [busy, archiveProjectId, captureReference, captureViewportAt, stopAnimation]);
+
   /** 沿相机路径逐帧渲参考图，打包成一个 zip 下载。 */
   const exportSequence = useCallback(
     async (pass: ReferencePass) => {
@@ -3908,10 +4092,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         return;
       }
       const epoch = sceneEpochRef.current;
+      const sourceState = fingerprintRef.current().full();
+      const sourceFrame = frameRef.current;
+      const viewState = () => [...camera.position.toArray(), ...controls.target.toArray(), camera.fov];
+      const sourceView = viewState();
       const assertCurrent = () => {
         if (epoch !== sceneEpochRef.current) throw new Error('场景已替换，已停止序列导出');
         if (mover && (!canMoveEntry(mover) || !objectsRef.current.includes(mover))) throw new Error('移动对象已隐藏、锁定或删除，已停止序列导出');
+        if (sourceState !== fingerprintRef.current().full() || viewState().some((value, index) => Math.abs(value - sourceView[index]) > 1e-7)) throw new Error('导出期间场景或机位发生变化，已放弃整份序列，请重新核对后导出');
       };
+      sequenceFramesRef.current = null;
       const path = editorGroundPath(groundPoints);
       const mover =
         moverId ? objectsRef.current.find((entry) => entry.id === moverId && canMoveEntry(entry)) ?? null : null;
@@ -3945,12 +4135,19 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         ? { position: mover.object.position.clone(), quaternion: mover.object.quaternion.clone() }
         : null;
       const entries: Array<{ name: string; data: Uint8Array }> = [];
+      let restoreFrame: (() => void) | null = null;
       try {
         for (let index = 0; index < frames; index += 1) {
           assertCurrent();
           const sampleTime = sequenceSampleTime(index, frames, plan.seconds, fps);
           const sample = sampleCameraPath(cameraKeys, sampleTime);
-          if (!sample) break;
+          if (!sample) throw new Error('相机路径未返回完整采样，已放弃整份序列');
+          restoreFrame = () => {
+            camera.position.copy(savedPosition); controls.target.copy(savedTarget); camera.fov = savedFov; camera.updateProjectionMatrix(); controls.update();
+            if (mover && savedMover && canMoveEntry(mover) && objectsRef.current.includes(mover)) {
+              mover.object.position.copy(savedMover.position); mover.object.quaternion.copy(savedMover.quaternion); mover.object.updateMatrixWorld(true);
+            }
+          };
           camera.position.set(...sample.position);
           controls.target.set(...sample.target);
           controls.update();
@@ -3961,7 +4158,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           if (mover && path && moverSeconds && canMoveEntry(mover)) {
             // 移动与相机各走各的时钟：按同一帧时间 / 移动总时长取进度，超出就停在 B。
             const progress = Math.min(1, sampleTime / moverSeconds);
-            mover.object.position.set(...groundPathPointAt(path, progress));
+            mover.object.position.set(...groundPathPoint(path, progress));
             mover.object.rotation.y = groundPathYaw(path, progress);
             if (followMover) {
               // 跟拍：相机与目标整体加上角色的水平位移，构图不变。
@@ -3990,13 +4187,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             } catch (err) { preview?.stop(); throw err; }
             return () => {
               preview?.stop();
-              camera.position.copy(savedPosition); controls.target.copy(savedTarget); camera.fov = savedFov; camera.updateProjectionMatrix(); controls.update();
-              if (mover && savedMover) { mover.object.position.copy(savedMover.position); mover.object.quaternion.copy(savedMover.quaternion); mover.object.updateMatrixWorld(true); }
+              restoreFrame?.(); restoreFrame = null;
             };
           };
           const shot = await captureReference(pass);
           assertCurrent();
-          if (!shot) break;
+          if (!shot) throw new Error('序列取帧失败，已放弃整份序列');
           entries.push({
             name: `${pass}-${String(index).padStart(3, "0")}.png`,
             data: new Uint8Array(await shot.blob.arrayBuffer()),
@@ -4005,7 +4201,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           operation.update(`${REFERENCE_BUSY_PREFIX}（序列 ${index + 1}/${frames}）…`);
           setBusy(`${REFERENCE_BUSY_PREFIX}（序列 ${index + 1}/${frames}）…`);
         }
-        if (entries.length === 0) throw new Error("没有取到任何帧");
+        if (entries.length !== frames) throw new Error('序列帧数不完整，已放弃导出');
+        assertCurrent();
         // 先留一份帧，用户想存素材库时不用再渲一遍。
         sequenceFramesRef.current = {
           pass,
@@ -4028,18 +4225,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       } finally {
         exportSampleRef.current = null;
         operation.finish();
-        if (epoch === sceneEpochRef.current) {
-          camera.position.copy(savedPosition);
-          controls.target.copy(savedTarget);
-          if (Math.abs(camera.fov - savedFov) > 1e-4) {
-            camera.fov = savedFov;
-            camera.updateProjectionMatrix();
-          }
-          controls.update();
-          if (mover && savedMover && canMoveEntry(mover) && objectsRef.current.includes(mover)) {
-            mover.object.position.copy(savedMover.position);
-            mover.object.quaternion.copy(savedMover.quaternion);
-          }
+        if (epoch === sceneEpochRef.current) restoreFrame?.();
+        // Sampling state was already restored synchronously by captureReference.
+        // Never roll back camera/object edits made while PNG encoding was pending.
+        if (epoch === sceneEpochRef.current && sourceFrame === frameRef.current) {
           // 画布尺寸与投影一起还原，否则编辑器停在导出分辨率上。
           if (renderer && savedSize && sequenceWidth > 0) {
             renderer.setPixelRatio(savedPixelRatio);
@@ -4071,7 +4260,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       if (!camera || !controls) { setError('视口尚未就绪，无法导出逐镜参考包'); return false; }
       const epoch = sceneEpochRef.current;
       let module: typeof import('./toonflowSets');
-      let pack: import('./toonflowSets').ScriptReferencePack & { exportedSceneFingerprint?: string; scope?: string };
+      let pack: import('./toonflowSets').ScriptReferencePack & { exportedSceneFingerprint?: string; scope?: string; environment?: SceneEnvironment | null; motionSampling?: string; motionPlan?: import('./toonflowSets').ScriptShotPlan; artifactId?: string; walkProof?: unknown; characterAnimationCatalogRevision?: number; output?: Array<{ name: string; width: number; height: number }> };
       const sourceState = fingerprintRef.current().full();
       const assertSource = () => {
         if (epoch !== sceneEpochRef.current || sourceState !== fingerprintRef.current().full()) throw new Error('导出期间场景发生变化，已放弃整包，请重新核对后导出');
@@ -4080,7 +4269,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         // 保持 toonflowSets 懒加载：静态 import 会把整套素材塞进主视口包。
         module = await import('./toonflowSets');
         if (objectsRef.current.some(entry => entry.splat || entry.mediaKind === 'video')) throw new Error('逐镜参考包暂不支持包含泼溅或视频平面的场景：不能省略或使用未同步画面，请先显式移除后导出');
-        pack = { ...module.buildScriptShotReferencePack(plan, { now: new Date() }), exportedSceneFingerprint: module.scriptFingerprint(sourceState), scope: 'static-mesh-reference-passes' };
+        pack = { ...module.buildScriptShotReferencePack(plan, { now: new Date() }), exportedSceneFingerprint: module.scriptFingerprint(sourceState), scope: 'static-mesh-reference-passes', environment: environmentRef.current ? validateSceneEnvironment(environmentRef.current) : null, motionSampling: 'script-shot-timeline-v1', motionPlan: plan };
+        // 纯清单函数不负责渲染；本入口明确声明已经统一时间轴采样，不沿用静态取图警告。
+        pack.notes = [...pack.notes.filter(note => !note.startsWith('镜头表含人工走位；')), '每镜开始秒数与视频共用机位/走位/骨姿采样；已结束镜次保留走位终点，雨雪不烘入结构参考图。'];
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : String(cause));
         return false;
@@ -4097,24 +4288,28 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       setBusy(`${REFERENCE_BUSY_PREFIX}（逐镜参考包 0/${total} 镜）…`);
       setError(null);
       const entries: Array<{ name: string; data: Uint8Array }> = [];
+      let sampler: ReturnType<typeof import('./scriptShotSampler')['createScriptShotSampler']> | null = null;
       try {
         controls.enabled = false;
         controls.enableDamping = false;
         controls.update();
+        const { createScriptShotSampler } = await import('./scriptShotSampler');
+        assertSource();
+        sampler = createScriptShotSampler(plan, { camera, controls, entries: () => objectsRef.current, environment: pack.environment ?? null, baselines: motionBaselineRef.current, isCurrent: () => epoch === sceneEpochRef.current });
+        pack.artifactId = crypto.randomUUID(); pack.walkProof = sampler.walkProof; pack.output = [];
+        pack.characterAnimationCatalogRevision = (await import('./toonflow/characterAnimations')).characterAnimationCatalogRevision;
         for (let index = 0; index < total; index += 1) {
           const shot = pack.shots[index]!;
           assertSource();
           // 采样时刻来自清单（本镜开始秒数），不读实时播放头，也不在镜间插值。
-          camera.position.set(...shot.camera.position);
-          if (Math.abs(camera.fov - shot.camera.fov) > 1e-4) { camera.fov = shot.camera.fov; camera.updateProjectionMatrix(); }
-          controls.target.set(...shot.camera.target);
-          controls.update();
+          sampler.sampleAt(shot.sampleSeconds);
           for (const file of shot.files) {
             const frame = await captureReference(file.pass);
             if (!frame) throw new Error(`第 ${shot.order} 镜的${file.pass}参考图没有取到`);
             assertSource();
             const data = new Uint8Array(await frame.blob.arrayBuffer());
             assertSource();
+            pack.output!.push({ name: file.name, width: frame.width, height: frame.height });
             entries.push({ name: file.name, data });
           }
           const progress = `${REFERENCE_BUSY_PREFIX}（逐镜参考包 ${index + 1}/${total} 镜）…`;
@@ -4140,6 +4335,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         setError(err instanceof Error ? err.message : String(err));
         return false;
       } finally {
+        sampler?.stop();
         if (epoch === sceneEpochRef.current) {
           camera.position.copy(savedPosition);
           controls.target.copy(savedTarget);
@@ -4301,7 +4497,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       if (epoch !== sceneEpochRef.current || !objectsRef.current.includes(mover) || !canMoveEntry(mover)) { stopAnimation(); return; }
       const elapsed = Math.min(seconds, (performance.now() - started) / 1000);
       const progress = elapsed / seconds;
-      mover.object.position.set(...groundPathPointAt(path, progress));
+      mover.object.position.set(...groundPathPoint(path, progress));
       mover.object.rotation.y = groundPathYaw(path, progress);
       animationRef.current?.preview.sampleAt(elapsed);
       if (progress < 1) {
@@ -4333,6 +4529,50 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const moverAnimationClips = objectsRef.current.find(e => e.id === moverId)?.object.animations ?? [];
   const selectedAnimationEntry = objectsRef.current.find(e => e.id === selectedId);
   const animationClips = selectedAnimationEntry?.object.animations ?? [];
+  // 目录片段的可绑定情况按当前选中角色实时算：缺哪根骨骼必须说出来，不静默禁用。
+  const catalogBinding: CharacterAnimationBinding | null = animationCatalog && animationCatalogId && selectedAnimationEntry && animationCatalogRef.current
+    ? animationCatalogRef.current.characterAnimationBinding(selectedAnimationEntry.object, animationCatalogId)
+    : null;
+
+  /** 动作目录按需加载：目录数据约 1.2 MB，不静态进主视口包。 */
+  const loadAnimationCatalog = useCallback(async () => {
+    try {
+      const module = await import("./toonflow/characterAnimations");
+      animationCatalogRef.current = module;
+      const entries = module.listCharacterAnimationCatalog();
+      setAnimationCatalog({ summary: module.summarizeCharacterAnimationCatalog(), entries });
+      setAnimationCatalogId(current => current || entries[0]?.id || "");
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, []);
+
+  /**
+   * 把目录片段作为普通动作资源加到选中角色：先按同名骨骼核对可绑定，再按保存规则整份校验，
+   * 都通过才改对象。不做骨架重定向、不覆盖同名片段、不自动播放、不写提示词。
+   */
+  const addCatalogAnimation = useCallback(async (id: string) => {
+    if (busy) { setError("请等待当前场景操作完成再加入动作"); return; }
+    if (animationRef.current) { setError("先停止正在播放的动作，再加入新的动作资源"); return; }
+    const entry = objectsRef.current.find(item => item.id === selectedId);
+    if (!entry) { setError("先在左栏选中要加动作的角色"); return; }
+    if (entry.locked || !entry.object.visible) { setError("对象已锁定或隐藏：先解锁/显示再加入动作"); return; }
+    try {
+      const module = animationCatalogRef.current ?? (await import("./toonflow/characterAnimations"));
+      animationCatalogRef.current = module;
+      if (!objectsRef.current.includes(entry) || selectedIdRef.current !== entry.id || entry.locked || !entry.object.visible || busy) throw new Error("角色或场景状态已变化，动作未加入");
+      const clip = module.createCharacterAnimationClipFor(entry.object, id);
+      stopAnimation();
+      entry.object.animations = attachAnimationClip(entry.object, clip);
+      setAnimationIndex(entry.object.animations.length - 1);
+      syncObjects();
+      setStatus(`已加入动作「${clip.name}」（${clip.duration.toFixed(2)} 秒 · CC0）到「${entry.name}」；随场景存档保存，不会自动播放`);
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [busy, selectedId, syncObjects]);
   const playAnimation = () => {
     if (scrubRef.current) stopAnimation();
     if (busy || playingPath || playingMove || operationBusy) return;
@@ -4882,6 +5122,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       </div>
 
       <div className="fixed right-3 top-20 z-30 max-h-[calc(100vh-6rem)] w-64 space-y-3 overflow-y-auto rounded-lg border border-white/10 bg-[#101014]/90 p-3 text-sm text-white/80 backdrop-blur">
+        {scriptShots && <ShotEnhancementPanel plan={scriptShots} entries={objects} environment={environment} disabled={!!busy || !!shotPlayback} onApply={plan => { stopAnimation(); setScriptShots(plan); setStatus('镜头增强已应用，请播放审阅并保存场景'); }} />}
+        <CharacterMotionPanel entries={objects} disabled={!!busy || !!shotPlayback} onChanged={() => { stopAnimation(); syncObjects(); setStatus('重定向动作已加入目标角色，请审阅并保存场景'); }} />
+        {scriptShots && <ScriptVideoPanel plan={scriptShots} frameAspect={frameAspect} disabled={!!busy || !!shotPlayback} onExport={exportScriptVideo} isCurrent={artifact => artifact.epoch === sceneEpochRef.current && artifact.source === fingerprintRef.current().full()} />}
         <section>
           <div className="mb-1.5 px-1 text-xs uppercase tracking-wide text-white/40">灯光</div>
           <div className="grid grid-cols-4 gap-1">
@@ -4889,7 +5132,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               <button
                 key={name}
                 type="button"
-                onClick={() => applyLightPreset(name)}
+                onClick={() => {
+                  // 环境启用时预设只改「记录用」的预设名，灯光/背景立刻回到环境，
+                  // 否则点一下预设就把环境画面顶掉，同一个场景出现两种结果。
+                  applyLightPreset(name);
+                  const current = environmentRef.current;
+                  if (current) applyEnvironment(current);
+                }}
                 className={`rounded-md px-1 py-1 text-xs ${
                   lightPreset === name ? "bg-amber-400/20 text-amber-100" : "bg-white/5 text-white/60 hover:bg-white/10"
                 }`}
@@ -4898,6 +5147,163 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               </button>
             ))}
           </div>
+          {environment ? (
+            <div className="mt-1 px-1 text-[10px] leading-snug text-amber-200/70">
+              环境接管主光/半球光与背景，灯光预设此时只作参考。
+            </div>
+          ) : null}
+        </section>
+
+        <section>
+          <div className="mb-1.5 flex items-center justify-between px-1 text-xs uppercase tracking-wide text-white/40">
+            <span>环境（时间/天气/地形）</span>
+            <button
+              type="button"
+              onClick={() => (environment ? applyEnvironment(null) : applyEnvironment(defaultSceneEnvironment()))}
+              className={`rounded px-1.5 py-0.5 text-[10px] normal-case tracking-normal ${
+                environment ? "bg-emerald-400/25 text-emerald-100" : "bg-white/5 text-white/60 hover:bg-white/10"
+              }`}
+            >
+              {environment ? "关闭" : "启用"}
+            </button>
+          </div>
+          {environment ? (
+            <div className="space-y-2">
+              <label className="flex items-center justify-between text-xs">
+                <span className="text-white/60">时间 {environment.hour.toFixed(2)} 时</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={24}
+                  step={0.25}
+                  value={environment.hour}
+                  onChange={(event) => applyEnvironment({ ...environment, hour: Number(event.target.value) })}
+                  className="w-28"
+                />
+              </label>
+              <label className="flex items-center justify-between text-xs">
+                <span className="text-white/60">天气</span>
+                <select
+                  value={environment.weather.condition}
+                  onChange={(event) => applyEnvironment({
+                    ...environment,
+                    weather: { ...environment.weather, condition: event.target.value as WeatherCondition },
+                  })}
+                  className="rounded border border-white/10 bg-[#17171d] px-1 py-0.5"
+                >
+                  {WEATHER_CONDITIONS.map((condition) => (
+                    <option key={condition} value={condition}>{WEATHER_LABELS[condition]}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex items-center justify-between text-xs">
+                <span className="text-white/60">强度 {environment.weather.intensity.toFixed(2)}</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={environment.weather.intensity}
+                  onChange={(event) => applyEnvironment({
+                    ...environment,
+                    weather: { ...environment.weather, intensity: Number(event.target.value) },
+                  })}
+                  className="w-28"
+                />
+              </label>
+              {(['latitude', 'northOffset'] as const).map(key => <label key={key} className="flex items-center justify-between text-xs">
+                <span>{key === 'latitude' ? '纬度' : '北向偏移/度'}</span>
+                <input aria-label={key === 'latitude' ? '环境纬度' : '环境北向'} type="range" min={key === 'latitude' ? -66 : -180} max={key === 'latitude' ? 66 : 180} value={environment[key]} onChange={event => applyEnvironment({ ...environment, [key]: Number(event.target.value) })} className="w-24" />
+                <span>{environment[key]}°</span>
+              </label>)}
+              <label className="flex items-center justify-between text-xs">风力 {environment.weather.wind.toFixed(2)}
+                <input aria-label="环境风力" type="range" min={0} max={1} step={0.05} value={environment.weather.wind} onChange={event => applyEnvironment({ ...environment, weather: { ...environment.weather, wind: Number(event.target.value) } })} className="w-28" />
+              </label>
+              <div className="rounded border border-white/10 p-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-white/60">
+                    {environment.terrain
+                      ? `地形 ${environment.terrain.size} 米 / ${environment.terrain.segments} 段`
+                      : "地形（未启用，地面为 20×20 平地）"}
+                  </span>
+                  {environment.terrain ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        applyTerrainChange(null);
+                        setStatus("已清除地形：地面回到 20×20 平地，落点 Y 复位为 0.02；未保存前不会写进存档");
+                      }}
+                      className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/60 hover:bg-white/10"
+                    >
+                      清除
+                    </button>
+                  ) : null}
+                </div>
+                <div className="mt-1 grid grid-cols-3 gap-1 text-[10px]">
+                  <label className="flex flex-col gap-0.5">
+                    <span className="text-white/35">边长/米</span>
+                    <input
+                      type="number"
+                      min={20}
+                      max={1024}
+                      value={terrainDraft.size}
+                      onChange={(event) => setTerrainDraft((draft) => ({ ...draft, size: Number(event.target.value) }))}
+                      className="rounded border border-white/10 bg-[#17171d] px-1 py-0.5 text-white/80"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-0.5">
+                    <span className="text-white/35">起伏/米</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={16}
+                      value={terrainDraft.amplitude}
+                      onChange={(event) => setTerrainDraft((draft) => ({ ...draft, amplitude: Number(event.target.value) }))}
+                      className="rounded border border-white/10 bg-[#17171d] px-1 py-0.5 text-white/80"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-0.5">
+                    <span className="text-white/35">种子</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={2147483647}
+                      value={terrainDraft.seed}
+                      onChange={(event) => setTerrainDraft((draft) => ({ ...draft, seed: Number(event.target.value) }))}
+                      className="rounded border border-white/10 bg-[#17171d] px-1 py-0.5 text-white/80"
+                    />
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      const terrain = createEnvironmentTerrain(terrainDraft);
+                      applyTerrainChange(terrain);
+                      setStatus(`已生成地形（${summarizeEnvironment({ ...environment, terrain })}）；落点已贴到新地面，保存场景才会写进存档`);
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : String(err));
+                    }
+                  }}
+                  className="mt-1 w-full rounded bg-emerald-400/20 px-1.5 py-1 text-[11px] text-emerald-100 hover:bg-emerald-400/30"
+                >
+                  {environment.terrain ? "按当前参数重建地形" : "生成地形"}
+                </button>
+                {environment.terrain && <EnvironmentBrushPanel terrain={environment.terrain} disabled={!!busy || !!shotPlayback} onChange={applyTerrainChange} />}
+              </div>
+              <div className="px-1 text-[10px] leading-snug text-white/35">
+                {summarizeEnvironment(environment)}
+              </div>
+              <div className="px-1 text-[10px] leading-snug text-white/30">
+                同一份环境在视口、截图、序列与参考图取样里结果一致；逐镜走位会按地形坡度上限
+                检查坡度，参考图不烘雾/雨雪。风力控制雨雪漂移；视频按时间轴确定性取样。
+              </div>
+            </div>
+          ) : (
+            <div className="px-1 text-[10px] leading-snug text-white/35">
+              未启用：沿用灯光预设与 20×20 平地（旧存档行为）。启用后太阳/雾/地形接管地面。
+            </div>
+          )}
         </section>
 
         <section>
@@ -5209,6 +5615,45 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
             <p role="status" className="text-[11px] text-white/50">{animationState === 'playing' ? '动作播放中' : animationState === 'paused' ? '动作已暂停（仍占用骨骼）' : '动作已停止'}</p>
           </div> : <p className="text-[11px] text-white/40">选中带内置骨骼动作的 GLB 或 v6 场景角色；静态模型与无动作旧档没有可用片段。</p>}
           <p className="mt-1 text-[10px] text-white/40">仅使用骨骼局部动作；编辑、FK、保存前自动停止并还原，不保存临时帧。动作资源随 v6 场景保存，重开不自动播放；路径、相机跟拍、参考序列及首尾帧复用路径面板动作选择，路径动作选择也随场景保存，重开后需主动预览或导出。</p>
+          <div className="mt-2 space-y-1 border-t border-white/10 pt-2">
+            <div className="px-1 text-[11px] text-white/50">动作目录（CC0 · 按需载入）</div>
+            {!animationCatalog ? (
+              <button type="button" onClick={loadAnimationCatalog} className="w-full rounded bg-white/5 px-2 py-1 text-xs text-white/70 hover:bg-white/10">
+                载入动作目录
+              </button>
+            ) : (
+              <>
+                <p className="px-1 text-[10px] leading-4 text-white/40">
+                  {animationCatalog.summary.total} 条 = 源 {animationCatalog.summary.source} + 镜像 {animationCatalog.summary.mirrored} · 数据修订 {animationCatalog.summary.revision} · CC0-1.0（不重授权为本仓库 MIT）
+                </p>
+                <select aria-label="动作目录片段" value={animationCatalogId} onChange={event => setAnimationCatalogId(event.target.value)} className="w-full rounded bg-[#222] p-1 text-xs">
+                  {animationCatalog.entries.map(entry => <option key={entry.id} value={entry.id}>{entry.category} · {entry.name} · {entry.duration.toFixed(2)} 秒{entry.mirrored ? "（镜像）" : ""}</option>)}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => addCatalogAnimation(animationCatalogId)}
+                  disabled={!animationCatalogId || !catalogBinding?.bindable || Boolean(busy) || Boolean(selectedAnimationEntry?.locked) || !selectedAnimationEntry?.object.visible}
+                  className="w-full rounded bg-white/10 px-2 py-1 text-xs disabled:opacity-40"
+                >
+                  加入该角色动作
+                </button>
+                <p role="status" className="px-1 text-[10px] leading-4 text-white/40">
+                  {!selectedAnimationEntry
+                    ? "先在左栏选中要加动作的角色"
+                    : !selectedHasSkeleton
+                      ? "这个对象没有骨骼；目录只支持同名 23 根人形骨骼"
+                      : catalogBinding
+                        ? catalogBinding.bindable
+                          ? `可绑定：${catalogBinding.bones.length} 根同名骨骼全部存在`
+                          : `不可绑定：缺少 ${catalogBinding.missing.length} 根骨骼（${catalogBinding.missing.join("、")}）`
+                        : "选一个目录片段"}
+                </p>
+                <p className="px-1 text-[10px] leading-4 text-white/30">
+                  只按同名骨骼绑定，不做骨架重定向、IK 或脚底贴地；加入后就是普通 v6 动作资源，播放、逐镜视频与参考包读同一份轨道。
+                </p>
+              </>
+            )}
+          </div>
         </section>
 
         <section>

@@ -46,7 +46,12 @@ test('设了天空盒后切灯光预设不会把背景顶掉', () => {
     /if \(!skyboxTextureRef\.current\) scene\.background = new THREE\.Color\(preset\.background\)/,
     '切灯光预设时若已有天空盒，不应覆盖背景',
   )
-  assert.match(stage3d, /scene\.background = new THREE\.Color\(LIGHT_PRESETS\[lightPreset\]\.background\)/, '清除天空盒要回到灯光预设底色')
+  // 2026-11-25：环境启用时天色归环境（太阳高度+天气雾），否则回到灯光预设底色。
+  assert.match(
+    stage3d,
+    /scene\.background = environment\n\s+\? new THREE\.Color\(environmentLight\(environment\)\.background\)\n\s+: new THREE\.Color\(LIGHT_PRESETS\[lightPreset\]\.background\);/,
+    '清除天空盒要回到灯光预设底色（环境启用时回到环境天色）',
+  )
 })
 
 test('视频平面不参与导出，并说明原因', () => {

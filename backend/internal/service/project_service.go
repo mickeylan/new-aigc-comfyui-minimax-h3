@@ -8493,13 +8493,36 @@ func scene3DRefVideo(sc *models.Scene) string {
 }
 
 // scene3DRefVideoFiles 把 3D 参考视频包成模板的 ref_videos 输入。
-// 3D 编辑器导出的序列存在素材库 task 目录 materials 下，所以 TaskID 固定为 materials。
+// 旧版共享素材的兼容默认；生产提交还会按上传登记解析当前项目的 material_p<ID> 目录。
 func scene3DRefVideoFiles(sc *models.Scene) map[string][]FileMeta {
 	name := scene3DRefVideo(sc)
 	if name == "" {
 		return nil
 	}
 	return map[string][]FileMeta{"ref_videos": {{TaskID: "materials", Name: name}}}
+}
+
+// resolveScene3DRefVideoFiles follows the registered upload directory, never another project's.
+// Shared/legacy clips keep their old materials path; project-owned Studio uploads use material_p<ID>.
+func (s *ProjectService) resolveScene3DRefVideoFiles(sc *models.Scene) (map[string][]FileMeta, error) {
+	files := scene3DRefVideoFiles(sc)
+	if files == nil {
+		return nil, nil
+	}
+	name, err := safeFileSegment(scene3DRefVideo(sc), "3D 参考视频文件名")
+	if err != nil {
+		return nil, err
+	}
+	for _, taskID := range []string{fmt.Sprintf("material_p%d", sc.ProjectID), "materials"} {
+		var registered models.UploadFile
+		if err := s.db.Where("task_id = ? AND name = ? AND type = ?", taskID, name, "video").Limit(1).Find(&registered).Error; err != nil {
+			return nil, fmt.Errorf("读取 3D 参考视频登记失败: %w", err)
+		}
+		if registered.ID != 0 {
+			return map[string][]FileMeta{"ref_videos": {{TaskID: taskID, Name: name}}}, nil
+		}
+	}
+	return files, nil
 }
 
 func hasAuditedCombatShots(shots []models.Shot) bool {
@@ -8571,6 +8594,10 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	}
 	videoW, videoH := aspectVideoSize(p.AspectRatio, s.videoResolution())
 	pid := fmt.Sprintf("%d", p.ID)
+	ref3DFiles, err := s.resolveScene3DRefVideoFiles(sc)
+	if err != nil {
+		return err
+	}
 	assemble := func(override string) (string, string, map[string][]FileMeta) {
 		code, prompt, files := s.buildSceneVideoSpec(sc, pid, override)
 		if isH3Ref2VTemplate(code) {
@@ -8591,7 +8618,7 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 			}
 		}
 		if code == h3Ref2V3DTemplate {
-			if ref3D := scene3DRefVideoFiles(sc); ref3D != nil {
+			if ref3D := ref3DFiles; ref3D != nil {
 				if files == nil {
 					files = map[string][]FileMeta{}
 				}
@@ -8635,6 +8662,9 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	tpl, selectionErr := catalog.ValidateVideoSelection(tplCode, videoFiles, duration)
 	if selectionErr != nil {
 		fallbackCode := "minimax_h3_ref2v"
+		if scene3DRefVideo(sc) != "" {
+			return fmt.Errorf("3D 结构参考视频模板 %s 不可用，禁止回退并丢弃已选参考视频: %w", tplCode, selectionErr)
+		}
 		if tplCode == h3CombatRef2VTemplate {
 			return fmt.Errorf("武戏专用视频模板 %s 不可用，禁止回退普通模板: %w", tplCode, selectionErr)
 		}

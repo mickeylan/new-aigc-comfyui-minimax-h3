@@ -59,12 +59,15 @@ test('两点间距按三维距离算，只有一端时没有路径', () => {
 
 test('编辑器：只对地面拾取、拖拽超过阈值不落点、参考图导出时藏起标记', () => {
   // 选点期间点击走射线；只对地面做 intersectObject，点模型不该变成落点
-  assert.match(stage, /const onGround = hit\.raycaster\.intersectObject\(ground, false\)\[0\];/)
+  // 2026-11-25：地形启用后落点读地形高度场，地形优先于 20×20 平面，否则点山里会点穿
+  assert.match(stage, /const terrainMesh = terrainMeshRef\.current;\n\s+const onTerrain = terrainMesh \? hit\.raycaster\.intersectObject\(terrainMesh, false\)\[0\] : undefined;/)
+  assert.match(stage, /const onGround = onTerrain \?\? hit\.raycaster\.intersectObject\(ground, false\)\[0\];/)
   // 地面网格只有 20×20，点远处会打空：退回无限平面，否则用户会觉得点了没反应
   assert.match(stage, /: hit\.raycaster\.ray\.intersectPlane\(/)
   assert.match(stage, /if \(!onPlane\) return null;/)
   assert.match(stage, /if \(moved > 4\) return;/)
-  assert.match(stage, /return clampGroundPoint\(\[onPlane\.x, 0\.02, onPlane\.z\]\);/)
+  // 落点钳制：有地形钳到地形内圈并取地面高度，没地形回退旧的 20×20 平地（y=0.02）
+  assert.match(stage, /return clampGroundPointToTerrain\(terrain, \[onPlane\.x, onPlane\.y, onPlane\.z\]\);/)
   // 落点与拖动共用同一个射线助手（落点/微调走同一套地面拾取语义）
   assert.match(stage, /const groundPointOf = \(event: PointerEvent \| MouseEvent\): GroundPoint \| null => \{/)
   // 落点标记不进参考图
@@ -103,14 +106,17 @@ test('导出序列时逐帧推角色、结束还原，预览走同一个取样�
   // 进度 = 帧时间 / 移动时长，超出停在 B
   assert.match(stage, /const sampleTime = sequenceSampleTime\(index, frames, plan\.seconds, fps\);/)
   assert.match(stage, /const progress = Math\.min\(1, sampleTime \/ moverSeconds\);/)
-  assert.match(stage, /mover\.object\.position\.set\(\.\.\.groundPathPointAt\(path, progress\)\);/)
+  assert.match(stage, /mover\.object\.position\.set\(\.\.\.groundPathPoint\(path, progress\)\);/)
   // 朝向也按当前进度取切线（有途经点时是一条曲线，不能用固定朝向）
   assert.match(stage, /mover\.object\.rotation\.y = groundPathYaw\(path, progress\);/)
   // 导出后对象要回到原位，不能停在 B 点
   assert.match(stage, /mover\.object\.position\.copy\(savedMover\.position\);/)
   assert.match(stage, /mover\.object\.quaternion\.copy\(savedMover\.quaternion\);/)
   // 编辑器里的预览与导出共用取样，不另写一份插值
-  assert.match(stage, /mover\.object\.position\.set\(\.\.\.groundPathPointAt\(path, progress\)\);/)
+  assert.match(stage, /mover\.object\.position\.set\(\.\.\.groundPathPoint\(path, progress\)\);/)
+  // 取样入口只有一个：地形接管后 Y 跟随高度场，别处不再各自调用 groundPathPointAt
+  assert.match(stage, /const groundPathPoint = \(path: GroundPath, t: number\): GroundPoint =>\n\s+groundPathPointOnTerrain\(environmentRef\.current\?\.terrain \?\? null, path, t\);/)
+  assert.equal(/groundPathPointAt\(/.test(stage), false)
   assert.match(stage, /const \[playingMove, setPlayingMove\] = useState\(false\);/)
   assert.match(stage, /\{playingMove \? "移动中…" : "预览"\}/)
   // 无头环境改不动 <select>，所以另给一个「用左栏选中对象」的按钮，顺手也更好用

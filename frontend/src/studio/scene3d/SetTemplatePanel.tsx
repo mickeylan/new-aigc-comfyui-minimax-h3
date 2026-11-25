@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import type { ScriptCharacterBinding, ScriptSceneDraft, ScriptSceneIndex, ScriptShot, ScriptShotCamera, ScriptShotMotion, ScriptShotMotionTarget, ScriptShotPlan, SetDraft } from './toonflowSets';
 type Engine = typeof import('./toonflowSets');
 type Entries = ReturnType<Engine['materializeSetDraft']>;
-type BindingChoice = { kind: 'unbound' } | { kind: 'set-person'; objectId: string } | { kind: 'placeholder'; x: number; z: number };
+type BindingChoice = { kind: 'unbound' } | { kind: 'set-person'; objectId: string } | { kind: 'placeholder'; x: number; z: number; rig?: 'skeletal' };
 
 const TIME_LABELS: Record<string, string> = { day: '日', dawn: '晨', dusk: '黄昏', night: '夜', unknown: '未标注时间' };
 const POSE_LABELS: Record<string, string> = { person: '站', seatedPerson: '坐', kneelingPerson: '跪' };
-const bindingValue = (choice: BindingChoice) => choice.kind === 'unbound' ? '' : choice.kind === 'placeholder' ? 'placeholder' : `set:${choice.objectId}`;
+const bindingValue = (choice: BindingChoice) => choice.kind === 'unbound' ? '' : choice.kind === 'placeholder' ? (choice.rig === 'skeletal' ? 'skeletal' : 'placeholder') : `set:${choice.objectId}`;
 type MotionForm = { targetId: string; startX: string; startZ: string; endX: string; endZ: string; duration: string; animationIndex: string };
 const motionForm = (motion?: ScriptShotMotion | null): MotionForm => ({
   targetId: motion?.targetId ?? '',
@@ -66,7 +66,7 @@ function ShotMotionEditor({ shot, targets, disabled, pending, onSet, onClear }: 
         {animations.map(clip => <option key={`${clip.index}-${clip.name}`} value={String(clip.index)}>{clip.name} · {clip.duration.toFixed(2)} 秒</option>)}
       </select></label>
     </div>
-    <p className="text-zinc-500">平地直线 XZ 位移，不做地形或障碍避让，Y 跟随对象当前高度；骨骼动作只作局部预演。目标须由人选定，不按名字猜。</p>
+    <p className="text-zinc-500">XZ 直线位移，有地形时 Y 跟随高度场，否则保留当前高度；坡度或水域不可走、遇静态障碍时显式拒绝，不自动绕行。骨骼动作只作局部预演，目标须由人选定，不按名字猜。</p>
     <div className="flex gap-2">
       <button type="button" aria-label={`镜 ${shot.order} 应用走位`} disabled={disabled || pending || !form.targetId} onClick={apply}>应用走位</button>
       <button type="button" aria-label={`镜 ${shot.order} 清除走位`} disabled={disabled || pending || !shot.motion} onClick={onClear}>清除走位</button>
@@ -190,7 +190,7 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
   }
   function setCharacterBinding(character: string, value: string) {
     setAcknowledged(false);
-    const choice: BindingChoice = value === '' ? { kind: 'unbound' } : value === 'placeholder' ? { kind: 'placeholder', x: 0, z: 0 } : { kind: 'set-person', objectId: value.slice(4) };
+    const choice: BindingChoice = value === '' ? { kind: 'unbound' } : (value === 'placeholder' || value === 'skeletal') ? { kind: 'placeholder', x: 0, z: 0, ...(value === 'skeletal' ? { rig: 'skeletal' as const } : {}) } : { kind: 'set-person', objectId: value.slice(4) };
     setBindings(current => ({ ...current, [character]: choice }));
   }
   function movePlaceholder(character: string, axis: 'x' | 'z', value: number) {
@@ -321,7 +321,7 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
         const choice = bindings[character];
         if (!choice || choice.kind === 'unbound') throw new Error(`角色「${character}」尚未绑定`);
         const target: ScriptCharacterBinding['target'] = choice.kind === 'placeholder'
-          ? { kind: 'placeholder', position: { x: choice.x, z: choice.z } }
+          ? { kind: 'placeholder', position: { x: choice.x, z: choice.z }, ...(choice.rig ? { rig: choice.rig } : {}) }
           : { kind: 'set-person', objectId: choice.objectId };
         return { character, target };
       });
@@ -372,7 +372,7 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
         {scriptDraft.review.characters.length > 0 && <p>出场：{scriptDraft.review.characters.join('、')}</p>}
         {scriptDraft.review.dialogue.map((line, position) => <p key={`${line.speaker}-${position}`} className="text-zinc-400">{line.speaker}：{line.line}</p>)}
         {scriptDraft.review.characters.length > 0 ? <div className="space-y-1 border-t border-zinc-700 pt-1">
-          <p>角色绑定：逐个选择布景里已有的人物，或新建中性胶囊人占位并填写站位；不按姓名猜素材。</p>
+          <p>角色绑定：复用布景人物，或显式新建胶囊人/24骨蒙皮人物并填写站位；不按姓名猜素材。</p>
           {scriptDraft.review.characters.map(character => {
             const choice: BindingChoice = bindings[character] ?? { kind: 'unbound' };
             return <div key={character} className="space-y-1">
@@ -381,6 +381,7 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
                 <select aria-label={`角色 ${character} 绑定`} value={bindingValue(choice)} disabled={disabled || pending} onChange={event => setCharacterBinding(character, event.target.value)} className="w-full bg-zinc-800 p-1">
                   <option value="">未绑定</option>
                   <option value="placeholder">中性占位人（胶囊人）＋指定站位</option>
+                  <option value="skeletal">24骨蒙皮人物（37动作）＋指定站位</option>
                   {scriptPersons.map(person => <option key={person.id} value={`set:${person.id}`}>布景人物：{person.name} · {POSE_LABELS[person.shape] ?? person.shape} · {person.position.x.toFixed(1)},{person.position.z.toFixed(1)}</option>)}
                 </select>
               </label>
@@ -391,7 +392,7 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
             </div>;
           })}
           <p role="status">{unboundCharacters.length ? `已绑定 ${scriptDraft.review.characters.length - unboundCharacters.length}/${scriptDraft.review.characters.length} 个角色；还需绑定：${unboundCharacters.join('、')}` : `已绑定 ${scriptDraft.review.characters.length} 个角色（站位相对布景中心）`}</p>
-          <p className="text-zinc-400">占位人是中性胶囊人，不是最终角色模型；绑定只改实例名称、追加占位人并写站位，不改素材，也不写提示词。</p>
+          <p className="text-zinc-400">占位人不是最终角色模型；24骨人物含37个可选片段，追加后可人工逐镜选动作。不按台词猜表演、不写提示词。</p>
         </div> : <p className="text-zinc-400">本场没有检出出场角色，无需角色绑定。</p>}
         {scriptDraft.review.diagnostics.map((text, position) => <p key={`diagnostic-${position}`} role="note" className="text-amber-400">{text}</p>)}
         {scriptDraft.review.conflicts.map((text, position) => <p key={`conflict-${position}`} role="alert" className="text-amber-400">{text}</p>)}
@@ -414,7 +415,7 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
           <button type="button" disabled={disabled || pending} onClick={loadAppliedShots}>载入场景镜头表审阅</button>
         </div>}
         {appliedPlan && <div className="space-y-1 rounded border border-zinc-700 p-1" aria-label="连续逐镜播放">
-          <p className="text-zinc-400">连续逐镜播放：按已保存镜头表的时间轴切换人工记录的视口机位，并在下方显示本镜台词。缺任一镜机位就直接拒绝，不补造机位；这只是取景切换预览，不生成角色表演或视频。</p>
+          <p className="text-zinc-400">连续逐镜播放：按已保存镜头表的时间轴切换人工记录的视口机位，并在下方显示本镜台词。缺任一镜机位就直接拒绝，不补造机位；已人工绑定的走位、骨骼片段或胶囊步态同步预览，不自动编排表演或生成视频。</p>
           <div className="flex flex-wrap gap-2">
             <button type="button" disabled={disabled || pending || !onPlayShots || Boolean(shotPlayback)} onClick={playAppliedShots}>连续逐镜播放</button>
             <button type="button" disabled={!shotPlayback || !onStopShots} onClick={onStopShots}>停止并还原视口</button>
@@ -422,7 +423,7 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
           {shotPlayback && <p role="status">正在播放第 {playingShot?.order ?? shotPlayback.index + 1} 镜 / 共 {shotPlayback.shots} 镜{playingLine ? ` · 当前台词：${playingLine}` : ''}</p>}
         </div>}
         {appliedPlan && <div className="space-y-1 rounded border border-zinc-700 p-1" aria-label="逐镜参考包">
-          <p className="text-zinc-400">逐镜参考包：按已保存镜头表的镜序，在每镜开始秒数用人工记录的机位分别渲染白模/法线/深度三张 PNG，连同 manifest.json 打成一个 zip 本地下载。缺任一镜机位或有镜头取图失败都拒绝整包，不补造机位、不导出半份；采样后视口还原。这只是静态网格参考素材：包含泼溅或视频平面的场景暂不支持，会明确拒绝而非省略。清单记录导出时场景标识；导出途中场景变化则整包作废。不编码视频、不上传素材库、不写业务库。</p>
+          <p className="text-zinc-400">逐镜参考包：按已保存镜头表的镜序，在每镜开始秒数用人工记录的机位分别渲染白模/法线/深度三张 PNG，连同 manifest.json 打成一个 zip 本地下载。缺任一镜机位或有镜头取图失败都拒绝整包，不补造机位、不导出半份；与逐镜视频共用时间轴，取样人工走位与骨姿，保留前镜走位终点；采样后视口和人物还原。这只是网格结构参考素材：包含泼溅或视频平面的场景暂不支持，会明确拒绝而非省略。清单记录导出时场景标识；导出途中场景变化则整包作废。不编码视频、不上传素材库、不写业务库。</p>
           <p role="note">预计 {appliedPlan.shots.length} 镜 × 3 张 = {appliedPlan.shots.length * 3} 张 PNG + manifest.json。导出期间视口会依次切到各镜机位，结束后回到当前取景。</p>
           <label className="flex gap-1">
             <input type="checkbox" aria-label="确认导出逐镜参考包" checked={packAcknowledged} disabled={disabled || pending || packPending} onChange={event => setPackAcknowledged(event.target.checked)} />
@@ -432,7 +433,7 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
         </div>}
         {shotPlan && <div className="space-y-1">
           <p role="status">共 {shotPlan.shots.length} 镜 · 总时长 {shotPlan.shots[shotPlan.shots.length - 1]!.end.toFixed(2)} 秒 · 未指定机位 {shotPlan.shots.filter(shot => !shot.camera).length} 镜 · 含人工走位 {shotPlan.shots.filter(shot => shot.motion).length} 镜{scriptDraft ? '' : ' · 本面板没有当前草稿可比对来源'}</p>
-          <p className="text-zinc-400">走位只按人工选定的场景对象、起止 XZ 与时长做平地直线移动，不做地形或障碍避让；可选已有骨骼 clip 只作局部预演。不会按角色姓名猜对象，也不会按文件名猜动作。</p>
+          <p className="text-zinc-400">走位按人工选定的场景对象、起止 XZ 与时长做直线移动，Y 跟随启用的地形高差；越界或陡坡拒绝，不做障碍避让。可选已有骨骼 clip 只作局部预演；无 clip 的胶囊人按行进距离摆步态。不会按角色姓名猜对象，也不会按文件名猜动作。</p>
           {shotPlan.shots.map(shot => <div key={shot.id} className="space-y-1 border-t border-zinc-800 pt-1">
             <p role="status">{shot.id} · 第 {shot.order} 镜 · {shot.start.toFixed(2)}–{shot.end.toFixed(2)} 秒 · {shot.camera ? '已记录机位' : '未指定机位'}</p>
             {shot.dialogue.map(line => <p key={`${shot.id}-${line.index}`} className="text-zinc-400">{line.speaker}：{line.line || '（无台词）'}（{line.start.toFixed(2)}–{line.end.toFixed(2)} 秒）</p>)}

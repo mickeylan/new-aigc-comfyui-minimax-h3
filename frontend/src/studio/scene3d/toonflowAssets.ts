@@ -3,6 +3,7 @@
 import { catalogAssets, countAssetDerivatives, getAssetDerivatives, getAssetSearchText, matchesSearchToken } from './toonflow/assetCatalog';
 import { resolveAssetModel } from './toonflow/assetModelResolver';
 import { createModelGroup } from './toonflow/modelGeometry';
+import { createToonflowPrimitive } from './toonflowPrimitives';
 import type { SceneAsset } from './toonflow/sceneDocument';
 
 export const TOONFLOW_GENERATOR_VERSION = 1;
@@ -37,8 +38,8 @@ function findAsset(id: string, parentId?: string) {
 export function createProceduralAsset(assetId: string, parentId?: string) {
   const asset = findAsset(assetId, parentId);
   const definition = resolveAssetModel(asset);
-  if (!definition) throw new Error('该素材没有可构建的本地模型');
-  const object = createModelGroup(definition, undefined, true);
+  if (!definition && asset.kind !== 'primitive') throw new Error('该素材没有可构建的本地模型');
+  const object = definition ? createModelGroup(definition, undefined, true) : createToonflowPrimitive(asset, '#8b87ad');
   object.name = asset.name;
   object.userData.proceduralSource = { generator: 'toonflow', version: TOONFLOW_GENERATOR_VERSION, assetId, ...(parentId ? { parentId } : {}) };
   return object;

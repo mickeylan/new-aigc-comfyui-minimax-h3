@@ -49,6 +49,16 @@ func (m *MaterialService) SaveUpload(projectID *uint, ftype, name string, data [
 	return m.SaveUploadWithThumb(projectID, ftype, name, data, "", nil)
 }
 
+// SaveUploadWithDerivation keeps audit data in the same Create as the material row.
+// Validate before SaveFile: a rejected manifest must not leave files or database rows.
+func (m *MaterialService) SaveUploadWithDerivation(projectID *uint, ftype, name string, data []byte, manifest string) (*models.Material, error) {
+	validated, err := validateMaterialDerivation(manifest, ftype)
+	if err != nil {
+		return nil, err
+	}
+	return m.saveUpload(projectID, ftype, name, data, "", nil, "upload", validated)
+}
+
 // SaveUploadWithThumb 与 SaveUpload 相同，另存一张预览图（3D 素材用：客户端截一帧）。
 // 缩略图与模型文件落在同一 task 目录，删除素材时一起清理。
 func (m *MaterialService) SaveUploadWithThumb(projectID *uint, ftype, name string, data []byte, thumbName string, thumb []byte) (*models.Material, error) {
@@ -78,7 +88,7 @@ func thumbExtension(thumb []byte) string {
 	return ".png"
 }
 
-func (m *MaterialService) saveUpload(projectID *uint, ftype, name string, data []byte, thumbName string, thumb []byte, source string) (*models.Material, error) {
+func (m *MaterialService) saveUpload(projectID *uint, ftype, name string, data []byte, thumbName string, thumb []byte, source string, derivation ...string) (*models.Material, error) {
 	taskID := "materials"
 	if projectID != nil {
 		taskID = fmt.Sprintf("material_p%d", *projectID)
@@ -97,6 +107,9 @@ func (m *MaterialService) saveUpload(projectID *uint, ftype, name string, data [
 	mat := models.Material{
 		Name: name, Type: ftype, Source: source,
 		ProjectID: projectID, Path: path, ThumbPath: thumbPath, Size: size,
+	}
+	if len(derivation) > 0 {
+		mat.DerivationManifest = derivation[0]
 	}
 	if err := m.db.Create(&mat).Error; err != nil {
 		return nil, err

@@ -3,9 +3,10 @@ import {exportFrameTimes} from './previsFrameArchive.js'
 export const VIDEO_WIDTH=1280,VIDEO_HEIGHT=720,VIDEO_MAX_FRAMES=2880,VIDEO_MAX_BYTES=256*1024*1024
 const CODECS=[{name:'VP9',codec:'vp09.00.31.08',webm:'V_VP9'},{name:'VP8',codec:'vp8',webm:'V_VP8'}]
 export function videoFrameTimes(from,to,fps,duration){return exportFrameTimes(from,to,fps,duration,VIDEO_MAX_FRAMES)}
-export async function pickVideoCodec(Encoder,Frame,fps){
+export async function pickVideoCodec(Encoder,Frame,fps,{width=VIDEO_WIDTH,height=VIDEO_HEIGHT}={}){
+ if(!Number.isSafeInteger(width)||!Number.isSafeInteger(height)||width<2||height<2||width%2||height%2||Math.max(width,height)>1280||width*height>VIDEO_WIDTH*VIDEO_HEIGHT)throw Error('视频尺寸无效或超过1280×720像素预算')
  if(typeof Encoder?.isConfigSupported!=='function'||typeof Frame!=='function')throw Error('当前浏览器不支持WebCodecs视频编码，请改用PNG序列导出')
- for(const c of CODECS){const config={codec:c.codec,width:VIDEO_WIDTH,height:VIDEO_HEIGHT,bitrate:8_000_000,framerate:fps,latencyMode:'quality'};try{if((await Encoder.isConfigSupported(config))?.supported)return{...c,config}}catch{/* try next codec */}}
+ for(const c of CODECS){const config={codec:c.codec,width,height,bitrate:8_000_000,framerate:fps,latencyMode:'quality'};try{if((await Encoder.isConfigSupported(config))?.supported)return{...c,config}}catch{/* try next codec */}}
  throw Error('当前浏览器不支持VP9/VP8编码，请改用PNG序列导出')
 }
 // Timestamps come from the frame index, never the wall clock, so slow rendering cannot drop frames or change speed.
@@ -54,6 +55,9 @@ export function webmBlob({codecID,width=VIDEO_WIDTH,height=VIDEO_HEIGHT,fps,chun
  let pos=tracksPos+tracks.size;const cuePoints=[]
  clusters.forEach((c,i)=>{if(c.key)cuePoints.push(el(0xBB,[uint(0xB3,c.time),el(0xB7,[uint(0xF7,1),uint(0xF1,pos)])]));pos+=clusterEls[i].size})
  const cues=el(0x1C53BB6B,cuePoints),segment=el(0x18538067,[seekHead([[0x1549A966,infoPos],[0x1654AE6B,tracksPos],[0x1C53BB6B,pos]]),info,tracks,...clusterEls,cues])
+ // The budget applies to the complete artifact, including EBML/track/cue overhead.
+ // Check the computed size before Blob copies any payload buffers.
+ if(header.size+segment.size>VIDEO_MAX_BYTES)throw Error('视频超过256MiB，请缩小时间范围或降低FPS')
  return new Blob([...header.parts,...segment.parts],{type:'video/webm'})
 }
 export function videoManifest({sceneID,revision,dirty,mode,codec,fps,from_ms,to_ms,times,depth,document}){return{schema_version:1,kind:'previs-video',scene_id:sceneID,saved_revision:revision,unsaved_changes:!!dirty,mode,container:'webm',codec:codec.name,codec_string:codec.codec,width:VIDEO_WIDTH,height:VIDEO_HEIGHT,fps,from_ms,to_ms,frame_count:times.length,times_ms:times,depth,note:'浏览器本地导出，仅供审阅；深度视频为有损编码，精确深度请用PNG序列',document}}

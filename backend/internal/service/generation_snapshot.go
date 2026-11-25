@@ -24,6 +24,9 @@ type generationSnapshotRef struct {
 	SourceID       uint   `json:"source_id,omitempty"`
 	Variant        string `json:"variant,omitempty"`
 	AssetVariantID uint   `json:"asset_variant_id,omitempty"`
+	MaterialID     uint   `json:"material_id,omitempty"`
+	// Client-declared derivation audit data, not proof that a provider consumed this reference.
+	DerivationManifest json.RawMessage `json:"derivation_manifest,omitempty"`
 }
 
 func sha256Hex(data []byte) string {
@@ -76,10 +79,23 @@ func (s *ProjectService) recordGenerationSnapshot(sc *models.Scene, kind string,
 		}
 	}
 	refs := []generationSnapshotRef{}
+	// Persist a copy with the generation, so later material edits/deletion cannot rewrite its origin.
+	// Older databases/tests without a materials table and legacy uploads remain compatible.
+	hasVideoMaterials := len(files["ref_videos"]) > 0 && s.db.Migrator().HasTable(&models.Material{})
 	for _, role := range roles {
 		for i, ref := range files[role] {
 			identity := identities[ref.TaskID+"/"+ref.Name]
-			refs = append(refs, generationSnapshotRef{SchemaVersion: 2, Order: i + 1, SourceType: identity.SourceType, SourceID: identity.SourceID, Variant: identity.Variant, AssetVariantID: identity.AssetVariantID, Role: role, File: ref.TaskID + "/" + ref.Name, SHA256: s.fileSHA256(ref)})
+			snapshotRef := generationSnapshotRef{SchemaVersion: 2, Order: i + 1, SourceType: identity.SourceType, SourceID: identity.SourceID, Variant: identity.Variant, AssetVariantID: identity.AssetVariantID, Role: role, File: ref.TaskID + "/" + ref.Name, SHA256: s.fileSHA256(ref)}
+			if hasVideoMaterials && role == "ref_videos" && (ref.TaskID == "materials" || ref.TaskID == fmt.Sprintf("material_p%d", sc.ProjectID)) {
+				var material models.Material
+				if err := s.db.Where("path = ? AND type = ?", ref.TaskID+"/"+ref.Name, "video").Order("id DESC").Limit(1).Find(&material).Error; err == nil && material.ID != 0 {
+					snapshotRef.MaterialID = material.ID
+					if manifest, err := validateMaterialDerivation(material.DerivationManifest, "video"); err == nil && manifest != "" {
+						snapshotRef.DerivationManifest = json.RawMessage(manifest)
+					}
+				}
+			}
+			refs = append(refs, snapshotRef)
 		}
 	}
 	refsJSON, _ := json.Marshal(refs)

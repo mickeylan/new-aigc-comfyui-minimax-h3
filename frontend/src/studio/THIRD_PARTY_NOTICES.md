@@ -128,10 +128,16 @@ SOFTWARE.
 
 opencut-classic 的 MIT 许可要求保留版权声明与许可全文。本项目根目录的 `LICENSE` 只覆盖本仓库自身代码，不替代上游声明，因此移植部分按下列方式声明：
 
-```
-Portions of frontend/src/studio/video-editor are derived from opencut-classic
-(https://github.com/opencut-app/opencut-classic), licensed under the MIT License.
-Copyright (c) opencut-app contributors.
+来源许可全文（核对 <https://raw.githubusercontent.com/opencut-app/opencut-classic/main/LICENSE>）：
+
+```text
+Copyright 2025-2026 OpenCut
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
 `scene3d/animationPreview.ts` 的 GLTF CUBICSPLINE 插值逻辑参考 Three.js `examples/jsm/loaders/GLTFLoader.js`，为工程存档恢复用途改写。该部分保留以下上游 MIT 许可：
@@ -175,7 +181,7 @@ THE SOFTWARE.
 | `@hugeicons/react` | 1.0.4 | Hugeicons Pro 许可条款 | 只用到 `HugeiconsIcon` 渲染组件；**未引入任何 Pro 图标文件** |
 | `radix-ui` / `@radix-ui/react-*` | 见 `frontend/package.json` | MIT | 弹层、下拉、对话框等无样式原语 |
 
-MPL-2.0 只对 `mediabunny` 自身的文件生效，要求保留其许可并可获取其源码；本项目对它的使用方式（原样 import，不改源文件）满足该要求。
+`mediabunny` 的 MPL-2.0 义务按其覆盖文件判断；原样 import、未修改依赖并不自动免除分发时的许可保留与对应源码可获取要求。工程清单记录其 npm 包内 `LICENSE` / `src/` 和上述上游地址；发布方仍须核对所分发的确切版本、许可及源码获取说明。此处不是已完成全部许可证合规审计的声明。
 
 ## 三、不随代码分发的内容
 

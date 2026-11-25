@@ -533,10 +533,12 @@ type Material struct {
 	Path      string `json:"path"`                                      // input 相对路径（task_id/filename）
 	// ThumbPath 是 3D 素材的预览图（客户端截一帧后随文件一起上传），
 	// 与 Path 同一 task 目录下的 image 文件；其它类型留空。
-	ThumbPath string    `gorm:"column:thumb_path" json:"thumb_path,omitempty"`
-	Prompt    string    `json:"prompt"` // 生成提示词（可选）
-	Size      int64     `json:"size"`
-	CreatedAt time.Time `json:"created_at"`
+	ThumbPath string `gorm:"column:thumb_path" json:"thumb_path,omitempty"`
+	// Client-declared immutable derivation snapshot, not a server-verified generation proof.
+	DerivationManifest string    `gorm:"column:derivation_manifest;type:text" json:"derivation_manifest,omitempty"`
+	Prompt             string    `json:"prompt"` // 生成提示词（可选）
+	Size               int64     `json:"size"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 // ScriptRevision 保存某一集完整剧本层级的不可变 JSON 快照。

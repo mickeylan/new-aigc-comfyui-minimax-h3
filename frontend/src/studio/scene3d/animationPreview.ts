@@ -64,8 +64,33 @@ function installGLTFCubic(track: THREE.KeyframeTrack, width: number, quaternion:
   track.createInterpolant = factory;
 }
 
+export interface AnimationCatalogSource {
+  catalog: 'toonflow-quaternius';
+  id: string;
+  revision: number;
+  license: 'CC0-1.0';
+}
+
+// Explicit attachment only: never infer provenance from a coincidentally matching clip name.
+const catalogSources = new WeakMap<THREE.AnimationClip, AnimationCatalogSource>();
+function validateCatalogSource(value: unknown): AnimationCatalogSource {
+  const source = value as AnimationCatalogSource;
+  if (!source || typeof source !== 'object' || Array.isArray(source) ||
+    Object.keys(source).some(key => !['catalog', 'id', 'revision', 'license'].includes(key)) ||
+    source.catalog !== 'toonflow-quaternius' || typeof source.id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(source.id) ||
+    !Number.isSafeInteger(source.revision) || source.revision < 1 || source.license !== 'CC0-1.0') {
+    throw new Error('动作目录来源无效，场景未替换');
+  }
+  return { catalog: source.catalog, id: source.id, revision: source.revision, license: source.license };
+}
+export function setAnimationCatalogSource(clip: THREE.AnimationClip, source: AnimationCatalogSource): THREE.AnimationClip {
+  catalogSources.set(clip, validateCatalogSource(source));
+  return clip;
+}
+
 export interface SavedAnimationClip {
   name: string;
+  catalogSource?: AnimationCatalogSource;
   duration: number;
   tracks: { path: number[]; property: 'position' | 'quaternion' | 'scale'; interpolation: number | 'CUBICSPLINE'; times: number[]; values: number[] }[];
 }
@@ -73,10 +98,11 @@ export interface SavedAnimationClip {
 /** Archive resource data only. Child paths remain local even when glTF renames duplicate bones. */
 export function saveAnimationClips(root: THREE.Object3D): SavedAnimationClip[] {
   const paths = new Map<THREE.Object3D, number[]>();
-  const visit = (node: THREE.Object3D, path: number[]) => { paths.set(node, path); node.children.forEach((child, i) => visit(child, [...path, i])); };
+  const visit = (node: THREE.Object3D, path: number[]) => { paths.set(node, (node as THREE.Bone).isBone && node.userData.sceneAnimationPath !== undefined ? node.userData.sceneAnimationPath : path); node.children.forEach((child, i) => visit(child, [...path, i])); };
   visit(root, []);
   const saved = root.animations.map(clip => ({
     name: clip.name, duration: clip.duration,
+    ...(catalogSources.has(clip) ? { catalogSource: { ...catalogSources.get(clip)! } } : {}),
     tracks: clip.tracks.map(track => {
       const binding = THREE.PropertyBinding.parseTrackName(track.name);
       const bone = THREE.PropertyBinding.findNode(root, binding.nodeName);
@@ -91,22 +117,44 @@ export function saveAnimationClips(root: THREE.Object3D): SavedAnimationClip[] {
   return saved;
 }
 
+/** Tag an export clone before glTF splits multi-material SkinnedMesh nodes into groups.
+ * Extras survive that structural rewrite; the editor source object is never modified. */
+export function markAnimationArchivePaths(root: THREE.Object3D): void {
+  const visit = (node: THREE.Object3D, path: number[]) => {
+    if ((node as THREE.Bone).isBone) node.userData.sceneAnimationPath ??= path;
+    node.children.forEach((child, index) => visit(child, [...path, index]));
+  };
+  visit(root, []);
+}
+
 /** Strict and atomic: caller assigns returned clips only after every binding validates. */
 export function restoreAnimationClips(root: THREE.Object3D, data: unknown): THREE.AnimationClip[] {
   if (data === undefined) return [];
   const fail = (): never => { throw new Error('场景动作资源无效或骨骼绑定不兼容，场景未替换'); };
   if (!Array.isArray(data) || data.length > 256) return fail();
   let samples = 0;
+  const exportedBones = new Map<string, THREE.Object3D>();
+  root.traverse(node => {
+    const path = node.userData.sceneAnimationPath;
+    if (path === undefined) return;
+    if (!(node instanceof THREE.Bone) || !Array.isArray(path) || path.length > 256 || !path.every(i => Number.isSafeInteger(i) && i >= 0) || exportedBones.has(path.join('/'))) return fail();
+    exportedBones.set(path.join('/'), node);
+  });
   return data.map(clip => {
     if (!clip || typeof clip.name !== 'string' || clip.name.length > 1000 || !Number.isFinite(clip.duration) || clip.duration <= 0 ||
       !Array.isArray(clip.tracks) || !clip.tracks.length || clip.tracks.length > 4096) return fail();
+    const catalogSource = clip.catalogSource === undefined ? undefined : validateCatalogSource(clip.catalogSource);
     const bindings = new Set<string>();
     const tracks = clip.tracks.map((track: SavedAnimationClip['tracks'][number]) => {
       if (!track || !Array.isArray(track.path) || track.path.length > 256 || !track.path.every(i => Number.isSafeInteger(i) && i >= 0) ||
         !['position', 'quaternion', 'scale'].includes(track.property) || !['CUBICSPLINE', THREE.InterpolateDiscrete, THREE.InterpolateLinear, THREE.InterpolateSmooth].includes(track.interpolation) ||
         (track.property === 'quaternion' && track.interpolation === THREE.InterpolateSmooth)) return fail();
       let bone = root;
-      for (const i of track.path) { if (!bone.children[i]) return fail(); bone = bone.children[i]; }
+      if (exportedBones.size) {
+        const tagged = exportedBones.get(track.path.join('/'));
+        if (!tagged) return fail();
+        bone = tagged;
+      } else for (const i of track.path) { if (!bone.children[i]) return fail(); bone = bone.children[i]; }
       const key = `${bone.uuid}.${track.property}`;
       if (!(bone instanceof THREE.Bone) || bindings.has(key)) return fail();
       bindings.add(key);
@@ -122,8 +170,29 @@ export function restoreAnimationClips(root: THREE.Object3D, data: unknown): THRE
       if (track.interpolation === 'CUBICSPLINE') installGLTFCubic(restored, width, track.property === 'quaternion');
       return restored;
     });
-    return new THREE.AnimationClip(clip.name, clip.duration, tracks);
+    const restored = new THREE.AnimationClip(clip.name, clip.duration, tracks);
+    if (catalogSource) setAnimationCatalogSource(restored, catalogSource);
+    return restored;
   });
+}
+
+/**
+ * 加入动作前的整份校验：与保存用同一套规则，失败时不改对象。
+ * 同名片段显式拒绝（不覆盖既有资源）；返回可直接赋给 root.animations 的新数组。
+ * 校验通过不代表画面好看：这里只证明能完整存档并重新绑定。
+ */
+export function attachAnimationClip(root: THREE.Object3D, clip: THREE.AnimationClip): THREE.AnimationClip[] {
+  if (!clip || typeof clip.name !== 'string' || !clip.name || !Number.isFinite(clip.duration) || clip.duration <= 0 || !clip.tracks.length) throw new Error('动作片段无效，未加入');
+  if (root.animations.some(item => item.name === clip.name)) throw new Error(`该对象已有同名动作「${clip.name}」，未加入也不覆盖`);
+  const previous = root.animations;
+  const next = [...previous, clip];
+  try {
+    root.animations = next;
+    saveAnimationClips(root); // 失败即抛：不把存不进场景的动作挂上去。
+  } finally {
+    root.animations = previous;
+  }
+  return next;
 }
 
 /** Single-owner runtime preview. stop() restores the exact editing pose. */

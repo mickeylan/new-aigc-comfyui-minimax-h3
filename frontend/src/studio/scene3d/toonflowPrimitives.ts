@@ -3,9 +3,10 @@
 import { BoxGeometry, BufferGeometry, CapsuleGeometry, ConeGeometry, CylinderGeometry, Group, Mesh, MeshStandardMaterial, Object3D, PlaneGeometry, SphereGeometry, TorusGeometry } from 'three';
 import { capsuleHipHeight, capsuleJointNames, capsuleRigName } from './toonflow/capsuleRig';
 import type { SceneAsset } from './toonflow/sceneDocument';
+import { createRiggedPerson } from './toonflow/riggedPerson';
 
 export function createToonflowPrimitive(asset: SceneAsset, color: string) {
-  if (asset.shape === 'riggedPerson') throw new Error('骨骼人物需通过角色入口添加，不能静默替换为胶囊人');
+  if (asset.shape === 'riggedPerson') return createRiggedPerson(color);
   const group = new Group();
   const material = new MeshStandardMaterial({ color, roughness: 0.72, metalness: 0.05 });
   function addEyes(y: number, z: number) {

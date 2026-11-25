@@ -7,9 +7,11 @@ import { createModelGroup } from './toonflow/modelGeometry';
 import { builtinAssets, usesNativeScale } from './toonflow/assetLibrary';
 import { getAssetPlacementScale } from './toonflow/assetMetadata';
 import { measureCollisionBounds } from './toonflow/sceneCollision';
-import { disposeObject } from './toonflow/sceneResources';
+import { disposeObject, shareObjectGeometry } from './toonflow/sceneResources';
 import { createToonflowPrimitive } from './toonflowPrimitives';
 import { estimateChineseDialogueDuration, SPEAKER_SWITCH_SECONDS } from '../../utils/dialogueDuration.js';
+import { validateCharacterMotionSettings, type CharacterMotionSettings } from './characterMotion';
+import type { ShotNavigation } from './shotNavigation';
 
 export type SetDraft = { version: 1; templateId: string; name: string; document: SceneDocument };
 export const SET_DRAFT_VERSION = 1;
@@ -120,6 +122,7 @@ export function materializeSetObject(saved: SceneObject): Group {
       content.scale.setScalar(asset.contentTransform?.scale ?? (usesNativeScale(asset) ? 1 : getAssetPlacementScale(asset, bounds.getSize(new Vector3()))));
     } else content.add(model);
     const object = new Group(); object.add(content); object.name = saved.name;
+    object.animations = model.animations.map(clip => clip.clone());
     object.position.copy(saved.position);
     object.rotation.set(MathUtils.degToRad(saved.rotation.x), MathUtils.degToRad(saved.rotation.y), MathUtils.degToRad(saved.rotation.z));
     object.scale.copy(saved.scale); object.visible = saved.visible;
@@ -127,6 +130,7 @@ export function materializeSetObject(saved: SceneObject): Group {
     if (saved.height !== undefined) object.position.y += saved.height - measureCollisionBounds(object, new Box3()).min.y;
     object.traverse(child => { if (child instanceof Mesh) { child.castShadow = true; child.receiveShadow = true; } });
     object.userData.proceduralSource = { generator: 'toonflow-set', version: 1, source: JSON.parse(JSON.stringify(saved)) };
+    shareObjectGeometry(object, JSON.stringify(asset));
     return object;
   } catch (error) { disposeObject(model); throw error; }
 }
@@ -453,11 +457,11 @@ export async function buildScriptSceneDraft(index: ScriptSceneIndex, sceneId: st
 export const SCRIPT_CHARACTER_LIMIT = 64;
 export const STAGING_LIMIT = 1000;
 /** 布景里可被剧本角色复用、且能由本地基础几何物化的人物形状。 */
-const PLACEABLE_PERSON_SHAPES = new Set(['person', 'seatedPerson', 'kneelingPerson']);
+const PLACEABLE_PERSON_SHAPES = new Set(['person', 'seatedPerson', 'kneelingPerson', 'riggedPerson']);
 export type SetPersonSummary = { id: string; name: string; shape: string; position: { x: number; y: number; z: number } };
 export type ScriptCharacterTarget =
   | { kind: 'set-person'; objectId: string }
-  | { kind: 'placeholder'; position: { x: number; z: number } };
+  | { kind: 'placeholder'; position: { x: number; z: number }; rig?: 'skeletal' };
 export type ScriptCharacterBinding = { character: string; target: ScriptCharacterTarget };
 export type ScriptCharacterPlacement = {
   character: string;
@@ -530,8 +534,9 @@ export function applyScriptCharacterBindings(draft: ScriptSceneDraft, bindings: 
     if (target.kind !== 'placeholder') throw new Error(`角色「${character}」的绑定类型无效`);
     if (!isStagingPoint(target.position)) throw new Error(`角色「${character}」的站位须为 ±${STAGING_LIMIT} 米内的有限坐标`);
     claimStanding(character, target.position);
-    const asset = builtinAssets.find(item => item.id === 'person');
-    if (!asset) throw new Error('内置胶囊人素材缺失，无法新建中性占位人');
+    if (target.rig !== undefined && target.rig !== 'skeletal') throw new Error('不支持的占位人物骨架');
+    const asset = builtinAssets.find(item => item.id === (target.rig === 'skeletal' ? 'riggedPerson' : 'person'));
+    if (!asset) throw new Error('内置人物素材缺失，无法新建中性占位人');
     const object = createSceneObject(JSON.parse(JSON.stringify(asset)), { x: target.position.x, y: 0, z: target.position.z });
     object.name = character;
     if (byId.has(object.id)) throw new Error(`角色「${character}」的占位人身份与已有对象冲突，请重新生成草稿`);
@@ -570,7 +575,7 @@ export type ScriptShotCamera = { position: [number, number, number]; target: [nu
 export type ScriptTimedLine = { index: number; speaker: string; line: string; start: number; end: number };
 /** 人工选定的已有骨骼 clip：按索引+名称+时长严格匹配，不按文件名猜动作语义。 */
 export type ScriptShotMotionAnimation = { index: number; name: string; duration: number };
-/** 一镜内一个角色的平地直线走位；只存 XZ，Y 跟随对象当前高度，不做地形或障碍避让。 */
+/** 一镜内一个角色的 XZ 直线走位；Y 由采样器跟随地形（无地形时保留当前高度），不可走坡度/水域或静态障碍显式拒绝，不自动绕行。 */
 export type ScriptShotMotion = {
   targetId: string;
   targetName: string;
@@ -579,6 +584,9 @@ export type ScriptShotMotion = {
   /** 走完全程的秒数，必须 ≤ 本镜时长；走完后停在终点。 */
   duration: number;
   animation?: ScriptShotMotionAnimation | null;
+  /** Explicit opt-in; missing fields retain legacy line-reject / single-clip behavior. */
+  navigation?: ShotNavigation;
+  characterMotion?: CharacterMotionSettings;
 };
 export type ScriptShotMotionTarget = {
   id: string;
@@ -709,7 +717,14 @@ export function validateScriptShotMotion(value: unknown, shotDuration: number, l
     if (typeof clip.duration !== 'number' || !Number.isFinite(clip.duration) || clip.duration <= 0) throw new Error(`${label}的骨骼动作时长无效`);
     animation = { index: clip.index as number, name, duration: clip.duration };
   }
-  return { targetId, targetName, start, end, duration, ...(animation ? { animation } : {}) };
+  const characterMotion = motion.characterMotion === undefined ? undefined : validateCharacterMotionSettings(motion.characterMotion);
+  const navigation = motion.navigation;
+  if (navigation !== undefined && (!navigation || navigation.version !== 1 || navigation.mode !== 'avoid' ||
+    Object.keys(navigation).some(key => !['version', 'mode', 'radius', 'speed'].includes(key)) ||
+    typeof navigation.radius !== 'number' || !Number.isFinite(navigation.radius) || navigation.radius <= 0 || navigation.radius > 10 ||
+    typeof navigation.speed !== 'number' || !Number.isFinite(navigation.speed) || navigation.speed <= 0 || navigation.speed > 100)) throw Error(`${label}的避障配置无效`);
+  return { targetId, targetName, start, end, duration, ...(animation ? { animation } : {}),
+    ...(characterMotion ? { characterMotion } : {}), ...(navigation ? { navigation: { ...navigation } } : {}) };
 }
 
 /** 人工绑定某一镜的走位；只改计划数据，不移动对象、不生成表演。 */
@@ -974,10 +989,11 @@ export function assertScriptShotMotionTargets(plan: ScriptShotPlan, targets: rea
     if (!target) throw new Error(`${label} ${motion.targetId}（${motion.targetName}）在当前场景中不存在，请重新绑定`);
     if (target.visible === false) throw new Error(`${label}「${target.name || motion.targetName}」已隐藏，不能走位；请先显示或改绑`);
     if (target.locked) throw new Error(`${label}「${target.name || motion.targetName}」已锁定，不能走位；请先解锁或改绑`);
-    if (motion.animation) {
-      const clip = Array.isArray(target.animations) ? target.animations[motion.animation.index] : undefined;
-      if (!clip || clip.name !== motion.animation.name || clip.duration !== motion.animation.duration) {
-        throw new Error(`${label}「${target.name || motion.targetName}」的骨骼动作「${motion.animation.name}」已变化，请重新选择`);
+    for (const reference of [motion.animation, motion.characterMotion?.blend?.animation]) {
+      if (!reference) continue;
+      const clip = Array.isArray(target.animations) ? target.animations[reference.index] : undefined;
+      if (!clip || clip.name !== reference.name || clip.duration !== reference.duration) {
+        throw new Error(`${label}「${target.name || motion.targetName}」的骨骼动作「${reference.name}」已变化，请重新选择`);
       }
     }
   }
@@ -1090,7 +1106,7 @@ export function buildScriptShotReferencePack(
       '采样时刻取每镜开始秒数；镜内机位固定，因此该时刻即本镜取景。采样后视口还原到导出前机位。',
       '白模/法线/深度均为本地渲染 PNG；深度为近黑远白的 8 位线性灰度，范围按模型包围盒计算。',
       '是否可把某张图当控制输入，必须在目标工作流实测，不能按普通参考图对待。',
-      ...(ready.shots.some(shot => shot.motion) ? ['镜头表含人工走位；参考包仍按当前静态场景取图，不播放走位或骨骼动作。'] : []),
+      ...(ready.shots.some(shot => shot.motion) ? ['镜头表含人工走位；本函数仅构造清单，实际走位与骨姿的逐镜采样由导出入口负责并记录。'] : []),
     ],
   };
 }
