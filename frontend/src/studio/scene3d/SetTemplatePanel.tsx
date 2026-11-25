@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+const DirectorSourcePanel = lazy(() => import('./DirectorSourcePanel'));
 import type { ScriptCharacterBinding, ScriptSceneDraft, ScriptSceneIndex, ScriptShot, ScriptShotCamera, ScriptShotMotion, ScriptShotMotionTarget, ScriptShotPlan, SetDraft } from './toonflowSets';
 type Engine = typeof import('./toonflowSets');
 type Entries = ReturnType<Engine['materializeSetDraft']>;
@@ -88,7 +89,7 @@ function ShotMotionEditor({ shot, targets, disabled, pending, onSet, onClear }: 
   </div>;
 }
 
-export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, onPreviewShot, onApplyShots, appliedPlan, onPlayShots, onStopShots, shotPlayback, onExportShotPack, listMotionTargets }: {
+export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, onPreviewShot, onApplyShots, appliedPlan, onPlayShots, onStopShots, shotPlayback, onExportShotPack, listMotionTargets, captureExecutionContext, onApplyExecution }: {
   disabled: boolean;
   onApply: (draft: SetDraft, entries: Entries, x: number, z: number) => void;
   /** 记录当前视口机位；场景没接视口时保持 undefined，界面不会假装能记机位。 */
@@ -109,9 +110,12 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
   onExportShotPack?: (plan: ScriptShotPlan) => void | boolean | Promise<void | boolean>;
   /** 当前场景可被人工选作走位目标的真实对象；不提供就无法在应用/播放前校验目标。 */
   listMotionTargets?: () => ScriptShotMotionTarget[];
+  captureExecutionContext?: () => Promise<import('./studioExecutionContext').StudioExecutionContext>;
+  onApplyExecution?: import('./DirectorSourcePanel').ApplyDirectorExecution;
 }) {
   const [engine, setEngine] = useState<Engine | null>(null);
   const [templateId, setTemplateId] = useState('ancientStreet');
+  const [showDirectorSource, setShowDirectorSource] = useState(false);
   const [draft, setDraft] = useState<SetDraft | null>(null);
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
@@ -349,6 +353,8 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
   const playingShot = appliedPlan && shotPlayback ? appliedPlan.shots[shotPlayback.index] ?? null : null;
   const playingLine = shotPlayback?.line ?? '（停顿／无台词）';
   return <section aria-label="整套布景" className="space-y-2 border-t border-zinc-700 p-2 text-xs">
+    <button type="button" aria-expanded={showDirectorSource} onClick={() => setShowDirectorSource(value => !value)}>{showDirectorSource ? '收起已有导演来源' : '从已有小说项目读取导演结果'}</button>
+    {showDirectorSource && <Suspense fallback={<p role="status">正在加载导演来源入口…</p>}><DirectorSourcePanel disabled={disabled || pending} captureExecutionContext={captureExecutionContext} onApplyExecution={onApplyExecution} /></Suspense>}
     <h3>整套布景 · {engine?.listSetTemplates().length ?? '加载中'} 套</h3>
     <p className="text-zinc-400">先生成草稿，确认后追加到当前场景，不替换已有对象。当前仅应用静态布景；模板时间、天气、群演动线尚未接入。</p>
     <select aria-label="布景模板" value={templateId} disabled={!engine || disabled || pending} onChange={event => { setTemplateId(event.target.value); setDraft(null); }} className="w-full bg-zinc-800 p-2">

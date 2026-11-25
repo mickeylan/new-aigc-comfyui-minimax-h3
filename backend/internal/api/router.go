@@ -146,6 +146,8 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.GET("/api/projects/:id/scenes/:sid/previsualization", svc.HandleGetScenePrevisualization)
 	r.PUT("/api/projects/:id/scenes/:sid/previsualization", svc.HandleSaveScenePrevisualization)
 	r.POST("/api/projects/:id/scenes/:sid/previsualization/plan", svc.HandlePlanScenePrevisualization)
+	r.GET("/api/projects/:id/scenes/:sid/studio-execution/source", svc.HandleGetStudioExecutionSource)
+	r.POST("/api/projects/:id/scenes/:sid/studio-execution/plan", svc.HandlePlanStudioExecution)
 	r.GET("/api/projects/:id/scenes/:sid/previsualization/frames", svc.HandleListShotPrevisFrames)
 	r.POST("/api/projects/:id/scenes/:sid/previsualization/frames", svc.HandleBindShotPrevisFrame)
 	r.POST("/api/projects/:id/scenes/:sid/previsualization/frames/:fid/prompt/preview", svc.HandlePreviewShotPrevisFramePrompt)

@@ -91,6 +91,7 @@ act_type仅限setup/rising/midpoint/falling/resolution；transition_type仅限�
 // InitSystemSkills 初始化系统内置技能（幂等）
 func (s *SkillService) InitSystemSkills() error {
 	systemSkills := []models.Skill{
+		studioExecutionSkill(),
 		// plan 阶段技能
 		{
 			Name:           "短剧创作方案",

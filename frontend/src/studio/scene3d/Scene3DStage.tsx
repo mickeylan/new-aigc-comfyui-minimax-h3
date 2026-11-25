@@ -946,6 +946,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [playingPath, setPlayingPath] = useState(false);
   // 逐镜播放的当前镜下标与总镜数；null 表示没有在播放。
   const [shotPlayback, setShotPlayback] = useState<{ index: number; shots: number; line: string | null } | null>(null);
+  const executionUnavailableRef = useRef(false);
+  executionUnavailableRef.current = !!busy || !!shotPlayback;
   const [poseSlots, setPoseSlots] = useState<{ a: boolean; b: boolean }>({ a: false, b: false });
   const [poseBlend, setPoseBlend] = useState(0);
   const [transform, setTransform] = useState({ x: 0, y: 0, z: 0, rotateX: 0, rotateY: 0, rotateZ: 0, scale: 1, scaleX: 1, scaleY: 1, scaleZ: 1 });
@@ -5079,7 +5081,48 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                 const entry = addObject(object, name);
                 if (!entry) disposeSceneEntry({ id: '', name, object });
               }} />
-              <SetTemplatePanel disabled={Boolean(busy)} onApply={(draft, entries, x, z) => {
+              <SetTemplatePanel disabled={Boolean(busy)} captureExecutionContext={async () => {
+                const { captureStudioExecutionContext } = await import('./studioExecutionContext');
+                return captureStudioExecutionContext(objectsRef.current);
+              }} onApplyExecution={async (plan, reviewed, isCurrent) => {
+                if (executionUnavailableRef.current) throw Error('场景忙碌或正在播放，不能应用');
+                const scene = sceneRef.current; const epoch = sceneEpochRef.current;
+                if (!scene) throw Error('场景尚未就绪');
+                stopAnimation(); // Restore preview baselines before validating/staging edits, not after publication.
+                const token = shotPlaybackTokenRef.current; const baseline = fingerprintRef.current().full();
+                const [{ applyStudioExecution }, { captureStudioExecutionContext }] = await Promise.all([import('./studioExecutionApply'), import('./studioExecutionContext')]);
+                await applyStudioExecution(plan, reviewed, {
+                  fingerprint: () => fingerprintRef.current().full(),
+                  isCurrent: () => isCurrent() && sceneRef.current === scene && sceneEpochRef.current === epoch && !executionUnavailableRef.current && shotPlaybackTokenRef.current === token && !animationRef.current && !cancelMoveRef.current && !cancelCameraPreviewRef.current && !scrubRef.current && fingerprintRef.current().full() === baseline,
+                  captureContext: () => captureStudioExecutionContext(objectsRef.current),
+                  readSource: async () => {
+                    const response = await fetch(`/api/projects/${reviewed.scene.project_id}/scenes/${reviewed.scene.id}/studio-execution/source`, { method: 'GET' });
+                    const value = await response.json(); if (!response.ok) throw Error(value?.error || `读取来源失败 HTTP ${response.status}`); return value;
+                  },
+                  commit: batch => {
+                    const before = objectsRef.current;
+                    const updates = batch.updates.map(value => {
+                      const entry = before.find(item => item.id === value.id);
+                      if (!entry || entry.locked || !entry.object.visible || entry.splat) throw Error('复用对象已不可编辑');
+                      return { entry, value, name: entry.name, objectName: entry.object.name, position: entry.object.position.clone(), rotation: entry.object.rotation.clone(), scale: entry.object.scale.clone() };
+                    });
+                    if (batch.additions.some(entry => before.some(item => item.id === entry.id))) throw Error('新增对象ID冲突');
+                    historyRef.current.checkpoint(before);
+                    try {
+                      updates.forEach(({ entry, value }) => { entry.name = value.name; entry.object.name = value.name; entry.object.position.set(...value.position); entry.object.rotation.set(...value.rotation); entry.object.scale.set(...value.scale); entry.object.updateMatrixWorld(true); });
+                      batch.additions.forEach(entry => scene.add(entry.object));
+                      objectsRef.current = [...before, ...batch.additions];
+                      historyRef.current.collect(objectsRef.current);
+                    } catch (cause) {
+                      batch.additions.forEach(entry => entry.object.removeFromParent()); objectsRef.current = before;
+                      updates.forEach(saved => { saved.entry.name = saved.name; saved.entry.object.name = saved.objectName; saved.entry.object.position.copy(saved.position); saved.entry.object.rotation.copy(saved.rotation); saved.entry.object.scale.copy(saved.scale); saved.entry.object.updateMatrixWorld(true); });
+                      throw cause;
+                    }
+                    syncObjects(); setScriptShots(batch.shotPlan);
+                    setStatus(`已确认应用导演执行草稿：追加${batch.additions.length}对象、更新${updates.length}对象、${batch.shotPlan.shots.length}镜；请播放审阅并保存，未生成媒体`);
+                  },
+                });
+              }} onApply={(draft, entries, x, z) => {
                 const scene = sceneRef.current;
                 if (!scene) throw new Error('场景尚未就绪，请重试');
                 const ids = new Set(objectsRef.current.map(entry => entry.id));
