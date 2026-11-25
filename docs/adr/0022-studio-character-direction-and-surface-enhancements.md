@@ -80,3 +80,16 @@
 - `npm --prefix frontend test`首次exit1：Node662/662，Vitest325/326，`studioRecipeRoundtrip.spec.ts:302` 的逐镜骨骼回调用例报 `TestTimeoutError: Test timed out in 5000ms`。当时前端构建及Go测试同时在跑；不能仅凭此断定根因。
 - 构建/Go结束后，未修改源码、测试、断言或超时，单独执行相同前端全量命令一次，exit0：Node662/662、41文件326/326。首次超时保留，不以重跑抹去，也不宣称已建立负载性能保证。
 - `go -C backend test ./... -count=1` exit0（service67.480s）；`npm --prefix frontend run build` exit0（4509 modules，2m58s）；声明源与dist逐字节一致11677字节，`git diff --cached --check` exit0。仅提交目标源码/测试/文档，不含业务数据、临时产物和`.rscode`夹具。
+
+## 推送后复核：四类遗漏修复（2026-11-25）
+
+本节为用户随后授权的修复，基于已推送 `ae04d3c`。修复验收时未提交、推送或部署；用户随后明确授权提交并推送这批修复，以包含本节的实际提交和远端同步结果核对，不执行部署。T01–T05及GPU/长片边界不因这些修复改变。
+
+- **跨镜坡地高度**：复现同角色连续上坡两镜，切镜前后Y从1.0195降到0.02（约0.9995m）。统一采样器现在只在该角色首个走位起点确定地表偏移，后续镜次共用，不再逐镜归零；保持首镜旧行为、绝对时间随机访问和停止还原。`scriptShotSampler.spec.ts`新增普通/避让路径两种跨镜、乱序seek、终点及恢复断言，修复前失败（预期1.02实际0.02），修复后5/5。
+- **旧档灯光**：环境为空的存档载入显式把`doc.lightPreset`传给环境回退，避免同一载入回调中旧闭包预设覆盖新灯光。真实保存/载入及灯光生产回调测试，修复前最终studio而非night；修复后night灯强/背景/状态一致，非空环境逻辑不变。
+- **视频尺寸所有权**：逐镜导出期间ResizeObserver延迟调整；采样及异步捕获后校验真实画布尺寸、相机比例、截取尺寸与源画幅。异常拒绝整份输出；成功/取消/失败统一释放所有权，恢复当前容器尺寸与DPR，不恢复过期视口尺寸。生产回调新增五画幅×成功/取消/错误尺寸15组断言；修复前窗口缩放覆盖固定输出，修复后全部通过。不提高像素、体积或帧数上限。
+- **参考视频范围/项目ID**：下拉取消前100条截断，沿现有不分页接口获取，再仅保留当前项目与共享视频；迟到成功/失败均校验项目与请求代次。上传/列表显式提供非法、空、零或溢出project_id均400，上传在文件读取与持久化前拒绝；缺省共享语义不变。这是参数格式校验，不新增项目存在性/鉴权机制。`scene3d-ref-video-options.test.mjs`4/4，含125条项目视频+共享/跨项目过滤和切项目迟到响应；`material_project_validation_test.go`用nil服务证明非法请求不能到达媒体/数据库处理。主代理独立复验均exit0。
+- **当前全量**：串行执行`npm --prefix frontend test` exit0，Node663/663、Vitest41文件333/333（含真实Stage回调27/27）；`go -C backend test ./... -count=1` exit0（service43.289s）；`npm --prefix frontend run build` exit0（4509 modules，1m5s，保留既有大chunk/动态静态混用警告）。未调整断言或超时。源与dist许可声明逐字节一致11677字节，`git diff --check` exit0。
+- **新构建真实Chrome**：`.rscode/verify-four-fix-browser.mjs` exit0，`FOUR_FIX_BROWSER=PASS oldArchiveLight=night aspects=5 encodedFrames=10 consoleErrors=[]`。载入无环境旧档后背景080b14、三盏方向光强度0.7/0.3/1.2；五画幅各导出2秒/1fps视频，在首帧真实PNG编码挂起时通过CDP改窗口并等待ResizeObserver，导出画布保持目标尺寸，实际10个VideoFrame、WebM播放器尺寸及清单全部一致，完成后按新容器恢复。视频readyState≥2/error=null；这是小样本尺寸/恢复回归，不代替2880帧播放、长片性能或跨设备验收。
+- 临时浏览器脚本及`.rscode/four-fix-browser-result.json`不入库；未访问业务数据库或18000、未入库素材或创建生成任务。ComfyUI实机继续**SKIPPED：本机无法运行**。
+- **验证纠错**：首个`npm --prefix frontend exec -- vitest ...`被本机npm解析掉参数，误用根目录配置收集Node套件（exit1，`No test suite found`/缺DOM）；检查项目`vitest.config.js`后使用`node frontend/node_modules/vitest/vitest.mjs run --root frontend ...`。新增回调夹具首轮缺天空盒ref、把TS类型import替换成运行时表达式；补齐依赖且只替换运行时导入后，原断言准确复现两项产品缺陷，再修改产品代码通过。没有调整测试超时或削弱断言。

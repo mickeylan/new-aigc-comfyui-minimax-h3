@@ -19,9 +19,34 @@ test('素材列表两种响应都解析：裸数组 / {items}', () => {
 })
 
 test('3D 结构参考视频下拉用 materialList 灌数据，不再只认 items', () => {
-  assert.match(detail, /api\.materials\(\{ type: 'video', page_size: 100 \}\)/)
+  assert.match(detail, /api\.materials\(\{ type: 'video' \}\)/)
   assert.match(detail, /videoRef3DOptions\.value = materialList\(data\)/)
   assert.doesNotMatch(detail, /videoRef3DOptions\.value = data\?\.items \|\| \[\]/)
+})
+
+test('参考视频超过100条仍完整且只包括当前项目与共享，拒绝过期响应', async () => {
+  const start = detail.indexOf('    const referenceProjectID = Number(id())')
+  const end = detail.indexOf('    await nextTick()', start)
+  const source = detail.slice(start, end)
+  const run = new Function('api', 'id', 'epoch', 'videoPromptRequestEpoch', 'videoRef3DOptions', 'materialList', source)
+  const rows = Array.from({ length: 125 }, (_, i) => ({ id: i + 1, project_id: 7 }))
+  rows.push({ id: 126, project_id: null }, { id: 127, project_id: 8 })
+  for (const data of [rows, { items: rows }]) {
+    const options = { value: [] }
+    run({ materials: async params => { assert.deepEqual(params, { type: 'video' }); return { data } } }, () => 7, 1, 1, options, materialList)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(options.value.length, 126)
+    assert.ok(!options.value.some(row => row.project_id === 8))
+  }
+  let resolve
+  let project = 7
+  const options = { value: [] }
+  run({ materials: () => new Promise(r => { resolve = r }) }, () => project, 1, 1, options, materialList)
+  project = 8
+  options.value = [{ id: 'new-project' }]
+  resolve({ data: rows })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(options.value, [{ id: 'new-project' }])
 })
 
 test('下拉选项提交的是素材文件名（后端按 materials/<name> 拼路径）', () => {

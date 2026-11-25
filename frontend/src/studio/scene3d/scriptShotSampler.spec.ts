@@ -70,6 +70,28 @@ describe('production random-access shot sampler', () => {
     const outside = setScriptShotMotion(f.plan, f.plan.shots[0].id, { targetId: 'a', targetName: '甲', start: { x: 0, z: 0 }, end: { x: 50, z: 0 }, duration: 2 });
     expect(() => createScriptShotSampler(outside, { ...f.options, environment: { ...defaultSceneEnvironment(), terrain: createEnvironmentTerrain({ size: 40 }) } })).toThrow('范围外');
   });
+  it('同角色跨镜沿坡地保持脚底偏移，随机跳转与顺播一致，停止恢复编辑基线', async () => {
+    for (const navigation of [undefined, { version: 1, mode: 'avoid', radius: 0.35, speed: 2 }] as const) {
+      const f = await fixture();
+      const terrain = createEnvironmentTerrain({ size: 40, amplitude: 0 });
+      for (let row = 0; row <= terrain.segments; row++) for (let col = 0; col <= terrain.segments; col++) {
+        terrain.heights[row * (terrain.segments + 1) + col] = (col * terrain.size / terrain.segments - terrain.size / 2) / 4;
+      }
+      f.actor.position.set(0, 0.02, 0);
+      let plan = f.plan;
+      for (let i = 0; i < 2; i++) plan = setScriptShotMotion(plan, plan.shots[i].id, {
+        targetId: 'a', targetName: '甲', start: { x: i * 4, z: 0 }, end: { x: (i + 1) * 4, z: 0 }, duration: 2,
+        ...(navigation ? { navigation } : {}),
+      });
+      const session = createScriptShotSampler(plan, { ...f.options, environment: { ...defaultSceneEnvironment(), terrain } });
+      session.sampleAt(1.999); const before = f.actor.position.y;
+      session.sampleAt(2); expect(f.actor.position.y).toBeCloseTo(1.02); expect(Math.abs(f.actor.position.y - before)).toBeLessThan(0.001);
+      session.sampleAt(3); const later = f.actor.position.toArray(); expect(later[1]).toBeCloseTo(1.52);
+      session.sampleAt(0); session.sampleAt(3); expect(f.actor.position.toArray()).toEqual(later);
+      session.sampleAt(4.1); expect(f.actor.position.y).toBeCloseTo(2.02);
+      session.stop(); expect(f.actor.position.toArray()).toEqual([0, 0.02, 0]); expect(f.baselines.size).toBe(0);
+    }
+  });
   it('胶囊人真实关节按行进距离摆动；停止后不把临时姿势留进存档', async () => {
     const f = await fixture();
     const capsule = createToonflowPrimitive({ shape: 'person' } as any, '#aabbcc');

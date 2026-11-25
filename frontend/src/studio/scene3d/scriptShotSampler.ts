@@ -56,11 +56,14 @@ export function createScriptShotSampler(plan: ScriptShotPlan, options: {
   }
   const { camera, controls } = options;
   const cameraState = { p: camera.position.clone(), q: camera.quaternion.clone(), fov: camera.fov, target: controls.target.clone(), enabled: controls.enabled, damping: controls.enableDamping };
-  const actors = new Map<string, { entry: Entry; baseline: Baseline; activated: boolean; preview: { stop(): void } | null; rigs: ReturnType<typeof findCapsuleRigs> }>();
+  const actors = new Map<string, { entry: Entry; baseline: Baseline; groundOffset: number; activated: boolean; preview: { stop(): void } | null; rigs: ReturnType<typeof findCapsuleRigs> }>();
   for (const shot of ready.shots) if (shot.motion && !actors.has(shot.motion.targetId)) {
     const entry = entries.find(item => item.id === shot.motion!.targetId)!;
     const baseline = { position: entry.object.position.clone(), quaternion: entry.object.quaternion.clone(), pose: serializeBonePose(entry.object) };
-    actors.set(entry.id, { entry, baseline, activated: false, preview: null, rigs: findCapsuleRigs(entry.object) });
+    // Anchor once at this actor's FIRST motion start. Re-anchoring at every cut
+    // discards accumulated terrain elevation and makes a continuous walk jump down.
+    const groundOffset = baseline.position.y - groundHeightAt(options.environment?.terrain, shot.motion.start.x, shot.motion.start.z);
+    actors.set(entry.id, { entry, baseline, groundOffset, activated: false, preview: null, rigs: findCapsuleRigs(entry.object) });
   }
   controls.enabled = false; controls.enableDamping = false;
   let stopped = false;
@@ -89,7 +92,7 @@ export function createScriptShotSampler(plan: ScriptShotPlan, options: {
     }
     object.position.x = sample.position.x; object.position.z = sample.position.z; object.rotation.y = sample.yaw;
     const terrain = options.environment?.terrain;
-    if (terrain) object.position.y = actor.baseline.position.y + groundHeightAt(terrain, sample.position.x, sample.position.z) - groundHeightAt(terrain, motion.start.x, motion.start.z);
+    if (terrain) object.position.y = actor.groundOffset + groundHeightAt(terrain, sample.position.x, sample.position.z);
     if (motion.characterMotion) {
       const runtime = createCharacterMotionRuntime(object, motion.animation ?? undefined, motion.characterMotion);
       actor.preview = runtime;

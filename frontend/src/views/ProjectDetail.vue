@@ -2435,9 +2435,15 @@ async function viewVideoPrompt(sc) {
     videoTaskRef3D.value = preview.ref3d_video || sc.video_3d_ref_video || ''
     // 3D 结构参考视频只能从素材库的视频分栏里挑（3D 编辑器「合成视频」产出）。
     // 裸数组与 {items: []} 两种响应都认：只认 data.items 时下拉框会永远为空。
-    api.materials({ type: 'video', page_size: 100 })
-      .then(({ data }) => { if (epoch === videoPromptRequestEpoch) videoRef3DOptions.value = materialList(data) })
-      .catch(() => { videoRef3DOptions.value = [] })
+    const referenceProjectID = Number(id())
+    videoRef3DOptions.value = []
+    // 不分页获取后按归属过滤：project_id 查询仅返回本项目，不包含共享素材。
+    api.materials({ type: 'video' })
+      .then(({ data }) => {
+        if (epoch !== videoPromptRequestEpoch || Number(id()) !== referenceProjectID) return
+        videoRef3DOptions.value = materialList(data).filter(material => material.project_id == null || Number(material.project_id) === referenceProjectID)
+      })
+      .catch(() => { if (epoch === videoPromptRequestEpoch && Number(id()) === referenceProjectID) videoRef3DOptions.value = [] })
     await nextTick()
     videoPromptHydrating = false
     videoPromptBaseline.value = videoPromptState()

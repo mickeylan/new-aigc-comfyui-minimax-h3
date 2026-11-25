@@ -2978,12 +2978,14 @@ func parseIntQuery(c *gin.Context, name string) int {
 func (s *Service) HandleListMaterials(c *gin.Context) {
 	ftype := c.Query("type")
 	var projectID *uint
-	if v := c.Query("project_id"); v != "" {
+	if v, provided := c.GetQuery("project_id"); provided || c.Request.URL.Query().Has("project_id") {
 		id, err := strconv.ParseUint(v, 10, 32)
-		if err == nil {
-			pid := uint(id)
-			projectID = &pid
+		if err != nil || id == 0 {
+			c.JSON(400, gin.H{"error": "project_id 必须为正整数"})
+			return
 		}
+		pid := uint(id)
+		projectID = &pid
 	}
 	category := c.Query("category")
 	if category != "" && category != "model" && category != "splat" {
@@ -3011,11 +3013,14 @@ func (s *Service) HandleUploadMaterial(c *gin.Context) {
 		ftype = "image"
 	}
 	var projectID *uint
-	if v := c.PostForm("project_id"); v != "" {
-		if id, err := strconv.ParseUint(v, 10, 32); err == nil {
-			pid := uint(id)
-			projectID = &pid
+	if v, provided := c.GetPostForm("project_id"); provided {
+		id, err := strconv.ParseUint(v, 10, 32)
+		if err != nil || id == 0 {
+			c.JSON(400, gin.H{"error": "project_id 必须为正整数"})
+			return
 		}
+		pid := uint(id)
+		projectID = &pid
 	}
 	manifest, manifestErr := validateMaterialDerivation(c.PostForm("derivation_manifest"), ftype)
 	if manifestErr != nil {

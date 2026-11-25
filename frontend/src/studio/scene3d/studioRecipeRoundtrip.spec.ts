@@ -28,6 +28,7 @@ import { findCapsuleRigs, gaitCapsuleRig, resetCapsuleRig } from './toonflow/cap
 import { draftShotDirection } from './shotDirection';
 import { retargetSkeletalClip } from './characterMotion';
 import { editEnvironmentTerrain } from './environmentEdit';
+import { fitFrame, FRAME_VIDEO_SIZES } from './sceneFrame';
 
 const frontend = resolve(existsSync('src/studio/scene3d') ? '.' : 'frontend');
 const stage = readFileSync(resolve(frontend, 'src/studio/scene3d/Scene3DStage.tsx'), 'utf8');
@@ -37,7 +38,7 @@ function callback(name: string, next: string, scope: Record<string, any>) {
   const ending = [...text.matchAll(/\n[ \t]*},\s*\[/g)].at(-1);
   if (!ending) throw new Error(`Callback boundary not found: ${name}`);
   const end = ending.index! + ending[0].indexOf('}');
-  const expression = text.slice(start, end + 1).replaceAll("await import('./proceduralArchive')", 'await Promise.resolve(recipeModuleForTest)').replaceAll("await import('./toonflowSets')", 'await Promise.resolve(scriptShotModuleForTest)').replaceAll("await import('./scriptShotSampler')", 'await Promise.resolve(samplerModuleForTest)').replaceAll("await import('./toonflow/characterAnimations')", 'await Promise.resolve(catalogModuleForTest)');
+  const expression = text.slice(start, end + 1).replaceAll("await import('./proceduralArchive')", 'await Promise.resolve(recipeModuleForTest)').replaceAll("await import('./toonflowSets')", 'await Promise.resolve(scriptShotModuleForTest)').replaceAll("await import('./scriptShotSampler')", 'await Promise.resolve(samplerModuleForTest)').replaceAll("await import('./toonflow/characterAnimations')", 'await Promise.resolve(catalogModuleForTest)').replaceAll("import('./scriptShotVideo')", 'Promise.resolve(videoModuleForTest)').replaceAll(", import('./toonflowSets')", ', Promise.resolve(scriptShotModuleForTest)');
   // Run the project's existing TS transformer in Node's realm (esbuild cannot run in jsdom's Uint8Array realm).
   const code = execFileSync(process.execPath, ['-e', "process.stdout.write(require('esbuild').transformSync(require('fs').readFileSync(0,'utf8'),{loader:'ts',format:'cjs'}).code)"], { input: `const callback = ${expression};`, encoding: 'utf8', cwd: frontend });
   for (const name of code.match(/\bset[A-Z]\w+/g) ?? []) scope[name] ??= vi.fn();
@@ -806,6 +807,60 @@ describe('Studio production v7 callbacks', () => {
 });
 
 describe('Integrated enhancements through production callbacks', () => {
+  it('loads an environment-free archive using its saved light, not the callback closure light', async () => {
+    const object = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial());
+    const source = scopeFor([{ id: 'light-box', name: 'box', object, locked: false }]);
+    source.lightPreset = 'night';
+    const saved = await callback('buildSceneDocument', 'saveScene', source)();
+    delete saved.environment; // Legacy archive, no environment field.
+    const scope = scopeFor([]);
+    const lights = { key: new THREE.DirectionalLight(), hemi: new THREE.HemisphereLight(), fill: new THREE.DirectionalLight(), rim: new THREE.DirectionalLight() };
+    // Compile the actual preset table and actual application callbacks.
+    const table = stage.slice(stage.indexOf('const LIGHT_PRESETS:'), stage.indexOf('const WEATHER_LABELS:'));
+    const code = execFileSync(process.execPath, ['-e', "process.stdout.write(require('esbuild').transformSync(require('fs').readFileSync(0,'utf8'),{loader:'ts',format:'cjs'}).code)"], { input: table, encoding: 'utf8', cwd: frontend });
+    Object.assign(scope, { skyboxTextureRef: { current: null }, LIGHT_PRESETS: new Function(`${code};return LIGHT_PRESETS;`)(), lightsRef: { current: lights }, terrainMeshRef: { current: null }, weatherEffectsRef: { current: null }, rebuildTerrainMesh: vi.fn() });
+    scope.applyLightPreset = callback('applyLightPreset', 'rebuildTerrainMesh', scope);
+    scope.applyEnvironment = callback('applyEnvironment', 'applyTerrainChange', scope);
+    try {
+      await callback('importSceneText', 'loadScene', scope)(JSON.stringify(saved));
+      expect(scope.setError.mock.calls.filter((call: any[]) => call[0])).toEqual([]);
+      expect(scope.setLightPreset).toHaveBeenLastCalledWith('night');
+      expect(lights.key.intensity).toBe(scope.LIGHT_PRESETS.night.key.intensity);
+      expect(scope.sceneRef.current.background.getHexString()).toBe('080b14');
+    } finally { disposeObject(object); scope.objectsRef.current.forEach((entry: any) => disposeObject(entry.object)); }
+  });
+  it.each(Object.keys(FRAME_VIDEO_SIZES))('keeps %s video size through container resize and restores the latest viewport after success, cancel or failure', async frame => {
+    for (const outcome of ['success', 'cancel', 'wrong-size']) {
+      const scope = scopeFor([]), controller = new AbortController();
+      let ratio = 2;
+      const canvas = { width: 1600, height: 900 };
+      const container = { clientWidth: 800, clientHeight: 450 };
+      const renderer = { domElement: canvas, getPixelRatio: () => ratio, setPixelRatio: (value: number) => { ratio = value; },
+        getSize: (v: THREE.Vector2) => v.set(canvas.width / ratio, canvas.height / ratio),
+        setSize: (width: number, height: number) => { canvas.width = width * ratio; canvas.height = height * ratio; } };
+      Object.assign(scope, { busy: false, archiveProjectId: '7', FRAME_VIDEO_SIZES, frameRef: { current: frame }, shotVideoExportRef: { current: null }, rendererRef: { current: renderer },
+        weatherEffectsRef: { current: null }, scriptShotModuleForTest: shotModule, globalThis: { VideoEncoder: class {}, VideoFrame: class {} },
+        createImageBitmap: async () => ({ close() {} }), captureViewportAt: vi.fn(async () => ({ blob: {}, width: canvas.width, height: canvas.height })) });
+      const resizeStart = stage.indexOf('resizeFrameRef.current = () => {'), resizeEnd = stage.indexOf('const observer =', resizeStart);
+      new Function('scope', `with(scope) { ${stage.slice(resizeStart, resizeEnd)} }`)({ ...scope, container, renderer, camera: scope.cameraRef.current, fitFrame });
+      scope.videoModuleForTest = { renderScriptShotVideo: async (_plan: unknown, options: any) => {
+        container.clientWidth = 640; container.clientHeight = 480;
+        scope.resizeFrameRef.current();
+        expect(canvas).toEqual(FRAME_VIDEO_SIZES[frame as keyof typeof FRAME_VIDEO_SIZES]);
+        if (outcome === 'cancel') { controller.abort(); options.assertSource(); }
+        if (outcome === 'wrong-size') canvas.width -= 2;
+        await options.renderFrame({ camera: { position: [1,2,3], target: [0,0,0], fov:45 } }, 0, { timestamp: 0, duration: 1000000 });
+        return { blob: {}, manifest: { frameCount: 1 } };
+      } };
+      const run = callback('exportScriptVideo', 'exportSequence', scope)({ shots: [] }, 1, 'viewport', controller.signal);
+      if (outcome === 'success') await expect(run).resolves.toMatchObject({ projectId: 7 });
+      else await expect(run).rejects.toThrow(outcome === 'cancel' ? '取消' : '尺寸');
+      expect(scope.shotVideoExportRef.current).toBe(null); expect(ratio).toBe(2);
+      const latest = fitFrame(container.clientWidth, container.clientHeight, frame as any);
+      expect(canvas).toEqual({ width: latest.width * 2, height: latest.height * 2 });
+      expect(scope.cameraRef.current.aspect).toBe(latest.aspect);
+    }
+  });
   it('synchronizes modern terrain wetness and sky/sun direction through the actual environment callback', () => {
     const scope=scopeFor([]), next=defaultSceneEnvironment(), modern={setRain:vi.fn(),setEnvironment:vi.fn()}; next.weather={condition:'rain',intensity:0.7,wind:0.2};
     Object.assign(scope,{terrainMeshRef:{current:{userData:{sourceTerrain:null,terrainMaterial:modern}}},weatherEffectsRef:{current:null},lightsRef:{current:{key:new THREE.DirectionalLight(),hemi:new THREE.HemisphereLight(),fill:new THREE.DirectionalLight(),rim:new THREE.DirectionalLight()}},skyboxTextureRef:{current:null},rebuildTerrainMesh:vi.fn(),createEnvironmentEffects:()=>({object:new THREE.Group(),dispose:vi.fn()}),environmentLight});

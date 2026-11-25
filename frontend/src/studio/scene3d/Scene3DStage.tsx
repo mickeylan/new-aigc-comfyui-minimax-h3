@@ -1434,6 +1434,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     animate();
 
     resizeFrameRef.current = () => {
+      // The video session owns drawing-buffer size until its finally releases it.
+      if (shotVideoExportRef.current) return;
       const { width, height, aspect } = fitFrame(container.clientWidth || 1, container.clientHeight || 1, frameRef.current);
       camera.aspect = aspect;
       camera.updateProjectionMatrix();
@@ -2200,7 +2202,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
    * 视口、缩略图、截图、序列与参考图取样都读这份场景状态，所以同一份环境在同一时刻
    * 得到同一画面；关闭后回到原来的灯光预设 + 20×20 平地（旧存档行为）。
    */
-  const applyEnvironment = useCallback((next: SceneEnvironment | null) => {
+  const applyEnvironment = useCallback((next: SceneEnvironment | null, fallbackPreset: LightPresetName = lightPreset) => {
     environmentRef.current = next;
     setEnvironment(next);
     if (terrainMeshRef.current?.userData.sourceTerrain !== (next?.terrain ?? null)) rebuildTerrainMesh(next?.terrain ?? null);
@@ -2215,7 +2217,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     if (!scene || !lights) return;
     if (!next) {
       scene.fog = null;
-      applyLightPreset(lightPreset);
+      applyLightPreset(fallbackPreset);
       return;
     }
     const light = environmentLight(next);
@@ -3463,7 +3465,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         setFollowMover(Boolean(savedMove?.follow));
         applyLightPreset(doc.lightPreset);
         // 环境在场景替换后应用：地形网格、太阳、雾与天空一起换，旧档读出 null 就回平地。
-        applyEnvironment(restoredEnvironment);
+        applyEnvironment(restoredEnvironment, doc.lightPreset);
         // 落点恢复（vias 是可选途经点数组：老存档没有、或只有单个 via，都由 normalizeGroundPath 归一）
         setGroundPoints({
           start: savedPath?.start ?? null,
@@ -4043,25 +4045,31 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     shotVideoExportRef.current = signal;
     const epoch = sceneEpochRef.current, source = fingerprintRef.current().full();
     const sourceFrame = frameRef.current, outputSize = FRAME_VIDEO_SIZES[sourceFrame];
-    const size = renderer.getSize(new THREE.Vector2()), ratio = renderer.getPixelRatio(), aspect = camera.aspect;
+    const ratio = renderer.getPixelRatio();
+    let outputSized = false;
     const operation = operationsRef.current.start('正在准备逐镜视频…'); setBusy('正在准备逐镜视频…'); setError(null);
     const assertSource = () => {
       if (signal.aborted) throw new Error('导出已取消');
-      if (epoch !== sceneEpochRef.current || source !== fingerprintRef.current().full()) throw new Error('场景在导出期间变化，视频已放弃，请重新审阅后导出');
+      if (epoch !== sceneEpochRef.current || sourceFrame !== frameRef.current || source !== fingerprintRef.current().full()) throw new Error('场景在导出期间变化，视频已放弃，请重新审阅后导出');
+      if (outputSized && (renderer.domElement.width !== outputSize.width || renderer.domElement.height !== outputSize.height || Math.abs(camera.aspect - outputSize.width / outputSize.height) > 1e-7)) throw new Error('导出画布尺寸发生变化，视频已放弃，请重新导出');
     };
     try {
       const [{ renderScriptShotVideo }, module] = await Promise.all([import('./scriptShotVideo'), import('./toonflowSets')]);
       assertSource();
       renderer.setPixelRatio(1); renderer.setSize(outputSize.width, outputSize.height, false); camera.aspect = outputSize.width / outputSize.height; camera.updateProjectionMatrix();
+      outputSized = true;
+      assertSource();
       const result = await renderScriptShotVideo(plan, {
         camera, controls, entries: () => objectsRef.current, environment: environmentRef.current ? validateSceneEnvironment(environmentRef.current) : null,
         baselines: motionBaselineRef.current, isCurrent: () => epoch === sceneEpochRef.current,
         fps, mode, size: outputSize, Encoder: globalThis.VideoEncoder, Frame: globalThis.VideoFrame, signal, sourceFingerprint: module.scriptFingerprint(source), assertSource,
         onProgress: (done, total) => { const label = `正在渲染逐镜视频（${done}/${total} 帧）…`; operation.update(label); setBusy(label); },
         renderFrame: async (sample, seconds, timing) => {
+          assertSource();
           weatherEffectsRef.current?.sampleAt(seconds);
           const shot = mode === 'viewport' ? await captureViewportAt(sample.camera) : await captureReference(mode);
           assertSource(); if (!shot) throw new Error('逐镜视频未取到完整画面');
+          if (shot.width !== outputSize.width || shot.height !== outputSize.height) throw new Error('逐镜画面尺寸与视频输出不一致，视频已放弃');
           const bitmap = await createImageBitmap(shot.blob);
           try { assertSource(); return new globalThis.VideoFrame(bitmap, timing); } finally { bitmap.close(); }
         },
@@ -4072,8 +4080,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       shotVideoExportRef.current = null;
       if (renderer === rendererRef.current) {
         renderer.setPixelRatio(ratio);
-        if (epoch === sceneEpochRef.current && sourceFrame === frameRef.current) { renderer.setSize(size.x, size.y, false); camera.aspect = aspect; camera.updateProjectionMatrix(); }
-        else resizeFrameRef.current();
+        // A resize may have been deferred while exporting. Restore the CURRENT
+        // container and frame, never stale pre-export viewport dimensions.
+        resizeFrameRef.current();
       }
       operation.finish(); setBusy(null);
     }
