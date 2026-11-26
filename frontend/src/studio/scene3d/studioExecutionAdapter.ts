@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { validateShotExecution, type ShotExecution } from './shotExecution';
 import { snapshotDirectorSource, type DirectorSourceSnapshot } from './directorSource';
 import { validateScriptShotPlan, type ScriptShotPlan } from './scriptShotPlan';
 import type { StudioExecutionContext } from './studioExecutionContext';
@@ -21,6 +22,7 @@ const planSchema = z.object({
     shot_id: z.number().int().positive(), duration: finite(0.2, 86400),
     camera: z.object({ position: vector(-1000, 1000), target: vector(-1000, 1000), fov: finite(15, 90) }).strict().nullable(),
     motion: z.object({ object_id: id, clip_id: id, start: vector(-1000, 1000), end: vector(-1000, 1000), duration: finite(0.1, 86400) }).strict().nullable(),
+    execution: z.custom<ShotExecution>().optional(),
     evidence: notes.min(1), assumptions: notes, blockers: notes,
   }).strict()).min(1).max(64), assumptions: notes, blockers: notes,
 }).strict();
@@ -46,7 +48,7 @@ export async function prepareStudioExecution(
   value: unknown, reviewedSource: DirectorSourceSnapshot, sourceHash: string, current: StudioExecutionContext, speech?: StudioExecutionSpeechSource,
 ): Promise<PreparedStudioExecution> {
   // Parse/clone synchronously before hashing so caller edits during await cannot leak in.
-  const plan = planSchema.parse(value);
+  const plan = planSchema.parse(structuredClone(value));
   const context: StudioExecutionContext = structuredClone(current);
   const speechCopy = speech ? structuredClone(speech) : undefined;
   const reviewedRevision = reviewedSource.revision;
@@ -84,11 +86,34 @@ export async function prepareStudioExecution(
     const evidence = [source.scene.content, original.description, original.performance, original.blocking, original.camera_movement, original.focus_subject].filter(item => typeof item === 'string').join('\n');
     if (shot.evidence.some(quote => !evidence.includes(quote))) throw Error('执行依据不在原文或导演字段中');
     blockers.push(...shot.blockers.map(note => `镜${original.id}：${note}`));
-    if (!shot.camera) blockers.push(`镜${original.id}：缺少机位`);
-    else if (Math.hypot(...shot.camera.position.map((n, i) => n - shot.camera!.target[i]!)) < 0.001) throw Error('机位与焦点重合');
-    if (nonempty(original.camera_movement) && !['固定', '固定镜头', 'static'].includes((original.camera_movement as string).trim())) blockers.push(`镜${original.id}：采样器不支持原运镜`);
+    const execution = shot.execution === undefined ? undefined : validateShotExecution(shot.execution, shot.duration);
+    if (execution?.actors && shot.motion) throw Error('镜内多角色执行不能混用旧走位');
+    if (!shot.camera && !execution?.camera) blockers.push(`镜${original.id}：缺少机位`);
+    else if (shot.camera && Math.hypot(...shot.camera.position.map((n, i) => n - shot.camera!.target[i]!)) < 0.001) throw Error('机位与焦点重合');
+    if (nonempty(original.camera_movement) && !['固定', '固定镜头', 'static'].includes((original.camera_movement as string).trim())) {
+      const keys = execution?.camera?.keys;
+      if (!keys || keys.every(k => JSON.stringify([k.position, k.target, k.fov]) === JSON.stringify([keys[0].position, keys[0].target, keys[0].fov]))) blockers.push(`镜${original.id}：原运镜未绑定有效机位轨道`);
+    }
     const timeline = Array.isArray(original.action_timeline) ? original.action_timeline : [];
-    if (timeline.length > 1) blockers.push(`镜${original.id}：多段动作时间轴尚不能完整执行`);
+    if (timeline.length > 1 && !execution?.actors) blockers.push(`镜${original.id}：多段动作时间轴尚不能完整执行`);
+    if (execution?.actors) {
+      const covered = new Set<string>();
+      for (const actor of execution.actors) {
+        const object = objects.get(actor.targetId), asset = object && assets.get(object.asset_id);
+        const binding = plan.bindings.find(b => b.object_id === actor.targetId);
+        if (!object || !binding || object.asset_id !== `object:${actor.targetId}` || actor.targetName !== object.name) throw Error('执行角色必须绑定实际可见对象');
+        for (const beat of actor.beats) {
+          const clip = asset?.clips[beat.animation.index];
+          if (!clip || !clip.id.startsWith(`${beat.animation.index}:`) || clip.name !== beat.animation.name || clip.duration !== beat.animation.duration) throw Error('执行动作资源与当前对象不符');
+          if (timeline.length) {
+            const step = timeline[beat.sourceIndex ?? -1] as Record<string, unknown> | undefined;
+            if (!step || step.start !== beat.start || step.end !== beat.end || !names(step.subject).includes(binding.character)) throw Error('执行段与原动作时间轴的区间或主体不符');
+            covered.add(`${beat.sourceIndex}:${binding.character}`);
+          } else if (beat.sourceIndex !== undefined) throw Error('原镜头无动作段，不能虚构来源索引');
+        }
+      }
+      if (timeline.some((step, i) => names((step as Record<string, unknown>).subject).some(name => !covered.has(`${i}:${name}`)))) blockers.push(`镜${original.id}：动作时间轴未完整绑定`);
+    }
     let motion: ScriptShotPlan['shots'][number]['motion'] = null;
     if (shot.motion) {
       const m = shot.motion; const object = objects.get(m.object_id);
@@ -102,9 +127,9 @@ export async function prepareStudioExecution(
       if (object.asset_id !== `object:${object.id}` || !/^\d+$/.test(indexText) || !Number.isSafeInteger(clipIndex) || asset!.clips[clipIndex]?.id !== m.clip_id) throw Error('动作必须是当前对象实际挂载的原索引clip');
       if (Math.round(m.duration * 100) / 100 !== m.duration) blockers.push(`镜${original.id}：走位秒数精度超出现有采样器契约`);
       motion = { targetId: object.id, targetName: object.name, start: { x: m.start[0], z: m.start[2] }, end: { x: m.end[0], z: m.end[2] }, duration: m.duration, animation: { index: clipIndex, name: clip.name, duration: clip.duration } };
-    } else if (nonempty(original.performance) || timeline.length) blockers.push(`镜${original.id}：原始表演未绑定，不得用静止画面替代`);
+    } else if (!execution?.actors && (nonempty(original.performance) || timeline.length)) blockers.push(`镜${original.id}：原始表演未绑定，不得用静止画面替代`);
     const start = cursor; cursor += shot.duration;
-    return { id: `director-shot:${original.id}`, order: original.order, start, end: cursor, camera: shot.camera, motion, dialogue: dialogue.byShot.get(original.id) ?? [] };
+    return { id: `director-shot:${original.id}`, order: original.order, start, end: cursor, camera: shot.camera, motion, ...(execution ? { execution } : {}), dialogue: dialogue.byShot.get(original.id) ?? [] };
   });
   const uniqueBlockers = [...new Set(blockers)];
   const shotPlan = uniqueBlockers.length ? null : validateScriptShotPlan({

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import { assertScriptShotMotionTargets, assertScriptShotPlaybackReady, sampleScriptShotPlayback, sampleScriptShotMotionAt, type ScriptShotPlan, type ScriptShotMotionSample } from './scriptShotPlan';
+import { assertScriptShotMotionTargets, assertScriptShotPlaybackReady, validateScriptShotPlan, sampleScriptShotPlayback, sampleScriptShotMotionAt, type ScriptShotPlan, type ScriptShotMotionSample } from './scriptShotPlan';
 import { AnimationPreview } from './animationPreview';
+import { sampleExecutionActors, validateShotExecution } from './shotExecution';
 import { createCharacterMotionRuntime } from './characterMotion';
 import { compileShotNavigation } from './shotNavigation';
 import { serializeBonePose } from './posing/bonePose';
@@ -14,7 +15,7 @@ type Controls = { target: THREE.Vector3; enabled: boolean; enableDamping?: boole
 
 /** One immutable editing-baseline obstacle snapshot for viewport, video and reference sessions. */
 export function assertScriptShotWalkable(plan: ScriptShotPlan, entries: readonly Entry[], environment: SceneEnvironment | null) {
-  const excludedIds = [...new Set(plan.shots.flatMap(shot => shot.motion ? [shot.motion.targetId] : []))];
+  const excludedIds = [...new Set(plan.shots.flatMap(shot => [...(shot.motion ? [shot.motion.targetId] : []), ...(shot.execution?.actors ?? []).map(a => a.targetId)]))];
   const excluded = new Set(excludedIds);
   const obstacles: (GroundObstacle & { id: string })[] = [];
   if (excluded.size) for (const entry of entries) {
@@ -23,6 +24,38 @@ export function assertScriptShotWalkable(plan: ScriptShotPlan, entries: readonly
     if (box.isEmpty()) continue;
     obstacles.push({ id: entry.id, name: entry.name, min: [box.min.x, box.min.z], max: [box.max.x, box.max.z] });
   }
+  // Track held actors across cuts, including actors not bound in the current shot.
+  const executionIds = new Set(plan.shots.flatMap(s => (s.execution?.actors ?? []).map(a => a.targetId)));
+  if (executionIds.size > 32) throw Error('整份执行计划超过32个角色，请拆分场次');
+  const radii = new Map([...executionIds].map(id => {
+    const object = entries.find(e => e.id === id)?.object;
+    if (!object) throw Error(`执行角色不存在：${id}`);
+    object.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(object), p = object.getWorldPosition(new THREE.Vector3());
+    const radius = box.isEmpty() ? .35 : .35 + Math.hypot(Math.max(Math.abs(box.min.x - p.x), Math.abs(box.max.x - p.x)), Math.max(Math.abs(box.min.z - p.z), Math.abs(box.max.z - p.z)));
+    if (!Number.isFinite(radius) || radius > 10) throw Error('执行角色包围体超出可证明安全范围');
+    return [id, radius];
+  }));
+  const held = new Map([...executionIds].map(id => {
+    const entry = entries.find(e => e.id === id);
+    if (!entry) throw Error(`Execution actor missing: ${id}`);
+    return [id, { x: entry.object.position.x, z: entry.object.position.z }];
+  }));
+  for (const shot of plan.shots) if (executionIds.size) {
+    const duration = shot.end - shot.start;
+    const actors = [...executionIds].map(id => {
+      const bound = shot.execution?.actors?.find(a => a.targetId === id);
+      if (bound) return bound;
+      const p = held.get(id)!;
+      return { targetId: id, targetName: id, beats: [{ start: 0, end: duration, from: p, to: p, yaw: 0, animation: { index: 0, name: 'proof-only', duration: 1 } }] };
+    });
+    validateShotExecution({ version: 1, actors }, duration, 2 * Math.max(...radii.values()));
+    for (const actor of actors) for (const beat of actor.beats) {
+      const proof = proveWalkableLine(environment?.terrain, beat.from, beat.to, { obstacles, obstacleMargin: radii.get(actor.targetId) });
+      if (!proof.ok) throw Error(`Execution actor ${actor.targetId}: ${proof.reason}`);
+    }
+    for (const actor of actors) held.set(actor.targetId, actor.beats[actor.beats.length - 1].to);
+  }
   const shots = plan.shots.flatMap(shot => {
     if (!shot.motion || shot.motion.navigation) return [];
     const proof = proveWalkableLine(environment?.terrain, shot.motion.start, shot.motion.end, { obstacles });
@@ -30,6 +63,39 @@ export function assertScriptShotWalkable(plan: ScriptShotPlan, entries: readonly
     return [{ shotId: shot.id, ...proof }];
   });
   return { version: 1, policy: 'static-xz-reject-v1', margin: GROUND_OBSTACLE_MARGIN, excludedIds, obstacles, shots };
+}
+
+/** Synchronous pre-publication proof against the proposed editor transforms, not the
+ * old editing positions. No scene publication, animation ownership, await or history
+ * writes; restore every borrowed transform even if the shared runtime proof rejects.
+ */
+export function assertScriptShotApplicationSafe(plan: ScriptShotPlan, entries: readonly Entry[], environment: SceneEnvironment | null,
+  updates: readonly { id: string; position: readonly number[]; rotation: readonly number[]; scale: readonly number[] }[] = []) {
+  const ready = assertScriptShotMotionTargets(validateScriptShotPlan(plan), entries.map(entry => ({
+    id: entry.id, name: entry.name, visible: entry.object.visible, locked: !!entry.locked,
+    animations: entry.object.animations.map((clip, index) => ({ index, name: clip.name, duration: clip.duration })),
+  })));
+  const staged = updates.map(value => {
+    const entry = entries.find(entry => entry.id === value.id);
+    if (!entry || !canMoveEntry(entry)) throw Error(`无法预检不可编辑对象：${value.id}`);
+    if ([value.position, value.rotation, value.scale].some(v => v.length !== 3 || v.some(n => !Number.isFinite(n)))) throw Error('预检对象变换无效');
+    return { value, object: entry.object, position: entry.object.position.clone(), rotation: entry.object.rotation.clone(), scale: entry.object.scale.clone() };
+  });
+  try {
+    for (const { object, value } of staged) {
+      object.position.set(value.position[0], value.position[1], value.position[2]);
+      object.rotation.set(value.rotation[0], value.rotation[1], value.rotation[2]);
+      object.scale.set(value.scale[0], value.scale[1], value.scale[2]);
+      object.updateMatrixWorld(true);
+    }
+    const proof = assertScriptShotWalkable(ready, entries, environment);
+    if (ready.shots.some(shot => shot.motion?.navigation)) compileShotNavigation(ready, entries, environment);
+    return proof;
+  } finally {
+    for (const { object, position, rotation, scale } of staged) {
+      object.position.copy(position); object.rotation.copy(rotation); object.scale.copy(scale); object.updateMatrixWorld(true);
+    }
+  }
 }
 
 /** Random access cuts + movement + skeletal clips; shared by video and reference captures.
@@ -64,6 +130,12 @@ export function createScriptShotSampler(plan: ScriptShotPlan, options: {
     // discards accumulated terrain elevation and makes a continuous walk jump down.
     const groundOffset = baseline.position.y - groundHeightAt(options.environment?.terrain, shot.motion.start.x, shot.motion.start.z);
     actors.set(entry.id, { entry, baseline, groundOffset, activated: false, preview: null, rigs: findCapsuleRigs(entry.object) });
+  }
+  for (const shot of ready.shots) for (const binding of shot.execution?.actors ?? []) if (!actors.has(binding.targetId)) {
+    const entry = entries.find(item => item.id === binding.targetId)!;
+    const baseline = { position: entry.object.position.clone(), quaternion: entry.object.quaternion.clone(), pose: serializeBonePose(entry.object) };
+    const start = binding.beats[0].from;
+    actors.set(entry.id, { entry, baseline, groundOffset: baseline.position.y - groundHeightAt(options.environment?.terrain, start.x, start.z), activated: false, preview: null, rigs: findCapsuleRigs(entry.object) });
   }
   controls.enabled = false; controls.enableDamping = false;
   let stopped = false;
@@ -110,6 +182,22 @@ export function createScriptShotSampler(plan: ScriptShotPlan, options: {
     }
     object.updateMatrixWorld(true);
   };
+  const execute = (shot: ScriptShotPlan['shots'][number], seconds: number) => {
+    for (const sample of sampleExecutionActors(shot.execution, seconds - shot.start)) {
+      const actor = actors.get(sample.targetId)!;
+      if (!options.entries().includes(actor.entry) || !canMoveEntry(actor.entry)) throw Error(`Execution actor unavailable: ${sample.targetId}`);
+      const object = actor.entry.object;
+      const clip = object.animations[sample.animation.index];
+      if (!clip || clip.name !== sample.animation.name || clip.duration !== sample.animation.duration) throw Error('Execution clip resource changed');
+      if (!actor.activated) { actor.activated = true; options.baselines?.set(actor.entry.id, actor.baseline); }
+      actor.preview?.stop();
+      object.position.x = sample.position.x; object.position.z = sample.position.z; object.rotation.y = sample.yaw;
+      if (options.environment?.terrain) object.position.y = actor.groundOffset + groundHeightAt(options.environment.terrain, sample.position.x, sample.position.z);
+      const preview = new AnimationPreview(object, clip); actor.preview = preview;
+      preview.sampleAt(Math.min(sample.animationSeconds, Math.max(0, clip.duration - 1e-4)));
+      object.updateMatrixWorld(true);
+    }
+  };
   return {
     plan: ready,
     walkProof,
@@ -124,8 +212,10 @@ export function createScriptShotSampler(plan: ScriptShotPlan, options: {
         const previous = ready.shots[i];
         const motion = sampleScriptShotMotionAt(previous, previous.end);
         if (motion) move(motion, false);
+        execute(previous, previous.end);
       }
       if (sample.motion) move(sample.motion, true);
+      execute(sample.shot, sample.seconds);
       camera.position.set(...sample.camera.position); camera.fov = sample.camera.fov; camera.updateProjectionMatrix();
       controls.target.set(...sample.camera.target); controls.update(); camera.lookAt(controls.target); camera.updateMatrixWorld(true);
       return sample;

@@ -137,3 +137,10 @@
 - `node .rscode/motion-upload-chrome.mjs` 最终exit0，`CHROME_COMPONENT_AND_UPLOAD_FIXTURE=PASS`：9组走位场景通过——双增强/仅导航/仅角色增强重复应用保留、坐标时长修改保留、换目标/换主动作/清空动作拒绝、仅导航时切主动作保留、显式清除。拒绝场景应用回调计数为0；浏览器未捕获error事件。
 - 是真实Chrome组件/DOM事件验收，不是完整Scene3DStage/WebGL像素、真实存档上传或业务端到端验收；未证明视觉效果、避障安全或目录请求时机。与上传共用脚本首轮在后续上传夹具的非法project_id前置校验处失败，走位已执行但未当整轮PASS；修正上传输入准备且保留原断言后整轮通过。
 - 临时脚本、bundle、结果与profile在 `.rscode/`，Go无数据库哨兵源在 `backend/.rscode-upload-probe/`，均不提交。临时哨兵已停止并断言端口拒绝连接，未启动真实前后端或ComfyUI。qa-only流程仍因缺fresh project-gate evidence而blocked，不宣称workflow完成。
+
+### 原片seek解码对照补记（2026-11-26）
+
+- Chrome/158.0.8127.37默认路径：旧64秒/768帧、120秒/2880帧原片seek到60秒均`PIPELINE_ERROR_DECODE`，exit1；复制码流的FFmpeg remux对照同样失败。原64秒片的32个cue位置有效、关键帧标记无失配，未发现支持“仅修封装即可恢复”的证据。
+- 相同原片在独立profile加`--disable-accelerated-video-decode`后均seek恢复至61.79秒，`seeking=false, readyState=4, error=null`，exit0。范围为本机Chrome平台/硬件解码路径相关，未定位驱动/GPU内部根因；不修改编码、分辨率、FPS、超时或重试，不自动改变用户浏览器设置。
+- 不追认默认路径或原片全片通过；新机RTX4070简化新片全片/seek通过是独立证据。详见高性能电脑待验收清单T01最新小节；真实ComfyUI本轮仍SKIPPED。
+- 历史夹具19049/Media域补证：默认49210实际`D3D11VideoDecoder`、platform=true、D3D11 backend，首帧可解但60秒seek后`D3DStatus::6`→`DecoderStatus::1`，最终`PIPELINE_ERROR_DECODE`，exit1；软件49211实际`VpxVideoDecoder`、platform=false，同片恢复至61.6437秒、readyState4/error=null，exit0。截图和事件在`.rscode/visible-decode-49210-0.{png,json}`及49211对应文件。后查49210进程带`--headless=new`：页面有内容及截图不等于普通可见窗口验收，先前“可见”措辞更正；用户指出旧片起播约1秒即错误，后续不seek的完整播放测试也失败，首帧可解不能称起播播放通过。定位到本机D3D11硬件VP9路径相关，尚未定位驱动/GPU内部根因，不宣称排除所有编码兼容性问题。新增VP8优先导出修复、49212普通窗口（无headless/禁加速开关）验证及最新EXE另见ADR-0023末节；旧片失败证据不转为通过。

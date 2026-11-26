@@ -69,16 +69,16 @@ export default function ScriptVideoPanel({ plan, disabled, onExport, isCurrent, 
   };
   return <section aria-label="逐镜视频导出" className="mt-2 space-y-1 rounded border border-zinc-700 p-2 text-xs">
     <h3>逐镜视频导出与生成交接</h3>
-    <p className="text-zinc-400">按已保存镜头表逐帧渲机位、走位、骨骼与天气。无音频；{frameAspect} · {size.width}×{size.height} WebM，最多2880帧/256MiB，超限整段拒绝，不截断。包含视频平面的场景暂不支持。</p>
+    <p className="text-zinc-400">按已保存镜头表逐帧渲机位、走位、骨骼与天气。无音频；{frameAspect} · {size.width}×{size.height} WebM（优先VP8，不支持时回退VP9），最多2880帧/256MiB，超限整段拒绝，不截断。包含视频平面的场景暂不支持。</p>
     <label>FPS <select aria-label="逐镜视频FPS" value={fps} disabled={disabled || pending || saving} onChange={e => { setFps(Number(e.target.value)); setApproved(false); }} className="bg-zinc-800">{[1, 6, 12, 24].map(value => <option key={value} value={value}>{value}</option>)}</select></label>
     <label>画面 <select aria-label="逐镜视频画面" value={mode} disabled={disabled || pending || saving} onChange={e => { setMode(e.target.value as ScriptVideoMode); setApproved(false); }} className="bg-zinc-800">{Object.entries({ viewport: '材质原样', white: '白模', normal: '法线', depth: '深度（有损）' }).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
     <label className="flex gap-1"><input type="checkbox" aria-label="确认逐镜视频导出" checked={approved} disabled={disabled || pending || saving} onChange={e => setApproved(e.target.checked)} />已核对镜头表、机位、动作与时长，仅本地导出，不提交生成</label>
     <div className="flex gap-2"><button type="button" disabled={!approved || disabled || pending || saving} onClick={() => { void exportVideo(); }}>渲染逐镜视频</button><button type="button" disabled={!pending} onClick={() => controller.current?.abort()}>取消视频导出</button></div>
     {pending && <p role="status">正在逐帧渲染与编码；取消、失败或结束都会还原场景。</p>}
     {artifact && <div className="space-y-1">
-      {url && <video controls src={url} className="w-full" onError={() => setPlaybackError('本地播放器解码失败；请下载WebM用独立播放器核验，或降低FPS重新导出。不能据此判断文件有效，不会自动重试或提交生成。')} />}
+      {url && <video controls src={url} className="w-full" onError={() => setPlaybackError('本地播放器解码失败；请重新导出并核对编码（优先VP8），旧VP9文件不会随升级自动修复。请保留WebM及追溯清单诊断；不能据此判断文件有效，不会自动重试或提交生成。')} />}
       {playbackError && <p role="alert" className="text-amber-300">{playbackError}</p>}
-      <p role="status">已生成 {artifact.manifest.frameCount} 帧 · {artifact.manifest.width}×{artifact.manifest.height} · {(artifact.blob.size / 1024 / 1024).toFixed(2)} MiB；尚未提交任何生成。</p>
+      <p role="status">已生成 {artifact.manifest.frameCount} 帧 · {artifact.manifest.width}×{artifact.manifest.height} · {artifact.manifest.codec ?? '未知编码'} · {(artifact.blob.size / 1024 / 1024).toFixed(2)} MiB；尚未提交任何生成。</p>
       <div className="flex flex-wrap gap-2"><a href={url} download="studio-shot-previs.webm">下载WebM</a><button type="button" onClick={() => {
         const u = URL.createObjectURL(new Blob([JSON.stringify(artifact.manifest, null, 2)], { type: 'application/json' }));
         const a = document.createElement('a'); a.href = u; a.download = 'studio-shot-previs.manifest.json'; a.click(); setTimeout(() => URL.revokeObjectURL(u), 10000);

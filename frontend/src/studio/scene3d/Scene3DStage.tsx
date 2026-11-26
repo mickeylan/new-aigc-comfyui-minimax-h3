@@ -21,6 +21,7 @@ import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { findTemplateId } from "../host/template-cache.js";
 import { FKHelper } from "./posing/FKHelper.js";
 import { PreviewPlayhead, PREVIEW_FPS, previewFrameCount, previewFrameTime } from './previewPlayhead';
+import { assertScriptShotApplicationSafe } from './scriptShotSampler';
 import { AnimationPreview, skeletalClips, saveAnimationClips, restoreAnimationClips, markAnimationArchivePaths, attachAnimationClip, saveMoveAnimation, restoreMoveAnimation, type SavedMoveAnimation, type SavedAnimationClip } from './animationPreview';
 import { findCapsuleRigs, gaitCapsuleRig, resetCapsuleRig } from './toonflow/capsuleRig';
 import { createStoreZip } from "./zip.js";
@@ -5107,6 +5108,10 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                       return { entry, value, name: entry.name, objectName: entry.object.name, position: entry.object.position.clone(), rotation: entry.object.rotation.clone(), scale: entry.object.scale.clone() };
                     });
                     if (batch.additions.some(entry => before.some(item => item.id === entry.id))) throw Error('新增对象ID冲突');
+                    if (batch.shotPlan.shots.some(shot => shot.execution?.actors?.length)) {
+                      // Prove the proposed scene, including staged additions, before history or publication.
+                      assertScriptShotApplicationSafe(batch.shotPlan, [...before, ...batch.additions], environmentRef.current, batch.updates);
+                    }
                     historyRef.current.checkpoint(before);
                     try {
                       updates.forEach(({ entry, value }) => { entry.name = value.name; entry.object.name = value.name; entry.object.position.set(...value.position); entry.object.rotation.set(...value.rotation); entry.object.scale.set(...value.scale); entry.object.updateMatrixWorld(true); });
@@ -5160,7 +5165,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               }} onApplyShots={(plan) => {
                 // 换计划前还原旧播放，避免界面台词与仍在播放的旧机位错配。
                 stopAnimation();
-                // 只把已确认的镜头表接入场景状态，随现有存档保存；不改对象、不触发生成。
+                if (plan.shots.some(shot => shot.execution?.actors?.length)) assertScriptShotApplicationSafe(plan, objectsRef.current, environmentRef.current);
+                // 只把已确认且几何预检通过的镜头表接入场景状态；不改对象、不触发生成。
                 setScriptShots(plan);
                 setStatus(`已接入镜头表：${plan.shots.length} 镜 · ${plan.shots[plan.shots.length - 1]!.end.toFixed(2)} 秒（未指定机位 ${plan.shots.filter(shot => !shot.camera).length} 镜），保存场景后随存档保留`);
               }} appliedPlan={scriptShots} shotPlayback={shotPlayback} onPlayShots={(plan) => { void playScriptShots(plan); }} onStopShots={stopAnimation} onExportShotPack={exportShotReferencePack}

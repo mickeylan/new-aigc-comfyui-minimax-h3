@@ -1034,6 +1034,48 @@ describe('Character animation catalog attached to a scene object', () => {
     console.log(`ANIMATION_CATALOG_ARCHIVE=PASS clip=cc0Run tracks=${restored[0]!.tracks.length} duration=${restored[0]!.duration.toFixed(3)} bytes=${new TextEncoder().encode(json).byteLength}`);
   });
 
+  it('preserves opt-in execution tracks through real v6/v7 archive callbacks and keeps legacy shots opt-out', async () => {
+    for (const version of [6, 7]) {
+      // Reuse the real skinned fixture and production exporter from the enhancement roundtrip above.
+      const rig = createToonflowPrimitive({ shape: 'riggedPerson' } as any, '#ff8800');
+      const chest = rig.getObjectByName('chest')!;
+      rig.animations = [new THREE.AnimationClip('attached', 2, [new THREE.QuaternionKeyframeTrack(`${chest.uuid}.quaternion`, [0, 2], [0, 0, 0, 1, 0, Math.sin(.1), 0, Math.cos(.1)])])];
+      const extras = version === 7 ? materializeSetDraft(await prepareSetDraft('ancientStreet', new AbortController().signal)).slice(0, 1) : [];
+      extras.forEach(e => e.object.position.set(30, 0, 30));
+      const source = scopeFor([{ id: 'actor', name: 'A', object: rig, locked: false }, ...extras]);
+      const target = scopeFor([]);
+      for (const scope of [source, target]) {
+        Object.assign(scope, { GLTFExporter, clonePosedContent, markAnimationArchivePaths, isExportablePlane, applyBonePose });
+        scope.exportGeometry = callback('exportGeometry', 'exportGlb', scope);
+      }
+      const clip = { index: 0, name: rig.animations[0].name, duration: rig.animations[0].duration };
+      source.scriptShots = validateScriptShotPlan({ version: 1, sceneId: 's', heading: '', location: '', sourceFingerprint: 's', sceneFingerprint: 's', action: [], diagnostics: [], shots: [{
+        id: 's', order: 1, start: 0, end: 4, camera: null, dialogue: [], execution: { version: 1,
+          camera: { keys: [{ at: 0, position: [0, 2, 5], target: [0, 1, 0], fov: 45 }, { at: 4, position: [0, 2, 3], target: [0, 1, 0], fov: 45 }] },
+          actors: [{ targetId: 'actor', targetName: 'A', beats: [{ start: 0, end: 4, from: { x: 0, z: 0 }, to: { x: 1, z: 0 }, yaw: 0, animation: clip, sourceIndex: 0 }] }],
+        },
+      }] });
+      try {
+        const saved = await callback('buildSceneDocument', 'saveScene', source)(); expect(saved.version).toBe(version);
+        await callback('importSceneText', 'loadScene', target)(JSON.stringify(saved));
+        expect(target.setError.mock.calls.filter((call: any[]) => call[0])).toEqual([]);
+        const restored = target.setScriptShots.mock.calls.at(-1)[0];
+        expect(restored.shots[0].execution).toEqual(source.scriptShots.shots[0].execution);
+        const sampler = createScriptShotSampler(restored, { camera: target.cameraRef.current, controls: target.controlsRef.current, entries: () => target.objectsRef.current, environment: null });
+        const restoredActor = target.objectsRef.current.find((e: any) => e.id === 'actor').object;
+        const rest = restoredActor.getObjectByName('chest').quaternion.clone();
+        sampler.sampleAt(1.5); expect(restoredActor.position.x).toBeCloseTo(.375);
+        expect(restoredActor.getObjectByName('chest').quaternion.angleTo(rest)).toBeCloseTo(.15, 4);
+        sampler.sampleAt(2); expect(restoredActor.position.x).toBeCloseTo(.5); sampler.stop();
+        expect(restoredActor.position.x).toBe(0); expect(restoredActor.getObjectByName('chest').quaternion.angleTo(rest)).toBeLessThan(1e-6);
+        delete saved.scriptShots.shots[0].execution;
+        saved.scriptShots.shots[0].camera = { position: [0, 2, 5], target: [0, 1, 0], fov: 45 };
+        await callback('importSceneText', 'loadScene', target)(JSON.stringify(saved));
+        expect(target.setScriptShots.mock.calls.at(-1)[0].shots[0].execution).toBeUndefined();
+      } finally { for (const s of [source, target]) s.objectsRef.current.forEach((e: any) => disposeObject(e.object)); }
+    }
+  }, 60_000);
+
   it('marks the scene dirty when an action resource is attached', () => {
     const rig = catalogRig('cc0Idle');
     const entry = { id: 'actor', name: '张三', object: rig, locked: false };

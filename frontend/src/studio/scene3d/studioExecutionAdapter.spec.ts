@@ -95,6 +95,48 @@ it('reports unsupported camera movement, multi-beat action and authoritative dia
   expect(result.source.shots[0]).toEqual(shots[0]);
 });
 
+async function tracksFixture() {
+  const f = await fixture();
+  const shots = structuredClone(f.source.shots);
+  shots[0] = { ...shots[0], camera_movement: '推近', action_timeline: [
+    { start: 0, end: 1, subject: '甲', action: '停下', state: '', camera: '' },
+    { start: 1, end: 2.345, subject: '甲', action: '挥手', state: '', camera: '' },
+  ] };
+  const source = await snapshotDirectorSource(1, f.source.scene, shots);
+  f.plan.shots[0].camera = null; f.plan.shots[0].motion = null;
+  f.plan.shots[0].execution = { version: 1, camera: { keys: [
+    { at: 0, position: [0, 2, 5], target: [0, 1, 0], fov: 45 },
+    { at: 2.345, position: [0, 2, 3], target: [0, 1, 0], fov: 45 },
+  ] }, actors: [{ targetId: 'actor', targetName: '演员', beats: shots[0].action_timeline!.map((step, sourceIndex) => ({
+    start: step.start, end: step.end, from: { x: 0, z: 0 }, to: { x: 0, z: 0 }, yaw: 0,
+    animation: { index: 0, name: 'Walk', duration: 1 }, sourceIndex,
+  })) }] };
+  return { ...f, source, run: () => prepareStudioExecution(f.plan, source, 'server-hash', f.context) };
+}
+it('accepts audited moving cameras and multi-beat in-place clips without changing source or duration', async () => {
+  const f = await tracksFixture(); const before = JSON.stringify(f.source); const r = await f.run();
+  expect(r.blockers).toEqual([]); expect(r.shotPlan!.shots[0].execution).toEqual(f.plan.shots[0].execution);
+  expect(r.shotPlan!.shots[0].end).toBe(2.345); expect(JSON.stringify(f.source)).toBe(before);
+  r.plan.shots[0].execution!.actors![0].beats[0].yaw = 1;
+  expect(f.plan.shots[0].execution!.actors![0].beats[0].yaw).toBe(0);
+});
+it('rejects execution clips, source indices, times, subjects and bindings not matching actual source/context', async () => {
+  for (const change of [
+    (p: any) => { p.shots[0].execution.actors[0].beats[0].animation.name = 'invented'; },
+    (p: any) => { p.shots[0].execution.actors[0].beats[0].sourceIndex = 1; },
+    (p: any) => { p.shots[0].execution.actors[0].beats[0].end = .9; },
+    (p: any) => { p.shots[0].execution.actors[0].targetId = 'wall'; },
+    (p: any) => { p.shots[0].execution.actors[0].beats[0].typo = true; },
+    (p: any) => { p.shots[0].execution.camera.keys[1].at = 2; },
+  ]) { const f = await tracksFixture(); change(f.plan); await expect(f.run()).rejects.toThrow(); }
+});
+it('does not substitute partial action coverage or missing moving camera with a static playable plan', async () => {
+  const f = await tracksFixture(); f.plan.shots[0].execution!.actors![0].beats.pop();
+  const r = await f.run(); expect(r.shotPlan).toBeNull(); expect(r.blockers.join()).toContain('未完整绑定');
+  const g = await tracksFixture(); delete g.plan.shots[0].execution!.camera;
+  const q = await g.run(); expect(q.shotPlan).toBeNull(); expect(q.blockers.join()).toContain('原运镜');
+});
+
 it('does not silently discard unsupported world height or normalize motion duration precision', async () => {
   const f = await fixture(); f.plan.shots[0].motion!.start[1] = 1; f.plan.shots[0].motion!.end[1] = 1; f.plan.shots[0].motion!.duration = 1.234;
   const r = await f.run(); expect(r.shotPlan).toBeNull(); expect(r.blockers.join()).toContain('高度'); expect(r.blockers.join()).toContain('精度');

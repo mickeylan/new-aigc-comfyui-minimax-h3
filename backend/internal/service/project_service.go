@@ -8647,7 +8647,13 @@ func (s *ProjectService) GenerateSceneVideo(p *models.Project, sc *models.Scene)
 	}
 	tplCode, promptText, videoFiles := assemble(requestedTemplate)
 	if strings.TrimSpace(sc.VideoPromptMasterZH) != "" {
-		// Submit the confirmed execution draft byte-for-byte; validation below remains mandatory.
+		// Source/reference inputs alone are not a saved English execution draft.
+		if strings.TrimSpace(sc.VideoFullPrompt) == "" {
+			return fmt.Errorf("场景 %d 尚未翻译并确认视频提示词", sc.Order)
+		}
+		// Prefer the saved execution draft for this selection; a later template fallback
+		// can reassemble the prompt. Retain legacy saved-English compatibility:
+		// confirmation/source hashes are not a submission freshness gate.
 		promptText = sc.VideoFullPrompt
 	}
 	if isReviewedAudioVideoTemplate(tplCode) {

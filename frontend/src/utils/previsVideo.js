@@ -1,7 +1,9 @@
 // Local previs video export: deterministic WebCodecs encoding + minimal WebM (Matroska) muxing. See ADR-0010.
 import {exportFrameTimes} from './previsFrameArchive.js'
 export const VIDEO_WIDTH=1280,VIDEO_HEIGHT=720,VIDEO_MAX_FRAMES=2880,VIDEO_MAX_BYTES=256*1024*1024
-const CODECS=[{name:'VP9',codec:'vp09.00.31.08',webm:'V_VP9'},{name:'VP8',codec:'vp8',webm:'V_VP8'}]
+// Prefer VP8 for playback compatibility: encoder support does not prove a VP9 export
+// can be decoded by the viewer's hardware (notably the observed Windows D3D11 path).
+const CODECS=[{name:'VP8',codec:'vp8',webm:'V_VP8'},{name:'VP9',codec:'vp09.00.31.08',webm:'V_VP9'}]
 export function videoFrameTimes(from,to,fps,duration){return exportFrameTimes(from,to,fps,duration,VIDEO_MAX_FRAMES)}
 export async function pickVideoCodec(Encoder,Frame,fps,{width=VIDEO_WIDTH,height=VIDEO_HEIGHT}={}){
  if(!Number.isSafeInteger(width)||!Number.isSafeInteger(height)||width<2||height<2||width%2||height%2||Math.max(width,height)>1280||width*height>VIDEO_WIDTH*VIDEO_HEIGHT)throw Error('视频尺寸无效或超过1280×720像素预算')

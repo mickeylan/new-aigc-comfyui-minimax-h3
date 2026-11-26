@@ -7,7 +7,7 @@
  <div class="row"><label>深度近界（米）<input type="number" min="0" max="499.9" step="0.1" v-model.number="near"></label><label>深度远界（米）<input type="number" min="0.1" max="500" step="0.1" v-model.number="far"></label></div>
  <div class="row"><button type="button" :disabled="busy||!ready" @click="$emit('export',{mode:'white',depth_range:{near,far}})">导出当前帧白模 PNG</button><button type="button" :disabled="busy||!ready" @click="$emit('export',{mode:'depth',depth_range:{near,far}})">导出当前帧深度 PNG</button></div>
  <div class="row"><label>序列起秒<input type="number" min="0" step="0.1" v-model.number="from"></label><label>序列止秒<input type="number" min="0" step="0.1" v-model.number="to"></label><label>FPS<select v-model.number="fps"><option v-for="n in [1,6,12,24]" :key="n" :value="n">{{n}}</option></select></label><label>画面<select v-model="pass"><option value="white">白模</option><option value="depth">深度</option></select></label><button type="button" :disabled="busy||!ready" @click="$emit('export',{mode:pass,from_ms:Math.round(from*1000),to_ms:Math.round(to*1000),fps,depth_range:{near,far}})">导出序列ZIP（最多240帧）</button><button type="button" :disabled="busy||!ready" @click="$emit('export-video',{mode:pass,from_ms:Math.round(from*1000),to_ms:Math.round(to*1000),fps,depth_range:{near,far}})">导出 WebM 视频（最多2880帧）</button></div>
- <p>视频按帧序号逐帧编码（VP9/VP8，1280×720，无音轨），渲染慢不会丢帧或变速；需浏览器支持 WebCodecs。深度视频为有损编码，仅供审阅运动与机位，精确深度请用PNG序列。</p>
+ <p>视频按帧序号逐帧编码（优先VP8，不支持时回退VP9，1280×720，无音轨；旧VP9文件需重新导出），渲染慢不会丢帧或变速；需浏览器支持 WebCodecs。深度视频为有损编码，仅供审阅运动与机位，精确深度请用PNG序列。</p>
  </section>
 </template>
 <script setup>

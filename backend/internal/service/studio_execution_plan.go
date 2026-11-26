@@ -63,6 +63,7 @@ type studioExecutionShot struct {
 	Duration    float64                `json:"duration"`
 	Camera      *studioExecutionCamera `json:"camera"`
 	Motion      *studioExecutionMotion `json:"motion"`
+	Execution   *studioExecutionTracks `json:"execution,omitempty"`
 	Evidence    []string               `json:"evidence"`
 	Assumptions []string               `json:"assumptions"`
 	Blockers    []string               `json:"blockers"`
@@ -186,6 +187,22 @@ func validateStudioExecutionPlan(plan *studioExecutionPlan, source studioExecuti
 			plan.Blockers = append(plan.Blockers, "可见角色尚未绑定真实对象："+name)
 		}
 	}
+	executionIDs := map[string]bool{}
+	hasLegacyMotion := false
+	for _, shot := range plan.Shots {
+		if shot.Execution != nil {
+			for _, actor := range shot.Execution.Actors {
+				executionIDs[actor.TargetID] = true
+			}
+		}
+		hasLegacyMotion = hasLegacyMotion || shot.Motion != nil
+	}
+	if len(executionIDs) > 32 {
+		return fmt.Errorf("整份执行计划超过32个角色，请拆分场次")
+	}
+	if len(executionIDs) > 0 && hasLegacyMotion {
+		return fmt.Errorf("镜内执行角色不能与旧走位混用于同一计划")
+	}
 	for i, original := range source.Shots {
 		shot := &plan.Shots[i]
 		if shot.ShotID != original.ID || shot.Duration != original.Duration || !studioExecutionTexts(shot.Evidence, true) || !studioExecutionTexts(shot.Assumptions, false) || !studioExecutionTexts(shot.Blockers, false) {
@@ -196,6 +213,13 @@ func validateStudioExecutionPlan(plan *studioExecutionPlan, source studioExecuti
 			if !strings.Contains(evidenceText, quote) {
 				return fmt.Errorf("第%d镜依据不在原文或导演字段中", i+1)
 			}
+		}
+		if err := validateStudioExecutionTracks(shot.Execution, original, plan, objects, assetByID); err != nil {
+			return err
+		}
+		hasActors := shot.Execution != nil && len(shot.Execution.Actors) > 0
+		if hasActors && shot.Motion != nil {
+			return fmt.Errorf("镜内执行不能混用旧走位")
 		}
 		if shot.Camera != nil {
 			c := shot.Camera
@@ -209,10 +233,10 @@ func validateStudioExecutionPlan(plan *studioExecutionPlan, source studioExecuti
 			if distance < 1e-6 {
 				return fmt.Errorf("机位与焦点重合")
 			}
-		} else {
+		} else if shot.Execution == nil || shot.Execution.Camera == nil {
 			shot.Blockers = append(shot.Blockers, "尚无可执行机位")
 		}
-		if movement := strings.TrimSpace(original.CameraMovement); movement != "" && movement != "固定" && movement != "static" && movement != "固定镜头" {
+		if movement := strings.TrimSpace(original.CameraMovement); movement != "" && movement != "固定" && movement != "static" && movement != "固定镜头" && !studioMovingCamera(shot.Execution) {
 			shot.Blockers = append(shot.Blockers, "现有逐镜采样器不支持该运镜："+movement)
 		}
 		if m := shot.Motion; m != nil {
@@ -233,10 +257,10 @@ func validateStudioExecutionPlan(plan *studioExecutionPlan, source studioExecuti
 			if !found {
 				return fmt.Errorf("表演引用的动作不在该对象资产目录")
 			}
-		} else if strings.TrimSpace(original.Performance) != "" || len(original.ActionTimeline) > 0 {
+		} else if !hasActors && (strings.TrimSpace(original.Performance) != "" || len(original.ActionTimeline) > 0) {
 			shot.Blockers = append(shot.Blockers, "原导演表演尚未绑定可执行动作；不可用静止画面替代")
 		}
-		if len(original.ActionTimeline) > 1 {
+		if len(original.ActionTimeline) > 1 && !hasActors {
 			shot.Blockers = append(shot.Blockers, "现有单对象直线走位不能证明覆盖多段动作时间轴")
 		}
 	}
@@ -325,8 +349,8 @@ func (s *Service) HandlePlanStudioExecution(c *gin.Context) {
 		return
 	}
 	// A typed zero-value is shape documentation, never a sample plan to apply.
-	shape := studioExecutionPlan{Objects: []studioExecutionObject{{}}, Bindings: []studioExecutionBinding{{}}, Shots: []studioExecutionShot{{Camera: &studioExecutionCamera{}, Motion: &studioExecutionMotion{}, Evidence: []string{}, Assumptions: []string{}, Blockers: []string{}}}, Assumptions: []string{}, Blockers: []string{}}
-	data, _ := json.Marshal(gin.H{"source": source, "source_hash": hash, "context": req.Context, "output_shape": shape, "capabilities": gin.H{"units": "meters", "y_up": true, "rotation": "radians ±2pi", "position_bounds": []int{-1000, 1000}, "fov_bounds": []int{15, 90}, "camera": "static only; null with blockers when unresolved", "motion": "one object, nonzero straight XZ travel, constant Y; actual clip ID required; null with blockers when unresolved", "arrays": "all arrays required, empty allowed except shot evidence; preserve shot IDs/order/duration", "objects": "new placements or transform edits; reuse existing IDs without changing asset_id", "evidence": "exact quotes from scene content or corresponding shot description/performance/blocking/camera_movement/focus_subject", "validation": "structure and references only; not semantic, collision or playback acceptance"}})
+	shape := studioExecutionPlan{Objects: []studioExecutionObject{{}}, Bindings: []studioExecutionBinding{{}}, Shots: []studioExecutionShot{{Camera: &studioExecutionCamera{}, Motion: &studioExecutionMotion{}, Execution: &studioExecutionTracks{Version: 1, Camera: &studioExecutionCameraTrack{Keys: []studioExecutionKey{{}}}, Actors: []studioExecutionActorTrack{{Beats: []studioExecutionBeat{{}}}}}, Evidence: []string{}, Assumptions: []string{}, Blockers: []string{}}}, Assumptions: []string{}, Blockers: []string{}}
+	data, _ := json.Marshal(gin.H{"source": source, "source_hash": hash, "context": req.Context, "output_shape": shape, "capabilities": gin.H{"units": "meters", "y_up": true, "rotation": "radians ±2pi", "position_bounds": []int{-1000, 1000}, "fov_bounds": []int{15, 90}, "camera": "legacy camera is fixed; optional execution.version=1 camera.keys supports linear position/target/fov at strictly increasing shot-relative seconds including 0 and full duration; max64 keys; null with blockers when unresolved", "motion": "legacy motion is one nonzero straight XZ segment. Optional execution.actors supports max32 actual existing object targets and max128 ordered beats total, including in-place skeletal clips with explicit yaw. Each beat uses start/end/from/to/yaw/animation{index,name,duration}/sourceIndex; sourceIndex references original action_timeline with exact interval and bound subject, every subject/beat must be covered. Actual clip index/name/duration from that object's context asset required. No legacy motion anywhere in plans with execution actors. Constant base Y follows terrain. Overlap/collision/visual quality not approved by schema; unresolved requirements must remain blockers", "arrays": "all arrays required, empty allowed except shot evidence; preserve shot IDs/order/duration", "objects": "new placements or transform edits; reuse existing IDs without changing asset_id", "evidence": "exact quotes from scene content or corresponding shot description/performance/blocking/camera_movement/focus_subject", "validation": "structure and references only; not semantic, collision or playback acceptance"}})
 	output, provenance, err := s.Skills.ChatWithConfiguredOrFallbackSkillTraced(scene.ProjectID, string(models.SkillStageStoryboard), studioExecutionSkillCode, s.TextProviderFact, "", string(data), nil)
 	if err != nil {
 		c.JSON(502, gin.H{"error": "执行规划失败：" + err.Error()})

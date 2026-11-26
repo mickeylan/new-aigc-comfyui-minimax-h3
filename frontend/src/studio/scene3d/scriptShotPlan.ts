@@ -2,6 +2,7 @@
 import { estimateChineseDialogueDuration, SPEAKER_SWITCH_SECONDS } from '../../utils/dialogueDuration.js';
 import { validateCharacterMotionSettings, type CharacterMotionSettings } from './characterMotion';
 import type { ShotNavigation } from './shotNavigation';
+import { validateShotExecution, sampleExecutionCamera, sampleExecutionActors, type ShotExecution } from './shotExecution';
 import type { ScriptSceneDraft } from './toonflowSets';
 
 // ---------------------------------------------------------------------------
@@ -54,6 +55,7 @@ export type ScriptShot = {
   camera: ScriptShotCamera | null;
   /** 人工绑定的一镜走位；旧镜头表没有该字段，按未绑定处理。 */
   motion?: ScriptShotMotion | null;
+  execution?: ShotExecution;
   dialogue: ScriptTimedLine[];
 };
 export type ScriptShotPlan = {
@@ -131,7 +133,11 @@ export function validateScriptShotPlan(value: unknown): ScriptShotPlan {
     if (shot.camera !== null) validateScriptShotCamera(shot.camera);
     // 走位是可选字段：旧档没有就保持没有；有但不成立必须显式失败，不静默忽略。
     if (shot.motion !== undefined && shot.motion !== null) validateScriptShotMotion(shot.motion, end - start, `${label}的走位`);
+    if (shot.execution !== undefined) validateShotExecution(shot.execution, end - start);
   });
+  const executionIds = new Set(plan.shots.flatMap(shot => (shot.execution?.actors ?? []).map(actor => actor.targetId)));
+  if (executionIds.size > 32) throw Error('整份执行计划超过32个角色，请拆分场次');
+  if (executionIds.size && plan.shots.some(shot => shot.motion)) throw Error('Execution actors cannot mix with legacy motion anywhere in a plan');
   return plan as ScriptShotPlan;
 }
 
@@ -319,7 +325,7 @@ export function assertScriptShotPlanSource(plan: ScriptShotPlan, draft: ScriptSc
 /** 镜头表摘要：镜数、总时长与未指定机位的镜数，供界面如实显示。 */
 export function summarizeScriptShotPlan(plan: ScriptShotPlan) {
   const valid = validateScriptShotPlan(plan);
-  return { shots: valid.shots.length, seconds: valid.shots[valid.shots.length - 1]!.end, missingCameras: valid.shots.filter(shot => !shot.camera).length };
+  return { shots: valid.shots.length, seconds: valid.shots[valid.shots.length - 1]!.end, missingCameras: valid.shots.filter(shot => !shot.camera && !shot.execution?.camera).length };
 }
 
 /**
@@ -328,7 +334,7 @@ export function summarizeScriptShotPlan(plan: ScriptShotPlan) {
  */
 export function assertScriptShotPlaybackReady(plan: ScriptShotPlan): ScriptShotPlan {
   const valid = validateScriptShotPlan(plan);
-  const missing = valid.shots.filter(shot => !shot.camera);
+  const missing = valid.shots.filter(shot => !shot.camera && !shot.execution?.camera);
   if (missing.length > 0) {
     throw new Error(`镜头表还有 ${missing.length} 镜未指定机位（第 ${missing.map(shot => shot.order).join('、')} 镜），不能连续逐镜播放；请先在视口逐镜记录机位，不会自动补机位`);
   }
@@ -398,6 +404,8 @@ export type ScriptShotPlaybackSample = {
   line: ScriptTimedLine | null;
   /** 当前镜的人工走位采样；未绑定为 null。 */
   motion: ScriptShotMotionSample | null;
+  /** Present only for the opt-in execution extension. */
+  actors?: ReturnType<typeof sampleExecutionActors>;
   /** 已钳制到 [0, 总时长] 的播放时间（秒）。 */
   seconds: number;
 };
@@ -415,9 +423,11 @@ export function sampleScriptShotPlayback(plan: ScriptShotPlan, seconds: number):
   const found = valid.shots.findIndex(shot => time < shot.end);
   const index = found < 0 ? valid.shots.length - 1 : found;
   const shot = valid.shots[index]!;
-  if (!shot.camera) throw new Error(`第 ${shot.order} 镜未指定机位，不能切换机位；不会自动补机位`);
+  const camera = sampleExecutionCamera(shot.execution, time - shot.start) ?? shot.camera;
+  if (!camera) throw new Error(`第 ${shot.order} 镜未指定机位，不能切换机位；不会自动补机位`);
   const line = shot.dialogue.find(item => time >= item.start && time < item.end) ?? null;
-  return { index, shot, camera: shot.camera, line, motion: sampleScriptShotMotionAt(shot, time), seconds: time };
+  return { index, shot, camera, line, motion: sampleScriptShotMotionAt(shot, time), seconds: time,
+    ...(shot.execution?.actors ? { actors: sampleExecutionActors(shot.execution, time - shot.start) } : {}) };
 }
 
 /**
@@ -432,6 +442,14 @@ export function assertScriptShotMotionTargets(plan: ScriptShotPlan, targets: rea
     byId.set(target.id, target);
   }
   for (const shot of valid.shots) {
+    for (const actor of shot.execution?.actors ?? []) {
+      const target = byId.get(actor.targetId);
+      if (!target || target.visible === false || target.locked) throw Error(`Execution actor unavailable: ${actor.targetId}`);
+      for (const beat of actor.beats) {
+        const clip = target.animations?.[beat.animation.index];
+        if (!clip || clip.name !== beat.animation.name || clip.duration !== beat.animation.duration) throw Error(`Execution clip resource changed: ${actor.targetId}`);
+      }
+    }
     const motion = shot.motion;
     if (!motion) continue;
     const label = `第 ${shot.order} 镜的走位目标`;

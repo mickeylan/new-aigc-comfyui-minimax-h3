@@ -3,10 +3,11 @@ import { readFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { webcrypto } from 'node:crypto';
-import { Group, Scene, Mesh, BoxGeometry, MeshStandardMaterial } from 'three';
+import { Group, Scene, Mesh, BoxGeometry, MeshStandardMaterial, Bone, AnimationClip, VectorKeyframeTrack } from 'three';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { applyStudioExecution } from './studioExecutionApply';
 import { captureStudioExecutionContext } from './studioExecutionContext';
+import { assertScriptShotApplicationSafe } from './scriptShotSampler';
 import { snapshotDirectorSource } from './directorSource';
 import { catalogAssets } from './toonflow/assetCatalog';
 import { disposeObject } from './toonflow/sceneResources';
@@ -35,6 +36,7 @@ async function fixture(failCommit = false) {
     { id: 'new-prop', name: '新布景', asset_id: `catalog:${catalogAssets[0].id}`, position: [1, 0, 3], rotation: [0, 0, 0], scale: [1, 1, 1] },
   ], bindings: [], shots: [{ shot_id: 9, duration: 3, camera: { position: [1, 2, 5], target: [0, 1, 0], fov: 45 }, motion: null, evidence: ['院中一堵墙。'], assumptions: [], blockers: [] }], assumptions: [], blockers: [] };
   const scope: Record<string, any> = {
+    assertScriptShotApplicationSafe, environmentRef: { current: null },
     executionUnavailableRef: { current: false }, sceneRef: { current: scene }, sceneEpochRef: { current: 1 }, objectsRef: { current: entries },
     shotPlaybackTokenRef: { current: 0 }, animationRef: { current: null }, cancelMoveRef: { current: null }, cancelCameraPreviewRef: { current: null }, scrubRef: { current: null },
     fingerprintRef: { current: () => ({ full: () => 'baseline' }) },
@@ -46,7 +48,7 @@ async function fixture(failCommit = false) {
     fetch: vi.fn(async () => ({ ok: true, json: async () => ({ source_hash: 'hash', source: { scene: sourceScene, shots } }) })),
     historyRef: { current: { checkpoint: vi.fn(), collect: vi.fn() } }, syncObjects: vi.fn(), setScriptShots: vi.fn(), setStatus: vi.fn(),
   };
-  return { object, scene, entries, scope, plan, source, run: () => production(scope)(plan, source, () => true) };
+  return { object, scene, entries, scope, plan, source, sourceScene, shots, run: () => production(scope)(plan, source, () => true) };
 }
 
 it('production Stage callback commits real staged objects and the original director shot plan together', async () => {
@@ -69,4 +71,45 @@ it('production Stage rolls back reused transforms/names and new scene children i
     expect(f.object.position.toArray()).toEqual([0, 0, 0]); expect(f.object.name).toBe('旧名称'); expect(f.entries[0].name).toBe('旧名称');
     expect(f.scope.setScriptShots).not.toHaveBeenCalled(); expect(f.scope.syncObjects).not.toHaveBeenCalled();
   } finally { disposeObject(f.object); }
+});
+
+async function executionFixture(distance: number) {
+  const f = await fixture();
+  const other = new Group(); other.add(new Mesh(new BoxGeometry(), new MeshStandardMaterial())); other.position.x = 10;
+  const second = { id: 'other', name: '乙', object: other };
+  f.entries.push(second); f.scene.add(other);
+  for (const entry of f.entries) {
+    const bone = new Bone(); bone.name = 'joint'; entry.object.add(bone);
+    entry.object.animations = [new AnimationClip('idle', 3, [new VectorKeyframeTrack('joint.position', [0, 3], [0, 0, 0, 0, 1, 0])])];
+  }
+  Object.assign(f.sourceScene, { character_roles_set: true, visible_characters: '甲，乙', content: '甲和乙隔院停步。' });
+  Object.assign(f.shots[0], { action_timeline: [{ start: 0, end: 3, subject: '甲，乙', action: '停步', state: '', camera: '' }] });
+  const source = await snapshotDirectorSource(1, f.sourceScene, f.shots);
+  const plan: any = structuredClone(f.plan);
+  plan.context_revision = (await captureStudioExecutionContext(f.entries)).revision;
+  plan.objects = [plan.objects[0]];
+  plan.bindings = [{ character: '甲', object_id: 'actor' }, { character: '乙', object_id: 'other' }];
+  plan.shots[0].evidence = [f.sourceScene.content];
+  plan.shots[0].execution = { version: 1, actors: f.entries.map((entry, i) => ({ targetId: entry.id, targetName: i === 0 ? plan.objects[0].name : entry.name, beats: [{ start: 0, end: 3, from: { x: i * distance, z: 0 }, to: { x: i * distance, z: 0 }, yaw: 0, animation: { index: 0, name: 'idle', duration: 3 }, sourceIndex: 0 }] })) };
+  return { ...f, run: () => production(f.scope)(plan, source, () => true) };
+}
+
+it('production Stage rejects structural-valid close actors before history, publication or shot replacement', async () => {
+  const f = await executionFixture(1);
+  try {
+    await expect(f.run()).rejects.toThrow('间距');
+    expect(f.scope.historyRef.current.checkpoint).not.toHaveBeenCalled(); expect(f.scope.historyRef.current.collect).not.toHaveBeenCalled();
+    expect(f.scope.setScriptShots).not.toHaveBeenCalled(); expect(f.scope.syncObjects).not.toHaveBeenCalled();
+    expect(f.scope.objectsRef.current).toBe(f.entries); expect(f.scene.children).toEqual(f.entries.map(e => e.object));
+    expect(f.object.position.toArray()).toEqual([0, 0, 0]); expect(f.object.rotation.y).toBe(0); expect(f.object.name).toBe('旧名称');
+  } finally { f.entries.forEach(e => disposeObject(e.object)); }
+});
+
+it('production Stage publishes a safe execution plan only after the same runtime geometry proof', async () => {
+  const f = await executionFixture(6);
+  try {
+    await f.run(); expect(f.scope.historyRef.current.checkpoint).toHaveBeenCalledTimes(1);
+    expect(f.scope.setScriptShots).toHaveBeenCalledTimes(1); expect(f.object.position.toArray()).toEqual([8, 0, 3]);
+    expect(f.scope.setScriptShots.mock.calls[0][0].shots[0].execution.actors).toHaveLength(2);
+  } finally { f.entries.forEach(e => disposeObject(e.object)); }
 });

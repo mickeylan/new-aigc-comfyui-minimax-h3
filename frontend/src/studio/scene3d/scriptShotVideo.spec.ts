@@ -55,7 +55,10 @@ describe('production shot video driver', () => {
         configure(config: any) { configured = config; super.configure(); }
       }
       const result = await renderScriptShotVideo(f.plan, { ...f.options, Encoder: SizedEncoder, size: { width, height } });
-      expect(configured).toMatchObject({width,height}); expect(result.manifest).toMatchObject({width,height,frameCount:12});
+      expect(configured).toMatchObject({width,height,codec:'vp8'}); expect(result.manifest).toMatchObject({width,height,frameCount:12,codec:'VP8'});
+      // The real driver must use the compatibility choice in both encoder and WebM track.
+      expect(new TextDecoder().decode(await result.blob.arrayBuffer())).toContain('V_VP8');
+      expect(new TextDecoder().decode(await result.blob.arrayBuffer())).not.toContain('V_VP9');
       expect(f.samples.map(sample => sample[1])).toEqual(f.samples.map(sample => sample[0]));
       expect(f.camera.position.toArray()).toEqual([9,8,7]); expect(f.actor.position.x).toBe(0);
     }

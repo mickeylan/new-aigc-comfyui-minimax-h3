@@ -6,7 +6,7 @@ import EnvironmentBrushPanel from './EnvironmentBrushPanel';
 import { createEnvironmentTerrain } from './ground-path';
 let host: HTMLDivElement, root: Root;
 const plan = { shots: [{ id: 'shot-1', end: 1 }] } as any;
-const artifact = (): ScriptVideoArtifact => ({ blob: new Blob(['video'], { type: 'video/webm' }), manifest: { frameCount: 12, artifactId: '00000000-0000-4000-8000-000000000001', samplerVersion: 'script-shot-timeline-v1', characterAnimationCatalogRevision: 3 }, source: 'source', epoch: 1, projectId: 17 });
+const artifact = (): ScriptVideoArtifact => ({ blob: new Blob(['video'], { type: 'video/webm' }), manifest: { codec: 'VP8', frameCount: 12, artifactId: '00000000-0000-4000-8000-000000000001', samplerVersion: 'script-shot-timeline-v1', characterAnimationCatalogRevision: 3 }, source: 'source', epoch: 1, projectId: 17 });
 const button = (text: string) => [...host.querySelectorAll('button')].find(node => node.textContent === text)!;
 async function click(node: Element) { await act(async () => (node as HTMLElement).click()); }
 beforeEach(() => {
@@ -67,6 +67,9 @@ describe('manual video export and material handoff', () => {
     await act(async () => host.querySelector('video')!.dispatchEvent(new Event('error')));
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('本地播放器解码失败');
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('不能据此判断文件有效');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('旧VP9文件不会随升级自动修复');
+    expect(host.querySelector('[role="alert"]')?.textContent).not.toContain('降低FPS');
+    expect(host.querySelector('[role="status"]')?.textContent).toContain('VP8');
     expect(host.querySelector('a[download="studio-shot-previs.webm"]')).not.toBeNull();
     expect(button('下载追溯清单')).toBeTruthy(); expect(fetch).not.toHaveBeenCalled(); expect(onExport).toHaveBeenCalledOnce();
     await click(host.querySelector('input[type="checkbox"]')!); await click(button('渲染逐镜视频'));
