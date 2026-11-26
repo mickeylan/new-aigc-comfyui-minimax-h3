@@ -9,7 +9,7 @@ const engine = vi.hoisted(() => ({
   parseScriptScenes: vi.fn(), buildScriptSceneDraft: vi.fn(), materializeSetDraft: vi.fn(), applyScriptCharacterBindings: vi.fn(),
   buildScriptShotPlan: vi.fn(), updateScriptShotDuration: vi.fn(), setScriptShotCamera: vi.fn(), clearScriptShotCamera: vi.fn(), assertScriptShotPlanSource: vi.fn(),
   setScriptShotMotion: vi.fn(), clearScriptShotMotion: vi.fn(), assertScriptShotMotionTargets: vi.fn(),
-  assertScriptShotPlaybackReady: vi.fn(), assertScriptShotReferenceReady: vi.fn(),
+  assertScriptShotPlaybackReady: vi.fn(), assertScriptShotReferenceReady: vi.fn(), sampleScriptShotPlayback: vi.fn(),
 }));
 vi.mock('./toonflowSets', () => engine);
 // Import the large real catalog during suite collection, before any React root
@@ -64,6 +64,7 @@ beforeEach(async () => {
   engine.assertScriptShotPlaybackReady.mockImplementation((value: any) => value);
   engine.assertScriptShotReferenceReady.mockReset();
   engine.assertScriptShotReferenceReady.mockImplementation((value: any) => value);
+  engine.sampleScriptShotPlayback.mockImplementation(actual.sampleScriptShotPlayback);
   engine.listSetPersonObjects.mockReturnValue([]);
   engine.parseScriptScenes.mockReturnValue({ explicitHeadings: true, scenes: [{ ...scene, id: 'scene-1' }, scene], diagnostics: [] });
   engine.buildScriptSceneDraft.mockResolvedValue(draft);
@@ -328,6 +329,39 @@ describe('script staging human gates', () => {
     expect(host.textContent).toContain('共 2 镜');
     expect(host.textContent).toContain('已载入存档镜头表');
     expect(onApplyShots).not.toHaveBeenCalled();
+  });
+  it.each([false, true])('counts execution cameras and previews the track start ahead of a static camera: fallback=%s', async fallback => {
+    const camera = { position: [3, 4, 8], target: [0, 1, 0], fov: 50 };
+    const p = { ...shotPlan, shots: [{ ...shotPlan.shots[0], camera: fallback ? shotCamera : null,
+      execution: { version: 1, camera: { keys: [{ at: 0, ...camera }, { at: 1.5, ...camera, position: [3, 4, 6] }] } } }, shotPlan.shots[1]] };
+    await act(async () => { root.render(<SetTemplatePanel disabled={false} onApply={onApply} onApplyShots={onApplyShots} onPreviewShot={onPreviewShot} appliedPlan={p} />); });
+    expect(host.textContent).toContain('1 镜未指定机位');
+    await click(button('载入场景镜头表审阅'));
+    expect(host.textContent).toContain('未指定机位 1 镜');
+    expect(host.textContent).toContain('执行机位轨道');
+    expect((host.querySelector('[aria-label="预览镜 1"]') as HTMLButtonElement).disabled).toBe(false);
+    await click(host.querySelector('[aria-label="预览镜 1"]')!);
+    expect(onPreviewShot).toHaveBeenCalledWith(camera);
+    expect((host.querySelector('[aria-label="清除机位 镜 1"]') as HTMLButtonElement).disabled).toBe(!fallback);
+    if (fallback) expect(host.textContent).toContain('清除记录机位（保留执行轨道）');
+    await click(host.querySelector('[aria-label="确认镜头表"]')!);
+    await click(button('确认应用镜头表'));
+    expect(host.textContent).toContain('未指定机位 1 镜。');
+    expect(onApplyShots).toHaveBeenCalledWith(p);
+  });
+  it.each(['apply', 'play', 'pack'] as const)('checks execution-only actor resources before %s', async action => {
+    const p = { ...readyPlan, shots: [{ ...readyPlan.shots[0], execution: { version: 1, actors: [{ targetId: 'actor-1', targetName: '张三', beats: [
+      { start: 0, end: 1, from: { x: 0, z: 0 }, to: { x: 0, z: 0 }, yaw: 0, animation: { index: 0, name: 'walk', duration: 1 } },
+    ] }] } }, readyPlan.shots[1]] };
+    engine.assertScriptShotMotionTargets.mockImplementation(actual.assertScriptShotMotionTargets);
+    const onExportShotPack = vi.fn(async () => true), listMotionTargets = () => [];
+    await act(async () => { root.render(<SetTemplatePanel disabled={false} onApply={onApply} onApplyShots={onApplyShots} onPlayShots={onPlayShots} appliedPlan={p} listMotionTargets={listMotionTargets} onExportShotPack={onExportShotPack} />); });
+    if (action === 'apply') { await click(button('载入场景镜头表审阅')); await click(host.querySelector('[aria-label="确认镜头表"]')!); await click(button('确认应用镜头表')); }
+    if (action === 'play') await click(button('连续逐镜播放'));
+    if (action === 'pack') { await click(host.querySelector('[aria-label="确认导出逐镜参考包"]')!); await click(button('导出逐镜参考包 ZIP')); }
+    expect(engine.assertScriptShotMotionTargets).toHaveBeenCalledWith(p, []);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Execution actor unavailable');
+    expect(onApplyShots).not.toHaveBeenCalled(); expect(onPlayShots).not.toHaveBeenCalled(); expect(onExportShotPack).not.toHaveBeenCalled();
   });
   it('refuses to play a saved plan whose camera is missing and never asks the viewport to fake one', async () => {
     engine.assertScriptShotPlaybackReady.mockImplementationOnce(() => { throw new Error('镜头表还有 2 镜未指定机位（第 1、2 镜），不能连续逐镜播放；请先在视口逐镜记录机位，不会自动补机位'); });

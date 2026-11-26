@@ -200,7 +200,7 @@ A完成不等于B–D完成，不得把“数据接通”报告成“小说自�
 - 复核提出的“确认哈希硬门禁”不直接采纳：现有`TestSavedEnglishPromptBypassesTranslationFreshnessGate`明确要求已保存英文稿兼容、不受来源漂移拦截。保留此行为并修正注释；新增非空门禁不证明确认哈希有效。上述兼容专项与来源链专项exit0；不得把“空英文稿零任务”扩大解释为“所有未确认稿均禁止提交”。模板fallback仍可重新assemble提示词，注释已限定到当前选择，不能声称所有分支均逐字提交。
 - 保留运行时按真实包围体的严格间距，不采纳降至0.7米换通过的建议。此前应用只做结构校验，实际几何阻塞延后到播放/导出；本轮已补应用前同源证明，详见下节。单独保存草稿仍不等于几何可播放保证，应用后的编辑也可能令计划失效，播放/导出继续重新验证。
 - C4应用前缺口本轮已修：前后端结构校验均检查整计划角色并集≤32；确认应用前检查真实包围体半径≤10米、角色间距、静态障碍及逐段地形水域/坡度安全，包含跨镜held角色。静止段继续执行现有可行走证明，不免证、不降低阈值。
-- 相邻未处理项：`SetTemplatePanel.tsx`的`verifyMotionTargets`门槛可能跳过执行角色检查；移动execution机位的参考包provenance仍用固定机位表述；面板仍按`shot.camera`计数；新增部分错误为英文。以上未声称已修复。
+- 当时相邻未处理项：执行角色资源预检门槛、移动execution机位的参考包provenance、面板只按`shot.camera`计数；这三项已在下文“产品面板重渲与执行机位语义续验”修正。新增部分错误仍为英文，逐段执行轨道人工编辑UI仍未提供。
 - 浮点修复后的上一版本地产物（已由下节应用前预检版本取代）：`backend/comfyui-console.exe`，76032512字节，SHA-256 `b6869332117c6b57990058c0b93c6016bb879a6a476ae683acae0d1194e931d1`。旧EXE/嵌入目录已备份到`.rscode/gap-deliverable-backup-20261126-110033`；嵌入新dist后`go -C backend build -o comfyui-console.exe .` exit0，`node .rscode/verify-gap-deliverable.mjs` exit0（CURRENT_DELIVERABLE=PASS，95项资源逐字节一致，notices四处一致）。构建信息为windows/amd64、CGO_ENABLED=0、vcs.revision=78b3f90、vcs.modified=true；不是干净提交发布版，也不代表许可合规。未启动/重启服务，未提交/推送/部署。
 
 ### 应用前几何预检与真实文本小样续验（2026-11-26）
@@ -240,3 +240,21 @@ A完成不等于B–D完成，不得把“数据接通”报告成“小说自�
 - 正式暂存相关新模块后运行项目原始完整命令`npm --prefix frontend test` exit0：Node671/671（Git导入完整性门禁通过），其后Vitest54文件/409项均通过。此前Node669/670失败被实际完整通过取代，不是修改测试、跳过门禁或以独立Vitest冒充。`go -C backend test ./... -count=1` exit0（service91.666秒），真实文本opt-in显式关闭，不调用外部模型或ComfyUI。
 - 最新生产源码与上一节成功构建时一致；`git diff --exit-code -- backend frontend` exit0，既有前端build的Monitor最终exit0，93资源的EXE逐字节复验CURRENT_DELIVERABLE=PASS（SHA仍为上一节未提交构建，不冒充本次新提交的干净构建）。`git diff --cached --check`通过。原生ship workflow `flow-1795671796375-11928-3`仍因历史Chrome profile的LOCK/os error33 blocked；本次不声称原生workflow通过，不为提交而关闭用户浏览器或更改忽略规则。
 - 真实ComfyUI消费/生成/回溯仍 **SKIPPED（本机无法运行 ComfyUI）**；普通Chrome兼容转码全片通过不替代产品同档重渲/内嵌、小说整链、跨设备、性能及许可验收。提交与推送不包含EXE，不启动/重启服务，不部署。
+
+### 产品面板重渲与执行机位语义续验（2026-11-26）
+
+- 本轮“继续”不构成新的提交/推送授权。产品视频验收针对已提交`524d204`对应dist；随后四个前端源码/测试文件续修与本文档尚未提交。下述最新本地EXE已另行重建并包含续修，但本次64秒视频在续修之前导出，不宣称已在该视频中端到端验证新修。
+- 在只托管生产dist的5186隔离服务，用产品载入按钮导入既有合成64镜存档（双胶囊人物、雨0.50、80×80米/64段地形、种子41317），真实点击渲染/下载。无业务后端代理，非GET业务API均403，产物只落`.rscode`且拒绝覆盖；未调用模型或ComfyUI，未入库、创建Scene或生成任务。普通Chrome158.0.8127.37/49212、normal窗口，启动无headless/禁GPU/禁视频加速开关，GPU compositing/WebGL/video_decode/video_encode均enabled，GTX960驱动32.0.15.8278；Media记录编码器VpxVideoEncoder/platform=false，不冒称硬件编码。
+- **产品3D重渲64秒档PASS，不是转码**：约64944ms，产品显示“已生成768帧·1280×720·VP8·15.41MiB”。`.rscode/product-64.webm`16158257字节/SHA-256 `e2d02f0311abb2b6b0bb32b9fa7c4afdb940567ade6eb42217830b80ac705809`；原生manifest205272字节/SHA-256 `b2873a905b4c95d1ea4eaf15760aa22085e71e206fc8dc77bcdcb4a5ce12a200`，64镜、768采样、12fps、sourceDurationMs64000。`ffprobe -count_frames`精确断言vp8/1280×720/12fps/768帧/64秒exit0，`ffmpeg -v error -xerror -i .rscode/product-64.webm -f null -`严格全片解码exit0。场景截图能看见山地、雨线及两个角色，非空白页；不以侧栏未显示播放器的场景截图证明播放器可见。
+- **普通Chrome内嵌全片仍未通过，停止第三次重试**：`node .rscode/product-long-video.mjs 64` exit1，`true !== false`（`hidden`断言）；重渲产物已成功捕获。`node .rscode/product-inset-playback.mjs 64`将内嵌Blob逐字节SHA核对为同一产品文件，再从0重播；每轮主动bringToFront但不恢复暂停、不延长时限，仍exit1于`ordinary Chrome must stay foreground`。末态62.3291/64秒、752帧、丢帧2、paused=true、hidden=true、ended=false、error=null，有kPause而无Media解码错误；Media有空`playerErrorsRaised:[]`字段不等于有错误。隐藏/暂停的具体来源尚未证明，不把猜测的窗口切换或GPU原因称为结论。两份result JSON及playing/scene截图均保留。120秒/2880帧产品同档本轮未开始；跨设备也未验，不拿旧片兼容转码代替。
+- 本轮相邻修复：面板计数接受执行机位，预览取共享采样器的本镜开始值（执行轨道优先于记录机位）；清除记录机位明确保留轨道。应用/播放/参考包前对execution actors重新检查真实对象、可见性、锁定及clip。参考包逐镜增加`cameraSource`，汇总允许`mixed`，说明每镜开始取景不等于整镜固定机位；静态来源仍为`viewport-recorded`。manifest版本未变，外部严格枚举消费者需按新增来源值兼容；没有宣称已有全部下游消费者验证。本面板仍不提供逐段轨道编辑，英文错误也未在本轮改写。
+- 回归先在旧实现复现4项provenance及5项面板失败；逐文件修后48/48、44/44专项exit0。只读复核未发现阻塞问题。完整`npm --prefix frontend test`首次exit1：Node671/671通过，Vitest52文件通过/2文件失败，412/419通过，7项全部为TestTimeoutError（6项5000ms、1项60000ms），涉及studioExecutionStage与studioRecipeRoundtrip。保留日志，不把测试中间打印PASS误认为最终通过；未放宽超时/断言/测试。关闭自有49212 Chrome、取消自有5186夹具服务后按原命令仅复跑一次，Monitor `work-001a216819ddb-333`最终exit0：Node671/671、Vitest54文件419/419全通过（75.74秒）。未修改超时、并发配置或断言；这支持当时负载相关超时的判断，但不证明具体争用源。没有触碰18000或业务进程。LSP因本机没有typescript-language-server不可用，未安装全局工具，不声称类型检查通过。
+- 完整前端回归通过后，`npm --prefix frontend run build` exit0；先备份旧EXE与嵌入目录到`.rscode/execution-camera-deliverable-backup-1795674142436`，再复制新dist，93项逐字节断言PASS，`go -C backend build -o comfyui-console.exe .` exit0。`node .rscode/verify-gap-deliverable.mjs` exit0、CURRENT_DELIVERABLE=PASS，93项source/dist/embed/EXE资源及许可声明字节一致（不等于法律合规）。最新EXE76036608字节，SHA-256 `22c9aba6320179d2d4905487253b772d8a1d9799a8e164d8674a2a7f15d2a1df`；windows/amd64、CGO_ENABLED=0、vcs.revision=524d20447f27c13d01d7eeed46548ce3690de161、vcs.modified=true，是含未提交源码的本地构建，不是干净发布版。本轮未改后端源码，未重跑Go全量测试，Go构建成功不冒充全量测试；此前Go全量通过仍只是历史证据。未启动/重启业务服务；新EXE也未追加产品浏览器端到端验收。
+- `git diff --check`及`git diff --cached --exit-code` exit0，暂存为空、受跟踪仅4个前端源码/测试及2份相关文档有改动；未提交/推送。第一次文档校验命令曾因本机PowerShell不支持`&&`而exit1（ParserError）；改用Node显式捕获子进程退出码后文档断言与diff检查均exit0，没有用流水线末命令掩盖失败。原生qa-only仍blocked（历史Chrome profile LOCK/os error33），不宣称workflow通过。
+- 真实小说整链仍未验收且不追加第三次模型调用；真实ComfyUI **SKIPPED（本机无法运行 ComfyUI）**。所有视频/manifest/诊断、dist、EXE不入库，不部署；原32任务中真实待验收项保持未完成。
+
+### 本轮续修的独立提交推送授权（2026-11-26）
+
+- 用户在上述续验结果后明确“提交并推送”，本次仅包含4个前端源码/测试文件与本ADR、待验收清单共6个文件；此前“未提交/未推送”均为授权前状态，以包含本节的实际提交及远端同步结果为准。没有部署授权，不改系统提示词/Skill、业务数据或测试门槛，不提交生成产物。
+- 复核本批完整源码diff及既有完整前端测试Monitor的最终exit0，生产源码未再变更，仍为Node671/671与Vitest54文件419/419通过的版本。本轮仅补交付授权文案并逐文件校验；EXE不额外重建，仍使用上节记录的提交前本地产物与哈希，不冒充新提交干净构建。
+- 新建原生ship流程`flow-1795674753430-11928-6`在review_gate再次因历史`.rscode/gap-video-profile/Default/Extension Rules/LOCK`、os error33而blocked；保留该状态，不改忽略规则或关闭用户浏览器规避。不把独立提交推送核验称为workflow通过；64秒内嵌全片两次hidden失败、120秒产品未验收及ComfyUI SKIPPED的边界不随提交改变。

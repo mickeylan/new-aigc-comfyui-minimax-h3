@@ -1,13 +1,40 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { createScriptShotSampler } from './scriptShotSampler';
-import { validateScriptShotPlan, type ScriptShotPlan } from './scriptShotPlan';
+import { buildScriptShotReferencePack, validateScriptShotPlan, type ScriptShotPlan } from './scriptShotPlan';
 const plan = (): ScriptShotPlan => ({ version: 1, sceneId: 's', heading: '', location: '', sourceFingerprint: 's', sceneFingerprint: 's', action: [], diagnostics: [], shots: [{ id: 's', order: 1, start: 0, end: 4, camera: { position: [0, 3, 5], target: [0, 0, 0], fov: 45 }, dialogue: [], execution: { version: 1, actors: [{ targetId: 'a', targetName: 'A', beats: [{ start: 0, end: 2, from: { x: 0, z: 0 }, to: { x: 2, z: 0 }, yaw: 1, animation: { index: 0, name: 'idle', duration: 2 } }] }] } }] });
 
 import { validateShotExecution, sampleExecutionCamera, sampleExecutionActors } from './shotExecution';
 const clip = { index: 0, name: 'idle', duration: 2 };
 const beat = { start: 1, end: 2, from: { x: 0, z: 0 }, to: { x: 1, z: 0 }, yaw: 1, animation: clip };
 const actor = { targetId: 'a', targetName: 'A', beats: [beat] };
+describe('execution camera reference provenance', () => {
+  it.each(['static', 'execution', 'mixed', 'override'] as const)('reports the actual sampled camera source: %s', mode => {
+    const p = plan(); delete p.shots[0].execution;
+    const recorded = structuredClone(p.shots[0].camera);
+    const keys = [{ at: 0, position: [2, 3, 8] as [number, number, number], target: [0, 1, 0] as [number, number, number], fov: 50 },
+      { at: 4, position: [2, 3, 4] as [number, number, number], target: [0, 1, 0] as [number, number, number], fov: 40 }];
+    if (mode !== 'static') {
+      p.shots[0].execution = { version: 1, camera: { keys } };
+      if (mode !== 'override') p.shots[0].camera = null;
+    }
+    if (mode === 'mixed') p.shots.push({ ...structuredClone(p.shots[0]), id: 'second', order: 2, start: 4, end: 8, camera: recorded, execution: undefined });
+    const before = JSON.stringify(p), pack = buildScriptShotReferencePack(p);
+    expect(pack.cameraSource).toBe(mode === 'static' ? 'viewport-recorded' : mode === 'mixed' ? 'mixed' : 'execution-track');
+    expect(pack.shots.map(s => s.cameraSource)).toEqual(mode === 'mixed' ? ['execution-track', 'viewport-recorded'] : [mode === 'static' ? 'viewport-recorded' : 'execution-track']);
+    expect(pack.shots[0].camera).toEqual(mode === 'static' ? recorded : { position: keys[0].position, target: keys[0].target, fov: keys[0].fov });
+    expect(pack.shots.map(s => s.sampleSeconds)).toEqual(mode === 'mixed' ? [0, 4] : [0]);
+    expect(pack.shots.flatMap(s => s.files)).toHaveLength(p.shots.length * 3);
+    expect(pack.notes.join('')).not.toContain('镜内机位固定');
+    expect(JSON.stringify(p)).toBe(before);
+    if (mode !== 'static') expect(pack.notes.join('')).toContain('执行机位轨道');
+  });
+  it('still rejects a reference pack with neither a recorded camera nor an execution camera', () => {
+    const p = plan(); p.shots[0].camera = null;
+    expect(() => buildScriptShotReferencePack(p)).toThrow('未指定机位');
+  });
+});
+
 describe('bounded shot execution', () => {
   it('rejects mixed legacy execution modes plan-wide', () => {
     const p = plan();

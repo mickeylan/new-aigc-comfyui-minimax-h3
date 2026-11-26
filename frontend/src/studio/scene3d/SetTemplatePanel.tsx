@@ -7,6 +7,7 @@ type BindingChoice = { kind: 'unbound' } | { kind: 'set-person'; objectId: strin
 
 const TIME_LABELS: Record<string, string> = { day: '日', dawn: '晨', dusk: '黄昏', night: '夜', unknown: '未标注时间' };
 const POSE_LABELS: Record<string, string> = { person: '站', seatedPerson: '坐', kneelingPerson: '跪' };
+const hasShotCamera = (shot: ScriptShot) => Boolean(shot.execution?.camera || shot.camera);
 const bindingValue = (choice: BindingChoice) => choice.kind === 'unbound' ? '' : choice.kind === 'placeholder' ? (choice.rig === 'skeletal' ? 'skeletal' : 'placeholder') : `set:${choice.objectId}`;
 type MotionForm = { targetId: string; startX: string; startZ: string; endX: string; endZ: string; duration: string; animationIndex: string };
 const motionForm = (motion?: ScriptShotMotion | null): MotionForm => ({
@@ -246,10 +247,11 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
       setShotAcknowledged(false); setError('');
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
-  function previewShot(camera: ScriptShotCamera | null) {
-    if (!camera) { setError('这一镜还没有记录机位，无法预览'); return; }
+  function previewShot(shot: ScriptShot) {
+    if (!hasShotCamera(shot)) { setError('这一镜还没有记录机位或执行机位轨道，无法预览'); return; }
     try {
-      if (!onPreviewShot) throw new Error('当前场景没有接入视口预览');
+      if (!engine || !shotPlan || !onPreviewShot) throw new Error('当前场景没有接入视口预览');
+      const camera = shot.execution?.camera ? engine.sampleScriptShotPlayback(shotPlan, shot.start).camera : shot.camera!;
       onPreviewShot(camera); setError('');
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
@@ -272,9 +274,9 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
     try { setShotPlan(engine.clearScriptShotMotion(shotPlan, shotId)); setShotAcknowledged(false); setError(''); }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
-  /** 计划含走位时必须先对当前场景对象校验；缺目标、隐藏、锁定或 clip 变化都在应用/播放前报出来。 */
+  /** 旧走位与执行角色共用真实对象校验；缺目标、隐藏、锁定或 clip 变化都在应用/播放/参考包前报出来。 */
   function verifyMotionTargets(plan: ScriptShotPlan): ScriptShotPlan {
-    if (!engine || !plan.shots.some(shot => shot.motion)) return plan;
+    if (!engine || !plan.shots.some(shot => shot.motion || shot.execution?.actors?.length)) return plan;
     if (!listMotionTargets) throw new Error('当前场景没有接入对象列表，无法校验走位目标');
     return engine.assertScriptShotMotionTargets(plan, listMotionTargets());
   }
@@ -295,7 +297,7 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
     if (!engine || !appliedPlan || disabled || pending || packPending) return;
     if (!packAcknowledged) { setError('请先核对逐镜机位、采样时刻与导出清单并勾选确认'); return; }
     try {
-      const ready = engine.assertScriptShotReferenceReady(appliedPlan);
+      const ready = verifyMotionTargets(engine.assertScriptShotReferenceReady(appliedPlan));
       if (scriptDraft) engine.assertScriptShotPlanSource(ready, scriptDraft);
       if (!onExportShotPack) throw new Error('当前场景没有接入视口，无法导出逐镜参考包');
       setError(''); setPackPending(true);
@@ -323,7 +325,7 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
       const checked = scriptDraft ? engine.assertScriptShotPlanSource(shotPlan, scriptDraft) : shotPlan;
       const verified = verifyMotionTargets(checked);
       onApplyShots(verified);
-      setShotNote(`已接入 ${verified.shots.length} 镜（${verified.shots.filter(shot => shot.motion).length} 镜含人工走位）；保存场景后随存档保留。未指定机位 ${verified.shots.filter(shot => !shot.camera).length} 镜。`);
+      setShotNote(`已接入 ${verified.shots.length} 镜（${verified.shots.filter(shot => shot.motion).length} 镜含人工走位）；保存场景后随存档保留。未指定机位 ${verified.shots.filter(shot => !hasShotCamera(shot)).length} 镜。`);
       setShotAcknowledged(false);
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
@@ -431,11 +433,11 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
       {(shotPlan || appliedPlan) && <div className="space-y-2 border-t border-zinc-700 pt-2" aria-label="镜头表">
         <h3>镜头表与台词时间轴</h3>
         {appliedPlan && appliedPlan !== shotPlan && <div className="space-y-1">
-          <p role="status">场景中已保存镜头表：{appliedPlan.shots.length} 镜 · {appliedPlan.shots[appliedPlan.shots.length - 1]!.end.toFixed(2)} 秒 · {appliedPlan.shots.filter(shot => !shot.camera).length} 镜未指定机位 · {appliedPlan.shots.filter(shot => shot.motion).length} 镜含人工走位（{appliedPlan.sceneId}）</p>
+          <p role="status">场景中已保存镜头表：{appliedPlan.shots.length} 镜 · {appliedPlan.shots[appliedPlan.shots.length - 1]!.end.toFixed(2)} 秒 · {appliedPlan.shots.filter(shot => !hasShotCamera(shot)).length} 镜未指定机位 · {appliedPlan.shots.filter(shot => shot.motion).length} 镜含人工走位（{appliedPlan.sceneId}）</p>
           <button type="button" disabled={disabled || pending} onClick={loadAppliedShots}>载入场景镜头表审阅</button>
         </div>}
         {appliedPlan && <div className="space-y-1 rounded border border-zinc-700 p-1" aria-label="连续逐镜播放">
-          <p className="text-zinc-400">连续逐镜播放：按已保存镜头表的时间轴切换人工记录的视口机位，并在下方显示本镜台词。缺任一镜机位就直接拒绝，不补造机位；已人工绑定的走位、骨骼片段或胶囊步态同步预览，不自动编排表演或生成视频。</p>
+          <p className="text-zinc-400">连续逐镜播放：按已保存镜头表的时间轴采样已确认的执行机位轨道或记录机位，并在下方显示本镜台词。缺任一镜机位就直接拒绝，不补造机位；已人工绑定的走位、骨骼片段或胶囊步态同步预览，不自动编排表演或生成视频。</p>
           <div className="flex flex-wrap gap-2">
             <button type="button" disabled={disabled || pending || !onPlayShots || Boolean(shotPlayback)} onClick={playAppliedShots}>连续逐镜播放</button>
             <button type="button" disabled={!shotPlayback || !onStopShots} onClick={onStopShots}>停止并还原视口</button>
@@ -443,7 +445,7 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
           {shotPlayback && <p role="status">正在播放第 {playingShot?.order ?? shotPlayback.index + 1} 镜 / 共 {shotPlayback.shots} 镜{playingLine ? ` · 当前台词：${playingLine}` : ''}</p>}
         </div>}
         {appliedPlan && <div className="space-y-1 rounded border border-zinc-700 p-1" aria-label="逐镜参考包">
-          <p className="text-zinc-400">逐镜参考包：按已保存镜头表的镜序，在每镜开始秒数用人工记录的机位分别渲染白模/法线/深度三张 PNG，连同 manifest.json 打成一个 zip 本地下载。缺任一镜机位或有镜头取图失败都拒绝整包，不补造机位、不导出半份；与逐镜视频共用时间轴，取样人工走位与骨姿，保留前镜走位终点；采样后视口和人物还原。这只是网格结构参考素材：包含泼溅或视频平面的场景暂不支持，会明确拒绝而非省略。清单记录导出时场景标识；导出途中场景变化则整包作废。不编码视频、不上传素材库、不写业务库。</p>
+          <p className="text-zinc-400">逐镜参考包：按已保存镜头表的镜序，在每镜开始秒数采样已确认的执行机位轨道（优先）或记录机位，分别渲染白模/法线/深度三张 PNG，连同 manifest.json 打成一个 zip 本地下载。缺任一镜机位或有镜头取图失败都拒绝整包，不补造机位、不导出半份；与逐镜视频共用时间轴，取样人工走位与骨姿，保留前镜走位终点；采样后视口和人物还原。这只是网格结构参考素材：包含泼溅或视频平面的场景暂不支持，会明确拒绝而非省略。清单记录导出时场景标识；导出途中场景变化则整包作废。不编码视频、不上传素材库、不写业务库。</p>
           <p role="note">预计 {appliedPlan.shots.length} 镜 × 3 张 = {appliedPlan.shots.length * 3} 张 PNG + manifest.json。导出期间视口会依次切到各镜机位，结束后回到当前取景。</p>
           <label className="flex gap-1">
             <input type="checkbox" aria-label="确认导出逐镜参考包" checked={packAcknowledged} disabled={disabled || pending || packPending} onChange={event => setPackAcknowledged(event.target.checked)} />
@@ -452,18 +454,18 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
           <button type="button" disabled={!packAcknowledged || disabled || pending || packPending || !onExportShotPack} onClick={() => { void exportShotPack(); }}>导出逐镜参考包 ZIP</button>
         </div>}
         {shotPlan && <div className="space-y-1">
-          <p role="status">共 {shotPlan.shots.length} 镜 · 总时长 {shotPlan.shots[shotPlan.shots.length - 1]!.end.toFixed(2)} 秒 · 未指定机位 {shotPlan.shots.filter(shot => !shot.camera).length} 镜 · 含人工走位 {shotPlan.shots.filter(shot => shot.motion).length} 镜{scriptDraft ? '' : ' · 本面板没有当前草稿可比对来源'}</p>
+          <p role="status">共 {shotPlan.shots.length} 镜 · 总时长 {shotPlan.shots[shotPlan.shots.length - 1]!.end.toFixed(2)} 秒 · 未指定机位 {shotPlan.shots.filter(shot => !hasShotCamera(shot)).length} 镜 · 含人工走位 {shotPlan.shots.filter(shot => shot.motion).length} 镜{scriptDraft ? '' : ' · 本面板没有当前草稿可比对来源'}</p>
           <p className="text-zinc-400">走位按人工选定的场景对象、起止 XZ 与时长做直线移动，Y 跟随启用的地形高差；越界或陡坡拒绝，不做障碍避让。可选已有骨骼 clip 只作局部预演；无 clip 的胶囊人按行进距离摆步态。不会按角色姓名猜对象，也不会按文件名猜动作。</p>
           {shotPlan.shots.map(shot => <div key={shot.id} className="space-y-1 border-t border-zinc-800 pt-1">
-            <p role="status">{shot.id} · 第 {shot.order} 镜 · {shot.start.toFixed(2)}–{shot.end.toFixed(2)} 秒 · {shot.camera ? '已记录机位' : '未指定机位'}</p>
+            <p role="status">{shot.id} · 第 {shot.order} 镜 · {shot.start.toFixed(2)}–{shot.end.toFixed(2)} 秒 · {shot.execution?.camera ? '执行机位轨道' : shot.camera ? '已记录机位' : '未指定机位'}</p>
             {shot.dialogue.map(line => <p key={`${shot.id}-${line.index}`} className="text-zinc-400">{line.speaker}：{line.line || '（无台词）'}（{line.start.toFixed(2)}–{line.end.toFixed(2)} 秒）</p>)}
             <div className="flex flex-wrap gap-2">
               <label>时长（秒）<input aria-label={`镜 ${shot.order} 时长`} type="number" step="0.1" min={0.2} value={Number((shot.end - shot.start).toFixed(2))} disabled={disabled || pending} onChange={event => { const value = event.target.valueAsNumber; if (Number.isFinite(value)) editShotDuration(shot.id, value); }} className="w-20 bg-zinc-800" /></label>
-              <button type="button" aria-label={`用当前视口机位 ${shot.id}`} disabled={disabled || pending || !onCaptureCamera} onClick={() => captureShotCamera(shot.id)}>用当前视口机位</button>
-              <button type="button" aria-label={`预览镜 ${shot.order}`} disabled={disabled || !shot.camera || !onPreviewShot} onClick={() => previewShot(shot.camera)}>预览</button>
-              <button type="button" aria-label={`清除机位 镜 ${shot.order}`} disabled={disabled || pending || !shot.camera} onClick={() => clearShotCamera(shot.id)}>清除机位</button>
+              <button type="button" aria-label={`用当前视口机位 ${shot.id}`} title={shot.execution?.camera ? '只更新记录机位；已确认的执行机位轨道仍优先' : undefined} disabled={disabled || pending || !onCaptureCamera} onClick={() => captureShotCamera(shot.id)}>用当前视口机位</button>
+              <button type="button" aria-label={`预览镜 ${shot.order}`} disabled={disabled || !hasShotCamera(shot) || !onPreviewShot} onClick={() => previewShot(shot)}>预览</button>
+              <button type="button" aria-label={`清除机位 镜 ${shot.order}`} disabled={disabled || pending || !shot.camera} onClick={() => clearShotCamera(shot.id)}>{shot.execution?.camera ? '清除记录机位（保留执行轨道）' : '清除机位'}</button>
             </div>
-            <p className="text-zinc-400">{shot.camera ? `机位 ${shot.camera.position.map(value => value.toFixed(2)).join(',')} → ${shot.camera.target.map(value => value.toFixed(2)).join(',')} · ${shot.camera.fov.toFixed(0)}°` : '未指定机位（不会自动补）'}</p>
+            <p className="text-zinc-400">{shot.execution?.camera ? `执行机位轨道 ${shot.execution.camera.keys.length} 键；预览取本镜开始值，优先于记录机位。本面板不编辑执行轨道。` : shot.camera ? `机位 ${shot.camera.position.map(value => value.toFixed(2)).join(',')} → ${shot.camera.target.map(value => value.toFixed(2)).join(',')} · ${shot.camera.fov.toFixed(0)}°` : '未指定机位（不会自动补）'}</p>
             <ShotMotionEditor shot={shot} targets={motionTargets} disabled={disabled} pending={pending}
               onSet={motion => bindShotMotion(shot.id, motion)} onClear={() => unbindShotMotion(shot.id)} />
           </div>)}
@@ -475,7 +477,7 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
           {shotNote && <p role="status" className="text-amber-400">{shotNote}</p>}
           <label className="flex gap-1">
             <input type="checkbox" aria-label="确认镜头表" checked={shotAcknowledged} disabled={disabled || pending} onChange={event => setShotAcknowledged(event.target.checked)} />
-            <span>已核对镜头顺序、台词时长与未指定机位的镜头；机位只来自我记录的视口</span>
+            <span>已核对镜头顺序、台词时长、记录机位或已确认执行轨道，以及未指定机位的镜头</span>
           </label>
           <button type="button" disabled={!shotAcknowledged || disabled || pending || !onApplyShots} onClick={applyShots}>确认应用镜头表</button>
           <button type="button" disabled={pending} onClick={() => { resetShots(); }}>丢弃镜头计划</button>

@@ -480,9 +480,10 @@ export type ScriptReferenceFile = { pass: ScriptReferencePass; name: string };
 export type ScriptReferenceShot = {
   shotId: string;
   order: number;
-  /** 固定采样时刻：取本镜开始秒数；镜内机位固定，所以这就是本镜取景。 */
+  /** 固定采样时刻：取本镜开始秒数，不代表镜内机位不移动。 */
   sampleSeconds: number;
-  /** 人工在视口记录的机位原值，不做取整或替换。 */
+  /** 与播放一致：执行机位轨道优先，否则使用已记录的视口机位。 */
+  cameraSource: 'viewport-recorded' | 'execution-track';
   camera: ScriptShotCamera;
   dialogue: ScriptTimedLine[];
   /** 包内文件名，顺序 = pass 顺序；文件名前缀 = 镜序，便于按序展开。 */
@@ -498,8 +499,8 @@ export type ScriptReferencePack = {
   sourceFingerprint: string;
   sceneFingerprint: string;
   exportedAt: string;
-  /** 固定为视口人工记录；这里不产生、也不推断机位。 */
-  cameraSource: 'viewport-recorded';
+  /** 按各镜实际采样来源汇总；旧静态机位保留 viewport-recorded。 */
+  cameraSource: ScriptReferenceShot['cameraSource'] | 'mixed';
   passes: ScriptReferencePass[];
   manifestFile: string;
   shots: ScriptReferenceShot[];
@@ -528,7 +529,7 @@ export function assertScriptShotReferenceReady(plan: ScriptShotPlan): ScriptShot
 }
 
 /**
- * 生成逐镜参考包清单：镜序、每镜固定采样秒数、人工机位、台词、文件名与来源指纹全部先确定。
+ * 生成逐镜参考包清单：镜序、每镜开始采样秒数、实际机位来源、台词、文件名与来源指纹全部先确定。
  * 不渲染、不读实时播放头、不改输入镜头表；任一步不成立就抛错，调用方不得产出部分包。
  */
 export function buildScriptShotReferencePack(
@@ -539,7 +540,7 @@ export function buildScriptShotReferencePack(
   const passes = normalizeScriptReferencePasses(options.passes);
   const now = options.now ?? new Date();
   if (!(now instanceof Date) || !Number.isFinite(now.getTime())) throw new Error('参考包时间戳无效');
-  const shots = ready.shots.map((shot, index) => {
+  const shots: ScriptReferenceShot[] = ready.shots.map((shot, index) => {
     // 用既有时间轴采样确认「镜序 ↔ 机位」一一对应；采样时刻就是本镜开始秒数。
     const sample = sampleScriptShotPlayback(ready, shot.start);
     if (sample.index !== index || sample.shot.id !== shot.id) throw new Error(`第 ${shot.order} 镜的采样与镜序不一致，已停止导出`);
@@ -547,6 +548,7 @@ export function buildScriptShotReferencePack(
       shotId: shot.id,
       order: shot.order,
       sampleSeconds: sample.seconds,
+      cameraSource: shot.execution?.camera ? 'execution-track' : 'viewport-recorded',
       camera: {
         position: [...sample.camera.position] as [number, number, number],
         target: [...sample.camera.target] as [number, number, number],
@@ -565,13 +567,15 @@ export function buildScriptShotReferencePack(
     sourceFingerprint: ready.sourceFingerprint,
     sceneFingerprint: ready.sceneFingerprint,
     exportedAt: now.toISOString(),
-    cameraSource: 'viewport-recorded',
+    cameraSource: shots.every(shot => shot.cameraSource === 'viewport-recorded') ? 'viewport-recorded'
+      : shots.every(shot => shot.cameraSource === 'execution-track') ? 'execution-track' : 'mixed',
     passes,
     manifestFile: SCRIPT_REFERENCE_MANIFEST_FILE,
     shots,
     notes: [
-      '参考包是已确认镜头表与人工记录机位的派生输出：不生成角色表演、不编码视频、不上传素材库、不写业务库。',
-      '采样时刻取每镜开始秒数；镜内机位固定，因此该时刻即本镜取景。采样后视口还原到导出前机位。',
+      '参考包是已确认镜头表中记录机位或执行机位轨道的派生输出：不生成角色表演、不编码视频、不上传素材库、不写业务库。',
+      '采样时刻取每镜开始秒数，只代表该时刻的取景，不能代替镜内完整运镜。采样后视口还原到导出前机位。',
+      ...(ready.shots.some(shot => shot.execution?.camera) ? ['执行机位轨道优先于同镜记录机位，按与播放及视频相同的时间轴取本镜开始值；逐镜 cameraSource 标明实际来源。'] : []),
       '白模/法线/深度均为本地渲染 PNG；深度为近黑远白的 8 位线性灰度，范围按模型包围盒计算。',
       '是否可把某张图当控制输入，必须在目标工作流实测，不能按普通参考图对待。',
       ...(ready.shots.some(shot => shot.motion) ? ['镜头表含人工走位；本函数仅构造清单，实际走位与骨姿的逐镜采样由导出入口负责并记录。'] : []),
