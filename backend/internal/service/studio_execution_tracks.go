@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -42,10 +43,35 @@ type studioExecutionActorTrack struct {
 	TargetName string                `json:"targetName"`
 	Beats      []studioExecutionBeat `json:"beats"`
 }
+type studioWristArm struct {
+	Shoulder string `json:"shoulder"`
+	Elbow    string `json:"elbow"`
+	Wrist    string `json:"wrist"`
+}
+type studioWristContactBinding struct {
+	Version      int            `json:"version"`
+	Arm          studioWristArm `json:"arm"`
+	TargetBone   string         `json:"targetBone"`
+	SourceAnchor []float64      `json:"sourceAnchor"`
+	TargetAnchor []float64      `json:"targetAnchor"`
+	Rotation     []float64      `json:"rotation"`
+	Pole         []float64      `json:"pole"`
+}
+type studioWristContact struct {
+	Version  int                       `json:"version"`
+	Policy   string                    `json:"policy"`
+	SourceID string                    `json:"sourceId"`
+	TargetID string                    `json:"targetId"`
+	Start    *float64                  `json:"start"`
+	End      *float64                  `json:"end"`
+	Binding  studioWristContactBinding `json:"binding"`
+	Normal   []float64                 `json:"normal"`
+}
 type studioExecutionTracks struct {
-	Version int                         `json:"version"`
-	Camera  *studioExecutionCameraTrack `json:"camera,omitempty"`
-	Actors  []studioExecutionActorTrack `json:"actors,omitempty"`
+	Version  int                         `json:"version"`
+	Camera   *studioExecutionCameraTrack `json:"camera,omitempty"`
+	Actors   []studioExecutionActorTrack `json:"actors,omitempty"`
+	Contacts []studioWristContact        `json:"contacts,omitempty"`
 }
 
 func studioMovingCamera(e *studioExecutionTracks) bool {
@@ -173,6 +199,90 @@ func validateStudioExecutionTracks(e *studioExecutionTracks, original models.Sho
 				if !covered[fmt.Sprintf("%d:%s", i, strings.TrimSpace(name))] {
 					return fmt.Errorf("动作时间轴的主体或区间尚未完整绑定")
 				}
+			}
+		}
+	}
+	return validateStudioWristContacts(e, original.Duration)
+}
+
+// Structural/resource checks only. Browser application/playback/export must also
+// solve the actual rig and prove every posed skin against the separating plane.
+// Version 1 is an ENTIRE-shot surface hold, not approach/release or a closed grip.
+func validateStudioWristContacts(e *studioExecutionTracks, duration float64) error {
+	if e.Contacts == nil {
+		return nil
+	}
+	if len(e.Contacts) == 0 || len(e.Contacts) > 16 {
+		return fmt.Errorf("手腕接触数量无效")
+	}
+	actors := map[string]studioExecutionActorTrack{}
+	for _, actor := range e.Actors {
+		actors[actor.TargetID] = actor
+	}
+	used := map[string]bool{}
+	normSquared := func(v []float64) float64 {
+		sum := 0.0
+		for _, n := range v {
+			sum += n * n
+		}
+		return sum
+	}
+	for _, c := range e.Contacts {
+		a, aok := actors[c.SourceID]
+		b, bok := actors[c.TargetID]
+		if c.Version != 1 || c.Policy != "whole-skin-separating-plane-v1" || !aok || !bok || c.SourceID == c.TargetID || used[c.SourceID] || used[c.TargetID] || c.Start == nil || c.End == nil || !previsFinite(*c.Start, 0, duration) || *c.Start != 0 || !previsFinite(*c.End, 0, duration+1e-6) || math.Abs(*c.End-duration) > 1e-6 || !studioExecutionVector(c.Normal, -1, 1) || math.Abs(normSquared(c.Normal)-1) > 1e-6 {
+			return fmt.Errorf("手腕接触版本、双方、整镜时间窗或法线无效")
+		}
+		used[c.SourceID], used[c.TargetID] = true, true
+		v := c.Binding
+		names := []string{v.Arm.Shoulder, v.Arm.Elbow, v.Arm.Wrist, v.TargetBone}
+		for _, name := range names {
+			if strings.TrimSpace(name) == "" || len(name) > 160 {
+				return fmt.Errorf("手腕接触必须指定实际骨名")
+			}
+		}
+		if v.Version != 1 || v.Arm.Shoulder == v.Arm.Elbow || v.Arm.Shoulder == v.Arm.Wrist || v.Arm.Elbow == v.Arm.Wrist || !studioExecutionVector(v.SourceAnchor, -.25, .25) || !studioExecutionVector(v.TargetAnchor, -.25, .25) || len(v.Rotation) != 4 || !studioExecutionVector(v.Pole, -1, 1) || normSquared(v.Pole) < 1e-12 {
+			return fmt.Errorf("手腕接触骨链、锚点或肘向无效")
+		}
+		for _, n := range v.Rotation {
+			if !previsFinite(n, -1, 1) {
+				return fmt.Errorf("手腕接触旋转无效")
+			}
+		}
+		if math.Abs(normSquared(v.Rotation)-1) > 1e-6 {
+			return fmt.Errorf("手腕接触旋转必须单位化")
+		}
+		// Exact minimum of piecewise linear relative roots, including held gaps.
+		// The global .7m floor remains strict; no contact field can turn it off.
+		times := []float64{0, duration}
+		for _, actor := range []studioExecutionActorTrack{a, b} {
+			for _, beat := range actor.Beats {
+				times = append(times, beat.Start, beat.End)
+			}
+		}
+		sort.Float64s(times)
+		position := func(actor studioExecutionActorTrack, seconds float64) studioExecutionPoint {
+			beat := actor.Beats[0]
+			for _, next := range actor.Beats {
+				if next.Start <= seconds {
+					beat = next
+				}
+			}
+			t := math.Max(0, math.Min(1, (seconds-beat.Start)/(beat.End-beat.Start)))
+			return studioExecutionPoint{X: beat.From.X + (beat.To.X-beat.From.X)*t, Z: beat.From.Z + (beat.To.Z-beat.From.Z)*t}
+		}
+		for i := 1; i < len(times); i++ {
+			ap, bp := position(a, times[i-1]), position(b, times[i-1])
+			aq, bq := position(a, times[i]), position(b, times[i])
+			x, z := ap.X-bp.X, ap.Z-bp.Z
+			dx, dz := aq.X-bq.X-x, aq.Z-bq.Z-z
+			t := 0.0
+			if denom := dx*dx + dz*dz; denom > 0 {
+				t = math.Max(0, math.Min(1, -(x*dx+z*dz)/denom))
+			}
+			floor := float64(.7)
+			if (x+dx*t)*(x+dx*t)+(z+dz*t)*(z+dz*t) <= floor*floor {
+				return fmt.Errorf("手腕接触仍须通过严格0.7米角色根间距")
 			}
 		}
 	}

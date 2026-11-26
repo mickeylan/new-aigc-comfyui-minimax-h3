@@ -1,8 +1,12 @@
 import type { ScriptShotCamera, ScriptShotMotionAnimation } from './scriptShotPlan';
+import { validateWristContactBinding, type WristContactBinding } from './characterMotion';
 
 export type ExecutionBeat = { start: number; end: number; from: { x: number; z: number }; to: { x: number; z: number }; yaw: number; animation: ScriptShotMotionAnimation; sourceIndex?: number };
 export type ExecutionActor = { targetId: string; targetName: string; beats: ExecutionBeat[] };
-export type ShotExecution = { version: 1; camera?: { keys: (ScriptShotCamera & { at: number })[] }; actors?: ExecutionActor[] };
+/** First contact version is a held wrist surface contact for the ENTIRE shot.
+ * Approach/release, closed fingers and balance recovery are not implied. */
+export type ExecutionWristContact = { version: 1; policy: 'whole-skin-separating-plane-v1'; sourceId: string; targetId: string; start: number; end: number; binding: WristContactBinding; normal: [number, number, number] };
+export type ShotExecution = { version: 1; camera?: { keys: (ScriptShotCamera & { at: number })[] }; actors?: ExecutionActor[]; contacts?: ExecutionWristContact[] };
 // Same 1e-6-second boundary convention as ScriptShotPlan; accumulated cuts are not exact decimals.
 const TIME_TOLERANCE = 1e-6;
 const fail = (): never => { throw Error('镜内执行配置无效（版本、区间、资源或坐标超出支持范围）'); };
@@ -31,7 +35,7 @@ function separation(a: number[], b: number[]) {
   return a.reduce((n, v, i) => n + (v + delta[i] * t) ** 2, 0);
 }
 export function validateShotExecution(value: unknown, duration: number, clearance = .7): ShotExecution {
-  const e = object(value, ['version', 'camera', 'actors']);
+  const e = object(value, ['version', 'camera', 'actors', 'contacts']);
   if (e.version !== 1 || !Number.isFinite(duration) || duration <= 0) fail();
   const result: ShotExecution = { version: 1 };
   if (e.camera !== undefined) {
@@ -72,16 +76,33 @@ export function validateShotExecution(value: unknown, duration: number, clearanc
       }
       return { targetId, targetName, beats };
     });
+    if (e.contacts !== undefined) {
+      if (!Array.isArray(e.contacts) || !e.contacts.length || e.contacts.length > 16) fail();
+      const participants = new Set<string>();
+      result.contacts = e.contacts.map((value: unknown) => {
+        const c = object(value, ['version', 'policy', 'sourceId', 'targetId', 'start', 'end', 'binding', 'normal']);
+        const sourceId = text(c.sourceId), targetId = text(c.targetId), normal = vector(c.normal);
+        const start = finite(c.start, 0, duration), end = finite(c.end, 0, duration + TIME_TOLERANCE);
+        if (c.version !== 1 || c.policy !== 'whole-skin-separating-plane-v1' || sourceId === targetId || !ids.has(sourceId) || !ids.has(targetId) || participants.has(sourceId) || participants.has(targetId) || start !== 0 || Math.abs(end - duration) > TIME_TOLERANCE || Math.abs(normal.reduce((s, n) => s + n * n, 0) - 1) > 1e-6) fail();
+        participants.add(sourceId); participants.add(targetId);
+        return { version: 1, policy: c.policy, sourceId, targetId, start, end, binding: validateWristContactBinding(c.binding), normal };
+      });
+    }
     // Piecewise-linear relative motion: include every beat boundary and held gap.
     const times = [...new Set([0, duration, ...result.actors.flatMap(a => a.beats.flatMap(b => [b.start, b.end]))])].sort((a, b) => a - b);
     for (let k = 1; k < times.length; k++) {
       const a = sampleExecutionActors(result, times[k - 1]), b = sampleExecutionActors(result, times[k]);
       for (let i = 0; i < a.length; i++) for (let j = i + 1; j < a.length; j++) {
-        if (separation([a[i].position.x - a[j].position.x, a[i].position.z - a[j].position.z], [b[i].position.x - b[j].position.x, b[i].position.z - b[j].position.z]) <= Math.max(.7, clearance) ** 2) throw Error('镜内执行角色间距不足，无法证明安全');
+        const distanceSquared = separation([a[i].position.x - a[j].position.x, a[i].position.z - a[j].position.z], [b[i].position.x - b[j].position.x, b[i].position.z - b[j].position.z]);
+        const posedProofRequired = result.contacts?.some(c => [c.sourceId, c.targetId].includes(a[i].targetId) && [c.sourceId, c.targetId].includes(a[j].targetId));
+        // The .7m floor NEVER changes. A declared pair can defer only the extra
+        // coarse editing-envelope clearance to a mandatory whole-skin pose proof
+        // in the shared sampler. This validator alone is NOT geometric approval.
+        if (distanceSquared <= .7 ** 2 || (!posedProofRequired && distanceSquared <= Math.max(.7, clearance) ** 2)) throw Error('镜内执行角色间距不足，无法证明安全');
       }
     }
   }
-  if (!result.camera && !result.actors) fail();
+  if ((!result.camera && !result.actors) || (e.contacts !== undefined && !result.contacts)) fail();
   return result;
 }
 export function sampleExecutionCamera(execution: ShotExecution | undefined, seconds: number): ScriptShotCamera | null {

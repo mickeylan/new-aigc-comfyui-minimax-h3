@@ -1,7 +1,8 @@
 import type { Object3D } from 'three';
 import { snapshotDirectorSource, type DirectorSourceSnapshot } from './directorSource';
 import { prepareStudioExecution, type StudioExecutionObject } from './studioExecutionAdapter';
-import type { ScriptShotPlan } from './scriptShotPlan';
+import { validateScriptShotPlan, type ScriptShotPlan } from './scriptShotPlan';
+import { validateSceneRequirements } from './sceneRequirements';
 import type { StudioExecutionContext } from './studioExecutionContext';
 import { disposeObject } from './toonflow/sceneResources';
 
@@ -21,11 +22,14 @@ export type StudioExecutionApplyPort = {
  * recheck authoritative source + actual resources, and reject edits at every async boundary.
  * Does not run media tasks, save a file or alter backend business data.
  */
-export async function applyStudioExecution(value: unknown, reviewed: DirectorSourceSnapshot, port: StudioExecutionApplyPort): Promise<ScriptShotPlan> {
+export async function applyStudioExecution(value: unknown, reviewed: DirectorSourceSnapshot, port: StudioExecutionApplyPort, requirements?: unknown): Promise<ScriptShotPlan> {
   const baseline = port.fingerprint();
   const projectID = reviewed.scene.project_id; const sceneID = reviewed.scene.id;
   const reviewedCopy = structuredClone(reviewed);
   const planValue = structuredClone(value);
+  const review = requirements === undefined ? undefined : validateSceneRequirements(structuredClone(requirements));
+  if (review && (review.sourceRevision !== reviewedCopy.revision || review.sourceContent !== reviewedCopy.scene.content)) throw Error('建景要求来源已变化，请重新审阅');
+  if (review?.unresolved.length) throw Error(`建景要求仍未解决：${review.unresolved.join('；')}`);
   const check = () => { if (!port.isCurrent() || port.fingerprint() !== baseline) throw Error('应用期间来源选择或编辑场景已变化，未应用'); };
   check();
   const authoritative = structuredClone(await port.readSource()); check();
@@ -40,6 +44,14 @@ export async function applyStudioExecution(value: unknown, reviewed: DirectorSou
     ? { dialogues: authoritative.source.dialogues, dialogue_timeline: authoritative.source.dialogue_timeline } : undefined;
   const prepared = await prepareStudioExecution(planValue, source, authoritative.source_hash, context, speech); check();
   if (!prepared.shotPlan || prepared.blockers.length) throw Error(`执行草稿存在阻塞，未应用：${prepared.blockers.join('；')}`);
+  if (review) {
+    const available = new Set([...context.objects.map(o => o.id), ...prepared.objects.map(o => o.id)]);
+    for (const entity of review.entities) for (const id of entity.objectIds) if (!available.has(id)) throw Error(`建景要求缺少对象：${entity.label}（${id}）`);
+    // The authoritative Scene can contain different computed metadata. Only after
+    // source content and every reviewed shot have matched, bind to its revision.
+    prepared.shotPlan.sceneRequirements = { ...review, sourceRevision: source.revision };
+    validateScriptShotPlan(prepared.shotPlan);
+  }
   const [{ catalogAssets }, { materializeSetObject }] = await Promise.all([import('./toonflow/assetCatalog'), import('./toonflowSets')]); check();
   const catalog = new Map(catalogAssets.map(asset => [`catalog:${asset.id}`, asset]));
   const existing = new Set(context.objects.map(object => object.id));

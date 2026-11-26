@@ -4,6 +4,7 @@ import { validateCharacterMotionSettings, type CharacterMotionSettings } from '.
 import type { ShotNavigation } from './shotNavigation';
 import { validateShotExecution, sampleExecutionCamera, sampleExecutionActors, type ShotExecution } from './shotExecution';
 import type { ScriptSceneDraft } from './toonflowSets';
+import { validateSceneRequirements, type SceneRequirements } from './sceneRequirements';
 
 // ---------------------------------------------------------------------------
 // 剧本镜头与台词时间轴：把已审阅的场次草稿拆成可复核、可改时长的镜头表。
@@ -70,6 +71,8 @@ export type ScriptShotPlan = {
   action: string[];
   shots: ScriptShot[];
   diagnostics: string[];
+  /** Optional authored source/object review. Absence is unreviewed, never implicit approval. */
+  sceneRequirements?: SceneRequirements;
 };
 
 const shotTime = (value: number) => Math.round(value * 100) / 100;
@@ -135,6 +138,10 @@ export function validateScriptShotPlan(value: unknown): ScriptShotPlan {
     if (shot.motion !== undefined && shot.motion !== null) validateScriptShotMotion(shot.motion, end - start, `${label}的走位`);
     if (shot.execution !== undefined) validateShotExecution(shot.execution, end - start);
   });
+  if (plan.sceneRequirements !== undefined) {
+    const requirements = validateSceneRequirements(plan.sceneRequirements);
+    if (requirements.sourceRevision !== plan.sceneFingerprint) throw Error('建景要求来源与镜头表不一致');
+  }
   const executionIds = new Set(plan.shots.flatMap(shot => (shot.execution?.actors ?? []).map(actor => actor.targetId)));
   if (executionIds.size > 32) throw Error('整份执行计划超过32个角色，请拆分场次');
   if (executionIds.size && plan.shots.some(shot => shot.motion)) throw Error('Execution actors cannot mix with legacy motion anywhere in a plan');

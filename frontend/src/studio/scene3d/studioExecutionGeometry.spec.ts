@@ -3,6 +3,8 @@ import * as THREE from 'three';
 import { assertScriptShotApplicationSafe, createScriptShotSampler } from './scriptShotSampler';
 import { validateScriptShotPlan, type ScriptShotPlan } from './scriptShotPlan';
 import { createEnvironmentTerrain, defaultSceneEnvironment } from './ground-path';
+import { createRiggedPerson } from './toonflow/riggedPerson';
+import { serializeBonePose } from './posing/bonePose';
 
 function fixture() {
   const entries = [-3, 3].map((x, i) => {
@@ -18,6 +20,20 @@ function fixture() {
   const snapshot = () => entries.map(e => ({ position: e.object.position.toArray(), quaternion: e.object.quaternion.toArray(), scale: e.object.scale.toArray(), parent: e.object.parent, bone: e.object.getObjectByName('joint')!.position.toArray() }));
   return { entries, plan, actor, updates, snapshot };
 }
+
+it('keeps an actor facing pi upright after baseline quaternion restore and repeated absolute seeks', () => {
+  const f = fixture(), root = f.entries[0].object;
+  root.rotation.y = Math.PI;
+  f.plan.shots[0].execution!.actors![0].beats[0].yaw = Math.PI;
+  const baseline = root.quaternion.clone();
+  const sampler = createScriptShotSampler(f.plan, { camera: new THREE.PerspectiveCamera(), controls: { target: new THREE.Vector3(), enabled: true, update() {} }, entries: () => f.entries, environment: null });
+  try { for (const t of [0, 1, .2, 2, 0]) {
+    sampler.sampleAt(t);
+    expect(new THREE.Vector3(0, 1, 0).applyQuaternion(root.quaternion).y).toBeCloseTo(1, 8);
+    expect(new THREE.Vector3(0, 0, 1).applyQuaternion(root.quaternion).z).toBeCloseTo(-1, 8);
+  } } finally { sampler.stop(); }
+  expect(root.quaternion.angleTo(baseline)).toBeLessThan(1e-7);
+});
 
 it('rejects real-box clearance before application although the 0.7m structural floor passes', () => {
   const f = fixture(), baseline = f.snapshot();
@@ -62,4 +78,85 @@ it('keeps static held/beat terrain-water checks, with no mutation on rejection',
   terrain.waterLevels = terrain.heights.map(() => 1);
   expect(() => assertScriptShotApplicationSafe(f.plan, f.entries, { ...defaultSceneEnvironment(), terrain })).toThrow('水域');
   expect(f.snapshot()).toEqual(baseline);
+});
+
+function contactFixture() {
+  const source = createRiggedPerson('#eee'), target = createRiggedPerson('#ccc'); target.position.x = .85;
+  const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -.2).toArray();
+  source.animations = [new THREE.AnimationClip('hold', .2, [new THREE.QuaternionKeyframeTrack('chest.quaternion', [0, .2], [0, 0, 0, 1, 0, 0, 0, 1])])];
+  target.animations = [new THREE.AnimationClip('offer', .2, [new THREE.QuaternionKeyframeTrack('rightUpperArm.quaternion', [0, .2], [...q, ...q])])];
+  const entries = [{ id: 'a', name: '抓取者', object: source }, { id: 'b', name: '被抓者', object: target }];
+  const plan: ScriptShotPlan = { version: 1, sceneId: 's', heading: '', location: '', sourceFingerprint: 's', sceneFingerprint: 's', action: [], diagnostics: [], shots: [{ id: 'one', order: 1, start: 0, end: .2, camera: { position: [0, 3, 8], target: [0, 0, 0], fov: 45 }, dialogue: [], execution: { version: 1,
+    actors: entries.map((e, i) => ({ targetId: e.id, targetName: e.name, beats: [{ start: 0, end: .2, from: { x: i * .85, z: 0 }, to: { x: i * .86, z: 0 }, yaw: 0, animation: { index: 0, name: e.object.animations[0].name, duration: .2 } }] })),
+    contacts: [{ version: 1, policy: 'whole-skin-separating-plane-v1', sourceId: 'a', targetId: 'b', start: 0, end: .2, normal: [-1, 0, 0],
+      binding: { version: 1, arm: { shoulder: 'leftUpperArm', elbow: 'leftForeArm', wrist: 'leftHand' }, targetBone: 'rightHand', sourceAnchor: [.066, -.02, .0047], targetAnchor: [-.066, -.02, .0047], rotation: [0, 0, 0, 1], pole: [0, 0, 1] } }] } }] };
+  const snapshot = () => entries.map(e => ({ p: e.object.position.toArray(), q: e.object.quaternion.toArray(), pose: serializeBonePose(e.object) }));
+  const camera = new THREE.PerspectiveCamera(), controls = { target: new THREE.Vector3(), enabled: true, enableDamping: true, update() {} };
+  const sampler = () => createScriptShotSampler(plan, { camera, controls, entries: () => entries, environment: null });
+  const error = () => source.getObjectByName('leftHand')!.localToWorld(new THREE.Vector3(.066, -.02, .0047)).distanceTo(target.getObjectByName('rightHand')!.localToWorld(new THREE.Vector3(-.066, -.02, .0047)));
+  return { plan, entries, source, target, snapshot, camera, controls, sampler, error };
+}
+
+it('runs actual paired wrist IK after BOTH base clips in the shared viewport/reference/video sampler', () => {
+  const f = contactFixture(), baseline = f.snapshot(), sampler = f.sampler();
+  expect(f.snapshot()).toEqual(baseline); // preflight borrows no persistent poses
+  expect(sampler.walkProof.contact?.policy).toBe('whole-skin-separating-plane-v1');
+  expect(sampler.walkProof.contact!.samples).toBeGreaterThanOrEqual(7);
+  expect(sampler.walkProof.contact!.maxSampleIntervalSeconds).toBeLessThanOrEqual(1 / 60 + 1e-9);
+  sampler.sampleAt(0); const initialWrist = f.target.getObjectByName('rightHand')!.getWorldPosition(new THREE.Vector3());
+  sampler.sampleAt(.2); expect(f.target.getObjectByName('rightHand')!.getWorldPosition(new THREE.Vector3()).distanceTo(initialWrist)).toBeGreaterThan(.008);
+  for (const t of [.2, 0, .03, .08, .03]) { sampler.sampleAt(t); expect(f.error()).toBeLessThan(1e-5); }
+  const pose = f.snapshot(); sampler.stop(); expect(f.snapshot()).toEqual(baseline); expect(f.controls.enabled).toBe(true); expect(f.controls.enableDamping).toBe(true);
+  f.plan.shots[0].execution!.actors!.reverse(); const reversed = f.sampler(); reversed.sampleAt(.03);
+  expect(f.snapshot()).toEqual(pose); reversed.stop();
+});
+
+it('preflights real skin contact before application and rejects an arm that merely points nearby', () => {
+  const f = contactFixture(), baseline = f.snapshot();
+  expect(assertScriptShotApplicationSafe(f.plan, f.entries, null).contact?.samples).toBeGreaterThan(0);
+  expect(f.snapshot()).toEqual(baseline);
+  f.plan.shots[0].execution!.contacts![0].binding.sourceAnchor = [.09, -.02, .0047];
+  f.plan.shots[0].execution!.contacts![0].binding.targetAnchor = [-.09, -.02, .0047];
+  expect(() => assertScriptShotApplicationSafe(f.plan, f.entries, null)).toThrow('表面');
+  expect(f.snapshot()).toEqual(baseline); expect(f.controls.enabled).toBe(true);
+});
+
+it('rejects unreachable or clothing-intersecting contact plans atomically without granting pair immunity', () => {
+  for (const mode of ['unreachable', 'clothes']) {
+    const f = contactFixture(), baseline = f.snapshot();
+    if (mode === 'unreachable') { const beat = f.plan.shots[0].execution!.actors![1].beats[0]; beat.from.x = beat.to.x = 5; }
+    else f.source.add(new THREE.Mesh(new THREE.BoxGeometry(2, 1, 1), new THREE.MeshStandardMaterial()));
+    expect(() => f.sampler()).toThrow(mode === 'unreachable' ? '不可达' : '分离平面');
+    expect(f.snapshot()).toEqual(baseline); expect(f.controls.enabled).toBe(true); expect(f.controls.enableDamping).toBe(true);
+  }
+});
+
+it('revalidates live skin on every output frame and restores actors/camera/controls after failure', () => {
+  const f = contactFixture(), baseline = f.snapshot(), cameraBefore = f.camera.position.toArray(), sampler = f.sampler();
+  sampler.sampleAt(.03); f.source.add(new THREE.Mesh(new THREE.BoxGeometry(2, 1, 1), new THREE.MeshStandardMaterial()));
+  expect(() => sampler.sampleAt(.05)).toThrow('分离平面');
+  expect(f.snapshot()).toEqual(baseline); expect(f.camera.position.toArray()).toEqual(cameraBefore); expect(f.controls.enabled).toBe(true);
+  sampler.stop();
+});
+
+it('rejects a turning wrist when this conservative plane intersects a foot rather than widening its policy', () => {
+  const f = contactFixture(), baseline = f.snapshot();
+  const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -.22).toArray();
+  f.target.animations[0].tracks[0].values.set(q, 4);
+  const beat = f.plan.shots[0].execution!.actors![1].beats[0]; beat.to.x = beat.from.x;
+  expect(() => f.sampler()).toThrow('分离平面'); expect(f.snapshot()).toEqual(baseline);
+});
+
+it('rejects base clips that change arm length instead of using the stretched rig to satisfy contact', () => {
+  const f = contactFixture(), bone = f.source.getObjectByName('leftForeArm')!, p = bone.position.clone().multiplyScalar(1.01).toArray();
+  f.source.animations[0].tracks.push(new THREE.VectorKeyframeTrack('leftForeArm.position', [0, .2], [...p, ...p]));
+  const baseline = f.snapshot(); expect(() => f.sampler()).toThrow('骨长'); expect(f.snapshot()).toEqual(baseline);
+});
+
+it('does not exempt a third actor/environment object moved into a live contact pose', () => {
+  const f = contactFixture(), wall = new THREE.Mesh(new THREE.BoxGeometry(.2, .4, .4), new THREE.MeshStandardMaterial()); wall.position.set(10, 1, 0);
+  f.entries.push({ id: 'wall', name: '环境阻挡', object: wall as any }); const baseline = f.snapshot(), sampler = f.sampler();
+  sampler.sampleAt(.03); wall.position.x = .3;
+  expect(() => sampler.sampleAt(.05)).toThrow('环境阻挡');
+  expect(f.snapshot().slice(0, 2)).toEqual(baseline.slice(0, 2)); expect(wall.position.x).toBe(.3); expect(f.controls.enabled).toBe(true); sampler.stop();
 });

@@ -4070,7 +4070,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         renderFrame: async (sample, seconds, timing) => {
           assertSource();
           weatherEffectsRef.current?.sampleAt(seconds);
-          const shot = mode === 'viewport' ? await captureViewportAt(sample.camera) : await captureReference(mode);
+          const shot = mode === 'viewport' ? await captureViewportAt(sample.camera) : await captureReference(mode === 'white' ? 'clay' : mode);
           assertSource(); if (!shot) throw new Error('逐镜视频未取到完整画面');
           if (shot.width !== outputSize.width || shot.height !== outputSize.height) throw new Error('逐镜画面尺寸与视频输出不一致，视频已放弃');
           const bitmap = await createImageBitmap(shot.blob);
@@ -5085,7 +5085,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               <SetTemplatePanel disabled={Boolean(busy)} captureExecutionContext={async () => {
                 const { captureStudioExecutionContext } = await import('./studioExecutionContext');
                 return captureStudioExecutionContext(objectsRef.current);
-              }} onApplyExecution={async (plan, reviewed, isCurrent) => {
+              }} onApplyExecution={async (plan, reviewed, isCurrent, requirements) => {
                 if (executionUnavailableRef.current) throw Error('场景忙碌或正在播放，不能应用');
                 const scene = sceneRef.current; const epoch = sceneEpochRef.current;
                 if (!scene) throw Error('场景尚未就绪');
@@ -5108,7 +5108,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                       return { entry, value, name: entry.name, objectName: entry.object.name, position: entry.object.position.clone(), rotation: entry.object.rotation.clone(), scale: entry.object.scale.clone() };
                     });
                     if (batch.additions.some(entry => before.some(item => item.id === entry.id))) throw Error('新增对象ID冲突');
-                    if (batch.shotPlan.shots.some(shot => shot.execution?.actors?.length)) {
+                    if (batch.shotPlan.sceneRequirements || batch.shotPlan.shots.some(shot => shot.execution?.actors?.length)) {
                       // Prove the proposed scene, including staged additions, before history or publication.
                       assertScriptShotApplicationSafe(batch.shotPlan, [...before, ...batch.additions], environmentRef.current, batch.updates);
                     }
@@ -5124,9 +5124,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                       throw cause;
                     }
                     syncObjects(); setScriptShots(batch.shotPlan);
-                    setStatus(`已确认应用导演执行草稿：追加${batch.additions.length}对象、更新${updates.length}对象、${batch.shotPlan.shots.length}镜；请播放审阅并保存，未生成媒体`);
+                    setStatus(`已确认应用导演执行草稿：追加${batch.additions.length}对象、更新${updates.length}对象、${batch.shotPlan.shots.length}镜；${batch.shotPlan.sceneRequirements ? '已检查声明的建景几何要求，不代表全文完整还原' : '未附原文建景要求，场景忠实度未核验'}；请播放审阅并保存，未生成媒体`);
                   },
-                });
+                }, requirements);
               }} onApply={(draft, entries, x, z) => {
                 const scene = sceneRef.current;
                 if (!scene) throw new Error('场景尚未就绪，请重试');
@@ -5165,7 +5165,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
               }} onApplyShots={(plan) => {
                 // 换计划前还原旧播放，避免界面台词与仍在播放的旧机位错配。
                 stopAnimation();
-                if (plan.shots.some(shot => shot.execution?.actors?.length)) assertScriptShotApplicationSafe(plan, objectsRef.current, environmentRef.current);
+                if (plan.sceneRequirements || plan.shots.some(shot => shot.execution?.actors?.length)) assertScriptShotApplicationSafe(plan, objectsRef.current, environmentRef.current);
                 // 只把已确认且几何预检通过的镜头表接入场景状态；不改对象、不触发生成。
                 setScriptShots(plan);
                 setStatus(`已接入镜头表：${plan.shots.length} 镜 · ${plan.shots[plan.shots.length - 1]!.end.toFixed(2)} 秒（未指定机位 ${plan.shots.filter(shot => !shot.camera).length} 镜），保存场景后随存档保留`);

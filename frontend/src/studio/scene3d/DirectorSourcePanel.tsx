@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { projectChoices, scenePromptChoices, type ProjectChoice } from './motion-prompt';
 import { snapshotDirectorSource, type DirectorSourceSnapshot } from './directorSource';
 import type { StudioExecutionContext } from './studioExecutionContext';
+import { validateSceneRequirements, type SceneRequirements } from './sceneRequirements';
 
 type SceneChoice = { id: number; label: string };
 async function readJSON(url: string, signal: AbortSignal): Promise<any> {
@@ -18,7 +19,7 @@ function findScene(project: any, id: number) {
 }
 
 /** Read/plan first; editor application is a separate, explicitly confirmed transaction. */
-export type ApplyDirectorExecution = (plan: unknown, source: DirectorSourceSnapshot, isCurrent: () => boolean) => Promise<void>;
+export type ApplyDirectorExecution = (plan: unknown, source: DirectorSourceSnapshot, isCurrent: () => boolean, requirements?: SceneRequirements) => Promise<void>;
 export default function DirectorSourcePanel({ disabled, captureExecutionContext, onApplyExecution }: { disabled: boolean; captureExecutionContext?: () => Promise<StudioExecutionContext>; onApplyExecution?: ApplyDirectorExecution }) {
   const [projects, setProjects] = useState<ProjectChoice[]>([]);
   const [scenes, setScenes] = useState<SceneChoice[]>([]);
@@ -30,9 +31,20 @@ export default function DirectorSourcePanel({ disabled, captureExecutionContext,
   const [execution, setExecution] = useState<any>(null);
   const [acknowledged, setAcknowledged] = useState(false);
   const [executionApplied, setExecutionApplied] = useState(false);
+  const [requirementsJSON, setRequirementsJSON] = useState('');
+  const requirementState = useMemo((): { review?: SceneRequirements; error?: string } => {
+    if (!requirementsJSON.trim()) return {};
+    try {
+      if (requirementsJSON.length > 2 * 1024 * 1024) throw Error('建景要求超过2MiB，请拆分审校');
+      const review = validateSceneRequirements(JSON.parse(requirementsJSON));
+      if (!snapshot || review.sourceRevision !== snapshot.revision || review.sourceContent !== snapshot.scene.content) throw Error('建景要求来源已变化或原文不一致，请重新审校');
+      if (review.unresolved.length) throw Error(`建景要求仍未解决：${review.unresolved.join('；')}`);
+      return { review };
+    } catch (cause) { return { error: `建景要求无效：${cause instanceof Error ? cause.message : String(cause)}` }; }
+  }, [requirementsJSON, snapshot]);
   const loading = useRef<AbortController | null>(null);
   const generation = useRef(0);
-  const invalidate = () => { generation.current++; loading.current?.abort(); setSnapshot(null); setExecution(null); setAcknowledged(false); setExecutionApplied(false); setError(''); setPending(false); };
+  const invalidate = () => { generation.current++; loading.current?.abort(); setSnapshot(null); setExecution(null); setAcknowledged(false); setExecutionApplied(false); setRequirementsJSON(''); setError(''); setPending(false); };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -78,7 +90,7 @@ export default function DirectorSourcePanel({ disabled, captureExecutionContext,
     loading.current?.abort();
     const controller = new AbortController(); loading.current = controller;
     const current = () => !controller.signal.aborted && generation.current === ticket;
-    setPending(true); setError(''); setExecution(null); setAcknowledged(false); setExecutionApplied(false);
+    setPending(true); setError(''); setExecution(null); setAcknowledged(false); setExecutionApplied(false); setRequirementsJSON('');
     try {
       const base = `/api/projects/${project}/scenes/${scene}/studio-execution`;
       const authoritative = await readJSON(`${base}/source`, controller.signal);
@@ -104,12 +116,13 @@ export default function DirectorSourcePanel({ disabled, captureExecutionContext,
   }
 
   async function applyExecution() {
-    if (!execution?.plan || !snapshot || !onApplyExecution || !acknowledged || disabled || pending || executionApplied) return;
+    if (!execution?.plan || !snapshot || !onApplyExecution || !acknowledged || disabled || pending || executionApplied || requirementState.error) return;
     const ticket = ++generation.current;
     const current = () => generation.current === ticket;
     setPending(true); setError(''); setAcknowledged(false);
     try {
-      await onApplyExecution(execution.plan, snapshot, current);
+      if (requirementState.review) await onApplyExecution(execution.plan, snapshot, current, requirementState.review);
+      else await onApplyExecution(execution.plan, snapshot, current);
       if (current()) setExecutionApplied(true);
     } catch (cause) { if (current()) setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { if (current()) setPending(false); }
@@ -143,8 +156,22 @@ export default function DirectorSourcePanel({ disabled, captureExecutionContext,
         <p role="status">{executionApplied ? '已确认应用到编辑场景 · 未自动播放、保存或导出' : '已生成待审执行草稿 · 未应用到场景 · 尚未绑定播放'}</p>
         <pre className="whitespace-pre-wrap break-all">{JSON.stringify(execution, null, 2)}</pre>
         {onApplyExecution && !executionApplied && <>
+          <details aria-label="人工建景审校入口">
+            <summary>人工建景要求（高级 JSON，可选）</summary>
+            <p>这不是小说自动抽取。逐项填写物件数量和草稿中的对象ID；fact 使用上方原文的 UTF-16 [start,end) 精确引用，assumption 必须写 reason。near 的 maxMetres、opposite-sides 的 x/z 轴均为人工布景选择，须写 stagingNote；未解决项不得清空冒充完成。</p>
+            <button type="button" disabled={disabled || pending} onClick={() => {
+              if (requirementsJSON.trim()) return;
+              setRequirementsJSON(JSON.stringify({ version: 1, sourceRevision: snapshot.revision, sourceContent: snapshot.scene.content,
+                entities: [{ id: 'entity-1', label: '待填写物件', count: 1, objectIds: ['待填写对象ID'], basis: { kind: 'assumption', reason: '待填写布景推定理由；有原文证据则改为fact及start/end/quote' } }], relations: [], unresolved: ['请逐项核对原文、物件及空间关系，完成前保留此项'] }, null, 2));
+              setAcknowledged(false);
+            }}>初始化建景审校模板（未完成）</button>
+            <label>完整建景要求 JSON<textarea aria-label="人工建景要求 JSON" value={requirementsJSON} disabled={disabled || pending} rows={14} className="w-full bg-zinc-800 font-mono" onChange={event => { setRequirementsJSON(event.target.value); setAcknowledged(false); }} /></label>
+            <p>事实依据格式：{JSON.stringify({ kind: 'fact', start: 0, end: snapshot.scene.content.length, quote: snapshot.scene.content })}。原文匹配只证明引用存在，不证明物件含义或全文无遗漏。</p>
+          </details>
+          {requirementState.error && <p role="alert" className="whitespace-pre-wrap break-all">{requirementState.error}</p>}
+          <p role="status">{requirementState.review ? `已声明 ${requirementState.review.entities.length} 项物件、${requirementState.review.relations.length} 项关系；应用时检查真实几何，不代表全文完整还原` : '未附有效原文建景要求，场景忠实度未核验'}</p>
           <label><input type="checkbox" aria-label="确认应用导演执行草稿" checked={acknowledged} disabled={disabled || pending} onChange={event => setAcknowledged(event.target.checked)} />已审阅原文依据、导演补充与阻塞；确认追加布景、更新复用对象并替换当前镜头表。存在执行阻塞时不会应用。</label>
-          <button type="button" disabled={disabled || pending || !acknowledged} onClick={() => void applyExecution()}>确认应用到3D编辑场景</button>
+          <button type="button" disabled={disabled || pending || !acknowledged || !!requirementState.error} onClick={() => void applyExecution()}>确认应用到3D编辑场景</button>
         </>}
       </div>}
     </div>}

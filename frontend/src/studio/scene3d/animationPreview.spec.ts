@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { AnimationPreview, skeletalClips, saveAnimationClips, restoreAnimationClips, saveMoveAnimation, restoreMoveAnimation } from './animationPreview';
+import { AnimationPreview, skeletalClips, saveAnimationClips, restoreAnimationClips, saveMoveAnimation, restoreMoveAnimation, markAnimationArchivePaths } from './animationPreview';
 
 describe('glTF cubic archive semantics', () => {
   it('matches GLTFLoader at boundaries/interior/non-monotonic times without losing tangents', async () => {
@@ -62,6 +62,30 @@ describe('archive animation resources', () => {
     const preview = new AnimationPreview(b.root, b.root.animations[0]); preview.sampleAt(.5);
     expect(b.bone.position.y).toBeCloseTo(1); expect(a.bone.position.y).toBe(2); preview.stop();
     expect(saveAnimationClips(b.root)).toEqual(data);
+  });
+  it('restores explicitly archived bone names without guessing loader suffixes', () => {
+    const a = fixture(); a.root.animations = [a.clip]; const data = saveAnimationClips(a.root);
+    const b = fixture(); markAnimationArchivePaths(b.root); b.bone.name = 'arbitrary-loader-name';
+    const clips = restoreAnimationClips(b.root, data);
+    expect(b.bone.name).toBe('Hips'); expect(a.bone.userData.sceneAnimationBoneName).toBeUndefined();
+    const preview = new AnimationPreview(b.root, clips[0]); preview.sampleAt(.5);
+    expect(b.bone.position.y).toBeCloseTo(1); preview.stop();
+  });
+  it('rejects malformed or ambiguous archived bone names and invalid resources before renaming any bone', () => {
+    const a = fixture(); a.root.animations = [a.clip]; const data = saveAnimationClips(a.root);
+    for (const name of ['', 42, 'x'.repeat(1025)]) {
+      const b = fixture(); markAnimationArchivePaths(b.root); b.bone.name = 'loader'; b.bone.userData.sceneAnimationBoneName = name;
+      expect(() => restoreAnimationClips(b.root, data)).toThrow(); expect(b.bone.name).toBe('loader');
+    }
+    for (const tagged of [false, true]) {
+      const b = fixture(); markAnimationArchivePaths(b.root); b.bone.name = 'loader';
+      const other = new THREE.Bone(); other.name = 'Hips'; b.root.add(other);
+      if (tagged) { other.userData.sceneAnimationPath = [2]; other.userData.sceneAnimationBoneName = 'Hips'; }
+      expect(() => restoreAnimationClips(b.root, data)).toThrow(); expect(b.bone.name).toBe('loader');
+    }
+    const b = fixture(); markAnimationArchivePaths(b.root); b.bone.name = 'loader';
+    const bad = structuredClone(data); bad[0].tracks[0].values.pop();
+    expect(() => restoreAnimationClips(b.root, bad)).toThrow(); expect(b.bone.name).toBe('loader');
   });
   it('keeps duplicate names on separate actors independent and legacy resources empty', () => {
     const a = fixture(), b = fixture(); a.root.animations = [a.clip];

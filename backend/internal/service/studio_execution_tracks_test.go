@@ -1,8 +1,11 @@
 package service
 
 import (
+	"bytes"
 	"comfyui-console/internal/models"
+	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 )
@@ -20,6 +23,96 @@ func executionTracksFixture() (studioExecutionSource, studioExecutionContext, st
 	p.Shots[0].Execution = &studioExecutionTracks{Version: 1, Camera: &studioExecutionCameraTrack{Keys: []studioExecutionKey{{At: 0, Position: []float64{0, 2, 5}, Target: []float64{0, 1, 0}, FOV: 45}, {At: 4, Position: []float64{0, 2, 3}, Target: []float64{0, 1, 0}, FOV: 45}}}, Actors: []studioExecutionActorTrack{{TargetID: "existing", TargetName: "韩立", Beats: []studioExecutionBeat{{Start: 0, End: 2, From: studioExecutionPoint{}, To: studioExecutionPoint{}, Animation: studioExecutionClipRef{Index: 0, Name: "walk", Duration: 1}, SourceIndex: &zero}, {Start: 2, End: 4, From: studioExecutionPoint{}, To: studioExecutionPoint{}, Animation: studioExecutionClipRef{Index: 0, Name: "walk", Duration: 1}, SourceIndex: &one}}}}}
 	return source, ctx, p
 }
+func wristTracksFixture() (*studioExecutionTracks, models.Shot, studioExecutionPlan, map[string]studioExecutionObject, map[string]studioExecutionAsset) {
+	source, ctx, p := executionTracksFixture()
+	e := p.Shots[0].Execution
+	other := e.Actors[0]
+	other.TargetID, other.TargetName = "other", "乙"
+	other.Beats = append([]studioExecutionBeat(nil), other.Beats...)
+	for i := range other.Beats {
+		other.Beats[i].From.X, other.Beats[i].To.X = .85, .85
+	}
+	e.Actors = append(e.Actors, other)
+	p.Bindings = append(p.Bindings, studioExecutionBinding{Character: "乙", ObjectID: "other"})
+	for i := range source.Shots[0].ActionTimeline {
+		source.Shots[0].ActionTimeline[i].Subject = "甲，乙"
+	}
+	objects := map[string]studioExecutionObject{ctx.Objects[0].ID: ctx.Objects[0]}
+	o := ctx.Objects[0]
+	o.ID, o.Name, o.AssetID = "other", "乙", "object:other"
+	objects[o.ID] = o
+	asset := ctx.Assets[0]
+	assets := map[string]studioExecutionAsset{asset.ID: asset}
+	asset.ID = o.AssetID
+	assets[asset.ID] = asset
+	start, end := 0.0, 4.0
+	e.Contacts = []studioWristContact{{Version: 1, Policy: "whole-skin-separating-plane-v1", SourceID: "existing", TargetID: "other", Start: &start, End: &end, Normal: []float64{-1, 0, 0},
+		Binding: studioWristContactBinding{Version: 1, Arm: studioWristArm{Shoulder: "leftUpperArm", Elbow: "leftForeArm", Wrist: "leftHand"}, TargetBone: "rightHand", SourceAnchor: []float64{.066, -.02, .0047}, TargetAnchor: []float64{-.066, -.02, .0047}, Rotation: []float64{0, 0, 0, 1}, Pole: []float64{0, 0, 1}}}}
+	return e, source.Shots[0], p, objects, assets
+}
+
+func TestStudioWristContactContractRoundtrip(t *testing.T) {
+	e, original, p, objects, assets := wristTracksFixture()
+	if err := validateStudioExecutionTracks(e, original, &p, objects, assets); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored studioExecutionTracks
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&restored); err != nil {
+		t.Fatal(err)
+	}
+	if len(restored.Contacts) != 1 || restored.Contacts[0].Binding.TargetAnchor[0] != -.066 {
+		t.Fatal("contact contract was lost")
+	}
+	if err := validateStudioExecutionTracks(&restored, original, &p, objects, assets); err != nil {
+		t.Fatal(err)
+	}
+	unknown := strings.Replace(string(data), `"policy":`, `"typo":`, 1)
+	decoder = json.NewDecoder(strings.NewReader(unknown))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&restored); err == nil {
+		t.Fatal("unknown contact field accepted")
+	}
+}
+
+func TestStudioWristContactRejectsMalformedOrUnboundContracts(t *testing.T) {
+	cases := map[string]func(*studioExecutionTracks){
+		"version":          func(e *studioExecutionTracks) { e.Contacts[0].Version = 2 },
+		"policy":           func(e *studioExecutionTracks) { e.Contacts[0].Policy = "ignore-pair" },
+		"unbound":          func(e *studioExecutionTracks) { e.Contacts[0].TargetID = "missing" },
+		"self":             func(e *studioExecutionTracks) { e.Contacts[0].TargetID = "existing" },
+		"duplicate":        func(e *studioExecutionTracks) { e.Contacts = append(e.Contacts, e.Contacts[0]) },
+		"missing-start":    func(e *studioExecutionTracks) { e.Contacts[0].Start = nil },
+		"partial-window":   func(e *studioExecutionTracks) { *e.Contacts[0].End = 3 },
+		"zero-normal":      func(e *studioExecutionTracks) { e.Contacts[0].Normal = []float64{0, 0, 0} },
+		"nan-normal":       func(e *studioExecutionTracks) { e.Contacts[0].Normal[0] = math.NaN() },
+		"rotation":         func(e *studioExecutionTracks) { e.Contacts[0].Binding.Rotation[3] = 2 },
+		"oversized-anchor": func(e *studioExecutionTracks) { e.Contacts[0].Binding.SourceAnchor[0] = .26 },
+		"pole":             func(e *studioExecutionTracks) { e.Contacts[0].Binding.Pole = []float64{0, 0, 0} },
+		"arm-chain":        func(e *studioExecutionTracks) { e.Contacts[0].Binding.Arm.Elbow = "leftHand" },
+		"missing-binding":  func(e *studioExecutionTracks) { e.Contacts[0].Binding.Version = 0 },
+		"root-floor": func(e *studioExecutionTracks) {
+			for i := range e.Actors[1].Beats {
+				e.Actors[1].Beats[i].From.X, e.Actors[1].Beats[i].To.X = .7, .7
+			}
+		},
+	}
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			e, original, p, objects, assets := wristTracksFixture()
+			change(e)
+			if err := validateStudioExecutionTracks(e, original, &p, objects, assets); err == nil {
+				t.Fatal("unsafe contact accepted")
+			}
+		})
+	}
+}
+
 func TestStudioExecutionTracksAcceptAuditedInPlaceMultipleBeatsAndCamera(t *testing.T) {
 	source, ctx, p := executionTracksFixture()
 	if err := validateStudioExecutionPlan(&p, source, ctx, "hash"); err != nil {

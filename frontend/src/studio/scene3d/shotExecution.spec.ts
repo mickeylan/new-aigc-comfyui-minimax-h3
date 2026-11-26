@@ -99,4 +99,30 @@ describe('bounded shot execution', () => {
     expect(sampleExecutionCamera(execution, 2)?.fov).toBe(45);
     expect(() => validateShotExecution({ version: 1, camera: { keys: [keys[0], { ...keys[1], position: [4, 0, -2] }] } }, 4)).toThrow();
   });
+  function contactExecution(distance = .85): any {
+    const stationary = (id: string, x: number) => ({ targetId: id, targetName: id, beats: [{ ...beat, start: 0, end: 4, from: { x, z: 0 }, to: { x, z: 0 } }] });
+    return { version: 1, actors: [stationary('a', 0), stationary('b', distance)], contacts: [{ version: 1, policy: 'whole-skin-separating-plane-v1', sourceId: 'a', targetId: 'b', start: 0, end: 4,
+      normal: [-1, 0, 0], binding: { version: 1, arm: { shoulder: 'leftUpperArm', elbow: 'leftForeArm', wrist: 'leftHand' }, targetBone: 'rightHand',
+        sourceAnchor: [.066, -.02, .0047], targetAnchor: [-.066, -.02, .0047], rotation: [0, 0, 0, 1], pole: [0, 0, 1] } }] };
+  }
+  it('preserves explicit whole-shot wrist contacts without treating the declaration as geometric proof', () => {
+    const value = contactExecution(), result = validateShotExecution(value, 4, 5);
+    expect(result).toEqual(value); value.contacts[0].binding.targetAnchor[0] = 10;
+    expect(result.contacts![0].binding.targetAnchor[0]).toBe(-.066);
+  });
+  it('retains the strict .7m root floor and full clearance for every undeclared/third-actor pair', () => {
+    expect(() => validateShotExecution(contactExecution(.7), 4, 5)).toThrow('间距不足');
+    const undeclared = contactExecution(); delete undeclared.contacts;
+    expect(() => validateShotExecution(undeclared, 4, 5)).toThrow('间距不足');
+    const third = contactExecution(); third.actors.push({ ...structuredClone(third.actors[1]), targetId: 'c', targetName: 'c' });
+    expect(() => validateShotExecution(third, 4, 5)).toThrow('间距不足');
+  });
+  it('rejects unbound, cyclic/shared, partial-window, unknown-policy and malformed contact contracts', () => {
+    const changes = [(c: any) => { c.targetId = 'missing'; }, (c: any) => { c.targetId = 'a'; },
+      (c: any) => { c.start = 1; }, (c: any) => { c.end = 3; }, (c: any) => { c.policy = 'ignore-pair'; },
+      (c: any) => { c.normal = [0, 0, 0]; }, (c: any) => { c.typo = true; }, (c: any) => { c.binding.typo = true; }];
+    for (const change of changes) { const value = contactExecution(); change(value.contacts[0]); expect(() => validateShotExecution(value, 4, 5)).toThrow(); }
+    const duplicate = contactExecution(); duplicate.contacts.push(structuredClone(duplicate.contacts[0]));
+    expect(() => validateShotExecution(duplicate, 4, 5)).toThrow();
+  });
 });

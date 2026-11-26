@@ -68,6 +68,31 @@ it('cleans staged geometry if atomic editor commit refuses publication', async (
   await expect(f.run()).rejects.toThrow('编辑器拒绝提交'); expect(meshes).toBeGreaterThan(0); expect(disposed).toBeGreaterThan(0);
 });
 
+function requirementReview(f: Awaited<ReturnType<typeof fixture>>) {
+  return { version: 1, sourceRevision: f.reviewed.revision, sourceContent: f.scene.content,
+    entities: [{ id: 'wall', label: '墙', count: 1, objectIds: ['planned-wall'], basis: { kind: 'fact', start: 0, end: f.scene.content.length, quote: f.scene.content } }], relations: [], unresolved: [] };
+}
+it('attaches human-reviewed original requirements to the published shot plan without changing model contracts', async () => {
+  const f = await fixture(), review = requirementReview(f);
+  const result = await applyStudioExecution(f.plan, f.reviewed, f.port, review);
+  try {
+    expect(result.sceneRequirements).toEqual(review);
+    expect(f.commit.mock.calls[0][0].shotPlan.sceneRequirements).toEqual(review);
+    const loaded = JSON.parse(JSON.stringify(result)); expect(loaded.sceneRequirements.entities[0].basis.quote).toBe(f.scene.content);
+    result.sceneRequirements!.entities[0].label = 'edited'; expect(review.entities[0].label).toBe('墙');
+  } finally { f.commit.mock.calls[0][0].additions.forEach(e => disposeObject(e.object)); }
+});
+it('rejects requirements from another source or unresolved mapping before geometry publication', async () => {
+  for (const change of [
+    (r: any) => r.sourceRevision = 'stale',
+    (r: any) => r.sourceContent = '另一场次',
+    (r: any) => r.entities[0].objectIds = ['not-in-context'],
+    (r: any) => r.unresolved.push('小路尚未连通'),
+  ]) {
+    const f = await fixture(), review = requirementReview(f); change(review);
+    await expect(applyStudioExecution(f.plan, f.reviewed, f.port, review)).rejects.toThrow(); expect(f.commit).not.toHaveBeenCalled();
+  }
+});
 it('checks reviewed shots and content again instead of accepting a different current scene', async () => {
   const f = await fixture(); f.shots[0].duration = 4;
   await expect(f.run()).rejects.toThrow('来源已变化'); expect(f.commit).not.toHaveBeenCalled();

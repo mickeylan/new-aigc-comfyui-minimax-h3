@@ -23,7 +23,7 @@ import { createEnvironmentTerrain, defaultSceneEnvironment, environmentLight, gr
 import { saveAnimationClips, restoreAnimationClips, attachAnimationClip, markAnimationArchivePaths } from './animationPreview';
 import { characterAnimationBinding, characterAnimationBoneNames, characterAnimationCatalogRevision, createCharacterAnimationClip, createCharacterAnimationClipFor, listCharacterAnimationCatalog, summarizeCharacterAnimationCatalog } from './toonflow/characterAnimations';
 import { createToonflowPrimitive } from './toonflowPrimitives';
-import { assertScriptShotWalkable, createScriptShotSampler } from './scriptShotSampler';
+import { assertScriptShotApplicationSafe, assertScriptShotWalkable, createScriptShotSampler } from './scriptShotSampler';
 import { findCapsuleRigs, gaitCapsuleRig, resetCapsuleRig } from './toonflow/capsuleRig';
 import { draftShotDirection } from './shotDirection';
 import { retargetSkeletalClip } from './characterMotion';
@@ -806,6 +806,54 @@ describe('Studio production v7 callbacks', () => {
   }, 60_000);
 });
 
+function requirementsFixture() {
+  const object = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial());
+  const plan = validateScriptShotPlan({ version: 1, sceneId: 'review', heading: '院落', location: '院落', sourceFingerprint: 'source', sceneFingerprint: 'review', action: [], diagnostics: [],
+    shots: [{ id: 'one', order: 1, start: 0, end: 1, camera: { position: [0, 2, 5], target: [0, 0, 0], fov: 45 }, dialogue: [] }],
+    sceneRequirements: { version: 1, sourceRevision: 'review', sourceContent: '院中一块石。', entities: [{ id: 'stone', label: '石', count: 1, objectIds: ['stone-object'], basis: { kind: 'fact', start: 4, end: 5, quote: '石' } }], relations: [], unresolved: [] } });
+  return { entries: [{ id: 'stone-object', name: '石', object, locked: false }], plan };
+}
+describe('Declared scenery requirements through production callbacks', () => {
+  it('validates requirements-only shot publication without actors before setting editor state', () => {
+    const f = requirementsFixture(), scope = scopeFor(f.entries);
+    const start = stage.indexOf('onApplyShots={') + 'onApplyShots={'.length;
+    const end = stage.indexOf('} appliedPlan=', start);
+    expect(start).toBeGreaterThan('onApplyShots={'.length); expect(end).toBeGreaterThan(start);
+    const code = execFileSync(process.execPath, ['-e', "process.stdout.write(require('esbuild').transformSync(require('fs').readFileSync(0,'utf8'),{loader:'ts',format:'cjs'}).code)"], { input: `const apply = ${stage.slice(start, end)};`, encoding: 'utf8', cwd: frontend });
+    Object.assign(scope, { assertScriptShotApplicationSafe, setScriptShots: vi.fn(), setStatus: vi.fn() });
+    const apply = new Function('scope', `with(scope) { ${code}; return apply; }`)(scope);
+    try {
+      f.entries[0].object.visible = false;
+      expect(() => apply(f.plan)).toThrow('不可见'); expect(scope.setScriptShots).not.toHaveBeenCalled();
+      f.entries[0].object.visible = true; f.plan.sceneRequirements!.unresolved.push('未确认道路');
+      expect(() => apply(f.plan)).toThrow('未确认道路'); expect(scope.setScriptShots).not.toHaveBeenCalled();
+      f.plan.sceneRequirements!.unresolved = []; scope.objectsRef.current = [];
+      expect(() => apply(f.plan)).toThrow('缺少对象'); expect(scope.setScriptShots).not.toHaveBeenCalled();
+      scope.objectsRef.current = f.entries; apply(f.plan); expect(scope.setScriptShots).toHaveBeenCalledExactlyOnceWith(f.plan);
+    } finally { disposeObject(f.entries[0].object); }
+  });
+  for (const version of [6, 7]) it(`preserves exact source and human mappings through real v${version} archives and rejects forged evidence atomically`, async () => {
+    const f = requirementsFixture();
+    const extra = version === 7 ? materializeSetDraft(await prepareSetDraft('ancientStreet', new AbortController().signal)).slice(0, 1) : [];
+    const source = scopeFor([...f.entries, ...extra]), target = scopeFor([]); source.scriptShots = f.plan;
+    try {
+      for (let cycle = 0; cycle < 2; cycle++) {
+        const saved = await callback('buildSceneDocument', 'saveScene', cycle ? target : source)(); expect(saved.version).toBe(version);
+        await callback('importSceneText', 'loadScene', target)(JSON.stringify(saved));
+        expect(target.setError.mock.calls.filter((c: any[]) => c[0])).toEqual([]);
+        const restored = target.setScriptShots.mock.calls.at(-1)[0]; expect(restored.sceneRequirements).toEqual(f.plan.sceneRequirements);
+        const sampler = createScriptShotSampler(restored, { camera: target.cameraRef.current, controls: target.controlsRef.current, entries: () => target.objectsRef.current, environment: null });
+        expect(sampler.walkProof.sceneRequirements).toMatchObject({ entities: 1, coverage: 'declared-only' }); sampler.stop();
+        const current = target.objectsRef.current;
+        const invalid = JSON.parse(JSON.stringify(saved)); invalid.scriptShots.sceneRequirements.entities[0].basis.quote = '伪造';
+        await callback('importSceneText', 'loadScene', target)(JSON.stringify(invalid));
+        expect(target.objectsRef.current).toBe(current); expect(target.setError.mock.calls.at(-1)[0]).toContain('证据'); target.setError.mockClear();
+        target.scriptShots = restored;
+      }
+    } finally { for (const scope of [source, target]) scope.objectsRef.current.forEach((e: any) => disposeObject(e.object)); }
+  }, 60_000);
+});
+
 describe('Integrated enhancements through production callbacks', () => {
   it('loads an environment-free archive using its saved light, not the callback closure light', async () => {
     const object = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial());
@@ -860,6 +908,22 @@ describe('Integrated enhancements through production callbacks', () => {
       expect(canvas).toEqual({ width: latest.width * 2, height: latest.height * 2 });
       expect(scope.cameraRef.current.aspect).toBe(latest.aspect);
     }
+  });
+  it.each([['white', 'clay'], ['normal', 'normal'], ['depth', 'depth']] as const)('routes video mode %s to the actual %s reference pass', async (mode, pass) => {
+    const scope = scopeFor([]), canvas = { width: 1280, height: 720 };
+    Object.assign(scope, { busy: false, archiveProjectId: '', FRAME_VIDEO_SIZES, shotVideoExportRef: { current: null },
+      rendererRef: { current: { domElement: canvas, getPixelRatio: () => 1, setPixelRatio() {}, setSize() {} } },
+      weatherEffectsRef: { current: null }, scriptShotModuleForTest: shotModule,
+      globalThis: { VideoEncoder: class {}, VideoFrame: class {} }, createImageBitmap: async () => ({ close() {} }),
+      captureReference: vi.fn(async () => ({ blob: {}, ...canvas })), captureViewportAt: vi.fn(),
+      videoModuleForTest: { renderScriptShotVideo: async (_plan: unknown, options: any) => {
+        expect(options.mode).toBe(mode); // Keep the user-facing provenance, not the renderer's internal pass name.
+        await options.renderFrame({ camera: {} }, 0, { timestamp: 0, duration: 1000000 });
+        return { blob: {}, manifest: { frameCount: 1, mode } };
+      } } });
+    const result = await callback('exportScriptVideo', 'exportSequence', scope)({ shots: [] }, 1, mode, new AbortController().signal);
+    expect(scope.captureReference).toHaveBeenCalledExactlyOnceWith(pass);
+    expect(scope.captureViewportAt).not.toHaveBeenCalled(); expect(result.manifest.mode).toBe(mode);
   });
   it('synchronizes modern terrain wetness and sky/sun direction through the actual environment callback', () => {
     const scope=scopeFor([]), next=defaultSceneEnvironment(), modern={setRain:vi.fn(),setEnvironment:vi.fn()}; next.weather={condition:'rain',intensity:0.7,wind:0.2};
@@ -1074,6 +1138,51 @@ describe('Character animation catalog attached to a scene object', () => {
         expect(target.setScriptShots.mock.calls.at(-1)[0].shots[0].execution).toBeUndefined();
       } finally { for (const s of [source, target]) s.objectsRef.current.forEach((e: any) => disposeObject(e.object)); }
     }
+  }, 60_000);
+
+  it.each([6, 7])('preserves actual paired wrist constraints through production v%s archives and replays restored skin', async version => {
+    // Float32 key times must not round past clip.duration; .25 is exact in both
+    // archive and key buffers (.2 rounds upward and is correctly rejected).
+    const duration = .25;
+    const rigs = ['#eee', '#ccc'].map(color => createToonflowPrimitive({ shape: 'riggedPerson' } as any, color));
+    rigs[1]!.position.x = .85;
+    const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -.2).toArray();
+    rigs.forEach((rig, i) => { const bone = rig.getObjectByName(i ? 'rightUpperArm' : 'chest')!; rig.animations = [new THREE.AnimationClip(i ? 'offer' : 'hold', duration, [new THREE.QuaternionKeyframeTrack(`${bone.uuid}.quaternion`, [0, duration], i ? [...q, ...q] : [0, 0, 0, 1, 0, 0, 0, 1])])]; });
+    const extras = version === 7 ? materializeSetDraft(await prepareSetDraft('ancientStreet', new AbortController().signal)).slice(0, 1) : [];
+    extras.forEach(e => e.object.position.set(30, 0, 30));
+    const source = scopeFor([{ id: 'a', name: 'A', object: rigs[0], locked: false }, { id: 'b', name: 'B', object: rigs[1], locked: false }, ...extras]);
+    const target = scopeFor([]);
+    for (const scope of [source, target]) {
+      Object.assign(scope, { GLTFExporter, clonePosedContent, markAnimationArchivePaths, isExportablePlane, applyBonePose });
+      scope.exportGeometry = callback('exportGeometry', 'exportGlb', scope);
+    }
+    source.scriptShots = validateScriptShotPlan({ version: 1, sceneId: 's', heading: '', location: '', sourceFingerprint: 's', sceneFingerprint: 's', action: [], diagnostics: [], shots: [{
+      id: 's', order: 1, start: 0, end: duration, camera: { position: [0, 2, 5], target: [.4, 1, 0], fov: 45 }, dialogue: [], execution: { version: 1,
+        actors: rigs.map((rig, i) => ({ targetId: i ? 'b' : 'a', targetName: i ? 'B' : 'A', beats: [{ start: 0, end: duration, from: { x: i * .85, z: 0 }, to: { x: i * .86, z: 0 }, yaw: 0, animation: { index: 0, name: rig.animations[0].name, duration } }] })),
+        contacts: [{ version: 1, policy: 'whole-skin-separating-plane-v1', sourceId: 'a', targetId: 'b', start: 0, end: duration, normal: [-1, 0, 0], binding: { version: 1, arm: { shoulder: 'leftUpperArm', elbow: 'leftForeArm', wrist: 'leftHand' }, targetBone: 'rightHand', sourceAnchor: [.066, -.02, .0047], targetAnchor: [-.066, -.02, .0047], rotation: [0, 0, 0, 1], pole: [0, 0, 1] } }],
+      },
+    }] });
+    try {
+      const saved = await callback('buildSceneDocument', 'saveScene', source)(); expect(saved.version).toBe(version);
+      await callback('importSceneText', 'loadScene', target)(JSON.stringify(saved));
+      expect(target.setError.mock.calls.filter((call: any[]) => call[0])).toEqual([]);
+      const restored = target.setScriptShots.mock.calls.at(-1)[0];
+      expect(restored.shots[0].execution).toEqual(source.scriptShots.shots[0].execution);
+      const a = target.objectsRef.current.find((e: any) => e.id === 'a').object, b = target.objectsRef.current.find((e: any) => e.id === 'b').object;
+      const before = [serializeBonePose(a), serializeBonePose(b)];
+      const sampler = createScriptShotSampler(restored, { camera: target.cameraRef.current, controls: target.controlsRef.current, entries: () => target.objectsRef.current, environment: null });
+      try {
+        expect(sampler.walkProof.contact!.maxErrorMetres).toBeLessThan(1e-5);
+        for (const time of [duration, 0, .1, .03, .1]) {
+          sampler.sampleAt(time);
+          const hand = a.getObjectByName('leftHand').localToWorld(new THREE.Vector3(.066, -.02, .0047));
+          const wrist = b.getObjectByName('rightHand').localToWorld(new THREE.Vector3(-.066, -.02, .0047));
+          expect(hand.distanceTo(wrist)).toBeLessThan(1e-5);
+        }
+      } finally { sampler.stop(); }
+      expect([serializeBonePose(a), serializeBonePose(b)]).toEqual(before);
+      expect(a.position.x).toBe(0); expect(b.position.x).toBe(.85);
+    } finally { for (const s of [source, target]) s.objectsRef.current.forEach((e: any) => disposeObject(e.object)); }
   }, 60_000);
 
   it('marks the scene dirty when an action resource is attached', () => {

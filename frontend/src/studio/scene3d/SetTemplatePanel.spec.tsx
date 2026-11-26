@@ -400,6 +400,15 @@ describe('script staging human gates', () => {
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('未指定机位');
     expect(onExportShotPack).not.toHaveBeenCalled();
   });
+  it('shows saved source requirements as declared coverage only and never labels an old plan reviewed', async () => {
+    await act(async () => { root.render(<SetTemplatePanel disabled={false} onApply={onApply} appliedPlan={readyPlan} />); });
+    expect(host.querySelector('[aria-label="已保存建景要求"]')?.textContent).toContain('场景忠实度未核验');
+    const reviewedPlan = { ...readyPlan, sceneRequirements: { version: 1 as const, sourceRevision: 'scene-1', sourceContent: '院中石。', entities: [{ id: 'stone', label: '石', count: 1, objectIds: ['stone-id'], basis: { kind: 'fact' as const, start: 2, end: 3, quote: '石' } }], relations: [], unresolved: [] } };
+    await act(async () => { root.render(<SetTemplatePanel disabled={false} onApply={onApply} appliedPlan={reviewedPlan} />); });
+    const text = host.querySelector('[aria-label="已保存建景要求"]')?.textContent;
+    expect(text).toContain('1 项物件'); expect(text).toContain('0 项关系'); expect(text).toContain('不代表全文完整还原');
+    expect(text).not.toContain('几何通过'); expect(onApplyShots).not.toHaveBeenCalled();
+  });
   it('hands the confirmed shot plan to the viewport exporter and clears the confirmation afterwards', async () => {
     const onExportShotPack = vi.fn(async () => true);
     await act(async () => { root.render(<SetTemplatePanel disabled={false} onApply={onApply} appliedPlan={readyPlan} onExportShotPack={onExportShotPack} />); });

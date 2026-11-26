@@ -121,7 +121,12 @@ export function saveAnimationClips(root: THREE.Object3D): SavedAnimationClip[] {
  * Extras survive that structural rewrite; the editor source object is never modified. */
 export function markAnimationArchivePaths(root: THREE.Object3D): void {
   const visit = (node: THREE.Object3D, path: number[]) => {
-    if ((node as THREE.Bone).isBone) node.userData.sceneAnimationPath ??= path;
+    if ((node as THREE.Bone).isBone) {
+      node.userData.sceneAnimationPath ??= path;
+      // GLTFLoader makes names globally unique across actors. Preserve the exact
+      // per-actor identity, not an inferred suffix mapping, for named constraints.
+      node.userData.sceneAnimationBoneName ??= node.name;
+    }
     node.children.forEach((child, index) => visit(child, [...path, index]));
   };
   visit(root, []);
@@ -134,13 +139,22 @@ export function restoreAnimationClips(root: THREE.Object3D, data: unknown): THRE
   if (!Array.isArray(data) || data.length > 256) return fail();
   let samples = 0;
   const exportedBones = new Map<string, THREE.Object3D>();
+  const restoredNames = new Map<THREE.Bone, string>();
+  const uniqueNames = new Set<string>();
   root.traverse(node => {
     const path = node.userData.sceneAnimationPath;
     if (path === undefined) return;
     if (!(node instanceof THREE.Bone) || !Array.isArray(path) || path.length > 256 || !path.every(i => Number.isSafeInteger(i) && i >= 0) || exportedBones.has(path.join('/'))) return fail();
     exportedBones.set(path.join('/'), node);
+    const name = node.userData.sceneAnimationBoneName;
+    if (name !== undefined) {
+      if (typeof name !== 'string' || !name.trim() || name.length > 1024 || uniqueNames.has(name)) return fail();
+      uniqueNames.add(name);
+      restoredNames.set(node as THREE.Bone, name);
+    }
   });
-  return data.map(clip => {
+  // Validate the complete resource set before changing any live bone identity.
+  const clips = data.map(clip => {
     if (!clip || typeof clip.name !== 'string' || clip.name.length > 1000 || !Number.isFinite(clip.duration) || clip.duration <= 0 ||
       !Array.isArray(clip.tracks) || !clip.tracks.length || clip.tracks.length > 4096) return fail();
     const catalogSource = clip.catalogSource === undefined ? undefined : validateCatalogSource(clip.catalogSource);
@@ -174,6 +188,16 @@ export function restoreAnimationClips(root: THREE.Object3D, data: unknown): THRE
     if (catalogSource) setAnimationCatalogSource(restored, catalogSource);
     return restored;
   });
+  // Also reject a tagged/untagged name collision rather than binding ambiguously.
+  const finalNames = new Set<string>();
+  root.traverse(node => {
+    if (!(node instanceof THREE.Bone)) return;
+    const name = restoredNames.get(node) ?? node.name;
+    if (restoredNames.size && (!name.trim() || finalNames.has(name))) return fail();
+    finalNames.add(name);
+  });
+  restoredNames.forEach((name, bone) => { bone.name = name; });
+  return clips;
 }
 
 /**

@@ -434,6 +434,7 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
         <h3>镜头表与台词时间轴</h3>
         {appliedPlan && appliedPlan !== shotPlan && <div className="space-y-1">
           <p role="status">场景中已保存镜头表：{appliedPlan.shots.length} 镜 · {appliedPlan.shots[appliedPlan.shots.length - 1]!.end.toFixed(2)} 秒 · {appliedPlan.shots.filter(shot => !hasShotCamera(shot)).length} 镜未指定机位 · {appliedPlan.shots.filter(shot => shot.motion).length} 镜含人工走位（{appliedPlan.sceneId}）</p>
+          <p aria-label="已保存建景要求" className="text-amber-400">{appliedPlan.sceneRequirements ? `已保存原文建景声明：${appliedPlan.sceneRequirements.entities.length} 项物件、${appliedPlan.sceneRequirements.relations.length} 项关系、${appliedPlan.sceneRequirements.unresolved.length} 项未解决；仅覆盖人工声明，不代表全文完整还原。播放/导出前重新检查当前几何。` : '未附原文建景要求，场景忠实度未核验。'}</p>
           <button type="button" disabled={disabled || pending} onClick={loadAppliedShots}>载入场景镜头表审阅</button>
         </div>}
         {appliedPlan && <div className="space-y-1 rounded border border-zinc-700 p-1" aria-label="连续逐镜播放">

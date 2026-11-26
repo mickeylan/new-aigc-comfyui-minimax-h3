@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { createCharacterMotionRuntime, retargetSkeletalClip, validateCharacterMotionSettings } from './characterMotion';
+import * as motion from './characterMotion';
+import { createRiggedPerson } from './toonflow/riggedPerson';
 import { attachAnimationClip } from './animationPreview';
 function rig() { const root = new THREE.Group(), bone = new THREE.Bone(); bone.name='rootBone'; root.add(bone); return {root,bone}; }
 function clip(bone: THREE.Bone, name: string, x: number) { return new THREE.AnimationClip(name, 2, [new THREE.VectorKeyframeTrack(`${bone.uuid}.position`,[0,2],[x,0,0,x,0,0])]); }
@@ -66,4 +68,131 @@ describe('character motion',()=>{
     runtime.stop(); expect(root.getObjectByName('leftKnee')!.position.toArray()).toEqual([0,-1,0]); decoration.geometry.dispose(); (decoration.material as THREE.Material).dispose();
   });
   it('rejects missing mappings and excessive bake allocations',()=>{const s=rig(),t=rig(); expect(()=>retargetSkeletalClip(s.root,t.root,clip(s.bone,'a',0),{},'b')).toThrow(); const huge=clip(s.bone,'a',0); huge.duration=10000; expect(()=>retargetSkeletalClip(s.root,t.root,huge,{rootBone:'rootBone'},'b')).toThrow(/budget/);});
+});
+
+// This verifies a real hand/wrist anchor constraint, not proximity of root nodes.
+// It does NOT authorize body collision exceptions or claim a closed-finger grip.
+describe('cross-character wrist contact', () => {
+  const binding = () => ({ version: 1 as const,
+    arm: { shoulder: 'leftUpperArm', elbow: 'leftForeArm', wrist: 'leftHand' },
+    targetBone: 'rightHand', sourceAnchor: [0, -.03, .02] as [number, number, number],
+    targetAnchor: [.04, 0, .02] as [number, number, number],
+    rotation: [0, 0, 0, 1] as [number, number, number, number], pole: [0, 0, 1] as [number, number, number] });
+  function pair() {
+    const source = createRiggedPerson('#eee'), target = createRiggedPerson('#ccc');
+    // The other actor must actually offer the wrist: a hanging arm puts it .556m
+    // from our shoulder, beyond this rig's measured .478m reach. No bone stretching.
+    target.position.set(.85, 0, 0); target.getObjectByName('rightUpperArm')!.rotation.z = -.6;
+    source.updateMatrixWorld(true); target.updateMatrixWorld(true);
+    const world = (root: THREE.Object3D, name: string, p: number[]) => root.getObjectByName(name)!.localToWorld(new THREE.Vector3().fromArray(p));
+    return { source, target, world };
+  }
+  const pose = (root: THREE.Object3D) => { const values: number[][] = []; root.traverse(n => values.push([...n.position, ...n.quaternion, ...n.scale])); return values; };
+  it('locks the hand anchor onto the other actual wrist while preserving bone lengths and target pose', () => {
+    const { source, target, world } = pair(), b = binding(), targetBefore = pose(target);
+    const lengths = ['leftForeArm', 'leftHand'].map(n => source.getObjectByName(n)!.position.length());
+    const result = motion.solveWristContact(source, target, b);
+    expect(result.errorMetres).toBeLessThan(1e-5);
+    expect(world(source, b.arm.wrist, b.sourceAnchor).distanceTo(world(target, b.targetBone, b.targetAnchor))).toBeLessThan(1e-5);
+    expect(['leftForeArm', 'leftHand'].map(n => source.getObjectByName(n)!.position.length())).toEqual(lengths);
+    expect(pose(target)).toEqual(targetBefore);
+    expect(source.getObjectByName('leftUpperArm')!.quaternion.angleTo(new THREE.Quaternion())).toBeGreaterThan(.1);
+  });
+  it('follows wrist and torso motion at absolute times, seeks out of order and restores both actors', () => {
+    const { source, target, world } = pair(), b = binding(), before = [pose(source), pose(target)];
+    const runtime = motion.createWristContactRuntime(source, target, b);
+    const evaluate = (t: number) => { target.position.x = .85 - t * .04; target.getObjectByName('chest')!.rotation.z = -.08 * t; target.getObjectByName('rightForeArm')!.rotation.x = t * .12; };
+    const samples = new Map<number, number[][]>();
+    for (const t of [0, 1, 2, .5, 2, 0, 1]) {
+      const r = runtime.sampleAt(t, evaluate); expect(r.errorMetres).toBeLessThan(1e-5);
+      expect(world(source, b.arm.wrist, b.sourceAnchor).distanceTo(world(target, b.targetBone, b.targetAnchor))).toBeLessThan(1e-5);
+      if (samples.has(t)) expect(pose(source)).toEqual(samples.get(t)); else samples.set(t, pose(source));
+    }
+    runtime.stop(); expect([pose(source), pose(target)]).toEqual(before); runtime.stop();
+    expect(() => runtime.sampleAt(0, evaluate)).toThrow(/停止/);
+  });
+  it('solves rotated parent coordinates rather than treating local anchors as world points', () => {
+    const { source, target, world } = pair(), scene = new THREE.Group(); scene.rotation.y = .73; scene.position.set(3, 2, -5); scene.add(source, target);
+    const b = binding(), r = motion.solveWristContact(source, target, b); expect(r.errorMetres).toBeLessThan(1e-5);
+    expect(world(source, b.arm.wrist, b.sourceAnchor).distanceTo(world(target, b.targetBone, b.targetAnchor))).toBeLessThan(1e-5);
+  });
+  it('rejects unreachable targets atomically instead of stretching the arm or accepting a residual', () => {
+    const { source, target } = pair(); target.position.x = 10; const before = pose(source);
+    expect(() => motion.solveWristContact(source, target, binding())).toThrow(/不可达/); expect(pose(source)).toEqual(before);
+  });
+  it('restores both actors when pose evaluation or contact solving fails', () => {
+    const { source, target } = pair(), before = [pose(source), pose(target)], runtime = motion.createWristContactRuntime(source, target, binding());
+    runtime.sampleAt(0, () => {});
+    expect(() => runtime.sampleAt(1, () => { target.position.x = 20; })).toThrow(/不可达/);
+    expect([pose(source), pose(target)]).toEqual(before);
+    expect(() => runtime.sampleAt(1, () => { source.position.z = 4; throw Error('pose failure'); })).toThrow('pose failure');
+    expect([pose(source), pose(target)]).toEqual(before); runtime.stop();
+  });
+  it('rejects unknown fields, missing/duplicate bones, invalid poles and shared rigs before changing poses', () => {
+    const { source, target } = pair(), before = pose(source);
+    for (const bad of [{ ...binding(), typo: true }, { ...binding(), pole: [0, 0, 0] }, { ...binding(), rotation: [0, 0, 0, 2] }, { ...binding(), sourceAnchor: [NaN, 0, 0] }, { ...binding(), targetBone: 'missing' }]) {
+      expect(() => motion.solveWristContact(source, target, bad as any)).toThrow(); expect(pose(source)).toEqual(before);
+    }
+    expect(() => motion.solveWristContact(source, source, binding())).toThrow(/独立/);
+    const duplicate = new THREE.Bone(); duplicate.name = 'rightHand'; target.add(duplicate);
+    expect(() => motion.solveWristContact(source, target, binding())).toThrow(/unique/);
+  });
+  it('rejects scaled chains and removed target bindings without silently reattaching by name', () => {
+    const { source, target } = pair(), runtime = motion.createWristContactRuntime(source, target, binding());
+    expect(() => runtime.sampleAt(0, () => { source.scale.x = 2; })).toThrow(/unit-scale/);
+    const wrist = target.getObjectByName('rightHand')!; wrist.removeFromParent();
+    expect(() => runtime.sampleAt(0, () => {})).toThrow(/绑定已变化/); runtime.stop();
+  });
+  function surfacePair() {
+    const p = pair(), b = binding(); p.target.getObjectByName('rightUpperArm')!.rotation.z = -.2;
+    // Continuous proxy arms have a .065m skin radius. 1mm above each surface;
+    // this is a near-surface anchor, never permission for hand/body penetration.
+    b.sourceAnchor = [.066, -.02, .0047]; b.targetAnchor = [-.066, -.02, .0047];
+    motion.solveWristContact(p.source, p.target, b); return { ...p, b };
+  }
+  it('proves a conservative whole-skin separating plane using every real deformed vertex and surface triangle', () => {
+    const { source, target, b } = surfacePair(), before = [pose(source), pose(target)];
+    const proof = motion.assertWristContactSurface(source, target, b, [-1, 0, 0]);
+    expect(proof.policy).toBe('whole-skin-separating-plane-v1');
+    expect(proof.vertices).toBeGreaterThan(1000); expect(proof.triangles).toBeGreaterThan(1000);
+    expect(proof.sourceMinimum).toBeGreaterThanOrEqual(-1e-7); expect(proof.targetMaximum).toBeLessThanOrEqual(1e-7);
+    expect(proof.sourceSurfaceError).toBeLessThanOrEqual(.002); expect(proof.targetSurfaceError).toBeLessThanOrEqual(.002);
+    expect([pose(source), pose(target)]).toEqual(before);
+  });
+  it('places the plane inside the measured positive skin gap, never through either convex support', () => {
+    const { source, target, b } = surfacePair();
+    const point = target.getObjectByName(b.targetBone)!.localToWorld(new THREE.Vector3(...b.targetAnchor));
+    const normal = new THREE.Vector3(-1, 0, 0).applyQuaternion(target.getObjectByName(b.targetBone)!.getWorldQuaternion(new THREE.Quaternion()));
+    const patch = new THREE.Mesh(new THREE.BoxGeometry(.0002, .0002, .0002), new THREE.MeshStandardMaterial());
+    // An entire source patch crosses the anchor plane by .4mm, but is still
+    // separated from the target's nearest convex support (~1mm past the anchor).
+    patch.position.copy(point).addScaledVector(normal, -.0003).add(new THREE.Vector3(0, 0, .1)); source.add(patch);
+    const proof = motion.assertWristContactSurface(source, target, b, [-1, 0, 0]);
+    expect(proof.planeOffsetMetres).toBeLessThan(0);
+    expect(proof.separationMetres).toBeGreaterThan(.0004);
+    expect(proof.sourceMinimum).toBeGreaterThan(0); expect(proof.targetMaximum).toBeLessThan(0);
+    patch.position.addScaledVector(normal, -.002);
+    expect(() => motion.assertWristContactSurface(source, target, b, [-1, 0, 0])).toThrow('分离平面');
+    source.remove(patch); patch.geometry.dispose(); (patch.material as THREE.Material).dispose();
+  });
+  it('refuses intersecting torso/clothes rather than exempting the two contact actors', () => {
+    const { source, target, b } = surfacePair();
+    const cloth = new THREE.Mesh(new THREE.BoxGeometry(2, 1, 1), new THREE.MeshStandardMaterial()); source.add(cloth);
+    expect(() => motion.assertWristContactSurface(source, target, b, [-1, 0, 0])).toThrow(/分离平面/);
+  });
+  it('refuses air anchors, non-unit normals, missing skin and nonfinite/deforming shader geometry', () => {
+    const { source, target, b } = surfacePair();
+    expect(() => motion.assertWristContactSurface(source, target, b, [2, 0, 0])).toThrow(/法线/);
+    expect(() => motion.assertWristContactSurface(source, target, b, [1, 0, 0])).toThrow(/分离平面/);
+    const air = { ...b, sourceAnchor: [.09, -.02, .0047] as [number,number,number], targetAnchor: [-.09, -.02, .0047] as [number,number,number] };
+    motion.solveWristContact(source, target, air);
+    expect(() => motion.assertWristContactSurface(source, target, air, [-1, 0, 0])).toThrow(/表面/);
+    const empty = new THREE.Group();
+    expect(() => motion.assertWristContactSurface(empty, target, b, [-1, 0, 0])).toThrow();
+    const bad = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.ShaderMaterial()); source.add(bad);
+    expect(() => motion.assertWristContactSurface(source, target, air, [-1, 0, 0])).toThrow(/不支持/);
+    source.remove(bad); const mesh = source.getObjectByName('riggedPersonBody') as THREE.SkinnedMesh;
+    mesh.geometry.getAttribute('position').setX(0, NaN);
+    expect(() => motion.assertWristContactSurface(source, target, air, [-1, 0, 0])).toThrow(/有限/);
+  });
 });
