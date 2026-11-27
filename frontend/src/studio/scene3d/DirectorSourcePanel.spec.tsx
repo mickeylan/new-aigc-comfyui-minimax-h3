@@ -117,6 +117,92 @@ it('blocks malformed, stale, forged or unresolved human reviews and clears them 
   }
   await choose('导演来源场次', ''); expect(host!.querySelector('[aria-label="人工建景要求 JSON"]')).toBeNull();
 });
+it('explains manual route evidence and passes reviewed world coordinates without auto-adding or generating anything', async () => {
+  const f = await executionFixture();
+  expect(host!.textContent).toContain('连续中心线');
+  expect(host!.textContent).toContain('不证明路宽');
+  const example = JSON.parse(host!.querySelector('[aria-label="道路连通关系格式示例"]')!.textContent!);
+  expect(example).toMatchObject({ kind: 'path-connected', subject: 'road', reference: 'camp', other: 'bank' });
+  const review = { ...f.review, entities: ['road', 'camp', 'bank'].map(id => ({ id, label: id, count: 1, objectIds: [id], basis: { kind: 'assumption', reason: '测试人工布景，不宣称原文写了道路' } })), relations: [example] };
+  await editReview(JSON.stringify(review)); await acknowledge(); await clickText('确认应用到3D编辑场景');
+  expect(f.apply).toHaveBeenCalledTimes(1); expect(f.apply.mock.calls[0][3]).toEqual(review);
+  expect(f.fetcher.mock.calls.filter(([url]) => String(url).endsWith('/plan'))).toHaveLength(1);
+});
+it('shows offline source-only candidates before planning or viewport capture, with exact selectable evidence and no extra requests', async () => {
+  const content = '😀\r\n两块  黑石在水潭附近。小路通向军营。';
+  const fetcher = vi.fn(async (url: any) => {
+    if (url === '/api/projects') return response([{ id: 1, title: '项目' }]);
+    if (url.endsWith('/shots')) return response([{ ...sourceShot, performance: '500棵树' }]);
+    return response({ scenes: [{ ...sourceScene, content, location: '100座寺庙' }] });
+  });
+  await mount(fetcher); await choose('导演来源项目', '1'); await choose('导演来源场次', '2'); await read();
+  const panel = host!.querySelector('[aria-label="离线原文建景候选"]');
+  expect(panel).not.toBeNull(); expect(panel!.textContent).toContain('未完成审校');
+  expect(panel!.textContent).toContain('4 次提及 · 2 条关系候选');
+  expect(panel!.textContent).toContain('字面数量：2 块');
+  expect(panel!.querySelectorAll('[data-scenery-mention]')).toHaveLength(4);
+  expect(panel!.querySelector('[data-scenery-mention]')!.textContent).toContain('两块  黑石');
+  expect([...panel!.querySelectorAll('[data-scenery-mention]')].map(e => e.getAttribute('data-scenery-mention'))).toEqual(['黑石', '水潭', '小路', '军营']);
+  const before = fetcher.mock.calls.length;
+  await clickText('定位提及 1');
+  const original = panel!.querySelector('[aria-label="候选原文定位"]')!;
+  // Textareas normalize CRLF and would invalidate raw UTF-16 offsets. Use raw
+  // text nodes and a mark; both the original and highlighted quote stay exact.
+  expect(original.textContent).toBe(content);
+  expect(original.querySelector('mark')!.textContent).toBe('两块  黑石');
+  expect(original.querySelector('mark')!.getAttribute('data-source-start')).toBe('4');
+  expect(original.closest('details')!.open).toBe(true); expect(document.activeElement).toBe(original);
+  expect(fetcher.mock.calls).toHaveLength(before);
+  expect(fetcher.mock.calls.every(([, options]: any) => options.method === 'GET')).toBe(true);
+  expect(fetcher.mock.calls).toHaveLength(5);
+  expect(host!.querySelector('[aria-label="人工建景要求 JSON"]')).toBeNull();
+});
+it.each(['project', 'scene', 'disabled'])('removes source candidates when invalidated by %s', async mode => {
+  const fetcher = vi.fn(async (url: any) => url === '/api/projects' ? response([{ id: 1, title: '项目' }]) : url.endsWith('/shots') ? response([sourceShot]) : response({ scenes: [sourceScene] }));
+  await mount(fetcher); await choose('导演来源项目', '1'); await choose('导演来源场次', '2'); await read();
+  expect(host!.querySelector('[aria-label="离线原文建景候选"]')).not.toBeNull();
+  if (mode === 'disabled') await act(async () => root!.render(<DirectorSourcePanel disabled />));
+  else await choose(mode === 'project' ? '导演来源项目' : '导演来源场次', '');
+  expect(host!.querySelector('[aria-label="离线原文建景候选"]')).toBeNull();
+});
+it('does not repopulate candidates from a late response after disabling the panel', async () => {
+  let resolveShots!: (value: Response) => void;
+  await mount(vi.fn(async (url: any) => url === '/api/projects' ? response([{ id: 1, title: '项目' }]) : url.endsWith('/shots') ? new Promise<Response>(resolve => { resolveShots = resolve; }) : response({ scenes: [sourceScene] })));
+  await choose('导演来源项目', '1'); await choose('导演来源场次', '2'); await read();
+  await act(async () => root!.render(<DirectorSourcePanel disabled />));
+  await act(async () => resolveShots(response([sourceShot]))); await flush();
+  expect(host!.querySelector('[aria-label="离线原文建景候选"]')).toBeNull();
+});
+it('keeps candidates across planning without modifying manual JSON, unresolved items or confirmation when navigating evidence', async () => {
+  const f = await executionFixture();
+  expect(host!.querySelector('[aria-label="离线原文建景候选"]')).not.toBeNull();
+  const review = JSON.stringify({ ...f.review, unresolved: ['人工仍须核对门的位置'] });
+  await editReview(review); await acknowledge();
+  const requests = f.fetcher.mock.calls.length;
+  await clickText('定位提及 1');
+  expect((host!.querySelector('[aria-label="人工建景要求 JSON"]') as HTMLTextAreaElement).value).toBe(review);
+  expect((host!.querySelector('[aria-label="确认应用导演执行草稿"]') as HTMLInputElement).checked).toBe(true);
+  expect(applicationButton().disabled).toBe(true); expect(f.apply).not.toHaveBeenCalled();
+  expect(f.fetcher.mock.calls).toHaveLength(requests);
+  await editReview(JSON.stringify(f.review)); await acknowledge();
+  await clickText('定位提及 1'); expect(applicationButton().disabled).toBe(false);
+  await clickText('确认应用到3D编辑场景'); expect(f.apply.mock.calls[0][3]).toEqual(f.review);
+});
+it.each([
+  ['他握住她的手，转身离开。', '零命中不代表原文没有布景要求'],
+  ['黑石'.repeat(200) + 'x'.repeat(64000), '输出证据超过262144'],
+])('shows an honest empty or unavailable review without extra model calls', async (content, expected) => {
+  const fetcher = vi.fn(async (url: any) => url === '/api/projects' ? response([{ id: 1, title: '项目' }]) : url.endsWith('/shots') ? response([sourceShot]) : response({ scenes: [{ ...sourceScene, content }] }));
+  await mount(fetcher); await choose('导演来源项目', '1'); await choose('导演来源场次', '2'); await read();
+  // Source SHA-256 is genuinely asynchronous, especially for a 64k fixture
+  // during the full suite. Wait for the observable snapshot, not a 15ms guess.
+  await vi.waitFor(async () => { await flush(); expect(host!.querySelector('[aria-label="导演来源快照"]')).not.toBeNull(); });
+  const panel = host!.querySelector('[aria-label="离线原文建景候选"]')!;
+  expect(panel.textContent).toContain(expected); expect(panel.textContent).toContain('未完成审校');
+  expect(panel.querySelectorAll('[data-scenery-mention]')).toHaveLength(0);
+  expect(fetcher.mock.calls).toHaveLength(5);
+  expect(fetcher.mock.calls.every(([, options]: any) => options.method === 'GET')).toBe(true);
+});
 it('rejects a scene changed during the separate API reads', async () => {
   let reads = 0;
   await mount(vi.fn(async (url: any) => {

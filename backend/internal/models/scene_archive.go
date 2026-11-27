@@ -9,8 +9,10 @@ import (
 // 落在 <data_dir>/scene-archives/<id>.json，表里只放元信息：十几 MB 的 base64
 // 塞进 SQLite 行里会让全表扫描和备份都变慢，也没办法按流读取。
 type SceneArchive struct {
-	ID        uint           `gorm:"primaryKey" json:"id"`
-	ProjectID *uint          `gorm:"index" json:"project_id"`
+	ID        uint  `gorm:"primaryKey" json:"id"`
+	ProjectID *uint `gorm:"index" json:"project_id"`
+	// SceneID 记录存档的历史来源，不代表该场次的当前存档或逐镜生成产物。
+	SceneID   *uint          `gorm:"index" json:"scene_id"`
 	Name      string         `gorm:"size:200" json:"name"`
 	Size      int64          `json:"size"`
 	CreatedAt time.Time      `json:"created_at"`

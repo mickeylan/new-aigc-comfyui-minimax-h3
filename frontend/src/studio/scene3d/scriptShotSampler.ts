@@ -97,7 +97,7 @@ export function assertScriptShotApplicationSafe(plan: ScriptShotPlan, entries: r
       object.scale.set(value.scale[0], value.scale[1], value.scale[2]);
       object.updateMatrixWorld(true);
     }
-    if (ready.sceneRequirements) assertSceneRequirements(ready.sceneRequirements, entries);
+    if (ready.sceneRequirements) assertSceneRequirements(ready.sceneRequirements, entries, environment);
     const proof = assertScriptShotWalkable(ready, entries, environment);
     if (ready.shots.some(shot => shot.motion?.navigation)) compileShotNavigation(ready, entries, environment);
     // Contact declarations are not geometric permission. Prove all borrowed poses
@@ -164,7 +164,7 @@ function createSamplerCore(plan: ScriptShotPlan, options: SamplerOptions) {
   })));
   // Check editing-baseline scenery before taking camera/animation ownership. This
   // is not a per-frame statement about moving actors or continuous physics.
-  const sceneRequirements = ready.sceneRequirements ? assertSceneRequirements(ready.sceneRequirements, entries) : undefined;
+  const sceneRequirements = ready.sceneRequirements ? assertSceneRequirements(ready.sceneRequirements, entries, options.environment) : undefined;
   const legacyProof = assertScriptShotWalkable(ready, entries, options.environment);
   const navigation = ready.shots.some(shot => shot.motion?.navigation) ? compileShotNavigation(ready, entries, options.environment) : null;
   const walkProof = { ...legacyProof, ...(navigation ? { navigation: navigation.proof } : {}), ...(sceneRequirements ? { sceneRequirements } : {}) };

@@ -3,6 +3,7 @@ import { projectChoices, scenePromptChoices, type ProjectChoice } from './motion
 import { snapshotDirectorSource, type DirectorSourceSnapshot } from './directorSource';
 import type { StudioExecutionContext } from './studioExecutionContext';
 import { validateSceneRequirements, type SceneRequirements } from './sceneRequirements';
+import { extractSceneryCandidates, SCENERY_VOCABULARY, type SourceSpan } from './sceneryCandidates';
 
 type SceneChoice = { id: number; label: string };
 async function readJSON(url: string, signal: AbortSignal): Promise<any> {
@@ -32,6 +33,16 @@ export default function DirectorSourcePanel({ disabled, captureExecutionContext,
   const [acknowledged, setAcknowledged] = useState(false);
   const [executionApplied, setExecutionApplied] = useState(false);
   const [requirementsJSON, setRequirementsJSON] = useState('');
+  const candidates = useMemo(() => snapshot ? extractSceneryCandidates(snapshot.scene.content) : null, [snapshot]);
+  const [sourceHighlight, setSourceHighlight] = useState<SourceSpan | null>(null);
+  const sourceView = useRef<HTMLPreElement | null>(null);
+  const locateSource = (evidence: SourceSpan) => setSourceHighlight({ ...evidence });
+  useEffect(() => {
+    const view = sourceView.current;
+    if (!view || !sourceHighlight) return;
+    const details = view.closest('details'); if (details) details.open = true;
+    view.focus(); view.querySelector('mark')?.scrollIntoView?.({ block: 'nearest' });
+  }, [sourceHighlight]);
   const requirementState = useMemo((): { review?: SceneRequirements; error?: string } => {
     if (!requirementsJSON.trim()) return {};
     try {
@@ -44,7 +55,7 @@ export default function DirectorSourcePanel({ disabled, captureExecutionContext,
   }, [requirementsJSON, snapshot]);
   const loading = useRef<AbortController | null>(null);
   const generation = useRef(0);
-  const invalidate = () => { generation.current++; loading.current?.abort(); setSnapshot(null); setExecution(null); setAcknowledged(false); setExecutionApplied(false); setRequirementsJSON(''); setError(''); setPending(false); };
+  const invalidate = () => { generation.current++; loading.current?.abort(); setSnapshot(null); setSourceHighlight(null); setExecution(null); setAcknowledged(false); setExecutionApplied(false); setRequirementsJSON(''); setError(''); setPending(false); };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -145,6 +156,35 @@ export default function DirectorSourcePanel({ disabled, captureExecutionContext,
       <p>{snapshot.scene.title} · {snapshot.scene.location}</p>
       <p className="whitespace-pre-wrap">{snapshot.scene.content}</p>
       <p className="break-all">来源修订：{snapshot.revision}</p>
+      {candidates && <section aria-label="离线原文建景候选" className="space-y-2 border border-zinc-700 p-2">
+        <h4>离线原文候选 · 未完成审校</h4>
+        <p>{candidates.status === 'unavailable' ? '本次无法分析；请人工审阅原文。' : `${candidates.mentions.length} 次提及 · ${candidates.relations.length} 条关系候选`}</p>
+        <p>只扫描本次快照的场次正文，不读标题、地点栏或导演补充。不调用模型，不修改场景或人工建景 JSON，不清空未解决项。候选不等于事实，也不代表全文已理解。</p>
+        <p>数量为“数词＋量词＋词表名词”的字面线索（中文一至九十九、阿拉伯正整数至4096），不代表场景实例数；一片竹林不是一株竹子。重复提及不合并、不累加。</p>
+        <details><summary>规则词表与覆盖边界</summary><p>{SCENERY_VOCABULARY.join('、')}</p><p>仅局部明确端点支持“在/位于…附近/近岸/对岸”和“通向/通往/连接”。词表外名词、指代、跨句关系及复杂数量须人工补充；当前没有语义完整性保证。</p></details>
+        <details><summary>原文定位（只读 UTF-16 [start,end)）</summary>
+          <pre aria-label="候选原文定位" ref={sourceView} tabIndex={-1} className="max-h-60 overflow-auto whitespace-pre-wrap break-all">{sourceHighlight ? <>{snapshot.scene.content.slice(0, sourceHighlight.start)}<mark data-source-start={sourceHighlight.start} data-source-end={sourceHighlight.end}>{snapshot.scene.content.slice(sourceHighlight.start, sourceHighlight.end)}</mark>{snapshot.scene.content.slice(sourceHighlight.end)}</> : snapshot.scene.content}</pre>
+        </details>
+        <details open><summary>地点与物件提及（未绑定实际对象）</summary>
+          <ol className="max-h-80 space-y-2 overflow-auto">{candidates.mentions.map((item, index) => <li key={item.id} data-scenery-mention={item.label}>
+            <p>{index + 1}. {item.label} · {item.kind === 'place' ? '地点词' : '物件词'} · 字面数量：{item.quantity === null ? '未确认' : `${item.quantity} ${item.classifier}`}</p>
+            <p>UTF-16 [{item.evidence.start},{item.evidence.end}) <code className="whitespace-pre-wrap">{item.evidence.quote}</code></p>
+            <button type="button" disabled={disabled} onClick={() => locateSource(item.evidence)}>定位提及 {index + 1}</button>
+            {item.concerns.map(concern => <p key={concern}>{concern}</p>)}
+            <details><summary>原始语境</summary><pre className="whitespace-pre-wrap break-all">{item.context.quote}</pre></details>
+          </li>)}</ol>
+        </details>
+        <details><summary>空间关系候选（不是几何证明）</summary>
+          <ol className="max-h-80 space-y-2 overflow-auto">{candidates.relations.map((item, index) => <li key={item.id}>
+            <p>{index + 1}. {item.kind === 'leads-to' ? '通向线索' : item.kind === 'across-reference' ? '对岸线索' : '附近/近岸线索'} · UTF-16 [{item.evidence.start},{item.evidence.end})</p>
+            <code className="whitespace-pre-wrap">{item.evidence.quote}</code>
+            <button type="button" disabled={disabled} onClick={() => locateSource(item.evidence)}>定位关系 {index + 1}</button>
+            {item.concerns.map(concern => <p key={concern}>{concern}</p>)}
+          </li>)}</ol>
+        </details>
+        <details open><summary>缺项与歧义提示（未完成）</summary><ul>{candidates.issues.map((issue, index) => <li key={index} className="whitespace-pre-wrap break-all">{issue}</li>)}</ul></details>
+        <p>确认语义、数量和身份后，仍须在高级人工建景审校中绑定真实对象并填写距离/坐标/推定理由；本区不会生成可执行要求或更改应用确认。</p>
+      </section>}
       {snapshot.shots.map(shot => <details key={shot.id}>
         <summary>镜 {shot.order} · ID {shot.id} · {shot.duration} 秒 · {String(shot.shot_type || '未标注景别')}</summary>
         <pre className="whitespace-pre-wrap break-all">{JSON.stringify(shot, null, 2)}</pre>
@@ -159,6 +199,8 @@ export default function DirectorSourcePanel({ disabled, captureExecutionContext,
           <details aria-label="人工建景审校入口">
             <summary>人工建景要求（高级 JSON，可选）</summary>
             <p>这不是小说自动抽取。逐项填写物件数量和草稿中的对象ID；fact 使用上方原文的 UTF-16 [start,end) 精确引用，assumption 必须写 reason。near 的 maxMetres、opposite-sides 的 x/z 轴均为人工布景选择，须写 stagingNote；未解决项不得清空冒充完成。</p>
+            <p>道路可声明 path-connected：subject 绑定路面物件，reference/other 为起终点地点；points 按顺序填写世界坐标 [x,y,z]。检查实际路面是否支撑连续中心线及端点是否接近地点表面，拒绝断口和第三方障碍；地形/水域为取样检查，不证明路宽、整身通行、涉水或全文覆盖。坐标、端点距离须写人工 stagingNote；不会自动加路或替你补齐关系。</p>
+            <pre aria-label="道路连通关系格式示例" className="whitespace-pre-wrap break-all">{JSON.stringify({ id: 'camp-to-bank', kind: 'path-connected', subject: 'road', reference: 'camp', other: 'bank', points: [[-2, 0, 0], [2, 0, 0]], maxEndpointGapMetres: .5, stagingNote: '仅格式示例，须替换为本场景实测坐标、端点距离及物件映射', basis: { kind: 'assumption', reason: '示例不是小说事实，请逐条核对原文后替换' } }, null, 2)}</pre>
             <button type="button" disabled={disabled || pending} onClick={() => {
               if (requirementsJSON.trim()) return;
               setRequirementsJSON(JSON.stringify({ version: 1, sourceRevision: snapshot.revision, sourceContent: snapshot.scene.content,

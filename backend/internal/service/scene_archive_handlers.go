@@ -96,7 +96,11 @@ func (s *Service) HandleCreateSceneArchive(c *gin.Context) {
 		}
 		project = &id
 	}
-	archive := models.SceneArchive{ProjectID: project, Name: name, Size: int64(len(payload))}
+	scene, ok := s.validateSceneArchiveScene(c, c.PostForm("scene_id"), project)
+	if !ok {
+		return
+	}
+	archive := models.SceneArchive{ProjectID: project, SceneID: scene, Name: name, Size: int64(len(payload))}
 	if err := s.DB.Create(&archive).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "登记场景存档失败：" + err.Error()})
 		return
@@ -115,9 +119,33 @@ func (s *Service) HandleCreateSceneArchive(c *gin.Context) {
 	c.JSON(http.StatusCreated, archive)
 }
 
-// HandleListSceneArchives 列出存档元数据，可按 project_id 过滤，新的排在前面。
+// validateSceneArchiveScene 对可选来源作同一套创建/筛选校验，不能只凭客户端 id 关联。
+func (s *Service) validateSceneArchiveScene(c *gin.Context, value string, project *uint) (*uint, bool) {
+	if value == "" {
+		return nil, true
+	}
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || parsed == 0 || uint64(uint(parsed)) != parsed || project == nil || *project == 0 {
+		c.JSON(400, gin.H{"error": "scene_id 须为正整数且必须指定 project_id"})
+		return nil, false
+	}
+	var count int64
+	if err := s.DB.Model(&models.Scene{}).Where("id = ? AND project_id = ? AND archived = ?", uint(parsed), *project, false).Count(&count).Error; err != nil {
+		c.JSON(500, gin.H{"error": "查询来源场次失败"})
+		return nil, false
+	}
+	if count != 1 {
+		c.JSON(400, gin.H{"error": "来源场次不存在、不属于该项目或已归档"})
+		return nil, false
+	}
+	id := uint(parsed)
+	return &id, true
+}
+
+// HandleListSceneArchives 列出存档元数据，可按 project_id / scene_id 过滤，新的排在前面。
 func (s *Service) HandleListSceneArchives(c *gin.Context) {
 	query := s.DB.Model(&models.SceneArchive{})
+	var project *uint
 	if value := strings.TrimSpace(c.Query("project_id")); value != "" {
 		parsed, err := strconv.ParseUint(value, 10, 64)
 		if err != nil {
@@ -127,8 +155,17 @@ func (s *Service) HandleListSceneArchives(c *gin.Context) {
 		if parsed == 0 {
 			query = query.Where("project_id IS NULL")
 		} else {
-			query = query.Where("project_id = ?", uint(parsed))
+			id := uint(parsed)
+			project = &id
+			query = query.Where("project_id = ?", id)
 		}
+	}
+	scene, ok := s.validateSceneArchiveScene(c, c.Query("scene_id"), project)
+	if !ok {
+		return
+	}
+	if scene != nil {
+		query = query.Where("scene_id = ?", *scene)
 	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {

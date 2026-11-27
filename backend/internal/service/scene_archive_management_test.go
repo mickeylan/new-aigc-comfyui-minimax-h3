@@ -53,6 +53,83 @@ func TestSceneArchiveProjectValidation(t *testing.T) {
 	}
 }
 
+func TestSceneArchiveSceneAssociation(t *testing.T) {
+	r, s, _ := newSceneArchiveRouter(t)
+	if err := s.DB.AutoMigrate(&models.Project{}, &models.Scene{}); err != nil {
+		t.Fatal(err)
+	}
+	p, other := models.Project{Title: "来源项目"}, models.Project{Title: "其他项目"}
+	s.DB.Create(&p)
+	s.DB.Create(&other)
+	scene := models.Scene{ProjectID: p.ID, Title: "来源场次"}
+	archived := models.Scene{ProjectID: p.ID, Archived: true}
+	sibling := models.Scene{ProjectID: p.ID, Title: "同项目其他场次"}
+	for _, item := range []*models.Scene{&scene, &archived, &sibling} {
+		if err := s.DB.Create(item).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	upload := func(projectID, sceneID string) *httptest.ResponseRecorder {
+		body := &bytes.Buffer{}
+		writer := multipart.NewWriter(body)
+		part, err := writer.CreateFormFile("file", "source.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		part.Write([]byte(`{"version":7}`))
+		writer.WriteField("project_id", projectID)
+		writer.WriteField("scene_id", sceneID)
+		writer.Close()
+		q := httptest.NewRequest("POST", "/api/scene-archives", body)
+		q.Header.Set("Content-Type", writer.FormDataContentType())
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, q)
+		return w
+	}
+	pid, sid := fmt.Sprint(p.ID), fmt.Sprint(scene.ID)
+	for _, pair := range [][2]string{{"", sid}, {pid, "0"}, {pid, "-1"}, {pid, "1.5"}, {pid, "x"}, {pid, " "}, {pid, "999999"}, {pid, fmt.Sprint(archived.ID)}, {fmt.Sprint(other.ID), sid}} {
+		if w := upload(pair[0], pair[1]); w.Code != 400 {
+			t.Fatalf("invalid source %v: %d %s", pair, w.Code, w.Body.String())
+		}
+	}
+	w := upload(pid, sid)
+	var saved models.SceneArchive
+	if w.Code != 201 || json.Unmarshal(w.Body.Bytes(), &saved) != nil || saved.SceneID == nil || *saved.SceneID != scene.ID || saved.ProjectID == nil || *saved.ProjectID != p.ID {
+		t.Fatalf("association: %d %s", w.Code, w.Body.String())
+	}
+	for _, pair := range [][2]string{{pid, ""}, {"", ""}, {pid, fmt.Sprint(sibling.ID)}} {
+		if w := upload(pair[0], pair[1]); w.Code != 201 {
+			t.Fatalf("legacy/sibling upload: %d %s", w.Code, w.Body.String())
+		}
+	}
+	for _, query := range []string{"scene_id=" + sid, "project_id=0&scene_id=" + sid, "project_id=" + fmt.Sprint(other.ID) + "&scene_id=" + sid, "project_id=" + pid + "&scene_id=" + fmt.Sprint(archived.ID), "project_id=" + pid + "&scene_id=0", "project_id=" + pid + "&scene_id=x"} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("GET", "/api/scene-archives?"+query, nil))
+		if w.Code != 400 {
+			t.Fatalf("invalid filter %s: %d %s", query, w.Code, w.Body.String())
+		}
+	}
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/scene-archives?project_id="+pid+"&scene_id="+sid+"&page=1&page_size=10", nil))
+	var list struct {
+		Items []models.SceneArchive
+		Total int
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &list) != nil || list.Total != 1 || len(list.Items) != 1 || list.Items[0].ID != saved.ID {
+		t.Fatalf("source filter leaked: %d %s", w.Code, w.Body.String())
+	}
+	data, err := os.ReadFile(s.sceneArchivePath(saved.ID))
+	if err != nil || string(data) != `{"version":7}` {
+		t.Fatalf("source changed archive: %s %v", data, err)
+	}
+	if err := s.DB.Delete(&scene).Error; err != nil {
+		t.Fatal(err)
+	}
+	if w := upload(pid, sid); w.Code != 400 {
+		t.Fatalf("deleted scene accepted: %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestSceneArchiveManagement(t *testing.T) {
 	r, s, _ := newSceneArchiveRouter(t)
 	r.PATCH("/api/scene-archives/:id", s.HandleRenameSceneArchive)

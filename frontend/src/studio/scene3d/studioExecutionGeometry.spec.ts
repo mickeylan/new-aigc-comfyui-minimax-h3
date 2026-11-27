@@ -5,6 +5,7 @@ import { validateScriptShotPlan, type ScriptShotPlan } from './scriptShotPlan';
 import { createEnvironmentTerrain, defaultSceneEnvironment } from './ground-path';
 import { createRiggedPerson } from './toonflow/riggedPerson';
 import { serializeBonePose } from './posing/bonePose';
+import { correctExecutionBeatClip } from './performanceCorrection';
 
 function fixture() {
   const entries = [-3, 3].map((x, i) => {
@@ -145,6 +146,42 @@ it('rejects a turning wrist when this conservative plane intersects a foot rathe
   f.target.animations[0].tracks[0].values.set(q, 4);
   const beat = f.plan.shots[0].execution!.actors![1].beats[0]; beat.to.x = beat.from.x;
   expect(() => f.sampler()).toThrow('分离平面'); expect(f.snapshot()).toEqual(baseline);
+});
+
+it('rejects an unsafe manually selected replacement clip at the real skin gate, preserving the original plan and live pose', () => {
+  const f = contactFixture();
+  const beat = f.plan.shots[0].execution!.actors![1].beats[0]; beat.to.x = beat.from.x;
+  const original = structuredClone(f.plan), baseline = f.snapshot();
+  expect(() => assertScriptShotApplicationSafe(f.plan, f.entries, null)).not.toThrow();
+  const unsafe = f.target.animations[0].clone(); unsafe.name = 'manual-unsafe-wrist-turn';
+  const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -.22).toArray(); unsafe.tracks[0].values.set(q, 4);
+  f.target.animations.push(unsafe);
+  const targets = f.entries.map(e => ({ id: e.id, name: e.name, visible: true, locked: false, animations: e.object.animations.map((c, index) => ({ index, name: c.name, duration: c.duration })) }));
+  const corrected = correctExecutionBeatClip(f.plan, { shotId: 'one', targetId: 'b', beatIndex: 0, animation: targets[1].animations[1], reason: '隔离测试：人工改片段仍不可绕过安全门禁' }, targets);
+  expect(() => assertScriptShotApplicationSafe(corrected, f.entries, null)).toThrow('分离平面');
+  expect(f.plan).toEqual(original); expect(f.snapshot()).toEqual(baseline);
+  console.log('MANUAL_PERFORMANCE_SKIN_GATE=PASS unsafeReplacement=rejected originalPlan=preserved livePose=restored');
+});
+
+it('keeps whole-shot wrist constraints across a split and rejects an unsafe second phase with the unchanged skin gate', () => {
+  const f = contactFixture();
+  const beat = f.plan.shots[0].execution!.actors![1].beats[0]; beat.to.x = beat.from.x;
+  const unsafe = f.target.animations[0].clone(); unsafe.name = 'unsafe-second-phase';
+  // A split restarts local time: its .15s phase never reaches the original .2s
+  // final key. Make the unsafe pose present from local zero, not after the cut.
+  const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -.22).toArray(); unsafe.tracks[0].values.set([...q, ...q]);
+  f.target.animations.push(unsafe);
+  const targets = f.entries.map(e => ({ id: e.id, name: e.name, visible: true, locked: false, animations: e.object.animations.map((c, index) => ({ index, name: c.name, duration: c.duration })) }));
+  const input = { shotId: 'one', targetId: 'b', beatIndex: 0, animation: targets[1].animations[0], reason: '人工两阶段仍保持整镜贴合；非释放', split: { at: .05, afterAnimation: targets[1].animations[0] } };
+  const baseline = f.snapshot(), original = structuredClone(f.plan);
+  const safe = correctExecutionBeatClip(f.plan, input, targets);
+  expect(safe.shots[0].execution!.contacts).toEqual(original.shots[0].execution!.contacts);
+  const sampler = createScriptShotSampler(safe, { camera: f.camera, controls: f.controls, entries: () => f.entries, environment: null });
+  try { for (const t of [.01, .05, .1, .2, .05]) { sampler.sampleAt(t); expect(f.error()).toBeLessThan(1e-5); } } finally { sampler.stop(); }
+  const bad = correctExecutionBeatClip(f.plan, { ...input, split: { at: .05, afterAnimation: targets[1].animations[1] } }, targets);
+  expect(() => assertScriptShotApplicationSafe(bad, f.entries, null)).toThrow('分离平面');
+  expect(f.plan).toEqual(original); expect(f.snapshot()).toEqual(baseline);
+  console.log('SPLIT_PERFORMANCE_SKIN_GATE=PASS contact=whole-shot boundary=sampled unsafeSecondPhase=rejected original=preserved stop=restored');
 });
 
 it('rejects base clips that change arm length instead of using the stretched rig to satisfy contact', () => {

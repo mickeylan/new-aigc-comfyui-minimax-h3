@@ -10,6 +10,8 @@ const {
   sceneArchiveBlocker,
   sceneArchiveFileName,
   sceneArchiveFormBody,
+  sceneStudioContext,
+  sceneArchiveQuery,
 } = await import('../src/studio/scene3d/scene-archive.ts')
 
 const stage = readFileSync(
@@ -94,6 +96,29 @@ test('上传表单：file 与 name 同名，project_id 只在有值时才带', (
   assert.equal(noProject.get('project_id'), null)
   const zeroProject = sceneArchiveFormBody('{"version":3}', 'scene-3.json', 0)
   assert.equal(zeroProject.get('project_id'), null)
+})
+
+test('场次来源严格校验：缺失、数组、非整数不得悄悄成为另一场次', () => {
+  assert.equal(sceneStudioContext(undefined, undefined), undefined)
+  assert.deepEqual(sceneStudioContext('7', '11'), { projectId: 7, sceneId: 11 })
+  for (const pair of [[7, undefined], [undefined, 11], [0, 11], [7, -1], [7, 1.2], [7, ['11']], [7, '1e2'], [7, ' 11'], [7, Number.MAX_SAFE_INTEGER + 1]]) {
+    assert.throws(() => sceneStudioContext(...pair), /来源/)
+  }
+})
+
+test('关联表单和分页过滤携带相同来源身份；旧存档仍无场次', () => {
+  const form = sceneArchiveFormBody('{}', 'scene.json', 7, 11)
+  assert.equal(form.get('project_id'), '7')
+  assert.equal(form.get('scene_id'), '11')
+  assert.throws(() => sceneArchiveFormBody('{}', 'scene.json', null, 11), /来源/)
+  assert.equal(sceneArchiveFormBody('{}', 'scene.json', 7).get('scene_id'), null)
+  const context = sceneStudioContext(7, 11)
+  const query = new URLSearchParams(sceneArchiveQuery(2, 'scene', context))
+  assert.deepEqual(Object.fromEntries(query), { page: '2', page_size: '10', project_id: '7', scene_id: '11' })
+  assert.equal(new URLSearchParams(sceneArchiveQuery(1, 'all', context)).has('scene_id'), false)
+  assert.throws(() => sceneArchiveQuery(1, 'scene'), /没有关联/)
+  assert.equal(parseSceneArchiveList([{ id: 1, project_id: 7, scene_id: 11 }])[0].sceneId, 11)
+  assert.equal(parseSceneArchiveList([{ id: 1 }])[0].sceneId, null)
 })
 
 test('没给 name 时用时间戳文件名兜底', () => {

@@ -2,13 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 const s=readFileSync(new URL('../src/studio/scene3d/Scene3DStage.tsx',import.meta.url),'utf8');
+const { sceneArchiveQuery } = await import('../src/studio/scene3d/scene-archive.ts');
 test('存档归属独立于提示词项目，使用真实项目标签',()=>{
  const save=s.slice(s.indexOf('const saveSceneToServer'),s.indexOf('// 本地文件与后端存档'));
  assert.match(save,/Number\(archiveProjectId\)/);assert.doesNotMatch(save,/promptProjectId/);
  assert.match(s,/aria-label="新存档项目"/);assert.match(s,/\{p.label\}/);
 });
 test('列表分页和项目筛选有独立上下文',()=>{
- assert.match(s,/page_size=10/);assert.match(s,/archiveTotal\/10/);
+ // 请求构造已提取为同一生产函数：测实际query，而不是要求URL字面量留在Stage。
+ const query = new URLSearchParams(sceneArchiveQuery(2, '7'));
+ assert.equal(query.get('page_size'),'10');assert.equal(query.get('page'),'2');assert.equal(query.get('project_id'),'7');
+ assert.match(s,/sceneArchiveQuery\(page, filter, studioContext\)/);assert.match(s,/archiveTotal\/10/);
  assert.match(s,/aria-label="存档列表项目筛选"/);assert.match(s,/<option value="0">无项目归属/);
  assert.match(s,/上一页/);assert.match(s,/下一页/);
 });

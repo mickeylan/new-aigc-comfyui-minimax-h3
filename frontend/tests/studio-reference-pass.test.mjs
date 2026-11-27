@@ -51,9 +51,11 @@ test('深度范围按模型包围盒算，没法线的几何体先补法线', ()
 })
 
 test('渲一帧前藏掉编辑器痕迹与泼溅，渲完 finally 无条件还原', () => {
-  const fn = stage.match(/const captureReference = useCallback\(async \(pass: ReferencePass\) => \{([\s\S]*?)\n  \}, \[\]\);/)
+  // 新的可选开关仅供当前帧交接；旧导出默认仍停止播放。保留全部还原断言。
+  const fn = stage.match(/const captureReference = useCallback\(async \(pass: ReferencePass, preservePreview = false\) => \{([\s\S]*?)\n  \}, \[\]\);/)
   assert.ok(fn, '缺 captureReference')
   const body = fn[1]
+  assert.match(body, /if \(!preservePreview\) stopAnimation\(\);/)
 
   // 网格线/地面/gizmo/骨架线不是要被约束的几何
   assert.match(body, /hide\(gridRef\.current\);/)

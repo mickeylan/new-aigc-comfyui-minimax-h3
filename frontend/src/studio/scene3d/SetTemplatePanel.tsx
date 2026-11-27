@@ -1,5 +1,9 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 const DirectorSourcePanel = lazy(() => import('./DirectorSourcePanel'));
+import PerformanceCorrectionPanel from './PerformanceCorrectionPanel';
+import ScriptPerformancePanel, { ScriptPerformanceDiagnostic } from './ScriptPerformancePanel';
+import { suggestScriptCast, type ScriptPerformanceContext } from './scriptPerformance';
+import { correctExecutionBeatClip, type ExecutionClipCorrection } from './performanceCorrection';
 import type { ScriptCharacterBinding, ScriptSceneDraft, ScriptSceneIndex, ScriptShot, ScriptShotCamera, ScriptShotMotion, ScriptShotMotionTarget, ScriptShotPlan, SetDraft } from './toonflowSets';
 type Engine = typeof import('./toonflowSets');
 type Entries = ReturnType<Engine['materializeSetDraft']>;
@@ -90,7 +94,7 @@ function ShotMotionEditor({ shot, targets, disabled, pending, onSet, onClear }: 
   </div>;
 }
 
-export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, onPreviewShot, onApplyShots, appliedPlan, onPlayShots, onStopShots, shotPlayback, onExportShotPack, listMotionTargets, captureExecutionContext, onApplyExecution }: {
+export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, onPreviewShot, onApplyShots, appliedPlan, onPlayShots, onStopShots, shotPlayback, onExportShotPack, listMotionTargets, captureExecutionContext, onApplyExecution, capturePerformanceContext }: {
   disabled: boolean;
   onApply: (draft: SetDraft, entries: Entries, x: number, z: number) => void;
   /** 记录当前视口机位；场景没接视口时保持 undefined，界面不会假装能记机位。 */
@@ -112,6 +116,8 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
   /** 当前场景可被人工选作走位目标的真实对象；不提供就无法在应用/播放前校验目标。 */
   listMotionTargets?: () => ScriptShotMotionTarget[];
   captureExecutionContext?: () => Promise<import('./studioExecutionContext').StudioExecutionContext>;
+  /** Synchronous live cast/transform snapshot; checked again before applying a local script proposal. */
+  capturePerformanceContext?: () => ScriptPerformanceContext;
   onApplyExecution?: import('./DirectorSourcePanel').ApplyDirectorExecution;
 }) {
   const [engine, setEngine] = useState<Engine | null>(null);
@@ -132,6 +138,15 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
   const [shotPlan, setShotPlan] = useState<ScriptShotPlan | null>(null);
   const [shotAcknowledged, setShotAcknowledged] = useState(false);
   const [shotNote, setShotNote] = useState('');
+  const [performanceDirty, setPerformanceDirty] = useState(false);
+  const [scriptPerformanceDirty, setScriptPerformanceDirty] = useState(false);
+  const [confirmedScript, setConfirmedScript] = useState<{ draft: ScriptSceneDraft; scene: import('./toonflowSets').ScriptScene; source: string } | null>(null);
+  const [performanceBaseline, setPerformanceBaseline] = useState<{ revision: string; against: ScriptShotPlan | null | undefined } | null>(null);
+  const [reviewedPlan, setReviewedPlan] = useState<ScriptShotPlan | null>(null);
+  const staleReview = (!!reviewedPlan && appliedPlan !== reviewedPlan && appliedPlan !== shotPlan) || (!!performanceBaseline && appliedPlan !== performanceBaseline.against && appliedPlan !== shotPlan);
+  const unsavedPerformance = performanceDirty || scriptPerformanceDirty;
+  useEffect(() => { setShotAcknowledged(false); }, [appliedPlan, disabled]);
+  useEffect(() => { if (unsavedPerformance) setShotAcknowledged(false); }, [unsavedPerformance]);
   const [packAcknowledged, setPackAcknowledged] = useState(false);
   const [packPending, setPackPending] = useState(false);
   const scriptController = useRef<AbortController | null>(null);
@@ -158,7 +173,33 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
   }
   const centerBlocker = () => (![x, z].every(Number.isFinite) || Math.max(Math.abs(x), Math.abs(z)) > 1000 ? '布景中心坐标须在 -1000 到 1000 米内' : '');
   /** 剧本、场次、模板或草稿一换，旧镜头表就作废；不悄悄沿用。 */
-  function resetShots() { setShotPlan(null); setShotAcknowledged(false); setShotNote(''); }
+  function resetShots() { setShotPlan(null); setShotAcknowledged(false); setShotNote(''); setPerformanceDirty(false); setScriptPerformanceDirty(false); setReviewedPlan(null); setConfirmedScript(null); setPerformanceBaseline(null); }
+  function suggestCast() {
+    if (!scriptDraft || disabled || pending) return;
+    try {
+      const suggestions = suggestScriptCast(scriptDraft.review.characters);
+      setBindings(Object.fromEntries(suggestions.map(binding => {
+        const target = binding.target as Extract<ScriptCharacterBinding['target'], { kind: 'placeholder' }>;
+        return [binding.character, { kind: 'placeholder', rig: 'skeletal', x: target.position.x, z: target.position.z } as BindingChoice];
+      })));
+      setAcknowledged(false); setError('');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  }
+  function stageScriptPerformance(plan: ScriptShotPlan, revision: string) {
+    if (disabled || pending || performanceDirty || staleReview || !confirmedScript || confirmedScript.source !== scriptText) throw Error('剧本或场景已变化，请重新读取');
+    if (!capturePerformanceContext || capturePerformanceContext().revision !== revision) throw Error('场景或演员已变化，请重新读取已确认演员');
+    setShotPlan(plan); setShotAcknowledged(false); setReviewedPlan(null);
+    setPerformanceBaseline({ revision, against: appliedPlan }); setError('');
+    const record = JSON.parse(plan.diagnostics.at(-1)!);
+    setShotNote(`已暂存表演草稿，尚未应用：${record.unresolved.length} 行动作未覆盖；请核对下方原文缺项与每段真实动作，新增动作镜头仍须记录机位。`);
+  }
+  function stagePerformanceCorrection(correction: ExecutionClipCorrection) {
+    if (!shotPlan || disabled || pending || staleReview) throw Error('场景镜头表已变化，请重新载入');
+    if (!listMotionTargets) throw Error('当前场景没有提供真实骨骼动作目录');
+    const next = correctExecutionBeatClip(shotPlan, correction, listMotionTargets());
+    setShotPlan(next); setShotAcknowledged(false); setError('');
+    setShotNote('已暂存人工动作纠正，尚未应用；请重新核对镜头表并确认，通过真实几何预检后才接入场景。');
+  }
   async function prepare() {
     if (!engine || disabled || pending) return;
     controller.current?.abort();
@@ -309,7 +350,7 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
   }
   function loadAppliedShots() {
     if (!appliedPlan) return;
-    setShotPlan(appliedPlan); setShotAcknowledged(false); setError('');
+    setShotPlan(appliedPlan); setReviewedPlan(appliedPlan); setPerformanceDirty(false); setScriptPerformanceDirty(false); setConfirmedScript(null); setPerformanceBaseline(null); setShotAcknowledged(false); setError('');
     const mismatch = scriptDraft && (appliedPlan.sceneId !== scriptDraft.sceneId || appliedPlan.sourceFingerprint !== scriptDraft.review.sourceFingerprint);
     setShotNote(mismatch
       ? `该镜头表来自存档（${appliedPlan.sceneId}），与当前草稿不同源；仅作复核，应用会被来源检查拦下。`
@@ -317,14 +358,20 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
   }
   function applyShots() {
     if (!engine || !shotPlan || disabled || pending) return;
+    if (unsavedPerformance || staleReview) { setShotAcknowledged(false); setError(staleReview ? '场景镜头表已变化，请重新载入' : '请先暂存或放弃动作修改'); return; }
     if (!onApplyShots) { setError('当前场景没有接入镜头表接口，镜头计划无法应用'); return; }
     if (!shotAcknowledged) { setError('请先核对镜头顺序、台词与未指定机位的镜头并勾选确认'); return; }
     setError('');
     try {
       // 有当前草稿时必须先比对来源；没有草稿就如实提示无法比对。
-      const checked = scriptDraft ? engine.assertScriptShotPlanSource(shotPlan, scriptDraft) : shotPlan;
+      const sourceDraft = scriptDraft ?? confirmedScript?.draft;
+      const checked = sourceDraft ? engine.assertScriptShotPlanSource(shotPlan, sourceDraft) : shotPlan;
+      if (performanceBaseline && (!capturePerformanceContext || capturePerformanceContext().revision !== performanceBaseline.revision)) {
+        setShotAcknowledged(false); throw Error('场景或演员已变化，请重新读取已确认演员并生成草稿');
+      }
       const verified = verifyMotionTargets(checked);
       onApplyShots(verified);
+      setReviewedPlan(verified);
       setShotNote(`已接入 ${verified.shots.length} 镜（${verified.shots.filter(shot => shot.motion).length} 镜含人工走位）；保存场景后随存档保留。未指定机位 ${verified.shots.filter(shot => !hasShotCamera(shot)).length} 镜。`);
       setShotAcknowledged(false);
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
@@ -346,7 +393,10 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
         return { character, target };
       });
       const bound = engine.applyScriptCharacterBindings(scriptDraft, choices);
+      const sourceScene = index?.scenes.find(scene => scene.id === bound.sceneId);
       commit(bound.setDraft, x, z);
+      // Retain exact confirmed IDs, never rediscover actors by their mutable display names.
+      setConfirmedScript(sourceScene && bound.review.bindings?.length ? { draft: bound, scene: sourceScene, source: scriptText } : null);
       // 镜头计划独立于布景草稿：追加布景后仍可继续记录机位并应用。
       setScriptDraft(null); setAcknowledged(false); setBindings({});
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
@@ -395,6 +445,8 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
         {scriptDraft.review.dialogue.map((line, position) => <p key={`${line.speaker}-${position}`} className="text-zinc-400">{line.speaker}：{line.line}</p>)}
         {scriptDraft.review.characters.length > 0 ? <div className="space-y-1 border-t border-zinc-700 pt-1">
           <p>角色绑定：复用布景人物，或显式新建胶囊人/24骨蒙皮人物并填写站位；不按姓名猜素材。</p>
+          <button type="button" disabled={disabled || pending} onClick={suggestCast}>生成演员站位建议</button>
+          <p className="text-amber-400">建议为中性骨骼人物按8米网格排开，不是原文事实、不自动避让布景；可逐人改绑定和站位，另行勾选确认后才追加。</p>
           {scriptDraft.review.characters.map(character => {
             const choice: BindingChoice = bindings[character] ?? { kind: 'unbound' };
             return <div key={character} className="space-y-1">
@@ -430,12 +482,17 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
         <button type="button" disabled={disabled || pending} onClick={generateShots}>生成镜头计划（每句一镜）</button>
         <p className="text-zinc-400">镜头计划只拆台词与时间；机位一律留空，需在视口里逐镜记录。</p>
       </div>}
+      {confirmedScript && engine && <ScriptPerformancePanel key={`${confirmedScript.draft.review.sourceFingerprint}:${confirmedScript.draft.sceneId}`}
+        draft={confirmedScript.draft} scene={confirmedScript.scene} source={confirmedScript.source}
+        captureContext={capturePerformanceContext} buildBasePlan={() => engine.buildScriptShotPlan(confirmedScript.draft)}
+        disabled={disabled || pending || performanceDirty || staleReview}
+        onDirty={dirty => { setScriptPerformanceDirty(dirty); setShotAcknowledged(false); }} onStage={stageScriptPerformance} />}
       {(shotPlan || appliedPlan) && <div className="space-y-2 border-t border-zinc-700 pt-2" aria-label="镜头表">
         <h3>镜头表与台词时间轴</h3>
         {appliedPlan && appliedPlan !== shotPlan && <div className="space-y-1">
           <p role="status">场景中已保存镜头表：{appliedPlan.shots.length} 镜 · {appliedPlan.shots[appliedPlan.shots.length - 1]!.end.toFixed(2)} 秒 · {appliedPlan.shots.filter(shot => !hasShotCamera(shot)).length} 镜未指定机位 · {appliedPlan.shots.filter(shot => shot.motion).length} 镜含人工走位（{appliedPlan.sceneId}）</p>
           <p aria-label="已保存建景要求" className="text-amber-400">{appliedPlan.sceneRequirements ? `已保存原文建景声明：${appliedPlan.sceneRequirements.entities.length} 项物件、${appliedPlan.sceneRequirements.relations.length} 项关系、${appliedPlan.sceneRequirements.unresolved.length} 项未解决；仅覆盖人工声明，不代表全文完整还原。播放/导出前重新检查当前几何。` : '未附原文建景要求，场景忠实度未核验。'}</p>
-          <button type="button" disabled={disabled || pending} onClick={loadAppliedShots}>载入场景镜头表审阅</button>
+          <button type="button" disabled={disabled || pending || unsavedPerformance} onClick={loadAppliedShots}>载入场景镜头表审阅</button>
         </div>}
         {appliedPlan && <div className="space-y-1 rounded border border-zinc-700 p-1" aria-label="连续逐镜播放">
           <p className="text-zinc-400">连续逐镜播放：按已保存镜头表的时间轴采样已确认的执行机位轨道或记录机位，并在下方显示本镜台词。缺任一镜机位就直接拒绝，不补造机位；已人工绑定的走位、骨骼片段或胶囊步态同步预览，不自动编排表演或生成视频。</p>
@@ -456,31 +513,33 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
         </div>}
         {shotPlan && <div className="space-y-1">
           <p role="status">共 {shotPlan.shots.length} 镜 · 总时长 {shotPlan.shots[shotPlan.shots.length - 1]!.end.toFixed(2)} 秒 · 未指定机位 {shotPlan.shots.filter(shot => !hasShotCamera(shot)).length} 镜 · 含人工走位 {shotPlan.shots.filter(shot => shot.motion).length} 镜{scriptDraft ? '' : ' · 本面板没有当前草稿可比对来源'}</p>
+          {staleReview && <p role="alert">场景镜头表已变化，请重新载入；旧草稿不能覆盖当前存档镜头表。</p>}
+          <PerformanceCorrectionPanel plan={shotPlan} targets={motionTargets} disabled={disabled || pending || scriptPerformanceDirty} stale={staleReview} onDirty={setPerformanceDirty} onStage={stagePerformanceCorrection} />
           <p className="text-zinc-400">走位按人工选定的场景对象、起止 XZ 与时长做直线移动，Y 跟随启用的地形高差；越界或陡坡拒绝，不做障碍避让。可选已有骨骼 clip 只作局部预演；无 clip 的胶囊人按行进距离摆步态。不会按角色姓名猜对象，也不会按文件名猜动作。</p>
           {shotPlan.shots.map(shot => <div key={shot.id} className="space-y-1 border-t border-zinc-800 pt-1">
             <p role="status">{shot.id} · 第 {shot.order} 镜 · {shot.start.toFixed(2)}–{shot.end.toFixed(2)} 秒 · {shot.execution?.camera ? '执行机位轨道' : shot.camera ? '已记录机位' : '未指定机位'}</p>
             {shot.dialogue.map(line => <p key={`${shot.id}-${line.index}`} className="text-zinc-400">{line.speaker}：{line.line || '（无台词）'}（{line.start.toFixed(2)}–{line.end.toFixed(2)} 秒）</p>)}
             <div className="flex flex-wrap gap-2">
-              <label>时长（秒）<input aria-label={`镜 ${shot.order} 时长`} type="number" step="0.1" min={0.2} value={Number((shot.end - shot.start).toFixed(2))} disabled={disabled || pending} onChange={event => { const value = event.target.valueAsNumber; if (Number.isFinite(value)) editShotDuration(shot.id, value); }} className="w-20 bg-zinc-800" /></label>
-              <button type="button" aria-label={`用当前视口机位 ${shot.id}`} title={shot.execution?.camera ? '只更新记录机位；已确认的执行机位轨道仍优先' : undefined} disabled={disabled || pending || !onCaptureCamera} onClick={() => captureShotCamera(shot.id)}>用当前视口机位</button>
+              <label>时长（秒）<input aria-label={`镜 ${shot.order} 时长`} type="number" step="0.1" min={0.2} value={Number((shot.end - shot.start).toFixed(2))} disabled={disabled || pending || unsavedPerformance} onChange={event => { const value = event.target.valueAsNumber; if (Number.isFinite(value)) editShotDuration(shot.id, value); }} className="w-20 bg-zinc-800" /></label>
+              <button type="button" aria-label={`用当前视口机位 ${shot.id}`} title={shot.execution?.camera ? '只更新记录机位；已确认的执行机位轨道仍优先' : undefined} disabled={disabled || pending || performanceDirty || !onCaptureCamera} onClick={() => captureShotCamera(shot.id)}>用当前视口机位</button>
               <button type="button" aria-label={`预览镜 ${shot.order}`} disabled={disabled || !hasShotCamera(shot) || !onPreviewShot} onClick={() => previewShot(shot)}>预览</button>
-              <button type="button" aria-label={`清除机位 镜 ${shot.order}`} disabled={disabled || pending || !shot.camera} onClick={() => clearShotCamera(shot.id)}>{shot.execution?.camera ? '清除记录机位（保留执行轨道）' : '清除机位'}</button>
+              <button type="button" aria-label={`清除机位 镜 ${shot.order}`} disabled={disabled || pending || performanceDirty || !shot.camera} onClick={() => clearShotCamera(shot.id)}>{shot.execution?.camera ? '清除记录机位（保留执行轨道）' : '清除机位'}</button>
             </div>
             <p className="text-zinc-400">{shot.execution?.camera ? `执行机位轨道 ${shot.execution.camera.keys.length} 键；预览取本镜开始值，优先于记录机位。本面板不编辑执行轨道。` : shot.camera ? `机位 ${shot.camera.position.map(value => value.toFixed(2)).join(',')} → ${shot.camera.target.map(value => value.toFixed(2)).join(',')} · ${shot.camera.fov.toFixed(0)}°` : '未指定机位（不会自动补）'}</p>
-            <ShotMotionEditor shot={shot} targets={motionTargets} disabled={disabled} pending={pending}
+            <ShotMotionEditor shot={shot} targets={motionTargets} disabled={disabled} pending={pending || unsavedPerformance}
               onSet={motion => bindShotMotion(shot.id, motion)} onClear={() => unbindShotMotion(shot.id)} />
           </div>)}
           {shotPlan.action?.length > 0 && <div>
-            <p className="text-zinc-400">动作行（按原文保留，不计时）：</p>
+            <p className="text-zinc-400">动作行（原文保留；只有已编排走位计入动作镜头，其他未覆盖动作不计时）：</p>
             {shotPlan.action.map((text, position) => <p key={`shot-action-${position}`} className="text-zinc-400">{text}</p>)}
           </div>}
-          {shotPlan.diagnostics?.map((text, position) => <p key={`shot-diagnostic-${position}`} role="note" className="text-amber-400">{text}</p>)}
+          {shotPlan.diagnostics?.map((text, position) => <ScriptPerformanceDiagnostic key={`shot-diagnostic-${position}`} text={text} />)}
           {shotNote && <p role="status" className="text-amber-400">{shotNote}</p>}
           <label className="flex gap-1">
-            <input type="checkbox" aria-label="确认镜头表" checked={shotAcknowledged} disabled={disabled || pending} onChange={event => setShotAcknowledged(event.target.checked)} />
+            <input type="checkbox" aria-label="确认镜头表" checked={shotAcknowledged} disabled={disabled || pending || unsavedPerformance || staleReview} onChange={event => setShotAcknowledged(event.target.checked)} />
             <span>已核对镜头顺序、台词时长、记录机位或已确认执行轨道，以及未指定机位的镜头</span>
           </label>
-          <button type="button" disabled={!shotAcknowledged || disabled || pending || !onApplyShots} onClick={applyShots}>确认应用镜头表</button>
+          <button type="button" disabled={!shotAcknowledged || disabled || pending || unsavedPerformance || staleReview || !onApplyShots} onClick={applyShots}>确认应用镜头表</button>
           <button type="button" disabled={pending} onClick={() => { resetShots(); }}>丢弃镜头计划</button>
         </div>}
       </div>}

@@ -22,6 +22,7 @@ import { findTemplateId } from "../host/template-cache.js";
 import { FKHelper } from "./posing/FKHelper.js";
 import { PreviewPlayhead, PREVIEW_FPS, previewFrameCount, previewFrameTime } from './previewPlayhead';
 import { assertScriptShotApplicationSafe } from './scriptShotSampler';
+import { captureScriptPerformanceContext } from './scriptPerformance';
 import { AnimationPreview, skeletalClips, saveAnimationClips, restoreAnimationClips, markAnimationArchivePaths, attachAnimationClip, saveMoveAnimation, restoreMoveAnimation, type SavedMoveAnimation, type SavedAnimationClip } from './animationPreview';
 import { findCapsuleRigs, gaitCapsuleRig, resetCapsuleRig } from './toonflow/capsuleRig';
 import { createStoreZip } from "./zip.js";
@@ -52,6 +53,9 @@ import {
   sceneArchiveBlocker,
   sceneArchiveFileName,
   sceneArchiveFormBody,
+  sceneArchiveQuery,
+  sceneStudioContext,
+  type SceneStudioContext,
   type SceneArchiveItem,
 } from "./scene-archive.js";
 import {
@@ -118,7 +122,10 @@ import {
 import AssetLibraryPanel from "./AssetLibraryPanel";
 import ProceduralAssetPanel from './ProceduralAssetPanel';
 import SetTemplatePanel from './SetTemplatePanel';
+import SceneDesignPanel from './SceneDesignPanel';
 import LocationGenerationPanel from "./LocationGenerationPanel";
+import { storyboardSource, linkedStoryboardShot, captureStoryboardShot } from './storyboardLink';
+import type { LocationCaptureMode } from './locationGeneration';
 import { clonePosedContent, hidePoseEditorHelpers, isPoseEditorHelper } from "./posing/poseExport";
 import { ASSET_DRAG_MIME, assetKind, assetUrl, type LibraryAsset } from "./assetLibrary.js";
 import {
@@ -159,6 +166,7 @@ import {
 
 interface Scene3DStageProps {
   exitTo?: string;
+  context?: SceneStudioContext;
 }
 
 /**
@@ -740,7 +748,7 @@ function normalizeObject(object: THREE.Object3D) {
   object.position.y += (size.y * scale) / 2;
 }
 
-export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStageProps) {
+export default function Scene3DStage({ exitTo = "/studio/draw", context }: Scene3DStageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
@@ -796,7 +804,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [frameAspect, setFrameAspect] = useState<FrameAspect>('16:9');
   const [focal, setFocal] = useState(focalFromFov(45));
   const [archiveName, setArchiveName] = useState('');
-  const [archiveProjectId, setArchiveProjectId] = useState('');
+  const [studioContext, setStudioContext] = useState<SceneStudioContext | undefined>(context);
+  const [archiveProjectId, setArchiveProjectId] = useState(context ? String(context.projectId) : '');
   const [archiveProjects, setArchiveProjects] = useState<ProjectChoice[]>([]);
   useEffect(() => {
     let active = true;
@@ -883,6 +892,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [cameraKeys, setCameraKeys] = useState<CameraKey[]>([]);
   /** 剧本镜头表：可选字段，随场景存档一起保存；旧存档没有时保持 null。 */
   const [scriptShots, setScriptShots] = useState<import('./toonflowSets').ScriptShotPlan | null>(null);
+  const designShotPlanRef = useRef(scriptShots); designShotPlanRef.current = scriptShots;
   // 导出首尾帧时算出来的运镜文案：首尾帧只锚两端，中间怎么动得靠这句话写进提示词。
   const [firstLastNote, setFirstLastNote] = useState("");
   // 把运镜文案写进某一场的视频提示词：只追加，人点两次才动手（选项目/场次 + 追加）。
@@ -2465,6 +2475,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const playScriptShots = useCallback(async (plan: import('./toonflowSets').ScriptShotPlan) => {
     if (busy) return;
     stopAnimation();
+    // Stop can publish its own completion; reset feedback for this new attempt.
+    setStatus(''); setError(null);
     const token = ++shotPlaybackTokenRef.current;
     const epoch = sceneEpochRef.current;
     let module: typeof import('./toonflowSets');
@@ -3261,13 +3273,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const projectId = Number(archiveProjectId) || null;
       const response = await fetch("/api/scene-archives", {
         method: "POST",
-        body: sceneArchiveFormBody(json, name, projectId),
+        body: sceneArchiveFormBody(json, name, projectId, studioContext?.sceneId),
       });
       if (!response.ok) {
         const detail = await response.text().catch(() => "");
         throw new Error(`存到后端失败（HTTP ${response.status}）${detail ? `：${detail.slice(0, 200)}` : ""}`);
       }
-      const saved = (await response.json().catch(() => null)) as { id?: number } | null;
+      const saved = (await response.json().catch(() => null)) as { id?: number; project_id?: number; scene_id?: number } | null;
+      if (studioContext && (saved?.project_id !== studioContext.projectId || saved?.scene_id !== studioContext.sceneId)) {
+        throw new Error(`存档${saved?.id ? ` #${saved.id}` : ''}已提交，但后端未确认场次关联；请核对后端版本与该存档，不要重复上传。`);
+      }
       const unchanged = before === fingerprintRef.current().full();
       if (unchanged) { saveGuardRef.current.markSaved(before, fingerprint); setDirty(false); }
       else { setDirty(true); setError('快照已存入后端，但场景随后发生变化；当前修改尚未保存'); }
@@ -3280,7 +3295,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     } finally {
       operation.finish(); setBusy(null);
     }
-  }, [buildSceneDocument, archiveProjectId, archiveName]);
+  }, [buildSceneDocument, archiveProjectId, archiveName, studioContext]);
 
   // 本地文件与后端存档都走这一条：解析、校验 version/model.data、回填对象与机位。
   const importSceneText = useCallback(
@@ -3523,7 +3538,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
 
   const loadScene = useCallback(
     async (file: File) => {
-      await importSceneText(() => file.text());
+      if (await importSceneText(() => file.text())) setLocationGenerationOpen(false);
     },
     [importSceneText],
   );
@@ -3532,13 +3547,13 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const [archivesOpen, setArchivesOpen] = useState(false);
   const [archives, setArchives] = useState<SceneArchiveItem[]>([]);
   const [archivesBusy, setArchivesBusy] = useState(false);
-  const [archiveFilter, setArchiveFilter] = useState('all');
+  const [archiveFilter, setArchiveFilter] = useState(context ? 'scene' : 'all');
   const [archivePage, setArchivePage] = useState(1);
   const [archiveTotal, setArchiveTotal] = useState(0);
   const [renameId, setRenameId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [deleteArchive, setDeleteArchive] = useState<SceneArchiveItem | null>(null);
-  const [archivePreview, setArchivePreview] = useState<{ name: string; preview?: string; count: number; aspect: string; restore: () => Promise<void> } | null>(null);
+  const [archivePreview, setArchivePreview] = useState<{ name: string; source?: SceneStudioContext; preview?: string; count: number; aspect: string; restore: () => Promise<void> } | null>(null);
   const archiveRequestRef = useRef(0);
   const archiveListRequestRef = useRef(0);
 
@@ -3547,12 +3562,16 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     setArchivesBusy(true);
     setError(null);
     try {
-      const query = `?page=${page}&page_size=10${filter === 'all' ? '' : `&project_id=${encodeURIComponent(filter)}`}`;
+      const query = sceneArchiveQuery(page, filter, studioContext);
       const response = await fetch(`/api/scene-archives${query}`);
       if (!response.ok) throw new Error(`读取后端存档失败（HTTP ${response.status}）`);
       const data = await response.json();
       if (ticket !== archiveListRequestRef.current) return false;
-      setArchives(parseSceneArchiveList(data));
+      const items = parseSceneArchiveList(data);
+      if (filter === 'scene' && items.some(item => item.projectId !== studioContext?.projectId || item.sceneId !== studioContext?.sceneId)) {
+        throw new Error('后端返回了不属于关联场次的存档，已拒绝显示；请核对后端版本');
+      }
+      setArchives(items);
       setArchiveTotal(data.total); setArchivePage(page); setArchiveFilter(filter);
       setArchivesOpen(true);
       setStatus("后端存档列表已刷新");
@@ -3563,7 +3582,14 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     } finally {
       if (ticket === archiveListRequestRef.current) setArchivesBusy(false);
     }
-  }, [archiveFilter]);
+  }, [archiveFilter, studioContext]);
+
+  const entryArchivesRequestedRef = useRef(false);
+  useEffect(() => {
+    if (!context || entryArchivesRequestedRef.current) return;
+    entryArchivesRequestedRef.current = true;
+    void loadSceneArchives(1, 'scene'); // 只列本场次历史；仍需人工预览/确认恢复，不自动挑最新档。
+  }, [context, loadSceneArchives]);
 
   const manageArchive = async (id: number, method: 'PATCH' | 'DELETE') => {
     const ticket = ++archiveListRequestRef.current;
@@ -3589,17 +3615,22 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       const operation = operationsRef.current.start(`正在载入后端存档 #${item.id}…`);
       setError(null);
       try {
+        const source = item.sceneId ? sceneStudioContext(item.projectId, item.sceneId) : undefined;
         const response = await fetch(`/api/scene-archives/${item.id}`);
         if (!response.ok) throw new Error(`读取存档 #${item.id} 失败（HTTP ${response.status}）`);
         const text = await response.text(); validateSceneSize(text);
         const doc = JSON.parse(text) as SceneDocument; validateCompositionDocument(doc);
         if (ticket !== archiveRequestRef.current) return;
-        setArchivePreview({ name: item.name, preview: typeof doc.preview === 'string' && doc.preview.length < 256_000 && /^data:image\/(png|jpeg);base64,/.test(doc.preview) ? doc.preview : undefined,
+        setArchivePreview({ name: item.name, source, preview: typeof doc.preview === 'string' && doc.preview.length < 256_000 && /^data:image\/(png|jpeg);base64,/.test(doc.preview) ? doc.preview : undefined,
           count: (doc.objects?.length ?? 0) + (doc.planes?.length ?? 0) + (doc.splats?.length ?? 0), aspect: doc.frame?.aspect ?? '16:9',
           restore: async () => {
             if (ticket !== archiveRequestRef.current) return;
             const restored = await importSceneText(text);
-            if (restored && ticket === archiveRequestRef.current) { setArchivePreview(null); setArchivesOpen(false); }
+            if (restored && ticket === archiveRequestRef.current) {
+              setStudioContext(source); setArchiveProjectId(item.projectId ? String(item.projectId) : '');
+              setArchiveFilter(source ? 'scene' : item.projectId ? String(item.projectId) : 'all');
+              setLocationGenerationOpen(false); setArchivePreview(null); setArchivesOpen(false);
+            }
           } });
       } catch (err) {
         if (ticket === archiveRequestRef.current) setError(err instanceof Error ? err.message : String(err));
@@ -3612,8 +3643,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
 
   // 渲一帧参考图并取回 PNG：藏编辑器痕迹、换材质、黑底、取图、还原都在这里。
   // 单帧导出和序列导出共用同一条路径，免得两条路各修一遍。
-  const captureReference = useCallback(async (pass: ReferencePass) => {
-    stopAnimation();
+  const captureReference = useCallback(async (pass: ReferencePass, preservePreview = false) => {
+    // 机位出图捕获眼前这一帧；不能先 stop 导致人物/相机退回播放前基线。
+    if (!preservePreview) stopAnimation();
     const sampleExport = exportSampleRef.current;
     exportSampleRef.current = null;
     const restoreExportSample = sampleExport?.();
@@ -3767,7 +3799,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         if (child instanceof THREE.SkeletonHelper) hide(child);
       });
       camera.position.set(pose.position[0], pose.position[1], pose.position[2]);
-      camera.fov = Math.min(90, Math.max(15, Number(pose.fov) || camera.fov));
+      // 与焦距控件12–92mm的有效范围一致；92mm约14.86°，不能捕获时悄悄放宽成15°。
+      camera.fov = Math.min(90, Math.max(fovFromFocal(92), Number(pose.fov) || camera.fov));
       camera.updateProjectionMatrix();
       if (controls) {
         controls.target.set(pose.target[0], pose.target[1], pose.target[2]);
@@ -3809,6 +3842,45 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     }
     } finally { restoreExportSample?.(); }
   }, []);
+
+  const captureLocationSnapshot = useCallback(async (mode: LocationCaptureMode, selection?: { context: SceneStudioContext; shotId: number }) => {
+    if (selection) {
+      if (executionUnavailableRef.current) throw Error('请先停止播放并等待场景操作完成');
+      stopAnimation();
+      const livePlan = designShotPlanRef.current;
+      if (!livePlan) throw Error('请先应用已有导演镜头表，再自动取景');
+      const plan = structuredClone(livePlan), shot = linkedStoryboardShot(plan, selection.context, selection.shotId);
+      const camera = cameraRef.current, controls = controlsRef.current, scene = sceneRef.current;
+      if (!camera || !controls || !scene) throw Error('视口尚未就绪');
+      if (objectsRef.current.some(entry => entry.splat || entry.mediaKind === 'video')) throw Error('自动逐镜取景暂不支持泼溅或视频平面，请使用手工取景或显式移除');
+      const epoch = sceneEpochRef.current, baseline = fingerprintRef.current().full(), frame = frameRef.current, planKey = JSON.stringify(plan);
+      // Freshness is editing content, not temporary playback/export availability. The
+      // fingerprint already reads motion baselines instead of sampled actor poses.
+      const isCurrent = () => sceneRef.current === scene && sceneEpochRef.current === epoch && frameRef.current === frame && JSON.stringify(designShotPlanRef.current) === planKey && fingerprintRef.current().full() === baseline;
+      const assertCurrent = () => {
+        if (executionUnavailableRef.current) throw Error('请先停止播放并等待场景操作完成');
+        if (!isCurrent()) throw Error('场景或镜头表已变化，请重新取景');
+      };
+      const [source, { createScriptShotSampler }] = await Promise.all([storyboardSource(plan, baseline, frame), import('./scriptShotSampler')]);
+      assertCurrent();
+      let pose: import('./scriptShotPlan').ScriptShotCamera | undefined;
+      const captured = await captureStoryboardShot(plan, shot.id, {
+        assertCurrent,
+        sampler: () => createScriptShotSampler(plan, { camera, controls, entries: () => objectsRef.current, environment: environmentRef.current, baselines: motionBaselineRef.current, isCurrent: () => sceneEpochRef.current === epoch }),
+        capture: sampledCamera => { pose = structuredClone(sampledCamera); return mode === 'clay' ? captureReference('clay', true) : captureViewportAt(sampledCamera); },
+      });
+      if (!captured || !pose) throw Error('分镜取景失败');
+      return { blob: captured.blob, isCurrent, camera: { ...pose, reference_pass: mode, storyboard_source: { ...source, projectId: selection.context.projectId, sceneIdNumber: selection.context.sceneId, shotId: selection.shotId, planShotId: shot.id, sampleSeconds: shot.start } } };
+    }
+    const camera = cameraRef.current, controls = controlsRef.current;
+    if (!camera || !controls) throw new Error('相机尚未就绪');
+    const pose = { position: camera.position.toArray() as [number, number, number], target: controls.target.toArray() as [number, number, number], fov: camera.fov, frame: { aspect: frameRef.current }, sensorHeight: 24 };
+    // 两条捕获路径都同步复制当前帧后才等待PNG编码，且同步还原临时材质/辅助器。
+    const pending = mode === 'clay' ? captureReference('clay', true) : captureViewportAt(pose);
+    const captured = await pending;
+    if (!captured) throw new Error('取景失败，未产生结构参考图');
+    return { blob: captured.blob, camera: { ...pose, reference_pass: mode } };
+  }, [captureReference, captureViewportAt]);
 
   /**
    * 导出首尾帧并存进素材库：起幅取第一个机位、落幅取最后一个机位。
@@ -4041,6 +4113,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
   const exportScriptVideo = useCallback(async (plan: import('./toonflowSets').ScriptShotPlan, fps: number, mode: ScriptVideoMode, signal: AbortSignal): Promise<ScriptVideoArtifact> => {
     if (busy || shotVideoExportRef.current) throw new Error('请等待当前场景操作完成');
     stopAnimation();
+    setStatus(''); setError(null);
     const renderer = rendererRef.current, camera = cameraRef.current, controls = controlsRef.current;
     if (!renderer || !camera || !controls) throw new Error('视口尚未就绪');
     if (objectsRef.current.some(entry => entry.mediaKind === 'video')) throw new Error('视频平面尚未按逐镜时间同步，请显式移除后再导出');
@@ -4062,6 +4135,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
       renderer.setPixelRatio(1); renderer.setSize(outputSize.width, outputSize.height, false); camera.aspect = outputSize.width / outputSize.height; camera.updateProjectionMatrix();
       outputSized = true;
       assertSource();
+      const sharedSource = await storyboardSource(plan, source, sourceFrame);
+      assertSource();
       const result = await renderScriptShotVideo(plan, {
         camera, controls, entries: () => objectsRef.current, environment: environmentRef.current ? validateSceneEnvironment(environmentRef.current) : null,
         baselines: motionBaselineRef.current, isCurrent: () => epoch === sceneEpochRef.current,
@@ -4078,7 +4153,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         },
       });
       assertSource(); setStatus(`逐镜视频已生成：${result.manifest.frameCount} 帧，尚未入库、未关联Scene、未提交生成`);
-      return { ...result, source, epoch, projectId: Number(archiveProjectId) || null };
+      return { ...result, manifest: { ...result.manifest, storyboardSource: sharedSource }, source, epoch, projectId: Number(archiveProjectId) || null };
     } finally {
       shotVideoExportRef.current = null;
       if (renderer === rendererRef.current) {
@@ -4267,6 +4342,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
     async (plan: import('./toonflowSets').ScriptShotPlan) => {
       if (busy) return false;
       stopAnimation();
+      setStatus(''); setError(null);
       const camera = cameraRef.current as THREE.PerspectiveCamera | null;
       const controls = controlsRef.current;
       if (!camera || !controls) { setError('视口尚未就绪，无法导出逐镜参考包'); return false; }
@@ -4281,7 +4357,9 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         // 保持 toonflowSets 懒加载：静态 import 会把整套素材塞进主视口包。
         module = await import('./toonflowSets');
         if (objectsRef.current.some(entry => entry.splat || entry.mediaKind === 'video')) throw new Error('逐镜参考包暂不支持包含泼溅或视频平面的场景：不能省略或使用未同步画面，请先显式移除后导出');
-        pack = { ...module.buildScriptShotReferencePack(plan, { now: new Date() }), exportedSceneFingerprint: module.scriptFingerprint(sourceState), scope: 'static-mesh-reference-passes', environment: environmentRef.current ? validateSceneEnvironment(environmentRef.current) : null, motionSampling: 'script-shot-timeline-v1', motionPlan: plan };
+        const sharedSource = await storyboardSource(plan, sourceState, frameRef.current);
+        assertSource();
+        pack = { ...module.buildScriptShotReferencePack(plan, { now: new Date() }), storyboardSource: sharedSource, exportedSceneFingerprint: module.scriptFingerprint(sourceState), scope: 'static-mesh-reference-passes', environment: environmentRef.current ? validateSceneEnvironment(environmentRef.current) : null, motionSampling: 'script-shot-timeline-v1', motionPlan: plan };
         // 纯清单函数不负责渲染；本入口明确声明已经统一时间轴采样，不沿用静态取图警告。
         pack.notes = [...pack.notes.filter(note => !note.startsWith('镜头表含人工走位；')), '每镜开始秒数与视频共用机位/走位/骨姿采样；已结束镜次保留走位终点，雨雪不烘入结构参考图。'];
       } catch (cause) {
@@ -4643,12 +4721,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         }}
       />
 
-      {locationGenerationOpen && <LocationGenerationPanel disabled={Boolean(busy)} close={() => setLocationGenerationOpen(false)} waitForTask={waitForTask} capture={async () => {
-        const camera = cameraRef.current, controls = controlsRef.current;
-        if (!camera || !controls) throw new Error("相机尚未就绪");
-        const pose = { position: camera.position.toArray(), target: controls.target.toArray(), fov: camera.fov, frame: { aspect: frameRef.current }, sensorHeight: 24 };
-        return { blob: await captureCurrentView(), camera: pose };
-      }} />}
+      {locationGenerationOpen && <LocationGenerationPanel key={studioContext ? `${studioContext.projectId}:${studioContext.sceneId}` : 'unbound'} context={studioContext} disabled={Boolean(busy)} close={() => setLocationGenerationOpen(false)} waitForTask={waitForTask} capture={captureLocationSnapshot} captureShot={(mode, context, shotId) => captureLocationSnapshot(mode, { context, shotId })} />}
       <div className="fixed inset-x-0 top-0 z-40 flex h-14 items-center gap-2 border-b border-white/10 bg-[#101014]/95 px-3 backdrop-blur">
         <button
           type="button"
@@ -4832,6 +4905,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
         />
         {archivePreview ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6" role="dialog" aria-label="存档恢复预览"><div className="max-w-md rounded bg-neutral-900 p-4 space-y-3">
           <h3>{archivePreview.name}</h3>
+          <p>{archivePreview.source ? `恢复后关联项目 #${archivePreview.source.projectId} / 场次 #${archivePreview.source.sceneId}` : '恢复后无场次关联'}</p>
           {archivePreview.preview ? <img src={archivePreview.preview} alt="存档取景预览" className="max-h-64 mx-auto" /> : <p>旧存档无缩略图</p>}
           <p>{archivePreview.count} 个对象 · {archivePreview.aspect} · 确认后替换当前场景</p>
           <button onClick={() => void archivePreview.restore()}>确认恢复</button> <button onClick={() => setArchivePreview(null)}>取消</button>
@@ -4858,6 +4932,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                 </button>
               </div>
               <select aria-label="存档列表项目筛选" value={archiveFilter} disabled={archivesBusy} className="w-full bg-neutral-800" onChange={e => void loadSceneArchives(1, e.target.value)}>
+                {studioContext&&<option value="scene">关联场次 #{studioContext.sceneId} 的历史存档</option>}
                 <option value="all">全部项目</option><option value="0">无项目归属</option>
                 {archiveProjects.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
               </select>
@@ -4882,7 +4957,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                       >
                         <span className="block truncate">{item.name}</span>
                         <span className="block text-xs text-white/50">
-                          #{item.id} · {item.sizeLabel}
+                          #{item.id} · {item.sizeLabel}{item.sceneId ? ` · 场次 #${item.sceneId}` : ' · 无场次关联'}
                           {item.createdLabel ? ` · ${item.createdLabel}` : ""}
                         </span>
                       </button>
@@ -5007,11 +5082,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           <label>画幅 <select aria-label="场景画幅" value={frameAspect} onChange={e => { frameRef.current = e.target.value as FrameAspect; setFrameAspect(frameRef.current); resizeFrameRef.current(); setLocationGenerationOpen(false); }}>{Object.keys(FRAME_ASPECTS).map(a => <option key={a}>{a}</option>)}</select></label>
           <label className="block">焦距 mm（24mm传感器高）<input aria-label="焦距毫米" type="number" min="12" max="92" value={Math.round(focal * 10) / 10} onChange={e => { const mm = Number(e.target.value); if (!Number.isFinite(mm) || mm < 12 || mm > 92 || !cameraRef.current) return; cameraRef.current.fov = fovFromFocal(mm); cameraRef.current.updateProjectionMatrix(); setFocal(mm); setLocationGenerationOpen(false); }} className="w-full bg-black/30" /></label>
           <label className="block text-xs">新存档归属（不改变旧档）
-            <select aria-label="新存档项目" value={archiveProjectId} onChange={e => setArchiveProjectId(e.target.value)} className="w-full bg-neutral-800">
+            <select aria-label="新存档项目" disabled={!!studioContext || Boolean(busy)} value={archiveProjectId} onChange={e => setArchiveProjectId(e.target.value)} className="w-full bg-neutral-800">
               <option value="">无项目归属</option>
               {archiveProjects.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
             </select>
           </label>
+          {studioContext&&<p aria-label="存档关联场次">项目 #{studioContext.projectId} / 场次 #{studioContext.sceneId} · 新存档保留该来源（历史关联，非当前存档指针）</p>}
           <input aria-label="存档名称" placeholder="存档名称（另存为）" value={archiveName} onChange={e => setArchiveName(e.target.value)} className="w-full bg-black/30" />
         </div>
         <div className="mb-2 px-1 text-xs uppercase tracking-wide text-white/40">场景对象</div>
@@ -5082,7 +5158,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
                 const entry = addObject(object, name);
                 if (!entry) disposeSceneEntry({ id: '', name, object });
               }} />
-              <SetTemplatePanel disabled={Boolean(busy)} captureExecutionContext={async () => {
+              <SetTemplatePanel disabled={Boolean(busy) || !!shotPlayback} capturePerformanceContext={() => captureScriptPerformanceContext(objectsRef.current)} captureExecutionContext={async () => {
                 const { captureStudioExecutionContext } = await import('./studioExecutionContext');
                 return captureStudioExecutionContext(objectsRef.current);
               }} onApplyExecution={async (plan, reviewed, isCurrent, requirements) => {
@@ -5178,6 +5254,56 @@ export default function Scene3DStage({ exitTo = "/studio/draw" }: Scene3DStagePr
           </details>
         </div>
       </div>
+
+      <SceneDesignPanel disabled={Boolean(busy) || !!shotPlayback} sceneKey={String(sceneEpochRef.current)} host={{
+        capture: async () => {
+          if (!sceneRef.current || executionUnavailableRef.current) throw Error('场景尚未就绪或正在忙碌');
+          stopAnimation();
+          const epoch = sceneEpochRef.current; const scene = sceneRef.current;
+          const { captureSceneDesignContext, captureSceneDesignEditKeys } = await import('./sceneDesign');
+          const fingerprint = fingerprintRef.current().full();
+          const editKeys = captureSceneDesignEditKeys(objectsRef.current);
+          const context = await captureSceneDesignContext(objectsRef.current);
+          if (epoch !== sceneEpochRef.current || scene !== sceneRef.current || fingerprint !== fingerprintRef.current().full()) throw Error('读取期间场景已变化，请重试');
+          return { sceneKey: String(epoch), context, editKeys };
+        },
+        apply: async (plan, base, current) => {
+          const scene = sceneRef.current;
+          if (!scene || executionUnavailableRef.current) throw Error('场景尚未就绪或正在忙碌');
+          stopAnimation();
+          const [{ applySceneDesign }, { captureSceneDesignContext, captureSceneDesignEditKeys }] = await Promise.all([import('./sceneDesignApply'), import('./sceneDesign')]);
+          const result = await applySceneDesign(plan, base, current, {
+            state: () => ({ sceneKey: String(sceneEpochRef.current), fingerprint: fingerprintRef.current().full(), available: sceneRef.current === scene && !executionUnavailableRef.current && !animationRef.current && !cancelMoveRef.current && !cancelCameraPreviewRef.current && !scrubRef.current }),
+            capture: async () => { const epoch = sceneEpochRef.current; const editKeys = captureSceneDesignEditKeys(objectsRef.current); const context = await captureSceneDesignContext(objectsRef.current); return { sceneKey: String(epoch), context, editKeys }; },
+            entries: () => objectsRef.current,
+            scene,
+            checkpoint: () => historyRef.current.checkpoint(objectsRef.current),
+            validate: batch => {
+              if (batch.additions.length && environmentRef.current?.terrain) throw Error('当前AI静态建景尚未接入地形落点，未应用；请使用平地场景设计');
+              const shots = designShotPlanRef.current;
+              if (shots && (batch.updates.length || batch.removeIds.length)) throw Error('已有镜头表引用当前场景，本入口不改动其表演对象；请通过已有导演流程修改');
+              if (shots && batch.additions.length) assertScriptShotApplicationSafe(shots, [...objectsRef.current, ...batch.additions], environmentRef.current);
+            },
+            publish: entries => {
+              const empty = objectsRef.current.length === 0;
+              objectsRef.current = entries; historyRef.current.collect(entries); selectObject(null); syncObjects();
+              // First AI set should be visible without a manual focus/coordinate step.
+              if (empty && entries.length && cameraRef.current && controlsRef.current) {
+                const bounds = new THREE.Box3(); entries.forEach(entry => bounds.expandByObject(entry.object));
+                if (!bounds.isEmpty()) {
+                  const center = bounds.getCenter(new THREE.Vector3());
+                  const radius = Math.max(bounds.getSize(new THREE.Vector3()).length() / 2, 1);
+                  const distance = radius / Math.sin(THREE.MathUtils.degToRad(cameraRef.current.fov) / 2) * 1.2;
+                  cameraRef.current.position.copy(center).addScaledVector(new THREE.Vector3(.6, .5, .8).normalize(), distance);
+                  controlsRef.current.target.copy(center); controlsRef.current.update();
+                }
+              }
+            },
+          });
+          setStatus(`AI静态建景已应用：新增${result.added}、更新${result.updated}、删除${result.removed}，保留人工改动${result.preserved}项；请保存场景，未生成媒体`);
+          return result;
+        },
+      }} />
 
       <div className="fixed right-3 top-20 z-30 max-h-[calc(100vh-6rem)] w-64 space-y-3 overflow-y-auto rounded-lg border border-white/10 bg-[#101014]/90 p-3 text-sm text-white/80 backdrop-blur">
         {scriptShots && <ShotEnhancementPanel plan={scriptShots} entries={objects} environment={environment} disabled={!!busy || !!shotPlayback} onApply={plan => { stopAnimation(); setScriptShots(plan); setStatus('镜头增强已应用，请播放审阅并保存场景'); }} />}

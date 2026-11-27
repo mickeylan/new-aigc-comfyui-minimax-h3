@@ -9,9 +9,12 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as recipes from './proceduralArchive';
 import * as shotModule from './toonflowSets';
 import { PreviewPlayhead } from './previewPlayhead';
+import { storyboardSource, captureStoryboardShot, linkedStoryboardShot } from './storyboardLink';
+import { correctExecutionBeatClip } from './performanceCorrection';
+import { buildScriptPerformancePlan, captureScriptPerformanceContext } from './scriptPerformance';
 import { AnimationPreview } from './animationPreview';
 import { buildSceneFingerprint, canMoveEntry, materialRevision } from './sceneSafety';
-import { isPoseEditorHelper, clonePosedContent } from './posing/poseExport';
+import { isPoseEditorHelper, clonePosedContent, hidePoseEditorHelpers } from './posing/poseExport';
 import { isExportablePlane } from './compositing.js';
 import { prepareSetDraft, materializeSetDraft, parseScriptScenes, buildScriptSceneDraft, listSetPersonObjects, applyScriptCharacterBindings, buildScriptShotPlan, validateScriptShotPlan } from './toonflowSets';
 import { disposeObject } from './toonflow/sceneResources';
@@ -28,19 +31,46 @@ import { findCapsuleRigs, gaitCapsuleRig, resetCapsuleRig } from './toonflow/cap
 import { draftShotDirection } from './shotDirection';
 import { retargetSkeletalClip } from './characterMotion';
 import { editEnvironmentTerrain } from './environmentEdit';
-import { fitFrame, FRAME_VIDEO_SIZES } from './sceneFrame';
+import { fitFrame, FRAME_VIDEO_SIZES, fovFromFocal } from './sceneFrame';
+import { archiveSizeLabel, parseSceneArchiveList, sceneArchiveBlocker, sceneArchiveFileName, sceneArchiveFormBody, sceneArchiveQuery, sceneStudioContext } from './scene-archive';
 
 const frontend = resolve(existsSync('src/studio/scene3d') ? '.' : 'frontend');
 const stage = readFileSync(resolve(frontend, 'src/studio/scene3d/Scene3DStage.tsx'), 'utf8');
-function callback(name: string, next: string, scope: Record<string, any>) {
+// esbuild must run outside jsdom's Uint8Array realm. Compile the callback catalog
+// in ONE Node process, sharing its compiler service, then cache immutable JS only.
+// Every invocation below still creates a fresh closure over the supplied scope.
+const compiledSources = new Map<string, string>();
+function compileBatch(sources: string[]) {
+  const unique = [...new Set(sources)].filter(source => !compiledSources.has(source));
+  if (!unique.length) return;
+  const result = execFileSync(process.execPath, ['-e', "const { transformSync } = require('esbuild'); const sources = JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(JSON.stringify(sources.map(source => transformSync(source,{loader:'ts',format:'cjs'}).code)));"], { input: JSON.stringify(unique), encoding: 'utf8', cwd: frontend });
+  const codes: string[] = JSON.parse(result);
+  if (codes.length !== unique.length) throw new Error('Incomplete production callback compilation');
+  unique.forEach((source, index) => compiledSources.set(source, codes[index]));
+}
+function compileTypeScript(source: string) {
+  compileBatch([source]);
+  return compiledSources.get(source)!;
+}
+function callbackSource(name: string, next: string) {
   const text = stage.slice(stage.indexOf(`const ${name} = useCallback(`), stage.indexOf(`const ${next} =`));
   const start = text.indexOf('useCallback(') + 'useCallback('.length;
   const ending = [...text.matchAll(/\n[ \t]*},\s*\[/g)].at(-1);
   if (!ending) throw new Error(`Callback boundary not found: ${name}`);
   const end = ending.index! + ending[0].indexOf('}');
-  const expression = text.slice(start, end + 1).replaceAll("await import('./proceduralArchive')", 'await Promise.resolve(recipeModuleForTest)').replaceAll("await import('./toonflowSets')", 'await Promise.resolve(scriptShotModuleForTest)').replaceAll("await import('./scriptShotSampler')", 'await Promise.resolve(samplerModuleForTest)').replaceAll("await import('./toonflow/characterAnimations')", 'await Promise.resolve(catalogModuleForTest)').replaceAll("import('./scriptShotVideo')", 'Promise.resolve(videoModuleForTest)').replaceAll(", import('./toonflowSets')", ', Promise.resolve(scriptShotModuleForTest)');
-  // Run the project's existing TS transformer in Node's realm (esbuild cannot run in jsdom's Uint8Array realm).
-  const code = execFileSync(process.execPath, ['-e', "process.stdout.write(require('esbuild').transformSync(require('fs').readFileSync(0,'utf8'),{loader:'ts',format:'cjs'}).code)"], { input: `const callback = ${expression};`, encoding: 'utf8', cwd: frontend });
+  const expression = text.slice(start, end + 1).replaceAll("await import('./proceduralArchive')", 'await Promise.resolve(recipeModuleForTest)').replaceAll("await import('./toonflowSets')", 'await Promise.resolve(scriptShotModuleForTest)').replaceAll("await import('./scriptShotSampler')", 'await Promise.resolve(samplerModuleForTest)').replaceAll(", import('./scriptShotSampler')", ', Promise.resolve(samplerModuleForTest)').replaceAll("await import('./toonflow/characterAnimations')", 'await Promise.resolve(catalogModuleForTest)').replaceAll("import('./scriptShotVideo')", 'Promise.resolve(videoModuleForTest)').replaceAll(", import('./toonflowSets')", ', Promise.resolve(scriptShotModuleForTest)');
+  return `const callback = ${expression};`;
+}
+// Discover literal callback requests from this spec, including branches/loops,
+// using the same production-source extractor as the actual test executions.
+const specSource = readFileSync(resolve(frontend, 'src/studio/scene3d/studioRecipeRoundtrip.spec.ts'), 'utf8');
+const compilerProbeSource = 'const compilerProbe = (value: number) => value + 1;';
+compileBatch([
+  ...[...specSource.matchAll(/\bcallback\('([^']+)',\s*'([^']+)'/g)].map(([, name, next]) => callbackSource(name, next)),
+  compilerProbeSource, compilerProbeSource.replace('value + 1', 'value + 2'),
+]);
+function callback(name: string, next: string, scope: Record<string, any>) {
+  const code = compileTypeScript(callbackSource(name, next));
   for (const name of code.match(/\bset[A-Z]\w+/g) ?? []) scope[name] ??= vi.fn();
   return new Function('scope', `with(scope) { ${code}; return callback; }`)(scope);
 }
@@ -48,7 +78,7 @@ function wireProductionFingerprint(scope: Record<string, any>) {
   const start = stage.indexOf('fingerprintRef.current = () => buildSceneFingerprint(');
   const end = stage.indexOf('  if (cleanOnRenderRef.current)', start);
   if (start < 0 || end < start) throw new Error('Production fingerprint boundary missing');
-  const code = execFileSync(process.execPath, ['-e', "process.stdout.write(require('esbuild').transformSync(require('fs').readFileSync(0,'utf8'),{loader:'ts',format:'cjs'}).code)"], { input: stage.slice(start, end), encoding: 'utf8', cwd: frontend });
+  const code = compileTypeScript(stage.slice(start, end));
   Object.assign(scope, { buildSceneFingerprint, materialRevision, isPoseEditorHelper,
     documentMetaRef: { current: 'motion-test' }, scrubRef: { current: null }, animationRef: { current: null } });
   new Function('scope', `with(scope) { ${code} }`)(scope);
@@ -57,7 +87,7 @@ function scopeFor(entries: any[]) {
   const camera = new THREE.PerspectiveCamera(); camera.position.set(18, 22, 46);
   const scene = new THREE.Scene(); entries.forEach(entry => scene.add(entry.object));
   const scope: Record<string, any> = {
-    THREE, GLTFLoader, recipeModuleForTest: recipes, scriptShotModuleForTest: { validateScriptShotPlan }, catalogModuleForTest: { characterAnimationCatalogRevision },
+    THREE, GLTFLoader, storyboardSource, captureStoryboardShot, linkedStoryboardShot, recipeModuleForTest: recipes, scriptShotModuleForTest: { validateScriptShotPlan }, catalogModuleForTest: { characterAnimationCatalogRevision },
     scriptShots: null,
     objectsRef: { current: entries }, cameraRef: { current: camera }, controlsRef: { current: { target: new THREE.Vector3(), update: vi.fn() } },
     sceneRef: { current: scene }, sceneEpochRef: { current: 0 }, frameRef: { current: '16:9' },
@@ -102,6 +132,165 @@ function readStoreZip(bytes: Uint8Array) {
   }
   return entries;
 }
+describe('Production callback compiler', () => {
+  it('caches compiled source, invalidates changed source and never caches scope-bound callbacks', async () => {
+    const size = compiledSources.size;
+    const code = compileTypeScript(compilerProbeSource);
+    expect(compileTypeScript(compilerProbeSource)).toBe(code);
+    const changed = compileTypeScript(compilerProbeSource.replace('value + 1', 'value + 2'));
+    expect(changed).not.toBe(code);
+    expect(compiledSources.size).toBe(size);
+    expect(new Function(`${code}; return compilerProbe(3);`)()).toBe(4);
+    expect(new Function(`${changed}; return compilerProbe(3);`)()).toBe(5);
+
+    const first = scopeFor([]), second = scopeFor([]);
+    first.cameraRef.current.position.set(1, 2, 3); second.cameraRef.current.position.set(7, 8, 9);
+    first.captureViewportAt = vi.fn(async () => ({ blob: new Blob(['first']) }));
+    second.captureViewportAt = vi.fn(async () => ({ blob: new Blob(['second']) }));
+    const a = callback('captureLocationSnapshot', 'exportFirstLastFrames', first);
+    const compiled = compiledSources.size;
+    const b = callback('captureLocationSnapshot', 'exportFirstLastFrames', second);
+    expect(compiledSources.size).toBe(compiled);
+    expect(a).not.toBe(b);
+    expect((await a('viewport')).camera.position).toEqual([1, 2, 3]);
+    expect(second.captureViewportAt).not.toHaveBeenCalled();
+    expect((await b('viewport')).camera.position).toEqual([7, 8, 9]);
+    expect(first.captureViewportAt).toHaveBeenCalledOnce();
+    expect(second.captureViewportAt).toHaveBeenCalledOnce();
+  });
+});
+
+describe('Scene Studio integration production callbacks', () => {
+  it('saves source metadata in multipart and lists only the explicitly linked Scene', async () => {
+    const object = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial());
+    const scope = scopeFor([{ id: 'linked-box', name: 'box', object }]);
+    Object.assign(scope, { archiveProjectId: '7', studioContext: { projectId: 7, sceneId: 11 }, archiveFilter: 'scene', archiveListRequestRef: { current: 0 },
+      sceneArchiveFormBody, sceneArchiveBlocker, sceneArchiveFileName, archiveSizeLabel, sceneArchiveQuery, parseSceneArchiveList,
+      buildSceneDocument: callback('buildSceneDocument', 'saveScene', scope), captureCurrentView: async () => new Blob(['preview']),
+      createImageBitmap: async () => ({ width: 800, height: 450, close: vi.fn() }),
+      window: { document: { createElement: () => ({ getContext: () => ({ drawImage() {} }), toDataURL: () => 'data:image/jpeg;base64,AA==' }) } },
+      fetch: vi.fn(async (_url: string, options?: any) => ({ ok: true, json: async () => options?.method === 'POST' ? { id: 23, project_id: 7, scene_id: 11 } : { items: [{ id: 23, project_id: 7, scene_id: 11 }], total: 1 } })) });
+    scope.saveGuardRef.current.markSaved = vi.fn();
+    try {
+      await callback('saveSceneToServer', 'importSceneText', scope)();
+      expect(scope.fetch).toHaveBeenCalledOnce();
+      const body = scope.fetch.mock.calls[0][1].body as FormData;
+      expect(body.get('project_id')).toBe('7'); expect(body.get('scene_id')).toBe('11'); expect(body.get('file')).toBeInstanceOf(Blob);
+      expect(scope.saveGuardRef.current.markSaved).toHaveBeenCalledOnce();
+      const list = callback('loadSceneArchives', 'entryArchivesRequestedRef', scope);
+      expect(await list(2)).toBe(true);
+      const query = new URL(scope.fetch.mock.calls[1][0], 'http://fixture').searchParams;
+      expect(Object.fromEntries(query)).toEqual({ page: '2', page_size: '10', project_id: '7', scene_id: '11' });
+      expect(scope.setArchives.mock.calls.at(-1)[0][0]).toMatchObject({ id: 23, projectId: 7, sceneId: 11 });
+      // 旧后端若忽略scene_id，不得把普通存档伪报为场次关联成功，也不自动重试上传。
+      scope.fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ id: 24, project_id: 7 }) });
+      await callback('saveSceneToServer', 'importSceneText', scope)();
+      expect(scope.saveGuardRef.current.markSaved).toHaveBeenCalledOnce();
+      expect(scope.setError).toHaveBeenLastCalledWith(expect.stringContaining('存档 #24已提交，但后端未确认场次关联'));
+      scope.fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ items: [{ id: 24, project_id: 7 }], total: 1 }) });
+      scope.setArchives.mockClear(); expect(await list(1)).toBe(false); expect(scope.setArchives).not.toHaveBeenCalled();
+      expect(scope.setError).toHaveBeenLastCalledWith(expect.stringContaining('已拒绝显示'));
+      expect(scope.fetch).toHaveBeenCalledTimes(4);
+      console.log('SCENE_STUDIO_ARCHIVE_LINK=PASS save=source-fields list=scene-only oldBackend=blocked noAutomaticRetry=1');
+    } finally { disposeObject(object); }
+  });
+  it('rebinds Scene identity only after confirmed successful restore, not after failure or stale completion', async () => {
+    const scope = scopeFor([]); let preview: any;
+    Object.assign(scope, { sceneStudioContext, archiveRequestRef: { current: 0 },
+      fetch: vi.fn(async () => ({ ok: true, text: async () => JSON.stringify({ version: 6, model: { name: 'box', data: 'AA==' }, camera: { position: [1, 2, 3], target: [0, 0, 0], fov: 45 } }) })),
+      importSceneText: vi.fn(async () => false), setArchivePreview: vi.fn(value => { preview = value; }) });
+    const open = callback('openSceneArchive', 'captureReference', scope);
+    await open({ id: 23, projectId: 7, sceneId: 11, name: 'linked' });
+    expect(preview.source).toEqual({ projectId: 7, sceneId: 11 }); expect(scope.setStudioContext).not.toHaveBeenCalled();
+    await preview.restore(); expect(scope.setStudioContext).not.toHaveBeenCalled();
+    scope.importSceneText.mockResolvedValue(true); await preview.restore();
+    expect(scope.setStudioContext).toHaveBeenLastCalledWith({ projectId: 7, sceneId: 11 });
+    expect(scope.setArchiveProjectId).toHaveBeenLastCalledWith('7'); expect(scope.setLocationGenerationOpen).toHaveBeenLastCalledWith(false);
+    let finish!: (value: boolean) => void;
+    await open({ id: 23, projectId: 7, sceneId: 11, name: 'old' });
+    scope.importSceneText.mockImplementationOnce(() => new Promise<boolean>(resolve => { finish = resolve; }));
+    const old = preview.restore(); await open({ id: 24, projectId: 8, sceneId: 12, name: 'new' });
+    scope.setStudioContext.mockClear(); finish(true); await old; expect(scope.setStudioContext).not.toHaveBeenCalled();
+    await preview.restore(); expect(scope.setStudioContext).toHaveBeenLastCalledWith({ projectId: 8, sceneId: 12 });
+    await open({ id: 1, projectId: null, sceneId: null, name: 'legacy' }); await preview.restore();
+    expect(scope.setStudioContext).toHaveBeenLastCalledWith(undefined); expect(scope.setArchiveProjectId).toHaveBeenLastCalledWith('');
+  });
+  for (const mode of ['clay', 'viewport'] as const) it(`captures the visible preview frame via ${mode}, restores temporary state before encoding and retains capture-time camera metadata`, async () => {
+    const object = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial({ color: 'red' })); object.position.x = 5;
+    const originalMaterial = object.material, scope = scopeFor([{ id: 'actor', name: 'actor', object }]);
+    const camera = scope.cameraRef.current, scene = scope.sceneRef.current, originalPosition = camera.position.toArray();
+    camera.fov = fovFromFocal(92); // 产品焦距控件的有效边界，小于旧捕获路径的15度下限。
+    const grid = new THREE.Object3D(); scene.add(grid); scene.background = new THREE.Color('blue'); scene.fog = new THREE.Fog('white', 1, 10);
+    const background = scene.background, fog = scene.fog, blob = new Blob(['copied-frame'], { type: 'image/png' });
+    let encode!: (blob: Blob | null) => void, fail = false;
+    Object.assign(scope, { exportSampleRef: { current: null }, gridRef: { current: grid }, groundRef: { current: null }, groundPathGroupRef: { current: null }, transformRef: { current: null }, sparkRef: { current: null }, terrainMeshRef: { current: null },
+      hidePoseEditorHelpers, clonePosedContent, isPoseEditorHelper, fovFromFocal, createReferenceMaterial: vi.fn(() => new THREE.MeshStandardMaterial()), referencePlaneMaterial: vi.fn(),
+      stopAnimation: vi.fn(() => { object.position.x = 0; camera.position.set(0, 0, 0); }),
+      rendererRef: { current: { domElement: { width: 800, height: 450 }, clear() {}, render: vi.fn(() => {
+        if (mode === 'viewport' && grid.visible) return; // 视口路径 finally 会重画已还原的编辑画面。
+        if (fail) { fail = false; throw Error('render interrupted'); }
+        expect(grid.visible).toBe(false); expect(object.position.x).toBe(5); expect(camera.position.toArray()).toEqual(originalPosition); expect(camera.fov).toBe(fovFromFocal(92));
+        if (mode === 'clay') { expect(object.material).not.toBe(originalMaterial); expect(scene.fog).toBeNull(); }
+      }) } }, document: { createElement: () => ({ getContext: () => ({ drawImage: vi.fn() }), toBlob: (cb: typeof encode) => { encode = cb; } }) } });
+    try {
+      scope.captureReference = callback('captureReference', 'captureViewportAt', scope);
+      scope.captureViewportAt = callback('captureViewportAt', 'captureLocationSnapshot', scope);
+      const capture = callback('captureLocationSnapshot', 'exportFirstLastFrames', scope);
+      const pending = capture(mode);
+      expect(encode).toBeTypeOf('function'); expect(scope.stopAnimation).not.toHaveBeenCalled();
+      expect(object.material).toBe(originalMaterial); expect(grid.visible).toBe(true); expect(scene.background).toBe(background); expect(scene.fog).toBe(fog);
+      camera.position.set(90, 80, 70); scope.frameRef.current = '9:16';
+      encode(blob); const result = await pending;
+      expect(result.blob).toBe(blob); expect(result.camera).toMatchObject({ position: originalPosition, fov: fovFromFocal(92), reference_pass: mode, frame: { aspect: '16:9' } });
+      expect(camera.position.toArray()).toEqual([90, 80, 70]);
+      camera.position.fromArray(originalPosition); fail = true;
+      await expect(capture(mode)).rejects.toThrow('render interrupted');
+      expect(object.material).toBe(originalMaterial); expect(grid.visible).toBe(true); expect(scene.background).toBe(background); expect(scene.fog).toBe(fog);
+      expect(scope.stopAnimation).not.toHaveBeenCalled();
+      console.log(`SCENE_STUDIO_CAPTURE=PASS mode=${mode} pose=current state=restored-before-encoding metadata=capture-time failure=visible`);
+    } finally { disposeObject(object); }
+  });
+});
+
+describe('Studio storyboard linked capture production callback', () => {
+  it.each(['viewport', 'clay'] as const)('samples selected Shot via %s, shares parent, restores before encoding and invalidates edits', async mode => {
+    const actor = new THREE.Group(); actor.position.x = -2;
+    const scope = scopeFor([{ id: 'actor', name: '甲', object: actor }]);
+    const plan: any = { version: 1, sceneId: 'director-scene:2', heading: '院落', location: '院落', sourceFingerprint: 'source', sceneFingerprint: 'director', action: [],
+      diagnostics: [JSON.stringify({ directorSource: { scene: { project_id: 1, id: 2 }, shots: [{ id: 9, scene_id: 2 }, { id: 10, scene_id: 2 }] } })],
+      shots: [9, 10].map((id, i) => ({ id: `director-shot:${id}`, order: i + 1, start: i, end: i + 1, dialogue: [], camera: { position: [i + 1, 2, 5], target: [0, 0, 0], fov: 45 } })) };
+    plan.shots[0].motion = { targetId: 'actor', targetName: '甲', start: { x: 0, z: 0 }, end: { x: 4, z: 0 }, duration: 1 };
+    let finish!: (value: any) => void;
+    const copied = vi.fn(() => { expect(actor.position.x).toBe(4); return new Promise<any>(ok => { finish = ok; }); });
+    Object.assign(scope, { executionUnavailableRef: { current: false }, designShotPlanRef: { current: plan }, captureReference: copied, captureViewportAt: copied });
+    wireProductionFingerprint(scope);
+    const baseline = scope.fingerprintRef.current().full();
+    const capture = callback('captureLocationSnapshot', 'exportFirstLastFrames', scope);
+    const cameraBefore = scope.cameraRef.current.position.toArray();
+    const pending = capture(mode, { context: { projectId: 1, sceneId: 2 }, shotId: 10 });
+    await vi.waitFor(() => expect(copied).toHaveBeenCalledOnce());
+    expect(actor.position.x).toBe(-2); expect(scope.cameraRef.current.position.toArray()).toEqual(cameraBefore);
+    finish({ blob: new Blob(['png']) }); const result = await pending;
+    const parent = await storyboardSource(plan, baseline, '16:9');
+    expect(result.camera.storyboard_source).toMatchObject({ ...parent, projectId: 1, sceneIdNumber: 2, shotId: 10, sampleSeconds: 1 });
+    expect(result.camera.position).toEqual([2, 2, 5]); expect(result.isCurrent()).toBe(true);
+    // Real playback/export sampling borrows transforms, but the production
+    // fingerprint uses its editing baselines. Availability only blocks NEW captures.
+    scope.executionUnavailableRef.current = true;
+    const sampler = createScriptShotSampler(plan, { camera: scope.cameraRef.current, controls: scope.controlsRef.current, entries: () => scope.objectsRef.current, environment: null, baselines: scope.motionBaselineRef.current });
+    try {
+      sampler.sampleAt(1); expect(actor.position.x).toBe(4);
+      expect(result.isCurrent()).toBe(true);
+      await expect(capture(mode, { context: { projectId: 1, sceneId: 2 }, shotId: 10 })).rejects.toThrow(/停止播放/);
+    } finally { sampler.stop(); scope.executionUnavailableRef.current = false; }
+    expect(actor.position.x).toBe(-2); expect(result.isCurrent()).toBe(true);
+    actor.position.x++; expect(result.isCurrent()).toBe(false);
+    await expect(capture(mode, { context: { projectId: 3, sceneId: 2 }, shotId: 10 })).rejects.toThrow(/来源/);
+    scope.designShotPlanRef.current = null;
+    await expect(capture(mode, { context: { projectId: 1, sceneId: 2 }, shotId: 10 })).rejects.toThrow(/先应用/);
+  });
+});
+
 describe('Studio production v7 callbacks', () => {
   it('rejects mixed revisions during legacy PNG encoding without downloading, uploading or overwriting newer camera/frame edits', async () => {
     for (const operation of ['reference', 'first-last', 'sequence'] as const) for (const edit of ['material', 'object', 'frame-camera'] as const) {
@@ -500,6 +689,7 @@ describe('Studio production v7 callbacks', () => {
     scope.stopAnimation = () => { scope.shotPlaybackTokenRef.current++; scope.cancelCameraPreviewRef.current?.(); };
     const play = callback('playScriptShots', 'seekPreviewFrame', scope);
     for (const delayedFirstFrame of [false, true]) {
+      scope.setError.mockClear(); // Assert one reset per playback attempt, not the cumulative loop count.
       clock = 0; await play(plan);
       if (!delayedFirstFrame) { clock = 500; frame!(); }
       clock = 4500; frame!();
@@ -510,7 +700,8 @@ describe('Studio production v7 callbacks', () => {
         const rig = findCapsuleRigs(entry.object)[0], expectedRig = findCapsuleRigs(videoEntries[index].object)[0];
         expect(rig.leg.quaternion.toArray()).toEqual(expectedRig.leg.quaternion.toArray());
       });
-      expect(scope.setError).not.toHaveBeenCalled();
+      // Starting a new attempt now explicitly clears stale feedback; null is not an error.
+      expect(scope.setError).toHaveBeenCalledExactlyOnceWith(null);
       scope.stopAnimation(); sampler.stop();
       entries.forEach(entry => expect(entry.object.position.toArray()).toEqual([0, 0, 0]));
       expect(scope.motionBaselineRef.current.size).toBe(0);
@@ -819,7 +1010,7 @@ describe('Declared scenery requirements through production callbacks', () => {
     const start = stage.indexOf('onApplyShots={') + 'onApplyShots={'.length;
     const end = stage.indexOf('} appliedPlan=', start);
     expect(start).toBeGreaterThan('onApplyShots={'.length); expect(end).toBeGreaterThan(start);
-    const code = execFileSync(process.execPath, ['-e', "process.stdout.write(require('esbuild').transformSync(require('fs').readFileSync(0,'utf8'),{loader:'ts',format:'cjs'}).code)"], { input: `const apply = ${stage.slice(start, end)};`, encoding: 'utf8', cwd: frontend });
+    const code = compileTypeScript(`const apply = ${stage.slice(start, end)};`);
     Object.assign(scope, { assertScriptShotApplicationSafe, setScriptShots: vi.fn(), setStatus: vi.fn() });
     const apply = new Function('scope', `with(scope) { ${code}; return apply; }`)(scope);
     try {
@@ -854,6 +1045,101 @@ describe('Declared scenery requirements through production callbacks', () => {
   }, 60_000);
 });
 
+describe('Declared connected roads through production archives', () => {
+  for (const version of [6, 7]) it(`preserves road points and source through v${version} save/reopen and rechecks a newly broken road`, async () => {
+    const mesh = (id: string, x: number, w: number, h: number, y: number) => {
+      const object = new THREE.Mesh(new THREE.BoxGeometry(w, h, 1), new THREE.MeshStandardMaterial()); object.position.set(x, y, 0);
+      return { id, name: id, object, locked: false };
+    };
+    const entries = [mesh('road', 0, 4, .1, -.05), mesh('camp', -3, 1, 1, .5), mesh('bank', 3, 1, 1, .5)];
+    const extra = version === 7 ? materializeSetDraft(await prepareSetDraft('ancientStreet', new AbortController().signal)).slice(0, 1) : [];
+    extra.forEach(e => e.object.position.x = 100);
+    const source = scopeFor([...entries, ...extra]), target = scopeFor([]);
+    const content = '军营外的小路通向潭边。';
+    const basis = { kind: 'fact', start: 0, end: content.length, quote: content };
+    const plan = validateScriptShotPlan({ ...requirementsFixture().plan, sceneRequirements: {
+      version: 1, sourceRevision: 'review', sourceContent: content, entities: entries.map(e => ({ id: e.id, label: e.name, count: 1, objectIds: [e.id], basis })),
+      relations: [{ id: 'route', kind: 'path-connected', subject: 'road', reference: 'camp', other: 'bank', points: [[-2, 0, 0], [2, 0, 0]], maxEndpointGapMetres: .5, stagingNote: '坐标和端点距离为人工布景', basis }], unresolved: [] } });
+    source.scriptShots = plan;
+    try {
+      for (let cycle = 0; cycle < 2; cycle++) {
+        const saved = await callback('buildSceneDocument', 'saveScene', cycle ? target : source)(); expect(saved.version).toBe(version);
+        await callback('importSceneText', 'loadScene', target)(JSON.stringify(saved));
+        expect(target.setError.mock.calls.filter((c: any[]) => c[0])).toEqual([]);
+        const restored = target.setScriptShots.mock.calls.at(-1)[0]; expect(restored.sceneRequirements).toEqual(plan.sceneRequirements);
+        const options = { camera: target.cameraRef.current, controls: target.controlsRef.current, entries: () => target.objectsRef.current, environment: null };
+        const sampler = createScriptShotSampler(restored, options); expect(sampler.walkProof.sceneRequirements?.paths).toHaveLength(1); sampler.stop();
+        const road = target.objectsRef.current.find((e: any) => e.id === 'road').object;
+        const scale = road.scale.clone(); road.scale.x *= .9;
+        expect(() => createScriptShotSampler(restored, options)).toThrow('路面不连续'); road.scale.copy(scale);
+        target.scriptShots = restored;
+      }
+      console.log(`CONNECTED_ROAD_ARCHIVE=PASS version=${version} cycles=2 source=preserved geometryDrift=rejected`);
+    } finally { for (const scope of [source, target]) scope.objectsRef.current.forEach((e: any) => disposeObject(e.object)); }
+  });
+});
+
+describe('Shot operation feedback through production callbacks', () => {
+  for (const entry of ['play', 'reference', 'video']) {
+    for (const failure of ['viewport', 'plan', 'road']) it(`${entry} clears previous success and error before ${failure} rejection`, async () => {
+      const mesh = (id: string, x: number, w: number, h: number, y: number) => {
+        const object = new THREE.Mesh(new THREE.BoxGeometry(w, h, 1), new THREE.MeshStandardMaterial()); object.position.set(x, y, 0);
+        return { id, name: id, object, locked: false };
+      };
+      const entries = [mesh('road', 0, 4, .1, -.05), mesh('camp', -3, 1, 1, .5), mesh('bank', 3, 1, 1, .5)];
+      const scope = scopeFor(entries), camera = scope.cameraRef.current;
+      const basis = { kind: 'assumption', reason: '隔离人工测试布局，不是小说抽取' };
+      const plan = validateScriptShotPlan({ version: 1, sceneId: 'feedback', heading: '反馈测试', location: '平地', sourceFingerprint: 'source', sceneFingerprint: 'review', action: [], diagnostics: [],
+        shots: [{ id: 'one', order: 1, start: 0, end: 1, camera: { position: [0, 2, 5], target: [0, 0, 0], fov: 45 }, dialogue: [] }],
+        sceneRequirements: { version: 1, sourceRevision: 'review', sourceContent: '人工道路夹具', entities: entries.map(e => ({ id: e.id, label: e.id, count: 1, objectIds: [e.id], basis })),
+          relations: [{ id: 'route', kind: 'path-connected', subject: 'road', reference: 'camp', other: 'bank', points: [[-2, 0, 0], [2, 0, 0]], maxEndpointGapMetres: .5, stagingNote: '测试坐标', basis }], unresolved: [] } });
+      let status = '逐镜视频已生成：旧任务', error: string | null = '旧错误';
+      Object.assign(scope, {
+        busy: false, setStatus: vi.fn(value => { status = value; }), setError: vi.fn(value => { error = value; }),
+        // Stopping an existing preview may itself publish a completion message.
+        stopAnimation: vi.fn(() => { status = '已停止旧预演'; }),
+        shotPlaybackTokenRef: { current: 0 }, scriptShotModuleForTest: shotModule,
+        REFERENCE_BUSY_PREFIX: '参考图', shotVideoExportRef: { current: null }, FRAME_VIDEO_SIZES,
+        rendererRef: { current: { domElement: { width: 1280, height: 720 }, getPixelRatio: () => 1, setPixelRatio: vi.fn(), setSize: vi.fn() } },
+        captureReference: vi.fn(), captureViewportAt: vi.fn(),
+        videoModuleForTest: { renderScriptShotVideo: vi.fn(async (value: any, options: any) => {
+          createScriptShotSampler(value, options); throw Error('Unexpected valid fixture');
+        }) },
+      });
+      const baseline = camera.position.toArray();
+      if (failure === 'viewport') scope.cameraRef.current = null;
+      else if (failure === 'plan') plan.shots[0].camera = null;
+      else entries[0].object.position.z = 2;
+      const expected = failure === 'viewport' ? '视口尚未就绪' : failure === 'plan' ? '未指定机位' : '路面不连续';
+      const run = entry === 'play' ? callback('playScriptShots', 'seekPreviewFrame', scope)
+        : entry === 'reference' ? callback('exportShotReferencePack', 'saveReferenceToLibrary', scope)
+        : callback('exportScriptVideo', 'exportSequence', scope);
+      try {
+        const pending = entry === 'video' ? run(plan, 12, 'viewport', new AbortController().signal) : run(plan);
+        // Feedback must be reset synchronously, before lazy imports/encoding settle.
+        const initialStatus = status, initialError = error;
+        if (entry === 'video') await expect(pending).rejects.toThrow(expected);
+        else await pending;
+        expect(initialStatus).toBe('');
+        if (failure !== 'viewport') expect(initialError).toBeNull();
+        if (entry !== 'video') expect(error).toContain(expected);
+        expect(status).toBe('');
+        expect(camera.position.toArray()).toEqual(baseline);
+        expect(scope.captureReference).not.toHaveBeenCalled(); expect(scope.captureViewportAt).not.toHaveBeenCalled();
+      } finally { entries.forEach(e => disposeObject(e.object)); }
+    });
+    it(`${entry} does not clear active operation feedback when busy`, async () => {
+      const scope = scopeFor([]); Object.assign(scope, { busy: true, setStatus: vi.fn(), setError: vi.fn() });
+      const run = entry === 'play' ? callback('playScriptShots', 'seekPreviewFrame', scope)
+        : entry === 'reference' ? callback('exportShotReferencePack', 'saveReferenceToLibrary', scope)
+        : callback('exportScriptVideo', 'exportSequence', scope);
+      if (entry === 'video') await expect(run({}, 12, 'viewport', new AbortController().signal)).rejects.toThrow('请等待');
+      else await run({});
+      expect(scope.stopAnimation).not.toHaveBeenCalled(); expect(scope.setStatus).not.toHaveBeenCalled(); expect(scope.setError).not.toHaveBeenCalled();
+    });
+  }
+});
+
 describe('Integrated enhancements through production callbacks', () => {
   it('loads an environment-free archive using its saved light, not the callback closure light', async () => {
     const object = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial());
@@ -865,7 +1151,7 @@ describe('Integrated enhancements through production callbacks', () => {
     const lights = { key: new THREE.DirectionalLight(), hemi: new THREE.HemisphereLight(), fill: new THREE.DirectionalLight(), rim: new THREE.DirectionalLight() };
     // Compile the actual preset table and actual application callbacks.
     const table = stage.slice(stage.indexOf('const LIGHT_PRESETS:'), stage.indexOf('const WEATHER_LABELS:'));
-    const code = execFileSync(process.execPath, ['-e', "process.stdout.write(require('esbuild').transformSync(require('fs').readFileSync(0,'utf8'),{loader:'ts',format:'cjs'}).code)"], { input: table, encoding: 'utf8', cwd: frontend });
+    const code = compileTypeScript(table);
     Object.assign(scope, { skyboxTextureRef: { current: null }, LIGHT_PRESETS: new Function(`${code};return LIGHT_PRESETS;`)(), lightsRef: { current: lights }, terrainMeshRef: { current: null }, weatherEffectsRef: { current: null }, rebuildTerrainMesh: vi.fn() });
     scope.applyLightPreset = callback('applyLightPreset', 'rebuildTerrainMesh', scope);
     scope.applyEnvironment = callback('applyEnvironment', 'applyTerrainChange', scope);
@@ -900,7 +1186,10 @@ describe('Integrated enhancements through production callbacks', () => {
         await options.renderFrame({ camera: { position: [1,2,3], target: [0,0,0], fov:45 } }, 0, { timestamp: 0, duration: 1000000 });
         return { blob: {}, manifest: { frameCount: 1 } };
       } };
-      const run = callback('exportScriptVideo', 'exportSequence', scope)({ shots: [] }, 1, 'viewport', controller.signal);
+      // Provenance now validates the plan before the encoder stub. Use a real plan;
+      // keep every sizing/cancel/restoration assertion and the encoder failure injection.
+      const plan = buildScriptShotPlan(await buildScriptSceneDraft(parseScriptScenes('1. 内景 现代卧室 日\n张三：走吧。'), 'scene-1', controller.signal));
+      const run = callback('exportScriptVideo', 'exportSequence', scope)(plan, 1, 'viewport', controller.signal);
       if (outcome === 'success') await expect(run).resolves.toMatchObject({ projectId: 7 });
       else await expect(run).rejects.toThrow(outcome === 'cancel' ? '取消' : '尺寸');
       expect(scope.shotVideoExportRef.current).toBe(null); expect(ratio).toBe(2);
@@ -921,7 +1210,9 @@ describe('Integrated enhancements through production callbacks', () => {
         await options.renderFrame({ camera: {} }, 0, { timestamp: 0, duration: 1000000 });
         return { blob: {}, manifest: { frameCount: 1, mode } };
       } } });
-    const result = await callback('exportScriptVideo', 'exportSequence', scope)({ shots: [] }, 1, mode, new AbortController().signal);
+    const signal = new AbortController().signal;
+    const plan = buildScriptShotPlan(await buildScriptSceneDraft(parseScriptScenes('1. 内景 现代卧室 日\n张三：走吧。'), 'scene-1', signal));
+    const result = await callback('exportScriptVideo', 'exportSequence', scope)(plan, 1, mode, signal);
     expect(scope.captureReference).toHaveBeenCalledExactlyOnceWith(pass);
     expect(scope.captureViewportAt).not.toHaveBeenCalled(); expect(result.manifest.mode).toBe(mode);
   });
@@ -1139,6 +1430,92 @@ describe('Character animation catalog attached to a scene object', () => {
       } finally { for (const s of [source, target]) s.objectsRef.current.forEach((e: any) => disposeObject(e.object)); }
     }
   }, 60_000);
+
+  it.each([6, 7].flatMap(version => [false, true].map(split => ({ version, split }))))('preserves manual beat clip correction and human provenance through production v$version archive callbacks split=$split', async ({ version, split }) => {
+    const rig = createToonflowPrimitive({ shape: 'riggedPerson' } as any, '#eee');
+    const chest = rig.getObjectByName('chest')!;
+    rig.animations = [0, 1].map(i => new THREE.AnimationClip(i ? 'human-chest-turn' : 'rest', 2, [new THREE.QuaternionKeyframeTrack(`${chest.uuid}.quaternion`, [0, 2], [0, 0, 0, 1, 0, Math.sin(i * .1), 0, Math.cos(i * .1)])]));
+    const clips = rig.animations.map((c, index) => ({ index, name: c.name, duration: c.duration }));
+    const extras = version === 7 ? materializeSetDraft(await prepareSetDraft('ancientStreet', new AbortController().signal)).slice(0, 1) : [];
+    extras.forEach(e => e.object.position.set(30, 0, 30));
+    const source = scopeFor([{ id: 'actor', name: 'A', object: rig, locked: false }, ...extras]), target = scopeFor([]);
+    for (const scope of [source, target]) {
+      Object.assign(scope, { GLTFExporter, clonePosedContent, markAnimationArchivePaths, isExportablePlane, applyBonePose });
+      scope.exportGeometry = callback('exportGeometry', 'exportGlb', scope);
+    }
+    const original = validateScriptShotPlan({ version: 1, sceneId: 's', heading: '人工动作', location: '平地', sourceFingerprint: 'source-kept', sceneFingerprint: 'review-kept', action: ['原导演表演字段不改写'], diagnostics: ['原始依据'], shots: [{
+      id: 's', order: 1, start: 0, end: 4, camera: { position: [0, 2, 5], target: [0, 1, 0], fov: 45 }, dialogue: [], execution: { version: 1, actors: [{ targetId: 'actor', targetName: 'A', beats: [0, 1].map(i => ({ start: i * 2, end: i * 2 + 2, from: { x: 0, z: 0 }, to: { x: 0, z: 0 }, yaw: 0, animation: clips[0], sourceIndex: i })) }] },
+    }] });
+    const reason = split ? '人工拆成前半静置后半胸部转动，不证明剧情完成' : '人工替换第二段胸部转动，不证明剧情完成';
+    source.scriptShots = correctExecutionBeatClip(original, { shotId: 's', targetId: 'actor', beatIndex: 1, animation: clips[split ? 0 : 1], reason,
+      ...(split ? { split: { at: 3, afterAnimation: clips[1] } } : {}) }, [{ id: 'actor', name: 'A', visible: true, locked: false, animations: clips }]);
+    try {
+      const saved = await callback('buildSceneDocument', 'saveScene', source)(); expect(saved.version).toBe(version);
+      await callback('importSceneText', 'loadScene', target)(JSON.stringify(saved));
+      expect(target.setError.mock.calls.filter((call: any[]) => call[0])).toEqual([]);
+      const restored = target.setScriptShots.mock.calls.at(-1)[0]; expect(restored).toEqual(source.scriptShots);
+      expect(JSON.parse(restored.diagnostics.at(-1)).reason).toBe(reason);
+      if (split) {
+        expect(restored.shots[0].execution.actors[0].beats.slice(1).map((b: any) => [b.start, b.end, b.sourceIndex])).toEqual([[2, 3, 1], [3, 4, 1]]);
+        expect(JSON.parse(restored.diagnostics.at(-1)).operation).toBe('split-beat');
+      }
+      const restoredRig = target.objectsRef.current.find((e: any) => e.id === 'actor').object;
+      const rest = restoredRig.getObjectByName('chest').quaternion.clone();
+      const sampler = createScriptShotSampler(restored, { camera: target.cameraRef.current, controls: target.controlsRef.current, entries: () => target.objectsRef.current, environment: null });
+      try {
+        sampler.sampleAt(1); expect(restoredRig.getObjectByName('chest').quaternion.angleTo(rest)).toBeLessThan(1e-6);
+        if (split) {
+          for (const t of [2.5, 3, 3.5, 2.5, 3.5]) {
+            sampler.sampleAt(t); expect(restoredRig.getObjectByName('chest').quaternion.angleTo(rest)).toBeCloseTo(t === 3.5 ? .05 : 0, 4);
+          }
+        } else { sampler.sampleAt(3); expect(restoredRig.getObjectByName('chest').quaternion.angleTo(rest)).toBeCloseTo(.1, 4); }
+        sampler.sampleAt(1); expect(restoredRig.getObjectByName('chest').quaternion.angleTo(rest)).toBeLessThan(1e-6);
+      } finally { sampler.stop(); }
+      expect(restoredRig.getObjectByName('chest').quaternion.angleTo(rest)).toBeLessThan(1e-6);
+      expect(restoredRig.position.toArray()).toEqual([0, 0, 0]);
+      console.log(`MANUAL_PERFORMANCE_ARCHIVE=PASS version=${version} split=${split} provenance=preserved actualBonePose=changed stop=restored`);
+    } finally { for (const scope of [source, target]) scope.objectsRef.current.forEach((e: any) => disposeObject(e.object)); }
+  });
+
+  it.each([6, 7])('preserves literal performance proposal and later correction through production v%s archive callbacks', async version => {
+    const text = '1. 外景 古街 日\n张三：等。\n（张三走近李四。）\n李四：好。\n（张三抓腕。）';
+    const index = parseScriptScenes(text), draft = await buildScriptSceneDraft(index, index.scenes[0].id, new AbortController().signal, 'bedroom');
+    const entries = ['张三', '李四'].map((name, i) => {
+      const object = createToonflowPrimitive({ shape: 'riggedPerson' } as any, '#eee'); object.position.x = i * 8;
+      object.animations = ['cc0Idle', 'cc0Talk', 'cc0Walk'].map(name => object.animations.find(c => c.name === name)!);
+      return { id: `actor-${i}`, name, object, locked: false };
+    });
+    const extras = version === 7 ? materializeSetDraft(await prepareSetDraft('bedroom', new AbortController().signal)).slice(0, 1) : [];
+    extras.forEach(e => e.object.position.set(30, 0, 30));
+    const source = scopeFor([...entries, ...extras]), target = scopeFor([]), context = captureScriptPerformanceContext(entries);
+    const cast = context.targets.map(t => ({ character: t.name, targetId: t.id, idle: t.animations[0], talk: t.animations[1], walk: t.animations[2] }));
+    const proposed = buildScriptPerformancePlan(buildScriptShotPlan(draft), index.scenes[0], text, cast, context, { speed: 1.35, approachDistance: 4, departureDistance: 4 });
+    proposed.shots.forEach(s => { s.camera = { position: [0, 4, 16], target: [4, 1, 0], fov: 45 }; });
+    source.scriptShots = correctExecutionBeatClip(proposed, { shotId: 'performance-1', targetId: 'actor-0', beatIndex: 0, animation: cast[0].idle, reason: '人工改为静候，不冒充抓腕' }, context.targets);
+    for (const scope of [source, target]) {
+      Object.assign(scope, { GLTFExporter, clonePosedContent, markAnimationArchivePaths, isExportablePlane, applyBonePose });
+      scope.exportGeometry = callback('exportGeometry', 'exportGlb', scope);
+    }
+    try {
+      const saved = await callback('buildSceneDocument', 'saveScene', source)(); expect(saved.version).toBe(version);
+      await callback('importSceneText', 'loadScene', target)(JSON.stringify(saved));
+      expect(target.setError.mock.calls.filter((call: any[]) => call[0])).toEqual([]);
+      const restored = target.setScriptShots.mock.calls.at(-1)[0]; expect(restored).toEqual(source.scriptShots);
+      const record = JSON.parse(restored.diagnostics.find((t: string) => t.startsWith('{"kind":"script-performance-proposal"')));
+      expect(record.unresolved[0]).toMatchObject({ line: 5, quote: '（张三抓腕。）' });
+      expect(JSON.parse(restored.diagnostics.at(-1)).reason).toBe('人工改为静候，不冒充抓腕');
+      const rig = target.objectsRef.current.find((e: any) => e.id === 'actor-0').object, baseline = rig.position.clone();
+      assertScriptShotApplicationSafe(restored, target.objectsRef.current, null);
+      const sampler = createScriptShotSampler(restored, { camera: target.cameraRef.current, controls: target.controlsRef.current, entries: () => target.objectsRef.current, environment: null });
+      try {
+        const walk = restored.shots[1]; sampler.sampleAt(walk.start + (walk.end - walk.start) / 2); expect(rig.position.x).toBeCloseTo(2);
+        const arm = rig.getObjectByName('leftUpperArm').quaternion.clone(); sampler.sampleAt(walk.start + .1);
+        expect(rig.getObjectByName('leftUpperArm').quaternion.angleTo(arm)).toBeGreaterThan(.001);
+      } finally { sampler.stop(); }
+      expect(rig.position.equals(baseline)).toBe(true);
+      console.log(`SCRIPT_PERFORMANCE_ARCHIVE=PASS version=${version} sourceGaps=preserved correction=preserved actualBonePose=changed stop=restored`);
+    } finally { for (const scope of [source, target]) scope.objectsRef.current.forEach((e: any) => disposeObject(e.object)); }
+  }, 30_000);
 
   it.each([6, 7])('preserves actual paired wrist constraints through production v%s archives and replays restored skin', async version => {
     // Float32 key times must not round past clip.duration; .25 is exact in both

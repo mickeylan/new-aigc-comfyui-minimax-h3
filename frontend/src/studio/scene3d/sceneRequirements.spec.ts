@@ -1,4 +1,5 @@
-import { BoxGeometry, Group, InstancedMesh, Mesh, MeshStandardMaterial, Plane, Texture } from 'three';
+import { Bone, BoxGeometry, Float32BufferAttribute, Group, InstancedMesh, Matrix4, Mesh, MeshStandardMaterial, Plane, Skeleton, SkinnedMesh, Texture, Uint16BufferAttribute } from 'three';
+import { createEnvironmentTerrain, defaultSceneEnvironment } from './ground-path';
 import { expect, it } from 'vitest';
 import { assertSceneRequirements, validateSceneRequirements } from './sceneRequirements';
 import { validateScriptShotPlan } from './scriptShotPlan';
@@ -132,4 +133,141 @@ it('rejects unsupported displaced or non-finite geometry rather than issuing a f
     (m: Mesh) => (m.material as MeshStandardMaterial).displacementMap = new Texture(),
     (m: Mesh) => m.geometry.attributes.position.setX(0, NaN),
   ]) { const f = fixture(); change(f.entries[0].object.children[0] as Mesh); expect(() => assertSceneRequirements(f.review, f.entries)).toThrow(); }
+});
+
+function routeFixture() {
+  const mesh = (w: number, h: number, d: number, x: number, y: number) => {
+    const m = new Mesh(new BoxGeometry(w, h, d), new MeshStandardMaterial()); m.position.set(x, y, 0); return m;
+  };
+  const road = new Group(); road.add(mesh(4, .1, 1, 0, -.05));
+  const entries = [{ id: 'road', name: '小路', object: road },
+    { id: 'camp', name: '军营', object: mesh(1, 1, 1, -3, .5) },
+    { id: 'bank', name: '潭边', object: mesh(1, 1, 1, 3, .5) }];
+  const review = { version: 1 as const, sourceRevision: 'reviewed-revision', sourceContent: content,
+    entities: entries.map(e => ({ id: e.id, label: e.name, count: 1, objectIds: [e.id], basis: evidence(e.id === 'road' ? '小路' : e.id === 'camp' ? '军营' : '水潭') })),
+    relations: [{ id: 'camp-to-bank', kind: 'path-connected' as const, subject: 'road', reference: 'camp', other: 'bank',
+      points: [[-2, 0, 0], [2, 0, 0]] as [number, number, number][], maxEndpointGapMetres: .5,
+      stagingNote: '世界坐标折线和半米端点接近为人工布景，不证明路宽或人物可通行', basis: evidence('军营外的小路通向水潭') }], unresolved: [] };
+  return { entries, review, road, mesh };
+}
+it('proves a declared route on rendered triangles, keeps assumptions/source and does not mutate transforms', () => {
+  const f = routeFixture(), before = JSON.stringify(f.review), positions = f.entries.map(e => e.object.position.toArray());
+  const proof = assertSceneRequirements(f.review, f.entries, null);
+  expect(proof.paths).toMatchObject([{ id: 'camp-to-bank', segments: 1, support: 'continuous-triangle-centreline', clearanceMetres: .35 }]);
+  expect(validateSceneRequirements(JSON.parse(before))).toEqual(f.review);
+  expect(JSON.stringify(f.review)).toBe(before); expect(f.entries.map(e => e.object.position.toArray())).toEqual(positions);
+});
+it('rejects sub-sample road gaps inside an aggregate AABB instead of sampling across the hole', () => {
+  const f = routeFixture(); f.road.clear();
+  // 1mm gap at x=.123; a 0.5m sample grid and the union AABB both miss it.
+  f.road.add(f.mesh(2.1225, .1, 1, -.93875, -.05), f.mesh(1.8765, .1, 1, 1.06175, -.05));
+  expect(() => assertSceneRequirements(f.review, f.entries, null)).toThrow('路面不连续');
+});
+it('requires true endpoint surface proximity and never attaches across hollow landmark bounds', () => {
+  const f = routeFixture(); f.entries[1].object.position.x = -4;
+  expect(() => assertSceneRequirements(f.review, f.entries, null)).toThrow('端点');
+  const hollow = new Group(); const a = f.mesh(1, 1, 1, -3, .5), b = a.clone(); a.position.z = -3; b.position.z = 3;
+  hollow.add(a, b); f.entries[1].object = hollow as any;
+  expect(() => assertSceneRequirements(f.review, f.entries, null)).toThrow('端点');
+});
+it('binds actual transformed/instanced route geometry and rejects hidden or clipped support', () => {
+  const f = routeFixture(); f.road.clear();
+  const instances = new InstancedMesh(new BoxGeometry(4, .1, 1), new MeshStandardMaterial(), 1);
+  instances.setMatrixAt(0, new Matrix4().makeTranslation(0, -.05, 0)); f.road.add(instances);
+  expect(() => assertSceneRequirements(f.review, f.entries, null)).not.toThrow();
+  f.road.position.z = 2; expect(() => assertSceneRequirements(f.review, f.entries, null)).toThrow('路面不连续');
+  f.road.position.z = 0; instances.geometry.setDrawRange(0, 0);
+  expect(() => assertSceneRequirements(f.review, f.entries, null)).toThrow();
+});
+it('keeps water, slope and third-object clearance gates for declared roads', () => {
+  const f = routeFixture(), environment = defaultSceneEnvironment(); environment.terrain = createEnvironmentTerrain({ size: 20, segments: 64, amplitude: 0 });
+  expect(() => assertSceneRequirements(f.review, f.entries, environment)).not.toThrow();
+  environment.terrain.waterLevels = Array(4225).fill(null); environment.terrain.waterLevels[2112] = .1; environment.terrain.surfaces[2112] = 2;
+  expect(() => assertSceneRequirements(f.review, f.entries, environment)).toThrow('水域');
+  environment.terrain.waterLevels[2112] = null;
+  f.entries.push({ id: 'blocker', name: '挡路石', object: f.mesh(.2, 1, .2, .123, .5) } as any);
+  expect(() => assertSceneRequirements(f.review, f.entries, environment)).toThrow('障碍');
+  f.entries.pop(); f.road.rotation.z = Math.PI / 3;
+  expect(() => assertSceneRequirements(f.review, f.entries, environment)).toThrow('路面不连续');
+});
+it('rejects ambiguous route references, zero-length segments, malformed coordinates and unbounded work', () => {
+  for (const edit of [
+    (r: any) => r.relations[0].other = 'absent',
+    (r: any) => r.relations[0].other = 'road',
+    (r: any) => r.relations[0].points[1] = [-2, 0, 0],
+    (r: any) => r.relations[0].points[1][0] = NaN,
+    (r: any) => r.relations[0].points[1] = [2, 0],
+    (r: any) => r.relations[0].points = Array(130).fill([0, 0, 0]),
+    (r: any) => r.relations[0].maxEndpointGapMetres = 999,
+  ]) { const f = routeFixture(); edit(f.review); expect(() => validateSceneRequirements(f.review)).toThrow(); }
+});
+it('passes current terrain into application and shared viewport/reference/video requirements gates', () => {
+  const f = routeFixture(), p = validateScriptShotPlan({ ...shotPlan(), sceneRequirements: f.review });
+  const environment = defaultSceneEnvironment(); environment.terrain = createEnvironmentTerrain({ size: 20, segments: 64, amplitude: 0 });
+  environment.terrain.waterLevels = Array(4225).fill(null); environment.terrain.waterLevels[2112] = .1; environment.terrain.surfaces[2112] = 2;
+  expect(() => assertScriptShotApplicationSafe(p, f.entries, environment)).toThrow('水域');
+  const camera = new PerspectiveCamera(), controls = { target: new Vector3(), enabled: true, update() {} };
+  camera.position.set(1, 2, 3);
+  expect(() => createScriptShotSampler(p, { camera, controls, entries: () => f.entries, environment })).toThrow('水域');
+  expect(camera.position.toArray()).toEqual([1, 2, 3]); expect(controls.enabled).toBe(true);
+});
+it('restores staged road transforms on rejection and rechecks geometry drift before sampler ownership', () => {
+  const f = routeFixture(), p = validateScriptShotPlan({ ...shotPlan(), sceneRequirements: f.review });
+  expect(validateScriptShotPlan(JSON.parse(JSON.stringify(p)))).toEqual(p);
+  expect(() => assertScriptShotApplicationSafe(p, f.entries, null, [{ id: 'road', position: [0, 0, 2], rotation: [0, 0, 0], scale: [1, 1, 1] }])).toThrow('路面不连续');
+  expect(f.road.position.toArray()).toEqual([0, 0, 0]);
+  const camera = new PerspectiveCamera(), controls = { target: new Vector3(), enabled: true, update() {} };
+  const sampler = createScriptShotSampler(p, { camera, controls, entries: () => f.entries, environment: null });
+  expect(sampler.walkProof.sceneRequirements?.paths).toHaveLength(1); sampler.stop();
+  f.road.children[0].scale.x = .9;
+  expect(() => createScriptShotSampler(p, { camera, controls, entries: () => f.entries, environment: null })).toThrow('路面不连续');
+  expect(controls.enabled).toBe(true);
+});
+it('refuses colourless declared scenery as well as road evidence', () => {
+  const f = fixture(); ((f.entries[0].object.children[0] as Mesh).material as MeshStandardMaterial).colorWrite = false;
+  expect(() => assertSceneRequirements(f.review, f.entries)).toThrow('不可见');
+});
+it('bounds vertex preprocessing before scanning geometry even with a tiny draw range', () => {
+  const f = routeFixture(), geometry = (f.road.children[0] as Mesh).geometry;
+  geometry.setAttribute('position', new Float32BufferAttribute(new Float32Array(300000 * 3), 3)); geometry.setDrawRange(0, 6);
+  expect(() => assertSceneRequirements(f.review, f.entries, null)).toThrow('顶点预算');
+});
+it('does not accumulate per-seam tolerance into a meaningful unsupported length', () => {
+  const f = routeFixture(); f.road.clear();
+  const count = 100, cell = 4 / count, gap = .0000005;
+  for (let i = 0; i < count; i++) f.road.add(f.mesh(cell - (i === count - 1 ? 0 : gap), .1, 1, -2 + cell * i + (cell - (i === count - 1 ? 0 : gap)) / 2, -.05));
+  expect(() => assertSceneRequirements(f.review, f.entries, null)).toThrow('路面不连续');
+});
+it('refuses colourless road evidence even when it still writes depth', () => {
+  const f = routeFixture(); ((f.road.children[0] as Mesh).material as MeshStandardMaterial).colorWrite = false;
+  expect(() => assertSceneRequirements(f.review, f.entries, null)).toThrow('不可见');
+});
+it('allows surface-touching endpoints but still rejects entering or crossing endpoint landmarks', () => {
+  const f = routeFixture(); f.road.children[0].scale.x = 1.25;
+  f.review.relations[0].points = [[-2.5, 0, 0], [2.5, 0, 0]]; f.review.relations[0].maxEndpointGapMetres = 0;
+  expect(() => assertSceneRequirements(f.review, f.entries, null)).not.toThrow();
+  f.road.children[0].scale.x = 1.5;
+  f.review.relations[0].points = [[-3, 0, 0], [3, 0, 0]];
+  f.review.relations[0].maxEndpointGapMetres = .5;
+  expect(() => assertSceneRequirements(f.review, f.entries, null)).toThrow('障碍');
+});
+it('uses the current skin pose as an obstacle without requiring unrelated characters to be static scenery evidence', () => {
+  const f = routeFixture(), geometry = new BoxGeometry(.5, 1, .5), count = geometry.attributes.position.count;
+  geometry.setAttribute('skinIndex', new Uint16BufferAttribute(new Uint16Array(count * 4), 4));
+  const weights = new Float32Array(count * 4); for (let i = 0; i < count; i++) weights[i * 4] = 1;
+  geometry.setAttribute('skinWeight', new Float32BufferAttribute(weights, 4));
+  const actor = new SkinnedMesh(geometry, new MeshStandardMaterial()), bone = new Bone(); actor.add(bone); actor.bind(new Skeleton([bone])); actor.position.set(0, .5, 100);
+  f.entries.push({ id: 'actor', name: '远处角色', object: actor } as any);
+  expect(() => assertSceneRequirements(f.review, f.entries, null)).not.toThrow();
+  actor.position.z = 0;
+  expect(() => assertSceneRequirements(f.review, f.entries, null)).toThrow('障碍');
+});
+it('rejects floating, hidden, transparent, mirrored and over-budget route geometry', () => {
+  for (const edit of [
+    (f: ReturnType<typeof routeFixture>) => { f.road.position.y = .5; f.review.relations[0].points.forEach(p => p[1] = .5); },
+    (f: ReturnType<typeof routeFixture>) => f.road.children[0].visible = false,
+    (f: ReturnType<typeof routeFixture>) => ((f.road.children[0] as Mesh).material as MeshStandardMaterial).opacity = .5,
+    (f: ReturnType<typeof routeFixture>) => f.road.scale.x = -1,
+    (f: ReturnType<typeof routeFixture>) => { const m = new InstancedMesh(new BoxGeometry(4, .1, 1), new MeshStandardMaterial(), 4097); f.road.clear().add(m); },
+  ]) { const f = routeFixture(); edit(f); expect(() => assertSceneRequirements(f.review, f.entries, null)).toThrow(); }
 });

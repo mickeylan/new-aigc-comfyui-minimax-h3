@@ -7,9 +7,30 @@
 export const SCENE_ARCHIVE_MAX_BYTES = 32 * 1024 * 1024;
 export const SCENE_ARCHIVE_MAX_LABEL = "32 MB";
 
+export type SceneStudioContext = { projectId: number; sceneId: number };
+
+/** 路由和存档元数据只传来源身份，不推断小说内容或自动套用镜头。 */
+export function sceneStudioContext(projectId: unknown, sceneId: unknown): SceneStudioContext | undefined {
+  if ((projectId == null || projectId === '') && (sceneId == null || sceneId === '')) return undefined;
+  const positiveID = (value: unknown) => (typeof value === 'number' || (typeof value === 'string' && /^\d+$/.test(value))) && Number.isSafeInteger(Number(value)) && Number(value) > 0;
+  if (!positiveID(projectId) || !positiveID(sceneId)) throw new Error('Studio 来源必须同时提供有效的项目和场次 ID');
+  return { projectId: Number(projectId), sceneId: Number(sceneId) };
+}
+
+export function sceneArchiveQuery(page: number, filter: string, context?: SceneStudioContext): string {
+  const query = new URLSearchParams({ page: String(page), page_size: '10' });
+  if (filter === 'scene') {
+    if (!context) throw new Error('没有关联场次，不能筛选本场次存档');
+    query.set('project_id', String(context.projectId));
+    query.set('scene_id', String(context.sceneId));
+  } else if (filter !== 'all') query.set('project_id', filter);
+  return `?${query}`;
+}
+
 export interface SceneArchiveItem {
   id: number;
   projectId: number | null;
+  sceneId: number | null;
   name: string;
   size: number;
   sizeLabel: string;
@@ -58,6 +79,7 @@ export function parseSceneArchiveList(payload: unknown): SceneArchiveItem[] {
     items.push({
       id,
       projectId: typeof row.project_id === "number" ? row.project_id : null,
+      sceneId: typeof row.scene_id === 'number' && Number.isSafeInteger(row.scene_id) && row.scene_id > 0 ? row.scene_id : null,
       name: rawName || `存档 ${id}`,
       size: bytes,
       sizeLabel: archiveSizeLabel(bytes),
@@ -95,7 +117,9 @@ export function sceneArchiveFormBody(
   json: string,
   name: string,
   projectId?: number | null,
+  sceneId?: number | null,
 ): FormData {
+  const source = sceneId == null ? undefined : sceneStudioContext(projectId, sceneId);
   const fileName = name || sceneArchiveFileName(Date.now());
   const form = new FormData();
   form.append("file", new Blob([json], { type: "application/json" }), fileName);
@@ -103,5 +127,6 @@ export function sceneArchiveFormBody(
   if (typeof projectId === "number" && Number.isFinite(projectId) && projectId > 0) {
     form.append("project_id", String(projectId));
   }
+  if (source) form.append('scene_id', String(source.sceneId));
   return form;
 }

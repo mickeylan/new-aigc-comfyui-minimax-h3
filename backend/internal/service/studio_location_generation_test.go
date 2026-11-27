@@ -92,6 +92,58 @@ func TestStudioLocationRequestReviewTemplateAndReferenceOrder(t *testing.T) {
 	}
 }
 
+func TestStudioLocationClayShotProvenancePreservesScene(t *testing.T) {
+	svc, scene, ref := studioLocationFixture(t)
+	shot := models.Shot{SceneID: scene.ID}
+	if err := svc.DB.Create(&shot).Error; err != nil {
+		t.Fatal(err)
+	}
+	// 不改已有场次参考选择；白模只通过这次人工审阅的任务输入消费。
+	scene.ReferenceImagesJSON = `[{"source_type":"character","source_id":42,"use_h3":true}]`
+	if err := svc.DB.Model(scene).Update("reference_images_json", scene.ReferenceImagesJSON).Error; err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(svc.Upload.InputDir(), ref.TaskID, ref.Name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.Upload.SaveFile("identity", "image", "character.png", data); err != nil {
+		t.Fatal(err)
+	}
+	identity := FileMeta{TaskID: "identity", Name: "character.png"}
+	camera := json.RawMessage(`{"position":[1,2,3],"target":[0,1,0],"fov":45,"reference_pass":"clay","frame":{"aspect":"16:9"}}`)
+	req, err := svc.studioLocationRequest(scene, studioLocationInput{TemplateSHA256: svc.studioLocationTemplates()[0].TemplateSHA256, TemplateCode: "qwen_image_2_1_multi_edit", Prompt: "人工核对：参考1空间结构，参考2人物身份", Reviewed: true, ShotID: shot.ID, Snapshot: ref, References: []FileMeta{identity}, Camera: camera})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := req.Files["ref_images"]
+	if len(refs) != 2 || refs[0] != ref || refs[1] != identity {
+		t.Fatalf("ordered reference handoff lost: %+v", refs)
+	}
+	params, err := json.Marshal(req.Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(params, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	var source studioLocationSource
+	if err := json.Unmarshal(decoded[studioLocationKey], &source); err != nil {
+		t.Fatal(err)
+	}
+	if source.ProjectID != scene.ProjectID || source.SceneID != scene.ID || source.ShotID != shot.ID || len(source.ReferenceSHA256) != 2 || !bytes.Equal(source.Camera, camera) {
+		t.Fatalf("clay source snapshot lost: %+v", source)
+	}
+	var after models.Scene
+	if err := svc.DB.First(&after, scene.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if after.ImagePrompt != scene.ImagePrompt || after.ReferenceImagesJSON != scene.ReferenceImagesJSON || after.ImageFile != scene.ImageFile || after.VideoFile != scene.VideoFile || after.ImageTaskID != scene.ImageTaskID {
+		t.Fatalf("handoff changed production state: %+v", after)
+	}
+}
+
 func TestStudioLocationCompletionPendingIdempotentAndRecovery(t *testing.T) {
 	svc, scene, ref := studioLocationFixture(t)
 	req, err := svc.studioLocationRequest(scene, studioLocationInput{TemplateSHA256: svc.studioLocationTemplates()[0].TemplateSHA256, TemplateCode: "qwen_image_2_1_multi_edit", Prompt: "keep camera", Reviewed: true, Snapshot: ref})

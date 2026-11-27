@@ -13,6 +13,12 @@ export default function ScriptVideoPanel({ plan, disabled, onExport, isCurrent, 
   const [approved, setApproved] = useState(false), [pending, setPending] = useState(false), [saving, setSaving] = useState(false);
   const [artifact, setArtifact] = useState<ScriptVideoArtifact | null>(null), [url, setUrl] = useState('');
   const [playbackError, setPlaybackError] = useState('');
+  const [stale, setStale] = useState(false);
+  useEffect(() => {
+    if (!artifact) { setStale(false); return; }
+    const check = () => setStale(!isCurrent(artifact)); check();
+    const timer = window.setInterval(check, 500); return () => window.clearInterval(timer);
+  }, [artifact, isCurrent]);
   const [error, setError] = useState(''), [material, setMaterial] = useState<{ id: number; name: string } | null>(null);
   const controller = useRef<AbortController | null>(null);
   const [earlierUpload, setEarlierUpload] = useState('');
@@ -78,6 +84,8 @@ export default function ScriptVideoPanel({ plan, disabled, onExport, isCurrent, 
     {artifact && <div className="space-y-1">
       {url && <video controls src={url} className="w-full" onError={() => setPlaybackError('本地播放器解码失败；请重新导出并核对编码（优先VP8），旧VP9文件不会随升级自动修复。请保留WebM及追溯清单诊断；不能据此判断文件有效，不会自动重试或提交生成。')} />}
       {playbackError && <p role="alert" className="text-amber-300">{playbackError}</p>}
+      {stale && !error && <p role="alert" className="text-amber-300">场景已变化，旧视频仅供下载审阅；请重新导出后入库。</p>}
+      {artifact.manifest.storyboardSource && <p aria-label="逐镜视频同源版本">同源版本 {String(artifact.manifest.storyboardSource.revision).slice(0,12)} · 与同一布景和镜头表的取景图共用父版本</p>}
       <p role="status">已生成 {artifact.manifest.frameCount} 帧 · {artifact.manifest.width}×{artifact.manifest.height} · {artifact.manifest.codec ?? '未知编码'} · {(artifact.blob.size / 1024 / 1024).toFixed(2)} MiB；尚未提交任何生成。</p>
       <div className="flex flex-wrap gap-2"><a href={url} download="studio-shot-previs.webm">下载WebM</a><button type="button" onClick={() => {
         const u = URL.createObjectURL(new Blob([JSON.stringify(artifact.manifest, null, 2)], { type: 'application/json' }));

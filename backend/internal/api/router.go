@@ -202,6 +202,7 @@ func NewRouter(cfg *config.Config, svc *service.Service) *gin.Engine {
 	r.POST("/api/projects/:id/scenes/:sid/image/upload", svc.HandleUploadSceneImage)
 	r.POST("/api/projects/:id/scenes/:sid/video/upload", svc.HandleUploadSceneVideo)
 	r.POST("/api/projects/:id/scenes/:sid/video/material", svc.HandleReplaceSceneVideoFromMaterial)
+	r.POST("/api/studio/scene-design/plan", svc.HandlePlanStudioSceneDesign)
 	r.GET("/api/studio/location/templates", svc.HandleStudioLocationTemplates)
 	r.POST("/api/projects/:id/scenes/:sid/location-generations", svc.HandleCreateStudioLocation)
 	r.GET("/api/projects/:id/scenes/:sid/location-generations", svc.HandleGetStudioLocation)

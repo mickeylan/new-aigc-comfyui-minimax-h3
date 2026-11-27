@@ -1,9 +1,11 @@
 import { createRoot } from "react-dom/client";
 import Scene3DStage from "../scene3d/Scene3DStage";
+import type { SceneStudioContext } from '../scene3d/scene-archive';
 import "../styles/studio.css";
 
 export interface MountScene3DOptions {
   exitTo?: string;
+  context?: SceneStudioContext;
 }
 
 export interface Scene3DHandle {
@@ -20,7 +22,7 @@ export function mountScene3D(
   options: MountScene3DOptions = {},
 ): Scene3DHandle {
   const root = createRoot(el);
-  root.render(<Scene3DStage exitTo={options.exitTo} />);
+  root.render(<Scene3DStage exitTo={options.exitTo} context={options.context} />);
   return {
     unmount() {
       root.unmount();
