@@ -30,6 +30,9 @@ import { assertScriptShotApplicationSafe, assertScriptShotWalkable, createScript
 import { findCapsuleRigs, gaitCapsuleRig, resetCapsuleRig } from './toonflow/capsuleRig';
 import { draftShotDirection } from './shotDirection';
 import { retargetSkeletalClip } from './characterMotion';
+import { sessionEvents, setSessionEvents, createPrevisEventRuntime } from './previsEvents';
+import { captureEventSidecarSource, serializeEventSidecar, parseEventSidecar } from './previsEventSidecar';
+import * as deliveryModuleForTest from './previsDelivery';
 import { editEnvironmentTerrain } from './environmentEdit';
 import { fitFrame, FRAME_VIDEO_SIZES, fovFromFocal } from './sceneFrame';
 import { archiveSizeLabel, parseSceneArchiveList, sceneArchiveBlocker, sceneArchiveFileName, sceneArchiveFormBody, sceneArchiveQuery, sceneStudioContext } from './scene-archive';
@@ -58,7 +61,7 @@ function callbackSource(name: string, next: string) {
   const ending = [...text.matchAll(/\n[ \t]*},\s*\[/g)].at(-1);
   if (!ending) throw new Error(`Callback boundary not found: ${name}`);
   const end = ending.index! + ending[0].indexOf('}');
-  const expression = text.slice(start, end + 1).replaceAll("await import('./proceduralArchive')", 'await Promise.resolve(recipeModuleForTest)').replaceAll("await import('./toonflowSets')", 'await Promise.resolve(scriptShotModuleForTest)').replaceAll("await import('./scriptShotSampler')", 'await Promise.resolve(samplerModuleForTest)').replaceAll(", import('./scriptShotSampler')", ', Promise.resolve(samplerModuleForTest)').replaceAll("await import('./toonflow/characterAnimations')", 'await Promise.resolve(catalogModuleForTest)').replaceAll("import('./scriptShotVideo')", 'Promise.resolve(videoModuleForTest)').replaceAll(", import('./toonflowSets')", ', Promise.resolve(scriptShotModuleForTest)');
+  const expression = text.slice(start, end + 1).replaceAll("await import('./proceduralArchive')", 'await Promise.resolve(recipeModuleForTest)').replaceAll("await import('./toonflowSets')", 'await Promise.resolve(scriptShotModuleForTest)').replaceAll("await import('./scriptShotSampler')", 'await Promise.resolve(samplerModuleForTest)').replaceAll(", import('./scriptShotSampler')", ', Promise.resolve(samplerModuleForTest)').replaceAll("await import('./toonflow/characterAnimations')", 'await Promise.resolve(catalogModuleForTest)').replaceAll("import('./scriptShotVideo')", 'Promise.resolve(videoModuleForTest)').replaceAll(", import('./toonflowSets')", ', Promise.resolve(scriptShotModuleForTest)').replaceAll("await import('./previsDelivery')", 'await Promise.resolve(deliveryModuleForTest)');
   return `const callback = ${expression};`;
 }
 // Discover literal callback requests from this spec, including branches/loops,
@@ -87,7 +90,7 @@ function scopeFor(entries: any[]) {
   const camera = new THREE.PerspectiveCamera(); camera.position.set(18, 22, 46);
   const scene = new THREE.Scene(); entries.forEach(entry => scene.add(entry.object));
   const scope: Record<string, any> = {
-    THREE, GLTFLoader, storyboardSource, captureStoryboardShot, linkedStoryboardShot, recipeModuleForTest: recipes, scriptShotModuleForTest: { validateScriptShotPlan }, catalogModuleForTest: { characterAnimationCatalogRevision },
+    THREE, GLTFLoader, sessionEvents, storyboardSource, captureStoryboardShot, linkedStoryboardShot, recipeModuleForTest: recipes, scriptShotModuleForTest: { validateScriptShotPlan }, catalogModuleForTest: { characterAnimationCatalogRevision },
     scriptShots: null,
     objectsRef: { current: entries }, cameraRef: { current: camera }, controlsRef: { current: { target: new THREE.Vector3(), update: vi.fn() } },
     sceneRef: { current: scene }, sceneEpochRef: { current: 0 }, frameRef: { current: '16:9' },
@@ -449,6 +452,44 @@ describe('Studio production v7 callbacks', () => {
     expect(preview).toBeNull(); expect(target.setArchivesOpen).toHaveBeenLastCalledWith(false);
     console.log('STUDIO_ARCHIVE_CONFIRMATION=PASS failed=retained stalePreview=blocked lateCompletion=ignored currentSuccess=closed');
   });
+  it('seeks actual production shared samples without RAF/timers and restores on reseek, stop and invalid input', async () => {
+    const draft = await buildScriptSceneDraft(parseScriptScenes('1. 内景 现代卧室 日\n张三：走吧。\n李四：好。'), 'scene-1', new AbortController().signal);
+    let plan = shotModule.updateScriptShotDuration(buildScriptShotPlan(draft), 'shot-1', 2.5);
+    plan = shotModule.setScriptShotCamera(plan, 'shot-1', { position: [4, 3, 6], target: [0, 1, 0], fov: 45 });
+    plan = shotModule.setScriptShotCamera(plan, 'shot-2', { position: [-4, 2, 6], target: [0, 1, 0], fov: 60 });
+    const scope = scopeFor([]), camera = scope.cameraRef.current, baseline = camera.position.toArray(), before = JSON.stringify(plan);
+    Object.assign(scope, { busy: false, scriptShotModuleForTest: shotModule, designShotPlanRef: { current: plan },
+      shotPlaybackTokenRef: { current: 0 }, shotPlaybackRef: { current: null }, shotPlaybackTimerRef: { current: null }, cancelCameraPreviewRef: { current: null },
+      performance: { now: () => 0 }, requestAnimationFrame: vi.fn(), cancelAnimationFrame: vi.fn(), window: { setTimeout: vi.fn(), clearTimeout: vi.fn() } });
+    scope.stopAnimation = () => { scope.shotPlaybackTokenRef.current++; scope.cancelCameraPreviewRef.current?.(); };
+    const seek = callback('playScriptShots', 'seekPreviewFrame', scope);
+    await seek(plan, 0);
+    expect(camera.position.toArray()).toEqual([4, 3, 6]);
+    expect(scope.setShotPlayback).toHaveBeenLastCalledWith({ index: 0, shots: 2, line: '张三：走吧。', holding: true });
+    await seek(plan, plan.shots[1].start);
+    expect(camera.position.toArray()).toEqual([-4, 2, 6]);
+    expect(scope.setShotTimeline).toHaveBeenLastCalledWith({ index: 1, shots: 2, seconds: plan.shots[1].start, plan });
+    expect(scope.requestAnimationFrame).not.toHaveBeenCalled(); expect(scope.window.setTimeout).not.toHaveBeenCalled();
+    scope.stopAnimation(); expect(camera.position.toArray()).toEqual(baseline);
+    for (const seconds of [NaN, -1, Infinity, plan.shots.at(-1)!.end]) {
+      await seek(plan, seconds); expect(camera.position.toArray()).toEqual(baseline); expect(scope.setError).toHaveBeenLastCalledWith('定位时间必须在全片半开区间内');
+    }
+    const late = seek(plan, 1); scope.stopAnimation(); await late; expect(camera.position.toArray()).toEqual(baseline);
+    const changed = seek(plan, 1); plan.heading += 'changed'; await changed;
+    expect(scope.setError).toHaveBeenLastCalledWith('定位启动期间场景、计划或事件变化，请重新定位'); expect(camera.position.toArray()).toEqual(baseline);
+    plan.heading = JSON.parse(before).heading; expect(JSON.stringify(plan)).toBe(before);
+    const replaced = seek(plan, 1); scope.designShotPlanRef.current = structuredClone(plan); await replaced;
+    expect(scope.setError).toHaveBeenLastCalledWith('定位启动期间场景、计划或事件变化，请重新定位'); expect(camera.position.toArray()).toEqual(baseline);
+    scope.designShotPlanRef.current = plan;
+    const altered = seek(plan, 1); scope.fingerprintRef.current = () => ({ full: () => 'changed' }); await altered;
+    expect(scope.setError).toHaveBeenLastCalledWith('定位启动期间场景、计划或事件变化，请重新定位'); expect(camera.position.toArray()).toEqual(baseline);
+    scope.fingerprintRef.current = () => ({ full: () => 'unchanged' });
+    const eventRead = scope.sessionEvents; let eventVersion = 0; scope.sessionEvents = () => eventVersion ? [{ changed: true }] : [];
+    const eventChanged = seek(plan, 1); eventVersion++; await eventChanged;
+    expect(scope.setError).toHaveBeenLastCalledWith('定位启动期间场景、计划或事件变化，请重新定位'); expect(camera.position.toArray()).toEqual(baseline); scope.sessionEvents = eventRead;
+    const first = seek(plan, 0), second = seek(plan, plan.shots[1].start); await Promise.all([first, second]);
+    expect(camera.position.toArray()).toEqual([-4, 2, 6]); scope.stopAnimation(); expect(camera.position.toArray()).toEqual(baseline);
+  });
   it('plays recorded cuts with production callback and restores the exact viewport on stop and completion', async () => {
     const draft = await buildScriptSceneDraft(parseScriptScenes('1. 内景 现代卧室 日\n张三：走吧。\n李四：好。'), 'scene-1', new AbortController().signal);
     let plan = shotModule.updateScriptShotDuration(buildScriptShotPlan(draft), 'shot-1', 2.5);
@@ -693,6 +734,12 @@ describe('Studio production v7 callbacks', () => {
       clock = 0; await play(plan);
       if (!delayedFirstFrame) { clock = 500; frame!(); }
       clock = 4500; frame!();
+      expect(scope.setShotTimeline).toHaveBeenLastCalledWith({ plan, index: 2, shots: 3, seconds: 4.5 });
+      expect(scope.setShotTimeline.mock.calls.at(-1)[0].plan).toBe(plan);
+      const published = scope.setShotTimeline.mock.calls.length;
+      clock = 4510; frame!(); expect(scope.setShotTimeline).toHaveBeenCalledTimes(published);
+      clock = 4610; frame!(); expect(scope.setShotTimeline).toHaveBeenLastCalledWith({ plan, index: 2, shots: 3, seconds: 4.61 });
+      clock = 4500; frame!();
       const sampler = createScriptShotSampler(plan, { camera: new THREE.PerspectiveCamera(), controls: { target: new THREE.Vector3(), enabled: true, update: vi.fn() }, entries: () => videoEntries, environment: null });
       sampler.sampleAt(4.5);
       entries.forEach((entry, index) => {
@@ -703,10 +750,37 @@ describe('Studio production v7 callbacks', () => {
       // Starting a new attempt now explicitly clears stale feedback; null is not an error.
       expect(scope.setError).toHaveBeenCalledExactlyOnceWith(null);
       scope.stopAnimation(); sampler.stop();
+      expect(scope.setShotTimeline).toHaveBeenLastCalledWith(null);
       entries.forEach(entry => expect(entry.object.position.toArray()).toEqual([0, 0, 0]));
       expect(scope.motionBaselineRef.current.size).toBe(0);
     }
     console.log('SCRIPT_DROPPED_FRAME_PARITY=PASS skippedShots=2 delayedFirstFrame=1 stop=restored');
+  });
+  it.each(['success', 'cancel', 'events'])('prepares a G3 reference child without downloading and restores viewport: %s', async outcome => {
+    const draft = await buildScriptSceneDraft(parseScriptScenes('1. 内景 现代卧室 日\n张三：走吧。'), 'scene-1', new AbortController().signal);
+    const plan = shotModule.setScriptShotCamera(buildScriptShotPlan(draft), 'shot-1', { position: [4, 3, 6], target: [0, 1, 0], fov: 45 });
+    const scope = scopeFor([]), baseline = scope.cameraRef.current.position.clone(), request = new AbortController();
+    const download = vi.fn(), prepared = vi.fn(), finish = vi.fn();
+    let captures = 0;
+    Object.assign(scope, { busy: false, REFERENCE_BUSY_PREFIX: '正在渲染参考图', scriptShotModuleForTest: shotModule, deliveryModuleForTest, createStoreZip,
+      operationsRef: { current: { start: () => ({ update: vi.fn(), finish }) } },
+      document: { createElement: download }, URL: { createObjectURL: download }, window: { setTimeout: vi.fn() },
+      captureReference: async () => {
+        captures++;
+        if (outcome === 'cancel') request.abort();
+        if (outcome === 'events') setSessionEvents(scope.sceneRef.current, [{ kind: 'fire', objectId: 'changed', start: 0, end: 1, offset: [0, 0, 0], rotation: [0, 0, 0], scale: 1, velocity: [0, 0, 0] }]);
+        return { blob: new Blob(['png-fixture'], { type: 'image/png' }), width: 1280, height: 720 };
+      },
+    });
+    const result = await callback('exportShotReferencePack', 'saveReferenceToLibrary', scope)(plan, true, { signal: request.signal, onPrepared: prepared });
+    expect(result).toBe(outcome === 'success'); expect(download).not.toHaveBeenCalled(); expect(finish).toHaveBeenCalledOnce();
+    expect(scope.cameraRef.current.position.toArray()).toEqual(baseline.toArray());
+    if (outcome === 'success') {
+      expect(prepared).toHaveBeenCalledOnce(); const child = prepared.mock.calls[0][0];
+      const entries = readStoreZip(new Uint8Array(await child.blob.arrayBuffer()));
+      expect(entries.map(e => e.name)).toEqual(expect.arrayContaining(['shot-01-clay.png', 'shot-01-normal.png', 'shot-01-depth.png', 'shots.html', 'shots.csv', 'timeline.edl', 'delivery.json', 'manifest.json']));
+      expect(child.manifest.sessionEvents).toEqual([]); expect(child.manifest.motionPlan).toEqual(plan); expect(captures).toBe(3);
+    } else { expect(prepared).not.toHaveBeenCalled(); expect(captures).toBe(1); expect(scope.setError).toHaveBeenLastCalledWith(expect.stringContaining(outcome === 'cancel' ? '取消' : '事件发生变化')); }
   });
   it('renders one ordered reference pack per recorded shot, restores the viewport, and downloads nothing on a failed frame', async () => {
     const draft = await buildScriptSceneDraft(parseScriptScenes('1. 内景 现代卧室 日\n张三：走吧。\n李四：好。'), 'scene-1', new AbortController().signal);
@@ -1216,6 +1290,20 @@ describe('Integrated enhancements through production callbacks', () => {
     expect(scope.captureReference).toHaveBeenCalledExactlyOnceWith(pass);
     expect(scope.captureViewportAt).not.toHaveBeenCalled(); expect(result.manifest.mode).toBe(mode);
   });
+  it('abandons video on session-event edits and still restores the export lock', async () => {
+    const scope = scopeFor([]), canvas = { width: 1280, height: 720 };
+    Object.assign(scope, { busy: false, archiveProjectId: '', FRAME_VIDEO_SIZES, shotVideoExportRef: { current: null },
+      rendererRef: { current: { domElement: canvas, getPixelRatio: () => 1, setPixelRatio() {}, setSize() {} } },
+      weatherEffectsRef: { current: null }, scriptShotModuleForTest: shotModule,
+      videoModuleForTest: { renderScriptShotVideo: async (_plan: unknown, options: any) => {
+        setSessionEvents(scope.sceneRef.current, [{ kind: 'fire', objectId: 'anchor', start: 0, end: 1, offset: [0, 0, 0], rotation: [0, 0, 0], velocity: [0, 0, 0], scale: 1 }]);
+        options.assertSource(); throw Error('must not encode a mixed event revision');
+      } } });
+    const signal = new AbortController().signal;
+    const plan = buildScriptShotPlan(await buildScriptSceneDraft(parseScriptScenes('1. 内景 现代卧室 日\n张三：走吧。'), 'scene-1', signal));
+    await expect(callback('exportScriptVideo', 'exportSequence', scope)(plan, 24, 'viewport', signal)).rejects.toThrow('会话事件在导出期间变化');
+    expect(scope.shotVideoExportRef.current).toBe(null); expect(scope.resizeFrameRef.current).toHaveBeenCalledOnce();
+  });
   it('synchronizes modern terrain wetness and sky/sun direction through the actual environment callback', () => {
     const scope=scopeFor([]), next=defaultSceneEnvironment(), modern={setRain:vi.fn(),setEnvironment:vi.fn()}; next.weather={condition:'rain',intensity:0.7,wind:0.2};
     Object.assign(scope,{terrainMeshRef:{current:{userData:{sourceTerrain:null,terrainMaterial:modern}}},weatherEffectsRef:{current:null},lightsRef:{current:{key:new THREE.DirectionalLight(),hemi:new THREE.HemisphereLight(),fill:new THREE.DirectionalLight(),rim:new THREE.DirectionalLight()}},skyboxTextureRef:{current:null},rebuildTerrainMesh:vi.fn(),createEnvironmentEffects:()=>({object:new THREE.Group(),dispose:vi.fn()}),environmentLight});
@@ -1430,6 +1518,54 @@ describe('Character animation catalog attached to a scene object', () => {
       } finally { for (const s of [source, target]) s.objectsRef.current.forEach((e: any) => disposeObject(e.object)); }
     }
   }, 60_000);
+
+  it.each([6, 7])('reimports independent event sidecars after production v%s save/load and restores sampled props', async version => {
+    const rig = createToonflowPrimitive({ shape: 'riggedPerson' } as any, '#eee');
+    const prop = new THREE.Mesh(new THREE.BoxGeometry(.2, .2, .2), new THREE.MeshStandardMaterial()); prop.position.set(2, 1, 0);
+    const extras = version === 7 ? materializeSetDraft(await prepareSetDraft('ancientStreet', new AbortController().signal)).slice(0, 1) : []; extras.forEach(e => e.object.position.set(30, 0, 30));
+    const source = scopeFor([{ id: 'actor', name: 'A', object: rig, locked: false }, { id: 'prop', name: '道具', object: prop, locked: false }, ...extras]), target = scopeFor([]);
+    for (const scope of [source, target]) { Object.assign(scope, { GLTFExporter, clonePosedContent, markAnimationArchivePaths, isExportablePlane, applyBonePose }); scope.exportGeometry = callback('exportGeometry', 'exportGlb', scope); }
+    source.scriptShots = validateScriptShotPlan({ version: 1, sceneId: 's', heading: '', location: '', sourceFingerprint: 'src', sceneFingerprint: 'rev', action: [], diagnostics: [], shots: [{ id: 's', order: 1, start: 0, end: 4, camera: { position: [0, 2, 5], target: [0, 1, 0], fov: 45 }, dialogue: [] }] });
+    const bone = rig.getObjectByName('chest')!; expect((bone as THREE.Bone).isBone).toBe(true);
+    setSessionEvents(source.sceneRef.current, [{ kind: 'attach', objectId: 'prop', targetId: 'actor', bone: bone.name, start: 0, end: 4, offset: [0, .2, 0], rotation: [0, 0, 0], scale: 1, velocity: [0, 0, 0] }]);
+    const text = serializeEventSidecar(captureEventSidecarSource(source.scriptShots, source.objectsRef.current), sessionEvents(source.sceneRef.current));
+    try {
+      const saved = await callback('buildSceneDocument', 'saveScene', source)(); expect(saved.version).toBe(version); expect(JSON.stringify(saved)).not.toContain('previs-event-sidecar');
+      await callback('importSceneText', 'loadScene', target)(JSON.stringify(saved)); expect(target.setError.mock.calls.filter((c: any[]) => c[0])).toEqual([]);
+      expect(sessionEvents(target.sceneRef.current)).toEqual([]);
+      const restoredPlan = target.setScriptShots.mock.calls.at(-1)[0];
+      const parsed = parseEventSidecar(text, captureEventSidecarSource(restoredPlan, target.objectsRef.current));
+      expect(parsed.events).toEqual(sessionEvents(source.sceneRef.current)); expect(sessionEvents(target.sceneRef.current)).toEqual([]);
+      setSessionEvents(target.sceneRef.current, parsed.events);
+      const entry = target.objectsRef.current.find((e: any) => e.id === 'prop'), baseline = entry.object.position.clone();
+      const runtime = createPrevisEventRuntime(target.objectsRef.current, 4, new Set(['actor']));
+      try { runtime.sample(1); expect(entry.object.position.distanceTo(baseline)).toBeGreaterThan(.1); } finally { runtime.stop(); }
+      expect(entry.object.position.toArray()).toEqual(baseline.toArray()); expect(entry.object.parent).toBe(target.sceneRef.current);
+      entry.object.position.x += .1; expect(() => parseEventSidecar(text, captureEventSidecarSource(restoredPlan, target.objectsRef.current))).toThrow('不一致');
+    } finally { for (const scope of [source, target]) scope.objectsRef.current.forEach((e: any) => disposeObject(e.object)); }
+  });
+
+  it.each([6, 7])('preserves stationary boundary edits and exact dialogue through production v%s archives', async version => {
+    const rig = createToonflowPrimitive({ shape: 'riggedPerson' } as any, '#eee');
+    const chest = rig.getObjectByName('chest')!;
+    rig.animations = [0, 1].map(i => new THREE.AnimationClip(i ? 'turn' : 'rest', 2, [new THREE.QuaternionKeyframeTrack(`${chest.uuid}.quaternion`, [0, 2], [0, 0, 0, 1, 0, Math.sin(i * .1), 0, Math.cos(i * .1)])]));
+    const clips = rig.animations.map((c, index) => ({ index, name: c.name, duration: c.duration }));
+    const extras = version === 7 ? materializeSetDraft(await prepareSetDraft('ancientStreet', new AbortController().signal)).slice(0, 1) : []; extras.forEach(e => e.object.position.set(30, 0, 30));
+    const source = scopeFor([{ id: 'actor', name: 'A', object: rig, locked: false }, ...extras]), target = scopeFor([]);
+    for (const scope of [source, target]) { Object.assign(scope, { GLTFExporter, clonePosedContent, markAnimationArchivePaths, isExportablePlane, applyBonePose }); scope.exportGeometry = callback('exportGeometry', 'exportGlb', scope); }
+    const original = validateScriptShotPlan({ version: 1, sceneId: 's', heading: '', location: '', sourceFingerprint: 'source', sceneFingerprint: 'scene', action: [], diagnostics: [], shots: [{ id: 's', order: 1, start: 0, end: 4, camera: { position: [0, 2, 5], target: [0, 1, 0], fov: 45 }, dialogue: [{ index: 0, speaker: '甲', line: '原文不改。', start: .5, end: 1.5 }], execution: { version: 1, actors: [{ targetId: 'actor', targetName: 'A', beats: [0, 1].map(i => ({ start: i * 2, end: i * 2 + 2, from: { x: 0, z: 0 }, to: { x: 0, z: 0 }, yaw: 0, animation: clips[i], sourceIndex: i })) }] } }] });
+    source.scriptShots = correctExecutionBeatClip(original, { shotId: 's', targetId: 'actor', beatIndex: 0, animation: clips[0], reason: '明确延后动作切点', boundary: { at: 3 } }, [{ id: 'actor', name: 'A', animations: clips }]);
+    try {
+      const saved = await callback('buildSceneDocument', 'saveScene', source)(); expect(saved.version).toBe(version);
+      await callback('importSceneText', 'loadScene', target)(JSON.stringify(saved)); expect(target.setError.mock.calls.filter((c: any[]) => c[0])).toEqual([]);
+      const restored = target.setScriptShots.mock.calls.at(-1)[0]; expect(restored).toEqual(source.scriptShots); expect(restored.shots[0].dialogue).toEqual(original.shots[0].dialogue);
+      expect(JSON.parse(restored.diagnostics.at(-1)).operation).toBe('move-stationary-boundary');
+      const actor = target.objectsRef.current.find((e: any) => e.id === 'actor').object, bone = actor.getObjectByName('chest'), rest = bone.quaternion.clone();
+      const sampler = createScriptShotSampler(restored, { camera: target.cameraRef.current, controls: target.controlsRef.current, entries: () => target.objectsRef.current, environment: null });
+      try { sampler.sampleAt(2.5); expect(bone.quaternion.angleTo(rest)).toBeLessThan(1e-6); sampler.sampleAt(3.5); expect(bone.quaternion.angleTo(rest)).toBeCloseTo(.05, 4); } finally { sampler.stop(); }
+      expect(bone.quaternion.angleTo(rest)).toBeLessThan(1e-6); expect(actor.position.toArray()).toEqual([0, 0, 0]);
+    } finally { for (const scope of [source, target]) scope.objectsRef.current.forEach((e: any) => disposeObject(e.object)); }
+  });
 
   it.each([6, 7].flatMap(version => [false, true].map(split => ({ version, split }))))('preserves manual beat clip correction and human provenance through production v$version archive callbacks split=$split', async ({ version, split }) => {
     const rig = createToonflowPrimitive({ shape: 'riggedPerson' } as any, '#eee');

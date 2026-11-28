@@ -114,3 +114,25 @@ it('does not offer a fake execution correction on legacy camera-only plans', asy
   await act(async () => root!.render(<SetTemplatePanel {...props} appliedPlan={legacy} />)); await click('载入场景镜头表审阅');
   expect(host.querySelector('[aria-label="纠正骨骼片段"]')).toBeNull(); expect(host.textContent).toContain('没有可纠正的逐段骨骼执行');
 });
+it('stages an authored clip window and rate offline, refuses an overflowing window, and applies only after renewed approval', async () => {
+  const { plan, apply } = await mount(); const before = structuredClone(plan);
+  await input('纠正镜头', 'one'); await input('纠正角色', 'a'); await input('纠正动作段', '0');
+  await act(async () => (host.querySelector('[aria-label="调整片段源区间与速率"]') as HTMLInputElement).click());
+  expect(host.textContent).toContain('人物位置仍按区间进度线性移动');
+  await input('片段入点秒', '0'); await input('片段播放速率', '4');
+  expect(host.textContent).toContain('不超过片段时长'); expect(button('暂存源区间与速率').disabled).toBe(true);
+  await input('片段播放速率', '0.5'); await input('人工动作纠正理由', '第1段慢放；只作人工节奏稿');
+  expect(button('暂存源区间与速率').disabled).toBe(false);
+  expect(button('暂存动作纠正').disabled).toBe(true);
+  await click('暂存源区间与速率');
+  expect(apply).not.toHaveBeenCalled(); expect(button('确认应用镜头表').disabled).toBe(true);
+  expect(host.textContent).toContain('尚未应用');
+  await act(async () => (host.querySelector('[aria-label="调整片段源区间与速率"]') as HTMLInputElement).click());
+  await checked(); await click('确认应用镜头表');
+  expect(apply).toHaveBeenCalledTimes(1);
+  const result = apply.mock.calls[0][0];
+  expect(result.shots[0].execution.actors[0].beats[0]).toMatchObject({ start: 0, end: 2, timing: { sourceIn: 0, rate: 0.5 } });
+  expect(result.shots[0].execution.actors[0].beats[1].timing).toBeUndefined();
+  expect(JSON.parse(result.diagnostics.at(-1))).toMatchObject({ operation: 'retime-beat', reason: '第1段慢放；只作人工节奏稿' });
+  expect(plan).toEqual(before); expect(fetch).not.toHaveBeenCalled();
+});

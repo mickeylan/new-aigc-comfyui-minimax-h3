@@ -136,6 +136,42 @@ describe('manual video export and material handoff', () => {
     expect(onExport.mock.calls[0][3].aborted).toBe(true); expect(host.textContent).toContain('导出已取消'); expect(fetch).not.toHaveBeenCalled(); expect(host.querySelector('video')).toBeNull();
   });
 });
+describe('unified delivery UI ownership', () => {
+  const label = '下载PNG＋WebM总交付ZIP（双子包，无音频）';
+  async function setup(references?: any) {
+    const { validateScriptShotPlan } = await import('./scriptShotPlan');
+    const p = validateScriptShotPlan({ version: 1, sceneId: 's', heading: '', location: '', sourceFingerprint: 'src', sceneFingerprint: 'rev', action: [], diagnostics: [], shots: [{ id: 's', order: 1, start: 0, end: 1, camera: null, dialogue: [] }] });
+    const a = artifact(); Object.assign(a.manifest, { kind: 'studio-script-shot-video', fps: 24, container: 'webm', frameCount: 24, sourceDurationMs: 1000, durationMs: 1000, width: 832, height: 480, shots: p, sourceFingerprint: 'content', sessionEvents: [] });
+    const reference = { blob: new Blob(['reference-child'], { type: 'application/zip' }), manifest: { kind: 'script-shot-reference-pack', version: 1, sceneId: 's', sourceFingerprint: 'src', sceneFingerprint: 'rev', exportedSceneFingerprint: 'content', motionPlan: p, sessionEvents: [] } };
+    const onReferences = references ?? vi.fn(async () => reference), onExport = vi.fn(async () => a);
+    const current = { value: true };
+    await act(async () => root.render(<ScriptVideoPanel plan={p} disabled={false} onExport={onExport} onExportReferences={onReferences} isCurrent={() => current.value} />));
+    await click(host.querySelector('input[type="checkbox"]')!); await click(button('渲染逐镜视频'));
+    return { reference, onReferences, onExport, current };
+  }
+  it('downloads exactly one total zip without encoding again or uploading', async () => {
+    const f = await setup();
+    const downloads: string[] = []; vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function () { downloads.push(this.download); });
+    await click(button(label));
+    await act(async () => { await vi.waitFor(() => expect(downloads).toEqual(['previs-unified-delivery.zip'])); }); expect(f.onReferences).toHaveBeenCalledOnce(); expect(f.onExport).toHaveBeenCalledOnce(); expect(fetch).not.toHaveBeenCalled();
+    const blobs = (URL.createObjectURL as any).mock.calls.map((c: any[]) => c[0]);
+    const text = new TextDecoder().decode(await blobs.at(-1).arrayBuffer()); expect(text).toContain('reference-pack.zip'); expect(text).toContain('video-delivery.zip');
+  });
+  it.each(['cancel', 'stale', 'failure', 'unmount'])('does not download partial child or total zip on %s', async action => {
+    let release!: (x: any) => void;
+    const onReferences = vi.fn((_p, _signal) => new Promise(resolve => { release = resolve; }));
+    const f = await setup(onReferences), downloads = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    await click(button(label)); expect(button(label).disabled).toBe(true);
+    if (action === 'cancel') await click(button('取消视频导出'));
+    if (action === 'stale') f.current.value = false;
+    if (action === 'failure') f.reference.manifest.exportedSceneFingerprint = 'changed';
+    if (action === 'unmount') await act(async () => root.render(<div />));
+    await act(async () => { release(f.reference); });
+    if (action !== 'unmount') await act(async () => { await vi.waitFor(() => expect(host.querySelector('[role="alert"]')).not.toBeNull()); });
+    expect(downloads).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled(); expect(f.onExport).toHaveBeenCalledOnce();
+    if (action === 'cancel') expect(onReferences.mock.calls[0][1].aborted).toBe(true);
+  });
+});
 describe('terrain editor UI', () => {
   it('真实笔刷通过显式按钮应用，撤销精确回原高度场；重建地形使旧撤销失效', async () => {
     const original = createEnvironmentTerrain({ size: 40, amplitude: 0 }); let terrain = original;

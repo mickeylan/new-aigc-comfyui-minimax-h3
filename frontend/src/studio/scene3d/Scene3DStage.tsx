@@ -7,6 +7,14 @@ import {
   type DragEvent,
 } from "react";
 import * as THREE from "three";
+import CoveragePanel from './CoveragePanel';
+import PrevisRevisionPanel from './PrevisRevisionPanel';
+import { applyRevisionProposal } from './previsRevision';
+import PrevisSeekPanel from './PrevisSeekPanel';
+import PrevisEventsPanel from './PrevisEventsPanel';
+import { createPrevisEventRuntime, sessionEvents, setSessionEvents } from './previsEvents';
+import { captureEventSidecarSource } from './previsEventSidecar';
+import { createStaticSceneProxy } from './staticSceneProxy';
 import { SceneOperations, SceneSaveGuard, buildSceneFingerprint, canMoveEntry, materialRevision, type SceneFingerprint } from './sceneSafety';
 import { sequenceTiming, sequenceSampleTime } from './sequenceTiming';
 import { referencePlaneMaterial } from './referenceAlpha';
@@ -767,16 +775,18 @@ export default function Scene3DStage({ exitTo = "/studio/draw", context }: Scene
   const [animationIndex, setAnimationIndex] = useState(0);
   const scrubRef = useRef<{ session: PreviewPlayhead; id?: string; pose: BonePoseNode | null } | null>(null);
   // 逐镜走位播放期间对象被临时移动/摆骨：指纹按播放前基线计算，避免把预演当成未保存编辑。
-  const motionBaselineRef = useRef(new Map<string, { position: THREE.Vector3; quaternion: THREE.Quaternion; pose: ReturnType<typeof serializeBonePose> }>());
+  const motionBaselineRef = useRef(new Map<string, { position: THREE.Vector3; quaternion: THREE.Quaternion; scale?: THREE.Vector3; pose: ReturnType<typeof serializeBonePose> }>());
   // 连续逐镜播放：rAF 推进时间轴、兜底定时器收尾、token 作废迟到的懒加载启动。
   const shotPlaybackRef = useRef<number | null>(null);
   const shotPlaybackTimerRef = useRef<number | null>(null);
   const shotPlaybackTokenRef = useRef(0);
   const shotVideoExportRef = useRef<AbortSignal | null>(null);
   const [previewFrame, setPreviewFrame] = useState(0);
+  const [shotTimeline, setShotTimeline] = useState<import('./PrevisPlaybackTimeline').PrevisPlaybackState | null>(null);
   const stopAnimation = useCallback(() => {
     // 作废尚未落地的逐镜播放启动（模块是懒加载的），避免停止后迟到启动。
     shotPlaybackTokenRef.current += 1;
+    setShotTimeline(null);
     if (scrubRef.current) {
       scrubRef.current.session.stop(); scrubRef.current = null; setPreviewFrame(0);
       const selected = objectsRef.current.find(e => e.id === selectedIdRef.current);
@@ -892,7 +902,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw", context }: Scene
   const [cameraKeys, setCameraKeys] = useState<CameraKey[]>([]);
   /** 剧本镜头表：可选字段，随场景存档一起保存；旧存档没有时保持 null。 */
   const [scriptShots, setScriptShots] = useState<import('./toonflowSets').ScriptShotPlan | null>(null);
+  const [observationReport, setObservationReport] = useState<{ observations: readonly { file: string; shotId: string; seconds: number; localSeconds: number; camera: { position: [number, number, number]; target: [number, number, number]; fov: number }; width: number; height: number }[] } | null>(null);
   const designShotPlanRef = useRef(scriptShots); designShotPlanRef.current = scriptShots;
+  const observationCancelRef = useRef<AbortController | null>(null);
+  const staticProxyRef = useRef<ReturnType<typeof createStaticSceneProxy> | null>(null);
+  const [staticProxyEnabled, setStaticProxyEnabled] = useState(false);
+  const [batchSignal, setBatchSignal] = useState('尚未测量draw calls；未视觉验收');
   // 导出首尾帧时算出来的运镜文案：首尾帧只锚两端，中间怎么动得靠这句话写进提示词。
   const [firstLastNote, setFirstLastNote] = useState("");
   // 把运镜文案写进某一场的视频提示词：只追加，人点两次才动手（选项目/场次 + 追加）。
@@ -956,7 +971,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw", context }: Scene
   const sequenceFramesRef = useRef<{ pass: ReferencePass; stamp: string; blobs: Blob[]; fps: number; projectId: number | null; frameIds: number[] } | null>(null);
   const [playingPath, setPlayingPath] = useState(false);
   // 逐镜播放的当前镜下标与总镜数；null 表示没有在播放。
-  const [shotPlayback, setShotPlayback] = useState<{ index: number; shots: number; line: string | null } | null>(null);
+  const [shotPlayback, setShotPlayback] = useState<{ index: number; shots: number; line: string | null; holding?: boolean } | null>(null);
   const executionUnavailableRef = useRef(false);
   executionUnavailableRef.current = !!busy || !!shotPlayback;
   const [poseSlots, setPoseSlots] = useState<{ a: boolean; b: boolean }>({ a: false, b: false });
@@ -1006,7 +1021,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw", context }: Scene
     objectsRef.current.map(e => {
       const scrub = scrubRef.current?.id === e.id ? scrubRef.current : null;
       const motion = motionBaselineRef.current.get(e.id);
-      return { id: e.id, name: e.name, p: (scrub ? scrub.session.position : motion ? motion.position : e.object.position)?.toArray(), q: (scrub ? scrub.session.quaternion : motion ? motion.quaternion : e.object.quaternion)?.toArray(), s: e.object.scale.toArray(), visible: e.object.visible, locked: !!e.locked, plane: e.plane, source: e.mediaSource, splat: e.splatUrl, pose: scrub ? scrub.pose : animationRef.current?.id === e.id ? animationRef.current.pose : motion ? motion.pose : serializeBonePose(e.object), initial: e.initialBonePose,
+      return { id: e.id, name: e.name, p: (scrub ? scrub.session.position : motion ? motion.position : e.object.position)?.toArray(), q: (scrub ? scrub.session.quaternion : motion ? motion.quaternion : e.object.quaternion)?.toArray(), s: (motion?.scale ?? e.object.scale).toArray(), visible: e.object.visible, locked: !!e.locked, plane: e.plane, source: e.mediaSource, splat: e.splatUrl, pose: scrub ? scrub.pose : animationRef.current?.id === e.id ? animationRef.current.pose : motion ? motion.pose : serializeBonePose(e.object), initial: e.initialBonePose,
         // 动作资源也是场景内容：加入/替换动作必须触发未保存提示，否则重开会静默丢动作。
         clips: e.object.animations.map(clip => `${clip.uuid}:${clip.name}@${clip.duration}#${clip.tracks.length}`).join("|"),
         materials: (() => { const rows: unknown[] = []; e.object.traverse(o => { if (isPoseEditorHelper(o)) return; const m = (o as THREE.Mesh).material; if (m) for (const v of Array.isArray(m) ? m : [m]) rows.push(materialRevision(v as THREE.MeshStandardMaterial)); }); return rows; })() };
@@ -1442,7 +1457,11 @@ export default function Scene3DStage({ exitTo = "/studio/draw", context }: Scene
       // Empty Spark still traverses the entire scene several times in onBeforeRender.
       // Keep the original path for ANY registered splat, including hidden/loading entries.
       spark.visible = objectsRef.current.some(entry => !!entry.splat);
-      renderer.render(scene, camera);
+      if (staticProxyRef.current && !executionUnavailableRef.current) {
+        const excluded = new Set(designShotPlanRef.current?.shots.flatMap(s => [...(s.motion ? [s.motion.targetId] : []), ...(s.execution?.actors ?? []).map(a => a.targetId)]) ?? []);
+        if (selectedIdRef.current) excluded.add(selectedIdRef.current);
+        staticProxyRef.current.render(scene, objectsRef.current, excluded, () => renderer.render(scene, camera));
+      } else renderer.render(scene, camera);
     };
     animate();
 
@@ -1460,6 +1479,8 @@ export default function Scene3DStage({ exitTo = "/studio/draw", context }: Scene
     return () => {
       cancelAnimationFrame(frame);
       cancelCameraPreviewRef.current?.();
+      staticProxyRef.current?.dispose(); staticProxyRef.current = null;
+      observationCancelRef.current?.abort();
       scrubRef.current?.session.stop(); scrubRef.current = null;
       cancelCameraPreviewRef.current = null;
       cancelMoveRef.current?.();
@@ -2472,13 +2493,14 @@ export default function Scene3DStage({ exitTo = "/studio/draw", context }: Scene
    * 与参考包/视频复用同一绝对时间采样器。旧镜保持直线障碍拒绝；仅显式启用的镜头
    * 使用避让、动作混合与双腿IK；结束时还原机位、位置、骨姿及指纹遮罩。
    */
-  const playScriptShots = useCallback(async (plan: import('./toonflowSets').ScriptShotPlan) => {
+  const playScriptShots = useCallback(async (plan: import('./toonflowSets').ScriptShotPlan, seekSeconds?: number) => {
     if (busy) return;
     stopAnimation();
     // Stop can publish its own completion; reset feedback for this new attempt.
     setStatus(''); setError(null);
     const token = ++shotPlaybackTokenRef.current;
     const epoch = sceneEpochRef.current;
+    const baseline = fingerprintRef.current().full(), planKey = JSON.stringify(plan), eventsKey = JSON.stringify(sessionEvents(sceneRef.current));
     let module: typeof import('./toonflowSets');
     let ready: import('./toonflowSets').ScriptShotPlan;
     let makeSampler: typeof import('./scriptShotSampler').createScriptShotSampler;
@@ -2498,15 +2520,18 @@ export default function Scene3DStage({ exitTo = "/studio/draw", context }: Scene
       return;
     }
     if (token !== shotPlaybackTokenRef.current || epoch !== sceneEpochRef.current || busy) return;
+    if (seekSeconds !== undefined && (designShotPlanRef.current !== plan || baseline !== fingerprintRef.current().full() || planKey !== JSON.stringify(plan) || eventsKey !== JSON.stringify(sessionEvents(sceneRef.current)))) { setError('定位启动期间场景、计划或事件变化，请重新定位'); return; }
     const camera = cameraRef.current; const controls = controlsRef.current;
     if (!camera || !controls) { setError('视口尚未就绪，无法连续逐镜播放'); return; }
     const total = ready.shots[ready.shots.length - 1]!.end;
+    if (seekSeconds !== undefined && (!Number.isFinite(seekSeconds) || seekSeconds < 0 || seekSeconds >= total)) { setError('定位时间必须在全片半开区间内'); return; }
     let session: ReturnType<typeof makeSampler>;
     try { session = makeSampler(ready, { camera, controls, entries: () => objectsRef.current, environment: environmentRef.current, baselines: motionBaselineRef.current, isCurrent: () => epoch === sceneEpochRef.current }); }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); return; }
     const started = performance.now();
     let finished = false;
     let lastIndex = -1;
+    let lastPublishedSeconds = -Infinity;
     let lastLine: string | null = null;
     // Viewport, reference captures and videos now own exactly the same absolute
     // actor/IK/blend/navigation evaluator and editing-baseline restoration.
@@ -2525,10 +2550,21 @@ export default function Scene3DStage({ exitTo = "/studio/draw", context }: Scene
       }
       session.stop();
       setShotPlayback(null);
+      setShotTimeline(null);
       setStatus(message);
     };
     const cancelPlayback = () => finish('已停止连续逐镜播放，视口机位、角色位置与骨姿已还原');
     cancelCameraPreviewRef.current = cancelPlayback;
+    if (seekSeconds !== undefined) {
+      try {
+        const sample = session.sampleAt(seekSeconds);
+        const line = sample.line ? `${sample.line.speaker}：${sample.line.line || '（无台词）'}` : null;
+        setShotPlayback({ index: sample.index, shots: ready.shots.length, line, holding: true });
+        setShotTimeline({ index: sample.index, shots: ready.shots.length, seconds: sample.seconds, plan });
+        setStatus(`视口已定位全片${sample.seconds.toFixed(3)}秒；临时姿态，停止后还原，未修改计划`);
+      } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); finish('定位失败，视口已还原'); }
+      return;
+    }
     setShotPlayback({ index: 0, shots: ready.shots.length, line: null });
     setStatus(`开始连续逐镜播放：${ready.shots.length} 镜 · ${total.toFixed(2)} 秒（人工机位 ${ready.shots.length} 镜 · 角色走位 ${ready.shots.filter(shot => shot.motion).length} 镜；按镜头表启用避让/骨骼增强）`);
     // 大兜底：rAF 被节流或挂起时也保证不会永久停在播放中。
@@ -2550,9 +2586,14 @@ export default function Scene3DStage({ exitTo = "/studio/draw", context }: Scene
         // Camera cuts are applied by the same absolute sampler used in exports.
       }
       const line = sample.line ? `${sample.line.speaker}：${sample.line.line || '（无台词）'}` : null;
-      if (line !== lastLine || sample.index !== shotIndex) {
+      const changed = line !== lastLine || sample.index !== shotIndex;
+      if (changed) {
         lastLine = line;
         setShotPlayback({ index: sample.index, shots: ready.shots.length, line });
+      }
+      if (changed || sample.seconds - lastPublishedSeconds >= 0.1) {
+        lastPublishedSeconds = sample.seconds;
+        setShotTimeline({ index: sample.index, shots: ready.shots.length, seconds: sample.seconds, plan });
       }
       if (sample.seconds >= total) { finish(`连续逐镜播放结束：${ready.shots.length} 镜，视口机位、角色位置与骨姿已还原`); return; }
       shotPlaybackRef.current = requestAnimationFrame(step);
@@ -4120,12 +4161,14 @@ export default function Scene3DStage({ exitTo = "/studio/draw", context }: Scene
     if (mode !== 'viewport' && objectsRef.current.some(entry => entry.splat)) throw new Error('泼溅不支持白模/法线/深度视频，请选择材质原样或显式移除泼溅');
     shotVideoExportRef.current = signal;
     const epoch = sceneEpochRef.current, source = fingerprintRef.current().full();
+    const sourceEvents = JSON.stringify(sessionEvents(sceneRef.current));
     const sourceFrame = frameRef.current, outputSize = FRAME_VIDEO_SIZES[sourceFrame];
     const ratio = renderer.getPixelRatio();
     let outputSized = false;
     const operation = operationsRef.current.start('正在准备逐镜视频…'); setBusy('正在准备逐镜视频…'); setError(null);
     const assertSource = () => {
       if (signal.aborted) throw new Error('导出已取消');
+      if (sourceEvents !== JSON.stringify(sessionEvents(sceneRef.current))) throw new Error('会话事件在导出期间变化，视频已放弃');
       if (epoch !== sceneEpochRef.current || sourceFrame !== frameRef.current || source !== fingerprintRef.current().full()) throw new Error('场景在导出期间变化，视频已放弃，请重新审阅后导出');
       if (outputSized && (renderer.domElement.width !== outputSize.width || renderer.domElement.height !== outputSize.height || Math.abs(camera.aspect - outputSize.width / outputSize.height) > 1e-7)) throw new Error('导出画布尺寸发生变化，视频已放弃，请重新导出');
     };
@@ -4339,7 +4382,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw", context }: Scene
    * 不下载半份。结束后把视口还原到导出前机位。不编码视频、不上传素材库、不写业务库。
    */
   const exportShotReferencePack = useCallback(
-    async (plan: import('./toonflowSets').ScriptShotPlan) => {
+    async (plan: import('./toonflowSets').ScriptShotPlan, includeDelivery = false, deliveryContext?: { signal: AbortSignal; onPrepared(artifact: import('./previsUnifiedDelivery').ReferenceDeliveryArtifact): void }) => {
       if (busy) return false;
       stopAnimation();
       setStatus(''); setError(null);
@@ -4348,9 +4391,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw", context }: Scene
       if (!camera || !controls) { setError('视口尚未就绪，无法导出逐镜参考包'); return false; }
       const epoch = sceneEpochRef.current;
       let module: typeof import('./toonflowSets');
-      let pack: import('./toonflowSets').ScriptReferencePack & { exportedSceneFingerprint?: string; scope?: string; environment?: SceneEnvironment | null; motionSampling?: string; motionPlan?: import('./toonflowSets').ScriptShotPlan; artifactId?: string; walkProof?: unknown; characterAnimationCatalogRevision?: number; output?: Array<{ name: string; width: number; height: number }> };
+      let pack: import('./toonflowSets').ScriptReferencePack & { exportedSceneFingerprint?: string; scope?: string; environment?: SceneEnvironment | null; motionSampling?: string; motionPlan?: import('./toonflowSets').ScriptShotPlan; artifactId?: string; walkProof?: unknown; sessionEvents?: unknown; characterAnimationCatalogRevision?: number; output?: Array<{ name: string; width: number; height: number }> };
       const sourceState = fingerprintRef.current().full();
+      const sourceEvents = JSON.stringify(sessionEvents(sceneRef.current));
       const assertSource = () => {
+        if (deliveryContext?.signal.aborted) throw new Error('参考子包制作已取消');
+        if (sourceEvents !== JSON.stringify(sessionEvents(sceneRef.current))) throw new Error('导出期间事件发生变化，已放弃整包');
         if (epoch !== sceneEpochRef.current || sourceState !== fingerprintRef.current().full()) throw new Error('导出期间场景发生变化，已放弃整包，请重新核对后导出');
       };
       try {
@@ -4386,7 +4432,7 @@ export default function Scene3DStage({ exitTo = "/studio/draw", context }: Scene
         const { createScriptShotSampler } = await import('./scriptShotSampler');
         assertSource();
         sampler = createScriptShotSampler(plan, { camera, controls, entries: () => objectsRef.current, environment: pack.environment ?? null, baselines: motionBaselineRef.current, isCurrent: () => epoch === sceneEpochRef.current });
-        pack.artifactId = crypto.randomUUID(); pack.walkProof = sampler.walkProof; pack.output = [];
+        pack.artifactId = crypto.randomUUID(); pack.walkProof = sampler.walkProof; pack.sessionEvents = sampler.sessionEvents; pack.output = [];
         pack.characterAnimationCatalogRevision = (await import('./toonflow/characterAnimations')).characterAnimationCatalogRevision;
         for (let index = 0; index < total; index += 1) {
           const shot = pack.shots[index]!;
@@ -4408,9 +4454,17 @@ export default function Scene3DStage({ exitTo = "/studio/draw", context }: Scene
         }
         if (entries.length !== total * pack.passes.length) throw new Error('参考包张数与清单不一致，已放弃导出');
         assertSource();
+        if (includeDelivery) {
+          const { buildPrevisDelivery } = await import('./previsDelivery');
+          assertSource();
+          entries.push(...buildPrevisDelivery(plan, pack));
+        }
         entries.push({ name: pack.manifestFile, data: new TextEncoder().encode(module.scriptShotReferenceManifestText(pack)) });
         const zip = createStoreZip(entries);
-        const url = URL.createObjectURL(new Blob([zip], { type: "application/zip" }));
+        assertSource();
+        const blob = new Blob([zip], { type: 'application/zip' });
+        if (deliveryContext) { deliveryContext.onPrepared({ blob, manifest: pack }); return true; }
+        const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.href = url;
         link.download = `${pack.sceneId}-shot-reference-pack-${total}shots.zip`;
@@ -5158,7 +5212,118 @@ export default function Scene3DStage({ exitTo = "/studio/draw", context }: Scene
                 const entry = addObject(object, name);
                 if (!entry) disposeSceneEntry({ id: '', name, object });
               }} />
-              <SetTemplatePanel disabled={Boolean(busy) || !!shotPlayback} capturePerformanceContext={() => captureScriptPerformanceContext(objectsRef.current)} captureExecutionContext={async () => {
+              <button type="button" disabled={Boolean(busy) || !!shotPlayback || !scriptShots} onClick={async () => {
+                if (executionUnavailableRef.current || observationCancelRef.current || !designShotPlanRef.current) return;
+                stopAnimation();
+                const camera = cameraRef.current, controls = controlsRef.current;
+                if (!camera || !controls) { setError('视口尚未就绪'); return; }
+                const plan = structuredClone(designShotPlanRef.current), epoch = sceneEpochRef.current;
+                const baseline = fingerprintRef.current().full(), key = JSON.stringify(plan), eventsKey = JSON.stringify(sessionEvents(sceneRef.current));
+                const cancel = new AbortController(); observationCancelRef.current = cancel;
+                const operation = operationsRef.current.start('正在采集视口观察与运行诊断…');
+                setBusy('正在采集视口观察与运行诊断…'); setError(null);
+                const assertCurrent = () => {
+                  if (cancel.signal.aborted) throw Error('观察已取消');
+                  if (epoch !== sceneEpochRef.current || key !== JSON.stringify(designShotPlanRef.current) || baseline !== fingerprintRef.current().full() || eventsKey !== JSON.stringify(sessionEvents(sceneRef.current))) throw Error('场景、计划或事件变化，观察证据已失效');
+                };
+                try {
+                  if (objectsRef.current.some(e => e.splat || e.mediaKind === 'video')) throw Error('观察暂不支持泼溅或视频平面');
+                  const [{ observePrevis }, { createScriptShotSampler }] = await Promise.all([import('./previsRehearsal'), import('./scriptShotSampler')]);
+                  assertCurrent();
+                  const result = await observePrevis(plan, {
+                    sourceRevision: baseline, temporalEvidence: true, assertCurrent,
+                    sampler: () => createScriptShotSampler(plan, { camera, controls, entries: () => objectsRef.current, environment: environmentRef.current, baselines: motionBaselineRef.current, isCurrent: () => epoch === sceneEpochRef.current }),
+                    actors: () => objectsRef.current.filter(e => plan.shots.some(s => s.motion?.targetId === e.id || s.execution?.actors?.some(a => a.targetId === e.id))).map(e => ({ id: e.id, position: e.object.getWorldPosition(new THREE.Vector3()).toArray() })),
+                    capture: async pose => { const result = await captureViewportAt(pose); if (!result) throw Error('实际视口截图失败'); return result; },
+                  });
+                  assertCurrent();
+                  const zip = createStoreZip(result.files), url = URL.createObjectURL(new Blob([zip], { type: 'application/zip' }));
+                  const link = document.createElement('a'); link.href = url; link.download = 'previs-observation.zip'; link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 10000);
+                  setObservationReport(result.report.status === 'completed' ? { observations: result.report.observations } : null);
+                  setStatus(`已导出观察诊断：${result.report.status}，${result.report.completedSamples}个离散样本、${result.report.observations.length}张真实视口图；未视觉批准${result.report.error ? '；阻塞：' + result.report.error : ''}`);
+                } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+                finally { observationCancelRef.current = null; operation.finish(); setBusy(null); }
+              }}>导出时序观察与运行诊断（含审阅页，未视觉批准）</button>
+              <button type="button" disabled={Boolean(busy) || !!shotPlayback || !scriptShots} onClick={() => scriptShots && void exportShotReferencePack(scriptShots, true)}>导出统一参考交付包（PNG＋HTML/CSV/EDL，24fps，无音视频）</button>
+              <button type="button" disabled={!observationCancelRef.current} onClick={() => observationCancelRef.current?.abort()}>取消观察诊断</button>
+              <label><input type="checkbox" checked={staticProxyEnabled} disabled={Boolean(busy) || !!shotPlayback} onChange={e => {
+                staticProxyRef.current?.dispose(); staticProxyRef.current = e.target.checked ? createStaticSceneProxy() : null; setStaticProxyEnabled(e.target.checked); setBatchSignal('配置已改变，请重新测量draw calls；未视觉验收');
+              }} />静态场景视口合批（保留独立编辑对象，不写入存档）</label>
+              <button type="button" disabled={!staticProxyEnabled || Boolean(busy) || !!shotPlayback} onClick={() => {
+                const renderer = rendererRef.current, scene = sceneRef.current, camera = cameraRef.current, proxy = staticProxyRef.current;
+                if (!renderer || !scene || !camera || !proxy || executionUnavailableRef.current) return;
+                const excluded = new Set(scriptShots?.shots.flatMap(s => [...(s.motion ? [s.motion.targetId] : []), ...(s.execution?.actors ?? []).map(a => a.targetId)]) ?? []);
+                if (selectedId) excluded.add(selectedId);
+                renderer.render(scene, camera); const before = renderer.info.render.calls;
+                const result = proxy.render(scene, objectsRef.current, excluded, () => renderer.render(scene, camera)); const after = renderer.info.render.calls;
+                setBatchSignal(`实测draw calls ${before} → ${after}；${result.batchedMeshes}网格/${result.proxyCount}代理。仅本次机位采样，不代表像素一致性或帧率已通过。`);
+              }}>测量合批前后draw calls</button><p>{batchSignal}</p>
+              <PrevisEventsPanel disabled={Boolean(busy) || !!shotPlayback} sceneKey={String(sceneEpochRef.current)} timelineDuration={() => designShotPlanRef.current?.shots.at(-1)?.end} list={() => {
+                if (executionUnavailableRef.current) throw Error('场景忙碌');
+                return objectsRef.current.filter(e => !e.splat && e.object.visible && !e.locked).map(e => { const bones: string[] = []; e.object.traverse(o => { if ((o as THREE.Bone).isBone) bones.push(o.name); }); return { id: e.id, name: e.name, bones }; });
+              }} sidecarSource={() => {
+                if (executionUnavailableRef.current || !designShotPlanRef.current || !sceneRef.current) throw Error('请先停止播放并应用镜头表');
+                return captureEventSidecarSource(designShotPlanRef.current, objectsRef.current);
+              }} read={() => sessionEvents(sceneRef.current)} write={events => {
+                const scene = sceneRef.current, plan = designShotPlanRef.current;
+                if (!scene || executionUnavailableRef.current) throw Error('场景忙碌');
+                if (events.length && !plan) throw Error('请先应用镜头表以明确全片时间区间');
+                const previous = sessionEvents(scene);
+                try {
+                  setSessionEvents(scene, events);
+                  createPrevisEventRuntime(objectsRef.current, plan?.shots.at(-1)?.end ?? 0, new Set(plan?.shots.flatMap(s => [...(s.motion ? [s.motion.targetId] : []), ...(s.execution?.actors ?? []).map(a => a.targetId)]) ?? [])).stop();
+                } catch (cause) { setSessionEvents(scene, previous); throw cause; }
+                setStatus(`已配置${events.length}个临时事件；不会随存档保存，请通过试演/观察核对。`);
+              }} preview={async seconds => {
+                const camera = cameraRef.current, controls = controlsRef.current, plan = designShotPlanRef.current;
+                if (executionUnavailableRef.current || !camera || !controls || !plan) throw Error('镜头表或视口未就绪');
+                if (!Number.isFinite(seconds) || seconds < 0 || seconds > plan.shots.at(-1)!.end) throw Error('试演时间超出全片');
+                const epoch = sceneEpochRef.current, baseline = fingerprintRef.current().full(), key = JSON.stringify(plan), eventsKey = JSON.stringify(sessionEvents(sceneRef.current));
+                const operation = operationsRef.current.start('正在采样临时事件…'); setBusy('正在采样临时事件…');
+                try {
+                  const { createScriptShotSampler } = await import('./scriptShotSampler');
+                  if (epoch !== sceneEpochRef.current || baseline !== fingerprintRef.current().full()) throw Error('场景已变化');
+                  const sampler = createScriptShotSampler(plan, { camera, controls, entries: () => objectsRef.current, environment: environmentRef.current, baselines: motionBaselineRef.current, isCurrent: () => epoch === sceneEpochRef.current });
+                  let pending: ReturnType<typeof captureViewportAt>;
+                  try { const sample = sampler.sampleAt(seconds); pending = captureViewportAt(sample.camera); } finally { sampler.stop(); }
+                  const image = await pending!;
+                  if (!image || epoch !== sceneEpochRef.current || baseline !== fingerprintRef.current().full() || key !== JSON.stringify(designShotPlanRef.current) || eventsKey !== JSON.stringify(sessionEvents(sceneRef.current))) throw Error('试演失效或截图失败');
+                  return image.blob;
+                } finally { operation.finish(); setBusy(null); }
+              }} />
+              <CoveragePanel disabled={Boolean(busy) || !!shotPlayback} plan={scriptShots} diagnosePosed={async (shotId, candidates, revision, sourcePlan) => {
+                const epoch = sceneEpochRef.current, planKey = JSON.stringify(sourcePlan), eventsKey = JSON.stringify(sessionEvents(sceneRef.current));
+                const assertCurrent = () => {
+                  if (executionUnavailableRef.current || sceneEpochRef.current !== epoch || designShotPlanRef.current !== sourcePlan || JSON.stringify(sourcePlan) !== planKey || fingerprintRef.current().full() !== revision || JSON.stringify(sessionEvents(sceneRef.current)) !== eventsKey) throw Error('主体互挡诊断来源已失效');
+                };
+                assertCurrent();
+                const [{ diagnosePosedSubjects }, { createScriptShotSampler }] = await Promise.all([import('./previsPosedOcclusion'), import('./scriptShotSampler')]);
+                assertCurrent();
+                const camera = cameraRef.current, controls = controlsRef.current, shot = sourcePlan.shots.find(s => s.id === shotId);
+                if (!camera || !controls || !shot) throw Error('视口或镜头未就绪');
+                const result = diagnosePosedSubjects(shot, candidates, objectsRef.current, () => createScriptShotSampler(sourcePlan, { camera, controls, entries: () => objectsRef.current, environment: environmentRef.current, baselines: motionBaselineRef.current, isCurrent: () => sceneEpochRef.current === epoch }));
+                assertCurrent();
+                return result;
+              }} capture={() => {
+                if (executionUnavailableRef.current || !cameraRef.current) throw Error('场景忙碌或视口未就绪');
+                return { revision: fingerprintRef.current().full(), entries: objectsRef.current, aspect: FRAME_VIDEO_SIZES[frameRef.current].width / FRAME_VIDEO_SIZES[frameRef.current].height };
+              }} apply={(shotId, camera, revision, sourcePlan) => {
+                if (executionUnavailableRef.current || designShotPlanRef.current !== sourcePlan || fingerprintRef.current().full() !== revision) throw Error('候选来源已失效');
+                const next = structuredClone(sourcePlan), shot = next.shots.find(s => s.id === shotId);
+                if (!shot || shot.execution?.camera) throw Error('不能覆盖镜内机位轨道');
+                shot.camera = camera;
+                assertScriptShotApplicationSafe(next, objectsRef.current, environmentRef.current);
+                setScriptShots(next); setStatus('已确认采用候选机位；保留镜序、动作与对白。视锥入画不代表无遮挡，请重新观察审阅。');
+              }} />
+              <PrevisRevisionPanel report={observationReport} plan={scriptShots} disabled={Boolean(busy) || !!shotPlayback}
+                onApply={proposal => {
+                  if (!scriptShots) throw Error('请先载入镜头表');
+                  const next = applyRevisionProposal(scriptShots, proposal);
+                  stopAnimation(); setScriptShots(next); setObservationReport(null);
+                  setStatus(`已应用修订提案 ${proposal.id}：仅改该镜机位目标；请重新观察并重新确认，仍未视觉批准`);
+                }} />
+              {scriptShots && <PrevisSeekPanel plan={scriptShots} disabled={Boolean(busy) || (!!shotPlayback && !shotPlayback.holding)} holding={!!shotPlayback?.holding} onSeek={seconds => { void playScriptShots(scriptShots, seconds); }} onStop={stopAnimation} />}
+              <SetTemplatePanel playbackTimeline={shotTimeline} disabled={Boolean(busy) || !!shotPlayback} capturePerformanceContext={() => captureScriptPerformanceContext(objectsRef.current)} captureExecutionContext={async () => {
                 const { captureStudioExecutionContext } = await import('./studioExecutionContext');
                 return captureStudioExecutionContext(objectsRef.current);
               }} onApplyExecution={async (plan, reviewed, isCurrent, requirements) => {
@@ -5308,7 +5473,12 @@ export default function Scene3DStage({ exitTo = "/studio/draw", context }: Scene
       <div className="fixed right-3 top-20 z-30 max-h-[calc(100vh-6rem)] w-64 space-y-3 overflow-y-auto rounded-lg border border-white/10 bg-[#101014]/90 p-3 text-sm text-white/80 backdrop-blur">
         {scriptShots && <ShotEnhancementPanel plan={scriptShots} entries={objects} environment={environment} disabled={!!busy || !!shotPlayback} onApply={plan => { stopAnimation(); setScriptShots(plan); setStatus('镜头增强已应用，请播放审阅并保存场景'); }} />}
         <CharacterMotionPanel entries={objects} disabled={!!busy || !!shotPlayback} onChanged={() => { stopAnimation(); syncObjects(); setStatus('重定向动作已加入目标角色，请审阅并保存场景'); }} />
-        {scriptShots && <ScriptVideoPanel plan={scriptShots} frameAspect={frameAspect} disabled={!!busy || !!shotPlayback} onExport={exportScriptVideo} isCurrent={artifact => artifact.epoch === sceneEpochRef.current && artifact.source === fingerprintRef.current().full()} />}
+        {scriptShots && <ScriptVideoPanel plan={scriptShots} frameAspect={frameAspect} onExportReferences={async (plan, signal) => {
+          let prepared: import('./previsUnifiedDelivery').ReferenceDeliveryArtifact | null = null;
+          const success = await exportShotReferencePack(plan, true, { signal, onPrepared(artifact) { prepared = artifact; } });
+          if (!success || !prepared) throw Error('参考子包未完成，未下载总交付包');
+          return prepared;
+        }} disabled={!!busy || !!shotPlayback} onExport={exportScriptVideo} isCurrent={artifact => artifact.epoch === sceneEpochRef.current && artifact.source === fingerprintRef.current().full() && JSON.stringify(artifact.manifest.sessionEvents ?? []) === JSON.stringify(sessionEvents(sceneRef.current))} />}
         <section>
           <div className="mb-1.5 px-1 text-xs uppercase tracking-wide text-white/40">灯光</div>
           <div className="grid grid-cols-4 gap-1">

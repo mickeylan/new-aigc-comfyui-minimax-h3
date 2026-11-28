@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createPrevisEventRuntime } from './previsEvents';
 import { assertScriptShotMotionTargets, assertScriptShotPlaybackReady, validateScriptShotPlan, sampleScriptShotPlayback, sampleScriptShotMotionAt, type ScriptShotPlan, type ScriptShotMotionSample } from './scriptShotPlan';
 import { AnimationPreview } from './animationPreview';
 import { sampleExecutionActors, validateShotExecution } from './shotExecution';
@@ -19,7 +20,7 @@ function setActorYaw(root: THREE.Object3D, yaw: number) {
   orientation.y = yaw; root.quaternion.setFromEuler(orientation);
 }
 type Entry = { id: string; name: string; locked?: boolean; splat?: unknown; object: THREE.Object3D };
-type Baseline = { position: THREE.Vector3; quaternion: THREE.Quaternion; pose: ReturnType<typeof serializeBonePose> };
+type Baseline = { position: THREE.Vector3; quaternion: THREE.Quaternion; scale?: THREE.Vector3; pose: ReturnType<typeof serializeBonePose> };
 type Controls = { target: THREE.Vector3; enabled: boolean; enableDamping?: boolean; update(): unknown };
 
 /** One immutable editing-baseline obstacle snapshot for viewport, video and reference sessions. */
@@ -204,6 +205,13 @@ function createSamplerCore(plan: ScriptShotPlan, options: SamplerOptions) {
     const start = binding.beats[0].from;
     actors.set(entry.id, { entry, root: entry.object, baseline, groundOffset: baseline.position.y - groundHeightAt(options.environment?.terrain, start.x, start.z), activated: false, preview: null, rigs: findCapsuleRigs(entry.object) });
   }
+  const eventActors = new Set(actors.keys()), eventActivated = new Set<string>();
+  const events = createPrevisEventRuntime(entries, ready.shots.at(-1)!.end, eventActors, entry => {
+    if (!eventActivated.has(entry.id)) {
+      eventActivated.add(entry.id);
+      options.baselines?.set(entry.id, { position: entry.object.position.clone(), quaternion: entry.object.quaternion.clone(), scale: entry.object.scale.clone(), pose: serializeBonePose(entry.object) });
+    }
+  });
   controls.enabled = false; controls.enableDamping = false;
   let stopped = false;
   const reset = () => {
@@ -289,6 +297,8 @@ function createSamplerCore(plan: ScriptShotPlan, options: SamplerOptions) {
   };
   const stop = () => {
     if (stopped) return; stopped = true;
+    events.stop();
+    for (const id of eventActivated) options.baselines?.delete(id);
     reset();
     for (const [id, actor] of actors) if (actor.activated) options.baselines?.delete(id);
     if (options.isCurrent?.() !== false) {
@@ -301,12 +311,14 @@ function createSamplerCore(plan: ScriptShotPlan, options: SamplerOptions) {
     plan: ready,
     contactMetrics,
     walkProof,
+    sessionEvents: events.events,
     duration: ready.shots[ready.shots.length - 1]!.end,
     sampleAt(seconds: number) {
       if (stopped || !Number.isFinite(seconds) || seconds < 0) throw Error('逐镜取样时间无效或会话已停止');
       if (options.isCurrent?.() === false) throw Error('场景已替换，已停止取样');
       try {
         contactChecks.forEach(check => check());
+        events.restore();
         reset();
         const sample = sampleScriptShotPlayback(ready, seconds);
         // Replay ALL completed shots, even when jumping across several cuts.
@@ -318,6 +330,7 @@ function createSamplerCore(plan: ScriptShotPlan, options: SamplerOptions) {
         }
         if (sample.motion) move(sample.motion, true);
         execute(sample.shot, sample.seconds);
+        events.sample(sample.seconds);
         camera.position.set(...sample.camera.position); camera.fov = sample.camera.fov; camera.updateProjectionMatrix();
         controls.target.set(...sample.camera.target); controls.update(); camera.lookAt(controls.target); camera.updateMatrixWorld(true);
         return sample;

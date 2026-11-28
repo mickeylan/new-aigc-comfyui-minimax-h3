@@ -91,6 +91,42 @@ describe('manual execution clip correction', () => {
     expect(() => correctExecutionBeatClip(crowded, { ...patch(), beatIndex: 0, split: { at: .01, afterAnimation: clips[0] } }, targets())).toThrow();
     expect(actors[0].beats).toHaveLength(126);
   });
+  it('moves a stationary shared boundary while retaining dialogue, source indices, contacts and every other track', () => {
+    const original = plan(); original.shots[0].dialogue = [{ index: 0, speaker: '甲', line: '保留原文', start: .5, end: 1.5 }];
+    const before = structuredClone(original);
+    const result = correctExecutionBeatClip(original, { ...patch(), beatIndex: 0, animation: clips[0], boundary: { at: 3 } }, targets());
+    const expected = structuredClone(before); expected.shots[0].execution!.actors![0].beats[0].end = 3; expected.shots[0].execution!.actors![0].beats[1].start = 3;
+    expect({ ...result, diagnostics: before.diagnostics }).toEqual(expected); expect(original).toEqual(before);
+    expect(JSON.parse(result.diagnostics.at(-1)!)).toMatchObject({ operation: 'move-stationary-boundary', boundaryAt: 3, previousBeats: before.shots[0].execution!.actors![0].beats, replacementBeats: result.shots[0].execution!.actors![0].beats });
+  });
+  it.each(['last', 'moving-first', 'moving-next', 'turning', 'gap', 'split', 'clip', 'same', 'start', 'end', 'nan', 'epsilon'])('rejects boundary %s atomically', mode => {
+    const original = plan(), beats = original.shots[0].execution!.actors![0].beats;
+    const correction = { ...patch(), beatIndex: 0, animation: clips[0], boundary: { at: 3 }, split: undefined as { at: number; afterAnimation: typeof clips[0] } | undefined };
+    if (mode === 'last') correction.beatIndex = 1;
+    if (mode === 'moving-first') beats[0].from.x = -.2;
+    if (mode === 'moving-next') beats[1].to.x = .2;
+    if (mode === 'turning') beats[1].yaw = .2;
+    if (mode === 'gap') beats[1].start = 2.1;
+    if (mode === 'split') correction.split = { at: 1, afterAnimation: clips[0] };
+    if (mode === 'clip') correction.animation = clips[1];
+    if (mode === 'same') correction.boundary.at = 2;
+    if (mode === 'start') correction.boundary.at = 0;
+    if (mode === 'end') correction.boundary.at = 4;
+    if (mode === 'nan') correction.boundary.at = NaN;
+    if (mode === 'epsilon') correction.boundary.at = 4 - 1e-7;
+    const before = structuredClone(original);
+    expect(() => correctExecutionBeatClip(original, correction, targets())).toThrow(); expect(original).toEqual(before);
+  });
+  it('shared sampler uses the changed phase boundary and restores actual bones and root', () => {
+    const scene = new THREE.Scene(); const object = new THREE.Group(), arm = new THREE.Bone(); arm.name = 'arm'; object.add(arm); scene.add(object);
+    object.animations = clips.map((c, i) => new THREE.AnimationClip(c.name, 2, [new THREE.QuaternionKeyframeTrack('arm.quaternion', [0, 2], [0, 0, 0, 1, 0, 0, Math.sin(i * Math.PI / 4), Math.cos(i * Math.PI / 4)])]));
+    const original = plan(); original.shots.forEach(s => { s.execution!.actors = s.execution!.actors!.slice(0, 1); }); original.shots[0].execution!.actors![0].beats[1].animation = clips[1];
+    const result = correctExecutionBeatClip(original, { ...patch(), beatIndex: 0, animation: clips[0], boundary: { at: 3 } }, targets());
+    const entries = [{ id: 'a', name: 'a', object }];
+    const sample = (p: ScriptShotPlan, at: number) => { const sampler = createScriptShotSampler(p, { camera: new THREE.PerspectiveCamera(), controls: { target: new THREE.Vector3(), update() {} }, entries: () => entries, environment: null }); try { sampler.sampleAt(at); return arm.quaternion.z; } finally { sampler.stop(); } };
+    expect(sample(original, 2.5)).toBeGreaterThan(0); expect(sample(result, 2.5)).toBe(0); expect(sample(result, 3.5)).toBeGreaterThan(0);
+    expect(arm.quaternion.toArray()).toEqual([0, 0, 0, 1]); expect(object.position.toArray()).toEqual([0, 0, 0]);
+  });
   it('produces an actual local bone-pose change in the shared sampler, not a camera/position proxy, and restores it', () => {
     const entries = ['a', 'b'].map((id, j) => {
       const object = new THREE.Group(); object.position.x = j * 3;

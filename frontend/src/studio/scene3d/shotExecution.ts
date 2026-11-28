@@ -1,7 +1,10 @@
 import type { ScriptShotCamera, ScriptShotMotionAnimation } from './scriptShotPlan';
 import { validateWristContactBinding, type WristContactBinding } from './characterMotion';
 
-export type ExecutionBeat = { start: number; end: number; from: { x: number; z: number }; to: { x: number; z: number }; yaw: number; animation: ScriptShotMotionAnimation; sourceIndex?: number };
+/** Authored playback window of an existing clip. Defaults mean the legacy "from zero, real time" behaviour.
+ * sourceIn is the clip second to start from; rate scales playback without touching the root trajectory. */
+export type ExecutionClipTiming = { sourceIn?: number; rate?: number };
+export type ExecutionBeat = { start: number; end: number; from: { x: number; z: number }; to: { x: number; z: number }; yaw: number; animation: ScriptShotMotionAnimation; sourceIndex?: number; timing?: ExecutionClipTiming };
 export type ExecutionActor = { targetId: string; targetName: string; beats: ExecutionBeat[] };
 /** First contact version is a held wrist surface contact for the ENTIRE shot.
  * Approach/release, closed fingers and balance recovery are not implied. */
@@ -62,13 +65,23 @@ export function validateShotExecution(value: unknown, duration: number, clearanc
       if (ids.has(targetId)) fail(); ids.add(targetId);
       if (!Array.isArray(a.beats) || !a.beats.length || (count += a.beats.length) > 128) fail();
       const beats: ExecutionBeat[] = a.beats.map((value: unknown) => {
-        const b = object(value, ['start', 'end', 'from', 'to', 'yaw', 'animation', 'sourceIndex']);
+        const b = object(value, ['start', 'end', 'from', 'to', 'yaw', 'animation', 'sourceIndex', 'timing']);
         const start = finite(b.start, 0, duration + TIME_TOLERANCE), end = finite(b.end, 0, duration + TIME_TOLERANCE);
         if (end <= start) fail();
         const c = object(b.animation, ['index', 'name', 'duration']);
         const index = finite(c.index, 0, Number.MAX_SAFE_INTEGER);
         if (!Number.isSafeInteger(index) || (b.sourceIndex !== undefined && !Number.isSafeInteger(b.sourceIndex))) fail();
-        return { start, end, from: point(b.from), to: point(b.to), yaw: finite(b.yaw, -2 * Math.PI, 2 * Math.PI), animation: { index, name: text(c.name, 200), duration: finite(c.duration, Number.MIN_VALUE, 86400) }, ...(b.sourceIndex === undefined ? {} : { sourceIndex: finite(b.sourceIndex, 0, 127) }) };
+        const clip = { index, name: text(c.name, 200), duration: finite(c.duration, Number.MIN_VALUE, 86400) };
+        let timing: ExecutionClipTiming | undefined;
+        if (b.timing !== undefined) {
+          const t = object(b.timing, ['sourceIn', 'rate']);
+          const sourceIn = t.sourceIn === undefined ? 0 : finite(t.sourceIn, 0, 86400);
+          const rate = t.rate === undefined ? 1 : finite(t.rate, .25, 4);
+          // The authored window must land inside the clip; a frozen last frame is never implicit.
+          if (sourceIn >= clip.duration || sourceIn + (end - start) * rate > clip.duration + TIME_TOLERANCE) fail();
+          timing = { ...(t.sourceIn === undefined ? {} : { sourceIn }), ...(t.rate === undefined ? {} : { rate }) };
+        }
+        return { start, end, from: point(b.from), to: point(b.to), yaw: finite(b.yaw, -2 * Math.PI, 2 * Math.PI), animation: clip, ...(b.sourceIndex === undefined ? {} : { sourceIndex: finite(b.sourceIndex, 0, 127) }), ...(timing ? { timing } : {}) };
       });
       for (let i = 1; i < beats.length; i++) {
         const a = beats[i - 1], b = beats[i];
@@ -119,6 +132,6 @@ export function sampleExecutionActors(execution: ShotExecution | undefined, seco
     const beat = [...actor.beats].reverse().find(b => seconds >= b.start) ?? actor.beats[0];
     const local = Math.max(0, Math.min(beat.end - beat.start, seconds - beat.start));
     const progress = local / (beat.end - beat.start);
-    return { targetId: actor.targetId, targetName: actor.targetName, progress, position: { x: beat.from.x + (beat.to.x - beat.from.x) * progress, z: beat.from.z + (beat.to.z - beat.from.z) * progress }, yaw: beat.yaw, animation: beat.animation, animationSeconds: Math.min(local, beat.animation.duration), finished: progress === 1 };
+    return { targetId: actor.targetId, targetName: actor.targetName, progress, position: { x: beat.from.x + (beat.to.x - beat.from.x) * progress, z: beat.from.z + (beat.to.z - beat.from.z) * progress }, yaw: beat.yaw, animation: beat.animation, animationSeconds: Math.min(beat.animation.duration, (beat.timing?.sourceIn ?? 0) + local * (beat.timing?.rate ?? 1)), finished: progress === 1 };
   });
 }

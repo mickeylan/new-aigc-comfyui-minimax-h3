@@ -13,6 +13,9 @@ describe('纯网格不执行空Spark遍历', () => {
       frame: 0, guardFrames: 0, guardSince: performance.now(), animationTime: performance.now(), performance,
       requestAnimationFrame: vi.fn(() => 1), weatherEffectsRef: { current: { sampleAt: vi.fn() } }, animationRef: { current: null },
       splatDetailRef: { current: 'manual' }, objectsRef: { current: entries }, controls: { update: vi.fn() }, fkRef: { current: null },
+      // New opt-in batch dependency is disabled in this legacy Spark-guard fixture.
+      // Existing assertions remain unchanged; enabled batching has its own runtime tests.
+      staticProxyRef: { current: null },
       spark: { visible: true }, scene: {}, camera: {}, renderer: { render: vi.fn() },
     };
     const animate = new Function('scope', `with(scope) { ${source.slice(start, end)}; return animate; }`)(scope);

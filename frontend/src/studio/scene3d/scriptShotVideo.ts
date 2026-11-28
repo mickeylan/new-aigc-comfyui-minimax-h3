@@ -42,7 +42,7 @@ export async function renderScriptShotVideo(plan: ScriptShotPlan, options: Param
       width: size.width, height: size.height, fps: options.fps, frameCount: times.length,
       durationMs: encoded.duration_ms, sourceDurationMs: duration * 1000, timesMs: times,
       sourceFingerprint: options.sourceFingerprint, mode: options.mode,
-      shots: sampler.plan, environment: options.environment,
+      shots: sampler.plan, environment: options.environment, sessionEvents: sampler.sessionEvents,
       notes: ['无音频：台词时间轴只作审阅，不合成对白。', '首帧包含、末端不包含；按固定帧率编码，末帧不足一帧时补足帧长。', '深度/法线/白模是结构参考，不保证目标生成工作流接受；深度视频为有损编码，精确深度使用PNG参考包。', '仅本地生成，入库及关联须人工操作，不自动提交生成。'] };
     return { blob, manifest };
   } finally { sampler.stop(); }

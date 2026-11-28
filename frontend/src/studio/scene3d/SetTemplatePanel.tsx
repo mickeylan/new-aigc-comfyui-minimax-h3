@@ -1,9 +1,10 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 const DirectorSourcePanel = lazy(() => import('./DirectorSourcePanel'));
 import PerformanceCorrectionPanel from './PerformanceCorrectionPanel';
+import PrevisPlaybackTimeline, { type PrevisPlaybackState } from './PrevisPlaybackTimeline';
 import ScriptPerformancePanel, { ScriptPerformanceDiagnostic } from './ScriptPerformancePanel';
 import { suggestScriptCast, type ScriptPerformanceContext } from './scriptPerformance';
-import { correctExecutionBeatClip, type ExecutionClipCorrection } from './performanceCorrection';
+import { correctExecutionBeatClip, retimeExecutionBeat, type ExecutionClipCorrection, type ExecutionClipRetime } from './performanceCorrection';
 import type { ScriptCharacterBinding, ScriptSceneDraft, ScriptSceneIndex, ScriptShot, ScriptShotCamera, ScriptShotMotion, ScriptShotMotionTarget, ScriptShotPlan, SetDraft } from './toonflowSets';
 type Engine = typeof import('./toonflowSets');
 type Entries = ReturnType<Engine['materializeSetDraft']>;
@@ -94,7 +95,7 @@ function ShotMotionEditor({ shot, targets, disabled, pending, onSet, onClear }: 
   </div>;
 }
 
-export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, onPreviewShot, onApplyShots, appliedPlan, onPlayShots, onStopShots, shotPlayback, onExportShotPack, listMotionTargets, captureExecutionContext, onApplyExecution, capturePerformanceContext }: {
+export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, onPreviewShot, onApplyShots, appliedPlan, onPlayShots, onStopShots, shotPlayback, playbackTimeline, onExportShotPack, listMotionTargets, captureExecutionContext, onApplyExecution, capturePerformanceContext }: {
   disabled: boolean;
   onApply: (draft: SetDraft, entries: Entries, x: number, z: number) => void;
   /** 记录当前视口机位；场景没接视口时保持 undefined，界面不会假装能记机位。 */
@@ -111,6 +112,7 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
   onStopShots?: () => void;
   /** 当前播放到的镜次（下标）与总镜数；null 表示未播放。 */
   shotPlayback?: { index: number; shots: number; line?: string | null } | null;
+  playbackTimeline?: PrevisPlaybackState | null;
   /** 按已保存镜头表在视口逐镜渲参考图并本地打包下载；场景负责采样与还原视口，失败不得产出部分包。返回 false 表示没有产出下载，界面保留本次确认。 */
   onExportShotPack?: (plan: ScriptShotPlan) => void | boolean | Promise<void | boolean>;
   /** 当前场景可被人工选作走位目标的真实对象；不提供就无法在应用/播放前校验目标。 */
@@ -199,6 +201,13 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
     const next = correctExecutionBeatClip(shotPlan, correction, listMotionTargets());
     setShotPlan(next); setShotAcknowledged(false); setError('');
     setShotNote('已暂存人工动作纠正，尚未应用；请重新核对镜头表并确认，通过真实几何预检后才接入场景。');
+  }
+  function stagePerformanceRetime(correction: ExecutionClipRetime) {
+    if (!shotPlan || disabled || pending || staleReview) throw Error('场景镜头表已变化，请重新载入');
+    if (!listMotionTargets) throw Error('当前场景没有提供真实骨骼动作目录');
+    const next = retimeExecutionBeat(shotPlan, correction, listMotionTargets());
+    setShotPlan(next); setShotAcknowledged(false); setError('');
+    setShotNote('已暂存片段入点与速率，尚未应用；请重新核对镜头表并确认，通过真实几何预检后才接入场景。');
   }
   async function prepare() {
     if (!engine || disabled || pending) return;
@@ -405,6 +414,7 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
   const playingShot = appliedPlan && shotPlayback ? appliedPlan.shots[shotPlayback.index] ?? null : null;
   const playingLine = shotPlayback?.line ?? '（停顿／无台词）';
   return <section aria-label="整套布景" className="space-y-2 border-t border-zinc-700 p-2 text-xs">
+    <PrevisPlaybackTimeline plan={appliedPlan} playback={playbackTimeline} />
     <button type="button" aria-expanded={showDirectorSource} onClick={() => setShowDirectorSource(value => !value)}>{showDirectorSource ? '收起已有导演来源' : '从已有小说项目读取导演结果'}</button>
     {showDirectorSource && <Suspense fallback={<p role="status">正在加载导演来源入口…</p>}><DirectorSourcePanel disabled={disabled || pending} captureExecutionContext={captureExecutionContext} onApplyExecution={onApplyExecution} /></Suspense>}
     <h3>整套布景 · {engine?.listSetTemplates().length ?? '加载中'} 套</h3>
@@ -514,7 +524,7 @@ export default function SetTemplatePanel({ disabled, onApply, onCaptureCamera, o
         {shotPlan && <div className="space-y-1">
           <p role="status">共 {shotPlan.shots.length} 镜 · 总时长 {shotPlan.shots[shotPlan.shots.length - 1]!.end.toFixed(2)} 秒 · 未指定机位 {shotPlan.shots.filter(shot => !hasShotCamera(shot)).length} 镜 · 含人工走位 {shotPlan.shots.filter(shot => shot.motion).length} 镜{scriptDraft ? '' : ' · 本面板没有当前草稿可比对来源'}</p>
           {staleReview && <p role="alert">场景镜头表已变化，请重新载入；旧草稿不能覆盖当前存档镜头表。</p>}
-          <PerformanceCorrectionPanel plan={shotPlan} targets={motionTargets} disabled={disabled || pending || scriptPerformanceDirty} stale={staleReview} onDirty={setPerformanceDirty} onStage={stagePerformanceCorrection} />
+          <PerformanceCorrectionPanel plan={shotPlan} targets={motionTargets} disabled={disabled || pending || scriptPerformanceDirty} stale={staleReview} onDirty={setPerformanceDirty} onStage={stagePerformanceCorrection} onRetime={stagePerformanceRetime} />
           <p className="text-zinc-400">走位按人工选定的场景对象、起止 XZ 与时长做直线移动，Y 跟随启用的地形高差；越界或陡坡拒绝，不做障碍避让。可选已有骨骼 clip 只作局部预演；无 clip 的胶囊人按行进距离摆步态。不会按角色姓名猜对象，也不会按文件名猜动作。</p>
           {shotPlan.shots.map(shot => <div key={shot.id} className="space-y-1 border-t border-zinc-800 pt-1">
             <p role="status">{shot.id} · 第 {shot.order} 镜 · {shot.start.toFixed(2)}–{shot.end.toFixed(2)} 秒 · {shot.execution?.camera ? '执行机位轨道' : shot.camera ? '已记录机位' : '未指定机位'}</p>
